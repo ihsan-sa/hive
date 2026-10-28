@@ -124,9 +124,13 @@ func (m *Module) refreshLedger(p core.Project, content string) (kept bool, err e
 	if err != nil || main == "" {
 		return false, err
 	}
-	path := m.C.Effects.Config(p, main).Ledger
+	cfg := m.C.Effects.Config(p, main).Guarded(p)
+	path := cfg.Ledger
 	if path == "" {
 		return false, nil
+	}
+	if err := core.LedgerPathOK(cfg, path); err != nil {
+		return false, err
 	}
 	if m.C.Effects.ReadFile(p, main, path) == strings.TrimSpace(content) { // git's output comes trimmed
 		return true, nil

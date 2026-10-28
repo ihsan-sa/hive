@@ -298,5 +298,10 @@ through the tests and checks like any change. Content the Hive last wrote
 there from its record (`Change.Recorded`) is neither a protected path nor in
 need of a read, so it merges with no approval in between, though the ledger is
 a score path; a worker's own edit to it still waits for an approval, as does
-an older record once a newer one is written. A record task that stopped (a red
-check, a conflict) is filed again after 30 minutes.
+an older record once a newer one is written. Only the path main's project.json
+names counts, and only when `core.LedgerPathOK` takes it: a plain relative path
+outside `.git`, one of the score's own paths, and none the project otherwise
+guards (the base protected paths, its protected, high or root paths, CI,
+`.gitattributes`); the host write refuses a path out of the checkout or through
+a symlink. A record task that stopped (a red check, a conflict) is filed again
+after 30 minutes.

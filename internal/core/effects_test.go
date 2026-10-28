@@ -1726,3 +1726,59 @@ func TestRecordedLedgerNeedsNoApproval(t *testing.T) {
 		t.Fatalf("an older record must be protected once a newer one is written: %+v", ch)
 	}
 }
+
+// The ledger path comes from the project's own project.json, and the Hive
+// writes it on the host with no approval: a path that leaves the checkout,
+// goes into .git, through a symlink, or names a file the project guards is
+// refused, and a protected file it names still waits for the person.
+func TestRecordRefusesALedgerPathOutsideItsPlace(t *testing.T) {
+	for _, ledger := range []string{"../../x", "/tmp/x", ".git/hooks/pre-commit", "a/../ledger.json", ".hive/project.json", ".hive/goals.md", "docs/REVIEW.md", "keep.txt", ".github/workflows/ci.yml", "other.json"} {
+		t.Run(ledger, func(t *testing.T) {
+			c, f := testHive(t)
+			cfg := fmt.Sprintf(`{"test":"true","ledger":%q,"protected":["keep.txt"],"score":{"command":"cat ledger.json","paths":["ledger.json",%q],"direction":"higher"}}`, ledger, ledger)
+			if ledger == "other.json" { // in no score path
+				cfg = `{"test":"true","ledger":"other.json","score":{"command":"cat ledger.json","paths":["ledger.json"],"direction":"higher"}}`
+			}
+			seedRepo(t, f, "me/tr", map[string]string{"ledger.json": "{}\n", "keep.txt": "k\n", ".hive/project.json": cfg})
+			p, _ := c.Projects.Add(Project{Name: "tr", Repo: "me/tr"})
+			main, _ := c.Effects.Sync(p)
+			_, err := c.Effects.Record(p, main, map[string]string{ledger: "{\"trials\": [1]}\n"}, "Refresh")
+			if err == nil {
+				t.Fatalf("a record wrote ledger %q", ledger)
+			}
+			if ledger == ".hive/project.json" {
+				r, _ := commitInCheckout(t, c, p, "w1", main, ledger, "{\"trials\": [1]}\n")
+				sha, _ := c.Effects.Extract(p, r, main)
+				if ch, _ := c.Effects.Classify(p, main, sha); !slices.Contains(ch.Protected, ledger) || len(ch.Recorded) != 0 {
+					t.Fatalf("a ledger naming project.json escaped approval: %+v", ch)
+				}
+			}
+		})
+	}
+	// Only the path main names is written, and never through a symlink.
+	c, f := testHive(t)
+	seedRepo(t, f, "me/tr", map[string]string{"ledger.json": "{}\n", ".hive/project.json": `{"test":"true","ledger":"ledger.json","score":{"command":"cat ledger.json","paths":["ledger.json"],"direction":"higher"}}`})
+	p, _ := c.Projects.Add(Project{Name: "tr", Repo: "me/tr"})
+	main, _ := c.Effects.Sync(p)
+	if _, err := c.Effects.Record(p, main, map[string]string{"notes.json": "{}\n"}, "Refresh"); err == nil {
+		t.Fatal("a record wrote a path main's project.json doesn't name")
+	}
+	outside := filepath.Join(t.TempDir(), "victim")
+	os.WriteFile(outside, []byte("safe\n"), 0o644)
+	tmp := t.TempDir()
+	mustGit(t, "", "clone", "-q", f.RepoPath("me/tr"), tmp)
+	os.Remove(filepath.Join(tmp, "ledger.json"))
+	if err := os.Symlink(outside, filepath.Join(tmp, "ledger.json")); err != nil {
+		t.Skip("no symlinks here:", err)
+	}
+	mustGit(t, tmp, "add", "-A")
+	mustGit(t, tmp, "commit", "-q", "-m", "link")
+	mustGit(t, tmp, "push", "-q", "origin", "HEAD:main")
+	main, _ = c.Effects.Sync(p)
+	if _, err := c.Effects.Record(p, main, map[string]string{"ledger.json": "{\"trials\": [1]}\n"}, "Refresh"); err == nil || !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("a record wrote through a symlink: %v", err)
+	}
+	if b, _ := os.ReadFile(outside); string(b) != "safe\n" {
+		t.Fatalf("the file outside was written: %q", b)
+	}
+}

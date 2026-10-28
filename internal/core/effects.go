@@ -1347,9 +1347,42 @@ var docExt = []string{".md", ".txt", ".rst", ".adoc"}
 // a script there is code like anywhere else.
 var docImage = []string{".png", ".jpg", ".jpeg", ".gif", ".webp"}
 
+// BaseProtected are the paths every project's changes to which the person
+// merges, whatever its project.json says.
+var BaseProtected = []string{".hive/project.json", ".hive/goals.md", "docs/REVIEW.md", StewardFile}
+
+// LedgerPathOK says why path can't be a project's trial ledger, or nil. The
+// Hive writes the ledger on the host and lands it with no approval or read,
+// so it must be a plain relative path inside the repository, outside .git,
+// one of the score's own paths (what a ledger is for), and nothing else the
+// project guards: not a base protected path, nor one of its protected, high
+// or root paths, nor CI, nor .gitattributes.
+func LedgerPathOK(cfg ProjectConfig, p string) error {
+	bad := func(why string) error { return fmt.Errorf("ledger path %q: %s", p, why) }
+	if p == "" || strings.ContainsAny(p, "\\\x00") || path.IsAbs(p) || path.Clean(p) != p {
+		return bad("not a plain relative path")
+	}
+	for _, seg := range strings.Split(p, "/") {
+		if seg == ".." || seg == "." || strings.EqualFold(seg, ".git") {
+			return bad("it leaves the repository or goes into .git")
+		}
+	}
+	if cfg.Score == nil || !slices.Contains(cfg.Score.Evaluator(), p) {
+		return bad("not one of the score's paths")
+	}
+	guarded := append(append(append(append(slices.Clone(BaseProtected), cfg.Protected...), cfg.High...), cfg.Root...), ".github/")
+	if under(p, guarded) || p == ".gitattributes" || strings.HasSuffix(p, "/.gitattributes") {
+		return bad("a path the project guards")
+	}
+	return nil
+}
+
 // isRecorded says whether file at sha holds what the Hive last wrote there
-// from its record.
-func (e *Effects) isRecorded(p Project, sha, file string) bool {
+// from its record, and file is the ledger cfg (main's) names.
+func (e *Effects) isRecorded(p Project, cfg ProjectConfig, sha, file string) bool {
+	if file != cfg.Ledger || LedgerPathOK(cfg, file) != nil {
+		return false
+	}
 	e.mu.Lock()
 	want, ok := e.recorded[p.Name+"\x00"+file]
 	e.mu.Unlock()
@@ -1377,7 +1410,7 @@ func (e *Effects) Classify(p Project, mainSHA, sha string) (Change, error) {
 		return c, err
 	}
 	cfg := e.Config(p, mainSHA).Guarded(p)
-	protected := append([]string{".hive/project.json", ".hive/goals.md", "docs/REVIEW.md", StewardFile}, cfg.Protected...)
+	protected := append(slices.Clone(BaseProtected), cfg.Protected...)
 	if cfg.Score != nil {
 		protected = append(protected, cfg.Score.Evaluator()...)
 	}
@@ -1394,7 +1427,7 @@ func (e *Effects) Classify(p Project, mainSHA, sha string) (Change, error) {
 		file := f[2]
 		c.Files = append(c.Files, file)
 		c.Lines += add + del
-		if e.isRecorded(p, sha, file) {
+		if e.isRecorded(p, cfg, sha, file) {
 			c.Recorded = append(c.Recorded, file)
 		} else if under(file, protected) {
 			c.Protected = append(c.Protected, file)
@@ -2598,6 +2631,15 @@ func (e *Effects) Record(p Project, main string, files map[string]string, messag
 	if main == "" {
 		return "", errors.New("a record goes on top of main, and the repository is empty")
 	}
+	cfg := e.Config(p, main).Guarded(p)
+	for f := range files {
+		if f != cfg.Ledger {
+			return "", fmt.Errorf("a record writes only the ledger main's project.json names, not %q", f)
+		}
+		if err := LedgerPathOK(cfg, f); err != nil {
+			return "", err
+		}
+	}
 	return e.write(p, main, files, message, "record")
 }
 
@@ -2618,6 +2660,9 @@ func (e *Effects) write(p Project, base string, files map[string]string, message
 	defer e.dropCheckout(dir)
 	for path, content := range files {
 		full := filepath.Join(dir, filepath.FromSlash(path))
+		if err := inside(dir, full); err != nil {
+			return "", err
+		}
 		os.MkdirAll(filepath.Dir(full), 0o755)
 		if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
 			return "", err
@@ -2658,6 +2703,27 @@ func (e *Effects) PushInitial(p Project, sha string) error {
 	}
 	_, err := GitEnvT(5*time.Minute, dir, ghEnv(p.Repo), "push", "-q", "origin", sha+":refs/heads/"+p.Branch)
 	return err
+}
+
+// inside refuses full unless it lies under dir with no symlink on the way
+// (the checkout's own files are the branch's to make one), so a host write
+// lands in the checkout and nowhere else.
+func inside(dir, full string) error {
+	rel, err := filepath.Rel(dir, full)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+		return fmt.Errorf("%s is outside the checkout", full)
+	}
+	at := dir
+	for _, seg := range strings.Split(rel, string(filepath.Separator)) {
+		if strings.EqualFold(seg, ".git") {
+			return fmt.Errorf("%s is inside .git", rel)
+		}
+		at = filepath.Join(at, seg)
+		if fi, err := os.Lstat(at); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("%s goes through a symlink", rel)
+		}
+	}
+	return nil
 }
 
 // hostCommit moves a commit made in a gate clone into the host clone.
