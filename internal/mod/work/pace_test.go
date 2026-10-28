@@ -360,6 +360,42 @@ func TestCheckRankFixes(t *testing.T) {
 	}
 }
 
+// While main is red, the fix whose brief names one of its failing tests goes
+// ahead of every other fix, though behind main's own measurement; once main
+// passes it is one fix among the rest (issue #1877).
+func TestCheckRankRedMainFix(t *testing.T) {
+	m, _, _ := helperRig(t)
+	m.mu.Lock()
+	m.tasks["red"] = &Task{ID: "red", Project: "p", SHA: "s1", Stage: StageTesting, Aim: AimFix, Title: "Fix the flaky example.com/x/internal/core::TestStaleModuleCacheRunsAgain"}
+	m.tasks["why"] = &Task{ID: "why", Project: "p", SHA: "s2", Stage: StageTesting, Aim: AimFix, AimWhy: "TestMerge fails on main"}
+	m.tasks["fix"] = &Task{ID: "fix", Project: "p", SHA: "s3", Stage: StageTesting, Aim: AimFix, Title: "TestStaleModuleCacheRunsAgainSlowly fails"}
+	m.tasks["gain"] = &Task{ID: "gain", Project: "p", SHA: "s4", Stage: StageTesting, Known: "TestMerge"}
+	m.mainFails["p"] = []string{"TestStaleModuleCacheRunsAgain", "TestMerge/sub_case"}
+	m.mu.Unlock()
+	for sha, want := range map[string]int{"s1": rankRedFix, "s2": rankRedFix, "s3": rankFix, "s4": 0} {
+		if got := m.checkRank("p", sha, "test"); got != want {
+			t.Errorf("while main is red, rank of %s: %d, want %d", sha, got, want)
+		}
+	}
+	if got := m.checkRank("other", "s1", "test"); got != 0 {
+		t.Errorf("another project's sha ranked %d", got)
+	}
+	done := m.MeasuringMain("p", "main1")
+	if m.checkRank("p", "main1", "test") <= m.checkRank("p", "s1", "test") {
+		t.Error("the red main's fix ranks with main's own measurement")
+	}
+	done()
+	m.mu.Lock()
+	delete(m.mainFails, "p")
+	m.mu.Unlock()
+	if got := m.checkRank("p", "s1", "test"); got != rankFix {
+		t.Errorf("main green: the fix ranked %d", got)
+	}
+	if RankWhy(rankRedFix) != "fixes red main" || RankWhy(rankMain) != "measures main" || RankWhy(rankFix) != "a fix" {
+		t.Error("RankWhy doesn't tell the ranks apart")
+	}
+}
+
 // Main's own measurement goes ahead of every task's check while it runs,
 // and keeps its place once done (issue #1078).
 func TestCheckRankMainFirst(t *testing.T) {

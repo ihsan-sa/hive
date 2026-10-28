@@ -57,6 +57,10 @@ type RunSpec struct {
 	Inputs     map[string]string `json:"inputs,omitempty"`     // name -> content, placed read-only in /hive/run
 	OneTurn    bool              `json:"one_turn,omitempty"`   // done when a turn ends; nothing is added to its prompts, and it may only finish and report progress
 	Budget     float64           `json:"budget,omitempty"`     // USD the whole run may spend; 0 is no cap
+	// Away sends the run's turns to an executor module with room first,
+	// strained here or not: the work queue started it past its pace because
+	// a runner had room. With none, a turn runs here.
+	Away bool `json:"away,omitempty"`
 	// Route is the harnesses and models the run may go on, in order
 	// (Config.Route): when its own are at their usage limit it moves to the
 	// first of these with room. Empty stays and waits.
@@ -471,6 +475,11 @@ type Runs struct {
 	// Admit says why a run's next turn waits on a module, or "": the work
 	// module's pace for a worker sent back to its task (Returned).
 	Admit func(Run) string
+	// Held is when a module next lets a pick take turns (a model at a
+	// spending cap), zero when it doesn't hold it; TurnBudget is the most a
+	// module lets run's next turn spend, 0 for no limit. Either may be nil.
+	Held       func(Pick) time.Time
+	TurnBudget func(Run) float64
 
 	mu      sync.Mutex
 	runs    map[string]*Run
@@ -1089,8 +1098,9 @@ func (rs *Runs) Start(s RunSpec) (Run, error) {
 		return Run{}, err
 	}
 	if HarnessName(s.Harness) == "open" {
-		m := rs.ws.LoadConfig().Models[s.Model]
-		if err := harness.OpenRouterPaid(m.Endpoint, m.Model); err != nil {
+		cfg := rs.ws.LoadConfig()
+		m := cfg.Models[s.Model]
+		if err := cfg.PaidRefused(s.Model); err != nil {
 			return Run{}, fmt.Errorf("a run won't start on %s: %v", s.Model, err)
 		}
 		if err := m.Holds(s.Budget); err != nil {
@@ -1355,6 +1365,10 @@ func (rs *Runs) logins(h, model string) []Login {
 // its retry too. A check (Reserved) has room up to the week's stop.
 func (rs *Runs) freeAt(h, model string, reserve bool) time.Time {
 	now := time.Now()
+	var held time.Time
+	if rs.Held != nil {
+		held = rs.Held(Pick{Harness: HarnessName(h), Model: model})
+	}
 	logins := rs.logins(h, model)
 	limited := rs.limited(keys(logins), now)
 	var at time.Time
@@ -1379,7 +1393,18 @@ func (rs *Runs) freeAt(h, model string, reserve bool) time.Time {
 	if d, ok := rs.down[Pick{Harness: HarnessName(h), Model: model}.String()]; ok && d.Retry.After(at) {
 		at = d.Retry
 	}
+	if held.After(at) {
+		at = held
+	}
 	return at
+}
+
+// turnBudget is the most a module lets run's next turn spend (TurnBudget).
+func (rs *Runs) turnBudget(r Run) float64 {
+	if rs.TurnBudget == nil {
+		return 0
+	}
+	return rs.TurnBudget(r)
 }
 
 // next is the pick r's next turn goes on, and when it has room: the first of
@@ -2330,11 +2355,11 @@ func (rs *Runs) launch(r Run, cfg Config) {
 		floor, memMax, cpuMax = min(floor, LeadMemFloorMB), 0, 0
 	}
 	// A turn this machine is too strained for goes to an executor module
-	// with room, or waits.
+	// with room, or waits; an away run's goes there first anyway.
 	var elsewhere sandbox.Sandbox
 	where := ""
 	why := Strained(floor, memMax, cpuMax)
-	if why != "" {
+	if why != "" || (r.Away && !r.Lead()) {
 		elsewhere, where = rs.executor()
 	}
 	if why != "" && elsewhere == nil {
@@ -2396,7 +2421,7 @@ func (rs *Runs) launch(r Run, cfg Config) {
 	}
 	if HarnessName(r.Harness) == "open" {
 		m := cfg.Models[r.Model]
-		if err := harness.OpenRouterPaid(m.Endpoint, m.Model); err != nil {
+		if err := cfg.PaidRefused(r.Model); err != nil {
 			rs.SetStatus(r.ID, StatusBlocked, fmt.Sprintf("no turn on %s: %v; route the run to a free model and reopen it", r.Model, err))
 			return
 		}
@@ -2514,7 +2539,7 @@ func (rs *Runs) Elsewhere() bool {
 }
 
 // executor returns an executor module with room for a turn this machine is
-// too strained to start, and the runner it named; nil when there is none or
+// too strained to start (or an away run's), and the runner it named; nil when there is none or
 // the local sandbox isn't one whose spec another machine can run.
 func (rs *Runs) executor() (sandbox.Sandbox, string) {
 	if rs.Executor == nil {
@@ -2591,6 +2616,9 @@ func (rs *Runs) sandboxSpec(cfg Config, sb sandbox.Sandbox, h harness.Harness, r
 		// Claude Code counts --max-budget-usd against this process's spend
 		// only, not the running total a resumed session carries on.
 		t.MaxBudgetUSD = max(r.Budget-r.Cost, 0.01)
+	}
+	if b := rs.turnBudget(r); b > 0 && (t.MaxBudgetUSD == 0 || b < t.MaxBudgetUSD) {
+		t.MaxBudgetUSD = b
 	}
 	if sb.Isolated() {
 		t.SystemFile = "/hive/run/system.md"
