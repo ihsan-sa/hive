@@ -177,6 +177,7 @@ func New(c *core.Core, a *agents.Agents, w *work.Module, ch *chat.Module) *Modul
 	work.BestScore = m.Best
 	work.Measured = m.measured
 	c.Effects.Quarantined = m.QuarantinedTests
+	c.Runs.Ops().Register(core.Op{Name: "pivot", Help: `{"case","evidence","project"} -> any agent proposes a pivot: a short case (what to stop, throw away or change, and what instead) and the evidence for it. It is filed as a fix, first in line, its worker weighs the case before acting and nothing bounds what it may throw away; the project's lead and the person hear it at once and turn it down with withdraw`, Fn: m.opPivot})
 	go m.measureLoop()
 	return m
 }
@@ -897,9 +898,9 @@ func (m *Module) afterMerge(t work.Task) {
 			}
 			reason += fmt.Sprintf(", and %g measured again", again)
 		}
-		m.lookIntoDip(p, t, reason)
+		looked := m.lookIntoDip(p, t, reason, bar)
 		ms.Kept, ms.Best = true, &b
-		ms.Note = "kept as a fix (" + core.Clip(t.AimWhy, 200) + ") though " + reason + "; a brief looks into the dip; " + note
+		ms.Note = "kept as a fix (" + core.Clip(t.AimWhy, 200) + ") though " + reason + "; " + looked + "; " + note
 		m.record(ms)
 		if m.OnKept != nil {
 			m.OnKept(p.Name, t.MergeSHA)
@@ -957,12 +958,41 @@ func (m *Module) revert(p core.Project, t work.Task, ms Measurement, reason stri
 	}
 }
 
+// dipLook begins the title of the brief that looks into a fix's score dip.
+const dipLook = "Look into the score dip after "
+
 // lookIntoDip files, once per merge, the brief that judges a fix's score
-// dip: what caused it, and whether the fix itself made things worse.
-func (m *Module) lookIntoDip(p core.Project, t work.Task, reason string) {
-	title := core.Clip("Look into the score dip after "+core.Short(t.MergeSHA)+": "+t.Label(), 120)
+// dip: what caused it, and whether the fix itself made things worse. A dip
+// whose cause is already being looked into, or already gone from main, files
+// none (three of four looks on 2026-10-27 re-found one known cause): before
+// is the score main had before it, and the result says what was done.
+func (m *Module) lookIntoDip(p core.Project, t work.Task, reason string, before float64) string {
+	title := core.Clip(dipLook+core.Short(t.MergeSHA)+": "+t.Label(), 120)
 	if len(m.Work.List(func(x work.Task) bool { return x.Project == p.Name && x.Title == title })) > 0 {
-		return
+		return "a brief looks into the dip"
+	}
+	// A look a worker will still read (AddKnown: new, queued, or working
+	// with its worker live) takes this dip as more of what it looks into: a
+	// second worker would only find the same cause. One past its worker, in
+	// review or merge, takes nothing, and this dip gets its own look.
+	open := m.Work.List(func(x work.Task) bool {
+		return x.Project == p.Name && x.From == "improve" && strings.HasPrefix(x.Title, dipLook) && !x.Terminal()
+	})
+	slices.Reverse(open) // oldest first
+	for _, o := range open {
+		if _, ok := m.Work.AddKnown(o.ID, "improve", fmt.Sprintf("Main dipped again after %s (task %s, a fix: %s): %s. "+
+			"If it is the same cause, say so; if it is another, name it too.", core.Short(t.MergeSHA), t.ID, core.Clip(t.AimWhy, 200), reason)); ok {
+			return "the look into an earlier dip still open (" + o.ID + ") takes this one too"
+		}
+	}
+	// Main gone past the merge and back within tolerance at its head: the
+	// dip went with what came after (a fix to its cause, or the load).
+	if cfg := m.C.Effects.Config(p, t.MergeSHA); cfg.Score != nil {
+		if head, err := m.C.Effects.Sync(p); err == nil && head != "" && m.after(p, head, t.MergeSHA) {
+			if now, ok := m.scoreNow(p, head); ok && cfg.Score.WithinTolerance(now, before) {
+				return fmt.Sprintf("no look into the dip: main at %s scores %g measured now, within tolerance of the %g before it, so the dip is gone from main", core.Short(head), now, before)
+			}
+		}
 	}
 	if _, err := m.Work.File(work.Brief{Project: p.Name, From: "improve", Chat: t.Chat, Thread: t.Thread, Title: title,
 		// The failure its known quotes is the fix's, not one of its own; a
@@ -977,6 +1007,7 @@ func (m *Module) lookIntoDip(p core.Project, t work.Task, reason string) {
 			t.ID, core.Clip(t.AimWhy, 300), core.Short(t.MergeSHA), reason)}); err != nil {
 		m.C.J.MustAppend("alert.raised", map[string]string{"kind": "dip", "project": p.Name, "text": "could not file a look into a fix's score dip: " + err.Error()})
 	}
+	return "a brief looks into the dip"
 }
 
 // flakeWindow is how far back a test's failures elsewhere count as a flake.

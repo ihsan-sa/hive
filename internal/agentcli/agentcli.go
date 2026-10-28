@@ -182,6 +182,8 @@ A value of @path reads that file. Common ops:
                                                  names, which merges on its tests and reads and isn't reverted
                                                  for a score dip alone, or a gain, which on the Hive's own
                                                  repository merges only on the recursive gate's clear gain
+  pivot     --case "..." --evidence "..." [--project p]   any agent: a change of direction, filed first in
+                                                 line as a fix; its worker weighs the case, then may throw away anything
   warden    --want "..." --why "..." --steps "..."   for anything past your reach; the person decides
   install   --tool python|uv|node|go [--version 3.12]   installs it for every agent, no root,
                                                  on your PATH at once; give the call a 25-minute timeout
