@@ -344,6 +344,10 @@ type Module struct {
 	// measuring counts, per project@sha, the measurements of main running
 	// now (MeasuringMain), whose checks go first (pace.go).
 	measuring map[string]int
+	// mainFails holds, per project, the tests its red main fails now, so
+	// the fix that names one has its check go first (checkRank); emptied
+	// when main's tests pass.
+	mainFails map[string][]string
 	// later is when a held task (waiting on the forge's checks or an outside
 	// read) is next looked at; kept in memory, so a restart looks at once.
 	// Guarded by mu: due reads it with mu held, hold takes mu itself.
@@ -395,7 +399,7 @@ type Module struct {
 
 // New loads tasks and registers the brief op.
 func New(c *core.Core, a *agents.Agents, ch *chat.Module) *Module {
-	m := &Module{C: c, Agents: a, Chat: ch, tasks: map[string]*Task{}, busy: map[string]bool{}, aims: map[string]aimAsk{}, steered: map[string]time.Time{}, mainRed: map[string]bool{}, sighted: map[string]bool{}, cantRunOpen: map[string]string{}, measuring: map[string]int{}, later: map[string]time.Time{}, prPolled: map[string]time.Time{}, holds: map[string]*MergeHold{}, holdPolled: map[string]time.Time{}, refusedAsked: map[string]time.Time{}}
+	m := &Module{C: c, Agents: a, Chat: ch, tasks: map[string]*Task{}, busy: map[string]bool{}, aims: map[string]aimAsk{}, steered: map[string]time.Time{}, mainRed: map[string]bool{}, sighted: map[string]bool{}, cantRunOpen: map[string]string{}, measuring: map[string]int{}, mainFails: map[string][]string{}, later: map[string]time.Time{}, prPolled: map[string]time.Time{}, holds: map[string]*MergeHold{}, holdPolled: map[string]time.Time{}, refusedAsked: map[string]time.Time{}}
 	m.checks.loadCuts, m.gates.loadCuts = true, true // their builds and child Hives make the load
 	apply := func(e core.Event) {
 		if e.Kind == "merge.held" || e.Kind == "merge.lifted" {
@@ -450,7 +454,7 @@ func New(c *core.Core, a *agents.Agents, ch *chat.Module) *Module {
 	c.Person.Handle("gate", m.onPersonGate)
 	c.Effects.MergeHeld = m.MergeHeld
 	c.Effects.Slots.Resize(m.checkSlots)
-	c.Effects.Slots.Prioritize(m.checkRank, rankMain)
+	c.Effects.Slots.Prioritize(m.checkRank, rankRedFix)
 	return m
 }
 
@@ -1857,7 +1861,7 @@ func (m *Module) test(t *Task, p core.Project) error {
 		return err
 	}
 	cfg := m.C.Effects.Config(p, main)
-	c, ok, err := m.headTest(t, p, cfg.Test)
+	c, ok, err := m.headTest(t, p, main, cfg.Test)
 	if !ok || err != nil {
 		return err // queued or running behind the step: it waits in testing
 	}
@@ -1908,6 +1912,11 @@ func (m *Module) test(t *Task, p core.Project) error {
 		if mc.CantRun != "" {
 			return m.cantRun(t, p, mc)
 		}
+		m.mu.Lock()
+		if m.mainFails[p.Name] = mc.Failed; mc.OK {
+			delete(m.mainFails, p.Name)
+		}
+		m.mu.Unlock()
 		switch {
 		case !mc.OK && !core.NoWorse(c, mc):
 			return m.waitOnMain(t, p, main, mc)
@@ -2117,6 +2126,7 @@ func (m *Module) failsAgain(p core.Project, sha, command string, c core.Check) b
 // on main waits on it, so its checks go ahead of the line.
 func (m *Module) mainTests(p core.Project, main, command string) (core.Check, error) {
 	c, ok := m.C.Effects.GetCheck(p.Name, main, "test")
+	ok = ok && c.Scope == nil // main's own answer is its whole run
 	if !ok || !c.OK && c.CantRun == "" && m.Retest != nil {
 		defer m.MeasuringMain(p.Name, main)()
 	}
@@ -2489,6 +2499,9 @@ func (m *Module) merge(t *Task, p core.Project) error {
 		return err
 	}
 	if wait, err := m.upToDate(t, p, main, pr); wait || err != nil {
+		return err
+	}
+	if wait, err := m.publishScan(t, p, main); wait || err != nil {
 		return err
 	}
 	// The security read first: it takes longest, so its line goes on the PR

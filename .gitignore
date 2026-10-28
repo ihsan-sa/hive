@@ -5,5 +5,4 @@
 *.test
 *.exe~
 __pycache__/
-# TestCheckRecordsItsDisk scratch folders, should a run leave one
-internal/core/disk-test-*/
+disk-test-*/
