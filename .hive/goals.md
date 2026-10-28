@@ -14,13 +14,23 @@ Soft layers are a big part of that loop (23:21): sub-Hives in this Hive's state,
 
 The person asked (19:36 local): "Given that our current progress have been very predictably roadblock after roadlack, how do we pivot/accelerate". The lead proposed three things, and the person agreed (19:39): "Excellent idea let's do it. We need to be willing to pivot fast and throw stuff away. In somewways the opportunity cost of staying on the same track is too high".
 
-1. **A daily release train.** H0 runs a stable release while changes collect on main. Once a day a candidate release runs real work in a child Hive, the canary (the tests, the benchmark, and a few real tasks merged through its own repos); H0 moves to it only if it holds. No release per fix. This replaces "follow every pre-release at once" (see Standing asks).
+1. **A daily release train.** H0 runs a stable release while changes collect on main. About once a day (a judgment, not a timer: see 2026-10-28 below) a candidate release runs real work in a child Hive, the canary (the tests, the benchmark, and a few real tasks merged through its own repos); H0 moves to it only if it holds. No release per fix. This replaces "follow every pre-release at once" (see Standing asks).
 2. **Big, focused batches, not many small tasks.** Each core area goes to one long batch session at a time, with a work-in-progress limit of a handful of open batches for the Hive itself. Queued work that doesn't fit is folded into a batch or withdrawn; built and reviewed work is kept; withdrawn PRs keep their branches.
 3. **Delete before fixing.** For each mechanism, ask "can we remove it?" before "how do we fix it?", down to the smallest loop that works: brief, worker, tests and CI, one review, merge, then the daily train. The recursive gate stays only for claimed gains.
 
 No bounds on how far a pivot goes (20:09 local): "we should be ready to dp radical changes and pivots where current stuff may be rendered completely obsiolter or the hive could change fully its architecture. Thats teh point of the hive. We cant set any bouds". Nothing in the design is fixed, not the merge line, the gate, the queue or the roles; the goals in this file are. And the person added: "the cost of not pivoting is way bigger".
 
 Any agent can propose a pivot (20:19 local): "Maybe it shouldnt be only in a stepp back loop but rather ANY agent can propose a pivot". An agent that sees the current approach costing more than another would files a short proposal: what to stop, what to do instead, the evidence, and what it throws away.
+
+## No set rules: the Hive is one (2026-10-28)
+
+The person, on finding the release train built as one try a day (12:21 local, "HUH why does each day have ONE try??"), 12:24: "the whole point of the hive is that it doesnt follow set rules and pipelines ... We cannot build a tight fast system if we have a ton of constraints and arbitrary rules at every turn, simply because those rules cannot be updated fast enough to match our intended dev rate". And 12:27: "This is not only you but the WHOLE HIVE. The hive is ONE. All agents are the same, just as important as one another, have the same amount of say, etc. They all work together as a HIVE. They enforce rules for one another and guide one another. Thats the whole point of giving up the rigid structure". And: "we gotta think laterally here".
+
+So:
+
+- **No fixed rule stands in the way.** An ask from the person is a judgment to make, not a number to hard-code: "once a day", a cap, a count or a timer is a default at most, which any agent may set aside on the spot with its reason on the record. Fixing one rule by adding another is the same trap; delete it or make it judgment instead.
+- **The Hive is one.** Every agent, lead or worker, reviewer or sweep, has the same say. Agents hold one another to the goals and guide one another; an agent that meets a rule in its way, or sees another agent add one, changes it or calls it out, whoever made it. A miss is the whole Hive's, not one agent's.
+- **Think laterally.** When the same kind of roadblock keeps coming back, look for what makes it come back (a rule, a mechanism, the way behaviour only changes through a release) and propose a pivot on that, not another patch.
 
 ## First milestone
 
@@ -91,7 +101,7 @@ So a change to a path on `tests/LANDING-security.toml` gets its security read fr
 What the person has asked that holds from now on, in their words where they gave them. A line may also hold answers given on the person's behalf, credited to whoever gave them:
 
 - **Always maximum autonomy.** "the intended behaviour is ALWAYS max autonomy. Me being here is not the norm, its the exception." (2026-10-24, 23:14). Autobox and perms answer for the person while they're away (23:11). If autobox, perms or the person get too involved in the Hive's workings, the Hive tells them they're interfering (23:22).
-- **Every agent equal.** "you're in charge of this, along with ALL the agents in the hive. You may be the lead, but all agents have the same importance and ability to do things" (23:16). Any agent that sees what the loop needs may act on it or file it.
+- **Every agent equal.** "you're in charge of this, along with ALL the agents in the hive. You may be the lead, but all agents have the same importance and ability to do things" (23:16). Any agent that sees what the loop needs may act on it or file it. On 2026-10-28 (12:27): "The hive is ONE ... They enforce rules for one another and guide one another" (see No set rules above).
 - **A known fix wins; otherwise the score leans.** "When you know a fix is needed, it should win even if the score dips afterwards: the score is a data point, not the judge. But when it's unclear whether a change is a fix or a gain, lean on the score instead of assuming it's a fix." (23:20). Scoring is a data point in a model's judgement call (22:50; see docs/judge.md).
 - **Versions.** "call the first release that's stable enough for my own projects 1.0, and only go to 2.0 when an upgrade would break an existing setup." (23:20).
 - **Build against the essay** at ihsan.cc/writing/the-hive: its text is in [docs/the-hive-essay.md](../docs/the-hive-essay.md), and where the Hive departs from it today is listed, as known gaps, at the end of [docs/spec.md](../docs/spec.md).
