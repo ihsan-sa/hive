@@ -11,6 +11,7 @@ import (
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/work"
+	"github.com/ihsan-sa/hive-standalone-build/internal/setup"
 )
 
 // feedRow is one line of the dashboard's live feed: who told whom what.
@@ -277,7 +278,7 @@ func (m *model) usage(w int) string {
 	var parts []string
 	now := time.Now()
 	for _, p := range m.st.Plans {
-		s := text.Visible(p.Harness) + " " + standing(p, now)
+		s := text.Visible(setup.LoginLabel(m.st.LoginNames, p.Key())) + " " + standing(p, now)
 		for _, w := range p.Limit.WindowUses(now) {
 			s += " · " + windowShort(w, now, false)
 		}
@@ -285,7 +286,7 @@ func (m *model) usage(w int) string {
 	}
 	for _, l := range m.st.Logins {
 		if l.Error != "" {
-			parts = append(parts, stBad.Render(text.Visible(l.Login)+" login can't renew"))
+			parts = append(parts, stBad.Render(text.Visible(setup.LoginLabel(m.st.LoginNames, l.Login))+" login can't renew"))
 		}
 	}
 	if n := len(m.st.Alerts); n > 0 {
