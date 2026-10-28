@@ -84,16 +84,17 @@ func TestRecordFilesEveryEvent(t *testing.T) {
 	restart("1") // what is left of a cut "12"
 }
 
-// Search returns the matching entry, not its whole file, and the newest
-// state first when two match as well. Find shows the best limit of them and
+// Search returns the matching entry, not its whole file: one per file, the
+// newest state when two match as well. Find shows the best limit of hits and
 // says how many more matched, and marks an entry it clips.
 func TestSearch(t *testing.T) {
 	dir := t.TempDir()
 	os.MkdirAll(filepath.Join(dir, "record", "task"), 0o755)
 	os.WriteFile(filepath.Join(dir, "record", "task", "t1.md"), []byte("# task t1\n\n### 2026-10-01 09:00 · task.saved · seq 1\n- title: Add login\n- stage: working\n\n### 2026-10-02 09:00 · task.saved · seq 9\n- stage: merged\n"), 0o644)
 	os.WriteFile(filepath.Join(dir, "billing.md"), []byte("---\ntitle: Billing\ndate: 2026-09-01\n---\n\nInvoices go out monthly.\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "record", "task", "t2.md"), []byte("# task t2\n\n### 2026-10-03 09:00 · task.saved · seq 12\n- title: Fix login\n"), 0o644)
 	hits := Search(dir, "login merged")
-	if len(hits) != 2 || !strings.Contains(hits[0].Text, "seq 9") {
+	if len(hits) != 2 || !strings.Contains(hits[0].Text, "seq 9") || !strings.Contains(hits[1].Text, "seq 12") {
 		t.Fatalf("hits: %+v", hits)
 	}
 	if hits := Search(dir, "invoices"); len(hits) != 1 || hits[0].File != "billing.md" {
@@ -102,10 +103,10 @@ func TestSearch(t *testing.T) {
 	if got := Find(dir, "zebra", ""); !strings.Contains(got, "doesn't cover") {
 		t.Fatal(got)
 	}
-	if got := Find(dir, "login merged", "1"); !strings.Contains(got, "seq 9") || strings.Contains(got, "seq 1\n") || !strings.Contains(got, "1 more match") {
+	if got := Find(dir, "login merged", "1"); !strings.Contains(got, "seq 9") || strings.Contains(got, "seq 12") || !strings.Contains(got, "1 more match") {
 		t.Fatal(got)
 	}
-	if got := Find(dir, "login merged", "all"); !strings.Contains(got, "seq 1\n") || strings.Contains(got, "more match") {
+	if got := Find(dir, "login merged", "all"); !strings.Contains(got, "seq 12") || strings.Contains(got, "seq 1\n") || strings.Contains(got, "more match") {
 		t.Fatal(got)
 	}
 	os.WriteFile(filepath.Join(dir, "long.md"), []byte("walrus "+strings.Repeat("x", 2000)), 0o644)
@@ -124,6 +125,33 @@ func TestSearch(t *testing.T) {
 		if hits := Search(dir, "invoices"); len(hits) != 1 || hits[0].File != "billing.md" {
 			t.Fatalf("hits past an unreadable folder: %+v", hits)
 		}
+	}
+}
+
+// Search puts the note whose title says what was asked first, ahead of long
+// pages that mention every word, notes ahead of the record, and the same text
+// once; a word matches where a word starts, so "stall" doesn't find
+// "installer".
+func TestSearchFindsTheNoteYouMean(t *testing.T) {
+	dir := t.TempDir()
+	os.MkdirAll(filepath.Join(dir, "record", "task"), 0o755)
+	os.WriteFile(filepath.Join(dir, "record", "task", "t1.md"), []byte("# task t1\n\n### 2026-10-28 09:00 · task.saved · seq 1\n- title: merge stall again\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "merge-stall-2026-10-27.md"), []byte("---\ntitle: Merge stall 2026-10-27\ndate: 2026-10-27\n---\n\nMerges fell to 1-3/h.\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "project-hive-what-s-true-now.md"), []byte("---\ntitle: Project hive: what's true now\ndate: 2026-10-28\nconsolidated: 2026-10-28\n---\n\nA merge stall on 10-27; merges stall when checks wait. "+strings.Repeat("merge stall ", 20)+"\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "installer.md"), []byte("---\ntitle: Installer URLs\ndate: 2026-10-28\n---\n\nThe installer merges paths.\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "copy.md"), []byte("---\ntitle: Installer URLs\ndate: 2026-10-28\n---\n\nThe installer merges paths.\n"), 0o644)
+	for _, f := range []string{"a", "b", "c"} {
+		os.WriteFile(filepath.Join(dir, f+".md"), []byte("---\ntitle: Other "+f+"\n---\n\nmerge things\n"), 0o644)
+	}
+	var got []string
+	for _, h := range Search(dir, "merge stall") {
+		got = append(got, h.File)
+	}
+	if len(got) != 7 || got[0] != "merge-stall-2026-10-27.md" || got[1] != "project-hive-what-s-true-now.md" || got[6] != "record/task/t1.md" {
+		t.Errorf("order %v", got)
+	}
+	if hits := Search(dir, "stall"); len(hits) != 3 {
+		t.Errorf("stall found %+v", hits)
 	}
 }
 
