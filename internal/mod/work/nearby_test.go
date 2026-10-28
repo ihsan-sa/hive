@@ -85,8 +85,7 @@ func TestConflictNamesWhoMovedMain(t *testing.T) {
 	if err := m.conflict(task, p, task.SHA, errors.New("main moved")); err != nil {
 		t.Fatal(err)
 	}
-	r, _ := m.C.Runs.Get(task.Worker)
-	got := strings.Join(r.Pending, "\n")
+	got := task.Resend // sent when the pace has room
 	if !strings.Contains(got, "task t-mover, run w-mover") || strings.Contains(got, "t-old") {
 		t.Fatalf("conflict message:\n%s", got)
 	}
