@@ -99,11 +99,11 @@ func TestQuarantine(t *testing.T) {
 	}
 }
 
-// A task and its own follow-up, or two tasks on the same head, are one
+// A task and its own revert, or two tasks on the same head, are one
 // change: their reds aren't two unrelated branches.
 func TestQuarantineNeedsUnrelatedBranches(t *testing.T) {
 	m := rig(t)
-	m.C.J.MustAppend("task.saved", work.Task{ID: "f1", Project: "hive", Title: "follow up", FollowUp: "t1"})
+	m.C.J.MustAppend("task.saved", work.Task{ID: "f1", Project: "hive", Title: "revert", RevertOf: "t1"})
 	sight(m, "t1", "https://ci/1", "TestX")
 	sight(m, "f1", "https://ci/2", "TestX")
 	m.C.J.MustAppend("forge.tests_failed", map[string]any{"project": "hive", "task": "t2", "sha": "abct1", "check": "c", "url": "https://ci/3", "tests": []string{"TestX"}})
@@ -140,10 +140,10 @@ func TestQuarantineAgesOut(t *testing.T) {
 }
 
 // A PR is excused only on evidence from outside its task: its own reds, its
-// re-runs' passes and its follow-ups' reds don't count for it.
+// re-runs' passes and its reverts' reds don't count for it.
 func TestQuarantineNotOnItsOwnEvidence(t *testing.T) {
 	m := rig(t)
-	m.C.J.MustAppend("task.saved", work.Task{ID: "f1", Project: "hive", Title: "follow up", FollowUp: "t1"})
+	m.C.J.MustAppend("task.saved", work.Task{ID: "f1", Project: "hive", Title: "revert", RevertOf: "t1"})
 	sight(m, "t1", "https://ci/1", "pkg::TestX")
 	m.C.J.MustAppend("forge.flaked", map[string]any{"project": "hive", "task": "t1", "sha": "abct1", "checks": []string{"test"}, "tests": []string{"pkg::TestX"}})
 	sight(m, "f1", "https://ci/2", "pkg::TestX")
@@ -206,8 +206,8 @@ func TestQuarantineFromLocalChecks(t *testing.T) {
 
 // A check run broken by its environment (its folder gone) or failing dozens
 // of tests at once is no sighting of any of them: two such runs on unrelated
-// heads quarantine nothing and file no fix briefs, and a waiting fix brief
-// filed on such runs before is taken back.
+// heads quarantine nothing and file no fix briefs, and a fix brief filed on
+// such runs before is taken back, even once its worker started.
 func TestQuarantineSkipsBrokenRuns(t *testing.T) {
 	m := rig(t)
 	pkg := "github.com/x/hive/internal/core::"
@@ -234,9 +234,15 @@ func TestQuarantineSkipsBrokenRuns(t *testing.T) {
 
 	stale, _ := m.Work.File(work.Brief{Project: "hive", From: "improve", Title: flakyTitle + key, Done: "d", Known: "k"})
 	kept, _ := m.Work.File(work.Brief{Project: "hive", From: "improve", Title: flakyTitle + pkg + "TestOther", Done: "d", Known: "k"})
+	started, _ := m.Work.File(work.Brief{Project: "hive", From: "improve", Title: flakyTitle + pkg + "TestManyA", Done: "d", Known: "k"})
+	started.Stage = work.StageWorking
+	m.C.J.MustAppend("task.saved", started)
 	m.fileQuarantined()
-	if n := len(m.Work.List(func(t work.Task) bool { return strings.HasPrefix(t.Title, flakyTitle) })); n != 2 {
-		t.Fatalf("%d fix tasks, want only the two filed by hand", n)
+	if n := len(m.Work.List(func(t work.Task) bool { return strings.HasPrefix(t.Title, flakyTitle) })); n != 3 {
+		t.Fatalf("%d fix tasks, want only the three filed by hand", n)
+	}
+	if got, _ := m.Work.Get(started.ID); !got.Withdrawn() {
+		t.Fatalf("the started brief filed on broken runs is %s (%s), want withdrawn", got.Stage, got.Reason)
 	}
 	if got, _ := m.Work.Get(stale.ID); !got.Withdrawn() {
 		t.Fatalf("the brief filed on broken runs is %s (%s), want withdrawn", got.Stage, got.Reason)

@@ -1,6 +1,7 @@
 package harness
 
 import (
+	"encoding/json"
 	"slices"
 	"strings"
 	"testing"
@@ -271,6 +272,26 @@ func TestWindowWithoutResetHasNone(t *testing.T) {
 	}
 }
 
+// Only a free variant on OpenRouter passes; other endpoints aren't asked.
+func TestOpenRouterPaid(t *testing.T) {
+	for _, c := range []struct {
+		endpoint, model string
+		paid            bool
+	}{
+		{"https://openrouter.ai/api/v1", "nvidia/nemotron-3-ultra-550b-a55b:free", false},
+		{"https://openrouter.ai/api/v1", "anthropic/claude-opus-5", true},
+		{"https://OpenRouter.ai./api/v1", "openai/gpt-5", true},
+		{"https://eu.openrouter.ai/api/v1", "openrouter/auto", true},
+		{"https://openrouter.ai/api/v1", "meta/llama:freeish", true},
+		{"https://notopenrouter.ai/v1", "anything", false},
+		{"http://127.0.0.1:11434/v1", "qwen2.5-coder:14b", false},
+	} {
+		if err := OpenRouterPaid(c.endpoint, c.model); (err != nil) != c.paid {
+			t.Errorf("%s %s: %v, want paid %v", c.endpoint, c.model, err, c.paid)
+		}
+	}
+}
+
 // The same for Codex: a rollout window with no reset has none, and one that
 // gives resets_in_seconds (older Codex) resets that long from now.
 func TestCodexWindowWithoutResetHasNone(t *testing.T) {
@@ -286,5 +307,14 @@ func TestCodexWindowWithoutResetHasNone(t *testing.T) {
 	}
 	if d := time.Until(rl.ResetsAt); d < 590*time.Second || d > 600*time.Second {
 		t.Fatalf("resets in %v, want ten minutes: %+v", d, rl)
+	}
+}
+
+func TestCodexModelNotFoundHasStatus(t *testing.T) {
+	msg := `{"type":"error","status":400,"error":{"type":"invalid_request_error","code":"model_not_found","message":"The 'gpt-5' model is not supported when using Codex with a ChatGPT account."}}`
+	line, _ := json.Marshal(map[string]any{"type": "turn.failed", "error": map[string]any{"message": msg}})
+	r := Codex{}.Parse(line)[0].Result
+	if r.APIStatus != 400 {
+		t.Fatalf("status %d", r.APIStatus)
 	}
 }

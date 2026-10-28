@@ -2,6 +2,7 @@ package gate
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"io"
 	"net"
@@ -9,7 +10,6 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -32,8 +32,12 @@ type Meter struct {
 	upstream *url.URL // the gate's own proxy, if it has one
 	bytes    atomic.Int64
 	local    bool // tests only: reach this machine
-	wg       sync.WaitGroup
-	broker   atomic.Pointer[Broker] // answers for GitHub, when the side has its own repositories there
+
+	lookup func(host string) ([]net.IP, error)                      // net.LookupIP; a test's own
+	public func(ctx context.Context, host string) ([]net.IP, error) // public DNS through upstream; a test's own
+	own    func() []net.IP                                          // this machine's addresses; a test's own
+	wg     sync.WaitGroup
+	broker atomic.Pointer[Broker] // answers for GitHub, when the side has its own repositories there
 }
 
 // SetBroker makes b the side's GitHub (nil: GitHub is tunnelled like any
@@ -45,7 +49,10 @@ const ProxyPort = 3128
 
 // StartMeter serves a meter on a unix socket at sock and on a loopback port.
 func StartMeter(sock string) (*Meter, error) {
-	m := &Meter{Sock: sock}
+	m := &Meter{Sock: sock, lookup: net.LookupIP, own: sandbox.OwnAddrs}
+	m.public = func(ctx context.Context, host string) ([]net.IP, error) {
+		return publicDNS(ctx, host, m.upstream)
+	}
 	for _, k := range []string{"HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"} {
 		if v := os.Getenv(k); v != "" {
 			if u, err := url.Parse(v); err == nil && u.Host != "" {
@@ -171,9 +178,11 @@ func (c *countedConn) Write(p []byte) (int, error) {
 }
 
 // dial reaches hostport, directly or through the gate's own proxy, refusing
-// this machine and private networks. A name that resolves to any private
-// address is refused; one that does not resolve here goes to the gate's proxy
-// (which does its own resolving) as a name, never as an address.
+// this machine (by any of its addresses), private networks and local names.
+// A name that resolves to any refused address is refused. One that does not
+// resolve here (a gate inside a sandbox whose only way out is that proxy) is
+// asked of public DNS through the proxy, and goes to it as a name only once
+// public DNS vouches it is on the public internet and not this machine.
 func (m *Meter) dial(hostport string) (net.Conn, error) {
 	host, port, err := net.SplitHostPort(hostport)
 	if err != nil {
@@ -182,20 +191,34 @@ func (m *Meter) dial(hostport string) (net.Conn, error) {
 	if m.local {
 		return net.DialTimeout("tcp", hostport, 30*time.Second)
 	}
-	if strings.EqualFold(host, "localhost") || strings.HasSuffix(strings.ToLower(host), ".localhost") {
-		return nil, fmt.Errorf("the meter does not reach this machine")
+	if why := sandbox.LocalName(host); why != "" {
+		return nil, fmt.Errorf("the meter does not reach this machine or a local name (%s: %s)", host, why)
 	}
 	var ips []net.IP
+	how := ""
 	if ip := net.ParseIP(host); ip != nil {
 		ips = []net.IP{ip}
-	} else if addrs, err := net.LookupIP(host); err == nil {
+	} else if addrs, err := m.lookup(host); err == nil {
 		ips = addrs
 	} else if m.upstream == nil {
 		return nil, err
+	} else {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		ips, err = m.public(ctx, host)
+		cancel()
+		if err != nil {
+			return nil, fmt.Errorf("the meter can't resolve %s here, and %v "+
+				"(public DNS over HTTPS, dns.google or cloudflare-dns.com, must be reachable through the gate's proxy)", host, err)
+		}
+		if len(ips) == 0 {
+			return nil, fmt.Errorf("the meter can't resolve %s here, nor in public DNS", host)
+		}
+		how = ", in public DNS"
 	}
+	mine := m.own()
 	for _, ip := range ips {
-		if !sandbox.Public(ip) {
-			return nil, fmt.Errorf("the meter does not reach this machine or a private network (%s)", ip)
+		if why := sandbox.Refused(ip, mine); why != "" {
+			return nil, fmt.Errorf("the meter does not reach this machine or a private network (%s%s: %s)", ip, how, why)
 		}
 	}
 	if m.upstream == nil {

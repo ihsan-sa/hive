@@ -330,6 +330,7 @@ func (m *Module) scoreNow(p core.Project, sha string) (float64, bool) {
 	if cfg.Score == nil || sha == "" {
 		return 0, false
 	}
+	defer m.Work.MeasuringMain(p.Name, sha)() // the merge's keep/revert waits on it
 	sc := m.C.Effects.RunCheck(p, sha, "score", cfg.Score.Command)
 	if sc.CantRun != "" || !sc.OK || sc.Score == nil {
 		return 0, false
@@ -673,10 +674,49 @@ func (m *Module) enqueue(t work.Task) {
 	}
 }
 
+// measureLoop measures merges as they come. When it is behind, it takes
+// every merge waiting at once and measures each project's newest first, so
+// main is judged as it stands now; the older ones then come through
+// afterMerge covered by it, rather than each one holding the queue for a
+// whole measurement of code main has long moved past.
 func (m *Module) measureLoop() {
 	for t := range m.queue {
-		m.afterMerge(t)
+		batch := []work.Task{t}
+		for more := true; more; {
+			select {
+			case u := <-m.queue:
+				batch = append(batch, u)
+			default:
+				more = false
+			}
+		}
+		for _, t := range m.newestFirst(batch) {
+			m.afterMerge(t)
+		}
 	}
+}
+
+// newestFirst puts each project's newest merge on main ahead of the rest,
+// which keep their order.
+func (m *Module) newestFirst(batch []work.Task) []work.Task {
+	if len(batch) < 2 {
+		return batch
+	}
+	newest := map[string]int{}
+	for i, t := range batch {
+		if j, ok := newest[t.Project]; !ok || m.after(core.Project{Name: t.Project}, t.MergeSHA, batch[j].MergeSHA) {
+			newest[t.Project] = i
+		}
+	}
+	var first, rest []work.Task
+	for i, t := range batch {
+		if newest[t.Project] == i {
+			first = append(first, t)
+		} else {
+			rest = append(rest, t)
+		}
+	}
+	return append(first, rest...)
 }
 
 // Recover re-queues merges whose measurement didn't happen (after a restart).
@@ -833,10 +873,31 @@ func (m *Module) afterMerge(t work.Task) {
 	}
 	if dip && t.Kind != "revert" && t.Fix() {
 		// A known fix wins over a dip (issue #568): it stays, main's score
-		// is the baseline from here, and a brief looks into the dip; only
+		// is the baseline from here (its better of two readings), and a brief looks into the dip; only
 		// that look, judging the fix itself made things worse, reverts it.
-		m.lookIntoDip(p, t, reason)
+		// One reading is not yet a baseline (issue #1788): the fix is scored
+		// once more, and a second reading back within tolerance was no dip;
+		// otherwise the better of the two is the baseline.
+		bar := best
+		if ms.Against != nil {
+			bar = *ms.Against
+		}
 		b := *score
+		if again, ok := m.scoreNow(p, t.MergeSHA); ok {
+			b = cfg.Score.Best(b, again)
+			if cfg.Score.WithinTolerance(again, bar) {
+				b = cfg.Score.Best(again, bar)
+				ms.Kept, ms.Best = true, &b
+				ms.Note = fmt.Sprintf("kept: %g measured again, so the first reading's fall (%s) was noise; the baseline is %g from here; %s", again, reason, b, note)
+				m.record(ms)
+				if m.OnKept != nil {
+					m.OnKept(p.Name, t.MergeSHA)
+				}
+				return
+			}
+			reason += fmt.Sprintf(", and %g measured again", again)
+		}
+		m.lookIntoDip(p, t, reason)
 		ms.Kept, ms.Best = true, &b
 		ms.Note = "kept as a fix (" + core.Clip(t.AimWhy, 200) + ") though " + reason + "; a brief looks into the dip; " + note
 		m.record(ms)

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -112,30 +113,11 @@ func TestNoCommitsWithoutSteps(t *testing.T) {
 	}
 }
 
-// A review follow-up whose worker finished done with no commit judged every
-// item in its account, so it is done and its issue closed; one that finished
-// blocked, or a plain ask with no commit, still blocks.
-func TestFollowUpNoCommitsIsDone(t *testing.T) {
-	m, forge, task, p := noCommitRig(t, 0)
-	task.FollowUp = "t0"
-	done := core.Run{RunSpec: core.RunSpec{ID: "w1"}, Finish: &core.Finish{Status: core.StatusDone, Account: "each item judged not worth doing"}}
-	m.noCommits(task, p, done)
-	if task.Stage != StageDone || len(forge.closed) != 1 {
-		t.Fatalf("stage %q, reason %q, closed %v", task.Stage, task.Reason, forge.closed)
-	}
-	if c := forge.Comments("me/p", 7); len(c) != 1 || !strings.Contains(c[0], "each item judged not worth doing") {
-		t.Fatalf("comments %q", c)
-	}
-
-	m, _, task, p = noCommitRig(t, 0)
-	task.FollowUp = "t0"
-	m.noCommits(task, p, core.Run{RunSpec: core.RunSpec{ID: "w1"}, Finish: &core.Finish{Status: core.StatusBlocked, Account: "stuck"}})
-	if task.Stage != StageBlocked {
-		t.Fatalf("a blocked follow-up: stage %q", task.Stage)
-	}
-
-	m, _, task, p = noCommitRig(t, 0)
-	m.noCommits(task, p, done)
+// A worker that finished done with no commit and no step outside the
+// checkout still blocks: nothing came of the ask.
+func TestNoCommitsIsBlocked(t *testing.T) {
+	m, _, task, p := noCommitRig(t, 0)
+	m.noCommits(task, p, core.Run{RunSpec: core.RunSpec{ID: "w1"}, Finish: &core.Finish{Status: core.StatusDone, Account: "nothing to do"}})
 	if task.Stage != StageBlocked {
 		t.Fatalf("a plain ask: stage %q", task.Stage)
 	}
@@ -331,15 +313,21 @@ func nextCheck(m *Module) time.Duration {
 	return time.Until(m.probe).Round(time.Second)
 }
 
-// A done task whose project is gone drops its pending close and stays done.
+// A done or withdrawn task whose project is gone drops its pending close and
+// stays where it is.
 func TestDoneProjectGone(t *testing.T) {
-	m, _, task, _ := noCommitRig(t, 0)
-	task.Stage, task.IssueOpen, task.Project = StageDone, true, "gone"
-	if err := m.step(task); err != nil {
-		t.Fatal(err)
-	}
-	if task.Stage != StageDone || task.IssueOpen || !logged(task, "project gone is gone, so issue #7 is left open") {
-		t.Fatalf("stage %q, issue open %v, log %v", task.Stage, task.IssueOpen, task.Log)
+	for _, stage := range []string{StageDone, StageStopped} {
+		m, _, task, _ := noCommitRig(t, 0)
+		task.Stage, task.IssueOpen, task.Project = stage, true, "gone"
+		if stage == StageStopped {
+			task.Reason = withdrawn + "lead-1: folded into another"
+		}
+		if err := m.step(task); err != nil {
+			t.Fatalf("%s: %v", stage, err)
+		}
+		if task.Stage != stage || task.IssueOpen || !logged(task, "project gone is gone, so issue #7 is left open") {
+			t.Fatalf("stage %q, issue open %v, log %v", task.Stage, task.IssueOpen, task.Log)
+		}
 	}
 }
 
@@ -506,6 +494,24 @@ func TestPersonStoppedWorkerHolds(t *testing.T) {
 }
 
 // A lead can't recheck a task in a project walled off from it.
+// A task retried from reviewing has its reader stopped, so a hung one
+// doesn't keep its slot, and the next read is a new run, not the stopped one.
+func TestRecheckFromReviewingStopsTheReader(t *testing.T) {
+	m, _, task, _ := noCommitRig(t, 0)
+	task.Stage, task.SHA, task.Reviewer = StageReviewing, "2125f74e", "r-hung"
+	m.C.J.MustAppend("run.created", core.RunSpec{ID: "r-hung", Role: "reviewer", Project: task.Project, Harness: "fake"})
+	m.save(task, "reviewer r-hung reading 2125f74e")
+	if err := m.Recheck(task.ID, "", "the stall watcher"); err != nil {
+		t.Fatal(err)
+	}
+	if r, _ := m.C.Runs.Get("r-hung"); !r.Terminal() {
+		t.Fatalf("the hung reader is still %s after the retry", r.Status)
+	}
+	if got, _ := m.Get(task.ID); got.Stage != StageLanding || got.Reviews != 1 {
+		t.Fatalf("after the retry: %s with %d reviews, want landing with the stopped read counted", got.Stage, got.Reviews)
+	}
+}
+
 func TestRecheckWalled(t *testing.T) {
 	m, _, _, _ := noCommitRig(t, 0)
 	m.C.Projects.Add(core.Project{Name: "secret", Repo: "me/secret", Isolated: true})
@@ -811,9 +817,9 @@ func TestScoredBriefCarriesTheGoal(t *testing.T) {
 	}
 }
 
-// A review's brief ends with main's standing rules, lessons included, so a
-// revert the Hive made (no worker brief to quote them) still carries them; a
-// project with none of the files gets nothing appended.
+// A review's brief ends with main's docs/REVIEW.md in full and points at
+// goals and lessons by path rather than carrying them; a project with none of
+// the files gets nothing appended.
 func TestReviewRulesFromMain(t *testing.T) {
 	m, p := rigAt(t, `{"test":"true"}`)
 	if r := m.reviewRules(p, "HEAD"); r != "" {
@@ -830,59 +836,9 @@ func TestReviewRulesFromMain(t *testing.T) {
 		}
 	}
 	r := m.reviewRules(p, "HEAD")
-	i, j, k := strings.Index(r, "## `docs/REVIEW.md` on main\n\n# Review\n\nsimple wins"), strings.Index(r, "## `.hive/goals.md` on main"), strings.Index(r, "## `.hive/lessons.md` on main\n\n# Lessons\n\n- don't do that again")
-	if i < 0 || j < i || k < j {
+	i, j := strings.Index(r, "## `docs/REVIEW.md` on main\n\n# Review\n\nsimple wins"), strings.Index(r, "`.hive/goals.md` and `.hive/lessons.md` are in your checkout")
+	if i < 0 || j < i || strings.Contains(r, "ship it") || strings.Contains(r, "don't do that again") {
 		t.Fatalf("rules:\n%s", r)
-	}
-}
-
-// Advice from a land is filed once, when the task merges: a step repeated
-// after a restart files no second brief, a follow-up's own advice files none,
-// on a scored project the follow-up keeps its done line, and it is taken as a
-// fix of what the review found, not a gain for the gate.
-func TestFollowUpOnceAfterMerge(t *testing.T) {
-	m, p := rigAt(t, `{"test":"true","score":{"command":"cat s","direction":"higher"}}`)
-	tk := &Task{ID: "t9", Project: "p", Title: "add a helper", Kind: "work", Stage: StageMerged, Reviewer: "r-t9", Advice: []string{"name it better"}}
-	follows := func() []Task { return m.List(func(x Task) bool { return x.FollowUp != "" }) }
-	if err := m.followUp(tk, p); err != nil {
-		t.Fatal(err)
-	}
-	if err := m.followUp(tk, p); err != nil { // the restart: still merged, filed already
-		t.Fatal(err)
-	}
-	fs := follows()
-	if len(fs) != 1 || fs[0].FollowUp != "t9" || fs[0].From != "r-t9" || !strings.Contains(fs[0].Known, "name it better") {
-		t.Fatalf("follow-ups: %+v", fs)
-	}
-	fu := fs[0]
-	if !fu.Fix() || !strings.Contains(fu.AimWhy, "name it better") {
-		t.Fatalf("the follow-up is taken as %s (%q), not a fix", fu.AimWord(), fu.AimWhy)
-	}
-	if d := doneFor(&fu, true); !strings.Contains(d, "judged not worth doing") {
-		t.Fatalf("the follow-up lost its done line: %q", d)
-	}
-	keepAdvice(&fu, []string{"and again"})
-	if len(fu.Advice) != 0 {
-		t.Fatalf("a follow-up kept advice, so the chain goes on: %v", fu.Advice)
-	}
-	keepAdvice(tk, []string{" name it better ", "", "test it"}) // a second read repeats one item
-	if strings.Join(tk.Advice, "|") != "name it better|test it" {
-		t.Fatalf("advice: %q", tk.Advice)
-	}
-}
-
-// A review follow-up filed before followUp named its aim, still queued with
-// none, is taken as a fix; one its worker or the lead aimed at a gain is a gain.
-func TestUnaimedFollowUpIsAFix(t *testing.T) {
-	fu := Task{ID: "t2", Title: "Follow up the review of x", FollowUp: "t1"}
-	if !fu.Fix() || !strings.Contains(fu.AimWord(), "follow-up of t1") {
-		t.Fatalf("an unaimed follow-up is taken as %s", fu.AimWord())
-	}
-	if fu.Aim = AimGain; fu.Fix() {
-		t.Fatal("a follow-up aimed at a gain is taken as a fix")
-	}
-	if plain := (Task{ID: "t3"}); plain.Fix() {
-		t.Fatal("an unaimed brief that follows up nothing is taken as a fix")
 	}
 }
 
@@ -984,18 +940,20 @@ func TestLandedEndsATaskOnMain(t *testing.T) {
 	}
 }
 
-// queue now starts a brief past the one it waits on, only with a reason, put
-// on its record; the max_workers cap still holds it.
-func TestQueueNowPastOverlap(t *testing.T) {
+// queue now puts a brief first in line, only with a reason, put on its
+// record; the max_workers cap still holds it.
+func TestQueueNowGoesFirst(t *testing.T) {
 	m := queueRig(t)
 	lead := core.Run{RunSpec: core.RunSpec{ID: "lead", Role: "lead"}}
 	stuck := file(t, m, "the stuck one", "In internal/core/effects.go.")
+	other := file(t, m, "an earlier idea", "")
 	fix := file(t, m, "the queue fix", "In internal/core/effects.go too.")
-	stuck.Stage, fix.Stage = StageWorking, StageQueued
+	stuck.Stage, other.Stage, fix.Stage = StageWorking, StageQueued, StageQueued
 	m.save(&stuck, "")
+	m.save(&other, "")
 	m.save(&fix, "")
-	if _, wait := m.admit(m.List(nil)); !strings.Contains(wait[fix.ID], stuck.ID) {
-		t.Fatalf("the fix doesn't wait on the stuck one: %q", wait[fix.ID])
+	if start, wait := m.admit(m.List(nil)); !start[other.ID] || start[fix.ID] {
+		t.Fatalf("the earlier brief didn't take the slot: %q", wait[fix.ID])
 	}
 	if _, err := m.C.Runs.Ops().Call(lead, "queue", json.RawMessage(`{"now":"`+fix.ID+`"}`)); err == nil {
 		t.Fatal("started one now with no reason")
@@ -1007,7 +965,7 @@ func TestQueueNowPastOverlap(t *testing.T) {
 	if !got.Now || !logged(&got, "it fixes what holds the queue") {
 		t.Fatalf("now %v, log %v", got.Now, got.Log)
 	}
-	if start, wait := m.admit(m.List(nil)); !start[fix.ID] {
+	if start, wait := m.admit(m.List(nil)); !start[fix.ID] || start[other.ID] {
 		t.Fatalf("the fix still waits: %q", wait[fix.ID])
 	}
 	cfg := m.C.WS.LoadConfig()
@@ -1093,6 +1051,59 @@ func TestStopStandsOverARunningStep(t *testing.T) {
 	}
 }
 
+// A step past its limit is let go with a journalled steer: its later saves
+// are dropped, and its late end leaves the step that took over holding the task.
+func TestReapStuckLetsAStepGoAndKeepsTheNewOne(t *testing.T) {
+	m, _, task, _ := noCommitRig(t, 0)
+	task.Stage = StageMerging
+	m.save(task, "on to the merge")
+	old := time.Now().Add(-2 * stepLimit)
+	m.mu.Lock()
+	m.busy[task.ID] = true
+	m.stepAt = map[string]time.Time{task.ID: old}
+	m.mu.Unlock()
+	stale, _ := m.Get(task.ID)
+	m.reapStuck()
+	if m.busy[task.ID] || !m.overtaken(&stale) {
+		t.Fatalf("busy %v, overtaken %v: want freed and the old copy overtaken", m.busy[task.ID], m.overtaken(&stale))
+	}
+	got, _ := m.Get(task.ID)
+	if !logged(&got, "ran past") {
+		t.Fatalf("the reap isn't in the task's log: %v", got.Log)
+	}
+	stale.Stage = StageLanding
+	m.save(&stale, "the hung step's late save")
+	if got, _ := m.Get(task.ID); got.Stage != StageMerging {
+		t.Fatalf("the hung step saved over the task: %q", got.Stage)
+	}
+	// A newer step takes the task; the hung one ending frees nothing.
+	began := time.Now()
+	m.mu.Lock()
+	m.busy[task.ID] = true
+	m.stepAt[task.ID] = began
+	m.mu.Unlock()
+	m.endStep(task.ID, old)
+	if !m.busy[task.ID] {
+		t.Fatal("the hung step's end freed the newer step's mark")
+	}
+	m.endStep(task.ID, began)
+	if m.busy[task.ID] {
+		t.Fatal("the current step's end left the task held")
+	}
+}
+
+func TestReapStuckLeavesAStepWithinItsLimit(t *testing.T) {
+	m, _, task, _ := noCommitRig(t, 0)
+	m.mu.Lock()
+	m.busy[task.ID] = true
+	m.stepAt = map[string]time.Time{task.ID: time.Now()}
+	m.mu.Unlock()
+	m.reapStuck()
+	if !m.busy[task.ID] || len(m.stepAt) != 1 {
+		t.Fatal("a step within its limit was let go")
+	}
+}
+
 func mustRun(t *testing.T, m *Module, id string) core.Run {
 	t.Helper()
 	r, ok := m.C.Runs.Get(id)
@@ -1100,4 +1111,36 @@ func mustRun(t *testing.T, m *Module, id string) core.Run {
 		t.Fatalf("no run %s", id)
 	}
 	return r
+}
+
+// A parent looping on spawn gets no second helper for the same brief, live or
+// just finished, and says which sibling has it; a different brief still goes,
+// up to maxLiveHelpers live at once.
+func TestSpawnRefusesARepeatedHelper(t *testing.T) {
+	m, _, _ := helperRig(t)
+	parent := core.Run{RunSpec: core.RunSpec{ID: "parent", Role: "worker"}}
+	first, err := m.Spawn(parent, "worker", "p", "Run the word counter task (wc) to completion\nand report", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = m.Spawn(parent, "worker", "p", "  run the word counter task (WC)   to completion\nand report back with numbers", "")
+	if err == nil || !strings.Contains(err.Error(), first.ID) {
+		t.Fatalf("a repeat of a live helper: err %v, want one naming %s", err, first.ID)
+	}
+	m.C.Runs.Stop(first.ID, "test")
+	if _, err = m.Spawn(parent, "worker", "p", "Run the word counter task (wc) to completion\nand report", ""); err == nil || !strings.Contains(err.Error(), "finished") {
+		t.Fatalf("a repeat of a just-finished helper: err %v", err)
+	}
+	if _, err = m.Spawn(core.Run{RunSpec: core.RunSpec{ID: "other", Role: "worker"}}, "worker", "p", "Run the word counter task (wc) to completion\nand report", ""); err != nil {
+		t.Fatalf("another parent's helper with the same brief: %v", err)
+	}
+	for i := 0; i < maxLiveHelpers; i++ {
+		_, err = m.Spawn(parent, "worker", "p", "helper part "+strconv.Itoa(i), "")
+		if err != nil {
+			t.Fatalf("helper %d: %v", i, err)
+		}
+	}
+	if _, err = m.Spawn(parent, "worker", "p", "one more part", ""); err == nil || !strings.Contains(err.Error(), "helpers live") {
+		t.Fatalf("a helper past the cap: err %v", err)
+	}
 }

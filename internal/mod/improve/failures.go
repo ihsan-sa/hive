@@ -293,7 +293,9 @@ func (m *Module) redBefore(p core.Project, t work.Task, test string) string {
 	if slices.ContainsFunc(keys, func(k string) bool { return strings.HasSuffix(k, " !") }) {
 		cmd = test
 	}
+	done := m.Work.MeasuringMain(p.Name, parent) // keep/revert waits on it
 	bc := m.C.Effects.RunCheck(p, parent, "before", cmd)
+	done()
 	if bc.CantRun != "" || bc.OK {
 		return ""
 	}
@@ -335,7 +337,7 @@ func (m *Module) redBefore(p core.Project, t work.Task, test string) string {
 	if len(m.Work.List(func(w work.Task) bool { return w.Project == p.Name && w.Title == title && !w.Terminal() })) == 0 {
 		m.Work.File(work.Brief{Project: p.Name, From: "improve", Title: title, Aim: work.AimFix, Why: core.Clip("red on main: "+what+" fail at "+core.Short(parent)+" and after "+core.Short(t.MergeSHA), 300),
 			Done:  "The tests pass on main again, every time, without reverting anything.",
-			Known: known + " What failed: " + core.Clip(tc.Output, 1500) + "\n\nAt " + core.Short(parent) + ": " + core.Clip(bc.Output, 1000)})
+			Known: known + " What failed: " + core.ClipEnds(tc.Output, 1500) + "\n\nAt " + core.Short(parent) + ": " + core.ClipEnds(bc.Output, 1000)})
 	}
 	return why
 }

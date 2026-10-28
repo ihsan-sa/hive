@@ -2,12 +2,16 @@ package gate
 
 import (
 	"bufio"
+	"context"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -105,6 +109,83 @@ func TestSideTmpEqualAndShort(t *testing.T) {
 	for _, p := range []string{cand.Tmp(), cand.Scratch()} {
 		if !sideDir(filepath.Base(p)) {
 			t.Fatalf("%s is not tidied as a side folder", p)
+		}
+	}
+}
+
+// The meter refuses local names and this machine by any of its addresses,
+// and a name it can't resolve goes to the gate's proxy only once public DNS
+// vouches for it.
+func TestMeterRefusesLocalNamesAndUnvouchedNames(t *testing.T) {
+	t.Setenv("HTTPS_PROXY", "")
+	var mu sync.Mutex
+	var asked []string
+	up, _ := net.Listen("tcp", "127.0.0.1:0") // the gate's proxy: says yes to all
+	defer up.Close()
+	go func() {
+		for {
+			c, err := up.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer c.Close()
+				if _, err := http.ReadRequest(bufio.NewReader(c)); err == nil {
+					io.WriteString(c, "HTTP/1.1 200 OK\r\n\r\n")
+				}
+			}()
+		}
+	}()
+	dir, err := os.MkdirTemp(shortTmp(), "gate-test-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+	m, err := StartMeter(filepath.Join(dir, "m.sock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	m.upstream = &url.URL{Scheme: "http", Host: up.Addr().String()}
+	mine := net.ParseIP("203.0.114.7")
+	m.own = func() []net.IP { return []net.IP{mine} }
+	m.lookup = func(host string) ([]net.IP, error) {
+		if host == "me.example.com" {
+			return []net.IP{mine}, nil
+		}
+		return nil, fmt.Errorf("no DNS here")
+	}
+	public := map[string][]net.IP{
+		"api.example.com":     {net.ParseIP("8.8.8.8")},
+		"tail.example.com":    {net.ParseIP("100.101.102.103")},
+		"mine.example.com":    {mine},
+		"nowhere.example.com": {},
+	}
+	m.public = func(_ context.Context, host string) ([]net.IP, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		asked = append(asked, host)
+		if ips, ok := public[host]; ok {
+			return ips, nil
+		}
+		return nil, fmt.Errorf("no public DNS answered")
+	}
+	for dest, want := range map[string]int{
+		"203.0.114.7:443": 403, "me.example.com:443": 403, "box.tail1234.ts.net:443": 403, "nas.lan:443": 403,
+		"nas:443": 403, "[64:ff9b::cb00:7207]:443": 403, "tail.example.com:443": 403, "mine.example.com:443": 403,
+		"nowhere.example.com:443": 403, "unanswered.example.com:443": 403, "api.example.com:443": 200,
+	} {
+		c, _, code := connect(t, m.Addr, dest)
+		c.Close()
+		if code != want {
+			t.Errorf("%s: %d, want %d", dest, code, want)
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	for _, h := range asked {
+		if strings.HasSuffix(h, ".lan") || strings.HasSuffix(h, ".ts.net") || h == "nas" {
+			t.Errorf("asked public DNS for local name %s", h)
 		}
 	}
 }

@@ -926,7 +926,9 @@ func TestOutOfTimeIsAloneOnlyWhenTheCandidateIsSlower(t *testing.T) {
 	if rep := run("both-slow", 300*time.Millisecond, 300*time.Millisecond, 100*time.Millisecond); rep.Alone {
 		t.Errorf("out of time before the control's turn, both slow: alone (%s)", rep.Error)
 	}
-	if rep := run("cand-slow", 600*time.Millisecond, 10*time.Millisecond, 800*time.Millisecond); !rep.Alone {
+	// A second's slack for start-up before the control's turn: a loaded
+	// runner used up 200ms of it.
+	if rep := run("cand-slow", 2*time.Second, 10*time.Millisecond, 3*time.Second); !rep.Alone {
 		t.Errorf("out of time with the candidate the slower side: not alone (%s)", rep.Error)
 	}
 }
