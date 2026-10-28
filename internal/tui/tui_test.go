@@ -1530,3 +1530,27 @@ func TestApplicationCursorEndAndHome(t *testing.T) {
 		t.Fatalf("ESC O F didn't go to the newest, or typed into a box:\n%s", v)
 	}
 }
+
+// A message one agent sends another shows in the feed, naming both by role
+// and project, a run the state no longer holds by its short id.
+func TestFeedShowsAgentMessages(t *testing.T) {
+	m := testModel(140, 40)
+	m.st.Runs = append(m.st.Runs,
+		core.Run{RunSpec: core.RunSpec{ID: "w-261028-1-aaaaa11111", Role: "worker", Project: "textkit"}, Status: core.StatusRunning},
+		core.Run{RunSpec: core.RunSpec{ID: "r-261028-2-bbbbb22222", Role: "reviewer", Project: "hive"}, Status: core.StatusRunning})
+	m.pick(sideRow{sec: secDash})
+	msg := func(seq int64, from, to, text string) core.Event {
+		data, _ := json.Marshal(map[string]string{"from": from, "to": to, "text": text})
+		return core.Event{Seq: seq, At: time.Now(), Kind: "msg.sent", Data: data}
+	}
+	m.addEvents([]core.Event{
+		msg(1, "w-261028-1-aaaaa11111", "r-261028-2-bbbbb22222", "the flake is\nin main"),
+		msg(2, "w-261028-3-ccccc33333", "w-261028-1-aaaaa11111", "ended run talks"),
+	})
+	v := plain(m.View())
+	for _, want := range []string{"worker aaaaa → reviewer bbbbb (hive)", "textkit", "the flake is in main", "ccccc → worker aaaaa", "ended run talks"} {
+		if !strings.Contains(v, want) {
+			t.Errorf("feed lacks %q:\n%s", want, v)
+		}
+	}
+}

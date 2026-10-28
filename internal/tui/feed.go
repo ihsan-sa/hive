@@ -77,6 +77,15 @@ func (m *model) addEvents(evs []core.Event) tea.Cmd {
 				to = runLabel(w)
 			}
 			r.from, r.to, r.project, r.text, r.task = "lead", to, t.Project, t.Stage+": "+t.Label(), t.ID
+		case "msg.sent": // agents talking to each other
+			var p struct{ From, To, Text string }
+			e.Decode(&p)
+			from, fp := m.runName(p.From)
+			to, tp := m.runName(p.To)
+			if fp != "" && tp != "" && tp != fp {
+				to += " (" + tp + ")"
+			}
+			r.from, r.to, r.project, r.text = from, to, or(fp, tp), core.Clip(p.Text, 300)
 		case "person.asked":
 			var a core.Ask
 			e.Decode(&a)
@@ -114,6 +123,15 @@ func toldDetail(a core.Ask) detail {
 		text += "\n\n" + a.Diff
 	}
 	return detail{kind: "text", id: "told:" + a.ID, title: "done for you", text: shown(text)}
+}
+
+// runName names a run by its role (or name) and gives its project; a run
+// the state no longer holds keeps its short id.
+func (m *model) runName(id string) (name, project string) {
+	if r, ok := m.run(id); ok {
+		return runLabel(r), r.Project
+	}
+	return strings.TrimSpace(runLabel(core.Run{ID: id})), ""
 }
 
 // chatName names a chat as the sidebar does, with its project.
@@ -226,7 +244,11 @@ func (m *model) viewFeed() []string {
 	if w < 90 {
 		pw = 0
 	}
-	lines = append(lines, "  "+stDim.Render(fmt.Sprintf("%-10s%-24s%s%s", "time", "from → to", pad(clip("project", pw), pw), "message")), "")
+	fw := 24 // from → to, wider where there's room for two agents and a project
+	if w >= 110 {
+		fw = 40
+	}
+	lines = append(lines, "  "+stDim.Render(fmt.Sprintf("%-10s%s%s%s", "time", pad("from → to", fw), pad(clip("project", pw), pw), "message")), "")
 	rows := m.feedRows()
 	sel := m.feedCursor(len(rows))
 	room := m.bodyHeight() - len(lines)
@@ -235,7 +257,7 @@ func (m *model) viewFeed() []string {
 	for i := start; i < len(rows) && len(feed) < room; i++ {
 		r := rows[i]
 		row := func(from, to, text string) string {
-			return clip(fmt.Sprintf("%-10s%s%s", r.at.Local().Format("15:04:05"), pad(clip(from+" → "+to, 22), 24), pad(clip(r.project, pw-2), pw))+text, w)
+			return clip(fmt.Sprintf("%-10s%s%s", r.at.Local().Format("15:04:05"), pad(clip(from+" → "+to, fw-2), fw), pad(clip(r.project, pw-2), pw))+text, w)
 		}
 		var line string
 		switch {
