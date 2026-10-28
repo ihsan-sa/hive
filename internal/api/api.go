@@ -64,6 +64,7 @@ type State struct {
 	Wakeups    []system.Wakeup    `json:"wakeups"`
 	Checks     Checks             `json:"checks"`
 	Workers    string             `json:"workers,omitempty"` // how many workers may work at once, and why (the work module's pace)
+	Turns      *core.TurnBudget   `json:"turns,omitempty"`   // every role's turns live and waiting against the memory budget
 	Disk       core.DiskUse       `json:"disk"`              // the Hive's disk use and the room left, as the hive.clean job last measured
 	Modules    []ModuleView       `json:"modules"`
 	Chats      []ChatView         `json:"chats"`

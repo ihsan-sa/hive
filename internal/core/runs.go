@@ -453,6 +453,7 @@ type Runs struct {
 	backedOff                map[string]int  // the turn each run last backed off from for another daemon's claim, said once
 	turnLive                 map[string]int  // the turn each run last waited on its own last turn for, said once
 	waking                   sync.Mutex      // one wake at a time, so a run is woken once
+	budget                   budget          // the memory budget every turn counts against (budget.go)
 }
 
 // Hold keeps new turns from starting, saying why; "" lets them start again.
@@ -1545,6 +1546,7 @@ func (rs *Runs) Interrupt(id string) bool {
 // meanwhile may have stepped them already.
 func (rs *Runs) Tick(cfg Config) {
 	rs.tickDown(cfg)
+	go rs.sampleTurns(time.Now())
 	live := rs.List(func(r *Run) bool { return r.Lead() && (!r.Terminal() || r.Status == StatusRunning) })
 	slices.SortStableFunc(live, func(a, b Run) int { return a.Nice() - b.Nice() })
 	var wg sync.WaitGroup
@@ -2172,6 +2174,12 @@ func (rs *Runs) launch(r Run, cfg Config) {
 		rs.mu.Unlock()
 		return
 	}
+	floor, memMax, cpuMax := cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax
+	if r.Lead() {
+		// A lead answers however busy the machine is: no pressure hold, and
+		// only the floor under which its turn could not run at all.
+		floor, memMax, cpuMax = min(floor, LeadMemFloorMB), 0, 0
+	}
 	if !r.Lead() && rs.leadLaunching > 0 {
 		// A lead's turn starts first; this one is due again next tick. Leads
 		// launch when a message comes, so this rarely repeats; one that does
@@ -2187,6 +2195,40 @@ func (rs *Runs) launch(r Run, cfg Config) {
 		return
 	}
 	delete(rs.deferred, r.ID)
+	rs.mu.Unlock()
+	// A turn this machine is too strained for goes to an executor module
+	// with room, or waits; one that starts here counts against the memory
+	// budget (budget.go), which a lead's never waits on.
+	var elsewhere sandbox.Sandbox
+	where := ""
+	why := Strained(floor, memMax, cpuMax)
+	if why != "" {
+		elsewhere, where = rs.executor()
+	}
+	mem := readMem(cfg)
+	rs.mu.Lock()
+	if cur := rs.runs[r.ID]; len(rs.holds) > 0 || cur == nil || cur.Status == StatusRunning || cur.Status != r.Status || cur.Turn != r.Turn || rs.starting[r.ID] {
+		rs.mu.Unlock()
+		return
+	}
+	if why == "" {
+		why = rs.admit(r, cfg, mem, time.Now())
+	} else if elsewhere != nil {
+		why = ""
+	}
+	if why != "" {
+		rs.mu.Unlock()
+		// The hold keeps the run's status, so a parked run keeps its backoff
+		// and a nudged one its count; the live figures after " (" change
+		// every tick, so only a new kind of hold is journalled.
+		if !strings.HasPrefix(why, "waiting: ") {
+			why = "waiting: " + why
+		}
+		if kind, _, _ := strings.Cut(why, " ("); !strings.HasPrefix(r.Reason, kind) {
+			rs.append("run.held", runNote{ID: r.ID, Reason: why})
+		}
+		return
+	}
 	if rs.starting == nil {
 		rs.starting = map[string]bool{}
 	}
@@ -2205,30 +2247,6 @@ func (rs *Runs) launch(r Run, cfg Config) {
 		delete(rs.starting, r.ID)
 		rs.mu.Unlock()
 	}()
-	floor, memMax, cpuMax := cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax
-	if r.Lead() {
-		// A lead answers however busy the machine is: no pressure hold, and
-		// only the floor under which its turn could not run at all.
-		floor, memMax, cpuMax = min(floor, LeadMemFloorMB), 0, 0
-	}
-	// A turn this machine is too strained for goes to an executor module
-	// with room, or waits.
-	var elsewhere sandbox.Sandbox
-	where := ""
-	why := Strained(floor, memMax, cpuMax)
-	if why != "" {
-		elsewhere, where = rs.executor()
-	}
-	if why != "" && elsewhere == nil {
-		// The hold keeps the run's status, so a parked run keeps its backoff
-		// and a nudged one its count; the live figures after " (" change
-		// every tick, so only a new kind of hold is journalled.
-		why = "waiting: " + why
-		if kind, _, _ := strings.Cut(why, " ("); !strings.HasPrefix(r.Reason, kind) {
-			rs.append("run.held", runNote{ID: r.ID, Reason: why})
-		}
-		return
-	}
 	sb, err := rs.sandbox()
 	if err != nil {
 		if r.Status != StatusQueued || r.Reason != err.Error() {
@@ -2378,6 +2396,7 @@ func (rs *Runs) launch(r Run, cfg Config) {
 		return
 	}
 	started = true
+	rs.started(r)
 	rs.claimed(r.ID, turn, p)
 	rs.append("run.turn_started", turnStarted{ID: r.ID, Session: session, Turn: turn, Proc: p, Delivered: delivered, Resume: resume, Login: login.Key(), Model: r.Model, Harness: r.Harness, Where: where})
 }

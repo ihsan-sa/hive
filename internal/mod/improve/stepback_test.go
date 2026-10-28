@@ -28,6 +28,7 @@ func rig(t *testing.T) *Module {
 	cfg := ws.LoadConfig()
 	cfg.Sandbox, cfg.BareAccepted, cfg.Harness = "bare", time.Now().Format(time.RFC3339), "fake"
 	cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax, cfg.LoadMax = 0, 0, 0, 0 // a loaded machine mustn't hold the queue
+	cfg.TurnBurst = 0                                                                // nor let back-to-back turns in only a few at a time
 	ws.SaveConfig(cfg)
 	forge := &core.Local{Dir: filepath.Join(dir, "forge")}
 	if _, err := forge.EnsureRepo("me/hive", "", false); err != nil {

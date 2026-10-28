@@ -25,6 +25,7 @@ func hiveWithModels(t *testing.T) (*app.App, core.Run) {
 	cfg := ws.LoadConfig()
 	cfg.Harness = "fake"
 	cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax, cfg.LoadMax = 0, 0, 0, 0
+	cfg.TurnBurst = 0 // nor let back-to-back turns in only a few at a time
 	cfg.Models = map[string]core.OpenModel{"qwen": {Endpoint: "http://127.0.0.1:11434/v1", Model: "qwen2.5-coder:14b"}}
 	if err := ws.SaveConfig(cfg); err != nil {
 		t.Fatal(err)

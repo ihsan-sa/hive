@@ -144,7 +144,7 @@ func (m *model) dashRows() []row {
 			live = append(live, r)
 		}
 	}
-	if add(row{key: "agents", text: fmt.Sprintf("agents (%d live)", len(live)) + limitNote("workers", m.st.Workers), expand: len(live) > 0, def: true}) {
+	if add(row{key: "agents", text: fmt.Sprintf("agents (%d live)", len(live)) + limitNote("workers", m.st.Workers) + turnsNote(m.st.Turns), expand: len(live) > 0, def: true}) {
 		for _, r := range live {
 			d := detail{kind: "run", id: r.ID, title: runLabel(r)}
 			add(row{key: "run:" + r.ID, depth: 1, text: m.runLine(r), open: &d})
@@ -1615,6 +1615,14 @@ func windowShort(w harness.WindowUse, now time.Time, long bool) string {
 }
 
 // limitNote is a limit the pace set, dimmed after a heading, or "" for none.
+// turnsNote is every role's turns against the memory budget, and how many wait.
+func turnsNote(t *core.TurnBudget) string {
+	if t == nil {
+		return ""
+	}
+	return limitNote("turns", t.Short())
+}
+
 func limitNote(what, limit string) string {
 	if limit == "" {
 		return ""

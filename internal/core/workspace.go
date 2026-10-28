@@ -137,6 +137,16 @@ type Config struct {
 	MemFloorMB     int     `json:"mem_floor_mb"`
 	MemPressureMax float64 `json:"mem_pressure_max"`
 	CPUPressureMax float64 `json:"cpu_pressure_max"`
+	// MemBudgetMB is the Hive's memory share: every agent turn, of any role,
+	// counts against it less MemFloorMB, at TurnMB a turn (core/budget.go).
+	// 0 reads the daemon's cgroup memory.high or memory.max, else MemTotal;
+	// a TurnMB of 0 is learned from the turns' RSS, starting at 250.
+	MemBudgetMB int `json:"mem_budget_mb,omitempty"`
+	TurnMB      int `json:"turn_mb,omitempty"`
+	// TurnBurst is the most turns (leads aside) that start in any 20
+	// seconds, so a lifted hold or a burst of reopened runs is let in a few
+	// at a time; 0 is off.
+	TurnBurst int `json:"turn_burst"`
 	// MaxWorkers is the most workers that may work at once, the person's
 	// ceiling: below it the work module's pace sets the limit from what the
 	// machine and the plan carry (internal/mod/work/pace.go). Briefs past the
@@ -349,6 +359,7 @@ func DefaultConfig() Config {
 		MemPressureMax:  10,
 		CPUPressureMax:  40,
 		LoadMax:         1,
+		TurnBurst:       3,
 		Ceilings:        true,
 		PlateauMerges:   3,
 		Schedules: map[string]string{
