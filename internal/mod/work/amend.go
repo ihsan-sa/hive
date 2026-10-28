@@ -13,19 +13,26 @@ import (
 // queued with its issue) can be changed in place or taken back by whoever
 // filed it, or by the lead, so a wider ask doesn't have to be filed again
 // beside the first and the old copy held (issue #405). Once a worker has
-// started, it is told instead (message it), and its PR closed with pr_close.
+// started, it is told instead (message it), and its PR closed with pr_close;
+// one whose worker finished blocked without opening a PR has nothing left to
+// tell or close, so it can be withdrawn as well (folded into another task, or
+// dropped), else no op could end it.
 
 // withdrawn starts the reason of a task its filer took back; it doesn't come
 // back with recheck, as new work is a new brief.
 const withdrawn = "withdrawn by "
 
-// Withdrawn reports whether t was taken back before a worker started on it.
+// Withdrawn reports whether t was taken back by its filer or a lead.
 func (t Task) Withdrawn() bool {
 	return t.Stage == StageStopped && strings.HasPrefix(t.Reason, withdrawn)
 }
 
+// endedBare reports whether t's worker finished blocked without a PR.
+func (t Task) endedBare() bool { return t.Stage == StageBlocked && t.PR.Number == 0 }
+
 // mayChange checks r may amend or withdraw t: a brief that no worker has
-// started on yet, filed by r, or by anyone but the person when r is the lead.
+// started on yet (or, to withdraw, one blocked with no PR), filed by r, or by
+// anyone but the person when r is the lead.
 func (m *Module) mayChange(r core.Run, t Task, verb string) error {
 	if err := m.reach(r, t.Project); err != nil {
 		return err
@@ -33,8 +40,8 @@ func (m *Module) mayChange(r core.Run, t Task, verb string) error {
 	switch {
 	case t.Kind != "work":
 		return fmt.Errorf("task %s is a %s, not a filed brief", t.ID, t.Kind)
-	case t.Stage != StageNew && !t.Queued():
-		return fmt.Errorf("task %s has left the queue (%s), so it can't be %s: message its worker, or close its PR with pr_close", t.ID, t.Stage, verb)
+	case t.Stage != StageNew && !t.Queued() && !(verb == "withdrawn" && t.endedBare()):
+		return fmt.Errorf("task %s has left the queue (%s), so it can't be %s: message its worker, or close its PR with pr_close (only a blocked task with no PR can still be withdrawn)", t.ID, t.Stage, verb)
 	case t.From == r.ID:
 		return nil
 	case r.Role != "lead":
@@ -98,8 +105,9 @@ func (m *Module) Amend(r core.Run, id, title, done, known, why string) (Task, er
 	return t, nil
 }
 
-// Withdraw takes back a waiting brief: the task stops, its issue closes with
-// why (and the task that covers it now, into), and no worker starts on it.
+// Withdraw takes back a waiting brief, or one blocked with no PR: the task
+// stops, its issue closes with why (and the task that covers it now, into),
+// and no worker starts on it again.
 func (m *Module) Withdraw(r core.Run, id, into, why string) (Task, error) {
 	if strings.TrimSpace(why) == "" {
 		return Task{}, errors.New("say why with why (it goes on the issue and the task's record)")
@@ -123,6 +131,14 @@ func (m *Module) Withdraw(r core.Run, id, into, why string) (Task, error) {
 	if err := m.mayChange(r, t, "withdrawn"); err != nil {
 		return Task{}, err
 	}
+	when := "before a worker started"
+	if t.endedBare() {
+		when = "after its worker finished blocked with no PR"
+		if t.Worker != "" { // a blocked worker may still wait on a reply: it isn't woken again
+			m.C.Runs.Stop(t.Worker, "its brief was "+withdrawn+r.ID+": "+core.Clip(strings.TrimSpace(why), 300))
+		}
+		t.Checkpoint, t.DraftWhy = "", ""
+	}
 	reason := withdrawn + r.ID + ": " + core.Clip(strings.TrimSpace(why), 300)
 	if by.ID != "" {
 		reason += fmt.Sprintf(" (covered by task %s, %q)", by.ID, by.Label())
@@ -130,7 +146,7 @@ func (m *Module) Withdraw(r core.Run, id, into, why string) (Task, error) {
 	t.Stage, t.Reason, t.Held, t.HeldBy, t.Now = StageStopped, reason, false, "", false
 	if t.Issue.Number != 0 {
 		if p, err := m.project(&t); err == nil {
-			text := "Withdrawn by " + r.ID + " before a worker started on it: " + strings.TrimSpace(why)
+			text := "Withdrawn by " + r.ID + " " + when + ": " + strings.TrimSpace(why)
 			if by.ID != "" && by.Issue.Number != 0 {
 				text += fmt.Sprintf("\n\nCovered by #%d.", by.Issue.Number)
 			}
@@ -139,7 +155,7 @@ func (m *Module) Withdraw(r core.Run, id, into, why string) (Task, error) {
 		}
 	}
 	m.save(&t, reason)
-	text := fmt.Sprintf("Withdrawn before a worker started: %q (%s)", t.Label(), reason)
+	text := fmt.Sprintf("Withdrawn %s: %q (%s)", when, t.Label(), reason)
 	if quietWithdrawer(r) {
 		m.post(&t, text)
 	} else {

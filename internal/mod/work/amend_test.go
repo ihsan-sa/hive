@@ -148,3 +148,56 @@ func TestWithdrawnByALeadDoesNotWakeIt(t *testing.T) {
 		t.Fatalf("the chat has %d messages, want the 4 withdrawals in the feed", n)
 	}
 }
+
+// A worker that finished blocked with no PR left a task no op could end
+// (hive-eval 261028-132616-bf6f1f35c9): withdraw takes it, folded into
+// another task or dropped, and its worker isn't woken again. One with a PR
+// is still pr_close's.
+func TestWithdrawABlockedTaskWithNoPR(t *testing.T) {
+	m := queueRig(t)
+	lead := core.Run{RunSpec: core.RunSpec{ID: "lead-1", Role: "lead"}}
+	into, err := m.File(Brief{Project: "p", Title: "The wider ask", Done: "done", From: "w-one"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, err := m.C.Runs.Start(core.RunSpec{Role: "worker", Project: "p", Brief: "x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := m.File(Brief{Project: "p", Title: "The narrow ask", Done: "done", From: "w-one", Apart: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tick(m)
+	task, _ = m.Get(task.ID)
+	task.Stage, task.Reason, task.Worker = StageBlocked, "the worker finished without any commits", w.ID
+	m.save(&task, task.Reason)
+
+	withPR := task
+	withPR.PR.Number = 7
+	if err := m.mayChange(lead, withPR, "withdrawn"); err == nil || !strings.Contains(err.Error(), "pr_close") {
+		t.Fatalf("a blocked task with a PR was withdrawable: %v", err)
+	}
+	if _, err := m.Amend(lead, task.ID, "x", "", "", ""); err == nil {
+		t.Fatal("a blocked task was amended")
+	}
+	if _, err := m.Withdraw(lead, task.ID, into.ID, "folded into the wider ask"); err != nil {
+		t.Fatal(err)
+	}
+	tick(m)
+	got, _ := m.Get(task.ID)
+	if r, _ := m.C.Runs.Get(w.ID); !got.Withdrawn() || got.IssueOpen || !r.Terminal() {
+		t.Fatalf("not withdrawn with its issue closed and worker stopped: %s %q open=%v run=%s", got.Stage, got.Reason, got.IssueOpen, r.Status)
+	}
+	if !strings.Contains(got.Reason, "covered by task "+into.ID) {
+		t.Fatalf("the reason doesn't name the task that covers it: %q", got.Reason)
+	}
+	if got.Issue.Number != 0 {
+		if cs := strings.Join(m.C.Effects.Forge.(*flakyForge).Comments("me/p", got.Issue.Number), "\n"); !strings.Contains(cs, "finished blocked with no PR") {
+			t.Fatalf("the issue doesn't say it was withdrawn after its worker blocked: %q", cs)
+		}
+	}
+	if err := m.Recheck(got.ID, "", "lead-1"); err == nil {
+		t.Fatal("a withdrawn blocked task came back with recheck")
+	}
+}
