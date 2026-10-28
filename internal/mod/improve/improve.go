@@ -177,6 +177,7 @@ func New(c *core.Core, a *agents.Agents, w *work.Module, ch *chat.Module) *Modul
 	work.BestScore = m.Best
 	work.Measured = m.measured
 	c.Effects.Quarantined = m.QuarantinedTests
+	c.Runs.Ops().Register(core.Op{Name: "pivot", Help: `{"case","evidence","project"} -> any agent proposes a pivot: a short case (what to stop, throw away or change, and what instead) and the evidence for it. It is filed as a fix, first in line, its worker weighs the case before acting and nothing bounds what it may throw away; the project's lead and the person hear it at once and turn it down with withdraw`, Fn: m.opPivot})
 	go m.measureLoop()
 	return m
 }

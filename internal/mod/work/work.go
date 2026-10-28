@@ -587,6 +587,9 @@ type Brief struct {
 	// Apart files an agent's brief as its own task even when it matches an
 	// open one (join.go).
 	Apart bool `json:"apart"`
+	// Now puts it first in line as it is filed, as queue's now does; only a
+	// pivot (the improve module's) sets it.
+	Now bool `json:"-"`
 }
 
 // taken is the brief's aim and why as File takes them, or why it can't be
@@ -626,8 +629,12 @@ func (m *Module) File(b Brief) (Task, error) {
 		return Task{}, err
 	}
 	t := &Task{Aim: aim, AimWhy: core.Clip(why, 300), ID: core.NewID(), Project: b.Project, Title: strings.TrimSpace(b.Title), Done: b.Done, Known: b.Known,
-		From: b.From, Chat: b.Chat, Thread: b.Thread, Kind: "work", Stage: StageNew, Inputs: b.Inputs, Model: b.Model, Created: time.Now().UTC()}
-	m.save(t, "filed by "+b.From+", taken as "+t.AimWord())
+		From: b.From, Chat: b.Chat, Thread: b.Thread, Kind: "work", Stage: StageNew, Inputs: b.Inputs, Model: b.Model, Now: b.Now, Created: time.Now().UTC()}
+	note := "filed by " + b.From + ", taken as " + t.AimWord()
+	if t.Now {
+		note += ", first in line"
+	}
+	m.save(t, note)
 	return *t, nil
 }
 
