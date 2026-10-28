@@ -233,18 +233,14 @@ func Run(ws core.Workspace, waitFor int) error {
 	// Before anything else touches the workspace: one daemon per workspace.
 	// A daemon that holds the lock but doesn't answer is on its way out (or
 	// still starting): wait for it, and exit at once only when one is up.
-	wait := stopWait
+	var lock *workspaceLock
+	var err error
 	if waitFor > 0 {
-		// The replaced daemon may still be on its way out: a slow shutdown
-		// mustn't leave the Hive down, with nothing to start it again.
-		wait = 2 * time.Minute
+		lock, err = takeOver(ws, waitFor, takeOverWait)
+	} else {
+		lock, err = lockWorkspace(ws, stopWait, true)
 	}
-	lock, err := lockWorkspace(ws, wait, waitFor == 0)
 	if err != nil {
-		if waitFor > 0 {
-			fmt.Printf("hive: %s: the daemon an update replaced (pid %d) still held the workspace after %s more, so the Hive stays down until it is started again\n",
-				time.Now().Format(time.DateTime), waitFor, wait)
-		}
 		return err
 	}
 	defer func() { lock.Release() }() // the lock held at the end, which a failed hand-off retakes
@@ -530,7 +526,23 @@ func (s *server) restart() {
 		raw, _ := json.Marshal(info)
 		core.WriteFileAtomic(ws.DaemonFile(), raw, 0o600)
 		s.cancel()
+		exitWithin(restartExitWait, 0)
 	}
+}
+
+// restartExitWait is how long a daemon that a restart cancelled has to shut
+// down before it exits anyway: a shutdown stuck behind a step that never
+// returns must not keep the workspace from its replacement.
+var restartExitWait = time.Minute
+
+// exitWithin ends this process with status code if it is still running
+// after d, as a shutdown that hangs would leave it.
+var exitWithin = func(d time.Duration, code int) {
+	time.AfterFunc(d, func() {
+		fmt.Printf("hive: %s: shutdown for a restart took over %s, so this daemon (pid %d) exits without finishing it\n",
+			time.Now().Format(time.DateTime), d, os.Getpid())
+		os.Exit(code)
+	})
 }
 
 // handBack ends this daemon so its supervisor starts the updated binary,
@@ -568,6 +580,7 @@ func (s *server) handBack(sup supervision) {
 	core.WriteFileAtomic(s.a.C.WS.DaemonFile(), raw, 0o600)
 	s.exit.Store(int64(sup.status))
 	s.cancel()
+	exitWithin(restartExitWait, sup.status)
 }
 
 func (s *server) routes() http.Handler {
