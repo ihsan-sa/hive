@@ -746,9 +746,9 @@ func TestCheckpointsBankEachGain(t *testing.T) {
 	}
 }
 
-// A review reads the project's docs/REVIEW.md, goals and lessons from main,
-// and advice given with a land stays on the pull request: it holds nothing and
-// is filed as no new task.
+// A review reads the project's docs/REVIEW.md from main and is pointed at its
+// goals and lessons, and advice given with a land stays on the pull request: it
+// holds nothing and is filed as no new task.
 func TestReviewReadsTheRules(t *testing.T) {
 	t.Parallel()
 	h := start(t)
@@ -763,7 +763,7 @@ func TestReviewReadsTheRules(t *testing.T) {
 	st := h.wait("the ask to merge", 3*minute, taskStage("rules", "add a helper", work.StageDone))
 	tk, _ := task(st, "rules", "add a helper")
 	brief, _ := os.ReadFile(filepath.Join(h.ws.RunRO(tk.Reviewer), "brief.md"))
-	for _, want := range []string{"walls the Hive off from the host", "Every agent sees the same thing", "## `.hive/lessons.md` on main"} {
+	for _, want := range []string{"walls the Hive off from the host", "`.hive/goals.md` and `.hive/lessons.md` are in your checkout"} {
 		if !strings.Contains(string(brief), want) {
 			t.Fatalf("the review brief lacks %q:\n%s", want, brief)
 		}
@@ -934,10 +934,14 @@ func TestStalls(t *testing.T) {
 	h.ws.SaveConfig(cfg)
 	h.seed("me/stall", map[string]string{".hive/project.json": `{"test": "if [ -f STALL ]; then sleep 60; fi"}`, ".hive/goals.md": "# Goals\n"})
 	h.post("/api/project", map[string]any{"name": "stall", "repo": "me/stall"}, nil)
-	// History: a worker here has taken about 13 seconds (11 asleep; the loop
-	// ticks soon after each step, so little else), so the limit is about 39
-	// without moving, well over the slow worker's 22 on a slow runner.
-	for title, known := range map[string]string{"history one": "FAKE:slowworker:11", "history two": ""} {
+	// History: a worker here has taken about 22 seconds (20 asleep; the loop
+	// ticks soon after each step, so little else), so the limit is about 66
+	// without moving. The slow worker's clock starts at its last output, just
+	// before its 22 asleep, but whatever it does after waking (commit, finish)
+	// runs while three other tasks and the package's parallel tests load the
+	// runner, so it needs the room: at 11 asleep the limit was about 39, and
+	// CI has flagged it against limits from 33 up.
+	for title, known := range map[string]string{"history one": "FAKE:slowworker:20", "history two": ""} {
 		h.post("/api/ask", map[string]string{"project": "stall", "title": title, "known": known}, nil)
 		h.wait(title+" to land", 3*minute, taskStage("stall", title, work.StageDone))
 	}
@@ -949,8 +953,10 @@ func TestStalls(t *testing.T) {
 	for title, known := range asks {
 		h.post("/api/ask", map[string]string{"project": "stall", "title": title, "known": known}, nil)
 	}
+	// The hung check runs its minute-long test up to three times (its head,
+	// the watcher's retry from its head, then merged with main).
 	for title := range asks {
-		h.wait(title+" to land", 4*minute, taskStage("stall", title, work.StageDone))
+		h.wait(title+" to land", 6*minute, taskStage("stall", title, work.StageDone))
 	}
 	hung := map[string]string{"hung worker": "restarted its turn", "hung reviewer": "restarted its turn", "hung check": "handed it to the lead"}
 	stalls := func(st api.State) map[string][]string {

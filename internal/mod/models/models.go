@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
+	"github.com/ihsan-sa/hive-standalone-build/internal/harness"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/work"
 	"github.com/ihsan-sa/hive-standalone-build/internal/openagent"
 )
@@ -239,9 +240,15 @@ func (m *Module) routed(rt Route) (core.Config, error) {
 		return cfg, fmt.Errorf("config.json has to be fixed first: %v", err)
 	}
 	for _, e := range rt.Models {
-		if _, err := cfg.Pick(e); err != nil {
+		p, err := cfg.Pick(e)
+		if err != nil {
 			names := slices.Sorted(maps.Keys(cfg.Models))
 			return cfg, fmt.Errorf("%v (named models: %s; or harness:model, such as claude:opus)", err, strings.Join(names, ", "))
+		}
+		if p.Harness == "claude" || p.Harness == "codex" {
+			if offered := harness.Models(p.Harness); p.Model != "" && !slices.Contains(offered, p.Model) {
+				return cfg, fmt.Errorf("%q: the %s harness offers %s, not %q", e, p.Harness, strings.Join(offered, ", "), p.Model)
+			}
 		}
 	}
 	set := func(routes map[string][]string) map[string][]string {

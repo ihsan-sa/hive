@@ -114,18 +114,48 @@ func toolDiskFull(out string) string {
 const staleModules = "module lookup disabled by GOPROXY=off"
 
 // ownModules marks a go.mod and go.sum whose check needed a module they don't
-// name (`go run x@latest`, a tool fetched by version): the shared cache can't
-// serve it, so later checks of the same files fetch their own from the start
-// instead of running twice.
+// name (`go run x@latest`, a tool fetched by version) and passed fetching its
+// own: the shared cache can't serve it, so later checks of the same files
+// fetch their own from the start instead of running twice. The mark holds for
+// ownModulesFor, so one odd check doesn't switch the cache off for good.
 const ownModules = ".own"
+
+const ownModulesFor = 24 * time.Hour
 
 var missingModule = regexp.MustCompile(`(\S+)@(\S+): ` + regexp.QuoteMeta(staleModules))
 
-// cacheLacked says why a check that printed staleModules failed: the shared
+// staleLine is the check's own line saying the shared cache couldn't serve a
+// module: the first line at the start of a line with staleModules in it. What
+// a test printed indented (a nested go it ran, offline as its check is) is
+// the test's own words, and its failure the commit's.
+func staleLine(out string) string {
+	for _, l := range strings.Split(out, "\n") {
+		if l != "" && l[0] != ' ' && l[0] != '\t' && strings.Contains(l, staleModules) {
+			return strings.TrimSpace(l)
+		}
+	}
+	return ""
+}
+
+// ownMarked says whether marker's go.mod and go.sum were marked ownModules
+// within ownModulesFor; an older mark is removed.
+func ownMarked(marker string) bool {
+	fi, err := os.Stat(marker + ownModules)
+	if err != nil {
+		return false
+	}
+	if time.Since(fi.ModTime()) < ownModulesFor {
+		return true
+	}
+	os.Remove(marker + ownModules)
+	return false
+}
+
+// cacheLacked says why a check whose staleLine is line failed: the shared
 // cache lacked a module go.sum names (its fault: true), or the check wanted
 // one go.sum doesn't name (false). A line it can't read counts as the cache's.
-func cacheLacked(out string, sum []byte) bool {
-	m := missingModule.FindStringSubmatch(out)
+func cacheLacked(line string, sum []byte) bool {
+	m := missingModule.FindStringSubmatch(line)
 	if m == nil {
 		return true
 	}
@@ -189,7 +219,7 @@ func (e *Effects) goModules(sb sandbox.Sandbox, dir string) goMods {
 	h := sha256.Sum256(append(append(mod, 0), sum...))
 	key := hex.EncodeToString(h[:8])
 	marker := filepath.Join(e.ws.goSums(), key)
-	if Exists(marker + ownModules) {
+	if ownMarked(marker) {
 		none.note = "modules not prefetched: a check of this go.mod and go.sum needed a module they don't name"
 		return none
 	}

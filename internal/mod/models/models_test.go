@@ -347,6 +347,17 @@ func TestAModelThatKeepsEndingBlockedStopsBeingFirst(t *testing.T) {
 	}
 }
 
+// A route can't name a model its harness doesn't offer.
+func TestRouteRefusesModelHarnessLacks(t *testing.T) {
+	a, lead := hiveWithModels(t)
+	if _, err := call(t, a, lead, "route", map[string]any{"role": "worker", "models": "claude:opus,codex:gpt-5"}); err == nil || !strings.Contains(err.Error(), "gpt-5") {
+		t.Fatalf("codex:gpt-5 was accepted: %v", err)
+	}
+	if _, err := call(t, a, lead, "route", map[string]any{"role": "worker", "models": "claude:opus,codex:gpt-5.5"}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // A project with no lead of its own has its trial rounds run by a worker:
 // on its own project only, never from a trial's own worker, and not twice
 // while one is open.

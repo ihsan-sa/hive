@@ -1,6 +1,7 @@
 package harness
 
 import (
+	"encoding/json"
 	"slices"
 	"strings"
 	"testing"
@@ -306,5 +307,14 @@ func TestCodexWindowWithoutResetHasNone(t *testing.T) {
 	}
 	if d := time.Until(rl.ResetsAt); d < 590*time.Second || d > 600*time.Second {
 		t.Fatalf("resets in %v, want ten minutes: %+v", d, rl)
+	}
+}
+
+func TestCodexModelNotFoundHasStatus(t *testing.T) {
+	msg := `{"type":"error","status":400,"error":{"type":"invalid_request_error","code":"model_not_found","message":"The 'gpt-5' model is not supported when using Codex with a ChatGPT account."}}`
+	line, _ := json.Marshal(map[string]any{"type": "turn.failed", "error": map[string]any{"message": msg}})
+	r := Codex{}.Parse(line)[0].Result
+	if r.APIStatus != 400 {
+		t.Fatalf("status %d", r.APIStatus)
 	}
 }

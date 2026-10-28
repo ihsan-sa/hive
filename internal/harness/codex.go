@@ -117,12 +117,34 @@ func (Codex) Parse(line []byte) []Event {
 		if l.Error != nil {
 			msg = l.Error.Message
 		}
-		return []Event{{Kind: "result", Result: &Result{Text: msg, IsError: true, Subtype: "error", Limited: LooksLimited(msg)}}}
+		return []Event{{Kind: "result", Result: &Result{Text: msg, IsError: true, Subtype: "error", Limited: LooksLimited(msg), APIStatus: codexStatus(msg)}}}
 	}
 	// A top-level "error" line is not the turn's end: Codex prints one for
 	// each retry ("Reconnecting... 2/5"), and a turn that fails ends with
 	// turn.failed, carrying the last error's message.
 	return nil
+}
+
+// codexStatus is the API status in an error message Codex carries as the
+// API's JSON body ({"status":400,...}), or 400 when the body names
+// a model_not_found; 0 when it says none.
+func codexStatus(msg string) int {
+	var b struct {
+		Status int `json:"status"`
+		Error  struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	if json.Unmarshal([]byte(msg), &b) != nil {
+		if strings.Contains(msg, "model_not_found") {
+			return 400
+		}
+		return 0
+	}
+	if b.Status == 0 && b.Error.Code == "model_not_found" {
+		return 400
+	}
+	return b.Status
 }
 
 // Usage reads the plan usage Codex keeps out of its output stream, in the

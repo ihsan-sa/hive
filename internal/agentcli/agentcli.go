@@ -221,5 +221,10 @@ with your run id.
   models                                         named models, each role's route, what each agent runs on, trials
   route     --role worker --models "a,b" [--project p]   the models a role runs on, in fallback order
   trial     --model m --project test --title "..." --done "..."   one brief's worker on that model alone
+  hold_merges --project p --why "their words" [--only N,M] [--until release] [--lift]   on the person's
+                                                 word only: nothing merges but those PRs until lifted or released
+  create_project --name n [--repo o/r] --description "..." --goals "..." [--sharing shared|private|isolated]
+  install_module --url <git url> | --project <module>   a warden weighs it; you hear back
+  requests                                       each request past a sandbox and where it stands
 In $HIVE_STATE, logins/ and private/ (the daemon's token, every agent's home) are covered, and so are an
 isolated project's records (and the journal, while any project is isolated): hidden there, not missing.`

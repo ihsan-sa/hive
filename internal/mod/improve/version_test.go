@@ -112,7 +112,7 @@ func TestFixWinsOverAScoreDip(t *testing.T) {
 		t.Fatal("the look into a dip names no failure, so it is taken as a gain")
 	}
 	p, _ := m.C.Projects.Get("p")
-	m.lookIntoDip(p, work.Task{ID: "fix-1", Title: fix.Title, MergeSHA: ms.SHA}, "again")
+	m.lookIntoDip(p, work.Task{ID: "fix-1", Title: fix.Title, MergeSHA: ms.SHA}, "again", 5)
 	if len(looks()) != 1 {
 		t.Fatal("the same dip was looked into twice")
 	}
@@ -125,6 +125,59 @@ func TestFixWinsOverAScoreDip(t *testing.T) {
 	}
 	if b, _ := m.Best("p"); b != 3 {
 		t.Fatalf("best %v, want the fix's 3", b)
+	}
+}
+
+// A dip while an earlier one is still looked into files no second look:
+// the open one takes it as context (three of four looks on 2026-10-27
+// re-found one cause). A dip gone from main by the time it is read, main past
+// the merge scoring back within tolerance, files none either.
+func TestNoSecondLookIntoAKnownOrGoneDip(t *testing.T) {
+	m, merge := scored(t)
+	looks := func() []work.Task {
+		return m.Work.List(func(x work.Task) bool { return strings.HasPrefix(x.Title, dipLook) })
+	}
+	fix := func(id string) work.Task {
+		return work.Task{ID: id, Title: "Fix " + id, Aim: work.AimFix, AimWhy: id + " fails"}
+	}
+	first := merge(map[string]string{"n.txt": "3\n"}, fix("fix-1"))
+	if len(looks()) != 1 {
+		t.Fatalf("want one look into the first dip: %+v", looks())
+	}
+	second := merge(map[string]string{"n.txt": "1\n"}, fix("fix-2"))
+	l := looks()
+	if len(l) != 1 || !strings.Contains(l[0].Known, "dipped again after "+core.Short(second.SHA)) || !strings.Contains(second.Note, "takes this one too") {
+		t.Fatalf("a dip while the first look is open should join it, not file a second: %+v\n%s", l, second.Note)
+	}
+
+	// Past its worker (in review), the look takes nothing it would leave
+	// unread: the next dip gets a look of its own.
+	reviewing := l[0]
+	reviewing.Stage = work.StageReviewing
+	m.C.J.MustAppend("task.saved", reviewing)
+	third := merge(map[string]string{"n.txt": "0\n"}, fix("fix-4"))
+	if l := looks(); len(l) != 2 || strings.Contains(reviewing.Known, core.Short(third.SHA)) {
+		t.Fatalf("a dip while the open look is in review should get its own look: %+v\n%s", l, third.Note)
+	}
+	if tk, _ := m.Work.Get(reviewing.ID); strings.Contains(tk.Known, core.Short(third.SHA)) {
+		t.Fatalf("a look in review took a dip no one will read: %s", tk.Known)
+	}
+
+	// The looks end; main recovers past a merge whose dip is read late.
+	for _, o := range looks() {
+		m.Work.Stop(o.ID, "done")
+	}
+	merge(map[string]string{"n.txt": "5\n"})
+	p, _ := m.C.Projects.Get("p")
+	fix3 := fix("fix-3")
+	fix3.MergeSHA = first.SHA
+	if got := m.lookIntoDip(p, fix3, "late", 3); !strings.Contains(got, "gone from main") || len(looks()) != 2 {
+		t.Fatalf("a dip main has since left behind filed a look: %q %+v", got, looks())
+	}
+	// Still there at main's head: a new look.
+	m.lookIntoDip(p, fix3, "late", 9)
+	if len(looks()) != 3 {
+		t.Fatalf("a dip still on main got no look: %+v", looks())
 	}
 }
 
@@ -235,5 +288,49 @@ func TestFallIsJudgedAgainstMainMeasuredNow(t *testing.T) {
 	ms = merge(map[string]string{"n.txt": "6\n"})
 	if ms.Kept || ms.AgainstSHA != second || !strings.Contains(ms.Note, "fell to 2 from 6") {
 		t.Fatalf("a real fall under the same load, against where the best was read: %+v", ms)
+	}
+}
+
+// A fix's dip is measured once more before it becomes the baseline (issue
+// #1788): a second reading back within tolerance was no dip, so the best
+// stands and no brief is filed; one still under it makes the better of the two
+// readings the baseline.
+func TestFixDipIsMeasuredAgain(t *testing.T) {
+	m, merge := scored(t)
+	looks := func() int {
+		return len(m.Work.List(func(x work.Task) bool { return strings.HasPrefix(x.Title, "Look into the score dip") }))
+	}
+	readings := filepath.Join(t.TempDir(), "readings")
+	// score.sh prints the first line of the readings file and drops it.
+	score := fmt.Sprintf("f=%q; head -n1 \"$f\"; tail -n +2 \"$f\" > \"$f.x\"; mv \"$f.x\" \"$f\"\n", readings)
+	os.WriteFile(readings, []byte("1\n5\n"), 0o644)
+	fix := work.Task{ID: "fix-1", Title: "Fix the merge", Aim: work.AimFix, AimWhy: "TestMerge fails"}
+	ms := merge(map[string]string{"score.sh": score, "n.txt": "x\n"}, fix)
+	// The score's file changed, so that merge starts a new baseline at 1;
+	// the next ones are measured against it.
+	if !ms.Kept || *ms.Best != 1 {
+		t.Fatalf("%+v", ms)
+	}
+	os.WriteFile(readings, []byte("9\n"), 0o644)
+	if ms := merge(map[string]string{"a.txt": "a\n"}); !ms.Kept || *ms.Best != 9 {
+		t.Fatalf("want best 9: %+v", ms)
+	}
+	// Readings in turn: the merge, main where the best was read (the load
+	// check), the merge again. The first dips, the second is back at 9.
+	os.WriteFile(readings, []byte("2\n9\n9\n"), 0o644)
+	fix.ID = "fix-2"
+	ms = merge(map[string]string{"b.txt": "b\n"}, fix)
+	if !ms.Kept || *ms.Best != 9 || !strings.Contains(ms.Note, "measured again") || looks() != 0 {
+		t.Fatalf("a dip gone on the second reading should keep the best 9 and file nothing: %+v, %d looks", ms, looks())
+	}
+	// Both readings dip: the better one is the baseline, and a brief looks.
+	os.WriteFile(readings, []byte("2\n9\n4\n"), 0o644)
+	fix.ID = "fix-3"
+	ms = merge(map[string]string{"c.txt": "c\n"}, fix)
+	if !ms.Kept || *ms.Best != 4 || !strings.Contains(ms.Note, "kept as a fix") || looks() != 1 {
+		t.Fatalf("want the fix kept at its better reading 4 with one brief: %+v, %d looks", ms, looks())
+	}
+	if b, _ := m.Best("p"); b != 4 {
+		t.Fatalf("best %v, want 4", b)
 	}
 }
