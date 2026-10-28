@@ -18,6 +18,12 @@ import (
 
 func hiveWithModels(t *testing.T) (*app.App, core.Run) {
 	t.Helper()
+	a, lead, _ := hiveWithForge(t)
+	return a, lead
+}
+
+func hiveWithForge(t *testing.T) (*app.App, core.Run, *core.Local) {
+	t.Helper()
 	ws := core.Workspace{Root: t.TempDir()}
 	if err := ws.Init(); err != nil {
 		t.Fatal(err)
@@ -29,7 +35,8 @@ func hiveWithModels(t *testing.T) (*app.App, core.Run) {
 	if err := ws.SaveConfig(cfg); err != nil {
 		t.Fatal(err)
 	}
-	a, err := app.New(ws, &core.Local{Dir: t.TempDir()})
+	forge := &core.Local{Dir: t.TempDir()}
+	a, err := app.New(ws, forge)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,7 +49,7 @@ func hiveWithModels(t *testing.T) (*app.App, core.Run) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return a, lead
+	return a, lead, forge
 }
 
 func call(t *testing.T, a *app.App, r core.Run, op string, args any) (any, error) {

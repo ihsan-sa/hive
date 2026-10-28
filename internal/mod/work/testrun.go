@@ -28,7 +28,7 @@ type testRun struct {
 // done, which clears the recheck; a stale head's is dropped. Runs are kept in
 // memory, so after a restart a head with no recorded check, or one asked to
 // be checked again, queues once more.
-func (m *Module) headTest(t *Task, p core.Project, command string) (c core.Check, ok bool, err error) {
+func (m *Module) headTest(t *Task, p core.Project, main, command string) (c core.Check, ok bool, err error) {
 	m.mu.Lock()
 	r := m.testRuns[t.ID]
 	if r != nil && !r.done {
@@ -48,12 +48,13 @@ func (m *Module) headTest(t *Task, p core.Project, command string) (c core.Check
 	if _, err := m.C.Sandbox(); err != nil {
 		return core.Check{}, false, err
 	}
-	m.testHead(t, p, command)
+	m.testHead(t, p, main, command)
 	return core.Check{}, false, nil
 }
 
-// testHead queues the test of t's head behind the step.
-func (m *Module) testHead(t *Task, p core.Project, command string) {
+// testHead queues the test of t's head behind the step, narrowed to what
+// it changes since main (RunCheckSince).
+func (m *Module) testHead(t *Task, p core.Project, main, command string) {
 	r := &testRun{sha: t.SHA}
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -65,7 +66,7 @@ func (m *Module) testHead(t *Task, p core.Project, command string) {
 	m.steps.Add(1)
 	go func(id, sha string) {
 		defer m.steps.Done()
-		c := m.C.Effects.RunCheck(p, sha, "test", command)
+		c := m.C.Effects.RunCheckSince(p, sha, main, "test", command)
 		m.mu.Lock()
 		r.c, r.done = c, true
 		if r.gone && m.testRuns[id] == r {

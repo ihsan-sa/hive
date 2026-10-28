@@ -22,15 +22,13 @@ No bounds on how far a pivot goes (20:09 local): "we should be ready to dp radic
 
 Any agent can propose a pivot (20:19 local): "Maybe it shouldnt be only in a stepp back loop but rather ANY agent can propose a pivot". An agent that sees the current approach costing more than another would files a short proposal: what to stop, what to do instead, the evidence, and what it throws away.
 
-Where it stands (2026-10-28 ~02:00Z): both pieces are on main: the deletion batch (2efacd8; the merge line among what it removed, issue #1837) and the daily train (a633980, issue #1836), which first runs for real once H0 installs a release carrying it. The pivot-proposal change is filed. The machine (load and memory) and GitHub's API limits on the person's account are now the main brakes; the iiks1 runner (dispatch) and a GitHub App are the levers the lead has put to the person.
-
 ## First milestone
 
 You land a change you proposed yourself, which beats your benchmark, with nobody in between. Then you release it and update your own install to that release.
 
 ## First change (done)
 
-Done: #114 (a token per repo owner) merged, and has been live on this machine since v0.1.17. H0 now runs v0.1.57 (since 2026-10-24 14:25Z) and follows pre-releases by itself (#237, #322); releases/latest is v0.1.55. Releases go out unsigned for now, by the person's choice. The ask as written:
+Done: #114 (a token per repo owner) merged, and has been live on this machine since v0.1.17. Releases go out unsigned for now, by the person's choice. The ask as written:
 
 Pick a GitHub token per repo owner. One token is gh's login, for ihsan-sa/hive only. The other is for Hive-RSI-Lab, the org for test repos and child Hives, kept at /home/hive/h0-org.token. Both act as the user ihsan-sa, so gh can't hold them as two logins. Have the Hive pass GH_TOKEN by the repo's owner, so that gh and git's credential helper both follow it.
 
@@ -43,8 +41,6 @@ For a candidate change:
 4. Keep the change only if the child does better than you do now; otherwise roll back.
 
 Anything may be used for this: nested sandboxed Hives, rollback to an earlier version. Don't narrow it to one test path.
-
-Where it stands (2026-10-27): the gate runs on every change to the Hive taken as a gain, under bubblewrap, always on a local org so far, and a judge on another model (docs/judge.md) decides keep or rollback with the gate's numbers as one thing it weighs. The first milestone is met by the record, pending the person's word: changes the Hive proposed itself were kept by the gate on merit, merged, released, and H0 runs a release that carries them. The one gap: auto_update is off in this install, so those releases and H0's updates went through the lead's warden requests (no person in between), not the release loop on its own. Whether that counts is the person's call.
 
 - The gate is #146 (merged 2026-10-24 ~14:03Z) and has run on every change since #390 (14:56Z). This machine forbids a sandbox inside a sandbox (kernel.apparmor_restrict_unprivileged_userns=1 refuses nested bwrap), so each child Hive runs in a sibling sandbox, not a nested one.
 - 59 verdicts to 2026-10-25 20:00Z: 5 keep, 32 rollback, 22 could not run. Most rollbacks are "nothing moved beyond the noise" or e2e flakes (.hive/lessons.md). Of the keeps, 6861de9da, 915afeb06 and c99cedc3e won only because the control flaked on e2e (3/3 against 2/3), and 2e4786cce was a tie when ties were allowed. 0fde98f1c (2026-10-25 17:05Z) is the first keep on merit: it fixed a test that fails on the control (internal/mod/work TestQueueSameFileApartFunctions), and the judge agreed the gain was real.
@@ -72,8 +68,6 @@ The harder eval, where the arms should come apart, is the kind of work the Hive 
 
 It has its own project, hive-eval, whose `.hive/goals.md` holds the same ask. It measures the loop above rather than replacing it: the first milestone comes first, and changes to the Hive that this one needs (a frozen mode, budget accounting, counting interventions) count as work for this project.
 
-Where it stands (2026-10-27): hive-eval's dev pilot (261027-dev-pilot) ran 9 counted runs, one per arm on each of three tasks: frozen 3/3, plain 3/3, current 0/3. Current's runs gave up because GitHub answered 403 on check runs for /home/hive/h0-org.token, so the comparison is void until that token gets Checks: read (asked of the person in the project chat). Runs lost to a Claude login about to expire were run again and not counted; arm runs that die on infrastructure are to be counted invalid, not failed (hive-eval #57).
-
 ## Where it leads: something new built every day
 
 The person, via autobox (2026-10-26, 21:59 local): "one interesting thing would be getting the hive working, showing RSI on itself, and then everyday building something new and posting it and saying built with The Hive, hive.ihsan.cc". And, the same minute: "well priority is having the core of the hive working well so we can actually build projects"; each project is "a build and also continued maintenance etc".
@@ -85,8 +79,6 @@ This is what the core work above is for, not a task for now. In order:
 3. Then, every day, the Hive builds something new as a project of its own, keeps maintaining what it built, and each one says "Built with The Hive, hive.ihsan.cc".
 
 Posting anything publicly in the person's name stays the person's: the Hive can make the thing and draft the post, never send it (autobox: "Posting in his name stays his").
-
-Where it stands (2026-10-27): not started, by design; the first milestone comes first.
 
 ## Security reads
 

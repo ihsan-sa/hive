@@ -54,6 +54,24 @@ func (m OpenModel) Holds(budget float64) error {
 	return nil
 }
 
+// PaidRefused says why named model name can't be used: a paid model on
+// OpenRouter can, the person said (10-24), as long as the month stays inside
+// openrouter_monthly_usd, so it needs that cap and a price its spend is
+// counted at; the models module holds it to the cap. Nil for any other model.
+func (c Config) PaidRefused(name string) error {
+	m := c.Models[name]
+	err := harness.OpenRouterPaid(m.Endpoint, m.Model)
+	switch {
+	case err == nil:
+		return nil
+	case c.OpenRouterUSD <= 0:
+		return fmt.Errorf("%v, and openrouter_monthly_usd is 0, so OpenRouter is free-only; set a monthly cap to allow paid models under it", err)
+	case m.Price == nil || *m.Price == Price{}:
+		return fmt.Errorf("%v with no price, so what it spends against openrouter_monthly_usd isn't counted; set its price (hive model add --price, or config.json)", err)
+	}
+	return nil
+}
+
 // APIs are the kinds of endpoint a named model can be on.
 var APIs = []string{"openai", "anthropic"}
 

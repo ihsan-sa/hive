@@ -135,8 +135,8 @@ func (OpenClaude) Parse(line []byte) []Event { return Open{}.Parse(line) }
 
 // OpenRouterPaid says why model on endpoint could spend money: on
 // OpenRouter the person's key pays for every model but the free variants
-// (an id ending in ":free"), and they asked that only those are ever used.
-// Nil for a free variant or an endpoint that isn't OpenRouter's.
+// (an id ending in ":free"); core.Config.PaidRefused says whether one may
+// run. Nil for a free variant or an endpoint that isn't OpenRouter's.
 func OpenRouterPaid(endpoint, model string) error {
 	u, err := url.Parse(strings.TrimSpace(endpoint))
 	if err != nil {
@@ -149,5 +149,5 @@ func OpenRouterPaid(endpoint, model string) error {
 	if strings.HasSuffix(strings.TrimSpace(model), ":free") {
 		return nil
 	}
-	return fmt.Errorf("%s on OpenRouter isn't a free model, and the key there pays for every model but the free ones; only a model id ending in \":free\" is allowed", model)
+	return fmt.Errorf("%s on OpenRouter is a paid model (the key there pays for every model but those whose id ends in \":free\")", model)
 }
