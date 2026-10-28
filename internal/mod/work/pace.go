@@ -324,10 +324,12 @@ func (m *Module) Pace() map[string]string {
 // reviewer's plan spends its week more than aheadSlack ahead of the clock,
 // and why, or "" when it is on pace. The workers' pace holds new changes;
 // this holds what reading each one costs, as reads follow the changes in
-// flight: the change gets one read (core.Verdict.Paced) on the route's
-// cheaper model, sonnet where the route is opus. On 10-27 a login's week
-// stood at 48% with a tenth of it gone. A change on the security list is
-// read as ever (the caller leaves it out).
+// flight: each read goes on the route's cheaper model, sonnet where the
+// route is opus. On 10-27 a login's week stood at 48% with a tenth of it
+// gone. How many reads a change needs doesn't change: a high class still
+// gets its second, separate read, as the warden's and tribunal's prompts
+// are high so they never land on one (docs/log.md). A change on the
+// security list is read as ever (the caller leaves it out).
 func (m *Module) pacedRead(project string) ([]core.Pick, string) {
 	route := m.Agents.Route("reviewer", project)
 	if len(route) == 0 {

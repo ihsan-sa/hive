@@ -2213,7 +2213,7 @@ func (m *Module) review(t *Task, p core.Project) error {
 		if route, why := m.pacedRead(p.Name); why != "" && len(ch.Security) == 0 {
 			spec.Harness, spec.Model, spec.Route = route[0].Harness, route[0].Model, route
 			spec.Inputs["paced"] = "1"
-			paced = fmt.Sprintf(" on %s, its one read: %s", route[0].Model, why)
+			paced = fmt.Sprintf(" on %s: %s", route[0].Model, why)
 		}
 		if _, err := m.C.Runs.Start(spec); err != nil {
 			return err

@@ -554,9 +554,10 @@ func TestPaceComesBackToTheStartUnderLoadAlone(t *testing.T) {
 	}
 }
 
-// While the reviewer's plan runs ahead of its week, a change in a high class
-// gets one read on the cheaper model, its record says so, and it merges on
-// it; on pace, the same change gets its second, separate read.
+// While the reviewer's plan runs ahead of its week, a review goes on the
+// cheaper model and the task's record says so; a change in a high class
+// still needs its second, separate read (the warden's and tribunal's prompts
+// are high so they never land on one), and that read is paced too.
 func TestPaceHoldsReadsAheadOfTheWeek(t *testing.T) {
 	for _, ahead := range []bool{true, false} {
 		m, task, p, _ := gateRigSeeded(t, false, map[string]string{".hive/project.json": `{"test": "true", "high": ["feature.txt"]}`}, map[string]string{"feature.txt": "y"})
@@ -572,26 +573,26 @@ func TestPaceHoldsReadsAheadOfTheWeek(t *testing.T) {
 		if err := testStep(m, task, p); err != nil || task.Stage != StageReviewing {
 			t.Fatalf("stage %q, err %v", task.Stage, err)
 		}
-		if err := m.review(task, p); err != nil {
-			t.Fatal(err)
-		}
-		r, _ := m.C.Runs.Get(task.Reviewer)
-		if paced := r.Inputs["paced"] != ""; paced != ahead || logged(task, "its one read") != ahead {
-			t.Fatalf("ahead %v: paced input %v, log %v", ahead, paced, task.Log)
-		}
-		m.C.J.MustAppend("run.turn_ended", map[string]any{"id": r.ID, "turn": 1, "status": core.StatusDone,
-			"result": harness.Result{Structured: []byte(`{"verdict":"land","summary":"ok","token":"` + reviewToken(r.ID) + `"}`)}})
-		if err := m.review(task, p); err != nil {
-			t.Fatal(err)
-		}
-		main, _ := m.C.Effects.Sync(p)
-		ch, _ := m.C.Effects.Classify(p, main, task.SHA)
-		if len(ch.High) != 1 || m.C.Effects.Reviewed(p, ch, task.SHA) != ahead {
-			t.Fatalf("ahead %v: high %v, reviewed on one read %v", ahead, ch.High, !ahead)
-		}
-		if !ahead {
-			if err := m.review(task, p); err != nil || !strings.HasSuffix(task.Reviewer, "-read2") {
-				t.Fatalf("on pace, no second read: reviewer %q, err %v", task.Reviewer, err)
+		for read := 1; read <= 2; read++ {
+			if err := m.review(task, p); err != nil {
+				t.Fatal(err)
+			}
+			r, _ := m.C.Runs.Get(task.Reviewer)
+			if paced := r.Inputs["paced"] != ""; paced != ahead || logged(task, "ahead of its week") != ahead {
+				t.Fatalf("ahead %v, read %d: paced input %v, log %v", ahead, read, paced, task.Log)
+			}
+			if read == 2 && !strings.HasSuffix(r.ID, "-read2") {
+				t.Fatalf("ahead %v: the second read is %q", ahead, r.ID)
+			}
+			m.C.J.MustAppend("run.turn_ended", map[string]any{"id": r.ID, "turn": 1, "status": core.StatusDone,
+				"result": harness.Result{Structured: []byte(`{"verdict":"land","summary":"ok","token":"` + reviewToken(r.ID) + `"}`)}})
+			if err := m.review(task, p); err != nil {
+				t.Fatal(err)
+			}
+			main, _ := m.C.Effects.Sync(p)
+			ch, _ := m.C.Effects.Classify(p, main, task.SHA)
+			if len(ch.High) != 1 || m.C.Effects.Reviewed(p, ch, task.SHA) != (read == 2) {
+				t.Fatalf("ahead %v: high %v, reviewed after %d reads: %v", ahead, ch.High, read, read != 2)
 			}
 		}
 	}

@@ -486,16 +486,6 @@ func TestHighClassNeedsTwoReads(t *testing.T) {
 	req := MergeRequest{Project: p, PR: pr.Number, SHA: sha, Main: main}
 	read("r7a", "land")
 	read("r7b", "fix")
-	// A read given while the plan runs ahead of its week is a change's one
-	// read only off the security list; a root path is on it.
-	c.Runs.Start(RunSpec{ID: "r7p", Role: "reviewer", Project: p.Name, ReadOnly: true, Harness: "fake", Inputs: map[string]string{"sha": sha, "paced": "1"}})
-	if err := c.Effects.RecordVerdict(Verdict{Project: p.Name, SHA: sha, Run: "r7p", Verdict: "land"}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := c.Effects.Merge(req); err == nil || !strings.Contains(err.Error(), "no land verdict") {
-		t.Fatalf("merged a root path on one paced read: %v", err)
-	}
-	read("r7b2", "fix")
 	read("r7c", "land")
 	read("r7c", "land") // the same run twice is one read
 	if _, err := c.Effects.Merge(req); err == nil || !strings.Contains(err.Error(), "no land verdict") {

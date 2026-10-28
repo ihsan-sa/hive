@@ -127,10 +127,6 @@ type Verdict struct {
 	// PanelSeat(i)); "" is the ordinary reviewer. The host sets it on the run,
 	// so a seat's read never counts as an ordinary one, nor the other way.
 	Seat string `json:"seat,omitempty"`
-	// Paced says the read was given while the reviewer's plan ran ahead of
-	// its week: the change gets this one read, not a second (readOK). The
-	// host sets it on the run (its "paced" input), as it does Seat.
-	Paced bool `json:"paced,omitempty"`
 }
 
 // SeatSecurity is the Hive's own security reviewer: a reviewer separate from
@@ -1055,7 +1051,6 @@ func (e *Effects) RecordVerdict(v Verdict) error {
 	if v.Seat = r.Inputs["seat"]; v.Seat != "" && v.Diff == "" {
 		return errors.New("a security seat's read is bound to a diff")
 	}
-	v.Paced = r.Inputs["paced"] != "" && v.Seat == ""
 	e.j.MustAppend("effect.verdict", v)
 	return nil
 }
@@ -2356,11 +2351,8 @@ func (e *Effects) readOK(p Project, ch Change, sha string) bool {
 	if p.Self || len(ch.High) > 0 {
 		// A release names the read of each merged head; a high class needs a
 		// second, separate read.
-		// While the plan runs ahead of its week, a read given then
-		// (Verdict.Paced) is the one a change outside the security list
-		// gets: reads in proportion to the change and the plan.
 		need := 1
-		if v, ok := e.verdict(project, sha, ch.DiffID); len(ch.High) > 0 && !(len(ch.Security) == 0 && ok && v.Verdict == "land" && v.Paced) {
+		if len(ch.High) > 0 {
 			need = 2
 		}
 		return len(e.Reads(project, sha, ch.DiffID)) >= need
