@@ -427,6 +427,10 @@ func TestStaleModuleCacheRunsAgain(t *testing.T) {
 	if _, err := exec.LookPath("go"); err != nil {
 		t.Skip("no go on PATH")
 	}
+	// mapped's runs inherit this process's environment, and a check of the
+	// Hive itself that has the shared cache runs its tests with GOPROXY=off:
+	// only what RunCheck sets may count.
+	t.Setenv("GOPROXY", "")
 	c, f := testHive(t)
 	removesCache(t, c)
 	seedRepo(t, f, "me/gomod", map[string]string{
