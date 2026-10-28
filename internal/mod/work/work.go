@@ -576,6 +576,9 @@ type Brief struct {
 	// Apart files an agent's brief as its own task even when it matches an
 	// open one (join.go).
 	Apart bool `json:"apart"`
+	// Now puts it first in line as it is filed, as queue's now does; only a
+	// pivot (the improve module's) sets it.
+	Now bool `json:"-"`
 }
 
 // taken is the brief's aim and why as File takes them, or why it can't be
@@ -615,8 +618,12 @@ func (m *Module) File(b Brief) (Task, error) {
 		return Task{}, err
 	}
 	t := &Task{Aim: aim, AimWhy: core.Clip(why, 300), ID: core.NewID(), Project: b.Project, Title: strings.TrimSpace(b.Title), Done: b.Done, Known: b.Known,
-		From: b.From, Chat: b.Chat, Thread: b.Thread, Kind: "work", Stage: StageNew, Inputs: b.Inputs, Model: b.Model, Created: time.Now().UTC()}
-	m.save(t, "filed by "+b.From+", taken as "+t.AimWord())
+		From: b.From, Chat: b.Chat, Thread: b.Thread, Kind: "work", Stage: StageNew, Inputs: b.Inputs, Model: b.Model, Now: b.Now, Created: time.Now().UTC()}
+	note := "filed by " + b.From + ", taken as " + t.AimWord()
+	if t.Now {
+		note += ", first in line"
+	}
+	m.save(t, note)
 	return *t, nil
 }
 
@@ -1148,6 +1155,16 @@ func (m *Module) status(t *Task, p core.Project, number int, text string) {
 // findings, which a worker's code can fill with anything.
 const gaveUpOnErrors = "gave up after repeated errors: "
 
+// HiveTrouble is why t stopped on the Hive's own trouble ("" when it
+// didn't): the pipeline gave up on its steps' errors (a forge refusing the
+// token, calls killed by their timeout), not on the worker's work.
+func HiveTrouble(t Task) string {
+	if t.Stage != StageStopped || t.ByPerson || !strings.HasPrefix(t.Reason, "gave up after ") {
+		return ""
+	}
+	return t.Reason
+}
+
 // revive brings back the tasks GitHub's rate limit stopped, from before it
 // was waited out, once the pause is over, and those stopped on calls killed
 // by their timeout, once no call has been for a while. Only a stop on
@@ -1168,6 +1185,8 @@ func (m *Module) revive() {
 			said = "brought back: it stopped only because GitHub rate-limited the Hive's writes"
 		case !slow && core.TimedOut(why):
 			said = "brought back: it stopped only because a call was killed by its timeout while the machine was loaded"
+		case core.BaseMoved(why):
+			said = "brought back: it stopped only because main moved while it merged"
 		default:
 			continue
 		}
@@ -2503,6 +2522,12 @@ func (m *Module) merge(t *Task, p core.Project) error {
 	if errors.Is(err, core.ErrHeadMoved) {
 		// A push since this look: no failure, the next look sees the new head.
 		m.save(t, "not readied: "+core.Clip(err.Error(), 300))
+		return nil
+	}
+	if errors.Is(err, core.ErrBaseMoved) {
+		// Main moved mid-merge, as it does in a batch: no failure, the next
+		// look merges onto the new main.
+		m.save(t, "main moved as it merged, so it tries again: "+core.Clip(err.Error(), 300))
 		return nil
 	}
 	var np *core.NeedsPerson
