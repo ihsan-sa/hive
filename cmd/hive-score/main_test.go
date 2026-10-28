@@ -200,6 +200,20 @@ func TestLoudRunsRunAgain(t *testing.T) {
 	if runs, _ := Counted([]Run{none, ok(false, false, 4), ok(false, false, 4), ok(false, true, 9)}); slices.ContainsFunc(runs, Run.missed) {
 		t.Fatal("a loud miss filled a way that had a loud run that landed")
 	}
+	// Past the budget a way that stayed loud doesn't take the other's
+	// runs: one quiet run one by one and loud ones at once goes on one by
+	// one until it has its three, and the score counts three of each way.
+	lone := []Run{ok(false, false, 4), ok(true, true, 5), ok(true, true, 6), ok(true, true, 5), ok(true, true, 7), ok(true, true, 5)}
+	if atOnce, more := Next(lone, false); atOnce || !more {
+		t.Fatalf("past the budget with one run one by one, next is at once %v, more %v", atOnce, more)
+	}
+	if _, more := Next(append(lone, ok(false, true, 9), ok(false, true, 8)), false); more {
+		t.Fatal("past the budget with three runs of each way, runs went on")
+	}
+	e1 := E2E{Run: 1, Passed: 1}
+	if few, _ := Counted(lone); math.Abs(Score(few, e1)-Score([]Run{ok(false, false, 4), ok(false, false, 4), ok(false, false, 4), ok(true, true, 5), ok(true, true, 5), ok(true, true, 5)}, e1)) > 1e-9 {
+		t.Fatal("a way with one run counted is scored on fewer than three")
+	}
 	if atOnce, more := Next([]Run{ok(false, false, 4), ok(true, false, 1), ok(false, false, 4), ok(true, false, 1), ok(false, false, 4), ok(true, false, 1)}, true); more {
 		t.Fatalf("six quiet runs, yet another (at once: %v)", atOnce)
 	}

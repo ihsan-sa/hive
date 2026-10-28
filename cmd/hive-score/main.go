@@ -297,15 +297,20 @@ func (r Run) counts() bool { return !r.Loud }
 // Next says which way of asking the next benchmark run uses, and whether
 // there is one: until each way has benchReps runs that count, the one with
 // fewer first (on a tie, not the way just run); once the budget is out
-// (inTime false) only until the usual six have run.
+// (inTime false) only until each way has benchReps runs, loud or not, the
+// one with fewer runs first, so neither is scored on fewer than its three.
 func Next(all []Run, inTime bool) (atOnce, more bool) {
-	n := map[bool]int{}
+	n, ran := map[bool]int{}, map[bool]int{}
 	for _, r := range all {
+		ran[r.AtOnce]++
 		if r.counts() {
 			n[r.AtOnce]++
 		}
 	}
-	if n[false] >= benchReps && n[true] >= benchReps || !inTime && len(all) >= 2*benchReps {
+	if !inTime {
+		n = ran
+	}
+	if n[false] >= benchReps && n[true] >= benchReps {
 		return false, false
 	}
 	if n[false] != n[true] {
@@ -464,8 +469,8 @@ func Score(runs []Run, e E2E) float64 {
 		n[r.AtOnce]++
 		missed = missed || r.missed()
 	}
-	for way, c := range n {
-		secs += float64(c) * fastest[way]
+	for way := range n {
+		secs += benchReps * fastest[way] // three runs of each way, whatever ran
 	}
 	if missed {
 		secs = benchTimeout.Seconds() * float64(max(len(runs), 1))
