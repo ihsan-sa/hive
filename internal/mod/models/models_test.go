@@ -470,3 +470,30 @@ func TestAWorkerFilesTrialsOnItsOwnProject(t *testing.T) {
 		t.Fatal("a trial's own worker filed a trial")
 	}
 }
+
+// A step-back files the trials it wants as trials, on its own project: one
+// it filed as a brief ran on the project's route and moved to claude:opus
+// at OpenRouter's limit (task 261028-141459).
+func TestAStepBackFilesTrials(t *testing.T) {
+	a, _ := hiveWithModels(t)
+	if _, err := a.C.Projects.Add(core.Project{Name: "other", Repo: "me/other"}); err != nil {
+		t.Fatal(err)
+	}
+	sb, err := a.C.Runs.Start(core.RunSpec{Role: "stepback", Project: "lab", Harness: "fake", Checkout: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := call(t, a, sb, "trial", map[string]any{"model": "qwen", "project": "other", "title": "wc"}); err == nil {
+		t.Fatal("a step-back filed a trial on another project")
+	}
+	res, err := call(t, a, sb, "trial", map[string]any{"model": "qwen", "project": "lab", "title": "wc"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tk, _ := a.Work.Get(res.(map[string]string)["task"]); tk.Model != "qwen" {
+		t.Fatalf("a step-back's trial: %+v", tk)
+	}
+	if _, err := call(t, a, sb, "trial", map[string]any{"model": "qwen", "project": "lab", "title": "wc"}); err == nil {
+		t.Fatal("a step-back filed a second open trial of the same model and title")
+	}
+}
