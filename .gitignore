@@ -5,4 +5,4 @@
 *.test
 *.exe~
 __pycache__/
-/internal/core/disk-test-*/
+disk-test-*/

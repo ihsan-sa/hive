@@ -21,6 +21,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/ihsan-sa/hive-standalone-build/internal/goscope"
 	"github.com/ihsan-sa/hive-standalone-build/internal/sandbox"
 )
 
@@ -111,6 +112,7 @@ type Check struct {
 	Log     string    `json:"log,omitempty"`      // the full output on the host, when it ran
 	Failed  []string  `json:"failed,omitempty"`   // the failing tests it names, read before the output is clipped
 	Keys    []string  `json:"keys,omitempty"`     // those tests with their packages (FailedTestKeys), when each can be placed
+	Scope   []string  `json:"scope,omitempty"`    // the packages it ran, when only those the change since main can affect (RunCheckSince); none is all
 	At      time.Time `json:"at"`
 	// DiskRead and DiskWrote are the bytes the check's command read from
 	// and wrote to the disk, every run of it together (sandbox.Disk; 0 where
@@ -196,8 +198,12 @@ func NewEffects(ws Workspace, j *Journal, forge Forge, sb func() (sandbox.Sandbo
 		case "effect.checked":
 			var c Check
 			ev.Decode(&c)
+			k := c.Project + "@" + c.SHA + "/" + c.Kind
+			if old, ok := e.checks[k]; ok && old.OK && old.Scope == nil && c.Scope != nil {
+				break // a whole pass answers for more than part of one; a red one is rechecked
+			}
 			if !noVerdict(c) { // a check that couldn't start runs again next time
-				e.checks[c.Project+"@"+c.SHA+"/"+c.Kind] = c
+				e.checks[k] = c
 			}
 		case "effect.verdict":
 			var v Verdict
@@ -539,13 +545,32 @@ type sharedCheck struct {
 // that one's result: one slot, one checkout and one journaled verdict, not one
 // per caller (#1880). A caller after it ends runs afresh.
 func (e *Effects) RunCheck(p Project, sha, kind, command string) Check {
-	key := p.Name + "@" + sha + "@" + kind + "@" + command
+	return e.shared(p, sha, "", kind, command)
+}
+
+// RunCheckSince is RunCheck of a change bound for main: a test command
+// made only of go vet and go test over ./... runs on the packages the
+// change since its merge base with main can affect (goscope), which is
+// every package whose result can differ from main's. Its Check names them
+// in Scope. A narrowing the go command can't follow runs everything.
+func (e *Effects) RunCheckSince(p Project, sha, main, kind, command string) Check {
+	c := e.shared(p, sha, main, kind, command)
+	if c.Scope != nil && !c.OK && c.CantRun == "" && goscope.Misfired(c.Output) {
+		return e.shared(p, sha, "", kind, command)
+	}
+	return c
+}
+
+// shared is runCheck, run once for every caller asking for the same check
+// while it waits or runs; each gets a copy of its result.
+func (e *Effects) shared(p Project, sha, main, kind, command string) Check {
+	key := p.Name + "@" + sha + "@" + main + "@" + kind + "@" + command
 	e.shareMu.Lock()
 	if s, ok := e.sharing[key]; ok {
 		e.shareMu.Unlock()
 		<-s.done
 		c := s.c
-		c.Failed, c.Keys = slices.Clone(c.Failed), slices.Clone(c.Keys)
+		c.Failed, c.Keys, c.Scope = slices.Clone(c.Failed), slices.Clone(c.Keys), slices.Clone(c.Scope)
 		return c
 	}
 	if e.sharing == nil {
@@ -560,11 +585,11 @@ func (e *Effects) RunCheck(p Project, sha, kind, command string) Check {
 		e.shareMu.Unlock()
 		close(s.done)
 	}()
-	s.c = e.runCheck(p, sha, kind, command)
+	s.c = e.runCheck(p, sha, main, kind, command)
 	return s.c
 }
 
-func (e *Effects) runCheck(p Project, sha, kind, command string) Check {
+func (e *Effects) runCheck(p Project, sha, main, kind, command string) Check {
 	c := Check{Project: p.Name, SHA: sha, Kind: kind, At: time.Now().UTC()}
 	record := func() Check {
 		c.Output = ClipEnds(c.Output, 4000)
@@ -595,6 +620,10 @@ func (e *Effects) runCheck(p Project, sha, kind, command string) Check {
 		return c
 	}
 	defer e.dropCheckout(dir)
+	scope := ""
+	if main != "" && kind == "test" {
+		command, c.Scope, scope = e.narrow(p, dir, sha, main, command)
+	}
 	id := "gate-" + short(sha) + "-" + kind + "-" + NewID()[14:]
 	c.Log = filepath.Join(e.ws.Hive(), "checks", p.Name, id+".log")
 	mounts := []sandbox.Mount{{Host: dir, Inside: "/work", RW: true}}
@@ -653,7 +682,7 @@ func (e *Effects) runCheck(p Project, sha, kind, command string) Check {
 	}
 	mods.done()
 	build.done()
-	for _, n := range []string{build.note, mods.note} {
+	for _, n := range []string{build.note, mods.note, scope} {
 		if n != "" {
 			out = "hive: " + n + "\n" + out
 		}
@@ -703,6 +732,37 @@ func (e *Effects) runCheck(p Project, sha, kind, command string) Check {
 		}
 	}
 	return record()
+}
+
+// narrow is command run only on the packages of the checkout at dir (sha)
+// that the change since its merge base with main can affect, those
+// packages, and a note saying so; or command as it is when it can't be
+// narrowed.
+func (e *Effects) narrow(p Project, dir, sha, main, command string) (string, []string, string) {
+	unlock := e.lock(p.Name)
+	_, err := GitT(5*time.Minute, dir, "fetch", "-q", "origin", main)
+	unlock()
+	if err != nil {
+		return command, nil, ""
+	}
+	base, err := Git(dir, "merge-base", main, sha)
+	if err != nil {
+		return command, nil, ""
+	}
+	out, err := Git(dir, "diff", "--name-only", "--no-renames", "-z", base, sha)
+	if err != nil {
+		return command, nil, ""
+	}
+	changed := slices.DeleteFunc(strings.Split(out, "\x00"), func(f string) bool { return f == "" })
+	pkgs, ok := goscope.Affected(dir, changed)
+	if !ok {
+		return command, nil, ""
+	}
+	narrowed, ok := goscope.Narrow(command, pkgs)
+	if !ok {
+		return command, nil, ""
+	}
+	return narrowed, pkgs, fmt.Sprintf("only the %d packages the change since %s can affect: %s", len(pkgs), short(base), strings.Join(pkgs, " "))
 }
 
 // missingTool matches the shell's "not found" for a command looked up on the
@@ -1030,7 +1090,7 @@ func (e *Effects) runSandboxed(sb sandbox.Sandbox, project, id string, mounts []
 		argv = hostShell(script)
 	}
 	spec := sandbox.Spec{ID: id, Argv: argv, Env: env, Cwd: sandbox.InsidePath(sb, mounts[0]), Mounts: mounts, Tools: e.tools(),
-		Stdout: logPath, StopFile: home + ".stop", Network: network, Allow: e.ws.LoadConfig().Egress.For("check"), Local: e.ws.LoadConfig().Egress.LocalAddrs(), Guard: e.ws.Guarded(), Cover: e.ws.Covered(), UID: os.Getuid(), GID: os.Getgid(), Nice: CheckNice, Disk: disk}
+		Stdout: logPath, StopFile: home + ".stop", Tmp: filepath.Join(home, homeTmp), Network: network, Allow: e.ws.LoadConfig().Egress.For("check"), Local: e.ws.LoadConfig().Egress.LocalAddrs(), Guard: e.ws.Guarded(), Cover: e.ws.Covered(), UID: os.Getuid(), GID: os.Getgid(), Nice: CheckNice, Disk: disk}
 	over := watchHome(home, capB)
 	code, err := sb.Run(spec, timeout)
 	if over() && err == nil {
