@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -363,3 +364,26 @@ func TestKeyMainOnce(t *testing.T) {
 		t.Fatal("the link's target was touched")
 	}
 }
+
+// A paid model on OpenRouter is never asked: no request leaves.
+func TestNoRequestForAPaidOpenRouterModel(t *testing.T) {
+	asked := false
+	client := &http.Client{Transport: roundTrip(func(*http.Request) (*http.Response, error) {
+		asked = true
+		return nil, errors.New("sent")
+	})}
+	a := &Agent{Endpoint: "https://openrouter.ai/api/v1", Model: "openai/gpt-5", Key: "k", Client: client, Sleep: func(time.Duration) {}}
+	if _, _, err := a.chat(context.Background(), []Message{{Role: "user", Content: "hi"}}, nil); err == nil || !strings.Contains(err.Error(), ":free") {
+		t.Fatalf("chat: %v", err)
+	}
+	if err := Probe(context.Background(), "https://openrouter.ai/api/v1", "openai/gpt-5", "k", false); err == nil {
+		t.Fatal("probe of a paid model passed")
+	}
+	if asked {
+		t.Fatal("a request went out for a paid OpenRouter model")
+	}
+}
+
+type roundTrip func(*http.Request) (*http.Response, error)
+
+func (f roundTrip) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }

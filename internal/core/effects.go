@@ -19,6 +19,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/sandbox"
 )
@@ -134,8 +135,9 @@ type Verdict struct {
 const SeatSecurity = "security"
 
 // PanelSeats is how many sit on the panel that also reads a change to a root
-// path on the security list (what runs with elevated rights); a majority of
-// their lands passes it.
+// path on the security list (what runs with elevated rights). Every seat's
+// verdict is counted: it passes once all of them have read and a majority
+// said land, never on an early majority with a seat still reading.
 const PanelSeats = 3
 
 // PanelSeat names the panel's seat i.
@@ -518,7 +520,7 @@ func (e *Effects) Push(p Project, branch, sha string) error {
 func (e *Effects) RunCheck(p Project, sha, kind, command string) Check {
 	c := Check{Project: p.Name, SHA: sha, Kind: kind, At: time.Now().UTC()}
 	record := func() Check {
-		c.Output = Clip(c.Output, 4000)
+		c.Output = ClipEnds(c.Output, 4000)
 		e.j.MustAppend("effect.checked", c)
 		return c
 	}
@@ -534,7 +536,12 @@ func (e *Effects) RunCheck(p Project, sha, kind, command string) Check {
 		c.Output = err.Error()
 		return c // not recorded: no sandbox is not a verdict on the commit
 	}
-	defer e.Slots.Acquire(p.Name, sha, kind)()
+	release, ok := e.Slots.Take(p.Name, sha, kind)
+	if !ok {
+		c.Output = "dropped from the check line before it started"
+		return c // not recorded: nobody wants its verdict any more
+	}
+	defer release()
 	dir, err := e.cleanCheckout(p, sha, kind)
 	if err != nil {
 		c.Output = "could not make a clean checkout: " + err.Error()
@@ -634,7 +641,7 @@ func (e *Effects) RunCheck(p Project, sha, kind, command string) Check {
 	if kind == "score" && c.OK {
 		v, perr := scoreOf(out)
 		if perr != nil {
-			c.OK, c.Output = false, "score command printed no number at the end or on one line of its own: "+Clip(out, 500)
+			c.OK, c.Output = false, "score command printed no number at the end or on one line of its own: "+ClipEnds(out, 500)
 		} else {
 			c.Score = &v
 		}
@@ -801,6 +808,26 @@ func StopKeys(out string) []string {
 	return keys
 }
 
+// ClipEnds shortens s to about n runes, keeping its lines and both ends: a
+// check prints what it ran first and its verdict (the failures, the summary,
+// ok or FAIL) last, so a quarter of the room goes to the head and the rest to
+// the tail, each cut at a line where one is near.
+func ClipEnds(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	head, tail := string(r[:n/4]), string(r[len(r)-(n-n/4):])
+	if i := strings.LastIndexByte(head, '\n'); i > len(head)/2 {
+		head = head[:i]
+	}
+	if i := strings.IndexByte(tail, '\n'); i >= 0 && i < len(tail)/2 {
+		tail = tail[i+1:]
+	}
+	cut := len(r) - utf8.RuneCountInString(head) - utf8.RuneCountInString(tail)
+	return head + fmt.Sprintf("\n… %d characters cut …\n", cut) + tail
+}
+
 // FullOutput is a check's whole output: its log on the host when it can be
 // read, else the clipped output it was journaled with.
 func (c Check) FullOutput() string {
@@ -830,6 +857,19 @@ func NoWorse(c, mc Check) bool {
 		}
 	}
 	return true
+}
+
+// MainTests is main's recorded test run at sha as both gates read it (the
+// work module's testing stage and Merge): a red run that a "retest" since
+// passed was a flake of a busy machine, and main counts as green there.
+func (e *Effects) MainTests(project, sha string) (Check, bool) {
+	c, ok := e.GetCheck(project, sha, "test")
+	if ok && !c.OK && c.CantRun == "" {
+		if rc, rok := e.GetCheck(project, sha, "retest"); rok && !rc.At.Before(c.At) && rc.CantRun == "" {
+			c.OK = rc.OK
+		}
+	}
+	return c, ok
 }
 
 // scoreOf reads the score from a score command's output: the last word of
@@ -1106,7 +1146,7 @@ func PanelTally(reads map[string]Verdict) (lands, fixes int) {
 // security read it needs: an outside read (the box's perms seat or
 // architect) decides when there is one, a fix from either outweighing a
 // land; otherwise the Hive's own security seat said land on its own diff,
-// and for a root path a majority of the panel did too.
+// and for a root path the whole panel read it and a majority said land.
 func (e *Effects) SecurityOK(project string, ch Change) bool {
 	if len(ch.Security) == 0 {
 		return true
@@ -1121,8 +1161,8 @@ func (e *Effects) SecurityOK(project string, ch Change) bool {
 	if reads[SeatSecurity].Verdict != "land" {
 		return false
 	}
-	lands, _ := PanelTally(reads)
-	return len(ch.SecurityRoot) == 0 || lands > PanelSeats/2
+	lands, fixes := PanelTally(reads)
+	return len(ch.SecurityRoot) == 0 || (lands+fixes == PanelSeats && lands > PanelSeats/2)
 }
 
 // OwnDiff is the diff from base (a change's merge base with main) to sha, as
@@ -1429,6 +1469,9 @@ type MergeRequest struct {
 	// once every read is checked. One made a draft after that look isn't
 	// (the lead's pr_draft, say): MergePR refuses it with ErrDraft.
 	Draft bool
+	// Stale, when set, is asked last, just before the forge merges: true
+	// (the person stopped the task while the merge was weighed) refuses it.
+	Stale func() bool
 }
 
 // Merge merges the PR only at sha, and only when the host's own records show
@@ -1456,8 +1499,23 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 		// a red main can land. Or red only in quarantined tests, which count
 		// against no head, as the forge's checks below.
 		if flaky = e.ExcusedLocal(p, m.Main, m.Task, ch.Files, c); len(flaky) == 0 {
-			if mc, ok := e.GetCheck(p.Name, m.Main, "test"); !ok || mc.OK || !NoWorse(c, mc) {
-				return "", refuse("%s: its test run is red beyond what main's own run at %s fails too (or main's has no record)", short(m.SHA), short(m.Main))
+			mc, ok := e.MainTests(p.Name, m.Main)
+			switch {
+			case !ok:
+				return "", refuse("%s: its test run is red, and main has no recorded test run at %s to say whether it is red there too", short(m.SHA), short(m.Main))
+			case mc.OK:
+				return "", refuse("%s: its test run is red where main's own passes at %s", short(m.SHA), short(m.Main))
+			case !NoWorse(c, mc):
+				mains, beyond := RedKeys(mc.FullOutput()), []string{}
+				for _, k := range RedKeys(c.FullOutput()) {
+					if !slices.Contains(mains, k) {
+						beyond = append(beyond, k)
+					}
+				}
+				if len(beyond) == 0 {
+					beyond = []string{"a failure no test name accounts for"}
+				}
+				return "", refuse("%s: its test run fails beyond what main's own run at %s fails too (%s)", short(m.SHA), short(m.Main), Clip(strings.Join(beyond, ", "), 300))
 			}
 		}
 	}
@@ -1505,6 +1563,9 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 	}
 	if st != CheckPass {
 		return "", refuse("%s: the forge's checks are not all passing there, beyond what fails on main at %s too (%s: %s)", short(m.SHA), short(m.Main), st, CheckNames(which))
+	}
+	if m.Stale != nil && m.Stale() {
+		return "", refuse("#%d: its task was stopped or brought back while the merge was weighed", m.PR)
 	}
 	// Every read above is the Hive's own and bound to sha, and nobody outside
 	// the Hive reads its PRs, so a draft it cleared is its to ready.

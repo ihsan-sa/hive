@@ -55,6 +55,13 @@ model ids and free tiers):
 | OpenRouter's free models | `https://openrouter.ai/api/v1` | `moonshotai/kimi-k2:free` |
 | Ollama on this machine | `http://127.0.0.1:11434/v1` | `qwen2.5-coder:14b` |
 
+OpenRouter is free-only, enforced (#355): the person's key there pays for
+every model but the free variants, so a model on `openrouter.ai` whose id
+doesn't end in `:free` is refused by `hive model add` and by the config check
+(a route or trial can't name it), a run won't start or take a turn on one, and
+the open agent sends it no request, probe included (`TestOpenRouterPaid`,
+`TestCheckRefusesAPaidOpenRouterModel`, `TestNoRequestForAPaidOpenRouterModel`).
+
 Other harnesses with a CLI of their own (Cursor, OpenCode, Aider) come in as
 harnesses through the harness-module seam rather than as more code in the open
 agent ([harnesses.md](harnesses.md)).
@@ -274,3 +281,8 @@ a brief whose worker runs on that model alone (no fallback); the checks stay
 on their own models. When it ends, `model.trial` records the outcome (merged,
 done, blocked, stopped), turns, review rounds, minutes and cost, and
 `hive agent models` lists it. A trial belongs on a test project, not real work.
+A lead files trials, and so does a worker on its own project: a test project
+(trials) has no lead of its own unless the person chats with one, so its trial
+rounds are briefs a worker carries out by filing one trial per model and task.
+A trial's own worker files none, and one already open on the same model with
+the same title is refused with its task id, so a round doesn't file twice.
