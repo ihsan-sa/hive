@@ -2478,6 +2478,9 @@ func (m *Module) merge(t *Task, p core.Project) error {
 	if wait, err := m.upToDate(t, p, main, pr); wait || err != nil {
 		return err
 	}
+	if wait, err := m.publishScan(t, p, main); wait || err != nil {
+		return err
+	}
 	// The security read first: it takes longest, so its line goes on the PR
 	// while the forge's checks still run.
 	if wait, err := m.securityRead(t, p, main); wait || err != nil {
