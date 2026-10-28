@@ -1141,6 +1141,16 @@ func (m *Module) status(t *Task, p core.Project, number int, text string) {
 // findings, which a worker's code can fill with anything.
 const gaveUpOnErrors = "gave up after repeated errors: "
 
+// HiveTrouble is why t stopped on the Hive's own trouble ("" when it
+// didn't): the pipeline gave up on its steps' errors (a forge refusing the
+// token, calls killed by their timeout), not on the worker's work.
+func HiveTrouble(t Task) string {
+	if t.Stage != StageStopped || t.ByPerson || !strings.HasPrefix(t.Reason, "gave up after ") {
+		return ""
+	}
+	return t.Reason
+}
+
 // revive brings back the tasks GitHub's rate limit stopped, from before it
 // was waited out, once the pause is over, and those stopped on calls killed
 // by their timeout, once no call has been for a while. Only a stop on
@@ -1161,6 +1171,8 @@ func (m *Module) revive() {
 			said = "brought back: it stopped only because GitHub rate-limited the Hive's writes"
 		case !slow && core.TimedOut(why):
 			said = "brought back: it stopped only because a call was killed by its timeout while the machine was loaded"
+		case core.BaseMoved(why):
+			said = "brought back: it stopped only because main moved while it merged"
 		default:
 			continue
 		}
@@ -1414,7 +1426,9 @@ func (m *Module) renderBrief(t *Task, p core.Project, base string) string {
 		}
 		b.WriteString(" Every merge is measured; after a clear fix a lower score files a brief to look into it, and otherwise it is reverted unless a judge, weighing it with the change, keeps it, so say in your account what the change is for.\n")
 	}
-	if cfg.Score != nil && t.From != "hive" { // as checkpoint() skips the Hive's own setup brief
+	if cfg.Score != nil && t.From != "hive" && p.Self && t.Gain() {
+		b.WriteString("- Commit as you go: a change aimed at a gain isn't merged as checkpoints; the recursive gate judges its whole diff once you finish.\n")
+	} else if cfg.Score != nil && t.From != "hive" { // as checkpoint() skips the Hive's own setup brief
 		b.WriteString("- Commit each gain as you make it: a commit that beats the best kept score is tested, read and merged into main as a checkpoint while you keep working on top of it.\n")
 	}
 	{
@@ -1533,7 +1547,20 @@ func (m *Module) checkWorker(t *Task, p core.Project) error {
 // change to the checkout's reflog, read without running git there. Once the
 // worker has finished and been sent back, its next finish lands instead.
 func (m *Module) checkpoint(t *Task, p core.Project, r core.Run) error {
-	if _, scored := m.bestScore(p.Name); !scored || t.From == "hive" || t.NoBank != "" || t.Round > 0 || t.Conflicts > 0 { // the Hive's own setup brief keeps its done line (doneFor)
+	if _, scored := m.bestScore(p.Name); !scored || t.From == "hive" { // the Hive's own setup brief keeps its done line (doneFor)
+		return nil
+	}
+	if p.Self && t.Gain() {
+		if t.NoBank == "" {
+			t.NoBank = noBankGain
+			m.save(t, "no checkpoints: "+noBankGain)
+		}
+		return nil
+	}
+	if t.NoBank == noBankGain {
+		t.NoBank = "" // its aim became a fix
+	}
+	if t.NoBank != "" || t.Round > 0 || t.Conflicts > 0 {
 		return nil
 	}
 	sc := m.C.Effects.Config(p, "HEAD").Score
@@ -1607,6 +1634,10 @@ func (m *Module) checkpoint(t *Task, p core.Project, r core.Run) error {
 	return m.open(t, p, sha, fmt.Sprintf("A checkpoint of #%d while its worker keeps going: %s scores %g, above the best kept %g.", t.Issue.Number, core.Short(sha), *c.Score, best))
 }
 
+// noBankGain is why a change to the Hive aimed at a gain is never merged in
+// parts: the recursive gate judges its whole diff, once its worker finishes.
+const noBankGain = "it aims at a gain, which merges only whole, on the recursive gate's keep once its worker finishes"
+
 // rewound tells a worker its branch left a commit already merged as a checkpoint.
 func rewound(base string) string {
 	return fmt.Sprintf("Your newest commit no longer builds on %s, which is merged into main as a checkpoint, so the Hive can't take it. Bring that commit back into your branch (`git merge %s`, or rebase onto it), keep it as it is, commit, and carry on.", core.Short(base), base)
@@ -1645,6 +1676,11 @@ func finishText(r core.Run) string {
 }
 
 func (m *Module) land(t *Task, p core.Project) error {
+	if stage, what := m.unmade(*t); stage != "" {
+		t.Stage = stage
+		m.save(t, "its "+what+" was never made, so there are no commits to take out; it is made again")
+		return nil
+	}
 	r, _ := m.C.Runs.Get(t.Worker)
 	sha, err := m.C.Effects.Extract(p, r, t.Base)
 	if errors.Is(err, core.ErrNoChanges) && t.Banked > 0 {
@@ -2469,6 +2505,12 @@ func (m *Module) merge(t *Task, p core.Project) error {
 	if errors.Is(err, core.ErrHeadMoved) {
 		// A push since this look: no failure, the next look sees the new head.
 		m.save(t, "not readied: "+core.Clip(err.Error(), 300))
+		return nil
+	}
+	if errors.Is(err, core.ErrBaseMoved) {
+		// Main moved mid-merge, as it does in a batch: no failure, the next
+		// look merges onto the new main.
+		m.save(t, "main moved as it merged, so it tries again: "+core.Clip(err.Error(), 300))
 		return nil
 	}
 	var np *core.NeedsPerson
@@ -3882,6 +3924,17 @@ func (m *Module) Recheck(id, back, by string) error {
 	t.Reason, t.Failures, t.Round, t.Reviews, t.Conflicts, t.CantRuns = "", 0, 0, 0, 0, 0
 	m.goNow(&t)
 	m.CloseCantRunAsk(t.Project, "cant-run:"+t.ID, "the change is tested again, asked by "+by)
+	if stage, what := m.unmade(t); stage != "" {
+		// it stopped before its issue or worker was made (a rate-limited
+		// 'gh issue create', say): there are no commits to check and no
+		// worker to send back, so it makes what's missing again.
+		if back != "" {
+			t.Known = strings.TrimSpace(t.Known + "\n\n" + back)
+		}
+		t.Stage = stage
+		m.steer(&t, "its "+what+" was never made, so it is made again, asked by "+by)
+		return nil
+	}
 	if back != "" {
 		if err := m.C.Runs.Reopen(t.Worker, back); err != nil {
 			return err
@@ -3893,6 +3946,19 @@ func (m *Module) Recheck(id, back, by string) error {
 	t.Stage = StageLanding
 	m.steer(&t, "checks run again on its commits, asked by "+by)
 	return nil
+}
+
+// unmade says the stage that makes what a task stopped before making: its
+// issue (StageNew) or its worker and checkout (StageQueued); "" when it got
+// that far, or has commits or a pull request of its own to go on with.
+func (m *Module) unmade(t Task) (stage, what string) {
+	switch {
+	case t.Worker != "" || t.SHA != "" || t.PR.Number != 0:
+		return "", ""
+	case t.Issue.Number == 0:
+		return StageNew, "issue"
+	}
+	return StageQueued, "worker and checkout"
 }
 
 // goNow drops a task's backoff and hold, so a retry asked for by hand runs on
