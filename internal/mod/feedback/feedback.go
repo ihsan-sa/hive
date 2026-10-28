@@ -33,6 +33,8 @@ type Item struct {
 	Note    string    `json:"note,omitempty"` // what the person did with it
 	// Task is the task an agent named as the fix; the item closes when that
 	// task lands (merged or done), so sweeps stop reading it as still open.
+	// If the task is stopped (withdrawn, closed unmerged) the link is dropped
+	// and the item is plainly open again.
 	Task string `json:"task,omitempty"`
 }
 
@@ -48,39 +50,45 @@ type Module struct {
 
 	mu       sync.Mutex
 	items    map[string]*Item
-	known    map[string]bool // every task id task.saved has named
-	landed   map[string]bool // tasks merged or done, and not reverted since
-	reverted map[string]bool // tasks a merged revert has undone
+	known    map[string]bool   // every task id task.saved has named
+	landed   map[string]bool   // tasks merged or done, and not reverted since
+	reverted map[string]bool   // tasks a merged revert has undone
+	stopped  map[string]string // tasks whose latest stage is stopped, with the reason
 }
 
-// taskOf reads a task.saved event: its task, whether it landed, and the task
-// it reverts if it is a revert.
-func taskOf(e core.Event) (id string, landed bool, revertOf string) {
+// taskOf reads a task.saved event: its task, whether it landed, the task it
+// reverts if it is a revert, and its stage and reason.
+func taskOf(e core.Event) (id string, landed bool, revertOf, stage, reason string) {
 	var t struct {
-		ID, Stage, Kind string
-		RevertOf        string `json:"revert_of"`
+		ID, Stage, Kind, Reason string
+		RevertOf                string `json:"revert_of"`
 	}
 	if e.Decode(&t) != nil || t.ID == "" {
-		return "", false, ""
+		return "", false, "", "", ""
 	}
 	landed = t.Stage == "merged" || t.Stage == "done"
 	if t.Kind == "revert" && landed {
 		revertOf = t.RevertOf
 	}
-	return t.ID, landed, revertOf
+	return t.ID, landed, revertOf, t.Stage, t.Reason
 }
 
 // New loads the record and registers the feedback op.
 func New(c *core.Core) *Module {
-	m := &Module{C: c, items: map[string]*Item{}, known: map[string]bool{}, landed: map[string]bool{}, reverted: map[string]bool{}}
+	m := &Module{C: c, items: map[string]*Item{}, known: map[string]bool{}, landed: map[string]bool{}, reverted: map[string]bool{}, stopped: map[string]string{}}
 	apply := func(e core.Event) {
 		if e.Kind == "task.saved" {
-			id, landed, revertOf := taskOf(e)
+			id, landed, revertOf, stage, reason := taskOf(e)
 			if id == "" {
 				return
 			}
 			m.mu.Lock()
 			m.known[id] = true
+			if stage == "stopped" {
+				m.stopped[id] = reason
+			} else {
+				delete(m.stopped, id)
+			}
 			if landed && !m.reverted[id] {
 				m.landed[id] = true
 			}
@@ -103,11 +111,25 @@ func New(c *core.Core) *Module {
 	}
 	c.J.Replay(apply)
 	c.J.Subscribe(apply)
-	c.J.Subscribe(func(e core.Event) { // a fix that lands closes what it fixed; its revert reopens it
+	m.mu.Lock()
+	var gone []string // items linked before their task was stopped, from before this rule
+	for _, it := range m.items {
+		if _, ok := m.stopped[it.Task]; ok && it.Status == Open && it.Task != "" {
+			gone = append(gone, it.Task)
+		}
+	}
+	m.mu.Unlock()
+	for _, id := range gone {
+		m.unlinkStopped(id)
+	}
+	c.J.Subscribe(func(e core.Event) { // a fix that lands closes what it fixed; its revert reopens it; its stop unlinks it
 		if e.Kind != "task.saved" {
 			return
 		}
-		id, landed, revertOf := taskOf(e)
+		id, landed, revertOf, stage, _ := taskOf(e)
+		if stage == "stopped" {
+			m.unlinkStopped(id)
+		}
 		if landed && m.isLanded(id) {
 			for _, it := range m.List(func(it Item) bool { return it.Status == Open && it.Task == id }) {
 				m.Close(it.ID, fixedBy+id)
@@ -244,12 +266,16 @@ func (m *Module) Fix(r core.Run, id, task string) (Item, error) {
 	}
 	m.mu.Lock()
 	known, landed, reverted := m.known[task], m.landed[task], m.reverted[task]
+	_, stopped := m.stopped[task]
 	m.mu.Unlock()
 	if !known {
 		return Item{}, fmt.Errorf("no task %s in the journal: name the fix's task id as hive agent brief or status gives it", task)
 	}
 	if reverted {
 		return Item{}, fmt.Errorf("task %s was reverted, so it fixes nothing: name the task that fixes it now", task)
+	}
+	if stopped && !landed {
+		return Item{}, fmt.Errorf("task %s was stopped without landing, so it fixes nothing: name the task that fixes it now", task)
 	}
 	return m.save(id, func(it *Item) error {
 		if it.Status != Open {
@@ -264,6 +290,32 @@ func (m *Module) Fix(r core.Run, id, task string) (Item, error) {
 }
 
 const fixedBy = "fixed by task "
+
+// unlinkStopped drops the link from open items to a task that was stopped
+// (withdrawn, closed unmerged, given up on) before it landed, so the item
+// reads as plainly open again instead of "fix filed" forever.
+func (m *Module) unlinkStopped(task string) {
+	m.mu.Lock()
+	reason, stopped := m.stopped[task]
+	landed := m.landed[task]
+	m.mu.Unlock()
+	if !stopped || landed {
+		return
+	}
+	note := "task " + task + " was meant to fix it but was stopped"
+	if reason = strings.TrimSpace(reason); reason != "" {
+		note += ": " + core.Clip(reason, 200)
+	}
+	for _, it := range m.List(func(it Item) bool { return it.Status == Open && it.Task == task }) {
+		m.save(it.ID, func(it *Item) error {
+			if it.Status != Open || it.Task != task {
+				return errors.New("changed")
+			}
+			it.Seen, it.Task, it.Note = false, "", note
+			return nil
+		})
+	}
+}
 
 func (m *Module) isLanded(task string) bool {
 	m.mu.Lock()

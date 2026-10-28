@@ -63,6 +63,9 @@ type Forge interface {
 	IsEmpty(repo string) (bool, error)
 	DefaultBranch(repo string) string
 	CreateIssue(repo, title, body, marker string) (Issue, error)
+	// EditIssue replaces an issue's title and body (a body keeps its marker
+	// only if the caller writes it in again).
+	EditIssue(repo string, number int, title, body string) error
 	Comment(repo string, number int, body string) error
 	// StatusComment keeps one comment per issue or PR that carries marker:
 	// the first call posts it, later calls edit it in place.
@@ -227,19 +230,20 @@ var ghRun = func(repo string, args []string) (string, string, error) {
 
 // gh runs one gh command. Its error carries gh's stderr, the actual reason,
 // under a short name for the command, never the arguments (which hold bodies
-// long enough to push the reason out of any log line). While GitHub has asked
-// for a pause, writes wait it out without being sent.
+// long enough to push the reason out of any log line). It waits its turn at
+// ghGate first, then, while GitHub has asked for a pause, waits it out without
+// being sent: a call queued behind the one that met the limit isn't sent
+// after it.
 func gh(repo string, args ...string) (string, error) {
 	write := ghWrites(args)
 	login := strings.Join(ghEnv(repo), "")
 	free := len(args) > 1 && args[0] == "api" && args[1] == "rate_limit" // GitHub doesn't count it
 	if !free {
+		defer ghGate.enter(write)()
 		if err := ghQuota.wait(repo, login); err != nil {
 			return "", err
 		}
-	}
-	if write {
-		if err := ghPause.wait(); err != nil {
+		if err := ghPause.wait(write); err != nil {
 			return "", err
 		}
 	}
@@ -262,6 +266,43 @@ func gh(repo string, args ...string) (string, error) {
 		ghPause.clear()
 	}
 	return out, nil
+}
+
+// gate keeps the Hive's gh calls under GitHub's secondary limits, which count
+// bursts and calls at once rather than the hour: at most `slots` calls are in
+// flight, the rest queue, and writes go at least `gap` apart, as GitHub asks
+// of anything that creates content. Every token the Hive holds acts as the
+// same account, so one gate covers them all. Ten tasks rechecked together
+// queue here instead of sending their reads at once.
+type gate struct {
+	slots chan struct{}
+	gap   time.Duration
+	mu    sync.Mutex
+	next  time.Time // the earliest the next write may go
+}
+
+func newGate(atOnce int, gap time.Duration) *gate {
+	return &gate{slots: make(chan struct{}, atOnce), gap: gap}
+}
+
+// ghGate is the gate every counted gh call passes. Tests replace it.
+var ghGate = newGate(3, time.Second)
+
+// enter waits for a slot (and a write for its turn) and returns the call
+// that frees the slot.
+func (g *gate) enter(write bool) func() {
+	if write && g.gap > 0 {
+		g.mu.Lock()
+		at := time.Now()
+		if g.next.After(at) {
+			at = g.next
+		}
+		g.next = at.Add(g.gap)
+		g.mu.Unlock()
+		time.Sleep(time.Until(at))
+	}
+	g.slots <- struct{}{}
+	return func() { <-g.slots }
 }
 
 // ghVerb names a gh command by its leading words, such as "pr create" or
@@ -302,16 +343,21 @@ func ghWrites(args []string) bool {
 
 // RateLimited is GitHub asking the Hive to slow down: a secondary rate limit
 // ("was submitted too quickly"), or a 403 or 429 that names a rate limit or a
-// retry-after. Writes wait until Until; it isn't any task's fault.
+// retry-after. Writes wait until Until, reads too unless only content
+// creation was refused; it isn't any task's fault.
 type RateLimited struct {
 	Until time.Time
 	Text  string // gh's own words
 	All   bool   // the login's hour of calls is spent or near it: reads wait too
+	Reads bool   // a secondary limit that holds reads as well as writes
 }
 
 func (r *RateLimited) Error() string {
 	if r.All {
 		return fmt.Sprintf("the login's GitHub API quota is spent or nearly, so the Hive's calls wait until %s: %s", r.Until.UTC().Format("15:04:05Z"), r.Text)
+	}
+	if r.Reads {
+		return fmt.Sprintf("GitHub asked the Hive to slow down, so its calls wait until %s: %s", r.Until.UTC().Format("15:04:05Z"), r.Text)
 	}
 	return fmt.Sprintf("GitHub asked the Hive to slow down, so its writes wait until %s: %s", r.Until.UTC().Format("15:04:05Z"), r.Text)
 }
@@ -346,20 +392,28 @@ func rateLimit(stderr string) (time.Duration, bool) {
 
 // pause is the one wait every write to GitHub shares, since GitHub limits the
 // login, not a task: a minute after the first hit, doubling to 15 minutes
-// while hits keep coming, or the retry-after GitHub names.
+// while hits keep coming, or the retry-after GitHub names. Only "submitted
+// too quickly" is about writes alone (content creation); any other secondary
+// limit holds reads too, since GitHub refuses those as well until it lifts.
 type pause struct {
 	mu    sync.Mutex
-	until time.Time
+	until time.Time // writes wait until then
+	reads time.Time // reads wait until then
+	last  time.Time // the last hit
 	hits  int
 	text  string
 }
 
 var ghPause = &pause{}
 
-func (p *pause) wait() error {
+func (p *pause) wait(write bool) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if time.Now().Before(p.until) {
+	now := time.Now()
+	if now.Before(p.reads) {
+		return &RateLimited{Until: p.reads, Text: p.text, Reads: true}
+	}
+	if write && now.Before(p.until) {
 		return &RateLimited{Until: p.until, Text: p.text}
 	}
 	return nil
@@ -372,14 +426,34 @@ func (p *pause) hit(stderr string) *RateLimited {
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if d <= 0 {
+	now := time.Now()
+	if now.Sub(p.last) > 30*time.Minute { // a new spell, not more of the last
+		p.hits = 0
+	}
+	p.last = now
+	// Hits while the pause stands are calls already in flight when it began:
+	// the same spell, which doesn't double it.
+	during := now.Before(p.until)
+	if d <= 0 && during {
+		d = p.until.Sub(now)
+	} else if d <= 0 {
 		d = min(time.Minute<<min(p.hits, 4), 15*time.Minute)
 	}
-	if u := time.Now().Add(d); u.After(p.until) {
+	if !during {
+		p.hits++
+	}
+	u := now.Add(d)
+	if u.After(p.until) {
 		p.until = u
 	}
-	p.hits++
+	reads := !strings.Contains(strings.ToLower(stderr), "submitted too quickly")
+	if reads && u.After(p.reads) {
+		p.reads = u
+	}
 	p.text = Clip(stderr, 300)
+	if reads {
+		return &RateLimited{Until: p.reads, Text: p.text, Reads: true}
+	}
 	return &RateLimited{Until: p.until, Text: p.text}
 }
 
@@ -440,7 +514,7 @@ func (q *quota) wait(repo, login string) error {
 	if q.every > 0 && time.Now().After(h.until) && time.Since(h.looked) >= q.every {
 		h.looked = time.Now() // one call looks; the rest go on meanwhile
 		q.mu.Unlock()
-		at, why := quotaLow(repo)
+		at, why, _ := quotaLow(repo)
 		q.mu.Lock()
 		if at.After(h.until) {
 			h.until, h.text = at, why
@@ -453,12 +527,19 @@ func (q *quota) wait(repo, login string) error {
 }
 
 // spent holds every call on the login when stderr says its quota is spent,
-// until the reset GitHub names, or five minutes when it can't be read.
+// until the reset GitHub names, or five minutes when it can't be read. When
+// rate_limit shows every quota above the reserve, GitHub's words for the
+// hour are its secondary limit on bursts (#1769: "already exceeded" with
+// 3553 of 5000 GraphQL points left), so spent leaves it to ghPause, which
+// starts at a minute and doubles.
 func (q *quota) spent(repo, login, stderr string) *RateLimited {
 	if !spentQuota(stderr) {
 		return nil
 	}
-	at, _ := quotaLow(repo)
+	at, _, read := quotaLow(repo)
+	if read && at.IsZero() {
+		return nil
+	}
 	if !at.After(time.Now()) {
 		at = time.Now().Add(5 * time.Minute)
 	}
@@ -475,17 +556,19 @@ func (q *quota) spent(repo, login, stderr string) *RateLimited {
 // quotaLow reads the login's quotas from rate_limit, which GitHub doesn't
 // count, and returns the latest reset of one under the Hive's reserve (a
 // second past it, and at most an hour and five minutes off), or the zero time
-// when none is or it can't be read.
-func quotaLow(repo string) (time.Time, string) {
+// when none is or it can't be read; read says whether it could be.
+func quotaLow(repo string) (at time.Time, why string, read bool) {
 	out, _, err := ghRun(repo, []string{"api", "rate_limit", "-q", `.resources | .core, .graphql | "\(.remaining) \(.limit) \(.reset)"`})
 	if err != nil {
-		return time.Time{}, ""
+		return time.Time{}, "", false
 	}
-	var at time.Time
-	var why string
 	for i, line := range strings.Split(strings.TrimSpace(out), "\n") {
 		var left, limit, reset int64
-		if _, err := fmt.Sscan(line, &left, &limit, &reset); err != nil || left*quotaReserve >= limit {
+		if _, err := fmt.Sscan(line, &left, &limit, &reset); err != nil {
+			continue
+		}
+		read = true
+		if left*quotaReserve >= limit {
 			continue
 		}
 		if r := time.Unix(reset+1, 0); r.After(at) {
@@ -496,7 +579,7 @@ func quotaLow(repo string) (time.Time, string) {
 	if most := time.Now().Add(65 * time.Minute); at.After(most) {
 		at = most
 	}
-	return at, why
+	return at, why, read
 }
 
 var logins sync.Map // repo owner -> the login its token acts as
@@ -629,6 +712,11 @@ func (GitHub) CreateIssue(repo, title, body, marker string) (Issue, error) {
 		return Issue{}, err
 	}
 	return Issue{numberFromURL(url), url}, nil
+}
+
+func (GitHub) EditIssue(repo string, number int, title, body string) error {
+	_, err := gh(repo, "issue", "edit", strconv.Itoa(number), "-R", repo, "--title", title, "--body", body)
+	return err
 }
 
 func (GitHub) Comment(repo string, number int, body string) error {
