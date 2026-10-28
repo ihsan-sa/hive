@@ -320,6 +320,7 @@ type Module struct {
 	away      map[string]bool      // queued tasks admit started past the pace for a runner, until their worker starts
 	elsewhere func() bool          // whether an executor module has room: core.Runs.Elsewhere, or a test's
 	stepAt    map[string]time.Time // when each Tick step began, so one stuck past stepLimit is let go
+	weighing  map[string]weighing  // the checkpoints a step is weighing, so a finish takes them out of the check line
 	aims      map[string]aimAsk    // aims asked while a step held the task, set as it ends
 	// steered is when the person's stop, retry or recheck (steer) last saved
 	// each task: a step whose copy is older saves nothing after it, nor
@@ -947,6 +948,7 @@ func (m *Module) Tick() {
 	m.reviveDrafts()
 	m.paceChecks()
 	m.reapStuck()
+	m.unweighFinished()
 	tasks := m.List(func(t Task) bool { return !t.Terminal() || t.IssueOpen || m.woke(t) })
 	start, wait := m.admit(tasks)
 	for _, t := range tasks {
@@ -1696,7 +1698,14 @@ func (m *Module) checkpoint(t *Task, p core.Project, r core.Run) error {
 	}
 	c, ok := m.C.Effects.GetCheck(p.Name, sha, "score")
 	if !ok {
+		m.weigh(t.ID, weighing{worker: t.Worker, project: p.Name, sha: sha})
 		c = m.C.Effects.RunCheck(p, sha, "score", sc.Command)
+		m.weigh(t.ID, weighing{})
+	}
+	if r, ok := m.C.Runs.Get(t.Worker); ok && finished(r.Status) && c.Score == nil {
+		t.Tried = "" // its finish lands it; this weighing was taken out of the line
+		m.save(t, "the worker finished while its commit "+core.Short(sha)+" waited to be weighed as a checkpoint, so it lands whole instead")
+		return nil
 	}
 	if c.Score == nil {
 		m.save(t, fmt.Sprintf("the score gave no number on the worker's commit %s, so no checkpoint", core.Short(sha)))
@@ -1708,6 +1717,68 @@ func (m *Module) checkpoint(t *Task, p core.Project, r core.Run) error {
 	}
 	t.Checkpoint = sha
 	return m.open(t, p, sha, fmt.Sprintf("A checkpoint of #%d while its worker keeps going: %s scores %g, above the best kept %g.", t.Issue.Number, core.Short(sha), *c.Score, best))
+}
+
+// heldErr refuses a steer on task id while a step holds it, saying since
+// when and, when known, what the step waits on, so a lead can tell a step
+// about to end from one stuck.
+func (m *Module) heldErr(id string) error {
+	m.mu.Lock()
+	at, w := m.stepAt[id], m.weighing[id]
+	m.mu.Unlock()
+	why := "a step running right now"
+	if !at.IsZero() {
+		why = fmt.Sprintf("a step running since %s (%s ago)", at.UTC().Format("15:04Z"), time.Since(at).Round(time.Minute))
+	}
+	if w.sha != "" {
+		why += fmt.Sprintf(", weighing the worker's commit %s as a checkpoint: its score check waits for a slot or runs, and is dropped once the worker finishes", core.Short(w.sha))
+	}
+	return fmt.Errorf("task %s has %s; ask again in a moment", id, why)
+}
+
+// weighing is a checkpoint's score check a step waits on: the worker's
+// commit sha in project.
+type weighing struct{ worker, project, sha string }
+
+// weigh notes (or, given none, forgets) the checkpoint task id's step weighs.
+func (m *Module) weigh(id string, w weighing) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if w.sha == "" {
+		delete(m.weighing, id)
+		return
+	}
+	if m.weighing == nil {
+		m.weighing = map[string]weighing{}
+	}
+	m.weighing[id] = w
+}
+
+// unweighFinished takes out of the check line the checkpoints whose worker
+// has finished. A checkpoint's score check waits its turn for a slot, and
+// the step holds the task while it waits, so checkWorker can't see the
+// finish: on 10-28 ten finished workers sat in working 80-171 minutes
+// behind a backlog of checks before their commits were taken out. Once the
+// worker finishes, its commit lands whole, so the weighing is dropped (one
+// already running goes on) and the next tick lands it.
+func (m *Module) unweighFinished() {
+	m.mu.Lock()
+	ws := make([]weighing, 0, len(m.weighing))
+	for _, w := range m.weighing {
+		ws = append(ws, w)
+	}
+	m.mu.Unlock()
+	for _, w := range ws {
+		if r, ok := m.C.Runs.Get(w.worker); ok && finished(r.Status) {
+			m.C.Effects.Slots.Drop(w.project, w.sha)
+		}
+	}
+}
+
+// finished says whether a worker's run has ended its work, so its task
+// moves on from working.
+func finished(s string) bool {
+	return s == core.StatusDone || s == core.StatusBlocked || s == core.StatusStopped
 }
 
 // noBankGain is why a change to the Hive aimed at a gain is never merged in
@@ -4110,7 +4181,7 @@ func (m *Module) retryInFlight(id, back, by string) error {
 	}
 	m.mu.Unlock()
 	if busy {
-		return fmt.Errorf("task %s has a step running right now; ask again in a moment", id)
+		return m.heldErr(id)
 	}
 	defer m.release(id)
 	t, _ := m.Get(id) // as the last step left it
