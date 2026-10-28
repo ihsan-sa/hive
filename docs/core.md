@@ -23,7 +23,7 @@ So the core is the skeleton and nothing else. **New functionality goes into a mo
 
 The executor hook is core because only launch knows a turn's spec and when the machine holds it; what runs the turn elsewhere (hive-dispatch's SSH runners) is the module's. `hive <name>` is the seam step 4 below asks for, for module programs.
 
-What a check sees is part of the merge guarantees, so the choice of its caches is core: `core/disk.go`'s `goBuild` and `stableTimes` (#920, about 80 lines) decide whether a check writes main's build cache or reads it read-only; the cache program itself (`internal/gocache`, `hive gocacheprog`) is outside the core.
+What a check sees is part of the merge guarantees, so the choice of its caches is core: `core/disk.go`'s `goBuild` and `stableTimes` (#920, about 80 lines) decide whether a check writes main's build cache or reads it read-only; the cache program itself (`internal/gocache`, `hive gocacheprog`) is outside the core. For the same reason, which packages a change's check runs is core: `RunCheckSince` and `narrow` in `core/effects.go` (#1161, about 50 lines) narrow a Go test command to the packages the change since main can affect; working out which they are (`internal/goscope`) is outside the core.
 
 The last row is core only as the place the skeleton runs: what a module adds to it (an API route, a CLI verb) is module material and moves out (step 4 below).
 
@@ -52,7 +52,7 @@ Every other package is module material. Most are compiled-in modules already (`i
 | `internal/mod/improve`, `internal/gate`, `internal/demo` | the improve module: measure and keep/revert, sweeps, step-backs, the recursive gate and its benchmark project |
 | `internal/mod/kb` | the kb module |
 | `internal/mod/risk` | a risk module: wardens, tribunals, approved scripts. The ceiling itself stays core |
-| `internal/mod/chat`, `internal/mod/feedback` | the chat module |
+| `internal/mod/chat`, `internal/mod/feedback`, `internal/mod/problems` | the chat module |
 | `internal/mod/work` | a work module: ask → issue → PR → review → merge. The core keeps runs, spawning and the merge guarantees it calls |
 | `internal/mod/projects` | a projects module: adding and onboarding projects (the registry stays core) |
 | `internal/mod/system` | the system module: schedules and wake-ups |

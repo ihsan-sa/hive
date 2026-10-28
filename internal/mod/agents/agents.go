@@ -25,6 +25,13 @@ type Agents struct {
 	// project's route ("" when it doesn't): its runs there keep ending
 	// without a merge.
 	Demote func(project string, p core.Pick) string
+	// Last, when set, puts a pick after the rest of every route: a paid
+	// model, which a run reaches once the others are at their limits.
+	Last func(core.Pick) bool
+	// Board, when set, is the section a run of role in project gets at the
+	// end of its system prompt: the Hive's open problems (the problems
+	// module), as they stand when it starts.
+	Board func(role, project string) string
 }
 
 // readOnly are the seats that read one change and answer, changing nothing
@@ -67,7 +74,8 @@ func (a *Agents) Model(role, project string) (harness, model string) {
 
 // Route is the picks a run of role in project goes on, in fallback order,
 // less those Skip benches while any other is left; a worker's picks Demote
-// names go after the rest, still there to fall back to.
+// names go after the rest, still there to fall back to, and those Last
+// names after those.
 func (a *Agents) Route(role, project string) []core.Pick {
 	route := a.C.WS.LoadConfig().Route(role, project)
 	if a.Skip != nil {
@@ -76,24 +84,38 @@ func (a *Agents) Route(role, project string) []core.Pick {
 		}
 	}
 	if a.Demote != nil && role == "worker" {
-		var ahead, after []core.Pick
-		for _, p := range route {
-			if a.Demote(project, p) != "" {
-				after = append(after, p)
-			} else {
-				ahead = append(ahead, p)
-			}
-		}
-		route = append(ahead, after...)
+		route = last(route, func(p core.Pick) bool { return a.Demote(project, p) != "" })
+	}
+	if a.Last != nil {
+		route = last(route, a.Last)
 	}
 	return route
+}
+
+// last is route with the picks f names moved after the rest, in order.
+func last(route []core.Pick, f func(core.Pick) bool) []core.Pick {
+	var ahead, after []core.Pick
+	for _, p := range route {
+		if f(p) {
+			after = append(after, p)
+		} else {
+			ahead = append(ahead, p)
+		}
+	}
+	return append(ahead, after...)
 }
 
 // Spec builds a run spec with the role's system prompt, grants and model.
 func (a *Agents) Spec(id, role, project, checkout, brief string) core.RunSpec {
 	route := a.Route(role, project)
+	system := a.System(role, project)
+	if a.Board != nil { // in the system prompt, not the brief, which reviewers and judges are handed
+		if board := a.Board(role, project); board != "" {
+			system += "\n" + board
+		}
+	}
 	s := core.RunSpec{ID: id, Role: role, Project: project, Checkout: checkout, Harness: route[0].Harness, Model: route[0].Model,
-		System: a.System(role, project), Brief: brief, Route: route}
+		System: system, Brief: brief, Route: route}
 	if p, ok := a.C.Projects.Get(project); ok && p.Isolated {
 		s.Isolated = true
 		s.Modules = a.Mod.Granted(project)
