@@ -9,7 +9,9 @@
 // four asks on the demo textkit project) six times, three asked one by one and
 // three all at once, which is the loop itself (the queue, workers side by side,
 // branches landing on a main that moves), and then the rest of the e2e suite,
-// a failed test run again once on its own. What it judges is measured outside the Hive:
+// a failed test run again once on its own. A benchmark run during which the
+// machine had no CPU free doesn't count; another runs in its place. What it
+// judges is measured outside the Hive:
 // each benchmark's score, asks finished and seconds come from its BENCH line,
 // which the test works out from textkit's main on fresh inputs and signs with
 // a key this command hands it on stdin. How they combine, and the noise, is in
@@ -20,6 +22,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/hmac"
 	"crypto/rand"
@@ -34,6 +37,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -45,6 +49,12 @@ const (
 	benchTimeout = 2 * time.Minute // about 10 s now (a minute before the loop woke on events); a stuck ask is cut off, counted as not landed
 	rerunTimeout = 6 * time.Minute
 	suiteTimeout = 10 * time.Minute // about 4 normally; with a re-run, all stays inside the check's 30
+	benchBudget  = 6 * time.Minute  // for runs again after loud ones; with the suite, still inside the check's 30
+	sampleEvery  = 250 * time.Millisecond
+	// quietCPUs is the CPU that must stay free, in every sample while a
+	// benchmark run goes, for its seconds to count: on a machine with none
+	// free the runs took two to three times as long (docs/score.md).
+	quietCPUs = 1.0
 )
 
 func main() {
@@ -81,18 +91,29 @@ func run() (string, error) {
 		return "", err
 	}
 	k := hex.EncodeToString(key)
-	var runs []Run
-	for i := range 2 * benchReps {
-		atOnce := i%2 == 1
+	// Runs go on, alternating, until each way of asking has benchReps runs
+	// that count (a run the machine's CPU was free for), or benchBudget is spent with at least the six done.
+	var all []Run
+	for end := time.Now().Add(benchBudget); ; {
+		atOnce, more := Next(all, time.Now().Before(end))
+		if !more {
+			break
+		}
 		env := []string{"HIVE_BENCH=" + fmt.Sprint(benchAsks)}
 		if atOnce {
 			env = append(env, "HIVE_BENCH_AT_ONCE=1")
 		}
+		free := watchCPU()
 		out, _ := runSuite(suite, pkg, k+"\n", benchTimeout, env,
 			"-test.run", "^TestBenchmark$", "-test.v", "-test.timeout", benchTimeout.String())
 		b, err := ParseBench(out, k)
-		runs = append(runs, Run{AtOnce: atOnce, Bench: b, Err: err})
+		if err != nil {
+			err = fmt.Errorf("%w (it ended: %s)", err, lastLines(out, 3))
+		}
+		f := free()
+		all = append(all, Run{AtOnce: atOnce, Bench: b, Err: err, Free: f, Loud: f >= 0 && f < quietCPUs})
 	}
+	runs, loud := Counted(all)
 
 	listed, err := runSuite(suite, pkg, "", time.Minute, nil, "-test.list", ".")
 	var names []string
@@ -127,7 +148,7 @@ func run() (string, error) {
 	}
 	e, failed := Tally(names, Declared(string(before)), res)
 	e.Flaky = flaky
-	return Report(runs, e, failed), nil
+	return Report(runs, e, failed, loud), nil
 }
 
 // declared matches a top-level test's declaration in a _test.go file.
@@ -252,15 +273,163 @@ type E2E struct {
 }
 
 // Run is one benchmark run: asked one by one or all at once, what its BENCH
-// line said, or why there was none.
+// line said, or why there was none, and the least CPU the machine had free
+// while it ran (negative: not known), which made it loud when under
+// quietCPUs.
 type Run struct {
 	AtOnce bool
 	Bench
-	Err error
+	Err  error
+	Free float64
+	Loud bool
 }
 
 // missed says the run didn't land every ask, or printed no valid line.
 func (r Run) missed() bool { return r.Err != nil || r.AsksFinished < benchAsks }
+
+// counts says the run's seconds are the Hive's and not the machine's load:
+// it wasn't loud. A run that missed an ask counts like any other: a hang
+// leaves the CPU free, so it is quiet and counts, while one the load set
+// off (on 10-28, two runs with no BENCH line under busy loops charged a
+// reading the bound, 136.67 among 252-256) is run again.
+func (r Run) counts() bool { return !r.Loud }
+
+// Next says which way of asking the next benchmark run uses, and whether
+// there is one: until each way has benchReps runs that count, the one with
+// fewer first (on a tie, not the way just run); once the budget is out
+// (inTime false) only until the usual six have run.
+func Next(all []Run, inTime bool) (atOnce, more bool) {
+	n := map[bool]int{}
+	for _, r := range all {
+		if r.counts() {
+			n[r.AtOnce]++
+		}
+	}
+	if n[false] >= benchReps && n[true] >= benchReps || !inTime && len(all) >= 2*benchReps {
+		return false, false
+	}
+	if n[false] != n[true] {
+		return n[true] < n[false], true
+	}
+	return len(all) > 0 && !all[len(all)-1].AtOnce, true
+}
+
+// Counted splits the runs into those the score counts, in the order they
+// ran, and the loud ones it leaves out: the first benchReps that count of
+// each way of asking, a way short of them made up with its fastest loud
+// runs (the ones the load moved least).
+func Counted(all []Run) (runs, loud []Run) {
+	take := make([]bool, len(all))
+	for _, atOnce := range []bool{false, true} {
+		var quiet, noisy []int
+		for i, r := range all {
+			if r.AtOnce != atOnce {
+				continue
+			}
+			if r.counts() {
+				quiet = append(quiet, i)
+			} else {
+				noisy = append(noisy, i)
+			}
+		}
+		slices.SortStableFunc(noisy, func(a, b int) int {
+			return cmp.Or(cmp.Compare(btoi(all[a].missed()), btoi(all[b].missed())), cmp.Compare(all[a].Seconds, all[b].Seconds))
+		})
+		for _, i := range append(quiet, noisy...)[:min(benchReps, len(quiet)+len(noisy))] {
+			take[i] = true
+		}
+	}
+	for i, r := range all {
+		if take[i] {
+			runs = append(runs, r)
+		} else if !r.counts() {
+			loud = append(loud, r)
+		}
+	}
+	return runs, loud
+}
+
+// watchCPU samples /proc/stat every sampleEvery until the func it returns
+// is called, which gives the least CPU found free in a sample (idle or
+// waiting on the disk, which leaves the CPU to whoever wants it), or -1
+// where there is no /proc/stat to read.
+func watchCPU() func() float64 {
+	prev, ok := cpuStat()
+	if !ok {
+		return func() float64 { return -1 }
+	}
+	least := math.Inf(1)
+	sample := func() {
+		cur, ok := cpuStat()
+		if ok && cur.total > prev.total {
+			least = min(least, float64(cur.idle-prev.idle)/float64(cur.total-prev.total)*float64(cur.cpus))
+			prev = cur
+		}
+	}
+	stop, done := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(done)
+		t := time.NewTicker(sampleEvery)
+		defer t.Stop()
+		for {
+			select {
+			case <-stop:
+				sample()
+				return
+			case <-t.C:
+				sample()
+			}
+		}
+	}()
+	return func() float64 {
+		close(stop)
+		<-done
+		if math.IsInf(least, 1) {
+			return -1
+		}
+		return least
+	}
+}
+
+type cpuTimes struct {
+	idle, total uint64
+	cpus        int
+}
+
+func cpuStat() (cpuTimes, bool) {
+	raw, err := os.ReadFile("/proc/stat")
+	if err != nil {
+		return cpuTimes{}, false
+	}
+	return ParseCPUStat(string(raw))
+}
+
+// ParseCPUStat reads /proc/stat's machine-wide line: idle and iowait
+// against all the time counted (user to steal), and how many CPUs there are.
+func ParseCPUStat(raw string) (cpuTimes, bool) {
+	var c cpuTimes
+	ok := false
+	for _, l := range strings.Split(raw, "\n") {
+		f := strings.Fields(l)
+		switch {
+		case len(f) > 8 && f[0] == "cpu":
+			for i, v := range f[1:9] {
+				n, err := strconv.ParseUint(v, 10, 64)
+				if err != nil {
+					return c, false
+				}
+				c.total += n
+				if i == 3 || i == 4 {
+					c.idle += n
+				}
+			}
+			ok = true
+		case len(f) > 0 && strings.HasPrefix(f[0], "cpu"):
+			c.cpus++
+		}
+	}
+	return c, ok && c.cpus > 0
+}
 
 // refSeconds is where the loop's term is zero: about three times the six
 // runs' seconds when the score began counting the at-once run (2026-10-25:
@@ -272,7 +441,10 @@ const refSeconds = 180
 // each of textkit's functions right on fresh inputs and ten more for each
 // asked one, shared out over the runs, and the loop's speed: 15 points for
 // every halving of all the runs' seconds together, so 13% faster is about 3
-// points (the tolerance) whatever the Hive's speed already is. When any run
+// points (the tolerance) whatever the Hive's speed already is. Each run of a
+// way of asking is taken at that way's fastest: load only slows a run, so
+// the fastest is the one it moved least (on a quiet machine they are a few
+// percent apart). When any run
 // misses an ask, every run is charged its whole bound, the slowest a run can
 // be, so landing the work always outweighs doing it faster.
 func Score(runs []Run, e E2E) float64 {
@@ -281,12 +453,19 @@ func Score(runs []Run, e E2E) float64 {
 		rate = float64(e.Passed) / float64(e.Run)
 	}
 	s, secs, missed := 100*rate, 0.0, len(runs) == 0
+	fastest, n := map[bool]float64{}, map[bool]int{}
 	for _, r := range runs {
 		if r.Err == nil {
 			s += 10 / float64(len(runs)) * float64(r.Score+r.AsksFinished)
 		}
-		secs += r.Seconds
+		if n[r.AtOnce] == 0 || r.Seconds < fastest[r.AtOnce] {
+			fastest[r.AtOnce] = r.Seconds
+		}
+		n[r.AtOnce]++
 		missed = missed || r.missed()
+	}
+	for way, c := range n {
+		secs += float64(c) * fastest[way]
 	}
 	if missed {
 		secs = benchTimeout.Seconds() * float64(max(len(runs), 1))
@@ -294,9 +473,37 @@ func Score(runs []Run, e E2E) float64 {
 	return s + 15*math.Log2(refSeconds/max(secs, 0.1))
 }
 
+func btoi(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+// lastLines is the last n non-empty lines of out, joined by " | ".
+func lastLines(out string, n int) string {
+	var ls []string
+	for _, l := range strings.Split(out, "\n") {
+		if l = strings.TrimSpace(l); l != "" {
+			ls = append(ls, l)
+		}
+	}
+	return strings.Join(ls[max(len(ls)-n, 0):], " | ")
+}
+
+func (r Run) freeNote() string {
+	switch {
+	case r.Loud:
+		return fmt.Sprintf(" (%.1f CPU free at least: loud, counted for want of a quiet run)", r.Free)
+	case r.Free > 0:
+		return fmt.Sprintf(" (%.1f CPU free at least)", r.Free)
+	}
+	return ""
+}
+
 // Report is the score's output: what made it, then the number on its own
 // last line.
-func Report(runs []Run, e E2E, failed []string) string {
+func Report(runs []Run, e E2E, failed []string, loud []Run) string {
 	var s strings.Builder
 	for _, r := range runs {
 		how := "one by one"
@@ -304,10 +511,21 @@ func Report(runs []Run, e E2E, failed []string) string {
 			how = "all at once"
 		}
 		if r.Err != nil {
-			fmt.Fprintf(&s, "benchmark, %s: %v; counted as nothing landed\n", how, r.Err)
+			fmt.Fprintf(&s, "benchmark, %s: %v; counted as nothing landed%s\n", how, r.Err, r.freeNote())
 			continue
 		}
-		fmt.Fprintf(&s, "benchmark, %s: %d/%d functions right, %d/%d asks finished, %.1fs\n", how, r.Score, benchFuncs, r.AsksFinished, benchAsks, r.Seconds)
+		fmt.Fprintf(&s, "benchmark, %s: %d/%d functions right, %d/%d asks finished, %.1fs%s\n", how, r.Score, benchFuncs, r.AsksFinished, benchAsks, r.Seconds, r.freeNote())
+	}
+	if len(loud) > 0 {
+		var secs []string
+		for _, r := range loud {
+			if r.missed() {
+				secs = append(secs, fmt.Sprintf("missed (%.1f)", r.Free))
+			} else {
+				secs = append(secs, fmt.Sprintf("%.1fs (%.1f)", r.Seconds, r.Free))
+			}
+		}
+		fmt.Fprintf(&s, "benchmark: %d runs not counted, under %.0f CPU free at times while they ran (least free): %s\n", len(loud), quietCPUs, strings.Join(secs, ", "))
 	}
 	if slices.ContainsFunc(runs, Run.missed) {
 		fmt.Fprintf(&s, "benchmark: an ask didn't land, so every run is charged its bound (%.0fs)\n", benchTimeout.Seconds())
