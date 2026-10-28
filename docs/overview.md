@@ -57,6 +57,7 @@ The installer downloads the release binary for your platform from GitHub, checks
 - **Some things are always yours:** spending money, credentials, opening the machine to the network and anything sent in your name. The Hive spots these by reading the step's words, so it errs toward asking you, but a step that hides what it does can slip past.
 - **Merges don't wait for you.** A change merges once its tests pass and a reviewer agent lands it (a small docs-only change on its tests alone). Changes to the goals, the score or the project's settings merge on a warden's read, and you're told after; at autonomy 1 they're yours to merge. Tests a worker changes as part of its change count, unless you mark their folder protected.
 - **Spend isn't capped.** `monthly_usd` tells you once a month when spend passes it; it never stops work.
+- **Plans run to their limit unless you set a stop.** `usage_stops` in `.hive/config.json` (`{"week": 95, "five_hour": 90}`, in percent) holds a login back at that share of its window until it resets, keeping the rest of the plan for your own use; a new install has none.
 - **Modules with a program run as you,** unsandboxed, with only a review run between their code and your files.
 
 More: [risk.md](risk.md) (tiers, warden, tribunal, egress), [architecture.md](architecture.md) (packages, folders, the path from ask to merge).
