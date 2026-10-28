@@ -1377,7 +1377,20 @@ func (rs *Runs) turnBudget(r Run) float64 {
 // without finishing while others waited on it (task 135947 on gpt-oss), so it
 // waits for its own model's reset instead.
 func (rs *Runs) next(r Run) (Pick, time.Time) {
-	picks, _ := rs.picks(r)
+	picks, unproven := rs.picks(r)
+	// A pick that can't run here at all (its harness's module is gone, a
+	// paid model the settings refuse) is passed while the route has another,
+	// even one no run has finished on yet, rather than the run parked or
+	// blocked on it.
+	cant := func(p Pick) bool { return rs.cantRun(p) != nil }
+	if left := slices.DeleteFunc(slices.Clone(picks), cant); len(left) < len(picks) {
+		if len(left) == 0 {
+			left = slices.DeleteFunc(slices.Clone(unproven), cant)
+		}
+		if len(left) > 0 {
+			picks = left
+		}
+	}
 	best, at := picks[0], time.Time{}
 	for _, p := range picks {
 		free := rs.freeAt(p.Harness, p.Model, Reserved(r.Role))
@@ -1389,6 +1402,18 @@ func (rs *Runs) next(r Run) (Pick, time.Time) {
 		}
 	}
 	return best, at
+}
+
+// cantRun says why pick p can't take a turn here whatever its usage: no
+// installed harness has its name, or it is a paid model the settings refuse.
+func (rs *Runs) cantRun(p Pick) error {
+	if _, err := harness.Get(p.Harness); err != nil {
+		return err
+	}
+	if p.Harness == "open" {
+		return rs.ws.LoadConfig().PaidRefused(p.Model)
+	}
+	return nil
 }
 
 // picks is r's picks in the order next tries them, and those of its route
@@ -2346,6 +2371,8 @@ func (rs *Runs) launch(r Run, cfg Config) {
 			why := "the settings route you there"
 			if slices.Contains(r.Stalled, from.String()) {
 				why = "your turns on " + from.String() + " kept ending without finishing; when the work is done (or can't be), end with `" + Cmd + " agent finish`"
+			} else if err := rs.cantRun(from); err != nil {
+				why = from.String() + " can't run here (" + Clip(err.Error(), 200) + ")"
 			} else if d, ok := rs.downFor(from); ok {
 				why = from.String() + " can't answer (" + Clip(d.Text, 200) + ")"
 			} else if rs.freeAt(from.Harness, from.Model, Reserved(r.Role)).After(time.Now()) {
