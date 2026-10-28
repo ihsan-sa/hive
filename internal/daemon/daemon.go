@@ -1070,6 +1070,7 @@ func (s *server) state() api.State {
 	st.Plans = a.C.Runs.Plans()
 	st.Down = a.C.Runs.Down()
 	st.Logins = a.C.Tokens.States()
+	st.LoginNames = setup.LoginNames(a.C.WS)
 	sw := a.Improve.Sweeps()
 	if len(sw) > 10 {
 		sw = sw[:10]
