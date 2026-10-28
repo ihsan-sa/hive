@@ -223,6 +223,8 @@ func gateCeiling(cfg core.Config) int {
 func (m *Module) gateRoom(running int) string {
 	limit, why := m.gateLimit(time.Now(), running, m.C.WS.LoadConfig())
 	switch {
+	case time.Now().Before(m.gatesHeld):
+		return "the Hive installs an update once the gates running now end, and new ones start after its restart"
 	case running >= limit:
 		// Saved with the task: the live limit stays out (see Pace).
 		return "as many run at once here as may now, and every one is in use"
@@ -624,6 +626,33 @@ func (m *Module) TidyGates(reap func(out string) int) int {
 		n += reap(out)
 	}
 	return n
+}
+
+// GatesRunning is how many recursive gates are in flight and when the
+// oldest of them started, so an update can wait for them (the release
+// module): a restart ends every one, and up to two hours of work with it.
+func (m *Module) GatesRunning() (n int, oldest time.Time) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, r := range m.gating {
+		if r.dropped {
+			continue
+		}
+		n++
+		if oldest.IsZero() || r.since.Before(oldest) {
+			oldest = r.since
+		}
+	}
+	return n, oldest
+}
+
+// HoldGates keeps new gates from starting until until, while an update
+// waits for the running ones: a gate starting then would only be ended by
+// the restart, or hold the update back again.
+func (m *Module) HoldGates(until time.Time) {
+	m.mu.Lock()
+	m.gatesHeld = until
+	m.mu.Unlock()
 }
 
 // gateLive says a run in flight owns the folder out. m.mu is held.
