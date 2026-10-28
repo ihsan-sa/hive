@@ -2674,13 +2674,15 @@ func (m *Module) PauseMerges(wait time.Duration) (resume func(), ok bool) {
 // main, brings main in; on a self project the recursive gate merges main in
 // its own clone, so it judges what would land without moving the branch (see
 // recursiveGate). pr is the merge step's own read of the PR, not read
-// again. While the forge is still working it out, t waits. Two
+// again. While the forge is still working it out, t waits; after
+// unknownGrace of that, main is brought in to give the forge a new head. Two
 // changes that each pass alone can still break main together; improve
 // measures main after every merge and reverts a red one. Testing each head
 // merged with main first made a merge line every project's merges queued in
 // one at a time: some 50 tasks waited hours there (docs/log.md, 2026-10-27).
 func (m *Module) upToDate(t *Task, p core.Project, main string, pr core.PR) (bool, error) {
 	if _, err := core.Git(m.C.WS.Project(p.Name), "merge-base", "--is-ancestor", main, t.SHA); err == nil {
+		m.clearUnknown(t)
 		return false, nil
 	}
 	switch {
@@ -2690,7 +2692,10 @@ func (m *Module) upToDate(t *Task, p core.Project, main string, pr core.PR) (boo
 		return m.catchUp(t, p, main, "main moved and the forge wants the branch up to date")
 	case pr.Mergeable != "MERGEABLE":
 		if t.UnknownSince.IsZero() {
+			// Saved, or the stamp dies with this tick's copy of t when the
+			// hold's reason is unchanged.
 			t.UnknownSince = time.Now()
+			m.save(t, "the forge can't yet say whether it merges cleanly with main")
 		} else if time.Since(t.UnknownSince) > unknownGrace {
 			// The forge's read is stuck: a push gives it a new head to work
 			// out, and the branch is tested with main in it.
@@ -2706,8 +2711,17 @@ func (m *Module) upToDate(t *Task, p core.Project, main string, pr core.PR) (boo
 		m.hold(t, p, "waiting for the forge to work out whether PR #"+fmt.Sprint(t.PR.Number)+" merges cleanly with main (mergeable "+state+", main at "+core.Short(main)+")")
 		return true, nil
 	}
-	t.UnknownSince = time.Time{}
+	m.clearUnknown(t)
 	return false, nil
+}
+
+// clearUnknown forgets a stretch of mergeable UNKNOWN, saved so a later one
+// starts its ten minutes afresh.
+func (m *Module) clearUnknown(t *Task) {
+	if !t.UnknownSince.IsZero() {
+		t.UnknownSince = time.Time{}
+		m.save(t, "")
+	}
 }
 
 // unknownGrace is how long the forge may report mergeable UNKNOWN before the

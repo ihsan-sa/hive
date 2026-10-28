@@ -376,7 +376,15 @@ func TestMergeWaitsOnUnknownMergeable(t *testing.T) {
 	if task.Stage != StageMerging || !strings.HasPrefix(task.Reason, "waiting for the forge to work out") || !strings.Contains(task.Reason, "mergeable UNKNOWN") {
 		t.Fatalf("stage %q, reason %q", task.Stage, task.Reason)
 	}
-	task.UnknownSince = time.Now().Add(-time.Hour)
+	// Ticks work on copies loaded from the store: the stamp must survive that.
+	stored, _ := m.Get(task.ID)
+	if stored.UnknownSince.IsZero() {
+		t.Fatal("the start of the wait was not saved")
+	}
+	stored.UnknownSince = time.Now().Add(-time.Hour)
+	m.save(&stored, "")
+	reloaded, _ := m.Get(task.ID)
+	task = &reloaded
 	m.later = map[string]time.Time{}
 	mergeOnce(t, m, task, p)
 	if task.Stage != StageTesting {
