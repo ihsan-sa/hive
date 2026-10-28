@@ -212,30 +212,6 @@ func TestUnsignedUpdateToldInChat(t *testing.T) {
 	}
 }
 
-// A new lead answers in the thread its prompt's header names, though the
-// person's own words, or the problems board, say "thread <word>".
-func TestLeadThreadFromHeader(t *testing.T) {
-	dir := t.TempDir()
-	ws := core.Workspace{Root: filepath.Join(dir, "hive")}
-	c, err := core.Open(ws, &core.Local{Dir: filepath.Join(dir, "forge")})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer c.Close()
-	a := &agents.Agents{C: c, Mod: modules.New(ws, c.J)}
-	a.Board = func(role, project string) string {
-		return "## The Hive's open problems\n\n- **p-1** (hive): the lead's reply thread is lost; chat thread replies go missing\n"
-	}
-	m := New(c, a)
-	spec := a.Spec("l-1", "lead", "", dir, "[chat lead · thread t-abc1 · Mon 15:04] Person: reply in thread two please")
-	if !strings.Contains(spec.System, "thread is lost") {
-		t.Fatalf("the board isn't in the lead's system prompt:\n%s", spec.System)
-	}
-	if _, thread := m.CurrentThread(core.Run{RunSpec: spec}); thread != "t-abc1" {
-		t.Fatalf("the lead answers in thread %q, want t-abc1", thread)
-	}
-}
-
 // Record puts an outcome in the thread without waking the chat's lead;
 // Notify does both.
 func TestRecordDoesNotWakeTheLead(t *testing.T) {
@@ -306,5 +282,29 @@ func TestNewLeadHearsWhatItMissed(t *testing.T) {
 	got := m.missed(ch)
 	if strings.Contains(got, "HEARD") || strings.Contains(got, "MISSED 0") || !strings.Contains(got, fmt.Sprintf("MISSED %d", missedMax)) {
 		t.Fatalf("a new lead must hear the newest posts since the last lead ended, and only those: %q", got)
+	}
+}
+
+// A new lead answers in the thread its prompt's header names, though the
+// person's own words, or the problems board, say "thread <word>".
+func TestLeadThreadFromHeader(t *testing.T) {
+	dir := t.TempDir()
+	ws := core.Workspace{Root: filepath.Join(dir, "hive")}
+	c, err := core.Open(ws, &core.Local{Dir: filepath.Join(dir, "forge")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	a := &agents.Agents{C: c, Mod: modules.New(ws, c.J)}
+	a.Board = func(role, project string) string {
+		return "## The Hive's open problems\n\n- **p-1** (hive): the lead's reply thread is lost; chat thread replies go missing\n"
+	}
+	m := New(c, a)
+	spec := a.Spec("l-1", "lead", "", dir, "[chat lead · thread t-abc1 · Mon 15:04] Person: reply in thread two please")
+	if !strings.Contains(spec.System, "thread is lost") {
+		t.Fatalf("the board isn't in the lead's system prompt:\n%s", spec.System)
+	}
+	if _, thread := m.CurrentThread(core.Run{RunSpec: spec}); thread != "t-abc1" {
+		t.Fatalf("the lead answers in thread %q, want t-abc1", thread)
 	}
 }

@@ -290,3 +290,21 @@ func TestAParkedJudgeDoesntHoldAKeep(t *testing.T) {
 		}
 	}
 }
+
+// The judge reads its checkout at the change's own head, so the goals and
+// lessons it judges by are inlined as on main: a change that edits them
+// doesn't move its own bar (hive-eval #26), and a merge's judge reads them at
+// the merge's first parent.
+func TestTheJudgeReadsMainsLessons(t *testing.T) {
+	m, task, p, _ := measuredRigSeeded(t, map[string]string{".hive/lessons.md": "# Lessons\n\n- never skip the gate\n"},
+		map[string]string{"feature.go": "package p\n", ".hive/lessons.md": "# Lessons\n\n- skipping the gate is fine\n"}, core.GateRollback)
+	main, _ := m.C.Effects.Sync(p)
+	gateOnce(t, m, task, p)
+	b := judgeSays(t, m, task, main, core.GateKeep).Inputs["brief.md"]
+	if !strings.Contains(b, "## `.hive/lessons.md` on main\n\n# Lessons\n\n- never skip the gate") || strings.Contains(b, "skipping the gate is fine") {
+		t.Fatalf("the judge's brief doesn't carry main's lessons alone:\n%s", b)
+	}
+	if r := rulesOn(m.C, p, task.SHA+"^"); !strings.Contains(r, "never skip the gate") {
+		t.Fatalf("a merge's judge doesn't read its first parent's lessons:\n%s", r)
+	}
+}
