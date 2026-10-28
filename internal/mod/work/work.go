@@ -1371,7 +1371,7 @@ func (m *Module) step(t *Task) error {
 		return m.startWorker(t, p)
 	case StageWorking:
 		if t.Resend != "" {
-			return m.resend(t)
+			return m.resend(t, p)
 		}
 		return m.checkWorker(t, p)
 	case StageLanding:
@@ -1460,7 +1460,10 @@ func (m *Module) startWorker(t *Task, p core.Project) error {
 			m.C.Runs.Stop(id, "its task was stopped as its worker started")
 			return nil
 		}
-		t.Base = base
+		t.Base, t.Worker = base, id
+		if _, err := m.writeMainBundle(t, p); err != nil { // main as it starts (just synced), not none (issue #1945)
+			m.bundleFailed(t, p, err)
+		}
 	}
 	if t.Branch == "" {
 		t.Branch = "hive/" + t.ID
@@ -2499,6 +2502,24 @@ func (m *Module) bundleForFixes(t *Task, p core.Project) string {
 		return ""
 	}
 	return "\n\n$HIVE_RUN/main.bundle holds main at " + core.Short(main) + ": if a fix needs main's newer commits, " + fetchMain + " and merge FETCH_HEAD."
+}
+
+// freshBundle brings the project's clone up to main's tip and writes it to
+// t's worker's main.bundle, returning the commit it holds, or "" when it
+// couldn't be written (journaled; the worker goes on without it). A run
+// that starts or resumes then sees main as it is, not as it was when an
+// earlier step last wrote the bundle.
+func (m *Module) freshBundle(t *Task, p core.Project) string {
+	if _, err := m.C.Effects.Sync(p); err != nil {
+		m.bundleFailed(t, p, err)
+		return ""
+	}
+	head, err := m.writeMainBundle(t, p)
+	if err != nil {
+		m.bundleFailed(t, p, err)
+		return ""
+	}
+	return head
 }
 
 // fetchMain is how a worker takes the main its writeMainBundle holds.
@@ -3913,9 +3934,16 @@ func (m *Module) conflict(t *Task, p core.Project, head string, why error) error
 func (t Task) Resending() bool { return t.Stage == StageWorking && t.Resend != "" }
 
 // resend sends t's worker back with the conflict it was held for, now the
-// queue has let it go.
-func (m *Module) resend(t *Task) error {
-	if err := m.C.Runs.Reopen(t.Worker, t.Resend); err != nil {
+// queue has let it go. The conflict wrote main.bundle when it was found, but
+// main may have moved while the worker waited for the pace: it is written
+// again from main now, so the merge the worker makes is with today's main,
+// not one that conflicts again (issue #1945).
+func (m *Module) resend(t *Task, p core.Project) error {
+	msg := t.Resend
+	if head := m.freshBundle(t, p); head != "" {
+		msg += "\n\n$HIVE_RUN/main.bundle holds main at " + core.Short(head) + "."
+	}
+	if err := m.C.Runs.Reopen(t.Worker, msg); err != nil {
 		return err
 	}
 	t.Resend, t.Reason = "", ""
