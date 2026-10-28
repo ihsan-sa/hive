@@ -103,7 +103,11 @@ func Probe(ws core.Workspace, name string, m core.OpenModel) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	return openagent.Probe(ctx, m.Endpoint, m.Model, key, m.Anthropic())
+	var price [2]float64
+	if m.Price != nil {
+		price = [2]float64{m.Price.Input, m.Price.Output}
+	}
+	return openagent.Probe(ctx, m.Endpoint, m.Model, key, price, m.Anthropic())
 }
 
 // probe refuses a pick that can't answer, saying why: a named model gets one
