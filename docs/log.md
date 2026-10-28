@@ -353,3 +353,8 @@
 - Decision: improve keeps the merge sha of the fix that lifted a quarantine (`liftedBy`); after it, a red from the Hive's own test check on a commit that doesn't contain that merge (`git merge-base --is-ancestor`) is no sighting. Forge reds are unchanged: the forge tests the branch merged with main, so its head's ancestry doesn't say what ran.
 - Why: TestStaleModuleCacheRunsAgain's fix (30fea85) merged at 07:45:04Z; two older branches' local checks of their own heads, which still had the old test, went red seconds later, re-quarantined it and filed the same fix brief twice more (261028-085542, 261028-090108), each with nothing left to change.
 - Tradeoff: one git call per local red of a lifted test; when git can't tell (a commit not fetched), the red counts as before.
+
+## 2026-10-28 The daemon's scratch files go to disk, not an in-memory /tmp
+- Decision: a daemon whose temp dir would be an in-memory `/tmp` (tmpfs) moves its `TMPDIR` to `.hive/private/tmp` on disk as it starts (`core.UseDiskTemp`); `hive.clean` removes the Hive's leftovers in `/tmp` (`hive-*`, `TestSoftLayer*`) and anything in its own temp folder untouched for 24 hours, and the sandbox sweep reads `/tmp` as well as the new temp dir
+- Why: issue #1914, a warden read found the host's 15G tmpfs `/tmp` holding 1.4G of the Hive's leftovers from killed tests, gates and builds, unreclaimable memory
+- Tradeoff: `go-build*` in `/tmp` could be anyone's and is left; a Hive temp folder nothing wrote to for a day is taken for dead; private/ is covered from agents, so they can't read the daemon's scratch (turn specs carry tokens), as in `/tmp`.

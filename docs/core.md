@@ -25,6 +25,8 @@ The executor hook is core because only launch knows a turn's spec and when the m
 
 What a check sees is part of the merge guarantees, so the choice of its caches is core: `core/disk.go`'s `goBuild` and `stableTimes` (#920, about 80 lines) decide whether a check writes main's build cache or reads it read-only; the cache program itself (`internal/gocache`, `hive gocacheprog`) is outside the core. For the same reason, which packages a change's check runs is core: `RunCheckSince` and `narrow` in `core/effects.go` (#1161, about 50 lines) narrow a Go test command to the packages the change since main can affect; working out which they are (`internal/goscope`) is outside the core.
 
+Where the daemon's scratch files go is core too: `core/hosttmp.go` (#1914, about 100 lines) sets the daemon's `TMPDIR` before any module starts, and its leftovers are removed by the core's own clean job (`Prune`), beside the check homes it already removes.
+
 The last row is core only as the place the skeleton runs: what a module adds to it (an API route, a CLI verb) is module material and moves out (step 4 below).
 
 The packages measured as the core, read by `tests/core-size.sh`:
