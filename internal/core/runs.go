@@ -1702,13 +1702,19 @@ func settled(path string, quiet, most time.Duration) {
 		}
 		return -1
 	}
-	end := time.Now().Add(most)
-	last, still := size(), time.Now()
-	for time.Now().Before(end) {
-		time.Sleep(10 * time.Millisecond)
+	settle(size, time.Now, time.Sleep, quiet, most)
+}
+
+// settle is settled's loop over a size, a clock and a sleep, so a test can
+// drive it without the wall clock.
+func settle(size func() int64, now func() time.Time, sleep func(time.Duration), quiet, most time.Duration) {
+	end := now().Add(most)
+	last, still := size(), now()
+	for now().Before(end) {
+		sleep(10 * time.Millisecond)
 		if n := size(); n != last {
-			last, still = n, time.Now()
-		} else if time.Since(still) >= quiet {
+			last, still = n, now()
+		} else if now().Sub(still) >= quiet {
 			return
 		}
 	}
