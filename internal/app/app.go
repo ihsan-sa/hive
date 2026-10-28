@@ -90,6 +90,7 @@ func New(ws core.Workspace, forge core.Forge) (*App, error) {
 	a.Work.Gate = runGate(ws)
 	a.Projects = projects.New(c, a.Chat, a.Work, a.Improve)
 	a.Release = release.New(c)
+	a.Release.Canary = runCanary(ws, a.Work.Gate)
 	a.Models = models.New(c, a.Work)
 	a.Agents.Skip = a.Models.Benched
 	a.Agents.Demote = a.Models.Demoted

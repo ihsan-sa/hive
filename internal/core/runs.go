@@ -106,7 +106,8 @@ type Run struct {
 	Updated     time.Time       `json:"updated"`
 	TurnStarted time.Time       `json:"turn_started,omitempty"`
 	LastOutput  time.Time       `json:"last_output,omitempty"`
-	Moves       []Move          `json:"moves,omitempty"` // each change of harness, so a past turn is read as it was written
+	Moves       []Move          `json:"moves,omitempty"`   // each change of harness, so a past turn is read as it was written
+	Stalled     []string        `json:"stalled,omitempty"` // picks its turns kept ending on without finishing, so its route moved it past them
 	SessionCost SessionSpend    `json:"session_cost"`
 }
 
@@ -647,6 +648,7 @@ type turnEnded struct {
 	Offline     string          `json:"offline,omitempty"`     // why the harness couldn't reach its service, in one plain line
 	Unavailable string          `json:"unavailable,omitempty"` // the pick it ran on can't answer (Down), so it moved or waits without a retry's backoff
 	Head        string          `json:"head,omitempty"`        // the checkout's HEAD log at the turn's end
+	Stalled     string          `json:"stalled,omitempty"`     // the pick it kept ending turns on without finishing, which it moves past
 }
 
 // egressRefused is the hosts a turn's egress proxy refused, and each
@@ -838,6 +840,11 @@ func (rs *Runs) apply(e Event) {
 			r.Head, r.Still = t.Head, 0
 		} else if t.Status != StatusParked {
 			r.Still++
+		}
+		if t.Stalled != "" {
+			// The next stop gets its own nudges before it too is passed.
+			r.Stalled = append(r.Stalled, t.Stalled)
+			r.Nudges, r.Still = 0, 0
 		}
 	case "run.queued":
 		var n runNote
@@ -1340,7 +1347,26 @@ func (rs *Runs) picks(r Run) (picks, unproven []Pick) {
 			picks = append([]Pick{first}, picks...)
 		}
 	}
+	// A pick its turns kept ending on without finishing is passed for good,
+	// while its route has another.
+	if left := slices.DeleteFunc(slices.Clone(picks), func(p Pick) bool { return slices.Contains(r.Stalled, p.String()) }); len(left) > 0 {
+		picks = left
+	}
 	return picks, unproven
+}
+
+// onward is the pick a worker whose turns keep ending on ran without
+// finishing goes on next, and when it has room; ok is false when its route
+// has no other stop to try (each is passed, or no run has finished on it).
+// Its last stop is where it stays quiet, or ends blocked, as before: three
+// runs on Deck's free models never reached its route's claude:opus.
+func (rs *Runs) onward(r Run, ran Pick) (pick Pick, at time.Time, ok bool) {
+	if !r.Finishes() {
+		return pick, at, false
+	}
+	r.Stalled = append(slices.Clone(r.Stalled), ran.String())
+	pick, at = rs.next(r)
+	return pick, at, !slices.Contains(r.Stalled, pick.String())
 }
 
 // Spent is what runs cost in a month ("2006-01", UTC), from the harnesses' results.
@@ -1947,12 +1973,28 @@ func (rs *Runs) endTurn(r Run) {
 	case cur.Nudges < 2:
 		te.Status, te.Reason = StatusIdle, "nudged: ended a turn without finishing"
 		te.Queue = []string{printedNudge(r, tl.Result.Text)}
-	case te.Head != "" && te.Head == cur.Head && cur.Still+1 >= StillTurns:
-		// Its nudges changed nothing: it can't follow the finish protocol,
-		// so it ends and frees its slot instead of holding it quiet.
-		te.Status, te.Reason = StatusBlocked, NoFinish+": it was nudged twice to call `hive agent finish`, and the turns after made no new commit and ended without it"
 	default:
-		te.Status, te.Reason = StatusQuiet, "keeps ending turns without finishing; flagged for the lead"
+		pick, at, onward := rs.onward(r, ran)
+		switch {
+		case onward:
+			// Its nudges didn't get it to finish here: the next stop on its
+			// route takes the next turn, rather than it going quiet or ending.
+			te.Status, te.ParkedUntil, te.Stalled = StatusParked, at, ran.String()
+			te.Reason = ran.String() + " keeps ending turns without finishing; moving to " + pick.String()
+			if at.After(time.Now()) {
+				te.Reason += ", which resumes " + at.Local().Format("Mon 15:04")
+			}
+			if pick.Harness == ran.Harness && ran.Harness != "open" {
+				// The same harness resumes its session, so launch says nothing of the move.
+				te.Queue = []string{fmt.Sprintf("Your turns on %s kept ending without finishing, so you now run on %s. Continue where you left off, and when the work is done (or can't be), end with `%s agent finish`.", ran, pick, Cmd)}
+			}
+		case te.Head != "" && te.Head == cur.Head && cur.Still+1 >= StillTurns:
+			// Its nudges changed nothing: it can't follow the finish protocol,
+			// so it ends and frees its slot instead of holding it quiet.
+			te.Status, te.Reason = StatusBlocked, NoFinish+": it was nudged twice to call `hive agent finish`, and the turns after made no new commit and ended without it"
+		default:
+			te.Status, te.Reason = StatusQuiet, "keeps ending turns without finishing; flagged for the lead"
+		}
 	}
 	if te.Offline != "" {
 		// Retrying costs no usage while it's down, so it checks back every few minutes at most.
@@ -2207,7 +2249,9 @@ func (rs *Runs) launch(r Run, cfg Config) {
 		if pick.Harness != from.Harness || pick.Harness == "open" {
 			r.SessionLive = false
 			why := "the settings route you there"
-			if d, ok := rs.downFor(from); ok {
+			if slices.Contains(r.Stalled, from.String()) {
+				why = "your turns on " + from.String() + " kept ending without finishing; when the work is done (or can't be), end with `" + Cmd + " agent finish`"
+			} else if d, ok := rs.downFor(from); ok {
 				why = from.String() + " can't answer (" + Clip(d.Text, 200) + ")"
 			} else if rs.freeAt(from.Harness, from.Model, Reserved(r.Role)).After(time.Now()) {
 				why = from.String() + " is at its usage limit"
