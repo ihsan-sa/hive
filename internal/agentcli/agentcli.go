@@ -182,12 +182,16 @@ A value of @path reads that file. Common ops:
                                                  names, which merges on its tests and reads and isn't reverted
                                                  for a score dip alone, or a gain, which on the Hive's own
                                                  repository merges only on the recursive gate's clear gain
+  pivot     --case "..." --evidence "..." [--project p]   any agent: a change of direction, filed first in
+                                                 line as a fix; its worker weighs the case, then may throw away anything
   warden    --want "..." --why "..." --steps "..."   for anything past your reach; the person decides
   install   --tool python|uv|node|go [--version 3.12]   installs it for every agent, no root,
                                                  on your PATH at once; give the call a 25-minute timeout
   install   --system "sudo apt-get install -y x" --why "..."   a root install: goes to the person
   search    --query "words" [--limit n|all]     the knowledge base pieces that match, best first
   remember  --title "..." --text "..." [--tags a,b]   write to the knowledge base
+  problem   --text "..." [--where "..."]          post what you ran into on the Hive's problems board, with
+            [--id id --also "..." | --solved "how"]   your run id; add to one or close it; problems lists them
   feedback  --text "..." [--about "agents/worker.md"]   what about the Hive got in your way, for the person
   feedback  --fixed <feedback id> --task <task id>   that task fixes it: it closes when the task lands
   schedule  --in 2h --text "..."                 a wake-up message to yourself

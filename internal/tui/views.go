@@ -22,6 +22,7 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/report"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/system"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/work"
+	"github.com/ihsan-sa/hive-standalone-build/internal/setup"
 )
 
 func visibleWidth(s string) int { return ansi.StringWidth(s) }
@@ -169,7 +170,7 @@ func (m *model) dashRows() []row {
 	if add(row{key: "plans", text: "plan usage", expand: len(m.st.Plans) > 0, def: true}) {
 		now := time.Now()
 		for _, p := range m.st.Plans {
-			line := fmt.Sprintf("%s  %s", text.Visible(p.Key()), standing(p, now))
+			line := fmt.Sprintf("%s  %s", text.Visible(setup.LoginLabel(m.st.LoginNames, p.Key())), standing(p, now))
 			for _, w := range p.Limit.WindowUses(now) {
 				line += "  " + windowShort(w, now, true)
 			}
@@ -185,7 +186,7 @@ func (m *model) dashRows() []row {
 	}
 	if add(row{key: "logins", text: "logins", expand: len(m.st.Logins) > 0, def: true}) {
 		for _, l := range m.st.Logins {
-			add(row{key: "login:" + l.Login, depth: 1, text: loginLine(l)})
+			add(row{key: "login:" + l.Login, depth: 1, text: loginLine(l, m.st.LoginNames)})
 		}
 	}
 	add(row{key: "waiting", text: fmt.Sprintf("waiting on you (%d)", len(m.st.Asks)), jump: secWaiting})
@@ -1054,7 +1055,7 @@ func (m *model) settings() []setting {
 		{group: "General", label: "use ANTHROPIC_API_KEY", value: onOff(c.APIKeyOptIn), key: "api_key_opt_in"},
 		{group: "General", label: "release repo", value: c.ReleaseRepo, key: "release_repo"},
 		{group: "General", label: "self fork owner", value: c.SelfFork, key: "self_fork"},
-		{group: "General", label: "release channel", value: channelText(m.st.Channel, c.Channel), key: "channel", choices: []string{"default", "latest", "pre-release"}},
+		{group: "General", label: "release channel", value: channelText(m.st.Channel, c.Channel), key: "channel", choices: []string{"default", "latest", "pre-release", "train"}},
 		{group: "General", label: "release", value: m.st.Version + ", " + pinText(c.ReleasePin), action: func() tea.Cmd {
 			return func() tea.Msg {
 				return flashMsg("`" + core.Cmd + " update --release <tag>` installs a release, pinning one behind the newest")
@@ -1130,8 +1131,11 @@ func pinText(pin string) string {
 // channelText is the channel the daemon follows, and whether the person chose it.
 func channelText(follows, chosen string) string {
 	t := "the latest release"
-	if follows == "pre-release" {
+	switch follows {
+	case "pre-release":
 		t = "pre-releases, once safe here"
+	case "train":
+		t = "the daily train: a release once its canary keeps it"
 	}
 	if chosen == "" {
 		t += " (default)"
@@ -1546,7 +1550,7 @@ func (m *model) viewSettings() []string {
 func fmtNum(f float64) string { return strconv.FormatFloat(f, 'g', 6, 64) }
 
 // loginLine is a login's expiry and last renewal, and why it can't renew.
-func loginLine(l core.LoginState) string {
+func loginLine(l core.LoginState, names map[string]string) string {
 	exp := "expires " + l.Expires.Local().Format("Mon 15:04")
 	if l.Expires.IsZero() {
 		exp = "expiry unknown"
@@ -1557,7 +1561,7 @@ func loginLine(l core.LoginState) string {
 	if !l.Renewed.IsZero() {
 		renewed = "renewed " + l.Renewed.Local().Format("Mon 15:04")
 	}
-	line := fmt.Sprintf("%s  %s  %s", text.Visible(l.Login), exp, stDim.Render(renewed))
+	line := fmt.Sprintf("%s  %s  %s", text.Visible(setup.LoginLabel(names, l.Login)), exp, stDim.Render(renewed))
 	if l.Limited.After(time.Now()) {
 		line += "  " + stWarn.Render("at its usage limit") + " until " + l.Limited.Local().Format("Mon 15:04") + stDim.Render(": renews after it resets")
 	}

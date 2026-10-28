@@ -747,8 +747,8 @@ func TestCheckpointsBankEachGain(t *testing.T) {
 	}
 }
 
-// A review reads the project's docs/REVIEW.md from main and is pointed at its
-// goals and lessons, and advice given with a land stays on the pull request: it
+// A review reads the project's docs/REVIEW.md, goals and lessons from main,
+// and advice given with a land stays on the pull request: it
 // holds nothing and is filed as no new task.
 func TestReviewReadsTheRules(t *testing.T) {
 	t.Parallel()
@@ -764,7 +764,7 @@ func TestReviewReadsTheRules(t *testing.T) {
 	st := h.wait("the ask to merge", 3*minute, taskStage("rules", "add a helper", work.StageDone))
 	tk, _ := task(st, "rules", "add a helper")
 	brief, _ := os.ReadFile(filepath.Join(h.ws.RunRO(tk.Reviewer), "brief.md"))
-	for _, want := range []string{"walls the Hive off from the host", "`.hive/goals.md` and `.hive/lessons.md` are in your checkout"} {
+	for _, want := range []string{"walls the Hive off from the host", "Every agent sees the same thing.", "a lesson from an earlier revert"} {
 		if !strings.Contains(string(brief), want) {
 			t.Fatalf("the review brief lacks %q:\n%s", want, brief)
 		}

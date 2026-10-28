@@ -20,6 +20,7 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/kb"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/models"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/modules"
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/problems"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/projects"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/release"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/report"
@@ -71,6 +72,7 @@ func New(ws core.Workspace, forge core.Forge) (*App, error) {
 	c.Runs.Ops().SetSpawner(a.Work.Spawn)
 	a.Improve = improve.New(c, a.Agents, a.Work, a.Chat)
 	a.Feedback = feedback.New(c)
+	a.Agents.Board = problems.New(c).Brief
 	a.Stats = stats.New(c.J)
 	a.Improve.Feedback = a.Feedback.Digest
 	a.KB = kb.New(c, a.Agents)
@@ -83,6 +85,7 @@ func New(ws core.Workspace, forge core.Forge) (*App, error) {
 	a.Work.Gate = runGate(ws)
 	a.Projects = projects.New(c, a.Chat, a.Work, a.Improve)
 	a.Release = release.New(c)
+	a.Release.Canary = runCanary(ws, a.Work.Gate)
 	a.Models = models.New(c, a.Work)
 	a.Agents.Skip = a.Models.Benched
 	a.Agents.Demote = a.Models.Demoted

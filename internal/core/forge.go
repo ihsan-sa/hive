@@ -48,6 +48,18 @@ var ErrDraft = errors.New("the pull request is a draft, not yet marked ready")
 // Hive read, so it isn't readied: the next look sees the new head.
 var ErrHeadMoved = errors.New("its head moved past the commit read")
 
+// ErrBaseMoved means the forge refused a merge because the base branch moved
+// while it merged ("Base branch was modified"), as it does when a batch
+// merges several pull requests in a row: the next look merges onto the new
+// main, so it counts toward no stop.
+var ErrBaseMoved = errors.New("its base branch moved while it merged")
+
+// BaseMoved reports whether error text e is the forge's refusal of a merge
+// for its base branch moving mid-merge.
+func BaseMoved(e string) bool { return baseModified.MatchString(e) }
+
+var baseModified = regexp.MustCompile(`(?i)base branch was modified`)
+
 // Forge is where code, issues and pull requests live. GitHub through the gh
 // CLI is the real one; Local is a folder-backed stand-in for tests.
 type Forge interface {
@@ -849,6 +861,9 @@ func (g GitHub) MergePR(repo string, number int, sha, subject string) (string, e
 	if _, err := gh(repo, "pr", "merge", strconv.Itoa(number), "-R", repo, "--squash", "--match-head-commit", sha, "--subject", subject, "--body", g.squashBody(repo, number)); err != nil {
 		if draftRefused.MatchString(err.Error()) { // made a draft since the look above
 			return "", fmt.Errorf("PR #%d: %w (%v)", number, ErrDraft, err)
+		}
+		if BaseMoved(err.Error()) { // another merge moved main as this one went in
+			return "", fmt.Errorf("PR #%d: %w (%v)", number, ErrBaseMoved, err)
 		}
 		return "", err
 	}

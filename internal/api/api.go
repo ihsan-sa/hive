@@ -40,7 +40,7 @@ type DaemonInfo struct {
 // State is everything the control center shows.
 type State struct {
 	Version    string             `json:"version"`
-	Channel    string             `json:"channel,omitempty"` // the releases auto-update follows: "latest" or "pre-release"
+	Channel    string             `json:"channel,omitempty"` // the releases auto-update follows: "latest", "pre-release" or "train"
 	Newest     string             `json:"newest,omitempty"`  // the newest release out, as the last look for an update found
 	Behind     int                `json:"behind,omitempty"`  // how many releases newer than Version are out
 	Seq        int64              `json:"seq"`
@@ -52,8 +52,9 @@ type State struct {
 	Projects   []ProjectView      `json:"projects"`
 	Runs       []core.Run         `json:"runs"`
 	Plans      []core.Plan        `json:"plans"`
-	Down       []core.Down        `json:"down,omitempty"` // models that can't answer, which runs skip, each with its last answer
-	Logins     []core.LoginState  `json:"logins"`         // each login's expiry and last renewal
+	Down       []core.Down        `json:"down,omitempty"`        // models that can't answer, which runs skip, each with its last answer
+	Logins     []core.LoginState  `json:"logins"`                // each login's expiry and last renewal
+	LoginNames map[string]string  `json:"login_names,omitempty"` // the names the person gave logins, by key (setup.LoginLabel)
 	Sweeps     []improve.Sweep    `json:"sweeps"`
 	StepBacks  []improve.StepBack `json:"stepbacks"`
 	Asks       []core.Ask         `json:"asks"`

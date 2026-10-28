@@ -117,16 +117,21 @@ type Config struct {
 	AutoUpdate   bool     `json:"auto_update"`
 	ReleasePin   string   `json:"release_pin,omitempty"`        // the release `hive update --release` chose; auto-update stays on it
 	PinnedAuto   bool     `json:"pinned_auto_update,omitempty"` // auto_update before the pin turned it off; clearing the pin restores it
-	// Channel is the releases auto-update follows: "latest", or "pre-release",
-	// each pre-release once its checks for this system pass. Empty is the
-	// default: pre-releases on the Hive whose own project is release_repo, the
-	// latest everywhere else.
+	// Channel is the releases auto-update follows: "latest"; "pre-release",
+	// each pre-release once its checks for this system pass; or "train", once
+	// a day the newest of those after a canary child Hive on real work keeps
+	// it. Empty is the default: the train on the Hive whose own project is
+	// release_repo, the latest everywhere else.
 	Channel      string                     `json:"channel,omitempty"`
 	APIKeyOptIn  bool                       `json:"api_key_opt_in"`
 	ReviewRounds int                        `json:"review_rounds"`
 	Projects     map[string]ProjectSettings `json:"projects,omitempty"`
 	Schedules    map[string]string          `json:"schedules,omitempty"` // name -> "every 12h" | "daily 03:00" | "off"
 	ChatMaxMB    int                        `json:"chat_max_mb"`         // the most one chat message, files and all, may be, in MB; 0 means the default
+
+	// UsageStops are where a plan login stops short of its limit, until the
+	// window resets; none runs every login to its limit.
+	UsageStops UsageStops `json:"usage_stops"`
 
 	// MaxOutputTokens caps one reply (a budget is checked only between turns); 0 leaves the harness default.
 	MaxOutputTokens int `json:"max_output_tokens"`
@@ -294,8 +299,11 @@ func (e Egress) For(role string) []string {
 // Check refuses settings the Hive can't act on: a tribunal seat it couldn't
 // read or on a harness it doesn't have, and a floor glob that can't match.
 func (c Config) Check() error {
-	if c.Channel != "" && c.Channel != "latest" && c.Channel != "pre-release" {
-		return fmt.Errorf("channel %q is neither \"latest\" nor \"pre-release\"", c.Channel)
+	if c.Channel != "" && c.Channel != "latest" && c.Channel != "pre-release" && c.Channel != "train" {
+		return fmt.Errorf("channel %q is none of \"latest\", \"pre-release\" and \"train\"", c.Channel)
+	}
+	if err := c.UsageStops.check(); err != nil {
+		return err
 	}
 	for _, f := range c.Floor {
 		if _, err := path.Match(f, ""); strings.ContainsAny(f, "*?[") && err != nil {
@@ -398,8 +406,9 @@ func (w Workspace) ReadConfig() (Config, error) {
 		// A config from before lead_model: a model the person chose stays the
 		// lead's; the old default ("sonnet") moves the lead to opus.
 		var had struct {
-			LeadModel *string `json:"lead_model"`
-			Ceilings  *bool   `json:"ceilings"`
+			LeadModel  *string          `json:"lead_model"`
+			Ceilings   *bool            `json:"ceilings"`
+			UsageStops *json.RawMessage `json:"usage_stops"`
 		}
 		if json.Unmarshal(raw, &had) == nil && had.LeadModel == nil && c.Model != "sonnet" {
 			c.LeadModel = c.Model
@@ -412,6 +421,11 @@ func (w Workspace) ReadConfig() (Config, error) {
 				c.MaxChecks = 0
 			}
 			c.Ceilings = true
+		}
+		if had.UsageStops == nil {
+			// A config from before usage_stops keeps the stops every
+			// install had then (OldUsageStops); a new one has none.
+			c.UsageStops = OldUsageStops
 		}
 	} else if os.IsNotExist(err) {
 		err = nil

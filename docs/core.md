@@ -54,7 +54,7 @@ Every other package is module material. Most are compiled-in modules already (`i
 | `internal/mod/improve`, `internal/gate`, `internal/demo` | the improve module: measure and keep/revert, sweeps, step-backs, the recursive gate and its benchmark project |
 | `internal/mod/kb` | the kb module |
 | `internal/mod/risk` | a risk module: wardens, tribunals, approved scripts. The ceiling itself stays core |
-| `internal/mod/chat`, `internal/mod/feedback` | the chat module |
+| `internal/mod/chat`, `internal/mod/feedback`, `internal/mod/problems` | the chat module |
 | `internal/mod/work` | a work module: ask → issue → PR → review → merge. The core keeps runs, spawning and the merge guarantees it calls |
 | `internal/mod/projects` | a projects module: adding and onboarding projects (the registry stays core) |
 | `internal/mod/system` | the system module: schedules and wake-ups |
