@@ -16,7 +16,7 @@ import (
 func TestSyncCommandDiesWithItsDaemon(t *testing.T) {
 	if os.Getenv("HIVE_SYNC_HELPER") == "1" {
 		pidFile := os.Getenv("HIVE_SYNC_PID")
-		go runSync([]string{"/bin/sh", "-c", "echo $$ > " + pidFile + "; exec sleep 300"}, nil, "", "", "", time.Hour)
+		go runSync([]string{"/bin/sh", "-c", "echo $$ > " + pidFile + "; exec sleep 300"}, nil, "", "", "", time.Hour, nil)
 		time.Sleep(time.Hour)
 		return
 	}
@@ -35,7 +35,7 @@ func TestSyncCommandDiesWithItsDaemon(t *testing.T) {
 // What a command leaves running in its group ends when it returns.
 func TestSyncCommandLeavesNothingRunning(t *testing.T) {
 	pidFile := t.TempDir() + "/pid"
-	code, err := runSync([]string{"/bin/sh", "-c", "sleep 300 & echo $! > " + pidFile + "; exit 3"}, nil, "", "", "", time.Minute)
+	code, err := runSync([]string{"/bin/sh", "-c", "sleep 300 & echo $! > " + pidFile + "; exit 3"}, nil, "", "", "", time.Minute, nil)
 	if err != nil || code != 3 {
 		t.Fatalf("code %d, %v", code, err)
 	}
@@ -108,5 +108,28 @@ func TestSweepEndsWhatADeadDaemonsBareCommandLeft(t *testing.T) {
 	gone(t, pid)
 	if syscall.Kill(live.Process.Pid, 0) != nil {
 		t.Error("the sweep killed a live daemon's command")
+	}
+}
+
+// A synchronous command says what it wrote to the disk, a child's writes
+// (a shell running dd) among them. The file goes beside the test, not in
+// TMPDIR, which may be a tmpfs that writes to no disk.
+func TestRunSaysWhatItWroteToDisk(t *testing.T) {
+	dir, err := os.MkdirTemp(".", "disk-test-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	var disk Disk
+	code, err := Bare{}.Run(Spec{Argv: []string{"/bin/sh", "-c", "dd if=/dev/zero of=" + dir + "/f bs=1M count=4 conv=fsync 2>/dev/null; true"}, Disk: &disk}, time.Minute)
+	if code != 0 || err != nil {
+		t.Fatalf("ran with %d, %v", code, err)
+	}
+	var fs syscall.Statfs_t
+	if syscall.Statfs(dir, &fs); fs.Type == 0x01021994 { // tmpfs
+		t.Skip("the test's own folder is on a tmpfs")
+	}
+	if disk.Wrote < 4<<20 {
+		t.Errorf("wrote %d bytes, want at least 4 MiB", disk.Wrote)
 	}
 }
