@@ -2344,15 +2344,15 @@ func (rs *Runs) launch(r Run, cfg Config) {
 		rs.holdTurn(r, "waiting: "+why)
 		return
 	}
-	if rs.Admit != nil {
+	if !r.Lead() && elsewhere == nil && rs.ramp(time.Now()) {
+		rs.holdTurn(r, "waiting: starting one turn at a time after the machine was strained")
+		return
+	}
+	if rs.Admit != nil { // after the ramp: a pass Admit gives is used now
 		if why := rs.Admit(r); why != "" {
 			rs.holdTurn(r, why)
 			return
 		}
-	}
-	if !r.Lead() && elsewhere == nil && rs.ramp(time.Now()) {
-		rs.holdTurn(r, "waiting: starting one turn at a time after the machine was strained")
-		return
 	}
 	sb, err := rs.sandbox()
 	if err != nil {
