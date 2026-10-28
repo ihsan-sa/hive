@@ -48,6 +48,7 @@ Every other package is module material. Most are compiled-in modules already (`i
 | `internal/harness`, `internal/openagent`, `internal/fakeagent` | the agents module: harness adapters (Claude, Codex, open, fake), the open harness's agent loop, the scripted test agent. The core keeps only the `Harness` interface and a registry |
 | `internal/mod/agents`, `internal/mod/models` | the agents module: role prompts, the spawner, model routes |
 | `internal/tui`, `internal/text` | the control center, a client of the control API: it should import `internal/api` alone, not the core or modules |
+| `internal/mod/ui` | with the control center: the bus a client (the deck) steers it through, `/api/ui` (docs/ui-api.md) |
 | `internal/mod/release`, `internal/setup` | a release/update module: releases, self-update, install, login, doctor, autostart |
 | `internal/mod/improve`, `internal/gate`, `internal/demo` | the improve module: measure and keep/revert, sweeps, step-backs, the recursive gate and its benchmark project |
 | `internal/mod/kb` | the kb module |
