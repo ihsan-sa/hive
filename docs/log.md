@@ -357,3 +357,8 @@
 - Decision: improve keeps the merge sha of the fix that lifted a quarantine (`liftedBy`); after it, a red from the Hive's own test check on a commit that doesn't contain that merge (`git merge-base --is-ancestor`) is no sighting. Forge reds are unchanged: the forge tests the branch merged with main, so its head's ancestry doesn't say what ran.
 - Why: TestStaleModuleCacheRunsAgain's fix (30fea85) merged at 07:45:04Z; two older branches' local checks of their own heads, which still had the old test, went red seconds later, re-quarantined it and filed the same fix brief twice more (261028-085542, 261028-090108), each with nothing left to change.
 - Tradeoff: one git call per local red of a lifted test; when git can't tell (a commit not fetched), the red counts as before.
+
+## 2026-10-28 The canary doesn't rerun what its releases' CI passed
+- Decision: the release train's canary runs the gate with `--ci-passed` (`gate.Config.CIPassed`, set only by `app.runCanary`), which skips vet, the short tests and the candidate's new-tests step on both sides: the candidate and the running release are both releases whose CI already passed them. Unit `TestCanarySkipsWhatCIPassed`
+- Why: issue #1923; the canary was spending part of its 2h rerunning what CI had just passed
+- Tradeoff: a short test that only fails inside the gate's sandbox (not on CI's runner) goes unseen by the canary; the e2e, probes and benchmark still run.
