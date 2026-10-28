@@ -1848,7 +1848,7 @@ func (m *Module) test(t *Task, p core.Project) error {
 		return err
 	}
 	cfg := m.C.Effects.Config(p, main)
-	c, ok, err := m.headTest(t, p, cfg.Test)
+	c, ok, err := m.headTest(t, p, main, cfg.Test)
 	if !ok || err != nil {
 		return err // queued or running behind the step: it waits in testing
 	}
@@ -2113,6 +2113,7 @@ func (m *Module) failsAgain(p core.Project, sha, command string, c core.Check) b
 // on main waits on it, so its checks go ahead of the line.
 func (m *Module) mainTests(p core.Project, main, command string) (core.Check, error) {
 	c, ok := m.C.Effects.GetCheck(p.Name, main, "test")
+	ok = ok && c.Scope == nil // main's own answer is its whole run
 	if !ok || !c.OK && c.CantRun == "" && m.Retest != nil {
 		defer m.MeasuringMain(p.Name, main)()
 	}
