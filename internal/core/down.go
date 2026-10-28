@@ -262,6 +262,7 @@ const cantAnswerWhy = " can't answer; "
 func (rs *Runs) tickDown(cfg Config) {
 	rs.mu.Lock()
 	rs.cfg = cfg
+	rs.usage = cfg.UsageStops
 	var changed []Pick
 	for _, d := range rs.down {
 		if rs.downConfig(cfg, d.Pick) != d.Config {

@@ -164,6 +164,51 @@ func TestCheckpointMergedOnForgeTellsWorker(t *testing.T) {
 	}
 }
 
+// A change to the Hive aimed at a gain is never merged as checkpoints, however
+// it scores: the task says why, and a fix's checkpoints come back once the
+// lead makes it one (issue #759).
+func TestCheckpointRefusedForAGain(t *testing.T) {
+	m, task, p := checkpointRig(t, 5, "7")
+	p.Self = true
+	task.Aim = AimGain
+	if err := m.checkWorker(task, p); err != nil {
+		t.Fatal(err)
+	}
+	if task.Stage != StageWorking || task.Checkpoint != "" || task.PR.Number != 0 || task.NoBank != noBankGain || !logged(task, "no checkpoints: it aims at a gain") {
+		t.Fatalf("stage %q, checkpoint %q, PR %d, no bank %q, log %v", task.Stage, task.Checkpoint, task.PR.Number, task.NoBank, task.Log)
+	}
+	n := len(task.Log)
+	task.Seen = "" // a new commit
+	m.checkWorker(task, p)
+	if len(task.Log) != n || task.PR.Number != 0 {
+		t.Fatalf("said it again or opened a checkpoint: %v", task.Log[n:])
+	}
+	task.Aim, task.AimWhy = AimFix, "a named failure"
+	if err := m.checkWorker(task, p); err != nil {
+		t.Fatal(err)
+	}
+	if task.Checkpoint == "" || task.NoBank != "" {
+		t.Fatalf("a fix got no checkpoint: no bank %q, log %v", task.NoBank, task.Log)
+	}
+}
+
+// A checkpoint opened while its task was a fix, and aimed at a gain since,
+// is dropped at the gate unjudged; the worker's finished head then goes
+// through the recursive gate whole, and merges on its keep.
+func TestGainCheckpointDroppedFinalHeadGated(t *testing.T) {
+	m, task, p, f, jobs := selfRig(t, map[string]string{"feature.go": "package p\n"}, core.GateKeep)
+	task.Checkpoint = task.SHA
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageWorking || task.Checkpoint != "" || len(*jobs) != 0 || prState(t, f, task.PR.Number) == "MERGED" || !logged(task, "checkpoint not merged: it aims at a gain") {
+		t.Fatalf("stage %q, checkpoint %q, %d gate runs, log %v", task.Stage, task.Checkpoint, len(*jobs), task.Log)
+	}
+	task.Stage = StageMerging // the worker finished on the same head
+	gateOnce(t, m, task, p)
+	if len(*jobs) != 1 || task.Stage != StageMerged || prState(t, f, task.PR.Number) != "MERGED" {
+		t.Fatalf("%d gate runs, stage %q, reason %q: want the whole head merged on the gate's keep", len(*jobs), task.Stage, task.Reason)
+	}
+}
+
 // While checks wait for a slot, a commit isn't weighed: the step would hold
 // the task behind the backlog, so a worker that finished meanwhile would sit
 // in working. The commit is weighed once the backlog clears.

@@ -29,7 +29,8 @@ import (
 //   - Go modules come from one shared cache, filled by the effects process
 //     (outside the sandbox, running no code of the commit's: `go mod
 //     download`, as the recursive gate's prefetch does) once per go.mod and
-//     go.sum, and mounted read-only with GOPROXY=off and -mod=readonly.
+//     go.sum, and mounted read-only with GOPROXY=off and -mod=readonly. A
+//     check fetching its own modules still reads it first, as a file:// proxy.
 //   - A check's own home lives under the workspace's cache folder, is capped
 //     in size (config check_cache_max_mb) and removed after.
 //   - A Go project's build cache is shared only from main: a check of a
@@ -114,18 +115,48 @@ func toolDiskFull(out string) string {
 const staleModules = "module lookup disabled by GOPROXY=off"
 
 // ownModules marks a go.mod and go.sum whose check needed a module they don't
-// name (`go run x@latest`, a tool fetched by version): the shared cache can't
-// serve it, so later checks of the same files fetch their own from the start
-// instead of running twice.
+// name (`go run x@latest`, a tool fetched by version) and passed fetching its
+// own: the shared cache can't serve it, so later checks of the same files
+// fetch their own from the start instead of running twice. The mark holds for
+// ownModulesFor, so one odd check doesn't switch the cache off for good.
 const ownModules = ".own"
+
+const ownModulesFor = 24 * time.Hour
 
 var missingModule = regexp.MustCompile(`(\S+)@(\S+): ` + regexp.QuoteMeta(staleModules))
 
-// cacheLacked says why a check that printed staleModules failed: the shared
+// staleLine is the check's own line saying the shared cache couldn't serve a
+// module: the first line at the start of a line with staleModules in it. What
+// a test printed indented (a nested go it ran, offline as its check is) is
+// the test's own words, and its failure the commit's.
+func staleLine(out string) string {
+	for _, l := range strings.Split(out, "\n") {
+		if l != "" && l[0] != ' ' && l[0] != '\t' && strings.Contains(l, staleModules) {
+			return strings.TrimSpace(l)
+		}
+	}
+	return ""
+}
+
+// ownMarked says whether marker's go.mod and go.sum were marked ownModules
+// within ownModulesFor; an older mark is removed.
+func ownMarked(marker string) bool {
+	fi, err := os.Stat(marker + ownModules)
+	if err != nil {
+		return false
+	}
+	if time.Since(fi.ModTime()) < ownModulesFor {
+		return true
+	}
+	os.Remove(marker + ownModules)
+	return false
+}
+
+// cacheLacked says why a check whose staleLine is line failed: the shared
 // cache lacked a module go.sum names (its fault: true), or the check wanted
 // one go.sum doesn't name (false). A line it can't read counts as the cache's.
-func cacheLacked(out string, sum []byte) bool {
-	m := missingModule.FindStringSubmatch(out)
+func cacheLacked(line string, sum []byte) bool {
+	m := missingModule.FindStringSubmatch(line)
 	if m == nil {
 		return true
 	}
@@ -149,6 +180,7 @@ func (e *Effects) checkCacheCap() int64 {
 type goMods struct {
 	mounts []sandbox.Mount
 	env    []string
+	own    []string // env instead, for a run fetching its own modules
 	note   string
 	marker string
 	sum    []byte // the go.sum the marker is for
@@ -186,14 +218,16 @@ func (e *Effects) goModules(sb sandbox.Sandbox, dir string) goMods {
 		none.note = "modules not prefetched: " + why
 		return none
 	}
+	shared := []sandbox.Mount{{Host: e.ws.GoModCache(), Inside: GoModInside}}
 	h := sha256.Sum256(append(append(mod, 0), sum...))
 	key := hex.EncodeToString(h[:8])
 	marker := filepath.Join(e.ws.goSums(), key)
-	if Exists(marker + ownModules) {
-		none.note = "modules not prefetched: a check of this go.mod and go.sum needed a module they don't name"
-		return none
-	}
 	e.modMu.RLock() // Prune empties the cache only while no check fetches into or reads it
+	if ownMarked(marker) {
+		os.MkdirAll(e.ws.GoModCache(), 0o755)
+		return goMods{mounts: shared, env: ownModEnv, own: ownModEnv, done: e.modMu.RUnlock,
+			note: "a check of this go.mod and go.sum needed a module they don't name; it fetches what the shared module cache lacks"}
+	}
 	if !Exists(marker) {
 		unlock := e.lock("gomod:" + key)
 		if !Exists(marker) {
@@ -221,9 +255,16 @@ func (e *Effects) goModules(sb sandbox.Sandbox, dir string) goMods {
 		unlock()
 	}
 	os.MkdirAll(e.ws.GoModCache(), 0o755) // a module with nothing to fetch still mounts it
-	return goMods{mounts: []sandbox.Mount{{Host: e.ws.GoModCache(), Inside: GoModInside}},
-		env: []string{"GOMODCACHE=" + GoModInside, "GOFLAGS=-mod=readonly", "GOPROXY=off"}, marker: marker, sum: sum, done: e.modMu.RUnlock}
+	return goMods{mounts: shared, env: []string{"GOMODCACHE=" + GoModInside, "GOFLAGS=-mod=readonly", "GOPROXY=off"},
+		own: ownModEnv, marker: marker, sum: sum, done: e.modMu.RUnlock}
 }
+
+// ownModEnv is a check's environment when it fetches its own modules: the
+// shared cache, mounted read-only, is its first proxy, so only what the cache
+// lacks comes over the network. A check fetching everything from the proxy
+// failed whenever the proxy refused it (2ea48ab0: "Forbidden" twice, then a
+// pass).
+var ownModEnv = []string{"GOPROXY=file://" + GoModInside + "/cache/download,https://proxy.golang.org,direct"}
 
 // goBuild readies the project's shared build cache for a check of sha in dir,
 // where goModules would share the module cache. A commit on main's line

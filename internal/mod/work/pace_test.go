@@ -616,6 +616,40 @@ func TestCheaperRead(t *testing.T) {
 	}
 }
 
+// A load that is the disk's doesn't pull the checks' pace under its start,
+// and brings it back there a growStep after another strain pulled it under:
+// on 10-27 the checks sat at 1 for hours under a load of IO wait that never
+// fell with them. A load that is the CPU's still cuts them.
+func TestDiskLoadKeepsTheChecksAtTheirStart(t *testing.T) {
+	const disk = "machine loaded on its disk (io pressure 57%, cpu pressure 3%; load 34 on 20 cores, limit 1.5 per core)"
+	now := time.Date(2026, 10, 27, 22, 0, 0, 0, time.UTC)
+	checks := pace{limit: 3, start: 3, at: now, loadCuts: true}
+	for i := range 30 {
+		if l := checks.next(now.Add(time.Duration(i+1)*paceStep), 3, true, disk, true, 3, 6); l != 3 {
+			t.Fatalf("minute %d under disk load: %d, want its start 3", i, l)
+		}
+	}
+	checks = pace{limit: 3, start: 3, at: now, loadCuts: true}
+	at := now
+	for range 3 {
+		at = at.Add(paceStep)
+		checks.next(at, checks.limit, true, "machine under memory pressure (57.91%, limit 10%)", true, 3, 6)
+	}
+	if checks.limit != 1 {
+		t.Fatalf("under memory pressure: %d, want 1", checks.limit)
+	}
+	for range 6 {
+		at = at.Add(paceStep)
+		checks.next(at, checks.limit, true, disk, true, 3, 6)
+	}
+	if checks.limit != 3 || !strings.Contains(checks.String(), "back to the start") {
+		t.Fatalf("after disk load alone: %s, want back at its start 3", checks.String())
+	}
+	if l := checks.next(at.Add(paceStep), 3, true, "machine loaded (load 34 on 20 cores, limit 1.5 per core)", true, 3, 6); l != 2 {
+		t.Fatalf("checks under cpu load: %d, want 2", l)
+	}
+}
+
 // Driven through the check slots: a rank-0 check already waiting in a full
 // line starts next once MeasuringMain marks its sha, ahead of one that asked
 // before it (issue #1713).
