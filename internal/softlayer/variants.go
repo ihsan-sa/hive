@@ -58,8 +58,11 @@ func tools(std map[string]string) (string, error) {
 		return "", fmt.Errorf("the standard orientation has no \"## Talking to the Hive\" section")
 	}
 	var keep []string
-	for _, l := range strings.Split(o[i:], "\n") {
-		if strings.HasPrefix(l, "## ") || strings.HasPrefix(l, "Everything goes through") || strings.HasPrefix(l, "- `hive agent") {
+	for n, l := range strings.Split(o[i:], "\n") {
+		if n > 0 && strings.HasPrefix(l, "## ") {
+			break // the next section's heading, without its section
+		}
+		if n == 0 || strings.HasPrefix(l, "Everything goes through") || strings.HasPrefix(l, "- `hive agent") {
 			keep = append(keep, l)
 		}
 	}
@@ -104,6 +107,68 @@ const quiet = `## Work alone
 Work alone. Don't message other agents, don't read ` + "`hive agent status`" + ` for peers, and don't file briefs or spawn helpers. Message the lead only if you are blocked and cannot finish.
 `
 
+// OpenArm is the arm with the open space: no lead routes its work and no
+// role procedure shapes it. Its agents share one room, and the experiment
+// starts several of them at once on the same open brief (OpenBrief) instead
+// of giving the lead one task. What stays is the safety layer: the sandbox,
+// the reach rules (warden, tribunal, the person), and the merge path's
+// tests, reads and keep-or-revert, so the reviewer, warden, tribunal and
+// judge keep their standard prompts.
+const OpenArm = "open"
+
+const open = `# The Hive, open
+
+You are one of several agents in one shared space, working on one person's project on their machine. Nobody assigns you work: there is no lead routing tasks, no queue you were put in, no procedure for your role. The others started when you did, with the same words. What gets done, who does it, and how, is for you to work out together.
+
+## The room
+
+` + "`hive agent message --to room --text \"...\"`" + ` says something to every other agent in the space at once; what they say comes to you as your next prompt. ` + "`hive agent agents`" + ` lists who is here; ` + "`hive agent message --to <id>`" + ` talks to one of them.
+
+Work is shared objects: the same file, test, or failure in flight. Say in the room what you are about to take before you start, so two of you don't build the same thing, and listen for the same from the others. When you find something the others need (a cause, a flake, a file several of you touch), say it at once. Split work, pair on it, review each other, hand it over: whatever gets the most done. A reply arrives only after you end your turn, so end it when you are waiting.
+
+## What there is to do
+
+The person's goals are in ` + "`.hive/goals.md`" + `; what was tried and reverted is in ` + "`.hive/lessons.md`" + `. Read the code, the docs and the record, and find what most needs doing: there is no list. Your work lands as one pull request from your checkout: commit on your branch, then ` + "`hive agent finish`" + `. More than one PR's worth goes to a new agent: ` + "`hive agent spawn --brief \"...\"`" + ` brings one into the room.
+
+## What holds
+
+The space has few rules, and they are the safety layer. A change merges only on its tests and its reads, and one that makes the project's score worse is reverted. Everything else here, including how this space is organised, you may change.
+
+`
+
+// openRoles are the open arm's role prompts: the roles that do the work get
+// a line; the safety layer's keep the standard prompts.
+var openRoles = map[string]string{
+	"lead":   "You are one of the agents in the space. You began with the person's words; share what they asked in the room.\n",
+	"worker": "You are one of the agents in the space.\n",
+	"sweep":  "You are one of the agents in the space, looking over what the others did.\n",
+	"filer":  "You are the filer.\n",
+}
+
+// OpenTitle starts each open brief's title.
+const OpenTitle = "Open work in a shared space"
+
+// OpenBrief is the open arm's brief, the same for each of its n agents
+// (i counts from 1, so each has its own title and is filed once).
+func OpenBrief(i, n int) (title, done string) {
+	return fmt.Sprintf("%s (agent %d of %d)", OpenTitle, i, n),
+		fmt.Sprintf("You are agent %d of %d started at once in one shared space. Nobody has assigned work: find, with the others in the room (hive agent message --to room), what most needs doing for this project's goals, and get it landed.", i, n)
+}
+
+// section returns the standard orientation's "## <name>" section, heading
+// included, and fails if it isn't there.
+func section(o, name string) (string, error) {
+	i := strings.Index(o, "## "+name+"\n")
+	if i < 0 {
+		return "", fmt.Errorf("the standard orientation has no \"## %s\" section", name)
+	}
+	rest := o[i:]
+	if j := strings.Index(rest[3:], "\n## "); j >= 0 {
+		rest = rest[:j+4]
+	}
+	return strings.TrimRight(rest, "\n") + "\n", nil
+}
+
 // Variants are the arms, from the standard prompts to almost nothing.
 var Variants = []Variant{
 	{"standard", "the Hive's own agents module, unchanged: the control", func(std map[string]string, _ string) (map[string]string, error) {
@@ -139,6 +204,26 @@ var Variants = []Variant{
 	}},
 	{"philosophy", "a page of principles, no procedure, and one line per role", func(_ map[string]string, _ string) (map[string]string, error) {
 		return lines(philosophy), nil
+	}},
+	{OpenArm, "one shared room, several agents on the same open brief, no lead routing; only the safety layer as structure", func(std map[string]string, _ string) (map[string]string, error) {
+		out := clone(std)
+		text := open
+		for _, name := range []string{"Where things are", "Your reach"} {
+			sec, err := section(std["orientation"], name)
+			if err != nil {
+				return nil, err
+			}
+			text += sec + "\n"
+		}
+		t, err := tools(std)
+		if err != nil {
+			return nil, err
+		}
+		out["orientation"] = text + t
+		for r, l := range openRoles {
+			out[r] = l
+		}
+		return out, nil
 	}},
 	{"vague", "one sentence, and one line per role", func(_ map[string]string, _ string) (map[string]string, error) {
 		return lines("You are an agent in a team of agents working on a software project. Do good work.\n"), nil
