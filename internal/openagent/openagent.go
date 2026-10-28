@@ -23,6 +23,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/ihsan-sa/hive-standalone-build/internal/harness"
 )
 
 // Message is one entry of the chat, in the OpenAI shape.
@@ -399,6 +401,9 @@ func (e *httpErr) Error() string {
 // chat sends the conversation and returns the model's reply and the prompt's
 // size in tokens. A rate limit that resets within two minutes is waited out.
 func (a *Agent) chat(ctx context.Context, msgs []Message, tools []map[string]any) (Message, int, error) {
+	if err := harness.OpenRouterPaid(a.Endpoint, a.Model); err != nil {
+		return Message{}, 0, err
+	}
 	body := map[string]any{"model": a.Model, "messages": msgs, "tools": tools}
 	if a.MaxOutput > 0 {
 		body["max_tokens"] = a.MaxOutput
@@ -739,6 +744,9 @@ func clip(s string) string {
 // answering: the model is there, only busy. A model on an Anthropic-compatible
 // API (anthropic) is asked through its Messages API, as Claude Code would.
 func Probe(ctx context.Context, endpoint, model, key string, anthropic bool) error {
+	if err := harness.OpenRouterPaid(endpoint, model); err != nil {
+		return err
+	}
 	client := &http.Client{Timeout: 90 * time.Second}
 	if anthropic {
 		body, _ := json.Marshal(map[string]any{"model": model, "max_tokens": 16,

@@ -263,3 +263,47 @@ func TestMovedIsAGainBesideTheParent(t *testing.T) {
 		}
 	}
 }
+
+// A fix's dip is measured once more before it becomes the baseline (issue
+// #1788): a second reading back within tolerance was no dip, so the best
+// stands and no brief is filed; one still under it makes the better of the two
+// readings the baseline.
+func TestFixDipIsMeasuredAgain(t *testing.T) {
+	m, merge := scored(t)
+	looks := func() int {
+		return len(m.Work.List(func(x work.Task) bool { return strings.HasPrefix(x.Title, "Look into the score dip") }))
+	}
+	readings := filepath.Join(t.TempDir(), "readings")
+	// score.sh prints the first line of the readings file and drops it.
+	score := fmt.Sprintf("f=%q; head -n1 \"$f\"; tail -n +2 \"$f\" > \"$f.x\"; mv \"$f.x\" \"$f\"\n", readings)
+	os.WriteFile(readings, []byte("1\n5\n"), 0o644)
+	fix := work.Task{ID: "fix-1", Title: "Fix the merge", Aim: work.AimFix, AimWhy: "TestMerge fails"}
+	ms := merge(map[string]string{"score.sh": score, "n.txt": "x\n"}, fix)
+	// The score's file changed, so that merge starts a new baseline at 1;
+	// the next ones are measured against it.
+	if !ms.Kept || *ms.Best != 1 {
+		t.Fatalf("%+v", ms)
+	}
+	os.WriteFile(readings, []byte("9\n"), 0o644)
+	if ms := merge(map[string]string{"a.txt": "a\n"}); !ms.Kept || *ms.Best != 9 {
+		t.Fatalf("want best 9: %+v", ms)
+	}
+	// Readings in turn: the merge, main where the best was read (the load
+	// check), the merge again. The first dips, the second is back at 9.
+	os.WriteFile(readings, []byte("2\n9\n9\n"), 0o644)
+	fix.ID = "fix-2"
+	ms = merge(map[string]string{"b.txt": "b\n"}, fix)
+	if !ms.Kept || *ms.Best != 9 || !strings.Contains(ms.Note, "measured again") || looks() != 0 {
+		t.Fatalf("a dip gone on the second reading should keep the best 9 and file nothing: %+v, %d looks", ms, looks())
+	}
+	// Both readings dip: the better one is the baseline, and a brief looks.
+	os.WriteFile(readings, []byte("2\n9\n4\n"), 0o644)
+	fix.ID = "fix-3"
+	ms = merge(map[string]string{"c.txt": "c\n"}, fix)
+	if !ms.Kept || *ms.Best != 4 || !strings.Contains(ms.Note, "kept as a fix") || looks() != 1 {
+		t.Fatalf("want the fix kept at its better reading 4 with one brief: %+v, %d looks", ms, looks())
+	}
+	if b, _ := m.Best("p"); b != 4 {
+		t.Fatalf("best %v, want 4", b)
+	}
+}
