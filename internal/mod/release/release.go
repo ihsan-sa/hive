@@ -46,6 +46,14 @@ type Module struct {
 	// running ones to end (the work module), so an update never restarts
 	// mid-merge; ok false says one still runs, and resume lets merges go on.
 	PauseMerges func(wait time.Duration) (resume func(), ok bool)
+	// Gates says how many recursive gates run and since when the oldest
+	// has, and HoldGates keeps new ones from starting until a time (the
+	// work module): an automatic update waits for the running ones, since
+	// the restart ends them and up to two hours of their work.
+	Gates     func() (running int, oldest time.Time)
+	HoldGates func(until time.Time)
+	// gatesSince is when the update first waited for running gates.
+	gatesSince time.Time
 	// Canary runs the train's canary (train.go): a child Hive on the
 	// candidate against one on this release, on real work; nil can't run one,
 	// so a Hive on the train stays where it is.
@@ -361,7 +369,8 @@ func (m *Module) Update(tag string) (string, error) {
 const busy = "an update is already being checked; try again in a minute"
 
 // update installs tag, or the newest release when tag is "" or latest; on its
-// own (auto), it never crosses into a new major version past 1.0.
+// own (auto), it never crosses into a new major version past 1.0, and waits
+// for the recursive gates running (waitGates).
 func (m *Module) update(tag string, auto bool) (string, error) {
 	m.pmu.Lock()
 	m.tried = tag
@@ -393,6 +402,9 @@ func (m *Module) update(tag string, auto bool) (string, error) {
 	m.pmu.Unlock()
 	if !chosen && m.rolledBack(tag) {
 		return tag + " was rolled back after it failed to start here; `" + core.Cmd + " update " + tag + "` tries it again", nil
+	}
+	if msg := m.waitGates(tag, auto); msg != "" {
+		return msg, nil
 	}
 	tmp, err := os.MkdirTemp("", "hive-update-")
 	if err != nil {
@@ -565,6 +577,52 @@ var mergeWait = 2 * time.Minute
 // maxSkips is how many looks in a row an update waits on a merge running
 // past mergeWait before it installs anyway.
 const maxSkips = 3
+
+// gateWaitMax is the most an automatic update waits for the recursive gates
+// running when it first looked: a gate's own limit and its grace, so a run
+// that started just before ends, and a hung one doesn't keep the Hive behind.
+var gateWaitMax = 2*time.Hour + 15*time.Minute
+
+// gateHold is how long each look that waits for gates keeps new ones from
+// starting; the next look renews it, so an update gone from the channel
+// holds no gate back for long.
+const gateHold = 15 * time.Minute
+
+// waitGates says why an automatic update to tag waits, or "": while
+// recursive gates run, it waits for them to end and starts no new ones,
+// for at most gateWaitMax from its first look; then it installs anyway. A
+// restart ends every gate in flight, and before this one each pre-release
+// threw away whatever the gates running had done. `hive update` doesn't wait.
+func (m *Module) waitGates(tag string, auto bool) string {
+	n := 0
+	var oldest time.Time
+	if auto && m.Gates != nil {
+		n, oldest = m.Gates()
+	}
+	if n == 0 {
+		m.gatesSince = time.Time{}
+		return ""
+	}
+	now := time.Now().UTC()
+	first := m.gatesSince.IsZero()
+	if first {
+		m.gatesSince = now
+	}
+	by := m.gatesSince.Add(gateWaitMax)
+	text := fmt.Sprintf("%d recursive gate(s) running, the oldest since %s", n, oldest.UTC().Format("15:04Z"))
+	if !now.Before(by) {
+		m.gatesSince = time.Time{}
+		m.C.J.MustAppend("hive.update_held", map[string]any{"to": tag, "gates": n, "forced": true, "text": text + fmt.Sprintf("; waited %s, installing anyway", gateWaitMax)})
+		return ""
+	}
+	if m.HoldGates != nil {
+		m.HoldGates(now.Add(gateHold))
+	}
+	if first {
+		m.C.J.MustAppend("hive.update_held", map[string]any{"to": tag, "gates": n, "text": text + "; no new gate starts until it installs"})
+	}
+	return "waiting: " + text + "; " + tag + " installs when they end, or at " + by.Format("15:04Z") + " at the latest"
+}
 
 // restartGrace is how long merges stay paused after an update installs,
 // waiting for its restart.

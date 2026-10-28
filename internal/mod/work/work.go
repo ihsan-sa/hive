@@ -374,6 +374,9 @@ type Module struct {
 	holdPolled map[string]time.Time
 	// gating are the recursive gate runs in flight by key (selfgate.go).
 	gating map[string]*gateRun
+	// gatesHeld is when new gates may start again: an update waiting for
+	// the running ones to end holds the rest back until then (HoldGates).
+	gatesHeld time.Time
 	// gate lets an update stop new merges and wait out the running ones
 	// (PauseMerges): inMerge counts merges past the gate, paused says the
 	// gate is shut, and idle, while a pause waits, closes when the last
