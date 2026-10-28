@@ -34,7 +34,7 @@ func init() {
 func TestTimedOutCheckEndsItsChildren(t *testing.T) {
 	pidFile := filepath.Join(t.TempDir(), "child.pid")
 	env := append(os.Environ(), "HIVE_GROUP_HELPER=check", "HIVE_GROUP_PID="+pidFile)
-	if _, err := runSync([]string{os.Args[0]}, env, "", "", "", 5*time.Second); err != ErrTimeout {
+	if _, err := runSync([]string{os.Args[0]}, env, "", "", "", 5*time.Second, nil); err != ErrTimeout {
 		t.Fatalf("runSync: %v, want a timeout", err)
 	}
 	raw, err := os.ReadFile(pidFile)
