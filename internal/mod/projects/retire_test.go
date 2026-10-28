@@ -29,9 +29,10 @@ func TestBareNameGoesInTheOwnerNamed(t *testing.T) {
 	}
 }
 
-// A lead retires a project whose setup never finished: it leaves the
+// An agent retires a project whose setup never finished (one with a project,
+// only its own): it leaves the
 // registry for good, its name is free again, and its setup alert is cleared.
-func TestLeadRetiresAProjectMadeByMistake(t *testing.T) {
+func TestRetireAProjectMadeByMistake(t *testing.T) {
 	m, _ := stewardHive(t, map[string]string{})
 	if _, err := m.C.Projects.Add(core.Project{Name: "broken", Repo: "nobody/broken"}); err != nil {
 		t.Fatal(err)
@@ -39,6 +40,10 @@ func TestLeadRetiresAProjectMadeByMistake(t *testing.T) {
 	lead := core.Run{ID: "lead-x", Role: "lead"}
 	if _, err := m.opRetire(lead, json.RawMessage(`{"name":"broken"}`)); err == nil {
 		t.Fatal("retired without a why")
+	}
+	elsewhere := core.Run{ID: "w-q", Role: "worker", Project: "q"}
+	if _, err := m.opRetire(elsewhere, json.RawMessage(`{"name":"broken","why":"x"}`)); err == nil || !strings.Contains(err.Error(), "only your own") {
+		t.Fatalf("a worker on another project retired this one: %v", err)
 	}
 	if _, err := m.opRetire(lead, json.RawMessage(`{"name":"broken","why":"made in an owner the Hive can't write"}`)); err != nil {
 		t.Fatal(err)
