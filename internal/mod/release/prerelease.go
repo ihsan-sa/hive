@@ -19,8 +19,8 @@ const (
 )
 
 // Channel is the releases this install follows: the config's channel, or by
-// default pre-releases on the Hive that releases the Hive (its own project is
-// release_repo, as on H0) and the latest release everywhere else.
+// default the daily train on the Hive that releases the Hive (its own project
+// is release_repo, as on H0) and the latest release everywhere else.
 func (m *Module) Channel() string {
 	cfg := m.C.WS.LoadConfig()
 	if cfg.Channel != "" {
@@ -28,7 +28,7 @@ func (m *Module) Channel() string {
 	}
 	for _, p := range m.C.Projects.List() {
 		if p.Self && strings.EqualFold(p.Repo, cfg.ReleaseRepo) {
-			return Prerelease
+			return Train
 		}
 	}
 	return Latest
@@ -68,8 +68,9 @@ func own(gate, job, r string) bool {
 	return strings.HasPrefix(job, ownJobs[gate]+" ("+r) || alsoOwn[r][gate] != "" && job == alsoOwn[r][gate]
 }
 
-// follow runs AutoUpdate every followEvery while the Hive follows pre-releases,
-// so one that is safe here installs within minutes, not at the next schedule.
+// follow runs AutoUpdate every followEvery while the Hive follows pre-releases
+// or rides the train, so one that is safe here (or that its canary kept)
+// installs within minutes, not at the next schedule.
 func (m *Module) follow() {
 	m.pmu.Lock()
 	due := time.Since(m.followed) >= followEvery
@@ -80,7 +81,7 @@ func (m *Module) follow() {
 	if !due {
 		return
 	}
-	if cfg := m.C.WS.LoadConfig(); !cfg.AutoUpdate || cfg.ReleasePin != "" || m.Channel() != Prerelease {
+	if cfg := m.C.WS.LoadConfig(); !cfg.AutoUpdate || cfg.ReleasePin != "" || m.Channel() == Latest {
 		return
 	}
 	// An update not yet settled waits: installing over it would leave a
@@ -184,8 +185,11 @@ func (m *Module) prerelease(repo, after string) (tag string, why []string, err e
 		return "", nil, fmt.Errorf("following pre-releases reads them through the GitHub login, which failed: %w", err)
 	}
 	var tags, ahead []string // tags are the candidates; ahead counts the lag from this one
+	train := m.Channel() == Train
 	for _, r := range rels {
-		if r.Prerelease && modules.Newer(after, r.Tag) {
+		// The train's candidates are every release newer here, the latest
+		// included: it moves only on a canary's keep.
+		if (r.Prerelease || train) && modules.Newer(after, r.Tag) {
 			tags = append(tags, r.Tag)
 		}
 		if modules.Newer(core.Version, r.Tag) {
