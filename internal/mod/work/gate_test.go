@@ -146,6 +146,9 @@ func TestGateFailsOnBoth(t *testing.T) {
 	if n := alerts(m, "main-red"); n != 1 {
 		t.Fatalf("%d main-red alerts, want 1", n)
 	}
+	if _, ok := m.mainFails[p.Name]; !ok {
+		t.Fatal("main's red isn't kept, so its fix's check can't go first (checkRank)")
+	}
 	if main, _ := m.C.Effects.Sync(p); !func() bool { _, ok := m.C.Effects.GetCheck(p.Name, main, "test"); return ok }() {
 		t.Fatal("main's result isn't kept, so it would be measured again")
 	}
@@ -156,6 +159,9 @@ func TestGateFailsOnBoth(t *testing.T) {
 	}
 	if task.Stage != StageTesting || task.SHA == old || task.Reason != "" || task.Round != 0 {
 		t.Fatalf("after main went green: stage %q, sha %s (was %s), reason %q, round %d", task.Stage, task.SHA, old, task.Reason, task.Round)
+	}
+	if fails, ok := m.mainFails[p.Name]; ok {
+		t.Fatalf("main green, its failing tests still kept: %q", fails)
 	}
 	if err := testStep(m, task, p); err != nil {
 		t.Fatal(err)

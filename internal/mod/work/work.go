@@ -335,6 +335,10 @@ type Module struct {
 	// measuring counts, per project@sha, the measurements of main running
 	// now (MeasuringMain), whose checks go first (pace.go).
 	measuring map[string]int
+	// mainFails holds, per project, the tests its red main fails now, so
+	// the fix that names one has its check go first (checkRank); emptied
+	// when main's tests pass.
+	mainFails map[string][]string
 	// later is when a held task (waiting on the forge's checks or an outside
 	// read) is next looked at; kept in memory, so a restart looks at once.
 	// Guarded by mu: due reads it with mu held, hold takes mu itself.
@@ -383,7 +387,7 @@ type Module struct {
 
 // New loads tasks and registers the brief op.
 func New(c *core.Core, a *agents.Agents, ch *chat.Module) *Module {
-	m := &Module{C: c, Agents: a, Chat: ch, tasks: map[string]*Task{}, busy: map[string]bool{}, aims: map[string]aimAsk{}, steered: map[string]time.Time{}, mainRed: map[string]bool{}, sighted: map[string]bool{}, cantRunOpen: map[string]string{}, measuring: map[string]int{}, later: map[string]time.Time{}, prPolled: map[string]time.Time{}, holds: map[string]*MergeHold{}, holdPolled: map[string]time.Time{}, refusedAsked: map[string]time.Time{}}
+	m := &Module{C: c, Agents: a, Chat: ch, tasks: map[string]*Task{}, busy: map[string]bool{}, aims: map[string]aimAsk{}, steered: map[string]time.Time{}, mainRed: map[string]bool{}, sighted: map[string]bool{}, cantRunOpen: map[string]string{}, measuring: map[string]int{}, mainFails: map[string][]string{}, later: map[string]time.Time{}, prPolled: map[string]time.Time{}, holds: map[string]*MergeHold{}, holdPolled: map[string]time.Time{}, refusedAsked: map[string]time.Time{}}
 	m.checks.loadCuts, m.gates.loadCuts = true, true // their builds and child Hives make the load
 	apply := func(e core.Event) {
 		if e.Kind == "merge.held" || e.Kind == "merge.lifted" {
@@ -438,7 +442,7 @@ func New(c *core.Core, a *agents.Agents, ch *chat.Module) *Module {
 	c.Person.Handle("gate", m.onPersonGate)
 	c.Effects.MergeHeld = m.MergeHeld
 	c.Effects.Slots.Resize(m.checkSlots)
-	c.Effects.Slots.Prioritize(m.checkRank, rankMain)
+	c.Effects.Slots.Prioritize(m.checkRank, rankRedFix)
 	return m
 }
 
@@ -1886,6 +1890,11 @@ func (m *Module) test(t *Task, p core.Project) error {
 		if mc.CantRun != "" {
 			return m.cantRun(t, p, mc)
 		}
+		m.mu.Lock()
+		if m.mainFails[p.Name] = mc.Failed; mc.OK {
+			delete(m.mainFails, p.Name)
+		}
+		m.mu.Unlock()
 		switch {
 		case !mc.OK && !core.NoWorse(c, mc):
 			return m.waitOnMain(t, p, main, mc)
