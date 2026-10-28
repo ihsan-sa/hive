@@ -378,7 +378,7 @@ func (m *Module) withdrawUnsighted(q []Flake) {
 	if len(unsighted) == 0 {
 		return
 	}
-	settled := []string{work.StageStopped, work.StageDone, work.StageMerged, work.StageMerging, work.StageReverting}
+	settled := []string{work.StageStopped, work.StageDone, work.StageMerged, work.StageMerging, work.StageReverting, work.StageRecording}
 	held := map[string]bool{}
 	for _, f := range q {
 		held[flakeKey(f.Project, f.Test)] = true
