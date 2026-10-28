@@ -95,6 +95,10 @@ type Task struct {
 	// head that contains it resolved that conflict, so the next is main
 	// moving again and the count starts over: only unresolved ones add up.
 	ConflictMain string `json:"conflict_main,omitempty"`
+	// Resend is what a conflict with main sends the worker back with, held
+	// until the pace has room for it: one main merge once made about 22 open
+	// PRs conflict, and reopening every worker at once ran 19 at a pace of 1.
+	Resend string `json:"resend,omitempty"`
 	// UnknownSince is when the forge first couldn't say whether the PR
 	// merges cleanly; cleared once it can.
 	UnknownSince time.Time `json:"unknown_since,omitempty"`
@@ -325,9 +329,13 @@ type Module struct {
 	// workers, checks and gates are the limits the pace sets (pace.go,
 	// selfgate.go).
 	workers, checks, gates pace
-	filing                 sync.Mutex     // one agent's brief is matched and filed at a time (join.go)
-	meeting                sync.Mutex     // one started worker meets its neighbours at a time (meet.go)
-	steps                  sync.WaitGroup // the steps Tick started, and the checks they queued, still going
+	// backMu guards backIn: the workers sent back to their tasks that the
+	// pace has let take their next turn (paceBack).
+	backMu  sync.Mutex
+	backIn  map[string]bool
+	filing  sync.Mutex     // one agent's brief is matched and filed at a time (join.go)
+	meeting sync.Mutex     // one started worker meets its neighbours at a time (meet.go)
+	steps   sync.WaitGroup // the steps Tick started, and the checks they queued, still going
 	// mainRed holds project@sha for every main commit whose red tests were
 	// already raised, so each is raised once whatever the tasks say now. It
 	// grows by one key per red main commit and isn't pruned; that's small.
@@ -341,6 +349,10 @@ type Module struct {
 	// measuring counts, per project@sha, the measurements of main running
 	// now (MeasuringMain), whose checks go first (pace.go).
 	measuring map[string]int
+	// mainFails holds, per project, the tests its red main fails now, so
+	// the fix that names one has its check go first (checkRank); emptied
+	// when main's tests pass.
+	mainFails map[string][]string
 	// later is when a held task (waiting on the forge's checks or an outside
 	// read) is next looked at; kept in memory, so a restart looks at once.
 	// Guarded by mu: due reads it with mu held, hold takes mu itself.
@@ -392,8 +404,10 @@ type Module struct {
 
 // New loads tasks and registers the brief op.
 func New(c *core.Core, a *agents.Agents, ch *chat.Module) *Module {
-	m := &Module{C: c, Agents: a, Chat: ch, tasks: map[string]*Task{}, busy: map[string]bool{}, aims: map[string]aimAsk{}, steered: map[string]time.Time{}, mainRed: map[string]bool{}, sighted: map[string]bool{}, cantRunOpen: map[string]string{}, measuring: map[string]int{}, later: map[string]time.Time{}, prPolled: map[string]time.Time{}, holds: map[string]*MergeHold{}, holdPolled: map[string]time.Time{}, refusedAsked: map[string]time.Time{}}
+	m := &Module{C: c, Agents: a, Chat: ch, tasks: map[string]*Task{}, busy: map[string]bool{}, aims: map[string]aimAsk{}, steered: map[string]time.Time{}, mainRed: map[string]bool{}, sighted: map[string]bool{}, cantRunOpen: map[string]string{}, measuring: map[string]int{}, mainFails: map[string][]string{}, later: map[string]time.Time{}, prPolled: map[string]time.Time{}, holds: map[string]*MergeHold{}, holdPolled: map[string]time.Time{}, refusedAsked: map[string]time.Time{}}
 	m.checks.loadCuts, m.gates.loadCuts = true, true // their builds and child Hives make the load
+	m.backIn = map[string]bool{}
+	c.Runs.Admit = m.paceBack
 	apply := func(e core.Event) {
 		if e.Kind == "merge.held" || e.Kind == "merge.lifted" {
 			m.applyHold(e)
@@ -447,7 +461,7 @@ func New(c *core.Core, a *agents.Agents, ch *chat.Module) *Module {
 	c.Person.Handle("gate", m.onPersonGate)
 	c.Effects.MergeHeld = m.MergeHeld
 	c.Effects.Slots.Resize(m.checkSlots)
-	c.Effects.Slots.Prioritize(m.checkRank, rankMain)
+	c.Effects.Slots.Prioritize(m.checkRank, rankRedFix)
 	m.wrapFinish()
 	return m
 }
@@ -471,6 +485,9 @@ func (m *Module) overtaken(t *Task) bool {
 // store saves t, or, when t is a copy from before the task was steered and
 // this save isn't a steer itself, drops it, reporting whether it saved.
 func (m *Module) store(t *Task, note string, steer bool) bool {
+	if t.Stage != StageWorking { // stopped, blocked or moved on: a conflict held for the pace no longer goes
+		t.Resend = ""
+	}
 	now := time.Now().UTC()
 	loaded := t.Updated // when the copy was last saved, before it is stamped now
 	// Windows' clock ticks coarsely, so a save in the tick GitHub came back
@@ -902,7 +919,7 @@ func (m *Module) Tick() {
 			continue
 		}
 		m.mu.Lock()
-		if !m.due(t) || m.busy[t.ID] || !m.fresh(t) || (t.Queued() && !start[t.ID]) {
+		if !m.due(t) || m.busy[t.ID] || !m.fresh(t) || ((t.Queued() || t.Resending()) && !start[t.ID]) {
 			m.mu.Unlock()
 			continue
 		}
@@ -970,7 +987,7 @@ func (m *Module) reapStuck() {
 // live figures after " (" change every tick, so only a new kind is saved.
 func (m *Module) waits(t Task, why string) {
 	kind, _, _ := strings.Cut(why, " (")
-	if t.Stage == StageQueued && (t.Reason == why || strings.HasPrefix(why, "waiting: machine") && strings.HasPrefix(t.Reason, kind+" (")) {
+	if (t.Stage == StageQueued || t.Resending()) && (t.Reason == why || strings.HasPrefix(why, "waiting: machine") && strings.HasPrefix(t.Reason, kind+" (")) {
 		return
 	}
 	m.mu.Lock()
@@ -980,7 +997,10 @@ func (m *Module) waits(t Task, why string) {
 	}
 	m.busy[t.ID] = true
 	m.mu.Unlock()
-	t.Stage, t.Reason = StageQueued, why
+	if !t.Resending() { // a worker held back from a conflict stays its own
+		t.Stage = StageQueued
+	}
+	t.Reason = why
 	m.save(&t, "")
 	m.mu.Lock()
 	delete(m.busy, t.ID)
@@ -1311,6 +1331,9 @@ func (m *Module) step(t *Task) error {
 	case StageQueued, StageIssued:
 		return m.startWorker(t, p)
 	case StageWorking:
+		if t.Resend != "" {
+			return m.resend(t)
+		}
 		return m.checkWorker(t, p)
 	case StageLanding:
 		return m.land(t, p)
@@ -1852,7 +1875,7 @@ func (m *Module) test(t *Task, p core.Project) error {
 		return err
 	}
 	cfg := m.C.Effects.Config(p, main)
-	c, ok, err := m.headTest(t, p, cfg.Test)
+	c, ok, err := m.headTest(t, p, main, cfg.Test)
 	if !ok || err != nil {
 		return err // queued or running behind the step: it waits in testing
 	}
@@ -1903,6 +1926,11 @@ func (m *Module) test(t *Task, p core.Project) error {
 		if mc.CantRun != "" {
 			return m.cantRun(t, p, mc)
 		}
+		m.mu.Lock()
+		if m.mainFails[p.Name] = mc.Failed; mc.OK {
+			delete(m.mainFails, p.Name)
+		}
+		m.mu.Unlock()
 		switch {
 		case !mc.OK && !core.NoWorse(c, mc):
 			return m.waitOnMain(t, p, main, mc)
@@ -2112,6 +2140,7 @@ func (m *Module) failsAgain(p core.Project, sha, command string, c core.Check) b
 // on main waits on it, so its checks go ahead of the line.
 func (m *Module) mainTests(p core.Project, main, command string) (core.Check, error) {
 	c, ok := m.C.Effects.GetCheck(p.Name, main, "test")
+	ok = ok && c.Scope == nil // main's own answer is its whole run
 	if !ok || !c.OK && c.CantRun == "" && m.Retest != nil {
 		defer m.MeasuringMain(p.Name, main)()
 	}
@@ -2484,6 +2513,9 @@ func (m *Module) merge(t *Task, p core.Project) error {
 		return err
 	}
 	if wait, err := m.upToDate(t, p, main, pr); wait || err != nil {
+		return err
+	}
+	if wait, err := m.publishScan(t, p, main); wait || err != nil {
 		return err
 	}
 	// The security read first: it takes longest, so its line goes on the PR
@@ -3826,10 +3858,22 @@ func (m *Module) conflict(t *Task, p core.Project, head string, why error) error
 			strings.Join(g.files, "\n- ") + "\n\nFetch main with " + fetchMain + ", merge FETCH_HEAD, resolve the conflicts, run the tests, commit, and finish again."
 	}
 	msg += m.movedBy(p, cmp.Or(head, t.SHA), t.ConflictMain)
-	if err := m.C.Runs.Reopen(t.Worker, msg); err != nil {
+	t.Stage, t.Resend = StageWorking, msg
+	m.save(t, "conflict with main: goes back to the worker when the pace has room")
+	return nil
+}
+
+// Resending reports whether t waits for the pace to send its worker back
+// to merge main (conflict).
+func (t Task) Resending() bool { return t.Stage == StageWorking && t.Resend != "" }
+
+// resend sends t's worker back with the conflict it was held for, now the
+// queue has let it go.
+func (m *Module) resend(t *Task) error {
+	if err := m.C.Runs.Reopen(t.Worker, t.Resend); err != nil {
 		return err
 	}
-	t.Stage = StageWorking
+	t.Resend, t.Reason = "", ""
 	m.save(t, "conflict with main sent back to the worker")
 	return nil
 }

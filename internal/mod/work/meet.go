@@ -54,7 +54,8 @@ func (m *Module) briefFiles(t Task) []string {
 	return out
 }
 
-// neighbours are the tasks working now on t's project, quiet ones aside,
+// neighbours are the tasks working now on t's project, quiet ones and
+// ones waiting to be sent back with main aside,
 // whose briefs name a file t's brief names.
 func (m *Module) neighbours(t Task) []neighbour {
 	mine := m.briefFiles(t)
@@ -63,7 +64,7 @@ func (m *Module) neighbours(t Task) []neighbour {
 	}
 	var out []neighbour
 	for _, o := range m.List(func(o Task) bool {
-		return o.ID != t.ID && o.Project == t.Project && o.Stage == StageWorking && o.Worker != "" && o.Worker != t.Worker
+		return o.ID != t.ID && o.Project == t.Project && o.Stage == StageWorking && !o.Resending() && o.Worker != "" && o.Worker != t.Worker
 	}) {
 		if m.quiet(o) {
 			continue // a message would wake it for nothing

@@ -360,6 +360,42 @@ func TestCheckRankFixes(t *testing.T) {
 	}
 }
 
+// While main is red, the fix whose brief names one of its failing tests goes
+// ahead of every other fix, though behind main's own measurement; once main
+// passes it is one fix among the rest (issue #1877).
+func TestCheckRankRedMainFix(t *testing.T) {
+	m, _, _ := helperRig(t)
+	m.mu.Lock()
+	m.tasks["red"] = &Task{ID: "red", Project: "p", SHA: "s1", Stage: StageTesting, Aim: AimFix, Title: "Fix the flaky example.com/x/internal/core::TestStaleModuleCacheRunsAgain"}
+	m.tasks["why"] = &Task{ID: "why", Project: "p", SHA: "s2", Stage: StageTesting, Aim: AimFix, AimWhy: "TestMerge fails on main"}
+	m.tasks["fix"] = &Task{ID: "fix", Project: "p", SHA: "s3", Stage: StageTesting, Aim: AimFix, Title: "TestStaleModuleCacheRunsAgainSlowly fails"}
+	m.tasks["gain"] = &Task{ID: "gain", Project: "p", SHA: "s4", Stage: StageTesting, Known: "TestMerge"}
+	m.mainFails["p"] = []string{"TestStaleModuleCacheRunsAgain", "TestMerge/sub_case"}
+	m.mu.Unlock()
+	for sha, want := range map[string]int{"s1": rankRedFix, "s2": rankRedFix, "s3": rankFix, "s4": 0} {
+		if got := m.checkRank("p", sha, "test"); got != want {
+			t.Errorf("while main is red, rank of %s: %d, want %d", sha, got, want)
+		}
+	}
+	if got := m.checkRank("other", "s1", "test"); got != 0 {
+		t.Errorf("another project's sha ranked %d", got)
+	}
+	done := m.MeasuringMain("p", "main1")
+	if m.checkRank("p", "main1", "test") <= m.checkRank("p", "s1", "test") {
+		t.Error("the red main's fix ranks with main's own measurement")
+	}
+	done()
+	m.mu.Lock()
+	delete(m.mainFails, "p")
+	m.mu.Unlock()
+	if got := m.checkRank("p", "s1", "test"); got != rankFix {
+		t.Errorf("main green: the fix ranked %d", got)
+	}
+	if RankWhy(rankRedFix) != "fixes red main" || RankWhy(rankMain) != "measures main" || RankWhy(rankFix) != "a fix" {
+		t.Error("RankWhy doesn't tell the ranks apart")
+	}
+}
+
 // Main's own measurement goes ahead of every task's check while it runs,
 // and keeps its place once done (issue #1078).
 func TestCheckRankMainFirst(t *testing.T) {
@@ -709,5 +745,61 @@ func TestMainTestsRetestRanksAsMain(t *testing.T) {
 	}
 	if got := m.checkRank(p.Name, main, "test"); got != 0 {
 		t.Fatalf("answered: still ranked %d", got)
+	}
+}
+
+// A worker sent back to its task (here a conflict with main) takes its next
+// turn under the workers' pace like a brief that starts: on 10-28 a merge
+// sent 22 PRs back at once past it, and 19 workers ran while it said 1. The
+// ones waiting go ahead of new briefs, and go as slots free.
+func TestSentBackWorkersWaitOnThePace(t *testing.T) {
+	m := queueRig(t)
+	cfg := m.C.WS.LoadConfig()
+	cfg.MaxWorkers = 0
+	cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax, cfg.LoadMax = 0, 0, 0, 0
+	m.C.WS.SaveConfig(cfg)
+	set := func(l int) {
+		m.workers.mu.Lock()
+		m.workers.limit, m.workers.start, m.workers.at = l, defaultWorkers, time.Now()
+		m.workers.mu.Unlock()
+	}
+	set(2)
+	a := file(t, m, "first", "")
+	b := file(t, m, "second", "")
+	tick(m)
+	set(1) // the pace pulled back meanwhile
+	var runs []core.Run
+	for _, task := range []Task{a, b} {
+		got := stageOf(t, m, task)
+		if got.Stage != StageWorking || got.Worker == "" {
+			t.Fatalf("%q: stage %q worker %q", task.Title, got.Stage, got.Worker)
+		}
+		m.C.Runs.SetStatus(got.Worker, core.StatusDone, "finished")
+		if err := m.C.Runs.Reopen(got.Worker, "Main moved and your branch conflicts with it."); err != nil {
+			t.Fatal(err)
+		}
+		r, _ := m.C.Runs.Get(got.Worker)
+		runs = append(runs, r)
+	}
+	if m.C.Runs.Admit == nil {
+		t.Fatal("the work module doesn't pace core's launches")
+	}
+	if why := m.C.Runs.Admit(runs[0]); why != "" {
+		t.Fatalf("the first sent back, with no worker at work: %q, want it let through", why)
+	}
+	if why := m.C.Runs.Admit(runs[1]); !strings.Contains(why, "at the pace") {
+		t.Fatalf("the second sent back at a pace of 1: %q, want it waiting", why)
+	}
+	if why := m.C.Runs.Admit(runs[0]); why != "" {
+		t.Fatalf("the first again, already let through: %q", why)
+	}
+	c := file(t, m, "third", "")
+	tick(m)
+	if got := stageOf(t, m, c); got.Stage != StageQueued {
+		t.Fatalf("a new brief with a worker sent back waiting: stage %q, want queued behind it", got.Stage)
+	}
+	set(2)
+	if why := m.C.Runs.Admit(runs[1]); why != "" {
+		t.Fatalf("the second at a pace of 2: %q, want it let through", why)
 	}
 }
