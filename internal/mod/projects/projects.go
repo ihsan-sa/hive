@@ -15,6 +15,7 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 	"github.com/ihsan-sa/hive-standalone-build/internal/demo"
 	"github.com/ihsan-sa/hive-standalone-build/internal/harness"
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/budget"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/chat"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/improve"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/work"
@@ -26,6 +27,7 @@ type Module struct {
 	Chat    *chat.Module
 	Work    *work.Module
 	Improve *improve.Module
+	Budget  *budget.Module // the turns' memory budget, for the status op's turns line; nil leaves it out
 
 	mu      sync.Mutex // one project setup at a time
 	retry   map[string]time.Time
@@ -457,12 +459,15 @@ func (m *Module) Status(r core.Run) map[string]any {
 	cfg := m.C.WS.LoadConfig()
 	running, waitingChecks := m.C.Effects.Slots.State()
 	pace := m.Work.Pace()
-	return map[string]any{"projects": ps, "waiting_on_person": waiting, "config": View(cfg),
+	out := map[string]any{"projects": ps, "waiting_on_person": waiting, "config": View(cfg),
 		"queue":   m.Work.Queue(r), // briefs waiting for a worker, in the order they start; the queue op reorders or holds them
 		"checks":  fmt.Sprintf("%d running, %d waiting (at once: %s; max_checks %d, 0 is no ceiling)%s", len(running), len(waitingChecks), pace["checks"], cfg.MaxChecks, checkLine(waitingChecks)),
 		"workers": fmt.Sprintf("at once: %s; max_workers %d, 0 is no ceiling", pace["workers"], cfg.MaxWorkers),
-		"turns":   "every role's turns against the memory budget: " + m.C.Runs.Budget(cfg).String(),
 		"gates":   fmt.Sprintf("recursive gates at once: %s; max_gates %d, 0 is one per 6 cores", pace["gates"], cfg.MaxGates)}
+	if m.Budget != nil {
+		out["turns"] = "every role's turns against the memory budget: " + m.Budget.State(cfg).String()
+	}
+	return out
 }
 
 // checkLine names the waiting checks in the order they start, each ranked

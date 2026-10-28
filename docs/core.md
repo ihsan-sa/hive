@@ -21,7 +21,7 @@ So the core is the skeleton and nothing else. **New functionality goes into a mo
 | The module seam: how the core gains functionality (the registry and tick list, agent ops, the person's answers, scheduled jobs, module programs, an executor module handed a strained turn's spec, a module's own `hive <name>` command) | `internal/mod/modules`, `internal/mod/runner`, `Ops().Register`, `Person.Handle`, `Runs.Executor` and `sandbox.Delegate` |
 | The host process and its wiring: the daemon, its control API, the entry point | `internal/daemon`, `internal/api`, `internal/app`, `cmd/hive` |
 
-The memory budget (`internal/core/budget.go`, [priority.md](priority.md#one-memory-budget-across-every-role)) is core for the same reason as the strain hold beside it: only launch sees every role's turn, reopened and resumed ones included, at the moment it starts; a module's pace sees only the runs it starts itself.
+The admission hook (`Runs.Admit`) is core for the same reason as the executor hook: only launch sees every role's turn, reopened and resumed ones included, at the moment it starts. What it admits (the memory budget, ranks, the few at a time) is the budget module's (`internal/mod/budget`, [priority.md](priority.md#one-memory-budget-across-every-role)).
 
 The executor hook is core because only launch knows a turn's spec and when the machine holds it; what runs the turn elsewhere (hive-dispatch's SSH runners) is the module's. `hive <name>` is the seam step 4 below asks for, for module programs.
 

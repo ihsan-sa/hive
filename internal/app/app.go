@@ -13,6 +13,7 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 	"github.com/ihsan-sa/hive-standalone-build/internal/gate"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/agents"
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/budget"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/chat"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/feedback"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/forgeread"
@@ -46,6 +47,7 @@ type App struct {
 	Projects *projects.Module
 	Release  *release.Module
 	Runner   *runner.Runner
+	Budget   *budget.Module
 	Feedback *feedback.Module
 	Models   *models.Module
 	Stats    *stats.Tally
@@ -92,7 +94,9 @@ func New(ws core.Workspace, forge core.Forge) (*App, error) {
 	a.Improve.OnKept = a.Release.AfterKept
 	a.Runner = &runner.Runner{C: c, Mods: a.Mods, Agents: a.Agents}
 	c.Runs.Executor = a.Runner.Executor
-	for _, tick := range []func(){stats.SpendNotice{C: c}.Tick, a.Work.Tick, a.Improve.Tick, a.Improve.TickSweeps, a.Improve.TickStepBacks, a.KB.Tick, a.System.Tick, a.Release.Tick, a.Risk.Tick, a.Projects.Tick, a.moduleJobs, a.Runner.Tick, a.Models.Tick} {
+	a.Budget = budget.New(c)
+	a.Projects.Budget = a.Budget
+	for _, tick := range []func(){stats.SpendNotice{C: c}.Tick, a.Work.Tick, a.Improve.Tick, a.Improve.TickSweeps, a.Improve.TickStepBacks, a.KB.Tick, a.System.Tick, a.Release.Tick, a.Risk.Tick, a.Projects.Tick, a.moduleJobs, a.Runner.Tick, a.Models.Tick, a.Budget.Tick} {
 		a.Mods.Builtin(tick)
 	}
 	c.Person.Handle("release", a.Release.OnPerson)

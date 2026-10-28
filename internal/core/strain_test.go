@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -495,5 +496,43 @@ func TestStrainedCappedElsewhere(t *testing.T) {
 		if (got != "") != c.held {
 			t.Errorf("%s: %q, want held %v", c.name, got, c.held)
 		}
+	}
+}
+
+// Every turn but a lead's asks Admit before it starts, with the turns live
+// here: with the budget full a sweep waits while a lead's turn starts, and
+// the lead's live turn is among those the next ask counts (issue #1849).
+func TestAdmitAsksForAllButLeads(t *testing.T) {
+	c, _ := testHive(t)
+	cfg := c.WS.LoadConfig()
+	t.Cleanup(func() { endTurns(t, c, cfg) })
+	asked := map[string][]string{}
+	c.Runs.Admit = func(r Run, live []Run, _ Config) string {
+		for _, l := range live {
+			asked[r.ID] = append(asked[r.ID], l.ID)
+		}
+		if r.Role == "sweep" {
+			return "waiting: the Hive's memory budget is full (test)"
+		}
+		return ""
+	}
+	for _, s := range []RunSpec{{ID: "lead", Role: "lead", Harness: "fake", Persistent: true}, {ID: "sweep", Role: "sweep", Harness: "fake"}, {ID: "w", Role: "worker", Harness: "fake"}} {
+		if _, err := c.Runs.Start(s); err != nil {
+			t.Fatal(err)
+		}
+		r, _ := c.Runs.Get(s.ID)
+		c.Runs.launch(r, cfg)
+	}
+	if l, _ := c.Runs.Get("lead"); l.Status != StatusRunning {
+		t.Errorf("lead: %s %q, want its turn running", l.Status, l.Reason)
+	}
+	if _, ok := asked["lead"]; ok {
+		t.Error("a lead's turn asked the budget")
+	}
+	if s, _ := c.Runs.Get("sweep"); s.Status == StatusRunning || !strings.HasPrefix(s.Reason, "waiting: the Hive's memory budget is full") {
+		t.Errorf("sweep: %s %q, want it waiting on the budget", s.Status, s.Reason)
+	}
+	if w, _ := c.Runs.Get("w"); w.Status != StatusRunning || !slices.Contains(asked["w"], "lead") {
+		t.Errorf("worker: %s, asked with %v live, want it running with the lead counted", w.Status, asked["w"])
 	}
 }

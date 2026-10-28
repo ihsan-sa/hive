@@ -463,6 +463,12 @@ type Runs struct {
 	// module that runs it elsewhere: the sandbox to start it in and the
 	// runner that has room, or nil when no module has room now.
 	Executor func() (sandbox.Sandbox, string)
+	// Admit, a module's, says why a turn other than a lead's that would
+	// start on this machine waits, or "" to start it, given the runs whose
+	// turns are live or starting here. It is asked under the runs' lock, so
+	// two launches are never both let into the last room, and so must not
+	// call back into Runs; nil starts every turn.
+	Admit func(r Run, live []Run, cfg Config) string
 
 	mu      sync.Mutex
 	runs    map[string]*Run
@@ -492,7 +498,6 @@ type Runs struct {
 	backedOff                map[string]int  // the turn each run last backed off from for another daemon's claim, said once
 	turnLive                 map[string]int  // the turn each run last waited on its own last turn for, said once
 	waking                   sync.Mutex      // one wake at a time, so a run is woken once
-	budget                   budget          // the memory budget every turn counts against (budget.go)
 }
 
 // Hold keeps new turns from starting, saying why; "" lets them start again.
@@ -523,6 +528,18 @@ func (rs *Runs) Holds() []string {
 		why = append(why, rs.holds[w])
 	}
 	return why
+}
+
+// liveHere is the runs whose turns are running on this machine (not an
+// executor's) or starting. rs.mu is held.
+func (rs *Runs) liveHere() []Run {
+	var out []Run
+	for id, r := range rs.runs {
+		if r.Status == StatusRunning && r.Where == "" || rs.starting[id] {
+			out = append(out, *r)
+		}
+	}
+	return out
 }
 
 // Live counts the turns whose process is running, and those starting.
@@ -1600,7 +1617,6 @@ func (rs *Runs) Interrupt(id string) bool {
 // meanwhile may have stepped them already.
 func (rs *Runs) Tick(cfg Config) {
 	rs.tickDown(cfg)
-	go rs.sampleTurns(time.Now())
 	live := rs.List(func(r *Run) bool { return r.Lead() && (!r.Terminal() || r.Status == StatusRunning) })
 	slices.SortStableFunc(live, func(a, b Run) int { return a.Nice() - b.Nice() })
 	var wg sync.WaitGroup
@@ -2257,22 +2273,21 @@ func (rs *Runs) launch(r Run, cfg Config) {
 	delete(rs.deferred, r.ID)
 	rs.mu.Unlock()
 	// A turn this machine is too strained for goes to an executor module
-	// with room, or waits; one that starts here counts against the memory
-	// budget (budget.go), which a lead's never waits on.
+	// with room, or waits; one that would start here asks Admit (a lead's
+	// never does).
 	var elsewhere sandbox.Sandbox
 	where := ""
 	why := Strained(floor, memMax, cpuMax)
 	if why != "" {
 		elsewhere, where = rs.executor()
 	}
-	mem := readMem(cfg)
 	rs.mu.Lock()
 	if cur := rs.runs[r.ID]; len(rs.holds) > 0 || cur == nil || cur.Status == StatusRunning || cur.Status != r.Status || cur.Turn != r.Turn || rs.starting[r.ID] {
 		rs.mu.Unlock()
 		return
 	}
-	if why == "" {
-		why = rs.admit(r, cfg, mem, time.Now())
+	if why == "" && !r.Lead() && rs.Admit != nil {
+		why = rs.Admit(r, rs.liveHere(), cfg)
 	} else if elsewhere != nil {
 		why = ""
 	}
@@ -2456,7 +2471,6 @@ func (rs *Runs) launch(r Run, cfg Config) {
 		return
 	}
 	started = true
-	rs.started(r)
 	rs.claimed(r.ID, turn, p)
 	rs.append("run.turn_started", turnStarted{ID: r.ID, Session: session, Turn: turn, Proc: p, Delivered: delivered, Resume: resume, Login: login.Key(), Model: r.Model, Harness: r.Harness, Where: where})
 }

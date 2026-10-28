@@ -143,7 +143,7 @@ type Config struct {
 	MemPressureMax float64 `json:"mem_pressure_max"`
 	CPUPressureMax float64 `json:"cpu_pressure_max"`
 	// MemBudgetMB is the Hive's memory share: every agent turn, of any role,
-	// counts against it less MemFloorMB, at TurnMB a turn (core/budget.go).
+	// counts against it less MemFloorMB, at TurnMB a turn (internal/mod/budget).
 	// 0 reads the daemon's cgroup memory.high or memory.max, else MemTotal;
 	// a TurnMB of 0 is learned from the turns' RSS, starting at 250.
 	MemBudgetMB int `json:"mem_budget_mb,omitempty"`

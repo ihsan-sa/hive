@@ -1105,8 +1105,7 @@ func (s *server) state() api.State {
 	st.Checks.Running, st.Checks.Waiting = a.C.Effects.Slots.State()
 	pace := a.Work.Pace()
 	st.Checks.Limit, st.Workers = pace["checks"], pace["workers"]
-	tb := a.C.Runs.Budget(cfg)
-	st.Turns = &tb
+	st.Turns = a.Budget.State(cfg).Short()
 	st.Disk = a.C.Effects.Disk()
 	for _, m := range a.Mods.List() {
 		st.Modules = append(st.Modules, api.ModuleView{Name: m.Name, Description: m.Description, Source: m.Source.Source, Release: m.Source.Release, Projects: m.Source.Projects,
