@@ -552,11 +552,16 @@ func (e *Effects) RunCheck(p Project, sha, kind, command string) Check {
 	// A check the line here would make wait goes to a runner with room, now
 	// or while it waits.
 	away, where := e.elsewhere(p, sha, kind)
-	if away == nil {
+	if away != nil {
+		e.took(away, true)
+	} else {
 		release, ok, left := e.Slots.TakeOr(p.Name, sha, kind, func() bool {
 			away, where = e.elsewhere(p, sha, kind)
 			return away != nil
 		}, checkLeaveEvery)
+		if away != nil {
+			e.took(away, left) // spent only by a check that left the line
+		}
 		if !left {
 			away = nil // it took a slot here as the runner answered
 		}
@@ -566,8 +571,11 @@ func (e *Effects) RunCheck(p Project, sha, kind, command string) Check {
 		}
 		defer release()
 	}
+	script := guardProgram(command)
+	nonce := NewID()[14:]
 	if away != nil {
 		sb, c.Where = away, where
+		script = exitMarked(script, nonce)
 	}
 	dir, err := e.cleanCheckout(p, sha, kind)
 	if err != nil {
@@ -591,9 +599,21 @@ func (e *Effects) RunCheck(p Project, sha, kind, command string) Check {
 		}
 		var disk sandbox.Disk
 		defer func() { c.DiskRead, c.DiskWrote = c.DiskRead+disk.Read, c.DiskWrote+disk.Wrote }()
-		return e.runSandboxed(sb, p.Name, id, ms, guardProgram(command), true, 30*time.Minute, env, e.checkCacheCap(), &disk)
+		return e.runSandboxed(sb, p.Name, id, ms, script, true, 30*time.Minute, env, e.checkCacheCap(), &disk)
 	}
 	code, out, err := run(true)
+	if away != nil && err == nil {
+		// The verdict elsewhere is the exit the command itself printed, never
+		// the module's own: a module that exits 0 without running it can't
+		// make a check green.
+		got, ok := markedExit(out, nonce)
+		if !ok {
+			c.Output = out
+			c.CantRun = fmt.Sprintf("can't run: %s gave back no exit for the check (the module exited %d)", where, code)
+			return record()
+		}
+		code = got
+	}
 	if len(build.mounts) > 0 && code != 0 && strings.Contains(out, "GOCACHEPROG") {
 		// The build cache's program failed, not the commit: run once
 		// without the shared build cache.
@@ -691,25 +711,52 @@ func (e *Effects) RunCheck(p Project, sha, kind, command string) Check {
 	return record()
 }
 
-// elsewhere returns an executor module with room for a check of sha the
-// check line here would make wait (the pace has pulled checks back, or every
-// slot is taken), and the runner it named; nil when the check runs here. Only
-// a test check of a commit off main's line goes: main's own write the shared
-// build cache the rest read, and a check granted a service on this machine
-// can't leave it.
+// elsewhere returns an executor module that takes checks and has room for a
+// check of sha the check line here would make wait (the pace has pulled
+// checks back, or every slot is taken), and the runner it named; nil when the
+// check runs here. Only a test check of a commit off main's line goes: main's
+// own write the shared build cache the rest read, and a check granted a
+// service on this machine can't leave it. One it returns holds awayMu until
+// took, so one room answer goes to one check.
 func (e *Effects) elsewhere(p Project, sha, kind string) (sandbox.Sandbox, string) {
 	if e.runs == nil || kind != "test" && kind != "retest" || len(e.ws.LoadConfig().Egress.LocalAddrs()) > 0 ||
 		!e.Slots.Busy() || e.MainLine(p)[sha] {
 		return nil, ""
 	}
-	e.awayMu.Lock() // one room answer, one check: the next asks again
-	defer e.awayMu.Unlock()
-	sb, where := e.runs.executor()
-	if d, ok := sb.(*sandbox.Delegate); ok && d.Started != nil {
+	e.awayMu.Lock()
+	sb, where := e.runs.checkExecutor()
+	if sb == nil {
+		e.awayMu.Unlock()
+	}
+	return sb, where
+}
+
+// took ends what elsewhere began for sb: the room answer is spent if the
+// check went, so the next asks again.
+func (e *Effects) took(sb sandbox.Sandbox, went bool) {
+	if d, ok := sb.(*sandbox.Delegate); ok && went && d.Started != nil {
 		d.Started()
 		d.Started = nil
 	}
-	return sb, where
+	e.awayMu.Unlock()
+}
+
+// exitMarked wraps a check's script so it prints its own exit, with nonce,
+// as its last line of output.
+func exitMarked(script, nonce string) string {
+	return "(\n" + script + "\n); s=$?; printf '\\nhive-check-exit " + nonce + " %d\\n' \"$s\"; exit \"$s\""
+}
+
+// markedExit reads the exit exitMarked printed, if it is there.
+func markedExit(out, nonce string) (int, bool) {
+	tag := "hive-check-exit " + nonce + " "
+	i := strings.LastIndex(out, tag)
+	if i < 0 {
+		return 0, false
+	}
+	rest, _, _ := strings.Cut(out[i+len(tag):], "\n")
+	n, err := strconv.Atoi(strings.TrimSpace(rest))
+	return n, err == nil
 }
 
 // checkLeaveEvery is how often a check waiting in the line here asks whether

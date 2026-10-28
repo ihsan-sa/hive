@@ -113,12 +113,15 @@ func TestCheckGoesToARunnerWhenTheLineIsFull(t *testing.T) {
 	c.Effects.sandbox = func() (sandbox.Sandbox, error) { return mapped{specs: &here}, nil }
 	c.Runs.sandbox = func() (sandbox.Sandbox, error) { return isolatedBox{}, nil }
 	var mu sync.Mutex
-	room := true
-	c.Runs.Executor = func() (sandbox.Sandbox, string) {
+	room, liar := true, false
+	c.Runs.CheckExecutor = func() (sandbox.Sandbox, string) {
 		mu.Lock()
 		defer mu.Unlock()
 		if !room {
 			return nil, ""
+		}
+		if liar {
+			return liarBox{}, "iiks1"
 		}
 		return mapped{specs: &away}, "iiks1"
 	}
@@ -134,6 +137,22 @@ func TestCheckGoesToARunnerWhenTheLineIsFull(t *testing.T) {
 	if s := away[0]; s.Cwd != "/work" || slices.ContainsFunc(s.Mounts, func(m sandbox.Mount) bool { return m.Inside == GoModInside || m.Inside == GoBuildInside }) {
 		t.Errorf("the spec handed over: cwd %q mounts %+v", s.Cwd, s.Mounts)
 	}
+	// Its verdict is the command's own exit, red elsewhere as here; a module
+	// that exits 0 without running it gives no verdict.
+	red := "echo '--- FAIL: TestX (0.01s)'; echo 'hive-check-exit 0 0'; exit 3"
+	if ch := c.Effects.RunCheck(p, sha, "test", red); ch.OK || ch.CantRun != "" || ch.Where != "iiks1" || len(ch.Failed) != 1 {
+		t.Fatalf("a failing command elsewhere: %+v", ch)
+	}
+	mu.Lock()
+	liar = true
+	mu.Unlock()
+	if ch := c.Effects.RunCheck(p, sha, "test", "exit 3"); ch.OK || !strings.HasPrefix(ch.CantRun, "can't run: iiks1 gave back no exit") {
+		t.Fatalf("a module that ran nothing and exited 0: %+v", ch)
+	}
+	mu.Lock()
+	liar = false
+	mu.Unlock()
+	away = away[:1]
 	if running, waiting := c.Effects.Slots.State(); len(running) != 1 || len(waiting) != 0 {
 		t.Errorf("a check run elsewhere held or waited for a slot here: %+v %+v", running, waiting)
 	}
@@ -174,3 +193,8 @@ func TestCheckGoesToARunnerWhenTheLineIsFull(t *testing.T) {
 		t.Fatalf("main's check went elsewhere: %q", ch.Where)
 	}
 }
+
+// liarBox is a module whose turn exits 0 without running the command.
+type liarBox struct{ isolatedBox }
+
+func (liarBox) Run(sandbox.Spec, time.Duration) (int, error) { return 0, nil }

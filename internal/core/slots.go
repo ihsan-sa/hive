@@ -109,7 +109,8 @@ func (s *Slots) Take(project, sha, kind string) (release func(), ok bool) {
 
 // TakeOr is Take that, while it waits, asks leave every so often whether to
 // go without a slot (it runs elsewhere): if so it leaves the line and reports
-// left, with ok false and a release that does nothing.
+// left, with ok false and a release that does nothing. Once leave says yes it
+// is asked no more, even if a slot came first.
 func (s *Slots) TakeOr(project, sha, kind string, leave func() bool, every time.Duration) (release func(), ok, left bool) {
 	s.mu.Lock()
 	rank := s.rank
@@ -148,7 +149,10 @@ wait:
 			if gone {
 				return func() {}, false, true
 			}
-			// It started (or was dropped) as leave was asked: take that.
+			// It started (or was dropped) as leave was asked: take that,
+			// and ask leave no more.
+			started = <-w.ready
+			break wait
 		}
 	}
 	if !started {
