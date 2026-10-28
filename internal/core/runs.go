@@ -57,6 +57,10 @@ type RunSpec struct {
 	Inputs     map[string]string `json:"inputs,omitempty"`     // name -> content, placed read-only in /hive/run
 	OneTurn    bool              `json:"one_turn,omitempty"`   // done when a turn ends; nothing is added to its prompts, and it may only finish and report progress
 	Budget     float64           `json:"budget,omitempty"`     // USD the whole run may spend; 0 is no cap
+	// Away sends the run's turns to an executor module with room first,
+	// strained here or not: the work queue started it past its pace because
+	// a runner had room. With none, a turn runs here.
+	Away bool `json:"away,omitempty"`
 	// Route is the harnesses and models the run may go on, in order
 	// (Config.Route): when its own are at their usage limit it moves to the
 	// first of these with room. Empty stays and waits.
@@ -2272,11 +2276,11 @@ func (rs *Runs) launch(r Run, cfg Config) {
 		floor, memMax, cpuMax = min(floor, LeadMemFloorMB), 0, 0
 	}
 	// A turn this machine is too strained for goes to an executor module
-	// with room, or waits.
+	// with room, or waits; an away run's goes there first anyway.
 	var elsewhere sandbox.Sandbox
 	where := ""
 	why := Strained(floor, memMax, cpuMax)
-	if why != "" {
+	if why != "" || (r.Away && !r.Lead()) {
 		elsewhere, where = rs.executor()
 	}
 	if why != "" && elsewhere == nil {
@@ -2449,7 +2453,7 @@ func (rs *Runs) Elsewhere() bool {
 }
 
 // executor returns an executor module with room for a turn this machine is
-// too strained to start, and the runner it named; nil when there is none or
+// too strained to start (or an away run's), and the runner it named; nil when there is none or
 // the local sandbox isn't one whose spec another machine can run.
 func (rs *Runs) executor() (sandbox.Sandbox, string) {
 	if rs.Executor == nil {
