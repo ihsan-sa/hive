@@ -42,10 +42,12 @@ func TestChecksReuseMainsCache(t *testing.T) {
 	os.WriteFile(filepath.Join(mod, "m.go"), []byte("package m\n\nfunc One() int { return 1 }\n"), 0o644)
 	os.WriteFile(filepath.Join(mod, "m_test.go"), []byte("package m\n\nimport \"testing\"\n\nfunc TestOne(t *testing.T) {\n\tif One() != 1 {\n\t\tt.Fatal(1)\n\t}\n}\n"), 0o644)
 	self, _ := os.Executable()
+	// GOCACHEPROG= drops a program the check itself runs under, so the
+	// first run writes the shared cache, not the outer program's.
 	run := func(env ...string) string {
 		cmd := exec.Command("go", "test", "./...")
 		cmd.Dir = mod
-		cmd.Env = append(os.Environ(), append([]string{"GOFLAGS=", "GOWORK=off", "GOTOOLCHAIN=local"}, env...)...)
+		cmd.Env = append(os.Environ(), append([]string{"GOFLAGS=", "GOWORK=off", "GOTOOLCHAIN=local", "GOCACHEPROG="}, env...)...)
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			t.Fatalf("go test: %v\n%s", err, out)
