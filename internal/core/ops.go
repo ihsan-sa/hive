@@ -326,6 +326,10 @@ func (o *Ops) registerCore() {
 		if m.Role != "worker" && m.Role != "reviewer" {
 			return nil, fmt.Errorf("agents may spawn workers or reviewers; for wider reach ask a warden (op warden)")
 		}
+		// A helper started with nothing to do can only finish blocked.
+		if strings.TrimSpace(m.Brief) == "" {
+			return nil, errors.New(`spawn needs a brief: say what the helper is to do ("brief": "...")`)
+		}
 		if m.Project == "" {
 			m.Project = r.Project
 		}

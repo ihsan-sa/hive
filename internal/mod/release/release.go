@@ -56,6 +56,8 @@ type Module struct {
 	Contains func(p core.Project, sha, tagSHA string) (bool, error)
 	// announced is the newest release a pinned Hive has said is out.
 	announced string
+	// liftLooked is set once AutoUpdate has looked for a pin to lift.
+	liftLooked bool
 	// said holds project@tag for each pre-release whose wait or failed
 	// publish Publish has already raised in this life of the daemon.
 	said map[string]bool
@@ -323,9 +325,10 @@ func hasBinary(repo, tag string) error {
 }
 
 // Update installs a release over this binary: tag, which pins the Hive there
-// and may be older, or with "" or "latest" the newest that Check finds, which
-// clears any pin. Live runs are separate processes and the daemon reattaches
-// to them after it restarts, so live work carries across.
+// when it is a step back (see onward), or with "" or "latest" the newest that
+// Check finds. Anything but a pinned step back clears any pin. Live runs are
+// separate processes and the daemon reattaches to them after it restarts, so
+// live work carries across.
 func (m *Module) Update(tag string) (string, error) {
 	if !m.updating.TryLock() {
 		return busy, nil
@@ -345,14 +348,15 @@ func (m *Module) update(tag string) (string, error) {
 		return "this is a source build (" + core.Version + "); it doesn't update itself", nil
 	}
 	cfg := m.C.WS.LoadConfig()
-	repo, pin := cfg.ReleaseRepo, tag != "" && tag != "latest"
-	if !pin {
+	repo, chosen := cfg.ReleaseRepo, tag != "" && tag != "latest"
+	pin := chosen && !m.onward(cfg, tag)
+	if !chosen {
 		var err error
 		if repo, tag, _, err = m.Check(); err != nil {
 			return "", err
 		}
 	}
-	if !pin && !modules.Newer(core.Version, tag) || pin && tag == core.Version {
+	if !chosen && !modules.Newer(core.Version, tag) || chosen && tag == core.Version {
 		msg := "already on " + core.Version
 		if pin {
 			msg += ", pinned there"
@@ -362,7 +366,7 @@ func (m *Module) update(tag string) (string, error) {
 	m.pmu.Lock()
 	m.tried = tag
 	m.pmu.Unlock()
-	if !pin && m.rolledBack(tag) {
+	if !chosen && m.rolledBack(tag) {
 		return tag + " was rolled back after it failed to start here; `" + core.Cmd + " update " + tag + "` tries it again", nil
 	}
 	tmp, err := os.MkdirTemp("", "hive-update-")
@@ -469,7 +473,7 @@ func (m *Module) update(tag string) (string, error) {
 	}
 	notes := Notes(m.C.Effects.Forge, repo, core.Version, tag)
 	unsigned := PublicKey == ""
-	m.C.J.MustAppend("hive.updated", map[string]any{"from": core.Version, "to": tag, "notes": notes, "unsigned": unsigned})
+	m.C.J.MustAppend("hive.updated", map[string]any{"from": core.Version, "to": tag, "notes": notes, "unsigned": unsigned, "pinned": pin})
 	installed = true
 	// Merges stay paused until the restart; one that never comes (a
 	// supervisor that doesn't restart, a failed start) lets them go on.
@@ -488,6 +492,25 @@ func (m *Module) update(tag string) (string, error) {
 		msg += "\n\n" + Unsigned
 	}
 	return msg + "\n\n" + notes, nil
+}
+
+// onward reports whether a tag chosen with --release moves the Hive forward:
+// no older than this one, nor than what auto-update would take now on the
+// Hive's channel (on pre-releases, the newest safe here, else the latest
+// release). Such a tag is installed with auto-update left as it is, so the
+// Hive goes on following; anything older is a step back and pins, also one
+// forward from an earlier step back that is still behind what the channel
+// would install. When the look fails, only an unpinned Hive's tag no older
+// than the latest release counts as onward, so a step back stays pinned.
+func (m *Module) onward(cfg core.Config, tag string) bool {
+	if modules.Newer(tag, core.Version) {
+		return false
+	}
+	if _, want, _, err := m.Check(); err == nil && want != "" {
+		return !modules.Newer(tag, want)
+	}
+	newest, err := latest(cfg.ReleaseRepo)
+	return cfg.ReleasePin == "" && err == nil && !modules.Newer(tag, newest)
 }
 
 // pin keeps the Hive on tag, or with on false follows the newest release.
@@ -522,6 +545,40 @@ const maxSkips = 3
 // waiting for its restart.
 var restartGrace = 30 * time.Minute
 
+// liftForwardPin lifts a pin that an update forward left, from before such an
+// update stopped pinning (issue #1795), when auto-update was on before it: the
+// update that brought this release in, as the journal has it, came from an
+// older one, and it was an update from before this build, which says in its
+// event whether it pinned: a pin this build made is a step back, even one
+// forward from an earlier step back, and stays. It runs once a daemon, from
+// the scheduled job at start.
+func (m *Module) liftForwardPin(cfg core.Config) (bool, error) {
+	if cfg.ReleasePin == "" || !cfg.PinnedAuto || cfg.ReleasePin != core.Version {
+		return false, nil
+	}
+	from := ""
+	m.C.J.Replay(func(e core.Event) {
+		var x struct {
+			From, To string
+			Pinned   *bool
+		}
+		if e.Kind == "hive.updated" && e.Decode(&x) == nil && x.To == cfg.ReleasePin {
+			from = x.From
+			if x.Pinned != nil {
+				from = "" // this build's own update: a pin it made stays
+			}
+		}
+	})
+	if from == "" || !modules.Newer(from, cfg.ReleasePin) {
+		return false, nil
+	}
+	if err := m.pin(cfg, "", false); err != nil {
+		return false, err
+	}
+	m.C.J.MustAppend("release.unpinned", map[string]string{"pin": cfg.ReleasePin, "text": "the pin on " + cfg.ReleasePin + " was an update forward from " + from + ", not a step back; auto-update is on again"})
+	return true, nil
+}
+
 // AutoUpdate is the scheduled job: update when allowed, pausing merges for
 // the swap rather than waiting for a Hive with none in merging, which a busy
 // one never is. A pinned Hive that was updating itself stays put and says once
@@ -533,6 +590,14 @@ func (m *Module) AutoUpdate() (string, error) {
 	}
 	defer m.updating.Unlock()
 	cfg := m.C.WS.LoadConfig()
+	if !m.liftLooked {
+		m.liftLooked = true
+		if lifted, err := m.liftForwardPin(cfg); err != nil {
+			return "", err
+		} else if lifted {
+			cfg = m.C.WS.LoadConfig()
+		}
+	}
 	if cfg.ReleasePin != "" && (cfg.AutoUpdate || cfg.PinnedAuto) {
 		tag, err := latest(cfg.ReleaseRepo)
 		if err != nil || !modules.Newer(cfg.ReleasePin, tag) {
@@ -742,6 +807,14 @@ func (m *Module) afterKept(project, sha string) {
 		return
 	}
 	list, refuse := m.merges(project, sha)
+	if refuse == notMerged {
+		// A later merge of the Hive's carries this kept commit: Tick tries
+		// the newest one (retryUnmerged) rather than waiting on the next
+		// measurement.
+		if last, _ := m.unmerged(project); last != sha {
+			m.C.J.MustAppend("release.unmerged", map[string]string{"project": project, "sha": sha})
+		}
+	}
 	if refuse != "" {
 		once(refuse)
 		return
@@ -968,6 +1041,8 @@ func (m *Module) ciState(project string) (last ciWait) {
 // that is then held (an unread or root merge) or blocked by its scan still
 // journals release.ci_passed, which ends the original's wait: the hold's or
 // the scan's alert speaks for it from then on.
+// Then it tries a commit refused as no merge the Hive made at the kept
+// merge since (retryUnmerged).
 func (m *Module) retryWaiting() {
 	if m.said == nil {
 		m.said = map[string]bool{}
@@ -994,6 +1069,78 @@ func (m *Module) retryWaiting() {
 			m.C.J.MustAppend("alert.raised", map[string]string{"kind": "release", "project": p.Name,
 				"text": "no release at " + core.Short(w.SHA) + " yet: main's checks there haven't passed after " + lateAfter.String()})
 		}
+	}
+	m.retryUnmerged()
+}
+
+// unmerged is the kept commit a project's release last refused as no merge
+// the Hive made, and the newest kept Hive merge journaled after that refusal
+// (the commit itself, once its effect.merged comes late); both are "" once a
+// release was cut or main's checks were read for one since.
+func (m *Module) unmerged(project string) (sha, next string) {
+	var later []string
+	kept := map[string]bool{}
+	m.C.J.Replay(func(e core.Event) {
+		var x struct {
+			Project, SHA string
+			MergeSHA     string `json:"merge_sha"`
+			Kept, Red    bool
+			NoResult     bool `json:"no_result"`
+		}
+		if e.Decode(&x) != nil || x.Project != project {
+			return
+		}
+		switch {
+		case e.Kind == "release.unmerged":
+			sha, later = x.SHA, nil
+		case e.Kind == "hive.released" || strings.HasPrefix(e.Kind, "release.ci_"):
+			sha, later = "", nil
+		case e.Kind == "score.measured" && !x.NoResult:
+			kept[x.SHA] = x.Kept
+		case e.Kind == "score.covered":
+			kept[x.SHA] = !x.Red
+		case e.Kind == "effect.merged" && sha != "" && x.MergeSHA != "":
+			later = append(later, x.MergeSHA)
+		}
+	})
+	kept[sha] = sha != "" // AfterKept refused it, so improve kept it
+	for i := len(later) - 1; i >= 0; i-- {
+		if kept[later[i]] {
+			return sha, later[i]
+		}
+	}
+	return sha, ""
+}
+
+// retryUnmerged tries again each self project whose kept commit was refused
+// as no merge the Hive made (a merge whose forge call failed though it went
+// through, say), at the newest kept Hive merge since whose history holds it.
+// Each is tried once; main's checks there are then waited on as any kept
+// merge's are.
+func (m *Module) retryUnmerged() {
+	for _, p := range m.C.Projects.List() {
+		if !p.Self {
+			continue
+		}
+		sha, next := m.unmerged(p.Name)
+		key := p.Name + "@unmerged:" + next
+		if next == "" || m.said[key] {
+			continue
+		}
+		m.said[key] = true
+		contains := m.Contains
+		if contains == nil {
+			contains = m.contains
+		}
+		if next != sha {
+			if in, err := contains(p, sha, next); err != nil || !in {
+				continue
+			}
+		}
+		func() {
+			defer m.lock(p.Name)()
+			m.afterKept(p.Name, next)
+		}()
 	}
 }
 
@@ -1189,6 +1336,9 @@ func (m *Module) OnPerson(a core.Ask) {
 	}
 }
 
+// notMerged is merges' refusal of a commit no effect.merged names.
+const notMerged = "it is not a merge the Hive made"
+
 type merge struct {
 	PR       int
 	SHA      string
@@ -1228,7 +1378,7 @@ func (m *Module) merges(project, upTo string) (out []merge, refuse string) {
 		return nil, "a newer release already covers it"
 	}
 	if at < 0 {
-		return nil, "it is not a merge the Hive made"
+		return nil, notMerged
 	}
 	return all[from : at+1], ""
 }

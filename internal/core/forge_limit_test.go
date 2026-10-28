@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -13,9 +14,9 @@ import (
 // stubGH replaces gh with reply for one test and records each call's args.
 func stubGH(t *testing.T, reply func(args []string) (string, string, error)) *[][]string {
 	t.Helper()
-	run, p := ghRun, ghPause
-	t.Cleanup(func() { ghRun, ghPause = run, p })
-	ghPause = &pause{}
+	run, p, q, g := ghRun, ghPause, ghQuota, ghGate
+	t.Cleanup(func() { ghRun, ghPause, ghQuota, ghGate = run, p, q, g })
+	ghPause, ghQuota, ghGate = &pause{}, &quota{}, newGate(3, 0)
 	logins.Clear()
 	clear(workflowless.m)
 	var calls [][]string
@@ -71,6 +72,7 @@ func TestRateLimitRead(t *testing.T) {
 		"You have exceeded a secondary rate limit. Please wait a few minutes. (HTTP 403)":    true,
 		"HTTP 429: Too Many Requests (https://api.github.com/...)\nRetry-After: 30":          true,
 		"HTTP 403: API rate limit exceeded for user ID 1.":                                   true,
+		"gh pr view 936: GraphQL: API rate limit already exceeded for user ID 77406516.":     true,
 		"HTTP 403: Resource not accessible by integration":                                   false,
 		"GraphQL: Head sha can't be blank (createPullRequest)":                               false,
 		"dial tcp: lookup api.github.com: no such host":                                      false,
@@ -81,6 +83,75 @@ func TestRateLimitRead(t *testing.T) {
 	}
 	if d, _ := rateLimit("HTTP 429\nRetry-After: 30"); d != 30*time.Second {
 		t.Errorf("retry-after read as %v", d)
+	}
+}
+
+// The hour's quota spent (PR #936: GraphQL's "already exceeded" on a pr view)
+// holds every call on the login, reads too, without sending them, until the
+// reset rate_limit names for the spent quota; rate_limit itself still goes,
+// since GitHub doesn't count it. A secondary limit is no spent quota.
+func TestSpentQuotaHoldsEveryCall(t *testing.T) {
+	reset := time.Now().Add(40 * time.Minute).Unix()
+	calls := stubGH(t, func(args []string) (string, string, error) {
+		if args[1] == "rate_limit" {
+			return fmt.Sprintf("4900 5000 %d\n0 5000 %d\n", reset-600, reset), "", nil
+		}
+		return "", "GraphQL: API rate limit already exceeded for user ID 77406516.", errors.New("exit status 1")
+	})
+	_, err := (GitHub{}).GetPR("o/r", 936)
+	var rl *RateLimited
+	if !errors.As(err, &rl) || !rl.All || rl.Until.Unix() != reset+1 {
+		t.Fatalf("spent quota read as %v", err)
+	}
+	n := len(*calls)
+	for _, call := range []func() error{
+		func() error { _, err := (GitHub{}).GetPR("o/r", 936); return err },
+		func() error { _, err := (GitHub{}).Checks("o/r", "abc"); return err },
+		func() error { return (GitHub{}).Comment("o/r", 936, "hi") },
+	} {
+		if err := call(); !errors.As(err, &rl) || !rl.All {
+			t.Fatalf("a call while the quota is spent: %v", err)
+		}
+	}
+	if len(*calls) != n {
+		t.Fatalf("calls sent while the quota is spent: %q", (*calls)[n:])
+	}
+	if _, err := (GitHub{}).RateReset("o/r"); err != nil || len(*calls) != n+1 {
+		t.Fatalf("rate_limit held: %v", err)
+	}
+	if spentQuota("You have exceeded a secondary rate limit (HTTP 403)") || spentQuota("was submitted too quickly") {
+		t.Fatal("a secondary limit read as the quota spent")
+	}
+}
+
+// The Hive looks at what is left of the login's quotas at most once every
+// q.every, and once either is under a tenth, every call waits for its reset,
+// leaving the rest to the person; with plenty left calls go on.
+func TestQuotaReserveHoldsAhead(t *testing.T) {
+	left := "4000"
+	reset := time.Now().Add(20 * time.Minute).Unix()
+	calls := stubGH(t, func(args []string) (string, string, error) {
+		if args[1] == "rate_limit" {
+			return fmt.Sprintf("%s 5000 %d\n4000 5000 %d\n", left, reset, reset), "", nil
+		}
+		return `{"number":7}`, "", nil
+	})
+	ghQuota.every = time.Minute
+	if _, err := (GitHub{}).APIGet("o/r", "repos/o/r/pulls/7"); err != nil || len(*calls) != 2 {
+		t.Fatalf("with plenty left: %v, calls %q", err, *calls)
+	}
+	left = "499"
+	if _, err := (GitHub{}).APIGet("o/r", "repos/o/r/pulls/7"); err != nil || len(*calls) != 3 {
+		t.Fatalf("looked again within the minute: %v, calls %q", err, *calls)
+	}
+	ghQuota.held[""].looked = time.Time{}
+	_, err := (GitHub{}).APIGet("o/r", "repos/o/r/pulls/7")
+	var rl *RateLimited
+	if !errors.As(err, &rl) || !rl.All || rl.Until.Unix() != reset+1 || !strings.Contains(err.Error(), "499 of the login's 5000 REST calls") {
+		t.Fatalf("under the reserve: %v", err)
+	}
+	if len(*calls) != 4 || (*calls)[3][1] != "rate_limit" {
+		t.Fatalf("a call sent under the reserve: %q", *calls)
 	}
 }
 
@@ -127,7 +198,7 @@ func TestRateLimitPausesWrites(t *testing.T) {
 		t.Fatalf("hits %d after a write went through", ghPause.hits)
 	}
 	ghPause.hit("HTTP 429: Too Many Requests\nRetry-After: 300")
-	if err := ghPause.wait(); !errors.As(err, &rl) || time.Until(rl.Until) < 295*time.Second {
+	if err := ghPause.wait(true); !errors.As(err, &rl) || time.Until(rl.Until) < 295*time.Second {
 		t.Fatalf("retry-after pause %v", err)
 	}
 }
@@ -341,7 +412,7 @@ func TestChecksRefusedWithoutWorkflows(t *testing.T) {
 					return `[{"name":"ci.yml"}]`, "", nil
 				}
 				return "", "gh: Not Found (HTTP 404)", errors.New("exit status 1")
-			case strings.Contains(args[2], "check-runs"), strings.Contains(args[2], "check-suites"):
+			case strings.Contains(args[2], "check-runs"), strings.Contains(args[2], "check-suites"), strings.Contains(args[2], "actions/runs"):
 				return "", refused, errors.New("exit status 1")
 			}
 			return "", "", nil
@@ -349,7 +420,7 @@ func TestChecksRefusedWithoutWorkflows(t *testing.T) {
 		runs, err := GitHub{}.Checks("o/r", "abc")
 		if workflows {
 			// The stopped task's reason is this text, which revive matches.
-			want := "gh api repos/o/r/commits/abc/check-runs?per_page=100: " + refused
+			want := "gh api repos/o/r/actions/runs?head_sha=abc&per_page=100: " + refused
 			if err == nil || err.Error() != want || !ChecksRefused(err.Error()) {
 				t.Errorf("with workflows: runs %+v, err %v", runs, err)
 			}
@@ -385,6 +456,67 @@ func TestChecksRefusedWithoutWorkflows(t *testing.T) {
 	}
 }
 
+// A fine-grained token, refused the Checks API, reads the head's CI through
+// its Actions runs and their jobs, and its commit statuses: a failed job
+// fails the head, a job keeps its URL so its log can be read, a run with no
+// jobs listed yet holds it, and a head with workflows whose runs aren't
+// listed yet is held a while, not passed. The replies are the shapes
+// GitHub's actions/runs and runs/{id}/jobs calls return.
+func TestChecksThroughActions(t *testing.T) {
+	refused := "gh: Resource not accessible by personal access token (HTTP 403)"
+	var listed bool
+	calls := stubGH(t, func(args []string) (string, string, error) {
+		p := strings.Join(args, " ")
+		switch {
+		case strings.Contains(p, "check-runs"), strings.Contains(p, "check-suites"):
+			return "", refused, errors.New("exit status 1")
+		case strings.Contains(p, "contents/.github/workflows"):
+			return `[{"name":"ci.yml"}]`, "", nil
+		case strings.Contains(p, "actions/runs/1/jobs"):
+			return `{"id":11,"name":"test","status":"completed","conclusion":"success","started_at":"2026-10-27T10:00:00Z","html_url":"https://github.com/o/r/actions/runs/1/job/11"}` + "\n" +
+				`{"id":12,"name":"vet","status":"completed","conclusion":"failure","started_at":"2026-10-27T10:00:00Z","html_url":"https://github.com/o/r/actions/runs/1/job/12"}`, "", nil
+		case strings.Contains(p, "actions/runs/2/jobs"):
+			return "", "", nil
+		case strings.Contains(p, "actions/runs?head_sha="):
+			if !listed {
+				return "", "", nil
+			}
+			return `{"id":1,"name":"ci","status":"completed","conclusion":"failure","html_url":"https://github.com/o/r/actions/runs/1"}` + "\n" +
+				`{"id":2,"name":"lint","status":"queued","run_started_at":"2026-10-27T10:00:00Z","html_url":"https://github.com/o/r/actions/runs/2"}`, "", nil
+		case strings.Contains(p, "/status"):
+			return `{"context":"ci/legacy","state":"success","description":"ok","target_url":"https://ci.example/1"}`, "", nil
+		}
+		return "", "", nil
+	})
+	runs, err := GitHub{}.Checks("o/r", "def")
+	if st, which := ChecksState(runs, nil); err != nil || st != CheckPending || len(which) != 1 || which[0].Name != "github-actions" {
+		t.Fatalf("a head with workflows and no runs yet: %s %+v, err %v", st, runs, err)
+	}
+	listed = true
+	runs, err = GitHub{}.Checks("o/r", "def")
+	if err != nil || len(runs) != 4 {
+		t.Fatalf("runs %+v, err %v", runs, err)
+	}
+	got := map[string]CheckRun{}
+	for _, r := range runs {
+		got[r.Name] = r
+	}
+	if got["test"].State != CheckPass || got["vet"].State != CheckFail || got["lint"].State != CheckCantStart || got["ci/legacy"].State != CheckPass {
+		t.Errorf("checks read %+v", got)
+	}
+	if m := ghJobURL.FindStringSubmatch(got["vet"].URL); m == nil || m[1] != "12" {
+		t.Errorf("the failed job's URL %q names no job", got["vet"].URL)
+	}
+	if st, _ := ChecksState(runs, nil); st != CheckFail {
+		t.Errorf("a failed job reads %s", st)
+	}
+	for _, c := range *calls {
+		if strings.Contains(strings.Join(c, " "), "check-suites") {
+			t.Errorf("asked for suites the token may not read: %q", c)
+		}
+	}
+}
+
 // A rate limit's 403 on the checks is no refusal: it isn't read as no checks
 // and spends no call on the workflows.
 func TestChecksRateLimitIsNoRefusal(t *testing.T) {
@@ -415,6 +547,7 @@ func TestChecksRefusedReasons(t *testing.T) {
 		"gh api repos/Hive-RSI-Lab/hive-dispatch/commits/23925cb03db4544ed170451a28aa905c00d66783/check-runs" + tail,
 		"gh api repos/Hive-RSI-Lab/hive-trials/commits/e5789b39d9d40ee34abf3b53886ee38529028feb/check-runs" + tail,
 		"gh api repos/Hive-RSI-Lab/hive-trials/commits/fa2ec42bff45ca0e5d059e4a6429e8c0495ebd36/check-runs" + tail,
+		"gh api repos/o/r/actions/runs?head_sha=abc&per_page=100: gh: Resource not accessible by personal access token (HTTP 403)",
 	} {
 		if !ChecksRefused(r) {
 			t.Errorf("not read as a checks refusal: %s", r)
@@ -502,6 +635,82 @@ func TestTimedOutIsOnlyTheHivesTimeout(t *testing.T) {
 	for _, s := range []string{"go test: signal: killed", "panic: test timed out after 2s\nFAIL\tp\t2.01s"} {
 		if TimedOut(s) {
 			t.Errorf("%q read as a timeout", s)
+		}
+	}
+}
+
+// A burst of calls (ten tasks rechecked at once, #1769) queues at the gate:
+// no more than its slots are in flight, and once GitHub answers one with its
+// limit, though rate_limit shows the hour's quota plenty, the calls queued
+// behind it wait out a pause, reads too, instead of being sent: the tasks
+// wait, none fails.
+func TestBurstQueuesAndWaitsOutTheLimit(t *testing.T) {
+	var mu sync.Mutex
+	in, most, views := 0, 0, 0
+	stubGH(t, func(args []string) (string, string, error) {
+		if args[1] == "rate_limit" {
+			reset := time.Now().Add(30 * time.Minute).Unix()
+			return fmt.Sprintf("4633 5000 %d\n3553 5000 %d\n", reset, reset), "", nil
+		}
+		mu.Lock()
+		in++
+		most = max(most, in)
+		views++
+		mu.Unlock()
+		time.Sleep(20 * time.Millisecond)
+		mu.Lock()
+		in--
+		mu.Unlock()
+		return "", "GraphQL: API rate limit already exceeded for user ID 77406516.", errors.New("exit status 1")
+	})
+	var wg sync.WaitGroup
+	errs := make([]error, 50)
+	for i := range errs {
+		wg.Add(1)
+		go func() { defer wg.Done(); _, errs[i] = (GitHub{}).GetPR("o/r", 1000+i) }()
+	}
+	wg.Wait()
+	if most > 3 {
+		t.Fatalf("%d calls in flight at once", most)
+	}
+	if views > 3 {
+		t.Fatalf("%d calls sent; those queued behind the first limit were sent too", views)
+	}
+	for _, err := range errs {
+		var rl *RateLimited
+		if !errors.As(err, &rl) || rl.All || !rl.Reads {
+			t.Fatalf("a call in the burst: %v", err)
+		}
+		if d := time.Until(rl.Until); d < 55*time.Second || d > 2*time.Minute {
+			t.Fatalf("waits %v, want a minute (the secondary limit's pause, not the quota's)", d)
+		}
+	}
+	if !strings.Contains(errs[0].Error(), "its calls wait") {
+		t.Fatalf("said as %q", errs[0])
+	}
+}
+
+// Writes go at least the gate's gap apart, however many are asked at once.
+func TestWritesAreSpaced(t *testing.T) {
+	var mu sync.Mutex
+	var sent []time.Time
+	stubGH(t, func(args []string) (string, string, error) {
+		mu.Lock()
+		sent = append(sent, time.Now())
+		mu.Unlock()
+		return "", "", nil
+	})
+	ghGate = newGate(3, 40*time.Millisecond)
+	var wg sync.WaitGroup
+	for i := range 5 {
+		wg.Add(1)
+		go func() { defer wg.Done(); _ = (GitHub{}).Comment("o/r", i, "hi") }()
+	}
+	wg.Wait()
+	slices.SortFunc(sent, func(a, b time.Time) int { return a.Compare(b) })
+	for i := 1; i < len(sent); i++ {
+		if gap := sent[i].Sub(sent[i-1]); gap < 35*time.Millisecond {
+			t.Fatalf("writes %v apart: %v", gap, sent)
 		}
 	}
 }

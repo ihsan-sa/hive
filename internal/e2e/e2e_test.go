@@ -746,9 +746,9 @@ func TestCheckpointsBankEachGain(t *testing.T) {
 	}
 }
 
-// A review reads the project's docs/REVIEW.md, goals and lessons from main,
-// and advice given with a land stays on the pull request: it holds nothing and
-// is filed as no new task.
+// A review reads the project's docs/REVIEW.md from main and is pointed at its
+// goals and lessons, and advice given with a land stays on the pull request: it
+// holds nothing and is filed as no new task.
 func TestReviewReadsTheRules(t *testing.T) {
 	t.Parallel()
 	h := start(t)
@@ -763,7 +763,7 @@ func TestReviewReadsTheRules(t *testing.T) {
 	st := h.wait("the ask to merge", 3*minute, taskStage("rules", "add a helper", work.StageDone))
 	tk, _ := task(st, "rules", "add a helper")
 	brief, _ := os.ReadFile(filepath.Join(h.ws.RunRO(tk.Reviewer), "brief.md"))
-	for _, want := range []string{"walls the Hive off from the host", "Every agent sees the same thing", "## `.hive/lessons.md` on main"} {
+	for _, want := range []string{"walls the Hive off from the host", "`.hive/goals.md` and `.hive/lessons.md` are in your checkout"} {
 		if !strings.Contains(string(brief), want) {
 			t.Fatalf("the review brief lacks %q:\n%s", want, brief)
 		}
@@ -1843,25 +1843,25 @@ func TestStepBack(t *testing.T) {
 		t.Fatalf("the fault must carry both scores, the setup and its run, and no host path: %+v", fault)
 	}
 	if lose.Status != "lost" || *lose.Score != 1 || lose.Fault != "" {
-		t.Fatalf("a losing setup files nothing: %+v", lose)
+		t.Fatalf("a losing setup files nothing: %+v\n%s", lose, onProject(st, "lose"))
 	}
 	if r := runs[lose.Run]; r.Project != "lose" || !r.Isolated {
 		t.Fatalf("a step-back on an isolated project must run isolated under it: %+v", r.RunSpec)
 	}
 	if s := sb["fail"]; s.Status != "failed" || !strings.Contains(s.Note, "blocked") {
-		t.Fatalf("a failed experiment must say why: %+v", s)
+		t.Fatalf("a failed experiment must say why: %+v\n%s", s, onProject(st, "fail"))
 	}
 	if s, r := sb["spend"], runs[sb["spend"].Exp]; s.Status != "lost" || s.Asked != 1 || *s.Score != 5 || r.Reason != "spent its budget" || r.Budget != s.Budget {
-		t.Fatalf("a setup that spends its budget must stop there: %+v %+v", s, r)
+		t.Fatalf("a setup that spends its budget must stop there: %+v %+v\n%s", s, r, onProject(st, "spend"))
 	}
 	if s := sb["rig"]; s.Status != "failed" || !strings.Contains(s.Note, "score.txt") {
 		t.Fatalf("a setup that changes what scores it must not count: %+v\n%s", s, onProject(st, "rig"))
 	}
 	if s := sb["none"]; s.Status != "none" || s.Exp != "" || !strings.Contains(s.Note, "designed no experiment") {
-		t.Fatalf("a step-back that designs nothing runs nothing: %+v", s)
+		t.Fatalf("a step-back that designs nothing runs nothing: %+v\n%s", s, onProject(st, "none"))
 	}
 	if s, ran := sb["zero"], runs[sb["zero"].Run].ID != ""; s.Status != "judged" || !s.Unspent || !ran || s.Exp != "" || !strings.Contains(s.Report, "FAKE judgement") {
-		t.Fatalf("a step-back with nothing to spend must judge goals not yet judged and run no experiment: %+v", s)
+		t.Fatalf("a step-back with nothing to spend must judge goals not yet judged and run no experiment: %+v\n%s", s, onProject(st, "zero"))
 	}
 	alerts := map[string]int{}
 	for _, a := range st.Alerts {

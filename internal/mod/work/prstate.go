@@ -72,10 +72,8 @@ func (m *Module) openPR(t Task, p core.Project) (core.PR, error) {
 // draft goes on at its next look. A task stopped over the draft (before
 // drafts waited) comes back to be checked again, unless the person stopped it.
 func (m *Module) MarkReady(id, by, why string) (string, error) {
-	if !m.claim(id) {
-		return "", fmt.Errorf("task %s is busy; try again in a moment", id)
-	}
-	defer m.release(id)
+	save, done := m.take(id)
+	defer done()
 	t, _ := m.Get(id)
 	p, err := m.project(&t)
 	if err != nil {
@@ -113,7 +111,7 @@ func (m *Module) MarkReady(id, by, why string) (string, error) {
 		m.comment(p.Repo, pr.Number, body)
 	}
 	t.DraftWhy = ""
-	m.save(&t, note)
+	save(&t, note)
 	switch {
 	case t.Stage != StageStopped && t.Stage != StageBlocked:
 		return note + "; the task goes on", nil
@@ -131,10 +129,8 @@ func (m *Module) MarkReady(id, by, why string) (string, error) {
 // MarkDraft marks a task's PR a draft, which holds its merge (waitDraft)
 // until it is marked ready again; why goes on the PR and the task.
 func (m *Module) MarkDraft(id, by, why string) (string, error) {
-	if !m.claim(id) {
-		return "", fmt.Errorf("task %s is busy; try again in a moment", id)
-	}
-	defer m.release(id)
+	save, done := m.take(id)
+	defer done()
 	t, _ := m.Get(id)
 	switch t.Stage {
 	case StageMerged, StageDone:
@@ -156,7 +152,7 @@ func (m *Module) MarkDraft(id, by, why string) (string, error) {
 	m.comment(p.Repo, pr.Number, "Held as a draft by the Hive's lead: "+why+"\n\nIt merges once marked ready.")
 	t.DraftWhy = core.Clip(why, 200)
 	note := fmt.Sprintf("PR #%d marked a draft by %s: %s", pr.Number, by, core.Clip(why, 300))
-	m.save(&t, note)
+	save(&t, note)
 	return note + "; its merge waits until it is marked ready (pr_ready)", nil
 }
 
@@ -168,10 +164,8 @@ const closedByLead = "closed by the lead"
 // stopped; with deleteBranch its hive/ branch goes too. A revert the lead no
 // longer wants ends this way, rather than waiting on the person.
 func (m *Module) ClosePR(id, by, comment string, deleteBranch bool) (string, error) {
-	if !m.claim(id) {
-		return "", fmt.Errorf("task %s is busy; try again in a moment", id)
-	}
-	defer m.release(id)
+	save, done := m.take(id)
+	defer done()
 	t, _ := m.Get(id)
 	switch t.Stage {
 	case StageMerged, StageDone:
@@ -213,8 +207,10 @@ func (m *Module) ClosePR(id, by, comment string, deleteBranch bool) (string, err
 			}
 		}
 	}
+	shas := []string{t.SHA, t.Checkpoint}
 	t.Stage, t.Reason, t.Checkpoint, t.DraftWhy = StageStopped, core.Clip(closedByLead+": "+comment, 300), "", ""
-	m.save(&t, note)
+	save(&t, note)
+	m.dropChecks(t, shas)
 	// A merge question already put to the person is about a PR that is gone
 	// now: answered for them, it leaves Waiting (onPersonMerge ignores it, as
 	// the task is no longer waiting on the person).
@@ -225,6 +221,18 @@ func (m *Module) ClosePR(id, by, comment string, deleteBranch bool) (string, err
 	}
 	m.notify(&t, fmt.Sprintf("Closed without merging: %s %s (%s)", t.Label(), t.PR.URL, core.Clip(comment, 300)))
 	return note, nil
+}
+
+// dropChecks takes t's checks still waiting in the check line out of it, so
+// a closed PR doesn't hold a place there; a commit another live task still
+// has keeps its place.
+func (m *Module) dropChecks(t Task, shas []string) {
+	for _, sha := range shas {
+		if sha == "" || len(m.List(func(o Task) bool { return o.ID != t.ID && !o.Terminal() && (o.SHA == sha || o.Checkpoint == sha) })) > 0 {
+			continue
+		}
+		m.C.Effects.Slots.Drop(t.Project, sha)
+	}
 }
 
 type prArgs struct {

@@ -10,6 +10,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/ihsan-sa/hive-standalone-build/internal/proc"
 )
 
 // fakeProc writes a /proc with this much available memory and pressure; the
@@ -332,20 +334,21 @@ func TestOverlappingTicksStepEachRunOnce(t *testing.T) {
 	}
 	// Its turn, ended while ticks overlap, is recorded once. The fake
 	// worker finishes on its own, so by now its process may be gone already
-	// (it is on Windows); killing it is only a nudge, and either way the
-	// end is seen by the ticks below.
+	// (it is on Windows); killing it is only a nudge. Only a tick sees the
+	// end, so the overlapping ticks wait for the process to be gone: on a
+	// loaded machine a killed process can outlive three ticks, and then no
+	// tick would come to end its turn.
 	c.Runs.Interrupt("worker")
+	for end := time.Now().Add(10 * time.Second); proc.Alive(w.Proc) && time.Now().Before(end); time.Sleep(20 * time.Millisecond) {
+	}
+	if proc.Alive(w.Proc) {
+		t.Fatal("the worker's process is still alive 10s after it was killed")
+	}
 	slowStep("two")
 	ticks()
-	for end := time.Now().Add(10 * time.Second); time.Now().Before(end); time.Sleep(50 * time.Millisecond) {
-		if w, _ := c.Runs.Get("worker"); w.Status != StatusRunning {
-			break
-		}
-	}
 	if w, _ := c.Runs.Get("worker"); w.Status == StatusRunning {
 		t.Fatalf("the worker's turn never ended: %s %q", w.Status, w.Reason)
 	}
-	settled()
 	if n := count("run.turn_ended", "worker"); n != 1 {
 		t.Errorf("the worker's turn ended %d times across overlapping ticks, want 1", n)
 	}

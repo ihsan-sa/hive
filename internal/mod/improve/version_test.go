@@ -184,6 +184,30 @@ func TestScoreWithNoPathsWarns(t *testing.T) {
 	}
 }
 
+// Behind, improve measures the newest merge first; an older one waiting with
+// it is then covered by that measurement, not measured on its own.
+func TestBehindMeasuresTheNewestMain(t *testing.T) {
+	m, merge := scored(t)
+	old := merge(map[string]string{"a.txt": "a\n"}).SHA
+	m.mu.Lock()
+	m.scores["p"] = m.scores["p"][:1] // as if the merge at old were still waiting
+	m.mu.Unlock()
+	newest := merge(map[string]string{"n.txt": "6\n"}, work.Task{ID: "t2"}).SHA
+	m.mu.Lock()
+	m.scores["p"] = m.scores["p"][:1]
+	m.mu.Unlock()
+	batch := m.newestFirst([]work.Task{{ID: "t1", Project: "p", MergeSHA: old}, {ID: "t2", Project: "p", MergeSHA: newest}})
+	if batch[0].MergeSHA != newest || batch[1].MergeSHA != old {
+		t.Fatalf("the newest merge must come first: %+v", batch)
+	}
+	for _, t := range batch {
+		m.afterMerge(t)
+	}
+	if ms := m.Scores("p"); len(ms) != 2 || ms[1].SHA != newest || !m.measured("p", old) {
+		t.Fatalf("the newest is measured and the older covered by it: %+v", ms)
+	}
+}
+
 // A score that moves with the machine's load is judged against main measured
 // in the same moment (issue #1343): a merge that reads under a best taken
 // under a lighter load is kept when main where the best was read scores the
@@ -211,5 +235,49 @@ func TestFallIsJudgedAgainstMainMeasuredNow(t *testing.T) {
 	ms = merge(map[string]string{"n.txt": "6\n"})
 	if ms.Kept || ms.AgainstSHA != second || !strings.Contains(ms.Note, "fell to 2 from 6") {
 		t.Fatalf("a real fall under the same load, against where the best was read: %+v", ms)
+	}
+}
+
+// A fix's dip is measured once more before it becomes the baseline (issue
+// #1788): a second reading back within tolerance was no dip, so the best
+// stands and no brief is filed; one still under it makes the better of the two
+// readings the baseline.
+func TestFixDipIsMeasuredAgain(t *testing.T) {
+	m, merge := scored(t)
+	looks := func() int {
+		return len(m.Work.List(func(x work.Task) bool { return strings.HasPrefix(x.Title, "Look into the score dip") }))
+	}
+	readings := filepath.Join(t.TempDir(), "readings")
+	// score.sh prints the first line of the readings file and drops it.
+	score := fmt.Sprintf("f=%q; head -n1 \"$f\"; tail -n +2 \"$f\" > \"$f.x\"; mv \"$f.x\" \"$f\"\n", readings)
+	os.WriteFile(readings, []byte("1\n5\n"), 0o644)
+	fix := work.Task{ID: "fix-1", Title: "Fix the merge", Aim: work.AimFix, AimWhy: "TestMerge fails"}
+	ms := merge(map[string]string{"score.sh": score, "n.txt": "x\n"}, fix)
+	// The score's file changed, so that merge starts a new baseline at 1;
+	// the next ones are measured against it.
+	if !ms.Kept || *ms.Best != 1 {
+		t.Fatalf("%+v", ms)
+	}
+	os.WriteFile(readings, []byte("9\n"), 0o644)
+	if ms := merge(map[string]string{"a.txt": "a\n"}); !ms.Kept || *ms.Best != 9 {
+		t.Fatalf("want best 9: %+v", ms)
+	}
+	// Readings in turn: the merge, main where the best was read (the load
+	// check), the merge again. The first dips, the second is back at 9.
+	os.WriteFile(readings, []byte("2\n9\n9\n"), 0o644)
+	fix.ID = "fix-2"
+	ms = merge(map[string]string{"b.txt": "b\n"}, fix)
+	if !ms.Kept || *ms.Best != 9 || !strings.Contains(ms.Note, "measured again") || looks() != 0 {
+		t.Fatalf("a dip gone on the second reading should keep the best 9 and file nothing: %+v, %d looks", ms, looks())
+	}
+	// Both readings dip: the better one is the baseline, and a brief looks.
+	os.WriteFile(readings, []byte("2\n9\n4\n"), 0o644)
+	fix.ID = "fix-3"
+	ms = merge(map[string]string{"c.txt": "c\n"}, fix)
+	if !ms.Kept || *ms.Best != 4 || !strings.Contains(ms.Note, "kept as a fix") || looks() != 1 {
+		t.Fatalf("want the fix kept at its better reading 4 with one brief: %+v, %d looks", ms, looks())
+	}
+	if b, _ := m.Best("p"); b != 4 {
+		t.Fatalf("best %v, want 4", b)
 	}
 }
