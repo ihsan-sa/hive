@@ -359,3 +359,45 @@ func (m *Module) paceChecks() {
 func (m *Module) Pace() map[string]string {
 	return map[string]string{"workers": m.workers.String(), "checks": m.checks.String(), "gates": m.gates.String()}
 }
+
+// pacedRead is the route a review of a change on project goes on while the
+// reviewer's plan spends its week more than aheadSlack ahead of the clock,
+// and why, or "" when it is on pace. The workers' pace holds new changes;
+// this holds what reading each one costs, as reads follow the changes in
+// flight: each read goes on the route's cheaper model, sonnet where the
+// route is opus. On 10-27 a login's week stood at 48% with a tenth of it
+// gone. How many reads a change needs doesn't change: a high class still
+// gets its second, separate read, as the warden's and tribunal's prompts
+// are high so they never land on one (docs/log.md). A change on the
+// security list is read as ever (the caller leaves it out).
+func (m *Module) pacedRead(project string) ([]core.Pick, string) {
+	route := m.Agents.Route("reviewer", project)
+	if len(route) == 0 {
+		return nil, ""
+	}
+	a := m.C.Runs.AheadIn(route[0], "seven_day", "reviewer")
+	if a <= aheadSlack {
+		return nil, ""
+	}
+	c := cheaper(route)
+	return append([]core.Pick{c}, slices.DeleteFunc(slices.Clone(route), c.Same)...), fmt.Sprintf("the reviewer's plan is %.0f%% ahead of its week", a*100)
+}
+
+// cheaper is the cheaper pick for a read on route: a later sonnet or haiku
+// in it, else sonnet on the first's harness where that is an opus on
+// Claude, else the first.
+func cheaper(route []core.Pick) core.Pick {
+	first := route[0]
+	if !strings.Contains(first.Model, "opus") {
+		return first
+	}
+	for _, p := range route[1:] {
+		if strings.Contains(p.Model, "sonnet") || strings.Contains(p.Model, "haiku") {
+			return p
+		}
+	}
+	if core.HarnessName(first.Harness) == "claude" {
+		first.Model = strings.Replace(first.Model, "opus", "sonnet", 1)
+	}
+	return first
+}

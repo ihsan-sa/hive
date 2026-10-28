@@ -590,6 +590,68 @@ func TestPaceComesBackToTheStartUnderLoadAlone(t *testing.T) {
 	}
 }
 
+// While the reviewer's plan runs ahead of its week, a review goes on the
+// cheaper model and the task's record says so; a change in a high class
+// still needs its second, separate read (the warden's and tribunal's prompts
+// are high so they never land on one), and that read is paced too.
+func TestPaceHoldsReadsAheadOfTheWeek(t *testing.T) {
+	for _, ahead := range []bool{true, false} {
+		m, task, p, _ := gateRigSeeded(t, false, map[string]string{".hive/project.json": `{"test": "true", "high": ["feature.txt"]}`}, map[string]string{"feature.txt": "y"})
+		pick := m.Agents.Route("reviewer", p.Name)[0]
+		week := 0.1
+		if ahead {
+			week = 0.5
+		}
+		reset := time.Now().Add(3 * time.Hour)
+		m.C.J.MustAppend("plan.usage", core.Plan{Harness: pick.Harness, Limit: harness.RateLimit{Status: "allowed", ResetsAt: reset, Window: "five_hour",
+			Windows: map[string]harness.Window{"five_hour": {Utilization: 0.1, ResetsAt: reset},
+				"seven_day": {Utilization: week, ResetsAt: time.Now().Add(6 * 24 * time.Hour)}}}})
+		if err := testStep(m, task, p); err != nil || task.Stage != StageReviewing {
+			t.Fatalf("stage %q, err %v", task.Stage, err)
+		}
+		for read := 1; read <= 2; read++ {
+			if err := m.review(task, p); err != nil {
+				t.Fatal(err)
+			}
+			r, _ := m.C.Runs.Get(task.Reviewer)
+			if paced := r.Inputs["paced"] != ""; paced != ahead || logged(task, "ahead of its week") != ahead {
+				t.Fatalf("ahead %v, read %d: paced input %v, log %v", ahead, read, paced, task.Log)
+			}
+			if read == 2 && !strings.HasSuffix(r.ID, "-read2") {
+				t.Fatalf("ahead %v: the second read is %q", ahead, r.ID)
+			}
+			m.C.J.MustAppend("run.turn_ended", map[string]any{"id": r.ID, "turn": 1, "status": core.StatusDone,
+				"result": harness.Result{Structured: []byte(`{"verdict":"land","summary":"ok","token":"` + reviewToken(r.ID) + `"}`)}})
+			if err := m.review(task, p); err != nil {
+				t.Fatal(err)
+			}
+			main, _ := m.C.Effects.Sync(p)
+			ch, _ := m.C.Effects.Classify(p, main, task.SHA)
+			if len(ch.High) != 1 || m.C.Effects.Reviewed(p, ch, task.SHA) != (read == 2) {
+				t.Fatalf("ahead %v: high %v, reviewed after %d reads: %v", ahead, ch.High, read, read != 2)
+			}
+		}
+	}
+}
+
+// The cheaper read is sonnet where the reviewer's route is opus.
+func TestCheaperRead(t *testing.T) {
+	for _, c := range []struct {
+		route []core.Pick
+		want  string
+	}{
+		{[]core.Pick{{Harness: "claude", Model: "opus"}}, "claude:sonnet"},
+		{[]core.Pick{{Harness: "claude", Model: "claude-opus-5-5"}}, "claude:claude-sonnet-5-5"},
+		{[]core.Pick{{Harness: "codex", Model: "opus"}, {Harness: "claude", Model: "haiku"}}, "claude:haiku"},
+		{[]core.Pick{{Harness: "claude", Model: "sonnet"}}, "claude:sonnet"},
+		{[]core.Pick{{Harness: "codex", Model: "gpt-5.5"}}, "codex:gpt-5.5"},
+	} {
+		if got := cheaper(c.route).String(); got != c.want {
+			t.Errorf("%v: %s, want %s", c.route, got, c.want)
+		}
+	}
+}
+
 // A load that is the disk's doesn't pull the checks' pace under its start,
 // and brings it back there a growStep after another strain pulled it under:
 // on 10-27 the checks sat at 1 for hours under a load of IO wait that never

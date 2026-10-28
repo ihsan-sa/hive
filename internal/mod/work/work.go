@@ -378,6 +378,9 @@ type Module struct {
 	holdPolled map[string]time.Time
 	// gating are the recursive gate runs in flight by key (selfgate.go).
 	gating map[string]*gateRun
+	// gatesHeld is when new gates may start again: an update waiting for
+	// the running ones to end holds the rest back until then (HoldGates).
+	gatesHeld time.Time
 	// gate lets an update stop new merges and wait out the running ones
 	// (PauseMerges): inMerge counts merges past the gate, paused says the
 	// gate is shut, and idle, while a pause waits, closes when the last
@@ -2264,11 +2267,17 @@ func (m *Module) review(t *Task, p core.Project) error {
 		spec.ReadOnly, spec.Schema, spec.Task = true, VerdictSchema, t.ID
 		spec.Inputs = map[string]string{"sha": t.SHA, "diff.patch": ch.Diff, "tests.txt": core.ClipEnds(c.FullOutput(), 16000),
 			"brief.md": "Review token: " + reviewToken(id) + "\n\n" + account + m.reviewRules(p, main)}
+		paced := ""
+		if route, why := m.pacedRead(p.Name); why != "" && len(ch.Security) == 0 {
+			spec.Harness, spec.Model, spec.Route = route[0].Harness, route[0].Model, route
+			spec.Inputs["paced"] = "1"
+			paced = fmt.Sprintf(" on %s: %s", route[0].Model, why)
+		}
 		if _, err := m.C.Runs.Start(spec); err != nil {
 			return err
 		}
 		t.Reviewer = id
-		m.save(t, "reviewer "+id+" reading "+core.Short(t.SHA))
+		m.save(t, "reviewer "+id+" reading "+core.Short(t.SHA)+paced)
 		return nil
 	}
 	if !r.Terminal() {

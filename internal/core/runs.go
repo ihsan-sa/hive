@@ -428,11 +428,15 @@ func windowLength(k string) time.Duration {
 // or behind it. The share is of each window's own length, so the same slack
 // is 45 minutes of a five-hour window and about a day of the week. A window spent at this rate runs out before it resets and
 // the Hive sits idle until it does.
-func (p Plan) Ahead(now time.Time) float64 {
+func (p Plan) Ahead(now time.Time) float64 { return p.AheadIn(now, "") }
+
+// AheadIn is Ahead over the windows whose name starts with window
+// ("seven_day" for the week, "" for every paced one).
+func (p Plan) AheadIn(now time.Time, window string) float64 {
 	a := 0.0
 	for k, w := range p.Limit.Windows {
 		n := windowLength(k)
-		if n == 0 || !w.ResetsAt.After(now) {
+		if n == 0 || !strings.HasPrefix(k, window) || !w.ResetsAt.After(now) {
 			continue
 		}
 		passed := 1 - float64(w.ResetsAt.Sub(now))/float64(n)
@@ -1277,16 +1281,22 @@ func (rs *Runs) Headroom(p Pick) float64 {
 // Ahead is how far ahead of its paced windows the least ahead login a turn
 // on p could take is (Plan.Ahead), 0 when one is on pace or nothing is known;
 // with every login parked it is 0 too, and Headroom says so.
-func (rs *Runs) Ahead(p Pick) float64 {
+func (rs *Runs) Ahead(p Pick) float64 { return rs.AheadIn(p, "", "") }
+
+// AheadIn is Ahead over the windows named by window (Plan.AheadIn; the
+// week's alone is "seven_day") for a run of role, which a login parked for
+// other roles still takes when role may spend the reserve (Reserved).
+func (rs *Runs) AheadIn(p Pick, window, role string) float64 {
 	logins := rs.logins(p.Harness, p.Model)
 	now := time.Now()
 	limited := rs.limited(keys(logins), now)
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
 	ahead := -1.0
-	for _, pl := range rs.plansOf(logins, now, false, limited) {
-		if !pl.Parked(now) && !limited[pl.Key()].After(now) && (ahead < 0 || pl.Ahead(now) < ahead) {
-			ahead = pl.Ahead(now)
+	reserve := Reserved(role)
+	for _, pl := range rs.plansOf(logins, now, reserve, limited) {
+		if pl.parkedFor(now, reserve).IsZero() && !limited[pl.Key()].After(now) && (ahead < 0 || pl.AheadIn(now, window) < ahead) {
+			ahead = pl.AheadIn(now, window)
 		}
 	}
 	return max(ahead, 0)
