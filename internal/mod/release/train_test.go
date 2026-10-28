@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/calls"
 )
 
 // canaryStub answers each canary with the next outcome sent on it, and
@@ -91,10 +92,12 @@ func TestTrainMovesOnlyOnTheCanarysKeep(t *testing.T) {
 		t.Fatalf("within the day: %q, %v", msg, err)
 	}
 
-	// A day on: the canary couldn't run, then rolls it back.
-	every := trainEvery
-	t.Cleanup(func() { trainEvery = every })
-	trainEvery = 0
+	// The lead makes the call that the train needn't wait the day (#1940),
+	// and it holds at the next look: the canary couldn't run, then rolls it
+	// back.
+	if _, err := calls.Make(m.C.J, core.Run{RunSpec: core.RunSpec{ID: "lead-1", Role: "lead"}}, "release.train_every", "0", "v0.1.15 is safe and carries a fix the machine needs"); err != nil {
+		t.Fatal(err)
+	}
 	m.AutoUpdate()
 	<-s.jobs
 	s.outcome <- core.GateCantRun

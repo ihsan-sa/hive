@@ -967,7 +967,7 @@ func (m *Module) reapStuck() {
 	m.mu.Lock()
 	var stuck []string
 	for id, at := range m.stepAt {
-		if time.Since(at) > stepLimit {
+		if time.Since(at) > callStepLimit.Of(m.C.J) {
 			stuck = append(stuck, id)
 			delete(m.stepAt, id)
 			delete(m.busy, id)
@@ -976,7 +976,7 @@ func (m *Module) reapStuck() {
 	m.mu.Unlock()
 	for _, id := range stuck {
 		if t, ok := m.Get(id); ok {
-			m.steer(&t, fmt.Sprintf("its step in %s ran past %s and was let go; it steps again", t.Stage, stepLimit))
+			m.steer(&t, fmt.Sprintf("its step in %s ran past %s and was let go; it steps again", t.Stage, callStepLimit.Of(m.C.J)))
 		}
 	}
 }
@@ -1090,9 +1090,9 @@ func (m *Module) settle(t *Task, err error) {
 		m.slow = time.Now()
 		m.mu.Unlock()
 		t.Kills++
-		if t.Kills >= killCap {
+		if t.Kills >= callKillCap.Of(m.C.J) {
 			t.Kills = 0
-			m.giveUp(t, fmt.Sprintf("gave up after %d steps in a row killed by their timeout (about %s): ", killCap, killCap*slowWait)+core.Clip(err.Error(), 300))
+			m.giveUp(t, fmt.Sprintf("gave up after %d steps in a row killed by their timeout (about %s): ", t.Kills, time.Duration(t.Kills)*slowWait)+core.Clip(err.Error(), 300))
 			return
 		}
 		t.Retry = time.Now().Add(slowWait)
@@ -1116,7 +1116,7 @@ const slowWait = 3 * time.Minute
 
 // killCap is how many steps in a row killed by their timeout stop a task:
 // about an hour of slowWait.
-const killCap = 20
+var killCap = 20
 
 // backoff is the gap after the nth failed step of an outage: 30s doubling to
 // a 10 minute ceiling.
@@ -1991,7 +1991,7 @@ func (m *Module) test(t *Task, p core.Project) error {
 // CantRunTries is how many tries in a row a check may fail to start before
 // that counts as red: a commit can print "not found" and exit 127 to look like
 // a missing tool, and it isn't held, nor its merge kept, on that forever.
-const CantRunTries = 6
+var CantRunTries = 6
 
 // cantRun holds a change whose tests couldn't start because a tool they call
 // is missing where checks run. That is no verdict on the change: it isn't
@@ -2000,7 +2000,7 @@ const CantRunTries = 6
 // changes. After CantRunTries of its own tests in a row it is red: it is
 // stopped, never merged on it, and the person is asked for the tool.
 func (m *Module) cantRun(t *Task, p core.Project, c core.Check) error {
-	if t.CantRuns >= CantRunTries {
+	if t.CantRuns >= CallCantRunTries.Of(m.C.J) {
 		return m.cantRunRed(t, p, c)
 	}
 	reason := "the tests " + c.CantRun + ", so this waits and is tested again every 10 minutes"
@@ -2033,7 +2033,7 @@ func (m *Module) cantRunRed(t *Task, p core.Project, c core.Check) error {
 		Detail: fmt.Sprintf("The tests of %q (%s) %s, %d tries in a row. That now counts as red: it is stopped and not merged. "+
 			"If %s is really missing, install it where checks run and the lead can bring the change back; if it isn't, the change only claims it is.", t.Label(), cmp.Or(t.PR.URL, t.ID), c.CantRun, t.CantRuns, tool)})
 	t.CantRuns = 0
-	m.giveUp(t, fmt.Sprintf("the tests %s, %d tries in a row, which now counts as red; the person is asked for %s", c.CantRun, CantRunTries, tool))
+	m.giveUp(t, fmt.Sprintf("the tests %s, %d tries in a row, which now counts as red; the person is asked for %s", c.CantRun, t.CantRuns, tool))
 	return nil
 }
 
@@ -2698,7 +2698,7 @@ func (m *Module) waitDraft(t *Task, pr core.PR) error {
 		t.Reason = reason
 		m.save(t, reason)
 	}
-	if !t.DraftTold && time.Since(t.DraftSince) >= draftTell {
+	if !t.DraftTold && time.Since(t.DraftSince) >= callDraftTell.Of(m.C.J) {
 		t.DraftTold = true
 		m.save(t, "told the lead the draft has waited since "+t.DraftSince.Format("2006-01-02 15:04Z"))
 		m.Chat.ToLead(t.Chat, t.Thread, fmt.Sprintf("%q (task %s) has waited since %s: %s.", t.Label(), strings.TrimSpace(t.ID+" "+t.PR.URL), t.DraftSince.Format("2006-01-02 15:04Z"), reason))
@@ -2943,14 +2943,14 @@ func (m *Module) forgeChecks(t *Task, p core.Project, main string) (bool, error)
 				t.MainWait, t.MainWaitOn = time.Now().UTC(), t.SHA
 				m.save(t, "") // the hold below may save nothing, and the next tick loads it afresh
 			}
-			if time.Since(t.MainWait) < mainWaitMax {
+			if time.Since(t.MainWait) < callMainWaitMax.Of(m.C.J) {
 				m.hold(t, p, "waiting on main: the forge's checks "+core.CheckNames(still)+" fail on "+core.Short(t.SHA)+" and still run on main at "+core.Short(main)+", whose result says whether the red is the change's")
 				return true, nil
 			}
 			// A run on main that never finishes (a stuck runner, a status
 			// that never reports, a run cancelled with nothing finished
 			// before it) counts as not run, and the lead hears of it.
-			how := " have run on main in " + p.Name + " at " + core.Short(main) + " for over " + mainWaitMax.String() + " without a result"
+			how := " have run on main in " + p.Name + " at " + core.Short(main) + " for over " + callMainWaitMax.Of(m.C.J).String() + " without a result"
 			if slices.ContainsFunc(mainRuns, func(mr core.CheckRun) bool {
 				return mr.State == core.CheckCantStart && slices.ContainsFunc(still, func(r core.CheckRun) bool { return r.Name == mr.Name })
 			}) {
@@ -3032,7 +3032,7 @@ func (m *Module) forgeChecks(t *Task, p core.Project, main string) (bool, error)
 		}
 		t.Reason = ""
 		hint := ""
-		if t.Reruns[t.SHA] < rerunsPerHead {
+		if t.Reruns[t.SHA] < callReruns.Of(m.C.J) {
 			hint = "\n\nIf the log shows a flake rather than your change, `hive agent rerun-checks` runs the failed jobs again and finishing again without a commit waits for them."
 		}
 		findings := forgeFailed + core.Short(t.SHA)

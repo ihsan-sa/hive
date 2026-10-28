@@ -60,7 +60,7 @@ func (m *Module) keptFirst(t *Task, p core.Project, main string) string {
 			continue // git can't tell: as before, it doesn't wait
 		}
 		return fmt.Sprintf("%s: #%d (%s) was kept on %s against main at %s, and this merge would change what that verdict measured; it merges first (or until %s)",
-			KeptFirstWait, k.task.PR.Number, core.Clip(k.task.Label(), 80), core.Short(k.gate.Head), core.Short(k.gate.Main), k.gate.At.Add(keptFirstFor).Format("15:04Z"))
+			KeptFirstWait, k.task.PR.Number, core.Clip(k.task.Label(), 80), core.Short(k.gate.Head), core.Short(k.gate.Main), k.gate.At.Add(callKeptFirstFor.Of(m.C.J)).Format("15:04Z"))
 	}
 	return ""
 }
@@ -69,7 +69,7 @@ func (m *Module) keptFirst(t *Task, p core.Project, main string) string {
 // rolled it back and it is fresh enough to hold others.
 func (m *Module) liveKeep(u *Task, p core.Project, main string) (core.GateResult, bool) {
 	g, ok := m.C.Effects.StandingGate(p, u.SHA, main)
-	if !ok || !g.Measured || g.Outcome != core.GateKeep || time.Since(g.At) > keptFirstFor {
+	if !ok || !g.Measured || g.Outcome != core.GateKeep || time.Since(g.At) > callKeptFirstFor.Of(m.C.J) {
 		return core.GateResult{}, false
 	}
 	if j, ok := m.C.Effects.Judgement(p.Name, g.Head, g.Main); ok && j.At.After(g.At) && j.Verdict != core.GateKeep {

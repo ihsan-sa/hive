@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/calls"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/modules"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/report"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/scan"
@@ -449,10 +450,10 @@ func (m *Module) update(tag string, auto bool) (string, error) {
 	resume := func() {}
 	if m.PauseMerges != nil {
 		var ok bool
-		if resume, ok = m.PauseMerges(mergeWait); !ok {
+		if resume, ok = m.PauseMerges(callMergeWait.Of(m.C.J)); !ok {
 			m.skipped++
-			text := fmt.Sprintf("a merge has run past %s at %d looks in a row", mergeWait, m.skipped)
-			if m.skipped < maxSkips {
+			text := fmt.Sprintf("a merge has run past %s at %d looks in a row", callMergeWait.Of(m.C.J), m.skipped)
+			if m.skipped < callMaxSkips.Of(m.C.J) {
 				resume()
 				m.C.J.MustAppend("hive.update_held", map[string]any{"to": tag, "looks": m.skipped, "text": text})
 				return "waiting: " + text + "; " + tag + " installs at the next look", nil
@@ -582,12 +583,21 @@ var mergeWait = 2 * time.Minute
 
 // maxSkips is how many looks in a row an update waits on a merge running
 // past mergeWait before it installs anyway.
-const maxSkips = 3
+var maxSkips = 3
 
 // gateWaitMax is the most an automatic update waits for the recursive gates
 // running when it first looked: a gate's own limit and its grace, so a run
 // that started just before ends, and a hung one doesn't keep the Hive behind.
 var gateWaitMax = 2*time.Hour + 15*time.Minute
+
+// An update's waits are calls (#1940): an agent that sees one holding the
+// Hive behind, or cutting work short, changes it at once with `hive agent call`.
+var (
+	callMergeWait   = calls.Duration("release.update_merge_wait", "the most an update waits for the merges already running, at each look", &mergeWait)
+	callMaxSkips    = calls.Count("release.update_merge_looks", "how many looks in a row an update waits on a merge running past release.update_merge_wait before it installs anyway; 0 installs at once", &maxSkips)
+	callGateWaitMax = calls.Duration("release.update_gate_wait", "the most an automatic update waits for the recursive gates running when it first looked, holding new ones back meanwhile; 0 installs at once", &gateWaitMax)
+	callLateAfter   = calls.Duration("release.late_after", "how long a merge waits for main's checks, or a pre-release for its own, before the person is told", &lateAfter)
+)
 
 // gateHold is how long each look that waits for gates keeps new ones from
 // starting; the next look renews it, so an update gone from the channel
@@ -614,11 +624,11 @@ func (m *Module) waitGates(tag string, auto bool) string {
 	if first {
 		m.gatesSince = now
 	}
-	by := m.gatesSince.Add(gateWaitMax)
+	by := m.gatesSince.Add(callGateWaitMax.Of(m.C.J))
 	text := fmt.Sprintf("%d recursive gate(s) running, the oldest since %s", n, oldest.UTC().Format("15:04Z"))
 	if !now.Before(by) {
 		m.gatesSince = time.Time{}
-		m.C.J.MustAppend("hive.update_held", map[string]any{"to": tag, "gates": n, "forced": true, "text": text + fmt.Sprintf("; waited %s, installing anyway", gateWaitMax)})
+		m.C.J.MustAppend("hive.update_held", map[string]any{"to": tag, "gates": n, "forced": true, "text": text + fmt.Sprintf("; waited %s, installing anyway", callGateWaitMax.Of(m.C.J))})
 		return ""
 	}
 	if m.HoldGates != nil {
@@ -1208,10 +1218,10 @@ func (m *Module) retryWaiting() {
 			m.afterKept(p.Name, sha)
 		}()
 		key := p.Name + "@ci:" + w.SHA
-		if now := m.ciState(p.Name); now.Kind == "release.ci_waiting" && now.SHA == w.SHA && time.Since(w.At) > lateAfter && !m.said[key] {
+		if now := m.ciState(p.Name); now.Kind == "release.ci_waiting" && now.SHA == w.SHA && time.Since(w.At) > callLateAfter.Of(m.C.J) && !m.said[key] {
 			m.said[key] = true
 			m.C.J.MustAppend("alert.raised", map[string]string{"kind": "release", "project": p.Name,
-				"text": "no release at " + core.Short(w.SHA) + " yet: main's checks there haven't passed after " + lateAfter.String()})
+				"text": "no release at " + core.Short(w.SHA) + " yet: main's checks there haven't passed after " + callLateAfter.Of(m.C.J).String()})
 		}
 	}
 	m.retryUnmerged()
@@ -1566,7 +1576,7 @@ func (m *Module) merges(project, upTo string) (out []merge, refuse string) {
 var Gates = []string{"ci", "update"}
 
 // lateAfter is how long a pre-release waits for its gates before it is raised.
-const lateAfter = 6 * time.Hour
+var lateAfter = 6 * time.Hour
 
 // publishEvery is how often Tick checks the Hive's pre-releases.
 const publishEvery = 10 * time.Minute
@@ -1687,9 +1697,9 @@ func (m *Module) Publish() string {
 			}
 			out = append(out, c.Tag+": "+why)
 		default:
-			if time.Since(c.At) > lateAfter && !m.said[key] {
+			if time.Since(c.At) > callLateAfter.Of(m.C.J) && !m.said[key] {
 				m.said[key] = true
-				alert(c, c.Tag+" is still a pre-release after "+lateAfter.String()+": "+why)
+				alert(c, c.Tag+" is still a pre-release after "+callLateAfter.Of(m.C.J).String()+": "+why)
 			}
 			out = append(out, c.Tag+": "+why)
 		}

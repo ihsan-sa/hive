@@ -200,7 +200,10 @@ A value of @path reads that file. Common ops:
                                                  GitHub's API on the person's login, cached; never curl api.github.com
 The loop is every agent's: these act on your own project's tasks, on the record with your run id.
   rerun-checks [--task id]                      the failed forge checks (CI jobs) on a PR's head (yours by default)
-                                                 run again, for a flake; at most 2 per head, the merge waits for them
+                                                 run again, for a flake; work.reruns_per_head times per head, the merge waits
+  call      [--name n --value v --why "..."]     the Hive's cadences, caps and counts are calls: with no name,
+                                                 each with its value and what it decides; with one, changed
+                                                 for the whole Hive at once ("default" puts it back)
   queue     [--order id,id] [--hold id] [--release id]   briefs waiting for a worker, in order
             [--now id --why "..."]               put it first in line
   recheck   --task id [--back "..."]           a blocked or stopped task, or one stuck on its way to

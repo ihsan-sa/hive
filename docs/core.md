@@ -54,6 +54,7 @@ Every other package is module material. Most are compiled-in modules already (`i
 | `internal/mod/kb` | the kb module |
 | `internal/mod/risk` | a risk module: wardens, tribunals, approved scripts. The ceiling itself stays core |
 | `internal/mod/chat`, `internal/mod/feedback`, `internal/mod/problems` | the chat module |
+| `internal/mod/calls` | the calls module: the cadences, caps and counts agents change with `hive agent call`; each module declares its own |
 | `internal/mod/work` | a work module: ask → issue → PR → review → merge. The core keeps runs, spawning and the merge guarantees it calls |
 | `internal/mod/projects` | a projects module: adding and onboarding projects (the registry stays core) |
 | `internal/mod/system` | the system module: schedules and wake-ups |

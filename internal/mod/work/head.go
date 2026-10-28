@@ -42,11 +42,11 @@ func (m *Module) sameHead(t *Task, p core.Project, head string) (bool, error) {
 			t.HeadWait, t.HeadWaitOn = time.Now().UTC(), head
 			m.save(t, "") // the hold below may save nothing, and the next tick loads it afresh
 		}
-		if time.Since(t.HeadWait) < noChecksMax {
+		if time.Since(t.HeadWait) < callNoChecksMax.Of(m.C.J) {
 			m.hold(t, p, "waiting for the forge to show "+pr+" at "+core.Short(t.SHA)+" (it still shows "+core.Short(head)+", an earlier push)")
 			return true, nil
 		}
-		m.adopt(t, head, pr+"'s head has stayed at "+core.Short(head)+", an earlier push of the Hive's to "+t.Branch+", for over "+noChecksMax.String()+": the forge's order of the pushes isn't the journal's")
+		m.adopt(t, head, pr+"'s head has stayed at "+core.Short(head)+", an earlier push of the Hive's to "+t.Branch+", for over "+callNoChecksMax.Of(m.C.J).String()+": the forge's order of the pushes isn't the journal's")
 		return true, nil
 	}
 	t.Reason = ""
@@ -78,12 +78,12 @@ func (m *Module) noChecks(t *Task, p core.Project, main string, runs []core.Chec
 		// Saved now: a hold whose reason didn't change saves nothing, and
 		// the next tick loads the task afresh.
 		t.NoChecks, t.NoChecksOn = time.Now().UTC(), t.SHA
-		m.save(t, "no forge check run on "+core.Short(t.SHA)+" yet; waiting up to "+noChecksMax.String()+" for one")
+		m.save(t, "no forge check run on "+core.Short(t.SHA)+" yet; waiting up to "+callNoChecksMax.Of(m.C.J).String()+" for one")
 	}
-	if time.Since(t.NoChecks) < noChecksMax {
+	if time.Since(t.NoChecks) < callNoChecksMax.Of(m.C.J) {
 		return false, nil
 	}
-	none := "no forge check run has appeared on " + core.Short(t.SHA) + " in over " + noChecksMax.String()
+	none := "no forge check run has appeared on " + core.Short(t.SHA) + " in over " + callNoChecksMax.Of(m.C.J).String()
 	if ok, err := m.catchUp(t, p, main, none); ok || err != nil {
 		return true, err
 	}

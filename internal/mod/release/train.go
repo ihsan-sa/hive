@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/calls"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/modules"
 )
 
@@ -19,8 +20,8 @@ import (
 // the Hive, so the engine isn't rebuilt under the work running on it.
 const Train = "train"
 
-// trainEvery is how often a canary runs: once a day, counted from the last
-// verdict, so one update a day at most.
+// trainEvery is how often a canary runs by default: once a day, counted from
+// the last verdict, so one update a day at most (release.train_every).
 var trainEvery = 24 * time.Hour
 
 // canaryRetry is how long a canary that couldn't run waits before it tries
@@ -29,6 +30,15 @@ var canaryRetry = time.Hour
 
 // canaryTimeout bounds one canary run, as GateTimeout bounds a gate.
 var canaryTimeout = 2 * time.Hour
+
+// The train's cadence is a call, not a rule (#1940): an agent that sees a
+// safe release held back by the day, or a canary that keeps failing on its
+// own setup, changes it at once with `hive agent call`.
+var (
+	callTrainEvery    = calls.Duration("release.train_every", "how long after a canary's verdict the next canary leaves, so how often the Hive moves to a new release at most; 0 runs a canary as soon as a newer pre-release is safe here", &trainEvery)
+	callCanaryRetry   = calls.Duration("release.canary_retry", "how long a canary that couldn't run waits before it tries again; 0 tries at the next look", &canaryRetry)
+	callCanaryTimeout = calls.Duration("release.canary_timeout", "how long one canary run may take before it is stopped", &canaryTimeout)
+)
 
 // CanaryJob is one canary run: Head, the candidate's commit, against Base,
 // the running release's, both in the self project's clone.
@@ -102,12 +112,12 @@ func (m *Module) train(repo, safe string) (tag string, why []string) {
 		switch c := cs[i]; {
 		case c.Outcome == core.GateRollback:
 			return "", []string{safe + ": its canary rolled it back (" + core.Clip(c.Reason, 200) + "); a newer pre-release rides the next train"}
-		case c.Outcome == core.GateCantRun && time.Since(c.At) < canaryRetry:
-			return "", []string{safe + ": its canary couldn't run (" + core.Clip(c.Reason, 200) + "); it tries again after " + c.At.Add(canaryRetry).UTC().Format("15:04Z")}
+		case c.Outcome == core.GateCantRun && time.Since(c.At) < callCanaryRetry.Of(m.C.J):
+			return "", []string{safe + ": its canary couldn't run (" + core.Clip(c.Reason, 200) + "); it tries again after " + c.At.Add(callCanaryRetry.Of(m.C.J)).UTC().Format("15:04Z")}
 		}
 		break
 	}
-	if next := last.Add(trainEvery); time.Now().Before(next) {
+	if next := last.Add(callTrainEvery.Of(m.C.J)); time.Now().Before(next) {
 		return "", []string{safe + ": safe here; the next train leaves after " + next.UTC().Format("2006-01-02 15:04Z")}
 	}
 	if err := m.startCanary(repo, safe); err != nil {
@@ -149,7 +159,7 @@ func (m *Module) startCanary(repo, tag string) error {
 	from := core.Version
 	// Under the project's canary/, not recursive/, whose folders the work
 	// module tidies when no gate of its own runs there.
-	job := CanaryJob{Project: self, Tag: tag, Head: head, Base: base, Timeout: canaryTimeout,
+	job := CanaryJob{Project: self, Tag: tag, Head: head, Base: base, Timeout: callCanaryTimeout.Of(m.C.J),
 		Out: filepath.Join(m.C.WS.Gates(), self.Name, "canary", tag+"-"+time.Now().UTC().Format("20060102-150405"))}
 	m.C.J.MustAppend("release.canary_started", map[string]string{"tag": tag, "from": from, "head": head, "base": base, "out": job.Out})
 	go func() {

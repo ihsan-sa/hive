@@ -14,7 +14,7 @@ import (
 // a check that fails for real can't be run again and again in place of a fix:
 // two asked for (rerun-checks) and the one the Hive makes itself when main has
 // no answer for the red (forgeChecks), which mustn't spend a worker's.
-const rerunsPerHead = 3
+var rerunsPerHead = 3
 
 // rerunGrace is how long after a re-run a failure still read on that head
 // waits instead of going back: the forge may not list the new attempt yet.
@@ -64,7 +64,7 @@ func (m *Module) RerunChecks(id, by string) (string, error) {
 		return "", fmt.Errorf("task %s is %s; nothing to re-run", id, t.Stage)
 	case t.PR.Number == 0 || t.SHA == "":
 		return "", fmt.Errorf("task %s has no pull request yet; finish first", id)
-	case t.Reruns[t.SHA] >= rerunsPerHead:
+	case t.Reruns[t.SHA] >= callReruns.Of(m.C.J):
 		return "", fmt.Errorf("the forge's checks on %s were re-run %d times already, the most for one head; a failure that keeps coming back is likely the change's own: read its log and fix it", core.Short(t.SHA), t.Reruns[t.SHA])
 	}
 	p, err := m.project(&t)
@@ -95,7 +95,7 @@ func (m *Module) RerunChecks(id, by string) (string, error) {
 		return "", fmt.Errorf("the forge has no finished failed run on %s to re-run: one may still be going, or never started (%s), which a re-run doesn't fix; a startup failure is often the workflow file itself, and one awaiting approval is the repo owner's to approve", core.Short(t.SHA), core.CheckNames(failed))
 	}
 	m.retried(&t, failed, m.keysOf(p.Repo))
-	note := fmt.Sprintf("re-ran the forge's failed checks on %s (%s) for %s, %d of %d on this head", core.Short(t.SHA), core.CheckNames(failed), by, t.Reruns[t.SHA], rerunsPerHead)
+	note := fmt.Sprintf("re-ran the forge's failed checks on %s (%s) for %s, %d of %d on this head", core.Short(t.SHA), core.CheckNames(failed), by, t.Reruns[t.SHA], callReruns.Of(m.C.J))
 	if t.Stage == StageWorking && t.Round > 0 && strings.HasPrefix(t.Findings, forgeFailed+core.Short(t.SHA)) {
 		t.Round--
 		note += "; the round they cost is given back"

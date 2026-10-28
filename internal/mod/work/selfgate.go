@@ -171,14 +171,14 @@ func (m *Module) recursiveGate(t *Task, p core.Project, main string) (bool, erro
 	m.mu.Unlock()
 	switch {
 	case cur != nil && cur.main != "" && cur.main != main:
-		m.hold(t, p, fmt.Sprintf("%s on %s against main at %s (started %s, at most %s); main has moved to %s, where the verdict counts if main's commits since miss its files and the gate's", GateWait, core.Short(t.SHA), core.Short(cur.main), cur.since.Format("15:04Z"), GateTimeout, core.Short(main)))
+		m.hold(t, p, fmt.Sprintf("%s on %s against main at %s (started %s, at most %s); main has moved to %s, where the verdict counts if main's commits since miss its files and the gate's", GateWait, core.Short(t.SHA), core.Short(cur.main), cur.since.Format("15:04Z"), callGateTimeout.Of(m.C.J), core.Short(main)))
 	case cur != nil:
-		m.hold(t, p, fmt.Sprintf("%s on %s against main at %s (started %s, at most %s)", GateWait, core.Short(t.SHA), core.Short(main), cur.since.Format("15:04Z"), GateTimeout))
+		m.hold(t, p, fmt.Sprintf("%s on %s against main at %s (started %s, at most %s)", GateWait, core.Short(t.SHA), core.Short(main), cur.since.Format("15:04Z"), callGateTimeout.Of(m.C.J)))
 	case full != "":
 		m.hold(t, p, gateSlotWait+": "+full)
 	default:
 		m.startGate(t, p, main, key, out)
-		m.hold(t, p, fmt.Sprintf("%s on %s against main at %s (started %s, at most %s)", GateWait, core.Short(t.SHA), core.Short(main), time.Now().UTC().Format("15:04Z"), GateTimeout))
+		m.hold(t, p, fmt.Sprintf("%s on %s against main at %s (started %s, at most %s)", GateWait, core.Short(t.SHA), core.Short(main), time.Now().UTC().Format("15:04Z"), callGateTimeout.Of(m.C.J)))
 	}
 	return true, nil
 }
@@ -255,7 +255,7 @@ func (m *Module) gateLimit(now time.Time, running int, cfg core.Config) (int, st
 // startGate runs the gate on t's head in the background and records its
 // verdict in out; m.gating already holds key, and m.steps counts it.
 func (m *Module) startGate(t *Task, p core.Project, main, key, out string) {
-	job := GateJob{Project: p, Repo: m.C.WS.Project(p.Name), Head: t.SHA, Main: main, Out: out, Timeout: GateTimeout}
+	job := GateJob{Project: p, Repo: m.C.WS.Project(p.Name), Head: t.SHA, Main: main, Out: out, Timeout: callGateTimeout.Of(m.C.J)}
 	id := t.ID
 	ctx, cancel := context.WithTimeout(context.Background(), job.Timeout+15*time.Minute)
 	m.mu.Lock()

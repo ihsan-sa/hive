@@ -580,7 +580,7 @@ func (m *Module) triedOut(project, sha string, cant core.Check) bool {
 	m.C.J.MustAppend("score.cant-run", map[string]string{"project": project, "sha": sha, "tool": cant.Tool})
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.cantRuns[project+"@"+sha] >= work.CantRunTries
+	return m.cantRuns[project+"@"+sha] >= work.CallCantRunTries.Of(m.C.J)
 }
 
 // closeCantRunAsks answers p's open asks for a tool a merge's measures
@@ -803,7 +803,7 @@ func (m *Module) Recover() {
 // as with its judge, so later merges of its project wait for the baseline it
 // settles from the start, not only once it is measured again.
 func (m *Module) holdForJudge(t work.Task) {
-	for i := 0; i < work.JudgeTries; i++ {
+	for i := 0; i < work.CallJudgeTries.Of(m.C.J); i++ {
 		if r, ok := m.C.Runs.Get(fmt.Sprintf("j-%s-%s-%d", t.ID, core.Short(t.MergeSHA), i)); ok && !r.Terminal() {
 			m.mu.Lock()
 			if _, busy := m.judging[t.MergeSHA]; !busy {
@@ -865,7 +865,7 @@ func (m *Module) afterMerge(t work.Task) {
 	case cant.CantRun != "" && m.introduced(p, t.MergeSHA, cant):
 		ok, note = false, "tests red: this merge's test command calls "+cant.Tool+", which isn't installed where checks run: "+note
 	case cant.CantRun != "" && m.triedOut(p.Name, t.MergeSHA, cant):
-		ok, note = false, fmt.Sprintf("%s %s, %d tries in a row since it merged, which counts as red: %s", cant.Kind, cant.CantRun, work.CantRunTries, note)
+		ok, note = false, fmt.Sprintf("%s %s, %d tries in a row since it merged, which counts as red: %s", cant.Kind, cant.CantRun, work.CallCantRunTries.Of(m.C.J), note)
 		m.C.Person.Ask(core.Ask{Kind: "question", Ref: "cant-run:" + t.MergeSHA, Project: p.Name, Options: []string{"ok"},
 			Title:  "Install " + cmp.Or(cant.Tool, "a tool") + " where checks run for " + p.Name + "?",
 			Detail: "Main of " + p.Name + " at " + core.Short(t.MergeSHA) + " (" + t.Label() + ") " + cant.CantRun + " every time it was measured since it merged. That now counts as red, so the merge is reverted. If the tool is really missing, install it where checks run; if it isn't, the change only claimed it was."})

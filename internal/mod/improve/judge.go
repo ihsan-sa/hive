@@ -102,7 +102,7 @@ func (m *Module) judgeMerge(p core.Project, t work.Task, ms Measurement, reason 
 // when it isn't that no answer was usable.
 func (m *Module) runJudge(p core.Project, t work.Task, ms Measurement, reason string) (j core.Judgement, ok bool) {
 	waited, alerted := time.Now(), false
-	for i := 0; i < work.JudgeTries; i++ {
+	for i := 0; i < work.CallJudgeTries.Of(m.C.J); i++ {
 		id := fmt.Sprintf("j-%s-%s-%d", t.ID, core.Short(t.MergeSHA), i)
 		r, found := m.C.Runs.Get(id)
 		if !found {
@@ -127,7 +127,7 @@ func (m *Module) runJudge(p core.Project, t work.Task, ms Measurement, reason st
 				// Later merges of the project wait on this one: say so.
 				alerted = true
 				m.C.J.MustAppend("alert.raised", map[string]string{"kind": "judge", "ref": "judge:" + t.MergeSHA, "project": p.Name,
-					"text": fmt.Sprintf("merge %s (%s) has been with its judge for over %s; later merges of %s aren't measured until it decides (up to %d runs of %s)", core.Short(t.MergeSHA), t.Label(), judgeLong, p.Name, work.JudgeTries, judgeWait)})
+					"text": fmt.Sprintf("merge %s (%s) has been with its judge for over %s; later merges of %s aren't measured until it decides (up to %d runs of %s)", core.Short(t.MergeSHA), t.Label(), judgeLong, p.Name, work.CallJudgeTries.Of(m.C.J), judgeWait)})
 			}
 		}
 		if !r.Terminal() {

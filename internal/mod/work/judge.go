@@ -18,7 +18,7 @@ import (
 
 // JudgeTries is how many unusable answers a judge may give before the numbers
 // decide alone.
-const JudgeTries = 3
+var JudgeTries = 3
 
 // JudgeParkWait is the longest a clear keep (clearKeep) waits on a parked
 // judge: a judge that has stayed parked this long (at a usage limit, on a
@@ -120,7 +120,7 @@ func (m *Module) judgeGate(t *Task, p core.Project, g core.GateResult) (keep, wa
 		return j.Verdict == core.GateKeep, false, nil
 	}
 	key := core.Short(g.Head) + "@" + core.Short(g.Main)
-	if t.JudgeTries[key] >= JudgeTries {
+	if t.JudgeTries[key] >= CallJudgeTries.Of(m.C.J) {
 		return numbers, false, nil
 	}
 	id := fmt.Sprintf("j-%s-%s-%d", t.ID, strings.ReplaceAll(key, "@", "-"), t.JudgeTries[key])
@@ -134,7 +134,7 @@ func (m *Module) judgeGate(t *Task, p core.Project, g core.GateResult) (keep, wa
 			if t.JudgeTries == nil {
 				t.JudgeTries = map[string]int{}
 			}
-			t.JudgeTries[key] = JudgeTries
+			t.JudgeTries[key] = CallJudgeTries.Of(m.C.J)
 			m.save(t, "the gate's numbers decide unjudged: "+why)
 			return false, false, nil
 		}
@@ -149,12 +149,12 @@ func (m *Module) judgeGate(t *Task, p core.Project, g core.GateResult) (keep, wa
 		m.hold(t, p, fmt.Sprintf("%s: the gate said %s on %s, and its judge (%s) is weighing that with the change", GateWait, GateWord(g.Outcome), core.Short(g.Head), spec.Model))
 		return false, true, nil
 	}
-	if !r.Terminal() && clearKeep(g) && r.Status == core.StatusParked && !r.ParkedSince.IsZero() && time.Since(r.ParkedSince) >= JudgeParkWait {
+	if !r.Terminal() && clearKeep(g) && r.Status == core.StatusParked && !r.ParkedSince.IsZero() && time.Since(r.ParkedSince) >= callJudgeParkWait.Of(m.C.J) {
 		m.C.Runs.Stop(r.ID, "the gate's clear keep merges on its numbers rather than wait for this judge")
 		if t.JudgeTries == nil {
 			t.JudgeTries = map[string]int{}
 		}
-		t.JudgeTries[key] = JudgeTries
+		t.JudgeTries[key] = CallJudgeTries.Of(m.C.J)
 		why := fmt.Sprintf("the judge (%s) has been parked since %s (%s), so the gate's clear keep merges on its numbers", r.Model, r.ParkedSince.UTC().Format("15:04Z"), core.Clip(r.Reason, 200))
 		// Said on the PR, so a later read knows no judge weighed this keep.
 		m.comment(p.Repo, t.PR.Number, fmt.Sprintf("**Judge bypassed:** %s against main at %s merges unjudged: %s. The gate said: %s", core.Short(g.Head), core.Short(g.Main), why, g.Reason))
@@ -163,13 +163,13 @@ func (m *Module) judgeGate(t *Task, p core.Project, g core.GateResult) (keep, wa
 	}
 	verdict, summary, ok := "", "", false
 	switch {
-	case !r.Terminal() && time.Since(r.Created) < JudgeWait:
+	case !r.Terminal() && time.Since(r.Created) < callJudgeWait.Of(m.C.J):
 		m.hold(t, p, fmt.Sprintf("%s: the gate said %s on %s, and its judge (%s) is weighing that with the change", GateWait, GateWord(g.Outcome), core.Short(g.Head), r.Model))
 		return false, true, nil
 	case !r.Terminal():
 		// A judge that hangs counts as a try, so the task never waits on it
 		// past JudgeTries of them (the stall watcher skips GateWait).
-		m.C.Runs.Stop(id, "the judge took longer than "+JudgeWait.String()+"; another is asked")
+		m.C.Runs.Stop(id, "the judge took longer than "+callJudgeWait.Of(m.C.J).String()+"; another is asked")
 	default:
 		verdict, summary, ok = ReadJudgement(r)
 	}
@@ -178,8 +178,8 @@ func (m *Module) judgeGate(t *Task, p core.Project, g core.GateResult) (keep, wa
 			t.JudgeTries = map[string]int{}
 		}
 		t.JudgeTries[key]++
-		if t.JudgeTries[key] >= JudgeTries {
-			m.save(t, fmt.Sprintf("the judge gave no usable answer %d times, so the gate's numbers decide: %s", JudgeTries, GateWord(g.Outcome)))
+		if t.JudgeTries[key] >= CallJudgeTries.Of(m.C.J) {
+			m.save(t, fmt.Sprintf("the judge gave no usable answer %d times, so the gate's numbers decide: %s", t.JudgeTries[key], GateWord(g.Outcome)))
 			return numbers, false, nil
 		}
 		m.save(t, "the judge gave no usable answer; asking again")
