@@ -19,12 +19,14 @@ import (
 // the Hive, so the engine isn't rebuilt under the work running on it.
 const Train = "train"
 
-// trainEvery is how often a canary runs: once a day, counted from the last
-// verdict, so one update a day at most.
+// trainEvery is how often the Hive moves: once a day, counted from the last
+// canary that kept its candidate, so one update a day at most. A rollback
+// moved nothing, so it doesn't spend the day either.
 var trainEvery = 24 * time.Hour
 
-// canaryRetry is how long a canary that couldn't run waits before it tries
-// again: it measured nothing, so it doesn't spend the day.
+// canaryRetry is how long the train waits after a canary that moved nothing:
+// one that couldn't run tries again, and one that rolled back gives the next
+// newer safe pre-release its canary, an hour on.
 var canaryRetry = time.Hour
 
 // canaryTimeout bounds one canary run, as GateTimeout bounds a gate.
@@ -71,14 +73,16 @@ func (m *Module) canaries() []canary {
 // on safe, in the background. why says what the train waits for.
 func (m *Module) train(repo, safe string) (tag string, why []string) {
 	cs := m.canaries()
-	var last time.Time // the last verdict that spent a day
+	var last time.Time // the last keep, which spent a day
+	var rolled time.Time // the last rollback, which spent an hour
 	kept := map[string]bool{}
 	for _, c := range cs {
-		if c.Outcome != core.GateCantRun {
+		switch c.Outcome {
+		case core.GateKeep:
 			last = c.At
-		}
-		if c.Outcome == core.GateKeep {
 			kept[c.Tag] = true
+		case core.GateRollback:
+			rolled = c.At
 		}
 	}
 	for t := range kept {
@@ -109,6 +113,9 @@ func (m *Module) train(repo, safe string) (tag string, why []string) {
 	}
 	if next := last.Add(trainEvery); time.Now().Before(next) {
 		return "", []string{safe + ": safe here; the next train leaves after " + next.UTC().Format("2006-01-02 15:04Z")}
+	}
+	if next := rolled.Add(canaryRetry); time.Now().Before(next) {
+		return "", []string{safe + ": safe here; the last canary rolled back, so its canary runs after " + next.UTC().Format("2006-01-02 15:04Z")}
 	}
 	if err := m.startCanary(repo, safe); err != nil {
 		return "", []string{safe + ": its canary can't start: " + err.Error()}
