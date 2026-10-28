@@ -145,14 +145,21 @@ func (m *Module) mergedSeat(p core.Project, pr int, head, mergeSHA string, ch co
 		if err := json.Unmarshal(r.Structured, &v); err != nil || (v.Verdict != "land" && v.Verdict != "fix") || (v.Verdict == "land" && tok.Token != reviewToken(r.ID)) {
 			continue
 		}
-		if got, ok := m.C.Effects.GetVerdict(p.Name, head); !ok || got.Run != id || seat != "" {
+		// Recorded once: an ordinary verdict on the head, a seat's on the diff.
+		got, ok := m.C.Effects.GetVerdict(p.Name, head)
+		if seat != "" {
+			got, ok = m.C.Effects.SecurityReads(p.Name, ch.DiffID)[seat]
+		}
+		if !ok || got.Run != id {
 			v.Project, v.SHA, v.Run = p.Name, head, id
 			if err := m.C.Effects.RecordVerdict(v); err != nil {
 				return "can't record " + who + "'s verdict: " + core.Clip(err.Error(), 200)
 			}
 			m.C.Effects.RemoveCheckout(p.Name, id)
 		}
-		if v.Verdict == "fix" {
+		// A panel seat's fix is one vote: the tally decides once every seat
+		// has read (mergedSeats, SecurityOK).
+		if v.Verdict == "fix" && !strings.HasPrefix(seat, "panel-") {
 			return who + " asked for fixes on the merged #" + strconv.Itoa(pr) + ": " + core.Clip(verdictText(v), 400)
 		}
 		return ""

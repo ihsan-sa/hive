@@ -104,3 +104,47 @@ func TestReadMergedUnread(t *testing.T) {
 		t.Fatalf("passed %v, why %q after the reviewer's land", passed, why)
 	}
 }
+
+// A panel seat's fix is one vote of three: two lands and a fix pass the
+// read, whichever seat ends last; a majority of fixes holds it.
+func TestReadMergedPanelMajority(t *testing.T) {
+	for name, votes := range map[string][]string{"fix last": {"land", "land", "fix"}, "fix first": {"fix", "land", "land"}, "two fixes": {"fix", "land", "fix"}} {
+		t.Run(name, func(t *testing.T) {
+			m, p, task, mergeSHA, diff, root := mergedRig(t)
+			id := func(seat string) string {
+				return "m-p-" + strconv.Itoa(task.PR.Number) + "-" + core.Short(diff) + "-" + seat + "-0"
+			}
+			m.ReadMerged(p, task.PR.Number, task.SHA, mergeSHA, diff, root)
+			mergedSays(t, m, id(core.SeatSecurity), "land")
+			m.ReadMerged(p, task.PR.Number, task.SHA, mergeSHA, diff, root)
+			for i, v := range votes {
+				mergedSays(t, m, id(core.PanelSeat(i)), v)
+			}
+			passed, why := m.ReadMerged(p, task.PR.Number, task.SHA, mergeSHA, diff, root)
+			if name == "two fixes" {
+				if passed || !strings.Contains(why, "panel asked for fixes (2 of 3)") {
+					t.Fatalf("passed %v, why %q on two fixes of three", passed, why)
+				}
+				return
+			}
+			if !passed || why != "" {
+				t.Fatalf("passed %v, why %q on two lands of three", passed, why)
+			}
+			n := 0
+			m.C.J.Replay(func(e core.Event) {
+				if e.Kind == "effect.verdict" {
+					n++
+				}
+			})
+			m.ReadMerged(p, task.PR.Number, task.SHA, mergeSHA, diff, root)
+			m.C.J.Replay(func(e core.Event) {
+				if e.Kind == "effect.verdict" {
+					n--
+				}
+			})
+			if n != 0 {
+				t.Fatalf("a later call recorded %d verdicts again", -n)
+			}
+		})
+	}
+}
