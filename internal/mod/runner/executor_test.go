@@ -117,6 +117,29 @@ func TestExecutorHandsTheSpecToTheModule(t *testing.T) {
 	}
 }
 
+// A check is handed over the same way and run to its end: Run returns once
+// the module's turn exits, with its exit code.
+func TestExecutorRunsACheck(t *testing.T) {
+	r, home := execRunner(t, `{"name":"dispatch","exec":["./run"],"hooks":["status","executor"]}`)
+	r.status["dispatch"] = "running"
+	ex, _ := r.Executor()
+	if ex == nil {
+		t.Fatal("no executor")
+	}
+	out := filepath.Join(t.TempDir(), "gate-1.log")
+	code, err := ex.Run(sandbox.Spec{ID: "gate-1", Argv: []string{"/bin/sh", "-c", "true"}, Cwd: "/work", Stdout: out}, time.Minute)
+	if err != nil || code != 0 {
+		t.Fatalf("Run = %d, %v", code, err)
+	}
+	args, _ := os.ReadFile(filepath.Join(home, "args"))
+	if f := strings.Fields(string(args)); len(f) != 5 || f[0] != "turn" || f[4] != "iiks1" || core.Exists(f[2]) {
+		t.Fatalf("turn's arguments: %q", args)
+	}
+	if s, err := sandbox.ReadSpec(filepath.Join(home, "spec")); err != nil || s.ID != "gate-1" {
+		t.Errorf("spec handed over: %+v, %v", s, err)
+	}
+}
+
 // A module without the hook is never handed a turn.
 func TestExecutorNeedsTheHook(t *testing.T) {
 	r, _ := execRunner(t, `{"name":"dispatch","exec":["./run"],"hooks":["status"]}`)

@@ -2,8 +2,11 @@ package core
 
 import (
 	"runtime"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/sandbox"
 )
@@ -88,5 +91,86 @@ func TestStrainedTurnGoesToAnExecutor(t *testing.T) {
 	})
 	if where != "iiks1" {
 		t.Errorf("run.turn_started says where %q", where)
+	}
+}
+
+// A test check the line here would make wait runs on an executor module's
+// runner with room, without a slot and without this machine's shared caches,
+// and the record says where; a check waiting in the line leaves it once a
+// runner has room. A check with a free slot, or of main's own commit, runs
+// here.
+func TestCheckGoesToARunnerWhenTheLineIsFull(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the checks are shell")
+	}
+	c, _, p, main := setupProject(t)
+	r, _ := commitInCheckout(t, c, p, "w1", main, "feature.go", "package demo\n")
+	sha, err := c.Effects.Extract(p, r, main)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var here, away []sandbox.Spec
+	c.Effects.sandbox = func() (sandbox.Sandbox, error) { return mapped{specs: &here}, nil }
+	c.Runs.sandbox = func() (sandbox.Sandbox, error) { return isolatedBox{}, nil }
+	var mu sync.Mutex
+	room := true
+	c.Runs.Executor = func() (sandbox.Sandbox, string) {
+		mu.Lock()
+		defer mu.Unlock()
+		if !room {
+			return nil, ""
+		}
+		return mapped{specs: &away}, "iiks1"
+	}
+	c.Effects.Slots.Resize(func() int { return 1 })
+
+	if ch := c.Effects.RunCheck(p, sha, "test", "true"); !ch.OK || ch.Where != "" || len(here) != 1 || len(away) != 0 {
+		t.Fatalf("with a free slot: where %q, %d here, %d away", ch.Where, len(here), len(away))
+	}
+	release := c.Effects.Slots.Acquire("other", "x", "test")
+	if ch := c.Effects.RunCheck(p, sha, "test", "true"); !ch.OK || ch.Where != "iiks1" || len(away) != 1 || !strings.Contains(ch.Output, "ran on iiks1") {
+		t.Fatalf("with the line full: %+v, %d away", ch, len(away))
+	}
+	if s := away[0]; s.Cwd != "/work" || slices.ContainsFunc(s.Mounts, func(m sandbox.Mount) bool { return m.Inside == GoModInside || m.Inside == GoBuildInside }) {
+		t.Errorf("the spec handed over: cwd %q mounts %+v", s.Cwd, s.Mounts)
+	}
+	if running, waiting := c.Effects.Slots.State(); len(running) != 1 || len(waiting) != 0 {
+		t.Errorf("a check run elsewhere held or waited for a slot here: %+v %+v", running, waiting)
+	}
+
+	// Waiting in the line, it leaves once a runner has room.
+	old := checkLeaveEvery
+	checkLeaveEvery = 20 * time.Millisecond
+	defer func() { checkLeaveEvery = old }()
+	mu.Lock()
+	room = false
+	mu.Unlock()
+	done := make(chan Check)
+	go func() { done <- c.Effects.RunCheck(p, sha, "retest", "true") }()
+	time.Sleep(100 * time.Millisecond)
+	if _, waiting := c.Effects.Slots.State(); len(waiting) != 1 {
+		t.Fatalf("with no room it doesn't wait in the line: %+v", waiting)
+	}
+	mu.Lock()
+	room = true
+	mu.Unlock()
+	select {
+	case ch := <-done:
+		if ch.Where != "iiks1" || len(away) != 2 {
+			t.Fatalf("left the line for %q, %d away", ch.Where, len(away))
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("a waiting check didn't leave the line for a runner with room")
+	}
+	if _, waiting := c.Effects.Slots.State(); len(waiting) != 0 {
+		t.Errorf("it left and still waits: %+v", waiting)
+	}
+
+	// Main's own check waits for a slot here: it writes the shared build cache.
+	go func() { done <- c.Effects.RunCheck(p, main, "test", "true") }()
+	time.Sleep(100 * time.Millisecond)
+	release()
+	if ch := <-done; ch.Where != "" || len(away) != 2 {
+		t.Fatalf("main's check went elsewhere: %q", ch.Where)
 	}
 }

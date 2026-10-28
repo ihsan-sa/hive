@@ -66,6 +66,7 @@ type Effects struct {
 	// Slots holds checks to config's max_checks at a time, started in the order they asked.
 	Slots *Slots
 
+	awayMu    sync.Mutex // one check at a time takes a runner's room (elsewhere)
 	mu        sync.Mutex
 	checks    map[string]Check
 	verdicts  map[string]Verdict
@@ -115,6 +116,9 @@ type Check struct {
 	// a disk-bound machine.
 	DiskRead  int64 `json:"disk_read,omitempty"`
 	DiskWrote int64 `json:"disk_wrote,omitempty"`
+	// Where is the executor module's runner the check ran on (elsewhere);
+	// empty is this machine.
+	Where string `json:"where,omitempty"`
 }
 
 // Verdict is a reviewer's read of one commit.
@@ -545,12 +549,26 @@ func (e *Effects) RunCheck(p Project, sha, kind, command string) Check {
 		c.Output = err.Error()
 		return c // not recorded: no sandbox is not a verdict on the commit
 	}
-	release, ok := e.Slots.Take(p.Name, sha, kind)
-	if !ok {
-		c.Output = "dropped from the check line before it started"
-		return c // not recorded: nobody wants its verdict any more
+	// A check the line here would make wait goes to a runner with room, now
+	// or while it waits.
+	away, where := e.elsewhere(p, sha, kind)
+	if away == nil {
+		release, ok, left := e.Slots.TakeOr(p.Name, sha, kind, func() bool {
+			away, where = e.elsewhere(p, sha, kind)
+			return away != nil
+		}, checkLeaveEvery)
+		if !left {
+			away = nil // it took a slot here as the runner answered
+		}
+		if !ok && !left {
+			c.Output = "dropped from the check line before it started"
+			return c // not recorded: nobody wants its verdict any more
+		}
+		defer release()
 	}
-	defer release()
+	if away != nil {
+		sb, c.Where = away, where
+	}
 	dir, err := e.cleanCheckout(p, sha, kind)
 	if err != nil {
 		c.Output = "could not make a clean checkout: " + err.Error()
@@ -560,8 +578,11 @@ func (e *Effects) RunCheck(p Project, sha, kind, command string) Check {
 	id := "gate-" + short(sha) + "-" + kind + "-" + NewID()[14:]
 	c.Log = filepath.Join(e.ws.Hive(), "checks", p.Name, id+".log")
 	mounts := []sandbox.Mount{{Host: dir, Inside: "/work", RW: true}}
-	mods := e.goModules(sb, dir)
-	build := e.goBuild(sb, p, sha, dir)
+	mods, build := goMods{done: func() {}}, goMods{done: func() {}}
+	if away == nil { // the shared caches are this machine's: a runner fetches its own
+		mods = e.goModules(sb, dir)
+		build = e.goBuild(sb, p, sha, dir)
+	}
 	run := func(offline bool) (int, string, error) {
 		ms := append(append(slices.Clone(mounts), build.mounts...), mods.mounts...)
 		env := append(slices.Clone(build.env), mods.own...)
@@ -615,6 +636,9 @@ func (e *Effects) RunCheck(p Project, sha, kind, command string) Check {
 	}
 	mods.done()
 	build.done()
+	if c.Where != "" {
+		mods.note = "ran on " + c.Where + ", as the check line here was full"
+	}
 	for _, n := range []string{build.note, mods.note} {
 		if n != "" {
 			out = "hive: " + n + "\n" + out
@@ -666,6 +690,31 @@ func (e *Effects) RunCheck(p Project, sha, kind, command string) Check {
 	}
 	return record()
 }
+
+// elsewhere returns an executor module with room for a check of sha the
+// check line here would make wait (the pace has pulled checks back, or every
+// slot is taken), and the runner it named; nil when the check runs here. Only
+// a test check of a commit off main's line goes: main's own write the shared
+// build cache the rest read, and a check granted a service on this machine
+// can't leave it.
+func (e *Effects) elsewhere(p Project, sha, kind string) (sandbox.Sandbox, string) {
+	if e.runs == nil || kind != "test" && kind != "retest" || len(e.ws.LoadConfig().Egress.LocalAddrs()) > 0 ||
+		!e.Slots.Busy() || e.MainLine(p)[sha] {
+		return nil, ""
+	}
+	e.awayMu.Lock() // one room answer, one check: the next asks again
+	defer e.awayMu.Unlock()
+	sb, where := e.runs.executor()
+	if d, ok := sb.(*sandbox.Delegate); ok && d.Started != nil {
+		d.Started()
+		d.Started = nil
+	}
+	return sb, where
+}
+
+// checkLeaveEvery is how often a check waiting in the line here asks whether
+// a runner has room for it.
+var checkLeaveEvery = 30 * time.Second
 
 // missingTool matches the shell's "not found" for a command looked up on the
 // PATH: dash's "/bin/sh: 1: go: not found", bash's "bash: go: command not found",
@@ -1004,8 +1053,10 @@ func (e *Effects) runSandboxed(sb sandbox.Sandbox, project, id string, mounts []
 	if len(errRaw) > 0 {
 		out += "\n" + string(errRaw)
 	}
-	if wsl, _ := os.ReadFile(logPath + ".wsl"); len(wsl) > 0 {
-		out += "\n" + string(wsl)
+	for _, side := range []string{".wsl", ".dispatch"} {
+		if raw, _ := os.ReadFile(logPath + side); len(raw) > 0 {
+			out += "\n" + string(raw)
+		}
 	}
 	return code, out, err
 }
