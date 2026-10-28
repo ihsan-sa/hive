@@ -14,6 +14,7 @@ import (
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/api"
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/ui"
 )
 
 // A command sent to the daemon's /api/ui moves a following control center:
@@ -21,7 +22,7 @@ import (
 // says who did it on the hint line and reports back where it is. Commands
 // sent before it followed are not acted on.
 func TestControlCenterFollowsUICommands(t *testing.T) {
-	var bus api.UIBus
+	var bus ui.Bus
 	var answered map[string]string
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/ui", func(w http.ResponseWriter, r *http.Request) {

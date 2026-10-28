@@ -33,6 +33,7 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/modules"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/projects"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/release"
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/ui"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/work"
 	"github.com/ihsan-sa/hive-standalone-build/internal/proc"
 	"github.com/ihsan-sa/hive-standalone-build/internal/setup"
@@ -460,7 +461,7 @@ type server struct {
 	// stopping is set once shutdown begins: ping fails from then on, so a
 	// daemon starting meanwhile waits for the lock instead of giving up.
 	stopping atomic.Bool
-	ui       api.UIBus       // commands to the control centers following, and where they are
+	ui       ui.Bus          // commands to the control centers following, and where they are
 	ctx      context.Context // ends when the daemon stops, and with it a GET /api/ui still waiting
 }
 

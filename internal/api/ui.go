@@ -1,10 +1,8 @@
 package api
 
 import (
-	"context"
 	"fmt"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -13,9 +11,10 @@ import (
 // following GET /api/ui acts on it at once, and each reports back where it
 // is (POST /api/ui/view), which GET /api/ui returns so a client can light
 // its pads to match. All three are the person's: a module's token is
-// refused. Commands live in the daemon's memory, not the journal: they
-// steer a screen and change nothing in the Hive (an answer goes through
-// /api/answer as the person's own does). docs/ui-api.md documents them.
+// refused. These are the wire types; the ui module (internal/mod/ui) holds
+// the commands in the daemon's memory, not the journal: they steer a screen
+// and change nothing in the Hive (an answer goes through /api/answer as the
+// person's own does). docs/ui-api.md documents them.
 
 // UIActions are the commands a control center follows.
 var UIActions = []string{"up", "down", "left", "right", "pageup", "pagedown", "view", "open", "back", "answer"}
@@ -105,81 +104,4 @@ type UIState struct {
 	Seq      int64       `json:"seq"`
 	Commands []UICommand `json:"commands"`
 	View     *UIView     `json:"view,omitempty"`
-}
-
-// UIBus holds the recent commands and the last view; its zero value is ready.
-type UIBus struct {
-	mu   sync.Mutex
-	seq  int64
-	cmds []UICommand
-	view *UIView
-	wake chan struct{} // closed and replaced when a command comes
-}
-
-// uiKeep is how many commands the bus keeps for a follower that fell behind.
-const uiKeep = 64
-
-// Send queues a command for every control center following.
-func (b *UIBus) Send(c UICommand) (UICommand, error) {
-	if err := c.Check(); err != nil {
-		return c, err
-	}
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.seq++
-	c.Seq, c.At = b.seq, time.Now().UTC()
-	if b.cmds = append(b.cmds, c); len(b.cmds) > uiKeep {
-		b.cmds = b.cmds[len(b.cmds)-uiKeep:]
-	}
-	if b.wake != nil {
-		close(b.wake)
-		b.wake = nil
-	}
-	return c, nil
-}
-
-// Since returns the commands after seq, waiting up to wait (or until ctx
-// ends) for one to come. A negative seq, or one past the newest (a
-// daemon that restarted), returns at once with no commands and the newest
-// seq, which a follower reads on from.
-func (b *UIBus) Since(ctx context.Context, after int64, wait time.Duration) UIState {
-	end := time.NewTimer(wait)
-	defer end.Stop()
-	for {
-		b.mu.Lock()
-		st := UIState{Seq: b.seq, View: b.view, Commands: []UICommand{}}
-		if after < 0 || after > b.seq {
-			b.mu.Unlock()
-			return st
-		}
-		for _, c := range b.cmds {
-			if c.Seq > after {
-				st.Commands = append(st.Commands, c)
-			}
-		}
-		if len(st.Commands) > 0 || wait <= 0 {
-			b.mu.Unlock()
-			return st
-		}
-		if b.wake == nil {
-			b.wake = make(chan struct{})
-		}
-		wake := b.wake
-		b.mu.Unlock()
-		select {
-		case <-wake:
-		case <-end.C:
-			wait = 0
-		case <-ctx.Done():
-			wait = 0
-		}
-	}
-}
-
-// SetView records where a control center is.
-func (b *UIBus) SetView(v UIView) {
-	v.At = time.Now().UTC()
-	b.mu.Lock()
-	b.view = &v
-	b.mu.Unlock()
 }
