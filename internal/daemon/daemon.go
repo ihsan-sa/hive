@@ -33,6 +33,7 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/modules"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/projects"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/release"
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/ui"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/work"
 	"github.com/ihsan-sa/hive-standalone-build/internal/proc"
 	"github.com/ihsan-sa/hive-standalone-build/internal/setup"
@@ -325,7 +326,7 @@ func Run(ws core.Workspace, waitFor int) error {
 	}()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	s := &server{a: a, info: info}
+	s := &server{a: a, info: info, ctx: ctx}
 	s.cancel = func() { s.stopping.Store(true); cancel() }
 	a.Runner.API = fmt.Sprintf("http://127.0.0.1:%d", info.Port)
 	a.Release.Restart = func() { s.restart() }
@@ -463,6 +464,8 @@ type server struct {
 	// stopping is set once shutdown begins: ping fails from then on, so a
 	// daemon starting meanwhile waits for the lock instead of giving up.
 	stopping atomic.Bool
+	ui       ui.Bus          // commands to the control centers following, and where they are
+	ctx      context.Context // ends when the daemon stops, and with it a GET /api/ui still waiting
 }
 
 func (s *server) onEvent(e core.Event) {
@@ -840,6 +843,45 @@ func (s *server) routes() http.Handler {
 			return nil, err
 		}
 		return h.Text(), nil
+	})
+	h("/api/ui", func(r *http.Request) (any, error) {
+		// The person's screen, steered from the person's own client (the
+		// deck); never a module's.
+		if moduleOf(r) != "" {
+			return nil, errors.New("only the person steers the control center")
+		}
+		if r.Method == http.MethodPost {
+			var c api.UICommand
+			if err := decode(r, &c); err != nil {
+				return nil, err
+			}
+			return s.ui.Send(c)
+		}
+		q := r.URL.Query()
+		after, err := strconv.ParseInt(q.Get("after"), 10, 64)
+		if q.Get("after") == "" || err != nil {
+			after = -1
+		}
+		wait, _ := strconv.Atoi(q.Get("wait"))
+		ctx := r.Context()
+		if s.ctx != nil { // a waiting follower doesn't hold the daemon's shutdown up
+			var cancel func()
+			ctx, cancel = context.WithCancel(ctx)
+			defer cancel()
+			defer context.AfterFunc(s.ctx, cancel)()
+		}
+		return s.ui.Since(ctx, after, time.Duration(min(max(wait, 0), 30))*time.Second), nil
+	})
+	h("/api/ui/view", func(r *http.Request) (any, error) {
+		if moduleOf(r) != "" {
+			return nil, errors.New("only the person's control center reports its view")
+		}
+		var v api.UIView
+		if err := decode(r, &v); err != nil {
+			return nil, err
+		}
+		s.ui.SetView(v)
+		return "ok", nil
 	})
 	h("/api/improve", func(r *http.Request) (any, error) { return a.Improve.StartSweep(true) })
 	h("/api/job", func(r *http.Request) (any, error) {

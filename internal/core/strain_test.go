@@ -455,6 +455,107 @@ func TestWatched(t *testing.T) {
 	}
 }
 
+// When a strain hold lifts, the turns it held start one a rampStep, not all
+// at once: on 10-28 the lift started every held run together, and the Hive's
+// slice ran to load near 400 and an OOM kill. A lead isn't ramped.
+func TestHoldLiftsOneTurnAtATime(t *testing.T) {
+	c, _ := testHive(t)
+	cfg := c.WS.LoadConfig()
+	cfg.MemFloorMB = 1024
+	defer func(p string) { procRoot = p }(procRoot)
+	procRoot = fakeProc(t, "600000", "0.00", "0.00") // under the floor
+	t.Cleanup(func() { endTurns(t, c, cfg) })
+	ids := []string{"w1", "w2", "w3"}
+	for _, id := range ids {
+		if _, err := c.Runs.Start(RunSpec{ID: id, Role: "worker", Harness: "fake"}); err != nil {
+			t.Fatal(err)
+		}
+		r, _ := c.Runs.Get(id)
+		c.Runs.launch(r, cfg)
+	}
+	procRoot = fakeProc(t, "8000000", "0.00", "0.00") // the hold lifts
+	launch := func(id string) Run {
+		r, _ := c.Runs.Get(id)
+		c.Runs.launch(r, cfg)
+		r, _ = c.Runs.Get(id)
+		return r
+	}
+	running := func() (n int) {
+		for _, id := range ids {
+			if r, _ := c.Runs.Get(id); r.Status == StatusRunning {
+				n++
+			}
+		}
+		return n
+	}
+	for _, id := range ids {
+		launch(id)
+	}
+	if n := running(); n != 1 {
+		t.Fatalf("%d turns started as the hold lifted, want 1", n)
+	}
+	if r, _ := c.Runs.Get("w3"); r.Status != StatusQueued || !strings.Contains(r.Reason, "one turn at a time") {
+		t.Errorf("w3 after the lift: %s %q, want waiting on the ramp", r.Status, r.Reason)
+	}
+	if _, err := c.Runs.Start(RunSpec{ID: "lead", Role: "lead", Harness: "fake", Persistent: true}); err != nil {
+		t.Fatal(err)
+	}
+	if l := launch("lead"); l.Status != StatusRunning {
+		t.Errorf("a lead on the ramp: %s %q, want its turn running", l.Status, l.Reason)
+	}
+	c.Runs.mu.Lock()
+	c.Runs.rampLast = c.Runs.rampLast.Add(-rampStep) // a step on
+	c.Runs.mu.Unlock()
+	for _, id := range ids {
+		launch(id)
+	}
+	if n := running(); n != 2 {
+		t.Errorf("%d turns running a step after the lift, want 2", n)
+	}
+	// Once none has waited on it for two steps, the ramp is over.
+	c.Runs.mu.Lock()
+	c.Runs.heldAt, c.Runs.rampedAt = time.Now().Add(-3*rampStep), time.Now().Add(-3*rampStep)
+	c.Runs.mu.Unlock()
+	if r := launch("w3"); r.Status != StatusRunning {
+		t.Errorf("w3 after the ramp: %s %q, want its turn running", r.Status, r.Reason)
+	}
+}
+
+// A run reopened after its turn ended is Returned until a turn starts, and
+// Admit, a module's say, holds it with its reason.
+func TestAdmitHoldsAReturnedRun(t *testing.T) {
+	c, _ := testHive(t)
+	cfg := c.WS.LoadConfig()
+	t.Cleanup(func() { endTurns(t, c, cfg) })
+	if _, err := c.Runs.Start(RunSpec{ID: "w1", Role: "worker", Harness: "fake"}); err != nil {
+		t.Fatal(err)
+	}
+	c.Runs.SetStatus("w1", StatusDone, "finished")
+	if err := c.Runs.Reopen("w1", "main moved"); err != nil {
+		t.Fatal(err)
+	}
+	r, _ := c.Runs.Get("w1")
+	if !r.Returned {
+		t.Fatalf("reopened after it ended: %+v, want Returned", r)
+	}
+	full := true
+	c.Runs.Admit = func(r Run) string {
+		if r.Returned && full {
+			return "waiting for a worker (at the pace)"
+		}
+		return ""
+	}
+	c.Runs.launch(r, cfg)
+	if r, _ = c.Runs.Get("w1"); r.Status != StatusIdle || r.Reason != "waiting for a worker (at the pace)" {
+		t.Errorf("held by Admit: %s %q", r.Status, r.Reason)
+	}
+	full = false
+	c.Runs.launch(r, cfg)
+	if r, _ = c.Runs.Get("w1"); r.Status != StatusRunning || r.Returned {
+		t.Errorf("let through: %s returned %v, want its turn running and no longer Returned", r.Status, r.Returned)
+	}
+}
+
 // Memory pressure from a unit outside the Hive's cgroup stalling at its own
 // MemoryHigh doesn't hold a turn; the same pressure with the Hive's own cgroup
 // stalled, or the unit under its cap, does.

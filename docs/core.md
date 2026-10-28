@@ -18,10 +18,10 @@ So the core is the skeleton and nothing else. **New functionality goes into a mo
 | Messaging and discovery: message, inbox, progress, finish, spawn, agents; the person's feed | `internal/core/ops.go`, `internal/core/person.go`, `internal/agentcli` (the agent's end) |
 | The effects process (fx): holds every credential and acts for agents: git, the forge, checks, merge guarantees | `internal/core` (`effects.go`, `forge.go`, `git.go`, `tokens.go`, `selfgate.go`, `slots.go`) |
 | The permissions ceiling and the sandbox | `internal/core/ceiling.go`, `internal/core/strain.go`, `internal/sandbox` |
-| The module seam: how the core gains functionality (the registry and tick list, agent ops, the person's answers, scheduled jobs, module programs, an executor module handed a strained turn's spec, a module's own `hive <name>` command) | `internal/mod/modules`, `internal/mod/runner`, `Ops().Register`, `Person.Handle`, `Runs.Executor` and `sandbox.Delegate` |
+| The module seam: how the core gains functionality (the registry and tick list, agent ops, the person's answers, scheduled jobs, module programs, an executor module handed a strained turn's spec, a module's say on whether a turn starts now, a module's own `hive <name>` command) | `internal/mod/modules`, `internal/mod/runner`, `Ops().Register`, `Person.Handle`, `Runs.Executor`, `Runs.Admit` and `sandbox.Delegate` |
 | The host process and its wiring: the daemon, its control API, the entry point | `internal/daemon`, `internal/api`, `internal/app`, `cmd/hive` |
 
-The executor hook is core because only launch knows a turn's spec and when the machine holds it; what runs the turn elsewhere (hive-dispatch's SSH runners) is the module's. `hive <name>` is the seam step 4 below asks for, for module programs.
+The executor hook is core because only launch knows a turn's spec and when the machine holds it; what runs the turn elsewhere (hive-dispatch's SSH runners) is the module's. `Runs.Admit` and the ramp after a strain hold (`Runs.ramp`, `Runs.Holding`, about 35 lines, #1854) are core for the same reason: only launch knows when a turn starts, and a turn reopened past it (a worker sent back) or released all at once by a lifted hold overloaded the machine on 10-28; the workers' pace itself (`paceBack`) stays in the work module. `hive <name>` is the seam step 4 below asks for, for module programs.
 
 What a check sees is part of the merge guarantees, so the choice of its caches is core: `core/disk.go`'s `goBuild` and `stableTimes` (#920, about 80 lines) decide whether a check writes main's build cache or reads it read-only; the cache program itself (`internal/gocache`, `hive gocacheprog`) is outside the core. For the same reason, which packages a change's check runs is core: `RunCheckSince` and `narrow` in `core/effects.go` (#1161, about 50 lines) narrow a Go test command to the packages the change since main can affect; working out which they are (`internal/goscope`) is outside the core.
 
@@ -50,6 +50,7 @@ Every other package is module material. Most are compiled-in modules already (`i
 | `internal/harness`, `internal/openagent`, `internal/fakeagent` | the agents module: harness adapters (Claude, Codex, open, fake), the open harness's agent loop, the scripted test agent. The core keeps only the `Harness` interface and a registry |
 | `internal/mod/agents`, `internal/mod/models` | the agents module: role prompts, the spawner, model routes |
 | `internal/tui`, `internal/text` | the control center, a client of the control API: it should import `internal/api` alone, not the core or modules |
+| `internal/mod/ui` | with the control center: the bus a client (the deck) steers it through, `/api/ui` (docs/ui-api.md) |
 | `internal/mod/release`, `internal/setup` | a release/update module: releases, self-update, install, login, doctor, autostart |
 | `internal/mod/improve`, `internal/gate`, `internal/demo` | the improve module: measure and keep/revert, sweeps, step-backs, the recursive gate and its benchmark project |
 | `internal/mod/kb` | the kb module |

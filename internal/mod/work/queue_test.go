@@ -373,3 +373,95 @@ func TestPaceSendsAWorkerToARunnerWithRoom(t *testing.T) {
 		t.Fatalf("an away worker holds a slot here: %q", wait[b.ID])
 	}
 }
+
+// A main merge that conflicts with many PRs sends their workers back at the
+// pace, not all at once (one did 19 at a pace of 1): the rest stay with their
+// own workers, waiting, ahead of new briefs.
+func TestConflictsGoBackAtThePace(t *testing.T) {
+	m := queueRig(t)
+	cfg := m.C.WS.LoadConfig()
+	cfg.MaxWorkers = 1
+	m.C.WS.SaveConfig(cfg)
+	var sent []Task
+	for i, title := range []string{"one", "two", "three"} {
+		task := file(t, m, title, "")
+		w := fmt.Sprintf("wc%d", i)
+		if _, err := m.C.Runs.Start(core.RunSpec{ID: w, Role: "worker", Project: "p", Harness: "fake", Checkout: t.TempDir()}); err != nil {
+			t.Fatal(err)
+		}
+		m.C.Runs.SetStatus(w, core.StatusDone, "finished")
+		task.Stage, task.Worker, task.Resend = StageWorking, w, "Main moved and your branch conflicts with it."
+		m.save(&task, "")
+		sent = append(sent, task)
+	}
+	fresh := file(t, m, "a new brief", "")
+	fresh.Stage = StageQueued
+	m.save(&fresh, "")
+	tick(m)
+	reopened := 0
+	for _, task := range sent {
+		got := stageOf(t, m, task)
+		if got.Stage != StageWorking {
+			t.Fatalf("%s: stage %q, want it kept with its worker", got.Title, got.Stage)
+		}
+		if got.Resend == "" {
+			reopened++
+			if queued(m, got.Worker) == "" {
+				t.Fatalf("%s was let go but its worker wasn't told", got.Title)
+			}
+		} else if queued(m, got.Worker) != "" || !strings.Contains(got.Reason, "waiting for a worker") {
+			t.Fatalf("%s: queued %q, reason %q: want it waiting at the pace", got.Title, queued(m, got.Worker), got.Reason)
+		}
+	}
+	if reopened != 1 {
+		t.Fatalf("%d workers sent back at a pace of 1", reopened)
+	}
+	if got := stageOf(t, m, fresh); got.Stage != StageQueued || got.Worker != "" {
+		t.Fatalf("the new brief went ahead of the workers waiting: stage %q", got.Stage)
+	}
+	if start, _ := m.admit(m.List(nil)); len(start) != 0 {
+		t.Fatalf("started %v past the pace", start)
+	}
+	q := m.Queue(core.Run{RunSpec: core.RunSpec{ID: "lead", Role: "lead"}})
+	if len(q) != 3 || !strings.Contains(q[0], "goes back to merge main") || !strings.Contains(q[2], fresh.ID) {
+		t.Fatalf("queue: %q, want the two waiting to go back ahead of the new brief", q)
+	}
+	// One stopped while it waits never takes the stale conflict to a later worker.
+	var waiting Task
+	for _, task := range sent {
+		if got := stageOf(t, m, task); got.Resend != "" {
+			waiting = got
+		}
+	}
+	if err := m.Stop(waiting.ID, "not wanted"); err != nil {
+		t.Fatal(err)
+	}
+	if got := stageOf(t, m, waiting); got.Resend != "" || got.Resending() {
+		t.Fatalf("a stopped task keeps its conflict to send: %q", got.Resend)
+	}
+}
+
+// A worker a conflict sends back is reopened, not launched, so it never goes
+// past the pace to a runner: it waits for a slot here, and leaves no away
+// mark behind to count against the runners.
+func TestConflictWaitsHereNotOnARunner(t *testing.T) {
+	m := queueRig(t)
+	cfg := m.C.WS.LoadConfig()
+	cfg.MaxWorkers = 1
+	m.C.WS.SaveConfig(cfg)
+	m.elsewhere = func() bool { return true }
+	for _, id := range []string{"wb", "wr"} {
+		if _, err := m.C.Runs.Start(core.RunSpec{ID: id, Role: "worker", Project: "p", Harness: "fake", Checkout: t.TempDir()}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	busy := file(t, m, "the working one", "")
+	busy.Stage, busy.Worker = StageWorking, "wb"
+	m.save(&busy, "")
+	back := file(t, m, "sent back", "")
+	back.Stage, back.Worker, back.Resend = StageWorking, "wr", "Main moved and your branch conflicts with it."
+	m.save(&back, "")
+	if start, wait := m.admit(m.List(nil)); start[back.ID] || !strings.Contains(wait[back.ID], "waiting for a worker") || m.away[back.ID] {
+		t.Fatalf("a conflict went past the pace: start %v, wait %q", start, wait[back.ID])
+	}
+}
