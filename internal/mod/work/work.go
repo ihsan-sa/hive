@@ -46,6 +46,7 @@ const (
 	StageBlocked   = "blocked"
 	StageStopped   = "stopped"
 	StageReverting = "reverting" // revert tasks start here
+	StageRecording = "recording" // record tasks start here, their commit made
 )
 
 // Task is one piece of work from ask to merge.
@@ -95,6 +96,10 @@ type Task struct {
 	// head that contains it resolved that conflict, so the next is main
 	// moving again and the count starts over: only unresolved ones add up.
 	ConflictMain string `json:"conflict_main,omitempty"`
+	// Resend is what a conflict with main sends the worker back with, held
+	// until the pace has room for it: one main merge once made about 22 open
+	// PRs conflict, and reopening every worker at once ran 19 at a pace of 1.
+	Resend string `json:"resend,omitempty"`
 	// UnknownSince is when the forge first couldn't say whether the PR
 	// merges cleanly; cleared once it can.
 	UnknownSince time.Time `json:"unknown_since,omitempty"`
@@ -221,9 +226,9 @@ const (
 
 // Fix says the task is clearly a fix: its brief, worker or the lead said so
 // and named the failure. A revert undoes a merge already judged worse, so it
-// is one too.
+// is one too, and so is a record, which brings main up to what happened.
 func (t Task) Fix() bool {
-	return t.Aim == AimFix || t.Kind == "revert"
+	return t.Aim == AimFix || t.Kind == "revert" || t.Kind == "record"
 }
 
 // Gain says the task is taken as a gain: it aims at one, or it isn't clearly a fix.
@@ -234,6 +239,8 @@ func (t Task) AimWord() string {
 	switch {
 	case t.Kind == "revert":
 		return "a fix (a revert of a merge judged worse)"
+	case t.Kind == "record":
+		return "a fix (the Hive's own record, brought up to date on main)"
 	case t.Fix():
 		return "a fix: " + orNone(t.AimWhy)
 	case t.Aim == AimGain && t.AimWhy != "":
@@ -479,6 +486,9 @@ func (m *Module) overtaken(t *Task) bool {
 // store saves t, or, when t is a copy from before the task was steered and
 // this save isn't a steer itself, drops it, reporting whether it saved.
 func (m *Module) store(t *Task, note string, steer bool) bool {
+	if t.Stage != StageWorking { // stopped, blocked or moved on: a conflict held for the pace no longer goes
+		t.Resend = ""
+	}
 	now := time.Now().UTC()
 	loaded := t.Updated // when the copy was last saved, before it is stamped now
 	// Windows' clock ticks coarsely, so a save in the tick GitHub came back
@@ -895,6 +905,44 @@ func (m *Module) Revert(of Task, mergeSHA, reason string) (Task, error) {
 	return *t, nil
 }
 
+// Record files a task that lands files the Hive writes from its own record
+// (a project's trial ledger) on top of main: a host-made commit (core's
+// Record) that goes through the tests and checks like any change, but needs
+// no read, and no approval for the protected path it writes.
+func (m *Module) Record(project, title, why string, files map[string]string) (Task, error) {
+	p, ok := m.C.Projects.Get(project)
+	if !ok {
+		return Task{}, fmt.Errorf("project %s is gone", project)
+	}
+	main, err := m.C.Effects.Sync(p)
+	if err != nil {
+		return Task{}, err
+	}
+	sha, err := m.C.Effects.Record(p, main, files, title)
+	if err != nil {
+		return Task{}, err
+	}
+	id := core.NewID()
+	t := &Task{ID: id, Project: project, Title: title, Kind: "record", Stage: StageRecording, From: "models",
+		Lesson: why, SHA: sha, Base: main, Branch: "hive/record-" + id, Created: time.Now().UTC()}
+	m.save(t, "record commit "+core.Short(sha)+": "+why)
+	return *t, nil
+}
+
+func (m *Module) prepareRecord(t *Task, p core.Project) error {
+	if err := m.C.Effects.Push(p, t.Branch, t.SHA); err != nil {
+		return err
+	}
+	body := fmt.Sprintf("The Hive wrote this from its own record; no worker wrote it. %s\n\n%s", t.Lesson, marker(t.ID))
+	pr, err := m.C.Effects.Forge.CreatePR(p.Repo, t.Branch, p.Branch, t.Label(), body)
+	if err != nil {
+		return err
+	}
+	t.PR, t.Stage = pr, StageTesting
+	m.save(t, fmt.Sprintf("record PR #%d", pr.Number))
+	return nil
+}
+
 // Tick advances every task that isn't already being worked on. One waiting
 // for a worker goes only when the queue lets it, and otherwise says why it waits.
 func (m *Module) Tick() {
@@ -910,7 +958,7 @@ func (m *Module) Tick() {
 			continue
 		}
 		m.mu.Lock()
-		if !m.due(t) || m.busy[t.ID] || !m.fresh(t) || (t.Queued() && !start[t.ID]) {
+		if !m.due(t) || m.busy[t.ID] || !m.fresh(t) || ((t.Queued() || t.Resending()) && !start[t.ID]) {
 			m.mu.Unlock()
 			continue
 		}
@@ -978,7 +1026,7 @@ func (m *Module) reapStuck() {
 // live figures after " (" change every tick, so only a new kind is saved.
 func (m *Module) waits(t Task, why string) {
 	kind, _, _ := strings.Cut(why, " (")
-	if t.Stage == StageQueued && (t.Reason == why || strings.HasPrefix(why, "waiting: machine") && strings.HasPrefix(t.Reason, kind+" (")) {
+	if (t.Stage == StageQueued || t.Resending()) && (t.Reason == why || strings.HasPrefix(why, "waiting: machine") && strings.HasPrefix(t.Reason, kind+" (")) {
 		return
 	}
 	m.mu.Lock()
@@ -988,7 +1036,10 @@ func (m *Module) waits(t Task, why string) {
 	}
 	m.busy[t.ID] = true
 	m.mu.Unlock()
-	t.Stage, t.Reason = StageQueued, why
+	if !t.Resending() { // a worker held back from a conflict stays its own
+		t.Stage = StageQueued
+	}
+	t.Reason = why
 	m.save(&t, "")
 	m.mu.Lock()
 	delete(m.busy, t.ID)
@@ -1319,6 +1370,9 @@ func (m *Module) step(t *Task) error {
 	case StageQueued, StageIssued:
 		return m.startWorker(t, p)
 	case StageWorking:
+		if t.Resend != "" {
+			return m.resend(t)
+		}
 		return m.checkWorker(t, p)
 	case StageLanding:
 		return m.land(t, p)
@@ -1337,6 +1391,8 @@ func (m *Module) step(t *Task) error {
 		}
 	case StageReverting:
 		return m.prepareRevert(t, p)
+	case StageRecording:
+		return m.prepareRecord(t, p)
 	case StagePerson:
 		// waiting on the person's answer (onPersonMerge), or their close
 		if m.pollDue(t.ID) {
@@ -2265,6 +2321,9 @@ func (m *Module) review(t *Task, p core.Project) error {
 		account := w.Brief + "\n\n## The worker's account\n\n" + finishText(w)
 		if t.Kind == "revert" {
 			account = fmt.Sprintf("The Hive made this revert itself; no worker wrote it. It reverts the merge %s because: %s\n\nIt also records that lesson in `.hive/lessons.md`. Check it undoes that merge and nothing else.", core.Short(t.RevertSHA), t.Lesson)
+		}
+		if t.Kind == "record" {
+			account = "The Hive wrote this from its own record; no worker wrote it. " + t.Lesson
 		}
 		round := fmt.Sprintf("round %d", t.Round+1)
 		if t.Checkpoint != "" {
@@ -3611,6 +3670,9 @@ func (m *Module) startSeat(t *Task, p core.Project, ch core.Change, main, seat, 
 	if t.Kind == "revert" {
 		account = fmt.Sprintf("The Hive made this revert itself; no worker wrote it. It reverts the merge %s because: %s", core.Short(t.RevertSHA), t.Lesson)
 	}
+	if t.Kind == "record" {
+		account = "The Hive wrote this from its own record; no worker wrote it. " + t.Lesson
+	}
 	brief := fmt.Sprintf("Security read (%s) of task %s: %q.\n\nThe brief, the exact diff and the test run are in $HIVE_RUN (brief.md, diff.patch, tests.txt). Give your verdict.", seat, t.ID, t.Label())
 	spec := m.Agents.Spec(id, "reviewer", p.Name, dir, brief)
 	h, model, route := m.seatModel(p, seat)
@@ -3819,6 +3881,11 @@ func (m *Module) conflict(t *Task, p core.Project, head string, why error) error
 	main, _ := core.Git(dir, "rev-parse", p.Branch) // before the bundle, so the bundle holds at least this main
 	t.ConflictMain = strings.TrimSpace(main)
 	t.Conflicts++
+	if t.Worker == "" { // host-made: nobody to resolve it, and a record is written afresh on the new main
+		m.giveUp(t, "conflicts with main, and the Hive made this commit itself, so no worker can resolve it")
+		m.comment(p.Repo, t.PR.Number, "Stopping: the branch conflicts with main. The pull request stays open.")
+		return nil
+	}
 	if t.Conflicts > 3 {
 		m.giveUp(t, "keeps conflicting with main")
 		m.comment(p.Repo, t.PR.Number, "Stopping: the branch keeps conflicting with main. The pull request stays open.")
@@ -3836,10 +3903,22 @@ func (m *Module) conflict(t *Task, p core.Project, head string, why error) error
 		msg = "Main moved, and the recursive gate, merging it into your branch to judge the change as it would land, found conflicts in:\n\n- " +
 			strings.Join(g.files, "\n- ") + "\n\nFetch main with " + fetchMain + ", merge FETCH_HEAD, resolve the conflicts, run the tests, commit, and finish again."
 	}
-	if err := m.C.Runs.Reopen(t.Worker, msg); err != nil {
+	t.Stage, t.Resend = StageWorking, msg
+	m.save(t, "conflict with main: goes back to the worker when the pace has room")
+	return nil
+}
+
+// Resending reports whether t waits for the pace to send its worker back
+// to merge main (conflict).
+func (t Task) Resending() bool { return t.Stage == StageWorking && t.Resend != "" }
+
+// resend sends t's worker back with the conflict it was held for, now the
+// queue has let it go.
+func (m *Module) resend(t *Task) error {
+	if err := m.C.Runs.Reopen(t.Worker, t.Resend); err != nil {
 		return err
 	}
-	t.Stage = StageWorking
+	t.Resend, t.Reason = "", ""
 	m.save(t, "conflict with main sent back to the worker")
 	return nil
 }

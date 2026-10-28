@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -40,6 +42,7 @@ func New(c *core.Core, ch *chat.Module, w *work.Module, im *improve.Module) *Mod
 	m := &Module{C: c, Chat: ch, Work: w, Improve: im, retry: map[string]time.Time{}, lastErr: map[string]string{}, claimed: map[string]bool{}}
 	ops := c.Runs.Ops()
 	ops.Register(core.Op{Name: "create_project", Roles: []string{"lead"}, Help: `{"name","repo","description","goals","sharing","visibility","self"} (visibility: private (default) or public: public in public_owners (Hive-RSI-Lab) is made and the person told, public anywhere else, or for a project whose sharing isn't shared, waits for their yes; an existing repository keeps its visibility, changing it is the person's; sharing: shared (default), private (its agents read the shared Hive, no one else sees it) or isolated (walled both ways); self: the Hive's own code, in a fork of it, or in the release repository itself only when this Hive is its steward)`, Fn: m.opCreate})
+	ops.Register(core.Op{Name: "retire_project", Roles: []string{"lead"}, Help: `{"name","why"} takes a project made by mistake out of the Hive: one whose setup never finished, or with no work in flight or merged (stop its tasks first). Its repository on the forge is left as it is, and the name is free again; one with work merged is the person's to retire`, Fn: m.opRetire})
 	c.Person.Handle("public_repo", m.onPublic)
 	ops.Register(core.Op{Name: "status", Help: `{} -> projects, work in flight, scores, what waits on the person, the live settings (models, autonomy, schedules)`, Fn: func(r core.Run, _ json.RawMessage) (any, error) { return m.Status(r), nil }})
 	return m
@@ -126,16 +129,15 @@ func checkVisibility(v string) error {
 }
 
 // publicAllowed says whether repo's owner is one the person said public
-// repositories may go in. A bare name lives in the forge login's own
-// account, which counts only if they list it.
+// repositories may go in. A bare name lives in the default owner, which
+// counts only if they list it.
 func (m *Module) publicAllowed(repo string) bool {
 	owner, _, ok := strings.Cut(repo, "/")
 	if !ok {
-		user, err := m.C.Effects.Forge.User()
-		if err != nil || user == "" {
+		var err error
+		if owner, err = m.owner(); err != nil || owner == "" {
 			return false
 		}
-		owner = user
 	}
 	return slices.ContainsFunc(m.C.WS.LoadConfig().PublicOwners, func(o string) bool { return strings.EqualFold(o, owner) })
 }
@@ -227,9 +229,9 @@ func (m *Module) Create(s Spec) (core.Project, bool, error) {
 		return core.Project{}, false, errors.New("give a name or a repository")
 	}
 	if s.Repo == "" || !strings.Contains(s.Repo, "/") {
-		user, err := f.User()
+		user, err := m.owner()
 		if err != nil {
-			return core.Project{}, false, fmt.Errorf("who are you on %s? %v", f.Name(), err)
+			return core.Project{}, false, err
 		}
 		if s.Repo == "" {
 			s.Repo = user + "/" + s.Name
@@ -266,7 +268,78 @@ func (m *Module) Create(s Spec) (core.Project, bool, error) {
 		return p, created, err
 	}
 	p, err = m.finish(p)
+	// A repository the Hive can't write is no project: a retry every minute
+	// would only hold its name. Any other failure (the network) is retried.
+	if err != nil && !p.Ready && noAccess(err) {
+		m.drop(p.Name, "its first setup was refused: "+core.Clip(err.Error(), 300))
+		return core.Project{}, created, fmt.Errorf("the Hive can't write %s (%v), so no project was kept: give --repo in an owner it can write (repo_owner or self_fork in the settings names the default)", p.Repo, err)
+	}
 	return p, created, err
+}
+
+// owner is where a repository given only a name goes: repo_owner, else
+// self_fork (an organization the Hive makes repositories in), else the
+// forge login's own account.
+func (m *Module) owner() (string, error) {
+	cfg := m.C.WS.LoadConfig()
+	if o := orDefault(cfg.RepoOwner, cfg.SelfFork); strings.TrimSpace(o) != "" {
+		return strings.TrimSpace(o), nil
+	}
+	f := m.C.Effects.Forge
+	user, err := f.User()
+	if err != nil {
+		return "", fmt.Errorf("who are you on %s? %v", f.Name(), err)
+	}
+	return user, nil
+}
+
+// noAccess says whether err is the forge refusing the Hive's login, not a
+// fault that passes.
+func noAccess(err error) bool {
+	e := strings.ToLower(err.Error())
+	return slices.ContainsFunc([]string{"403", "not granted", "permission to", "permission denied", "access denied"}, func(s string) bool { return strings.Contains(e, s) })
+}
+
+// opRetire takes a project made by mistake out of the Hive.
+func (m *Module) opRetire(r core.Run, args json.RawMessage) (any, error) {
+	var a struct{ Name, Why string }
+	if err := core.Bind(args, &a); err != nil {
+		return nil, err
+	}
+	p, ok := m.C.Projects.Get(a.Name)
+	if !ok || m.C.Runs.Walled(r, a.Name) != nil {
+		return nil, fmt.Errorf("%q isn't a project you can see", a.Name)
+	}
+	if p.Self {
+		return nil, fmt.Errorf("%s is the Hive's own project; retiring it is the person's", p.Name)
+	}
+	if strings.TrimSpace(a.Why) == "" {
+		return nil, errors.New("say why with --why")
+	}
+	for _, t := range m.Work.List(func(t work.Task) bool { return t.Project == p.Name }) {
+		if !t.Terminal() {
+			return nil, fmt.Errorf("%s has work in flight (%s, %s): stop it first", p.Name, t.ID, t.Stage)
+		}
+		if t.Stage == work.StageDone {
+			return nil, fmt.Errorf("%s has work merged (%s), so retiring it is the person's: ask them", p.Name, t.ID)
+		}
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.drop(p.Name, r.ID+": "+core.Clip(a.Why, 300))
+	return map[string]any{"retired": p.Name, "repo": p.Repo, "text": "the project is out of the Hive and its name is free; its repository on " + m.C.Effects.Forge.Name() + " is left as it is"}, nil
+}
+
+// drop takes name out of the registry, with its host clone and its setup
+// alert. The caller holds m.mu.
+func (m *Module) drop(name, why string) {
+	m.C.Projects.Remove(name, why)
+	delete(m.retry, name)
+	delete(m.lastErr, name)
+	if dir := m.C.WS.Project(name); filepath.Dir(dir) == m.C.WS.Projects() {
+		os.RemoveAll(dir)
+	}
+	m.C.J.MustAppend("alert.cleared", map[string]string{"ref": "setup:" + name, "project": name})
 }
 
 // mayWorkIn says why this Hive may not work directly in up, the release
@@ -385,7 +458,7 @@ func (m *Module) Tick() {
 			defer m.mu.Unlock()
 			if _, err := m.finish(p); err != nil && err.Error() != m.lastErr[p.Name] {
 				m.lastErr[p.Name] = err.Error()
-				m.C.J.MustAppend("alert.raised", map[string]string{"kind": "project", "project": p.Name, "text": "setting up " + p.Name + " (retrying every minute): " + core.Clip(err.Error(), 300)})
+				m.C.J.MustAppend("alert.raised", map[string]string{"kind": "project", "project": p.Name, "ref": "setup:" + p.Name, "text": "setting up " + p.Name + " (retrying every minute): " + core.Clip(err.Error(), 300)})
 			}
 		}(p)
 		return

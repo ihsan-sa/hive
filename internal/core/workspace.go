@@ -110,6 +110,9 @@ type Config struct {
 	// Hive works on itself in, when the person owns release_repo but another
 	// of their Hives is its steward (core.StewardFile).
 	SelfFork string `json:"self_fork,omitempty"`
+	// RepoOwner is the account or organization where create_project makes a
+	// repository given only a name; empty is self_fork, else the forge login.
+	RepoOwner string `json:"repo_owner,omitempty"`
 	// PublicOwners are the accounts or organizations where create_project
 	// may make a public repository and tell the person after; a public one
 	// anywhere else waits for their yes.

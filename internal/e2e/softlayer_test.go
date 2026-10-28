@@ -107,6 +107,11 @@ func TestSoftLayer(t *testing.T) {
 		// one arm's processes from the other's.
 		both = " With two arms at a time, an arm's peak MB includes the other arm's processes while both ran."
 	}
+	for _, arm := range arms {
+		if arm.Name == softlayer.OpenArm {
+			task += fmt.Sprintf(" (not the open arm's: it got %d open briefs and no task)", openAgents())
+		}
+	}
 	table := fmt.Sprintf("Task: %s\n\nHarness: %s; each arm waited up to %s, %d at a time on %d CPUs each.%s%s\n\n%s", task, envOr("HIVE_E2E_HARNESS", "fake"), wait, at, softCPUs, both, cgroupPeak(), softlayer.Table(reps))
 	if err := os.WriteFile(filepath.Join(out, "table.md"), []byte(table), 0o644); err != nil {
 		t.Errorf("keeping the table: %v", err)
@@ -131,11 +136,18 @@ func softArm(t *testing.T, arm softlayer.Variant, slot int, essay, task string, 
 	// The caps: one worker and one check at a time, set as the person's
 	// ceilings so the pace can't raise them, and builds of two packages at
 	// once where a check gets the daemon's environment (a bare sandbox).
+	// The open arm has several agents in its space at once, each its own
+	// worker; checks and gates stay one at a time.
+	open := arm.Name == softlayer.OpenArm
+	workers := 1
+	if open {
+		workers = openAgents()
+	}
 	h := startOn(t, softCPUs, slot, bin, func(c *core.Config) {
 		if os.Getenv("HIVE_SOFT_WARDENS") != "1" {
 			c.Autonomy = 1
 		}
-		c.MaxWorkers, c.MaxChecks, c.MaxGates, c.Ceilings = 1, 1, 1, true
+		c.MaxWorkers, c.MaxChecks, c.MaxGates, c.Ceilings = workers, 1, 1, true
 	}, "GOFLAGS=-p=2", fmt.Sprintf("GOMAXPROCS=%d", softCPUs))
 	if err := arm.Install(h.ws.Modules(), essay); err != nil {
 		t.Fatal(err)
@@ -153,7 +165,16 @@ func softArm(t *testing.T, arm softlayer.Variant, slot int, essay, task string, 
 		h.post("/api/project", map[string]any{"name": "hive", "repo": "me/hive"}, nil)
 	}
 	began := time.Now().UTC()
-	h.post("/api/chat", map[string]string{"chat": "lead", "text": ask}, nil)
+	if open {
+		// No lead and no task: the same open brief for each agent, filed
+		// straight into the queue, so they all start at once in one room.
+		for i := 1; i <= workers; i++ {
+			title, done := softlayer.OpenBrief(i, workers)
+			h.post("/api/ask", map[string]any{"project": project, "title": title, "done": done, "apart": true}, nil)
+		}
+	} else {
+		h.post("/api/chat", map[string]string{"chat": "lead", "text": ask}, nil)
+	}
 	stopWatch := watchPeaks()
 
 	outcome := ""
@@ -166,7 +187,11 @@ func softArm(t *testing.T, arm softlayer.Variant, slot int, essay, task string, 
 			outcome = "the sub-Hive's daemon stopped answering after " + time.Since(began).Round(time.Second).String() + ": " + err.Error()
 			break
 		}
-		if tk, ok := askLanded(st, project); ok {
+		if open {
+			if ended, landed := openEnded(st, project, workers); ended || time.Now().After(deadline) {
+				outcome = fmt.Sprintf("%d of %d agents' work landed after %s; %s", landed, workers, time.Since(began).Round(time.Second), stages(st, project))
+			}
+		} else if tk, ok := askLanded(st, project); ok {
 			outcome = "landed " + shortSHA(tk.MergeSHA) + " after " + time.Since(began).Round(time.Second).String()
 		} else if time.Now().After(deadline) {
 			outcome = "not landed: " + stages(st, project)
@@ -233,6 +258,40 @@ func askLanded(st api.State, project string) (work.Task, bool) {
 		}
 	}
 	return work.Task{}, false
+}
+
+// openAgents is how many agents the open arm starts at once:
+// HIVE_SOFT_OPEN_AGENTS, 3 by default, at most 4 (each is a harness process
+// beside the checks, under the run's one memory ceiling).
+func openAgents() int {
+	n, err := strconv.Atoi(os.Getenv("HIVE_SOFT_OPEN_AGENTS"))
+	if err != nil {
+		n = 3
+	}
+	return min(max(n, 2), 4)
+}
+
+// openEnded says whether every open brief's task has ended, merged or
+// not, and how many merged: the open arm has no one ask to wait for.
+func openEnded(st api.State, project string, n int) (bool, int) {
+	ended, landed := 0, 0
+	for _, p := range st.Projects {
+		for _, t := range p.Tasks {
+			if p.Name != project || !strings.HasPrefix(t.Title, softlayer.OpenTitle) {
+				continue
+			}
+			switch t.Stage {
+			case work.StageMerged, work.StageDone:
+				ended++
+				if t.MergeSHA != "" {
+					landed++
+				}
+			case work.StageBlocked, work.StageStopped:
+				ended++
+			}
+		}
+	}
+	return ended >= n, landed
 }
 
 // armTookEffect: the system prompt of every run the sub-Hive made starts
