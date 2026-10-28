@@ -63,6 +63,7 @@ const usage = `hive: a small team of AI agents working on your projects.
   hive model               the named models (free ones too) and the routes that pick each role's model
   hive model add <name> <endpoint> <model id> [--key] [--no-probe]   a model on an OpenAI-compatible endpoint, e.g.
                            hive model add qwen http://127.0.0.1:11434/v1 qwen2.5-coder:14b
+                           (on OpenRouter only a free model, an id ending in ":free", is allowed)
                            [--anthropic]: its API is Anthropic-compatible, so Claude Code runs it, e.g.
                            hive model add kimi https://api.moonshot.ai/anthropic kimi-k2-0905-preview --key --anthropic
   hive model key <name>    store its API key, read from stdin (kept where no agent can read it)
@@ -72,7 +73,7 @@ const usage = `hive: a small team of AI agents working on your projects.
   hive harness login <name>  run a module harness's own login on this machine (what bare runs use)
   hive share [--yes]       send the developer your Hive's chats, runs, notes and logs in one bundle
                            (scanned first: it needs a handle list in .hive/private/scan-handles.txt or HIVE_SCAN_HANDLES)
-  hive update              install the newest release [--release <tag>: that one, and stay on it]
+  hive update              install the newest release [--release <tag>: that one; one behind the newest stays pinned]
   hive remote <ssh host>   open the control center here for the Hive on another machine, over ssh [--hive <its hive command>]
                            pasted images and dropped files then go from this computer to that Hive
   hive shutdown            stop the Hive (running agents finish their turn)

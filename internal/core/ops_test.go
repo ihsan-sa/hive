@@ -119,6 +119,30 @@ func TestSpawnNeverMakesALead(t *testing.T) {
 	}
 }
 
+// TestSpawnRefusesAnEmptyBrief: a helper started with nothing to do can only
+// finish blocked, so spawn refuses a missing or blank brief before any
+// checkout or task is made.
+func TestSpawnRefusesAnEmptyBrief(t *testing.T) {
+	c, _ := testHive(t)
+	parent, err := c.Runs.Start(RunSpec{ID: "parent", Role: "worker", Harness: "fake"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	asked := false
+	c.Runs.Ops().SetSpawner(func(Run, string, string, string, string) (RunSpec, error) {
+		asked = true
+		return RunSpec{}, errors.New("not reached")
+	})
+	for _, args := range []string{`{}`, `{"brief": ""}`, `{"brief": " \n\t "}`, `{"role": "reviewer"}`} {
+		if _, err := c.Runs.Ops().Call(parent, "spawn", json.RawMessage(args)); err == nil || !strings.Contains(err.Error(), "needs a brief") {
+			t.Errorf("spawn %s: %v, want refused for an empty brief", args, err)
+		}
+	}
+	if asked {
+		t.Fatal("the spawner was asked to start a helper with an empty brief")
+	}
+}
+
 // TestChatMaxZero: chat_max_mb set to 0 means the default, not a limit that
 // refuses every message.
 func TestChatMaxZero(t *testing.T) {

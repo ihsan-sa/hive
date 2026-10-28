@@ -49,8 +49,11 @@ func TestAmendAndWithdrawAWaitingBrief(t *testing.T) {
 		t.Fatalf("not amended in place: %+v", got)
 	}
 	forge := m.C.Effects.Forge.(*flakyForge)
-	if cs := strings.Join(forge.Comments("me/p", got.Issue.Number), "\n"); !strings.Contains(cs, "amended by lead-1") || !strings.Contains(cs, "long paste") {
-		t.Fatalf("the issue doesn't show the amended brief: %q", cs)
+	if title, body := forge.Issue("me/p", got.Issue.Number); title != got.Label() || !strings.Contains(body, "10k characters") || !strings.Contains(body, marker(got.ID)) {
+		t.Fatalf("the issue doesn't show the amended brief: %q %q", title, body)
+	}
+	if cs := strings.Join(forge.Comments("me/p", got.Issue.Number), "\n"); !strings.Contains(cs, "amended by lead-1 (title, known): the person's second report") {
+		t.Fatalf("the issue doesn't say who amended it and why: %q", cs)
 	}
 
 	if _, err := op(m.opWithdraw, lead, map[string]any{"task": second["task"]}); err == nil {
@@ -84,5 +87,22 @@ func TestAmendAndWithdrawAWaitingBrief(t *testing.T) {
 	}
 	if _, err := op(m.opWithdraw, lead, map[string]any{"task": first["task"], "why": "x"}); err == nil || !strings.Contains(err.Error(), "left the queue") {
 		t.Fatalf("a started task was withdrawn: %v", err)
+	}
+
+	// Its filer can still retract it once its ask turns out void: the
+	// worker is stopped and the task doesn't come back.
+	if _, err := m.Retract(other, first["task"], "void"); err == nil {
+		t.Fatal("a run that didn't file it retracted a started task")
+	}
+	s, _ := m.Get(first["task"])
+	if _, err := m.Retract(core.Run{RunSpec: core.RunSpec{ID: s.From}}, s.ID, "its test was never flaky"); err != nil {
+		t.Fatal(err)
+	}
+	s, _ = m.Get(first["task"])
+	if r, _ := m.C.Runs.Get(s.Worker); !s.Withdrawn() || !r.Terminal() {
+		t.Fatalf("not retracted with its worker stopped: %s %q run=%s", s.Stage, s.Reason, r.Status)
+	}
+	if err := m.Recheck(s.ID, "", "lead-1"); err == nil {
+		t.Fatal("a retracted task came back with recheck")
 	}
 }

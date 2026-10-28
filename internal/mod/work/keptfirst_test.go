@@ -84,3 +84,32 @@ func TestTheFirstOfTwoKeepsGoesFirst(t *testing.T) {
 		t.Fatalf("the earlier keep waits too: %q", why)
 	}
 }
+
+// A keep its judge has since rolled back holds nothing: the other merge
+// goes on (liveKeep's judgement branch).
+func TestAKeepItsJudgeRolledBackHoldsNothing(t *testing.T) {
+	m, task, p, f, _ := selfRig(t, map[string]string{"feature.go": "package p\n"}, core.GateKeep)
+	task.Aim, task.AimWhy = AimFix, "TestX fails"
+	main, _ := m.C.Effects.Sync(p)
+	measured := time.Now().Add(-time.Minute)
+	u := keptBeside(t, m, p, f, main, map[string]string{"feature.go": "package p // faster\n"}, measured)
+	if why := m.keptFirst(task, p, main); !strings.HasPrefix(why, KeptFirstWait) {
+		t.Fatalf("%q: want waiting behind the keep before its judge calls it", why)
+	}
+	m.C.J.MustAppend("judge.decided", core.Judgement{Project: p.Name, SHA: u.SHA, Main: main, Run: "j1", Numbers: core.GateKeep, Verdict: core.GateRollback, At: time.Now()})
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageMerged {
+		t.Fatalf("stage %q, reason %q: want merged once the keep's judge rolled it back", task.Stage, task.Reason)
+	}
+}
+
+// A kept task's label with its own parentheses doesn't make the hold's key
+// vary, so the PR hears the hold once.
+func TestAKeptFirstHoldKeyIgnoresALabelsParentheses(t *testing.T) {
+	why := func(until string) string {
+		return KeptFirstWait + ": #99 (Fix (the flaky) TestX (internal/core)) was kept on abc against main at def, and this merge would change what that verdict measured; it merges first (or until " + until + ")"
+	}
+	if a, b := HoldKey(why("10:00Z")), HoldKey(why("11:00Z")); a != b {
+		t.Fatalf("hold key varies with the bound: %q vs %q", a, b)
+	}
+}
