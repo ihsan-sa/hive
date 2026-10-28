@@ -106,6 +106,7 @@ type Run struct {
 	StopAsked   bool            `json:"stop_asked,omitempty"`
 	Waiting     string          `json:"waiting,omitempty"`  // what it ended its turn waiting for
 	Reopened    bool            `json:"reopened,omitempty"` // reopened while its turn ran: the turn's finish doesn't end it
+	Returned    bool            `json:"returned,omitempty"` // reopened after its turn ended, with no turn since: Admit may hold it
 	Created     time.Time       `json:"created"`
 	Updated     time.Time       `json:"updated"`
 	TurnStarted time.Time       `json:"turn_started,omitempty"`
@@ -474,6 +475,9 @@ type Runs struct {
 	// CheckExecutor is the same for a check the check line would make wait,
 	// from a module that says it takes checks.
 	CheckExecutor func() (sandbox.Sandbox, string)
+	// Admit says why a run's next turn waits on a module, or "": the work
+	// module's pace for a worker sent back to its task (Returned).
+	Admit func(Run) string
 	// Held is when a module next lets a pick take turns (a model at a
 	// spending cap), zero when it doesn't hold it; TurnBudget is the most a
 	// module lets run's next turn spend, 0 for no limit. Either may be nil.
@@ -508,6 +512,40 @@ type Runs struct {
 	backedOff                map[string]int  // the turn each run last backed off from for another daemon's claim, said once
 	turnLive                 map[string]int  // the turn each run last waited on its own last turn for, said once
 	waking                   sync.Mutex      // one wake at a time, so a run is woken once
+	// heldAt is when a turn last waited on a strained machine, rampLast
+	// when the ramp after it last let one start, and rampedAt when it last
+	// held one back (ramp).
+	heldAt, rampLast, rampedAt time.Time
+}
+
+// rampStep is the least time between two turns starting after a strain hold
+// (ramp), so the readings see each before the next: on 10-28, the hold
+// lifting started every run it had held at once, and the Hive's slice ran to
+// 42 claude, 87 link and 40 compile processes, load near 400 and an OOM kill.
+var rampStep = 30 * time.Second
+
+// Holding marks a strain hold now, outside launch (a brief the work module
+// held on one), so the turns after it ramp up.
+func (rs *Runs) Holding() {
+	rs.mu.Lock()
+	rs.heldAt = time.Now()
+	rs.mu.Unlock()
+}
+
+// ramp says whether a turn starting now waits for the ramp: after a strain
+// hold, turns start one a rampStep until none has waited on the ramp for two.
+func (rs *Runs) ramp(now time.Time) bool {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	if now.Sub(rs.heldAt) > 2*rampStep && now.Sub(rs.rampedAt) > 2*rampStep {
+		return false
+	}
+	if now.Sub(rs.rampLast) < rampStep {
+		rs.rampedAt = now
+		return true
+	}
+	rs.rampLast = now
+	return false
 }
 
 // Hold keeps new turns from starting, saying why; "" lets them start again.
@@ -852,7 +890,7 @@ func (rs *Runs) apply(e Event) {
 			on = ""
 		}
 		rs.ranOn[r.ID] = on
-		r.Waiting, r.Reopened = "", false
+		r.Waiting, r.Reopened, r.Returned = "", false, false
 		r.Given = nil
 		if t.Delivered <= len(r.Pending) {
 			r.Given = append(r.Given, r.Pending[:t.Delivered]...)
@@ -960,6 +998,7 @@ func (rs *Runs) apply(e Event) {
 	case "run.reopened":
 		r.Finish, r.StopAsked, r.Nudges, r.Still = nil, false, 0, 0
 		r.Reopened = r.Status == StatusRunning
+		r.Returned = !r.Reopened
 	}
 }
 
@@ -2260,6 +2299,15 @@ func tail(path string, n int) string {
 // PendingSep joins messages that queued during a turn into the next prompt.
 const PendingSep = "\n\n---\n\n"
 
+// holdTurn journals why r's turn waits, keeping its status, so a parked run
+// keeps its backoff and a nudged one its count; the live figures after " ("
+// change every tick, so only a new kind of hold is journalled.
+func (rs *Runs) holdTurn(r Run, why string) {
+	if kind, _, _ := strings.Cut(why, " ("); !strings.HasPrefix(r.Reason, kind) {
+		rs.append("run.held", runNote{ID: r.ID, Reason: why})
+	}
+}
+
 // launch starts the run's next turn in its sandbox.
 func (rs *Runs) launch(r Run, cfg Config) {
 	rs.mu.Lock()
@@ -2318,14 +2366,21 @@ func (rs *Runs) launch(r Run, cfg Config) {
 		elsewhere, where = rs.executor()
 	}
 	if why != "" && elsewhere == nil {
-		// The hold keeps the run's status, so a parked run keeps its backoff
-		// and a nudged one its count; the live figures after " (" change
-		// every tick, so only a new kind of hold is journalled.
-		why = "waiting: " + why
-		if kind, _, _ := strings.Cut(why, " ("); !strings.HasPrefix(r.Reason, kind) {
-			rs.append("run.held", runNote{ID: r.ID, Reason: why})
+		if !r.Lead() {
+			rs.Holding()
 		}
+		rs.holdTurn(r, "waiting: "+why)
 		return
+	}
+	if !r.Lead() && elsewhere == nil && rs.ramp(time.Now()) {
+		rs.holdTurn(r, "waiting: starting one turn at a time after the machine was strained")
+		return
+	}
+	if rs.Admit != nil { // after the ramp: a pass Admit gives is used now
+		if why := rs.Admit(r); why != "" {
+			rs.holdTurn(r, why)
+			return
+		}
 	}
 	sb, err := rs.sandbox()
 	if err != nil {
@@ -2675,7 +2730,7 @@ func (rs *Runs) sandboxSpec(cfg Config, sb sandbox.Sandbox, h harness.Harness, r
 	}
 	return sandbox.Spec{
 		ID: r.ID, Argv: argv, Env: env, Cwd: in(mounts[0]), Mounts: mounts, Tools: tools,
-		Stdin: stdin, Stdout: rs.ws.TurnOut(r.ID, turn), StopFile: filepath.Join(rs.ws.RunHost(r.ID), "stop"),
+		Stdin: stdin, Stdout: rs.ws.TurnOut(r.ID, turn), StopFile: filepath.Join(rs.ws.RunHost(r.ID), "stop"), Tmp: filepath.Join(rs.ws.RunPrivate(r.ID), "tmp"),
 		Network: true, Allow: allow, Local: cfg.Egress.LocalAddrs(), Guard: rs.ws.Guarded(), Cover: rs.ws.Covered(), UID: os.Getuid(), GID: os.Getgid(),
 		Nice: r.Nice(),
 	}, nil
