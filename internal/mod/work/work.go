@@ -156,16 +156,20 @@ type Task struct {
 	DraftWhy   string    `json:"draft_why,omitempty"`   // why the lead made its PR a draft (pr_draft)
 	// DraftRevived: it was brought back once after stopping on a draft merge
 	// (reviveDrafts), so stopping on one again leaves it for the lead.
-	DraftRevived bool      `json:"draft_revived,omitempty"`
-	Failures     int       `json:"failures"`
-	Kills        int       `json:"kills,omitempty"`      // steps in a row killed by their timeout (killCap)
-	CloseFail    int       `json:"close_fail,omitempty"` // failed tries to close the issue
-	Attempt      int       `json:"attempt"`              // fresh workers handed this task
-	Retry        time.Time `json:"retry,omitempty"`
-	IssueOpen    bool      `json:"issue_open,omitempty"` // done, but its issue is still to close
-	Noted        string    `json:"noted,omitempty"`      // the head whose test result the PR has been told, or knowingly not
-	NotedDiff    string    `json:"noted_diff,omitempty"` // the PR's own diff and result its last test comment was about
-	HoldSaid     string    `json:"hold_said,omitempty"`  // the HoldKey of the hold the PR was last told of
+	DraftRevived bool `json:"draft_revived,omitempty"`
+	Failures     int  `json:"failures"`
+	// StoppedAt is when its steps' errors last stopped it, and Revivals how
+	// often the Hive has brought it back from such a stop since (revive).
+	StoppedAt time.Time `json:"stopped_at,omitempty"`
+	Revivals  int       `json:"revivals,omitempty"`
+	Kills     int       `json:"kills,omitempty"`      // steps in a row killed by their timeout (killCap)
+	CloseFail int       `json:"close_fail,omitempty"` // failed tries to close the issue
+	Attempt   int       `json:"attempt"`              // fresh workers handed this task
+	Retry     time.Time `json:"retry,omitempty"`
+	IssueOpen bool      `json:"issue_open,omitempty"` // done, but its issue is still to close
+	Noted     string    `json:"noted,omitempty"`      // the head whose test result the PR has been told, or knowingly not
+	NotedDiff string    `json:"noted_diff,omitempty"` // the PR's own diff and result its last test comment was about
+	HoldSaid  string    `json:"hold_said,omitempty"`  // the HoldKey of the hold the PR was last told of
 	// CantRuns counts the tries in a row its own tests couldn't start (a
 	// missing tool); past CantRunTries the hold goes to the person and counts
 	// as red. CantRunSaid is the PR told of a can't-run, once per PR.
@@ -1178,9 +1182,14 @@ func (m *Module) revive() {
 	slow := time.Since(m.slow) < slowWait
 	m.mu.Unlock()
 	for _, t := range m.List(func(t Task) bool {
-		return t.Stage == StageStopped && !t.ByPerson && strings.HasPrefix(t.Reason, gaveUpOnErrors)
+		return t.Stage == StageStopped && !t.ByPerson && strings.HasPrefix(t.Reason, "gave up after ")
 	}) {
 		why := strings.TrimPrefix(t.Reason, gaveUpOnErrors)
+		if !strings.HasPrefix(t.Reason, gaveUpOnErrors) {
+			// Stopped on steps killed by their timeout (killCap): only the
+			// cool-down below brings it back, not the machine clearing.
+			why = ""
+		}
 		var said string
 		switch {
 		case !paused && core.IsRateLimit(why):
@@ -1189,8 +1198,16 @@ func (m *Module) revive() {
 			said = "brought back: it stopped only because a call was killed by its timeout while the machine was loaded"
 		case core.BaseMoved(why):
 			said = "brought back: it stopped only because main moved while it merged"
-		default:
+		case paused && core.IsRateLimit(why), slow && core.TimedOut(why), core.ChecksRefused(why), stoppedOnDraft(t):
+			continue // waits for its own cause to clear (above, reviveRefused, reviveDrafts)
+		case t.StoppedAt.IsZero() || time.Since(t.StoppedAt) < ReviveWait(t.Revivals):
 			continue
+		default:
+			// Any other error stop is no verdict on the work either: what
+			// broke (a sandbox mount, the forge, a disk) is often fixed by
+			// then, so it is tried again, each time after twice the wait.
+			t.Revivals++
+			said = fmt.Sprintf("brought back (time %d): it stopped %s ago on errors that weren't its work's (%s), so the Hive tries it again", t.Revivals, time.Since(t.StoppedAt).Round(time.Minute), core.Clip(why, 200))
 		}
 		if m.workerStopped(t) {
 			continue
@@ -3960,8 +3977,20 @@ func (m *Module) Stop(id, reason string) error {
 // lead, which brings it back with recheck or leaves it; no count ends it for good.
 func (m *Module) giveUp(t *Task, reason string) {
 	t.Stage, t.Reason = StageStopped, reason
+	next := "It's yours: bring it back with recheck, or leave it."
+	if strings.HasPrefix(reason, "gave up after ") {
+		t.StoppedAt = time.Now().UTC()
+		next = fmt.Sprintf("The Hive tries it again itself in %s unless its cause clears sooner; recheck brings it back now, and withdraw or stop ends it.", ReviveWait(t.Revivals))
+	}
 	m.save(t, core.Clip(reason, 300))
-	m.Chat.ToLead(t.Chat, t.Thread, fmt.Sprintf("Stopped %q (task %s): %s\n\nIt's yours: bring it back with recheck, or leave it.", t.Label(), strings.TrimSpace(t.ID+" "+t.PR.URL), core.Clip(reason, 1500)))
+	m.Chat.ToLead(t.Chat, t.Thread, fmt.Sprintf("Stopped %q (task %s): %s\n\n%s", t.Label(), strings.TrimSpace(t.ID+" "+t.PR.URL), core.Clip(reason, 1500), next))
+}
+
+// ReviveWait is how long a task stopped on its steps' errors waits before
+// the Hive brings it back itself, the n-th time: an hour, doubling each
+// time, at most a day. Nothing the errors did stops it for good.
+func ReviveWait(n int) time.Duration {
+	return min(time.Hour<<min(n, 5), 24*time.Hour)
 }
 
 // woke reports whether a blocked task's worker is taking turns again.
