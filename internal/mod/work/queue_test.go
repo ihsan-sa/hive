@@ -368,4 +368,21 @@ func TestConflictsGoBackAtThePace(t *testing.T) {
 	if start, _ := m.admit(m.List(nil)); len(start) != 0 {
 		t.Fatalf("started %v past the pace", start)
 	}
+	q := m.Queue(core.Run{RunSpec: core.RunSpec{ID: "lead", Role: "lead"}})
+	if len(q) != 3 || !strings.Contains(q[0], "goes back to merge main") || !strings.Contains(q[2], fresh.ID) {
+		t.Fatalf("queue: %q, want the two waiting to go back ahead of the new brief", q)
+	}
+	// One stopped while it waits never takes the stale conflict to a later worker.
+	var waiting Task
+	for _, task := range sent {
+		if got := stageOf(t, m, task); got.Resend != "" {
+			waiting = got
+		}
+	}
+	if err := m.Stop(waiting.ID, "not wanted"); err != nil {
+		t.Fatal(err)
+	}
+	if got := stageOf(t, m, waiting); got.Resend != "" || got.Resending() {
+		t.Fatalf("a stopped task keeps its conflict to send: %q", got.Resend)
+	}
 }

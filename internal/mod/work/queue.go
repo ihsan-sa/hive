@@ -314,12 +314,14 @@ func (l *ids) UnmarshalJSON(b []byte) error {
 
 // Queue lists the waiting briefs r may see, in the order they will start.
 func (m *Module) Queue(r core.Run) []string {
-	line := m.List(func(t Task) bool { return t.Queued() && m.C.Runs.Walled(r, t.Project) == nil })
+	line := m.List(func(t Task) bool { return (t.Queued() || t.Resending()) && m.C.Runs.Walled(r, t.Project) == nil })
 	m.inLine(line)
 	out := []string{}
 	for i, t := range line {
 		why := t.Reason
-		if d := time.Since(t.Created); !t.Created.IsZero() && d >= time.Hour {
+		if t.Resending() { // it started long ago: its wait is the pace's, not the brief's
+			why = strings.TrimSuffix("its worker goes back to merge main; "+why, "; ")
+		} else if d := time.Since(t.Created); !t.Created.IsZero() && d >= time.Hour {
 			// The lead sees the long waits, and which go ahead of its order.
 			age := fmt.Sprintf("waited %s", d.Round(time.Minute))
 			if t.Overdue() && !t.Now {

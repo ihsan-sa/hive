@@ -235,3 +235,22 @@ func TestEnqueueDoesNotWaitForRoom(t *testing.T) {
 		t.Fatal("the merge never reached the queue")
 	}
 }
+
+// A worker a conflict sends back waits at the pace as a queued brief does
+// (issue #1853): with ~20 conflicts at a pace of 1, hours of it are no
+// stall, while a working task with no such wait still is one.
+func TestConflictWaitingAtThePaceIsNoStall(t *testing.T) {
+	m := rig(t)
+	m.C.J.MustAppend("task.saved", work.Task{ID: "t0", Project: "p", Title: "change t0", Stage: work.StageWorking, Worker: "w0", Resend: "Main moved and your branch conflicts with it.", Reason: "waiting for a worker (at the pace)"})
+	m.C.J.MustAppend("task.saved", work.Task{ID: "t1", Project: "p", Title: "change t1", Stage: work.StageWorking, Worker: "w1"})
+	m.mu.Lock()
+	for _, id := range []string{"t0", "t1"} {
+		m.spells[id] = spell{stage: work.StageWorking, since: time.Now().Add(-48 * time.Hour)}
+	}
+	m.mu.Unlock()
+	m.Watch()
+	s := m.Stalls()
+	if len(s) != 1 || !strings.Contains(fmt.Sprint(s), "t1") || strings.Contains(fmt.Sprint(s), "t0") {
+		t.Fatalf("stalls = %+v, want only t1's", s)
+	}
+}

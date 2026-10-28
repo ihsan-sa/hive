@@ -174,10 +174,11 @@ func (m *Module) Watch() {
 		return !t.Terminal() && t.Stage != work.StagePerson && t.Stage != work.StageMerged
 	}) {
 		now["task:"+t.ID] = t.Stage
-		// The recursive gate runs on its own clock, as many at once as the
+		// A worker a conflict sends back waits at the pace as a queued
+		// brief does (work.Task.Resending). The recursive gate runs on its own clock, as many at once as the
 		// machine carries; a merge behind a kept gain waits at most that
 		// keep's own bound (work.KeptFirstWait).
-		if t.Queued() || strings.HasPrefix(t.Reason, work.GateWait) || strings.HasPrefix(t.Reason, work.KeptFirstWait) || slices.ContainsFunc(waiting, func(u core.SlotUse) bool { return u.Project == t.Project && u.SHA == checked(t) }) {
+		if t.Queued() || t.Resending() || strings.HasPrefix(t.Reason, work.GateWait) || strings.HasPrefix(t.Reason, work.KeptFirstWait) || slices.ContainsFunc(waiting, func(u core.SlotUse) bool { return u.Project == t.Project && u.SHA == checked(t) }) {
 			continue
 		}
 		if c := waitCause(t.Reason); c != "" && t.Stage != work.StageWorking && t.Stage != work.StageReviewing { // a run's own hang is still its own

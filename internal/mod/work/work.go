@@ -465,6 +465,9 @@ func (m *Module) overtaken(t *Task) bool {
 // store saves t, or, when t is a copy from before the task was steered and
 // this save isn't a steer itself, drops it, reporting whether it saved.
 func (m *Module) store(t *Task, note string, steer bool) bool {
+	if t.Stage != StageWorking { // stopped, blocked or moved on: a conflict held for the pace no longer goes
+		t.Resend = ""
+	}
 	now := time.Now().UTC()
 	loaded := t.Updated // when the copy was last saved, before it is stamped now
 	// Windows' clock ticks coarsely, so a save in the tick GitHub came back
