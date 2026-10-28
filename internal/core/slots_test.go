@@ -120,7 +120,7 @@ func TestSlotsRankGoesFirst(t *testing.T) {
 	var mu sync.Mutex
 	ranks := map[string]int{"urgent": 2}
 	s := NewSlots(func() int { return 1 })
-	s.Prioritize(func(_, sha, _ string) int { mu.Lock(); defer mu.Unlock(); return ranks[sha] })
+	s.Prioritize(func(_, sha, _ string) int { mu.Lock(); defer mu.Unlock(); return ranks[sha] }, 0)
 	hold := s.Acquire("p", "first", "test")
 	started := make(chan string, 10)
 	ask := func(sha string) {
@@ -165,7 +165,7 @@ func TestSlotsPatienceStopsPassingOver(t *testing.T) {
 			return 0
 		}
 		return 2
-	})
+	}, 0)
 	s.patience = 50 * time.Millisecond
 	hold := s.Acquire("p", "first", "test")
 	started := make(chan string, 10)
@@ -193,5 +193,77 @@ func TestSlotsPatienceStopsPassingOver(t *testing.T) {
 	hold()
 	if a, b := <-started, <-started; a != "plain" || b != "ranked" {
 		t.Fatalf("started %s then %s", a, b)
+	}
+}
+
+// A dropped waiter leaves the line at once without a slot, and the next one
+// starts in its place.
+func TestSlotsDrop(t *testing.T) {
+	s := NewSlots(func() int { return 1 })
+	hold := s.Acquire("p", "first", "test")
+	dropped := make(chan bool, 1)
+	go func() { _, ok := s.Take("p", "closed", "test"); dropped <- ok }()
+	for {
+		if _, w := s.State(); len(w) == 1 {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if n := s.Drop("p", "closed"); n != 1 {
+		t.Fatalf("dropped %d, want 1", n)
+	}
+	select {
+	case ok := <-dropped:
+		if ok {
+			t.Fatal("a dropped wait got a slot")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("a dropped wait still waits")
+	}
+	if run, w := s.State(); len(run) != 1 || len(w) != 0 {
+		t.Fatalf("running %v, waiting %v", run, w)
+	}
+	hold()
+	if s.Busy() {
+		t.Fatal("busy after the holder released")
+	}
+}
+
+// An urgent rank goes first even past a waiter out of patience, which still
+// goes ahead of a merely ranked one: main's measurement waited behind PR
+// checks an hour old in a backlog (issue #1713).
+func TestSlotsUrgentPassesPatience(t *testing.T) {
+	s := NewSlots(func() int { return 1 })
+	s.Prioritize(func(_, sha, _ string) int {
+		return map[string]int{"plain": 0, "ranked": 2, "main": 3}[sha]
+	}, 3)
+	s.patience = 50 * time.Millisecond
+	hold := s.Acquire("p", "first", "test")
+	started := make(chan string, 10)
+	ask := func(sha string) {
+		go func() {
+			rel := s.Acquire("p", sha, "test")
+			started <- sha
+			rel()
+		}()
+		for end := time.Now().Add(5 * time.Second); ; time.Sleep(time.Millisecond) {
+			if r, w := s.State(); inSlots(r, w, sha) {
+				break
+			}
+			if time.Now().After(end) {
+				t.Fatalf("%s never queued", sha)
+			}
+		}
+	}
+	ask("plain")
+	time.Sleep(60 * time.Millisecond)
+	ask("ranked")
+	ask("main")
+	if _, w := s.State(); len(w) != 3 || w[0].SHA != "main" || w[1].SHA != "plain" || w[2].SHA != "ranked" {
+		t.Fatalf("waiting %+v", w)
+	}
+	hold()
+	if a, b, c := <-started, <-started, <-started; a+" "+b+" "+c != "main plain ranked" {
+		t.Fatalf("started %s %s %s", a, b, c)
 	}
 }

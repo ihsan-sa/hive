@@ -326,7 +326,7 @@ func (m *Module) deliverToLead(ch *Chat, text string, files ...File) error {
 	if err != nil {
 		return err
 	}
-	text += note
+	text = m.missed(ch) + text + note
 	name, project := "lead", ""
 	dir := filepath.Join(m.C.WS.Hive(), "leads", "main")
 	if ch.Kind == "project" {
@@ -366,6 +366,35 @@ func (m *Module) deliverToLead(ch *Chat, text string, files ...File) error {
 	return nil
 }
 
+// missedMax is how many of the Hive's posts a new lead is told it missed.
+const missedMax = 5
+
+// missed is what the Hive posted in the chat while no lead was running
+// (after the last one ended, or ever, for a chat that never had one), newest
+// last: a notification reaches only a running lead, so a step-back's
+// judgement or an outcome posted between leads would otherwise steer no one.
+func (m *Module) missed(ch *Chat) string {
+	var since time.Time
+	if ch.Lead != "" {
+		if r, ok := m.C.Runs.Get(ch.Lead); ok {
+			since = r.Updated
+		}
+	}
+	var posts []string
+	for _, msg := range m.Messages(ch.ID) {
+		if msg.From == "hive" && msg.At.After(since) {
+			posts = append(posts, fmt.Sprintf("[notification · thread %s · %s] %s", msg.Thread, msg.At.Local().Format("Mon 15:04"), core.Clip(msg.Text, 1500)))
+		}
+	}
+	if len(posts) == 0 {
+		return ""
+	}
+	if len(posts) > missedMax {
+		posts = posts[len(posts)-missedMax:]
+	}
+	return "[posted in this chat while no lead was running]\n" + strings.Join(posts, "\n") + "\n\n"
+}
+
 // bundleFor puts main.bundle in an isolated project's run dir for its lead.
 func (m *Module) bundleFor(ch *Chat, p core.Project, id string) {
 	if !p.Isolated {
@@ -385,6 +414,15 @@ func (m *Module) bundleFor(ch *Chat, p core.Project, id string) {
 
 // Notify posts an outcome into a thread and tells the chat's lead.
 func (m *Module) Notify(chatID, thread, text string) {
+	if m.Record(chatID, thread, text) {
+		m.ToLead(chatID, thread, text)
+	}
+}
+
+// Record puts an outcome that needs nothing into a thread without waking the
+// chat's lead: the feed and the record carry it. It says whether the chat
+// exists.
+func (m *Module) Record(chatID, thread, text string) bool {
 	if chatID == "" {
 		chatID = "lead"
 	}
@@ -392,10 +430,10 @@ func (m *Module) Notify(chatID, thread, text string) {
 	ch := m.chats[chatID]
 	m.mu.Unlock()
 	if ch == nil {
-		return
+		return false
 	}
 	m.add(Message{Chat: chatID, Thread: thread, From: "hive", Name: "hive", Text: text})
-	m.ToLead(chatID, thread, text)
+	return true
 }
 
 // ToLead tells only the chat's lead, which judges what the person hears.

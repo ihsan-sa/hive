@@ -211,3 +211,76 @@ func TestUnsignedUpdateToldInChat(t *testing.T) {
 		t.Fatalf("lead chat after updates: %+v", msgs)
 	}
 }
+
+// Record puts an outcome in the thread without waking the chat's lead;
+// Notify does both.
+func TestRecordDoesNotWakeTheLead(t *testing.T) {
+	dir := t.TempDir()
+	forge := &core.Local{Dir: filepath.Join(dir, "forge")}
+	ws := core.Workspace{Root: filepath.Join(dir, "hive")}
+	ws.Init()
+	cfg := ws.LoadConfig()
+	cfg.Sandbox, cfg.BareAccepted, cfg.Harness = "bare", time.Now().Format(time.RFC3339), "fake"
+	cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax, cfg.LoadMax = 0, 0, 0, 0
+	ws.SaveConfig(cfg)
+	c, err := core.Open(ws, forge)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	r, err := c.Runs.Start(core.RunSpec{Role: "lead", Brief: "lead", Persistent: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := &Module{C: c, chats: map[string]*Chat{"lead": {ID: "lead", Lead: r.ID}}, msgs: map[string][]Message{}, read: map[string]int{}}
+	queued := func() (n int) {
+		for _, e := range c.J.Since(0) {
+			if e.Kind == "run.queued" && strings.Contains(string(e.Data), "[notification") {
+				n++
+			}
+		}
+		return
+	}
+	m.Record("lead", "t1", "Merged: x")
+	if n := queued(); n != 0 || len(m.Messages("lead")) != 1 {
+		t.Fatalf("Record: %d notifications to the lead, %d messages", n, len(m.Messages("lead")))
+	}
+	m.Notify("lead", "t1", "Blocked: y")
+	if n := queued(); n != 1 || len(m.Messages("lead")) != 2 {
+		t.Fatalf("Notify: %d notifications to the lead, %d messages", n, len(m.Messages("lead")))
+	}
+}
+
+// A notification reaches only a running lead, so a lead that starts later
+// is told what the Hive posted in its chat after the last lead ended, the
+// newest missedMax of it, and nothing the last lead already heard.
+func TestNewLeadHearsWhatItMissed(t *testing.T) {
+	dir := t.TempDir()
+	c, err := core.Open(core.Workspace{Root: filepath.Join(dir, "hive")}, &core.Local{Dir: filepath.Join(dir, "forge")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	m := New(c, nil)
+	m.EnsureProject("p")
+	m.Notify("project:p", "", "HEARD before any lead")
+	ch := m.chats["project:p"]
+	if got := m.missed(ch); !strings.Contains(got, "HEARD before any lead") {
+		t.Fatalf("a chat's first lead must hear what the Hive posted: %q", got)
+	}
+	c.J.MustAppend("run.created", core.RunSpec{ID: "lead-old", Role: "lead", Project: "p", Harness: "fake"})
+	c.J.MustAppend("run.status", map[string]any{"id": "lead-old", "status": core.StatusStopped})
+	r, _ := c.Runs.Get("lead-old")
+	if !r.Terminal() {
+		t.Fatalf("the old lead must have ended: %+v", r)
+	}
+	ch.Lead = "lead-old"
+	time.Sleep(10 * time.Millisecond)
+	for i := range missedMax + 1 {
+		m.Notify("project:p", "", fmt.Sprintf("MISSED %d", i))
+	}
+	got := m.missed(ch)
+	if strings.Contains(got, "HEARD") || strings.Contains(got, "MISSED 0") || !strings.Contains(got, fmt.Sprintf("MISSED %d", missedMax)) {
+		t.Fatalf("a new lead must hear the newest posts since the last lead ended, and only those: %q", got)
+	}
+}

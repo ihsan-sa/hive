@@ -4,8 +4,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 // A worker whose turns keep ending in prose is nudged twice; when the turns
@@ -136,5 +138,65 @@ func TestHeadMarkReadsTheCommit(t *testing.T) {
 	run(wt, "commit", "-q", "--allow-empty", "-m", "two")
 	if got, want := headMark(wt), run(wt, "rev-parse", "HEAD"); got != want || got == headMark(co) {
 		t.Fatalf("worktree: %q, want %q", got, want)
+	}
+}
+
+// A worker whose nudges don't get it to finish on a stop of its route that
+// isn't the last moves on to the next stop a run has finished on, with
+// nudges of its own there, rather than going quiet; on the last it goes
+// quiet as before. Deck's fix stalled three times on its free models and
+// never reached its route's claude:opus.
+func TestAWorkerThatDoesntFinishMovesAlongItsRoute(t *testing.T) {
+	c, _ := testHive(t)
+	cfg := c.WS.LoadConfig()
+	cfg.Models = map[string]OpenModel{
+		"free": {Endpoint: "http://127.0.0.1:11434/v1", Model: "qwen"},
+		"mid":  {Endpoint: "http://127.0.0.1:11434/v1", Model: "gpt-oss"},
+	}
+	c.WS.SaveConfig(cfg)
+	opus := Pick{Harness: "fake", Model: "opus"}
+	c.J.MustAppend("run.created", RunSpec{ID: "trial", Role: "worker", Harness: "fake", Model: "opus"})
+	c.J.MustAppend("run.finish", map[string]any{"id": "trial", "finish": Finish{Status: "done"}})
+	c.J.MustAppend("run.created", RunSpec{ID: "w1", Role: "worker", Harness: "open", Model: "free", Checkout: t.TempDir(),
+		Route: []Pick{{Harness: "open", Model: "free"}, {Harness: "open", Model: "mid"}, opus}})
+	turn := 0
+	prose := func(on Pick) Run {
+		turn++
+		r, _ := c.Runs.Get("w1")
+		c.J.MustAppend("run.delivered", runNote{ID: "w1", N: len(r.Pending)})
+		c.J.MustAppend("run.turn_started", turnStarted{ID: "w1", Turn: turn, Harness: on.Harness, Model: on.Model})
+		out := c.WS.TurnOut("w1", turn)
+		os.MkdirAll(filepath.Dir(out), 0o755)
+		os.WriteFile(out, []byte(`{"type":"result","subtype":"success","result":"All done.","session_id":"s1"}`+"\n"), 0o600)
+		r, _ = c.Runs.Get("w1")
+		c.Runs.endTurn(r)
+		got, _ := c.Runs.Get("w1")
+		return got
+	}
+	free := Pick{Harness: "open", Model: "free"}
+	prose(free)
+	prose(free)
+	got := prose(free)
+	if got.Status != StatusParked || got.Reason != "open:free keeps ending turns without finishing; moving to fake:opus" {
+		t.Fatalf("after its nudges on a stop that isn't the last: %q (%q)", got.Status, got.Reason)
+	}
+	if p, at := c.Runs.next(got); !p.Same(opus) || at.After(time.Now()) {
+		t.Fatalf("next after stalling: %v at %v, want fake:opus (past the stop no run has finished on)", p, at)
+	}
+	if got.Nudges != 0 || !slices.Equal(got.Stalled, []string{"open:free"}) {
+		t.Fatalf("the next stop gets its own nudges, and the stop passed is kept: nudges %d, stalled %q", got.Nudges, got.Stalled)
+	}
+	for i := 0; i < 2; i++ {
+		if got = prose(opus); got.Status != StatusIdle {
+			t.Fatalf("a nudge on the next stop: %q (%q)", got.Status, got.Reason)
+		}
+	}
+	if got = prose(opus); got.Status != StatusQuiet {
+		t.Fatalf("on the route's last stop: %q (%q), want quiet", got.Status, got.Reason)
+	}
+	// A run with no route stays where it is, as before.
+	c.J.MustAppend("run.created", RunSpec{ID: "w2", Role: "worker", Harness: "fake", Model: "opus", Checkout: t.TempDir()})
+	if r, _ := c.Runs.Get("w2"); func() bool { _, _, ok := c.Runs.onward(r, opus); return ok }() {
+		t.Fatal("a run with no route moved on")
 	}
 }
