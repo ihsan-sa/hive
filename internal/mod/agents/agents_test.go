@@ -32,6 +32,34 @@ func TestLeadChecksMachineClaims(t *testing.T) {
 	}
 }
 
+// A read-only seat (reviewer, security read, judge) gets its role alone, not
+// the orientation on working in the Hive; a worker still gets both.
+func TestReadOnlySeatsGetTheirRoleAlone(t *testing.T) {
+	ws := core.Workspace{Root: t.TempDir()}
+	if err := ws.Init(); err != nil {
+		t.Fatal(err)
+	}
+	c, err := core.Open(ws, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	mods := modules.New(ws, c.J)
+	if err := mods.InstallDefaults(); err != nil {
+		t.Fatal(err)
+	}
+	a := &Agents{C: c, Mod: mods}
+	orientation := mods.Prompt("orientation.md")
+	for _, role := range []string{"reviewer", core.JudgeRole} {
+		if s := a.System(role, ""); s != mods.Prompt(role+".md") || s == "" {
+			t.Errorf("%s's system prompt isn't its role alone:\n%s", role, s)
+		}
+	}
+	if s := a.System("worker", ""); !strings.HasPrefix(s, orientation) || !strings.Contains(s, mods.Prompt("worker.md")) {
+		t.Error("a worker's system prompt lost the orientation or its role")
+	}
+}
+
 // A project's own model is more specific than lead_model, so it runs that
 // project's lead; a lead with no project of its own gets lead_model.
 func TestProjectModelBeatsLeadModel(t *testing.T) {

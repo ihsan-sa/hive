@@ -246,6 +246,89 @@ func TestPinPausesAutoUpdate(t *testing.T) {
 	}
 }
 
+// --release to the newest release, or to a pre-release past it, moves the
+// Hive forward and leaves auto-update on, clearing a pin it had: only a step
+// back pins (issue #1795, where each hand update to a pre-release left the
+// Hive pinned with auto-update off).
+func TestUpdateForwardDoesntPin(t *testing.T) {
+	serveAll(t, "v0.1.3", map[string]map[string]string{"v0.1.3": build("new"), "v0.1.4": build("pre")}, false)
+	for _, tag := range []string{"v0.1.3", "v0.1.4"} {
+		m, exe := releaseAt(t, "v0.1.2", "me/hive")
+		cfg := m.C.WS.LoadConfig()
+		cfg.AutoUpdate, cfg.PinnedAuto, cfg.ReleasePin = false, true, "v0.1.2"
+		m.C.WS.SaveConfig(cfg)
+		msg, err := m.Update(tag)
+		if raw, _ := os.ReadFile(exe); err != nil || !strings.HasPrefix(msg, "updated to "+tag+"\n") || string(raw) == "old" {
+			t.Fatalf("%s: %q, %v, binary %q", tag, msg, err, raw)
+		}
+		if cfg := m.C.WS.LoadConfig(); cfg.ReleasePin != "" || !cfg.AutoUpdate || cfg.PinnedAuto {
+			t.Fatalf("%s: pin %q, auto_update %v, pinned_auto %v", tag, cfg.ReleasePin, cfg.AutoUpdate, cfg.PinnedAuto)
+		}
+	}
+}
+
+// A pin an update forward left before it stopped pinning (auto-update was on
+// before it) is lifted at the daemon's first auto-update, as the journalled
+// update that brought the release in shows; a step back stays pinned, also
+// one to a pre-release past the latest full release or one this build made
+// forward from an earlier step back, and so does a pin no journalled update
+// explains.
+func TestForwardPinLifted(t *testing.T) {
+	serveAll(t, "v0.1.3", map[string]map[string]string{"v0.1.3": build("new"), "v0.1.5": build("broken")}, false)
+	for _, c := range []struct {
+		from, pin string
+		lifted    bool
+		pinned    bool // journalled by this build's update, which says whether it pinned
+	}{{"v0.1.2", "v0.1.4", true, false}, {"v0.1.2", "v0.1.3", true, false}, {"v0.1.5", "v0.1.4", false, false},
+		{"v0.1.3", "v0.1.2", false, false}, {"", "v0.1.4", false, false}, {"v0.1.1", "v0.1.2", false, true}} {
+		m, exe := releaseAt(t, c.pin, "me/hive")
+		cfg := m.C.WS.LoadConfig()
+		cfg.AutoUpdate, cfg.PinnedAuto, cfg.ReleasePin = false, true, c.pin
+		m.C.WS.SaveConfig(cfg)
+		if c.from != "" {
+			ev := map[string]any{"from": c.from, "to": c.pin}
+			if c.pinned {
+				ev["pinned"] = true
+			}
+			m.C.J.MustAppend("hive.updated", ev)
+		}
+		for range 2 {
+			msg, err := m.AutoUpdate()
+			if err != nil {
+				t.Fatalf("%s from %s: %v", c.pin, c.from, err)
+			}
+			cfg = m.C.WS.LoadConfig()
+			if raw, _ := os.ReadFile(exe); c.lifted != (cfg.ReleasePin == "" && cfg.AutoUpdate) || string(raw) != "old" {
+				t.Fatalf("%s from %s: %q; pin %q, auto_update %v, binary %q, want lifted %v", c.pin, c.from, msg, cfg.ReleasePin, cfg.AutoUpdate, raw, c.lifted)
+			}
+		}
+	}
+}
+
+// A step back this build pins, even one forward from an earlier step back,
+// stays pinned through the restart's first auto-update.
+func TestStepBackPinSurvivesRestart(t *testing.T) {
+	serveAll(t, "v0.1.3", map[string]map[string]string{"v0.1.3": build("new"), "v0.1.2": build("bisect")}, false)
+	m, exe := releaseAt(t, "v0.1.1", "me/hive")
+	cfg := m.C.WS.LoadConfig()
+	cfg.AutoUpdate, cfg.PinnedAuto, cfg.ReleasePin = false, true, "v0.1.1"
+	m.C.WS.SaveConfig(cfg)
+	if msg, err := m.Update("v0.1.2"); err != nil || !strings.Contains(msg, "pinned") {
+		t.Fatalf("step to v0.1.2: %q, %v", msg, err)
+	}
+	core.Version = "v0.1.2" // the restart
+	restarted := &Module{C: m.C}
+	if msg, err := restarted.AutoUpdate(); err != nil || !strings.Contains(msg, "pinned to v0.1.2") {
+		t.Fatalf("auto-update after the restart: %q, %v", msg, err)
+	}
+	if cfg := m.C.WS.LoadConfig(); cfg.ReleasePin != "v0.1.2" || cfg.AutoUpdate {
+		t.Fatalf("pin %q, auto_update %v", cfg.ReleasePin, cfg.AutoUpdate)
+	}
+	if raw, _ := os.ReadFile(exe); string(raw) != "bisect" {
+		t.Fatalf("binary %q", raw)
+	}
+}
+
 // A pinned Hive doesn't update itself past its pin and says, once, that a
 // newer release is out; `hive update` clears the pin and installs the newest.
 func TestPinHoldsUntilCleared(t *testing.T) {
@@ -470,6 +553,11 @@ func TestRootReleaseOnTheHivesReads(t *testing.T) {
 	}
 	seated(m, "a2", "d2", core.PanelSeat(1), "land")
 	m.AfterKept("hive", "m2")
+	if len(n.got) != 0 {
+		t.Fatalf("two lands with a panel seat still reading released a root change: %v", n.got)
+	}
+	seated(m, "a2", "d2", core.PanelSeat(2), "fix")
+	m.AfterKept("hive", "m2")
 	body := n.got["v0.0.1"]
 	if !strings.Contains(body, "install/root.sh) passed the security seat") || strings.Contains(body, "The person released it") {
 		t.Fatalf("the release should say the Hive's reads passed its root paths: %q", body)
@@ -541,7 +629,7 @@ func TestRootReadCoversTheWholeDiff(t *testing.T) {
 	m, n, _, land := selfHive(t)
 	m.C.J.MustAppend("effect.merged", map[string]any{"project": "hive", "pr": 2, "sha": "a2", "merge_sha": "m2", "root": []string{"install/root.sh", ".github/CODEOWNERS"}, "diff": "d2"})
 	land("a2", "r2")
-	for _, seat := range []string{core.SeatSecurity, core.PanelSeat(0), core.PanelSeat(1)} {
+	for _, seat := range []string{core.SeatSecurity, core.PanelSeat(0), core.PanelSeat(1), core.PanelSeat(2)} {
 		seated(m, "a2", "d2", seat, "land")
 	}
 	m.C.J.MustAppend("effect.merged", map[string]any{"project": "hive", "pr": 3, "sha": "a3", "merge_sha": "m3", "root": []string{".github/CODEOWNERS"}, "diff": "d3"})
@@ -1629,5 +1717,49 @@ func TestReleaseFallForwardHeldEndsTheWait(t *testing.T) {
 	m.retryWaiting()
 	if journaledN(m, "alert.raised") != alerts || len(n.got) != 0 {
 		t.Fatalf("a wait the hold ended was retried: %v", n.got)
+	}
+}
+
+// ed8e06d8 was kept but had no effect.merged (its merge's gh call failed
+// though the merge went through), so its release was refused and nothing
+// tried again: the newest kept Hive merge since is tried on Tick, once, and
+// released when its checks pass.
+func TestRefusedUnmergedTriesTheNextMerge(t *testing.T) {
+	m, n, merged, land := selfHive(t)
+	linear(m)
+	inHistory := m.Contains
+	m.Contains = func(p core.Project, sha, at string) (bool, error) {
+		if sha == "m2" { // on main, between m1 and m3, though no effect.merged names it
+			return at == "m3", nil
+		}
+		return inHistory(p, sha, at)
+	}
+	merged(1, "a1", "m1")
+	land("a1", "r1")
+	for range 2 {
+		m.AfterKept("hive", "m2")
+	}
+	m.retryWaiting()
+	if len(n.got) != 0 || journaledN(m, "release.unmerged") != 1 || !strings.Contains(alertText(m), "no release at m2: it is not a merge") {
+		t.Fatalf("the refusal: releases %v, %d release.unmerged, alert %q", n.got, journaledN(m, "release.unmerged"), alertText(m))
+	}
+	merged(3, "a3", "m3")
+	land("a3", "r3")
+	n.SetChecks("me/hive", "m3", core.CheckRun{Name: "test", State: core.CheckPass})
+	m.retryWaiting()
+	if len(n.got) != 0 {
+		t.Fatalf("released at a merge not kept yet: %v", n.got)
+	}
+	keptAt(m, "m3", true)
+	m.retryWaiting()
+	if len(n.got) != 1 || !strings.Contains(n.got["v0.0.1"], "#3 at a3") || !strings.Contains(n.got["v0.0.1"], "#1 at a1") {
+		t.Fatalf("the next merge wasn't released: %v", n.got)
+	}
+	m.retryWaiting()
+	if len(n.got) != 1 {
+		t.Fatalf("released again: %v", n.got)
+	}
+	if sha, next := m.unmerged("hive"); sha != "" || next != "" {
+		t.Fatalf("the refusal still waits after a release: %q %q", sha, next)
 	}
 }

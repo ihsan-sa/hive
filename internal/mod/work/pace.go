@@ -196,17 +196,23 @@ func safeChecks() int { return 2 * core.DefaultMaxChecks() }
 
 // planSpent says when every model a worker would go on, the workspace's
 // route or any project's own, has under planFloor of its plan left, all
-// logins together, or is spending a usage window more than aheadSlack
-// ahead of the clock, or "".
+// logins together, or when any one route's every model is spending a usage
+// window more than aheadSlack ahead of the clock, or "". The pull-back is
+// read route by route: a free model on one project's route (which has no
+// windows, so reads on the clock) left the min over every route at 0, and
+// it never fired while Claude's week, all of the Hive's own route, went from
+// 26% to 65% in a day at 14% of the week passed (issue #1797).
 func (m *Module) planSpent(cfg core.Config) string {
-	room, ahead := 0.0, -1.0
+	room, ahead := 0.0, 0.0
 	for _, project := range append([]string{""}, slices.Sorted(maps.Keys(cfg.Projects))...) {
+		least := -1.0 // the least ahead model on this route
 		for _, p := range cfg.Route("worker", project) {
 			room = max(room, m.C.Runs.Headroom(p))
-			if a := m.C.Runs.Ahead(p); ahead < 0 || a < ahead {
-				ahead = a
+			if a := m.C.Runs.Ahead(p); least < 0 || a < least {
+				least = a
 			}
 		}
+		ahead = max(ahead, least)
 	}
 	switch {
 	case room < planFloor:
@@ -237,16 +243,13 @@ func (m *Module) checkSlots() int {
 	return cmp.Or(m.checks.get(), m.C.WS.LoadConfig().MaxChecks, core.DefaultMaxChecks())
 }
 
-// Check ranks: main's own measurement goes first, then a check of a task
-// queued briefs wait on, then a fix's, then the rest in the order they
-// asked. The worker on #601 finished with ~20 briefs waiting on it to land,
-// and its check sat ~30 minutes behind 31 others (issue #838); main's score
-// and size of 282991d7 waited 2h16m behind PR checks, and keep/revert, the
-// release and the next baseline with them (issue #1078).
+// Check ranks: main's own measurement goes first, then a fix's, then the
+// rest in the order they asked. Main's score and size of 282991d7 waited
+// 2h16m behind PR checks, and keep/revert, the release and the next baseline
+// with them (issue #1078).
 const (
-	rankFix   = 1
-	rankFrees = 2
-	rankMain  = 3
+	rankFix  = 1
+	rankMain = 2
 )
 
 // MeasuringMain marks sha as main's commit being measured on project until
@@ -275,8 +278,6 @@ func RankWhy(r int) string {
 	switch {
 	case r >= rankMain:
 		return "measures main"
-	case r == rankFrees:
-		return "frees queued briefs"
 	case r == rankFix:
 		return "a fix"
 	}
@@ -291,23 +292,13 @@ func (m *Module) checkRank(project, sha, _ string) int {
 	if m.measuring[project+"@"+sha] > 0 {
 		return rankMain
 	}
-	var mine *Task
 	for _, t := range m.tasks {
 		if t.Project == project && t.SHA == sha && !t.Terminal() {
-			mine = t
-			break
+			if t.Fix() {
+				return rankFix
+			}
+			return 0
 		}
-	}
-	if mine == nil {
-		return 0
-	}
-	for _, t := range m.tasks {
-		if t.Queued() && holder(t.Reason) == mine.ID {
-			return rankFrees
-		}
-	}
-	if mine.Fix() {
-		return rankFix
 	}
 	return 0
 }

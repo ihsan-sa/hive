@@ -275,9 +275,6 @@ func (m *model) taskLine(t work.Task) string {
 	}
 	if (t.Queued() || t.Stage == work.StageMerging) && t.Reason != "" {
 		progress = stDim.Render("  " + core.Clip(t.Reason, 70))
-		if t.FilesWait() >= time.Hour { // passed by later briefs on its other files meanwhile
-			progress = stDim.Render("  " + ago(t.FilesSince) + " on others' files: " + core.Clip(t.Reason, 60))
-		}
 	}
 	if i := slices.IndexFunc(m.st.Checks.Waiting, func(u core.SlotUse) bool { return u.Project == t.Project && u.SHA == t.SHA }); t.Stage == work.StageTesting && i >= 0 {
 		progress = fmt.Sprintf("  waiting for a check slot (%d ahead)", i)
@@ -307,6 +304,9 @@ func (m *model) runLine(r core.Run) string {
 	}
 	if r.Finish != nil && r.Finish.Printed {
 		extra = "(finish printed, the Hive ran it) " + extra
+	}
+	if r.Status == core.StatusRunning && r.Where != "" {
+		status += " on " + text.Visible(r.Where)
 	}
 	return fmt.Sprintf("%s  %s  %s  turn %d  $%.2f  %dk ctx  %s  %s", runLabel(r), status, text.Visible(core.HarnessName(r.Harness)+":"+r.Model), r.Turn, r.Cost, r.Context/1000, stDim.Render(core.Clip(extra, 70)), stDim.Render(ago(r.Updated)))
 }
@@ -625,6 +625,9 @@ func (m *model) viewDetail(d *detail) []string {
 		kv("status", r.Status+"  "+r.Reason)
 		kv("project", r.Project+"  task "+r.Task)
 		kv("model", r.Harness+" "+r.Model)
+		if r.Where != "" {
+			kv("ran on", text.Visible(r.Where)+" (an executor module's runner)")
+		}
 		kv("turns", fmt.Sprintf("%d  cost $%.2f  started %s", r.Turn, r.Cost, r.Created.Local().Format("Mon 15:04")))
 		kv("context", fmt.Sprintf("%dk tokens", r.Context/1000))
 		if r.Progress != "" {
@@ -1054,7 +1057,7 @@ func (m *model) settings() []setting {
 		{group: "General", label: "release channel", value: channelText(m.st.Channel, c.Channel), key: "channel", choices: []string{"default", "latest", "pre-release"}},
 		{group: "General", label: "release", value: m.st.Version + ", " + pinText(c.ReleasePin), action: func() tea.Cmd {
 			return func() tea.Msg {
-				return flashMsg("`" + core.Cmd + " update --release <tag>` installs and pins a release")
+				return flashMsg("`" + core.Cmd + " update --release <tag>` installs a release, pinning one behind the newest")
 			}
 		}},
 		{group: "General", label: "share reports", value: share, key: "share"},
