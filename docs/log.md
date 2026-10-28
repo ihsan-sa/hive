@@ -352,3 +352,7 @@
 ## 2026-10-28 Identical checks in flight share one run
 - Decision: `Effects.RunCheck` keys a check by project, sha, kind and command; a caller asking while that check waits for a slot or runs waits for it and gets its result (one slot, one clean checkout, one `effect.checked`). It lives in the core because RunCheck is: the check line is part of the merge guarantees (docs/core.md).
 - Why: on 10-28 at 06:53 one check ran at a time with 31 waiting, and the next six were main 5455e8f5's test five times over and a retest, ahead of the red-main fix's own check (issue #1880). Every main sha did the same (16df0575 x4, d49d85fa x4, 4743a19e x5), each with the same verdict.
+## 2026-10-28 A fix's lift isn't undone by checks of heads cut before it
+- Decision: improve keeps the merge sha of the fix that lifted a quarantine (`liftedBy`); after it, a red from the Hive's own test check on a commit that doesn't contain that merge (`git merge-base --is-ancestor`) is no sighting. Forge reds are unchanged: the forge tests the branch merged with main, so its head's ancestry doesn't say what ran.
+- Why: TestStaleModuleCacheRunsAgain's fix (30fea85) merged at 07:45:04Z; two older branches' local checks of their own heads, which still had the old test, went red seconds later, re-quarantined it and filed the same fix brief twice more (261028-085542, 261028-090108), each with nothing left to change.
+- Tradeoff: one git call per local red of a lifted test; when git can't tell (a commit not fetched), the red counts as before.
