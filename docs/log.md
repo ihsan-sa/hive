@@ -348,3 +348,7 @@
 ## 2026-10-27 A load that is IO wait is the disk's, and doesn't cut the checks
 - Decision: `core.Loaded` reads CPU and IO pressure once the load per core is over `load_max`: with CPU pressure under 10% the load is the disk's (`core.DiskReason`, "machine loaded on its disk (io pressure …)") when IO pressure is 10% or more, and strains nothing otherwise. A disk load alone doesn't pull the checks' or gates' pace under its start, as CPU load does; workers treat it as load, as before. Each check's record carries its disk bytes (`disk_read`, `disk_wrote`).
 - Why: on 10-27 /proc/pressure/cpu some avg300 was 2.6% and /proc/pressure/io some 56% (full 40%) under a load of 34 on 20 cores; the checks sat at 1 for 6.9 of 12 hours while the load stayed 30-88 (issue #1833), and 26 briefs waited behind them. The pace said "machine loaded", which read as CPU.
+
+## 2026-10-28 Identical checks in flight share one run
+- Decision: `Effects.RunCheck` keys a check by project, sha, kind and command; a caller asking while that check waits for a slot or runs waits for it and gets its result (one slot, one clean checkout, one `effect.checked`). It lives in the core because RunCheck is: the check line is part of the merge guarantees (docs/core.md).
+- Why: on 10-28 at 06:53 one check ran at a time with 31 waiting, and the next six were main 5455e8f5's test five times over and a retest, ahead of the red-main fix's own check (issue #1880). Every main sha did the same (16df0575 x4, d49d85fa x4, 4743a19e x5), each with the same verdict.

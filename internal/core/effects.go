@@ -66,6 +66,9 @@ type Effects struct {
 	// Slots holds checks to config's max_checks at a time, started in the order they asked.
 	Slots *Slots
 
+	shareMu sync.Mutex
+	sharing map[string]*sharedCheck // project@sha@kind@command -> the identical check in flight
+
 	mu        sync.Mutex
 	checks    map[string]Check
 	verdicts  map[string]Verdict
@@ -523,10 +526,45 @@ func (e *Effects) Push(p Project, branch, sha string) error {
 	return nil
 }
 
+// sharedCheck is one check in flight that identical callers wait on.
+type sharedCheck struct {
+	done chan struct{}
+	c    Check
+}
+
 // RunCheck runs the project's test or score command on exactly sha in a clean
 // checkout inside the sandbox. The command comes from main's settings, so a
-// change can't rewrite the check it is judged by.
+// change can't rewrite the check it is judged by. A caller asking for the same
+// check (project, sha, kind and command) while one is waiting or running gets
+// that one's result: one slot, one checkout and one journaled verdict, not one
+// per caller (#1880). A caller after it ends runs afresh.
 func (e *Effects) RunCheck(p Project, sha, kind, command string) Check {
+	key := p.Name + "@" + sha + "@" + kind + "@" + command
+	e.shareMu.Lock()
+	if s, ok := e.sharing[key]; ok {
+		e.shareMu.Unlock()
+		<-s.done
+		c := s.c
+		c.Failed, c.Keys = slices.Clone(c.Failed), slices.Clone(c.Keys)
+		return c
+	}
+	if e.sharing == nil {
+		e.sharing = map[string]*sharedCheck{}
+	}
+	s := &sharedCheck{done: make(chan struct{}), c: Check{Project: p.Name, SHA: sha, Kind: kind, CantRun: "can't run: the shared check stopped before its verdict"}}
+	e.sharing[key] = s
+	e.shareMu.Unlock()
+	defer func() {
+		e.shareMu.Lock()
+		delete(e.sharing, key)
+		e.shareMu.Unlock()
+		close(s.done)
+	}()
+	s.c = e.runCheck(p, sha, kind, command)
+	return s.c
+}
+
+func (e *Effects) runCheck(p Project, sha, kind, command string) Check {
 	c := Check{Project: p.Name, SHA: sha, Kind: kind, At: time.Now().UTC()}
 	record := func() Check {
 		c.Output = ClipEnds(c.Output, 4000)
