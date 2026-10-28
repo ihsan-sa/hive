@@ -160,7 +160,7 @@ func New(c *core.Core, w *work.Module) *Module {
 	ops := c.Runs.Ops()
 	ops.Register(core.Op{Name: "route", Roles: []string{"lead"}, Help: `{"role": "lead|worker|reviewer|security|warden|tribunal|sweep|fallback", "models": "a,b,c" (in fallback order; empty clears it), "project": "(optional) only this project"} -> sets the models that role runs on in config.json; a check seat (reviewer, security, warden, tribunal) changes only once the person says yes`, Fn: m.opRoute})
 	ops.Register(core.Op{Name: "models", Help: `{} -> the named models, the routes, which model each live agent runs on, and the trials and how they went`, Fn: func(r core.Run, _ json.RawMessage) (any, error) { return m.View(r), nil }})
-	ops.Register(core.Op{Name: "trial", Roles: []string{"lead", "worker"}, Help: `{"model": "a named model or harness:model", "project": "a test project", "title": "...", "done": "..."} -> a brief whose worker runs on that model alone; the checks stay on their own models, and how it went is recorded (models op). A worker files trials on its own project only, not from a trial of its own, and not one already open on that model with that title`, Fn: m.opTrial})
+	ops.Register(core.Op{Name: "trial", Roles: []string{"lead", "worker", "stepback"}, Help: `{"model": "a named model or harness:model", "project": "a test project", "title": "...", "done": "..."} -> a brief whose worker runs on that model alone: at its usage limit it waits for the reset, never on another model; the checks stay on their own models, and how it went is recorded (models op). A brief (the brief op) is no trial: its worker runs on the project's route and moves along it at a limit. A worker or step-back files trials on its own project only, a worker not from a trial of its own, and not one already open on that model with that title`, Fn: m.opTrial})
 	c.Person.Handle("route", m.onPerson)
 	return m
 }
@@ -368,10 +368,12 @@ func (m *Module) opTrial(r core.Run, args json.RawMessage) (any, error) {
 	if err := m.C.Runs.Walled(r, b.Project); err != nil {
 		return nil, err
 	}
-	if r.Role == "worker" {
+	if r.Role == "worker" || r.Role == "stepback" {
 		// A project with no lead of its own (one made to try models on) has
-		// its trial rounds run by a worker; a trial's own worker files none,
-		// so trials don't breed trials.
+		// its trial rounds run by a worker, and a step-back files the trials
+		// it wants itself: as a brief one ran on the project's route and
+		// moved to claude:opus at OpenRouter's limit (task 261028-141459).
+		// A trial's own worker files none, so trials don't breed trials.
 		if own, ok := m.Work.Get(r.Task); ok && own.Model != "" {
 			return nil, errors.New("a trial's own worker files no trials: finish this one, and say in the account what to try next")
 		}
