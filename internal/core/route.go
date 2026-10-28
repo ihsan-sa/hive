@@ -54,17 +54,10 @@ func (m OpenModel) Holds(budget float64) error {
 	return nil
 }
 
-// OpenRouterPaid reports whether named model name is a paid model on
-// OpenRouter, whose turns cost the person's key there (harness.OpenRouterPaid).
-func (c Config) OpenRouterPaid(name string) bool {
-	m, ok := c.Models[name]
-	return ok && harness.OpenRouterPaid(m.Endpoint, m.Model) != nil
-}
-
 // PaidRefused says why named model name can't be used: a paid model on
-// OpenRouter is, the person said (10-24), as long as the month stays inside
+// OpenRouter can, the person said (10-24), as long as the month stays inside
 // openrouter_monthly_usd, so it needs that cap and a price its spend is
-// counted at. Nil for any other model.
+// counted at; the models module holds it to the cap. Nil for any other model.
 func (c Config) PaidRefused(name string) error {
 	m := c.Models[name]
 	err := harness.OpenRouterPaid(m.Endpoint, m.Model)
@@ -74,7 +67,7 @@ func (c Config) PaidRefused(name string) error {
 	case c.OpenRouterUSD <= 0:
 		return fmt.Errorf("%v, and openrouter_monthly_usd is 0, so OpenRouter is free-only; set a monthly cap to allow paid models under it", err)
 	case m.Price == nil || *m.Price == Price{}:
-		return fmt.Errorf("%v with no price, so what it spends against openrouter_monthly_usd isn't counted; set its price in config.json", err)
+		return fmt.Errorf("%v with no price, so what it spends against openrouter_monthly_usd isn't counted; set its price (hive model add --price, or config.json)", err)
 	}
 	return nil
 }
@@ -185,17 +178,7 @@ func (c Config) Route(role, project string) []Pick {
 	if !slices.Contains(CheckRoles, role) {
 		add(c.Routed("fallback", project))
 	}
-	// Free ones first: a paid OpenRouter model is where a run goes once the
-	// rest are at their limits (the person, 10-24).
-	var free, paid []Pick
-	for _, p := range out {
-		if HarnessName(p.Harness) == "open" && c.OpenRouterPaid(p.Model) {
-			paid = append(paid, p)
-		} else {
-			free = append(free, p)
-		}
-	}
-	return append(free, paid...)
+	return out
 }
 
 // base is the harness and model settings for role: the workspace's harness

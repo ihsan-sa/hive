@@ -2,10 +2,9 @@ package core
 
 import (
 	"encoding/json"
-	"fmt"
 	"os"
+	"path/filepath"
 	"reflect"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -110,45 +109,41 @@ func TestCheckAllowsAPaidOpenRouterModelUnderTheCap(t *testing.T) {
 	}
 }
 
-// Free ones first: a paid OpenRouter model on a route goes after the rest,
-// whatever its place there; a run on it takes turns while the month's
-// OpenRouter spend is under the cap, then waits for the next month, and a
-// free model beside it is never held.
-func TestPaidOpenRouterModelRunsLastAndUnderTheCap(t *testing.T) {
+// A module's hooks hold a pick (Held) and limit a turn's budget (TurnBudget):
+// freeAt waits for the hold, and a turn's --max-budget-usd is the smaller of
+// the run's own and the module's.
+func TestModuleHoldsAPickAndLimitsATurn(t *testing.T) {
 	c, _ := testHive(t)
-	cfg := c.WS.LoadConfig()
-	cfg.OpenRouterUSD = 10
-	cfg.Models = map[string]OpenModel{
-		"cheap": {Endpoint: "https://openrouter.ai/api/v1", Model: "deepseek/deepseek-v4", Key: true, Price: &Price{Input: 0.3, Output: 1.2}},
-		"free":  {Endpoint: "https://openrouter.ai/api/v1", Model: "deepseek/deepseek-v4:free", Key: true},
+	month := time.Now().Add(30 * 24 * time.Hour)
+	c.Runs.Held = func(p Pick) time.Time {
+		if p.Model == "held" {
+			return month
+		}
+		return time.Time{}
 	}
-	cfg.Routes = map[string][]string{"worker": {"cheap", "free", "claude:opus"}}
-	if err := cfg.Check(); err != nil {
-		t.Fatal(err)
+	if at := c.Runs.freeAt("open", "held", false); !at.Equal(month) {
+		t.Fatalf("a held pick has room at %v, want %v", at, month)
 	}
-	var got []string
-	for _, p := range cfg.Route("worker", "") {
-		got = append(got, p.String())
+	if at := c.Runs.freeAt("open", "other", false); at.After(time.Now().Add(time.Minute)) {
+		t.Fatalf("a pick no module holds waits until %v", at)
 	}
-	if want := []string{"open:free", "claude:opus", "open:cheap"}; !slices.Equal(got, want) {
-		t.Fatalf("route %v, want %v", got, want)
+	h, _ := harness.Get("open")
+	r := Run{RunSpec: RunSpec{ID: "r", Role: "worker", Harness: "open", Model: "m", Budget: 5}}
+	budget := func() string {
+		spec, err := c.Runs.sandboxSpec(c.WS.LoadConfig(), isolatedSB{}, h, r, 1, false, filepath.Join(t.TempDir(), "p"), nil, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		args := strings.Join(spec.Argv, " ")
+		_, after, _ := strings.Cut(args, "--max-budget-usd ")
+		return strings.Fields(after + " ")[0]
 	}
-	c.Runs.tickDown(cfg)
-	now := time.Now()
-	if at := c.Runs.freeAt("open", "cheap", false); at.After(now.Add(time.Minute)) {
-		t.Fatalf("a paid model under the cap waits until %v", at)
+	c.Runs.TurnBudget = func(Run) float64 { return 2 }
+	if b := budget(); b != "2" {
+		t.Fatalf("budget %q, want the module's 2", b)
 	}
-	// Two turns of $6 each, as the run manager journals them, pass the $10 cap.
-	c.J.MustAppend("run.created", RunSpec{ID: "w", Harness: "open", Model: "cheap"})
-	for n := 1; n <= 2; n++ {
-		c.J.MustAppend("run.turn_started", turnStarted{ID: "w", Session: fmt.Sprint(n), Turn: n})
-		c.J.MustAppend("run.turn_ended", turnEnded{ID: "w", Turn: n, Session: fmt.Sprint(n), Result: &harness.Result{CostUSD: 6}, Status: StatusIdle})
-	}
-	y, m, _ := now.UTC().Date()
-	if at := c.Runs.freeAt("open", "cheap", false); !at.After(time.Date(y, m+1, 1, 0, 0, 0, 0, time.UTC).Add(-time.Second)) {
-		t.Fatalf("a paid model past the month's cap has room at %v", at)
-	}
-	if at := c.Runs.freeAt("open", "free", false); at.After(now.Add(time.Minute)) {
-		t.Fatalf("a free model waits until %v once the paid one is at the cap", at)
+	c.Runs.TurnBudget = func(Run) float64 { return 9 }
+	if b := budget(); b != "5" {
+		t.Fatalf("budget %q, want the run's own 5", b)
 	}
 }

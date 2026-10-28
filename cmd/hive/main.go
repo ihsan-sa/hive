@@ -62,9 +62,10 @@ const usage = `hive: a small team of AI agents working on your projects.
   hive egress grant <host:port>   open one to every sandboxed run (loopback only, e.g. 127.0.0.1:11434)
   hive egress revoke <host:port>  close it again
   hive model               the named models (free ones too) and the routes that pick each role's model
-  hive model add <name> <endpoint> <model id> [--key] [--no-probe]   a model on an OpenAI-compatible endpoint, e.g.
+  hive model add <name> <endpoint> <model id> [--key] [--price IN,OUT] [--no-probe]   a model on an OpenAI-compatible endpoint, e.g.
                            hive model add qwen http://127.0.0.1:11434/v1 qwen2.5-coder:14b
-                           (on OpenRouter a paid model, an id not ending in ":free", needs a price and openrouter_monthly_usd)
+                           --price: USD per million tokens in and out, which its turns cost; on OpenRouter a paid model
+                           (an id not ending in ":free") needs one and openrouter_monthly_usd in config.json
                            [--anthropic]: its API is Anthropic-compatible, so Claude Code runs it, e.g.
                            hive model add kimi https://api.moonshot.ai/anthropic kimi-k2-0905-preview --key --anthropic
   hive model key <name>    store its API key, read from stdin (kept where no agent can read it)
@@ -837,7 +838,7 @@ func cmdModel(args []string) int {
 		return 1
 	}
 	usage := func() int {
-		fmt.Fprintln(os.Stderr, "usage: "+core.Cmd+" model [add <name> <endpoint> <model id> [--key] [--anthropic] [--no-probe] | key <name> | rm <name>]")
+		fmt.Fprintln(os.Stderr, "usage: "+core.Cmd+" model [add <name> <endpoint> <model id> [--key] [--anthropic] [--price IN,OUT] [--no-probe] | key <name> | rm <name>]")
 		return 2
 	}
 	if len(args) == 0 {
@@ -864,8 +865,17 @@ func cmdModel(args []string) int {
 	switch {
 	case args[0] == "add" && len(args) >= 4:
 		m, noProbe := core.OpenModel{Endpoint: args[2], Model: args[3]}, false
-		for _, f := range args[4:] {
-			switch f {
+		for i := 4; i < len(args); i++ {
+			switch f := args[i]; f {
+			case "--price":
+				var p core.Price
+				if i+1 >= len(args) {
+					return usage()
+				}
+				if _, err := fmt.Sscanf(args[i+1], "%g,%g", &p.Input, &p.Output); err != nil {
+					return usage()
+				}
+				m.Price, i = &p, i+1
 			case "--key":
 				m.Key = true
 			case "--anthropic":
@@ -880,6 +890,9 @@ func cmdModel(args []string) int {
 			cfg.Models = map[string]core.OpenModel{}
 		}
 		was, replaced := cfg.Models[args[1]]
+		if replaced && m.Price == nil && was.Endpoint == m.Endpoint && was.Model == m.Model {
+			m.Price = was.Price // the same model again keeps the price it had
+		}
 		cfg.Models[args[1]] = m
 		if err := cfg.Check(); err != nil {
 			fmt.Fprintln(os.Stderr, err)

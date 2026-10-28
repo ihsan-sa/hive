@@ -471,20 +471,22 @@ type Runs struct {
 	// module that runs it elsewhere: the sandbox to start it in and the
 	// runner that has room, or nil when no module has room now.
 	Executor func() (sandbox.Sandbox, string)
+	// Held is when a module next lets a pick take turns (a model at a
+	// spending cap), zero when it doesn't hold it; TurnBudget is the most a
+	// module lets run's next turn spend, 0 for no limit. Either may be nil.
+	Held       func(Pick) time.Time
+	TurnBudget func(Run) float64
 
-	mu    sync.Mutex
-	runs  map[string]*Run
-	plans map[string]Plan
-	busy  map[string]bool    // runs whose tick work is in flight
-	spent map[string]float64 // "2006-01" (UTC) -> what runs cost that month
-	// openRouter is the same for turns on paid OpenRouter models, held to
-	// Config.OpenRouterUSD (paidUntil).
-	openRouter map[string]float64
-	holds      map[string]string // why no new turn starts (a restart waiting for a quiet moment), by who holds them
-	down       map[string]Down   // picks that can't answer, by Pick.String
-	strikes    map[string]strike // each pick's straight turns ending in the same error
-	cfg        Config            // the config of the latest tick, which a Down is fingerprinted against
-	usage      UsageStops        // the config's usage stops, which the plans it hands out are held to
+	mu      sync.Mutex
+	runs    map[string]*Run
+	plans   map[string]Plan
+	busy    map[string]bool    // runs whose tick work is in flight
+	spent   map[string]float64 // "2006-01" (UTC) -> what runs cost that month
+	holds   map[string]string  // why no new turn starts (a restart waiting for a quiet moment), by who holds them
+	down    map[string]Down    // picks that can't answer, by Pick.String
+	strikes map[string]strike  // each pick's straight turns ending in the same error
+	cfg     Config             // the config of the latest tick, which a Down is fingerprinted against
+	usage   UsageStops         // the config's usage stops, which the plans it hands out are held to
 	// proven is the picks (Pick.String) some run has finished done on, every
 	// turn of it on that pick: the only ones a run that must finish falls
 	// back to (next). ranOn is the pick each run's turns ran on, "" once they
@@ -548,10 +550,9 @@ const codexTokenStuck = "its Codex token could not be deleted: "
 
 // NewRuns builds the run manager and replays its records.
 func NewRuns(ws Workspace, j *Journal, sb func() (sandbox.Sandbox, error), tokens TokenSource, tools func() []string) *Runs {
-	rs := &Runs{ws: ws, j: j, sandbox: sb, tokens: tokens, tools: tools, runs: map[string]*Run{}, plans: map[string]Plan{}, busy: map[string]bool{}, spent: map[string]float64{}, openRouter: map[string]float64{}, down: map[string]Down{}, strikes: map[string]strike{}, self: selfHandle(), backedOff: map[string]int{}, turnLive: map[string]int{}, proven: map[string]bool{}, ranOn: map[string]string{}}
+	rs := &Runs{ws: ws, j: j, sandbox: sb, tokens: tokens, tools: tools, runs: map[string]*Run{}, plans: map[string]Plan{}, busy: map[string]bool{}, spent: map[string]float64{}, down: map[string]Down{}, strikes: map[string]strike{}, self: selfHandle(), backedOff: map[string]int{}, turnLive: map[string]int{}, proven: map[string]bool{}, ranOn: map[string]string{}}
 	rs.ops = NewOps(rs)
-	rs.cfg = ws.LoadConfig() // which models a replayed turn's spend counts against openrouter_monthly_usd; each Tick's after
-	rs.usage = rs.cfg.UsageStops
+	rs.usage = ws.LoadConfig().UsageStops
 	_ = j.Replay(rs.apply)
 	j.Subscribe(func(e Event) {
 		rs.mu.Lock()
@@ -872,9 +873,6 @@ func (rs *Runs) apply(e Event) {
 			spent := r.SessionCost.Turn(r.Session, t.Result.CostUSD)
 			r.Cost += spent
 			rs.spent[e.At.UTC().Format("2006-01")] += spent
-			if HarnessName(r.Harness) == "open" && rs.cfg.OpenRouterPaid(r.Model) {
-				rs.openRouter[e.At.UTC().Format("2006-01")] += spent
-			}
 			if !t.Result.IsError {
 				r.Result, r.Structured = t.Result.Text, t.Result.Structured
 				r.Retries = 0
@@ -1328,6 +1326,10 @@ func (rs *Runs) logins(h, model string) []Login {
 // its retry too. A check (Reserved) has room up to the week's stop.
 func (rs *Runs) freeAt(h, model string, reserve bool) time.Time {
 	now := time.Now()
+	var held time.Time
+	if rs.Held != nil {
+		held = rs.Held(Pick{Harness: HarnessName(h), Model: model})
+	}
 	logins := rs.logins(h, model)
 	limited := rs.limited(keys(logins), now)
 	var at time.Time
@@ -1336,9 +1338,6 @@ func (rs *Runs) freeAt(h, model string, reserve bool) time.Time {
 	for _, p := range rs.plansOf(logins, now, reserve, limited) {
 		until := p.parkedFor(now, reserve)
 		if l := limited[p.Key()]; l.After(until) {
-			until = l
-		}
-		if l := rs.paidUntil(model, now); HarnessName(h) == "open" && l.After(until) {
 			until = l
 		}
 		if until.IsZero() {
@@ -1355,7 +1354,18 @@ func (rs *Runs) freeAt(h, model string, reserve bool) time.Time {
 	if d, ok := rs.down[Pick{Harness: HarnessName(h), Model: model}.String()]; ok && d.Retry.After(at) {
 		at = d.Retry
 	}
+	if held.After(at) {
+		at = held
+	}
 	return at
+}
+
+// turnBudget is the most a module lets run's next turn spend (TurnBudget).
+func (rs *Runs) turnBudget(r Run) float64 {
+	if rs.TurnBudget == nil {
+		return 0
+	}
+	return rs.TurnBudget(r)
 }
 
 // next is the pick r's next turn goes on, and when it has room: the first of
@@ -1453,18 +1463,6 @@ func (rs *Runs) Spent(month string) float64 {
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
 	return rs.spent[month]
-}
-
-// paidUntil is when a turn on named model may next spend: zero for any
-// model but a paid OpenRouter one, or one whose month's spend there is under
-// Config.OpenRouterUSD; else the start of next month (UTC), when it starts
-// again from nothing. rs.mu is held.
-func (rs *Runs) paidUntil(model string, now time.Time) time.Time {
-	if !rs.cfg.OpenRouterPaid(model) || rs.cfg.PaidRefused(model) == nil && rs.openRouter[now.UTC().Format("2006-01")] < rs.cfg.OpenRouterUSD {
-		return time.Time{}
-	}
-	y, m, _ := now.UTC().Date()
-	return time.Date(y, m+1, 1, 0, 0, 0, 0, time.UTC)
 }
 
 // Takes says why run id can't take a message, or nil if it can.
@@ -2367,11 +2365,12 @@ func (rs *Runs) launch(r Run, cfg Config) {
 		return
 	}
 	if HarnessName(r.Harness) == "open" {
+		m := cfg.Models[r.Model]
 		if err := cfg.PaidRefused(r.Model); err != nil {
 			rs.SetStatus(r.ID, StatusBlocked, fmt.Sprintf("no turn on %s: %v; route the run to a free model and reopen it", r.Model, err))
 			return
 		}
-		h = cfg.Models[r.Model].Harness() // Claude Code for a model on an Anthropic-compatible API
+		h = m.Harness() // Claude Code for a model on an Anthropic-compatible API
 	}
 	turn := r.Turn + 1
 	// A session that never came up is started fresh under a new id; one that
@@ -2563,14 +2562,8 @@ func (rs *Runs) sandboxSpec(cfg Config, sb sandbox.Sandbox, h harness.Harness, r
 		// only, not the running total a resumed session carries on.
 		t.MaxBudgetUSD = max(r.Budget-r.Cost, 0.01)
 	}
-	if HarnessName(r.Harness) == "open" && cfg.OpenRouterPaid(r.Model) {
-		// A paid OpenRouter turn stops where it would pass the month's cap.
-		rs.mu.Lock()
-		left := max(cfg.OpenRouterUSD-rs.openRouter[time.Now().UTC().Format("2006-01")], 0.01)
-		rs.mu.Unlock()
-		if t.MaxBudgetUSD == 0 || left < t.MaxBudgetUSD {
-			t.MaxBudgetUSD = left
-		}
+	if b := rs.turnBudget(r); b > 0 && (t.MaxBudgetUSD == 0 || b < t.MaxBudgetUSD) {
+		t.MaxBudgetUSD = b
 	}
 	if sb.Isolated() {
 		t.SystemFile = "/hive/run/system.md"

@@ -59,13 +59,18 @@ OpenRouter is free first, paid under the month's cap (#1841): the person's key
 there pays for every model but the free variants (an id ending in `:free`). A
 paid one is refused by `hive model add` and the config check unless
 `openrouter_monthly_usd` (the month's cap, UTC; 0 keeps OpenRouter free-only)
-is set and the model has a `price`, so its spend is counted. A route puts a
-paid OpenRouter model after every other pick, so a run reaches it only when the
-free ones (and the plans) are at their limits; it takes turns while the month's
-spend on paid OpenRouter models is under the cap, each turn's budget held to
-what is left, and waits for the next month after. The open agent sends an
-unpriced paid model no request (`TestCheckAllowsAPaidOpenRouterModelUnderTheCap`,
-`TestPaidOpenRouterModelRunsLastAndUnderTheCap`,
+is set and the model has a `price` (`hive model add ... --price IN,OUT`, USD per
+million tokens), so its spend is counted (`core.Config.PaidRefused`). The rest
+is the models module's (`internal/mod/models/paid.go`): a route puts a paid
+OpenRouter model after every other pick, so a run reaches it only when the
+free ones (and the plans) are at their limits; it counts what paid turns cost
+from the journal, gives each turn no more than is left of the cap less what
+the paid turns running were given, and once the month's spend reaches the cap
+holds the model until the next month, through the run manager's `Held` and
+`TurnBudget` hooks. The open agent sends an unpriced paid model no request
+(`TestCheckAllowsAPaidOpenRouterModelUnderTheCap`,
+`TestPaidOpenRouterModelUnderTheCap`, `TestPaidOpenRouterModelGoesLastOnARoute`,
+`TestModuleHoldsAPickAndLimitsATurn`, `TestModelAddWithAPrice`,
 `TestNoRequestForAnUnpricedPaidOpenRouterModel`).
 
 Other harnesses with a CLI of their own (Cursor, OpenCode, Aider) come in as

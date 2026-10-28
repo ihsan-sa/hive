@@ -138,9 +138,10 @@ type Config struct {
 	// MonthlyUSD: once this month's runs cost more, the person is told once. Work goes on; 0 is off.
 	MonthlyUSD float64 `json:"monthly_usd,omitempty"`
 	// OpenRouterUSD is what paid OpenRouter models may cost in a month
-	// (UTC): free ones first (Route puts a paid one last), and a paid one,
-	// priced so its spend is counted, takes turns only while the month's
-	// spend on OpenRouter is under it. 0 keeps OpenRouter free-only.
+	// (UTC): a paid one, priced so its spend is counted (PaidRefused), goes
+	// after the rest of a route and takes turns only while the month's spend
+	// on them is under it (internal/mod/models/paid.go). 0 keeps OpenRouter
+	// free-only.
 	OpenRouterUSD float64 `json:"openrouter_monthly_usd,omitempty"`
 	// A turn waits while available memory is under MemFloorMB, or memory or
 	// CPU pressure (Linux PSI "some avg10", percent) is over its limit; 0 turns a check off.
