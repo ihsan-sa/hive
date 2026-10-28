@@ -90,3 +90,40 @@ func TestStrainedTurnGoesToAnExecutor(t *testing.T) {
 		t.Errorf("run.turn_started says where %q", where)
 	}
 }
+
+// Only a worker's turn is handed to an executor module: a lead's, a sweep's
+// or any other role's waits here, however much room there is elsewhere.
+func TestOnlyWorkersGoToAnExecutor(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("sleep stands in for the turn")
+	}
+	c, _ := testHive(t)
+	cfg := c.WS.LoadConfig()
+	cfg.MemFloorMB = 1 << 30
+	if Strained(cfg.MemFloorMB, 0, 0) == "" {
+		t.Skip("no /proc/meminfo here")
+	}
+	c.Runs.sandbox = func() (sandbox.Sandbox, error) { return isolatedBox{}, nil }
+	var spec sandbox.Spec
+	asked := 0
+	c.Runs.Executor = func() (sandbox.Sandbox, string) {
+		asked++
+		return elsewhereSB{agent: sleeper(t), spec: &spec}, "iiks1"
+	}
+	r, err := c.Runs.Start(RunSpec{ID: "s", Role: "sweep", Harness: "fake", Checkout: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Runs.launch(r, cfg)
+	if got, _ := c.Runs.Get("s"); got.Status == StatusRunning || got.Where != "" || asked != 0 {
+		t.Fatalf("a sweep's turn went elsewhere: %s where %q, asked %d", got.Status, got.Where, asked)
+	}
+	r, err = c.Runs.Start(RunSpec{ID: "w", Role: "worker", Harness: "fake", Checkout: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Runs.launch(r, cfg)
+	if got, _ := c.Runs.Get("w"); got.Status != StatusRunning || got.Where != "iiks1" {
+		t.Fatalf("a worker's turn: %s where %q", got.Status, got.Where)
+	}
+}

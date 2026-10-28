@@ -1047,10 +1047,19 @@ func (rs *Runs) Find(addr string) (Run, bool) {
 	if r, ok := rs.runs[addr]; ok {
 		return *r, true
 	}
+	// An exact name wins over an id prefix: every lead id starts with
+	// "lead-", so "lead" must reach the run named lead, not the newest lead.
 	var best *Run
 	for _, r := range rs.runs {
-		if (r.Name == addr || strings.HasPrefix(r.ID, addr) || strings.HasSuffix(r.ID, addr)) && (best == nil || r.Created.After(best.Created)) {
+		if r.Name == addr && (best == nil || r.Created.After(best.Created)) {
 			best = r
+		}
+	}
+	if best == nil {
+		for _, r := range rs.runs {
+			if (strings.HasPrefix(r.ID, addr) || strings.HasSuffix(r.ID, addr)) && (best == nil || r.Created.After(best.Created)) {
+				best = r
+			}
 		}
 	}
 	if best == nil {
@@ -2211,12 +2220,12 @@ func (rs *Runs) launch(r Run, cfg Config) {
 		// only the floor under which its turn could not run at all.
 		floor, memMax, cpuMax = min(floor, LeadMemFloorMB), 0, 0
 	}
-	// A turn this machine is too strained for goes to an executor module
-	// with room, or waits.
+	// A worker's turn this machine is too strained for goes to an executor
+	// module with room, or waits; a lead's (or any other role's) only waits.
 	var elsewhere sandbox.Sandbox
 	where := ""
 	why := Strained(floor, memMax, cpuMax)
-	if why != "" {
+	if why != "" && r.Role == "worker" {
 		elsewhere, where = rs.executor()
 	}
 	if why != "" && elsewhere == nil {

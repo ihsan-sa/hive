@@ -12,6 +12,20 @@ import (
 	"time"
 )
 
+// "lead" reaches the run named lead, not the newest run whose id starts with
+// "lead-"; "lead:demo" reaches that project's lead, and an id prefix still works.
+func TestFindPrefersAnExactName(t *testing.T) {
+	rs := &Runs{runs: map[string]*Run{}}
+	now := time.Now()
+	rs.runs["lead-lead-1"] = &Run{RunSpec: RunSpec{ID: "lead-lead-1", Name: "lead", Role: "lead"}, Created: now.Add(-time.Hour)}
+	rs.runs["lead-project-demo-2"] = &Run{RunSpec: RunSpec{ID: "lead-project-demo-2", Name: "lead:demo", Role: "lead", Project: "demo"}, Created: now}
+	for addr, want := range map[string]string{"lead": "lead-lead-1", "lead:demo": "lead-project-demo-2", "lead-project": "lead-project-demo-2", "demo-2": "lead-project-demo-2"} {
+		if r, ok := rs.Find(addr); !ok || r.ID != want {
+			t.Errorf("Find(%q) = %q, want %q", addr, r.ID, want)
+		}
+	}
+}
+
 // An experiment run may only report on its own copy: it can't spawn helpers,
 // file work, write the knowledge base, schedule, ask a warden or message.
 func TestExperimentOnlyReports(t *testing.T) {
