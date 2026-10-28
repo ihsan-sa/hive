@@ -799,6 +799,14 @@ func (m *Module) afterKept(project, sha string) {
 		return
 	}
 	list, refuse := m.merges(project, sha)
+	if refuse == notMerged {
+		// A later merge of the Hive's carries this kept commit: Tick tries
+		// the newest one (retryUnmerged) rather than waiting on the next
+		// measurement.
+		if last, _ := m.unmerged(project); last != sha {
+			m.C.J.MustAppend("release.unmerged", map[string]string{"project": project, "sha": sha})
+		}
+	}
 	if refuse != "" {
 		once(refuse)
 		return
@@ -1025,6 +1033,8 @@ func (m *Module) ciState(project string) (last ciWait) {
 // that is then held (an unread or root merge) or blocked by its scan still
 // journals release.ci_passed, which ends the original's wait: the hold's or
 // the scan's alert speaks for it from then on.
+// Then it tries a commit refused as no merge the Hive made at the kept
+// merge since (retryUnmerged).
 func (m *Module) retryWaiting() {
 	if m.said == nil {
 		m.said = map[string]bool{}
@@ -1051,6 +1061,78 @@ func (m *Module) retryWaiting() {
 			m.C.J.MustAppend("alert.raised", map[string]string{"kind": "release", "project": p.Name,
 				"text": "no release at " + core.Short(w.SHA) + " yet: main's checks there haven't passed after " + lateAfter.String()})
 		}
+	}
+	m.retryUnmerged()
+}
+
+// unmerged is the kept commit a project's release last refused as no merge
+// the Hive made, and the newest kept Hive merge journaled after that refusal
+// (the commit itself, once its effect.merged comes late); both are "" once a
+// release was cut or main's checks were read for one since.
+func (m *Module) unmerged(project string) (sha, next string) {
+	var later []string
+	kept := map[string]bool{}
+	m.C.J.Replay(func(e core.Event) {
+		var x struct {
+			Project, SHA string
+			MergeSHA     string `json:"merge_sha"`
+			Kept, Red    bool
+			NoResult     bool `json:"no_result"`
+		}
+		if e.Decode(&x) != nil || x.Project != project {
+			return
+		}
+		switch {
+		case e.Kind == "release.unmerged":
+			sha, later = x.SHA, nil
+		case e.Kind == "hive.released" || strings.HasPrefix(e.Kind, "release.ci_"):
+			sha, later = "", nil
+		case e.Kind == "score.measured" && !x.NoResult:
+			kept[x.SHA] = x.Kept
+		case e.Kind == "score.covered":
+			kept[x.SHA] = !x.Red
+		case e.Kind == "effect.merged" && sha != "" && x.MergeSHA != "":
+			later = append(later, x.MergeSHA)
+		}
+	})
+	kept[sha] = sha != "" // AfterKept refused it, so improve kept it
+	for i := len(later) - 1; i >= 0; i-- {
+		if kept[later[i]] {
+			return sha, later[i]
+		}
+	}
+	return sha, ""
+}
+
+// retryUnmerged tries again each self project whose kept commit was refused
+// as no merge the Hive made (a merge whose forge call failed though it went
+// through, say), at the newest kept Hive merge since whose history holds it.
+// Each is tried once; main's checks there are then waited on as any kept
+// merge's are.
+func (m *Module) retryUnmerged() {
+	for _, p := range m.C.Projects.List() {
+		if !p.Self {
+			continue
+		}
+		sha, next := m.unmerged(p.Name)
+		key := p.Name + "@unmerged:" + next
+		if next == "" || m.said[key] {
+			continue
+		}
+		m.said[key] = true
+		contains := m.Contains
+		if contains == nil {
+			contains = m.contains
+		}
+		if next != sha {
+			if in, err := contains(p, sha, next); err != nil || !in {
+				continue
+			}
+		}
+		func() {
+			defer m.lock(p.Name)()
+			m.afterKept(p.Name, next)
+		}()
 	}
 }
 
@@ -1246,6 +1328,9 @@ func (m *Module) OnPerson(a core.Ask) {
 	}
 }
 
+// notMerged is merges' refusal of a commit no effect.merged names.
+const notMerged = "it is not a merge the Hive made"
+
 type merge struct {
 	PR       int
 	SHA      string
@@ -1285,7 +1370,7 @@ func (m *Module) merges(project, upTo string) (out []merge, refuse string) {
 		return nil, "a newer release already covers it"
 	}
 	if at < 0 {
-		return nil, "it is not a merge the Hive made"
+		return nil, notMerged
 	}
 	return all[from : at+1], ""
 }
