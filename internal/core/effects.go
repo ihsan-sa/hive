@@ -553,10 +553,11 @@ func (e *Effects) RunCheck(p Project, sha, kind, command string) Check {
 	mounts := []sandbox.Mount{{Host: dir, Inside: "/work", RW: true}}
 	mods := e.goModules(sb, dir)
 	build := e.goBuild(sb, p, sha, dir)
-	run := func(withMods bool) (int, string, error) {
-		ms, env := append(slices.Clone(mounts), build.mounts...), slices.Clone(build.env)
-		if withMods {
-			ms, env = append(ms, mods.mounts...), append(env, mods.env...)
+	run := func(offline bool) (int, string, error) {
+		ms := append(append(slices.Clone(mounts), build.mounts...), mods.mounts...)
+		env := append(slices.Clone(build.env), mods.own...)
+		if offline {
+			env = append(slices.Clone(build.env), mods.env...)
 		}
 		return e.runSandboxed(sb, p.Name, id, ms, guardProgram(command), true, 30*time.Minute, env, e.checkCacheCap())
 	}
@@ -568,10 +569,10 @@ func (e *Effects) RunCheck(p Project, sha, kind, command string) Check {
 		build = goMods{note: "the shared build cache failed; run again without it", done: func() {}}
 		code, out, err = run(true)
 	}
-	mods.done()
 	if line := staleLine(out); mods.marker != "" && code != 0 && line != "" {
 		// Offline, the check couldn't have a module: not the commit's fault,
-		// so it runs once more fetching its own, in a checkout the first run
+		// so it runs once more fetching what the shared cache lacks (its
+		// own modules, with the cache as its first proxy), in a checkout the first run
 		// hasn't written to. If go.sum names the module the cache lacked
 		// what its marker promised, and the marker goes; if not and the
 		// check then passes, it needs more than the cache can hold, and later
@@ -586,6 +587,7 @@ func (e *Effects) RunCheck(p Project, sha, kind, command string) Check {
 		}
 		again, cerr := e.cleanCheckout(p, sha, kind)
 		if cerr != nil {
+			mods.done()
 			build.done()
 			c.Output = "could not make a clean checkout: " + cerr.Error()
 			return c
@@ -600,6 +602,7 @@ func (e *Effects) RunCheck(p Project, sha, kind, command string) Check {
 			os.WriteFile(mods.marker+ownModules, nil, 0o644)
 		}
 	}
+	mods.done()
 	build.done()
 	for _, n := range []string{build.note, mods.note} {
 		if n != "" {
