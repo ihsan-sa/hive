@@ -57,6 +57,10 @@ type RunSpec struct {
 	Inputs     map[string]string `json:"inputs,omitempty"`     // name -> content, placed read-only in /hive/run
 	OneTurn    bool              `json:"one_turn,omitempty"`   // done when a turn ends; nothing is added to its prompts, and it may only finish and report progress
 	Budget     float64           `json:"budget,omitempty"`     // USD the whole run may spend; 0 is no cap
+	// Away sends the run's turns to an executor module with room first,
+	// strained here or not: the work queue started it past its pace because
+	// a runner had room. With none, a turn runs here.
+	Away bool `json:"away,omitempty"`
 	// Route is the harnesses and models the run may go on, in order
 	// (Config.Route): when its own are at their usage limit it moves to the
 	// first of these with room. Empty stays and waits.
@@ -102,6 +106,7 @@ type Run struct {
 	StopAsked   bool            `json:"stop_asked,omitempty"`
 	Waiting     string          `json:"waiting,omitempty"`  // what it ended its turn waiting for
 	Reopened    bool            `json:"reopened,omitempty"` // reopened while its turn ran: the turn's finish doesn't end it
+	Returned    bool            `json:"returned,omitempty"` // reopened after its turn ended, with no turn since: Admit may hold it
 	Created     time.Time       `json:"created"`
 	Updated     time.Time       `json:"updated"`
 	TurnStarted time.Time       `json:"turn_started,omitempty"`
@@ -428,11 +433,15 @@ func windowLength(k string) time.Duration {
 // or behind it. The share is of each window's own length, so the same slack
 // is 45 minutes of a five-hour window and about a day of the week. A window spent at this rate runs out before it resets and
 // the Hive sits idle until it does.
-func (p Plan) Ahead(now time.Time) float64 {
+func (p Plan) Ahead(now time.Time) float64 { return p.AheadIn(now, "") }
+
+// AheadIn is Ahead over the windows whose name starts with window
+// ("seven_day" for the week, "" for every paced one).
+func (p Plan) AheadIn(now time.Time, window string) float64 {
 	a := 0.0
 	for k, w := range p.Limit.Windows {
 		n := windowLength(k)
-		if n == 0 || !w.ResetsAt.After(now) {
+		if n == 0 || !strings.HasPrefix(k, window) || !w.ResetsAt.After(now) {
 			continue
 		}
 		passed := 1 - float64(w.ResetsAt.Sub(now))/float64(n)
@@ -463,6 +472,14 @@ type Runs struct {
 	// module that runs it elsewhere: the sandbox to start it in and the
 	// runner that has room, or nil when no module has room now.
 	Executor func() (sandbox.Sandbox, string)
+	// Admit says why a run's next turn waits on a module, or "": the work
+	// module's pace for a worker sent back to its task (Returned).
+	Admit func(Run) string
+	// Held is when a module next lets a pick take turns (a model at a
+	// spending cap), zero when it doesn't hold it; TurnBudget is the most a
+	// module lets run's next turn spend, 0 for no limit. Either may be nil.
+	Held       func(Pick) time.Time
+	TurnBudget func(Run) float64
 
 	mu      sync.Mutex
 	runs    map[string]*Run
@@ -492,6 +509,40 @@ type Runs struct {
 	backedOff                map[string]int  // the turn each run last backed off from for another daemon's claim, said once
 	turnLive                 map[string]int  // the turn each run last waited on its own last turn for, said once
 	waking                   sync.Mutex      // one wake at a time, so a run is woken once
+	// heldAt is when a turn last waited on a strained machine, rampLast
+	// when the ramp after it last let one start, and rampedAt when it last
+	// held one back (ramp).
+	heldAt, rampLast, rampedAt time.Time
+}
+
+// rampStep is the least time between two turns starting after a strain hold
+// (ramp), so the readings see each before the next: on 10-28, the hold
+// lifting started every run it had held at once, and the Hive's slice ran to
+// 42 claude, 87 link and 40 compile processes, load near 400 and an OOM kill.
+var rampStep = 30 * time.Second
+
+// Holding marks a strain hold now, outside launch (a brief the work module
+// held on one), so the turns after it ramp up.
+func (rs *Runs) Holding() {
+	rs.mu.Lock()
+	rs.heldAt = time.Now()
+	rs.mu.Unlock()
+}
+
+// ramp says whether a turn starting now waits for the ramp: after a strain
+// hold, turns start one a rampStep until none has waited on the ramp for two.
+func (rs *Runs) ramp(now time.Time) bool {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	if now.Sub(rs.heldAt) > 2*rampStep && now.Sub(rs.rampedAt) > 2*rampStep {
+		return false
+	}
+	if now.Sub(rs.rampLast) < rampStep {
+		rs.rampedAt = now
+		return true
+	}
+	rs.rampLast = now
+	return false
 }
 
 // Hold keeps new turns from starting, saying why; "" lets them start again.
@@ -836,7 +887,7 @@ func (rs *Runs) apply(e Event) {
 			on = ""
 		}
 		rs.ranOn[r.ID] = on
-		r.Waiting, r.Reopened = "", false
+		r.Waiting, r.Reopened, r.Returned = "", false, false
 		r.Given = nil
 		if t.Delivered <= len(r.Pending) {
 			r.Given = append(r.Given, r.Pending[:t.Delivered]...)
@@ -944,6 +995,7 @@ func (rs *Runs) apply(e Event) {
 	case "run.reopened":
 		r.Finish, r.StopAsked, r.Nudges, r.Still = nil, false, 0, 0
 		r.Reopened = r.Status == StatusRunning
+		r.Returned = !r.Reopened
 	}
 }
 
@@ -1046,8 +1098,9 @@ func (rs *Runs) Start(s RunSpec) (Run, error) {
 		return Run{}, err
 	}
 	if HarnessName(s.Harness) == "open" {
-		m := rs.ws.LoadConfig().Models[s.Model]
-		if err := harness.OpenRouterPaid(m.Endpoint, m.Model); err != nil {
+		cfg := rs.ws.LoadConfig()
+		m := cfg.Models[s.Model]
+		if err := cfg.PaidRefused(s.Model); err != nil {
 			return Run{}, fmt.Errorf("a run won't start on %s: %v", s.Model, err)
 		}
 		if err := m.Holds(s.Budget); err != nil {
@@ -1277,16 +1330,22 @@ func (rs *Runs) Headroom(p Pick) float64 {
 // Ahead is how far ahead of its paced windows the least ahead login a turn
 // on p could take is (Plan.Ahead), 0 when one is on pace or nothing is known;
 // with every login parked it is 0 too, and Headroom says so.
-func (rs *Runs) Ahead(p Pick) float64 {
+func (rs *Runs) Ahead(p Pick) float64 { return rs.AheadIn(p, "", "") }
+
+// AheadIn is Ahead over the windows named by window (Plan.AheadIn; the
+// week's alone is "seven_day") for a run of role, which a login parked for
+// other roles still takes when role may spend the reserve (Reserved).
+func (rs *Runs) AheadIn(p Pick, window, role string) float64 {
 	logins := rs.logins(p.Harness, p.Model)
 	now := time.Now()
 	limited := rs.limited(keys(logins), now)
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
 	ahead := -1.0
-	for _, pl := range rs.plansOf(logins, now, false, limited) {
-		if !pl.Parked(now) && !limited[pl.Key()].After(now) && (ahead < 0 || pl.Ahead(now) < ahead) {
-			ahead = pl.Ahead(now)
+	reserve := Reserved(role)
+	for _, pl := range rs.plansOf(logins, now, reserve, limited) {
+		if pl.parkedFor(now, reserve).IsZero() && !limited[pl.Key()].After(now) && (ahead < 0 || pl.AheadIn(now, window) < ahead) {
+			ahead = pl.AheadIn(now, window)
 		}
 	}
 	return max(ahead, 0)
@@ -1306,6 +1365,10 @@ func (rs *Runs) logins(h, model string) []Login {
 // its retry too. A check (Reserved) has room up to the week's stop.
 func (rs *Runs) freeAt(h, model string, reserve bool) time.Time {
 	now := time.Now()
+	var held time.Time
+	if rs.Held != nil {
+		held = rs.Held(Pick{Harness: HarnessName(h), Model: model})
+	}
 	logins := rs.logins(h, model)
 	limited := rs.limited(keys(logins), now)
 	var at time.Time
@@ -1330,7 +1393,18 @@ func (rs *Runs) freeAt(h, model string, reserve bool) time.Time {
 	if d, ok := rs.down[Pick{Harness: HarnessName(h), Model: model}.String()]; ok && d.Retry.After(at) {
 		at = d.Retry
 	}
+	if held.After(at) {
+		at = held
+	}
 	return at
+}
+
+// turnBudget is the most a module lets run's next turn spend (TurnBudget).
+func (rs *Runs) turnBudget(r Run) float64 {
+	if rs.TurnBudget == nil {
+		return 0
+	}
+	return rs.TurnBudget(r)
 }
 
 // next is the pick r's next turn goes on, and when it has room: the first of
@@ -2222,6 +2296,15 @@ func tail(path string, n int) string {
 // PendingSep joins messages that queued during a turn into the next prompt.
 const PendingSep = "\n\n---\n\n"
 
+// holdTurn journals why r's turn waits, keeping its status, so a parked run
+// keeps its backoff and a nudged one its count; the live figures after " ("
+// change every tick, so only a new kind of hold is journalled.
+func (rs *Runs) holdTurn(r Run, why string) {
+	if kind, _, _ := strings.Cut(why, " ("); !strings.HasPrefix(r.Reason, kind) {
+		rs.append("run.held", runNote{ID: r.ID, Reason: why})
+	}
+}
+
 // launch starts the run's next turn in its sandbox.
 func (rs *Runs) launch(r Run, cfg Config) {
 	rs.mu.Lock()
@@ -2272,22 +2355,29 @@ func (rs *Runs) launch(r Run, cfg Config) {
 		floor, memMax, cpuMax = min(floor, LeadMemFloorMB), 0, 0
 	}
 	// A turn this machine is too strained for goes to an executor module
-	// with room, or waits.
+	// with room, or waits; an away run's goes there first anyway.
 	var elsewhere sandbox.Sandbox
 	where := ""
 	why := Strained(floor, memMax, cpuMax)
-	if why != "" {
+	if why != "" || (r.Away && !r.Lead()) {
 		elsewhere, where = rs.executor()
 	}
 	if why != "" && elsewhere == nil {
-		// The hold keeps the run's status, so a parked run keeps its backoff
-		// and a nudged one its count; the live figures after " (" change
-		// every tick, so only a new kind of hold is journalled.
-		why = "waiting: " + why
-		if kind, _, _ := strings.Cut(why, " ("); !strings.HasPrefix(r.Reason, kind) {
-			rs.append("run.held", runNote{ID: r.ID, Reason: why})
+		if !r.Lead() {
+			rs.Holding()
 		}
+		rs.holdTurn(r, "waiting: "+why)
 		return
+	}
+	if !r.Lead() && elsewhere == nil && rs.ramp(time.Now()) {
+		rs.holdTurn(r, "waiting: starting one turn at a time after the machine was strained")
+		return
+	}
+	if rs.Admit != nil { // after the ramp: a pass Admit gives is used now
+		if why := rs.Admit(r); why != "" {
+			rs.holdTurn(r, why)
+			return
+		}
 	}
 	sb, err := rs.sandbox()
 	if err != nil {
@@ -2331,7 +2421,7 @@ func (rs *Runs) launch(r Run, cfg Config) {
 	}
 	if HarnessName(r.Harness) == "open" {
 		m := cfg.Models[r.Model]
-		if err := harness.OpenRouterPaid(m.Endpoint, m.Model); err != nil {
+		if err := cfg.PaidRefused(r.Model); err != nil {
 			rs.SetStatus(r.ID, StatusBlocked, fmt.Sprintf("no turn on %s: %v; route the run to a free model and reopen it", r.Model, err))
 			return
 		}
@@ -2449,7 +2539,7 @@ func (rs *Runs) Elsewhere() bool {
 }
 
 // executor returns an executor module with room for a turn this machine is
-// too strained to start, and the runner it named; nil when there is none or
+// too strained to start (or an away run's), and the runner it named; nil when there is none or
 // the local sandbox isn't one whose spec another machine can run.
 func (rs *Runs) executor() (sandbox.Sandbox, string) {
 	if rs.Executor == nil {
@@ -2526,6 +2616,9 @@ func (rs *Runs) sandboxSpec(cfg Config, sb sandbox.Sandbox, h harness.Harness, r
 		// Claude Code counts --max-budget-usd against this process's spend
 		// only, not the running total a resumed session carries on.
 		t.MaxBudgetUSD = max(r.Budget-r.Cost, 0.01)
+	}
+	if b := rs.turnBudget(r); b > 0 && (t.MaxBudgetUSD == 0 || b < t.MaxBudgetUSD) {
+		t.MaxBudgetUSD = b
 	}
 	if sb.Isolated() {
 		t.SystemFile = "/hive/run/system.md"
@@ -2629,7 +2722,7 @@ func (rs *Runs) sandboxSpec(cfg Config, sb sandbox.Sandbox, h harness.Harness, r
 	}
 	return sandbox.Spec{
 		ID: r.ID, Argv: argv, Env: env, Cwd: in(mounts[0]), Mounts: mounts, Tools: tools,
-		Stdin: stdin, Stdout: rs.ws.TurnOut(r.ID, turn), StopFile: filepath.Join(rs.ws.RunHost(r.ID), "stop"),
+		Stdin: stdin, Stdout: rs.ws.TurnOut(r.ID, turn), StopFile: filepath.Join(rs.ws.RunHost(r.ID), "stop"), Tmp: filepath.Join(rs.ws.RunPrivate(r.ID), "tmp"),
 		Network: true, Allow: allow, Local: cfg.Egress.LocalAddrs(), Guard: rs.ws.Guarded(), Cover: rs.ws.Covered(), UID: os.Getuid(), GID: os.Getgid(),
 		Nice: r.Nice(),
 	}, nil

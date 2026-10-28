@@ -22,7 +22,7 @@ No bounds on how far a pivot goes (20:09 local): "we should be ready to dp radic
 
 Any agent can propose a pivot (20:19 local): "Maybe it shouldnt be only in a stepp back loop but rather ANY agent can propose a pivot". An agent that sees the current approach costing more than another would files a short proposal: what to stop, what to do instead, the evidence, and what it throws away.
 
-Where it stands (2026-10-28 ~02:00Z): both pieces are on main: the deletion batch (2efacd8; the merge line among what it removed, issue #1837) and the daily train (a633980, issue #1836), which first runs for real once H0 installs a release carrying it. The pivot-proposal change is filed. The machine (load and memory) and GitHub's API limits on the person's account are now the main brakes; the iiks1 runner (dispatch) and a GitHub App are the levers the lead has put to the person.
+Where it stands (2026-10-28 ~02:00Z): both pieces are on main: the deletion batch (2efacd8; the merge line among what it removed, issue #1837) and the daily train (a633980, issue #1836), which first runs for real once H0 installs a release carrying it. The pivot-proposal change is filed. The machine (load and memory) and GitHub's API limits on the person's account are now the main brakes; a runner on the person's second machine (dispatch) and a GitHub App are the levers the lead has put to the person.
 
 ## First milestone
 

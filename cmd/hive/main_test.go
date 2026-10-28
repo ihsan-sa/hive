@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -300,5 +301,40 @@ func TestModelCommands(t *testing.T) {
 	}
 	if _, err := os.Stat(ws.OpenKey("kimi")); err == nil {
 		t.Fatal("rm left the key")
+	}
+}
+
+// A paid OpenRouter model is added with its price, under the month's cap;
+// with no price it is refused, and adding the same model again keeps it.
+func TestModelAddWithAPrice(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("HIVE_HOME", root)
+	ws := core.Workspace{Root: root}
+	if err := ws.Init(); err != nil {
+		t.Fatal(err)
+	}
+	cfg := ws.LoadConfig()
+	cfg.OpenRouterUSD = 10
+	if err := ws.SaveConfig(cfg); err != nil {
+		t.Fatal(err)
+	}
+	add := []string{"add", "qwen", "https://openrouter.ai/api/v1", "qwen/qwen3-coder-next", "--key", "--no-probe"}
+	if code := cmdModel(add); code != 1 {
+		t.Fatalf("a paid model with no price: exit %d", code)
+	}
+	if code := cmdModel(append(slices.Clone(add), "--price", "0.12,0.8")); code != 0 {
+		t.Fatalf("a paid model with a price: exit %d", code)
+	}
+	if p := ws.LoadConfig().Models["qwen"].Price; p == nil || *p != (core.Price{Input: 0.12, Output: 0.8}) {
+		t.Fatalf("price %+v", p)
+	}
+	if code := cmdModel(add); code != 0 {
+		t.Fatalf("the same model again: exit %d", code)
+	}
+	if p := ws.LoadConfig().Models["qwen"].Price; p == nil || p.Input != 0.12 {
+		t.Fatalf("adding it again dropped its price: %+v", p)
+	}
+	if code := cmdModel(append(slices.Clone(add), "--price", "cheap")); code != 2 {
+		t.Fatalf("a price that isn't two numbers: exit %d", code)
 	}
 }

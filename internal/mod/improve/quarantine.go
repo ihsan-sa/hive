@@ -123,7 +123,7 @@ func (m *Module) applyQuarantine(e core.Event) {
 		if t.MergeSHA != "" && !m.fixMerged[t.ID] {
 			m.fixMerged[t.ID] = true
 			if e.At.After(m.lifted[k]) {
-				m.lifted[k] = e.At
+				m.lifted[k], m.liftedBy[k] = e.At, t.MergeSHA
 			}
 		}
 	}
@@ -182,8 +182,28 @@ func (m *Module) sightLocal(e core.Event) {
 		if slices.ContainsFunc(m.sighted[k], func(o Sighting) bool { return o.SHA == s.SHA && o.Check == s.Check }) {
 			continue
 		}
+		// A local check runs the commit itself, so a red on one without the
+		// fix (a head cut before it merged) says nothing of the fixed test.
+		if fix := m.liftedBy[k]; fix != "" && !m.contains(c.Project, c.SHA, fix) {
+			continue
+		}
 		m.sighted[k] = append(m.sighted[k], s)
 	}
+}
+
+// contains says sha has commit fix in its history; if git can't tell (one
+// of them isn't fetched), it does, so a red is never dropped on a guess.
+func (m *Module) contains(project, sha, fix string) bool {
+	dir := m.C.WS.Project(project)
+	if _, err := core.Git(dir, "merge-base", "--is-ancestor", fix, sha); err == nil {
+		return true
+	}
+	for _, c := range []string{sha, fix} {
+		if _, err := core.Git(dir, "cat-file", "-e", c+"^{commit}"); err != nil {
+			return true
+		}
+	}
+	return false
 }
 
 // unsight notes project's tests taken down by a run that is no sighting, so

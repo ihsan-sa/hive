@@ -313,6 +313,8 @@ type Module struct {
 	// retesting is held while main's red tests run once more (mainTests).
 	retesting sync.Mutex
 	busy      map[string]bool
+	away      map[string]bool      // queued tasks admit started past the pace for a runner, until their worker starts
+	elsewhere func() bool          // whether an executor module has room: core.Runs.Elsewhere, or a test's
 	stepAt    map[string]time.Time // when each Tick step began, so one stuck past stepLimit is let go
 	aims      map[string]aimAsk    // aims asked while a step held the task, set as it ends
 	// steered is when the person's stop, retry or recheck (steer) last saved
@@ -326,8 +328,12 @@ type Module struct {
 	// workers, checks and gates are the limits the pace sets (pace.go,
 	// selfgate.go).
 	workers, checks, gates pace
-	filing                 sync.Mutex     // one agent's brief is matched and filed at a time (join.go)
-	steps                  sync.WaitGroup // the steps Tick started, and the checks they queued, still going
+	// backMu guards backIn: the workers sent back to their tasks that the
+	// pace has let take their next turn (paceBack).
+	backMu sync.Mutex
+	backIn map[string]bool
+	filing sync.Mutex     // one agent's brief is matched and filed at a time (join.go)
+	steps  sync.WaitGroup // the steps Tick started, and the checks they queued, still going
 	// mainRed holds project@sha for every main commit whose red tests were
 	// already raised, so each is raised once whatever the tasks say now. It
 	// grows by one key per red main commit and isn't pruned; that's small.
@@ -341,6 +347,10 @@ type Module struct {
 	// measuring counts, per project@sha, the measurements of main running
 	// now (MeasuringMain), whose checks go first (pace.go).
 	measuring map[string]int
+	// mainFails holds, per project, the tests its red main fails now, so
+	// the fix that names one has its check go first (checkRank); emptied
+	// when main's tests pass.
+	mainFails map[string][]string
 	// later is when a held task (waiting on the forge's checks or an outside
 	// read) is next looked at; kept in memory, so a restart looks at once.
 	// Guarded by mu: due reads it with mu held, hold takes mu itself.
@@ -377,6 +387,9 @@ type Module struct {
 	holdPolled map[string]time.Time
 	// gating are the recursive gate runs in flight by key (selfgate.go).
 	gating map[string]*gateRun
+	// gatesHeld is when new gates may start again: an update waiting for
+	// the running ones to end holds the rest back until then (HoldGates).
+	gatesHeld time.Time
 	// gate lets an update stop new merges and wait out the running ones
 	// (PauseMerges): inMerge counts merges past the gate, paused says the
 	// gate is shut, and idle, while a pause waits, closes when the last
@@ -389,8 +402,10 @@ type Module struct {
 
 // New loads tasks and registers the brief op.
 func New(c *core.Core, a *agents.Agents, ch *chat.Module) *Module {
-	m := &Module{C: c, Agents: a, Chat: ch, tasks: map[string]*Task{}, busy: map[string]bool{}, aims: map[string]aimAsk{}, steered: map[string]time.Time{}, mainRed: map[string]bool{}, sighted: map[string]bool{}, cantRunOpen: map[string]string{}, measuring: map[string]int{}, later: map[string]time.Time{}, prPolled: map[string]time.Time{}, holds: map[string]*MergeHold{}, holdPolled: map[string]time.Time{}, refusedAsked: map[string]time.Time{}}
+	m := &Module{C: c, Agents: a, Chat: ch, tasks: map[string]*Task{}, busy: map[string]bool{}, aims: map[string]aimAsk{}, steered: map[string]time.Time{}, mainRed: map[string]bool{}, sighted: map[string]bool{}, cantRunOpen: map[string]string{}, measuring: map[string]int{}, mainFails: map[string][]string{}, later: map[string]time.Time{}, prPolled: map[string]time.Time{}, holds: map[string]*MergeHold{}, holdPolled: map[string]time.Time{}, refusedAsked: map[string]time.Time{}}
 	m.checks.loadCuts, m.gates.loadCuts = true, true // their builds and child Hives make the load
+	m.backIn = map[string]bool{}
+	c.Runs.Admit = m.paceBack
 	apply := func(e core.Event) {
 		if e.Kind == "merge.held" || e.Kind == "merge.lifted" {
 			m.applyHold(e)
@@ -444,7 +459,7 @@ func New(c *core.Core, a *agents.Agents, ch *chat.Module) *Module {
 	c.Person.Handle("gate", m.onPersonGate)
 	c.Effects.MergeHeld = m.MergeHeld
 	c.Effects.Slots.Resize(m.checkSlots)
-	c.Effects.Slots.Prioritize(m.checkRank, rankMain)
+	c.Effects.Slots.Prioritize(m.checkRank, rankRedFix)
 	return m
 }
 
@@ -1395,6 +1410,7 @@ func workerID(t Task) string {
 
 func (m *Module) startWorker(t *Task, p core.Project) error {
 	id := workerID(*t)
+	away := m.takeAway(t.ID)
 	if _, ok := m.C.Runs.Get(id); !ok {
 		base, err := m.C.Effects.Sync(p)
 		if err != nil {
@@ -1413,7 +1429,7 @@ func (m *Module) startWorker(t *Task, p core.Project) error {
 			return err
 		}
 		spec := m.Agents.Spec(id, "worker", p.Name, dir, m.renderBrief(t, p, base))
-		spec.Task, spec.Inputs = t.ID, t.Inputs
+		spec.Task, spec.Inputs, spec.Away = t.ID, t.Inputs, away
 		if t.Model != "" {
 			pick, err := m.C.WS.LoadConfig().Pick(t.Model)
 			if err != nil {
@@ -1881,7 +1897,7 @@ func (m *Module) test(t *Task, p core.Project) error {
 		return err
 	}
 	cfg := m.C.Effects.Config(p, main)
-	c, ok, err := m.headTest(t, p, cfg.Test)
+	c, ok, err := m.headTest(t, p, main, cfg.Test)
 	if !ok || err != nil {
 		return err // queued or running behind the step: it waits in testing
 	}
@@ -1932,6 +1948,11 @@ func (m *Module) test(t *Task, p core.Project) error {
 		if mc.CantRun != "" {
 			return m.cantRun(t, p, mc)
 		}
+		m.mu.Lock()
+		if m.mainFails[p.Name] = mc.Failed; mc.OK {
+			delete(m.mainFails, p.Name)
+		}
+		m.mu.Unlock()
 		switch {
 		case !mc.OK && !core.NoWorse(c, mc):
 			return m.waitOnMain(t, p, main, mc)
@@ -2141,6 +2162,7 @@ func (m *Module) failsAgain(p core.Project, sha, command string, c core.Check) b
 // on main waits on it, so its checks go ahead of the line.
 func (m *Module) mainTests(p core.Project, main, command string) (core.Check, error) {
 	c, ok := m.C.Effects.GetCheck(p.Name, main, "test")
+	ok = ok && c.Scope == nil // main's own answer is its whole run
 	if !ok || !c.OK && c.CantRun == "" && m.Retest != nil {
 		defer m.MeasuringMain(p.Name, main)()
 	}
@@ -2301,11 +2323,17 @@ func (m *Module) review(t *Task, p core.Project) error {
 		spec.ReadOnly, spec.Schema, spec.Task = true, VerdictSchema, t.ID
 		spec.Inputs = map[string]string{"sha": t.SHA, "diff.patch": ch.Diff, "tests.txt": core.ClipEnds(c.FullOutput(), 16000),
 			"brief.md": "Review token: " + reviewToken(id) + "\n\n" + account + m.reviewRules(p, main)}
+		paced := ""
+		if route, why := m.pacedRead(p.Name); why != "" && len(ch.Security) == 0 {
+			spec.Harness, spec.Model, spec.Route = route[0].Harness, route[0].Model, route
+			spec.Inputs["paced"] = "1"
+			paced = fmt.Sprintf(" on %s: %s", route[0].Model, why)
+		}
 		if _, err := m.C.Runs.Start(spec); err != nil {
 			return err
 		}
 		t.Reviewer = id
-		m.save(t, "reviewer "+id+" reading "+core.Short(t.SHA))
+		m.save(t, "reviewer "+id+" reading "+core.Short(t.SHA)+paced)
 		return nil
 	}
 	if !r.Terminal() {
@@ -2510,6 +2538,9 @@ func (m *Module) merge(t *Task, p core.Project) error {
 		return err
 	}
 	if wait, err := m.upToDate(t, p, main, pr); wait || err != nil {
+		return err
+	}
+	if wait, err := m.publishScan(t, p, main); wait || err != nil {
 		return err
 	}
 	// The security read first: it takes longest, so its line goes on the PR

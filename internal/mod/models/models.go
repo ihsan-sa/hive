@@ -64,6 +64,8 @@ type Module struct {
 	// Probe asks a named model one real request before a route or trial
 	// puts work on it (Probe, by default).
 	Probe func(ws core.Workspace, name string, m core.OpenModel) error
+	// Paid holds paid OpenRouter models to the month's cap (paid.go).
+	Paid *Paid
 
 	mu     sync.Mutex
 	trials map[string]Trial // recorded, by task
@@ -153,6 +155,7 @@ func New(c *core.Core, w *work.Module) *Module {
 	}
 	c.J.Replay(apply)
 	c.J.Subscribe(apply)
+	m.Paid = NewPaid(c.J, c.WS.LoadConfig)
 	m.tickDemoted() // so a restart routes as before it, not only from the first tick
 	ops := c.Runs.Ops()
 	ops.Register(core.Op{Name: "route", Roles: []string{"lead"}, Help: `{"role": "lead|worker|reviewer|security|warden|tribunal|sweep|fallback", "models": "a,b,c" (in fallback order; empty clears it), "project": "(optional) only this project"} -> sets the models that role runs on in config.json; a check seat (reviewer, security, warden, tribunal) changes only once the person says yes`, Fn: m.opRoute})

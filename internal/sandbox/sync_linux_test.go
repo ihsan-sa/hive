@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -115,7 +116,7 @@ func TestSweepEndsWhatADeadDaemonsBareCommandLeft(t *testing.T) {
 // (a shell running dd) among them. The file goes beside the test, not in
 // TMPDIR, which may be a tmpfs that writes to no disk.
 func TestRunSaysWhatItWroteToDisk(t *testing.T) {
-	dir, err := os.MkdirTemp(".", "disk-test-")
+	dir, err := diskTestDir()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,4 +133,18 @@ func TestRunSaysWhatItWroteToDisk(t *testing.T) {
 	if disk.Wrote < 4<<20 {
 		t.Errorf("wrote %d bytes, want at least 4 MiB", disk.Wrote)
 	}
+}
+
+// diskTestDir makes the folder beside the test that a disk test writes to.
+// A run cut short never reaches its cleanup, so it first removes the
+// folders earlier runs left behind (.gitignore keeps them out of commits
+// meanwhile); a folder under ten minutes old may be a parallel run's.
+func diskTestDir() (string, error) {
+	old, _ := filepath.Glob("disk-test-*")
+	for _, d := range old {
+		if fi, err := os.Stat(d); err == nil && fi.IsDir() && time.Since(fi.ModTime()) > 10*time.Minute {
+			os.RemoveAll(d)
+		}
+	}
+	return os.MkdirTemp(".", "disk-test-")
 }

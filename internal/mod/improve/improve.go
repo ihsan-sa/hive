@@ -92,6 +92,7 @@ type Module struct {
 	sighted   map[string][]Sighting                                                                   // project\x00test -> its recent reds in the forge's checks (quarantine.go)
 	fixes     map[string]string                                                                       // project\x00test -> the task filed to fix it
 	lifted    map[string]time.Time                                                                    // project\x00test -> when its fix merged
+	liftedBy  map[string]string                                                                       // project\x00test -> its fix's merge sha
 	fixMerged map[string]bool                                                                         // fix tasks whose merge lifted their test
 	unsighted map[string]bool                                                                         // project\x00test -> taken down by a run not read as sightings (brokenRun), or a test of the whole tree
 	modules   map[string]string                                                                       // project -> its Go module path, "" for none (quarantine.go)
@@ -111,7 +112,7 @@ type Module struct {
 // New loads measurements and sweeps.
 func New(c *core.Core, a *agents.Agents, w *work.Module, ch *chat.Module) *Module {
 	m := &Module{C: c, Agents: a, Work: w, Chat: ch, scores: map[string][]Measurement{}, sweeps: map[string]*Sweep{}, queue: make(chan work.Task, 64), retryAt: map[string]time.Time{}, pending: map[string]held{},
-		spells: map[string]spell{}, took: map[string][]float64{}, stalls: map[string]*Stall{}, fails: map[string][]core.Check{}, heads: map[string][]string{}, merged: map[string]time.Time{}, sighted: map[string][]Sighting{}, fixes: map[string]string{}, lifted: map[string]time.Time{}, fixMerged: map[string]bool{}, unsighted: map[string]bool{}, modules: map[string]string{}, kin: map[string]string{}, judging: map[string]judgingMerge{}, covered: map[string][]Covered{}, cantRuns: map[string]int{}, stepbacks: map[string]*StepBack{}, busy: map[string]bool{}, alerted: map[string]string{}}
+		spells: map[string]spell{}, took: map[string][]float64{}, stalls: map[string]*Stall{}, fails: map[string][]core.Check{}, heads: map[string][]string{}, merged: map[string]time.Time{}, sighted: map[string][]Sighting{}, fixes: map[string]string{}, lifted: map[string]time.Time{}, liftedBy: map[string]string{}, fixMerged: map[string]bool{}, unsighted: map[string]bool{}, modules: map[string]string{}, kin: map[string]string{}, judging: map[string]judgingMerge{}, covered: map[string][]Covered{}, cantRuns: map[string]int{}, stepbacks: map[string]*StepBack{}, busy: map[string]bool{}, alerted: map[string]string{}}
 	apply := func(e core.Event) {
 		m.mu.Lock()
 		defer m.mu.Unlock()
@@ -264,7 +265,12 @@ func (m *Module) record(ms Measurement) {
 // measure runs tests and the score on sha in clean checkouts. cant is the
 // check that couldn't start for want of a tool (its CantRun set), which is no
 // result either way; a check that did run clears the alert for its kind.
-func (m *Module) measure(p core.Project, sha string) (ok bool, score *float64, note string, cant core.Check) {
+// A red on quarantined tests alone, quarantined on evidence from outside
+// task in packages files (what sha changed) don't touch, is read past as the
+// PRs' checks read it (core.Effects.ExcusedLocal), so one known-broken test
+// can't leave main unscored. A merge (task set) whose files can't be read
+// has nothing excused.
+func (m *Module) measure(p core.Project, sha, task string, files []string) (ok bool, score *float64, note string, cant core.Check) {
 	cfg := m.C.Effects.Config(p, sha)
 	tc := m.C.Effects.RunCheck(p, sha, "test", cfg.Test)
 	if tc.CantRun != "" {
@@ -272,7 +278,13 @@ func (m *Module) measure(p core.Project, sha string) (ok bool, score *float64, n
 	}
 	m.Work.RanCheck(p.Name, "test")
 	flaky := "" // a red that passed when what failed ran again
-	if !tc.OK {
+	var excused []string
+	if task == "" || files != nil {
+		excused = m.C.Effects.ExcusedLocal(p, sha, task, files, tc)
+	}
+	if len(excused) > 0 {
+		flaky = "tests red only on quarantined " + strings.Join(excused, ", ") + " (read past, as PRs' checks do); "
+	} else if !tc.OK {
 		sum, flake, rc := m.redTests(p, sha, cfg.Test, tc)
 		if rc.CantRun != "" {
 			rc.Kind = "test"
@@ -298,6 +310,21 @@ func (m *Module) measure(p core.Project, sha string) (ok bool, score *float64, n
 		return true, nil, flaky + "score did not produce a number: " + core.Clip(sc.Output, 600), cant
 	}
 	return true, sc.Score, flaky + fmt.Sprintf("score %g", *sc.Score), cant
+}
+
+// mergeFiles is what t's merge changed on main: from the parent of its first
+// merge (a checkpoint merged earlier is part of the change) to its merge.
+// It is nil when that can't be read, and measure then excuses nothing.
+func (m *Module) mergeFiles(p core.Project, t work.Task) []string {
+	first := t.MergeSHA
+	if len(t.Banks) > 0 {
+		first = t.Banks[0].MergeSHA
+	}
+	out, err := core.Git(m.C.WS.Project(p.Name), "-c", "core.quotePath=false", "diff", "--name-only", "-z", "--no-renames", first+"^1", t.MergeSHA)
+	if err != nil {
+		return nil
+	}
+	return strings.FieldsFunc(out, func(r rune) bool { return r == 0 })
 }
 
 // bestAt is the commit the best kept score was read at: the newest kept
@@ -470,7 +497,7 @@ func (m *Module) baseline(p core.Project) {
 	}
 	defer m.Work.MeasuringMain(p.Name, main)() // its checks go ahead of the PRs'
 	cfg := m.C.Effects.Config(p, main)
-	ok, score, note, cant := m.measure(p, main)
+	ok, score, note, cant := m.measure(p, main, "", nil)
 	ms := Measurement{Project: p.Name, SHA: main, TestsOK: ok, Score: score, Note: "start: " + note, Version: m.version(p, main, cfg), NoResult: cant.CantRun != ""}
 	if ms.NoResult {
 		m.noResult(p, ms, cant.Kind) // Tick measures again in 10 minutes
@@ -831,7 +858,7 @@ func (m *Module) afterMerge(t work.Task) {
 	}
 	defer m.Work.MeasuringMain(p.Name, t.MergeSHA)() // keep/revert, the release and the next baseline wait on it
 	cfg := m.C.Effects.Config(p, t.MergeSHA)
-	ok, score, note, cant := m.measure(p, t.MergeSHA)
+	ok, score, note, cant := m.measure(p, t.MergeSHA, t.ID, m.mergeFiles(p, t))
 	switch {
 	case cant.CantRun != "" && m.introduced(p, t.MergeSHA, cant) && cant.Kind == "score":
 		ok, score, note = true, nil, "score did not produce a number: this merge's score command calls "+cant.Tool+", which isn't installed where checks run: "+note
