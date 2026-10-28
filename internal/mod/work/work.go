@@ -446,19 +446,19 @@ func New(c *core.Core, a *agents.Agents, ch *chat.Module) *Module {
 	c.J.Replay(apply)
 	c.J.Subscribe(apply)
 	c.Runs.Ops().Register(core.Op{Name: "brief", Help: `{"title","done","known","project","aim","why","apart"} (aim: fix, with why naming the failure it fixes, merges on its tests, checks and reads and isn't reverted for a score dip alone; anything else is taken as a gain, which on the Hive's own repository merges only if the recursive gate shows it); one matching an open task not yet pushed (a test both name, a near-identical title) and taken the same way joins it as added context instead, unless apart`, Fn: m.opBrief})
-	c.Runs.Ops().Register(core.Op{Name: "aim", Roles: []string{"worker", "lead"}, Help: `{"task","aim":"fix"|"gain","why"} (a worker's own task by default) -> sets whether the task is a fix of the failure why names, which merges on its tests, checks and reads and isn't reverted for a score dip alone, or a gain, which on the Hive's own repository merges only on the recursive gate's clear gain`, Fn: m.opAim})
+	c.Runs.Ops().Register(core.Op{Name: "aim", Roles: steerers, Help: `{"task","aim":"fix"|"gain","why"} (your own task by default; any task on your project) -> sets whether the task is a fix of the failure why names, which merges on its tests, checks and reads and isn't reverted for a score dip alone, or a gain, which on the Hive's own repository merges only on the recursive gate's clear gain`, Fn: m.opAim})
 	c.Runs.Ops().Register(core.Op{Name: "recheck", Roles: steerers, Help: `{"task","back"} -> a blocked or stopped task's commits are pushed and checked again (not one the person stopped); one stuck on its way to the merge (landing, testing, reviewing, merging: say on checks of a commit that is no longer its head) is retried the same way from its branch's head, and a stuck checkpoint is dropped while its worker goes on; with back, its worker gets that text and works on`, Fn: m.opRecheck})
-	c.Runs.Ops().Register(core.Op{Name: "rerun-checks", Roles: steerers, Help: `{"task"} (a worker's own task by default; a worker may name any task on its project, the lead and a sweep must name one) -> re-runs the failed forge checks (CI jobs) on the PR's head, for a flake that isn't the change's fault; at most 2 per head, and the merge waits for the new result`, Fn: m.opRerunChecks})
+	c.Runs.Ops().Register(core.Op{Name: "rerun-checks", Roles: steerers, Help: `{"task"} (your own task by default; any task on your project) -> re-runs the failed forge checks (CI jobs) on the PR's head, for a flake that isn't the change's fault; at most 2 per head, and the merge waits for the new result`, Fn: m.opRerunChecks})
 	c.Runs.Ops().Register(core.Op{Name: "queue", Roles: steerers, Help: `{"order":[task ids],"hold":[task ids],"release":[task ids],"now":[task ids],"why"} (all optional) -> the briefs waiting for a worker, in the order they start; order puts those first in that order (the rest follow as filed; one waiting 4h or more goes ahead of the order, oldest first), hold keeps one waiting until released, now puts those first of all (why says so, on the record), for a fix the rest need. A started worker is never stopped here (a quiet one is, with stop)`, Fn: m.opQueue})
 	c.Runs.Ops().Register(core.Op{Name: "stop", Roles: steerers, Help: `{"task","why","fresh":bool} -> ends a working task's quiet worker (one that keeps ending turns without finishing) as blocked, so it holds no run for a day; why goes on the record. The task goes blocked, yours to bring back with recheck; with fresh it is queued at once for a fresh worker on the same branch with the first one's notes. A worker taking turns, waiting or parked isn't stopped`, Fn: m.opStop})
 	c.Runs.Ops().Register(core.Op{Name: "landed", Roles: steerers, Help: `{"task","why","merge"} -> ends a task in any stage as merged when its PR is merged on the forge or its commits are on main (merge names the main commit when they were squashed there), so the briefs waiting on it start; refused while its PR is open and its work isn't on main`, Fn: m.opLanded})
-	c.Runs.Ops().Register(core.Op{Name: "amend", Roles: steerers, Help: `{"task","title","done","known","why"} -> changes a brief no worker has started on yet (filed or queued) in place: each of title, done and known given replaces the old one, and its open issue gets the brief as amended; its filer's own, or (the lead) any but the person's. A wider ask goes here rather than in a new brief beside it`, Fn: m.opAmend})
-	c.Runs.Ops().Register(core.Op{Name: "withdraw", Roles: steerers, Help: `{"task","why","into"} -> takes back a brief no worker has started on yet: the task stops and its issue closes with why (and into, the task that covers it now); its filer's own, or (the lead) any but the person's. It doesn't come back with recheck`, Fn: m.opWithdraw})
+	c.Runs.Ops().Register(core.Op{Name: "amend", Roles: steerers, Help: `{"task","title","done","known","why"} -> changes a brief no worker has started on yet (filed or queued) in place: each of title, done and known given replaces the old one, and its open issue gets the brief as amended; any on your project but the person's own. A wider ask goes here rather than in a new brief beside it`, Fn: m.opAmend})
+	c.Runs.Ops().Register(core.Op{Name: "withdraw", Roles: steerers, Help: `{"task","why","into"} -> takes back a brief no worker has started on yet: the task stops and its issue closes with why (and into, the task that covers it now); any on your project but the person's own. It doesn't come back with recheck`, Fn: m.opWithdraw})
 	c.Runs.Ops().Register(core.Op{Name: "batch", Roles: steerers, Help: `{"tasks":"batch,id,...","why"} -> folds related briefs into one task, the first named: one worker does them all in one session and lands them as one PR, through one round of checks and reads. The first may be waiting or being worked on (its worker is told); each other must be a brief you could withdraw, taken the same way (fixes with fixes), and is withdrawn into the first, its issue closed as covered by the batch's`, Fn: m.opBatch})
-	c.Runs.Ops().Register(core.Op{Name: "hold_merges", Roles: []string{"lead"}, Help: `{"project","why","only":[PR numbers],"until":"release"|"","lift":bool} -> on the person's word only (why quotes them): hold every merge on the project but the PRs in only (follow-ups and reverts included) until lifted, or with until "release" until the next release is out; lift ends it. Held PRs still pass their gate and wait ready`, Fn: m.opHold})
-	c.Runs.Ops().Register(core.Op{Name: "pr_ready", Roles: []string{"lead"}, Help: `{"task"|"project"+"pr","why"} -> marks the Hive's own PR ready for review, so a merge waiting on the draft goes on (a task stopped over the draft comes back; the Hive brings one back on its own only once). Readying isn't a read: the PR may sit ready but unmerged until the gate clears its head`, Fn: m.opPRReady})
-	c.Runs.Ops().Register(core.Op{Name: "pr_draft", Roles: []string{"lead"}, Help: `{"task"|"project"+"pr","why"} -> marks the Hive's own PR a draft, posting why: its task waits (it isn't stopped) and merges once marked ready with pr_ready`, Fn: m.opPRDraft})
-	c.Runs.Ops().Register(core.Op{Name: "pr_close", Roles: []string{"lead"}, Help: `{"task"|"project"+"pr","comment","delete_branch":bool} -> closes the Hive's own PR with comment and ends its task (its worker stopped); delete_branch deletes its hive/ branch. A revert you no longer want is closed this way, not left to the person`, Fn: m.opPRClose})
+	c.Runs.Ops().Register(core.Op{Name: "hold_merges", Roles: steerers, Help: `{"project","why","only":[PR numbers],"until":"release"|"","lift":bool} -> on the person's word only (why quotes them): hold every merge on the project but the PRs in only (follow-ups and reverts included) until lifted, or with until "release" until the next release is out; lift ends it. Held PRs still pass their gate and wait ready`, Fn: m.opHold})
+	c.Runs.Ops().Register(core.Op{Name: "pr_ready", Roles: steerers, Help: `{"task"|"project"+"pr","why"} -> marks the Hive's own PR ready for review, so a merge waiting on the draft goes on (a task stopped over the draft comes back; the Hive brings one back on its own only once). Readying isn't a read: the PR may sit ready but unmerged until the gate clears its head`, Fn: m.opPRReady})
+	c.Runs.Ops().Register(core.Op{Name: "pr_draft", Roles: steerers, Help: `{"task"|"project"+"pr","why"} -> marks the Hive's own PR a draft, posting why: its task waits (it isn't stopped) and merges once marked ready with pr_ready`, Fn: m.opPRDraft})
+	c.Runs.Ops().Register(core.Op{Name: "pr_close", Roles: steerers, Help: `{"task"|"project"+"pr","comment","delete_branch":bool} -> closes the Hive's own PR with comment and ends its task (its worker stopped); delete_branch deletes its hive/ branch. A revert you no longer want is closed this way, not left to the person`, Fn: m.opPRClose})
 	c.Person.Handle("merge", m.onPersonMerge)
 	c.Person.Handle("gate", m.onPersonGate)
 	c.Effects.MergeHeld = m.MergeHeld
@@ -648,7 +648,8 @@ func (m *Module) File(b Brief) (Task, error) {
 	return *t, nil
 }
 
-// opAim sets a task's aim: a worker its own, the lead any.
+// opAim sets a task's aim: any agent's own by default, or any task on its
+// project.
 func (m *Module) opAim(r core.Run, args json.RawMessage) (any, error) {
 	var a struct{ Task, Aim, Why string }
 	if err := core.Bind(args, &a); err != nil {
@@ -666,25 +667,21 @@ func (m *Module) opAim(r core.Run, args json.RawMessage) (any, error) {
 	}
 	t, ok := m.Get(a.Task)
 	if a.Task == "" {
-		if r.Role != "worker" {
+		if t, ok = m.taskOf(r.ID); !ok {
 			return nil, errors.New("name the task: --task <id>")
 		}
-		t, ok = m.taskOf(r.ID)
 	}
 	if !ok {
 		return nil, fmt.Errorf("no task %q", a.Task)
 	}
-	if r.Role == "worker" && t.Worker != r.ID {
-		return nil, fmt.Errorf("task %s isn't yours: a worker sets only its own task's aim", t.ID)
-	}
-	if err := m.C.Runs.Walled(r, t.Project); err != nil {
+	if err := m.reach(r, t.Project); err != nil {
 		return nil, err
 	}
 	if t.Terminal() || t.Stage == StageMerged {
 		return nil, fmt.Errorf("task %s has already ended (%s)", t.ID, t.Stage)
 	}
-	if r.Role == "worker" && aim != AimGain && t.Gain() && t.Gate != nil && t.Gate.Outcome == core.GateRollback {
-		return nil, fmt.Errorf("task %s was rolled back by the recursive gate, so it can't stop aiming at a gain on its own word: ask the lead (hive agent message --to lead), who can set its aim", t.ID)
+	if aim != AimGain && t.Gain() && t.Gate != nil && t.Gate.Outcome == core.GateRollback && m.spokenFor(r, t.Worker) {
+		return nil, fmt.Errorf("task %s was rolled back by the recursive gate, so it can't stop aiming at a gain on its own worker's word, nor a helper it spawned: ask another agent on the project, not one its worker spawned (hive agent message --to <run id>), who can set its aim", t.ID)
 	}
 	ask := aimAsk{aim: aim, why: core.Clip(strings.TrimSpace(a.Why), 300), by: r.ID}
 	if t.Aim != ask.aim || t.AimWhy != ask.why {
@@ -4159,22 +4156,45 @@ func (m *Module) workerStopped(t Task) bool {
 	return ok && t.Worker != "" && (r.Status == core.StatusStopped || r.StopAsked)
 }
 
+// spokenFor says whether r is the worker or a helper down its spawn chain,
+// so a change can't move its own bar one hop removed.
+func (m *Module) spokenFor(r core.Run, worker string) bool {
+	if worker == "" {
+		return false
+	}
+	seen := map[string]bool{}
+	for id, parent := r.ID, r.Parent; !seen[id]; {
+		if id == worker || parent == worker {
+			return true
+		}
+		seen[id] = true
+		p, ok := m.C.Runs.Get(parent)
+		if parent == "" || !ok {
+			return false
+		}
+		id, parent = p.ID, p.Parent
+	}
+	return false
+}
+
 // steerers are the roles that keep the loop moving: every agent owns it, so
-// a worker, sweep or step-back orders and holds the queue, checks blocked work
-// again and ends a landed task as the lead does, each on the record by its run
-// id. A step-back diagnoses a stalled loop and acts on what it finds rather
+// any of them orders and holds the queue, checks blocked work again, ends a
+// landed task and changes the Hive's own PRs, each on the record by its run id.
+// A step-back diagnoses a stalled loop and acts on what it finds rather
 // than routing the fix through a lead that may not answer for a while.
-var steerers = []string{"lead", "worker", "sweep", "stepback"}
+var steerers = core.Peers
 
 // reach refuses a task outside r's own project: an agent with a project steers
-// only there; one with none (the workspace lead, and a sweep, which reads the
-// whole Hive's records) any it can see, on purpose. A project lead is held by
-// Walled alone.
+// only there, whatever its role; one with none (the workspace lead, and a
+// sweep, which reads the whole Hive's records) any it can see, on purpose.
 func (m *Module) reach(r core.Run, project string) error {
-	if r.Project != "" && project != r.Project && r.Role != "lead" {
+	if err := m.C.Runs.Walled(r, project); err != nil {
+		return err
+	}
+	if r.Project != "" && project != r.Project {
 		return fmt.Errorf("that task is on project %q; you act only on your own (%s)", project, r.Project)
 	}
-	return m.C.Runs.Walled(r, project)
+	return nil
 }
 
 func (m *Module) opRecheck(r core.Run, args json.RawMessage) (any, error) {

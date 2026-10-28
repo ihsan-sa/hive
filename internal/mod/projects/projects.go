@@ -39,8 +39,8 @@ type Module struct {
 func New(c *core.Core, ch *chat.Module, w *work.Module, im *improve.Module) *Module {
 	m := &Module{C: c, Chat: ch, Work: w, Improve: im, retry: map[string]time.Time{}, lastErr: map[string]string{}, claimed: map[string]bool{}}
 	ops := c.Runs.Ops()
-	ops.Register(core.Op{Name: "create_project", Roles: []string{"lead"}, Help: `{"name","repo","description","goals","sharing","visibility","self"} (visibility: private (default) or public: public in public_owners (Hive-RSI-Lab) is made and the person told, public anywhere else, or for a project whose sharing isn't shared, waits for their yes; an existing repository keeps its visibility, changing it is the person's; sharing: shared (default), private (its agents read the shared Hive, no one else sees it) or isolated (walled both ways); self: the Hive's own code, in a fork of it, or in the release repository itself only when this Hive is its steward)`, Fn: m.opCreate})
-	ops.Register(core.Op{Name: "retire_project", Roles: []string{"lead"}, Help: `{"name","why"} takes a project made by mistake out of the Hive: one whose setup never finished, or with no work in flight or merged (stop its tasks first). Its repository on the forge is left as it is, and the name is free again; one with work merged is the person's to retire`, Fn: m.opRetire})
+	ops.Register(core.Op{Name: "create_project", Roles: core.Peers, Help: `{"name","repo","description","goals","sharing","visibility","self"} (visibility: private (default) or public: public in public_owners (Hive-RSI-Lab) is made and the person told, public anywhere else, or for a project whose sharing isn't shared, waits for their yes; an existing repository keeps its visibility, changing it is the person's; sharing: shared (default), private (its agents read the shared Hive, no one else sees it) or isolated (walled both ways); self: the Hive's own code, in a fork of it, or in the release repository itself only when this Hive is its steward)`, Fn: m.opCreate})
+	ops.Register(core.Op{Name: "retire_project", Roles: core.Peers, Help: `{"name","why"} takes a project made by mistake out of the Hive: one whose setup never finished, or with no work in flight or merged (stop its tasks first). Its repository on the forge is left as it is, and the name is free again; one with work merged is the person's to retire`, Fn: m.opRetire})
 	c.Person.Handle("public_repo", m.onPublic)
 	ops.Register(core.Op{Name: "status", Help: `{} -> projects, work in flight, scores, what waits on the person, the live settings (models, autonomy, schedules)`, Fn: func(r core.Run, _ json.RawMessage) (any, error) { return m.Status(r), nil }})
 	return m
@@ -310,6 +310,9 @@ func (m *Module) opRetire(r core.Run, args json.RawMessage) (any, error) {
 	}
 	if p.Self {
 		return nil, fmt.Errorf("%s is the Hive's own project; retiring it is the person's", p.Name)
+	}
+	if r.Project != "" && r.Project != p.Name { // an agent with a project acts only there, whatever its role
+		return nil, fmt.Errorf("%s isn't your project (%s); you retire only your own", p.Name, r.Project)
 	}
 	if strings.TrimSpace(a.Why) == "" {
 		return nil, errors.New("say why with --why")
