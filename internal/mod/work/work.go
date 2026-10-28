@@ -1258,7 +1258,7 @@ func marker(id string) string { return "<!-- hive-task:" + id + " -->" }
 
 func (m *Module) step(t *Task) error {
 	p, err := m.project(t)
-	if err != nil && t.Stage == StageDone {
+	if err != nil && (t.Stage == StageDone || t.Withdrawn()) {
 		t.IssueOpen = false
 		m.save(t, fmt.Sprintf("%v, so issue #%d is left open", err, t.Issue.Number))
 		return nil
@@ -1829,7 +1829,7 @@ func (m *Module) test(t *Task, p core.Project) error {
 		}
 	}
 	if !c.OK && t.Checkpoint != "" {
-		return m.dropCheckpoint(t, p, "the tests failed on "+core.Short(t.SHA)+":\n\n"+core.Clip(c.Output, 1500))
+		return m.dropCheckpoint(t, p, "the tests failed on "+core.Short(t.SHA)+":\n\n"+core.ClipEnds(c.Output, 1500))
 	}
 	if !c.OK {
 		mc, err := m.mainTests(p, main, cfg.Test)
@@ -1857,7 +1857,7 @@ func (m *Module) test(t *Task, p core.Project) error {
 				return err
 			}
 			if t.Retested != t.SHA && m.failsAgain(p, t.SHA, cfg.Test, c) {
-				return m.sendBack(t, p, "The tests failed on your commit "+core.Short(t.SHA)+", and again when only the failing tests ran once more:\n\n"+core.Clip(c.Output, 3000))
+				return m.sendBack(t, p, "The tests failed on your commit "+core.Short(t.SHA)+", and again when only the failing tests ran once more:\n\n"+core.ClipEnds(c.Output, 3000))
 			}
 			if t.Retested != t.SHA {
 				// A slow, busy machine fails a test CI passes: what failed
@@ -1871,7 +1871,7 @@ func (m *Module) test(t *Task, p core.Project) error {
 				m.save(t, "its tests failed on "+core.Short(t.SHA)+" ("+core.Clip(strings.Join(core.RedKeys(c.FullOutput()), ", "), 300)+") while main's pass, so they run once more before it counts")
 				return nil
 			}
-			return m.sendBack(t, p, "The tests failed on your commit "+core.Short(t.SHA)+":\n\n"+core.Clip(c.Output, 3000))
+			return m.sendBack(t, p, "The tests failed on your commit "+core.Short(t.SHA)+":\n\n"+core.ClipEnds(c.Output, 3000))
 		}
 	}
 	ch, err := m.C.Effects.Classify(p, main, t.SHA)
@@ -1933,7 +1933,7 @@ func (m *Module) cantRun(t *Task, p core.Project, c core.Check) error {
 	m.save(t, reason)
 	m.raiseCantRun(p, c)
 	if say {
-		m.comment(p.Repo, t.PR.Number, "Tests on "+core.Short(t.SHA)+": **can't run**, "+c.CantRun+". That is no verdict on this change, so it isn't sent back; it is tested again once the tool is there.\n\n```\n"+core.Clip(c.Output, 1500)+"\n```")
+		m.comment(p.Repo, t.PR.Number, "Tests on "+core.Short(t.SHA)+": **can't run**, "+c.CantRun+". That is no verdict on this change, so it isn't sent back; it is tested again once the tool is there.\n\n```\n"+core.ClipEnds(c.Output, 1500)+"\n```")
 	}
 	return nil
 }
@@ -2002,7 +2002,7 @@ func (m *Module) noteTests(t *Task, p core.Project, main string, c core.Check) e
 	diff := m.ownDiff(p, main, t.SHA)
 	key := diff + " " + passFail(c.OK)
 	if diff == "" || key != t.NotedDiff {
-		err := m.C.Effects.Forge.Comment(p.Repo, t.PR.Number, fmt.Sprintf("Tests on %s: **%s**\n\n```\n%s\n```", core.Short(t.SHA), passFail(c.OK), core.Clip(c.Output, 1500)))
+		err := m.C.Effects.Forge.Comment(p.Repo, t.PR.Number, fmt.Sprintf("Tests on %s: **%s**\n\n```\n%s\n```", core.Short(t.SHA), passFail(c.OK), core.ClipEnds(c.Output, 1500)))
 		if rl := (*core.RateLimited)(nil); errors.As(err, &rl) {
 			return err
 		}
@@ -2203,7 +2203,7 @@ func (m *Module) review(t *Task, p core.Project) error {
 		brief := fmt.Sprintf("Review %s of task %s: %q.\n\nThe brief, the exact diff and the test run are in $HIVE_RUN (brief.md, diff.patch, tests.txt). Give your verdict.", round, t.ID, t.Label())
 		spec := m.Agents.Spec(id, "reviewer", p.Name, dir, brief)
 		spec.ReadOnly, spec.Schema, spec.Task = true, VerdictSchema, t.ID
-		spec.Inputs = map[string]string{"sha": t.SHA, "diff.patch": ch.Diff, "tests.txt": c.Output,
+		spec.Inputs = map[string]string{"sha": t.SHA, "diff.patch": ch.Diff, "tests.txt": core.ClipEnds(c.FullOutput(), 16000),
 			"brief.md": "Review token: " + reviewToken(id) + "\n\n" + account + m.reviewRules(p, main)}
 		if _, err := m.C.Runs.Start(spec); err != nil {
 			return err
@@ -2272,16 +2272,24 @@ func aimCheck(t *Task, p core.Project) string {
 	return "\n\n## The aim\n\nThis change to the Hive itself is declared a fix (" + core.Clip(t.AimWhy, 300) + "), so it merges without the recursive gate, and a score dip after it doesn't revert it on its own. If it fixes no failure the change itself shows, or is really aimed at a measurable gain (the brief names a target to beat, or the diff tunes the benchmark, the score or the gate to move a number), that is a finding: the worker must declare it with `hive agent aim --aim gain --why \"...\"` so the gate judges it. A fix that only touches those files to repair them is still a fix."
 }
 
-// reviewRules are the project's standing rules, read from main so a change
-// can't move the bar it is judged against. Lessons are among them: a revert
-// the Hive made has no worker brief quoting them, and one may have landed
-// since the worker started.
+// reviewRules are the project's standing rules: docs/REVIEW.md (the
+// person's intent for the product) in full, read from main so a change can't
+// move the bar it is judged against, and goals and lessons by path, since a
+// reader that can change nothing doesn't need all of them in every brief
+// (docs/research/forced.md); the worker's brief already quotes the lessons.
 func (m *Module) reviewRules(p core.Project, main string) string {
 	var b strings.Builder
-	for _, f := range []string{"docs/REVIEW.md", ".hive/goals.md", ".hive/lessons.md"} {
-		if s := strings.TrimSpace(m.C.Effects.ReadFile(p, main, f)); s != "" {
-			fmt.Fprintf(&b, "\n\n## `%s` on main\n\n%s", f, s)
+	if s := strings.TrimSpace(m.C.Effects.ReadFile(p, main, "docs/REVIEW.md")); s != "" {
+		fmt.Fprintf(&b, "\n\n## `docs/REVIEW.md` on main\n\n%s", s)
+	}
+	var paths []string
+	for _, f := range []string{".hive/goals.md", ".hive/lessons.md"} {
+		if strings.TrimSpace(m.C.Effects.ReadFile(p, main, f)) != "" {
+			paths = append(paths, "`"+f+"`")
 		}
+	}
+	if len(paths) > 0 {
+		fmt.Fprintf(&b, "\n\n## The project's standing rules\n\n%s are in your checkout (the diff shows any change this makes to them); read them where the change touches what they cover.", strings.Join(paths, " and "))
 	}
 	return b.String()
 }
@@ -3491,7 +3499,7 @@ func (m *Module) startSeat(t *Task, p core.Project, ch core.Change, main, seat, 
 	h, model, route := m.seatModel(p, seat)
 	spec.Harness, spec.Model, spec.Route = h, model, route
 	spec.ReadOnly, spec.Schema, spec.Task = true, VerdictSchema, t.ID
-	spec.Inputs = map[string]string{"sha": t.SHA, "seat": seat, "diff.patch": ch.Diff, "tests.txt": c.Output,
+	spec.Inputs = map[string]string{"sha": t.SHA, "seat": seat, "diff.patch": ch.Diff, "tests.txt": core.ClipEnds(c.FullOutput(), 16000),
 		"brief.md": "Review token: " + reviewToken(id) + "\n\n" + securityRules(ch) + "\n\n## The change\n\n" + account + m.reviewRules(p, main)}
 	if _, err := m.C.Runs.Start(spec); err != nil {
 		return err

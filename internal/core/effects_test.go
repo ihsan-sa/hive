@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 // testHive is a workspace with a local forge and bare (opted-in) runs.
@@ -1665,5 +1666,26 @@ func TestUpdateBranchMergedMainBeforeCheckpointLanded(t *testing.T) {
 	}
 	if got := u.mainFile(next, "main.go"); got != file(6, 3) {
 		t.Fatalf("the update should keep the resolution:\n%s", got)
+	}
+}
+
+func TestClipEndsKeepsTheSummary(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("=== RUN TestFirst\n")
+	for i := range 500 {
+		fmt.Fprintf(&b, "    noise line %d of a long test run\n", i)
+	}
+	b.WriteString("--- FAIL: TestLast (0.01s)\nFAIL\nFAIL\texample.com/pkg\t0.2s\nRan 312 tests in 4.1s\n")
+	got := ClipEnds(b.String(), 4000)
+	if n := utf8.RuneCountInString(got); n > 4100 {
+		t.Fatalf("clipped to %d runes, want about 4000", n)
+	}
+	for _, want := range []string{"=== RUN TestFirst\n", "--- FAIL: TestLast", "Ran 312 tests in 4.1s\n", "characters cut"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("clipped output lacks %q:\n%s", want, got)
+		}
+	}
+	if s := "short\noutput\n"; ClipEnds(s, 4000) != s {
+		t.Error("a short output should come back whole, newlines and all")
 	}
 }
