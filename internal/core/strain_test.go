@@ -110,6 +110,39 @@ func TestLoaded(t *testing.T) {
 	}
 }
 
+// Linux counts a task waiting on the disk in the load average: a load over
+// its limit with the CPU barely contended is the disk's when IO pressure is
+// high, and strains nothing when that is low too. Where pressure can't be
+// read, load is the CPU's as before.
+func TestLoadedReadsWhatIsContended(t *testing.T) {
+	for _, c := range []struct {
+		name, cpu, io string
+		want          string
+	}{
+		{"cpu contended", "55.00", "60.00", "machine loaded (load 34 on 20 cores"},
+		{"disk", "2.61", "56.58", "machine loaded on its disk (io pressure 57%, cpu pressure 3%; load 34 on 20 cores"},
+		{"neither", "2.61", "3.00", ""},
+		{"no io file", "2.61", "", ""},
+		{"no pressure files", "", "", "machine loaded (load 34 on 20 cores"},
+	} {
+		dir := t.TempDir()
+		os.MkdirAll(filepath.Join(dir, "pressure"), 0o755)
+		os.WriteFile(filepath.Join(dir, "loadavg"), []byte("34.18 31.81 29.80 30/6000 1234\n"), 0o644)
+		for file, avg10 := range map[string]string{"cpu": c.cpu, "io": c.io} {
+			if avg10 != "" {
+				os.WriteFile(filepath.Join(dir, "pressure", file), []byte("some avg10="+avg10+" avg60=0.00 avg300=0.00 total=0\nfull avg10=99.00 avg60=0.00 avg300=0.00 total=0\n"), 0o644)
+			}
+		}
+		got := loaded(dir, 20, 1.5)
+		if (c.want == "") != (got == "") || !strings.HasPrefix(got, c.want) {
+			t.Errorf("%s: %q, want %q", c.name, got, c.want)
+		}
+		if got != "" && !strings.HasPrefix(got, LoadedReason) {
+			t.Errorf("%s: %q doesn't start with %q", c.name, got, LoadedReason)
+		}
+	}
+}
+
 // A lead's turn starts under the pressure and the memory floor that hold a
 // worker's: a person's message is answered however busy the machine is. Only
 // under the absolute floor (LeadMemFloorMB) does a lead wait, saying why once.
