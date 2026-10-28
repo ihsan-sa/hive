@@ -1763,3 +1763,82 @@ func TestRefusedUnmergedTriesTheNextMerge(t *testing.T) {
 		t.Fatalf("the refusal still waits after a release: %q %q", sha, next)
 	}
 }
+
+// A root merge no security read passed gets one from the Hive's own seats
+// (ReadMerged) while the release waits, not from the person: once they land,
+// Tick's retry cuts it and the person is told after.
+func TestRootMergeGetsTheHivesOwnRead(t *testing.T) {
+	m, n, _, land := selfHive(t)
+	m.C.J.MustAppend("effect.merged", map[string]any{"project": "hive", "pr": 2, "sha": "a2", "merge_sha": "m2", "root": []string{"internal/sandbox/delegate.go"}, "diff": "d2"})
+	land("a2", "r2")
+	var asked [][]string
+	m.ReadMerged = func(p core.Project, pr int, head, mergeSHA, diff string, root []string) (bool, string) {
+		asked = append(asked, root)
+		if pr != 2 || head != "a2" || mergeSHA != "m2" || diff != "d2" {
+			t.Errorf("read asked of #%d %s %s %s", pr, head, mergeSHA, diff)
+		}
+		return m.rootRead("hive", merge{Root: root, Diff: diff}) != "", ""
+	}
+	m.AfterKept("hive", "m2")
+	if len(n.got) != 0 || len(m.C.Person.Open()) != 0 || m.reading("hive") != "m2" {
+		t.Fatalf("while the seats read: released %v, asks %+v, reading at %q", n.got, m.C.Person.Open(), m.reading("hive"))
+	}
+	if len(asked) != 1 || len(asked[0]) != 1 {
+		t.Fatalf("reads asked %v, want the root paths' one", asked)
+	}
+	m.retryWaiting() // still reading: nothing new
+	if len(n.got) != 0 || len(m.C.Person.Open()) != 0 {
+		t.Fatalf("released or asked mid-read: %v %+v", n.got, m.C.Person.Open())
+	}
+	for _, seat := range []string{core.SeatSecurity, core.PanelSeat(0), core.PanelSeat(1), core.PanelSeat(2)} {
+		seated(m, "a2", "d2", seat, "land")
+	}
+	m.retryWaiting()
+	if body := n.got["v0.0.1"]; !strings.Contains(body, "delegate.go) passed the security seat") {
+		t.Fatalf("not released on the Hive's own read: %v", n.got)
+	}
+	if len(m.C.Person.Open()) != 0 || m.reading("hive") != "" {
+		t.Fatalf("asks %+v, reading at %q after the release", m.C.Person.Open(), m.reading("hive"))
+	}
+	if told := m.C.Person.Told(5); len(told) != 1 || !strings.Contains(told[0].Title, "Released v0.0.1") {
+		t.Fatalf("the person should be told after: %+v", told)
+	}
+}
+
+// A read of the Hive's own that can't pass (a seat's fix) holds the release
+// for the person, and the ask says why; an unread merge is read the same way.
+func TestOwnReadThatFailsHolds(t *testing.T) {
+	m, n, _, land := selfHive(t)
+	m.C.J.MustAppend("effect.merged", map[string]any{"project": "hive", "pr": 2, "sha": "a2", "merge_sha": "m2", "root": []string{"install/root.sh"}, "diff": "d2"})
+	land("a2", "r2")
+	m.ReadMerged = func(p core.Project, pr int, head, mergeSHA, diff string, root []string) (bool, string) {
+		return false, "the Hive's security seat asked for fixes: widens a mount"
+	}
+	m.AfterKept("hive", "m2")
+	asks := m.C.Person.Open()
+	if len(n.got) != 0 || len(asks) != 1 || !strings.Contains(asks[0].Title, "install/root.sh (#2: the Hive's security seat asked for fixes") {
+		t.Fatalf("a failed own read should hold and say why: %v %+v", n.got, asks)
+	}
+
+	m, n, _, land = selfHive(t)
+	m.C.J.MustAppend("effect.merged", map[string]any{"project": "hive", "pr": 3, "sha": "a3", "merge_sha": "m3", "diff": "d3"})
+	done := false
+	m.ReadMerged = func(p core.Project, pr int, head, mergeSHA, diff string, root []string) (bool, string) {
+		if root != nil {
+			t.Errorf("a merge with no root path asked for a security read: %v", root)
+		}
+		if done {
+			land(head, "m-read")
+		}
+		return done, ""
+	}
+	m.AfterKept("hive", "m3")
+	if len(n.got) != 0 || len(m.C.Person.Open()) != 0 || m.reading("hive") != "m3" {
+		t.Fatalf("while the reviewer reads: released %v, asks %+v", n.got, m.C.Person.Open())
+	}
+	done = true
+	m.retryWaiting()
+	if body := n.got["v0.0.1"]; !strings.Contains(body, "#3 at a3, read by m-read") {
+		t.Fatalf("an unread merge wasn't released on the Hive's own read: %v %+v", n.got, m.C.Person.Open())
+	}
+}

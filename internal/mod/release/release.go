@@ -56,6 +56,12 @@ type Module struct {
 	// Diff lists the files that differ between two commits; nil is git diff
 	// in the project's clone.
 	Diff func(p core.Project, from, to string) ([]string, error)
+	// ReadMerged gives a merge that lacks the read a release needs (its root
+	// paths with no security read, or no read at all) that read from the
+	// Hive's own seats: the work module's ReadMerged. passed says it has it
+	// now; why says only the person can settle it; neither, still reading.
+	// nil leaves such a merge to the person.
+	ReadMerged func(p core.Project, pr int, head, mergeSHA, diff string, root []string) (passed bool, why string)
 	// Contains says whether commit tagSHA has sha in its history; nil is
 	// git merge-base in the project's clone.
 	Contains func(p core.Project, sha, tagSHA string) (bool, error)
@@ -782,10 +788,12 @@ func fileSum(path string) (string, error) {
 // AfterKept cuts a release when a kept merge lands in the Hive's own project
 // and its dry run passes on that exact commit. The release names each change
 // merged since the last one and the reviewer runs that read its exact head. A
-// head with no read waits for the person's word. A change to a root path (what
-// runs with elevated rights) goes out once the Hive's own security reads passed
-// its diff (rootRead), and the person is told after; with no such read it waits
-// for the person too. While the newest release's release run failed, a merge
+// change to a root path (what runs with elevated rights) goes out once the
+// Hive's own security reads passed its diff (rootRead), and the person is told
+// after. A merge missing either read gets it now from the Hive's own seats
+// (ReadMerged) while the release waits (release.reading); it waits for the
+// person's word only when that read can't pass: a seat asked for fixes, or its
+// diff can't be read. While the newest release's release run failed, a merge
 // that changes nothing the failed job reads waits too (unbuilt).
 // The release numbers on from this build, so the install switches to it at its
 // next update. In the person's fork it also asks the person whether to offer
@@ -836,30 +844,64 @@ func (m *Module) afterKept(project, sha string) {
 		once(refuse)
 		return
 	}
+	approved := m.C.Effects.Approved("release", project, sha)
+	// A merge without the read a release needs gets it from the Hive's own
+	// seats (ReadMerged) while the release waits; only a read that can't
+	// pass leaves it to the person.
+	selfRead := m.ReadMerged
+	if approved {
+		selfRead = nil // the person's word already stands for them
+	}
 	var manifest strings.Builder
-	var root, unread, rootRead []string
+	var root, unread, rootRead, reading []string
 	for _, mg := range list {
-		if reads := m.C.Effects.Reads(project, mg.SHA, mg.Diff); len(reads) > 0 {
+		reads, why := m.C.Effects.Reads(project, mg.SHA, mg.Diff), "no seat reads it"
+		if len(reads) == 0 && mg.Diff != "" && selfRead != nil {
+			var passed bool
+			if passed, why = selfRead(p, mg.PR, mg.SHA, mg.MergeSHA, mg.Diff, nil); passed {
+				reads = m.C.Effects.Reads(project, mg.SHA, mg.Diff)
+			} else if why != "" {
+				log.Printf("release: %s: #%d stays unread: %s", project, mg.PR, why)
+			}
+		}
+		switch {
+		case len(reads) > 0:
 			fmt.Fprintf(&manifest, "- #%d at %s, read by %s\n", mg.PR, core.Short(mg.SHA), strings.Join(reads, ", "))
-		} else {
+		case why == "":
+			reading = append(reading, fmt.Sprintf("#%d's read", mg.PR))
+			fmt.Fprintf(&manifest, "- #%d at %s, being read by the Hive's reviewer\n", mg.PR, core.Short(mg.SHA))
+		default:
 			unread = append(unread, fmt.Sprintf("#%d at %s", mg.PR, core.Short(mg.SHA)))
 			fmt.Fprintf(&manifest, "- #%d at %s, not read\n", mg.PR, core.Short(mg.SHA))
 		}
 		if len(mg.Root) == 0 {
 			continue
 		}
-		if by := m.rootRead(project, mg); by != "" {
+		by := m.rootRead(project, mg)
+		why = "no security read passed them"
+		if by == "" && mg.Diff != "" && selfRead != nil {
+			var passed bool
+			if passed, why = selfRead(p, mg.PR, mg.SHA, mg.MergeSHA, mg.Diff, mg.Root); passed {
+				by = m.rootRead(project, mg)
+			}
+		}
+		switch {
+		case by != "":
 			fmt.Fprintf(&manifest, "  its root paths (%s) passed %s\n", strings.Join(mg.Root, ", "), by)
 			rootRead = append(rootRead, fmt.Sprintf("#%d (%s)", mg.PR, strings.Join(mg.Root, ", ")))
-		} else if mg.Diff == "" {
+		case mg.Diff == "":
 			// Merged before effect.merged carried the diff: no read can be
 			// matched to it.
 			root = append(root, fmt.Sprintf("%s (#%d's merge record names no diff)", strings.Join(mg.Root, ", "), mg.PR))
-		} else {
+		case why == "":
+			reading = append(reading, fmt.Sprintf("#%d's security read (%s)", mg.PR, strings.Join(mg.Root, ", ")))
+			fmt.Fprintf(&manifest, "  its root paths (%s) are being read by the Hive's security seat and panel\n", strings.Join(mg.Root, ", "))
+		case selfRead == nil:
 			root = append(root, mg.Root...)
+		default:
+			root = append(root, fmt.Sprintf("%s (#%d: %s)", strings.Join(mg.Root, ", "), mg.PR, why))
 		}
 	}
-	approved := m.C.Effects.Approved("release", project, sha)
 	if !approved && !m.mainGreen(p, sha) {
 		return
 	}
@@ -889,7 +931,21 @@ func (m *Module) afterKept(project, sha string) {
 			why = append(why, held)
 		}
 	}
+	readAt := m.reading(project)
+	if len(reading) > 0 && len(why) == 0 && !approved {
+		// Tick tries it again (retryReading) until the reads end.
+		if readAt != sha {
+			m.C.J.MustAppend("release.reading", map[string]any{"project": project, "sha": sha, "reads": reading})
+		}
+		return
+	}
+	if readAt != "" {
+		m.C.J.MustAppend("release.read_ended", map[string]string{"project": project, "sha": readAt})
+	}
 	if len(why) > 0 && !approved {
+		if len(reading) > 0 {
+			why = append(why, "the Hive's own reads of "+strings.Join(reading, ", ")+" are still running")
+		}
 		m.hold(project, sha, why, manifest.String())
 		return
 	}
@@ -1088,6 +1144,40 @@ func (m *Module) retryWaiting() {
 		}
 	}
 	m.retryUnmerged()
+	m.retryReading()
+}
+
+// reading is the commit a project's release waits at while the Hive's own
+// seats read merges it covers (release.reading), "" once those reads ended or
+// a release was cut since.
+func (m *Module) reading(project string) (sha string) {
+	m.C.J.Replay(func(e core.Event) {
+		var x struct{ Project, SHA string }
+		if (e.Kind != "release.reading" && e.Kind != "release.read_ended" && e.Kind != "hive.released") || e.Decode(&x) != nil || x.Project != project {
+			return
+		}
+		sha = ""
+		if e.Kind == "release.reading" {
+			sha = x.SHA
+		}
+	})
+	return sha
+}
+
+// retryReading tries again each self project's release that waits on the
+// Hive's own reads of the merges it covers.
+func (m *Module) retryReading() {
+	for _, p := range m.C.Projects.List() {
+		if !p.Self {
+			continue
+		}
+		func() {
+			defer m.lock(p.Name)()
+			if sha := m.reading(p.Name); sha != "" {
+				m.afterKept(p.Name, sha)
+			}
+		}()
+	}
 }
 
 // unmerged is the kept commit a project's release last refused as no merge
