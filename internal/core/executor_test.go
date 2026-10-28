@@ -166,7 +166,8 @@ func TestCheckGoesToARunnerWhenTheLineIsFull(t *testing.T) {
 	mu.Unlock()
 	done := make(chan Check)
 	go func() { done <- c.Effects.RunCheck(p, sha, "retest", "true") }()
-	time.Sleep(100 * time.Millisecond)
+	waitFor(t, "the check to wait in the line with no room", func() bool { _, w := c.Effects.Slots.State(); return len(w) == 1 })
+	time.Sleep(5 * checkLeaveEvery) // it asks a few times and stays
 	if _, waiting := c.Effects.Slots.State(); len(waiting) != 1 {
 		t.Fatalf("with no room it doesn't wait in the line: %+v", waiting)
 	}
@@ -187,7 +188,8 @@ func TestCheckGoesToARunnerWhenTheLineIsFull(t *testing.T) {
 
 	// Main's own check waits for a slot here: it writes the shared build cache.
 	go func() { done <- c.Effects.RunCheck(p, main, "test", "true") }()
-	time.Sleep(100 * time.Millisecond)
+	waitFor(t, "main's check to wait in the line", func() bool { _, w := c.Effects.Slots.State(); return len(w) == 1 })
+	time.Sleep(5 * checkLeaveEvery) // it would have left by now
 	release()
 	if ch := <-done; ch.Where != "" || len(away) != 2 {
 		t.Fatalf("main's check went elsewhere: %q", ch.Where)
@@ -198,3 +200,50 @@ func TestCheckGoesToARunnerWhenTheLineIsFull(t *testing.T) {
 type liarBox struct{ isolatedBox }
 
 func (liarBox) Run(sandbox.Spec, time.Duration) (int, error) { return 0, nil }
+
+// An away run's turn goes to an executor module with room though the machine
+// isn't strained, and with no room runs here rather than waiting.
+func TestAwayTurnGoesToAnExecutorFirst(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("sleep stands in for the turn")
+	}
+	c, _ := testHive(t)
+	cfg := c.WS.LoadConfig()
+	cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax = 0, 0, 0
+	c.Runs.sandbox = func() (sandbox.Sandbox, error) { return elsewhereSB{agent: sleeper(t), spec: new(sandbox.Spec)}, nil }
+	var spec sandbox.Spec
+	room := true
+	c.Runs.Executor = func() (sandbox.Sandbox, string) {
+		if !room {
+			return nil, ""
+		}
+		return elsewhereSB{agent: sleeper(t), spec: &spec}, "iiks1"
+	}
+	r, err := c.Runs.Start(RunSpec{ID: "w", Role: "worker", Harness: "fake", Checkout: t.TempDir(), Away: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Runs.launch(r, cfg)
+	if got, _ := c.Runs.Get("w"); got.Status != StatusRunning || got.Where != "iiks1" {
+		t.Fatalf("an away turn: %s %q where %q", got.Status, got.Reason, got.Where)
+	}
+	room = false
+	r, err = c.Runs.Start(RunSpec{ID: "w2", Role: "worker", Harness: "fake", Checkout: t.TempDir(), Away: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Runs.launch(r, cfg)
+	if got, _ := c.Runs.Get("w2"); got.Status != StatusRunning || got.Where != "" {
+		t.Fatalf("an away turn with no room elsewhere: %s %q where %q", got.Status, got.Reason, got.Where)
+	}
+}
+
+// waitFor polls cond until it holds, or fails after 10 seconds.
+func waitFor(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	for end := time.Now().Add(10 * time.Second); !cond(); time.Sleep(5 * time.Millisecond) {
+		if time.Now().After(end) {
+			t.Fatal("timed out waiting for " + what)
+		}
+	}
+}
