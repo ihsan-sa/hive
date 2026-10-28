@@ -5,6 +5,4 @@
 *.test
 *.exe~
 __pycache__/
-
-# left by checkdisk_linux_test.go when a test run is killed before its cleanup
 disk-test-*/

@@ -365,22 +365,26 @@ func TestKeyMainOnce(t *testing.T) {
 	}
 }
 
-// A paid model on OpenRouter is never asked: no request leaves.
-func TestNoRequestForAPaidOpenRouterModel(t *testing.T) {
+// A paid model on OpenRouter with no price is never asked, as what it would
+// spend isn't counted; one priced, which the run manager lets in under the
+// month's cap (core.Config.PaidRefused), is.
+func TestNoRequestForAnUnpricedPaidOpenRouterModel(t *testing.T) {
 	asked := false
 	client := &http.Client{Transport: roundTrip(func(*http.Request) (*http.Response, error) {
 		asked = true
 		return nil, errors.New("sent")
 	})}
 	a := &Agent{Endpoint: "https://openrouter.ai/api/v1", Model: "openai/gpt-5", Key: "k", Client: client, Sleep: func(time.Duration) {}}
-	if _, _, err := a.chat(context.Background(), []Message{{Role: "user", Content: "hi"}}, nil); err == nil || !strings.Contains(err.Error(), ":free") {
+	if _, _, err := a.chat(context.Background(), []Message{{Role: "user", Content: "hi"}}, nil); err == nil || !strings.Contains(err.Error(), "no price") {
 		t.Fatalf("chat: %v", err)
 	}
-	if err := Probe(context.Background(), "https://openrouter.ai/api/v1", "openai/gpt-5", "k", false); err == nil {
-		t.Fatal("probe of a paid model passed")
-	}
 	if asked {
-		t.Fatal("a request went out for a paid OpenRouter model")
+		t.Fatal("a request went out for an unpriced paid OpenRouter model")
+	}
+	a.Price = [2]float64{0.1, 0.4}
+	a.chat(context.Background(), []Message{{Role: "user", Content: "hi"}}, nil)
+	if !asked {
+		t.Fatal("a priced paid OpenRouter model was never asked")
 	}
 }
 

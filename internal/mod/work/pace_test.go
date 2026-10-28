@@ -360,6 +360,42 @@ func TestCheckRankFixes(t *testing.T) {
 	}
 }
 
+// While main is red, the fix whose brief names one of its failing tests goes
+// ahead of every other fix, though behind main's own measurement; once main
+// passes it is one fix among the rest (issue #1877).
+func TestCheckRankRedMainFix(t *testing.T) {
+	m, _, _ := helperRig(t)
+	m.mu.Lock()
+	m.tasks["red"] = &Task{ID: "red", Project: "p", SHA: "s1", Stage: StageTesting, Aim: AimFix, Title: "Fix the flaky example.com/x/internal/core::TestStaleModuleCacheRunsAgain"}
+	m.tasks["why"] = &Task{ID: "why", Project: "p", SHA: "s2", Stage: StageTesting, Aim: AimFix, AimWhy: "TestMerge fails on main"}
+	m.tasks["fix"] = &Task{ID: "fix", Project: "p", SHA: "s3", Stage: StageTesting, Aim: AimFix, Title: "TestStaleModuleCacheRunsAgainSlowly fails"}
+	m.tasks["gain"] = &Task{ID: "gain", Project: "p", SHA: "s4", Stage: StageTesting, Known: "TestMerge"}
+	m.mainFails["p"] = []string{"TestStaleModuleCacheRunsAgain", "TestMerge/sub_case"}
+	m.mu.Unlock()
+	for sha, want := range map[string]int{"s1": rankRedFix, "s2": rankRedFix, "s3": rankFix, "s4": 0} {
+		if got := m.checkRank("p", sha, "test"); got != want {
+			t.Errorf("while main is red, rank of %s: %d, want %d", sha, got, want)
+		}
+	}
+	if got := m.checkRank("other", "s1", "test"); got != 0 {
+		t.Errorf("another project's sha ranked %d", got)
+	}
+	done := m.MeasuringMain("p", "main1")
+	if m.checkRank("p", "main1", "test") <= m.checkRank("p", "s1", "test") {
+		t.Error("the red main's fix ranks with main's own measurement")
+	}
+	done()
+	m.mu.Lock()
+	delete(m.mainFails, "p")
+	m.mu.Unlock()
+	if got := m.checkRank("p", "s1", "test"); got != rankFix {
+		t.Errorf("main green: the fix ranked %d", got)
+	}
+	if RankWhy(rankRedFix) != "fixes red main" || RankWhy(rankMain) != "measures main" || RankWhy(rankFix) != "a fix" {
+		t.Error("RankWhy doesn't tell the ranks apart")
+	}
+}
+
 // Main's own measurement goes ahead of every task's check while it runs,
 // and keeps its place once done (issue #1078).
 func TestCheckRankMainFirst(t *testing.T) {
@@ -551,6 +587,68 @@ func TestPaceComesBackToTheStartUnderLoadAlone(t *testing.T) {
 	fresh := pace{limit: 4, start: 4, at: now, loadCuts: true}
 	if l := fresh.next(now.Add(paceStep), 4, true, load, true, 4, 0); l != 3 {
 		t.Fatalf("checks at their start under load alone: %d, want 3", l)
+	}
+}
+
+// While the reviewer's plan runs ahead of its week, a review goes on the
+// cheaper model and the task's record says so; a change in a high class
+// still needs its second, separate read (the warden's and tribunal's prompts
+// are high so they never land on one), and that read is paced too.
+func TestPaceHoldsReadsAheadOfTheWeek(t *testing.T) {
+	for _, ahead := range []bool{true, false} {
+		m, task, p, _ := gateRigSeeded(t, false, map[string]string{".hive/project.json": `{"test": "true", "high": ["feature.txt"]}`}, map[string]string{"feature.txt": "y"})
+		pick := m.Agents.Route("reviewer", p.Name)[0]
+		week := 0.1
+		if ahead {
+			week = 0.5
+		}
+		reset := time.Now().Add(3 * time.Hour)
+		m.C.J.MustAppend("plan.usage", core.Plan{Harness: pick.Harness, Limit: harness.RateLimit{Status: "allowed", ResetsAt: reset, Window: "five_hour",
+			Windows: map[string]harness.Window{"five_hour": {Utilization: 0.1, ResetsAt: reset},
+				"seven_day": {Utilization: week, ResetsAt: time.Now().Add(6 * 24 * time.Hour)}}}})
+		if err := testStep(m, task, p); err != nil || task.Stage != StageReviewing {
+			t.Fatalf("stage %q, err %v", task.Stage, err)
+		}
+		for read := 1; read <= 2; read++ {
+			if err := m.review(task, p); err != nil {
+				t.Fatal(err)
+			}
+			r, _ := m.C.Runs.Get(task.Reviewer)
+			if paced := r.Inputs["paced"] != ""; paced != ahead || logged(task, "ahead of its week") != ahead {
+				t.Fatalf("ahead %v, read %d: paced input %v, log %v", ahead, read, paced, task.Log)
+			}
+			if read == 2 && !strings.HasSuffix(r.ID, "-read2") {
+				t.Fatalf("ahead %v: the second read is %q", ahead, r.ID)
+			}
+			m.C.J.MustAppend("run.turn_ended", map[string]any{"id": r.ID, "turn": 1, "status": core.StatusDone,
+				"result": harness.Result{Structured: []byte(`{"verdict":"land","summary":"ok","token":"` + reviewToken(r.ID) + `"}`)}})
+			if err := m.review(task, p); err != nil {
+				t.Fatal(err)
+			}
+			main, _ := m.C.Effects.Sync(p)
+			ch, _ := m.C.Effects.Classify(p, main, task.SHA)
+			if len(ch.High) != 1 || m.C.Effects.Reviewed(p, ch, task.SHA) != (read == 2) {
+				t.Fatalf("ahead %v: high %v, reviewed after %d reads: %v", ahead, ch.High, read, read != 2)
+			}
+		}
+	}
+}
+
+// The cheaper read is sonnet where the reviewer's route is opus.
+func TestCheaperRead(t *testing.T) {
+	for _, c := range []struct {
+		route []core.Pick
+		want  string
+	}{
+		{[]core.Pick{{Harness: "claude", Model: "opus"}}, "claude:sonnet"},
+		{[]core.Pick{{Harness: "claude", Model: "claude-opus-5-5"}}, "claude:claude-sonnet-5-5"},
+		{[]core.Pick{{Harness: "codex", Model: "opus"}, {Harness: "claude", Model: "haiku"}}, "claude:haiku"},
+		{[]core.Pick{{Harness: "claude", Model: "sonnet"}}, "claude:sonnet"},
+		{[]core.Pick{{Harness: "codex", Model: "gpt-5.5"}}, "codex:gpt-5.5"},
+	} {
+		if got := cheaper(c.route).String(); got != c.want {
+			t.Errorf("%v: %s, want %s", c.route, got, c.want)
+		}
 	}
 }
 
