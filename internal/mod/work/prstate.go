@@ -311,7 +311,7 @@ func (m *Module) ownRevert(r core.Run, t Task, verb string) error {
 		return nil
 	}
 	if of, ok := m.Get(t.RevertOf); ok && m.spokenFor(r, of.Worker) {
-		return fmt.Errorf("task %s reverts your own change (task %s), so you can't %s its PR: ask another agent (hive agent message --to lead, or a run on related work that isn't yours)", t.ID, of.ID, verb)
+		return fmt.Errorf("task %s reverts your own change (task %s), so you can't %s its PR: ask another agent on the project, not one you spawned (hive agent message --to <run id>)", t.ID, of.ID, verb)
 	}
 	return nil
 }

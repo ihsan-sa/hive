@@ -656,7 +656,7 @@ func (m *Module) opAim(r core.Run, args json.RawMessage) (any, error) {
 		return nil, fmt.Errorf("task %s has already ended (%s)", t.ID, t.Stage)
 	}
 	if aim != AimGain && t.Gain() && t.Gate != nil && t.Gate.Outcome == core.GateRollback && m.spokenFor(r, t.Worker) {
-		return nil, fmt.Errorf("task %s was rolled back by the recursive gate, so it can't stop aiming at a gain on its own worker's word, nor a helper it spawned: ask another agent (hive agent message --to lead, or a run on related work that isn't yours), who can set its aim", t.ID)
+		return nil, fmt.Errorf("task %s was rolled back by the recursive gate, so it can't stop aiming at a gain on its own worker's word, nor a helper it spawned: ask another agent on the project, not one its worker spawned (hive agent message --to <run id>), who can set its aim", t.ID)
 	}
 	ask := aimAsk{aim: aim, why: core.Clip(strings.TrimSpace(a.Why), 300), by: r.ID}
 	if t.Aim != ask.aim || t.AimWhy != ask.why {

@@ -746,7 +746,7 @@ func TestAimWhileAStepRuns(t *testing.T) {
 }
 
 // A worker whose gain the gate rolled back can't make it a fix on its own
-// word, which would let a change move its own bar; the lead can.
+// word, which would let a change move its own bar; another agent can.
 func TestWorkerCantUnaimARolledBackGain(t *testing.T) {
 	m, task, p, _, _ := selfRig(t, map[string]string{"feature.go": "package p\n"}, core.GateRollback)
 	gateOnce(t, m, task, p)
@@ -754,7 +754,7 @@ func TestWorkerCantUnaimARolledBackGain(t *testing.T) {
 		t.Fatalf("stage %q: want sent back", task.Stage)
 	}
 	own := core.Run{ID: task.Worker, Role: "worker"}
-	if _, err := m.opAim(own, []byte(`{"aim":"fix","why":"it is a fix really"}`)); err == nil || !strings.Contains(err.Error(), "lead") {
+	if _, err := m.opAim(own, []byte(`{"aim":"fix","why":"it is a fix really"}`)); err == nil || !strings.Contains(err.Error(), "ask another agent") {
 		t.Fatalf("a worker turned its rolled-back gain into a fix: %v", err)
 	}
 	if _, err := m.opAim(core.Run{ID: "lead-1", Role: "lead"}, []byte(`{"task":"`+task.ID+`","aim":"fix","why":"it is a fix"}`)); err != nil {
