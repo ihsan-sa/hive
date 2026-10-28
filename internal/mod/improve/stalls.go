@@ -317,7 +317,7 @@ func (m *Module) judge(cur Stall, run, chat, thread string, took []float64, floo
 	m.C.J.MustAppend("stall.saved", *s)
 	text := m.alertStall(*s)
 	if handed {
-		m.Chat.NotifyAbout(s.Project, chat, thread, "Stuck: "+text+retryHint(s.Key))
+		m.Chat.Notify(chat, thread, "Stuck: "+text+retryHint(s.Key))
 	}
 }
 

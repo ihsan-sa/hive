@@ -1896,7 +1896,7 @@ func (m *Module) test(t *Task, p core.Project) error {
 			m.C.Person.Ask(a)
 		}
 		if who == "person" {
-			m.askPerson(t, approveNotice(t.Label(), ch.Protected, t.PR.URL))
+			m.notify(t, approveNotice(t.Label(), ch.Protected, t.PR.URL))
 		}
 	case ch.Small || m.C.Effects.Reviewed(p, ch, t.SHA):
 		t.Stage = StageMerging
@@ -2602,7 +2602,7 @@ func (m *Module) waitDraft(t *Task, pr core.PR) error {
 	if !t.DraftTold && time.Since(t.DraftSince) >= draftTell {
 		t.DraftTold = true
 		m.save(t, "told the lead the draft has waited since "+t.DraftSince.Format("2006-01-02 15:04Z"))
-		m.Chat.ToLead(m.Chat.LeadFor(t.Project, t.Chat), t.Thread, fmt.Sprintf("%q (task %s) has waited since %s: %s.", t.Label(), strings.TrimSpace(t.ID+" "+t.PR.URL), t.DraftSince.Format("2006-01-02 15:04Z"), reason))
+		m.Chat.ToLead(t.Chat, t.Thread, fmt.Sprintf("%q (task %s) has waited since %s: %s.", t.Label(), strings.TrimSpace(t.ID+" "+t.PR.URL), t.DraftSince.Format("2006-01-02 15:04Z"), reason))
 	}
 	return nil
 }
@@ -3813,7 +3813,7 @@ func (m *Module) Stop(id, reason string) error {
 func (m *Module) giveUp(t *Task, reason string) {
 	t.Stage, t.Reason = StageStopped, reason
 	m.save(t, core.Clip(reason, 300))
-	m.Chat.ToLead(m.Chat.LeadFor(t.Project, t.Chat), t.Thread, fmt.Sprintf("Stopped %q (task %s): %s\n\nIt's yours: bring it back with recheck, or leave it.", t.Label(), strings.TrimSpace(t.ID+" "+t.PR.URL), core.Clip(reason, 1500)))
+	m.Chat.ToLead(t.Chat, t.Thread, fmt.Sprintf("Stopped %q (task %s): %s\n\nIt's yours: bring it back with recheck, or leave it.", t.Label(), strings.TrimSpace(t.ID+" "+t.PR.URL), core.Clip(reason, 1500)))
 }
 
 // woke reports whether a blocked task's worker is taking turns again.
