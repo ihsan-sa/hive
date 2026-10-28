@@ -229,7 +229,7 @@ func TestStaleReadingKeepsThePark(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer j.Close()
-	rs := NewRuns(Workspace{Root: t.TempDir()}, j, nil, noOwnLogin{}, func() []string { return nil })
+	rs := NewRuns(stopsAt(t, OldUsageStops), j, nil, noOwnLogin{}, func() []string { return nil })
 	reset := time.Now().Add(time.Hour)
 	read := func(status string, u float64, at time.Time) {
 		rs.append("plan.usage", Plan{Harness: "claude", Login: "claude", Limit: harness.RateLimit{Status: status, ResetsAt: at, Window: "five_hour",
@@ -257,7 +257,7 @@ func TestStaleReadingKeepsTheWeeklyStop(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer j.Close()
-	rs := NewRuns(Workspace{Root: t.TempDir()}, j, nil, noOwnLogin{}, func() []string { return nil })
+	rs := NewRuns(stopsAt(t, OldUsageStops), j, nil, noOwnLogin{}, func() []string { return nil })
 	week := time.Now().Add(3 * 24 * time.Hour)
 	read := func(five time.Time, weekly float64, weekReset time.Time) {
 		rs.append("plan.usage", Plan{Harness: "claude", Login: "claude", Limit: harness.RateLimit{Status: "allowed", ResetsAt: five, Window: "five_hour",
@@ -350,7 +350,7 @@ func TestWeeklyStopParksALogin(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer j.Close()
-	rs := NewRuns(Workspace{Root: t.TempDir()}, j, nil, twoLogins{}, func() []string { return nil })
+	rs := NewRuns(stopsAt(t, OldUsageStops), j, nil, twoLogins{}, func() []string { return nil })
 	now := time.Now()
 	five, week := now.Add(time.Hour), now.Add(5*time.Hour+24*time.Hour)
 	read := func(login string, weekly float64, resets time.Time) {
@@ -373,7 +373,7 @@ func TestWeeklyStopParksALogin(t *testing.T) {
 		t.Fatalf("headroom %v, want the other login's 0.5", h)
 	}
 	read("claude:work", 0.93, week.Add(time.Hour))
-	if _, _, err := rs.pickLogin("claude", "", t.TempDir(), false, false); err == nil || !strings.Contains(err.Error(), "90% of its weekly window") {
+	if _, _, err := rs.pickLogin("claude", "", t.TempDir(), false, false); err == nil || !strings.Contains(err.Error(), "90% of its week,") {
 		t.Fatalf("with every login past 90%% of its week: %v", err)
 	}
 	if at := rs.freeAt("claude", "opus", false); at.Before(week) || at.After(week.Add(time.Minute)) {
@@ -393,7 +393,7 @@ func TestWeeklyStopParksALogin(t *testing.T) {
 		t.Fatalf("a check with the machine's login at 95%% picked %s (%v)", l.Key(), err)
 	}
 	read("claude:work", 0.97, week.Add(time.Hour))
-	if _, _, err := rs.pickLogin("claude", "", t.TempDir(), false, true); err == nil || !strings.Contains(err.Error(), "95% of its weekly window") {
+	if _, _, err := rs.pickLogin("claude", "", t.TempDir(), false, true); err == nil || !strings.Contains(err.Error(), "95% of its week,") {
 		t.Fatalf("a check with every login at 95%% of its week: %v", err)
 	}
 	if at := rs.freeAt("claude", "opus", true); at.Before(week) || at.After(week.Add(time.Minute)) {
@@ -419,7 +419,7 @@ func TestFiveHourStopParksALogin(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer j.Close()
-	rs := NewRuns(Workspace{Root: t.TempDir()}, j, nil, twoLogins{}, func() []string { return nil })
+	rs := NewRuns(stopsAt(t, OldUsageStops), j, nil, twoLogins{}, func() []string { return nil })
 	now := time.Now()
 	five, week := now.Add(time.Hour), now.Add(3*24*time.Hour)
 	read := func(login string, used float64, resets time.Time) {
@@ -463,7 +463,7 @@ func TestFiveHourStopParksALogin(t *testing.T) {
 		t.Fatal("a stale reading from before the stop lifted it")
 	}
 	read("claude:work", 1, five.Add(time.Hour))
-	if _, _, err := rs.pickLogin("claude", "", t.TempDir(), false, false); err == nil || !strings.Contains(err.Error(), "90% of its five-hour one") {
+	if _, _, err := rs.pickLogin("claude", "", t.TempDir(), false, false); err == nil || !strings.Contains(err.Error(), "90% of its five-hour)") {
 		t.Fatalf("with the other login at its limit: %v", err)
 	}
 	// The five hours' last tenth is the person's: the checks' reserve is the week's alone.
@@ -490,7 +490,7 @@ func TestFiveHourStopKeepsOneLoginsTenth(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer j.Close()
-	rs := NewRuns(Workspace{Root: t.TempDir()}, j, nil, twoLogins{}, func() []string { return nil })
+	rs := NewRuns(stopsAt(t, OldUsageStops), j, nil, twoLogins{}, func() []string { return nil })
 	five := time.Now().Add(time.Hour)
 	used := map[string]float64{"claude": 0.80, "claude:work": 0.81}
 	read := func(login string) {
@@ -515,7 +515,7 @@ func TestFiveHourStopKeepsOneLoginsTenth(t *testing.T) {
 	if full < kept {
 		full, kept = kept, full
 	}
-	if full < 1 || kept < FiveHourStop || kept >= FiveHourStop+0.03 {
+	if full < 1 || kept < 0.90 || kept >= 0.93 {
 		t.Fatalf("five hours used %v: want one login at its limit and the other kept at 90%%", used)
 	}
 }
@@ -531,7 +531,7 @@ func TestPlansShowTheLoginKeptAtFiveHours(t *testing.T) {
 	}
 	defer j.Close()
 	tokens := &renewLimited{}
-	rs := NewRuns(Workspace{Root: t.TempDir()}, j, nil, tokens, func() []string { return nil })
+	rs := NewRuns(stopsAt(t, OldUsageStops), j, nil, tokens, func() []string { return nil })
 	now := time.Now()
 	five := now.Add(time.Hour)
 	read := func(login string, used float64) {
@@ -585,4 +585,62 @@ func (r *renewLimited) LimitedUntil(key string) time.Time {
 		return r.until
 	}
 	return time.Time{}
+}
+
+// stopsAt is a workspace whose config sets the usage stops u.
+func stopsAt(t *testing.T, u UsageStops) Workspace {
+	ws := Workspace{Root: t.TempDir()}
+	cfg := DefaultConfig()
+	cfg.UsageStops = u
+	if err := ws.SaveConfig(cfg); err != nil {
+		t.Fatal(err)
+	}
+	return ws
+}
+
+// The usage stops are the person's setting, not a rule for every install
+// (the person, 10-27): a new install runs each login to its limit, a config
+// from before the setting keeps the 95% and 90% it had, and stops the person
+// sets hold from the next tick.
+func TestUsageStopsAreASetting(t *testing.T) {
+	ws := Workspace{Root: t.TempDir()}
+	if err := ws.Init(); err != nil {
+		t.Fatal(err)
+	}
+	if u := ws.LoadConfig().UsageStops; u != (UsageStops{}) {
+		t.Fatalf("a new install stops at %+v, want none", u)
+	}
+	old := Workspace{Root: t.TempDir()}
+	os.MkdirAll(filepath.Dir(old.ConfigPath()), 0o755)
+	os.WriteFile(old.ConfigPath(), []byte(`{"harness": "claude", "model": "opus"}`), 0o600)
+	if u := old.LoadConfig().UsageStops; u != OldUsageStops {
+		t.Fatalf("a config from before usage_stops stops at %+v, want %+v", u, OldUsageStops)
+	}
+	bad := DefaultConfig()
+	bad.UsageStops.Week = 150
+	if bad.Check() == nil {
+		t.Fatal("a stop at 150% passed the check")
+	}
+
+	j, err := OpenJournal(filepath.Join(t.TempDir(), "j.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer j.Close()
+	rs := NewRuns(ws, j, nil, noOwnLogin{}, func() []string { return nil })
+	now := time.Now()
+	rs.append("plan.usage", Plan{Harness: "claude", Login: "claude", Limit: harness.RateLimit{Status: "allowed_warning", ResetsAt: now.Add(time.Hour), Window: "five_hour", Utilization: 0.97,
+		Windows: map[string]harness.Window{"five_hour": {Utilization: 0.97, ResetsAt: now.Add(time.Hour)}, "seven_day": {Utilization: 0.98, ResetsAt: now.Add(48 * time.Hour)}}}})
+	if p := rs.Plans()[0]; p.Parked(now) || strings.Contains(p.Standing(now), "paused") {
+		t.Fatalf("with no stops a login short of its limit is parked: %q", p.Standing(now))
+	}
+	cfg := ws.LoadConfig()
+	cfg.UsageStops = UsageStops{FiveHour: 96}
+	rs.tickDown(cfg)
+	if s := rs.Plans()[0].Standing(now); s != "paused at 96% of its five-hour window until it resets" {
+		t.Fatalf("with the person's stop at 96%% of the five hours: %q", s)
+	}
+	if _, _, err := rs.pickLogin("claude", "", t.TempDir(), false, false); err == nil || !strings.Contains(err.Error(), "its stop (96% of its five-hour)") {
+		t.Fatalf("picked past the stop: %v", err)
+	}
 }

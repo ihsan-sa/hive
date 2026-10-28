@@ -182,6 +182,24 @@ func TestUpdateWithoutNotesLinksThem(t *testing.T) {
 	}
 }
 
+// Past 1.0, a new major version means an update would break the setup: the
+// auto-update leaves it for the person, whose own update installs it.
+func TestAutoUpdateStopsAtANewMajor(t *testing.T) {
+	serve(t, "v2.0.0", build("new"), false)
+	m, exe := releaseAt(t, "v1.4.2", "me/hive")
+	cfg := m.C.WS.LoadConfig()
+	cfg.AutoUpdate = true
+	m.C.WS.SaveConfig(cfg)
+	msg, err := m.AutoUpdate()
+	if raw, _ := os.ReadFile(exe); err != nil || !strings.Contains(msg, "v2.0.0 is a new major version") || string(raw) != "old" {
+		t.Fatalf("auto-update crossed a major: %q, %v, binary %q", msg, err, raw)
+	}
+	msg, err = m.Update("")
+	if raw, _ := os.ReadFile(exe); err != nil || string(raw) != "new" {
+		t.Fatalf("the person's update: %q, %v, binary %q", msg, err, raw)
+	}
+}
+
 // A download whose checksum doesn't match is never installed.
 func TestChecksumMismatchKeepsBinary(t *testing.T) {
 	serve(t, "v9.9.9", build("new"), true)
@@ -1176,15 +1194,65 @@ func TestReleaseNumbersPastEveryTag(t *testing.T) {
 func TestNextTag(t *testing.T) {
 	for _, c := range []struct {
 		tags []string
+		line string
 		want string
 	}{
-		{nil, "v0.0.1"},
-		{[]string{"dev", "probe-3"}, "v0.0.1"},
-		{[]string{"v0.1.3", "v0.1.6", "v0.1.4", "v0.1.10", "v0.1.9"}, "v0.1.11"},
-		{[]string{"v0.2.0", "v0.1.9"}, "v0.2.1"},
+		{nil, "", "v0.0.1"},
+		{[]string{"dev", "probe-3"}, "", "v0.0.1"},
+		{[]string{"v0.1.3", "v0.1.6", "v0.1.4", "v0.1.10", "v0.1.9"}, "", "v0.1.11"},
+		{[]string{"v0.2.0", "v0.1.9"}, "", "v0.2.1"},
+		{[]string{"v0.1.70"}, "0.1", "v0.1.71"},
+		{[]string{"v0.1.70"}, "1.0", "v1.0.0"},
+		{[]string{"v1.0.0"}, "1.0", "v1.0.1"},
+		{[]string{"v1.0.3"}, "0.1", "v1.0.4"}, // a lower line never goes back
+		{[]string{"v1.4.2"}, "2.0", "v2.0.0"},
+		{[]string{"v0.1.70"}, "one", "v0.1.71"},
 	} {
-		if got := nextTag(c.tags); got != c.want {
+		if got := nextTag(c.tags, c.line); got != c.want {
 			t.Errorf("nextTag(%v) = %s; want %s", c.tags, got, c.want)
+		}
+	}
+}
+
+// A VERSION that names a new major line holds the cut for the person, who
+// says when the Hive is 1.0 and when an update breaks a setup; their word
+// cuts the line's first release.
+func TestNewMajorWaitsForThePerson(t *testing.T) {
+	m, n, merged, land := selfHive(t)
+	m.Line = func(core.Project, string) (string, error) { return "1.0\n", nil }
+	merged(1, "a1", "m1")
+	land("a1", "r1")
+	m.AfterKept("hive", "m1")
+	asks := m.C.Person.Open()
+	if len(n.got) != 0 || len(asks) != 1 || !strings.Contains(asks[0].Title, "it starts v1.0.0, a new major version") {
+		t.Fatalf("a new major went out without the person: %v %+v", n.got, asks)
+	}
+	asks[0].Answer = "release"
+	m.OnPerson(asks[0])
+	if _, ok := n.got["v1.0.0"]; !ok || len(n.got) != 1 {
+		t.Fatalf("the person's word should cut v1.0.0: %v", n.got)
+	}
+	merged(2, "a2", "m2")
+	land("a2", "r2")
+	m.AfterKept("hive", "m2")
+	if _, ok := n.got["v1.0.1"]; !ok || len(m.C.Person.Open()) != 0 {
+		t.Fatalf("the line's next release should go out by itself: %v %+v", n.got, m.C.Person.Open())
+	}
+}
+
+func TestBreaking(t *testing.T) {
+	for _, c := range []struct {
+		from, to string
+		want     bool
+	}{
+		{"v0.1.70", "v0.1.71", false},
+		{"v0.1.70", "v1.0.0", false}, // 1.0 is stable, not breaking
+		{"v1.0.3", "v1.2.0", false},
+		{"v1.4.2", "v2.0.0", true},
+		{"0.0.0-dev", "v2.0.0", false}, // a source build doesn't update
+	} {
+		if got := Breaking(c.from, c.to); got != c.want {
+			t.Errorf("Breaking(%s, %s) = %v; want %v", c.from, c.to, got, c.want)
 		}
 	}
 }
