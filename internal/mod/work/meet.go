@@ -31,15 +31,24 @@ type neighbour struct {
 // share nothing to settle.
 func (m *Module) briefFiles(t Task) []string {
 	root := m.C.WS.Project(t.Project)
-	union := unionRules(root)
 	var out []string
 	for _, p := range pathLike.FindAllString(t.Title+"\n"+t.Done+"\n"+t.Known, -1) {
 		p = path.Clean(strings.TrimRight(strings.TrimPrefix(p, "./"), "."))
-		if p == ".." || strings.HasPrefix(p, "../") || p == ".hive/goals.md" || p == ".hive/project.json" || isUnion(union, p) || slices.Contains(out, p) {
+		if p == ".." || strings.HasPrefix(p, "../") || p == ".hive/goals.md" || p == ".hive/project.json" || slices.Contains(out, p) {
 			continue
 		}
 		if fi, err := os.Lstat(filepath.Join(root, filepath.FromSlash(p))); err == nil && fi.Mode().IsRegular() {
 			out = append(out, p)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	// The project's clone, never a worker's checkout, says which merge as union.
+	attrs, _ := core.Git(root, append([]string{"check-attr", "merge", "--"}, out...)...)
+	for _, l := range strings.Split(attrs, "\n") {
+		if f, ok := strings.CutSuffix(strings.TrimSpace(l), ": merge: union"); ok {
+			out = slices.DeleteFunc(out, func(p string) bool { return p == f })
 		}
 	}
 	return out

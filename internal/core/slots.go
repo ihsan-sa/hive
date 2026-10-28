@@ -38,7 +38,7 @@ type SlotUse struct {
 
 type slotWait struct {
 	SlotUse
-	ready chan struct{}
+	ready chan bool // true: started; false: dropped from the line (Drop)
 }
 
 var slotSeq int64
@@ -96,6 +96,13 @@ func (s *Slots) Fill() {
 
 // Acquire waits for a slot, by rank and then in order, and returns its release.
 func (s *Slots) Acquire(project, sha, kind string) (release func()) {
+	release, _ = s.Take(project, sha, kind)
+	return release
+}
+
+// Take is Acquire, reporting false, with a release that does nothing, when
+// the wait was dropped (Drop) before a slot came.
+func (s *Slots) Take(project, sha, kind string) (release func(), ok bool) {
 	s.mu.Lock()
 	rank := s.rank
 	s.mu.Unlock()
@@ -105,11 +112,13 @@ func (s *Slots) Acquire(project, sha, kind string) (release func()) {
 	}
 	s.mu.Lock()
 	slotSeq++
-	w := slotWait{SlotUse{Project: project, SHA: sha, Kind: kind, Since: time.Now().UTC(), Rank: r, id: slotSeq}, make(chan struct{})}
+	w := slotWait{SlotUse{Project: project, SHA: sha, Kind: kind, Since: time.Now().UTC(), Rank: r, id: slotSeq}, make(chan bool, 1)}
 	s.waiting = append(s.waiting, w)
 	s.fill()
 	s.mu.Unlock()
-	<-w.ready
+	if !<-w.ready {
+		return func() {}, false
+	}
 	var once sync.Once
 	return func() {
 		once.Do(func() {
@@ -118,7 +127,26 @@ func (s *Slots) Acquire(project, sha, kind string) (release func()) {
 			s.running = slices.DeleteFunc(s.running, func(u SlotUse) bool { return u.id == w.id })
 			s.fill()
 		})
-	}
+	}, true
+}
+
+// Drop takes what waits for a slot on sha in project out of the line, so a
+// check nobody wants any more (its pull request closed) doesn't hold a place
+// or run once its turn comes; one already running goes on. It returns how
+// many it dropped.
+func (s *Slots) Drop(project, sha string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := 0
+	s.waiting = slices.DeleteFunc(s.waiting, func(w slotWait) bool {
+		if w.Project != project || w.SHA != sha {
+			return false
+		}
+		w.ready <- false
+		n++
+		return true
+	})
+	return n
 }
 
 // fill starts the highest-ranked, then oldest, waiters while there is room;
@@ -140,7 +168,7 @@ func (s *Slots) fill() {
 		s.waiting = slices.Delete(s.waiting, next, next+1)
 		w.Since = time.Now().UTC()
 		s.running = append(s.running, w.SlotUse)
-		close(w.ready)
+		w.ready <- true
 	}
 }
 

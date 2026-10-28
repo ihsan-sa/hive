@@ -516,3 +516,43 @@ func TestNotesReadOnTheLogin(t *testing.T) {
 		t.Fatalf("update: %q, %v, reads %q", msg, err, f.gets)
 	}
 }
+
+// Following pre-releases, --release to one whose checks still run here (a
+// hand update past a slow follow) moves the Hive forward and leaves
+// auto-update on; one older than the newest safe here, past the latest
+// release though it is, is a step back: from a step-back pin it stays pinned
+// through the restart, and auto-update doesn't move past it (issue #1795).
+func TestPreReleaseStepBackStaysPinned(t *testing.T) {
+	m, exe := releaseAt(t, "v0.1.13", "me/hive")
+	g := preSite(t, m)
+	cfg := m.C.WS.LoadConfig()
+	cfg.Channel, cfg.AutoUpdate = Prerelease, true
+	m.C.WS.SaveConfig(cfg)
+	msg, err := m.Update("v0.1.15")
+	if cfg := m.C.WS.LoadConfig(); err != nil || !strings.HasPrefix(msg, "updated to v0.1.15\n") || cfg.ReleasePin != "" || !cfg.AutoUpdate {
+		t.Fatalf("past a slow follow: %q, %v; pin %q, auto_update %v", msg, err, cfg.ReleasePin, cfg.AutoUpdate)
+	}
+
+	m, exe = releaseAt(t, "v0.1.12", "me/hive")
+	g = preSite(t, m)
+	g.setJobs("v0.1.15", gatesFor("success", "success"))
+	cfg = m.C.WS.LoadConfig()
+	cfg.Channel, cfg.AutoUpdate, cfg.PinnedAuto, cfg.ReleasePin = Prerelease, false, true, "v0.1.12"
+	m.C.WS.SaveConfig(cfg)
+	if msg, err := m.Update("v0.1.13"); err != nil || !strings.Contains(msg, "updated to v0.1.13, pinned") {
+		t.Fatalf("bisecting forward: %q, %v", msg, err)
+	}
+	core.Version = "v0.1.13" // the restart
+	restarted := &Module{C: m.C}
+	if msg, err := restarted.AutoUpdate(); err != nil || !strings.HasPrefix(msg, "pinned to v0.1.13") {
+		t.Fatalf("auto-update after the restart: %q, %v", msg, err)
+	}
+	restarted.follow()
+	time.Sleep(50 * time.Millisecond)
+	if cfg := m.C.WS.LoadConfig(); cfg.ReleasePin != "v0.1.13" || cfg.AutoUpdate {
+		t.Fatalf("pin %q, auto_update %v", cfg.ReleasePin, cfg.AutoUpdate)
+	}
+	if raw, _ := os.ReadFile(exe); string(raw) != "v13" {
+		t.Fatalf("binary %q", raw)
+	}
+}

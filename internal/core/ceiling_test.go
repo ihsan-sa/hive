@@ -147,9 +147,31 @@ func TestAskCeilingSkipsRuledOutMentions(t *testing.T) {
 			t.Errorf("AskCeilingMatch(%q) = %q, want %q", text, k, want)
 		}
 	}
-	// The guard on the script that would run stays strict.
-	if CeilingGuard("# do not set OLLAMA_HOST=0.0.0.0\nollama serve", nil, false) == nil {
-		t.Error("the script guard skipped a ruled-out mention")
+	// The guard on the script that would run counts every mention outside a
+	// comment, and in a comment every one the comment doesn't rule out.
+	for _, script := range []string{
+		"# do not set OLLAMA_HOST=0.0.0.0\nOLLAMA_HOST=0.0.0.0 ollama serve",
+		"echo 'no tokens' && cat ~/.netrc",
+		"export GH_TOKEN=x # no tokens here",
+		"# rotate the token first\n./renew.sh",
+		"# don't forget the token\n./renew.sh",
+		"# no firewall on this box\nsystemctl stop ufw",
+		"# no reason not to expose it\n./serve.sh",
+		"cat <<EOF\nno tokens\nEOF",
+	} {
+		if CeilingGuard(script, nil, false) == nil {
+			t.Errorf("the script guard let %q run", script)
+		}
+	}
+	// A whole-line comment never runs: what it rules out isn't asked for.
+	for _, script := range []string{
+		"# do not set OLLAMA_HOST=0.0.0.0\nollama serve",
+		"set -u\n  # Scrubbed environment: no tokens, a throwaway HOME/config (so gate.key and Go caches stay in $D), host proxy kept if any.\nenv -i HOME=$D/home go test ./...",
+		"# local repos only (no org, no tokens)\ngit clone -q https://github.com/ihsan-sa/hive.git",
+	} {
+		if err := CeilingGuard(script, nil, false); err != nil {
+			t.Errorf("CeilingGuard(%q) = %v, want nil", script, err)
+		}
 	}
 	if CeilingGuard("systemctl disable --now firewalld", nil, false) == nil {
 		t.Error("the script guard let a firewall be turned off")
