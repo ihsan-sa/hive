@@ -264,7 +264,12 @@ func (m *Module) record(ms Measurement) {
 // measure runs tests and the score on sha in clean checkouts. cant is the
 // check that couldn't start for want of a tool (its CantRun set), which is no
 // result either way; a check that did run clears the alert for its kind.
-func (m *Module) measure(p core.Project, sha string) (ok bool, score *float64, note string, cant core.Check) {
+// A red on quarantined tests alone, quarantined on evidence from outside
+// task in packages files (what sha changed) don't touch, is read past as the
+// PRs' checks read it (core.Effects.ExcusedLocal), so one known-broken test
+// can't leave main unscored. A merge (task set) whose files can't be read
+// has nothing excused.
+func (m *Module) measure(p core.Project, sha, task string, files []string) (ok bool, score *float64, note string, cant core.Check) {
 	cfg := m.C.Effects.Config(p, sha)
 	tc := m.C.Effects.RunCheck(p, sha, "test", cfg.Test)
 	if tc.CantRun != "" {
@@ -272,7 +277,13 @@ func (m *Module) measure(p core.Project, sha string) (ok bool, score *float64, n
 	}
 	m.Work.RanCheck(p.Name, "test")
 	flaky := "" // a red that passed when what failed ran again
-	if !tc.OK {
+	var excused []string
+	if task == "" || files != nil {
+		excused = m.C.Effects.ExcusedLocal(p, sha, task, files, tc)
+	}
+	if len(excused) > 0 {
+		flaky = "tests red only on quarantined " + strings.Join(excused, ", ") + " (read past, as PRs' checks do); "
+	} else if !tc.OK {
 		sum, flake, rc := m.redTests(p, sha, cfg.Test, tc)
 		if rc.CantRun != "" {
 			rc.Kind = "test"
@@ -298,6 +309,21 @@ func (m *Module) measure(p core.Project, sha string) (ok bool, score *float64, n
 		return true, nil, flaky + "score did not produce a number: " + core.Clip(sc.Output, 600), cant
 	}
 	return true, sc.Score, flaky + fmt.Sprintf("score %g", *sc.Score), cant
+}
+
+// mergeFiles is what t's merge changed on main: from the parent of its first
+// merge (a checkpoint merged earlier is part of the change) to its merge.
+// It is nil when that can't be read, and measure then excuses nothing.
+func (m *Module) mergeFiles(p core.Project, t work.Task) []string {
+	first := t.MergeSHA
+	if len(t.Banks) > 0 {
+		first = t.Banks[0].MergeSHA
+	}
+	out, err := core.Git(m.C.WS.Project(p.Name), "-c", "core.quotePath=false", "diff", "--name-only", "-z", "--no-renames", first+"^1", t.MergeSHA)
+	if err != nil {
+		return nil
+	}
+	return strings.FieldsFunc(out, func(r rune) bool { return r == 0 })
 }
 
 // bestAt is the commit the best kept score was read at: the newest kept
@@ -470,7 +496,7 @@ func (m *Module) baseline(p core.Project) {
 	}
 	defer m.Work.MeasuringMain(p.Name, main)() // its checks go ahead of the PRs'
 	cfg := m.C.Effects.Config(p, main)
-	ok, score, note, cant := m.measure(p, main)
+	ok, score, note, cant := m.measure(p, main, "", nil)
 	ms := Measurement{Project: p.Name, SHA: main, TestsOK: ok, Score: score, Note: "start: " + note, Version: m.version(p, main, cfg), NoResult: cant.CantRun != ""}
 	if ms.NoResult {
 		m.noResult(p, ms, cant.Kind) // Tick measures again in 10 minutes
@@ -831,7 +857,7 @@ func (m *Module) afterMerge(t work.Task) {
 	}
 	defer m.Work.MeasuringMain(p.Name, t.MergeSHA)() // keep/revert, the release and the next baseline wait on it
 	cfg := m.C.Effects.Config(p, t.MergeSHA)
-	ok, score, note, cant := m.measure(p, t.MergeSHA)
+	ok, score, note, cant := m.measure(p, t.MergeSHA, t.ID, m.mergeFiles(p, t))
 	switch {
 	case cant.CantRun != "" && m.introduced(p, t.MergeSHA, cant) && cant.Kind == "score":
 		ok, score, note = true, nil, "score did not produce a number: this merge's score command calls "+cant.Tool+", which isn't installed where checks run: "+note
