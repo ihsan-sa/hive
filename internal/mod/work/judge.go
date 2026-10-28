@@ -86,8 +86,12 @@ func StartJudge(cc *core.Core, a *agents.Agents, c JudgeCase) (core.RunSpec, err
 		spec.Route = nil // a check's model doesn't move at a limit unless the person routed it
 	}
 	spec.ReadOnly, spec.Schema, spec.Task = true, core.JudgeSchema, c.Author.Task
+	base := c.Main
+	if base == "" { // a merge on main: the rules it was judged by are its first parent's
+		base = c.SHA + "^"
+	}
 	spec.Inputs = map[string]string{"sha": c.SHA, "main": c.Main, "diff.patch": c.Diff, "numbers.md": c.Report,
-		"brief.md": fmt.Sprintf("Judge token: %s\n\nYou decide: %s.\n\nThe numbers alone say: %s.\n\n## The change\n\n%s", core.JudgeToken(c.ID), c.What, c.Numbers, c.Brief)}
+		"brief.md": fmt.Sprintf("Judge token: %s\n\nYou decide: %s.\n\nThe numbers alone say: %s.\n\n## The change\n\n%s", core.JudgeToken(c.ID), c.What, c.Numbers, c.Brief) + rulesOn(cc, c.Project, base)}
 	_, err = cc.Runs.Start(spec)
 	return spec, err
 }

@@ -248,12 +248,15 @@ func NewEffects(ws Workspace, j *Journal, forge Forge, sb func() (sandbox.Sandbo
 			k := pu.Project + "@" + pu.Branch
 			e.pushes[k] = append(slices.DeleteFunc(e.pushes[k], func(s string) bool { return s == pu.SHA }), pu.SHA)
 		case "effect.approved":
-			var a struct{ Kind, Project, SHA string }
+			var a struct{ Kind, Project, SHA, Diff string }
 			ev.Decode(&a)
 			if a.Kind == "" {
 				a.Kind = "merge"
 			}
 			e.approvals[a.Kind+":"+a.Project+"@"+a.SHA] = true
+			if a.Diff != "" {
+				e.approvals[a.Kind+":"+a.Project+"#"+a.Diff] = true
+			}
 		case "gate.judged":
 			var g GateResult
 			ev.Decode(&g)
@@ -1244,14 +1247,30 @@ func DiffID(diff string) string {
 // head@main), while main itself fails in the gate.
 // The kinds stay apart, since a fast-forwarding forge merges a head as itself.
 func (e *Effects) Approve(kind, project, sha string) {
-	e.j.MustAppend("effect.approved", map[string]string{"kind": kind, "project": project, "sha": sha})
+	e.ApproveDiff(kind, project, sha, "")
+}
+
+// ApproveDiff records the approval of sha and of its own diff (DiffID): a
+// later head with the same own diff, main merged into it, needs no new yes.
+func (e *Effects) ApproveDiff(kind, project, sha, diff string) {
+	ev := map[string]string{"kind": kind, "project": project, "sha": sha}
+	if diff != "" {
+		ev["diff"] = diff
+	}
+	e.j.MustAppend("effect.approved", ev)
 }
 
 // Approved reports whether the person approved sha for kind.
 func (e *Effects) Approved(kind, project, sha string) bool {
+	return e.ApprovedDiff(kind, project, sha, "")
+}
+
+// ApprovedDiff reports whether the person approved sha, or a head with the
+// same own diff (DiffID; "" for none), for kind.
+func (e *Effects) ApprovedDiff(kind, project, sha, diff string) bool {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	return e.approvals[kind+":"+project+"@"+sha]
+	return e.approvals[kind+":"+project+"@"+sha] || diff != "" && e.approvals[kind+":"+project+"#"+diff]
 }
 
 // Pushed says whether the Hive pushed sha to branch, and whether it is the
@@ -1532,7 +1551,7 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 			}
 		}
 	}
-	if len(ch.Protected) > 0 && !e.Approved("merge", p.Name, m.SHA) {
+	if len(ch.Protected) > 0 && !e.ApprovedDiff("merge", p.Name, m.SHA, ch.DiffID) {
 		return "", &NeedsPerson{Reason: "it changes " + strings.Join(ch.Protected, ", ") + ", which needs an approval first"}
 	}
 	if !ch.Small && !e.readOK(p, ch, m.SHA) {
