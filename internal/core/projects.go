@@ -158,13 +158,17 @@ type Projects struct {
 func NewProjects(j *Journal) *Projects {
 	p := &Projects{j: j, m: map[string]Project{}}
 	apply := func(e Event) {
-		if e.Kind != "project.created" && e.Kind != "project.updated" {
+		if e.Kind != "project.created" && e.Kind != "project.updated" && e.Kind != "project.removed" {
 			return
 		}
 		var pr Project
 		e.Decode(&pr)
 		p.mu.Lock()
-		p.m[pr.Name] = pr
+		if e.Kind == "project.removed" {
+			delete(p.m, pr.Name)
+		} else {
+			p.m[pr.Name] = pr
+		}
 		p.mu.Unlock()
 	}
 	j.Replay(apply)
@@ -218,6 +222,11 @@ func (p *Projects) Add(pr Project) (Project, error) {
 
 // Update rewrites a project record.
 func (p *Projects) Update(pr Project) { p.j.MustAppend("project.updated", pr) }
+
+// Remove takes a project out of the registry, saying why; its name is free again.
+func (p *Projects) Remove(name, why string) {
+	p.j.MustAppend("project.removed", map[string]string{"name": name, "why": why})
+}
 
 // Get returns a project by name.
 func (p *Projects) Get(name string) (Project, bool) {
