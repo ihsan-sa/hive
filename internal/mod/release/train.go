@@ -37,7 +37,7 @@ var canaryTimeout = 2 * time.Hour
 var (
 	callTrainEvery    = calls.Duration("release.train_every", "how long after a canary's verdict the next canary leaves, so how often the Hive moves to a new release at most; 0 runs a canary as soon as a newer pre-release is safe here", &trainEvery)
 	callCanaryRetry   = calls.Duration("release.canary_retry", "how long a canary that couldn't run waits before it tries again; 0 tries at the next look", &canaryRetry)
-	callCanaryTimeout = calls.Duration("release.canary_timeout", "how long one canary run may take before it is stopped", &canaryTimeout)
+	callCanaryTimeout = calls.Duration("release.canary_timeout", "how long one canary run may take before it is stopped", &canaryTimeout).AtLeast(10 * time.Minute)
 )
 
 // CanaryJob is one canary run: Head, the candidate's commit, against Base,

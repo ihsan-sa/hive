@@ -593,10 +593,10 @@ var gateWaitMax = 2*time.Hour + 15*time.Minute
 // An update's waits are calls (#1940): an agent that sees one holding the
 // Hive behind, or cutting work short, changes it at once with `hive agent call`.
 var (
-	callMergeWait   = calls.Duration("release.update_merge_wait", "the most an update waits for the merges already running, at each look", &mergeWait)
+	callMergeWait   = calls.Duration("release.update_merge_wait", "the most an update waits for the merges already running, at each look; 0 doesn't wait", &mergeWait)
 	callMaxSkips    = calls.Count("release.update_merge_looks", "how many looks in a row an update waits on a merge running past release.update_merge_wait before it installs anyway; 0 installs at once", &maxSkips)
 	callGateWaitMax = calls.Duration("release.update_gate_wait", "the most an automatic update waits for the recursive gates running when it first looked, holding new ones back meanwhile; 0 installs at once", &gateWaitMax)
-	callLateAfter   = calls.Duration("release.late_after", "how long a merge waits for main's checks, or a pre-release for its own, before the person is told", &lateAfter)
+	callLateAfter   = calls.Duration("release.late_after", "how long a merge waits for main's checks, or a pre-release for its own, before the person is told; 0 tells at once", &lateAfter)
 )
 
 // gateHold is how long each look that waits for gates keeps new ones from

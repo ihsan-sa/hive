@@ -757,7 +757,7 @@ func TestFakedCantRunCommentsOnceThenRed(t *testing.T) {
 	if err := testStep(m, task, p); err != nil {
 		t.Fatal(err)
 	}
-	if task.Stage != StageStopped || !strings.Contains(task.Reason, "counts as red") {
+	if task.Stage != StageStopped || !strings.Contains(task.Reason, fmt.Sprintf("%d tries in a row, which now counts as red", CantRunTries)) {
 		t.Fatalf("after %d tries: stage %q, reason %q", CantRunTries, task.Stage, task.Reason)
 	}
 	var ask core.Ask

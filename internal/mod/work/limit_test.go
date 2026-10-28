@@ -2,6 +2,7 @@ package work
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -259,7 +260,7 @@ func TestKilledEveryTimeStops(t *testing.T) {
 		t.Fatalf("stopped though a step got through: %q %q", task.Stage, task.Reason)
 	}
 	settle(killed)
-	if task.Stage != StageStopped || !strings.Contains(task.Reason, "in a row killed by their timeout") || task.Failures != 0 {
+	if task.Stage != StageStopped || !strings.Contains(task.Reason, fmt.Sprintf("gave up after %d steps in a row killed by their timeout", killCap)) || task.Failures != 0 {
 		t.Fatalf("stage %q, reason %q, failures %d", task.Stage, task.Reason, task.Failures)
 	}
 	m.slow = time.Now().Add(-slowWait - time.Second)

@@ -1091,8 +1091,9 @@ func (m *Module) settle(t *Task, err error) {
 		m.mu.Unlock()
 		t.Kills++
 		if t.Kills >= callKillCap.Of(m.C.J) {
+			n := t.Kills
 			t.Kills = 0
-			m.giveUp(t, fmt.Sprintf("gave up after %d steps in a row killed by their timeout (about %s): ", t.Kills, time.Duration(t.Kills)*slowWait)+core.Clip(err.Error(), 300))
+			m.giveUp(t, fmt.Sprintf("gave up after %d steps in a row killed by their timeout (about %s): ", n, time.Duration(n)*slowWait)+core.Clip(err.Error(), 300))
 			return
 		}
 		t.Retry = time.Now().Add(slowWait)
@@ -2032,8 +2033,9 @@ func (m *Module) cantRunRed(t *Task, p core.Project, c core.Check) error {
 		Title: "Install " + tool + " where checks run for " + p.Name + "?",
 		Detail: fmt.Sprintf("The tests of %q (%s) %s, %d tries in a row. That now counts as red: it is stopped and not merged. "+
 			"If %s is really missing, install it where checks run and the lead can bring the change back; if it isn't, the change only claims it is.", t.Label(), cmp.Or(t.PR.URL, t.ID), c.CantRun, t.CantRuns, tool)})
+	n := t.CantRuns
 	t.CantRuns = 0
-	m.giveUp(t, fmt.Sprintf("the tests %s, %d tries in a row, which now counts as red; the person is asked for %s", c.CantRun, t.CantRuns, tool))
+	m.giveUp(t, fmt.Sprintf("the tests %s, %d tries in a row, which now counts as red; the person is asked for %s", c.CantRun, n, tool))
 	return nil
 }
 

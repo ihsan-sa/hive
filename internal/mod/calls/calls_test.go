@@ -14,6 +14,8 @@ var (
 	testTries = 3
 	callEvery = Duration("test.every", "how often", &testEvery)
 	callTries = Count("test.tries", "how many", &testTries).Bar()
+	testLimit = time.Hour
+	callLimit = Duration("test.limit", "how long a step", &testLimit).AtLeast(10 * time.Minute)
 )
 
 func open(t *testing.T) *core.Core {
@@ -137,5 +139,23 @@ func TestDurationText(t *testing.T) {
 		if back, err := parseDur(fmtDur(d)); err != nil || back != d {
 			t.Errorf("%s doesn't read back: %s %v", d, back, err)
 		}
+	}
+}
+
+// A call whose value would break the Hive rather than change how it runs (a
+// step limit of 0) is refused under its least; at or above it, it holds.
+func TestCallHasItsLeast(t *testing.T) {
+	c := open(t)
+	lead := core.Run{RunSpec: core.RunSpec{ID: "lead-1", Role: "lead"}}
+	for _, v := range []string{"0", "5m"} {
+		if _, err := call(c, lead, map[string]string{"name": "test.limit", "value": v, "why": "x"}); err == nil || !strings.Contains(err.Error(), "least") {
+			t.Fatalf("%s under the least: %v", v, err)
+		}
+	}
+	if callLimit.Of(c.J) != time.Hour {
+		t.Fatal("a refused call took effect")
+	}
+	if _, err := call(c, lead, map[string]string{"name": "test.limit", "value": "10m", "why": "x"}); err != nil || callLimit.Of(c.J) != 10*time.Minute {
+		t.Fatalf("at the least: %s %v", callLimit.Of(c.J), err)
 	}
 }

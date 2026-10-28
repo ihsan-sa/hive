@@ -91,6 +91,20 @@ func (d Dur) Of(j *core.Journal) time.Duration {
 // Name is the call's name.
 func (d Dur) Name() string { return d.s.Name }
 
+// AtLeast refuses a value under min: one that would break the Hive rather
+// than change how it runs (a step limit of 0 lets every step go at once).
+func (d Dur) AtLeast(min time.Duration) Dur {
+	check := d.s.check
+	d.s.check = func(v string) (string, error) {
+		kept, err := check(v)
+		if x, _ := parseDur(kept); err == nil && x < min {
+			err = fmt.Errorf("%s is under %s, its least: below that it breaks rather than changes how the Hive runs", kept, fmtDur(min))
+		}
+		return kept, err
+	}
+	return d
+}
+
 // Bar marks the call as one that decides whether a change counts (how often
 // its failed checks run again, how long before tests that can't start count
 // as red): a worker, whose own change it would be, doesn't make it.
@@ -117,6 +131,19 @@ func (n Int) Of(j *core.Journal) int {
 
 // Name is the call's name.
 func (n Int) Name() string { return n.s.Name }
+
+// AtLeast refuses a count under min (Dur.AtLeast).
+func (n Int) AtLeast(min int) Int {
+	check := n.s.check
+	n.s.check = func(v string) (string, error) {
+		kept, err := check(v)
+		if x, _ := strconv.Atoi(kept); err == nil && x < min {
+			err = fmt.Errorf("%d is under %d, its least: below that it breaks rather than changes how the Hive runs", x, min)
+		}
+		return kept, err
+	}
+	return n
+}
 
 // Bar marks the call as one that decides whether a change counts (Dur.Bar).
 func (n Int) Bar() Int { n.s.bar = true; return n }
