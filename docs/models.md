@@ -297,3 +297,22 @@ A lead files trials, and so does a worker on its own project: a test project
 rounds are briefs a worker carries out by filing one trial per model and task.
 A trial's own worker files none, and one already open on the same model with
 the same title is refused with its task id, so a round doesn't file twice.
+
+A score can't call `hive agent models` from its sandbox, so a project whose
+`.hive/project.json` names a `"ledger"` (trials: `"ledger": "ledger.json"`)
+has the Hive keep that file as its trial ledger: the named models and the
+project's counted trials, as the models op shows them
+(`internal/mod/models/ledger.go`). When what it would say changes (a trial's
+outcome recorded, a model named), the models module files a record task: a
+host-made commit (`Effects.Record`, kind `record`) on top of main that goes
+through the tests and checks like any change. Content the Hive last wrote
+there from its record (`Change.Recorded`) is neither a protected path nor in
+need of a read, so it merges with no approval in between, though the ledger is
+a score path; a worker's own edit to it still waits for an approval, as does
+an older record once a newer one is written. Only the path main's project.json
+names counts, and only when `core.LedgerPathOK` takes it: a plain relative path
+outside `.git`, one of the score's own paths, and none the project otherwise
+guards (the base protected paths, its protected, high or root paths, CI,
+`.gitattributes`); the host write refuses a path out of the checkout or through
+a symlink. A record task that stopped (a red check, a conflict) is filed again
+after 30 minutes.

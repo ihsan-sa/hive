@@ -209,5 +209,8 @@ func (w *WSL) translate(s Spec) Spec {
 	}
 	s.Tools = tools
 	s.Stdin, s.Stdout, s.StopFile = WinToWSL(s.Stdin), WinToWSL(s.Stdout), WinToWSL(s.StopFile)
+	if s.Tmp != "" {
+		s.Tmp = WinToWSL(s.Tmp)
+	}
 	return s
 }
