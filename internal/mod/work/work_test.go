@@ -358,7 +358,7 @@ func TestMergeAskCarriesTheWholeDiff(t *testing.T) {
 // with fresh counts; a merged task can't be rechecked.
 func TestGiveUpComesBack(t *testing.T) {
 	m, _, task, _ := noCommitRig(t, 0)
-	task.Failures, task.Round, task.Reviews = 8, 3, 3
+	task.Failures, task.Round, task.Reviews, task.SHA = 8, 3, 3, "abc1234"
 	m.giveUp(task, "gave up after repeated errors: HTTP 503")
 	if task.Stage != StageStopped {
 		t.Fatalf("stage %q", task.Stage)
@@ -374,6 +374,33 @@ func TestGiveUpComesBack(t *testing.T) {
 	m.save(&got, "done")
 	if err := m.Recheck(task.ID, "", "lead"); err == nil {
 		t.Fatal("a done task was rechecked")
+	}
+}
+
+// A task that gave up before its issue or worker was made (a rate-limited
+// 'gh issue create') comes back to make them, not to landing, where taking
+// commits out of a checkout that was never made failed on an empty path.
+func TestRecheckMakesWhatWasNeverMade(t *testing.T) {
+	for _, issue := range []int{0, 7} {
+		m, _, task, p := noCommitRig(t, 0)
+		task.Stage, task.Issue.Number = StageNew, issue
+		m.giveUp(task, "gave up after repeated errors: gh issue create: GraphQL: API rate limit already exceeded")
+		if err := m.Recheck(task.ID, "", "lead"); err != nil {
+			t.Fatal(err)
+		}
+		got, _ := m.Get(task.ID)
+		want := StageNew
+		if issue != 0 {
+			want = StageQueued
+		}
+		if got.Stage != want || got.Reason != "" {
+			t.Fatalf("issue %d: stage %q, want %q", issue, got.Stage, want)
+		}
+		got.Stage = StageLanding // one already sent to landing before the fix
+		m.save(&got, "landing")
+		if err := m.land(&got, p); err != nil || got.Stage != want {
+			t.Fatalf("issue %d: landing a task with no checkout: stage %q, err %v", issue, got.Stage, err)
+		}
 	}
 }
 
@@ -817,9 +844,10 @@ func TestScoredBriefCarriesTheGoal(t *testing.T) {
 	}
 }
 
-// A review's brief ends with main's docs/REVIEW.md in full and points at
-// goals and lessons by path rather than carrying them; a project with none of
-// the files gets nothing appended.
+// A review's brief ends with main's standing rules, goals and lessons
+// included: the seat's checkout is the change's head, where a diff may have
+// edited them (hive-eval #26); a project with none of the files gets nothing
+// appended.
 func TestReviewRulesFromMain(t *testing.T) {
 	m, p := rigAt(t, `{"test":"true"}`)
 	if r := m.reviewRules(p, "HEAD"); r != "" {
@@ -836,8 +864,8 @@ func TestReviewRulesFromMain(t *testing.T) {
 		}
 	}
 	r := m.reviewRules(p, "HEAD")
-	i, j := strings.Index(r, "## `docs/REVIEW.md` on main\n\n# Review\n\nsimple wins"), strings.Index(r, "`.hive/goals.md` and `.hive/lessons.md` are in your checkout")
-	if i < 0 || j < i || strings.Contains(r, "ship it") || strings.Contains(r, "don't do that again") {
+	i, j, k := strings.Index(r, "## `docs/REVIEW.md` on main\n\n# Review\n\nsimple wins"), strings.Index(r, "## `.hive/goals.md` on main\n\n# Goals\n\nship it"), strings.Index(r, "## `.hive/lessons.md` on main\n\n# Lessons\n\n- don't do that again")
+	if i < 0 || j < i || k < j {
 		t.Fatalf("rules:\n%s", r)
 	}
 }

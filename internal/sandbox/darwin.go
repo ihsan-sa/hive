@@ -143,5 +143,5 @@ func (s *Seatbelt) Run(sp Spec, timeout time.Duration) (int, error) {
 		return -1, err
 	}
 	env := withPathPrefix(append(SeatbeltEnv(sp, port), "PATH=/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"), pathDirs(sp))
-	return runSync(Niced(append([]string{sandboxExec, "-f", pf}, sp.Argv...), sp.Nice), env, sp.Cwd, sp.Stdin, sp.Stdout, timeout)
+	return runSync(Niced(append([]string{sandboxExec, "-f", pf}, sp.Argv...), sp.Nice), env, sp.Cwd, sp.Stdin, sp.Stdout, timeout, sp.Disk)
 }

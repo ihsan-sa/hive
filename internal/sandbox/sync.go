@@ -16,8 +16,9 @@ var ErrTimeout = errors.New("timed out")
 // runSync runs argv and returns its exit code. The exit code comes from the
 // host-side process, never from anything the sandboxed command printed.
 // Whatever argv started and left running ends when it returns, however it
-// returns, and argv itself ends if the daemon dies first.
-func runSync(argv, env []string, dir, stdin, stdout string, timeout time.Duration) (int, error) {
+// returns, and argv itself ends if the daemon dies first. A disk that isn't
+// nil gets what argv read and wrote (diskUsed).
+func runSync(argv, env []string, dir, stdin, stdout string, timeout time.Duration, disk *Disk) (int, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
@@ -52,6 +53,9 @@ func runSync(argv, env []string, dir, stdin, stdout string, timeout time.Duratio
 	err = cmd.Wait()
 	if !ended {
 		end(true)
+	}
+	if disk != nil && cmd.ProcessState != nil {
+		*disk = diskUsed(cmd.ProcessState)
 	}
 	timedOut := ctx.Err() == context.DeadlineExceeded
 	if timedOut {
@@ -91,5 +95,5 @@ func (Bare) Run(s Spec, timeout time.Duration) (int, error) {
 	if owner != "" {
 		env = append(env, OwnerEnv+"="+owner)
 	}
-	return runSync(Niced(s.Argv, s.Nice), env, s.Cwd, s.Stdin, s.Stdout, timeout)
+	return runSync(Niced(s.Argv, s.Nice), env, s.Cwd, s.Stdin, s.Stdout, timeout, s.Disk)
 }

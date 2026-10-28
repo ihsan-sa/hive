@@ -44,23 +44,34 @@ func TestTerminateReachesAZombieLeadersGroup(t *testing.T) {
 	}
 	defer cmd.Wait()
 	h := Handle{PID: cmd.Process.Pid, Started: StartTime(cmd.Process.Pid)}
+	// A loaded runner can take seconds to fork the shell and its child, so
+	// each step waits on a deadline, not a fixed number of polls.
 	child := 0
-	for i := 0; i < 200 && (child == 0 || !zombie(h.PID)); i++ {
-		time.Sleep(20 * time.Millisecond)
+	ok := waitUntil(30*time.Second, func() bool {
 		raw, _ := os.ReadFile(pidf)
 		child, _ = strconv.Atoi(strings.TrimSpace(string(raw)))
-	}
-	if child == 0 || Alive(h) {
-		t.Fatalf("no zombie leader with a child: child %d, alive %v", child, Alive(h))
+		return child != 0 && zombie(h.PID)
+	})
+	if !ok || Alive(h) {
+		t.Fatalf("no zombie leader with a child: child %d, leader zombie %v, alive %v", child, zombie(h.PID), Alive(h))
 	}
 	defer syscall.Kill(child, syscall.SIGKILL)
 	if err := Terminate(h); err != nil {
 		t.Fatal(err)
 	}
-	for i := 0; i < 200 && running(child); i++ {
-		time.Sleep(20 * time.Millisecond)
-	}
-	if running(child) {
+	if !waitUntil(30*time.Second, func() bool { return !running(child) }) {
 		t.Fatal("the zombie leader's child still runs")
+	}
+}
+
+// waitUntil polls cond until it holds or d passes, and says whether it held.
+func waitUntil(d time.Duration, cond func() bool) bool {
+	for end := time.Now().Add(d); ; time.Sleep(20 * time.Millisecond) {
+		if cond() {
+			return true
+		}
+		if time.Now().After(end) {
+			return cond()
+		}
 	}
 }

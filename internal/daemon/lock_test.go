@@ -20,6 +20,7 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/api"
 	"github.com/ihsan-sa/hive-standalone-build/internal/app"
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
+	"github.com/ihsan-sa/hive-standalone-build/internal/proc"
 )
 
 // A second daemon on a workspace exits at once, naming the daemon that holds
@@ -91,6 +92,34 @@ func lockHolder(t *testing.T, ws core.Workspace) *exec.Cmd {
 		t.Fatalf("the helper didn't take the workspace: %q", line)
 	}
 	return cmd
+}
+
+// An update's replacement ends the daemon it replaced when that one still
+// holds the workspace after the wait, as one hung on shutdown does, and takes
+// the workspace; a holder it didn't replace is left alone.
+func TestTakeOverEndsAHungDaemon(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the helper's lock outlives a kill until it is reaped")
+	}
+	ws := core.Workspace{Root: t.TempDir()}
+	other := lockHolder(t, ws)
+	if _, err := takeOver(ws, other.Process.Pid+100000, 200*time.Millisecond); err == nil {
+		t.Fatal("took the workspace from a daemon it didn't replace")
+	}
+	if !proc.Alive(proc.Handle{PID: other.Process.Pid}) {
+		t.Fatal("ended a daemon it didn't replace")
+	}
+	other.Process.Kill()
+	other.Wait()
+	hung := lockHolder(t, ws)
+	l, err := takeOver(ws, hung.Process.Pid, 200*time.Millisecond)
+	if err != nil {
+		t.Fatalf("the replacement didn't take the workspace from the hung daemon: %v", err)
+	}
+	l.Release()
+	if proc.Alive(proc.Handle{PID: hung.Process.Pid}) {
+		t.Fatal("the hung daemon still runs")
+	}
 }
 
 // serveDaemon writes daemon.json for a daemon answering at a test server

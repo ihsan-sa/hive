@@ -110,6 +110,39 @@ func TestLoaded(t *testing.T) {
 	}
 }
 
+// Linux counts a task waiting on the disk in the load average: a load over
+// its limit with the CPU barely contended is the disk's when IO pressure is
+// high, and strains nothing when that is low too. Where pressure can't be
+// read, load is the CPU's as before.
+func TestLoadedReadsWhatIsContended(t *testing.T) {
+	for _, c := range []struct {
+		name, cpu, io string
+		want          string
+	}{
+		{"cpu contended", "55.00", "60.00", "machine loaded (load 34 on 20 cores"},
+		{"disk", "2.61", "56.58", "machine loaded on its disk (io pressure 57%, cpu pressure 3%; load 34 on 20 cores"},
+		{"neither", "2.61", "3.00", ""},
+		{"no io file", "2.61", "", ""},
+		{"no pressure files", "", "", "machine loaded (load 34 on 20 cores"},
+	} {
+		dir := t.TempDir()
+		os.MkdirAll(filepath.Join(dir, "pressure"), 0o755)
+		os.WriteFile(filepath.Join(dir, "loadavg"), []byte("34.18 31.81 29.80 30/6000 1234\n"), 0o644)
+		for file, avg10 := range map[string]string{"cpu": c.cpu, "io": c.io} {
+			if avg10 != "" {
+				os.WriteFile(filepath.Join(dir, "pressure", file), []byte("some avg10="+avg10+" avg60=0.00 avg300=0.00 total=0\nfull avg10=99.00 avg60=0.00 avg300=0.00 total=0\n"), 0o644)
+			}
+		}
+		got := loaded(dir, 20, 1.5)
+		if (c.want == "") != (got == "") || !strings.HasPrefix(got, c.want) {
+			t.Errorf("%s: %q, want %q", c.name, got, c.want)
+		}
+		if got != "" && !strings.HasPrefix(got, LoadedReason) {
+			t.Errorf("%s: %q doesn't start with %q", c.name, got, LoadedReason)
+		}
+	}
+}
+
 // A lead's turn starts under the pressure and the memory floor that hold a
 // worker's: a person's message is answered however busy the machine is. Only
 // under the absolute floor (LeadMemFloorMB) does a lead wait, saying why once.
@@ -419,5 +452,48 @@ func TestWatched(t *testing.T) {
 	}
 	if watched(dir, 1024, 10, 40, 0) {
 		t.Error("only loadavg is there and load_max is off, yet watched")
+	}
+}
+
+// Memory pressure from a unit outside the Hive's cgroup stalling at its own
+// MemoryHigh doesn't hold a turn; the same pressure with the Hive's own cgroup
+// stalled, or the unit under its cap, does.
+func TestStrainedCappedElsewhere(t *testing.T) {
+	cgroup := func(root, rel string, files map[string]string) {
+		dir := filepath.Join(root, rel)
+		os.MkdirAll(dir, 0o755)
+		for k, v := range files {
+			os.WriteFile(filepath.Join(dir, k), []byte(v), 0o644)
+		}
+	}
+	pressure := func(avg10 string) string {
+		return "some avg10=" + avg10 + " avg60=0.00 avg300=0.00 total=0\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0\n"
+	}
+	hive := "user.slice/user-1000.slice/user@1000.service/app.slice/hive.service"
+	unit := "system.slice/hive-eval-ml-dev-2.service"
+	for _, c := range []struct {
+		name, self, hivePSI, current string
+		held                         bool
+	}{
+		{"unit at its cap", hive, "0.50", "2700000000", false},
+		{"hive stalled too", hive, "30.00", "2700000000", true},
+		{"unit under its cap", hive, "0.50", "1000000000", true},
+		{"hive in the root cgroup", "", "0.50", "2700000000", true},
+	} {
+		proc := fakeProc(t, "8000000", "45.00", "1.00")
+		os.MkdirAll(filepath.Join(proc, "self"), 0o755)
+		os.WriteFile(filepath.Join(proc, "self", "cgroup"), []byte("0::/"+c.self+"\n"), 0o644)
+		root := t.TempDir()
+		cgroup(root, "", map[string]string{"cgroup.controllers": "memory", "memory.pressure": pressure("45.00")})
+		cgroup(root, "user.slice", map[string]string{"memory.high": "max", "memory.max": "max", "memory.pressure": pressure("0.50")})
+		cgroup(root, hive, map[string]string{"memory.high": "max", "memory.max": "max", "memory.current": "900000000", "memory.pressure": pressure(c.hivePSI)})
+		cgroup(root, unit, map[string]string{"memory.high": "2791728742", "memory.max": "3221225472", "memory.current": c.current, "memory.pressure": pressure("60.00")})
+		old := cgroupRoot
+		cgroupRoot = root
+		got := strained(proc, 1024, 10, 40)
+		cgroupRoot = old
+		if (got != "") != c.held {
+			t.Errorf("%s: %q, want held %v", c.name, got, c.held)
+		}
 	}
 }
