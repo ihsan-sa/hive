@@ -2258,11 +2258,17 @@ func (m *Module) review(t *Task, p core.Project) error {
 		spec.ReadOnly, spec.Schema, spec.Task = true, VerdictSchema, t.ID
 		spec.Inputs = map[string]string{"sha": t.SHA, "diff.patch": ch.Diff, "tests.txt": core.ClipEnds(c.FullOutput(), 16000),
 			"brief.md": "Review token: " + reviewToken(id) + "\n\n" + account + m.reviewRules(p, main)}
+		paced := ""
+		if route, why := m.pacedRead(p.Name); why != "" && len(ch.Security) == 0 {
+			spec.Harness, spec.Model, spec.Route = route[0].Harness, route[0].Model, route
+			spec.Inputs["paced"] = "1"
+			paced = fmt.Sprintf(" on %s: %s", route[0].Model, why)
+		}
 		if _, err := m.C.Runs.Start(spec); err != nil {
 			return err
 		}
 		t.Reviewer = id
-		m.save(t, "reviewer "+id+" reading "+core.Short(t.SHA))
+		m.save(t, "reviewer "+id+" reading "+core.Short(t.SHA)+paced)
 		return nil
 	}
 	if !r.Terminal() {
