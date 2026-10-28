@@ -55,6 +55,7 @@ const usage = `hive: a small team of AI agents working on your projects.
   hive hold <project> --lift [why]  lift the hold
   hive login               log in to Claude Code and GitHub with their own logins
   hive login add <name>    add another Claude login to spread runs over; add "codex" for Codex
+  hive login name [<login> <name>]  name or rename a login, the machine's own included; no name lists them
   hive doctor [--bare]     check the install; --bare opts into unsandboxed agents
   hive report [on|off|show|send]  sharing failures with the developer: state, switch, last report, send now
   hive egress              the services on this machine agents may reach
@@ -288,6 +289,17 @@ func run(args []string) int {
 				return 1
 			}
 			fmt.Printf("Added login %s; runs now spread over it too.\n", args[1])
+			return 0
+		}
+		if len(args) > 0 && args[0] == "name" {
+			ws, err := workspace()
+			if err == nil {
+				err = setup.NameLogin(ws, args[1:], os.Stdout)
+			}
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				return 1
+			}
 			return 0
 		}
 		if err := setup.Login(len(args) > 0 && args[0] == "--all"); err != nil {
@@ -636,7 +648,7 @@ func cmdStatus() int {
 			fmt.Printf("  new turns %s\n", text.Visible(why))
 		}
 		for _, p := range st.Plans {
-			fmt.Println(planLine(p, time.Now()))
+			fmt.Println(planLine(p, st.LoginNames, time.Now()))
 		}
 		for _, d := range st.Down {
 			fmt.Printf("model %s, so runs skip it; tried again %s\n", text.Visible(d.Line()), d.Retry.Local().Format("Mon 15:04"))
@@ -1108,12 +1120,13 @@ func kbArgs(args []string) (query, limit string) {
 }
 
 // planLine is a plan's usage for hive status, in plain words: how near its
-// limit the login is, then each window's share and when it resets, with the
-// zone and how far off. A window that has reset since the reading says so
-// rather than passing its old number off as current. Names from the usage
+// limit the login is (under the name the person gave it, if any), then each
+// window's share and when it resets, with the zone and how far off. A window
+// that has reset since the reading says so rather than passing its old number
+// off as current. Names from the usage
 // feed are escaped, so none can rewrite the screen.
-func planLine(p core.Plan, now time.Time) string {
-	s := fmt.Sprintf("plan %s: %s", text.Visible(p.Key()), text.Visible(p.Standing(now)))
+func planLine(p core.Plan, names map[string]string, now time.Time) string {
+	s := fmt.Sprintf("plan %s: %s", text.Visible(setup.LoginLabel(names, p.Key())), text.Visible(p.Standing(now)))
 	for _, w := range p.Limit.WindowUses(now) {
 		name, at := text.Visible(w.Name), w.ResetsAt.Local().Format("Mon 15:04 MST")
 		switch {
