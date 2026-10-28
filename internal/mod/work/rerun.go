@@ -52,10 +52,8 @@ func (m *Module) opRerunChecks(r core.Run, args json.RawMessage) (any, error) {
 // waits for the new result. A worker sent back only for those checks gets its
 // round back, since a flake isn't its fault.
 func (m *Module) RerunChecks(id, by string) (string, error) {
-	if !m.claim(id) {
-		return "", fmt.Errorf("task %s is busy; try again in a moment", id)
-	}
-	defer m.release(id)
+	save, done := m.take(id)
+	defer done()
 	t, ok := m.Get(id)
 	if !ok {
 		return "", core.ErrNotFound
@@ -101,13 +99,25 @@ func (m *Module) RerunChecks(id, by string) (string, error) {
 		t.Round--
 		note += "; the round they cost is given back"
 	}
-	m.save(&t, note)
+	save(&t, note)
 	return note + ". The merge waits for the new result; finish again without a new commit if the failure was the only finding.", nil
 }
 
 // claim marks a task busy for a change from outside its step, waiting for a
 // running step to end, so neither saves over the other.
 func (m *Module) claim(id string) bool { return m.claimWithin(id, 30*time.Second) }
+
+// take holds a task for a lead's change from outside its step (a PR closed,
+// readied or made a draft, its checks re-run). A step holding it can wait in
+// the check line for many minutes, so it isn't waited out: the change is
+// steered over it, and that step's older copy is saved no more. It returns
+// the save to make the change with and the release.
+func (m *Module) take(id string) (save func(*Task, string), done func()) {
+	if m.claimWithin(id, 2*time.Second) {
+		return m.save, func() { m.release(id) }
+	}
+	return m.steer, func() {}
+}
 
 // claimWithin is claim, giving up after d.
 func (m *Module) claimWithin(id string, d time.Duration) bool {

@@ -313,15 +313,21 @@ func nextCheck(m *Module) time.Duration {
 	return time.Until(m.probe).Round(time.Second)
 }
 
-// A done task whose project is gone drops its pending close and stays done.
+// A done or withdrawn task whose project is gone drops its pending close and
+// stays where it is.
 func TestDoneProjectGone(t *testing.T) {
-	m, _, task, _ := noCommitRig(t, 0)
-	task.Stage, task.IssueOpen, task.Project = StageDone, true, "gone"
-	if err := m.step(task); err != nil {
-		t.Fatal(err)
-	}
-	if task.Stage != StageDone || task.IssueOpen || !logged(task, "project gone is gone, so issue #7 is left open") {
-		t.Fatalf("stage %q, issue open %v, log %v", task.Stage, task.IssueOpen, task.Log)
+	for _, stage := range []string{StageDone, StageStopped} {
+		m, _, task, _ := noCommitRig(t, 0)
+		task.Stage, task.IssueOpen, task.Project = stage, true, "gone"
+		if stage == StageStopped {
+			task.Reason = withdrawn + "lead-1: folded into another"
+		}
+		if err := m.step(task); err != nil {
+			t.Fatalf("%s: %v", stage, err)
+		}
+		if task.Stage != stage || task.IssueOpen || !logged(task, "project gone is gone, so issue #7 is left open") {
+			t.Fatalf("stage %q, issue open %v, log %v", task.Stage, task.IssueOpen, task.Log)
+		}
 	}
 }
 
@@ -488,6 +494,24 @@ func TestPersonStoppedWorkerHolds(t *testing.T) {
 }
 
 // A lead can't recheck a task in a project walled off from it.
+// A task retried from reviewing has its reader stopped, so a hung one
+// doesn't keep its slot, and the next read is a new run, not the stopped one.
+func TestRecheckFromReviewingStopsTheReader(t *testing.T) {
+	m, _, task, _ := noCommitRig(t, 0)
+	task.Stage, task.SHA, task.Reviewer = StageReviewing, "2125f74e", "r-hung"
+	m.C.J.MustAppend("run.created", core.RunSpec{ID: "r-hung", Role: "reviewer", Project: task.Project, Harness: "fake"})
+	m.save(task, "reviewer r-hung reading 2125f74e")
+	if err := m.Recheck(task.ID, "", "the stall watcher"); err != nil {
+		t.Fatal(err)
+	}
+	if r, _ := m.C.Runs.Get("r-hung"); !r.Terminal() {
+		t.Fatalf("the hung reader is still %s after the retry", r.Status)
+	}
+	if got, _ := m.Get(task.ID); got.Stage != StageLanding || got.Reviews != 1 {
+		t.Fatalf("after the retry: %s with %d reviews, want landing with the stopped read counted", got.Stage, got.Reviews)
+	}
+}
+
 func TestRecheckWalled(t *testing.T) {
 	m, _, _, _ := noCommitRig(t, 0)
 	m.C.Projects.Add(core.Project{Name: "secret", Repo: "me/secret", Isolated: true})

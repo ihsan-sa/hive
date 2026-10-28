@@ -45,8 +45,9 @@ func (m *Module) mayChange(r core.Run, t Task, verb string) error {
 
 // Amend replaces a waiting brief's title, done line or known context with
 // those given (an empty one is kept), so its worker starts on the ask as it
-// stands now. An issue already open gets the brief as amended in a comment,
-// edited in place on each later amend.
+// stands now. An issue already open gets the amended brief as its title and
+// body, and a comment (edited in place on each later amend) saying who
+// changed what and why.
 func (m *Module) Amend(r core.Run, id, title, done, known, why string) (Task, error) {
 	title, done, known = strings.TrimSpace(title), strings.TrimSpace(done), strings.TrimSpace(known)
 	if title == "" && done == "" && known == "" {
@@ -82,8 +83,11 @@ func (m *Module) Amend(r core.Run, id, title, done, known, why string) (Task, er
 	}
 	if t.Issue.Number != 0 {
 		if p, err := m.project(&t); err == nil {
-			body := fmt.Sprintf("The brief was amended by %s%s; its worker starts on this:\n\n%s", r.ID, suffixed(core.Clip(why, 300)), m.issueBody(&t, p))
-			if err := m.C.Effects.Forge.StatusComment(p.Repo, t.Issue.Number, "<!-- hive-amended:"+t.ID+" -->", body); err != nil {
+			err := m.C.Effects.Forge.EditIssue(p.Repo, t.Issue.Number, t.Label(), m.issueBody(&t, p)+"\n\n"+marker(t.ID))
+			if err == nil {
+				err = m.C.Effects.Forge.StatusComment(p.Repo, t.Issue.Number, "<!-- hive-amended:"+t.ID+" -->", "The brief above was "+note+".")
+			}
+			if err != nil {
 				note += "; the issue couldn't be updated: " + core.Clip(err.Error(), 200)
 			}
 		}

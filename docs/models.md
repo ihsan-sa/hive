@@ -55,6 +55,13 @@ model ids and free tiers):
 | OpenRouter's free models | `https://openrouter.ai/api/v1` | `moonshotai/kimi-k2:free` |
 | Ollama on this machine | `http://127.0.0.1:11434/v1` | `qwen2.5-coder:14b` |
 
+OpenRouter is free-only, enforced (#355): the person's key there pays for
+every model but the free variants, so a model on `openrouter.ai` whose id
+doesn't end in `:free` is refused by `hive model add` and by the config check
+(a route or trial can't name it), a run won't start or take a turn on one, and
+the open agent sends it no request, probe included (`TestOpenRouterPaid`,
+`TestCheckRefusesAPaidOpenRouterModel`, `TestNoRequestForAPaidOpenRouterModel`).
+
 Other harnesses with a CLI of their own (Cursor, OpenCode, Aider) come in as
 harnesses through the harness-module seam rather than as more code in the open
 agent ([harnesses.md](harnesses.md)).

@@ -49,8 +49,11 @@ func TestAmendAndWithdrawAWaitingBrief(t *testing.T) {
 		t.Fatalf("not amended in place: %+v", got)
 	}
 	forge := m.C.Effects.Forge.(*flakyForge)
-	if cs := strings.Join(forge.Comments("me/p", got.Issue.Number), "\n"); !strings.Contains(cs, "amended by lead-1") || !strings.Contains(cs, "long paste") {
-		t.Fatalf("the issue doesn't show the amended brief: %q", cs)
+	if title, body := forge.Issue("me/p", got.Issue.Number); title != got.Label() || !strings.Contains(body, "10k characters") || !strings.Contains(body, marker(got.ID)) {
+		t.Fatalf("the issue doesn't show the amended brief: %q %q", title, body)
+	}
+	if cs := strings.Join(forge.Comments("me/p", got.Issue.Number), "\n"); !strings.Contains(cs, "amended by lead-1 (title, known): the person's second report") {
+		t.Fatalf("the issue doesn't say who amended it and why: %q", cs)
 	}
 
 	if _, err := op(m.opWithdraw, lead, map[string]any{"task": second["task"]}); err == nil {

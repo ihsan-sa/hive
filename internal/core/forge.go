@@ -63,6 +63,9 @@ type Forge interface {
 	IsEmpty(repo string) (bool, error)
 	DefaultBranch(repo string) string
 	CreateIssue(repo, title, body, marker string) (Issue, error)
+	// EditIssue replaces an issue's title and body (a body keeps its marker
+	// only if the caller writes it in again).
+	EditIssue(repo string, number int, title, body string) error
 	Comment(repo string, number int, body string) error
 	// StatusComment keeps one comment per issue or PR that carries marker:
 	// the first call posts it, later calls edit it in place.
@@ -631,6 +634,11 @@ func (GitHub) CreateIssue(repo, title, body, marker string) (Issue, error) {
 	return Issue{numberFromURL(url), url}, nil
 }
 
+func (GitHub) EditIssue(repo string, number int, title, body string) error {
+	_, err := gh(repo, "issue", "edit", strconv.Itoa(number), "-R", repo, "--title", title, "--body", body)
+	return err
+}
+
 func (GitHub) Comment(repo string, number int, body string) error {
 	_, err := gh(repo, "issue", "comment", strconv.Itoa(number), "-R", repo, "--body", body)
 	return err
@@ -782,7 +790,7 @@ func (g GitHub) MergePR(repo string, number int, sha, subject string) (string, e
 func (GitHub) squashBody(repo string, number int) string {
 	out, err := gh(repo, "pr", "view", strconv.Itoa(number), "-R", repo, "--json", "commits")
 	if err != nil {
-		return ""
+		return SquashBody(nil)
 	}
 	var v struct {
 		Commits []struct {
@@ -791,7 +799,7 @@ func (GitHub) squashBody(repo string, number int) string {
 		} `json:"commits"`
 	}
 	if json.Unmarshal([]byte(out), &v) != nil {
-		return ""
+		return SquashBody(nil)
 	}
 	if len(v.Commits) == 1 {
 		return SquashBody([]string{v.Commits[0].Body})
@@ -805,8 +813,18 @@ func (GitHub) squashBody(repo string, number int) string {
 
 var coAuthor = regexp.MustCompile(`(?im)^co-authored-by:.*$\n?`)
 
+// squashBodyMax keeps the body, one argv string to gh, well under Linux's
+// 128 KiB cap on a single argument (MAX_ARG_STRLEN).
+const squashBodyMax = 64 << 10
+
+// noSquashBody stands in for a body with nothing left in it: gh skips an
+// empty --body and GitHub writes its default, co-author lines and all.
+const noSquashBody = "Merged by the Hive."
+
 // SquashBody joins commit messages into a squash body with no
-// Co-authored-by trailer, so nobody but the Hive is credited.
+// Co-authored-by trailer, so nobody but the Hive is credited. It is never
+// empty, and past squashBodyMax it keeps each message's first line only,
+// then cuts at a line.
 func SquashBody(messages []string) string {
 	var parts []string
 	for _, m := range messages {
@@ -814,7 +832,24 @@ func SquashBody(messages []string) string {
 			parts = append(parts, m)
 		}
 	}
-	return strings.Join(parts, "\n\n")
+	body := strings.Join(parts, "\n\n")
+	if body == "" {
+		return noSquashBody
+	}
+	if len(body) <= squashBodyMax {
+		return body
+	}
+	for i, p := range parts {
+		parts[i], _, _ = strings.Cut(p, "\n")
+	}
+	if body = strings.Join(parts, "\n"); len(body) > squashBodyMax {
+		body = body[:squashBodyMax]
+		if i := strings.LastIndex(body, "\n"); i > 0 {
+			body = body[:i]
+		}
+		body = strings.ToValidUTF8(body, "")
+	}
+	return body + "\n\n(trimmed: the full messages are on the pull request)"
 }
 
 // ReadyPR marks a draft ready for review with the token for repo's owner,
