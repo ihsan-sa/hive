@@ -30,7 +30,8 @@ import (
 // Queued reports whether t is waiting for a worker.
 func (t Task) Queued() bool { return t.Stage == StageQueued || t.Stage == StageIssued }
 
-// inLine sorts waiting tasks: those the lead started now first, then those
+// inLine sorts waiting tasks: those the lead started now first, then workers
+// a conflict sends back, then those
 // filed overdue ago, oldest first, then those the lead ordered, in its
 // order, then the rest as filed.
 func (m *Module) inLine(q []Task) {
@@ -38,6 +39,9 @@ func (m *Module) inLine(q []Task) {
 		a, b := q[i], q[j]
 		if a.Now != b.Now {
 			return a.Now
+		}
+		if a.Resending() != b.Resending() { // work already under way finishes first
+			return a.Resending()
 		}
 		if a.Overdue() != b.Overdue() {
 			return a.Overdue()
@@ -77,7 +81,9 @@ func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]str
 	m.mu.Lock()
 	for _, t := range tasks {
 		switch {
-		case t.Queued() && !m.busy[t.ID]:
+		case (t.Queued() || t.Resending()) && !m.busy[t.ID]:
+			// A worker a conflict sends back takes a slot as a new one
+			// does: a main merge once reopened 19 at a pace of 1.
 			line = append(line, t)
 		case t.Stage == StageWorking && m.quiet(t):
 			// A quiet worker holds no slot: three held 3 of 8 slots for
@@ -89,7 +95,7 @@ func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]str
 			// A worker started past the pace whose turns go to a runner
 			// holds no slot here, until a turn of its runs here again.
 			away++
-		case t.Stage == StageWorking || t.Queued(): // or a queued one being started right now
+		case t.Stage == StageWorking || t.Queued(): // or a queued or resent one being started right now
 			ahead = append(ahead, t)
 			working++
 			if m.away[t.ID] {
@@ -149,9 +155,10 @@ func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]str
 			switch {
 			case t.Held:
 				wait[t.ID] = "held by " + cmp.Or(t.HeldBy, "the lead")
-			case working >= limit && away < awayMax(cfg) && elsewhereOnce():
+			case working >= limit && !t.Resending() && away < awayMax(cfg) && elsewhereOnce():
 				// Past the pace while a runner has room: its worker's turns
-				// go there first (core.RunSpec.Away).
+				// go there first (core.RunSpec.Away). A worker a conflict
+				// sends back is reopened, not launched, so it waits here.
 				start[t.ID], sent[t.ID] = true, true
 				away++
 			case working >= limit:
@@ -430,12 +437,14 @@ func (l *ids) UnmarshalJSON(b []byte) error {
 
 // Queue lists the waiting briefs r may see, in the order they will start.
 func (m *Module) Queue(r core.Run) []string {
-	line := m.List(func(t Task) bool { return t.Queued() && m.C.Runs.Walled(r, t.Project) == nil })
+	line := m.List(func(t Task) bool { return (t.Queued() || t.Resending()) && m.C.Runs.Walled(r, t.Project) == nil })
 	m.inLine(line)
 	out := []string{}
 	for i, t := range line {
 		why := t.Reason
-		if d := time.Since(t.Created); !t.Created.IsZero() && d >= time.Hour {
+		if t.Resending() { // it started long ago: its wait is the pace's, not the brief's
+			why = strings.TrimSuffix("its worker goes back to merge main; "+why, "; ")
+		} else if d := time.Since(t.Created); !t.Created.IsZero() && d >= time.Hour {
 			// The lead sees the long waits, and which go ahead of its order.
 			age := fmt.Sprintf("waited %s", d.Round(time.Minute))
 			if t.Overdue() && !t.Now {
