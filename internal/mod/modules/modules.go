@@ -92,8 +92,14 @@ func sourcePath(dir string) string { return filepath.Join(dir, ".hive-source.jso
 
 // InstallDefaults writes the default modules that aren't installed yet, and
 // refreshes ones still identical to an older builtin release.
-func (r *Registry) InstallDefaults() error {
-	entries, err := fs.ReadDir(defaults.FS, ".")
+func (r *Registry) InstallDefaults() error { return r.InstallFrom(defaults.FS, core.Version) }
+
+// InstallFrom is InstallDefaults from another copy of the default modules:
+// the release module hands it main's tip, so a merged change to them (the
+// agents' prompts) shapes the next turn without a release. release names
+// what fsys is ("main@<sha>"); a module edited here stays as it is.
+func (r *Registry) InstallFrom(fsys fs.FS, release string) error {
+	entries, err := fs.ReadDir(fsys, ".")
 	if err != nil {
 		return err
 	}
@@ -107,13 +113,13 @@ func (r *Registry) InstallDefaults() error {
 		if hasSrc && src.Source != "builtin" {
 			continue
 		}
-		if hasSrc && (src.Release == core.Version || hashDir(dir) != src.Hash) {
+		if hasSrc && (src.Release == release || hashDir(dir) != src.Hash) {
 			continue // current, or edited locally: the Hive's own changes win
 		}
-		if err := writeDefault(name, dir); err != nil {
+		if err := writeDefault(fsys, name, dir); err != nil {
 			return err
 		}
-		s := Source{Source: "builtin", Release: core.Version, Installed: time.Now().UTC(), Projects: []string{"*"}, Hash: hashDir(dir)}
+		s := Source{Source: "builtin", Release: release, Installed: time.Now().UTC(), Projects: []string{"*"}, Hash: hashDir(dir)}
 		if hasSrc {
 			s.Installed, s.Projects, s.Updated = src.Installed, src.Projects, time.Now().UTC()
 		}
@@ -124,8 +130,10 @@ func (r *Registry) InstallDefaults() error {
 	return nil
 }
 
-func writeDefault(name, dir string) error {
-	return fs.WalkDir(defaults.FS, name, func(p string, d fs.DirEntry, err error) error {
+// writeDefault writes each file whole (an agent starting reads a prompt
+// while it is replaced).
+func writeDefault(fsys fs.FS, name, dir string) error {
+	return fs.WalkDir(fsys, name, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -134,11 +142,11 @@ func writeDefault(name, dir string) error {
 		if d.IsDir() {
 			return os.MkdirAll(target, 0o755)
 		}
-		raw, err := defaults.FS.ReadFile(p)
+		raw, err := fs.ReadFile(fsys, p)
 		if err != nil {
 			return err
 		}
-		return os.WriteFile(target, raw, 0o644)
+		return core.WriteFileAtomic(target, raw, 0o644)
 	})
 }
 
