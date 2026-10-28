@@ -5,3 +5,5 @@
 *.test
 *.exe~
 __pycache__/
+# Left by a disk test cut off before its cleanup (internal/core, internal/sandbox)
+disk-test-*/

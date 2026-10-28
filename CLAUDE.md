@@ -17,7 +17,7 @@ Dev runs without touching GitHub or plan usage: `HIVE_HOME=<dir> HIVE_FORGE=loca
 
 ## Docs
 
-- [docs/status.md](docs/status.md): what's done, in flight, next. Read first.
+- [docs/status.md](docs/status.md): what stands now: focus, paused, not verified, next. Read first.
 - [docs/overview.md](docs/overview.md): the plain account behind the README and its diagram (`docs/arch.json`). It repeats facts from status.md and goals.md; update it in the same change.
 - [docs/architecture.md](docs/architecture.md): packages, folder layout, data flow, invariants.
 - [docs/core.md](docs/core.md): what the core is, its measured size, and what moves out to modules. New functionality goes in a module unless it says core.
@@ -36,3 +36,4 @@ Dev runs without touching GitHub or plan usage: `HIVE_HOME=<dir> HIVE_FORGE=loca
 - Host git never runs in an agent's checkout. Files the sandbox can write are read with `core.SafeRead`.
 - Every state change is a journal event; every forge/run creation is idempotent so a restart never duplicates.
 - Nothing an agent asks for runs outside the sandbox, except a warden's or tribunal's approved script, pinned by the digest of its text (not the files it calls), which the risk module runs in the daemon (see docs/risk.md).
+- Docs go one sentence per line (a very long one, one clause per line), so two changes to different sentences merge without a conflict. Don't add a "Done:" line to docs/status.md for your change: git log and the journal record it.
