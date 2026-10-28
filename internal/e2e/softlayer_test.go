@@ -236,7 +236,8 @@ func askLanded(st api.State, project string) (work.Task, bool) {
 }
 
 // armTookEffect: the system prompt of every run the sub-Hive made starts
-// with the arm's orientation.
+// with the arm's orientation, but for the read-only seats, which get their
+// role alone.
 func armTookEffect(h *hive, arm softlayer.Variant, essay string) bool {
 	files, err := arm.Build(essay)
 	if err != nil {
@@ -247,9 +248,9 @@ func armTookEffect(h *hive, arm softlayer.Variant, essay string) bool {
 	for _, line := range strings.Split(string(raw), "\n") {
 		var e struct {
 			Kind string
-			Data struct{ ID string }
+			Data struct{ ID, Role string }
 		}
-		if json.Unmarshal([]byte(line), &e) != nil || e.Kind != "run.created" {
+		if json.Unmarshal([]byte(line), &e) != nil || e.Kind != "run.created" || e.Data.Role == "reviewer" || e.Data.Role == core.JudgeRole {
 			continue
 		}
 		runs++

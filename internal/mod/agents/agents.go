@@ -31,9 +31,18 @@ type Agents struct {
 	Board func(role, project string) string
 }
 
+// readOnly are the seats that read one change and answer, changing nothing
+// and talking to no one: they get their role alone, not the orientation on
+// working in the Hive or the modules (docs/research/forced.md). The security
+// reader is a reviewer run.
+var readOnly = map[string]bool{"reviewer": true, core.JudgeRole: true}
+
 // System is the appended system prompt for a role: orientation, the role,
-// and the modules this run may use.
+// and the modules this run may use; for a read-only seat, the role alone.
 func (a *Agents) System(role, project string) string {
+	if readOnly[role] {
+		return a.Mod.Prompt(role + ".md")
+	}
 	var b strings.Builder
 	b.WriteString(a.Mod.Prompt("orientation.md"))
 	b.WriteString("\n\n")

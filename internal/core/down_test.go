@@ -172,3 +172,12 @@ func TestParkedRunWakesWhenThePickComesBack(t *testing.T) {
 		t.Fatalf("after the config changed: %s until %v (%s)", got.Status, got.ParkedUntil, got.Reason)
 	}
 }
+
+// A Codex turn whose model its login refuses (400 model_not_found) marks the
+// pick down, so the run moves to the next stop.
+func TestCantAnswerCodexModelRefused(t *testing.T) {
+	res := &harness.Result{IsError: true, APIStatus: 400, Text: `{"error":{"code":"model_not_found","message":"The 'gpt-5' model is not supported when using Codex with a ChatGPT account."}}`}
+	if !cantAnswer(Pick{Harness: "codex", Model: "gpt-5"}, res, "", 1, 1) {
+		t.Fatal("not marked down")
+	}
+}
