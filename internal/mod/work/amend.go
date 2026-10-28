@@ -139,8 +139,20 @@ func (m *Module) Withdraw(r core.Run, id, into, why string) (Task, error) {
 		}
 	}
 	m.save(&t, reason)
-	m.notify(&t, fmt.Sprintf("Withdrawn before a worker started: %q (%s)", t.Label(), reason))
+	text := fmt.Sprintf("Withdrawn before a worker started: %q (%s)", t.Label(), reason)
+	if quietWithdrawer(r) {
+		m.post(&t, text)
+	} else {
+		m.notify(&t, text)
+	}
 	return t, nil
+}
+
+// quietWithdrawer says a withdrawal by r needs no lead's turn: a lead (the
+// main one or a project's) decided it, or improve or a step-back took back
+// its own brief, with its reason on the task and in the feed.
+func quietWithdrawer(r core.Run) bool {
+	return r.Role == "lead" || r.Role == "stepback" || r.ID == "improve"
 }
 
 func (m *Module) opAmend(r core.Run, args json.RawMessage) (any, error) {

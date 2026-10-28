@@ -29,7 +29,8 @@ import (
 //   - Go modules come from one shared cache, filled by the effects process
 //     (outside the sandbox, running no code of the commit's: `go mod
 //     download`, as the recursive gate's prefetch does) once per go.mod and
-//     go.sum, and mounted read-only with GOPROXY=off and -mod=readonly.
+//     go.sum, and mounted read-only with GOPROXY=off and -mod=readonly. A
+//     check fetching its own modules still reads it first, as a file:// proxy.
 //   - A check's own home lives under the workspace's cache folder, is capped
 //     in size (config check_cache_max_mb) and removed after.
 //   - A Go project's build cache is shared only from main: a check of a
@@ -179,6 +180,7 @@ func (e *Effects) checkCacheCap() int64 {
 type goMods struct {
 	mounts []sandbox.Mount
 	env    []string
+	own    []string // env instead, for a run fetching its own modules
 	note   string
 	marker string
 	sum    []byte // the go.sum the marker is for
@@ -216,14 +218,16 @@ func (e *Effects) goModules(sb sandbox.Sandbox, dir string) goMods {
 		none.note = "modules not prefetched: " + why
 		return none
 	}
+	shared := []sandbox.Mount{{Host: e.ws.GoModCache(), Inside: GoModInside}}
 	h := sha256.Sum256(append(append(mod, 0), sum...))
 	key := hex.EncodeToString(h[:8])
 	marker := filepath.Join(e.ws.goSums(), key)
-	if ownMarked(marker) {
-		none.note = "modules not prefetched: a check of this go.mod and go.sum needed a module they don't name"
-		return none
-	}
 	e.modMu.RLock() // Prune empties the cache only while no check fetches into or reads it
+	if ownMarked(marker) {
+		os.MkdirAll(e.ws.GoModCache(), 0o755)
+		return goMods{mounts: shared, env: ownModEnv, own: ownModEnv, done: e.modMu.RUnlock,
+			note: "a check of this go.mod and go.sum needed a module they don't name; it fetches what the shared module cache lacks"}
+	}
 	if !Exists(marker) {
 		unlock := e.lock("gomod:" + key)
 		if !Exists(marker) {
@@ -251,9 +255,16 @@ func (e *Effects) goModules(sb sandbox.Sandbox, dir string) goMods {
 		unlock()
 	}
 	os.MkdirAll(e.ws.GoModCache(), 0o755) // a module with nothing to fetch still mounts it
-	return goMods{mounts: []sandbox.Mount{{Host: e.ws.GoModCache(), Inside: GoModInside}},
-		env: []string{"GOMODCACHE=" + GoModInside, "GOFLAGS=-mod=readonly", "GOPROXY=off"}, marker: marker, sum: sum, done: e.modMu.RUnlock}
+	return goMods{mounts: shared, env: []string{"GOMODCACHE=" + GoModInside, "GOFLAGS=-mod=readonly", "GOPROXY=off"},
+		own: ownModEnv, marker: marker, sum: sum, done: e.modMu.RUnlock}
 }
+
+// ownModEnv is a check's environment when it fetches its own modules: the
+// shared cache, mounted read-only, is its first proxy, so only what the cache
+// lacks comes over the network. A check fetching everything from the proxy
+// failed whenever the proxy refused it (2ea48ab0: "Forbidden" twice, then a
+// pass).
+var ownModEnv = []string{"GOPROXY=file://" + GoModInside + "/cache/download,https://proxy.golang.org,direct"}
 
 // goBuild readies the project's shared build cache for a check of sha in dir,
 // where goModules would share the module cache. A commit on main's line

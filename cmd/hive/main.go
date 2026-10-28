@@ -196,6 +196,8 @@ func run(args []string) int {
 			return 2
 		}
 		return gate.Connect(args[0], args[1])
+	case "gate-broker": // outside a box of sub-Hives: their GitHub, their own repositories alone
+		return gate.BrokerMain(args)
 	case "gate":
 		return cmdGate(args)
 	case "improve":
