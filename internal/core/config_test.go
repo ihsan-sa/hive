@@ -3,9 +3,13 @@ package core
 import (
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/ihsan-sa/hive-standalone-build/internal/harness"
 )
 
 // A seat config.json can't read is refused by name, and every setting after
@@ -81,14 +85,65 @@ func TestSetShareOnAgainKeepsSince(t *testing.T) {
 	}
 }
 
-// A model on OpenRouter that isn't a free variant is refused; a free one passes.
-func TestCheckRefusesAPaidOpenRouterModel(t *testing.T) {
-	c := Config{Models: map[string]OpenModel{"or": {Endpoint: "https://openrouter.ai/api/v1", Model: "anthropic/claude-opus-5", Key: true}}}
-	if err := c.Check(); err == nil || !strings.Contains(err.Error(), "model or:") {
-		t.Fatalf("a paid OpenRouter model passed: %v", err)
+// A paid model on OpenRouter is refused while OpenRouter is free-only (no
+// openrouter_monthly_usd) or it has no price its spend is counted at; with
+// both it passes, under the month's cap. A free one always passes.
+func TestCheckAllowsAPaidOpenRouterModelUnderTheCap(t *testing.T) {
+	paid := OpenModel{Endpoint: "https://openrouter.ai/api/v1", Model: "anthropic/claude-opus-5", Key: true}
+	c := Config{Models: map[string]OpenModel{"or": paid}}
+	if err := c.Check(); err == nil || !strings.Contains(err.Error(), "model or:") || !strings.Contains(err.Error(), "free-only") {
+		t.Fatalf("a paid OpenRouter model passed with no cap: %v", err)
 	}
-	c.Models["or"] = OpenModel{Endpoint: "https://openrouter.ai/api/v1", Model: "nvidia/nemotron-3-ultra-550b-a55b:free", Key: true}
+	c.OpenRouterUSD = 10
+	if err := c.Check(); err == nil || !strings.Contains(err.Error(), "no price") {
+		t.Fatalf("an unpriced paid OpenRouter model passed: %v", err)
+	}
+	paid.Price = &Price{Input: 0.3, Output: 1.2}
+	c.Models["or"] = paid
 	if err := c.Check(); err != nil {
 		t.Fatal(err)
+	}
+	c = Config{Models: map[string]OpenModel{"or": {Endpoint: "https://openrouter.ai/api/v1", Model: "nvidia/nemotron-3-ultra-550b-a55b:free", Key: true}}}
+	if err := c.Check(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A module's hooks hold a pick (Held) and limit a turn's budget (TurnBudget):
+// freeAt waits for the hold, and a turn's --max-budget-usd is the smaller of
+// the run's own and the module's.
+func TestModuleHoldsAPickAndLimitsATurn(t *testing.T) {
+	c, _ := testHive(t)
+	month := time.Now().Add(30 * 24 * time.Hour)
+	c.Runs.Held = func(p Pick) time.Time {
+		if p.Model == "held" {
+			return month
+		}
+		return time.Time{}
+	}
+	if at := c.Runs.freeAt("open", "held", false); !at.Equal(month) {
+		t.Fatalf("a held pick has room at %v, want %v", at, month)
+	}
+	if at := c.Runs.freeAt("open", "other", false); at.After(time.Now().Add(time.Minute)) {
+		t.Fatalf("a pick no module holds waits until %v", at)
+	}
+	h, _ := harness.Get("open")
+	r := Run{RunSpec: RunSpec{ID: "r", Role: "worker", Harness: "open", Model: "m", Budget: 5}}
+	budget := func() string {
+		spec, err := c.Runs.sandboxSpec(c.WS.LoadConfig(), isolatedSB{}, h, r, 1, false, filepath.Join(t.TempDir(), "p"), nil, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		args := strings.Join(spec.Argv, " ")
+		_, after, _ := strings.Cut(args, "--max-budget-usd ")
+		return strings.Fields(after + " ")[0]
+	}
+	c.Runs.TurnBudget = func(Run) float64 { return 2 }
+	if b := budget(); b != "2" {
+		t.Fatalf("budget %q, want the module's 2", b)
+	}
+	c.Runs.TurnBudget = func(Run) float64 { return 9 }
+	if b := budget(); b != "5" {
+		t.Fatalf("budget %q, want the run's own 5", b)
 	}
 }

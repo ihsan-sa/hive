@@ -137,6 +137,12 @@ type Config struct {
 	MaxOutputTokens int `json:"max_output_tokens"`
 	// MonthlyUSD: once this month's runs cost more, the person is told once. Work goes on; 0 is off.
 	MonthlyUSD float64 `json:"monthly_usd,omitempty"`
+	// OpenRouterUSD is what paid OpenRouter models may cost in a month
+	// (UTC): a paid one, priced so its spend is counted (PaidRefused), goes
+	// after the rest of a route and takes turns only while the month's spend
+	// on them is under it (internal/mod/models/paid.go). 0 keeps OpenRouter
+	// free-only.
+	OpenRouterUSD float64 `json:"openrouter_monthly_usd,omitempty"`
 	// A turn waits while available memory is under MemFloorMB, or memory or
 	// CPU pressure (Linux PSI "some avg10", percent) is over its limit; 0 turns a check off.
 	MemFloorMB     int     `json:"mem_floor_mb"`
@@ -319,7 +325,7 @@ func (c Config) Check() error {
 		return err
 	}
 	for _, name := range slices.Sorted(maps.Keys(c.Models)) {
-		if err := harness.OpenRouterPaid(c.Models[name].Endpoint, c.Models[name].Model); err != nil {
+		if err := c.PaidRefused(name); err != nil {
 			return fmt.Errorf("model %s: %v", name, err)
 		}
 	}

@@ -477,6 +477,11 @@ type Runs struct {
 	// two launches are never both let into the last room, and so must not
 	// call back into Runs; nil starts every turn.
 	Admit func(r Run, live []Run, cfg Config) string
+	// Held is when a module next lets a pick take turns (a model at a
+	// spending cap), zero when it doesn't hold it; TurnBudget is the most a
+	// module lets run's next turn spend, 0 for no limit. Either may be nil.
+	Held       func(Pick) time.Time
+	TurnBudget func(Run) float64
 
 	mu      sync.Mutex
 	runs    map[string]*Run
@@ -1072,8 +1077,9 @@ func (rs *Runs) Start(s RunSpec) (Run, error) {
 		return Run{}, err
 	}
 	if HarnessName(s.Harness) == "open" {
-		m := rs.ws.LoadConfig().Models[s.Model]
-		if err := harness.OpenRouterPaid(m.Endpoint, m.Model); err != nil {
+		cfg := rs.ws.LoadConfig()
+		m := cfg.Models[s.Model]
+		if err := cfg.PaidRefused(s.Model); err != nil {
 			return Run{}, fmt.Errorf("a run won't start on %s: %v", s.Model, err)
 		}
 		if err := m.Holds(s.Budget); err != nil {
@@ -1338,6 +1344,10 @@ func (rs *Runs) logins(h, model string) []Login {
 // its retry too. A check (Reserved) has room up to the week's stop.
 func (rs *Runs) freeAt(h, model string, reserve bool) time.Time {
 	now := time.Now()
+	var held time.Time
+	if rs.Held != nil {
+		held = rs.Held(Pick{Harness: HarnessName(h), Model: model})
+	}
 	logins := rs.logins(h, model)
 	limited := rs.limited(keys(logins), now)
 	var at time.Time
@@ -1362,7 +1372,18 @@ func (rs *Runs) freeAt(h, model string, reserve bool) time.Time {
 	if d, ok := rs.down[Pick{Harness: HarnessName(h), Model: model}.String()]; ok && d.Retry.After(at) {
 		at = d.Retry
 	}
+	if held.After(at) {
+		at = held
+	}
 	return at
+}
+
+// turnBudget is the most a module lets run's next turn spend (TurnBudget).
+func (rs *Runs) turnBudget(r Run) float64 {
+	if rs.TurnBudget == nil {
+		return 0
+	}
+	return rs.TurnBudget(r)
 }
 
 // next is the pick r's next turn goes on, and when it has room: the first of
@@ -2378,7 +2399,7 @@ func (rs *Runs) launch(r Run, cfg Config) {
 	}
 	if HarnessName(r.Harness) == "open" {
 		m := cfg.Models[r.Model]
-		if err := harness.OpenRouterPaid(m.Endpoint, m.Model); err != nil {
+		if err := cfg.PaidRefused(r.Model); err != nil {
 			rs.SetStatus(r.ID, StatusBlocked, fmt.Sprintf("no turn on %s: %v; route the run to a free model and reopen it", r.Model, err))
 			return
 		}
@@ -2573,6 +2594,9 @@ func (rs *Runs) sandboxSpec(cfg Config, sb sandbox.Sandbox, h harness.Harness, r
 		// Claude Code counts --max-budget-usd against this process's spend
 		// only, not the running total a resumed session carries on.
 		t.MaxBudgetUSD = max(r.Budget-r.Cost, 0.01)
+	}
+	if b := rs.turnBudget(r); b > 0 && (t.MaxBudgetUSD == 0 || b < t.MaxBudgetUSD) {
+		t.MaxBudgetUSD = b
 	}
 	if sb.Isolated() {
 		t.SystemFile = "/hive/run/system.md"

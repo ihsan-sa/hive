@@ -92,6 +92,8 @@ func New(ws core.Workspace, forge core.Forge) (*App, error) {
 	a.Models = models.New(c, a.Work)
 	a.Agents.Skip = a.Models.Benched
 	a.Agents.Demote = a.Models.Demoted
+	a.Agents.Last = a.Models.Paid.Last
+	c.Runs.Held, c.Runs.TurnBudget = a.Models.Paid.Held, a.Models.Paid.TurnBudget
 	a.Improve.OnKept = a.Release.AfterKept
 	a.Runner = &runner.Runner{C: c, Mods: a.Mods, Agents: a.Agents}
 	c.Runs.Executor = a.Runner.Executor
