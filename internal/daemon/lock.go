@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -64,6 +65,42 @@ func (e *AlreadyRunning) Error() string {
 // answer: a daemon shutting down holds it until it has exited, which a
 // Windows runner has taken seconds to do.
 var stopWait = 30 * time.Second
+
+// takeOverWait is how long an update's replacement waits for the daemon it
+// replaces to let go of the workspace before it ends that daemon.
+var takeOverWait = 2 * time.Minute
+
+// endProcess ends pid at once (SIGKILL; TerminateProcess on Windows).
+var endProcess = func(pid int) error {
+	p, err := os.FindProcess(pid)
+	if err != nil {
+		return err
+	}
+	return p.Kill()
+}
+
+// takeOver takes the workspace from pid, the daemon an update replaced. It
+// waits up to wait for that daemon to let go, as it does once its shutdown
+// ends; one still holding it then has hung on the way out, and is ended
+// rather than left holding a workspace no daemon serves.
+func takeOver(ws core.Workspace, pid int, wait time.Duration) (*workspaceLock, error) {
+	lock, err := lockWorkspace(ws, wait, false)
+	var held *AlreadyRunning
+	if err == nil || !errors.As(err, &held) || held.By.PID != pid || !proc.Alive(proc.Handle{PID: pid}) {
+		if err != nil {
+			fmt.Printf("hive: %s: the daemon an update replaced (pid %d) let go, but the workspace is held (%v), so this one exits\n", time.Now().Format(time.DateTime), pid, err)
+		}
+		return lock, err
+	}
+	fmt.Printf("hive: %s: the daemon an update replaced (pid %d) still held the workspace after %s, so it is ended\n", time.Now().Format(time.DateTime), pid, wait)
+	if err := endProcess(pid); err != nil {
+		fmt.Printf("hive: couldn't end pid %d: %v\n", pid, err)
+	}
+	if lock, err = lockWorkspace(ws, 10*time.Second, false); err != nil {
+		fmt.Printf("hive: %s: the workspace is still held after ending pid %d (%v), so the Hive stays down until it is started again\n", time.Now().Format(time.DateTime), pid, err)
+	}
+	return lock, err
+}
 
 // lockWorkspace takes the workspace's daemon lock, trying for up to wait
 // (an update's restart waits out the daemon it replaces, a start waits out

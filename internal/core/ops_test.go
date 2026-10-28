@@ -216,26 +216,38 @@ func TestANewRequestWakesTheLoopOnce(t *testing.T) {
 	}
 }
 
-// settled waits for the last lines of a file still being written, and ends
-// soon once it stops growing. The quiet is ten of the writer's gaps and the
-// bounds are wide: a loaded gate machine once held the writer past 50ms.
+// settle waits for the last lines of a file still being written, and ends
+// once it has been still for quiet, or at most. It runs on a fake clock: on a
+// loaded machine a real writer goroutine was once not scheduled for 370ms.
 func TestSettledWaitsForTheLastLines(t *testing.T) {
+	var clock time.Time
+	now := func() time.Time { return clock }
+	// The file grows by a line every 20ms until 80ms, then is still.
+	size := func() int64 {
+		ms := clock.Sub(time.Time{}).Milliseconds()
+		return 2 + 5*min(ms/20, 4)
+	}
+	sleep := func(d time.Duration) { clock = clock.Add(d) }
+	settle(size, now, sleep, 50*time.Millisecond, 5*time.Second)
+	if got := size(); got != 22 {
+		t.Fatalf("settled at %v with %d bytes; want all four lines (22)", clock.Sub(time.Time{}), got)
+	}
+	if d := clock.Sub(time.Time{}); d < 130*time.Millisecond || d > 150*time.Millisecond {
+		t.Fatalf("settled at %v; want 50ms after the last line at 80ms", d)
+	}
+
+	// A file that never stops growing ends at most.
+	clock = time.Time{}
+	grow := int64(0)
+	settle(func() int64 { grow++; return grow }, now, sleep, 50*time.Millisecond, time.Second)
+	if d := clock.Sub(time.Time{}); d != time.Second {
+		t.Fatalf("a growing file ended at %v; want the 1s bound", d)
+	}
+
+	// The real file wrapper ends soon on a still file.
 	path := filepath.Join(t.TempDir(), "out.jsonl")
 	os.WriteFile(path, []byte("a\n"), 0o600)
-	go func() {
-		for i := 0; i < 4; i++ {
-			time.Sleep(20 * time.Millisecond)
-			f, _ := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
-			f.WriteString("line\n")
-			f.Close()
-		}
-	}()
 	start := time.Now()
-	settled(path, 200*time.Millisecond, 5*time.Second)
-	if raw, _ := os.ReadFile(path); strings.Count(string(raw), "line") != 4 {
-		t.Fatalf("settled after %s with %q; want all four lines", time.Since(start), raw)
-	}
-	start = time.Now()
 	settled(path, 50*time.Millisecond, 5*time.Second)
 	if d := time.Since(start); d >= 2*time.Second {
 		t.Fatalf("a still file took %s to settle; want about 50ms", d)

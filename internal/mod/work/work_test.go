@@ -844,9 +844,10 @@ func TestScoredBriefCarriesTheGoal(t *testing.T) {
 	}
 }
 
-// A review's brief ends with main's docs/REVIEW.md in full and points at
-// goals and lessons by path rather than carrying them; a project with none of
-// the files gets nothing appended.
+// A review's brief ends with main's standing rules, goals and lessons
+// included: the seat's checkout is the change's head, where a diff may have
+// edited them (hive-eval #26); a project with none of the files gets nothing
+// appended.
 func TestReviewRulesFromMain(t *testing.T) {
 	m, p := rigAt(t, `{"test":"true"}`)
 	if r := m.reviewRules(p, "HEAD"); r != "" {
@@ -863,8 +864,8 @@ func TestReviewRulesFromMain(t *testing.T) {
 		}
 	}
 	r := m.reviewRules(p, "HEAD")
-	i, j := strings.Index(r, "## `docs/REVIEW.md` on main\n\n# Review\n\nsimple wins"), strings.Index(r, "`.hive/goals.md` and `.hive/lessons.md` are in your checkout")
-	if i < 0 || j < i || strings.Contains(r, "ship it") || strings.Contains(r, "don't do that again") {
+	i, j, k := strings.Index(r, "## `docs/REVIEW.md` on main\n\n# Review\n\nsimple wins"), strings.Index(r, "## `.hive/goals.md` on main\n\n# Goals\n\nship it"), strings.Index(r, "## `.hive/lessons.md` on main\n\n# Lessons\n\n- don't do that again")
+	if i < 0 || j < i || k < j {
 		t.Fatalf("rules:\n%s", r)
 	}
 }
