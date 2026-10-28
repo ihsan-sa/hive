@@ -94,6 +94,7 @@ func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]str
 		// a conflict, with their worker if need be.
 	}
 	m.mu.Unlock()
+	back := m.sentBack(tasks)
 	m.inLine(line)
 	// A strained machine lets one task a pass go to an executor module with
 	// room (machineHold); the executor is asked at most once a pass.
@@ -130,6 +131,9 @@ func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]str
 				wait[t.ID], capped = full, true
 			case func() bool { held = hold(working); return held != "" }():
 				wait[t.ID] = "waiting: " + steady(held)
+				if !onlyLoad(held) {
+					m.C.Runs.Holding() // the turns after a strain ramp up (load alone holds only past the start)
+				}
 			default:
 				start[t.ID] = true
 				working++
@@ -141,12 +145,73 @@ func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]str
 	// line is sorted again at the new one.
 	limit := m.paceWorkers(cfg, working, false)
 	start, wait, capped := decide(limit)
-	if capped {
+	if capped || back > 0 && working >= limit { // a worker sent back waits on the limit too
 		if l := m.paceWorkers(cfg, working, true); l != limit {
 			start, wait, _ = decide(l)
 		}
 	}
 	return start, wait
+}
+
+// paceBack says why a worker sent back to its task (a conflict with main, a
+// reviewer's findings, a retry) waits to take its next turn, or "": it takes
+// a slot under the workers' pace like a brief that starts, ahead of the
+// briefs (admit counts it as working). On 10-28 a merge sent 22 conflicting
+// PRs back at once through Reopen, which went past the pace: 19 workers ran
+// while it said 1, and load reached 481. It is core's Runs.Admit.
+func (m *Module) paceBack(r core.Run) string {
+	if !r.Returned || r.Role != "worker" {
+		return ""
+	}
+	mine, working := false, 0
+	tasks := m.List(func(t Task) bool { return !t.Terminal() && t.Worker != "" })
+	m.backMu.Lock()
+	defer m.backMu.Unlock()
+	if m.backIn[r.ID] {
+		return ""
+	}
+	for _, t := range tasks {
+		switch {
+		case t.Worker == r.ID:
+			mine = true
+		case t.Stage == StageWorking && !m.quiet(t) && !m.waitsBack(t):
+			working++
+		}
+	}
+	if !mine {
+		return ""
+	}
+	if working >= cmp.Or(m.workers.get(), m.C.WS.LoadConfig().MaxWorkers, defaultWorkers) {
+		return "waiting for a worker (at the pace): sent back to its task"
+	}
+	m.backIn[r.ID] = true
+	return ""
+}
+
+// waitsBack says whether t's worker was sent back to it and waits on the
+// pace; backMu is held.
+func (m *Module) waitsBack(t Task) bool {
+	r, ok := m.C.Runs.Get(t.Worker)
+	return ok && r.Returned && r.Role == "worker" && !m.backIn[r.ID]
+}
+
+// sentBack counts the workers at work in tasks that were sent back and wait
+// on the pace, and forgets the ones let through whose turn has started.
+func (m *Module) sentBack(tasks []Task) int {
+	m.backMu.Lock()
+	defer m.backMu.Unlock()
+	for id := range m.backIn {
+		if r, ok := m.C.Runs.Get(id); !ok || !r.Returned {
+			delete(m.backIn, id)
+		}
+	}
+	n := 0
+	for _, t := range tasks {
+		if t.Stage == StageWorking && !m.quiet(t) && m.waitsBack(t) {
+			n++
+		}
+	}
+	return n
 }
 
 // machineHold says, for each task in line in turn with working workers at

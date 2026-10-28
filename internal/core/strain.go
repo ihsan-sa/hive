@@ -8,13 +8,17 @@ import (
 	"strings"
 )
 
-// procRoot is where Linux's figures are read; a test points it at its own.
-var procRoot = "/proc"
+// procRoot is where Linux's figures are read, and cgroupRoot where its
+// cgroups are; a test points them at its own.
+var procRoot, cgroupRoot = "/proc", "/sys/fs/cgroup"
 
 // Strained says why the machine is too strained to start a turn, or "". It
 // reads Linux's MemAvailable and memory and CPU pressure (PSI "some avg10",
 // the share of the last ten seconds some task stalled); where those files
-// don't exist it never holds. A limit of 0 turns its check off.
+// don't exist it never holds. A limit of 0 turns its check off. Pressure is
+// the Hive's own (pressureFile): on 10-28 the machine's read 67% for twenty
+// minutes while a hive-eval unit stalled inside its own memory cap and the
+// daemon had none, and every run was held on it.
 func Strained(memFloorMB int, memPressureMax, cpuPressureMax float64) string {
 	return strained(procRoot, memFloorMB, memPressureMax, cpuPressureMax)
 }
@@ -32,7 +36,7 @@ func strained(proc string, memFloorMB int, memPressureMax, cpuPressureMax float6
 		if c.max <= 0 {
 			continue
 		}
-		if p, ok := procField(proc+"/pressure/"+c.what, "avg10="); ok && p > c.max {
+		if p, ok := procField(pressureFile(proc, c.what), "avg10="); ok && p > c.max {
 			return fmt.Sprintf("machine under %s pressure (%.2f%%, limit %g%%)", c.what, p, c.max)
 		}
 	}
@@ -50,12 +54,31 @@ func watched(proc string, memFloorMB int, memPressureMax, cpuPressureMax, loadMa
 	for _, r := range []struct {
 		on   bool
 		file string
-	}{{memFloorMB > 0, "meminfo"}, {memPressureMax > 0, "pressure/memory"}, {cpuPressureMax > 0, "pressure/cpu"}, {loadMax > 0, "loadavg"}} {
-		if _, err := os.Stat(proc + "/" + r.file); r.on && err == nil {
+	}{{memFloorMB > 0, proc + "/meminfo"}, {memPressureMax > 0, pressureFile(proc, "memory")}, {cpuPressureMax > 0, pressureFile(proc, "cpu")}, {loadMax > 0, proc + "/loadavg"}} {
+		if _, err := os.Stat(r.file); r.on && err == nil {
 			return true
 		}
 	}
 	return false
+}
+
+// pressureFile is where what's pressure ("memory" or "cpu") is read: the
+// daemon's own cgroup's, which holds every turn it starts (they are its
+// children) and so counts their stalls whatever causes them, the machine
+// running short included, but not a sibling unit's stalling inside its own
+// cap. Outside a cgroup v2 of its own (at the root, or none mounted) it is
+// the machine's.
+func pressureFile(proc, what string) string {
+	raw, _ := os.ReadFile(proc + "/self/cgroup")
+	for _, line := range strings.Split(string(raw), "\n") {
+		if path, ok := strings.CutPrefix(line, "0::"); ok && path != "/" && path != "" {
+			f := cgroupRoot + path + "/" + what + ".pressure"
+			if _, err := os.Stat(f); err == nil {
+				return f
+			}
+		}
+	}
+	return proc + "/pressure/" + what
 }
 
 // procField reads the number after the first occurrence of key in a /proc

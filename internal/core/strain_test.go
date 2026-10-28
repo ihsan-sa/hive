@@ -48,6 +48,36 @@ func TestStrained(t *testing.T) {
 	}
 }
 
+// Pressure is read from the daemon's own cgroup where it has one: a sibling
+// unit stalling inside its own cap raises the machine's reading, not the
+// Hive's (10-28: every run held on 67% the daemon never felt).
+func TestStrainedReadsTheHivesOwnCgroup(t *testing.T) {
+	defer func(c string) { cgroupRoot = c }(cgroupRoot)
+	cgroupRoot = t.TempDir()
+	proc := fakeProc(t, "8000000", "67.00", "90.00") // the machine's, a sibling's stall in it
+	os.MkdirAll(filepath.Join(proc, "self"), 0o755)
+	own := filepath.Join(cgroupRoot, "user.slice", "hive.slice", "hive.service")
+	os.MkdirAll(own, 0o755)
+	os.WriteFile(filepath.Join(own, "memory.pressure"), []byte("some avg10=0.40 avg60=0.00 avg300=0.00 total=0\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0\n"), 0o644)
+	os.WriteFile(filepath.Join(own, "cpu.pressure"), []byte("some avg10=3.00 avg60=0.00 avg300=0.00 total=0\n"), 0o644)
+	os.WriteFile(filepath.Join(proc, "self", "cgroup"), []byte("0::/user.slice/hive.slice/hive.service\n"), 0o644)
+	if got := strained(proc, 1024, 10, 40); got != "" {
+		t.Errorf("the Hive's own cgroup is calm: %q, want no hold", got)
+	}
+	os.WriteFile(filepath.Join(own, "memory.pressure"), []byte("some avg10=22.00 avg60=0.00 avg300=0.00 total=0\n"), 0o644)
+	if got := strained(proc, 1024, 10, 40); !strings.Contains(got, "memory pressure (22.00%") {
+		t.Errorf("the Hive's own cgroup stalls: %q, want its memory pressure", got)
+	}
+	// At the root cgroup, or with none mounted, it is the machine's.
+	os.WriteFile(filepath.Join(proc, "self", "cgroup"), []byte("0::/\n"), 0o644)
+	if got := strained(proc, 1024, 10, 40); !strings.Contains(got, "memory pressure (67.00%") {
+		t.Errorf("no cgroup of its own: %q, want the machine's memory pressure", got)
+	}
+	if !watched(proc, 0, 10, 0, 0) {
+		t.Error("the machine's pressure file is there to read")
+	}
+}
+
 // A strain hold leaves a parked run's backoff and a nudged run's count alone,
 // and journals once however the live figures move.
 func TestStrainHoldKeepsBackoffAndNudges(t *testing.T) {
@@ -419,5 +449,106 @@ func TestWatched(t *testing.T) {
 	}
 	if watched(dir, 1024, 10, 40, 0) {
 		t.Error("only loadavg is there and load_max is off, yet watched")
+	}
+}
+
+// When a strain hold lifts, the turns it held start one a rampStep, not all
+// at once: on 10-28 the lift started every held run together, and the Hive's
+// slice ran to load near 400 and an OOM kill. A lead isn't ramped.
+func TestHoldLiftsOneTurnAtATime(t *testing.T) {
+	c, _ := testHive(t)
+	cfg := c.WS.LoadConfig()
+	cfg.MemFloorMB = 1024
+	defer func(p string) { procRoot = p }(procRoot)
+	procRoot = fakeProc(t, "600000", "0.00", "0.00") // under the floor
+	t.Cleanup(func() { endTurns(t, c, cfg) })
+	ids := []string{"w1", "w2", "w3"}
+	for _, id := range ids {
+		if _, err := c.Runs.Start(RunSpec{ID: id, Role: "worker", Harness: "fake"}); err != nil {
+			t.Fatal(err)
+		}
+		r, _ := c.Runs.Get(id)
+		c.Runs.launch(r, cfg)
+	}
+	procRoot = fakeProc(t, "8000000", "0.00", "0.00") // the hold lifts
+	launch := func(id string) Run {
+		r, _ := c.Runs.Get(id)
+		c.Runs.launch(r, cfg)
+		r, _ = c.Runs.Get(id)
+		return r
+	}
+	running := func() (n int) {
+		for _, id := range ids {
+			if r, _ := c.Runs.Get(id); r.Status == StatusRunning {
+				n++
+			}
+		}
+		return n
+	}
+	for _, id := range ids {
+		launch(id)
+	}
+	if n := running(); n != 1 {
+		t.Fatalf("%d turns started as the hold lifted, want 1", n)
+	}
+	if r, _ := c.Runs.Get("w3"); r.Status != StatusQueued || !strings.Contains(r.Reason, "one turn at a time") {
+		t.Errorf("w3 after the lift: %s %q, want waiting on the ramp", r.Status, r.Reason)
+	}
+	if _, err := c.Runs.Start(RunSpec{ID: "lead", Role: "lead", Harness: "fake", Persistent: true}); err != nil {
+		t.Fatal(err)
+	}
+	if l := launch("lead"); l.Status != StatusRunning {
+		t.Errorf("a lead on the ramp: %s %q, want its turn running", l.Status, l.Reason)
+	}
+	c.Runs.mu.Lock()
+	c.Runs.rampLast = c.Runs.rampLast.Add(-rampStep) // a step on
+	c.Runs.mu.Unlock()
+	for _, id := range ids {
+		launch(id)
+	}
+	if n := running(); n != 2 {
+		t.Errorf("%d turns running a step after the lift, want 2", n)
+	}
+	// Once none has waited on it for two steps, the ramp is over.
+	c.Runs.mu.Lock()
+	c.Runs.heldAt, c.Runs.rampedAt = time.Now().Add(-3*rampStep), time.Now().Add(-3*rampStep)
+	c.Runs.mu.Unlock()
+	if r := launch("w3"); r.Status != StatusRunning {
+		t.Errorf("w3 after the ramp: %s %q, want its turn running", r.Status, r.Reason)
+	}
+}
+
+// A run reopened after its turn ended is Returned until a turn starts, and
+// Admit, a module's say, holds it with its reason.
+func TestAdmitHoldsAReturnedRun(t *testing.T) {
+	c, _ := testHive(t)
+	cfg := c.WS.LoadConfig()
+	t.Cleanup(func() { endTurns(t, c, cfg) })
+	if _, err := c.Runs.Start(RunSpec{ID: "w1", Role: "worker", Harness: "fake"}); err != nil {
+		t.Fatal(err)
+	}
+	c.Runs.SetStatus("w1", StatusDone, "finished")
+	if err := c.Runs.Reopen("w1", "main moved"); err != nil {
+		t.Fatal(err)
+	}
+	r, _ := c.Runs.Get("w1")
+	if !r.Returned {
+		t.Fatalf("reopened after it ended: %+v, want Returned", r)
+	}
+	full := true
+	c.Runs.Admit = func(r Run) string {
+		if r.Returned && full {
+			return "waiting for a worker (at the pace)"
+		}
+		return ""
+	}
+	c.Runs.launch(r, cfg)
+	if r, _ = c.Runs.Get("w1"); r.Status != StatusIdle || r.Reason != "waiting for a worker (at the pace)" {
+		t.Errorf("held by Admit: %s %q", r.Status, r.Reason)
+	}
+	full = false
+	c.Runs.launch(r, cfg)
+	if r, _ = c.Runs.Get("w1"); r.Status != StatusRunning || r.Returned {
+		t.Errorf("let through: %s returned %v, want its turn running and no longer Returned", r.Status, r.Returned)
 	}
 }
