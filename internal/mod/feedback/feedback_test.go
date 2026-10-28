@@ -221,3 +221,44 @@ func TestFixNeedsALiveTaskAndItsRevertReopens(t *testing.T) {
 		t.Fatalf("digest after a restart:\n%s", d)
 	}
 }
+
+// A fix that is stopped before it lands (withdrawn, closed unmerged) drops
+// its link, so the item reads as open again rather than "fix filed" in every
+// digest; a stopped task can't be named as a fix, and an item linked before
+// this rule is unlinked when the module loads.
+func TestStoppedFixUnlinksItsFeedback(t *testing.T) {
+	c, m := open(t)
+	w := core.Run{RunSpec: core.RunSpec{ID: "w-1", Role: "worker", Project: "hive"}}
+	a, _ := m.Add(w, "", "tui restart test flakes")
+	c.J.MustAppend("task.saved", map[string]string{"id": "t-w", "stage": "queued"})
+	if _, err := m.Fix(w, a.ID, "t-w"); err != nil {
+		t.Fatal(err)
+	}
+	c.J.MustAppend("task.saved", map[string]string{"id": "t-w", "stage": "stopped", "reason": "withdrawn by lead: overtaken"})
+	it, _ := m.Get(a.ID)
+	if it.Status != Open || it.Task != "" || !strings.Contains(it.Note, "t-w") || !strings.Contains(it.Note, "overtaken") {
+		t.Fatalf("after its fix was withdrawn: %+v", it)
+	}
+	if d := m.Digest(func(string) bool { return true }); strings.Contains(d, "fix filed") || !strings.Contains(d, "was stopped") {
+		t.Fatalf("digest:\n%s", d)
+	}
+	if _, err := m.Fix(w, a.ID, "t-w"); err == nil || !strings.Contains(err.Error(), "stopped") {
+		t.Fatalf("a stopped task was accepted as a fix: %v", err)
+	}
+
+	// An item linked to a task stopped before this rule existed.
+	b, _ := m.Add(w, "", "old link")
+	c.J.MustAppend("task.saved", map[string]string{"id": "t-old", "stage": "queued"})
+	c.J.MustAppend("task.saved", map[string]string{"id": "t-old", "stage": "stopped"})
+	b.Task = "t-old"
+	c.J.MustAppend("feedback.saved", b)
+	again := New(c)
+	if it, _ := again.Get(b.ID); it.Status != Open || it.Task != "" || !strings.Contains(it.Note, "t-old") {
+		t.Fatalf("an old link to a stopped task after a restart: %+v", it)
+	}
+	seq := c.J.Seq()
+	New(c)
+	if c.J.Seq() != seq {
+		t.Fatal("a second load journaled the unlink again")
+	}
+}

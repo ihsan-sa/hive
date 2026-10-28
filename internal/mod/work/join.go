@@ -3,6 +3,7 @@ package work
 import (
 	"errors"
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
@@ -235,23 +236,55 @@ func (m *Module) postJoins(t *Task, p core.Project) {
 // any other agent still running as a message, since a worker that split its
 // work among helpers has no thread of its own to read.
 func (m *Module) notify(t *Task, text string) {
-	if t.Kind == "helper" {
-		if r, ok := m.C.Runs.Get(t.From); ok && r.Role != "lead" && (!r.Terminal() || r.Persistent) {
-			m.C.Runs.Send(r.ID, fmt.Sprintf("[your helper's task %s] %s", t.ID, text))
-		}
-	}
+	m.toSpawner(t, text)
 	m.notifyThreads(t, text)
 }
 
 // notifyThreads is notify without the message to a helper's spawner, for news
 // the spawner already has.
-func (m *Module) notifyThreads(t *Task, text string) {
-	m.Chat.Notify(t.Chat, t.Thread, text)
+func (m *Module) notifyThreads(t *Task, text string) { m.tell(t, text, m.Chat.Notify) }
+
+// post puts how t went in the same threads without waking their leads, for
+// an outcome that needs nothing of them (a merge); a helper's spawner still
+// hears it. A merge of a module built as a project of its own and not yet
+// installed still wakes them: the lead installs it (install_module
+// --project, lead.md).
+func (m *Module) post(t *Task, text string) {
+	if m.moduleToInstall(t) {
+		m.notify(t, text)
+		return
+	}
+	m.toSpawner(t, text)
+	m.tell(t, text, func(c, th, s string) { m.Chat.Record(c, th, s) })
+}
+
+// moduleToInstall says t's head carries a module.json at its root while no
+// module of its project's name is installed.
+func (m *Module) moduleToInstall(t *Task) bool {
+	if t.SHA == "" || core.Exists(filepath.Join(m.C.WS.Modules(), t.Project)) {
+		return false
+	}
+	_, err := core.Git(m.C.WS.Project(t.Project), "cat-file", "-e", t.SHA+":module.json")
+	return err == nil
+}
+
+// toSpawner tells a helper's spawner, when it isn't a lead and still runs.
+func (m *Module) toSpawner(t *Task, text string) {
+	if t.Kind == "helper" {
+		if r, ok := m.C.Runs.Get(t.From); ok && r.Role != "lead" && (!r.Terminal() || r.Persistent) {
+			m.C.Runs.Send(r.ID, fmt.Sprintf("[your helper's task %s] %s", t.ID, text))
+		}
+	}
+}
+
+// tell sends text to t's thread and each joined lead's thread once.
+func (m *Module) tell(t *Task, text string, send func(chat, thread, text string)) {
+	send(t.Chat, t.Thread, text)
 	seen := map[[2]string]bool{{t.Chat, t.Thread}: true}
 	for _, j := range t.Joins {
 		if k := [2]string{j.Chat, j.Thread}; j.Thread != "" && !seen[k] {
 			seen[k] = true
-			m.Chat.Notify(j.Chat, j.Thread, text)
+			send(j.Chat, j.Thread, text)
 		}
 	}
 }

@@ -873,14 +873,31 @@ func (m *Module) afterMerge(t work.Task) {
 	}
 	if dip && t.Kind != "revert" && t.Fix() {
 		// A known fix wins over a dip (issue #568): it stays, main's score
-		// is the baseline from here, and a brief looks into the dip; only
+		// is the baseline from here (its better of two readings), and a brief looks into the dip; only
 		// that look, judging the fix itself made things worse, reverts it.
-		before := best
+		// One reading is not yet a baseline (issue #1788): the fix is scored
+		// once more, and a second reading back within tolerance was no dip;
+		// otherwise the better of the two is the baseline.
+		bar := best
 		if ms.Against != nil {
-			before = *ms.Against
+			bar = *ms.Against
 		}
-		looked := m.lookIntoDip(p, t, reason, before)
 		b := *score
+		if again, ok := m.scoreNow(p, t.MergeSHA); ok {
+			b = cfg.Score.Best(b, again)
+			if cfg.Score.WithinTolerance(again, bar) {
+				b = cfg.Score.Best(again, bar)
+				ms.Kept, ms.Best = true, &b
+				ms.Note = fmt.Sprintf("kept: %g measured again, so the first reading's fall (%s) was noise; the baseline is %g from here; %s", again, reason, b, note)
+				m.record(ms)
+				if m.OnKept != nil {
+					m.OnKept(p.Name, t.MergeSHA)
+				}
+				return
+			}
+			reason += fmt.Sprintf(", and %g measured again", again)
+		}
+		looked := m.lookIntoDip(p, t, reason, bar)
 		ms.Kept, ms.Best = true, &b
 		ms.Note = "kept as a fix (" + core.Clip(t.AimWhy, 200) + ") though " + reason + "; " + looked + "; " + note
 		m.record(ms)
