@@ -258,6 +258,7 @@ func TestStaleReadingKeepsTheWeeklyStop(t *testing.T) {
 	}
 	defer j.Close()
 	rs := NewRuns(Workspace{Root: t.TempDir()}, j, nil, noOwnLogin{}, func() []string { return nil })
+	rs.cfg.Cutoffs = thisHive
 	week := time.Now().Add(3 * 24 * time.Hour)
 	read := func(five time.Time, weekly float64, weekReset time.Time) {
 		rs.append("plan.usage", Plan{Harness: "claude", Login: "claude", Limit: harness.RateLimit{Status: "allowed", ResetsAt: five, Window: "five_hour",
@@ -351,6 +352,7 @@ func TestWeeklyStopParksALogin(t *testing.T) {
 	}
 	defer j.Close()
 	rs := NewRuns(Workspace{Root: t.TempDir()}, j, nil, twoLogins{}, func() []string { return nil })
+	rs.cfg.Cutoffs = thisHive
 	now := time.Now()
 	five, week := now.Add(time.Hour), now.Add(5*time.Hour+24*time.Hour)
 	read := func(login string, weekly float64, resets time.Time) {
@@ -420,6 +422,7 @@ func TestFiveHourStopParksALogin(t *testing.T) {
 	}
 	defer j.Close()
 	rs := NewRuns(Workspace{Root: t.TempDir()}, j, nil, twoLogins{}, func() []string { return nil })
+	rs.cfg.Cutoffs = thisHive
 	now := time.Now()
 	five, week := now.Add(time.Hour), now.Add(3*24*time.Hour)
 	read := func(login string, used float64, resets time.Time) {
@@ -491,6 +494,7 @@ func TestFiveHourStopKeepsOneLoginsTenth(t *testing.T) {
 	}
 	defer j.Close()
 	rs := NewRuns(Workspace{Root: t.TempDir()}, j, nil, twoLogins{}, func() []string { return nil })
+	rs.cfg.Cutoffs = thisHive
 	five := time.Now().Add(time.Hour)
 	used := map[string]float64{"claude": 0.80, "claude:work": 0.81}
 	read := func(login string) {
@@ -515,7 +519,7 @@ func TestFiveHourStopKeepsOneLoginsTenth(t *testing.T) {
 	if full < kept {
 		full, kept = kept, full
 	}
-	if full < 1 || kept < FiveHourStop || kept >= FiveHourStop+0.03 {
+	if full < 1 || kept < 0.90 || kept >= 0.93 {
 		t.Fatalf("five hours used %v: want one login at its limit and the other kept at 90%%", used)
 	}
 }
@@ -532,6 +536,7 @@ func TestPlansShowTheLoginKeptAtFiveHours(t *testing.T) {
 	defer j.Close()
 	tokens := &renewLimited{}
 	rs := NewRuns(Workspace{Root: t.TempDir()}, j, nil, tokens, func() []string { return nil })
+	rs.cfg.Cutoffs = thisHive
 	now := time.Now()
 	five := now.Add(time.Hour)
 	read := func(login string, used float64) {
@@ -585,4 +590,46 @@ func (r *renewLimited) LimitedUntil(key string) time.Time {
 		return r.until
 	}
 	return time.Time{}
+}
+
+// thisHive is the person's own Hive's cutoffs (its config.json), which the
+// stops' tests run against.
+var thisHive = Cutoffs{Week: 0.95, FiveHour: 0.90}
+
+// With no cutoffs set, a fresh install's, a login runs to its limit: 99% of
+// its week and of its five hours parks nothing, and Standing says no pause.
+func TestNoCutoffsRunsALoginToItsLimit(t *testing.T) {
+	if c := DefaultConfig().Cutoffs; c != (Cutoffs{}) {
+		t.Fatalf("a fresh install has cutoffs %+v", c)
+	}
+	j, err := OpenJournal(filepath.Join(t.TempDir(), "j.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer j.Close()
+	rs := NewRuns(Workspace{Root: t.TempDir()}, j, nil, noOwnLogin{}, func() []string { return nil })
+	reset := time.Now().Add(time.Hour)
+	rs.append("plan.usage", Plan{Harness: "claude", Limit: harness.RateLimit{Status: "allowed", ResetsAt: reset, Window: "five_hour",
+		Windows: map[string]harness.Window{"five_hour": {Utilization: 0.99, ResetsAt: reset}, "seven_day": {Utilization: 0.99, ResetsAt: reset}}}})
+	now := time.Now()
+	if p := rs.Plans()[0]; p.Parked(now) || strings.Contains(p.Standing(now), "paused") {
+		t.Fatalf("with no cutoffs a login at 99%% is parked: %q", p.Standing(now))
+	}
+	if _, _, err := rs.pickLogin("claude", "", t.TempDir(), true, false); err != nil {
+		t.Fatalf("no login picked: %v", err)
+	}
+	// The same reading with this Hive's cutoffs, set in its config.json, parks it.
+	ws := Workspace{Root: t.TempDir()}
+	cfg := DefaultConfig()
+	cfg.Cutoffs = thisHive
+	if err := ws.SaveConfig(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if got := ws.LoadConfig().Cutoffs; got != thisHive {
+		t.Fatalf("cutoffs read back %+v", got)
+	}
+	rs.Tick(ws.LoadConfig())
+	if !rs.Plans()[0].Parked(now) {
+		t.Fatal("this Hive's cutoffs don't park a login at 99%")
+	}
 }

@@ -133,6 +133,14 @@ type Config struct {
 	MaxOutputTokens int `json:"max_output_tokens"`
 	// MonthlyUSD: once this month's runs cost more, the person is told once. Work goes on; 0 is off.
 	MonthlyUSD float64 `json:"monthly_usd,omitempty"`
+	// OpenRouterUSD is what paid OpenRouter models may cost in a month
+	// (UTC): free ones first (Route puts a paid one last), and a paid one,
+	// priced so its spend is counted, takes turns only while the month's
+	// spend on OpenRouter is under it. 0 keeps OpenRouter free-only.
+	OpenRouterUSD float64 `json:"openrouter_monthly_usd,omitempty"`
+	// Cutoffs are where a login stops short of its plan's limits; none is
+	// set on a fresh install, so a login runs to its limit.
+	Cutoffs Cutoffs `json:"cutoffs,omitzero"`
 	// A turn waits while available memory is under MemFloorMB, or memory or
 	// CPU pressure (Linux PSI "some avg10", percent) is over its limit; 0 turns a check off.
 	MemFloorMB     int     `json:"mem_floor_mb"`
@@ -302,8 +310,13 @@ func (c Config) Check() error {
 		return err
 	}
 	for _, name := range slices.Sorted(maps.Keys(c.Models)) {
-		if err := harness.OpenRouterPaid(c.Models[name].Endpoint, c.Models[name].Model); err != nil {
+		if err := c.PaidRefused(name); err != nil {
 			return fmt.Errorf("model %s: %v", name, err)
+		}
+	}
+	for _, x := range []float64{c.Cutoffs.Week, c.Cutoffs.FiveHour} {
+		if x < 0 || x > 1 {
+			return fmt.Errorf("cutoffs: %g isn't a share of a window between 0 and 1", x)
 		}
 	}
 	if _, ok := c.Models[c.Model]; HarnessName(c.Harness) == "open" && !ok {

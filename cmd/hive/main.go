@@ -63,7 +63,7 @@ const usage = `hive: a small team of AI agents working on your projects.
   hive model               the named models (free ones too) and the routes that pick each role's model
   hive model add <name> <endpoint> <model id> [--key] [--no-probe]   a model on an OpenAI-compatible endpoint, e.g.
                            hive model add qwen http://127.0.0.1:11434/v1 qwen2.5-coder:14b
-                           (on OpenRouter only a free model, an id ending in ":free", is allowed)
+                           (on OpenRouter a paid model, an id not ending in ":free", needs a price and openrouter_monthly_usd)
                            [--anthropic]: its API is Anthropic-compatible, so Claude Code runs it, e.g.
                            hive model add kimi https://api.moonshot.ai/anthropic kimi-k2-0905-preview --key --anthropic
   hive model key <name>    store its API key, read from stdin (kept where no agent can read it)
