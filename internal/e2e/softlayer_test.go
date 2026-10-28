@@ -158,6 +158,13 @@ func softArm(t *testing.T, arm softlayer.Variant, slot int, essay, task string, 
 
 	outcome := ""
 	for deadline := time.Now().Add(wait); outcome == ""; time.Sleep(10 * time.Second) {
+		// A login at its usage limit past the deadline can't do anything in
+		// this arm: in the first real open run (2026-10-28) the machine's
+		// login was at its weekly limit and each arm idled its 90 minutes.
+		if why := limitedPast(h.ws.Events(), deadline); why != "" {
+			outcome = "not run: " + why
+			break
+		}
 		standInCI(h, "me/"+project)
 		// A sub-Hive whose daemon stops answering is a result too: its
 		// journal and daemon log are still kept below, not lost to t.Fatal.
@@ -218,6 +225,29 @@ func softArm(t *testing.T, arm softlayer.Variant, slot int, essay, task string, 
 	}
 	t.Logf("%s: %s", arm.Name, outcome)
 	return rep
+}
+
+// limitedPast says why, when the sub-Hive's journal has a login parked at its
+// usage limit until after deadline; "" when none is.
+func limitedPast(events string, deadline time.Time) string {
+	raw, err := os.ReadFile(events)
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(raw), "\n") {
+		var ev struct {
+			Kind string `json:"kind"`
+			Data struct {
+				Login string    `json:"login"`
+				Said  string    `json:"said"`
+				Until time.Time `json:"until"`
+			} `json:"data"`
+		}
+		if json.Unmarshal([]byte(line), &ev) == nil && ev.Kind == "login.limited" && ev.Data.Until.After(deadline) {
+			return fmt.Sprintf("login %s is at its usage limit until %s (%q)", ev.Data.Login, ev.Data.Until.UTC().Format(time.RFC3339), ev.Data.Said)
+		}
+	}
+	return ""
 }
 
 // askLanded finds the asked task merged: one the lead filed from its chat.
@@ -588,5 +618,25 @@ func TestSoftLimitAbove(t *testing.T) {
 	set(filepath.Dir(filepath.Dir(leaf)), "max")
 	if n, ok := cgroupMemMax(root, leaf); ok {
 		t.Errorf("no ceiling anywhere read as %d", n)
+	}
+}
+
+// TestSoftLimitedPast: an arm ends at once when its login is parked past its
+// deadline, and waits on a limit that resets before it (the journal line is
+// the one the first real open run's standard arm wrote).
+func TestSoftLimitedPast(t *testing.T) {
+	ev := filepath.Join(t.TempDir(), "events.jsonl")
+	os.WriteFile(ev, []byte(`{"seq":1,"kind":"hive.idle","data":{}}
+{"seq":15,"at":"2026-10-28T13:33:59.870975662Z","kind":"login.limited","data":{"expires":"2026-10-28T17:33:58.531-04:00","login":"claude","said":"You've hit your weekly limit · resets Oct 31, 1pm (America/New_York)","until":"2026-10-31T13:00:00-04:00"}}
+`), 0o644)
+	at := func(s string) time.Time { tm, _ := time.Parse(time.RFC3339, s); return tm }
+	if why := limitedPast(ev, at("2026-10-28T15:04:00Z")); !strings.Contains(why, "claude") || !strings.Contains(why, "2026-10-31T17:00:00Z") {
+		t.Errorf("a login parked past the deadline: %q", why)
+	}
+	if why := limitedPast(ev, at("2026-11-01T00:00:00Z")); why != "" {
+		t.Errorf("a limit that resets before the deadline ended the arm: %q", why)
+	}
+	if why := limitedPast(filepath.Join(t.TempDir(), "none"), time.Now()); why != "" {
+		t.Errorf("no journal yet: %q", why)
 	}
 }
