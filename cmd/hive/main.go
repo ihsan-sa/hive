@@ -30,6 +30,7 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/kb"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/models"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/report"
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/runner"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/tools"
 	"github.com/ihsan-sa/hive-standalone-build/internal/openagent"
 	"github.com/ihsan-sa/hive-standalone-build/internal/sandbox"
@@ -50,7 +51,7 @@ const usage = `hive: a small team of AI agents working on your projects.
   hive refuse <id> [note]  say no to it (its last option)
   hive read <task|#pr> <sha> land|fix --by perms|architect [note]
                            record the box's perms seat's or architect's read of that head
-  hive hold <project> [why]  hold every merge on it, follow-ups included [--only 12,15] [--until release]
+  hive hold <project> [why]  hold every merge on it, the Hive's own included [--only 12,15] [--until release]
   hive hold <project> --lift [why]  lift the hold
   hive login               log in to Claude Code and GitHub with their own logins
   hive login add <name>    add another Claude login to spread runs over; add "codex" for Codex
@@ -62,6 +63,7 @@ const usage = `hive: a small team of AI agents working on your projects.
   hive model               the named models (free ones too) and the routes that pick each role's model
   hive model add <name> <endpoint> <model id> [--key] [--no-probe]   a model on an OpenAI-compatible endpoint, e.g.
                            hive model add qwen http://127.0.0.1:11434/v1 qwen2.5-coder:14b
+                           (on OpenRouter only a free model, an id ending in ":free", is allowed)
                            [--anthropic]: its API is Anthropic-compatible, so Claude Code runs it, e.g.
                            hive model add kimi https://api.moonshot.ai/anthropic kimi-k2-0905-preview --key --anthropic
   hive model key <name>    store its API key, read from stdin (kept where no agent can read it)
@@ -71,7 +73,7 @@ const usage = `hive: a small team of AI agents working on your projects.
   hive harness login <name>  run a module harness's own login on this machine (what bare runs use)
   hive share [--yes]       send the developer your Hive's chats, runs, notes and logs in one bundle
                            (scanned first: it needs a handle list in .hive/private/scan-handles.txt or HIVE_SCAN_HANDLES)
-  hive update              install the newest release [--release <tag>: that one, and stay on it]
+  hive update              install the newest release [--release <tag>: that one; one behind the newest stays pinned]
   hive remote <ssh host>   open the control center here for the Hive on another machine, over ssh [--hive <its hive command>]
                            pasted images and dropped files then go from this computer to that Hive
   hive shutdown            stop the Hive (running agents finish their turn)
@@ -332,6 +334,16 @@ func run(args []string) int {
 		return cmdRemote(args)
 	case "remote-info": // run over ssh by `hive remote`
 		return cmdRemoteInfo(args, os.Stdin, os.Stdout)
+	}
+	// A module whose manifest asks for it has a command of its own.
+	if ws, ok := core.FindWorkspace(); ok && cmd != "" {
+		code, err := runner.Command(ws, cmd, args)
+		if err != runner.ErrNoCommand {
+			if err != nil {
+				fmt.Fprintln(os.Stderr, core.Cmd+":", err)
+			}
+			return code
+		}
 	}
 	fmt.Fprintf(os.Stderr, "unknown command %q\n\n%s", cmd, usageText())
 	return 2

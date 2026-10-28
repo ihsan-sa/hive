@@ -240,7 +240,18 @@ func TestCreateProjectVisibility(t *testing.T) {
 // The person's no to a public repository makes nothing, and the run that
 // asked is told.
 func TestCreateProjectPublicNo(t *testing.T) {
-	ws := core.Workspace{Root: t.TempDir()}
+	// Not t.TempDir: the lead's fake turn may still be writing its folder as
+	// the test ends, and TempDir's single RemoveAll then fails the test.
+	root, err := os.MkdirTemp("", "create-public-no")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		for i := 0; i < 50 && os.RemoveAll(root) != nil; i++ {
+			time.Sleep(100 * time.Millisecond)
+		}
+	})
+	ws := core.Workspace{Root: root}
 	if err := ws.Init(); err != nil {
 		t.Fatal(err)
 	}
@@ -255,7 +266,7 @@ func TestCreateProjectPublicNo(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer a.C.Close()
-	lead, err := a.C.Runs.Start(core.RunSpec{Role: "lead", Harness: "fake", Checkout: t.TempDir(), Persistent: true})
+	lead, err := a.C.Runs.Start(core.RunSpec{Role: "lead", Harness: "fake", Checkout: filepath.Join(root, "lead"), Persistent: true})
 	if err != nil {
 		t.Fatal(err)
 	}

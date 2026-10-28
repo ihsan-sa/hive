@@ -306,3 +306,57 @@ func shortSock(t *testing.T, name string) string {
 	t.Cleanup(func() { os.RemoveAll(dir) })
 	return filepath.Join(dir, name)
 }
+
+// An IPv6 address that carries a private IPv4 one is no more public than it.
+func TestPublicEmbedded(t *testing.T) {
+	for ip, want := range map[string]bool{
+		"64:ff9b::7f00:1": false, "64:ff9b::a00:5": false, "64:ff9b::808:808": true,
+		"2002:c0a8:101::1": false, "2002:808:808::1": true,
+		"2001:0:4136:e378:8000:63bf:f7f7:f7f7": true, "2001:0:4136:e378:8000:63bf:80ff:fffe": false, // Teredo client 127.0.0.1
+		"::7f00:1": false, "2001:db8::1": false, "192.0.2.1": false,
+	} {
+		if got := Public(net.ParseIP(ip)); got != want {
+			t.Errorf("Public(%s) = %v, want %v", ip, got, want)
+		}
+	}
+}
+
+func TestLocalName(t *testing.T) {
+	for host, local := range map[string]bool{
+		"localhost": true, "api.localhost": true, "nas.lan": true, "printer.local": true, "box.tail1234.ts.net": true,
+		"db.corp": true, "metadata.google.internal": true, "router.home.arpa": true, "nas": true, "NAS.LAN.": true,
+		"github.com": false, "api.anthropic.com": false, "10.0.0.1": false,
+	} {
+		if got := LocalName(host) != ""; got != local {
+			t.Errorf("LocalName(%s) = %q, want local %v", host, LocalName(host), local)
+		}
+	}
+}
+
+// This machine is refused by any of its addresses, a public one and one a
+// name resolves to included, and so are local names that never resolve.
+func TestEgressRefusesThisMachineAndLocalNames(t *testing.T) {
+	_, port := echo(t)
+	mine := net.ParseIP("203.0.114.7") // a public address this machine holds
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var refused bytes.Buffer
+	e := ServeEgress(ln, nil, nil, &refused)
+	defer e.Close()
+	e.own = func() []net.IP { return []net.IP{mine} }
+	e.lookup = func(_ context.Context, host string) ([]net.IPAddr, error) {
+		return []net.IPAddr{{IP: mine}}, nil
+	}
+	for _, dest := range []string{"203.0.114.7:" + port, "me.example.com:" + port, "[64:ff9b::cb00:7207]:" + port,
+		"box.tail1234.ts.net:" + port, "nas.lan:" + port, "nas:" + port} {
+		code, body := connect(t, "tcp", ln.Addr().String(), dest)
+		if code != http.StatusForbidden || !strings.Contains(body, "egress grant 127.0.0.1:"+port) {
+			t.Errorf("%s: %d %q", dest, code, body)
+		}
+	}
+	if n := strings.Count(refused.String(), RefusedLocal); n != 6 {
+		t.Errorf("recorded %q", refused.String())
+	}
+}

@@ -198,7 +198,7 @@ The loop is every agent's: these act on your own project's tasks, on the record 
   rerun-checks [--task id]                      the failed forge checks (CI jobs) on a PR's head (yours by default)
                                                  run again, for a flake; at most 2 per head, the merge waits for them
   queue     [--order id,id] [--hold id] [--release id]   briefs waiting for a worker, in order
-            [--now id --why "..."]               start it first, past a brief on the same files
+            [--now id --why "..."]               put it first in line
   recheck   --task id [--back "..."]           a blocked or stopped task, or one stuck on its way to
                                                  the merge (say on a stale commit's checks), is pushed and
                                                  checked again from its head; --back sends its worker that
@@ -207,6 +207,8 @@ The loop is every agent's: these act on your own project's tasks, on the record 
   amend     --task id [--title ...] [--done ...] [--known ...] [--why ...]   change a brief no worker
                                                  has started on, in place (yours; the lead: any but the person's)
   withdraw  --task id --why "..." [--into id]   take back such a brief: it stops, its issue closes
+  batch     --tasks batch,id,... --why "..."  related briefs to one worker in one session and one PR:
+                                                 the rest fold into the first (waiting or being worked on)
   stop      --task id --why "..." [--fresh]   end a working task's quiet worker (one that keeps ending
                                                  turns without finishing) as blocked; bring the task back
                                                  with recheck, or --fresh hands it to a new worker at once
@@ -217,5 +219,10 @@ The loop is every agent's: these act on your own project's tasks, on the record 
   models                                         named models, each role's route, what each agent runs on, trials
   route     --role worker --models "a,b" [--project p]   (lead) the models a role runs on, in fallback order
   trial     --model m --project test --title "..." --done "..."   (lead) one brief's worker on that model alone
+  hold_merges --project p --why "their words" [--only N,M] [--until release] [--lift]   (lead) on the person's
+                                                 word only: nothing merges but those PRs until lifted or released
+  create_project --name n [--repo o/r] --description "..." --goals "..." [--sharing shared|private|isolated]   (lead)
+  install_module --url <git url> | --project <module>   (lead) a warden weighs it; you hear back
+  requests                                       each request past a sandbox and where it stands
 In $HIVE_STATE, logins/ and private/ (the daemon's token, every agent's home) are covered, and so are an
 isolated project's records (and the journal, while any project is isolated): hidden there, not missing.`
