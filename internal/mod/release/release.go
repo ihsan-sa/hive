@@ -4,6 +4,7 @@
 package release
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -45,6 +46,10 @@ type Module struct {
 	// running ones to end (the work module), so an update never restarts
 	// mid-merge; ok false says one still runs, and resume lets merges go on.
 	PauseMerges func(wait time.Duration) (resume func(), ok bool)
+	// Canary runs the train's canary (train.go): a child Hive on the
+	// candidate against one on this release, on real work; nil can't run one,
+	// so a Hive on the train stays where it is.
+	Canary func(ctx context.Context, j CanaryJob) core.GateResult
 	// Scan checks what a release at sha publishes before it is cut; nil is
 	// the identity and secret scan of the files on the commit's public list.
 	Scan func(p core.Project, sha string) error
@@ -69,8 +74,10 @@ type Module struct {
 	// pre-release whose checks here failed, and waits what the newer ones
 	// wait for, as the last look found.
 	followed time.Time
-	red      map[string]verdict
-	waits    []string
+	// canarying is the pre-release the train's canary is running on, or "".
+	canarying string
+	red       map[string]verdict
+	waits     []string
 	// shas are the pre-releases' commits, by repo@tag; tried is the tag the
 	// last update went for and said1 what follow last recorded.
 	shas  map[string]string
@@ -241,15 +248,25 @@ func (m *Module) Check() (repo, tag string, newer bool, err error) {
 	m.ahead = nil
 	m.pmu.Unlock()
 	var stopped *limited // a look the rate limit stopped
-	if m.Channel() == Prerelease {
+	if ch := m.Channel(); ch == Prerelease || ch == Train {
 		after := core.Version
-		if modules.Newer(after, tag) {
+		if ch == Prerelease && modules.Newer(after, tag) {
 			after = tag
 		}
 		t, waits, e := m.prerelease(up, after)
 		errors.As(e, &stopped)
 		if e != nil {
 			waits = append(waits, e.Error())
+		}
+		if ch == Train {
+			// Only what a canary kept moves the Hive, the latest release
+			// included.
+			var w []string
+			t, w = m.train(up, t)
+			waits = append(w, waits...)
+			if t == "" {
+				repo, tag = "", ""
+			}
 		}
 		m.pmu.Lock()
 		m.waits = waits
