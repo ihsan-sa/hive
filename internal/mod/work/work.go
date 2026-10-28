@@ -95,7 +95,11 @@ type Task struct {
 	// head that contains it resolved that conflict, so the next is main
 	// moving again and the count starts over: only unresolved ones add up.
 	ConflictMain string `json:"conflict_main,omitempty"`
-	Reviews      int    `json:"reviews"`
+	// Resend is what a conflict with main sends the worker back with, held
+	// until the pace has room for it: one main merge once made about 22 open
+	// PRs conflict, and reopening every worker at once ran 19 at a pace of 1.
+	Resend  string `json:"resend,omitempty"`
+	Reviews int    `json:"reviews"`
 	// SeatTries counts each security seat's unusable verdicts on this head's
 	// own diff, keyed by "diffID#seat". When the diff changes, the old
 	// tries are left behind and the seat starts fresh on the new diff.
@@ -885,7 +889,7 @@ func (m *Module) Tick() {
 			continue
 		}
 		m.mu.Lock()
-		if !m.due(t) || m.busy[t.ID] || !m.fresh(t) || (t.Queued() && !start[t.ID]) {
+		if !m.due(t) || m.busy[t.ID] || !m.fresh(t) || ((t.Queued() || t.Resending()) && !start[t.ID]) {
 			m.mu.Unlock()
 			continue
 		}
@@ -953,7 +957,7 @@ func (m *Module) reapStuck() {
 // live figures after " (" change every tick, so only a new kind is saved.
 func (m *Module) waits(t Task, why string) {
 	kind, _, _ := strings.Cut(why, " (")
-	if t.Stage == StageQueued && (t.Reason == why || strings.HasPrefix(why, "waiting: machine") && strings.HasPrefix(t.Reason, kind+" (")) {
+	if (t.Stage == StageQueued || t.Resending()) && (t.Reason == why || strings.HasPrefix(why, "waiting: machine") && strings.HasPrefix(t.Reason, kind+" (")) {
 		return
 	}
 	m.mu.Lock()
@@ -963,7 +967,10 @@ func (m *Module) waits(t Task, why string) {
 	}
 	m.busy[t.ID] = true
 	m.mu.Unlock()
-	t.Stage, t.Reason = StageQueued, why
+	if !t.Resending() { // a worker held back from a conflict stays its own
+		t.Stage = StageQueued
+	}
+	t.Reason = why
 	m.save(&t, "")
 	m.mu.Lock()
 	delete(m.busy, t.ID)
@@ -1282,6 +1289,9 @@ func (m *Module) step(t *Task) error {
 	case StageQueued, StageIssued:
 		return m.startWorker(t, p)
 	case StageWorking:
+		if t.Resend != "" {
+			return m.resend(t)
+		}
 		return m.checkWorker(t, p)
 	case StageLanding:
 		return m.land(t, p)
@@ -3747,10 +3757,22 @@ func (m *Module) conflict(t *Task, p core.Project, head string, why error) error
 		msg = "Main moved, and the recursive gate, merging it into your branch to judge the change as it would land, found conflicts in:\n\n- " +
 			strings.Join(g.files, "\n- ") + "\n\nFetch main with " + fetchMain + ", merge FETCH_HEAD, resolve the conflicts, run the tests, commit, and finish again."
 	}
-	if err := m.C.Runs.Reopen(t.Worker, msg); err != nil {
+	t.Stage, t.Resend = StageWorking, msg
+	m.save(t, "conflict with main: goes back to the worker when the pace has room")
+	return nil
+}
+
+// Resending reports whether t waits for the pace to send its worker back
+// to merge main (conflict).
+func (t Task) Resending() bool { return t.Stage == StageWorking && t.Resend != "" }
+
+// resend sends t's worker back with the conflict it was held for, now the
+// queue has let it go.
+func (m *Module) resend(t *Task) error {
+	if err := m.C.Runs.Reopen(t.Worker, t.Resend); err != nil {
 		return err
 	}
-	t.Stage = StageWorking
+	t.Resend, t.Reason = "", ""
 	m.save(t, "conflict with main sent back to the worker")
 	return nil
 }

@@ -319,3 +319,53 @@ func TestQueueOverdueGoesAheadOfTheOrder(t *testing.T) {
 		t.Fatalf("the newer brief: %q, want it to wait for a worker", wait[newer.ID])
 	}
 }
+
+// A main merge that conflicts with many PRs sends their workers back at the
+// pace, not all at once (one did 19 at a pace of 1): the rest stay with their
+// own workers, waiting, ahead of new briefs.
+func TestConflictsGoBackAtThePace(t *testing.T) {
+	m := queueRig(t)
+	cfg := m.C.WS.LoadConfig()
+	cfg.MaxWorkers = 1
+	m.C.WS.SaveConfig(cfg)
+	var sent []Task
+	for i, title := range []string{"one", "two", "three"} {
+		task := file(t, m, title, "")
+		w := fmt.Sprintf("wc%d", i)
+		if _, err := m.C.Runs.Start(core.RunSpec{ID: w, Role: "worker", Project: "p", Harness: "fake", Checkout: t.TempDir()}); err != nil {
+			t.Fatal(err)
+		}
+		m.C.Runs.SetStatus(w, core.StatusDone, "finished")
+		task.Stage, task.Worker, task.Resend = StageWorking, w, "Main moved and your branch conflicts with it."
+		m.save(&task, "")
+		sent = append(sent, task)
+	}
+	fresh := file(t, m, "a new brief", "")
+	fresh.Stage = StageQueued
+	m.save(&fresh, "")
+	tick(m)
+	reopened := 0
+	for _, task := range sent {
+		got := stageOf(t, m, task)
+		if got.Stage != StageWorking {
+			t.Fatalf("%s: stage %q, want it kept with its worker", got.Title, got.Stage)
+		}
+		if got.Resend == "" {
+			reopened++
+			if queued(m, got.Worker) == "" {
+				t.Fatalf("%s was let go but its worker wasn't told", got.Title)
+			}
+		} else if queued(m, got.Worker) != "" || !strings.Contains(got.Reason, "waiting for a worker") {
+			t.Fatalf("%s: queued %q, reason %q: want it waiting at the pace", got.Title, queued(m, got.Worker), got.Reason)
+		}
+	}
+	if reopened != 1 {
+		t.Fatalf("%d workers sent back at a pace of 1", reopened)
+	}
+	if got := stageOf(t, m, fresh); got.Stage != StageQueued || got.Worker != "" {
+		t.Fatalf("the new brief went ahead of the workers waiting: stage %q", got.Stage)
+	}
+	if start, _ := m.admit(m.List(nil)); len(start) != 0 {
+		t.Fatalf("started %v past the pace", start)
+	}
+}

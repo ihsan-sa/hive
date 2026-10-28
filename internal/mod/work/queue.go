@@ -30,7 +30,8 @@ import (
 // Queued reports whether t is waiting for a worker.
 func (t Task) Queued() bool { return t.Stage == StageQueued || t.Stage == StageIssued }
 
-// inLine sorts waiting tasks: those the lead started now first, then those
+// inLine sorts waiting tasks: those the lead started now first, then workers
+// a conflict sends back, then those
 // filed overdue ago, oldest first, then those the lead ordered, in its
 // order, then the rest as filed.
 func (m *Module) inLine(q []Task) {
@@ -38,6 +39,9 @@ func (m *Module) inLine(q []Task) {
 		a, b := q[i], q[j]
 		if a.Now != b.Now {
 			return a.Now
+		}
+		if a.Resending() != b.Resending() { // work already under way finishes first
+			return a.Resending()
 		}
 		if a.Overdue() != b.Overdue() {
 			return a.Overdue()
@@ -77,7 +81,9 @@ func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]str
 	m.mu.Lock()
 	for _, t := range tasks {
 		switch {
-		case t.Queued() && !m.busy[t.ID]:
+		case (t.Queued() || t.Resending()) && !m.busy[t.ID]:
+			// A worker a conflict sends back takes a slot as a new one
+			// does: a main merge once reopened 19 at a pace of 1.
 			line = append(line, t)
 		case t.Stage == StageWorking && m.quiet(t):
 			// A quiet worker holds no slot: three held 3 of 8 slots for
@@ -85,7 +91,7 @@ func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]str
 			// (core.Runs), and then it counts again, even if that puts the
 			// workers past the limit (by as many as resume at once) until
 			// slots free; none start meanwhile.
-		case t.Stage == StageWorking || t.Queued(): // or a queued one being started right now
+		case t.Stage == StageWorking || t.Queued(): // or a queued or resent one being started right now
 			ahead = append(ahead, t)
 			working++
 		}
