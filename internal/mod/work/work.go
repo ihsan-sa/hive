@@ -1642,6 +1642,11 @@ func finishText(r core.Run) string {
 }
 
 func (m *Module) land(t *Task, p core.Project) error {
+	if stage, what := m.unmade(*t); stage != "" {
+		t.Stage = stage
+		m.save(t, "its "+what+" was never made, so there are no commits to take out; it is made again")
+		return nil
+	}
 	r, _ := m.C.Runs.Get(t.Worker)
 	sha, err := m.C.Effects.Extract(p, r, t.Base)
 	if errors.Is(err, core.ErrNoChanges) && t.Banked > 0 {
@@ -3852,6 +3857,17 @@ func (m *Module) Recheck(id, back, by string) error {
 	t.Reason, t.Failures, t.Round, t.Reviews, t.Conflicts, t.CantRuns = "", 0, 0, 0, 0, 0
 	m.goNow(&t)
 	m.CloseCantRunAsk(t.Project, "cant-run:"+t.ID, "the change is tested again, asked by "+by)
+	if stage, what := m.unmade(t); stage != "" {
+		// it stopped before its issue or worker was made (a rate-limited
+		// 'gh issue create', say): there are no commits to check and no
+		// worker to send back, so it makes what's missing again.
+		if back != "" {
+			t.Known = strings.TrimSpace(t.Known + "\n\n" + back)
+		}
+		t.Stage = stage
+		m.steer(&t, "its "+what+" was never made, so it is made again, asked by "+by)
+		return nil
+	}
 	if back != "" {
 		if err := m.C.Runs.Reopen(t.Worker, back); err != nil {
 			return err
@@ -3863,6 +3879,19 @@ func (m *Module) Recheck(id, back, by string) error {
 	t.Stage = StageLanding
 	m.steer(&t, "checks run again on its commits, asked by "+by)
 	return nil
+}
+
+// unmade says the stage that makes what a task stopped before making: its
+// issue (StageNew) or its worker and checkout (StageQueued); "" when it got
+// that far, or has commits or a pull request of its own to go on with.
+func (m *Module) unmade(t Task) (stage, what string) {
+	switch {
+	case t.Worker != "" || t.SHA != "" || t.PR.Number != 0:
+		return "", ""
+	case t.Issue.Number == 0:
+		return StageNew, "issue"
+	}
+	return StageQueued, "worker and checkout"
 }
 
 // goNow drops a task's backoff and hold, so a retry asked for by hand runs on
