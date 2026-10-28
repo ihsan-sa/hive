@@ -427,6 +427,10 @@ func TestStaleModuleCacheRunsAgain(t *testing.T) {
 	if _, err := exec.LookPath("go"); err != nil {
 		t.Skip("no go on PATH")
 	}
+	// The bare sandbox passes the test's own environment on, and the Hive
+	// runs its checks offline: a GOPROXY=off there would make the run
+	// without the shared cache look offline too.
+	t.Setenv("GOPROXY", "")
 	c, f := testHive(t)
 	removesCache(t, c)
 	seedRepo(t, f, "me/gomod", map[string]string{
