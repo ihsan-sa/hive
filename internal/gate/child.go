@@ -140,6 +140,7 @@ type Child struct {
 	RepoURL  string
 	Token    string // a contents-only org token, given by hand (--child-token-file); never one that can make or delete repositories
 	Key      string // the private half of a deploy key on Repo alone: the only credential a child holds by default
+	Trust    string // with a broker on its meter: the roots its TLS trusts, the broker's authority among them
 	Sandbox  string // "bwrap" or "bare"
 	Depth    int    // how many more levels the child may gate
 	Go       Go
@@ -191,6 +192,11 @@ func (c *Child) Env() []string {
 		env = append(env, "GH_TOKEN="+c.Token, "GITHUB_TOKEN="+c.Token)
 		// git reads its auth header from the environment, so the token is in no argv.
 		env = append(env, "GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=http.extraHeader", "GIT_CONFIG_VALUE_0=Authorization: Basic "+basic(c.Token))
+	}
+	if c.Trust != "" {
+		// GitHub is the broker's, which holds the login: the child holds a
+		// placeholder, and trusts the broker's authority for GitHub's names.
+		env = append(env, TrustEnv(c.Trust)...)
 	}
 	if c.Key != "" {
 		// git's ssh reads only this config: the deploy key, GitHub's pinned

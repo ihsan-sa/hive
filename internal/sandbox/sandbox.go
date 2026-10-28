@@ -61,6 +61,17 @@ type Spec struct {
 	// Nice is the Unix nice value the command runs at, 0 the daemon's own;
 	// a process can only go higher (lower priority), so it is never raised.
 	Nice int `json:"nice,omitempty"`
+	// Disk, when set, is where Run says how much the command and what it
+	// started and waited for read from and wrote to the disk; it stays zero
+	// where the platform doesn't count it (only Linux does).
+	Disk *Disk `json:"-"`
+}
+
+// Disk is what a command read from and wrote to the disk, in bytes: the
+// kernel's block I/O counts for it and every child it waited for (a read
+// served from the page cache isn't one).
+type Disk struct {
+	Read, Wrote int64
 }
 
 // Proc identifies a started, detached command.

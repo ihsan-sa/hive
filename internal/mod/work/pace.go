@@ -29,7 +29,8 @@ import (
 // a worker from starting while fewer than the start work (loadHolds), and it
 // doesn't hide a spent or ahead plan, which still pulls the workers under
 // it. Checks and gates do go under their start for load alone (loadCuts):
-// theirs are the builds and child Hives that load the machine. Nothing
+// theirs are the builds and child Hives that load the machine; but not for
+// a load that is the disk's (onlyDisk), which cutting them didn't lift. Nothing
 // running is stopped; past the limit, work waits in order. It
 // pulls back at most once a step, so the readings (load is a 1-minute
 // average) catch up with the last change before the next, and grows more
@@ -83,6 +84,12 @@ type pace struct {
 // from starting under it (loadHolds).
 func onlyLoad(strain string) bool { return strings.HasPrefix(strain, core.LoadedReason) }
 
+// onlyDisk says whether strain is a load that is tasks waiting on the disk
+// (core.DiskReason), which doesn't pull even the checks or gates under their
+// start: on 10-27 the checks sat at 1 for 6.9 of 12 hours under a load of
+// 30-88 that was IO wait, and the load never fell with them.
+func onlyDisk(strain string) bool { return strings.HasPrefix(strain, core.DiskReason) }
+
 // next moves the limit for running things with waiting ones wanting more,
 // strain saying what strains the machine or plan ("" for nothing), watching
 // whether any machine reading is on, from start under ceiling (0: none).
@@ -100,7 +107,7 @@ func (p *pace) next(now time.Time, running int, waiting bool, strain string, wat
 	switch {
 	case strain != "":
 		p.shown = now
-		soft := onlyLoad(strain) && !p.loadCuts
+		soft := onlyLoad(strain) && (!p.loadCuts || onlyDisk(strain))
 		if !soft {
 			p.hard = now
 		}
@@ -243,13 +250,17 @@ func (m *Module) checkSlots() int {
 	return cmp.Or(m.checks.get(), m.C.WS.LoadConfig().MaxChecks, core.DefaultMaxChecks())
 }
 
-// Check ranks: main's own measurement goes first, then a fix's, then the
-// rest in the order they asked. Main's score and size of 282991d7 waited
-// 2h16m behind PR checks, and keep/revert, the release and the next baseline
-// with them (issue #1078).
+// Check ranks: main's own measurement goes first, then the fix of a red
+// main's failing test, then any other fix's, then the rest in the order they
+// asked. Main's score and size of 282991d7 waited 2h16m behind PR checks,
+// and keep/revert, the release and the next baseline with them (issue
+// #1078); a red main's fix waited behind 29 other fixes' checks that failed
+// on the same red, and every merge with it (issue #1877). Both go past the
+// line's patience: there is one red main at a time, and few fixes of it.
 const (
-	rankFix  = 1
-	rankMain = 2
+	rankFix    = 1
+	rankRedFix = 2
+	rankMain   = 3
 )
 
 // MeasuringMain marks sha as main's commit being measured on project until
@@ -278,6 +289,8 @@ func RankWhy(r int) string {
 	switch {
 	case r >= rankMain:
 		return "measures main"
+	case r == rankRedFix:
+		return "fixes red main"
 	case r == rankFix:
 		return "a fix"
 	}
@@ -294,6 +307,9 @@ func (m *Module) checkRank(project, sha, _ string) int {
 	}
 	for _, t := range m.tasks {
 		if t.Project == project && t.SHA == sha && !t.Terminal() {
+			if t.Fix() && namesAny(t.Title+"\n"+t.Known+"\n"+t.AimWhy, m.mainFails[project]) {
+				return rankRedFix
+			}
 			if t.Fix() {
 				return rankFix
 			}
@@ -301,6 +317,30 @@ func (m *Module) checkRank(project, sha, _ string) int {
 		}
 	}
 	return 0
+}
+
+// namesAny says text names one of tests (a subtest by its top test) as a
+// whole word.
+func namesAny(text string, tests []string) bool {
+	for _, n := range tests {
+		n, _, _ = strings.Cut(n, "/")
+		for rest, at := text, 0; n != ""; {
+			i := strings.Index(rest, n)
+			if i < 0 {
+				break
+			}
+			start, end := at+i, at+i+len(n)
+			if (start == 0 || !isWord(text[start-1])) && (end == len(text) || !isWord(text[end])) {
+				return true
+			}
+			rest, at = text[start+1:], start+1
+		}
+	}
+	return false
+}
+
+func isWord(c byte) bool {
+	return c == '_' || '0' <= c && c <= '9' || 'a' <= c && c <= 'z' || 'A' <= c && c <= 'Z'
 }
 
 // paceChecks moves the checks' limit and starts the checks it now has room for.
@@ -318,4 +358,46 @@ func (m *Module) paceChecks() {
 // and the lead.
 func (m *Module) Pace() map[string]string {
 	return map[string]string{"workers": m.workers.String(), "checks": m.checks.String(), "gates": m.gates.String()}
+}
+
+// pacedRead is the route a review of a change on project goes on while the
+// reviewer's plan spends its week more than aheadSlack ahead of the clock,
+// and why, or "" when it is on pace. The workers' pace holds new changes;
+// this holds what reading each one costs, as reads follow the changes in
+// flight: each read goes on the route's cheaper model, sonnet where the
+// route is opus. On 10-27 a login's week stood at 48% with a tenth of it
+// gone. How many reads a change needs doesn't change: a high class still
+// gets its second, separate read, as the warden's and tribunal's prompts
+// are high so they never land on one (docs/log.md). A change on the
+// security list is read as ever (the caller leaves it out).
+func (m *Module) pacedRead(project string) ([]core.Pick, string) {
+	route := m.Agents.Route("reviewer", project)
+	if len(route) == 0 {
+		return nil, ""
+	}
+	a := m.C.Runs.AheadIn(route[0], "seven_day", "reviewer")
+	if a <= aheadSlack {
+		return nil, ""
+	}
+	c := cheaper(route)
+	return append([]core.Pick{c}, slices.DeleteFunc(slices.Clone(route), c.Same)...), fmt.Sprintf("the reviewer's plan is %.0f%% ahead of its week", a*100)
+}
+
+// cheaper is the cheaper pick for a read on route: a later sonnet or haiku
+// in it, else sonnet on the first's harness where that is an opus on
+// Claude, else the first.
+func cheaper(route []core.Pick) core.Pick {
+	first := route[0]
+	if !strings.Contains(first.Model, "opus") {
+		return first
+	}
+	for _, p := range route[1:] {
+		if strings.Contains(p.Model, "sonnet") || strings.Contains(p.Model, "haiku") {
+			return p
+		}
+	}
+	if core.HarnessName(first.Harness) == "claude" {
+		first.Model = strings.Replace(first.Model, "opus", "sonnet", 1)
+	}
+	return first
 }

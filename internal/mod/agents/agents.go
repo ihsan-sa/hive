@@ -25,6 +25,10 @@ type Agents struct {
 	// project's route ("" when it doesn't): its runs there keep ending
 	// without a merge.
 	Demote func(project string, p core.Pick) string
+	// Board, when set, is the section a run of role in project gets at the
+	// end of its system prompt: the Hive's open problems (the problems
+	// module), as they stand when it starts.
+	Board func(role, project string) string
 }
 
 // readOnly are the seats that read one change and answer, changing nothing
@@ -92,8 +96,14 @@ func (a *Agents) Route(role, project string) []core.Pick {
 // Spec builds a run spec with the role's system prompt, grants and model.
 func (a *Agents) Spec(id, role, project, checkout, brief string) core.RunSpec {
 	route := a.Route(role, project)
+	system := a.System(role, project)
+	if a.Board != nil { // in the system prompt, not the brief, which reviewers and judges are handed
+		if board := a.Board(role, project); board != "" {
+			system += "\n" + board
+		}
+	}
 	s := core.RunSpec{ID: id, Role: role, Project: project, Checkout: checkout, Harness: route[0].Harness, Model: route[0].Model,
-		System: a.System(role, project), Brief: brief, Route: route}
+		System: system, Brief: brief, Route: route}
 	if p, ok := a.C.Projects.Get(project); ok && p.Isolated {
 		s.Isolated = true
 		s.Modules = a.Mod.Granted(project)
