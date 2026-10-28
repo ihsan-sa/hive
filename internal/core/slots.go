@@ -103,6 +103,15 @@ func (s *Slots) Acquire(project, sha, kind string) (release func()) {
 // Take is Acquire, reporting false, with a release that does nothing, when
 // the wait was dropped (Drop) before a slot came.
 func (s *Slots) Take(project, sha, kind string) (release func(), ok bool) {
+	release, ok, _ = s.TakeOr(project, sha, kind, nil, 0)
+	return release, ok
+}
+
+// TakeOr is Take that, while it waits, asks leave every so often whether to
+// go without a slot (it runs elsewhere): if so it leaves the line and reports
+// left, with ok false and a release that does nothing. Once leave says yes it
+// is asked no more, even if a slot came first.
+func (s *Slots) TakeOr(project, sha, kind string, leave func() bool, every time.Duration) (release func(), ok, left bool) {
 	s.mu.Lock()
 	rank := s.rank
 	s.mu.Unlock()
@@ -116,8 +125,38 @@ func (s *Slots) Take(project, sha, kind string) (release func(), ok bool) {
 	s.waiting = append(s.waiting, w)
 	s.fill()
 	s.mu.Unlock()
-	if !<-w.ready {
-		return func() {}, false
+	var tick <-chan time.Time
+	if leave != nil && every > 0 {
+		t := time.NewTicker(every)
+		defer t.Stop()
+		tick = t.C
+	}
+	var started bool
+wait:
+	for {
+		select {
+		case started = <-w.ready:
+			break wait
+		case <-tick:
+			if !leave() {
+				continue
+			}
+			s.mu.Lock()
+			n := len(s.waiting)
+			s.waiting = slices.DeleteFunc(s.waiting, func(o slotWait) bool { return o.id == w.id })
+			gone := len(s.waiting) < n
+			s.mu.Unlock()
+			if gone {
+				return func() {}, false, true
+			}
+			// It started (or was dropped) as leave was asked: take that,
+			// and ask leave no more.
+			started = <-w.ready
+			break wait
+		}
+	}
+	if !started {
+		return func() {}, false, false
 	}
 	var once sync.Once
 	return func() {
@@ -127,7 +166,7 @@ func (s *Slots) Take(project, sha, kind string) (release func(), ok bool) {
 			s.running = slices.DeleteFunc(s.running, func(u SlotUse) bool { return u.id == w.id })
 			s.fill()
 		})
-	}, true
+	}, true, false
 }
 
 // Drop takes what waits for a slot on sha in project out of the line, so a
