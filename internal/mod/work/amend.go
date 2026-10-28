@@ -172,3 +172,49 @@ func (m *Module) opWithdraw(r core.Run, args json.RawMessage) (any, error) {
 	}
 	return map[string]string{"task": t.ID, "stage": t.Stage, "note": t.Reason}, nil
 }
+
+// Retract ends a brief r filed that a worker has already started on, once
+// its ask turns out to be void (improve's fix brief for a test whose
+// quarantine came from a broken check run): its worker is stopped, an open
+// PR closed, and the task withdrawn, so it holds no worker slot and doesn't
+// come back with recheck. A task on its way to merge or past it is left be.
+func (m *Module) Retract(r core.Run, id, why string) (Task, error) {
+	if strings.TrimSpace(why) == "" {
+		return Task{}, errors.New("say why with why (it goes on the issue and the task's record)")
+	}
+	if !m.claim(id) {
+		return Task{}, fmt.Errorf("task %s is busy; try again in a moment", id)
+	}
+	defer m.release(id)
+	t, ok := m.Get(id)
+	if !ok || m.C.Runs.Walled(r, t.Project) != nil {
+		return Task{}, fmt.Errorf("no task %q", id)
+	}
+	switch {
+	case t.Kind != "work" || t.From != r.ID:
+		return Task{}, fmt.Errorf("task %s wasn't filed by %s", id, r.ID)
+	case t.Stage == StageNew || t.Queued():
+		return Task{}, fmt.Errorf("task %s hasn't started; withdraw it", id)
+	case t.Stage == StageMerging || t.Stage == StageMerged || t.Stage == StageDone || t.Stage == StageReverting || t.Withdrawn():
+		return Task{}, fmt.Errorf("task %s is %s, so it isn't retracted", id, t.Stage)
+	}
+	why = core.Clip(strings.TrimSpace(why), 300)
+	if t.Worker != "" {
+		m.C.Runs.Stop(t.Worker, "its brief was "+withdrawn+r.ID+": "+why)
+	}
+	p, perr := m.project(&t)
+	if perr == nil && t.PR.Number != 0 {
+		if pr, err := m.C.Effects.Forge.GetPR(p.Repo, t.PR.Number); err == nil && pr.State == "OPEN" {
+			m.C.Effects.Forge.ClosePR(p.Repo, pr.Number, "Withdrawn by "+r.ID+": "+why)
+		}
+	}
+	reason := withdrawn + r.ID + " after its worker started: " + why
+	t.Stage, t.Reason, t.Held, t.HeldBy, t.Now, t.Checkpoint, t.DraftWhy = StageStopped, reason, false, "", false, "", ""
+	if perr == nil && t.Issue.Number != 0 {
+		m.comment(p.Repo, t.Issue.Number, "Withdrawn by "+r.ID+" after a worker started on it: "+why)
+		t.IssueOpen = true // closed by the step, retried as a done task's is
+	}
+	m.save(&t, reason)
+	m.notify(&t, fmt.Sprintf("Withdrawn after its worker started: %q (%s)", t.Label(), reason))
+	return t, nil
+}
