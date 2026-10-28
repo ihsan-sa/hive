@@ -76,6 +76,7 @@ type Effects struct {
 	outside   map[string]map[string]OutsideRead // project#diff -> reader -> their latest read
 	seats     map[string]map[string]Verdict     // project#diff -> security seat -> its latest verdict
 	hostMade  map[string]HostCommit
+	recorded  map[string]string   // project\x00path -> the blob the Hive last wrote there from its record (Record)
 	pushes    map[string][]string // project@branch -> each commit pushed to it, oldest first
 	approvals map[string]bool
 	failing   map[string]CheckFailure   // repo url -> what a failed check's log says
@@ -176,15 +177,18 @@ type Finding struct {
 type HostCommit struct {
 	Project  string `json:"project"`
 	SHA      string `json:"sha"`
-	Kind     string `json:"kind"`               // update | revert | setup
+	Kind     string `json:"kind"`               // update | revert | setup | record
 	Reviewed string `json:"reviewed,omitempty"` // for updates: the commit whose verdict carries
 	Main     string `json:"main,omitempty"`
+	// Files are, for a record, the files it wrote from the Hive's own
+	// record (a project's trial ledger), by path, with their blobs.
+	Files map[string]string `json:"files,omitempty"`
 }
 
 // NewEffects builds the effects process and replays its records.
 func NewEffects(ws Workspace, j *Journal, forge Forge, sb func() (sandbox.Sandbox, error), tools func() []string, runs *Runs) *Effects {
 	e := &Effects{ws: ws, j: j, Forge: forge, sandbox: sb, tools: tools, runs: runs, sweep: sandbox.Sweep,
-		checks: map[string]Check{}, verdicts: map[string]Verdict{}, lands: map[string][]string{}, diffLands: map[string][]string{}, diffVerds: map[string]Verdict{}, diffHeads: map[string][]string{}, outside: map[string]map[string]OutsideRead{}, seats: map[string]map[string]Verdict{}, hostMade: map[string]HostCommit{}, pushes: map[string][]string{}, approvals: map[string]bool{}, gates: map[string]GateResult{}, judged: map[string]Judgement{}, gateMains: map[string]GateResult{}, standing: map[string]bool{}, errored: map[string]map[string]any{}}
+		checks: map[string]Check{}, verdicts: map[string]Verdict{}, lands: map[string][]string{}, diffLands: map[string][]string{}, diffVerds: map[string]Verdict{}, diffHeads: map[string][]string{}, outside: map[string]map[string]OutsideRead{}, seats: map[string]map[string]Verdict{}, hostMade: map[string]HostCommit{}, recorded: map[string]string{}, pushes: map[string][]string{}, approvals: map[string]bool{}, gates: map[string]GateResult{}, judged: map[string]Judgement{}, gateMains: map[string]GateResult{}, standing: map[string]bool{}, errored: map[string]map[string]any{}}
 	e.Slots = NewSlots(func() int { return cmp.Or(ws.LoadConfig().MaxChecks, DefaultMaxChecks()) }) // the work module paces it
 	apply := func(ev Event) {
 		e.mu.Lock()
@@ -242,6 +246,9 @@ func NewEffects(ws Workspace, j *Journal, forge Forge, sb func() (sandbox.Sandbo
 			var h HostCommit
 			ev.Decode(&h)
 			e.hostMade[h.Project+"@"+h.SHA] = h
+			for path, blob := range h.Files {
+				e.recorded[h.Project+"\x00"+path] = blob
+			}
 		case "effect.pushed":
 			var pu struct{ Project, Branch, SHA string }
 			ev.Decode(&pu)
@@ -1300,7 +1307,11 @@ type Change struct {
 	Lines     int      `json:"lines"`
 	Small     bool     `json:"small"`
 	Protected []string `json:"protected,omitempty"`
-	High      []string `json:"high,omitempty"` // files in a high or root class
+	// Recorded are the files whose content at the head is what the Hive
+	// last wrote there from its own record (Record): not protected, and a
+	// change of nothing else needs no read.
+	Recorded []string `json:"recorded,omitempty"`
+	High     []string `json:"high,omitempty"` // files in a high or root class
 	// Security are files on main's SecurityList, or in the project's root
 	// class: the change merges only after a security read said land on its
 	// diff (SecurityOK).
@@ -1336,6 +1347,19 @@ var docExt = []string{".md", ".txt", ".rst", ".adoc"}
 // a script there is code like anywhere else.
 var docImage = []string{".png", ".jpg", ".jpeg", ".gif", ".webp"}
 
+// isRecorded says whether file at sha holds what the Hive last wrote there
+// from its record.
+func (e *Effects) isRecorded(p Project, sha, file string) bool {
+	e.mu.Lock()
+	want, ok := e.recorded[p.Name+"\x00"+file]
+	e.mu.Unlock()
+	if !ok {
+		return false
+	}
+	got, err := Git(e.ws.Project(p.Name), "rev-parse", "--verify", "-q", sha+":"+file)
+	return err == nil && got == want
+}
+
 // Classify measures a change against main. Small means docs only and few
 // lines, judged by file type: a script under docs/ is code.
 func (e *Effects) Classify(p Project, mainSHA, sha string) (Change, error) {
@@ -1370,7 +1394,9 @@ func (e *Effects) Classify(p Project, mainSHA, sha string) (Change, error) {
 		file := f[2]
 		c.Files = append(c.Files, file)
 		c.Lines += add + del
-		if under(file, protected) {
+		if e.isRecorded(p, sha, file) {
+			c.Recorded = append(c.Recorded, file)
+		} else if under(file, protected) {
 			c.Protected = append(c.Protected, file)
 		}
 		if under(file, cfg.Root) {
@@ -2383,6 +2409,9 @@ func CheckNames(runs []CheckRun) string {
 // else that changes the change's own files needs a new read.
 func (e *Effects) readOK(p Project, ch Change, sha string) bool {
 	project := p.Name
+	if len(ch.Files) > 0 && len(ch.Recorded) == len(ch.Files) && len(ch.High) == 0 && len(ch.Security) == 0 {
+		return true // only what the Hive wrote from its own record: nothing for a reader to judge
+	}
 	if p.Self || len(ch.High) > 0 {
 		// A release names the read of each merged head; a high class needs a
 		// second, separate read.
@@ -2557,10 +2586,26 @@ func (e *Effects) Revert(p Project, mainSHA, mergeSHA, lesson string) (string, e
 // Setup writes files as a host-made commit on top of base (or as the first
 // commit of an empty repository).
 func (e *Effects) Setup(p Project, base string, files map[string]string, message string) (string, error) {
-	dir := filepath.Join(e.ws.Gates(), p.Name, "setup-"+NewID()[14:])
+	return e.write(p, base, files, message, "setup")
+}
+
+// Record writes files the Hive derives from its own record (a project's
+// trial ledger) as a host-made commit on top of main. Until it writes the
+// path again, a change that leaves exactly that content there needs neither
+// the person's approval for it, though the path is protected, nor a read
+// (Classify's Recorded): what it says is the Hive's to say, not a worker's.
+func (e *Effects) Record(p Project, main string, files map[string]string, message string) (string, error) {
+	if main == "" {
+		return "", errors.New("a record goes on top of main, and the repository is empty")
+	}
+	return e.write(p, main, files, message, "record")
+}
+
+func (e *Effects) write(p Project, base string, files map[string]string, message, kind string) (string, error) {
+	dir := filepath.Join(e.ws.Gates(), p.Name, kind+"-"+NewID()[14:])
 	var err error
 	if base != "" {
-		dir, err = e.cleanCheckout(p, base, "setup")
+		dir, err = e.cleanCheckout(p, base, kind)
 	} else {
 		err = os.MkdirAll(dir, 0o755)
 		if err == nil {
@@ -2585,7 +2630,18 @@ func (e *Effects) Setup(p Project, base string, files map[string]string, message
 	if base == "" {
 		Git(dir, "remote", "add", "origin", e.ws.Project(p.Name))
 	}
-	return e.hostCommit(p, dir, HostCommit{Project: p.Name, Kind: "setup", Main: base})
+	h := HostCommit{Project: p.Name, Kind: kind, Main: base}
+	if kind == "record" {
+		h.Files = map[string]string{}
+		for path := range files {
+			blob, err := Git(dir, "rev-parse", "HEAD:"+path)
+			if err != nil {
+				return "", err
+			}
+			h.Files[path] = blob
+		}
+	}
+	return e.hostCommit(p, dir, h)
 }
 
 // PushInitial publishes the first commit of an empty repository to main.

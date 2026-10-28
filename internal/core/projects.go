@@ -75,6 +75,10 @@ type ProjectConfig struct {
 	Root      []string `json:"root,omitempty"`      // paths that run with elevated rights: high, and the person says when they release
 	SmallMax  int      `json:"small_max_lines,omitempty"`
 	DryRun    string   `json:"dryrun,omitempty"` // for self-releasing projects: one ask, end to end
+	// Ledger is a file the Hive keeps as this project's trial ledger (the
+	// named models and the project's trials, as the models op shows them),
+	// written from its record whenever a trial's outcome is recorded.
+	Ledger string `json:"ledger,omitempty"`
 }
 
 // SelfRoot and SelfHigh are the paths of the Hive's own source that a self

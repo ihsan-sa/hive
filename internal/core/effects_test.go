@@ -1689,3 +1689,40 @@ func TestClipEndsKeepsTheSummary(t *testing.T) {
 		t.Error("a short output should come back whole, newlines and all")
 	}
 }
+
+// A ledger the Hive writes from its own record is a score path, yet it needs
+// neither the person's approval nor a read; a worker's own content there
+// still does, and so does the Hive's older content once it writes newer.
+func TestRecordedLedgerNeedsNoApproval(t *testing.T) {
+	c, f := testHive(t)
+	seedRepo(t, f, "me/tr", map[string]string{"ledger.json": "{}\n", ".hive/project.json": `{"test":"true","ledger":"ledger.json","score":{"command":"cat ledger.json","paths":["ledger.json"],"direction":"higher"}}`})
+	p, _ := c.Projects.Add(Project{Name: "tr", Repo: "me/tr"})
+	main, _ := c.Effects.Sync(p)
+	if got := c.Effects.Config(p, main).Ledger; got != "ledger.json" {
+		t.Fatalf("ledger %q", got)
+	}
+	sha, err := c.Effects.Record(p, main, map[string]string{"ledger.json": "{\"trials\": [1]}\n"}, "Refresh the ledger")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ch, err := c.Effects.Classify(p, main, sha)
+	if err != nil || len(ch.Protected) != 0 || !slices.Equal(ch.Recorded, []string{"ledger.json"}) || !c.Effects.Reviewed(p, ch, sha) {
+		t.Fatalf("the Hive's own record: %+v %v", ch, err)
+	}
+	c.Effects.RunCheck(p, sha, "test", "true")
+	var np *NeedsPerson
+	if _, err := c.Effects.Merge(MergeRequest{Project: p, SHA: sha, Main: main}); errors.As(err, &np) {
+		t.Fatalf("the record waited on the person: %v", err)
+	}
+	r, _ := commitInCheckout(t, c, p, "w1", main, "ledger.json", "{\"trials\": [1, 2]}\n")
+	own, _ := c.Effects.Extract(p, r, main)
+	if ch, _ := c.Effects.Classify(p, main, own); !slices.Contains(ch.Protected, "ledger.json") || len(ch.Recorded) != 0 {
+		t.Fatalf("a worker's ledger must be protected: %+v", ch)
+	}
+	if _, err := c.Effects.Record(p, main, map[string]string{"ledger.json": "{\"trials\": [1, 3]}\n"}, "Refresh the ledger"); err != nil {
+		t.Fatal(err)
+	}
+	if ch, _ := c.Effects.Classify(p, main, sha); !slices.Contains(ch.Protected, "ledger.json") {
+		t.Fatalf("an older record must be protected once a newer one is written: %+v", ch)
+	}
+}
