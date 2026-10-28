@@ -65,6 +65,9 @@ type Module struct {
 	// Contains says whether commit tagSHA has sha in its history; nil is
 	// git merge-base in the project's clone.
 	Contains func(p core.Project, sha, tagSHA string) (bool, error)
+	// Line reads the release line (VERSION, "1.0") at sha; nil is git show
+	// in the project's clone.
+	Line func(p core.Project, sha string) (string, error)
 	// announced is the newest release a pinned Hive has said is out.
 	announced string
 	// liftLooked is set once AutoUpdate has looked for a pin to lift.
@@ -357,13 +360,15 @@ func (m *Module) Update(tag string) (string, error) {
 		return busy, nil
 	}
 	defer m.updating.Unlock()
-	return m.update(tag)
+	return m.update(tag, false)
 }
 
 // busy is what an update says while another is being checked.
 const busy = "an update is already being checked; try again in a minute"
 
-func (m *Module) update(tag string) (string, error) {
+// update installs tag, or the newest release when tag is "" or latest; on its
+// own (auto), it never crosses into a new major version past 1.0.
+func (m *Module) update(tag string, auto bool) (string, error) {
 	m.pmu.Lock()
 	m.tried = tag
 	m.pmu.Unlock()
@@ -385,6 +390,9 @@ func (m *Module) update(tag string) (string, error) {
 			msg += ", pinned there"
 		}
 		return msg, m.pin(cfg, tag, pin)
+	}
+	if auto && Breaking(core.Version, tag) {
+		return tag + " is a new major version, which by the Hive's versioning would break this setup; read its notes, then `" + core.Cmd + " update " + tag + "` installs it", nil
 	}
 	m.pmu.Lock()
 	m.tried = tag
@@ -636,7 +644,7 @@ func (m *Module) AutoUpdate() (string, error) {
 	if !cfg.AutoUpdate || cfg.ReleasePin != "" {
 		return "auto-update is off", nil
 	}
-	msg, err := m.update("")
+	msg, err := m.update("", true)
 	m.pmu.Lock()
 	waits := m.waits
 	m.pmu.Unlock()
@@ -913,7 +921,20 @@ func (m *Module) afterKept(project, sha string) {
 		return
 	}
 	m.refused.Delete(project)
+	// The next tag is one past the highest anywhere (the release marked
+	// latest may be older than pre-releases, and their tags are taken), or
+	// the first of a higher line VERSION names.
+	tags, err := m.C.Effects.Forge.Tags(p.Repo)
+	if err != nil {
+		alert("no release at " + core.Short(sha) + ": can't list the tags: " + err.Error())
+		return
+	}
+	tags = append(tags, core.Version)
+	next := nextTag(tags, m.line(p, sha))
 	var why []string
+	if major(next) > major(nextTag(tags, "")) {
+		why = append(why, "it starts "+next+", a new major version, which is the person's call ("+lineWhy+")")
+	}
 	if len(root) > 0 {
 		why = append(why, strings.Join(root, ", ")+" run with elevated rights and no security read passed them")
 	}
@@ -978,14 +999,6 @@ func (m *Module) afterKept(project, sha string) {
 			return
 		}
 	}
-	// The next tag is one past the highest anywhere: the release marked
-	// latest may be older than pre-releases, and their tags are taken.
-	tags, err := m.C.Effects.Forge.Tags(p.Repo)
-	if err != nil {
-		alert("no release at " + core.Short(sha) + ": can't list the tags: " + err.Error())
-		return
-	}
-	next := nextTag(append(tags, core.Version))
 	body := "Released by the Hive after " + core.Short(sha) + " kept its tests, main's checks and dry run green. It is a pre-release until " +
 		strings.Join(Gates, " and ") + " pass on that commit; then it is the latest, which installs follow.\n\nWhat was read:\n\n" + manifest.String()
 	if approved {
@@ -1864,15 +1877,57 @@ func (m *Module) diff(p core.Project, from, to string) ([]string, error) {
 	return slices.DeleteFunc(strings.Split(out, "\x00"), func(f string) bool { return f == "" }), nil
 }
 
-// nextTag is one past the highest vX.Y.Z among tags (v0.0.1 if none is).
-func nextTag(tags []string) string {
+// nextTag is one past the highest vX.Y.Z among tags (v0.0.1 if none is),
+// or vX.Y.0 when line ("X.Y", from VERSION) is above the highest's X.Y.
+func nextTag(tags []string, line string) string {
 	last := "v0.0.0"
 	for _, t := range tags {
 		if strings.HasPrefix(t, "v") && modules.Newer(last, t) {
 			last = t
 		}
 	}
+	var a, b int
+	if n, _ := fmt.Sscanf(line, "%d.%d", &a, &b); n == 2 {
+		if first := fmt.Sprintf("v%d.%d.0", a, b); modules.Newer(last, first) {
+			return first
+		}
+	}
 	return bump(last)
+}
+
+// lineWhy is what a new major version says, by docs/versions.md.
+const lineWhy = "1.0 is the first release stable enough for the person's own projects; each major after it means an update would break an existing setup"
+
+// major is a vX.Y.Z tag's X.
+func major(tag string) int {
+	var a int
+	fmt.Sscanf(strings.TrimPrefix(tag, "v"), "%d", &a)
+	return a
+}
+
+// Breaking says whether going from one release to another crosses a major
+// version past 1.0, which by the Hive's versioning (docs/versions.md) means
+// the update would break an existing setup: no update takes it on its own.
+func Breaking(from, to string) bool {
+	return strings.HasPrefix(from, "v") && major(from) >= 1 && major(to) > major(from)
+}
+
+// line reads the release line VERSION names at sha ("" when there is none).
+func (m *Module) line(p core.Project, sha string) string {
+	read := m.Line
+	if read == nil {
+		read = func(p core.Project, sha string) (string, error) {
+			if !hexName(sha) {
+				return "", fmt.Errorf("not a commit name: %q", core.Clip(sha, 50))
+			}
+			return core.Git(m.C.WS.Project(p.Name), "show", sha+":VERSION")
+		}
+	}
+	v, err := read(p, sha)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(v)
 }
 
 func bump(tag string) string {

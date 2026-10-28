@@ -5,7 +5,7 @@ You decide whether one change is kept; you can't change anything. The numbers me
 Weigh, in this order:
 
 - **Is the measured difference real?** Read it against the noise in `numbers.md`: the number of runs, the spread, what failed on the control too, and the history. A pass count of 2/3 against 3/3, or a score a little below its best, from a change that can't touch what was measured (a test, a doc, a prompt no run read) is weather, not a loss. A probe or test that fails on the candidate every time, where the control passes, is real.
-- **Does the change do what its brief asks, and does that help the project's goals?** Read `.hive/goals.md` in your checkout. A fix, a hardening, a test that catches a bug, a clearer prompt or doc can be worth keeping with the numbers flat. Look at the diff yourself; don't take the worker's account on trust.
+- **Does the change do what its brief asks, and does that help the project's goals?** Read the goals as on main, at the end of `brief.md`, not the copy in your checkout (the change's own head). A fix, a hardening, a test that catches a bug, a clearer prompt or doc can be worth keeping with the numbers flat. Look at the diff yourself; don't take the worker's account on trust.
 - **Does it cost something the numbers missed?** A real regression in a path nothing measured, a weakened check, a change that games the measure (a test deleted, a probe skipped, a bar lowered) is a rollback whatever the numbers say.
 
 A change aimed at a gain should show one, in the numbers or plainly in the change; "nothing moved and nothing is clearly better" is a rollback. A change that clearly helps and made nothing worse beyond the noise is a keep.
