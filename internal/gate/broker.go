@@ -694,7 +694,7 @@ func (g *gqlCheck) within(sels []gqlSel, depth int) error {
 // names are the fields a leaving field may still open: who owns it, what
 // its default branch is called, what it was forked from, the items of a
 // list. gh reads them to know a repository and a pull request's people.
-var names = map[string]bool{"owner": true, "defaultBranchRef": true, "parent": true, "organization": true, "project": true, "column": true,
+var names = map[string]bool{"owner": true, "defaultBranchRef": true, "parent": true, "organization": true, "project": true, "column": true, "fieldValueByName": true,
 	"nodes": true, "edges": true, "node": true, "pageInfo": true}
 
 // nameScalars are all a leaving field, or anything below one, may select:
@@ -710,12 +710,18 @@ var nameScalars = map[string]bool{"id": true, "databaseId": true, "login": true,
 // can't be forked into, so there is none.
 var repoScalars = map[string]bool{"sshUrl": true, "description": true, "hasIssuesEnabled": true, "hasWikiEnabled": true, "viewerPermission": true}
 
+// extraScalars are what a few leaving fields may give besides names, each
+// because gh asks it: a repository's parent (pr create), a project's title
+// and a project item's status option (pr view's projectItems, newer gh).
+// The side's repositories are fresh, so none of these exist for them.
+var extraScalars = map[string]map[string]bool{"parent": repoScalars, "project": {"title": true}, "fieldValueByName": {"optionId": true}}
+
 // leaves allows s, which leaves the repository, only nameScalars below it,
 // through names.
 func (g *gqlCheck) leaves(s gqlSel, depth int) error {
 	return g.each(s.Children, depth+1, func(k gqlSel, d int) error {
 		if !k.Has {
-			if !nameScalars[k.Field] && !(s.Field == "parent" && repoScalars[k.Field]) {
+			if !nameScalars[k.Field] && !extraScalars[s.Field][k.Field] {
 				return fmt.Errorf("%s gives names and ids only, not %s", s.Field, k.Field)
 			}
 			return nil

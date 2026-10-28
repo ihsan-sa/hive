@@ -547,7 +547,9 @@ func TestBrokerReadsNoContentBeyondTheRepository(t *testing.T) {
 		`{ ` + r + `{ pullRequest(number:1){ headRepository { description } } } }`:                                false,
 		`mutation { addSubIssue(input:{issueId:"I_1", subIssueId:"I_2"}){ clientMutationId } }`:                   false,
 		// newer gh asks these (seen from gh on ubuntu-latest)
-		`{ ` + r + `{ parent { databaseId sshUrl } pullRequest(number:1){ assignees(first:5){ nodes { databaseId } } headRepository { nameWithOwner } } } }`: true,
+		`{ ` + r + `{ parent { databaseId sshUrl } pullRequest(number:1){ assignees(first:5){ nodes { databaseId } } headRepository { nameWithOwner } } } }`:                                                                        true,
+		`{ ` + r + `{ pullRequest(number:1){ projectItems(first:100){ totalCount nodes { id project { id title } status: fieldValueByName(name:"Status"){ ... on ProjectV2ItemFieldSingleSelectValue { optionId name } } } } } } }`: true,
+		`{ ` + r + `{ pullRequest(number:1){ projectItems(first:100){ nodes { project { readme } } } } } }`:                                                                                                                         false,
 		`{ rateLimit { limit cost remaining resetAt } }`: true,
 	} {
 		body, _ := json.Marshal(map[string]string{"query": q})
