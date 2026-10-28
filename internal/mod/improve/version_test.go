@@ -208,33 +208,59 @@ func TestBehindMeasuresTheNewestMain(t *testing.T) {
 	}
 }
 
-// A score that moves with the machine's load is judged against main measured
-// in the same moment (issue #1343): a merge that reads under a best taken
-// under a lighter load is kept when main where the best was read scores the
-// same now, and the baseline moves to that; a fall under the same load still
-// goes to the judge, measured against where the best was read, so falls kept
-// one by one can't walk the baseline down.
-func TestFallIsJudgedAgainstMainMeasuredNow(t *testing.T) {
+// A score that moves with the machine's load is judged beside the merge's
+// parent, scored right after it (issues #1343, #1808): a merge that reads
+// under a best taken under a lighter load is kept when its parent scores the
+// same now, and the baseline moves to that; a best taken under a heavier load
+// doesn't hide a fall, which goes to the judge against the parent.
+func TestFallIsJudgedBesideItsParent(t *testing.T) {
 	m, merge := scored(t)
 	load := filepath.Join(t.TempDir(), "load")
 	os.WriteFile(load, []byte("0\n"), 0o644)
-	if ms := merge(map[string]string{"score.sh": "expr $(cat n.txt) - $(cat " + load + ")\n", "n.txt": "10\n",
-		".hive/project.json": `{"test": "true", "score": {"command": "sh ./score.sh", "direction": "higher", "tolerance": 3}}`}); !ms.Kept || *ms.Best != 10 {
+	if ms := merge(map[string]string{"score.sh": "expr $(cat n.txt) - $(cat " + load + ")\n", "n.txt": "20\n",
+		".hive/project.json": `{"test": "true", "score": {"command": "sh ./score.sh", "direction": "higher", "tolerance": 3}}`}); !ms.Kept || *ms.Best != 20 {
 		t.Fatalf("the new score's start: %+v", ms)
 	}
 	at := m.Scores("p")[len(m.Scores("p"))-1].SHA
 	os.WriteFile(load, []byte("4\n"), 0o644) // the machine got busier
 	ms := merge(map[string]string{"other.txt": "x\n"})
-	if !ms.Kept || ms.Best == nil || *ms.Best != 6 || ms.Against == nil || *ms.Against != 6 || ms.AgainstSHA != at || !strings.Contains(ms.Note, "load") {
+	if !ms.Kept || ms.Best == nil || *ms.Best != 16 || ms.Against == nil || *ms.Against != 16 || ms.AgainstSHA != at || ms.Gain || !strings.Contains(ms.Note, "beside it") {
 		t.Fatalf("a fall that was the load alone: %+v", ms)
 	}
-	second := ms.SHA // it scored the new baseline itself
-	if ms := merge(map[string]string{"other.txt": "y\n", "n.txt": "9\n"}); !ms.Kept || *ms.Best != 6 || ms.Against != nil {
-		t.Fatalf("a reading within the tolerance of the new baseline: %+v", ms)
+	second := ms.SHA
+	os.WriteFile(load, []byte("12\n"), 0o644) // busier still
+	ms = merge(map[string]string{"n.txt": "15\n"}, work.Task{ID: "fix", Aim: work.AimFix, AimWhy: "a named failure"})
+	if !ms.Kept || ms.AgainstSHA != second || *ms.Against != 8 || *ms.Best != 3 || !strings.Contains(ms.Note, "fell to 3 from 8") {
+		t.Fatalf("a fix that fell beside its parent, kept as one: %+v", ms)
 	}
-	ms = merge(map[string]string{"n.txt": "6\n"})
-	if ms.Kept || ms.AgainstSHA != second || !strings.Contains(ms.Note, "fell to 2 from 6") {
-		t.Fatalf("a real fall under the same load, against where the best was read: %+v", ms)
+	fix := ms.SHA
+	os.WriteFile(load, []byte("0\n"), 0o644) // lighter: the stored best of 3 would pass anything
+	if ms := merge(map[string]string{"n.txt": "11\n"}); ms.Kept || ms.AgainstSHA != fix || *ms.Against != 15 || !strings.Contains(ms.Note, "fell to 11 from 15") {
+		t.Fatalf("a real fall under a lighter load than the best's, beside its parent: %+v", ms)
+	}
+	if ms := merge(map[string]string{"n.txt": "19\n", "other.txt": "y\n"}); !ms.Kept || ms.AgainstSHA != fix || *ms.Against != 15 || !ms.Gain || *ms.Best != 19 {
+		t.Fatalf("a gain beside its parent: %+v", ms)
+	}
+}
+
+// A best read beside its parent moves with the load, so only a gain beside
+// the parent counts as the score moving on (plateau, judgedDrift); one read
+// with no parent beside it moves when its number does.
+func TestMovedIsAGainBesideTheParent(t *testing.T) {
+	f := func(v float64) *float64 { return &v }
+	last := f(10)
+	for _, c := range []struct {
+		x    Measurement
+		want bool
+	}{
+		{Measurement{Best: f(12), Against: f(11)}, false},
+		{Measurement{Best: f(15), Against: f(11), Gain: true}, true},
+		{Measurement{Best: f(10)}, false},
+		{Measurement{Best: f(12)}, true},
+	} {
+		if got := c.x.moved(last); got != c.want {
+			t.Errorf("moved(%+v) = %v, want %v", c.x, got, c.want)
+		}
 	}
 }
 

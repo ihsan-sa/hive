@@ -38,11 +38,12 @@ type Measurement struct {
 	// this is neither kept nor a failure, and main is measured again later.
 	NoResult bool     `json:"no_result,omitempty"`
 	Best     *float64 `json:"best,omitempty"` // best kept after this measure
-	// Against is main where the best kept score was read, measured again
-	// right after this one when this one read past the tolerance below the
-	// best: under the same load, so a fall is judged against it (#1343).
+	// Against is the merge's parent, the newest kept main, scored right
+	// after it under the same load: the merge is kept or reverted on the two
+	// (#1343, #1808). Gain says it beat that by more than the tolerance.
 	Against    *float64  `json:"against,omitempty"`
 	AgainstSHA string    `json:"against_sha,omitempty"`
+	Gain       bool      `json:"gain,omitempty"`
 	Version    string    `json:"version,omitempty"` // the score's version (Effects.ScoreVersion); a new one starts a new baseline
 	Note       string    `json:"note"`
 	At         time.Time `json:"at"`
@@ -188,6 +189,17 @@ func (m *Module) Scores(project string) []Measurement {
 	return append([]Measurement{}, m.scores[project]...)
 }
 
+// moved says whether x, a kept measurement, moved the score on: it beat its
+// parent scored beside it, or, measured with no parent beside it, its best
+// differs from the one before (last). A best read beside a parent moves
+// with the machine's load, so its number alone is no gain.
+func (x Measurement) moved(last *float64) bool {
+	if x.Against != nil {
+		return x.Gain
+	}
+	return last == nil || x.Best == nil || *x.Best != *last
+}
+
 // Best returns the best kept score.
 func (m *Module) Best(project string) (float64, bool) {
 	k, ok := m.kept(project)
@@ -295,31 +307,6 @@ func (m *Module) measure(p core.Project, sha string) (ok bool, score *float64, n
 		return true, nil, flaky + "score did not produce a number: " + core.Clip(sc.Output, 600), cant
 	}
 	return true, sc.Score, flaky + fmt.Sprintf("score %g", *sc.Score), cant
-}
-
-// bestAt is the commit the best kept score was read at: the newest kept
-// measurement that scored it, itself or main measured again beside it. A
-// fall is judged there, not at the last kept merge, so small falls kept one
-// after another can't walk the baseline down.
-func (m *Module) bestAt(project string, best float64) string {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	ms := m.scores[project]
-	for i := len(ms) - 1; i >= 0; i-- {
-		switch x := ms[i]; {
-		case !x.Kept:
-		case x.Score != nil && *x.Score == best:
-			return x.SHA
-		case x.Against != nil && *x.Against == best:
-			return x.AgainstSHA
-		}
-	}
-	for i := len(ms) - 1; i >= 0; i-- {
-		if ms[i].Kept && ms[i].Best != nil {
-			return ms[i].SHA
-		}
-	}
-	return ""
 }
 
 // scoreNow measures the score at sha, a commit already kept, again now, so
@@ -849,27 +836,25 @@ func (m *Module) afterMerge(t work.Task) {
 		reason = "the tests went red after it merged: " + strings.TrimPrefix(note, "tests red: ")
 	case cfg.Score != nil && score == nil:
 		worse, reason = true, "the score stopped producing a number"
-	case cfg.Score != nil && hasBest && !cfg.Score.WithinTolerance(*score, best):
-		// The score is speed, so it moves with the machine's load (issue
-		// #1343): the best may have been read under a lighter one. Main as
-		// it was kept, measured again now, says whether this merge fell.
-		at := m.bestAt(p.Name, best)
-		if now, ok := m.scoreNow(p, at); ok {
-			ms.Against, ms.AgainstSHA = &now, at
-			if cfg.Score.WithinTolerance(*score, now) {
-				b := cfg.Score.Best(*score, now)
-				ms.Kept, ms.Best = true, &b
-				ms.Note = fmt.Sprintf("kept: %g is under the best kept %g, but main where it was read (%s) scores %g measured now, so the fall is the machine's load; the baseline is %g from here; %s", *score, best, core.Short(at), now, b, note)
-				m.record(ms)
-				if m.OnKept != nil {
-					m.OnKept(p.Name, t.MergeSHA)
-				}
-				return
+	case cfg.Score != nil && hasBest:
+		// The score is speed, so it moves with the machine's load (issues
+		// #1343, #1808): a best read in another sitting says little about
+		// this one. The merge is judged beside its parent, the newest kept
+		// main, scored right after it with the same command, as the
+		// step-back scores its control; the stored best only when the
+		// parent gives no number.
+		if now, ok := m.scoreNow(p, k.SHA); ok {
+			ms.Against, ms.AgainstSHA = &now, k.SHA
+			ms.Note += fmt.Sprintf("; its parent %s scored %g beside it", core.Short(k.SHA), now)
+			if !cfg.Score.WithinTolerance(*score, now) {
+				worse, dip, reason = true, true, fmt.Sprintf("the score fell to %g from %g, its parent %s scored beside it (tolerance %g)", *score, now, core.Short(k.SHA), cfg.Score.Tolerance)
 			}
-			worse, dip, reason = true, true, fmt.Sprintf("the score fell to %g from %g, main where the best kept %g was read (%s) measured right after it (tolerance %g)", *score, now, best, core.Short(at), cfg.Score.Tolerance)
+			ms.Gain = cfg.Score.Beats(*score, now)
 			break
 		}
-		worse, dip, reason = true, true, fmt.Sprintf("the score fell to %g from the best kept %g (tolerance %g)", *score, best, cfg.Score.Tolerance)
+		if !cfg.Score.WithinTolerance(*score, best) {
+			worse, dip, reason = true, true, fmt.Sprintf("the score fell to %g from the best kept %g, its parent giving no number to score it beside (tolerance %g)", *score, best, cfg.Score.Tolerance)
+		}
 	}
 	if dip && t.Kind != "revert" && t.Fix() {
 		// A known fix wins over a dip (issue #568): it stays, main's score
@@ -910,7 +895,10 @@ func (m *Module) afterMerge(t work.Task) {
 		ms.Kept = true
 		if score != nil {
 			b := *score
-			if hasBest {
+			switch {
+			case ms.Against != nil:
+				b = cfg.Score.Best(*score, *ms.Against) // the baseline under this sitting's load
+			case hasBest:
 				b = cfg.Score.Best(*score, best)
 			}
 			ms.Best = &b
