@@ -21,6 +21,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/ihsan-sa/hive-standalone-build/internal/goscope"
 	"github.com/ihsan-sa/hive-standalone-build/internal/sandbox"
 )
 
@@ -109,6 +110,7 @@ type Check struct {
 	Log     string    `json:"log,omitempty"`      // the full output on the host, when it ran
 	Failed  []string  `json:"failed,omitempty"`   // the failing tests it names, read before the output is clipped
 	Keys    []string  `json:"keys,omitempty"`     // those tests with their packages (FailedTestKeys), when each can be placed
+	Scope   []string  `json:"scope,omitempty"`    // the packages it ran, when only those the change since main can affect (RunCheckSince); none is all
 	At      time.Time `json:"at"`
 	// DiskRead and DiskWrote are the bytes the check's command read from
 	// and wrote to the disk, every run of it together (sandbox.Disk; 0 where
@@ -197,8 +199,12 @@ func NewEffects(ws Workspace, j *Journal, forge Forge, sb func() (sandbox.Sandbo
 		case "effect.checked":
 			var c Check
 			ev.Decode(&c)
+			k := c.Project + "@" + c.SHA + "/" + c.Kind
+			if old, ok := e.checks[k]; ok && old.OK && old.Scope == nil && c.Scope != nil {
+				break // a whole pass answers for more than part of one; a red one is rechecked
+			}
 			if !noVerdict(c) { // a check that couldn't start runs again next time
-				e.checks[c.Project+"@"+c.SHA+"/"+c.Kind] = c
+				e.checks[k] = c
 			}
 		case "effect.verdict":
 			var v Verdict
@@ -531,6 +537,23 @@ func (e *Effects) Push(p Project, branch, sha string) error {
 // checkout inside the sandbox. The command comes from main's settings, so a
 // change can't rewrite the check it is judged by.
 func (e *Effects) RunCheck(p Project, sha, kind, command string) Check {
+	return e.runCheck(p, sha, "", kind, command)
+}
+
+// RunCheckSince is RunCheck of a change bound for main: a test command
+// made only of go vet and go test over ./... runs on the packages the
+// change since its merge base with main can affect (goscope), which is
+// every package whose result can differ from main's. Its Check names them
+// in Scope. A narrowing the go command can't follow runs everything.
+func (e *Effects) RunCheckSince(p Project, sha, main, kind, command string) Check {
+	c := e.runCheck(p, sha, main, kind, command)
+	if c.Scope != nil && !c.OK && c.CantRun == "" && goscope.Misfired(c.Output) {
+		return e.runCheck(p, sha, "", kind, command)
+	}
+	return c
+}
+
+func (e *Effects) runCheck(p Project, sha, main, kind, command string) Check {
 	c := Check{Project: p.Name, SHA: sha, Kind: kind, At: time.Now().UTC()}
 	record := func() Check {
 		c.Output = ClipEnds(c.Output, 4000)
@@ -571,11 +594,8 @@ func (e *Effects) RunCheck(p Project, sha, kind, command string) Check {
 		}
 		defer release()
 	}
-	script := guardProgram(command)
-	nonce := NewID()[14:]
 	if away != nil {
 		sb, c.Where = away, where
-		script = exitMarked(script, nonce)
 	}
 	dir, err := e.cleanCheckout(p, sha, kind)
 	if err != nil {
@@ -583,6 +603,15 @@ func (e *Effects) RunCheck(p Project, sha, kind, command string) Check {
 		return c
 	}
 	defer e.dropCheckout(dir)
+	scope := ""
+	if main != "" && kind == "test" {
+		command, c.Scope, scope = e.narrow(p, dir, sha, main, command)
+	}
+	script := guardProgram(command)
+	nonce := NewID()[14:]
+	if away != nil {
+		script = exitMarked(script, nonce)
+	}
 	id := "gate-" + short(sha) + "-" + kind + "-" + NewID()[14:]
 	c.Log = filepath.Join(e.ws.Hive(), "checks", p.Name, id+".log")
 	mounts := []sandbox.Mount{{Host: dir, Inside: "/work", RW: true}}
@@ -659,7 +688,7 @@ func (e *Effects) RunCheck(p Project, sha, kind, command string) Check {
 	if c.Where != "" {
 		mods.note = "ran on " + c.Where + ", as the check line here was full"
 	}
-	for _, n := range []string{build.note, mods.note} {
+	for _, n := range []string{build.note, mods.note, scope} {
 		if n != "" {
 			out = "hive: " + n + "\n" + out
 		}
@@ -762,6 +791,37 @@ func markedExit(out, nonce string) (int, bool) {
 // checkLeaveEvery is how often a check waiting in the line here asks whether
 // a runner has room for it.
 var checkLeaveEvery = 30 * time.Second
+
+// narrow is command run only on the packages of the checkout at dir (sha)
+// that the change since its merge base with main can affect, those
+// packages, and a note saying so; or command as it is when it can't be
+// narrowed.
+func (e *Effects) narrow(p Project, dir, sha, main, command string) (string, []string, string) {
+	unlock := e.lock(p.Name)
+	_, err := GitT(5*time.Minute, dir, "fetch", "-q", "origin", main)
+	unlock()
+	if err != nil {
+		return command, nil, ""
+	}
+	base, err := Git(dir, "merge-base", main, sha)
+	if err != nil {
+		return command, nil, ""
+	}
+	out, err := Git(dir, "diff", "--name-only", "--no-renames", "-z", base, sha)
+	if err != nil {
+		return command, nil, ""
+	}
+	changed := slices.DeleteFunc(strings.Split(out, "\x00"), func(f string) bool { return f == "" })
+	pkgs, ok := goscope.Affected(dir, changed)
+	if !ok {
+		return command, nil, ""
+	}
+	narrowed, ok := goscope.Narrow(command, pkgs)
+	if !ok {
+		return command, nil, ""
+	}
+	return narrowed, pkgs, fmt.Sprintf("only the %d packages the change since %s can affect: %s", len(pkgs), short(base), strings.Join(pkgs, " "))
+}
 
 // missingTool matches the shell's "not found" for a command looked up on the
 // PATH: dash's "/bin/sh: 1: go: not found", bash's "bash: go: command not found",

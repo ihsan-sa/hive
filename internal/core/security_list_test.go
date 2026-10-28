@@ -38,7 +38,7 @@ func TestShippedModuleProgramsNeedASecurityRead(t *testing.T) {
 			if !strings.HasPrefix(p, dir+"/") {
 				continue
 			}
-			filepath.WalkDir(filepath.Join(root, filepath.FromSlash(p)), func(f string, d fs.DirEntry, err error) error {
+			filepath.WalkDir(filepath.Join(root, "modules", filepath.FromSlash(strings.TrimPrefix(p, "modules/"))), func(f string, d fs.DirEntry, err error) error {
 				if err == nil && !d.IsDir() {
 					rel, _ := filepath.Rel(root, f)
 					need = append(need, filepath.ToSlash(rel))

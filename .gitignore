@@ -5,5 +5,4 @@
 *.test
 *.exe~
 __pycache__/
-# left by an interrupted disk test (checkdisk_linux_test.go)
-internal/core/disk-test-*/
+disk-test-*/
