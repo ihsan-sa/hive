@@ -350,3 +350,8 @@
 ## 2026-10-27 A load that is IO wait is the disk's, and doesn't cut the checks
 - Decision: `core.Loaded` reads CPU and IO pressure once the load per core is over `load_max`: with CPU pressure under 10% the load is the disk's (`core.DiskReason`, "machine loaded on its disk (io pressure …)") when IO pressure is 10% or more, and strains nothing otherwise. A disk load alone doesn't pull the checks' or gates' pace under its start, as CPU load does; workers treat it as load, as before. Each check's record carries its disk bytes (`disk_read`, `disk_wrote`).
 - Why: on 10-27 /proc/pressure/cpu some avg300 was 2.6% and /proc/pressure/io some 56% (full 40%) under a load of 34 on 20 cores; the checks sat at 1 for 6.9 of 12 hours while the load stayed 30-88 (issue #1833), and 26 briefs waited behind them. The pace said "machine loaded", which read as CPU.
+
+## 2026-10-28 A fix's lift isn't undone by checks of heads cut before it
+- Decision: improve keeps the merge sha of the fix that lifted a quarantine (`liftedBy`); after it, a red from the Hive's own test check on a commit that doesn't contain that merge (`git merge-base --is-ancestor`) is no sighting. Forge reds are unchanged: the forge tests the branch merged with main, so its head's ancestry doesn't say what ran.
+- Why: TestStaleModuleCacheRunsAgain's fix (30fea85) merged at 07:45:04Z; two older branches' local checks of their own heads, which still had the old test, went red seconds later, re-quarantined it and filed the same fix brief twice more (261028-085542, 261028-090108), each with nothing left to change.
+- Tradeoff: one git call per local red of a lifted test; when git can't tell (a commit not fetched), the red counts as before.
