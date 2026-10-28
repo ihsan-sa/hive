@@ -529,3 +529,50 @@ func TestSettingKeepsTheSandbox(t *testing.T) {
 		}
 	}
 }
+
+// POST /api/ui reaches a control center waiting on GET /api/ui at once, and
+// its view comes back on GET; a module's token is refused all three.
+func TestUICommandsAreThePersons(t *testing.T) {
+	s := &server{a: &app.App{}, info: api.DaemonInfo{Token: "t"}}
+	call := func(method, path, body, module string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(method, path, strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer t")
+		if module != "" {
+			req = req.WithContext(context.WithValue(req.Context(), moduleKey{}, module))
+		}
+		rec := httptest.NewRecorder()
+		s.routes().ServeHTTP(rec, req)
+		return rec
+	}
+	for _, c := range [][2]string{{"POST", "/api/ui"}, {"GET", "/api/ui?after=0"}, {"POST", "/api/ui/view"}} {
+		if rec := call(c[0], c[1], `{"action":"down"}`, "deckmod"); rec.Code == http.StatusOK || !strings.Contains(rec.Body.String(), "only the person") {
+			t.Fatalf("a module's %s %s: %d %s", c[0], c[1], rec.Code, rec.Body)
+		}
+	}
+	if s.ui.Since(t.Context(), -1, 0).Seq != 0 {
+		t.Fatal("a module's command was queued")
+	}
+	got := make(chan api.UIState, 1)
+	start := time.Now()
+	go func() {
+		var st api.UIState
+		json.Unmarshal(call("GET", "/api/ui?after=0&wait=20", "", "").Body.Bytes(), &st)
+		got <- st
+	}()
+	time.Sleep(100 * time.Millisecond)
+	if rec := call("POST", "/api/ui", `{"action":"view","view":"waiting","client":"deck","control":"pad 1"}`, ""); rec.Code != http.StatusOK {
+		t.Fatalf("POST: %d %s", rec.Code, rec.Body)
+	}
+	st := <-got
+	if len(st.Commands) != 1 || st.Commands[0].View != "waiting" || st.Commands[0].Client != "deck" || st.Seq != 1 || time.Since(start) > 10*time.Second {
+		t.Fatalf("the waiting GET got %+v after %s", st, time.Since(start))
+	}
+	if rec := call("POST", "/api/ui", `{"action":"view","view":"nowhere"}`, ""); rec.Code == http.StatusOK {
+		t.Fatalf("an unknown view was queued: %s", rec.Body)
+	}
+	call("POST", "/api/ui/view", `{"view":"waiting","focus":"main","sel":1,"item":"a2","applied":1}`, "")
+	json.Unmarshal(call("GET", "/api/ui", "", "").Body.Bytes(), &st)
+	if st.View == nil || st.View.Item != "a2" || st.View.Applied != 1 || len(st.Commands) != 0 {
+		t.Fatalf("GET /api/ui: %+v", st)
+	}
+}
