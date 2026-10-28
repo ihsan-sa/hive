@@ -765,3 +765,59 @@ func TestCheckRankCarriesTaskAge(t *testing.T) {
 		t.Errorf("a sha no task holds carries %v", first)
 	}
 }
+
+// A worker sent back to its task (here a conflict with main) takes its next
+// turn under the workers' pace like a brief that starts: on 10-28 a merge
+// sent 22 PRs back at once past it, and 19 workers ran while it said 1. The
+// ones waiting go ahead of new briefs, and go as slots free.
+func TestSentBackWorkersWaitOnThePace(t *testing.T) {
+	m := queueRig(t)
+	cfg := m.C.WS.LoadConfig()
+	cfg.MaxWorkers = 0
+	cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax, cfg.LoadMax = 0, 0, 0, 0
+	m.C.WS.SaveConfig(cfg)
+	set := func(l int) {
+		m.workers.mu.Lock()
+		m.workers.limit, m.workers.start, m.workers.at = l, defaultWorkers, time.Now()
+		m.workers.mu.Unlock()
+	}
+	set(2)
+	a := file(t, m, "first", "")
+	b := file(t, m, "second", "")
+	tick(m)
+	set(1) // the pace pulled back meanwhile
+	var runs []core.Run
+	for _, task := range []Task{a, b} {
+		got := stageOf(t, m, task)
+		if got.Stage != StageWorking || got.Worker == "" {
+			t.Fatalf("%q: stage %q worker %q", task.Title, got.Stage, got.Worker)
+		}
+		m.C.Runs.SetStatus(got.Worker, core.StatusDone, "finished")
+		if err := m.C.Runs.Reopen(got.Worker, "Main moved and your branch conflicts with it."); err != nil {
+			t.Fatal(err)
+		}
+		r, _ := m.C.Runs.Get(got.Worker)
+		runs = append(runs, r)
+	}
+	if m.C.Runs.Admit == nil {
+		t.Fatal("the work module doesn't pace core's launches")
+	}
+	if why := m.C.Runs.Admit(runs[0]); why != "" {
+		t.Fatalf("the first sent back, with no worker at work: %q, want it let through", why)
+	}
+	if why := m.C.Runs.Admit(runs[1]); !strings.Contains(why, "at the pace") {
+		t.Fatalf("the second sent back at a pace of 1: %q, want it waiting", why)
+	}
+	if why := m.C.Runs.Admit(runs[0]); why != "" {
+		t.Fatalf("the first again, already let through: %q", why)
+	}
+	c := file(t, m, "third", "")
+	tick(m)
+	if got := stageOf(t, m, c); got.Stage != StageQueued {
+		t.Fatalf("a new brief with a worker sent back waiting: stage %q, want queued behind it", got.Stage)
+	}
+	set(2)
+	if why := m.C.Runs.Admit(runs[1]); why != "" {
+		t.Fatalf("the second at a pace of 2: %q, want it let through", why)
+	}
+}

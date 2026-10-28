@@ -325,8 +325,12 @@ type Module struct {
 	// workers, checks and gates are the limits the pace sets (pace.go,
 	// selfgate.go).
 	workers, checks, gates pace
-	filing                 sync.Mutex     // one agent's brief is matched and filed at a time (join.go)
-	steps                  sync.WaitGroup // the steps Tick started, and the checks they queued, still going
+	// backMu guards backIn: the workers sent back to their tasks that the
+	// pace has let take their next turn (paceBack).
+	backMu sync.Mutex
+	backIn map[string]bool
+	filing sync.Mutex     // one agent's brief is matched and filed at a time (join.go)
+	steps  sync.WaitGroup // the steps Tick started, and the checks they queued, still going
 	// mainRed holds project@sha for every main commit whose red tests were
 	// already raised, so each is raised once whatever the tasks say now. It
 	// grows by one key per red main commit and isn't pruned; that's small.
@@ -397,6 +401,8 @@ type Module struct {
 func New(c *core.Core, a *agents.Agents, ch *chat.Module) *Module {
 	m := &Module{C: c, Agents: a, Chat: ch, tasks: map[string]*Task{}, busy: map[string]bool{}, aims: map[string]aimAsk{}, steered: map[string]time.Time{}, mainRed: map[string]bool{}, sighted: map[string]bool{}, cantRunOpen: map[string]string{}, measuring: map[string]int{}, mainFails: map[string][]string{}, later: map[string]time.Time{}, prPolled: map[string]time.Time{}, holds: map[string]*MergeHold{}, holdPolled: map[string]time.Time{}, refusedAsked: map[string]time.Time{}}
 	m.checks.loadCuts, m.gates.loadCuts = true, true // their builds and child Hives make the load
+	m.backIn = map[string]bool{}
+	c.Runs.Admit = m.paceBack
 	apply := func(e core.Event) {
 		if e.Kind == "merge.held" || e.Kind == "merge.lifted" {
 			m.applyHold(e)
