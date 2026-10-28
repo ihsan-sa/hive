@@ -101,6 +101,46 @@ func TestStuckTaskIsRetriedOnceBeforeTheLead(t *testing.T) {
 	}
 }
 
+// A task handed to the lead stuck in a stage, that moves and then sticks in
+// that stage again, is left with the lead: the lead hears "Stuck" once per
+// task and stage, not every spell.
+func TestStuckAgainInTheSameStageIsHandedOnce(t *testing.T) {
+	m := rig(t)
+	stuck := func() (n int) {
+		for _, msg := range m.Chat.Messages("lead") {
+			if strings.HasPrefix(msg.Text, "Stuck: ") {
+				n++
+			}
+		}
+		return
+	}
+	stick := func(stage string) {
+		m.C.J.MustAppend("task.saved", work.Task{ID: "t0", Project: "p", Title: "change t0", Stage: stage})
+		m.mu.Lock()
+		m.spells["t0"] = spell{stage: stage, since: time.Now().Add(-2 * time.Hour)}
+		m.mu.Unlock()
+		m.Watch()
+		m.Watch()
+	}
+	stick(work.StageTesting) // retried into landing by the watcher
+	stick(work.StageLanding)
+	if n := stuck(); n != 1 {
+		t.Fatalf("Stuck notices after it stuck in landing: %d, want 1", n)
+	}
+	stick(work.StageMerging)
+	if n := stuck(); n != 2 {
+		t.Fatalf("Stuck notices after it stuck in merging: %d, want 2 (a new stage is news)", n)
+	}
+	stick(work.StageLanding)
+	stick(work.StageMerging)
+	if n := stuck(); n != 2 {
+		t.Fatalf("Stuck notices after it stuck again in landing and merging: %d, want still 2", n)
+	}
+	if s := m.Stalls(); len(s) != 1 || !s[0].Told || !strings.HasPrefix(s[0].Did, "left it with the lead") {
+		t.Fatalf("stalls = %+v, want the task left with the lead", s)
+	}
+}
+
 // holdOnMain saves tasks ids held on red main at sha, as if they had been in
 // merging for two hours and waiting on main for waited.
 func holdOnMain(m *Module, sha string, waited time.Duration, ids ...string) {

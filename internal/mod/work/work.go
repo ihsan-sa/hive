@@ -314,6 +314,8 @@ type Module struct {
 	// retesting is held while main's red tests run once more (mainTests).
 	retesting sync.Mutex
 	busy      map[string]bool
+	away      map[string]bool      // queued tasks admit started past the pace for a runner, until their worker starts
+	elsewhere func() bool          // whether an executor module has room: core.Runs.Elsewhere, or a test's
 	stepAt    map[string]time.Time // when each Tick step began, so one stuck past stepLimit is let go
 	aims      map[string]aimAsk    // aims asked while a step held the task, set as it ends
 	// steered is when the person's stop, retry or recheck (steer) last saved
@@ -378,6 +380,9 @@ type Module struct {
 	holdPolled map[string]time.Time
 	// gating are the recursive gate runs in flight by key (selfgate.go).
 	gating map[string]*gateRun
+	// gatesHeld is when new gates may start again: an update waiting for
+	// the running ones to end holds the rest back until then (HoldGates).
+	gatesHeld time.Time
 	// gate lets an update stop new merges and wait out the running ones
 	// (PauseMerges): inMerge counts merges past the gate, paused says the
 	// gate is shut, and idle, while a pause waits, closes when the last
@@ -1365,6 +1370,7 @@ func workerID(t Task) string {
 
 func (m *Module) startWorker(t *Task, p core.Project) error {
 	id := workerID(*t)
+	away := m.takeAway(t.ID)
 	if _, ok := m.C.Runs.Get(id); !ok {
 		base, err := m.C.Effects.Sync(p)
 		if err != nil {
@@ -1383,7 +1389,7 @@ func (m *Module) startWorker(t *Task, p core.Project) error {
 			return err
 		}
 		spec := m.Agents.Spec(id, "worker", p.Name, dir, m.renderBrief(t, p, base))
-		spec.Task, spec.Inputs = t.ID, t.Inputs
+		spec.Task, spec.Inputs, spec.Away = t.ID, t.Inputs, away
 		if t.Model != "" {
 			pick, err := m.C.WS.LoadConfig().Pick(t.Model)
 			if err != nil {
@@ -2268,11 +2274,17 @@ func (m *Module) review(t *Task, p core.Project) error {
 		spec.ReadOnly, spec.Schema, spec.Task = true, VerdictSchema, t.ID
 		spec.Inputs = map[string]string{"sha": t.SHA, "diff.patch": ch.Diff, "tests.txt": core.ClipEnds(c.FullOutput(), 16000),
 			"brief.md": "Review token: " + reviewToken(id) + "\n\n" + account + m.reviewRules(p, main)}
+		paced := ""
+		if route, why := m.pacedRead(p.Name); why != "" && len(ch.Security) == 0 {
+			spec.Harness, spec.Model, spec.Route = route[0].Harness, route[0].Model, route
+			spec.Inputs["paced"] = "1"
+			paced = fmt.Sprintf(" on %s: %s", route[0].Model, why)
+		}
 		if _, err := m.C.Runs.Start(spec); err != nil {
 			return err
 		}
 		t.Reviewer = id
-		m.save(t, "reviewer "+id+" reading "+core.Short(t.SHA))
+		m.save(t, "reviewer "+id+" reading "+core.Short(t.SHA)+paced)
 		return nil
 	}
 	if !r.Terminal() {

@@ -24,11 +24,15 @@ type Stall struct {
 	Tries   int       `json:"tries"`
 	// Rechecked: the watcher retried this task from its branch's head; it
 	// does so once per task, so a task stuck again goes to the lead.
-	Rechecked bool      `json:"rechecked,omitempty"`
-	Told      bool      `json:"told"` // handed to the lead; the watcher does nothing more
-	Did       string    `json:"did"`
-	At        time.Time `json:"at"` // last action
-	Moved     time.Time `json:"moved,omitempty"`
+	Rechecked bool `json:"rechecked,omitempty"`
+	Told      bool `json:"told"` // handed to the lead; the watcher does nothing more
+	// ToldIn: the stages the lead was handed this thing stuck in. It
+	// outlives the spell, so a task that sticks in one of them again is
+	// left with the lead, not handed over anew.
+	ToldIn []string  `json:"told_in,omitempty"`
+	Did    string    `json:"did"`
+	At     time.Time `json:"at"` // last action
+	Moved  time.Time `json:"moved,omitempty"`
 }
 
 type spell struct {
@@ -268,6 +272,10 @@ func (m *Module) judge(cur Stall, run, chat, thread string, took []float64, floo
 		s = &c
 	} else if old != nil {
 		cur.Rechecked = old.Rechecked // once per task, whatever stage it sticks in next
+		cur.ToldIn = old.ToldIn
+		if old.Told && !slices.Contains(cur.ToldIn, old.Stage) {
+			cur.ToldIn = append(slices.Clip(cur.ToldIn), old.Stage) // a stall saved before told_in was
+		}
 	}
 	m.mu.Unlock()
 	if s.Told {
@@ -286,13 +294,17 @@ func (m *Module) judge(cur Stall, run, chat, thread string, took []float64, floo
 	s.Limit, s.Samples, s.At = limit.Seconds(), len(took), time.Now().UTC()
 	var did string
 	var refused error
+	handed := false
 	switch {
 	case s.Tries == 1 && m.C.Runs.Interrupt(run):
 		did = "restarted its turn"
 	case m.recheck(s, &refused):
 		did = "retried it from its branch's head"
+	case slices.Contains(s.ToldIn, s.Stage):
+		s.Told, did = true, "left it with the lead, who was handed it stuck in this stage before"
 	default:
-		s.Told, did = true, "handed it to the lead"
+		s.Told, did, handed = true, "handed it to the lead", true
+		s.ToldIn = append(slices.Clip(s.ToldIn), s.Stage)
 		if s.Rechecked {
 			did += ", having retried it from its branch's head once already"
 		} else if refused != nil {
@@ -305,7 +317,7 @@ func (m *Module) judge(cur Stall, run, chat, thread string, took []float64, floo
 	s.Did += did + " at " + s.At.Local().Format("15:04")
 	m.C.J.MustAppend("stall.saved", *s)
 	text := m.alertStall(*s)
-	if s.Told {
+	if handed {
 		m.Chat.Notify(chat, thread, "Stuck: "+text+retryHint(s.Key))
 	}
 }

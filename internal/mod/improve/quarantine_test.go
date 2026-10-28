@@ -204,6 +204,48 @@ func TestQuarantineFromLocalChecks(t *testing.T) {
 	}
 }
 
+// Once a flaky test's fix merges, a local red on a commit without the fix
+// (a head cut before it merged, checked just after) is no sighting: the
+// check ran the old test. Reds on commits that have the fix count again.
+func TestQuarantineLiftNotUndoneByOldHeads(t *testing.T) {
+	m := rig(t)
+	p, _ := m.C.Projects.Get("hive")
+	if err := m.C.Effects.Clone(p); err != nil {
+		t.Fatal(err)
+	}
+	dir := m.C.WS.Project("hive")
+	commit := func(msg string) string {
+		t.Helper()
+		if out, err := core.Git(dir, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", msg); err != nil {
+			t.Fatal(out, err)
+		}
+		sha, _ := core.Git(dir, "rev-parse", "HEAD")
+		return strings.TrimSpace(sha)
+	}
+	old1, old2 := commit("t1 before the fix"), commit("t2 before the fix")
+	fixed := commit("the fix")
+	key := "github.com/x/hive/internal/core::TestStale"
+	fix := work.Task{ID: "f", Project: "hive", Title: flakyTitle + key}
+	m.C.J.MustAppend("task.saved", fix)
+	fix.MergeSHA, fix.Stage = fixed, work.StageMerged
+	m.C.J.MustAppend("task.saved", fix)
+	time.Sleep(time.Millisecond)
+	checked := func(id, sha string) {
+		m.C.J.MustAppend("task.saved", work.Task{ID: id, Project: "hive", Title: "work " + id, SHA: sha})
+		m.C.J.MustAppend("effect.checked", core.Check{Project: "hive", SHA: sha, Kind: "test", Output: "--- FAIL: TestStale (0.4s)\n", Failed: []string{"TestStale"}, Keys: []string{key}, At: time.Now().UTC()})
+	}
+	checked("t1", old1)
+	checked("t2", old2)
+	if q := m.QuarantinedTests("hive", ""); len(q) != 0 {
+		t.Fatalf("reds on a commit without the fix quarantined %v", q)
+	}
+	checked("t3", commit("t3 on the fix"))
+	checked("t4", commit("t4 on the fix"))
+	if q := m.QuarantinedTests("hive", ""); !slices.Equal(q, []string{key}) {
+		t.Fatalf("reds with the fix in quarantined %v", q)
+	}
+}
+
 // A check run broken by its environment (its folder gone) or failing dozens
 // of tests at once is no sighting of any of them: two such runs on unrelated
 // heads quarantine nothing and file no fix briefs, and a fix brief filed on

@@ -416,10 +416,11 @@ func (m mapped) Run(s sandbox.Spec, timeout time.Duration) (int, error) {
 	return m.Bare.Run(s, timeout)
 }
 
-// A check that couldn't have a module offline runs once more without the
-// shared cache, in a checkout the first run never wrote to. If go.sum names
-// the module, the cache lacked it and its marker goes; if not, the check
-// needs more than the cache holds, and later checks skip the cache at once.
+// A check that couldn't have a module offline runs once more fetching its
+// own, with the shared cache as its first proxy, in a checkout the first run
+// never wrote to. If go.sum names the module, the cache lacked it and its
+// marker goes; if not, the check needs more than the cache holds, and later
+// checks go straight to fetching their own.
 func TestStaleModuleCacheRunsAgain(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("the shared module cache is for Linux sandboxes")
@@ -454,8 +455,15 @@ func TestStaleModuleCacheRunsAgain(t *testing.T) {
 		return `test -e dirty && { echo "a used checkout"; exit 3; }; touch dirty; ` +
 			`[ "$GOPROXY" = off ] && { echo "go: ` + missing + `: ` + staleModules + `"; exit 1; }; exit 0`
 	}
+	// Offline on the shared cache, or fetching its own with the cache as its
+	// first proxy (mounted either way).
 	sharedIn := func(s sandbox.Spec) bool {
-		return slices.ContainsFunc(s.Mounts, func(m sandbox.Mount) bool { return m.Inside == GoModInside })
+		return slices.ContainsFunc(s.Mounts, func(m sandbox.Mount) bool { return m.Inside == GoModInside }) &&
+			slices.Contains(s.Env, "GOPROXY=off")
+	}
+	ownFrom := func(s sandbox.Spec) bool {
+		return slices.ContainsFunc(s.Mounts, func(m sandbox.Mount) bool { return m.Inside == GoModInside && !m.RW }) &&
+			slices.Contains(s.Env, ownModEnv[0])
 	}
 	markers := func() []string {
 		es, _ := os.ReadDir(c.WS.goSums())
@@ -470,8 +478,8 @@ func TestStaleModuleCacheRunsAgain(t *testing.T) {
 	if !ch.OK || ch.CantRun != "" {
 		t.Fatalf("named module: %+v", ch)
 	}
-	if len(specs) != 2 || !sharedIn(specs[0]) || sharedIn(specs[1]) || slices.Contains(specs[1].Env, "GOPROXY=off") {
-		t.Fatalf("named module: %d runs, want the shared cache then none", len(specs))
+	if len(specs) != 2 || !sharedIn(specs[0]) || sharedIn(specs[1]) || !ownFrom(specs[1]) {
+		t.Fatalf("named module: %d runs, want the shared cache offline then as the first proxy", len(specs))
 	}
 	if m := markers(); len(m) != 0 {
 		t.Fatalf("the cache lacked what its marker promised, and the marker stayed: %v", m)
@@ -485,7 +493,7 @@ func TestStaleModuleCacheRunsAgain(t *testing.T) {
 		t.Fatalf("markers %v, want the go.sum's and its own-modules mark", m)
 	}
 	specs = nil
-	if ch := c.Effects.RunCheck(p, main, "test", check("example.com/tool@latest")); !ch.OK || len(specs) != 1 || sharedIn(specs[0]) {
+	if ch := c.Effects.RunCheck(p, main, "test", check("example.com/tool@latest")); !ch.OK || len(specs) != 1 || sharedIn(specs[0]) || !ownFrom(specs[0]) {
 		t.Fatalf("a later check of the same go.sum ran %d time(s) (%+v)", len(specs), ch)
 	}
 

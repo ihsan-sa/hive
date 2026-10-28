@@ -1036,3 +1036,30 @@ func TestStaleCopyKeepsTheLiveHeadsGate(t *testing.T) {
 		t.Fatalf("a stale copy on the old head ended the gate's run on the live head")
 	}
 }
+
+// An update waiting for the gates running sees them and the oldest's start,
+// and while it holds them no new gate starts: one would only be ended by
+// the restart. A dropped run counts for nothing.
+func TestUpdateHoldsNewGates(t *testing.T) {
+	m, task, p, _, jobs := selfRig(t, map[string]string{"feature.go": "package p\n"}, core.GateKeep)
+	maxGates(m, 3)
+	defer func(g func(core.Config) (string, bool)) { gateMachine = g }(gateMachine)
+	gateMachine = func(core.Config) (string, bool) { return "", true }
+	since := time.Now().Add(-time.Hour)
+	m.mu.Lock()
+	m.gating = map[string]*gateRun{
+		"a": {key: "a", task: "t8", since: since},
+		"b": {key: "b", task: "t9", since: time.Now()},
+		"c": {key: "c", task: "t7", since: since.Add(-time.Hour), dropped: true},
+	}
+	m.mu.Unlock()
+	if n, oldest := m.GatesRunning(); n != 2 || !oldest.Equal(since) {
+		t.Fatalf("%d running, oldest %v: want 2, %v", n, oldest, since)
+	}
+	m.HoldGates(time.Now().Add(time.Hour))
+	mergeOnce(t, m, task, p)
+	m.Wait()
+	if len(*jobs) != 0 || !strings.HasPrefix(task.Reason, gateSlotWait) || !strings.Contains(task.Reason, "update") {
+		t.Fatalf("%d runs, reason %q: want no gate started while an update waits", len(*jobs), task.Reason)
+	}
+}
