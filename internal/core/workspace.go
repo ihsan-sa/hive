@@ -129,6 +129,10 @@ type Config struct {
 	Schedules    map[string]string          `json:"schedules,omitempty"` // name -> "every 12h" | "daily 03:00" | "off"
 	ChatMaxMB    int                        `json:"chat_max_mb"`         // the most one chat message, files and all, may be, in MB; 0 means the default
 
+	// UsageStops are where a plan login stops short of its limit, until the
+	// window resets; none runs every login to its limit.
+	UsageStops UsageStops `json:"usage_stops"`
+
 	// MaxOutputTokens caps one reply (a budget is checked only between turns); 0 leaves the harness default.
 	MaxOutputTokens int `json:"max_output_tokens"`
 	// MonthlyUSD: once this month's runs cost more, the person is told once. Work goes on; 0 is off.
@@ -138,9 +142,6 @@ type Config struct {
 	// priced so its spend is counted, takes turns only while the month's
 	// spend on OpenRouter is under it. 0 keeps OpenRouter free-only.
 	OpenRouterUSD float64 `json:"openrouter_monthly_usd,omitempty"`
-	// Cutoffs are where a login stops short of its plan's limits; none is
-	// set on a fresh install, so a login runs to its limit.
-	Cutoffs Cutoffs `json:"cutoffs,omitzero"`
 	// A turn waits while available memory is under MemFloorMB, or memory or
 	// CPU pressure (Linux PSI "some avg10", percent) is over its limit; 0 turns a check off.
 	MemFloorMB     int     `json:"mem_floor_mb"`
@@ -296,6 +297,9 @@ func (c Config) Check() error {
 	if c.Channel != "" && c.Channel != "latest" && c.Channel != "pre-release" && c.Channel != "train" {
 		return fmt.Errorf("channel %q is none of \"latest\", \"pre-release\" and \"train\"", c.Channel)
 	}
+	if err := c.UsageStops.check(); err != nil {
+		return err
+	}
 	for _, f := range c.Floor {
 		if _, err := path.Match(f, ""); strings.ContainsAny(f, "*?[") && err != nil {
 			return fmt.Errorf("floor entry %q isn't a glob the Hive can match: %v", f, err)
@@ -312,11 +316,6 @@ func (c Config) Check() error {
 	for _, name := range slices.Sorted(maps.Keys(c.Models)) {
 		if err := c.PaidRefused(name); err != nil {
 			return fmt.Errorf("model %s: %v", name, err)
-		}
-	}
-	for _, x := range []float64{c.Cutoffs.Week, c.Cutoffs.FiveHour} {
-		if x < 0 || x > 1 {
-			return fmt.Errorf("cutoffs: %g isn't a share of a window between 0 and 1", x)
 		}
 	}
 	if _, ok := c.Models[c.Model]; HarnessName(c.Harness) == "open" && !ok {
@@ -401,8 +400,9 @@ func (w Workspace) ReadConfig() (Config, error) {
 		// A config from before lead_model: a model the person chose stays the
 		// lead's; the old default ("sonnet") moves the lead to opus.
 		var had struct {
-			LeadModel *string `json:"lead_model"`
-			Ceilings  *bool   `json:"ceilings"`
+			LeadModel  *string          `json:"lead_model"`
+			Ceilings   *bool            `json:"ceilings"`
+			UsageStops *json.RawMessage `json:"usage_stops"`
 		}
 		if json.Unmarshal(raw, &had) == nil && had.LeadModel == nil && c.Model != "sonnet" {
 			c.LeadModel = c.Model
@@ -415,6 +415,11 @@ func (w Workspace) ReadConfig() (Config, error) {
 				c.MaxChecks = 0
 			}
 			c.Ceilings = true
+		}
+		if had.UsageStops == nil {
+			// A config from before usage_stops keeps the stops every
+			// install had then (OldUsageStops); a new one has none.
+			c.UsageStops = OldUsageStops
 		}
 	} else if os.IsNotExist(err) {
 		err = nil

@@ -179,7 +179,7 @@ func (w *WSL) Run(s Spec, timeout time.Duration) (int, error) {
 		return -1, err
 	}
 	argv := []string{"wsl.exe", "-d", w.Distro, "--exec", WinToWSL(w.HiveLinux), "sandbox-exec", "--spec", WinToWSL(specPath)}
-	return runSync(argv, os.Environ(), "", "", hostStdout+".wsl", timeout)
+	return runSync(argv, os.Environ(), "", "", hostStdout+".wsl", timeout, nil)
 }
 
 func (w *WSL) translate(s Spec) Spec {

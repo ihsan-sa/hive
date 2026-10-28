@@ -76,17 +76,17 @@ func TestPlanLineSaysWhenTheResetIs(t *testing.T) {
 	now := time.Date(2026, 10, 24, 2, 9, 0, 0, time.UTC)
 	p := core.Plan{Harness: "claude", Login: "claude", At: now.Add(-time.Minute), Limit: harness.RateLimit{Status: "allowed", ResetsAt: reset, Window: "five_hour", Utilization: 0.28,
 		Windows: map[string]harness.Window{"five_hour": {Utilization: 0.28, ResetsAt: reset}, "seven_day": {Utilization: 0.36, ResetsAt: reset.Add(48 * time.Hour)}}}}
-	got := planLine(p, now)
+	got := planLine(p, nil, now)
 	for _, want := range []string{"within its limit", "5-hour window 28% used, resets in 3h31m", "weekly window 36% used, resets in 2d3h", "(read 1m ago)"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("%q lacks %q", got, want)
 		}
 	}
 	p.Limit.Status = "allowed_warning"
-	if got := planLine(p, now); !strings.Contains(got, "near its limit") || strings.Contains(got, "allowed_warning") {
+	if got := planLine(p, nil, now); !strings.Contains(got, "near its limit") || strings.Contains(got, "allowed_warning") {
 		t.Errorf("allowed_warning should read in plain words: %q", got)
 	}
-	if got := planLine(p, reset.Add(time.Minute)); !strings.Contains(got, "5-hour window reset at") || !strings.Contains(got, "no reading since (was 28%)") || strings.Contains(got, "within its limit") {
+	if got := planLine(p, nil, reset.Add(time.Minute)); !strings.Contains(got, "5-hour window reset at") || !strings.Contains(got, "no reading since (was 28%)") || strings.Contains(got, "within its limit") {
 		t.Errorf("a reading past its reset should say so: %q", got)
 	}
 }
@@ -99,7 +99,7 @@ func TestPlanLineEscapesFeedNames(t *testing.T) {
 	evil := "five\x1b[2J\x1b[H\u009b31m\r\u202e\u200bhour"
 	p := core.Plan{Harness: "claude", Login: "me\x1b[1A", At: now, Limit: harness.RateLimit{Status: "allowed\x1b]0;x\x07", ResetsAt: now.Add(time.Hour), Window: evil,
 		Windows: map[string]harness.Window{evil: {}, "seven\x1b[Kday\u2066": {Utilization: 0.1}}}}
-	for _, got := range []string{planLine(p, now), planLine(p, now.Add(2*time.Hour))} {
+	for _, got := range []string{planLine(p, nil, now), planLine(p, nil, now.Add(2*time.Hour))} {
 		for _, want := range []string{`five\x1b[2J\x1b[H\x9b31m\x0d\u202e\u200bhour`, `me\x1b[1A`} {
 			if !strings.Contains(got, want) {
 				t.Errorf("%q lacks %q", got, want)
@@ -109,7 +109,7 @@ func TestPlanLineEscapesFeedNames(t *testing.T) {
 			t.Errorf("a control or format character reaches the screen: %q", got)
 		}
 	}
-	if got := planLine(p, now); !strings.Contains(got, `allowed\x1b]0;x\x07`) || !strings.Contains(got, `seven\x1b[Kday\u2066 window 10%`) {
+	if got := planLine(p, nil, now); !strings.Contains(got, `allowed\x1b]0;x\x07`) || !strings.Contains(got, `seven\x1b[Kday\u2066 window 10%`) {
 		t.Errorf("the status and the other windows should be escaped too: %q", got)
 	}
 }

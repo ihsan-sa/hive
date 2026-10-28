@@ -218,9 +218,9 @@ type Plan struct {
 	// keeps the person's tenth (lift). Set only on the copies Runs hands out
 	// (Plans carries it to the control center), never on a journaled one.
 	Lifted bool `json:"lifted,omitempty"`
-	// Cutoffs are the install's (Config.Cutoffs), set like Lifted only on
-	// the copies Runs hands out and reads, never on a journaled one.
-	Cutoffs Cutoffs `json:"cutoffs,omitzero"`
+	// Stops are the usage stops it is held to (Config.UsageStops), set like
+	// Lifted on the copies Runs hands out; with none it runs to its limit.
+	Stops *UsageStops `json:"stops,omitempty"`
 	// Wait is the park a limit whose named reset had already passed got;
 	// the next such limit in a row doubles it, up to the hour.
 	Wait time.Duration `json:"wait,omitempty"`
@@ -234,41 +234,55 @@ func (p Plan) Key() string {
 	return p.Login
 }
 
-// Cutoffs are where a login stops taking turns short of its plan's limits,
-// each a share of its window, until that window resets; 0 runs it to its
-// limit. They are an install's own settings (config.json "cutoffs"), none on
-// a fresh one: the person's own Hive stops at 95% of the week (10-25) and at
-// "90% of the only 5h limit avail" (10-26), to keep working with the plan
-// themselves while it waits, and asked (10-27) that this be a setting for
-// that Hive only, not a rule for every install.
-type Cutoffs struct {
-	// Week is the share of the seven-day window every login stops at;
-	// every run but the checks and leads (Reserved) stops CheckReserve
-	// short of it.
+// UsageStops are the shares of a plan login's windows, in percent, at which
+// it stops taking turns until that window resets, short of the plan's own
+// limit; 0 runs it to the limit. They are the person's to set (config.json's
+// usage_stops): the person asked (10-27) for "some mechanism that enables
+// setting usage cutoffs, not a hard 90% rule for all users".
+type UsageStops struct {
+	// Week holds every login back at this share of its weekly window, and
+	// every run but the checks and leads CheckReserve before it.
 	Week float64 `json:"week,omitempty"`
-	// FiveHour is the share of the five-hour window one login of a pick
-	// stops at while the others run to their limit (lift), the last of it
-	// left for the person.
+	// FiveHour holds back one login of a pick, the one with the most of its
+	// five hours left, while the others run to their limit (lift): the rest
+	// of that one's window stays the person's, to use the plan themselves.
 	FiveHour float64 `json:"five_hour,omitempty"`
 }
 
-// CheckReserve is the share of a week below Cutoffs.Week kept for the checks
-// and leads (Reserved): every other run stops at Week-CheckReserve, so a
-// change already written can still be read, judged and merged, and Week
-// stays the ceiling for all. On 10-26 a gate's keep waited over 8 hours for
-// its judge, parked at 95% of every login's week, and main didn't move for 12
-// (issue #983). The five-hour stop has no reserve: its last share is the
-// person's.
+// OldUsageStops are the stops every install had before they were settings,
+// which a config from then keeps: 95% of the week (the person, 10-25:
+// "pause at 95%" until the week resets) and 90% of the five hours (10-26:
+// "90% of the only 5h limit avail", the last tenth theirs). They were this
+// Hive's own (10-27: "only a thing for THIS hive"), so a new install has
+// none.
+var OldUsageStops = UsageStops{Week: 95, FiveHour: 90}
+
+func (u UsageStops) check() error {
+	for _, v := range []float64{u.Week, u.FiveHour} {
+		if v < 0 || v > 100 {
+			return fmt.Errorf("usage_stops: %v isn't a percent from 0 (no stop) to 100", v)
+		}
+	}
+	return nil
+}
+
+// CheckReserve is the share of a week below its stop kept for the checks
+// and leads (Reserved): every other run stops at the week's stop less
+// CheckReserve, so a change already written can still be read, judged and
+// merged, and the stop stays the ceiling for all. On 10-26 a gate's keep
+// waited over 8 hours for its judge, parked at 95% of every login's week,
+// and main didn't move for 12 (issue #983). The five-hour stop has no
+// reserve: what is left above it is the person's.
 const CheckReserve = 0.05
 
 // Reserved says whether role's runs may spend the reserve: the checks
 // (CheckRoles), and the leads, which answer however busy the machine is
-// (docs/priority.md) and stopped at Cutoffs.Week before the reserve.
+// (docs/priority.md) and stopped at the week's stop before the reserve.
 func Reserved(role string) bool { return role == "lead" || slices.Contains(CheckRoles, role) }
 
-// stop is a window a login stops at short of its limit, and where; the
-// week's less CheckReserve for a run that isn't Reserved; one that may be
-// lifted holds only for the last login with room (lift).
+// stop is a window a login stops at short of its limit, and where; at less
+// reserve for a run that isn't Reserved; one that may be lifted holds only
+// for the last login with room (lift).
 type stop struct {
 	window   string
 	at       float64
@@ -277,21 +291,24 @@ type stop struct {
 	liftable bool
 }
 
-// stops are the plan's stops, from its Cutoffs; a cutoff of 0 is none.
-func (p Plan) stops() []stop {
+// stops are the windows u stops a login at.
+func (u *UsageStops) stops() []stop {
 	var out []stop
-	if c := p.Cutoffs.Week; c > 0 {
-		out = append(out, stop{"seven_day", c, min(CheckReserve, c), "week", false})
+	if u == nil {
+		return nil
 	}
-	if c := p.Cutoffs.FiveHour; c > 0 {
-		out = append(out, stop{"five_hour", c, 0, "five-hour window", true})
+	if u.Week > 0 {
+		out = append(out, stop{"seven_day", u.Week / 100, min(CheckReserve, u.Week/100), "week", false})
+	}
+	if u.FiveHour > 0 {
+		out = append(out, stop{"five_hour", u.FiveHour / 100, 0, "five-hour window", true})
 	}
 	return out
 }
 
 // Parked reports whether the plan is at its usage limit, or at one of its
-// stops (Cutoffs.Week less CheckReserve, Cutoffs.FiveHour) for a run that
-// isn't Reserved, until a reset still ahead.
+// Stops (the week's less CheckReserve) for a run that isn't Reserved, until
+// a reset still ahead.
 func (p Plan) Parked(now time.Time) bool { return !p.ParkedUntil(now).IsZero() }
 
 // ParkedUntil is when a parked plan (Parked) takes turns again, the latest
@@ -300,7 +317,7 @@ func (p Plan) Parked(now time.Time) bool { return !p.ParkedUntil(now).IsZero() }
 func (p Plan) ParkedUntil(now time.Time) time.Time { return p.parkedFor(now, false) }
 
 // parkedFor is ParkedUntil for a run that may spend the reserve (Reserved)
-// or not: the reserve runs on to Cutoffs.Week.
+// or not: the reserve runs on to the week's stop.
 func (p Plan) parkedFor(now time.Time, reserve bool) time.Time {
 	var at time.Time
 	if p.Limit.Status == "rejected" && p.Limit.ResetsAt.After(now) {
@@ -316,7 +333,7 @@ func (p Plan) parkedFor(now time.Time, reserve bool) time.Time {
 func (p Plan) stopped(now time.Time, reserve bool) (harness.Window, string, bool) {
 	var out harness.Window
 	var name string
-	for _, s := range p.stops() {
+	for _, s := range p.Stops.stops() {
 		if s.liftable && p.Lifted {
 			continue
 		}
@@ -352,7 +369,7 @@ func (p Plan) stale(old Plan, now time.Time) bool {
 // that it has stopped at one of its stops until that window resets.
 func (p Plan) Standing(now time.Time) string {
 	if w, k, ok := p.stopped(now, false); ok && !(p.Limit.Status == "rejected" && p.Limit.ResetsAt.After(now)) {
-		for _, s := range p.stops() {
+		for _, s := range p.Stops.stops() {
 			if s.window != k {
 				continue
 			}
@@ -459,6 +476,7 @@ type Runs struct {
 	down       map[string]Down   // picks that can't answer, by Pick.String
 	strikes    map[string]strike // each pick's straight turns ending in the same error
 	cfg        Config            // the config of the latest tick, which a Down is fingerprinted against
+	usage      UsageStops        // the config's usage stops, which the plans it hands out are held to
 	// proven is the picks (Pick.String) some run has finished done on, every
 	// turn of it on that pick: the only ones a run that must finish falls
 	// back to (next). ranOn is the pick each run's turns ran on, "" once they
@@ -524,7 +542,8 @@ const codexTokenStuck = "its Codex token could not be deleted: "
 func NewRuns(ws Workspace, j *Journal, sb func() (sandbox.Sandbox, error), tokens TokenSource, tools func() []string) *Runs {
 	rs := &Runs{ws: ws, j: j, sandbox: sb, tokens: tokens, tools: tools, runs: map[string]*Run{}, plans: map[string]Plan{}, busy: map[string]bool{}, spent: map[string]float64{}, openRouter: map[string]float64{}, down: map[string]Down{}, strikes: map[string]strike{}, self: selfHandle(), backedOff: map[string]int{}, turnLive: map[string]int{}, proven: map[string]bool{}, ranOn: map[string]string{}}
 	rs.ops = NewOps(rs)
-	rs.cfg = ws.LoadConfig() // the cutoffs a replayed reading is measured against; each Tick's after
+	rs.cfg = ws.LoadConfig() // which models a replayed turn's spend counts against openrouter_monthly_usd; each Tick's after
+	rs.usage = rs.cfg.UsageStops
 	_ = j.Replay(rs.apply)
 	j.Subscribe(func(e Event) {
 		rs.mu.Lock()
@@ -766,7 +785,7 @@ func (rs *Runs) apply(e Event) {
 	case "plan.usage":
 		var p Plan
 		e.Decode(&p)
-		p.Lifted, p.Cutoffs = false, Cutoffs{} // set on copies, never here
+		p.Lifted = false // lift sets it on copies, never here
 		// Readings journaled before the parse fix carry 0 at the top level
 		// and the real number only under the window.
 		if w, ok := p.Limit.Windows[p.Limit.Window]; ok && p.Limit.Utilization == 0 {
@@ -775,9 +794,7 @@ func (rs *Runs) apply(e Event) {
 		// A turn that started before the limit can end after it with a
 		// reading taken before it: that doesn't lift the park, or the next
 		// turn starts only to be turned away (10-25, 10:41).
-		old, now := rs.plans[p.Key()], p
-		old.Cutoffs, now.Cutoffs = rs.cfg.Cutoffs, rs.cfg.Cutoffs
-		if old.Parked(e.At) && p.Limit.Status != "rejected" && now.stale(old, e.At) {
+		if old := rs.held(rs.plans[p.Key()]); old.Parked(e.At) && p.Limit.Status != "rejected" && rs.held(p).stale(old, e.At) {
 			return
 		}
 		rs.plans[p.Key()] = p
@@ -1110,12 +1127,11 @@ func (rs *Runs) Plans() []Plan {
 	rs.mu.Lock()
 	picks := map[string][]Plan{}
 	for _, p := range rs.plans {
-		p.Cutoffs = rs.cfg.Cutoffs
 		pick := HarnessName(p.Harness)
 		if pick == "open" { // each model is its own pick
 			pick = p.Key()
 		}
-		picks[pick] = append(picks[pick], p)
+		picks[pick] = append(picks[pick], rs.held(p))
 	}
 	rs.mu.Unlock()
 	var out []Plan
@@ -1134,8 +1150,8 @@ func (rs *Runs) Plans() []Plan {
 // one with the most of its five hours left (the first by Key on a tie) of
 // those with room short of the stops that lift, for a run that may spend
 // the reserve (Reserved) or not; one limited (Runs.limited) has no room. So
-// the others run to their limit while that one stops at Cutoffs.FiveHour
-// and keeps the rest for the person.
+// the others run to their limit while that one stops at its five-hour stop and
+// keeps the rest of it for the person.
 func lift(plans []Plan, now time.Time, reserve bool, limited map[string]time.Time) []Plan {
 	keep, left := -1, 0.0
 	for i, p := range plans {
@@ -1154,6 +1170,13 @@ func lift(plans []Plan, now time.Time, reserve bool, limited map[string]time.Tim
 	return plans
 }
 
+// held is p held to the config's usage stops; rs.mu is held.
+func (rs *Runs) held(p Plan) Plan {
+	u := rs.usage
+	p.Stops = &u
+	return p
+}
+
 // plansOf are the plans of logins, lifted (lift); rs.mu is held.
 func (rs *Runs) plansOf(logins []Login, now time.Time, reserve bool, limited map[string]time.Time) []Plan {
 	var out []Plan
@@ -1162,15 +1185,14 @@ func (rs *Runs) plansOf(logins []Login, now time.Time, reserve bool, limited map
 		if !ok {
 			p = Plan{Harness: l.Harness, Login: l.Key()}
 		}
-		p.Cutoffs = rs.cfg.Cutoffs
-		out = append(out, p)
+		out = append(out, rs.held(p))
 	}
 	return lift(out, now, reserve, limited)
 }
 
 // pickLogin chooses the login for a run's next turn: of those not parked at
 // their usage limit, the least used (Plan.Used), the machine's own first on a
-// tie; a check (Reserved) takes the reserve up to Cutoffs.Week too. A
+// tie; a check (Reserved) takes the reserve up to the week's stop too. A
 // bare run whose machine login has no credential file the Hive can read gets
 // no token, so the harness's own login on the host still works.
 func (rs *Runs) pickLogin(h, model, home string, bare, reserve bool) (Login, []string, error) {
@@ -1186,8 +1208,19 @@ func (rs *Runs) pickLogin(h, model, home string, bare, reserve bool) (Login, []s
 		}
 	}
 	sort.SliceStable(open, func(i, j int) bool { return use(open[i]) < use(open[j]) })
+	usage := rs.usage
 	rs.mu.Unlock()
-	limit := fmt.Errorf("every %s login is at its usage limit%s", HarnessName(h), rs.cutoffsSaid(reserve))
+	var at []string
+	for _, s := range usage.stops() {
+		if !reserve {
+			s.at -= s.reserve
+		}
+		at = append(at, fmt.Sprintf("%.0f%% of its %s", s.at*100, strings.TrimSuffix(s.name, " window")))
+	}
+	limit := fmt.Errorf("every %s login is at its usage limit", HarnessName(h))
+	if len(at) > 0 {
+		limit = fmt.Errorf("every %s login is at its usage limit or its stop (%s)", HarnessName(h), strings.Join(at, ", "))
+	}
 	err := limit
 	for _, l := range open {
 		env, e := rs.tokens.AgentEnv(l, home)
@@ -1202,29 +1235,6 @@ func (rs *Runs) pickLogin(h, model, home string, bare, reserve bool) (Login, []s
 		err = fmt.Errorf("%w; %s can't be used either: %v", limit, strings.Join(keys(open), ", "), err)
 	}
 	return Login{}, nil, err
-}
-
-// cutoffsSaid is where the install's Cutoffs stop a login, as pickLogin
-// says it, for a run that may spend the reserve or not; "" with none set.
-func (rs *Runs) cutoffsSaid(reserve bool) string {
-	rs.mu.Lock()
-	c := rs.cfg.Cutoffs
-	rs.mu.Unlock()
-	var at []string
-	if c.Week > 0 {
-		week := c.Week
-		if !reserve {
-			week -= min(CheckReserve, week)
-		}
-		at = append(at, fmt.Sprintf("%.0f%% of its weekly window", week*100))
-	}
-	if c.FiveHour > 0 {
-		at = append(at, fmt.Sprintf("%.0f%% of its five-hour one", c.FiveHour*100))
-	}
-	if len(at) == 0 {
-		return ""
-	}
-	return ", " + strings.Join(at, " or ")
 }
 
 // limited is when each of the logins keys names whose renewal was turned
@@ -1301,7 +1311,7 @@ func (rs *Runs) logins(h, model string) []Login {
 
 // freeAt is when a login for harness h and model next has room: now if one
 // has, else the earliest reset; a pick that can't answer (Down) waits for
-// its retry too. A check (Reserved) has room up to Cutoffs.Week.
+// its retry too. A check (Reserved) has room up to the week's stop.
 func (rs *Runs) freeAt(h, model string, reserve bool) time.Time {
 	now := time.Now()
 	logins := rs.logins(h, model)
@@ -1769,13 +1779,19 @@ func settled(path string, quiet, most time.Duration) {
 		}
 		return -1
 	}
-	end := time.Now().Add(most)
-	last, still := size(), time.Now()
-	for time.Now().Before(end) {
-		time.Sleep(10 * time.Millisecond)
+	settle(size, time.Now, time.Sleep, quiet, most)
+}
+
+// settle is settled's loop over a size, a clock and a sleep, so a test can
+// drive it without the wall clock.
+func settle(size func() int64, now func() time.Time, sleep func(time.Duration), quiet, most time.Duration) {
+	end := now().Add(most)
+	last, still := size(), now()
+	for now().Before(end) {
+		sleep(10 * time.Millisecond)
 		if n := size(); n != last {
-			last, still = n, time.Now()
-		} else if time.Since(still) >= quiet {
+			last, still = n, now()
+		} else if now().Sub(still) >= quiet {
 			return
 		}
 	}
