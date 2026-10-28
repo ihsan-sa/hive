@@ -130,6 +130,7 @@ func Exec(specPath string) int {
 			errf = f
 		}
 	}
+	level := 0 // the autogroups' level (autogroup_linux.go); 0 leaves them
 	if s.Nice > 0 {
 		// This launcher, the init it starts and the command inherit it, so a
 		// check or a worker's turn yields the cpu to a lead's. Failing to is
@@ -137,6 +138,8 @@ func Exec(specPath string) int {
 		if err := lowerPriority(s.Nice); err != nil {
 			fmt.Fprintln(errf, "sandbox: running at the daemon's priority, not", s.Nice, "under it:", err)
 		}
+		level = ownLevel()
+		lowerOwnAutogroup(level)
 	}
 	fail := func(err error) int { fmt.Fprintln(errf, "sandbox:", err); return 125 }
 	if s.Tmp != "" {
@@ -246,7 +249,10 @@ func Exec(specPath string) int {
 		signal.Notify(sig, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
 		t := time.NewTicker(time.Second)
 		defer t.Stop()
-		for {
+		for tick := 0; ; tick++ {
+			if level > 0 && tick%autogroupEvery == 0 {
+				lowerAutogroups(cmd.Process.Pid, level)
+			}
 			select {
 			case <-stop:
 				return
