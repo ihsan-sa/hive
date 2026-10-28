@@ -80,3 +80,15 @@ func TestSetShareOnAgainKeepsSince(t *testing.T) {
 		t.Fatalf("off then on kept %q, id %q (was %q)", c.Share, c.InstallID, id)
 	}
 }
+
+// A model on OpenRouter that isn't a free variant is refused; a free one passes.
+func TestCheckRefusesAPaidOpenRouterModel(t *testing.T) {
+	c := Config{Models: map[string]OpenModel{"or": {Endpoint: "https://openrouter.ai/api/v1", Model: "anthropic/claude-opus-5", Key: true}}}
+	if err := c.Check(); err == nil || !strings.Contains(err.Error(), "model or:") {
+		t.Fatalf("a paid OpenRouter model passed: %v", err)
+	}
+	c.Models["or"] = OpenModel{Endpoint: "https://openrouter.ai/api/v1", Model: "nvidia/nemotron-3-ultra-550b-a55b:free", Key: true}
+	if err := c.Check(); err != nil {
+		t.Fatal(err)
+	}
+}

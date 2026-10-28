@@ -42,6 +42,9 @@ type GateJob struct {
 // watcher leaves it alone, since the gate is bounded by its own clock.
 const GateWait = "waiting for the recursive gate"
 
+// gateSlotWait opens the reason of a task waiting for a gate slot to free.
+const gateSlotWait = GateWait + "'s next free slot"
+
 // GateTimeout bounds one gate run; the daemon kills it a little after.
 var GateTimeout = 2 * time.Hour
 
@@ -148,6 +151,9 @@ func (m *Module) recursiveGate(t *Task, p core.Project, main string) (bool, erro
 		// ends, as a change of aim ends it, and frees its slot.
 		m.dropGateLocked(t.ID, key)
 		if full = m.gateRoom(len(m.gating)); full == "" {
+			full = m.slotAheadLocked(t)
+		}
+		if full == "" {
 			out = filepath.Join(m.C.WS.Gates(), p.Name, "recursive", time.Now().UTC().Format("060102-150405")+"-"+core.Short(t.SHA))
 			if m.gating == nil {
 				m.gating = map[string]*gateRun{}
@@ -163,7 +169,7 @@ func (m *Module) recursiveGate(t *Task, p core.Project, main string) (bool, erro
 	case cur != nil:
 		m.hold(t, p, fmt.Sprintf("%s on %s against main at %s (started %s, at most %s)", GateWait, core.Short(t.SHA), core.Short(main), cur.since.Format("15:04Z"), GateTimeout))
 	case full != "":
-		m.hold(t, p, GateWait+": "+full)
+		m.hold(t, p, gateSlotWait+": "+full)
 	default:
 		m.startGate(t, p, main, key, out)
 		m.hold(t, p, fmt.Sprintf("%s on %s against main at %s (started %s, at most %s)", GateWait, core.Short(t.SHA), core.Short(main), time.Now().UTC().Format("15:04Z"), GateTimeout))
@@ -281,8 +287,45 @@ func (m *Module) startGate(t *Task, p core.Project, main, key, out string) {
 		m.mu.Lock()
 		delete(m.gating, key)
 		delete(m.later, id) // the task looks again at once
+		m.wakeGateSlotLocked(p.Name)
 		m.mu.Unlock()
 	}()
+}
+
+// slotAheadLocked says why t leaves a free gate slot to an older PR in its
+// project's merge line that waits for one, or "" (issue #1794): first come
+// was first served, so the line's front, back from testing as main moved,
+// lost each freed slot to whoever looked first. m.mu is held.
+func (m *Module) slotAheadLocked(t *Task) string {
+	var ahead *Task
+	for _, u := range m.tasks {
+		if u.ID != t.ID && u.Project == t.Project && u.Stage == StageMerging && strings.HasPrefix(u.Reason, gateSlotWait) &&
+			lineBefore(u, t) && (ahead == nil || lineBefore(u, ahead)) && m.sameHeadLocked(u.ID, u.SHA) == nil && m.lookingLocked(u.ID) {
+			ahead = u
+		}
+	}
+	if ahead == nil {
+		return ""
+	}
+	return fmt.Sprintf("#%d (%s) is ahead of it in the merge line and takes the next one", ahead.PR.Number, core.Clip(ahead.Label(), 80))
+}
+
+// lookingLocked says task id's steps still look on their own: its next look
+// isn't long past (a step that stopped looking keeps no slot). m.mu is held.
+func (m *Module) lookingLocked(id string) bool {
+	at, ok := m.later[id]
+	return !ok || time.Since(at) < 3*holdGap
+}
+
+// wakeGateSlotLocked has project's tasks waiting for a gate slot look again
+// on the next tick: one freed, or the one ahead stopped waiting for it.
+// m.mu is held.
+func (m *Module) wakeGateSlotLocked(project string) {
+	for _, u := range m.tasks {
+		if u.Project == project && u.Stage == StageMerging && strings.HasPrefix(u.Reason, gateSlotWait) {
+			delete(m.later, u.ID)
+		}
+	}
 }
 
 // dropGate cancels the gate run in flight for task id, if any, so the gains

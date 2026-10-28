@@ -346,3 +346,53 @@ func TestAModelThatKeepsEndingBlockedStopsBeingFirst(t *testing.T) {
 		t.Fatalf("a merge didn't put the model back in front: %s", got)
 	}
 }
+
+// A route can't name a model its harness doesn't offer.
+func TestRouteRefusesModelHarnessLacks(t *testing.T) {
+	a, lead := hiveWithModels(t)
+	if _, err := call(t, a, lead, "route", map[string]any{"role": "worker", "models": "claude:opus,codex:gpt-5"}); err == nil || !strings.Contains(err.Error(), "gpt-5") {
+		t.Fatalf("codex:gpt-5 was accepted: %v", err)
+	}
+	if _, err := call(t, a, lead, "route", map[string]any{"role": "worker", "models": "claude:opus,codex:gpt-5.5"}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A project with no lead of its own has its trial rounds run by a worker:
+// on its own project only, never from a trial's own worker, and not twice
+// while one is open.
+func TestAWorkerFilesTrialsOnItsOwnProject(t *testing.T) {
+	a, _ := hiveWithModels(t)
+	if _, err := a.C.Projects.Add(core.Project{Name: "other", Repo: "me/other"}); err != nil {
+		t.Fatal(err)
+	}
+	round, err := a.Work.File(work.Brief{Project: "lab", Title: "one trial round", From: "person"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, err := a.C.Runs.Start(core.RunSpec{Role: "worker", Project: "lab", Task: round.ID, Harness: "fake", Checkout: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := call(t, a, w, "trial", map[string]any{"model": "qwen", "project": "other", "title": "wc"}); err == nil {
+		t.Fatal("a worker filed a trial on another project")
+	}
+	res, err := call(t, a, w, "trial", map[string]any{"model": "qwen", "project": "lab", "title": "wc"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := res.(map[string]string)["task"]
+	if _, err := call(t, a, w, "trial", map[string]any{"model": "qwen", "project": "lab", "title": "wc"}); err == nil || !strings.Contains(err.Error(), id) {
+		t.Fatalf("a second open trial of the same model and title: %v", err)
+	}
+	if _, err := call(t, a, w, "trial", map[string]any{"model": "qwen", "project": "lab", "title": "lru"}); err != nil {
+		t.Fatal(err)
+	}
+	tw, err := a.C.Runs.Start(core.RunSpec{Role: "worker", Project: "lab", Task: id, Harness: "fake", Checkout: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := call(t, a, tw, "trial", map[string]any{"model": "qwen", "project": "lab", "title": "csvsum"}); err == nil {
+		t.Fatal("a trial's own worker filed a trial")
+	}
+}

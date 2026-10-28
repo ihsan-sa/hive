@@ -63,6 +63,9 @@ type Forge interface {
 	IsEmpty(repo string) (bool, error)
 	DefaultBranch(repo string) string
 	CreateIssue(repo, title, body, marker string) (Issue, error)
+	// EditIssue replaces an issue's title and body (a body keeps its marker
+	// only if the caller writes it in again).
+	EditIssue(repo string, number int, title, body string) error
 	Comment(repo string, number int, body string) error
 	// StatusComment keeps one comment per issue or PR that carries marker:
 	// the first call posts it, later calls edit it in place.
@@ -231,6 +234,13 @@ var ghRun = func(repo string, args []string) (string, string, error) {
 // for a pause, writes wait it out without being sent.
 func gh(repo string, args ...string) (string, error) {
 	write := ghWrites(args)
+	login := strings.Join(ghEnv(repo), "")
+	free := len(args) > 1 && args[0] == "api" && args[1] == "rate_limit" // GitHub doesn't count it
+	if !free {
+		if err := ghQuota.wait(repo, login); err != nil {
+			return "", err
+		}
+	}
 	if write {
 		if err := ghPause.wait(); err != nil {
 			return "", err
@@ -238,6 +248,9 @@ func gh(repo string, args ...string) (string, error) {
 	}
 	out, stderr, err := ghRun(repo, args)
 	if err != nil {
+		if rl := ghQuota.spent(repo, login, stderr); rl != nil {
+			return out, rl
+		}
 		if rl := ghPause.hit(stderr); rl != nil {
 			return out, rl
 		}
@@ -296,9 +309,13 @@ func ghWrites(args []string) bool {
 type RateLimited struct {
 	Until time.Time
 	Text  string // gh's own words
+	All   bool   // the login's hour of calls is spent or near it: reads wait too
 }
 
 func (r *RateLimited) Error() string {
+	if r.All {
+		return fmt.Sprintf("the login's GitHub API quota is spent or nearly, so the Hive's calls wait until %s: %s", r.Until.UTC().Format("15:04:05Z"), r.Text)
+	}
 	return fmt.Sprintf("GitHub asked the Hive to slow down, so its writes wait until %s: %s", r.Until.UTC().Format("15:04:05Z"), r.Text)
 }
 
@@ -317,7 +334,7 @@ func rateLimit(stderr string) (time.Duration, bool) {
 	has := func(words ...string) bool {
 		return slices.ContainsFunc(words, func(w string) bool { return strings.Contains(t, w) })
 	}
-	limited := has("submitted too quickly", "secondary rate limit", "api rate limit exceeded", "abuse detection") ||
+	limited := has("submitted too quickly", "secondary rate limit", "rate limit exceeded", "rate limit already exceeded", "abuse detection") ||
 		has("http 403", "http 429", " 403 ", " 429 ") && has("rate limit", "retry-after", "retry after")
 	if !limited {
 		return 0, false
@@ -373,6 +390,116 @@ func (p *pause) clear() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.hits = 0
+}
+
+// spentQuota reports whether gh's stderr is the hour's quota spent ("API rate
+// limit exceeded", GraphQL's "API rate limit already exceeded"), not a
+// secondary limit.
+func spentQuota(stderr string) bool {
+	t := strings.ToLower(stderr)
+	return !strings.Contains(t, "secondary") && (strings.Contains(t, "rate limit exceeded") || strings.Contains(t, "rate limit already exceeded"))
+}
+
+// quota keeps the Hive under a login's hour of calls (REST's core and
+// GraphQL's points). GitHub counts reads as well as writes, and the login is
+// often the person's own, shared with their use, so the Hive leaves a tenth
+// of each for them: once either is under that, or GitHub says it is spent,
+// every call on the login, read or write, waits for that quota's reset
+// without being sent. What is left is looked at, at most once every `every`
+// (a free call), before the next call on the login; every 0 only holds on
+// GitHub's word.
+type quota struct {
+	mu    sync.Mutex
+	every time.Duration
+	held  map[string]*hold // by the token gh acts with ("" for gh's own login)
+}
+
+type hold struct {
+	until, looked time.Time
+	text          string
+}
+
+var ghQuota = &quota{every: time.Minute}
+
+// quotaReserve is the part of each quota the Hive leaves to the person.
+const quotaReserve = 10
+
+func (q *quota) get(login string) *hold {
+	if q.held == nil {
+		q.held = map[string]*hold{}
+	}
+	h := q.held[login]
+	if h == nil {
+		h = &hold{}
+		q.held[login] = h
+	}
+	return h
+}
+
+func (q *quota) wait(repo, login string) error {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	h := q.get(login)
+	if q.every > 0 && time.Now().After(h.until) && time.Since(h.looked) >= q.every {
+		h.looked = time.Now() // one call looks; the rest go on meanwhile
+		q.mu.Unlock()
+		at, why := quotaLow(repo)
+		q.mu.Lock()
+		if at.After(h.until) {
+			h.until, h.text = at, why
+		}
+	}
+	if time.Now().Before(h.until) {
+		return &RateLimited{Until: h.until, Text: h.text, All: true}
+	}
+	return nil
+}
+
+// spent holds every call on the login when stderr says its quota is spent,
+// until the reset GitHub names, or five minutes when it can't be read.
+func (q *quota) spent(repo, login, stderr string) *RateLimited {
+	if !spentQuota(stderr) {
+		return nil
+	}
+	at, _ := quotaLow(repo)
+	if !at.After(time.Now()) {
+		at = time.Now().Add(5 * time.Minute)
+	}
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	h := q.get(login)
+	if at.After(h.until) {
+		h.until = at
+	}
+	h.looked, h.text = time.Now(), Clip(stderr, 300)
+	return &RateLimited{Until: h.until, Text: h.text, All: true}
+}
+
+// quotaLow reads the login's quotas from rate_limit, which GitHub doesn't
+// count, and returns the latest reset of one under the Hive's reserve (a
+// second past it, and at most an hour and five minutes off), or the zero time
+// when none is or it can't be read.
+func quotaLow(repo string) (time.Time, string) {
+	out, _, err := ghRun(repo, []string{"api", "rate_limit", "-q", `.resources | .core, .graphql | "\(.remaining) \(.limit) \(.reset)"`})
+	if err != nil {
+		return time.Time{}, ""
+	}
+	var at time.Time
+	var why string
+	for i, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		var left, limit, reset int64
+		if _, err := fmt.Sscan(line, &left, &limit, &reset); err != nil || left*quotaReserve >= limit {
+			continue
+		}
+		if r := time.Unix(reset+1, 0); r.After(at) {
+			at = r
+			why = fmt.Sprintf("%d of the login's %d %s calls this hour are left, under the tenth the Hive leaves to the person", left, limit, []string{"REST", "GraphQL"}[min(i, 1)])
+		}
+	}
+	if most := time.Now().Add(65 * time.Minute); at.After(most) {
+		at = most
+	}
+	return at, why
 }
 
 var logins sync.Map // repo owner -> the login its token acts as
@@ -505,6 +632,11 @@ func (GitHub) CreateIssue(repo, title, body, marker string) (Issue, error) {
 		return Issue{}, err
 	}
 	return Issue{numberFromURL(url), url}, nil
+}
+
+func (GitHub) EditIssue(repo string, number int, title, body string) error {
+	_, err := gh(repo, "issue", "edit", strconv.Itoa(number), "-R", repo, "--title", title, "--body", body)
+	return err
 }
 
 func (GitHub) Comment(repo string, number int, body string) error {
@@ -658,7 +790,7 @@ func (g GitHub) MergePR(repo string, number int, sha, subject string) (string, e
 func (GitHub) squashBody(repo string, number int) string {
 	out, err := gh(repo, "pr", "view", strconv.Itoa(number), "-R", repo, "--json", "commits")
 	if err != nil {
-		return ""
+		return SquashBody(nil)
 	}
 	var v struct {
 		Commits []struct {
@@ -667,7 +799,7 @@ func (GitHub) squashBody(repo string, number int) string {
 		} `json:"commits"`
 	}
 	if json.Unmarshal([]byte(out), &v) != nil {
-		return ""
+		return SquashBody(nil)
 	}
 	if len(v.Commits) == 1 {
 		return SquashBody([]string{v.Commits[0].Body})
@@ -681,8 +813,18 @@ func (GitHub) squashBody(repo string, number int) string {
 
 var coAuthor = regexp.MustCompile(`(?im)^co-authored-by:.*$\n?`)
 
+// squashBodyMax keeps the body, one argv string to gh, well under Linux's
+// 128 KiB cap on a single argument (MAX_ARG_STRLEN).
+const squashBodyMax = 64 << 10
+
+// noSquashBody stands in for a body with nothing left in it: gh skips an
+// empty --body and GitHub writes its default, co-author lines and all.
+const noSquashBody = "Merged by the Hive."
+
 // SquashBody joins commit messages into a squash body with no
-// Co-authored-by trailer, so nobody but the Hive is credited.
+// Co-authored-by trailer, so nobody but the Hive is credited. It is never
+// empty, and past squashBodyMax it keeps each message's first line only,
+// then cuts at a line.
 func SquashBody(messages []string) string {
 	var parts []string
 	for _, m := range messages {
@@ -690,7 +832,24 @@ func SquashBody(messages []string) string {
 			parts = append(parts, m)
 		}
 	}
-	return strings.Join(parts, "\n\n")
+	body := strings.Join(parts, "\n\n")
+	if body == "" {
+		return noSquashBody
+	}
+	if len(body) <= squashBodyMax {
+		return body
+	}
+	for i, p := range parts {
+		parts[i], _, _ = strings.Cut(p, "\n")
+	}
+	if body = strings.Join(parts, "\n"); len(body) > squashBodyMax {
+		body = body[:squashBodyMax]
+		if i := strings.LastIndex(body, "\n"); i > 0 {
+			body = body[:i]
+		}
+		body = strings.ToValidUTF8(body, "")
+	}
+	return body + "\n\n(trimmed: the full messages are on the pull request)"
 }
 
 // ReadyPR marks a draft ready for review with the token for repo's owner,
@@ -780,12 +939,20 @@ const queuedTooLong = time.Hour
 // with no runs yet counts as pending, so a just-pushed head whose jobs aren't
 // listed yet doesn't read as having none.
 //
-// A token that may not read checks (a 403) on a head with no workflows reads
-// as no checks: there is no CI there to wait for, so the change goes on by
-// the Hive's own tests, as on a project with no forge checks at all.
+// A token that may not use the Checks API (a fine-grained token: GitHub
+// offers it no checks permission, so check-runs and check-suites answer 403)
+// reads the head's Actions runs and their jobs instead, which carry the same
+// names, states and job URLs, and its commit statuses as before. A token that
+// may read none of them (a 403) on a head with no workflows reads as no
+// checks: there is no CI there to wait for, so the change goes on by the
+// Hive's own tests, as on a project with no forge checks at all.
 func (GitHub) Checks(repo, sha string) ([]CheckRun, error) {
 	none := ciless(repo, sha)
 	runs, err := ghPages[ghCheckRun](repo, "repos/"+repo+"/commits/"+sha+"/check-runs", "check_runs")
+	actions := refused(err)
+	if actions {
+		runs, err = actionsJobs(repo, sha)
+	}
 	if err = none(err); err != nil {
 		return nil, err
 	}
@@ -822,6 +989,9 @@ func (GitHub) Checks(repo, sha string) ([]CheckRun, error) {
 		}
 		list = append(list, CheckRun{Name: s.Context, State: state, Detail: s.Description, URL: s.TargetURL})
 	}
+	if actions { // the suites are the Checks API's too; actionsJobs holds a new head
+		return list, nil
+	}
 	suites, err := ghPages[ghSuite](repo, "repos/"+repo+"/commits/"+sha+"/check-suites", "check_suites")
 	if err = none(err); err != nil {
 		return nil, err
@@ -834,10 +1004,74 @@ func (GitHub) Checks(repo, sha string) ([]CheckRun, error) {
 	return list, nil
 }
 
+// refused reports whether err is the forge refusing the token a read (HTTP
+// 403); a rate limit's 403 is no refusal.
+func refused(err error) bool {
+	var rl *RateLimited
+	return err != nil && !errors.As(err, &rl) && strings.Contains(err.Error(), "HTTP 403")
+}
+
+// actionsJobs reads sha's checks through the Actions API, which a
+// fine-grained token may use: each workflow run on the head and the jobs of
+// its latest attempt, read as check runs (a job is one: the same id, name,
+// status, conclusion, start and job URL). A run with no jobs listed stands
+// for itself: one queued or just started holds the merge, one that ended
+// without jobs (a startup failure) reads by its conclusion. A head with
+// workflows and no runs listed yet is held for suiteGrace from when it was
+// first read so, as a young Actions suite holds it on the Checks API: GitHub
+// lists a just-pushed head's runs a little after the push.
+func actionsJobs(repo, sha string) ([]ghCheckRun, error) {
+	wruns, err := ghPages[struct {
+		ghCheckRun
+		RunStartedAt time.Time `json:"run_started_at"`
+	}](repo, "repos/"+repo+"/actions/runs?head_sha="+sha, "workflow_runs")
+	if err != nil {
+		return nil, err
+	}
+	var list []ghCheckRun
+	for _, r := range wruns {
+		jobs, err := ghPages[ghCheckRun](repo, fmt.Sprintf("repos/%s/actions/runs/%d/jobs", repo, r.ID), "jobs")
+		if err != nil {
+			return nil, err
+		}
+		if len(jobs) == 0 {
+			run := r.ghCheckRun
+			run.StartedAt = r.RunStartedAt
+			jobs = append(jobs, run)
+		}
+		list = append(list, jobs...)
+	}
+	if len(list) == 0 && !noWorkflows(repo, sha) {
+		key := repo + "@" + sha
+		runless.Lock()
+		first, seen := runless.m[key]
+		if !seen {
+			if len(runless.m) >= 1024 {
+				clear(runless.m)
+			}
+			first = time.Now()
+			runless.m[key] = first
+		}
+		runless.Unlock()
+		if time.Since(first) < suiteGrace {
+			list = append(list, ghCheckRun{Name: "github-actions", Status: "queued, no runs listed yet"})
+		}
+	}
+	return list, nil
+}
+
+// runless remembers, by repo@sha, when a head with workflows was first read
+// with no Actions runs listed.
+var runless = struct {
+	sync.Mutex
+	m map[string]time.Time
+}{m: map[string]time.Time{}}
+
 // checksRefused is a forge refusing the token a read of a head's checks, as
 // gh words it: "gh api repos/o/r/commits/<sha>/check-runs?per_page=100: gh:
-// Resource not accessible by personal access token (HTTP 403)".
-var checksRefused = regexp.MustCompile(`^gh api repos/\S+/commits/[0-9a-f]+/(check-runs|check-suites|status)\S*: .*\(HTTP 403\)$`)
+// Resource not accessible by personal access token (HTTP 403)", or the same
+// of the Actions runs read in their place.
+var checksRefused = regexp.MustCompile(`^gh api repos/\S+/(commits/[0-9a-f]+/(check-runs|check-suites|status)|actions/runs)\S*: .*\(HTTP 403\)$`)
 
 // ChecksRefused reports whether err's text is GitHub.Checks refused the
 // token's read of a head's checks.
@@ -855,8 +1089,7 @@ func ChecksRefused(text string) bool { return checksRefused.MatchString(text) }
 // reads as having no checks (docs/risk.md).
 func ciless(repo, sha string) func(error) error {
 	return func(err error) error {
-		var rl *RateLimited
-		if err == nil || errors.As(err, &rl) || !strings.Contains(err.Error(), "HTTP 403") {
+		if !refused(err) {
 			return err
 		}
 		if noWorkflows(repo, sha) {

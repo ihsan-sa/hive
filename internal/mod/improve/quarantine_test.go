@@ -250,8 +250,8 @@ func TestLocalSightingOnASharedHead(t *testing.T) {
 
 // A check run broken by its environment (its folder gone) or failing dozens
 // of tests at once is no sighting of any of them: two such runs on unrelated
-// heads quarantine nothing and file no fix briefs, and a waiting fix brief
-// filed on such runs before is taken back.
+// heads quarantine nothing and file no fix briefs, and a fix brief filed on
+// such runs before is taken back, even once its worker started.
 func TestQuarantineSkipsBrokenRuns(t *testing.T) {
 	m := rig(t)
 	pkg := "github.com/x/hive/internal/core::"
@@ -278,9 +278,15 @@ func TestQuarantineSkipsBrokenRuns(t *testing.T) {
 
 	stale, _ := m.Work.File(work.Brief{Project: "hive", From: "improve", Title: flakyTitle + key, Done: "d", Known: "k"})
 	kept, _ := m.Work.File(work.Brief{Project: "hive", From: "improve", Title: flakyTitle + pkg + "TestOther", Done: "d", Known: "k"})
+	started, _ := m.Work.File(work.Brief{Project: "hive", From: "improve", Title: flakyTitle + pkg + "TestManyA", Done: "d", Known: "k"})
+	started.Stage = work.StageWorking
+	m.C.J.MustAppend("task.saved", started)
 	m.fileQuarantined()
-	if n := len(m.Work.List(func(t work.Task) bool { return strings.HasPrefix(t.Title, flakyTitle) })); n != 2 {
-		t.Fatalf("%d fix tasks, want only the two filed by hand", n)
+	if n := len(m.Work.List(func(t work.Task) bool { return strings.HasPrefix(t.Title, flakyTitle) })); n != 3 {
+		t.Fatalf("%d fix tasks, want only the three filed by hand", n)
+	}
+	if got, _ := m.Work.Get(started.ID); !got.Withdrawn() {
+		t.Fatalf("the started brief filed on broken runs is %s (%s), want withdrawn", got.Stage, got.Reason)
 	}
 	if got, _ := m.Work.Get(stale.ID); !got.Withdrawn() {
 		t.Fatalf("the brief filed on broken runs is %s (%s), want withdrawn", got.Stage, got.Reason)
