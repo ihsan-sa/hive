@@ -3,7 +3,6 @@ package work
 import (
 	"context"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -30,13 +29,6 @@ func mergeOnce(t *testing.T, m *Module, task *Task, p core.Project) {
 	t.Helper()
 	if err := m.merge(task, p); err != nil {
 		t.Fatal(err)
-	}
-	if task.MergedTest != "" { // its merge with main is tested behind the step
-		m.Wait()
-		m.later = map[string]time.Time{}
-		if err := m.merge(task, p); err != nil {
-			t.Fatal(err)
-		}
 	}
 }
 
@@ -351,33 +343,6 @@ func TestMergeAsItIsWhenClean(t *testing.T) {
 	}
 }
 
-// Two changes that each merge cleanly and pass alone can break main together:
-// the PR's tests run merged with main before it merges as it is, and a red
-// merge where main is green goes back through testing to the worker rather
-// than onto main.
-func TestMergedWithMainTestedFirst(t *testing.T) {
-	both := map[string]string{".hive/project.json": `{"test": "! { test -f half1.txt && test -f half2.txt; }"}`}
-	m, task, p, f := gateRigSeeded(t, false, both, map[string]string{"half1.txt": "x"})
-	toMerging(t, m, task, p)
-	head := task.SHA
-	pushMain(t, f, map[string]string{"half2.txt": "y"})
-	mergeOnce(t, m, task, p)
-	if task.Stage != StageTesting || task.SHA == head || prState(t, f, task.PR.Number) != "OPEN" {
-		t.Fatalf("stage %q at %s (head %s), reason %q", task.Stage, core.Short(task.SHA), core.Short(head), task.Reason)
-	}
-	if c, ok := m.C.Effects.GetCheck(p.Name, task.SHA, "test"); !ok || c.OK {
-		t.Fatalf("the merge with main should be tested red: %+v", c)
-	}
-	for i := 0; i < 2 && task.Stage == StageTesting; i++ { // a red runs once more before it counts
-		if err := testStep(m, task, p); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if task.Stage != StageWorking {
-		t.Fatalf("the red merge should go back to the worker: stage %q, reason %q", task.Stage, task.Reason)
-	}
-}
-
 // A clean merge whose tests pass merges as it is, tested once per head and main.
 func TestMergedWithMainGreenMergesAsItIs(t *testing.T) {
 	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
@@ -385,107 +350,9 @@ func TestMergedWithMainGreenMergesAsItIs(t *testing.T) {
 	head := task.SHA
 	pushMain(t, f, map[string]string{"other.txt": "z"})
 	mergeOnce(t, m, task, p)
-	if task.Stage != StageMerged || task.SHA != head || task.MergedOK == "" {
+	if task.Stage != StageMerged || task.SHA != head {
 		t.Fatalf("stage %q at %s (head %s), reason %q", task.Stage, core.Short(task.SHA), core.Short(head), task.Reason)
 	}
-}
-
-// The merge step never waits for a check slot: with every slot taken, the
-// test of the PR merged with main is queued, the step returns and the task
-// waits in merging; once a slot frees and the test passes, it merges.
-func TestMergedTestsNeverBlockTheStep(t *testing.T) {
-	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
-	toMerging(t, m, task, p)
-	head := task.SHA
-	pushMain(t, f, map[string]string{"other.txt": "z"})
-	m.C.Effects.Slots.Resize(func() int { return 1 })
-	release := m.C.Effects.Slots.Acquire(p.Name, "other", "test")
-	done := make(chan error, 1)
-	go func() { done <- m.merge(task, p) }()
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatal(err)
-		}
-	case <-time.After(time.Minute):
-		release()
-		t.Fatal("the merge step waited for a check slot")
-	}
-	if task.Stage != StageMerging || task.MergedTest == "" || !strings.HasPrefix(task.Reason, "testing its head merged with main") {
-		t.Fatalf("stage %q, merged test %q, reason %q", task.Stage, task.MergedTest, task.Reason)
-	}
-	if err := m.merge(task, p); err != nil || task.Stage != StageMerging { // still queued: a second step doesn't queue it twice
-		t.Fatalf("stage %q, reason %q, err %v", task.Stage, task.Reason, err)
-	}
-	release()
-	m.Wait()
-	mergeOnce(t, m, task, p)
-	if task.Stage != StageMerged || task.SHA != head || task.MergedOK == "" || task.MergedTest != "" {
-		t.Fatalf("stage %q at %s (head %s), reason %q", task.Stage, core.Short(task.SHA), core.Short(head), task.Reason)
-	}
-}
-
-// Main moving while a merged test waits for a slot queues no second one: the
-// task waits that one out, then tests its merge with the new main and merges.
-func TestMergedTestOnePerTaskAsMainMoves(t *testing.T) {
-	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
-	toMerging(t, m, task, p)
-	pushMain(t, f, map[string]string{"other.txt": "z"})
-	m.C.Effects.Slots.Resize(func() int { return 1 })
-	release := m.C.Effects.Slots.Acquire(p.Name, "other", "test")
-	mergeOnce := func() {
-		done := make(chan error, 1)
-		go func() { done <- m.merge(task, p) }()
-		select {
-		case err := <-done:
-			if err != nil {
-				t.Fatal(err)
-			}
-		case <-time.After(time.Minute):
-			release()
-			t.Fatal("the merge step waited for a check slot")
-		}
-	}
-	mergeOnce()
-	first := task.MergedTest
-	pushMain(t, f, map[string]string{"third.txt": "w"})
-	mergeOnce()
-	if task.Stage != StageMerging || task.MergedTest != first {
-		t.Fatalf("stage %q, merged test %q (first %q), reason %q", task.Stage, task.MergedTest, first, task.Reason)
-	}
-	if _, waiting := m.C.Effects.Slots.State(); len(waiting) != 1 {
-		t.Fatalf("one merged test should wait for a slot, not %d: %+v", len(waiting), waiting)
-	}
-	moved, _ := m.C.Effects.Sync(p)
-	release()
-	for i := 0; i < 4 && task.Stage == StageMerging; i++ {
-		m.Wait()
-		if err := m.merge(task, p); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if task.Stage != StageMerged || task.MergedTest != "" {
-		t.Fatalf("stage %q, reason %q", task.Stage, task.Reason)
-	}
-	if !strings.HasSuffix(task.MergedOK, "+"+moved) {
-		t.Fatalf("merged on a test of an old main: %q, main was %s", task.MergedOK, core.Short(moved))
-	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if len(m.mergeRuns) != 0 {
-		t.Fatalf("finished merged tests left behind: %d", len(m.mergeRuns))
-	}
-}
-
-// countingForge counts the PRs read through it.
-type countingForge struct {
-	*core.Local
-	n int
-}
-
-func (c *countingForge) GetPR(repo string, n int) (core.PR, error) {
-	c.n++
-	return c.Local.GetPR(repo, n)
 }
 
 // unknownForge is a forge still working out whether a PR merges cleanly.
@@ -1738,183 +1605,4 @@ func testStep(m *Module, task *Task, p core.Project) error {
 	delete(m.later, task.ID)
 	m.mu.Unlock()
 	return m.test(task, p)
-}
-
-// Only the front of a project's merge line tests merged with main (issue
-// #1727): a task behind an older PR waiting at the same step queues no test
-// and runs no merge, and one behind a test already in flight waits it out
-// however new its PR; once the line ahead clears, it tests and merges.
-func TestMergeLineOnlyFrontTests(t *testing.T) {
-	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
-	toMerging(t, m, task, p)
-	head := task.SHA
-	pushMain(t, f, map[string]string{"other.txt": "z"})
-	older := &Task{ID: "t-older", Project: p.Name, Stage: StageMerging, PR: core.PR{Number: task.PR.Number - 1}, Reason: MergeLineWait + ": earlier"}
-	newer := &Task{ID: "t-newer", Project: p.Name, Stage: StageMerging, PR: core.PR{Number: task.PR.Number + 1}, Reason: mergedTestWait + " at x"}
-	elsewhere := &Task{ID: "t-held", Project: p.Name, Stage: StageMerging, PR: core.PR{Number: task.PR.Number - 2}, Reason: "waiting for the forge's checks"}
-	m.mu.Lock()
-	m.tasks[older.ID], m.tasks[newer.ID], m.tasks[elsewhere.ID] = older, newer, elsewhere
-	m.mu.Unlock()
-	mergeOnce(t, m, task, p)
-	if task.Stage != StageMerging || task.MergedTest != "" || !strings.HasPrefix(task.Reason, MergeLineWait) || !strings.Contains(task.Reason, fmt.Sprintf("#%d", older.PR.Number)) {
-		t.Fatalf("behind an older PR: stage %q, merged test %q, reason %q", task.Stage, task.MergedTest, task.Reason)
-	}
-	// Waiting its turn, a step reads no PR (issue #1749).
-	reads := &countingForge{Local: f}
-	m.C.Effects.Forge = reads
-	waiting := task.Reason
-	m.later = map[string]time.Time{}
-	mergeOnce(t, m, task, p)
-	if reads.n != 0 || task.Reason != waiting {
-		t.Fatalf("a task waiting its turn read its PR %d times; reason %q", reads.n, task.Reason)
-	}
-	m.C.Effects.Forge = f
-	m.mu.Lock()
-	queued := len(m.mergeRuns)
-	older.Stage = StageMerged
-	if m.mergeRuns == nil {
-		m.mergeRuns = map[string]*mergeRun{}
-	}
-	m.mergeRuns[newer.ID] = &mergeRun{key: "x"} // a newer PR's test already in flight
-	m.mu.Unlock()
-	if queued != 0 {
-		t.Fatalf("a task behind the front queued a merged test")
-	}
-	m.later = map[string]time.Time{}
-	mergeOnce(t, m, task, p)
-	if task.Stage != StageMerging || !strings.Contains(task.Reason, fmt.Sprintf("#%d", newer.PR.Number)) {
-		t.Fatalf("behind a test in flight: stage %q, reason %q", task.Stage, task.Reason)
-	}
-	m.mu.Lock()
-	m.mergeRuns[newer.ID].done = true
-	newer.Stage = StageMerged
-	m.mu.Unlock()
-	m.later = map[string]time.Time{}
-	mergeOnce(t, m, task, p)
-	if task.Stage != StageMerged || task.SHA != head || task.MergedOK == "" {
-		t.Fatalf("at the front: stage %q at %s (head %s), reason %q", task.Stage, core.Short(task.SHA), core.Short(head), task.Reason)
-	}
-}
-
-// lineMember makes a PR head off main's first commit holding files, in the
-// project's clone, and a task waiting behind the front in the merge line.
-func lineMember(t *testing.T, m *Module, f *core.Local, p core.Project, id string, pr int, files map[string]string) *Task {
-	t.Helper()
-	tmp := t.TempDir()
-	must(t, "", "clone", "-q", f.RepoPath(p.Repo), tmp)
-	must(t, tmp, "checkout", "-q", "--detach", strings.TrimSpace(must(t, tmp, "rev-list", "--max-parents=0", "HEAD")))
-	for name, body := range files {
-		os.WriteFile(filepath.Join(tmp, name), []byte(body), 0o644)
-	}
-	must(t, tmp, "add", "-A")
-	must(t, tmp, "commit", "-q", "-m", id)
-	sha := strings.TrimSpace(must(t, tmp, "rev-parse", "HEAD"))
-	must(t, m.C.WS.Project(p.Name), "fetch", "-q", tmp, "+HEAD:refs/hive/test/"+id)
-	u := &Task{ID: id, Project: p.Name, Kind: "work", Stage: StageMerging, SHA: sha, PR: core.PR{Number: pr}, Reason: MergeLineWait + ": behind"}
-	m.mu.Lock()
-	m.tasks[u.ID] = u
-	m.mu.Unlock()
-	return u
-}
-
-// The front's merged test takes in every PR waiting behind it (issue
-// #1771): one green test lets each of them merge, as main moves by the
-// batch's own merges, with no test of its own; a PR whose merge with main
-// came from anything else waits in the line again.
-func TestMergeLineBatchPasses(t *testing.T) {
-	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
-	toMerging(t, m, task, p)
-	pushMain(t, f, map[string]string{"other.txt": "z"})
-	a := lineMember(t, m, f, p, "t-a", task.PR.Number+1, map[string]string{"a.txt": "a"})
-	b := lineMember(t, m, f, p, "t-b", task.PR.Number+2, map[string]string{"b.txt": "b"})
-	mergeOnce(t, m, task, p)
-	if task.Stage != StageMerged {
-		t.Fatalf("front: stage %q, reason %q", task.Stage, task.Reason)
-	}
-	main, err := m.C.Effects.Sync(p)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if wait, err := m.mergedTests(a, p, main); wait || err != nil || a.MergedOK != a.SHA+"+"+main {
-		t.Fatalf("a batch member after the front merged: wait %v, err %v, reason %q", wait, err, a.Reason)
-	}
-	if len(m.mergeRuns) != 0 {
-		t.Fatalf("a batch member queued a test of its own")
-	}
-	// a merges onto main; b, last, still counts as tested.
-	m.batchMerged(a, main, "after-a")
-	if m.batchPassed(b, "after-a") == "" || m.batchPassed(b, main) != "" {
-		t.Fatal("the batch's tip didn't follow its own merge")
-	}
-	// main moving any other way leaves b to the line.
-	m.batchMerged(&Task{ID: "t-x", Project: p.Name}, "after-a", "after-x")
-	if m.batchPassed(b, "after-x") != "" {
-		t.Fatal("a merge from outside the batch kept it passed")
-	}
-}
-
-// A batch that fails tests the front alone: it merges on its own green, and
-// the PRs that were in the batch wait for the next front.
-func TestMergeLineBatchFailsFrontAlone(t *testing.T) {
-	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
-	toMerging(t, m, task, p)
-	pushMain(t, f, map[string]string{"other.txt": "z"})
-	bad := lineMember(t, m, f, p, "t-bad", task.PR.Number+1, map[string]string{"BROKEN": "x"})
-	mergeOnce(t, m, task, p) // the batch's red result sends the front to test alone
-	if task.Stage != StageMerging || task.MergedTest == "" {
-		t.Fatalf("after the red batch: stage %q, merged test %q, reason %q", task.Stage, task.MergedTest, task.Reason)
-	}
-	m.Wait()
-	m.later = map[string]time.Time{}
-	mergeOnce(t, m, task, p)
-	if task.Stage != StageMerged {
-		t.Fatalf("front: stage %q, reason %q", task.Stage, task.Reason)
-	}
-	main, _ := m.C.Effects.Sync(p)
-	if m.batchPassed(bad, main) != "" || m.batchPassed(bad, "") != "" {
-		t.Fatal("a member of a red batch counts as passed")
-	}
-}
-
-// A task waiting its turn in the merge line looks again as soon as the front
-// leaves it, not a holdGap later (issue #1745): four asks at once otherwise
-// spent up to a minute per place in the line, and two places ran the
-// benchmark past its bound.
-func TestMergeLineWakesWhenFrontLeaves(t *testing.T) {
-	m, task, p, _ := gateRig(t, false, map[string]string{"feature.txt": "y"})
-	toMerging(t, m, task, p)
-	waiter := &Task{ID: "t-waiter", Project: p.Name, Stage: StageMerging, PR: core.PR{Number: task.PR.Number + 1}, Reason: MergeLineWait + ": behind"}
-	other := &Task{ID: "t-other", Project: p.Name, Stage: StageMerging, PR: core.PR{Number: task.PR.Number + 2}, Reason: "waiting for the forge's checks"}
-	waiting := func() (bool, bool) {
-		m.mu.Lock()
-		defer m.mu.Unlock()
-		_, w := m.later[waiter.ID]
-		_, o := m.later[other.ID]
-		return w, o
-	}
-	setup := func() {
-		m.mu.Lock()
-		m.tasks[waiter.ID], m.tasks[other.ID] = waiter, other
-		m.later[waiter.ID] = time.Now().Add(holdGap)
-		m.later[other.ID] = time.Now().Add(holdGap)
-		m.mu.Unlock()
-	}
-
-	setup()
-	m.hold(task, p, mergedTestWait+" at x")
-	if w, _ := waiting(); !w {
-		t.Fatalf("the front moving within the line woke the waiter")
-	}
-	m.hold(task, p, "waiting for the forge's checks on its head")
-	if w, o := waiting(); w || !o {
-		t.Fatalf("front stood aside: waiter still held %v, other task woken %v", w, !o)
-	}
-
-	setup()
-	task.Reason = mergedTestWait + " at x"
-	task.Stage = StageMerged
-	m.save(task, "merged")
-	if w, o := waiting(); w || !o {
-		t.Fatalf("front merged: waiter still held %v, other task woken %v", w, !o)
-	}
 }

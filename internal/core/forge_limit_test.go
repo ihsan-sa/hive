@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -13,9 +14,9 @@ import (
 // stubGH replaces gh with reply for one test and records each call's args.
 func stubGH(t *testing.T, reply func(args []string) (string, string, error)) *[][]string {
 	t.Helper()
-	run, p, q := ghRun, ghPause, ghQuota
-	t.Cleanup(func() { ghRun, ghPause, ghQuota = run, p, q })
-	ghPause, ghQuota = &pause{}, &quota{}
+	run, p, q, g := ghRun, ghPause, ghQuota, ghGate
+	t.Cleanup(func() { ghRun, ghPause, ghQuota, ghGate = run, p, q, g })
+	ghPause, ghQuota, ghGate = &pause{}, &quota{}, newGate(3, 0)
 	logins.Clear()
 	clear(workflowless.m)
 	var calls [][]string
@@ -197,7 +198,7 @@ func TestRateLimitPausesWrites(t *testing.T) {
 		t.Fatalf("hits %d after a write went through", ghPause.hits)
 	}
 	ghPause.hit("HTTP 429: Too Many Requests\nRetry-After: 300")
-	if err := ghPause.wait(); !errors.As(err, &rl) || time.Until(rl.Until) < 295*time.Second {
+	if err := ghPause.wait(true); !errors.As(err, &rl) || time.Until(rl.Until) < 295*time.Second {
 		t.Fatalf("retry-after pause %v", err)
 	}
 }
@@ -634,6 +635,82 @@ func TestTimedOutIsOnlyTheHivesTimeout(t *testing.T) {
 	for _, s := range []string{"go test: signal: killed", "panic: test timed out after 2s\nFAIL\tp\t2.01s"} {
 		if TimedOut(s) {
 			t.Errorf("%q read as a timeout", s)
+		}
+	}
+}
+
+// A burst of calls (ten tasks rechecked at once, #1769) queues at the gate:
+// no more than its slots are in flight, and once GitHub answers one with its
+// limit, though rate_limit shows the hour's quota plenty, the calls queued
+// behind it wait out a pause, reads too, instead of being sent: the tasks
+// wait, none fails.
+func TestBurstQueuesAndWaitsOutTheLimit(t *testing.T) {
+	var mu sync.Mutex
+	in, most, views := 0, 0, 0
+	stubGH(t, func(args []string) (string, string, error) {
+		if args[1] == "rate_limit" {
+			reset := time.Now().Add(30 * time.Minute).Unix()
+			return fmt.Sprintf("4633 5000 %d\n3553 5000 %d\n", reset, reset), "", nil
+		}
+		mu.Lock()
+		in++
+		most = max(most, in)
+		views++
+		mu.Unlock()
+		time.Sleep(20 * time.Millisecond)
+		mu.Lock()
+		in--
+		mu.Unlock()
+		return "", "GraphQL: API rate limit already exceeded for user ID 77406516.", errors.New("exit status 1")
+	})
+	var wg sync.WaitGroup
+	errs := make([]error, 50)
+	for i := range errs {
+		wg.Add(1)
+		go func() { defer wg.Done(); _, errs[i] = (GitHub{}).GetPR("o/r", 1000+i) }()
+	}
+	wg.Wait()
+	if most > 3 {
+		t.Fatalf("%d calls in flight at once", most)
+	}
+	if views > 3 {
+		t.Fatalf("%d calls sent; those queued behind the first limit were sent too", views)
+	}
+	for _, err := range errs {
+		var rl *RateLimited
+		if !errors.As(err, &rl) || rl.All || !rl.Reads {
+			t.Fatalf("a call in the burst: %v", err)
+		}
+		if d := time.Until(rl.Until); d < 55*time.Second || d > 2*time.Minute {
+			t.Fatalf("waits %v, want a minute (the secondary limit's pause, not the quota's)", d)
+		}
+	}
+	if !strings.Contains(errs[0].Error(), "its calls wait") {
+		t.Fatalf("said as %q", errs[0])
+	}
+}
+
+// Writes go at least the gate's gap apart, however many are asked at once.
+func TestWritesAreSpaced(t *testing.T) {
+	var mu sync.Mutex
+	var sent []time.Time
+	stubGH(t, func(args []string) (string, string, error) {
+		mu.Lock()
+		sent = append(sent, time.Now())
+		mu.Unlock()
+		return "", "", nil
+	})
+	ghGate = newGate(3, 40*time.Millisecond)
+	var wg sync.WaitGroup
+	for i := range 5 {
+		wg.Add(1)
+		go func() { defer wg.Done(); _ = (GitHub{}).Comment("o/r", i, "hi") }()
+	}
+	wg.Wait()
+	slices.SortFunc(sent, func(a, b time.Time) int { return a.Compare(b) })
+	for i := 1; i < len(sent); i++ {
+		if gap := sent[i].Sub(sent[i-1]); gap < 35*time.Millisecond {
+			t.Fatalf("writes %v apart: %v", gap, sent)
 		}
 	}
 }

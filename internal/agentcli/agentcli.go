@@ -221,5 +221,10 @@ The loop is every agent's: these act on your own project's tasks, on the record 
   models                                         named models, each role's route, what each agent runs on, trials
   route     --role worker --models "a,b" [--project p]   (lead) the models a role runs on, in fallback order
   trial     --model m --project test --title "..." --done "..."   (lead) one brief's worker on that model alone
+  hold_merges --project p --why "their words" [--only N,M] [--until release] [--lift]   (lead) on the person's
+                                                 word only: nothing merges but those PRs until lifted or released
+  create_project --name n [--repo o/r] --description "..." --goals "..." [--sharing shared|private|isolated]   (lead)
+  install_module --url <git url> | --project <module>   (lead) a warden weighs it; you hear back
+  requests                                       each request past a sandbox and where it stands
 In $HIVE_STATE, logins/ and private/ (the daemon's token, every agent's home) are covered, and so are an
 isolated project's records (and the journal, while any project is isolated): hidden there, not missing.`
