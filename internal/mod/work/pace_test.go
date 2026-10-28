@@ -351,11 +351,11 @@ func TestCheckRankFixes(t *testing.T) {
 	put(Task{ID: "gain", Project: "p", SHA: "s3", Stage: StageTesting})
 	put(Task{ID: "done", Project: "p", SHA: "s4", Stage: StageDone})
 	for sha, want := range map[string]int{"s1": 0, "s2": rankFix, "s3": 0, "s4": 0, "nobody": 0} {
-		if got := m.checkRank("p", sha, "test"); got != want {
+		if got := rankOnly(m.checkRank("p", sha, "test")); got != want {
 			t.Errorf("rank of %s: %d, want %d", sha, got, want)
 		}
 	}
-	if got := m.checkRank("other", "s2", "test"); got != 0 {
+	if got := rankOnly(m.checkRank("other", "s2", "test")); got != 0 {
 		t.Errorf("another project's sha ranked %d", got)
 	}
 }
@@ -369,19 +369,19 @@ func TestCheckRankMainFirst(t *testing.T) {
 	m.mu.Unlock()
 	done := m.MeasuringMain("p", "main1")
 	again := m.MeasuringMain("p", "main1")
-	if got := m.checkRank("p", "main1", "size"); got != rankMain || got <= m.checkRank("p", "s1", "test") {
-		t.Errorf("main's measurement ranked %d, a fix's check %d", got, m.checkRank("p", "s1", "test"))
+	if got := rankOnly(m.checkRank("p", "main1", "size")); got != rankMain || got <= rankOnly(m.checkRank("p", "s1", "test")) {
+		t.Errorf("main's measurement ranked %d, a fix's check %d", got, rankOnly(m.checkRank("p", "s1", "test")))
 	}
-	if got := m.checkRank("other", "main1", "score"); got != 0 {
+	if got := rankOnly(m.checkRank("other", "main1", "score")); got != 0 {
 		t.Errorf("another project's sha ranked %d", got)
 	}
 	done()
 	done()
-	if got := m.checkRank("p", "main1", "score"); got != rankMain {
+	if got := rankOnly(m.checkRank("p", "main1", "score")); got != rankMain {
 		t.Errorf("one of two measurements done: ranked %d", got)
 	}
 	again()
-	if got := m.checkRank("p", "main1", "score"); got != 0 {
+	if got := rankOnly(m.checkRank("p", "main1", "score")); got != 0 {
 		t.Errorf("measured: still ranked %d", got)
 	}
 }
@@ -635,7 +635,7 @@ func TestMainTestsRetestRanksAsMain(t *testing.T) {
 	main := strings.TrimSpace(out)
 	rank := -1
 	m.Retest = func(p core.Project, sha, _ string, _ core.Check, _ bool) bool {
-		rank = m.checkRank(p.Name, sha, "retest")
+		rank = rankOnly(m.checkRank(p.Name, sha, "retest"))
 		return true
 	}
 	c, err := m.mainTests(p, main, "exit 1")
@@ -645,7 +645,25 @@ func TestMainTestsRetestRanksAsMain(t *testing.T) {
 	if !c.OK || rank != rankMain {
 		t.Fatalf("ok %v, retest ranked %d", c.OK, rank)
 	}
-	if got := m.checkRank(p.Name, main, "test"); got != 0 {
+	if got := rankOnly(m.checkRank(p.Name, main, "test")); got != 0 {
 		t.Fatalf("answered: still ranked %d", got)
+	}
+}
+
+func rankOnly(r int, _ time.Time) int { return r }
+
+// Within a rank a check carries its task's age, so a head that resolved a
+// merge conflict goes ahead of newer tasks' checks (issue #1893).
+func TestCheckRankCarriesTaskAge(t *testing.T) {
+	m, _, _ := helperRig(t)
+	old := time.Now().Add(-48 * time.Hour).UTC()
+	m.mu.Lock()
+	m.tasks["old"] = &Task{ID: "old", Project: "p", SHA: "s1", Stage: StageTesting, Aim: AimFix, Created: old}
+	m.mu.Unlock()
+	if r, first := m.checkRank("p", "s1", "test"); r != rankFix || !first.Equal(old) {
+		t.Errorf("ranked %d at %v, want %d at %v", r, first, rankFix, old)
+	}
+	if _, first := m.checkRank("p", "nobody", "test"); !first.IsZero() {
+		t.Errorf("a sha no task holds carries %v", first)
 	}
 }

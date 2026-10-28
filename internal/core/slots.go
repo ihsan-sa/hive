@@ -13,11 +13,12 @@ import (
 // order they asked, so a burst of checks waits its turn instead of piling
 // onto the machine together; a higher rank (Prioritize) goes ahead of that
 // line, but never past one that has waited slotPatience unless it ranks
-// urgent. Its size is read at every hand-off, so a changed setting holds from
-// the next start; one already running is never stopped.
+// urgent; within either, the oldest work (First) goes first. Its size is
+// read at every hand-off, so a changed setting holds from the next start;
+// one already running is never stopped.
 type Slots struct {
 	size     func() int // <= 0: no limit
-	rank     func(project, sha, kind string) int
+	rank     func(project, sha, kind string) (int, time.Time)
 	urgent   int // > 0: a rank this high goes first even past the patience
 	patience time.Duration
 
@@ -33,6 +34,7 @@ type SlotUse struct {
 	Kind    string    `json:"kind"`
 	Since   time.Time `json:"since"` // when it started, or began waiting
 	Rank    int       `json:"rank,omitempty"`
+	First   time.Time `json:"first,omitzero"` // when the work it checks first asked, its place within a rank; zero: Since
 	id      int64
 }
 
@@ -60,12 +62,14 @@ func (s *Slots) Resize(size func() int) {
 }
 
 // Prioritize ranks each waiter from now on: a higher rank starts first, and
-// equal ranks in the order they asked. A rank of urgent or more (when > 0)
+// equal ranks by the time rank gives with it (a task's age, so a head that
+// resolved a conflict isn't sent to the back of the line, issue #1893), or in
+// the order they asked where it gives none. A rank of urgent or more (when > 0)
 // goes first even past a waiter out of patience, so it must be rare enough
 // never to starve the line. rank is called without the slots' lock, as a
 // check asks and again at every Fill, so it may read what it likes but
 // never calls back into the slots.
-func (s *Slots) Prioritize(rank func(project, sha, kind string) int, urgent int) {
+func (s *Slots) Prioritize(rank func(project, sha, kind string) (int, time.Time), urgent int) {
 	s.mu.Lock()
 	s.rank, s.urgent = rank, urgent
 	s.mu.Unlock()
@@ -78,17 +82,22 @@ func (s *Slots) Fill() {
 	s.mu.Lock()
 	rank, waiting := s.rank, append([]slotWait(nil), s.waiting...)
 	s.mu.Unlock()
-	ranks := map[int64]int{}
+	type place struct {
+		rank  int
+		first time.Time
+	}
+	ranks := map[int64]place{}
 	if rank != nil {
 		for _, w := range waiting {
-			ranks[w.id] = rank(w.Project, w.SHA, w.Kind)
+			r, first := rank(w.Project, w.SHA, w.Kind)
+			ranks[w.id] = place{r, first}
 		}
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for i := range s.waiting {
-		if r, ok := ranks[s.waiting[i].id]; ok {
-			s.waiting[i].Rank = r
+		if p, ok := ranks[s.waiting[i].id]; ok {
+			s.waiting[i].Rank, s.waiting[i].First = p.rank, p.first
 		}
 	}
 	s.fill()
@@ -106,13 +115,13 @@ func (s *Slots) Take(project, sha, kind string) (release func(), ok bool) {
 	s.mu.Lock()
 	rank := s.rank
 	s.mu.Unlock()
-	r := 0
+	r, first := 0, time.Time{}
 	if rank != nil {
-		r = rank(project, sha, kind)
+		r, first = rank(project, sha, kind)
 	}
 	s.mu.Lock()
 	slotSeq++
-	w := slotWait{SlotUse{Project: project, SHA: sha, Kind: kind, Since: time.Now().UTC(), Rank: r, id: slotSeq}, make(chan bool, 1)}
+	w := slotWait{SlotUse{Project: project, SHA: sha, Kind: kind, Since: time.Now().UTC(), Rank: r, First: first, id: slotSeq}, make(chan bool, 1)}
 	s.waiting = append(s.waiting, w)
 	s.fill()
 	s.mu.Unlock()
@@ -149,18 +158,16 @@ func (s *Slots) Drop(project, sha string) int {
 	return n
 }
 
-// fill starts the highest-ranked, then oldest, waiters while there is room;
-// the oldest goes first once it has waited past the patience, unless an
-// urgent one waits. The caller holds s.mu.
+// fill starts the waiters first in line (order) while there is room. The
+// caller holds s.mu.
 func (s *Slots) fill() {
 	for len(s.waiting) > 0 {
 		if n := s.size(); n > 0 && len(s.running) >= n {
 			return
 		}
 		next := 0
-		patient := time.Since(s.waiting[0].Since) >= s.patience // waiters keep the order they asked
 		for i, w := range s.waiting {
-			if w.Rank > s.waiting[next].Rank && (!patient || s.isUrgent(w.Rank)) {
+			if s.order(w.SlotUse, s.waiting[next].SlotUse) < 0 {
 				next = i
 			}
 		}
@@ -171,6 +178,27 @@ func (s *Slots) fill() {
 		w.ready <- true
 	}
 }
+
+// order compares two waiters' places in line: an urgent rank first, then
+// those that have waited past the patience, then by rank; within each, the
+// oldest work (First) first. Under a long line every waiter is past the
+// patience, so ranks no longer pass it, but a task's re-asked check still
+// goes ahead of newer tasks'.
+func (s *Slots) order(a, b SlotUse) int {
+	key := func(u SlotUse) int {
+		switch {
+		case s.isUrgent(u.Rank):
+			return math.MaxInt
+		case time.Since(u.Since) >= s.patience:
+			return math.MaxInt - 1
+		}
+		return u.Rank
+	}
+	return cmp.Or(cmp.Compare(key(b), key(a)), a.first().Compare(b.first()))
+}
+
+// first is when the work u checks first asked, for its place within a rank.
+func (u SlotUse) first() time.Time { return cmp.Or(u.First, u.Since) }
 
 func (s *Slots) isUrgent(rank int) bool { return s.urgent > 0 && rank >= s.urgent }
 
@@ -192,16 +220,7 @@ func (s *Slots) State() (running, waiting []SlotUse) {
 	for _, w := range s.waiting {
 		waiting = append(waiting, w.SlotUse)
 	}
-	key := func(u SlotUse) int {
-		switch {
-		case s.isUrgent(u.Rank):
-			return math.MaxInt
-		case time.Since(u.Since) >= s.patience:
-			return math.MaxInt - 1 // waited long enough: in the order they asked
-		}
-		return u.Rank
-	}
-	slices.SortStableFunc(waiting, func(a, b SlotUse) int { return cmp.Compare(key(b), key(a)) })
+	slices.SortStableFunc(waiting, s.order)
 	return running, waiting
 }
 

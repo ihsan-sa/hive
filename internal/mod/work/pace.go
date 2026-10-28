@@ -251,7 +251,7 @@ func (m *Module) checkSlots() int {
 }
 
 // Check ranks: main's own measurement goes first, then a fix's, then the
-// rest in the order they asked. Main's score and size of 282991d7 waited
+// rest; within a rank, the oldest task's first (checkRank). Main's score and size of 282991d7 waited
 // 2h16m behind PR checks, and keep/revert, the release and the next baseline
 // with them (issue #1078).
 const (
@@ -292,22 +292,25 @@ func RankWhy(r int) string {
 }
 
 // checkRank ranks a check of sha on project: main's being measured, or by
-// the task whose head it is.
-func (m *Module) checkRank(project, sha, _ string) int {
+// the task whose head it is, with that task's age for its place within the
+// rank. A head that resolved a merge conflict keeps the task's place instead
+// of going behind every check that asked since: under a long line it waited
+// hours, main moved and it conflicted again (issue #1893).
+func (m *Module) checkRank(project, sha, _ string) (int, time.Time) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.measuring[project+"@"+sha] > 0 {
-		return rankMain
+		return rankMain, time.Time{}
 	}
 	for _, t := range m.tasks {
 		if t.Project == project && t.SHA == sha && !t.Terminal() {
 			if t.Fix() {
-				return rankFix
+				return rankFix, t.Created
 			}
-			return 0
+			return 0, t.Created
 		}
 	}
-	return 0
+	return 0, time.Time{}
 }
 
 // paceChecks moves the checks' limit and starts the checks it now has room for.
