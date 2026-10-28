@@ -158,6 +158,10 @@ func TestOpenModelTurn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Its /tmp is a folder on disk no other run can read, not memory.
+	if spec.Tmp != filepath.Join(c.WS.RunPrivate(r.ID), "tmp") {
+		t.Errorf("turn /tmp = %q", spec.Tmp)
+	}
 	all := strings.Join(spec.Env, "\n")
 	raw, _ := os.ReadFile(c.Runs.openKeyFile(r.ID))
 	if strings.Contains(all, "sk-or-test") || !strings.Contains(all, "HIVE_OPEN_KEY_FILE=/hive/home/.hive-open/key") || string(raw) != "sk-or-test" {
