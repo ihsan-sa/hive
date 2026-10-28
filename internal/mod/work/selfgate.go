@@ -91,7 +91,13 @@ type gateRun struct {
 // went back). A fix passes straight on, and so does a head the person landed
 // at this main while the gate couldn't judge there (askGateFix).
 func (m *Module) recursiveGate(t *Task, p core.Project, main string) (bool, error) {
-	if !p.Self || !t.Gain() || m.C.Effects.Approved("gate", p.Name, t.SHA+"@"+main) {
+	if !p.Self || !t.Gain() {
+		return false, nil
+	}
+	if t.Checkpoint != "" { // opened while it was a fix; part of a gain never merges
+		return true, m.dropCheckpoint(t, p, noBankGain)
+	}
+	if m.C.Effects.Approved("gate", p.Name, t.SHA+"@"+main) {
 		return false, nil
 	}
 	// A measured verdict against an older main still counts while main's
@@ -295,9 +301,9 @@ func (m *Module) startGate(t *Task, p core.Project, main, key, out string) {
 }
 
 // slotAheadLocked says why t leaves a free gate slot to an older PR in its
-// project's merge line that waits for one, or "" (issue #1794): first come
-// was first served, so the line's front, back from testing as main moved,
-// lost each freed slot to whoever looked first. m.mu is held.
+// project that waits for one, or "" (issue #1794): first come was first
+// served, so the oldest, back from testing as main moved, lost each freed
+// slot to whoever looked first. m.mu is held.
 func (m *Module) slotAheadLocked(t *Task) string {
 	var ahead *Task
 	for _, u := range m.tasks {
@@ -309,7 +315,7 @@ func (m *Module) slotAheadLocked(t *Task) string {
 	if ahead == nil {
 		return ""
 	}
-	return fmt.Sprintf("#%d (%s) is ahead of it in the merge line and takes the next one", ahead.PR.Number, core.Clip(ahead.Label(), 80))
+	return fmt.Sprintf("#%d (%s) is ahead of it in line for the gate and takes the next one", ahead.PR.Number, core.Clip(ahead.Label(), 80))
 }
 
 // lookingLocked says task id's steps still look on their own: its next look

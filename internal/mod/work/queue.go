@@ -5,9 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
-	"path"
-	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -27,33 +24,20 @@ import (
 // measured (docs/research/forced.md). Nothing here stops a worker that has
 // started.
 //
-// A brief that only changes module prompts (every path it names is a .md
-// file under modules/) is quick: it goes first in line, after those the lead
-// started now, and may start past the pace while no other quick brief is
-// working, since a prompt edit takes a worker little time and plan. It still
-// waits on a strained machine and on a plan near its end.
-//
 // A worker that has gone quiet (it keeps ending turns without finishing)
 // counts toward no one's max_workers until it resumes.
 
 // Queued reports whether t is waiting for a worker.
 func (t Task) Queued() bool { return t.Stage == StageQueued || t.Stage == StageIssued }
 
-// inLine sorts waiting tasks: those the lead started now first, then quick
-// ones, then those filed overdue ago, oldest first, then those the lead
-// ordered, in its order, then the rest as filed.
+// inLine sorts waiting tasks: those the lead started now first, then those
+// filed overdue ago, oldest first, then those the lead ordered, in its
+// order, then the rest as filed.
 func (m *Module) inLine(q []Task) {
-	quick := map[string]bool{}
-	for _, t := range q {
-		quick[t.ID] = m.quick(t)
-	}
 	sort.SliceStable(q, func(i, j int) bool {
 		a, b := q[i], q[j]
 		if a.Now != b.Now {
 			return a.Now
-		}
-		if quick[a.ID] != quick[b.ID] {
-			return quick[a.ID]
 		}
 		if a.Overdue() != b.Overdue() {
 			return a.Overdue()
@@ -84,46 +68,11 @@ func (t Task) Overdue() bool {
 	return t.Queued() && !t.Created.IsZero() && time.Since(t.Created) >= overdue
 }
 
-// quick reports whether t's brief only changes module prompts: it names at
-// least one path, and every path-like word in it is a .md file under modules/
-// (one that doesn't exist yet counts) or a merge=union file in the clone. A
-// package, a directory, a code file or a file still to be made, named
-// alongside a prompt, makes it an ordinary brief.
-func (m *Module) quick(t Task) bool {
-	root := m.C.WS.Project(t.Project)
-	if !core.Exists(root) { // the queue reads the clone before any worker has synced it
-		if p, ok := m.C.Projects.Get(t.Project); !ok || m.C.Effects.Clone(p) != nil {
-			return false
-		}
-	}
-	text := t.Title + "\n" + t.Done + "\n" + t.Known
-	var union []attrRule
-	read, n := false, 0
-	for _, p := range pathLike.FindAllString(text, -1) {
-		p = path.Clean(strings.TrimRight(strings.TrimPrefix(p, "./"), "."))
-		switch {
-		case p == ".." || strings.HasPrefix(p, "../"): // never looked up outside the clone
-			return false
-		case strings.HasPrefix(p, "modules/") && path.Ext(p) == ".md":
-			n++
-		default:
-			if !read {
-				union, read = unionRules(root), true
-			}
-			fi, err := os.Lstat(filepath.Join(root, filepath.FromSlash(p)))
-			if err != nil || fi.IsDir() || !isUnion(union, p) {
-				return false
-			}
-		}
-	}
-	return n > 0
-}
-
 // admit decides which waiting tasks start a worker now, and why each other
 // one waits. tasks is every task Tick looks at.
 func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]string) {
 	cfg := m.C.WS.LoadConfig()
-	working, quickWorking := 0, 0
+	working := 0
 	var ahead, line []Task // ahead: being worked on, or being started right now
 	m.mu.Lock()
 	for _, t := range tasks {
@@ -145,11 +94,6 @@ func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]str
 		// a conflict, with their worker if need be.
 	}
 	m.mu.Unlock()
-	for _, t := range ahead {
-		if m.quick(t) {
-			quickWorking++
-		}
-	}
 	m.inLine(line)
 	// A strained machine lets one task a pass go to an executor module with
 	// room (machineHold); the executor is asked at most once a pass.
@@ -162,27 +106,12 @@ func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]str
 		}
 		return *roomOK
 	}
-	// Finishing beats starting: while checks wait for a slot, the machine
-	// is theirs. A new worker would load it further and pull the checks'
-	// limit back (88 checks waited, 44 tasks sat in testing for hours).
-	_, checksWait := m.C.Effects.Slots.State()
-	checksHold := len(checksWait) > 0
-	// planOK says the plan has room for a quick brief past the pace: read
-	// once, on need.
-	var planOK *bool
-	plan := func() bool {
-		if planOK == nil {
-			ok := m.planSpent(cfg) == ""
-			planOK = &ok
-		}
-		return *planOK
-	}
 	// decide sorts the line at limit, and says whether a brief waits on the
 	// limit itself: only then may the pace grow, as a held brief would leave
 	// a new slot empty.
 	decide := func(limit int) (start map[string]bool, wait map[string]string, capped bool) {
 		start, wait = map[string]bool{}, map[string]string{}
-		working, quickWorking := working, quickWorking
+		working := working
 		// The reason is saved with the task, so it names the limit but not
 		// its live value: the pace moved about every minute under load, and
 		// each move re-saved every waiting task with its whole brief (one
@@ -193,23 +122,17 @@ func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]str
 		}
 		hold := machineHold(strained, loaded, cmp.Or(cfg.MaxWorkers, defaultWorkers), elsewhere)
 		for _, t := range line {
-			quick := m.quick(t)
 			held := "" // asked only of a task nothing else holds back
 			switch {
 			case t.Held:
 				wait[t.ID] = "held by " + cmp.Or(t.HeldBy, "the lead")
-			case working >= limit && (!quick || quickWorking > 0 || !plan()):
+			case working >= limit:
 				wait[t.ID], capped = full, true
-			case checksHold && !t.Now:
-				wait[t.ID] = "waiting: checks wait for the machine"
 			case func() bool { held = hold(working); return held != "" }():
 				wait[t.ID] = "waiting: " + steady(held)
 			default:
 				start[t.ID] = true
 				working++
-				if quick {
-					quickWorking++
-				}
 			}
 		}
 		return start, wait, capped
@@ -219,7 +142,7 @@ func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]str
 	limit := m.paceWorkers(cfg, working, false)
 	start, wait, capped := decide(limit)
 	if capped {
-		if l := m.paceWorkers(cfg, working, !checksHold); l != limit {
+		if l := m.paceWorkers(cfg, working, true); l != limit {
 			start, wait, _ = decide(l)
 		}
 	}
@@ -259,85 +182,6 @@ func (m *Module) quiet(t Task) bool {
 
 // pathLike is a word that reads as a path in the project.
 var pathLike = regexp.MustCompile(`[A-Za-z0-9_.\-]+(?:/[A-Za-z0-9_.\-]+)+`)
-
-// attrRule is one .gitattributes line that sets or clears merge: union is
-// whether it makes the files it matches merge as union.
-type attrRule struct {
-	pattern string
-	union   bool
-}
-
-// unionRules are the .gitattributes lines in the clone root that touch the
-// merge attribute, in file order. Only the root file is read, and macros
-// ([attr]) and quoted patterns are skipped.
-func unionRules(root string) []attrRule {
-	b, err := core.SafeRead(filepath.Join(root, ".gitattributes"), 1<<20)
-	if err != nil {
-		return nil
-	}
-	var out []attrRule
-	for _, line := range strings.Split(string(b), "\n") {
-		f := strings.Fields(line)
-		if len(f) < 2 || strings.HasPrefix(f[0], "#") || strings.HasPrefix(f[0], "!") || strings.HasPrefix(f[0], "[attr]") || strings.HasPrefix(f[0], `"`) {
-			continue // git ignores negative patterns
-		}
-		for _, attr := range f[1:] {
-			switch {
-			case attr == "merge=union":
-				out = append(out, attrRule{f[0], true})
-			case attr == "merge" || attr == "-merge" || attr == "!merge" || strings.HasPrefix(attr, "merge="):
-				out = append(out, attrRule{f[0], false})
-			}
-		}
-	}
-	return out
-}
-
-// isUnion reports whether the clone path p merges as union: the last rule
-// that matches it decides, as in git.
-func isUnion(rules []attrRule, p string) bool {
-	union := false
-	for _, r := range rules {
-		if attrMatch(r.pattern, p) {
-			union = r.union
-		}
-	}
-	return union
-}
-
-// attrMatch reports whether the clone path p matches a .gitattributes
-// pattern: one without a slash matches the file's name at any depth, one with
-// a slash the path from the root, where "**" stands for any number of
-// directories.
-func attrMatch(pat, p string) bool {
-	if strings.HasSuffix(pat, "/") {
-		return false // matches only directories, and attributes don't recurse
-	}
-	if !strings.Contains(pat, "/") {
-		ok, _ := path.Match(pat, path.Base(p))
-		return ok
-	}
-	return matchSegs(strings.Split(strings.TrimPrefix(pat, "/"), "/"), strings.Split(p, "/"))
-}
-
-func matchSegs(pat, segs []string) bool {
-	if len(pat) == 0 {
-		return len(segs) == 0
-	}
-	if pat[0] == "**" {
-		for i := 0; i <= len(segs); i++ {
-			if matchSegs(pat[1:], segs[i:]) {
-				return true
-			}
-		}
-		return false
-	}
-	if len(segs) == 0 {
-		return false
-	}
-	ok, _ := path.Match(pat[0], segs[0])
-	return ok && matchSegs(pat[1:], segs[1:])
-}
 
 // opQueue shows the queue, and with arguments sets its order or holds briefs.
 func (m *Module) opQueue(r core.Run, args json.RawMessage) (any, error) {
