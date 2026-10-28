@@ -73,6 +73,9 @@ func Main(argv []string) int {
 		return 0
 	}
 	op := argv[0]
+	if op == "heavy" {
+		return Heavy(argv[1:])
+	}
 	args, err := parseArgs(argv[1:])
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "hive agent:", err)
@@ -195,6 +198,9 @@ A value of @path reads that file. Common ops:
   feedback  --text "..." [--about "agents/worker.md"]   what about the Hive got in your way, for the person
   feedback  --fixed <feedback id> --task <task id>   that task fixes it: it closes when the task lands
   schedule  --in 2h --text "..."                 a wake-up message to yourself
+  heavy     --what "the test suite" -- cmd args   run a heavy command (a test suite, a router, a build)
+                                                 once the machine has room: it waits while others run
+                                                 and the machine is strained, at most --patience (10m)
   status                                         projects, work in flight, scores
   github    --pr N | --checks sha | --annotations id | --path "repos/o/r/..." [--repo o/r]
                                                  GitHub's API on the person's login, cached; never curl api.github.com
