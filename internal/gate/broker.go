@@ -702,13 +702,13 @@ var names = map[string]bool{"owner": true, "defaultBranchRef": true, "parent": t
 // repository (an issue a pull request closes, a sub-issue's parent, a
 // cross-reference) or a person (an author, a reviewer, an assignable user),
 // so what's below one is read as if it were elsewhere, whatever it is.
-var nameScalars = map[string]bool{"id": true, "login": true, "name": true, "nameWithOwner": true, "slug": true, "__typename": true,
+var nameScalars = map[string]bool{"id": true, "databaseId": true, "login": true, "name": true, "nameWithOwner": true, "slug": true, "__typename": true,
 	"totalCount": true, "hasNextPage": true, "hasPreviousPage": true, "endCursor": true, "startCursor": true}
 
 // repoScalars are what gh reads of a repository's parent (RepositoryInfo,
 // for pr create) besides its name. The side's repositories are fresh and
 // can't be forked into, so there is none.
-var repoScalars = map[string]bool{"description": true, "hasIssuesEnabled": true, "hasWikiEnabled": true, "viewerPermission": true}
+var repoScalars = map[string]bool{"sshUrl": true, "description": true, "hasIssuesEnabled": true, "hasWikiEnabled": true, "viewerPermission": true}
 
 // leaves allows s, which leaves the repository, only nameScalars below it,
 // through names.

@@ -546,7 +546,9 @@ func TestBrokerReadsNoContentBeyondTheRepository(t *testing.T) {
 		`{ ` + r + `{ headRepository: parent { description owner { login } } } }`:                                 true,
 		`{ ` + r + `{ pullRequest(number:1){ headRepository { description } } } }`:                                false,
 		`mutation { addSubIssue(input:{issueId:"I_1", subIssueId:"I_2"}){ clientMutationId } }`:                   false,
-		`{ rateLimit { limit cost remaining resetAt } }`:                                                          true,
+		// newer gh asks these (seen from gh on ubuntu-latest)
+		`{ ` + r + `{ parent { databaseId sshUrl } pullRequest(number:1){ assignees(first:5){ nodes { databaseId } } headRepository { nameWithOwner } } } }`: true,
+		`{ rateLimit { limit cost remaining resetAt } }`: true,
 	} {
 		body, _ := json.Marshal(map[string]string{"query": q})
 		if why := b.graphqlOK(body); (why == "") != ok {
