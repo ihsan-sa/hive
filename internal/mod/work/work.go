@@ -1904,10 +1904,11 @@ func (m *Module) test(t *Task, p core.Project) error {
 			delete(m.mainFails, p.Name)
 		}
 		m.mu.Unlock()
+		own := ownReds(c, mc)
 		switch {
-		case !mc.OK && !core.NoWorse(c, mc):
+		case !mc.OK && len(own) == 0 && !core.NoWorse(c, mc):
 			return m.waitOnMain(t, p, main, mc)
-		case !mc.OK:
+		case !mc.OK && len(own) == 0:
 			// Every test it fails main fails too: it is no worse than main,
 			// so it goes on rather than wait for the green it may be the fix
 			// for (a revert of what turned main red, say). Journaled every
@@ -1918,11 +1919,22 @@ func (m *Module) test(t *Task, p core.Project) error {
 			}
 			m.save(t, "its tests fail on "+core.Short(t.SHA)+" only where main's fail at "+core.Short(main)+" ("+core.Clip(strings.Join(core.RedKeys(c.FullOutput()), ", "), 400)+"), so it is no worse than main and goes on")
 		default:
-			if ok, err := m.catchUp(t, p, main, "tests failed but pass on main"); ok || err != nil {
+			// Main green, or red but passing whole packages this change
+			// fails in: those failures are the change's own, so it goes
+			// back to its worker rather than wait on main's fix.
+			why, onMain := "tests failed but pass on main", ""
+			if !mc.OK {
+				if strings.HasPrefix(t.Reason, "waiting on main") {
+					t.Reason = ""
+				}
+				why = "tests failed where main's pass at " + core.Short(main) + " (" + core.Clip(strings.Join(own, ", "), 300) + "), though main is red elsewhere"
+				onMain = "\n\nMain is red at " + core.Short(main) + " too, but only elsewhere: it passes every package where these fail (" + core.Clip(strings.Join(own, ", "), 400) + "), so they are this change's. Main's own failures aren't yours to fix."
+			}
+			if ok, err := m.catchUp(t, p, main, why); ok || err != nil {
 				return err
 			}
 			if t.Retested != t.SHA && m.failsAgain(p, t.SHA, cfg.Test, c) {
-				return m.sendBack(t, p, "The tests failed on your commit "+core.Short(t.SHA)+", and again when only the failing tests ran once more:\n\n"+core.ClipEnds(c.Output, 3000))
+				return m.sendBack(t, p, "The tests failed on your commit "+core.Short(t.SHA)+", and again when only the failing tests ran once more:\n\n"+core.ClipEnds(c.Output, 3000)+onMain)
 			}
 			if t.Retested != t.SHA {
 				// A slow, busy machine fails a test CI passes: what failed
@@ -1933,10 +1945,10 @@ func (m *Module) test(t *Task, p core.Project) error {
 				if strings.HasPrefix(t.Reason, "waiting on main") {
 					t.Reason = ""
 				}
-				m.save(t, "its tests failed on "+core.Short(t.SHA)+" ("+core.Clip(strings.Join(core.RedKeys(c.FullOutput()), ", "), 300)+") while main's pass, so they run once more before it counts")
+				m.save(t, "its tests failed on "+core.Short(t.SHA)+" ("+core.Clip(strings.Join(core.RedKeys(c.FullOutput()), ", "), 300)+") where main's pass, so they run once more before it counts")
 				return nil
 			}
-			return m.sendBack(t, p, "The tests failed on your commit "+core.Short(t.SHA)+":\n\n"+core.ClipEnds(c.Output, 3000))
+			return m.sendBack(t, p, "The tests failed on your commit "+core.Short(t.SHA)+":\n\n"+core.ClipEnds(c.Output, 3000)+onMain)
 		}
 	}
 	ch, err := m.C.Effects.Classify(p, main, t.SHA)
@@ -2139,8 +2151,33 @@ func (m *Module) mainTests(p core.Project, main, command string) (core.Check, er
 	return c, nil
 }
 
+// ownReds names the failures of a red run c, beside main's red run mc,
+// that are the change's own: each in a go package main's run passed whole
+// ("ok pkg"). Main red in one place says nothing of a package it passed, so
+// such a change is sent back rather than held till main goes green. A
+// failure in a package main fails, or didn't report (its run stopped short),
+// can't be told apart and isn't named.
+func ownReds(c, mc core.Check) []string {
+	if mc.OK || c.OK {
+		return nil
+	}
+	passed := map[string]bool{}
+	for _, l := range strings.Split(mc.FullOutput(), "\n") {
+		if g := core.GoPkgLine.FindStringSubmatch(l); g != nil && g[1] == "ok" {
+			passed[g[2]] = true
+		}
+	}
+	var own []string
+	for _, k := range core.RedKeys(c.FullOutput()) {
+		if pkg, _, ok := strings.Cut(k, " "); ok && passed[pkg] {
+			own = append(own, k)
+		}
+	}
+	return own
+}
+
 // waitOnMain holds a red change while main's own tests are red, since the
-// failure can't be told apart from main's. Main's failure is raised once per
+// failure can't be told apart from main's (ownReds names none). Main's failure is raised once per
 // main commit, not once per waiting change; when main goes green the change
 // is brought up to date and tested again.
 func (m *Module) waitOnMain(t *Task, p core.Project, main string, mc core.Check) error {
