@@ -44,9 +44,14 @@ type Spec struct {
 	Stdin    string   `json:"stdin"`     // host path
 	Stdout   string   `json:"stdout"`    // host path, appended
 	StopFile string   `json:"stop_file"` // host path; when present the command is killed
-	Network  bool     `json:"network"`   // outbound through the egress proxy
-	Allow    []string `json:"allow"`     // hosts the proxy lets through; nil is every public host
-	Local    []string `json:"local"`     // services on this machine the person granted, loopback ip:port (LocalGrant's)
+	// Tmp, when set, is a host folder on disk the sandbox binds at /tmp,
+	// emptied before the command and removed after it: a tmpfs /tmp is
+	// memory that can't be reclaimed, only swapped, and go build's work dirs
+	// and test binaries go there. Unset, /tmp is a tmpfs capped at TmpfsSize.
+	Tmp     string   `json:"tmp,omitempty"`
+	Network bool     `json:"network"` // outbound through the egress proxy
+	Allow   []string `json:"allow"`   // hosts the proxy lets through; nil is every public host
+	Local   []string `json:"local"`   // services on this machine the person granted, loopback ip:port (LocalGrant's)
 	// Guard is host paths no host interpreter's install may contain, as
 	// its bind would expose them: the workspace and the folders covered in it
 	// (Workspace.Guarded). Every mount's host path is guarded as well. A spec
@@ -229,6 +234,14 @@ func ReadSpec(path string) (Spec, error) {
 	}
 	return s, json.Unmarshal(raw, &s)
 }
+
+// ShmSize caps a sandbox's /dev/shm, and TmpfsSize its /tmp where the spec
+// gives no folder on disk for it (a runner's turn, a setup probe), so a full
+// one fails the command that filled it rather than the machine's memory.
+const (
+	ShmSize   = 1 << 30
+	TmpfsSize = 4 << 30
+)
 
 // InsideEnv is the standard environment inside the sandbox.
 func InsideEnv(home string, network bool) []string {
