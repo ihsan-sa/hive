@@ -1158,6 +1158,8 @@ func (m *Module) revive() {
 			said = "brought back: it stopped only because GitHub rate-limited the Hive's writes"
 		case !slow && core.TimedOut(why):
 			said = "brought back: it stopped only because a call was killed by its timeout while the machine was loaded"
+		case core.BaseMoved(why):
+			said = "brought back: it stopped only because main moved while it merged"
 		default:
 			continue
 		}
@@ -2490,6 +2492,12 @@ func (m *Module) merge(t *Task, p core.Project) error {
 	if errors.Is(err, core.ErrHeadMoved) {
 		// A push since this look: no failure, the next look sees the new head.
 		m.save(t, "not readied: "+core.Clip(err.Error(), 300))
+		return nil
+	}
+	if errors.Is(err, core.ErrBaseMoved) {
+		// Main moved mid-merge, as it does in a batch: no failure, the next
+		// look merges onto the new main.
+		m.save(t, "main moved as it merged, so it tries again: "+core.Clip(err.Error(), 300))
 		return nil
 	}
 	var np *core.NeedsPerson
