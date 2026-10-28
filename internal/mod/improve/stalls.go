@@ -55,13 +55,10 @@ func waitCause(reason string) string {
 }
 
 // checked is the commit whose test t waits on in its stage: its head in
-// testing, its head merged with main in merging (work.mergedTests).
+// testing.
 func checked(t work.Task) string {
-	switch {
-	case t.Stage == work.StageTesting:
+	if t.Stage == work.StageTesting {
 		return t.SHA
-	case t.Stage == work.StageMerging && t.MergedTest != "":
-		return t.MergedTest
 	}
 	return ""
 }

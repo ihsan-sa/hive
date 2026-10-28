@@ -484,6 +484,44 @@ func TestStaleModuleCacheRunsAgain(t *testing.T) {
 	if ch := c.Effects.RunCheck(p, main, "test", check("example.com/tool@latest")); !ch.OK || len(specs) != 1 || sharedIn(specs[0]) {
 		t.Fatalf("a later check of the same go.sum ran %d time(s) (%+v)", len(specs), ch)
 	}
+
+	// The mark lapses: a day on, checks of the same go.sum share the cache again.
+	var own string
+	for _, n := range markers() {
+		if strings.HasSuffix(n, ownModules) {
+			own = filepath.Join(c.WS.goSums(), n)
+		}
+	}
+	old := time.Now().Add(-ownModulesFor - time.Minute)
+	os.Chtimes(own, old, old)
+	specs = nil
+	if ch := c.Effects.RunCheck(p, main, "test", "exit 0"); !ch.OK || len(specs) != 1 || !sharedIn(specs[0]) {
+		t.Fatalf("after the mark lapsed: %d run(s), shared %v (%+v)", len(specs), len(specs) > 0 && sharedIn(specs[0]), ch)
+	}
+	if Exists(own) {
+		t.Fatal("a lapsed mark stayed")
+	}
+
+	// A check that fails fetching its own too is the commit's red: no mark.
+	specs = nil
+	failing := `[ "$GOPROXY" = off ] && echo "go: example.com/tool@latest: ` + staleModules + `"; exit 1`
+	if ch := c.Effects.RunCheck(p, main, "test", failing); ch.OK || len(specs) != 2 || !strings.Contains(ch.Output, "example.com/tool@latest") {
+		t.Fatalf("failing both ways: %d run(s) (%+v)", len(specs), ch)
+	}
+	if slices.ContainsFunc(markers(), func(n string) bool { return strings.HasSuffix(n, ownModules) }) {
+		t.Fatal("a check that failed fetching its own marked its go.sum")
+	}
+
+	// What a failing test printed indented (a nested go it ran) is its own:
+	// no second run, no mark.
+	specs = nil
+	nested := `printf -- '--- FAIL: TestNested (0.00s)\n    x_test.go:9: go: example.com/y@v1.0.0: ` + staleModules + `\n'; exit 1`
+	if ch := c.Effects.RunCheck(p, main, "test", nested); ch.OK || len(specs) != 1 {
+		t.Fatalf("a test's own words: %d run(s) (%+v)", len(specs), ch)
+	}
+	if slices.ContainsFunc(markers(), func(n string) bool { return strings.HasSuffix(n, ownModules) }) {
+		t.Fatal("a test's own words marked its go.sum")
+	}
 }
 
 // A test that fails because the disk filled under it is can't-run when the
