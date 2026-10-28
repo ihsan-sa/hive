@@ -549,6 +549,8 @@ func checkLine(waiting []core.SlotUse) string {
 		line := u.Project + " " + core.Short(u.SHA) + " " + u.Kind
 		if why := work.RankWhy(u.Rank); why != "" {
 			line += " (" + why + ")"
+		} else if u.Quick() {
+			line += " (quick: ~" + u.Expect.Round(time.Second).String() + ")"
 		}
 		next = append(next, line)
 	}
