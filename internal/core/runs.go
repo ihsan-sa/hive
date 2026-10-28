@@ -188,6 +188,11 @@ func (r *Run) Nice() int {
 // CheckNice is the nice value checks and gate runs get: under every run.
 const CheckNice = 15
 
+// CantStartHere begins the reason a worker's run ends blocked when its
+// harness can't start on this machine (its program isn't installed, or no
+// key is stored for it): an infra outcome, not a verdict on the model.
+const CantStartHere = "can't start here: "
+
 // LeadMemFloorMB is the one hold a lead's turn has: below this much
 // available memory its harness would be killed before it answered, so it
 // waits (saying why once, as run.held) rather than crash. Pressure never
@@ -1936,6 +1941,11 @@ func (rs *Runs) endTurn(r Run) {
 		// Under WSL, sandbox-exec's own early failures go to .wsl.
 		out := rs.ws.TurnOut(r.ID, r.Turn)
 		errTail := strings.TrimSpace(tail(out+".err", 400) + "\n" + tail(out+".wsl", 400))
+		if r.Role == "worker" && strings.Contains(errTail, "not found on this machine") {
+			// Its harness's program isn't installed: no retry can start it.
+			te.Status, te.Reason = StatusBlocked, CantStartHere+Clip(errTail, 300)
+			break
+		}
 		te.Offline = Unreachable(service(r.Harness), errTail)
 		te.Status, te.ParkedUntil = StatusParked, time.Now().Add(backoff(cur.Retries))
 		te.Reason = "interrupted; retrying on its checkout" + suffix(errTail)
@@ -2359,6 +2369,11 @@ func (rs *Runs) launch(r Run, cfg Config) {
 		}()
 	}
 	login, tok, err := rs.pickLogin(r.Harness, r.Model, codexHome, !sb.Isolated(), Reserved(r.Role))
+	if err != nil && r.Role == "worker" && errors.Is(err, ErrNoKey) {
+		// No key is stored for its harness: no retry can start it.
+		rs.SetStatus(r.ID, StatusBlocked, CantStartHere+"login for "+HarnessName(r.Harness)+": "+err.Error())
+		return
+	}
 	if err != nil {
 		until := rs.freeAt(r.Harness, r.Model, Reserved(r.Role))
 		if !until.After(time.Now()) {
