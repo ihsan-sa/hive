@@ -90,3 +90,40 @@ func TestStrainedTurnGoesToAnExecutor(t *testing.T) {
 		t.Errorf("run.turn_started says where %q", where)
 	}
 }
+
+// An away run's turn goes to an executor module with room though the machine
+// isn't strained, and with no room runs here rather than waiting.
+func TestAwayTurnGoesToAnExecutorFirst(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("sleep stands in for the turn")
+	}
+	c, _ := testHive(t)
+	cfg := c.WS.LoadConfig()
+	cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax = 0, 0, 0
+	c.Runs.sandbox = func() (sandbox.Sandbox, error) { return elsewhereSB{agent: sleeper(t), spec: new(sandbox.Spec)}, nil }
+	var spec sandbox.Spec
+	room := true
+	c.Runs.Executor = func() (sandbox.Sandbox, string) {
+		if !room {
+			return nil, ""
+		}
+		return elsewhereSB{agent: sleeper(t), spec: &spec}, "iiks1"
+	}
+	r, err := c.Runs.Start(RunSpec{ID: "w", Role: "worker", Harness: "fake", Checkout: t.TempDir(), Away: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Runs.launch(r, cfg)
+	if got, _ := c.Runs.Get("w"); got.Status != StatusRunning || got.Where != "iiks1" {
+		t.Fatalf("an away turn: %s %q where %q", got.Status, got.Reason, got.Where)
+	}
+	room = false
+	r, err = c.Runs.Start(RunSpec{ID: "w2", Role: "worker", Harness: "fake", Checkout: t.TempDir(), Away: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Runs.launch(r, cfg)
+	if got, _ := c.Runs.Get("w2"); got.Status != StatusRunning || got.Where != "" {
+		t.Fatalf("an away turn with no room elsewhere: %s %q where %q", got.Status, got.Reason, got.Where)
+	}
+}
