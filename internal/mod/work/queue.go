@@ -151,7 +151,17 @@ func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]str
 		}
 	}
 	m.inLine(line)
-	strain, _ := machine(cfg)
+	// A strained machine lets one task a pass go to an executor module with
+	// room (machineHold); the executor is asked at most once a pass.
+	strained, loaded := core.Strained(cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax), core.Loaded(cfg.LoadMax)
+	var roomOK *bool
+	elsewhere := func() bool {
+		if roomOK == nil {
+			ok := m.C.Runs.Elsewhere()
+			roomOK = &ok
+		}
+		return *roomOK
+	}
 	// Finishing beats starting: while checks wait for a slot, the machine
 	// is theirs. A new worker would load it further and pull the checks'
 	// limit back (88 checks waited, 44 tasks sat in testing for hours).
@@ -181,8 +191,10 @@ func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]str
 		if cfg.MaxWorkers == 0 || limit < cfg.MaxWorkers {
 			full = "waiting for a worker (at the pace)"
 		}
+		hold := machineHold(strained, loaded, cmp.Or(cfg.MaxWorkers, defaultWorkers), elsewhere)
 		for _, t := range line {
 			quick := m.quick(t)
+			held := "" // asked only of a task nothing else holds back
 			switch {
 			case t.Held:
 				wait[t.ID] = "held by " + cmp.Or(t.HeldBy, "the lead")
@@ -190,8 +202,8 @@ func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]str
 				wait[t.ID], capped = full, true
 			case checksHold && !t.Now:
 				wait[t.ID] = "waiting: checks wait for the machine"
-			case loadHolds(strain, working, cmp.Or(cfg.MaxWorkers, defaultWorkers)):
-				wait[t.ID] = "waiting: " + steady(strain)
+			case func() bool { held = hold(working); return held != "" }():
+				wait[t.ID] = "waiting: " + steady(held)
 			default:
 				start[t.ID] = true
 				working++
@@ -212,6 +224,31 @@ func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]str
 		}
 	}
 	return start, wait
+}
+
+// machineHold says, for each task in line in turn with working workers at
+// work, why the machine holds it back, or "". A machine over load_max alone
+// (loaded) holds a new worker only from start on, as the few workers there
+// aren't what loads it, and never sends one elsewhere, since launch would
+// run it here; one task a pass goes past a strained machine while an
+// executor module has room, since launch hands a strained turn to it.
+func machineHold(strained, loaded string, start int, elsewhere func() bool) func(working int) string {
+	asked := false
+	return func(working int) string {
+		if strained == "" {
+			if loaded != "" && working >= start {
+				return loaded
+			}
+			return ""
+		}
+		if !asked {
+			asked = true
+			if elsewhere() {
+				return ""
+			}
+		}
+		return strained
+	}
 }
 
 // quiet reports whether t's worker keeps ending turns without finishing.

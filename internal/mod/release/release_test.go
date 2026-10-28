@@ -470,6 +470,11 @@ func TestRootReleaseOnTheHivesReads(t *testing.T) {
 	}
 	seated(m, "a2", "d2", core.PanelSeat(1), "land")
 	m.AfterKept("hive", "m2")
+	if len(n.got) != 0 {
+		t.Fatalf("two lands with a panel seat still reading released a root change: %v", n.got)
+	}
+	seated(m, "a2", "d2", core.PanelSeat(2), "fix")
+	m.AfterKept("hive", "m2")
 	body := n.got["v0.0.1"]
 	if !strings.Contains(body, "install/root.sh) passed the security seat") || strings.Contains(body, "The person released it") {
 		t.Fatalf("the release should say the Hive's reads passed its root paths: %q", body)
@@ -541,7 +546,7 @@ func TestRootReadCoversTheWholeDiff(t *testing.T) {
 	m, n, _, land := selfHive(t)
 	m.C.J.MustAppend("effect.merged", map[string]any{"project": "hive", "pr": 2, "sha": "a2", "merge_sha": "m2", "root": []string{"install/root.sh", ".github/CODEOWNERS"}, "diff": "d2"})
 	land("a2", "r2")
-	for _, seat := range []string{core.SeatSecurity, core.PanelSeat(0), core.PanelSeat(1)} {
+	for _, seat := range []string{core.SeatSecurity, core.PanelSeat(0), core.PanelSeat(1), core.PanelSeat(2)} {
 		seated(m, "a2", "d2", seat, "land")
 	}
 	m.C.J.MustAppend("effect.merged", map[string]any{"project": "hive", "pr": 3, "sha": "a3", "merge_sha": "m3", "root": []string{".github/CODEOWNERS"}, "diff": "d3"})
@@ -1629,5 +1634,49 @@ func TestReleaseFallForwardHeldEndsTheWait(t *testing.T) {
 	m.retryWaiting()
 	if journaledN(m, "alert.raised") != alerts || len(n.got) != 0 {
 		t.Fatalf("a wait the hold ended was retried: %v", n.got)
+	}
+}
+
+// ed8e06d8 was kept but had no effect.merged (its merge's gh call failed
+// though the merge went through), so its release was refused and nothing
+// tried again: the newest kept Hive merge since is tried on Tick, once, and
+// released when its checks pass.
+func TestRefusedUnmergedTriesTheNextMerge(t *testing.T) {
+	m, n, merged, land := selfHive(t)
+	linear(m)
+	inHistory := m.Contains
+	m.Contains = func(p core.Project, sha, at string) (bool, error) {
+		if sha == "m2" { // on main, between m1 and m3, though no effect.merged names it
+			return at == "m3", nil
+		}
+		return inHistory(p, sha, at)
+	}
+	merged(1, "a1", "m1")
+	land("a1", "r1")
+	for range 2 {
+		m.AfterKept("hive", "m2")
+	}
+	m.retryWaiting()
+	if len(n.got) != 0 || journaledN(m, "release.unmerged") != 1 || !strings.Contains(alertText(m), "no release at m2: it is not a merge") {
+		t.Fatalf("the refusal: releases %v, %d release.unmerged, alert %q", n.got, journaledN(m, "release.unmerged"), alertText(m))
+	}
+	merged(3, "a3", "m3")
+	land("a3", "r3")
+	n.SetChecks("me/hive", "m3", core.CheckRun{Name: "test", State: core.CheckPass})
+	m.retryWaiting()
+	if len(n.got) != 0 {
+		t.Fatalf("released at a merge not kept yet: %v", n.got)
+	}
+	keptAt(m, "m3", true)
+	m.retryWaiting()
+	if len(n.got) != 1 || !strings.Contains(n.got["v0.0.1"], "#3 at a3") || !strings.Contains(n.got["v0.0.1"], "#1 at a1") {
+		t.Fatalf("the next merge wasn't released: %v", n.got)
+	}
+	m.retryWaiting()
+	if len(n.got) != 1 {
+		t.Fatalf("released again: %v", n.got)
+	}
+	if sha, next := m.unmerged("hive"); sha != "" || next != "" {
+		t.Fatalf("the refusal still waits after a release: %q %q", sha, next)
 	}
 }

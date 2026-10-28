@@ -33,6 +33,8 @@ var Scopes = map[string][]string{
 	"status":  {"/api/events"},
 	"idle":    {"/api/events"},                    // hive.idle
 	"kb":      {"/api/kb/notes", "/api/kb/dream"}, // read the shared notes, apply a consolidation pass
+	// executor: the core hands it turns (Executor); it needs no API path
+	"executor": {},
 }
 
 // every module may ping and report.
@@ -56,6 +58,7 @@ type Runner struct {
 	missing map[string]bool
 	tries   map[string]int // reviews started this life, by module and commit
 	busy    bool
+	rooms   map[string]roomAnswer // executors' last answers to `room`, by module
 }
 
 type child struct {
@@ -126,21 +129,9 @@ func (r *Runner) Tick() {
 // A module with neither a git source nor a .git folder was put there by the
 // person and runs as is; a clone with no source record is read like any other.
 func (r *Runner) cleared(name string, m modules.Module) (string, string) {
-	if (m.Source.Source == "" || m.Source.Source == "builtin") && !core.Exists(filepath.Join(m.Dir, ".git")) {
-		return "local", ""
-	}
-	commit := m.Source.Commit
-	if commit == "" { // installed before the commit was recorded, or never recorded
-		var err error
-		if commit, err = core.Git(m.Dir, "rev-parse", "HEAD"); err != nil {
-			return "", "its commit is unknown: " + err.Error()
-		}
-	}
-	if v := m.Source.Review; v != nil && v.Commit == commit {
-		if v.Vote != "approve" {
-			return commit, "declined by its review: " + v.Reason
-		}
-		return commit, ""
+	commit, decided, why := recorded(m)
+	if decided {
+		return commit, why
 	}
 	// A review that ends with no vote (it failed or crashed) is run again, up
 	// to three times in one life of the daemon; restarting it reads it again.
@@ -234,11 +225,8 @@ func copyTree(from, to string) error {
 // start launches the program with a fresh token, its own HOME and no
 // credentials from the daemon's environment.
 func (r *Runner) start(name string, c *child, m modules.Module) {
-	argv := append([]string{}, m.Exec...)
-	if strings.HasPrefix(argv[0], ".") {
-		argv[0] = filepath.Join(m.Dir, argv[0])
-	}
-	home := filepath.Join(r.C.WS.Hive(), "modules", name)
+	argv := Argv(m)
+	home := Home(r.C.WS, name)
 	os.MkdirAll(home, 0o700)
 	var tok [16]byte
 	rand.Read(tok[:])

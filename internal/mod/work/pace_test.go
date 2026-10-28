@@ -360,6 +360,38 @@ func TestCheckRankFixes(t *testing.T) {
 	}
 }
 
+// The merge line's front tests its head merged with main, a sha no task
+// holds as its head: it goes ahead of every task's own check, behind main's
+// measurement, and drops back once done or gone (issue #1766).
+func TestCheckRankMergeFront(t *testing.T) {
+	m, _, _ := helperRig(t)
+	m.mu.Lock()
+	m.tasks["front"] = &Task{ID: "front", Project: "p", SHA: "head", Stage: StageMerging}
+	m.tasks["fix"] = &Task{ID: "fix", Project: "p", SHA: "s1", Stage: StageTesting, Aim: AimFix}
+	m.mergeRuns = map[string]*mergeRun{"front": {key: "head+main1", main: "main1", sha: "merged"}}
+	m.mu.Unlock()
+	if got := m.checkRank("p", "merged", "test"); got != rankMerge || got <= m.checkRank("p", "s1", "test") {
+		t.Errorf("the front's merged test ranked %d, a fix's check %d", got, m.checkRank("p", "s1", "test"))
+	}
+	if RankWhy(rankMerge) == "" {
+		t.Error("the merge front's rank says nothing")
+	}
+	if got := m.checkRank("other", "merged", "test"); got != 0 {
+		t.Errorf("another project's merge ranked %d", got)
+	}
+	done := m.MeasuringMain("p", "main2")
+	if got := m.checkRank("p", "main2", "score"); got <= rankMerge {
+		t.Errorf("main's measurement ranked %d, not ahead of the merge front", got)
+	}
+	done()
+	m.mu.Lock()
+	m.mergeRuns["front"].done = true
+	m.mu.Unlock()
+	if got := m.checkRank("p", "merged", "test"); got != 0 {
+		t.Errorf("a finished merged test still ranked %d", got)
+	}
+}
+
 // Main's own measurement goes ahead of every task's check while it runs,
 // and keeps its place once done (issue #1078).
 func TestCheckRankMainFirst(t *testing.T) {
@@ -489,6 +521,27 @@ func TestPacePullsBackAheadOfTheWeek(t *testing.T) {
 	read(0.75, 6*24*time.Hour)
 	if why := m.planSpent(cfg); !strings.Contains(why, "ahead of the clock") {
 		t.Fatalf("a week 75%% spent in its first day: %q", why)
+	}
+}
+
+// The pull-back reads route by route: on 10-27 Claude's week went from 26%
+// to 65% at 14% of it passed, and it never fired, as a free model first on
+// another project's route reads on the clock (issue #1797).
+func TestPacePullsBackWithAFreeModelOnAnotherRoute(t *testing.T) {
+	m := queueRig(t)
+	cfg := m.C.WS.LoadConfig()
+	pick := cfg.Route("worker", "")[0]
+	cfg.Models = map[string]core.OpenModel{"gpt-oss": {Endpoint: "https://openrouter.ai/api/v1", Model: "openai/gpt-oss-120b:free", Key: true}}
+	cfg.Projects = map[string]core.ProjectSettings{"deck": {Routes: map[string][]string{"worker": {"open:gpt-oss", pick.Harness + ":" + pick.Model}}}}
+	week := time.Now().Add(6 * 24 * time.Hour)
+	m.C.J.MustAppend("plan.usage", core.Plan{Harness: pick.Harness, Limit: harness.RateLimit{Status: "allowed", ResetsAt: week, Window: "seven_day",
+		Windows: map[string]harness.Window{"seven_day": {Utilization: 0.6, ResetsAt: week}}}})
+	if why := m.planSpent(cfg); !strings.Contains(why, "ahead of the clock") {
+		t.Fatalf("the workspace's route 45%% ahead, a free model on deck's: %q", why)
+	}
+	cfg.Routes = map[string][]string{"worker": {"open:gpt-oss"}}
+	if why := m.planSpent(cfg); why != "" {
+		t.Fatalf("every route has a free model: %q", why)
 	}
 }
 
