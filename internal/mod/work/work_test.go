@@ -817,9 +817,9 @@ func TestScoredBriefCarriesTheGoal(t *testing.T) {
 	}
 }
 
-// A review's brief ends with main's standing rules, lessons included, so a
-// revert the Hive made (no worker brief to quote them) still carries them; a
-// project with none of the files gets nothing appended.
+// A review's brief ends with main's docs/REVIEW.md in full and points at
+// goals and lessons by path rather than carrying them; a project with none of
+// the files gets nothing appended.
 func TestReviewRulesFromMain(t *testing.T) {
 	m, p := rigAt(t, `{"test":"true"}`)
 	if r := m.reviewRules(p, "HEAD"); r != "" {
@@ -836,8 +836,8 @@ func TestReviewRulesFromMain(t *testing.T) {
 		}
 	}
 	r := m.reviewRules(p, "HEAD")
-	i, j, k := strings.Index(r, "## `docs/REVIEW.md` on main\n\n# Review\n\nsimple wins"), strings.Index(r, "## `.hive/goals.md` on main"), strings.Index(r, "## `.hive/lessons.md` on main\n\n# Lessons\n\n- don't do that again")
-	if i < 0 || j < i || k < j {
+	i, j := strings.Index(r, "## `docs/REVIEW.md` on main\n\n# Review\n\nsimple wins"), strings.Index(r, "`.hive/goals.md` and `.hive/lessons.md` are in your checkout")
+	if i < 0 || j < i || strings.Contains(r, "ship it") || strings.Contains(r, "don't do that again") {
 		t.Fatalf("rules:\n%s", r)
 	}
 }

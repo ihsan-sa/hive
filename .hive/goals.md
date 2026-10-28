@@ -30,11 +30,11 @@ For a candidate change:
 
 Anything may be used for this: nested sandboxed Hives, rollback to an earlier version. Don't narrow it to one test path.
 
-Where it stands (2026-10-25 ~20:00Z): the gate runs on every change to the Hive taken as a gain, under bubblewrap, always on a local org so far, and a judge on another model (docs/judge.md) now decides keep or rollback with the gate's numbers as one thing it weighs. The first milestone is not met yet: no kept change has been released and run here.
+Where it stands (2026-10-27): the gate runs on every change to the Hive taken as a gain, under bubblewrap, always on a local org so far, and a judge on another model (docs/judge.md) decides keep or rollback with the gate's numbers as one thing it weighs. The first milestone is met by the record, pending the person's word: changes the Hive proposed itself were kept by the gate on merit, merged, released, and H0 runs a release that carries them. The one gap: auto_update is off in this install, so those releases and H0's updates went through the lead's warden requests (no person in between), not the release loop on its own. Whether that counts is the person's call.
 
 - The gate is #146 (merged 2026-10-24 ~14:03Z) and has run on every change since #390 (14:56Z). This machine forbids a sandbox inside a sandbox (kernel.apparmor_restrict_unprivileged_userns=1 refuses nested bwrap), so each child Hive runs in a sibling sandbox, not a nested one.
 - 59 verdicts to 2026-10-25 20:00Z: 5 keep, 32 rollback, 22 could not run. Most rollbacks are "nothing moved beyond the noise" or e2e flakes (.hive/lessons.md). Of the keeps, 6861de9da, 915afeb06 and c99cedc3e won only because the control flaked on e2e (3/3 against 2/3), and 2e4786cce was a tie when ties were allowed. 0fde98f1c (2026-10-25 17:05Z) is the first keep on merit: it fixed a test that fails on the control (internal/mod/work TestQueueSameFileApartFunctions), and the judge agreed the gain was real.
-- What stands between that and the milestone is the release: H0 runs v0.1.110; v0.1.111 failed its update test, and from v0.1.112 every cut has stopped at the release scan, which refuses to pass until the person gives its handle list (HIVE_SCAN_HANDLES).
+- The milestone's path, by the record: #868 (four loop-latency fixes a step-back proposed) was kept by the gate on merit (benchmark 5.5s against the control's 11.6s, 2026-10-26 08:47Z), merged as 1f2f0d0 (23:08Z) and shipped in v0.1.120, which H0 took 2026-10-27 02:18Z. The step-back of 2026-10-27 14:10Z lists the gate-kept, Hive-proposed #868, #931, #800, #794, #831 and #923 as in v0.1.130; H0 ran v0.1.130 from 12:20Z and v0.1.132 since 14:18Z. Releases were cut through the lead's warden requests; the release-scan block from v0.1.112 no longer stands.
 - The org leg: the test org is Hive-RSI-Lab, which owns the fork Hive-RSI-Lab/hive that the gate's reach check must handle. /home/hive/h0-gate.token is gone; test runs make their own private repos in Hive-RSI-Lab instead (see Standing asks).
 - Alongside: Codex can be picked per role (#398); the optional modules have their own projects (dispatch: Hive-RSI-Lab/hive-dispatch, deck: Hive-RSI-Lab/hive-deck, trials: Hive-RSI-Lab/hive-trials); the Claude login renews itself (#323).
 
@@ -54,7 +54,7 @@ The milestone: show, on held-out real work, that the Hive after its own improvem
 
 It has its own project, hive-eval, whose `.hive/goals.md` holds the same ask. It measures the loop above rather than replacing it: the first milestone comes first, and changes to the Hive that this one needs (a frozen mode, budget accounting, counting interventions) count as work for this project.
 
-Where it stands (2026-10-26): hive-eval exists with its goals and a README; no pilot has run yet.
+Where it stands (2026-10-27): hive-eval's dev pilot (261027-dev-pilot) ran 9 counted runs, one per arm on each of three tasks: frozen 3/3, plain 3/3, current 0/3. Current's runs gave up because GitHub answered 403 on check runs for /home/hive/h0-org.token, so the comparison is void until that token gets Checks: read (asked of the person in the project chat). Runs lost to a Claude login about to expire were run again and not counted; arm runs that die on infrastructure are to be counted invalid, not failed (hive-eval #57).
 
 ## Where it leads: something new built every day
 
