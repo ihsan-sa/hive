@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"syscall"
 	"testing"
+	"time"
 )
 
 // A check's record says what its command wrote to the disk, so a sweep can
@@ -12,7 +13,7 @@ import (
 // test, not in the test's workspace, which may be on a tmpfs.
 func TestCheckRecordsItsDisk(t *testing.T) {
 	c, _, p, main := setupProject(t)
-	dir, err := os.MkdirTemp(".", "disk-test-")
+	dir, err := diskTestDir()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -32,4 +33,18 @@ func TestCheckRecordsItsDisk(t *testing.T) {
 	if got, _ := c.Effects.GetCheck(p.Name, main, "test"); got.DiskWrote != ch.DiskWrote {
 		t.Errorf("journalled %d bytes written, returned %d", got.DiskWrote, ch.DiskWrote)
 	}
+}
+
+// diskTestDir makes the folder beside the test that a disk test writes to.
+// A run cut short never reaches its cleanup, so it first removes the
+// folders earlier runs left behind (.gitignore keeps them out of commits
+// meanwhile); a folder under ten minutes old may be a parallel run's.
+func diskTestDir() (string, error) {
+	old, _ := filepath.Glob("disk-test-*")
+	for _, d := range old {
+		if fi, err := os.Stat(d); err == nil && fi.IsDir() && time.Since(fi.ModTime()) > 10*time.Minute {
+			os.RemoveAll(d)
+		}
+	}
+	return os.MkdirTemp(".", "disk-test-")
 }
