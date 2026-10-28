@@ -569,6 +569,9 @@ type Brief struct {
 	// Apart files an agent's brief as its own task even when it matches an
 	// open one (join.go).
 	Apart bool `json:"apart"`
+	// Now puts it first in line as it is filed, as queue's now does; only a
+	// pivot (the improve module's) sets it.
+	Now bool `json:"-"`
 }
 
 // taken is the brief's aim and why as File takes them, or why it can't be
@@ -608,8 +611,12 @@ func (m *Module) File(b Brief) (Task, error) {
 		return Task{}, err
 	}
 	t := &Task{Aim: aim, AimWhy: core.Clip(why, 300), ID: core.NewID(), Project: b.Project, Title: strings.TrimSpace(b.Title), Done: b.Done, Known: b.Known,
-		From: b.From, Chat: b.Chat, Thread: b.Thread, Kind: "work", Stage: StageNew, Inputs: b.Inputs, Model: b.Model, Created: time.Now().UTC()}
-	m.save(t, "filed by "+b.From+", taken as "+t.AimWord())
+		From: b.From, Chat: b.Chat, Thread: b.Thread, Kind: "work", Stage: StageNew, Inputs: b.Inputs, Model: b.Model, Now: b.Now, Created: time.Now().UTC()}
+	note := "filed by " + b.From + ", taken as " + t.AimWord()
+	if t.Now {
+		note += ", first in line"
+	}
+	m.save(t, note)
 	return *t, nil
 }
 
@@ -1137,6 +1144,16 @@ func (m *Module) status(t *Task, p core.Project, number int, text string) {
 // errors. Only that reason is the Hive's own words: others quote reviewer
 // findings, which a worker's code can fill with anything.
 const gaveUpOnErrors = "gave up after repeated errors: "
+
+// HiveTrouble is why t stopped on the Hive's own trouble ("" when it
+// didn't): the pipeline gave up on its steps' errors (a forge refusing the
+// token, calls killed by their timeout), not on the worker's work.
+func HiveTrouble(t Task) string {
+	if t.Stage != StageStopped || t.ByPerson || !strings.HasPrefix(t.Reason, "gave up after ") {
+		return ""
+	}
+	return t.Reason
+}
 
 // revive brings back the tasks GitHub's rate limit stopped, from before it
 // was waited out, once the pause is over, and those stopped on calls killed
@@ -1910,7 +1927,7 @@ func (m *Module) test(t *Task, p core.Project) error {
 	}
 	t.setDiff(ch.DiffID)
 	switch {
-	case len(ch.Protected) > 0 && !m.C.Effects.Approved("merge", p.Name, t.SHA):
+	case len(ch.Protected) > 0 && !m.C.Effects.ApprovedDiff("merge", p.Name, t.SHA, ch.DiffID):
 		t.Stage = StagePerson
 		a := mergeAsk(t, p, ch)
 		// Saved before Weigh: a warden's answer may reach onPersonMerge first.
@@ -3802,7 +3819,11 @@ func (m *Module) onPersonMerge(a core.Ask) {
 		return
 	}
 	if a.Answer == "merge" || a.Answer == "yes" {
-		m.C.Effects.Approve("merge", t.Project, sha)
+		diff := ""
+		if sha == t.SHA {
+			diff = t.Diff // set from this head's Classify just before the ask
+		}
+		m.C.Effects.ApproveDiff("merge", t.Project, sha, diff)
 		t.Stage = StageTesting // test() routes to a read or the merge
 		m.save(&t, "the person approved")
 		return

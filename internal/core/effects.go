@@ -109,6 +109,12 @@ type Check struct {
 	Failed  []string  `json:"failed,omitempty"`   // the failing tests it names, read before the output is clipped
 	Keys    []string  `json:"keys,omitempty"`     // those tests with their packages (FailedTestKeys), when each can be placed
 	At      time.Time `json:"at"`
+	// DiskRead and DiskWrote are the bytes the check's command read from
+	// and wrote to the disk, every run of it together (sandbox.Disk; 0 where
+	// the platform doesn't count them), so the record says which checks load
+	// a disk-bound machine.
+	DiskRead  int64 `json:"disk_read,omitempty"`
+	DiskWrote int64 `json:"disk_wrote,omitempty"`
 }
 
 // Verdict is a reviewer's read of one commit.
@@ -242,12 +248,15 @@ func NewEffects(ws Workspace, j *Journal, forge Forge, sb func() (sandbox.Sandbo
 			k := pu.Project + "@" + pu.Branch
 			e.pushes[k] = append(slices.DeleteFunc(e.pushes[k], func(s string) bool { return s == pu.SHA }), pu.SHA)
 		case "effect.approved":
-			var a struct{ Kind, Project, SHA string }
+			var a struct{ Kind, Project, SHA, Diff string }
 			ev.Decode(&a)
 			if a.Kind == "" {
 				a.Kind = "merge"
 			}
 			e.approvals[a.Kind+":"+a.Project+"@"+a.SHA] = true
+			if a.Diff != "" {
+				e.approvals[a.Kind+":"+a.Project+"#"+a.Diff] = true
+			}
 		case "gate.judged":
 			var g GateResult
 			ev.Decode(&g)
@@ -439,7 +448,7 @@ func (e *Effects) Snapshot(p Project, r Run, base string) (string, error) {
 	work := sandbox.Mount{Host: r.Checkout, Inside: "/work", RW: true}
 	git := "git -c safe.directory='*' -c core.hooksPath=/dev/null -c user.name=Hive -c user.email=hive@localhost -C " + shq(sandbox.InsidePath(sb, work))
 	script := git + " add -A && { " + git + " diff --cached --quiet || " + git + " commit -q --no-verify -m 'what the run left'; }"
-	if code, out, err := e.runSandboxed(sb, r.Project, r.ID+"-snapshot", []sandbox.Mount{work}, script, false, 5*time.Minute, nil, 0); err != nil || code != 0 {
+	if code, out, err := e.runSandboxed(sb, r.Project, r.ID+"-snapshot", []sandbox.Mount{work}, script, false, 5*time.Minute, nil, 0, nil); err != nil || code != 0 {
 		return "", fmt.Errorf("could not commit what the run left: %v %s", err, Clip(out, 300))
 	}
 	return e.Extract(p, r, base)
@@ -464,7 +473,7 @@ func (e *Effects) ExtractInto(dir, lockKey string, r Run, base string) (string, 
 		rangeSpec = base + "..HEAD"
 	}
 	script := fmt.Sprintf("git -c safe.directory='*' -C %s bundle create %s %s", shq(sandbox.InsidePath(sb, work)), shq(bundle), rangeSpec)
-	code, logText, err := e.runSandboxed(sb, r.Project, r.ID+"-extract", []sandbox.Mount{work, outM}, script, false, 5*time.Minute, nil, 0)
+	code, logText, err := e.runSandboxed(sb, r.Project, r.ID+"-extract", []sandbox.Mount{work, outM}, script, false, 5*time.Minute, nil, 0, nil)
 	if err != nil {
 		return "", err
 	}
@@ -559,7 +568,9 @@ func (e *Effects) RunCheck(p Project, sha, kind, command string) Check {
 		if offline {
 			env = append(slices.Clone(build.env), mods.env...)
 		}
-		return e.runSandboxed(sb, p.Name, id, ms, guardProgram(command), true, 30*time.Minute, env, e.checkCacheCap())
+		var disk sandbox.Disk
+		defer func() { c.DiskRead, c.DiskWrote = c.DiskRead+disk.Read, c.DiskWrote+disk.Wrote }()
+		return e.runSandboxed(sb, p.Name, id, ms, guardProgram(command), true, 30*time.Minute, env, e.checkCacheCap(), &disk)
 	}
 	code, out, err := run(true)
 	if len(build.mounts) > 0 && code != 0 && strings.Contains(out, "GOCACHEPROG") {
@@ -963,8 +974,9 @@ func (e *Effects) dropCheckout(dir string) {
 // can't see when the project is isolated.
 // The command gets its own home under the cache folder, removed after; extra
 // is more environment where the sandbox has its own, and a capB over 0 ends
-// the command with ErrHomeFull once its home passes that many bytes.
-func (e *Effects) runSandboxed(sb sandbox.Sandbox, project, id string, mounts []sandbox.Mount, script string, network bool, timeout time.Duration, extra []string, capB int64) (int, string, error) {
+// the command with ErrHomeFull once its home passes that many bytes. A disk
+// that isn't nil gets what the command read from and wrote to the disk.
+func (e *Effects) runSandboxed(sb sandbox.Sandbox, project, id string, mounts []sandbox.Mount, script string, network bool, timeout time.Duration, extra []string, capB int64, disk *sandbox.Disk) (int, string, error) {
 	logDir := filepath.Join(e.ws.Hive(), "checks", project)
 	os.MkdirAll(logDir, 0o755)
 	logPath := filepath.Join(logDir, id+".log")
@@ -980,7 +992,7 @@ func (e *Effects) runSandboxed(sb sandbox.Sandbox, project, id string, mounts []
 		argv = hostShell(script)
 	}
 	spec := sandbox.Spec{ID: id, Argv: argv, Env: env, Cwd: sandbox.InsidePath(sb, mounts[0]), Mounts: mounts, Tools: e.tools(),
-		Stdout: logPath, StopFile: home + ".stop", Network: network, Allow: e.ws.LoadConfig().Egress.For("check"), Local: e.ws.LoadConfig().Egress.LocalAddrs(), Guard: e.ws.Guarded(), Cover: e.ws.Covered(), UID: os.Getuid(), GID: os.Getgid(), Nice: CheckNice}
+		Stdout: logPath, StopFile: home + ".stop", Network: network, Allow: e.ws.LoadConfig().Egress.For("check"), Local: e.ws.LoadConfig().Egress.LocalAddrs(), Guard: e.ws.Guarded(), Cover: e.ws.Covered(), UID: os.Getuid(), GID: os.Getgid(), Nice: CheckNice, Disk: disk}
 	over := watchHome(home, capB)
 	code, err := sb.Run(spec, timeout)
 	if over() && err == nil {
@@ -1238,14 +1250,30 @@ func DiffID(diff string) string {
 // head@main), while main itself fails in the gate.
 // The kinds stay apart, since a fast-forwarding forge merges a head as itself.
 func (e *Effects) Approve(kind, project, sha string) {
-	e.j.MustAppend("effect.approved", map[string]string{"kind": kind, "project": project, "sha": sha})
+	e.ApproveDiff(kind, project, sha, "")
+}
+
+// ApproveDiff records the approval of sha and of its own diff (DiffID): a
+// later head with the same own diff, main merged into it, needs no new yes.
+func (e *Effects) ApproveDiff(kind, project, sha, diff string) {
+	ev := map[string]string{"kind": kind, "project": project, "sha": sha}
+	if diff != "" {
+		ev["diff"] = diff
+	}
+	e.j.MustAppend("effect.approved", ev)
 }
 
 // Approved reports whether the person approved sha for kind.
 func (e *Effects) Approved(kind, project, sha string) bool {
+	return e.ApprovedDiff(kind, project, sha, "")
+}
+
+// ApprovedDiff reports whether the person approved sha, or a head with the
+// same own diff (DiffID; "" for none), for kind.
+func (e *Effects) ApprovedDiff(kind, project, sha, diff string) bool {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	return e.approvals[kind+":"+project+"@"+sha]
+	return e.approvals[kind+":"+project+"@"+sha] || diff != "" && e.approvals[kind+":"+project+"#"+diff]
 }
 
 // Pushed says whether the Hive pushed sha to branch, and whether it is the
@@ -1526,7 +1554,7 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 			}
 		}
 	}
-	if len(ch.Protected) > 0 && !e.Approved("merge", p.Name, m.SHA) {
+	if len(ch.Protected) > 0 && !e.ApprovedDiff("merge", p.Name, m.SHA, ch.DiffID) {
 		return "", &NeedsPerson{Reason: "it changes " + strings.Join(ch.Protected, ", ") + ", which needs an approval first"}
 	}
 	if !ch.Small && !e.readOK(p, ch, m.SHA) {
