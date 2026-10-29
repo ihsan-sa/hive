@@ -152,6 +152,11 @@ type Task struct {
 	// so long, however often main moves meanwhile.
 	MainWait   time.Time `json:"main_wait,omitempty"`
 	MainWaitOn string    `json:"main_wait_on,omitempty"`
+	// RedWait is when a red check on head RedWaitOn first waited for the
+	// head's other checks still running, so one that never ends holds the
+	// red back only so long.
+	RedWait   time.Time `json:"red_wait,omitempty"`
+	RedWaitOn string    `json:"red_wait_on,omitempty"`
 	// NoChecks is when head NoChecksOn was first seen with no forge check
 	// run at all while its required ones were awaited (head.go).
 	NoChecks   time.Time `json:"no_checks,omitempty"`
@@ -3171,6 +3176,22 @@ func (m *Module) forgeChecks(t *Task, p core.Project, main string) (bool, error)
 		m.hold(t, p, "waiting for the re-run of the forge's checks on "+core.Short(t.SHA)+" ("+core.CheckNames(which)+")")
 		return true, nil
 	}
+	// A red found while other checks on the head still run waits for them:
+	// the forge re-runs only a finished workflow run's failed jobs, so a red
+	// sent back now could be re-run neither here nor by rerun-checks, and
+	// the worker would see only part of what failed.
+	if st == core.CheckFail {
+		if going := pendingOf(raw); len(going) > 0 {
+			if t.RedWaitOn != t.SHA {
+				t.RedWait, t.RedWaitOn = time.Now().UTC(), t.SHA
+				m.save(t, "")
+			}
+			if time.Since(t.RedWait) < redWaitMax {
+				m.hold(t, p, "the forge's checks "+core.CheckNames(which)+" fail on "+core.Short(t.SHA)+"; waiting for the rest ("+core.CheckNames(going)+") to finish before the red is re-run or goes back")
+				return true, nil
+			}
+		}
+	}
 	var shared, byName, excused []string
 	var mainRuns []core.CheckRun
 	var at map[string]string
@@ -3409,6 +3430,7 @@ func (m *Module) retried(t *Task, which []core.CheckRun, tests core.TestsOf) {
 	// A wait on main belongs to one run of the checks: the re-run's red
 	// starts its own, not one already spent.
 	t.MainWait, t.MainWaitOn = time.Time{}, ""
+	t.RedWait, t.RedWaitOn = time.Time{}, ""
 	rt := &Retried{SHA: t.SHA}
 	for _, r := range which {
 		if r.State != core.CheckFail && r.State != core.CheckCantStart {
@@ -3504,6 +3526,21 @@ func (m *Module) warn(t *Task, p core.Project, warned []string) {
 
 // mainWaitMax is how long a red check waits on main's run of it.
 var mainWaitMax = 45 * time.Minute
+
+// redWaitMax is how long a red check waits for the other checks still
+// running on its head before it goes back regardless.
+var redWaitMax = time.Hour
+
+// pendingOf are the checks in runs still going.
+func pendingOf(runs []core.CheckRun) []core.CheckRun {
+	var going []core.CheckRun
+	for _, r := range runs {
+		if r.State == core.CheckPending {
+			going = append(going, r)
+		}
+	}
+	return going
+}
 
 // stillOnMain are the failed checks whose run on main is still going, or
 // was cancelled or couldn't start (no finished answer on main's recent

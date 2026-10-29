@@ -74,12 +74,19 @@ func rerunSpent(task *Task) {
 }
 
 // A forge check that fails on a change to code (a plain text file is data a
-// test may read), with no answer on main, is run once more; failing
-// again, it sends the change back as a red test would.
+// test may read), with no answer on main, waits for the head's other checks
+// to finish (the forge re-runs only a finished run), is run once more, and
+// failing again sends the change back as a red test would.
 func TestMergeForgeCheckFails(t *testing.T) {
 	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
 	toMerging(t, m, task, p)
-	red := []core.CheckRun{{Name: "test (macos-latest)", State: core.CheckFail, Detail: "failure", URL: "https://ci/1"}, {Name: "sandboxed-e2e", State: core.CheckPending}}
+	f.SetChecks(p.Repo, task.SHA, core.CheckRun{Name: "test (macos-latest)", State: core.CheckFail, Detail: "failure", URL: "https://ci/1"}, core.CheckRun{Name: "sandboxed-e2e", State: core.CheckPending})
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageMerging || task.Round != 0 || f.Reruns(p.Repo, task.SHA) != 0 || !strings.Contains(task.Reason, "waiting for the rest (sandboxed-e2e)") {
+		t.Fatalf("a red went on while a check still ran: stage %q, round %d, re-runs %d, reason %q", task.Stage, task.Round, f.Reruns(p.Repo, task.SHA), task.Reason)
+	}
+	m.later = map[string]time.Time{}
+	red := []core.CheckRun{{Name: "test (macos-latest)", State: core.CheckFail, Detail: "failure", URL: "https://ci/1"}, {Name: "sandboxed-e2e", State: core.CheckPass}}
 	f.SetChecks(p.Repo, task.SHA, red...)
 	mergeOnce(t, m, task, p)
 	// The forge re-runs nothing while sandboxed-e2e still runs: it waits.
@@ -105,6 +112,25 @@ func TestMergeForgeCheckFails(t *testing.T) {
 	}
 	if prState(t, f, task.PR.Number) != "OPEN" || alerts(m, "main-red") != 0 {
 		t.Fatal("a red check merged or raised main")
+	}
+}
+
+// A red waits for a check that never finishes on its head only redWaitMax,
+// then goes on as any red does.
+func TestMergeForgeCheckRedWaitEnds(t *testing.T) {
+	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
+	toMerging(t, m, task, p)
+	rerunSpent(task)
+	f.SetChecks(p.Repo, task.SHA, core.CheckRun{Name: "test", State: core.CheckFail, Detail: "failure", URL: "https://ci/1"}, core.CheckRun{Name: "stuck", State: core.CheckPending})
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageMerging || task.RedWaitOn != task.SHA || !strings.Contains(task.Reason, "waiting for the rest (stuck)") {
+		t.Fatalf("stage %q, waiting on %q, reason %q", task.Stage, task.RedWaitOn, task.Reason)
+	}
+	task.RedWait = time.Now().Add(-redWaitMax - time.Minute)
+	m.later = map[string]time.Time{}
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageWorking || task.Round != 1 || !strings.Contains(task.Findings, "test (failure)") {
+		t.Fatalf("stage %q, round %d, findings %q", task.Stage, task.Round, task.Findings)
 	}
 }
 
