@@ -224,6 +224,7 @@ with your run id.
                                                  run again, for a flake; at most 2 per head, the merge waits for them
   queue     [--order id,id] [--hold id] [--release id]   briefs waiting for a worker, in order
             [--now id --why "..."]               put it first in line
+                                                 any project's: --why on one not yours, on its record
   recheck   --task id [--back "..."]           a blocked or stopped task, or one stuck on its way to
                                                  the merge (say on a stale commit's checks), is pushed and
                                                  checked again from its head; --back sends its worker that

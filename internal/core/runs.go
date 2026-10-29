@@ -522,7 +522,32 @@ type Runs struct {
 	// when the ramp after it last let one start, and rampedAt when it last
 	// held one back (ramp).
 	heldAt, rampLast, rampedAt time.Time
+	rampWait                   map[string]rampWaiter // the runs waiting on the ramp
 }
+
+// rampWaiter is a run waiting on the ramp: whether it was sent back to its
+// work (Returned), when it was created, and when it last asked.
+type rampWaiter struct {
+	returned      bool
+	created, seen time.Time
+}
+
+// before says whether w goes ahead of o on the ramp: one sent back first,
+// then the oldest.
+func (w rampWaiter) before(o rampWaiter, id, oid string) bool {
+	if w.returned != o.returned {
+		return w.returned
+	}
+	if !w.created.Equal(o.created) {
+		return w.created.Before(o.created)
+	}
+	return id < oid
+}
+
+// rampSeen is how lately a run must have asked the ramp to be waiting on it:
+// a tick steps every run about once a second, so one not seen for this long
+// has started elsewhere, been held before it, or ended.
+var rampSeen = 10 * time.Second
 
 // rampStep is the least time between two turns starting after a strain hold
 // (ramp), so the readings see each before the next: on 10-28, the hold
@@ -538,18 +563,37 @@ func (rs *Runs) Holding() {
 	rs.mu.Unlock()
 }
 
-// ramp says whether a turn starting now waits for the ramp: after a strain
+// ramp says whether r's turn starting now waits for the ramp: after a strain
 // hold, turns start one a rampStep until none has waited on the ramp for two.
-func (rs *Runs) ramp(now time.Time) bool {
+// Each step goes to the waiting run first in line (rampWaiter.before): every
+// run is stepped in its own goroutine, so the step went to whichever asked
+// first after it, and from 04Z on 10-29 seven workers sent back to their tasks
+// took no turn in 4-7h while 28 newer runs took 46.
+func (rs *Runs) ramp(r Run, now time.Time) bool {
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
 	if now.Sub(rs.heldAt) > 2*rampStep && now.Sub(rs.rampedAt) > 2*rampStep {
+		clear(rs.rampWait)
 		return false
 	}
-	if now.Sub(rs.rampLast) < rampStep {
+	if rs.rampWait == nil {
+		rs.rampWait = map[string]rampWaiter{}
+	}
+	me := rampWaiter{returned: r.Returned, created: r.Created, seen: now}
+	rs.rampWait[r.ID] = me
+	ahead := false
+	for id, w := range rs.rampWait {
+		if now.Sub(w.seen) > rampSeen {
+			delete(rs.rampWait, id)
+		} else if id != r.ID && w.before(me, id, r.ID) {
+			ahead = true
+		}
+	}
+	if ahead || now.Sub(rs.rampLast) < rampStep {
 		rs.rampedAt = now
 		return true
 	}
+	delete(rs.rampWait, r.ID)
 	rs.rampLast = now
 	return false
 }
@@ -1562,7 +1606,8 @@ func (rs *Runs) Send(id, text string) error {
 
 // wake gives a run that ended blocked with a message waiting (often the
 // answer it was blocked on) the turn for it, rather than leaving it on a run
-// that takes no turns. One blocked for its Codex token stays blocked.
+// that takes no turns. One blocked for its Codex token, or whose checkout
+// is gone, stays blocked.
 // It is safe to call at any time: it reads the run afresh, so a caller's
 // earlier, stale look (Send's live check, endTurn's read) can't wake the
 // wrong run; on anything but a blocked run with a message waiting it does
@@ -1571,7 +1616,7 @@ func (rs *Runs) wake(id string) {
 	rs.waking.Lock() // Send and endTurn can both see it; it's woken once
 	defer rs.waking.Unlock()
 	r, ok := rs.Get(id)
-	if !ok || r.Status != StatusBlocked || len(r.Pending) == 0 || strings.HasPrefix(r.Reason, codexTokenStuck) || strings.HasPrefix(r.Reason, StoppedQuiet) {
+	if !ok || r.Status != StatusBlocked || len(r.Pending) == 0 || strings.HasPrefix(r.Reason, codexTokenStuck) || strings.HasPrefix(r.Reason, StoppedQuiet) || checkoutGone(r) {
 		return
 	}
 	rs.append("run.reopened", runNote{ID: id})
@@ -1597,11 +1642,20 @@ func (rs *Runs) Reopen(id, text string) error {
 	if err := rs.tokenStuck(r); err != nil {
 		return err
 	}
+	if r.Terminal() && checkoutGone(r) {
+		// Its task ended and its checkout went with it (issue #2008): a
+		// turn would fail in the sandbox and park for another, forever.
+		return fmt.Errorf("run %s has ended and its checkout %s is gone; it can't take another turn", id, r.Checkout)
+	}
 	rs.append("run.reopened", runNote{ID: id})
 	rs.append("run.queued", runNote{ID: id, Text: text})
 	rs.append("run.status", runNote{ID: id, Status: StatusIdle, Reason: "reopened"})
 	return nil
 }
+
+// checkoutGone reports a run whose checkout was removed (spent checkouts
+// go when their task ends). A run with no checkout of its own has none to lose.
+func checkoutGone(r Run) bool { return r.Checkout != "" && !Exists(r.Checkout) }
 
 // tokenStuck checks again that a Codex run's token folder is gone; if it still
 // won't delete, the run is blocked for it (once) and the error says why.
@@ -2080,6 +2134,10 @@ func (rs *Runs) endTurn(r Run) {
 			te.Reason = "usage limit; moving to another login"
 			te.Queue = []string{"Your last turn hit a usage limit, so your next turn runs on another login. Continue where you left off."}
 		}
+	case tl.Result == nil && checkoutGone(r):
+		// The turn couldn't start without its checkout, and no retry brings
+		// it back (removed after its task ended): the run ends here.
+		te.Status, te.Reason = StatusBlocked, "its checkout "+r.Checkout+" is gone, so it can't take another turn"
 	case tl.Result == nil:
 		// Under WSL, sandbox-exec's own early failures go to .wsl.
 		out := rs.ws.TurnOut(r.ID, r.Turn)
@@ -2416,7 +2474,7 @@ func (rs *Runs) launch(r Run, cfg Config) {
 			return
 		}
 	}
-	if !r.Lead() && elsewhere == nil && rs.ramp(time.Now()) {
+	if !r.Lead() && elsewhere == nil && rs.ramp(r, time.Now()) {
 		rs.holdTurn(r, "waiting: starting one turn at a time after the machine was strained")
 		return
 	}

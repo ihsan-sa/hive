@@ -1786,10 +1786,15 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	var flaky []string // a red local test run's known flakes, its only failures
-	if c, ok := e.GetCheck(p.Name, m.SHA, "test"); !ok {
+	var flaky []string                       // a red local test run's known flakes, its only failures
+	tested := e.Config(p, m.Main).ForgeTests // the forge's checks are the test there
+	switch c, ok := e.GetCheck(p.Name, m.SHA, "test"); {
+	case len(tested) > 0:
+		// No local run is needed, and one there is no gate: the forge's
+		// checks below must pass, these among them.
+	case !ok:
 		return "", refuse("%s: no test run recorded for that exact commit", short(m.SHA))
-	} else if !c.OK {
+	case !c.OK:
 		// Red only where main's own run at m.Main is red too: no worse than
 		// main, as the work module's testing stage let it on, so the fix for
 		// a red main can land. Or red only in quarantined tests, which count
@@ -1840,6 +1845,7 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 		return "", err
 	}
 	runs, req, warned := Advisory(p, runs, e.RequiredChecks(p, m.Main), e.AdvisoryChecks(p, m.Main))
+	req = ProjectConfig{ForgeTests: tested}.WithForgeTests(req)
 	st, which := ChecksState(runs, req)
 	var shared, excused []string
 	var answer map[string]string // check -> the older main commit its answer came from

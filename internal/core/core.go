@@ -125,9 +125,13 @@ func (c *Core) agentBinary(exe string) string {
 	src, err1 := os.Stat(exe)
 	cur, err2 := os.Stat(dst)
 	if err1 == nil && (err2 != nil || cur.Size() != src.Size() || cur.ModTime().Before(src.ModTime())) {
-		if raw, err := os.ReadFile(exe); err == nil {
-			os.MkdirAll(c.WS.Bin(), 0o755)
-			tmp := dst + ".tmp-" + NewID()[14:]
+		os.MkdirAll(c.WS.Bin(), 0o755)
+		tmp := dst + ".tmp-" + NewID()[14:]
+		if linkTestBinary(exe, tmp) {
+			if os.Rename(tmp, dst) != nil {
+				os.Remove(tmp)
+			}
+		} else if raw, err := os.ReadFile(exe); err == nil {
 			if os.WriteFile(tmp, raw, 0o755) == nil {
 				os.Remove(dst + ".old")
 				os.Rename(dst, dst+".old") // a running copy can be renamed, not overwritten
@@ -141,6 +145,14 @@ func (c *Core) agentBinary(exe string) string {
 		return dst
 	}
 	return exe
+}
+
+// linkTestBinary hardlinks a test binary in place of the copy: every test's
+// workspace took its own (13-50 MB), and internal/mod/work's tests wrote
+// 13 MB a test that way, gigabytes a run on a disk the checks share. The
+// daemon still copies, so rebuilding hive never changes a running agent's.
+func linkTestBinary(exe, tmp string) bool {
+	return !durable && os.Link(exe, tmp) == nil
 }
 
 // Tick advances runs on one read of the config; modules tick themselves
