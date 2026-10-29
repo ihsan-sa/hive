@@ -978,7 +978,7 @@ func TestLeadClosesPRWaitingInCheckLine(t *testing.T) {
 	if err := m.test(task, p); err != nil { // queues its test behind the step
 		t.Fatal(err)
 	}
-	for end := time.Now().Add(10 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+	for end := time.Now().Add(time.Minute); ; time.Sleep(10 * time.Millisecond) {
 		if _, w := m.C.Effects.Slots.State(); len(w) == 1 {
 			break
 		}
@@ -990,12 +990,18 @@ func TestLeadClosesPRWaitingInCheckLine(t *testing.T) {
 	m.busy[task.ID] = true // a step holds it, as Tick does
 	m.mu.Unlock()
 	stepCopy := *task
-	start := time.Now()
-	if _, err := m.ClosePR(task.ID, "lead", "a duplicate", false); err != nil {
-		t.Fatalf("close refused while a step holds the task: %v", err)
-	}
-	if d := time.Since(start); d > 10*time.Second {
-		t.Fatalf("close took %v", d)
+	// The step holds the task until after the close, so a close that waited
+	// on it would never return; no wall-clock bound beyond that, as a loaded
+	// machine's local forge alone can take seconds.
+	closed := make(chan error, 1)
+	go func() { _, err := m.ClosePR(task.ID, "lead", "a duplicate", false); closed <- err }()
+	select {
+	case err := <-closed:
+		if err != nil {
+			t.Fatalf("close refused while a step holds the task: %v", err)
+		}
+	case <-time.After(2 * time.Minute):
+		t.Fatal("close waited on the step holding the task")
 	}
 	m.save(&stepCopy, "the step's older copy") // dropped: the close was steered over it
 	m.release(task.ID)

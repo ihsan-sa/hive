@@ -12,8 +12,22 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"testing"
 	"time"
 )
+
+// durable says whether writes are fsynced. A test binary's journals are
+// throwaway, and on a loaded disk an fsync took half a second: with them
+// internal/mod/work's tests took 8.5 minutes on disk against 70s on a tmpfs,
+// and ran into the checks' 25-minute limit. Its git skips them too
+// (GIT_TEST_FSYNC, which every git it starts inherits).
+var durable = !testing.Testing()
+
+func init() {
+	if !durable {
+		os.Setenv("GIT_TEST_FSYNC", "0")
+	}
+}
 
 // Event is one append-only record. Kind is dotted ("run.created", "task.merged").
 type Event struct {
@@ -93,7 +107,7 @@ func (j *Journal) Append(kind string, data any) (Event, error) {
 	e := Event{Seq: j.seq, At: time.Now().UTC(), Kind: kind, Data: raw}
 	line, _ := json.Marshal(e)
 	_, err = j.f.Write(append(line, '\n'))
-	if err == nil {
+	if err == nil && durable {
 		err = j.f.Sync()
 	}
 	subs := append([]func(Event){}, j.subs...)
@@ -191,6 +205,9 @@ func AppendJSONL(path string, v any) error {
 	defer f.Close()
 	if _, err := f.Write(append(raw, '\n')); err != nil {
 		return err
+	}
+	if !durable {
+		return nil
 	}
 	return f.Sync()
 }

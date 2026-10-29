@@ -18,6 +18,8 @@ The hard layer (core, sandbox, merge path, tests, reviews) is the same in every 
 | `philosophy` | a page of principles (simplicity, talk, measure, remember, ask before acting outside, improve the Hive), no procedure | one line |
 | `vague` | "You are an agent in a team of agents working on a software project. Do good work." | one line |
 
+| `open` | a shared space: no one assigns work, say what you take in the room, find what most needs doing from the goals; then the standard "Where things are", "Your reach" and command list | lead, worker, sweep: one line ("You are one of the agents in the space."); reviewer, warden, tribunal, judge: the standard prompts |
+
 From lots of comms (`chatty`) to none (`quiet`), and from very specific (`standard`) to almost nothing (`vague`). `essay` is the person's suggestion as given; `essay-tools` separates "the essay alone doesn't say how to call the Hive" from "the essay doesn't make agents behave as a hive". The structured parts stay whatever the arm: a reviewer still has to answer `land` or `fix` in its schema, and the harness still gives every agent `hive agent` on its PATH.
 
 ## How an arm runs
@@ -56,6 +58,26 @@ Not shared: the Go build and module caches. Each check builds in a home of its o
 
 The dry run on the fake harness (2026-10-25, `HIVE_SOFT=standard,essay` on the clone of the Hive's own source, the default task): the arms ran one after the other, each went lead → worker → the clone's `go vet` and short tests → review → merge in about 3 minutes, and the test's processes peaked at 341 MB (`standard`) and 484 MB (`essay`). The peak load, 39 and 37, is the machine's, other Hive work included. Real agents add their harness processes (a lead, a worker and a reviewer at a time with these ceilings), which is what the 3 GB ceiling leaves room for.
 
+
+## The open arm
+
+The person (2026-10-28 08:56 local): "Thats the whole point of putting all the agents in one place like the hive all able to talk to one another and then letting them do unstructured work", and "stuff is far too rigid still like eerything needs to be dynamic and adapt". Task 261028-125710-1df12ead4d, issue #1905. The other arms change only the words inside today's pipeline: one ask, the lead files it, one worker builds it. `open` changes the shape as well, and keeps only the safety layer:
+
+- **No lead, no task.** The test doesn't post an ask in the lead's chat. It files `HIVE_SOFT_OPEN_AGENTS` briefs (3 by default, 2 to 4) straight into the queue, the same open brief each ("agent i of n started at once in one shared space; nobody has assigned work; find with the others what most needs doing for this project's goals and get it landed", `softlayer.OpenBrief`), and the sub-Hive's `max_workers` is that many, so they all start at once. `max_checks` and `max_gates` stay 1.
+- **One room.** `hive agent message --to room --text "..."` reaches every other live lead, worker and sweep on the sender's project at once (the chat module's router; `chat.Room`), each as an ordinary message marked "(to the room)", so each is in the journal as `msg.sent`. The read-only and safety seats (reviewer, warden, tribunal, judge) aren't in it. It works in any Hive, but only the open arm's prompts mention it.
+- **Only the safety layer as structure.** The sandbox, the reach rules (warden, tribunal, the person; autonomy 1 unless `HIVE_SOFT_WARDENS=1`), and the merge path: tests, reads and keep-or-revert. So the reviewer, warden, tribunal and judge keep their standard prompts; the roles that do the work get one line, and the orientation tells them what holds and that everything else, how the space is organised included, is theirs to change.
+- **Ends** when every open brief's task has merged, blocked or stopped, or at `HIVE_SOFT_WAIT`: "k of n agents' work landed". The table's `room` column counts posts to the room once each; each hearer's copy is also in `messages` and, worker to worker, in `peer`.
+
+```
+# on the fake harness: the shape (3 workers at once, no lead, 3 merges in about 10 seconds on the demo project, 2026-10-28)
+HIVE_SOFT=open HIVE_SOFT_STATE=demo go test ./internal/e2e -run 'TestSoftLayer$' -v
+# real agents: three harness processes beside the checks, so a 4G ceiling
+systemd-run --user --scope -p MemoryHigh=3500M -p MemoryMax=4G -p MemorySwapMax=0 -p CPUWeight=20 -p IOWeight=20 \
+  env HIVE_SOFT=standard,open HIVE_E2E_HARNESS=claude HIVE_SOFT_KB=~/hive/.hive/kb HIVE_SOFT_OUT=~/hive/.hive/soft-layer/<run> \
+  go test ./internal/e2e -run 'TestSoftLayer$' -timeout 5h -v
+```
+
+What it can show against `standard`: whether agents left to organise themselves talk laterally (room posts, peer messages) where a shared object is in flight, whether they split the work or collide on it, and whether what lands is worth as much as one routed fix, at what cost in turns. The real run is still to come.
 
 ## What is observed
 
