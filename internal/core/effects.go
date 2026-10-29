@@ -617,7 +617,7 @@ func (e *Effects) checkOnce(p Project, sha, main, kind, command, back string) (C
 		away, where = e.elsewhere(p, sha, kind)
 	}
 	if away != nil {
-		e.took(away, true)
+		e.took()
 	} else {
 		leave := func() bool {
 			away, where = e.elsewhere(p, sha, kind)
@@ -628,7 +628,7 @@ func (e *Effects) checkOnce(p Project, sha, main, kind, command, back string) (C
 		}
 		release, ok, left := e.Slots.TakeOr(p.Name, sha, kind, leave, checkLeaveEvery)
 		if away != nil {
-			e.took(away, left) // spent only by a check that left the line
+			e.took()
 		}
 		if !left {
 			away = nil // it took a slot here as the runner answered
@@ -811,13 +811,9 @@ func (e *Effects) elsewhere(p Project, sha, kind string) (sandbox.Sandbox, strin
 	return sb, where
 }
 
-// took ends what elsewhere began for sb: the room answer is spent if the
-// check went, so the next asks again.
-func (e *Effects) took(sb sandbox.Sandbox, went bool) {
-	if d, ok := sb.(*sandbox.Delegate); ok && went && d.Started != nil {
-		d.Started()
-		d.Started = nil
-	}
+// took ends what elsewhere began. The room answer it went on was
+// spent when checkExecutor returned it, so the next asks again.
+func (e *Effects) took() {
 	e.awayMu.Unlock()
 }
 

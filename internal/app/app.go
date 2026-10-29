@@ -108,6 +108,7 @@ func New(ws core.Workspace, forge core.Forge) (*App, error) {
 	a.Runner = &runner.Runner{C: c, Mods: a.Mods, Agents: a.Agents}
 	c.Runs.Executor = a.Runner.Executor
 	c.Runs.CheckExecutor = a.Runner.CheckExecutor
+	c.Runs.Room = a.Runner.Room
 	for _, tick := range []func(){stats.SpendNotice{C: c}.Tick, a.Work.Tick, a.Improve.Tick, a.Improve.TickSweeps, a.Improve.TickStepBacks, a.KB.Tick, a.System.Tick, a.Release.Tick, a.Risk.Tick, a.Projects.Tick, a.moduleJobs, a.Runner.Tick, a.Models.Tick} {
 		a.Mods.Builtin(tick)
 	}
