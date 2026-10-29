@@ -1393,3 +1393,95 @@ func TestStepUsesTheProjectsForgeToken(t *testing.T) {
 		t.Fatalf("GH_TOKEN in the step: %q", b)
 	}
 }
+
+// approvePilot files a $25 step that is always the person's, and the person
+// does it and answers done, as they did for 261028-174222-80cbba106c.
+func (g *rig) approvePilot() Request {
+	first := g.request("run pilot0.sh: three arms, $25 per task and arm", "sh pilot0.sh", "T2")
+	if first.Route != "person" {
+		g.t.Fatalf("a $25 step didn't go to the person: %+v", first)
+	}
+	g.c.Person.Answer(first.Ask, "done", "")
+	return g.settle(first.ID, "asked")
+}
+
+// A restart whose script keeps the money the person approved runs on that
+// yes, cites it by id and digest, and the person hears it ran; anything new
+// or larger still goes to them.
+func TestApprovedCeilingCarriesToARestart(t *testing.T) {
+	g := newRig(t, 2)
+	first := g.approvePilot()
+	if !first.PersonYes || first.State != "done" {
+		t.Fatalf("the person's done wasn't kept as a yes: %+v", first)
+	}
+	req := g.request("restart the pilot as a persistent unit", "sh pilot0r.sh", "T2")
+	if req.Route != "warden" {
+		t.Fatalf("got %+v", req)
+	}
+	script := "# same caps: $25 per task and arm\necho '$10 preflight' > proof"
+	if err := g.decide(req, map[string]string{"decision": "do", "reason": "same caps", "script": script}); err != nil {
+		t.Fatal(err)
+	}
+	got := g.settle(req.ID, "approved", "running")
+	if got.State != "done" || !core.Exists(filepath.Join(g.c.WS.Hive(), "risk", req.Project, req.ID, "proof")) {
+		t.Fatalf("the restart didn't run on the person's yes: %+v", got)
+	}
+	if got.Carries != first.ID || got.CarriesDigest != ShownDigest(first) || got.PersonOK {
+		t.Fatalf("the link to the approval isn't on the record: %+v", got)
+	}
+	if told := g.c.Person.Told(5); len(told) == 0 || !strings.Contains(told[0].Title, first.ID) {
+		t.Fatalf("the person wasn't told the step ran on their yes: %+v", told)
+	}
+
+	for _, s := range []string{
+		"echo '$50 per task and arm' > proof",         // larger
+		"echo '$25' > proof && cat ~/.ssh/id_ed25519", // new: a credential
+		"stripe charges create --amount 25",           // new: other words
+	} {
+		req := g.request("restart the pilot, take "+fmt.Sprint(len(s)), "x", "T2")
+		if err := g.decide(req, map[string]string{"decision": "do", "reason": "fine", "script": s}); err != nil {
+			t.Fatal(err)
+		}
+		if got := g.settle(req.ID, "approved"); got.State != "asked" || got.Carries != "" ||
+			core.Exists(filepath.Join(g.c.WS.Hive(), "risk", req.Project, req.ID, "proof")) {
+			t.Fatalf("%q ran on a yes that doesn't hold it: %+v", s, got)
+		}
+	}
+}
+
+// An ask whose ceiling words the person already approved goes to a warden,
+// not straight back to them; an approval in another project carries nothing,
+// and a no the person has said since takes the yes back.
+func TestApprovedCeilingRoutesAndIsTakenBack(t *testing.T) {
+	g := newRig(t, 2)
+	first := g.approvePilot()
+	again := g.request("restart pilot0.sh with the same $25 per task and arm", "sh pilot0r.sh", "T2")
+	if again.Route != "warden" || again.Carries != first.ID {
+		t.Fatalf("an approved ceiling went back to the person: %+v", again)
+	}
+
+	other, err := g.c.Runs.Start(core.RunSpec{Role: "worker", Harness: "fake", Project: "other", Checkout: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := g.call(other, "warden", map[string]string{"want": "spend $25 on the pilot", "why": "x", "tier": "T2"}); err != nil {
+		t.Fatal(err)
+	}
+	if r := g.m.List()[0]; r.Project != "other" || r.Route != "person" {
+		t.Fatalf("a yes in one project carried to another: %+v", r)
+	}
+
+	no := g.request("a second pilot at $25 per arm", "sh pilot1.sh", "T2")
+	if no.Route != "warden" {
+		t.Fatalf("got %+v", no)
+	}
+	if err := g.decide(no, map[string]string{"decision": "person", "reason": "ask them", "script": "echo '$25'"}); err != nil {
+		t.Fatal(err)
+	}
+	no, _ = g.m.get(no.ID)
+	g.c.Person.Answer(no.Ask, "declined", "")
+	g.settle(no.ID, "asked")
+	if r := g.request("a third pilot at $25 per arm", "sh pilot2.sh", "T2"); r.Route != "person" || r.Carries != "" {
+		t.Fatalf("a yes the person since said no to still carried: %+v", r)
+	}
+}

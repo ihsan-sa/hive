@@ -25,6 +25,7 @@ import (
 	"regexp"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -78,6 +79,15 @@ type Request struct {
 	Joined   []string  `json:"joined,omitempty"` // other runs that asked the same and hear the answer
 	Created  time.Time `json:"created"`
 	Updated  time.Time `json:"updated"`
+
+	// PersonYes: the person said run or done to this request. Its ceiling
+	// content (Bound) may then carry to a later step in the same project.
+	PersonYes bool `json:"person_yes,omitempty"`
+	// Carries names the person-approved request whose ceiling content holds
+	// this one's, and CarriesDigest pins what that request showed the person
+	// (ShownDigest), so the link is checked against the records.
+	Carries       string `json:"carries,omitempty"`
+	CarriesDigest string `json:"carries_digest,omitempty"`
 }
 
 // Seat is one panelist and its votes by round.
@@ -252,6 +262,113 @@ func Digest(script string) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// ShownDigest pins what a request showed the person: sha256 over its want,
+// why, steps and script, joined by NUL. A request that carries its approval
+// cites it, so anyone can recompute it from the risk.saved records.
+func ShownDigest(r Request) string {
+	return Digest(strings.Join([]string{r.Want, r.Why, r.Steps, r.Script}, "\x00"))
+}
+
+// Bound is the ceiling content of a step: every money, credential, network
+// and outward mention (in the words as routing reads them, in a script as
+// CeilingGuard does) and every floor entry it touches. A person's yes binds
+// to it.
+func Bound(floor []string, want, why, steps, script string) []core.Mention {
+	out := append(core.AskMentions(want, why, steps), core.ScriptMentions(script)...)
+	for _, f := range floor {
+		if core.FloorHit([]string{f}, want, why, steps, script) != "" {
+			out = append(out, core.Mention{Kind: "floor", Phrase: f})
+		}
+	}
+	return out
+}
+
+func bound(floor []string, r Request) []core.Mention {
+	return Bound(floor, r.Want, r.Why, r.Steps, r.Script)
+}
+
+// covers says whether every mention in need is one in have, or for an amount
+// of money, no more than one in have: "$10" sits inside a yes to "$25", "$50"
+// and "spend" don't.
+func covers(have, need []core.Mention) bool {
+	for _, n := range need {
+		if !slices.ContainsFunc(have, func(h core.Mention) bool {
+			if h.Kind != n.Kind {
+				return false
+			}
+			if same(h.Phrase) == same(n.Phrase) {
+				return true
+			}
+			a, okA := amount(h.Phrase)
+			b, okB := amount(n.Phrase)
+			return h.Kind == "money" && okA && okB && b <= a
+		}) {
+			return false
+		}
+	}
+	return true
+}
+
+func amount(p string) (float64, bool) {
+	t, ok := strings.CutPrefix(strings.TrimSpace(p), "$")
+	if !ok {
+		return 0, false
+	}
+	f, err := strconv.ParseFloat(strings.ReplaceAll(strings.TrimSpace(t), ",", ""), 64)
+	return f, err == nil
+}
+
+// mentions lists a step's ceiling content once each, for the person.
+func mentions(ms []core.Mention) string {
+	var out []string
+	for _, x := range ms {
+		if p := fmt.Sprintf("%s %q", x.Kind, x.Phrase); !slices.Contains(out, p) {
+			out = append(out, p)
+		}
+	}
+	return strings.Join(out, ", ")
+}
+
+// personYes says the person said yes to r itself (run, or done when they did
+// it), not to an ask a warden answered for them. Records from before
+// PersonYes count by their route: an always-yours ask settles done only on
+// the person's word.
+func personYes(r Request) bool {
+	return r.Settles == nil && (r.PersonYes || r.PersonOK || r.Route == "person" && r.State == "done")
+}
+
+// carrier finds the request in project the person said yes to whose ceiling
+// content holds need, newest first, so a restart or fix that keeps the money,
+// caps and login they approved isn't asked again; anything new or larger
+// still goes to them. A yes the person has since said no to inside (a
+// declined ask its content holds) carries nothing.
+func (m *Module) carrier(project string, floor []string, need []core.Mention, self string) *Request {
+	if len(need) == 0 {
+		return nil
+	}
+	reqs := m.List()
+	sort.SliceStable(reqs, func(i, j int) bool { return reqs[i].Updated.After(reqs[j].Updated) })
+	var noes [][]core.Mention
+	for _, r := range reqs {
+		if r.Project != project || r.ID == self || r.Kind != "request" {
+			continue
+		}
+		if r.State == "declined" && r.Outcome == "declined" && r.Ask != "" {
+			noes = append(noes, bound(floor, r))
+			continue
+		}
+		if !personYes(r) {
+			continue
+		}
+		have := bound(floor, r)
+		if !covers(have, need) || slices.ContainsFunc(noes, func(no []core.Mention) bool { return covers(have, no) }) {
+			continue
+		}
+		return &r
+	}
+	return nil
+}
+
 func (m *Module) opRequest(r core.Run, args json.RawMessage) (any, error) {
 	var a struct{ Want, Why, Steps, Tier, Gain string }
 	if err := core.Bind(args, &a); err != nil {
@@ -263,8 +380,16 @@ func (m *Module) opRequest(r core.Run, args json.RawMessage) (any, error) {
 	tier := core.Tier(a.Tier)
 	cfg := m.C.WS.LoadConfig()
 	// Routing reads the ask's words, so a mention it rules out doesn't count;
-	// whatever then runs meets CeilingGuard, which counts every mention.
+	// whatever then runs meets CeilingGuard, which counts every mention. An
+	// ask whose ceiling words the person already said yes to in this project
+	// goes to a warden; the script still has to stay inside that yes.
 	ceiling := core.AskCeiling(cfg.Floor, a.Want, a.Why, a.Steps)
+	var carry *Request
+	if ceiling != "" {
+		if carry = m.carrier(r.Project, cfg.Floor, Bound(cfg.Floor, a.Want, a.Why, a.Steps, ""), ""); carry != nil {
+			ceiling = ""
+		}
+	}
 	route := core.Route(tier, cfg.Autonomy, ceiling)
 	if route == "self" {
 		return map[string]string{"tier": tier, "route": route, "note": "T1 is inside the Hive: weigh it yourself and get on with it."}, nil
@@ -290,6 +415,9 @@ func (m *Module) opRequest(r core.Run, args json.RawMessage) (any, error) {
 	}
 	req := &Request{ID: core.NewID(), Kind: "request", Origin: r.ID, Project: r.Project, Want: a.Want, Why: a.Why, Steps: a.Steps,
 		Tier: tier, Route: route, Gain: a.Gain, State: "asked", Created: time.Now().UTC()}
+	if carry != nil {
+		req.Carries, req.CarriesDigest = carry.ID, ShownDigest(*carry)
+	}
 	switch route {
 	case "person":
 		m.ask(req, "Always yours", "This step "+ceiling+", which is on the list that is always yours, so no warden or panel may take it. Do it yourself if you agree.", "done", "declined")
@@ -778,8 +906,14 @@ func (m *Module) execute(id string) {
 		return
 	}
 	floor := m.C.WS.LoadConfig().Floor
-	if err := core.CeilingGuard(req.Script, floor, req.PersonOK); err != nil {
-		m.ask(&req, "Always yours", "Whoever approved it, this script "+core.ScriptCeiling(floor, req.Script)+", which is always yours to decide.", "run", "declined")
+	req.Carries, req.CarriesDigest = "", ""
+	if !req.PersonOK && req.Settles == nil && core.ScriptCeiling(floor, req.Script) != "" {
+		if c := m.carrier(req.Project, floor, Bound(floor, "", "", "", req.Script), req.ID); c != nil {
+			req.Carries, req.CarriesDigest = c.ID, ShownDigest(*c)
+		}
+	}
+	if err := core.CeilingGuard(req.Script, floor, req.PersonOK || req.Carries != ""); err != nil {
+		m.ask(&req, "Always yours", "Whoever approved it, this script "+core.ScriptCeiling(floor, req.Script)+", which is always yours to decide. Everything in it that is: "+mentions(Bound(floor, "", "", "", req.Script))+"; a later step that keeps to these, or less, carries your run.", "run", "declined")
 		m.act.Unlock()
 		if req.Settles == nil {
 			m.tell(req, err.Error()+"; the person decides.")
@@ -833,7 +967,11 @@ func (m *Module) execute(id string) {
 	m.tell(req, fmt.Sprintf("%s: %q. Its output is kept for the person.", req.Outcome, core.Clip(req.Want, 80)))
 	m.save(&req)
 	m.act.Unlock()
-	if !req.PersonOK && m.C.WS.LoadConfig().Autonomy >= 3 { // "tell me after"
+	if req.Carries != "" { // the person's yes ran again: they hear it
+		m.C.Person.Tell(core.Ask{Ref: req.ID, Project: req.Project, From: req.Origin,
+			Title:  fmt.Sprintf("A step ran on your yes to %s (%s): %s", req.Carries, req.State, core.Clip(req.Want, 100)),
+			Detail: fmt.Sprintf("Its money, credential, network and floor mentions are the same as or narrower than those of request %s, which you approved (what it showed you: sha256 %s).\n\n%s\n\n%s", req.Carries, core.Short(req.CarriesDigest), req.Script, req.Output)})
+	} else if !req.PersonOK && m.C.WS.LoadConfig().Autonomy >= 3 { // "tell me after"
 		m.C.Person.Tell(core.Ask{Ref: req.ID, Project: req.Project, From: req.Origin,
 			Title: fmt.Sprintf("A %s step ran (%s): %s", req.Tier, req.State, core.Clip(req.Want, 100)), Detail: req.Script + "\n\n" + req.Output})
 	}
@@ -908,7 +1046,7 @@ func (m *Module) onAnswer(a core.Ask) {
 		}
 		return
 	case a.Answer == "run" && req.Script != "":
-		req.State, req.PersonOK = "approved", true
+		req.State, req.PersonOK, req.PersonYes = "approved", true, true
 		m.save(&req)
 		m.act.Unlock()
 		go m.execute(req.ID)
@@ -916,7 +1054,7 @@ func (m *Module) onAnswer(a core.Ask) {
 	}
 	req.State, req.Outcome = "declined", a.Answer
 	if a.Answer == "done" {
-		req.State = "done"
+		req.State, req.PersonYes = "done", true
 	}
 	m.save(&req)
 	m.act.Unlock()
