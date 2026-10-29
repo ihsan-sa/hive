@@ -71,7 +71,7 @@ type Request struct {
 	Round    int       `json:"round,omitempty"`
 	PersonOK bool      `json:"person_ok,omitempty"` // the person said run, to this script
 	Output   string    `json:"output,omitempty"`
-	Share    bool      `json:"share,omitempty"` // the warden read the script as read-only: its output, redacted, goes back to the asker
+	Share    bool      `json:"share,omitempty"`   // the warden read the script as read-only: its output, redacted, goes back to the asker
 	Settles  *core.Ask `json:"settles,omitempty"` // the person's ask a warden answers instead
 	Ask      string    `json:"ask"`               // the person's queue item
 	Outcome  string    `json:"outcome,omitempty"`
