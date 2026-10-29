@@ -4254,10 +4254,13 @@ func (m *Module) onPersonMerge(a core.Ask) {
 		m.dropCheckpoint(&t, p, strings.TrimSuffix("left open: "+a.Note, ": ")+"; no more checkpoints, the rest lands when the worker finishes")
 		return
 	}
-	t.Stage, t.Reason, t.ByPerson = StageStopped, strings.TrimSuffix("left open: "+a.Note, ": "), true
+	t.Stage, t.Reason, t.ByPerson = StageStopped, strings.TrimSuffix(leftOpen+": "+a.Note, ": "), true
 	m.save(&t, t.Reason)
-	m.notify(&t, fmt.Sprintf("%q was %s: %s", t.Label(), t.Reason, t.PR.URL))
+	m.notify(&t, fmt.Sprintf("%q was %s: %s\n\nIf it only needs main merged in, send it back to its worker (recheck with text) and it asks again.", t.Label(), t.Reason, t.PR.URL))
 }
+
+// leftOpen begins the reason of a task whose merge ask the person left open.
+const leftOpen = "left open"
 
 // Stop ends a task on purpose (from the control center).
 func (m *Module) Stop(id, reason string) error {
@@ -4312,7 +4315,9 @@ func (m *Module) woke(t Task) bool {
 // Recheck brings a blocked or stopped task back with fresh counts: with no
 // text its commits are pushed and checked again (what blocked it may be fixed
 // now); with text its worker gets that and works on in the same checkout. A
-// task the person stopped or left open stays theirs to bring back.
+// task the person stopped stays theirs to bring back. One whose merge ask they
+// left open (a PR that conflicts with main, say) can be sent back to its worker
+// with text, to rebase: its next merge asks them again, so they keep the say.
 func (m *Module) Recheck(id, back, by string) error {
 	t, ok := m.Get(id)
 	if !ok {
@@ -4330,10 +4335,13 @@ func (m *Module) Recheck(id, back, by string) error {
 	if t.Withdrawn() {
 		return fmt.Errorf("task %s was %s, so it doesn't come back; file the work again as a new brief if it is still wanted", id, core.Clip(t.Reason, 300))
 	}
-	if t.ByPerson || m.workerStopped(t) {
+	if m.workerStopped(t) || t.ByPerson && !strings.HasPrefix(t.Reason, leftOpen) {
 		return fmt.Errorf("task %s was stopped by the person (%s); only they can bring it back", id, t.Reason)
 	}
-	t.Reason, t.Failures, t.Round, t.Reviews, t.Conflicts, t.CantRuns = "", 0, 0, 0, 0, 0
+	if t.ByPerson && (back == "" || t.Worker == "") {
+		return fmt.Errorf("task %s was %s by the person; send it back to its worker with text (to merge main in, say) and its next merge asks them again, but its commits as they are don't come back", id, core.Clip(t.Reason, 300))
+	}
+	t.Reason, t.Failures, t.Round, t.Reviews, t.Conflicts, t.CantRuns, t.ByPerson = "", 0, 0, 0, 0, 0, false
 	m.goNow(&t)
 	m.CloseCantRunAsk(t.Project, "cant-run:"+t.ID, "the change is tested again, asked by "+by)
 	if stage, what := m.unmade(t); stage != "" {
