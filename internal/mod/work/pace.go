@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"fmt"
 	"maps"
+	"path"
 	"runtime"
 	"slices"
 	"strings"
@@ -319,22 +320,47 @@ func (m *Module) checkRank(project, sha, _ string) int {
 	return 0
 }
 
-// namesAny says text names one of tests (a subtest by its top test) as a
-// whole word.
+// namesAny says text names one of tests as a whole word: a Go subtest by
+// its top test, a pytest id (path::test[params]) by its test or its file.
 func namesAny(text string, tests []string) bool {
-	for _, n := range tests {
-		n, _, _ = strings.Cut(n, "/")
-		for rest, at := text, 0; n != ""; {
-			i := strings.Index(rest, n)
-			if i < 0 {
-				break
-			}
-			start, end := at+i, at+i+len(n)
-			if (start == 0 || !isWord(text[start-1])) && (end == len(text) || !isWord(text[end])) {
+	for _, id := range tests {
+		for _, n := range testNames(id) {
+			if namesWord(text, n) {
 				return true
 			}
-			rest, at = text[start+1:], start+1
 		}
+	}
+	return false
+}
+
+// testNames are the words that name a failing test's id.
+func testNames(id string) []string {
+	where, _, found := strings.Cut(id, "::")
+	if !found {
+		n, _, _ := strings.Cut(id, "/")
+		return []string{n}
+	}
+	n := id[strings.LastIndex(id, "::")+2:]
+	n, _, _ = strings.Cut(n, "[")
+	if strings.HasSuffix(where, ".py") {
+		return []string{n, path.Base(where)}
+	}
+	n, _, _ = strings.Cut(n, "/")
+	return []string{n}
+}
+
+// namesWord says text holds n as a whole word.
+func namesWord(text, n string) bool {
+	for rest, at := text, 0; n != ""; {
+		i := strings.Index(rest, n)
+		if i < 0 {
+			break
+		}
+		start, end := at+i, at+i+len(n)
+		if (start == 0 || !isWord(text[start-1])) && (end == len(text) || !isWord(text[end])) {
+			return true
+		}
+		rest, at = text[start+1:], start+1
 	}
 	return false
 }

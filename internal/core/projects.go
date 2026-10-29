@@ -79,6 +79,25 @@ type ProjectConfig struct {
 	// named models and the project's trials, as the models op shows them),
 	// written from its record whenever a trial's outcome is recorded.
 	Ledger string `json:"ledger,omitempty"`
+	// ForgeTests names the forge's checks that run this project's tests on
+	// every pull request (a CI job, "test (ubuntu-latest)" say). With them
+	// the forge's run on the exact head is the test: the Hive runs no test
+	// of its own on a PR, and the merge waits for these to pass there (or
+	// fail only where they fail on main). The local test still measures
+	// main. Read from main, and changing it is the person's (BaseProtected).
+	ForgeTests []string `json:"forge_tests,omitempty"`
+}
+
+// WithForgeTests is required with every name in cfg.ForgeTests added: they
+// are waited on as any required check, and an advisory list can't drop them.
+func (cfg ProjectConfig) WithForgeTests(required []string) []string {
+	out := slices.Clone(required)
+	for _, n := range cfg.ForgeTests {
+		if !slices.Contains(out, n) {
+			out = append(out, n)
+		}
+	}
+	return out
 }
 
 // SelfRoot and SelfHigh are the paths of the Hive's own source that a self

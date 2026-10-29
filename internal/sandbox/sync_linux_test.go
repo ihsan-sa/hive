@@ -1,6 +1,7 @@
 package sandbox
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"os"
@@ -11,6 +12,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/ihsan-sa/hive-standalone-build/internal/proc"
 )
 
 // A synchronous command dies with the process that started it, killed
@@ -57,6 +60,23 @@ func waitPid(t *testing.T, path string) int {
 	return 0
 }
 
+// waitTagged waits for pid to be prog carrying a bare command's tag. $! is
+// the shell's fork, and on a loaded machine it may still be on its way
+// through setsid to prog when the sweep looks: mid-exec, the kernel shows an
+// empty environment, so the sweep would pass it by.
+func waitTagged(t *testing.T, pid int, prog string) {
+	t.Helper()
+	dir := fmt.Sprintf("/proc/%d/", pid)
+	for end := time.Now().Add(30 * time.Second); time.Now().Before(end); time.Sleep(20 * time.Millisecond) {
+		comm, _ := os.ReadFile(dir + "comm")
+		env, _ := os.ReadFile(dir + "environ")
+		if strings.TrimSpace(string(comm)) == prog && strings.Contains("\x00"+string(env), "\x00"+OwnerEnv+"=") {
+			return
+		}
+	}
+	t.Fatalf("pid %d never became a tagged %s", pid, prog)
+}
+
 // gone waits for pid to end; a zombie (ended, its parent not yet reaped it) counts.
 func gone(t *testing.T, pid int) {
 	t.Helper()
@@ -92,6 +112,7 @@ func TestSweepEndsWhatADeadDaemonsBareCommandLeft(t *testing.T) {
 	}
 	pid := waitPid(t, pidFile)
 	t.Cleanup(func() { syscall.Kill(pid, syscall.SIGKILL) })
+	waitTagged(t, pid, "sleep")
 	live := exec.Command("sleep", "60")
 	live.Env = append(os.Environ(), OwnerEnv+"="+owner)
 	if err := live.Start(); err != nil {
@@ -104,8 +125,17 @@ func TestSweepEndsWhatADeadDaemonsBareCommandLeft(t *testing.T) {
 	if syscall.Kill(pid, 0) != nil {
 		t.Fatal("the detached process ended with its daemon: nothing for the sweep to do")
 	}
-	if n := sweepOrphans(); n < 1 {
-		t.Errorf("the sweep ended %d processes, want the orphan", n)
+	// A sweep that misses it (read mid-exec on a loaded machine: one failure
+	// in thousands of runs) leaves it to the next; the daemon sweeps again.
+	n := sweepOrphans()
+	for i := 0; i < 20 && n == 0; i++ {
+		time.Sleep(100 * time.Millisecond)
+		n = sweepOrphans()
+	}
+	if n < 1 {
+		env, _ := os.ReadFile(fmt.Sprintf("/proc/%d/environ", pid))
+		tag := proc.EnvValue(bytes.Split(env, []byte{0}), OwnerEnv)
+		t.Errorf("the sweeps ended %d processes, want the orphan (tagged %q, its owner alive: %v)", n, tag, proc.OwnerAlive(tag))
 	}
 	gone(t, pid)
 	if syscall.Kill(live.Process.Pid, 0) != nil {

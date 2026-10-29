@@ -1,6 +1,7 @@
 package improve
 
 import (
+	"errors"
 	"fmt"
 	"slices"
 	"sort"
@@ -91,6 +92,11 @@ func (m *Module) applyStall(e core.Event) {
 			}
 		}
 		m.spells[t.ID] = spell{stage: t.Stage, since: e.At}.held(t, e.At)
+	case "effect.checked":
+		var c core.Check
+		if e.Decode(&c) == nil && c.Kind == "test" {
+			m.ended[c.Project+"@"+c.SHA] = e.At
+		}
 	case "stall.saved":
 		var s Stall
 		e.Decode(&s)
@@ -159,7 +165,8 @@ func (m *Module) Watch() {
 	if floor <= 0 {
 		floor = 20 * time.Minute
 	}
-	now := map[string]string{} // key -> current stage
+	now := map[string]string{}   // key -> current stage
+	testing := map[string]bool{} // project@sha -> a task is testing that head
 	// A queued brief and a check waiting for a slot are waiting their turn,
 	// not stuck; a check is timed from when it got its slot.
 	running, waiting := m.C.Effects.Slots.State()
@@ -178,6 +185,9 @@ func (m *Module) Watch() {
 		return !t.Terminal() && t.Stage != work.StagePerson && t.Stage != work.StageMerged
 	}) {
 		now["task:"+t.ID] = t.Stage
+		if sha := checked(t); sha != "" {
+			testing[t.Project+"@"+sha] = true
+		}
 		// A worker a conflict sends back waits at the pace as a queued
 		// brief does (work.Task.Resending). The recursive gate runs on its
 		// own clock, as many at once as the machine carries; a merge behind
@@ -211,6 +221,11 @@ func (m *Module) Watch() {
 		sp, took := m.spells[t.ID], append([]float64(nil), m.took[t.Stage]...)
 		m.mu.Unlock()
 		if sha := checked(t); sha != "" {
+			// A check that has just ended leaves the line before its step
+			// saves the task on: it is timed from then, not from its long wait.
+			m.mu.Lock()
+			sp.since = latest(sp.since, m.ended[t.Project+"@"+sha])
+			m.mu.Unlock()
 			for _, u := range running {
 				if u.Project == t.Project && u.SHA == sha {
 					sp.since = latest(sp.since, u.Since)
@@ -219,6 +234,13 @@ func (m *Module) Watch() {
 		}
 		m.judge(Stall{Key: "task:" + t.ID, What: fmt.Sprintf("%q", t.Label()), Project: t.Project, Stage: t.Stage, Since: sp.since}, run, t.Chat, t.Thread, took, floor)
 	}
+	m.mu.Lock()
+	for k, at := range m.ended {
+		if !testing[k] && time.Since(at) > time.Hour {
+			delete(m.ended, k) // no task is testing that head any more
+		}
+	}
+	m.mu.Unlock()
 	for _, key := range causes {
 		g := waits[key]
 		now[key] = g.stage
@@ -263,6 +285,13 @@ func (m *Module) judge(cur Stall, run, chat, thread string, took []float64, floo
 		if r.Status == core.StatusParked || r.Status == core.StatusQuiet || r.Waiting != "" {
 			return // waiting on a reset, a planned retry or something it asked for; quiet is flagged already
 		}
+		if r.Status != core.StatusRunning && strings.HasPrefix(r.Reason, "waiting") {
+			// Held before its turn by the pace (the strain, the ramp after
+			// it, the workers' pace): a recheck would only send it to the
+			// back (10-29: five such "Stuck" alerts in two hours). Its
+			// clock starts again from the turn the pace lets start.
+			return
+		}
 		cur.Since = latest(cur.Since, r.TurnStarted, r.LastOutput)
 	}
 	s := &cur
@@ -294,12 +323,15 @@ func (m *Module) judge(cur Stall, run, chat, thread string, took []float64, floo
 	s.Limit, s.Samples, s.At = limit.Seconds(), len(took), time.Now().UTC()
 	var did string
 	var refused error
+	var held *work.HeldError
 	handed := false
 	switch {
 	case s.Tries == 1 && m.C.Runs.Interrupt(run):
 		did = "restarted its turn"
 	case m.recheck(s, &refused):
 		did = "retried it from its branch's head"
+	case errors.As(refused, &held) && time.Since(held.Since) < limit:
+		return // a step is moving it right now: look again once it ends
 	case slices.Contains(s.ToldIn, s.Stage):
 		s.Told, did = true, "left it with the lead, who was handed it stuck in this stage before"
 	default:
@@ -307,6 +339,8 @@ func (m *Module) judge(cur Stall, run, chat, thread string, took []float64, floo
 		s.ToldIn = append(slices.Clip(s.ToldIn), s.Stage)
 		if s.Rechecked {
 			did += ", having retried it from its branch's head once already"
+		} else if held != nil && !held.Since.IsZero() {
+			did += " (a retry from its branch's head was refused: a step has held it since " + held.Since.Local().Format("15:04") + ", longer than the limit)"
 		} else if refused != nil {
 			did += " (a retry from its branch's head was refused: " + core.Clip(refused.Error(), 200) + ")"
 		}
@@ -338,11 +372,22 @@ func (m *Module) recheck(s *Stall, refused *error) bool {
 	c := *s
 	c.Rechecked = true
 	m.mu.Lock()
+	old := m.stalls[s.Key]
 	m.stalls[s.Key] = &c
 	m.mu.Unlock()
 	if err := m.Work.Recheck(id, "", "the stall watcher"); err != nil {
 		*refused = err
-		return false // the journaled record that follows replaces c
+		var held *work.HeldError
+		if errors.As(err, &held) {
+			m.mu.Lock()
+			if old != nil {
+				m.stalls[s.Key] = old
+			} else {
+				delete(m.stalls, s.Key)
+			}
+			m.mu.Unlock()
+		}
+		return false // the journaled record that follows replaces c, unless a step holds it and nothing is journaled yet
 	}
 	s.Rechecked = true
 	return true

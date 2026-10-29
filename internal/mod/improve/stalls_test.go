@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/work"
 )
 
@@ -283,6 +284,48 @@ func TestConflictWaitingAtThePaceIsNoStall(t *testing.T) {
 	m := rig(t)
 	m.C.J.MustAppend("task.saved", work.Task{ID: "t0", Project: "p", Title: "change t0", Stage: work.StageWorking, Worker: "w0", Resend: "Main moved and your branch conflicts with it.", Reason: "waiting for a worker (at the pace)"})
 	m.C.J.MustAppend("task.saved", work.Task{ID: "t1", Project: "p", Title: "change t1", Stage: work.StageWorking, Worker: "w1"})
+	m.mu.Lock()
+	for _, id := range []string{"t0", "t1"} {
+		m.spells[id] = spell{stage: work.StageWorking, since: time.Now().Add(-48 * time.Hour)}
+	}
+	m.mu.Unlock()
+	m.Watch()
+	s := m.Stalls()
+	if len(s) != 1 || !strings.Contains(fmt.Sprint(s), "t1") || strings.Contains(fmt.Sprint(s), "t0") {
+		t.Fatalf("stalls = %+v, want only t1's", s)
+	}
+}
+
+// A check that has just ended leaves the line before its step saves the
+// task on, so a watch in between sees a testing task neither waiting nor
+// running: it is timed from the check's end, not its long wait in the line,
+// and isn't retried (which threw away its green test and started read).
+func TestJustEndedCheckIsNoStall(t *testing.T) {
+	m := rig(t)
+	m.C.J.MustAppend("task.saved", work.Task{ID: "t0", Project: "p", Title: "change t0", Stage: work.StageTesting, SHA: "40496a88"})
+	m.mu.Lock()
+	m.spells["t0"] = spell{stage: work.StageTesting, since: time.Now().Add(-7 * time.Hour)}
+	m.mu.Unlock()
+	m.C.J.MustAppend("effect.checked", core.Check{Project: "p", SHA: "40496a88", Kind: "test", OK: true})
+	m.Watch()
+	if s := m.Stalls(); len(s) != 0 {
+		t.Fatalf("stalls = %+v, want none for a task whose test just ended", s)
+	}
+	if tk, _ := m.Work.Get("t0"); tk.Stage != work.StageTesting {
+		t.Fatalf("task is %s, want it left in testing", tk.Stage)
+	}
+}
+
+// A worker the pace holds before its turn (the ramp after a strain, issue
+// #2022) is waiting its turn, not stuck: its task isn't retried or handed to
+// the lead, while a working task whose worker isn't held still is a stall.
+func TestRunHeldByThePaceIsNoStall(t *testing.T) {
+	m := rig(t)
+	for _, id := range []string{"0", "1"} {
+		m.C.J.MustAppend("run.created", core.RunSpec{ID: "w" + id, Role: "worker", Project: "p", Harness: "fake"})
+		m.C.J.MustAppend("task.saved", work.Task{ID: "t" + id, Project: "p", Title: "change t" + id, Stage: work.StageWorking, Worker: "w" + id})
+	}
+	m.C.J.MustAppend("run.held", map[string]any{"id": "w0", "reason": "waiting: starting one turn at a time after the machine was strained"})
 	m.mu.Lock()
 	for _, id := range []string{"t0", "t1"} {
 		m.spells[id] = spell{stage: work.StageWorking, since: time.Now().Add(-48 * time.Hour)}

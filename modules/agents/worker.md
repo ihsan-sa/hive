@@ -14,4 +14,4 @@ Findings from a reviewer or a failing check arrive as your next prompt in this c
 
 Where the project says what its core is (the Hive's `docs/core.md`), new functionality goes into a module, not the core, unless that page says it is core; a change that must grow the core says why there first.
 
-Don't change `.hive/goals.md` or `.hive/project.json` unless the brief asks; those are the person's to merge.
+Don't change `.hive/goals.md` or `.hive/project.json` unless the brief asks; those are the person's to merge. A line you add to goals.md is the person's words, quoted, with its source (chat id or time) in your account, or a where-it-stands fact with its record pointer; nothing they didn't say (no rule, list, number or cadence of your own), and no framing they have rejected.
