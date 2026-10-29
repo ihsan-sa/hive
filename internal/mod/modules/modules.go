@@ -12,9 +12,11 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
@@ -70,9 +72,10 @@ type Module struct {
 
 // Registry reads and writes .modules/.
 type Registry struct {
-	ws    core.Workspace
-	j     *core.Journal
-	ticks []func()
+	ws       core.Workspace
+	j        *core.Journal
+	ticks    []func()
+	updating sync.Mutex // one update at a time moves a module's folder
 }
 
 // Builtin adds an in-process module's step to the tick list.
@@ -366,9 +369,19 @@ func record(dir, name, url string) (string, error) {
 
 // Update moves git-sourced modules to their source's newest release, or its
 // newest commit when it has no releases.
-func (r *Registry) Update() []string {
+func (r *Registry) Update() []string { return r.UpdateFrom(nil) }
+
+// UpdateFrom is Update for the modules whose source is one of sources (all
+// of them when sources is nil): a merge on a module's own project moves that
+// module at once, not at the next hourly update.
+func (r *Registry) UpdateFrom(sources []string) []string {
+	r.updating.Lock()
+	defer r.updating.Unlock()
 	var changed []string
 	for _, m := range r.List() {
+		if sources != nil && !slices.Contains(sources, m.Source.Source) {
+			continue
+		}
 		if m.Source.Source == "" || m.Source.Source == "builtin" || !core.Exists(filepath.Join(m.Dir, ".git")) {
 			continue
 		}

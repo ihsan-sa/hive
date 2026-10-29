@@ -14,6 +14,9 @@ import (
 // starts `<Argv...> turn --spec <file> [--runner <Where>]`. The spec is built
 // with inside paths, as for the local sandbox, and the program writes the
 // turn's output to the spec's stdout and stops when its stop_file appears.
+// The spec's tools go by absolute path (AbsTools): the program runs with its
+// own PATH, and when it runs the turn here after all, with `hive sandbox-exec`,
+// a tool found by name only on the daemon's PATH would be missing.
 type Delegate struct {
 	Module string   // the module's name
 	Where  string   // the runner that said it has room
@@ -30,6 +33,7 @@ func (d *Delegate) Isolated() bool { return true }
 func (d *Delegate) Check() error   { return nil }
 
 func (d *Delegate) Start(s Spec) (Proc, error) {
+	s.Tools = AbsTools(s.Tools)
 	specPath, err := writeTempSpec(s)
 	if err != nil {
 		return Proc{}, err
@@ -53,6 +57,7 @@ func (d *Delegate) Start(s Spec) (Proc, error) {
 // module writes its output to the spec's stdout, and a check past timeout is
 // ended with the module's program, which ends it on the runner too.
 func (d *Delegate) Run(s Spec, timeout time.Duration) (int, error) {
+	s.Tools = AbsTools(s.Tools)
 	specPath, err := writeTempSpec(s)
 	if err != nil {
 		return -1, err

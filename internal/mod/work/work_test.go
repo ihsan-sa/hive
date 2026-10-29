@@ -879,6 +879,7 @@ func TestLandedEndsATaskOnMain(t *testing.T) {
 	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
 	lead := core.Run{RunSpec: core.RunSpec{ID: "lead", Role: "lead"}}
 	task.Stage, task.Known = StageMerging, "Changes .hive/project.json."
+	task.Base, _ = m.C.Effects.Sync(p)
 	m.save(task, "")
 	var merged []Task
 	m.OnMerged = func(t Task) { merged = append(merged, t) }
@@ -892,8 +893,8 @@ func TestLandedEndsATaskOnMain(t *testing.T) {
 	if err := call(`{"task":"t1","why":"merged by hand"}`); err == nil || !strings.Contains(err.Error(), "isn't landed") {
 		t.Fatalf("ended a task whose PR is open and isn't on main: %v", err)
 	}
-	if err := call(`{"task":"t1","why":"x","merge":"HEAD"}`); err == nil || !strings.Contains(err.Error(), "doesn't hold") {
-		t.Fatalf("took a main commit without its change: %v", err)
+	if err := call(`{"task":"t1","why":"x","merge":"HEAD"}`); err == nil || !strings.Contains(err.Error(), "from before") {
+		t.Fatalf("took a main commit from before the task's work: %v", err)
 	}
 
 	waiting := file(t, m, "tune the tests", "See .hive/project.json.")

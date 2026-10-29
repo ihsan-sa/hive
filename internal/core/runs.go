@@ -97,10 +97,11 @@ type Run struct {
 	Retries     int             `json:"retries"`
 	Offline     string          `json:"offline,omitempty"` // its last turn couldn't reach its service, and why
 	Nudges      int             `json:"nudges"`
-	Head        string          `json:"head,omitempty"`  // its checkout's HEAD log (size, time) at its last turn's end
-	Still       int             `json:"still,omitempty"` // turns in a row that ended with that log unchanged
-	Login       string          `json:"login,omitempty"` // the login its latest turn went on
-	Where       string          `json:"where,omitempty"` // the runner its latest turn went to; empty is this machine
+	Head        string          `json:"head,omitempty"`         // its checkout's HEAD log (size, time) at its last turn's end
+	Still       int             `json:"still,omitempty"`        // turns in a row that ended with that log unchanged
+	Login       string          `json:"login,omitempty"`        // the login its latest turn went on
+	TokenExpiry time.Time       `json:"token_expiry,omitempty"` // when the access token its latest turn was handed runs out
+	Where       string          `json:"where,omitempty"`        // the runner its latest turn went to; empty is this machine
 	Progress    string          `json:"progress,omitempty"`
 	ProgressAt  time.Time       `json:"progress_at,omitempty"`
 	StopAsked   bool            `json:"stop_asked,omitempty"`
@@ -516,7 +517,32 @@ type Runs struct {
 	// when the ramp after it last let one start, and rampedAt when it last
 	// held one back (ramp).
 	heldAt, rampLast, rampedAt time.Time
+	rampWait                   map[string]rampWaiter // the runs waiting on the ramp
 }
+
+// rampWaiter is a run waiting on the ramp: whether it was sent back to its
+// work (Returned), when it was created, and when it last asked.
+type rampWaiter struct {
+	returned      bool
+	created, seen time.Time
+}
+
+// before says whether w goes ahead of o on the ramp: one sent back first,
+// then the oldest.
+func (w rampWaiter) before(o rampWaiter, id, oid string) bool {
+	if w.returned != o.returned {
+		return w.returned
+	}
+	if !w.created.Equal(o.created) {
+		return w.created.Before(o.created)
+	}
+	return id < oid
+}
+
+// rampSeen is how lately a run must have asked the ramp to be waiting on it:
+// a tick steps every run about once a second, so one not seen for this long
+// has started elsewhere, been held before it, or ended.
+var rampSeen = 10 * time.Second
 
 // rampStep is the least time between two turns starting after a strain hold
 // (ramp), so the readings see each before the next: on 10-28, the hold
@@ -532,18 +558,37 @@ func (rs *Runs) Holding() {
 	rs.mu.Unlock()
 }
 
-// ramp says whether a turn starting now waits for the ramp: after a strain
+// ramp says whether r's turn starting now waits for the ramp: after a strain
 // hold, turns start one a rampStep until none has waited on the ramp for two.
-func (rs *Runs) ramp(now time.Time) bool {
+// Each step goes to the waiting run first in line (rampWaiter.before): every
+// run is stepped in its own goroutine, so the step went to whichever asked
+// first after it, and from 04Z on 10-29 seven workers sent back to their tasks
+// took no turn in 4-7h while 28 newer runs took 46.
+func (rs *Runs) ramp(r Run, now time.Time) bool {
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
 	if now.Sub(rs.heldAt) > 2*rampStep && now.Sub(rs.rampedAt) > 2*rampStep {
+		clear(rs.rampWait)
 		return false
 	}
-	if now.Sub(rs.rampLast) < rampStep {
+	if rs.rampWait == nil {
+		rs.rampWait = map[string]rampWaiter{}
+	}
+	me := rampWaiter{returned: r.Returned, created: r.Created, seen: now}
+	rs.rampWait[r.ID] = me
+	ahead := false
+	for id, w := range rs.rampWait {
+		if now.Sub(w.seen) > rampSeen {
+			delete(rs.rampWait, id)
+		} else if id != r.ID && w.before(me, id, r.ID) {
+			ahead = true
+		}
+	}
+	if ahead || now.Sub(rs.rampLast) < rampStep {
 		rs.rampedAt = now
 		return true
 	}
+	delete(rs.rampWait, r.ID)
 	rs.rampLast = now
 	return false
 }
@@ -726,6 +771,9 @@ type turnStarted struct {
 	Harness   string      `json:"harness,omitempty"`
 	Login     string      `json:"login,omitempty"`
 	Where     string      `json:"where,omitempty"` // the executor module's runner it went to; empty is this machine
+	// TokenExpiry is when the access token the turn was handed runs out: a
+	// later one on its login at the turn's end is a renewal since (renewedMidTurn).
+	TokenExpiry time.Time `json:"token_expiry,omitempty"`
 }
 
 type turnEnded struct {
@@ -743,6 +791,7 @@ type turnEnded struct {
 	Unavailable string          `json:"unavailable,omitempty"` // the pick it ran on can't answer (Down), so it moved or waits without a retry's backoff
 	Head        string          `json:"head,omitempty"`        // the checkout's HEAD log at the turn's end
 	Stalled     string          `json:"stalled,omitempty"`     // the pick it kept ending turns on without finishing, which it moves past
+	Renewed     bool            `json:"renewed,omitempty"`     // its login was renewed mid-turn, revoking its token: it resumes at once, not as a retry
 }
 
 // egressRefused is the hosts a turn's egress proxy refused, and each
@@ -872,6 +921,7 @@ func (rs *Runs) apply(e Event) {
 		var t turnStarted
 		e.Decode(&t)
 		r.Turn, r.Proc, r.Status, r.TurnStarted, r.LastOutput, r.Login, r.Where = t.Turn, t.Proc, StatusRunning, e.At, e.At, t.Login, t.Where
+		r.TokenExpiry = t.TokenExpiry
 		if t.Session != "" {
 			r.Session = t.Session
 		}
@@ -919,7 +969,7 @@ func (rs *Runs) apply(e Event) {
 				r.Retries = 0
 			}
 		}
-		if t.Status == StatusParked && t.Unavailable == "" && (t.Result == nil || (t.Result.IsError && !t.Result.Limited)) {
+		if t.Status == StatusParked && t.Unavailable == "" && !t.Renewed && (t.Result == nil || (t.Result.IsError && !t.Result.Limited)) {
 			r.Retries++
 		}
 		if len(t.Queue) > 0 {
@@ -1567,7 +1617,8 @@ func (rs *Runs) Send(id, text string) error {
 
 // wake gives a run that ended blocked with a message waiting (often the
 // answer it was blocked on) the turn for it, rather than leaving it on a run
-// that takes no turns. One blocked for its Codex token stays blocked.
+// that takes no turns. One blocked for its Codex token, or whose checkout
+// is gone, stays blocked.
 // It is safe to call at any time: it reads the run afresh, so a caller's
 // earlier, stale look (Send's live check, endTurn's read) can't wake the
 // wrong run; on anything but a blocked run with a message waiting it does
@@ -1576,7 +1627,7 @@ func (rs *Runs) wake(id string) {
 	rs.waking.Lock() // Send and endTurn can both see it; it's woken once
 	defer rs.waking.Unlock()
 	r, ok := rs.Get(id)
-	if !ok || r.Status != StatusBlocked || len(r.Pending) == 0 || strings.HasPrefix(r.Reason, codexTokenStuck) || strings.HasPrefix(r.Reason, StoppedQuiet) {
+	if !ok || r.Status != StatusBlocked || len(r.Pending) == 0 || strings.HasPrefix(r.Reason, codexTokenStuck) || strings.HasPrefix(r.Reason, StoppedQuiet) || checkoutGone(r) {
 		return
 	}
 	rs.append("run.reopened", runNote{ID: id})
@@ -1602,11 +1653,20 @@ func (rs *Runs) Reopen(id, text string) error {
 	if err := rs.tokenStuck(r); err != nil {
 		return err
 	}
+	if r.Terminal() && checkoutGone(r) {
+		// Its task ended and its checkout went with it (issue #2008): a
+		// turn would fail in the sandbox and park for another, forever.
+		return fmt.Errorf("run %s has ended and its checkout %s is gone; it can't take another turn", id, r.Checkout)
+	}
 	rs.append("run.reopened", runNote{ID: id})
 	rs.append("run.queued", runNote{ID: id, Text: text})
 	rs.append("run.status", runNote{ID: id, Status: StatusIdle, Reason: "reopened"})
 	return nil
 }
+
+// checkoutGone reports a run whose checkout was removed (spent checkouts
+// go when their task ends). A run with no checkout of its own has none to lose.
+func checkoutGone(r Run) bool { return r.Checkout != "" && !Exists(r.Checkout) }
 
 // tokenStuck checks again that a Codex run's token folder is gone; if it still
 // won't delete, the run is blocked for it (once) and the error says why.
@@ -2085,6 +2145,10 @@ func (rs *Runs) endTurn(r Run) {
 			te.Reason = "usage limit; moving to another login"
 			te.Queue = []string{"Your last turn hit a usage limit, so your next turn runs on another login. Continue where you left off."}
 		}
+	case tl.Result == nil && checkoutGone(r):
+		// The turn couldn't start without its checkout, and no retry brings
+		// it back (removed after its task ended): the run ends here.
+		te.Status, te.Reason = StatusBlocked, "its checkout "+r.Checkout+" is gone, so it can't take another turn"
 	case tl.Result == nil:
 		// Under WSL, sandbox-exec's own early failures go to .wsl.
 		out := rs.ws.TurnOut(r.ID, r.Turn)
@@ -2099,6 +2163,13 @@ func (rs *Runs) endTurn(r Run) {
 		te.Status, te.ParkedUntil = StatusParked, time.Now().Add(backoff(cur.Retries))
 		te.Reason = fmt.Sprintf("the endpoint refused %s's key mid-turn, and a turn is handed the key only once; the next turn gets it afresh (if this repeats, store it again with `%s model key %s`)", r.Model, Cmd, r.Model)
 		te.Queue = []string{"Your previous turn was cut off when the model's endpoint refused its key. Your checkout and commits are intact. Continue where you left off."}
+	case rs.renewedMidTurn(r, tl.Result):
+		// Renewing a Claude login revokes the access token every turn on it
+		// holds, so turns running then end on a 401. The login is fine: the
+		// turn resumes its session at once, handed the new token.
+		te.Status, te.ParkedUntil, te.Renewed = StatusParked, time.Now(), true
+		te.Reason = "its login " + r.Login + " was renewed mid-turn, which revoked the token the turn held; resuming at once on the new one"
+		te.Queue = []string{"Your previous turn was cut off when the Hive renewed its login, which revoked the token it held. Your checkout and commits are intact. Continue where you left off."}
 	case down != nil:
 		// As at a usage limit: the next pick with room takes the next turn
 		// at once, else it waits for the first reset, with no backoff.
@@ -2397,15 +2468,20 @@ func (rs *Runs) launch(r Run, cfg Config) {
 		rs.holdTurn(r, "waiting: "+why)
 		return
 	}
-	if !r.Lead() && elsewhere == nil && rs.ramp(time.Now()) {
-		rs.holdTurn(r, "waiting: starting one turn at a time after the machine was strained")
-		return
-	}
-	if rs.Admit != nil { // after the ramp: a pass Admit gives is used now
+	// Admit before the ramp: a run the module holds doesn't spend the
+	// ramp's step, and a pass it gives is kept (work's backIn) until the
+	// ramp lets the turn start. The other way round a run held by both
+	// took the step one tick and the module's hold the next, journalling
+	// two run.held a tick (618 for one worker in 3h on 10-28).
+	if rs.Admit != nil {
 		if why := rs.Admit(r); why != "" {
 			rs.holdTurn(r, why)
 			return
 		}
+	}
+	if !r.Lead() && elsewhere == nil && rs.ramp(r, time.Now()) {
+		rs.holdTurn(r, "waiting: starting one turn at a time after the machine was strained")
+		return
 	}
 	sb, err := rs.sandbox()
 	if err != nil {
@@ -2530,6 +2606,7 @@ func (rs *Runs) launch(r Run, cfg Config) {
 		}()
 	}
 	login, tok, err := rs.pickLogin(r.Harness, r.Model, codexHome, !sb.Isolated(), Reserved(r.Role))
+	exp := rs.tokenExpiry(login)
 	if err != nil {
 		until := rs.freeAt(r.Harness, r.Model, Reserved(r.Role))
 		if !until.After(time.Now()) {
@@ -2559,7 +2636,36 @@ func (rs *Runs) launch(r Run, cfg Config) {
 	}
 	started = true
 	rs.claimed(r.ID, turn, p)
-	rs.append("run.turn_started", turnStarted{ID: r.ID, Session: session, Turn: turn, Proc: p, Delivered: delivered, Resume: resume, Login: login.Key(), Model: r.Model, Harness: r.Harness, Where: where})
+	rs.append("run.turn_started", turnStarted{ID: r.ID, Session: session, Turn: turn, Proc: p, Delivered: delivered, Resume: resume, Login: login.Key(), Model: r.Model, Harness: r.Harness, Where: where, TokenExpiry: exp})
+}
+
+// tokenExpiry is when the access token login l hands a Claude turn runs out,
+// or zero where the token source can't say.
+func (rs *Runs) tokenExpiry(l Login) time.Time {
+	if t, ok := rs.tokens.(interface {
+		Expiry(Login) (time.Time, error)
+	}); ok && l.Harness == "claude" {
+		if exp, err := t.Expiry(l); err == nil {
+			return exp
+		}
+	}
+	return time.Time{}
+}
+
+// renewedMidTurn reports whether Claude turn r ended on a 401 after its login
+// was renewed: the login now holds a live token that runs out later than the
+// one the turn was handed, which the renewal revoked.
+func (rs *Runs) renewedMidTurn(r Run, res *harness.Result) bool {
+	if res == nil || !res.IsError || res.APIStatus != 401 || HarnessName(r.Harness) != "claude" || r.TokenExpiry.IsZero() {
+		return false
+	}
+	for _, l := range rs.tokens.Logins("claude") {
+		if l.Key() == r.Login {
+			exp := rs.tokenExpiry(l)
+			return exp.After(r.TokenExpiry) && exp.After(time.Now())
+		}
+	}
+	return false
 }
 
 // Elsewhere says whether an executor module has room for a turn now.

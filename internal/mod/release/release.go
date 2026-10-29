@@ -27,6 +27,7 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/report"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/scan"
 	"github.com/ihsan-sa/hive-standalone-build/internal/setup"
+	"github.com/ihsan-sa/hive-standalone-build/internal/text"
 )
 
 // Module is the release module.
@@ -173,22 +174,24 @@ func download(repo, tag, name, dir string) error {
 	return err
 }
 
+// maxNotes bounds how much of the releases list is read for notes.
+var maxNotes int64 = 1 << 20
+
 // Notes are the release notes of each version after from up to to, newest
 // first, each with its page; when they can't be fetched, the releases page.
 // They are read on the forge's login when it has one, never on the anonymous
-// 60 an hour this machine's agents share.
+// 60 an hour this machine's agents share. They are outside text, so each
+// prints as plain text (text.Visible, with no CR); pre-releases are left out
+// unless to is one, as a Hive following them steps through them. A list past
+// maxNotes is read that far and ends with a link to the rest.
 func Notes(f core.Forge, repo, from, to string) string {
-	var rels []struct {
-		Tag  string `json:"tag_name"`
-		Body string
-		URL  string `json:"html_url"`
-	}
 	path := "repos/" + repo + "/releases?per_page=100"
+	var body io.Reader
 	var err error
 	if r, ok := f.(core.APIReader); ok {
 		var out string
 		if out, err = r.APIGet(repo, path); err == nil {
-			err = json.Unmarshal([]byte(out), &rels)
+			body = strings.NewReader(out)
 		}
 	} else {
 		var resp *http.Response
@@ -198,20 +201,55 @@ func Notes(f core.Forge, repo, from, to string) string {
 			if resp.StatusCode != http.StatusOK {
 				err = errors.New(resp.Status)
 			} else {
-				err = json.NewDecoder(resp.Body).Decode(&rels)
+				body = resp.Body
 			}
+		}
+	}
+	type rel struct {
+		Tag        string `json:"tag_name"`
+		Body       string
+		URL        string `json:"html_url"`
+		Prerelease bool
+	}
+	var rels []rel
+	pre := false // to is a pre-release
+	if err == nil {
+		dec := json.NewDecoder(io.LimitReader(body, maxNotes))
+		_, err = dec.Token() // the list's [
+		for err == nil && dec.More() {
+			var r rel
+			if err = dec.Decode(&r); err == nil && modules.Newer(from, r.Tag) && !modules.Newer(to, r.Tag) {
+				rels = append(rels, r)
+				pre = pre || r.Tag == to && r.Prerelease
+			}
+		}
+		if err == nil {
+			_, err = dec.Token() // the list's ], missing when cut at the limit
 		}
 	}
 	var b strings.Builder
 	for _, r := range rels {
-		if modules.Newer(from, r.Tag) && !modules.Newer(to, r.Tag) {
-			fmt.Fprintf(&b, "%s: %s\n%s\n\n", r.Tag, r.URL, strings.TrimSpace(r.Body))
+		if !r.Prerelease || pre {
+			fmt.Fprintf(&b, "%s: %s\n%s\n\n", plain(r.Tag), plain(r.URL), strings.TrimSpace(plain(r.Body)))
 		}
 	}
-	if err != nil || b.Len() == 0 {
+	if b.Len() == 0 {
 		return NotesLink(repo)
 	}
+	if err != nil { // cut short: the rest is on the releases page
+		b.WriteString("…\n" + NotesLink(repo))
+	}
 	return strings.TrimSpace(b.String())
+}
+
+// plain is outside text made safe to print, line by line: no CR, and no
+// escape, control or hidden character reaches the terminal (text.Visible).
+func plain(s string) string {
+	ls := strings.Split(strings.ReplaceAll(s, "\r", ""), "\n")
+	for i, l := range ls {
+		ls[i] = text.Visible(l)
+	}
+	return strings.Join(ls, "\n")
 }
 
 // NotesLink points at the releases page.
@@ -1473,6 +1511,7 @@ func New(c *core.Core) *Module {
 	m := &Module{C: c}
 	c.Person.Handle("upstream", m.onUpstream)
 	c.Person.Handle("scan_handles", m.onHandles)
+	c.Runs.Ops().Register(core.Op{Name: "train", Help: `{"why"} -> runs the release train again at the next look, whatever the day: the newest pre-release safe here rides as a canary against the running release, even one an earlier canary turned back (a canary that failed on its own environment, now fixed); why goes on the record. Refused while a canary runs or when this Hive doesn't ride the train`, Fn: m.opTrain})
 	return m
 }
 
