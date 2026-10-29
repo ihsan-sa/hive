@@ -364,6 +364,11 @@
 - Why: TestStaleModuleCacheRunsAgain's fix (30fea85) merged at 07:45:04Z; two older branches' local checks of their own heads, which still had the old test, went red seconds later, re-quarantined it and filed the same fix brief twice more (261028-085542, 261028-090108), each with nothing left to change.
 - Tradeoff: one git call per local red of a lifted test; when git can't tell (a commit not fetched), the red counts as before.
 
+## 2026-10-28: a canary's rollback spends an hour, not the train's day (issue #1922)
+
+- Decision: only a canary's keep spends the train's day (`trainEvery`, counted from the last keep); a rollback spends `canaryRetry` (an hour), after which the next newer pre-release safe here gets its canary. A rollback the canary made before measuring (issue #1924) still lets the next one ride at once; a can't-run still spends nothing beyond its own hour's retry. Unit `TestTrainRollbackSpendsAnHourNotADay`.
+- Why: the first real canary (10-28 13:21Z) rolled back v0.1.147 on an environment fault, and `train` booked that rollback as the day's move, so a fixed pre-release would have waited until the next day though the Hive hadn't moved.
+- Tradeoff: after a run of rollbacks the canary can run hourly (one gate run each, outside `max_gates`); each needs a newer safe pre-release, since a rolled-back tag never runs again.
 ## 2026-10-28 The canary doesn't rerun what its releases' CI passed
 - Decision: the release train's canary runs the gate with `--ci-passed` (`gate.Config.CIPassed`, set only by `app.runCanary`), which skips vet, the short tests and the candidate's new-tests step on both sides: the candidate and the running release are both releases whose CI already passed them. Unit `TestCanarySkipsWhatCIPassed`
 - Why: issue #1923; the canary was spending part of its 2h rerunning what CI had just passed
