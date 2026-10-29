@@ -1782,3 +1782,33 @@ func TestRecordRefusesALedgerPathOutsideItsPlace(t *testing.T) {
 		t.Fatalf("the file outside was written: %q", b)
 	}
 }
+
+// A file a worker makes executable is committed executable and comes out of
+// the checkout at mode 100755.
+func TestCheckoutKeepsExecBit(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("no exec bits on Windows filesystems")
+	}
+	c, _, p, main := setupProject(t)
+	dir, err := c.Effects.NewCheckout(p, "wx", main)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "run.sh"), []byte("#!/bin/sh\necho hi\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	os.Chmod(filepath.Join(dir, "run.sh"), 0o755)
+	mustGit(t, dir, "add", "-A")
+	mustGit(t, dir, "commit", "-q", "-m", "a script")
+	r, err := c.Runs.Start(RunSpec{ID: "wx", Role: "worker", Project: p.Name, Checkout: dir, Harness: "fake"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sha, err := c.Effects.Extract(p, r, main)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out := mustGit(t, c.WS.Project(p.Name), "ls-tree", sha, "run.sh"); !strings.HasPrefix(out, "100755 ") {
+		t.Fatalf("run.sh committed as %q, want 100755", out)
+	}
+}
