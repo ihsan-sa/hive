@@ -1203,3 +1203,37 @@ func TestRecheckBackFollowsTheWorkerRoute(t *testing.T) {
 		}
 	}
 }
+
+// A worker's "parent" is whoever filed its task while that run takes
+// messages, and its own project's lead once it doesn't; "lead" is that lead
+// (issue #2040).
+func TestWorkerParentIsItsFiler(t *testing.T) {
+	m, _, _ := helperRig(t)
+	sweep, err := m.C.Runs.Start(m.Agents.Spec("sweep-1", "sweep", "", t.TempDir(), "look around"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lead := m.Agents.Spec("lead-project-p-1", "lead", "p", t.TempDir(), "hi")
+	lead.Name, lead.Persistent = "lead:p", true
+	if _, err := m.C.Runs.Start(lead); err != nil {
+		t.Fatal(err)
+	}
+	task := &Task{ID: core.NewID(), Project: "p", Title: "fix it", From: sweep.ID, Stage: StageWorking, Created: time.Now().UTC()}
+	task.Worker = "w-" + task.ID
+	m.save(task, "")
+	w := core.Run{RunSpec: core.RunSpec{ID: task.Worker, Role: "worker", Project: "p", Task: task.ID}}
+	pending := func(id string) int {
+		r, _ := m.C.Runs.Get(id)
+		return len(r.Pending)
+	}
+	if _, err := m.C.Runs.Ops().Deliver(w, "parent", "done?"); err != nil || pending(sweep.ID) != 1 || pending(lead.ID) != 0 {
+		t.Fatalf("parent went elsewhere than the filer: %v, sweep %d, lead %d", err, pending(sweep.ID), pending(lead.ID))
+	}
+	if _, err := m.C.Runs.Ops().Deliver(w, "lead", "done?"); err != nil || pending(lead.ID) != 1 {
+		t.Fatalf("lead didn't reach the project's lead: %v", err)
+	}
+	m.C.Runs.Stop(sweep.ID, "done")
+	if _, err := m.C.Runs.Ops().Deliver(w, "parent", "done?"); err != nil || pending(lead.ID) != 2 {
+		t.Fatalf("parent with its filer ended didn't reach the project's lead: %v", err)
+	}
+}
