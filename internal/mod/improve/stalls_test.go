@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/work"
 )
 
@@ -292,5 +293,25 @@ func TestConflictWaitingAtThePaceIsNoStall(t *testing.T) {
 	s := m.Stalls()
 	if len(s) != 1 || !strings.Contains(fmt.Sprint(s), "t1") || strings.Contains(fmt.Sprint(s), "t0") {
 		t.Fatalf("stalls = %+v, want only t1's", s)
+	}
+}
+
+// A check that has just ended leaves the line before its step saves the
+// task on, so a watch in between sees a testing task neither waiting nor
+// running: it is timed from the check's end, not its long wait in the line,
+// and isn't retried (which threw away its green test and started read).
+func TestJustEndedCheckIsNoStall(t *testing.T) {
+	m := rig(t)
+	m.C.J.MustAppend("task.saved", work.Task{ID: "t0", Project: "p", Title: "change t0", Stage: work.StageTesting, SHA: "40496a88"})
+	m.mu.Lock()
+	m.spells["t0"] = spell{stage: work.StageTesting, since: time.Now().Add(-7 * time.Hour)}
+	m.mu.Unlock()
+	m.C.J.MustAppend("effect.checked", core.Check{Project: "p", SHA: "40496a88", Kind: "test", OK: true})
+	m.Watch()
+	if s := m.Stalls(); len(s) != 0 {
+		t.Fatalf("stalls = %+v, want none for a task whose test just ended", s)
+	}
+	if tk, _ := m.Work.Get("t0"); tk.Stage != work.StageTesting {
+		t.Fatalf("task is %s, want it left in testing", tk.Stage)
 	}
 }
