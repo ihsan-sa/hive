@@ -447,6 +447,7 @@ func New(c *core.Core, a *agents.Agents, ch *chat.Module) *Module {
 	}
 	c.J.Replay(apply)
 	c.J.Subscribe(apply)
+	c.Runs.Ops().AddRouter(m.toFiler)
 	c.Runs.Ops().Register(core.Op{Name: "brief", Help: `{"title","done","known","project","aim","why","apart"} (aim: fix, with why naming the failure it fixes, merges on its tests, checks and reads and isn't reverted for a score dip alone; anything else is taken as a gain, which on the Hive's own repository merges only if the recursive gate shows it); one matching an open task not yet pushed (a test both name, a near-identical title) and taken the same way joins it as added context instead, unless apart`, Fn: m.opBrief})
 	c.Runs.Ops().Register(core.Op{Name: "aim", Roles: steerers, Help: `{"task","aim":"fix"|"gain","why"} (your own task by default; any task on your project) -> sets whether the task is a fix of the failure why names, which merges on its tests, checks and reads and isn't reverted for a score dip alone, or a gain, which on the Hive's own repository merges only on the recursive gate's clear gain`, Fn: m.opAim})
 	c.Runs.Ops().Register(core.Op{Name: "recheck", Roles: steerers, Help: `{"task","back"} -> a blocked or stopped task's commits are pushed and checked again (not one the person stopped); one stuck on its way to the merge (landing, testing, reviewing, merging: say on checks of a commit that is no longer its head) is retried the same way from its branch's head, and a stuck checkpoint is dropped while its worker goes on; with back, its worker gets that text and works on`, Fn: m.opRecheck})
@@ -891,6 +892,25 @@ func (m *Module) taskOf(runID string) (Task, bool) {
 		}
 	}
 	return Task{}, false
+}
+
+// toFiler routes a worker's "parent" to whoever filed its task while that
+// run still takes messages (a lead, a sweep, a worker that briefed it); the
+// core sends it to the worker's own project's lead otherwise (issue #2040).
+func (m *Module) toFiler(from core.Run, to, text string) (bool, error) {
+	if to != "parent" || from.Parent != "" || from.Task == "" {
+		return false, nil
+	}
+	t, ok := m.Get(from.Task)
+	if !ok || t.From == from.ID {
+		return false, nil
+	}
+	r, ok := m.C.Runs.Get(t.From)
+	if !ok || r.Terminal() && !r.Persistent || m.C.Runs.Walled(from, r.Project) != nil {
+		return false, nil
+	}
+	_, err := m.C.Runs.Ops().Deliver(from, r.ID, text)
+	return true, err
 }
 
 // Revert files a revert of a merged task.

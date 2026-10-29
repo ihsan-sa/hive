@@ -1193,16 +1193,38 @@ func (rs *Runs) Find(addr string) (Run, bool) {
 	if r, ok := rs.runs[addr]; ok {
 		return *r, true
 	}
+	// A name beats an id prefix: "lead" is the Hive's lead, not the newest
+	// run whose id starts "lead-project-".
 	var best *Run
+	named := false
 	for _, r := range rs.runs {
-		if (r.Name == addr || strings.HasPrefix(r.ID, addr) || strings.HasSuffix(r.ID, addr)) && (best == nil || r.Created.After(best.Created)) {
-			best = r
+		name := r.Name == addr
+		if !name && (named || !strings.HasPrefix(r.ID, addr) && !strings.HasSuffix(r.ID, addr)) {
+			continue
+		}
+		if best == nil || name && !named || r.Created.After(best.Created) {
+			best, named = r, name
 		}
 	}
 	if best == nil {
 		return Run{}, false
 	}
 	return *best, true
+}
+
+// LeadOf is the lead of a project ("lead:<project>"), or the Hive's lead
+// ("lead") for a run on no project or a project with no lead yet: the
+// newest of that name, so a lead started afresh for a chat is the one.
+func (rs *Runs) LeadOf(project string) (Run, bool) {
+	for _, name := range []string{"lead:" + project, "lead"} {
+		if project == "" && name != "lead" {
+			continue
+		}
+		if l := rs.List(func(r *Run) bool { return r.Role == "lead" && r.Name == name }); len(l) > 0 {
+			return l[0], true
+		}
+	}
+	return Run{}, false
 }
 
 // List returns runs, newest first, filtered by fn (nil = all).

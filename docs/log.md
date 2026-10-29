@@ -388,3 +388,8 @@
 - Decision: `Runs.ramp` keeps the runs waiting on it and gives each step to the first in line: one Returned (sent back to its task) first, then the oldest by Created; a waiter not seen for `rampSeen` (10s) drops out.
 - Why: Tick steps every run in its own goroutine, so the step went to whichever asked first after it, under steady load usually a newer run; from 04Z on 10-29 seven sent-back workers took no turn in 4-7h while 28 newer runs took 46. (The pace-vs-ramp flip itself was the old order, Admit after the ramp, fixed in #1980.)
 - Tradeoff: when the run first in line has gone (started elsewhere, ended) the step waits up to 10s more; a lead and a turn going to a runner still skip the ramp.
+
+## 2026-10-29 A worker's "lead" and "parent" stay on its project (#2040)
+- Decision: `Runs.Find` takes a run named the address over an id prefix, so "lead" is the Hive's lead; `Deliver` reads "lead" as the sender's own project's lead (`Runs.LeadOf`, "lead:<project>", the Hive's when it has none; a project's lead's "lead" is the Hive's). A worker's "parent" with no Parent is whoever filed its task while that run takes messages (the work module's router), else that project lead.
+- Why: every lead's id starts "lead-", so Find("lead") took the newest lead of any project; two hive workers (on #1907, #1941) reported to hifi-receiver-2's lead, which had to forward them.
+- Tradeoff: a run with no Parent and no task (a warden on its own) still fails on "parent" rather than guessing.
