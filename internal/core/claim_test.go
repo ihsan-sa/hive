@@ -61,6 +61,7 @@ func TestTwoDaemonsStartATurnOnce(t *testing.T) {
 	b.Runs.sandbox = a.Runs.sandbox
 	b.Runs.self = sleeper(t)
 	cfg := a.WS.LoadConfig()
+	cfg.Slots = len(runs) // every run's turn has a slot: the claim is what's tested
 	for _, r := range runs {
 		var wg sync.WaitGroup
 		for _, rs := range []*Runs{a.Runs, b.Runs} {
