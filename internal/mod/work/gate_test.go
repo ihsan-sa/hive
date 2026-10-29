@@ -317,6 +317,31 @@ func TestGateNoWorseThanRedMainGoesOn(t *testing.T) {
 	}
 }
 
+// A red main holds only what it can't be told apart from: a change failing
+// in a package main's own run passed whole is the change's red, so it goes
+// back to its worker (after the one rerun any red gets) instead of waiting
+// on main's fix, and is told main's failures aren't its.
+func TestRedMainDoesntHoldAChangesOwnRed(t *testing.T) {
+	const mainRed = "echo '--- FAIL: TestClock (0.01s)'\necho 'FAIL\tp/a\t0.01s'\necho 'ok  \tp/b\t0.01s'\nexit 1\n"
+	onMain := map[string]string{".hive/project.json": `{"test": "sh ./t.sh"}`, "t.sh": mainRed}
+	own := "echo '--- FAIL: TestClock (0.01s)'\necho 'FAIL\tp/a\t0.01s'\necho '--- FAIL: TestNew (0.01s)'\necho 'FAIL\tp/b\t0.01s'\nexit 1\n"
+	m, task, p, _ := gateRigSeeded(t, false, onMain, map[string]string{"t.sh": own})
+	for i := 0; i < 2; i++ {
+		if err := testStep(m, task, p); err != nil {
+			t.Fatal(err)
+		}
+		if strings.HasPrefix(task.Reason, "waiting on main") {
+			t.Fatalf("step %d: its own red waited on main: %q", i, task.Reason)
+		}
+	}
+	if task.Stage != StageWorking || task.Round != 1 || !strings.Contains(task.Findings, "p/b TestNew") || !strings.Contains(task.Findings, "aren't yours to fix") {
+		t.Fatalf("stage %q, round %d, findings %q", task.Stage, task.Round, task.Findings)
+	}
+	if n := alerts(m, "main-red"); n != 0 {
+		t.Fatalf("%d main-red alerts for a change sent back on its own red", n)
+	}
+}
+
 // The change the testing stage let on as no worse than main merges: the
 // merge's own gate takes a red test run whose every failure main's run
 // shares, rather than refuse it as untested and hold it till it gives up.
