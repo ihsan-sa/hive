@@ -45,7 +45,7 @@ type Measurement struct {
 	Against    *float64  `json:"against,omitempty"`
 	AgainstSHA string    `json:"against_sha,omitempty"`
 	Paired     *float64  `json:"paired,omitempty"`
-	Version    string    `json:"version,omitempty"` // the score's version (Effects.ScoreVersion); a new one starts a new baseline
+	Version    string    `json:"version,omitempty"` // the score's version (Effects.ScoreVersion); a new one is judged against its parent under it
 	Note       string    `json:"note"`
 	At         time.Time `json:"at"`
 	// Size is what the project's size command printed ("name value" lines),
@@ -377,14 +377,25 @@ func (m *Module) scoreNow(p core.Project, sha string) (float64, bool) {
 // A B B A with first the merge's reading already taken, so both are read
 // under the same load (issue #1865). Each side is its better reading: load
 // only slows a run, so a spike on one reading is dropped, not averaged in.
-// It gives the parent, both readings and all four in order; false when the
-// merge has no parent, the score changed with it, or a reading gave no number.
+// A merge that changed the score has its parent scored under the merge's
+// evaluator (underScoreOf), so the change is still judged (#2090). It gives
+// the parent, both readings and all four in order; false when the merge has
+// no parent, its score can't be laid over it, or a reading gave no number.
 func (m *Module) paired(p core.Project, sha string, first float64) (parent string, mine, theirs float64, readings string, ok bool) {
 	out, err := core.Git(m.C.WS.Project(p.Name), "rev-parse", "-q", "--verify", sha+"^")
 	parent = strings.TrimSpace(out)
 	cfg := m.C.Effects.Config(p, sha)
-	if err != nil || parent == "" || cfg.Score == nil || m.version(p, parent, m.C.Effects.Config(p, parent)) != m.version(p, sha, cfg) {
+	if err != nil || parent == "" || cfg.Score == nil {
 		return "", 0, 0, "", false
+	}
+	at, under := parent, ""
+	if m.version(p, parent, m.C.Effects.Config(p, parent)) != m.version(p, sha, cfg) {
+		var done func()
+		if at, done, err = m.underScoreOf(p, parent, sha, *cfg.Score); err != nil {
+			return "", 0, 0, "", false
+		}
+		defer done()
+		under = " under this merge's score"
 	}
 	defer m.Work.MeasuringMain(p.Name, sha)()
 	read := func(at string) (float64, bool) {
@@ -394,13 +405,94 @@ func (m *Module) paired(p core.Project, sha string, first float64) (parent strin
 		}
 		return *sc.Score, true
 	}
-	p1, ok1 := read(parent)
-	p2, ok2 := read(parent)
+	p1, ok1 := read(at)
+	p2, ok2 := read(at)
 	m2, ok3 := read(sha)
 	if !ok1 || !ok2 || !ok3 {
 		return "", 0, 0, "", false
 	}
-	return parent, cfg.Score.Best(first, m2), cfg.Score.Best(p1, p2), fmt.Sprintf("merge %g, parent %g, parent %g, merge %g", first, p1, p2, m2), true
+	return parent, cfg.Score.Best(first, m2), cfg.Score.Best(p1, p2), fmt.Sprintf("merge %g, parent%s %g, parent %g, merge %g", first, under, p1, p2, m2), true
+}
+
+// underScoreOf makes, in the project's clone, a commit holding parent's
+// tree with sha's evaluator (its score's paths and ./ files, and
+// .hive/project.json, which names the score) in place of parent's own, and
+// a ref holding it while it is scored; done drops the ref. A check of it is
+// the parent's code judged by the merge's score.
+func (m *Module) underScoreOf(p core.Project, parent, sha string, s core.Score) (string, func(), error) {
+	dir := m.C.WS.Project(p.Name)
+	paths := append([]string{".hive/project.json"}, s.Evaluator()...)
+	if old := m.C.Effects.Config(p, parent).Score; old != nil {
+		paths = append(paths, old.Evaluator()...) // one the merge dropped goes too
+	}
+	isEval := func(f string) bool {
+		return slices.ContainsFunc(paths, func(e string) bool { return f == e || strings.HasPrefix(f, e+"/") })
+	}
+	// files lists at's files under the evaluator, as git ls-tree gives them.
+	files := func(at string) ([]string, error) {
+		out, err := core.Git(dir, "ls-tree", "-r", "-z", "--full-tree", at)
+		var got []string
+		for _, l := range strings.Split(out, "\x00") {
+			if _, f, ok := strings.Cut(l, "\t"); ok && isEval(f) {
+				got = append(got, l)
+			}
+		}
+		return got, err
+	}
+	old, err := files(parent)
+	if err != nil {
+		return "", nil, err
+	}
+	now, err := files(sha)
+	if err != nil {
+		return "", nil, err
+	}
+	tmp, err := os.MkdirTemp("", "hive-underscore-")
+	if err != nil {
+		return "", nil, err
+	}
+	defer os.RemoveAll(tmp)
+	env := []string{"GIT_INDEX_FILE=" + filepath.Join(tmp, "index")}
+	git := func(args ...string) (string, error) { return core.GitEnvT(2*time.Minute, dir, env, args...) }
+	if _, err := git("read-tree", parent); err != nil {
+		return "", nil, err
+	}
+	gone := []string{"update-index", "--force-remove", "--"}
+	for _, l := range old {
+		_, f, _ := strings.Cut(l, "\t")
+		gone = append(gone, f)
+	}
+	add := []string{"update-index", "--add"}
+	for _, l := range now {
+		meta, f, _ := strings.Cut(l, "\t")
+		if m := strings.Fields(meta); len(m) == 3 {
+			add = append(add, "--cacheinfo", m[0]+","+m[2]+","+f)
+		}
+	}
+	if len(old) > 0 {
+		if _, err := git(gone...); err != nil {
+			return "", nil, err
+		}
+	}
+	if len(now) > 0 {
+		if _, err := git(add...); err != nil {
+			return "", nil, err
+		}
+	}
+	tree, err := git("write-tree")
+	if err != nil {
+		return "", nil, err
+	}
+	c, err := git("commit-tree", tree, "-p", parent, "-m", "Score "+core.Short(parent)+" under "+core.Short(sha)+"'s score")
+	if err != nil {
+		return "", nil, err
+	}
+	c = strings.TrimSpace(c)
+	ref := "refs/hive/scored/" + core.Short(parent) + "-" + core.Short(sha)
+	if _, err := core.Git(dir, "update-ref", ref, c); err != nil {
+		return "", nil, err
+	}
+	return c, func() { core.Git(dir, "update-ref", "-d", ref) }, nil
 }
 
 // SelfSize is the Hive's own size command, run for a self project whose
@@ -896,12 +988,11 @@ func (m *Module) afterMerge(t work.Task) {
 	size, sizeNote := m.size(p, t.MergeSHA, false)
 	note += sizeNote
 	ms := Measurement{Project: p.Name, SHA: t.MergeSHA, Task: t.ID, TestsOK: ok, Score: score, Note: note, Version: m.version(p, t.MergeSHA, cfg), Size: size}
+	changed := false
 	if !hasBest || m.versionOf(p, k) != ms.Version {
 		m.warnUnlisted(p, cfg)
-		if hasBest {
-			// The score itself changed, so this merge starts a new baseline.
-			hasBest, ms.Note = false, "the score changed, so this starts a new baseline; "+note
-		}
+		// The score itself changed: the old best can't be compared with it.
+		changed, hasBest = hasBest, false
 	}
 	worse, dip := !ok, false
 	reason := ""
@@ -914,6 +1005,26 @@ func (m *Module) afterMerge(t work.Task) {
 		reason = "the tests went red after it merged: " + strings.TrimPrefix(note, "tests red: ")
 	case cfg.Score != nil && score == nil:
 		worse, reason = true, "the score stopped producing a number"
+	case changed:
+		// The merge is still judged (#2090): its parent is scored under the
+		// merge's own score, beside it. Only when that gives no number does
+		// the merge start a new baseline unjudged.
+		parent, mine, theirs, readings, ok := m.paired(p, t.MergeSHA, *score)
+		if !ok {
+			ms.Note = "the score changed and its parent gave no number under the new one, so this starts a new baseline; " + note
+			break
+		}
+		ms.Against, ms.AgainstSHA, ms.Paired = &theirs, parent, &mine
+		if cfg.Score.WithinTolerance(mine, theirs) {
+			ms.Kept, ms.Best = true, &mine
+			ms.Note = fmt.Sprintf("kept: the score changed, and under the new one it reads %g against its parent %s's %g, in one sitting (%s); the baseline is %g from here; %s", mine, core.Short(parent), theirs, readings, mine, note)
+			m.record(ms)
+			if m.OnKept != nil {
+				m.OnKept(p.Name, t.MergeSHA)
+			}
+			return
+		}
+		worse, dip, reason = true, true, fmt.Sprintf("the score changed, and under the new one it fell to %g from its parent %s's %g, both scored in one sitting (%s; tolerance %g)", mine, core.Short(parent), theirs, readings, cfg.Score.Tolerance)
 	case cfg.Score != nil && hasBest && !cfg.Score.WithinTolerance(*score, best):
 		// The score is speed, so it moves with the machine's load (issues
 		// #1343, #1865): the same code read 18 points apart at different

@@ -131,8 +131,9 @@ type Score struct {
 
 // Evaluator returns the paths in the repository that make up the score: its
 // paths and, as a best guess, any ./ file its command names. A change to one
-// is the person's to merge, and changes the score's version, so it starts a
-// new baseline. A path outside the repository can't be either, so it's left out.
+// is the person's to merge, and changes the score's version, so it is judged
+// against its parent scored under the new one, not the old best. A path
+// outside the repository can't be either, so it's left out.
 func (s Score) Evaluator() []string {
 	var out []string
 	add := func(f string) {

@@ -182,19 +182,38 @@ func TestNoSecondLookIntoAKnownOrGoneDip(t *testing.T) {
 }
 
 // A merge that changes the score's own file is not compared with the old
-// baseline: it starts a new one, so a lower number there isn't a revert, and a
-// higher one isn't a gain.
-func TestChangedScoreStartsANewBaseline(t *testing.T) {
+// baseline, but it is still judged (#2090): its parent is scored under the
+// merge's score beside it. Equal there, it is kept and the new number is the
+// baseline; a fall under the new score goes to the judge; a parent that
+// gives no number under it lets the merge start a new baseline.
+func TestChangedScoreIsJudgedAgainstItsParent(t *testing.T) {
 	m, merge := scored(t)
-	ms := merge(map[string]string{"score.sh": "echo 3\n"})
-	if !ms.Kept || ms.Best == nil || *ms.Best != 3 || !strings.Contains(ms.Note, "new baseline") {
-		t.Fatalf("a changed score should start a new baseline at 3: %+v", ms)
-	}
-	if ms := merge(map[string]string{"n.txt": "9\n"}); !ms.Kept || *ms.Best != 3 {
-		t.Fatalf("a change outside the score kept the new baseline: %+v", ms)
+	ms := merge(map[string]string{"score.sh": "expr $(cat n.txt) - 2\n"})
+	if !ms.Kept || ms.Best == nil || *ms.Best != 3 || ms.Against == nil || *ms.Against != 3 || !strings.Contains(ms.Note, "under this merge's score") {
+		t.Fatalf("a changed score that reads its parent the same should be kept at 3: %+v", ms)
 	}
 	if m.Scores("p")[0].Version == ms.Version {
 		t.Fatal("the score's version did not change with its file")
+	}
+	if ms := merge(map[string]string{"n.txt": "12\n"}); !ms.Kept || *ms.Best != 10 {
+		t.Fatalf("a change outside the score kept the new baseline: %+v", ms)
+	}
+	// A new score and a fall in the code it reads in one merge: 1 under
+	// the new score, against its parent's 10 under it too.
+	if ms := merge(map[string]string{"score.sh": "expr $(cat n.txt) - 1\n", "n.txt": "2\n"}); ms.Kept || ms.Against == nil || *ms.Against != 11 || !strings.Contains(ms.Note, "the score changed, and under the new one it fell to 1") {
+		t.Fatalf("a fall under a changed score was not judged: %+v", ms)
+	}
+	if refs, _ := core.Git(m.C.WS.Project("p"), "for-each-ref", "refs/hive/scored/"); refs != "" {
+		t.Fatalf("the scratch commits' refs were left: %s", refs)
+	}
+}
+
+// A changed score its parent can't run starts a new baseline.
+func TestChangedScoreParentCantScore(t *testing.T) {
+	_, merge := scored(t)
+	ms := merge(map[string]string{"score.sh": "cat m.txt\n", "m.txt": "2\n"})
+	if !ms.Kept || *ms.Best != 2 || !strings.Contains(ms.Note, "new baseline") {
+		t.Fatalf("a changed score the parent can't run should start a new baseline at 2: %+v", ms)
 	}
 }
 
