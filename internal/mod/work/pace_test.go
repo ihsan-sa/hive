@@ -158,6 +158,7 @@ func TestPaceHoldsAndFreesTheQueueAndChecks(t *testing.T) {
 	cfg := m.C.WS.LoadConfig()
 	cfg.MaxWorkers, cfg.MaxChecks = 0, 0
 	cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax, cfg.LoadMax = 0, 0, 0, 0
+	cfg.IOPressureMax, cfg.IOFullMax = 0, 0
 	m.C.WS.SaveConfig(cfg)
 	set := func(p *pace, l int, start int) {
 		p.mu.Lock()
@@ -239,6 +240,7 @@ func TestPaceHasASafetyCeiling(t *testing.T) {
 	cfg := m.C.WS.LoadConfig()
 	cfg.MaxWorkers, cfg.MaxChecks = 0, 0
 	cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax, cfg.LoadMax = 0, 0, 0, 1e6 // watched, never strained
+	cfg.IOPressureMax, cfg.IOFullMax = 0, 0
 	if _, watching := machine(cfg); !watching {
 		t.Skip("no /proc/loadavg here")
 	}
@@ -262,6 +264,7 @@ func TestPaceGrowsOnlyForBriefsTheLimitHolds(t *testing.T) {
 	cfg := m.C.WS.LoadConfig()
 	cfg.MaxWorkers, cfg.MaxChecks = 0, 0
 	cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax, cfg.LoadMax = 0, 0, 0, 1e6
+	cfg.IOPressureMax, cfg.IOFullMax = 0, 0
 	if _, watching := machine(cfg); !watching {
 		t.Skip("no /proc/loadavg here")
 	}
@@ -491,6 +494,7 @@ func TestPaceSeesThePlanUnderLoad(t *testing.T) {
 	cfg := m.C.WS.LoadConfig()
 	cfg.MaxWorkers = 0
 	cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax, cfg.LoadMax = 0, 0, 0, 1e-9
+	cfg.IOPressureMax, cfg.IOFullMax = 0, 0
 	if why, _ := machine(cfg); !onlyLoad(why) {
 		t.Skip("no load to read here")
 	}
@@ -757,6 +761,7 @@ func TestSentBackWorkersWaitOnThePace(t *testing.T) {
 	cfg := m.C.WS.LoadConfig()
 	cfg.MaxWorkers = 0
 	cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax, cfg.LoadMax = 0, 0, 0, 0
+	cfg.IOPressureMax, cfg.IOFullMax = 0, 0
 	m.C.WS.SaveConfig(cfg)
 	set := func(l int) {
 		m.workers.mu.Lock()
@@ -801,5 +806,60 @@ func TestSentBackWorkersWaitOnThePace(t *testing.T) {
 	set(2)
 	if why := m.C.Runs.Admit(runs[1]); why != "" {
 		t.Fatalf("the second at a pace of 2: %q, want it let through", why)
+	}
+}
+
+// IO pressure over its limit holds a pace at what runs: no more workers or
+// checks start on a saturated disk, none running is stopped, the status says
+// io pressure, and the limit grows back once it falls. On 10-29 turn starts
+// rose from 5 to 13 per 10 minutes at IO pressure some avg10 87%.
+func TestIOPressureHoldsThePace(t *testing.T) {
+	const io = core.IOReason + " (some avg10 87%, limit 80%)"
+	now := time.Date(2026, 10, 29, 13, 20, 0, 0, time.UTC)
+	for _, loadCuts := range []bool{false, true} { // the workers' pace, the checks'
+		p := pace{limit: 6, start: 4, at: now.Add(-time.Hour), loadCuts: loadCuts}
+		at := now
+		next := func(d time.Duration, running int, strain string) int {
+			at = at.Add(d)
+			return p.next(at, running, true, strain, true, 4, 12)
+		}
+		if l := next(0, 6, io); l != 6 {
+			t.Fatalf("loadCuts %v: six running under io pressure: %d, want held at 6", loadCuts, l)
+		}
+		if !strings.Contains(p.String(), "held: "+core.IOReason) {
+			t.Fatalf("loadCuts %v: says %q", loadCuts, p.String())
+		}
+		for range 10 {
+			if l := next(growStep, 6, io); l != 6 {
+				t.Fatalf("loadCuts %v: grew or cut under io pressure: %d", loadCuts, l)
+			}
+		}
+		if l := next(paceStep, 3, io); l != 3 {
+			t.Fatalf("loadCuts %v: three left running: %d, want 3", loadCuts, l)
+		}
+		if l := next(paceStep, 3, ""); l != 3 {
+			t.Fatalf("loadCuts %v: grew at once as io pressure fell: %d", loadCuts, l)
+		}
+		if l := next(growStep, 3, ""); l != 4 {
+			t.Fatalf("loadCuts %v: a growStep after it fell: %d, want 4", loadCuts, l)
+		}
+	}
+}
+
+// IO pressure holds every new worker, below the start too, and never sends
+// one to an executor: launch doesn't read it, so would run it here.
+func TestIOPressureHoldsNewWorkers(t *testing.T) {
+	asked := 0
+	hold := machineHold("", core.IOReason+" (some avg10 87%, limit 80%)", "machine loaded", 4, func() bool { asked++; return true })
+	for _, working := range []int{0, 3, 5} {
+		if why := hold(working); !strings.HasPrefix(why, core.IOReason) {
+			t.Errorf("%d working: %q", working, why)
+		}
+	}
+	if asked != 0 {
+		t.Errorf("asked the executor %d times", asked)
+	}
+	if why := machineHold("machine low on memory", core.IOReason, "", 4, func() bool { return false })(0); why != "machine low on memory" {
+		t.Errorf("memory and io: %q", why)
 	}
 }

@@ -563,6 +563,7 @@ func helperRig(t *testing.T) (*Module, *flakyForge, core.Project) {
 	cfg := ws.LoadConfig()
 	cfg.Sandbox, cfg.BareAccepted, cfg.Harness = "bare", time.Now().Format(time.RFC3339), "fake"
 	cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax, cfg.LoadMax = 0, 0, 0, 0 // a loaded machine mustn't hold the queue
+	cfg.IOPressureMax, cfg.IOFullMax = 0, 0
 	ws.SaveConfig(cfg)
 	forge := &flakyForge{Local: &core.Local{Dir: filepath.Join(dir, "forge")}}
 	if _, err := forge.EnsureRepo("me/p", "", false); err != nil {

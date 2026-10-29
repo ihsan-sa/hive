@@ -151,6 +151,12 @@ type Config struct {
 	MemFloorMB     int     `json:"mem_floor_mb"`
 	MemPressureMax float64 `json:"mem_pressure_max"`
 	CPUPressureMax float64 `json:"cpu_pressure_max"`
+	// While IO pressure (Linux PSI, percent) is over IOPressureMax ("some
+	// avg10") or IOFullMax ("full avg10"), the work module's pace starts no
+	// more workers or checks (internal/mod/work/pace.go); running ones go on.
+	// 0 turns a check off.
+	IOPressureMax float64 `json:"io_pressure_max"`
+	IOFullMax     float64 `json:"io_full_max"`
 	// MaxWorkers is the most workers that may work at once, the person's
 	// ceiling: below it the work module's pace sets the limit from what the
 	// machine and the plan carry (internal/mod/work/pace.go). Briefs past the
@@ -365,6 +371,8 @@ func DefaultConfig() Config {
 		MemFloorMB:      1024,
 		MemPressureMax:  10,
 		CPUPressureMax:  40,
+		IOPressureMax:   80,
+		IOFullMax:       50,
 		LoadMax:         1,
 		Ceilings:        true,
 		PlateauMerges:   3,

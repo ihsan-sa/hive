@@ -121,6 +121,7 @@ func startOn(t *testing.T, cpus, slot int, exe string, prep func(*core.Config), 
 	cfg := h.ws.LoadConfig()
 	cfg.Harness, cfg.AutoUpdate = "fake", false
 	cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax, cfg.LoadMax = 0, 0, 0, 0 // a loaded CI runner mustn't hold fake turns
+	cfg.IOPressureMax, cfg.IOFullMax = 0, 0
 	if hn := os.Getenv("HIVE_E2E_HARNESS"); hn != "" {
 		cfg.Harness = hn // a live probe: real agents, plan usage
 		if _, err := harness.Get(hn); err != nil {
