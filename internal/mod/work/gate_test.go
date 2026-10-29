@@ -846,6 +846,45 @@ func TestFakedCantRunCommentsOnceThenRed(t *testing.T) {
 	}
 }
 
+// A branch whose tests can't find a tool that main's own tests ran with is
+// stale, not short of the tool: it catches up with main and is tested again,
+// without counting tries or asking the person to install it.
+func TestCantRunBehindMainCatchesUp(t *testing.T) {
+	m, task, p, forge := gateRigSeeded(t, false,
+		map[string]string{".hive/project.json": `{"test": "sh check.sh"}`, "check.sh": "echo 'sh: 1: hwde: not found'; exit 127\n"},
+		map[string]string{"feature.txt": "y"})
+	if err := testStep(m, task, p); err != nil {
+		t.Fatal(err)
+	}
+	if task.Stage != StageTesting || task.CantRuns != 1 {
+		t.Fatalf("stage %q, can't-runs %d, reason %q", task.Stage, task.CantRuns, task.Reason)
+	}
+	// Main's script now finds the tool its own way; the branch's predates it.
+	pushMain(t, forge, map[string]string{"check.sh": "exit 0\n"})
+	before := task.SHA
+	if err := testStep(m, task, p); err != nil {
+		t.Fatal(err)
+	}
+	main, _ := m.C.Effects.Sync(p)
+	if task.SHA == before || !strings.Contains(task.Log[len(task.Log)-1].Text, "branch brought up to date") {
+		t.Fatalf("not caught up: sha %s was %s, log %+v", task.SHA, before, task.Log)
+	}
+	if _, err := core.Git(m.C.WS.Project(p.Name), "merge-base", "--is-ancestor", main, task.SHA); err != nil {
+		t.Fatal("the new head doesn't contain main")
+	}
+	for _, a := range m.C.Person.Open() {
+		if a.Ref == "cant-run:"+task.ID {
+			t.Fatalf("the person was asked: %+v", a)
+		}
+	}
+	if err := testStep(m, task, p); err != nil {
+		t.Fatal(err)
+	}
+	if task.Stage == StageTesting || task.Stage == StageStopped || task.CantRuns != 0 {
+		t.Fatalf("after catching up: stage %q, can't-runs %d, reason %q", task.Stage, task.CantRuns, task.Reason)
+	}
+}
+
 // A checkpoint whose tests can't find their tool is dropped with that reason:
 // not a failure, nothing sent back, its round unspent, and the tool named once.
 // The alert clears once the tests run.
