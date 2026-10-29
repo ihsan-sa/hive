@@ -261,7 +261,7 @@ func (m *Module) fileFlaky(p core.Project, sha string, fs []failure, sum, out st
 	}
 	m.C.J.MustAppend("alert.raised", map[string]string{"kind": "flake", "project": p.Name, "sha": sha, "text": "a flaky test in " + p.Name + " failed at " + core.Short(sha) + " and passed on rerun: " + core.Clip(sum, 300)})
 	m.Work.File(work.Brief{Project: p.Name, From: "improve", Title: title, Aim: work.AimFix, Why: "flaky test: " + core.Clip(what, 200) + " failed at " + core.Short(sha) + " and passed on rerun",
-		Done:  "The test passes every time: it no longer depends on timing, order or shared state, and running it many times (go test -count=50 -run on it) never fails.",
+		Done:  "The test passes every time: it no longer depends on timing, order or shared state, and running it many times (" + m.manyTimes(p, sha) + ") never fails.",
 		Known: fmt.Sprintf("After a merge at %s the tests went red and passed when only what failed ran again, so the merge was kept. What failed: %s%s", core.Short(sha), sum, tests)})
 }
 

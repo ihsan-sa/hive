@@ -435,8 +435,18 @@ func (m *Module) fileFlakes(g []Flake) {
 		known = "The tests are quarantined (known flakes), seen red together: a forge check failing only them doesn't send a PR back. Each " + f.Why
 	}
 	m.Work.File(work.Brief{Project: f.Project, From: "improve", Title: core.Clip(flakyTitle+strings.Join(names, ", "), 120),
-		Done:  "The test passes every time on every platform the forge's checks run: it no longer depends on timing, order or shared state, and running it many times (go test -count=50 -run on it) never fails. Once this merges the quarantine on it is lifted, so its next red sends a PR back again.",
+		Done:  "The test passes every time on every platform the forge's checks run: it no longer depends on timing, order or shared state, and running it many times (" + m.manyTimes(core.Project{Name: f.Project}, "HEAD") + ") never fails. Once this merges the quarantine on it is lifted, so its next red sends a PR back again.",
 		Known: known + ". Where it failed:\n" + strings.Join(ev, "\n") + "\n\n" + testsLine + strings.Join(names, ", ")})
+}
+
+// manyTimes says how to run a flaky test many times in project p at sha:
+// go test's -count on a Go project, its own test command on any other.
+func (m *Module) manyTimes(p core.Project, sha string) string {
+	test := strings.TrimSpace(m.C.Effects.Config(p, sha).Test)
+	if test == "" || strings.Contains(test, "go test") {
+		return "go test -count=50 -run on it"
+	}
+	return "the project's own test command, " + core.Clip(test, 200) + ", narrowed to it"
 }
 
 // testsLine starts the line of a flake brief's known context that names its

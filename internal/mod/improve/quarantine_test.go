@@ -1,6 +1,8 @@
 package improve
 
 import (
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -411,5 +413,33 @@ func TestFlakeBriefsDedupe(t *testing.T) {
 	m.fileFlaky(core.Project{Name: "hive"}, "main9", []failure{{Pkg: "pkg", Tests: []string{"TestA"}}}, "TestA failed", "")
 	if n := len(flakes()); n != 2 {
 		t.Fatalf("a flake an open brief names was filed again: %d briefs", n)
+	}
+}
+
+// A flake brief on a project that isn't Go's says to run the test many
+// times with the project's own test command, not go test.
+func TestFlakeBriefNamesTheProjectsTestCommand(t *testing.T) {
+	m := rig(t)
+	p, _ := m.C.Projects.Get("hive")
+	if err := m.C.Effects.Clone(p); err != nil {
+		t.Fatal(err)
+	}
+	dir := m.C.WS.Project("hive")
+	if err := os.MkdirAll(filepath.Join(dir, ".hive"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".hive", "project.json"), []byte(`{"test": "python3 -m pytest -q"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"add", "-A"}, {"-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "pytest"}} {
+		if out, err := core.Git(dir, args...); err != nil {
+			t.Fatal(out, err)
+		}
+	}
+	sha, _ := core.Git(dir, "rev-parse", "HEAD")
+	m.fileFlaky(p, strings.TrimSpace(sha), nil, "tests/test_x.py::test_y failed", "FAILED tests/test_x.py::test_y - assert 0\n")
+	fs := m.Work.List(func(t work.Task) bool { return strings.HasPrefix(t.Title, flakyTitle) })
+	if len(fs) != 1 || !strings.Contains(fs[0].Done, "python3 -m pytest -q") || strings.Contains(fs[0].Done, "go test") {
+		t.Fatalf("flake briefs %+v", fs)
 	}
 }
