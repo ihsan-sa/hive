@@ -285,6 +285,13 @@ func (m *Module) judge(cur Stall, run, chat, thread string, took []float64, floo
 		if r.Status == core.StatusParked || r.Status == core.StatusQuiet || r.Waiting != "" {
 			return // waiting on a reset, a planned retry or something it asked for; quiet is flagged already
 		}
+		if r.Status != core.StatusRunning && strings.HasPrefix(r.Reason, "waiting") {
+			// Held before its turn by the pace (the strain, the ramp after
+			// it, the workers' pace): a recheck would only send it to the
+			// back (10-29: five such "Stuck" alerts in two hours). Its
+			// clock starts again from the turn the pace lets start.
+			return
+		}
 		cur.Since = latest(cur.Since, r.TurnStarted, r.LastOutput)
 	}
 	s := &cur

@@ -315,3 +315,25 @@ func TestJustEndedCheckIsNoStall(t *testing.T) {
 		t.Fatalf("task is %s, want it left in testing", tk.Stage)
 	}
 }
+
+// A worker the pace holds before its turn (the ramp after a strain, issue
+// #2022) is waiting its turn, not stuck: its task isn't retried or handed to
+// the lead, while a working task whose worker isn't held still is a stall.
+func TestRunHeldByThePaceIsNoStall(t *testing.T) {
+	m := rig(t)
+	for _, id := range []string{"0", "1"} {
+		m.C.J.MustAppend("run.created", core.RunSpec{ID: "w" + id, Role: "worker", Project: "p", Harness: "fake"})
+		m.C.J.MustAppend("task.saved", work.Task{ID: "t" + id, Project: "p", Title: "change t" + id, Stage: work.StageWorking, Worker: "w" + id})
+	}
+	m.C.J.MustAppend("run.held", map[string]any{"id": "w0", "reason": "waiting: starting one turn at a time after the machine was strained"})
+	m.mu.Lock()
+	for _, id := range []string{"t0", "t1"} {
+		m.spells[id] = spell{stage: work.StageWorking, since: time.Now().Add(-48 * time.Hour)}
+	}
+	m.mu.Unlock()
+	m.Watch()
+	s := m.Stalls()
+	if len(s) != 1 || !strings.Contains(fmt.Sprint(s), "t1") || strings.Contains(fmt.Sprint(s), "t0") {
+		t.Fatalf("stalls = %+v, want only t1's", s)
+	}
+}
