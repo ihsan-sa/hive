@@ -28,7 +28,7 @@ One Go binary, `hive`. A small core plus default modules; the daemon runs both a
 
 ```
 .hive/      events.jsonl, config.json, chats/*.jsonl, scores/*.jsonl,
-            runs/<id>/{host,ro,box}, kb/ (git repo of notes; record/ filed from the journal, untracked), gates/, checks/, improve/sweeps/,
+            runs/<id>/{host,ro,box}, kb/ (git repo of notes; record/ filed from the journal, untracked, with record/hours/<UTC hour>.jsonl the journal's last 48 hours as written), gates/, checks/, improve/sweeps/,
             logins/, private/{daemon.json, update.json, runs/<id>/{home,codex,codex-sessions}},
             tools/<python|uv|node|go>/bin (agent-installed runtimes; read-only at /hive/tools, on PATH),
             reports/{sent/*.json, outbox.jsonl, pending.jsonl} (only when sharing is on)
