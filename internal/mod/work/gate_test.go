@@ -171,6 +171,43 @@ func TestGateFailsOnBoth(t *testing.T) {
 	}
 }
 
+// A fix or revert whose red can't be told apart from main's (its run names
+// no failure, as a run cut off by its timeout doesn't) isn't held for main
+// to go green, which may wait on it: on hive-hwde the revert of the commit
+// that turned main red waited 'on main' for hours. It runs once more, then
+// goes back to its worker, or, a revert the Hive made itself, stops.
+func TestGateFixDoesNotWaitOnMain(t *testing.T) {
+	for _, kind := range []string{"fix", "revert"} {
+		t.Run(kind, func(t *testing.T) {
+			m, task, p, _ := gateRig(t, true, map[string]string{"feature.txt": "y"})
+			if kind == "fix" {
+				task.Aim, task.AimWhy = AimFix, "main's tests fail"
+			} else {
+				task.Kind, task.Worker, task.RevertSHA = "revert", "", "abc1234"
+			}
+			task.Reason = "waiting on main: its own tests fail at abc1234, so this failure isn't the worker's"
+			if err := testStep(m, task, p); err != nil {
+				t.Fatal(err)
+			}
+			if strings.HasPrefix(task.Reason, "waiting on main") || !task.Recheck || task.Retested != task.SHA {
+				t.Fatalf("first red: stage %q, reason %q, recheck %v", task.Stage, task.Reason, task.Recheck)
+			}
+			if n := alerts(m, "main-red"); n != 0 {
+				t.Fatalf("%d main-red alerts for a fix that doesn't wait on main", n)
+			}
+			if err := testStep(m, task, p); err != nil {
+				t.Fatal(err)
+			}
+			switch {
+			case kind == "fix" && (task.Stage != StageWorking || task.Round != 1 || !strings.Contains(task.Findings, "isn't held for main")):
+				t.Fatalf("fix: stage %q, round %d, findings %q", task.Stage, task.Round, task.Findings)
+			case kind == "revert" && (task.Stage == StageTesting || !strings.Contains(task.Reason, "no worker can fix it")):
+				t.Fatalf("revert: stage %q, reason %q", task.Stage, task.Reason)
+			}
+		})
+	}
+}
+
 // A failure only the branch has still goes back to the worker.
 func TestGateFailsOnBranchOnly(t *testing.T) {
 	m, task, p, _ := gateRig(t, false, map[string]string{"BROKEN": "x"})
