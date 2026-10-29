@@ -162,16 +162,20 @@ type Task struct {
 	DraftWhy   string    `json:"draft_why,omitempty"`   // why the lead made its PR a draft (pr_draft)
 	// DraftRevived: it was brought back once after stopping on a draft merge
 	// (reviveDrafts), so stopping on one again leaves it for the lead.
-	DraftRevived bool      `json:"draft_revived,omitempty"`
-	Failures     int       `json:"failures"`
-	Kills        int       `json:"kills,omitempty"`      // steps in a row killed by their timeout (killCap)
-	CloseFail    int       `json:"close_fail,omitempty"` // failed tries to close the issue
-	Attempt      int       `json:"attempt"`              // fresh workers handed this task
-	Retry        time.Time `json:"retry,omitempty"`
-	IssueOpen    bool      `json:"issue_open,omitempty"` // done, but its issue is still to close
-	Noted        string    `json:"noted,omitempty"`      // the head whose test result the PR has been told, or knowingly not
-	NotedDiff    string    `json:"noted_diff,omitempty"` // the PR's own diff and result its last test comment was about
-	HoldSaid     string    `json:"hold_said,omitempty"`  // the HoldKey of the hold the PR was last told of
+	DraftRevived bool `json:"draft_revived,omitempty"`
+	Failures     int  `json:"failures"`
+	// StoppedAt is when its steps' errors last stopped it, and Revivals how
+	// often the Hive has brought it back from such a stop since (revive).
+	StoppedAt time.Time `json:"stopped_at,omitempty"`
+	Revivals  int       `json:"revivals,omitempty"`
+	Kills     int       `json:"kills,omitempty"`      // steps in a row killed by their timeout (killCap)
+	CloseFail int       `json:"close_fail,omitempty"` // failed tries to close the issue
+	Attempt   int       `json:"attempt"`              // fresh workers handed this task
+	Retry     time.Time `json:"retry,omitempty"`
+	IssueOpen bool      `json:"issue_open,omitempty"` // done, but its issue is still to close
+	Noted     string    `json:"noted,omitempty"`      // the head whose test result the PR has been told, or knowingly not
+	NotedDiff string    `json:"noted_diff,omitempty"` // the PR's own diff and result its last test comment was about
+	HoldSaid  string    `json:"hold_said,omitempty"`  // the HoldKey of the hold the PR was last told of
 	// CantRuns counts the tries in a row its own tests couldn't start (a
 	// missing tool); past CantRunTries the hold goes to the person and counts
 	// as red. CantRunSaid is the PR told of a can't-run, once per PR.
@@ -1258,9 +1262,14 @@ func (m *Module) revive() {
 	slow := time.Since(m.slow) < slowWait
 	m.mu.Unlock()
 	for _, t := range m.List(func(t Task) bool {
-		return t.Stage == StageStopped && !t.ByPerson && strings.HasPrefix(t.Reason, gaveUpOnErrors)
+		return t.Stage == StageStopped && !t.ByPerson && strings.HasPrefix(t.Reason, "gave up after ")
 	}) {
 		why := strings.TrimPrefix(t.Reason, gaveUpOnErrors)
+		if !strings.HasPrefix(t.Reason, gaveUpOnErrors) {
+			// Stopped on steps killed by their timeout (killCap): only the
+			// cool-down below brings it back, not the machine clearing.
+			why = ""
+		}
 		var said string
 		switch {
 		case !paused && core.IsRateLimit(why):
@@ -1269,8 +1278,16 @@ func (m *Module) revive() {
 			said = "brought back: it stopped only because a call was killed by its timeout while the machine was loaded"
 		case core.BaseMoved(why):
 			said = "brought back: it stopped only because main moved while it merged"
-		default:
+		case paused && core.IsRateLimit(why), slow && core.TimedOut(why), core.ChecksRefused(why), stoppedOnDraft(t):
+			continue // waits for its own cause to clear (above, reviveRefused, reviveDrafts)
+		case t.StoppedAt.IsZero() || time.Since(t.StoppedAt) < ReviveWait(t.Revivals):
 			continue
+		default:
+			// Any other error stop is no verdict on the work either: what
+			// broke (a sandbox mount, the forge, a disk) is often fixed by
+			// then, so it is tried again, each time after twice the wait.
+			t.Revivals++
+			said = fmt.Sprintf("brought back (time %d): it stopped %s ago on errors that weren't its work's (%s), so the Hive tries it again", t.Revivals, time.Since(t.StoppedAt).Round(time.Minute), core.Clip(why, 200))
 		}
 		if m.workerStopped(t) {
 			continue
@@ -2086,10 +2103,11 @@ func (m *Module) test(t *Task, p core.Project) error {
 			delete(m.mainFails, p.Name)
 		}
 		m.mu.Unlock()
+		own := ownReds(c, mc)
 		switch {
-		case !mc.OK && !core.NoWorse(c, mc):
+		case !mc.OK && len(own) == 0 && !core.NoWorse(c, mc):
 			return m.waitOnMain(t, p, main, mc)
-		case !mc.OK:
+		case !mc.OK && len(own) == 0:
 			// Every test it fails main fails too: it is no worse than main,
 			// so it goes on rather than wait for the green it may be the fix
 			// for (a revert of what turned main red, say). Journaled every
@@ -2100,11 +2118,22 @@ func (m *Module) test(t *Task, p core.Project) error {
 			}
 			m.save(t, "its tests fail on "+core.Short(t.SHA)+" only where main's fail at "+core.Short(main)+" ("+core.Clip(strings.Join(core.RedKeys(c.FullOutput()), ", "), 400)+"), so it is no worse than main and goes on")
 		default:
-			if ok, err := m.catchUp(t, p, main, "tests failed but pass on main"); ok || err != nil {
+			// Main green, or red but passing whole packages this change
+			// fails in: those failures are the change's own, so it goes
+			// back to its worker rather than wait on main's fix.
+			why, onMain := "tests failed but pass on main", ""
+			if !mc.OK {
+				if strings.HasPrefix(t.Reason, "waiting on main") {
+					t.Reason = ""
+				}
+				why = "tests failed where main's pass at " + core.Short(main) + " (" + core.Clip(strings.Join(own, ", "), 300) + "), though main is red elsewhere"
+				onMain = "\n\nMain is red at " + core.Short(main) + " too, but only elsewhere: it passes every package where these fail (" + core.Clip(strings.Join(own, ", "), 400) + "), so they are this change's. Main's own failures aren't yours to fix."
+			}
+			if ok, err := m.catchUp(t, p, main, why); ok || err != nil {
 				return err
 			}
 			if t.Retested != t.SHA && m.failsAgain(p, t.SHA, cfg.Test, c) {
-				return m.sendBack(t, p, "The tests failed on your commit "+core.Short(t.SHA)+", and again when only the failing tests ran once more:\n\n"+core.ClipEnds(c.Output, 3000))
+				return m.sendBack(t, p, "The tests failed on your commit "+core.Short(t.SHA)+", and again when only the failing tests ran once more:\n\n"+core.ClipEnds(c.Output, 3000)+onMain)
 			}
 			if t.Retested != t.SHA {
 				// A slow, busy machine fails a test CI passes: what failed
@@ -2115,10 +2144,10 @@ func (m *Module) test(t *Task, p core.Project) error {
 				if strings.HasPrefix(t.Reason, "waiting on main") {
 					t.Reason = ""
 				}
-				m.save(t, "its tests failed on "+core.Short(t.SHA)+" ("+core.Clip(strings.Join(core.RedKeys(c.FullOutput()), ", "), 300)+") while main's pass, so they run once more before it counts")
+				m.save(t, "its tests failed on "+core.Short(t.SHA)+" ("+core.Clip(strings.Join(core.RedKeys(c.FullOutput()), ", "), 300)+") where main's pass, so they run once more before it counts")
 				return nil
 			}
-			return m.sendBack(t, p, "The tests failed on your commit "+core.Short(t.SHA)+":\n\n"+core.ClipEnds(c.Output, 3000))
+			return m.sendBack(t, p, "The tests failed on your commit "+core.Short(t.SHA)+":\n\n"+core.ClipEnds(c.Output, 3000)+onMain)
 		}
 	}
 	return m.passed(t, p, main, "tests passed")
@@ -2338,8 +2367,33 @@ func (m *Module) mainTests(p core.Project, main, command string) (core.Check, er
 	return c, nil
 }
 
+// ownReds names the failures of a red run c, beside main's red run mc,
+// that are the change's own: each in a go package main's run passed whole
+// ("ok pkg"). Main red in one place says nothing of a package it passed, so
+// such a change is sent back rather than held till main goes green. A
+// failure in a package main fails, or didn't report (its run stopped short),
+// can't be told apart and isn't named.
+func ownReds(c, mc core.Check) []string {
+	if mc.OK || c.OK {
+		return nil
+	}
+	passed := map[string]bool{}
+	for _, l := range strings.Split(mc.FullOutput(), "\n") {
+		if g := core.GoPkgLine.FindStringSubmatch(l); g != nil && g[1] == "ok" {
+			passed[g[2]] = true
+		}
+	}
+	var own []string
+	for _, k := range core.RedKeys(c.FullOutput()) {
+		if pkg, _, ok := strings.Cut(k, " "); ok && passed[pkg] {
+			own = append(own, k)
+		}
+	}
+	return own
+}
+
 // waitOnMain holds a red change while main's own tests are red, since the
-// failure can't be told apart from main's. Main's failure is raised once per
+// failure can't be told apart from main's (ownReds names none). Main's failure is raised once per
 // main commit, not once per waiting change; when main goes green the change
 // is brought up to date and tested again.
 func (m *Module) waitOnMain(t *Task, p core.Project, main string, mc core.Check) error {
@@ -4177,8 +4231,20 @@ func (m *Module) Stop(id, reason string) error {
 // lead, which brings it back with recheck or leaves it; no count ends it for good.
 func (m *Module) giveUp(t *Task, reason string) {
 	t.Stage, t.Reason = StageStopped, reason
+	next := "It's yours: bring it back with recheck, or leave it."
+	if strings.HasPrefix(reason, "gave up after ") {
+		t.StoppedAt = time.Now().UTC()
+		next = fmt.Sprintf("The Hive tries it again itself in %s unless its cause clears sooner; recheck brings it back now, and withdraw or stop ends it.", ReviveWait(t.Revivals))
+	}
 	m.save(t, core.Clip(reason, 300))
-	m.Chat.ToLead(t.Chat, t.Thread, fmt.Sprintf("Stopped %q (task %s): %s\n\nIt's yours: bring it back with recheck, or leave it.", t.Label(), strings.TrimSpace(t.ID+" "+t.PR.URL), core.Clip(reason, 1500)))
+	m.Chat.ToLead(t.Chat, t.Thread, fmt.Sprintf("Stopped %q (task %s): %s\n\n%s", t.Label(), strings.TrimSpace(t.ID+" "+t.PR.URL), core.Clip(reason, 1500), next))
+}
+
+// ReviveWait is how long a task stopped on its steps' errors waits before
+// the Hive brings it back itself, the n-th time: an hour, doubling each
+// time, at most a day. Nothing the errors did stops it for good.
+func ReviveWait(n int) time.Duration {
+	return min(time.Hour<<min(n, 5), 24*time.Hour)
 }
 
 // woke reports whether a blocked task's worker is taking turns again.

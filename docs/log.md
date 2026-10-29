@@ -364,6 +364,11 @@
 - Why: TestStaleModuleCacheRunsAgain's fix (30fea85) merged at 07:45:04Z; two older branches' local checks of their own heads, which still had the old test, went red seconds later, re-quarantined it and filed the same fix brief twice more (261028-085542, 261028-090108), each with nothing left to change.
 - Tradeoff: one git call per local red of a lifted test; when git can't tell (a commit not fetched), the red counts as before.
 
+## 2026-10-28 A hard stop repairs, reroutes or degrades instead (issue #1904)
+- Decision: four stops that held work until someone looked now act on their own. A red main holds a red change only where its failures can't be told apart from main's: one failing in a package main's run passed whole goes back to its worker. A task stopped on its steps' errors comes back after an hour, then two, up to a day apart, for as long as it keeps stopping. A pick on a run's route that can't run here is passed for the next. A release scan hit files the fix brief itself.
+- Why: the person (10-28 08:56 local): "stuff is far too rigid still like everything needs to be dynamic and adapt". The record of 10-27/28: every change with any red waited on main's red ("main-red" alerts, 8 in a day); dispatch's task for the second machine stopped for good on a bwrap mount error the Hive had since fixed; the release scan's goals.md:25 hit held every release for hours, alerted on each commit and fixed only when the lead read it.
+- Tradeoff: an error that will never clear is retried at most once a day, eight tries a time; a change's red in a package main passed is sent back even when main's red elsewhere caused it (a shared helper, say), costing its worker a round; a pick passed for an unproven one may not finish, which the route's stall handling (`Runs.onward`) already moves past.
+
 ## 2026-10-28: a canary's rollback spends an hour, not the train's day (issue #1922)
 
 - Decision: only a canary's keep spends the train's day (`trainEvery`, counted from the last keep); a rollback spends `canaryRetry` (an hour), after which the next newer pre-release safe here gets its canary. A rollback the canary made before measuring (issue #1924) still lets the next one ride at once; a can't-run still spends nothing beyond its own hour's retry. Unit `TestTrainRollbackSpendsAnHourNotADay`.
