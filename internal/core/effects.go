@@ -436,7 +436,9 @@ func (e *Effects) NewCheckout(p Project, id, base string) (string, error) {
 	Git(dir, "config", "user.name", "Hive")
 	Git(dir, "config", "user.email", "hive@localhost")
 	Git(dir, "config", "core.autocrlf", "false")
-	Git(dir, "config", "core.filemode", "false")
+	// core.filemode is left as clone probed it: true where the filesystem
+	// keeps exec bits, so a script a worker makes executable is committed
+	// 100755; false where it can't (Windows), as git sets there on its own.
 	return dir, nil
 }
 
