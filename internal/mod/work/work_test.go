@@ -1049,6 +1049,36 @@ func TestMergedOnForgeWhileHeld(t *testing.T) {
 	}
 }
 
+// A task held waiting on main is stepped again every tick to see whether main
+// went green, so a step nearly always holds it: a recheck sending it back to
+// its worker goes ahead over that step, and the step's older copy doesn't
+// save over it (issue #2082).
+func TestRecheckSendsBackATaskHeldOnMainUnderItsStep(t *testing.T) {
+	m, _, task, p := noCommitRig(t, 0)
+	if _, err := m.C.Runs.Start(core.RunSpec{ID: "w1", Role: "worker", Project: p.Name, Task: task.ID, Checkout: t.TempDir(), Harness: "fake"}); err != nil {
+		t.Fatal(err)
+	}
+	task.Stage, task.SHA, task.Worker = StageTesting, "2125f74e", "w1"
+	task.Reason = "waiting on main: its own tests fail at 7606c7f7, so this failure isn't the worker's"
+	m.save(task, task.Reason)
+	step, _ := m.Get(task.ID) // the tick's copy
+	m.mu.Lock()
+	m.busy[task.ID] = true
+	m.stepAt = map[string]time.Time{task.ID: time.Now()}
+	m.mu.Unlock()
+	if err := m.Recheck(task.ID, "fix the red test", "lead"); err != nil {
+		t.Fatalf("refused under the hold's step: %v", err)
+	}
+	m.save(&step, "the step's older copy")
+	got, _ := m.Get(task.ID)
+	if got.Stage != StageWorking || got.Reason != "" || !logged(&got, "sent back to its worker") {
+		t.Fatalf("not sent back, or the step saved over it: stage %q reason %q", got.Stage, got.Reason)
+	}
+	if !m.busy[task.ID] {
+		t.Fatal("the retry freed the task under the step still running on it")
+	}
+}
+
 // The person's stop stands over a step running on an older copy of the task:
 // the step's later saves are dropped and it doesn't merge, and a tick doesn't
 // start a step on a copy taken before a save.

@@ -4376,7 +4376,10 @@ func InFlight(stage string) bool {
 // with fresh counts, so its worker's branch is read again, pushed, and its
 // tests, reads and checks wait on that head, not on the one it was stuck on.
 // A checkpoint stuck there is dropped instead, and its worker keeps going.
-// It is refused while a step runs on the task, as Landed is.
+// It is refused while a step runs on the task, as Landed is, except on a
+// task held waiting on main: each tick steps it again only to look whether
+// main went green, so a step nearly always holds it, and the retry goes
+// ahead as a steer that the step's older copy can't save over.
 func (m *Module) retryInFlight(id, back, by string) error {
 	m.mu.Lock()
 	busy := m.busy[id]
@@ -4384,13 +4387,20 @@ func (m *Module) retryInFlight(id, back, by string) error {
 		m.busy[id] = true
 	}
 	m.mu.Unlock()
-	if busy {
+	t, _ := m.Get(id) // as the last step left it
+	over := busy && strings.HasPrefix(t.Reason, "waiting on main") && t.Checkpoint == ""
+	if busy && !over {
 		return m.heldErr(id)
 	}
-	defer m.release(id)
-	t, _ := m.Get(id) // as the last step left it
+	if !over {
+		defer m.release(id)
+	}
 	if !InFlight(t.Stage) {
 		return fmt.Errorf("task %s moved on to %s; look again", id, t.Stage)
+	}
+	save := m.save
+	if over {
+		save = m.steer
 	}
 	was := t.Stage
 	if t.Checkpoint != "" {
@@ -4420,11 +4430,11 @@ func (m *Module) retryInFlight(id, back, by string) error {
 			return err
 		}
 		t.Stage = StageWorking
-		m.save(&t, "retried from "+was+" by "+by+" and sent back to its worker: "+core.Clip(back, 200))
+		save(&t, "retried from "+was+" by "+by+" and sent back to its worker: "+core.Clip(back, 200))
 		return nil
 	}
 	t.Stage = StageLanding
-	m.save(&t, "retried from "+was+" by "+by+": its branch is pushed and checked again on its head")
+	save(&t, "retried from "+was+" by "+by+": its branch is pushed and checked again on its head")
 	return nil
 }
 
