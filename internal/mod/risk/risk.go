@@ -495,7 +495,9 @@ func (m *Module) tell(req Request, text string) {
 			continue
 		}
 		if m.C.Runs.Send(id, text) != nil {
-			m.reopen(id, text)
+			if err := m.reopen(id, text); err != nil {
+				m.C.Runs.Progress(id, "late answer, not delivered ("+core.Clip(err.Error(), 200)+"): "+text)
+			}
 		}
 	}
 }
