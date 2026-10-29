@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
 	"runtime"
@@ -284,3 +285,45 @@ const insideBins = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 // ProxyPort is where the egress forwarder listens inside the sandbox.
 const ProxyPort = "3128"
+
+// lookTool finds tool t on this machine: an absolute path as it is, a bare
+// name on PATH or else in ~/.local/bin or /usr/local/bin, where an installer
+// puts it without PATH knowing.
+func lookTool(t string) (string, error) {
+	if filepath.IsAbs(t) {
+		return t, nil
+	}
+	if p, err := exec.LookPath(t); err == nil {
+		if abs, err := filepath.Abs(p); err == nil {
+			return abs, nil
+		}
+	}
+	for _, d := range []string{filepath.Join(os.Getenv("HOME"), ".local", "bin"), "/usr/local/bin"} {
+		if _, err := os.Stat(filepath.Join(d, t)); err == nil {
+			return filepath.Join(d, t), nil
+		}
+	}
+	return "", fmt.Errorf("tool %q not found on this machine", t)
+}
+
+// AbsTools names each of tools by the absolute path this machine finds it
+// at, for a spec handed to another program (an executor module): that
+// program runs with its own PATH and HOME, so a bare name the daemon finds
+// (claude in /hive/bin, say) may be missing there. The base name stays the
+// tool's own (links aren't followed), as the name inside and a runner's
+// mapping go by it. One in the system's bin dirs stays bare: it is on any
+// PATH, and found by name it runs where it is inside, beside its package.
+// One not found stays as it was, for the sandbox to report.
+func AbsTools(tools []string) []string {
+	out := make([]string, len(tools))
+	for i, t := range tools {
+		out[i] = t
+		if filepath.IsAbs(t) {
+			continue
+		}
+		if p, err := lookTool(t); err == nil && !strings.Contains(":"+insideBins+":", ":"+filepath.Dir(p)+":") {
+			out[i] = p
+		}
+	}
+	return out
+}

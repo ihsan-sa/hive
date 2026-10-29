@@ -13,15 +13,17 @@ import (
 // canaryStub answers each canary with the next outcome sent on it, and
 // records the jobs it was given.
 type canaryStub struct {
-	outcome chan string
-	jobs    chan CanaryJob
+	outcome    chan string
+	jobs       chan CanaryJob
+	unmeasured bool // a rollback fails the candidate before measuring it
 }
 
 func newCanary(m *Module) *canaryStub {
 	s := &canaryStub{outcome: make(chan string, 1), jobs: make(chan CanaryJob, 4)}
 	m.Canary = func(ctx context.Context, j CanaryJob) core.GateResult {
 		s.jobs <- j
-		return core.GateResult{Outcome: <-s.outcome, Reason: "stub"}
+		o := <-s.outcome
+		return core.GateResult{Outcome: o, Reason: "stub", Measured: o != core.GateCantRun && !s.unmeasured}
 	}
 	return s
 }
@@ -140,5 +142,104 @@ func TestTrainWithoutACanaryStays(t *testing.T) {
 	msg, err := m.AutoUpdate()
 	if raw, _ := os.ReadFile(exe); err != nil || !strings.HasPrefix(msg, "already on v0.1.12") || !strings.Contains(msg, "no canary runner") || string(raw) != "old" {
 		t.Fatalf("no canary: %q, %v, binary %q", msg, err, raw)
+	}
+}
+
+// A canary that failed the candidate before measuring it, though its checks
+// passed here, failed on its own environment: that tag is turned back but the
+// day isn't spent, so the next pre-release rides at once; and any agent can
+// run the train again, on the same tag, whatever the day.
+func TestTrainAfterTheCanarysOwnFailure(t *testing.T) {
+	m, _ := releaseAt(t, "v0.1.12", "me/hive")
+	g := preSite(t, m)
+	if _, err := m.C.Projects.Add(core.Project{Name: "hive", Repo: "me/hive", Self: true}); err != nil {
+		t.Fatal(err)
+	}
+	s := newCanary(m)
+	s.unmeasured = true
+	m.AutoUpdate()
+	if j := <-s.jobs; j.Tag != "v0.1.13" {
+		t.Fatalf("canary job %+v", j)
+	}
+	s.outcome <- core.GateRollback
+	verdicts(t, m, 1)
+	if msg, _ := m.AutoUpdate(); !strings.Contains(msg, "v0.1.13: its canary failed it before measuring it (stub)") {
+		t.Fatalf("after the canary's own failure: %q", msg)
+	}
+	select {
+	case j := <-s.jobs:
+		t.Fatalf("the turned-back candidate ran again on its own: %+v", j)
+	default:
+	}
+
+	// The next pre-release is safe here: it rides at once, not a day on.
+	g.setJobs("v0.1.15", gatesFor("success", "success"))
+	g.f.PublishRelease("me/hive", "v0.1.15")
+	if msg, _ := m.AutoUpdate(); !strings.Contains(msg, "v0.1.15: its canary started against v0.1.12") {
+		t.Fatalf("the next pre-release waited: %q", msg)
+	}
+	<-s.jobs
+	s.unmeasured = false
+	s.outcome <- core.GateRollback
+	verdicts(t, m, 2)
+	if msg, _ := m.AutoUpdate(); !strings.Contains(msg, "v0.1.15: its canary rolled it back") {
+		t.Fatalf("after a measured rollback: %q", msg)
+	}
+
+	// A measured rollback spent the day; an agent runs the train again on
+	// the same tag anyway.
+	op := core.Run{ID: "w-1", Role: "worker"}
+	if _, err := m.opTrain(op, []byte(`{}`)); err == nil {
+		t.Fatal("the train ran again with no why")
+	}
+	if _, err := m.opTrain(op, []byte(`{"why":"the canary's checkout is writable now"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if msg, _ := m.AutoUpdate(); !strings.Contains(msg, "v0.1.15: its canary started against v0.1.12") {
+		t.Fatalf("after train again: %q", msg)
+	}
+	<-s.jobs
+	if _, err := m.opTrain(op, []byte(`{"why":"again"}`)); err == nil || !strings.Contains(err.Error(), "the canary is running on v0.1.15") {
+		t.Fatalf("train again while a canary runs: %v", err)
+	}
+	s.outcome <- core.GateKeep
+	verdicts(t, m, 3)
+}
+
+// A rollback moved nothing, so it doesn't spend the day: the next newer
+// pre-release safe here gets its canary an hour after it (issue #1922).
+func TestTrainRollbackSpendsAnHourNotADay(t *testing.T) {
+	m, exe := releaseAt(t, "v0.1.12", "me/hive")
+	g := preSite(t, m)
+	if _, err := m.C.Projects.Add(core.Project{Name: "hive", Repo: "me/hive", Self: true}); err != nil {
+		t.Fatal(err)
+	}
+	s := newCanary(m)
+	m.AutoUpdate()
+	if j := <-s.jobs; j.Tag != "v0.1.13" {
+		t.Fatalf("canary job %+v", j)
+	}
+	s.outcome <- core.GateRollback
+	verdicts(t, m, 1)
+
+	g.setJobs("v0.1.15", gatesFor("success", "success"))
+	g.f.PublishRelease("me/hive", "v0.1.15")
+	msg, err := m.AutoUpdate()
+	if err != nil || !strings.HasPrefix(msg, "already on v0.1.12") || !strings.Contains(msg, "v0.1.15: safe here; the last canary rolled back, so its canary runs after") {
+		t.Fatalf("within the hour: %q, %v", msg, err)
+	}
+
+	retry := canaryRetry
+	t.Cleanup(func() { canaryRetry = retry })
+	canaryRetry = 0
+	if msg, _ := m.AutoUpdate(); !strings.Contains(msg, "v0.1.15: its canary started against v0.1.12") {
+		t.Fatalf("an hour on, within the day: %q", msg)
+	}
+	<-s.jobs
+	s.outcome <- core.GateKeep
+	verdicts(t, m, 2)
+	msg, err = m.AutoUpdate()
+	if raw, _ := os.ReadFile(exe); err != nil || !strings.HasPrefix(msg, "updated to v0.1.15\n") || string(raw) != "v15" {
+		t.Fatalf("after the keep: %q, %v, binary %q", msg, err, raw)
 	}
 }

@@ -178,7 +178,7 @@ A value of @path reads that file. Common ops:
                                                  file an ask: it becomes an issue, a worker, a PR; a fix with
                                                  --aim fix --why, or when it names something broken;
                                                  else (or with --aim gain) taken as a gain
-  aim       --aim fix|gain --why "..." [--task id]   your task (the lead: any) is a fix of the failure --why
+  aim       --aim fix|gain --why "..." [--task id]   your task (or any on your project) is a fix of the failure --why
                                                  names, which merges on its tests and reads and isn't reverted
                                                  for a score dip alone, or a gain, which on the Hive's own
                                                  repository merges only on the recursive gate's clear gain
@@ -198,11 +198,14 @@ A value of @path reads that file. Common ops:
   status                                         projects, work in flight, scores
   github    --pr N | --checks sha | --annotations id | --path "repos/o/r/..." [--repo o/r]
                                                  GitHub's API on the person's login, cached; never curl api.github.com
-The loop is every agent's: these act on your own project's tasks, on the record with your run id.
+Every agent is the same: lead, worker and sweep are names, not ranks, and every op below is yours
+(only the warden and tribunal are set apart). These act on your own project's work, on the record
+with your run id.
   rerun-checks [--task id]                      the failed forge checks (CI jobs) on a PR's head (yours by default)
                                                  run again, for a flake; at most 2 per head, the merge waits for them
   queue     [--order id,id] [--hold id] [--release id]   briefs waiting for a worker, in order
             [--now id --why "..."]               put it first in line
+                                                 any project's: --why on one not yours, on its record
   recheck   --task id [--back "..."]           a blocked or stopped task, or one stuck on its way to
                                                  the merge (say on a stale commit's checks), is pushed and
                                                  checked again from its head; --back sends its worker that
@@ -216,20 +219,20 @@ The loop is every agent's: these act on your own project's tasks, on the record 
   stop      --task id --why "..." [--fresh]   end a working task's quiet worker (one that keeps ending
                                                  turns without finishing) as blocked; bring the task back
                                                  with recheck, or --fresh hands it to a new worker at once
-  pr_ready  --task id [--why "..."]              (lead) mark the Hive's own PR ready; its merge goes on
-  pr_draft  --task id --why "..."                (lead) mark it a draft; its task waits, not stopped
-  pr_close  --task id --comment "..." [--delete_branch]   (lead) close it with a comment, ending its
+  pr_ready  --task id [--why "..."]              mark the Hive's own PR ready; its merge goes on
+  pr_draft  --task id --why "..."                mark it a draft; its task waits, not stopped
+  pr_close  --task id --comment "..." [--delete_branch]   close it with a comment, ending its
                                                  task (or --project p --pr N in place of --task)
   models                                         named models, each role's route, what each agent runs on, trials
-  route     --role worker --models "a,b" [--project p]   (lead) the models a role runs on, in fallback order
-  trial     --model m --project test --title "..." --done "..."   (lead) one brief's worker on that model alone
-  hold_merges --project p --why "their words" [--only N,M] [--until release] [--lift]   (lead) on the person's
+  route     --role worker --models "a,b" [--project p]   the models a role runs on, in fallback order
+  trial     --model m --project test --title "..." --done "..."   one brief's worker on that model alone
+  hold_merges --project p --why "their words" [--only N,M] [--until release] [--lift]   on the person's
                                                  word only: nothing merges but those PRs until lifted or released
-  create_project --name n [--repo o/r] --description "..." --goals "..." [--sharing shared|private|isolated]   (lead)
+  create_project --name n [--repo o/r] --description "..." --goals "..." [--sharing shared|private|isolated]
                                                  a bare name goes in repo_owner, else self_fork, else the gh login
-  retire_project --name n --why "..."            (lead) one made by mistake: setup never finished, or nothing
+  retire_project --name n --why "..."            one made by mistake: setup never finished, or nothing
                                                  in flight or merged; the repository is left as it is
-  install_module --url <git url> | --project <module>   (lead) a warden weighs it; you hear back
+  install_module --url <git url> | --project <module>   a warden weighs it; you hear back
   requests                                       each request past a sandbox and where it stands
 In $HIVE_STATE, logins/ and private/ (the daemon's token, every agent's home) are covered, and so are an
 isolated project's records (and the journal, while any project is isolated): hidden there, not missing.`

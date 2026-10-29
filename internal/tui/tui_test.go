@@ -535,6 +535,36 @@ func TestUpdateNoticeShowsOnce(t *testing.T) {
 	}
 }
 
+// Long notes show whole: a line past the pane wraps, notes past its height
+// scroll to the end, and an escape an older version journaled raw never
+// reaches the screen.
+func TestUpdateNoticeShowsLongNotesWhole(t *testing.T) {
+	m := testModel(100, 24)
+	st := sample()
+	long := "v0.1.4: https://github.com/me/hive/releases/tag/v0.1.4\n" + strings.Repeat("a long line of notes that runs past the edge of the screen ", 5) + "WRAPPED"
+	for i := range 40 {
+		long += fmt.Sprintf("\r\nline %d", i)
+	}
+	st.Updated = &api.Updated{Seq: 3, To: "v0.1.4", Notes: long + "\n\x1b]0;owned\x07THE END"}
+	m.Update(stateMsg{st: st})
+	view := m.View()
+	checkWidth(t, view, 100, 24, "long update notice")
+	if !strings.Contains(view, "WRAPPED") || strings.Contains(view, "THE END") || !strings.Contains(view, "lines 1–") {
+		t.Fatalf("a line clipped rather than wrapped, or no word of more:\n%s", view)
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeySpace})
+	m.Update(tea.KeyMsg{Type: tea.KeyEnd})
+	view = m.View()
+	checkWidth(t, view, 100, 24, "long update notice at its end")
+	if !strings.Contains(view, `\x1b]0;owned\x07THE END`) || strings.ContainsAny(view, "\a\r") || !strings.Contains(view, "Updated to v0.1.4") {
+		t.Fatalf("can't scroll to the end of the notes, or an escape reached the screen:\n%s", view)
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if view := m.View(); strings.Contains(view, "Updated to v0.1.4") {
+		t.Fatalf("notice still up after esc:\n%s", view)
+	}
+}
+
 // An update that installed an unsigned release says so in its notice.
 func TestUpdateNoticeSaysUnsigned(t *testing.T) {
 	m := testModel(100, 30)
@@ -1528,5 +1558,53 @@ func TestApplicationCursorEndAndHome(t *testing.T) {
 	ss3('F')
 	if v := m.View(); !strings.Contains(v, "pull/3") || m.composing {
 		t.Fatalf("ESC O F didn't go to the newest, or typed into a box:\n%s", v)
+	}
+}
+
+// A message one agent sends another shows in the feed with both names in
+// full and its project, and enter or a click on the line opens all of it.
+func TestFeedShowsAgentMessagesWhole(t *testing.T) {
+	m := testModel(120, 40)
+	m.pick(sideRow{sec: secDash})
+	m.st.Runs = append(m.st.Runs,
+		core.Run{RunSpec: core.RunSpec{ID: "w-261028-1-aaaaaaaaaa", Role: "worker", Project: "textkit"}},
+		core.Run{RunSpec: core.RunSpec{ID: "lead-project-textkit-b", Role: "lead", Name: "lead:hifi-receiver-2", Project: "textkit"}})
+	long := "the gate flakes on TestClientFollowsRestartedDaemon " + strings.Repeat("and here is more of why ", 20) + "THE END"
+	data, _ := json.Marshal(map[string]string{"from": "w-261028-1-aaaaaaaaaa", "to": "lead-project-textkit-b", "text": long})
+	m.addEvents([]core.Event{{Seq: 1, At: time.Now(), Kind: "msg.sent", Data: data}})
+	v := plain(m.View())
+	if !strings.Contains(v, "worker aaaaa → lead:hifi-receiver-2") || !strings.Contains(v, "textkit") ||
+		!strings.Contains(v, "the gate flakes") {
+		t.Fatalf("the feed lacks the names in full, the project or the message:\n%s", v)
+	}
+	m.focus = 1
+	m.keyDash(tea.KeyMsg{Type: tea.KeyEnter})
+	if len(m.stack) != 1 || !strings.Contains(m.stack[0].text, "THE END") || !strings.Contains(m.stack[0].text, "lead:hifi-receiver-2") {
+		t.Fatalf("enter didn't open the whole message: %+v", m.stack)
+	}
+	m.stack = nil
+
+	// a click on the line: find the row it was drawn on
+	screen := strings.Split(plain(m.View()), "\n")
+	y := -1
+	for i, l := range screen {
+		if strings.Contains(l, "the gate flakes") {
+			y = i
+		}
+	}
+	if y < 0 {
+		t.Fatal("the line isn't on screen")
+	}
+	sw, _, _ := m.layout()
+	m.Update(tea.MouseMsg{X: sw + 10, Y: y, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress})
+	m.Update(tea.MouseMsg{X: sw + 10, Y: y, Button: tea.MouseButtonLeft, Action: tea.MouseActionRelease})
+	if len(m.stack) != 1 || !strings.Contains(m.stack[0].text, "THE END") {
+		t.Fatalf("a click on the line didn't open it: %+v", m.stack)
+	}
+	m.stack = nil
+	m.Update(tea.MouseMsg{X: sw + 10, Y: y - 3, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress})
+	m.Update(tea.MouseMsg{X: sw + 10, Y: y - 3, Button: tea.MouseButtonLeft, Action: tea.MouseActionRelease})
+	if len(m.stack) != 0 {
+		t.Fatalf("a click above the feed opened %+v", m.stack)
 	}
 }

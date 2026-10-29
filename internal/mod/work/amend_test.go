@@ -11,13 +11,13 @@ import (
 
 // The lead re-filed a wider copy of the person's report and held the old one
 // six times over (issue #405): a waiting brief is amended in place instead,
-// and a superseded one withdrawn, its issue closed. Only its filer or the
-// lead may do either, and not once a worker has started; a withdrawn task
+// and a superseded one withdrawn, its issue closed. Any agent on its project
+// may do either (the person's own ask only they), and not once a worker has started; a withdrawn task
 // doesn't come back with recheck.
 func TestAmendAndWithdrawAWaitingBrief(t *testing.T) {
 	m := queueRig(t)
 	lead := core.Run{RunSpec: core.RunSpec{ID: "lead-1", Role: "lead"}}
-	other := core.Run{RunSpec: core.RunSpec{ID: "w-two", Role: "worker", Project: "p"}}
+	other := core.Run{RunSpec: core.RunSpec{ID: "w-two", Role: "worker", Project: "q"}}
 	op := func(fn func(core.Run, json.RawMessage) (any, error), r core.Run, a map[string]any) (map[string]string, error) {
 		raw, _ := json.Marshal(a)
 		out, err := fn(r, raw)
@@ -35,8 +35,8 @@ func TestAmendAndWithdrawAWaitingBrief(t *testing.T) {
 	}
 	tick(m)
 
-	if _, err := op(m.opAmend, other, map[string]any{"task": first["task"], "title": "x"}); err == nil || !strings.Contains(err.Error(), "only its filer or the lead") {
-		t.Fatalf("another worker amended a brief it didn't file: %v", err)
+	if _, err := op(m.opAmend, other, map[string]any{"task": first["task"], "title": "x"}); err == nil || !strings.Contains(err.Error(), "act only on your own") {
+		t.Fatalf("a worker on another project amended a brief: %v", err)
 	}
 	if _, err := op(m.opAmend, lead, map[string]any{"task": first["task"]}); err == nil {
 		t.Fatal("an amend that changes nothing was taken")

@@ -11,7 +11,7 @@ import (
 
 // Amending and withdrawing: a brief still waiting for a worker (filed, or
 // queued with its issue) can be changed in place or taken back by whoever
-// filed it, or by the lead, so a wider ask doesn't have to be filed again
+// filed it, or by any agent on its project, so a wider ask doesn't have to be filed again
 // beside the first and the old copy held (issue #405). Once a worker has
 // started, it is told instead (message it), and its PR closed with pr_close;
 // one whose worker finished blocked without opening a PR has nothing left to
@@ -31,8 +31,8 @@ func (t Task) Withdrawn() bool {
 func (t Task) endedBare() bool { return t.Stage == StageBlocked && t.PR.Number == 0 }
 
 // mayChange checks r may amend or withdraw t: a brief that no worker has
-// started on yet (or, to withdraw, one blocked with no PR), filed by r, or by
-// anyone but the person when r is the lead.
+// started on yet (or, to withdraw, one blocked with no PR), on r's project,
+// and not the person's own unless r filed it.
 func (m *Module) mayChange(r core.Run, t Task, verb string) error {
 	if err := m.reach(r, t.Project); err != nil {
 		return err
@@ -44,8 +44,6 @@ func (m *Module) mayChange(r core.Run, t Task, verb string) error {
 		return fmt.Errorf("task %s has left the queue (%s), so it can't be %s: message its worker, or close its PR with pr_close (only a blocked task with no PR can still be withdrawn)", t.ID, t.Stage, verb)
 	case t.From == r.ID:
 		return nil
-	case r.Role != "lead":
-		return fmt.Errorf("task %s was filed by %s; only its filer or the lead can have it %s", t.ID, t.From, verb)
 	case t.From == "person":
 		return fmt.Errorf("task %s is the person's own ask; only they can have it %s", t.ID, verb)
 	}

@@ -280,22 +280,11 @@ func openIn(path string) (*os.File, error) {
 }
 
 func findTool(t string) (string, error) {
-	if !filepath.IsAbs(t) {
-		p, err := exec.LookPath(t)
-		if err != nil {
-			for _, d := range []string{filepath.Join(os.Getenv("HOME"), ".local", "bin"), "/usr/local/bin"} {
-				if _, e := os.Stat(filepath.Join(d, t)); e == nil {
-					p, err = filepath.Join(d, t), nil
-					break
-				}
-			}
-		}
-		if err != nil {
-			return "", fmt.Errorf("tool %q not found on this machine", t)
-		}
-		t = p
+	p, err := lookTool(t)
+	if err != nil {
+		return "", err
 	}
-	return filepath.EvalSymlinks(t)
+	return filepath.EvalSymlinks(p)
 }
 
 // interpreters are the host's own runtimes a command may call by name. One
