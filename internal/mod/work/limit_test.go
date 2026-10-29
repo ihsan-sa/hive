@@ -310,3 +310,48 @@ func TestSpentQuotaWaitsAndComesBack(t *testing.T) {
 		t.Fatalf("not brought back: %q %q", got.Stage, got.Reason)
 	}
 }
+
+// A task stopped on errors no other revival knows (a sandbox mount the
+// Hive got wrong, as 261027-110621-37da031414's was) isn't stopped for good:
+// it comes back after ReviveWait, then after twice that, and so on. One the
+// person stopped, or stopped on its worker's findings, stays stopped.
+func TestErrorStopsComeBackAfterAWait(t *testing.T) {
+	m, _, task, _ := noCommitRig(t, 0)
+	why := "gave up after repeated errors: could not take commits out: bwrap: Can't find source path : No such file or directory"
+	m.giveUp(task, why)
+	held := &Task{ID: "t2", Project: "p", Kind: "work", Stage: StageStopped, ByPerson: true, Reason: why, StoppedAt: time.Now().Add(-48 * time.Hour)}
+	m.save(held, "stopped")
+	planted := &Task{ID: "t3", Project: "p", Kind: "work", Stage: StageStopped, Reason: "stopped after 3 rounds of fixes: " + why, StoppedAt: time.Now().Add(-48 * time.Hour)}
+	m.save(planted, "stopped")
+	m.revive()
+	if got, _ := m.Get(task.ID); got.Stage != StageStopped {
+		t.Fatalf("brought back at once: %q", got.Stage)
+	}
+	for n := 0; n < 3; n++ {
+		got, _ := m.Get(task.ID)
+		got.StoppedAt = time.Now().Add(-ReviveWait(n) + time.Minute)
+		m.save(&got, "")
+		m.revive()
+		if got, _ := m.Get(task.ID); got.Stage != StageStopped {
+			t.Fatalf("time %d: brought back before its wait: %q", n, got.Stage)
+		}
+		got, _ = m.Get(task.ID)
+		got.StoppedAt = time.Now().Add(-ReviveWait(n) - time.Minute)
+		m.save(&got, "")
+		m.revive()
+		got, _ = m.Get(task.ID)
+		if got.Stage != StageLanding || got.Revivals != n+1 || got.Failures != 0 || !logged(&got, "the Hive tries it again") {
+			t.Fatalf("time %d: not brought back: %+v", n, got)
+		}
+		m.giveUp(&got, why)
+	}
+	if h, _ := m.Get("t2"); h.Stage != StageStopped {
+		t.Fatal("a task the person stopped came back")
+	}
+	if o, _ := m.Get("t3"); o.Stage != StageStopped {
+		t.Fatal("a stop on findings came back")
+	}
+	if ReviveWait(1) != 2*time.Hour || ReviveWait(40) != 24*time.Hour {
+		t.Fatalf("waits %s, %s", ReviveWait(1), ReviveWait(40))
+	}
+}

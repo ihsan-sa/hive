@@ -1,6 +1,7 @@
 package release
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -53,6 +54,32 @@ func TestScanBlocksTheRelease(t *testing.T) {
 	}
 	if a := alerts(m); len(a) != 1 || !strings.Contains(a[0], "scan blocks it") {
 		t.Fatalf("want one alert that the scan blocked it, got %q", a)
+	}
+}
+
+// A scan that blocks the release files its own fix, naming the files its
+// hits are in and never what they found; a later commit held by the same
+// hits files the same title, which the work module keeps to one open task.
+func TestScanBlockFilesItsFix(t *testing.T) {
+	m, _, merged, land := selfHive(t)
+	hits := errors.New("the scan found 2 thing(s) in 333 published file(s) that must never be published:\n  .hive/goals.md:25: word 2 of the deny list\n  docs/a.md:3: handle 1")
+	m.Scan = func(core.Project, string) error { return hits }
+	var titles []string
+	m.FileFix = func(project, title, done, known, why string) {
+		if project != "hive" || !strings.Contains(known, "goals.md:25") || why == "" {
+			t.Errorf("filed %q %q %q", project, known, why)
+		}
+		titles = append(titles, title)
+	}
+	merged(1, "a1", "m1")
+	land("a1", "r1")
+	m.AfterKept("hive", "m1")
+	if len(titles) != 1 || !strings.Contains(titles[0], ".hive/goals.md, docs/a.md") || strings.Contains(titles[0], "25") {
+		t.Fatalf("filed %q", titles)
+	}
+	m.AfterKept("hive", "m1")
+	if len(titles) != 1 {
+		t.Fatalf("the same hits at the same commit filed again: %q", titles)
 	}
 }
 

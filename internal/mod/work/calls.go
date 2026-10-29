@@ -22,5 +22,7 @@ var (
 	callJudgeParkWait = calls.Duration("work.judge_park_wait", "how long a judge parked on usage holds a clear keep before the numbers decide; 0 decides at once", &JudgeParkWait)
 	callGateTimeout   = calls.Duration("work.gate_timeout", "how long one recursive gate run may take", &GateTimeout).AtLeast(10 * time.Minute)
 	callDraftTell     = calls.Duration("work.draft_tell", "how long a PR stays a draft before the lead is told; 0 tells it at once", &draftTell)
+	callReviveFirst   = calls.Duration("work.revive_wait", "how long a task stopped on its steps' errors waits before the Hive brings it back itself the first time; each time after waits twice as long, up to work.revive_wait_max", &reviveFirst).AtLeast(time.Minute)
+	callReviveMost    = calls.Duration("work.revive_wait_max", "the longest a task stopped on its steps' errors waits before the Hive brings it back itself", &reviveMost).AtLeast(time.Minute)
 	callKeptFirstFor  = calls.Duration("work.kept_first_for", "how long a gate's measured keep holds other merges that would unseat it, so it merges first; 0 holds none", &keptFirstFor).Bar()
 )

@@ -317,6 +317,31 @@ func TestGateNoWorseThanRedMainGoesOn(t *testing.T) {
 	}
 }
 
+// A red main holds only what it can't be told apart from: a change failing
+// in a package main's own run passed whole is the change's red, so it goes
+// back to its worker (after the one rerun any red gets) instead of waiting
+// on main's fix, and is told main's failures aren't its.
+func TestRedMainDoesntHoldAChangesOwnRed(t *testing.T) {
+	const mainRed = "echo '--- FAIL: TestClock (0.01s)'\necho 'FAIL\tp/a\t0.01s'\necho 'ok  \tp/b\t0.01s'\nexit 1\n"
+	onMain := map[string]string{".hive/project.json": `{"test": "sh ./t.sh"}`, "t.sh": mainRed}
+	own := "echo '--- FAIL: TestClock (0.01s)'\necho 'FAIL\tp/a\t0.01s'\necho '--- FAIL: TestNew (0.01s)'\necho 'FAIL\tp/b\t0.01s'\nexit 1\n"
+	m, task, p, _ := gateRigSeeded(t, false, onMain, map[string]string{"t.sh": own})
+	for i := 0; i < 2; i++ {
+		if err := testStep(m, task, p); err != nil {
+			t.Fatal(err)
+		}
+		if strings.HasPrefix(task.Reason, "waiting on main") {
+			t.Fatalf("step %d: its own red waited on main: %q", i, task.Reason)
+		}
+	}
+	if task.Stage != StageWorking || task.Round != 1 || !strings.Contains(task.Findings, "p/b TestNew") || !strings.Contains(task.Findings, "aren't yours to fix") {
+		t.Fatalf("stage %q, round %d, findings %q", task.Stage, task.Round, task.Findings)
+	}
+	if n := alerts(m, "main-red"); n != 0 {
+		t.Fatalf("%d main-red alerts for a change sent back on its own red", n)
+	}
+}
+
 // The change the testing stage let on as no worse than main merges: the
 // merge's own gate takes a red test run whose every failure main's run
 // shares, rather than refuse it as untested and hold it till it gives up.
@@ -978,7 +1003,7 @@ func TestLeadClosesPRWaitingInCheckLine(t *testing.T) {
 	if err := m.test(task, p); err != nil { // queues its test behind the step
 		t.Fatal(err)
 	}
-	for end := time.Now().Add(10 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+	for end := time.Now().Add(time.Minute); ; time.Sleep(10 * time.Millisecond) {
 		if _, w := m.C.Effects.Slots.State(); len(w) == 1 {
 			break
 		}
@@ -990,12 +1015,18 @@ func TestLeadClosesPRWaitingInCheckLine(t *testing.T) {
 	m.busy[task.ID] = true // a step holds it, as Tick does
 	m.mu.Unlock()
 	stepCopy := *task
-	start := time.Now()
-	if _, err := m.ClosePR(task.ID, "lead", "a duplicate", false); err != nil {
-		t.Fatalf("close refused while a step holds the task: %v", err)
-	}
-	if d := time.Since(start); d > 10*time.Second {
-		t.Fatalf("close took %v", d)
+	// The step holds the task until after the close, so a close that waited
+	// on it would never return; no wall-clock bound beyond that, as a loaded
+	// machine's local forge alone can take seconds.
+	closed := make(chan error, 1)
+	go func() { _, err := m.ClosePR(task.ID, "lead", "a duplicate", false); closed <- err }()
+	select {
+	case err := <-closed:
+		if err != nil {
+			t.Fatalf("close refused while a step holds the task: %v", err)
+		}
+	case <-time.After(2 * time.Minute):
+		t.Fatal("close waited on the step holding the task")
 	}
 	m.save(&stepCopy, "the step's older copy") // dropped: the close was steered over it
 	m.release(task.ID)

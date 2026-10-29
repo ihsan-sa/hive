@@ -1,7 +1,6 @@
 package sandbox
 
 import (
-	"errors"
 	"os"
 	"time"
 
@@ -15,6 +14,9 @@ import (
 // starts `<Argv...> turn --spec <file> [--runner <Where>]`. The spec is built
 // with inside paths, as for the local sandbox, and the program writes the
 // turn's output to the spec's stdout and stops when its stop_file appears.
+// The spec's tools go by absolute path (AbsTools): the program runs with its
+// own PATH, and when it runs the turn here after all, with `hive sandbox-exec`,
+// a tool found by name only on the daemon's PATH would be missing.
 type Delegate struct {
 	Module string   // the module's name
 	Where  string   // the runner that said it has room
@@ -31,6 +33,7 @@ func (d *Delegate) Isolated() bool { return true }
 func (d *Delegate) Check() error   { return nil }
 
 func (d *Delegate) Start(s Spec) (Proc, error) {
+	s.Tools = AbsTools(s.Tools)
 	specPath, err := writeTempSpec(s)
 	if err != nil {
 		return Proc{}, err
@@ -50,7 +53,23 @@ func (d *Delegate) Start(s Spec) (Proc, error) {
 	return p, nil
 }
 
-// Run is for checks, which always run here.
-func (d *Delegate) Run(Spec, time.Duration) (int, error) {
-	return -1, errors.New("an executor module runs turns only")
+// Run runs a check's spec on the module the same way, to completion: the
+// module writes its output to the spec's stdout, and a check past timeout is
+// ended with the module's program, which ends it on the runner too.
+func (d *Delegate) Run(s Spec, timeout time.Duration) (int, error) {
+	s.Tools = AbsTools(s.Tools)
+	specPath, err := writeTempSpec(s)
+	if err != nil {
+		return -1, err
+	}
+	argv := append(append([]string{}, d.Argv...), "turn", "--spec", specPath)
+	if d.Where != "" {
+		argv = append(argv, "--runner", d.Where)
+	}
+	if d.Started != nil {
+		d.Started()
+	}
+	code, err := runSync(argv, d.Env, d.Dir, "", s.Stdout+".dispatch", timeout, nil)
+	os.Remove(specPath) // the module removes it once read; not if it never started
+	return code, err
 }

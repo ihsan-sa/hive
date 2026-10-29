@@ -30,10 +30,9 @@ func (m *Module) opRerunChecks(r core.Run, args json.RawMessage) (any, error) {
 	}
 	t, ok := m.Get(a.Task)
 	if a.Task == "" {
-		if r.Role != "worker" {
+		if t, ok = m.taskOf(r.ID); !ok {
 			return nil, errors.New("name the task: --task <id>")
 		}
-		t, ok = m.taskOf(r.ID)
 	}
 	if !ok {
 		return nil, fmt.Errorf("no task %q", a.Task)
