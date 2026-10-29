@@ -111,8 +111,8 @@ func TestLoaded(t *testing.T) {
 }
 
 // Linux counts a task waiting on the disk in the load average: a load over
-// its limit with the CPU barely contended is the disk's when IO pressure is
-// high, and strains nothing when that is low too. Where pressure can't be
+// its limit with the CPU barely contended, or contended far less than the
+// disk, is the disk's when IO pressure is high, and strains nothing when that is low too. Where pressure can't be
 // read, load is the CPU's as before.
 func TestLoadedReadsWhatIsContended(t *testing.T) {
 	for _, c := range []struct {
@@ -120,6 +120,9 @@ func TestLoadedReadsWhatIsContended(t *testing.T) {
 		want          string
 	}{
 		{"cpu contended", "55.00", "60.00", "machine loaded (load 34 on 20 cores"},
+		{"cpu contended, disk less", "30.00", "58.00", "machine loaded (load 34 on 20 cores"},
+		{"cpu over its minimum, disk far more", "11.20", "58.00", "machine loaded on its disk (io pressure 58%, cpu pressure 11%; load 34 on 20 cores"},
+		{"cpu over its minimum, no io file", "11.20", "", "machine loaded (load 34 on 20 cores"},
 		{"disk", "2.61", "56.58", "machine loaded on its disk (io pressure 57%, cpu pressure 3%; load 34 on 20 cores"},
 		{"neither", "2.61", "3.00", ""},
 		{"no io file", "2.61", "", ""},
