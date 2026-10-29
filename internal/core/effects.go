@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"math"
 	"os"
@@ -67,6 +68,11 @@ type Effects struct {
 	// Granted are the modules an isolated project's checks may see (the
 	// modules module's grants). Unset, they see none.
 	Granted func(project string) []string
+
+	// ModuleHomes are the HOME folders of the installed modules built from a
+	// project's repository: its score check reads a copy of their records
+	// (moduleRecords). Unset, it reads none.
+	ModuleHomes func(project string) []string
 
 	// Slots holds checks to config's max_checks at a time, started in the order they asked.
 	Slots *Slots
@@ -713,14 +719,23 @@ func (e *Effects) checkOnce(p Project, sha, main, kind, command, back string) (C
 		installed, drop = e.checkModules(sb, p, dir)
 		defer drop()
 	}
+	var records []sandbox.Mount
+	if away == nil && kind == "score" {
+		var drop func()
+		records, drop = e.moduleRecords(p, dir)
+		defer drop()
+	}
 	run := func(offline bool) (int, string, error) {
-		ms := append(append(append(slices.Clone(mounts), build.mounts...), mods.mounts...), installed...)
+		ms := append(append(append(append(slices.Clone(mounts), build.mounts...), mods.mounts...), installed...), records...)
 		env := append(slices.Clone(build.env), mods.own...)
 		if offline {
 			env = append(slices.Clone(build.env), mods.env...)
 		}
 		if len(installed) > 0 {
 			env = append(env, "HIVE_MODULES="+sandbox.InsidePath(sb, installed[0]))
+		}
+		if len(records) > 0 {
+			env = append(env, "HIVE_HOME="+sandbox.InsidePath(sb, records[0]))
 		}
 		var disk sandbox.Disk
 		defer func() { c.DiskRead, c.DiskWrote = c.DiskRead+disk.Read, c.DiskWrote+disk.Wrote }()
@@ -1218,6 +1233,55 @@ func (e *Effects) checkModules(sb sandbox.Sandbox, p Project, dir string) ([]san
 		out = append(out, sandbox.Mount{Host: filepath.Join(all.Host, m), Inside: all.Inside + "/" + m})
 	}
 	return out, func() { os.RemoveAll(empty); e.markLive(empty, false) }
+}
+
+// moduleRecords copies the records (top-level *.jsonl, the last recordCap
+// bytes of each) of the modules built from p into a folder laid out as the
+// Hive's own, which p's score check reads read-only at HIVE_HOME: dispatch's
+// score counts the turns in its .hive/modules/dispatch/turns.jsonl. Nothing
+// else of a module's HOME goes, so its keys and tokens stay out.
+func (e *Effects) moduleRecords(p Project, dir string) ([]sandbox.Mount, func()) {
+	var homes []string
+	if e.ModuleHomes != nil {
+		homes = e.ModuleHomes(p.Name)
+	}
+	if len(homes) == 0 {
+		return nil, func() {}
+	}
+	root := dir + ".records"
+	e.markLive(root, true)
+	for _, h := range homes {
+		to := filepath.Join(root, ".hive", "modules", filepath.Base(h))
+		os.MkdirAll(to, 0o755)
+		files, _ := filepath.Glob(filepath.Join(h, "*.jsonl"))
+		for _, f := range files {
+			copyTail(f, filepath.Join(to, filepath.Base(f)), recordCap)
+		}
+	}
+	return []sandbox.Mount{{Host: root, Inside: "/hive/records"}}, func() { os.RemoveAll(root); e.markLive(root, false) }
+}
+
+const recordCap = 64 << 20
+
+// copyTail copies a regular file's last n bytes; a symlink is not followed.
+func copyTail(from, to string, n int64) {
+	if fi, err := os.Lstat(from); err != nil || !fi.Mode().IsRegular() {
+		return
+	}
+	in, err := os.Open(from)
+	if err != nil {
+		return
+	}
+	defer in.Close()
+	if fi, err := in.Stat(); err == nil && fi.Size() > n {
+		in.Seek(fi.Size()-n, io.SeekStart)
+	}
+	out, err := os.OpenFile(to, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
+	if err != nil {
+		return
+	}
+	io.Copy(out, io.LimitReader(in, n))
+	out.Close()
 }
 
 // cleanCheckout clones the host clone fresh and checks out sha.
