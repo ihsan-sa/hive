@@ -1514,3 +1514,22 @@ func TestApprovedCeilingRoutesAndIsTakenBack(t *testing.T) {
 		t.Fatalf("a run the person since said no inside of still carried: %+v", got)
 	}
 }
+
+// A line whose shape matches only through the shell's own "$#" is not
+// carried and doesn't panic.
+func TestWithinShellArgCount(t *testing.T) {
+	for _, c := range [][2]string{
+		{"[ $# -gt 0 ] && spend", "[ $1 -gt 0 ] && spend"},
+		{"[ $1 -gt 0 ] && spend", "[ $# -gt 0 ] && spend"},
+	} {
+		if within(c[0], c[1]) {
+			t.Errorf("within(%q, %q) carried", c[0], c[1])
+		}
+		if holds(map[string]int{c[0]: 1}, map[string]int{c[1]: 1}) {
+			t.Errorf("holds carried %q on %q", c[1], c[0])
+		}
+	}
+	if !within("pay $25 now", "pay $10 now") || within("pay $25 now", "pay $50 now") {
+		t.Error("amounts no longer compare")
+	}
+}

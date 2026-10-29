@@ -300,10 +300,15 @@ func within(a, n string) bool {
 	if a == n {
 		return true
 	}
-	if dollarRe.ReplaceAllString(a, "$#") != dollarRe.ReplaceAllString(n, "$#") {
+	// NUL never occurs in a line of shell, so the shapes can't meet by
+	// accident ("$#" is the shell's own argument count).
+	if dollarRe.ReplaceAllLiteralString(a, "\x00") != dollarRe.ReplaceAllLiteralString(n, "\x00") {
 		return false
 	}
 	as, ns := dollarRe.FindAllString(a, -1), dollarRe.FindAllString(n, -1)
+	if len(as) != len(ns) {
+		return false
+	}
 	for i := range ns {
 		x, okA := amount(as[i])
 		y, okN := amount(ns[i])
