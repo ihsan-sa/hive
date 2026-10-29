@@ -276,7 +276,7 @@ func (o *Ops) SetSpawner(s Spawner) { o.spawner = s }
 func (o *Ops) AddRouter(r Router) { o.routers = append(o.routers, r) }
 
 func (o *Ops) registerCore() {
-	o.Register(Op{Name: "message", Help: `{"to": "<run id | name | parent | person>", "text": "..."}`, Fn: func(r Run, a json.RawMessage) (any, error) {
+	o.Register(Op{Name: "message", Help: `{"to": "<run id | name | parent | lead | person>", "text": "..."} (lead: your own project's lead; parent: whoever started or filed you, else that lead)`, Fn: func(r Run, a json.RawMessage) (any, error) {
 		var m struct{ To, Text string }
 		if err := Bind(a, &m); err != nil {
 			return nil, err
@@ -364,11 +364,7 @@ func (o *Ops) registerCore() {
 
 // Deliver routes a message from r to an address.
 func (o *Ops) Deliver(from Run, to, text string) (any, error) {
-	if to == "parent" {
-		// Find("") matches any run, so a run with no parent must fail here.
-		if from.Parent == "" {
-			return nil, fmt.Errorf("%s has no parent to message", from.ID)
-		}
+	if to == "parent" && from.Parent != "" {
 		to = from.Parent
 	}
 	for _, route := range o.routers {
@@ -378,6 +374,25 @@ func (o *Ops) Deliver(from Run, to, text string) (any, error) {
 			}
 			return "delivered", nil
 		}
+	}
+	// "lead" is the sender's own project's lead, never another project's
+	// (issue #2040): a lead's id starts with "lead", so Find would take the
+	// newest of every project's. A worker's "parent" with none of its own
+	// (its task's filer, when a router didn't take it) is that lead too.
+	if to == "parent" && from.Task == "" {
+		// Find("") matches any run, so a run with no parent must fail here.
+		return nil, fmt.Errorf("%s has no parent to message", from.ID)
+	}
+	if to == "lead" || to == "parent" {
+		project := from.Project
+		if from.Lead() { // a project's lead's "lead" is the Hive's
+			project = ""
+		}
+		lead, ok := o.rs.LeadOf(project)
+		if !ok {
+			return nil, fmt.Errorf("%s has no %s to message", from.ID, to)
+		}
+		to = lead.ID
 	}
 	target, ok := o.rs.Find(to)
 	if !ok || o.rs.Walled(from, target.Project) != nil {

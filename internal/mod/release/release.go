@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"slices"
 	"strings"
@@ -62,6 +63,9 @@ type Module struct {
 	// Scan checks what a release at sha publishes before it is cut; nil is
 	// the identity and secret scan of the files on the commit's public list.
 	Scan func(p core.Project, sha string) error
+	// FileFix files a brief to fix what stops every release (the work
+	// module's File, once per open title); nil only alerts.
+	FileFix func(project, title, done, known, why string)
 	// Diff lists the files that differ between two commits; nil is git diff
 	// in the project's clone.
 	Diff func(p core.Project, from, to string) ([]string, error)
@@ -1078,6 +1082,7 @@ func (m *Module) afterKept(project, sha string) {
 		// A retry meets the same hits at the same commit: said once.
 		if last, _ := m.scanSaid.Swap(project, sha+": "+err.Error()); last != sha+": "+err.Error() {
 			alert("no release at " + core.Short(sha) + ", since its scan blocks it: " + err.Error())
+			m.fileScanFix(project, sha, err)
 		}
 		return
 	}
@@ -2031,4 +2036,32 @@ func bump(tag string) string {
 	var a, b, c int
 	fmt.Sscanf(strings.TrimPrefix(tag, "v"), "%d.%d.%d", &a, &b, &c)
 	return fmt.Sprintf("v%d.%d.%d", a, b, c+1)
+}
+
+// scanHit is a line of the scan's failure naming one hit: "  path:line: kind".
+var scanHit = regexp.MustCompile(`(?m)^\s+(\S+?):\d+: `)
+
+// fileScanFix turns a scan that blocks every release into work: a fix brief
+// naming the files its hits are in (by file, line and kind only, never what
+// was found), so the hold repairs itself rather than wait for someone to
+// read the alert. Its title names the files, not the commit or lines, so
+// each new commit the same hit holds doesn't file another.
+func (m *Module) fileScanFix(project, sha string, err error) {
+	if m.FileFix == nil {
+		return
+	}
+	var files []string
+	for _, h := range scanHit.FindAllStringSubmatch(err.Error(), -1) {
+		if !slices.Contains(files, h[1]) {
+			files = append(files, h[1])
+		}
+	}
+	if len(files) == 0 {
+		return
+	}
+	slices.Sort(files)
+	m.FileFix(project, "Releases go out again: the release scan's hits in "+strings.Join(files, ", ")+" are gone",
+		"The release scan passes on main, so a release can be cut; what the hits said is put another way or left out, never moved to an unscanned file.",
+		"No release since "+core.Short(sha)+": the release scan blocks it. "+core.Clip(err.Error(), 1500),
+		"the release scan blocks every release at "+core.Short(sha))
 }
