@@ -371,3 +371,45 @@ func TestMainRedIsNoFlake(t *testing.T) {
 		t.Fatalf("red on main, then green, then red again: quarantined %v", q)
 	}
 }
+
+// One red sighting files one brief, however many tests it took down; a
+// test an open brief names among others gets no brief of its own; and a
+// withdrawn brief isn't filed again until a red comes from a new commit,
+// then only for the tests that red took down.
+func TestFlakeBriefsDedupe(t *testing.T) {
+	m := rig(t)
+	flakes := func() []work.Task {
+		return m.Work.List(func(t work.Task) bool { return strings.HasPrefix(t.Title, flakyTitle) })
+	}
+	for _, id := range []string{"t1", "t2"} {
+		sight(m, id, "https://ci/"+id, "pkg::TestA", "pkg::TestB", "pkg::TestC")
+	}
+	m.fileQuarantined()
+	fs := flakes()
+	if len(fs) != 1 || fs[0].Title != flakyTitle+"pkg::TestA, pkg::TestB, pkg::TestC" || !strings.Contains(fs[0].Known, testsLine+"pkg::TestA, pkg::TestB, pkg::TestC") {
+		t.Fatalf("one sighting filed %+v", fs)
+	}
+	if _, err := m.Work.Withdraw(core.Run{ID: "improve", Project: "hive"}, fs[0].ID, "", "covered by the fix of main"); err != nil {
+		t.Fatal(err)
+	}
+	m.fileQuarantined()
+	if fs := flakes(); len(fs) != 1 {
+		t.Fatalf("a withdrawn brief was filed again on the same reds: %d briefs", len(fs))
+	}
+	m.fileFlaky(core.Project{Name: "hive"}, "abct1", []failure{{Pkg: "pkg", Tests: []string{"TestB"}}}, "TestB failed", "")
+	if fs := flakes(); len(fs) != 1 {
+		t.Fatalf("a rerun's pass on a commit the withdrawn brief named filed it again: %d briefs", len(fs))
+	}
+	time.Sleep(time.Millisecond)
+	sight(m, "t3", "https://ci/t3", "pkg::TestA")
+	m.fileQuarantined()
+	fs = flakes()
+	if len(fs) != 2 || !slices.ContainsFunc(fs, func(t work.Task) bool { return t.Title == flakyTitle+"pkg::TestA" && !t.Terminal() }) {
+		t.Fatalf("a red from a new commit after the withdrawal: %+v", fs)
+	}
+	// A rerun's pass naming tests an open brief covers files nothing more.
+	m.fileFlaky(core.Project{Name: "hive"}, "main9", []failure{{Pkg: "pkg", Tests: []string{"TestA"}}}, "TestA failed", "")
+	if n := len(flakes()); n != 2 {
+		t.Fatalf("a flake an open brief names was filed again: %d briefs", n)
+	}
+}

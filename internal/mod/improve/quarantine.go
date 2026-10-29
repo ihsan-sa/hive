@@ -112,17 +112,16 @@ func (m *Module) applyQuarantine(e core.Event) {
 		if !strings.HasPrefix(t.Title, flakyTitle) {
 			return
 		}
-		test := strings.TrimPrefix(t.Title, flakyTitle)
-		if strings.ContainsAny(test, ", ") {
-			return // one task for several tests: each still files its own
-		}
-		k := flakeKey(t.Project, test)
-		m.fixes[k] = t.ID
 		// The lift is the fix's merge, once: a later save of the same task
 		// (a note, a revert) mustn't drop the reds seen since.
-		if t.MergeSHA != "" && !m.fixMerged[t.ID] {
+		lift := t.MergeSHA != "" && !m.fixMerged[t.ID]
+		if lift {
 			m.fixMerged[t.ID] = true
-			if e.At.After(m.lifted[k]) {
+		}
+		for _, test := range flakeTests(t) {
+			k := flakeKey(t.Project, test)
+			m.fixes[k] = t.ID
+			if lift && e.At.After(m.lifted[k]) {
 				m.lifted[k], m.liftedBy[k] = e.At, t.MergeSHA
 			}
 		}
@@ -370,44 +369,137 @@ func (m *Module) QuarantinedTests(project, task string) []string {
 	return names
 }
 
-// fileQuarantined gives each quarantined test with no open fix task one,
-// and takes back a waiting one whose test is no longer quarantined and was
+// fileQuarantined gives the quarantined tests no task answers (answered) a
+// fix brief, one for the tests quarantined on the same commits' reds, and
+// takes back a waiting one whose test is no longer quarantined and was
 // taken down by a run that is no sighting (brokenRun) or reads the whole
 // tree (core.WholeTree): its quarantine came from reading those as flakes.
 func (m *Module) fileQuarantined() {
 	q := m.Quarantine("")
 	m.withdrawUnsighted(q)
+	var groups [][]Flake
+	at := map[string]int{}
 	for _, f := range q {
 		if t, ok := m.Work.Get(f.Task); ok && f.Task != "" && !t.Terminal() {
 			continue
 		}
-		title := flakyTitle + f.Test
-		if len(m.Work.List(func(t work.Task) bool { return t.Project == f.Project && t.Title == title && !t.Terminal() })) > 0 {
+		if m.answered(f.Project, f.Test, f.Evidence) {
 			continue
 		}
-		var ev []string
+		var shas []string
 		for _, s := range f.Evidence {
-			where := "task " + s.Task
-			if s.Branch != "" {
-				where += " (" + s.Branch + ")"
-			}
-			if s.Main {
-				where = "main"
-			}
-			line := fmt.Sprintf("- %s: %s at %s, check %s", s.At.Format("01-02 15:04"), where, core.Short(s.SHA), s.Check)
-			if s.Rerun {
-				line += ", passed when run again"
-			}
-			if s.URL != "" {
-				line += " " + s.URL
-			}
-			ev = append(ev, line)
+			shas = append(shas, s.SHA)
 		}
-		m.C.J.MustAppend("alert.raised", map[string]string{"kind": "flake", "project": f.Project, "sha": f.Test, "text": "quarantined the flaky " + f.Test + " in " + f.Project + ": it " + f.Why})
-		m.Work.File(work.Brief{Project: f.Project, From: "improve", Title: title,
-			Done:  "The test passes every time on every platform the forge's checks run: it no longer depends on timing, order or shared state, and running it many times (go test -count=50 -run on it) never fails. Once this merges the quarantine on it is lifted, so its next red sends a PR back again.",
-			Known: "The test is quarantined (a known flake): a forge check failing only it doesn't send a PR back. It " + f.Why + ". Where it failed:\n" + strings.Join(ev, "\n")})
+		slices.Sort(shas)
+		key := f.Project + "\x00" + strings.Join(slices.Compact(shas), " ")
+		i, ok := at[key]
+		if !ok {
+			i, at[key] = len(groups), len(groups)
+			groups = append(groups, nil)
+		}
+		groups[i] = append(groups[i], f)
 	}
+	for _, g := range groups {
+		m.fileFlakes(g)
+	}
+}
+
+// fileFlakes files one fix brief for quarantined tests seen red together.
+func (m *Module) fileFlakes(g []Flake) {
+	f := g[0]
+	var names []string
+	for _, o := range g {
+		names = append(names, o.Test)
+		m.C.J.MustAppend("alert.raised", map[string]string{"kind": "flake", "project": o.Project, "sha": o.Test, "text": "quarantined the flaky " + o.Test + " in " + o.Project + ": it " + o.Why})
+	}
+	var ev []string
+	for _, s := range f.Evidence {
+		where := "task " + s.Task
+		if s.Branch != "" {
+			where += " (" + s.Branch + ")"
+		}
+		if s.Main {
+			where = "main"
+		}
+		line := fmt.Sprintf("- %s: %s at %s, check %s", s.At.Format("01-02 15:04"), where, core.Short(s.SHA), s.Check)
+		if s.Rerun {
+			line += ", passed when run again"
+		}
+		if s.URL != "" {
+			line += " " + s.URL
+		}
+		ev = append(ev, line)
+	}
+	known := "The test is quarantined (a known flake): a forge check failing only it doesn't send a PR back. It " + f.Why
+	if len(g) > 1 {
+		known = "The tests are quarantined (known flakes), seen red together: a forge check failing only them doesn't send a PR back. Each " + f.Why
+	}
+	m.Work.File(work.Brief{Project: f.Project, From: "improve", Title: core.Clip(flakyTitle+strings.Join(names, ", "), 120),
+		Done:  "The test passes every time on every platform the forge's checks run: it no longer depends on timing, order or shared state, and running it many times (go test -count=50 -run on it) never fails. Once this merges the quarantine on it is lifted, so its next red sends a PR back again.",
+		Known: known + ". Where it failed:\n" + strings.Join(ev, "\n") + "\n\n" + testsLine + strings.Join(names, ", ")})
+}
+
+// testsLine starts the line of a flake brief's known context that names its
+// tests, which its title, clipped, may not hold.
+const testsLine = "Tests: "
+
+// mainAgain frames the title of a red main's fix brief (failures.go's
+// redBefore): "Make <tests> pass on main again".
+const mainAgain = " pass on main again"
+
+// flakeTests names the tests t was filed for, if it is a flake brief or a
+// red main's.
+func flakeTests(t work.Task) []string {
+	var list string
+	switch {
+	case strings.HasPrefix(t.Title, flakyTitle):
+		list = strings.TrimPrefix(t.Title, flakyTitle)
+	case strings.HasPrefix(t.Title, "Make ") && strings.HasSuffix(t.Title, mainAgain):
+		list = strings.TrimSuffix(strings.TrimPrefix(t.Title, "Make "), mainAgain)
+	default:
+		return nil
+	}
+	for _, l := range strings.Split(t.Known, "\n") {
+		if rest, ok := strings.CutPrefix(l, testsLine); ok {
+			list += ", " + rest
+		}
+	}
+	var names []string
+	for _, n := range strings.Split(list, ", ") {
+		if n = strings.TrimSpace(n); n != "" && !strings.HasSuffix(n, "…") {
+			names = append(names, n)
+		}
+	}
+	slices.Sort(names)
+	return slices.Compact(names)
+}
+
+// sameTest says a and b name one test, either with its package or bare.
+func sameTest(a, b string) bool {
+	return a == b || strings.HasSuffix(a, "::"+b) || strings.HasSuffix(b, "::"+a)
+}
+
+// answered reports whether a task on project already answers test's reds:
+// an open flake or red-main brief naming it, among however many tests, or
+// one a lead or improve stopped (or its worker left blocked) with no red of
+// the test since from a commit it hadn't been seen red on. A withdrawal
+// stands until there is new evidence, not until the next pass refiles it.
+func (m *Module) answered(project, test string, reds []Sighting) bool {
+	return len(m.Work.List(func(t work.Task) bool {
+		if t.Project != project || !slices.ContainsFunc(flakeTests(t), func(n string) bool { return sameTest(test, n) }) {
+			return false
+		}
+		if !t.Terminal() {
+			return true
+		}
+		if t.Stage == work.StageDone {
+			return false // finished: a red since is the test's again
+		}
+		return !slices.ContainsFunc(reds, func(s Sighting) bool {
+			return s.At.After(t.Updated) && !strings.Contains(t.Known, core.Short(s.SHA)) &&
+				!slices.ContainsFunc(reds, func(o Sighting) bool { return o.SHA == s.SHA && !o.At.After(t.Updated) })
+		})
+	})) > 0
 }
 
 // withdrawUnsighted takes back improve's fix briefs for tests not in q that
@@ -429,8 +521,11 @@ func (m *Module) withdrawUnsighted(q []Flake) {
 	for _, t := range m.Work.List(func(t work.Task) bool {
 		return t.From == "improve" && strings.HasPrefix(t.Title, flakyTitle) && !slices.Contains(settled, t.Stage)
 	}) {
-		k := flakeKey(t.Project, strings.TrimPrefix(t.Title, flakyTitle))
-		if !unsighted[k] || held[k] {
+		tests := flakeTests(t)
+		if len(tests) == 0 || slices.ContainsFunc(tests, func(test string) bool {
+			k := flakeKey(t.Project, test)
+			return !unsighted[k] || held[k]
+		}) {
 			continue
 		}
 		why := "its quarantine came from a check run broken by its environment or failing more than " + fmt.Sprint(maxSightedPerRun) + " tests at once, or it is a test of the whole tree whose reds are a branch's own content, which is no evidence the test is flaky; the test is no longer quarantined"

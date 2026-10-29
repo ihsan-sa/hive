@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/work"
@@ -240,14 +241,28 @@ func (m *Module) fileFlaky(p core.Project, sha string, fs []failure, sum, out st
 	if len(names) > 0 {
 		what = strings.Join(names, ", ")
 	}
-	title := core.Clip("Fix the flaky "+what, 120)
+	title := core.Clip(flakyTitle+what, 120)
+	m.mu.Lock()
+	var reds []Sighting
+	for _, n := range names {
+		reds = append(reds, m.sighted[flakeKey(p.Name, n)]...)
+	}
+	m.mu.Unlock()
+	reds = append(reds, Sighting{At: time.Now().UTC(), SHA: sha})
+	if len(names) > 0 && !slices.ContainsFunc(names, func(n string) bool { return !m.answered(p.Name, n, reds) }) {
+		return // each test has a task, or a stopped one with no new red since
+	}
 	if len(m.Work.List(func(t work.Task) bool { return t.Project == p.Name && t.Title == title && !t.Terminal() })) > 0 {
 		return
+	}
+	tests := ""
+	if len(names) > 0 {
+		tests = "\n\n" + testsLine + what
 	}
 	m.C.J.MustAppend("alert.raised", map[string]string{"kind": "flake", "project": p.Name, "sha": sha, "text": "a flaky test in " + p.Name + " failed at " + core.Short(sha) + " and passed on rerun: " + core.Clip(sum, 300)})
 	m.Work.File(work.Brief{Project: p.Name, From: "improve", Title: title, Aim: work.AimFix, Why: "flaky test: " + core.Clip(what, 200) + " failed at " + core.Short(sha) + " and passed on rerun",
 		Done:  "The test passes every time: it no longer depends on timing, order or shared state, and running it many times (go test -count=50 -run on it) never fails.",
-		Known: fmt.Sprintf("After a merge at %s the tests went red and passed when only what failed ran again, so the merge was kept. What failed: %s", core.Short(sha), sum)})
+		Known: fmt.Sprintf("After a merge at %s the tests went red and passed when only what failed ran again, so the merge was kept. What failed: %s%s", core.Short(sha), sum, tests)})
 }
 
 // redBefore runs what stayed red at t's merge again on main just before t
@@ -333,7 +348,7 @@ func (m *Module) redBefore(p core.Project, t work.Task, test string) string {
 	}
 	m.C.J.MustAppend("alert.raised", map[string]string{"kind": "main-red", "project": p.Name, "sha": t.MergeSHA, "task": t.ID,
 		"text": core.Clip(why, 400) + " (" + p.Name + "). Not reverted; filed to fix on main."})
-	title := core.Clip("Make "+what+" pass on main again", 120)
+	title := core.Clip("Make "+what+mainAgain, 120)
 	if len(m.Work.List(func(w work.Task) bool { return w.Project == p.Name && w.Title == title && !w.Terminal() })) == 0 {
 		m.Work.File(work.Brief{Project: p.Name, From: "improve", Title: title, Aim: work.AimFix, Why: core.Clip("red on main: "+what+" fail at "+core.Short(parent)+" and after "+core.Short(t.MergeSHA), 300),
 			Done:  "The tests pass on main again, every time, without reverting anything.",
