@@ -107,6 +107,7 @@ type Module struct {
 	askJudge  func(p core.Project, t work.Task, ms Measurement, reason string) (core.Judgement, bool) // tests' stand-in for runJudge
 	covered   map[string][]Covered                                                                    // project -> merges main already held when they closed
 	cantRuns  map[string]int                                                                          // project@sha -> its checks that couldn't start
+	forgeAt   map[string]time.Time                                                                    // project@sha -> when its measure first waited on the forge's tests (forgetest.go)
 
 	stepbacks map[string]*StepBack
 	busy      map[string]bool
@@ -274,15 +275,24 @@ func (m *Module) record(ms Measurement) {
 // task in packages files (what sha changed) don't touch, is read past as the
 // PRs' checks read it (core.Effects.ExcusedLocal), so one known-broken test
 // can't leave main unscored. A merge (task set) whose files can't be read
-// has nothing excused.
-func (m *Module) measure(p core.Project, sha, task string, files []string) (ok bool, score *float64, note string, cant core.Check) {
+// has nothing excused. forged, when set, is the forge's pass of sha's tests
+// (forgeTest), and none runs here.
+func (m *Module) measure(p core.Project, sha, task string, files []string, forged *core.Check) (ok bool, score *float64, note string, cant core.Check) {
 	cfg := m.C.Effects.Config(p, sha)
-	tc := m.C.Effects.RunCheck(p, sha, "test", cfg.Test)
+	var tc core.Check
+	if forged != nil {
+		tc = *forged
+	} else {
+		tc = m.C.Effects.RunCheck(p, sha, "test", cfg.Test)
+	}
 	if tc.CantRun != "" {
 		return false, nil, "tests " + tc.CantRun + ": " + core.Clip(tc.Output, 300), tc
 	}
 	m.Work.RanCheck(p.Name, "test")
-	flaky := "" // a red that passed when what failed ran again
+	flaky := "" // a red that passed when what failed ran again, or the forge's pass
+	if forged != nil {
+		flaky = "tests green on the forge (" + strings.Join(cfg.ForgeTests, ", ") + "), none run here; "
+	}
 	var excused []string
 	if task == "" || files != nil {
 		excused = m.C.Effects.ExcusedLocal(p, sha, task, files, tc)
@@ -502,7 +512,7 @@ func (m *Module) baseline(p core.Project) {
 	}
 	defer m.Work.MeasuringMain(p.Name, main)() // its checks go ahead of the PRs'
 	cfg := m.C.Effects.Config(p, main)
-	ok, score, note, cant := m.measure(p, main, "", nil)
+	ok, score, note, cant := m.measure(p, main, "", nil, nil)
 	ms := Measurement{Project: p.Name, SHA: main, TestsOK: ok, Score: score, Note: "start: " + note, Version: m.version(p, main, cfg), NoResult: cant.CantRun != ""}
 	if ms.NoResult {
 		m.noResult(p, ms, cant.Kind) // Tick measures again in 10 minutes
@@ -861,9 +871,19 @@ func (m *Module) afterMerge(t work.Task) {
 		m.C.J.MustAppend("score.covered", Covered{Project: p.Name, SHA: t.MergeSHA, Task: t.ID, By: by.SHA, Red: !by.Kept})
 		return
 	}
-	defer m.Work.MeasuringMain(p.Name, t.MergeSHA)() // keep/revert, the release and the next baseline wait on it
 	cfg := m.C.Effects.Config(p, t.MergeSHA)
-	ok, score, note, cant := m.measure(p, t.MergeSHA, t.ID, m.mergeFiles(p, t))
+	forged, onForge, wait := m.forgeTest(p, t.MergeSHA, cfg.ForgeTests)
+	if wait {
+		later = true
+		go func() { time.Sleep(forgePoll); m.queue <- t }()
+		return
+	}
+	defer m.Work.MeasuringMain(p.Name, t.MergeSHA)() // keep/revert, the release and the next baseline wait on it
+	var tc *core.Check
+	if onForge {
+		tc = &forged
+	}
+	ok, score, note, cant := m.measure(p, t.MergeSHA, t.ID, m.mergeFiles(p, t), tc)
 	switch {
 	case cant.CantRun != "" && m.introduced(p, t.MergeSHA, cant) && cant.Kind == "score":
 		ok, score, note = true, nil, "score did not produce a number: this merge's score command calls "+cant.Tool+", which isn't installed where checks run: "+note
