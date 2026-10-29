@@ -16,7 +16,9 @@ import (
 // rather than waiting on the person. It records the merge commit and runs
 // OnMerged, and the next tick takes it to done, so the briefs behind it start.
 // One whose PR is open and whose work isn't on main is refused: that is a
-// merge still to happen, not one that happened.
+// merge still to happen, not one that happened. When the caller names the main
+// commit that carried it (another PR's squash merge, say), that is taken on
+// their word, and its own open PR is closed naming that commit.
 func (m *Module) Landed(id, mergeSHA, by, why string) (Task, error) {
 	t, ok := m.Get(id)
 	if !ok {
@@ -39,13 +41,19 @@ func (m *Module) Landed(id, mergeSHA, by, why string) (Task, error) {
 	}
 	m.mu.Unlock()
 	if busy {
-		return t, fmt.Errorf("task %s has a step running right now; ask again in a moment", id)
+		return t, m.heldErr(id)
 	}
 	defer m.release(id)
 	t, _ = m.Get(id) // as the last step left it
-	merged, how, err := m.landedAt(&t, p, mergeSHA)
+	merged, how, open, err := m.landedAt(&t, p, mergeSHA)
 	if err != nil {
 		return t, err
+	}
+	if open { // carried by another merge: its own PR has nothing left to merge
+		say := fmt.Sprintf("Already on main: %s carries this work, so there is nothing left to merge. Closing.", merged)
+		if err := m.C.Effects.Forge.ClosePR(p.Repo, t.PR.Number, say); err != nil {
+			return t, err
+		}
 	}
 	past := m.pastCheckpoint(&t, p) // read before the worker stops
 	if t.Worker != "" {
@@ -62,52 +70,58 @@ func (m *Module) Landed(id, mergeSHA, by, why string) (Task, error) {
 }
 
 // landedAt finds where t's work is on main: its PR's merge on the forge, or
-// mergeSHA (a commit on main's line that holds its commits), or its head
-// itself when main has it. It says how it knows.
-func (m *Module) landedAt(t *Task, p core.Project, mergeSHA string) (string, string, error) {
+// mergeSHA (a commit on main's line that carries it: one that holds its head,
+// or, on the caller's word, another PR's squash merge that took its work in
+// some other shape, or a task with no commits of its own), or its head itself
+// when main has it. It says how it knows, and whether t's PR is still open.
+// A named commit from before the task's work started is refused.
+func (m *Module) landedAt(t *Task, p core.Project, mergeSHA string) (string, string, bool, error) {
 	open := false
 	if t.PR.Number != 0 {
 		pr, err := m.C.Effects.Forge.GetPR(p.Repo, t.PR.Number)
 		if err != nil {
-			return "", "", err
+			return "", "", false, err
 		}
 		if pr.State == "MERGED" && pr.MergeSHA != "" {
-			return pr.MergeSHA, fmt.Sprintf("PR #%d merged on the forge", pr.Number), nil
+			return pr.MergeSHA, fmt.Sprintf("PR #%d merged on the forge", pr.Number), false, nil
 		}
 		open = pr.State == "OPEN"
 	}
-	if t.SHA == "" {
-		return "", "", fmt.Errorf("task %s has no PR merged on the forge and no commits to find on main", t.ID)
+	if t.SHA == "" && mergeSHA == "" {
+		return "", "", false, fmt.Errorf("task %s has no PR merged on the forge and no commits to find on main: if another merge carried its work, say which with merge <sha>", t.ID)
 	}
 	main, err := m.C.Effects.Sync(p)
 	if err != nil {
-		return "", "", err
+		return "", "", false, err
 	}
 	dir := m.C.WS.Project(p.Name)
-	refuse := func() error {
-		state := "no PR"
-		if t.PR.Number != 0 {
-			state = fmt.Sprintf("PR #%d is %s", t.PR.Number, map[bool]string{true: "open", false: "not merged"}[open])
-		}
-		return fmt.Errorf("task %s isn't landed: %s and its head %s isn't on main %s", t.ID, state, core.Short(t.SHA), core.Short(main))
-	}
 	if mergeSHA != "" {
 		full, err := core.Git(dir, "rev-parse", "--verify", "-q", mergeSHA+"^{commit}")
+		full = strings.TrimSpace(full)
 		if err != nil || !m.C.Effects.MainLine(p)[full] {
-			return "", "", fmt.Errorf("%s isn't a commit on main", mergeSHA)
+			return "", "", false, fmt.Errorf("%s isn't a commit on main", mergeSHA)
 		}
-		if !holds(dir, full, t.SHA) {
-			return "", "", fmt.Errorf("main at %s doesn't hold task %s's head %s", core.Short(full), t.ID, core.Short(t.SHA))
+		if t.Base != "" {
+			if _, err := core.Git(dir, "merge-base", "--is-ancestor", full, t.Base); err == nil {
+				return "", "", false, fmt.Errorf("main at %s is from before task %s's work started (at %s): name the merge that carried it", core.Short(full), t.ID, core.Short(t.Base))
+			}
 		}
-		return full, "its work is on main at " + core.Short(full), nil
+		if t.SHA != "" && holds(dir, full, t.SHA) {
+			return full, "its work is on main at " + core.Short(full), open, nil
+		}
+		return full, "carried to main by " + core.Short(full) + ", on the caller's word", open, nil
 	}
 	if _, err := core.Git(dir, "merge-base", "--is-ancestor", t.SHA, main); err == nil {
-		return t.SHA, "its head is on main", nil
+		return t.SHA, "its head is on main", open, nil
 	}
 	if holds(dir, main, t.SHA) { // squashed: main has the change, under another commit
-		return "", "", errors.New("main holds its change, squashed under another commit: say which with merge <sha>")
+		return "", "", false, errors.New("main holds its change, squashed under another commit: say which with merge <sha>")
 	}
-	return "", "", refuse()
+	state := "no PR"
+	if t.PR.Number != 0 {
+		state = fmt.Sprintf("PR #%d is %s", t.PR.Number, map[bool]string{true: "open", false: "not merged"}[open])
+	}
+	return "", "", false, fmt.Errorf("task %s isn't landed: %s and its head %s isn't on main %s; if another merge carried its work, say which with merge <sha>", t.ID, state, core.Short(t.SHA), core.Short(main))
 }
 
 // pastCheckpoint reads what t's worker committed past the Hive's last take of
