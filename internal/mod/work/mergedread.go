@@ -177,7 +177,6 @@ func (m *Module) startMerged(p core.Project, pr int, head, mergeSHA string, ch c
 	main, _ := core.Git(m.C.WS.Project(p.Name), "rev-parse", "--verify", "-q", mergeSHA+"^1")
 	subject, _ := core.Git(m.C.WS.Project(p.Name), "log", "-1", "--format=%B", mergeSHA)
 	account := fmt.Sprintf("## The change\n\nThis change already merged as #%d (%s) and is in the next release. It merged without the read a release needs, so the Hive reads it now, before the release goes out; a fix holds the release for the person. The merge's message:\n\n%s", pr, core.Short(mergeSHA), core.Clip(subject, 4000))
-	c, _ := m.C.Effects.GetCheck(p.Name, head, "test")
 	brief := fmt.Sprintf("Review of the merged #%d at %s, for a release.\n\nThe brief, the exact diff and the test run are in $HIVE_RUN (brief.md, diff.patch, tests.txt). Give your verdict.", pr, core.Short(head))
 	rules := ""
 	if seat != "" {
@@ -190,7 +189,7 @@ func (m *Module) startMerged(p core.Project, pr int, head, mergeSHA string, ch c
 		spec.Harness, spec.Model, spec.Route = h, model, route
 	}
 	spec.ReadOnly, spec.Schema = true, VerdictSchema
-	spec.Inputs = map[string]string{"sha": head, "diff.patch": ch.Diff, "tests.txt": core.ClipEnds(c.FullOutput(), 16000),
+	spec.Inputs = map[string]string{"sha": head, "diff.patch": ch.Diff, "tests.txt": m.testsText(p, head, main),
 		"brief.md": "Review token: " + reviewToken(id) + "\n\n" + rules + account + m.reviewRules(p, main)}
 	if seat != "" {
 		spec.Inputs["seat"] = seat
