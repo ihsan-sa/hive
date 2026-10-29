@@ -383,7 +383,7 @@ func (m *Module) paceChecks() {
 // Pace says the workers', checks' and recursive gates' limits now and why, for the dashboard
 // and the lead.
 func (m *Module) Pace() map[string]string {
-	return map[string]string{"workers": m.workers.String(), "checks": m.checks.String(), "gates": m.gates.String()}
+	return map[string]string{"workers": m.workers.String(), "checks": m.checks.String(), "gates": m.gates.String(), "heavy": m.heavy.String()}
 }
 
 // pacedRead is the route a review of a change on project goes on while the
