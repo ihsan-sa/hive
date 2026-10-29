@@ -25,9 +25,16 @@ func (m *Module) forgeTest(p core.Project, sha string, names []string) (c core.C
 	if len(names) == 0 {
 		return core.Check{}, false, false
 	}
-	runs, err := m.C.Effects.Forge.Checks(p.Repo, sha)
-	if err != nil {
+	key := p.Name + "@" + sha
+	none := func() (core.Check, bool, bool) {
+		m.mu.Lock()
+		delete(m.forgeAt, key)
+		m.mu.Unlock()
 		return core.Check{}, false, false
+	}
+	runs, err := m.C.Effects.Forge.Checks(p.Repo, sha) // the newest attempt of each check
+	if err != nil {
+		return none()
 	}
 	pending := false
 	for _, n := range names {
@@ -42,12 +49,11 @@ func (m *Module) forgeTest(p core.Project, sha string, names []string) (c core.C
 			case core.CheckPending:
 				pending = true
 			default:
-				return core.Check{}, false, false
+				return none()
 			}
 		}
 		pending = pending || !seen
 	}
-	key := p.Name + "@" + sha
 	m.mu.Lock()
 	first, seen := m.forgeAt[key]
 	switch {
