@@ -963,6 +963,10 @@ func (m *Module) afterKept(project, sha string) {
 	var manifest strings.Builder
 	var root, unread, rootRead, reading []string
 	for _, mg := range list {
+		if mg.Hand {
+			fmt.Fprintf(&manifest, "- %s and what else on main up to it the Hive didn't merge: merged by hand, which stands for its read\n", core.Short(mg.SHA))
+			continue
+		}
 		reads, why := m.C.Effects.Reads(project, mg.SHA, mg.Diff), "no seat reads it"
 		if len(reads) == 0 && mg.Diff != "" && selfRead != nil {
 			var passed bool
@@ -1558,7 +1562,8 @@ func (m *Module) OnPerson(a core.Ask) {
 	}
 }
 
-// notMerged is merges' refusal of a commit no effect.merged names.
+// notMerged is merges' refusal of a commit no effect.merged names and whose
+// history git can't place after the last release.
 const notMerged = "it is not a merge the Hive made"
 
 type merge struct {
@@ -1567,14 +1572,27 @@ type merge struct {
 	MergeSHA string `json:"merge_sha"`
 	Root     []string
 	Diff     string // the head's own diff (core.DiffID), whose reads carry to it
+	// Hand marks a kept commit on main no effect.merged names: the person's
+	// merge on the forge (or a Hive merge whose record was lost), which
+	// stands for its own read.
+	Hand bool `json:"-"`
 }
 
 // merges lists the project's merges after the one its last release was cut
 // at, up to the one that made upTo. refuse says why there is nothing to
-// release: a release already covers upTo, or upTo is no merge the journal saw.
+// release: a release already covers upTo, or upTo is no merge the journal saw
+// and git can't place it after the last release. A kept commit the person
+// merged by hand (issue #2084: 4b38b782 on 10-29 was refused so, and no
+// release went out for a day) is released with the Hive's merges its history
+// holds.
 func (m *Module) merges(project, upTo string) (out []merge, refuse string) {
 	var all []merge
-	from, at := 0, -1
+	from, at, released := 0, -1, ""
+	type cut struct {
+		sha string
+		n   int // the merges journaled before it
+	}
+	var hand []cut // releases at commits this journal didn't merge
 	m.C.J.Replay(func(e core.Event) {
 		var x struct {
 			merge
@@ -1590,19 +1608,76 @@ func (m *Module) merges(project, upTo string) (out []merge, refuse string) {
 			}
 			return
 		}
-		i := slices.IndexFunc(all, func(mg merge) bool { return mg.MergeSHA == x.SHA })
-		if i < 0 {
-			i = len(all) - 1 // a release at a commit this journal didn't merge
+		released = x.SHA
+		if i := slices.IndexFunc(all, func(mg merge) bool { return mg.MergeSHA == x.SHA }); i >= 0 {
+			from = max(from, i+1)
+		} else {
+			hand = append(hand, cut{x.SHA, len(all)})
 		}
-		from = max(from, i+1)
 	})
-	if at >= 0 && at < from {
+	// A release at a commit the Hive didn't merge (a hand merge, a warden's
+	// tag) covers the merges before it that its history holds; one git can't
+	// read covers them all, as it did before hand merges were released.
+	covered := map[int]bool{}
+	for _, c := range hand {
+		for i := from; i < c.n; i++ {
+			if in, err := m.holds(project, all[i].MergeSHA, c.sha); err != nil || in {
+				covered[i] = true
+			}
+		}
+	}
+	for from < len(all) && covered[from] {
+		from++
+	}
+	if at >= 0 && (at < from || covered[at]) {
 		return nil, "a newer release already covers it"
 	}
+	var since []merge
+	for i := from; i < len(all) && (at < 0 || i <= at); i++ {
+		if !covered[i] {
+			since = append(since, all[i])
+		}
+	}
 	if at < 0 {
+		return m.byHand(project, upTo, released, since)
+	}
+	return since, ""
+}
+
+// holds says whether commit at has sha in its history (m.Contains).
+func (m *Module) holds(project, sha, at string) (bool, error) {
+	p, ok := m.C.Projects.Get(project)
+	if !ok {
+		return false, errors.New("no project " + project)
+	}
+	if m.Contains != nil {
+		return m.Contains(p, sha, at)
+	}
+	return m.contains(p, sha, at)
+}
+
+// byHand is merges for a kept commit upTo no effect.merged names: the Hive's
+// merges since the last release (at released) that upTo's history holds,
+// then upTo itself as a hand merge. upTo must hold released and not be held
+// by it; history git can't read is refused as notMerged.
+func (m *Module) byHand(project, upTo, released string, since []merge) ([]merge, string) {
+	if released != "" {
+		if in, err := m.holds(project, upTo, released); err == nil && in {
+			return nil, "a newer release already covers it"
+		}
+		if in, err := m.holds(project, released, upTo); err != nil || !in {
+			return nil, notMerged
+		}
+	} else if _, err := m.holds(project, upTo, upTo); err != nil {
 		return nil, notMerged
 	}
-	return all[from : at+1], ""
+	var out []merge
+	for _, mg := range since {
+		if in, err := m.holds(project, mg.MergeSHA, upTo); err == nil && in {
+			out = append(out, mg)
+		}
+	}
+	return append(out, merge{SHA: upTo, MergeSHA: upTo, Hand: true}), ""
 }
 
 // Gates are the workflows that must pass in a release's own runs, on its

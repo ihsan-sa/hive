@@ -427,3 +427,8 @@
 - Decision: `queue` takes order, hold, release and now on a brief of any project the caller can see; on one not its own it needs `why`, which goes on the brief's record with the caller's id. A new order still resets only the caller's own project's places. The other steering ops stay on the caller's project.
 - Why: on 10-29 lead:hifi-receiver-2 twice had to ask the lead to move hive and pll briefs first ("I can't steer hive"); the person: all agents are the same and have the same say (10-28 12:27).
 - Tradeoff: a project's lead can find its line moved by another project's agent; the why on the record says who and for what.
+
+## 2026-10-29 A kept hand merge is released (issue #2084)
+- Decision: a kept, CI-green commit on main that no `effect.merged` names (the person merged its PR by hand on the forge, or a Hive merge's record was lost) is released when git places it after the last release: the cut lists the Hive's merges since that its history holds, then the commit itself as merged by hand, which stands for its read (`release.byHand`). A release at such a commit covers the merges before it that its history holds, not all of them (`merges`, `holds`); one git can't read still covers them all. `release.unmerged` and `retryUnmerged` now only meet a commit git can't place.
+- Why: 4b38b782 (#2043, merged by hand) was kept at 15:42Z on 10-29 and refused as "not a merge the Hive made"; with the hand-merged status.md line the scan blocked before it, no release went out after v0.1.150 (10-28 15:36Z).
+- Tradeoff: a hand merge goes out without the Hive's own reads or the pre-merge publish scan; the release scan still reads every published file, and the manifest says which commit was merged by hand.
