@@ -2067,6 +2067,9 @@ func (m *Module) test(t *Task, p core.Project) error {
 		return err // queued or running behind the step: it waits in testing
 	}
 	if c.CantRun != "" {
+		if ok, err := m.catchUpToRun(t, p, main, cfg.Test, c); ok || err != nil {
+			return err
+		}
 		if t.Checkpoint != "" {
 			m.raiseCantRun(p, c)
 			return m.dropCheckpoint(t, p, "the tests "+c.CantRun+", which is no verdict on it")
@@ -2260,6 +2263,25 @@ func (m *Module) cantRun(t *Task, p core.Project, c core.Check) error {
 		m.comment(p.Repo, t.PR.Number, "Tests on "+core.Short(t.SHA)+": **can't run**, "+c.CantRun+". That is no verdict on this change, so it isn't sent back; it is tested again once the tool is there.\n\n```\n"+core.ClipEnds(c.Output, 1500)+"\n```")
 	}
 	return nil
+}
+
+// catchUpToRun brings a branch behind main up to date when its tests can't
+// find a tool (c) that main's own tests, the same check, ran with: the branch
+// predates what main changed to find it (a stale script, say), so the tool
+// isn't missing and the person isn't asked for it. A branch that already
+// contains main, or a main that can't run them either, waits as before.
+func (m *Module) catchUpToRun(t *Task, p core.Project, main, command string, c core.Check) (bool, error) {
+	if c.Tool == "" {
+		return false, nil
+	}
+	if _, err := core.Git(m.C.WS.Project(p.Name), "merge-base", "--is-ancestor", main, t.SHA); err == nil {
+		return false, nil
+	}
+	mc, err := m.mainTests(p, main, command)
+	if err != nil || mc.CantRun != "" {
+		return false, err
+	}
+	return m.catchUp(t, p, main, "the tests "+c.CantRun+" on "+core.Short(t.SHA)+", but main's ran at "+core.Short(main)+", so the branch is behind, not the machine short of "+c.Tool)
 }
 
 // cantRunRed ends a change whose own tests couldn't start CantRunTries times
