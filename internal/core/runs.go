@@ -97,10 +97,11 @@ type Run struct {
 	Retries     int             `json:"retries"`
 	Offline     string          `json:"offline,omitempty"` // its last turn couldn't reach its service, and why
 	Nudges      int             `json:"nudges"`
-	Head        string          `json:"head,omitempty"`  // its checkout's HEAD log (size, time) at its last turn's end
-	Still       int             `json:"still,omitempty"` // turns in a row that ended with that log unchanged
-	Login       string          `json:"login,omitempty"` // the login its latest turn went on
-	Where       string          `json:"where,omitempty"` // the runner its latest turn went to; empty is this machine
+	Head        string          `json:"head,omitempty"`         // its checkout's HEAD log (size, time) at its last turn's end
+	Still       int             `json:"still,omitempty"`        // turns in a row that ended with that log unchanged
+	Login       string          `json:"login,omitempty"`        // the login its latest turn went on
+	TokenExpiry time.Time       `json:"token_expiry,omitempty"` // when the access token its latest turn was handed runs out
+	Where       string          `json:"where,omitempty"`        // the runner its latest turn went to; empty is this machine
 	Progress    string          `json:"progress,omitempty"`
 	ProgressAt  time.Time       `json:"progress_at,omitempty"`
 	StopAsked   bool            `json:"stop_asked,omitempty"`
@@ -726,6 +727,9 @@ type turnStarted struct {
 	Harness   string      `json:"harness,omitempty"`
 	Login     string      `json:"login,omitempty"`
 	Where     string      `json:"where,omitempty"` // the executor module's runner it went to; empty is this machine
+	// TokenExpiry is when the access token the turn was handed runs out: a
+	// later one on its login at the turn's end is a renewal since (renewedMidTurn).
+	TokenExpiry time.Time `json:"token_expiry,omitempty"`
 }
 
 type turnEnded struct {
@@ -743,6 +747,7 @@ type turnEnded struct {
 	Unavailable string          `json:"unavailable,omitempty"` // the pick it ran on can't answer (Down), so it moved or waits without a retry's backoff
 	Head        string          `json:"head,omitempty"`        // the checkout's HEAD log at the turn's end
 	Stalled     string          `json:"stalled,omitempty"`     // the pick it kept ending turns on without finishing, which it moves past
+	Renewed     bool            `json:"renewed,omitempty"`     // its login was renewed mid-turn, revoking its token: it resumes at once, not as a retry
 }
 
 // egressRefused is the hosts a turn's egress proxy refused, and each
@@ -872,6 +877,7 @@ func (rs *Runs) apply(e Event) {
 		var t turnStarted
 		e.Decode(&t)
 		r.Turn, r.Proc, r.Status, r.TurnStarted, r.LastOutput, r.Login, r.Where = t.Turn, t.Proc, StatusRunning, e.At, e.At, t.Login, t.Where
+		r.TokenExpiry = t.TokenExpiry
 		if t.Session != "" {
 			r.Session = t.Session
 		}
@@ -919,7 +925,7 @@ func (rs *Runs) apply(e Event) {
 				r.Retries = 0
 			}
 		}
-		if t.Status == StatusParked && t.Unavailable == "" && (t.Result == nil || (t.Result.IsError && !t.Result.Limited)) {
+		if t.Status == StatusParked && t.Unavailable == "" && !t.Renewed && (t.Result == nil || (t.Result.IsError && !t.Result.Limited)) {
 			r.Retries++
 		}
 		if len(t.Queue) > 0 {
@@ -2074,6 +2080,13 @@ func (rs *Runs) endTurn(r Run) {
 		te.Status, te.ParkedUntil = StatusParked, time.Now().Add(backoff(cur.Retries))
 		te.Reason = fmt.Sprintf("the endpoint refused %s's key mid-turn, and a turn is handed the key only once; the next turn gets it afresh (if this repeats, store it again with `%s model key %s`)", r.Model, Cmd, r.Model)
 		te.Queue = []string{"Your previous turn was cut off when the model's endpoint refused its key. Your checkout and commits are intact. Continue where you left off."}
+	case rs.renewedMidTurn(r, tl.Result):
+		// Renewing a Claude login revokes the access token every turn on it
+		// holds, so turns running then end on a 401. The login is fine: the
+		// turn resumes its session at once, handed the new token.
+		te.Status, te.ParkedUntil, te.Renewed = StatusParked, time.Now(), true
+		te.Reason = "its login " + r.Login + " was renewed mid-turn, which revoked the token the turn held; resuming at once on the new one"
+		te.Queue = []string{"Your previous turn was cut off when the Hive renewed its login, which revoked the token it held. Your checkout and commits are intact. Continue where you left off."}
 	case down != nil:
 		// As at a usage limit: the next pick with room takes the next turn
 		// at once, else it waits for the first reset, with no backoff.
@@ -2508,6 +2521,7 @@ func (rs *Runs) launch(r Run, cfg Config) {
 		}()
 	}
 	login, tok, err := rs.pickLogin(r.Harness, r.Model, codexHome, !sb.Isolated(), Reserved(r.Role))
+	exp := rs.tokenExpiry(login)
 	if err != nil {
 		until := rs.freeAt(r.Harness, r.Model, Reserved(r.Role))
 		if !until.After(time.Now()) {
@@ -2537,7 +2551,36 @@ func (rs *Runs) launch(r Run, cfg Config) {
 	}
 	started = true
 	rs.claimed(r.ID, turn, p)
-	rs.append("run.turn_started", turnStarted{ID: r.ID, Session: session, Turn: turn, Proc: p, Delivered: delivered, Resume: resume, Login: login.Key(), Model: r.Model, Harness: r.Harness, Where: where})
+	rs.append("run.turn_started", turnStarted{ID: r.ID, Session: session, Turn: turn, Proc: p, Delivered: delivered, Resume: resume, Login: login.Key(), Model: r.Model, Harness: r.Harness, Where: where, TokenExpiry: exp})
+}
+
+// tokenExpiry is when the access token login l hands a Claude turn runs out,
+// or zero where the token source can't say.
+func (rs *Runs) tokenExpiry(l Login) time.Time {
+	if t, ok := rs.tokens.(interface {
+		Expiry(Login) (time.Time, error)
+	}); ok && l.Harness == "claude" {
+		if exp, err := t.Expiry(l); err == nil {
+			return exp
+		}
+	}
+	return time.Time{}
+}
+
+// renewedMidTurn reports whether Claude turn r ended on a 401 after its login
+// was renewed: the login now holds a live token that runs out later than the
+// one the turn was handed, which the renewal revoked.
+func (rs *Runs) renewedMidTurn(r Run, res *harness.Result) bool {
+	if res == nil || !res.IsError || res.APIStatus != 401 || HarnessName(r.Harness) != "claude" || r.TokenExpiry.IsZero() {
+		return false
+	}
+	for _, l := range rs.tokens.Logins("claude") {
+		if l.Key() == r.Login {
+			exp := rs.tokenExpiry(l)
+			return exp.After(r.TokenExpiry) && exp.After(time.Now())
+		}
+	}
+	return false
 }
 
 // Elsewhere says whether an executor module has room for a turn now.

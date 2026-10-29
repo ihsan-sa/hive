@@ -2,6 +2,8 @@ package release
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -20,7 +22,7 @@ import (
 const Train = "train"
 
 // trainEvery is how often a canary runs: once a day, counted from the last
-// verdict, so one update a day at most.
+// verdict that measured the candidate, so one update a day at most.
 var trainEvery = 24 * time.Hour
 
 // canaryRetry is how long a canary that couldn't run waits before it tries
@@ -43,26 +45,46 @@ type CanaryJob struct {
 
 // canary is one canary verdict as the journal holds it (release.canary).
 type canary struct {
-	Tag     string    `json:"tag"`
-	From    string    `json:"from"`
-	Head    string    `json:"head"`
-	Base    string    `json:"base"`
-	Outcome string    `json:"outcome"`
-	Reason  string    `json:"reason"`
-	Report  string    `json:"report,omitempty"`
-	At      time.Time `json:"at"`
+	Tag     string `json:"tag"`
+	From    string `json:"from"`
+	Head    string `json:"head"`
+	Base    string `json:"base"`
+	Outcome string `json:"outcome"`
+	Reason  string `json:"reason"`
+	Report  string `json:"report,omitempty"`
+	// Measured says the verdict compared both sides on the work. A rollback
+	// that didn't (the candidate failed its own build or tests in the
+	// canary, though its checks passed here) failed on the canary's own
+	// environment, so it turns back that tag but doesn't spend the day.
+	Measured bool      `json:"measured,omitempty"`
+	At       time.Time `json:"at"`
+}
+
+// spends says whether a verdict spends the train's day.
+func (c canary) spends() bool {
+	return c.Outcome == core.GateKeep || c.Outcome == core.GateRollback && c.Measured
 }
 
 // canaries are this Hive's canary verdicts, oldest first.
 func (m *Module) canaries() []canary {
-	var out []canary
+	cs, _ := m.trainRecord()
+	return cs
+}
+
+// trainRecord is this Hive's canary verdicts, oldest first, and when an
+// agent last asked for the train again (release.train_again): verdicts
+// before then neither spend the day nor turn their tag back.
+func (m *Module) trainRecord() (cs []canary, again time.Time) {
 	m.C.J.Replay(func(e core.Event) {
 		var c canary
-		if e.Kind == "release.canary" && e.Decode(&c) == nil {
-			out = append(out, c)
+		switch {
+		case e.Kind == "release.canary" && e.Decode(&c) == nil:
+			cs = append(cs, c)
+		case e.Kind == "release.train_again":
+			again = e.At
 		}
 	})
-	return out
+	return cs, again
 }
 
 // train picks what the train moves to, given the newest pre-release safe
@@ -70,11 +92,11 @@ func (m *Module) canaries() []canary {
 // release, or "". When none is kept and the day's canary is due, it starts one
 // on safe, in the background. why says what the train waits for.
 func (m *Module) train(repo, safe string) (tag string, why []string) {
-	cs := m.canaries()
+	cs, again := m.trainRecord()
 	var last time.Time // the last verdict that spent a day
 	kept := map[string]bool{}
 	for _, c := range cs {
-		if c.Outcome != core.GateCantRun {
+		if c.spends() && c.At.After(again) {
 			last = c.At
 		}
 		if c.Outcome == core.GateKeep {
@@ -99,7 +121,12 @@ func (m *Module) train(repo, safe string) (tag string, why []string) {
 		if cs[i].Tag != safe || cs[i].From != core.Version {
 			continue
 		}
+		if !cs[i].At.After(again) {
+			break
+		}
 		switch c := cs[i]; {
+		case c.Outcome == core.GateRollback && !c.Measured:
+			return "", []string{safe + ": its canary failed it before measuring it (" + core.Clip(c.Reason, 200) + "), though its checks passed here: the canary's own environment, so it didn't spend the day; a newer pre-release rides the train as soon as it is safe here, and `hive agent train` runs this one again"}
 		case c.Outcome == core.GateRollback:
 			return "", []string{safe + ": its canary rolled it back (" + core.Clip(c.Reason, 200) + "); a newer pre-release rides the next train"}
 		case c.Outcome == core.GateCantRun && time.Since(c.At) < canaryRetry:
@@ -156,14 +183,17 @@ func (m *Module) startCanary(repo, tag string) error {
 		ctx, cancel := context.WithTimeout(context.Background(), job.Timeout+15*time.Minute)
 		defer cancel()
 		g := m.Canary(ctx, job)
-		c := canary{Tag: tag, From: from, Head: head, Base: base, Outcome: g.Outcome, Reason: g.Reason, Report: g.Report, At: time.Now().UTC()}
+		c := canary{Tag: tag, From: from, Head: head, Base: base, Outcome: g.Outcome, Reason: g.Reason, Report: g.Report, Measured: g.Measured, At: time.Now().UTC()}
 		if c.Outcome == "" {
 			c.Outcome = core.GateCantRun
 		}
 		m.C.J.MustAppend("release.canary", c)
 		if c.Outcome == core.GateRollback {
-			m.C.J.MustAppend("alert.raised", map[string]string{"kind": "release", "ref": "release:canary@" + tag,
-				"text": "The canary rolled back " + tag + " against " + from + ", so the Hive stays on " + from + ": " + core.Clip(c.Reason, 300)})
+			text := "The canary rolled back " + tag + " against " + from + ", so the Hive stays on " + from + ": " + core.Clip(c.Reason, 300)
+			if !c.Measured {
+				text += ". It failed before it was measured, though its checks passed here: the canary's own environment, so the day isn't spent; a newer pre-release rides as soon as it is safe, and `hive agent train` runs this one again"
+			}
+			m.C.J.MustAppend("alert.raised", map[string]string{"kind": "release", "ref": "release:canary@" + tag, "text": text})
 		}
 		m.pmu.Lock()
 		m.canarying = ""
@@ -171,4 +201,29 @@ func (m *Module) startCanary(repo, tag string) error {
 		m.pmu.Unlock()
 	}()
 	return nil
+}
+
+// opTrain is `hive agent train`: any agent runs the train again, at the next
+// look, whatever the day: the newest pre-release safe here rides as a
+// canary, even one an earlier canary turned back (its environment fixed, a
+// flake), and the verdicts before it don't count against the day.
+func (m *Module) opTrain(r core.Run, args json.RawMessage) (any, error) {
+	var a struct{ Why string }
+	if err := core.Bind(args, &a); err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(a.Why) == "" {
+		return nil, errors.New("say why the train runs again: --why \"...\"")
+	}
+	if ch := m.Channel(); ch != Train {
+		return nil, fmt.Errorf("this Hive doesn't ride the train: it follows %q", ch)
+	}
+	m.pmu.Lock()
+	defer m.pmu.Unlock()
+	if m.canarying != "" {
+		return nil, fmt.Errorf("the canary is running on %s", m.canarying)
+	}
+	m.C.J.MustAppend("release.train_again", map[string]string{"by": r.ID, "why": a.Why})
+	m.followed = time.Time{} // the next tick looks
+	return map[string]string{"note": "the train runs again at the next look: the newest pre-release safe here rides it as a canary against " + core.Version + ", even one an earlier canary turned back"}, nil
 }

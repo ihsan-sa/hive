@@ -506,3 +506,52 @@ func TestConflictWaitsHereNotOnARunner(t *testing.T) {
 		t.Fatalf("a conflict went past the pace: start %v, wait %q", start, wait[back.ID])
 	}
 }
+
+// A run's main.bundle is main's tip when the run starts, and again when a
+// conflict held for the pace finally sends its worker back: main may have
+// moved while it waited, and merging an older main conflicts again (issue
+// #1945).
+func TestBundleIsMainWhenTheWorkerStartsOrResumes(t *testing.T) {
+	m := queueRig(t)
+	repo := m.C.Effects.Forge.(*flakyForge).RepoPath("me/p")
+	push := func(name string) string {
+		seed := filepath.Join(t.TempDir(), "seed")
+		mustGit(t, "", "clone", "-q", repo, seed)
+		os.WriteFile(filepath.Join(seed, name), []byte(name+"\n"), 0o644)
+		mustGit(t, seed, "add", "-A")
+		mustGit(t, seed, "commit", "-q", "-m", name)
+		mustGit(t, seed, "push", "-q", "origin", "HEAD:main")
+		return strings.TrimSpace(must(t, seed, "rev-parse", "HEAD"))
+	}
+	heads := func(worker string) string {
+		return must(t, "", "bundle", "list-heads", filepath.Join(m.C.WS.RunRO(worker), "main.bundle"))
+	}
+	task := file(t, m, "starts", "")
+	task.Stage = StageQueued
+	m.save(&task, "")
+	first := push("first.txt")
+	tick(m)
+	got := stageOf(t, m, task)
+	if got.Worker == "" {
+		t.Fatalf("no worker started: stage %q, reason %q", got.Stage, got.Reason)
+	}
+	if h := heads(got.Worker); !strings.Contains(h, first) {
+		t.Fatalf("main.bundle as the worker starts holds %q, want main at %s", h, first)
+	}
+	// A conflict found at the first main waits; main moves on before it goes back.
+	m.C.Runs.SetStatus(got.Worker, core.StatusDone, "finished")
+	got.Resend = "Main moved and your branch conflicts with it."
+	m.save(&got, "")
+	later := push("later.txt")
+	tick(m)
+	got = stageOf(t, m, task)
+	if got.Resend != "" {
+		t.Fatalf("the conflict wasn't sent back: reason %q", got.Reason)
+	}
+	if h := heads(got.Worker); !strings.Contains(h, later) {
+		t.Fatalf("main.bundle as the worker resumes holds %q, want main at %s", h, later)
+	}
+	if msg := queued(m, got.Worker); !strings.Contains(msg, "main.bundle holds main at "+core.Short(later)) {
+		t.Fatalf("the resend doesn't name the main it holds: %q", msg)
+	}
+}
