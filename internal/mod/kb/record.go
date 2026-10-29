@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"sort"
 	"strconv"
@@ -166,97 +168,228 @@ type Hit struct {
 	File  string `json:"file"` // relative to the knowledge base
 	When  string `json:"when"`
 	Text  string `json:"text"`
-	score int
-	tier  int // 0 a living note the dream made, 1 any other, 2 a retired note
+	score float64
+	tier  int // 0 a note, 1 a record entry, 2 a retired note
+	lived bool
+	marks []float64 // a note's points for each word of the query
 }
 
-// Search returns the pieces of the knowledge base under dir (notes whole,
-// record files entry by entry) that match the most words of query, newest
-// first among equals, skipping the folders in hide (relative to dir). A
-// living note the dream consolidated ranks first when it matches at least
-// half as well as the best hit, and a retired note ranks last.
+// Search returns the pieces of the knowledge base under dir that match
+// query, skipping the folders in hide (relative to dir). Notes come first,
+// best match first: a word in a note's title or file name counts most, then
+// one in its tags, then one in its text, and the whole query in the title
+// most of all, each word weighed by how few notes hold it; a living note the dream consolidated goes ahead of one that
+// matches as well. Then the record, one entry per file (the one that matches
+// best, the newest among equals), so one task's many states don't crowd out
+// everything else; and a retired note last. The record's files are read in
+// parallel and skipped whole when no word is in them.
 func Search(dir, query string, hide ...string) []Hit {
 	var terms []string
 	for _, w := range strings.Fields(strings.ToLower(query)) {
-		if len(w) > 1 {
+		if len(w) > 1 && !slices.Contains(terms, w) {
 			terms = append(terms, w)
 		}
 	}
-	var hits []Hit
+	if len(terms) == 0 {
+		return nil
+	}
+	phrase := strings.Join(terms, " ")
+	var notes, record []string
 	filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return nil // an unreadable folder has nothing to give; go on with the rest
 		}
 		rel, _ := filepath.Rel(dir, path)
+		rel = filepath.ToSlash(rel)
 		// A dot folder is git's or a copy SeedSelf is swapping in, never notes.
-		if d.IsDir() && path != dir && (strings.HasPrefix(d.Name(), ".") || slices.Contains(hide, filepath.ToSlash(rel))) {
+		if d.IsDir() && path != dir && (strings.HasPrefix(d.Name(), ".") || slices.Contains(hide, rel)) {
 			return filepath.SkipDir
 		}
 		if d.IsDir() || !strings.HasSuffix(path, ".md") {
 			return nil
 		}
-		raw, _ := os.ReadFile(path)
-		whole := strings.ToLower(rel + " " + string(raw))
-		pieces := []string{string(raw)}
-		if strings.HasPrefix(filepath.ToSlash(rel), "record/") {
-			pieces = strings.Split(string(raw), "\n### ")[1:]
-			slices.Reverse(pieces) // newest first among equals
-		}
-		for _, p := range pieces {
-			low := strings.ToLower(p)
-			h := Hit{File: filepath.ToSlash(rel), Text: strings.TrimSpace(p)}
-			// A word in the entry counts double; one elsewhere in its file
-			// (an earlier state of the same task) still counts.
-			inEntry := false
-			for _, t := range terms {
-				if strings.Contains(low, t) {
-					h.score += 2
-					inEntry = true
-				}
-				if strings.Contains(whole, t) {
-					h.score++
-				}
-			}
-			if !inEntry {
-				continue
-			}
-			if i := strings.Index(p, "date: "); i >= 0 && !strings.HasPrefix(h.File, "record/") {
-				h.When, _, _ = strings.Cut(p[i+6:], "\n")
-			} else if len(p) >= 16 {
-				h.When = p[:16]
-			}
-			h.tier = 1
-			if !strings.HasPrefix(h.File, "record/") {
-				switch head := header(p); {
-				case head["retired"] != "":
-					h.tier = 2
-				case head["consolidated"] != "":
-					h.tier = 0
-				}
-			}
-			hits = append(hits, h)
+		if strings.HasPrefix(rel, "record/") {
+			record = append(record, rel)
+		} else {
+			notes = append(notes, rel)
 		}
 		return nil
 	})
-	best := 0
-	for _, h := range hits {
-		best = max(best, h.score)
+	found := make([]*Hit, len(notes)+len(record))
+	work := make(chan int)
+	var wg sync.WaitGroup
+	for range max(4, 2*runtime.GOMAXPROCS(0)) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := range work {
+				if i < len(notes) {
+					found[i] = matchNote(dir, notes[i], terms, phrase)
+				} else {
+					found[i] = matchRecord(dir, record[i-len(notes)], terms)
+				}
+			}
+		}()
 	}
-	for i := range hits {
-		if hits[i].tier == 0 && 2*hits[i].score < best {
-			hits[i].tier = 1
+	for i := range found {
+		work <- i
+	}
+	close(work)
+	wg.Wait()
+	// A word few notes hold says more about the note than one most hold.
+	held := make([]int, len(terms))
+	for _, h := range found[:len(notes)] {
+		for k := range terms {
+			if h != nil && h.marks[k] > 0 {
+				held[k]++
+			}
+		}
+	}
+	for _, h := range found[:len(notes)] {
+		if h == nil {
+			continue
+		}
+		for k, m := range h.marks {
+			h.score += m * (1 + math.Log(float64(len(notes)+1)/float64(held[k]+1)))
+		}
+	}
+	var hits []Hit
+	seen := map[string]bool{}
+	for _, h := range found {
+		// The same text under two names (a note copied, an event filed
+		// under two subjects) is shown once.
+		if h != nil && !seen[h.Text] {
+			seen[h.Text] = true
+			hits = append(hits, *h)
 		}
 	}
 	sort.SliceStable(hits, func(i, j int) bool {
-		if hits[i].tier != hits[j].tier {
-			return hits[i].tier < hits[j].tier
+		a, b := hits[i], hits[j]
+		if a.tier != b.tier {
+			return a.tier < b.tier
 		}
-		if hits[i].score != hits[j].score {
-			return hits[i].score > hits[j].score
+		if a.score != b.score {
+			return a.score > b.score
 		}
-		return hits[i].When > hits[j].When
+		if a.lived != b.lived {
+			return a.lived
+		}
+		if a.When != b.When {
+			return a.When > b.When
+		}
+		return a.File < b.File
 	})
 	return hits
+}
+
+// matchNote scores the note at rel, or returns nil when no word is in it.
+func matchNote(dir, rel string, terms []string, phrase string) *Hit {
+	raw, err := os.ReadFile(filepath.Join(dir, rel))
+	if err != nil {
+		return nil
+	}
+	text := string(raw)
+	low := strings.ToLower(text)
+	head := header(text)
+	title := strings.ToLower(head["title"])
+	name := strings.NewReplacer("-", " ", "_", " ").Replace(strings.ToLower(rel))
+	tags := strings.ToLower(head["tags"])
+	h := Hit{File: rel, Text: strings.TrimSpace(text), When: head["date"], marks: make([]float64, len(terms))}
+	any := false
+	for k, t := range terms {
+		switch {
+		case hasWord(title, t) || hasWord(name, t):
+			h.marks[k] = 6
+		case hasWord(tags, t):
+			h.marks[k] = 4
+		case hasWord(low, t):
+			h.marks[k] = 2
+		default:
+			continue
+		}
+		any = true
+	}
+	if !any {
+		return nil
+	}
+	if len(terms) > 1 {
+		if hasWord(title, phrase) || hasWord(name, phrase) {
+			h.score += 12
+		} else if hasWord(low, phrase) {
+			h.score += 4
+		}
+	}
+	switch {
+	case head["retired"] != "":
+		h.tier = 2
+	case head["consolidated"] != "":
+		h.lived = true
+	}
+	return &h
+}
+
+// matchRecord returns the entry of the record file at rel that matches best,
+// the newest among equals, or nil when no word is in the file.
+func matchRecord(dir, rel string, terms []string) *Hit {
+	raw, err := os.ReadFile(filepath.Join(dir, rel))
+	if err != nil {
+		return nil
+	}
+	whole := bytes.ToLower(raw)
+	inFile := 0
+	for _, t := range terms {
+		if bytes.Contains(whole, []byte(t)) {
+			inFile++
+		}
+	}
+	if inFile == 0 {
+		return nil
+	}
+	var best *Hit
+	pieces := strings.Split(string(raw), "\n### ")[1:]
+	for i := len(pieces) - 1; i >= 0; i-- { // newest first
+		p := pieces[i]
+		low := strings.ToLower(p)
+		// A word in the entry counts double; one elsewhere in its file
+		// (an earlier state of the same task) still counts.
+		score := 0.0
+		for _, t := range terms {
+			if hasWord(low, t) {
+				score += 2
+			}
+		}
+		if score == 0 || best != nil && score <= best.score {
+			continue
+		}
+		h := Hit{File: rel, Text: strings.TrimSpace(p), score: score, tier: 1}
+		if len(p) >= 16 {
+			h.When = p[:16]
+		}
+		best = &h
+	}
+	if best != nil {
+		best.score += float64(inFile)
+	}
+	return best
+}
+
+// hasWord says whether t starts a word in s, so "merge" finds "merged" but
+// "stall" doesn't find "installer".
+func hasWord(s, t string) bool {
+	for i := 0; ; {
+		j := strings.Index(s[i:], t)
+		if j < 0 {
+			return false
+		}
+		if i += j; i == 0 || !isWordByte(s[i-1]) {
+			return true
+		}
+		i++
+	}
+}
+
+func isWordByte(c byte) bool {
+	return c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c >= 0x80
 }
 
 // Find searches the knowledge base under dir and renders the best limit hits
