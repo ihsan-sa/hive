@@ -683,3 +683,43 @@ func TestRoomIsAskedForAllButLeads(t *testing.T) {
 		t.Errorf("worker: %s, asked with %v live, want it running with the lead counted", w.Status, asked["w"])
 	}
 }
+
+// Each step of the ramp goes to the run first in line, not the one that asks
+// first after it: a worker sent back to its task, then the oldest. On 10-29
+// seven sent-back workers took no turn in 4-7h while newer runs took 46.
+func TestRampGoesInLine(t *testing.T) {
+	now := time.Now()
+	rs := &Runs{heldAt: now, rampLast: now} // a turn just started
+	old := Run{RunSpec: RunSpec{ID: "w-old"}, Created: now.Add(-3 * time.Hour)}
+	back := Run{RunSpec: RunSpec{ID: "w-back"}, Created: now.Add(-2 * time.Hour), Returned: true}
+	fresh := Run{RunSpec: RunSpec{ID: "w-new"}, Created: now.Add(-time.Minute)}
+	waiting := []Run{fresh, old, back} // the newest asks first, as Tick lists them
+	var started []string
+	for tick := time.Duration(0); tick < 4*rampStep && len(waiting) > 0; tick += time.Second {
+		var still []Run
+		for _, r := range waiting {
+			if rs.ramp(r, now.Add(tick)) {
+				still = append(still, r)
+			} else {
+				started = append(started, r.ID)
+			}
+		}
+		waiting = still
+	}
+	if got := strings.Join(started, " "); got != "w-back w-old w-new" {
+		t.Errorf("the ramp started %q, want the sent-back worker, then the oldest", got)
+	}
+	// One first in line that stops asking (started elsewhere, ended) holds
+	// the step only until rampSeen passes.
+	rs = &Runs{heldAt: now, rampLast: now}
+	if !rs.ramp(old, now) {
+		t.Fatal("w-old started inside the step")
+	}
+	rs.rampLast = now.Add(-rampStep) // the step is open
+	if !rs.ramp(fresh, now.Add(time.Second)) {
+		t.Fatal("w-new went ahead of w-old, which asked lately")
+	}
+	if rs.ramp(fresh, now.Add(rampSeen+2*time.Second)) {
+		t.Error("w-new still waits on w-old, which stopped asking")
+	}
+}
