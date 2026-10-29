@@ -99,6 +99,9 @@ type model struct {
 	feed     []feedRow
 	feedSeq  int64
 	feedSel  int
+	feedTop  int // the feed as last drawn: its first row, how many, and the body line they start on, for clicks
+	feedN    int
+	feedY    int
 	follow   string // a project, or "" for everyone
 	onlyMe   bool
 	dashTree bool
@@ -137,6 +140,9 @@ type model struct {
 	burstT1  time.Time // and its last
 	saves    int       // settings saves sent
 	saved    int       // and done, refused or not: see saveConfig
+
+	uiSeq  int64       // the last command from a client acted on; -1 before the first answer (steer.go)
+	uiSent *api.UIView // the view last reported
 }
 
 type stateMsg struct {
@@ -210,14 +216,14 @@ func newModel(c *api.Client, ws core.Workspace) *model {
 	in.FocusedStyle.Placeholder, in.BlurredStyle.Placeholder = stDim, stDim
 	in.KeyMap.InsertNewline.SetKeys("ctrl+j", "alt+enter")
 	return &model{c: c, ws: ws, remote: c != nil && c.Remote(), open: map[string]bool{}, closed: map[string]bool{}, msgs: map[string][]chat.Message{},
-		runs: map[string]api.RunDetail{}, tasks: map[string]work.Task{}, drafts: map[string]string{}, unread: map[string]bool{}, places: map[string]place{}, stages: map[string]string{}, input: in, threadSel: -1, feedSel: -1}
+		runs: map[string]api.RunDetail{}, tasks: map[string]work.Task{}, drafts: map[string]string{}, unread: map[string]bool{}, places: map[string]place{}, stages: map[string]string{}, input: in, threadSel: -1, feedSel: -1, uiSeq: -1}
 }
 
 // sidePane: a pane is open beside the main one.
 func (m *model) sidePane() bool { return m.section == secChats && m.thread != "" }
 
 func (m *model) Init() tea.Cmd {
-	return tea.Batch(m.fetchState(), m.fetchSince(), m.fetchFeed(), tick())
+	return tea.Batch(m.fetchState(), m.fetchSince(), m.fetchFeed(), m.followUI(-1, 0), tick())
 }
 
 func tick() tea.Cmd {
@@ -382,7 +388,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.unread[msg.msg.ID] = true
 		m.msgs[msg.out.chat] = withMsg(m.msgs[msg.out.chat], msg.msg) // a new thread stays in the channel; the person opens it
 	case tickMsg:
-		return m, tea.Batch(m.fetchState(), m.fetchChat(m.currentChatID()), m.fetchDetail(), m.fetchFeed(), tick())
+		return m, tea.Batch(m.fetchState(), m.fetchChat(m.currentChatID()), m.fetchDetail(), m.fetchFeed(), m.reportView(), tick())
 	case stateMsg:
 		if msg.err != nil {
 			m.err = "the Hive isn't answering: " + msg.err.Error()
@@ -403,6 +409,8 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case feedMsg:
 		return m, m.addEvents(msg)
+	case uiMsg:
+		return m, m.gotUI(msg)
 	case chatMsg:
 		if msg.err == nil {
 			m.msgs[msg.id] = merge(msg.msgs, m.msgs[msg.id], m.unread)
@@ -481,6 +489,16 @@ func (m *model) paneUnder(x int) int {
 		return 1
 	}
 	return 2
+}
+
+// click is a click (press and release on one cell) at screen (x, y): on a
+// line of the dashboard's feed it opens that line; elsewhere it does nothing.
+func (m *model) click(x, y int) tea.Cmd {
+	if m.help || m.showSince || m.notice != nil || m.editing || !m.loaded || m.takeover() ||
+		m.section != secDash || m.dashTree || len(m.stack) > 0 || m.paneUnder(x) != 1 {
+		return nil
+	}
+	return m.clickFeed(y - 2) // the header and its rule sit above the body
 }
 
 // wheel scrolls a pane: text panes move their offset, lists move their
@@ -1055,7 +1073,7 @@ func (m *model) keys() []string {
 		if m.dashTree {
 			return []string{"↑↓", "move", "enter", "open", "←", "collapse", "e E", "a level", "s", "feed", "tab", "sidebar"}
 		}
-		return []string{"enter", "open thread", "f", "follow", "m", "only me", "s", "status", "tab", "sidebar"}
+		return []string{"enter click", "open", "f", "follow", "m", "only me", "s", "status", "tab", "sidebar"}
 	case m.section == secWaiting && m.waitSel < len(m.st.Asks) && m.st.Asks[m.waitSel].Diff != "":
 		return []string{"↑↓", "move", "←→", "pick", "enter", "answer", "d", "whole diff", "tab", "sidebar"}
 	case m.section == secWaiting:

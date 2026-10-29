@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 )
 
@@ -31,6 +32,24 @@ func bwrapPath() string {
 	return p
 }
 
+// bwrapSize is the --size that caps the next tmpfs, where this bwrap has it
+// (0.5 and later); an older one would refuse the whole command line.
+func bwrapSize(n int) []string {
+	sizeOnce.Do(func() {
+		out, _ := exec.Command(bwrapPath(), "--help").CombinedOutput()
+		sizeOK = strings.Contains(string(out), "--size")
+	})
+	if !sizeOK {
+		return nil
+	}
+	return []string{"--size", strconv.Itoa(n)}
+}
+
+var (
+	sizeOnce sync.Once
+	sizeOK   bool
+)
+
 // bwrapArgs gives bwrap the reach Init builds: system dirs and host
 // interpreter installs read-only, the spec's mounts, tools at /hive/bin, a
 // fresh /dev, /proc and /tmp, no network but the egress socket, every
@@ -51,7 +70,13 @@ func bwrapArgs(a initArgs, self string) []string {
 		}
 		argv = append(argv, "--ro-bind", d, d)
 	}
-	argv = append(argv, "--dev", "/dev", "--tmpfs", "/dev/shm", "--proc", "/proc", "--tmpfs", "/tmp")
+	argv = append(argv, "--dev", "/dev")
+	argv = append(append(argv, bwrapSize(ShmSize)...), "--tmpfs", "/dev/shm", "--proc", "/proc")
+	if s.Tmp != "" {
+		argv = append(argv, "--bind", s.Tmp, "/tmp")
+	} else {
+		argv = append(append(argv, bwrapSize(TmpfsSize)...), "--tmpfs", "/tmp")
+	}
 	for _, r := range a.Roots {
 		argv = append(argv, "--ro-bind", r, r)
 	}

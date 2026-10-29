@@ -67,6 +67,7 @@ type Effects struct {
 	// Slots holds checks to config's max_checks at a time, started in the order they asked.
 	Slots *Slots
 
+	awayMu    sync.Mutex // one check at a time takes a runner's room (elsewhere)
 	mu        sync.Mutex
 	checks    map[string]Check
 	verdicts  map[string]Verdict
@@ -77,6 +78,7 @@ type Effects struct {
 	outside   map[string]map[string]OutsideRead // project#diff -> reader -> their latest read
 	seats     map[string]map[string]Verdict     // project#diff -> security seat -> its latest verdict
 	hostMade  map[string]HostCommit
+	recorded  map[string]string   // project\x00path -> the blob the Hive last wrote there from its record (Record)
 	pushes    map[string][]string // project@branch -> each commit pushed to it, oldest first
 	approvals map[string]bool
 	failing   map[string]CheckFailure   // repo url -> what a failed check's log says
@@ -117,6 +119,9 @@ type Check struct {
 	// a disk-bound machine.
 	DiskRead  int64 `json:"disk_read,omitempty"`
 	DiskWrote int64 `json:"disk_wrote,omitempty"`
+	// Where is the executor module's runner the check ran on (elsewhere);
+	// empty is this machine.
+	Where string `json:"where,omitempty"`
 }
 
 // Verdict is a reviewer's read of one commit.
@@ -178,15 +183,18 @@ type Finding struct {
 type HostCommit struct {
 	Project  string `json:"project"`
 	SHA      string `json:"sha"`
-	Kind     string `json:"kind"`               // update | revert | setup
+	Kind     string `json:"kind"`               // update | revert | setup | record
 	Reviewed string `json:"reviewed,omitempty"` // for updates: the commit whose verdict carries
 	Main     string `json:"main,omitempty"`
+	// Files are, for a record, the files it wrote from the Hive's own
+	// record (a project's trial ledger), by path, with their blobs.
+	Files map[string]string `json:"files,omitempty"`
 }
 
 // NewEffects builds the effects process and replays its records.
 func NewEffects(ws Workspace, j *Journal, forge Forge, sb func() (sandbox.Sandbox, error), tools func() []string, runs *Runs) *Effects {
 	e := &Effects{ws: ws, j: j, Forge: forge, sandbox: sb, tools: tools, runs: runs, sweep: sandbox.Sweep,
-		checks: map[string]Check{}, verdicts: map[string]Verdict{}, lands: map[string][]string{}, diffLands: map[string][]string{}, diffVerds: map[string]Verdict{}, diffHeads: map[string][]string{}, outside: map[string]map[string]OutsideRead{}, seats: map[string]map[string]Verdict{}, hostMade: map[string]HostCommit{}, pushes: map[string][]string{}, approvals: map[string]bool{}, gates: map[string]GateResult{}, judged: map[string]Judgement{}, gateMains: map[string]GateResult{}, standing: map[string]bool{}, errored: map[string]map[string]any{}}
+		checks: map[string]Check{}, verdicts: map[string]Verdict{}, lands: map[string][]string{}, diffLands: map[string][]string{}, diffVerds: map[string]Verdict{}, diffHeads: map[string][]string{}, outside: map[string]map[string]OutsideRead{}, seats: map[string]map[string]Verdict{}, hostMade: map[string]HostCommit{}, recorded: map[string]string{}, pushes: map[string][]string{}, approvals: map[string]bool{}, gates: map[string]GateResult{}, judged: map[string]Judgement{}, gateMains: map[string]GateResult{}, standing: map[string]bool{}, errored: map[string]map[string]any{}}
 	e.Slots = NewSlots(func() int { return cmp.Or(ws.LoadConfig().MaxChecks, DefaultMaxChecks()) }) // the work module paces it
 	apply := func(ev Event) {
 		e.mu.Lock()
@@ -248,6 +256,9 @@ func NewEffects(ws Workspace, j *Journal, forge Forge, sb func() (sandbox.Sandbo
 			var h HostCommit
 			ev.Decode(&h)
 			e.hostMade[h.Project+"@"+h.SHA] = h
+			for path, blob := range h.Files {
+				e.recorded[h.Project+"\x00"+path] = blob
+			}
 		case "effect.pushed":
 			var pu struct{ Project, Branch, SHA string }
 			ev.Decode(&pu)
@@ -425,7 +436,9 @@ func (e *Effects) NewCheckout(p Project, id, base string) (string, error) {
 	Git(dir, "config", "user.name", "Hive")
 	Git(dir, "config", "user.email", "hive@localhost")
 	Git(dir, "config", "core.autocrlf", "false")
-	Git(dir, "config", "core.filemode", "false")
+	// core.filemode is left as clone probed it: true where the filesystem
+	// keeps exec bits, so a script a worker makes executable is committed
+	// 100755; false where it can't (Windows), as git sets there on its own.
 	return dir, nil
 }
 
@@ -550,6 +563,34 @@ func (e *Effects) RunCheckSince(p Project, sha, main, kind, command string) Chec
 }
 
 func (e *Effects) runCheck(p Project, sha, main, kind, command string) Check {
+	c, refused := e.checkOnce(p, sha, main, kind, command, "")
+	if refused != "" {
+		c, _ = e.checkOnce(p, sha, main, kind, command, refused)
+	}
+	return c
+}
+
+// refusedBefore is the line an executor module gives back for a check it
+// refused before it started (a runner full or loaded, none with room): exit
+// 125, no exit marker, and dispatch's "not run:" line. Nothing ran, so it is
+// no can't-run: the check goes back in the line here at once.
+func refusedBefore(code int, out string) string {
+	if code != 125 {
+		return ""
+	}
+	for line := range strings.Lines(out) {
+		if _, why, ok := strings.Cut(line, "dispatch: not run: "); ok {
+			why, _, _ = strings.Cut(strings.TrimSpace(why), "; a check never runs here")
+			return why
+		}
+	}
+	return ""
+}
+
+// checkOnce is runCheck. A check an executor refused before it started comes
+// back unrecorded with why; run again with back set to that why, it waits in
+// the line here and goes to no runner.
+func (e *Effects) checkOnce(p Project, sha, main, kind, command, back string) (Check, string) {
 	c := Check{Project: p.Name, SHA: sha, Kind: kind, At: time.Now().UTC()}
 	record := func() Check {
 		c.Output = ClipEnds(c.Output, 4000)
@@ -561,34 +602,69 @@ func (e *Effects) runCheck(p Project, sha, main, kind, command string) Check {
 		if !c.OK {
 			c.Output = "the " + kind + " command was removed from main's settings; the person restores it"
 		}
-		return record()
+		return record(), ""
 	}
 	sb, err := e.sandbox()
 	if err != nil {
 		c.Output = err.Error()
-		return c // not recorded: no sandbox is not a verdict on the commit
+		return c, "" // not recorded: no sandbox is not a verdict on the commit
 	}
-	release, ok := e.Slots.Take(p.Name, sha, kind)
-	if !ok {
-		c.Output = "dropped from the check line before it started"
-		return c // not recorded: nobody wants its verdict any more
+	// A check the line here would make wait goes to a runner with room, now
+	// or while it waits; one a runner refused waits here.
+	var away sandbox.Sandbox
+	var where string
+	if back == "" {
+		away, where = e.elsewhere(p, sha, kind)
 	}
-	defer release()
+	if away != nil {
+		e.took(away, true)
+	} else {
+		leave := func() bool {
+			away, where = e.elsewhere(p, sha, kind)
+			return away != nil
+		}
+		if back != "" {
+			leave = nil
+		}
+		release, ok, left := e.Slots.TakeOr(p.Name, sha, kind, leave, checkLeaveEvery)
+		if away != nil {
+			e.took(away, left) // spent only by a check that left the line
+		}
+		if !left {
+			away = nil // it took a slot here as the runner answered
+		}
+		if !ok && !left {
+			c.Output = "dropped from the check line before it started"
+			return c, "" // not recorded: nobody wants its verdict any more
+		}
+		defer release()
+	}
+	if away != nil {
+		sb, c.Where = away, where
+	}
 	dir, err := e.cleanCheckout(p, sha, kind)
 	if err != nil {
 		c.Output = "could not make a clean checkout: " + err.Error()
-		return c
+		return c, ""
 	}
 	defer e.dropCheckout(dir)
 	scope := ""
 	if main != "" && kind == "test" {
 		command, c.Scope, scope = e.narrow(p, dir, sha, main, command)
 	}
+	script := guardProgram(command)
+	nonce := NewID()[14:]
+	if away != nil {
+		script = exitMarked(script, nonce)
+	}
 	id := "gate-" + short(sha) + "-" + kind + "-" + NewID()[14:]
 	c.Log = filepath.Join(e.ws.Hive(), "checks", p.Name, id+".log")
 	mounts := []sandbox.Mount{{Host: dir, Inside: "/work", RW: true}}
-	mods := e.goModules(sb, dir)
-	build := e.goBuild(sb, p, sha, dir)
+	mods, build := goMods{done: func() {}}, goMods{done: func() {}}
+	if away == nil { // the shared caches are this machine's: a runner fetches its own
+		mods = e.goModules(sb, dir)
+		build = e.goBuild(sb, p, sha, dir)
+	}
 	run := func(offline bool) (int, string, error) {
 		ms := append(append(slices.Clone(mounts), build.mounts...), mods.mounts...)
 		env := append(slices.Clone(build.env), mods.own...)
@@ -597,9 +673,24 @@ func (e *Effects) runCheck(p Project, sha, main, kind, command string) Check {
 		}
 		var disk sandbox.Disk
 		defer func() { c.DiskRead, c.DiskWrote = c.DiskRead+disk.Read, c.DiskWrote+disk.Wrote }()
-		return e.runSandboxed(sb, p.Name, id, ms, guardProgram(command), true, 30*time.Minute, env, e.checkCacheCap(), &disk)
+		return e.runSandboxed(sb, p.Name, id, ms, script, true, 30*time.Minute, env, e.checkCacheCap(), &disk)
 	}
 	code, out, err := run(true)
+	if away != nil && err == nil {
+		// The verdict elsewhere is the exit the command itself printed, never
+		// the module's own: a module that exits 0 without running it can't
+		// make a check green.
+		got, ok := markedExit(out, nonce)
+		if why := refusedBefore(code, out); !ok && why != "" {
+			return c, where + " refused it before it started (" + why + ")"
+		}
+		if !ok {
+			c.Output = out
+			c.CantRun = fmt.Sprintf("can't run: %s gave back no exit for the check (the module exited %d)", where, code)
+			return record(), ""
+		}
+		code = got
+	}
 	if len(build.mounts) > 0 && code != 0 && strings.Contains(out, "GOCACHEPROG") {
 		// The build cache's program failed, not the commit: run once
 		// without the shared build cache.
@@ -628,7 +719,7 @@ func (e *Effects) runCheck(p Project, sha, main, kind, command string) Check {
 			mods.done()
 			build.done()
 			c.Output = "could not make a clean checkout: " + cerr.Error()
-			return c
+			return c, ""
 		}
 		defer e.dropCheckout(again)
 		if len(build.mounts) > 0 {
@@ -642,7 +733,13 @@ func (e *Effects) runCheck(p Project, sha, main, kind, command string) Check {
 	}
 	mods.done()
 	build.done()
-	for _, n := range []string{build.note, mods.note, scope} {
+	if c.Where != "" {
+		mods.note = "ran on " + c.Where + ", as the check line here was full"
+	}
+	if back != "" {
+		back += ", so it went back in the check line here"
+	}
+	for _, n := range []string{back, build.note, mods.note, scope} {
 		if n != "" {
 			out = "hive: " + n + "\n" + out
 		}
@@ -650,7 +747,7 @@ func (e *Effects) runCheck(p Project, sha, main, kind, command string) Check {
 	c.Output = out
 	if errors.Is(err, ErrHomeFull) {
 		c.CantRun = fmt.Sprintf("can't run: %v (%s)", err, Bytes(e.checkCacheCap()))
-		return record()
+		return record(), ""
 	}
 	if err != nil {
 		c.Output = err.Error() + "\n" + out
@@ -658,12 +755,12 @@ func (e *Effects) runCheck(p Project, sha, main, kind, command string) Check {
 			c.CantRun = "can't run: the disk or a quota is full where checks run"
 			e.diskAlert(line)
 		}
-		return record()
+		return record(), ""
 	}
 	c.OK = code == 0
 	if tool := MissingTool(code, out); tool != "" {
 		c.CantRun, c.Tool = "can't run: "+tool+" is not installed where checks run", tool
-		return record()
+		return record(), ""
 	}
 	line := DiskFull(out)
 	if line == "" && !c.OK && (DiskUse{Room: e.room()}).Low() {
@@ -672,7 +769,7 @@ func (e *Effects) runCheck(p Project, sha, main, kind, command string) Check {
 	if !c.OK && line != "" {
 		c.OK, c.CantRun = false, "can't run: the disk or a quota is full where checks run"
 		e.diskAlert(line)
-		return record()
+		return record(), ""
 	}
 	e.mu.Lock()
 	e.diskFull = false
@@ -691,8 +788,60 @@ func (e *Effects) runCheck(p Project, sha, main, kind, command string) Check {
 			c.Score = &v
 		}
 	}
-	return record()
+	return record(), ""
 }
+
+// elsewhere returns an executor module that takes checks and has room for a
+// check of sha the check line here would make wait (the pace has pulled
+// checks back, or every slot is taken), and the runner it named; nil when the
+// check runs here. Only a test check of a commit off main's line goes: main's
+// own write the shared build cache the rest read, and a check granted a
+// service on this machine can't leave it. One it returns holds awayMu until
+// took, so one room answer goes to one check.
+func (e *Effects) elsewhere(p Project, sha, kind string) (sandbox.Sandbox, string) {
+	if e.runs == nil || kind != "test" && kind != "retest" || len(e.ws.LoadConfig().Egress.LocalAddrs()) > 0 ||
+		!e.Slots.Busy() || e.MainLine(p)[sha] {
+		return nil, ""
+	}
+	e.awayMu.Lock()
+	sb, where := e.runs.checkExecutor()
+	if sb == nil {
+		e.awayMu.Unlock()
+	}
+	return sb, where
+}
+
+// took ends what elsewhere began for sb: the room answer is spent if the
+// check went, so the next asks again.
+func (e *Effects) took(sb sandbox.Sandbox, went bool) {
+	if d, ok := sb.(*sandbox.Delegate); ok && went && d.Started != nil {
+		d.Started()
+		d.Started = nil
+	}
+	e.awayMu.Unlock()
+}
+
+// exitMarked wraps a check's script so it prints its own exit, with nonce,
+// as its last line of output.
+func exitMarked(script, nonce string) string {
+	return "(\n" + script + "\n); s=$?; printf '\\nhive-check-exit " + nonce + " %d\\n' \"$s\"; exit \"$s\""
+}
+
+// markedExit reads the exit exitMarked printed, if it is there.
+func markedExit(out, nonce string) (int, bool) {
+	tag := "hive-check-exit " + nonce + " "
+	i := strings.LastIndex(out, tag)
+	if i < 0 {
+		return 0, false
+	}
+	rest, _, _ := strings.Cut(out[i+len(tag):], "\n")
+	n, err := strconv.Atoi(strings.TrimSpace(rest))
+	return n, err == nil
+}
+
+// checkLeaveEvery is how often a check waiting in the line here asks whether
+// a runner has room for it.
+var checkLeaveEvery = 30 * time.Second
 
 // narrow is command run only on the packages of the checkout at dir (sha)
 // that the change since its merge base with main can affect, those
@@ -1050,7 +1199,7 @@ func (e *Effects) runSandboxed(sb sandbox.Sandbox, project, id string, mounts []
 		argv = hostShell(script)
 	}
 	spec := sandbox.Spec{ID: id, Argv: argv, Env: env, Cwd: sandbox.InsidePath(sb, mounts[0]), Mounts: mounts, Tools: e.tools(),
-		Stdout: logPath, StopFile: home + ".stop", Network: network, Allow: e.ws.LoadConfig().Egress.For("check"), Local: e.ws.LoadConfig().Egress.LocalAddrs(), Guard: e.ws.Guarded(), Cover: e.ws.Covered(), UID: os.Getuid(), GID: os.Getgid(), Nice: CheckNice, Disk: disk}
+		Stdout: logPath, StopFile: home + ".stop", Tmp: filepath.Join(home, homeTmp), Network: network, Allow: e.ws.LoadConfig().Egress.For("check"), Local: e.ws.LoadConfig().Egress.LocalAddrs(), Guard: e.ws.Guarded(), Cover: e.ws.Covered(), UID: os.Getuid(), GID: os.Getgid(), Nice: CheckNice, Disk: disk}
 	over := watchHome(home, capB)
 	code, err := sb.Run(spec, timeout)
 	if over() && err == nil {
@@ -1062,8 +1211,10 @@ func (e *Effects) runSandboxed(sb sandbox.Sandbox, project, id string, mounts []
 	if len(errRaw) > 0 {
 		out += "\n" + string(errRaw)
 	}
-	if wsl, _ := os.ReadFile(logPath + ".wsl"); len(wsl) > 0 {
-		out += "\n" + string(wsl)
+	for _, side := range []string{".wsl", ".dispatch"} {
+		if raw, _ := os.ReadFile(logPath + side); len(raw) > 0 {
+			out += "\n" + string(raw)
+		}
 	}
 	return code, out, err
 }
@@ -1358,7 +1509,11 @@ type Change struct {
 	Lines     int      `json:"lines"`
 	Small     bool     `json:"small"`
 	Protected []string `json:"protected,omitempty"`
-	High      []string `json:"high,omitempty"` // files in a high or root class
+	// Recorded are the files whose content at the head is what the Hive
+	// last wrote there from its own record (Record): not protected, and a
+	// change of nothing else needs no read.
+	Recorded []string `json:"recorded,omitempty"`
+	High     []string `json:"high,omitempty"` // files in a high or root class
 	// Security are files on main's SecurityList, or in the project's root
 	// class: the change merges only after a security read said land on its
 	// diff (SecurityOK).
@@ -1394,6 +1549,52 @@ var docExt = []string{".md", ".txt", ".rst", ".adoc"}
 // a script there is code like anywhere else.
 var docImage = []string{".png", ".jpg", ".jpeg", ".gif", ".webp"}
 
+// BaseProtected are the paths every project's changes to which the person
+// merges, whatever its project.json says.
+var BaseProtected = []string{".hive/project.json", ".hive/goals.md", "docs/REVIEW.md", StewardFile}
+
+// LedgerPathOK says why path can't be a project's trial ledger, or nil. The
+// Hive writes the ledger on the host and lands it with no approval or read,
+// so it must be a plain relative path inside the repository, outside .git,
+// one of the score's own paths (what a ledger is for), and nothing else the
+// project guards: not a base protected path, nor one of its protected, high
+// or root paths, nor CI, nor .gitattributes.
+func LedgerPathOK(cfg ProjectConfig, p string) error {
+	bad := func(why string) error { return fmt.Errorf("ledger path %q: %s", p, why) }
+	if p == "" || strings.ContainsAny(p, "\\\x00") || path.IsAbs(p) || path.Clean(p) != p {
+		return bad("not a plain relative path")
+	}
+	for _, seg := range strings.Split(p, "/") {
+		if seg == ".." || seg == "." || strings.EqualFold(seg, ".git") {
+			return bad("it leaves the repository or goes into .git")
+		}
+	}
+	if cfg.Score == nil || !slices.Contains(cfg.Score.Evaluator(), p) {
+		return bad("not one of the score's paths")
+	}
+	guarded := append(append(append(append(slices.Clone(BaseProtected), cfg.Protected...), cfg.High...), cfg.Root...), ".github/")
+	if under(p, guarded) || p == ".gitattributes" || strings.HasSuffix(p, "/.gitattributes") {
+		return bad("a path the project guards")
+	}
+	return nil
+}
+
+// isRecorded says whether file at sha holds what the Hive last wrote there
+// from its record, and file is the ledger cfg (main's) names.
+func (e *Effects) isRecorded(p Project, cfg ProjectConfig, sha, file string) bool {
+	if file != cfg.Ledger || LedgerPathOK(cfg, file) != nil {
+		return false
+	}
+	e.mu.Lock()
+	want, ok := e.recorded[p.Name+"\x00"+file]
+	e.mu.Unlock()
+	if !ok {
+		return false
+	}
+	got, err := Git(e.ws.Project(p.Name), "rev-parse", "--verify", "-q", sha+":"+file)
+	return err == nil && got == want
+}
+
 // Classify measures a change against main. Small means docs only and few
 // lines, judged by file type: a script under docs/ is code.
 func (e *Effects) Classify(p Project, mainSHA, sha string) (Change, error) {
@@ -1411,7 +1612,7 @@ func (e *Effects) Classify(p Project, mainSHA, sha string) (Change, error) {
 		return c, err
 	}
 	cfg := e.Config(p, mainSHA).Guarded(p)
-	protected := append([]string{".hive/project.json", ".hive/goals.md", "docs/REVIEW.md", StewardFile}, cfg.Protected...)
+	protected := append(slices.Clone(BaseProtected), cfg.Protected...)
 	if cfg.Score != nil {
 		protected = append(protected, cfg.Score.Evaluator()...)
 	}
@@ -1428,7 +1629,9 @@ func (e *Effects) Classify(p Project, mainSHA, sha string) (Change, error) {
 		file := f[2]
 		c.Files = append(c.Files, file)
 		c.Lines += add + del
-		if under(file, protected) {
+		if e.isRecorded(p, cfg, sha, file) {
+			c.Recorded = append(c.Recorded, file)
+		} else if under(file, protected) {
 			c.Protected = append(c.Protected, file)
 		}
 		if under(file, cfg.Root) {
@@ -2441,6 +2644,9 @@ func CheckNames(runs []CheckRun) string {
 // else that changes the change's own files needs a new read.
 func (e *Effects) readOK(p Project, ch Change, sha string) bool {
 	project := p.Name
+	if len(ch.Files) > 0 && len(ch.Recorded) == len(ch.Files) && len(ch.High) == 0 && len(ch.Security) == 0 {
+		return true // only what the Hive wrote from its own record: nothing for a reader to judge
+	}
 	if p.Self || len(ch.High) > 0 {
 		// A release names the read of each merged head; a high class needs a
 		// second, separate read.
@@ -2615,10 +2821,35 @@ func (e *Effects) Revert(p Project, mainSHA, mergeSHA, lesson string) (string, e
 // Setup writes files as a host-made commit on top of base (or as the first
 // commit of an empty repository).
 func (e *Effects) Setup(p Project, base string, files map[string]string, message string) (string, error) {
-	dir := filepath.Join(e.ws.Gates(), p.Name, "setup-"+NewID()[14:])
+	return e.write(p, base, files, message, "setup")
+}
+
+// Record writes files the Hive derives from its own record (a project's
+// trial ledger) as a host-made commit on top of main. Until it writes the
+// path again, a change that leaves exactly that content there needs neither
+// the person's approval for it, though the path is protected, nor a read
+// (Classify's Recorded): what it says is the Hive's to say, not a worker's.
+func (e *Effects) Record(p Project, main string, files map[string]string, message string) (string, error) {
+	if main == "" {
+		return "", errors.New("a record goes on top of main, and the repository is empty")
+	}
+	cfg := e.Config(p, main).Guarded(p)
+	for f := range files {
+		if f != cfg.Ledger {
+			return "", fmt.Errorf("a record writes only the ledger main's project.json names, not %q", f)
+		}
+		if err := LedgerPathOK(cfg, f); err != nil {
+			return "", err
+		}
+	}
+	return e.write(p, main, files, message, "record")
+}
+
+func (e *Effects) write(p Project, base string, files map[string]string, message, kind string) (string, error) {
+	dir := filepath.Join(e.ws.Gates(), p.Name, kind+"-"+NewID()[14:])
 	var err error
 	if base != "" {
-		dir, err = e.cleanCheckout(p, base, "setup")
+		dir, err = e.cleanCheckout(p, base, kind)
 	} else {
 		err = os.MkdirAll(dir, 0o755)
 		if err == nil {
@@ -2631,6 +2862,9 @@ func (e *Effects) Setup(p Project, base string, files map[string]string, message
 	defer e.dropCheckout(dir)
 	for path, content := range files {
 		full := filepath.Join(dir, filepath.FromSlash(path))
+		if err := inside(dir, full); err != nil {
+			return "", err
+		}
 		os.MkdirAll(filepath.Dir(full), 0o755)
 		if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
 			return "", err
@@ -2643,7 +2877,18 @@ func (e *Effects) Setup(p Project, base string, files map[string]string, message
 	if base == "" {
 		Git(dir, "remote", "add", "origin", e.ws.Project(p.Name))
 	}
-	return e.hostCommit(p, dir, HostCommit{Project: p.Name, Kind: "setup", Main: base})
+	h := HostCommit{Project: p.Name, Kind: kind, Main: base}
+	if kind == "record" {
+		h.Files = map[string]string{}
+		for path := range files {
+			blob, err := Git(dir, "rev-parse", "HEAD:"+path)
+			if err != nil {
+				return "", err
+			}
+			h.Files[path] = blob
+		}
+	}
+	return e.hostCommit(p, dir, h)
 }
 
 // PushInitial publishes the first commit of an empty repository to main.
@@ -2660,6 +2905,27 @@ func (e *Effects) PushInitial(p Project, sha string) error {
 	}
 	_, err := GitEnvT(5*time.Minute, dir, ghEnv(p.Repo), "push", "-q", "origin", sha+":refs/heads/"+p.Branch)
 	return err
+}
+
+// inside refuses full unless it lies under dir with no symlink on the way
+// (the checkout's own files are the branch's to make one), so a host write
+// lands in the checkout and nowhere else.
+func inside(dir, full string) error {
+	rel, err := filepath.Rel(dir, full)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+		return fmt.Errorf("%s is outside the checkout", full)
+	}
+	at := dir
+	for _, seg := range strings.Split(rel, string(filepath.Separator)) {
+		if strings.EqualFold(seg, ".git") {
+			return fmt.Errorf("%s is inside .git", rel)
+		}
+		at = filepath.Join(at, seg)
+		if fi, err := os.Lstat(at); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("%s goes through a symlink", rel)
+		}
+	}
+	return nil
 }
 
 // hostCommit moves a commit made in a gate clone into the host clone.

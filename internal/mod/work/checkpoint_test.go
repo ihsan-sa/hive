@@ -3,6 +3,7 @@ package work
 import (
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -272,5 +273,57 @@ func TestCheckpointWaitsOutFullSlots(t *testing.T) {
 	}
 	if !logged(task, "doesn't beat the best kept score 5") {
 		t.Fatalf("not weighed once a slot was free: %v", task.Log)
+	}
+}
+
+// A checkpoint's score check that queued behind other checks anyway (the line
+// filled between its look and its ask) is taken out of the line once the
+// worker finishes, so the step ends and the next looks land the finish within
+// a tick, not after the backlog. On 10-28 ten finished workers sat in working
+// 80-171 minutes this way. While it waits, a recheck says what it waits on.
+func TestCheckpointLeavesTheLineWhenTheWorkerFinishes(t *testing.T) {
+	m, task, p := checkpointRig(t, 5, "7")
+	var full atomic.Bool
+	slots := core.NewSlots(func() int {
+		if full.Load() {
+			return 1
+		}
+		full.Store(true) // the first look, the checkpoint's own, sees room
+		return 0
+	})
+	m.C.Effects.Slots = slots
+	release := slots.Acquire("other", "abc", "test")
+	defer release()
+	full.Store(false)
+	m.mu.Lock()
+	m.stepAt = map[string]time.Time{task.ID: time.Now().Add(-90 * time.Minute)}
+	m.mu.Unlock()
+	done := make(chan error, 1)
+	go func() { done <- m.checkWorker(task, p) }()
+	for _, waiting := slots.State(); len(waiting) == 0; _, waiting = slots.State() {
+		time.Sleep(time.Millisecond)
+	}
+	if err := m.heldErr(task.ID); !strings.Contains(err.Error(), "since") || !strings.Contains(err.Error(), "as a checkpoint") {
+		t.Fatalf("a held task doesn't say what it waits on: %v", err)
+	}
+	m.unweighFinished()
+	if _, waiting := slots.State(); len(waiting) != 1 {
+		t.Fatal("a running worker's checkpoint left the line")
+	}
+	m.C.J.MustAppend("run.turn_ended", map[string]any{"id": "w1", "turn": 1, "status": core.StatusDone})
+	m.unweighFinished()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the step still waits for a slot after the worker finished")
+	}
+	if task.Stage != StageWorking || task.Checkpoint != "" || task.Tried != "" || !logged(task, "lands whole instead") {
+		t.Fatalf("stage %q, checkpoint %q, tried %q, log %v", task.Stage, task.Checkpoint, task.Tried, task.Log)
+	}
+	if err := m.checkWorker(task, p); err != nil || task.Stage != StageLanding {
+		t.Fatalf("the finish wasn't seen: stage %q, err %v", task.Stage, err)
 	}
 }

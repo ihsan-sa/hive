@@ -104,8 +104,9 @@ func TestHoldUntilTheNextRelease(t *testing.T) {
 	}
 }
 
-// The lead sets a hold only with the person's words, and only on a project it reaches.
-func TestLeadHoldNeedsThePersonsWords(t *testing.T) {
+// Any agent sets a hold only with the person's words, and only on its own
+// project; a hold the person set themselves only they lift or change.
+func TestHoldNeedsThePersonsWords(t *testing.T) {
 	m, _, p, _ := heldRig(t)
 	lead := core.Run{ID: "lead-1", Role: "lead"}
 	if _, err := m.opHold(lead, []byte(`{"project":"p"}`)); err == nil {
@@ -122,6 +123,29 @@ func TestLeadHoldNeedsThePersonsWords(t *testing.T) {
 	}
 	if _, ok := m.Hold(p.Name); ok {
 		t.Fatal("not lifted")
+	}
+	for _, elsewhere := range []core.Run{{ID: "w-q", Role: "worker", Project: "q"}, {ID: "lead-q", Role: "lead", Project: "q"}} {
+		if _, err := m.opHold(elsewhere, []byte(`{"project":"p","why":"person: hold merges"}`)); err == nil {
+			t.Fatalf("a %s on another project held p's merges", elsewhere.Role)
+		}
+	}
+	worker := core.Run{ID: "w-p", Role: "worker", Project: "p"}
+	if _, err := m.opHold(worker, []byte(`{"project":"p","why":"person: hold merges"}`)); err != nil {
+		t.Fatalf("a worker on p couldn't hold p on the person's word: %v", err)
+	}
+	if _, err := m.opHold(worker, []byte(`{"project":"p","why":"person: lift it","lift":"true"}`)); err != nil {
+		t.Fatalf("an agent's own hold isn't liftable by an agent: %v", err)
+	}
+	if _, err := m.SetHold(MergeHold{Project: p.Name, Why: "nothing until the next release", By: "person"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, ask := range []string{`{"project":"p","why":"person: lift it","lift":"true"}`, `{"project":"p","why":"person: only #3","only":"#3"}`} {
+		if _, err := m.opHold(worker, []byte(ask)); err == nil || !strings.Contains(err.Error(), "set by the person") {
+			t.Fatalf("a worker changed the person's own hold with %s: %v", ask, err)
+		}
+	}
+	if h, ok := m.Hold(p.Name); !ok || h.By != "person" || len(h.Only) != 0 {
+		t.Fatalf("the person's hold moved: %+v %v", h, ok)
 	}
 }
 

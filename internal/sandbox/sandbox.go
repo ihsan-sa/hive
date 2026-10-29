@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
 	"runtime"
@@ -44,9 +45,14 @@ type Spec struct {
 	Stdin    string   `json:"stdin"`     // host path
 	Stdout   string   `json:"stdout"`    // host path, appended
 	StopFile string   `json:"stop_file"` // host path; when present the command is killed
-	Network  bool     `json:"network"`   // outbound through the egress proxy
-	Allow    []string `json:"allow"`     // hosts the proxy lets through; nil is every public host
-	Local    []string `json:"local"`     // services on this machine the person granted, loopback ip:port (LocalGrant's)
+	// Tmp, when set, is a host folder on disk the sandbox binds at /tmp,
+	// emptied before the command and removed after it: a tmpfs /tmp is
+	// memory that can't be reclaimed, only swapped, and go build's work dirs
+	// and test binaries go there. Unset, /tmp is a tmpfs capped at TmpfsSize.
+	Tmp     string   `json:"tmp,omitempty"`
+	Network bool     `json:"network"` // outbound through the egress proxy
+	Allow   []string `json:"allow"`   // hosts the proxy lets through; nil is every public host
+	Local   []string `json:"local"`   // services on this machine the person granted, loopback ip:port (LocalGrant's)
 	// Guard is host paths no host interpreter's install may contain, as
 	// its bind would expose them: the workspace and the folders covered in it
 	// (Workspace.Guarded). Every mount's host path is guarded as well. A spec
@@ -230,6 +236,14 @@ func ReadSpec(path string) (Spec, error) {
 	return s, json.Unmarshal(raw, &s)
 }
 
+// ShmSize caps a sandbox's /dev/shm, and TmpfsSize its /tmp where the spec
+// gives no folder on disk for it (a runner's turn, a setup probe), so a full
+// one fails the command that filled it rather than the machine's memory.
+const (
+	ShmSize   = 1 << 30
+	TmpfsSize = 4 << 30
+)
+
 // InsideEnv is the standard environment inside the sandbox.
 func InsideEnv(home string, network bool) []string {
 	env := []string{
@@ -271,3 +285,45 @@ const insideBins = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 // ProxyPort is where the egress forwarder listens inside the sandbox.
 const ProxyPort = "3128"
+
+// lookTool finds tool t on this machine: an absolute path as it is, a bare
+// name on PATH or else in ~/.local/bin or /usr/local/bin, where an installer
+// puts it without PATH knowing.
+func lookTool(t string) (string, error) {
+	if filepath.IsAbs(t) {
+		return t, nil
+	}
+	if p, err := exec.LookPath(t); err == nil {
+		if abs, err := filepath.Abs(p); err == nil {
+			return abs, nil
+		}
+	}
+	for _, d := range []string{filepath.Join(os.Getenv("HOME"), ".local", "bin"), "/usr/local/bin"} {
+		if _, err := os.Stat(filepath.Join(d, t)); err == nil {
+			return filepath.Join(d, t), nil
+		}
+	}
+	return "", fmt.Errorf("tool %q not found on this machine", t)
+}
+
+// AbsTools names each of tools by the absolute path this machine finds it
+// at, for a spec handed to another program (an executor module): that
+// program runs with its own PATH and HOME, so a bare name the daemon finds
+// (claude in /hive/bin, say) may be missing there. The base name stays the
+// tool's own (links aren't followed), as the name inside and a runner's
+// mapping go by it. One in the system's bin dirs stays bare: it is on any
+// PATH, and found by name it runs where it is inside, beside its package.
+// One not found stays as it was, for the sandbox to report.
+func AbsTools(tools []string) []string {
+	out := make([]string, len(tools))
+	for i, t := range tools {
+		out[i] = t
+		if filepath.IsAbs(t) {
+			continue
+		}
+		if p, err := lookTool(t); err == nil && !strings.Contains(":"+insideBins+":", ":"+filepath.Dir(p)+":") {
+			out[i] = p
+		}
+	}
+	return out
+}
