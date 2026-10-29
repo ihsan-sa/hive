@@ -67,6 +67,7 @@ type Effects struct {
 	// Slots holds checks to config's max_checks at a time, started in the order they asked.
 	Slots *Slots
 
+	awayMu    sync.Mutex // one check at a time takes a runner's room (elsewhere)
 	mu        sync.Mutex
 	checks    map[string]Check
 	verdicts  map[string]Verdict
@@ -118,6 +119,9 @@ type Check struct {
 	// a disk-bound machine.
 	DiskRead  int64 `json:"disk_read,omitempty"`
 	DiskWrote int64 `json:"disk_wrote,omitempty"`
+	// Where is the executor module's runner the check ran on (elsewhere);
+	// empty is this machine.
+	Where string `json:"where,omitempty"`
 }
 
 // Verdict is a reviewer's read of one commit.
@@ -575,12 +579,31 @@ func (e *Effects) runCheck(p Project, sha, main, kind, command string) Check {
 		c.Output = err.Error()
 		return c // not recorded: no sandbox is not a verdict on the commit
 	}
-	release, ok := e.Slots.Take(p.Name, sha, kind)
-	if !ok {
-		c.Output = "dropped from the check line before it started"
-		return c // not recorded: nobody wants its verdict any more
+	// A check the line here would make wait goes to a runner with room, now
+	// or while it waits.
+	away, where := e.elsewhere(p, sha, kind)
+	if away != nil {
+		e.took(away, true)
+	} else {
+		release, ok, left := e.Slots.TakeOr(p.Name, sha, kind, func() bool {
+			away, where = e.elsewhere(p, sha, kind)
+			return away != nil
+		}, checkLeaveEvery)
+		if away != nil {
+			e.took(away, left) // spent only by a check that left the line
+		}
+		if !left {
+			away = nil // it took a slot here as the runner answered
+		}
+		if !ok && !left {
+			c.Output = "dropped from the check line before it started"
+			return c // not recorded: nobody wants its verdict any more
+		}
+		defer release()
 	}
-	defer release()
+	if away != nil {
+		sb, c.Where = away, where
+	}
 	dir, err := e.cleanCheckout(p, sha, kind)
 	if err != nil {
 		c.Output = "could not make a clean checkout: " + err.Error()
@@ -591,11 +614,19 @@ func (e *Effects) runCheck(p Project, sha, main, kind, command string) Check {
 	if main != "" && kind == "test" {
 		command, c.Scope, scope = e.narrow(p, dir, sha, main, command)
 	}
+	script := guardProgram(command)
+	nonce := NewID()[14:]
+	if away != nil {
+		script = exitMarked(script, nonce)
+	}
 	id := "gate-" + short(sha) + "-" + kind + "-" + NewID()[14:]
 	c.Log = filepath.Join(e.ws.Hive(), "checks", p.Name, id+".log")
 	mounts := []sandbox.Mount{{Host: dir, Inside: "/work", RW: true}}
-	mods := e.goModules(sb, dir)
-	build := e.goBuild(sb, p, sha, dir)
+	mods, build := goMods{done: func() {}}, goMods{done: func() {}}
+	if away == nil { // the shared caches are this machine's: a runner fetches its own
+		mods = e.goModules(sb, dir)
+		build = e.goBuild(sb, p, sha, dir)
+	}
 	run := func(offline bool) (int, string, error) {
 		ms := append(append(slices.Clone(mounts), build.mounts...), mods.mounts...)
 		env := append(slices.Clone(build.env), mods.own...)
@@ -604,9 +635,21 @@ func (e *Effects) runCheck(p Project, sha, main, kind, command string) Check {
 		}
 		var disk sandbox.Disk
 		defer func() { c.DiskRead, c.DiskWrote = c.DiskRead+disk.Read, c.DiskWrote+disk.Wrote }()
-		return e.runSandboxed(sb, p.Name, id, ms, guardProgram(command), true, 30*time.Minute, env, e.checkCacheCap(), &disk)
+		return e.runSandboxed(sb, p.Name, id, ms, script, true, 30*time.Minute, env, e.checkCacheCap(), &disk)
 	}
 	code, out, err := run(true)
+	if away != nil && err == nil {
+		// The verdict elsewhere is the exit the command itself printed, never
+		// the module's own: a module that exits 0 without running it can't
+		// make a check green.
+		got, ok := markedExit(out, nonce)
+		if !ok {
+			c.Output = out
+			c.CantRun = fmt.Sprintf("can't run: %s gave back no exit for the check (the module exited %d)", where, code)
+			return record()
+		}
+		code = got
+	}
 	if len(build.mounts) > 0 && code != 0 && strings.Contains(out, "GOCACHEPROG") {
 		// The build cache's program failed, not the commit: run once
 		// without the shared build cache.
@@ -649,6 +692,9 @@ func (e *Effects) runCheck(p Project, sha, main, kind, command string) Check {
 	}
 	mods.done()
 	build.done()
+	if c.Where != "" {
+		mods.note = "ran on " + c.Where + ", as the check line here was full"
+	}
 	for _, n := range []string{build.note, mods.note, scope} {
 		if n != "" {
 			out = "hive: " + n + "\n" + out
@@ -700,6 +746,58 @@ func (e *Effects) runCheck(p Project, sha, main, kind, command string) Check {
 	}
 	return record()
 }
+
+// elsewhere returns an executor module that takes checks and has room for a
+// check of sha the check line here would make wait (the pace has pulled
+// checks back, or every slot is taken), and the runner it named; nil when the
+// check runs here. Only a test check of a commit off main's line goes: main's
+// own write the shared build cache the rest read, and a check granted a
+// service on this machine can't leave it. One it returns holds awayMu until
+// took, so one room answer goes to one check.
+func (e *Effects) elsewhere(p Project, sha, kind string) (sandbox.Sandbox, string) {
+	if e.runs == nil || kind != "test" && kind != "retest" || len(e.ws.LoadConfig().Egress.LocalAddrs()) > 0 ||
+		!e.Slots.Busy() || e.MainLine(p)[sha] {
+		return nil, ""
+	}
+	e.awayMu.Lock()
+	sb, where := e.runs.checkExecutor()
+	if sb == nil {
+		e.awayMu.Unlock()
+	}
+	return sb, where
+}
+
+// took ends what elsewhere began for sb: the room answer is spent if the
+// check went, so the next asks again.
+func (e *Effects) took(sb sandbox.Sandbox, went bool) {
+	if d, ok := sb.(*sandbox.Delegate); ok && went && d.Started != nil {
+		d.Started()
+		d.Started = nil
+	}
+	e.awayMu.Unlock()
+}
+
+// exitMarked wraps a check's script so it prints its own exit, with nonce,
+// as its last line of output.
+func exitMarked(script, nonce string) string {
+	return "(\n" + script + "\n); s=$?; printf '\\nhive-check-exit " + nonce + " %d\\n' \"$s\"; exit \"$s\""
+}
+
+// markedExit reads the exit exitMarked printed, if it is there.
+func markedExit(out, nonce string) (int, bool) {
+	tag := "hive-check-exit " + nonce + " "
+	i := strings.LastIndex(out, tag)
+	if i < 0 {
+		return 0, false
+	}
+	rest, _, _ := strings.Cut(out[i+len(tag):], "\n")
+	n, err := strconv.Atoi(strings.TrimSpace(rest))
+	return n, err == nil
+}
+
+// checkLeaveEvery is how often a check waiting in the line here asks whether
+// a runner has room for it.
+var checkLeaveEvery = 30 * time.Second
 
 // narrow is command run only on the packages of the checkout at dir (sha)
 // that the change since its merge base with main can affect, those
@@ -1069,8 +1167,10 @@ func (e *Effects) runSandboxed(sb sandbox.Sandbox, project, id string, mounts []
 	if len(errRaw) > 0 {
 		out += "\n" + string(errRaw)
 	}
-	if wsl, _ := os.ReadFile(logPath + ".wsl"); len(wsl) > 0 {
-		out += "\n" + string(wsl)
+	for _, side := range []string{".wsl", ".dispatch"} {
+		if raw, _ := os.ReadFile(logPath + side); len(raw) > 0 {
+			out += "\n" + string(raw)
+		}
 	}
 	return code, out, err
 }

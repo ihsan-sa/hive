@@ -42,10 +42,19 @@ type roomAnswer struct {
 // as a sandbox that hands the turn's spec to it, and the runner it named.
 // A module serves the hook `executor` by answering `<exec> room` (exit 0
 // and print {"runner": "<name>"}) and `<exec> turn --spec <file>`.
-func (r *Runner) Executor() (sandbox.Sandbox, string) {
+func (r *Runner) Executor() (sandbox.Sandbox, string) { return r.executor("executor") }
+
+// CheckExecutor is Executor for a check, from a module whose manifest lists
+// the hook `checks`: it says its `turn` runs a check's spec to its end and
+// brings back its output (the core reads the check's exit from the output,
+// never from `turn`'s own code). A module with the `executor` hook alone is
+// handed turns, not checks.
+func (r *Runner) CheckExecutor() (sandbox.Sandbox, string) { return r.executor("checks") }
+
+func (r *Runner) executor(hook string) (sandbox.Sandbox, string) {
 	for _, m := range r.Mods.List() {
 		name := filepath.Base(m.Dir)
-		if len(m.Exec) == 0 || !slices.Contains(m.Hooks, "executor") || r.Status(name) != "running" {
+		if len(m.Exec) == 0 || !slices.Contains(m.Hooks, hook) || r.Status(name) != "running" {
 			continue
 		}
 		argv, env := Argv(m), Env(r.C.WS, name)
