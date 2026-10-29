@@ -60,6 +60,23 @@ func waitPid(t *testing.T, path string) int {
 	return 0
 }
 
+// waitTagged waits for pid to be prog carrying a bare command's tag. $! is
+// the shell's fork, and on a loaded machine it may still be on its way
+// through setsid to prog when the sweep looks: mid-exec, the kernel shows an
+// empty environment, so the sweep would pass it by.
+func waitTagged(t *testing.T, pid int, prog string) {
+	t.Helper()
+	dir := fmt.Sprintf("/proc/%d/", pid)
+	for end := time.Now().Add(30 * time.Second); time.Now().Before(end); time.Sleep(20 * time.Millisecond) {
+		comm, _ := os.ReadFile(dir + "comm")
+		env, _ := os.ReadFile(dir + "environ")
+		if strings.TrimSpace(string(comm)) == prog && strings.Contains("\x00"+string(env), "\x00"+OwnerEnv+"=") {
+			return
+		}
+	}
+	t.Fatalf("pid %d never became a tagged %s", pid, prog)
+}
+
 // gone waits for pid to end; a zombie (ended, its parent not yet reaped it) counts.
 func gone(t *testing.T, pid int) {
 	t.Helper()
@@ -95,6 +112,7 @@ func TestSweepEndsWhatADeadDaemonsBareCommandLeft(t *testing.T) {
 	}
 	pid := waitPid(t, pidFile)
 	t.Cleanup(func() { syscall.Kill(pid, syscall.SIGKILL) })
+	waitTagged(t, pid, "sleep")
 	live := exec.Command("sleep", "60")
 	live.Env = append(os.Environ(), OwnerEnv+"="+owner)
 	if err := live.Start(); err != nil {
