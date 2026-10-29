@@ -150,7 +150,7 @@ func TestQueueCapsOrdersAndGroups(t *testing.T) {
 
 // Every agent owns the loop: a worker holds a queued brief on its own project
 // as the lead would, on the record by its run id, and one on another project
-// can't.
+// only saying why.
 func TestWorkerHoldsQueuedBrief(t *testing.T) {
 	m := queueRig(t)
 	a := file(t, m, "tidy the readme", "")
@@ -163,11 +163,11 @@ func TestWorkerHoldsQueuedBrief(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if notes := fmt.Sprint(out.(map[string]any)["notes"]); !strings.Contains(notes, c.ID+" is on project p; you steer only your own") {
+	if notes := fmt.Sprint(out.(map[string]any)["notes"]); !strings.Contains(notes, c.ID+" is on project p; say why with why") {
 		t.Fatalf("the stranger wasn't refused by reach: %s", notes)
 	}
 	if got := stageOf(t, m, c); got.Held {
-		t.Fatalf("a worker on another project held the brief: %+v", got)
+		t.Fatalf("a worker on another project held the brief without why: %+v", got)
 	}
 	// A new order from the stranger touches only its own project's line: p's
 	// ordered brief keeps its place, with no note about a brief it never named.
@@ -180,6 +180,20 @@ func TestWorkerHoldsQueuedBrief(t *testing.T) {
 	}
 	if notes := fmt.Sprint(out.(map[string]any)["notes"]); strings.Contains(notes, c.ID) || stageOf(t, m, c).Order != 1 {
 		t.Fatalf("another project's order was reset or noted: %s, order %d", notes, stageOf(t, m, c).Order)
+	}
+	// Saying why, the stranger moves p's brief first, on its record (10-29:
+	// a lead twice asked the lead to move another project's briefs).
+	if _, err := m.C.Runs.Ops().Call(stranger, "queue", json.RawMessage(`{"order":"`+c.ID+`,`+a.ID+`","hold":"`+c.ID+`","why":"it unblocks q"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if got := stageOf(t, m, c); !got.Held || got.HeldBy != stranger.ID || !strings.Contains(got.Log[len(got.Log)-1].Text, "held by w-other: it unblocks q") {
+		t.Fatalf("the stranger's hold with why wasn't set on the record: %+v", got)
+	}
+	if _, err := m.C.Runs.Ops().Call(stranger, "queue", json.RawMessage(`{"release":"`+c.ID+`","why":"done with it"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if stageOf(t, m, c).Held {
+		t.Fatal("the stranger's release with why didn't take")
 	}
 	placed.Order = 0
 	m.save(&placed, "")
