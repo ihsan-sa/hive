@@ -1530,3 +1530,51 @@ func TestApplicationCursorEndAndHome(t *testing.T) {
 		t.Fatalf("ESC O F didn't go to the newest, or typed into a box:\n%s", v)
 	}
 }
+
+// A message one agent sends another shows in the feed with both names in
+// full and its project, and enter or a click on the line opens all of it.
+func TestFeedShowsAgentMessagesWhole(t *testing.T) {
+	m := testModel(120, 40)
+	m.pick(sideRow{sec: secDash})
+	m.st.Runs = append(m.st.Runs,
+		core.Run{RunSpec: core.RunSpec{ID: "w-261028-1-aaaaaaaaaa", Role: "worker", Project: "textkit"}},
+		core.Run{RunSpec: core.RunSpec{ID: "lead-project-textkit-b", Role: "lead", Name: "lead:hifi-receiver-2", Project: "textkit"}})
+	long := "the gate flakes on TestClientFollowsRestartedDaemon " + strings.Repeat("and here is more of why ", 20) + "THE END"
+	data, _ := json.Marshal(map[string]string{"from": "w-261028-1-aaaaaaaaaa", "to": "lead-project-textkit-b", "text": long})
+	m.addEvents([]core.Event{{Seq: 1, At: time.Now(), Kind: "msg.sent", Data: data}})
+	v := plain(m.View())
+	if !strings.Contains(v, "worker aaaaa → lead:hifi-receiver-2") || !strings.Contains(v, "textkit") ||
+		!strings.Contains(v, "the gate flakes") {
+		t.Fatalf("the feed lacks the names in full, the project or the message:\n%s", v)
+	}
+	m.focus = 1
+	m.keyDash(tea.KeyMsg{Type: tea.KeyEnter})
+	if len(m.stack) != 1 || !strings.Contains(m.stack[0].text, "THE END") || !strings.Contains(m.stack[0].text, "lead:hifi-receiver-2") {
+		t.Fatalf("enter didn't open the whole message: %+v", m.stack)
+	}
+	m.stack = nil
+
+	// a click on the line: find the row it was drawn on
+	screen := strings.Split(plain(m.View()), "\n")
+	y := -1
+	for i, l := range screen {
+		if strings.Contains(l, "the gate flakes") {
+			y = i
+		}
+	}
+	if y < 0 {
+		t.Fatal("the line isn't on screen")
+	}
+	sw, _, _ := m.layout()
+	m.Update(tea.MouseMsg{X: sw + 10, Y: y, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress})
+	m.Update(tea.MouseMsg{X: sw + 10, Y: y, Button: tea.MouseButtonLeft, Action: tea.MouseActionRelease})
+	if len(m.stack) != 1 || !strings.Contains(m.stack[0].text, "THE END") {
+		t.Fatalf("a click on the line didn't open it: %+v", m.stack)
+	}
+	m.stack = nil
+	m.Update(tea.MouseMsg{X: sw + 10, Y: y - 3, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress})
+	m.Update(tea.MouseMsg{X: sw + 10, Y: y - 3, Button: tea.MouseButtonLeft, Action: tea.MouseActionRelease})
+	if len(m.stack) != 0 {
+		t.Fatalf("a click above the feed opened %+v", m.stack)
+	}
+}

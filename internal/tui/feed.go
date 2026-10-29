@@ -85,6 +85,16 @@ func (m *model) addEvents(evs []core.Event) tea.Cmd {
 			var a core.Ask
 			e.Decode(&a)
 			r.from, r.to, r.project, r.text, r.told = or(a.From, "hive"), "you", a.Project, "done for you: "+a.Title, &a
+		case "msg.sent": // one agent to another, its text as sent (to 2000 characters)
+			var p struct{ From, To, Text string }
+			e.Decode(&p)
+			r.from, r.to, r.text = p.From, p.To, p.Text
+			if f, ok := m.run(p.From); ok {
+				r.from, r.project = runLabel(f), f.Project
+			}
+			if t, ok := m.run(p.To); ok {
+				r.to, r.project = runLabel(t), or(r.project, t.Project)
+			}
 		case "alert.raised":
 			var a struct{ Kind, Project, Text string }
 			e.Decode(&a)
@@ -185,20 +195,66 @@ func (m *model) keyDash(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if sel < 0 {
 			return m, nil
 		}
-		switch r := rows[sel]; {
-		case r.chat != "":
-			cmd := m.openChat(r.chat)
-			m.thread, m.focus, m.chFree = r.thread, 2, false
-			return m, tea.Batch(cmd, m.focusBox(r.thread))
-		case r.task != "":
-			return m, m.push(detail{kind: "task", id: r.task, title: core.Clip(r.text, 40)})
-		case r.told != nil:
-			return m, m.push(toldDetail(*r.told))
-		case r.ask:
-			m.pick(sideRow{sec: secWaiting})
-		}
+		return m, m.openFeedRow(rows[sel])
 	}
 	return m, nil
+}
+
+// openFeedRow opens a feed line to the whole of it: a chat message in its
+// thread, a task, what was done for the person, an ask in Waiting, and
+// anything else (a message between agents, an alert) as its full text.
+func (m *model) openFeedRow(r feedRow) tea.Cmd {
+	switch {
+	case r.chat != "":
+		cmd := m.openChat(r.chat)
+		m.thread, m.focus, m.chFree = r.thread, 2, false
+		return tea.Batch(cmd, m.focusBox(r.thread))
+	case r.task != "":
+		return m.push(detail{kind: "task", id: r.task, title: core.Clip(r.text, 40)})
+	case r.told != nil:
+		return m.push(toldDetail(*r.told))
+	case r.ask:
+		m.pick(sideRow{sec: secWaiting})
+		return nil
+	}
+	head := r.from + " → " + r.to + "\n" + r.at.Local().Format("Mon 15:04:05")
+	if r.project != "" {
+		head += " · " + r.project
+	}
+	return m.push(detail{kind: "text", id: fmt.Sprintf("feed:%d", r.at.UnixNano()), title: core.Clip(r.from+" → "+r.to, 40), text: shown(head + "\n\n" + r.text)})
+}
+
+// clickFeed opens the feed line drawn at body line y, as enter would.
+func (m *model) clickFeed(y int) tea.Cmd {
+	rows := m.feedRows()
+	i := m.feedTop + y - m.feedY
+	if y < m.feedY || i < 0 || i >= len(rows) || i >= m.feedTop+m.feedN {
+		return nil
+	}
+	m.focus, m.feedSel = 1, i
+	if i == len(rows)-1 {
+		m.feedSel = -1
+	}
+	return m.openFeedRow(rows[i])
+}
+
+// feedCols are the widths of the from → to and project columns: as wide as
+// the rows in the feed need, so names show in full, up to nearly half the
+// line; the project column goes first when the message would get under a third.
+func feedCols(rows []feedRow, w int) (fw, pw int) {
+	fw, pw = len("from → to"), 0
+	for _, r := range rows {
+		fw = max(fw, visibleWidth(r.from+" → "+r.to))
+		pw = max(pw, visibleWidth(r.project))
+	}
+	fw = min(fw+2, max(24, w*9/20))
+	if pw > 0 {
+		pw = min(max(pw, len("project"))+2, 22)
+	}
+	if w-fw-pw-10 < w/3 {
+		pw = 0
+	}
+	return fw, pw
 }
 
 func (m *model) viewFeed() []string {
@@ -222,20 +278,19 @@ func (m *model) viewFeed() []string {
 		lines = append(lines, "  "+g)
 	}
 	lines = append(lines, "  "+m.usage(w))
-	pw := 12 // the project column, dropped when the message would get too narrow
-	if w < 90 {
-		pw = 0
-	}
-	lines = append(lines, "  "+stDim.Render(fmt.Sprintf("%-10s%-24s%s%s", "time", "from → to", pad(clip("project", pw), pw), "message")), "")
 	rows := m.feedRows()
+	fw, pw := feedCols(rows, w)
+	lines = append(lines, "  "+stDim.Render(fmt.Sprintf("%-10s%s%s%s", "time", pad("from → to", fw), pad(clip("project", pw), pw), "message")), "")
 	sel := m.feedCursor(len(rows))
 	room := m.bodyHeight() - len(lines)
 	start := max(0, min(len(rows)-room, sel-room/2))
+	m.feedTop, m.feedN = start, min(room, len(rows)-start)
+	m.feedY = len(lines) + max(0, room-m.feedN) // short feeds sit at the bottom
 	var feed []string
 	for i := start; i < len(rows) && len(feed) < room; i++ {
 		r := rows[i]
 		row := func(from, to, text string) string {
-			return clip(fmt.Sprintf("%-10s%s%s", r.at.Local().Format("15:04:05"), pad(clip(from+" → "+to, 22), 24), pad(clip(r.project, pw-2), pw))+text, w)
+			return clip(fmt.Sprintf("%-10s%s%s", r.at.Local().Format("15:04:05"), pad(clip(from+" → "+to, fw-2), fw), pad(clip(r.project, pw-2), pw))+text, w)
 		}
 		var line string
 		switch {

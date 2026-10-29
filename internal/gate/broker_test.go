@@ -82,8 +82,8 @@ func sideEnv(t *testing.T, m *Meter, b *Broker) []string {
 	if err := b.WriteTrust(trust); err != nil {
 		t.Fatal(err)
 	}
-	env := []string{"PATH=" + os.Getenv("PATH"), "HOME=" + dir, "TMPDIR=" + dir, // gh caches answers under TMPDIR "XDG_CONFIG_HOME=" + filepath.Join(dir, ".config"),
-		"GIT_CONFIG_GLOBAL=/dev/null", "GIT_TERMINAL_PROMPT=0", "GH_NO_UPDATE_NOTIFIER=1", "GH_HOST=github.com"}
+	env := []string{"PATH=" + os.Getenv("PATH"), "HOME=" + dir, "TMPDIR=" + dir, // gh caches answers under TMPDIR
+		"XDG_CONFIG_HOME=" + filepath.Join(dir, ".config"), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_TERMINAL_PROMPT=0", "GH_NO_UPDATE_NOTIFIER=1", "GH_HOST=github.com"}
 	env = append(env, m.Env(false)...)
 	return append(env, TrustEnv(trust)...)
 }
@@ -205,6 +205,50 @@ func TestBrokerIsTheSidesGitHub(t *testing.T) {
 		if strings.Contains(r, brokerPlaceholder) {
 			t.Errorf("the side's placeholder reached GitHub: %q", r)
 		}
+	}
+}
+
+// Requests a side sends at once, each on its own tunnel, get their own
+// answers: gh's pr merge asks two feature-detection queries together, and
+// an answer that crossed to the other reads as "struct field ... doesn't
+// exist" there (the reds TestBrokerIsTheSidesGitHub was quarantined for).
+func TestBrokerKeepsAnswersApart(t *testing.T) {
+	f := newFakeGitHub(t)
+	f.answer = func(_ *http.Request, body []byte) (int, string) {
+		return 200, `{"data":{"echo":` + strings.TrimSpace(string(body)) + `}}`
+	}
+	b := testBroker(t, f, "gate-x-candidate")
+	m, err := StartMeter(filepath.Join(shortTmp(), "ba.sock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	m.SetBroker(b)
+	roots := x509.NewCertPool()
+	roots.AppendCertsFromPEM(b.CAPEM())
+	proxy, _ := url.Parse("http://" + m.Addr)
+	for round := 0; round < 100; round++ {
+		c := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(proxy), TLSClientConfig: &tls.Config{RootCAs: roots}}}
+		var wg sync.WaitGroup
+		for i := 0; i < 4; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				name := fmt.Sprintf("Q%d_%d", round, i)
+				resp, err := c.Post("https://api.github.com/graphql", "application/json",
+					strings.NewReader(`{"query":"query `+name+`{T: __type(name: \"PullRequest\"){name}}"}`))
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				defer resp.Body.Close()
+				if out, _ := io.ReadAll(resp.Body); !strings.Contains(string(out), name+"{") {
+					t.Errorf("%s got another's answer: %s", name, out)
+				}
+			}()
+		}
+		wg.Wait()
+		c.CloseIdleConnections()
 	}
 }
 

@@ -1359,3 +1359,37 @@ func TestWardenHoldsARequestADayAtMost(t *testing.T) {
 		t.Fatal("the warden past WardenHoldMax was not stopped")
 	}
 }
+
+// A step on a project whose owner has a token runs gh and git with it, as the
+// Hive's own pushes do, and the warden is told so.
+func TestStepUsesTheProjectsForgeToken(t *testing.T) {
+	g := newRig(t, 2)
+	tok := filepath.Join(t.TempDir(), "org.token")
+	os.WriteFile(tok, []byte("org-tok\n"), 0o600)
+	old, had := core.OwnerTokens["some-org"]
+	core.OwnerTokens["some-org"] = tok
+	t.Cleanup(func() {
+		if had {
+			core.OwnerTokens["some-org"] = old
+		} else {
+			delete(core.OwnerTokens, "some-org")
+		}
+	})
+	g.c.Projects.Add(core.Project{Name: "deck", Repo: "Some-Org/deck"})
+	w, err := g.c.Runs.Start(core.RunSpec{Role: "worker", Harness: "fake", Project: "deck", Checkout: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	g.worker = w
+	req := g.request("push tag v0.1.0", "gh api repos/Some-Org/deck/git/refs", "T2")
+	if b := g.run(req.Warden).Brief; !strings.Contains(b, "token the Hive uses for Some-Org/deck") {
+		t.Fatalf("the warden isn't told which login:\n%s", b)
+	}
+	if err := g.decide(req, map[string]string{"decision": "do", "reason": "fine", "script": `printf %s "$GH_TOKEN" > proof`}); err != nil {
+		t.Fatal(err)
+	}
+	g.settle(req.ID, "approved", "running")
+	if b, _ := os.ReadFile(filepath.Join(g.c.WS.Hive(), "risk", "deck", req.ID, "proof")); string(b) != "org-tok" {
+		t.Fatalf("GH_TOKEN in the step: %q", b)
+	}
+}

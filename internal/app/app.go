@@ -5,6 +5,8 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -52,6 +54,7 @@ type App struct {
 
 	seeding  sync.WaitGroup // SeedSelf's copy, which Close waits out
 	stopSeed context.CancelFunc
+	updating sync.WaitGroup // modules following a merge on their project, which Close waits out
 }
 
 // New opens the workspace and builds every module.
@@ -95,6 +98,7 @@ func New(ws core.Workspace, forge core.Forge) (*App, error) {
 	a.Improve.OnKept = a.Release.AfterKept
 	a.Runner = &runner.Runner{C: c, Mods: a.Mods, Agents: a.Agents}
 	c.Runs.Executor = a.Runner.Executor
+	c.Runs.CheckExecutor = a.Runner.CheckExecutor
 	for _, tick := range []func(){stats.SpendNotice{C: c}.Tick, a.Work.Tick, a.Improve.Tick, a.Improve.TickSweeps, a.Improve.TickStepBacks, a.KB.Tick, a.System.Tick, a.Release.Tick, a.Risk.Tick, a.Projects.Tick, a.moduleJobs, a.Runner.Tick, a.Models.Tick} {
 		a.Mods.Builtin(tick)
 	}
@@ -122,6 +126,12 @@ func New(ws core.Workspace, forge core.Forge) (*App, error) {
 		}
 		return "updated " + join(changed), nil
 	}})
+	c.J.Subscribe(func(e core.Event) {
+		if e.Kind == "effect.merged" {
+			a.updating.Add(1)
+			go func() { defer a.updating.Done(); a.followMerge(e) }()
+		}
+	})
 	a.Release.PauseMerges = a.Work.PauseMerges
 	a.Release.Gates, a.Release.HoldGates = a.Work.GatesRunning, a.Work.HoldGates
 	a.System.Register(system.Job{Name: "hive.update", AtStart: true, Fn: a.Release.AutoUpdate})
@@ -129,6 +139,41 @@ func New(ws core.Workspace, forge core.Forge) (*App, error) {
 	a.System.Register(system.Job{Name: "hive.clean", AtStart: true, Fn: func() (string, error) { return a.Clean(), nil }})
 	c.Effects.OnDiskFull = func() { a.System.RunNow("hive.clean") }
 	return a, nil
+}
+
+// followMerge updates the installed modules whose source is the project a
+// merge landed on, at once: a fix to dispatch or hive-hwde reaches the Hive
+// as it merges, not at the next hourly modules.update. A module installed
+// from the project's host clone takes the clone at main first. The update
+// moves its folder as Update does, so its program starts again only once its
+// review has read the new commit.
+func (a *App) followMerge(e core.Event) {
+	var x struct {
+		Project string `json:"project"`
+	}
+	if e.Decode(&x) != nil {
+		return
+	}
+	p, ok := a.C.Projects.Get(x.Project)
+	if !ok {
+		return
+	}
+	clone := a.C.WS.Project(p.Name)
+	var sources []string
+	for _, m := range a.Mods.List() {
+		if s := m.Source.Source; s == clone || (p.Repo != "" && strings.HasSuffix(strings.TrimSuffix(strings.TrimRight(s, "/"), ".git"), "/"+p.Repo)) {
+			sources = append(sources, s)
+		}
+	}
+	if len(sources) == 0 {
+		return
+	}
+	if slices.Contains(sources, clone) {
+		if _, err := a.C.Effects.Sync(p); err != nil {
+			return // the hourly update tries again
+		}
+	}
+	a.Mods.UpdateFrom(sources)
 }
 
 // moduleJobs registers the jobs module programs serve (a manifest's
@@ -295,6 +340,7 @@ func (a *App) Close() error {
 		a.stopSeed()
 	}
 	a.seeding.Wait()
+	a.updating.Wait()
 	a.Runner.Close()
 	return a.C.Close()
 }

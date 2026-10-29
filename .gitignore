@@ -5,6 +5,6 @@
 *.test
 *.exe~
 __pycache__/
-# left by an interrupted disk test (MkdirTemp(".", ...) beside the test)
+# left by internal/core TestCheckRecordsItsDisk when a run is cut short
 disk-test-*/
 .bwrap-host-*/
