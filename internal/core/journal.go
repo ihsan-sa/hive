@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 	"time"
 )
@@ -37,6 +38,27 @@ type Journal struct {
 	// breaks counts events whose seq didn't rise past the one before: two
 	// writers on one file. flagged is the count an earlier start reported.
 	breaks, flagged int
+	// size is where the next line goes; marks let Since start near its seq
+	// rather than read the whole file (a module polls it every second).
+	size  int64
+	marks []mark
+	lines int
+}
+
+// mark is an event line's offset and the highest seq of every line before
+// it: Since may start at any mark whose top is at or below its after.
+type mark struct{ off, top int64 }
+
+// markEvery is how many lines lie between marks.
+const markEvery = 256
+
+// note records the line at off with seq, after the lines before it.
+func (j *Journal) note(off, seq int64) {
+	if j.lines%markEvery == 0 {
+		j.marks = append(j.marks, mark{off, j.seq})
+	}
+	j.lines++
+	j.seq = max(j.seq, seq)
 }
 
 // OpenJournal opens (or creates) the journal at path and reads its last seq.
@@ -45,11 +67,15 @@ func OpenJournal(path string) (*Journal, error) {
 		return nil, err
 	}
 	j := &Journal{path: path}
-	if err := j.Replay(func(e Event) {
+	if err := readJSONLFrom(path, 0, func(raw []byte, off int64) {
+		var e Event
+		if json.Unmarshal(raw, &e) != nil || e.Kind == "" {
+			return
+		}
 		if e.Seq <= j.seq {
 			j.breaks++
 		}
-		j.seq = max(j.seq, e.Seq) // after two writers, the next seq is still new
+		j.note(off, e.Seq) // after two writers, the next seq is still new
 		var a struct {
 			Kind   string `json:"kind"`
 			Breaks int    `json:"breaks"`
@@ -65,6 +91,9 @@ func OpenJournal(path string) (*Journal, error) {
 		return nil, err
 	}
 	j.f = f
+	if fi, err := f.Stat(); err == nil {
+		j.size = fi.Size()
+	}
 	return j, nil
 }
 
@@ -89,10 +118,13 @@ func (j *Journal) Append(kind string, data any) (Event, error) {
 		return Event{}, err
 	}
 	j.mu.Lock()
-	j.seq++
-	e := Event{Seq: j.seq, At: time.Now().UTC(), Kind: kind, Data: raw}
+	e := Event{Seq: j.seq + 1, At: time.Now().UTC(), Kind: kind, Data: raw}
 	line, _ := json.Marshal(e)
-	_, err = j.f.Write(append(line, '\n'))
+	n, err := j.f.Write(append(line, '\n'))
+	if n > 0 {
+		j.note(j.size, e.Seq)
+		j.size += int64(n)
+	}
 	if err == nil {
 		err = j.f.Sync()
 	}
@@ -129,11 +161,21 @@ func (j *Journal) Replay(fn func(Event)) error {
 	})
 }
 
-// Since returns events with Seq > after.
+// Since returns events with Seq > after. It reads from the last mark no
+// line before which has a seq past after, so a reader near the end reads
+// only the end.
 func (j *Journal) Since(after int64) []Event {
+	j.mu.Lock()
+	i := sort.Search(len(j.marks), func(i int) bool { return j.marks[i].top > after })
+	var from int64
+	if i > 0 {
+		from = j.marks[i-1].off
+	}
+	j.mu.Unlock()
 	var out []Event
-	_ = j.Replay(func(e Event) {
-		if e.Seq > after {
+	_ = readJSONLFrom(j.path, from, func(raw []byte, _ int64) {
+		var e Event
+		if json.Unmarshal(raw, &e) == nil && e.Kind != "" && e.Seq > after {
 			out = append(out, e)
 		}
 	})
@@ -152,6 +194,11 @@ func (j *Journal) Close() error { return j.f.Close() }
 
 // ReadJSONL calls fn for each non-empty line; a missing file is empty.
 func ReadJSONL(path string, fn func([]byte)) error {
+	return readJSONLFrom(path, 0, func(line []byte, _ int64) { fn(line) })
+}
+
+// readJSONLFrom is ReadJSONL from byte offset from, passing each line's offset.
+func readJSONLFrom(path string, from int64, fn func([]byte, int64)) error {
 	f, err := os.Open(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
@@ -160,12 +207,16 @@ func ReadJSONL(path string, fn func([]byte)) error {
 		return err
 	}
 	defer f.Close()
+	if _, err := f.Seek(from, io.SeekStart); err != nil {
+		return err
+	}
 	r := bufio.NewReaderSize(f, 1<<16)
-	for {
+	for off := from; ; {
 		line, err := r.ReadBytes('\n')
 		if len(line) > 1 && line[len(line)-1] == '\n' {
-			fn(line[:len(line)-1])
+			fn(line[:len(line)-1], off)
 		}
+		off += int64(len(line))
 		if err == io.EOF {
 			return nil
 		}
