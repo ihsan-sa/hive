@@ -1397,8 +1397,10 @@ func TestStepUsesTheProjectsForgeToken(t *testing.T) {
 func TestWardenSharesAReadOnlyStepsOutput(t *testing.T) {
 	g := newRig(t, 2)
 	req := g.request("print per-cgroup io.stat", "cat io.stat", "T2")
-	if g.decide(req, map[string]string{"decision": "decline", "reason": "no", "share": "output"}) == nil {
-		t.Fatal("a decline took share")
+	for _, d := range []string{"decline", "tribunal"} {
+		if g.decide(req, map[string]string{"decision": d, "reason": "no", "script": "cat io.stat", "share": "output"}) == nil {
+			t.Fatalf("a %s took share", d)
+		}
 	}
 	script := "echo user.slice wbytes=43MB; echo GH_TOKEN=ghp_abcdefghijklmnopqrstuvwxyz0123; echo 'Authorization: Bearer x'; echo dispatch-fx.service 7.8"
 	if err := g.decide(req, map[string]string{"decision": "do", "reason": "reads only", "script": script, "share": "output"}); err != nil {
@@ -1417,8 +1419,28 @@ func TestWardenSharesAReadOnlyStepsOutput(t *testing.T) {
 }
 
 func TestRedact(t *testing.T) {
-	out := Redact("fine 1\npassword: hunter2\nx tok123456789 y\n-----BEGIN OPENSSH PRIVATE KEY-----\nAWS AKIAABCDEFGHIJKLMNOP\nfine 2", []string{"GH_TOKEN=tok123456789"})
-	if out != "fine 1\n[line withheld: it reads like a secret]\n[line withheld: it reads like a secret]\n[line withheld: it reads like a secret]\n[line withheld: it reads like a secret]\nfine 2" {
-		t.Fatalf("redacted:\n%s", out)
+	t.Setenv("HIVE_TEST_OTHER_TOKEN", "daemon-only-value")
+	in := strings.Join([]string{
+		"fine 1",
+		"password: hunter2",
+		"x tok123456789 y",
+		"-----BEGIN OPENSSH PRIVATE KEY-----",
+		"b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQ",
+		"QyNTUxOQAAACDx",
+		"-----END OPENSSH PRIVATE KEY-----",
+		"AWS AKIAABCDEFGHIJKLMNOP",
+		"machine github.com login me password hunter2",
+		"FOO=bar",
+		"export WHATEVER=1",
+		"some line daemon-only-value here",
+		"user.slice 8:0 rbytes=116 wbytes=43",
+		"fine 2",
+	}, "\n")
+	out := strings.Split(Redact(in, []string{"GH_TOKEN=tok123456789"}), "\n")
+	for i, l := range out {
+		kept := i == 0 || i == len(out)-1 || i == len(out)-2
+		if kept == (l == "[line withheld: it reads like a secret]") {
+			t.Errorf("line %d: %q", i, l)
+		}
 	}
 }

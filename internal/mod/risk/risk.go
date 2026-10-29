@@ -431,8 +431,11 @@ func (m *Module) opDecide(r core.Run, args json.RawMessage) (any, error) {
 	if a.Decision == "do" && sudoRe.MatchString(a.Script) && !sudoOK() {
 		return nil, errors.New(sudoFact())
 	}
-	if a.Share != "" && (a.Share != "output" || (a.Decision != "do" && a.Decision != "tribunal") || req.Settles != nil) {
-		return nil, errors.New(`share is "output", with do or tribunal on a script that only reads`)
+	// Share is the warden's alone, so it goes only with a do the warden runs
+	// itself: a panel votes on the script, not on its output going back, so
+	// a T3 step or a tribunal never shares.
+	if a.Share != "" && (a.Share != "output" || a.Decision != "do" || req.Tier == "T3" || req.Settles != nil) {
+		return nil, errors.New(`share is "output", only with do on a T2 script that only reads (a panel's vote doesn't cover its output going back)`)
 	}
 	req.Decision, req.Reason, req.Share = a.Decision, a.Reason, a.Share == "output"
 	if a.Gain != "" {
@@ -877,25 +880,40 @@ func (m *Module) run(req Request) (string, error) {
 }
 
 // secretLine is a line that reads like a credential: a name that says so
-// with a value, or a token in a well-known shape.
-var secretLine = regexp.MustCompile(`(?i)(token|secret|passw|api[_-]?key|access[_-]?key|private[_-]?key|credential|auth|bearer|cookie)\S*\s*[:=]|-----BEGIN|\b(gh[pousr]_[A-Za-z0-9]{20,}|github_pat_\w{20,}|sk-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}|xox[abpr]-[A-Za-z0-9-]{10,}|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,})`)
+// followed by a value (after =, : or a space, as .netrc writes it), an
+// environment-style NAME=value line whatever the name, or a token in a
+// well-known shape or long enough to be one (a key's base64 body, an
+// unknown API token).
+var secretLine = regexp.MustCompile(`(?i)(token|secret|passw|passphrase|api[_-]?key|access[_-]?key|private[_-]?key|credential|authorization|bearer|cookie)\S*(\s*[:=]|\s+\S)|^\s*(export\s+)?[A-Za-z_][A-Za-z0-9_]*=\S|-----(BEGIN|END)|\b(gh[pousr]_[A-Za-z0-9]{20,}|github_pat_\w{20,}|sk-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}|xox[abpr]-[A-Za-z0-9-]{10,}|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,})|[A-Za-z0-9+/_-]{32,}`)
+
+// secretName is an environment variable whose value is a secret.
+var secretName = regexp.MustCompile(`(?i)token|secret|passw|key|credential|auth|cookie|session`)
 
 // Redact is a step's output fit to go back to an agent: each line that reads
-// like a secret, or holds a value from env (the forge token the script got),
-// is withheld. It is a filter on the text, not a proof: the warden shares
+// like a secret, or holds a value from env (the forge token the script got)
+// or from this daemon's own secret-named environment, is withheld, and so is
+// everything from a -----BEGIN line through its -----END (a key's body has no
+// name on it). It is a filter on the text, not a proof: the warden shares
 // only what a read-only script prints.
 func Redact(out string, env []string) string {
 	var vals []string
-	for _, kv := range env {
-		if _, v, ok := strings.Cut(kv, "="); ok && len(v) >= 8 {
+	for _, kv := range append(slices.Clone(env), os.Environ()...) {
+		if k, v, ok := strings.Cut(kv, "="); ok && len(v) >= 8 && (slices.Contains(env, kv) || secretName.MatchString(k)) {
 			vals = append(vals, v)
 		}
 	}
 	lines := strings.Split(out, "\n")
+	block := false
 	for i, l := range lines {
-		hit := secretLine.MatchString(l)
+		hit := block || secretLine.MatchString(l)
 		for _, v := range vals {
 			hit = hit || strings.Contains(l, v)
+		}
+		if strings.Contains(l, "-----BEGIN") {
+			block = true
+		}
+		if strings.Contains(l, "-----END") {
+			block = false
 		}
 		if hit {
 			lines[i] = "[line withheld: it reads like a secret]"
