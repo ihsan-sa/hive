@@ -76,13 +76,14 @@ type Task struct {
 	AimWhy    string     `json:"aim_why,omitempty"` // why it was taken as what it is
 	Stage     string     `json:"stage"`
 	Reason    string     `json:"reason,omitempty"`
-	Order     int        `json:"order,omitempty"`     // its place in the queue the lead set; 0 goes after, as filed
-	Held      bool       `json:"held,omitempty"`      // an agent holds it in the queue
-	HeldBy    string     `json:"held_by,omitempty"`   // the run that holds it
-	Now       bool       `json:"now,omitempty"`       // the lead put it first in line (queue now)
-	Recheck   bool       `json:"recheck,omitempty"`   // landed again on the same commit, so its test runs again
-	Retested  string     `json:"retested,omitempty"`  // the head whose red tests ran once more while main's passed
-	ByPerson  bool       `json:"by_person,omitempty"` // the person stopped it or left it open, so the lead can't bring it back
+	Order     int        `json:"order,omitempty"`      // its place in the queue the lead set; 0 goes after, as filed
+	Held      bool       `json:"held,omitempty"`       // an agent holds it in the queue
+	HeldBy    string     `json:"held_by,omitempty"`    // the run that holds it
+	Now       bool       `json:"now,omitempty"`        // the lead put it first in line (queue now)
+	Recheck   bool       `json:"recheck,omitempty"`    // landed again on the same commit, so its test runs again
+	Retested  string     `json:"retested,omitempty"`   // the head whose red tests ran once more while main's passed
+	KeepsTest string     `json:"keeps_test,omitempty"` // the head a retry took back to landing with its tests green, which it lands again without rerunning
+	ByPerson  bool       `json:"by_person,omitempty"`  // the person stopped it or left it open, so the lead can't bring it back
 	Issue     core.Issue `json:"issue"`
 	Worker    string     `json:"worker,omitempty"`
 	Base      string     `json:"base,omitempty"`
@@ -320,6 +321,7 @@ type Module struct {
 	away      map[string]bool      // queued tasks admit started past the pace for a runner, until their worker starts
 	elsewhere func() bool          // whether an executor module has room: core.Runs.Elsewhere, or a test's
 	stepAt    map[string]time.Time // when each Tick step began, so one stuck past stepLimit is let go
+	weighing  map[string]weighing  // the checkpoints a step is weighing, so a finish takes them out of the check line
 	aims      map[string]aimAsk    // aims asked while a step held the task, set as it ends
 	// steered is when the person's stop, retry or recheck (steer) last saved
 	// each task: a step whose copy is older saves nothing after it, nor
@@ -947,6 +949,7 @@ func (m *Module) Tick() {
 	m.reviveDrafts()
 	m.paceChecks()
 	m.reapStuck()
+	m.unweighFinished()
 	tasks := m.List(func(t Task) bool { return !t.Terminal() || t.IssueOpen || m.woke(t) })
 	start, wait := m.admit(tasks)
 	for _, t := range tasks {
@@ -1368,7 +1371,7 @@ func (m *Module) step(t *Task) error {
 		return m.startWorker(t, p)
 	case StageWorking:
 		if t.Resend != "" {
-			return m.resend(t)
+			return m.resend(t, p)
 		}
 		return m.checkWorker(t, p)
 	case StageLanding:
@@ -1457,7 +1460,10 @@ func (m *Module) startWorker(t *Task, p core.Project) error {
 			m.C.Runs.Stop(id, "its task was stopped as its worker started")
 			return nil
 		}
-		t.Base = base
+		t.Base, t.Worker = base, id
+		if _, err := m.writeMainBundle(t, p); err != nil { // main as it starts (just synced), not none (issue #1945)
+			m.bundleFailed(t, p, err)
+		}
 	}
 	if t.Branch == "" {
 		t.Branch = "hive/" + t.ID
@@ -1696,7 +1702,14 @@ func (m *Module) checkpoint(t *Task, p core.Project, r core.Run) error {
 	}
 	c, ok := m.C.Effects.GetCheck(p.Name, sha, "score")
 	if !ok {
+		m.weigh(t.ID, weighing{worker: t.Worker, project: p.Name, sha: sha})
 		c = m.C.Effects.RunCheck(p, sha, "score", sc.Command)
+		m.weigh(t.ID, weighing{})
+	}
+	if r, ok := m.C.Runs.Get(t.Worker); ok && finished(r.Status) && c.Score == nil {
+		t.Tried = "" // its finish lands it; this weighing was taken out of the line
+		m.save(t, "the worker finished while its commit "+core.Short(sha)+" waited to be weighed as a checkpoint, so it lands whole instead")
+		return nil
 	}
 	if c.Score == nil {
 		m.save(t, fmt.Sprintf("the score gave no number on the worker's commit %s, so no checkpoint", core.Short(sha)))
@@ -1708,6 +1721,78 @@ func (m *Module) checkpoint(t *Task, p core.Project, r core.Run) error {
 	}
 	t.Checkpoint = sha
 	return m.open(t, p, sha, fmt.Sprintf("A checkpoint of #%d while its worker keeps going: %s scores %g, above the best kept %g.", t.Issue.Number, core.Short(sha), *c.Score, best))
+}
+
+// heldErr refuses a steer on task id while a step holds it, saying since
+// when and, when known, what the step waits on, so a lead can tell a step
+// about to end from one stuck.
+func (m *Module) heldErr(id string) error {
+	m.mu.Lock()
+	at, w := m.stepAt[id], m.weighing[id]
+	m.mu.Unlock()
+	why := "a step running right now"
+	if !at.IsZero() {
+		why = fmt.Sprintf("a step running since %s (%s ago)", at.UTC().Format("15:04Z"), time.Since(at).Round(time.Minute))
+	}
+	if w.sha != "" {
+		why += fmt.Sprintf(", weighing the worker's commit %s as a checkpoint: its score check waits for a slot or runs, and is dropped once the worker finishes", core.Short(w.sha))
+	}
+	return &HeldError{err: fmt.Errorf("task %s has %s; ask again in a moment", id, why), Since: at}
+}
+
+// HeldError is a steer refused because a step holds the task: the task is
+// moving, so whoever asked waits for the step instead of reading it as stuck.
+// Since is when the step began; zero is not known.
+type HeldError struct {
+	err   error
+	Since time.Time
+}
+
+func (e *HeldError) Error() string { return e.err.Error() }
+
+// weighing is a checkpoint's score check a step waits on: the worker's
+// commit sha in project.
+type weighing struct{ worker, project, sha string }
+
+// weigh notes (or, given none, forgets) the checkpoint task id's step weighs.
+func (m *Module) weigh(id string, w weighing) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if w.sha == "" {
+		delete(m.weighing, id)
+		return
+	}
+	if m.weighing == nil {
+		m.weighing = map[string]weighing{}
+	}
+	m.weighing[id] = w
+}
+
+// unweighFinished takes out of the check line the checkpoints whose worker
+// has finished. A checkpoint's score check waits its turn for a slot, and
+// the step holds the task while it waits, so checkWorker can't see the
+// finish: on 10-28 ten finished workers sat in working 80-171 minutes
+// behind a backlog of checks before their commits were taken out. Once the
+// worker finishes, its commit lands whole, so the weighing is dropped (one
+// already running goes on) and the next tick lands it.
+func (m *Module) unweighFinished() {
+	m.mu.Lock()
+	ws := make([]weighing, 0, len(m.weighing))
+	for _, w := range m.weighing {
+		ws = append(ws, w)
+	}
+	m.mu.Unlock()
+	for _, w := range ws {
+		if r, ok := m.C.Runs.Get(w.worker); ok && finished(r.Status) {
+			m.C.Effects.Slots.Drop(w.project, w.sha)
+		}
+	}
+}
+
+// finished says whether a worker's run has ended its work, so its task
+// moves on from working.
+func finished(s string) bool {
+	return s == core.StatusDone || s == core.StatusBlocked || s == core.StatusStopped
 }
 
 // noBankGain is why a change to the Hive aimed at a gain is never merged in
@@ -1842,7 +1927,10 @@ func (m *Module) open(t *Task, p core.Project, sha, body string) error {
 	// A worker that finishes again on the same commit thinks something outside
 	// it changed (a tool installed, an answer), so its tests run again; one
 	// that had the forge's checks re-run there lately waits for those instead.
-	t.PR, t.Recheck, t.SHA, t.Stage, t.Failures = pr, t.SHA == sha && !rerunning(t), sha, StageTesting, 0
+	// A retry of a head whose tests passed keeps that green run: what it
+	// retries is what came after the test, and the test line may be long.
+	t.PR, t.Recheck, t.SHA, t.Stage, t.Failures = pr, t.SHA == sha && !rerunning(t) && t.KeepsTest != sha, sha, StageTesting, 0
+	t.KeepsTest = ""
 	m.save(t, fmt.Sprintf("pushed %s, PR #%d", core.Short(sha), pr.Number))
 	return nil
 }
@@ -2522,6 +2610,24 @@ func (m *Module) bundleForFixes(t *Task, p core.Project) string {
 		return ""
 	}
 	return "\n\n$HIVE_RUN/main.bundle holds main at " + core.Short(main) + ": if a fix needs main's newer commits, " + fetchMain + " and merge FETCH_HEAD."
+}
+
+// freshBundle brings the project's clone up to main's tip and writes it to
+// t's worker's main.bundle, returning the commit it holds, or "" when it
+// couldn't be written (journaled; the worker goes on without it). A run
+// that starts or resumes then sees main as it is, not as it was when an
+// earlier step last wrote the bundle.
+func (m *Module) freshBundle(t *Task, p core.Project) string {
+	if _, err := m.C.Effects.Sync(p); err != nil {
+		m.bundleFailed(t, p, err)
+		return ""
+	}
+	head, err := m.writeMainBundle(t, p)
+	if err != nil {
+		m.bundleFailed(t, p, err)
+		return ""
+	}
+	return head
 }
 
 // fetchMain is how a worker takes the main its writeMainBundle holds.
@@ -3937,9 +4043,16 @@ func (m *Module) conflict(t *Task, p core.Project, head string, why error) error
 func (t Task) Resending() bool { return t.Stage == StageWorking && t.Resend != "" }
 
 // resend sends t's worker back with the conflict it was held for, now the
-// queue has let it go.
-func (m *Module) resend(t *Task) error {
-	if err := m.C.Runs.Reopen(t.Worker, t.Resend); err != nil {
+// queue has let it go. The conflict wrote main.bundle when it was found, but
+// main may have moved while the worker waited for the pace: it is written
+// again from main now, so the merge the worker makes is with today's main,
+// not one that conflicts again (issue #1945).
+func (m *Module) resend(t *Task, p core.Project) error {
+	msg := t.Resend
+	if head := m.freshBundle(t, p); head != "" {
+		msg += "\n\n$HIVE_RUN/main.bundle holds main at " + core.Short(head) + "."
+	}
+	if err := m.C.Runs.Reopen(t.Worker, msg); err != nil {
 		return err
 	}
 	t.Resend, t.Reason = "", ""
@@ -4137,7 +4250,7 @@ func (m *Module) retryInFlight(id, back, by string) error {
 	}
 	m.mu.Unlock()
 	if busy {
-		return fmt.Errorf("task %s has a step running right now; ask again in a moment", id)
+		return m.heldErr(id)
 	}
 	defer m.release(id)
 	t, _ := m.Get(id) // as the last step left it
@@ -4156,6 +4269,10 @@ func (m *Module) retryInFlight(id, back, by string) error {
 		return m.dropCheckpoint(&t, p, "the lead retried it from "+was)
 	}
 	t.Reason, t.Failures, t.Round, t.Reviews, t.Conflicts = "", 0, 0, 0, 0
+	t.KeepsTest = ""
+	if c, ok := m.C.Effects.GetCheck(t.Project, t.SHA, "test"); ok && c.OK && c.CantRun == "" && t.SHA != "" && !t.Recheck {
+		t.KeepsTest = t.SHA // passed on this head: a retry of what came after doesn't send it back to the end of the test line
+	}
 	if r, ok := m.C.Runs.Get(t.Reviewer); ok && was == StageReviewing && !r.Terminal() {
 		// A reader stuck on the task would otherwise keep its slot, and the
 		// next read of the same head would wait on it again by its id.

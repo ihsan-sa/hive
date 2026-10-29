@@ -41,9 +41,10 @@ func (f TestFailure) key() string { return f.Step + "\x00" + f.Package + "\x00" 
 type UnitReport struct {
 	Candidate []TestFailure `json:"candidate,omitempty"` // what failed on the candidate's first run
 	Control   []TestFailure `json:"control,omitempty"`
-	Shared    []TestFailure `json:"shared,omitempty"` // failed on both sides: the environment's, never the candidate's
-	Flaky     []TestFailure `json:"flaky,omitempty"`  // failed on the candidate alone, then passed when run again
-	Own       []TestFailure `json:"own,omitempty"`    // failed on the candidate alone, again: its own
+	Shared    []TestFailure `json:"shared,omitempty"`  // failed on both sides: the environment's, never the candidate's
+	Flaky     []TestFailure `json:"flaky,omitempty"`   // failed on the candidate alone, then passed when run again
+	Own       []TestFailure `json:"own,omitempty"`     // failed on the candidate alone, again: its own
+	Skipped   string        `json:"skipped,omitempty"` // why the step didn't run (Config.CIPassed): both sides' CI already passed it
 }
 
 // unitFailure is a side's vet or short tests failing, with what failed.
@@ -467,6 +468,9 @@ func modulePath(src string) string {
 // markdown is the step as a report section: each side's failures, named,
 // with the end of each one's output.
 func (u UnitReport) markdown() string {
+	if u.Skipped != "" {
+		return "\n## Vet and short tests\n\nNot run: " + u.Skipped + "\n"
+	}
 	if len(u.Candidate) == 0 && len(u.Control) == 0 {
 		return ""
 	}

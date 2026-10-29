@@ -12,12 +12,16 @@ import (
 )
 
 // fakeGH puts a gh on PATH that logs its arguments, one call per line, and
-// prints reply. It returns the log's path.
+// prints reply. It returns the log's path. The limits are fresh and never
+// look at rate_limit, so the log holds only the calls the test made.
 func fakeGH(t *testing.T, reply string) string {
 	t.Helper()
 	if runtime.GOOS == "windows" {
 		t.Skip("the fake gh is a sh script")
 	}
+	p, q, g := ghPause, ghQuota, ghGate
+	t.Cleanup(func() { ghPause, ghQuota, ghGate = p, q, g })
+	ghPause, ghQuota, ghGate = &pause{}, &quota{}, newGate(3, 0)
 	dir := t.TempDir()
 	log := filepath.Join(dir, "calls")
 	script := "#!/bin/sh\necho \"$*\" >> " + log + "\nprintf '%s\\n' '" + reply + "'\n"
