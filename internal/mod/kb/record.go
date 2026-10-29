@@ -49,8 +49,10 @@ func (m *Module) startRecord() {
 	// Replay all of it so snapshots diff against their true previous state;
 	// only events past the cursor are written, which is the catch-up. Each of
 	// those is rechecked, since the cursor moves only when an entry is written.
-	m.C.J.Replay(func(e core.Event) { rec.file(e, e.Seq > resumed) })
-	m.C.J.Subscribe(func(e core.Event) { rec.file(e, false) })
+	hrs := &hours{dir: filepath.Join(rec.dir, "hours"), made: map[string]bool{}}
+	os.MkdirAll(hrs.dir, 0o755)
+	m.C.J.Replay(func(e core.Event) { rec.file(e, e.Seq > resumed); hrs.write(e) })
+	m.C.J.Subscribe(func(e core.Event) { rec.file(e, false); hrs.write(e) })
 }
 
 // file writes one event; recheck guards an event a crash could have written

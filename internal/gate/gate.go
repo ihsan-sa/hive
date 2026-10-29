@@ -31,6 +31,7 @@ type Config struct {
 	OrgToken   string   // the org token the gate itself uses to make and delete test repositories; children never hold it
 	ChildToken string   // the contents-only token the children hold (empty: they hold none and the org probe is skipped)
 	ReachOK    bool     // the caller passed CheckReach on these tokens within the hour (the daemon), so the gate doesn't probe again
+	CIPassed   bool     // both commits are releases whose CI passed vet and the short tests (the release train's canary), so the run skips that step and the candidate's new tests and goes straight to the e2e, probes and benchmark
 	Depth      int      // levels of gating the children may still do (capped at MaxDepth)
 	MaxRepos   int      // most org repositories one run may make (default 4)
 	Timeout    time.Duration
@@ -266,36 +267,11 @@ func Run(cfg Config) (rep Report, err error) {
 	// its read-only checkout, in its sandbox.
 	// What fails on both sides is the environment's and is only reported;
 	// what fails on the candidate alone is run again before it is its own.
-	checkErrs := map[*Child]error{}
-	for _, c := range built {
-		cfg.log("vet and short tests of %s", c.Name)
-		if e := unitTest(c); e != nil {
-			checkErrs[c] = e
-			cfg.log("  %s fails: %s", c.Name, tail(e.Error(), 2000))
-		}
-	}
-	rep.Unit, err = judgeUnit(cand, ctrl, checkErrs, modulePath(cand.Src))
-	for _, f := range rep.Unit.Shared {
-		cfg.log("  failing on both sides, the environment's: %s", f.Name())
-	}
-	for _, f := range rep.Unit.Flaky {
-		cfg.log("  failed once on the candidate, passed again: %s", f.Name())
-	}
-	if err != nil {
+	if cfg.CIPassed {
+		rep.Unit.Skipped = "both commits are releases whose CI already passed them"
+		cfg.log("vet and short tests: skipped, %s", rep.Unit.Skipped)
+	} else if rep.Unit, rep.Fixes, err = unitAndFixes(&cfg, cand, ctrl, built); err != nil {
 		return rep, err
-	}
-
-	// The candidate's own new and changed tests, on both sides: one that
-	// passes on it and fails on the control is a fix the benchmark may not see.
-	if len(built) == 2 {
-		cfg.log("the candidate's new and changed tests, on both sides")
-		rep.Fixes = findFixes(&cfg, cand, ctrl)
-		for _, f := range rep.Fixes.Fixes {
-			cfg.log("  %s", f)
-		}
-		for _, n := range rep.Fixes.Notes {
-			cfg.log("  %s", n)
-		}
 	}
 
 	// Both sides are judged by one evaluator, taken from Eval (the base by
@@ -836,3 +812,38 @@ type candidateFault struct {
 
 func (f *candidateFault) Error() string { return f.err.Error() }
 func (f *candidateFault) Unwrap() error { return f.err }
+
+// unitAndFixes runs each built side's vet and short tests, judges whose the
+// failures are, then runs the candidate's own new and changed tests on both
+// sides: one that passes on it and fails on the control is a fix the
+// benchmark may not see. A failure that is a side's own is the error.
+func unitAndFixes(cfg *Config, cand, ctrl *Child, built []*Child) (UnitReport, FixReport, error) {
+	checkErrs := map[*Child]error{}
+	for _, c := range built {
+		cfg.log("vet and short tests of %s", c.Name)
+		if e := unitTest(c); e != nil {
+			checkErrs[c] = e
+			cfg.log("  %s fails: %s", c.Name, tail(e.Error(), 2000))
+		}
+	}
+	u, err := judgeUnit(cand, ctrl, checkErrs, modulePath(cand.Src))
+	for _, f := range u.Shared {
+		cfg.log("  failing on both sides, the environment's: %s", f.Name())
+	}
+	for _, f := range u.Flaky {
+		cfg.log("  failed once on the candidate, passed again: %s", f.Name())
+	}
+	var fx FixReport
+	if err != nil || len(built) != 2 {
+		return u, fx, err
+	}
+	cfg.log("the candidate's new and changed tests, on both sides")
+	fx = findFixes(cfg, cand, ctrl)
+	for _, f := range fx.Fixes {
+		cfg.log("  %s", f)
+	}
+	for _, n := range fx.Notes {
+		cfg.log("  %s", n)
+	}
+	return u, fx, nil
+}

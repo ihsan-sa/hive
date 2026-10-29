@@ -73,16 +73,35 @@ func AskCeilingMatch(texts ...string) (kind, phrase string) {
 }
 
 func ceilingMatch(skipRuledOut bool, texts ...string) (string, string) {
-	t := strings.Join(texts, "\n")
-	for _, k := range []string{"money", "credential", "open", "outward"} {
-		for _, m := range alwaysPersonRe[k].FindAllStringIndex(t, -1) {
-			if !skipRuledOut || !ruledOut(k, t[:m[0]], t[m[0]:m[1]], t[m[1]:]) {
-				return k, t[m[0]:m[1]]
-			}
-		}
+	if ms := askMatches(skipRuledOut, true, texts...); len(ms) > 0 {
+		return ms[0].Kind, ms[0].Phrase
 	}
 	return "", ""
 }
+
+// A Mention is one AlwaysPerson match: its category and the words.
+type Mention struct{ Kind, Phrase string }
+
+func askMatches(skipRuledOut, first bool, texts ...string) []Mention {
+	t := strings.Join(texts, "\n")
+	var out []Mention
+	for _, k := range []string{"money", "credential", "open", "outward"} {
+		for _, m := range alwaysPersonRe[k].FindAllStringIndex(t, -1) {
+			if !skipRuledOut || !ruledOut(k, t[:m[0]], t[m[0]:m[1]], t[m[1]:]) {
+				if out = append(out, Mention{k, t[m[0]:m[1]]}); first {
+					return out
+				}
+			}
+		}
+	}
+	return out
+}
+
+// AskMentions is every mention AskCeilingMatch counts, not just the first.
+func AskMentions(texts ...string) []Mention { return askMatches(true, false, texts...) }
+
+// ScriptMentions is every mention ScriptCeilingMatch counts.
+func ScriptMentions(texts ...string) []Mention { return scriptMatches(false, texts...) }
 
 // ScriptCeilingMatch is CeilingMatch for the script that would run: every
 // mention counts, except one on a whole-line shell comment that the comment
@@ -90,7 +109,15 @@ func ceilingMatch(skipRuledOut bool, texts ...string) (string, string) {
 // never runs. A mention on a line with code, or one a comment asks for
 // ("# rotate the token"), still counts.
 func ScriptCeilingMatch(texts ...string) (string, string) {
+	if ms := scriptMatches(true, texts...); len(ms) > 0 {
+		return ms[0].Kind, ms[0].Phrase
+	}
+	return "", ""
+}
+
+func scriptMatches(first bool, texts ...string) []Mention {
 	t := strings.Join(texts, "\n")
+	var out []Mention
 	for _, k := range []string{"money", "credential", "open", "outward"} {
 		for _, m := range alwaysPersonRe[k].FindAllStringIndex(t, -1) {
 			start := strings.LastIndexByte(t[:m[0]], '\n') + 1
@@ -100,11 +127,13 @@ func ScriptCeilingMatch(texts ...string) (string, string) {
 			}
 			body, ok := strings.CutPrefix(strings.TrimLeft(t[start:m[0]], " \t"), "#")
 			if !ok || !ruledOut(k, body, t[m[0]:m[1]], t[m[1]:end]) {
-				return k, t[m[0]:m[1]]
+				if out = append(out, Mention{k, t[m[0]:m[1]]}); first {
+					return out
+				}
 			}
 		}
 	}
-	return "", ""
+	return out
 }
 
 var (

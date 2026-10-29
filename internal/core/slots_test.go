@@ -267,3 +267,101 @@ func TestSlotsUrgentPassesPatience(t *testing.T) {
 		t.Fatalf("started %s %s %s", a, b, c)
 	}
 }
+
+// Within a rank the check expected to be shortest starts first, one not
+// known yet before both, and a higher rank still goes ahead; a quick one goes
+// past even a waiter out of patience, a long one doesn't: a check of seconds
+// waited ~50 minutes behind 30 of ten minutes (issue #1933).
+func TestSlotsShortFirstWithinRank(t *testing.T) {
+	s := NewSlots(func() int { return 1 })
+	s.Prioritize(func(_, sha, _ string) int {
+		if sha == "fix" {
+			return 1
+		}
+		return 0
+	}, 3)
+	s.took = map[string]time.Duration{tookKey("heavy", "test"): 15 * time.Minute, tookKey("light", "test"): 5 * time.Second}
+	hold := s.Acquire("x", "first", "test")
+	started := make(chan string, 10)
+	ask := func(project, sha string) {
+		go func() {
+			rel := s.Acquire(project, sha, "test")
+			started <- sha
+			rel()
+		}()
+		for end := time.Now().Add(5 * time.Second); ; time.Sleep(time.Millisecond) {
+			if r, w := s.State(); inSlots(r, w, sha) {
+				break
+			}
+			if time.Now().After(end) {
+				t.Fatalf("%s never queued", sha)
+			}
+		}
+	}
+	ask("heavy", "h1")
+	ask("heavy", "fix")
+	ask("light", "l1")
+	ask("new", "n1")
+	ask("heavy", "h2")
+	_, w := s.State()
+	var line []string
+	for _, u := range w {
+		line = append(line, u.SHA)
+	}
+	if fmt.Sprint(line) != "[fix n1 l1 h1 h2]" {
+		t.Fatalf("waiting in order %v", line)
+	}
+	if !w[2].Quick() || w[3].Quick() || w[1].Quick() {
+		t.Fatalf("quick: %+v", w)
+	}
+
+	// Out of patience the oldest goes first, except past it a quick one.
+	s.mu.Lock()
+	s.patience = 0
+	s.mu.Unlock()
+	if _, w := s.State(); w[0].SHA != "l1" || w[1].SHA != "h1" || w[2].SHA != "fix" {
+		t.Fatalf("out of patience, waiting %+v", w)
+	}
+	hold()
+	var order []string
+	for range 5 {
+		order = append(order, <-started)
+	}
+	if fmt.Sprint(order) != "[l1 h1 fix n1 h2]" {
+		t.Fatalf("started in order %v", order)
+	}
+}
+
+// What a run took is learnt as it ends, weighed with the runs before, and
+// a waiter of its project and kind expects it from then on.
+func TestSlotsLearnWhatARunTakes(t *testing.T) {
+	s := NewSlots(func() int { return 1 })
+	rel := s.Acquire("p", "a", "test")
+	go func() { s.Acquire("p", "b", "test")() }()
+	for {
+		if _, w := s.State(); len(w) == 1 {
+			if w[0].Expect != 0 {
+				t.Fatalf("expects %v before any run ended", w[0].Expect)
+			}
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	time.Sleep(20 * time.Millisecond)
+	rel()
+	s.mu.Lock()
+	first := s.took[tookKey("p", "test")]
+	s.learn(SlotUse{Project: "p", Kind: "test"}, first+2*time.Second)
+	got := s.took[tookKey("p", "test")]
+	other := s.took[tookKey("p", "score")]
+	s.mu.Unlock()
+	if first < 20*time.Millisecond || first > 2*time.Second {
+		t.Fatalf("learnt %v from a run of ~20ms", first)
+	}
+	if got != first+time.Second {
+		t.Fatalf("after a run of %v learnt %v, want the two weighed", first+2*time.Second, got)
+	}
+	if other != 0 {
+		t.Fatalf("a score check expects %v from a test's runs", other)
+	}
+}

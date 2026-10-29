@@ -24,8 +24,9 @@ import (
 // measured (docs/research/forced.md). Nothing here stops a worker that has
 // started.
 //
-// A worker that has gone quiet (it keeps ending turns without finishing)
-// counts toward no one's max_workers until it resumes.
+// A worker that can't take a turn now (quiet, finished awaiting take-out, or
+// parked until a usage reset) counts toward no one's max_workers until it
+// resumes (slotless).
 
 // Queued reports whether t is waiting for a worker.
 func (t Task) Queued() bool { return t.Stage == StageQueued || t.Stage == StageIssued }
@@ -81,16 +82,17 @@ func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]str
 	m.mu.Lock()
 	for _, t := range tasks {
 		switch {
-		case (t.Queued() || t.Resending()) && !m.busy[t.ID]:
+		case (t.Queued() || t.Resending()) && !m.busy[t.ID] && !m.finishedBack(t):
 			// A worker a conflict sends back takes a slot as a new one
 			// does: a main merge once reopened 19 at a pace of 1.
 			line = append(line, t)
-		case t.Stage == StageWorking && m.quiet(t):
-			// A quiet worker holds no slot: three held 3 of 8 slots for
-			// 10-12h while ~39 briefs waited. A message resumes it
-			// (core.Runs), and then it counts again, even if that puts the
-			// workers past the limit (by as many as resume at once) until
-			// slots free; none start meanwhile.
+		case t.Stage == StageWorking && m.slotless(t):
+			// A worker that can't take a turn now holds no slot (slotless):
+			// three quiet ones held 3 of 8 slots for 10-12h while ~39 briefs
+			// waited. A message or its reset resumes it (core.Runs), and
+			// then it counts again, even if that puts the workers past the
+			// limit (by as many as resume at once) until slots free; none
+			// start meanwhile.
 		case t.Stage == StageWorking && m.awayNow(t):
 			// A worker started past the pace whose turns go to a runner
 			// holds no slot here, until a turn of its runs here again.
@@ -216,7 +218,7 @@ func (m *Module) paceBack(r core.Run) string {
 		switch {
 		case t.Worker == r.ID:
 			mine = true
-		case t.Stage == StageWorking && !m.quiet(t) && !m.awayNow(t) && !m.waitsBack(t):
+		case t.Stage == StageWorking && !m.slotless(t) && !m.awayNow(t) && !m.waitsBack(t):
 			working++
 		}
 	}
@@ -249,7 +251,7 @@ func (m *Module) sentBack(tasks []Task) int {
 	}
 	n := 0
 	for _, t := range tasks {
-		if t.Stage == StageWorking && !m.quiet(t) && m.waitsBack(t) {
+		if t.Stage == StageWorking && !m.slotless(t) && m.waitsBack(t) {
 			n++
 		}
 	}
@@ -303,10 +305,28 @@ func machineHold(strained, loaded string, start int, elsewhere func() bool) func
 	}
 }
 
-// quiet reports whether t's worker keeps ending turns without finishing.
-func (m *Module) quiet(t Task) bool {
+// parkedFree is how far off a parked worker's next turn must be for it to
+// give up its slot: a retry's backoff is shorter and keeps it, a usage reset
+// is hours off. On 10-28 a worker parked at 18:16 until a midnight reset held
+// its slot, a finished one awaiting take-out held another for 1h20m, and the
+// pace of 4-6 ran one turn while 14 briefs waited 2.5-4h.
+var parkedFree = 10 * time.Minute
+
+// slotless reports whether t's worker can't take a turn now and so holds no
+// slot: it is quiet, has finished (its task waits to be taken out), or is
+// parked until parkedFree or more from now.
+func (m *Module) slotless(t Task) bool {
 	r, ok := m.C.Runs.Get(t.Worker)
-	return ok && r.Status == core.StatusQuiet
+	if !ok {
+		return false
+	}
+	switch r.Status {
+	case core.StatusQuiet, core.StatusDone, core.StatusBlocked, core.StatusStopped:
+		return true
+	case core.StatusParked:
+		return time.Until(r.ParkedUntil) >= parkedFree
+	}
+	return false
 }
 
 // pathLike is a word that reads as a path in the project.
@@ -373,8 +393,10 @@ func (m *Module) opQueue(r core.Run, args json.RawMessage) (any, error) {
 		case m.C.Runs.Walled(r, t.Project) != nil:
 			notes = append(notes, "no task "+id)
 			continue
-		case m.reach(r, t.Project) != nil:
-			notes = append(notes, fmt.Sprintf("%s is on project %s; you steer only your own", id, t.Project))
+		case m.reach(r, t.Project) != nil && strings.TrimSpace(a.Why) == "":
+			// Every agent has the same say (the person, 10-28): another
+			// project's line is anyone's to steer, saying why on the record.
+			notes = append(notes, fmt.Sprintf("%s is on project %s; say why with why to steer another project's line", id, t.Project))
 			continue
 		case !t.Queued():
 			notes = append(notes, fmt.Sprintf("%s has left the queue (%s); a started worker isn't stopped by the queue", id, t.Stage))
@@ -412,6 +434,8 @@ func (m *Module) opQueue(r core.Run, args json.RawMessage) (any, error) {
 		}
 		if c.now && !t.Now {
 			t.Now, note = true, fmt.Sprintf("started now by %s, first in line: %s", r.ID, core.Clip(a.Why, 300))
+		} else if note != "" && strings.TrimSpace(a.Why) != "" {
+			note += ": " + core.Clip(a.Why, 300)
 		}
 		if note != "" {
 			m.save(&t, note)
@@ -443,7 +467,9 @@ func (m *Module) Queue(r core.Run) []string {
 	for i, t := range line {
 		why := t.Reason
 		if t.Resending() { // it started long ago: its wait is the pace's, not the brief's
-			why = strings.TrimSuffix("its worker goes back to merge main; "+why, "; ")
+			if !strings.Contains(why, "goes back to merge main") { // waits names it
+				why = strings.TrimSuffix("its worker goes back to merge main; "+why, "; ")
+			}
 		} else if d := time.Since(t.Created); !t.Created.IsZero() && d >= time.Hour {
 			// The lead sees the long waits, and which go ahead of its order.
 			age := fmt.Sprintf("waited %s", d.Round(time.Minute))

@@ -58,10 +58,10 @@ func call(t *testing.T, a *app.App, r core.Run, op string, args any) (any, error
 	return a.C.Runs.Ops().Call(r, op, raw)
 }
 
-// The person routes a role by asking the lead: the lead's route op writes it
+// The person routes a role by asking an agent: the route op writes it
 // into config.json and the journal, and new runs of that role go on it; a
 // check seat's route waits for the person's yes.
-func TestLeadRoutes(t *testing.T) {
+func TestAgentsRoute(t *testing.T) {
 	a, lead := hiveWithModels(t)
 	if _, err := call(t, a, lead, "route", map[string]any{"role": "worker", "models": "qwen,fake:opus"}); err != nil {
 		t.Fatal(err)
@@ -101,9 +101,9 @@ func TestLeadRoutes(t *testing.T) {
 			t.Errorf("route %v was taken", bad)
 		}
 	}
-	worker, _ := a.C.Runs.Start(core.RunSpec{Role: "worker", Harness: "fake", Checkout: t.TempDir()})
-	if _, err := call(t, a, worker, "route", map[string]any{"role": "worker", "models": "qwen"}); err == nil {
-		t.Fatal("a worker routed the Hive")
+	seat, _ := a.C.Runs.Start(core.RunSpec{Role: "reviewer", Harness: "fake", Checkout: t.TempDir()})
+	if _, err := call(t, a, seat, "route", map[string]any{"role": "worker", "models": "qwen"}); err == nil {
+		t.Fatal("a check seat routed the Hive")
 	}
 
 	res, err := call(t, a, lead, "route", map[string]any{"role": "reviewer", "models": []string{"qwen"}})
