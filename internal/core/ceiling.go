@@ -102,13 +102,18 @@ func DecisionMatch(texts ...string) (kind, phrase string) {
 // harmlessRe is a credential command that reads, mints or rotates nothing:
 // "gh auth setup-git" points git at the login gh already has, so a push
 // uses the Hive's own (merging or pushing on the person's repository with
-// it is not the person's), and "gh auth status" only says who is logged in.
-var harmlessRe = regexp.MustCompile(`(?i)^\s+(setup-git|status)\b`)
+// it is not the person's), and "gh auth status" says who is logged in,
+// unless its line asks it to print the token too (-t, --show-token).
+var (
+	harmlessRe  = regexp.MustCompile(`(?i)^\s+(setup-git|status)\b`)
+	showTokenRe = regexp.MustCompile(`\s(-[a-zA-Z]*t[a-zA-Z]*\b|--show-token)`)
+)
 
 // harmless says whether a mention names nothing on the person's list
 // wherever it stands, in an ask or in the script that runs.
 func harmless(kind, match, after string) bool {
-	return kind == "credential" && strings.EqualFold(match, "gh auth") && harmlessRe.MatchString(after)
+	line, _, _ := strings.Cut(after, "\n")
+	return kind == "credential" && strings.EqualFold(match, "gh auth") && harmlessRe.MatchString(line) && !showTokenRe.MatchString(line)
 }
 
 // ScriptCeilingMatch is CeilingMatch for the script that would run: every
@@ -170,6 +175,9 @@ var (
 	// error's word ("Resource not accessible by personal access token (HTTP
 	// 403)", "HTTP 401: Bad credentials"), not an ask for one.
 	errorTextRe = regexp.MustCompile(`(?i)\bHTTP\s*[45]\d\d\b|\b(40[13]|forbidden|unauthori[sz]ed|permission denied|access denied|not accessible|bad credentials)\b`)
+	// asksRe in a credential's own clause asks for one, whatever error or
+	// lack its sentence also names ("got HTTP 403, give me a token").
+	asksRe      = regexp.MustCompile(`(?i)\b(give|need|needs|provide|send|create|make|issue|want|add|supply|grant|share)\b`)
 	sentenceEnd = regexp.MustCompile(`[.;!?\n]`)
 	// loopbackRe is a listen address that stays on this machine.
 	loopbackRe = regexp.MustCompile(`(?i)^\s*(127\.\d+\.\d+\.\d+|localhost|loopback|::1|\[::1\])\b`)
@@ -191,16 +199,22 @@ func ruledOut(kind, before, match, after string) bool {
 	if protectionRe.MatchString(match) {
 		return false // "no firewall", "do not block inbound" open the machine
 	}
-	if kind == "credential" && nounRe.MatchString(match) && (lacks(after) || errorText(before, after)) {
+	if kind == "credential" && nounRe.MatchString(match) && !asksRe.MatchString(clauseOf(before)) && (lacks(after) || errorText(before, after)) {
 		return true // what the agent lacks, or an error it quotes (#1990)
 	}
-	if ix := clauseEnd.FindAllStringIndex(before, -1); len(ix) > 0 {
-		before = before[ix[len(ix)-1][1]:]
-	}
+	before = clauseOf(before)
 	m := negatedRe.FindStringSubmatch(before)
 	// A second negation turns the first back: "won't work without your API
 	// key" and "no reason not to expose it" ask for the thing.
 	return m != nil && !turnsBack.MatchString(m[2]) && len(anyNegRe.FindAllString(before, 2)) < 2
+}
+
+// clauseOf is the end of before from its last clause end.
+func clauseOf(before string) string {
+	if ix := clauseEnd.FindAllStringIndex(before, -1); len(ix) > 0 {
+		return before[ix[len(ix)-1][1]:]
+	}
+	return before
 }
 
 // lacks says whether a credential is followed by what it can't do or isn't,

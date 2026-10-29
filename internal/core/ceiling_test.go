@@ -253,6 +253,8 @@ func TestMentionedCredentialsAreTheWardens(t *testing.T) {
 		"it got a 403, so rotate the token":                     "credential",
 		"gh auth refresh -s admin:org":                          "credential",
 		"add a token with repo scope":                           "credential",
+		"got HTTP 403, give me a token":                         "credential",
+		"the token can't push; I need a token with repo scope":  "credential",
 	} {
 		if k, _ := AskCeilingMatch(text); k != want {
 			t.Errorf("AskCeilingMatch(%q) = %q, want %q", text, k, want)
@@ -268,7 +270,8 @@ func TestMentionedCredentialsAreTheWardens(t *testing.T) {
 			t.Errorf("%v\n%s", err, s)
 		}
 	}
-	for _, s := range []string{"gh auth token", "gh auth setup-git && gh auth refresh", "cat ~/.config/gh/hosts.yml"} {
+	for _, s := range []string{"gh auth token", "gh auth setup-git && gh auth refresh", "cat ~/.config/gh/hosts.yml",
+		"gh auth status -t", "gh auth status --show-token", "gh auth status -at", "gh auth status --hostname github.com -t | tee out"} {
 		if CeilingGuard(s, nil, false) == nil {
 			t.Errorf("the script guard let %q run", s)
 		}
