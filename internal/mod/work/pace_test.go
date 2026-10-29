@@ -30,7 +30,7 @@ func TestFixedCountsHoldAndFreeTheQueueAndChecks(t *testing.T) {
 		}
 	}
 	want(a, StageWorking, "")
-	want(b, StageQueued, "waiting for a worker (all 1 at work; max_workers in config.json)")
+	want(b, StageQueued, "waiting for a worker (max_workers 1)")
 	saved := stageOf(t, m, b).Updated
 	tick(m)
 	if got := stageOf(t, m, b); !got.Updated.Equal(saved) {

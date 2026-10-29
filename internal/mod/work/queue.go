@@ -114,7 +114,10 @@ func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]str
 	limit, spent := workers(cfg), m.planSpent(cfg)
 	// The reason is saved with the task, so it names the limit but not
 	// a live value.
-	full := fmt.Sprintf("waiting for a worker (all %d at work; max_workers in config.json)", limit)
+	full := fmt.Sprintf("waiting for a worker (max_workers %d)", limit)
+	if cfg.MaxWorkers == 0 {
+		full = fmt.Sprintf("waiting for a worker (all %d at work: three quarters of the slots)", limit)
+	}
 	start, wait = map[string]bool{}, map[string]string{}
 	// One task a pass goes past the limit to an executor module with room
 	// (its worker's turns go there first, core.RunSpec.Away); the executor
