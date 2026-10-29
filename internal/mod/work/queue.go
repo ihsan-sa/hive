@@ -16,8 +16,8 @@ import (
 // The queue: a filed brief waits as queued until a worker can take it. Briefs
 // start in the order they were filed, or the order the lead set (a brief
 // waiting past overdue goes ahead of that order), and only as
-// many work at once as the pace allows (pace.go, under max_workers) while the
-// machine isn't loaded: the brake is the machine. Two briefs on the same
+// many work at once as workers() says (pace.go), each of their turns in one of
+// the core's slots. Two briefs on the same
 // files start side by side: a conflict is settled at merge, where the one
 // that meets it goes back to its worker with main to merge. A hold on shared
 // files took two thirds of all queue time and what it caught was never
@@ -94,7 +94,7 @@ func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]str
 			// limit (by as many as resume at once) until slots free; none
 			// start meanwhile.
 		case t.Stage == StageWorking && m.awayNow(t):
-			// A worker started past the pace whose turns go to a runner
+			// A worker started past max_workers whose turns go to a runner
 			// holds no slot here, until a turn of its runs here again.
 			away++
 		case t.Stage == StageWorking || t.Queued(): // or a queued or resent one being started right now
@@ -109,97 +109,61 @@ func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]str
 		// a conflict, with their worker if need be.
 	}
 	m.mu.Unlock()
-	back := m.sentBack(tasks)
+	m.sentBack(tasks)
 	m.inLine(line)
-	// One task a pass goes to an executor module with room: past a strained
-	// machine (machineHold), or past the pace (its worker's turns go there
-	// first, core.RunSpec.Away); the executor is asked at most once a pass.
-	strained, loaded := core.Strained(cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax), core.Loaded(cfg.LoadMax)
-	var roomOK *bool
+	limit, spent := workers(cfg), m.planSpent(cfg)
+	// The reason is saved with the task, so it names the limit but not
+	// a live value.
+	full := fmt.Sprintf("waiting for a worker (all %d at work; max_workers in config.json)", limit)
+	start, wait = map[string]bool{}, map[string]string{}
+	// One task a pass goes past the limit to an executor module with room
+	// (its worker's turns go there first, core.RunSpec.Away); the executor
+	// is asked at most once a pass, as one launch spends the room.
+	asked := false
 	elsewhere := func() bool {
-		if roomOK == nil {
-			ask := m.C.Runs.Elsewhere
-			if m.elsewhere != nil {
-				ask = m.elsewhere
-			}
-			ok := ask()
-			roomOK = &ok
+		if asked {
+			return false
 		}
-		return *roomOK
+		asked = true
+		if m.elsewhere != nil {
+			return m.elsewhere()
+		}
+		return m.C.Runs.Elsewhere()
 	}
-	// decide sorts the line at limit, and says whether a brief waits on the
-	// limit itself: only then may the pace grow, as a held brief would leave
-	// a new slot empty.
-	decide := func(limit int) (start map[string]bool, wait map[string]string, capped bool) {
-		start, wait = map[string]bool{}, map[string]string{}
-		working, away := working, away
-		sent := map[string]bool{}
-		// One task a pass goes elsewhere, as one launch spends the room.
-		once := false
-		elsewhereOnce := func() bool {
-			if once {
-				return false
-			}
-			once = true
-			return elsewhere()
-		}
-		// The reason is saved with the task, so it names the limit but not
-		// its live value: the pace moved about every minute under load, and
-		// each move re-saved every waiting task with its whole brief (one
-		// 36 times in 40 minutes). The pace itself shows in Pace.
-		full := fmt.Sprintf("waiting for a worker (max_workers %d)", cfg.MaxWorkers)
-		if cfg.MaxWorkers == 0 || limit < cfg.MaxWorkers {
-			full = "waiting for a worker (at the pace)"
-		}
-		hold := machineHold(strained, loaded, cmp.Or(cfg.MaxWorkers, defaultWorkers), elsewhereOnce)
-		for _, t := range line {
-			held := "" // asked only of a task nothing else holds back
-			switch {
-			case t.Held:
-				wait[t.ID] = "held by " + cmp.Or(t.HeldBy, "the lead")
-			case working >= limit && !t.Resending() && away < awayMax(cfg) && elsewhereOnce():
-				// Past the pace while a runner has room: its worker's turns
-				// go there first (core.RunSpec.Away). A worker a conflict
-				// sends back is reopened, not launched, so it waits here.
-				start[t.ID], sent[t.ID] = true, true
-				away++
-			case working >= limit:
-				wait[t.ID], capped = full, true
-			case func() bool { held = hold(working); return held != "" }():
-				wait[t.ID] = "waiting: " + steady(held)
-				if !onlyLoad(held) {
-					m.C.Runs.Holding() // the turns after a strain ramp up (load alone holds only past the start)
-				}
-			default:
-				start[t.ID] = true
-				working++
-			}
-		}
-		m.mu.Lock()
-		for id := range sent {
-			if m.away == nil {
-				m.away = map[string]bool{}
-			}
-			m.away[id] = true
-		}
-		m.mu.Unlock()
-		return start, wait, capped
-	}
-	// The pace moves on what waits at its limit now; if that moves it, the
-	// line is sorted again at the new one.
-	limit := m.paceWorkers(cfg, working, false)
-	start, wait, capped := decide(limit)
-	if capped || back > 0 && working >= limit { // a worker sent back waits on the limit too
-		if l := m.paceWorkers(cfg, working, true); l != limit {
-			start, wait, _ = decide(l)
+	sent := map[string]bool{}
+	for _, t := range line {
+		switch {
+		case t.Held:
+			wait[t.ID] = "held by " + cmp.Or(t.HeldBy, "the lead")
+		case spent != "" && !t.Resending():
+			// Work under way goes on: a worker sent back still takes its turn.
+			wait[t.ID] = "waiting: " + steady(spent)
+		case working >= limit && !t.Resending() && away < limit && elsewhere():
+			// A worker a conflict sends back is reopened, not launched, so
+			// it waits here.
+			start[t.ID], sent[t.ID] = true, true
+			away++
+		case working >= limit:
+			wait[t.ID] = full
+		default:
+			start[t.ID] = true
+			working++
 		}
 	}
+	m.mu.Lock()
+	for id := range sent {
+		if m.away == nil {
+			m.away = map[string]bool{}
+		}
+		m.away[id] = true
+	}
+	m.mu.Unlock()
 	return start, wait
 }
 
 // paceBack says why a worker sent back to its task (a conflict with main, a
 // reviewer's findings, a retry) waits to take its next turn, or "": it takes
-// a slot under the workers' pace like a brief that starts, ahead of the
+// a place among the workers() like a brief that starts, ahead of the
 // briefs (admit counts it as working). On 10-28 a merge sent 22 conflicting
 // PRs back at once through Reopen, which went past the pace: 19 workers ran
 // while it said 1, and load reached 481. It is core's Runs.Admit.
@@ -225,22 +189,22 @@ func (m *Module) paceBack(r core.Run) string {
 	if !mine {
 		return ""
 	}
-	if working >= cmp.Or(m.workers.get(), m.C.WS.LoadConfig().MaxWorkers, defaultWorkers) {
-		return "waiting for a worker (at the pace): sent back to its task"
+	if working >= workers(m.C.WS.LoadConfig()) {
+		return "waiting for a worker (all at work): sent back to its task"
 	}
 	m.backIn[r.ID] = true
 	return ""
 }
 
 // waitsBack says whether t's worker was sent back to it and waits on the
-// pace; backMu is held.
+// workers' count; backMu is held.
 func (m *Module) waitsBack(t Task) bool {
 	r, ok := m.C.Runs.Get(t.Worker)
 	return ok && r.Returned && r.Role == "worker" && !r.Away && !m.backIn[r.ID]
 }
 
 // sentBack counts the workers at work in tasks that were sent back and wait
-// on the pace, and forgets the ones let through whose turn has started.
+// on the workers' count, and forgets the ones let through whose turn has started.
 func (m *Module) sentBack(tasks []Task) int {
 	m.backMu.Lock()
 	defer m.backMu.Unlock()
@@ -258,12 +222,7 @@ func (m *Module) sentBack(tasks []Task) int {
 	return n
 }
 
-// awayMax is how many workers may run past the pace on executor modules'
-// runners at once: as many as the workers' own ceiling, so a runner gone
-// (whose workers' turns come back here) at most doubles the work here.
-func awayMax(cfg core.Config) int { return cmp.Or(cfg.MaxWorkers, defaultWorkers) }
-
-// awayNow reports whether t's worker was started past the pace for a runner
+// awayNow reports whether t's worker was started past max_workers for a runner
 // and its latest turn didn't run here: it has yet to start one, or that one
 // went to a runner.
 func (m *Module) awayNow(t Task) bool {
@@ -271,38 +230,13 @@ func (m *Module) awayNow(t Task) bool {
 	return ok && r.Away && (r.Turn == 0 || r.Where != "")
 }
 
-// takeAway says whether admit started t past the pace for a runner, once.
+// takeAway says whether admit started t past max_workers for a runner, once.
 func (m *Module) takeAway(id string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	a := m.away[id]
 	delete(m.away, id)
 	return a
-}
-
-// machineHold says, for each task in line in turn with working workers at
-// work, why the machine holds it back, or "". A machine over load_max alone
-// (loaded) holds a new worker only from start on, as the few workers there
-// aren't what loads it, and never sends one elsewhere, since launch would
-// run it here; one task a pass goes past a strained machine while an
-// executor module has room, since launch hands a strained turn to it.
-func machineHold(strained, loaded string, start int, elsewhere func() bool) func(working int) string {
-	asked := false
-	return func(working int) string {
-		if strained == "" {
-			if loaded != "" && working >= start {
-				return loaded
-			}
-			return ""
-		}
-		if !asked {
-			asked = true
-			if elsewhere() {
-				return ""
-			}
-		}
-		return strained
-	}
 }
 
 // parkedFree is how far off a parked worker's next turn must be for it to
@@ -466,7 +400,7 @@ func (m *Module) Queue(r core.Run) []string {
 	out := []string{}
 	for i, t := range line {
 		why := t.Reason
-		if t.Resending() { // it started long ago: its wait is the pace's, not the brief's
+		if t.Resending() { // it started long ago: its wait is for a worker, not the brief's
 			why = strings.TrimSuffix("its worker goes back to merge main; "+why, "; ")
 		} else if d := time.Since(t.Created); !t.Created.IsZero() && d >= time.Hour {
 			// The lead sees the long waits, and which go ahead of its order.

@@ -1,6 +1,7 @@
 package core
 
 import (
+	"cmp"
 	"runtime"
 	"slices"
 	"sync"
@@ -312,7 +313,40 @@ func (s *Slots) State() (running, waiting []SlotUse) {
 	return running, waiting
 }
 
-// DefaultMaxChecks is where the checks' limit starts, sized to the machine: a
-// check (vet, build, tests) keeps several cores busy on its own, so 20 cores
-// carry 3. The work module's pace moves it from there.
+// DefaultMaxChecks is how many checks run at once unless max_checks says, sized to
+// the machine: a check (vet, build, tests) keeps several cores busy on its
+// own, so 20 cores carry 3.
 func DefaultMaxChecks() int { return max(2, runtime.NumCPU()/6) }
+
+// TurnMB is what one agent turn is taken to hold in memory, for the default
+// slots: the harness (a Claude Code process holds 0.4-0.6 GB) and the builds
+// and tests it runs (the Hive's own go vet and test -short reach 2-3 GB). On
+// 10-29 53 turns at once on 31 GB drove memory pressure to 92%.
+const TurnMB = 3072
+
+// slotReserveMB is the memory the default slots leave to the daemon, the
+// leads, the checks and the person's own programs.
+const slotReserveMB = 8192
+
+// minSlots is the fewest slots the default gives: a worker, its reviewer, a
+// sweep and one more, so the loop goes round on a small machine.
+const minSlots = 4
+
+// DefaultSlots is how many turns other than leads' run here at once unless
+// the config's slots says: what the machine's memory carries past
+// slotReserveMB at TurnMB a turn (7 on 31 GB), at least minSlots. Where the
+// memory can't be read (no /proc, as on macOS) it is minSlots. It is read
+// from the machine's size, never its load: the count doesn't move with
+// readings.
+func DefaultSlots() int { return defaultSlots(procRoot) }
+
+func defaultSlots(proc string) int {
+	kb, ok := procField(proc+"/meminfo", "MemTotal:")
+	if !ok {
+		return minSlots
+	}
+	return max(minSlots, (int(kb/1024)-slotReserveMB)/TurnMB)
+}
+
+// TurnSlots is the config's slots, or DefaultSlots.
+func (c Config) TurnSlots() int { return cmp.Or(c.Slots, DefaultSlots()) }

@@ -25,20 +25,19 @@ func (s elsewhereSB) Start(spec sandbox.Spec) (sandbox.Proc, error) {
 	return s.agent, nil
 }
 
-// A turn this machine is too strained for goes to an executor module with
-// room, built with inside paths as for the local sandbox, and the record says
-// where it ran; with no room it waits as before, and a bare Hive never hands
+// A turn with every slot here in use goes to an executor module with room,
+// built with inside paths as for the local sandbox, and the record says
+// where it ran; with no room it waits for a slot, and a bare Hive never hands
 // a turn over.
-func TestStrainedTurnGoesToAnExecutor(t *testing.T) {
+func TestTurnPastTheSlotsGoesToAnExecutor(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("sleep stands in for the turn")
 	}
 	c, _ := testHive(t)
 	cfg := c.WS.LoadConfig()
-	cfg.MemFloorMB = 1 << 30
-	if Strained(cfg.MemFloorMB, 0, 0) == "" {
-		t.Skip("no /proc/meminfo here")
-	}
+	cfg.MemFloorMB, cfg.Slots = 0, 1
+	c.J.MustAppend("run.created", RunSpec{ID: "busy", Role: "worker", Harness: "fake"})
+	c.J.MustAppend("run.turn_started", turnStarted{ID: "busy", Turn: 1})
 	local := sandbox.Sandbox(isolatedBox{})
 	c.Runs.sandbox = func() (sandbox.Sandbox, error) { return local, nil }
 	var spec sandbox.Spec
@@ -55,7 +54,7 @@ func TestStrainedTurnGoesToAnExecutor(t *testing.T) {
 		t.Fatal(err)
 	}
 	c.Runs.launch(r, cfg)
-	if got, _ := c.Runs.Get("w"); got.Status == StatusRunning || !strings.HasPrefix(got.Reason, "waiting: machine low on memory") || asked != 1 {
+	if got, _ := c.Runs.Get("w"); got.Status == StatusRunning || got.Reason != "waiting for a slot (all 1 in use; slots in config.json)" || asked != 1 {
 		t.Fatalf("with no room elsewhere: %s %q, asked %d", got.Status, got.Reason, asked)
 	}
 	if c.Runs.Elsewhere() {
@@ -270,7 +269,7 @@ func TestAwayTurnGoesToAnExecutorFirst(t *testing.T) {
 	}
 	c, _ := testHive(t)
 	cfg := c.WS.LoadConfig()
-	cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax = 0, 0, 0
+	cfg.MemFloorMB = 0
 	c.Runs.sandbox = func() (sandbox.Sandbox, error) { return elsewhereSB{agent: sleeper(t), spec: new(sandbox.Spec)}, nil }
 	var spec sandbox.Spec
 	room := true

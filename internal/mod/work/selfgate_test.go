@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -626,15 +627,15 @@ func TestAimOp(t *testing.T) {
 	}
 }
 
-// More than one gate runs at once while the machine has room for another:
+// More than one gate runs at once while the machine has memory for another:
 // with one in flight, a second change starts its own run, and it waits while
-// the machine is strained.
+// memory is short.
 func TestSelfGatesRunSideBySide(t *testing.T) {
 	m, task, p, f, jobs := selfRig(t, map[string]string{"feature.go": "package p\n"}, core.GateKeep)
 	maxGates(m, 2)
 	strain := "machine low on memory (900 MB free, floor 4096 MB)"
-	defer func(g func(core.Config) (string, bool)) { gateMachine = g }(gateMachine)
-	gateMachine = func(core.Config) (string, bool) { return strain, true }
+	defer func(g func(core.Config) string) { gateMachine = g }(gateMachine)
+	gateMachine = func(core.Config) string { return strain }
 	release := make(chan struct{})
 	gate := m.Gate
 	m.Gate = func(ctx context.Context, j GateJob) core.GateResult { <-release; return gate(ctx, j) }
@@ -872,72 +873,13 @@ func TestOnlyUnresolvedConflictsCount(t *testing.T) {
 	}
 }
 
-// The gates' limit starts at two, grows by one at most every gateStep while
-// the machine has room, never past one gate per gateCores cores or the
-// person's max_gates, pulls back under strain, and stays at one where the
-// machine can't be read.
-func TestGatePace(t *testing.T) {
-	defer func(g func(core.Config) (string, bool)) { gateMachine = g }(gateMachine)
-	strain, watching := "", true
-	gateMachine = func(core.Config) (string, bool) { return strain, watching }
-	j, err := core.OpenJournal(filepath.Join(t.TempDir(), "events.jsonl"))
-	if err != nil {
-		t.Fatal(err)
+// The gates' count is the person's max_gates, or one per gateCores cores.
+func TestGateCeiling(t *testing.T) {
+	if got := gateCeiling(core.Config{MaxGates: 4}); got != 4 {
+		t.Fatalf("max_gates 4: %d", got)
 	}
-	defer j.Close()
-	fresh := func() *Module { return &Module{C: &core.Core{J: j}} }
-	now := time.Now()
-	m := fresh()
-	cfg := core.Config{MaxGates: 0}
-	top := gateCeiling(cfg)
-	if l, _ := m.gateLimit(now, 0, cfg); l != min(2, top) {
-		t.Fatalf("start %d, want %d", l, min(2, top))
-	}
-	cfg.MaxGates = 4
-	m = fresh()
-	if l, _ := m.gateLimit(now, 4, cfg); l != 4 {
-		t.Fatalf("start under max_gates 4: %d", l)
-	}
-	cfg.MaxGates = 5
-	m = fresh()
-	m.gateLimit(now, 3, cfg) // starts at 5
-	m.gates.limit = 3        // as if pulled back
-	if l, _ := m.gateLimit(now.Add(gateStep-time.Second), 3, cfg); l != 3 {
-		t.Fatalf("grew to %d within %s", l, gateStep)
-	}
-	if l, _ := m.gateLimit(now.Add(gateStep), 3, cfg); l != 4 {
-		t.Fatalf("limit %d after %s with room, want 4", l, gateStep)
-	}
-	if l, _ := m.gateLimit(now.Add(2*gateStep), 4, cfg); l != 5 {
-		t.Fatalf("limit %d, want 5", l)
-	}
-	if l, _ := m.gateLimit(now.Add(3*gateStep), 5, cfg); l != 5 {
-		t.Fatalf("grew past max_gates to %d", l)
-	}
-	strain = "machine low on memory"
-	if l, why := m.gateLimit(now.Add(4*gateStep), 5, cfg); l != 3 || why != strain {
-		t.Fatalf("limit %d (%q) under strain, want 3", l, why)
-	}
-	var changes []string // a change past the first read is journaled
-	j.Replay(func(e core.Event) {
-		var c struct {
-			Limit    string
-			From, To int
-		}
-		if e.Kind == "pace.changed" && e.Decode(&c) == nil {
-			changes = append(changes, fmt.Sprintf("%s %d>%d", c.Limit, c.From, c.To))
-		}
-	})
-	if got := strings.Join(changes, ", "); got != "gates 3>4, gates 4>5, gates 5>3" {
-		t.Fatalf("journaled %q", got)
-	}
-	strain, watching, cfg.MaxGates = "", false, 0
-	m = fresh()
-	if l, _ := m.gateLimit(now, 0, cfg); l != 1 {
-		t.Fatalf("limit %d where the machine can't be read, want 1", l)
-	}
-	if l, _ := m.gateLimit(now.Add(gateStep), 1, cfg); l != 1 {
-		t.Fatalf("grew to %d unseen", l)
+	if got := gateCeiling(core.Config{}); got != max(1, runtime.NumCPU()/gateCores) {
+		t.Fatalf("default: %d", got)
 	}
 }
 
@@ -946,8 +888,8 @@ func TestGatePace(t *testing.T) {
 func TestNewHeadCancelsItsOldGate(t *testing.T) {
 	m, task, p, _, jobs := selfRig(t, map[string]string{"feature.go": "package p\n"}, core.GateKeep)
 	maxGates(m, 3)
-	defer func(g func(core.Config) (string, bool)) { gateMachine = g }(gateMachine)
-	gateMachine = func(core.Config) (string, bool) { return "", true }
+	defer func(g func(core.Config) string) { gateMachine = g }(gateMachine)
+	gateMachine = func(core.Config) string { return "" }
 	cancelled := false
 	old := &gateRun{key: p.Name + "@oldhead@main", task: task.ID, cancel: func() { cancelled = true }}
 	other := &gateRun{key: "other", task: "t9", cancel: func() { t.Error("another task's run was cancelled") }}
@@ -991,8 +933,8 @@ func TestAimAfterRollback(t *testing.T) {
 func TestMainMovingKeepsTheGateRunning(t *testing.T) {
 	m, task, p, _, jobs := selfRig(t, map[string]string{"feature.go": "package p\n"}, core.GateKeep)
 	maxGates(m, 3)
-	defer func(g func(core.Config) (string, bool)) { gateMachine = g }(gateMachine)
-	gateMachine = func(core.Config) (string, bool) { return "", true }
+	defer func(g func(core.Config) string) { gateMachine = g }(gateMachine)
+	gateMachine = func(core.Config) string { return "" }
 	cancelled := false
 	run := &gateRun{key: p.Name + "@" + task.SHA + "@oldmain", task: task.ID, head: task.SHA, main: "oldmain", since: time.Now(), cancel: func() { cancelled = true }}
 	m.mu.Lock()
@@ -1070,8 +1012,8 @@ func TestStaleCopyKeepsTheLiveHeadsGate(t *testing.T) {
 func TestUpdateHoldsNewGates(t *testing.T) {
 	m, task, p, _, jobs := selfRig(t, map[string]string{"feature.go": "package p\n"}, core.GateKeep)
 	maxGates(m, 3)
-	defer func(g func(core.Config) (string, bool)) { gateMachine = g }(gateMachine)
-	gateMachine = func(core.Config) (string, bool) { return "", true }
+	defer func(g func(core.Config) string) { gateMachine = g }(gateMachine)
+	gateMachine = func(core.Config) string { return "" }
 	since := time.Now().Add(-time.Hour)
 	m.mu.Lock()
 	m.gating = map[string]*gateRun{

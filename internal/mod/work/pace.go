@@ -2,210 +2,60 @@ package work
 
 import (
 	"cmp"
+	"encoding/json"
 	"fmt"
 	"maps"
 	"path"
-	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 )
 
-// The pace: how many workers, and how many checks, start at once is not a
-// fixed number but a limit that sets itself from what the machine and the
-// plan carry. While something waits on the limit and nothing is strained, it
-// grows by one once nothing has strained for a growStep; when the machine is
-// strained (memory floor, memory or CPU pressure, load per core: the same
-// settings that hold a turn) or the workers' plan is nearly spent or running
-// ahead of its five-hour or weekly window, it pulls back to three quarters
-// of what is running, or to its start when nothing runs (the strain isn't
-// the Hive's, and from 1 it would take minutes to climb back). Load alone
-// never pulls the workers under their start, and brings them back up to it
-// a growStep after any other strain clears: on 10-25 a load of 27-46 on 20
-// cores came from child Hives and builds beside 2-3 live turns, and cutting
-// the workers to 1 or 2 hardly moved it while 51 tasks waited. Nor does load alone hold
-// a worker from starting while fewer than the start work (loadHolds), and it
-// doesn't hide a spent or ahead plan, which still pulls the workers under
-// it. Checks and gates do go under their start for load alone (loadCuts):
-// theirs are the builds and child Hives that load the machine; but not for
-// a load that is the disk's (onlyDisk), which cutting them didn't lift. Nothing
-// running is stopped; past the limit, work waits in order. It
-// pulls back at most once a step, so the readings (load is a 1-minute
-// average) catch up with the last change before the next, and grows more
-// slowly than it pulls back, so a load hovering round its limit doesn't
-// swing it every minute (10-25: 30-55 changes an hour, 1,2,1,2,3,4,3,…).
-// max_workers and max_checks, when set, are the person's ceilings and where
-// the pace starts;
-// with no machine reading on, or none to read (no /proc, as on macOS or
-// Windows), it stays at its start, as it can't see. With no ceiling set, a
-// safety ceiling sized to the machine (safeWorkers, safeChecks) keeps the
-// pace from running away while its steps are untuned.
+// How many run at once is fixed, not paced: every agent turn other than a
+// lead's takes one of the core's slots (core.Config.TurnSlots, sized once
+// from the machine's memory), a task has a worker only while fewer than
+// workers() have one, and checks and gates each have their own count. None
+// moves with load or pressure: the pace that did (grown each 5 minutes,
+// pulled back under strain, a ramp after each hold) was retuned round after
+// round and still sat at 1 worker and 1 check with 45 checks waiting on
+// 10-29 (docs/log.md). A count is changed at once with the slots op, its why
+// on the record. The workers' plan still holds new briefs back while it is
+// nearly spent or ahead of its window (planSpent): that is what the plan has
+// left, not what the machine reads.
 
-// paceStep is the least time between two changes of a limit.
-const paceStep = time.Minute
-
-// growStep is the least time since the last change, and since the last
-// strain, before a limit grows.
-const growStep = 5 * time.Minute
-
-// planFloor is the share of the plan left below which workers pull back.
+// planFloor is the share of the plan left below which no new brief starts.
 const planFloor = 0.1
 
 // aheadSlack is how far ahead of a usage window (five-hour or weekly), as a
-// share of the window, the workers' plan may run before workers pull back: a
+// share of the window, the workers' plan may run before new briefs wait: a
 // burst early in a window is fine, a pace that spends it before its reset is
 // not (10-25: three five-hour windows ran out 50 to 100 minutes early, and
 // one login's week was 75% gone a day in, the other two's already out).
 const aheadSlack = 0.15
 
-// defaultWorkers is where the workers' limit starts when no ceiling is set.
-const defaultWorkers = 4
+// workers is how many tasks have a worker at once: max_workers, or three
+// quarters of the slots, leaving the rest to their reviewers, sweeps and the
+// other roles.
+func workers(cfg core.Config) int { return cmp.Or(cfg.MaxWorkers, max(1, cfg.TurnSlots()*3/4)) }
 
-// pace is one self-setting limit.
-type pace struct {
-	mu    sync.Mutex
-	limit int // 0 until first read
-	start int // the start it last read: a new one (a ceiling set) starts it afresh
-	at    time.Time
-	why   string
-	step  time.Duration // the least time between two changes; 0 is paceStep
-	shown time.Time     // when a strain was last seen
-	hard  time.Time     // when a strain other than load alone was last seen
-	// loadCuts lets load alone pull the limit under its start, as for
-	// checks and gates: their builds and child Hives are what load the
-	// machine, unlike the workers' turns.
-	loadCuts bool
-}
+// checks is how many checks run at once.
+func checks(cfg core.Config) int { return cmp.Or(cfg.MaxChecks, core.DefaultMaxChecks()) }
 
-// onlyLoad says whether strain is the load per core alone (core.Loaded's
-// reason), which doesn't pull a limit under its start, nor hold a worker
-// from starting under it (loadHolds).
-func onlyLoad(strain string) bool { return strings.HasPrefix(strain, core.LoadedReason) }
-
-// onlyDisk says whether strain is a load that is tasks waiting on the disk
-// (core.DiskReason), which doesn't pull even the checks or gates under their
-// start: on 10-27 the checks sat at 1 for 6.9 of 12 hours under a load of
-// 30-88 that was IO wait, and the load never fell with them.
-func onlyDisk(strain string) bool { return strings.HasPrefix(strain, core.DiskReason) }
-
-// next moves the limit for running things with waiting ones wanting more,
-// strain saying what strains the machine or plan ("" for nothing), watching
-// whether any machine reading is on, from start under ceiling (0: none).
-func (p *pace) next(now time.Time, running int, waiting bool, strain string, watching bool, start, ceiling int) int {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	top := ceiling
-	if !watching {
-		top = start
-	}
-	if p.limit == 0 || start != p.start { // a restart starts from what already runs
-		p.limit, p.start, p.at, p.why = max(start, min(running, cmp.Or(top, running))), start, now, "the start"
-	}
-	step := cmp.Or(p.step, paceStep)
-	switch {
-	case strain != "":
-		p.shown = now
-		soft := onlyLoad(strain) && (!p.loadCuts || onlyDisk(strain))
-		if !soft {
-			p.hard = now
-		}
-		if now.Sub(p.at) < step {
-			break
-		}
-		if soft && p.limit < start && now.Sub(p.at) >= max(step, growStep) && now.Sub(p.hard) >= max(step, growStep) {
-			// Pulled under its start by another strain or the plan, it
-			// comes back once only load is left: load alone would otherwise
-			// keep it there, as each minute of it blocks growth.
-			p.limit, p.at, p.why = start, now, "back to the start: only load strains"
-			break
-		}
-		floor := 1
-		if soft {
-			floor = start
-		}
-		l := max(floor, min(p.limit, running)*3/4)
-		if running == 0 {
-			l = min(p.limit, start)
-		}
-		if l < p.limit {
-			p.limit, p.at, p.why = l, now, "pulled back: "+strain
-		}
-	case waiting && running >= p.limit && (top == 0 || p.limit < top) &&
-		now.Sub(p.at) >= max(step, growStep) && now.Sub(p.shown) >= max(step, growStep):
-		p.limit, p.at, p.why = p.limit+1, now, "grew: room on the machine and plan"
-	}
-	if top > 0 && p.limit > top {
-		p.limit, p.why = top, "the ceiling"
-	}
-	return p.limit
-}
-
-// journal records a change of p's limit from before (0: its first read,
-// not recorded) as a pace.changed event, so a sweep can tune the steps
-// against what the machine and plan did.
-func (m *Module) journal(name string, p *pace, before int) {
-	p.mu.Lock()
-	limit, why := p.limit, p.why
-	p.mu.Unlock()
-	if before != 0 && limit != before {
-		m.C.J.MustAppend("pace.changed", map[string]any{"limit": name, "from": before, "to": limit, "why": why})
-	}
-}
-
-// get is the limit, 0 before its first read.
-func (p *pace) get() int {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return p.limit
-}
-
-// String says the limit and why it is there.
-func (p *pace) String() string {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return fmt.Sprintf("%d (%s)", p.limit, p.why)
-}
-
-// machine says why the machine is strained, or "", and whether any reading
-// is both on and there to read.
-func machine(cfg core.Config) (string, bool) {
-	why := core.Strained(cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax)
-	if why == "" {
-		why = core.Loaded(cfg.LoadMax)
-	}
-	return why, core.Watched(cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax, cfg.LoadMax)
-}
-
-// loadHolds says whether strain holds a new worker with working of them at
-// work from start: every strain does, but load alone only past the start, as
-// the few workers there aren't what loads the machine.
-func loadHolds(strain string, working, start int) bool {
-	return strain != "" && (!onlyLoad(strain) || working >= start)
-}
-
-// steady is a strain without its readings ("machine loaded", not the load
-// now), for a reason saved with a task: readings that move each minute would
-// re-save it each minute.
-func steady(strain string) string {
-	s, _, _ := strings.Cut(strain, " (")
+// steady is a reason without its readings ("plan nearly spent", not the share
+// left now), for a reason saved with a task: readings that move each minute
+// would re-save it each minute.
+func steady(why string) string {
+	s, _, _ := strings.Cut(why, " (")
 	return s
 }
-
-// safeWorkers is the workers' ceiling when the person sets none: one a core,
-// as a worker's own builds and tests run beside the model's turns.
-func safeWorkers() int { return max(defaultWorkers, runtime.NumCPU()) }
-
-// safeChecks is the checks' ceiling when the person sets none: twice where
-// they start, as a check keeps several cores busy on its own.
-func safeChecks() int { return 2 * core.DefaultMaxChecks() }
 
 // planSpent says when every model a worker would go on, the workspace's
 // route or any project's own, has under planFloor of its plan left, all
 // logins together, or when any one route's every model is spending a usage
-// window more than aheadSlack ahead of the clock, or "". The pull-back is
+// window more than aheadSlack ahead of the clock, or "". The hold is
 // read route by route: a free model on one project's route (which has no
 // windows, so reads on the clock) left the min over every route at 0, and
 // it never fired while Claude's week, all of the Hive's own route, went from
@@ -226,30 +76,13 @@ func (m *Module) planSpent(cfg core.Config) string {
 	case room < planFloor:
 		return fmt.Sprintf("the workers' plan is nearly spent (%.0f%% left)", room*100)
 	case ahead > aheadSlack:
-		return fmt.Sprintf("the workers' plan is %.0f%% ahead of the clock in a usage window and would run out before it resets", ahead*100)
+		return fmt.Sprintf("the workers' plan is ahead of the clock in a usage window and would run out before it resets (%.0f%% ahead)", ahead*100)
 	}
 	return ""
 }
 
-// paceWorkers is the workers' limit now, with working of them at work and
-// waiting saying briefs wait for one. working leaves out quiet workers (see
-// admit): they use no machine or plan, so the pace grows only when the
-// active ones fill the limit, and a pull-back under strain starts from them.
-func (m *Module) paceWorkers(cfg core.Config, working int, waiting bool) int {
-	why, watching := machine(cfg)
-	if why == "" || onlyLoad(why) { // load alone stops at the start; the plan doesn't
-		why = cmp.Or(m.planSpent(cfg), why)
-	}
-	before := m.workers.get()
-	defer m.journal("workers", &m.workers, before)
-	return m.workers.next(time.Now(), working, waiting, why, watching, cmp.Or(cfg.MaxWorkers, defaultWorkers), cmp.Or(cfg.MaxWorkers, safeWorkers()))
-}
-
-// checkSlots is the checks' limit for the slots: the pace's, or before its
-// first read where it starts.
-func (m *Module) checkSlots() int {
-	return cmp.Or(m.checks.get(), m.C.WS.LoadConfig().MaxChecks, core.DefaultMaxChecks())
-}
+// checkSlots is how many checks run at once, read at every hand-off.
+func (m *Module) checkSlots() int { return checks(m.C.WS.LoadConfig()) }
 
 // Check ranks: main's own measurement goes first, then the fix of a red
 // main's failing test, then any other fix's, then the rest in the order they
@@ -369,21 +202,23 @@ func isWord(c byte) bool {
 	return c == '_' || '0' <= c && c <= '9' || 'a' <= c && c <= 'z' || 'A' <= c && c <= 'Z'
 }
 
-// paceChecks moves the checks' limit and starts the checks it now has room for.
-func (m *Module) paceChecks() {
-	cfg := m.C.WS.LoadConfig()
-	running, waiting := m.C.Effects.Slots.State()
-	why, watching := machine(cfg)
-	before := m.checks.get()
-	defer m.journal("checks", &m.checks, before)
-	m.checks.next(time.Now(), len(running), len(waiting) > 0, why, watching, cmp.Or(cfg.MaxChecks, core.DefaultMaxChecks()), cmp.Or(cfg.MaxChecks, safeChecks()))
-	m.C.Effects.Slots.Fill()
-}
-
-// Pace says the workers', checks' and recursive gates' limits now and why, for the dashboard
-// and the lead.
+// Pace says how many workers, checks, recursive gates and turns run at once
+// and where each number comes from, for the dashboard and the lead.
 func (m *Module) Pace() map[string]string {
-	return map[string]string{"workers": m.workers.String(), "checks": m.checks.String(), "gates": m.gates.String()}
+	cfg := m.C.WS.LoadConfig()
+	here, away := m.C.Runs.InUse()
+	from := func(set int, key, def string) string {
+		if set > 0 {
+			return key + " in config.json"
+		}
+		return def
+	}
+	return map[string]string{
+		"workers": fmt.Sprintf("%d (%s)", workers(cfg), from(cfg.MaxWorkers, "max_workers", "three quarters of the slots")),
+		"checks":  fmt.Sprintf("%d (%s)", checks(cfg), from(cfg.MaxChecks, "max_checks", "one per 6 cores, at least 2")),
+		"gates":   fmt.Sprintf("%d (%s)", gateCeiling(cfg), from(cfg.MaxGates, "max_gates", "one per 6 cores")),
+		"slots":   fmt.Sprintf("%d (%s); %d in use here, %d away", cfg.TurnSlots(), from(cfg.Slots, "slots", "sized from the machine's memory"), here, away),
+	}
 }
 
 // pacedRead is the route a review of a change on project goes on while the
@@ -426,4 +261,69 @@ func cheaper(route []core.Pick) core.Pick {
 		first.Model = strings.Replace(first.Model, "opus", "sonnet", 1)
 	}
 	return first
+}
+
+// slotsChange is the slots op's ask: each count given (a pointer, so 0, the
+// default sized to the machine, can be asked for) replaces the config's.
+type slotsChange struct {
+	Slots   *count `json:"slots"`
+	Workers *count `json:"workers"`
+	Checks  *count `json:"checks"`
+	Why     string `json:"why"`
+}
+
+// count is a number given as a number or as text, as the agent CLI passes
+// every value.
+type count int
+
+func (n *count) UnmarshalJSON(b []byte) error {
+	var s string
+	if json.Unmarshal(b, &s) != nil {
+		s = string(b)
+	}
+	v, err := strconv.Atoi(strings.TrimSpace(s))
+	if err != nil {
+		return fmt.Errorf("%s isn't a count", b)
+	}
+	*n = count(v)
+	return nil
+}
+
+// opSlots changes how many turns, workers or checks run at once, at once,
+// with why on the record (slots.changed): the person wants no rule that
+// can't be updated fast (10-28 12:24), so any agent that sees the machine
+// under- or over-used changes the count and says why.
+func (m *Module) opSlots(r core.Run, args json.RawMessage) (any, error) {
+	var a slotsChange
+	if err := core.Bind(args, &a); err != nil {
+		return nil, err
+	}
+	if a.Why = strings.TrimSpace(a.Why); a.Why == "" {
+		return nil, fmt.Errorf("say why, with what you saw (runs waiting, memory, load): it goes on the record")
+	}
+	cfg, err := m.C.WS.ReadConfig()
+	if err != nil {
+		return nil, fmt.Errorf("config.json has to be fixed first: %v", err)
+	}
+	from := map[string]int{"slots": cfg.Slots, "workers": cfg.MaxWorkers, "checks": cfg.MaxChecks}
+	to := maps.Clone(from)
+	for name, v := range map[string]*count{"slots": a.Slots, "workers": a.Workers, "checks": a.Checks} {
+		if v == nil {
+			continue
+		}
+		if *v < 0 {
+			return nil, fmt.Errorf("%s %d: give a count, or 0 for the default sized to the machine", name, *v)
+		}
+		to[name] = int(*v)
+	}
+	if maps.Equal(from, to) {
+		return nil, fmt.Errorf("give slots, workers or checks different from now (%v)", from)
+	}
+	cfg.Slots, cfg.MaxWorkers, cfg.MaxChecks = to["slots"], to["workers"], to["checks"]
+	if err := m.C.WS.SaveConfig(cfg); err != nil {
+		return nil, err
+	}
+	m.C.J.MustAppend("slots.changed", map[string]any{"by": r.ID, "why": core.Clip(a.Why, 500), "from": from, "to": to})
+	m.C.Effects.Slots.Fill()
+	return m.Pace(), nil
 }

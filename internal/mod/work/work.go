@@ -98,7 +98,7 @@ type Task struct {
 	// moving again and the count starts over: only unresolved ones add up.
 	ConflictMain string `json:"conflict_main,omitempty"`
 	// Resend is what a conflict with main sends the worker back with, held
-	// until the pace has room for it: one main merge once made about 22 open
+	// until fewer than max_workers are at work: one main merge once made about 22 open
 	// PRs conflict, and reopening every worker at once ran 19 at a pace of 1.
 	Resend string `json:"resend,omitempty"`
 	// UnknownSince is when the forge first couldn't say whether the PR
@@ -318,7 +318,7 @@ type Module struct {
 	// retesting is held while main's red tests run once more (mainTests).
 	retesting sync.Mutex
 	busy      map[string]bool
-	away      map[string]bool      // queued tasks admit started past the pace for a runner, until their worker starts
+	away      map[string]bool      // queued tasks admit started past max_workers for a runner, until their worker starts
 	elsewhere func() bool          // whether an executor module has room: core.Runs.Elsewhere, or a test's
 	stepAt    map[string]time.Time // when each Tick step began, so one stuck past stepLimit is let go
 	weighing  map[string]weighing  // the checkpoints a step is weighing, so a finish takes them out of the check line
@@ -331,11 +331,8 @@ type Module struct {
 	// holding keeps a hold being set and a lift on its release apart, so a
 	// lift ends only the hold whose release it read (releasedSince).
 	holding sync.Mutex
-	// workers, checks and gates are the limits the pace sets (pace.go,
-	// selfgate.go).
-	workers, checks, gates pace
-	// backMu guards backIn: the workers sent back to their tasks that the
-	// pace has let take their next turn (paceBack).
+	// backMu guards backIn: the workers sent back to their tasks that may
+	// take their next turn (paceBack).
 	backMu sync.Mutex
 	backIn map[string]bool
 	filing sync.Mutex     // one agent's brief is matched and filed at a time (join.go)
@@ -412,7 +409,6 @@ type Module struct {
 // New loads tasks and registers the brief op.
 func New(c *core.Core, a *agents.Agents, ch *chat.Module) *Module {
 	m := &Module{C: c, Agents: a, Chat: ch, tasks: map[string]*Task{}, busy: map[string]bool{}, aims: map[string]aimAsk{}, steered: map[string]time.Time{}, mainRed: map[string]bool{}, mergeLooked: map[string]string{}, sighted: map[string]bool{}, cantRunOpen: map[string]string{}, measuring: map[string]int{}, mainFails: map[string][]string{}, later: map[string]time.Time{}, prPolled: map[string]time.Time{}, holds: map[string]*MergeHold{}, holdPolled: map[string]time.Time{}, refusedAsked: map[string]time.Time{}}
-	m.checks.loadCuts, m.gates.loadCuts = true, true // their builds and child Hives make the load
 	m.backIn = map[string]bool{}
 	c.Runs.Admit = m.paceBack
 	apply := func(e core.Event) {
@@ -464,6 +460,7 @@ func New(c *core.Core, a *agents.Agents, ch *chat.Module) *Module {
 	c.Runs.Ops().Register(core.Op{Name: "pr_ready", Roles: steerers, Help: `{"task"|"project"+"pr","why"} -> marks the Hive's own PR ready for review, so a merge waiting on the draft goes on (a task stopped over the draft comes back; the Hive brings one back on its own only once). Readying isn't a read: the PR may sit ready but unmerged until the gate clears its head`, Fn: m.opPRReady})
 	c.Runs.Ops().Register(core.Op{Name: "pr_draft", Roles: steerers, Help: `{"task"|"project"+"pr","why"} -> marks the Hive's own PR a draft, posting why: its task waits (it isn't stopped) and merges once marked ready with pr_ready`, Fn: m.opPRDraft})
 	c.Runs.Ops().Register(core.Op{Name: "pr_close", Roles: steerers, Help: `{"task"|"project"+"pr","comment","delete_branch":bool} -> closes the Hive's own PR with comment and ends its task (its worker stopped); delete_branch deletes its hive/ branch. A revert you no longer want is closed this way, not left to the person`, Fn: m.opPRClose})
+	c.Runs.Ops().Register(core.Op{Name: "slots", Roles: steerers, Help: `{"slots","workers","checks","why"} (each optional; 0 is the default sized to the machine) -> sets at once how many agent turns besides the leads' run on this machine (slots), how many tasks have a worker (workers, max_workers) and how many checks run (checks, max_checks); why, with what you saw, goes on the record. Nothing moves these on its own`, Fn: m.opSlots})
 	c.Person.Handle("merge", m.onPersonMerge)
 	c.Person.Handle("gate", m.onPersonGate)
 	c.Effects.MergeHeld = m.MergeHeld
@@ -491,7 +488,7 @@ func (m *Module) overtaken(t *Task) bool {
 // store saves t, or, when t is a copy from before the task was steered and
 // this save isn't a steer itself, drops it, reporting whether it saved.
 func (m *Module) store(t *Task, note string, steer bool) bool {
-	if t.Stage != StageWorking { // stopped, blocked or moved on: a conflict held for the pace no longer goes
+	if t.Stage != StageWorking { // stopped, blocked or moved on: a conflict held for a worker no longer goes
 		t.Resend = ""
 	}
 	now := time.Now().UTC()
@@ -950,7 +947,7 @@ func (m *Module) prepareRecord(t *Task, p core.Project) error {
 func (m *Module) Tick() {
 	m.revive()
 	m.reviveDrafts()
-	m.paceChecks()
+	m.C.Effects.Slots.Fill()
 	m.reapStuck()
 	m.unweighFinished()
 	tasks := m.List(func(t Task) bool { return !t.Terminal() || t.IssueOpen || m.woke(t) })
@@ -1025,11 +1022,9 @@ func (m *Module) reapStuck() {
 	}
 }
 
-// waits records why a queued task waits, when that is new. A machine hold's
-// live figures after " (" change every tick, so only a new kind is saved.
+// waits records why a queued task waits, when that is new.
 func (m *Module) waits(t Task, why string) {
-	kind, _, _ := strings.Cut(why, " (")
-	if (t.Stage == StageQueued || t.Resending()) && (t.Reason == why || strings.HasPrefix(why, "waiting: machine") && strings.HasPrefix(t.Reason, kind+" (")) {
+	if (t.Stage == StageQueued || t.Resending()) && t.Reason == why {
 		return
 	}
 	m.mu.Lock()

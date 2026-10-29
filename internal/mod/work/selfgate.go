@@ -184,37 +184,21 @@ func (m *Module) recursiveGate(t *Task, p core.Project, main string) (bool, erro
 	return true, nil
 }
 
-// How many gates run at once is a pace, as workers and checks are
-// (pace.go), but slower and guarded: a gate is two Hives, the e2e suite, the
-// benchmark and a grandchild, so the limit starts at two (one where the
-// machine has under gateCores cores for each), grows by one at most every
-// gateStep while gains wait and the machine has room, and never past one
-// per gateCores cores or the person's max_gates. Past the first, a new gate
-// starts only while the machine has gateMemMB free and its load per core is
-// at most gateLoadMax, besides the turn's own limits; a gate running is
-// never stopped. Where the machine can't be read it stays at one, or at the
-// person's max_gates.
+// How many gates run at once is fixed, as workers and checks are (pace.go):
+// a gate is two Hives, the e2e suite, the benchmark and a grandchild, so one
+// per gateCores cores, or the person's max_gates. Past the first, a new gate
+// starts only while the machine has gateMemMB free, the memory floor's last
+// guard; a gate running is never stopped.
 const (
-	gateStep    = 10 * time.Minute
-	gateCores   = 6
-	gateMemMB   = 4096
-	gateLoadMax = 1.0
+	gateCores = 6
+	gateMemMB = 4096
 )
 
-// gateMachine says why the machine has no room for another gate, or "", and
-// whether any reading is there to see; a test sets its own.
-var gateMachine = func(cfg core.Config) (string, bool) {
-	why, watching := machine(cfg)
-	if why == "" {
-		why = core.Strained(gateMemMB, 0, 0)
-	}
-	if why == "" {
-		why = core.Loaded(gateLoadMax)
-	}
-	return why, watching || core.Watched(gateMemMB, 0, 0, gateLoadMax)
-}
+// gateMachine says why the machine has no memory for another gate, or ""; a
+// test sets its own.
+var gateMachine = func(cfg core.Config) string { return core.Strained(max(cfg.MemFloorMB, gateMemMB)) }
 
-// gateCeiling is the most gates that run at once here.
+// gateCeiling is how many gates run at once here.
 func gateCeiling(cfg core.Config) int {
 	return cmp.Or(cfg.MaxGates, max(1, runtime.NumCPU()/gateCores))
 }
@@ -222,35 +206,19 @@ func gateCeiling(cfg core.Config) int {
 // gateRoom says why no other gate starts now with running of them in
 // flight, or "". m.mu is held.
 func (m *Module) gateRoom(running int) string {
-	limit, why := m.gateLimit(time.Now(), running, m.C.WS.LoadConfig())
+	cfg := m.C.WS.LoadConfig()
 	switch {
 	case time.Now().Before(m.gatesHeld):
 		return "the Hive installs an update once the gates running now end, and new ones start after its restart"
-	case running >= limit:
-		// Saved with the task: the live limit stays out (see Pace).
-		return "as many run at once here as may now, and every one is in use"
-	case running > 0 && why != "":
-		return "no room for another: " + steady(why)
+	case running >= gateCeiling(cfg):
+		// Saved with the task: the live count stays out (see Pace).
+		return "as many run at once here as may, and every one is in use"
+	case running > 0:
+		if why := gateMachine(cfg); why != "" {
+			return "no room for another: " + steady(why)
+		}
 	}
 	return ""
-}
-
-// gateLimit moves the gates' limit at now with running of them in flight
-// and one more wanted, and says it with what strains the machine, or "".
-// Where the machine can't be read, a second gate starts only on the
-// person's max_gates: nothing would see it pile up.
-func (m *Module) gateLimit(now time.Time, running int, cfg core.Config) (int, string) {
-	why, watching := gateMachine(cfg)
-	top := gateCeiling(cfg)
-	start := cmp.Or(cfg.MaxGates, min(2, top))
-	if !watching && cfg.MaxGates == 0 {
-		start = 1
-	}
-	m.gates.mu.Lock()
-	m.gates.step = gateStep
-	m.gates.mu.Unlock()
-	defer m.journal("gates", &m.gates, m.gates.get())
-	return m.gates.next(now, running, true, why, watching, start, top), why
 }
 
 // startGate runs the gate on t's head in the background and records its

@@ -196,8 +196,8 @@ const CheckNice = 15
 
 // LeadMemFloorMB is the one hold a lead's turn has: below this much
 // available memory its harness would be killed before it answered, so it
-// waits (saying why once, as run.held) rather than crash. Pressure never
-// holds a lead, and mem_floor_mb above this is for the other roles.
+// waits (saying why once, as run.held) rather than crash. The slots never
+// hold a lead, and mem_floor_mb above this is for the other roles.
 const LeadMemFloorMB = 256
 
 // Paths of one run's folders.
@@ -513,84 +513,11 @@ type Runs struct {
 	backedOff                map[string]int  // the turn each run last backed off from for another daemon's claim, said once
 	turnLive                 map[string]int  // the turn each run last waited on its own last turn for, said once
 	waking                   sync.Mutex      // one wake at a time, so a run is woken once
-	// heldAt is when a turn last waited on a strained machine, rampLast
-	// when the ramp after it last let one start, and rampedAt when it last
-	// held one back (ramp).
-	heldAt, rampLast, rampedAt time.Time
-	rampWait                   map[string]rampWaiter // the runs waiting on the ramp
-}
-
-// rampWaiter is a run waiting on the ramp: whether it was sent back to its
-// work (Returned), when it was created, and when it last asked.
-type rampWaiter struct {
-	returned      bool
-	created, seen time.Time
-}
-
-// before says whether w goes ahead of o on the ramp: one sent back first,
-// then the oldest.
-func (w rampWaiter) before(o rampWaiter, id, oid string) bool {
-	if w.returned != o.returned {
-		return w.returned
-	}
-	if !w.created.Equal(o.created) {
-		return w.created.Before(o.created)
-	}
-	return id < oid
-}
-
-// rampSeen is how lately a run must have asked the ramp to be waiting on it:
-// a tick steps every run about once a second, so one not seen for this long
-// has started elsewhere, been held before it, or ended.
-var rampSeen = 10 * time.Second
-
-// rampStep is the least time between two turns starting after a strain hold
-// (ramp), so the readings see each before the next: on 10-28, the hold
-// lifting started every run it had held at once, and the Hive's slice ran to
-// 42 claude, 87 link and 40 compile processes, load near 400 and an OOM kill.
-var rampStep = 30 * time.Second
-
-// Holding marks a strain hold now, outside launch (a brief the work module
-// held on one), so the turns after it ramp up.
-func (rs *Runs) Holding() {
-	rs.mu.Lock()
-	rs.heldAt = time.Now()
-	rs.mu.Unlock()
-}
-
-// ramp says whether r's turn starting now waits for the ramp: after a strain
-// hold, turns start one a rampStep until none has waited on the ramp for two.
-// Each step goes to the waiting run first in line (rampWaiter.before): every
-// run is stepped in its own goroutine, so the step went to whichever asked
-// first after it, and from 04Z on 10-29 seven workers sent back to their tasks
-// took no turn in 4-7h while 28 newer runs took 46.
-func (rs *Runs) ramp(r Run, now time.Time) bool {
-	rs.mu.Lock()
-	defer rs.mu.Unlock()
-	if now.Sub(rs.heldAt) > 2*rampStep && now.Sub(rs.rampedAt) > 2*rampStep {
-		clear(rs.rampWait)
-		return false
-	}
-	if rs.rampWait == nil {
-		rs.rampWait = map[string]rampWaiter{}
-	}
-	me := rampWaiter{returned: r.Returned, created: r.Created, seen: now}
-	rs.rampWait[r.ID] = me
-	ahead := false
-	for id, w := range rs.rampWait {
-		if now.Sub(w.seen) > rampSeen {
-			delete(rs.rampWait, id)
-		} else if id != r.ID && w.before(me, id, r.ID) {
-			ahead = true
-		}
-	}
-	if ahead || now.Sub(rs.rampLast) < rampStep {
-		rs.rampedAt = now
-		return true
-	}
-	delete(rs.rampWait, r.ID)
-	rs.rampLast = now
-	return false
+	// here counts the launches past the slot check that start their turn on
+	// this machine and haven't journalled it yet (launch): with the turns
+	// running here, they fill the slots.
+	here     int
+	slotWait map[string]slotWaiter // the runs waiting for a slot (inLine)
 }
 
 // Hold keeps new turns from starting, saying why; "" lets them start again.
@@ -2422,42 +2349,31 @@ func (rs *Runs) launch(r Run, cfg Config) {
 		delete(rs.starting, r.ID)
 		rs.mu.Unlock()
 	}()
-	floor, memMax, cpuMax := cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax
+	floor := cfg.MemFloorMB
 	if r.Lead() {
-		// A lead answers however busy the machine is: no pressure hold, and
-		// only the floor under which its turn could not run at all.
-		floor, memMax, cpuMax = min(floor, LeadMemFloorMB), 0, 0
+		// A lead answers however busy the machine is: it takes no slot, and
+		// only the floor under which its turn could not run at all holds it.
+		floor = min(floor, LeadMemFloorMB)
 	}
-	// A turn this machine is too strained for goes to an executor module
-	// with room, or waits; an away run's goes there first anyway.
-	var elsewhere sandbox.Sandbox
-	where := ""
-	why := Strained(floor, memMax, cpuMax)
-	if why != "" || (r.Away && !r.Lead()) {
-		elsewhere, where = rs.executor()
-	}
-	if why != "" && elsewhere == nil {
-		if !r.Lead() {
-			rs.Holding()
-		}
+	if why := Strained(floor); why != "" {
 		rs.holdTurn(r, "waiting: "+why)
 		return
 	}
-	// Admit before the ramp: a run the module holds doesn't spend the
-	// ramp's step, and a pass it gives is kept (work's backIn) until the
-	// ramp lets the turn start. The other way round a run held by both
-	// took the step one tick and the module's hold the next, journalling
-	// two run.held a tick (618 for one worker in 3h on 10-28).
 	if rs.Admit != nil {
 		if why := rs.Admit(r); why != "" {
 			rs.holdTurn(r, why)
 			return
 		}
 	}
-	if !r.Lead() && elsewhere == nil && rs.ramp(r, time.Now()) {
-		rs.holdTurn(r, "waiting: starting one turn at a time after the machine was strained")
+	// Every other turn takes a slot here (slots.go), or goes to an executor
+	// module with room while the turns away hold no more than the slots; an
+	// away run's turn goes there first anyway.
+	elsewhere, where, release, ok := rs.slot(r, cfg)
+	if !ok {
+		rs.holdTurn(r, fmt.Sprintf("waiting for a slot (all %d in use; slots in config.json)", cfg.TurnSlots()))
 		return
 	}
+	defer release()
 	sb, err := rs.sandbox()
 	if err != nil {
 		if r.Status != StatusQueued || r.Reason != err.Error() {
@@ -2640,6 +2556,129 @@ func (rs *Runs) renewedMidTurn(r Run, res *harness.Result) bool {
 	}
 	return false
 }
+
+// slot takes a slot for r's turn: ok with the executor's sandbox and runner
+// when it goes there, or with neither when it starts here, where it holds a
+// slot until release (by then its turn is running and counts itself, or it
+// didn't start); not ok when it waits. A lead takes no slot and never waits.
+// A turn goes away first when its run is away, else only when every slot
+// here is in use; the turns away count against the slots too, since a runner
+// that refuses a turn it was handed runs it here: on 10-29 at 13:45 one
+// runner was handed 53 turns in six minutes past a pace of 4.
+func (rs *Runs) slot(r Run, cfg Config) (sb sandbox.Sandbox, where string, release func(), ok bool) {
+	if r.Lead() {
+		return nil, "", func() {}, true
+	}
+	slots := cfg.TurnSlots()
+	away := func() (sandbox.Sandbox, string) {
+		if _, n := rs.inUse(); n >= slots {
+			return nil, ""
+		}
+		return rs.executor()
+	}
+	if r.Away {
+		if sb, where = away(); sb != nil {
+			return sb, where, func() {}, true
+		}
+	}
+	rs.mu.Lock()
+	if n, _ := rs.inUseLocked(); rs.inLine(r, slots-n, time.Now()) {
+		rs.here++
+		rs.mu.Unlock()
+		return nil, "", func() {
+			rs.mu.Lock()
+			rs.here--
+			rs.mu.Unlock()
+		}, true
+	}
+	rs.mu.Unlock()
+	if !r.Away {
+		if sb, where = away(); sb != nil {
+			rs.mu.Lock()
+			delete(rs.slotWait, r.ID) // out of the line here
+			rs.mu.Unlock()
+			return sb, where, func() {}, true
+		}
+	}
+	return nil, "", nil, false
+}
+
+// slotWaiter is a run waiting for a slot: whether it was sent back to its
+// work (Returned), when it was created, and when it last asked.
+type slotWaiter struct {
+	returned      bool
+	created, seen time.Time
+}
+
+// before says whether w goes ahead of o for a slot: one sent back first,
+// then the oldest.
+func (w slotWaiter) before(o slotWaiter, id, oid string) bool {
+	if w.returned != o.returned {
+		return w.returned
+	}
+	if !w.created.Equal(o.created) {
+		return w.created.Before(o.created)
+	}
+	return id < oid
+}
+
+// slotSeen is how lately a run must have asked for a slot to be waiting for
+// one: a tick steps every run about once a second, so one not seen for this
+// long has started elsewhere, been held before it, or ended.
+var slotSeen = 10 * time.Second
+
+// inLine says whether r takes one of free slots now: only while fewer runs
+// that go ahead of it (slotWaiter.before) wait for one. Every run is stepped
+// in its own goroutine, so a freed slot went to whichever asked first, and
+// on 10-29 seven workers sent back to their tasks took no turn in 4-7h while
+// 28 newer runs took 46. One that doesn't take a slot is in line until it
+// does or stops asking. rs.mu is held.
+func (rs *Runs) inLine(r Run, free int, now time.Time) bool {
+	if rs.slotWait == nil {
+		rs.slotWait = map[string]slotWaiter{}
+	}
+	me := slotWaiter{returned: r.Returned, created: r.Created, seen: now}
+	ahead := 0
+	for id, w := range rs.slotWait {
+		if now.Sub(w.seen) > slotSeen {
+			delete(rs.slotWait, id)
+		} else if id != r.ID && w.before(me, id, r.ID) {
+			ahead++
+		}
+	}
+	if ahead >= free {
+		rs.slotWait[r.ID] = me
+		return false
+	}
+	delete(rs.slotWait, r.ID)
+	return true
+}
+
+// inUse counts the slots in use: turns of runs other than leads running
+// here, with the launches about to start one (rs.here), and running away.
+func (rs *Runs) inUse() (here, away int) {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	return rs.inUseLocked()
+}
+
+func (rs *Runs) inUseLocked() (here, away int) {
+	here = rs.here
+	for _, o := range rs.runs {
+		switch {
+		case o.Status != StatusRunning || o.Lead():
+		case o.Where != "":
+			away++
+		default:
+			here++
+		}
+	}
+	return here, away
+}
+
+// InUse says how many slots turns hold here and away, for the status op and
+// the dashboard.
+func (rs *Runs) InUse() (here, away int) { return rs.inUse() }
 
 // Elsewhere says whether an executor module has room for a turn now.
 func (rs *Runs) Elsewhere() bool {

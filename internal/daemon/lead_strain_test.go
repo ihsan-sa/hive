@@ -14,10 +14,10 @@ import (
 // floor asked for is more memory than any machine has, so the hold is real
 // on both runs; what differs is who it holds.
 func TestLeadTurnStartsUnderStrainThatHoldsAWorker(t *testing.T) {
-	if core.Strained(1<<30, 0, 0) == "" {
+	if core.Strained(1<<30) == "" {
 		t.Skip("no memory figure here to hold a turn on")
 	}
-	if why := core.Strained(core.LeadMemFloorMB, 0, 0); why != "" {
+	if why := core.Strained(core.LeadMemFloorMB); why != "" {
 		t.Skipf("the machine is under a lead's own floor, so the lead is held too: %s", why)
 	}
 	dir := t.TempDir()
@@ -27,7 +27,7 @@ func TestLeadTurnStartsUnderStrainThatHoldsAWorker(t *testing.T) {
 	}
 	cfg := ws.LoadConfig()
 	cfg.Sandbox, cfg.BareAccepted, cfg.Harness = "bare", time.Now().Format(time.RFC3339), "fake"
-	cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax, cfg.LoadMax = 1<<30, 0, 0, 0
+	cfg.MemFloorMB = 1 << 30
 	ws.SaveConfig(cfg)
 	c, err := core.Open(ws, &core.Local{Dir: filepath.Join(dir, "forge")})
 	if err != nil {

@@ -294,7 +294,7 @@ func TestControlCenterInTmux(t *testing.T) {
 		t.Fatalf("Enter at the share opt-in left share at %q, not off", cfg.Share)
 	}
 	cfg.Harness = "fake"
-	cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax, cfg.LoadMax = 0, 0, 0, 0
+	cfg.MemFloorMB = 0
 	for k := range cfg.Schedules {
 		cfg.Schedules[k] = "off"
 	}

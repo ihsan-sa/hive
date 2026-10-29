@@ -223,6 +223,9 @@ with your run id.
   pr_draft  --task id --why "..."                mark it a draft; its task waits, not stopped
   pr_close  --task id --comment "..." [--delete_branch]   close it with a comment, ending its
                                                  task (or --project p --pr N in place of --task)
+  slots     [--slots n] [--workers n] [--checks n] --why "what you saw"   how many agent turns besides
+                                                 the leads' run here at once, tasks have a worker, checks run;
+                                                 0 is the default sized to the machine; nothing else moves them
   models                                         named models, each role's route, what each agent runs on, trials
   route     --role worker --models "a,b" [--project p]   the models a role runs on, in fallback order
   trial     --model m --project test --title "..." --done "..."   one brief's worker on that model alone

@@ -146,31 +146,29 @@ type Config struct {
 	// on them is under it (internal/mod/models/paid.go). 0 keeps OpenRouter
 	// free-only.
 	OpenRouterUSD float64 `json:"openrouter_monthly_usd,omitempty"`
-	// A turn waits while available memory is under MemFloorMB, or memory or
-	// CPU pressure (Linux PSI "some avg10", percent) is over its limit; 0 turns a check off.
-	MemFloorMB     int     `json:"mem_floor_mb"`
-	MemPressureMax float64 `json:"mem_pressure_max"`
-	CPUPressureMax float64 `json:"cpu_pressure_max"`
-	// MaxWorkers is the most workers that may work at once, the person's
-	// ceiling: below it the work module's pace sets the limit from what the
-	// machine and the plan carry (internal/mod/work/pace.go). Briefs past the
-	// limit wait in the queue, in order; 0 is no ceiling.
+	// A turn waits while available memory is under MemFloorMB, the last
+	// guard under the slots; 0 turns it off.
+	MemFloorMB int `json:"mem_floor_mb"`
+	// Slots is how many agent turns other than leads' run on this machine at
+	// once, every role's alike (slots.go); the rest wait for one. 0 is the
+	// default, sized from the machine's memory (DefaultSlots). Any agent
+	// changes it at once with the slots op, which puts why on the record.
+	Slots int `json:"slots,omitempty"`
+	// MaxWorkers is how many tasks have a worker at once; the rest wait in
+	// the queue, in order. 0 is three quarters of the slots
+	// (internal/mod/work/pace.go).
 	MaxWorkers int `json:"max_workers"`
-	// LoadMax holds new workers past the pace's start while the machine's
-	// 1-minute load per core is over it (Linux /proc/loadavg); 0 is off.
-	LoadMax float64 `json:"load_max"`
-	// MaxChecks is the most checks (the gate's tests, scores and dry runs,
-	// improve's measures) that run at once, a ceiling over the pace as
-	// MaxWorkers is; the rest wait in order. 0 is no ceiling.
+	// MaxChecks is how many checks (the gate's tests, scores and dry runs,
+	// improve's measures) run at once; the rest wait in order. 0 is
+	// DefaultMaxChecks.
 	MaxChecks int `json:"max_checks"`
-	// Ceilings says max_workers and max_checks are the person's ceilings. A
-	// config without it is from before the pace (internal/mod/work/pace.go),
-	// when every install saved the then defaults (4, and the checks' start):
-	// reading one clears those two values, so the pace can grow there.
+	// Ceilings says max_workers and max_checks were set by the person. A
+	// config without it is from before 10-24, when every install saved the
+	// then defaults (4, and the checks' default): reading one clears those
+	// two values, so the defaults sized to the machine hold there.
 	Ceilings bool `json:"ceilings"`
 	// MaxGates is the most recursive gate runs (self projects' gains, each
-	// two child Hives and their suites) at once, a ceiling over their pace;
-	// 0 is one per 6 cores (internal/mod/work/selfgate.go).
+	// two child Hives and their suites) at once; 0 is one per 6 cores (internal/mod/work/selfgate.go).
 	MaxGates int `json:"max_gates,omitempty"`
 	// CheckCacheMaxMB caps one check's own home (its build cache and
 	// scratch): past it the check is ended as can't-run; 0 is the default
@@ -363,9 +361,6 @@ func DefaultConfig() Config {
 
 		MaxOutputTokens: 16000,
 		MemFloorMB:      1024,
-		MemPressureMax:  10,
-		CPUPressureMax:  40,
-		LoadMax:         1,
 		Ceilings:        true,
 		PlateauMerges:   3,
 		Schedules: map[string]string{

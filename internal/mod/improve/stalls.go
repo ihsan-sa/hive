@@ -188,7 +188,7 @@ func (m *Module) Watch() {
 		if sha := checked(t); sha != "" {
 			testing[t.Project+"@"+sha] = true
 		}
-		// A worker a conflict sends back waits at the pace as a queued
+		// A worker a conflict sends back waits for a worker as a queued
 		// brief does (work.Task.Resending). The recursive gate runs on its
 		// own clock, as many at once as the machine carries; a merge behind
 		// a kept gain waits at most that keep's own bound (work.KeptFirstWait).
