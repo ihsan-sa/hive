@@ -2385,15 +2385,20 @@ func (rs *Runs) launch(r Run, cfg Config) {
 		rs.holdTurn(r, "waiting: "+why)
 		return
 	}
-	if !r.Lead() && elsewhere == nil && rs.ramp(time.Now()) {
-		rs.holdTurn(r, "waiting: starting one turn at a time after the machine was strained")
-		return
-	}
-	if rs.Admit != nil { // after the ramp: a pass Admit gives is used now
+	// Admit before the ramp: a run the module holds doesn't spend the
+	// ramp's step, and a pass it gives is kept (work's backIn) until the
+	// ramp lets the turn start. The other way round a run held by both
+	// took the step one tick and the module's hold the next, journalling
+	// two run.held a tick (618 for one worker in 3h on 10-28).
+	if rs.Admit != nil {
 		if why := rs.Admit(r); why != "" {
 			rs.holdTurn(r, why)
 			return
 		}
+	}
+	if !r.Lead() && elsewhere == nil && rs.ramp(time.Now()) {
+		rs.holdTurn(r, "waiting: starting one turn at a time after the machine was strained")
+		return
 	}
 	sb, err := rs.sandbox()
 	if err != nil {

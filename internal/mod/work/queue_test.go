@@ -285,6 +285,47 @@ func TestQuietWorkerHoldsNoOne(t *testing.T) {
 	}
 }
 
+// A worker that can't take a turn now holds no slot: one parked until a
+// usage reset hours off, or finished with its task awaiting take-out. On
+// 10-28 such ones held the pace of 4-6 with one turn running while 14 briefs
+// waited 2.5-4h. One parked for a short retry keeps its slot, and a worker
+// sent back is let through past them and then counts.
+func TestWorkersThatCantTakeATurnHoldNoSlot(t *testing.T) {
+	m := queueRig(t) // max_workers 2
+	for _, id := range []string{"wreset", "wdone", "wretry", "wback"} {
+		if _, err := m.C.Runs.Start(core.RunSpec{ID: id, Role: "worker", Project: "p", Harness: "fake", Checkout: t.TempDir()}); err != nil {
+			t.Fatal(err)
+		}
+		task := file(t, m, "worked on by "+id, "")
+		task.Stage, task.Worker = StageWorking, id
+		m.save(&task, "")
+	}
+	park := func(id string, d time.Duration) {
+		m.C.J.MustAppend("run.status", map[string]any{"id": id, "status": core.StatusParked, "reason": "usage limit reached", "until": time.Now().Add(d)})
+	}
+	park("wreset", 5*time.Hour)
+	m.C.Runs.SetStatus("wdone", core.StatusDone, "finished")
+	m.C.Runs.SetStatus("wretry", core.StatusDone, "finished")
+	m.C.Runs.SetStatus("wback", core.StatusDone, "finished")
+	if err := m.C.Runs.Reopen("wback", "A reviewer's findings."); err != nil {
+		t.Fatal(err)
+	}
+	back, _ := m.C.Runs.Get("wback")
+	if why := m.C.Runs.Admit(back); why != "" {
+		t.Fatalf("the worker sent back, past a parked and two finished ones: %q, want it let through", why)
+	}
+	fix := file(t, m, "the brief waiting", "")
+	fix.Stage = StageQueued
+	m.save(&fix, "")
+	if start, wait := m.admit(m.List(nil)); !start[fix.ID] {
+		t.Fatalf("a parked and two finished workers hold the slot: %q", wait[fix.ID])
+	}
+	park("wretry", time.Minute)
+	if start, wait := m.admit(m.List(nil)); start[fix.ID] || !strings.Contains(wait[fix.ID], "waiting for a worker") {
+		t.Fatalf("a worker parked for a minute's retry gave its slot away: %q", wait[fix.ID])
+	}
+}
+
 // A brief that has waited past overdue goes ahead of newer ones the lead
 // ordered, oldest first, and the queue shows how long it has waited (task 065256 waited 10h20m,
 // passed by 30 newer briefs "to go first").

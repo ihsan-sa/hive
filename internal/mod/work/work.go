@@ -76,13 +76,14 @@ type Task struct {
 	AimWhy    string     `json:"aim_why,omitempty"` // why it was taken as what it is
 	Stage     string     `json:"stage"`
 	Reason    string     `json:"reason,omitempty"`
-	Order     int        `json:"order,omitempty"`     // its place in the queue the lead set; 0 goes after, as filed
-	Held      bool       `json:"held,omitempty"`      // an agent holds it in the queue
-	HeldBy    string     `json:"held_by,omitempty"`   // the run that holds it
-	Now       bool       `json:"now,omitempty"`       // the lead put it first in line (queue now)
-	Recheck   bool       `json:"recheck,omitempty"`   // landed again on the same commit, so its test runs again
-	Retested  string     `json:"retested,omitempty"`  // the head whose red tests ran once more while main's passed
-	ByPerson  bool       `json:"by_person,omitempty"` // the person stopped it or left it open, so the lead can't bring it back
+	Order     int        `json:"order,omitempty"`      // its place in the queue the lead set; 0 goes after, as filed
+	Held      bool       `json:"held,omitempty"`       // an agent holds it in the queue
+	HeldBy    string     `json:"held_by,omitempty"`    // the run that holds it
+	Now       bool       `json:"now,omitempty"`        // the lead put it first in line (queue now)
+	Recheck   bool       `json:"recheck,omitempty"`    // landed again on the same commit, so its test runs again
+	Retested  string     `json:"retested,omitempty"`   // the head whose red tests ran once more while main's passed
+	KeepsTest string     `json:"keeps_test,omitempty"` // the head a retry took back to landing with its tests green, which it lands again without rerunning
+	ByPerson  bool       `json:"by_person,omitempty"`  // the person stopped it or left it open, so the lead can't bring it back
 	Issue     core.Issue `json:"issue"`
 	Worker    string     `json:"worker,omitempty"`
 	Base      string     `json:"base,omitempty"`
@@ -1736,8 +1737,18 @@ func (m *Module) heldErr(id string) error {
 	if w.sha != "" {
 		why += fmt.Sprintf(", weighing the worker's commit %s as a checkpoint: its score check waits for a slot or runs, and is dropped once the worker finishes", core.Short(w.sha))
 	}
-	return fmt.Errorf("task %s has %s; ask again in a moment", id, why)
+	return &HeldError{err: fmt.Errorf("task %s has %s; ask again in a moment", id, why), Since: at}
 }
+
+// HeldError is a steer refused because a step holds the task: the task is
+// moving, so whoever asked waits for the step instead of reading it as stuck.
+// Since is when the step began; zero is not known.
+type HeldError struct {
+	err   error
+	Since time.Time
+}
+
+func (e *HeldError) Error() string { return e.err.Error() }
 
 // weighing is a checkpoint's score check a step waits on: the worker's
 // commit sha in project.
@@ -1916,7 +1927,10 @@ func (m *Module) open(t *Task, p core.Project, sha, body string) error {
 	// A worker that finishes again on the same commit thinks something outside
 	// it changed (a tool installed, an answer), so its tests run again; one
 	// that had the forge's checks re-run there lately waits for those instead.
-	t.PR, t.Recheck, t.SHA, t.Stage, t.Failures = pr, t.SHA == sha && !rerunning(t), sha, StageTesting, 0
+	// A retry of a head whose tests passed keeps that green run: what it
+	// retries is what came after the test, and the test line may be long.
+	t.PR, t.Recheck, t.SHA, t.Stage, t.Failures = pr, t.SHA == sha && !rerunning(t) && t.KeepsTest != sha, sha, StageTesting, 0
+	t.KeepsTest = ""
 	m.save(t, fmt.Sprintf("pushed %s, PR #%d", core.Short(sha), pr.Number))
 	return nil
 }
@@ -4228,6 +4242,10 @@ func (m *Module) retryInFlight(id, back, by string) error {
 		return m.dropCheckpoint(&t, p, "the lead retried it from "+was)
 	}
 	t.Reason, t.Failures, t.Round, t.Reviews, t.Conflicts = "", 0, 0, 0, 0
+	t.KeepsTest = ""
+	if c, ok := m.C.Effects.GetCheck(t.Project, t.SHA, "test"); ok && c.OK && c.CantRun == "" && t.SHA != "" && !t.Recheck {
+		t.KeepsTest = t.SHA // passed on this head: a retry of what came after doesn't send it back to the end of the test line
+	}
 	if r, ok := m.C.Runs.Get(t.Reviewer); ok && was == StageReviewing && !r.Terminal() {
 		// A reader stuck on the task would otherwise keep its slot, and the
 		// next read of the same head would wait on it again by its id.

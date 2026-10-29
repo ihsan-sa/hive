@@ -20,8 +20,11 @@ func stubGH(t *testing.T, reply func(args []string) (string, string, error)) *[]
 	logins.Clear()
 	clear(workflowless.m)
 	var calls [][]string
+	var mu sync.Mutex
 	ghRun = func(_ string, args []string) (string, string, error) {
+		mu.Lock()
 		calls = append(calls, args)
+		mu.Unlock()
 		return reply(args)
 	}
 	return &calls
@@ -701,6 +704,7 @@ func TestWritesAreSpaced(t *testing.T) {
 		return "", "", nil
 	})
 	ghGate = newGate(3, 40*time.Millisecond)
+	start := time.Now()
 	var wg sync.WaitGroup
 	for i := range 5 {
 		wg.Add(1)
@@ -708,9 +712,13 @@ func TestWritesAreSpaced(t *testing.T) {
 	}
 	wg.Wait()
 	slices.SortFunc(sent, func(a, b time.Time) int { return a.Compare(b) })
-	for i := 1; i < len(sent); i++ {
-		if gap := sent[i].Sub(sent[i-1]); gap < 35*time.Millisecond {
-			t.Fatalf("writes %v apart: %v", gap, sent)
+	// The gate gives the writes turns a gap apart, and a sleeper never wakes
+	// early, so the i-th write sent goes no sooner than i gaps after the
+	// start. Two neighbours can still land closer than a gap when the one
+	// before woke late on a loaded machine; that isn't a burst.
+	for i, at := range sent {
+		if d := at.Sub(start); d < time.Duration(i)*40*time.Millisecond {
+			t.Fatalf("write %d went %v after the start, want at least %v: %v", i, d, time.Duration(i)*40*time.Millisecond, sent)
 		}
 	}
 }
