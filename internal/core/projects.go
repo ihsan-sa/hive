@@ -83,8 +83,8 @@ type ProjectConfig struct {
 	// every pull request (a CI job, "test (ubuntu-latest)" say). With them
 	// the forge's run on the exact head is the test: the Hive runs no test
 	// of its own on a PR, and the merge waits for these to pass there (or
-	// fail only where they fail on main). The local test still measures
-	// main. Read from main, and changing it is the person's (BaseProtected).
+	// fail only where they fail on main). Main's measurement after a merge
+	// takes their pass on the merge commit too (improve.forgeTest). Read from main, and changing it is the person's (BaseProtected).
 	ForgeTests []string `json:"forge_tests,omitempty"`
 }
 

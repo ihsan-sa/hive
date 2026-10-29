@@ -27,7 +27,7 @@ What a check sees is part of the merge guarantees, so the choice of its caches i
 
 Where the daemon's scratch files go is core too: `core/hosttmp.go` (#1914, about 100 lines) sets the daemon's `TMPDIR` before any module starts, and its leftovers are removed by the core's own clean job (`Prune`), beside the check homes it already removes.
 
-What a merge rests on is core, so where a project's tests run is too: `ProjectConfig.ForgeTests` and its few lines in `Effects.Merge` (#1962, about 15 lines) let a project whose forge CI tests every PR name those checks, and the merge then rests on them passing on the exact head in place of a local run; the testing stage that skips the local run is the work module's.
+What a merge rests on is core, so where a project's tests run is too: `ProjectConfig.ForgeTests` and its few lines in `Effects.Merge` (#1962, about 15 lines) let a project whose forge CI tests every PR name those checks, and the merge then rests on them passing on the exact head in place of a local run; the testing stage that skips the local run is the work module's, and the measure of a merge that takes their pass on main is the improve module's (#2087).
 
 The last row is core only as the place the skeleton runs: what a module adds to it (an API route, a CLI verb) is module material and moves out (step 4 below).
 
