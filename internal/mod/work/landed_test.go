@@ -165,3 +165,47 @@ func TestOwnMergedPRIsNotAlreadyLanded(t *testing.T) {
 		})
 	}
 }
+
+// A task whose work another PR carried to main in its own shape (a squash
+// merge of several branches, say) ends as landed when the lead names that
+// merge: main need not hold its head. Its own open PR is closed naming the
+// carrier. So does a task with no commits or PR of its own. A named commit
+// from before the task's work started is refused.
+func TestLandedOnACarrierThatSquashedItsWork(t *testing.T) {
+	for _, own := range []bool{true, false} {
+		t.Run(fmt.Sprint("own commits=", own), func(t *testing.T) {
+			m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
+			base, _ := m.C.Effects.Sync(p)
+			task.Stage, task.Base = StageWorking, base
+			if !own {
+				task.SHA, task.PR = "", core.PR{}
+			}
+			m.save(task, "")
+			var merged int
+			m.OnMerged = func(Task) { merged++ }
+			pushMain(t, f, map[string]string{"feature.txt": "y, reworked with another branch", "other.txt": "o"}) // #57's squash
+			carried, _ := m.C.Effects.Sync(p)
+			pushMain(t, f, map[string]string{"later.txt": "z"})
+			if _, err := m.Landed(task.ID, base, "lead", "x"); err == nil || !strings.Contains(err.Error(), "from before") {
+				t.Fatalf("took main from before its work: %v", err)
+			}
+			if _, err := m.Landed(task.ID, "", "lead", "x"); err == nil || !strings.Contains(err.Error(), "merge <sha>") {
+				t.Fatalf("not told to name the carrier: %v", err)
+			}
+			got, err := m.Landed(task.ID, core.Short(carried), "lead", "carried by #57")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Stage != StageMerged || got.MergeSHA != carried || merged != 1 || !logged(&got, "on the caller's word") || !logged(&got, "carried by #57") {
+				t.Fatalf("stage %q, merge %s (want %s), measured %d, log %v", got.Stage, got.MergeSHA, carried, merged, got.Log)
+			}
+			if own {
+				pr, _ := f.GetPR(p.Repo, task.PR.Number)
+				cs := f.Comments(p.Repo, task.PR.Number)
+				if pr.State != "CLOSED" || len(cs) == 0 || !strings.Contains(cs[len(cs)-1], carried) {
+					t.Fatalf("PR %s, comments %q", pr.State, cs)
+				}
+			}
+		})
+	}
+}
