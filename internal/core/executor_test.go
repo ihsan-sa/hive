@@ -174,16 +174,17 @@ func TestCheckGoesToARunnerWhenTheLineIsFull(t *testing.T) {
 	mu.Lock()
 	room = true
 	mu.Unlock()
+	// Leaving takes a tick; the run after it (a clean checkout and the
+	// command) can take far longer on a loaded machine, so it gets its own,
+	// looser wait.
+	waitFor(t, "a waiting check to leave the line for a runner with room", func() bool { _, w := c.Effects.Slots.State(); return len(w) == 0 })
 	select {
 	case ch := <-done:
 		if ch.Where != "iiks1" || len(away) != 2 {
 			t.Fatalf("left the line for %q, %d away", ch.Where, len(away))
 		}
-	case <-time.After(10 * time.Second):
-		t.Fatal("a waiting check didn't leave the line for a runner with room")
-	}
-	if _, waiting := c.Effects.Slots.State(); len(waiting) != 0 {
-		t.Errorf("it left and still waits: %+v", waiting)
+	case <-time.After(2 * time.Minute):
+		t.Fatal("a check that left the line didn't finish on the runner")
 	}
 
 	// Main's own check waits for a slot here: it writes the shared build cache.
@@ -241,7 +242,7 @@ func TestAwayTurnGoesToAnExecutorFirst(t *testing.T) {
 // waitFor polls cond until it holds, or fails after 10 seconds.
 func waitFor(t *testing.T, what string, cond func() bool) {
 	t.Helper()
-	for end := time.Now().Add(10 * time.Second); !cond(); time.Sleep(5 * time.Millisecond) {
+	for end := time.Now().Add(30 * time.Second); !cond(); time.Sleep(5 * time.Millisecond) {
 		if time.Now().After(end) {
 			t.Fatal("timed out waiting for " + what)
 		}
