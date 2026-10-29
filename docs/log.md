@@ -401,6 +401,10 @@
 - Why: issue #2039; io pressure some 60% / full 44% from file reads in user.slice (117 MB/s) on 10-29 with a 981 MB journal. `/api/events`, which hive-slack polls every second and dream, runner programs and the control center read, decoded the whole file on every call, and agents tailed or grepped it.
 - Tradeoff: the hour files repeat two days of the journal on disk (unsynced; a crash's lost lines come back on the next start's rewrite of the window); the release module's whole-journal replays every 10 minutes are still there.
 
+## 2026-10-29 A worker's "lead" and "parent" stay on its project (#2040)
+- Decision: `Runs.Find` takes a run named the address over an id prefix, so "lead" is the Hive's lead; `Deliver` reads "lead" as the sender's own project's lead (`Runs.LeadOf`, "lead:<project>", the Hive's when it has none; a project's lead's "lead" is the Hive's). A worker's "parent" with no Parent is whoever filed its task while that run takes messages (the work module's router), else that project lead.
+- Why: every lead's id starts "lead-", so Find("lead") took the newest lead of any project; two hive workers (on #1907, #1941) reported to hifi-receiver-2's lead, which had to forward them.
+- Tradeoff: a run with no Parent and no task (a warden on its own) still fails on "parent" rather than guessing.
 ## 2026-10-29 A conflict with main goes back when main moves, not at the merge (#1996)
 - Decision: each tick that meets a new main for a head in testing (before its test), reviewing (before a read starts) or merging (before the forge's say) runs `git merge-tree --write-tree` of the head and main in the project clone, with `attr.tree=main` as `UpdateBranch` takes it, once per head@main; a conflict (exit 1) goes through `catchUp`, so it goes back to its worker at the pace, or drops a checkpoint.
 - Why: conflicts were found only at the merge from the forge's `Mergeable`: 279 'conflict with main' bounces in the journal, a median 2.6 h from push to the find, many after a passing test and two land reads (261028-031118: pushed 17:52Z, tested 22:43Z, sent back 22:47Z).
