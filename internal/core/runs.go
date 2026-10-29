@@ -1198,19 +1198,10 @@ func (rs *Runs) Find(addr string) (Run, bool) {
 	if r, ok := rs.runs[addr]; ok {
 		return *r, true
 	}
-	// An exact name wins over an id prefix: every lead id starts with
-	// "lead-", so "lead" must reach the run named lead, not the newest lead.
 	var best *Run
 	for _, r := range rs.runs {
-		if r.Name == addr && (best == nil || r.Created.After(best.Created)) {
+		if (r.Name == addr || strings.HasPrefix(r.ID, addr) || strings.HasSuffix(r.ID, addr)) && (best == nil || r.Created.After(best.Created)) {
 			best = r
-		}
-	}
-	if best == nil {
-		for _, r := range rs.runs {
-			if (strings.HasPrefix(r.ID, addr) || strings.HasSuffix(r.ID, addr)) && (best == nil || r.Created.After(best.Created)) {
-				best = r
-			}
 		}
 	}
 	if best == nil {
