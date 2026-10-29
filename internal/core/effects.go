@@ -561,6 +561,34 @@ func (e *Effects) RunCheckSince(p Project, sha, main, kind, command string) Chec
 }
 
 func (e *Effects) runCheck(p Project, sha, main, kind, command string) Check {
+	c, refused := e.checkOnce(p, sha, main, kind, command, "")
+	if refused != "" {
+		c, _ = e.checkOnce(p, sha, main, kind, command, refused)
+	}
+	return c
+}
+
+// refusedBefore is the line an executor module gives back for a check it
+// refused before it started (a runner full or loaded, none with room): exit
+// 125, no exit marker, and dispatch's "not run:" line. Nothing ran, so it is
+// no can't-run: the check goes back in the line here at once.
+func refusedBefore(code int, out string) string {
+	if code != 125 {
+		return ""
+	}
+	for line := range strings.Lines(out) {
+		if _, why, ok := strings.Cut(line, "dispatch: not run: "); ok {
+			why, _, _ = strings.Cut(strings.TrimSpace(why), "; a check never runs here")
+			return why
+		}
+	}
+	return ""
+}
+
+// checkOnce is runCheck. A check an executor refused before it started comes
+// back unrecorded with why; run again with back set to that why, it waits in
+// the line here and goes to no runner.
+func (e *Effects) checkOnce(p Project, sha, main, kind, command, back string) (Check, string) {
 	c := Check{Project: p.Name, SHA: sha, Kind: kind, At: time.Now().UTC()}
 	record := func() Check {
 		c.Output = ClipEnds(c.Output, 4000)
@@ -572,23 +600,31 @@ func (e *Effects) runCheck(p Project, sha, main, kind, command string) Check {
 		if !c.OK {
 			c.Output = "the " + kind + " command was removed from main's settings; the person restores it"
 		}
-		return record()
+		return record(), ""
 	}
 	sb, err := e.sandbox()
 	if err != nil {
 		c.Output = err.Error()
-		return c // not recorded: no sandbox is not a verdict on the commit
+		return c, "" // not recorded: no sandbox is not a verdict on the commit
 	}
 	// A check the line here would make wait goes to a runner with room, now
-	// or while it waits.
-	away, where := e.elsewhere(p, sha, kind)
+	// or while it waits; one a runner refused waits here.
+	var away sandbox.Sandbox
+	var where string
+	if back == "" {
+		away, where = e.elsewhere(p, sha, kind)
+	}
 	if away != nil {
 		e.took(away, true)
 	} else {
-		release, ok, left := e.Slots.TakeOr(p.Name, sha, kind, func() bool {
+		leave := func() bool {
 			away, where = e.elsewhere(p, sha, kind)
 			return away != nil
-		}, checkLeaveEvery)
+		}
+		if back != "" {
+			leave = nil
+		}
+		release, ok, left := e.Slots.TakeOr(p.Name, sha, kind, leave, checkLeaveEvery)
 		if away != nil {
 			e.took(away, left) // spent only by a check that left the line
 		}
@@ -597,7 +633,7 @@ func (e *Effects) runCheck(p Project, sha, main, kind, command string) Check {
 		}
 		if !ok && !left {
 			c.Output = "dropped from the check line before it started"
-			return c // not recorded: nobody wants its verdict any more
+			return c, "" // not recorded: nobody wants its verdict any more
 		}
 		defer release()
 	}
@@ -607,7 +643,7 @@ func (e *Effects) runCheck(p Project, sha, main, kind, command string) Check {
 	dir, err := e.cleanCheckout(p, sha, kind)
 	if err != nil {
 		c.Output = "could not make a clean checkout: " + err.Error()
-		return c
+		return c, ""
 	}
 	defer e.dropCheckout(dir)
 	scope := ""
@@ -643,10 +679,13 @@ func (e *Effects) runCheck(p Project, sha, main, kind, command string) Check {
 		// the module's own: a module that exits 0 without running it can't
 		// make a check green.
 		got, ok := markedExit(out, nonce)
+		if why := refusedBefore(code, out); !ok && why != "" {
+			return c, where + " refused it before it started (" + why + ")"
+		}
 		if !ok {
 			c.Output = out
 			c.CantRun = fmt.Sprintf("can't run: %s gave back no exit for the check (the module exited %d)", where, code)
-			return record()
+			return record(), ""
 		}
 		code = got
 	}
@@ -678,7 +717,7 @@ func (e *Effects) runCheck(p Project, sha, main, kind, command string) Check {
 			mods.done()
 			build.done()
 			c.Output = "could not make a clean checkout: " + cerr.Error()
-			return c
+			return c, ""
 		}
 		defer e.dropCheckout(again)
 		if len(build.mounts) > 0 {
@@ -695,7 +734,10 @@ func (e *Effects) runCheck(p Project, sha, main, kind, command string) Check {
 	if c.Where != "" {
 		mods.note = "ran on " + c.Where + ", as the check line here was full"
 	}
-	for _, n := range []string{build.note, mods.note, scope} {
+	if back != "" {
+		back += ", so it went back in the check line here"
+	}
+	for _, n := range []string{back, build.note, mods.note, scope} {
 		if n != "" {
 			out = "hive: " + n + "\n" + out
 		}
@@ -703,7 +745,7 @@ func (e *Effects) runCheck(p Project, sha, main, kind, command string) Check {
 	c.Output = out
 	if errors.Is(err, ErrHomeFull) {
 		c.CantRun = fmt.Sprintf("can't run: %v (%s)", err, Bytes(e.checkCacheCap()))
-		return record()
+		return record(), ""
 	}
 	if err != nil {
 		c.Output = err.Error() + "\n" + out
@@ -711,12 +753,12 @@ func (e *Effects) runCheck(p Project, sha, main, kind, command string) Check {
 			c.CantRun = "can't run: the disk or a quota is full where checks run"
 			e.diskAlert(line)
 		}
-		return record()
+		return record(), ""
 	}
 	c.OK = code == 0
 	if tool := MissingTool(code, out); tool != "" {
 		c.CantRun, c.Tool = "can't run: "+tool+" is not installed where checks run", tool
-		return record()
+		return record(), ""
 	}
 	line := DiskFull(out)
 	if line == "" && !c.OK && (DiskUse{Room: e.room()}).Low() {
@@ -725,7 +767,7 @@ func (e *Effects) runCheck(p Project, sha, main, kind, command string) Check {
 	if !c.OK && line != "" {
 		c.OK, c.CantRun = false, "can't run: the disk or a quota is full where checks run"
 		e.diskAlert(line)
-		return record()
+		return record(), ""
 	}
 	e.mu.Lock()
 	e.diskFull = false
@@ -744,7 +786,7 @@ func (e *Effects) runCheck(p Project, sha, main, kind, command string) Check {
 			c.Score = &v
 		}
 	}
-	return record()
+	return record(), ""
 }
 
 // elsewhere returns an executor module that takes checks and has room for a

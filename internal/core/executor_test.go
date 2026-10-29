@@ -1,6 +1,7 @@
 package core
 
 import (
+	"os"
 	"runtime"
 	"slices"
 	"strings"
@@ -195,6 +196,65 @@ func TestCheckGoesToARunnerWhenTheLineIsFull(t *testing.T) {
 	if ch := <-done; ch.Where != "" || len(away) != 2 {
 		t.Fatalf("main's check went elsewhere: %q", ch.Where)
 	}
+}
+
+// A check a runner refused before it started (dispatch's "not run:", exit
+// 125, no marker) is no can't-run: it goes back in the line here at once,
+// waits there for no runner, and runs here, its output saying why.
+func TestCheckARunnerRefusedGoesBackInTheLine(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the checks are shell")
+	}
+	c, _, p, main := setupProject(t)
+	r, _ := commitInCheckout(t, c, p, "w1", main, "feature.go", "package demo\n")
+	sha, err := c.Effects.Extract(p, r, main)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var here []sandbox.Spec
+	c.Effects.sandbox = func() (sandbox.Sandbox, error) { return mapped{specs: &here}, nil }
+	c.Runs.sandbox = func() (sandbox.Sandbox, error) { return isolatedBox{}, nil }
+	var mu sync.Mutex
+	asked := 0
+	c.Runs.CheckExecutor = func() (sandbox.Sandbox, string) {
+		mu.Lock()
+		defer mu.Unlock()
+		asked++
+		return refuserBox{}, "iiks1"
+	}
+	old := checkLeaveEvery
+	checkLeaveEvery = 10 * time.Millisecond
+	defer func() { checkLeaveEvery = old }()
+	c.Effects.Slots.Resize(func() int { return 1 })
+	release := c.Effects.Slots.Acquire("other", "x", "test")
+	done := make(chan Check)
+	go func() { done <- c.Effects.RunCheck(p, sha, "test", "true") }()
+	waitFor(t, "the refused check to wait in the line here", func() bool { _, w := c.Effects.Slots.State(); return len(w) == 1 })
+	time.Sleep(10 * checkLeaveEvery) // a runner still says it has room; it stays
+	mu.Lock()
+	if asked != 1 {
+		t.Errorf("a refused check asked a runner %d times, want 1", asked)
+	}
+	mu.Unlock()
+	release()
+	ch := <-done
+	if !ch.OK || ch.CantRun != "" || ch.Where != "" || len(here) != 1 {
+		t.Fatalf("a refused check: %+v, %d here", ch, len(here))
+	}
+	if !strings.Contains(ch.Output, "iiks1 refused it before it started (iiks1 won't take it: full (3 of 3 turns running)), so it went back in the check line here") {
+		t.Errorf("its output doesn't say why it ran here: %q", ch.Output)
+	}
+	if refusedBefore(125, "x\ndispatch: running it here: boom\n") != "" || refusedBefore(1, "dispatch: not run: full\n") != "" {
+		t.Error("refusedBefore read a check that ran as refused")
+	}
+}
+
+// refuserBox is a module whose runner refused the check before it started.
+type refuserBox struct{ isolatedBox }
+
+func (refuserBox) Run(s sandbox.Spec, _ time.Duration) (int, error) {
+	os.WriteFile(s.Stdout+".err", []byte("dispatch: not run: iiks1 won't take it: full (3 of 3 turns running); a check never runs here, the core puts it back in its line\n"), 0o644)
+	return 125, nil
 }
 
 // liarBox is a module whose turn exits 0 without running the command.
