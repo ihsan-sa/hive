@@ -364,6 +364,11 @@
 - Why: TestStaleModuleCacheRunsAgain's fix (30fea85) merged at 07:45:04Z; two older branches' local checks of their own heads, which still had the old test, went red seconds later, re-quarantined it and filed the same fix brief twice more (261028-085542, 261028-090108), each with nothing left to change.
 - Tradeoff: one git call per local red of a lifted test; when git can't tell (a commit not fetched), the red counts as before.
 
+## 2026-10-28: a canary's rollback spends an hour, not the train's day (issue #1922)
+
+- Decision: only a canary's keep spends the train's day (`trainEvery`, counted from the last keep); a rollback spends `canaryRetry` (an hour), after which the next newer pre-release safe here gets its canary. A rollback the canary made before measuring (issue #1924) still lets the next one ride at once; a can't-run still spends nothing beyond its own hour's retry. Unit `TestTrainRollbackSpendsAnHourNotADay`.
+- Why: the first real canary (10-28 13:21Z) rolled back v0.1.147 on an environment fault, and `train` booked that rollback as the day's move, so a fixed pre-release would have waited until the next day though the Hive hadn't moved.
+- Tradeoff: after a run of rollbacks the canary can run hourly (one gate run each, outside `max_gates`); each needs a newer safe pre-release, since a rolled-back tag never runs again.
 ## 2026-10-28 The canary doesn't rerun what its releases' CI passed
 - Decision: the release train's canary runs the gate with `--ci-passed` (`gate.Config.CIPassed`, set only by `app.runCanary`), which skips vet, the short tests and the candidate's new-tests step on both sides: the candidate and the running release are both releases whose CI already passed them. Unit `TestCanarySkipsWhatCIPassed`
 - Why: issue #1923; the canary was spending part of its 2h rerunning what CI had just passed
@@ -392,11 +397,18 @@
 - Decision: `Runs.ramp` keeps the runs waiting on it and gives each step to the first in line: one Returned (sent back to its task) first, then the oldest by Created; a waiter not seen for `rampSeen` (10s) drops out.
 - Why: Tick steps every run in its own goroutine, so the step went to whichever asked first after it, under steady load usually a newer run; from 04Z on 10-29 seven sent-back workers took no turn in 4-7h while 28 newer runs took 46. (The pace-vs-ramp flip itself was the old order, Admit after the ramp, fixed in #1980.)
 - Tradeoff: when the run first in line has gone (started elsewhere, ended) the step waits up to 10s more; a lead and a turn going to a runner still skip the ramp.
+- Decision: `Journal.Since` seeks: the journal keeps a mark every MB (a line's offset and the highest seq before it) and reads from the last mark at or below the cursor; the kb record keeps the journal's last 48 hours as one JSONL file per UTC hour (`record/hours/`), and the orientation sends agents there and to `record/<area>/<id>.md` instead of grepping `events.jsonl`.
+- Why: issue #2039; io pressure some 60% / full 44% from file reads in user.slice (117 MB/s) on 10-29 with a 981 MB journal. `/api/events`, which hive-slack polls every second and dream, runner programs and the control center read, decoded the whole file on every call, and agents tailed or grepped it.
+- Tradeoff: the hour files repeat two days of the journal on disk (unsynced; a crash's lost lines come back on the next start's rewrite of the window); the release module's whole-journal replays every 10 minutes are still there.
 
 ## 2026-10-29 A worker's "lead" and "parent" stay on its project (#2040)
 - Decision: `Runs.Find` takes a run named the address over an id prefix, so "lead" is the Hive's lead; `Deliver` reads "lead" as the sender's own project's lead (`Runs.LeadOf`, "lead:<project>", the Hive's when it has none; a project's lead's "lead" is the Hive's). A worker's "parent" with no Parent is whoever filed its task while that run takes messages (the work module's router), else that project lead.
 - Why: every lead's id starts "lead-", so Find("lead") took the newest lead of any project; two hive workers (on #1907, #1941) reported to hifi-receiver-2's lead, which had to forward them.
 - Tradeoff: a run with no Parent and no task (a warden on its own) still fails on "parent" rather than guessing.
+## 2026-10-29 A conflict with main goes back when main moves, not at the merge (#1996)
+- Decision: each tick that meets a new main for a head in testing (before its test), reviewing (before a read starts) or merging (before the forge's say) runs `git merge-tree --write-tree` of the head and main in the project clone, with `attr.tree=main` as `UpdateBranch` takes it, once per head@main; a conflict (exit 1) goes through `catchUp`, so it goes back to its worker at the pace, or drops a checkpoint.
+- Why: conflicts were found only at the merge from the forge's `Mergeable`: 279 'conflict with main' bounces in the journal, a median 2.6 h from push to the find, many after a passing test and two land reads (261028-031118: pushed 17:52Z, tested 22:43Z, sent back 22:47Z).
+- Tradeoff: a clean merge still leaves the head as it is, so main moving restarts nothing; a conflict a union merge hides (doubled lines) is still only found when main is merged in; a running test or read on a head sent back finishes for nothing; a banked head with no main merged since its checkpoint can read as a conflict here that its `--merge-base` merge wouldn't have; it then gets the merge step's own catch-up, only earlier.
 ## 2026-10-29 Any agent steers any project's queue, saying why (#2037)
 - Decision: `queue` takes order, hold, release and now on a brief of any project the caller can see; on one not its own it needs `why`, which goes on the brief's record with the caller's id. A new order still resets only the caller's own project's places. The other steering ops stay on the caller's project.
 - Why: on 10-29 lead:hifi-receiver-2 twice had to ask the lead to move hive and pll briefs first ("I can't steer hive"); the person: all agents are the same and have the same say (10-28 12:27).
