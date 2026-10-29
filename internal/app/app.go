@@ -147,6 +147,7 @@ func New(ws core.Workspace, forge core.Forge) (*App, error) {
 	a.System.Register(system.Job{Name: "report.send", Fn: (&report.Module{C: c}).Send})
 	a.System.Register(system.Job{Name: "hive.clean", AtStart: true, Fn: func() (string, error) { return a.Clean(), nil }})
 	c.Effects.OnDiskFull = func() { a.System.RunNow("hive.clean") }
+	c.Effects.Granted = a.Mods.Granted
 	return a, nil
 }
 
