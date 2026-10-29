@@ -115,6 +115,7 @@ func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]str
 	// machine (machineHold), or past the pace (its worker's turns go there
 	// first, core.RunSpec.Away); the executor is asked at most once a pass.
 	strained, loaded := core.Strained(cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax), core.Loaded(cfg.LoadMax)
+	io := core.IOStrained(cfg.IOPressureMax, cfg.IOFullMax)
 	var roomOK *bool
 	elsewhere := func() bool {
 		if roomOK == nil {
@@ -151,7 +152,7 @@ func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]str
 		if cfg.MaxWorkers == 0 || limit < cfg.MaxWorkers {
 			full = "waiting for a worker (at the pace)"
 		}
-		hold := machineHold(strained, loaded, cmp.Or(cfg.MaxWorkers, defaultWorkers), elsewhereOnce)
+		hold := machineHold(strained, io, loaded, cmp.Or(cfg.MaxWorkers, defaultWorkers), elsewhereOnce)
 		for _, t := range line {
 			held := "" // asked only of a task nothing else holds back
 			switch {
@@ -285,11 +286,16 @@ func (m *Module) takeAway(id string) bool {
 // (loaded) holds a new worker only from start on, as the few workers there
 // aren't what loads it, and never sends one elsewhere, since launch would
 // run it here; one task a pass goes past a strained machine while an
-// executor module has room, since launch hands a strained turn to it.
-func machineHold(strained, loaded string, start int, elsewhere func() bool) func(working int) string {
+// executor module has room, since launch hands a strained turn to it. A
+// saturated disk (io, core.IOStrained) holds every new worker, and never
+// sends one elsewhere either: launch doesn't read it, so would run it here.
+func machineHold(strained, io, loaded string, start int, elsewhere func() bool) func(working int) string {
 	asked := false
 	return func(working int) string {
 		if strained == "" {
+			if io != "" {
+				return io
+			}
 			if loaded != "" && working >= start {
 				return loaded
 			}

@@ -31,6 +31,7 @@ func hiveWithForge(t *testing.T) (*app.App, core.Run, *core.Local) {
 	cfg := ws.LoadConfig()
 	cfg.Harness = "fake"
 	cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax, cfg.LoadMax = 0, 0, 0, 0
+	cfg.IOPressureMax, cfg.IOFullMax = 0, 0
 	cfg.Models = map[string]core.OpenModel{"qwen": {Endpoint: "http://127.0.0.1:11434/v1", Model: "qwen2.5-coder:14b"}}
 	if err := ws.SaveConfig(cfg); err != nil {
 		t.Fatal(err)
