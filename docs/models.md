@@ -293,11 +293,11 @@ model's usage limit it parks until the reset and never moves to another model
 (`TestATrialStaysOnItsModelAtALimit`); the checks stay on their own models.
 A plain brief is no trial, whatever it says: its worker runs on the project's
 worker route and moves along it at a limit (task 261028-141459, a step-back's
-"trial" brief, went to claude:opus at OpenRouter's limit). When it ends, `model.trial` records the outcome (merged,
-done, blocked, stopped), turns, review rounds, minutes and cost, and
-`hive agent models` lists it. A trial belongs on a test project, not real work.
-A lead files trials, and so do a worker and a step-back on their own project
-(`TestAStepBackFilesTrials`): a test project
+"trial" brief, went to claude:opus at OpenRouter's limit). When it ends,
+`model.trial` records the outcome (merged, done, blocked, stopped), turns,
+review rounds, minutes and cost, and `hive agent models` lists it. A trial
+belongs on a test project, not real work. Any agent files trials, a worker or
+step-back on its own project only (`TestAStepBackFilesTrials`): a test project
 (trials) has no lead of its own unless the person chats with one, so its trial
 rounds are briefs a worker carries out by filing one trial per model and task.
 A trial's own worker files none, and one already open on the same model with
