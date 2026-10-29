@@ -14,13 +14,21 @@ Soft layers are a big part of that loop (23:21): sub-Hives in this Hive's state,
 
 The person asked (19:36 local): "Given that our current progress have been very predictably roadblock after roadlack, how do we pivot/accelerate". The lead proposed three things, and the person agreed (19:39): "Excellent idea let's do it. We need to be willing to pivot fast and throw stuff away. In somewways the opportunity cost of staying on the same track is too high".
 
-1. **A daily release train.** H0 runs a stable release while changes collect on main. Once a day a candidate release runs real work in a child Hive, the canary (the tests, the benchmark, and a few real tasks merged through its own repos); H0 moves to it only if it holds. No release per fix. This replaces "follow every pre-release at once" (see Standing asks).
+1. **A daily release train.** On finding it built as one try a day, the person, 2026-10-28 (12:21 local): "HUH why does each day have ONE try??"; and 12:24: "the whole point of the hive is that it doesnt follow set rules and pipelines" (see No set rules below).
 2. **Big, focused batches, not many small tasks.** Each core area goes to one long batch session at a time, with a work-in-progress limit of a handful of open batches for the Hive itself. Queued work that doesn't fit is folded into a batch or withdrawn; built and reviewed work is kept; withdrawn PRs keep their branches.
 3. **Delete before fixing.** For each mechanism, ask "can we remove it?" before "how do we fix it?", down to the smallest loop that works: brief, worker, tests and CI, one review, merge, then the daily train. The recursive gate stays only for claimed gains.
 
 No bounds on how far a pivot goes (20:09 local): "we should be ready to dp radical changes and pivots where current stuff may be rendered completely obsiolter or the hive could change fully its architecture. Thats teh point of the hive. We cant set any bouds". Nothing in the design is fixed, not the merge line, the gate, the queue or the roles; the goals in this file are. And the person added: "the cost of not pivoting is way bigger".
 
 Any agent can propose a pivot (20:19 local): "Maybe it shouldnt be only in a stepp back loop but rather ANY agent can propose a pivot". An agent that sees the current approach costing more than another would files a short proposal: what to stop, what to do instead, the evidence, and what it throws away.
+
+## No set rules: the Hive is one (2026-10-28)
+
+The person (08:56 local): "stuff is far too rigid still like eerything needs to be dynamic and adapt", and "Thats the whole point of putting all the agents in one placelike the hive all able to talk to one another and then letting them do unstructured work".
+
+12:24: "the whole point of the hive is that it doesnt follow set rules and pipelines ... We cannot build a tight fast system if we have a ton of constraints and arbitrary rules at every turn, simply because those rules cannot be updated fast enough to match our intended dev rate".
+
+12:27: "This is not only you but the WHOLE HIVE. The hive is ONE. All agents are the same, just as important as one another, have the same amount of say, etc. They all work together as a HIVE. They enforce rules for one another and guide one another. Thats the whole point of giving up the rigid structure". And: "we gotta think laterally here".
 
 ## First milestone
 
@@ -91,7 +99,10 @@ So a change to a path on `tests/LANDING-security.toml` gets its security read fr
 What the person has asked that holds from now on, in their words where they gave them. A line may also hold answers given on the person's behalf, credited to whoever gave them:
 
 - **Always maximum autonomy.** "the intended behaviour is ALWAYS max autonomy. Me being here is not the norm, its the exception." (2026-10-24, 23:14). Autobox and perms answer for the person while they're away (23:11). If autobox, perms or the person get too involved in the Hive's workings, the Hive tells them they're interfering (23:22).
-- **Every agent equal.** "you're in charge of this, along with ALL the agents in the hive. You may be the lead, but all agents have the same importance and ability to do things" (23:16). Any agent that sees what the loop needs may act on it or file it.
+- **Real projects on this Hive.** "it could be valuable to have real projects on this hive to see how things work" (2026-10-28, 09:01 local).
+- **Projects improve themselves too.** "the point of the HWDE proj is to test how RSI works at the project level. THe module and its scripts shuold update as it builds, it shuold all work just like the rest of the hive." (2026-10-28, 09:53 local). And (11:45): "This module needs to selfimprove super fast and tight. Tight loop. Individual scripts need to be tested, etc, but it should be light and flexible. its not a pipeline remember".
+- **Tools a goal needs are installed, scoped to the Hive.** "the security path should allow installing kicad since it can be scoped to the hive/it is necessary for the goal" (2026-10-28, 09:03 local).
+- **Every agent equal.** "you're in charge of this, along with ALL the agents in the hive. You may be the lead, but all agents have the same importance and ability to do things" (23:16). Any agent that sees what the loop needs may act on it or file it. On 2026-10-28 (12:27): "The hive is ONE ... They enforce rules for one another and guide one another" (see No set rules above).
 - **A known fix wins; otherwise the score leans.** "When you know a fix is needed, it should win even if the score dips afterwards: the score is a data point, not the judge. But when it's unclear whether a change is a fix or a gain, lean on the score instead of assuming it's a fix." (23:20). Scoring is a data point in a model's judgement call (22:50; see docs/judge.md).
 - **Versions.** "call the first release that's stable enough for my own projects 1.0, and only go to 2.0 when an upgrade would break an existing setup." (23:20).
 - **Build against the essay** at ihsan.cc/writing/the-hive: its text is in [docs/the-hive-essay.md](../docs/the-hive-essay.md), and where the Hive departs from it today is listed, as known gaps, at the end of [docs/spec.md](../docs/spec.md).
@@ -99,7 +110,7 @@ What the person has asked that holds from now on, in their words where they gave
 - **Modules: standard in the repo, extras in their own.** As decided with the person (2026-10-24, 10:40-10:41 local): the standard modules (agents with the common harness adapters, chat, improve, kb, system) stay in ihsan-sa/hive under modules/, each a module of its own; extras (Slack, a call/phone module, extra harnesses) live in their own public repos and install from the marketplace.
 - **Other harnesses.** Codex, Cursor and other open harnesses, not only Claude.
 - **Free models first.** Free models through OpenRouter first; paid ones only inside the $10/month cap.
-- **Stay on the newest release that holds.** Was: H0 runs every pre-release as soon as it's published ("You always should be on the newest"; #237, #322). Since the pivot of 2026-10-27 (the person's yes, 19:39 local), H0 runs a stable release and moves once a day to a candidate that passed the canary (see the pivot above).
+- **Stay on the newest release.** "You always should be on th enewest" (2026-10-24, 02:50 local; #237, #322). On the daily release train since: see the pivot of 2026-10-27 and No set rules above.
 - **Tree search over candidate Hives.** "what if we have changes get built very fast in parallel and have them spawn recursively so like changes and then new hives spawn fix those new fixes, etc, and just keep going down trees until we find one that works and is stable, pick that one, and archive the rest" (2026-10-25, 13:22 local). Not built yet: #932 was closed to clear the merge line on 2026-10-27 with its branch kept, to refile.
 - **Pivot fast, no bounds; any agent may propose one.** See the pivot of 2026-10-27 above.
 - **Don't wait on the person when nothing is worse.** A fix no worse than main doesn't wait for a person, and releases from the root path go out without the person: "Release them yourself and say so after". These are autobox's answers for the person while they slept (2026-10-24 ~07:56Z), not the person's own words.

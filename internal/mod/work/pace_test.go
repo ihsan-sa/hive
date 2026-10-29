@@ -396,6 +396,30 @@ func TestCheckRankRedMainFix(t *testing.T) {
 	}
 }
 
+// A red main's pytest ids name their fix by the test or the file, not by the
+// directory before the first slash (hive-hwde main 5f5bd3af, issue #1989).
+func TestCheckRankRedMainPytestFix(t *testing.T) {
+	m, _, _ := helperRig(t)
+	m.mu.Lock()
+	m.tasks["fix"] = &Task{ID: "fix", Project: "p", SHA: "s1", Stage: StageTesting, Aim: AimFix, Title: "Main is green again", Known: "test_known_answers_fire_where_expected and test_parts_search_missing_httpx_names_cause fail on main 5f5bd3af"}
+	m.tasks["file"] = &Task{ID: "file", Project: "p", SHA: "s2", Stage: StageTesting, Aim: AimFix, Title: "test_route_auto.py hangs on main"}
+	m.tasks["word"] = &Task{ID: "word", Project: "p", SHA: "s3", Stage: StageTesting, Aim: AimFix, Title: "The tests under tests/ run faster"}
+	m.tasks["param"] = &Task{ID: "param", Project: "p", SHA: "s4", Stage: StageTesting, Aim: AimFix, Title: "test_fit fails for the lid"}
+	m.tasks["near"] = &Task{ID: "near", Project: "p", SHA: "s5", Stage: StageTesting, Aim: AimFix, Title: "test_parts fails"}
+	m.mainFails["p"] = []string{
+		"tests/test_parts.py::test_parts_search_missing_httpx_names_cause",
+		"tests/test_verify.py::TestKnown::test_known_answers_fire_where_expected",
+		"tests/test_route_auto.py::test_run_freerouting_silent_but_growing_ses_is_not_killed",
+		"tests/test_mech.py::test_fit[lid-0.2]",
+	}
+	m.mu.Unlock()
+	for sha, want := range map[string]int{"s1": rankRedFix, "s2": rankRedFix, "s3": rankFix, "s4": rankRedFix, "s5": rankFix} {
+		if got := m.checkRank("p", sha, "test"); got != want {
+			t.Errorf("rank of %s: %d, want %d", sha, got, want)
+		}
+	}
+}
+
 // Main's own measurement goes ahead of every task's check while it runs,
 // and keeps its place once done (issue #1078).
 func TestCheckRankMainFirst(t *testing.T) {

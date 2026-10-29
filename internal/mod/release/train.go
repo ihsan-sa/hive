@@ -21,12 +21,14 @@ import (
 // the Hive, so the engine isn't rebuilt under the work running on it.
 const Train = "train"
 
-// trainEvery is how often a canary runs: once a day, counted from the last
-// verdict that measured the candidate, so one update a day at most.
+// trainEvery is how often the Hive moves: once a day, counted from the last
+// canary that kept its candidate, so one update a day at most. A rollback
+// moved nothing, so it doesn't spend the day (issue #1922).
 var trainEvery = 24 * time.Hour
 
-// canaryRetry is how long a canary that couldn't run waits before it tries
-// again: it measured nothing, so it doesn't spend the day.
+// canaryRetry is how long the train waits after a canary that moved nothing:
+// one that couldn't run tries again, and after one that measured a rollback
+// the next newer safe pre-release gets its canary, an hour on.
 var canaryRetry = time.Hour
 
 // canaryTimeout bounds one canary run, as GateTimeout bounds a gate.
@@ -55,14 +57,16 @@ type canary struct {
 	// Measured says the verdict compared both sides on the work. A rollback
 	// that didn't (the candidate failed its own build or tests in the
 	// canary, though its checks passed here) failed on the canary's own
-	// environment, so it turns back that tag but doesn't spend the day.
+	// environment, so it turns back that tag but doesn't spend the hour a
+	// measured rollback does.
 	Measured bool      `json:"measured,omitempty"`
 	At       time.Time `json:"at"`
 }
 
-// spends says whether a verdict spends the train's day.
+// spends says whether a verdict spends the train's day: only a keep, which
+// moved the Hive.
 func (c canary) spends() bool {
-	return c.Outcome == core.GateKeep || c.Outcome == core.GateRollback && c.Measured
+	return c.Outcome == core.GateKeep
 }
 
 // canaries are this Hive's canary verdicts, oldest first.
@@ -93,11 +97,15 @@ func (m *Module) trainRecord() (cs []canary, again time.Time) {
 // on safe, in the background. why says what the train waits for.
 func (m *Module) train(repo, safe string) (tag string, why []string) {
 	cs, again := m.trainRecord()
-	var last time.Time // the last verdict that spent a day
+	var last time.Time   // the last verdict that spent a day
+	var rolled time.Time // the last measured rollback, which spent an hour
 	kept := map[string]bool{}
 	for _, c := range cs {
 		if c.spends() && c.At.After(again) {
 			last = c.At
+		}
+		if c.Outcome == core.GateRollback && c.Measured && c.At.After(again) {
+			rolled = c.At
 		}
 		if c.Outcome == core.GateKeep {
 			kept[c.Tag] = true
@@ -128,7 +136,7 @@ func (m *Module) train(repo, safe string) (tag string, why []string) {
 		case c.Outcome == core.GateRollback && !c.Measured:
 			return "", []string{safe + ": its canary failed it before measuring it (" + core.Clip(c.Reason, 200) + "), though its checks passed here: the canary's own environment, so it didn't spend the day; a newer pre-release rides the train as soon as it is safe here, and `hive agent train` runs this one again"}
 		case c.Outcome == core.GateRollback:
-			return "", []string{safe + ": its canary rolled it back (" + core.Clip(c.Reason, 200) + "); a newer pre-release rides the next train"}
+			return "", []string{safe + ": its canary rolled it back (" + core.Clip(c.Reason, 200) + "); a newer pre-release rides the train an hour after it"}
 		case c.Outcome == core.GateCantRun && time.Since(c.At) < canaryRetry:
 			return "", []string{safe + ": its canary couldn't run (" + core.Clip(c.Reason, 200) + "); it tries again after " + c.At.Add(canaryRetry).UTC().Format("15:04Z")}
 		}
@@ -136,6 +144,9 @@ func (m *Module) train(repo, safe string) (tag string, why []string) {
 	}
 	if next := last.Add(trainEvery); time.Now().Before(next) {
 		return "", []string{safe + ": safe here; the next train leaves after " + next.UTC().Format("2006-01-02 15:04Z")}
+	}
+	if next := rolled.Add(canaryRetry); time.Now().Before(next) {
+		return "", []string{safe + ": safe here; the last canary rolled back, so its canary runs after " + next.UTC().Format("2006-01-02 15:04Z")}
 	}
 	if err := m.startCanary(repo, safe); err != nil {
 		return "", []string{safe + ": its canary can't start: " + err.Error()}

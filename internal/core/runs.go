@@ -1193,16 +1193,38 @@ func (rs *Runs) Find(addr string) (Run, bool) {
 	if r, ok := rs.runs[addr]; ok {
 		return *r, true
 	}
+	// A name beats an id prefix: "lead" is the Hive's lead, not the newest
+	// run whose id starts "lead-project-".
 	var best *Run
+	named := false
 	for _, r := range rs.runs {
-		if (r.Name == addr || strings.HasPrefix(r.ID, addr) || strings.HasSuffix(r.ID, addr)) && (best == nil || r.Created.After(best.Created)) {
-			best = r
+		name := r.Name == addr
+		if !name && (named || !strings.HasPrefix(r.ID, addr) && !strings.HasSuffix(r.ID, addr)) {
+			continue
+		}
+		if best == nil || name && !named || r.Created.After(best.Created) {
+			best, named = r, name
 		}
 	}
 	if best == nil {
 		return Run{}, false
 	}
 	return *best, true
+}
+
+// LeadOf is the lead of a project ("lead:<project>"), or the Hive's lead
+// ("lead") for a run on no project or a project with no lead yet: the
+// newest of that name, so a lead started afresh for a chat is the one.
+func (rs *Runs) LeadOf(project string) (Run, bool) {
+	for _, name := range []string{"lead:" + project, "lead"} {
+		if project == "" && name != "lead" {
+			continue
+		}
+		if l := rs.List(func(r *Run) bool { return r.Role == "lead" && r.Name == name }); len(l) > 0 {
+			return l[0], true
+		}
+	}
+	return Run{}, false
 }
 
 // List returns runs, newest first, filtered by fn (nil = all).
@@ -1469,7 +1491,20 @@ func (rs *Runs) turnBudget(r Run) float64 {
 // without finishing while others waited on it (task 135947 on gpt-oss), so it
 // waits for its own model's reset instead.
 func (rs *Runs) next(r Run) (Pick, time.Time) {
-	picks, _ := rs.picks(r)
+	picks, unproven := rs.picks(r)
+	// A pick that can't run here at all (its harness's module is gone, a
+	// paid model the settings refuse) is passed while the route has another,
+	// even one no run has finished on yet, rather than the run parked or
+	// blocked on it.
+	cant := func(p Pick) bool { return rs.cantRun(p) != nil }
+	if left := slices.DeleteFunc(slices.Clone(picks), cant); len(left) < len(picks) {
+		if len(left) == 0 {
+			left = slices.DeleteFunc(slices.Clone(unproven), cant)
+		}
+		if len(left) > 0 {
+			picks = left
+		}
+	}
 	best, at := picks[0], time.Time{}
 	for _, p := range picks {
 		free := rs.freeAt(p.Harness, p.Model, Reserved(r.Role))
@@ -1481,6 +1516,18 @@ func (rs *Runs) next(r Run) (Pick, time.Time) {
 		}
 	}
 	return best, at
+}
+
+// cantRun says why pick p can't take a turn here whatever its usage: no
+// installed harness has its name, or it is a paid model the settings refuse.
+func (rs *Runs) cantRun(p Pick) error {
+	if _, err := harness.Get(p.Harness); err != nil {
+		return err
+	}
+	if p.Harness == "open" {
+		return rs.ws.LoadConfig().PaidRefused(p.Model)
+	}
+	return nil
 }
 
 // picks is r's picks in the order next tries them, and those of its route
@@ -1592,7 +1639,8 @@ func (rs *Runs) Send(id, text string) error {
 
 // wake gives a run that ended blocked with a message waiting (often the
 // answer it was blocked on) the turn for it, rather than leaving it on a run
-// that takes no turns. One blocked for its Codex token stays blocked.
+// that takes no turns. One blocked for its Codex token, or whose checkout
+// is gone, stays blocked.
 // It is safe to call at any time: it reads the run afresh, so a caller's
 // earlier, stale look (Send's live check, endTurn's read) can't wake the
 // wrong run; on anything but a blocked run with a message waiting it does
@@ -1601,7 +1649,7 @@ func (rs *Runs) wake(id string) {
 	rs.waking.Lock() // Send and endTurn can both see it; it's woken once
 	defer rs.waking.Unlock()
 	r, ok := rs.Get(id)
-	if !ok || r.Status != StatusBlocked || len(r.Pending) == 0 || strings.HasPrefix(r.Reason, codexTokenStuck) || strings.HasPrefix(r.Reason, StoppedQuiet) {
+	if !ok || r.Status != StatusBlocked || len(r.Pending) == 0 || strings.HasPrefix(r.Reason, codexTokenStuck) || strings.HasPrefix(r.Reason, StoppedQuiet) || checkoutGone(r) {
 		return
 	}
 	rs.append("run.reopened", runNote{ID: id})
@@ -1627,11 +1675,20 @@ func (rs *Runs) Reopen(id, text string) error {
 	if err := rs.tokenStuck(r); err != nil {
 		return err
 	}
+	if r.Terminal() && checkoutGone(r) {
+		// Its task ended and its checkout went with it (issue #2008): a
+		// turn would fail in the sandbox and park for another, forever.
+		return fmt.Errorf("run %s has ended and its checkout %s is gone; it can't take another turn", id, r.Checkout)
+	}
 	rs.append("run.reopened", runNote{ID: id})
 	rs.append("run.queued", runNote{ID: id, Text: text})
 	rs.append("run.status", runNote{ID: id, Status: StatusIdle, Reason: "reopened"})
 	return nil
 }
+
+// checkoutGone reports a run whose checkout was removed (spent checkouts
+// go when their task ends). A run with no checkout of its own has none to lose.
+func checkoutGone(r Run) bool { return r.Checkout != "" && !Exists(r.Checkout) }
 
 // tokenStuck checks again that a Codex run's token folder is gone; if it still
 // won't delete, the run is blocked for it (once) and the error says why.
@@ -2110,6 +2167,10 @@ func (rs *Runs) endTurn(r Run) {
 			te.Reason = "usage limit; moving to another login"
 			te.Queue = []string{"Your last turn hit a usage limit, so your next turn runs on another login. Continue where you left off."}
 		}
+	case tl.Result == nil && checkoutGone(r):
+		// The turn couldn't start without its checkout, and no retry brings
+		// it back (removed after its task ended): the run ends here.
+		te.Status, te.Reason = StatusBlocked, "its checkout "+r.Checkout+" is gone, so it can't take another turn"
 	case tl.Result == nil:
 		// Under WSL, sandbox-exec's own early failures go to .wsl.
 		out := rs.ws.TurnOut(r.ID, r.Turn)
@@ -2466,6 +2527,8 @@ func (rs *Runs) launch(r Run, cfg Config) {
 			why := "the settings route you there"
 			if slices.Contains(r.Stalled, from.String()) {
 				why = "your turns on " + from.String() + " kept ending without finishing; when the work is done (or can't be), end with `" + Cmd + " agent finish`"
+			} else if err := rs.cantRun(from); err != nil {
+				why = from.String() + " can't run here (" + Clip(err.Error(), 200) + ")"
 			} else if d, ok := rs.downFor(from); ok {
 				why = from.String() + " can't answer (" + Clip(d.Text, 200) + ")"
 			} else if rs.freeAt(from.Harness, from.Model, Reserved(r.Role)).After(time.Now()) {
