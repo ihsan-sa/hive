@@ -64,6 +64,10 @@ type Effects struct {
 	// that fails only these doesn't hold task's merge. Unset, none are.
 	Quarantined func(project, task string) []string
 
+	// Granted are the modules an isolated project's checks may see (the
+	// modules module's grants). Unset, they see none.
+	Granted func(project string) []string
+
 	// Slots holds checks to config's max_checks at a time, started in the order they asked.
 	Slots *Slots
 
@@ -661,15 +665,22 @@ func (e *Effects) checkOnce(p Project, sha, main, kind, command, back string) (C
 	c.Log = filepath.Join(e.ws.Hive(), "checks", p.Name, id+".log")
 	mounts := []sandbox.Mount{{Host: dir, Inside: "/work", RW: true}}
 	mods, build := goMods{done: func() {}}, goMods{done: func() {}}
+	var installed []sandbox.Mount
 	if away == nil { // the shared caches are this machine's: a runner fetches its own
 		mods = e.goModules(sb, dir)
 		build = e.goBuild(sb, p, sha, dir)
+		var drop func()
+		installed, drop = e.checkModules(sb, p, dir)
+		defer drop()
 	}
 	run := func(offline bool) (int, string, error) {
-		ms := append(append(slices.Clone(mounts), build.mounts...), mods.mounts...)
+		ms := append(append(append(slices.Clone(mounts), build.mounts...), mods.mounts...), installed...)
 		env := append(slices.Clone(build.env), mods.own...)
 		if offline {
 			env = append(slices.Clone(build.env), mods.env...)
+		}
+		if len(installed) > 0 {
+			env = append(env, "HIVE_MODULES="+sandbox.InsidePath(sb, installed[0]))
 		}
 		var disk sandbox.Disk
 		defer func() { c.DiskRead, c.DiskWrote = c.DiskRead+disk.Read, c.DiskWrote+disk.Wrote }()
@@ -1145,6 +1156,32 @@ func guardProgram(command string) string {
 		missing = "the program in " + s[2]
 	}
 	return s[1] + ` [ -n "$` + s[2] + `" ] || { echo "hive: missing program: ` + missing + `" >&2; exit 127; };` + command[len(s[1]):]
+}
+
+// checkModules is how a check on p sees the installed modules: read-only at
+// /hive/modules, as p's agents do, so a project's check runs a module's
+// program at the version merged into its main (a module follows its
+// project's main at every merge). An isolated project's check sees only the
+// modules granted it, each mounted over an empty folder beside the checkout
+// that holds their mount points; done removes that folder.
+func (e *Effects) checkModules(sb sandbox.Sandbox, p Project, dir string) ([]sandbox.Mount, func()) {
+	all := sandbox.Mount{Host: e.ws.Modules(), Inside: "/hive/modules"}
+	if !p.Isolated || !sb.Isolated() {
+		return []sandbox.Mount{all}, func() {}
+	}
+	var granted []string
+	if e.Granted != nil {
+		granted = e.Granted(p.Name)
+	}
+	empty := dir + ".modules"
+	e.markLive(empty, true)
+	os.MkdirAll(empty, 0o755)
+	out := []sandbox.Mount{{Host: empty, Inside: all.Inside}}
+	for _, m := range granted {
+		os.MkdirAll(filepath.Join(empty, m), 0o755)
+		out = append(out, sandbox.Mount{Host: filepath.Join(all.Host, m), Inside: all.Inside + "/" + m})
+	}
+	return out, func() { os.RemoveAll(empty); e.markLive(empty, false) }
 }
 
 // cleanCheckout clones the host clone fresh and checks out sha.
