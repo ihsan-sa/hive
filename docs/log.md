@@ -1,5 +1,7 @@
 # Decision log
 
+Closed to new entries since 2026-10-29 (issue #2100): a change's decision, why and tradeoff go in its PR description (the worker's account), which `git log` and the record keep, not here, so PRs don't conflict on this file. A pivot is filed with `hive agent pivot` and kept in the record. The entries below stand as written.
+
 ## 2026-10-22 Go, one static binary
 - Decision: Go 1.27, single binary for CLI, daemon, sandbox launcher and in-sandbox agent client | Why: no runtime to ship, one-line install, cross-compiles | Tradeoff: no first-party Claude Agent SDK in Go; drive `claude -p --output-format stream-json` instead.
 
