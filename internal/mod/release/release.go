@@ -1573,8 +1573,8 @@ type merge struct {
 	Root     []string
 	Diff     string // the head's own diff (core.DiffID), whose reads carry to it
 	// Hand marks a kept commit on main no effect.merged names: the person's
-	// merge on the forge (or a Hive merge whose record was lost), which
-	// stands for its own read.
+	// merge on the forge, a warden's approved step, or a Hive merge whose
+	// record was lost. Its merge stands for its own read.
 	Hand bool `json:"-"`
 }
 
