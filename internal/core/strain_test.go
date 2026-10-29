@@ -556,6 +556,49 @@ func TestAdmitHoldsAReturnedRun(t *testing.T) {
 	}
 }
 
+// A run Admit holds doesn't spend the ramp's step after a strain hold, so
+// the next run's turn starts, and it is journalled held once, not once per
+// hold it alternates between (618 run.held for one worker in 3h on 10-28).
+func TestAdmitHoldSpendsNoRampStep(t *testing.T) {
+	c, _ := testHive(t)
+	cfg := c.WS.LoadConfig()
+	t.Cleanup(func() { endTurns(t, c, cfg) })
+	for _, id := range []string{"w1", "w2"} {
+		if _, err := c.Runs.Start(RunSpec{ID: id, Role: "worker", Harness: "fake"}); err != nil {
+			t.Fatal(err)
+		}
+		c.Runs.SetStatus(id, StatusDone, "finished")
+		if err := c.Runs.Reopen(id, "main moved"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	c.Runs.Admit = func(r Run) string {
+		if r.ID == "w1" {
+			return "waiting for a worker (at the pace)"
+		}
+		return ""
+	}
+	c.Runs.Holding() // the machine was strained just now
+	for range 3 {
+		r, _ := c.Runs.Get("w1")
+		c.Runs.launch(r, cfg)
+	}
+	r, _ := c.Runs.Get("w2")
+	c.Runs.launch(r, cfg)
+	if r, _ = c.Runs.Get("w2"); r.Status != StatusRunning {
+		t.Errorf("w2 after w1 was held at the pace: %s %q, want its turn running on the ramp's step", r.Status, r.Reason)
+	}
+	held := 0
+	c.J.Replay(func(e Event) {
+		if e.Kind == "run.held" && strings.Contains(string(e.Data), `"w1"`) {
+			held++
+		}
+	})
+	if held != 1 {
+		t.Errorf("%d run.held for w1 held three times, want 1", held)
+	}
+}
+
 // Memory pressure from a unit outside the Hive's cgroup stalling at its own
 // MemoryHigh doesn't hold a turn; the same pressure with the Hive's own cgroup
 // stalled, or the unit under its cap, does.
