@@ -354,7 +354,9 @@ func (m *Module) carrier(project string, floor []string, need []core.Mention, se
 			continue
 		}
 		if r.State == "declined" && r.Outcome == "declined" && r.Ask != "" {
-			noes = append(noes, bound(floor, r))
+			if no := bound(floor, r); len(no) > 0 { // a no to nothing on the ceiling takes back no yes
+				noes = append(noes, no)
+			}
 			continue
 		}
 		if !personYes(r) {
@@ -391,6 +393,9 @@ func (m *Module) opRequest(r core.Run, args json.RawMessage) (any, error) {
 		}
 	}
 	route := core.Route(tier, cfg.Autonomy, ceiling)
+	if carry != nil && route == "self" { // a carried yes is always on the record
+		route = "warden"
+	}
 	if route == "self" {
 		return map[string]string{"tier": tier, "route": route, "note": "T1 is inside the Hive: weigh it yourself and get on with it."}, nil
 	}

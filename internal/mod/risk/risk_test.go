@@ -1460,6 +1460,13 @@ func TestApprovedCeilingRoutesAndIsTakenBack(t *testing.T) {
 		t.Fatalf("an approved ceiling went back to the person: %+v", again)
 	}
 
+	if _, err := g.call(g.worker, "warden", map[string]string{"want": "rerun pilot0.sh at $25 per arm", "why": "x", "tier": "T1"}); err != nil {
+		t.Fatal(err)
+	}
+	if r := g.m.List()[0]; r.Route != "warden" || r.Carries != first.ID || r.CarriesDigest != ShownDigest(first) {
+		t.Fatalf("a T1 ask carried a yes off the record: %+v", r)
+	}
+
 	other, err := g.c.Runs.Start(core.RunSpec{Role: "worker", Harness: "fake", Project: "other", Checkout: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
