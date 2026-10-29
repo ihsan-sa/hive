@@ -559,6 +559,49 @@ func TestAdmitHoldsAReturnedRun(t *testing.T) {
 	}
 }
 
+// A run Admit holds doesn't spend the ramp's step after a strain hold, so
+// the next run's turn starts, and it is journalled held once, not once per
+// hold it alternates between (618 run.held for one worker in 3h on 10-28).
+func TestAdmitHoldSpendsNoRampStep(t *testing.T) {
+	c, _ := testHive(t)
+	cfg := c.WS.LoadConfig()
+	t.Cleanup(func() { endTurns(t, c, cfg) })
+	for _, id := range []string{"w1", "w2"} {
+		if _, err := c.Runs.Start(RunSpec{ID: id, Role: "worker", Harness: "fake"}); err != nil {
+			t.Fatal(err)
+		}
+		c.Runs.SetStatus(id, StatusDone, "finished")
+		if err := c.Runs.Reopen(id, "main moved"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	c.Runs.Admit = func(r Run) string {
+		if r.ID == "w1" {
+			return "waiting for a worker (at the pace)"
+		}
+		return ""
+	}
+	c.Runs.Holding() // the machine was strained just now
+	for range 3 {
+		r, _ := c.Runs.Get("w1")
+		c.Runs.launch(r, cfg)
+	}
+	r, _ := c.Runs.Get("w2")
+	c.Runs.launch(r, cfg)
+	if r, _ = c.Runs.Get("w2"); r.Status != StatusRunning {
+		t.Errorf("w2 after w1 was held at the pace: %s %q, want its turn running on the ramp's step", r.Status, r.Reason)
+	}
+	held := 0
+	c.J.Replay(func(e Event) {
+		if e.Kind == "run.held" && strings.Contains(string(e.Data), `"w1"`) {
+			held++
+		}
+	})
+	if held != 1 {
+		t.Errorf("%d run.held for w1 held three times, want 1", held)
+	}
+}
+
 // Memory pressure from a unit outside the Hive's cgroup stalling at its own
 // MemoryHigh doesn't hold a turn; the same pressure with the Hive's own cgroup
 // stalled, or the unit under its cap, does.
@@ -599,5 +642,45 @@ func TestStrainedCappedElsewhere(t *testing.T) {
 		if (got != "") != c.held {
 			t.Errorf("%s: %q, want held %v", c.name, got, c.held)
 		}
+	}
+}
+
+// Each step of the ramp goes to the run first in line, not the one that asks
+// first after it: a worker sent back to its task, then the oldest. On 10-29
+// seven sent-back workers took no turn in 4-7h while newer runs took 46.
+func TestRampGoesInLine(t *testing.T) {
+	now := time.Now()
+	rs := &Runs{heldAt: now, rampLast: now} // a turn just started
+	old := Run{RunSpec: RunSpec{ID: "w-old"}, Created: now.Add(-3 * time.Hour)}
+	back := Run{RunSpec: RunSpec{ID: "w-back"}, Created: now.Add(-2 * time.Hour), Returned: true}
+	fresh := Run{RunSpec: RunSpec{ID: "w-new"}, Created: now.Add(-time.Minute)}
+	waiting := []Run{fresh, old, back} // the newest asks first, as Tick lists them
+	var started []string
+	for tick := time.Duration(0); tick < 4*rampStep && len(waiting) > 0; tick += time.Second {
+		var still []Run
+		for _, r := range waiting {
+			if rs.ramp(r, now.Add(tick)) {
+				still = append(still, r)
+			} else {
+				started = append(started, r.ID)
+			}
+		}
+		waiting = still
+	}
+	if got := strings.Join(started, " "); got != "w-back w-old w-new" {
+		t.Errorf("the ramp started %q, want the sent-back worker, then the oldest", got)
+	}
+	// One first in line that stops asking (started elsewhere, ended) holds
+	// the step only until rampSeen passes.
+	rs = &Runs{heldAt: now, rampLast: now}
+	if !rs.ramp(old, now) {
+		t.Fatal("w-old started inside the step")
+	}
+	rs.rampLast = now.Add(-rampStep) // the step is open
+	if !rs.ramp(fresh, now.Add(time.Second)) {
+		t.Fatal("w-new went ahead of w-old, which asked lately")
+	}
+	if rs.ramp(fresh, now.Add(rampSeen+2*time.Second)) {
+		t.Error("w-new still waits on w-old, which stopped asking")
 	}
 }

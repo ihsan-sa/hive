@@ -150,7 +150,7 @@ func TestQueueCapsOrdersAndGroups(t *testing.T) {
 
 // Every agent owns the loop: a worker holds a queued brief on its own project
 // as the lead would, on the record by its run id, and one on another project
-// can't.
+// only saying why.
 func TestWorkerHoldsQueuedBrief(t *testing.T) {
 	m := queueRig(t)
 	a := file(t, m, "tidy the readme", "")
@@ -163,11 +163,11 @@ func TestWorkerHoldsQueuedBrief(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if notes := fmt.Sprint(out.(map[string]any)["notes"]); !strings.Contains(notes, c.ID+" is on project p; you steer only your own") {
+	if notes := fmt.Sprint(out.(map[string]any)["notes"]); !strings.Contains(notes, c.ID+" is on project p; say why with why") {
 		t.Fatalf("the stranger wasn't refused by reach: %s", notes)
 	}
 	if got := stageOf(t, m, c); got.Held {
-		t.Fatalf("a worker on another project held the brief: %+v", got)
+		t.Fatalf("a worker on another project held the brief without why: %+v", got)
 	}
 	// A new order from the stranger touches only its own project's line: p's
 	// ordered brief keeps its place, with no note about a brief it never named.
@@ -180,6 +180,20 @@ func TestWorkerHoldsQueuedBrief(t *testing.T) {
 	}
 	if notes := fmt.Sprint(out.(map[string]any)["notes"]); strings.Contains(notes, c.ID) || stageOf(t, m, c).Order != 1 {
 		t.Fatalf("another project's order was reset or noted: %s, order %d", notes, stageOf(t, m, c).Order)
+	}
+	// Saying why, the stranger moves p's brief first, on its record (10-29:
+	// a lead twice asked the lead to move another project's briefs).
+	if _, err := m.C.Runs.Ops().Call(stranger, "queue", json.RawMessage(`{"order":"`+c.ID+`,`+a.ID+`","hold":"`+c.ID+`","why":"it unblocks q"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if got := stageOf(t, m, c); !got.Held || got.HeldBy != stranger.ID || !strings.Contains(got.Log[len(got.Log)-1].Text, "held by w-other: it unblocks q") {
+		t.Fatalf("the stranger's hold with why wasn't set on the record: %+v", got)
+	}
+	if _, err := m.C.Runs.Ops().Call(stranger, "queue", json.RawMessage(`{"release":"`+c.ID+`","why":"done with it"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if stageOf(t, m, c).Held {
+		t.Fatal("the stranger's release with why didn't take")
 	}
 	placed.Order = 0
 	m.save(&placed, "")
@@ -282,6 +296,47 @@ func TestQuietWorkerHoldsNoOne(t *testing.T) {
 	m.save(&other, "")
 	if start, wait := m.admit(m.List(nil)); start[other.ID] || !strings.Contains(wait[other.ID], "max_workers") {
 		t.Fatalf("a resumed worker's slot was given away: %q", wait[other.ID])
+	}
+}
+
+// A worker that can't take a turn now holds no slot: one parked until a
+// usage reset hours off, or finished with its task awaiting take-out. On
+// 10-28 such ones held the pace of 4-6 with one turn running while 14 briefs
+// waited 2.5-4h. One parked for a short retry keeps its slot, and a worker
+// sent back is let through past them and then counts.
+func TestWorkersThatCantTakeATurnHoldNoSlot(t *testing.T) {
+	m := queueRig(t) // max_workers 2
+	for _, id := range []string{"wreset", "wdone", "wretry", "wback"} {
+		if _, err := m.C.Runs.Start(core.RunSpec{ID: id, Role: "worker", Project: "p", Harness: "fake", Checkout: t.TempDir()}); err != nil {
+			t.Fatal(err)
+		}
+		task := file(t, m, "worked on by "+id, "")
+		task.Stage, task.Worker = StageWorking, id
+		m.save(&task, "")
+	}
+	park := func(id string, d time.Duration) {
+		m.C.J.MustAppend("run.status", map[string]any{"id": id, "status": core.StatusParked, "reason": "usage limit reached", "until": time.Now().Add(d)})
+	}
+	park("wreset", 5*time.Hour)
+	m.C.Runs.SetStatus("wdone", core.StatusDone, "finished")
+	m.C.Runs.SetStatus("wretry", core.StatusDone, "finished")
+	m.C.Runs.SetStatus("wback", core.StatusDone, "finished")
+	if err := m.C.Runs.Reopen("wback", "A reviewer's findings."); err != nil {
+		t.Fatal(err)
+	}
+	back, _ := m.C.Runs.Get("wback")
+	if why := m.C.Runs.Admit(back); why != "" {
+		t.Fatalf("the worker sent back, past a parked and two finished ones: %q, want it let through", why)
+	}
+	fix := file(t, m, "the brief waiting", "")
+	fix.Stage = StageQueued
+	m.save(&fix, "")
+	if start, wait := m.admit(m.List(nil)); !start[fix.ID] {
+		t.Fatalf("a parked and two finished workers hold the slot: %q", wait[fix.ID])
+	}
+	park("wretry", time.Minute)
+	if start, wait := m.admit(m.List(nil)); start[fix.ID] || !strings.Contains(wait[fix.ID], "waiting for a worker") {
+		t.Fatalf("a worker parked for a minute's retry gave its slot away: %q", wait[fix.ID])
 	}
 }
 
@@ -463,6 +518,60 @@ func TestConflictWaitsHereNotOnARunner(t *testing.T) {
 	m.save(&back, "")
 	if start, wait := m.admit(m.List(nil)); start[back.ID] || !strings.Contains(wait[back.ID], "waiting for a worker") || m.away[back.ID] {
 		t.Fatalf("a conflict went past the pace: start %v, wait %q", start, wait[back.ID])
+	}
+}
+
+// A worker held back from a conflict that takes a turn anyway (a message
+// reopened it) and finishes has its commits taken out at once: it never waits
+// at the pace to be sent the same conflict again. One that hasn't turned since
+// waits, and says its PR was taken out and what waits is the merge with main
+// (on 10-29 #41's "waiting for a worker (at the pace)" read as nothing pushed).
+func TestFinishedAfterConflictIsTakenOutAtOnce(t *testing.T) {
+	m := queueRig(t)
+	cfg := m.C.WS.LoadConfig()
+	cfg.MaxWorkers = 1
+	m.C.WS.SaveConfig(cfg)
+	for _, id := range []string{"wb", "wf", "ww"} {
+		if _, err := m.C.Runs.Start(core.RunSpec{ID: id, Role: "worker", Project: "p", Harness: "fake", Checkout: t.TempDir()}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	busy := file(t, m, "the working one", "")
+	busy.Stage, busy.Worker = StageWorking, "wb"
+	m.save(&busy, "")
+	conflict := time.Now().Add(-time.Hour)
+	var finished, waiting Task
+	for _, w := range []string{"wf", "ww"} {
+		task := file(t, m, "sent back "+w, "")
+		task.Stage, task.Worker, task.Resend, task.ResendAt = StageWorking, w, "Main moved and your branch conflicts with it.", conflict
+		task.PR, task.SHA = core.PR{Number: 41, URL: "https://example/pull/41"}, "2fd3f2988b7f4862a9b6fe5234d009476f2651a5"
+		m.save(&task, "")
+		m.C.J.MustAppend("run.turn_started", map[string]any{"id": w, "turn": 2}) // reopened by a message
+		m.C.Runs.SetStatus(w, core.StatusDone, "finished")
+		if w == "wf" {
+			finished = task
+		} else {
+			waiting = task
+		}
+	}
+	// ww's conflict came after its turn; wf's turn came after its conflict.
+	waiting.ResendAt = time.Now().Add(time.Minute)
+	m.save(&waiting, "")
+	tick(m)
+	got := stageOf(t, m, finished)
+	if got.Resending() || got.Stage == StageWorking || queued(m, "wf") != "" {
+		t.Fatalf("a worker that finished after its conflict waited or was sent it again: stage %q, reason %q, queued %q", got.Stage, got.Reason, queued(m, "wf"))
+	}
+	got = stageOf(t, m, waiting)
+	if !got.Resending() || queued(m, "ww") != "" {
+		t.Fatalf("a worker yet to merge main went past the pace: stage %q, resend %q", got.Stage, got.Resend)
+	}
+	if !strings.Contains(got.Reason, "PR #41 (2fd3f29") || !strings.Contains(got.Reason, "waiting for a worker") {
+		t.Fatalf("reason %q, want it to say the PR was taken out and waits at the pace to merge main", got.Reason)
+	}
+	q := strings.Join(m.Queue(core.Run{RunSpec: core.RunSpec{ID: "lead", Role: "lead"}}), "\n")
+	if strings.Count(q, "goes back to merge main") != 1 {
+		t.Fatalf("queue: %q, want it said once", q)
 	}
 }
 

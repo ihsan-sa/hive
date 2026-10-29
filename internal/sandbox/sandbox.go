@@ -205,7 +205,9 @@ func homeDir() string {
 // Its error names every dir it searched.
 func LookTool(name string, extra ...string) (string, error) {
 	if p, err := exec.LookPath(name); err == nil {
-		return p, nil
+		if abs, err := filepath.Abs(p); err == nil {
+			return abs, nil
+		}
 	}
 	dirs := UserBinDirs(homeDir())
 	if exe, err := os.Executable(); err == nil {
@@ -337,3 +339,34 @@ const insideBins = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 // ProxyPort is where the egress forwarder listens inside the sandbox.
 const ProxyPort = "3128"
+
+// lookTool finds tool t on this machine: an absolute path as it is, a bare
+// name by LookTool.
+func lookTool(t string) (string, error) {
+	if filepath.IsAbs(t) {
+		return t, nil
+	}
+	return LookTool(t)
+}
+
+// AbsTools names each of tools by the absolute path this machine finds it
+// at, for a spec handed to another program (an executor module): that
+// program runs with its own PATH and HOME, so a bare name the daemon finds
+// (claude in /hive/bin, say) may be missing there. The base name stays the
+// tool's own (links aren't followed), as the name inside and a runner's
+// mapping go by it. One in the system's bin dirs stays bare: it is on any
+// PATH, and found by name it runs where it is inside, beside its package.
+// One not found stays as it was, for the sandbox to report.
+func AbsTools(tools []string) []string {
+	out := make([]string, len(tools))
+	for i, t := range tools {
+		out[i] = t
+		if filepath.IsAbs(t) {
+			continue
+		}
+		if p, err := lookTool(t); err == nil && !strings.Contains(":"+insideBins+":", ":"+filepath.Dir(p)+":") {
+			out[i] = p
+		}
+	}
+	return out
+}
