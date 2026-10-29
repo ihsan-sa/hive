@@ -137,10 +137,19 @@ func (m *Module) applyQuarantine(e core.Event) {
 // tests; m.mu is held.
 func (m *Module) sightLocal(e core.Event) {
 	var c core.Check
-	if e.Decode(&c) != nil || c.OK || c.CantRun != "" {
+	if e.Decode(&c) != nil || c.CantRun != "" {
 		return
 	}
 	if c.Kind != "test" && c.Kind != "retest" && c.Kind != "before" {
+		return
+	}
+	if c.OK {
+		// A green on main is what makes a red there a flake (flake): the
+		// same commit, or main between two reds, passing the test.
+		if _, main := m.merged[c.SHA]; (main || c.Kind == "before") && time.Since(c.At) <= quarantineWindow {
+			gs := slices.DeleteFunc(m.greens[c.Project], func(g Sighting) bool { return time.Since(g.At) > quarantineWindow })
+			m.greens[c.Project] = append(gs, Sighting{At: c.At, SHA: c.SHA, Check: "local " + c.Kind, Main: true})
+		}
 		return
 	}
 	keys := c.Keys
@@ -249,10 +258,10 @@ func (m *Module) flake(k, task string) (Flake, bool) {
 		return Flake{}, false
 	}
 	m.sighted[k] = ev
-	ev = slices.DeleteFunc(slices.Clone(ev), func(s Sighting) bool { return !m.outside(s, task) })
+	ev = slices.DeleteFunc(slices.Clone(ev), func(s Sighting) bool { return !m.outside(s, task) || m.mainRed(project, k, s) })
 	var why []string
 	if i := slices.IndexFunc(ev, func(s Sighting) bool { return s.Main }); i >= 0 {
-		why = append(why, "failed on main at "+core.Short(ev[i].SHA))
+		why = append(why, "failed on main at "+core.Short(ev[i].SHA)+" and passed there too")
 	}
 	// Unrelated branches: two tasks, neither following up or reverting the
 	// other, red on different heads, neither of which the other task had.
@@ -275,6 +284,40 @@ func (m *Module) flake(k, task string) (Flake, bool) {
 		return Flake{}, false
 	}
 	return Flake{Project: project, Test: test, Why: strings.Join(why, "; ") + " in the last " + quarantineWindow.String(), Evidence: ev, Task: m.fixes[k]}, true
+}
+
+// mainRed reports whether red s of test k is main being red on it, not a
+// flake: a red on main that main never passed (not at the same commit, a
+// re-run's pass, nor between two of its reds on main), so every main reading
+// since it is red too, or a branch's red while main was so. One commit broke
+// the test, and its fix is a revert or a fix of main, not one flake brief per
+// test it took down (failures.go's redBefore files that); m.mu is held.
+func (m *Module) mainRed(project, k string, s Sighting) bool {
+	var reds []Sighting
+	passed := slices.Clone(m.greens[project])
+	for _, o := range m.sighted[k] {
+		switch {
+		case o.Main && o.Rerun:
+			passed = append(passed, o)
+		case o.Main:
+			reds = append(reds, o)
+		}
+	}
+	// flaky says red r on main has a pass to show it isn't main's own.
+	flaky := func(r Sighting) bool {
+		return slices.ContainsFunc(passed, func(g Sighting) bool {
+			return g.SHA == r.SHA || slices.ContainsFunc(reds, func(o Sighting) bool {
+				return o.SHA != g.SHA && (r.At.Before(g.At) && g.At.Before(o.At) || o.At.Before(g.At) && g.At.Before(r.At))
+			})
+		})
+	}
+	if s.Main {
+		return !s.Rerun && !flaky(s)
+	}
+	// A branch red while main was red on the test, not passing it since.
+	return slices.ContainsFunc(reds, func(r Sighting) bool {
+		return !flaky(r) && !s.At.Before(r.At) && !slices.ContainsFunc(passed, func(g Sighting) bool { return g.At.After(r.At) && g.At.Before(s.At) })
+	})
 }
 
 // Quarantine is project's quarantined tests ("" for every project's), by

@@ -29,6 +29,12 @@ func TestQuarantine(t *testing.T) {
 	sight(m, "t2", "https://ci/3", "TestModuleLifecycle")
 	m.C.J.MustAppend("forge.tests_failed", map[string]any{"project": "hive", "main": true, "sha": "main1", "check": "test (macos-latest)", "url": "https://ci/4", "tests": []string{"TestReportSharing"}})
 	m.C.J.MustAppend("forge.flaked", map[string]any{"project": "hive", "task": "t3", "sha": "head3", "checks": []string{"test"}, "tests": []string{"TestStalls"}})
+	// A red on main alone may be main's own: it counts once main passes it.
+	if q := m.QuarantinedTests("hive", ""); !slices.Equal(q, []string{"TestModuleLifecycle"}) {
+		t.Fatalf("a red on main never passed there quarantined: %v", q)
+	}
+	m.C.J.MustAppend("effect.merged", map[string]string{"project": "hive", "merge_sha": "main1"})
+	m.C.J.MustAppend("effect.checked", core.Check{Project: "hive", SHA: "main1", Kind: "retest", OK: true, At: time.Now().UTC()})
 	q := m.Quarantine("hive")
 	var names []string
 	for _, f := range q {
@@ -194,8 +200,12 @@ func TestQuarantineFromLocalChecks(t *testing.T) {
 	m.C.J.MustAppend("effect.merged", map[string]string{"project": "hive", "merge_sha": "main1"})
 	other := "github.com/x/hive/internal/core::TestOther"
 	checked("main1", "test", other)
+	if slices.Contains(m.QuarantinedTests("hive", "t1"), other) {
+		t.Fatal("a local red on main quarantined before main passed it")
+	}
+	m.C.J.MustAppend("effect.checked", core.Check{Project: "hive", SHA: "main1", Kind: "retest", OK: true, At: time.Now().UTC()})
 	if !slices.Contains(m.QuarantinedTests("hive", "t1"), other) {
-		t.Fatal("a local red on main not quarantined")
+		t.Fatal("a local red on main that passed when run again not quarantined")
 	}
 	m.fileQuarantined()
 	fix := m.Work.List(func(t work.Task) bool { return t.Title == flakyTitle+key })
@@ -315,5 +325,49 @@ func TestQuarantineSkipsWholeTreeTests(t *testing.T) {
 	m.fileQuarantined()
 	if got, _ := m.Work.Get(stale.ID); !got.Withdrawn() {
 		t.Fatalf("the brief for a whole-tree test is %s, want withdrawn", got.Stage)
+	}
+}
+
+// Tests one commit broke fail on every main reading since, and on branches
+// cut from it: that is main red, not a flake. None of them is quarantined
+// or filed as a flake, and main passing them once fixed doesn't make the
+// reds before flakes. A red on main after a pass there does.
+func TestMainRedIsNoFlake(t *testing.T) {
+	m := rig(t)
+	keys := []string{"tests/test_bench.py::test_a[x]", "tests/test_bench.py::test_a[y]", "tests/test_gate.py::test_b"}
+	checked := func(sha, kind string, ok bool) {
+		time.Sleep(time.Millisecond)
+		c := core.Check{Project: "hive", SHA: sha, Kind: kind, OK: ok, At: time.Now().UTC()}
+		if !ok {
+			c.Output, c.Keys = "FAILED", keys
+		}
+		m.C.J.MustAppend("effect.checked", c)
+	}
+	for _, sha := range []string{"main1", "main2", "main3", "main4"} {
+		m.C.J.MustAppend("effect.merged", map[string]string{"project": "hive", "merge_sha": sha})
+	}
+	for _, id := range []string{"t1", "t2"} {
+		m.C.J.MustAppend("task.saved", work.Task{ID: id, Project: "hive", Title: "work " + id, SHA: "head" + id})
+	}
+	checked("main1", "test", false)
+	checked("main1", "retest", false)
+	checked("headt1", "test", false)
+	checked("main2", "test", false)
+	checked("headt2", "test", false)
+	m.C.J.MustAppend("forge.tests_failed", map[string]any{"project": "hive", "main": true, "sha": "main2", "check": "test", "url": "https://ci/1", "tests": keys})
+	if q := m.QuarantinedTests("hive", ""); len(q) != 0 {
+		t.Fatalf("a red main quarantined %v", q)
+	}
+	checked("main3", "test", true) // fixed
+	m.fileQuarantined()
+	if q := m.QuarantinedTests("hive", ""); len(q) != 0 {
+		t.Fatalf("a red main fixed later quarantined %v", q)
+	}
+	if fixes := m.Work.List(func(t work.Task) bool { return strings.HasPrefix(t.Title, flakyTitle) }); len(fixes) != 0 {
+		t.Fatalf("a red main filed %d flake briefs", len(fixes))
+	}
+	checked("main4", "test", false)
+	if q := m.QuarantinedTests("hive", ""); !slices.Equal(q, keys) {
+		t.Fatalf("red on main, then green, then red again: quarantined %v", q)
 	}
 }
