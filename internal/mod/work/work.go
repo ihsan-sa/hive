@@ -344,6 +344,9 @@ type Module struct {
 	// already raised, so each is raised once whatever the tasks say now. It
 	// grows by one key per red main commit and isn't pruned; that's small.
 	mainRed map[string]bool
+	// mergeLooked holds, per task, the head@main its merge with main was
+	// last looked at for (mainMoved), so each main is looked at once.
+	mergeLooked map[string]string
 	// sighted holds the URLs of the failed forge checks already journaled
 	// as sightings of their failing tests (sightings).
 	sighted map[string]bool
@@ -408,7 +411,7 @@ type Module struct {
 
 // New loads tasks and registers the brief op.
 func New(c *core.Core, a *agents.Agents, ch *chat.Module) *Module {
-	m := &Module{C: c, Agents: a, Chat: ch, tasks: map[string]*Task{}, busy: map[string]bool{}, aims: map[string]aimAsk{}, steered: map[string]time.Time{}, mainRed: map[string]bool{}, sighted: map[string]bool{}, cantRunOpen: map[string]string{}, measuring: map[string]int{}, mainFails: map[string][]string{}, later: map[string]time.Time{}, prPolled: map[string]time.Time{}, holds: map[string]*MergeHold{}, holdPolled: map[string]time.Time{}, refusedAsked: map[string]time.Time{}}
+	m := &Module{C: c, Agents: a, Chat: ch, tasks: map[string]*Task{}, busy: map[string]bool{}, aims: map[string]aimAsk{}, steered: map[string]time.Time{}, mainRed: map[string]bool{}, mergeLooked: map[string]string{}, sighted: map[string]bool{}, cantRunOpen: map[string]string{}, measuring: map[string]int{}, mainFails: map[string][]string{}, later: map[string]time.Time{}, prPolled: map[string]time.Time{}, holds: map[string]*MergeHold{}, holdPolled: map[string]time.Time{}, refusedAsked: map[string]time.Time{}}
 	m.checks.loadCuts, m.gates.loadCuts = true, true // their builds and child Hives make the load
 	m.backIn = map[string]bool{}
 	c.Runs.Admit = m.paceBack
@@ -1994,6 +1997,9 @@ func (m *Module) test(t *Task, p core.Project) error {
 	if done, err := m.alreadyLanded(t, p, main, t.SHA); done || err != nil {
 		return err
 	}
+	if back, err := m.mainMoved(t, p, main); back || err != nil {
+		return err
+	}
 	cfg := m.C.Effects.Config(p, main)
 	if len(cfg.ForgeTests) > 0 {
 		// The forge's CI tests every PR on its exact head: that run is the
@@ -2416,6 +2422,9 @@ func (m *Module) review(t *Task, p core.Project) error {
 		if done, err := m.alreadyLanded(t, p, main, t.SHA); done || err != nil { // main took the change meanwhile: nothing to read
 			return err
 		}
+		if back, err := m.mainMoved(t, p, main); back || err != nil { // no read for a head that must take main first
+			return err
+		}
 		ch, err := m.C.Effects.Classify(p, main, t.SHA)
 		if err != nil {
 			return err
@@ -2677,6 +2686,9 @@ func (m *Module) merge(t *Task, p core.Project) error {
 		return err
 	}
 	if wait, err := m.sameHead(t, p, pr.HeadSHA); wait || err != nil {
+		return err
+	}
+	if back, err := m.mainMoved(t, p, main); back || err != nil { // before the forge has worked it out
 		return err
 	}
 	if wait, err := m.upToDate(t, p, main, pr); wait || err != nil {
