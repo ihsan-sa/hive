@@ -517,7 +517,32 @@ type Runs struct {
 	// when the ramp after it last let one start, and rampedAt when it last
 	// held one back (ramp).
 	heldAt, rampLast, rampedAt time.Time
+	rampWait                   map[string]rampWaiter // the runs waiting on the ramp
 }
+
+// rampWaiter is a run waiting on the ramp: whether it was sent back to its
+// work (Returned), when it was created, and when it last asked.
+type rampWaiter struct {
+	returned      bool
+	created, seen time.Time
+}
+
+// before says whether w goes ahead of o on the ramp: one sent back first,
+// then the oldest.
+func (w rampWaiter) before(o rampWaiter, id, oid string) bool {
+	if w.returned != o.returned {
+		return w.returned
+	}
+	if !w.created.Equal(o.created) {
+		return w.created.Before(o.created)
+	}
+	return id < oid
+}
+
+// rampSeen is how lately a run must have asked the ramp to be waiting on it:
+// a tick steps every run about once a second, so one not seen for this long
+// has started elsewhere, been held before it, or ended.
+var rampSeen = 10 * time.Second
 
 // rampStep is the least time between two turns starting after a strain hold
 // (ramp), so the readings see each before the next: on 10-28, the hold
@@ -533,18 +558,37 @@ func (rs *Runs) Holding() {
 	rs.mu.Unlock()
 }
 
-// ramp says whether a turn starting now waits for the ramp: after a strain
+// ramp says whether r's turn starting now waits for the ramp: after a strain
 // hold, turns start one a rampStep until none has waited on the ramp for two.
-func (rs *Runs) ramp(now time.Time) bool {
+// Each step goes to the waiting run first in line (rampWaiter.before): every
+// run is stepped in its own goroutine, so the step went to whichever asked
+// first after it, and from 04Z on 10-29 seven workers sent back to their tasks
+// took no turn in 4-7h while 28 newer runs took 46.
+func (rs *Runs) ramp(r Run, now time.Time) bool {
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
 	if now.Sub(rs.heldAt) > 2*rampStep && now.Sub(rs.rampedAt) > 2*rampStep {
+		clear(rs.rampWait)
 		return false
 	}
-	if now.Sub(rs.rampLast) < rampStep {
+	if rs.rampWait == nil {
+		rs.rampWait = map[string]rampWaiter{}
+	}
+	me := rampWaiter{returned: r.Returned, created: r.Created, seen: now}
+	rs.rampWait[r.ID] = me
+	ahead := false
+	for id, w := range rs.rampWait {
+		if now.Sub(w.seen) > rampSeen {
+			delete(rs.rampWait, id)
+		} else if id != r.ID && w.before(me, id, r.ID) {
+			ahead = true
+		}
+	}
+	if ahead || now.Sub(rs.rampLast) < rampStep {
 		rs.rampedAt = now
 		return true
 	}
+	delete(rs.rampWait, r.ID)
 	rs.rampLast = now
 	return false
 }
@@ -2396,7 +2440,7 @@ func (rs *Runs) launch(r Run, cfg Config) {
 			return
 		}
 	}
-	if !r.Lead() && elsewhere == nil && rs.ramp(time.Now()) {
+	if !r.Lead() && elsewhere == nil && rs.ramp(r, time.Now()) {
 		rs.holdTurn(r, "waiting: starting one turn at a time after the machine was strained")
 		return
 	}
