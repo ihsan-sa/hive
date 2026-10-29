@@ -1,4 +1,7 @@
-package agentcli
+// Package heavycli is `hive agent heavy -- cmd`, the agent's end of the
+// work module's lease on heavy work (internal/mod/work/heavy.go). It is
+// outside the core: it reaches the daemon through agentcli.Call alone.
+package heavycli
 
 import (
 	"crypto/rand"
@@ -13,24 +16,31 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/ihsan-sa/hive-standalone-build/internal/agentcli"
 )
+
+// Call is how a request reaches the daemon; a test answers it itself.
+var Call = agentcli.Call
 
 // heavyPatience is how long `hive agent heavy` waits for a lease before it
 // runs the command anyway, saying so: the pace is a default, not a gate, and
-// a turn's shell command has a timeout of its own. --patience sets another.
-const heavyPatience = 10 * time.Minute
+// a turn's shell command has a timeout of its own (Claude Code's is at most
+// 10 minutes), which the wait must leave the command most of. --patience
+// sets another.
+const heavyPatience = 3 * time.Minute
 
 // heavyPoll is how often a waiting command asks again, and heavyRenew how
 // often a running one renews its lease (the work module drops one not
 // renewed for three minutes).
 var heavyPoll, heavyRenew = 20 * time.Second, time.Minute
 
-// Heavy is `hive agent heavy [--what "..."] [--patience 5m] -- cmd args`:
+// Main is `hive agent heavy [--what "..."] [--patience 5m] -- cmd args`:
 // it waits for the work module's lease on heavy work (internal/mod/work/
 // heavy.go), runs cmd, and gives the lease back when cmd ends, returning
 // cmd's exit code. Outside a Hive run (no HIVE_BOX), as when the person runs
 // a module's wrapper, it runs cmd at once.
-func Heavy(argv []string) int {
+func Main(argv []string) int {
 	i := slices.Index(argv, "--")
 	if i < 0 || i == len(argv)-1 {
 		fmt.Fprintln(os.Stderr, `hive agent heavy: name the command after --: hive agent heavy --what "the test suite" -- cmd args`)
@@ -42,7 +52,7 @@ func Heavy(argv []string) int {
 		return 2
 	}
 	cmdv := argv[i+1:]
-	what, _ := args["what"].(string)
+	what := args["what"]
 	if what == "" {
 		what = strings.Join(cmdv, " ")
 		if len(what) > 80 {
@@ -50,7 +60,7 @@ func Heavy(argv []string) int {
 		}
 	}
 	patience := heavyPatience
-	if p, _ := args["patience"].(string); p != "" {
+	if p := args["patience"]; p != "" {
 		if patience, err = time.ParseDuration(p); err != nil {
 			fmt.Fprintln(os.Stderr, "hive agent heavy: --patience:", err)
 			return 2
@@ -90,6 +100,7 @@ func Heavy(argv []string) int {
 		}
 	}()
 	err = cmd.Wait()
+	signal.Stop(sig)
 	close(ended)
 	if leased {
 		Call("heavy", map[string]any{"id": id, "done": true}, 30*time.Second)
@@ -141,4 +152,23 @@ func waitLease(id, what string, patience time.Duration) bool {
 		}
 		time.Sleep(min(heavyPoll, patience-time.Since(start)))
 	}
+}
+
+// parseArgs reads --what and --patience, as --key value or --key=value.
+func parseArgs(a []string) (map[string]string, error) {
+	out := map[string]string{}
+	for i := 0; i < len(a); i++ {
+		k, v, eq := strings.Cut(strings.TrimPrefix(a[i], "--"), "=")
+		if !strings.HasPrefix(a[i], "--") || k != "what" && k != "patience" {
+			return nil, fmt.Errorf("unknown argument %q: give --what and --patience, then -- and the command", a[i])
+		}
+		if !eq {
+			if i+1 >= len(a) {
+				return nil, fmt.Errorf("--%s needs a value", k)
+			}
+			v, i = a[i+1], i+1
+		}
+		out[k] = v
+	}
+	return out, nil
 }

@@ -1,11 +1,10 @@
-package agentcli
+package heavycli
 
 import (
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"runtime"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -57,7 +56,7 @@ func TestHeavyWaitsRunsAndGivesTheLeaseBack(t *testing.T) {
 		}
 	}()
 	mark := filepath.Join(t.TempDir(), "ran")
-	if code := Heavy([]string{"--what", "the suite", "--", "sh", "-c", "touch " + mark + "; exit 3"}); code != 3 {
+	if code := Main([]string{"--what", "the suite", "--", "sh", "-c", "touch " + mark + "; exit 3"}); code != 3 {
 		t.Fatalf("exit %d, want the command's 3", code)
 	}
 	if _, err := os.Stat(mark); err != nil {
@@ -77,10 +76,10 @@ func TestHeavyOutsideARunRunsAtOnce(t *testing.T) {
 		t.Skip("runs sh")
 	}
 	t.Setenv("HIVE_BOX", "")
-	if code := Heavy([]string{"--", "sh", "-c", "exit 0"}); code != 0 {
+	if code := Main([]string{"--", "sh", "-c", "exit 0"}); code != 0 {
 		t.Fatalf("exit %d", code)
 	}
-	if code := Heavy([]string{"--what", "x"}); code != 2 || !strings.Contains(Usage, "heavy") {
+	if code := Main([]string{"--what", "x"}); code != 2 {
 		t.Fatalf("no command: exit %d, want 2", code)
 	}
 }

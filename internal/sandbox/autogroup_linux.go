@@ -4,6 +4,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"golang.org/x/sys/unix"
 )
@@ -23,9 +24,9 @@ import (
 // sysctl off, or a cpu cgroup the processes sit in) the kernel keeps the
 // value and ignores it, and the nice levels alone hold as before.
 
-// autogroupEvery is how many of the launcher's one-second ticks go between
-// two sweeps of the sandbox's autogroups.
-const autogroupEvery = 3
+// autogroupEvery is the least time between two sweeps of the sandbox's
+// autogroups.
+const autogroupEvery = 3 * time.Second
 
 // ownLevel is the calling thread's nice level (the raw getpriority answers
 // 20 minus it).

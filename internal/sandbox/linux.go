@@ -249,9 +249,11 @@ func Exec(specPath string) int {
 		signal.Notify(sig, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
 		t := time.NewTicker(time.Second)
 		defer t.Stop()
-		for tick := 0; ; tick++ {
-			if level > 0 && tick%autogroupEvery == 0 {
+		var swept time.Time
+		for {
+			if level > 0 && time.Since(swept) >= autogroupEvery {
 				lowerAutogroups(cmd.Process.Pid, level)
+				swept = time.Now()
 			}
 			select {
 			case <-stop:
