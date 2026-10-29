@@ -451,7 +451,7 @@ func New(c *core.Core, a *agents.Agents, ch *chat.Module) *Module {
 	c.Runs.Ops().Register(core.Op{Name: "aim", Roles: steerers, Help: `{"task","aim":"fix"|"gain","why"} (your own task by default; any task on your project) -> sets whether the task is a fix of the failure why names, which merges on its tests, checks and reads and isn't reverted for a score dip alone, or a gain, which on the Hive's own repository merges only on the recursive gate's clear gain`, Fn: m.opAim})
 	c.Runs.Ops().Register(core.Op{Name: "recheck", Roles: steerers, Help: `{"task","back"} -> a blocked or stopped task's commits are pushed and checked again (not one the person stopped); one stuck on its way to the merge (landing, testing, reviewing, merging: say on checks of a commit that is no longer its head) is retried the same way from its branch's head, and a stuck checkpoint is dropped while its worker goes on; with back, its worker gets that text and works on`, Fn: m.opRecheck})
 	c.Runs.Ops().Register(core.Op{Name: "rerun-checks", Roles: steerers, Help: `{"task"} (your own task by default; any task on your project) -> re-runs the failed forge checks (CI jobs) on the PR's head, for a flake that isn't the change's fault; at most 2 per head, and the merge waits for the new result`, Fn: m.opRerunChecks})
-	c.Runs.Ops().Register(core.Op{Name: "queue", Roles: steerers, Help: `{"order":[task ids],"hold":[task ids],"release":[task ids],"now":[task ids],"why"} (all optional) -> the briefs waiting for a worker, in the order they start; order puts those first in that order (the rest follow as filed; one waiting 4h or more goes ahead of the order, oldest first), hold keeps one waiting until released, now puts those first of all (why says so, on the record), for a fix the rest need. A started worker is never stopped here (a quiet one is, with stop)`, Fn: m.opQueue})
+	c.Runs.Ops().Register(core.Op{Name: "queue", Roles: steerers, Help: `{"order":[task ids],"hold":[task ids],"release":[task ids],"now":[task ids],"why"} (all optional) -> the briefs waiting for a worker, in the order they start; order puts those first in that order (the rest follow as filed; one waiting 4h or more goes ahead of the order, oldest first), hold keeps one waiting until released, now puts those first of all (why says so, on the record), for a fix the rest need. Any project's briefs may be named: one on another project than yours needs why, which goes on its record. A started worker is never stopped here (a quiet one is, with stop)`, Fn: m.opQueue})
 	c.Runs.Ops().Register(core.Op{Name: "stop", Roles: steerers, Help: `{"task","why","fresh":bool} -> ends a working task's quiet worker (one that keeps ending turns without finishing) as blocked, so it holds no run for a day; why goes on the record. The task goes blocked, yours to bring back with recheck; with fresh it is queued at once for a fresh worker on the same branch with the first one's notes. A worker taking turns, waiting or parked isn't stopped`, Fn: m.opStop})
 	c.Runs.Ops().Register(core.Op{Name: "landed", Roles: steerers, Help: `{"task","why","merge"} -> ends a task in any stage as merged when its PR is merged on the forge or its commits are on main (merge names the main commit when they were squashed there), so the briefs waiting on it start; refused while its PR is open and its work isn't on main`, Fn: m.opLanded})
 	c.Runs.Ops().Register(core.Op{Name: "amend", Roles: steerers, Help: `{"task","title","done","known","why"} -> changes a brief no worker has started on yet (filed or queued) in place: each of title, done and known given replaces the old one, and its open issue gets the brief as amended; any on your project but the person's own. A wider ask goes here rather than in a new brief beside it`, Fn: m.opAmend})
@@ -1995,6 +1995,15 @@ func (m *Module) test(t *Task, p core.Project) error {
 		return err
 	}
 	cfg := m.C.Effects.Config(p, main)
+	if len(cfg.ForgeTests) > 0 {
+		// The forge's CI tests every PR on its exact head: that run is the
+		// test, waited on at the merge (forgeChecks), and none runs here.
+		m.mu.Lock()
+		m.dropTestRunLocked(t.ID)
+		m.mu.Unlock()
+		t.Recheck = false
+		return m.passed(t, p, main, "its tests are the forge's ("+strings.Join(cfg.ForgeTests, ", ")+"), weighed before it merges")
+	}
 	c, ok, err := m.headTest(t, p, main, cfg.Test)
 	if !ok || err != nil {
 		return err // queued or running behind the step: it waits in testing
@@ -2086,6 +2095,23 @@ func (m *Module) test(t *Task, p core.Project) error {
 			return m.sendBack(t, p, "The tests failed on your commit "+core.Short(t.SHA)+":\n\n"+core.ClipEnds(c.Output, 3000))
 		}
 	}
+	return m.passed(t, p, main, "tests passed")
+}
+
+// testsText is what a reader of sha gets as its test run: the local run's
+// output, or, where the forge's checks are the test (ForgeTests on main),
+// a line saying so when none ran here.
+func (m *Module) testsText(p core.Project, sha, main string) string {
+	c, ok := m.C.Effects.GetCheck(p.Name, sha, "test")
+	if ft := m.C.Effects.Config(p, main).ForgeTests; !ok && len(ft) > 0 {
+		return "No local test run: the forge's checks (" + strings.Join(ft, ", ") + ") test this exact head, and it merges only once they pass there.\n"
+	}
+	return core.ClipEnds(c.FullOutput(), 16000)
+}
+
+// passed sends a change whose tests cleared (said in how) on to the person's
+// approval, a read, or the merge.
+func (m *Module) passed(t *Task, p core.Project, main, how string) error {
 	ch, err := m.C.Effects.Classify(p, main, t.SHA)
 	if err != nil {
 		return err
@@ -2108,10 +2134,10 @@ func (m *Module) test(t *Task, p core.Project) error {
 		}
 	case ch.Small || m.C.Effects.Reviewed(p, ch, t.SHA):
 		t.Stage = StageMerging
-		m.save(t, "tests passed; "+map[bool]string{true: "small change, no read needed", false: "already read"}[ch.Small])
+		m.save(t, how+"; "+map[bool]string{true: "small change, no read needed", false: "already read"}[ch.Small])
 	default:
 		t.Stage = StageReviewing
-		m.save(t, "tests passed; asking for a read")
+		m.save(t, how+"; asking for a read")
 	}
 	return nil
 }
@@ -2401,7 +2427,7 @@ func (m *Module) review(t *Task, p core.Project) error {
 		if err != nil {
 			return err
 		}
-		c, _ := m.C.Effects.GetCheck(p.Name, t.SHA, "test")
+		tests := m.testsText(p, t.SHA, main)
 		w, _ := m.C.Runs.Get(t.Worker)
 		account := w.Brief + "\n\n## The worker's account\n\n" + finishText(w)
 		if t.Kind == "revert" {
@@ -2419,7 +2445,7 @@ func (m *Module) review(t *Task, p core.Project) error {
 		brief := fmt.Sprintf("Review %s of task %s: %q.\n\nThe brief, the exact diff and the test run are in $HIVE_RUN (brief.md, diff.patch, tests.txt). Give your verdict.", round, t.ID, t.Label())
 		spec := m.Agents.Spec(id, "reviewer", p.Name, dir, brief)
 		spec.ReadOnly, spec.Schema, spec.Task = true, VerdictSchema, t.ID
-		spec.Inputs = map[string]string{"sha": t.SHA, "diff.patch": ch.Diff, "tests.txt": core.ClipEnds(c.FullOutput(), 16000),
+		spec.Inputs = map[string]string{"sha": t.SHA, "diff.patch": ch.Diff, "tests.txt": tests,
 			"brief.md": "Review token: " + reviewToken(id) + "\n\n" + account + m.reviewRules(p, main)}
 		paced := ""
 		if route, why := m.pacedRead(p.Name); why != "" && len(ch.Security) == 0 {
@@ -3038,6 +3064,7 @@ func (m *Module) forgeChecks(t *Task, p core.Project, main string) (bool, error)
 	m.sightings(t, p, runs, keys, "", nil) // a red that only warns is evidence too
 	raw := runs
 	runs, req, warned := core.Advisory(p, runs, m.C.Effects.RequiredChecks(p, main), m.C.Effects.AdvisoryChecks(p, main))
+	req = m.C.Effects.Config(p, main).WithForgeTests(req)
 	st, which := core.ChecksState(runs, req)
 	if (st == core.CheckFail || st == core.CheckCantStart) && rerunning(t) && t.Retried.before(which) {
 		m.hold(t, p, "waiting for the re-run of the forge's checks on "+core.Short(t.SHA)+" ("+core.CheckNames(which)+")")
@@ -3767,7 +3794,7 @@ func (m *Module) startSeat(t *Task, p core.Project, ch core.Change, main, seat, 
 	if err != nil {
 		return err
 	}
-	c, _ := m.C.Effects.GetCheck(p.Name, t.SHA, "test")
+	tests := m.testsText(p, t.SHA, main)
 	w, _ := m.C.Runs.Get(t.Worker)
 	account := w.Brief + "\n\n## The worker's account\n\n" + finishText(w)
 	if t.Kind == "revert" {
@@ -3781,7 +3808,7 @@ func (m *Module) startSeat(t *Task, p core.Project, ch core.Change, main, seat, 
 	h, model, route := m.seatModel(p, seat)
 	spec.Harness, spec.Model, spec.Route = h, model, route
 	spec.ReadOnly, spec.Schema, spec.Task = true, VerdictSchema, t.ID
-	spec.Inputs = map[string]string{"sha": t.SHA, "seat": seat, "diff.patch": ch.Diff, "tests.txt": core.ClipEnds(c.FullOutput(), 16000),
+	spec.Inputs = map[string]string{"sha": t.SHA, "seat": seat, "diff.patch": ch.Diff, "tests.txt": tests,
 		"brief.md": "Review token: " + reviewToken(id) + "\n\n" + securityRules(ch) + "\n\n## The change\n\n" + account + m.reviewRules(p, main)}
 	if _, err := m.C.Runs.Start(spec); err != nil {
 		return err
