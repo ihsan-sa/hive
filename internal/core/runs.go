@@ -102,6 +102,7 @@ type Run struct {
 	Login       string          `json:"login,omitempty"`        // the login its latest turn went on
 	TokenExpiry time.Time       `json:"token_expiry,omitempty"` // when the access token its latest turn was handed runs out
 	Where       string          `json:"where,omitempty"`        // the runner its latest turn went to; empty is this machine
+	GaveBack    string          `json:"gave_back,omitempty"`    // the executor module that gave its latest turn back unstarted: its next runs here, under the holds
 	Progress    string          `json:"progress,omitempty"`
 	ProgressAt  time.Time       `json:"progress_at,omitempty"`
 	StopAsked   bool            `json:"stop_asked,omitempty"`
@@ -517,7 +518,9 @@ type Runs struct {
 	// when the ramp after it last let one start, and rampedAt when it last
 	// held one back (ramp).
 	heldAt, rampLast, rampedAt time.Time
-	rampWait                   map[string]rampWaiter // the runs waiting on the ramp
+	// handedAt is when a turn was last handed to an executor module (handing).
+	handedAt time.Time
+	rampWait map[string]rampWaiter // the runs waiting on the ramp
 }
 
 // rampWaiter is a run waiting on the ramp: whether it was sent back to its
@@ -792,6 +795,7 @@ type turnEnded struct {
 	Head        string          `json:"head,omitempty"`        // the checkout's HEAD log at the turn's end
 	Stalled     string          `json:"stalled,omitempty"`     // the pick it kept ending turns on without finishing, which it moves past
 	Renewed     bool            `json:"renewed,omitempty"`     // its login was renewed mid-turn, revoking its token: it resumes at once, not as a retry
+	GaveBack    string          `json:"gave_back,omitempty"`   // the executor module that gave the turn back before it started (givenBack): it waits here, not as a retry
 }
 
 // egressRefused is the hosts a turn's egress proxy refused, and each
@@ -940,7 +944,7 @@ func (rs *Runs) apply(e Event) {
 			on = ""
 		}
 		rs.ranOn[r.ID] = on
-		r.Waiting, r.Reopened, r.Returned = "", false, false
+		r.Waiting, r.Reopened, r.Returned, r.GaveBack = "", false, false, ""
 		r.Given = nil
 		if t.Delivered <= len(r.Pending) {
 			r.Given = append(r.Given, r.Pending[:t.Delivered]...)
@@ -969,7 +973,12 @@ func (rs *Runs) apply(e Event) {
 				r.Retries = 0
 			}
 		}
-		if t.Status == StatusParked && t.Unavailable == "" && !t.Renewed && (t.Result == nil || (t.Result.IsError && !t.Result.Limited)) {
+		if t.GaveBack != "" {
+			// Its turn never started: it ran nowhere, and waits on the pace
+			// here as a worker sent back to its task does (work's paceBack).
+			r.Where, r.GaveBack, r.Returned = "", t.GaveBack, true
+		}
+		if t.Status == StatusParked && t.Unavailable == "" && !t.Renewed && t.GaveBack == "" && (t.Result == nil || (t.Result.IsError && !t.Result.Limited)) {
 			r.Retries++
 		}
 		if len(t.Queue) > 0 {
@@ -2171,6 +2180,15 @@ func (rs *Runs) endTurn(r Run) {
 		// The turn couldn't start without its checkout, and no retry brings
 		// it back (removed after its task ended): the run ends here.
 		te.Status, te.Reason = StatusBlocked, "its checkout "+r.Checkout+" is gone, so it can't take another turn"
+	case tl.Result == nil && r.Where != "" && givenBack(rs.ws.TurnOut(r.ID, r.Turn)) != "":
+		// An executor module gave the turn back before it started (its
+		// runner refused it, or none had room by then): nothing ran, so it
+		// is no retry. It waits its turn here under the pace and the strain
+		// hold, as any turn does, with the messages it was handed.
+		why := givenBack(rs.ws.TurnOut(r.ID, r.Turn))
+		te.Status, te.ParkedUntil, te.GaveBack = StatusParked, time.Now(), r.Where
+		te.Reason = "waiting: " + r.Where + " gave its turn back before it started (" + Clip(why, 200) + "); it runs here when the pace and the machine let it"
+		te.Queue = cur.Given
 	case tl.Result == nil:
 		// Under WSL, sandbox-exec's own early failures go to .wsl.
 		out := rs.ws.TurnOut(r.ID, r.Turn)
@@ -2279,6 +2297,20 @@ func (rs *Runs) endTurn(r Run) {
 			rs.Send(p.ID, fmt.Sprintf("[%s %s finished]\n%s", r.Role, r.ID, account))
 		}
 	}
+}
+
+// givenBack is why an executor module gave back a turn handed to it before
+// it started, from the turn's output, or "": exit 125 and dispatch's "not
+// run:" line, as for a check (refusedBefore). The module learns from the
+// environment that the core takes a turn back (runner.Executor); one that
+// doesn't know runs the turn here itself, past the holds.
+func givenBack(out string) string {
+	for _, f := range []string{out + ".err", out + ".dispatch"} {
+		if why := refusedBefore(125, tail(f, 4000)); why != "" {
+			return why
+		}
+	}
+	return ""
 }
 
 // reopenedMidTurn is why a run that finished in a turn it was reopened during takes another.
@@ -2477,10 +2509,19 @@ func (rs *Runs) launch(r Run, cfg Config) {
 	}
 	// A turn this machine is too strained for goes to an executor module
 	// with room, or waits; an away run's goes there first anyway.
+	// A turn an executor gave back runs here, under the holds; and turns go
+	// to one one at a time (handing), so a burst isn't judged on one answer.
 	var elsewhere sandbox.Sandbox
 	where := ""
 	why := Strained(floor, memMax, cpuMax)
-	if why != "" || (r.Away && !r.Lead()) {
+	if (why != "" || (r.Away && !r.Lead())) && r.GaveBack == "" {
+		if rs.handing() {
+			if why != "" {
+				rs.Holding()
+			}
+			rs.holdTurn(r, "waiting: one turn at a time goes to an executor module")
+			return
+		}
 		elsewhere, where = rs.executor()
 	}
 	if why != "" && elsewhere == nil {
@@ -2568,7 +2609,7 @@ func (rs *Runs) launch(r Run, cfg Config) {
 			session = NewUUID()
 		}
 		prompt = r.Brief
-		if pending != "" && (r.Turn == 0 || moved != "") {
+		if pending != "" && (r.Turn == 0 || r.GaveBack != "" || moved != "") {
 			prompt += PendingSep + pending
 		}
 		if moved != "" {
@@ -2657,6 +2698,11 @@ func (rs *Runs) launch(r Run, cfg Config) {
 		return
 	}
 	started = true
+	if elsewhere != nil {
+		rs.mu.Lock()
+		rs.handedAt = time.Now()
+		rs.mu.Unlock()
+	}
 	rs.claimed(r.ID, turn, p)
 	rs.append("run.turn_started", turnStarted{ID: r.ID, Session: session, Turn: turn, Proc: p, Delivered: delivered, Resume: resume, Login: login.Key(), Model: r.Model, Harness: r.Harness, Where: where, TokenExpiry: exp})
 }
@@ -2690,10 +2736,29 @@ func (rs *Runs) renewedMidTurn(r Run, res *harness.Result) bool {
 	return false
 }
 
-// Elsewhere says whether an executor module has room for a turn now.
+// Elsewhere says whether an executor module has room for a turn now, and
+// one may go (handing).
 func (rs *Runs) Elsewhere() bool {
+	if rs.handing() {
+		return false
+	}
 	ex, _ := rs.executor()
 	return ex != nil
+}
+
+// handStep is the least time between two turns handed to executor modules.
+// A module's room answer is read off its runners' state, cached up to a
+// minute, and a turn shows in it only once it has started there: on 10-29,
+// 13:45-13:51Z, a strained Hive handed ~66 turns over on such answers, the
+// runner refused most, and 61 ran here after all (load ~300, memory
+// pressure 92%). So the first turn goes alone and the rest wait a step.
+var handStep = time.Minute
+
+// handing says whether a turn went to an executor module within handStep.
+func (rs *Runs) handing() bool {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	return time.Since(rs.handedAt) < handStep
 }
 
 // executor returns an executor module with room for a turn this machine is

@@ -204,7 +204,9 @@ func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]str
 // PRs back at once through Reopen, which went past the pace: 19 workers ran
 // while it said 1, and load reached 481. It is core's Runs.Admit.
 func (m *Module) paceBack(r core.Run) string {
-	if !r.Returned || r.Role != "worker" || r.Away { // an away worker's turns go to a runner first
+	// An away worker's turns go to a runner first; one a runner gave back
+	// runs here, so it waits here too.
+	if !r.Returned || r.Role != "worker" || r.Away && r.GaveBack == "" {
 		return ""
 	}
 	mine, working := false, 0
@@ -236,7 +238,7 @@ func (m *Module) paceBack(r core.Run) string {
 // pace; backMu is held.
 func (m *Module) waitsBack(t Task) bool {
 	r, ok := m.C.Runs.Get(t.Worker)
-	return ok && r.Returned && r.Role == "worker" && !r.Away && !m.backIn[r.ID]
+	return ok && r.Returned && r.Role == "worker" && (!r.Away || r.GaveBack != "") && !m.backIn[r.ID]
 }
 
 // sentBack counts the workers at work in tasks that were sent back and wait

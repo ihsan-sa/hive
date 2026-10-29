@@ -623,3 +623,29 @@ func TestBundleIsMainWhenTheWorkerStartsOrResumes(t *testing.T) {
 		t.Fatalf("the resend doesn't name the main it holds: %q", msg)
 	}
 }
+
+// An away worker's turn a runner gave back runs here, so it waits on the
+// pace here as a worker sent back to its task does; one still away doesn't.
+func TestGivenBackAwayWorkerWaitsOnThePace(t *testing.T) {
+	m := queueRig(t)
+	cfg := m.C.WS.LoadConfig()
+	cfg.MaxWorkers = 1
+	m.C.WS.SaveConfig(cfg)
+	if _, err := m.C.Runs.Start(core.RunSpec{ID: "wq", Role: "worker", Project: "p", Harness: "fake", Checkout: t.TempDir()}); err != nil {
+		t.Fatal(err)
+	}
+	busy := file(t, m, "the working one", "")
+	busy.Stage, busy.Worker = StageWorking, "wq"
+	m.save(&busy, "")
+	mine := file(t, m, "the away one", "")
+	mine.Stage, mine.Worker = StageWorking, "wa"
+	m.save(&mine, "")
+	r := core.Run{ID: "wa", Role: "worker", Away: true, Returned: true}
+	if why := m.paceBack(r); why != "" {
+		t.Fatalf("an away worker waits on the pace here: %q", why)
+	}
+	r.GaveBack = "iiks1"
+	if why := m.paceBack(r); !strings.Contains(why, "at the pace") {
+		t.Fatalf("a given-back worker went past the pace: %q", why)
+	}
+}

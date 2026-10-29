@@ -31,6 +31,10 @@ const noRoomFor = 15 * time.Second
 // `turn`, and runs the turn here when its runner has filled since.
 const roomFor = 5 * time.Second
 
+// GiveBackEnv, set to 1 in an executor's environment for `turn`, says the
+// core takes back a turn the module gives back before it starts.
+const GiveBackEnv = "HIVE_GIVE_BACK"
+
 // roomAnswer is an executor's last answer to `room`: the runner it named
 // ("" for no room) and until when it stands.
 type roomAnswer struct {
@@ -58,6 +62,12 @@ func (r *Runner) executor(hook string) (sandbox.Sandbox, string) {
 			continue
 		}
 		argv, env := Argv(m), Env(r.C.WS, name)
+		if hook == "executor" {
+			// A turn it can't send on after all it may give back unstarted
+			// (exit 125, "dispatch: not run: <why>"): the core then runs it
+			// here under the pace and the strain hold (core.givenBack).
+			env = append(env, GiveBackEnv+"=1")
+		}
 		r.mu.Lock()
 		a := r.rooms[name]
 		r.mu.Unlock()
