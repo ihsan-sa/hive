@@ -388,6 +388,31 @@ func TestNoRequestForAnUnpricedPaidOpenRouterModel(t *testing.T) {
 	}
 }
 
+// A priced paid OpenRouter model passes its probe, asked at its price as a
+// turn would be; an unpriced one fails it unasked.
+func TestProbeAsksAPricedPaidOpenRouterModel(t *testing.T) {
+	asked := 0
+	probeTransport = roundTrip(func(*http.Request) (*http.Response, error) {
+		asked++
+		body := `{"choices":[{"message":{"role":"assistant","content":"OK"}}],"usage":{"prompt_tokens":10,"completion_tokens":1}}`
+		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(body))}, nil
+	})
+	defer func() { probeTransport = nil }()
+	const ep, model = "https://openrouter.ai/api/v1", "openai/gpt-oss-120b"
+	if err := Probe(context.Background(), ep, model, "k", [2]float64{}, false); err == nil || !strings.Contains(err.Error(), "no price") {
+		t.Fatalf("unpriced probe: %v", err)
+	}
+	if asked != 0 {
+		t.Fatal("a request went out for an unpriced paid OpenRouter model")
+	}
+	if err := Probe(context.Background(), ep, model, "k", [2]float64{0.1, 0.4}, false); err != nil {
+		t.Fatalf("priced probe: %v", err)
+	}
+	if asked != 1 {
+		t.Fatalf("the priced model was asked %d times, want 1", asked)
+	}
+}
+
 type roundTrip func(*http.Request) (*http.Response, error)
 
 func (f roundTrip) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
