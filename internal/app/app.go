@@ -75,7 +75,11 @@ func New(ws core.Workspace, forge core.Forge) (*App, error) {
 	c.Runs.Ops().SetSpawner(a.Work.Spawn)
 	a.Improve = improve.New(c, a.Agents, a.Work, a.Chat)
 	a.Feedback = feedback.New(c)
-	a.Agents.Board = problems.New(c).Brief
+	board := problems.New(c)
+	a.Agents.Board = board.Brief
+	a.Improve.Board = func(project, where, text string) {
+		board.Standing(core.Run{ID: "improve", Role: "module", Project: project}, where, text)
+	}
 	a.Stats = stats.New(c.J)
 	a.Improve.Feedback = a.Feedback.Digest
 	a.KB = kb.New(c, a.Agents)
