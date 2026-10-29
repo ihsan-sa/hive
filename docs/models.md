@@ -55,12 +55,23 @@ model ids and free tiers):
 | OpenRouter's free models | `https://openrouter.ai/api/v1` | `moonshotai/kimi-k2:free` |
 | Ollama on this machine | `http://127.0.0.1:11434/v1` | `qwen2.5-coder:14b` |
 
-OpenRouter is free-only, enforced (#355): the person's key there pays for
-every model but the free variants, so a model on `openrouter.ai` whose id
-doesn't end in `:free` is refused by `hive model add` and by the config check
-(a route or trial can't name it), a run won't start or take a turn on one, and
-the open agent sends it no request, probe included (`TestOpenRouterPaid`,
-`TestCheckRefusesAPaidOpenRouterModel`, `TestNoRequestForAPaidOpenRouterModel`).
+OpenRouter is free first, paid under the month's cap (#1841): the person's key
+there pays for every model but the free variants (an id ending in `:free`). A
+paid one is refused by `hive model add` and the config check unless
+`openrouter_monthly_usd` (the month's cap, UTC; 0 keeps OpenRouter free-only)
+is set and the model has a `price` (`hive model add ... --price IN,OUT`, USD per
+million tokens), so its spend is counted (`core.Config.PaidRefused`). The rest
+is the models module's (`internal/mod/models/paid.go`): a route puts a paid
+OpenRouter model after every other pick, so a run reaches it only when the
+free ones (and the plans) are at their limits; it counts what paid turns cost
+from the journal, gives each turn no more than is left of the cap less what
+the paid turns running were given, and once the month's spend reaches the cap
+holds the model until the next month, through the run manager's `Held` and
+`TurnBudget` hooks. The open agent sends an unpriced paid model no request
+(`TestCheckAllowsAPaidOpenRouterModelUnderTheCap`,
+`TestPaidOpenRouterModelUnderTheCap`, `TestPaidOpenRouterModelGoesLastOnARoute`,
+`TestModuleHoldsAPickAndLimitsATurn`, `TestModelAddWithAPrice`,
+`TestNoRequestForAnUnpricedPaidOpenRouterModel`).
 
 Other harnesses with a CLI of their own (Cursor, OpenCode, Aider) come in as
 harnesses through the harness-module seam rather than as more code in the open
@@ -259,10 +270,10 @@ says the model doesn't exist (not found, unknown or invalid model): their
 other errors, and a context too long, are one run's, which backs off alone.
 A run parked waiting on a pick that comes back looks again at once.
 
-## Asking the lead
+## Asking an agent
 
 `hive agent route --role worker --models "qwen,claude:opus" [--project p]`
-(lead only; a project's lead routes its own project) writes the route into
+(any agent but a check seat; one with a project routes only that project) writes the route into
 config.json and journals `config.routed` with who, the role and what it was. A
 check seat's route waits for the person's yes in Waiting (ask kind `route`).
 The lead never adds a model or its key; those are the person's.
@@ -286,3 +297,22 @@ A lead files trials, and so does a worker on its own project: a test project
 rounds are briefs a worker carries out by filing one trial per model and task.
 A trial's own worker files none, and one already open on the same model with
 the same title is refused with its task id, so a round doesn't file twice.
+
+A score can't call `hive agent models` from its sandbox, so a project whose
+`.hive/project.json` names a `"ledger"` (trials: `"ledger": "ledger.json"`)
+has the Hive keep that file as its trial ledger: the named models and the
+project's counted trials, as the models op shows them
+(`internal/mod/models/ledger.go`). When what it would say changes (a trial's
+outcome recorded, a model named), the models module files a record task: a
+host-made commit (`Effects.Record`, kind `record`) on top of main that goes
+through the tests and checks like any change. Content the Hive last wrote
+there from its record (`Change.Recorded`) is neither a protected path nor in
+need of a read, so it merges with no approval in between, though the ledger is
+a score path; a worker's own edit to it still waits for an approval, as does
+an older record once a newer one is written. Only the path main's project.json
+names counts, and only when `core.LedgerPathOK` takes it: a plain relative path
+outside `.git`, one of the score's own paths, and none the project otherwise
+guards (the base protected paths, its protected, high or root paths, CI,
+`.gitattributes`); the host write refuses a path out of the checkout or through
+a symlink. A record task that stopped (a red check, a conflict) is filed again
+after 30 minutes.

@@ -8,6 +8,7 @@ import (
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/agents"
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/chat"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/modules"
 )
 
@@ -59,6 +60,26 @@ func TestEveryArmBuilds(t *testing.T) {
 			}
 		}
 	}
+	if strings.Contains(tools, "## Your reach") {
+		t.Errorf("the command list carries the next section's heading:\n%s", tools)
+	}
+	o := built[OpenArm]
+	for _, want := range []string{"--to room", "Nobody assigns you work", "## Your reach", "## Where things are", "- `hive agent warden"} {
+		if !strings.Contains(o["orientation"], want) {
+			t.Errorf("the open arm's orientation has no %q", want)
+		}
+	}
+	for _, r := range []string{"reviewer", "warden", "tribunal", "judge"} {
+		if o[r] != std[r] {
+			t.Errorf("the open arm changed the %s prompt: the safety layer keeps its own", r)
+		}
+	}
+	if o["worker"] == std["worker"] || o["lead"] == std["lead"] {
+		t.Error("the open arm kept the standard worker or lead procedure")
+	}
+	if a, _ := OpenBrief(1, 3); a == func() string { b, _ := OpenBrief(2, 3); return b }() {
+		t.Error("the open briefs share a title, so they'd be filed once")
+	}
 	if _, err := Pick("standard,nope"); err == nil {
 		t.Error("an unknown arm was accepted")
 	}
@@ -99,6 +120,9 @@ func TestInstallSurvivesTheDefaults(t *testing.T) {
 // (not a sweep's to a worker), a task is filed once however often it is saved, and the
 // window holds what it should.
 func TestObserve(t *testing.T) {
+	if chat.RoomMark != "(to the room) " {
+		t.Fatalf("the journal below marks room posts as the chat module did: %q", chat.RoomMark)
+	}
 	journal := strings.Join([]string{
 		`{"at":"2026-10-25T01:00:00Z","kind":"run.created","data":{"id":"w-1","role":"worker"}}`,
 		`{"at":"2026-10-25T01:00:00Z","kind":"task.saved","data":{"id":"t-old","from":"w-1","kind":"work"}}`,
@@ -107,6 +131,8 @@ func TestObserve(t *testing.T) {
 		`{"at":"2026-10-25T02:01:00Z","kind":"msg.sent","data":{"from":"w-1","to":"w-2","text":"hi"}}`,
 		`{"at":"2026-10-25T02:02:00Z","kind":"msg.sent","data":{"from":"w-2","to":"lead","text":"hi"}}`,
 		`{"at":"2026-10-25T02:03:00Z","kind":"msg.sent","data":{"from":"lead-lead-x","to":"w-1","text":"hi"}}`,
+		`{"at":"2026-10-25T02:03:00Z","kind":"msg.sent","data":{"from":"w-1","to":"lead-lead-x","text":"(to the room) mine: the gate"}}`,
+		`{"at":"2026-10-25T02:03:00Z","kind":"msg.sent","data":{"from":"w-1","to":"w-2","text":"(to the room) mine: the gate"}}`,
 		`{"at":"2026-10-25T02:03:01Z","kind":"run.created","data":{"id":"s-1","role":"sweep"}}`,
 		`{"at":"2026-10-25T02:03:02Z","kind":"msg.sent","data":{"from":"s-1","to":"w-1","text":"hi"}}`,
 		`{"at":"2026-10-25T02:04:00Z","kind":"task.saved","data":{"id":"t-old","from":"w-1","kind":"work"}}`,
@@ -126,8 +152,8 @@ func TestObserve(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rep.Messages != 4 || rep.Peer != 1 || rep.Pairs["sweep→worker"] != 1 || rep.Pairs["worker→worker"] != 1 || rep.Pairs["worker→lead"] != 1 || rep.Pairs["lead→worker"] != 1 {
-		t.Errorf("messages %d, peer %d, pairs %v", rep.Messages, rep.Peer, rep.Pairs)
+	if rep.Messages != 6 || rep.Peer != 2 || rep.Room != 1 || rep.Pairs["sweep→worker"] != 1 || rep.Pairs["worker→worker"] != 2 || rep.Pairs["worker→lead"] != 2 || rep.Pairs["lead→worker"] != 1 {
+		t.Errorf("messages %d, peer %d, room %d, pairs %v", rep.Messages, rep.Peer, rep.Room, rep.Pairs)
 	}
 	if rep.Briefs != 1 || rep.Helpers != 1 || rep.Asks != 1 {
 		t.Errorf("briefs %d, helpers %d, asks %d: want 1 each", rep.Briefs, rep.Helpers, rep.Asks)
@@ -136,7 +162,7 @@ func TestObserve(t *testing.T) {
 		t.Errorf("runs %v, finished %v, merged %d", rep.Runs, rep.Finished, rep.Merged)
 	}
 	rep.Variant = "vague"
-	if tab := Table([]Report{rep}); !strings.Contains(tab, "| vague |") || !strings.Contains(tab, "worker→worker 1") || !strings.HasSuffix(strings.Split(tab, "\n")[2], "| - | - |") {
+	if tab := Table([]Report{rep}); !strings.Contains(tab, "| vague |") || !strings.Contains(tab, "worker→worker 2") || !strings.HasSuffix(strings.Split(tab, "\n")[2], "| - | - |") {
 		t.Errorf("table:\n%s", tab)
 	}
 	rep.PeakMB, rep.PeakLoad = 2900, 6.25

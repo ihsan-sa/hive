@@ -111,8 +111,8 @@ func TestLoaded(t *testing.T) {
 }
 
 // Linux counts a task waiting on the disk in the load average: a load over
-// its limit with the CPU barely contended is the disk's when IO pressure is
-// high, and strains nothing when that is low too. Where pressure can't be
+// its limit with the CPU barely contended, or contended far less than the
+// disk, is the disk's when IO pressure is high, and strains nothing when that is low too. Where pressure can't be
 // read, load is the CPU's as before.
 func TestLoadedReadsWhatIsContended(t *testing.T) {
 	for _, c := range []struct {
@@ -120,6 +120,9 @@ func TestLoadedReadsWhatIsContended(t *testing.T) {
 		want          string
 	}{
 		{"cpu contended", "55.00", "60.00", "machine loaded (load 34 on 20 cores"},
+		{"cpu contended, disk less", "30.00", "58.00", "machine loaded (load 34 on 20 cores"},
+		{"cpu over its minimum, disk far more", "11.20", "58.00", "machine loaded on its disk (io pressure 58%, cpu pressure 11%; load 34 on 20 cores"},
+		{"cpu over its minimum, no io file", "11.20", "", "machine loaded (load 34 on 20 cores"},
 		{"disk", "2.61", "56.58", "machine loaded on its disk (io pressure 57%, cpu pressure 3%; load 34 on 20 cores"},
 		{"neither", "2.61", "3.00", ""},
 		{"no io file", "2.61", "", ""},
@@ -452,6 +455,150 @@ func TestWatched(t *testing.T) {
 	}
 	if watched(dir, 1024, 10, 40, 0) {
 		t.Error("only loadavg is there and load_max is off, yet watched")
+	}
+}
+
+// When a strain hold lifts, the turns it held start one a rampStep, not all
+// at once: on 10-28 the lift started every held run together, and the Hive's
+// slice ran to load near 400 and an OOM kill. A lead isn't ramped.
+func TestHoldLiftsOneTurnAtATime(t *testing.T) {
+	c, _ := testHive(t)
+	cfg := c.WS.LoadConfig()
+	cfg.MemFloorMB = 1024
+	defer func(p string) { procRoot = p }(procRoot)
+	procRoot = fakeProc(t, "600000", "0.00", "0.00") // under the floor
+	t.Cleanup(func() { endTurns(t, c, cfg) })
+	ids := []string{"w1", "w2", "w3"}
+	for _, id := range ids {
+		if _, err := c.Runs.Start(RunSpec{ID: id, Role: "worker", Harness: "fake"}); err != nil {
+			t.Fatal(err)
+		}
+		r, _ := c.Runs.Get(id)
+		c.Runs.launch(r, cfg)
+	}
+	procRoot = fakeProc(t, "8000000", "0.00", "0.00") // the hold lifts
+	launch := func(id string) Run {
+		r, _ := c.Runs.Get(id)
+		c.Runs.launch(r, cfg)
+		r, _ = c.Runs.Get(id)
+		return r
+	}
+	running := func() (n int) {
+		for _, id := range ids {
+			if r, _ := c.Runs.Get(id); r.Status == StatusRunning {
+				n++
+			}
+		}
+		return n
+	}
+	for _, id := range ids {
+		launch(id)
+	}
+	if n := running(); n != 1 {
+		t.Fatalf("%d turns started as the hold lifted, want 1", n)
+	}
+	if r, _ := c.Runs.Get("w3"); r.Status != StatusQueued || !strings.Contains(r.Reason, "one turn at a time") {
+		t.Errorf("w3 after the lift: %s %q, want waiting on the ramp", r.Status, r.Reason)
+	}
+	if _, err := c.Runs.Start(RunSpec{ID: "lead", Role: "lead", Harness: "fake", Persistent: true}); err != nil {
+		t.Fatal(err)
+	}
+	if l := launch("lead"); l.Status != StatusRunning {
+		t.Errorf("a lead on the ramp: %s %q, want its turn running", l.Status, l.Reason)
+	}
+	c.Runs.mu.Lock()
+	c.Runs.rampLast = c.Runs.rampLast.Add(-rampStep) // a step on
+	c.Runs.mu.Unlock()
+	for _, id := range ids {
+		launch(id)
+	}
+	if n := running(); n != 2 {
+		t.Errorf("%d turns running a step after the lift, want 2", n)
+	}
+	// Once none has waited on it for two steps, the ramp is over.
+	c.Runs.mu.Lock()
+	c.Runs.heldAt, c.Runs.rampedAt = time.Now().Add(-3*rampStep), time.Now().Add(-3*rampStep)
+	c.Runs.mu.Unlock()
+	if r := launch("w3"); r.Status != StatusRunning {
+		t.Errorf("w3 after the ramp: %s %q, want its turn running", r.Status, r.Reason)
+	}
+}
+
+// A run reopened after its turn ended is Returned until a turn starts, and
+// Admit, a module's say, holds it with its reason.
+func TestAdmitHoldsAReturnedRun(t *testing.T) {
+	c, _ := testHive(t)
+	cfg := c.WS.LoadConfig()
+	t.Cleanup(func() { endTurns(t, c, cfg) })
+	if _, err := c.Runs.Start(RunSpec{ID: "w1", Role: "worker", Harness: "fake"}); err != nil {
+		t.Fatal(err)
+	}
+	c.Runs.SetStatus("w1", StatusDone, "finished")
+	if err := c.Runs.Reopen("w1", "main moved"); err != nil {
+		t.Fatal(err)
+	}
+	r, _ := c.Runs.Get("w1")
+	if !r.Returned {
+		t.Fatalf("reopened after it ended: %+v, want Returned", r)
+	}
+	full := true
+	c.Runs.Admit = func(r Run) string {
+		if r.Returned && full {
+			return "waiting for a worker (at the pace)"
+		}
+		return ""
+	}
+	c.Runs.launch(r, cfg)
+	if r, _ = c.Runs.Get("w1"); r.Status != StatusIdle || r.Reason != "waiting for a worker (at the pace)" {
+		t.Errorf("held by Admit: %s %q", r.Status, r.Reason)
+	}
+	full = false
+	c.Runs.launch(r, cfg)
+	if r, _ = c.Runs.Get("w1"); r.Status != StatusRunning || r.Returned {
+		t.Errorf("let through: %s returned %v, want its turn running and no longer Returned", r.Status, r.Returned)
+	}
+}
+
+// A run Admit holds doesn't spend the ramp's step after a strain hold, so
+// the next run's turn starts, and it is journalled held once, not once per
+// hold it alternates between (618 run.held for one worker in 3h on 10-28).
+func TestAdmitHoldSpendsNoRampStep(t *testing.T) {
+	c, _ := testHive(t)
+	cfg := c.WS.LoadConfig()
+	t.Cleanup(func() { endTurns(t, c, cfg) })
+	for _, id := range []string{"w1", "w2"} {
+		if _, err := c.Runs.Start(RunSpec{ID: id, Role: "worker", Harness: "fake"}); err != nil {
+			t.Fatal(err)
+		}
+		c.Runs.SetStatus(id, StatusDone, "finished")
+		if err := c.Runs.Reopen(id, "main moved"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	c.Runs.Admit = func(r Run) string {
+		if r.ID == "w1" {
+			return "waiting for a worker (at the pace)"
+		}
+		return ""
+	}
+	c.Runs.Holding() // the machine was strained just now
+	for range 3 {
+		r, _ := c.Runs.Get("w1")
+		c.Runs.launch(r, cfg)
+	}
+	r, _ := c.Runs.Get("w2")
+	c.Runs.launch(r, cfg)
+	if r, _ = c.Runs.Get("w2"); r.Status != StatusRunning {
+		t.Errorf("w2 after w1 was held at the pace: %s %q, want its turn running on the ramp's step", r.Status, r.Reason)
+	}
+	held := 0
+	c.J.Replay(func(e Event) {
+		if e.Kind == "run.held" && strings.Contains(string(e.Data), `"w1"`) {
+			held++
+		}
+	})
+	if held != 1 {
+		t.Errorf("%d run.held for w1 held three times, want 1", held)
 	}
 }
 

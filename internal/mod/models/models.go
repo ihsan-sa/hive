@@ -1,4 +1,4 @@
-// Package models is the routing of agents to models: the lead's route op,
+// Package models is the routing of agents to models: the route op,
 // which sets the models a role runs on for the person (a check seat only
 // once the person says yes), the models op that shows how the Hive is routed
 // and what each agent runs on, and trials, which run one brief's worker on a
@@ -67,6 +67,8 @@ type Module struct {
 	// Probe asks a named model one real request before a route or trial
 	// puts work on it (Probe, by default).
 	Probe func(ws core.Workspace, name string, m core.OpenModel) error
+	// Paid holds paid OpenRouter models to the month's cap (paid.go).
+	Paid *Paid
 
 	mu     sync.Mutex
 	trials map[string]Trial // recorded, by task
@@ -75,6 +77,8 @@ type Module struct {
 	// demoted is each project's worker picks whose runs keep ending without
 	// a merge, by demoteKey, with why: Tick works it out from the tasks.
 	demoted map[string]string
+	// ledgers is how each project's ledger was last left (ledger.go).
+	ledgers map[string]ledgerSeen
 }
 
 // demoteAfter is the ended tasks in a row, each blocked, a pick's workers
@@ -102,7 +106,11 @@ func Probe(ws core.Workspace, name string, m core.OpenModel) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	return openagent.Probe(ctx, m.Endpoint, m.Model, key, m.Anthropic())
+	var price [2]float64
+	if m.Price != nil {
+		price = [2]float64{m.Price.Input, m.Price.Output}
+	}
+	return openagent.Probe(ctx, m.Endpoint, m.Model, key, price, m.Anthropic())
 }
 
 // probe refuses a pick that can't answer, saying why: a named model gets one
@@ -172,7 +180,7 @@ func downOf(downs []core.Down, p core.Pick) (core.Down, bool) {
 
 // New registers the ops and the person's answer to a check seat's route.
 func New(c *core.Core, w *work.Module) *Module {
-	m := &Module{C: c, Work: w, trials: map[string]Trial{}, order: map[string]int{}, demoted: map[string]string{}, Probe: Probe}
+	m := &Module{C: c, Work: w, trials: map[string]Trial{}, order: map[string]int{}, demoted: map[string]string{}, ledgers: map[string]ledgerSeen{}, Probe: Probe}
 	apply := func(e core.Event) {
 		if e.Kind != "model.trial" {
 			return
@@ -191,11 +199,12 @@ func New(c *core.Core, w *work.Module) *Module {
 	}
 	c.J.Replay(apply)
 	c.J.Subscribe(apply)
+	m.Paid = NewPaid(c.J, c.WS.LoadConfig)
 	m.tickDemoted() // so a restart routes as before it, not only from the first tick
 	ops := c.Runs.Ops()
-	ops.Register(core.Op{Name: "route", Roles: []string{"lead"}, Help: `{"role": "lead|worker|reviewer|security|warden|tribunal|sweep|fallback", "models": "a,b,c" (in fallback order; empty clears it), "project": "(optional) only this project"} -> sets the models that role runs on in config.json; a check seat (reviewer, security, warden, tribunal) changes only once the person says yes`, Fn: m.opRoute})
+	ops.Register(core.Op{Name: "route", Roles: core.Peers, Help: `{"role": "lead|worker|reviewer|security|warden|tribunal|sweep|fallback", "models": "a,b,c" (in fallback order; empty clears it), "project": "(optional) only this project"} -> sets the models that role runs on in config.json; a check seat (reviewer, security, warden, tribunal) changes only once the person says yes`, Fn: m.opRoute})
 	ops.Register(core.Op{Name: "models", Help: `{} -> the named models, the routes, which model each live agent runs on, and the trials and how they went`, Fn: func(r core.Run, _ json.RawMessage) (any, error) { return m.View(r), nil }})
-	ops.Register(core.Op{Name: "trial", Roles: []string{"lead", "worker"}, Help: `{"model": "a named model or harness:model", "project": "a test project", "title": "...", "done": "..."} -> a brief whose worker runs on that model alone; the checks stay on their own models, and how it went is recorded (models op). A worker files trials on its own project only, not from a trial of its own, and not one already open on that model with that title`, Fn: m.opTrial})
+	ops.Register(core.Op{Name: "trial", Roles: core.Peers, Help: `{"model": "a named model or harness:model", "project": "a test project", "title": "...", "done": "..."} -> a brief whose worker runs on that model alone; the checks stay on their own models, and how it went is recorded (models op). An agent with a project files trials there only, not from a trial of its own, and not one already open on that model with that title`, Fn: m.opTrial})
 	c.Person.Handle("route", m.onPerson)
 	return m
 }
@@ -218,7 +227,7 @@ func (m *Module) opRoute(r core.Run, args json.RawMessage) (any, error) {
 	}
 	if r.Project != "" && rt.Project != r.Project {
 		if rt.Project != "" {
-			return nil, fmt.Errorf("a project's lead routes only its own project, %s", r.Project)
+			return nil, fmt.Errorf("an agent with a project routes only that project, %s", r.Project)
 		}
 		rt.Project = r.Project
 	}
@@ -398,24 +407,22 @@ func (m *Module) opTrial(r core.Run, args json.RawMessage) (any, error) {
 		return nil, errors.New("a trial names the model, the project to try it on (a test project, not real work) and a title")
 	}
 	if r.Project != "" && b.Project != r.Project {
-		return nil, fmt.Errorf("a project's %s tries models only on its own project, %s", r.Role, r.Project)
+		return nil, fmt.Errorf("an agent with a project tries models only on that project, %s", r.Project)
 	}
 	if err := m.C.Runs.Walled(r, b.Project); err != nil {
 		return nil, err
 	}
-	if r.Role == "worker" {
-		// A project with no lead of its own (one made to try models on) has
-		// its trial rounds run by a worker; a trial's own worker files none,
-		// so trials don't breed trials.
-		if own, ok := m.Work.Get(r.Task); ok && own.Model != "" {
-			return nil, errors.New("a trial's own worker files no trials: finish this one, and say in the account what to try next")
-		}
-		title := strings.TrimSpace(b.Title)
-		if open := m.Work.List(func(t work.Task) bool {
-			return t.Model == b.Model && t.Project == b.Project && t.Title == title && !t.Terminal() && t.Stage != work.StageMerged
-		}); len(open) > 0 {
-			return nil, fmt.Errorf("task %s is already a trial of %s titled %q; it is recorded in the models op once it ends", open[0].ID, b.Model, title)
-		}
+	// Any agent files trials (a project made to try models on may have its
+	// rounds run by a worker); a trial's own worker files none, so trials
+	// don't breed trials, and one already open isn't filed twice.
+	if own, ok := m.Work.Get(r.Task); ok && r.Task != "" && own.Model != "" {
+		return nil, errors.New("a trial's own worker files no trials: finish this one, and say in the account what to try next")
+	}
+	title := strings.TrimSpace(b.Title)
+	if open := m.Work.List(func(t work.Task) bool {
+		return t.Model == b.Model && t.Project == b.Project && t.Title == title && !t.Terminal() && t.Stage != work.StageMerged
+	}); len(open) > 0 {
+		return nil, fmt.Errorf("task %s is already a trial of %s titled %q; it is recorded in the models op once it ends", open[0].ID, b.Model, title)
 	}
 	cfg := m.C.WS.LoadConfig()
 	pick, err := cfg.Pick(b.Model)
@@ -464,6 +471,7 @@ func (m *Module) Tick() {
 		m.C.J.MustAppend("model.trial", tr)
 	}
 	m.tickDemoted()
+	m.tickLedgers()
 }
 
 // tickDemoted works out the picks whose workers keep ending blocked on a
@@ -551,14 +559,7 @@ func (m *Module) Benched(p core.Pick) bool {
 // View is what the models op shows.
 func (m *Module) View(r core.Run) map[string]any {
 	cfg := m.C.WS.LoadConfig()
-	named := map[string]string{}
-	for name, x := range cfg.Models {
-		s := x.Where()
-		if x.Key {
-			s += ", needs a key"
-		}
-		named[name] = s
-	}
+	named := named(cfg)
 	routes := map[string][]string{}
 	for _, role := range core.RouteRoles {
 		routes[role] = cfg.Shown(role, r.Project)
@@ -608,6 +609,19 @@ func (m *Module) View(r core.Run) map[string]any {
 	m.mu.Unlock()
 	slices.Sort(demoted)
 	return map[string]any{"models": named, "routes": routes, "agents": agents, "trials": trials, "trials_not_counted": uncounted, "trials_running": running, "unavailable": down, "demoted": demoted}
+}
+
+// named is each named model and where it is, as the models op shows them.
+func named(cfg core.Config) map[string]string {
+	out := map[string]string{}
+	for name, x := range cfg.Models {
+		s := x.Where()
+		if x.Key {
+			s += ", needs a key"
+		}
+		out[name] = s
+	}
+	return out
 }
 
 // downLine is a Down with when it is tried again and the fix.

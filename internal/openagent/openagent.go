@@ -401,8 +401,11 @@ func (e *httpErr) Error() string {
 // chat sends the conversation and returns the model's reply and the prompt's
 // size in tokens. A rate limit that resets within two minutes is waited out.
 func (a *Agent) chat(ctx context.Context, msgs []Message, tools []map[string]any) (Message, int, error) {
-	if err := harness.OpenRouterPaid(a.Endpoint, a.Model); err != nil {
-		return Message{}, 0, err
+	if err := harness.OpenRouterPaid(a.Endpoint, a.Model); err != nil && a.Price == [2]float64{} {
+		// The run manager allows a paid one under the month's cap, priced so
+		// its spend is counted (core.Config.PaidRefused); one with no price
+		// would spend what nobody counts.
+		return Message{}, 0, fmt.Errorf("%v with no price, so what it spends isn't counted", err)
 	}
 	body := map[string]any{"model": a.Model, "messages": msgs, "tools": tools}
 	if a.MaxOutput > 0 {
@@ -743,11 +746,12 @@ func clip(s string) string {
 // says why it can't answer; nil when it answers. A rate limit counts as
 // answering: the model is there, only busy. A model on an Anthropic-compatible
 // API (anthropic) is asked through its Messages API, as Claude Code would.
-func Probe(ctx context.Context, endpoint, model, key string, anthropic bool) error {
-	if err := harness.OpenRouterPaid(endpoint, model); err != nil {
-		return err
-	}
-	client := &http.Client{Timeout: 90 * time.Second}
+// A paid OpenRouter model is asked at its price (USD per million tokens in
+// and out), as a turn on it would be; with none it is refused unasked, as
+// chat refuses it. The config check lets one in only under
+// openrouter_monthly_usd (Config.PaidRefused).
+func Probe(ctx context.Context, endpoint, model, key string, price [2]float64, anthropic bool) error {
+	client := &http.Client{Timeout: 90 * time.Second, Transport: probeTransport}
 	if anthropic {
 		body, _ := json.Marshal(map[string]any{"model": model, "max_tokens": 16,
 			"messages": []map[string]string{{"role": "user", "content": "Reply with OK."}}})
@@ -784,7 +788,7 @@ func Probe(ctx context.Context, endpoint, model, key string, anthropic bool) err
 		}
 		return &httpErr{code: resp.StatusCode, msg: msg}
 	}
-	a := &Agent{Endpoint: endpoint, Model: model, Key: key, MaxOutput: 16, Client: client, Sleep: func(time.Duration) {}}
+	a := &Agent{Endpoint: endpoint, Model: model, Key: key, Price: price, MaxOutput: 16, Client: client, Sleep: func(time.Duration) {}}
 	_, _, err := a.chat(ctx, []Message{{Role: "user", Content: "Reply with OK."}}, a.tools())
 	var le *limitErr
 	if errors.As(err, &le) {
@@ -792,6 +796,10 @@ func Probe(ctx context.Context, endpoint, model, key string, anthropic bool) err
 	}
 	return err
 }
+
+// probeTransport is what Probe sends through; nil is the default, and a
+// test sets its own.
+var probeTransport http.RoundTripper
 
 // Status is the API status a Probe's error names, or 0.
 func Status(err error) int {

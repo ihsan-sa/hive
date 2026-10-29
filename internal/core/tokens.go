@@ -466,6 +466,9 @@ func (t *Tokens) Watch() {
 	}
 }
 
+// Expiry is when the access token login l hands a turn runs out.
+func (t *Tokens) Expiry(l Login) (time.Time, error) { return loginExpiry(l) }
+
 // loginExpiry is when login l's access token runs out.
 func loginExpiry(l Login) (time.Time, error) {
 	if l.Harness == "codex" {

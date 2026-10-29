@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -138,6 +139,15 @@ func Exec(specPath string) int {
 		}
 	}
 	fail := func(err error) int { fmt.Fprintln(errf, "sandbox:", err); return 125 }
+	if s.Tmp != "" {
+		// Fresh each command, as a tmpfs is; what a killed launcher left
+		// goes the next time.
+		os.RemoveAll(s.Tmp)
+		if err := os.MkdirAll(s.Tmp, 0o700); err != nil {
+			return fail(err)
+		}
+		defer os.RemoveAll(s.Tmp)
+	}
 
 	base := "/dev/shm"
 	if _, err := os.Stat(base); err != nil {
@@ -270,22 +280,11 @@ func openIn(path string) (*os.File, error) {
 }
 
 func findTool(t string) (string, error) {
-	if !filepath.IsAbs(t) {
-		p, err := exec.LookPath(t)
-		if err != nil {
-			for _, d := range []string{filepath.Join(os.Getenv("HOME"), ".local", "bin"), "/usr/local/bin"} {
-				if _, e := os.Stat(filepath.Join(d, t)); e == nil {
-					p, err = filepath.Join(d, t), nil
-					break
-				}
-			}
-		}
-		if err != nil {
-			return "", fmt.Errorf("tool %q not found on this machine", t)
-		}
-		t = p
+	p, err := lookTool(t)
+	if err != nil {
+		return "", err
 	}
-	return filepath.EvalSymlinks(t)
+	return filepath.EvalSymlinks(p)
 }
 
 // interpreters are the host's own runtimes a command may call by name. One
@@ -523,7 +522,11 @@ func Init(argPath string) int {
 	if err := mkdirMount("proc", root+"/proc", "proc", unix.MS_NOSUID|unix.MS_NODEV|unix.MS_NOEXEC, ""); err != nil {
 		return fail("proc", err)
 	}
-	if err := mkdirMount("tmpfs", root+"/tmp", "tmpfs", unix.MS_NOSUID|unix.MS_NODEV, "mode=1777"); err != nil {
+	if s.Tmp != "" {
+		if err := bind(s.Tmp, root+"/tmp", true); err != nil {
+			return fail("tmp", err)
+		}
+	} else if err := mkdirMount("tmpfs", root+"/tmp", "tmpfs", unix.MS_NOSUID|unix.MS_NODEV, "mode=1777,size="+strconv.Itoa(TmpfsSize)); err != nil {
 		return fail("tmp", err)
 	}
 	for _, r := range a.Roots {
@@ -779,7 +782,7 @@ func setupDev(root string) error {
 	for n, t := range map[string]string{"fd": "/proc/self/fd", "stdin": "/proc/self/fd/0", "stdout": "/proc/self/fd/1", "stderr": "/proc/self/fd/2"} {
 		os.Symlink(t, dev+"/"+n)
 	}
-	return mkdirMount("tmpfs", dev+"/shm", "tmpfs", unix.MS_NOSUID|unix.MS_NODEV, "mode=1777")
+	return mkdirMount("tmpfs", dev+"/shm", "tmpfs", unix.MS_NOSUID|unix.MS_NODEV, "mode=1777,size="+strconv.Itoa(ShmSize))
 }
 
 func loopbackUp() error {
