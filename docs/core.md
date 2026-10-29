@@ -25,6 +25,8 @@ The executor hook is core because only launch knows a turn's spec and when the m
 
 What a check sees is part of the merge guarantees, so the choice of its caches is core: `core/disk.go`'s `goBuild` and `stableTimes` (#920, about 80 lines) decide whether a check writes main's build cache or reads it read-only; the cache program itself (`internal/gocache`, `hive gocacheprog`) is outside the core. For the same reason, which packages a change's check runs is core: `RunCheckSince` and `narrow` in `core/effects.go` (#1161, about 50 lines) narrow a Go test command to the packages the change since main can affect; working out which they are (`internal/goscope`) is outside the core.
 
+`core/git.go`'s memo of pure git calls (`pureGit`, `gitMemo`, #2044, about 90 lines) is core because every host git call goes through `Git` there: a merge, diff or file read named by full commit ids gives the same answer each time, and on a loaded machine the repeats (a fifth of the work module's git processes) pushed its tests past their 25-minute limit.
+
 The last row is core only as the place the skeleton runs: what a module adds to it (an API route, a CLI verb) is module material and moves out (step 4 below).
 
 The packages measured as the core, read by `tests/core-size.sh`:
