@@ -61,6 +61,10 @@ type Module struct {
 	// Scan checks what a release at sha publishes before it is cut; nil is
 	// the identity and secret scan of the files on the commit's public list.
 	Scan func(p core.Project, sha string) error
+	// FileFix files a fix brief on a project (title, the failure it fixes,
+	// done, known), or leaves it to an open one of the same title, adding
+	// known when it is news (the work module, wired in app); nil files none.
+	FileFix func(project, title, why, done, known string)
 	// Diff lists the files that differ between two commits; nil is git diff
 	// in the project's clone.
 	Diff func(p core.Project, from, to string) ([]string, error)
@@ -1040,6 +1044,7 @@ func (m *Module) afterKept(project, sha string) {
 		// A retry meets the same hits at the same commit: said once.
 		if last, _ := m.scanSaid.Swap(project, sha+": "+err.Error()); last != sha+": "+err.Error() {
 			alert("no release at " + core.Short(sha) + ", since its scan blocks it: " + err.Error())
+			m.fileScanFix(p, sha, err)
 		}
 		return
 	}

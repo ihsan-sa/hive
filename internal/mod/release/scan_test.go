@@ -163,3 +163,44 @@ func waitFor[T any](t *testing.T, get func() T, ok func(T) bool) T {
 		}
 	}
 }
+
+// A scan that blocks main files one fix naming each hit's file and line and
+// the commit that wrote it, never the thing found; a retry at the same
+// commit files nothing more.
+func TestScanThatBlocksMainFilesAFix(t *testing.T) {
+	m, _, merged, land := selfHive(t)
+	m.Scan = nil
+	type fix struct{ project, title, why, done, known string }
+	var got []fix
+	m.FileFix = func(project, title, why, done, known string) {
+		got = append(got, fix{project, title, why, done, known})
+	}
+	os.WriteFile(filepath.Join(m.C.WS.Private(), scan.HandlesFile), []byte("alice-k\n"), 0o600)
+	selfClone(t, m, map[string]string{scan.PublicList: "**\n", "README.md": "The Hive.\n"})
+	sha := strings.TrimSpace(selfClone(t, m, map[string]string{"docs/a.md": "one\nthanks alice-k\n"}))
+	p, _ := m.C.Projects.Get("hive")
+	m.Scan = func(p core.Project, _ string) error { return m.scan(p, sha) }
+	merged(1, "a1", "m1")
+	land("a1", "r1")
+	m.AfterKept("hive", "m1")
+	m.AfterKept("hive", "m1")
+	if len(got) != 1 || got[0].project != "hive" || got[0].title != scanFix {
+		t.Fatalf("want one fix filed, got %+v", got)
+	}
+	if !strings.Contains(got[0].known, "docs/a.md:2: handle 1 of the handle list (the line as ") {
+		t.Fatalf("the fix doesn't name the hit: %q", got[0].known)
+	}
+	// At a commit the clone has, git blame names the one that wrote the line.
+	m.fileScanFix(p, sha, m.scan(p, sha))
+	if len(got) != 2 || !strings.Contains(got[1].known, "docs/a.md:2: handle 1 of the handle list (the line as "+core.Short(sha)+" wrote it)") {
+		t.Fatalf("the fix doesn't name the commit that wrote the line: %+v", got)
+	}
+	if all := fmt.Sprint(got[0]); strings.Contains(all, "alice") {
+		t.Fatalf("the fix says what was found: %s", all)
+	}
+	// Any other failure files nothing.
+	m.fileScanFix(p, sha, os.ErrPermission)
+	if len(got) != 2 {
+		t.Fatalf("a failure with no hits filed a fix: %+v", got)
+	}
+}

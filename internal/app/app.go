@@ -90,6 +90,18 @@ func New(ws core.Workspace, forge core.Forge) (*App, error) {
 	a.Release = release.New(c)
 	a.Release.Canary = runCanary(ws, a.Work.Gate)
 	a.Release.ReadMerged = a.Work.ReadMerged
+	a.Release.FileFix = func(project, title, why, done, known string) {
+		// An open one takes what it lacks; one past its worker will land first.
+		for _, o := range a.Work.List(func(t work.Task) bool { return t.Project == project && t.Title == title && !t.Terminal() }) {
+			if !strings.Contains(o.Known, known) {
+				a.Work.AddKnown(o.ID, "release", known)
+			}
+			return
+		}
+		if _, err := a.Work.File(work.Brief{Project: project, From: "release", Title: title, Aim: work.AimFix, Why: why, Done: done, Known: known}); err != nil {
+			c.J.MustAppend("alert.raised", map[string]string{"kind": "release", "project": project, "text": "could not file " + title + ": " + err.Error()})
+		}
+	}
 	a.Models = models.New(c, a.Work)
 	a.Agents.Skip = a.Models.Benched
 	a.Agents.Demote = a.Models.Demoted
