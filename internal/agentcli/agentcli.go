@@ -217,6 +217,8 @@ with your run id.
   amend     --task id [--title ...] [--done ...] [--known ...] [--why ...]   change a brief no worker
                                                  has started on, in place (yours; the lead: any but the person's)
   withdraw  --task id --why "..." [--into id]   take back such a brief: it stops, its issue closes
+  fallback  --why "..."                         the Hive that follows its own main puts back
+                                                 the binary its last update replaced and restarts, at once
   batch     --tasks batch,id,... --why "..."  related briefs to one worker in one session and one PR:
                                                  the rest fold into the first (waiting or being worked on)
   stop      --task id --why "..." [--fresh]   end a working task's quiet worker (one that keeps ending
