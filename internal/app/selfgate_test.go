@@ -75,7 +75,7 @@ func TestRunGateReadsTheVerdict(t *testing.T) {
 		}
 		raw, _ := os.ReadFile(args)
 		a := string(raw)
-		if !strings.Contains(a, "--head h --base m") || !strings.Contains(a, "--local-org") || strings.Contains(a, "--allow-bare") || strings.Contains(a, "--allow-tie") != tc.tie {
+		if !strings.Contains(a, "--head h --base m") || !strings.Contains(a, "--local-org") || strings.Contains(a, "--allow-bare") || strings.Contains(a, "--allow-tie") != tc.tie || strings.Contains(a, "--ci-passed") {
 			t.Fatalf("case %d: gate called with %q", i, a)
 		}
 		if nice {

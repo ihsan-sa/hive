@@ -182,6 +182,51 @@ func TestUpdateWithoutNotesLinksThem(t *testing.T) {
 	}
 }
 
+// Notes are outside text: their escape and control characters never reach
+// the terminal, and a CRLF body prints with no CR.
+func TestNotesPrintAsPlainText(t *testing.T) {
+	serve(t, "v9.9.9", build("new"), false)
+	releases = `[{"tag_name": "v9.9.9", "body": "\u001b]0;owned\u0007\u001b[31mred\u009b2J\u202e\r\nnext line\r\n", "html_url": "https://example.com/me/hive/releases/tag/v9.9.9"}]`
+	m, _ := releaseAt(t, "v9.9.8", "me/hive")
+	msg, err := m.Update("")
+	if err != nil || !strings.Contains(msg, `\x1b]0;owned\x07\x1b[31mred\x9b2J\u202e`+"\nnext line") || strings.ContainsAny(msg, "\x1b\x07\u009b\u202e\r") {
+		t.Fatalf("update: %q, %v", msg, err)
+	}
+}
+
+// A releases list past the read limit is read that far, and the notes end
+// with a link to the rest.
+func TestLongNotesEndWithALink(t *testing.T) {
+	serve(t, "v9.9.9", build("new"), false)
+	releases = `[{"tag_name": "v9.9.9", "body": "Faster merges.", "html_url": "https://example.com/me/hive/releases/tag/v9.9.9"},
+ {"tag_name": "v9.9.8", "body": "` + strings.Repeat("x", 4000) + `", "html_url": "https://example.com/me/hive/releases/tag/v9.9.8"}]`
+	limit := maxNotes
+	t.Cleanup(func() { maxNotes = limit })
+	maxNotes = 1000
+	m, _ := releaseAt(t, "v0.1.2", "me/hive")
+	msg, err := m.Update("")
+	if err != nil || !strings.Contains(msg, "Faster merges.") || strings.Contains(msg, "xxx") || !strings.HasSuffix(msg, "…\n"+NotesLink("me/hive")) {
+		t.Fatalf("update: %q, %v", msg, err)
+	}
+}
+
+// A pre-release, which an update to a full release never installed, is left
+// out of its notes; an update to a pre-release shows the ones it passes.
+func TestNotesSkipPrereleases(t *testing.T) {
+	serve(t, "v9.9.8", build("new"), false)
+	releases = `[{"tag_name": "v9.9.9", "body": "Newer beta.", "prerelease": true, "html_url": "x"},
+ {"tag_name": "v9.9.8", "body": "Fixed the lead's chat.", "html_url": "x"},
+ {"tag_name": "v9.9.7", "body": "Beta only.", "prerelease": true, "html_url": "x"}]`
+	m, _ := releaseAt(t, "v0.1.2", "me/hive")
+	msg, err := m.Update("")
+	if err != nil || strings.Contains(msg, "beta") || strings.Contains(msg, "Beta only.") || !strings.Contains(msg, "Fixed the lead's chat.") {
+		t.Fatalf("update: %q, %v", msg, err)
+	}
+	if notes := Notes(m.C.Effects.Forge, "me/hive", "v0.1.2", "v9.9.9"); !strings.Contains(notes, "Newer beta.") || !strings.Contains(notes, "Beta only.") {
+		t.Fatalf("notes up to a pre-release: %q", notes)
+	}
+}
+
 // Past 1.0, a new major version means an update would break the setup: the
 // auto-update leaves it for the person, whose own update installs it.
 func TestAutoUpdateStopsAtANewMajor(t *testing.T) {

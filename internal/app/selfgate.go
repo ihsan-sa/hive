@@ -48,6 +48,9 @@ func runGate(ws core.Workspace) func(context.Context, work.GateJob) core.GateRes
 		if j.AllowTie {
 			args = append(args, "--allow-tie")
 		}
+		if j.CIPassed {
+			args = append(args, "--ci-passed")
+		}
 		args = append(args, orgArgs(j)...)
 		// The gate and all it starts (builds, child Hives, the e2e suite) run
 		// under every lead's priority, as a check does.

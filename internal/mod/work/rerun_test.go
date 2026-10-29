@@ -528,3 +528,32 @@ func mustSync(t *testing.T, m *Module, p core.Project) string {
 	}
 	return main
 }
+
+// A retry of a head whose tests passed (the stall watcher's or a lead's
+// recheck of a task past its test) lands again on that head with the green
+// run kept, not sent to the end of the test line; a red one runs again.
+func TestRetryOfAGreenHeadKeepsItsTest(t *testing.T) {
+	m, task, p, _ := gateRig(t, false, map[string]string{"feature.txt": "y"})
+	toMerging(t, m, task, p)
+	m.save(task, "")
+	if err := m.Recheck(task.ID, "", "lead"); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := m.Get(task.ID)
+	if got.Stage != StageLanding || got.KeepsTest != task.SHA {
+		t.Fatalf("after the retry: %s, keeps %q, want landing keeping %s's test", got.Stage, got.KeepsTest, task.SHA)
+	}
+	if err := m.open(&got, p, task.SHA, "retried"); err != nil {
+		t.Fatal(err)
+	}
+	if got.Recheck || got.KeepsTest != "" {
+		t.Fatalf("landed again on the green head: recheck %v, keeps %q, want its test kept", got.Recheck, got.KeepsTest)
+	}
+	got.KeepsTest = "" // a head not kept (its test red, or a worker finishing again) runs again
+	if err := m.open(&got, p, task.SHA, "a tool was installed"); err != nil {
+		t.Fatal(err)
+	}
+	if !got.Recheck {
+		t.Fatal("finishing again on the same head skips its tests")
+	}
+}
