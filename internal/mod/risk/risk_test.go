@@ -182,7 +182,7 @@ func TestWardenDoRunsExactlyItsScript(t *testing.T) {
 	if got.State != "done" || !core.Exists(filepath.Join(g.c.WS.Hive(), "risk", req.Project, req.ID, "proof")) || strings.Contains(got.Output, "secret-token") {
 		t.Fatalf("step didn't run: %+v", got)
 	}
-	if !g.told("done") {
+	if !g.told("done") || !g.toldNow("kept for the person") || g.toldNow("ran") && g.toldNow("HOME=") {
 		t.Fatal("the worker wasn't told")
 	}
 	if s, ok := g.m.Steps(g.worker.ID); !ok || s != "- done: install left-pad" {
@@ -1391,5 +1391,34 @@ func TestStepUsesTheProjectsForgeToken(t *testing.T) {
 	g.settle(req.ID, "approved", "running")
 	if b, _ := os.ReadFile(filepath.Join(g.c.WS.Hive(), "risk", "deck", req.ID, "proof")); string(b) != "org-tok" {
 		t.Fatalf("GH_TOKEN in the step: %q", b)
+	}
+}
+
+func TestWardenSharesAReadOnlyStepsOutput(t *testing.T) {
+	g := newRig(t, 2)
+	req := g.request("print per-cgroup io.stat", "cat io.stat", "T2")
+	if g.decide(req, map[string]string{"decision": "decline", "reason": "no", "share": "output"}) == nil {
+		t.Fatal("a decline took share")
+	}
+	script := "echo user.slice wbytes=43MB; echo GH_TOKEN=ghp_abcdefghijklmnopqrstuvwxyz0123; echo 'Authorization: Bearer x'; echo dispatch-fx.service 7.8"
+	if err := g.decide(req, map[string]string{"decision": "do", "reason": "reads only", "script": script, "share": "output"}); err != nil {
+		t.Fatal(err)
+	}
+	got := g.settle(req.ID, "approved", "running")
+	if got.State != "done" || !strings.Contains(got.Output, "ghp_abcdefghij") {
+		t.Fatalf("the person lost the whole output: %+v", got)
+	}
+	if !g.told("user.slice wbytes=43MB") || !g.told("dispatch-fx.service 7.8") {
+		t.Fatalf("the asker didn't get the output: %q", g.run(g.worker.ID).Pending)
+	}
+	if g.toldNow("ghp_") || g.toldNow("Bearer") || !g.toldNow("[line withheld") {
+		t.Fatalf("a secret went back: %q", g.run(g.worker.ID).Pending)
+	}
+}
+
+func TestRedact(t *testing.T) {
+	out := Redact("fine 1\npassword: hunter2\nx tok123456789 y\n-----BEGIN OPENSSH PRIVATE KEY-----\nAWS AKIAABCDEFGHIJKLMNOP\nfine 2", []string{"GH_TOKEN=tok123456789"})
+	if out != "fine 1\n[line withheld: it reads like a secret]\n[line withheld: it reads like a secret]\n[line withheld: it reads like a secret]\n[line withheld: it reads like a secret]\nfine 2" {
+		t.Fatalf("redacted:\n%s", out)
 	}
 }
