@@ -388,3 +388,8 @@
 - Decision: `Runs.ramp` keeps the runs waiting on it and gives each step to the first in line: one Returned (sent back to its task) first, then the oldest by Created; a waiter not seen for `rampSeen` (10s) drops out.
 - Why: Tick steps every run in its own goroutine, so the step went to whichever asked first after it, under steady load usually a newer run; from 04Z on 10-29 seven sent-back workers took no turn in 4-7h while 28 newer runs took 46. (The pace-vs-ramp flip itself was the old order, Admit after the ramp, fixed in #1980.)
 - Tradeoff: when the run first in line has gone (started elsewhere, ended) the step waits up to 10s more; a lead and a turn going to a runner still skip the ramp.
+
+## 2026-10-29 Any agent steers any project's queue, saying why (#2037)
+- Decision: `queue` takes order, hold, release and now on a brief of any project the caller can see; on one not its own it needs `why`, which goes on the brief's record with the caller's id. A new order still resets only the caller's own project's places. The other steering ops stay on the caller's project.
+- Why: on 10-29 lead:hifi-receiver-2 twice had to ask the lead to move hive and pll briefs first ("I can't steer hive"); the person: all agents are the same and have the same say (10-28 12:27).
+- Tradeoff: a project's lead can find its line moved by another project's agent; the why on the record says who and for what.
