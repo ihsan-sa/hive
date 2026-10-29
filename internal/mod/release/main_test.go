@@ -180,3 +180,41 @@ func TestUntarRefusesEscapes(t *testing.T) {
 		t.Fatal("the file escaped")
 	}
 }
+
+// The latest channel looks only on its schedule, hours apart, so a check
+// running at the look never holds the update.
+func TestScheduledLatestUpdateIgnoresRunningChecks(t *testing.T) {
+	serve(t, "v9.9.9", build("new"), false)
+	m, exe := releaseAt(t, "v0.1.2", "me/hive")
+	m.Restart = func() {}
+	done := m.C.Effects.Slots.Acquire("hive", "abc", "test")
+	defer done()
+	if m.Channel() != Latest {
+		t.Fatalf("channel %q", m.Channel())
+	}
+	msg, err := m.AutoUpdate()
+	if raw, _ := os.ReadFile(exe); err != nil || !strings.HasPrefix(msg, "updated to v9.9.9") || string(raw) != "new" {
+		t.Fatalf("scheduled update held by a running check: %q, %v, binary %q", msg, err, raw)
+	}
+}
+
+// Following main, the wait for running checks is bounded from its first look
+// at a release, however far apart the looks are: past checksWaitMax it
+// installs anyway.
+func TestCheckWaitEndsAtItsCap(t *testing.T) {
+	m, exe, sha := onMain(t, "v0.1.2", map[string]string{"VERSION": "0.1"})
+	m.Restart = func() {}
+	m.C.J.MustAppend("hive.released", map[string]any{"project": "hive", "tag": "v0.1.3", "sha": sha})
+	done := m.C.Effects.Slots.Acquire("hive", "abc", "test")
+	defer done()
+	if msg, _ := m.AutoUpdate(); !strings.Contains(msg, "1 check(s) running") {
+		t.Fatalf("didn't wait: %q", msg)
+	}
+	m.checksSince = time.Now().Add(-checksWaitMax - time.Minute) // the first look, long ago
+	if msg, err := m.AutoUpdate(); err != nil || !strings.HasPrefix(msg, "updated to v0.1.3") {
+		t.Fatalf("past the cap: %q, %v", msg, err)
+	}
+	if raw, _ := os.ReadFile(exe); string(raw) != "built v0.1.3 from 0.1" {
+		t.Fatalf("binary %q", raw)
+	}
+}

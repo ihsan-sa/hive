@@ -1135,7 +1135,7 @@ func channelText(follows, chosen string) string {
 	case "pre-release":
 		t = "pre-releases, once safe here"
 	case "main", "train":
-		t = "main: each commit it releases, built here, and main's modules live on merge"
+		t = "main: each commit it releases, built here, and main's modules live on merge (only where its own project is release_repo; elsewhere it never updates)"
 	}
 	if chosen == "" {
 		t += " (default)"

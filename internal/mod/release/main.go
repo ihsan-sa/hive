@@ -251,21 +251,21 @@ var goBuild = func(ws core.Workspace, src, out, goos, goarch, tag, repo string) 
 // were running when it first looked; the restart ends every check in flight.
 var checksWaitMax = 45 * time.Minute
 
-// waitChecks says why an automatic update to tag waits, or "": the checks
-// running when it first looked go on to their verdicts, for at most
-// checksWaitMax, then it installs; one that starts meanwhile doesn't hold
+// waitChecks says why an automatic update to tag waits, or "": on a channel
+// follow polls (main, pre-release), the checks running when it first looked
+// for tag go on to their verdicts, for at most checksWaitMax, then it
+// installs; one that starts meanwhile doesn't hold
 // it, and dies with the restart. `hive update` doesn't wait.
 func (m *Module) waitChecks(tag string, auto bool) string {
-	if !auto {
-		return ""
+	if !auto || m.Channel() == Latest {
+		return "" // the latest channel looks every few hours, not every few minutes: a wait would hold it a look
 	}
 	running, _ := m.C.Effects.Slots.State()
 	key := func(u core.SlotUse) string { return u.Project + "@" + u.SHA + " " + u.Kind + " " + u.Since.String() }
 	now := time.Now()
-	if now.Sub(m.checksLook) > 3*followEvery {
-		m.checksAt = nil // the last wait was given up: this one starts afresh
+	if m.checksTag != tag {
+		m.checksAt, m.checksTag = nil, tag // a wait for another release starts afresh
 	}
-	m.checksLook = now
 	if m.checksAt == nil {
 		m.checksAt, m.checksSince = map[string]bool{}, now
 		for _, u := range running {
