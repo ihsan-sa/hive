@@ -542,8 +542,11 @@ func (m *Module) onEvent(e core.Event) {
 	}
 }
 
-// route handles messages addressed to the person.
+// route handles messages addressed to the person, and to the room.
 func (m *Module) route(from core.Run, to, text string) (bool, error) {
+	if to == Room {
+		return true, m.room(from, text)
+	}
 	if to != "person" && to != "you" {
 		return false, nil
 	}
@@ -561,6 +564,42 @@ func (m *Module) route(from core.Run, to, text string) (bool, error) {
 	}
 	m.add(Message{Chat: ch.ID, From: from.ID, Name: ch.Title, Text: text})
 	return true, nil
+}
+
+// Room is the address of every live agent on the sender's project at once:
+// the one space the open arm's agents share (docs/soft-layer.md). Its
+// readers are the agents that take part in the work, leads, workers and
+// sweeps; reviewers, wardens, tribunals and judges answer what they were
+// asked and are left out.
+const Room = "room"
+
+var inRoom = map[string]bool{"lead": true, "worker": true, "sweep": true}
+
+// room delivers text to everyone else in from's room, each as an ordinary
+// message (so each is in the journal as msg.sent), marked as said to the room.
+func (m *Module) room(from core.Run, text string) error {
+	others := m.C.Runs.List(func(x *core.Run) bool {
+		return x.ID != from.ID && !x.Terminal() && inRoom[x.Role] && x.Project == from.Project
+	})
+	if len(others) == 0 {
+		return errors.New("nobody else is in the room: no other live lead, worker or sweep on " + orNone(from.Project))
+	}
+	for _, x := range others {
+		if _, err := m.C.Runs.Ops().Deliver(from, x.ID, RoomMark+text); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// RoomMark starts every message said to the room.
+const RoomMark = "(to the room) "
+
+func orNone(project string) string {
+	if project == "" {
+		return "no project"
+	}
+	return project
 }
 
 // Chats returns all chats, leads first, then projects, then agents.

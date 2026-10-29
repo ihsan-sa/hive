@@ -308,3 +308,46 @@ func TestLeadThreadFromHeader(t *testing.T) {
 		t.Fatalf("the lead answers in thread %q, want t-abc1", thread)
 	}
 }
+
+// A message to the room reaches every other live lead, worker and sweep on
+// the sender's project, each as a message of its own, and no one else.
+func TestRoomReachesTheProjectsAgents(t *testing.T) {
+	dir := t.TempDir()
+	c, err := core.Open(core.Workspace{Root: filepath.Join(dir, "hive")}, &core.Local{Dir: filepath.Join(dir, "forge")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	New(c, nil)
+	for _, s := range []core.RunSpec{
+		{ID: "w1", Role: "worker", Project: "p"}, {ID: "w2", Role: "worker", Project: "p"}, {ID: "l", Role: "lead", Project: "p"},
+		{ID: "rv", Role: "reviewer", Project: "p"}, {ID: "w3", Role: "worker", Project: "q"}, {ID: "w4", Role: "worker", Project: "p"},
+	} {
+		s.Harness = "fake"
+		c.J.MustAppend("run.created", s)
+	}
+	c.J.MustAppend("run.status", map[string]any{"id": "w4", "status": core.StatusStopped})
+	w1, _ := c.Runs.Get("w1")
+	if _, err := c.Runs.Ops().Deliver(w1, Room, "I take the flaky gate test"); err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, e := range c.J.Since(0) {
+		if e.Kind != "msg.sent" {
+			continue
+		}
+		var s struct{ From, To, Text string }
+		e.Decode(&s)
+		if s.From != "w1" || s.Text != RoomMark+"I take the flaky gate test" {
+			t.Errorf("room message: %+v", s)
+		}
+		got[s.To] = true
+	}
+	if len(got) != 2 || !got["w2"] || !got["l"] {
+		t.Fatalf("the room reached %v, want w2 and l", got)
+	}
+	w3, _ := c.Runs.Get("w3")
+	if _, err := c.Runs.Ops().Deliver(w3, Room, "anyone?"); err == nil || !strings.Contains(err.Error(), "nobody else") {
+		t.Fatalf("an empty room must say so: %v", err)
+	}
+}

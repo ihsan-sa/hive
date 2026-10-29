@@ -746,10 +746,12 @@ func clip(s string) string {
 // says why it can't answer; nil when it answers. A rate limit counts as
 // answering: the model is there, only busy. A model on an Anthropic-compatible
 // API (anthropic) is asked through its Messages API, as Claude Code would.
-// A paid OpenRouter model is asked too, its few tokens uncounted: the config
-// check lets one in only under openrouter_monthly_usd (Config.PaidRefused).
-func Probe(ctx context.Context, endpoint, model, key string, anthropic bool) error {
-	client := &http.Client{Timeout: 90 * time.Second}
+// A paid OpenRouter model is asked at its price (USD per million tokens in
+// and out), as a turn on it would be; with none it is refused unasked, as
+// chat refuses it. The config check lets one in only under
+// openrouter_monthly_usd (Config.PaidRefused).
+func Probe(ctx context.Context, endpoint, model, key string, price [2]float64, anthropic bool) error {
+	client := &http.Client{Timeout: 90 * time.Second, Transport: probeTransport}
 	if anthropic {
 		body, _ := json.Marshal(map[string]any{"model": model, "max_tokens": 16,
 			"messages": []map[string]string{{"role": "user", "content": "Reply with OK."}}})
@@ -786,7 +788,7 @@ func Probe(ctx context.Context, endpoint, model, key string, anthropic bool) err
 		}
 		return &httpErr{code: resp.StatusCode, msg: msg}
 	}
-	a := &Agent{Endpoint: endpoint, Model: model, Key: key, MaxOutput: 16, Client: client, Sleep: func(time.Duration) {}}
+	a := &Agent{Endpoint: endpoint, Model: model, Key: key, Price: price, MaxOutput: 16, Client: client, Sleep: func(time.Duration) {}}
 	_, _, err := a.chat(ctx, []Message{{Role: "user", Content: "Reply with OK."}}, a.tools())
 	var le *limitErr
 	if errors.As(err, &le) {
@@ -794,6 +796,10 @@ func Probe(ctx context.Context, endpoint, model, key string, anthropic bool) err
 	}
 	return err
 }
+
+// probeTransport is what Probe sends through; nil is the default, and a
+// test sets its own.
+var probeTransport http.RoundTripper
 
 // Status is the API status a Probe's error names, or 0.
 func Status(err error) int {

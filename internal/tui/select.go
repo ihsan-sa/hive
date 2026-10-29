@@ -56,8 +56,8 @@ func (m *model) mouseSelect(msg tea.MouseMsg) (handled bool, cmd tea.Cmd) {
 	case msg.Action == tea.MouseActionRelease:
 		s := m.sel
 		m.sel.on = false
-		if s.a == s.b {
-			return true, nil // a click, not a drag
+		if s.a == s.b { // a click, not a drag: on a feed line, it opens it
+			return true, m.click(s.a[0], s.a[1])
 		}
 		text := s.text(strings.Split(m.View(), "\n"))
 		if text == "" {

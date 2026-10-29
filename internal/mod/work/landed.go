@@ -39,7 +39,7 @@ func (m *Module) Landed(id, mergeSHA, by, why string) (Task, error) {
 	}
 	m.mu.Unlock()
 	if busy {
-		return t, fmt.Errorf("task %s has a step running right now; ask again in a moment", id)
+		return t, m.heldErr(id)
 	}
 	defer m.release(id)
 	t, _ = m.Get(id) // as the last step left it
