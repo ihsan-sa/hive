@@ -29,6 +29,7 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/kb"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/release"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/work"
+	"github.com/ihsan-sa/hive-standalone-build/internal/text"
 )
 
 var sections = []string{"Chats", "Dashboard", "Waiting", "Feedback", "Knowledge", "Modules", "Settings"}
@@ -130,6 +131,7 @@ type model struct {
 	showSince bool
 	seen      int64 // the journal seq the person has seen up to, for the update notice
 	notice    *api.Updated
+	noticeAt  int // the first line of the notes shown, as they scroll
 	help      bool
 	sel       selection // a mouse drag in progress
 
@@ -399,7 +401,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.err, m.st, m.loaded = "", msg.st, true
 			if u := msg.st.Updated; u != nil && u.Seq > m.seen {
-				m.notice, m.seen = u, u.Seq
+				m.notice, m.noticeAt, m.seen = u, 0, u.Seq
 			}
 			for _, c := range m.st.Chats {
 				if first && m.chat == "" && c.Kind == "lead" { // open on the Hive's lead
@@ -551,8 +553,23 @@ func (m *model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.showSince = false
 		return m, nil
 	}
-	if m.notice != nil {
-		m.notice = nil
+	if m.notice != nil { // notes longer than the screen scroll; any other key dismisses them
+		switch s {
+		case "up", "k":
+			m.noticeAt = max(0, m.noticeAt-1)
+		case "down", "j":
+			m.noticeAt++
+		case "pgdown", " ":
+			m.noticeAt += m.bodyHeight() - 2
+		case "pgup":
+			m.noticeAt = max(0, m.noticeAt-m.bodyHeight()+2)
+		case "home", "g":
+			m.noticeAt = 0
+		case "end", "G":
+			m.noticeAt = 1 << 20 // drawing clamps it to the last page
+		default:
+			m.notice = nil
+		}
 		return m, nil
 	}
 	if m.help {
@@ -915,6 +932,27 @@ func readClipboard(text bool, compose int) tea.Cmd {
 	}
 }
 
+// viewNotice is the notes of the version the Hive updated to, whole: wrapped
+// to the pane and scrolled when longer than it. They are cleaned here too, as
+// the version that wrote them may not have cleaned them.
+func (m *model) viewNotice(w int) []string {
+	u := m.notice
+	head := []string{"", stTitle.Render("Updated to "+text.Visible(u.To)) + stDim.Render("  any key to dismiss"), ""}
+	if u.Unsigned {
+		head = append(append(head, wrapStyled(stWarn, release.Unsigned, w-2)...), "")
+	}
+	notes := wrap(shown(u.Notes), w-2)
+	h := max(1, m.bodyHeight()-len(head))
+	if len(notes) <= h {
+		return append(head, notes...)
+	}
+	h-- // a line says where the notes are and how to scroll them
+	m.noticeAt = max(0, min(m.noticeAt, len(notes)-h))
+	end := m.noticeAt + h
+	foot := stDim.Render(fmt.Sprintf("lines %d–%d of %d · ↑↓ space pgup to scroll", m.noticeAt+1, end, len(notes)))
+	return append(append(head, notes[m.noticeAt:end]...), foot)
+}
+
 func (m *model) bodyHeight() int { return max(3, m.h-4) }
 
 func (m *model) View() string {
@@ -950,11 +988,7 @@ func (m *model) viewMain(w int) pane {
 		body = append([]string{"", stTitle.Render("While you were away"), ""}, m.since...)
 		body = append(body, "", stDim.Render("any key to continue"))
 	case m.notice != nil:
-		body = []string{"", stTitle.Render("Updated to "+m.notice.To) + stDim.Render("  any key to dismiss"), ""}
-		if m.notice.Unsigned {
-			body = append(append(body, wrapStyled(stWarn, release.Unsigned, w-2)...), "")
-		}
-		body = append(body, strings.Split(m.notice.Notes, "\n")...)
+		body = m.viewNotice(w)
 	case m.help:
 		body = helpLines()
 	case m.section == secChats:

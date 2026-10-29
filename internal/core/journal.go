@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 	"testing"
 	"time"
@@ -51,6 +52,32 @@ type Journal struct {
 	// breaks counts events whose seq didn't rise past the one before: two
 	// writers on one file. flagged is the count an earlier start reported.
 	breaks, flagged int
+	// size is where the next line goes; marks index the file for Since.
+	size  int64
+	marks []mark
+}
+
+// A mark is where a line starts and the highest seq of every line before
+// it, taken every markEvery bytes. Since starts at the last mark whose seq is
+// at most the cursor, so a module polling /api/events every second reads the
+// tail it wants, not the whole journal (981 MB on 2026-10-29, read from disk
+// once it fell out of the page cache). The highest seq, not the last, keeps
+// that right after two writers left seqs out of order.
+type mark struct{ off, seq int64 }
+
+const markEvery = 1 << 20
+
+// mark notes a line starting at off, before the event it holds is counted.
+func (j *Journal) mark(off int64) {
+	if last := int64(0); len(j.marks) > 0 {
+		last = j.marks[len(j.marks)-1].off
+		if off-last < markEvery {
+			return
+		}
+	} else if off < markEvery {
+		return
+	}
+	j.marks = append(j.marks, mark{off, j.seq})
 }
 
 // OpenJournal opens (or creates) the journal at path and reads its last seq.
@@ -59,7 +86,12 @@ func OpenJournal(path string) (*Journal, error) {
 		return nil, err
 	}
 	j := &Journal{path: path}
-	if err := j.Replay(func(e Event) {
+	if _, err := readFrom(path, 0, func(off int64, raw []byte) {
+		var e Event
+		if json.Unmarshal(raw, &e) != nil || e.Kind == "" {
+			return
+		}
+		j.mark(off)
 		if e.Seq <= j.seq {
 			j.breaks++
 		}
@@ -77,6 +109,9 @@ func OpenJournal(path string) (*Journal, error) {
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
 		return nil, err
+	}
+	if fi, err := f.Stat(); err == nil {
+		j.size = fi.Size()
 	}
 	j.f = f
 	return j, nil
@@ -103,10 +138,12 @@ func (j *Journal) Append(kind string, data any) (Event, error) {
 		return Event{}, err
 	}
 	j.mu.Lock()
+	j.mark(j.size)
 	j.seq++
 	e := Event{Seq: j.seq, At: time.Now().UTC(), Kind: kind, Data: raw}
 	line, _ := json.Marshal(e)
-	_, err = j.f.Write(append(line, '\n'))
+	n, err := j.f.Write(append(line, '\n'))
+	j.size += int64(n)
 	if err == nil && durable {
 		err = j.f.Sync()
 	}
@@ -143,11 +180,19 @@ func (j *Journal) Replay(fn func(Event)) error {
 	})
 }
 
-// Since returns events with Seq > after.
+// Since returns events with Seq > after, reading from the last mark before
+// them rather than from the start.
 func (j *Journal) Since(after int64) []Event {
+	j.mu.Lock()
+	from := int64(0)
+	if i := sort.Search(len(j.marks), func(i int) bool { return j.marks[i].seq > after }); i > 0 {
+		from = j.marks[i-1].off
+	}
+	j.mu.Unlock()
 	var out []Event
-	_ = j.Replay(func(e Event) {
-		if e.Seq > after {
+	_, _ = readFrom(j.path, from, func(_ int64, raw []byte) {
+		var e Event
+		if json.Unmarshal(raw, &e) == nil && e.Kind != "" && e.Seq > after {
 			out = append(out, e)
 		}
 	})
@@ -166,25 +211,38 @@ func (j *Journal) Close() error { return j.f.Close() }
 
 // ReadJSONL calls fn for each non-empty line; a missing file is empty.
 func ReadJSONL(path string, fn func([]byte)) error {
+	_, err := readFrom(path, 0, func(_ int64, raw []byte) { fn(raw) })
+	return err
+}
+
+// readFrom calls fn with the offset and text of each complete non-empty line
+// from byte off on, and returns where the last complete line ended.
+func readFrom(path string, off int64, fn func(int64, []byte)) (int64, error) {
 	f, err := os.Open(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return nil
+		return 0, nil
 	}
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer f.Close()
+	if _, err := f.Seek(off, io.SeekStart); err != nil {
+		return off, err
+	}
 	r := bufio.NewReaderSize(f, 1<<16)
 	for {
 		line, err := r.ReadBytes('\n')
-		if len(line) > 1 && line[len(line)-1] == '\n' {
-			fn(line[:len(line)-1])
+		if len(line) > 0 && line[len(line)-1] == '\n' {
+			if len(line) > 1 {
+				fn(off, line[:len(line)-1])
+			}
+			off += int64(len(line))
 		}
 		if err == io.EOF {
-			return nil
+			return off, nil
 		}
 		if err != nil {
-			return err
+			return off, err
 		}
 	}
 }

@@ -1813,3 +1813,58 @@ func TestCheckoutKeepsExecBit(t *testing.T) {
 		t.Fatalf("run.sh committed as %q, want 100755", out)
 	}
 }
+
+// Identical checks asked while one waits share its run: one slot, one
+// checkout, one verdict (#1880); one asked after it ends runs again.
+func TestIdenticalChecksShareOneRun(t *testing.T) {
+	c, _, p, main := setupProject(t)
+	c.Effects.Slots.Resize(func() int { return 1 })
+	dir := t.TempDir()
+	gate, runs := filepath.Join(dir, "gate"), filepath.Join(dir, "runs")
+	blocked := make(chan Check)
+	go func() {
+		blocked <- c.Effects.RunCheck(p, main, "test", "while [ ! -e "+gate+" ]; do sleep 0.05; done")
+	}()
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		if running, _ := c.Effects.Slots.State(); len(running) == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the first check never took the slot")
+		}
+	}
+	command := "echo ran >> " + runs
+	got := make(chan Check, 3)
+	for range 3 {
+		go func() { got <- c.Effects.RunCheck(p, main, "test", command) }()
+	}
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		c.Effects.shareMu.Lock()
+		n := len(c.Effects.sharing)
+		c.Effects.shareMu.Unlock()
+		if n == 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the identical checks never asked")
+		}
+	}
+	time.Sleep(200 * time.Millisecond) // the followers reach their wait
+	if _, waiting := c.Effects.Slots.State(); len(waiting) != 1 {
+		t.Fatalf("identical checks each wait for a slot: %d waiting", len(waiting))
+	}
+	os.WriteFile(gate, nil, 0o644)
+	<-blocked
+	for range 3 {
+		if ch := <-got; !ch.OK || ch.SHA != main {
+			t.Fatalf("a shared check came back wrong: %+v", ch)
+		}
+	}
+	if raw, _ := os.ReadFile(runs); strings.Count(string(raw), "ran") != 1 {
+		t.Fatalf("three identical checks waiting together ran %d times", strings.Count(string(raw), "ran"))
+	}
+	c.Effects.RunCheck(p, main, "test", command)
+	if raw, _ := os.ReadFile(runs); strings.Count(string(raw), "ran") != 2 {
+		t.Fatalf("a check asked after the shared one ended didn't run again: %q", raw)
+	}
+}

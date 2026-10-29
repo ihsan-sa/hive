@@ -170,6 +170,27 @@ func TestRunOnARemovedHarnessStops(t *testing.T) {
 	}
 }
 
+// A run whose pick can't run here (its harness's module removed, a paid
+// model the settings refuse) goes on the next pick of its route that can,
+// even one no run has finished on yet, rather than park or block on it.
+func TestRunPassesAPickThatCantRunHere(t *testing.T) {
+	c, _ := testHive(t)
+	installWorkers(t, c.WS)
+	route := []Pick{{Harness: "opencode", Model: "opencode/big-pickle"}, {Harness: "claude", Model: "opus"}}
+	c.J.MustAppend("run.created", RunSpec{ID: "w1", Role: "worker", Harness: "opencode", Model: "opencode/big-pickle", Route: route})
+	r, _ := c.Runs.Get("w1")
+	if p, _ := c.Runs.next(r); !p.Same(route[0]) {
+		t.Fatalf("with its harness there it went on %s", p)
+	}
+	os.RemoveAll(filepath.Join(c.WS.Modules(), "workers"))
+	if p, _ := c.Runs.next(r); !p.Same(route[1]) {
+		t.Fatalf("with its harness gone it went on %s, want %s", p, route[1])
+	}
+	if err := c.Runs.cantRun(route[0]); err == nil {
+		t.Fatal("a removed harness can run")
+	}
+}
+
 // A second result in one turn leaves no verdict, not even one read back
 // from the last message's text.
 func TestTwoResultsLeaveNoVerdict(t *testing.T) {

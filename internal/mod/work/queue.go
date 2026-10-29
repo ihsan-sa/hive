@@ -82,7 +82,7 @@ func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]str
 	m.mu.Lock()
 	for _, t := range tasks {
 		switch {
-		case (t.Queued() || t.Resending()) && !m.busy[t.ID]:
+		case (t.Queued() || t.Resending()) && !m.busy[t.ID] && !m.finishedBack(t):
 			// A worker a conflict sends back takes a slot as a new one
 			// does: a main merge once reopened 19 at a pace of 1.
 			line = append(line, t)
@@ -384,7 +384,7 @@ func (m *Module) opQueue(r core.Run, args json.RawMessage) (any, error) {
 	if len(a.Order) > 0 { // a new order replaces the old one: the rest go after, as filed
 		// Only in the caller's reach: another project's order is kept, and
 		// not one note each for the briefs it never named.
-		for _, t := range m.List(func(t Task) bool { return t.Queued() && t.Order > 0 && m.reach(r, t.Project) == nil }) {
+		for _, t := range m.List(func(t Task) bool { return (t.Queued() || t.Resending()) && t.Order > 0 && m.reach(r, t.Project) == nil }) {
 			if changes[t.ID] == nil {
 				at(t.ID).order = 0
 			}
@@ -404,7 +404,10 @@ func (m *Module) opQueue(r core.Run, args json.RawMessage) (any, error) {
 			// project's line is anyone's to steer, saying why on the record.
 			notes = append(notes, fmt.Sprintf("%s is on project %s; say why with why to steer another project's line", id, t.Project))
 			continue
-		case !t.Queued():
+		case !t.Queued() && !t.Resending():
+			// One a conflict sent back waits in the line as the queue lists
+			// it, so it is moved, held or started now like a brief (issue
+			// #2085: the pivot #2046 sat 23rd behind 22 sendbacks).
 			notes = append(notes, fmt.Sprintf("%s has left the queue (%s); a started worker isn't stopped by the queue", id, t.Stage))
 			continue
 		}
@@ -415,6 +418,13 @@ func (m *Module) opQueue(r core.Run, args json.RawMessage) (any, error) {
 		}
 		m.mu.Unlock()
 		if busy {
+			notes = append(notes, id+" is starting its worker right now")
+			continue
+		}
+		if t, ok = m.Get(id); !ok || !t.Queued() && !t.Resending() { // it started or was sent back before it was ours
+			m.mu.Lock()
+			delete(m.busy, id)
+			m.mu.Unlock()
 			notes = append(notes, id+" is starting its worker right now")
 			continue
 		}
@@ -473,7 +483,9 @@ func (m *Module) Queue(r core.Run) []string {
 	for i, t := range line {
 		why := t.Reason
 		if t.Resending() { // it started long ago: its wait is the pace's, not the brief's
-			why = strings.TrimSuffix("its worker goes back to merge main; "+why, "; ")
+			if !strings.Contains(why, "goes back to merge main") { // waits names it
+				why = strings.TrimSuffix("its worker goes back to merge main; "+why, "; ")
+			}
 		} else if d := time.Since(t.Created); !t.Created.IsZero() && d >= time.Hour {
 			// The lead sees the long waits, and which go ahead of its order.
 			age := fmt.Sprintf("waited %s", d.Round(time.Minute))

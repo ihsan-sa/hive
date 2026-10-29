@@ -191,15 +191,15 @@ func (m *Module) redTests(p core.Project, sha, test string, tc core.Check) (sum 
 }
 
 // retest is work's Retest: what failed in tc runs once more on its own, and
-// a pass then makes the red a flake. One on main is filed to fix, as a
-// measurement's is; one on a change's own head isn't, since the test may be
-// the change's own.
+// a pass then makes the red a flake. One on main raises the flake alert, as
+// a measurement's does; one on a change's own head doesn't, since the test
+// may be the change's own.
 func (m *Module) retest(p core.Project, sha, test string, tc core.Check, main bool) bool {
 	_, flaky, _ := m.runAgain(p, sha, test, tc, main)
 	return flaky
 }
 
-func (m *Module) runAgain(p core.Project, sha, test string, tc core.Check, file bool) (sum string, flaky bool, cant core.Check) {
+func (m *Module) runAgain(p core.Project, sha, test string, tc core.Check, alert bool) (sum string, flaky bool, cant core.Check) {
 	out := tc.Output
 	if tc.Log != "" {
 		if b, err := core.SafeRead(tc.Log, 8<<20); err == nil && len(b) > 0 {
@@ -216,38 +216,19 @@ func (m *Module) runAgain(p core.Project, sha, test string, tc core.Check, file 
 		return sum, false, rc // the rerun couldn't start: no answer either way
 	}
 	if rc.OK {
-		if file {
-			m.fileFlaky(p, sha, fs, sum, out)
+		if alert {
+			m.alertFlaky(p, sha, sum)
 		}
 		return sum, true, cant
 	}
 	return sum, false, cant
 }
 
-// fileFlaky files the flaky tests as work, once for as long as that work is open.
-func (m *Module) fileFlaky(p core.Project, sha string, fs []failure, sum, out string) {
-	var names []string
-	for _, f := range fs {
-		names = append(names, f.Tests...)
-		if len(f.Tests) == 0 {
-			names = append(names, f.Pkg)
-		}
-	}
-	if len(names) == 0 {
-		names = core.FailedTests(out) // not go test's output: what its own runner named
-	}
-	what := "the tests"
-	if len(names) > 0 {
-		what = strings.Join(names, ", ")
-	}
-	title := core.Clip("Fix the flaky "+what, 120)
-	if len(m.Work.List(func(t work.Task) bool { return t.Project == p.Name && t.Title == title && !t.Terminal() })) > 0 {
-		return
-	}
+// alertFlaky raises the flake alert for tests that failed at sha and passed
+// on rerun. No brief is filed: a red on main is a sighting that quarantines
+// the test, and the quarantine goes on the problems board (boardQuarantined).
+func (m *Module) alertFlaky(p core.Project, sha, sum string) {
 	m.C.J.MustAppend("alert.raised", map[string]string{"kind": "flake", "project": p.Name, "sha": sha, "text": "a flaky test in " + p.Name + " failed at " + core.Short(sha) + " and passed on rerun: " + core.Clip(sum, 300)})
-	m.Work.File(work.Brief{Project: p.Name, From: "improve", Title: title, Aim: work.AimFix, Why: "flaky test: " + core.Clip(what, 200) + " failed at " + core.Short(sha) + " and passed on rerun",
-		Done:  "The test passes every time: it no longer depends on timing, order or shared state, and running it many times (go test -count=50 -run on it) never fails.",
-		Known: fmt.Sprintf("After a merge at %s the tests went red and passed when only what failed ran again, so the merge was kept. What failed: %s", core.Short(sha), sum)})
 }
 
 // redBefore runs what stayed red at t's merge again on main just before t
