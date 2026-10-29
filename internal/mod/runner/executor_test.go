@@ -84,6 +84,9 @@ func TestExecutorHandsTheSpecToTheModule(t *testing.T) {
 	if !slices.Contains(lines, "HOME="+home) {
 		t.Errorf("turn's HOME isn't the module's %s", home)
 	}
+	if !slices.Contains(lines, GiveBackEnv+"=1") {
+		t.Errorf("turn's environment doesn't say the core takes a turn back (%s)", GiveBackEnv)
+	}
 	for _, kv := range lines {
 		if strings.HasPrefix(kv, "HIVE_") || strings.HasPrefix(kv, "GH_TOKEN=") {
 			t.Errorf("turn's environment holds %s", kv)

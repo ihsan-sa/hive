@@ -33,7 +33,7 @@ const roomFor = 5 * time.Second
 
 // GiveBackEnv, set to 1 in an executor's environment for `turn`, says the
 // core takes back a turn the module gives back before it starts.
-const GiveBackEnv = "HIVE_GIVE_BACK"
+const GiveBackEnv = "EXECUTOR_GIVE_BACK"
 
 // roomAnswer is an executor's last answer to `room`: the runner it named
 // ("" for no room) and until when it stands.
