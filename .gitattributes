@@ -1,7 +1,8 @@
 * text=auto eol=lf
 *.ps1 text eol=crlf
 # Additive docs: the Hive's own merge of main into a branch keeps both sides'
-# lines instead of stopping on a conflict (docs/log.md, 2026-10-24).
+# lines instead of stopping on a conflict (docs/log.md, 2026-10-24). log.md takes
+# no new entries since 2026-10-29 (#2100); the line stays for old branches.
 # docs/architecture.md and docs/status.md are edited in place, so they merge
 # normally (2026-10-25, 2026-10-26).
 docs/log.md merge=union

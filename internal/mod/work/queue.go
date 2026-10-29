@@ -378,7 +378,7 @@ func (m *Module) opQueue(r core.Run, args json.RawMessage) (any, error) {
 	if len(a.Order) > 0 { // a new order replaces the old one: the rest go after, as filed
 		// Only in the caller's reach: another project's order is kept, and
 		// not one note each for the briefs it never named.
-		for _, t := range m.List(func(t Task) bool { return t.Queued() && t.Order > 0 && m.reach(r, t.Project) == nil }) {
+		for _, t := range m.List(func(t Task) bool { return (t.Queued() || t.Resending()) && t.Order > 0 && m.reach(r, t.Project) == nil }) {
 			if changes[t.ID] == nil {
 				at(t.ID).order = 0
 			}
@@ -398,7 +398,10 @@ func (m *Module) opQueue(r core.Run, args json.RawMessage) (any, error) {
 			// project's line is anyone's to steer, saying why on the record.
 			notes = append(notes, fmt.Sprintf("%s is on project %s; say why with why to steer another project's line", id, t.Project))
 			continue
-		case !t.Queued():
+		case !t.Queued() && !t.Resending():
+			// One a conflict sent back waits in the line as the queue lists
+			// it, so it is moved, held or started now like a brief (issue
+			// #2085: the pivot #2046 sat 23rd behind 22 sendbacks).
 			notes = append(notes, fmt.Sprintf("%s has left the queue (%s); a started worker isn't stopped by the queue", id, t.Stage))
 			continue
 		}
@@ -409,6 +412,13 @@ func (m *Module) opQueue(r core.Run, args json.RawMessage) (any, error) {
 		}
 		m.mu.Unlock()
 		if busy {
+			notes = append(notes, id+" is starting its worker right now")
+			continue
+		}
+		if t, ok = m.Get(id); !ok || !t.Queued() && !t.Resending() { // it started or was sent back before it was ours
+			m.mu.Lock()
+			delete(m.busy, id)
+			m.mu.Unlock()
 			notes = append(notes, id+" is starting its worker right now")
 			continue
 		}

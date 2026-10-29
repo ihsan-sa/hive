@@ -2120,9 +2120,9 @@ func (m *Module) test(t *Task, p core.Project) error {
 		m.mu.Unlock()
 		own := ownReds(c, mc)
 		switch {
-		case !mc.OK && len(own) == 0 && !core.NoWorse(c, mc):
+		case !mc.OK && len(own) == 0 && !core.NoWorse(c, mc) && !t.Fix():
 			return m.waitOnMain(t, p, main, mc)
-		case !mc.OK && len(own) == 0:
+		case !mc.OK && len(own) == 0 && core.NoWorse(c, mc):
 			// Every test it fails main fails too: it is no worse than main,
 			// so it goes on rather than wait for the green it may be the fix
 			// for (a revert of what turned main red, say). Journaled every
@@ -2137,7 +2137,19 @@ func (m *Module) test(t *Task, p core.Project) error {
 			// fails in: those failures are the change's own, so it goes
 			// back to its worker rather than wait on main's fix.
 			why, onMain := "tests failed but pass on main", ""
-			if !mc.OK {
+			switch {
+			case !mc.OK && len(own) == 0:
+				// A fix or revert whose red can't be told apart from main's
+				// (its run named nothing, or named failures main hasn't) may
+				// be the very cure main's red waits on: holding it for a
+				// green main would hold it for itself. It is judged as its
+				// own red instead: run once more, then back to its worker.
+				if strings.HasPrefix(t.Reason, "waiting on main") {
+					t.Reason = ""
+				}
+				why = "tests failed at " + core.Short(t.SHA) + " where main's are red too at " + core.Short(main) + ", and as a fix it doesn't wait for main to go green"
+				onMain = "\n\nMain is red at " + core.Short(main) + " too, but this is a fix (or revert), which main's green may wait on, so it isn't held for main: these failures can't be told apart from main's (" + core.Clip(strings.Join(core.RedKeys(mc.FullOutput()), ", "), 400) + "), so make its own tests pass."
+			case !mc.OK:
 				if strings.HasPrefix(t.Reason, "waiting on main") {
 					t.Reason = ""
 				}
@@ -2159,7 +2171,11 @@ func (m *Module) test(t *Task, p core.Project) error {
 				if strings.HasPrefix(t.Reason, "waiting on main") {
 					t.Reason = ""
 				}
-				m.save(t, "its tests failed on "+core.Short(t.SHA)+" ("+core.Clip(strings.Join(core.RedKeys(c.FullOutput()), ", "), 300)+") where main's pass, so they run once more before it counts")
+				where := " where main's pass"
+				if !mc.OK && len(own) == 0 {
+					where = ", a fix that doesn't wait on main's red"
+				}
+				m.save(t, "its tests failed on "+core.Short(t.SHA)+" ("+core.Clip(strings.Join(core.RedKeys(c.FullOutput()), ", "), 300)+")"+where+", so they run once more before it counts")
 				return nil
 			}
 			return m.sendBack(t, p, "The tests failed on your commit "+core.Short(t.SHA)+":\n\n"+core.ClipEnds(c.Output, 3000)+onMain)
