@@ -418,7 +418,9 @@ func (m *Module) paired(p core.Project, sha string, first float64) (parent strin
 // tree with sha's evaluator (its score's paths and ./ files, and
 // .hive/project.json, which names the score) in place of parent's own, and
 // a ref holding it while it is scored; done drops the ref. A check of it is
-// the parent's code judged by the merge's score.
+// the parent's code judged by the merge's score. Only the score runs on it:
+// it carries the merge's whole project.json, test command included, so its
+// tests would be the merge's, not the parent's.
 func (m *Module) underScoreOf(p core.Project, parent, sha string, s core.Score) (string, func(), error) {
 	dir := m.C.WS.Project(p.Name)
 	paths := append([]string{".hive/project.json"}, s.Evaluator()...)
@@ -469,14 +471,20 @@ func (m *Module) underScoreOf(p core.Project, parent, sha string, s core.Score) 
 			add = append(add, "--cacheinfo", m[0]+","+m[2]+","+f)
 		}
 	}
-	if len(old) > 0 {
-		if _, err := git(gone...); err != nil {
-			return "", nil, err
+	// In batches, so a large evaluator (hive-eval's verdicts/) stays under
+	// the argument-length limit.
+	for _, args := range [][]string{gone, add} {
+		head, n := 2, 1
+		if args[1] == "--add" {
+			n = 2 // --cacheinfo and its value
 		}
-	}
-	if len(now) > 0 {
-		if _, err := git(add...); err != nil {
-			return "", nil, err
+		if args[1] == "--force-remove" {
+			head = 3
+		}
+		for i := head; i < len(args); i += 500 * n {
+			if _, err := git(append(slices.Clone(args[:head]), args[i:min(i+500*n, len(args))]...)...); err != nil {
+				return "", nil, err
+			}
 		}
 	}
 	tree, err := git("write-tree")
@@ -1005,7 +1013,7 @@ func (m *Module) afterMerge(t work.Task) {
 		reason = "the tests went red after it merged: " + strings.TrimPrefix(note, "tests red: ")
 	case cfg.Score != nil && score == nil:
 		worse, reason = true, "the score stopped producing a number"
-	case changed:
+	case changed && score != nil: // a merge that drops the score is kept with none, below
 		// The merge is still judged (#2090): its parent is scored under the
 		// merge's own score, beside it. Only when that gives no number does
 		// the merge start a new baseline unjudged.

@@ -208,6 +208,14 @@ func TestChangedScoreIsJudgedAgainstItsParent(t *testing.T) {
 	}
 }
 
+// A merge that drops the score is kept with no score, not judged.
+func TestDroppedScoreIsKept(t *testing.T) {
+	_, merge := scored(t)
+	if ms := merge(map[string]string{".hive/project.json": `{"test": "true"}`}); !ms.Kept || ms.Score != nil {
+		t.Fatalf("a merge that drops the score should be kept with none: %+v", ms)
+	}
+}
+
 // A changed score its parent can't run starts a new baseline.
 func TestChangedScoreParentCantScore(t *testing.T) {
 	_, merge := scored(t)
