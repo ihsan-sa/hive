@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"sort"
 	"sync"
+	"testing"
 	"time"
 )
 
@@ -26,6 +27,11 @@ type Event struct {
 
 // Decode unmarshals the event payload into v.
 func (e Event) Decode(v any) error { return json.Unmarshal(e.Data, v) }
+
+// durable is whether appends are fsynced. A test's journal is thrown away
+// with its temp folder, and the Hive's checks run thousands of them on the
+// disk everything else waits on.
+var durable = !testing.Testing()
 
 // Journal is an append-only JSONL file. Every append is fsynced, so a crash
 // loses at most the record being written; a torn last line is ignored on read.
@@ -125,7 +131,7 @@ func (j *Journal) Append(kind string, data any) (Event, error) {
 		j.note(j.size, e.Seq)
 		j.size += int64(n)
 	}
-	if err == nil {
+	if err == nil && durable {
 		err = j.f.Sync()
 	}
 	subs := append([]func(Event){}, j.subs...)
@@ -240,7 +246,7 @@ func AppendJSONL(path string, v any) error {
 		return err
 	}
 	defer f.Close()
-	if _, err := f.Write(append(raw, '\n')); err != nil {
+	if _, err := f.Write(append(raw, '\n')); err != nil || !durable {
 		return err
 	}
 	return f.Sync()
