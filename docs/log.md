@@ -406,6 +406,11 @@
 - Why: issue #2039; io pressure some 60% / full 44% from file reads in user.slice (117 MB/s) on 10-29 with a 981 MB journal. `/api/events`, which hive-slack polls every second and dream, runner programs and the control center read, decoded the whole file on every call, and agents tailed or grepped it.
 - Tradeoff: the hour files repeat two days of the journal on disk (unsynced; a crash's lost lines come back on the next start's rewrite of the window); the release module's whole-journal replays every 10 minutes are still there.
 
+## 2026-10-29 A finish after a held conflict is taken out at once (#2050)
+- Decision: `conflict` stamps `Task.ResendAt`; a task still holding its conflict for the pace whose worker started a turn after that and ended done or blocked (`finishedBack`) leaves the line and is taken out like any finish. A held task's reason leads with its PR and head: "PR #N (sha) conflicts with main, so its worker goes back to merge main; ".
+- Why: issue #2050 read #41's "working: waiting for a worker (at the pace)" as a finish not taken out. The record says it was (pushed 2fd3f29 at 09:11Z, conflicted at merge at 10:32Z); what waited was the merge with main, behind a pace of 1 under memory pressure with 18 others. The real gap: a worker reopened by a message while held, who finishes (maybe having merged main), waited for a slot only to be sent the same conflict again.
+- Tradeoff: tasks held before this have no ResendAt and keep the old path; a finish that didn't resolve the conflict meets it again at take-out (counted, reset if it merged the main it was sent).
+
 ## 2026-10-29 A worker's "lead" and "parent" stay on its project (#2040)
 - Decision: `Runs.Find` takes a run named the address over an id prefix, so "lead" is the Hive's lead; `Deliver` reads "lead" as the sender's own project's lead (`Runs.LeadOf`, "lead:<project>", the Hive's when it has none; a project's lead's "lead" is the Hive's). A worker's "parent" with no Parent is whoever filed its task while that run takes messages (the work module's router), else that project lead.
 - Why: every lead's id starts "lead-", so Find("lead") took the newest lead of any project; two hive workers (on #1907, #1941) reported to hifi-receiver-2's lead, which had to forward them.

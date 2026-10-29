@@ -82,7 +82,7 @@ func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]str
 	m.mu.Lock()
 	for _, t := range tasks {
 		switch {
-		case (t.Queued() || t.Resending()) && !m.busy[t.ID]:
+		case (t.Queued() || t.Resending()) && !m.busy[t.ID] && !m.finishedBack(t):
 			// A worker a conflict sends back takes a slot as a new one
 			// does: a main merge once reopened 19 at a pace of 1.
 			line = append(line, t)
@@ -467,7 +467,9 @@ func (m *Module) Queue(r core.Run) []string {
 	for i, t := range line {
 		why := t.Reason
 		if t.Resending() { // it started long ago: its wait is the pace's, not the brief's
-			why = strings.TrimSuffix("its worker goes back to merge main; "+why, "; ")
+			if !strings.Contains(why, "goes back to merge main") { // waits names it
+				why = strings.TrimSuffix("its worker goes back to merge main; "+why, "; ")
+			}
 		} else if d := time.Since(t.Created); !t.Created.IsZero() && d >= time.Hour {
 			// The lead sees the long waits, and which go ahead of its order.
 			age := fmt.Sprintf("waited %s", d.Round(time.Minute))

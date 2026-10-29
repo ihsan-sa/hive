@@ -101,6 +101,9 @@ type Task struct {
 	// until the pace has room for it: one main merge once made about 22 open
 	// PRs conflict, and reopening every worker at once ran 19 at a pace of 1.
 	Resend string `json:"resend,omitempty"`
+	// ResendAt is when the conflict set Resend: a worker that takes a turn
+	// after it and finishes is taken out at once (finishedBack).
+	ResendAt time.Time `json:"resend_at,omitempty"`
 	// UnknownSince is when the forge first couldn't say whether the PR
 	// merges cleanly; cleared once it can.
 	UnknownSince time.Time `json:"unknown_since,omitempty"`
@@ -497,7 +500,7 @@ func (m *Module) overtaken(t *Task) bool {
 // this save isn't a steer itself, drops it, reporting whether it saved.
 func (m *Module) store(t *Task, note string, steer bool) bool {
 	if t.Stage != StageWorking { // stopped, blocked or moved on: a conflict held for the pace no longer goes
-		t.Resend = ""
+		t.Resend, t.ResendAt = "", time.Time{}
 	}
 	now := time.Now().UTC()
 	loaded := t.Updated // when the copy was last saved, before it is stamped now
@@ -985,7 +988,7 @@ func (m *Module) Tick() {
 			continue
 		}
 		m.mu.Lock()
-		if !m.due(t) || m.busy[t.ID] || !m.fresh(t) || ((t.Queued() || t.Resending()) && !start[t.ID]) {
+		if !m.due(t) || m.busy[t.ID] || !m.fresh(t) || ((t.Queued() || t.Resending()) && !start[t.ID] && !m.finishedBack(t)) {
 			m.mu.Unlock()
 			continue
 		}
@@ -1053,7 +1056,10 @@ func (m *Module) reapStuck() {
 // live figures after " (" change every tick, so only a new kind is saved.
 func (m *Module) waits(t Task, why string) {
 	kind, _, _ := strings.Cut(why, " (")
-	if (t.Stage == StageQueued || t.Resending()) && (t.Reason == why || strings.HasPrefix(why, "waiting: machine") && strings.HasPrefix(t.Reason, kind+" (")) {
+	if t.Resending() { // not "nothing taken out": what waits is the merge with main
+		why, kind = backWhy(t)+why, backWhy(t)+kind
+	}
+	if (t.Stage == StageQueued || t.Resending()) && (t.Reason == why || strings.Contains(why, "waiting: machine") && strings.HasPrefix(t.Reason, kind+" (")) {
 		return
 	}
 	m.mu.Lock()
@@ -1410,6 +1416,10 @@ func (m *Module) step(t *Task) error {
 	case StageQueued, StageIssued:
 		return m.startWorker(t, p)
 	case StageWorking:
+		if m.finishedBack(*t) {
+			t.Resend, t.ResendAt, t.Reason = "", time.Time{}, ""
+			m.save(t, "its worker finished again while the conflict waited for the pace: taken out now")
+		}
 		if t.Resend != "" {
 			return m.resend(t, p)
 		}
@@ -4119,7 +4129,7 @@ func (m *Module) conflict(t *Task, p core.Project, head string, why error) error
 		msg = "Main moved, and the recursive gate, merging it into your branch to judge the change as it would land, found conflicts in:\n\n- " +
 			strings.Join(g.files, "\n- ") + "\n\nFetch main with " + fetchMain + ", merge FETCH_HEAD, resolve the conflicts, run the tests, commit, and finish again."
 	}
-	t.Stage, t.Resend = StageWorking, msg
+	t.Stage, t.Resend, t.ResendAt = StageWorking, msg, time.Now()
 	m.save(t, "conflict with main: goes back to the worker when the pace has room")
 	return nil
 }
@@ -4141,9 +4151,31 @@ func (m *Module) resend(t *Task, p core.Project) error {
 	if err := m.C.Runs.Reopen(t.Worker, msg); err != nil {
 		return err
 	}
-	t.Resend, t.Reason = "", ""
+	t.Resend, t.ResendAt, t.Reason = "", time.Time{}, ""
 	m.save(t, "conflict with main sent back to the worker")
 	return nil
+}
+
+// finishedBack reports whether t's worker, held back from a conflict, took a
+// turn since and finished anyway (a message reopened it, and it may well have
+// merged main): its commits are taken out at once, never waiting at the pace
+// to be sent the same conflict again. A finish that leaves it unresolved
+// meets the conflict again at take-out.
+func (m *Module) finishedBack(t Task) bool {
+	if !t.Resending() || t.ResendAt.IsZero() {
+		return false
+	}
+	r, ok := m.C.Runs.Get(t.Worker)
+	return ok && r.TurnStarted.After(t.ResendAt) && (r.Status == core.StatusDone || r.Status == core.StatusBlocked)
+}
+
+// backWhy heads the reason a worker sent back to its task waits: its commits
+// were taken out already, and what waits is the merge with main.
+func backWhy(t Task) string {
+	if t.PR.Number == 0 {
+		return "its commits conflict with main, so its worker goes back to merge main; "
+	}
+	return fmt.Sprintf("PR #%d (%s) conflicts with main, so its worker goes back to merge main; ", t.PR.Number, core.Short(t.SHA))
 }
 
 func (m *Module) prepareRevert(t *Task, p core.Project) error {
