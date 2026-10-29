@@ -1,6 +1,7 @@
 package sandbox
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"os"
@@ -11,6 +12,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/ihsan-sa/hive-standalone-build/internal/proc"
 )
 
 // A synchronous command dies with the process that started it, killed
@@ -104,8 +107,17 @@ func TestSweepEndsWhatADeadDaemonsBareCommandLeft(t *testing.T) {
 	if syscall.Kill(pid, 0) != nil {
 		t.Fatal("the detached process ended with its daemon: nothing for the sweep to do")
 	}
-	if n := sweepOrphans(); n < 1 {
-		t.Errorf("the sweep ended %d processes, want the orphan", n)
+	// A sweep that misses it (read mid-exec on a loaded machine: one failure
+	// in thousands of runs) leaves it to the next; the daemon sweeps again.
+	n := sweepOrphans()
+	for i := 0; i < 20 && n == 0; i++ {
+		time.Sleep(100 * time.Millisecond)
+		n = sweepOrphans()
+	}
+	if n < 1 {
+		env, _ := os.ReadFile(fmt.Sprintf("/proc/%d/environ", pid))
+		tag := proc.EnvValue(bytes.Split(env, []byte{0}), OwnerEnv)
+		t.Errorf("the sweeps ended %d processes, want the orphan (tagged %q, its owner alive: %v)", n, tag, proc.OwnerAlive(tag))
 	}
 	gone(t, pid)
 	if syscall.Kill(live.Process.Pid, 0) != nil {
