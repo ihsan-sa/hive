@@ -134,7 +134,7 @@ const softCPUs = 4
 // journal, chats and report in keep.
 func softArm(t *testing.T, arm softlayer.Variant, slot int, essay, task string, wait time.Duration, keep string) softlayer.Report {
 	// The caps: one worker and one check at a time, set as the person's
-	// ceilings so the pace can't raise them, and builds of two packages at
+	// counts, and builds of two packages at
 	// once where a check gets the daemon's environment (a bare sandbox).
 	// The open arm has several agents in its space at once, each its own
 	// worker; checks and gates stay one at a time.
