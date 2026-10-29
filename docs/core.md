@@ -29,6 +29,8 @@ Where the daemon's scratch files go is core too: `core/hosttmp.go` (#1914, about
 
 What a merge rests on is core, so where a project's tests run is too: `ProjectConfig.ForgeTests` and its few lines in `Effects.Merge` (#1962, about 15 lines) let a project whose forge CI tests every PR name those checks, and the merge then rests on them passing on the exact head in place of a local run; the testing stage that skips the local run is the work module's.
 
+Sharing an identical check in flight is core for the same reason: `Effects.shared` in `core/effects.go` (#1880, about 30 lines) runs one check for every caller asking for the same project, sha, main, kind and command while it waits or runs, since only the check line knows what is in it.
+
 The last row is core only as the place the skeleton runs: what a module adds to it (an API route, a CLI verb) is module material and moves out (step 4 below).
 
 The packages measured as the core, read by `tests/core-size.sh`:
