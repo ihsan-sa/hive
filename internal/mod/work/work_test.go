@@ -454,25 +454,41 @@ func TestRecheckRetriesAStuckMerge(t *testing.T) {
 	}
 }
 
-// A task the person stopped, from the control center or by leaving its PR
-// open, stays stopped: the lead can neither recheck it nor send its worker back.
+// A task the person stopped from the control center stays stopped: the lead
+// can neither recheck it nor send its worker back. One whose merge ask they
+// left open (it conflicts with main, say) comes back only to its worker, to
+// rebase, and is the lead's again from there.
 func TestPersonStopHolds(t *testing.T) {
 	for _, how := range []string{"stop", "leave open"} {
-		m, _, task, _ := noCommitRig(t, 0)
-		task.Stage = StagePerson
+		m, _, task, p := noCommitRig(t, 0)
+		if _, err := m.C.Runs.Start(core.RunSpec{ID: "w1", Role: "worker", Project: p.Name, Checkout: t.TempDir(), Harness: "fake"}); err != nil {
+			t.Fatal(err)
+		}
+		task.Stage, task.Worker = StagePerson, "w1"
 		m.save(task, "waiting on the person")
 		if how == "stop" {
 			m.Stop(task.ID, "stopped by the person")
 		} else {
-			m.onPersonMerge(core.Ask{Ref: task.ID + "@abc", Answer: "leave open"})
+			m.onPersonMerge(core.Ask{Ref: task.ID + "@abc", Answer: "leave open", Note: "conflicts with main"})
 		}
 		for _, back := range []string{"", "try again"} {
-			if err := m.Recheck(task.ID, back, "lead"); err == nil || !strings.Contains(err.Error(), "by the person") {
+			err := m.Recheck(task.ID, back, "lead")
+			if how == "leave open" && back != "" {
+				if err != nil {
+					t.Fatalf("%s: recheck %q got %v", how, back, err)
+				}
+				continue
+			}
+			if err == nil || !strings.Contains(err.Error(), "by the person") {
 				t.Fatalf("%s: recheck %q got %v", how, back, err)
 			}
 		}
-		if got, _ := m.Get(task.ID); got.Stage != StageStopped {
+		got, _ := m.Get(task.ID)
+		if how == "stop" && got.Stage != StageStopped {
 			t.Fatalf("%s: stage %q", how, got.Stage)
+		}
+		if how == "leave open" && (got.Stage != StageWorking || got.ByPerson || got.Reason != "") {
+			t.Fatalf("%s: stage %q, by person %v, reason %q", how, got.Stage, got.ByPerson, got.Reason)
 		}
 	}
 }
