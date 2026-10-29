@@ -388,3 +388,9 @@
 - Decision: `Runs.ramp` keeps the runs waiting on it and gives each step to the first in line: one Returned (sent back to its task) first, then the oldest by Created; a waiter not seen for `rampSeen` (10s) drops out.
 - Why: Tick steps every run in its own goroutine, so the step went to whichever asked first after it, under steady load usually a newer run; from 04Z on 10-29 seven sent-back workers took no turn in 4-7h while 28 newer runs took 46. (The pace-vs-ramp flip itself was the old order, Admit after the ramp, fixed in #1980.)
 - Tradeoff: when the run first in line has gone (started elsewhere, ended) the step waits up to 10s more; a lead and a turn going to a runner still skip the ramp.
+
+## 2026-10-29 A finish after a held conflict is taken out at once (#2050)
+- Decision: `conflict` stamps `Task.ResendAt`; a task still holding its conflict for the pace whose worker started a turn after that and ended done or blocked (`finishedBack`) leaves the line and is taken out like any finish. A held task's reason leads with its PR and head: "PR #N (sha) conflicts with main, so its worker goes back to merge main; ".
+- Why: issue #2050 read #41's "working: waiting for a worker (at the pace)" as a finish not taken out. The record says it was (pushed 2fd3f29 at 09:11Z, conflicted at merge at 10:32Z); what waited was the merge with main, behind a pace of 1 under memory pressure with 18 others. The real gap: a worker reopened by a message while held, who finishes (maybe having merged main), waited for a slot only to be sent the same conflict again.
+- Tradeoff: tasks held before this have no ResendAt and keep the old path; a finish that didn't resolve the conflict meets it again at take-out (counted, reset if it merged the main it was sent).
+

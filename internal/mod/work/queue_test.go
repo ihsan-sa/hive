@@ -507,6 +507,60 @@ func TestConflictWaitsHereNotOnARunner(t *testing.T) {
 	}
 }
 
+// A worker held back from a conflict that takes a turn anyway (a message
+// reopened it) and finishes has its commits taken out at once: it never waits
+// at the pace to be sent the same conflict again. One that hasn't turned since
+// waits, and says its PR was taken out and what waits is the merge with main
+// (on 10-29 #41's "waiting for a worker (at the pace)" read as nothing pushed).
+func TestFinishedAfterConflictIsTakenOutAtOnce(t *testing.T) {
+	m := queueRig(t)
+	cfg := m.C.WS.LoadConfig()
+	cfg.MaxWorkers = 1
+	m.C.WS.SaveConfig(cfg)
+	for _, id := range []string{"wb", "wf", "ww"} {
+		if _, err := m.C.Runs.Start(core.RunSpec{ID: id, Role: "worker", Project: "p", Harness: "fake", Checkout: t.TempDir()}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	busy := file(t, m, "the working one", "")
+	busy.Stage, busy.Worker = StageWorking, "wb"
+	m.save(&busy, "")
+	conflict := time.Now().Add(-time.Hour)
+	var finished, waiting Task
+	for _, w := range []string{"wf", "ww"} {
+		task := file(t, m, "sent back "+w, "")
+		task.Stage, task.Worker, task.Resend, task.ResendAt = StageWorking, w, "Main moved and your branch conflicts with it.", conflict
+		task.PR, task.SHA = core.PR{Number: 41, URL: "https://example/pull/41"}, "2fd3f2988b7f4862a9b6fe5234d009476f2651a5"
+		m.save(&task, "")
+		m.C.J.MustAppend("run.turn_started", map[string]any{"id": w, "turn": 2}) // reopened by a message
+		m.C.Runs.SetStatus(w, core.StatusDone, "finished")
+		if w == "wf" {
+			finished = task
+		} else {
+			waiting = task
+		}
+	}
+	// ww's conflict came after its turn; wf's turn came after its conflict.
+	waiting.ResendAt = time.Now().Add(time.Minute)
+	m.save(&waiting, "")
+	tick(m)
+	got := stageOf(t, m, finished)
+	if got.Resending() || got.Stage == StageWorking || queued(m, "wf") != "" {
+		t.Fatalf("a worker that finished after its conflict waited or was sent it again: stage %q, reason %q, queued %q", got.Stage, got.Reason, queued(m, "wf"))
+	}
+	got = stageOf(t, m, waiting)
+	if !got.Resending() || queued(m, "ww") != "" {
+		t.Fatalf("a worker yet to merge main went past the pace: stage %q, resend %q", got.Stage, got.Resend)
+	}
+	if !strings.Contains(got.Reason, "PR #41 (2fd3f29") || !strings.Contains(got.Reason, "waiting for a worker") {
+		t.Fatalf("reason %q, want it to say the PR was taken out and waits at the pace to merge main", got.Reason)
+	}
+	q := strings.Join(m.Queue(core.Run{RunSpec: core.RunSpec{ID: "lead", Role: "lead"}}), "\n")
+	if strings.Count(q, "goes back to merge main") != 1 {
+		t.Fatalf("queue: %q, want it said once", q)
+	}
+}
+
 // A run's main.bundle is main's tip when the run starts, and again when a
 // conflict held for the pace finally sends its worker back: main may have
 // moved while it waited, and merging an older main conflicts again (issue
