@@ -34,6 +34,7 @@ type GateJob struct {
 	Head     string // the candidate: the PR's exact head
 	Main     string // the control: main as the merge would see it
 	AllowTie bool   // kept when it breaks nothing; the work module never sets it, since an improvement must show a gain
+	CIPassed bool   // both commits are releases whose CI passed vet and the short tests, so the gate skips them (the canary); the work module never sets it
 	Out      string // the run's folder; its report.md and report.json go here
 	Timeout  time.Duration
 }

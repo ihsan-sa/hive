@@ -49,6 +49,9 @@ func runGate(ws core.Workspace) func(context.Context, work.GateJob) core.GateRes
 		if j.AllowTie {
 			args = append(args, "--allow-tie")
 		}
+		if j.CIPassed {
+			args = append(args, "--ci-passed")
+		}
 		args = append(args, orgArgs(j)...)
 		// The gate and all it starts (builds, child Hives, the e2e suite) run
 		// under every lead's priority, as a check does.
@@ -74,10 +77,12 @@ func runGate(ws core.Workspace) func(context.Context, work.GateJob) core.GateRes
 // runCanary runs the release train's canary as a gate run: the candidate
 // release's commit against the running release's, both child Hives on the
 // same real work. Ties are kept, since a release must break nothing rather
-// than show a gain; only a keep moves the Hive.
+// than show a gain; only a keep moves the Hive. Both are releases whose CI
+// passed vet and the short tests, so the canary goes straight to the e2e,
+// probes and benchmark.
 func runCanary(ws core.Workspace, run func(context.Context, work.GateJob) core.GateResult) func(context.Context, release.CanaryJob) core.GateResult {
 	return func(ctx context.Context, j release.CanaryJob) core.GateResult {
-		return run(ctx, work.GateJob{Project: j.Project, Repo: ws.Project(j.Project.Name), Head: j.Head, Main: j.Base, AllowTie: true, Out: j.Out, Timeout: j.Timeout})
+		return run(ctx, work.GateJob{Project: j.Project, Repo: ws.Project(j.Project.Name), Head: j.Head, Main: j.Base, AllowTie: true, CIPassed: true, Out: j.Out, Timeout: j.Timeout})
 	}
 }
 

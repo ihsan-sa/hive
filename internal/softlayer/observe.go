@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/chat"
 )
 
 // Report is what one Hive did, read from its journal: who ran, who talked to
@@ -25,7 +27,11 @@ type Report struct {
 	// Peer is a message from one worker run to another: the lateral talk the
 	// person asked to see ("2 of them worker to worker"). A sweep's or
 	// reviewer's message to a worker is in Pairs, not here.
-	Peer     int            `json:"peer"`
+	Peer int `json:"peer"`
+	// Room is what agents said to the room (hive agent message --to room),
+	// once per post however many heard it; each hearer's copy is also in
+	// Messages, Pairs and Peer.
+	Room     int            `json:"room"`
 	Briefs   int            `json:"briefs"`  // work an agent filed
 	Helpers  int            `json:"helpers"` // helpers an agent spawned
 	Asks     int            `json:"asks"`    // requests past an agent's reach (warden, tribunal, person)
@@ -57,6 +63,7 @@ func Observe(r io.Reader, since, until time.Time) (Report, error) {
 	rep := Report{Runs: map[string]int{}, Pairs: map[string]int{}, Finished: map[string]int{}}
 	roles := map[string]string{} // run id → role, from every run.created, even before since
 	seen := map[string]bool{}    // tasks, requests and feedback already filed
+	said := map[string]bool{}    // room posts already counted, by sender and text
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 1<<20), 64<<20)
 	for sc.Scan() {
@@ -98,6 +105,10 @@ func Observe(r io.Reader, since, until time.Time) (Report, error) {
 			rep.Pairs[from+"→"+to]++
 			if from == "worker" && to == "worker" {
 				rep.Peer++
+			}
+			if text := str("text"); strings.HasPrefix(text, chat.RoomMark) && !said[str("from")+"\x00"+text] {
+				said[str("from")+"\x00"+text] = true
+				rep.Room++
 			}
 		case "task.saved":
 			if _, ok := roles[str("from")]; !first || !ok {
@@ -182,8 +193,8 @@ func sorted(m map[string]int) string {
 // Table is the reports side by side, one row per arm, in Markdown.
 func Table(reps []Report) string {
 	var b strings.Builder
-	b.WriteString("| arm | outcome | minutes | runs | turns | messages | peer | briefs | helpers | asks | finished | notes | feedback | merged | peak MB | peak load |\n")
-	b.WriteString("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|\n")
+	b.WriteString("| arm | outcome | minutes | runs | turns | messages | peer | room | briefs | helpers | asks | finished | notes | feedback | merged | peak MB | peak load |\n")
+	b.WriteString("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|\n")
 	for _, r := range reps {
 		runs := 0
 		for _, n := range r.Runs {
@@ -193,8 +204,8 @@ func Table(reps []Report) string {
 		if name == "" {
 			name = "-"
 		}
-		fmt.Fprintf(&b, "| %s | %s | %.0f | %d | %d | %d | %d | %d | %d | %d | %s | %d | %d | %d | %s | %s |\n", name, orDash(r.Outcome),
-			r.To.Sub(r.From).Minutes(), runs, r.Turns, r.Messages, r.Peer, r.Briefs, r.Helpers, r.Asks, sorted(r.Finished), r.Notes, r.Feedback, r.Merged,
+		fmt.Fprintf(&b, "| %s | %s | %.0f | %d | %d | %d | %d | %d | %d | %d | %d | %s | %d | %d | %d | %s | %s |\n", name, orDash(r.Outcome),
+			r.To.Sub(r.From).Minutes(), runs, r.Turns, r.Messages, r.Peer, r.Room, r.Briefs, r.Helpers, r.Asks, sorted(r.Finished), r.Notes, r.Feedback, r.Merged,
 			peak(r.PeakMB > 0, "%d", r.PeakMB), peak(r.PeakLoad > 0, "%.1f", r.PeakLoad))
 	}
 	b.WriteString("\nWho talked to whom, and which roles ran:\n\n")

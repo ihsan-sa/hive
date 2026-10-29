@@ -1689,3 +1689,126 @@ func TestClipEndsKeepsTheSummary(t *testing.T) {
 		t.Error("a short output should come back whole, newlines and all")
 	}
 }
+
+// A ledger the Hive writes from its own record is a score path, yet it needs
+// neither the person's approval nor a read; a worker's own content there
+// still does, and so does the Hive's older content once it writes newer.
+func TestRecordedLedgerNeedsNoApproval(t *testing.T) {
+	c, f := testHive(t)
+	seedRepo(t, f, "me/tr", map[string]string{"ledger.json": "{}\n", ".hive/project.json": `{"test":"true","ledger":"ledger.json","score":{"command":"cat ledger.json","paths":["ledger.json"],"direction":"higher"}}`})
+	p, _ := c.Projects.Add(Project{Name: "tr", Repo: "me/tr"})
+	main, _ := c.Effects.Sync(p)
+	if got := c.Effects.Config(p, main).Ledger; got != "ledger.json" {
+		t.Fatalf("ledger %q", got)
+	}
+	sha, err := c.Effects.Record(p, main, map[string]string{"ledger.json": "{\"trials\": [1]}\n"}, "Refresh the ledger")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ch, err := c.Effects.Classify(p, main, sha)
+	if err != nil || len(ch.Protected) != 0 || !slices.Equal(ch.Recorded, []string{"ledger.json"}) || !c.Effects.Reviewed(p, ch, sha) {
+		t.Fatalf("the Hive's own record: %+v %v", ch, err)
+	}
+	c.Effects.RunCheck(p, sha, "test", "true")
+	var np *NeedsPerson
+	if _, err := c.Effects.Merge(MergeRequest{Project: p, SHA: sha, Main: main}); errors.As(err, &np) {
+		t.Fatalf("the record waited on the person: %v", err)
+	}
+	r, _ := commitInCheckout(t, c, p, "w1", main, "ledger.json", "{\"trials\": [1, 2]}\n")
+	own, _ := c.Effects.Extract(p, r, main)
+	if ch, _ := c.Effects.Classify(p, main, own); !slices.Contains(ch.Protected, "ledger.json") || len(ch.Recorded) != 0 {
+		t.Fatalf("a worker's ledger must be protected: %+v", ch)
+	}
+	if _, err := c.Effects.Record(p, main, map[string]string{"ledger.json": "{\"trials\": [1, 3]}\n"}, "Refresh the ledger"); err != nil {
+		t.Fatal(err)
+	}
+	if ch, _ := c.Effects.Classify(p, main, sha); !slices.Contains(ch.Protected, "ledger.json") {
+		t.Fatalf("an older record must be protected once a newer one is written: %+v", ch)
+	}
+}
+
+// The ledger path comes from the project's own project.json, and the Hive
+// writes it on the host with no approval: a path that leaves the checkout,
+// goes into .git, through a symlink, or names a file the project guards is
+// refused, and a protected file it names still waits for the person.
+func TestRecordRefusesALedgerPathOutsideItsPlace(t *testing.T) {
+	for _, ledger := range []string{"../../x", "/tmp/x", ".git/hooks/pre-commit", "a/../ledger.json", ".hive/project.json", ".hive/goals.md", "docs/REVIEW.md", "keep.txt", ".github/workflows/ci.yml", "other.json"} {
+		t.Run(ledger, func(t *testing.T) {
+			c, f := testHive(t)
+			cfg := fmt.Sprintf(`{"test":"true","ledger":%q,"protected":["keep.txt"],"score":{"command":"cat ledger.json","paths":["ledger.json",%q],"direction":"higher"}}`, ledger, ledger)
+			if ledger == "other.json" { // in no score path
+				cfg = `{"test":"true","ledger":"other.json","score":{"command":"cat ledger.json","paths":["ledger.json"],"direction":"higher"}}`
+			}
+			seedRepo(t, f, "me/tr", map[string]string{"ledger.json": "{}\n", "keep.txt": "k\n", ".hive/project.json": cfg})
+			p, _ := c.Projects.Add(Project{Name: "tr", Repo: "me/tr"})
+			main, _ := c.Effects.Sync(p)
+			_, err := c.Effects.Record(p, main, map[string]string{ledger: "{\"trials\": [1]}\n"}, "Refresh")
+			if err == nil {
+				t.Fatalf("a record wrote ledger %q", ledger)
+			}
+			if ledger == ".hive/project.json" {
+				r, _ := commitInCheckout(t, c, p, "w1", main, ledger, "{\"trials\": [1]}\n")
+				sha, _ := c.Effects.Extract(p, r, main)
+				if ch, _ := c.Effects.Classify(p, main, sha); !slices.Contains(ch.Protected, ledger) || len(ch.Recorded) != 0 {
+					t.Fatalf("a ledger naming project.json escaped approval: %+v", ch)
+				}
+			}
+		})
+	}
+	// Only the path main names is written, and never through a symlink.
+	c, f := testHive(t)
+	seedRepo(t, f, "me/tr", map[string]string{"ledger.json": "{}\n", ".hive/project.json": `{"test":"true","ledger":"ledger.json","score":{"command":"cat ledger.json","paths":["ledger.json"],"direction":"higher"}}`})
+	p, _ := c.Projects.Add(Project{Name: "tr", Repo: "me/tr"})
+	main, _ := c.Effects.Sync(p)
+	if _, err := c.Effects.Record(p, main, map[string]string{"notes.json": "{}\n"}, "Refresh"); err == nil {
+		t.Fatal("a record wrote a path main's project.json doesn't name")
+	}
+	outside := filepath.Join(t.TempDir(), "victim")
+	os.WriteFile(outside, []byte("safe\n"), 0o644)
+	tmp := t.TempDir()
+	mustGit(t, "", "clone", "-q", f.RepoPath("me/tr"), tmp)
+	os.Remove(filepath.Join(tmp, "ledger.json"))
+	if err := os.Symlink(outside, filepath.Join(tmp, "ledger.json")); err != nil {
+		t.Skip("no symlinks here:", err)
+	}
+	mustGit(t, tmp, "add", "-A")
+	mustGit(t, tmp, "commit", "-q", "-m", "link")
+	mustGit(t, tmp, "push", "-q", "origin", "HEAD:main")
+	main, _ = c.Effects.Sync(p)
+	if _, err := c.Effects.Record(p, main, map[string]string{"ledger.json": "{\"trials\": [1]}\n"}, "Refresh"); err == nil || !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("a record wrote through a symlink: %v", err)
+	}
+	if b, _ := os.ReadFile(outside); string(b) != "safe\n" {
+		t.Fatalf("the file outside was written: %q", b)
+	}
+}
+
+// A file a worker makes executable is committed executable and comes out of
+// the checkout at mode 100755.
+func TestCheckoutKeepsExecBit(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("no exec bits on Windows filesystems")
+	}
+	c, _, p, main := setupProject(t)
+	dir, err := c.Effects.NewCheckout(p, "wx", main)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "run.sh"), []byte("#!/bin/sh\necho hi\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	os.Chmod(filepath.Join(dir, "run.sh"), 0o755)
+	mustGit(t, dir, "add", "-A")
+	mustGit(t, dir, "commit", "-q", "-m", "a script")
+	r, err := c.Runs.Start(RunSpec{ID: "wx", Role: "worker", Project: p.Name, Checkout: dir, Harness: "fake"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sha, err := c.Effects.Extract(p, r, main)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out := mustGit(t, c.WS.Project(p.Name), "ls-tree", sha, "run.sh"); !strings.HasPrefix(out, "100755 ") {
+		t.Fatalf("run.sh committed as %q, want 100755", out)
+	}
+}

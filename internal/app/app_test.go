@@ -302,3 +302,54 @@ func TestCreateProjectPublicNo(t *testing.T) {
 		t.Fatal("a no still made the project")
 	}
 }
+
+// A merge on the project a module is installed from moves the module at
+// once, not at the next hourly modules.update; a merge elsewhere leaves it.
+func TestMergeOnAModulesProjectUpdatesIt(t *testing.T) {
+	ws := core.Workspace{Root: t.TempDir()}
+	if err := ws.Init(); err != nil {
+		t.Fatal(err)
+	}
+	a, err := New(ws, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	src := filepath.Join(t.TempDir(), "o", "ledger")
+	os.MkdirAll(src, 0o755)
+	git := func(args ...string) {
+		t.Helper()
+		if out, err := core.Git(src, append([]string{"-c", "user.name=t", "-c", "user.email=t@t"}, args...)...); err != nil {
+			t.Fatalf("%v %s", err, out)
+		}
+	}
+	git("init", "-q")
+	os.WriteFile(filepath.Join(src, "ledger.md"), []byte("old\n"), 0o644)
+	git("add", ".")
+	git("commit", "-qm", "first")
+	if _, err := a.Mods.Install(src, "ledger"); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []core.Project{{Name: "ledger", Repo: "o/ledger", Branch: "main"}, {Name: "other", Repo: "o/other", Branch: "main"}} {
+		if _, err := a.C.Projects.Add(p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	os.WriteFile(filepath.Join(src, "ledger.md"), []byte("new\n"), 0o644)
+	git("commit", "-qam", "fix")
+	read := func() string {
+		m, _ := a.Mods.Get("ledger")
+		got, _ := os.ReadFile(filepath.Join(m.Dir, "ledger.md"))
+		return string(got)
+	}
+	a.C.J.MustAppend("effect.merged", map[string]any{"project": "other", "pr": 1, "sha": "x", "merge_sha": "y"})
+	a.updating.Wait()
+	if got := read(); got != "old\n" {
+		t.Fatalf("a merge on another project updated the module: %q", got)
+	}
+	a.C.J.MustAppend("effect.merged", map[string]any{"project": "ledger", "pr": 2, "sha": "x", "merge_sha": "y"})
+	a.updating.Wait()
+	if got := read(); got != "new\n" {
+		t.Fatalf("a merge on the module's own project left it at %q", got)
+	}
+}

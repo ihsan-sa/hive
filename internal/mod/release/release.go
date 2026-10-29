@@ -1468,6 +1468,7 @@ func New(c *core.Core) *Module {
 	m := &Module{C: c}
 	c.Person.Handle("upstream", m.onUpstream)
 	c.Person.Handle("scan_handles", m.onHandles)
+	c.Runs.Ops().Register(core.Op{Name: "train", Help: `{"why"} -> runs the release train again at the next look, whatever the day: the newest pre-release safe here rides as a canary against the running release, even one an earlier canary turned back (a canary that failed on its own environment, now fixed); why goes on the record. Refused while a canary runs or when this Hive doesn't ride the train`, Fn: m.opTrain})
 	return m
 }
 

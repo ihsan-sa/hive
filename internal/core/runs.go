@@ -97,15 +97,17 @@ type Run struct {
 	Retries     int             `json:"retries"`
 	Offline     string          `json:"offline,omitempty"` // its last turn couldn't reach its service, and why
 	Nudges      int             `json:"nudges"`
-	Head        string          `json:"head,omitempty"`  // its checkout's HEAD log (size, time) at its last turn's end
-	Still       int             `json:"still,omitempty"` // turns in a row that ended with that log unchanged
-	Login       string          `json:"login,omitempty"` // the login its latest turn went on
-	Where       string          `json:"where,omitempty"` // the runner its latest turn went to; empty is this machine
+	Head        string          `json:"head,omitempty"`         // its checkout's HEAD log (size, time) at its last turn's end
+	Still       int             `json:"still,omitempty"`        // turns in a row that ended with that log unchanged
+	Login       string          `json:"login,omitempty"`        // the login its latest turn went on
+	TokenExpiry time.Time       `json:"token_expiry,omitempty"` // when the access token its latest turn was handed runs out
+	Where       string          `json:"where,omitempty"`        // the runner its latest turn went to; empty is this machine
 	Progress    string          `json:"progress,omitempty"`
 	ProgressAt  time.Time       `json:"progress_at,omitempty"`
 	StopAsked   bool            `json:"stop_asked,omitempty"`
 	Waiting     string          `json:"waiting,omitempty"`  // what it ended its turn waiting for
 	Reopened    bool            `json:"reopened,omitempty"` // reopened while its turn ran: the turn's finish doesn't end it
+	Returned    bool            `json:"returned,omitempty"` // reopened after its turn ended, with no turn since: Admit may hold it
 	Created     time.Time       `json:"created"`
 	Updated     time.Time       `json:"updated"`
 	TurnStarted time.Time       `json:"turn_started,omitempty"`
@@ -471,6 +473,12 @@ type Runs struct {
 	// module that runs it elsewhere: the sandbox to start it in and the
 	// runner that has room, or nil when no module has room now.
 	Executor func() (sandbox.Sandbox, string)
+	// CheckExecutor is the same for a check the check line would make wait,
+	// from a module that says it takes checks.
+	CheckExecutor func() (sandbox.Sandbox, string)
+	// Admit says why a run's next turn waits on a module, or "": the work
+	// module's pace for a worker sent back to its task (Returned).
+	Admit func(Run) string
 	// Held is when a module next lets a pick take turns (a model at a
 	// spending cap), zero when it doesn't hold it; TurnBudget is the most a
 	// module lets run's next turn spend, 0 for no limit. Either may be nil.
@@ -505,6 +513,84 @@ type Runs struct {
 	backedOff                map[string]int  // the turn each run last backed off from for another daemon's claim, said once
 	turnLive                 map[string]int  // the turn each run last waited on its own last turn for, said once
 	waking                   sync.Mutex      // one wake at a time, so a run is woken once
+	// heldAt is when a turn last waited on a strained machine, rampLast
+	// when the ramp after it last let one start, and rampedAt when it last
+	// held one back (ramp).
+	heldAt, rampLast, rampedAt time.Time
+	rampWait                   map[string]rampWaiter // the runs waiting on the ramp
+}
+
+// rampWaiter is a run waiting on the ramp: whether it was sent back to its
+// work (Returned), when it was created, and when it last asked.
+type rampWaiter struct {
+	returned      bool
+	created, seen time.Time
+}
+
+// before says whether w goes ahead of o on the ramp: one sent back first,
+// then the oldest.
+func (w rampWaiter) before(o rampWaiter, id, oid string) bool {
+	if w.returned != o.returned {
+		return w.returned
+	}
+	if !w.created.Equal(o.created) {
+		return w.created.Before(o.created)
+	}
+	return id < oid
+}
+
+// rampSeen is how lately a run must have asked the ramp to be waiting on it:
+// a tick steps every run about once a second, so one not seen for this long
+// has started elsewhere, been held before it, or ended.
+var rampSeen = 10 * time.Second
+
+// rampStep is the least time between two turns starting after a strain hold
+// (ramp), so the readings see each before the next: on 10-28, the hold
+// lifting started every run it had held at once, and the Hive's slice ran to
+// 42 claude, 87 link and 40 compile processes, load near 400 and an OOM kill.
+var rampStep = 30 * time.Second
+
+// Holding marks a strain hold now, outside launch (a brief the work module
+// held on one), so the turns after it ramp up.
+func (rs *Runs) Holding() {
+	rs.mu.Lock()
+	rs.heldAt = time.Now()
+	rs.mu.Unlock()
+}
+
+// ramp says whether r's turn starting now waits for the ramp: after a strain
+// hold, turns start one a rampStep until none has waited on the ramp for two.
+// Each step goes to the waiting run first in line (rampWaiter.before): every
+// run is stepped in its own goroutine, so the step went to whichever asked
+// first after it, and from 04Z on 10-29 seven workers sent back to their tasks
+// took no turn in 4-7h while 28 newer runs took 46.
+func (rs *Runs) ramp(r Run, now time.Time) bool {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	if now.Sub(rs.heldAt) > 2*rampStep && now.Sub(rs.rampedAt) > 2*rampStep {
+		clear(rs.rampWait)
+		return false
+	}
+	if rs.rampWait == nil {
+		rs.rampWait = map[string]rampWaiter{}
+	}
+	me := rampWaiter{returned: r.Returned, created: r.Created, seen: now}
+	rs.rampWait[r.ID] = me
+	ahead := false
+	for id, w := range rs.rampWait {
+		if now.Sub(w.seen) > rampSeen {
+			delete(rs.rampWait, id)
+		} else if id != r.ID && w.before(me, id, r.ID) {
+			ahead = true
+		}
+	}
+	if ahead || now.Sub(rs.rampLast) < rampStep {
+		rs.rampedAt = now
+		return true
+	}
+	delete(rs.rampWait, r.ID)
+	rs.rampLast = now
+	return false
 }
 
 // Hold keeps new turns from starting, saying why; "" lets them start again.
@@ -685,6 +771,9 @@ type turnStarted struct {
 	Harness   string      `json:"harness,omitempty"`
 	Login     string      `json:"login,omitempty"`
 	Where     string      `json:"where,omitempty"` // the executor module's runner it went to; empty is this machine
+	// TokenExpiry is when the access token the turn was handed runs out: a
+	// later one on its login at the turn's end is a renewal since (renewedMidTurn).
+	TokenExpiry time.Time `json:"token_expiry,omitempty"`
 }
 
 type turnEnded struct {
@@ -702,6 +791,7 @@ type turnEnded struct {
 	Unavailable string          `json:"unavailable,omitempty"` // the pick it ran on can't answer (Down), so it moved or waits without a retry's backoff
 	Head        string          `json:"head,omitempty"`        // the checkout's HEAD log at the turn's end
 	Stalled     string          `json:"stalled,omitempty"`     // the pick it kept ending turns on without finishing, which it moves past
+	Renewed     bool            `json:"renewed,omitempty"`     // its login was renewed mid-turn, revoking its token: it resumes at once, not as a retry
 }
 
 // egressRefused is the hosts a turn's egress proxy refused, and each
@@ -831,6 +921,7 @@ func (rs *Runs) apply(e Event) {
 		var t turnStarted
 		e.Decode(&t)
 		r.Turn, r.Proc, r.Status, r.TurnStarted, r.LastOutput, r.Login, r.Where = t.Turn, t.Proc, StatusRunning, e.At, e.At, t.Login, t.Where
+		r.TokenExpiry = t.TokenExpiry
 		if t.Session != "" {
 			r.Session = t.Session
 		}
@@ -849,7 +940,7 @@ func (rs *Runs) apply(e Event) {
 			on = ""
 		}
 		rs.ranOn[r.ID] = on
-		r.Waiting, r.Reopened = "", false
+		r.Waiting, r.Reopened, r.Returned = "", false, false
 		r.Given = nil
 		if t.Delivered <= len(r.Pending) {
 			r.Given = append(r.Given, r.Pending[:t.Delivered]...)
@@ -878,7 +969,7 @@ func (rs *Runs) apply(e Event) {
 				r.Retries = 0
 			}
 		}
-		if t.Status == StatusParked && t.Unavailable == "" && (t.Result == nil || (t.Result.IsError && !t.Result.Limited)) {
+		if t.Status == StatusParked && t.Unavailable == "" && !t.Renewed && (t.Result == nil || (t.Result.IsError && !t.Result.Limited)) {
 			r.Retries++
 		}
 		if len(t.Queue) > 0 {
@@ -957,6 +1048,7 @@ func (rs *Runs) apply(e Event) {
 	case "run.reopened":
 		r.Finish, r.StopAsked, r.Nudges, r.Still = nil, false, 0, 0
 		r.Reopened = r.Status == StatusRunning
+		r.Returned = !r.Reopened
 	}
 }
 
@@ -2032,6 +2124,13 @@ func (rs *Runs) endTurn(r Run) {
 		te.Status, te.ParkedUntil = StatusParked, time.Now().Add(backoff(cur.Retries))
 		te.Reason = fmt.Sprintf("the endpoint refused %s's key mid-turn, and a turn is handed the key only once; the next turn gets it afresh (if this repeats, store it again with `%s model key %s`)", r.Model, Cmd, r.Model)
 		te.Queue = []string{"Your previous turn was cut off when the model's endpoint refused its key. Your checkout and commits are intact. Continue where you left off."}
+	case rs.renewedMidTurn(r, tl.Result):
+		// Renewing a Claude login revokes the access token every turn on it
+		// holds, so turns running then end on a 401. The login is fine: the
+		// turn resumes its session at once, handed the new token.
+		te.Status, te.ParkedUntil, te.Renewed = StatusParked, time.Now(), true
+		te.Reason = "its login " + r.Login + " was renewed mid-turn, which revoked the token the turn held; resuming at once on the new one"
+		te.Queue = []string{"Your previous turn was cut off when the Hive renewed its login, which revoked the token it held. Your checkout and commits are intact. Continue where you left off."}
 	case down != nil:
 		// As at a usage limit: the next pick with room takes the next turn
 		// at once, else it waits for the first reset, with no backoff.
@@ -2257,6 +2356,15 @@ func tail(path string, n int) string {
 // PendingSep joins messages that queued during a turn into the next prompt.
 const PendingSep = "\n\n---\n\n"
 
+// holdTurn journals why r's turn waits, keeping its status, so a parked run
+// keeps its backoff and a nudged one its count; the live figures after " ("
+// change every tick, so only a new kind of hold is journalled.
+func (rs *Runs) holdTurn(r Run, why string) {
+	if kind, _, _ := strings.Cut(why, " ("); !strings.HasPrefix(r.Reason, kind) {
+		rs.append("run.held", runNote{ID: r.ID, Reason: why})
+	}
+}
+
 // launch starts the run's next turn in its sandbox.
 func (rs *Runs) launch(r Run, cfg Config) {
 	rs.mu.Lock()
@@ -2315,13 +2423,25 @@ func (rs *Runs) launch(r Run, cfg Config) {
 		elsewhere, where = rs.executor()
 	}
 	if why != "" && elsewhere == nil {
-		// The hold keeps the run's status, so a parked run keeps its backoff
-		// and a nudged one its count; the live figures after " (" change
-		// every tick, so only a new kind of hold is journalled.
-		why = "waiting: " + why
-		if kind, _, _ := strings.Cut(why, " ("); !strings.HasPrefix(r.Reason, kind) {
-			rs.append("run.held", runNote{ID: r.ID, Reason: why})
+		if !r.Lead() {
+			rs.Holding()
 		}
+		rs.holdTurn(r, "waiting: "+why)
+		return
+	}
+	// Admit before the ramp: a run the module holds doesn't spend the
+	// ramp's step, and a pass it gives is kept (work's backIn) until the
+	// ramp lets the turn start. The other way round a run held by both
+	// took the step one tick and the module's hold the next, journalling
+	// two run.held a tick (618 for one worker in 3h on 10-28).
+	if rs.Admit != nil {
+		if why := rs.Admit(r); why != "" {
+			rs.holdTurn(r, why)
+			return
+		}
+	}
+	if !r.Lead() && elsewhere == nil && rs.ramp(r, time.Now()) {
+		rs.holdTurn(r, "waiting: starting one turn at a time after the machine was strained")
 		return
 	}
 	sb, err := rs.sandbox()
@@ -2445,6 +2565,7 @@ func (rs *Runs) launch(r Run, cfg Config) {
 		}()
 	}
 	login, tok, err := rs.pickLogin(r.Harness, r.Model, codexHome, !sb.Isolated(), Reserved(r.Role))
+	exp := rs.tokenExpiry(login)
 	if err != nil {
 		until := rs.freeAt(r.Harness, r.Model, Reserved(r.Role))
 		if !until.After(time.Now()) {
@@ -2474,7 +2595,36 @@ func (rs *Runs) launch(r Run, cfg Config) {
 	}
 	started = true
 	rs.claimed(r.ID, turn, p)
-	rs.append("run.turn_started", turnStarted{ID: r.ID, Session: session, Turn: turn, Proc: p, Delivered: delivered, Resume: resume, Login: login.Key(), Model: r.Model, Harness: r.Harness, Where: where})
+	rs.append("run.turn_started", turnStarted{ID: r.ID, Session: session, Turn: turn, Proc: p, Delivered: delivered, Resume: resume, Login: login.Key(), Model: r.Model, Harness: r.Harness, Where: where, TokenExpiry: exp})
+}
+
+// tokenExpiry is when the access token login l hands a Claude turn runs out,
+// or zero where the token source can't say.
+func (rs *Runs) tokenExpiry(l Login) time.Time {
+	if t, ok := rs.tokens.(interface {
+		Expiry(Login) (time.Time, error)
+	}); ok && l.Harness == "claude" {
+		if exp, err := t.Expiry(l); err == nil {
+			return exp
+		}
+	}
+	return time.Time{}
+}
+
+// renewedMidTurn reports whether Claude turn r ended on a 401 after its login
+// was renewed: the login now holds a live token that runs out later than the
+// one the turn was handed, which the renewal revoked.
+func (rs *Runs) renewedMidTurn(r Run, res *harness.Result) bool {
+	if res == nil || !res.IsError || res.APIStatus != 401 || HarnessName(r.Harness) != "claude" || r.TokenExpiry.IsZero() {
+		return false
+	}
+	for _, l := range rs.tokens.Logins("claude") {
+		if l.Key() == r.Login {
+			exp := rs.tokenExpiry(l)
+			return exp.After(r.TokenExpiry) && exp.After(time.Now())
+		}
+	}
+	return false
 }
 
 // Elsewhere says whether an executor module has room for a turn now.
@@ -2486,14 +2636,19 @@ func (rs *Runs) Elsewhere() bool {
 // executor returns an executor module with room for a turn this machine is
 // too strained to start (or an away run's), and the runner it named; nil when there is none or
 // the local sandbox isn't one whose spec another machine can run.
-func (rs *Runs) executor() (sandbox.Sandbox, string) {
-	if rs.Executor == nil {
+func (rs *Runs) executor() (sandbox.Sandbox, string) { return rs.handOver(rs.Executor) }
+
+// checkExecutor is executor for a check (CheckExecutor).
+func (rs *Runs) checkExecutor() (sandbox.Sandbox, string) { return rs.handOver(rs.CheckExecutor) }
+
+func (rs *Runs) handOver(ex func() (sandbox.Sandbox, string)) (sandbox.Sandbox, string) {
+	if ex == nil {
 		return nil, ""
 	}
 	if sb, err := rs.sandbox(); err != nil || !sb.Isolated() {
 		return nil, ""
 	}
-	return rs.Executor()
+	return ex()
 }
 
 // RunPath is where a run's agent sees its run dir ($HIVE_RUN).
@@ -2667,7 +2822,7 @@ func (rs *Runs) sandboxSpec(cfg Config, sb sandbox.Sandbox, h harness.Harness, r
 	}
 	return sandbox.Spec{
 		ID: r.ID, Argv: argv, Env: env, Cwd: in(mounts[0]), Mounts: mounts, Tools: tools,
-		Stdin: stdin, Stdout: rs.ws.TurnOut(r.ID, turn), StopFile: filepath.Join(rs.ws.RunHost(r.ID), "stop"),
+		Stdin: stdin, Stdout: rs.ws.TurnOut(r.ID, turn), StopFile: filepath.Join(rs.ws.RunHost(r.ID), "stop"), Tmp: filepath.Join(rs.ws.RunPrivate(r.ID), "tmp"),
 		Network: true, Allow: allow, Local: cfg.Egress.LocalAddrs(), Guard: rs.ws.Guarded(), Cover: rs.ws.Covered(), UID: os.Getuid(), GID: os.Getgid(),
 		Nice: r.Nice(),
 	}, nil

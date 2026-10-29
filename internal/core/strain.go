@@ -159,6 +159,15 @@ const DiskReason = LoadedReason + " on its disk"
 // of 12 hours, where cutting them hardly moved the load.
 const loadCPUMin = 10.0
 
+// loadCPUShare is the least CPU pressure, as a share of the IO pressure,
+// for a load over its limit to be the CPU's when the disk is contended
+// too: CPU pressure over loadCPUMin alone doesn't say so. On 10-28 IO
+// pressure sat at 45-58% while CPU pressure wandered round 10%, so the same
+// load read as the disk's one minute and the CPU's the next, and each
+// "machine loaded" cut the checks back to 1: they spent 13.1 of 16.9 hours
+// there.
+const loadCPUShare = 0.5
+
 // loadIOMin is the IO pressure (PSI "some avg10", in %) at or over which a
 // load that isn't the CPU's is the disk's; under it, such a load strains
 // nothing.
@@ -166,7 +175,9 @@ const loadIOMin = 10.0
 
 // Loaded says why the machine is too loaded to take on more work, or "": its
 // 1-minute load average per core is over max, and the CPU is what is
-// contended, or the disk is (DiskReason). Where /proc/loadavg doesn't exist
+// contended, or the disk is (DiskReason): the load is the CPU's only when
+// CPU pressure is over loadCPUMin and, with the disk contended too, at
+// least loadCPUShare of IO pressure. Where /proc/loadavg doesn't exist
 // it never holds, and a max of 0 turns it off; where pressure can't be read,
 // load is the CPU's as before.
 func Loaded(max float64) string { return loaded(procRoot, runtime.NumCPU(), max) }
@@ -187,9 +198,12 @@ func loaded(proc string, cores int, max float64) string {
 	if err != nil || l/float64(cores) <= max {
 		return ""
 	}
-	if cpu, ok := procField(proc+"/pressure/cpu", "avg10="); ok && cpu < loadCPUMin {
-		io, ok := procField(proc+"/pressure/io", "avg10=")
-		if !ok || io < loadIOMin {
+	if cpu, ok := procField(proc+"/pressure/cpu", "avg10="); ok {
+		io, iok := procField(proc+"/pressure/io", "avg10=")
+		if cpu >= loadCPUMin && (!iok || io < loadIOMin || cpu >= io*loadCPUShare) {
+			return fmt.Sprintf("%s (load %.0f on %d cores, limit %g per core)", LoadedReason, l, cores, max)
+		}
+		if !iok || io < loadIOMin {
 			return ""
 		}
 		return fmt.Sprintf("%s (io pressure %.0f%%, cpu pressure %.0f%%; load %.0f on %d cores, limit %g per core)", DiskReason, io, cpu, l, cores, max)
