@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -28,20 +29,35 @@ func workspace(t *testing.T) (core.Workspace, func(DaemonInfo) error) {
 	}
 }
 
+// deadPort is a port no daemon serves. It stays held for the test, so no
+// other test's server can take it (a freed port was taken: the client got a
+// stranger's 400, a reset or a hang), and refuse makes the client's dials to
+// it fail as they would on a closed port.
 func deadPort(t *testing.T) int {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ln.Close()
+	t.Cleanup(func() { ln.Close() })
 	return ln.Addr().(*net.TCPAddr).Port
+}
+
+// refuse makes c's dials to port fail with "connection refused".
+func refuse(c *Client, port int) {
+	dead := net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
+	c.http.Transport = &http.Transport{DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+		if addr == dead {
+			return nil, &net.OpError{Op: "dial", Net: network, Err: syscall.ECONNREFUSED}
+		}
+		return (&net.Dialer{}).DialContext(ctx, network, addr)
+	}}
 }
 
 // A daemon that restarted on a new port still gets the message: the client
 // keeps dialling while the old one is restarting, re-reads daemon.json and
-// sends to the new daemon. The new port is held from the start (a freed port
-// can be taken by another test's server before the new daemon listens), and
-// it answers only once it serves.
+// sends to the new daemon. Both ports are held from the start (a freed port
+// can be taken by another test's server), the old one refusing the client and
+// the new one answering only once it serves.
 func TestClientFollowsRestartedDaemon(t *testing.T) {
 	ws, write := workspace(t)
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -50,13 +66,15 @@ func TestClientFollowsRestartedDaemon(t *testing.T) {
 	}
 	defer ln.Close()
 	next := ln.Addr().(*net.TCPAddr).Port
-	if err := write(DaemonInfo{PID: 1, Port: deadPort(t), Token: "old", Restarting: true}); err != nil {
+	old := deadPort(t)
+	if err := write(DaemonInfo{PID: 1, Port: old, Token: "old", Restarting: true}); err != nil {
 		t.Fatal(err)
 	}
 	c, err := Dial(ws)
 	if err != nil {
 		t.Fatal(err)
 	}
+	refuse(c, old)
 	got := make(chan string, 1)
 	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		select {
@@ -137,13 +155,15 @@ func TestClientWaitsOutRefusedNewDaemon(t *testing.T) {
 // a daemon the person stopped), the client fails at once instead of waiting.
 func TestClientFailsFastWithoutRestart(t *testing.T) {
 	ws, write := workspace(t)
-	if err := write(DaemonInfo{PID: 1, Port: deadPort(t), Token: "t"}); err != nil {
+	dead := deadPort(t)
+	if err := write(DaemonInfo{PID: 1, Port: dead, Token: "t"}); err != nil {
 		t.Fatal(err)
 	}
 	c, err := Dial(ws)
 	if err != nil {
 		t.Fatal(err)
 	}
+	refuse(c, dead)
 	start := time.Now()
 	if c.Ping() {
 		t.Fatal("ping answered on a dead port")
