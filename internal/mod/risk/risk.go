@@ -1,5 +1,5 @@
-// Package risk weighs requests past an agent's reach (spec 7). A T1 step is
-// the worker's own. A T2 step goes to a warden, an agent that weighs it and
+// Package risk weighs requests past an agent's reach (spec 7). A T1 or T2
+// step goes to a warden, an agent that weighs it and
 // does it, works out a safer route, declines, or convenes a tribunal: a panel
 // of three across models that investigates, discusses over two rounds and
 // votes. An approved step runs here, in the effects process, as exactly the
@@ -135,7 +135,7 @@ func New(c *core.Core, mod *modules.Registry, ag *agents.Agents) *Module {
 		}
 	}
 	ops := c.Runs.Ops()
-	ops.Register(core.Op{Name: "warden", Help: `{"want","why","steps","tier":"T1|T2|T3","gain":"(optional) large"} -> T1 you weigh yourself; T2 goes to a warden, T3 to a tribunal`, Fn: m.opRequest})
+	ops.Register(core.Op{Name: "warden", Help: `{"want","why","steps","tier":"T1|T2|T3","gain":"(optional) large"} -> T1 (inside the Hive, a step you can't take yourself, such as a merge on the forge) and T2 go to a warden, T3 to a tribunal`, Fn: m.opRequest})
 	ops.Register(core.Op{Name: "decide", Roles: []string{"warden"}, Help: `{"decision":"do|safer|decline|tribunal|person","reason","script":"exactly what runs (do, tribunal; person if you have one)","gain":"(optional) large"}`, Fn: m.opDecide})
 	ops.Register(core.Op{Name: "requests", Help: `{} -> recent requests past the sandbox: who asked, what, why, where each stands`, Fn: m.opRequests})
 	ops.Register(core.Op{Name: "install_module", Roles: core.Peers, Help: `{"url"} or {"project"}: a module built as a project of its own installs from it`, Fn: m.opInstall})
@@ -266,9 +266,6 @@ func (m *Module) opRequest(r core.Run, args json.RawMessage) (any, error) {
 	// whatever then runs meets CeilingGuard, which counts every mention.
 	ceiling := core.AskCeiling(cfg.Floor, a.Want, a.Why, a.Steps)
 	route := core.Route(tier, cfg.Autonomy, ceiling)
-	if route == "self" {
-		return map[string]string{"tier": tier, "route": route, "note": "T1 is inside the Hive: weigh it yourself and get on with it."}, nil
-	}
 	m.act.Lock()
 	defer m.act.Unlock()
 	// The same step asked in the same project joins the open request, or gets
@@ -778,12 +775,16 @@ func (m *Module) execute(id string) {
 		return
 	}
 	floor := m.C.WS.LoadConfig().Floor
-	if err := core.CeilingGuard(req.Script, floor, req.PersonOK); err != nil {
+	if req.Settles != nil { // no script runs: the decision is read as Weigh read it
+		if why := core.DecisionCeiling(floor, req.Script); why != "" && !req.PersonOK {
+			m.ask(&req, "Always yours", "Whoever approved it, this decision "+why+", which is always yours to decide.", "run", "declined")
+			m.act.Unlock()
+			return
+		}
+	} else if err := core.CeilingGuard(req.Script, floor, req.PersonOK); err != nil {
 		m.ask(&req, "Always yours", "Whoever approved it, this script "+core.ScriptCeiling(floor, req.Script)+", which is always yours to decide.", "run", "declined")
 		m.act.Unlock()
-		if req.Settles == nil {
-			m.tell(req, err.Error()+"; the person decides.")
-		}
+		m.tell(req, err.Error()+"; the person decides.")
 		return
 	}
 	if req.Settles != nil {
@@ -1005,7 +1006,9 @@ func (m *Module) Weigh(a core.Ask) string {
 	if a.Diff != "" {
 		why += "\n\n" + core.Clip(a.Diff, 6000)
 	}
-	if cfg := m.C.WS.LoadConfig(); cfg.Autonomy == 1 || core.Ceiling(cfg.Floor, a.Title, why) != "" {
+	// Saying yes spends nothing, so a money word in the title or diff
+	// doesn't make it the person's (DecisionCeiling); the rest still does.
+	if cfg := m.C.WS.LoadConfig(); cfg.Autonomy == 1 || core.DecisionCeiling(cfg.Floor, a.Title, why) != "" {
 		m.C.Person.Ask(a)
 		return "person"
 	}

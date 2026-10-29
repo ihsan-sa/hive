@@ -524,6 +524,53 @@ func TestHoldLiftsOneTurnAtATime(t *testing.T) {
 	}
 }
 
+// A warden's or tribunal's turn unblocks others (a lead's merge, a red main's
+// fix), so like a lead's it starts under strain and on the ramp after one,
+// where a worker waits (#1992: a warden held 20 minutes on the ramp).
+func TestWardenStartsUnderStrainAndOnTheRamp(t *testing.T) {
+	c, _ := testHive(t)
+	cfg := c.WS.LoadConfig()
+	cfg.MemFloorMB, cfg.CPUPressureMax = 1024, 80
+	defer func(p string) { procRoot = p }(procRoot)
+	procRoot = fakeProc(t, "600000", "0.00", "97.02") // under a worker's floor, cpu past its limit
+	t.Cleanup(func() { endTurns(t, c, cfg) })
+	launch := func(id string) Run {
+		r, _ := c.Runs.Get(id)
+		c.Runs.launch(r, cfg)
+		r, _ = c.Runs.Get(id)
+		return r
+	}
+	for _, s := range []RunSpec{
+		{ID: "w1", Role: "worker", Harness: "fake"},
+		{ID: "w2", Role: "worker", Harness: "fake"},
+		{ID: "warden", Role: "warden", Harness: "fake"},
+		{ID: "ramp-warden", Role: "warden", Harness: "fake"},
+		{ID: "ramp-tribunal", Role: "tribunal", Harness: "fake"},
+	} {
+		if _, err := c.Runs.Start(s); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if w := launch("w1"); w.Status != StatusQueued || !strings.HasPrefix(w.Reason, "waiting: machine") {
+		t.Errorf("worker under strain: %s %q, want queued and waiting", w.Status, w.Reason)
+	}
+	if r := launch("warden"); r.Status != StatusRunning {
+		t.Errorf("warden under strain: %s %q, want its turn running", r.Status, r.Reason)
+	}
+	procRoot = fakeProc(t, "8000000", "0.00", "0.00") // the hold lifts: the ramp
+	if r := launch("w1"); r.Status != StatusRunning {
+		t.Fatalf("first worker after the lift: %s %q, want its turn running", r.Status, r.Reason)
+	}
+	if r := launch("w2"); r.Status != StatusQueued || !strings.Contains(r.Reason, "one turn at a time") {
+		t.Errorf("second worker on the ramp: %s %q, want waiting on it", r.Status, r.Reason)
+	}
+	for _, id := range []string{"ramp-warden", "ramp-tribunal"} {
+		if r := launch(id); r.Status != StatusRunning {
+			t.Errorf("%s on the ramp: %s %q, want its turn running", id, r.Status, r.Reason)
+		}
+	}
+}
+
 // A run reopened after its turn ended is Returned until a turn starts, and
 // Admit, a module's say, holds it with its reason.
 func TestAdmitHoldsAReturnedRun(t *testing.T) {

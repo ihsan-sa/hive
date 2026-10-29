@@ -73,15 +73,42 @@ func AskCeilingMatch(texts ...string) (kind, phrase string) {
 }
 
 func ceilingMatch(skipRuledOut bool, texts ...string) (string, string) {
+	return matchKinds(skipRuledOut, []string{"money", "credential", "open", "outward"}, texts...)
+}
+
+func matchKinds(skipRuledOut bool, kinds []string, texts ...string) (string, string) {
 	t := strings.Join(texts, "\n")
-	for _, k := range []string{"money", "credential", "open", "outward"} {
+	for _, k := range kinds {
 		for _, m := range alwaysPersonRe[k].FindAllStringIndex(t, -1) {
+			if harmless(k, t[m[0]:m[1]], t[m[1]:]) {
+				continue
+			}
 			if !skipRuledOut || !ruledOut(k, t[:m[0]], t[m[0]:m[1]], t[m[1]:]) {
 				return k, t[m[0]:m[1]]
 			}
 		}
 	}
 	return "", ""
+}
+
+// DecisionMatch is CeilingMatch for a decision no script carries out (a
+// protected merge, a module install): saying yes spends nothing, so a money
+// mention in its title or diff (a hardware project's score is its unit cost
+// in USD, #1993) doesn't count; every other category still does.
+func DecisionMatch(texts ...string) (kind, phrase string) {
+	return matchKinds(false, []string{"credential", "open", "outward"}, texts...)
+}
+
+// harmlessRe is a credential command that reads, mints or rotates nothing:
+// "gh auth setup-git" points git at the login gh already has, so a push
+// uses the Hive's own (merging or pushing on the person's repository with
+// it is not the person's), and "gh auth status" only says who is logged in.
+var harmlessRe = regexp.MustCompile(`(?i)^\s+(setup-git|status)\b`)
+
+// harmless says whether a mention names nothing on the person's list
+// wherever it stands, in an ask or in the script that runs.
+func harmless(kind, match, after string) bool {
+	return kind == "credential" && strings.EqualFold(match, "gh auth") && harmlessRe.MatchString(after)
 }
 
 // ScriptCeilingMatch is CeilingMatch for the script that would run: every
@@ -98,6 +125,9 @@ func ScriptCeilingMatch(texts ...string) (string, string) {
 			if i := strings.IndexByte(t[m[1]:], '\n'); i >= 0 {
 				end = m[1] + i
 			}
+			if harmless(k, t[m[0]:m[1]], t[m[1]:end]) {
+				continue
+			}
 			body, ok := strings.CutPrefix(strings.TrimLeft(t[start:m[0]], " \t"), "#")
 			if !ok || !ruledOut(k, body, t[m[0]:m[1]], t[m[1]:end]) {
 				return k, t[m[0]:m[1]]
@@ -108,8 +138,10 @@ func ScriptCeilingMatch(texts ...string) (string, string) {
 }
 
 var (
-	// clauseEnd ends the stretch a negation reaches back over.
-	clauseEnd = regexp.MustCompile(`(?i)[.;:!?,\n]|\b(and|or|but|then|so|also|plus|while|unless|except)\b`)
+	// clauseEnd ends the stretch a negation reaches back over; a
+	// parenthesis is a clause of its own ("which the lead can't do (no
+	// credentials)" is judged on "no").
+	clauseEnd = regexp.MustCompile(`(?i)[.;:!?,()\n]|\b(and|or|but|then|so|also|plus|while|unless|except)\b`)
 	// negatedRe is a negation at most three words before a mention, with
 	// nothing between that turns it back ("don't forget to open a port").
 	negatedRe = regexp.MustCompile(`(?i)\b(not|no|never|don'?t|doesn'?t|won'?t|shouldn'?t|mustn'?t|needn'?t|without|nor|none)\b((\s+\S+){0,3})\s*$`)
@@ -123,6 +155,22 @@ var (
 	// negated asks to open the machine, or a local egress grant, whose every
 	// ask is the person's.
 	protectionRe = regexp.MustCompile(`(?i)firewall|ufw|iptables|nft|inbound|egress`)
+	// nounRe is a credential named as a thing, not an act on one (rotate,
+	// mint, ssh-keygen, gh auth): what an agent says it lacks or quotes
+	// from an error can only be such a noun.
+	nounRe = regexp.MustCompile(`(?i)^(api[ -]?keys?|tokens?|secrets?|credentials?|passwords?|ssh[ -]?keys?|private keys?|oauth|keychain)$`)
+	// lacksRe is a negation right after a credential: the ask says what the
+	// thing can't do or isn't ("fine-grained tokens can't use the Checks
+	// API"), not that it wants one.
+	lacksRe = regexp.MustCompile(`(?i)^\s+(\w+\s+)?(can'?t|cannot|couldn'?t|doesn'?t|don'?t|isn'?t|aren'?t|wasn'?t|won'?t|lacks?|(is|are|was|does|do) not)\b`)
+	// missingRe after that negation makes the credential's absence the
+	// problem ("the API key isn't set"): an ask for one.
+	missingRe = regexp.MustCompile(`(?i)^\s*(yet\s+|be\s+)?(set|configured|present|available|provided|exported|found|given|there|in)\b`)
+	// errorTextRe marks a sentence quoting a failure: a mention there is the
+	// error's word ("Resource not accessible by personal access token (HTTP
+	// 403)", "HTTP 401: Bad credentials"), not an ask for one.
+	errorTextRe = regexp.MustCompile(`(?i)\bHTTP\s*[45]\d\d\b|\b(40[13]|forbidden|unauthori[sz]ed|permission denied|access denied|not accessible|bad credentials)\b`)
+	sentenceEnd = regexp.MustCompile(`[.;!?\n]`)
 	// loopbackRe is a listen address that stays on this machine.
 	loopbackRe = regexp.MustCompile(`(?i)^\s*(127\.\d+\.\d+\.\d+|localhost|loopback|::1|\[::1\])\b`)
 )
@@ -143,6 +191,9 @@ func ruledOut(kind, before, match, after string) bool {
 	if protectionRe.MatchString(match) {
 		return false // "no firewall", "do not block inbound" open the machine
 	}
+	if kind == "credential" && nounRe.MatchString(match) && (lacks(after) || errorText(before, after)) {
+		return true // what the agent lacks, or an error it quotes (#1990)
+	}
 	if ix := clauseEnd.FindAllStringIndex(before, -1); len(ix) > 0 {
 		before = before[ix[len(ix)-1][1]:]
 	}
@@ -150,6 +201,25 @@ func ruledOut(kind, before, match, after string) bool {
 	// A second negation turns the first back: "won't work without your API
 	// key" and "no reason not to expose it" ask for the thing.
 	return m != nil && !turnsBack.MatchString(m[2]) && len(anyNegRe.FindAllString(before, 2)) < 2
+}
+
+// lacks says whether a credential is followed by what it can't do or isn't,
+// but not by its absence as the problem: "the API key isn't set" asks for
+// one, which is the person's to supply.
+func lacks(after string) bool {
+	m := lacksRe.FindStringIndex(after)
+	return m != nil && !missingRe.MatchString(after[m[1]:])
+}
+
+// errorText says whether the sentence around a mention quotes a failure.
+func errorText(before, after string) bool {
+	if ix := sentenceEnd.FindAllStringIndex(before, -1); len(ix) > 0 {
+		before = before[ix[len(ix)-1][1]:]
+	}
+	if i := sentenceEnd.FindStringIndex(after); i != nil {
+		after = after[:i[0]]
+	}
+	return errorTextRe.MatchString(before + " " + after)
 }
 
 // FloorHit returns the first entry of the person's floor list the texts
@@ -191,6 +261,12 @@ func AskCeiling(floor []string, texts ...string) string {
 	return ceiling(AskCeilingMatch, floor, texts...)
 }
 
+// DecisionCeiling is Ceiling for a decision no script carries out: a money
+// mention doesn't count (DecisionMatch).
+func DecisionCeiling(floor []string, texts ...string) string {
+	return ceiling(DecisionMatch, floor, texts...)
+}
+
 // ScriptCeiling is Ceiling for the exact script that would run: a mention a
 // comment rules out doesn't count (ScriptCeilingMatch).
 func ScriptCeiling(floor []string, script string) string {
@@ -207,9 +283,9 @@ func ceiling(match func(...string) (string, string), floor []string, texts ...st
 	return ""
 }
 
-// Tier normalises a risk tier (spec 7): T1 inside the Hive, the worker weighs
-// it; T2 outside but recoverable, or load-bearing inside, a warden weighs it;
-// T3 outside and hard to undo, a tribunal weighs it. Unknown is T2.
+// Tier normalises a risk tier (spec 7): T1 inside the Hive, a warden takes
+// what the asker can't do itself; T2 outside but recoverable, or
+// load-bearing inside, a warden weighs it; T3 outside and hard to undo, a tribunal weighs it. Unknown is T2.
 func Tier(s string) string {
 	switch s = strings.ToUpper(strings.TrimSpace(s)); s {
 	case "T1", "T3":
@@ -218,16 +294,19 @@ func Tier(s string) string {
 	return "T2"
 }
 
-// Route says who weighs a step: "person" (the ceiling or the floor), "self" (T1),
+// Route says who weighs a step: "person" (the ceiling or the floor),
 // "person-first" (autonomy 1 asks before anything outside the project),
-// "warden" (T2) or "tribunal" (T3). Autonomy 3 routes like 2 and tells the
-// person after. The setting moves lines; it never lifts the ceiling.
+// "warden" (T1 and T2) or "tribunal" (T3). An agent asks for a T1 step only
+// when it can't take it itself (a merge on the forge, retiring a project: no
+// agent holds credentials), so a warden takes it at every autonomy (#1991).
+// Autonomy 3 routes like 2 and tells the person after. The setting moves
+// lines; it never lifts the ceiling.
 func Route(tier string, autonomy int, ceiling string) string {
 	switch {
 	case ceiling != "":
 		return "person"
 	case Tier(tier) == "T1":
-		return "self"
+		return "warden"
 	case autonomy == 1:
 		return "person-first"
 	case Tier(tier) == "T2":

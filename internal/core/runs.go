@@ -176,6 +176,11 @@ func (r *Run) Terminal() bool {
 // scheduling priority.
 func (r *Run) Lead() bool { return r.Role == "lead" }
 
+// Unblocks reports a warden or tribunal run: a short turn a stuck lead or a
+// red main often waits on, so like a lead's it never waits for pressure or
+// the ramp after a strain, only the floor a lead has (#1992).
+func (r *Run) Unblocks() bool { return r.Role == "warden" || r.Role == "tribunal" }
+
 // Nice is the Unix nice value the run's processes get (higher is lower
 // priority; a process can only go higher): the Hive-wide lead at the
 // daemon's own, a project's lead just under it, and every other role well
@@ -2409,9 +2414,10 @@ func (rs *Runs) launch(r Run, cfg Config) {
 		rs.mu.Unlock()
 	}()
 	floor, memMax, cpuMax := cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax
-	if r.Lead() {
-		// A lead answers however busy the machine is: no pressure hold, and
-		// only the floor under which its turn could not run at all.
+	if r.Lead() || r.Unblocks() {
+		// A lead answers however busy the machine is, and a warden or
+		// tribunal unblocks others: no pressure hold, and only the floor
+		// under which its turn could not run at all.
 		floor, memMax, cpuMax = min(floor, LeadMemFloorMB), 0, 0
 	}
 	// A turn this machine is too strained for goes to an executor module
@@ -2423,7 +2429,7 @@ func (rs *Runs) launch(r Run, cfg Config) {
 		elsewhere, where = rs.executor()
 	}
 	if why != "" && elsewhere == nil {
-		if !r.Lead() {
+		if !r.Lead() && !r.Unblocks() {
 			rs.Holding()
 		}
 		rs.holdTurn(r, "waiting: "+why)
@@ -2440,7 +2446,7 @@ func (rs *Runs) launch(r Run, cfg Config) {
 			return
 		}
 	}
-	if !r.Lead() && elsewhere == nil && rs.ramp(r, time.Now()) {
+	if !r.Lead() && !r.Unblocks() && elsewhere == nil && rs.ramp(r, time.Now()) {
 		rs.holdTurn(r, "waiting: starting one turn at a time after the machine was strained")
 		return
 	}

@@ -148,13 +148,28 @@ func (g *rig) vote(req Request, votes ...string) {
 	g.m.Tick()
 }
 
-func TestT1IsTheWorkers(t *testing.T) {
-	g := newRig(t, 2)
-	if _, err := g.call(g.worker, "warden", map[string]string{"want": "pip install into .venv", "tier": "T1"}); err != nil {
-		t.Fatal(err)
-	}
-	if len(g.m.List()) != 0 {
-		t.Fatal("a T1 step became a request")
+// An agent asks for a T1 step only when it can't take it itself: a lead
+// can't merge a PR on its project's repo, holding no credentials. It used to
+// be told "weigh it yourself" with nothing filed, so a red main's fix waited
+// hours (#1991); a warden takes it now, at autonomy 1 too, with no yes first.
+func TestT1AskGoesToAWarden(t *testing.T) {
+	for _, autonomy := range []int{1, 2, 3} {
+		g := newRig(t, autonomy)
+		lead, err := g.c.Runs.Start(core.RunSpec{Role: "lead", Project: "hive-hwde", Harness: "fake", Persistent: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := g.call(lead, "warden", map[string]string{"want": "merge hive-hwde PR #95, the fix for main's red tests",
+			"why": "a merge on the forge, which no agent can do", "steps": "gh pr merge 95 --squash", "tier": "T1"}); err != nil {
+			t.Fatal(err)
+		}
+		reqs := g.m.List()
+		if len(reqs) != 1 || reqs[0].Route != "warden" || reqs[0].State != "weighing" || g.run(reqs[0].Warden).Role != "warden" {
+			t.Fatalf("autonomy %d: a lead's T1 merge ask: %+v, want a warden weighing it", autonomy, reqs)
+		}
+		if reqs[0].Ask != "" {
+			t.Errorf("autonomy %d: a T1 ask reached the person", autonomy)
+		}
 	}
 }
 
@@ -863,6 +878,37 @@ func TestWeighDeclineAndCeiling(t *testing.T) {
 	}
 	if who := g.m.Weigh(core.Ask{Kind: "merge", Ref: "t@2", Title: "Merge? It changes .hive/project.json", Detail: "+the deploy token lives in ~/.netrc", Options: []string{"merge", "leave open"}}); who != "person" {
 		t.Fatalf("a ceiling change went to the %s", who)
+	}
+}
+
+// A hardware project's score is its unit cost, so its protected merges talk
+// about cost, USD and the BOM; saying yes spends nothing, so a warden weighs
+// them at autonomy 3 and its yes merges (#1993: hifi-receiver-2's PRs #27
+// and #29 went to the person on "in USD").
+func TestWeighCostScoredMergeIsTheWardens(t *testing.T) {
+	g := newRig(t, 3)
+	answered := make(chan core.Ask, 1)
+	g.c.Person.Handle("merge", func(a core.Ask) { answered <- a })
+	diff := `--- a/tools/hwcheck.py
++++ b/tools/hwcheck.py
+     python3 tools/hwcheck.py score   the first-built tier's unit cost at 100,
+                                      in USD, from its board(s)' BOM, printed
++    print(f"unit cost at {QTY}: ${c['total']:.2f}")`
+	if who := g.m.Weigh(core.Ask{Kind: "merge", Ref: "t@1", From: g.worker.ID, Title: `Merge "Cut the BOM price"? It changes tools/hwcheck.py`,
+		Detail: "These hold the project's goals, score or settings.", Diff: diff, Options: []string{"merge", "leave open"}}); who != "warden" {
+		t.Fatalf("a cost-scored merge went to the %s", who)
+	}
+	req := g.m.List()[0]
+	if err := g.decide(req, map[string]string{"decision": "do", "reason": "only the test's docstring"}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case a := <-answered:
+		if a.Answer != "merge" {
+			t.Fatalf("the warden's yes answered %+v", a)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatalf("the warden's yes never merged: %+v", g.settle(req.ID, "weighing", "approved"))
 	}
 }
 

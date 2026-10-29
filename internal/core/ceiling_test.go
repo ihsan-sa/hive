@@ -12,8 +12,8 @@ func TestRouteByTierAndAutonomy(t *testing.T) {
 		ceiling  string
 		want     string
 	}{
-		{"T1", 2, "", "self"},
-		{"T1", 1, "", "self"},
+		{"T1", 2, "", "warden"}, // a T1 ask is a step the asker can't take itself (#1991)
+		{"T1", 1, "", "warden"}, // inside the Hive: no yes first
 		{"T2", 2, "", "warden"},
 		{"T2", 3, "", "warden"},
 		{"T2", 1, "", "person-first"}, // turning autonomy down makes T2 ask first
@@ -224,6 +224,88 @@ gh run list -R "$R" --workflow release.yml -L 2`,
 	for _, s := range scripts {
 		if err := CeilingGuard(s, nil, false); err != nil {
 			t.Errorf("%v\n%s", err, s)
+		}
+	}
+}
+
+// An ask that only mentions a credential, saying what the agent lacks or
+// quoting an error, reaches a warden (#1990: a lead's hand-merge ask went to
+// the person because its why said "which the lead can't do (no
+// credentials)"). One that asks for a credential, or a script that reads
+// one, is still the person's.
+func TestMentionedCredentialsAreTheWardens(t *testing.T) {
+	for _, text := range []string{
+		"Hand-merge board PRs #30/#31/#10: a merge on GitHub, which the lead can't do (no credentials)",
+		"the lead has no credentials",
+		"gh pr checks fails: Resource not accessible by personal access token (HTTP 403)",
+		"fine-grained tokens can't use the Checks API",
+		"gh api says 'HTTP 401: Bad credentials' for the org repo",
+		"the Hive's token doesn't reach the org's repo",
+	} {
+		if why := AskCeiling(nil, text); why != "" || Route("T2", 3, why) != "warden" {
+			t.Errorf("%q is the person's: %s", text, why)
+		}
+	}
+	for text, want := range map[string]string{
+		"the API key isn't set; please give me one":             "credential",
+		"the token isn't there yet":                             "credential",
+		"HTTP 403 from the API; please mint a fine-grained one": "credential",
+		"it got a 403, so rotate the token":                     "credential",
+		"gh auth refresh -s admin:org":                          "credential",
+		"add a token with repo scope":                           "credential",
+	} {
+		if k, _ := AskCeilingMatch(text); k != want {
+			t.Errorf("AskCeilingMatch(%q) = %q, want %q", text, k, want)
+		}
+	}
+	// gh auth setup-git only points git at gh's login, the Hive's own, to
+	// push or merge on the person's repo; a token read is still theirs.
+	for _, s := range []string{
+		"set -eu\ngh auth setup-git\ngit push origin hive/warden-x",
+		"gh auth status && gh pr merge 95 --squash",
+	} {
+		if err := CeilingGuard(s, nil, false); err != nil {
+			t.Errorf("%v\n%s", err, s)
+		}
+	}
+	for _, s := range []string{"gh auth token", "gh auth setup-git && gh auth refresh", "cat ~/.config/gh/hosts.yml"} {
+		if CeilingGuard(s, nil, false) == nil {
+			t.Errorf("the script guard let %q run", s)
+		}
+	}
+}
+
+// A protected merge's diff can talk about money without spending any: a
+// hardware project's score is its unit cost (#1993, hifi-receiver-2 PRs #27
+// and #29 changing tools/hwcheck.py). The decision ceiling skips money and
+// keeps the rest.
+func TestDecisionCeilingSkipsMoney(t *testing.T) {
+	diff := `Merge "Bench scripts for receiver bring-up and test"? It changes tools/hwcheck.py
+
+These hold the project's goals, score or settings. PR: https://github.com/Hive-RSI-Lab/hifi-receiver/pull/29
+
+diff --git a/tools/hwcheck.py b/tools/hwcheck.py
+-    python3 tools/hwcheck.py test    the check: docs/product.md, then every
+-                                     board's hwde gates
++    python3 tools/hwcheck.py test    the check: docs/product.md, the software's
++                                     unit tests, then every board's hwde gates
+     python3 tools/hwcheck.py score   the first-built tier's unit cost at 100,
+                                      in USD, from its board(s)' BOM, printed
+                                      only when their gates pass (lower is better)
++def say_cost(c: dict) -> None:
++    print(f"unit cost at {QTY}: ${c['total']:.2f}, price per part from the BOM")`
+	if Ceiling(nil, diff) == "" {
+		t.Fatal("the strict ceiling no longer sees USD; this test no longer shows the case")
+	}
+	if why := DecisionCeiling(nil, diff); why != "" {
+		t.Errorf("a cost-scored merge is the person's: %s", why)
+	}
+	for text, want := range map[string]string{
+		diff + "\n+subprocess.run(['cat', os.path.expanduser('~/.netrc')])": "credential",
+		diff + "\n+# send an email to the client with the BOM":              "outward",
+	} {
+		if k, _ := DecisionMatch(text); k != want {
+			t.Errorf("DecisionMatch(...%q) = %q, want %q", text[len(diff):], k, want)
 		}
 	}
 }
