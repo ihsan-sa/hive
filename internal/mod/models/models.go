@@ -116,9 +116,10 @@ func Probe(ws core.Workspace, name string, m core.OpenModel) error {
 // probe refuses a pick that can't answer, saying why: a named model gets one
 // real request (a stored Down is no reason to refuse, as the person may have
 // just fixed it); any other pick is refused only while it is down.
-// startable refuses a pick whose harness can't start on this machine: its
-// program isn't installed, or (in a sandbox) no key is stored for it. A
-// worker started on it would only end blocked.
+// startable refuses a trial on a pick whose harness can't start on this
+// machine: its program isn't installed, or (in a sandbox) no key is stored
+// for it. A worker started on it would only end blocked. A route isn't held
+// to it: its picks may run on a runner that has the program.
 func (m *Module) startable(p core.Pick) error {
 	h, err := harness.Get(p.Harness)
 	if err != nil {
@@ -158,7 +159,7 @@ func (m *Module) probe(cfg core.Config, p core.Pick) error {
 		if d, ok := downOf(m.C.Runs.Down(), p); ok {
 			return fmt.Errorf("%s; %s", d.Line(), d.Fix(cfg))
 		}
-		return m.startable(p)
+		return nil
 	}
 	err := m.Probe(m.C.WS, p.Model, cfg.Models[p.Model])
 	if err == nil {
@@ -427,6 +428,9 @@ func (m *Module) opTrial(r core.Run, args json.RawMessage) (any, error) {
 	cfg := m.C.WS.LoadConfig()
 	pick, err := cfg.Pick(b.Model)
 	if err != nil {
+		return nil, err
+	}
+	if err := m.startable(pick); err != nil {
 		return nil, err
 	}
 	if err := m.probe(cfg, pick); err != nil {
