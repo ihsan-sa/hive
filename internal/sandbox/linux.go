@@ -184,7 +184,7 @@ func Exec(specPath string) int {
 		defer ServeEgress(ln, s.Allow, s.Local, refused).Close()
 	}
 	for _, t := range s.Tools {
-		p, err := findTool(t)
+		p, err := findTool(t, s)
 		if err != nil {
 			return fail(err)
 		}
@@ -279,12 +279,23 @@ func openIn(path string) (*os.File, error) {
 	return os.Open(path)
 }
 
-func findTool(t string) (string, error) {
-	p, err := lookTool(t)
-	if err != nil {
-		return "", err
+// findTool resolves tool t for spec s: by LookTool, with the bins of the
+// tools folder s mounts as a last resort.
+func findTool(t string, s Spec) (string, error) {
+	if !filepath.IsAbs(t) {
+		var extra []string
+		for _, m := range s.Mounts {
+			if m.Inside == ToolsInside {
+				extra = append(extra, ToolBins(m.Host, filepath.Join)...)
+			}
+		}
+		p, err := LookTool(t, extra...)
+		if err != nil {
+			return "", err
+		}
+		t = p
 	}
-	return filepath.EvalSymlinks(p)
+	return filepath.EvalSymlinks(t)
 }
 
 // interpreters are the host's own runtimes a command may call by name. One
@@ -309,7 +320,7 @@ func hostInterpreters(a *initArgs) {
 	}
 	var dirs []string
 	for _, n := range interpreters {
-		p, err := findTool(n)
+		p, err := findTool(n, Spec{})
 		if err != nil || filepath.Base(p) == "snap" {
 			continue
 		}
