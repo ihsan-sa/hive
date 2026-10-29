@@ -393,8 +393,10 @@ func (m *Module) opQueue(r core.Run, args json.RawMessage) (any, error) {
 		case m.C.Runs.Walled(r, t.Project) != nil:
 			notes = append(notes, "no task "+id)
 			continue
-		case m.reach(r, t.Project) != nil:
-			notes = append(notes, fmt.Sprintf("%s is on project %s; you steer only your own", id, t.Project))
+		case m.reach(r, t.Project) != nil && strings.TrimSpace(a.Why) == "":
+			// Every agent has the same say (the person, 10-28): another
+			// project's line is anyone's to steer, saying why on the record.
+			notes = append(notes, fmt.Sprintf("%s is on project %s; say why with why to steer another project's line", id, t.Project))
 			continue
 		case !t.Queued():
 			notes = append(notes, fmt.Sprintf("%s has left the queue (%s); a started worker isn't stopped by the queue", id, t.Stage))
@@ -432,6 +434,8 @@ func (m *Module) opQueue(r core.Run, args json.RawMessage) (any, error) {
 		}
 		if c.now && !t.Now {
 			t.Now, note = true, fmt.Sprintf("started now by %s, first in line: %s", r.ID, core.Clip(a.Why, 300))
+		} else if note != "" && strings.TrimSpace(a.Why) != "" {
+			note += ": " + core.Clip(a.Why, 300)
 		}
 		if note != "" {
 			m.save(&t, note)
