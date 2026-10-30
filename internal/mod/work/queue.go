@@ -71,309 +71,34 @@ func (t Task) Overdue() bool {
 }
 
 // admit decides which waiting tasks start a worker now, and why each other
-// one waits. tasks is every task Tick looks at.
+// one waits: in line order, while the memory budget (core.MemBudget) has
+// room for another turn beside those started this pass, as launch weighs
+// every turn. tasks is every task Tick looks at.
 func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]string) {
-	cfg := m.C.WS.LoadConfig()
-	working, away := 0, 0
-	var ahead, line []Task // ahead: being worked on, or being started right now
+	start, wait = map[string]bool{}, map[string]string{}
+	turnMB := m.C.WS.LoadConfig().TurnMB
+	var line []Task
 	m.mu.Lock()
 	for _, t := range tasks {
-		switch {
-		case t.Queued() && !m.busy[t.ID]:
-			// A worker a conflict sends back takes a slot as a new one
-			// does: a main merge once reopened 19 at a pace of 1.
+		if t.Queued() && !m.busy[t.ID] {
 			line = append(line, t)
-		case t.Stage == StageWorking && m.slotless(t):
-			// A worker that can't take a turn now holds no slot (slotless):
-			// three quiet ones held 3 of 8 slots for 10-12h while ~39 briefs
-			// waited. A message or its reset resumes it (core.Runs), and
-			// then it counts again, even if that puts the workers past the
-			// limit until slots free; none start meanwhile, and its turn
-			// waits for a slot of its own (turnSlot).
-		case t.Stage == StageWorking && m.awayNow(t):
-			// A worker started past the pace whose turns go to a runner
-			// holds no slot here, until a turn of its runs here again.
-			away++
-		case t.Stage == StageWorking || t.Queued(): // or a queued or resent one being started right now
-			ahead = append(ahead, t)
-			working++
-			if m.away[t.ID] {
-				away++
-			}
 		}
-		// The rest hold no slot: new ones join the line once issued, and
-		// pushed ones (landing, testing, reviewing, merging) merge main on
-		// a conflict, with their worker if need be.
 	}
 	m.mu.Unlock()
-	back := m.sentBack(tasks)
 	m.inLine(line)
-	// One task a pass goes to an executor module with room: past a strained
-	// machine (machineHold), or past the pace (its worker's turns go there
-	// first, core.RunSpec.Away); the executor is asked at most once a pass.
-	strained, loaded := core.Strained(cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax), core.Loaded(cfg.LoadMax)
-	io := core.IOStrained(cfg.IOPressureMax, cfg.IOFullMax)
-	var roomOK *bool
-	elsewhere := func() bool {
-		if roomOK == nil {
-			ask := m.C.Runs.Elsewhere
-			if m.elsewhere != nil {
-				ask = m.elsewhere
-			}
-			ok := ask()
-			roomOK = &ok
-		}
-		return *roomOK
-	}
-	// decide sorts the line at limit, and says whether a brief waits on the
-	// limit itself: only then may the pace grow, as a held brief would leave
-	// a new slot empty.
-	decide := func(limit int) (start map[string]bool, wait map[string]string, capped bool) {
-		start, wait = map[string]bool{}, map[string]string{}
-		working, away := working, away
-		sent := map[string]bool{}
-		// One task a pass goes elsewhere, as one launch spends the room.
-		once := false
-		elsewhereOnce := func() bool {
-			if once {
-				return false
-			}
-			once = true
-			return elsewhere()
-		}
-		// The reason is saved with the task, so it names the limit but not
-		// its live value: the pace moved about every minute under load, and
-		// each move re-saved every waiting task with its whole brief (one
-		// 36 times in 40 minutes). The pace itself shows in Pace.
-		full := fmt.Sprintf("waiting for a worker (max_workers %d)", cfg.MaxWorkers)
-		if cfg.MaxWorkers == 0 || limit < cfg.MaxWorkers {
-			full = "waiting for a worker (at the pace)"
-		}
-		hold := machineHold(strained, io, loaded, cmp.Or(cfg.MaxWorkers, defaultWorkers), elsewhereOnce)
-		for _, t := range line {
-			held := "" // asked only of a task nothing else holds back
-			switch {
-			case t.Held:
-				wait[t.ID] = "held by " + cmp.Or(t.HeldBy, "the lead")
-			case working >= limit && away < awayMax(cfg) && elsewhereOnce():
-				// Past the pace while a runner has room: its worker's turns
-				// go there first (core.RunSpec.Away). A worker a conflict
-				// sends back is reopened, not launched, so it waits here.
-				start[t.ID], sent[t.ID] = true, true
-				away++
-			case working >= limit:
-				wait[t.ID], capped = full, true
-			case func() bool { held = hold(working); return held != "" }():
-				wait[t.ID] = "waiting: " + steady(held)
-				if !onlyLoad(held) {
-					m.C.Runs.Holding() // the turns after a strain ramp up (load alone holds only past the start)
-				}
-			default:
-				start[t.ID] = true
-				working++
-			}
-		}
-		m.mu.Lock()
-		for id := range sent {
-			if m.away == nil {
-				m.away = map[string]bool{}
-			}
-			m.away[id] = true
-		}
-		m.mu.Unlock()
-		return start, wait, capped
-	}
-	// The pace moves on what waits at its limit now; if that moves it, the
-	// line is sorted again at the new one.
-	limit := m.paceWorkers(cfg, working, false)
-	start, wait, capped := decide(limit)
-	if capped || back > 0 && working >= limit { // a worker sent back waits on the limit too
-		if l := m.paceWorkers(cfg, working, true); l != limit {
-			start, wait, _ = decide(l)
-		}
-	}
-	return start, wait
-}
-
-// paceBack says why a worker's next turn waits on the workers' pace, or "":
-// it is core's Runs.Admit. A worker's first turn starts with its task, which
-// admit starts under the pace; every later turn takes a slot too (turnSlot).
-// One sent back to its task (a conflict with main, a reviewer's findings, a
-// retry) also waits, ahead of the briefs, until the tasks at work are under
-// the pace (admit counts it as working). On 10-28 a merge sent 22
-// conflicting PRs back at once through Reopen, which went past the pace: 19
-// workers ran while it said 1, and load reached 481.
-func (m *Module) paceBack(r core.Run) string {
-	if r.Role != "worker" || r.Away || r.Turn == 0 && !r.Returned { // an away worker's turns go to a runner first
-		return ""
-	}
-	limit := cmp.Or(m.workers.get(), m.C.WS.LoadConfig().MaxWorkers, defaultWorkers)
-	tasks := m.List(func(t Task) bool { return !t.Terminal() && t.Worker != "" })
-	running := m.C.Runs.List(func(x *core.Run) bool {
-		return x.Role == "worker" && x.Status == core.StatusRunning && x.Where == "" && x.ID != r.ID
-	})
-	m.backMu.Lock()
-	defer m.backMu.Unlock()
-	if r.Returned && !m.backIn[r.ID] {
-		mine, working := false, 0
-		for _, t := range tasks {
-			switch {
-			case t.Worker == r.ID:
-				mine = true
-			case t.Stage == StageWorking && !m.slotless(t) && !m.awayNow(t) && !m.waitsBack(t):
-				working++
-			}
-		}
-		if mine && working >= limit {
-			return "waiting for a worker (at the pace): sent back to its task"
-		}
-		if mine {
-			m.backIn[r.ID] = true
-		}
-	}
-	return m.turnSlot(r, len(running), limit, time.Now())
-}
-
-// turnSeen is how lately a run must have asked for a turn slot to be
-// waiting for one: a tick steps every run about once a second.
-var turnSeen = 10 * time.Second
-
-// turnPass is how long a slot given to a turn that hasn't started (held
-// after by a strain or the ramp) is kept for it.
-var turnPass = 5 * time.Minute
-
-// turnWaiter is a turn waiting for a slot: since when, and when it last asked.
-type turnWaiter struct{ since, seen time.Time }
-
-// turnPassed is a slot given to a run's turn after turn, at when.
-type turnPassed struct {
-	turn int
-	at   time.Time
-}
-
-// turnSlot says why r's next turn waits for a slot, or "": it starts only
-// while the worker turns running here (running, r's own left out) and those
-// given a slot that haven't started yet are fewer than limit, the workers'
-// pace, and the turns that have waited longer go first. Without it a turn the
-// pace didn't start took no slot: a restart resumed every turn it cut at
-// once (29 within 60 s on 10-30, at a pace of 1; load 50 to 158 on 20
-// cores), and a quiet worker's message put it past the limit. backMu is held.
-func (m *Module) turnSlot(r core.Run, running, limit int, now time.Time) string {
-	if m.turnIn == nil {
-		m.turnIn, m.turnWait = map[string]turnPassed{}, map[string]turnWaiter{}
-	}
-	if p, ok := m.turnIn[r.ID]; ok && p.turn == r.Turn && now.Sub(p.at) < turnPass {
-		return "" // given its slot; held since by something else
-	}
-	delete(m.turnIn, r.ID)
-	taken := running
-	for id, p := range m.turnIn {
-		cur, ok := m.C.Runs.Get(id)
-		if !ok || cur.Terminal() || cur.Turn != p.turn || cur.Status == core.StatusRunning || now.Sub(p.at) >= turnPass {
-			delete(m.turnIn, id) // started (counted as running), ended, or let go
-			continue
-		}
-		taken++
-	}
-	me, ok := m.turnWait[r.ID]
-	if !ok || now.Sub(me.seen) > turnSeen {
-		me.since = now
-	}
-	me.seen = now
-	m.turnWait[r.ID] = me
-	ahead := 0
-	for id, w := range m.turnWait {
-		switch {
-		case now.Sub(w.seen) > turnSeen:
-			delete(m.turnWait, id)
-		case id != r.ID && (w.since.Before(me.since) || w.since.Equal(me.since) && id < r.ID):
-			ahead++
-		}
-	}
-	if taken+ahead >= limit {
-		return "waiting for a worker (at the pace): its next turn takes a slot"
-	}
-	delete(m.turnWait, r.ID)
-	m.turnIn[r.ID] = turnPassed{turn: r.Turn, at: now}
-	return ""
-}
-
-// waitsBack says whether t's worker was sent back to it and waits on the
-// pace; backMu is held.
-func (m *Module) waitsBack(t Task) bool {
-	r, ok := m.C.Runs.Get(t.Worker)
-	return ok && r.Returned && r.Role == "worker" && !r.Away && !m.backIn[r.ID]
-}
-
-// sentBack counts the workers at work in tasks that were sent back and wait
-// on the pace, and forgets the ones let through whose turn has started.
-func (m *Module) sentBack(tasks []Task) int {
-	m.backMu.Lock()
-	defer m.backMu.Unlock()
-	for id := range m.backIn {
-		if r, ok := m.C.Runs.Get(id); !ok || !r.Returned {
-			delete(m.backIn, id)
-		}
-	}
 	n := 0
-	for _, t := range tasks {
-		if t.Stage == StageWorking && !m.slotless(t) && m.waitsBack(t) {
+	for _, t := range line {
+		switch {
+		case t.Held:
+			wait[t.ID] = "held by " + cmp.Or(t.HeldBy, "the lead")
+		case core.MemBudget(turnMB, n) != "":
+			wait[t.ID] = core.MemWait + " for a worker"
+		default:
+			start[t.ID] = true
 			n++
 		}
 	}
-	return n
-}
-
-// awayMax is how many workers may run past the pace on executor modules'
-// runners at once: as many as the workers' own ceiling, so a runner gone
-// (whose workers' turns come back here) at most doubles the work here.
-func awayMax(cfg core.Config) int { return cmp.Or(cfg.MaxWorkers, defaultWorkers) }
-
-// awayNow reports whether t's worker was started past the pace for a runner
-// and its latest turn didn't run here: it has yet to start one, or that one
-// went to a runner.
-func (m *Module) awayNow(t Task) bool {
-	r, ok := m.C.Runs.Get(t.Worker)
-	return ok && r.Away && (r.Turn == 0 || r.Where != "")
-}
-
-// takeAway says whether admit started t past the pace for a runner, once.
-func (m *Module) takeAway(id string) bool {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	a := m.away[id]
-	delete(m.away, id)
-	return a
-}
-
-// machineHold says, for each task in line in turn with working workers at
-// work, why the machine holds it back, or "". A machine over load_max alone
-// (loaded) holds a new worker only from start on, as the few workers there
-// aren't what loads it, and never sends one elsewhere, since launch would
-// run it here; one task a pass goes past a strained machine while an
-// executor module has room, since launch hands a strained turn to it. A
-// saturated disk (io, core.IOStrained) holds every new worker, and never
-// sends one elsewhere either: launch doesn't read it, so would run it here.
-func machineHold(strained, io, loaded string, start int, elsewhere func() bool) func(working int) string {
-	asked := false
-	return func(working int) string {
-		if strained == "" {
-			if io != "" {
-				return io
-			}
-			if loaded != "" && working >= start {
-				return loaded
-			}
-			return ""
-		}
-		if !asked {
-			asked = true
-			if elsewhere() {
-				return ""
-			}
-		}
-		return strained
-	}
+	return start, wait
 }
 
 // parkedFree is how far off a parked worker's next turn must be for it to

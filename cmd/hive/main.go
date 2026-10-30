@@ -32,7 +32,6 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/report"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/runner"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/tools"
-	"github.com/ihsan-sa/hive-standalone-build/internal/mod/work/heavycli"
 	"github.com/ihsan-sa/hive-standalone-build/internal/openagent"
 	"github.com/ihsan-sa/hive-standalone-build/internal/sandbox"
 	"github.com/ihsan-sa/hive-standalone-build/internal/setup"
@@ -109,9 +108,6 @@ func run(args []string) int {
 	switch cmd {
 	// Internal commands, used inside sandboxes and by the Hive itself.
 	case "agent":
-		if len(args) > 0 && args[0] == "heavy" { // the work module's client, outside the core
-			return heavycli.Main(args[1:])
-		}
 		return agentcli.Main(args)
 	case "fake-agent":
 		return fakeagent.Main(args)
