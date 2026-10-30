@@ -34,6 +34,26 @@ The person (08:56 local): "stuff is far too rigid still like eerything needs to 
 
 On merging (2026-10-29, 16:01 local, through Slack): "Do we really need this many checks", and "Or can we not just have a soft merge process where some tests run but agents hand merge stuff clearing conflicts dynamically instead of making it all a structured process". The lead filed it as a pivot (task 261029-200923-15c2909213).
 
+## Full control, one workshop, send it (2026-10-29)
+
+The person, in the lead's chat (local time):
+
+21:19: "well if you give all agetns full control of everythig in the hive, like the architecture technically calls for, then they arent bound by anything and choose to follow the path that ensures fastest path. It's scoped risk. Yes, in theory, they could delete everything, but theur ceiling is loimited to the hive. So that means that worst is they delete stuff on the server, and we just dont give them the ability to do certain things like delete repos or commits etc so it is possible to go back".
+
+21:22: "Like we need as much freedom as possible. Agents are limited to projects, ANY AGENT in the hive has the SAME ability and permissions no matter where theybare spawned or what they are wokring on".
+
+21:24: "The WHOLE hive is essentially on big workshop for itself and the projects within it. Anyone can work onanything -- doesnt mean its the best way to do things, but things should fall into place as agents use their intelligence".
+
+21:26: "Like the fastest way to do stuff is just send it, minimal gates, fail fast, stuff breaks but revert, agents hand merge, etc. Determinism belongs at the implementation level and test level, not at the high level architecture and "pipeline" level".
+
+21:29: "and this approach needs to apply to projects too, not just the hive core, it's everything".
+
+21:34: "inm  many ways, the agents should literally just be like me opening a cluade code session in home like im about to do".
+
+22:04: "im excited for these changes to come into effect. With a lack of rules the agents will need to talk to one another in order to not step over each other, enabling REAL hive behaviour".
+
+The lead filed it as a pivot (task 261030-012011-88ac998307).
+
 ## First milestone
 
 You land a change you proposed yourself, which beats your benchmark, with nobody in between. Then you release it and update your own install to that release.
