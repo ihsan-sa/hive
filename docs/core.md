@@ -30,6 +30,8 @@ What a merge rests on is core, so where a project's tests run is too: `ProjectCo
 
 Sharing an identical check in flight is core for the same reason: `Effects.shared` in `core/effects.go` (#1880, about 30 lines) runs one check for every caller asking for the same project, sha, main, kind and command while it waits or runs, since only the check line knows what is in it.
 
+`core/git.go`'s memo of pure git calls (`pureGit`, `gitMemo`, #2044, about 90 lines) is core because every host git call goes through `Git` there: a merge, diff or file read named by full commit ids gives the same answer each time, and on a loaded machine the repeats (a fifth of the work module's git processes) pushed its tests past their 25-minute limit.
+
 The last row is core only as the place the skeleton runs: what a module adds to it (an API route, a CLI verb) is module material and moves out (step 4 below).
 
 The packages measured as the core, read by `tests/core-size.sh`:
