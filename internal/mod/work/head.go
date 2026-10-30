@@ -67,8 +67,10 @@ func (m *Module) adopt(t *Task, head, why string) {
 }
 
 // noChecks bounds the wait for a head on which the forge has reported no
-// check run at all while required ones are awaited. Past noChecksMax it is
-// raised once to the lead and waits.
+// check run at all while required ones are awaited. Past noChecksMax the Hive
+// starts the forge's CI on it once (a PR opened before its project's
+// workflow landed on main never had an event to run on) and waits again;
+// past that too, or if it can't, it is raised once to the lead and waits.
 func (m *Module) noChecks(t *Task, p core.Project, main string, runs []core.CheckRun, st string) (bool, error) {
 	if st != core.CheckPending || len(runs) > 0 {
 		return false, nil
@@ -83,8 +85,20 @@ func (m *Module) noChecks(t *Task, p core.Project, main string, runs []core.Chec
 		return false, nil
 	}
 	none := "no forge check run has appeared on " + core.Short(t.SHA) + " in over " + noChecksMax.String()
-	// No forge call starts CI on a commit as it is (a rerun needs a run to
-	// rerun), so the lead hears of it.
+	if t.CIStarted != t.SHA {
+		t.CIStarted = t.SHA
+		how, err := m.C.Effects.Forge.StartCI(p.Repo, t.PR.Number, t.Branch, t.SHA)
+		if err == nil {
+			t.NoChecks = time.Now().UTC()
+			m.save(t, none+", so the Hive started its CI: "+how+"; waiting up to "+noChecksMax.String()+" for its checks")
+			m.hold(t, p, "waiting for the CI the Hive started on "+core.Short(t.SHA))
+			return true, nil
+		}
+		none += "; starting its CI failed: " + core.Clip(err.Error(), 300)
+		m.save(t, "")
+	} else {
+		none += ", even after the Hive started its CI"
+	}
 	m.raiseKind(p, "no-checks", t.SHA+"/nochecks", fmt.Sprintf("%s (PR #%d in %s); the forge may not have run CI on it", none, t.PR.Number, p.Name))
 	m.hold(t, p, "waiting for the forge's checks on "+core.Short(t.SHA)+": "+none+"; the lead has been told")
 	return true, nil

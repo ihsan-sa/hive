@@ -27,14 +27,15 @@ type localState struct {
 	PRs      map[string][]localPR     `json:"prs"`
 	Comments map[string][]string      `json:"comments"`
 	Releases map[string][]Release     `json:"releases"`
-	Runs     map[string][]WorkflowRun `json:"runs"`             // repo@sha -> release runs, newest first
-	TagSHAs  map[string]string        `json:"tags"`             // repo@tag -> the commit it points at
-	Checks   map[string][]CheckRun    `json:"checks,omitempty"` // repo@sha
-	Jobs     map[string][]WorkflowJob `json:"jobs,omitempty"`   // repo#run -> its jobs
-	Logs     map[string]string        `json:"logs,omitempty"`   // repo url -> a check's log
-	Steps    map[string][]JobStep     `json:"steps,omitempty"`  // repo url -> a check's steps
-	Reruns   map[string]int           `json:"reruns,omitempty"` // repo@sha -> re-runs of its failed checks asked
-	Public   map[string]bool          `json:"public,omitempty"` // repos made public
+	Runs     map[string][]WorkflowRun `json:"runs"`                // repo@sha -> release runs, newest first
+	TagSHAs  map[string]string        `json:"tags"`                // repo@tag -> the commit it points at
+	Checks   map[string][]CheckRun    `json:"checks,omitempty"`    // repo@sha
+	Jobs     map[string][]WorkflowJob `json:"jobs,omitempty"`      // repo#run -> its jobs
+	Logs     map[string]string        `json:"logs,omitempty"`      // repo url -> a check's log
+	Steps    map[string][]JobStep     `json:"steps,omitempty"`     // repo url -> a check's steps
+	Reruns   map[string]int           `json:"reruns,omitempty"`    // repo@sha -> re-runs of its failed checks asked
+	CIStarts map[string]int           `json:"ci_starts,omitempty"` // repo@sha -> CI starts asked on a head it never ran on
+	Public   map[string]bool          `json:"public,omitempty"`    // repos made public
 }
 
 type localIssue struct {
@@ -609,6 +610,27 @@ func (l *Local) RerunFailed(repo, sha string) (int, error) {
 		l.save(s)
 	}
 	return n, nil
+}
+
+// StartCI counts a start of CI on repo@sha in CIStarts; the checks it
+// brings are the test's to set, as a CI would report them.
+func (l *Local) StartCI(repo string, number int, branch, sha string) (string, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	s := l.load()
+	if s.CIStarts == nil {
+		s.CIStarts = map[string]int{}
+	}
+	s.CIStarts[repo+"@"+sha]++
+	l.save(s)
+	return "dispatched ci.yml on " + branch, nil
+}
+
+// CIStarts counts the starts of CI asked on repo@sha.
+func (l *Local) CIStarts(repo, sha string) int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.load().CIStarts[repo+"@"+sha]
 }
 
 // Reruns counts the re-runs asked on repo@sha.
