@@ -165,6 +165,11 @@ type Config struct {
 	// measures) that run at once; the rest wait in order. 0 is the default
 	// (DefaultMaxChecks).
 	MaxChecks int `json:"max_checks"`
+	// DiskFullMax is the IO pressure (Linux PSI "full avg60", percent) past
+	// which the disk counts as saturated (DiskBusy): the work module starts
+	// no new worker while another works, and runs one check at a time.
+	// Running turns go on. 0 is the default (DefaultDiskFullMax); below 0 off.
+	DiskFullMax float64 `json:"disk_full_max,omitempty"`
 	// CheckCacheMaxMB caps one check's own home (its build cache and
 	// scratch): past it the check is ended as can't-run; 0 is the default
 	// (8 GB). See disk.go.

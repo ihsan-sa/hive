@@ -41,8 +41,9 @@ type Event struct {
 // Decode unmarshals the event payload into v.
 func (e Event) Decode(v any) error { return json.Unmarshal(e.Data, v) }
 
-// Journal is an append-only JSONL file. Every append is fsynced, so a crash
-// loses at most the record being written; a torn last line is ignored on read.
+// Journal is an append-only JSONL file. Every append is fsynced before it
+// returns, so a crash loses at most the records being written; appends at
+// once share one fsync. A torn last line is ignored on read.
 type Journal struct {
 	mu   sync.Mutex
 	path string
@@ -55,6 +56,12 @@ type Journal struct {
 	// size is where the next line goes; marks index the file for Since.
 	size  int64
 	marks []mark
+	// syncMu orders the fsyncs; synced is how much of the file the last one
+	// covered. An append waits for an fsync that covers its line, one an
+	// append beside it may already be making: on a saturated disk an fsync
+	// took ~0.8 s, and one each under mu held every other append behind it.
+	syncMu sync.Mutex
+	synced int64
 }
 
 // A mark is where a line starts and the highest seq of every line before
@@ -144,11 +151,12 @@ func (j *Journal) Append(kind string, data any) (Event, error) {
 	line, _ := json.Marshal(e)
 	n, err := j.f.Write(append(line, '\n'))
 	j.size += int64(n)
-	if err == nil && durable {
-		err = j.f.Sync()
-	}
+	end := j.size
 	subs := append([]func(Event){}, j.subs...)
 	j.mu.Unlock()
+	if err == nil && durable {
+		err = j.syncTo(end)
+	}
 	if err != nil {
 		return Event{}, err
 	}
@@ -156,6 +164,25 @@ func (j *Journal) Append(kind string, data any) (Event, error) {
 		fn(e)
 	}
 	return e, nil
+}
+
+// syncTo returns once the file is fsynced up to end at least: at once if an
+// fsync since covered it, else after one that covers every line written so
+// far, the appends beside this one's too.
+func (j *Journal) syncTo(end int64) error {
+	j.syncMu.Lock()
+	defer j.syncMu.Unlock()
+	if j.synced >= end {
+		return nil
+	}
+	j.mu.Lock()
+	upto := j.size
+	j.mu.Unlock()
+	if err := j.f.Sync(); err != nil {
+		return err
+	}
+	j.synced = upto
+	return nil
 }
 
 // MustAppend appends and panics only on a disk failure, which leaves the Hive

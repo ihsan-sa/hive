@@ -51,7 +51,7 @@ func TestChecksShareTheModuleCache(t *testing.T) {
 	if len(mounts) != 1 || mounts[0].Host != c.WS.GoModCache() || mounts[0].Inside != GoModInside || mounts[0].RW {
 		t.Fatalf("mounts %+v", mounts)
 	}
-	for _, kv := range []string{"GOMODCACHE=" + GoModInside, "GOPROXY=off", "GOFLAGS=-mod=readonly"} {
+	for _, kv := range []string{"GOMODCACHE=" + GoModInside, "GOPROXY=off", "GOFLAGS=-mod=readonly -ldflags=-w"} {
 		if !slices.Contains(env, kv) {
 			t.Errorf("env %v lacks %s", env, kv)
 		}

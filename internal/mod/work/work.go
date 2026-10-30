@@ -452,7 +452,7 @@ func New(c *core.Core, a *agents.Agents, ch *chat.Module) *Module {
 	c.Runs.Ops().Register(core.Op{Name: "pr_close", Help: `{"task"|"project"+"pr","comment","delete_branch":bool} -> closes the Hive's own PR with comment and ends its task (its worker stopped); delete_branch deletes its hive/ branch. A revert you no longer want is closed this way, not left to the person`, Fn: m.opPRClose})
 	c.Person.Handle("merge", m.onPersonMerge)
 	c.Effects.MergeHeld = m.MergeHeld
-	c.Effects.Slots.Resize(func() int { return cmp.Or(m.C.WS.LoadConfig().MaxChecks, core.DefaultMaxChecks()) })
+	c.Effects.Slots.Resize(m.maxChecks)
 	c.Effects.Slots.Prioritize(m.checkRank, rankRedFix)
 	m.wrapFinish()
 	return m

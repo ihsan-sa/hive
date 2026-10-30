@@ -4,7 +4,9 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -95,5 +97,36 @@ func TestJournalSinceSeeksPastWhatItCantWant(t *testing.T) {
 	}
 	if fi, _ := os.Stat(path); fi.Size()-from > 2*markEvery {
 		t.Fatalf("Since(4400) starts %d bytes from the end", fi.Size()-from)
+	}
+}
+
+// Appends at once share fsyncs, and each returns only once its own line is
+// covered by one: every line is synced, whole and in seq order.
+func TestJournalAppendsShareTheirFsync(t *testing.T) {
+	durable = true
+	defer func() { durable = false }()
+	path := filepath.Join(t.TempDir(), "events.jsonl")
+	j, err := OpenJournal(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer j.Close()
+	var wg sync.WaitGroup
+	for range 40 {
+		wg.Go(func() {
+			e := j.MustAppend("a", map[string]int{"n": 1})
+			j.syncMu.Lock()
+			synced := j.synced
+			j.syncMu.Unlock()
+			if raw, _ := os.ReadFile(path); synced < int64(len(raw)) && !strings.Contains(string(raw[:synced]), `"seq":`+strconv.FormatInt(e.Seq, 10)+",") {
+				t.Errorf("seq %d returned before an fsync covered it", e.Seq)
+			}
+		})
+	}
+	wg.Wait()
+	var seqs []int64
+	j.Replay(func(e Event) { seqs = append(seqs, e.Seq) })
+	if len(seqs) != 40 || !slices.IsSorted(seqs) || j.synced != j.size {
+		t.Fatalf("%d events %v, synced %d of %d", len(seqs), seqs, j.synced, j.size)
 	}
 }

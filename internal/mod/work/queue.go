@@ -73,10 +73,12 @@ func (t Task) Overdue() bool {
 // admit decides which waiting tasks start a worker now, and why each other
 // one waits: in line order, while the memory budget (core.MemBudget) has
 // room for another turn beside those started this pass, as launch weighs
-// every turn. tasks is every task Tick looks at.
+// every turn. On a saturated disk (core.DiskBusy) none starts while another
+// worker works: the running ones go on, and the loop never stops for want
+// of one. tasks is every task Tick looks at.
 func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]string) {
 	start, wait = map[string]bool{}, map[string]string{}
-	turnMB := m.C.WS.LoadConfig().TurnMB
+	cfg := m.C.WS.LoadConfig()
 	var line []Task
 	m.mu.Lock()
 	for _, t := range tasks {
@@ -86,12 +88,23 @@ func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]str
 	}
 	m.mu.Unlock()
 	m.inLine(line)
+	disk, working := "", 0
+	if len(line) > 0 {
+		disk = diskBusy(cfg.DiskFull())
+	}
+	for _, t := range tasks {
+		if disk != "" && t.Stage == StageWorking && !m.slotless(t) {
+			working++
+		}
+	}
 	n := 0
 	for _, t := range line {
 		switch {
 		case t.Held:
 			wait[t.ID] = "held by " + cmp.Or(t.HeldBy, "the lead")
-		case core.MemBudget(turnMB, n) != "":
+		case disk != "" && working+n > 0:
+			wait[t.ID] = disk + " for a worker"
+		case core.MemBudget(cfg.TurnMB, n) != "":
 			wait[t.ID] = core.MemWait + " for a worker"
 		default:
 			start[t.ID] = true
