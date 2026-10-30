@@ -2,6 +2,7 @@ package core
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -40,19 +41,52 @@ func TestSessionInHome(t *testing.T) {
 		t.Errorf("covered what isn't there: %v", hidden)
 	}
 
+}
+
+// Every run gets every owner's token: GH_TOKEN its project's owner's, and a
+// git helper that hands each repository its owner's (GH_TOKEN for an owner
+// with none saved); an isolated project's run gets its own owner's alone,
+// and none saved gives none.
+func TestAgentTokens(t *testing.T) {
 	dir := t.TempDir()
 	was := AgentTokens
 	t.Cleanup(func() { AgentTokens = was })
 	AgentTokens = func() string { return dir }
-	os.WriteFile(filepath.Join(dir, "Hive-RSI-Lab"), []byte("github_pat_x\n"), 0o600)
-	if tok := AgentToken("hive-rsi-lab/hive-hwde"); tok != "github_pat_x" {
-		t.Fatalf("token %q", tok)
+	if env := agentGit("ihsan-sa/hive", false); env != nil {
+		t.Fatalf("a token with none saved: %v", env)
 	}
-	if tok := AgentToken("someone/else"); tok != "" || agentGit(tok) != nil {
-		t.Fatalf("a token for an owner with none saved: %q", tok)
+	os.WriteFile(filepath.Join(dir, "Hive-RSI-Lab"), []byte("github_pat_lab\n"), 0o600)
+	os.WriteFile(filepath.Join(dir, "ihsan-sa"), []byte("github_pat_me\n"), 0o600)
+	env := agentGit("hive-rsi-lab/hive-hwde", false)
+	for _, want := range []string{"GH_TOKEN=github_pat_lab", "HIVE_GH_TOKEN_HIVE_RSI_LAB=github_pat_lab", "HIVE_GH_TOKEN_IHSAN_SA=github_pat_me"} {
+		if !slices.Contains(env, want) {
+			t.Fatalf("%s missing: %v", want, env)
+		}
 	}
-	env := agentGit("github_pat_x")
-	if !slices.Contains(env, "GH_TOKEN=github_pat_x") || !slices.Contains(env, "GIT_CONFIG_KEY_0=credential.https://github.com.helper") {
-		t.Fatalf("env %v", env)
+	if env := agentGit("", false); !slices.Contains(env, "GH_TOKEN=github_pat_lab") {
+		t.Fatalf("no project: %v", env)
+	}
+	if env := agentGit("ihsan-sa/x", true); slices.Contains(env, "HIVE_GH_TOKEN_HIVE_RSI_LAB=github_pat_lab") || !slices.Contains(env, "GH_TOKEN=github_pat_me") {
+		t.Fatalf("isolated: %v", env)
+	}
+	if env := agentGit("someone/x", true); env != nil {
+		t.Fatalf("isolated, its owner has none: %v", env)
+	}
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("no git")
+	}
+	for path, want := range map[string]string{"ihsan-sa/hive.git": "github_pat_me", "Hive-RSI-Lab/pll": "github_pat_lab", "other/x": "github_pat_me", "$(touch pwned)/x": "github_pat_me"} {
+		cmd := exec.Command("git", "credential", "fill")
+		cmd.Dir = t.TempDir()
+		cmd.Env = append(os.Environ(), "HOME="+cmd.Dir, "GIT_CONFIG_NOSYSTEM=1", "GIT_TERMINAL_PROMPT=0")
+		cmd.Env = append(cmd.Env, agentGit("ihsan-sa/hive", false)...)
+		cmd.Stdin = strings.NewReader("protocol=https\nhost=github.com\npath=" + path + "\n\n")
+		out, err := cmd.Output()
+		if err != nil || !strings.Contains(string(out), "password="+want+"\n") || !strings.Contains(string(out), "username=x-access-token") {
+			t.Errorf("%s: %v\n%s", path, err, out)
+		}
+		if _, err := os.Stat(filepath.Join(cmd.Dir, "pwned")); err == nil {
+			t.Errorf("%s ran", path)
+		}
 	}
 }

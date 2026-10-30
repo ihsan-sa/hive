@@ -1,8 +1,10 @@
 package core
 
 import (
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/sandbox"
@@ -34,37 +36,75 @@ var homeSecrets = []string{
 	".npmrc", ".pypirc", ".local/share/keyrings", ".config/systemd/user/hive.service.d",
 }
 
-// AgentToken is the agents' GitHub token for repo's owner, "" when the person
-// hasn't saved one: then agents there run with none, and their pushes and
-// merges go through the Hive as before.
-func AgentToken(repo string) string {
-	owner, _, ok := strings.Cut(repo, "/")
-	if !ok || owner == "" {
-		return ""
-	}
-	entries, err := os.ReadDir(AgentTokens())
-	if err != nil {
-		return ""
-	}
+// agentTokens is every token saved, by owner as its file is named.
+func agentTokens() map[string]string {
+	out := map[string]string{}
+	entries, _ := os.ReadDir(AgentTokens())
 	for _, e := range entries {
-		if strings.EqualFold(e.Name(), owner) && e.Type().IsRegular() {
-			raw, err := os.ReadFile(filepath.Join(AgentTokens(), e.Name()))
-			if err == nil {
-				return strings.TrimSpace(string(raw))
-			}
+		if !e.Type().IsRegular() {
+			continue
+		}
+		if raw, err := os.ReadFile(filepath.Join(AgentTokens(), e.Name())); err == nil && strings.TrimSpace(string(raw)) != "" {
+			out[e.Name()] = strings.TrimSpace(string(raw))
 		}
 	}
-	return ""
+	return out
 }
 
-// agentGit is the environment that gives git and gh tok: GH_TOKEN for gh, and
-// a credential helper for git's pushes to GitHub that reads it.
-func agentGit(tok string) []string {
-	if tok == "" {
+// tokenVar is the variable that holds owner's token in a run.
+func tokenVar(owner string) string {
+	return "HIVE_GH_TOKEN_" + strings.Map(func(r rune) rune {
+		if r >= 'a' && r <= 'z' {
+			return r - 'a' + 'A'
+		}
+		if r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' {
+			return r
+		}
+		return '_'
+	}, owner)
+}
+
+// gitHelper is git's credential helper for GitHub in a run: the token of the
+// repository's owner (git hands it the path, useHttpPath), else GH_TOKEN.
+// The owner is cut to letters, digits and _ before it names a variable.
+const gitHelper = `!f() { test "$1" = get || return 0; o=; while read -r l; do case $l in path=*) o=${l#path=};; esac; done; ` +
+	`o=$(printf %s "${o%%/*}" | tr a-z A-Z | tr -c A-Z0-9 _); t=$GH_TOKEN; [ -z "$o" ] || eval "t=\${HIVE_GH_TOKEN_$o:-\$GH_TOKEN}"; ` +
+	`printf 'username=x-access-token\npassword=%s\n' "$t"; }; f`
+
+// agentGit is the environment that gives git and gh the agents' tokens: one
+// HIVE_GH_TOKEN_<OWNER> per owner saved (only repo's owner's when only), and
+// GH_TOKEN for gh, repo's owner's or, with none saved for it, the first
+// owner's; git's helper picks the token by the repository's owner. None
+// saved gives none.
+func agentGit(repo string, only bool) []string {
+	toks := agentTokens()
+	owner, _, _ := strings.Cut(repo, "/")
+	names := slices.Sorted(maps.Keys(toks))
+	main := ""
+	for _, n := range names {
+		if strings.EqualFold(n, owner) {
+			main = n
+		}
+	}
+	if only {
+		names = nil
+		if main != "" {
+			names = []string{main}
+		}
+	}
+	if len(names) == 0 {
 		return nil
 	}
-	return []string{"GH_TOKEN=" + tok, "GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=credential.https://github.com.helper",
-		`GIT_CONFIG_VALUE_0=!f() { test "$1" = get && printf 'username=x-access-token\npassword=%s\n' "$GH_TOKEN"; }; f`}
+	if main == "" {
+		main = names[0]
+	}
+	env := []string{"GH_TOKEN=" + toks[main], "GIT_CONFIG_COUNT=2",
+		"GIT_CONFIG_KEY_0=credential.https://github.com.helper", "GIT_CONFIG_VALUE_0=" + gitHelper,
+		"GIT_CONFIG_KEY_1=credential.https://github.com.useHttpPath", "GIT_CONFIG_VALUE_1=true"}
+	for _, n := range names {
+		env = append(env, tokenVar(n)+"="+toks[n])
+	}
+	return env
 }
 
 // homeMounts are the mounts that make r's run a session in home: home

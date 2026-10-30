@@ -2819,13 +2819,19 @@ func (rs *Runs) sandboxSpec(cfg Config, sb sandbox.Sandbox, h harness.Harness, r
 	if secrets != nil {
 		env = append(env, "HIVE_SECRETS="+in(*secrets))
 	}
-	// git and gh on the agents' own token for the project's owner, never the
-	// Hive's logins (home.go); none saved, none given.
-	if rs.projs != nil && !r.ReadOnly && !r.OneTurn {
-		if p, ok := rs.projs.Get(r.Project); ok && p.Repo != "" {
-			env = append(env, "HIVE_REPO="+p.Repo)
-			env = append(env, agentGit(AgentToken(p.Repo))...)
+	// git and gh on the agents' own tokens, one per owner, never the Hive's
+	// logins (home.go): GH_TOKEN is the project's owner's (the Hive's own
+	// repo's for a run with no project). An isolated project's run gets its
+	// owner's alone, a one-turn experiment none.
+	if !r.OneTurn {
+		repo := cfg.ReleaseRepo
+		if rs.projs != nil {
+			if p, ok := rs.projs.Get(r.Project); ok && p.Repo != "" {
+				repo = p.Repo
+				env = append(env, "HIVE_REPO="+p.Repo)
+			}
 		}
+		env = append(env, agentGit(repo, r.Isolated)...)
 	}
 	if sb.Isolated() {
 		env = append(sandbox.InsideEnv("/hive/home", true), env...)
