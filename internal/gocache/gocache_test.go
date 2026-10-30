@@ -43,11 +43,17 @@ func TestChecksReuseMainsCache(t *testing.T) {
 	os.WriteFile(filepath.Join(mod, "m_test.go"), []byte("package m\n\nimport \"testing\"\n\nfunc TestOne(t *testing.T) {\n\tif One() != 1 {\n\t\tt.Fatal(1)\n\t}\n}\n"), 0o644)
 	self, _ := os.Executable()
 	// GOCACHEPROG= drops a program the check itself runs under, so the
-	// first run writes the shared cache, not the outer program's.
+	// first run writes the shared cache, not the outer program's. The
+	// first run builds testing's whole standard library (131 packages)
+	// into an empty cache, nearly all of the test's CPU, so the build is
+	// the cheapest one that still goes through the cache the same way: no
+	// vet, no optimising, inlining or DWARF, no cgo, a one-thread compiler
+	// backend, no GC in the short-lived tools, and 4 at a time to bound
+	// their memory. 14.1 CPU seconds a run, now 6.7 (hive-autoresearch).
 	run := func(env ...string) string {
-		cmd := exec.Command("go", "test", "./...")
+		cmd := exec.Command("go", "test", "-vet=off", "-gcflags=all=-N -l -dwarf=false -c=1", "-ldflags=-s -w", "./...")
 		cmd.Dir = mod
-		cmd.Env = append(os.Environ(), append([]string{"GOFLAGS=", "GOWORK=off", "GOTOOLCHAIN=local", "GOCACHEPROG="}, env...)...)
+		cmd.Env = append(os.Environ(), append([]string{"GOFLAGS=", "CGO_ENABLED=0", "GOGC=off", "GOMAXPROCS=4", "GOWORK=off", "GOTOOLCHAIN=local", "GOCACHEPROG="}, env...)...)
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			t.Fatalf("go test: %v\n%s", err, out)
