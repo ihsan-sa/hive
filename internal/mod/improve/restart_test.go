@@ -1,6 +1,9 @@
 package improve
 
 import (
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -68,6 +71,61 @@ func TestMeasureCutShortByARestartConcludesAfterIt(t *testing.T) {
 	}
 	if events(m, "score.resumed", sha, "") != 1 {
 		t.Fatal("no note that the measure was resumed")
+	}
+}
+
+// A merge whose pair a restart cut short goes on from the readings it had:
+// the parent read once before the restart is not read again after it, so a
+// pair longer than the time between restarts still ends in a result
+// (hifi-receiver-2's cb7bbae0 started its pair over at four restarts in an
+// hour on 2026-10-30).
+func TestPairCutShortByARestartGoesOnFromItsReadings(t *testing.T) {
+	m, commit, _ := tested(t)
+	readings := filepath.Join(t.TempDir(), "readings")
+	// score.sh prints the first line of the readings file and drops it.
+	score := fmt.Sprintf("f=%q; head -n1 \"$f\"; tail -n +2 \"$f\" > \"$f.x\"; mv \"$f.x\" \"$f\"\n", readings)
+	os.WriteFile(readings, []byte("9\n"), 0o644)
+	commit(map[string]string{".hive/project.json": `{"test": "sh ./t.sh", "score": {"command": "sh ./score.sh", "direction": "higher", "tolerance": 1}}`, "score.sh": score})
+	p, _ := m.C.Projects.Get("p")
+	m.baseline(p)
+	if b, ok := m.Best("p"); !ok || b != 9 {
+		t.Fatalf("start: best %v %v, want 9", b, ok)
+	}
+	sha := commit(map[string]string{"a.txt": "a\n"})
+	if _, err := m.C.Effects.Sync(p); err != nil {
+		t.Fatal(err)
+	}
+	// Before the restart: the merge reads 2, its parent 9, then the
+	// restart cuts the second reading of the parent (no number) short.
+	os.WriteFile(readings, []byte("2\n9\n\n"), 0o644)
+	m.C.Effects.RunCheck(p, sha, "test", "sh ./t.sh")
+	if c := m.C.Effects.RunCheck(p, sha, "score", "sh ./score.sh"); c.Score == nil || *c.Score != 2 {
+		t.Fatalf("score: %+v", c)
+	}
+	if _, _, _, _, ok := m.paired(p, sha, 2); ok {
+		t.Fatal("the pair finished before its restart")
+	}
+	m.C.J.MustAppend("task.saved", work.Task{ID: "t1", Project: "p", Title: "change t1", Stage: work.StageMerged, MergeSHA: sha, Updated: time.Now()})
+
+	// After it, only the parent's second reading and the merge's are left.
+	os.WriteFile(readings, []byte("9\n9\n"), 0o644)
+	again := New(m.C, m.Agents, m.Work, m.Chat)
+	again.Recover()
+	for deadline := time.Now().Add(30 * time.Second); !again.measured("p", sha); time.Sleep(50 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the merge whose pair the restart cut short never got a result")
+		}
+	}
+	ms := again.Scores("p")
+	last := ms[len(ms)-1]
+	if last.SHA != sha || !last.Kept || last.Against == nil || *last.Against != 9 || !strings.Contains(last.Note, "one sitting (merge 2, parent 9, parent 9, merge 9)") {
+		t.Fatalf("measured %+v", last)
+	}
+	if b, _ := os.ReadFile(readings); len(b) != 0 {
+		t.Fatalf("readings left %q: the parent was read again", b)
+	}
+	if n := events(m, "score.reading", sha, ""); n != 3 {
+		t.Fatalf("%d readings recorded, want 3", n)
 	}
 }
 

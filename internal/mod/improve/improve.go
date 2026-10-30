@@ -109,6 +109,7 @@ type Module struct {
 	abandoned map[string]bool                                                                         // merge sha -> noted as never to be measured (Recover)
 	cantRuns  map[string]int                                                                          // project@sha -> its checks that couldn't start
 	forgeAt   map[string]time.Time                                                                    // project@sha -> when its measure first waited on the forge's tests (forgetest.go)
+	readings  map[string]map[string]Reading                                                           // project@merge -> role -> a score its measure read (readings.go)
 
 	loops map[string]*loopTask // task id -> its way through the loop (loopspeed.go)
 
@@ -121,7 +122,7 @@ type Module struct {
 // New loads measurements and sweeps.
 func New(c *core.Core, a *agents.Agents, w *work.Module, ch *chat.Module) *Module {
 	m := &Module{C: c, Agents: a, Work: w, Chat: ch, scores: map[string][]Measurement{}, sweeps: map[string]*Sweep{}, queue: make(chan work.Task, 64), retryAt: map[string]time.Time{}, pending: map[string]held{},
-		spells: map[string]spell{}, ended: map[string]time.Time{}, took: map[string][]float64{}, stalls: map[string]*Stall{}, fails: map[string][]core.Check{}, heads: map[string][]string{}, merged: map[string]time.Time{}, sighted: map[string][]Sighting{}, fixes: map[string]string{}, lifted: map[string]time.Time{}, liftedBy: map[string]string{}, fixMerged: map[string]bool{}, boarded: map[string]string{}, modules: map[string]string{}, kin: map[string]string{}, judging: map[string]judgingMerge{}, covered: map[string][]Covered{}, abandoned: map[string]bool{}, cantRuns: map[string]int{}, loops: map[string]*loopTask{}, stepbacks: map[string]*StepBack{}, busy: map[string]bool{}, alerted: map[string]string{}}
+		spells: map[string]spell{}, ended: map[string]time.Time{}, took: map[string][]float64{}, stalls: map[string]*Stall{}, fails: map[string][]core.Check{}, heads: map[string][]string{}, merged: map[string]time.Time{}, sighted: map[string][]Sighting{}, fixes: map[string]string{}, lifted: map[string]time.Time{}, liftedBy: map[string]string{}, fixMerged: map[string]bool{}, boarded: map[string]string{}, modules: map[string]string{}, kin: map[string]string{}, judging: map[string]judgingMerge{}, covered: map[string][]Covered{}, abandoned: map[string]bool{}, cantRuns: map[string]int{}, readings: map[string]map[string]Reading{}, loops: map[string]*loopTask{}, stepbacks: map[string]*StepBack{}, busy: map[string]bool{}, alerted: map[string]string{}}
 	apply := func(e core.Event) {
 		m.mu.Lock()
 		defer m.mu.Unlock()
@@ -132,11 +133,14 @@ func New(c *core.Core, a *agents.Agents, w *work.Module, ch *chat.Module) *Modul
 			var ms Measurement
 			e.Decode(&ms)
 			m.scores[ms.Project] = append(m.scores[ms.Project], ms)
+			delete(m.readings, ms.Project+"@"+ms.SHA) // its measure is done with them
 		case "score.cant-run":
 			var x struct{ Project, SHA string }
 			if e.Decode(&x) == nil {
 				m.cantRuns[x.Project+"@"+x.SHA]++
 			}
+		case "score.reading":
+			m.applyReading(e)
 		case "score.abandoned":
 			var x struct{ SHA string }
 			if e.Decode(&x) == nil {
@@ -421,18 +425,21 @@ func (m *Module) bestAt(project string, best float64) string {
 
 // scoreNow measures the score at sha, a commit already kept, again now, so
 // a merge's reading is compared with one taken under the same load. It is
-// false when there is no number, and the stored best stands.
-func (m *Module) scoreNow(p core.Project, sha string) (float64, bool) {
+// false when there is no number, and the stored best stands. merge is the
+// merge whose measure reads it: a restart doesn't make it read again.
+func (m *Module) scoreNow(p core.Project, sha, merge string) (float64, bool) {
 	cfg := m.C.Effects.Config(p, sha)
 	if cfg.Score == nil || sha == "" {
 		return 0, false
 	}
-	defer m.Work.MeasuringMain(p.Name, sha)() // the merge's keep/revert waits on it
-	sc := m.C.Effects.RunCheck(p, sha, "score", cfg.Score.Command)
-	if sc.CantRun != "" || !sc.OK || sc.Score == nil {
-		return 0, false
-	}
-	return *sc.Score, true
+	return m.reading(p, merge, "now "+sha, sha, func() (float64, bool) {
+		defer m.Work.MeasuringMain(p.Name, sha)() // the merge's keep/revert waits on it
+		sc := m.C.Effects.RunCheck(p, sha, "score", cfg.Score.Command)
+		if sc.CantRun != "" || !sc.OK || sc.Score == nil {
+			return 0, false
+		}
+		return *sc.Score, true
+	})
 }
 
 // paired scores a merge beside its parent (main before it) in one sitting,
@@ -465,17 +472,27 @@ func (m *Module) paired(p core.Project, sha string, first float64) (parent strin
 	// 2026-10-30, so the merge never got a result).
 	defer m.Work.MeasuringMain(p.Name, sha)()
 	defer m.Work.MeasuringMain(p.Name, at)()
-	read := func(at string) (float64, bool) {
-		sc := m.C.Effects.RunCheck(p, at, "score", cfg.Score.Command)
-		if sc.CantRun != "" || !sc.OK || sc.Score == nil {
-			return 0, false
-		}
-		return *sc.Score, true
+	// Each reading is recorded as it is taken, so a restart between them
+	// goes on from the ones it had (readings.go).
+	read := func(role, at string) (float64, bool) {
+		return m.reading(p, sha, role, at, func() (float64, bool) {
+			sc := m.C.Effects.RunCheck(p, at, "score", cfg.Score.Command)
+			if sc.CantRun != "" || !sc.OK || sc.Score == nil {
+				return 0, false
+			}
+			return *sc.Score, true
+		})
 	}
-	p1, ok1 := read(at)
-	p2, ok2 := read(at)
-	m2, ok3 := read(sha)
-	if !ok1 || !ok2 || !ok3 {
+	p1, ok1 := read("parent 1", at)
+	if !ok1 {
+		return "", 0, 0, "", false
+	}
+	p2, ok2 := read("parent 2", at)
+	if !ok2 {
+		return "", 0, 0, "", false
+	}
+	m2, ok3 := read("merge 2", sha)
+	if !ok3 {
 		return "", 0, 0, "", false
 	}
 	return parent, cfg.Score.Best(first, m2), cfg.Score.Best(p1, p2), fmt.Sprintf("merge %g, parent%s %g, parent %g, merge %g", first, under, p1, p2, m2), true
@@ -1219,7 +1236,7 @@ func (m *Module) afterMerge(t work.Task) {
 		at := m.bestAt(p.Name, best)
 		if forge {
 			// A runner's reading of the best's commit is the one already taken.
-		} else if now, ok := m.scoreNow(p, at); ok {
+		} else if now, ok := m.scoreNow(p, at, t.MergeSHA); ok {
 			ms.Against, ms.AgainstSHA = &now, at
 			if cfg.Score.WithinTolerance(*score, now) {
 				b := cfg.Score.Best(*score, now)
@@ -1251,7 +1268,7 @@ func (m *Module) afterMerge(t work.Task) {
 		if ms.Paired != nil {
 			b = *ms.Paired // already read twice beside its parent
 		} else if forge {
-		} else if again, ok := m.scoreNow(p, t.MergeSHA); ok {
+		} else if again, ok := m.scoreNow(p, t.MergeSHA, t.MergeSHA); ok {
 			b = cfg.Score.Best(b, again)
 			if cfg.Score.WithinTolerance(again, bar) {
 				b = cfg.Score.Best(again, bar)
@@ -1361,7 +1378,7 @@ func (m *Module) lookIntoDip(p core.Project, t work.Task, reason string, before 
 		if head, err := m.C.Effects.Sync(p); err == nil && head != "" && m.after(p, head, t.MergeSHA) {
 			now, ok := m.forgeScoreAt(p, head)
 			if len(cfg.ForgeTests) == 0 { // scored on the forge, main is read there or not at all
-				now, ok = m.scoreNow(p, head)
+				now, ok = m.scoreNow(p, head, t.MergeSHA)
 			}
 			if ok && cfg.Score.WithinTolerance(now, before) {
 				return fmt.Sprintf("no look into the dip: main at %s scores %g measured now, within tolerance of the %g before it, so the dip is gone from main", core.Short(head), now, before)

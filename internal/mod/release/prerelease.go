@@ -94,6 +94,10 @@ func (m *Module) follow() {
 	// Main may have moved by an agent's own push, which no merge event
 	// announces: its modules go live from main as the clone last fetched it.
 	m.goLive(false)
+	if why := m.measureHold(); why != "" {
+		m.followed1(why, nil)
+		return
+	}
 	go func() {
 		msg, err := m.AutoUpdate()
 		var l *limited
@@ -106,6 +110,32 @@ func (m *Module) follow() {
 		}
 		m.followed1(msg, err)
 	}()
+}
+
+// measureHold is how long an update waits for main's measures whose checks
+// run here: a restart kills them, and on 2026-10-30, the daemon following
+// main every 20 to 30 minutes, a project's measure needing longer between
+// two never got a result. Past it the update goes ahead, so a stream of
+// measures holds each update this long at most.
+const measureHold = 45 * time.Minute
+
+// measureHold says why the update waits now, or "" when it goes ahead.
+func (m *Module) measureHold() string {
+	what := m.C.Runs.Measures()
+	m.pmu.Lock()
+	defer m.pmu.Unlock()
+	if len(what) == 0 {
+		m.heldSince = time.Time{}
+		return ""
+	}
+	if m.heldSince.IsZero() {
+		m.heldSince = time.Now()
+	}
+	if time.Since(m.heldSince) >= measureHold {
+		m.heldSince = time.Time{} // this look goes ahead; the next one may hold again
+		return ""
+	}
+	return "an update waits up to " + measureHold.String() + " for main's measure under way here, which a restart would cut short: " + strings.Join(what, ", ")
 }
 
 // limited is a look for a newer release that GitHub's rate limit stopped:

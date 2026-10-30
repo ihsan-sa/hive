@@ -287,6 +287,35 @@ func TestFollowWaitsForTheUpdateToSettle(t *testing.T) {
 	})
 }
 
+// follow holds an update while main's measure runs a check here, which the
+// restart would kill, and for measureHold at most.
+func TestFollowWaitsForMainsMeasure(t *testing.T) {
+	m, _ := releaseAt(t, "v0.1.13", "me/hive")
+	cfg := m.C.WS.LoadConfig()
+	cfg.Channel, cfg.AutoUpdate = Prerelease, true
+	m.C.WS.SaveConfig(cfg)
+	m.C.Runs.YieldFor("measure p@abc", "p main at abc is being measured")
+	m.follow()
+	time.Sleep(50 * time.Millisecond)
+	if !m.updating.TryLock() {
+		t.Fatal("follow updated while main's measure ran here")
+	}
+	m.updating.Unlock()
+	if why := m.measureHold(); !strings.Contains(why, "p main at abc") {
+		t.Fatalf("held for %q", why)
+	}
+	m.pmu.Lock()
+	m.heldSince = time.Now().Add(-measureHold)
+	m.pmu.Unlock()
+	if why := m.measureHold(); why != "" {
+		t.Fatalf("held past measureHold: %q", why)
+	}
+	m.C.Runs.YieldFor("measure p@abc", "")
+	if why := m.measureHold(); why != "" {
+		t.Fatalf("held with no measure: %q", why)
+	}
+}
+
 // The jobs the channel reads are named as ci.yml and update.yml name them: a
 // rename would leave the channel waiting without a word.
 func TestOwnJobsAreTheWorkflowsJobs(t *testing.T) {
