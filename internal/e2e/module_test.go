@@ -52,12 +52,7 @@ func TestModuleSeam(t *testing.T) {
 		}
 	}
 	h.post("/api/chat", map[string]string{"chat": "lead", "text": "install module " + src}, nil)
-	st := h.wait("the install to reach the person", 2*minute, func(st api.State) bool { return len(st.Asks) > 0 })
-	for _, a := range st.Asks {
-		if a.Kind == "module" {
-			h.post("/api/answer", map[string]string{"id": a.ID, "answer": "install"}, nil)
-		}
-	}
+	// The install goes ahead at once: no ask reaches the person.
 	running := func(st api.State) bool {
 		for _, m := range st.Modules {
 			if m.Name == "echo" {
@@ -126,7 +121,7 @@ func TestModuleSeam(t *testing.T) {
 	h.wait("asks outside its grant refused", minute, outbox("ask 400\nsay 400"))
 
 	// A module its review declines stays stopped, with an alert. Installing it
-	// talks with the lead and asks the person, which echo must not read.
+	// talks with the lead, which echo must not read.
 	cut := h.state().Seq
 	nope := filepath.Join(t.TempDir(), "nope")
 	os.MkdirAll(nope, 0o755)
@@ -137,15 +132,6 @@ func TestModuleSeam(t *testing.T) {
 		}
 	}
 	h.post("/api/chat", map[string]string{"chat": "lead", "text": "install module " + nope}, nil)
-	h.wait("the install to reach the person", 2*minute, func(st api.State) bool {
-		for _, a := range st.Asks {
-			if a.Kind == "module" && strings.Contains(a.Title+a.Detail, "nope") {
-				h.post("/api/answer", map[string]string{"id": a.ID, "answer": "install"}, nil)
-				return true
-			}
-		}
-		return false
-	})
 	h.wait("the review to decline it", 2*minute, func(st api.State) bool {
 		for _, m := range st.Modules {
 			if m.Name == "nope" {

@@ -797,7 +797,7 @@ func TestRecovery(t *testing.T) {
 	}
 	st := h.state()
 	issues, prs := h.forge.Issues("me/rec"), h.forge.PRs("me/rec")
-	if issues != 4 || len(prs) != 4 {
+	if issues != 3 || len(prs) != 3 {
 		t.Fatalf("duplicates after restarts: %d issues, %d PRs", issues, len(prs))
 	}
 	for _, p := range prs {
@@ -973,8 +973,7 @@ func TestPersonModulesRelease(t *testing.T) {
 		}
 		return api.ModuleView{}, false
 	}
-	h.wait("a warden to install the module at v1.0.0", 2*minute, func(st api.State) bool { m, ok := module(st); return ok && m.Release == "v1.0.0" })
-	h.wait("the person to be told after", minute, toldAbout("Install module tools"))
+	h.wait("the module to install at v1.0.0", 2*minute, func(st api.State) bool { m, ok := module(st); return ok && m.Release == "v1.0.0" })
 	h.post("/api/ask", map[string]string{"project": "self", "title": "write down a goal", "known": "FAKE:goals"}, nil)
 	h.wait("a warden to approve the goals change and it to merge", 3*minute, taskStage("self", "write down a goal", work.StageDone))
 	h.wait("the person to be told after", minute, toldAbout("write down a goal"))
