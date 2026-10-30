@@ -50,10 +50,50 @@ func TestCheckThatDiesLeavesNothing(t *testing.T) {
 	}
 }
 
-// A check's temp folder is in its home, on disk, not the sandbox's /tmp in memory.
+// A check with no tmpfs scratch (checkScratch) has its temp folder in its home, on disk.
 func TestCheckTempIsInItsHome(t *testing.T) {
 	env := checkTmp([]string{"HOME=/hive/home", "TMPDIR=/tmp"})
 	if env[1] != "TMPDIR=/hive/home/"+homeTmp {
 		t.Fatalf("env %v", env)
+	}
+}
+
+// A check's scratch is a tmpfs while the memory left keeps checkTmpSpare
+// over every tmpfs promised, and on disk once it wouldn't; a check done
+// gives its share back, once however often it says so.
+func TestCheckScratchIsATmpfsWhileMemoryHasRoom(t *testing.T) {
+	c, _ := testHive(t)
+	proc := t.TempDir()
+	old := procRoot
+	procRoot = proc
+	t.Cleanup(func() { procRoot = old })
+	os.MkdirAll(proc+"/self", 0o755)
+	os.WriteFile(proc+"/self/cgroup", []byte("0::/\n"), 0o644)
+	os.WriteFile(proc+"/meminfo", []byte("MemTotal: 16777216 kB\nMemAvailable: 9437184 kB\n"), 0o644) // 9 GiB left
+
+	if mb, _ := c.Effects.checkScratch(false); mb != 0 {
+		t.Fatalf("a check sent away or unisolated got a %d MB tmpfs", mb)
+	}
+	a, freeA := c.Effects.checkScratch(true)
+	b, freeB := c.Effects.checkScratch(true)
+	third, _ := c.Effects.checkScratch(true)
+	if a != checkTmpMB || b != checkTmpMB || third != 0 {
+		t.Fatalf("with 9 GiB left the checks got %d, %d and %d MB", a, b, third)
+	}
+	freeA()
+	freeA()
+	if mb, _ := c.Effects.checkScratch(true); mb != checkTmpMB {
+		t.Fatalf("a share given back wasn't there for the next check (%d MB)", mb)
+	}
+	freeB()
+	if mb, _ := c.Effects.checkScratch(true); mb != checkTmpMB {
+		t.Fatalf("a check given twice back took another's share (%d MB)", mb)
+	}
+	if c.Effects.tmpMB != 2*checkTmpMB {
+		t.Fatalf("%d MB promised, want %d", c.Effects.tmpMB, 2*checkTmpMB)
+	}
+	os.WriteFile(proc+"/meminfo", []byte("MemTotal: 16777216 kB\nMemAvailable: 1048576 kB\n"), 0o644)
+	if mb, _ := c.Effects.checkScratch(true); mb != 0 {
+		t.Fatalf("with 1 GiB left a check got a %d MB tmpfs", mb)
 	}
 }

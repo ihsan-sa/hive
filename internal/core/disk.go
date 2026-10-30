@@ -16,6 +16,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -514,8 +515,8 @@ func (e *Effects) prefetch(dir string) error {
 // newHome makes a check's own home under the cache folder, marked live until
 // the returned func removes it. It is made and marked in one step, so Prune
 // never sees a home of this daemon's that isn't marked. The home holds the
-// check's temp folder (homeTmp) too: the sandbox's own /tmp is memory, and a
-// Go build's test binaries there would take gigabytes of it per check.
+// check's temp folder (homeTmp) too, used when memory has no room for a
+// tmpfs one (checkScratch).
 func (e *Effects) newHome() (string, func()) {
 	os.MkdirAll(e.ws.CheckHomes(), 0o755)
 	e.mu.Lock()
@@ -1029,7 +1030,8 @@ func goTelemetryOff(home string) ([]string, error) {
 }
 
 // checkTmp points a check's TMPDIR at the temp folder in its home, on disk,
-// counted against its cap and removed with it.
+// counted against its cap and removed with it, where it has no tmpfs
+// (checkScratch).
 func checkTmp(env []string) []string {
 	for i, kv := range env {
 		if strings.HasPrefix(kv, "TMPDIR=") {
@@ -1037,6 +1039,46 @@ func checkTmp(env []string) []string {
 		}
 	}
 	return env
+}
+
+// A check's scratch (TMPDIR, /tmp) is a tmpfs of checkTmpMB when memory
+// has room for it: on disk, through the check's home, a check's go test
+// spent most of its time in IO on a saturated disk (hive-autoresearch,
+// 10-30: mod/work 164 -> 20 s, mod/improve 619 -> 21.5 s with TMPDIR on a
+// tmpfs) and added to the saturation. The hive project's `go test -short
+// ./...` peaked at ~320 MB there (10-30, sampled), so the cap leaves room for
+// several times that; a check whose tmpfs run says a disk is full runs again
+// with its scratch on disk. Each tmpfs check holds its cap from the memory
+// left, so checks side by side don't promise the same memory twice.
+const (
+	checkTmpMB    = 2048
+	checkTmpSpare = 4 << 30 // memory left over every tmpfs promised, for the checks' and turns' own
+)
+
+// checkScratch is the tmpfs size in MiB for a check's scratch, 0 for its
+// home on disk, and what gives the memory back once the check is done
+// (safe to call twice). Only a check in this machine's isolated sandbox
+// (ok) gets one: one sent to a runner has that machine's memory, and an
+// unisolated one has no /tmp of its own.
+func (e *Effects) checkScratch(ok bool) (int, func()) {
+	if !ok || runtime.GOOS != "linux" {
+		return 0, func() {}
+	}
+	limit, used := memRoom(procRoot, cgroupRoot)
+	e.tmpMu.Lock()
+	defer e.tmpMu.Unlock()
+	if limit <= 0 || limit-used-float64(e.tmpMB+checkTmpMB)*(1<<20) < checkTmpSpare {
+		return 0, func() {}
+	}
+	e.tmpMB += checkTmpMB
+	var once sync.Once
+	return checkTmpMB, func() {
+		once.Do(func() {
+			e.tmpMu.Lock()
+			e.tmpMB -= checkTmpMB
+			e.tmpMu.Unlock()
+		})
+	}
 }
 
 // ScoreCache is a project's score cache: a folder its score check keeps

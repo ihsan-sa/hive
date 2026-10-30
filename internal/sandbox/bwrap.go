@@ -75,7 +75,7 @@ func bwrapArgs(a initArgs, self string) []string {
 	if s.Tmp != "" {
 		argv = append(argv, "--bind", s.Tmp, "/tmp")
 	} else {
-		argv = append(append(argv, bwrapSize(TmpfsSize)...), "--tmpfs", "/tmp")
+		argv = append(append(argv, bwrapSize(s.tmpSize())...), "--tmpfs", "/tmp")
 	}
 	for _, r := range a.Roots {
 		argv = append(argv, "--ro-bind", r, r)
