@@ -114,13 +114,15 @@ func TestUpdateRefreshesUntouchedPracticeDocs(t *testing.T) {
 	}
 }
 
-// A commit that fails leaves a journal line instead of vanishing.
+// A commit that fails leaves a journal line instead of vanishing. The index
+// is a directory, so git can't read it: a held index.lock would fail it too,
+// but only after core.Git's waits for the lock's holder, 12 s a call.
 func TestSeedingReportsAFailedCommit(t *testing.T) {
 	ws, c, mods := freshWorkspace(t)
 	if _, err := core.Git("", "init", "-q", "-b", "main", ws.KB()); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(ws.KB(), ".git", "index.lock"), nil, 0o644); err != nil {
+	if err := os.Mkdir(filepath.Join(ws.KB(), ".git", "index"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	New(c, &agents.Agents{C: c, Mod: mods})
