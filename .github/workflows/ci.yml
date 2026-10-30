@@ -93,33 +93,6 @@ jobs:
         run: |
           go test ./internal/sandbox/ -run 'BothPaths' -v | tee "$RUNNER_TEMP/both.log"
           grep -q -- "--- PASS: TestHostPythonBothPaths/bubblewrap" "$RUNNER_TEMP/both.log"
-      - name: the gate's sandbox under bubblewrap
-        # HIVE_GATE_BWRAP=1 turns the gate's bwrap tests' skip into a failure, so they run here:
-        # the allowlist hides the host, the meter is the only way out, sealed code runs in a sibling
-        # sandbox, no sandbox starts inside another, and a deadline kills a child's whole tree.
-        run: go test ./internal/gate/ -count=1 -timeout 30m -v -run 'Bwrap|Build|Deadline|NoSandbox' 2>&1 | tee "$RUNNER_TEMP/gate.log"; test "${PIPESTATUS[0]}" = 0 && ! grep -q -- "--- SKIP" "$RUNNER_TEMP/gate.log"
-        shell: bash
-        env:
-          HIVE_GATE_BWRAP: "1"
-          HIVE_GATE_RECORD: ${{ runner.temp }}/gate-records
-      # The whole-run test's reports, green or red, as annotations: the Hive commits them as the
-      # gate's end-to-end record without the job log.
-      - name: the gate runs' reports
-        if: "!cancelled()"
-        shell: bash
-        run: |
-          for f in "$RUNNER_TEMP"/gate-records/*.md; do
-            [ -e "$f" ] || continue
-            echo "::notice title=gate run $(basename "$f" .md)::$(awk 'BEGIN { ORS = "%0A" } { gsub(/\r/, ""); gsub(/%/, "%25"); print }' "$f")"
-          done
-      # Job logs need a login; annotations don't, so the Hive can read what failed.
-      - name: name the gate's failing tests
-        if: failure()
-        shell: bash
-        run: |
-          grep -n -e '--- FAIL' -e '^panic:' "$RUNNER_TEMP/gate.log" | head -10 | while IFS=: read -r n _; do
-            echo "::error::$(sed -n "$n,$((n + 40))p" "$RUNNER_TEMP/gate.log" | awk 'BEGIN { ORS = "%0A" } { gsub(/\r/, ""); gsub(/%/, "%25"); print substr($0, 1, 300) }')"
-          done
       - name: end to end under bubblewrap
         run: go test ./internal/e2e/ -timeout 30m
         env:

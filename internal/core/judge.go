@@ -8,10 +8,15 @@ import (
 )
 
 // A model's judgement decides whether a change is kept; the numbers (the
-// recursive gate's report, the score measured after a merge) are one thing
-// it weighs, since a change can help without moving them (docs/judge.md).
+// score measured after a merge) are one thing it weighs, since a change can help without moving them (docs/judge.md).
 // The judge is a read-only run of role JudgeRole that the daemon starts, on
 // a model other than the change's author's where the config has one.
+
+// A judgement and what the numbers said are each keep or rollback.
+const (
+	GateKeep     = "keep"
+	GateRollback = "rollback"
+)
 
 // JudgeRole is the judge's role (modules/agents/judge.md).
 const JudgeRole = "judge"
@@ -62,20 +67,6 @@ func (e *Effects) Judgement(project, sha, main string) (Judgement, bool) {
 	defer e.mu.Unlock()
 	j, ok := e.judged[project+"@"+sha+"@"+main]
 	return j, ok
-}
-
-// Kept is the gate's verdict on head that stands at main (StandingGate) as
-// it decides a merge: a measured verdict as the judge called it, once it
-// has; else the numbers.
-func (e *Effects) Kept(p Project, head, main string) bool {
-	g, ok := e.StandingGate(p, head, main)
-	if !ok {
-		return false
-	}
-	if j, ok := e.Judgement(p.Name, head, g.Main); ok && g.Measured && j.At.After(g.At) {
-		return j.Verdict == GateKeep
-	}
-	return g.Outcome == GateKeep
 }
 
 // JudgePick is the harness and model that judge a change written on author:
