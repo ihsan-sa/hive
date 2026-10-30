@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 )
@@ -104,4 +105,29 @@ func cgroupNumber(path string) float64 {
 	}
 	f, _ := strconv.ParseFloat(strings.TrimSpace(string(raw)), 64)
 	return f
+}
+
+// MeasureWait starts the reason a turn waits for a measure of main.
+const MeasureWait = "waiting: main's measure"
+
+// measureLoad is the 1-minute load average, per CPU, at or over which a
+// measure of main holds new turns: at load 109 on 20 cores (10-30 08:39Z)
+// hive main's measures were cut off at their limits, no score for 17 hours.
+var measureLoad = 1.0
+
+// CPUFull says how full the machine's CPU is when its 1-minute load average
+// is measureLoad a CPU or more, or "" when it has room or can't be read.
+func CPUFull() string { return cpuFull(procRoot, runtime.NumCPU()) }
+
+func cpuFull(proc string, cpus int) string {
+	raw, err := os.ReadFile(proc + "/loadavg")
+	f := strings.Fields(string(raw))
+	if err != nil || len(f) == 0 || cpus <= 0 {
+		return ""
+	}
+	load, err := strconv.ParseFloat(f[0], 64)
+	if err != nil || load < measureLoad*float64(cpus) {
+		return ""
+	}
+	return fmt.Sprintf("load %.0f on %d CPUs", load, cpus)
 }

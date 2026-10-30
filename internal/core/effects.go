@@ -53,6 +53,9 @@ type Effects struct {
 	sweep   func() int // sandbox.Sweep; a test points it away from the host
 
 	locks  sync.Map
+
+	measureMu sync.Mutex
+	measuring map[string]int // project@sha of main being measured (Measuring), how many times over
 	unread sync.Map // project@main whose history MainAnswer couldn't read, journaled once
 
 	// MergeHeld is why a pull request on a project may not merge now (the
@@ -509,7 +512,7 @@ func (e *Effects) Snapshot(p Project, r Run, base string) (string, error) {
 	work := sandbox.Mount{Host: r.Checkout, Inside: "/work", RW: true}
 	git := "git -c safe.directory='*' -c core.hooksPath=/dev/null -c user.name=Hive -c user.email=hive@localhost -C " + shq(sandbox.InsidePath(sb, work))
 	script := git + " add -A && { " + git + " diff --cached --quiet || " + git + " commit -q --no-verify -m 'what the run left'; }"
-	if code, out, err := e.runSandboxed(sb, r.Project, r.ID+"-snapshot", []sandbox.Mount{work}, script, false, 5*time.Minute, nil, 0, nil); err != nil || code != 0 {
+	if code, out, err := e.runSandboxed(sb, r.Project, r.ID+"-snapshot", []sandbox.Mount{work}, script, false, 5*time.Minute, nil, 0, CheckNice, nil); err != nil || code != 0 {
 		return "", fmt.Errorf("could not commit what the run left: %v %s", err, Clip(out, 300))
 	}
 	return e.Extract(p, r, base)
@@ -534,7 +537,7 @@ func (e *Effects) ExtractInto(dir, lockKey string, r Run, base string) (string, 
 		rangeSpec = base + "..HEAD"
 	}
 	script := fmt.Sprintf("git -c safe.directory='*' -C %s bundle create %s %s", shq(sandbox.InsidePath(sb, work)), shq(bundle), rangeSpec)
-	code, logText, err := e.runSandboxed(sb, r.Project, r.ID+"-extract", []sandbox.Mount{work, outM}, script, false, 5*time.Minute, nil, 0, nil)
+	code, logText, err := e.runSandboxed(sb, r.Project, r.ID+"-extract", []sandbox.Mount{work, outM}, script, false, 5*time.Minute, nil, 0, CheckNice, nil)
 	if err != nil {
 		return "", err
 	}
@@ -598,6 +601,49 @@ type sharedCheck struct {
 // per caller (#1880). A caller after it ends runs afresh.
 func (e *Effects) RunCheck(p Project, sha, kind, command string) Check {
 	return e.shared(p, sha, "", kind, command)
+}
+
+// Measuring marks project's main at sha as being measured until the func it
+// gives is called: its checks run at MeasureNice, over every run but the
+// leads, not CheckNice under them all, and while the CPU is full no turn
+// that may wait starts (Runs.YieldFor). On 10-30, with load 109 on 20 cores,
+// hive main's checks at nice 15 under 50 workers' turns at 10 were cut off
+// at their limits and main went 17 hours and ~70 merges without a score.
+func (e *Effects) Measuring(project, sha string) func() {
+	key := project + "@" + sha
+	e.measureMu.Lock()
+	if e.measuring == nil {
+		e.measuring = map[string]int{}
+	}
+	e.measuring[key]++
+	e.measureMu.Unlock()
+	who := "measure " + key + " " + NewID()
+	if e.runs != nil {
+		e.runs.YieldFor(who, project+" main at "+short(sha)+" is being measured")
+	}
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			e.measureMu.Lock()
+			if e.measuring[key]--; e.measuring[key] <= 0 {
+				delete(e.measuring, key)
+			}
+			e.measureMu.Unlock()
+			if e.runs != nil {
+				e.runs.YieldFor(who, "")
+			}
+		})
+	}
+}
+
+// niceFor is the nice level of a check of project at sha.
+func (e *Effects) niceFor(project, sha string) int {
+	e.measureMu.Lock()
+	defer e.measureMu.Unlock()
+	if e.measuring[project+"@"+sha] > 0 {
+		return MeasureNice
+	}
+	return CheckNice
 }
 
 // RunCheckSince is RunCheck of a change bound for main: a test command
@@ -773,7 +819,7 @@ func (e *Effects) checkOnce(p Project, sha, main, kind, command, back string) (C
 		}
 		var disk sandbox.Disk
 		defer func() { c.DiskRead, c.DiskWrote = c.DiskRead+disk.Read, c.DiskWrote+disk.Wrote }()
-		return e.runSandboxed(sb, p.Name, id, ms, script, true, limit, env, e.checkCacheCap(), &disk)
+		return e.runSandboxed(sb, p.Name, id, ms, script, true, limit, env, e.checkCacheCap(), e.niceFor(p.Name, sha), &disk)
 	}
 	code, out, err := run(true)
 	if away != nil && err == nil {
@@ -1406,9 +1452,10 @@ func (e *Effects) dropCheckout(dir string) {
 // can't see when the project is isolated.
 // The command gets its own home under the cache folder, removed after; extra
 // is more environment where the sandbox has its own, and a capB over 0 ends
-// the command with ErrHomeFull once its home passes that many bytes. A disk
+// the command with ErrHomeFull once its home passes that many bytes. It runs
+// at nice level nice (CheckNice, or MeasureNice for a measure of main). A disk
 // that isn't nil gets what the command read from and wrote to the disk.
-func (e *Effects) runSandboxed(sb sandbox.Sandbox, project, id string, mounts []sandbox.Mount, script string, network bool, timeout time.Duration, extra []string, capB int64, disk *sandbox.Disk) (int, string, error) {
+func (e *Effects) runSandboxed(sb sandbox.Sandbox, project, id string, mounts []sandbox.Mount, script string, network bool, timeout time.Duration, extra []string, capB int64, nice int, disk *sandbox.Disk) (int, string, error) {
 	logDir := filepath.Join(e.ws.Hive(), "checks", project)
 	os.MkdirAll(logDir, 0o755)
 	logPath := filepath.Join(logDir, id+".log")
@@ -1424,7 +1471,7 @@ func (e *Effects) runSandboxed(sb sandbox.Sandbox, project, id string, mounts []
 		argv = hostShell(script)
 	}
 	spec := sandbox.Spec{ID: id, Argv: argv, Env: env, Cwd: sandbox.InsidePath(sb, mounts[0]), Mounts: mounts, Tools: e.tools(),
-		Stdout: logPath, StopFile: home + ".stop", Tmp: filepath.Join(home, homeTmp), Network: network, Allow: e.ws.LoadConfig().Egress.For("check"), Local: e.ws.LoadConfig().Egress.LocalAddrs(), Outside: e.ws.LoadConfig().Egress.OutsideFor(project), Guard: e.ws.Guarded(), Cover: e.ws.Covered(), UID: os.Getuid(), GID: os.Getgid(), Nice: CheckNice, Disk: disk}
+		Stdout: logPath, StopFile: home + ".stop", Tmp: filepath.Join(home, homeTmp), Network: network, Allow: e.ws.LoadConfig().Egress.For("check"), Local: e.ws.LoadConfig().Egress.LocalAddrs(), Outside: e.ws.LoadConfig().Egress.OutsideFor(project), Guard: e.ws.Guarded(), Cover: e.ws.Covered(), UID: os.Getuid(), GID: os.Getgid(), Nice: nice, Disk: disk}
 	over := watchHome(home, capB)
 	code, err := sb.Run(spec, timeout)
 	if over() && err == nil {
