@@ -292,6 +292,9 @@ func TestRedAlreadyOnMainBeforeTheMergeIsNotReverted(t *testing.T) {
 	if len(filed) != 1 {
 		t.Fatalf("the red wasn't filed to fix: %d", len(filed))
 	}
+	if !filed[0].Now {
+		t.Fatal("a red main's fix waits in line behind the PRs it holds up (issue #2128)")
+	}
 	if !filed[0].Fix() || !strings.Contains(filed[0].AimWhy, "TestClock") {
 		t.Fatalf("a red main's brief names its failure, so it is a fix (issue #568): %q", filed[0].AimWord())
 	}
@@ -300,6 +303,27 @@ func TestRedAlreadyOnMainBeforeTheMergeIsNotReverted(t *testing.T) {
 	m.afterMerge(work.Task{ID: "t2", Project: "p", MergeSHA: sha})
 	if reverts(m) != 0 || len(m.Work.List(func(t work.Task) bool { return strings.Contains(t.Title, "TestClock pass on main") })) != 1 {
 		t.Fatalf("reverts %d on a second merge", reverts(m))
+	}
+}
+
+// A measurement that lags main finds a red main's head has already fixed:
+// nothing is filed, and nothing is reverted (issue #2128: hifi-receiver-2's
+// 261030-003043 was filed 66 minutes after its fix merged).
+func TestRedMainsHeadHasFixedIsNotFiled(t *testing.T) {
+	m, commit, _ := tested(t)
+	commit(map[string]string{"t.sh": "echo '--- FAIL: TestClock (0.01s)'\nexit 1\n"}) // went red unmeasured
+	sha := commit(map[string]string{"README.md": "an unrelated change\n"})
+	commit(map[string]string{"t.sh": "true\n"}) // the fix, merged before sha is measured
+	m.afterMerge(work.Task{ID: "t1", Project: "p", MergeSHA: sha})
+	ms := m.Scores("p")
+	if got := ms[len(ms)-1]; got.SHA != sha || !strings.Contains(got.Note, "fixed already") {
+		t.Fatalf("measured %+v", got)
+	}
+	if reverts(m) != 0 {
+		t.Fatalf("a red main had before the merge was reverted: %d", reverts(m))
+	}
+	if n := len(m.Work.List(func(t work.Task) bool { return strings.HasSuffix(t.Title, "pass on main again") })); n != 0 {
+		t.Fatalf("a red main's head has fixed was filed to fix: %d", n)
 	}
 }
 

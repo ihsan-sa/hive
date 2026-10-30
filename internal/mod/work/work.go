@@ -574,7 +574,7 @@ type Brief struct {
 	// open one (join.go).
 	Apart bool `json:"apart"`
 	// Now puts it first in line as it is filed, as queue's now does; only a
-	// pivot (the improve module's) sets it.
+	// pivot and a red main's fix (both the improve module's) set it.
 	Now bool `json:"-"`
 }
 
