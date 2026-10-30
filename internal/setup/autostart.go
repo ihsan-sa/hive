@@ -89,9 +89,13 @@ func home() string { h, _ := os.UserHomeDir(); return h }
 
 // unitText is the Hive's systemd user unit, with PATH as its PATH. Its
 // memory has a soft cap: past MemoryHigh (of the machine's memory) the kernel
-// reclaims from the Hive and slows it, never the rest of the machine, and
+// reclaims from the Hive and slows it, never the rest of the machine;
+// MemoryMax is the hard stop, where the kernel kills inside the Hive; and
 // MemorySwapMax keeps it from driving the machine deep into swap (the
-// machine went down twice that way on 10-30, #2143). Delegate=yes lets the
+// machine went down twice that way on 10-30, #2143). The soft cap sits well
+// above what the Hive uses with room for its turns: at 45% its anon pages
+// were swapped out and faulted back while half the machine's memory sat
+// idle, and that swap was the IO pressure holding every start (#2217). Delegate=yes lets the
 // daemon give each sandboxed command a cgroup of its own with a hard limit
 // (sandbox.SettleMemory), so one runaway test is killed inside its run;
 // DelegateSubgroup starts the daemon in the unit's leaf, since the kernel
@@ -102,7 +106,7 @@ func home() string { h, _ := os.UserHomeDir(); return h }
 // ExecStopPost turned the controller off (10-30). It runs in the unit's
 // .control leaf once the daemon is gone; the new daemon turns it on again.
 func unitText(exe, root, path string) string {
-	return fmt.Sprintf("[Unit]\nDescription=The Hive\nAfter=network-online.target\n\n[Service]\nEnvironment=HIVE_HOME=%s\nEnvironment=\"PATH=%s\"\nExecStart=%s daemon\nKillMode=process\nRestart=on-failure\nRestartSec=10\nMemoryHigh=45%%\nMemorySwapMax=4G\nDelegate=yes\nDelegateSubgroup=daemon\nExecStopPost=%s\n\n[Install]\nWantedBy=default.target\n", root, strings.ReplaceAll(path, "%", "%%"), exe, releaseMemory)
+	return fmt.Sprintf("[Unit]\nDescription=The Hive\nAfter=network-online.target\n\n[Service]\nEnvironment=HIVE_HOME=%s\nEnvironment=\"PATH=%s\"\nExecStart=%s daemon\nKillMode=process\nRestart=on-failure\nRestartSec=10\nMemoryHigh=75%%\nMemoryMax=85%%\nMemorySwapMax=1G\nDelegate=yes\nDelegateSubgroup=daemon\nExecStopPost=%s\n\n[Install]\nWantedBy=default.target\n", root, strings.ReplaceAll(path, "%", "%%"), exe, releaseMemory)
 }
 
 // releaseMemory is ExecStopPost's command: the memory controller off for the
