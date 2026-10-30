@@ -1,9 +1,7 @@
 package work
 
 import (
-	"errors"
 	"fmt"
-	"os/exec"
 	"time"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
@@ -66,60 +64,4 @@ func (m *Module) adopt(t *Task, head, why string) {
 	t.SHA, t.Stage, t.Reason = head, StageTesting, ""
 	t.HeadWait, t.HeadWaitOn = time.Time{}, ""
 	m.save(t, why+", not "+core.Short(old)+"; adopted it and testing again")
-}
-
-// noChecks bounds the wait for a head on which the forge has reported no
-// check run at all while required ones are awaited. Past noChecksMax a head
-// behind main has main merged into it, once per task, and the new head is
-// tested and waited on: a branch cut before its project's workflow landed on
-// main has no workflow to run, and starting CI on that head brings nothing
-// (hive-chip-flow #36, hifi-receiver-2 #88, dispatch #45 on 10-30), while the
-// push of the merge runs main's. A head holding main has the forge's CI
-// started on it once and waits again; past that too, or if it can't, it is
-// raised once to the lead and waits.
-func (m *Module) noChecks(t *Task, p core.Project, main string, runs []core.CheckRun, st string) (bool, error) {
-	if st != core.CheckPending || len(runs) > 0 {
-		return false, nil
-	}
-	if t.NoChecksOn != t.SHA {
-		// Saved now: a hold whose reason didn't change saves nothing, and
-		// the next tick loads the task afresh.
-		t.NoChecks, t.NoChecksOn = time.Now().UTC(), t.SHA
-		m.save(t, "no forge check run on "+core.Short(t.SHA)+" yet; waiting up to "+noChecksMax.String()+" for one")
-	}
-	if time.Since(t.NoChecks) < noChecksMax {
-		return false, nil
-	}
-	none := "no forge check run has appeared on " + core.Short(t.SHA) + " in over " + noChecksMax.String()
-	if t.NoChecksMerged == "" && t.Checkpoint == "" {
-		_, err := core.Git(m.C.WS.Project(p.Name), "merge-base", "--is-ancestor", main, t.SHA)
-		if exit := (*exec.ExitError)(nil); errors.As(err, &exit) && exit.ExitCode() == 1 {
-			if err := m.catchUp(t, p, main, none+", perhaps as its branch predates its project's CI workflow; the head was",
-				"No forge check run appeared on %s, a head behind main, perhaps from before the project's CI workflow landed; the Hive merged main into this branch (%s) so main's workflow runs on it."); err != nil {
-				return true, err
-			}
-			if t.SHA != t.NoChecksOn { // caught up, not sent back on a conflict
-				t.NoChecksMerged = t.SHA
-				m.save(t, "")
-			}
-			return true, nil
-		}
-	}
-	if t.CIStarted != t.SHA {
-		t.CIStarted = t.SHA
-		how, err := m.C.Effects.Forge.StartCI(p.Repo, t.PR.Number, t.Branch, t.SHA)
-		if err == nil {
-			t.NoChecks = time.Now().UTC()
-			m.save(t, none+", so the Hive started its CI: "+how+"; waiting up to "+noChecksMax.String()+" for its checks")
-			m.hold(t, p, "waiting for the CI the Hive started on "+core.Short(t.SHA))
-			return true, nil
-		}
-		none += "; starting its CI failed: " + core.Clip(err.Error(), 300)
-		m.save(t, "")
-	} else {
-		none += ", even after the Hive started its CI"
-	}
-	m.raiseKind(p, "no-checks", t.SHA+"/nochecks", fmt.Sprintf("%s (PR #%d in %s); the forge may not have run CI on it", none, t.PR.Number, p.Name))
-	m.hold(t, p, "waiting for the forge's checks on "+core.Short(t.SHA)+": "+none+"; the lead has been told")
-	return true, nil
 }
