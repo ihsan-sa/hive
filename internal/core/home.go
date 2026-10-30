@@ -29,6 +29,11 @@ var AgentTokens = func() string {
 	return filepath.Join(home, ".config", "hive", "agent-tokens")
 }
 
+// sessionInHome says whether r's run is a session in the hive user's home
+// (where the sandbox isolates): a writable run that isn't walled off, not a
+// reader, a one-turn experiment or an isolated project's.
+func sessionInHome(r Run) bool { return !r.ReadOnly && !r.OneTurn && !r.Isolated }
+
 // homeSecrets are the paths under home that hold a login, covered in a run
 // that sees the home: the Hive's own logins, which hold administration
 // (h0-org.token, the gh login), Claude's and Codex's, and every login file a

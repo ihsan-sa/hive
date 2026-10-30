@@ -2472,7 +2472,9 @@ func (rs *Runs) launch(r Run, cfg Config) {
 	// Only a worker's turn is handed to an executor; a lead's, a sweep's or
 	// any other role's runs here. A run that reads its project's secrets
 	// stays here too: an executor would copy the folder to another machine.
-	away := r.Role == "worker" && rs.secretsFor(r) == ""
+	// So does a session in home: its spec names this machine's home and
+	// service manager, which the dispatch module would send whole.
+	away := r.Role == "worker" && rs.secretsFor(r) == "" && !sessionInHome(r)
 	if r.Away && !r.NeverWaits() && away {
 		elsewhere, where = rs.executor()
 	}
@@ -2765,7 +2767,7 @@ func (rs *Runs) sandboxSpec(cfg Config, sb sandbox.Sandbox, h harness.Harness, r
 	// A writable run that isn't walled off is a session in the hive user's
 	// home (home.go); a reader, an experiment and an isolated project's run
 	// keep their own view.
-	inHome := sb.Isolated() && !r.ReadOnly && !r.OneTurn && !r.Isolated
+	inHome := sb.Isolated() && sessionInHome(r)
 	var bus []string
 	if home, err := os.UserHomeDir(); inHome && err == nil && filepath.IsAbs(home) && home != "/" {
 		mounts = append(mounts, homeMounts(home, rs.ws.Covered(), rs.ws.PrivateFiles())...)

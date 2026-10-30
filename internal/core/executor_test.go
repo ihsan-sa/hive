@@ -230,12 +230,22 @@ func TestOnlyWorkersGoToAnExecutor(t *testing.T) {
 	if got, _ := c.Runs.Get("s"); got.Status == StatusRunning || got.Where != "" || asked != 0 {
 		t.Fatalf("a sweep's turn went elsewhere: %s where %q, asked %d", got.Status, got.Where, asked)
 	}
-	r, err = c.Runs.Start(RunSpec{ID: "w", Role: "worker", Harness: "fake", Checkout: t.TempDir()})
+	// A worker that is a session in home stays here: its spec names this
+	// machine's home and service manager.
+	r, err = c.Runs.Start(RunSpec{ID: "h", Role: "worker", Harness: "fake", Checkout: t.TempDir(), Away: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Runs.launch(r, cfg)
+	if got, _ := c.Runs.Get("h"); got.Status == StatusRunning || got.Where != "" || asked != 0 {
+		t.Fatalf("a worker in home went elsewhere: %s where %q, asked %d", got.Status, got.Where, asked)
+	}
+	r, err = c.Runs.Start(RunSpec{ID: "w", Role: "worker", Harness: "fake", Checkout: t.TempDir(), Isolated: true})
 	if err != nil {
 		t.Fatal(err)
 	}
 	c.Runs.launch(r, cfg)
 	if got, _ := c.Runs.Get("w"); got.Status != StatusRunning || got.Where != "iiks1" {
-		t.Fatalf("a worker's turn: %s %q where %q", got.Status, got.Reason, got.Where)
+		t.Fatalf("a walled worker's turn: %s %q where %q", got.Status, got.Reason, got.Where)
 	}
 }
