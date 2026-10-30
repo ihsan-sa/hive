@@ -41,9 +41,6 @@ func (m *Module) inLine(q []Task) {
 		if a.Now != b.Now {
 			return a.Now
 		}
-		if a.Resending() != b.Resending() { // work already under way finishes first
-			return a.Resending()
-		}
 		if a.Overdue() != b.Overdue() {
 			return a.Overdue()
 		}
@@ -82,7 +79,7 @@ func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]str
 	m.mu.Lock()
 	for _, t := range tasks {
 		switch {
-		case (t.Queued() || t.Resending()) && !m.busy[t.ID] && !m.finishedBack(t):
+		case t.Queued() && !m.busy[t.ID]:
 			// A worker a conflict sends back takes a slot as a new one
 			// does: a main merge once reopened 19 at a pace of 1.
 			line = append(line, t)
@@ -158,7 +155,7 @@ func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]str
 			switch {
 			case t.Held:
 				wait[t.ID] = "held by " + cmp.Or(t.HeldBy, "the lead")
-			case working >= limit && !t.Resending() && away < awayMax(cfg) && elsewhereOnce():
+			case working >= limit && away < awayMax(cfg) && elsewhereOnce():
 				// Past the pace while a runner has room: its worker's turns
 				// go there first (core.RunSpec.Away). A worker a conflict
 				// sends back is reopened, not launched, so it waits here.
@@ -390,7 +387,7 @@ func (m *Module) opQueue(r core.Run, args json.RawMessage) (any, error) {
 				named[t.Project] = true
 			}
 		}
-		for _, t := range m.List(func(t Task) bool { return (t.Queued() || t.Resending()) && t.Order > 0 && named[t.Project] }) {
+		for _, t := range m.List(func(t Task) bool { return t.Queued() && t.Order > 0 && named[t.Project] }) {
 			if changes[t.ID] == nil {
 				at(t.ID).order = 0
 			}
@@ -405,7 +402,7 @@ func (m *Module) opQueue(r core.Run, args json.RawMessage) (any, error) {
 		case m.C.Runs.Walled(r, t.Project) != nil:
 			notes = append(notes, "no task "+id)
 			continue
-		case !t.Queued() && !t.Resending():
+		case !t.Queued():
 			// One a conflict sent back waits in the line as the queue lists
 			// it, so it is moved, held or started now like a brief (issue
 			// #2085: the pivot #2046 sat 23rd behind 22 sendbacks).
@@ -422,7 +419,7 @@ func (m *Module) opQueue(r core.Run, args json.RawMessage) (any, error) {
 			notes = append(notes, id+" is starting its worker right now")
 			continue
 		}
-		if t, ok = m.Get(id); !ok || !t.Queued() && !t.Resending() { // it started or was sent back before it was ours
+		if t, ok = m.Get(id); !ok || !t.Queued() { // it started or was sent back before it was ours
 			m.mu.Lock()
 			delete(m.busy, id)
 			m.mu.Unlock()
@@ -478,16 +475,12 @@ func (l *ids) UnmarshalJSON(b []byte) error {
 
 // Queue lists the waiting briefs r may see, in the order they will start.
 func (m *Module) Queue(r core.Run) []string {
-	line := m.List(func(t Task) bool { return (t.Queued() || t.Resending()) && m.C.Runs.Walled(r, t.Project) == nil })
+	line := m.List(func(t Task) bool { return t.Queued() && m.C.Runs.Walled(r, t.Project) == nil })
 	m.inLine(line)
 	out := []string{}
 	for i, t := range line {
 		why := t.Reason
-		if t.Resending() { // it started long ago: its wait is the pace's, not the brief's
-			if !strings.Contains(why, "goes back to merge main") { // waits names it
-				why = strings.TrimSuffix("its worker goes back to merge main; "+why, "; ")
-			}
-		} else if d := time.Since(t.Created); !t.Created.IsZero() && d >= time.Hour {
+		if d := time.Since(t.Created); !t.Created.IsZero() && d >= time.Hour {
 			// The lead sees the long waits, and which go ahead of its order.
 			age := fmt.Sprintf("waited %s", d.Round(time.Minute))
 			if t.Overdue() && !t.Now {

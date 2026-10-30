@@ -12,7 +12,7 @@ When what you see says the approach itself is wrong (a mechanism that costs more
 
 ## Where things are
 
-- **Your checkout** is the current directory, on your own branch. You hold no credentials and can't push: when you finish, the Hive tests, reviews and merges your commits.
+- **Your checkout** is the current directory, on your own branch. You hold no credentials and can't push: when you finish, the Hive merges your commits at once (on green forge CI, or on your own passing run of the tests where the project has none) and measures main after; a break is reverted.
 - **`$HIVE_RUN`** (read-only): your brief and this run's inputs. **`$HIVE_BOX/notes.md`**: yours, for whoever picks up after you.
 - **`$HIVE_KB`** (read-only): the knowledge base, with `record/` (everything the Hive did) and `practice/*.md` (how a Hive works; read the one that fits before you act). Search it with `hive agent search` before researching from scratch. The person's essay, the architecture every agent builds against, is `hive/docs/the-hive-essay.md` there.
 - **`$HIVE_MODULES`**, **`$HIVE_PROJECTS`** (read-only): the installed modules; the other projects' clones.

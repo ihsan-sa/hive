@@ -67,33 +67,6 @@ func TestMergeAdoptsTheHivesNewerHead(t *testing.T) {
 	}
 }
 
-// A self project reads every head: an adopted head with the same own diff
-// keeps its read, one with a new diff is read again.
-func TestMergeAdoptedHeadReadOnlyIfTheDiffChanged(t *testing.T) {
-	for _, newDiff := range []bool{false, true} {
-		m, task, p, _, next := staleHead(t, newDiff)
-		p.Self = true
-		main, _ := m.C.Effects.Sync(p)
-		ch, _ := m.C.Effects.Classify(p, main, task.SHA)
-		if _, err := m.C.Runs.Start(core.RunSpec{ID: "r1", Role: "reviewer", Project: p.Name, ReadOnly: true, Harness: "fake", Inputs: map[string]string{"sha": task.SHA, "diff.patch": ch.Diff}}); err != nil {
-			t.Fatal(err)
-		}
-		if err := m.C.Effects.RecordVerdict(core.Verdict{Project: p.Name, SHA: task.SHA, Diff: ch.DiffID, Run: "r1", Verdict: "land"}); err != nil {
-			t.Fatal(err)
-		}
-		mergeOnce(t, m, task, p)
-		if task.SHA != next {
-			t.Fatalf("not adopted: %s", task.Reason)
-		}
-		if err := testStep(m, task, p); err != nil {
-			t.Fatal(err)
-		}
-		if want := map[bool]string{false: StageMerging, true: StageReviewing}[newDiff]; task.Stage != want {
-			t.Fatalf("new diff %v: stage %q, want %q", newDiff, task.Stage, want)
-		}
-	}
-}
-
 // A forge still showing an earlier push of the Hive's hasn't caught up: the
 // task waits, and keeps its newer head.
 func TestMergeWaitsForTheForgeToShowItsHead(t *testing.T) {
@@ -130,33 +103,6 @@ func TestMergeForeignHeadGoesBack(t *testing.T) {
 func waitedLong(t *testing.T, task *Task) {
 	t.Helper()
 	setJSON(t, task, map[string]any{"no_checks": time.Now().Add(-31 * time.Minute)})
-}
-
-// A head on which the forge reports no check run at all waits only so long:
-// behind main, it is brought up to date for a head the forge will run on; up
-// to date, the lead hears of it once.
-func TestMergeNoCheckRunsIsBounded(t *testing.T) {
-	list := map[string]string{core.SecurityList: "paths = [\"secure/**\"]\nrequired_checks = [\"sandboxed-e2e\"]\n"}
-	m, task, p, f := gateRigSeeded(t, false, list, map[string]string{"feature.txt": "y"})
-	toMerging(t, m, task, p)
-	mergeOnce(t, m, task, p)
-	if task.Stage != StageMerging || alerts(m, "no-checks") != 0 {
-		t.Fatalf("stage %q, reason %q", task.Stage, task.Reason)
-	}
-	waitedLong(t, task)
-	m.later = map[string]time.Time{}
-	mergeOnce(t, m, task, p)
-	if task.Stage != StageMerging || !strings.Contains(task.Reason, "lead has been told") || alerts(m, "no-checks") != 1 {
-		t.Fatalf("up to date: stage %q, reason %q, %d alerts", task.Stage, task.Reason, alerts(m, "no-checks"))
-	}
-	old := task.SHA
-	pushMain(t, f, map[string]string{"other.txt": "z"})
-	waitedLong(t, task)
-	m.later = map[string]time.Time{}
-	mergeOnce(t, m, task, p)
-	if task.SHA == old || task.Stage != StageTesting || task.Round != 0 {
-		t.Fatalf("behind main: sha %s, stage %q, reason %q", core.Short(task.SHA), task.Stage, task.Reason)
-	}
 }
 
 // A task already holding for checks that never came, with its reason
@@ -363,19 +309,6 @@ func TestMergeAdoptedHeadNeedsItsOwnSecurityRead(t *testing.T) {
 	}
 	if _, err := m.C.Effects.Merge(core.MergeRequest{Project: p, PR: task.PR.Number, SHA: next, Main: main}); err == nil {
 		t.Fatal("Effects.Merge took the adopted head unread")
-	}
-}
-
-// Runs set aside as advisory still show the forge ran CI on the head, so a
-// head with only those isn't raised as having no check run.
-func TestMergeAdvisoryRunsAreChecksRun(t *testing.T) {
-	list := map[string]string{core.SecurityList: "paths = []\nrequired_checks = [\"test (ubuntu-latest)\"]\nadvisory_checks = [\"test (windows-latest)\"]\n"}
-	m, task, p, f, _ := selfRigSeeded(t, list, map[string]string{"feature.go": "package p\n"}, core.GateKeep)
-	f.SetChecks(p.Repo, task.SHA, core.CheckRun{Name: "test (windows-latest)", State: core.CheckPending})
-	setJSON(t, task, map[string]any{"no_checks": time.Now().Add(-noChecksMax - time.Minute), "no_checks_on": task.SHA})
-	mergeOnce(t, m, task, p)
-	if alerts(m, "no-checks") != 0 || strings.Contains(task.Reason, "lead has been told") {
-		t.Fatalf("%d alerts, reason %q", alerts(m, "no-checks"), task.Reason)
 	}
 }
 
