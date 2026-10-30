@@ -1526,6 +1526,7 @@ func (m *Module) renderBrief(t *Task, p core.Project, base string) string {
 	b.WriteString("## The project\n\n")
 	b.WriteString("- Goals: `.hive/goals.md`. Read it; report against it.\n")
 	fmt.Fprintf(&b, "- Tests: `%s`\n", orNone(cfg.Test))
+	b.WriteString("- Run the tests and any other build, test suite or render as `hive heavy -- sh -c '...'`: heavy commands run one at a time on this machine, so each keeps its files in memory instead of re-reading them from a saturated disk.\n")
 	if p.Self {
 		if t.Fix() {
 			b.WriteString("- Aim: a fix (" + orNone(t.AimWhy) + "). It merges as soon as you finish; a score dip after it merges doesn't revert it on its own, but files a brief to look into it. If it isn't a fix of a named failure, say so with `hive agent aim --aim gain --why \"...\"`.\n")
