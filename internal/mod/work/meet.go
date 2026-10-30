@@ -64,7 +64,7 @@ func (m *Module) neighbours(t Task) []neighbour {
 	}
 	var out []neighbour
 	for _, o := range m.List(func(o Task) bool {
-		return o.ID != t.ID && o.Project == t.Project && o.Stage == StageWorking && !o.Resending() && o.Worker != "" && o.Worker != t.Worker
+		return o.ID != t.ID && o.Project == t.Project && o.Stage == StageWorking && o.Worker != "" && o.Worker != t.Worker
 	}) {
 		if m.slotless(o) {
 			continue // quiet, finished or parked long: a message would wake it for nothing

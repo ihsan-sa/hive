@@ -190,3 +190,23 @@ func waitFor[T any](t *testing.T, get func() T, ok func(T) bool) T {
 		}
 	}
 }
+
+// The fix a scan files names the commit that last wrote each hit's line,
+// and never what was found.
+func TestScanFixNamesTheCommitThatWroteEachHit(t *testing.T) {
+	m, _, _, _ := selfHive(t)
+	m.Scan = nil
+	var known []string
+	m.FileFix = func(project, title, done, known_, why string) { known = append(known, title+done+known_+why) }
+	os.WriteFile(filepath.Join(m.C.WS.Private(), scan.HandlesFile), []byte("alice-k\n"), 0o600)
+	selfClone(t, m, map[string]string{scan.PublicList: "**\n", "README.md": "The Hive.\n"})
+	sha := strings.TrimSpace(selfClone(t, m, map[string]string{"docs/a.md": "one\nthanks alice-k\n"}))
+	p, _ := m.C.Projects.Get("hive")
+	m.fileScanFix("hive", sha, m.scan(p, sha))
+	if len(known) != 1 || !strings.Contains(known[0], "docs/a.md:2: "+core.Short(sha)) {
+		t.Fatalf("the fix doesn't name the commit that wrote the line: %q", known)
+	}
+	if strings.Contains(known[0], "alice") {
+		t.Fatalf("the fix says what was found: %s", known[0])
+	}
+}

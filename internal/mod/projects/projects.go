@@ -535,10 +535,8 @@ func (m *Module) Status(r core.Run) map[string]any {
 	pace := m.Work.Pace()
 	return map[string]any{"projects": ps, "waiting_on_person": waiting, "config": View(cfg),
 		"queue":   m.Work.Queue(r), // briefs waiting for a worker, in the order they start; the queue op reorders or holds them
-		"checks":  fmt.Sprintf("%d running, %d waiting (at once: %s; max_checks %d, 0 is no ceiling)%s", len(running), len(waitingChecks), pace["checks"], cfg.MaxChecks, checkLine(waitingChecks)),
-		"workers": fmt.Sprintf("at once: %s; max_workers %d, 0 is no ceiling", pace["workers"], cfg.MaxWorkers),
-		"gates":   fmt.Sprintf("recursive gates at once: %s; max_gates %d, 0 is one per 6 cores", pace["gates"], cfg.MaxGates),
-		"heavy":   fmt.Sprintf("%d heavy commands in turns (hive agent heavy -- cmd); at once: %s", m.Work.Heavy(), pace["heavy"])}
+		"checks":  fmt.Sprintf("%d running, %d waiting (at once: %s, max_checks)%s", len(running), len(waitingChecks), pace["checks"], checkLine(waitingChecks)),
+		"workers": pace["workers"]}
 }
 
 // checkLine names the waiting checks in the order they start, each ranked
@@ -578,9 +576,7 @@ type ConfigView struct {
 	Schedules      map[string]string   `json:"schedules"`
 	ReviewRounds   int                 `json:"review_rounds"`
 	PlateauMerges  int                 `json:"plateau_merges"`
-	MaxWorkers     int                 `json:"max_workers"`
 	MaxChecks      int                 `json:"max_checks"`
-	MaxGates       int                 `json:"max_gates"`
 	AutoUpdate     bool                `json:"auto_update"`
 	Routes         map[string][]string `json:"routes,omitempty"` // each role's models in fallback order (the models op says more)
 	OpenModels     []string            `json:"open_models,omitempty"`
@@ -589,5 +585,5 @@ type ConfigView struct {
 // View is c as agents see it.
 func View(c core.Config) ConfigView {
 	return ConfigView{c.Autonomy, c.Harness, c.Model, c.LeadModel, c.ReviewerModel, c.TribunalModels,
-		append(harness.Models(c.Harness), c.ModelChoices...), c.Schedules, c.ReviewRounds, c.PlateauMerges, c.MaxWorkers, c.MaxChecks, c.MaxGates, c.AutoUpdate, c.Routes, slices.Sorted(maps.Keys(c.Models))}
+		append(harness.Models(c.Harness), c.ModelChoices...), c.Schedules, c.ReviewRounds, c.PlateauMerges, c.MaxChecks, c.AutoUpdate, c.Routes, slices.Sorted(maps.Keys(c.Models))}
 }

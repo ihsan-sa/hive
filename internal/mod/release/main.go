@@ -23,14 +23,16 @@ import (
 // its own main, not a release's build, gates and canary. What is behaviour
 // (the default modules: the agents' prompts, the modules' policies) is copied
 // from main's tip into .modules/ on every merge, so the next turn reads it
-// with no restart (Live). What is machinery, the binary, follows each commit
-// the Hive releases (a kept merge whose reads, scan and main's checks
-// passed): it is built here from the self project's clone at that commit and
-// installed between turns, as an update is, once the checks running end. A
-// new daemon that doesn't come up is rolled back by its third start (Boot);
-// one that comes up but misbehaves is the lead's call: `hive agent fallback`
-// (or `hive update --release back`) puts the binary it replaced back at once.
-// Releases go on being cut for every other install.
+// with no restart (Live). What is machinery, the binary, follows main too:
+// the newest commit on main whose forge CI passed there is built here from
+// the self project's clone, stamped <line>-main.<sha>, and installed between
+// turns, as an update is, once the checks running end. The binary it
+// replaced, the last one that came up healthy (an update waits until the
+// running one settled), stays beside it as .old: a new daemon that doesn't
+// come up is rolled back to it by its third start (Boot), and one that comes
+// up but misbehaves is anyone's call: `hive agent fallback` (or `hive update
+// --release back`) puts it back at once. Releases go on being cut for every
+// other install.
 const Main = "main"
 
 // self is the project here that is release_repo itself: this is the Hive
@@ -68,34 +70,114 @@ func (m *Module) releases() (core.Project, []released) {
 	return p, out
 }
 
-// mainTag is the newest release the Hive cut from its own main, newer than
-// this build and not rolled back here, or "".
+// mainBuild is the commit a build of main is stamped with
+// (v0.1.150-main.<sha>), or "" for a release or a source build.
+func mainBuild(version string) string {
+	if i := strings.LastIndex(version, "-main."); i > 0 && hexName(version[i+len("-main."):]) {
+		return version[i+len("-main."):]
+	}
+	return ""
+}
+
+// mainLooks is how many of main's newest commits a look weighs: a tip whose
+// CI still runs doesn't hold an older green one back.
+const mainLooks = 6
+
+// mainTag is the build of main to install next: the newest of main's last
+// mainLooks commits whose forge CI passed there, past this build (descended
+// from the commit it was built from) and not rolled back here, stamped on
+// this build's line; "" when there is none.
 func (m *Module) mainTag() string {
-	_, rs := m.releases()
-	back := m.rolledBackFrom()
-	tag := ""
-	for _, r := range rs {
-		if !back[r.Tag] && modules.Newer(core.Version, r.Tag) && (tag == "" || modules.Newer(tag, r.Tag)) {
-			tag = r.Tag
+	p, ok := m.self(m.C.WS.LoadConfig())
+	if !ok {
+		return ""
+	}
+	m.C.Effects.Sync(p) // a failed fetch weighs main as the clone last saw it
+	clone := m.C.WS.Project(p.Name)
+	ref := "refs/remotes/origin/" + p.Branch
+	if _, err := core.Git(clone, "rev-parse", "--verify", "-q", ref); err != nil {
+		ref = "refs/heads/" + p.Branch
+	}
+	out, err := core.Git(clone, "rev-list", "--first-parent", "-n", fmt.Sprint(mainLooks), ref)
+	if err != nil {
+		return ""
+	}
+	line, running := core.Version, mainBuild(core.Version)
+	if i := strings.Index(line, "-main."); i > 0 {
+		line = line[:i]
+	}
+	if running == "" {
+		_, rs := m.releases()
+		for _, r := range rs {
+			if r.Tag == core.Version {
+				running = r.SHA
+			}
 		}
 	}
-	return tag
+	back := m.rolledBackFrom()
+	for _, sha := range strings.Fields(out) {
+		if running != "" && strings.HasPrefix(sha, running) {
+			return "" // this build is main's newest green commit already
+		}
+		tag := line + "-main." + sha[:8]
+		if back[tag] {
+			continue
+		}
+		if running != "" {
+			if _, err := core.Git(clone, "merge-base", "--is-ancestor", running, sha); err != nil {
+				continue
+			}
+		}
+		if m.ciPassed(p, sha) {
+			return tag
+		}
+	}
+	return ""
+}
+
+// ciPassed reports whether the forge's CI passed on main at sha: the
+// project's forge_tests and required checks, all green there.
+func (m *Module) ciPassed(p core.Project, sha string) bool {
+	need := m.C.Effects.Config(p, sha).WithForgeTests(m.C.Effects.RequiredChecks(p, sha))
+	if len(need) == 0 {
+		return false
+	}
+	runs, err := m.C.Effects.Forge.Checks(p.Repo, sha)
+	if err != nil {
+		return false
+	}
+	st, _ := core.ChecksState(runs, need)
+	return st == core.CheckPass
 }
 
 // releasedHere is the self project and the commit of tag when this Hive
-// follows main and cut tag itself, so it builds tag rather than download it;
-// sha is "" otherwise.
+// follows main and tag is a build of main (or a release it cut itself), so
+// it builds tag rather than download it; sha is "" otherwise.
 func (m *Module) releasedHere(tag string) (p core.Project, sha string) {
 	if m.Channel() != Main {
 		return p, ""
 	}
 	p, rs := m.releases()
+	if short := mainBuild(tag); short != "" && p.Name != "" {
+		full, _ := core.Git(m.C.WS.Project(p.Name), "rev-parse", "--verify", "-q", short+"^{commit}")
+		return p, strings.TrimSpace(full)
+	}
 	for _, r := range rs {
 		if r.Tag == tag {
 			sha = r.SHA
 		}
 	}
 	return p, sha
+}
+
+// newer reports whether tag is past this build: a build of main that
+// mainTag picked always is (it descends from this one); a release by its
+// version.
+func newer(tag string) bool {
+	if mainBuild(tag) != "" {
+		return tag != core.Version
+	}
+	return modules.Newer(core.Version, tag)
 }
 
 // buildAt builds the binaries named, stamped tag as release.yml stamps a

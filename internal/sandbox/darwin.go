@@ -62,7 +62,7 @@ func proxy(sp Spec) (*Egress, string, error) {
 		}
 	}
 	_, port, _ := net.SplitHostPort(ln.Addr().String())
-	return ServeEgress(ln, sp.Allow, sp.Local, refused), port, nil
+	return ServeEgress(ln, sp.Allow, sp.Local, sp.Outside, refused), port, nil
 }
 
 func (s *Seatbelt) Start(sp Spec) (Proc, error) {

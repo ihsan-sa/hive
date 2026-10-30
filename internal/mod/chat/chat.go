@@ -451,6 +451,22 @@ func (m *Module) ToLead(chatID, thread, text string) {
 	}
 }
 
+// Ask starts a thread in chatID with shown, the Hive's line, and hands the
+// chat's lead text from module from to answer in that thread, starting a lead
+// if none runs. The person reads shown and the lead's answer; text, the facts
+// the lead works from, goes to the lead alone.
+func (m *Module) Ask(chatID, from, shown, text string) error {
+	m.mu.Lock()
+	ch := m.chats[chatID]
+	m.mu.Unlock()
+	if ch == nil || ch.Kind == "agent" {
+		return core.ErrNotFound
+	}
+	msg := m.add(Message{Chat: chatID, From: "hive", Name: "hive", Text: shown})
+	m.syncFor(ch)
+	return m.deliverToLead(ch, fmt.Sprintf("[chat %s · thread %s · %s] Module %s: %s", chatID, msg.Thread, time.Now().Format("Mon 15:04"), from, text))
+}
+
 // threadRe reads the thread off the headers the chat module writes ("[chat c ·
 // thread t · ...]", "[notification · thread t]"), not off any "thread x" in
 // the text after them: a person's words, or the problems board after a

@@ -120,8 +120,7 @@ func startOn(t *testing.T, cpus, slot int, exe string, prep func(*core.Config), 
 	os.WriteFile(filepath.Join(h.ws.Private(), scan.HandlesFile), []byte("nobody-in-this-test\n"), 0o600)
 	cfg := h.ws.LoadConfig()
 	cfg.Harness, cfg.AutoUpdate = "fake", false
-	cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax, cfg.LoadMax = 0, 0, 0, 0 // a loaded CI runner mustn't hold fake turns
-	cfg.IOPressureMax, cfg.IOFullMax = 0, 0
+	cfg.TurnMB = 0 // a loaded CI runner mustn't hold fake turns
 	if hn := os.Getenv("HIVE_E2E_HARNESS"); hn != "" {
 		cfg.Harness = hn // a live probe: real agents, plan usage
 		if _, err := harness.Get(hn); err != nil {
@@ -142,7 +141,7 @@ func startOn(t *testing.T, cpus, slot int, exe string, prep func(*core.Config), 
 		cfg.Sandbox, cfg.BareAccepted = "bare", time.Now().Format(time.RFC3339)
 	}
 	cfg.PlateauMerges = 0 // TestStepBack turns it on
-	cfg.Schedules = map[string]string{"improve.sweep": "off", "improve.stepback": "off", "kb.file": "off", "modules.update": "off", "hive.update": "off"}
+	cfg.Schedules = map[string]string{"improve.sweep": "off", "improve.stepback": "off", "kb.file": "off", "modules.update": "off", "hive.update": "off", "standup": "off"}
 	if prep != nil {
 		prep(&cfg)
 	}
