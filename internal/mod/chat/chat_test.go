@@ -13,6 +13,7 @@ import (
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/agents"
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/board"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/modules"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/release"
 )
@@ -328,7 +329,7 @@ func TestRoomReachesTheProjectsAgents(t *testing.T) {
 	}
 	c.J.MustAppend("run.status", map[string]any{"id": "w4", "status": core.StatusStopped})
 	w1, _ := c.Runs.Get("w1")
-	if _, err := c.Runs.Ops().Deliver(w1, Room, "I take the flaky gate test"); err != nil {
+	if _, err := board.Of(c).Deliver(w1, Room, "I take the flaky gate test"); err != nil {
 		t.Fatal(err)
 	}
 	got := map[string]bool{}
@@ -347,7 +348,7 @@ func TestRoomReachesTheProjectsAgents(t *testing.T) {
 		t.Fatalf("the room reached %v, want w2 and l", got)
 	}
 	w3, _ := c.Runs.Get("w3")
-	if _, err := c.Runs.Ops().Deliver(w3, Room, "anyone?"); err == nil || !strings.Contains(err.Error(), "nobody else") {
+	if _, err := board.Of(c).Deliver(w3, Room, "anyone?"); err == nil || !strings.Contains(err.Error(), "nobody else") {
 		t.Fatalf("an empty room must say so: %v", err)
 	}
 }

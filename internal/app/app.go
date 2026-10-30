@@ -13,6 +13,7 @@ import (
 	hive "github.com/ihsan-sa/hive-standalone-build"
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/agents"
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/board"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/chat"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/feedback"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/forgeread"
@@ -69,6 +70,7 @@ func New(ws core.Workspace, forge core.Forge) (*App, error) {
 	}
 	a.Agents = &agents.Agents{C: c, Mod: a.Mods}
 	c.Runs.Route = func(r core.Run) []core.Pick { return a.Agents.Route(r.Role, r.Project) }
+	board.Of(c) // messaging: the public board every module and agent posts on
 	a.Chat = chat.New(c, a.Agents)
 	a.Work = work.New(c, a.Agents, a.Chat)
 	c.Runs.Ops().SetSpawner(a.Work.Spawn)

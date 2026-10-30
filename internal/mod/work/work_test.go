@@ -12,6 +12,7 @@ import (
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/agents"
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/board"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/chat"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/modules"
 )
@@ -1126,14 +1127,14 @@ func TestWorkerParentIsItsFiler(t *testing.T) {
 		r, _ := m.C.Runs.Get(id)
 		return len(r.Pending)
 	}
-	if _, err := m.C.Runs.Ops().Deliver(w, "parent", "done?"); err != nil || pending(sweep.ID) != 1 || pending(lead.ID) != 0 {
+	if _, err := board.Of(m.C).Deliver(w, "parent", "done?"); err != nil || pending(sweep.ID) != 1 || pending(lead.ID) != 0 {
 		t.Fatalf("parent went elsewhere than the filer: %v, sweep %d, lead %d", err, pending(sweep.ID), pending(lead.ID))
 	}
-	if _, err := m.C.Runs.Ops().Deliver(w, "lead", "done?"); err != nil || pending(lead.ID) != 1 {
+	if _, err := board.Of(m.C).Deliver(w, "lead", "done?"); err != nil || pending(lead.ID) != 1 {
 		t.Fatalf("lead didn't reach the project's lead: %v", err)
 	}
 	m.C.Runs.Stop(sweep.ID, "done")
-	if _, err := m.C.Runs.Ops().Deliver(w, "parent", "done?"); err != nil || pending(lead.ID) != 2 {
+	if _, err := board.Of(m.C).Deliver(w, "parent", "done?"); err != nil || pending(lead.ID) != 2 {
 		t.Fatalf("parent with its filer ended didn't reach the project's lead: %v", err)
 	}
 }

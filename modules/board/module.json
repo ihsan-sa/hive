@@ -1,0 +1,5 @@
+{
+  "name": "board",
+  "description": "Messaging: every message between agents is a post on one public board, in threads. An agent adds itself to threads (join), searches the board for what it needs (board), and is woken only when a post names it (message, post, @run), with where to read, not what was said.",
+  "projects": ["*"]
+}

@@ -27,6 +27,7 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 	"github.com/ihsan-sa/hive-standalone-build/internal/harness"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/agents"
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/board"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/chat"
 )
 
@@ -445,7 +446,7 @@ func New(c *core.Core, a *agents.Agents, ch *chat.Module) *Module {
 	}
 	c.J.Replay(apply)
 	c.J.Subscribe(apply)
-	c.Runs.Ops().AddRouter(m.toFiler)
+	board.Of(c).AddRouter(m.toFiler)
 	c.Runs.Ops().Register(core.Op{Name: "brief", Help: `{"title","done","known","project","aim","why","apart"} (aim: fix, with why naming the failure it fixes, isn't reverted for a score dip alone; anything else is taken as a gain, which a score drop after its merge reverts unless a judge keeps it; either merges as soon as its worker finishes); one matching an open task not yet pushed (a test both name, a near-identical title, or one filed within the hour sharing most of its words) and taken the same way joins it as added context instead, unless apart`, Fn: m.opBrief})
 	c.Runs.Ops().Register(core.Op{Name: "aim", Help: `{"task","aim":"fix"|"gain","why"} (your own task by default; any other task) -> sets whether the task is a fix of the failure why names, which isn't reverted for a score dip alone, or a gain, which a score drop after its merge reverts unless a judge keeps it; either merges as soon as its worker finishes`, Fn: m.opAim})
 	c.Runs.Ops().Register(core.Op{Name: "recheck", Help: `{"task","back"} -> a blocked or stopped task's commits are pushed and checked again (whoever stopped it); a working one's worker gets back at once; one stuck on its way to the merge (landing, testing, reviewing, merging: say on checks of a commit that is no longer its head) is retried the same way from its branch's head, and a stuck checkpoint is dropped while its worker goes on; with back, its worker gets that text and works on`, Fn: m.opRecheck})
@@ -887,7 +888,7 @@ func (m *Module) toFiler(from core.Run, to, text string) (bool, error) {
 	if !ok || r.Terminal() && !r.Persistent || m.C.Runs.Walled(from, r.Project) != nil {
 		return false, nil
 	}
-	_, err := m.C.Runs.Ops().Deliver(from, r.ID, text)
+	_, err := board.Of(m.C).Deliver(from, r.ID, text)
 	return true, err
 }
 

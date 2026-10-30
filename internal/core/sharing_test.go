@@ -117,10 +117,4 @@ func TestPrivateProjectsAreOutOfReach(t *testing.T) {
 			t.Errorf("%s spawning into %q: %v", tc.from.ID, tc.project, err)
 		}
 	}
-	if _, err := o.Call(mine, "message", json.RawMessage(`{"to":"open-run","text":"x"}`)); err == nil {
-		t.Error("a private project's agent messaged another project's agent")
-	}
-	if _, err := o.Call(open, "message", json.RawMessage(`{"to":"mine-run","text":"x"}`)); err == nil {
-		t.Error("an agent messaged a private project's agent")
-	}
 }

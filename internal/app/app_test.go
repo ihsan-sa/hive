@@ -11,7 +11,7 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 )
 
-// The risk module wraps core's "message" op when it is built, so a warden
+// The risk module wraps the board's "message" op when it is built, so a warden
 // asking an agent only waits if the app builds risk after core.
 func TestWardenMessagingTheRequesterWaitsInTheApp(t *testing.T) {
 	a, warden := appWithWarden(t, true)
