@@ -156,6 +156,9 @@ type Task struct {
 	NoChecks   time.Time `json:"no_checks,omitempty"`
 	NoChecksOn string    `json:"no_checks_on,omitempty"`
 	CIStarted  string    `json:"ci_started,omitempty"` // the head the Hive started the forge's CI on, once (head.go)
+	// NoChecksMerged is the head the Hive made by merging main into a branch
+	// behind it that got no forge check run, once per task (head.go).
+	NoChecksMerged string `json:"no_checks_merged,omitempty"`
 	// HeadWait is when the forge was first seen still showing HeadWaitOn,
 	// an earlier push of the Hive's than the task's head (head.go).
 	HeadWait   time.Time `json:"head_wait,omitempty"`
@@ -2241,7 +2244,7 @@ func (m *Module) slowTests(t *Task, p core.Project, main string, c core.Check) e
 	var exit *exec.ExitError
 	if errors.As(err, &exit) && exit.ExitCode() == 1 && t.Checkpoint == "" {
 		t.Slows = 0
-		return m.catchUp(t, p, main)
+		return m.catchUp(t, p, main, "the tests were cut off at their time limit on", "Tests on %s were cut off at their time limit before a verdict; main had moved on, so the Hive merged main into this branch (%s) and tests that instead.")
 	}
 	if err != nil {
 		return m.cantRun(t, p, c) // git can't tell: tried again as before
@@ -2256,10 +2259,12 @@ func (m *Module) slowTests(t *Task, p core.Project, main string, c core.Check) e
 		SlowTries, core.Short(t.SHA), core.Short(main), core.ClipEnds(c.Output, 1500)))
 }
 
-// catchUp merges main into t's branch after its tests were cut off on a head
-// behind main, pushes it and tests that head instead, at once and with a
-// fresh time limit. A conflict goes to the worker as any other does.
-func (m *Module) catchUp(t *Task, p core.Project, main string) error {
+// catchUp merges main into t's branch, behind main at a head that got no
+// verdict (why, before the head: tests cut off at their time limit, or no
+// forge check run at all), pushes it and tests that head instead, at once and
+// with a fresh time limit. status is the PR's line, with the old head and the
+// new. A conflict goes to the worker as any other does.
+func (m *Module) catchUp(t *Task, p core.Project, main, why, status string) error {
 	next, err := m.C.Effects.UpdateBranch(p, t.SHA, main, t.Base)
 	if errors.Is(err, core.ErrConflict) {
 		return m.conflict(t, p, t.SHA, err)
@@ -2274,10 +2279,10 @@ func (m *Module) catchUp(t *Task, p core.Project, main string) error {
 		return err
 	}
 	old := t.SHA
-	t.SHA, t.Recheck, t.Reason, t.Retry = next, false, "", time.Time{}
-	m.save(t, "the tests were cut off at their time limit on "+core.Short(old)+", which is behind main at "+core.Short(main)+"; merged main into it as "+core.Short(next)+" and testing that")
+	t.SHA, t.Stage, t.Recheck, t.Reason, t.Retry = next, StageTesting, false, "", time.Time{}
+	m.save(t, why+" "+core.Short(old)+", which is behind main at "+core.Short(main)+"; merged main into it as "+core.Short(next)+" and testing that")
 	if t.PR.Number != 0 {
-		m.status(t, p, t.PR.Number, "Tests on "+core.Short(old)+" were cut off at their time limit before a verdict; main had moved on, so the Hive merged main into this branch ("+core.Short(next)+") and tests that instead.")
+		m.status(t, p, t.PR.Number, fmt.Sprintf(status, core.Short(old), core.Short(next)))
 	}
 	return nil
 }

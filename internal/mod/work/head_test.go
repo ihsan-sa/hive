@@ -160,6 +160,54 @@ func TestMergeStartsCIOnAHeadNeverRun(t *testing.T) {
 	}
 }
 
+// A head behind main that gets no forge check run has main merged into it
+// rather than its CI started, as a branch cut before its project's workflow
+// landed has no workflow to start (hive-chip-flow #36, hifi-receiver-2 #88,
+// dispatch #45 on 10-30); the caught-up head is tested and waited on. That is
+// once per task: a caught-up head that still gets none has its CI started and
+// then goes to the lead, however far main moves on meanwhile.
+func TestMergeNoChecksBehindMainCatchesUp(t *testing.T) {
+	list := map[string]string{core.SecurityList: "paths = [\"secure/**\"]\nrequired_checks = [\"sandboxed-e2e\"]\n"}
+	m, task, p, f := gateRigSeeded(t, false, list, map[string]string{"feature.txt": "y"})
+	toMerging(t, m, task, p)
+	mergeOnce(t, m, task, p)
+	pushMain(t, f, map[string]string{".github/workflows/ci.yml": "on: pull_request\n"})
+	stale := task.SHA
+	waitedLong(t, task)
+	m.later = map[string]time.Time{}
+	mergeOnce(t, m, task, p)
+	main, err := core.Git(f.RepoPath("me/p"), "rev-parse", "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := m.C.WS.Project(p.Name)
+	if task.SHA == stale || task.Stage != StageTesting || f.CIStarts(p.Repo, stale) != 0 || alerts(m, "no-checks") != 0 || !logHas(task, "merged main into it") {
+		t.Fatalf("head %s (was %s), stage %q, %d CI starts, %d alerts, reason %q", core.Short(task.SHA), core.Short(stale), task.Stage, f.CIStarts(p.Repo, stale), alerts(m, "no-checks"), task.Reason)
+	}
+	if _, err := core.Git(dir, "merge-base", "--is-ancestor", strings.TrimSpace(main), task.SHA); err != nil {
+		t.Fatal("the caught-up head doesn't hold main")
+	}
+	if pr, err := f.GetPR(p.Repo, task.PR.Number); err != nil || pr.HeadSHA != task.SHA {
+		t.Fatalf("the PR's head is %s (%v), want the caught-up %s", core.Short(pr.HeadSHA), err, core.Short(task.SHA))
+	}
+	caught := task.SHA
+	toMerging(t, m, task, p)
+	mergeOnce(t, m, task, p)
+	pushMain(t, f, map[string]string{"later.txt": "main moves on"})
+	waitedLong(t, task)
+	m.later = map[string]time.Time{}
+	mergeOnce(t, m, task, p)
+	if task.SHA != caught || f.CIStarts(p.Repo, caught) != 1 {
+		t.Fatalf("head %s (want %s), %d CI starts, reason %q", core.Short(task.SHA), core.Short(caught), f.CIStarts(p.Repo, caught), task.Reason)
+	}
+	waitedLong(t, task)
+	m.later = map[string]time.Time{}
+	mergeOnce(t, m, task, p)
+	if task.SHA != caught || alerts(m, "no-checks") != 1 || !strings.Contains(task.Reason, "lead has been told") {
+		t.Fatalf("head %s, %d alerts, reason %q", core.Short(task.SHA), alerts(m, "no-checks"), task.Reason)
+	}
+}
+
 // setJSON sets fields of the task's saved form, nil removing one, through
 // JSON so that this file builds on a Hive without them.
 func setJSON(t *testing.T, task *Task, set map[string]any) {
