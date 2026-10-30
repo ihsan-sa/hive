@@ -126,7 +126,7 @@ func Main(argv []string) int {
 		text = string(raw)
 	case "warden":
 		err = warden(all)
-	case "tribunal", "module-reviewer":
+	case "tribunal":
 		vote := "approve"
 		if strings.Contains(all, "FAKE:paneldecline") {
 			vote = "decline"

@@ -939,13 +939,6 @@ func (s *server) routes() http.Handler {
 		}
 		return "ok", a.Mods.SetAccess(b.Module, b.Project, b.Allow)
 	})
-	h("/api/module/review", func(r *http.Request) (any, error) {
-		var b struct{ Module string }
-		if err := decode(r, &b); err != nil {
-			return nil, err
-		}
-		return "ok", a.Runner.Retry(b.Module)
-	})
 	h("/api/project", func(r *http.Request) (any, error) {
 		var b projects.Spec
 		if err := decode(r, &b); err != nil {

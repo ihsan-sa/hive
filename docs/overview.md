@@ -30,7 +30,7 @@ The diagram is drawn from [arch.json](arch.json). To change it, edit that file a
 
 **The knowledge base.** Plain markdown in a git repository (`.hive/kb`): notes agents leave, how a Hive works, the Hive's own source, and a record of every task, run and chat filed from the journal. Agents search it before they research; you read it under **Knowledge** or with `hive kb <words>`.
 
-**Modules.** The pipeline and the default modules (chat, work, improve, risk, knowledge base, schedules and others) are compiled into the program; their prompts are files in `.modules/` you can change. You can add modules from git. A module that carries its own program runs as you, outside the sandbox, so it starts only after a module reviewer has read its code at that exact commit, and again after every update.
+**Modules.** The pipeline and the default modules (chat, work, improve, risk, knowledge base, schedules and others) are compiled into the program; their prompts are files in `.modules/` you can change. You can add modules from git. A module that carries its own program runs as you, outside the sandbox, at the commit it holds, with no read of its code first: the way back is the module's own history and the person's say over which modules are installed.
 
 ## Install
 
