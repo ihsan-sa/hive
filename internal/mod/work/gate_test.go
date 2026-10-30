@@ -61,6 +61,7 @@ func gateRigSeeded(t *testing.T, mainRed bool, onMain, files map[string]string) 
 	cfg := ws.LoadConfig()
 	cfg.Sandbox, cfg.BareAccepted, cfg.Harness = "bare", time.Now().Format(time.RFC3339), "fake"
 	cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax, cfg.LoadMax = 0, 0, 0, 0 // a loaded machine mustn't hold the queue
+	cfg.IOPressureMax, cfg.IOFullMax = 0, 0
 	ws.SaveConfig(cfg)
 	forge := &core.Local{Dir: filepath.Join(dir, "forge")}
 	c, err := core.Open(ws, forge)
@@ -168,6 +169,43 @@ func TestGateFailsOnBoth(t *testing.T) {
 	}
 	if task.Stage == StageTesting || task.Stage == StageWorking {
 		t.Fatalf("the caught-up change should pass the gate, stage %q", task.Stage)
+	}
+}
+
+// A fix or revert whose red can't be told apart from main's (its run names
+// no failure, as a run cut off by its timeout doesn't) isn't held for main
+// to go green, which may wait on it: on hive-hwde the revert of the commit
+// that turned main red waited 'on main' for hours. It runs once more, then
+// goes back to its worker, or, a revert the Hive made itself, stops.
+func TestGateFixDoesNotWaitOnMain(t *testing.T) {
+	for _, kind := range []string{"fix", "revert"} {
+		t.Run(kind, func(t *testing.T) {
+			m, task, p, _ := gateRig(t, true, map[string]string{"feature.txt": "y"})
+			if kind == "fix" {
+				task.Aim, task.AimWhy = AimFix, "main's tests fail"
+			} else {
+				task.Kind, task.Worker, task.RevertSHA = "revert", "", "abc1234"
+			}
+			task.Reason = "waiting on main: its own tests fail at abc1234, so this failure isn't the worker's"
+			if err := testStep(m, task, p); err != nil {
+				t.Fatal(err)
+			}
+			if strings.HasPrefix(task.Reason, "waiting on main") || !task.Recheck || task.Retested != task.SHA {
+				t.Fatalf("first red: stage %q, reason %q, recheck %v", task.Stage, task.Reason, task.Recheck)
+			}
+			if n := alerts(m, "main-red"); n != 0 {
+				t.Fatalf("%d main-red alerts for a fix that doesn't wait on main", n)
+			}
+			if err := testStep(m, task, p); err != nil {
+				t.Fatal(err)
+			}
+			switch {
+			case kind == "fix" && (task.Stage != StageWorking || task.Round != 1 || !strings.Contains(task.Findings, "isn't held for main")):
+				t.Fatalf("fix: stage %q, round %d, findings %q", task.Stage, task.Round, task.Findings)
+			case kind == "revert" && (task.Stage == StageTesting || !strings.Contains(task.Reason, "no worker can fix it")):
+				t.Fatalf("revert: stage %q, reason %q", task.Stage, task.Reason)
+			}
+		})
 	}
 }
 
@@ -314,6 +352,31 @@ func TestGateNoWorseThanRedMainGoesOn(t *testing.T) {
 		if task.Stage != StageTesting || !strings.HasPrefix(task.Reason, "waiting on main") {
 			t.Fatalf("%s beside main's failure went on: stage %q, reason %q", name, task.Stage, task.Reason)
 		}
+	}
+}
+
+// A red main holds only what it can't be told apart from: a change failing
+// in a package main's own run passed whole is the change's red, so it goes
+// back to its worker (after the one rerun any red gets) instead of waiting
+// on main's fix, and is told main's failures aren't its.
+func TestRedMainDoesntHoldAChangesOwnRed(t *testing.T) {
+	const mainRed = "echo '--- FAIL: TestClock (0.01s)'\necho 'FAIL\tp/a\t0.01s'\necho 'ok  \tp/b\t0.01s'\nexit 1\n"
+	onMain := map[string]string{".hive/project.json": `{"test": "sh ./t.sh"}`, "t.sh": mainRed}
+	own := "echo '--- FAIL: TestClock (0.01s)'\necho 'FAIL\tp/a\t0.01s'\necho '--- FAIL: TestNew (0.01s)'\necho 'FAIL\tp/b\t0.01s'\nexit 1\n"
+	m, task, p, _ := gateRigSeeded(t, false, onMain, map[string]string{"t.sh": own})
+	for i := 0; i < 2; i++ {
+		if err := testStep(m, task, p); err != nil {
+			t.Fatal(err)
+		}
+		if strings.HasPrefix(task.Reason, "waiting on main") {
+			t.Fatalf("step %d: its own red waited on main: %q", i, task.Reason)
+		}
+	}
+	if task.Stage != StageWorking || task.Round != 1 || !strings.Contains(task.Findings, "p/b TestNew") || !strings.Contains(task.Findings, "aren't yours to fix") {
+		t.Fatalf("stage %q, round %d, findings %q", task.Stage, task.Round, task.Findings)
+	}
+	if n := alerts(m, "main-red"); n != 0 {
+		t.Fatalf("%d main-red alerts for a change sent back on its own red", n)
 	}
 }
 
@@ -780,6 +843,45 @@ func TestFakedCantRunCommentsOnceThenRed(t *testing.T) {
 		if a.Ref == "cant-run:"+task.ID {
 			t.Fatalf("the ask stays open once the change is tested again: %+v", a)
 		}
+	}
+}
+
+// A branch whose tests can't find a tool that main's own tests ran with is
+// stale, not short of the tool: it catches up with main and is tested again,
+// without counting tries or asking the person to install it.
+func TestCantRunBehindMainCatchesUp(t *testing.T) {
+	m, task, p, forge := gateRigSeeded(t, false,
+		map[string]string{".hive/project.json": `{"test": "sh check.sh"}`, "check.sh": "echo 'sh: 1: hwde: not found'; exit 127\n"},
+		map[string]string{"feature.txt": "y"})
+	if err := testStep(m, task, p); err != nil {
+		t.Fatal(err)
+	}
+	if task.Stage != StageTesting || task.CantRuns != 1 {
+		t.Fatalf("stage %q, can't-runs %d, reason %q", task.Stage, task.CantRuns, task.Reason)
+	}
+	// Main's script now finds the tool its own way; the branch's predates it.
+	pushMain(t, forge, map[string]string{"check.sh": "exit 0\n"})
+	before := task.SHA
+	if err := testStep(m, task, p); err != nil {
+		t.Fatal(err)
+	}
+	main, _ := m.C.Effects.Sync(p)
+	if task.SHA == before || !strings.Contains(task.Log[len(task.Log)-1].Text, "branch brought up to date") {
+		t.Fatalf("not caught up: sha %s was %s, log %+v", task.SHA, before, task.Log)
+	}
+	if _, err := core.Git(m.C.WS.Project(p.Name), "merge-base", "--is-ancestor", main, task.SHA); err != nil {
+		t.Fatal("the new head doesn't contain main")
+	}
+	for _, a := range m.C.Person.Open() {
+		if a.Ref == "cant-run:"+task.ID {
+			t.Fatalf("the person was asked: %+v", a)
+		}
+	}
+	if err := testStep(m, task, p); err != nil {
+		t.Fatal(err)
+	}
+	if task.Stage == StageTesting || task.Stage == StageStopped || task.CantRuns != 0 {
+		t.Fatalf("after catching up: stage %q, can't-runs %d, reason %q", task.Stage, task.CantRuns, task.Reason)
 	}
 }
 
