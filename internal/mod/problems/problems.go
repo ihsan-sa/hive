@@ -103,7 +103,7 @@ func New(c *core.Core) *Module {
 		m.items[p.ID] = &p
 		m.mu.Unlock()
 	}
-	c.J.Replay(apply)
+	c.J.ReplayExcept(apply, "task.saved", "run.created")
 	c.J.Subscribe(apply)
 	c.Runs.Ops().Register(core.Op{Name: "problem", Help: `{"text": "what you ran into, what you found, how to reproduce", "where": "(optional) the part it is in"} -> posted on the Hive's problems board with your run id; {"id": "...", "also": "met it too / a clue / the cause"} adds to one; {"id": "...", "solved": "how (commit, task)"} closes one`, Fn: func(r core.Run, args json.RawMessage) (any, error) {
 		var a struct{ ID, Text, Where, Also, Solved string }

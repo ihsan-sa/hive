@@ -6,6 +6,7 @@ package core
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"io"
@@ -38,6 +39,66 @@ type Event struct {
 	At   time.Time       `json:"at"`
 	Kind string          `json:"kind"`
 	Data json.RawMessage `json:"data,omitempty"`
+}
+
+// parseEvent reads one journal line. Append writes every line as
+// {"seq":N,"at":"T","kind":"K","data":D}, and a start replays the journal
+// once per module, so that layout is read directly, leaving D for Decode to
+// check: json.Unmarshal of every line spent most of a start's CPU (13 s of
+// it on 300 MB). Any other line goes through json.Unmarshal. raw may be
+// reused once it returns, so what the Event keeps is copied; an event whose
+// kind want refuses is passed over (false) before that.
+func parseEvent(raw []byte, want func(string) bool) (Event, bool) {
+	var e Event
+	if ok, fast := fastEvent(raw, &e, want); fast {
+		return e, ok
+	}
+	e = Event{}
+	return e, json.Unmarshal(raw, &e) == nil && e.Kind != "" && (want == nil || want(e.Kind))
+}
+
+// fastEvent reads raw in Append's layout; fast is false for any other line.
+func fastEvent(raw []byte, e *Event, want func(string) bool) (ok, fast bool) {
+	rest, ok := bytes.CutPrefix(raw, []byte(`{"seq":`))
+	if !ok {
+		return false, false
+	}
+	i := 0
+	for i < len(rest) && i < 19 && rest[i] >= '0' && rest[i] <= '9' {
+		e.Seq = e.Seq*10 + int64(rest[i]-'0')
+		i++
+	}
+	if rest, ok = bytes.CutPrefix(rest[i:], []byte(`,"at":"`)); i == 0 || !ok {
+		return false, false
+	}
+	i = bytes.IndexByte(rest, '"')
+	if i < 0 || bytes.IndexByte(rest[:i], '\\') >= 0 {
+		return false, false
+	}
+	at, err := time.Parse(time.RFC3339Nano, string(rest[:i]))
+	if err != nil {
+		return false, false
+	}
+	e.At = at
+	if rest, ok = bytes.CutPrefix(rest[i+1:], []byte(`,"kind":"`)); !ok {
+		return false, false
+	}
+	i = bytes.IndexByte(rest, '"')
+	if i <= 0 || bytes.IndexByte(rest[:i], '\\') >= 0 {
+		return false, false
+	}
+	e.Kind = string(rest[:i])
+	if want != nil && !want(e.Kind) {
+		return false, true
+	}
+	switch rest = rest[i+1:]; {
+	case string(rest) == "}":
+	case bytes.HasPrefix(rest, []byte(`,"data":`)) && bytes.HasSuffix(rest, []byte("}")):
+		e.Data = json.RawMessage(bytes.Clone(rest[len(`,"data":`) : len(rest)-1]))
+	default:
+		return false, false
+	}
+	return true, true
 }
 
 // Decode unmarshals the event payload into v.
@@ -111,9 +172,9 @@ func OpenJournal(path string) (*Journal, error) {
 		return nil, err
 	}
 	j := &Journal{path: path}
-	if _, err := readFrom(path, 0, func(off int64, raw []byte) {
-		var e Event
-		if json.Unmarshal(raw, &e) != nil || e.Kind == "" {
+	if _, err := scan(path, 0, func(off int64, raw []byte) {
+		e, ok := parseEvent(raw, nil)
+		if !ok {
 			return
 		}
 		j.mark(off)
@@ -225,19 +286,38 @@ func (j *Journal) MustAppend(kind string, data any) Event {
 // another writer grew the file, the index doesn't cover it and the whole
 // file is read.
 func (j *Journal) Replay(fn func(Event), kinds ...string) error {
-	want := func(kind string) bool {
+	if len(kinds) == 0 {
+		return j.replay(fn, nil)
+	}
+	return j.replay(fn, func(kind string) bool {
 		for _, k := range kinds {
 			if pre, ok := strings.CutSuffix(k, "*"); ok && strings.HasPrefix(kind, pre) || kind == k {
 				return true
 			}
 		}
-		return len(kinds) == 0
-	}
+		return false
+	})
+}
+
+// ReplayExcept is Replay of every kind but those named, which are not read
+// at all while the index holds. Most of the journal is two kinds most
+// replays don't want (task.saved 51% of its bytes, run.created 41% on
+// 2026-10-30), and naming those is shorter, and safer as a replay's switch
+// grows, than naming every kind it does want.
+func (j *Journal) ReplayExcept(fn func(Event), skip ...string) error {
+	return j.replay(fn, func(kind string) bool { return !slices.Contains(skip, kind) })
+}
+
+// replay calls fn for the events whose kind want takes (all of them with
+// nil), from the index when it covers the file.
+func (j *Journal) replay(fn func(Event), want func(string) bool) error {
 	j.mu.Lock()
 	var at []span
-	for k, s := range j.spans {
-		if want(k) {
-			at = append(at, s...)
+	if want != nil {
+		for k, s := range j.spans {
+			if want(k) {
+				at = append(at, s...)
+			}
 		}
 	}
 	size := j.size
@@ -250,13 +330,13 @@ func (j *Journal) Replay(fn func(Event), kinds ...string) error {
 		return err
 	}
 	defer f.Close()
-	if fi, err := f.Stat(); len(kinds) == 0 || j.f == nil || err != nil || fi.Size() != size {
-		return ReadJSONL(j.path, func(raw []byte) {
-			var e Event
-			if json.Unmarshal(raw, &e) == nil && e.Kind != "" && want(e.Kind) {
+	if fi, err := f.Stat(); want == nil || j.f == nil || err != nil || fi.Size() != size {
+		_, err := scan(j.path, 0, func(_ int64, raw []byte) {
+			if e, ok := parseEvent(raw, want); ok {
 				fn(e)
 			}
 		})
+		return err
 	}
 	sort.Slice(at, func(a, b int) bool { return at[a].off < at[b].off })
 	var buf []byte
@@ -265,8 +345,7 @@ func (j *Journal) Replay(fn func(Event), kinds ...string) error {
 		if _, err := f.ReadAt(buf, s.off); err != nil {
 			return err
 		}
-		var e Event
-		if json.Unmarshal(buf, &e) == nil && e.Kind != "" {
+		if e, ok := parseEvent(buf, nil); ok {
 			fn(e)
 		}
 	}
@@ -283,9 +362,8 @@ func (j *Journal) Since(after int64) []Event {
 	}
 	j.mu.Unlock()
 	var out []Event
-	_, _ = readFrom(j.path, from, func(_ int64, raw []byte) {
-		var e Event
-		if json.Unmarshal(raw, &e) == nil && e.Kind != "" && e.Seq > after {
+	_, _ = scan(j.path, from, func(_ int64, raw []byte) {
+		if e, ok := parseEvent(raw, nil); ok && e.Seq > after {
 			out = append(out, e)
 		}
 	})
@@ -325,6 +403,48 @@ func readFrom(path string, off int64, fn func(int64, []byte)) (int64, error) {
 	r := bufio.NewReaderSize(f, 1<<16)
 	for {
 		line, err := r.ReadBytes('\n')
+		if len(line) > 0 && line[len(line)-1] == '\n' {
+			if len(line) > 1 {
+				fn(off, line[:len(line)-1])
+			}
+			off += int64(len(line))
+		}
+		if err == io.EOF {
+			return off, nil
+		}
+		if err != nil {
+			return off, err
+		}
+	}
+}
+
+// scan is readFrom without a copy of each line: fn's line is a slice of a
+// reused buffer, good only until fn returns. The journal's own reads use it,
+// copying out only what an Event keeps.
+func scan(path string, off int64, fn func(int64, []byte)) (int64, error) {
+	f, err := os.Open(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	defer f.Close()
+	if _, err := f.Seek(off, io.SeekStart); err != nil {
+		return off, err
+	}
+	r := bufio.NewReaderSize(f, 1<<20)
+	var long []byte // a line longer than r's buffer, gathered
+	for {
+		line, err := r.ReadSlice('\n')
+		if err == bufio.ErrBufferFull {
+			long = append(long, line...)
+			continue
+		}
+		if len(long) > 0 {
+			long = append(long, line...)
+			line, long = long, long[:0]
+		}
 		if len(line) > 0 && line[len(line)-1] == '\n' {
 			if len(line) > 1 {
 				fn(off, line[:len(line)-1])

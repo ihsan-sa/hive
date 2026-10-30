@@ -133,7 +133,7 @@ func New(c *core.Core, mod *modules.Registry, ag *agents.Agents) *Module {
 		m.reqs[r.ID] = &r
 		m.mu.Unlock()
 	}
-	c.J.Replay(apply)
+	c.J.ReplayExcept(apply, "task.saved", "run.created")
 	c.J.Subscribe(apply)
 	// A request's folder used to sit at risk/<id>; it now sits in its
 	// project's folder, which is covered when the project is isolated.

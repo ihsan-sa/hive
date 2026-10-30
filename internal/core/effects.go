@@ -309,7 +309,7 @@ func NewEffects(ws Workspace, j *Journal, forge Forge, sb func() (sandbox.Sandbo
 			}
 		}
 	}
-	j.Replay(apply)
+	j.ReplayExcept(apply, "task.saved", "run.created")
 	j.Subscribe(apply)
 	return e
 }

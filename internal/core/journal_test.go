@@ -1,6 +1,7 @@
 package core
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"slices"
@@ -174,5 +175,60 @@ func TestJournalReplaysKindsFromItsIndex(t *testing.T) {
 	f.Close()
 	if got := seqs("a"); len(got) != 76 || got[len(got)-1] != 999 {
 		t.Fatalf("after another writer: %d events of a, want 76 ending with its 999", len(got))
+	}
+}
+
+// A replay reads Append's own lines without json.Unmarshal; what it gets
+// must be what json.Unmarshal would give, for any line, and a line in another
+// layout still goes through json.Unmarshal.
+func TestJournalReadsItsLinesAsUnmarshalWould(t *testing.T) {
+	big := `{"text":"` + strings.Repeat("x", 3<<20) + `"}`
+	lines := []string{
+		`{"seq":1,"at":"2026-10-30T01:02:03.123456789Z","kind":"task.saved","data":{"id":"a","n":[1,2]}}`,
+		`{"seq":2,"at":"2026-10-30T01:02:03Z","kind":"hive.started"}`,
+		`{"seq":3,"at":"2026-10-30T01:02:03+02:00","kind":"run.created","data":null}`,
+		`{"seq":4,"at":"2026-10-30T01:02:03Z","kind":"chat.posted","data":"s"}`,
+		`{"kind":"x.y","seq":5,"at":"2026-10-30T01:02:03Z","data":{"a":1}}`,
+		` {"seq":6,"at":"2026-10-30T01:02:03Z","kind":"x.y","data":{}} `,
+		`{"seq":7,"at":"2026-10-30T01:02:03Z","kind":"x.y","data":{}}`,
+		`{"seq":8,"at":"2026-10-30T01:02:03Z","kind":"","data":{}}`,
+		`{"seq":9,"at":"not a time","kind":"x.y","data":{}}`,
+		`{"seq":10,"at":"2026-10-30T01:02:03Z","kind":"big.one","data":` + big + `}`,
+		`not json`,
+	}
+	for _, l := range lines {
+		var want Event
+		wantOK := json.Unmarshal([]byte(l), &want) == nil && want.Kind != ""
+		got, ok := parseEvent([]byte(l), nil)
+		if ok != wantOK || ok && (got.Seq != want.Seq || !got.At.Equal(want.At) || got.Kind != want.Kind || string(got.Data) != string(want.Data)) {
+			t.Errorf("%.80s: got %v %+v, want %v %+v", l, ok, got.Kind, wantOK, want.Kind)
+		}
+	}
+
+	path := filepath.Join(t.TempDir(), "events.jsonl")
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"+`{"seq":11,"at":"2026-10-30T01:02:03Z","kind":"torn`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	j, err := OpenJournal(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer j.Close()
+	var all, some []string
+	j.Replay(func(e Event) { all = append(all, e.Kind) })
+	j.ReplayExcept(func(e Event) {
+		some = append(some, e.Kind)
+		if e.Kind == "big.one" && string(e.Data) != big {
+			t.Errorf("a line longer than the read buffer came back %d bytes, want %d", len(e.Data), len(big))
+		}
+	}, "task.saved", "run.created")
+	if want := "task.saved hive.started run.created chat.posted x.y x.y x.y big.one"; strings.Join(all, " ") != want {
+		t.Errorf("Replay got %v, want %s", all, want)
+	}
+	if want := "hive.started chat.posted x.y x.y x.y big.one"; strings.Join(some, " ") != want {
+		t.Errorf("ReplayExcept got %v, want %s", some, want)
+	}
+	if j.Seq() != 10 {
+		t.Errorf("seq %d, want 10", j.Seq())
 	}
 }

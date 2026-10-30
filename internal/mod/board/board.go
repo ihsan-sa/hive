@@ -69,7 +69,7 @@ func Of(c *core.Core) *Module {
 		return m
 	}
 	m := &Module{C: c, at: map[string]int{}, members: map[string]map[string]bool{}, seen: map[string]int{}}
-	c.J.Replay(m.apply)
+	c.J.ReplayExcept(m.apply, "task.saved", "run.created")
 	c.J.Subscribe(m.apply)
 	m.register()
 	of[c] = m

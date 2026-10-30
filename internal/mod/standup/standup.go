@@ -50,7 +50,7 @@ func New(c *core.Core, w *work.Module, ch *chat.Module) *Module {
 		m.last[a.Chat] = e.At
 		m.mu.Unlock()
 	}
-	c.J.Replay(apply)
+	c.J.ReplayExcept(apply, "task.saved", "run.created")
 	c.J.Subscribe(apply)
 	return m
 }
