@@ -638,6 +638,8 @@ func TestMeasureDiskNamesTheRest(t *testing.T) {
 	os.WriteFile(big, make([]byte, 1<<20), 0o644)
 	os.MkdirAll(c.WS.Runs(), 0o755)
 	os.WriteFile(filepath.Join(c.WS.Runs(), "r"), make([]byte, 4096), 0o644)
+	os.MkdirAll(filepath.Join(c.WS.Temp(), "go-build1"), 0o755)
+	os.WriteFile(filepath.Join(c.WS.Temp(), "go-build1", "f"), make([]byte, 8192), 0o644)
 	d := c.Effects.MeasureDisk()
 	var sum int64
 	named := map[string]int64{}
@@ -647,6 +649,23 @@ func TestMeasureDiskNamesTheRest(t *testing.T) {
 	}
 	if named["runs"] < 4096 || named["other, most in .hive/spill"] != 1<<20 || sum > d.Total || d.Total != Size(c.WS.Root) {
 		t.Fatalf("parts %+v, total %d (walked %d)", d.Parts, d.Total, Size(c.WS.Root))
+	}
+}
+
+// What no part names in .hive/private is told by its own subfolder, not by
+// .hive/private as a whole.
+func TestTopOfLooksIntoPrivate(t *testing.T) {
+	root := filepath.FromSlash("/w")
+	for p, want := range map[string]string{
+		"/w/f":                              "",
+		"/w/a/f":                            "a",
+		"/w/.hive/spill/deep/f":             ".hive/spill",
+		"/w/.hive/private/f":                ".hive/private",
+		"/w/.hive/private/keys/r/auth.json": ".hive/private/keys",
+	} {
+		if got := topOf(root, filepath.FromSlash(p)); got != want {
+			t.Errorf("topOf(%s) = %q, want %q", p, got, want)
+		}
 	}
 }
 

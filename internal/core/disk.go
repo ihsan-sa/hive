@@ -648,6 +648,7 @@ func (e *Effects) markLive(p string, on bool) {
 // the temp homes older builds made, clean checkouts and prefetch folders a
 // crash left, the Hive's leftovers in the temp folders (pruneTemp), in
 // runs' own /tmp (Runs.pruneTmp) and in ended runs' homes (Runs.pruneHomes),
+// sooner when room is tight,
 // sandboxes' runtime folders and unread specs, and the module
 // cache once it is past its cap and no check is using it. It returns what it
 // removed.
@@ -703,10 +704,14 @@ func (e *Effects) Prune() string {
 			}
 		}
 	}
-	pruneTemp(e.ws, drop)
+	leftovers, ended := leftoverAge, homeAge
+	if tight(e.room()) {
+		leftovers, ended = tightLeftoverAge, tightHomeAge
+	}
+	pruneTemp(e.ws, leftovers, drop)
 	if e.runs != nil {
-		e.runs.pruneTmp(drop)
-		e.runs.pruneHomes(drop)
+		e.runs.pruneTmp(leftovers, drop)
+		e.runs.pruneHomes(ended, drop)
 	}
 	sandboxes := e.sweep()
 	projects, _ := os.ReadDir(e.ws.Gates())
@@ -770,8 +775,9 @@ type Room struct {
 func (e *Effects) MeasureDisk() DiskUse {
 	ws := e.ws
 	parts := []DiskPart{{Name: "agents' checkouts"}, {Name: "check homes"}, {Name: "Go module cache"},
-		{Name: "check checkouts and gates"}, {Name: "runs"}, {Name: "tools"}, {Name: "Go build caches"}, {Name: "runs' homes and /tmp"}}
-	at := map[string]int{ws.CheckHomes(): 1, ws.GoModCache(): 2, ws.Gates(): 3, ws.Runs(): 4, ws.Tools(): 5, filepath.Join(ws.Cache(), "gobuild"): 6, filepath.Join(ws.Private(), "runs"): 7}
+		{Name: "check checkouts and gates"}, {Name: "runs"}, {Name: "tools"}, {Name: "Go build caches"}, {Name: "runs' homes and /tmp"},
+		{Name: "the daemon's temp folder"}}
+	at := map[string]int{ws.CheckHomes(): 1, ws.GoModCache(): 2, ws.Gates(): 3, ws.Runs(): 4, ws.Tools(): 5, filepath.Join(ws.Cache(), "gobuild"): 6, filepath.Join(ws.Private(), "runs"): 7, ws.Temp(): 8}
 	projects, _ := os.ReadDir(ws.Projects())
 	for _, p := range projects {
 		at[ws.Checkouts(p.Name())] = 0
@@ -807,7 +813,7 @@ func (e *Effects) MeasureDisk() DiskUse {
 	if top != "" {
 		parts = append(parts, DiskPart{Name: "other, most in " + top, Bytes: other[top]})
 	}
-	if ms, _ := filepath.Glob(filepath.Join(os.TempDir(), "hive-check-home-*")); len(ms) > 0 {
+	if ms, _ := filepath.Glob(filepath.Join(os.TempDir(), "hive-check-home-*")); len(ms) > 0 && filepath.Clean(os.TempDir()) != filepath.Clean(ws.Temp()) {
 		for _, m := range ms {
 			parts[1].Bytes += Size(m)
 		}
@@ -837,17 +843,24 @@ func (e *Effects) room() []Room {
 // roomOf is statRoom, swapped in tests.
 var roomOf = statRoom
 
-// topOf is the folder two levels under root that holds p ("" for a file
-// directly in root), as a slash path.
+// topOf is the folder two levels under root that holds p, three in
+// .hive/private, which holds many kinds of thing (on 10-30 the clean's line
+// said only ".hive/private 627.9 GB"); "" for a file directly in root. It is
+// a slash path.
 func topOf(root, p string) string {
 	rel, err := filepath.Rel(root, filepath.Dir(p))
 	if err != nil || rel == "." {
 		return ""
 	}
-	if parts := strings.SplitN(filepath.ToSlash(rel), "/", 3); len(parts) > 2 {
-		rel = parts[0] + "/" + parts[1]
+	rel = filepath.ToSlash(rel)
+	n := 2
+	if rel == ".hive/private" || strings.HasPrefix(rel, ".hive/private/") {
+		n = 3
 	}
-	return filepath.ToSlash(rel)
+	if parts := strings.SplitN(rel, "/", n+1); len(parts) > n {
+		rel = strings.Join(parts[:n], "/")
+	}
+	return rel
 }
 
 // Disk is the last measurement (zero before the first).
