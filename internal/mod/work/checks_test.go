@@ -1628,3 +1628,58 @@ func testStep(m *Module, task *Task, p core.Project) error {
 	m.mu.Unlock()
 	return m.test(task, p)
 }
+
+// Where main's project.json names forge_tests, the forge's run on the exact
+// head is the test: the testing stage runs nothing here (a local test that
+// would fail never runs), and the merge waits for those checks to pass, even
+// with no required_checks list, before it merges with no local run recorded.
+func TestForgeTestsReplaceTheLocalTest(t *testing.T) {
+	cfg := map[string]string{".hive/project.json": `{"test": "false", "forge_tests": ["ci"]}`}
+	m, task, p, f := gateRigSeeded(t, false, cfg, map[string]string{"feature.txt": "y"})
+	if err := m.test(task, p); err != nil {
+		t.Fatal(err)
+	}
+	m.mu.Lock()
+	_, queued := m.testRuns[task.ID]
+	m.mu.Unlock()
+	if queued || task.Stage != StageMerging || !strings.Contains(task.Log[len(task.Log)-1].Text, "the forge's (ci)") {
+		t.Fatalf("queued %v, stage %q, log %+v", queued, task.Stage, task.Log)
+	}
+	if _, ok := m.C.Effects.GetCheck(p.Name, task.SHA, "test"); ok {
+		t.Fatal("a local test ran")
+	}
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageMerging || !strings.Contains(task.Reason, "ci") || prState(t, f, task.PR.Number) != "OPEN" {
+		t.Fatalf("no forge run yet: stage %q, reason %q", task.Stage, task.Reason)
+	}
+	f.SetChecks(p.Repo, task.SHA, core.CheckRun{Name: "lint", State: core.CheckPass})
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageMerging || prState(t, f, task.PR.Number) != "OPEN" {
+		t.Fatalf("the forge's tests not reported: stage %q, reason %q", task.Stage, task.Reason)
+	}
+	f.SetChecks(p.Repo, task.SHA, core.CheckRun{Name: "lint", State: core.CheckPass}, core.CheckRun{Name: "ci", State: core.CheckPass})
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageMerged || prState(t, f, task.PR.Number) != "MERGED" {
+		t.Fatalf("stage %q, reason %q once the forge's tests passed", task.Stage, task.Reason)
+	}
+}
+
+// The core gate holds the same line on its own: with forge_tests on main it
+// refuses a head whose named check hasn't passed, local run or not.
+func TestForgeTestsCoreGate(t *testing.T) {
+	cfg := map[string]string{".hive/project.json": `{"test": "false", "forge_tests": ["ci"]}`}
+	m, task, p, f := gateRigSeeded(t, false, cfg, map[string]string{"feature.txt": "y"})
+	toMerging(t, m, task, p)
+	main, err := m.C.Effects.Sync(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := core.MergeRequest{Project: p, PR: task.PR.Number, SHA: task.SHA, Main: main, Subject: "x", Task: task.ID}
+	if _, err := m.C.Effects.Merge(req); err == nil || !strings.Contains(err.Error(), "ci") {
+		t.Fatalf("merged with no forge test run: %v", err)
+	}
+	f.SetChecks(p.Repo, task.SHA, core.CheckRun{Name: "ci", State: core.CheckPass})
+	if _, err := m.C.Effects.Merge(req); err != nil {
+		t.Fatal(err)
+	}
+}

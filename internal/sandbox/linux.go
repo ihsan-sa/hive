@@ -130,6 +130,7 @@ func Exec(specPath string) int {
 			errf = f
 		}
 	}
+	level := 0 // the autogroups' level (autogroup_linux.go); 0 leaves them
 	if s.Nice > 0 {
 		// This launcher, the init it starts and the command inherit it, so a
 		// check or a worker's turn yields the cpu to a lead's. Failing to is
@@ -137,6 +138,8 @@ func Exec(specPath string) int {
 		if err := lowerPriority(s.Nice); err != nil {
 			fmt.Fprintln(errf, "sandbox: running at the daemon's priority, not", s.Nice, "under it:", err)
 		}
+		level = ownLevel()
+		lowerOwnAutogroup(level)
 	}
 	fail := func(err error) int { fmt.Fprintln(errf, "sandbox:", err); return 125 }
 	if s.Tmp != "" {
@@ -184,7 +187,7 @@ func Exec(specPath string) int {
 		defer ServeEgress(ln, s.Allow, s.Local, refused).Close()
 	}
 	for _, t := range s.Tools {
-		p, err := findTool(t)
+		p, err := findTool(t, s)
 		if err != nil {
 			return fail(err)
 		}
@@ -246,7 +249,12 @@ func Exec(specPath string) int {
 		signal.Notify(sig, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
 		t := time.NewTicker(time.Second)
 		defer t.Stop()
+		var swept time.Time
 		for {
+			if level > 0 && time.Since(swept) >= autogroupEvery {
+				lowerAutogroups(cmd.Process.Pid, level)
+				swept = time.Now()
+			}
 			select {
 			case <-stop:
 				return
@@ -279,12 +287,23 @@ func openIn(path string) (*os.File, error) {
 	return os.Open(path)
 }
 
-func findTool(t string) (string, error) {
-	p, err := lookTool(t)
-	if err != nil {
-		return "", err
+// findTool resolves tool t for spec s: by LookTool, with the bins of the
+// tools folder s mounts as a last resort.
+func findTool(t string, s Spec) (string, error) {
+	if !filepath.IsAbs(t) {
+		var extra []string
+		for _, m := range s.Mounts {
+			if m.Inside == ToolsInside {
+				extra = append(extra, ToolBins(m.Host, filepath.Join)...)
+			}
+		}
+		p, err := LookTool(t, extra...)
+		if err != nil {
+			return "", err
+		}
+		t = p
 	}
-	return filepath.EvalSymlinks(p)
+	return filepath.EvalSymlinks(t)
 }
 
 // interpreters are the host's own runtimes a command may call by name. One
@@ -309,7 +328,7 @@ func hostInterpreters(a *initArgs) {
 	}
 	var dirs []string
 	for _, n := range interpreters {
-		p, err := findTool(n)
+		p, err := findTool(n, Spec{})
 		if err != nil || filepath.Base(p) == "snap" {
 			continue
 		}

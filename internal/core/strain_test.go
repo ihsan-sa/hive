@@ -445,15 +445,15 @@ func (f writerFunc) Write(p []byte) (int, error) { return f(p) }
 // watched by none of them, whatever the limits say; a reading counts only
 // when its limit is on and its file is there.
 func TestWatched(t *testing.T) {
-	if watched(t.TempDir(), 1024, 10, 40, 1) {
+	if watched(t.TempDir(), 1024, 10, 40, 80, 1) {
 		t.Error("no readings to read, yet watched")
 	}
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "loadavg"), []byte("1.00 1.00 1.00 1/100 1\n"), 0o644)
-	if !watched(dir, 1024, 10, 40, 1) {
+	if !watched(dir, 1024, 10, 40, 0, 1) {
 		t.Error("loadavg is there and load_max on, yet not watched")
 	}
-	if watched(dir, 1024, 10, 40, 0) {
+	if watched(dir, 1024, 10, 40, 0, 0) {
 		t.Error("only loadavg is there and load_max is off, yet watched")
 	}
 }
@@ -642,5 +642,85 @@ func TestStrainedCappedElsewhere(t *testing.T) {
 		if (got != "") != c.held {
 			t.Errorf("%s: %q, want held %v", c.name, got, c.held)
 		}
+	}
+}
+
+// Each step of the ramp goes to the run first in line, not the one that asks
+// first after it: a worker sent back to its task, then the oldest. On 10-29
+// seven sent-back workers took no turn in 4-7h while newer runs took 46.
+func TestRampGoesInLine(t *testing.T) {
+	now := time.Now()
+	rs := &Runs{heldAt: now, rampLast: now} // a turn just started
+	old := Run{RunSpec: RunSpec{ID: "w-old"}, Created: now.Add(-3 * time.Hour)}
+	back := Run{RunSpec: RunSpec{ID: "w-back"}, Created: now.Add(-2 * time.Hour), Returned: true}
+	fresh := Run{RunSpec: RunSpec{ID: "w-new"}, Created: now.Add(-time.Minute)}
+	waiting := []Run{fresh, old, back} // the newest asks first, as Tick lists them
+	var started []string
+	for tick := time.Duration(0); tick < 4*rampStep && len(waiting) > 0; tick += time.Second {
+		var still []Run
+		for _, r := range waiting {
+			if rs.ramp(r, now.Add(tick)) {
+				still = append(still, r)
+			} else {
+				started = append(started, r.ID)
+			}
+		}
+		waiting = still
+	}
+	if got := strings.Join(started, " "); got != "w-back w-old w-new" {
+		t.Errorf("the ramp started %q, want the sent-back worker, then the oldest", got)
+	}
+	// One first in line that stops asking (started elsewhere, ended) holds
+	// the step only until rampSeen passes.
+	rs = &Runs{heldAt: now, rampLast: now}
+	if !rs.ramp(old, now) {
+		t.Fatal("w-old started inside the step")
+	}
+	rs.rampLast = now.Add(-rampStep) // the step is open
+	if !rs.ramp(fresh, now.Add(time.Second)) {
+		t.Fatal("w-new went ahead of w-old, which asked lately")
+	}
+	if rs.ramp(fresh, now.Add(rampSeen+2*time.Second)) {
+		t.Error("w-new still waits on w-old, which stopped asking")
+	}
+}
+
+// IO pressure is a strain on its own, whatever the load: its "some avg10"
+// over io_pressure_max or its "full avg10" over io_full_max; 0 turns either
+// off, and with no /proc/pressure/io nothing holds. The readings of 10-29
+// 13:2xZ (some avg10 87%) hold at the defaults.
+func TestIOStrained(t *testing.T) {
+	proc := func(some, full string) string {
+		dir := t.TempDir()
+		os.MkdirAll(filepath.Join(dir, "pressure"), 0o755)
+		os.WriteFile(filepath.Join(dir, "pressure", "io"), []byte("some avg10="+some+" avg60=0.00 avg300=82.00 total=0\nfull avg10="+full+" avg60=0.00 avg300=0.00 total=0\n"), 0o644)
+		return dir
+	}
+	for _, c := range []struct {
+		name, some, full string
+		someMax, fullMax float64
+		want             string
+	}{
+		{"healthy", "45.00", "20.00", 80, 50, ""},
+		{"saturated (10-29)", "87.00", "40.00", 80, 50, IOReason + " (some avg10 87%, limit 80%)"},
+		{"every task stalled", "70.00", "61.50", 80, 50, IOReason + " (full avg10 62%, limit 50%)"},
+		{"full off", "70.00", "61.50", 80, 0, ""},
+		{"both off", "99.00", "90.00", 0, 0, ""},
+	} {
+		if got := ioStrained(proc(c.some, c.full), c.someMax, c.fullMax); got != c.want {
+			t.Errorf("%s: %q, want %q", c.name, got, c.want)
+		}
+	}
+	if got := ioStrained(t.TempDir(), 80, 50); got != "" {
+		t.Errorf("no pressure file: %q", got)
+	}
+	dir := t.TempDir()
+	os.MkdirAll(filepath.Join(dir, "pressure"), 0o755)
+	os.WriteFile(filepath.Join(dir, "pressure", "io"), []byte("some avg10=1.00 avg60=0.00 avg300=0.00 total=0\n"), 0o644)
+	if !watched(dir, 0, 0, 0, 80, 0) {
+		t.Error("pressure/io is there and io_pressure_max on, yet not watched")
+	}
+	if watched(dir, 0, 0, 0, 0, 0) {
+		t.Error("io_pressure_max off, yet watched")
 	}
 }

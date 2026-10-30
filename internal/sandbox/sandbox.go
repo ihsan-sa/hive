@@ -15,9 +15,11 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/user"
 	"path"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"time"
 
@@ -174,6 +176,58 @@ func ToolBins(folder string, join func(...string) string) []string {
 	return out
 }
 
+// UserBinDirs are where a person's own installs put programs (claude's
+// installer, pipx and uv in ~/.local/bin; go install in ~/go/bin), which a
+// service's PATH can leave out: systemd's default for a unit started at boot
+// has none of them.
+func UserBinDirs(home string) []string {
+	dirs := []string{"/usr/local/bin"}
+	if home != "" {
+		dirs = append([]string{filepath.Join(home, ".local", "bin"), filepath.Join(home, "bin"), filepath.Join(home, "go", "bin")}, dirs...)
+	}
+	return dirs
+}
+
+// homeDir is the person's home: $HOME, else the account's own.
+func homeDir() string {
+	if h, _ := os.UserHomeDir(); h != "" {
+		return h
+	}
+	if u, err := user.Current(); err == nil {
+		return u.HomeDir
+	}
+	return ""
+}
+
+// LookTool finds program name on PATH, then in UserBinDirs, the folder the
+// running hive is in and extra (the Hive's tools bins), so a tool doesn't go
+// missing when the daemon runs with a thinner PATH than the person's shell.
+// Its error names every dir it searched.
+func LookTool(name string, extra ...string) (string, error) {
+	if p, err := exec.LookPath(name); err == nil {
+		if abs, err := filepath.Abs(p); err == nil {
+			return abs, nil
+		}
+	}
+	dirs := UserBinDirs(homeDir())
+	if exe, err := os.Executable(); err == nil {
+		dirs = append(dirs, filepath.Dir(exe))
+	}
+	dirs = append(dirs, extra...)
+	var searched []string
+	for _, d := range dirs {
+		if d == "" || slices.Contains(searched, d) {
+			continue
+		}
+		searched = append(searched, d)
+		p := filepath.Join(d, name)
+		if fi, err := os.Stat(p); err == nil && !fi.IsDir() && (runtime.GOOS == "windows" || fi.Mode()&0o111 != 0) {
+			return p, nil
+		}
+	}
+	return "", fmt.Errorf("tool %q not found on this machine (searched PATH=%s and %s)", name, os.Getenv("PATH"), strings.Join(searched, ", "))
+}
+
 // pathDirs are what a command on the host's own paths (bare, Seatbelt) gets
 // on PATH: the bin dirs of a mounted tools folder, then the exposed tools'
 // dirs, so an installed runtime wins over an older one beside hive on the host.
@@ -287,23 +341,12 @@ const insideBins = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 const ProxyPort = "3128"
 
 // lookTool finds tool t on this machine: an absolute path as it is, a bare
-// name on PATH or else in ~/.local/bin or /usr/local/bin, where an installer
-// puts it without PATH knowing.
+// name by LookTool.
 func lookTool(t string) (string, error) {
 	if filepath.IsAbs(t) {
 		return t, nil
 	}
-	if p, err := exec.LookPath(t); err == nil {
-		if abs, err := filepath.Abs(p); err == nil {
-			return abs, nil
-		}
-	}
-	for _, d := range []string{filepath.Join(os.Getenv("HOME"), ".local", "bin"), "/usr/local/bin"} {
-		if _, err := os.Stat(filepath.Join(d, t)); err == nil {
-			return filepath.Join(d, t), nil
-		}
-	}
-	return "", fmt.Errorf("tool %q not found on this machine", t)
+	return LookTool(t)
 }
 
 // AbsTools names each of tools by the absolute path this machine finds it

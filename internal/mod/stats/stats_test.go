@@ -1,6 +1,7 @@
 package stats
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -83,5 +84,37 @@ func TestViewIsACopy(t *testing.T) {
 	v.All.Runs["worker"] = 99
 	if tl.View(at).All.Runs["worker"] != 1 {
 		t.Fatal("the view shares the tally's map")
+	}
+}
+
+// Peers are counted where they meet: worker-to-worker messages (a lead's
+// count nothing), the pairs the Hive introduced and those of them that then
+// talked (once a pair), and the runs a finish account credits.
+func TestPeerFigures(t *testing.T) {
+	tl := NewTally()
+	at := time.Date(2026, 10, 27, 9, 0, 0, 0, time.UTC)
+	ev := func(kind string, data any) {
+		raw, err := json.Marshal(data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tl.Apply(core.Event{At: at, Kind: kind, Data: raw})
+	}
+	for _, r := range []core.RunSpec{{ID: "w-a", Role: "worker"}, {ID: "w-b", Role: "worker"}, {ID: "w-c", Role: "worker"}, {ID: "lead", Role: "lead"}} {
+		ev("run.created", r)
+	}
+	ev("work.met", map[string]any{"task": "b", "run": "w-b", "with": []map[string]any{{"task": "a", "run": "w-a"}}})
+	ev("work.met", map[string]any{"task": "a", "run": "w-a", "with": []map[string]any{{"task": "b", "run": "w-b"}}}) // the same pair
+	ev("msg.sent", map[string]string{"from": "w-a", "to": "w-b", "text": "I change cap()"})
+	ev("msg.sent", map[string]string{"from": "w-b", "to": "w-a", "text": "fine"})
+	ev("msg.sent", map[string]string{"from": "w-c", "to": "w-a", "text": "unmet"})
+	ev("msg.sent", map[string]string{"from": "lead", "to": "w-a", "text": "not a peer"})
+	ev("run.finish", map[string]any{"id": "w-a", "finish": core.Finish{Status: "done", Account: "Did it.\n\nHelped-by: w-261027-090100-4c83104837, lead-lead-83757baacd\nhelped by nobody here"}})
+	v := tl.View(at)
+	if a := v.All; a.Peer != 3 || a.Met != 1 || a.Talked != 1 || a.Helped != 2 {
+		t.Fatalf("all: peer %d met %d talked %d helped %d, want 3 1 1 2", a.Peer, a.Met, a.Talked, a.Helped)
+	}
+	if v.Hour.Peer != 3 || v.Hour.Helped != 2 {
+		t.Fatalf("hour %+v", v.Hour)
 	}
 }

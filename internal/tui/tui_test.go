@@ -535,6 +535,36 @@ func TestUpdateNoticeShowsOnce(t *testing.T) {
 	}
 }
 
+// Long notes show whole: a line past the pane wraps, notes past its height
+// scroll to the end, and an escape an older version journaled raw never
+// reaches the screen.
+func TestUpdateNoticeShowsLongNotesWhole(t *testing.T) {
+	m := testModel(100, 24)
+	st := sample()
+	long := "v0.1.4: https://github.com/me/hive/releases/tag/v0.1.4\n" + strings.Repeat("a long line of notes that runs past the edge of the screen ", 5) + "WRAPPED"
+	for i := range 40 {
+		long += fmt.Sprintf("\r\nline %d", i)
+	}
+	st.Updated = &api.Updated{Seq: 3, To: "v0.1.4", Notes: long + "\n\x1b]0;owned\x07THE END"}
+	m.Update(stateMsg{st: st})
+	view := m.View()
+	checkWidth(t, view, 100, 24, "long update notice")
+	if !strings.Contains(view, "WRAPPED") || strings.Contains(view, "THE END") || !strings.Contains(view, "lines 1–") {
+		t.Fatalf("a line clipped rather than wrapped, or no word of more:\n%s", view)
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeySpace})
+	m.Update(tea.KeyMsg{Type: tea.KeyEnd})
+	view = m.View()
+	checkWidth(t, view, 100, 24, "long update notice at its end")
+	if !strings.Contains(view, `\x1b]0;owned\x07THE END`) || strings.ContainsAny(view, "\a\r") || !strings.Contains(view, "Updated to v0.1.4") {
+		t.Fatalf("can't scroll to the end of the notes, or an escape reached the screen:\n%s", view)
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if view := m.View(); strings.Contains(view, "Updated to v0.1.4") {
+		t.Fatalf("notice still up after esc:\n%s", view)
+	}
+}
+
 // An update that installed an unsigned release says so in its notice.
 func TestUpdateNoticeSaysUnsigned(t *testing.T) {
 	m := testModel(100, 30)
