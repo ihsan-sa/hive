@@ -33,7 +33,6 @@ import (
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/agents"
-	"github.com/ihsan-sa/hive-standalone-build/internal/mod/board"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/modules"
 )
 
@@ -154,10 +153,9 @@ func New(c *core.Core, mod *modules.Registry, ag *agents.Agents) *Module {
 	// A warden that asks an agent ends its turn to wait for the reply, so it
 	// idles rather than going quiet, which Tick would read as failing. It
 	// waits only once the message is sent, so a failed send never leaves it
-	// waiting on a reply that won't come. The "message" op is the board's and
-	// Register replaces by name, so the board registers it first (board.Of);
-	// a test on the app's wiring (internal/app) pins the order.
-	board.Of(c)
+	// waiting on a reply that won't come. The "message" op comes from core and
+	// Register replaces by name, so this must run after core registers it; a
+	// test on the app's wiring (internal/app) pins the order.
 	for _, op := range ops.List() {
 		if op.Name != "message" {
 			continue
