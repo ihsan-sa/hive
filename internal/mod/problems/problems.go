@@ -39,6 +39,9 @@ type Problem struct {
 	Notes   []Note    `json:"notes,omitempty"`
 	Solved  string    `json:"solved,omitempty"` // how, once solved
 	Last    time.Time `json:"last"`             // the latest word on it
+	// Standing: a module's standing report (Standing), kept current by it
+	// and solved when it clears, so it never fades from the briefs.
+	Standing bool `json:"standing,omitempty"`
 }
 
 // Open says whether the problem still stands.
@@ -146,15 +149,42 @@ func cmpOr(a, b string) string {
 
 // Post puts a new problem on the board from run r.
 func (m *Module) Post(r core.Run, where, text string) (Problem, error) {
+	return m.post(r, where, text, false)
+}
+
+func (m *Module) post(r core.Run, where, text string, standing bool) (Problem, error) {
 	text = strings.TrimSpace(text)
 	if text == "" {
 		return Problem{}, errors.New("empty problem: say what you ran into and what you found")
 	}
 	now := time.Now().UTC()
 	p := Problem{ID: "p-" + core.NewID(), At: now, Last: now, Run: r.ID, Role: r.Role, Name: r.Name, Project: r.Project,
-		Where: core.Clip(strings.TrimSpace(where), 80), Text: core.Clip(text, 2000)}
+		Where: core.Clip(strings.TrimSpace(where), 80), Text: core.Clip(text, 2000), Standing: standing}
 	_, err := m.C.J.Append("problem.saved", p)
 	return p, err
+}
+
+// Standing keeps run r's one open problem under where in r.Project: posted
+// when none is open, its text replaced when it says something new, and
+// solved when text is "" (a module's standing report, such as improve's
+// quarantined tests).
+func (m *Module) Standing(r core.Run, where, text string) error {
+	text = strings.TrimSpace(text)
+	open := m.List(func(p Problem) bool { return p.Open() && p.Run == r.ID && p.Project == r.Project && p.Where == where })
+	switch {
+	case len(open) == 0 && text == "":
+		return nil
+	case len(open) == 0:
+		_, err := m.post(r, where, text, true)
+		return err
+	case text == "":
+		_, err := m.save(r, open[0].ID, func(p *Problem) { p.Solved = "nothing stands any more (" + r.ID + ")" })
+		return err
+	case open[0].Text == core.Clip(text, 2000):
+		return nil
+	}
+	_, err := m.save(r, open[0].ID, func(p *Problem) { p.Text = core.Clip(text, 2000) })
+	return err
 }
 
 // Add puts run r's word on problem id.
@@ -307,7 +337,7 @@ func (m *Module) Brief(role, project string) string {
 	if role == "sweep" {
 		cut = time.Time{} // it files the ones open long with no fix
 	}
-	list := m.List(func(p Problem) bool { return p.Open() && m.visible(p, project) && p.Last.After(cut) })
+	list := m.List(func(p Problem) bool { return p.Open() && m.visible(p, project) && (p.Standing || p.Last.After(cut)) })
 	if len(list) == 0 {
 		return ""
 	}

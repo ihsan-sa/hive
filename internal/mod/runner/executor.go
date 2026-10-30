@@ -26,8 +26,10 @@ const RoomWait = 5 * time.Second
 const noRoomFor = 15 * time.Second
 
 // roomFor is how long a "room on <runner>" stands, so the work queue's
-// question and the launch that follows it ask once. A turn handed over
-// spends it, so the next launch asks again; the module still decides at
+// question (Room) and the launch that follows it ask once. Executor spends
+// it as it returns it, whether or not the turn then starts: the module
+// counts each yes as one turn handed over, so two launches in one window
+// never go on one yes; the next asks again. The module still decides at
 // `turn`, and runs the turn here when its runner has filled since.
 const roomFor = 5 * time.Second
 
@@ -42,42 +44,55 @@ type roomAnswer struct {
 // as a sandbox that hands the turn's spec to it, and the runner it named.
 // A module serves the hook `executor` by answering `<exec> room` (exit 0
 // and print {"runner": "<name>"}) and `<exec> turn --spec <file>`.
-func (r *Runner) Executor() (sandbox.Sandbox, string) { return r.executor("executor") }
+func (r *Runner) Executor() (sandbox.Sandbox, string) { return r.executor("executor", true) }
+
+// Room says whether an executor module has room for a turn now, without
+// spending the answer: the launch that follows takes it with Executor.
+func (r *Runner) Room() bool { ex, _ := r.executor("executor", false); return ex != nil }
 
 // CheckExecutor is Executor for a check, from a module whose manifest lists
 // the hook `checks`: it says its `turn` runs a check's spec to its end and
 // brings back its output (the core reads the check's exit from the output,
 // never from `turn`'s own code). A module with the `executor` hook alone is
 // handed turns, not checks.
-func (r *Runner) CheckExecutor() (sandbox.Sandbox, string) { return r.executor("checks") }
+func (r *Runner) CheckExecutor() (sandbox.Sandbox, string) { return r.executor("checks", true) }
 
-func (r *Runner) executor(hook string) (sandbox.Sandbox, string) {
+// executor finds a module with room for hook; take spends the yes it went on.
+func (r *Runner) executor(hook string, take bool) (sandbox.Sandbox, string) {
 	for _, m := range r.Mods.List() {
 		name := filepath.Base(m.Dir)
 		if len(m.Exec) == 0 || !slices.Contains(m.Hooks, hook) || r.Status(name) != "running" {
 			continue
 		}
 		argv, env := Argv(m), Env(r.C.WS, name)
+		// A yes is read and, when taken, spent under one lock, so two
+		// launches beside each other never go on the same one.
 		r.mu.Lock()
 		a := r.rooms[name]
+		fresh := time.Now().Before(a.until)
+		if fresh && take && a.where != "" {
+			delete(r.rooms, name)
+		}
 		r.mu.Unlock()
-		if time.Now().After(a.until) {
+		if !fresh {
 			a.where, _ = room(argv, env, m.Dir)
 			a.until = time.Now().Add(noRoomFor)
 			if a.where != "" {
 				a.until = time.Now().Add(roomFor)
 			}
-			r.mu.Lock()
-			if r.rooms == nil {
-				r.rooms = map[string]roomAnswer{}
+			if a.where == "" || !take { // a yes taken now is spent already
+				r.mu.Lock()
+				if r.rooms == nil {
+					r.rooms = map[string]roomAnswer{}
+				}
+				r.rooms[name] = a
+				r.mu.Unlock()
 			}
-			r.rooms[name] = a
-			r.mu.Unlock()
 		}
-		if a.where != "" {
-			spent := func() { r.mu.Lock(); delete(r.rooms, name); r.mu.Unlock() }
-			return &sandbox.Delegate{Module: name, Where: a.where, Argv: argv, Env: env, Dir: m.Dir, Started: spent}, a.where
+		if a.where == "" {
+			continue
 		}
+		return &sandbox.Delegate{Module: name, Where: a.where, Argv: argv, Env: env, Dir: m.Dir}, a.where
 	}
 	return nil, ""
 }

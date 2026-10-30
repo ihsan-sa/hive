@@ -157,7 +157,36 @@ func TestBoardFadesAndQuorumRanks(t *testing.T) {
 	if !strings.Contains(m.Brief("sweep", "hive"), old.ID) {
 		t.Fatal("the sweep doesn't see the faded problem")
 	}
-	if got := m.List(func(p Problem) bool { return p.Open() }); len(got) != 3 {
-		t.Fatalf("problems lists %d open, want 3", len(got))
+	// A module's standing report is current while it stands, however old.
+	m.Standing(core.Run{ID: "improve", Role: "module", Project: "hive"}, "quarantined tests", "TestA")
+	st := m.List(func(p Problem) bool { return p.Standing })[0]
+	st.Last = time.Now().Add(-48 * time.Hour)
+	m.C.J.Append("problem.saved", st)
+	if !strings.Contains(m.Brief("worker", "hive"), st.ID) {
+		t.Fatal("a standing problem faded from the brief")
+	}
+	if got := m.List(func(p Problem) bool { return p.Open() }); len(got) != 4 {
+		t.Fatalf("problems lists %d open, want 4", len(got))
+	}
+}
+
+// A standing problem is one entry: posted once, rewritten only when its text
+// changes, and solved when it is cleared.
+func TestStandingIsOneEntry(t *testing.T) {
+	_, m := open(t)
+	r := core.Run{ID: "improve", Role: "module", Project: "p"}
+	m.Standing(r, "quarantined tests", "")
+	m.Standing(r, "quarantined tests", "TestA")
+	m.Standing(r, "quarantined tests", "TestA")
+	m.Standing(r, "quarantined tests", "TestA, TestB")
+	list := m.List(nil)
+	if len(list) != 1 || list[0].Text != "TestA, TestB" || !list[0].Open() {
+		t.Fatalf("board %+v", list)
+	}
+	m.Standing(r, "quarantined tests", "")
+	m.Standing(r, "quarantined tests", "TestC")
+	list = m.List(nil)
+	if len(list) != 2 || list[1].Open() || !list[0].Open() || list[0].Text != "TestC" {
+		t.Fatalf("board %+v", list)
 	}
 }

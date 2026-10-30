@@ -476,6 +476,9 @@ type Runs struct {
 	// CheckExecutor is the same for a check the check line would make wait,
 	// from a module that says it takes checks.
 	CheckExecutor func() (sandbox.Sandbox, string)
+	// Room says whether Executor would hand a turn over now, without
+	// spending the yes it would go on (each Executor call spends one).
+	Room func() bool
 	// Admit says why a run's next turn waits on a module, or "": the work
 	// module's pace for a worker sent back to its task (Returned).
 	Admit func(Run) string
@@ -2690,10 +2693,14 @@ func (rs *Runs) renewedMidTurn(r Run, res *harness.Result) bool {
 	return false
 }
 
-// Elsewhere says whether an executor module has room for a turn now.
+// Elsewhere says whether an executor module has room for a turn now; it
+// asks Room, so the launch that follows still finds the yes unspent.
 func (rs *Runs) Elsewhere() bool {
-	ex, _ := rs.executor()
-	return ex != nil
+	if rs.Room == nil {
+		ex, _ := rs.executor()
+		return ex != nil
+	}
+	return rs.canHandOver() && rs.Room()
 }
 
 // executor returns an executor module with room for a turn this machine is
@@ -2705,13 +2712,17 @@ func (rs *Runs) executor() (sandbox.Sandbox, string) { return rs.handOver(rs.Exe
 func (rs *Runs) checkExecutor() (sandbox.Sandbox, string) { return rs.handOver(rs.CheckExecutor) }
 
 func (rs *Runs) handOver(ex func() (sandbox.Sandbox, string)) (sandbox.Sandbox, string) {
-	if ex == nil {
-		return nil, ""
-	}
-	if sb, err := rs.sandbox(); err != nil || !sb.Isolated() {
+	if ex == nil || !rs.canHandOver() {
 		return nil, ""
 	}
 	return ex()
+}
+
+// canHandOver says whether the local sandbox is one whose spec another
+// machine can run.
+func (rs *Runs) canHandOver() bool {
+	sb, err := rs.sandbox()
+	return err == nil && sb.Isolated()
 }
 
 // RunPath is where a run's agent sees its run dir ($HIVE_RUN).
