@@ -144,7 +144,7 @@ func New(c *core.Core, mod *modules.Registry, ag *agents.Agents) *Module {
 		}
 	}
 	ops := c.Runs.Ops()
-	ops.Register(core.Op{Name: "warden", Help: `{"want","why","steps","tier":"T1|T2|T3","gain":"(optional) large"} -> only for money, credentials, publishing private details, opening the machine, something outward in the person's name, deleting repos or history, or a step your sandbox can't take (a path outside it goes to a warden, another machine to the person); anything else comes back as yours to do yourself`, Fn: m.opRequest})
+	ops.Register(core.Op{Name: "warden", Help: `{"want","why","steps","gain":"(optional) large"} -> only for money, credentials, publishing private details, opening the machine, something outward in the person's name, deleting repos or history (a tribunal's), or a step on another machine (the person's); anything else comes back as yours to do yourself`, Fn: m.opRequest})
 	ops.Register(core.Op{Name: "decide", Help: `{"decision":"do|safer|decline|tribunal|person","reason","script":"exactly what runs (do, tribunal; person if you have one)","gain":"(optional) large","share":"(optional) output: the script only reads, so what it prints goes back to the asker, secret-looking lines withheld"}`, Fn: m.opDecide})
 	ops.Register(core.Op{Name: "requests", Help: `{} -> recent requests past the sandbox: who asked, what, why, where each stands`, Fn: m.opRequests})
 	ops.Register(core.Op{Name: "install_module", Help: `{"url"} or {"project"}: installs the module at once (a module built as a project of its own installs from it); you hear back when it is in`, Fn: m.opInstall})
@@ -445,7 +445,6 @@ func (m *Module) opRequest(r core.Run, args json.RawMessage) (any, error) {
 	if strings.TrimSpace(a.Want) == "" {
 		return nil, errors.New("say what you need (want)")
 	}
-	tier := core.Tier(a.Tier)
 	cfg := m.C.WS.LoadConfig()
 	// Routing reads the ask's words, so a mention it rules out doesn't count;
 	// whatever then runs meets CeilingGuard, which counts every mention. An
@@ -456,41 +455,29 @@ func (m *Module) opRequest(r core.Run, args json.RawMessage) (any, error) {
 	if ms := core.AskMentions(a.Want, a.Why, a.Steps); ceiling != "" && len(ms) > 0 && core.FloorHit(cfg.Floor, a.Want, a.Why, a.Steps) == "" {
 		held = m.yesFor(r.Project, cfg.Floor, "", func(_ []string, y Request) bool { return covers(core.ScriptMentions(y.Script), ms) }) != nil
 	}
-	// Wardens only for what is outside the hive user or irreversible: the
-	// ceiling's list (the person's own) and WardenOnly's. Anything else is
-	// the agent's to do itself, whatever tier it asked.
-	// But only a step the asker's sandbox can take is its own: one on another
-	// machine is the person's, one on a path or the machine past its sandbox
-	// a warden's (reach.go).
+	// Wardens only for the hard limits: the ceiling's list (money,
+	// credentials, opening the machine, anything outward in the person's
+	// name; the person's own) and WardenOnly's (publishing private details,
+	// deleting repos or history). Anything else is the agent's to do itself,
+	// whatever tier it named: its run reaches all the hive user can (home,
+	// git and gh on the agents' tokens, systemd-run --user). A step on
+	// another machine, which no agent and no warden reaches, is the person's.
 	weighed := core.WardenHit(a.Want, a.Why, a.Steps)
-	elsewhere, what := "", ""
 	if ceiling == "" && weighed == "" {
-		elsewhere, what = m.beyond(r, a.Want, a.Why, a.Steps)
+		if host := elsewhere(a.Want, a.Why, a.Steps); host != "" {
+			ceiling = "is on another machine (" + core.Clip(host, 60) + "), which only the person can reach"
+		}
 	}
-	if elsewhere == "host" {
-		ceiling = "is on another machine (" + core.Clip(what, 60) + "), which only the person can reach"
+	if ceiling == "" && weighed == "" {
+		return map[string]string{"route": "self", "note": "Not a warden's: only money, credentials, publishing private details, opening the machine, something outward in the person's name, or deleting repos or history go to one. Everything else is yours to do yourself: your run reads and writes the hive user's whole home, git and gh push and merge on the agents' tokens, and `systemd-run --user` runs a step as the hive user outside your sandbox."}, nil
 	}
-	if elsewhere != "" && tier == "T1" {
-		tier = "T2"
-	}
-	if ceiling == "" && weighed == "" && elsewhere == "" {
-		return map[string]string{"tier": "T1", "route": "self", "note": "Not a warden's: only money, credentials, publishing private details, opening the machine, something outward in the person's name, or deleting repos or history go to one. Anything else inside the hive user's reach is yours: do it yourself, in your run (you are a session in the hive user's home, with git and gh on your project owner's token). If your sandbox can't reach it, ask again naming the path outside it (a warden's) or the other machine (the person's)."}, nil
-	}
-	switch {
-	case weighed == "history" && tier != "T3":
+	tier := "T2"
+	if weighed == "history" || core.Tier(a.Tier) == "T3" {
 		tier = "T3" // can't be undone: a tribunal
-	case weighed != "" && tier == "T1":
-		tier = "T2"
 	}
 	route := core.Route(tier, cfg.Autonomy, ceiling)
 	if held { // only who weighs it first: what runs is held line by line, and is recorded
 		route = core.Route(tier, cfg.Autonomy, "")
-		if route == "self" {
-			route = "warden"
-		}
-	}
-	if route == "self" {
-		return map[string]string{"tier": tier, "route": route, "note": "T1 is inside the Hive: weigh it yourself and get on with it."}, nil
 	}
 	m.act.Lock()
 	defer m.act.Unlock()
@@ -515,7 +502,7 @@ func (m *Module) opRequest(r core.Run, args json.RawMessage) (any, error) {
 		Tier: tier, Route: route, Gain: a.Gain, State: "asked", Created: time.Now().UTC()}
 	switch route {
 	case "person":
-		if elsewhere == "host" {
+		if strings.HasPrefix(ceiling, "is on another machine") {
 			m.ask(req, "Another machine", "This step "+ceiling+": no agent's sandbox can, so it is yours. Do it yourself if you agree.", "done", "declined")
 			break
 		}

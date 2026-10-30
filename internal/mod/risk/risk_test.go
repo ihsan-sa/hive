@@ -1637,20 +1637,21 @@ func TestWeighingSavedBeforeWardenStarts(t *testing.T) {
 	}
 }
 
-// An ask the asker's sandbox can't carry out reaches someone who can: a
-// full host disk and a lock in the daemon's host clone go to a warden,
-// another machine to the person; what the sandbox can write stays its own.
+// Every step on this machine is the asker's own, since its run reaches all
+// the hive user can (a full disk, a lock in the daemon's clone, a path its
+// sandbox once hid), whatever tier it names; only another machine goes on,
+// to the person, as no agent or warden reaches it.
 func TestAskBeyondTheSandbox(t *testing.T) {
 	g := newRig(t, 2)
 	clone := filepath.Join(g.c.WS.Root, "projects", "hive-hwde", ".git", "index.lock")
 	for _, c := range []struct{ name, want, why, steps, route string }{
-		{"disk", "find what filled the whole filesystem and free regenerable data", "/dev/nvme0n1p2 is at 4 KB free; tests fail with No space left on device", "du -xsh /home/hive/hive/cache/*; remove stale build caches", "warden"},
-		{"lock", "remove the stale git lock in the daemon's hive-hwde clone", "9 tasks stopped on index.lock: File exists", "rm " + clone, "warden"},
-		{"hidden", "clear old run homes", "they are hidden from my sandbox", "", "warden"},
-		{"host", "rebuild the dispatch runner on host2", "the runner there is out of date; Network is unreachable from my sandbox", "ssh host2 'cd runner && make'", "person"},
+		{"disk", "find what filled the whole filesystem and free regenerable data", "/dev/nvme0n1p2 is at 4 KB free; tests fail with No space left on device", "du -xsh /home/hive/hive/cache/*; remove stale build caches", "self"},
+		{"lock", "remove the stale git lock in the daemon's hive-hwde clone", "9 tasks stopped on index.lock: File exists", "rm " + clone, "self"},
+		{"hidden", "clear old run homes", "they are hidden from my sandbox", "", "self"},
+		{"host", "rebuild the dispatch runner on host2", "the runner there is out of date", "ssh host2 'cd runner && make'", "person"},
 		{"mine", "rm -rf /work/build and /tmp/x", "stale", "ls 2>/dev/null; /usr/bin/env go clean -cache", "self"},
 	} {
-		out, err := g.call(g.worker, "warden", map[string]string{"want": c.want, "why": c.why, "steps": c.steps, "tier": "T1"})
+		out, err := g.call(g.worker, "warden", map[string]string{"want": c.want, "why": c.why, "steps": c.steps, "tier": "T2"})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1658,13 +1659,7 @@ func TestAskBeyondTheSandbox(t *testing.T) {
 			t.Errorf("%s: routed %q, want %q (%v)", c.name, got, c.route, out)
 		}
 	}
-	l := g.m.List()
-	if len(l) != 4 {
-		t.Fatalf("want 4 requests, got %+v", l)
-	}
-	for _, r := range l {
-		if r.Tier == "T1" {
-			t.Errorf("a step the asker can't take stayed T1: %+v", r)
-		}
+	if l := g.m.List(); len(l) != 1 || l[0].Route != "person" || l[0].Tier != "T2" {
+		t.Fatalf("want the other machine's ask alone, with the person: %+v", l)
 	}
 }
