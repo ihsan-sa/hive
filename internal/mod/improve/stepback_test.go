@@ -160,6 +160,55 @@ func TestSelfFaultHandsOverTheCommits(t *testing.T) {
 	}
 }
 
+// A step-back that wins on another project files its commits on that project
+// as its own task, so the win reaches main; the Hive's fault names that task.
+func TestProjectFaultFilesTheWinOnTheProject(t *testing.T) {
+	m := rig(t)
+	forge := m.C.Effects.Forge.(*core.Local)
+	if _, err := forge.EnsureRepo("me/p", "", false); err != nil {
+		t.Fatal(err)
+	}
+	src := t.TempDir()
+	os.WriteFile(filepath.Join(src, "README.md"), []byte("# p\n"), 0o644)
+	for _, args := range [][]string{{"init", "-q", "-b", "main"}, {"add", "-A"}, {"-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "seed"}, {"push", "-q", forge.RepoPath("me/p"), "HEAD:main"}} {
+		if out, err := core.Git(src, args...); err != nil {
+			t.Fatal(out, err)
+		}
+	}
+	p, err := m.C.Projects.Add(core.Project{Name: "p", Repo: "me/p"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	from, err := m.C.Effects.Sync(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := m.C.WS.Project("p")
+	os.WriteFile(filepath.Join(dir, "win.txt"), []byte("the winning change\n"), 0o644)
+	for _, args := range [][]string{{"add", "win.txt"}, {"-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "the setup's win"}} {
+		if out, err := core.Git(dir, args...); err != nil {
+			t.Fatal(out, err)
+		}
+	}
+	sha, _ := core.Git(dir, "rev-parse", "HEAD")
+	core.Git(dir, "reset", "-q", "--hard", from)
+	exp := said(t, m, "stepback-3-exp", "p", "ran make")
+	thirty, nineteen := 30.0, 19.0
+	s := StepBack{ID: "stepback-3", Run: "stepback-3", Project: "p", From: from, Score: &thirty, Control: &nineteen, Main: from, Setup: &Setup{Asks: []string{"win"}}}
+	id := m.fileFault(s, p, exp, strings.TrimSpace(sha), core.Score{})
+	ports := m.Work.List(func(t work.Task) bool { return t.Project == "p" })
+	if len(ports) != 1 || !strings.Contains(ports[0].Done, "forward-ported onto main") || !strings.Contains(ports[0].Known, "git am -3") {
+		t.Fatalf("the win must be filed on its project to forward-port: %+v", ports)
+	}
+	if patch := ports[0].Inputs["commits.patch"]; !strings.Contains(patch, "+the winning change") {
+		t.Fatalf("the project's task lacks the setup's commit:\n%s", patch)
+	}
+	fault := m.Work.List(func(t work.Task) bool { return t.ID == id })
+	if len(fault) != 1 || fault[0].Project != "hive" || !strings.Contains(fault[0].Known, ports[0].ID) || fault[0].Inputs["changes.patch"] == "" {
+		t.Fatalf("the Hive's fault must keep the patch to compare and name the project's task: %+v", fault)
+	}
+}
+
 // An isolated project's fault asks the person and files nothing, so its runs
 // stay inside it.
 func TestIsolatedFaultAsksThePerson(t *testing.T) {
