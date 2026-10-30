@@ -312,13 +312,47 @@ func (m *Module) redBefore(p core.Project, t work.Task, test string) string {
 		why = "can't be told new at this merge: " + what + " failed after it merged, and at " + core.Short(parent) + ", main just before it, vet or the build stopped the command before any test ran, so they may have failed there unseen; this merge cleared that stop, and reverting it only brings the stop back"
 		known = fmt.Sprintf("After %s merged as %s it cleared a vet or build error that stopped main's tests at %s, main just before it, and tests that couldn't run there fail now. They may have broken at any merge while main was stopped, so this one wasn't reverted.", t.Label(), core.Short(t.MergeSHA), core.Short(parent))
 	}
+	// A measurement can lag main by an hour when the check line is long:
+	// hifi-receiver-2's 261030-003043 was filed for a red main's head had
+	// fixed 66 minutes before. What passes at main's head now is fixed.
+	if head := m.passesAtHead(p, t.MergeSHA, cmd); head != "" {
+		why += "; it passes at " + core.Short(head) + ", main's head now, so it is fixed already and nothing is filed"
+		m.C.J.MustAppend("alert.raised", map[string]string{"kind": "main-red", "project": p.Name, "sha": t.MergeSHA, "task": t.ID,
+			"text": core.Clip(why, 500) + " (" + p.Name + "). Not reverted."})
+		return why
+	}
 	m.C.J.MustAppend("alert.raised", map[string]string{"kind": "main-red", "project": p.Name, "sha": t.MergeSHA, "task": t.ID,
 		"text": core.Clip(why, 400) + " (" + p.Name + "). Not reverted; filed to fix on main."})
 	title := core.Clip("Make "+what+" pass on main again", 120)
 	if len(m.Work.List(func(w work.Task) bool { return w.Project == p.Name && w.Title == title && !w.Terminal() })) == 0 {
-		m.Work.File(work.Brief{Project: p.Name, From: "improve", Title: title, Aim: work.AimFix, Why: core.Clip("red on main: "+what+" fail at "+core.Short(parent)+" and after "+core.Short(t.MergeSHA), 300),
+		// First in line: while main is red every PR on the project waits
+		// on it, so behind the queue the fix holds up all of them.
+		m.Work.File(work.Brief{Project: p.Name, From: "improve", Title: title, Aim: work.AimFix, Now: true, Why: core.Clip("red on main: "+what+" fail at "+core.Short(parent)+" and after "+core.Short(t.MergeSHA), 300),
 			Done:  "The tests pass on main again, every time, without reverting anything.",
 			Known: known + " What failed: " + core.ClipEnds(tc.Output, 1500) + "\n\nAt " + core.Short(parent) + ": " + core.ClipEnds(bc.Output, 1000)})
 	}
 	return why
+}
+
+// passesAtHead is main's head when main has gone past sha and what failed at
+// sha passes there: its own test check if it has one, else cmd run at it.
+// "" when main is still at sha, or the head fails or can't be told.
+func (m *Module) passesAtHead(p core.Project, sha, cmd string) string {
+	head, err := m.C.Effects.Sync(p)
+	if err != nil || head == "" || !m.after(p, head, sha) {
+		return ""
+	}
+	if hc, ok := m.C.Effects.GetCheck(p.Name, head, "test"); ok && hc.CantRun == "" {
+		if hc.OK {
+			return head
+		}
+		return ""
+	}
+	done := m.Work.MeasuringMain(p.Name, head)
+	hc := m.C.Effects.RunCheck(p, head, "head", cmd)
+	done()
+	if hc.CantRun != "" || !hc.OK {
+		return ""
+	}
+	return head
 }
