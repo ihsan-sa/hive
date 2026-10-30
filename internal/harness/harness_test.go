@@ -80,6 +80,12 @@ func TestClaudeArgs(t *testing.T) {
 			t.Fatalf("args %q missing %q", joined, want)
 		}
 	}
+	if b := join(Claude{}.Args(Turn{SessionID: "u"})); !contains(b, "--setting-sources project ") {
+		t.Errorf("a turn not in home loads more than the project's settings: %s", b)
+	}
+	if b := join(Claude{}.Args(Turn{SessionID: "u", InHome: true})); !contains(b, "--setting-sources user,project,local ") {
+		t.Errorf("a session in home doesn't load the user's settings: %s", b)
+	}
 	if b := (Claude{}).Args(Turn{SessionID: "u", Resume: true}); !contains(join(b), "--resume u") {
 		t.Fatalf("resume args: %v", b)
 	}

@@ -128,3 +128,39 @@ func TestRuntimeMounts(t *testing.T) {
 		t.Fatalf("own sockets folder not made: %v", err)
 	}
 }
+
+// A Claude session in home links the hive user's settings, skills and
+// plugins into the run's own home (only those that are there), shares the
+// project's memory with that user's sessions in its clone, and never
+// replaces what the run's home already has.
+func TestShareClaudeHome(t *testing.T) {
+	home, own := t.TempDir(), t.TempDir()
+	os.MkdirAll(filepath.Join(home, ".claude", "skills", "synced"), 0o755)
+	os.WriteFile(filepath.Join(home, ".claude", "settings.json"), []byte(`{"theme":"dark"}`), 0o644)
+	os.MkdirAll(filepath.Join(own, ".claude", "plugins"), 0o755)
+	os.MkdirAll(filepath.Join(home, ".claude", "plugins"), 0o755)
+	dir := filepath.Join(home, "hive", "projects", "pll")
+	for range 2 {
+		shareClaudeHome(own, home, "/work", dir)
+	}
+	for _, n := range []string{"settings.json", "skills"} {
+		if to, err := os.Readlink(filepath.Join(own, ".claude", n)); err != nil || to != filepath.Join(home, ".claude", n) {
+			t.Errorf("%s isn't linked from home: %q %v", n, to, err)
+		}
+	}
+	for _, n := range []string{"CLAUDE.md", "agents", "commands"} {
+		if _, err := os.Lstat(filepath.Join(own, ".claude", n)); err == nil {
+			t.Errorf("%s is linked though home has none", n)
+		}
+	}
+	if fi, err := os.Lstat(filepath.Join(own, ".claude", "plugins")); err != nil || !fi.IsDir() {
+		t.Errorf("the run's own plugins folder was replaced: %v", err)
+	}
+	mem := filepath.Join(home, ".claude", "projects", claudeName(dir), "memory")
+	if to, err := os.Readlink(filepath.Join(own, ".claude", "projects", "-work", "memory")); err != nil || to != mem || !exists(mem) {
+		t.Errorf("memory isn't the clone's in home: %q %v", to, err)
+	}
+	if got := claudeName("/home/hive/openup-261030"); got != "-home-hive-openup-261030" {
+		t.Errorf("claudeName = %q", got)
+	}
+}

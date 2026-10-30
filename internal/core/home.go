@@ -181,3 +181,51 @@ func runtimeMounts(rt, own string) ([]sandbox.Mount, []string) {
 	return []sandbox.Mount{{Host: rt, Inside: rt, RW: true}, {Host: own, Inside: filepath.Join(rt, "cc-socks"), RW: true}},
 		[]string{"DBUS_SESSION_BUS_ADDRESS=unix:path=" + filepath.Join(rt, "bus")}
 }
+
+// claudeShared are what a Claude Code session in the hive user's home reads
+// from its ~/.claude besides its own sessions: the user settings, the user
+// CLAUDE.md, skills (the synced ones too), plugins, subagents and commands.
+// A run's HOME is its own (its sessions, which a resume reads, and its
+// scratch), so each of these is linked into it from the hive user's home:
+// an agent is the same kind of session as one opened in that home (the
+// person, 10-30: "Any agent in the hive should pretty much be like the same
+// type of session as the open up or free space session spawned in home").
+var claudeShared = []string{"settings.json", "CLAUDE.md", "skills", "plugins", "agents", "commands"}
+
+// claudeName is the folder Claude Code keeps a working directory's sessions
+// and memory under, in ~/.claude/projects: the path, every character but a
+// letter or a digit a dash.
+func claudeName(dir string) string {
+	return strings.Map(func(r rune) rune {
+		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' {
+			return r
+		}
+		return '-'
+	}, dir)
+}
+
+// shareClaudeHome links the hive user's Claude setup (claudeShared, those
+// that are there) into own, a run's home, and the memory of the run's
+// working directory (work, as the run sees it) to that of dir in the hive
+// user's home, the project's clone or the workspace: what one agent
+// remembers, the next agent on the project and a session the person opens
+// in that clone read. An entry the run's home already has is left as it is,
+// so a link is made once and an agent's own file is never replaced.
+func shareClaudeHome(own, home, work, dir string) {
+	link := func(target, at string) {
+		if _, err := os.Lstat(at); err == nil {
+			return
+		}
+		os.MkdirAll(filepath.Dir(at), 0o755)
+		os.Symlink(target, at)
+	}
+	for _, n := range claudeShared {
+		if p := filepath.Join(home, ".claude", n); exists(p) {
+			link(p, filepath.Join(own, ".claude", n))
+		}
+	}
+	mem := filepath.Join(home, ".claude", "projects", claudeName(dir), "memory")
+	if os.MkdirAll(mem, 0o755) == nil {
+		link(mem, filepath.Join(own, ".claude", "projects", claudeName(work), "memory"))
+	}
+}
