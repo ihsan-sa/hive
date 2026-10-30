@@ -74,9 +74,13 @@ func (g *rig) run(id string) core.Run {
 	return r
 }
 
+// wardensWhy is a why that puts a step in a warden's categories (WardenOnly:
+// a repository's visibility), so it is weighed rather than handed back.
+const wardensWhy = "the brief needs it, and it changes a repository's visibility"
+
 // request files a step as the worker and returns it.
 func (g *rig) request(want, steps, tier string) Request {
-	if _, err := g.call(g.worker, "warden", map[string]string{"want": want, "why": "the brief needs it", "steps": steps, "tier": tier, "gain": "large"}); err != nil {
+	if _, err := g.call(g.worker, "warden", map[string]string{"want": want, "why": wardensWhy, "steps": steps, "tier": tier, "gain": "large"}); err != nil {
 		g.t.Fatal(err)
 	}
 	return g.m.List()[0]
@@ -650,7 +654,7 @@ func TestSameNeedOneVerdict(t *testing.T) {
 		if i%2 == 1 {
 			want = "  install PYTHON3 on the   host "
 		}
-		if _, err := g.call(r, "warden", map[string]string{"want": want, "why": "tests need it", "steps": "apt-get install -y python3", "tier": "T2"}); err != nil {
+		if _, err := g.call(r, "warden", map[string]string{"want": want, "why": wardensWhy, "steps": "apt-get install -y python3", "tier": "T2"}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -669,7 +673,7 @@ func TestSameNeedOneVerdict(t *testing.T) {
 			t.Fatalf("%s never heard the verdict", r.ID)
 		}
 	}
-	out, err := g.call(runs[2], "warden", map[string]string{"want": "install python3 on the host", "why": "again", "tier": "T2"})
+	out, err := g.call(runs[2], "warden", map[string]string{"want": "install python3 on the host", "why": wardensWhy, "tier": "T2"})
 	if err != nil || len(g.m.List()) != 1 || !strings.Contains(fmt.Sprint(out), "not needed") {
 		t.Fatalf("asked again: %v %v, %d requests", out, err, len(g.m.List()))
 	}
@@ -733,14 +737,13 @@ func TestInstallWithProjectUnderSandboxRoot(t *testing.T) {
 	if _, err := g.call(lead, "install_module", map[string]string{"project": "tool"}); err != nil {
 		t.Fatalf("--project under a sandbox root was refused: %v", err)
 	}
-	filed := 0
 	for _, a := range g.c.Person.Open() {
-		if a.Kind == "module" && a.Ref == dir {
-			filed++
+		if a.Kind == "module" {
+			t.Fatalf("an install asked the person: %+v", a)
 		}
 	}
-	if filed != 1 {
-		t.Fatalf("want one install ask for %s, got %+v", dir, g.c.Person.Open())
+	if len(g.m.List()) != 0 {
+		t.Fatalf("an install went to a warden: %+v", g.m.List())
 	}
 }
 
@@ -792,7 +795,6 @@ func TestAutonomyDecidesProtectedChanges(t *testing.T) {
 		"goal":    "+- ship the beta to the three testers",
 		"score":   `+"score": {"command": "cat score.txt", "direction": "higher"}`,
 		"setting": `+"test": "go test ./..."`,
-		"module":  "",
 	}
 	for autonomy := 1; autonomy <= 3; autonomy++ {
 		for what, diff := range changes {
@@ -959,7 +961,7 @@ func TestJoinMidStepHearsTheResult(t *testing.T) {
 		t.Fatalf("not running: %+v", got)
 	}
 	late := g.worker2()
-	if _, err := g.call(late, "warden", map[string]string{"want": "install a tool", "why": "me too", "tier": "T2"}); err != nil {
+	if _, err := g.call(late, "warden", map[string]string{"want": "install a tool", "why": wardensWhy, "tier": "T2"}); err != nil {
 		t.Fatal(err)
 	}
 	os.WriteFile(gate, nil, 0o644)
@@ -988,7 +990,7 @@ func TestLateAskerAndFailures(t *testing.T) {
 	}
 	before, _ := g.m.get(req.ID)
 	late := g.worker2()
-	if _, err := g.call(late, "warden", map[string]string{"want": "install a tool", "why": "me too", "tier": "T2"}); err != nil {
+	if _, err := g.call(late, "warden", map[string]string{"want": "install a tool", "why": wardensWhy, "tier": "T2"}); err != nil {
 		t.Fatal(err)
 	}
 	after, _ := g.m.get(req.ID)
@@ -1012,7 +1014,7 @@ func TestLateAskerAndFailures(t *testing.T) {
 func TestWardenTimeoutHolds(t *testing.T) {
 	g := newRig(t, 2)
 	req := g.request("install a tool", "x", "T2")
-	if _, err := g.call(g.worker2(), "warden", map[string]string{"want": "install a tool", "why": "me too", "tier": "T2"}); err != nil {
+	if _, err := g.call(g.worker2(), "warden", map[string]string{"want": "install a tool", "why": wardensWhy, "tier": "T2"}); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ := g.m.get(req.ID); !got.Updated.Equal(req.Updated) {
@@ -1025,38 +1027,6 @@ func TestWardenTimeoutHolds(t *testing.T) {
 	g.m.Tick()
 	if got, _ := g.m.get(gone.ID); got.State != "asked" {
 		t.Fatalf("a warden with no run never timed out: %+v", got)
-	}
-}
-
-// An isolated project's lead asking to install a module files the ask under
-// its project, so other projects' agents don't see its title.
-func TestModuleInstallAskCarriesTheProject(t *testing.T) {
-	g := newRig(t, 2)
-	g.c.Projects.Add(core.Project{Name: "secret", Repo: "me/secret", Isolated: true})
-	lead, err := g.c.Runs.Start(core.RunSpec{Role: "lead", Harness: "fake", Project: "secret", Isolated: true, Checkout: t.TempDir()})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := g.call(lead, "install_module", map[string]string{"url": "https://example.com/me/tool.git"}); err != nil {
-		t.Fatal(err)
-	}
-	filed := 0
-	for _, a := range g.c.Person.Open() {
-		if a.Kind == "module" {
-			filed++
-			if a.Project != "secret" {
-				t.Errorf("the install ask is filed under %q", a.Project)
-			}
-		}
-	}
-	for _, q := range g.m.List() {
-		filed++
-		if q.Project != "secret" {
-			t.Errorf("the install request is filed under %q", q.Project)
-		}
-	}
-	if filed == 0 {
-		t.Error("the install was neither asked nor weighed")
 	}
 }
 
@@ -1582,5 +1552,25 @@ func TestWithinShellArgCount(t *testing.T) {
 	}
 	if !within("pay $25 now", "pay $10 now") || within("pay $25 now", "pay $50 now") {
 		t.Error("amounts no longer compare")
+	}
+}
+
+// Wardens only for what is outside the hive user or irreversible: an
+// ordinary step past the checkout comes back as the agent's, whatever tier it
+// asked, and deleting a repository goes to a tribunal.
+func TestWardenOnlyForWhatIsOutside(t *testing.T) {
+	g := newRig(t, 2)
+	out, err := g.call(g.worker, "warden", map[string]string{"want": "restart the dev server and install a tool", "why": "tests need it", "tier": "T2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res := out.(map[string]string); res["route"] != "self" || len(g.m.List()) != 0 {
+		t.Fatalf("an ordinary step went to a warden: %v %+v", res, g.m.List())
+	}
+	if _, err := g.call(g.worker, "warden", map[string]string{"want": "gh repo delete me/old-experiment", "why": "it is retired", "tier": "T2"}); err != nil {
+		t.Fatal(err)
+	}
+	if l := g.m.List(); len(l) != 1 || l[0].Tier != "T3" {
+		t.Fatalf("deleting a repository isn't a tribunal's: %+v", l)
 	}
 }

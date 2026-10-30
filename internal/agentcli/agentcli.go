@@ -186,7 +186,9 @@ A value of @path reads that file. Common ops:
                                                  repository merges only on the recursive gate's clear gain
   pivot     --case "..." --evidence "..." [--project p]   any agent: a change of direction, filed first in
                                                  line as a fix; its worker weighs the case, then may throw away anything
-  warden    --want "..." --why "..." --steps "..."   for anything past your reach; the person decides
+  warden    --want "..." --why "..." --steps "..."   only money, credentials, publishing private details,
+                                                 opening the machine, outward in the person's name, or
+                                                 deleting repos or history; anything else is yours
   install   --tool python|uv|node|go [--version 3.12]   installs it for every agent, no root,
                                                  on your PATH at once; give the call a 25-minute timeout
   install   --system "sudo apt-get install -y x" --why "..."   a root install: goes to the person
@@ -234,7 +236,7 @@ on any project's work as on your own, on the record with your run id.
                                                  a bare name goes in repo_owner, else self_fork, else the gh login
   retire_project --name n --why "..."            one made by mistake: setup never finished, or nothing
                                                  in flight or merged; the repository is left as it is
-  install_module --url <git url> | --project <module>   a warden weighs it; you hear back
+  install_module --url <git url> | --project <module>   installs it at once; you hear back
   requests                                       each request past a sandbox and where it stands
 In $HIVE_STATE, logins/ and private/ (the daemon's token, every agent's home) are covered, and so are an
 isolated project's records (and the journal, while any project is isolated): hidden there, not missing.`

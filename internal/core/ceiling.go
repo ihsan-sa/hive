@@ -49,6 +49,30 @@ var alwaysPersonRe = map[string]*regexp.Regexp{
 	"outward":    regexp.MustCompile(`(?i)\b(send (an? )?(e-?mail|mail|message|sms|text|dm)|email to|sendmail|tweet|post (to|on|as)|publish (as|in my name)|on my behalf|in my name)\b`),
 }
 
+// WardenOnly is what, past AlwaysPerson, still goes to a warden: what is
+// outside the hive user or can't be undone (the person, 10-30). Every other
+// step an agent takes itself, inside the hive user's reach.
+var WardenOnly = map[string]string{
+	"private": "publishes private details",
+	"history": "deletes a repository or history",
+}
+
+var wardenOnlyRe = map[string]*regexp.Regexp{
+	"private": regexp.MustCompile(`(?i)\b(make (it|the repo(sitory)?|.{0,40}) public|change (its |the )?visibility|visibility|private (details|data|info(rmation)?)|personal (data|details|info(rmation)?)|pii|doxx?(ing)?|leak)\b`),
+	"history": regexp.MustCompile(`(?i)\b(delete (the |a |its )?(repo|repository|repositories|repos|history|branch(es)?|tags?|releases?)|gh repo delete|repo(sitory)? delete|force[- ]push|push (-f|--force)|--force-with-lease|filter-branch|filter-repo|rewrite (the )?history|rm -rf \.git)\b`),
+}
+
+// WardenHit names the WardenOnly category the texts fall in, or "".
+func WardenHit(texts ...string) string {
+	all := strings.Join(texts, "\n")
+	for _, k := range []string{"history", "private"} {
+		if wardenOnlyRe[k].MatchString(all) {
+			return k
+		}
+	}
+	return ""
+}
+
 // CeilingHit names the AlwaysPerson category the texts fall in, or "".
 func CeilingHit(texts ...string) string {
 	k, _ := ceilingMatch(false, texts...)
