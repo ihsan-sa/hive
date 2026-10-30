@@ -191,8 +191,8 @@ func codexRun(t *testing.T) (*Runs, Workspace, string, Run, func()) {
 		t.Fatal(err)
 	}
 	lock := func() {
-		os.Chmod(ws.RunPrivate("r1"), 0o500)
-		t.Cleanup(func() { os.Chmod(ws.RunPrivate("r1"), 0o700) })
+		os.Chmod(ws.RunKeys("r1"), 0o500)
+		t.Cleanup(func() { os.Chmod(ws.RunKeys("r1"), 0o700) })
 	}
 	return rs, ws, path, r, lock
 }
@@ -303,12 +303,12 @@ func TestUndeletableCodexTokenKeepsAnotherBlockReason(t *testing.T) {
 		t.Fatalf("a second unblock wrote %d bytes to the journal", after-before)
 	}
 	// Once the folder deletes, unblocking works.
-	os.Chmod(ws.RunPrivate("r1"), 0o700)
+	os.Chmod(ws.RunKeys("r1"), 0o700)
 	if err := rs2.Reopen("r1", "go on"); err != nil {
 		t.Fatal(err)
 	}
-	if got, _ = rs2.Get("r1"); got.Status != StatusIdle || Exists(filepath.Join(ws.RunPrivate("r1"), "codex")) {
-		t.Fatalf("run is %q (%q), token folder left: %v", got.Status, got.Reason, Exists(filepath.Join(ws.RunPrivate("r1"), "codex")))
+	if got, _ = rs2.Get("r1"); got.Status != StatusIdle || Exists(filepath.Join(ws.RunKeys("r1"), "codex")) {
+		t.Fatalf("run is %q (%q), token folder left: %v", got.Status, got.Reason, Exists(filepath.Join(ws.RunKeys("r1"), "codex")))
 	}
 }
 

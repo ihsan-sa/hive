@@ -80,9 +80,10 @@ func TestLeadFollowsModelSetting(t *testing.T) {
 }
 
 // Every run but an isolated project's reads the whole .hive at /hive/state,
-// writes none of it, and reads nothing there that grants access: no run's
-// home or CODEX_HOME (its own, another's, or one made after the turn
-// started), no stored login, no module program's home and not the daemon's token.
+// writes none of it, and reads nothing there that grants access: no turn's
+// CODEX_HOME (its own, another's, or one made after the turn started), no
+// stored login, no module program's home and not the daemon's token. Runs'
+// homes it reads (the person, 10-30: .hive/private is open).
 func TestRunsReadTheStateButNoSecret(t *testing.T) {
 	c, _ := testHive(t)
 	os.WriteFile(c.WS.DaemonFile(), []byte(`{"token": "t"}`), 0o600)
@@ -118,7 +119,7 @@ func TestRunsReadTheStateButNoSecret(t *testing.T) {
 		}
 	}
 	under := func(p, dir string) bool { return p == dir || strings.HasPrefix(p, dir+string(filepath.Separator)) }
-	for _, p := range []string{c.WS.RunHome("r1"), codexHome, c.WS.RunHome("made-later"), c.WS.RunPrivate("made-later"), login, moduleHome, c.WS.DaemonFile()} {
+	for _, p := range []string{codexHome, c.WS.RunKeys("made-later"), login, moduleHome, c.WS.DaemonFile()} {
 		if state == "" || !under(p, state) {
 			t.Fatalf("%s is outside the state %q, so this test checks nothing", p, state)
 		}
@@ -126,8 +127,16 @@ func TestRunsReadTheStateButNoSecret(t *testing.T) {
 			t.Errorf("%s can be read under /hive/state (covers %v)", p, covers)
 		}
 	}
+	for _, p := range []string{c.WS.RunHome("r1"), c.WS.RunHome("made-later"), c.WS.RunTmp("r1")} {
+		if slices.ContainsFunc(covers, func(d string) bool { return under(p, d) }) {
+			t.Errorf("%s is covered under /hive/state (covers %v)", p, covers)
+		}
+	}
 	// The same folders keep a host interpreter's install out of the bind.
 	for _, d := range covers {
+		if fi, err := os.Stat(d); err == nil && !fi.IsDir() {
+			continue // a file holds no install
+		}
 		if !slices.Contains(spec.Cover, d) || !slices.Contains(spec.Guard, d) {
 			t.Errorf("%s is covered for agents but not for host interpreters (guard %v, cover %v)", d, spec.Guard, spec.Cover)
 		}

@@ -151,7 +151,7 @@ func TestOpenModelTurn(t *testing.T) {
 			t.Errorf("a %s run reaches the open model's host: %q", hn, spec.Allow)
 		}
 	}
-	// The key reaches the turn as a file in its home, never in its environment.
+	// The key reaches the turn as a file in its Keys, never in its environment.
 	r := Run{RunSpec: RunSpec{ID: "o-key", Role: "worker", Harness: "open", Model: "free"}}
 	os.MkdirAll(c.WS.RunHome(r.ID), 0o755)
 	spec, err := c.Runs.sandboxSpec(cfg, isolatedSB{}, h, r, 1, false, "p", env, "")
@@ -164,7 +164,7 @@ func TestOpenModelTurn(t *testing.T) {
 	}
 	all := strings.Join(spec.Env, "\n")
 	raw, _ := os.ReadFile(c.Runs.openKeyFile(r.ID))
-	if strings.Contains(all, "sk-or-test") || !strings.Contains(all, "HIVE_OPEN_KEY_FILE=/hive/home/.hive-open/key") || string(raw) != "sk-or-test" {
+	if strings.Contains(all, "sk-or-test") || !strings.Contains(all, "HIVE_OPEN_KEY_FILE=/hive/key/key") || string(raw) != "sk-or-test" {
 		t.Fatalf("env %q, key file %q", spec.Env, raw)
 	}
 	c.Runs.dropOpenKey(r.ID)
@@ -211,7 +211,7 @@ func TestAnthropicModelTurn(t *testing.T) {
 	}
 	argv, env := strings.Join(spec.Argv, " "), strings.Join(spec.Env, "\n")
 	if spec.Argv[0] != "claude" || !strings.Contains(argv, "--model kimi-k2-0905-preview") ||
-		!strings.Contains(argv, `--settings {"apiKeyHelper":"'hive' open-key '/hive/home/.hive-open/key'","attribution":{"commit":"","pr":""},"disableAllHooks":true`) {
+		!strings.Contains(argv, `--settings {"apiKeyHelper":"'hive' open-key '/hive/key/key'","attribution":{"commit":"","pr":""},"disableAllHooks":true`) {
 		t.Errorf("argv %q", spec.Argv)
 	}
 	for _, want := range []string{"ANTHROPIC_BASE_URL=https://api.moonshot.ai/anthropic", "ANTHROPIC_DEFAULT_HAIKU_MODEL=kimi-k2-0905-preview",
@@ -296,24 +296,23 @@ func TestOpenKeyFollowsNoLink(t *testing.T) {
 	keyOf := func(id string) string { raw, _ := os.ReadFile(c.Runs.openKeyFile(id)); return string(raw) }
 
 	// The folder is a link.
-	home := c.WS.RunHome("l-dir")
-	os.MkdirAll(home, 0o755)
-	os.Symlink(elsewhere, filepath.Join(home, ".hive-open"))
+	keyDir := func(id string) string { return filepath.Dir(c.Runs.openKeyFile(id)) }
+	os.MkdirAll(c.WS.RunKeys("l-dir"), 0o700)
+	os.Symlink(elsewhere, keyDir("l-dir"))
 	if _, err := c.Runs.openKey("l-dir", []string{"HIVE_OPEN_KEY=sk-x"}, "/k"); err != nil {
 		t.Fatal(err)
 	}
 	if raw, _ := os.ReadFile(filepath.Join(elsewhere, "key")); string(raw) != "theirs" || keyOf("l-dir") != "sk-x" {
 		t.Fatalf("outside %q, key %q", raw, keyOf("l-dir"))
 	}
-	if fi, _ := os.Lstat(filepath.Join(home, ".hive-open")); !fi.IsDir() {
+	if fi, _ := os.Lstat(keyDir("l-dir")); !fi.IsDir() {
 		t.Fatal("the key's folder is still a link")
 	}
 	c.Runs.dropOpenKey("l-dir")
 
 	// The file is a link.
-	home = c.WS.RunHome("l-file")
-	os.MkdirAll(filepath.Join(home, ".hive-open"), 0o700)
-	os.Symlink(filepath.Join(elsewhere, "key"), filepath.Join(home, ".hive-open", "key"))
+	os.MkdirAll(keyDir("l-file"), 0o700)
+	os.Symlink(filepath.Join(elsewhere, "key"), c.Runs.openKeyFile("l-file"))
 	if _, err := c.Runs.openKey("l-file", []string{"HIVE_OPEN_KEY=sk-y"}, "/k"); err != nil {
 		t.Fatal(err)
 	}
@@ -322,12 +321,15 @@ func TestOpenKeyFollowsNoLink(t *testing.T) {
 	}
 
 	// Dropping a key through a folder planted as a link after the turn
-	// began deletes nothing outside.
-	os.RemoveAll(filepath.Join(home, ".hive-open"))
+	// began deletes nothing outside, nor does one left in its home.
+	home := c.WS.RunHome("l-file")
+	os.MkdirAll(home, 0o755)
+	os.RemoveAll(keyDir("l-file"))
+	os.Symlink(elsewhere, keyDir("l-file"))
 	os.Symlink(elsewhere, filepath.Join(home, ".hive-open"))
 	c.Runs.dropOpenKey("l-file")
 	if !Exists(filepath.Join(elsewhere, "key")) {
-		t.Fatal("dropping the key deleted a file outside the run's home")
+		t.Fatal("dropping the key deleted a file outside the run's Keys")
 	}
 
 	// Claude Code's config folder planted as a link to a Claude login

@@ -2247,6 +2247,8 @@ func (rs *Runs) endTurn(r Run) {
 	if te.Status == StatusDone || te.Status == StatusBlocked || te.Status == StatusStopped {
 		// Its turn's launcher removes it as the turn ends, unless it was killed.
 		RemoveTree(rs.ws.RunTmp(r.ID))
+		RemoveTree(rs.ws.RunKeys(r.ID))
+		RemoveTree(filepath.Join(rs.ws.RunPrivate(r.ID), "cc-socks"))
 	}
 	if te.Reason == reopenedMidTurn {
 		rs.append("run.reopened", runNote{ID: r.ID}) // the finish it made before the message isn't its last
@@ -2745,12 +2747,18 @@ func (rs *Runs) sandboxSpec(cfg Config, sb sandbox.Sandbox, h harness.Harness, r
 			sandbox.Mount{Host: rs.ws.Hive(), Inside: "/hive/state"})
 		// Every agent reads the whole Hive but what grants access: the login
 		// pool's stored logins, module programs' homes and logs (where a door
-		// module keeps its own service login), and Private (the daemon's token,
-		// every run's home and CODEX_HOME). All are folders, so what lands in
-		// them mid-turn lands under the cover.
+		// module keeps its own service login), each turn's Keys and Secrets,
+		// all folders, so what lands in them mid-turn lands under the cover;
+		// and the daemon's token and the publish scan's lists, file by file.
+		hive := filepath.Join(rs.ws.abs(), ".hive")
 		for _, d := range rs.ws.Covered() {
 			os.MkdirAll(d, 0o700)
-			mounts = append(mounts, sandbox.Mount{Host: d, Inside: "/hive/state/" + filepath.Base(d), Hide: true})
+			rel, _ := filepath.Rel(hive, d)
+			mounts = append(mounts, sandbox.Mount{Host: d, Inside: "/hive/state/" + filepath.ToSlash(rel), Hide: true})
+		}
+		for _, f := range rs.ws.PrivateFiles() {
+			rel, _ := filepath.Rel(hive, f)
+			mounts = append(mounts, sandbox.Mount{Host: f, Inside: "/hive/state/" + filepath.ToSlash(rel), Hide: true})
 		}
 	}
 	mounts = append(mounts, sandbox.Mount{Host: rs.ws.Tools(), Inside: sandbox.ToolsInside})
@@ -2760,7 +2768,7 @@ func (rs *Runs) sandboxSpec(cfg Config, sb sandbox.Sandbox, h harness.Harness, r
 	inHome := sb.Isolated() && !r.ReadOnly && !r.OneTurn && !r.Isolated
 	var bus []string
 	if home, err := os.UserHomeDir(); inHome && err == nil && filepath.IsAbs(home) && home != "/" {
-		mounts = append(mounts, homeMounts(home, rs.ws.Covered())...)
+		mounts = append(mounts, homeMounts(home, rs.ws.Covered(), rs.ws.PrivateFiles())...)
 		var rt []sandbox.Mount
 		rt, bus = runtimeMounts(UserRuntime(), filepath.Join(rs.ws.RunPrivate(r.ID), "cc-socks"))
 		mounts = append(mounts, rt...)
@@ -2846,9 +2854,16 @@ func (rs *Runs) sandboxSpec(cfg Config, sb sandbox.Sandbox, h harness.Harness, r
 	if HarnessName(r.Harness) == "open" {
 		// The key goes in a file the open agent deletes before any tool runs,
 		// never in its environment, which its commands could read from /proc.
-		keyIn := filepath.Join(in(home), ".hive-open", "key")
+		// The file is in Keys, covered from every other run, which see this
+		// run's home; this run sees it at /hive/key.
+		if err := rs.openKeyDir(r.ID); err != nil {
+			return sandbox.Spec{}, err
+		}
+		km := sandbox.Mount{Host: filepath.Dir(rs.openKeyFile(r.ID)), Inside: "/hive/key", RW: true}
+		mounts = append(mounts, km)
+		keyIn := filepath.Join(in(km), "key")
 		if sb.Isolated() {
-			keyIn = in(home) + "/.hive-open/key"
+			keyIn = in(km) + "/key"
 		}
 		var err error
 		if tok, err = rs.openKey(r.ID, tok, keyIn); err != nil {
@@ -3035,7 +3050,8 @@ func (rs *Runs) freshCodexHome(r Run) (string, error) {
 	if err := rs.dropCodexHome(r.ID); err != nil {
 		return "", err
 	}
-	dir := filepath.Join(rs.ws.RunPrivate(r.ID), "codex")
+	dir := rs.codexHome(r.ID)
+	os.MkdirAll(filepath.Dir(dir), 0o700)
 	if err := os.Mkdir(dir, 0o700); err != nil {
 		return "", err
 	}
@@ -3049,13 +3065,23 @@ func (rs *Runs) freshCodexHome(r Run) (string, error) {
 	return dir, os.WriteFile(filepath.Join(dir, "config.toml"), []byte("developer_instructions = "+string(s)+"\n"), 0o600)
 }
 
+// codexHome is where run id's turn has its CODEX_HOME, in Keys.
+func (rs *Runs) codexHome(id string) string { return filepath.Join(rs.ws.RunKeys(id), "codex") }
+
 // dropCodexHome deletes the turn's CODEX_HOME, and with it the access token,
 // keeping only its sessions for the next turn's resume. Folders the agent
-// locked are opened first; links are never followed.
+// locked are opened first; links are never followed. One a turn made before
+// CODEX_HOMEs moved into Keys (in the run's private folder) goes too.
 func (rs *Runs) dropCodexHome(id string) error {
-	dir := filepath.Join(rs.ws.RunPrivate(id), "codex")
-	os.Rename(filepath.Join(dir, "sessions"), filepath.Join(rs.ws.RunPrivate(id), "codex-sessions"))
-	return removeTree(dir)
+	var err error
+	for _, dir := range []string{filepath.Join(rs.ws.RunPrivate(id), "codex"), rs.codexHome(id)} {
+		os.Rename(filepath.Join(dir, "sessions"), filepath.Join(rs.ws.RunPrivate(id), "codex-sessions"))
+		if e := removeTree(dir); e != nil {
+			err = e
+		}
+	}
+	os.Remove(rs.ws.RunKeys(id)) // when empty
+	return err
 }
 
 // codexUsage is the plan usage and context Codex recorded during r's turn
@@ -3063,7 +3089,7 @@ func (rs *Runs) dropCodexHome(id string) error {
 // known), which the agent could write, so it is read as such.
 func (rs *Runs) codexUsage(r Run, session string) (*harness.RateLimit, int) {
 	newest, at := "", time.Time{}
-	filepath.WalkDir(filepath.Join(rs.ws.RunPrivate(r.ID), "codex", "sessions"), func(p string, d fs.DirEntry, err error) error {
+	filepath.WalkDir(filepath.Join(rs.codexHome(r.ID), "sessions"), func(p string, d fs.DirEntry, err error) error {
 		if err != nil || !d.Type().IsRegular() || !strings.HasPrefix(d.Name(), "rollout-") || !strings.HasSuffix(d.Name(), ".jsonl") ||
 			session != "" && !strings.Contains(d.Name(), session) {
 			return nil
@@ -3085,7 +3111,7 @@ func (rs *Runs) codexUsage(r Run, session string) (*harness.RateLimit, int) {
 
 // openKeyFile is where a turn on the open harness finds its model's key.
 func (rs *Runs) openKeyFile(id string) string {
-	return filepath.Join(rs.ws.RunHome(id), ".hive-open", "key")
+	return filepath.Join(rs.ws.RunKeys(id), "open", "key")
 }
 
 // openKey moves a model key out of tok into the run's key file, which the
@@ -3123,7 +3149,7 @@ func (rs *Runs) openKey(id string, tok []string, keyIn string) ([]string, error)
 	return append(out, "HIVE_OPEN_KEY_FILE="+keyIn), nil
 }
 
-// openKeyDir makes the key file's folder in the run's home.
+// openKeyDir makes the key file's folder in the run's Keys.
 func (rs *Runs) openKeyDir(id string) error { return realDir(filepath.Dir(rs.openKeyFile(id))) }
 
 // realDir makes a folder in a run's home, which the agent can write: a link
@@ -3155,9 +3181,11 @@ func shellWord(s string, isolated bool) string {
 // dropOpenKey deletes a key file a turn left, read or not, and only inside a
 // real folder: through a link it would delete another file.
 func (rs *Runs) dropOpenKey(id string) {
-	f := rs.openKeyFile(id)
-	if fi, err := os.Lstat(filepath.Dir(f)); err == nil && fi.IsDir() {
-		os.Remove(f) // a link at the file's name goes, not what it points to
+	// One a turn left in its home before keys moved into Keys goes too.
+	for _, f := range []string{filepath.Join(rs.ws.RunHome(id), ".hive-open", "key"), rs.openKeyFile(id)} {
+		if fi, err := os.Lstat(filepath.Dir(f)); err == nil && fi.IsDir() {
+			os.Remove(f) // a link at the file's name goes, not what it points to
+		}
 	}
 }
 

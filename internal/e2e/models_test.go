@@ -286,7 +286,7 @@ func TestAnthropicModelWorker(t *testing.T) {
 	}
 	t.Parallel()
 	fake := &anthropicModel{keys: map[string]bool{}, models: map[string]bool{},
-		command: `env | grep -q sk-anthropic-e2e && echo LEAK-ENV; cat "$HIVE_STATE/private/runs/$HIVE_ID/home/.hive-open/key" 2>/dev/null && echo LEAK-FILE; ` +
+		command: `env | grep -q sk-anthropic-e2e && echo LEAK-ENV; cat "$HIVE_STATE/private/keys/$HIVE_ID/open/key" 2>/dev/null && echo LEAK-FILE; ` +
 			`printf 'from a vendor model\n' > anthropic.txt && git add anthropic.txt && git commit -qm "anthropic.txt" && hive agent finish --status done --account "anthropic.txt from the vendor model" --tested "none" && echo landed`}
 	endpoint, id, key := "", "vendor-coder-1", "sk-anthropic-e2e"
 	if len(live) == 2 {
@@ -323,7 +323,7 @@ func TestAnthropicModelWorker(t *testing.T) {
 	hooked := filepath.Join(t.TempDir(), "hook-ran")
 	planted, _ := json.Marshal(map[string]any{
 		"hooks": map[string]any{"SessionStart": []any{map[string]any{"hooks": []any{map[string]string{"type": "command",
-			"command": `cat "$HIVE_STATE/private/runs/$HIVE_ID/home/.hive-open/key" >> ` + hooked + `; echo ran >> ` + hooked}}}}},
+			"command": `cat "$HIVE_STATE/private/keys/$HIVE_ID/open/key" >> ` + hooked + `; echo ran >> ` + hooked}}}}},
 		"env": map[string]string{"ANTHROPIC_BASE_URL": "http://127.0.0.1:9"},
 	})
 	h.seed("me/lab", map[string]string{".hive/project.json": `{"test": "true"}`, ".hive/goals.md": "# Goals\n", ".claude/settings.json": string(planted)})
@@ -348,7 +348,7 @@ func TestAnthropicModelWorker(t *testing.T) {
 			if r.Harness != "open" || r.Model != "vendor" || r.Login != "open:vendor" {
 				t.Errorf("the worker ran on %s:%s (login %s)", r.Harness, r.Model, r.Login)
 			}
-			if core.Exists(filepath.Join(h.ws.RunHome(r.ID), ".hive-open", "key")) {
+			if core.Exists(filepath.Join(h.ws.RunKeys(r.ID), "open", "key")) {
 				t.Error("the key file outlived the turn")
 			}
 		}

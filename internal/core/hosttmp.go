@@ -16,8 +16,9 @@ import (
 // folder (Temp), and the hourly clean job removes what the Hive left in the
 // shared /tmp and in its own once nothing has touched it for leftoverAge.
 
-// Temp is the daemon's own temp folder, on disk. It sits in Private, covered
-// wherever agents read .hive, so no agent reads or writes what is in it.
+// Temp is the daemon's own temp folder, on disk. It sits in Private and is
+// covered wherever agents read .hive (Covered), so no agent reads or writes
+// what is in it.
 func (w Workspace) Temp() string { return filepath.Join(w.Private(), "tmp") }
 
 // RunTmp is a run's /tmp, on disk beside its home. Each turn's sandbox

@@ -33,7 +33,7 @@ A small core plus default modules; the daemon runs both and serves the control c
 ```
 .hive/      events.jsonl, config.json, chats/*.jsonl, scores/*.jsonl,
             runs/<id>/{host,ro,box}, kb/ (git repo of notes; record/ filed from the journal, untracked, with record/hours/<UTC hour>.jsonl the journal's last 48 hours as written), gates/, checks/, improve/sweeps/,
-            logins/, private/{daemon.json, update.json, runs/<id>/{home,codex,codex-sessions}},
+            logins/, private/{daemon.json, update.json, tmp/, runs/<id>/{home,tmp,codex-sessions,cc-socks}, keys/<id>/{codex,open}},
             tools/<python|uv|node|go>/bin (agent-installed runtimes; read-only at /hive/tools, on PATH),
             reports/{sent/*.json, outbox.jsonl, pending.jsonl} (only when sharing is on)
 .modules/   agents, chat, kb, improve, system, + installed (each with .hive-source.json)
@@ -43,11 +43,13 @@ projects/<name>/.checkouts/  agents' own checkouts (excluded from the clone)
 
 Run dir: `host/` (turn output, prompts, stop file; never mounted on its own), `ro/` (system prompt, brief, inputs; mounted read-only at `/hive/run`; `run.created` names each of these over 1 KB in `stored` instead of journaling it again, and replay reads it back from here), `box/` (mailbox + notes; rw at `/hive/box`); its home (rw `$HOME`) is `.hive/private/runs/<id>/home`.
 Every run but an isolated project's also gets the whole `.hive` read-only at `/hive/state` (`$HIVE_STATE`), so agents read one another's runs, chats and records.
-What grants access lives in four folders covered there as a whole (an empty tmpfs; a Seatbelt deny on macOS, after which a run's own writable folders are allowed again): `logins/`, `modules/` (module programs' homes and logs), `private/`, which holds the daemon's token and every run's home and `CODEX_HOME`, and `secrets/`, a folder per project of the project's own secret files (a broker login, a signing key) that the person or a warden's script fills;
+What grants access lives in five folders covered there as a whole (an empty tmpfs; a Seatbelt deny on macOS, after which a run's own writable folders are allowed again): `logins/`, `modules/` (module programs' homes and logs), `private/keys/`, which holds each turn's `CODEX_HOME` and open model key, `private/tmp/`, the daemon's own temp folder that turn specs pass through, and `secrets/`, a folder per project of the project's own secret files (a broker login, a signing key) that the person or a warden's script fills;
+and in three files covered one by one, `private/daemon.json` (the daemon's token) and the publish scan's `private/scan-deny.txt` and `scan-handles.txt`.
 agents can't write it.
+The rest of `private/` (runs' homes and scratch) is open to agents (`Workspace.Covered`, `Workspace.PrivateFiles`).
 A project's runs that act for it (not a read-only run, nor a reviewer, security, warden, tribunal or judge seat; `Runs.secretsFor`) read their own project's folder read-only at `/hive/secrets` (`$HIVE_SECRETS`), and no other project's; such a run is never handed to an executor module, which would copy the folder to another machine, so it waits out a strain here.
 Checks don't get it.
-Covering folders rather than files means a run made mid-turn, or a `daemon.json` a restart renames into place, is covered too; a file cover is bound to the inode it found.
+Covering folders rather than files means a run made mid-turn is covered too; a file cover is bound to the inode it found, so a `daemon.json` a restart renames into place is readable to a turn that began before it, until that turn ends.
 On its first start on this layout the daemon ends the turns the earlier daemon left running (their mounts carry no cover over `private/`), then moves homes and Codex homes from where earlier versions kept them and deletes their turn specs (docs/risk.md, Updates).
 config.json and daemon.log hold nothing that grants access.
 A turn's spec, which carries its token, is written to the temp dir.
@@ -233,7 +235,7 @@ Built-in modules still run in-process, as a hook table would.
 
 - A module program's environment carries no credential, and its token reaches only its hooks' endpoints; its review, not the token, keeps it from the person's files.
 - Agents hold no credentials.
-  Sandbox gets `CLAUDE_CODE_OAUTH_TOKEN` = short-lived access token only, read fresh per turn; each Codex turn gets a fresh `CODEX_HOME` made on the host side (`private/runs/<id>/codex`, mounted at `/hive/codex`), so nothing the agent planted steers the write; its `auth.json` holds the access token with the refresh token blanked and its `config.toml` the Hive's instructions (argv has a size cap).
+  Sandbox gets `CLAUDE_CODE_OAUTH_TOKEN` = short-lived access token only, read fresh per turn; each Codex turn gets a fresh `CODEX_HOME` made on the host side (`private/keys/<id>/codex`, mounted at `/hive/codex`), so nothing the agent planted steers the write; its `auth.json` holds the access token with the refresh token blanked and its `config.toml` the Hive's instructions (argv has a size cap).
   At turn end it is deleted except `sessions/`, kept in `private/runs/<id>/codex-sessions` for resume; folders the agent locked are opened first, a removal that still fails blocks the run, and daemon start deletes any left by a crash before a turn began.
   A bare run whose machine login has no readable credential file gets no token, so the harness's own host login works.
   Each turn goes on the least-used login of the pool (by the fullest of its usage windows still running, `Plan.Used`; the machine's own plus `.hive/logins/<harness>/<name>` from `hive login add`, which refuses a Codex API-key login since it has no access token to hand a turn) not parked at its usage limit, nor at one of the person's usage stops (`usage_stops` in config.json, `core.UsageStops`: a share of the week and of the five hours, none on a new install; a config from before the setting keeps this Hive's own 95% of the week and 90% of the five hours, `OldUsageStops`): a login stops taking turns there until that window resets, `Plan.ParkedUntil`;

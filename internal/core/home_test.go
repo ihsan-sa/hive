@@ -9,38 +9,53 @@ import (
 	"testing"
 )
 
-// A run in home gets home read-write and every credential in it covered, a
-// link to one covered where it points, and nothing covered that isn't there
-// or lies outside home; the agents' token for a repository's owner is read
-// by the owner's name in any case, and none saved gives none.
+// A run in home gets home read-write, .hive/private included, with each login
+// in it covered (a link to one where it points; nothing that isn't there or
+// lies outside home), the workspace's covered folders and files too, and
+// ~/.ssh read-only.
 func TestSessionInHome(t *testing.T) {
 	home := t.TempDir()
 	os.MkdirAll(filepath.Join(home, ".config", "gh"), 0o700)
+	os.MkdirAll(filepath.Join(home, ".config", "hive", "agent-tokens"), 0o700)
 	os.WriteFile(filepath.Join(home, "h0-org.token"), []byte("org"), 0o600)
+	os.MkdirAll(filepath.Join(home, ".claude"), 0o700)
+	os.WriteFile(filepath.Join(home, ".claude", ".credentials.json"), []byte("{}"), 0o600)
 	os.MkdirAll(filepath.Join(home, "elsewhere-ssh"), 0o700)
 	os.Symlink(filepath.Join(home, "elsewhere-ssh"), filepath.Join(home, ".ssh"))
 	os.Symlink("/nonexistent/creds", filepath.Join(home, ".netrc"))
 	ws := Workspace{Root: filepath.Join(home, "hive")}
-	ms := homeMounts(home, ws.Covered())
+	os.MkdirAll(ws.Private(), 0o700)
+	os.WriteFile(ws.DaemonFile(), []byte(`{"token":"t"}`), 0o600)
+	ms := homeMounts(home, ws.Covered(), ws.PrivateFiles())
 	if ms[0].Host != home || ms[0].Inside != home || !ms[0].RW || ms[0].Hide {
 		t.Fatalf("home isn't mounted read-write at its own path: %+v", ms[0])
 	}
-	var hidden []string
+	var hidden, readOnly []string
 	for _, m := range ms[1:] {
-		if !m.Hide || m.Host != m.Inside {
+		if m.Host != m.Inside || m.RW {
 			t.Fatalf("not a cover at its own path: %+v", m)
 		}
-		hidden = append(hidden, strings.TrimPrefix(m.Inside, home+"/"))
+		rel := strings.TrimPrefix(m.Inside, home+"/")
+		if m.Hide {
+			hidden = append(hidden, rel)
+		} else {
+			readOnly = append(readOnly, rel)
+		}
 	}
-	for _, want := range []string{".config/gh", "h0-org.token", "elsewhere-ssh", "hive/.hive/private", "hive/.hive/logins"} {
+	for _, want := range []string{".config/gh", "h0-org.token", ".claude/.credentials.json", "hive/.hive/logins", "hive/.hive/modules", "hive/.hive/secrets",
+		"hive/.hive/private/keys", "hive/.hive/private/tmp", "hive/.hive/private/daemon.json"} {
 		if !slices.Contains(hidden, want) {
 			t.Errorf("%s isn't covered: %v", want, hidden)
 		}
 	}
-	if slices.Contains(hidden, ".netrc") || slices.Contains(hidden, ".aws") {
-		t.Errorf("covered what isn't there: %v", hidden)
+	for _, open := range []string{"hive/.hive/private", ".config/hive", ".netrc", ".aws", "elsewhere-ssh"} {
+		if slices.Contains(hidden, open) {
+			t.Errorf("%s is covered: %v", open, hidden)
+		}
 	}
-
+	if !slices.Equal(readOnly, []string{"elsewhere-ssh"}) {
+		t.Errorf("read-only: %v, want ~/.ssh where it points", readOnly)
+	}
 }
 
 // Every run gets every owner's token: GH_TOKEN its project's owner's, and a

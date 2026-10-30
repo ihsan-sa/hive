@@ -29,14 +29,20 @@ var AgentTokens = func() string {
 	return filepath.Join(home, ".config", "hive", "agent-tokens")
 }
 
-// homeSecrets are the paths under home that hold a credential, covered in a
-// run that sees the home: the Hive's own logins, the person's machine logins
-// and every login file a tool keeps.
+// homeSecrets are the paths under home that hold a login, covered in a run
+// that sees the home: the Hive's own logins, which hold administration
+// (h0-org.token, the gh login), Claude's and Codex's, and every login file a
+// tool keeps. The rest of home is the run's to read and write, the Hive's
+// .hive/private and its service's settings included (the person, 10-30).
 var homeSecrets = []string{
-	"h0-org.token", ".config/gh", ".config/hive", ".ssh", ".gnupg", ".netrc", ".git-credentials",
-	".claude/.credentials.json", ".codex/auth.json", ".aws", ".kube", ".docker/config.json",
-	".npmrc", ".pypirc", ".local/share/keyrings", ".config/systemd/user/hive.service.d",
+	"h0-org.token", ".config/gh", ".claude/.credentials.json", ".codex/auth.json",
+	".netrc", ".git-credentials", ".gnupg", ".aws", ".kube", ".docker/config.json", ".npmrc", ".pypirc", ".local/share/keyrings",
 }
+
+// homeReadOnly are the paths under home a run reads but doesn't change:
+// ~/.ssh's authorized_keys says who logs in to this machine, and a run
+// adding to it would open the machine.
+var homeReadOnly = []string{".ssh"}
 
 // agentTokens is every token saved, by owner as its file is named.
 func agentTokens() map[string]string {
@@ -110,11 +116,12 @@ func agentGit(repo string, only bool) []string {
 }
 
 // homeMounts are the mounts that make r's run a session in home: home
-// read-write at its own path, then a cover over each credential in it and
-// over the workspace's covered folders, which the home holds.
-func homeMounts(home string, covered []string) []sandbox.Mount {
+// read-write at its own path, then a cover over each login in it, over the
+// workspace's covered folders and files (covered, files), which the home
+// holds, and ~/.ssh read-only.
+func homeMounts(home string, covered, files []string) []sandbox.Mount {
 	out := []sandbox.Mount{{Host: home, Inside: home, RW: true}}
-	for _, rel := range homeSecrets {
+	for _, rel := range append(slices.Clone(homeSecrets), homeReadOnly...) {
 		// Covered where it really is: a link resolves first, and one to a
 		// place outside home (not there inside) or to nothing is skipped, so
 		// a cover never creates a file in the real home through the bind.
@@ -122,12 +129,17 @@ func homeMounts(home string, covered []string) []sandbox.Mount {
 		if err != nil || !strings.HasPrefix(p, home+string(filepath.Separator)) {
 			continue
 		}
-		out = append(out, sandbox.Mount{Host: p, Inside: p, Hide: true})
+		out = append(out, sandbox.Mount{Host: p, Inside: p, Hide: !slices.Contains(homeReadOnly, rel)})
 	}
 	for _, d := range covered {
 		if strings.HasPrefix(d, home+string(filepath.Separator)) {
 			os.MkdirAll(d, 0o700)
 			out = append(out, sandbox.Mount{Host: d, Inside: d, Hide: true})
+		}
+	}
+	for _, f := range files {
+		if strings.HasPrefix(f, home+string(filepath.Separator)) {
+			out = append(out, sandbox.Mount{Host: f, Inside: f, Hide: true})
 		}
 	}
 	return out

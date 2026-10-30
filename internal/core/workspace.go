@@ -40,10 +40,32 @@ func (w Workspace) Bin() string                { return filepath.Join(w.Hive(), 
 func (w Workspace) Tools() string              { return filepath.Join(w.Hive(), "tools") }
 func (w Workspace) Gates() string              { return filepath.Join(w.Hive(), "gates") }
 
-// Private holds what grants access (the daemon's token, each run's home and
-// CODEX_HOME). It is covered as a whole wherever agents read .hive, so a run
-// made or a file renamed in it mid-turn is covered too.
+// Private holds the daemon's own files and each run's home and scratch.
+// Agents read and write it like the rest of the hive user's home (the
+// person, 10-30), all but Keys and PrivateFiles.
 func (w Workspace) Private() string { return filepath.Join(w.Hive(), "private") }
+
+// Keys holds each turn's own copy of a login, one folder per run: its
+// CODEX_HOME (auth.json) and its open model's key file. It is covered as a
+// whole wherever agents read .hive, so a run's made mid-turn is covered too.
+func (w Workspace) Keys() string { return filepath.Join(w.Private(), "keys") }
+
+// RunKeys is run id's folder in Keys.
+func (w Workspace) RunKeys(id string) string { return filepath.Join(w.Keys(), id) }
+
+// PrivateFiles are the files in Private covered one by one wherever agents
+// read .hive: the daemon's API token (daemon.json) and the publish scan's
+// lists, which are people's handles and private words. Only those there are
+// listed, since a cover can't be made over nothing.
+func (w Workspace) PrivateFiles() []string {
+	var out []string
+	for _, f := range []string{"daemon.json", "scan-deny.txt", "scan-handles.txt"} {
+		if p := filepath.Join(w.abs(), ".hive", "private", f); Exists(p) {
+			out = append(out, p)
+		}
+	}
+	return out
+}
 
 // Secrets is where each project's own secret files live, one folder per
 // project, filled by the person or a warden's script: a project's runs read
@@ -56,12 +78,15 @@ func (w Workspace) ProjectSecrets(project string) string {
 }
 
 // Covered is the folders covered wherever agents read .hive: the login pool's
-// stored logins, module programs' homes and logs, Private and Secrets. No host
-// interpreter's install bound into a sandbox may hold one or sit inside one.
-// The paths are absolute, so a relative root still guards them.
+// stored logins, module programs' homes and logs (a door module's service
+// login, the dispatch module's key to other machines), each turn's Keys, the
+// daemon's Temp (each turn's sandbox spec, with its login, passes through it)
+// and Secrets. No host interpreter's install bound into a sandbox may hold one
+// or sit inside one. The paths are absolute, so a relative root still guards them.
 func (w Workspace) Covered() []string {
 	hive := filepath.Join(w.abs(), ".hive")
-	return []string{filepath.Join(hive, "logins"), filepath.Join(hive, "modules"), filepath.Join(hive, "private"), filepath.Join(hive, "secrets")}
+	return []string{filepath.Join(hive, "logins"), filepath.Join(hive, "modules"), filepath.Join(hive, "private", "keys"),
+		filepath.Join(hive, "private", "tmp"), filepath.Join(hive, "secrets")}
 }
 
 // Guarded is what no host interpreter's install bound into a sandbox may

@@ -8,13 +8,17 @@ import (
 	"time"
 )
 
-// TestMain keeps every test's Prune out of the host's shared /tmp.
+// TestMain keeps every test's Prune out of the host's shared /tmp, and every
+// run a test lays out off this machine's agent tokens and service manager.
 func TestMain(m *testing.M) {
 	dir, err := os.MkdirTemp("", "core-shared-tmp-")
 	if err != nil {
 		panic(err)
 	}
 	sharedTmp = dir
+	toks := filepath.Join(dir, "no-agent-tokens")
+	AgentTokens = func() string { return toks }
+	UserRuntime = func() string { return "" }
 	code := m.Run()
 	os.RemoveAll(dir)
 	os.Exit(code)
