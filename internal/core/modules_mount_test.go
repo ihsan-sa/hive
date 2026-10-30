@@ -197,3 +197,42 @@ func TestScoreCheckReadsModuleRecords(t *testing.T) {
 		t.Fatalf("a test check got the module's records: %+v", specs[0].Mounts)
 	}
 }
+
+// A score check of a commit main has been at keeps a cache across measures
+// at HIVE_SCORE_CACHE; a branch's commit gets none, so it can't leave an
+// entry a later measure counts; clearing the cache empties it (#2176).
+func TestScoreCacheOutlivesTheMeasureOnMainOnly(t *testing.T) {
+	c, _, p, main := setupProject(t)
+	var specs []sandbox.Spec
+	c.Effects.sandbox = func() (sandbox.Sandbox, error) { return mapped{specs: &specs}, nil }
+	put := `if [ -n "$HIVE_SCORE_CACHE" ]; then cat /hive/score-cache/n 2>/dev/null; echo kept >/hive/score-cache/n; else echo none; fi; echo 1`
+	if ch := c.Effects.RunCheck(p, main, "score", put); !ch.OK || strings.Contains(ch.Output, "kept") || strings.Contains(ch.Output, "none") {
+		t.Fatalf("main's first score check had no empty cache: %+v", ch)
+	}
+	if !slices.ContainsFunc(specs[0].Mounts, func(m sandbox.Mount) bool { return m.Inside == "/hive/score-cache" && m.RW }) ||
+		!slices.Contains(specs[0].Env, "HIVE_SCORE_CACHE=/hive/score-cache") {
+		t.Fatalf("score cache not mounted writable: %+v", specs[0].Mounts)
+	}
+	if ch := c.Effects.RunCheck(p, main, "score", "cat /hive/score-cache/n; echo 1"); !strings.Contains(ch.Output, "kept") {
+		t.Fatalf("the cache didn't outlive the measure: %+v", ch)
+	}
+	r, _ := commitInCheckout(t, c, p, "w1", main, "feature.go", "package demo\n")
+	sha, err := c.Effects.Extract(p, r, main)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Effects.Push(p, "hive/t1", sha); err != nil {
+		t.Fatal(err)
+	}
+	specs = nil
+	if ch := c.Effects.RunCheck(p, sha, "score", put); !strings.Contains(ch.Output, "none") {
+		t.Fatalf("a branch's score check got the cache: %+v", ch)
+	}
+	if slices.ContainsFunc(specs[0].Mounts, func(m sandbox.Mount) bool { return m.Inside == "/hive/score-cache" }) {
+		t.Fatalf("a branch's score check mounted the cache: %+v", specs[0].Mounts)
+	}
+	c.Effects.ClearScoreCache(p.Name, "test")
+	if Exists(filepath.Join(c.WS.ScoreCache(p.Name), "n")) {
+		t.Fatal("ClearScoreCache left the entry")
+	}
+}

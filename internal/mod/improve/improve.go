@@ -1082,6 +1082,10 @@ func (m *Module) afterMerge(t work.Task) {
 		go func() { time.Sleep(time.Minute); m.queue <- t }()
 		return
 	}
+	if t.Kind == "revert" {
+		// Measures between the bad merge and its revert ran its code too.
+		m.C.Effects.ClearScoreCache(p.Name, "revert "+t.ID+" merged")
+	}
 	if by, ok := m.coveredBy(p, t.MergeSHA); ok {
 		m.C.J.MustAppend("score.covered", Covered{Project: p.Name, SHA: t.MergeSHA, Task: t.ID, By: by.SHA, Red: !by.Kept})
 		return
@@ -1316,6 +1320,9 @@ func (m *Module) revert(p core.Project, t work.Task, ms Measurement, reason stri
 			Detail: reason + ". The Hive won't revert a revert on its own.", Options: []string{"ok"}})
 		return
 	}
+	// What this merge's measure wrote to the score cache outlives its
+	// revert, so it goes now and again when the revert's merge is measured.
+	m.C.Effects.ClearScoreCache(p.Name, "the merge of "+t.ID+" is reverted")
 	if _, err := m.Work.Revert(t, t.MergeSHA, reason); err != nil {
 		m.C.J.MustAppend("alert.raised", map[string]string{"kind": "revert", "project": p.Name, "text": "could not file a revert: " + err.Error()})
 	}
