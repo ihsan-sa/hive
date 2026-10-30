@@ -289,3 +289,50 @@ func TestSettledWaitsForTheLastLines(t *testing.T) {
 		t.Fatalf("a still file took %s to settle; want about 50ms", d)
 	}
 }
+
+// The watcher answers a request itself, with no tick at all: an agent's
+// answer doesn't wait for the tick or behind a slow lead's step. A run a
+// step has claimed is left to that step.
+func TestTheWatcherAnswersWithoutATick(t *testing.T) {
+	ws := Workspace{Root: t.TempDir()}
+	if err := ws.Init(); err != nil {
+		t.Fatal(err)
+	}
+	j, err := OpenJournal(filepath.Join(t.TempDir(), "j.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer j.Close()
+	rs := NewRuns(ws, j, nil, NewTokens(ws), func() []string { return nil })
+	rs.ops.Register(Op{Name: "ping", Fn: func(Run, json.RawMessage) (any, error) { return "pong", nil }})
+	for _, id := range []string{"w1", "w2"} {
+		rs.runs[id] = &Run{RunSpec: RunSpec{ID: id, Role: "worker"}, Status: StatusRunning}
+		os.MkdirAll(filepath.Join(ws.RunBox(id), "outbox"), 0o755)
+		os.MkdirAll(filepath.Join(ws.RunBox(id), "inbox"), 0o755)
+		os.WriteFile(filepath.Join(ws.RunBox(id), "outbox", "r1.json"), []byte(`{"op":"ping"}`), 0o600)
+	}
+	rs.busy["w2"] = true // a step has it
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go rs.WatchRequests(ctx, 5*time.Millisecond, func() {})
+	resp := filepath.Join(ws.RunBox("w1"), "inbox", "r1.json")
+	for end := time.Now().Add(5 * time.Second); time.Now().Before(end); time.Sleep(5 * time.Millisecond) {
+		if _, err := os.Stat(resp); err == nil {
+			break
+		}
+	}
+	raw, err := os.ReadFile(resp)
+	if err != nil || !strings.Contains(string(raw), `"pong"`) {
+		t.Fatalf("w1's request wasn't answered by the watcher: %s %v", raw, err)
+	}
+	time.Sleep(50 * time.Millisecond)
+	if _, err := os.Stat(filepath.Join(ws.RunBox("w2"), "outbox", "r1.json")); err != nil {
+		t.Fatal("the watcher drained w2's outbox while a step had it")
+	}
+	rs.mu.Lock()
+	busy := rs.busy["w1"]
+	rs.mu.Unlock()
+	if busy {
+		t.Fatal("the watcher left w1 claimed")
+	}
+}
