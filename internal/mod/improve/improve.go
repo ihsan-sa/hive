@@ -192,7 +192,7 @@ func New(c *core.Core, a *agents.Agents, w *work.Module, ch *chat.Module) *Modul
 	c.J.Subscribe(apply)
 	w.OnMerged = m.enqueue
 	w.Retest = m.retest
-	work.BestScore = m.Best
+	work.BestScore = m.BestUnder
 	work.Measured = m.measured
 	c.Effects.Quarantined = m.QuarantinedTests
 	c.Runs.Ops().Register(core.Op{Name: "pivot", Help: `{"case","evidence","project"} -> any agent proposes a pivot: a short case (what to stop, throw away or change, and what instead) and the evidence for it. It is filed as a fix, first in line, its worker weighs the case before acting and nothing bounds what it may throw away; the project's lead and the person hear it at once and turn it down with withdraw`, Fn: m.opPivot})
@@ -211,6 +211,18 @@ func (m *Module) Scores(project string) []Measurement {
 func (m *Module) Best(project string) (float64, bool) {
 	k, ok := m.kept(project)
 	if !ok {
+		return 0, false
+	}
+	return *k.Best, true
+}
+
+// BestUnder is the best kept score when it was read under the score version
+// (core.Effects.ScoreVersion) given: false when there is none, or main was
+// last kept under another score, whose numbers this one's can't be held to.
+// Version "" takes the best under any.
+func (m *Module) BestUnder(p core.Project, version string) (float64, bool) {
+	k, ok := m.kept(p.Name)
+	if !ok || version != "" && m.versionOf(p, k) != version {
 		return 0, false
 	}
 	return *k.Best, true

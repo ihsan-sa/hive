@@ -20,7 +20,7 @@ func checkpointRig(t *testing.T, best float64, score string) (*Module, *Task, co
 		t.Fatal(err)
 	}
 	old := BestScore
-	BestScore = func(string) (float64, bool) { return best, true }
+	BestScore = func(core.Project, string) (float64, bool) { return best, true }
 	t.Cleanup(func() { BestScore = old })
 	task.Stage, task.Base, task.SHA, task.PR, task.Branch = StageWorking, base, "", core.PR{}, "hive/t1-cp"
 	return m, task, p
@@ -98,7 +98,7 @@ func TestCheckpointCountsAMeasurementInFlight(t *testing.T) {
 	task.Banks, task.Banked = []Bank{{PR: core.PR{Number: 2}, MergeSHA: "m1"}}, 1
 	measured := false
 	oldB, oldM := BestScore, Measured
-	BestScore = func(string) (float64, bool) {
+	BestScore = func(core.Project, string) (float64, bool) {
 		if measured {
 			return 7, true
 		}
@@ -275,5 +275,35 @@ func TestCheckpointLeavesTheLineWhenTheWorkerFinishes(t *testing.T) {
 	}
 	if err := m.checkWorker(task, p); err != nil || task.Stage != StageLanding {
 		t.Fatalf("the finish wasn't seen: stage %q, err %v", task.Stage, err)
+	}
+}
+
+// A checkpoint is weighed under its own score: when main was last kept
+// under an older score command, that best (96.68 on pll, 10-30) is not the
+// bar; the worker's base scored under the new one is (issue #2179).
+func TestCheckpointWeighedUnderItsOwnScore(t *testing.T) {
+	for _, c := range []struct {
+		base string
+		cp   bool
+	}{{"6", true}, {"8", false}} {
+		m, task, p, forge := gateRigSeeded(t, false, map[string]string{"score.val": c.base + "\n"}, map[string]string{"score.val": "7\n"})
+		base := must(t, m.C.WS.Project(p.Name), "rev-parse", task.SHA+"^")
+		pushMain(t, forge, map[string]string{".hive/project.json": `{"test": "test ! -f BROKEN", "score": {"command": "cat score.val", "direction": "higher"}}`})
+		if _, err := m.C.Effects.Sync(p); err != nil {
+			t.Fatal(err)
+		}
+		old := BestScore
+		BestScore = func(_ core.Project, version string) (float64, bool) { return 100, version == "" }
+		t.Cleanup(func() { BestScore = old })
+		task.Stage, task.Base, task.SHA, task.PR, task.Branch = StageWorking, base, "", core.PR{}, "hive/t1-cp"
+		if err := m.checkWorker(task, p); err != nil {
+			t.Fatal(err)
+		}
+		if c.cp && (task.Checkpoint == "" || logged(task, "100")) {
+			t.Fatalf("base %s: checkpoint %q, log %v", c.base, task.Checkpoint, task.Log)
+		}
+		if !c.cp && (task.Checkpoint != "" || !logged(task, "doesn't beat the best kept score 8")) {
+			t.Fatalf("base %s: checkpoint %q, log %v", c.base, task.Checkpoint, task.Log)
+		}
 	}
 }
