@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
-	"github.com/ihsan-sa/hive-standalone-build/internal/mod/modules"
 	"github.com/ihsan-sa/hive-standalone-build/internal/proc"
 	"github.com/ihsan-sa/hive-standalone-build/internal/sandbox"
 )
@@ -194,7 +193,7 @@ func TestExecutorNeedsTheHook(t *testing.T) {
 }
 
 // hive <module> runs a module's program with the arguments, its exit code
-// the command's, only for a module that asks for it and whose code was read.
+// the command's, only for a module that asks for it.
 func TestModuleCommand(t *testing.T) {
 	r, home := execRunner(t, `{"name":"dispatch","exec":["./run"],"command":true}`)
 	code, err := Command(r.C.WS, "dispatch", []string{"list", "--all"})
@@ -211,21 +210,14 @@ func TestModuleCommand(t *testing.T) {
 		t.Errorf("no module: %v", err)
 	}
 
-	// From git, it runs only at the commit its review approved.
+	// From git, it runs at its commit with no review first.
 	dir := filepath.Join(r.C.WS.Modules(), "dispatch")
 	for _, args := range [][]string{{"init", "-q"}, {"add", "-A"}, {"commit", "-q", "-m", "v1"}} {
 		if _, err := core.Git(dir, args...); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if _, err := Command(r.C.WS, "dispatch", []string{"list"}); err == nil || !strings.Contains(err.Error(), "hasn't been read") {
-		t.Errorf("an unread module ran: %v", err)
-	}
-	commit, _ := core.Git(dir, "rev-parse", "HEAD")
-	if err := r.Mods.SetReview("dispatch", modules.Review{Commit: commit, Vote: "approve"}); err != nil {
-		t.Fatal(err)
-	}
 	if code, err := Command(r.C.WS, "dispatch", []string{"list"}); err != nil || code != 3 {
-		t.Errorf("an approved module: %d, %v", code, err)
+		t.Errorf("a module from git: %d, %v", code, err)
 	}
 }

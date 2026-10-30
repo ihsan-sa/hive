@@ -15,12 +15,12 @@ import (
 )
 
 // The module seam: a module from git that carries a program (testdata/echomod)
-// starts only after the person approves it and a read-only review run clears
-// its commit; it files an ask with where it came from, carries the lead's
-// conversation out and a steer line in, is refused outside its hooks, and is
-// started again when it dies. One the review declines stays stopped; one
-// granted a single project never reads the lead's chat or the person's asks;
-// and a module catching up past more events than one read holds misses none.
+// starts at once, with no review of its code; it files an ask with where it
+// came from, carries the lead's conversation out and a steer line in, is
+// refused outside its hooks, and is started again when it dies. One whose
+// program isn't there raises an alert; one granted a single project never
+// reads the lead's chat or the person's asks; and a module catching up past
+// more events than one read holds misses none.
 func TestModuleSeam(t *testing.T) {
 	t.Parallel()
 	h := start(t)
@@ -61,9 +61,9 @@ func TestModuleSeam(t *testing.T) {
 		}
 		return false
 	}
-	h.wait("the module to be reviewed and started", 2*minute, running)
-	if !h.journaled("module.reviewed", `"vote":"approve"`) {
-		t.Fatal("the module started without a review on record")
+	h.wait("the module to start", 2*minute, running)
+	if h.journaled("module.reviewed", `"vote"`) {
+		t.Fatal("a review read the module before it ran")
 	}
 
 	home := filepath.Join(h.ws.Hive(), "modules", "echo")
@@ -100,7 +100,7 @@ func TestModuleSeam(t *testing.T) {
 		return h.countWith("module.started", `"module":"echo"`) >= 2 && running(st)
 	})
 
-	// An update is read again before it runs.
+	// An update runs at its new commit.
 	os.WriteFile(filepath.Join(src, "README.md"), []byte("an inbox and an outbox\n"), 0o644)
 	for _, args := range [][]string{{"add", "-A"}, {"commit", "-q", "-m", "v1.1"}, {"tag", "v1.1.0"}} {
 		if _, err := core.Git(src, args...); err != nil {
@@ -108,8 +108,8 @@ func TestModuleSeam(t *testing.T) {
 		}
 	}
 	h.post("/api/job", map[string]string{"name": "modules.update"}, nil)
-	h.wait("the update to be reviewed and started", 2*minute, func(st api.State) bool {
-		return h.count("module.reviewed") >= 2 && h.countWith("module.started", `"module":"echo"`) >= 3 && running(st)
+	h.wait("the update to start", 2*minute, func(st api.State) bool {
+		return h.countWith("module.started", `"module":"echo"`) >= 3 && running(st)
 	})
 
 	// Granted only another project, it reaches neither this one nor the lead.
@@ -120,28 +120,21 @@ func TestModuleSeam(t *testing.T) {
 	f.Close()
 	h.wait("asks outside its grant refused", minute, outbox("ask 400\nsay 400"))
 
-	// A module its review declines stays stopped, with an alert. Installing it
-	// talks with the lead, which echo must not read.
+	// A module whose program isn't there doesn't start, with an alert.
+	// Installing it talks with the lead, which echo must not read.
 	cut := h.state().Seq
 	nope := filepath.Join(t.TempDir(), "nope")
 	os.MkdirAll(nope, 0o755)
-	os.WriteFile(filepath.Join(nope, "module.json"), []byte(`{"name":"nope","description":"FAKE:paneldecline","exec":["./nope"],"hooks":["source"]}`), 0o644)
+	os.WriteFile(filepath.Join(nope, "module.json"), []byte(`{"name":"nope","description":"a program that isn't there","exec":["hive-e2e-no-such-program"],"hooks":["source"]}`), 0o644)
 	for _, args := range [][]string{{"init", "-q", "-b", "main"}, {"add", "-A"}, {"commit", "-q", "-m", "v1"}, {"tag", "v1.0.0"}} {
 		if _, err := core.Git(nope, args...); err != nil {
 			t.Fatal(err)
 		}
 	}
 	h.post("/api/chat", map[string]string{"chat": "lead", "text": "install module " + nope}, nil)
-	h.wait("the review to decline it", 2*minute, func(st api.State) bool {
-		for _, m := range st.Modules {
-			if m.Name == "nope" {
-				return strings.HasPrefix(m.Status, "declined by its review")
-			}
-		}
-		return false
-	})
-	if !h.journaled("alert.raised", "module nope was not started") || h.journaled("module.started", `"module":"nope"`) {
-		t.Fatal("a declined module: want an alert and no start")
+	h.wait("the missing program's alert", 2*minute, func(api.State) bool { return h.journaled("alert.raised", "module nope can't start") })
+	if h.journaled("module.started", `"module":"nope"`) {
+		t.Fatal("a module whose program isn't there: want no start")
 	}
 	events := func() map[string]int64 { // the last seq echo read of each kind
 		raw, _ := os.ReadFile(filepath.Join(home, "events"))

@@ -188,9 +188,9 @@ const Usage = `hive agent <op> [--key value ...]   (or one JSON object, or - for
 
 A value of @path reads that file. Common ops:
   progress  --text "where I am"                 shown on the dashboard
-  finish    --status done|blocked --account "..." [--tested ...] [--passed "test cmd"] [--unsure ...]
-                                                 --passed: the project's test passed on your final commit,
-                                                 main merged in; with no forge CI the Hive merges on it
+  finish    --status done|blocked --account "..." [--tested ...] [--unsure ...]
+                                                 your commits merge at once: no test, read or approval
+                                                 waits; main is measured after and a break is reverted
   message   --to <id|name|parent|person|lead> --text "..."
   inbox                                          messages waiting for you
   agents                                         who is running
@@ -200,9 +200,8 @@ A value of @path reads that file. Common ops:
                                                  --aim fix --why, or when it names something broken;
                                                  else (or with --aim gain) taken as a gain
   aim       --aim fix|gain --why "..." [--task id]   your task (or any other) is a fix of the failure --why
-                                                 names, which merges on its tests and reads and isn't reverted
-                                                 for a score dip alone, or a gain, which on the Hive's own
-                                                 repository merges only on the recursive gate's clear gain
+                                                 names, which isn't reverted for a score dip alone, or a gain,
+                                                 which a score drop after its merge reverts unless a judge keeps it
   pivot     --case "..." --evidence "..." [--project p]   any agent: a change of direction, filed first in
                                                  line as a fix; its worker weighs the case, then may throw away anything
   warden    --want "..." --why "..." --steps "..."   only money, credentials, publishing private details,
@@ -224,7 +223,7 @@ A value of @path reads that file. Common ops:
 Every agent is the same: lead, worker and sweep are names, not ranks, and every op below is yours,
 on any project's work as on your own, on the record with your run id.
   rerun-checks [--task id]                      the failed forge checks (CI jobs) on a PR's head (yours by default)
-                                                 run again, for a flake; at most 2 per head, the merge waits for them
+                                                 run again, for a flake; at most 2 per head
   queue     [--order id,id] [--hold id] [--release id]   briefs waiting for a worker, in order
             [--now id --why "..."]               put it first in line
   recheck   --task id [--back "..."]           any task: a blocked, stopped or stuck one is pushed and

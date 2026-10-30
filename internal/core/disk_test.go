@@ -711,66 +711,6 @@ func TestOnlyMainWritesTheBuildCache(t *testing.T) {
 	}
 }
 
-// A change's check runs go vet and go test on what the change can affect:
-// its packages and those that import them. Main's and a bare RunCheck run
-// everything, and a narrowing the go command refuses runs everything too.
-func TestRunCheckSinceNarrowsToAffectedPackages(t *testing.T) {
-	c, f := testHive(t)
-	seedRepo(t, f, "me/gomod", map[string]string{
-		"go.mod":         "module example.com/m\n\ngo 1.21\n",
-		"a/a.go":         "package a\n\nimport _ \"example.com/m/b\"\n",
-		"b/b.go":         "package b\n",
-		"c/c.go":         "package c\n",
-		".hive/goals.md": "# Goals\n",
-	})
-	p, err := c.Projects.Add(Project{Name: "gomod", Repo: "me/gomod"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	main, err := c.Effects.Sync(p)
-	if err != nil {
-		t.Fatal(err)
-	}
-	r, _ := commitInCheckout(t, c, p, "w1", main, "b/b.go", "package b\n\n// changed\n")
-	sha, err := c.Effects.Extract(p, r, main)
-	if err != nil {
-		t.Fatal(err)
-	}
-	bin := t.TempDir()
-	os.WriteFile(filepath.Join(bin, "go"), []byte("#!/bin/sh\necho \"ran go $*\"\ncase \"$*\" in *./a*) [ -f \"$REFUSE\" ] && { echo 'no Go files in /work/a'; exit 1; };; esac\nexit 0\n"), 0o755)
-	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
-	cmd := "go vet ./... && go test -short ./..."
-
-	ch := c.Effects.RunCheckSince(p, sha, main, "test", cmd)
-	if !ch.OK || !slices.Equal(ch.Scope, []string{"./a", "./b"}) || !strings.Contains(ch.Output, "ran go test -short ./a ./b") {
-		t.Fatalf("narrowed check: %+v", ch)
-	}
-	if ch := c.Effects.RunCheck(p, main, "test", cmd); ch.Scope != nil || !strings.Contains(ch.Output, "ran go test -short ./...") {
-		t.Fatalf("main's check: %+v", ch)
-	}
-	refuse := filepath.Join(t.TempDir(), "refuse")
-	os.WriteFile(refuse, nil, 0o644)
-	t.Setenv("REFUSE", refuse)
-	if ch := c.Effects.RunCheckSince(p, sha, main, "test", cmd); !ch.OK || ch.Scope != nil || !strings.Contains(ch.Output, "ran go test -short ./...") {
-		t.Fatalf("a narrowing go refused: %+v", ch)
-	}
-	// A whole pass stands over a later narrowed run of the same commit.
-	os.Remove(refuse)
-	c.Effects.RunCheckSince(p, sha, main, "test", cmd)
-	if got, _ := c.Effects.GetCheck(p.Name, sha, "test"); got.Scope != nil {
-		t.Fatalf("a narrowed run replaced the whole one: %+v", got)
-	}
-	// A whole red is rechecked: a narrowed pass after it is the answer, so
-	// the testing stage and Merge read the same record.
-	if ch := c.Effects.RunCheck(p, sha, "test", "exit 1"); ch.OK || ch.Scope != nil {
-		t.Fatalf("whole red: %+v", ch)
-	}
-	c.Effects.RunCheckSince(p, sha, main, "test", cmd)
-	if got, _ := c.Effects.GetCheck(p.Name, sha, "test"); !got.OK || got.Scope == nil {
-		t.Fatalf("a narrowed pass didn't replace a whole red: %+v", got)
-	}
-}
-
 // The person hears when the disk is nearly out of room, whatever fails first,
 // and the alert ends once the room is clearly back.
 func TestWatchRoomAlertsBeforeAnyCheck(t *testing.T) {

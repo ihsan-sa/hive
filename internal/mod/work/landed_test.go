@@ -35,8 +35,9 @@ func TestAlreadyLandedThroughAnotherTask(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if d := m.ownDiff(p, main, next); d != "" {
-					t.Fatalf("the updated branch still has an own diff %s", d)
+				dir := m.C.WS.Project(p.Name)
+				if base, err := core.Git(dir, "merge-base", main, next); err != nil || core.OwnDiff(dir, base, next) != "" {
+					t.Fatalf("the updated branch still has an own diff (%v)", err)
 				}
 				task.SHA = next
 				m.save(task, "")
