@@ -2244,6 +2244,10 @@ func (rs *Runs) endTurn(r Run) {
 		te.ParkedUntil = time.Now().Add(min(backoff(cur.Retries), 5*time.Minute))
 	}
 	rs.append("run.turn_ended", te)
+	if te.Status == StatusDone || te.Status == StatusBlocked || te.Status == StatusStopped {
+		// Its turn's launcher removes it as the turn ends, unless it was killed.
+		RemoveTree(rs.ws.RunTmp(r.ID))
+	}
 	if te.Reason == reopenedMidTurn {
 		rs.append("run.reopened", runNote{ID: r.ID}) // the finish it made before the message isn't its last
 	}
@@ -2907,7 +2911,7 @@ func (rs *Runs) sandboxSpec(cfg Config, sb sandbox.Sandbox, h harness.Harness, r
 	}
 	return sandbox.Spec{
 		ID: r.ID, Argv: argv, Env: env, Cwd: in(mounts[0]), Mounts: mounts, Tools: tools,
-		Stdin: stdin, Stdout: rs.ws.TurnOut(r.ID, turn), StopFile: filepath.Join(rs.ws.RunHost(r.ID), "stop"), Tmp: filepath.Join(rs.ws.RunPrivate(r.ID), "tmp"),
+		Stdin: stdin, Stdout: rs.ws.TurnOut(r.ID, turn), StopFile: filepath.Join(rs.ws.RunHost(r.ID), "stop"), Tmp: rs.ws.RunTmp(r.ID),
 		Network: true, Allow: allow, Local: cfg.Egress.LocalAddrs(), Outside: cfg.Egress.OutsideFor(r.Project), Guard: rs.ws.Guarded(), Cover: rs.ws.Covered(), UID: os.Getuid(), GID: os.Getgid(),
 		Nice: r.Nice(),
 	}, nil

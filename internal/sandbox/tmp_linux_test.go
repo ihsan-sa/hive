@@ -47,10 +47,13 @@ func TestTmpOnDiskBothPaths(t *testing.T) {
 			os.MkdirAll(work, 0o755)
 			os.MkdirAll(tmp, 0o755)
 			os.WriteFile(filepath.Join(tmp, "stale"), nil, 0o644)
+			os.MkdirAll(filepath.Join(tmp, "stale-ro"), 0o755)
+			os.WriteFile(filepath.Join(tmp, "stale-ro", "f"), nil, 0o644)
+			os.Chmod(filepath.Join(tmp, "stale-ro"), 0o555)
 			run := func(tmpDir string) string {
 				s := Spec{
 					ID:     "tmp",
-					Argv:   []string{"/bin/sh", "-c", "test ! -e /tmp/stale && echo x > /tmp/f && grep -E ' /(tmp|dev/shm) ' /proc/self/mounts > /work/mounts"},
+					Argv:   []string{"/bin/sh", "-c", "test ! -e /tmp/stale && test ! -e /tmp/stale-ro && echo x > /tmp/f && mkdir -p /tmp/ro/d && touch /tmp/ro/d/f && chmod 555 /tmp/ro/d && grep -E ' /(tmp|dev/shm) ' /proc/self/mounts > /work/mounts"},
 					Env:    InsideEnv("/tmp", false),
 					Cwd:    "/work",
 					Mounts: []Mount{{Host: work, Inside: "/work", RW: true}},
@@ -91,5 +94,22 @@ func TestTmpOnDiskBothPaths(t *testing.T) {
 				t.Errorf("no folder must mean a capped tmpfs /tmp:\n%s", mounts)
 			}
 		})
+	}
+}
+
+// A command's /tmp goes whole even when it holds read-only folders, as a
+// Go module cache's are: a plain remove leaves them, and they pile up turn
+// after turn.
+func TestRemoveTreeReadOnly(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "tmp")
+	ro := filepath.Join(dir, "gomod", "x@v1")
+	os.MkdirAll(ro, 0o755)
+	os.WriteFile(filepath.Join(ro, "f"), nil, 0o444)
+	os.Chmod(ro, 0o555)
+	if err := removeTree(dir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Errorf("%s outlived removeTree: %v", dir, err)
 	}
 }

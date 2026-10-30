@@ -90,3 +90,53 @@ func TestPruneTempRemovesQuietLeftovers(t *testing.T) {
 		t.Errorf("dropped %v", gone)
 	}
 }
+
+// The clean job removes a run's /tmp once no turn uses it: an ended run's
+// and an unknown one's at once, a waiting run's once quiet for a day, never
+// a running one's; read-only folders in it (a Go module cache's) go too.
+func TestPruneTmpRemovesRunsScratch(t *testing.T) {
+	ws := Workspace{Root: t.TempDir()}
+	if err := ws.Init(); err != nil {
+		t.Fatal(err)
+	}
+	j, err := OpenJournal(filepath.Join(t.TempDir(), "j.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer j.Close()
+	rs := NewRuns(ws, j, nil, NewTokens(ws), func() []string { return nil })
+	old := time.Now().Add(-2 * leftoverAge)
+	mk := func(id, status string, aged bool) string {
+		if status != "" {
+			rs.runs[id] = &Run{RunSpec: RunSpec{ID: id}, Status: status}
+		}
+		dir := filepath.Join(ws.RunTmp(id), "gomod", "x@v1")
+		os.MkdirAll(dir, 0o755)
+		os.WriteFile(filepath.Join(dir, "f"), []byte("data"), 0o444)
+		os.Chmod(dir, 0o555)
+		if aged {
+			for p := dir; p != filepath.Dir(ws.RunTmp(id)); p = filepath.Dir(p) {
+				os.Chtimes(p, old, old)
+			}
+			os.Chtimes(filepath.Join(dir, "f"), old, old)
+		}
+		return ws.RunTmp(id)
+	}
+	done := mk("done", StatusDone, false)
+	stopped := mk("stopped", StatusStopped, false)
+	unknown := mk("unknown", "", false)
+	running := mk("running", StatusRunning, true)
+	idle := mk("idle", StatusIdle, false)
+	quietIdle := mk("quiet", StatusIdle, true)
+	t.Cleanup(func() { RemoveTree(ws.Root) })
+	var gone []string
+	rs.pruneTmp(func(p string) { gone = append(gone, p); RemoveTree(p) })
+	for p, want := range map[string]bool{done: false, stopped: false, unknown: false, running: true, idle: true, quietIdle: false} {
+		if Exists(p) != want {
+			t.Errorf("%s exists %v, want %v", p, Exists(p), want)
+		}
+	}
+	if len(gone) != 4 {
+		t.Errorf("dropped %v", gone)
+	}
+}

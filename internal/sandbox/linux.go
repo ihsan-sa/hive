@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net"
 	"os"
 	"os/exec"
@@ -108,6 +109,21 @@ func Probe() error {
 	return nil
 }
 
+// removeTree removes dir and all in it, making read-only folders writable
+// first when a plain remove fails; links are never followed.
+func removeTree(dir string) error {
+	if err := os.RemoveAll(dir); err == nil {
+		return nil
+	}
+	filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+		if err == nil && d.IsDir() {
+			os.Chmod(p, 0o700)
+		}
+		return nil
+	})
+	return os.RemoveAll(dir)
+}
+
 type initArgs struct {
 	Spec   Spec              `json:"spec"`
 	Root   string            `json:"root"`
@@ -144,12 +160,13 @@ func Exec(specPath string) int {
 	fail := func(err error) int { fmt.Fprintln(errf, "sandbox:", err); return 125 }
 	if s.Tmp != "" {
 		// Fresh each command, as a tmpfs is; what a killed launcher left
-		// goes the next time.
-		os.RemoveAll(s.Tmp)
+		// goes the next time. Read-only folders (a Go module cache's) are
+		// opened first, or they and all under them would stay.
+		removeTree(s.Tmp)
 		if err := os.MkdirAll(s.Tmp, 0o700); err != nil {
 			return fail(err)
 		}
-		defer os.RemoveAll(s.Tmp)
+		defer removeTree(s.Tmp)
 	}
 
 	base := "/dev/shm"
