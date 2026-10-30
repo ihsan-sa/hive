@@ -30,6 +30,12 @@ MAX_MB=${HIVE_BACKUP_MAX_MB:-4096}
 MIN_FREE_MB=${HIVE_BACKUP_MIN_FREE_MB:-20480}
 
 say() { echo "hive-backup: $*"; }
+# safegit runs git with no system or global config, no hooks and no fsmonitor,
+# in an empty HOME, so nothing an agent wrote into a repo or ~ can run.
+safegit() {
+	env -i PATH=/usr/bin:/bin HOME=/nonexistent GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null \
+		git -c core.hooksPath=/dev/null -c core.fsmonitor=false -c protocol.file.allow=always "$@"
+}
 die() { say "$*" >&2; exit 1; }
 
 [ -f "$HIVE/.hive/events.jsonl" ] || die "no journal at $HIVE/.hive/events.jsonl"
@@ -39,7 +45,10 @@ mkdir -p "$OUT"
 # unauthenticated look at a private repo with 404. Anything it can't tell (no
 # answer, another forge) counts as private, so it is kept rather than lost.
 private() {
-	url=$(git -C "$1" config --get remote.origin.url 2>/dev/null) || return 0
+	# Read the URL as text: never run git inside a clone agents can write
+	# (a planted hook or config would run as this script's user).
+	url=$(sed -n '/^\[remote "origin"\]/,/^\[/s/^[[:space:]]*url[[:space:]]*=[[:space:]]*//p' "$1.git/config" 2>/dev/null | head -n 1)
+	[ -n "$url" ] || return 0
 	case "$url" in
 	https://github.com/*) repo=${url#https://github.com/} ;;
 	git@github.com:*) repo=${url#git@github.com:} ;;
@@ -84,8 +93,15 @@ tar -C "$HIVE/.hive" --exclude=kb/record -cf - kb | zstd -q -3 -T2 -o "$tmp/kb.t
 for p in $bundles; do
 	mkdir -p "$tmp/repos"
 	b="$tmp/repos/$(basename "$p").bundle"
-	git -C "$p" -c core.fsmonitor=false bundle create -q "$b" --all || die "can't bundle $p"
-	git -C "$p" bundle verify -q "$b" >/dev/null 2>&1 || die "the bundle of $p doesn't check"
+	# Mirror the clone into a fresh dir first, with no repo, user or system
+	# config and no hooks, then bundle the mirror: git never runs inside the
+	# agent-writable clone itself (upload-pack ignores a repo's hook settings).
+	m="$tmp/.mirror"
+	rm -rf "$m"
+	safegit clone -q --mirror --no-hardlinks "file://${p%/}/.git" "$m" || die "can't mirror $p"
+	safegit -C "$m" bundle create -q "$b" --all || die "can't bundle $p"
+	safegit -C "$m" bundle verify -q "$b" >/dev/null 2>&1 || die "the bundle of $p doesn't check"
+	rm -rf "$m"
 done
 
 zstd -q -t "$tmp/events.jsonl.zst" "$tmp/kb.tar.zst" || die "a compressed file doesn't check"
