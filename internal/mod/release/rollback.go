@@ -118,7 +118,7 @@ func (m *Module) rolledBackFrom() map[string]bool {
 		if e.Kind == "hive.rolledback" && e.Decode(&x) == nil {
 			back[x.From] = true
 		}
-	})
+	}, "hive.rolledback")
 	return back
 }
 

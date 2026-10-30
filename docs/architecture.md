@@ -253,6 +253,8 @@ Built-in modules still run in-process, as a hook table would.
 - Files the sandbox can write are read with `SafeRead` (no symlinks, same-file check); the host decides what to kill/clean from its own records.
 - Nothing an agent requests runs outside the sandbox, except a script a warden or tribunal approved, run by the risk module in the daemon as exactly that digest-pinned script text (the pin covers the text, not files it calls); what is always the person's goes to the person (see [risk.md](risk.md)).
 - Every state change is a journal event; restart = replay + reconcile; issue/PR/run creation is idempotent.
+  A whole replay is for start only: a read after it names its kinds (`Journal.Replay(fn, kinds...)`), which reads those lines from the journal's index of each kind's lines, or reads on from a cursor (`Since`).
+  On 2026-10-30 the release module's whole replays read the 1.09 GB journal about 20 times every 5 minutes, most of the daemon's 40 MB/s of reads.
 - A person's stop, retry or recheck stands over a step running on an older copy of the task (`work.steer`): the step's later saves are dropped, and it starts no worker, pushes nothing, posts no test or hold comment and doesn't merge once `overtaken`.
   The merge asks last of all, inside `core.Effects.Merge` just before the forge's merge call (`MergeRequest.Stale`), but not atomically with it: a stop that lands while the forge merges can't be refused, and the merge is then recorded, since the forge holds it.
   A worker started as a stop lands is stopped by whichever comes second, the step or the stop.

@@ -669,7 +669,7 @@ func (m *Module) liftForwardPin(cfg core.Config) (bool, error) {
 				from = "" // this build's own update: a pin it made stays
 			}
 		}
-	})
+	}, "hive.updated")
 	if from == "" || !modules.Newer(from, cfg.ReleasePin) {
 		return false, nil
 	}
@@ -1171,7 +1171,7 @@ func (m *Module) ciState(project string) (last ciWait) {
 			last.At = e.At // a wait keeps the time it began
 		}
 		last.Kind, last.SHA = e.Kind, x.SHA
-	})
+	}, "release.ci_*", "hive.released")
 	return last
 }
 
@@ -1228,7 +1228,7 @@ func (m *Module) reading(project string) (sha string) {
 		if e.Kind == "release.reading" {
 			sha = x.SHA
 		}
-	})
+	}, "release.reading", "release.read_ended", "hive.released")
 	return sha
 }
 
@@ -1277,7 +1277,7 @@ func (m *Module) unmerged(project string) (sha, next string) {
 		case e.Kind == "effect.merged" && sha != "" && x.MergeSHA != "":
 			later = append(later, x.MergeSHA)
 		}
-	})
+	}, "release.unmerged", "hive.released", "release.ci_*", "score.measured", "score.covered", "effect.merged")
 	kept[sha] = sha != "" // AfterKept refused it, so improve kept it
 	for i := len(later) - 1; i >= 0; i-- {
 		if kept[later[i]] {
@@ -1367,7 +1367,7 @@ func (m *Module) greenAfter(p core.Project, sha string) string {
 				later = append(later, x.MergeSHA)
 			}
 		}
-	})
+	}, "score.measured", "score.covered", "effect.merged")
 	contains := m.Contains
 	if contains == nil {
 		contains = m.contains
@@ -1565,7 +1565,7 @@ func (m *Module) merges(project, upTo string) (out []merge, refuse string) {
 		} else {
 			hand = append(hand, cut{x.SHA, len(all)})
 		}
-	})
+	}, "effect.merged", "hive.released")
 	// A release at a commit the Hive didn't merge (a hand merge, a warden's
 	// tag) covers the merges before it that its history holds; one git can't
 	// read covers them all, as it did before hand merges were released.
@@ -1703,7 +1703,7 @@ func (m *Module) Publish() string {
 		case "release.refused":
 			cands = slices.DeleteFunc(cands, func(c cand) bool { return c.Project == x.Project && c.Tag == x.Tag })
 		}
-	})
+	}, "hive.released", "hive.published", "release.failed", "release.refused")
 	if m.said == nil {
 		m.said = map[string]bool{}
 	}
@@ -1885,7 +1885,7 @@ func (m *Module) unbuilt(p core.Project, sha string) (why, tag string, first boo
 		case "release.held":
 			held[x.Tag] = true
 		}
-	})
+	}, "hive.released", "release.held")
 	if tag == "" || at == sha {
 		return "", "", false
 	}
