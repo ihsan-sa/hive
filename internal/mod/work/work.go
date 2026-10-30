@@ -69,7 +69,7 @@ type Task struct {
 	Thread      string `json:"thread,omitempty"`
 	Kind        string `json:"kind"` // work | revert | helper (spawned, no issue)
 	// Aim is AimFix for a task clearly said to be a fix, with the failure it
-	// fixes named (AimWhy), which merges on its tests, checks and reads and
+	// fixes named (AimWhy), which merges as soon as its worker finishes and
 	// which a score dip after it merges doesn't revert on its own. Anything
 	// else, AimGain or unclear (empty), is taken as a gain: on the Hive's own
 	// repository it goes through the recursive gate, and a dip reverts it.
@@ -442,17 +442,17 @@ func New(c *core.Core, a *agents.Agents, ch *chat.Module) *Module {
 	c.J.Replay(apply)
 	c.J.Subscribe(apply)
 	c.Runs.Ops().AddRouter(m.toFiler)
-	c.Runs.Ops().Register(core.Op{Name: "brief", Help: `{"title","done","known","project","aim","why","apart"} (aim: fix, with why naming the failure it fixes, merges on its tests, checks and reads and isn't reverted for a score dip alone; anything else is taken as a gain, which on the Hive's own repository merges only if the recursive gate shows it); one matching an open task not yet pushed (a test both name, a near-identical title, or one filed within the hour sharing most of its words) and taken the same way joins it as added context instead, unless apart`, Fn: m.opBrief})
-	c.Runs.Ops().Register(core.Op{Name: "aim", Help: `{"task","aim":"fix"|"gain","why"} (your own task by default; any other task) -> sets whether the task is a fix of the failure why names, which merges on its tests, checks and reads and isn't reverted for a score dip alone, or a gain, which on the Hive's own repository merges only on the recursive gate's clear gain`, Fn: m.opAim})
+	c.Runs.Ops().Register(core.Op{Name: "brief", Help: `{"title","done","known","project","aim","why","apart"} (aim: fix, with why naming the failure it fixes, isn't reverted for a score dip alone; anything else is taken as a gain, which a score drop after its merge reverts unless a judge keeps it; either merges as soon as its worker finishes); one matching an open task not yet pushed (a test both name, a near-identical title, or one filed within the hour sharing most of its words) and taken the same way joins it as added context instead, unless apart`, Fn: m.opBrief})
+	c.Runs.Ops().Register(core.Op{Name: "aim", Help: `{"task","aim":"fix"|"gain","why"} (your own task by default; any other task) -> sets whether the task is a fix of the failure why names, which isn't reverted for a score dip alone, or a gain, which a score drop after its merge reverts unless a judge keeps it; either merges as soon as its worker finishes`, Fn: m.opAim})
 	c.Runs.Ops().Register(core.Op{Name: "recheck", Help: `{"task","back"} -> a blocked or stopped task's commits are pushed and checked again (whoever stopped it); a working one's worker gets back at once; one stuck on its way to the merge (landing, testing, reviewing, merging: say on checks of a commit that is no longer its head) is retried the same way from its branch's head, and a stuck checkpoint is dropped while its worker goes on; with back, its worker gets that text and works on`, Fn: m.opRecheck})
-	c.Runs.Ops().Register(core.Op{Name: "rerun-checks", Help: `{"task"} (your own task by default; any other task) -> re-runs the failed forge checks (CI jobs) on the PR's head, for a flake that isn't the change's fault; at most 2 per head, and the merge waits for the new result`, Fn: m.opRerunChecks})
+	c.Runs.Ops().Register(core.Op{Name: "rerun-checks", Help: `{"task"} (your own task by default; any other task) -> re-runs the failed forge checks (CI jobs) on the PR's head, for a flake that isn't the change's fault; at most 2 per head`, Fn: m.opRerunChecks})
 	c.Runs.Ops().Register(core.Op{Name: "queue", Help: `{"order":[task ids],"hold":[task ids],"release":[task ids],"now":[task ids],"why"} (all optional) -> the briefs waiting for a worker, in the order they start; order puts those first in that order (the rest follow as filed; one waiting 4h or more goes ahead of the order, oldest first), hold keeps one waiting until released, now puts those first of all (why says so, on the record), for a fix the rest need. Any project's briefs may be named. A started worker is never stopped here (a quiet one is, with stop)`, Fn: m.opQueue})
 	c.Runs.Ops().Register(core.Op{Name: "stop", Help: `{"task","why","fresh":bool} -> ends a working task's quiet worker (one that keeps ending turns without finishing) as blocked, so it holds no run for a day; why goes on the record. The task goes blocked, yours to bring back with recheck; with fresh it is queued at once for a fresh worker on the same branch with the first one's notes. A worker taking turns, waiting or parked isn't stopped`, Fn: m.opStop})
 	c.Runs.Ops().Register(core.Op{Name: "landed", Help: `{"task","why","merge"} -> ends a task in any stage as merged when its PR is merged on the forge or its commits are on main (merge names the main commit that carried them: a squash of its own, or another PR's merge that took its work in, on your word, which closes its own open PR), so the briefs waiting on it start; refused while its PR is open and its work isn't on main, unless merge names that commit`, Fn: m.opLanded})
 	c.Runs.Ops().Register(core.Op{Name: "amend", Help: `{"task","title","done","known","why"} -> changes a brief no worker has started on yet (filed or queued) in place: each of title, done and known given replaces the old one, and its open issue gets the brief as amended. A wider ask goes here rather than in a new brief beside it`, Fn: m.opAmend})
 	c.Runs.Ops().Register(core.Op{Name: "withdraw", Help: `{"task","why","into"} -> takes back a brief no worker has started on yet, or one whose worker finished blocked with no PR: the task stops and its issue closes with why (and into, the task that covers it now). It doesn't come back with recheck`, Fn: m.opWithdraw})
-	c.Runs.Ops().Register(core.Op{Name: "batch", Help: `{"tasks":"batch,id,...","why"} -> folds related briefs into one task, the first named: one worker does them all in one session and lands them as one PR, through one round of checks and reads. The first may be waiting or being worked on (its worker is told); each other must be a brief you could withdraw, taken the same way (fixes with fixes), and is withdrawn into the first, its issue closed as covered by the batch's`, Fn: m.opBatch})
-	c.Runs.Ops().Register(core.Op{Name: "hold_merges", Help: `{"project","why","only":[PR numbers],"until":"release"|"","lift":bool} -> on the person's word only (why quotes them): hold every merge on the project but the PRs in only (follow-ups and reverts included) until lifted, or with until "release" until the next release is out; lift ends it. Held PRs still pass their gate and wait ready`, Fn: m.opHold})
+	c.Runs.Ops().Register(core.Op{Name: "batch", Help: `{"tasks":"batch,id,...","why"} -> folds related briefs into one task, the first named: one worker does them all in one session and lands them as one PR. The first may be waiting or being worked on (its worker is told); each other must be a brief you could withdraw, taken the same way (fixes with fixes), and is withdrawn into the first, its issue closed as covered by the batch's`, Fn: m.opBatch})
+	c.Runs.Ops().Register(core.Op{Name: "hold_merges", Help: `{"project","why","only":[PR numbers],"until":"release"|"","lift":bool} -> on the person's word only (why quotes them): hold every merge on the project but the PRs in only (follow-ups and reverts included) until lifted, or with until "release" until the next release is out; lift ends it. Held PRs wait ready`, Fn: m.opHold})
 	c.Runs.Ops().Register(core.Op{Name: "pr_close", Help: `{"task"|"project"+"pr","comment","delete_branch":bool} -> closes the Hive's own PR with comment and ends its task (its worker stopped); delete_branch deletes its hive/ branch. A revert you no longer want is closed this way, not left to the person`, Fn: m.opPRClose})
 	c.Effects.MergeHeld = m.MergeHeld
 	c.Effects.Slots.Resize(m.maxChecks)
@@ -1529,9 +1529,9 @@ func (m *Module) renderBrief(t *Task, p core.Project, base string) string {
 	fmt.Fprintf(&b, "- Tests: `%s`\n", orNone(cfg.Test))
 	if p.Self {
 		if t.Fix() {
-			b.WriteString("- Aim: a fix (" + orNone(t.AimWhy) + "). It merges on its tests; a score dip after it merges doesn't revert it on its own, but files a brief to look into it. If it isn't a fix of a named failure, say so with `hive agent aim --aim gain --why \"...\"`.\n")
+			b.WriteString("- Aim: a fix (" + orNone(t.AimWhy) + "). It merges as soon as you finish; a score dip after it merges doesn't revert it on its own, but files a brief to look into it. If it isn't a fix of a named failure, say so with `hive agent aim --aim gain --why \"...\"`.\n")
 		} else {
-			fmt.Fprintf(&b, "- Aim: %s. It merges on its tests, and main is measured after: a score drop beyond noise reverts it unless a judge, weighing it with the change, keeps it. If it is a fix, say so naming the failure it fixes (a bug, a failing test, a broken path) with `hive agent aim --aim fix --why \"...\"`.\n", t.AimWord())
+			fmt.Fprintf(&b, "- Aim: %s. It merges as soon as you finish, and main is measured after: a score drop beyond noise reverts it unless a judge, weighing it with the change, keeps it. If it is a fix, say so naming the failure it fixes (a bug, a failing test, a broken path) with `hive agent aim --aim fix --why \"...\"`.\n", t.AimWord())
 		}
 	}
 	if cfg.Score != nil {
@@ -1569,7 +1569,7 @@ func (m *Module) renderBrief(t *Task, p core.Project, base string) string {
 	if prior := m.priorBlocked(t); prior != "" {
 		b.WriteString("\n## Earlier attempts that stopped\n\n" + prior)
 	}
-	b.WriteString("\n## When you finish\n\nCommit on your branch, merge main into it (`git fetch \"$HIVE_RUN/main.bundle\" main && git merge FETCH_HEAD`) and resolve any conflict yourself, run the project's tests, then run `hive agent finish --status done --account \"...\" --tested \"...\" --passed \"<the test command, if it passed on this commit>\" --unsure \"...\"` and end your turn. The Hive merges your PR at once on green forge CI, or on your --passed where the project has none; main is measured after and a break is reverted. If you can't finish, use `--status blocked` and say why.\n")
+	b.WriteString("\n## When you finish\n\nCommit on your branch and merge main into it (`git fetch \"$HIVE_RUN/main.bundle\" main && git merge FETCH_HEAD`), resolving any conflict yourself. Then run `hive agent finish --status done --account \"...\" --tested \"...\" --unsure \"...\"` and end your turn: the Hive merges your PR at once. Nothing waits before the merge, no test, read, approval or CI, whatever you changed, the core included; run the tests if you want to. Main is measured after the merge and a break is reverted. You may instead push to main yourself (`git pull --rebase \"https://github.com/$HIVE_REPO\" main && git push \"https://github.com/$HIVE_REPO\" HEAD:main`, again if main moved; never force), then finish: what you pushed is yours to watch (`gh run list --branch main`) and to fix or revert if it goes red. If you can't finish, use `--status blocked` and say why.\n")
 	return b.String()
 }
 
@@ -1881,7 +1881,7 @@ func finished(s string) bool {
 
 // noBankGain is why a change to the Hive aimed at a gain is never merged in
 // parts: the recursive gate judges its whole diff, once its worker finishes.
-const noBankGain = "it aims at a gain, which merges only whole, on the recursive gate's keep once its worker finishes"
+const noBankGain = "it aims at a gain, which merges whole once its worker finishes"
 
 // rewound tells a worker its branch left a commit already merged as a checkpoint.
 func rewound(base string) string {
@@ -3658,10 +3658,10 @@ func (m *Module) conflict(t *Task, p core.Project, head string, why error) error
 		m.comment(p.Repo, t.PR.Number, "Stopping: the branch keeps conflicting with main. The pull request stays open.")
 		return nil
 	}
-	msg := "Main moved and your branch conflicts with it. Merge main into your branch, resolve the conflicts, run the tests, commit, and finish again (with --passed once they pass)."
+	msg := "Main moved and your branch conflicts with it. Merge main into your branch, resolve the conflicts, commit, and finish again."
 	if d := (*core.DoubledError)(nil); errors.As(why, &d) {
 		msg = "Main moved, and merging it into your branch keeps both sides of lines you and main each changed (these docs merge as union), so these end up more than once:\n\n- " +
-			strings.Join(d.Lines, "\n- ") + "\n\nMerge main into your branch, keep each of these once, run the tests, commit, and finish again."
+			strings.Join(d.Lines, "\n- ") + "\n\nMerge main into your branch, keep each of these once, commit, and finish again."
 	}
 	msg += m.movedBy(p, cmp.Or(head, t.SHA), t.ConflictMain)
 	return m.sendBack(t, p, msg)
