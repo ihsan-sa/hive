@@ -280,6 +280,7 @@ Settings in `.hive/config.json`; none of them stops or parks work.
 - `turn_mb` (240): one memory budget paces the Hive ([priority.md](priority.md)).
   A turn, and a waiting brief's worker, starts while the Hive's cgroup limit (or the machine's memory, with none) leaves `turn_mb` for it and for each one starting beside it (`core.MemBudget`); a lead's, warden's or tribunal seat's turn never waits.
   Each tick steps the leads before the other runs, and leads run at a higher priority (nice levels).
+- `disk_full_max` (40): on a saturated disk (IO pressure `full avg60` over it, `core.DiskBusy`) the work module starts no new worker while one works and runs one check at a time; below 0 is off.
 - `max_output_tokens` (16000): sets `CLAUDE_CODE_MAX_OUTPUT_TOKENS` on each Claude turn, because a spend budget is checked only between turns and one reply can otherwise run long.
   0 leaves Claude's own default.
 - `monthly_usd` (off): each turn's `cost_usd` is already in its `run.turn_ended` event; the runs fold it into a total per UTC month.

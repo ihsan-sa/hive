@@ -255,7 +255,7 @@ func (e *Effects) goModules(sb sandbox.Sandbox, dir string) goMods {
 		unlock()
 	}
 	os.MkdirAll(e.ws.GoModCache(), 0o755) // a module with nothing to fetch still mounts it
-	return goMods{mounts: shared, env: []string{"GOMODCACHE=" + GoModInside, "GOFLAGS=-mod=readonly", "GOPROXY=off"},
+	return goMods{mounts: shared, env: []string{"GOMODCACHE=" + GoModInside, "GOFLAGS=-mod=readonly " + leanLink, "GOPROXY=off"},
 		own: ownModEnv, marker: marker, sum: sum, done: e.modMu.RUnlock}
 }
 
@@ -264,7 +264,14 @@ func (e *Effects) goModules(sb sandbox.Sandbox, dir string) goMods {
 // lacks comes over the network. A check fetching everything from the proxy
 // failed whenever the proxy refused it (2ea48ab0: "Forbidden" twice, then a
 // pass).
-var ownModEnv = []string{"GOPROXY=file://" + GoModInside + "/cache/download,https://proxy.golang.org,direct"}
+var ownModEnv = []string{"GOPROXY=file://" + GoModInside + "/cache/download,https://proxy.golang.org,direct", "GOFLAGS=" + leanLink}
+
+// leanLink links a check's binaries without DWARF: test binaries are
+// written, run once and removed, and no check reads their debug data. A
+// quarter less to write per link (internal/core's test binary 13.1 MB to
+// 9.8 MB), on a disk Go links and test builds kept saturated (10-30). A
+// command's own -ldflags still wins.
+const leanLink = "-ldflags=-w"
 
 // goBuild readies the project's shared build cache for a check of sha in dir,
 // where goModules would share the module cache. A commit on main's line

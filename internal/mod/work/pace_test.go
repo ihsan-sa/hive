@@ -2,6 +2,7 @@ package work
 
 import (
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -153,5 +154,42 @@ func TestMeasuringMainMovesAWaiterUp(t *testing.T) {
 	hold()
 	if a, b := <-started, <-started; a != "main1" || b != "pr" {
 		t.Fatalf("started %s then %s", a, b)
+	}
+}
+
+// On a saturated disk no new worker starts while another works, but one
+// does when none works, so the loop never stops; checks run one at a time.
+func TestSaturatedDiskHoldsNewWorkersAndChecks(t *testing.T) {
+	m, _, _, _ := noCommitRig(t, 0)
+	busy := "waiting: disk (IO pressure full avg60 62%, limit 40%)"
+	was := diskBusy
+	diskBusy = func(float64) string { return busy }
+	defer func() { diskBusy = was }()
+	a, b := file(t, m, "first", ""), file(t, m, "second", "")
+	for _, tk := range []*Task{&a, &b} {
+		tk.Stage = StageQueued
+		m.save(tk, "")
+	}
+	start, wait := m.admit(m.List(nil))
+	if !start[a.ID] || start[b.ID] || wait[b.ID] != busy+" for a worker" {
+		t.Fatalf("with no worker working: start %v, wait %v", start, wait)
+	}
+	a.Stage = StageWorking
+	m.save(&a, "")
+	if start, wait = m.admit(m.List(nil)); start[b.ID] || wait[b.ID] == "" {
+		t.Fatalf("started beside a working one: start %v, wait %v", start, wait)
+	}
+	if n := m.maxChecks(); n != 1 {
+		t.Fatalf("%d checks at once on a saturated disk", n)
+	}
+	if p := m.Pace(); !strings.HasPrefix(p["checks"], "1, waiting: disk") {
+		t.Fatalf("pace %v", p)
+	}
+	busy = ""
+	if start, _ = m.admit(m.List(nil)); !start[b.ID] {
+		t.Fatal("the disk eased and the brief still waits")
+	}
+	if n := m.maxChecks(); n != core.DefaultMaxChecks() {
+		t.Fatalf("%d checks at once", n)
 	}
 }

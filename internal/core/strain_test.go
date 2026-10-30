@@ -51,3 +51,23 @@ func TestMemBudget(t *testing.T) {
 		t.Fatalf("the leaf didn't wait on its unit's limit: %q", why)
 	}
 }
+
+// The disk counts as saturated while IO pressure's full avg60 is over its
+// limit, and never with the limit off or nothing to read.
+func TestDiskBusy(t *testing.T) {
+	proc := t.TempDir()
+	if why := diskBusy(proc, DefaultDiskFullMax); why != "" {
+		t.Fatalf("held with nothing to read: %q", why)
+	}
+	os.MkdirAll(proc+"/pressure", 0o755)
+	os.WriteFile(proc+"/pressure/io", []byte("some avg10=92.82 avg60=92.17 avg300=92.28 total=1\nfull avg10=59.03 avg60=62.13 avg300=59.26 total=1\n"), 0o644)
+	if why := diskBusy(proc, 40); !strings.HasPrefix(why, DiskWait) || !strings.Contains(why, "62%") {
+		t.Fatalf("a saturated disk didn't hold: %q", why)
+	}
+	if why := diskBusy(proc, 70); why != "" {
+		t.Fatalf("held under the limit: %q", why)
+	}
+	if why := diskBusy(proc, 0); why != "" {
+		t.Fatalf("the limit off held: %q", why)
+	}
+}

@@ -110,3 +110,53 @@ func cgroupNumber(path string) float64 {
 	f, _ := strconv.ParseFloat(strings.TrimSpace(string(raw)), 64)
 	return f
 }
+
+// DefaultDiskFullMax is where Config.DiskFullMax starts: the share of the
+// last minute (Linux IO pressure, "full avg60", percent) every running task
+// sat stalled on the disk at once, past which the disk counts as saturated.
+// On 10-30 it stood at ~60% from boot, some avg60 92%, a write ~0.8 s.
+const DefaultDiskFullMax = 40
+
+// DiskWait starts every reason DiskBusy gives.
+const DiskWait = "waiting: disk"
+
+// DiskBusy says why the disk is too saturated to start more work on it, or
+// "": its IO pressure's full avg60 is over fullMax. Where /proc/pressure/io
+// can't be read, or with fullMax 0, it never holds. Memory is a budget per
+// turn (MemBudget); the disk has no figure per turn to budget, so it is read
+// as a whole and starts of new work wait while it is over (the work module:
+// new workers and checks past the first).
+func DiskBusy(fullMax float64) string { return diskBusy(procRoot, fullMax) }
+
+// DiskFull is the limit DiskBusy reads for c: its DiskFullMax, the default
+// where unset, 0 (off) where below 0.
+func (c Config) DiskFull() float64 {
+	switch {
+	case c.DiskFullMax < 0:
+		return 0
+	case c.DiskFullMax == 0:
+		return DefaultDiskFullMax
+	}
+	return c.DiskFullMax
+}
+
+func diskBusy(proc string, fullMax float64) string {
+	if fullMax <= 0 {
+		return ""
+	}
+	raw, err := os.ReadFile(proc + "/pressure/io")
+	if err != nil {
+		return ""
+	}
+	for _, l := range strings.Split(string(raw), "\n") {
+		rest, ok := strings.CutPrefix(l, "full ")
+		if !ok {
+			continue
+		}
+		_, v, _ := strings.Cut(rest, "avg60=")
+		if p, err := strconv.ParseFloat(strings.SplitN(v, " ", 2)[0], 64); err == nil && p > fullMax {
+			return fmt.Sprintf("%s (IO pressure full avg60 %.0f%%, limit %g%%)", DiskWait, p, fullMax)
+		}
+	}
+	return ""
+}
