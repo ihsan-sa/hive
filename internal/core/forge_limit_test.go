@@ -1,8 +1,10 @@
 package core
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"slices"
 	"strings"
@@ -768,5 +770,48 @@ func TestWritesAreSpaced(t *testing.T) {
 		if d := at.Sub(start); d < time.Duration(i)*40*time.Millisecond {
 			t.Fatalf("write %d went %v after the start, want at least %v: %v", i, d, time.Duration(i)*40*time.Millisecond, sent)
 		}
+	}
+}
+
+// A repository the Hive makes gets the keep-history ruleset on its default
+// branch (no force-push, no deletion), and one whose plan has no rulesets
+// is still made.
+func TestNewRepoKeepsHistory(t *testing.T) {
+	var body string
+	refuse := false
+	calls := stubGH(t, func(args []string) (string, string, error) {
+		switch {
+		case args[0] == "repo" && args[1] == "view":
+			return "", "not found", errors.New("exit status 1")
+		case args[0] == "api" && slices.Contains(args, "--input"):
+			raw, _ := os.ReadFile(args[len(args)-1])
+			body = string(raw)
+			if refuse {
+				return "", "Upgrade to GitHub Pro or make this repository public to enable this feature. (HTTP 403)", errors.New("exit status 1")
+			}
+		}
+		return "", "", nil
+	})
+	if made, err := (GitHub{}).EnsureRepo("Hive-RSI-Lab/new", "d", true); !made || err != nil {
+		t.Fatalf("made %v, %v", made, err)
+	}
+	last := (*calls)[len(*calls)-1]
+	if strings.Join(last[:4], " ") != "api -X POST repos/Hive-RSI-Lab/new/rulesets" {
+		t.Fatalf("no ruleset asked for: %q", *calls)
+	}
+	var rs struct {
+		Enforcement string
+		Conditions  struct {
+			RefName struct{ Include []string } `json:"ref_name"`
+		}
+		Rules []struct{ Type string }
+	}
+	if err := json.Unmarshal([]byte(body), &rs); err != nil || rs.Enforcement != "active" || !slices.Equal(rs.Conditions.RefName.Include, []string{"~DEFAULT_BRANCH"}) ||
+		len(rs.Rules) != 2 || rs.Rules[0].Type != "deletion" || rs.Rules[1].Type != "non_fast_forward" {
+		t.Fatalf("ruleset %s (%v)", body, err)
+	}
+	refuse = true
+	if made, err := (GitHub{}).EnsureRepo("Hive-RSI-Lab/secret", "d", false); !made || err != nil {
+		t.Fatalf("a private repository on a free plan: made %v, %v", made, err)
 	}
 }

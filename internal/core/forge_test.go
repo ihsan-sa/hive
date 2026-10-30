@@ -161,7 +161,9 @@ func TestGitHubEnsureRepoVisibility(t *testing.T) {
 	}
 	raw, _ := os.ReadFile(log)
 	calls := strings.Split(strings.TrimSpace(string(raw)), "\n")
-	if len(calls) != 4 || !strings.Contains(calls[1], "repo create Hive-RSI-Lab/m --private") || !strings.Contains(calls[3], "repo create Hive-RSI-Lab/m --public") {
+	// Each made repository then gets its keep-history ruleset (TestNewRepoKeepsHistory).
+	if len(calls) != 6 || !strings.Contains(calls[1], "repo create Hive-RSI-Lab/m --private") || !strings.Contains(calls[4], "repo create Hive-RSI-Lab/m --public") ||
+		!strings.Contains(calls[2], "repos/Hive-RSI-Lab/m/rulesets") || !strings.Contains(calls[5], "repos/Hive-RSI-Lab/m/rulesets") {
 		t.Fatalf("calls: %q", calls)
 	}
 }

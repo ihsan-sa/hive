@@ -630,7 +630,30 @@ func (g GitHub) EnsureRepo(repo, description string, public bool) (bool, error) 
 	if _, err := gh(repo, "repo", "create", repo, visibility, "--description", description); err != nil {
 		return false, err
 	}
+	if err := keepHistory(repo); err != nil {
+		fmt.Fprintf(tokenLog, "%s %s: no keep-history ruleset on its main: %v\n", time.Now().Format(time.RFC3339), repo, err)
+	}
 	return true, nil
+}
+
+// keepHistoryRules is the ruleset every repository the Hive makes gets, as
+// the person's own have: its default branch can't be force-pushed or
+// deleted, whoever holds a token, so whatever an agent does there is
+// reverted rather than lost. Free plans have no rulesets on private
+// repositories (403), which only loses the ruleset.
+const keepHistoryRules = `{"name":"keep-history","target":"branch","enforcement":"active","bypass_actors":[],` +
+	`"conditions":{"ref_name":{"include":["~DEFAULT_BRANCH"],"exclude":[]}},"rules":[{"type":"deletion"},{"type":"non_fast_forward"}]}`
+
+func keepHistory(repo string) error {
+	f, err := os.CreateTemp("", "hive-ruleset-*.json")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(f.Name())
+	f.WriteString(keepHistoryRules)
+	f.Close()
+	_, err = gh(repo, "api", "-X", "POST", "repos/"+repo+"/rulesets", "--input", f.Name())
+	return err
 }
 
 // Fork returns owner's fork of repo (the person's when owner is ""),
