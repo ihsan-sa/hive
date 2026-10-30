@@ -1,7 +1,7 @@
 // Package calls turns the Hive's fixed cadences, caps and counts into calls
 // agents make (issue #1940). Each one a module once held as a constant (how
-// often the release train leaves, how many reruns a head gets, how long a
-// step may take) is declared here by name with its old value as the default;
+// many reruns a head gets, how long a step may take, how long an update
+// waits on merges) is declared here by name with its old value as the default;
 // the code reads the call where it read the constant, and any agent that
 // steers changes it at once with `hive agent call`, on the record with why.
 // So a rule that stops fitting the work is changed in a turn, not in a PR, a

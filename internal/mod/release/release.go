@@ -4,13 +4,13 @@
 package release
 
 import (
-	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"net/http"
 	"os"
@@ -57,10 +57,6 @@ type Module struct {
 	HoldGates func(until time.Time)
 	// gatesSince is when the update first waited for running gates.
 	gatesSince time.Time
-	// Canary runs the train's canary (train.go): a child Hive on the
-	// candidate against one on this release, on real work; nil can't run one,
-	// so a Hive on the train stays where it is.
-	Canary func(ctx context.Context, j CanaryJob) core.GateResult
 	// Scan checks what a release at sha publishes before it is cut; nil is
 	// the identity and secret scan of the files on the commit's public list.
 	Scan func(p core.Project, sha string) error
@@ -97,10 +93,8 @@ type Module struct {
 	// pre-release whose checks here failed, and waits what the newer ones
 	// wait for, as the last look found.
 	followed time.Time
-	// canarying is the pre-release the train's canary is running on, or "".
-	canarying string
-	red       map[string]verdict
-	waits     []string
+	red      map[string]verdict
+	waits    []string
 	// shas are the pre-releases' commits, by repo@tag; tried is the tag the
 	// last update went for and said1 what follow last recorded.
 	shas  map[string]string
@@ -118,6 +112,15 @@ type Module struct {
 	// updating is held while an update runs: AutoUpdate, from its schedule
 	// or follow, or `hive update`.
 	updating sync.Mutex
+	// checksAt are the checks running when an automatic update first
+	// waited for them (waitChecks) to install checksTag, since checksSince.
+	checksAt    map[string]bool
+	checksTag   string
+	checksSince time.Time
+	// Live installs the default modules from a copy of them (the modules
+	// registry's InstallFrom): following main, main's tip (main.go).
+	Live func(fsys fs.FS, release string) error
+	live live
 }
 
 // Site serves the releases: GitHub over plain HTTPS, so updating needs no
@@ -270,12 +273,21 @@ func AssetName(goos, goarch string) string {
 // change the person's Hive released on their fork is the next update. Only
 // release_repo and the person's own fork of it are followed, never a
 // repository an agent named, and a release whose checksums don't list this
-// platform's binary is passed over. Following pre-releases, it takes the
-// newest of release_repo's whose checks for this system passed, when newer;
-// when GitHub's rate limit stopped that look and nothing newer is in hand,
+// platform's binary is passed over. Following main, it takes the newest
+// release this Hive cut from its own main (mainTag), with no look at the
+// forge. Following pre-releases, it takes the newest of release_repo's whose
+// checks for this system passed, when newer; when GitHub's rate limit stopped that look and nothing newer is in hand,
 // the error says so and when it looks again.
 func (m *Module) Check() (repo, tag string, newer bool, err error) {
 	up := m.C.WS.LoadConfig().ReleaseRepo
+	if m.Channel() == Main {
+		tag = m.mainTag()
+		m.pmu.Lock()
+		m.ahead, m.waits = nil, nil
+		m.pmu.Unlock()
+		m.lag(tag)
+		return up, tag, tag != "", nil
+	}
 	repos := []string{up}
 	if user, e := m.C.Effects.Forge.User(); e == nil {
 		fork := user + "/" + up[strings.LastIndex(up, "/")+1:]
@@ -308,25 +320,15 @@ func (m *Module) Check() (repo, tag string, newer bool, err error) {
 	m.ahead = nil
 	m.pmu.Unlock()
 	var stopped *limited // a look the rate limit stopped
-	if ch := m.Channel(); ch == Prerelease || ch == Train {
+	if m.Channel() == Prerelease {
 		after := core.Version
-		if ch == Prerelease && modules.Newer(after, tag) {
+		if modules.Newer(after, tag) {
 			after = tag
 		}
 		t, waits, e := m.prerelease(up, after)
 		errors.As(e, &stopped)
 		if e != nil {
 			waits = append(waits, e.Error())
-		}
-		if ch == Train {
-			// Only what a canary kept moves the Hive, the latest release
-			// included.
-			var w []string
-			t, w = m.train(up, t)
-			waits = append(w, waits...)
-			if t == "" {
-				repo, tag = "", ""
-			}
 		}
 		m.pmu.Lock()
 		m.waits = waits
@@ -403,10 +405,14 @@ func hasBinary(repo, tag string) error {
 
 // Update installs a release over this binary: tag, which pins the Hive there
 // when it is a step back (see onward), or with "" or "latest" the newest that
-// Check finds. Anything but a pinned step back clears any pin. Live runs are
+// Check finds; "back" falls back to the binary the last update replaced
+// (Fallback). Anything but a pinned step back clears any pin. Live runs are
 // separate processes and the daemon reattaches to them after it restarts, so
 // live work carries across.
 func (m *Module) Update(tag string) (string, error) {
+	if tag == "back" {
+		return m.Fallback("the person ran `" + core.Cmd + " update --release back`")
+	}
 	if !m.updating.TryLock() {
 		return busy, nil
 	}
@@ -455,35 +461,29 @@ func (m *Module) update(tag string, auto bool) (string, error) {
 	if msg := m.waitGates(tag, auto); msg != "" {
 		return msg, nil
 	}
+	if msg := m.waitChecks(tag, auto); msg != "" {
+		return msg, nil
+	}
 	tmp, err := os.MkdirTemp("", "hive-update-")
 	if err != nil {
 		return "", err
 	}
 	defer os.RemoveAll(tmp)
 	names := append([]string{AssetName(runtime.GOOS, runtime.GOARCH)}, alongside[runtime.GOOS]...)
-	sum, err := sums(repo, tag)
+	var sum map[string]string
+	if p, sha := m.releasedHere(tag); sha != "" {
+		// Following main, a commit the Hive released is built here from its
+		// own clone, without waiting for the release's build, gates or a
+		// signature: nothing was downloaded.
+		sum, err = m.buildAt(p, sha, tag, names, tmp)
+	} else {
+		sum, err = m.downloadTo(repo, tag, names, tmp)
+	}
 	if err != nil {
 		return "", err
 	}
-	for _, name := range names {
-		if sum[name] == "" {
-			return "", fmt.Errorf("release %s has no %s; not installing", tag, name)
-		}
-	}
 	exe := executable()
 	dir := filepath.Dir(exe)
-	for _, name := range names {
-		if err := download(repo, tag, name, tmp); err != nil {
-			return "", err
-		}
-		got, err := fileSum(filepath.Join(tmp, name))
-		if err != nil {
-			return "", err
-		}
-		if sum[name] != got {
-			return "", fmt.Errorf("%s: checksum mismatch; not installing", name)
-		}
-	}
 	// No merge starts from here to the restart, and any running ends first;
 	// tasks still in merging carry across and go on after it. A merge that
 	// runs past the wait look after look is hung, not slow: after maxSkips
@@ -578,6 +578,33 @@ func (m *Module) update(tag string, auto bool) (string, error) {
 		msg += "\n\n" + Unsigned
 	}
 	return msg + "\n\n" + notes, nil
+}
+
+// downloadTo downloads tag's binaries named into tmp, each checked against the
+// release's signed checksums, which it returns.
+func (m *Module) downloadTo(repo, tag string, names []string, tmp string) (map[string]string, error) {
+	sum, err := sums(repo, tag)
+	if err != nil {
+		return nil, err
+	}
+	for _, name := range names {
+		if sum[name] == "" {
+			return nil, fmt.Errorf("release %s has no %s; not installing", tag, name)
+		}
+	}
+	for _, name := range names {
+		if err := download(repo, tag, name, tmp); err != nil {
+			return nil, err
+		}
+		got, err := fileSum(filepath.Join(tmp, name))
+		if err != nil {
+			return nil, err
+		}
+		if sum[name] != got {
+			return nil, fmt.Errorf("%s: checksum mismatch; not installing", name)
+		}
+	}
+	return sum, nil
 }
 
 // onward reports whether a tag chosen with --release moves the Hive forward:
@@ -973,6 +1000,10 @@ func (m *Module) afterKept(project, sha string) {
 	var manifest strings.Builder
 	var root, unread, rootRead, reading []string
 	for _, mg := range list {
+		if mg.Hand {
+			fmt.Fprintf(&manifest, "- %s and what else on main up to it the Hive didn't merge: merged by hand, which stands for its read\n", core.Short(mg.SHA))
+			continue
+		}
 		reads, why := m.C.Effects.Reads(project, mg.SHA, mg.Diff), "no seat reads it"
 		if len(reads) == 0 && mg.Diff != "" && selfRead != nil {
 			var passed bool
@@ -1521,7 +1552,8 @@ func New(c *core.Core) *Module {
 	m := &Module{C: c}
 	c.Person.Handle("upstream", m.onUpstream)
 	c.Person.Handle("scan_handles", m.onHandles)
-	c.Runs.Ops().Register(core.Op{Name: "train", Help: `{"why"} -> runs the release train again at the next look, whatever the day: the newest pre-release safe here rides as a canary against the running release, even one an earlier canary turned back (a canary that failed on its own environment, now fixed); why goes on the record. Refused while a canary runs or when this Hive doesn't ride the train`, Fn: m.opTrain})
+	c.J.Subscribe(m.onEvent)
+	c.Runs.Ops().Register(core.Op{Name: "fallback", Help: `{"why"} -> on the Hive that follows its own main, puts back the binary the last update replaced and restarts into it, at once: for a release that came up but misbehaves (your judgment: turns failing, an op broken, the daemon looping), with why naming what it does wrong. That release isn't installed again on its own; the next one is`, Fn: m.opFallback})
 	return m
 }
 
@@ -1568,7 +1600,8 @@ func (m *Module) OnPerson(a core.Ask) {
 	}
 }
 
-// notMerged is merges' refusal of a commit no effect.merged names.
+// notMerged is merges' refusal of a commit no effect.merged names and whose
+// history git can't place after the last release.
 const notMerged = "it is not a merge the Hive made"
 
 type merge struct {
@@ -1577,14 +1610,27 @@ type merge struct {
 	MergeSHA string `json:"merge_sha"`
 	Root     []string
 	Diff     string // the head's own diff (core.DiffID), whose reads carry to it
+	// Hand marks a kept commit on main no effect.merged names: the person's
+	// merge on the forge, a warden's approved step, or a Hive merge whose
+	// record was lost. Its merge stands for its own read.
+	Hand bool `json:"-"`
 }
 
 // merges lists the project's merges after the one its last release was cut
 // at, up to the one that made upTo. refuse says why there is nothing to
-// release: a release already covers upTo, or upTo is no merge the journal saw.
+// release: a release already covers upTo, or upTo is no merge the journal saw
+// and git can't place it after the last release. A kept commit the person
+// merged by hand (issue #2084: 4b38b782 on 10-29 was refused so, and no
+// release went out for a day) is released with the Hive's merges its history
+// holds.
 func (m *Module) merges(project, upTo string) (out []merge, refuse string) {
 	var all []merge
-	from, at := 0, -1
+	from, at, released := 0, -1, ""
+	type cut struct {
+		sha string
+		n   int // the merges journaled before it
+	}
+	var hand []cut // releases at commits this journal didn't merge
 	m.C.J.Replay(func(e core.Event) {
 		var x struct {
 			merge
@@ -1600,19 +1646,76 @@ func (m *Module) merges(project, upTo string) (out []merge, refuse string) {
 			}
 			return
 		}
-		i := slices.IndexFunc(all, func(mg merge) bool { return mg.MergeSHA == x.SHA })
-		if i < 0 {
-			i = len(all) - 1 // a release at a commit this journal didn't merge
+		released = x.SHA
+		if i := slices.IndexFunc(all, func(mg merge) bool { return mg.MergeSHA == x.SHA }); i >= 0 {
+			from = max(from, i+1)
+		} else {
+			hand = append(hand, cut{x.SHA, len(all)})
 		}
-		from = max(from, i+1)
 	})
-	if at >= 0 && at < from {
+	// A release at a commit the Hive didn't merge (a hand merge, a warden's
+	// tag) covers the merges before it that its history holds; one git can't
+	// read covers them all, as it did before hand merges were released.
+	covered := map[int]bool{}
+	for _, c := range hand {
+		for i := from; i < c.n; i++ {
+			if in, err := m.holds(project, all[i].MergeSHA, c.sha); err != nil || in {
+				covered[i] = true
+			}
+		}
+	}
+	for from < len(all) && covered[from] {
+		from++
+	}
+	if at >= 0 && (at < from || covered[at]) {
 		return nil, "a newer release already covers it"
 	}
+	var since []merge
+	for i := from; i < len(all) && (at < 0 || i <= at); i++ {
+		if !covered[i] {
+			since = append(since, all[i])
+		}
+	}
 	if at < 0 {
+		return m.byHand(project, upTo, released, since)
+	}
+	return since, ""
+}
+
+// holds says whether commit at has sha in its history (m.Contains).
+func (m *Module) holds(project, sha, at string) (bool, error) {
+	p, ok := m.C.Projects.Get(project)
+	if !ok {
+		return false, errors.New("no project " + project)
+	}
+	if m.Contains != nil {
+		return m.Contains(p, sha, at)
+	}
+	return m.contains(p, sha, at)
+}
+
+// byHand is merges for a kept commit upTo no effect.merged names: the Hive's
+// merges since the last release (at released) that upTo's history holds,
+// then upTo itself as a hand merge. upTo must hold released and not be held
+// by it; history git can't read is refused as notMerged.
+func (m *Module) byHand(project, upTo, released string, since []merge) ([]merge, string) {
+	if released != "" {
+		if in, err := m.holds(project, upTo, released); err == nil && in {
+			return nil, "a newer release already covers it"
+		}
+		if in, err := m.holds(project, released, upTo); err != nil || !in {
+			return nil, notMerged
+		}
+	} else if _, err := m.holds(project, upTo, upTo); err != nil {
 		return nil, notMerged
 	}
-	return all[from : at+1], ""
+	var out []merge
+	for _, mg := range since {
+		if in, err := m.holds(project, mg.MergeSHA, upTo); err == nil && in {
+			out = append(out, mg)
+		}
+	}
+	return append(out, merge{SHA: upTo, MergeSHA: upTo, Hand: true}), ""
 }
 
 // Gates are the workflows that must pass in a release's own runs, on its
@@ -1628,6 +1731,13 @@ const publishEvery = 10 * time.Minute
 // Tick runs Publish every publishEvery, in the background, and follows
 // pre-releases when the Hive does.
 func (m *Module) Tick() {
+	m.live.mu.Lock()
+	start := !m.live.started
+	m.live.started = true
+	m.live.mu.Unlock()
+	if start {
+		m.goLive(false) // main's modules over the binary's own, after a restart
+	}
 	m.follow()
 	m.pmu.Lock()
 	defer m.pmu.Unlock()

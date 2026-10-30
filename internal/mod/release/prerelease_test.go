@@ -79,7 +79,7 @@ func preSite(t *testing.T, m *Module) *gateSite {
 }
 
 // A Hive following pre-releases (the Hive that releases the Hive did by
-// default before the train) takes
+// default before main) takes
 // the newest whose checks for its own system passed, passing over one red
 // here and one still running here, and waits out a merge; once the newer one
 // passes here it takes that too.
@@ -89,8 +89,8 @@ func TestFollowsTheNewestPreReleaseSafeHere(t *testing.T) {
 	if _, err := m.C.Projects.Add(core.Project{Name: "hive", Repo: "me/hive", Self: true}); err != nil {
 		t.Fatal(err)
 	}
-	if m.Channel() != Train {
-		t.Fatalf("the Hive that releases the Hive follows %q, not the train", m.Channel())
+	if m.Channel() != Main {
+		t.Fatalf("the Hive that releases the Hive follows %q, not main", m.Channel())
 	}
 	cfg := m.C.WS.LoadConfig()
 	cfg.Channel = Prerelease
