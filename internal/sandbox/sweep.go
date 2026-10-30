@@ -15,7 +15,8 @@ const specStale = time.Hour
 
 // Sweep removes what sandboxes that died left on the host: their runtime
 // folders (sweepRuntime), spec files no sandbox-exec read, and the processes
-// a bare command left when its daemon died (OwnerEnv). It returns how many it
+// a bare command left when its daemon died (OwnerEnv), and the memory
+// cgroups of runs whose sandbox-exec died (sweepRuns). It returns how many it
 // removed. The daemon's hourly clean job runs it, at start too.
 //
 // /dev/shm and the temp directory are shared by every Hive on the machine,
@@ -26,7 +27,7 @@ const specStale = time.Hour
 // A daemon whose /tmp is in memory moves its temp directory onto disk
 // (core.UseDiskTemp), so /tmp is swept as well, for what was left there.
 func Sweep() int {
-	n := sweepOrphans() + SweepIn("/dev/shm", os.TempDir())
+	n := sweepOrphans() + sweepRuns() + SweepIn("/dev/shm", os.TempDir())
 	if filepath.Clean(os.TempDir()) != "/tmp" {
 		n += SweepIn("/dev/shm", "/tmp")
 	}

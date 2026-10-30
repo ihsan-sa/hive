@@ -4,9 +4,17 @@ A person's message is answered whatever the machine is doing (issue #421). This 
 
 ## One memory budget, and leads and wardens never wait
 
-One figure paces the Hive: each agent turn is budgeted `turn_mb` (240 MB by default) of memory (`core.MemBudget`). Before a turn starts, `Runs.launch` takes the Hive's cgroup limit (the lower of `memory.max` and `memory.high`; with neither, the machine's `MemTotal`) and what is in use there (the cgroup's `memory.current` less its inactive file cache; on the machine, what `MemAvailable` doesn't cover), and holds the turn while that leaves less than `turn_mb` for it and for each turn launching beside it; an executor module with room takes it instead. The work module starts waiting briefs the same way, in line order, while the budget has room for another turn (`admit`). A lead's turn, and a warden's or tribunal seat's, never waits (`Run.NeverWaits`). There is no strain hold, ramp, pace, load limit, `max_workers` or heavy-command lease any more; checks run at most `max_checks` at once.
+One figure paces the Hive: each agent turn is budgeted `turn_mb` (240 MB by default) of memory (`core.MemBudget`).
+Before a turn starts, `Runs.launch` takes the Hive's cgroup limit (the lowest `memory.max` or `memory.high` of its cgroup and those above it; with none, the machine's `MemTotal`) and what is in use there (the cgroup's `memory.current` less its inactive file cache; on the machine, what `MemAvailable` doesn't cover), and holds the turn while that leaves less than `turn_mb` for it and for each turn launching beside it; an executor module with room takes it instead.
+The work module starts waiting briefs the same way, in line order, while the budget has room for another turn (`admit`).
+A lead's turn, and a warden's or tribunal seat's, never waits (`Run.NeverWaits`).
+There is no strain hold, ramp, pace, load limit, `max_workers` or heavy-command lease any more; checks run at most `max_checks` at once.
 
-The disk is read as a whole, since a turn has no figure of it to budget: while Linux's IO pressure says every running task sat stalled on the disk for over `disk_full_max` (40% by default; below 0 is off) of the last minute (`full avg60`, `core.DiskBusy`), the work module starts no new worker while another works (one still starts when none does, so the loop never stops) and runs one check at a time, main's measure first by its rank. Running turns go on. On 10-30 that figure stood at ~60% from boot, some 92%, a write ~0.8 s. Checks also write less: Go links in a check drop DWARF (`GOFLAGS=-ldflags=-w`, a quarter of each test binary), and the journal's appends at once share one fsync.
+The disk is read as a whole, since a turn has no figure of it to budget:
+while Linux's IO pressure says every running task sat stalled on the disk for over `disk_full_max` (40% by default; below 0 is off) of the last minute (`full avg60`, `core.DiskBusy`), the work module starts no new worker while another works (one still starts when none does, so the loop never stops) and runs one check at a time, main's measure first by its rank.
+Running turns go on.
+On 10-30 that figure stood at ~60% from boot, some 92%, a write ~0.8 s.
+Checks also write less: Go links in a check drop DWARF (`GOFLAGS=-ldflags=-w`, a quarter of each test binary), and the journal's appends at once share one fsync.
 
 ## Leads step first
 
@@ -19,3 +27,7 @@ Every sandboxed command carries a nice value (`sandbox.Spec.Nice`, from `Run.Nic
 ## Tests
 
 `TestMemBudget`, `TestTickStartsLeadsFirst`, `TestWorkerLaunchWaitsForLeadLaunch`, `TestOverlappingTicksStepEachRunOnce` (the lead's op held open on a channel, not timed by sleeps), `TestHungLeadStepIsSaidOnce`, `TestNiceByRole`, `TestSpawnNeverMakesALead` (internal/core); `TestNicedPrefixesArgv`, `TestNicedResolvesInTheDaemonsPath`, `TestLoweredAddsAndCaps`, `TestLowerPriorityHoldsForTheFork` (nice 0 leaves the level as it is), and, where namespaces can be made (CI), `TestHostPythonBothPaths`, whose command reads its own nice 10 inside the namespace and bubblewrap sandboxes (internal/sandbox); `TestRunGateReadsTheVerdict` (internal/app, the gate's level under a niced daemon too); `TestLeadTurnStartsUnderStrainThatHoldsAWorker` (internal/daemon, a real memory hold, built only from APIs main had, so the gate's fixes step could run it on both sides).
+
+## The Hive's memory is bounded (#2143)
+
+The Hive's systemd user unit (`setup.unitText`) has a soft cap that survives a reboot: `MemoryHigh=45%` of the machine's memory, past which the kernel reclaims from the Hive and slows it, never the rest of the machine, and `MemorySwapMax=4G`, so it can't drive the machine deep into swap. With `Delegate=yes` and `DelegateSubgroup=daemon` the daemon runs in the unit's leaf `daemon`, and `sandbox.SettleMemory` turns the memory controller on for the unit's subtree. Each `hive sandbox-exec` (every turn and check) then moves into a cgroup of its own beside it, `run-<pid>`, before it starts the command: its `memory.max` is half the Hive's limit and its `memory.swap.max` a quarter of that, so one runaway test is killed by the kernel inside its run, and the run's stderr log says so. As it ends it kills what the command left there and removes the cgroup; the clean job's sweep removes those of a sandbox-exec that died. Outside the unit, or in a unit not yet delegated (until systemd restarts it with the rewritten unit), nothing changes.

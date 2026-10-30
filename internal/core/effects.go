@@ -1,6 +1,7 @@
 package core
 
 import (
+	"bufio"
 	"cmp"
 	"crypto/sha256"
 	"encoding/hex"
@@ -376,10 +377,21 @@ func (e *Effects) Sync(p Project) (string, error) {
 	if err != nil || sha == "" {
 		return "", nil
 	}
-	if _, err := Git(dir, "checkout", "-q", "-f", "-B", p.Branch, sha); err != nil {
+	// A big tree on a loaded machine can take minutes to check out; a
+	// checkout cut off at two left index.lock behind for every task (#2151).
+	if _, err := GitT(10*time.Minute, dir, "checkout", "-q", "-f", "-B", p.Branch, sha); err != nil {
 		return "", err
 	}
 	return sha, nil
+}
+
+// HostFetch fetches from p's origin into the host clone under the project's
+// lock, so it never runs beside Sync's fetch and checkout (#2151). Every git
+// step a module takes that writes the host clone goes through here.
+func (e *Effects) HostFetch(p Project, args ...string) error {
+	defer e.lock(p.Name)()
+	_, err := GitEnvT(5*time.Minute, e.ws.Project(p.Name), ghEnv(p.Repo), append([]string{"fetch"}, args...)...)
+	return err
 }
 
 // MainLine is the set of commits main has been at in the host clone: its
@@ -400,6 +412,19 @@ func (e *Effects) MainLine(p Project) map[string]bool {
 func (e *Effects) Config(p Project, sha string) ProjectConfig {
 	raw, _ := Git(e.ws.Project(p.Name), "show", sha+":.hive/project.json")
 	return ParseProjectConfig(raw)
+}
+
+// ForgeTested names the forge's checks that are the test of head against
+// main: main's ForgeTests, or, for a change that moves its project's tests to
+// the forge, the head's own. The forge runs a PR's own new workflow on its
+// head, and the head's project.json is the person's to approve (BaseProtected)
+// before it merges, so a head can't name them to skip its test unseen; the
+// merge waits for every one named to pass there.
+func (e *Effects) ForgeTested(p Project, main, head string) []string {
+	if ft := e.Config(p, main).ForgeTests; len(ft) > 0 {
+		return ft
+	}
+	return e.Config(p, head).ForgeTests
 }
 
 // ScoreVersion names the score at sha: its command and the content of its
@@ -1990,8 +2015,8 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	var flaky []string                       // a red local test run's known flakes, its only failures
-	tested := e.Config(p, m.Main).ForgeTests // the forge's checks are the test there
+	var flaky []string                        // a red local test run's known flakes, its only failures
+	tested := e.ForgeTested(p, m.Main, m.SHA) // the forge's checks are the test there
 	switch c, ok := e.GetCheck(p.Name, m.SHA, "test"); {
 	case len(tested) > 0:
 		// No local run is needed, and one there is no gate: the forge's
@@ -3147,26 +3172,65 @@ func (e *Effects) hostCommit(p Project, dir string, h HostCommit) (string, error
 }
 
 // MainBundle writes main as a bundle a worker can fetch to resolve conflicts,
-// and returns the commit it holds (read under the same lock, so it is the
-// bundle's head even if main moves just after).
-// It is written under a temp name and renamed, so a fetch running now sees the old or the new file whole.
+// and returns the commit it holds (read from the bundle written, so it is the
+// bundle's head even if main moves just after). It takes no project lock: a
+// bundle only reads the clone, so a fetch holding the lock for minutes
+// doesn't hold up a turn that starts with a fresh one (FreshBundle).
+// It is written under a temp name of its own and renamed, so a fetch running
+// now sees the old or the new file whole, and two writers don't meet.
 func (e *Effects) MainBundle(p Project, path string) (string, error) {
-	defer e.lock(p.Name)()
-	dir := e.ws.Project(p.Name)
-	head, err := Git(dir, "rev-parse", "--verify", p.Branch)
-	if err != nil {
-		return "", err
-	}
-	tmp := path + ".tmp"
-	if _, err := Git(dir, "bundle", "create", tmp, p.Branch); err != nil {
+	tmp := path + ".tmp-" + NewUUID()[:8]
+	if _, err := Git(e.ws.Project(p.Name), "bundle", "create", tmp, p.Branch); err != nil {
 		os.Remove(tmp)
 		return "", err
+	}
+	head := BundleHead(tmp, p.Branch)
+	if head == "" {
+		os.Remove(tmp)
+		return "", fmt.Errorf("the bundle written holds no %s", p.Branch)
 	}
 	if err := os.Rename(tmp, path); err != nil {
 		os.Remove(tmp)
 		return "", err
 	}
-	return strings.TrimSpace(head), nil
+	return head, nil
+}
+
+// FreshBundle rewrites the main.bundle at path when it holds another
+// commit than the clone's main, and returns the commit it holds then.
+// Every turn of a run that has one starts with it (Runs.beforeTurn), so a
+// run reopened by any path, a message from a lead included, fetches main as
+// it is, not as it was when its task last wrote the bundle (issue #2154).
+func (e *Effects) FreshBundle(p Project, path string) (string, error) {
+	main, err := Git(e.ws.Project(p.Name), "rev-parse", "--verify", p.Branch)
+	if err != nil {
+		return "", err
+	}
+	if have := BundleHead(path, p.Branch); have != "" && have == strings.TrimSpace(main) {
+		return have, nil
+	}
+	return e.MainBundle(p, path)
+}
+
+// BundleHead is the commit a git bundle's header names for branch, or ""
+// when it names none (or the file can't be read).
+func BundleHead(path, branch string) string {
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		line := sc.Text()
+		if line == "" { // the header ends; the pack follows
+			break
+		}
+		if sha, ref, ok := strings.Cut(line, " "); ok && ref == "refs/heads/"+branch && !strings.HasPrefix(sha, "-") {
+			return sha
+		}
+	}
+	return ""
 }
 
 func appendLine(path, header, line string) error {

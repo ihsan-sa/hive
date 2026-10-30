@@ -83,6 +83,9 @@ func TestUnit(t *testing.T) {
 		{"0::/system.slice/hive-ihsan.service\n", "hive-ihsan.service", false, false},
 		{"12:cpu,cpuacct:/system.slice/x.service\n1:name=systemd:/system.slice/hive@box.service\n", "hive@box.service", false, false},
 		{"0::/user.slice/user-1000.slice/session-3.scope\n", "", false, false},
+		{"0::/user.slice/user-1000.slice/user@1000.service/app.slice/hive.service/daemon\n", "hive.service", true, true},
+		{"0::/user.slice/user-1000.slice/user@1000.service/app.slice/hive.service/run-42\n", "hive.service", true, true},
+		{"0::/user.slice/user-1000.slice/user@1000.service/app.slice/tmux.scope/inner\n", "", false, false},
 	} {
 		os.WriteFile(f, []byte(c.line), 0o644)
 		if name, user := Unit(); name != c.name || user != c.user {
@@ -210,5 +213,11 @@ func TestUnitCarriesAPath(t *testing.T) {
 	}
 	if got := unitText("/x/hive", root, "/a%b"); !strings.Contains(got, "PATH=/a%%b") {
 		t.Errorf("a %% in PATH isn't escaped for systemd: %s", got)
+	}
+	// The soft cap survives a reboot, and the daemon may give each run its own.
+	for _, line := range []string{"\nMemoryHigh=45%\n", "\nMemorySwapMax=4G\n", "\nDelegate=yes\n", "\nDelegateSubgroup=daemon\n"} {
+		if !strings.Contains(unit, line) {
+			t.Errorf("unit lacks %q:\n%s", strings.TrimSpace(line), unit)
+		}
 	}
 }

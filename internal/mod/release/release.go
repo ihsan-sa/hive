@@ -104,9 +104,9 @@ type Module struct {
 	// or follow, or `hive update`.
 	updating sync.Mutex
 	// checksAt are the checks running when an automatic update first
-	// waited for them (waitChecks) to install checksTag, since checksSince.
+	// waited for them (waitChecks), since checksSince; a newer release
+	// keeps the wait, an install ends it.
 	checksAt    map[string]bool
-	checksTag   string
 	checksSince time.Time
 	// Live installs the default modules from a copy of them (the modules
 	// registry's InstallFrom): following main, main's tip (main.go).
@@ -1978,7 +1978,7 @@ func (m *Module) contains(p core.Project, sha, tagSHA string) (bool, error) {
 		return false, err
 	}
 	if _, err := core.Git(dir, "rev-parse", "--verify", tagSHA+"^{commit}"); err != nil {
-		if _, err := core.GitEnvT(5*time.Minute, dir, core.ForgeEnv(p.Repo), "fetch", "-q", "--no-tags", "origin", tagSHA); err != nil {
+		if err := m.C.Effects.HostFetch(p, "-q", "--no-tags", "origin", tagSHA); err != nil {
 			return false, err
 		}
 	}
