@@ -394,6 +394,7 @@ func TestGivenBackTurnWaitsItsTurnHere(t *testing.T) {
 	out := c.WS.TurnOut(r.ID, r.Turn)
 	os.WriteFile(out+".err", []byte("dispatch: not run: iiks1 won't take it: full (3 of 3 turns running); the core runs it here\n"), 0o644)
 	proc.Kill(away)
+	waitFor(t, "the handed-over turn's process to end", func() bool { return !proc.Alive(away) })
 	c.Runs.endTurn(r)
 	got, _ := c.Runs.Get("w")
 	if got.Status != StatusParked || got.Retries != 0 || got.Where != "" || got.GaveBack != "iiks1" || !got.Returned ||

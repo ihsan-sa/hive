@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"math"
 	"os"
@@ -64,10 +65,22 @@ type Effects struct {
 	// that fails only these doesn't hold task's merge. Unset, none are.
 	Quarantined func(project, task string) []string
 
+	// Granted are the modules an isolated project's checks may see (the
+	// modules module's grants). Unset, they see none.
+	Granted func(project string) []string
+
+	// ModuleHomes are the HOME folders of the installed modules built from a
+	// project's repository: its score check reads a copy of their records
+	// (moduleRecords). Unset, it reads none.
+	ModuleHomes func(project string) []string
+
 	// Slots holds checks to config's max_checks at a time, started in the order they asked.
 	Slots *Slots
 
-	awayMu    sync.Mutex // one check at a time takes a runner's room (elsewhere)
+	awayMu  sync.Mutex // one check at a time takes a runner's room (elsewhere)
+	shareMu sync.Mutex
+	sharing map[string]*sharedCheck // project@sha@kind@command -> the identical check in flight
+
 	mu        sync.Mutex
 	checks    map[string]Check
 	verdicts  map[string]Verdict
@@ -542,11 +555,20 @@ func (e *Effects) Push(p Project, branch, sha string) error {
 	return nil
 }
 
+// sharedCheck is one check in flight that identical callers wait on.
+type sharedCheck struct {
+	done chan struct{}
+	c    Check
+}
+
 // RunCheck runs the project's test or score command on exactly sha in a clean
 // checkout inside the sandbox. The command comes from main's settings, so a
-// change can't rewrite the check it is judged by.
+// change can't rewrite the check it is judged by. A caller asking for the same
+// check (project, sha, kind and command) while one is waiting or running gets
+// that one's result: one slot, one checkout and one journaled verdict, not one
+// per caller (#1880). A caller after it ends runs afresh.
 func (e *Effects) RunCheck(p Project, sha, kind, command string) Check {
-	return e.runCheck(p, sha, "", kind, command)
+	return e.shared(p, sha, "", kind, command)
 }
 
 // RunCheckSince is RunCheck of a change bound for main: a test command
@@ -555,11 +577,39 @@ func (e *Effects) RunCheck(p Project, sha, kind, command string) Check {
 // every package whose result can differ from main's. Its Check names them
 // in Scope. A narrowing the go command can't follow runs everything.
 func (e *Effects) RunCheckSince(p Project, sha, main, kind, command string) Check {
-	c := e.runCheck(p, sha, main, kind, command)
+	c := e.shared(p, sha, main, kind, command)
 	if c.Scope != nil && !c.OK && c.CantRun == "" && goscope.Misfired(c.Output) {
-		return e.runCheck(p, sha, "", kind, command)
+		return e.shared(p, sha, "", kind, command)
 	}
 	return c
+}
+
+// shared is runCheck, run once for every caller asking for the same check
+// while it waits or runs; each gets a copy of its result.
+func (e *Effects) shared(p Project, sha, main, kind, command string) Check {
+	key := p.Name + "@" + sha + "@" + main + "@" + kind + "@" + command
+	e.shareMu.Lock()
+	if s, ok := e.sharing[key]; ok {
+		e.shareMu.Unlock()
+		<-s.done
+		c := s.c
+		c.Failed, c.Keys, c.Scope = slices.Clone(c.Failed), slices.Clone(c.Keys), slices.Clone(c.Scope)
+		return c
+	}
+	if e.sharing == nil {
+		e.sharing = map[string]*sharedCheck{}
+	}
+	s := &sharedCheck{done: make(chan struct{}), c: Check{Project: p.Name, SHA: sha, Kind: kind, CantRun: "can't run: the shared check stopped before its verdict"}}
+	e.sharing[key] = s
+	e.shareMu.Unlock()
+	defer func() {
+		e.shareMu.Lock()
+		delete(e.sharing, key)
+		e.shareMu.Unlock()
+		close(s.done)
+	}()
+	s.c = e.runCheck(p, sha, main, kind, command)
+	return s.c
 }
 
 func (e *Effects) runCheck(p Project, sha, main, kind, command string) Check {
@@ -617,7 +667,7 @@ func (e *Effects) checkOnce(p Project, sha, main, kind, command, back string) (C
 		away, where = e.elsewhere(p, sha, kind)
 	}
 	if away != nil {
-		e.took(away, true)
+		e.took()
 	} else {
 		leave := func() bool {
 			away, where = e.elsewhere(p, sha, kind)
@@ -628,7 +678,7 @@ func (e *Effects) checkOnce(p Project, sha, main, kind, command, back string) (C
 		}
 		release, ok, left := e.Slots.TakeOr(p.Name, sha, kind, leave, checkLeaveEvery)
 		if away != nil {
-			e.took(away, left) // spent only by a check that left the line
+			e.took()
 		}
 		if !left {
 			away = nil // it took a slot here as the runner answered
@@ -661,15 +711,31 @@ func (e *Effects) checkOnce(p Project, sha, main, kind, command, back string) (C
 	c.Log = filepath.Join(e.ws.Hive(), "checks", p.Name, id+".log")
 	mounts := []sandbox.Mount{{Host: dir, Inside: "/work", RW: true}}
 	mods, build := goMods{done: func() {}}, goMods{done: func() {}}
+	var installed []sandbox.Mount
 	if away == nil { // the shared caches are this machine's: a runner fetches its own
 		mods = e.goModules(sb, dir)
 		build = e.goBuild(sb, p, sha, dir)
+		var drop func()
+		installed, drop = e.checkModules(sb, p, dir)
+		defer drop()
+	}
+	var records []sandbox.Mount
+	if away == nil && kind == "score" {
+		var drop func()
+		records, drop = e.moduleRecords(p, dir)
+		defer drop()
 	}
 	run := func(offline bool) (int, string, error) {
-		ms := append(append(slices.Clone(mounts), build.mounts...), mods.mounts...)
+		ms := append(append(append(append(slices.Clone(mounts), build.mounts...), mods.mounts...), installed...), records...)
 		env := append(slices.Clone(build.env), mods.own...)
 		if offline {
 			env = append(slices.Clone(build.env), mods.env...)
+		}
+		if len(installed) > 0 {
+			env = append(env, "HIVE_MODULES="+sandbox.InsidePath(sb, installed[0]))
+		}
+		if len(records) > 0 {
+			env = append(env, "HIVE_HOME="+sandbox.InsidePath(sb, records[0]))
 		}
 		var disk sandbox.Disk
 		defer func() { c.DiskRead, c.DiskWrote = c.DiskRead+disk.Read, c.DiskWrote+disk.Wrote }()
@@ -811,13 +877,9 @@ func (e *Effects) elsewhere(p Project, sha, kind string) (sandbox.Sandbox, strin
 	return sb, where
 }
 
-// took ends what elsewhere began for sb: the room answer is spent if the
-// check went, so the next asks again.
-func (e *Effects) took(sb sandbox.Sandbox, went bool) {
-	if d, ok := sb.(*sandbox.Delegate); ok && went && d.Started != nil {
-		d.Started()
-		d.Started = nil
-	}
+// took ends what elsewhere began. The room answer it went on was
+// spent when checkExecutor returned it, so the next asks again.
+func (e *Effects) took() {
 	e.awayMu.Unlock()
 }
 
@@ -1145,6 +1207,81 @@ func guardProgram(command string) string {
 		missing = "the program in " + s[2]
 	}
 	return s[1] + ` [ -n "$` + s[2] + `" ] || { echo "hive: missing program: ` + missing + `" >&2; exit 127; };` + command[len(s[1]):]
+}
+
+// checkModules is how a check on p sees the installed modules: read-only at
+// /hive/modules, as p's agents do, so a project's check runs a module's
+// program at the version merged into its main (a module follows its
+// project's main at every merge). An isolated project's check sees only the
+// modules granted it, each mounted over an empty folder beside the checkout
+// that holds their mount points; done removes that folder.
+func (e *Effects) checkModules(sb sandbox.Sandbox, p Project, dir string) ([]sandbox.Mount, func()) {
+	all := sandbox.Mount{Host: e.ws.Modules(), Inside: "/hive/modules"}
+	if !p.Isolated || !sb.Isolated() {
+		return []sandbox.Mount{all}, func() {}
+	}
+	var granted []string
+	if e.Granted != nil {
+		granted = e.Granted(p.Name)
+	}
+	empty := dir + ".modules"
+	e.markLive(empty, true)
+	os.MkdirAll(empty, 0o755)
+	out := []sandbox.Mount{{Host: empty, Inside: all.Inside}}
+	for _, m := range granted {
+		os.MkdirAll(filepath.Join(empty, m), 0o755)
+		out = append(out, sandbox.Mount{Host: filepath.Join(all.Host, m), Inside: all.Inside + "/" + m})
+	}
+	return out, func() { os.RemoveAll(empty); e.markLive(empty, false) }
+}
+
+// moduleRecords copies the records (top-level *.jsonl, the last recordCap
+// bytes of each) of the modules built from p into a folder laid out as the
+// Hive's own, which p's score check reads read-only at HIVE_HOME: dispatch's
+// score counts the turns in its .hive/modules/dispatch/turns.jsonl. Nothing
+// else of a module's HOME goes, so its keys and tokens stay out.
+func (e *Effects) moduleRecords(p Project, dir string) ([]sandbox.Mount, func()) {
+	var homes []string
+	if e.ModuleHomes != nil {
+		homes = e.ModuleHomes(p.Name)
+	}
+	if len(homes) == 0 {
+		return nil, func() {}
+	}
+	root := dir + ".records"
+	e.markLive(root, true)
+	for _, h := range homes {
+		to := filepath.Join(root, ".hive", "modules", filepath.Base(h))
+		os.MkdirAll(to, 0o755)
+		files, _ := filepath.Glob(filepath.Join(h, "*.jsonl"))
+		for _, f := range files {
+			copyTail(f, filepath.Join(to, filepath.Base(f)), recordCap)
+		}
+	}
+	return []sandbox.Mount{{Host: root, Inside: "/hive/records"}}, func() { os.RemoveAll(root); e.markLive(root, false) }
+}
+
+const recordCap = 64 << 20
+
+// copyTail copies a regular file's last n bytes; a symlink is not followed.
+func copyTail(from, to string, n int64) {
+	if fi, err := os.Lstat(from); err != nil || !fi.Mode().IsRegular() {
+		return
+	}
+	in, err := os.Open(from)
+	if err != nil {
+		return
+	}
+	defer in.Close()
+	if fi, err := in.Stat(); err == nil && fi.Size() > n {
+		in.Seek(fi.Size()-n, io.SeekStart)
+	}
+	out, err := os.OpenFile(to, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
+	if err != nil {
+		return
+	}
+	io.Copy(out, io.LimitReader(in, n))
+	out.Close()
 }
 
 // cleanCheckout clones the host clone fresh and checks out sha.

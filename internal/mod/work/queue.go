@@ -115,6 +115,7 @@ func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]str
 	// machine (machineHold), or past the pace (its worker's turns go there
 	// first, core.RunSpec.Away); the executor is asked at most once a pass.
 	strained, loaded := core.Strained(cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax), core.Loaded(cfg.LoadMax)
+	io := core.IOStrained(cfg.IOPressureMax, cfg.IOFullMax)
 	var roomOK *bool
 	elsewhere := func() bool {
 		if roomOK == nil {
@@ -151,7 +152,7 @@ func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]str
 		if cfg.MaxWorkers == 0 || limit < cfg.MaxWorkers {
 			full = "waiting for a worker (at the pace)"
 		}
-		hold := machineHold(strained, loaded, cmp.Or(cfg.MaxWorkers, defaultWorkers), elsewhereOnce)
+		hold := machineHold(strained, io, loaded, cmp.Or(cfg.MaxWorkers, defaultWorkers), elsewhereOnce)
 		for _, t := range line {
 			held := "" // asked only of a task nothing else holds back
 			switch {
@@ -287,11 +288,16 @@ func (m *Module) takeAway(id string) bool {
 // (loaded) holds a new worker only from start on, as the few workers there
 // aren't what loads it, and never sends one elsewhere, since launch would
 // run it here; one task a pass goes past a strained machine while an
-// executor module has room, since launch hands a strained turn to it.
-func machineHold(strained, loaded string, start int, elsewhere func() bool) func(working int) string {
+// executor module has room, since launch hands a strained turn to it. A
+// saturated disk (io, core.IOStrained) holds every new worker, and never
+// sends one elsewhere either: launch doesn't read it, so would run it here.
+func machineHold(strained, io, loaded string, start int, elsewhere func() bool) func(working int) string {
 	asked := false
 	return func(working int) string {
 		if strained == "" {
+			if io != "" {
+				return io
+			}
 			if loaded != "" && working >= start {
 				return loaded
 			}
@@ -378,9 +384,15 @@ func (m *Module) opQueue(r core.Run, args json.RawMessage) (any, error) {
 	}
 	var notes []string
 	if len(a.Order) > 0 { // a new order replaces the old one: the rest go after, as filed
-		// Only in the caller's reach: another project's order is kept, and
+		// Only on the projects it names: another project's order is kept, and
 		// not one note each for the briefs it never named.
-		for _, t := range m.List(func(t Task) bool { return t.Queued() && t.Order > 0 && m.reach(r, t.Project) == nil }) {
+		named := map[string]bool{}
+		for _, id := range a.Order {
+			if t, ok := m.Get(id); ok {
+				named[t.Project] = true
+			}
+		}
+		for _, t := range m.List(func(t Task) bool { return (t.Queued() || t.Resending()) && t.Order > 0 && named[t.Project] }) {
 			if changes[t.ID] == nil {
 				at(t.ID).order = 0
 			}
@@ -395,12 +407,10 @@ func (m *Module) opQueue(r core.Run, args json.RawMessage) (any, error) {
 		case m.C.Runs.Walled(r, t.Project) != nil:
 			notes = append(notes, "no task "+id)
 			continue
-		case m.reach(r, t.Project) != nil && strings.TrimSpace(a.Why) == "":
-			// Every agent has the same say (the person, 10-28): another
-			// project's line is anyone's to steer, saying why on the record.
-			notes = append(notes, fmt.Sprintf("%s is on project %s; say why with why to steer another project's line", id, t.Project))
-			continue
-		case !t.Queued():
+		case !t.Queued() && !t.Resending():
+			// One a conflict sent back waits in the line as the queue lists
+			// it, so it is moved, held or started now like a brief (issue
+			// #2085: the pivot #2046 sat 23rd behind 22 sendbacks).
 			notes = append(notes, fmt.Sprintf("%s has left the queue (%s); a started worker isn't stopped by the queue", id, t.Stage))
 			continue
 		}
@@ -411,6 +421,13 @@ func (m *Module) opQueue(r core.Run, args json.RawMessage) (any, error) {
 		}
 		m.mu.Unlock()
 		if busy {
+			notes = append(notes, id+" is starting its worker right now")
+			continue
+		}
+		if t, ok = m.Get(id); !ok || !t.Queued() && !t.Resending() { // it started or was sent back before it was ours
+			m.mu.Lock()
+			delete(m.busy, id)
+			m.mu.Unlock()
 			notes = append(notes, id+" is starting its worker right now")
 			continue
 		}

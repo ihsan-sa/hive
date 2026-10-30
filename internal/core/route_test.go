@@ -785,3 +785,35 @@ func TestUnprovenFallbackSaysSo(t *testing.T) {
 		t.Fatalf("a skipped unproven fallback: %s %q", got.Status, got.Reason)
 	}
 }
+
+// A trial's worker starts with no route of its own, so at its model's usage
+// limit it parks until the reset, even where the settings' route for its
+// role has a proven fallback: a trial moved to claude:opus at OpenRouter's
+// limit would credit Opus's code to the model on trial (task 261028-141459).
+func TestATrialStaysOnItsModelAtALimit(t *testing.T) {
+	c, _ := testHive(t)
+	cfg := c.WS.LoadConfig()
+	cfg.Models = map[string]OpenModel{
+		"laguna": {Endpoint: "https://openrouter.ai/api/v1", Model: "poolside/laguna:free", Key: true},
+		"free":   {Endpoint: "http://127.0.0.1:11434/v1", Model: "qwen"},
+	}
+	c.WS.SaveConfig(cfg)
+	proven(c, "free")
+	c.Runs.Route = func(Run) []Pick { return []Pick{{Harness: "open", Model: "laguna"}, {Harness: "open", Model: "free"}} }
+	if _, err := c.Runs.Start(RunSpec{ID: "t1", Role: "worker", Harness: "open", Model: "laguna", Brief: "b", Checkout: t.TempDir()}); err != nil {
+		t.Fatal(err)
+	}
+	r, _ := c.Runs.Get("t1")
+	r.Turn, r.Login = 1, "open:laguna"
+	out := c.WS.TurnOut(r.ID, 1)
+	os.MkdirAll(filepath.Dir(out), 0o755)
+	os.WriteFile(out, []byte(`{"type":"result","subtype":"success","is_error":true,"api_error_status":429,"result":"API Error: Request rejected (429) · rate limit exceeded","session_id":"s1"}`+"\n"), 0o600)
+	c.Runs.endTurn(r)
+	got, _ := c.Runs.Get("t1")
+	if got.Status != StatusParked || !strings.HasPrefix(got.Reason, "usage limit; resumes") || got.Model != "laguna" {
+		t.Fatalf("a trial at its limit: %s on %s, %q", got.Status, got.Model, got.Reason)
+	}
+	if p, at := c.Runs.next(got); p.Model != "laguna" || !at.After(time.Now()) {
+		t.Fatalf("a trial at its limit would go on %v at %v", p, at)
+	}
+}

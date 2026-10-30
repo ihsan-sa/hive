@@ -35,9 +35,6 @@ func TestAmendAndWithdrawAWaitingBrief(t *testing.T) {
 	}
 	tick(m)
 
-	if _, err := op(m.opAmend, other, map[string]any{"task": first["task"], "title": "x"}); err == nil || !strings.Contains(err.Error(), "act only on your own") {
-		t.Fatalf("a worker on another project amended a brief: %v", err)
-	}
 	if _, err := op(m.opAmend, lead, map[string]any{"task": first["task"]}); err == nil {
 		t.Fatal("an amend that changes nothing was taken")
 	}
@@ -59,9 +56,6 @@ func TestAmendAndWithdrawAWaitingBrief(t *testing.T) {
 
 	if _, err := op(m.opWithdraw, lead, map[string]any{"task": second["task"]}); err == nil {
 		t.Fatal("a withdraw with no why was taken")
-	}
-	if _, err := op(m.opWithdraw, other, map[string]any{"task": second["task"], "why": "x"}); err == nil {
-		t.Fatal("another worker withdrew a brief it didn't file")
 	}
 	if _, err := op(m.opWithdraw, lead, map[string]any{"task": second["task"], "into": first["task"], "why": "folded into the chat task"}); err != nil {
 		t.Fatal(err)

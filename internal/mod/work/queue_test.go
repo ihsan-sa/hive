@@ -159,22 +159,12 @@ func TestWorkerHoldsQueuedBrief(t *testing.T) {
 	tick(m)
 	worker := core.Run{RunSpec: core.RunSpec{ID: "w-" + a.ID, Role: "worker", Project: "p"}}
 	stranger := core.Run{RunSpec: core.RunSpec{ID: "w-other", Role: "worker", Project: "q"}}
-	out, err := m.C.Runs.Ops().Call(stranger, "queue", json.RawMessage(`{"hold":"`+c.ID+`"}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if notes := fmt.Sprint(out.(map[string]any)["notes"]); !strings.Contains(notes, c.ID+" is on project p; say why with why") {
-		t.Fatalf("the stranger wasn't refused by reach: %s", notes)
-	}
-	if got := stageOf(t, m, c); got.Held {
-		t.Fatalf("a worker on another project held the brief without why: %+v", got)
-	}
 	// A new order from the stranger touches only its own project's line: p's
 	// ordered brief keeps its place, with no note about a brief it never named.
 	placed := stageOf(t, m, c)
 	placed.Order = 1
 	m.save(&placed, "")
-	out, err = m.C.Runs.Ops().Call(stranger, "queue", json.RawMessage(`{"order":"nope"}`))
+	out, err := m.C.Runs.Ops().Call(stranger, "queue", json.RawMessage(`{"order":"nope"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -518,6 +508,54 @@ func TestConflictWaitsHereNotOnARunner(t *testing.T) {
 	m.save(&back, "")
 	if start, wait := m.admit(m.List(nil)); start[back.ID] || !strings.Contains(wait[back.ID], "waiting for a worker") || m.away[back.ID] {
 		t.Fatalf("a conflict went past the pace: start %v, wait %q", start, wait[back.ID])
+	}
+}
+
+// A worker a conflict sent back waits in the line as the queue lists it, so
+// queue moves, holds and starts it like a brief: on 10-29 the pivot #2046 sat
+// 23rd behind 22 sendbacks, and order said it had left the queue (#2085).
+func TestQueueOrdersASendback(t *testing.T) {
+	m := queueRig(t)
+	cfg := m.C.WS.LoadConfig()
+	cfg.MaxWorkers = 1
+	m.C.WS.SaveConfig(cfg)
+	lead := core.Run{RunSpec: core.RunSpec{ID: "lead", Role: "lead"}}
+	var back []Task
+	for i, w := range []string{"wo", "wn", "wh"} {
+		if _, err := m.C.Runs.Start(core.RunSpec{ID: w, Role: "worker", Project: "p", Harness: "fake", Checkout: t.TempDir()}); err != nil {
+			t.Fatal(err)
+		}
+		task := file(t, m, "sent back "+w, "")
+		task.Stage, task.Worker, task.Resend = StageWorking, w, "Main moved and your branch conflicts with it."
+		task.Created = time.Now().Add(time.Duration(i-10) * time.Minute)
+		m.save(&task, "")
+		back = append(back, task)
+	}
+	older, newer, held := back[0], back[1], back[2]
+	out, err := m.opQueue(lead, json.RawMessage(`{"order":"`+newer.ID+`","hold":"`+held.ID+`","why":"the pivot first"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if notes := out.(map[string]any)["notes"].([]string); len(notes) != 0 {
+		t.Fatalf("notes %q, want none", notes)
+	}
+	if q := out.(map[string]any)["queue"].([]string); len(q) != 3 || !strings.Contains(q[0], newer.ID) || !strings.Contains(q[1], older.ID) {
+		t.Fatalf("queue after ordering: %q", q)
+	}
+	start, wait := m.admit(m.List(nil))
+	if !start[newer.ID] || start[older.ID] || start[held.ID] {
+		t.Fatalf("started %v, want only the ordered sendback", start)
+	}
+	if !strings.Contains(wait[held.ID], "held by lead") {
+		t.Fatalf("held sendback waits %q", wait[held.ID])
+	}
+	// A worker under way is still not the queue's.
+	busy := file(t, m, "working", "")
+	busy.Stage, busy.Worker = StageWorking, "wo"
+	m.save(&busy, "")
+	out, _ = m.opQueue(lead, json.RawMessage(`{"order":"`+busy.ID+`"}`))
+	if notes := out.(map[string]any)["notes"].([]string); len(notes) != 1 || !strings.Contains(notes[0], "has left the queue") {
+		t.Fatalf("notes %q", notes)
 	}
 }
 

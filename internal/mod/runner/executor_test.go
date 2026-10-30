@@ -6,6 +6,8 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -103,8 +105,20 @@ func TestExecutorHandsTheSpecToTheModule(t *testing.T) {
 		t.Fatal("an executor with room was passed over")
 	}
 	os.WriteFile(filepath.Join(home, "full"), nil, 0o644)
+	if ex, _ := r.Executor(); ex != nil {
+		t.Fatal("two launches went on one room answer: Executor didn't spend the yes it returned")
+	}
+	os.Remove(filepath.Join(home, "full"))
+	r.rooms = nil
+	if !r.Room() || !r.Room() {
+		t.Fatal("the queue's question found no room")
+	}
+	os.WriteFile(filepath.Join(home, "full"), nil, 0o644)
 	if ex, _ := r.Executor(); ex == nil {
 		t.Fatal("a module's room answer wasn't kept a moment, for the launch after the queue's question")
+	}
+	if r.Room() {
+		t.Fatal("the launch didn't spend the yes the queue's question kept")
 	}
 	r.rooms = nil
 	if ex, _ := r.Executor(); ex != nil {
@@ -117,6 +131,30 @@ func TestExecutorHandsTheSpecToTheModule(t *testing.T) {
 	r.rooms = nil
 	if ex, _ := r.Executor(); ex == nil {
 		t.Error("an executor with room again was passed over")
+	}
+}
+
+// Launches side by side in one room window share no yes: the one the
+// queue's question kept goes to one of them, and the rest ask again.
+func TestExecutorSpendsAYesOnce(t *testing.T) {
+	r, home := execRunner(t, `{"name":"dispatch","exec":["./run"],"hooks":["status","executor"]}`)
+	r.status["dispatch"] = "running"
+	if !r.Room() {
+		t.Fatal("no room")
+	}
+	os.WriteFile(filepath.Join(home, "full"), nil, 0o644)
+	var wg sync.WaitGroup
+	var handed atomic.Int32
+	for range 4 {
+		wg.Go(func() {
+			if ex, _ := r.Executor(); ex != nil {
+				handed.Add(1)
+			}
+		})
+	}
+	wg.Wait()
+	if n := handed.Load(); n != 1 {
+		t.Fatalf("%d launches went on one room answer, want 1", n)
 	}
 }
 
