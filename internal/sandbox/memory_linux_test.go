@@ -46,7 +46,9 @@ func TestSettleMemory(t *testing.T) {
 	fs = fakeCgroups(t, "/app.slice/hive.service/daemon")
 	unit = filepath.Join(fs, "app.slice", "hive.service")
 	os.MkdirAll(filepath.Join(unit, daemonLeaf), 0o755)
-	if err := SettleMemory(); err != nil || daemonUnit() != unit {
+	err := SettleMemory()
+	os.WriteFile(filepath.Join(unit, "cgroup.subtree_control"), []byte("memory\n"), 0o644) // as the kernel reads it back
+	if err != nil || daemonUnit() != unit {
 		t.Fatalf("from the leaf: %v, %q", err, daemonUnit())
 	}
 }
