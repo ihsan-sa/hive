@@ -79,6 +79,25 @@ type ProjectConfig struct {
 	// named models and the project's trials, as the models op shows them),
 	// written from its record whenever a trial's outcome is recorded.
 	Ledger string `json:"ledger,omitempty"`
+	// ForgeTests names the forge's checks that run this project's tests on
+	// every pull request (a CI job, "test (ubuntu-latest)" say). With them
+	// the forge's run on the exact head is the test: the Hive runs no test
+	// of its own on a PR, and the merge waits for these to pass there (or
+	// fail only where they fail on main). Main's measurement after a merge
+	// takes their pass on the merge commit too (improve.forgeTest). Read from main, and changing it is the person's (BaseProtected).
+	ForgeTests []string `json:"forge_tests,omitempty"`
+}
+
+// WithForgeTests is required with every name in cfg.ForgeTests added: they
+// are waited on as any required check, and an advisory list can't drop them.
+func (cfg ProjectConfig) WithForgeTests(required []string) []string {
+	out := slices.Clone(required)
+	for _, n := range cfg.ForgeTests {
+		if !slices.Contains(out, n) {
+			out = append(out, n)
+		}
+	}
+	return out
 }
 
 // SelfRoot and SelfHigh are the paths of the Hive's own source that a self
@@ -112,8 +131,9 @@ type Score struct {
 
 // Evaluator returns the paths in the repository that make up the score: its
 // paths and, as a best guess, any ./ file its command names. A change to one
-// is the person's to merge, and changes the score's version, so it starts a
-// new baseline. A path outside the repository can't be either, so it's left out.
+// is the person's to merge, and changes the score's version, so it is judged
+// against its parent scored under the new one, not the old best. A path
+// outside the repository can't be either, so it's left out.
 func (s Score) Evaluator() []string {
 	var out []string
 	add := func(f string) {

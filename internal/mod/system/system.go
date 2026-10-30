@@ -31,6 +31,9 @@ type Wakeup struct {
 	At   time.Time `json:"at"`
 	Text string    `json:"text"`
 	Done bool      `json:"done"`
+	// Missed is why a due wake-up reached no turn (its run was stopped,
+	// or its checkout is gone); empty when it was delivered.
+	Missed string `json:"missed,omitempty"`
 }
 
 // Module is the system module.
@@ -215,9 +218,30 @@ func (m *Module) Tick() {
 		go m.run(j)
 	}
 	for _, w := range wake {
-		m.C.Runs.Send(w.Run, "[wake-up you scheduled] "+w.Text)
+		if err := m.deliver(w); err != nil {
+			w.Missed = core.Clip(err.Error(), 300)
+			m.C.Runs.Progress(w.Run, "wake-up not delivered ("+w.Missed+"): "+w.Text)
+		}
 		m.C.J.MustAppend("system.woke", w)
 	}
+}
+
+// deliver hands a due wake-up to its run. A worker that scheduled a check
+// and then finished blocked (waiting on an outside unit) has ended, and Send
+// refuses ended runs; it is reopened for the wake-up instead (issue #2092).
+// Reopen still refuses a run stopped on purpose or whose checkout is gone.
+// A run that finished done is left alone: its work is in review, and a turn
+// now would finish it again mid-round.
+func (m *Module) deliver(w Wakeup) error {
+	text := "[wake-up you scheduled] " + w.Text
+	err := m.C.Runs.Send(w.Run, text)
+	if err == nil {
+		return nil
+	}
+	if r, ok := m.C.Runs.Get(w.Run); !ok || r.Status != core.StatusBlocked {
+		return err
+	}
+	return m.C.Runs.Reopen(w.Run, text)
 }
 
 // schedule is a job's schedule: config.json's, else the Hive's default, else

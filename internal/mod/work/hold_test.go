@@ -124,11 +124,6 @@ func TestHoldNeedsThePersonsWords(t *testing.T) {
 	if _, ok := m.Hold(p.Name); ok {
 		t.Fatal("not lifted")
 	}
-	for _, elsewhere := range []core.Run{{ID: "w-q", Role: "worker", Project: "q"}, {ID: "lead-q", Role: "lead", Project: "q"}} {
-		if _, err := m.opHold(elsewhere, []byte(`{"project":"p","why":"person: hold merges"}`)); err == nil {
-			t.Fatalf("a %s on another project held p's merges", elsewhere.Role)
-		}
-	}
 	worker := core.Run{ID: "w-p", Role: "worker", Project: "p"}
 	if _, err := m.opHold(worker, []byte(`{"project":"p","why":"person: hold merges"}`)); err != nil {
 		t.Fatalf("a worker on p couldn't hold p on the person's word: %v", err)

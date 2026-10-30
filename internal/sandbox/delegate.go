@@ -23,9 +23,6 @@ type Delegate struct {
 	Argv   []string // the module's program
 	Env    []string // its scrubbed environment
 	Dir    string   // its folder
-	// Started, if set, is called once a turn is handed over, so the room
-	// answer it went on isn't spent again.
-	Started func()
 }
 
 func (d *Delegate) Name() string   { return "module:" + d.Module + "@" + d.Where }
@@ -47,9 +44,6 @@ func (d *Delegate) Start(s Spec) (Proc, error) {
 		os.Remove(specPath)
 		return p, err
 	}
-	if d.Started != nil {
-		d.Started()
-	}
 	return p, nil
 }
 
@@ -65,9 +59,6 @@ func (d *Delegate) Run(s Spec, timeout time.Duration) (int, error) {
 	argv := append(append([]string{}, d.Argv...), "turn", "--spec", specPath)
 	if d.Where != "" {
 		argv = append(argv, "--runner", d.Where)
-	}
-	if d.Started != nil {
-		d.Started()
 	}
 	code, err := runSync(argv, d.Env, d.Dir, "", s.Stdout+".dispatch", timeout, nil)
 	os.Remove(specPath) // the module removes it once read; not if it never started

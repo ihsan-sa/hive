@@ -28,6 +28,7 @@ func TestLeadTurnStartsUnderStrainThatHoldsAWorker(t *testing.T) {
 	cfg := ws.LoadConfig()
 	cfg.Sandbox, cfg.BareAccepted, cfg.Harness = "bare", time.Now().Format(time.RFC3339), "fake"
 	cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax, cfg.LoadMax = 1<<30, 0, 0, 0
+	cfg.IOPressureMax, cfg.IOFullMax = 0, 0
 	ws.SaveConfig(cfg)
 	c, err := core.Open(ws, &core.Local{Dir: filepath.Join(dir, "forge")})
 	if err != nil {
