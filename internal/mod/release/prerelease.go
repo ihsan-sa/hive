@@ -19,17 +19,19 @@ const (
 )
 
 // Channel is the releases this install follows: the config's channel, or by
-// default the daily train on the Hive that releases the Hive (its own project
-// is release_repo, as on H0) and the latest release everywhere else.
+// default main on the Hive that releases the Hive (its own project is
+// release_repo, as on H0) and the latest release everywhere else. "train",
+// the daily canary train main replaced, reads as main.
 func (m *Module) Channel() string {
 	cfg := m.C.WS.LoadConfig()
+	if cfg.Channel == "train" {
+		cfg.Channel = Main
+	}
 	if cfg.Channel != "" {
 		return cfg.Channel
 	}
-	for _, p := range m.C.Projects.List() {
-		if p.Self && strings.EqualFold(p.Repo, cfg.ReleaseRepo) {
-			return Train
-		}
+	if _, ok := m.self(cfg); ok {
+		return Main
 	}
 	return Latest
 }
@@ -69,7 +71,7 @@ func own(gate, job, r string) bool {
 }
 
 // follow runs AutoUpdate every followEvery while the Hive follows pre-releases
-// or rides the train, so one that is safe here (or that its canary kept)
+// or main, so one that is safe here (or the commit the Hive just released)
 // installs within minutes, not at the next schedule.
 func (m *Module) follow() {
 	m.pmu.Lock()
@@ -185,11 +187,8 @@ func (m *Module) prerelease(repo, after string) (tag string, why []string, err e
 		return "", nil, fmt.Errorf("following pre-releases reads them through the GitHub login, which failed: %w", err)
 	}
 	var tags, ahead []string // tags are the candidates; ahead counts the lag from this one
-	train := m.Channel() == Train
 	for _, r := range rels {
-		// The train's candidates are every release newer here, the latest
-		// included: it moves only on a canary's keep.
-		if (r.Prerelease || train) && modules.Newer(after, r.Tag) {
+		if r.Prerelease && modules.Newer(after, r.Tag) {
 			tags = append(tags, r.Tag)
 		}
 		if modules.Newer(core.Version, r.Tag) {

@@ -78,6 +78,9 @@ func New(ws core.Workspace, forge core.Forge) (*App, error) {
 	board := problems.New(c)
 	a.Agents.Board = board.Brief
 	a.Work.Seen = board.Seen
+	a.Improve.Board = func(project, where, text string) {
+		board.Standing(core.Run{ID: "improve", Role: "module", Project: project}, where, text)
+	}
 	a.Stats = stats.New(c.J)
 	a.Improve.Feedback = a.Feedback.Digest
 	a.KB = kb.New(c, a.Agents)
@@ -93,8 +96,8 @@ func New(ws core.Workspace, forge core.Forge) (*App, error) {
 	a.Work.Gate = runGate(ws)
 	a.Projects = projects.New(c, a.Chat, a.Work, a.Improve)
 	a.Release = release.New(c)
-	a.Release.Canary = runCanary(ws, a.Work.Gate)
 	a.Release.ReadMerged = a.Work.ReadMerged
+	a.Release.Live = a.Mods.InstallFrom
 	a.Release.FileFix = func(project, title, done, known, why string) {
 		if len(a.Work.List(func(t work.Task) bool { return !t.Terminal() && t.Project == project && t.Title == title })) == 0 {
 			a.Work.File(work.Brief{Project: project, From: "release", Title: title, Done: done, Known: known, Aim: work.AimFix, Why: why})
@@ -109,6 +112,7 @@ func New(ws core.Workspace, forge core.Forge) (*App, error) {
 	a.Runner = &runner.Runner{C: c, Mods: a.Mods, Agents: a.Agents}
 	c.Runs.Executor = a.Runner.Executor
 	c.Runs.CheckExecutor = a.Runner.CheckExecutor
+	c.Runs.Room = a.Runner.Room
 	for _, tick := range []func(){stats.SpendNotice{C: c}.Tick, a.Work.Tick, a.Improve.Tick, a.Improve.TickSweeps, a.Improve.TickStepBacks, a.KB.Tick, a.System.Tick, a.Release.Tick, a.Risk.Tick, a.Projects.Tick, a.moduleJobs, a.Runner.Tick, a.Models.Tick} {
 		a.Mods.Builtin(tick)
 	}
@@ -148,6 +152,7 @@ func New(ws core.Workspace, forge core.Forge) (*App, error) {
 	a.System.Register(system.Job{Name: "report.send", Fn: (&report.Module{C: c}).Send})
 	a.System.Register(system.Job{Name: "hive.clean", AtStart: true, Fn: func() (string, error) { return a.Clean(), nil }})
 	c.Effects.OnDiskFull = func() { a.System.RunNow("hive.clean") }
+	c.Effects.Granted = a.Mods.Granted
 	return a, nil
 }
 

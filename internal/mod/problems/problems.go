@@ -146,6 +146,29 @@ func (m *Module) Post(r core.Run, where, text string) (Problem, error) {
 	return p, err
 }
 
+// Standing keeps run r's one open problem under where in r.Project: posted
+// when none is open, its text replaced when it says something new, and
+// solved when text is "" (a module's standing report, such as improve's
+// quarantined tests).
+func (m *Module) Standing(r core.Run, where, text string) error {
+	text = strings.TrimSpace(text)
+	open := m.List(func(p Problem) bool { return p.Open() && p.Run == r.ID && p.Project == r.Project && p.Where == where })
+	switch {
+	case len(open) == 0 && text == "":
+		return nil
+	case len(open) == 0:
+		_, err := m.Post(r, where, text)
+		return err
+	case text == "":
+		_, err := m.save(r, open[0].ID, func(p *Problem) { p.Solved = "nothing stands any more (" + r.ID + ")" })
+		return err
+	case open[0].Text == core.Clip(text, 2000):
+		return nil
+	}
+	_, err := m.save(r, open[0].ID, func(p *Problem) { p.Text = core.Clip(text, 2000) })
+	return err
+}
+
 // Add puts run r's word on problem id.
 func (m *Module) Add(r core.Run, id, text string) (Problem, error) {
 	text = strings.TrimSpace(text)

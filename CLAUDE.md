@@ -17,7 +17,7 @@ Dev runs without touching GitHub or plan usage: `HIVE_HOME=<dir> HIVE_FORGE=loca
 
 ## Docs
 
-- [docs/status.md](docs/status.md): what's done, in flight, next. Read first.
+- [docs/status.md](docs/status.md): the focus, what is paused, not verified and next. Read first. Not a changelog: a PR adds no Done line to it (#2100).
 - [docs/overview.md](docs/overview.md): the plain account behind the README and its diagram (`docs/arch.json`). It repeats facts from status.md and goals.md; update it in the same change.
 - [docs/architecture.md](docs/architecture.md): packages, folder layout, data flow, invariants.
 - [docs/core.md](docs/core.md): what the core is, its measured size, and what moves out to modules. New functionality goes in a module unless it says core.
@@ -26,7 +26,7 @@ Dev runs without touching GitHub or plan usage: `HIVE_HOME=<dir> HIVE_FORGE=loca
 - [docs/score.md](docs/score.md): the Hive project's score.
 - [docs/versions.md](docs/versions.md): what 1.0 and each major mean, and the `VERSION` line releases count from.
 - [docs/judge.md](docs/judge.md): a model's judgement decides whether a change is kept; the numbers are one thing it weighs.
-- [docs/log.md](docs/log.md): decisions.
+- [docs/log.md](docs/log.md): decisions up to 2026-10-29, closed to new entries (#2100). A change's decision and why go in its PR description.
 - [docs/spec.md](docs/spec.md): the build spec.
 - [LEARNINGS.md](LEARNINGS.md): gotchas.
 
