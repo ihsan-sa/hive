@@ -204,8 +204,8 @@ func (x *term) shot(name string) { x.t.Helper(); x.t.Logf("screen: %s\n%s", name
 
 // TestControlCenterInTmux drives the built hive in a real terminal the way a
 // person does: the first run on a clean HOME, a chat that lands work, the
-// dashboard, approving and declining from Waiting, merging a goals change
-// reached from the chat, module access, settings,
+// dashboard, approving and declining from Waiting, a goals change merging
+// with nothing waiting on the person, module access, settings,
 // quitting with the Hive still running, reopening, and resizing. Services are
 // stubbed on PATH, so nothing is installed on the account running the test.
 func TestControlCenterInTmux(t *testing.T) {
@@ -417,26 +417,14 @@ func TestControlCenterInTmux(t *testing.T) {
 		time.Sleep(500 * time.Millisecond)
 	}
 
-	// A change to the goals is the person's to merge: the chat says so, and
-	// → then a opens it in Waiting with its diff, where Enter merges it.
+	// A change to the goals merges like any other: nothing waits on the
+	// person, and Waiting stays empty.
 	x.goTo("Chats")
 	x.wait(10*time.Second, "textkit › lead")
 	x.keys("n")
 	x.typ("edit the goals FAKE:goals")
 	x.keys("Enter")
 	x.wait(time.Minute, "Understood: edit the goa")
-	x.goTo("lead") // the sidebar holds the chat, the focus moves to it, and esc goes back
-	x.wait(3*time.Minute, "1 waiting on you · a to answer")
-	x.keys("Escape")
-	x.wait(10*time.Second, "1 waiting on you · → then a to answer")
-	x.shot("the chat says a change waits on the person")
-	x.keys("Right", "a")
-	x.wait(10*time.Second, "│   Waiting", ".hive/goals.md", "+- a goal the worker wrote down", "merge    leave open")
-	x.shot("the goals change in Waiting")
-	x.keys("d")
-	x.wait(10*time.Second, "Waiting › what it changes", "+++ b/.hive/goals.md")
-	x.keys("Escape", "Enter")
-	x.wait(10*time.Second, "Nothing is waiting on you.")
 	for i := 0; ; i++ {
 		st, _ := c.State()
 		merged := false
@@ -445,20 +433,21 @@ func TestControlCenterInTmux(t *testing.T) {
 				merged = merged || strings.Contains(tk.Label(), "FAKE:goals") && (tk.Stage == work.StageMerged || tk.Stage == work.StageDone)
 			}
 		}
+		for _, a := range st.Asks {
+			if a.Kind == "merge" {
+				t.Fatalf("a merge waits on the person: %+v", a)
+			}
+		}
 		if merged {
 			break
 		}
-		if len(st.Asks) > 0 && i%10 == 0 { // main moved: the rebased commit asks again, and only that is answered
-			if a := st.Asks[0]; len(st.Asks) > 1 || a.Kind != "merge" || !strings.Contains(a.Title, "FAKE:goals") {
-				t.Fatalf("an ask this test doesn't expect is open: %+v", st.Asks)
-			}
-			x.keys("Enter")
-		}
 		if i == 600 {
-			t.Fatalf("the approved goals change never merged: %+v", st.Projects)
+			t.Fatalf("the goals change never merged: %+v", st.Projects)
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
+	x.goTo("Waiting")
+	x.wait(10*time.Second, "Nothing is waiting on you.")
 
 	// Modules: the defaults are listed; kb's access is removed from every
 	// project, granted to textkit alone, removed, and given back to all.
