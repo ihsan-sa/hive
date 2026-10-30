@@ -7,6 +7,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/ihsan-sa/hive-standalone-build/internal/harness"
 )
 
 // A run in home gets home read-write, .hive/private included, with each login
@@ -56,6 +58,33 @@ func TestSessionInHome(t *testing.T) {
 	}
 	if !slices.Equal(readOnly, []string{"elsewhere-ssh", "hive-backups"}) {
 		t.Errorf("read-only: %v, want ~/.ssh where it points and the backups", readOnly)
+	}
+}
+
+// A worker's run in home builds on the hive user's caches, not its own
+// HOME's empty ones; a reader, which isn't in home, keeps its own HOME's.
+func TestRunInHomeSharesCaches(t *testing.T) {
+	c, _ := testHive(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	h, _ := harness.Get("fake")
+	env := func(r Run) []string {
+		s, err := c.Runs.sandboxSpec(c.WS.LoadConfig(), isolatedSB{}, h, r, 1, false, filepath.Join(t.TempDir(), "p"), nil, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s.Env
+	}
+	got := env(Run{RunSpec: RunSpec{ID: "w1", Role: "worker", Harness: "fake"}})
+	for _, want := range []string{"XDG_CACHE_HOME=" + filepath.Join(home, ".cache"), "GOMODCACHE=" + filepath.Join(home, "go", "pkg", "mod")} {
+		if !slices.Contains(got, want) {
+			t.Errorf("a worker in home lacks %s: %v", want, got)
+		}
+	}
+	for _, kv := range env(Run{RunSpec: RunSpec{ID: "r1", Role: "reviewer", Harness: "fake", ReadOnly: true}}) {
+		if strings.HasPrefix(kv, "XDG_CACHE_HOME=") || strings.HasPrefix(kv, "GOMODCACHE=") {
+			t.Errorf("a reader, not in home, got %s", kv)
+		}
 	}
 }
 
