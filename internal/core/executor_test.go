@@ -249,3 +249,31 @@ func TestOnlyWorkersGoToAnExecutor(t *testing.T) {
 		t.Fatalf("a walled worker's turn: %s %q where %q", got.Status, got.Reason, got.Where)
 	}
 }
+
+// The work queue starts a worker past the strain here only when its turns
+// can go: an executor has room, and the project's worker is walled off (not
+// a session in home) and reads no secrets.
+func TestElsewhereForWalledWorkersOnly(t *testing.T) {
+	c, _ := testHive(t)
+	c.Runs.sandbox = func() (sandbox.Sandbox, error) { return isolatedBox{}, nil }
+	room := true
+	c.Runs.Room = func() bool { return room }
+	for _, p := range []Project{{Name: "home", Repo: "me/home"}, {Name: "walled", Repo: "me/walled", Isolated: true}, {Name: "secret", Repo: "me/secret", Isolated: true}} {
+		if _, err := c.Projects.Add(p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.MkdirAll(c.WS.ProjectSecrets("secret"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if !c.Runs.ElsewhereFor("walled") {
+		t.Fatal("a walled project's worker with room elsewhere doesn't go")
+	}
+	if c.Runs.ElsewhereFor("home") || c.Runs.ElsewhereFor("secret") {
+		t.Fatal("a worker in home or reading secrets would go elsewhere")
+	}
+	room = false
+	if c.Runs.ElsewhereFor("walled") {
+		t.Fatal("went with no room")
+	}
+}

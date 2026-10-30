@@ -2469,12 +2469,8 @@ func (rs *Runs) launch(r Run, cfg Config) {
 	// an executor module with room. An away run's goes there first anyway.
 	var elsewhere sandbox.Sandbox
 	where := ""
-	// Only a worker's turn is handed to an executor; a lead's, a sweep's or
-	// any other role's runs here. A run that reads its project's secrets
-	// stays here too: an executor would copy the folder to another machine.
-	// So does a session in home: its spec names this machine's home and
-	// service manager, which the dispatch module would send whole.
-	away := r.Role == "worker" && rs.secretsFor(r) == "" && !sessionInHome(r)
+	// Only some workers' turns are handed to an executor (handed).
+	away := rs.handed(r)
 	if r.Away && !r.NeverWaits() && away {
 		elsewhere, where = rs.executor()
 	}
@@ -2697,6 +2693,29 @@ func (rs *Runs) Elsewhere() bool {
 		return ex != nil
 	}
 	return rs.canHandOver() && rs.Room()
+}
+
+// ElsewhereFor says whether a worker for project would be handed to an
+// executor module with room now (Elsewhere): the work queue starts such a
+// worker, as an away run, while this machine is too strained for another.
+func (rs *Runs) ElsewhereFor(project string) bool {
+	r := Run{Role: "worker", Project: project}
+	if rs.projs != nil {
+		if p, ok := rs.projs.Get(project); ok {
+			r.Isolated = p.Isolated
+		}
+	}
+	return rs.handed(r) && rs.Elsewhere()
+}
+
+// handed says whether r's turns may go to an executor at all. Only a
+// worker's turn is handed over; a lead's, a sweep's or any other role's runs
+// here. A run that reads its project's secrets stays here too: an executor
+// would copy the folder to another machine. So does a session in home: its
+// spec names this machine's home and service manager, which the dispatch
+// module would send whole.
+func (rs *Runs) handed(r Run) bool {
+	return r.Role == "worker" && rs.secretsFor(r) == "" && !sessionInHome(r)
 }
 
 // executor returns an executor module with room for a turn this machine is

@@ -209,6 +209,44 @@ func TestSaturatedDiskHoldsNewWorkersAndChecks(t *testing.T) {
 	}
 }
 
+// A brief the strain here would hold starts when an executor has room for
+// its project's worker, one a pass, and its worker starts as an away run.
+func TestExecutorRoomStartsAHeldBrief(t *testing.T) {
+	m, _, _, _ := noCommitRig(t, 0)
+	wasDisk, wasRoom := diskBusy, elsewhereFor
+	room := true
+	diskBusy = func(float64) string { return "waiting: disk (IO pressure full avg60 62%, limit 40%)" }
+	elsewhereFor = func(*core.Runs, string) bool { return room }
+	defer func() { diskBusy, elsewhereFor = wasDisk, wasRoom }()
+	w, a, b := file(t, m, "working", ""), file(t, m, "first", ""), file(t, m, "second", "")
+	w.Stage = StageWorking
+	m.save(&w, "")
+	for _, tk := range []*Task{&a, &b} {
+		tk.Stage = StageQueued
+		m.save(tk, "")
+	}
+	start, wait := m.admit(m.List(nil))
+	if !start[a.ID] || start[b.ID] || wait[b.ID] == "" {
+		t.Fatalf("with room elsewhere: start %v, wait %v", start, wait)
+	}
+	m.mu.Lock()
+	away := m.away[a.ID]
+	m.mu.Unlock()
+	if !away {
+		t.Fatal("the brief started past the disk isn't marked away")
+	}
+	room = false
+	if start, _ = m.admit(m.List(nil)); start[a.ID] || start[b.ID] {
+		t.Fatalf("started with no room: %v", start)
+	}
+	m.mu.Lock()
+	away = m.away[a.ID]
+	m.mu.Unlock()
+	if away {
+		t.Fatal("a brief held again is still marked away")
+	}
+}
+
 // A queued task isn't saved again when only the live figures in its waiting
 // reason change: on 10-30 each was re-saved ~170 times an hour for a new avg60.
 func TestWaitingReasonIgnoresLiveFigures(t *testing.T) {

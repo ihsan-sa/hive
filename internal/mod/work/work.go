@@ -327,6 +327,7 @@ type Module struct {
 	// retesting is held while main's red tests run once more (mainTests).
 	retesting sync.Mutex
 	busy      map[string]bool
+	away      map[string]bool      // queued tasks admit started past the strain here because an executor had room (RunSpec.Away)
 	stepAt    map[string]time.Time // when each Tick step began, so one stuck past stepLimit is let go
 	weighing  map[string]weighing  // the checkpoints a step is weighing, so a finish takes them out of the check line
 	bars      map[string]float64   // a worker's base scored under a score main isn't yet measured by, keyed project@sha@version
@@ -408,7 +409,7 @@ type Module struct {
 
 // New loads tasks and registers the brief op.
 func New(c *core.Core, a *agents.Agents, ch *chat.Module) *Module {
-	m := &Module{C: c, Agents: a, Chat: ch, tasks: map[string]*Task{}, busy: map[string]bool{}, aims: map[string]aimAsk{}, steered: map[string]time.Time{}, mainRed: map[string]bool{}, mergeLooked: map[string]string{}, sighted: map[string]bool{}, cantRunOpen: map[string]string{}, measuring: map[string]int{}, mainFails: map[string][]string{}, later: map[string]time.Time{}, prPolled: map[string]time.Time{}, holds: map[string]*MergeHold{}, holdPolled: map[string]time.Time{}, refusedAsked: map[string]time.Time{}}
+	m := &Module{C: c, Agents: a, Chat: ch, tasks: map[string]*Task{}, busy: map[string]bool{}, away: map[string]bool{}, aims: map[string]aimAsk{}, steered: map[string]time.Time{}, mainRed: map[string]bool{}, mergeLooked: map[string]string{}, sighted: map[string]bool{}, cantRunOpen: map[string]string{}, measuring: map[string]int{}, mainFails: map[string][]string{}, later: map[string]time.Time{}, prPolled: map[string]time.Time{}, holds: map[string]*MergeHold{}, holdPolled: map[string]time.Time{}, refusedAsked: map[string]time.Time{}}
 	apply := func(e core.Event) {
 		if e.Kind == "merge.held" || e.Kind == "merge.lifted" {
 			m.applyHold(e)
@@ -1495,6 +1496,10 @@ func (m *Module) startWorker(t *Task, p core.Project) error {
 		brief = m.renderBrief(t, p, base)
 		spec := m.Agents.Spec(id, "worker", p.Name, dir, brief)
 		spec.Task, spec.Inputs = t.ID, t.Inputs
+		m.mu.Lock()
+		spec.Away = m.away[t.ID] // started past the strain here: an executor had room
+		delete(m.away, t.ID)
+		m.mu.Unlock()
 		if t.Model != "" {
 			pick, err := m.C.WS.LoadConfig().Pick(t.Model)
 			if err != nil {
