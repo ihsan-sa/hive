@@ -4,7 +4,9 @@ Built in `internal/mod/risk` (spec sections 4, 7 and 15, milestone 6).
 
 ## Tiers and routes
 
-A worker asks with `hive agent warden --want --why --steps --tier T1|T2|T3`. `core.Route` picks who settles it:
+Wardens are only for what is outside the hive user or can't be undone (the person, 10-30): money, credentials, publishing private details, opening the machine, anything outward in the person's name, and deleting repos or history. An agent's run is a session in the hive user's home (`internal/core/home.go`), so everything else it does itself. `hive agent warden` hands any other ask straight back as the agent's own (route `self`), whatever tier it names; one that publishes private details or deletes a repository or history (`core.WardenOnly`, `core.WardenHit`) goes to a warden, a deletion as T3 to a tribunal, and the ceiling's own list goes on to the person. A module install (`install_module`) isn't weighed: it installs at once.
+
+A worker asks with `hive agent warden --want --why --steps --tier T1|T2|T3`. For an ask in those categories, `core.Route` picks who settles it:
 
 - **T1** (inside the Hive, recoverable): the worker's own; nothing is filed.
 - **T2** (outside but recoverable, or load-bearing inside): a warden. At autonomy 1 the person says yes first; at autonomy 3 the warden settles it and the person is told after: a `person.told` event (`Person.Tell`), shown in the control center's feed and its "done for you" list with what ran, why and the output, never a Waiting item. Waiting holds only what needs their decision.
@@ -14,7 +16,7 @@ A worker asks with `hive agent warden --want --why --steps --tier T1|T2|T3`. `co
 
 A "gate" Waiting item (landing a change to the gate's own code unjudged while main itself fails in the gate, docs/gate.md) is the person's alone: it is asked straight to them, never through `risk.Weigh`, so no warden or tribunal answers it at any autonomy, and its approval lands only that head at that main.
 
-A decision that would otherwise wait in the person's queue goes the same way through `risk.Weigh`: a merge that changes protected paths (goals, `docs/REVIEW.md`, the score, settings; the ask quotes their diff) and a module install. At autonomy 1, or when the ceiling's words show up, the person decides as before. Otherwise a warden weighs it as T2 and may call a tribunal. No script runs: its `do` or decline answers the person's ask (merge or leave open, install or decline), so the ask's own handler acts, and a "told" item tells the person after. The worker that wrote a change never weighs it and is sent nothing about it, since its turn is over. A warden that ends without deciding hands the ask to the person.
+A decision that would otherwise wait in the person's queue goes the same way through `risk.Weigh`: a merge that changes protected paths (goals, `docs/REVIEW.md`, the score, settings; the ask quotes their diff). At autonomy 1, or when the ceiling's words show up, the person decides as before. Otherwise a warden weighs it as T2 and may call a tribunal. No script runs: its `do` or decline answers the person's ask (merge or leave open, install or decline), so the ask's own handler acts, and a "told" item tells the person after. The worker that wrote a change never weighs it and is sent nothing about it, since its turn is over. A warden that ends without deciding hands the ask to the person.
 
 ## Warden
 
