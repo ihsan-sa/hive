@@ -61,6 +61,12 @@ func activityText(a stats.Activity, full bool) string {
 	add(a.Started, "run started", "runs started")
 	add(a.Finished, "finished", "finished")
 	add(a.Merged, "merged", "merged")
+	if a.Peer > 0 {
+		parts = append(parts, fmt.Sprintf("%d %s between workers", a.Peer, plural(a.Peer, "message", "messages")))
+	}
+	if a.Helped > 0 {
+		parts = append(parts, fmt.Sprintf("%d helped-by", a.Helped))
+	}
 	if a.Reverted > 0 {
 		parts = append(parts, stWarn.Render(fmt.Sprintf("%d reverted", a.Reverted)))
 	} else if full {
@@ -117,6 +123,9 @@ func (m *model) statRows(add func(row) bool) {
 		rev := fmt.Sprintf("%d reverted", a.Reverted)
 		if a.Reverted > 0 {
 			rev = stWarn.Render(rev)
+		}
+		if a.Met+a.Peer+a.Helped > 0 {
+			add(row{key: "all:peers", depth: 1, text: fmt.Sprintf("peers    %d %s met on shared files · %d of them talked · %d %s between workers · %d helped-by", a.Met, plural(a.Met, "pair", "pairs"), a.Talked, a.Peer, plural(a.Peer, "message", "messages"), a.Helped)})
 		}
 		add(row{key: "all:prs", depth: 1, text: fmt.Sprintf("PRs      %s · %s · %d %s cut", stGood.Render(fmt.Sprintf("%d merged", a.Merged)), rev, a.Releases, plural(a.Releases, "release", "releases"))})
 	}

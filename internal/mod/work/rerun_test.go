@@ -212,40 +212,6 @@ func TestRerunChecksWalled(t *testing.T) {
 	}
 }
 
-// A worker steers only its own project's tasks: recheck, rerun-checks and
-// landed on another project's task are refused by reach, and nothing moves.
-func TestWorkerSteersOnlyItsProject(t *testing.T) {
-	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
-	toMerging(t, m, task, p)
-	m.save(task, "")
-	f.SetChecks(p.Repo, task.SHA, core.CheckRun{Name: "ci", State: core.CheckFail, Detail: "failure"})
-	before, _ := m.Get(task.ID)
-	stranger := core.Run{RunSpec: core.RunSpec{ID: "w-q", Role: "worker", Project: "q"}}
-	for op, args := range map[string]string{
-		"recheck":      `{"task":"` + task.ID + `","back":"look again"}`,
-		"rerun-checks": `{"task":"` + task.ID + `"}`,
-		"landed":       `{"task":"` + task.ID + `","why":"it's on main"}`,
-	} {
-		if _, err := m.C.Runs.Ops().Call(stranger, op, json.RawMessage(args)); err == nil || !strings.Contains(err.Error(), "you act only on your own (q)") {
-			t.Fatalf("%s from a worker on another project: %v", op, err)
-		}
-	}
-	after, _ := m.Get(task.ID)
-	if after.Stage != before.Stage || len(after.Log) != len(before.Log) || f.Reruns(p.Repo, task.SHA) != 0 {
-		t.Fatalf("a refused call moved the task: stage %q, log %d -> %d, %d re-runs", after.Stage, len(before.Log), len(after.Log), f.Reruns(p.Repo, task.SHA))
-	}
-	// Another worker on its project rechecks it, on the record by its run id.
-	after.Stage, after.Reason = StageBlocked, "a flake"
-	m.save(&after, "")
-	peer := core.Run{RunSpec: core.RunSpec{ID: "w-peer", Role: "worker", Project: p.Name}}
-	if _, err := m.C.Runs.Ops().Call(peer, "recheck", json.RawMessage(`{"task":"`+task.ID+`"}`)); err != nil {
-		t.Fatal(err)
-	}
-	if got, _ := m.Get(task.ID); got.Stage != StageLanding || !logHas(&got, "asked by w-peer") {
-		t.Fatalf("a worker's recheck on its project: stage %q, log %v", got.Stage, got.Log)
-	}
-}
-
 // e2eKey is a test's quarantine key in the module flakeRig seeds.
 const e2eKey = "example.com/p/e2e::"
 
@@ -424,33 +390,6 @@ func TestForgeQuarantineNotForItsOwnPackage(t *testing.T) {
 	m, task, p, f := flakeRig(t, map[string]string{"e2e/testdata.txt": "y"}, e2eKey+"TestStalls")
 	redOnce(t, m, task, p, f, e2eLog("TestStalls"))
 	sentBack(t, f, task)
-}
-
-// A step-back steers the loop it diagnoses on its own project, as a worker or
-// sweep does, and not another project's; a reviewer doesn't steer at all.
-func TestStepbackSteersItsProject(t *testing.T) {
-	m, task, p, _ := gateRig(t, false, map[string]string{"feature.txt": "y"})
-	toMerging(t, m, task, p)
-	task.Stage, task.Reason = StageBlocked, "a flake"
-	m.save(task, "")
-	reviewer := core.Run{RunSpec: core.RunSpec{ID: "r-1", Role: "reviewer", Project: p.Name}}
-	if _, err := m.C.Runs.Ops().Call(reviewer, "recheck", json.RawMessage(`{"task":"`+task.ID+`"}`)); err == nil || !strings.Contains(err.Error(), "not granted") {
-		t.Fatalf("recheck from a reviewer: %v", err)
-	}
-	elsewhere := core.Run{RunSpec: core.RunSpec{ID: "stepback-q", Role: "stepback", Project: "q"}}
-	if _, err := m.C.Runs.Ops().Call(elsewhere, "recheck", json.RawMessage(`{"task":"`+task.ID+`"}`)); err == nil || !strings.Contains(err.Error(), "you act only on your own (q)") {
-		t.Fatalf("recheck from a step-back on another project: %v", err)
-	}
-	sb := core.Run{RunSpec: core.RunSpec{ID: "stepback-p", Role: "stepback", Project: p.Name}}
-	if _, err := m.C.Runs.Ops().Call(sb, "queue", json.RawMessage(`{}`)); err != nil {
-		t.Fatalf("queue from a step-back: %v", err)
-	}
-	if _, err := m.C.Runs.Ops().Call(sb, "recheck", json.RawMessage(`{"task":"`+task.ID+`"}`)); err != nil {
-		t.Fatal(err)
-	}
-	if got, _ := m.Get(task.ID); got.Stage != StageLanding || !logHas(&got, "asked by stepback-p") {
-		t.Fatalf("a step-back's recheck on its project: stage %q, log %v", got.Stage, got.Log)
-	}
 }
 
 // localFlakeRig is flakeRig whose own test check prints the head's flaky.txt

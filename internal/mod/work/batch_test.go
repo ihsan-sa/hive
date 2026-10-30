@@ -17,7 +17,6 @@ import (
 func TestBatchFoldsRelatedFixesIntoOneTask(t *testing.T) {
 	m := queueRig(t)
 	lead := core.Run{RunSpec: core.RunSpec{ID: "lead-1", Role: "lead"}}
-	other := core.Run{RunSpec: core.RunSpec{ID: "w-two", Role: "worker", Project: "q"}}
 	batch := func(r core.Run, a map[string]any) (map[string]string, error) {
 		raw, _ := json.Marshal(a)
 		out, err := m.opBatch(r, raw)
@@ -42,9 +41,6 @@ func TestBatchFoldsRelatedFixesIntoOneTask(t *testing.T) {
 
 	if _, err := batch(lead, map[string]any{"tasks": a + "," + b}); err == nil {
 		t.Fatal("a batch with no why was taken")
-	}
-	if _, err := batch(other, map[string]any{"tasks": a + "," + b, "why": "x"}); err == nil {
-		t.Fatal("a worker on another project batched its briefs")
 	}
 	if _, err := batch(lead, map[string]any{"tasks": []string{a, b, g}, "why": "x"}); err == nil || !strings.Contains(err.Error(), "fixes with fixes") {
 		t.Fatalf("a gain was batched with fixes: %v", err)

@@ -48,14 +48,6 @@ type Module struct {
 	// running ones to end (the work module), so an update never restarts
 	// mid-merge; ok false says one still runs, and resume lets merges go on.
 	PauseMerges func(wait time.Duration) (resume func(), ok bool)
-	// Gates says how many recursive gates run and since when the oldest
-	// has, and HoldGates keeps new ones from starting until a time (the
-	// work module): an automatic update waits for the running ones, since
-	// the restart ends them and up to two hours of their work.
-	Gates     func() (running int, oldest time.Time)
-	HoldGates func(until time.Time)
-	// gatesSince is when the update first waited for running gates.
-	gatesSince time.Time
 	// Scan checks what a release at sha publishes before it is cut; nil is
 	// the identity and secret scan of the files on the commit's public list.
 	Scan func(p core.Project, sha string) error
@@ -373,12 +365,12 @@ func (m *Module) lag(out ...string) {
 	seen := map[string]bool{}
 	m.newest, m.behind = core.Version, 0
 	for _, t := range append(slices.Clone(m.ahead), out...) {
-		if t == "" || seen[t] || !modules.Newer(core.Version, t) {
+		if t == "" || seen[t] || !newer(t) {
 			continue
 		}
 		seen[t] = true
 		m.behind++
-		if modules.Newer(m.newest, t) {
+		if m.newest == core.Version || modules.Newer(m.newest, t) {
 			m.newest = t
 		}
 	}
@@ -423,8 +415,7 @@ func (m *Module) Update(tag string) (string, error) {
 const busy = "an update is already being checked; try again in a minute"
 
 // update installs tag, or the newest release when tag is "" or latest; on its
-// own (auto), it never crosses into a new major version past 1.0, and waits
-// for the recursive gates running (waitGates).
+// own (auto), it never crosses into a new major version past 1.0.
 func (m *Module) update(tag string, auto bool) (string, error) {
 	m.pmu.Lock()
 	m.tried = tag
@@ -441,7 +432,7 @@ func (m *Module) update(tag string, auto bool) (string, error) {
 			return "", err
 		}
 	}
-	if !chosen && !modules.Newer(core.Version, tag) || chosen && tag == core.Version {
+	if !chosen && !newer(tag) || chosen && tag == core.Version {
 		msg := "already on " + core.Version
 		if pin {
 			msg += ", pinned there"
@@ -456,9 +447,6 @@ func (m *Module) update(tag string, auto bool) (string, error) {
 	m.pmu.Unlock()
 	if !chosen && m.rolledBack(tag) {
 		return tag + " was rolled back after it failed to start here; `" + core.Cmd + " update " + tag + "` tries it again", nil
-	}
-	if msg := m.waitGates(tag, auto); msg != "" {
-		return msg, nil
 	}
 	if msg := m.waitChecks(tag, auto); msg != "" {
 		return msg, nil
@@ -652,52 +640,6 @@ var mergeWait = 2 * time.Minute
 // maxSkips is how many looks in a row an update waits on a merge running
 // past mergeWait before it installs anyway.
 const maxSkips = 3
-
-// gateWaitMax is the most an automatic update waits for the recursive gates
-// running when it first looked: a gate's own limit and its grace, so a run
-// that started just before ends, and a hung one doesn't keep the Hive behind.
-var gateWaitMax = 2*time.Hour + 15*time.Minute
-
-// gateHold is how long each look that waits for gates keeps new ones from
-// starting; the next look renews it, so an update gone from the channel
-// holds no gate back for long.
-const gateHold = 15 * time.Minute
-
-// waitGates says why an automatic update to tag waits, or "": while
-// recursive gates run, it waits for them to end and starts no new ones,
-// for at most gateWaitMax from its first look; then it installs anyway. A
-// restart ends every gate in flight, and before this one each pre-release
-// threw away whatever the gates running had done. `hive update` doesn't wait.
-func (m *Module) waitGates(tag string, auto bool) string {
-	n := 0
-	var oldest time.Time
-	if auto && m.Gates != nil {
-		n, oldest = m.Gates()
-	}
-	if n == 0 {
-		m.gatesSince = time.Time{}
-		return ""
-	}
-	now := time.Now().UTC()
-	first := m.gatesSince.IsZero()
-	if first {
-		m.gatesSince = now
-	}
-	by := m.gatesSince.Add(gateWaitMax)
-	text := fmt.Sprintf("%d recursive gate(s) running, the oldest since %s", n, oldest.UTC().Format("15:04Z"))
-	if !now.Before(by) {
-		m.gatesSince = time.Time{}
-		m.C.J.MustAppend("hive.update_held", map[string]any{"to": tag, "gates": n, "forced": true, "text": text + fmt.Sprintf("; waited %s, installing anyway", gateWaitMax)})
-		return ""
-	}
-	if m.HoldGates != nil {
-		m.HoldGates(now.Add(gateHold))
-	}
-	if first {
-		m.C.J.MustAppend("hive.update_held", map[string]any{"to": tag, "gates": n, "text": text + "; no new gate starts until it installs"})
-	}
-	return "waiting: " + text + "; " + tag + " installs when they end, or at " + by.Format("15:04Z") + " at the latest"
-}
 
 // restartGrace is how long merges stay paused after an update installs,
 // waiting for its restart.
@@ -988,31 +930,14 @@ func (m *Module) afterKept(project, sha string) {
 		selfRead = nil // the person's word already stands for them
 	}
 	var manifest strings.Builder
-	var root, unread, rootRead, reading []string
+	var root, rootRead, reading []string
 	for _, mg := range list {
 		if mg.Hand {
 			fmt.Fprintf(&manifest, "- %s and what else on main up to it the Hive didn't merge: merged by hand, which stands for its read\n", core.Short(mg.SHA))
 			continue
 		}
-		reads, why := m.C.Effects.Reads(project, mg.SHA, mg.Diff), "no seat reads it"
-		if len(reads) == 0 && mg.Diff != "" && selfRead != nil {
-			var passed bool
-			if passed, why = selfRead(p, mg.PR, mg.SHA, mg.MergeSHA, mg.Diff, nil); passed {
-				reads = m.C.Effects.Reads(project, mg.SHA, mg.Diff)
-			} else if why != "" {
-				log.Printf("release: %s: #%d stays unread: %s", project, mg.PR, why)
-			}
-		}
-		switch {
-		case len(reads) > 0:
-			fmt.Fprintf(&manifest, "- #%d at %s, read by %s\n", mg.PR, core.Short(mg.SHA), strings.Join(reads, ", "))
-		case why == "":
-			reading = append(reading, fmt.Sprintf("#%d's read", mg.PR))
-			fmt.Fprintf(&manifest, "- #%d at %s, being read by the Hive's reviewer\n", mg.PR, core.Short(mg.SHA))
-		default:
-			unread = append(unread, fmt.Sprintf("#%d at %s", mg.PR, core.Short(mg.SHA)))
-			fmt.Fprintf(&manifest, "- #%d at %s, not read\n", mg.PR, core.Short(mg.SHA))
-		}
+		fmt.Fprintf(&manifest, "- #%d at %s\n", mg.PR, core.Short(mg.SHA))
+		var why string
 		if len(mg.Root) == 0 {
 			continue
 		}
@@ -1068,9 +993,6 @@ func (m *Module) afterKept(project, sha string) {
 	}
 	if len(root) > 0 {
 		why = append(why, strings.Join(root, ", ")+" run with elevated rights and no security read passed them")
-	}
-	if len(unread) > 0 {
-		why = append(why, strings.Join(unread, ", ")+" merged without a read of its exact commit")
 	}
 	if !approved {
 		if held, tag, first := m.unbuilt(p, sha); held != "" {
@@ -1132,7 +1054,7 @@ func (m *Module) afterKept(project, sha string) {
 		}
 	}
 	body := "Released by the Hive after " + core.Short(sha) + " kept its tests, main's checks and dry run green. It is a pre-release until " +
-		strings.Join(Gates, " and ") + " pass on that commit; then it is the latest, which installs follow.\n\nWhat was read:\n\n" + manifest.String()
+		strings.Join(Gates, " and ") + " pass on that commit; then it is the latest, which installs follow.\n\nWhat it covers:\n\n" + manifest.String()
 	if approved {
 		body += "\nThe person released it.\n"
 	} else if len(rootRead) > 0 {

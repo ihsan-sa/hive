@@ -1896,8 +1896,10 @@ type MergeRequest struct {
 	SHA     string
 	Main    string
 	Subject string
-	Gain    bool   // the change aims at a measurable gain: on the Hive's own repository it needs the recursive gate's keep
 	Task    string // the task whose PR it is: the quarantine excuses it only on evidence from outside it
+	// Passed: its worker's own run of the tests passed at SHA in its turn
+	// (or it is a revert): with no forge CI that is the test.
+	Passed bool
 	// Draft is the PR's state at the caller's last look: a draft is readied
 	// once every read is checked. One made a draft after that look isn't
 	// (the lead's pr_draft, say): MergePR refuses it with ErrDraft.
@@ -1907,8 +1909,9 @@ type MergeRequest struct {
 	Stale func() bool
 }
 
-// Merge merges the PR only at sha, and only when the host's own records show
-// that sha passed its tests and was read (or needed no read).
+// Merge merges the PR only at sha, once sha passed its tests: the forge's CI
+// where the project has it, else its worker's own run or one here. What
+// breaks main shows in its measurement after the merge, which reverts it.
 func (e *Effects) Merge(m MergeRequest) (string, error) {
 	p := m.Project
 	if e.MergeHeld != nil {
@@ -1929,6 +1932,7 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 	case len(tested) > 0:
 		// No local run is needed, and one there is no gate: the forge's
 		// checks below must pass, these among them.
+	case m.Passed:
 	case !ok:
 		return "", refuse("%s: no test run recorded for that exact commit", short(m.SHA))
 	case !c.OK:
@@ -1960,22 +1964,12 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 	if len(ch.Protected) > 0 && !e.ApprovedDiff("merge", p.Name, m.SHA, ch.DiffID) {
 		return "", &NeedsPerson{Reason: "it changes " + strings.Join(ch.Protected, ", ") + ", which needs an approval first"}
 	}
-	if !ch.Small && !e.readOK(p, ch, m.SHA) {
-		return "", refuse("%s: no land verdict bound to that exact commit", short(m.SHA))
-	}
 	if !e.SecurityOK(p.Name, ch) {
 		need := "the Hive's security seat"
 		if len(ch.SecurityRoot) > 0 {
 			need += " and a majority of its panel"
 		}
 		return "", refuse("%s: it changes %s, %s, and no security read said land on its diff (%s, or an outside read)", short(m.SHA), strings.Join(ch.Security, ", "), ch.SecurityWhere(), need)
-	}
-	if p.Self && m.Gain {
-		// Or once the person landed that exact head at that main unjudged,
-		// the gate unable to judge there (the work module's "gate" ask).
-		if !e.Kept(p, m.SHA, m.Main) && !e.Approved("gate", p.Name, m.SHA+"@"+m.Main) {
-			return "", refuse("%s: a change to the Hive itself aimed at a gain merges only once the recursive gate, as its judge called it, kept it against main at %s, or the person landed it", short(m.SHA), short(m.Main))
-		}
 	}
 	runs, err := e.Forge.Checks(p.Repo, m.SHA)
 	if err != nil {

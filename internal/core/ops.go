@@ -301,7 +301,7 @@ func (o *Ops) registerCore() {
 		o.rs.Progress(r.ID, m.Text)
 		return "noted", nil
 	}})
-	o.Register(Op{Name: "finish", Help: `{"status": "done|blocked", "account": "what you did", "tested": "...", "unsure": "..."}`, Fn: func(r Run, a json.RawMessage) (any, error) {
+	o.Register(Op{Name: "finish", Help: `{"status": "done|blocked", "account": "what you did", "tested": "...", "passed": "the project's test command, when it passed in this turn on the commit you finish with (main merged in): with no forge CI the Hive merges on it at once", "unsure": "..."}`, Fn: func(r Run, a json.RawMessage) (any, error) {
 		var f Finish
 		if err := Bind(a, &f); err != nil {
 			return nil, err
@@ -324,7 +324,7 @@ func (o *Ops) registerCore() {
 			m.Role = "worker"
 		}
 		if m.Role != "worker" && m.Role != "reviewer" {
-			return nil, fmt.Errorf("agents may spawn workers or reviewers; for wider reach ask a warden (op warden)")
+			return nil, fmt.Errorf("a helper is a worker or a reviewer, not a %s", m.Role)
 		}
 		// A helper started with nothing to do can only finish blocked.
 		if strings.TrimSpace(m.Brief) == "" {
