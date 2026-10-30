@@ -1015,11 +1015,13 @@ func (m *Module) reapStuck() {
 	}
 }
 
-// waits records why a queued task waits, when that is new. A machine hold's
-// live figures after " (" change every tick, so only a new kind is saved.
+// waits records why a queued task waits, when that is new. A hold's live
+// figures in brackets (a disk's "avg60 67%", a machine's load) change every
+// tick, so a reason that differs only in them isn't saved again: on 10-30,
+// with the disk gate shut, 86% of the journal's events in an hour were
+// queued tasks re-saved for a new avg60, each ~170 times.
 func (m *Module) waits(t Task, why string) {
-	kind, _, _ := strings.Cut(why, " (")
-	if t.Stage == StageQueued && (t.Reason == why || strings.Contains(why, "waiting: machine") && strings.HasPrefix(t.Reason, kind+" (")) {
+	if t.Stage == StageQueued && steady(t.Reason) == steady(why) {
 		return
 	}
 	m.mu.Lock()
@@ -1035,6 +1037,23 @@ func (m *Module) waits(t Task, why string) {
 	m.mu.Lock()
 	delete(m.busy, t.ID)
 	m.mu.Unlock()
+}
+
+// steady is a reason without its bracketed live figures.
+func steady(why string) string {
+	var b strings.Builder
+	depth := 0
+	for _, r := range why {
+		switch {
+		case r == '(':
+			depth++
+		case r == ')' && depth > 0:
+			depth--
+		case depth == 0:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
 
 // Wait returns once every step Tick started has ended, so a test's folders
