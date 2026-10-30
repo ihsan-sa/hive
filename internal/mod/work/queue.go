@@ -76,7 +76,10 @@ func (t Task) Overdue() bool {
 // main holds turns on a full CPU (core.Runs.Yielding), as launch weighs
 // every turn. On a saturated disk (core.DiskBusy) none starts while another
 // worker works: the running ones go on, and the loop never stops for want
-// of one. tasks is every task Tick looks at.
+// of one. One any of those would hold starts anyway, one a pass, when an
+// executor module has room for its project's worker (core.Runs.ElsewhereFor):
+// it starts as an away run (m.away), whose turns go there first.
+// tasks is every task Tick looks at.
 func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]string) {
 	start, wait = map[string]bool{}, map[string]string{}
 	cfg := m.C.WS.LoadConfig()
@@ -98,24 +101,43 @@ func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]str
 			working++
 		}
 	}
-	n := 0
+	n, away := 0, ""
 	for _, t := range line {
+		why := ""
 		switch {
 		case t.Held:
 			wait[t.ID] = "held by " + cmp.Or(t.HeldBy, "the lead")
+			continue
 		case disk != "" && working+n > 0:
-			wait[t.ID] = disk + " for a worker"
+			why = disk + " for a worker"
 		case core.MemBudget(cfg.TurnMB, n) != "":
-			wait[t.ID] = core.MemWait + " for a worker"
+			why = core.MemWait + " for a worker"
 		case m.C.Runs.Yielding(cfg.TurnMB) != "":
-			wait[t.ID] = core.MeasureWait + " for a worker"
+			why = core.MeasureWait + " for a worker"
 		default:
 			start[t.ID] = true
 			n++
+			continue
 		}
+		if away == "" && elsewhereFor(m.C.Runs, t.Project) {
+			start[t.ID], away = true, t.ID
+			continue
+		}
+		wait[t.ID] = why
 	}
+	m.mu.Lock()
+	for _, t := range line {
+		delete(m.away, t.ID)
+	}
+	if away != "" {
+		m.away[away] = true
+	}
+	m.mu.Unlock()
 	return start, wait
 }
+
+// elsewhereFor is core.Runs.ElsewhereFor; a test says where there is room.
+var elsewhereFor = (*core.Runs).ElsewhereFor
 
 // parkedFree is how far off a parked worker's next turn must be for it to
 // give up its slot: a retry's backoff is shorter and keeps it, a usage reset
