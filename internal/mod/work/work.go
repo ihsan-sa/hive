@@ -2179,7 +2179,11 @@ func (m *Module) cantRun(t *Task, p core.Project, c core.Check) error {
 	m.save(t, reason)
 	m.raiseCantRun(p, c)
 	if say {
-		m.comment(p.Repo, t.PR.Number, "Tests on "+core.Short(t.SHA)+": **can't run**, "+c.CantRun+". That is no verdict on this change, so it isn't sent back; it is tested again once the tool is there.\n\n```\n"+core.ClipEnds(c.Output, 1500)+"\n```")
+		again := "it is tested again once the tool is there"
+		if c.Slow {
+			again = "it is tested again, with a longer limit"
+		}
+		m.comment(p.Repo, t.PR.Number, "Tests on "+core.Short(t.SHA)+": **can't run**, "+c.CantRun+". That is no verdict on this change, so it isn't sent back; "+again+".\n\n```\n"+core.ClipEnds(c.Output, 1500)+"\n```")
 	}
 	return nil
 }
