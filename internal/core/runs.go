@@ -202,6 +202,11 @@ func (r *Run) Nice() int {
 // CheckNice is the nice value checks and gate runs get: under every run.
 const CheckNice = 15
 
+// CantStartHere begins the reason a worker's run ends blocked when its
+// harness can't start on this machine (its program isn't installed, or no
+// key is stored for it): an infra outcome, not a verdict on the model.
+const CantStartHere = "can't start here: "
+
 // Paths of one run's folders.
 func (ws Workspace) RunHost(id string) string { return filepath.Join(ws.Run(id), "host") }
 func (ws Workspace) RunRO(id string) string   { return filepath.Join(ws.Run(id), "ro") }
@@ -2103,6 +2108,11 @@ func (rs *Runs) endTurn(r Run) {
 		// Under WSL, sandbox-exec's own early failures go to .wsl.
 		out := rs.ws.TurnOut(r.ID, r.Turn)
 		errTail := strings.TrimSpace(tail(out+".err", 400) + "\n" + tail(out+".wsl", 400))
+		if r.Role == "worker" && strings.Contains(errTail, "not found on this machine") {
+			// Its harness's program isn't installed: no retry can start it.
+			te.Status, te.Reason = StatusBlocked, CantStartHere+Clip(errTail, 300)
+			break
+		}
 		te.Offline = Unreachable(service(r.Harness), errTail)
 		te.Status, te.ParkedUntil = StatusParked, time.Now().Add(backoff(cur.Retries))
 		te.Reason = "interrupted; retrying on its checkout" + suffix(errTail)
@@ -2399,13 +2409,14 @@ func (rs *Runs) launch(r Run, cfg Config) {
 	}()
 	// One memory budget paces every turn (MemBudget): a lead's or a
 	// warden's never waits; any other waits while the memory left can't
-	// hold it beside the turns launching now, or goes to an executor module
-	// with room. An away run's goes there first anyway.
+	// hold it beside the turns launching now, or (a worker's) goes to an
+	// executor module with room. An away run's goes there first anyway.
 	var elsewhere sandbox.Sandbox
 	where := ""
-	// A run that reads its project's secrets stays here: an executor would
-	// copy the folder to another machine.
-	away := rs.secretsFor(r) == ""
+	// Only a worker's turn is handed to an executor; a lead's, a sweep's or
+	// any other role's runs here. A run that reads its project's secrets
+	// stays here too: an executor would copy the folder to another machine.
+	away := r.Role == "worker" && rs.secretsFor(r) == ""
 	if r.Away && !r.NeverWaits() && away {
 		elsewhere, where = rs.executor()
 	}
@@ -2549,6 +2560,11 @@ func (rs *Runs) launch(r Run, cfg Config) {
 		}()
 	}
 	login, tok, err := rs.pickLogin(r.Harness, r.Model, codexHome, !sb.Isolated(), Reserved(r.Role))
+	if err != nil && r.Role == "worker" && errors.Is(err, ErrNoKey) {
+		// No key is stored for its harness: no retry can start it.
+		rs.SetStatus(r.ID, StatusBlocked, CantStartHere+"login for "+HarnessName(r.Harness)+": "+err.Error())
+		return
+	}
 	exp := rs.tokenExpiry(login)
 	if err != nil {
 		until := rs.freeAt(r.Harness, r.Model, Reserved(r.Role))

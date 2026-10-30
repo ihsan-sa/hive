@@ -1097,6 +1097,36 @@ func TestSpawnRefusesARepeatedHelper(t *testing.T) {
 	}
 }
 
+// recheck --back sends a task to a fresh worker on the project's current
+// worker route when its worker's model is no longer that route's first stop,
+// with the back text in its brief; a worker still on it is sent back itself.
+func TestRecheckBackFollowsTheWorkerRoute(t *testing.T) {
+	for _, first := range []string{"claude:opus", "codex:gpt-5"} {
+		m, _, task, _ := noCommitRig(t, 0)
+		cfg := m.C.WS.LoadConfig()
+		cfg.Routes = map[string][]string{"worker": {first}}
+		m.C.WS.SaveConfig(cfg)
+		if _, err := m.C.Runs.Start(core.RunSpec{ID: "w-t1", Role: "worker", Project: "p", Harness: "codex", Model: "gpt-5", Task: "t1"}); err != nil {
+			t.Fatal(err)
+		}
+		task.Stage, task.Worker, task.SHA, task.Reason = StageBlocked, "w-t1", "abc1234", "the worker finished without any commits"
+		m.save(task, "blocked")
+		if err := m.Recheck(task.ID, "commit your fixes", "lead"); err != nil {
+			t.Fatal(err)
+		}
+		got, _ := m.Get(task.ID)
+		if first == "claude:opus" {
+			if got.Stage != StageQueued || got.Worker != "" || got.Attempt != 1 || !strings.Contains(got.Known, "commit your fixes") || workerID(got) == "w-t1" {
+				t.Fatalf("off the route: stage %q worker %q attempt %d known %q", got.Stage, got.Worker, got.Attempt, got.Known)
+			}
+			continue
+		}
+		if got.Stage != StageWorking || got.Worker != "w-t1" || got.Attempt != 0 {
+			t.Fatalf("on the route: stage %q worker %q attempt %d", got.Stage, got.Worker, got.Attempt)
+		}
+	}
+}
+
 // A worker's "parent" is whoever filed its task while that run takes
 // messages, and its own project's lead once it doesn't; "lead" is that lead
 // (issue #2040).

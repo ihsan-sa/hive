@@ -1218,8 +1218,12 @@ const gaveUpOnErrors = "gave up after repeated errors: "
 
 // HiveTrouble is why t stopped on the Hive's own trouble ("" when it
 // didn't): the pipeline gave up on its steps' errors (a forge refusing the
-// token, calls killed by their timeout), not on the worker's work.
+// token, calls killed by their timeout), or its worker's harness couldn't
+// start on this machine, not on the worker's work.
 func HiveTrouble(t Task) string {
+	if t.Stage == StageBlocked && strings.HasPrefix(t.Reason, core.CantStartHere) {
+		return t.Reason
+	}
 	if t.Stage != StageStopped || t.ByPerson || !strings.HasPrefix(t.Reason, "gave up after ") {
 		return ""
 	}
@@ -3969,6 +3973,11 @@ func (m *Module) Recheck(id, back, by string) error {
 		m.steer(&t, "its "+what+" was never made, so it is made again, asked by "+by)
 		return nil
 	}
+	if back != "" && m.offRoute(t) {
+		t.Known = strings.TrimSpace(t.Known + "\n\nSent back by " + by + ": " + back)
+		m.freshWorker(&t, "sent back by "+by+" to a fresh worker on the project's worker route: "+core.Clip(back, 200))
+		return nil
+	}
 	if back != "" {
 		if err := m.C.Runs.Reopen(t.Worker, back); err != nil {
 			return err
@@ -4113,6 +4122,27 @@ func (m *Module) Retry(id string) error {
 	if !ok {
 		return core.ErrNotFound
 	}
+	t.ByPerson = false // the person brought it back; the lead may handle it from here
+	m.freshWorker(&t, "handed to a fresh worker")
+	return nil
+}
+
+// offRoute reports whether t's worker runs on a harness and model that is no
+// longer the first stop of the project's worker route, so sending it back
+// would keep it on a model the lead has moved the project off. A trial keeps
+// its own model.
+func (m *Module) offRoute(t Task) bool {
+	r, ok := m.C.Runs.Get(t.Worker)
+	if t.Model != "" || !ok || r.Harness == "" {
+		return false
+	}
+	route := m.C.WS.LoadConfig().Route("worker", t.Project)
+	return len(route) > 0 && !route[0].Same(core.Pick{Harness: r.Harness, Model: r.Model})
+}
+
+// freshWorker hands t to a new worker on the same branch, started on the project's
+// current worker route, with the last one's account and notes in its brief.
+func (m *Module) freshWorker(t *Task, note string) {
 	if t.Worker != "" {
 		notes, _ := os.ReadFile(filepath.Join(m.C.WS.RunBox(t.Worker), "notes.md"))
 		r, _ := m.C.Runs.Get(t.Worker)
@@ -4120,10 +4150,8 @@ func (m *Module) Retry(id string) error {
 	}
 	t.Attempt++
 	t.Stage, t.Worker, t.Reason, t.Failures, t.Round = StageQueued, "", "", 0, 0
-	t.ForgeLog = ""    // a file in the stopped worker's run, which the fresh one can't read
-	t.ByPerson = false // the person brought it back; the lead may handle it from here
-	m.steer(&t, "handed to a fresh worker")
-	return nil
+	t.ForgeLog = "" // a file in the stopped worker's run, which the fresh one can't read
+	m.steer(t, note)
 }
 
 // doneFor is the done line a brief carries. On a scored project an agent's own
