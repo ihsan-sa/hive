@@ -771,11 +771,15 @@ func peek(warden string) string {
 		f.Close()
 		os.Remove(f.Name())
 	}
+	// What stays covered: the logins, module programs' homes, projects'
+	// secrets, each turn's keys, the daemon's temp folder and its token.
+	// The rest of private/ (runs' homes and scratch) is open. A file cover
+	// reads empty, so only a file with something in it counts.
 	secrets := 0
-	for _, dir := range []string{"logins", "modules", "private"} {
+	for _, dir := range []string{"logins", "modules", "secrets", "private/keys", "private/tmp", "private/daemon.json"} {
 		filepath.WalkDir(filepath.Join(st, dir), func(p string, d os.DirEntry, err error) error {
 			if err == nil && !d.IsDir() {
-				if _, err := os.ReadFile(p); err == nil {
+				if b, err := os.ReadFile(p); err == nil && len(b) > 0 {
 					secrets++
 				}
 			}
