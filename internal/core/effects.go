@@ -584,10 +584,11 @@ func (e *Effects) RunCheck(p Project, sha, kind, command string) Check {
 
 // Measuring marks project's main at sha as being measured until the func it
 // gives is called: its checks run at MeasureNice, over every run but the
-// leads, not CheckNice under them all, and while the CPU is full no turn
-// that may wait starts (Runs.YieldFor). On 10-30, with load 109 on 20 cores,
-// hive main's checks at nice 15 under 50 workers' turns at 10 were cut off
-// at their limits and main went 17 hours and ~70 merges without a score.
+// leads, not CheckNice under them all, and while one of them runs on this
+// machine and the CPU is full no turn that may wait starts
+// (yieldWhileMeasuring). On 10-30, with load 109 on 20 cores, hive main's
+// checks at nice 15 under 50 workers' turns at 10 were cut off at their
+// limits and main went 17 hours and ~70 merges without a score.
 func (e *Effects) Measuring(project, sha string) func() {
 	key := project + "@" + sha
 	e.measureMu.Lock()
@@ -596,10 +597,6 @@ func (e *Effects) Measuring(project, sha string) func() {
 	}
 	e.measuring[key]++
 	e.measureMu.Unlock()
-	who := "measure " + key + " " + NewID()
-	if e.runs != nil {
-		e.runs.YieldFor(who, project+" main at "+short(sha)+" is being measured")
-	}
 	var once sync.Once
 	return func() {
 		once.Do(func() {
@@ -608,11 +605,26 @@ func (e *Effects) Measuring(project, sha string) func() {
 				delete(e.measuring, key)
 			}
 			e.measureMu.Unlock()
-			if e.runs != nil {
-				e.runs.YieldFor(who, "")
-			}
 		})
 	}
+}
+
+// yieldWhileMeasuring holds new turns that may wait (Runs.YieldFor) while a
+// check of main being measured runs here, until the func it gives is called.
+// Only a check holding a slot on this machine holds them: a measure waiting
+// in the line, on the forge, on a runner or on its judge uses no CPU here,
+// and on 10-30 such measures (forge-tested, already recorded, resumed at a
+// restart) held workers up to 85 minutes (#2191).
+func (e *Effects) yieldWhileMeasuring(project, sha string) func() {
+	e.measureMu.Lock()
+	n := e.measuring[project+"@"+sha]
+	e.measureMu.Unlock()
+	if n <= 0 || e.runs == nil {
+		return func() {}
+	}
+	who := "measure " + project + "@" + sha + " " + NewID()
+	e.runs.YieldFor(who, project+" main at "+short(sha)+" is being measured")
+	return func() { e.runs.YieldFor(who, "") }
 }
 
 // niceFor is the nice level of a check of project at sha.
@@ -745,6 +757,8 @@ func (e *Effects) checkOnce(p Project, sha, main, kind, command, back string) (C
 	}
 	if away != nil {
 		sb, c.Where = away, where
+	} else {
+		defer e.yieldWhileMeasuring(p.Name, sha)()
 	}
 	dir, err := e.cleanCheckout(p, sha, kind)
 	if err != nil {

@@ -99,10 +99,19 @@ func TestMeasuringMainYieldsTheCPU(t *testing.T) {
 	if n := c.Effects.niceFor("demo", "def"); n != CheckNice {
 		t.Fatalf("another commit's check runs at %d", n)
 	}
-	why := c.Runs.Yielding(240)
-	if !strings.HasPrefix(why, MeasureWait) || !strings.Contains(why, "demo main at abc12345") {
-		t.Fatalf("a full CPU didn't hold turns for the measure: %q", why)
+	if why := c.Runs.Yielding(240); why != "" {
+		t.Fatalf("a measure with no check running here held turns: %q", why)
 	}
+	if c.Effects.yieldWhileMeasuring("demo", "def")(); c.Runs.Yielding(240) != "" {
+		t.Fatalf("a check of a commit not being measured held turns")
+	}
+	running := c.Effects.yieldWhileMeasuring("demo", "abc1234567") // its check runs here
+	alsoRunning := c.Effects.yieldWhileMeasuring("demo", "abc1234567")
+	why := c.Runs.Yielding(240)
+	if !strings.HasPrefix(why, MeasureWait) || strings.Count(why, "demo main at abc12345") != 1 {
+		t.Fatalf("a full CPU didn't hold turns, once, for the measure's checks: %q", why)
+	}
+	alsoRunning()
 	if why := c.Runs.Yielding(0); why != "" {
 		t.Fatalf("turn_mb 0 held: %q", why)
 	}
@@ -115,6 +124,10 @@ func TestMeasuringMainYieldsTheCPU(t *testing.T) {
 	done() // a second call does nothing
 	if n := c.Effects.niceFor("demo", "abc1234567"); n != MeasureNice || c.Runs.Yielding(240) == "" {
 		t.Fatalf("the nested measure's end let go of the outer one")
+	}
+	running()
+	if c.Runs.Yielding(240) != "" {
+		t.Fatalf("held after the measure's checks ended")
 	}
 	again()
 	if n := c.Effects.niceFor("demo", "abc1234567"); n != CheckNice {
@@ -143,6 +156,7 @@ func TestMeasureHoldsAWorkersTurnNotALeads(t *testing.T) {
 	cfg := rs.ws.LoadConfig()
 	cfg.TurnMB = 1 // pacing on; a megabyte always fits
 	defer c.Effects.Measuring("demo", "abc1234567")()
+	defer c.Effects.yieldWhileMeasuring("demo", "abc1234567")()
 	w, err := rs.Start(RunSpec{ID: "w1", Role: "worker", Harness: "fake", Checkout: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
