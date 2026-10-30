@@ -195,7 +195,7 @@ func NewProjects(j *Journal) *Projects {
 		}
 		p.mu.Unlock()
 	}
-	j.Replay(apply)
+	j.ReplayExcept(apply, "task.saved", "run.created")
 	j.Subscribe(apply)
 	return p
 }

@@ -1,6 +1,7 @@
 package kb
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -229,5 +230,27 @@ func TestSearchShowsTheBoardFirst(t *testing.T) {
 	got := out.(string)
 	if i, j := strings.Index(got, "p-1**: zebra in open"), strings.Index(got, "shared.md"); i < 0 || j < i {
 		t.Fatalf("search: %s", got)
+	}
+}
+
+// A replay files a snapshot from before the start under the subject
+// subjectOf reads from a few top-level fields; it must be the one the whole
+// decode (fieldsOf) gives, or the next snapshot diffs against nothing.
+func TestSubjectOfIsTheSubjectOfTheWholeDecode(t *testing.T) {
+	for _, s := range []string{`{"id":"a","project":"p"}`, `{"id":"a","id":"b"}`, `{"id":1,"project":"p"}`, `{"id":{"x":1},"name":"n"}`,
+		`{"id":"a"} x`, `{"id":"a",}`, `[1]`, `null`, ``, `{"id":"\xff"}`, `{"id":false,"job":true}`, ` {"name":"z"} `, `{"id":""}`,
+		`{"ID":"a"}`, `{"chat":"c","id":"m"}`, `{"text":"` + strings.Repeat("y", 1000) + `","module":"m"}`} {
+		for _, order := range [][]string{subjectFields, append([]string{"chat"}, subjectFields...)} {
+			f, want := fieldsOf(json.RawMessage(s)), ""
+			for _, k := range order {
+				if f[k] != "" {
+					want = f[k]
+					break
+				}
+			}
+			if got := subjectOf(json.RawMessage(s), order); got != want {
+				t.Errorf("subjectOf(%.60s, %v) = %q, want %q", s, order, got, want)
+			}
+		}
 	}
 }

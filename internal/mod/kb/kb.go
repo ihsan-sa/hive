@@ -52,7 +52,10 @@ func New(c *core.Core, a *agents.Agents) *Module {
 	m.ensureRepo()
 	m.moveIsolated()
 	m.filePractice()
-	c.J.Replay(func(e core.Event) {
+	c.J.ReplayExcept(func(e core.Event) {
+		if e.Kind != "kb.filing" && e.Kind != "kb.filed" {
+			return
+		}
 		var f struct{ Run string }
 		e.Decode(&f)
 		switch e.Kind {
@@ -63,7 +66,7 @@ func New(c *core.Core, a *agents.Agents) *Module {
 				m.filing = ""
 			}
 		}
-	})
+	}, "task.saved", "run.created")
 	c.Runs.Ops().Register(core.Op{Name: "remember", Help: `{"title","text","tags"}`, Fn: func(r core.Run, args json.RawMessage) (any, error) {
 		var n Note
 		if err := core.Bind(args, &n); err != nil {

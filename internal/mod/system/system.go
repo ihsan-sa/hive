@@ -73,7 +73,7 @@ func New(c *core.Core) *Module {
 			}
 		}
 	}
-	c.J.Replay(apply)
+	c.J.ReplayExcept(apply, "task.saved", "run.created")
 	c.J.Subscribe(apply)
 	c.Runs.Ops().Register(core.Op{Name: "schedule", Help: `{"in": "2h" | "at": "RFC3339", "text": "..."}`, Fn: func(r core.Run, args json.RawMessage) (any, error) {
 		var a struct{ In, At, Text string }

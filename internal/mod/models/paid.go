@@ -31,7 +31,7 @@ type Paid struct {
 func NewPaid(j *core.Journal, cfg func() core.Config) *Paid {
 	p := &Paid{cfg: cfg, pick: map[string]core.Pick{}, current: map[string]string{}, session: map[string]core.SessionSpend{}, month: map[string]float64{}, running: map[string]float64{}}
 	c := cfg()
-	j.Replay(func(e core.Event) { p.apply(e, c) })
+	j.ReplayExcept(func(e core.Event) { p.apply(e, c) }, "task.saved", "run.created")
 	j.Subscribe(func(e core.Event) { p.apply(e, p.cfg()) })
 	return p
 }

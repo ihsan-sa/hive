@@ -337,7 +337,7 @@ func tell(failures int, e string, exp, now time.Time) bool {
 // through p, and takes the last renewal of each login from the record, and
 // an unresolved failure with its count, so a restart doesn't tell it afresh.
 func (t *Tokens) Track(j *Journal, p *Person) {
-	j.Replay(func(e Event) {
+	j.ReplayExcept(func(e Event) {
 		if e.Kind != "login.renewed" && e.Kind != "login.renew_failed" && e.Kind != "login.limited" {
 			return
 		}
@@ -364,7 +364,7 @@ func (t *Tokens) Track(j *Journal, p *Person) {
 			s.Failed, s.Error, s.Failures, s.byCheck, s.stuckAt = e.At, r.Error, max(r.Failures, 1), r.ByCheck, r.Expires
 			s.told = s.told && s.Failures > 1 || tell(s.Failures, r.Error, r.Expires, e.At)
 		}
-	})
+	}, "task.saved", "run.created")
 	t.mu.Lock()
 	t.j, t.person = j, p
 	t.mu.Unlock()

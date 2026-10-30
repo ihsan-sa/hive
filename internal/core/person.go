@@ -69,7 +69,7 @@ func NewPerson(j *Journal) *Person {
 			p.mu.Unlock()
 		}
 	}
-	j.Replay(apply)
+	j.ReplayExcept(apply, "task.saved", "run.created")
 	j.Subscribe(apply)
 	return p
 }

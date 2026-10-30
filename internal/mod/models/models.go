@@ -198,7 +198,7 @@ func New(c *core.Core, w *work.Module) *Module {
 			m.mu.Unlock()
 		}
 	}
-	c.J.Replay(apply)
+	c.J.ReplayExcept(apply, "task.saved", "run.created")
 	c.J.Subscribe(apply)
 	m.Paid = NewPaid(c.J, c.WS.LoadConfig)
 	m.tickDemoted() // so a restart routes as before it, not only from the first tick

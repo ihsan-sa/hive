@@ -3,7 +3,9 @@ package kb
 import (
 	"bytes"
 	"encoding/json"
+	"encoding/json/jsontext"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"path/filepath"
@@ -38,10 +40,14 @@ type recorder struct {
 	mu     sync.Mutex
 	cursor int64                        // last seq filed
 	last   map[string]map[string]string // area/subject kind -> fields, for *.saved snapshots
+	// past holds, for a snapshot filed before this start, its data not yet
+	// decoded: a replay meets thousands of task.saved, and only the last one
+	// of each is ever diffed against.
+	past map[string]json.RawMessage
 }
 
 func (m *Module) startRecord() {
-	rec := &recorder{dir: filepath.Join(m.C.WS.KB(), "record"), last: map[string]map[string]string{}}
+	rec := &recorder{dir: filepath.Join(m.C.WS.KB(), "record"), last: map[string]map[string]string{}, past: map[string]json.RawMessage{}}
 	os.MkdirAll(rec.dir, 0o755)
 	raw, _ := os.ReadFile(filepath.Join(rec.dir, ".filed"))
 	rec.cursor, _ = strconv.ParseInt(strings.TrimSpace(string(raw)), 10, 64)
@@ -60,17 +66,23 @@ func (m *Module) startRecord() {
 func (r *recorder) file(e core.Event, recheck bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	area, _, _ := strings.Cut(e.Kind, ".")
-	fields := map[string]string{}
-	var data map[string]any
-	if json.Unmarshal(e.Data, &data) == nil {
-		flatten("", data, fields)
+	snapshot := strings.HasSuffix(e.Kind, ".saved") || strings.HasSuffix(e.Kind, ".updated")
+	if !snapshot && (e.Seq <= r.cursor || skipKinds[e.Kind]) {
+		return // filed already or never, and no later snapshot diffs against it
 	}
-	subject := ""
+	area, _, _ := strings.Cut(e.Kind, ".")
 	order := subjectFields
 	if area == "chat" {
 		order = append([]string{"chat"}, order...)
 	}
+	if snapshot && e.Seq <= r.cursor {
+		key := area + "/" + subjectOf(e.Data, order) + " " + e.Kind
+		delete(r.last, key)
+		r.past[key] = e.Data
+		return
+	}
+	fields := fieldsOf(e.Data)
+	subject := ""
 	for _, k := range order {
 		if v := fields[k]; v != "" {
 			subject = v
@@ -78,9 +90,13 @@ func (r *recorder) file(e core.Event, recheck bool) {
 		}
 	}
 	shown := fields
-	if strings.HasSuffix(e.Kind, ".saved") || strings.HasSuffix(e.Kind, ".updated") {
+	if snapshot {
 		key := area + "/" + subject + " " + e.Kind
 		prev := r.last[key]
+		if raw, ok := r.past[key]; ok {
+			prev = fieldsOf(raw)
+			delete(r.past, key)
+		}
 		r.last[key] = fields
 		if prev != nil {
 			shown = map[string]string{}
@@ -142,6 +158,60 @@ func (r *recorder) advance(seq int64) {
 
 // flatten turns nested JSON into dotted keys with string values, dropping
 // empty ones.
+// fieldsOf is an event's data flattened.
+func fieldsOf(data json.RawMessage) map[string]string {
+	fields := map[string]string{}
+	var v map[string]any
+	if json.Unmarshal(data, &v) == nil {
+		flatten("", v, fields)
+	}
+	return fields
+}
+
+// subjectOf is the subject file would find in fieldsOf(data) (the first of
+// order set), reading only those top-level fields: the rest are passed over
+// undecoded.
+func subjectOf(data json.RawMessage, order []string) string {
+	got := map[string]string{}
+	d := jsontext.NewDecoder(bytes.NewReader(data), jsontext.AllowDuplicateNames(true), jsontext.AllowInvalidUTF8(true))
+	if t, err := d.ReadToken(); err != nil || t.Kind() != '{' {
+		return ""
+	}
+	for d.PeekKind() != '}' {
+		t, err := d.ReadToken()
+		if err != nil {
+			return ""
+		}
+		if k := t.String(); slices.Contains(order, k) {
+			raw, err := d.ReadValue()
+			if err != nil {
+				return ""
+			}
+			var v any
+			if json.Unmarshal(raw, &v) != nil {
+				return ""
+			}
+			one := map[string]string{}
+			flatten(k+".", v, one)
+			got[k] = one[k]
+		} else if d.SkipValue() != nil {
+			return ""
+		}
+	}
+	if _, err := d.ReadToken(); err != nil {
+		return ""
+	}
+	if _, err := d.ReadToken(); err != io.EOF {
+		return "" // json.Unmarshal takes one value alone
+	}
+	for _, k := range order {
+		if got[k] != "" {
+			return got[k]
+		}
+	}
+	return ""
+}
+
 func flatten(prefix string, v any, out map[string]string) {
 	switch t := v.(type) {
 	case map[string]any:

@@ -113,7 +113,7 @@ func New(c *core.Core, a *agents.Agents) *Module {
 			m.mu.Unlock()
 		}
 	}
-	c.J.Replay(apply)
+	c.J.ReplayExcept(apply, "task.saved", "run.created")
 	c.J.Subscribe(apply)
 	c.J.Subscribe(m.onEvent)
 	for id := range m.chats {
