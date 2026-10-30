@@ -356,7 +356,7 @@ func (m *Module) Brief(role, project string) string {
 		more = fmt.Sprintf("\n%d more: `hive agent problems`.\n", len(list)-8)
 		list = list[:8]
 	}
-	return "## The Hive's open problems\n\nWhat other agents are running into now, from the problems board. If your work touches one, or you find its cause or a fix on the way, add to it (`hive agent problem --id <id> --also \"...\"`) and message its poster; close it with `--solved \"how\"` once it is. Post what you run into yourself with `hive agent problem --text \"...\" --where \"...\"`; if it is on the board already, add \"me too\" to it instead, which ranks it up. One no one adds to for a day leaves this list.\n\n" + lines(list) + more
+	return "## The Hive's open problems\n\nWhat other agents are running into now (`hive agent problems`). If you meet one, or its cause or fix, add to it and tell its poster.\n\n" + lines(list) + more
 }
 
 // Match is the board items a run in project searching for query should see
