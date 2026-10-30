@@ -131,10 +131,10 @@ type Config struct {
 	ReleasePin   string   `json:"release_pin,omitempty"`        // the release `hive update --release` chose; auto-update stays on it
 	PinnedAuto   bool     `json:"pinned_auto_update,omitempty"` // auto_update before the pin turned it off; clearing the pin restores it
 	// Channel is the releases auto-update follows: "latest"; "pre-release",
-	// each pre-release once its checks for this system pass; or "train", once
-	// a day the newest of those after a canary child Hive on real work keeps
-	// it. Empty is the default: the train on the Hive whose own project is
-	// release_repo, the latest everywhere else.
+	// each pre-release once its checks for this system pass; or "main", each
+	// commit the Hive releases from its own main, built here, with main's
+	// default modules live on merge. Empty is the default: main on the Hive
+	// whose own project is release_repo, the latest everywhere else.
 	Channel      string                     `json:"channel,omitempty"`
 	APIKeyOptIn  bool                       `json:"api_key_opt_in"`
 	ReviewRounds int                        `json:"review_rounds"`
@@ -161,6 +161,12 @@ type Config struct {
 	MemFloorMB     int     `json:"mem_floor_mb"`
 	MemPressureMax float64 `json:"mem_pressure_max"`
 	CPUPressureMax float64 `json:"cpu_pressure_max"`
+	// While IO pressure (Linux PSI, percent) is over IOPressureMax ("some
+	// avg10") or IOFullMax ("full avg10"), the work module's pace starts no
+	// more workers or checks (internal/mod/work/pace.go); running ones go on.
+	// 0 turns a check off.
+	IOPressureMax float64 `json:"io_pressure_max"`
+	IOFullMax     float64 `json:"io_full_max"`
 	// MaxWorkers is the most workers that may work at once, the person's
 	// ceiling: below it the work module's pace sets the limit from what the
 	// machine and the plan carry (internal/mod/work/pace.go). Briefs past the
@@ -308,8 +314,8 @@ func (e Egress) For(role string) []string {
 // Check refuses settings the Hive can't act on: a tribunal seat it couldn't
 // read or on a harness it doesn't have, and a floor glob that can't match.
 func (c Config) Check() error {
-	if c.Channel != "" && c.Channel != "latest" && c.Channel != "pre-release" && c.Channel != "train" {
-		return fmt.Errorf("channel %q is none of \"latest\", \"pre-release\" and \"train\"", c.Channel)
+	if c.Channel != "" && c.Channel != "latest" && c.Channel != "pre-release" && c.Channel != "main" && c.Channel != "train" {
+		return fmt.Errorf("channel %q is none of \"latest\", \"pre-release\" and \"main\"", c.Channel)
 	}
 	if err := c.UsageStops.check(); err != nil {
 		return err
@@ -375,6 +381,8 @@ func DefaultConfig() Config {
 		MemFloorMB:      1024,
 		MemPressureMax:  10,
 		CPUPressureMax:  40,
+		IOPressureMax:   80,
+		IOFullMax:       50,
 		LoadMax:         1,
 		Ceilings:        true,
 		PlateauMerges:   3,

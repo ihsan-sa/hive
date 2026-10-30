@@ -22,7 +22,16 @@ const specStale = time.Hour
 // and so is the process table: what another live Hive's sandbox holds is
 // kept by its lock (runtimeDead), its spec files by their age, and its bare
 // commands' processes because their daemon still runs.
-func Sweep() int { return sweepOrphans() + SweepIn("/dev/shm", os.TempDir()) }
+//
+// A daemon whose /tmp is in memory moves its temp directory onto disk
+// (core.UseDiskTemp), so /tmp is swept as well, for what was left there.
+func Sweep() int {
+	n := sweepOrphans() + SweepIn("/dev/shm", os.TempDir())
+	if filepath.Clean(os.TempDir()) != "/tmp" {
+		n += SweepIn("/dev/shm", "/tmp")
+	}
+	return n
+}
 
 // sweepOrphans kills the processes bare commands left whose daemon is gone.
 func sweepOrphans() int {

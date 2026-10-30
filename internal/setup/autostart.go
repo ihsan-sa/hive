@@ -6,8 +6,11 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
+
+	"github.com/ihsan-sa/hive-standalone-build/internal/sandbox"
 )
 
 // EnableAutostart makes the Hive start whenever the machine (or the person's
@@ -47,19 +50,20 @@ func EnableAutostartAt(exe, root string) error {
 <plist version="1.0"><dict>
   <key>Label</key><string>dev.hive.daemon</string>
   <key>ProgramArguments</key><array><string>%s</string><string>daemon</string></array>
-  <key>EnvironmentVariables</key><dict><key>HIVE_HOME</key><string>%s</string></dict>
+  <key>EnvironmentVariables</key><dict><key>HIVE_HOME</key><string>%s</string><key>PATH</key><string>%s</string></dict>
   <key>RunAtLoad</key><true/>
   <key>AbandonProcessGroup</key><true/>
   <key>StandardOutPath</key><string>%s</string>
   <key>StandardErrorPath</key><string>%s</string>
 </dict></plist>
-`, exe, root, filepath.Join(root, ".hive", "daemon.log"), filepath.Join(root, ".hive", "daemon.log.err"))
+`, exe, root, unitPath(home(), root, nil), filepath.Join(root, ".hive", "daemon.log"), filepath.Join(root, ".hive", "daemon.log.err"))
 		os.MkdirAll(filepath.Dir(path), 0o755)
 		return os.WriteFile(path, []byte(plist), 0o644)
 	default:
 		home, _ := os.UserHomeDir()
 		unit := userUnit()
-		content := fmt.Sprintf("[Unit]\nDescription=The Hive\nAfter=network-online.target\n\n[Service]\nEnvironment=HIVE_HOME=%s\nExecStart=%s daemon\nKillMode=process\nRestart=on-failure\nRestartSec=10\n\n[Install]\nWantedBy=default.target\n", root, exe)
+		old, _ := os.ReadFile(unit)
+		content := unitText(exe, root, unitPath(home, root, old))
 		os.MkdirAll(filepath.Dir(unit), 0o755)
 		if err := os.WriteFile(unit, []byte(content), 0o644); err != nil {
 			return err
@@ -79,6 +83,53 @@ func EnableAutostartAt(exe, root string) error {
 		os.MkdirAll(filepath.Dir(desk), 0o755)
 		return os.WriteFile(desk, []byte(fmt.Sprintf("[Desktop Entry]\nType=Application\nName=Hive\nExec=env HIVE_HOME=%s %s daemon\nX-GNOME-Autostart-enabled=true\n", root, exe)), 0o644)
 	}
+}
+
+func home() string { h, _ := os.UserHomeDir(); return h }
+
+// unitText is the Hive's systemd user unit, with PATH as its PATH.
+func unitText(exe, root, path string) string {
+	return fmt.Sprintf("[Unit]\nDescription=The Hive\nAfter=network-online.target\n\n[Service]\nEnvironment=HIVE_HOME=%s\nEnvironment=\"PATH=%s\"\nExecStart=%s daemon\nKillMode=process\nRestart=on-failure\nRestartSec=10\n\n[Install]\nWantedBy=default.target\n", root, strings.ReplaceAll(path, "%", "%%"), exe)
+}
+
+// unitTools are the programs the daemon runs by name.
+var unitTools = []string{"claude", "codex", "gh", "git", "go", "bwrap"}
+
+// unitPath is the PATH the daemon gets from systemd or launchd, which would
+// otherwise start it at boot with a default PATH that lacks ~/.local/bin,
+// where claude installs itself: every run then fails with tool "claude" not
+// found. It keeps the PATH of the unit it replaces (old), so a rewrite from a
+// daemon that has a thin PATH loses nothing, then this process's PATH, the
+// dirs unitTools resolve to, the person's own bin dirs and the system's.
+// The Hive's tools folder stays off it: agents write there, and the daemon
+// resolves what it starts on this PATH.
+func unitPath(home, root string, old []byte) string {
+	var dirs []string
+	add := func(d string) {
+		if d != "" && filepath.IsAbs(d) && !slices.Contains(dirs, d) && !strings.HasPrefix(d, filepath.Join(root, ".hive")+string(filepath.Separator)) {
+			dirs = append(dirs, d)
+		}
+	}
+	for _, line := range strings.Split(string(old), "\n") {
+		v, ok := strings.CutPrefix(strings.TrimSpace(line), "Environment=")
+		if v, ok = strings.CutPrefix(strings.ReplaceAll(strings.Trim(v, `"`), "%%", "%"), "PATH="); ok {
+			for _, d := range filepath.SplitList(v) {
+				add(d)
+			}
+		}
+	}
+	for _, d := range filepath.SplitList(os.Getenv("PATH")) {
+		add(d)
+	}
+	for _, t := range unitTools {
+		if p, err := sandbox.LookTool(t); err == nil {
+			add(filepath.Dir(p))
+		}
+	}
+	for _, d := range append(sandbox.UserBinDirs(home), "/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin", "/sbin", "/bin") {
+		add(d)
+	}
+	return strings.Join(dirs, string(os.PathListSeparator))
 }
 
 // cgroupFile names the systemd unit this process runs in, on Linux.
