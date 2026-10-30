@@ -88,6 +88,43 @@ func TestRunInHomeSharesCaches(t *testing.T) {
 	}
 }
 
+// A run in home has the hive user's home as its HOME, as a session started
+// there does, with Claude Code's config folder still the run's own (its
+// sessions and the links into home); a reader and a module's harness, whose
+// login and sessions live in HOME, keep the run's own.
+func TestRunInHomeHasRealHome(t *testing.T) {
+	c, _ := testHive(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	env := func(h harness.Harness, r Run) []string {
+		p := filepath.Join(t.TempDir(), "t.prompt")
+		os.WriteFile(p, []byte("hi"), 0o644)
+		s, err := c.Runs.sandboxSpec(c.WS.LoadConfig(), isolatedSB{}, h, r, 1, false, p, nil, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s.Env
+	}
+	claude, _ := harness.Get("claude")
+	got := env(claude, Run{RunSpec: RunSpec{ID: "w1", Role: "worker", Harness: "claude"}})
+	for _, want := range []string{"HOME=" + home, "CLAUDE_CONFIG_DIR=/hive/home/.claude"} {
+		if !slices.Contains(got, want) {
+			t.Errorf("a Claude worker in home lacks %s: %v", want, got)
+		}
+	}
+	fake, _ := harness.Get("fake")
+	if got := env(fake, Run{RunSpec: RunSpec{ID: "w2", Role: "worker", Harness: "fake"}}); !slices.Contains(got, "HOME="+home) || slices.ContainsFunc(got, func(kv string) bool { return strings.HasPrefix(kv, "CLAUDE_CONFIG_DIR=") }) {
+		t.Errorf("a worker in home on another harness: %v", got)
+	}
+	if got := env(claude, Run{RunSpec: RunSpec{ID: "r1", Role: "reviewer", Harness: "claude", ReadOnly: true}}); !slices.Contains(got, "HOME=/hive/home") {
+		t.Errorf("a reader: %v", got)
+	}
+	mod := &harness.Spec{ID: "mod", Bin: "mod"}
+	if got := env(mod, Run{RunSpec: RunSpec{ID: "w3", Role: "worker", Harness: "mod"}}); !slices.Contains(got, "HOME=/hive/home") {
+		t.Errorf("a module's harness: %v", got)
+	}
+}
+
 // Every run gets every owner's token: GH_TOKEN its project's owner's, and a
 // git helper that hands each repository its owner's (GH_TOKEN for an owner
 // with none saved); an isolated project's run gets its own owner's alone,
@@ -123,6 +160,9 @@ func TestAgentTokens(t *testing.T) {
 	for path, want := range map[string]string{"ihsan-sa/hive.git": "github_pat_me", "Hive-RSI-Lab/pll": "github_pat_lab", "other/x": "github_pat_me", "$(touch pwned)/x": "github_pat_me"} {
 		cmd := exec.Command("git", "credential", "fill")
 		cmd.Dir = t.TempDir()
+		// The home's own .gitconfig names a helper (gh's, on GH_TOKEN), as
+		// the hive user's does; the owner's token still wins.
+		os.WriteFile(filepath.Join(cmd.Dir, ".gitconfig"), []byte("[credential \"https://github.com\"]\n\thelper = !echo password=from_gitconfig; :\n"), 0o644)
 		cmd.Env = append(os.Environ(), "HOME="+cmd.Dir, "GIT_CONFIG_NOSYSTEM=1", "GIT_TERMINAL_PROMPT=0")
 		cmd.Env = append(cmd.Env, agentGit("ihsan-sa/hive", false)...)
 		cmd.Stdin = strings.NewReader("protocol=https\nhost=github.com\npath=" + path + "\n\n")

@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/ihsan-sa/hive-standalone-build/internal/harness"
 	"github.com/ihsan-sa/hive-standalone-build/internal/sandbox"
 )
 
@@ -112,9 +113,12 @@ func agentGit(repo string, only bool) []string {
 	if main == "" {
 		main = names[0]
 	}
-	env := []string{"GH_TOKEN=" + toks[main], "GIT_CONFIG_COUNT=2",
-		"GIT_CONFIG_KEY_0=credential.https://github.com.helper", "GIT_CONFIG_VALUE_0=" + gitHelper,
-		"GIT_CONFIG_KEY_1=credential.https://github.com.useHttpPath", "GIT_CONFIG_VALUE_1=true"}
+	// The empty helper first clears those of the home's own .gitconfig (gh's,
+	// which hands every repository GH_TOKEN), so the owner's token is the one used.
+	env := []string{"GH_TOKEN=" + toks[main], "GIT_CONFIG_COUNT=3",
+		"GIT_CONFIG_KEY_0=credential.https://github.com.helper", "GIT_CONFIG_VALUE_0=",
+		"GIT_CONFIG_KEY_1=credential.https://github.com.helper", "GIT_CONFIG_VALUE_1=" + gitHelper,
+		"GIT_CONFIG_KEY_2=credential.https://github.com.useHttpPath", "GIT_CONFIG_VALUE_2=true"}
 	for _, n := range names {
 		env = append(env, tokenVar(n)+"="+toks[n])
 	}
@@ -151,10 +155,23 @@ func homeMounts(home string, covered, files []string) []sandbox.Mount {
 	return out
 }
 
+// realHome says whether a run in home has the hive user's home as its HOME,
+// as a session started there does: ~, ~/.cache, ~/go and every tool's
+// default config are that home's (the person, 10-30). Claude Code keeps its
+// config folder in the run's own home (CLAUDE_CONFIG_DIR, its sessions and
+// the links shareClaudeHome makes), and Codex and the open harness have
+// theirs already; a module's harness keeps the run's own HOME, where its
+// login and sessions are, so no login of the person's in home is used.
+func realHome(h harness.Harness) bool {
+	_, module := h.(*harness.Spec)
+	return !module
+}
+
 // homeCaches point a run in home at the hive user's own caches: the build,
 // module and package caches a session in that home fills (Go's build and
 // module caches, uv's and pip's, under XDG_CACHE_HOME and GOMODCACHE). A
-// run's HOME is its own, so without these every run started them empty:
+// module harness's run keeps its own HOME (realHome), and before runs had
+// the real one, without these every run started them empty:
 // a worker's go build, vet and one test of hive wrote 463 MB from a cold
 // HOME against 63 MB on the shared caches, on a disk the Hive wears out
 // (48 TB in 17 days, 10-30). The tools take their own locks, so runs share
@@ -197,8 +214,8 @@ func runtimeMounts(rt, own string) ([]sandbox.Mount, []string) {
 // claudeShared are what a Claude Code session in the hive user's home reads
 // from its ~/.claude besides its own sessions: the user settings, the user
 // CLAUDE.md, skills (the synced ones too), plugins, subagents and commands.
-// A run's HOME is its own (its sessions, which a resume reads, and its
-// scratch), so each of these is linked into it from the hive user's home:
+// A run's Claude config folder is its own (CLAUDE_CONFIG_DIR, its sessions,
+// which a resume reads), so each of these is linked into it from the hive user's home:
 // an agent is the same kind of session as one opened in that home (the
 // person, 10-30: "Any agent in the hive should pretty much be like the same
 // type of session as the open up or free space session spawned in home").

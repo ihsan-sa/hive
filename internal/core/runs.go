@@ -2795,6 +2795,7 @@ func (rs *Runs) sandboxSpec(cfg Config, sb sandbox.Sandbox, h harness.Harness, r
 	// keep their own view.
 	inHome := sb.Isolated() && sessionInHome(r)
 	var bus, caches []string
+	insideHome := "/hive/home"
 	if home, err := os.UserHomeDir(); inHome && err == nil && filepath.IsAbs(home) && home != "/" {
 		mounts = append(mounts, homeMounts(home, rs.ws.Covered(), rs.ws.PrivateFiles())...)
 		if HarnessName(r.Harness) == "claude" {
@@ -2808,6 +2809,12 @@ func (rs *Runs) sandboxSpec(cfg Config, sb sandbox.Sandbox, h harness.Harness, r
 		rt, bus = runtimeMounts(UserRuntime(), filepath.Join(rs.ws.RunPrivate(r.ID), "cc-socks"))
 		mounts = append(mounts, rt...)
 		caches = homeCaches(home)
+		if realHome(h) {
+			insideHome = home
+			if HarnessName(r.Harness) == "claude" {
+				caches = append(caches, "CLAUDE_CONFIG_DIR=/hive/home/.claude")
+			}
+		}
 	}
 	mounts = append(mounts, rs.hideIsolated(r)...)
 	var secrets *sandbox.Mount
@@ -2883,7 +2890,7 @@ func (rs *Runs) sandboxSpec(cfg Config, sb sandbox.Sandbox, h harness.Harness, r
 		env = append(env, agentGit(repo, r.Isolated)...)
 	}
 	if sb.Isolated() {
-		env = append(sandbox.InsideEnv("/hive/home", true), env...)
+		env = append(sandbox.InsideEnv(insideHome, true), env...)
 	} else {
 		env = append(env, "HIVE_WORKSPACE="+rs.ws.Root)
 	}
