@@ -144,3 +144,74 @@ func TestPruneTmpRemovesRunsScratch(t *testing.T) {
 		t.Errorf("dropped %v", gone)
 	}
 }
+
+// An ended run's home is cut down to its sessions once it has been over for
+// homeAge, its files kept, and marked so the next sweep passes it by: one
+// that ended lately, a live one, or one moved since it was cut keeps or gets
+// its due; one no run knows goes by its home's age.
+func TestPruneHomesKeepsSessions(t *testing.T) {
+	ws := Workspace{Root: t.TempDir()}
+	if err := ws.Init(); err != nil {
+		t.Fatal(err)
+	}
+	j, err := OpenJournal(filepath.Join(t.TempDir(), "j.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer j.Close()
+	rs := NewRuns(ws, j, nil, NewTokens(ws), func() []string { return nil })
+	old := time.Now().Add(-2 * homeAge)
+	mk := func(id, status string, updated time.Time) string {
+		if status != "" {
+			rs.runs[id] = &Run{RunSpec: RunSpec{ID: id}, Status: status, Updated: updated}
+		}
+		home := ws.RunHome(id)
+		for _, d := range []string{".cache/go-build/00", "venv/lib", ".claude/projects/x", ".codex"} {
+			os.MkdirAll(filepath.Join(home, d), 0o755)
+		}
+		os.WriteFile(filepath.Join(home, ".cache", "go-build", "00", "obj"), []byte("data"), 0o444)
+		os.Chmod(filepath.Join(home, ".cache", "go-build", "00"), 0o555)
+		os.WriteFile(filepath.Join(home, "notes.sh"), []byte("echo"), 0o644)
+		os.Chtimes(home, updated, updated)
+		return home
+	}
+	done := mk("done", StatusDone, old)
+	recent := mk("recent", StatusBlocked, time.Now())
+	running := mk("running", StatusRunning, old)
+	unknown := mk("unknown", "", old)
+	young := mk("young", "", time.Now())
+	t.Cleanup(func() { RemoveTree(ws.Root) })
+	var gone []string
+	rs.pruneHomes(func(p string) { gone = append(gone, p); RemoveTree(p) })
+	for home, cut := range map[string]bool{done: true, recent: false, running: false, unknown: true, young: false} {
+		for _, keep := range []string{".claude/projects/x", ".codex", "notes.sh"} {
+			if !Exists(filepath.Join(home, keep)) {
+				t.Errorf("%s lost %s", home, keep)
+			}
+		}
+		for _, scratch := range []string{".cache", "venv"} {
+			if Exists(filepath.Join(home, scratch)) == cut {
+				t.Errorf("%s: %s there %v, cut %v", home, scratch, !cut, cut)
+			}
+		}
+		if Exists(filepath.Join(filepath.Dir(home), HomePruned)) != cut {
+			t.Errorf("%s: marked %v, cut %v", home, !cut, cut)
+		}
+	}
+	if len(gone) != 4 {
+		t.Errorf("dropped %v", gone)
+	}
+	// Marked, it is passed by; reopened and ended again since, it is cut again.
+	os.MkdirAll(filepath.Join(done, "venv"), 0o755)
+	gone = nil
+	rs.pruneHomes(func(p string) { gone = append(gone, p); RemoveTree(p) })
+	if len(gone) != 0 {
+		t.Errorf("a marked home was walked again: %v", gone)
+	}
+	mark := filepath.Join(filepath.Dir(done), HomePruned)
+	os.Chtimes(mark, old.Add(-time.Hour), old.Add(-time.Hour))
+	rs.pruneHomes(func(p string) { gone = append(gone, p); RemoveTree(p) })
+	if len(gone) != 1 || Exists(filepath.Join(done, "venv")) {
+		t.Errorf("a run that ended again after its cut kept its scratch: %v", gone)
+	}
+}

@@ -646,8 +646,8 @@ func (e *Effects) markLive(p string, on bool) {
 
 // Prune removes what checks left behind: homes of checks no longer running,
 // the temp homes older builds made, clean checkouts and prefetch folders a
-// crash left, the Hive's leftovers in the temp folders (pruneTemp) and in
-// runs' own /tmp (Runs.pruneTmp),
+// crash left, the Hive's leftovers in the temp folders (pruneTemp), in
+// runs' own /tmp (Runs.pruneTmp) and in ended runs' homes (Runs.pruneHomes),
 // sandboxes' runtime folders and unread specs, and the module
 // cache once it is past its cap and no check is using it. It returns what it
 // removed.
@@ -706,6 +706,7 @@ func (e *Effects) Prune() string {
 	pruneTemp(e.ws, drop)
 	if e.runs != nil {
 		e.runs.pruneTmp(drop)
+		e.runs.pruneHomes(drop)
 	}
 	sandboxes := e.sweep()
 	projects, _ := os.ReadDir(e.ws.Gates())

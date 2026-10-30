@@ -4,6 +4,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 )
@@ -120,5 +121,53 @@ func (rs *Runs) pruneTmp(drop func(string)) {
 		if !busy && (ended || quiet(tmp, leftoverAge)) {
 			drop(tmp)
 		}
+	}
+}
+
+// homeAge is how long a run must have been over before its home is cut down
+// to what a resume reads, so one reopened soon after it ended keeps its
+// caches.
+const homeAge = 6 * time.Hour
+
+// homeKeep is what an ended run's home keeps: its harness's sessions, which
+// a resume reads. Every other folder in it (clones, worktrees, venvs, build
+// and package caches) is the run's scratch; on 10-30, 6,500 run homes held
+// 630 GB of it.
+var homeKeep = []string{".claude", ".claude-open", ".codex", ".hive-open"}
+
+// HomePruned names the mark a home cut down gets, in the run's private
+// folder, so the hourly sweep doesn't walk it again until the run moves.
+const HomePruned = "home-pruned"
+
+// pruneHomes cuts down, through drop, the home of each run that ended at
+// least homeAge ago, and of one no run here knows once its home is that
+// old: every folder in it but homeKeep's goes, its files stay.
+func (rs *Runs) pruneHomes(drop func(string)) {
+	ds, _ := os.ReadDir(filepath.Join(rs.ws.Private(), "runs"))
+	for _, d := range ds {
+		id, home := d.Name(), rs.ws.RunHome(d.Name())
+		fi, err := os.Lstat(home)
+		if err != nil || !fi.IsDir() {
+			continue
+		}
+		rs.mu.Lock()
+		r, starting := rs.runs[id], rs.starting[id]
+		var ended time.Time
+		if r != nil {
+			ended = r.Updated
+		}
+		over := r == nil && time.Since(fi.ModTime()) > homeAge || r != nil && r.Terminal() && !starting && time.Since(ended) > homeAge
+		rs.mu.Unlock()
+		mark := filepath.Join(rs.ws.RunPrivate(id), HomePruned)
+		if mf, err := os.Stat(mark); !over || err == nil && !ended.After(mf.ModTime()) {
+			continue
+		}
+		es, _ := os.ReadDir(home)
+		for _, e := range es {
+			if e.IsDir() && !slices.Contains(homeKeep, e.Name()) {
+				drop(filepath.Join(home, e.Name()))
+			}
+		}
+		os.WriteFile(mark, nil, 0o644)
 	}
 }
