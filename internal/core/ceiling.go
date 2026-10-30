@@ -11,17 +11,17 @@ import (
 // each but the last check on a step is enforced by structure rather than by
 // an agent's good behaviour:
 //
-//   - Agents hold no credentials. Logins stay with the effects process and the
-//     harnesses' own stores; an agent gets only a short-lived token (Tokens).
-//   - Agents run sandboxed: they write only their checkout and scratch home and
-//     reach the network outbound only (package sandbox).
-//   - Main changes only through the gate: a merge pinned to a commit with a
-//     host-run passing test and a bound verdict (Effects.Merge). Only hive/*
-//     branches are ever pushed.
-//   - Goals, the score and the project's settings merge only on a recorded
-//     approval (Effects.Classify marks them protected): the person's at
-//     autonomy 1, otherwise a warden's, never the worker's that wrote them,
-//     and the person is told after (risk.Weigh).
+//   - Agents hold no login of the person's: the Hive's logins stay with the
+//     effects process and the harnesses' own stores; an agent gets its
+//     harness's short-lived token (Tokens) and the agents' own GitHub tokens.
+//   - Agents run sandboxed: a run in home writes the hive user's home but its
+//     covered logins, ~/.ssh and ~/hive-backups (package sandbox, home.go).
+//   - Main keeps its history: no force-push and no deletion (the forge's
+//     keep-history ruleset), so any change, the core's included, can be
+//     reverted. Nothing else stands before main (the person, 10-30: "freely
+//     edit everything including the core with no process"): a merge waits on
+//     no test, read or approval (Effects.Merge), and an agent may push to
+//     main itself on its own token.
 //   - The core has no path that runs an agent's request outside the sandbox.
 //     Only the risk module does, and only as a warden's or a panel's exact,
 //     digest-pinned script, after CeilingGuard on that script. That guard is
