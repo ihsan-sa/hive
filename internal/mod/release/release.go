@@ -60,7 +60,7 @@ type Module struct {
 	// ReadMerged gives a merge that lacks the read a release needs (its root
 	// paths with no security read, or no read at all) that read from the
 	// Hive's own seats: the work module's ReadMerged. passed says it has it
-	// now; why says only the person can settle it; neither, still reading.
+	// now; why says it can't pass; neither, still reading.
 	// nil leaves such a merge to the person.
 	ReadMerged func(p core.Project, pr int, head, mergeSHA, diff string, root []string) (passed bool, why string)
 	// Contains says whether commit tagSHA has sha in its history; nil is
@@ -869,9 +869,10 @@ func fileSum(path string) (string, error) {
 // change to a root path (what runs with elevated rights) goes out once the
 // Hive's own security reads passed its diff (rootRead), and the person is told
 // after. A merge missing either read gets it now from the Hive's own seats
-// (ReadMerged) while the release waits (release.reading); it waits for the
-// person's word only when that read can't pass: a seat asked for fixes, or its
-// diff can't be read. While the newest release's release run failed, a merge
+// (ReadMerged) while the release waits (release.reading). A read that asked
+// for fixes holds it by the Hive's own word (holdFix) until a later merge to
+// the same paths passes its own; it waits for the person's word only when a
+// read can't end: no usable verdict, or its diff can't be read. While the newest release's release run failed, a merge
 // that changes nothing the failed job reads waits too (unbuilt).
 // The release numbers on from this build, so the install switches to it at its
 // next update. In the person's fork it also asks the person whether to offer
@@ -924,15 +925,17 @@ func (m *Module) afterKept(project, sha string) {
 	}
 	approved := m.C.Effects.Approved("release", project, sha)
 	// A merge without the read a release needs gets it from the Hive's own
-	// seats (ReadMerged) while the release waits; only a read that can't
-	// pass leaves it to the person.
+	// seats (ReadMerged) while the release waits; a fix holds it by the
+	// Hive's word, and only a read that can't end leaves it to the person.
 	selfRead := m.ReadMerged
 	if approved {
 		selfRead = nil // the person's word already stands for them
 	}
 	var manifest strings.Builder
 	var root, rootRead, reading []string
-	for _, mg := range list {
+	var flagged []fixed
+	passed := map[int]bool{} // merges whose root paths a read passed, by index
+	for i, mg := range list {
 		if mg.Hand {
 			fmt.Fprintf(&manifest, "- %s and what else on main up to it the Hive didn't merge: merged by hand, which stands for its read\n", core.Short(mg.SHA))
 			continue
@@ -950,8 +953,18 @@ func (m *Module) afterKept(project, sha string) {
 				by = m.rootRead(project, mg)
 			}
 		}
+		if by == "" && !approved {
+			// A read that said fix is the Hive's own word on it: the
+			// release is held (holdFix), not asked of the person.
+			if fix := m.fixAsked(project, mg); fix != "" {
+				flagged = append(flagged, fixed{merge: mg, Why: fix})
+				fmt.Fprintf(&manifest, "  its root paths (%s): %s\n", strings.Join(mg.Root, ", "), fix)
+				continue
+			}
+		}
 		switch {
 		case by != "":
+			passed[i] = true
 			fmt.Fprintf(&manifest, "  its root paths (%s) passed %s\n", strings.Join(mg.Root, ", "), by)
 			rootRead = append(rootRead, fmt.Sprintf("#%d (%s)", mg.PR, strings.Join(mg.Root, ", ")))
 		case mg.Diff == "":
@@ -966,6 +979,42 @@ func (m *Module) afterKept(project, sha string) {
 		default:
 			root = append(root, fmt.Sprintf("%s (#%d: %s)", strings.Join(mg.Root, ", "), mg.PR, why))
 		}
+	}
+	// A merge a read asked fixes on goes out once a later merge to the same
+	// paths passed its own security read; until then the Hive holds.
+	var held []fixed
+	for _, f := range flagged {
+		at := slices.IndexFunc(list, func(mg merge) bool { return mg.MergeSHA == f.MergeSHA })
+		later := -1
+		for j := at + 1; j < len(list) && later < 0; j++ {
+			if passed[j] && covers(list[j].Root, f.Root) {
+				later = j
+			}
+		}
+		if later < 0 {
+			held = append(held, f)
+			continue
+		}
+		fmt.Fprintf(&manifest, "- #%d's root paths (%s), on which %s, went out with #%d's later change to them, which passed its own security read\n",
+			f.PR, strings.Join(f.Root, ", "), f.Why, list[later].PR)
+		rootRead = append(rootRead, fmt.Sprintf("#%d (%s, fixed by #%d)", f.PR, strings.Join(f.Root, ", "), list[later].PR))
+	}
+	readAt := m.reading(project)
+	if len(held) > 0 {
+		// Tick tries it again (retryReading) while the other reads run, so
+		// they end and are recorded though nothing is released.
+		switch {
+		case len(reading) > 0 && readAt != sha:
+			m.C.J.MustAppend("release.reading", map[string]any{"project": project, "sha": sha, "reads": reading})
+		case len(reading) == 0 && readAt != "":
+			m.C.J.MustAppend("release.read_ended", map[string]string{"project": project, "sha": readAt})
+		}
+		m.holdFix(project, sha, held, reading)
+		return
+	}
+	if len(m.fixHeld(project)) > 0 {
+		m.C.J.MustAppend("release.fix_ended", map[string]string{"project": project, "sha": sha})
+		m.C.J.MustAppend("alert.cleared", map[string]string{"ref": "release:fix:" + project})
 	}
 	if !approved && !m.mainGreen(p, sha) {
 		return
@@ -1006,7 +1055,6 @@ func (m *Module) afterKept(project, sha string) {
 			why = append(why, held)
 		}
 	}
-	readAt := m.reading(project)
 	if len(reading) > 0 && len(why) == 0 && !approved {
 		// Tick tries it again (retryReading) until the reads end.
 		if readAt != sha {
@@ -1414,6 +1462,119 @@ func (m *Module) rootRead(project string, mg merge) string {
 		return "the box's " + o.By + " read"
 	}
 	return "the security seat and a majority of its panel"
+}
+
+// fixAsked says who asked for fixes on a merge's root paths, and what they
+// found: an outside read's fix, the Hive's security seat's, or a panel that
+// all read with no majority to land. "" while no read said fix (none ran, or
+// they are still reading).
+func (m *Module) fixAsked(project string, mg merge) string {
+	if mg.Diff == "" {
+		return ""
+	}
+	if o, ok := m.C.Effects.OutsideRead(project, mg.Diff); ok {
+		if o.Verdict == "fix" {
+			return "the box's " + o.By + " read asked for fixes: " + core.Clip(o.Note, 400)
+		}
+		return ""
+	}
+	reads := m.C.Effects.SecurityReads(project, mg.Diff)
+	if v := reads[core.SeatSecurity]; v.Verdict == "fix" {
+		text := v.Summary
+		for _, f := range v.Findings {
+			text += "\n- `" + f.File + "` " + f.Issue
+		}
+		return "the Hive's security seat asked for fixes: " + core.Clip(text, 400)
+	}
+	if lands, fixes := core.PanelTally(reads); lands+fixes == core.PanelSeats && lands <= core.PanelSeats/2 {
+		return fmt.Sprintf("the Hive's security panel asked for fixes (%d of %d)", fixes, core.PanelSeats)
+	}
+	return ""
+}
+
+// fixed is a merge whose root paths a security read asked fixes on: the Hive
+// holds every release that would ship it until a later merge to the same
+// paths passes its own security read.
+type fixed struct {
+	merge
+	Why string `json:"why"`
+}
+
+// fixHeld is the project's merges the newest release.fix_held names, nil once
+// a release went out or the hold ended.
+func (m *Module) fixHeld(project string) (held []fixed) {
+	m.C.J.Replay(func(e core.Event) {
+		var x struct {
+			Project string
+			Merges  []fixed
+		}
+		if (e.Kind != "release.fix_held" && e.Kind != "release.fix_ended" && e.Kind != "hive.released") || e.Decode(&x) != nil || x.Project != project {
+			return
+		}
+		held = nil
+		if e.Kind == "release.fix_held" {
+			held = x.Merges
+		}
+	})
+	return held
+}
+
+// holdFix holds the release at sha by the Hive's own word: a security read
+// asked for fixes on held, so the release can't go out and the person has
+// nothing to decide. A release ask still open for the project is answered so,
+// the board says why while the hold lasts, and each merge newly held gets a
+// brief to fix what its read found. reading are the Hive's reads still
+// running on the other merges, which go on (release.reading) meanwhile.
+func (m *Module) holdFix(project, sha string, held []fixed, reading []string) {
+	var prs []string
+	for _, f := range held {
+		prs = append(prs, fmt.Sprintf("#%d", f.PR))
+	}
+	for _, a := range m.C.Person.Open() {
+		if a.Kind == "release" && a.Project == project {
+			m.C.Person.Answer(a.ID, "hold", "the Hive, not the person: its own security read asked for fixes on "+strings.Join(prs, ", "))
+		}
+	}
+	before := m.fixHeld(project)
+	same := len(before) == len(held)
+	for i := 0; same && i < len(held); i++ {
+		same = before[i].MergeSHA == held[i].MergeSHA
+	}
+	if same {
+		return
+	}
+	m.C.J.MustAppend("release.fix_held", map[string]any{"project": project, "sha": sha, "merges": held})
+	var text []string
+	for _, f := range held {
+		text = append(text, fmt.Sprintf("#%d (%s): %s", f.PR, strings.Join(f.Root, ", "), f.Why))
+	}
+	more := ""
+	if len(reading) > 0 {
+		more = " The Hive's reads of " + strings.Join(reading, ", ") + " go on meanwhile."
+	}
+	m.C.J.MustAppend("alert.raised", map[string]string{"kind": "release", "project": project, "ref": "release:fix:" + project,
+		"text": "The Hive holds its releases from " + core.Short(sha) + ": its own security read asked for fixes on " + strings.Join(text, "; ") +
+			". A later change to the same paths that passes its own security read lets them go out; the person isn't asked." + more})
+	for _, f := range held {
+		if slices.ContainsFunc(before, func(b fixed) bool { return b.MergeSHA == f.MergeSHA }) || m.FileFix == nil {
+			continue
+		}
+		paths := strings.Join(f.Root, ", ")
+		m.FileFix(project, fmt.Sprintf("Releases go out again: what the security read found in the merged #%d (%s) is fixed", f.PR, paths),
+			"A change to "+paths+" fixes what the security read of #"+fmt.Sprint(f.PR)+" found and merges with its own security read passing, so the release the Hive holds goes out.",
+			"The Hive holds every release since "+core.Short(f.MergeSHA)+": "+f.Why,
+			"the Hive's own security read holds every release from #"+fmt.Sprint(f.PR))
+	}
+}
+
+// covers says whether paths holds every one of want.
+func covers(paths, want []string) bool {
+	for _, w := range want {
+		if !slices.Contains(paths, w) {
+			return false
+		}
+	}
+	return true
 }
 
 // refusedSteps is what the person does about a refused release. Its

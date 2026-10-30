@@ -19,9 +19,9 @@ const mergedTries = 3
 // ordinary reviewer. Each reads the merge's own diff, rebuilt from the host
 // clone (head against its merge base with main before the merge) and taken
 // only when it is the diff the merge record names. passed says the read the
-// release needs is there; why, when not, says why only the person can settle
-// it (a seat asked for fixes, gave no usable verdict, or the diff can't be
-// rebuilt); neither means the seats are still reading. Each call records the
+// release needs is there; why, when not, says why it can't pass (a seat asked
+// for fixes, which the release module holds on itself, gave no usable
+// verdict, or the diff can't be rebuilt); neither means the seats are still reading. Each call records the
 // seats that have ended and starts the ones still missing, so the release
 // module calls it again until it says one or the other.
 func (m *Module) ReadMerged(p core.Project, pr int, head, mergeSHA, diff string, root []string) (passed bool, why string) {
@@ -175,7 +175,7 @@ func (m *Module) startMerged(p core.Project, pr int, head, mergeSHA string, ch c
 	}
 	main, _ := core.Git(m.C.WS.Project(p.Name), "rev-parse", "--verify", "-q", mergeSHA+"^1")
 	subject, _ := core.Git(m.C.WS.Project(p.Name), "log", "-1", "--format=%B", mergeSHA)
-	account := fmt.Sprintf("## The change\n\nThis change already merged as #%d (%s) and is in the next release. It merged without the read a release needs, so the Hive reads it now, before the release goes out; a fix holds the release for the person. The merge's message:\n\n%s", pr, core.Short(mergeSHA), core.Clip(subject, 4000))
+	account := fmt.Sprintf("## The change\n\nThis change already merged as #%d (%s) and is in the next release. It merged without the read a release needs, so the Hive reads it now, before the release goes out; a fix holds the release until the fix merges. The merge's message:\n\n%s", pr, core.Short(mergeSHA), core.Clip(subject, 4000))
 	brief := fmt.Sprintf("Review of the merged #%d at %s, for a release.\n\nThe brief, the exact diff and the test run are in $HIVE_RUN (brief.md, diff.patch, tests.txt). Give your verdict.", pr, core.Short(head))
 	rules := ""
 	if seat != "" {
