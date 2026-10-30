@@ -637,19 +637,6 @@ func (e *Effects) niceFor(project, sha string) int {
 	return CheckNice
 }
 
-// RunCheckSince is RunCheck of a change bound for main: a test command
-// made only of go vet and go test over ./... runs on the packages the
-// change since its merge base with main can affect (goscope), which is
-// every package whose result can differ from main's. Its Check names them
-// in Scope. A narrowing the go command can't follow runs everything.
-func (e *Effects) RunCheckSince(p Project, sha, main, kind, command string) Check {
-	c := e.shared(p, sha, main, kind, command)
-	if c.Scope != nil && !c.OK && c.CantRun == "" && goscope.Misfired(c.Output) {
-		return e.shared(p, sha, "", kind, command)
-	}
-	return c
-}
-
 // shared is runCheck, run once for every caller asking for the same check
 // while it waits or runs; each gets a copy of its result.
 func (e *Effects) shared(p Project, sha, main, kind, command string) Check {
@@ -1239,39 +1226,6 @@ func (c Check) FullOutput() string {
 		}
 	}
 	return c.Output
-}
-
-// NoWorse says a red run c fails only what main's red run mc fails too,
-// each test by its package and name, so the red is main's and the change
-// may be its fix. A failure in c that no test name accounts for (a timeout,
-// a panic or exit outside a test, a build failure) counts only where main's
-// run fails that package so too; one either run can't name at all can't be
-// told apart. A run stopped by vet or the build (StopKeys) never ran its
-// tests, so matching main's vet error never makes a change no worse.
-func NoWorse(c, mc Check) bool {
-	mine, mains := RedKeys(c.FullOutput()), RedKeys(mc.FullOutput())
-	if len(mine) == 0 || len(mains) == 0 {
-		return false
-	}
-	for _, k := range mine {
-		if !slices.Contains(mains, k) {
-			return false
-		}
-	}
-	return true
-}
-
-// MainTests is main's recorded test run at sha as both gates read it (the
-// work module's testing stage and Merge): a red run that a "retest" since
-// passed was a flake of a busy machine, and main counts as green there.
-func (e *Effects) MainTests(project, sha string) (Check, bool) {
-	c, ok := e.GetCheck(project, sha, "test")
-	if ok && !c.OK && c.CantRun == "" {
-		if rc, rok := e.GetCheck(project, sha, "retest"); rok && !rc.At.Before(c.At) && rc.CantRun == "" {
-			c.OK = rc.OK
-		}
-	}
-	return c, ok
 }
 
 // scoreOf reads the score from a score command's output: the last word of
@@ -2139,34 +2093,6 @@ func (e *Effects) RequiredChecks(p Project, mainSHA string) []string {
 	return ParseList(e.ReadFile(p, mainSHA, SecurityList), "required_checks")
 }
 
-// AdvisoryChecks are the forge's checks main's list says only warn on the
-// Hive's own PRs (Advisory).
-func (e *Effects) AdvisoryChecks(p Project, mainSHA string) []string {
-	return ParseList(e.ReadFile(p, mainSHA, SecurityList), "advisory_checks")
-}
-
-// Advisory splits off the checks that only warn: on the Hive's own project
-// (Self) a check named on main's advisory_checks (a Windows job, whose red was
-// mostly flakes unrelated to the change) doesn't hold the merge, red, pending
-// or unable to start (the person: keep the Hive improving as fast as
-// possible). A release still needs the whole ci workflow green. kept are the
-// rest; warned names the red ones set aside, and required loses every
-// advisory check so none is waited on.
-func Advisory(p Project, runs []CheckRun, required, advisory []string) (kept []CheckRun, req, warned []string) {
-	if !p.Self || len(advisory) == 0 {
-		return runs, required, nil
-	}
-	for _, r := range runs {
-		if !slices.Contains(advisory, r.Name) || r.State == CheckPass {
-			kept = append(kept, r)
-		} else if r.State == CheckFail && !slices.Contains(warned, r.Name) {
-			warned = append(warned, r.Name)
-		}
-	}
-	req = slices.DeleteFunc(slices.Clone(required), func(n string) bool { return slices.Contains(advisory, n) })
-	return kept, req, warned
-}
-
 // ChecksState sums up the forge's checks on one head, the worst first: a
 // failure, then one that can't start, then one still running, then a
 // required check that hasn't succeeded (not reported yet, or neutral or
@@ -2198,125 +2124,11 @@ func ChecksState(runs []CheckRun, required []string) (state string, which []Chec
 	return CheckPass, nil
 }
 
-// ChecksAgainstMain sums up a head's checks as ChecksState does, except that
-// a check that fails on main's head too doesn't count against it: the change
-// is no worse than main there, and holding it would keep the fix for a red
-// main from ever landing. shared names those checks; with main green it is
-// empty and the result is ChecksState's. With tests (the failing tests a
-// check's log names) a shared check whose log names a test failing that
-// main's doesn't is the change's after all, so a second red test inside a job
-// main already fails still counts; byName are the shared checks whose logs
-// couldn't tell, judged by the check's name alone.
-func ChecksAgainstMain(runs, mainRuns []CheckRun, required []string, tests TestsOf) (state string, which []CheckRun, shared, byName []string) {
-	var kept []CheckRun
-	for _, r := range runs {
-		// Only a check main fails outright: one of its name that passes or
-		// still runs there (another attempt, a status) keeps it the change's.
-		named := func(mr CheckRun) bool { return mr.Name == r.Name }
-		if r.State == CheckFail && slices.ContainsFunc(mainRuns, named) && !slices.ContainsFunc(mainRuns, func(mr CheckRun) bool { return named(mr) && mr.State != CheckFail }) {
-			fresh, ok := newTests(r, mainRuns, tests)
-			if len(fresh) > 0 {
-				r.Detail = strings.TrimPrefix(r.Detail+"; ", "; ") + "fails " + strings.Join(fresh, ", ") + ", which main's run of it doesn't"
-				kept = append(kept, r)
-				continue
-			}
-			if !slices.Contains(shared, r.Name) {
-				shared = append(shared, r.Name)
-				if !ok {
-					byName = append(byName, r.Name)
-				}
-			}
-			continue
-		}
-		kept = append(kept, r)
-	}
-	req := slices.DeleteFunc(slices.Clone(required), func(n string) bool { return slices.Contains(shared, n) })
-	state, which = ChecksState(kept, req)
-	return state, which, shared, byName
-}
-
 // JobRead reads a forge check's job: its log's failure, and its steps. A
 // nil func reads nothing.
 type JobRead struct {
 	Failure func(CheckRun) (CheckFailure, bool)
 	Steps   func(CheckRun) ([]JobStep, bool)
-}
-
-// Excuse marks as passing each failed check that failed only in quarantined
-// tests (known flakes, keyed package::test), so it counts against no head;
-// excused names those checks. A failure only in such tests is shown, never
-// assumed: the log's failing tests, each with its package, are all
-// quarantined, and it shows nothing else failing (no build or setup failure,
-// panic, timeout, package red apart from them or failing test with no
-// package, CheckFailure.OnlyTests); none of their packages is one the head
-// changes (touched), so a change can't break a quarantined test and pass;
-// exactly one of the job's steps failed; and every step it skipped was
-// skipped on main's finished run of that check too, so no step the red kept
-// from running goes unchecked. Anything unread excuses nothing.
-func Excuse(runs, mainRuns []CheckRun, read JobRead, quarantined []string, touched func(key string) bool) (out []CheckRun, excused []string) {
-	if read.Failure == nil || read.Steps == nil || len(quarantined) == 0 || touched == nil {
-		return runs, nil
-	}
-	out = slices.Clone(runs)
-	for i, r := range out {
-		if r.State != CheckFail {
-			continue
-		}
-		f, ok := read.Failure(r)
-		if !ok || !f.OnlyTests || len(f.Keys) == 0 || slices.ContainsFunc(f.Keys, func(k string) bool { return !slices.Contains(quarantined, k) || touched(k) }) {
-			continue
-		}
-		if !stepsShown(r, mainRuns, read.Steps) {
-			continue
-		}
-		out[i].State = CheckPass
-		out[i].Detail = "fails only the quarantined " + strings.Join(f.Keys, ", ")
-		if !slices.Contains(excused, r.Name) {
-			excused = append(excused, r.Name)
-		}
-	}
-	return out, excused
-}
-
-// stepsShown reports whether r's job failed in one step and skipped only
-// steps that main's finished runs of its name skip as well.
-func stepsShown(r CheckRun, mainRuns []CheckRun, steps func(CheckRun) ([]JobStep, bool)) bool {
-	head, ok := steps(r)
-	if !ok {
-		return false
-	}
-	failed := 0
-	var skipped []string
-	for _, s := range head {
-		switch s.Conclusion {
-		case "success":
-		case "skipped":
-			skipped = append(skipped, s.Name)
-		default: // failure, timed_out, cancelled, or not finished
-			failed++
-		}
-	}
-	if failed != 1 {
-		return false
-	}
-	if len(skipped) == 0 {
-		return true
-	}
-	seen := false
-	for _, mr := range mainRuns {
-		if mr.Name != r.Name || (mr.State != CheckPass && mr.State != CheckFail) {
-			continue
-		}
-		ms, ok := steps(mr)
-		if !ok {
-			return false
-		}
-		if slices.ContainsFunc(ms, func(s JobStep) bool { return slices.Contains(skipped, s.Name) && s.Conclusion != "skipped" }) {
-			return false
-		}
-		seen = true
-	}
-	return seen
 }
 
 var (
@@ -2421,18 +2233,6 @@ func WholeTree(key, module string) bool {
 	return module != "" && where == module
 }
 
-// Excused is Excuse for task's PR on p at head: the quarantine as evidence
-// from outside task shows it, and files the head changes against main, a
-// test whose package they touch (or whose package can't be placed) never
-// excused.
-func (e *Effects) Excused(p Project, main, task string, files []string, runs, mainRuns []CheckRun) ([]CheckRun, []string) {
-	q := e.Quarantine(p.Name, task)
-	if len(q) == 0 {
-		return runs, nil
-	}
-	return Excuse(runs, mainRuns, e.JobRead(p.Repo), q, e.touched(p, main, files))
-}
-
 // touched reports whether a test key's package is one files (a head's
 // changes against main) touch, can't be placed, or is the module's root,
 // whose tests read the whole tree (WholeTree).
@@ -2514,106 +2314,9 @@ func (e *Effects) Quarantine(project, task string) []string {
 	return e.Quarantined(project, task)
 }
 
-// ProseOnly says every file is prose (markdown, reStructuredText, AsciiDoc:
-// docs, goals, the agents' prompts) and none is under a testdata directory,
-// where tests read files as their data. A plain .txt file may be such data
-// anywhere, so it isn't prose. The Hive's own tests ran every test that reads
-// such a change on Linux, so a red forge check on it (another system, a flake)
-// isn't its own.
-func ProseOnly(files []string) bool {
-	for _, f := range files {
-		f = filepath.ToSlash(f)
-		switch strings.ToLower(filepath.Ext(f)) {
-		case ".md", ".rst", ".adoc":
-		default:
-			return false
-		}
-		if strings.HasPrefix(f, "testdata/") || strings.Contains(f, "/testdata/") {
-			return false
-		}
-	}
-	return len(files) > 0
-}
-
-// ChecksBesidesFailures sums up runs as ChecksState does with every failed
-// check left out (and not required), and names those.
-func ChecksBesidesFailures(runs []CheckRun, required []string) (state string, which []CheckRun, failed []string) {
-	var kept []CheckRun
-	for _, r := range runs {
-		if r.State != CheckFail {
-			kept = append(kept, r)
-		} else if !slices.Contains(failed, r.Name) {
-			failed = append(failed, r.Name)
-		}
-	}
-	req := slices.DeleteFunc(slices.Clone(required), func(n string) bool { return slices.Contains(failed, n) })
-	state, which = ChecksState(kept, req)
-	return state, which, failed
-}
-
 // MainLookBack is how many of main's commits, newest first, MainAnswer reads
 // for a finished run.
 const MainLookBack = 10
-
-// MainAnswer is main's runs of the checks that failed, each taken from the
-// newest commit on main's first-parent line, from main back MainLookBack
-// commits, where every run of that name has finished (passed or failed). A
-// run still going, cancelled or that couldn't start is no answer: CI cancels
-// a run on main when the next push supersedes it, and while merges keep
-// coming main's newest commit may never finish one. A check with no answer
-// keeps main's own runs of it. at names, per check, the older commit its
-// answer came from.
-func (e *Effects) MainAnswer(p Project, main string, failed []CheckRun) (runs []CheckRun, at map[string]string, err error) {
-	if runs, err = e.Forge.Checks(p.Repo, main); err != nil {
-		return nil, nil, err
-	}
-	var want []string
-	for _, r := range failed {
-		if r.State == CheckFail && !slices.Contains(want, r.Name) && !finished(runs, r.Name) {
-			want = append(want, r.Name)
-		}
-	}
-	if len(want) == 0 {
-		return runs, nil, nil
-	}
-	out, err := Git(e.ws.Project(p.Name), "rev-list", "--first-parent", "-n", strconv.Itoa(MainLookBack), main)
-	if err != nil {
-		// A stale or missing clone: main's own runs are all there is, and
-		// the journal says so once per main, so it doesn't pass unseen.
-		if _, seen := e.unread.LoadOrStore(p.Name+"@"+main, true); !seen {
-			e.j.MustAppend("effect.main_history_unread", map[string]string{"project": p.Name, "main": main, "error": Clip(err.Error(), 300)})
-		}
-		return runs, nil, nil
-	}
-	shas := strings.Fields(out)
-	if len(shas) < 2 {
-		return runs, nil, nil // no history to read: main's own runs are all there is
-	}
-	at = map[string]string{}
-	for _, sha := range shas[1:] {
-		if len(want) == 0 {
-			break
-		}
-		older, err := e.Forge.Checks(p.Repo, sha)
-		if err != nil {
-			return nil, nil, err
-		}
-		want = slices.DeleteFunc(want, func(name string) bool {
-			if !finished(older, name) {
-				return false
-			}
-			runs = slices.DeleteFunc(runs, func(r CheckRun) bool { return r.Name == name })
-			for _, r := range older {
-				if r.Name == name {
-					runs = append(runs, r)
-				}
-			}
-			at[name] = sha
-			return true
-		})
-	}
-	return runs, at, nil
-}
 
 // finished reports whether runs hold a run named name and every one of them
 // passed or failed.
@@ -2635,35 +2338,6 @@ func finished(runs []CheckRun, name string) bool {
 // the log can't be read or names none (a build that broke, a step that isn't
 // a test run).
 type TestsOf func(CheckRun) (names []string, ok bool)
-
-// newTests are the tests r fails that no run of its name on main fails; ok
-// is false when a log on either side can't tell.
-func newTests(r CheckRun, mainRuns []CheckRun, tests TestsOf) (fresh []string, ok bool) {
-	if tests == nil {
-		return nil, false
-	}
-	head, ok := tests(r)
-	if !ok {
-		return nil, false
-	}
-	var onMain []string
-	for _, mr := range mainRuns {
-		if mr.Name != r.Name {
-			continue
-		}
-		names, ok := tests(mr)
-		if !ok {
-			return nil, false
-		}
-		onMain = append(onMain, names...)
-	}
-	for _, n := range head {
-		if !slices.Contains(onMain, n) && len(fresh) < 10 {
-			fresh = append(fresh, n)
-		}
-	}
-	return fresh, true
-}
 
 // FailingTests reads the failing tests in a check's log on repo's forge, for
 // ChecksAgainstMain, or nil when the forge can't read logs.

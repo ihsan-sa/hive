@@ -2,8 +2,6 @@ package work
 
 import (
 	"errors"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -349,82 +347,6 @@ func TestSeatTriesFollowTheDiff(t *testing.T) {
 
 // advisoryList is a security list on main naming the Windows job advisory.
 var advisoryList = map[string]string{core.SecurityList: "paths = []\nadvisory_checks = [\"test (windows-latest)\"]\n"}
-
-// A branch red only with main's own vet error never ran its tests (vet
-// stopped the command), so it isn't no worse than main: it waits on main.
-func TestVetRedOnlyAsMainIsNotNoWorse(t *testing.T) {
-	vet := core.Check{Output: "# x/e\nvet: e/a_test.go:225:42: not enough arguments in call to f\n"}
-	if core.NoWorse(vet, vet) {
-		t.Fatal("a branch whose tests vet stopped counted as no worse than main")
-	}
-	red := core.Check{Output: "--- FAIL: TestClock (0.00s)\nFAIL\tx/a\t0.01s\n"}
-	if !core.NoWorse(red, red) {
-		t.Fatal("a branch failing only main's own test wasn't no worse")
-	}
-}
-
-// The message names the commit main.bundle holds: if the clone's main moved
-// past the one the checks ran on, it says both.
-func TestMergeForgeCheckBundleNamesItsHead(t *testing.T) {
-	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
-	toMerging(t, m, task, p)
-	rerunSpent(task)
-	pushMain(t, f, map[string]string{"new_test.txt": "only on main"})
-	main, _ := m.C.Effects.Sync(p)
-	f.SetChecks(p.Repo, task.SHA, core.CheckRun{Name: "test", State: core.CheckFail})
-	f.SetChecks(p.Repo, main, core.CheckRun{Name: "test", State: core.CheckPass})
-	clone := m.C.WS.Project(p.Name)
-	next := strings.TrimSpace(must(t, clone, "-c", "user.name=t", "-c", "user.email=t@t", "commit-tree", main+"^{tree}", "-p", main, "-m", "moved"))
-	must(t, clone, "update-ref", "refs/heads/"+p.Branch, next)
-	msg := m.forgeFailures(task, p, main, []core.CheckRun{{Name: "test", State: core.CheckFail}}, nil, nil)
-	if !strings.Contains(msg, "holds main at "+core.Short(next)+", which main has moved to since the checks ran on "+core.Short(main)) {
-		t.Fatalf("message:\n%s", msg)
-	}
-}
-
-// A main.bundle that can't be written is journaled and said, not dropped.
-func TestMergeForgeCheckBundleFailureIsRecorded(t *testing.T) {
-	m, task, p, _ := gateRig(t, false, map[string]string{"feature.txt": "y"})
-	main := strings.TrimSpace(must(t, m.C.WS.Project(p.Name), "rev-parse", p.Branch))
-	os.MkdirAll(filepath.Join(m.C.WS.RunRO(task.Worker), "main.bundle", "x"), 0o755) // a non-empty directory can't be renamed over
-	msg := m.forgeFailures(task, p, main, []core.CheckRun{{Name: "test", State: core.CheckFail}}, nil, nil)
-	if !strings.Contains(msg, "main.bundle couldn't be updated") {
-		t.Fatalf("message:\n%s", msg)
-	}
-	for _, e := range m.C.J.Since(0) {
-		if e.Kind == "task.bundle_failed" && strings.Contains(string(e.Data), task.ID) {
-			return
-		}
-	}
-	t.Fatal("no task.bundle_failed event")
-}
-
-// The report names the main the checks' log says they ran with, not main at
-// report time: a test failing on an older main may be fixed on main now.
-func TestForgeFailuresNamesTheTestedMain(t *testing.T) {
-	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
-	toMerging(t, m, task, p)
-	rerunSpent(task)
-	tested, _ := m.C.Effects.Sync(p)
-	pushMain(t, f, map[string]string{"fix.txt": "the fix, landed after the checks ran"})
-	main, _ := m.C.Effects.Sync(p)
-	if main == tested {
-		t.Fatal("main didn't move")
-	}
-	f.SetCheckLog(p.Repo, "head/test", "HEAD is now at a9ae988 Merge "+task.SHA+" into "+tested+"\n--- FAIL: TestX (0.1s)\n##[error]Process completed with exit code 1.\n")
-	msg := m.forgeFailures(task, p, main, []core.CheckRun{{Name: "test", State: core.CheckFail, URL: "head/test"}}, nil, nil)
-	for _, want := range []string{"run merged with main at " + core.Short(tested), "Main has moved to " + core.Short(main), "newer than the " + core.Short(tested)} {
-		if !strings.Contains(msg, want) {
-			t.Fatalf("no %q in message:\n%s", want, msg)
-		}
-	}
-	// A log that names no merge says main now may not be what ran.
-	f.SetCheckLog(p.Repo, "head/test2", "--- FAIL: TestX (0.1s)\n")
-	msg = m.forgeFailures(task, p, main, []core.CheckRun{{Name: "test", State: core.CheckFail, URL: "head/test2"}}, nil, nil)
-	if !strings.Contains(msg, "Main is at "+core.Short(main)+" now; the checks' logs don't say") {
-		t.Fatalf("message:\n%s", msg)
-	}
-}
 
 // testStep runs the test step and, when it queued the head's check behind
 // it, waits for the check and runs the step again to take the result.

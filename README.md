@@ -39,7 +39,7 @@ A repository you name that doesn't exist yet starts with no test and no score: `
       "score": {"command": "./score.sh", "direction": "higher", "tolerance": 0.5, "paths": ["score.sh", "bench/"]}
     }
 
-The score command's output ends with one number; `direction` says whether higher or lower is better, and `tolerance` is how much noise to ignore. List every file the score reads in `paths`: the scripts it calls, the tests it runs and their data. Only a `./` file the command names counts without that, as a best guess, and the Hive warns while `paths` is empty. Those are the score itself: a change to one waits for your approval, and its merge starts a new baseline instead of being compared with numbers the old score gave. The demo project comes with both.
+The score command's output ends with one number; `direction` says whether higher or lower is better, and `tolerance` is how much noise to ignore. List every file the score reads in `paths`: the scripts it calls, the tests it runs and their data. Only a `./` file the command names counts without that, as a best guess, and the Hive warns while `paths` is empty. Those are the score itself: a change to one starts a new baseline when it merges, instead of being compared with numbers the old score gave. The demo project comes with both.
 
 ## Models
 
