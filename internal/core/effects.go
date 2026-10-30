@@ -87,7 +87,6 @@ type Effects struct {
 	verdicts  map[string]Verdict
 	lands     map[string][]string               // project@sha -> reviewer runs that said land, since the last fix
 	diffLands map[string][]string               // project#diff -> the same, for every head with that own diff
-	diffVerds map[string]Verdict                // project#diff -> the latest verdict on that own diff
 	diffHeads map[string][]string               // project#diff -> the heads a verdict on that own diff was given on
 	outside   map[string]map[string]OutsideRead // project#diff -> reader -> their latest read
 	seats     map[string]map[string]Verdict     // project#diff -> security seat -> its latest verdict
@@ -97,9 +96,6 @@ type Effects struct {
 	approvals map[string]bool
 	failing   map[string]CheckFailure   // repo url -> what a failed check's log says
 	steps     map[string][]JobStep      // repo url -> a finished check's steps
-	gates     map[string]GateResult     // project@head@main -> the recursive gate's verdict (selfgate.go)
-	gateMains map[string]GateResult     // project@main -> the newest can't-run there not tied to its head (GateAtMain)
-	standing  map[string]bool           // project@head@verdict's main@main -> whether that verdict still stands there (StandingGate)
 	judged    map[string]Judgement      // project@sha@main -> the judge's newest call (judge.go)
 	errored   map[string]map[string]any // project#pr@sha -> the effect.merged a merge the forge answered with an error would have journaled
 	homes     map[string]bool           // folders in use that Prune leaves: running checks' homes and clean checkouts (disk.go)
@@ -209,7 +205,7 @@ type HostCommit struct {
 // NewEffects builds the effects process and replays its records.
 func NewEffects(ws Workspace, j *Journal, forge Forge, sb func() (sandbox.Sandbox, error), tools func() []string, runs *Runs) *Effects {
 	e := &Effects{ws: ws, j: j, Forge: forge, sandbox: sb, tools: tools, runs: runs, sweep: sandbox.Sweep,
-		checks: map[string]Check{}, slow: map[string]bool{}, verdicts: map[string]Verdict{}, lands: map[string][]string{}, diffLands: map[string][]string{}, diffVerds: map[string]Verdict{}, diffHeads: map[string][]string{}, outside: map[string]map[string]OutsideRead{}, seats: map[string]map[string]Verdict{}, hostMade: map[string]HostCommit{}, recorded: map[string]string{}, pushes: map[string][]string{}, approvals: map[string]bool{}, gates: map[string]GateResult{}, judged: map[string]Judgement{}, gateMains: map[string]GateResult{}, standing: map[string]bool{}, errored: map[string]map[string]any{}}
+		checks: map[string]Check{}, slow: map[string]bool{}, verdicts: map[string]Verdict{}, lands: map[string][]string{}, diffLands: map[string][]string{}, diffHeads: map[string][]string{}, outside: map[string]map[string]OutsideRead{}, seats: map[string]map[string]Verdict{}, hostMade: map[string]HostCommit{}, recorded: map[string]string{}, pushes: map[string][]string{}, approvals: map[string]bool{}, judged: map[string]Judgement{}, errored: map[string]map[string]any{}}
 	e.Slots = NewSlots(func() int { return cmp.Or(ws.LoadConfig().MaxChecks, DefaultMaxChecks()) }) // the work module paces it
 	apply := func(ev Event) {
 		e.mu.Lock()
@@ -247,7 +243,6 @@ func NewEffects(ws Workspace, j *Journal, forge Forge, sb func() (sandbox.Sandbo
 			}
 			if v.Diff != "" {
 				k := v.Project + "#" + v.Diff
-				e.diffVerds[k] = v
 				if !slices.Contains(e.diffHeads[k], v.SHA) {
 					e.diffHeads[k] = append(e.diffHeads[k], v.SHA)
 				}
@@ -291,24 +286,6 @@ func NewEffects(ws Workspace, j *Journal, forge Forge, sb func() (sandbox.Sandbo
 			e.approvals[a.Kind+":"+a.Project+"@"+a.SHA] = true
 			if a.Diff != "" {
 				e.approvals[a.Kind+":"+a.Project+"#"+a.Diff] = true
-			}
-		case "gate.judged":
-			var g GateResult
-			ev.Decode(&g)
-			if prev, ok := e.gateMains[g.Project+"@"+g.Main]; ok && prev.MainFails && g.MainFails {
-				g.Repeats = prev.Repeats
-				if g.Started.IsZero() || !prev.At.After(g.Started) { // a run beside it saw the same main: no repeat
-					g.Repeats++
-				}
-			}
-			e.gates[g.Project+"@"+g.Head+"@"+g.Main] = g
-			switch {
-			case g.Outcome == GateCantRun && (g.Alone || len(g.Conflicts) > 0):
-				// Its own cause: the others at this main go on as they were.
-			case g.Outcome == GateCantRun:
-				e.gateMains[g.Project+"@"+g.Main] = g
-			default:
-				delete(e.gateMains, g.Project+"@"+g.Main)
 			}
 		case "judge.decided":
 			var j Judgement
@@ -1480,17 +1457,6 @@ func (e *Effects) Reads(project, sha, diff string) []string {
 		}
 	}
 	return out
-}
-
-// verdict is the latest verdict on the own diff, else on exactly sha.
-func (e *Effects) verdict(project, sha, diff string) (Verdict, bool) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if v, ok := e.diffVerds[project+"#"+diff]; ok && diff != "" {
-		return v, true
-	}
-	v, ok := e.verdicts[project+"@"+sha]
-	return v, ok
 }
 
 // RecordRead records an outside read (OutsideReaders) of a head whose own
@@ -2812,34 +2778,6 @@ func CheckNames(runs []CheckRun) string {
 	}
 	return strings.Join(names, ", ")
 }
-
-// readOK reports whether sha has the reads it needs. A read is of a change's
-// own diff, so it carries to a later head of it (main merged in) only while
-// that head's own diff is the same, and a conflict resolution or anything
-// else that changes the change's own files needs a new read.
-func (e *Effects) readOK(p Project, ch Change, sha string) bool {
-	project := p.Name
-	if len(ch.Files) > 0 && len(ch.Recorded) == len(ch.Files) && len(ch.High) == 0 && len(ch.Security) == 0 {
-		return true // only what the Hive wrote from its own record: nothing for a reader to judge
-	}
-	if p.Self || len(ch.High) > 0 {
-		// A release names the read of each merged head; a high class needs a
-		// second, separate read.
-		need := 1
-		if len(ch.High) > 0 {
-			need = 2
-		}
-		return len(e.Reads(project, sha, ch.DiffID)) >= need
-	}
-	if v, ok := e.verdict(project, sha, ch.DiffID); ok {
-		return v.Verdict == "land"
-	}
-	h, ok := e.HostMade(project, sha)
-	return ok && (h.Kind == "revert" || h.Kind == "setup")
-}
-
-// Reviewed reports whether sha, classified as ch, has the reads it needs to merge.
-func (e *Effects) Reviewed(p Project, ch Change, sha string) bool { return e.readOK(p, ch, sha) }
 
 // UpdateBranch merges main into the reviewed commit in a clean host checkout.
 // The result is host-made; the read of the reviewed commit carries while the

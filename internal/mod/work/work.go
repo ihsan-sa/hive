@@ -180,16 +180,11 @@ type Task struct {
 	// CantRuns counts the tries in a row its own tests couldn't start (a
 	// missing tool); past CantRunTries the hold goes to the person and counts
 	// as red. CantRunSaid is the PR told of a can't-run, once per PR.
-	CantRuns    int `json:"cant_runs,omitempty"`
-	CantRunSaid int `json:"cant_run_said,omitempty"`
-	// Gate is the recursive gate's latest verdict on its head (self projects, selfgate.go).
-	Gate *core.GateResult `json:"gate,omitempty"`
-	// GateAsked is the gate item last put to the person (askGateFix),
-	// task@head@main: one answer per head and main.
-	GateAsked string    `json:"gate_asked,omitempty"`
-	Log       []Entry   `json:"log,omitempty"`
-	Created   time.Time `json:"created"`
-	Updated   time.Time `json:"updated"`
+	CantRuns    int       `json:"cant_runs,omitempty"`
+	CantRunSaid int       `json:"cant_run_said,omitempty"`
+	Log         []Entry   `json:"log,omitempty"`
+	Created     time.Time `json:"created"`
+	Updated     time.Time `json:"updated"`
 }
 
 // Retried is a head's red forge checks, run again once before the worker
@@ -2556,13 +2551,6 @@ func (m *Module) merged(t *Task, merged, note string) {
 
 // holdGap is how long a held task waits before the gate looks again.
 var holdGap = time.Minute
-
-// gateLook is how long a task waiting on the recursive gate waits before it
-// looks again: a gate takes up to GateTimeout, and its end, or a freed slot,
-// wakes the task at once (selfgate.go), so each look between only reads the
-// PR from GitHub again (issue #1749: per-PR reads every minute ran out its
-// API limit).
-var gateLook = 10 * time.Minute
 
 const draftWait = "waiting as a draft"
 

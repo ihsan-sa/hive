@@ -16,7 +16,7 @@ So the core is the skeleton and nothing else. **New functionality goes into a mo
 | The journal: every state change is an event | `internal/core/journal.go` |
 | Runs and spawning: an agent turn in its own checkout, park/resume, crash retry; spawn | `internal/core/runs.go`, `internal/proc` |
 | Messaging and discovery: message, inbox, progress, finish, spawn, agents; the person's feed | `internal/core/ops.go`, `internal/core/person.go`, `internal/agentcli` (the agent's end) |
-| The effects process (fx): holds every credential and acts for agents: git, the forge, checks, merge guarantees | `internal/core` (`effects.go`, `forge.go`, `git.go`, `tokens.go`, `selfgate.go`, `slots.go`) |
+| The effects process (fx): holds every credential and acts for agents: git, the forge, checks, merge guarantees | `internal/core` (`effects.go`, `forge.go`, `git.go`, `tokens.go`, `slots.go`) |
 | The permissions ceiling and the sandbox | `internal/core/ceiling.go`, `internal/core/strain.go`, `internal/sandbox` |
 | The module seam: how the core gains functionality (the registry and tick list, agent ops, the person's answers, scheduled jobs, module programs, an executor module handed a strained turn's spec, a module's say on whether a turn starts now, a module's own `hive <name>` command) | `internal/mod/modules`, `internal/mod/runner`, `Ops().Register`, `Person.Handle`, `Runs.Executor`, `Runs.Admit` and `sandbox.Delegate` |
 | The host process and its wiring: the daemon, its control API, the entry point | `internal/daemon`, `internal/api`, `internal/app`, `cmd/hive` |
@@ -55,7 +55,7 @@ Every other package is module material. Most are compiled-in modules already (`i
 | `internal/tui`, `internal/text` | the control center, a client of the control API: it should import `internal/api` alone, not the core or modules |
 | `internal/mod/ui` | with the control center: the bus a client (the deck) steers it through, `/api/ui` (docs/ui-api.md) |
 | `internal/mod/release`, `internal/setup` | a release/update module: releases, self-update, install, login, doctor, autostart |
-| `internal/mod/improve`, `internal/gate`, `internal/demo` | the improve module: measure and keep/revert, sweeps, step-backs, the recursive gate and its benchmark project |
+| `internal/mod/improve`, `internal/demo` | the improve module: measure and keep/revert, sweeps, step-backs, and the benchmark project |
 | `internal/mod/kb` | the kb module |
 | `internal/mod/risk` | a risk module: wardens, tribunals, approved scripts. The ceiling itself stays core |
 | `internal/mod/chat`, `internal/mod/feedback`, `internal/mod/problems`, `internal/mod/standup` | the chat module |
@@ -76,6 +76,5 @@ Each move is one change with no behaviour change, so a regression is easy to see
 3. **Risk routing**: `Tier` and `Route` go to `internal/mod/risk`; the core keeps `AlwaysPerson`, `CeilingHit` and `CeilingGuard`. `internal/mod/risk` is a root path, so this one waits for the person's release.
 4. **Module routes and verbs**: the daemon and `cmd/hive` stop importing modules; each module registers its API routes and CLI verbs through the seam.
 5. **The control center as a client**: `internal/tui` imports `internal/api` only.
-6. **The gate's runner** (`app/selfgate.go`) joins `internal/gate` in the improve module.
-7. **The local forge** leaves `internal/core` for a package of its own; the core keeps the `Forge` interface.
-8. **Installable modules**: once a module reaches the core only through the seam, it can leave the binary for `modules/` (a module program, docs/architecture.md "Modules that run a program").
+6. **The local forge** leaves `internal/core` for a package of its own; the core keeps the `Forge` interface.
+7. **Installable modules**: once a module reaches the core only through the seam, it can leave the binary for `modules/` (a module program, docs/architecture.md "Modules that run a program").

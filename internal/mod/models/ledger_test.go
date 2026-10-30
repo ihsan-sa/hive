@@ -55,8 +55,8 @@ func TestATrialRecordedRefreshesTheLedger(t *testing.T) {
 	}
 	main, _ := a.C.Effects.Sync(p)
 	ch, err := a.C.Effects.Classify(p, main, recs[0].SHA)
-	if err != nil || len(ch.Protected) != 0 || !a.C.Effects.Reviewed(p, ch, recs[0].SHA) {
-		t.Fatalf("the record needs the person or a read: %+v %v", ch, err)
+	if err != nil || len(ch.Protected) != 0 || len(ch.Recorded) != len(ch.Files) {
+		t.Fatalf("the record needs the person: %+v %v", ch, err)
 	}
 
 	// Main comes to hold it (the record merged): the next tick files nothing.
