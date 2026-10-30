@@ -746,41 +746,6 @@ func TestCheckpointsBankEachGain(t *testing.T) {
 	}
 }
 
-// A review reads the project's docs/REVIEW.md, goals and lessons from main,
-// and advice given with a land stays on the pull request: it
-// holds nothing and is filed as no new task.
-func TestReviewReadsTheRules(t *testing.T) {
-	t.Parallel()
-	h := start(t)
-	h.seed("me/rules", map[string]string{
-		".hive/project.json": `{"test": "true"}`,
-		".hive/goals.md":     "# Goals\n\nEvery agent sees the same thing.\n",
-		"docs/REVIEW.md":     "# Review\n\nThe sandbox walls the Hive off from the host. FAKE:reviewadvice\n",
-		".hive/lessons.md":   "# Lessons\n\n- a lesson from an earlier revert\n",
-	})
-	h.post("/api/project", map[string]any{"name": "rules", "repo": "me/rules"}, nil)
-	h.post("/api/ask", map[string]string{"project": "rules", "title": "add a helper"}, nil)
-	st := h.wait("the ask to merge", 3*minute, taskStage("rules", "add a helper", work.StageDone))
-	tk, _ := task(st, "rules", "add a helper")
-	brief, _ := os.ReadFile(filepath.Join(h.ws.RunRO(tk.Reviewer), "brief.md"))
-	for _, want := range []string{"walls the Hive off from the host", "Every agent sees the same thing.", "a lesson from an earlier revert"} {
-		if !strings.Contains(string(brief), want) {
-			t.Fatalf("the review brief lacks %q:\n%s", want, brief)
-		}
-	}
-	if c := strings.Join(h.forge.Comments("me/rules", tk.PR.Number), "\n"); !strings.Contains(c, "Advice: FAKE advice") {
-		t.Fatalf("the advice isn't on the PR:\n%s", c)
-	}
-	time.Sleep(3 * time.Second) // a few more ticks, and nothing is filed
-	for _, p := range h.state().Projects {
-		for _, x := range p.Tasks {
-			if x.From == tk.Reviewer {
-				t.Fatalf("the reviewer's advice was filed as a task: %+v", x)
-			}
-		}
-	}
-}
-
 // A person's hold on merges stops a change at the last step: it passes its
 // gate and waits as a ready PR, and merges once the hold names it.
 func TestHoldStopsMerges(t *testing.T) {
@@ -814,38 +779,6 @@ func TestHoldStopsMerges(t *testing.T) {
 	h.wait("the named PR to merge under the hold", 3*minute, taskStage("held", "add a helper", work.StageDone))
 }
 
-// A worker isn't blamed for a failure main has too: its change waits with no
-// round spent, main's failure is one alert, and once main is fixed the change
-// is brought up to date and merges.
-func TestMainRedDoesNotBlameWorker(t *testing.T) {
-	t.Parallel()
-	h := start(t)
-	h.seed("me/red", map[string]string{
-		".hive/project.json": `{"test": "grep -q green STATE"}`,
-		".hive/goals.md":     "# Goals\n",
-		".hive/lessons.md":   "# Lessons\n\n",
-		"STATE":              "red\n",
-	})
-	h.post("/api/project", map[string]any{"name": "red", "repo": "me/red"}, nil)
-	h.post("/api/ask", map[string]string{"project": "red", "title": "add a feature", "known": "a plain change"}, nil)
-	st := h.wait("the change to wait on main", 4*minute, func(st api.State) bool {
-		tk, ok := task(st, "red", "add a feature")
-		return ok && strings.HasPrefix(tk.Reason, "waiting on main")
-	})
-	tk, _ := task(st, "red", "add a feature")
-	alerts := 0
-	for _, a := range st.Alerts {
-		if a.Kind == "main-red" {
-			alerts++
-		}
-	}
-	if tk.Round != 0 || alerts != 1 {
-		t.Fatalf("round %d, %d main-red alerts; want 0 and 1", tk.Round, alerts)
-	}
-	h.seed("me/red", map[string]string{"STATE": "green\n"})
-	h.wait("the change to merge once main is green", 4*minute, taskStage("red", "add a feature", work.StageDone))
-}
-
 // M7: kill the Hive in the middle of an ask, restart, and get the same
 // outcome with no duplicate issue, run or PR. Usage limits park and resume;
 // a crashed turn is retried on its checkout.
@@ -855,7 +788,7 @@ func TestRecovery(t *testing.T) {
 	h.seed("me/rec", map[string]string{".hive/project.json": `{"test": "true"}`, ".hive/goals.md": "# Goals\n"})
 	h.post("/api/project", map[string]any{"name": "rec", "repo": "me/rec"}, nil)
 
-	for _, stage := range []string{work.StageWorking, work.StageTesting, work.StageReviewing, work.StageMerging} {
+	for _, stage := range []string{work.StageWorking, work.StageTesting, work.StageMerging} {
 		title := "survive " + stage
 		h.post("/api/ask", map[string]string{"project": "rec", "title": title}, nil)
 		h.wait(title+" to reach "+stage, 2*minute, func(st api.State) bool {
@@ -949,7 +882,7 @@ func TestStalls(t *testing.T) {
 	cfg.StallFloorSeconds = 20
 	h.ws.SaveConfig(cfg)
 
-	asks := map[string]string{"hung worker": "FAKE:stallworker", "hung reviewer": "FAKE:stallreviewer", "hung check": "FAKE:stallcheck", "slow worker": "FAKE:slowworker:22"}
+	asks := map[string]string{"hung worker": "FAKE:stallworker", "hung check": "FAKE:stallcheck", "slow worker": "FAKE:slowworker:22"}
 	for title, known := range asks {
 		h.post("/api/ask", map[string]string{"project": "stall", "title": title, "known": known}, nil)
 	}
@@ -958,7 +891,7 @@ func TestStalls(t *testing.T) {
 	for title := range asks {
 		h.wait(title+" to land", 6*minute, taskStage("stall", title, work.StageDone))
 	}
-	hung := map[string]string{"hung worker": "restarted its turn", "hung reviewer": "restarted its turn", "hung check": "handed it to the lead"}
+	hung := map[string]string{"hung worker": "restarted its turn", "hung check": "handed it to the lead"}
 	stalls := func(st api.State) map[string][]string {
 		alerts := map[string][]string{}
 		for _, a := range st.Alerts {
