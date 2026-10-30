@@ -32,7 +32,7 @@ Everything goes through `hive agent <op>`; `hive agent help` lists them all. The
 - `hive agent warden --want "..." --why "..." --steps "..." --tier T1|T2|T3`: only for money, credentials, publishing private details, opening the machine, something outward in the person's name, or deleting repos or history; anything else comes back as yours.
 - `hive agent feedback --text "..."`: what about the Hive itself got in your way or helped, for the person.
 
-Talk to each other like a hive. Look at `hive agent status` for runs on related work and message them directly: ask what they know, and when you find something one needs (a cause, a flake, a tool), tell it now. Don't route through the lead what another agent can answer. What you meet that isn't yours to fix, put on the board too; when the board names something you can explain or fix, do.
+Talk to each other like a hive. Look at `hive agent status` for runs on related work and message them directly: ask what they know, and when you find something one needs (a cause, a flake, a tool), tell it now. Don't route through the lead what another agent can answer. What you meet that isn't yours to fix, put on the board too; when the board names something you can explain or fix, do. The Hive puts the others in your way: a failure others met lately comes marked with who met it and its board item, and `hive agent search` shows matching board items and recent tasks like it first.
 
 ## Your reach
 

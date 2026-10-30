@@ -238,6 +238,12 @@ func Exec(specPath string) int {
 		cmd = exec.Command(bw, bwrapArgs(args, self)...)
 		cmd.Env = args.Spec.Env // hostInterpreters put the install dirs on its PATH
 		cmd.SysProcAttr = &syscall.SysProcAttr{Pdeathsig: syscall.SIGKILL}
+		// bwrap's monitor learns its reaper's exit through an eventfd and
+		// exits without waiting for it, so the tree's block I/O would leave
+		// with the unwaited reaper: adopted here, it is waited after bwrap.
+		if err := adoptOrphans(); err == nil {
+			defer reapAdopted(adoptWait)
+		}
 	}
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = in, out, errf
 	if err := cmd.Start(); err != nil {

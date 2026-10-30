@@ -353,10 +353,21 @@ func (e *Effects) Sync(p Project) (string, error) {
 	if err != nil || sha == "" {
 		return "", nil
 	}
-	if _, err := Git(dir, "checkout", "-q", "-f", "-B", p.Branch, sha); err != nil {
+	// A big tree on a loaded machine can take minutes to check out; a
+	// checkout cut off at two left index.lock behind for every task (#2151).
+	if _, err := GitT(10*time.Minute, dir, "checkout", "-q", "-f", "-B", p.Branch, sha); err != nil {
 		return "", err
 	}
 	return sha, nil
+}
+
+// HostFetch fetches from p's origin into the host clone under the project's
+// lock, so it never runs beside Sync's fetch and checkout (#2151). Every git
+// step a module takes that writes the host clone goes through here.
+func (e *Effects) HostFetch(p Project, args ...string) error {
+	defer e.lock(p.Name)()
+	_, err := GitEnvT(5*time.Minute, e.ws.Project(p.Name), ghEnv(p.Repo), append([]string{"fetch"}, args...)...)
+	return err
 }
 
 // MainLine is the set of commits main has been at in the host clone: its
@@ -377,6 +388,19 @@ func (e *Effects) MainLine(p Project) map[string]bool {
 func (e *Effects) Config(p Project, sha string) ProjectConfig {
 	raw, _ := Git(e.ws.Project(p.Name), "show", sha+":.hive/project.json")
 	return ParseProjectConfig(raw)
+}
+
+// ForgeTested names the forge's checks that are the test of head against
+// main: main's ForgeTests, or, for a change that moves its project's tests to
+// the forge, the head's own. The forge runs a PR's own new workflow on its
+// head, and the head's project.json is the person's to approve (BaseProtected)
+// before it merges, so a head can't name them to skip its test unseen; the
+// merge waits for every one named to pass there.
+func (e *Effects) ForgeTested(p Project, main, head string) []string {
+	if ft := e.Config(p, main).ForgeTests; len(ft) > 0 {
+		return ft
+	}
+	return e.Config(p, head).ForgeTests
 }
 
 // ScoreVersion names the score at sha: its command and the content of its
@@ -693,13 +717,14 @@ func (e *Effects) checkOnce(p Project, sha, main, kind, command, back string) (C
 	c.Log = filepath.Join(e.ws.Hive(), "checks", p.Name, id+".log")
 	mounts := []sandbox.Mount{{Host: dir, Inside: "/work", RW: true}}
 	mods, build := goMods{done: func() {}}, goMods{done: func() {}}
-	var installed []sandbox.Mount
+	var installed, projects []sandbox.Mount
 	if away == nil { // the shared caches are this machine's: a runner fetches its own
 		mods = e.goModules(sb, dir)
 		build = e.goBuild(sb, p, sha, dir)
 		var drop func()
 		installed, drop = e.checkModules(sb, p, dir)
 		defer drop()
+		projects = e.checkProjects(p)
 	}
 	var records []sandbox.Mount
 	if away == nil && kind == "score" {
@@ -709,13 +734,16 @@ func (e *Effects) checkOnce(p Project, sha, main, kind, command, back string) (C
 	}
 	limit := e.checkLimit(p.Name, sha, kind)
 	run := func(offline bool) (int, string, error) {
-		ms := append(append(append(append(slices.Clone(mounts), build.mounts...), mods.mounts...), installed...), records...)
+		ms := append(append(append(append(append(slices.Clone(mounts), build.mounts...), mods.mounts...), installed...), projects...), records...)
 		env := append(slices.Clone(build.env), mods.own...)
 		if offline {
 			env = append(slices.Clone(build.env), mods.env...)
 		}
 		if len(installed) > 0 {
 			env = append(env, "HIVE_MODULES="+sandbox.InsidePath(sb, installed[0]))
+		}
+		if len(projects) > 0 {
+			env = append(env, "HIVE_PROJECTS="+sandbox.InsidePath(sb, projects[0]))
 		}
 		if len(records) > 0 {
 			env = append(env, "HIVE_HOME="+sandbox.InsidePath(sb, records[0]))
@@ -1248,6 +1276,28 @@ func (e *Effects) checkModules(sb sandbox.Sandbox, p Project, dir string) ([]san
 		out = append(out, sandbox.Mount{Host: filepath.Join(all.Host, m), Inside: all.Inside + "/" + m})
 	}
 	return out, func() { os.RemoveAll(empty); e.markLive(empty, false) }
+}
+
+// checkProjects is how a check on p sees the other projects' clones, as p's
+// agents do: read-only at /hive/projects, each the Hive's clone of its main,
+// with every hidden project but p covered, so a score built on another
+// project's files (hive-fw's reads hifi-receiver-2's main) measures the same
+// here as in a turn. An isolated project's check sees none. A check on a
+// runner (elsewhere) gets none either: the clones are this machine's.
+func (e *Effects) checkProjects(p Project) []sandbox.Mount {
+	if p.Isolated || !Exists(e.ws.Projects()) {
+		return nil
+	}
+	out := []sandbox.Mount{{Host: e.ws.Projects(), Inside: "/hive/projects"}}
+	if e.runs == nil || e.runs.projs == nil {
+		return out
+	}
+	for _, o := range e.runs.projs.List() {
+		if o.Hidden() && o.Name != p.Name && Exists(e.ws.Project(o.Name)) {
+			out = append(out, sandbox.Mount{Host: e.ws.Project(o.Name), Inside: "/hive/projects/" + o.Name, Hide: true})
+		}
+	}
+	return out
 }
 
 // moduleRecords copies the records (top-level *.jsonl, the last recordCap
@@ -1930,8 +1980,8 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	var flaky []string                       // a red local test run's known flakes, its only failures
-	tested := e.Config(p, m.Main).ForgeTests // the forge's checks are the test there
+	var flaky []string                        // a red local test run's known flakes, its only failures
+	tested := e.ForgeTested(p, m.Main, m.SHA) // the forge's checks are the test there
 	switch c, ok := e.GetCheck(p.Name, m.SHA, "test"); {
 	case len(tested) > 0:
 		// No local run is needed, and one there is no gate: the forge's

@@ -20,7 +20,8 @@ var forgeWait, forgePoll = 45 * time.Minute, time.Minute
 // nothing meanwhile. Anything else gives neither and the tests run here, as
 // they did before: a red or a check that couldn't start there (a red here is
 // retried and its failing tests named), a forge that can't be read, or no
-// answer forgeWait after the measure first looked.
+// answer forgeWait after the merge (or, with no merge recorded, after the
+// measure first looked).
 func (m *Module) forgeTest(p core.Project, sha string, names []string) (c core.Check, ok, wait bool) {
 	if len(names) == 0 {
 		return core.Check{}, false, false
@@ -56,14 +57,21 @@ func (m *Module) forgeTest(p core.Project, sha string, names []string) (c core.C
 	}
 	m.mu.Lock()
 	first, seen := m.forgeAt[key]
-	switch {
-	case pending && !seen:
+	if pending && !seen {
 		if m.forgeAt == nil {
 			m.forgeAt = map[string]time.Time{}
 		}
-		m.forgeAt[key], first = time.Now(), time.Now()
-		fallthrough
-	case pending && time.Since(first) < forgeWait:
+		// The wait counts from the merge, which the journal keeps: counted
+		// from the first look, every restart started it over, and with the
+		// daemon restarting more often than forgeWait (2026-10-30) a merge
+		// the forge never ran CI on waited for ever.
+		first = time.Now()
+		if at, ok := m.merged[sha]; ok && at.Before(first) {
+			first = at
+		}
+		m.forgeAt[key] = first
+	}
+	if pending && time.Since(first) < forgeWait {
 		m.mu.Unlock()
 		return core.Check{}, false, true
 	}

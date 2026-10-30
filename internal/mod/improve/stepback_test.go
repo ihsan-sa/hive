@@ -394,3 +394,49 @@ func TestStepBackJudgesUnjudgedGoalsWithNothingSpent(t *testing.T) {
 		t.Fatalf("with nothing spent and its goals judged, a step-back must not run: %+v", sbs)
 	}
 }
+
+// A regular step-back needs something new since the last one: a score that
+// reads otherwise, or on a project that has never had a score, a merge. Merges
+// that leave the score where it was are left to the plateau.
+func TestRegularStepBackNeedsTheScoreToMove(t *testing.T) {
+	m := rig(t)
+	zero, five := 0.0, 5.0
+	measure := func(project, task string, score *float64) {
+		m.record(Measurement{Project: project, Task: task, Kept: true, Score: score, Best: score})
+	}
+	stepBack := func(project string) {
+		m.saveStepBack(StepBack{ID: "stepback-" + core.NewID(), Project: project, Status: "judged", Started: time.Now().UTC()})
+	}
+	measure("p", "a", &zero)
+	if !m.moved("p") {
+		t.Fatal("a project's first score is new to a step-back")
+	}
+	stepBack("p")
+	if m.moved("p") {
+		t.Fatal("nothing measured since the last step-back is nothing new")
+	}
+	measure("p", "b", &zero)
+	measure("p", "", &zero)
+	if m.moved("p") {
+		t.Fatal("merges that leave the score where it was must not start a regular step-back")
+	}
+	measure("p", "", &five)
+	if !m.moved("p") {
+		t.Fatal("a score that moved, merge or not, is new to a step-back")
+	}
+	stepBack("p")
+	m.record(Measurement{Project: "p", Task: "c", NoResult: true})
+	if m.moved("p") {
+		t.Fatal("a measure that couldn't run is nothing new")
+	}
+
+	stepBack("q")
+	measure("q", "", nil)
+	if m.moved("q") {
+		t.Fatal("an unscored main measured with nothing merged is nothing new")
+	}
+	measure("q", "d", nil)
+	if !m.moved("q") {
+		t.Fatal("on a project that has never had a score, a merge is new to a step-back")
+	}
+}

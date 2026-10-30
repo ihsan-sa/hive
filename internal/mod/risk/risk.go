@@ -612,11 +612,15 @@ func (m *Module) spawnWarden(req *Request) error {
 	if req.Note != "" {
 		brief += fmt.Sprintf("\n\nThe person said go ahead and added, in their own words: %q", req.Note)
 	}
-	if _, err := m.C.Runs.Start(m.Agents.Spec(id, "warden", req.Project, dir, brief)); err != nil {
-		return err
-	}
+	// Weighing is saved before the run starts, so a restart between the two
+	// never leaves a running warden whose decide finds no request.
 	req.Warden, req.State = id, "weighing"
 	m.save(req)
+	if _, err := m.C.Runs.Start(m.Agents.Spec(id, "warden", req.Project, dir, brief)); err != nil {
+		req.Warden, req.State, req.Outcome = "", "failed", "no warden started: "+err.Error()
+		m.save(req)
+		return err
+	}
 	return nil
 }
 
@@ -627,9 +631,12 @@ func (m *Module) opDecide(r core.Run, args json.RawMessage) (any, error) {
 	}
 	m.act.Lock()
 	defer m.act.Unlock()
-	req, ok := m.find(func(x *Request) bool { return x.Warden == r.ID })
+	req, ok := m.find(func(x *Request) bool { return x.Warden == r.ID || x.Warden == "" && "w-"+x.ID == r.ID })
 	if !ok {
 		return nil, errors.New("you are not weighing a request")
+	}
+	if req.Warden == "" && req.State == "asked" { // its weighing was lost to a restart before this fix
+		req.Warden, req.State = r.ID, "weighing"
 	}
 	if req.State != "weighing" {
 		return nil, fmt.Errorf("request %s is already decided (%s)", req.ID, req.State)
@@ -999,6 +1006,13 @@ func (m *Module) execute(id string) {
 		return
 	}
 	floor := m.C.WS.LoadConfig().Floor
+	if req.Settles != nil { // no script runs: the decision is read as Weigh read it
+		if why := core.DecisionCeiling(floor, req.Script); why != "" && !req.PersonOK {
+			m.ask(&req, "Always yours", "Whoever approved it, this decision "+why+", which is always yours to decide.", "run", "declined")
+			m.act.Unlock()
+			return
+		}
+	}
 	req.Carries, req.CarriesDigest = "", ""
 	if !req.PersonOK && req.Settles == nil && core.ScriptCeiling(floor, req.Script) != "" {
 		need := ceilingLines(floor, req.Script)
@@ -1006,7 +1020,7 @@ func (m *Module) execute(id string) {
 			req.Carries, req.CarriesDigest = c.ID, c.Digest
 		}
 	}
-	if err := core.CeilingGuard(req.Script, floor, req.PersonOK || req.Carries != ""); err != nil {
+	if err := core.CeilingGuard(req.Script, floor, req.PersonOK || req.Carries != ""); req.Settles == nil && err != nil {
 		m.ask(&req, "Always yours", "Whoever approved it, this script "+core.ScriptCeiling(floor, req.Script)+", which is always yours to decide. The lines that are:\n"+mentions(ceilingLines(floor, req.Script)), "run", "declined")
 		m.act.Unlock()
 		if req.Settles == nil {
@@ -1285,7 +1299,9 @@ func (m *Module) Weigh(a core.Ask) string {
 	if a.Diff != "" {
 		why += "\n\n" + core.Clip(a.Diff, 6000)
 	}
-	if cfg := m.C.WS.LoadConfig(); cfg.Autonomy == 1 || core.Ceiling(cfg.Floor, a.Title, why) != "" {
+	// Saying yes to a merge spends nothing, so a money word in its title or
+	// diff doesn't make it the person's (DecisionCeiling); the rest still does.
+	if cfg := m.C.WS.LoadConfig(); cfg.Autonomy == 1 || core.DecisionCeiling(cfg.Floor, a.Title, why) != "" {
 		m.C.Person.Ask(a)
 		return "person"
 	}

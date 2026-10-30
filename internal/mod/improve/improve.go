@@ -106,6 +106,7 @@ type Module struct {
 	judges    sync.WaitGroup                                                                          // judgeMerge calls in flight
 	askJudge  func(p core.Project, t work.Task, ms Measurement, reason string) (core.Judgement, bool) // tests' stand-in for runJudge
 	covered   map[string][]Covered                                                                    // project -> merges main already held when they closed
+	abandoned map[string]bool                                                                         // merge sha -> noted as never to be measured (Recover)
 	cantRuns  map[string]int                                                                          // project@sha -> its checks that couldn't start
 	forgeAt   map[string]time.Time                                                                    // project@sha -> when its measure first waited on the forge's tests (forgetest.go)
 
@@ -120,7 +121,7 @@ type Module struct {
 // New loads measurements and sweeps.
 func New(c *core.Core, a *agents.Agents, w *work.Module, ch *chat.Module) *Module {
 	m := &Module{C: c, Agents: a, Work: w, Chat: ch, scores: map[string][]Measurement{}, sweeps: map[string]*Sweep{}, queue: make(chan work.Task, 64), retryAt: map[string]time.Time{}, pending: map[string]held{},
-		spells: map[string]spell{}, ended: map[string]time.Time{}, took: map[string][]float64{}, stalls: map[string]*Stall{}, fails: map[string][]core.Check{}, heads: map[string][]string{}, merged: map[string]time.Time{}, sighted: map[string][]Sighting{}, fixes: map[string]string{}, lifted: map[string]time.Time{}, liftedBy: map[string]string{}, fixMerged: map[string]bool{}, boarded: map[string]string{}, modules: map[string]string{}, kin: map[string]string{}, judging: map[string]judgingMerge{}, covered: map[string][]Covered{}, cantRuns: map[string]int{}, loops: map[string]*loopTask{}, stepbacks: map[string]*StepBack{}, busy: map[string]bool{}, alerted: map[string]string{}}
+		spells: map[string]spell{}, ended: map[string]time.Time{}, took: map[string][]float64{}, stalls: map[string]*Stall{}, fails: map[string][]core.Check{}, heads: map[string][]string{}, merged: map[string]time.Time{}, sighted: map[string][]Sighting{}, fixes: map[string]string{}, lifted: map[string]time.Time{}, liftedBy: map[string]string{}, fixMerged: map[string]bool{}, boarded: map[string]string{}, modules: map[string]string{}, kin: map[string]string{}, judging: map[string]judgingMerge{}, covered: map[string][]Covered{}, abandoned: map[string]bool{}, cantRuns: map[string]int{}, loops: map[string]*loopTask{}, stepbacks: map[string]*StepBack{}, busy: map[string]bool{}, alerted: map[string]string{}}
 	apply := func(e core.Event) {
 		m.mu.Lock()
 		defer m.mu.Unlock()
@@ -135,6 +136,11 @@ func New(c *core.Core, a *agents.Agents, w *work.Module, ch *chat.Module) *Modul
 			var x struct{ Project, SHA string }
 			if e.Decode(&x) == nil {
 				m.cantRuns[x.Project+"@"+x.SHA]++
+			}
+		case "score.abandoned":
+			var x struct{ SHA string }
+			if e.Decode(&x) == nil {
+				m.abandoned[x.SHA] = true
 			}
 		case "score.covered":
 			var x Covered
@@ -283,8 +289,11 @@ func (m *Module) record(ms Measurement) {
 func (m *Module) measure(p core.Project, sha, task string, files []string, forged *core.Check) (ok bool, score *float64, note string, cant core.Check) {
 	cfg := m.C.Effects.Config(p, sha)
 	var tc core.Check
+	reused := false
 	if forged != nil {
 		tc = *forged
+	} else if c, ok := m.recorded(p, sha, task, "test"); ok {
+		tc, reused = c, true
 	} else {
 		tc = m.C.Effects.RunCheck(p, sha, "test", cfg.Test)
 	}
@@ -295,6 +304,8 @@ func (m *Module) measure(p core.Project, sha, task string, files []string, forge
 	flaky := "" // a red that passed when what failed ran again, or the forge's pass
 	if forged != nil {
 		flaky = "tests green on the forge (" + strings.Join(cfg.ForgeTests, ", ") + "), none run here; "
+	} else if reused {
+		flaky = "tests green as recorded at this commit already, not run again; "
 	}
 	var excused []string
 	if task == "" || files != nil {
@@ -319,7 +330,12 @@ func (m *Module) measure(p core.Project, sha, task string, files []string, forge
 		}
 		return true, nil, "tests green (no score configured)", cant
 	}
-	sc := m.C.Effects.RunCheck(p, sha, "score", cfg.Score.Command)
+	sc, got := m.recorded(p, sha, task, "score")
+	if got && sc.Score != nil {
+		flaky += "score recorded at this commit already, not run again; "
+	} else {
+		sc = m.C.Effects.RunCheck(p, sha, "score", cfg.Score.Command)
+	}
 	if sc.CantRun != "" {
 		return false, nil, "score " + sc.CantRun + ": " + core.Clip(sc.Output, 300), sc
 	}
@@ -328,6 +344,23 @@ func (m *Module) measure(p core.Project, sha, task string, files []string, forge
 		return true, nil, flaky + "score did not produce a number: " + core.Clip(sc.Output, 600), cant
 	}
 	return true, sc.Score, flaky + fmt.Sprintf("score %g", *sc.Score), cant
+}
+
+// recorded is a green check of kind already recorded at a merge's sha: a
+// measure a daemon restart cut short (seven restarts in three hours on
+// 2026-10-30, each under a measure's length) goes on from the checks it
+// finished, rather than start over and be cut short again. Only a merge's
+// measure (task set) reads one, and only a pass: a red runs again, so its
+// failing tests are retried and named.
+func (m *Module) recorded(p core.Project, sha, task, kind string) (core.Check, bool) {
+	if task == "" {
+		return core.Check{}, false
+	}
+	c, ok := m.C.Effects.GetCheck(p.Name, sha, kind)
+	if !ok || !c.OK || c.CantRun != "" {
+		return core.Check{}, false
+	}
+	return c, true
 }
 
 // mergeFiles is what t's merge changed on main: from the parent of its first
@@ -410,7 +443,12 @@ func (m *Module) paired(p core.Project, sha string, first float64) (parent strin
 		defer done()
 		under = " under this merge's score"
 	}
+	// Both sides go ahead of the line: the parent's readings are as much
+	// main's measure as the merge's, and unranked they waited behind every
+	// PR's checks (c5a52584's parent, 00:58Z to a restart at 02:21Z on
+	// 2026-10-30, so the merge never got a result).
 	defer m.Work.MeasuringMain(p.Name, sha)()
+	defer m.Work.MeasuringMain(p.Name, at)()
 	read := func(at string) (float64, bool) {
 		sc := m.C.Effects.RunCheck(p, at, "score", cfg.Score.Command)
 		if sc.CantRun != "" || !sc.OK || sc.Score == nil {
@@ -898,9 +936,14 @@ func (m *Module) newestFirst(batch []work.Task) []work.Task {
 }
 
 // Recover re-queues merges whose measurement didn't happen (after a restart).
+// Their measures were only in memory, so this is what carries each across:
+// one cut short notes so (score.resumed) and goes on from the checks it
+// had finished (recorded); one too old to measure now notes it is given up
+// (score.abandoned), so no merge leaves the loop without a line.
 func (m *Module) Recover() {
 	for _, t := range m.Work.List(func(t work.Task) bool { return t.MergeSHA != "" }) {
 		if time.Since(t.Updated) >= 7*24*time.Hour {
+			m.abandon(t)
 			continue
 		}
 		for _, b := range t.Banks { // a checkpoint merged before the latest one
@@ -911,9 +954,40 @@ func (m *Module) Recover() {
 			}
 		}
 		if !m.measured(t.Project, t.MergeSHA) {
+			m.resume(t)
 			m.holdForJudge(t)
 			m.enqueue(t)
 		}
+	}
+}
+
+// resume notes a merge whose measure a restart cut short: checks of it are
+// recorded, its result isn't.
+func (m *Module) resume(t work.Task) {
+	var had []string
+	for _, kind := range []string{"test", "score", "size"} {
+		if _, ok := m.C.Effects.GetCheck(t.Project, t.MergeSHA, kind); ok {
+			had = append(had, kind)
+		}
+	}
+	if len(had) > 0 {
+		m.C.J.MustAppend("score.resumed", map[string]any{"project": t.Project, "sha": t.MergeSHA, "task": t.ID, "had": had})
+	}
+}
+
+// abandon notes, once, a merge that was never measured and is now too old
+// to be: main has long moved past it. Only one that aged out in the last
+// week is noted, so merges from before measuring began aren't listed.
+func (m *Module) abandon(t work.Task) {
+	if time.Since(t.Updated) >= 14*24*time.Hour || m.measured(t.Project, t.MergeSHA) {
+		return
+	}
+	m.mu.Lock()
+	done := m.abandoned[t.MergeSHA]
+	m.mu.Unlock()
+	if !done {
+		m.C.J.MustAppend("score.abandoned", map[string]string{"project": t.Project, "sha": t.MergeSHA, "task": t.ID,
+			"note": "never measured, and its task was last updated " + t.Updated.UTC().Format(time.DateTime) + "Z, over a week ago: main has moved past it, so it is given up"})
 	}
 }
 

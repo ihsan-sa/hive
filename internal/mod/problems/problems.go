@@ -39,6 +39,7 @@ type Problem struct {
 	Notes   []Note    `json:"notes,omitempty"`
 	Solved  string    `json:"solved,omitempty"` // how, once solved
 	Last    time.Time `json:"last"`             // the latest word on it
+	Key     string    `json:"key,omitempty"`    // the failing test it is, when the Hive posted it (Seen)
 	// Standing: a module's standing report (Standing), kept current by it
 	// and solved when it clears, so it never fades from the briefs.
 	Standing bool `json:"standing,omitempty"`
@@ -73,6 +74,7 @@ type Module struct {
 
 	mu    sync.Mutex
 	items map[string]*Problem
+	seen  map[string][]Sighting // by project and key, the recent ones (Seen)
 }
 
 // quiet is the roles that weigh one thing on its own (a step, a change), whom
@@ -81,8 +83,15 @@ var quiet = map[string]bool{"judge": true, "warden": true, "tribunal": true, "fi
 
 // New loads the board from the journal and registers its ops.
 func New(c *core.Core) *Module {
-	m := &Module{C: c, items: map[string]*Problem{}}
+	m := &Module{C: c, items: map[string]*Problem{}, seen: map[string][]Sighting{}}
 	apply := func(e core.Event) {
+		if e.Kind == "problem.seen" {
+			var s Sighting
+			if e.Decode(&s) == nil && s.Key != "" {
+				m.applySeen(s)
+			}
+			return
+		}
 		if e.Kind != "problem.saved" {
 			return
 		}
@@ -348,4 +357,41 @@ func (m *Module) Brief(role, project string) string {
 		list = list[:8]
 	}
 	return "## The Hive's open problems\n\nWhat other agents are running into now, from the problems board. If your work touches one, or you find its cause or a fix on the way, add to it (`hive agent problem --id <id> --also \"...\"`) and message its poster; close it with `--solved \"how\"` once it is. Post what you run into yourself with `hive agent problem --text \"...\" --where \"...\"`; if it is on the board already, add \"me too\" to it instead, which ranks it up. One no one adds to for a day leaves this list.\n\n" + lines(list) + more
+}
+
+// Match is the board items a run in project searching for query should see
+// first: those sharing words with it (two, or every one of a shorter query),
+// open before solved, at most five; "" when none.
+func (m *Module) Match(project, query string) string {
+	words := map[string]bool{}
+	for _, w := range strings.Fields(strings.ToLower(query)) {
+		if w = strings.Trim(w, "`'\".,:;()"); len(w) > 3 {
+			words[w] = true
+		}
+	}
+	need := min(2, len(words))
+	if need == 0 {
+		return ""
+	}
+	list := m.List(func(p Problem) bool {
+		if !m.visible(p, project) {
+			return false
+		}
+		n, seen := 0, map[string]bool{}
+		for _, w := range strings.Fields(strings.ToLower(p.Where + " " + p.Text + " " + p.Key)) {
+			if w = strings.Trim(w, "`'\".,:;()"); words[w] && !seen[w] {
+				seen[w] = true
+				n++
+			}
+		}
+		return n >= need
+	})
+	sort.SliceStable(list, func(i, j int) bool { return list[i].Open() && !list[j].Open() })
+	if len(list) == 0 {
+		return ""
+	}
+	if len(list) > 5 {
+		list = list[:5]
+	}
+	return "## On the problems board\n\n" + lines(list)
 }
