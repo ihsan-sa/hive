@@ -285,8 +285,9 @@ func (m *Module) record(ms Measurement) {
 // PRs' checks read it (core.Effects.ExcusedLocal), so one known-broken test
 // can't leave main unscored. A merge (task set) whose files can't be read
 // has nothing excused. forged, when set, is the forge's pass of sha's tests
-// (forgeTest), and none runs here.
-func (m *Module) measure(p core.Project, sha, task string, files []string, forged *core.Check) (ok bool, score *float64, note string, cant core.Check) {
+// (forgeTest), and none runs here; scored likewise is the forge's score
+// (forgeScore).
+func (m *Module) measure(p core.Project, sha, task string, files []string, forged, scored *core.Check) (ok bool, score *float64, note string, cant core.Check) {
 	cfg := m.C.Effects.Config(p, sha)
 	var tc core.Check
 	reused := false
@@ -331,7 +332,10 @@ func (m *Module) measure(p core.Project, sha, task string, files []string, forge
 		return true, nil, "tests green (no score configured)", cant
 	}
 	sc, got := m.recorded(p, sha, task, "score")
-	if got && sc.Score != nil {
+	if scored != nil {
+		sc = *scored
+		flaky += "score read from the forge's " + ScoreJob + " job, none run here; "
+	} else if got && sc.Score != nil {
 		flaky += "score recorded at this commit already, not run again; "
 	} else {
 		sc = m.C.Effects.RunCheck(p, sha, "score", cfg.Score.Command)
@@ -653,7 +657,7 @@ func (m *Module) baseline(p core.Project) {
 	}
 	defer m.Work.MeasuringMain(p.Name, main)() // its checks go ahead of the PRs'
 	cfg := m.C.Effects.Config(p, main)
-	ok, score, note, cant := m.measure(p, main, "", nil, nil)
+	ok, score, note, cant := m.measure(p, main, "", nil, nil, nil)
 	ms := Measurement{Project: p.Name, SHA: main, TestsOK: ok, Score: score, Note: "start: " + note, Version: m.version(p, main, cfg), NoResult: cant.CantRun != ""}
 	if ms.NoResult {
 		m.noResult(p, ms, cant.Kind) // Tick measures again in 10 minutes
@@ -1039,13 +1043,21 @@ func (m *Module) afterMerge(t work.Task) {
 		go func() { time.Sleep(judgeHold); m.queue <- t }()
 		return
 	}
-	if _, err := m.C.Effects.Sync(p); err != nil {
+	head, err := m.C.Effects.Sync(p)
+	if err != nil {
 		later = true
 		go func() { time.Sleep(time.Minute); m.queue <- t }()
 		return
 	}
 	if by, ok := m.coveredBy(p, t.MergeSHA); ok {
 		m.C.J.MustAppend("score.covered", Covered{Project: p.Name, SHA: t.MergeSHA, Task: t.ID, By: by.SHA, Red: !by.Kept})
+		return
+	}
+	if m.tipAhead(p, t.MergeSHA, head) {
+		// Only main's tip is measured: a merge a later one on main holds is
+		// covered once that one is measured (coveredBy, on the next look),
+		// rather than hold the line measuring code main has moved past
+		// (10-29 merges re-measured at 08:46Z on 2026-10-30, the tip not).
 		return
 	}
 	cfg := m.C.Effects.Config(p, t.MergeSHA)
@@ -1055,12 +1067,25 @@ func (m *Module) afterMerge(t work.Task) {
 		go func() { time.Sleep(forgePoll); m.queue <- t }()
 		return
 	}
+	var scored *core.Check
+	if cfg.Score != nil && len(cfg.ForgeTests) > 0 {
+		sc, ok, wait := m.forgeScore(p, t.MergeSHA)
+		if wait {
+			later = true
+			go func() { time.Sleep(forgePoll); m.queue <- t }()
+			return
+		}
+		if ok {
+			scored = &sc
+		}
+	}
+	forge := scored != nil                           // scored on the forge: nothing is scored here, pairs included
 	defer m.Work.MeasuringMain(p.Name, t.MergeSHA)() // keep/revert, the release and the next baseline wait on it
 	var tc *core.Check
 	if onForge {
 		tc = &forged
 	}
-	ok, score, note, cant := m.measure(p, t.MergeSHA, t.ID, m.mergeFiles(p, t), tc)
+	ok, score, note, cant := m.measure(p, t.MergeSHA, t.ID, m.mergeFiles(p, t), tc, scored)
 	switch {
 	case cant.CantRun != "" && m.introduced(p, t.MergeSHA, cant) && cant.Kind == "score":
 		ok, score, note = true, nil, "score did not produce a number: this merge's score command calls "+cant.Tool+", which isn't installed where checks run: "+note
@@ -1093,6 +1118,11 @@ func (m *Module) afterMerge(t work.Task) {
 	size, sizeNote := m.size(p, t.MergeSHA, false)
 	note += sizeNote
 	ms := Measurement{Project: p.Name, SHA: t.MergeSHA, Task: t.ID, TestsOK: ok, Score: score, Note: note, Version: m.version(p, t.MergeSHA, cfg), Size: size}
+	pair := m.paired
+	if forge {
+		ms.Version += ForgeVersion
+		pair = m.forgePaired
+	}
 	changed := false
 	if !hasBest || m.versionOf(p, k) != ms.Version {
 		m.warnUnlisted(p, cfg)
@@ -1114,7 +1144,7 @@ func (m *Module) afterMerge(t work.Task) {
 		// The merge is still judged (#2090): its parent is scored under the
 		// merge's own score, beside it. Only when that gives no number does
 		// the merge start a new baseline unjudged.
-		parent, mine, theirs, readings, ok := m.paired(p, t.MergeSHA, *score)
+		parent, mine, theirs, readings, ok := pair(p, t.MergeSHA, *score)
 		if !ok {
 			ms.Note = "the score changed and its parent gave no number under the new one, so this starts a new baseline; " + note
 			break
@@ -1135,7 +1165,7 @@ func (m *Module) afterMerge(t work.Task) {
 		// #1343, #1865): the same code read 18 points apart at different
 		// times. The merge is judged against its parent scored beside it,
 		// interleaved, and against the best only when that can't be.
-		if parent, mine, theirs, readings, ok := m.paired(p, t.MergeSHA, *score); ok {
+		if parent, mine, theirs, readings, ok := pair(p, t.MergeSHA, *score); ok {
 			ms.Against, ms.AgainstSHA, ms.Paired = &theirs, parent, &mine
 			if cfg.Score.WithinTolerance(mine, theirs) {
 				ms.Kept, ms.Best = true, &mine
@@ -1150,7 +1180,9 @@ func (m *Module) afterMerge(t work.Task) {
 			break
 		}
 		at := m.bestAt(p.Name, best)
-		if now, ok := m.scoreNow(p, at); ok {
+		if forge {
+			// A runner's reading of the best's commit is the one already taken.
+		} else if now, ok := m.scoreNow(p, at); ok {
 			ms.Against, ms.AgainstSHA = &now, at
 			if cfg.Score.WithinTolerance(*score, now) {
 				b := cfg.Score.Best(*score, now)
@@ -1181,6 +1213,7 @@ func (m *Module) afterMerge(t work.Task) {
 		b := *score
 		if ms.Paired != nil {
 			b = *ms.Paired // already read twice beside its parent
+		} else if forge {
 		} else if again, ok := m.scoreNow(p, t.MergeSHA); ok {
 			b = cfg.Score.Best(b, again)
 			if cfg.Score.WithinTolerance(again, bar) {
@@ -1286,7 +1319,11 @@ func (m *Module) lookIntoDip(p core.Project, t work.Task, reason string, before 
 	// dip went with what came after (a fix to its cause, or the load).
 	if cfg := m.C.Effects.Config(p, t.MergeSHA); cfg.Score != nil {
 		if head, err := m.C.Effects.Sync(p); err == nil && head != "" && m.after(p, head, t.MergeSHA) {
-			if now, ok := m.scoreNow(p, head); ok && cfg.Score.WithinTolerance(now, before) {
+			now, ok := m.forgeScoreAt(p, head)
+			if len(cfg.ForgeTests) == 0 { // scored on the forge, main is read there or not at all
+				now, ok = m.scoreNow(p, head)
+			}
+			if ok && cfg.Score.WithinTolerance(now, before) {
 				return fmt.Sprintf("no look into the dip: main at %s scores %g measured now, within tolerance of the %g before it, so the dip is gone from main", core.Short(head), now, before)
 			}
 		}
