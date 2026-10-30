@@ -211,7 +211,7 @@ var gateMachine = func(cfg core.Config) (string, bool) {
 	if why == "" {
 		why = core.Loaded(gateLoadMax)
 	}
-	return why, watching || core.Watched(gateMemMB, 0, 0, gateLoadMax)
+	return why, watching || core.Watched(gateMemMB, 0, 0, 0, gateLoadMax)
 }
 
 // gateCeiling is the most gates that run at once here.

@@ -24,7 +24,7 @@ func rig(slots int) (*Module, core.Config, *time.Time) {
 func run(id, role string) core.Run { return core.Run{RunSpec: core.RunSpec{ID: id, Role: role}} }
 
 // With the budget full, a sweep waits; every role's live turn counts,
-// a lead's too (the core never asks for a lead's own: TestRoomIsAskedForAllButLeads).
+// a lead's too (the core never asks for a lead's own: TestFitIsAskedForAllButLeads).
 func TestBudgetHoldsASweepWhenFull(t *testing.T) {
 	m, cfg, _ := rig(2)
 	live := []core.Run{run("lead", "lead"), run("rv", "reviewer")}

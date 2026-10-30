@@ -31,6 +31,7 @@ func hiveWithForge(t *testing.T) (*app.App, core.Run, *core.Local) {
 	cfg := ws.LoadConfig()
 	cfg.Harness = "fake"
 	cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax, cfg.LoadMax = 0, 0, 0, 0
+	cfg.IOPressureMax, cfg.IOFullMax = 0, 0
 	cfg.TurnBurst = 0 // nor let back-to-back turns in only a few at a time
 	cfg.Models = map[string]core.OpenModel{"qwen": {Endpoint: "http://127.0.0.1:11434/v1", Model: "qwen2.5-coder:14b"}}
 	if err := ws.SaveConfig(cfg); err != nil {
@@ -469,5 +470,32 @@ func TestAWorkerFilesTrialsOnItsOwnProject(t *testing.T) {
 	}
 	if _, err := call(t, a, tw, "trial", map[string]any{"model": "qwen", "project": "lab", "title": "csvsum"}); err == nil {
 		t.Fatal("a trial's own worker filed a trial")
+	}
+}
+
+// A step-back files the trials it wants as trials, on its own project: one
+// it filed as a brief ran on the project's route and moved to claude:opus
+// at OpenRouter's limit (task 261028-141459).
+func TestAStepBackFilesTrials(t *testing.T) {
+	a, _ := hiveWithModels(t)
+	if _, err := a.C.Projects.Add(core.Project{Name: "other", Repo: "me/other"}); err != nil {
+		t.Fatal(err)
+	}
+	sb, err := a.C.Runs.Start(core.RunSpec{Role: "stepback", Project: "lab", Harness: "fake", Checkout: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := call(t, a, sb, "trial", map[string]any{"model": "qwen", "project": "other", "title": "wc"}); err == nil {
+		t.Fatal("a step-back filed a trial on another project")
+	}
+	res, err := call(t, a, sb, "trial", map[string]any{"model": "qwen", "project": "lab", "title": "wc"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tk, _ := a.Work.Get(res.(map[string]string)["task"]); tk.Model != "qwen" {
+		t.Fatalf("a step-back's trial: %+v", tk)
+	}
+	if _, err := call(t, a, sb, "trial", map[string]any{"model": "qwen", "project": "lab", "title": "wc"}); err == nil {
+		t.Fatal("a step-back filed a second open trial of the same model and title")
 	}
 }

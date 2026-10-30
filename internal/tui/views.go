@@ -1055,7 +1055,7 @@ func (m *model) settings() []setting {
 		{group: "General", label: "use ANTHROPIC_API_KEY", value: onOff(c.APIKeyOptIn), key: "api_key_opt_in"},
 		{group: "General", label: "release repo", value: c.ReleaseRepo, key: "release_repo"},
 		{group: "General", label: "self fork owner", value: c.SelfFork, key: "self_fork"},
-		{group: "General", label: "release channel", value: channelText(m.st.Channel, c.Channel), key: "channel", choices: []string{"default", "latest", "pre-release", "train"}},
+		{group: "General", label: "release channel", value: channelText(m.st.Channel, c.Channel), key: "channel", choices: []string{"default", "latest", "pre-release", "main"}},
 		{group: "General", label: "release", value: m.st.Version + ", " + pinText(c.ReleasePin), action: func() tea.Cmd {
 			return func() tea.Msg {
 				return flashMsg("`" + core.Cmd + " update --release <tag>` installs a release, pinning one behind the newest")
@@ -1134,8 +1134,8 @@ func channelText(follows, chosen string) string {
 	switch follows {
 	case "pre-release":
 		t = "pre-releases, once safe here"
-	case "train":
-		t = "the daily train: a release once its canary keeps it"
+	case "main", "train":
+		t = "main: each commit it releases, built here, and main's modules live on merge (only where its own project is release_repo; elsewhere it never updates)"
 	}
 	if chosen == "" {
 		t += " (default)"

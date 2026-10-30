@@ -446,15 +446,15 @@ func (f writerFunc) Write(p []byte) (int, error) { return f(p) }
 // watched by none of them, whatever the limits say; a reading counts only
 // when its limit is on and its file is there.
 func TestWatched(t *testing.T) {
-	if watched(t.TempDir(), 1024, 10, 40, 1) {
+	if watched(t.TempDir(), 1024, 10, 40, 80, 1) {
 		t.Error("no readings to read, yet watched")
 	}
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "loadavg"), []byte("1.00 1.00 1.00 1/100 1\n"), 0o644)
-	if !watched(dir, 1024, 10, 40, 1) {
+	if !watched(dir, 1024, 10, 40, 0, 1) {
 		t.Error("loadavg is there and load_max on, yet not watched")
 	}
-	if watched(dir, 1024, 10, 40, 0) {
+	if watched(dir, 1024, 10, 40, 0, 0) {
 		t.Error("only loadavg is there and load_max is off, yet watched")
 	}
 }
@@ -646,15 +646,15 @@ func TestStrainedCappedElsewhere(t *testing.T) {
 	}
 }
 
-// Every turn but a lead's asks Room before it starts, with the turns live
+// Every turn but a lead's asks Fit before it starts, with the turns live
 // here: with the budget full a sweep waits while a lead's turn starts, and
 // the lead's live turn is among those the next ask counts (issue #1849).
-func TestRoomIsAskedForAllButLeads(t *testing.T) {
+func TestFitIsAskedForAllButLeads(t *testing.T) {
 	c, _ := testHive(t)
 	cfg := c.WS.LoadConfig()
 	t.Cleanup(func() { endTurns(t, c, cfg) })
 	asked := map[string][]string{}
-	c.Runs.Room = func(r Run, live []Run, _ Config) string {
+	c.Runs.Fit = func(r Run, live []Run, _ Config) string {
 		for _, l := range live {
 			asked[r.ID] = append(asked[r.ID], l.ID)
 		}
@@ -721,5 +721,45 @@ func TestRampGoesInLine(t *testing.T) {
 	}
 	if rs.ramp(fresh, now.Add(rampSeen+2*time.Second)) {
 		t.Error("w-new still waits on w-old, which stopped asking")
+	}
+}
+
+// IO pressure is a strain on its own, whatever the load: its "some avg10"
+// over io_pressure_max or its "full avg10" over io_full_max; 0 turns either
+// off, and with no /proc/pressure/io nothing holds. The readings of 10-29
+// 13:2xZ (some avg10 87%) hold at the defaults.
+func TestIOStrained(t *testing.T) {
+	proc := func(some, full string) string {
+		dir := t.TempDir()
+		os.MkdirAll(filepath.Join(dir, "pressure"), 0o755)
+		os.WriteFile(filepath.Join(dir, "pressure", "io"), []byte("some avg10="+some+" avg60=0.00 avg300=82.00 total=0\nfull avg10="+full+" avg60=0.00 avg300=0.00 total=0\n"), 0o644)
+		return dir
+	}
+	for _, c := range []struct {
+		name, some, full string
+		someMax, fullMax float64
+		want             string
+	}{
+		{"healthy", "45.00", "20.00", 80, 50, ""},
+		{"saturated (10-29)", "87.00", "40.00", 80, 50, IOReason + " (some avg10 87%, limit 80%)"},
+		{"every task stalled", "70.00", "61.50", 80, 50, IOReason + " (full avg10 62%, limit 50%)"},
+		{"full off", "70.00", "61.50", 80, 0, ""},
+		{"both off", "99.00", "90.00", 0, 0, ""},
+	} {
+		if got := ioStrained(proc(c.some, c.full), c.someMax, c.fullMax); got != c.want {
+			t.Errorf("%s: %q, want %q", c.name, got, c.want)
+		}
+	}
+	if got := ioStrained(t.TempDir(), 80, 50); got != "" {
+		t.Errorf("no pressure file: %q", got)
+	}
+	dir := t.TempDir()
+	os.MkdirAll(filepath.Join(dir, "pressure"), 0o755)
+	os.WriteFile(filepath.Join(dir, "pressure", "io"), []byte("some avg10=1.00 avg60=0.00 avg300=0.00 total=0\n"), 0o644)
+	if !watched(dir, 0, 0, 0, 80, 0) {
+		t.Error("pressure/io is there and io_pressure_max on, yet not watched")
+	}
+	if watched(dir, 0, 0, 0, 0, 0) {
+		t.Error("io_pressure_max off, yet watched")
 	}
 }

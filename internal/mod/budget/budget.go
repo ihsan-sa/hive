@@ -2,7 +2,7 @@
 // counts against, of any role, reopened and resumed turns too (issue #1849:
 // 27 live turns filled the Hive's 10 GB share while the work module's pace
 // said one worker at once). The core asks it before each turn but a lead's
-// (core.Runs.Room); the policy is here: the Hive's memory limit less a
+// (core.Runs.Fit); the policy is here: the Hive's memory limit less a
 // reserve, at a per-turn size learned from the turns' own RSS, the rest
 // waiting in rank order (the merge path's readers first, then workers and
 // the rest, then sweeps and step-backs), one step-back at a time, and a few
@@ -51,7 +51,7 @@ func Rank(role string) int {
 }
 
 // Module keeps the line and the learned turn size. Its Admit is the core's
-// Runs.Room; Tick reads the machine's memory and samples the turns' RSS.
+// Runs.Fit; Tick reads the machine's memory and samples the turns' RSS.
 type Module struct {
 	C *core.Core
 	// Proc and Cgroup are where /proc and cgroup v2 are read; a test points
@@ -77,7 +77,7 @@ type waiter struct {
 // New makes the module and hands its Admit to the core.
 func New(c *core.Core) *Module {
 	m := &Module{C: c, Proc: "/proc", Cgroup: "/sys/fs/cgroup", now: time.Now}
-	c.Runs.Room = m.Admit
+	c.Runs.Fit = m.Admit
 	return m
 }
 
