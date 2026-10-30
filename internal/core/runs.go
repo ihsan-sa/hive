@@ -585,7 +585,7 @@ func (rs *Runs) Yielding(turnMB int) string {
 		return ""
 	}
 	rs.mu.Lock()
-	what := slices.Sorted(maps.Values(rs.yields))
+	what := slices.Compact(slices.Sorted(maps.Values(rs.yields))) // a measure's test and score checks name it once
 	rs.mu.Unlock()
 	if len(what) == 0 {
 		return ""

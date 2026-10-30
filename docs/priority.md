@@ -20,6 +20,7 @@ Checks also write less: Go links in a check drop DWARF (`GOFLAGS=-ldflags=-w`, a
 
 The score that keeps or reverts every merge is read from main's measure, so it is the one check the machine's load must not starve (issue #2169: at load 109 on 20 cores on 10-30, hive main's measures were cut off at their limits, and main went 17 hours and about 70 merges without a score).
 While the improve module measures main (`work.MeasuringMain`, which calls `core.Effects.Measuring`), that commit's checks run at `core.MeasureNice` (4), under the leads and over every other run's turns at 10, not at `CheckNice` (15) under them all.
+Only while one of those checks holds a slot on this machine (`core.Effects.yieldWhileMeasuring`) does the measure hold turns: one waiting in the check line, on the forge's CI, on a runner, on its judge, or resumed at a restart and not yet running, uses no CPU here and holds nothing (issue #2191: such measures held workers up to 85 minutes on 10-30).
 And while one runs and the 1-minute load average is a CPU each or more (`core.CPUFull`), a turn that may wait doesn't start, and the work module starts no waiting brief (`core.Runs.Yielding`, said as `waiting: main's measure`); an executor module with room takes an away turn instead, as with memory.
 Turns already running go on, a lead's, warden's or tribunal seat's turn never waits, and with `turn_mb` 0 (tests on a loaded machine) neither hold applies.
 
