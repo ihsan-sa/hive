@@ -8,6 +8,7 @@ How a change lands now (the person, 10-30: "they can freely edit everything incl
   A worker's `hive agent finish` merges its PR at once: no test, reviewer, security read, panel, protected-path approval, forge check or lead-held draft waits before it (`Effects.Merge`).
   Or any agent pushes to main itself on its own token (`git push https://github.com/$HIVE_REPO HEAD:main`), as a session in home does, and owns that push's CI after.
   A module's program runs with no code review first.
+  The one exception: a PR that changes the code enforcing the hard limits (the `limits` array in `tests/LANDING-security.toml`) waits for a warden's read of its own diff ([risk.md](risk.md#a-wardens-read-of-the-limits-code)); an agent's own push to main goes around it.
   An agent may run the tests; nothing makes it.
 - What stays is the way back and the hard limits.
   Main keeps its history (the keep-history ruleset: no force-push, no deletion), so any change can be reverted.
