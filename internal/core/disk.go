@@ -646,7 +646,8 @@ func (e *Effects) markLive(p string, on bool) {
 
 // Prune removes what checks left behind: homes of checks no longer running,
 // the temp homes older builds made, clean checkouts and prefetch folders a
-// crash left, the Hive's leftovers in the temp folders (pruneTemp),
+// crash left, the Hive's leftovers in the temp folders (pruneTemp) and in
+// runs' own /tmp (Runs.pruneTmp),
 // sandboxes' runtime folders and unread specs, and the module
 // cache once it is past its cap and no check is using it. It returns what it
 // removed.
@@ -703,6 +704,9 @@ func (e *Effects) Prune() string {
 		}
 	}
 	pruneTemp(e.ws, drop)
+	if e.runs != nil {
+		e.runs.pruneTmp(drop)
+	}
 	sandboxes := e.sweep()
 	projects, _ := os.ReadDir(e.ws.Gates())
 	for _, pr := range projects {
@@ -765,8 +769,8 @@ type Room struct {
 func (e *Effects) MeasureDisk() DiskUse {
 	ws := e.ws
 	parts := []DiskPart{{Name: "agents' checkouts"}, {Name: "check homes"}, {Name: "Go module cache"},
-		{Name: "check checkouts and gates"}, {Name: "runs"}, {Name: "tools"}, {Name: "Go build caches"}}
-	at := map[string]int{ws.CheckHomes(): 1, ws.GoModCache(): 2, ws.Gates(): 3, ws.Runs(): 4, ws.Tools(): 5, filepath.Join(ws.Cache(), "gobuild"): 6}
+		{Name: "check checkouts and gates"}, {Name: "runs"}, {Name: "tools"}, {Name: "Go build caches"}, {Name: "runs' homes and /tmp"}}
+	at := map[string]int{ws.CheckHomes(): 1, ws.GoModCache(): 2, ws.Gates(): 3, ws.Runs(): 4, ws.Tools(): 5, filepath.Join(ws.Cache(), "gobuild"): 6, filepath.Join(ws.Private(), "runs"): 7}
 	projects, _ := os.ReadDir(ws.Projects())
 	for _, p := range projects {
 		at[ws.Checkouts(p.Name())] = 0

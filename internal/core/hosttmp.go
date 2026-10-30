@@ -20,6 +20,11 @@ import (
 // wherever agents read .hive, so no agent reads or writes what is in it.
 func (w Workspace) Temp() string { return filepath.Join(w.Private(), "tmp") }
 
+// RunTmp is a run's /tmp, on disk beside its home. Each turn's sandbox
+// launcher empties it as the turn starts and ends; what a killed launcher
+// left goes when the run ends (endTurn) or in the clean job (pruneTmp).
+func (w Workspace) RunTmp(id string) string { return filepath.Join(w.RunPrivate(id), "tmp") }
+
 // leftoverAge is how long nothing in a Hive temp folder must have changed
 // before the clean job takes it for a leftover: a gate is bounded at two
 // hours, a soft-layer arm at a few.
@@ -94,4 +99,25 @@ func quiet(p string, d time.Duration) bool {
 		return nil
 	})
 	return ok
+}
+
+// pruneTmp removes, through drop, each run's /tmp that no turn is using: an
+// ended run's and one no run here knows at once, a waiting run's once
+// nothing in it has changed for leftoverAge.
+func (rs *Runs) pruneTmp(drop func(string)) {
+	ds, _ := os.ReadDir(filepath.Join(rs.ws.Private(), "runs"))
+	for _, d := range ds {
+		id, tmp := d.Name(), rs.ws.RunTmp(d.Name())
+		if !Exists(tmp) {
+			continue
+		}
+		rs.mu.Lock()
+		r := rs.runs[id]
+		busy := r != nil && (r.Status == StatusRunning || rs.starting[id])
+		ended := r == nil || r.Terminal()
+		rs.mu.Unlock()
+		if !busy && (ended || quiet(tmp, leftoverAge)) {
+			drop(tmp)
+		}
+	}
 }
