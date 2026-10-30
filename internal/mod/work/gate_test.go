@@ -739,3 +739,45 @@ func TestLeadClosesPRWaitingInCheckLine(t *testing.T) {
 		t.Fatalf("stage %q, reason %q", got.Stage, got.Reason)
 	}
 }
+
+// Tests cut off at their time limit on a branch behind main are retried on
+// the branch caught up with main, pushed, not on the same stale commit; a
+// head that holds main and is cut off SlowTries times goes back to its worker.
+func TestSlowTestsCatchUpThenGoBack(t *testing.T) {
+	m, task, p, forge := gateRig(t, false, map[string]string{"feature.txt": "y"})
+	pushMain(t, forge, map[string]string{"fast.txt": "main's fix"})
+	main, err := m.C.Effects.Sync(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cut := core.Check{Slow: true, CantRun: "can't run: cut off at its 30m0s limit before its verdict, a slow check, not a red one"}
+	stale := task.SHA
+	if err := m.slowTests(task, p, main, cut); err != nil {
+		t.Fatal(err)
+	}
+	dir := m.C.WS.Project(p.Name)
+	if task.SHA == stale || task.Stage != StageTesting || task.Slows != 0 || !task.Retry.IsZero() {
+		t.Fatalf("head %s (was %s), stage %q, slows %d, retry %v", core.Short(task.SHA), core.Short(stale), task.Stage, task.Slows, task.Retry)
+	}
+	if _, err := core.Git(dir, "merge-base", "--is-ancestor", main, task.SHA); err != nil {
+		t.Fatal("the retried head doesn't hold main")
+	}
+	if _, err := core.Git(dir, "merge-base", "--is-ancestor", stale, task.SHA); err != nil {
+		t.Fatal("the retried head lost the branch's own commit")
+	}
+	if pr, err := forge.GetPR(p.Repo, task.PR.Number); err != nil || pr.HeadSHA != task.SHA {
+		t.Fatalf("the PR's head is %s (%v), want the caught-up %s", core.Short(pr.HeadSHA), err, core.Short(task.SHA))
+	}
+	if err := m.slowTests(task, p, main, cut); err != nil {
+		t.Fatal(err)
+	}
+	if task.Stage != StageTesting || task.Slows != 1 || !task.Retry.After(time.Now()) {
+		t.Fatalf("first cut-off holding main: stage %q, slows %d, retry %v", task.Stage, task.Slows, task.Retry)
+	}
+	if err := m.slowTests(task, p, main, cut); err != nil {
+		t.Fatal(err)
+	}
+	if task.Stage != StageWorking || task.Round != 1 || task.Slows != 0 || !strings.Contains(task.Findings, "cut off at their time limit 2 times") {
+		t.Fatalf("second cut-off holding main: stage %q, round %d, slows %d, findings %q", task.Stage, task.Round, task.Slows, task.Findings)
+	}
+}
