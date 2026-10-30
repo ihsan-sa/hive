@@ -329,6 +329,7 @@ type Module struct {
 	busy      map[string]bool
 	stepAt    map[string]time.Time // when each Tick step began, so one stuck past stepLimit is let go
 	weighing  map[string]weighing  // the checkpoints a step is weighing, so a finish takes them out of the check line
+	bars      map[string]float64   // a worker's base scored under a score main isn't yet measured by, keyed project@sha@version
 	aims      map[string]aimAsk    // aims asked while a step held the task, set as it ends
 	// steered is when the person's stop, retry or recheck (steer) last saved
 	// each task: a step whose copy is older saves nothing after it, nor
@@ -1535,8 +1536,10 @@ func (m *Module) renderBrief(t *Task, p core.Project, base string) string {
 	}
 	if cfg.Score != nil {
 		fmt.Fprintf(&b, "- Score: `%s` (%s is better, tolerance %g).", cfg.Score.Command, cfg.Score.Direction, cfg.Score.Tolerance)
-		if best, ok := m.bestScore(p.Name); ok {
+		if best, ok := m.bestScore(p, m.C.Effects.ScoreVersion(p, base, *cfg.Score)); ok {
 			fmt.Fprintf(&b, " Best kept score: %g.", best)
+		} else if best, ok := m.bestScore(p, ""); ok {
+			fmt.Fprintf(&b, " Best kept score: %g, read under the score before it changed; main isn't measured under this one yet.", best)
 		}
 		b.WriteString(" Every merge is measured; after a clear fix a lower score files a brief to look into it, and otherwise it is reverted unless a judge, weighing it with the change, keeps it, so say in your account what the change is for.\n")
 	}
@@ -1582,14 +1585,16 @@ func (m *Module) seenBefore(t *Task, keys []string) string {
 	return ""
 }
 
-// BestScore is provided by the improve module.
-var BestScore func(project string) (float64, bool)
+// BestScore is provided by the improve module: the best kept score of p,
+// false when there is none or it was read under another score version
+// (core.Effects.ScoreVersion) than version; "" takes any version.
+var BestScore func(p core.Project, version string) (float64, bool)
 
-func (m *Module) bestScore(project string) (float64, bool) {
+func (m *Module) bestScore(p core.Project, version string) (float64, bool) {
 	if BestScore == nil {
 		return 0, false
 	}
-	return BestScore(project)
+	return BestScore(p, version)
 }
 
 func (m *Module) priorBlocked(t *Task) string {
@@ -1677,7 +1682,7 @@ func (m *Module) checkWorker(t *Task, p core.Project) error {
 // change to the checkout's reflog, read without running git there. Once the
 // worker has finished and been sent back, its next finish lands instead.
 func (m *Module) checkpoint(t *Task, p core.Project, r core.Run) error {
-	if _, scored := m.bestScore(p.Name); !scored || t.From == "hive" { // the Hive's own setup brief keeps its done line (doneFor)
+	if _, scored := m.bestScore(p, ""); !scored || t.From == "hive" { // the Hive's own setup brief keeps its done line (doneFor)
 		return nil
 	}
 	if p.Self && t.Gain() {
@@ -1742,8 +1747,39 @@ func (m *Module) checkpoint(t *Task, p core.Project, r core.Run) error {
 	// is in it (read before, a stale best let a commit no better than the
 	// last checkpoint merge as one more).
 	unmeasured := len(t.Banks) > 0 && !m.measured(p.Name, t.Banks[len(t.Banks)-1].MergeSHA)
-	best, _ := m.bestScore(p.Name)
-	if unmeasured {
+	// The best kept counts only when it was read under the score the commit
+	// is weighed by: a merge that changed the score command (pll's
+	// tests/score.sh, 261030-031450) left every checkpoint weighed against
+	// the old command's number until main was measured under the new one.
+	// Until then the bar is the worker's base, scored under the same score.
+	ver := m.C.Effects.ScoreVersion(p, sha, *sc)
+	best, comparable := m.bestScore(p, ver)
+	if !comparable {
+		if m.C.Effects.ScoreVersion(p, t.Base, *sc) != ver {
+			m.save(t, fmt.Sprintf("the worker's commit %s changes the score itself, so it has no best to beat and no checkpoint; it lands whole", core.Short(sha)))
+			return nil
+		}
+		key := p.Name + "@" + t.Base + "@" + ver
+		m.mu.Lock()
+		bar, ok := m.bars[key]
+		m.mu.Unlock()
+		if !ok {
+			bc := m.C.Effects.RunCheck(p, t.Base, "score", sc.Command)
+			if bc.Score == nil {
+				t.Tried = "" // weighed again on the worker's next commit
+				m.save(t, fmt.Sprintf("the score changed since main was last measured, and the worker's base %s gave no number under the new one, so no checkpoint yet", core.Short(t.Base)))
+				return nil
+			}
+			bar = *bc.Score
+			m.mu.Lock()
+			if m.bars == nil {
+				m.bars = map[string]float64{}
+			}
+			m.bars[key] = bar
+			m.mu.Unlock()
+		}
+		best = bar
+	} else if unmeasured {
 		if c, ok := m.C.Effects.GetCheck(p.Name, t.Base, "score"); ok && c.Score != nil {
 			best = sc.Best(best, *c.Score)
 		}
