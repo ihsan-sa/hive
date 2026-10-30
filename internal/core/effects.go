@@ -727,15 +727,16 @@ func (e *Effects) checkOnce(p Project, sha, main, kind, command, back string) (C
 		defer drop()
 		projects = e.checkProjects(p)
 	}
-	var records []sandbox.Mount
+	var records, cache []sandbox.Mount
 	if away == nil && kind == "score" {
 		var drop func()
 		records, drop = e.moduleRecords(p, dir)
 		defer drop()
+		cache = e.scoreCache(p, sha)
 	}
 	limit := e.checkLimit(p.Name, sha, kind)
 	run := func(offline bool) (int, string, error) {
-		ms := append(append(append(append(append(slices.Clone(mounts), build.mounts...), mods.mounts...), installed...), projects...), records...)
+		ms := append(append(append(append(append(append(slices.Clone(mounts), build.mounts...), mods.mounts...), installed...), projects...), records...), cache...)
 		env := append(slices.Clone(build.env), mods.own...)
 		if offline {
 			env = append(slices.Clone(build.env), mods.env...)
@@ -748,6 +749,9 @@ func (e *Effects) checkOnce(p Project, sha, main, kind, command, back string) (C
 		}
 		if len(records) > 0 {
 			env = append(env, "HIVE_HOME="+sandbox.InsidePath(sb, records[0]))
+		}
+		if len(cache) > 0 {
+			env = append(env, "HIVE_SCORE_CACHE="+sandbox.InsidePath(sb, cache[0]))
 		}
 		var disk sandbox.Disk
 		defer func() { c.DiskRead, c.DiskWrote = c.DiskRead+disk.Read, c.DiskWrote+disk.Wrote }()

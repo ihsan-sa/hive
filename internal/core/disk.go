@@ -960,3 +960,48 @@ func checkTmp(env []string) []string {
 	}
 	return env
 }
+
+// ScoreCache is a project's score cache: a folder its score check keeps
+// across measures, so a measure re-runs only what changed since the last
+// (hive-chip-flow keeps each gate step's outcome there, #2176).
+func (w Workspace) ScoreCache(project string) string {
+	return filepath.Join(w.Cache(), "score", project)
+}
+
+// scoreCache is what a score check of sha gets of its project's score
+// cache: the folder, writable at /hive/score-cache, only for a commit main
+// has been at (its first-parent line), so only main's own measure writes
+// there and a branch's commit can't leave entries a later measure counts.
+// A folder past the check cache cap is emptied first.
+func (e *Effects) scoreCache(p Project, sha string) []sandbox.Mount {
+	if !e.MainLine(p)[sha] {
+		return nil
+	}
+	dir := e.ws.ScoreCache(p.Name)
+	if Size(dir) > e.checkCacheCap() {
+		e.ClearScoreCache(p.Name, "it passed the check cache cap")
+	}
+	if os.MkdirAll(dir, 0o755) != nil {
+		return nil
+	}
+	return []sandbox.Mount{{Host: dir, Inside: "/hive/score-cache", RW: true}}
+}
+
+// ClearScoreCache empties a project's score cache: the improve module does
+// when a merge is reverted, since entries a bad merge's measure wrote
+// outlive its revert. It is moved aside first, so a check writing there
+// meanwhile writes into what is being removed.
+func (e *Effects) ClearScoreCache(project, why string) {
+	dir := e.ws.ScoreCache(project)
+	if !Exists(dir) {
+		return
+	}
+	aside := filepath.Join(e.ws.Cache(), "removing-"+NewID())
+	e.markLive(aside, true)
+	defer e.markLive(aside, false)
+	if os.Rename(dir, aside) != nil {
+		aside = dir
+	}
+	RemoveTree(aside)
+	e.j.MustAppend("effect.score_cache_cleared", map[string]string{"project": project, "why": why})
+}
