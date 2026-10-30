@@ -200,3 +200,27 @@ func TestAWorkerThatDoesntFinishMovesAlongItsRoute(t *testing.T) {
 		t.Fatal("a run with no route moved on")
 	}
 }
+
+// A worker whose turn ended before its harness started because the harness's
+// program isn't on this machine ends blocked, saying so, instead of parking
+// and retrying a start that can't work; another interrupted turn still parks.
+func TestAWorkerWhoseHarnessIsntInstalledEndsBlocked(t *testing.T) {
+	for _, tc := range []struct{ err, want string }{
+		{`sandbox: tool "opencode" not found on this machine`, StatusBlocked},
+		{"killed", StatusParked},
+	} {
+		c, _ := testHive(t)
+		c.J.MustAppend("run.created", RunSpec{ID: "w1", Role: "worker", Harness: "opencode", Checkout: t.TempDir()})
+		c.J.MustAppend("run.turn_started", turnStarted{ID: "w1", Turn: 1})
+		out := c.WS.TurnOut("w1", 1)
+		os.MkdirAll(filepath.Dir(out), 0o755)
+		os.WriteFile(out, nil, 0o600)
+		os.WriteFile(out+".err", []byte(tc.err+"\n"), 0o600)
+		r, _ := c.Runs.Get("w1")
+		c.Runs.endTurn(r)
+		got, _ := c.Runs.Get("w1")
+		if got.Status != tc.want || tc.want == StatusBlocked && !strings.HasPrefix(got.Reason, CantStartHere) {
+			t.Fatalf("%q: %s (%q), want %s", tc.err, got.Status, got.Reason, tc.want)
+		}
+	}
+}

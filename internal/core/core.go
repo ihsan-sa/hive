@@ -2,6 +2,7 @@ package core
 
 import (
 	"errors"
+	"fmt"
 	"github.com/ihsan-sa/hive-standalone-build/internal/harness"
 	"os"
 	"path/filepath"
@@ -51,6 +52,7 @@ func Open(ws Workspace, forge Forge) (*Core, error) {
 	c.Runs = NewRuns(ws, j, c.Sandbox, c.Tokens, c.Tools)
 	c.Runs.projs = c.Projects
 	c.Effects = NewEffects(ws, j, forge, c.Sandbox, c.Tools, c.Runs)
+	c.Runs.beforeTurn = c.freshBundle
 	c.moveOldChecks()
 	c.Person.moveTold()
 	return c, nil
@@ -218,4 +220,19 @@ func (c *Core) checkProject(id string) string {
 		}
 	}
 	return ""
+}
+
+// freshBundle brings a run's main.bundle, when it was given one (a worker,
+// an isolated project's lead), up to its project's main before a turn, so
+// whatever reopened it, the bundle holds main's tip. One that can't be
+// written leaves the older one, said in the daemon's log.
+func (c *Core) freshBundle(r Run) {
+	path := filepath.Join(c.WS.RunRO(r.ID), "main.bundle")
+	p, ok := c.Projects.Get(r.Project)
+	if !ok || !Exists(path) {
+		return
+	}
+	if _, err := c.Effects.FreshBundle(p, path); err != nil {
+		fmt.Printf("hive: %s's main.bundle isn't brought up to main: %v\n", r.ID, err)
+	}
 }

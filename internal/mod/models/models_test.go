@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -12,6 +14,7 @@ import (
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/app"
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
+	"github.com/ihsan-sa/hive-standalone-build/internal/harness"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/models"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/work"
 )
@@ -464,6 +467,35 @@ func TestAWorkerFilesTrialsOnItsOwnProject(t *testing.T) {
 	}
 	if _, err := call(t, a, tw, "trial", map[string]any{"model": "qwen", "project": "lab", "title": "csvsum"}); err == nil {
 		t.Fatal("a trial's own worker filed a trial")
+	}
+}
+
+// A trial on a harness whose program isn't installed here is refused up
+// front, rather than filed for a worker that would park and retry forever;
+// a trial whose worker ended because its harness couldn't start is recorded
+// as the Hive's trouble, not as the model's failure.
+func TestTrialOnAHarnessThatCantStart(t *testing.T) {
+	a, lead := hiveWithModels(t)
+	dir := filepath.Join(a.C.WS.Modules(), "nowhere")
+	os.MkdirAll(dir, 0o755)
+	os.WriteFile(filepath.Join(dir, "module.json"), []byte(`{"name": "nowhere", "description": "a harness not installed", "provides": {"harnesses": ["nowhere.json"]}, "projects": ["*"]}`), 0o644)
+	os.WriteFile(filepath.Join(dir, "nowhere.json"), []byte(`{"name": "nowhere", "title": "Nowhere", "program": "hive-test-no-such-harness", "models": ["any"],
+  "args": {"start": ["run"]}, "parse": [{"match": {"type": "result"}, "event": "result"}]}`), 0o644)
+	harness.UseModules(a.C.WS.Modules())
+	t.Cleanup(func() { harness.UseModules("") })
+	_, err := call(t, a, lead, "trial", map[string]any{"model": "nowhere:any", "project": "lab", "title": "add a README"})
+	if err == nil || !strings.Contains(err.Error(), "can't start here") {
+		t.Fatalf("a trial on a harness not installed here: %v", err)
+	}
+	task, err := a.Work.File(work.Brief{Project: "lab", Title: "try qwen", Model: "qwen", From: lead.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	task.Stage, task.Reason = work.StageBlocked, core.CantStartHere+`sandbox: tool "opencode" not found on this machine`
+	a.C.J.MustAppend("task.saved", task)
+	a.Models.Tick()
+	if raw, _ := json.Marshal(a.Models.View(lead)); !strings.Contains(string(raw), `"hives_trouble":"`+core.CantStartHere) {
+		t.Fatalf("the trial isn't recorded as the Hive's trouble: %s", raw)
 	}
 }
 

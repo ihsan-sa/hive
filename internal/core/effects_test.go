@@ -447,8 +447,61 @@ func TestMainBundleLeavesNoTemp(t *testing.T) {
 	if _, err := c.Effects.MainBundle(p, filepath.Join(dir, "blocked")); err == nil {
 		t.Fatal("rename over a directory should fail")
 	}
-	if left, _ := filepath.Glob(filepath.Join(dir, "*.tmp")); len(left) != 0 {
+	if left, _ := filepath.Glob(filepath.Join(dir, "*.tmp*")); len(left) != 0 {
 		t.Fatalf("temp left behind: %v", left)
+	}
+}
+
+// A run's main.bundle holds main's tip when its turn starts, whatever
+// reopened it (a lead's message too), not main as its task last wrote it
+// (issue #2154); a bundle already at main isn't written again.
+func TestTurnStartsWithMainsTip(t *testing.T) {
+	c, _, p, old := setupProject(t)
+	// Stop the turn and let it end before the hive's temp dir goes
+	// (cleanups run last-first); a turn's end is taken in a tick.
+	t.Cleanup(func() {
+		c.Runs.Stop("w1", "the test is over")
+		for end := time.Now().Add(30 * time.Second); time.Now().Before(end); time.Sleep(200 * time.Millisecond) {
+			if r, _ := c.Runs.Get("w1"); r.Status != StatusRunning {
+				return
+			}
+			c.Runs.Tick(c.WS.LoadConfig())
+		}
+	})
+	host := c.WS.Project(p.Name)
+	path := filepath.Join(c.WS.RunRO("w1"), "main.bundle")
+	os.MkdirAll(filepath.Dir(path), 0o755)
+	if head, err := c.Effects.MainBundle(p, path); err != nil || head != old {
+		t.Fatalf("bundle %q %v, want %q", head, err, old)
+	}
+	mustGit(t, host, "commit", "-q", "--allow-empty", "-m", "main moves on")
+	tip := strings.TrimSpace(mustGit(t, host, "rev-parse", p.Branch))
+	dir, err := c.Effects.NewCheckout(p, "w1", old)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Runs.Start(RunSpec{ID: "w1", Role: "worker", Project: p.Name, Checkout: dir, Harness: "fake"}); err != nil {
+		t.Fatal(err)
+	}
+	ticked := time.Time{}
+	waitFor(t, "the bundle at main's tip", func() bool {
+		if time.Since(ticked) > 200*time.Millisecond { // a tick that didn't start the turn: the next one does
+			c.Runs.Tick(c.WS.LoadConfig())
+			ticked = time.Now()
+		}
+		return BundleHead(path, p.Branch) == tip
+	})
+
+	st, _ := os.Stat(path)
+	if head, err := c.Effects.FreshBundle(p, path); err != nil || head != tip {
+		t.Fatalf("fresh %q %v, want %q", head, err, tip)
+	}
+	if again, _ := os.Stat(path); !os.SameFile(st, again) {
+		t.Fatal("a bundle already at main was written again")
+	}
+	out, err := Git(dir, "fetch", "-q", path, p.Branch)
+	if err != nil {
+		t.Fatalf("fetch: %v %s", err, out)
 	}
 }
 

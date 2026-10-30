@@ -26,8 +26,8 @@ var (
 )
 
 // MemBudget says why one more turn, beside launching others already on their
-// way, doesn't fit, or "". The limit is the Hive's cgroup's (the lower of
-// memory.max and memory.high), what it uses there less its reclaimable file
+// way, doesn't fit, or "". The limit is the Hive's cgroup's or an
+// ancestor's (the lowest memory.max or memory.high), what it uses there less its reclaimable file
 // cache; with no cgroup limit it is the machine's MemTotal, what it uses
 // what MemAvailable doesn't cover. Where none of those can be read it never
 // holds, nor with turnMB 0.
@@ -60,19 +60,24 @@ func memRoom(proc, root string) (limit, used float64) {
 			self = filepath.Clean("/" + p)
 		}
 	}
-	if self != "" && self != "/" {
+	// The tightest limit on the way up: a daemon in its unit's leaf
+	// "daemon" (sandbox.SettleMemory) works under the unit's.
+	for ; self != "" && self != "/"; self = filepath.Dir(self) {
 		dir := root + self
-		limit = cgroupNumber(dir + "/memory.max")
-		if h := cgroupNumber(dir + "/memory.high"); h > 0 && (limit <= 0 || h < limit) {
-			limit = h
+		l := cgroupNumber(dir + "/memory.max")
+		if h := cgroupNumber(dir + "/memory.high"); h > 0 && (l <= 0 || h < l) {
+			l = h
 		}
-		if limit > 0 {
+		if l > 0 && (limit <= 0 || l < limit) {
+			limit = l
 			used = cgroupNumber(dir + "/memory.current")
 			if cache, ok := procField(dir+"/memory.stat", "inactive_file "); ok {
 				used -= cache
 			}
-			return limit, max(used, 0)
 		}
+	}
+	if limit > 0 {
+		return limit, max(used, 0)
 	}
 	total, ok := procField(proc+"/meminfo", "MemTotal:")
 	avail, ok2 := procField(proc+"/meminfo", "MemAvailable:")

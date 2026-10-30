@@ -87,9 +87,17 @@ func EnableAutostartAt(exe, root string) error {
 
 func home() string { h, _ := os.UserHomeDir(); return h }
 
-// unitText is the Hive's systemd user unit, with PATH as its PATH.
+// unitText is the Hive's systemd user unit, with PATH as its PATH. Its
+// memory has a soft cap: past MemoryHigh (of the machine's memory) the kernel
+// reclaims from the Hive and slows it, never the rest of the machine, and
+// MemorySwapMax keeps it from driving the machine deep into swap (the
+// machine went down twice that way on 10-30, #2143). Delegate=yes lets the
+// daemon give each sandboxed command a cgroup of its own with a hard limit
+// (sandbox.SettleMemory), so one runaway test is killed inside its run;
+// DelegateSubgroup starts the daemon in the unit's leaf, since the kernel
+// lets no process into a cgroup that has controllers on for its children.
 func unitText(exe, root, path string) string {
-	return fmt.Sprintf("[Unit]\nDescription=The Hive\nAfter=network-online.target\n\n[Service]\nEnvironment=HIVE_HOME=%s\nEnvironment=\"PATH=%s\"\nExecStart=%s daemon\nKillMode=process\nRestart=on-failure\nRestartSec=10\n\n[Install]\nWantedBy=default.target\n", root, strings.ReplaceAll(path, "%", "%%"), exe)
+	return fmt.Sprintf("[Unit]\nDescription=The Hive\nAfter=network-online.target\n\n[Service]\nEnvironment=HIVE_HOME=%s\nEnvironment=\"PATH=%s\"\nExecStart=%s daemon\nKillMode=process\nRestart=on-failure\nRestartSec=10\nMemoryHigh=45%%\nMemorySwapMax=4G\nDelegate=yes\nDelegateSubgroup=daemon\n\n[Install]\nWantedBy=default.target\n", root, strings.ReplaceAll(path, "%", "%%"), exe)
 }
 
 // unitTools are the programs the daemon runs by name.
@@ -150,7 +158,13 @@ func Unit() (name string, user bool) {
 		if len(parts) < 3 || parts[1] != "" && parts[1] != "name=systemd" {
 			continue
 		}
+		// The cgroups a unit with Delegate=yes makes inside itself (the
+		// daemon's "daemon", a sandbox's "run-<pid>") have no dot in their
+		// names; every systemd unit's has one.
 		path := parts[2]
+		for strings.Contains(path, "/") && !strings.Contains(path[strings.LastIndex(path, "/")+1:], ".") {
+			path = path[:strings.LastIndex(path, "/")]
+		}
 		if base := path[strings.LastIndex(path, "/")+1:]; strings.HasSuffix(base, ".service") {
 			return base, strings.Contains(path, "/user@")
 		}
