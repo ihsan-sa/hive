@@ -3,12 +3,14 @@ package core
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -40,11 +42,104 @@ var gitLockExists = regexp.MustCompile(`Unable to create '?([^'\n]+\.lock)'?: Fi
 // the lock removed and runs once more. With dir "" (a clone, an ls-remote)
 // there is no repo of the Hive's to recover, so a lock is left alone.
 func GitEnvT(timeout time.Duration, dir string, env []string, args ...string) (string, error) {
+	key := ""
+	if dir != "" && len(env) == 0 && pureGit(args) {
+		key = dir + "\x00" + strings.Join(args, "\x00")
+		if out, err, ok := gitMemo.get(key); ok {
+			return out, err
+		}
+	}
 	out, err := gitOnce(timeout, dir, env, args...)
 	if err != nil && clearStaleLock(dir, err.Error()) {
 		out, err = gitOnce(timeout, dir, env, args...)
 	}
+	var exit *exec.ExitError
+	if key != "" && (err == nil || errors.As(err, &exit) && exit.ExitCode() == 1) {
+		gitMemo.put(key, out, err)
+	}
 	return out, err
+}
+
+// pureGit says whether a git call's answer is fixed by the commits it names:
+// merge-base or diff between full commit ids, or show of one (or of
+// id:path), with no ref, path or flag value that could mean something else
+// later. Such an answer is the same in any clone that has the commits, so a
+// checkout removed and cloned again at the same path doesn't change it. Such
+// calls repeat a lot (one merge pass asks the same ancestry and diff of the
+// same two commits many times), and on a loaded machine every git process
+// costs; the answer, or its exit 1 (not an ancestor, differs), is kept for
+// gitMemoFor. merge-tree isn't one: the tree it names was written into one
+// repo, and a fresh clone at the same path doesn't have it.
+func pureGit(args []string) bool {
+	if len(args) < 2 || !(args[0] == "merge-base" || args[0] == "diff" || args[0] == "show") {
+		return false
+	}
+	n := 0
+	for _, a := range args[1:] {
+		if strings.HasPrefix(a, "-") {
+			continue
+		}
+		id, path, hasPath := strings.Cut(a, ":")
+		if !fullID.MatchString(id) || hasPath && (args[0] != "show" || path == "") {
+			return false
+		}
+		n++
+	}
+	if args[0] == "show" {
+		return n > 0
+	}
+	return n >= 2 // diff of one commit is against the working tree
+}
+
+var fullID = regexp.MustCompile(`^(?:[0-9a-f]{40}|[0-9a-f]{64})$`)
+
+// gitMemoFor is how long a pure call's answer is kept: a merge pass's worth,
+// so the memo stays small.
+const gitMemoFor = 10 * time.Minute
+
+// gitMemoMax caps the memo's entries and gitMemoBytes the output one may hold.
+const gitMemoMax, gitMemoBytes = 4096, 1 << 20
+
+type gitAnswer struct {
+	out string
+	err error
+	at  time.Time
+}
+
+type gitMemoT struct {
+	mu sync.Mutex
+	m  map[string]gitAnswer
+}
+
+var gitMemo = &gitMemoT{m: map[string]gitAnswer{}}
+
+func (g *gitMemoT) get(key string) (string, error, bool) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	a, ok := g.m[key]
+	if !ok || time.Since(a.at) > gitMemoFor {
+		return "", nil, false
+	}
+	return a.out, a.err, true
+}
+
+func (g *gitMemoT) put(key, out string, err error) {
+	if len(out) > gitMemoBytes {
+		return
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if len(g.m) >= gitMemoMax {
+		for k, a := range g.m {
+			if time.Since(a.at) > gitMemoFor {
+				delete(g.m, k)
+			}
+		}
+		if len(g.m) >= gitMemoMax {
+			g.m = map[string]gitAnswer{}
+		}
+	}
+	g.m[key] = gitAnswer{out, err, time.Now()}
 }
 
 // clearStaleLock removes the lock a failed git call names when it is a plain

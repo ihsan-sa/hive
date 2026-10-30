@@ -36,3 +36,4 @@ Dev runs without touching GitHub or plan usage: `HIVE_HOME=<dir> HIVE_FORGE=loca
 - Host git never runs in an agent's checkout. Files the sandbox can write are read with `core.SafeRead`.
 - Every state change is a journal event; every forge/run creation is idempotent so a restart never duplicates.
 - Nothing an agent asks for runs outside the sandbox, except a warden's or tribunal's approved script, pinned by the digest of its text (not the files it calls), which the risk module runs in the daemon (see docs/risk.md).
+- Docs go one sentence per line (a very long one, one clause per line), so two changes to different sentences merge without a conflict.

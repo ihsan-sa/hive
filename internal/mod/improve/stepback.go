@@ -97,16 +97,14 @@ func (m *Module) start(p core.Project) (Measurement, bool) {
 	return Measurement{}, false
 }
 
-// RotateStepBacks starts a step-back on each project where the Hive merged
-// something since its last one, or whose goals no step-back has judged yet
+// RotateStepBacks starts a step-back on each project with something new
+// since its last one (moved), or whose goals no step-back has judged yet
 // (the improve.stepback schedule): judging the goals needs nothing spent.
 func (m *Module) RotateStepBacks() string {
 	var started []string
 	for _, p := range m.C.Projects.List() {
-		last := m.lastStepBack(p.Name)
-		merged := slices.ContainsFunc(m.Scores(p.Name), func(x Measurement) bool { return x.Task != "" && !x.NoResult && x.At.After(last) })
 		why := "it is the regular step-back"
-		if !merged {
+		if !m.moved(p.Name) {
 			if _, digest, _, err := m.goals(p); err != nil || m.judged(p.Name, digest) {
 				continue
 			}
@@ -117,6 +115,35 @@ func (m *Module) RotateStepBacks() string {
 		}
 	}
 	return "stepped back on: " + strings.Join(started, ", ")
+}
+
+// moved says project has something new for a regular step-back to judge:
+// its score reads other than it did when the last step-back began, or, on a
+// project that has never had a score, the Hive merged something since. Merges
+// that leave the score where it was are a plateau, which TickStepBacks steps
+// back on once there are enough of them; until then a regular step-back would
+// only re-read the same state (feedback 261030-030027, 261029-022956).
+func (m *Module) moved(project string) bool {
+	last := m.lastStepBack(project)
+	var before *float64
+	scored, merged := false, false
+	for _, x := range m.Scores(project) {
+		if x.NoResult {
+			continue
+		}
+		scored = scored || x.Score != nil
+		if !x.At.After(last) {
+			if x.Score != nil {
+				before = x.Score
+			}
+			continue
+		}
+		merged = merged || x.Task != ""
+		if x.Score != nil && (before == nil || *x.Score != *before) {
+			return true
+		}
+	}
+	return merged && !scored
 }
 
 // goals is main of p and the digest and text of its goals there (the

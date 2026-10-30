@@ -868,6 +868,37 @@ func TestWeighDeclineAndCeiling(t *testing.T) {
 	}
 }
 
+// A hardware project's score is its unit cost, so its protected merges talk
+// about cost, USD and the BOM; saying yes spends nothing, so a warden weighs
+// them at autonomy 3 and its yes merges (#1993: hifi-receiver-2's PRs #27
+// and #29 went to the person on "in USD").
+func TestWeighCostScoredMergeIsTheWardens(t *testing.T) {
+	g := newRig(t, 3)
+	answered := make(chan core.Ask, 1)
+	g.c.Person.Handle("merge", func(a core.Ask) { answered <- a })
+	diff := `--- a/tools/hwcheck.py
++++ b/tools/hwcheck.py
+     python3 tools/hwcheck.py score   the first-built tier's unit cost at 100,
+                                      in USD, from its board(s)' BOM, printed
++    print(f"unit cost at {QTY}: ${c['total']:.2f}")`
+	if who := g.m.Weigh(core.Ask{Kind: "merge", Ref: "t@1", From: g.worker.ID, Title: `Merge "Cut the BOM price"? It changes tools/hwcheck.py`,
+		Detail: "These hold the project's goals, score or settings.", Diff: diff, Options: []string{"merge", "leave open"}}); who != "warden" {
+		t.Fatalf("a cost-scored merge went to the %s", who)
+	}
+	req := g.m.List()[0]
+	if err := g.decide(req, map[string]string{"decision": "do", "reason": "only the test's docstring"}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case a := <-answered:
+		if a.Answer != "merge" {
+			t.Fatalf("the warden's yes answered %+v", a)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatalf("the warden's yes never merged: %+v", g.settle(req.ID, "weighing", "approved"))
+	}
+}
+
 // A merge that touches the floor goes to the person when it is filed, before
 // any warden sees it.
 func TestWeighFloorGoesToThePerson(t *testing.T) {
@@ -1572,5 +1603,36 @@ func TestWardenOnlyForWhatIsOutside(t *testing.T) {
 	}
 	if l := g.m.List(); len(l) != 1 || l[0].Tier != "T3" {
 		t.Fatalf("deleting a repository isn't a tribunal's: %+v", l)
+	}
+}
+
+// A request is saved as weighing before its warden's run is created, so a
+// restart between the two never strands the warden; and a request whose
+// weighing was lost that way still takes its warden's decide.
+func TestWeighingSavedBeforeWardenStarts(t *testing.T) {
+	g := newRig(t, 2)
+	req := g.request("install a tool", "x", "T2")
+	saved, created := -1, -1
+	for i, e := range g.c.J.Since(0) {
+		var d struct{ ID, State string }
+		json.Unmarshal(e.Data, &d)
+		switch {
+		case e.Kind == "risk.saved" && d.ID == req.ID && d.State == "weighing" && saved < 0:
+			saved = i
+		case e.Kind == "run.created" && d.ID == req.Warden:
+			created = i
+		}
+	}
+	if saved < 0 || created < 0 || saved > created {
+		t.Fatalf("weighing saved at %d, warden created at %d", saved, created)
+	}
+	lost := req
+	lost.Warden, lost.State = "", "asked" // the journal as a restart before the fix left it
+	g.m.save(&lost)
+	if err := g.decide(req, map[string]string{"decision": "decline", "reason": "no"}); err != nil {
+		t.Fatalf("a warden whose weighing was lost can't decide: %v", err)
+	}
+	if got, _ := g.m.get(req.ID); got.State != "declined" || got.Warden != req.Warden {
+		t.Fatalf("decide didn't land: %+v", got)
 	}
 }
