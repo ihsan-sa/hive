@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -78,6 +79,12 @@ func Main(argv []string) int {
 		fmt.Fprintln(os.Stderr, "hive agent:", err)
 		return 2
 	}
+	if op == "finish" && args["status"] == "done" && os.Getenv("HIVE_ROLE") == "worker" {
+		if dirty := uncommitted("."); dirty != "" {
+			fmt.Fprintf(os.Stderr, "hive agent finish: your checkout has changes no commit holds; only commits reach the pull request, so commit them (or discard them) and finish again:\n%s", dirty)
+			return 1
+		}
+	}
 	wait := 3 * time.Minute
 	if op == "install" {
 		wait = 25 * time.Minute // a download and an unpack, in the Hive's own sandbox
@@ -97,6 +104,18 @@ func Main(argv []string) int {
 		fmt.Println(string(out))
 	}
 	return 0
+}
+
+// uncommitted is `git status --porcelain` in dir: the modified and untracked
+// files a worker's commits would leave behind. It runs here, inside the
+// sandbox, since host git never runs in an agent's checkout; outside a git
+// checkout, or with no git, it says nothing.
+func uncommitted(dir string) string {
+	out, err := exec.Command("git", "-C", dir, "status", "--porcelain").Output()
+	if err != nil {
+		return ""
+	}
+	return string(out)
 }
 
 // switches are the yes/no arguments, which may stand bare before another

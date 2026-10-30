@@ -36,7 +36,7 @@ var benchAsks = []string{
 	"In textkit, implement truncate in textkit/__init__.py.",
 }
 
-// TestBenchmark is what `hive gate` measures: the fixed asks on the scored demo
+// TestBenchmark is what hive-score measures: the fixed asks on the scored demo
 // project, one after another. It prints one BENCH line: JSON and its HMAC. It runs only
 // when HIVE_BENCH is set (to the number of asks), because on the real harness
 // it spends plan usage.

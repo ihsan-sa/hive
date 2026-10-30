@@ -13,6 +13,9 @@ import (
 	"fmt"
 	"maps"
 	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -113,6 +116,44 @@ func Probe(ws core.Workspace, name string, m core.OpenModel) error {
 // probe refuses a pick that can't answer, saying why: a named model gets one
 // real request (a stored Down is no reason to refuse, as the person may have
 // just fixed it); any other pick is refused only while it is down.
+// startable refuses a trial on a pick whose harness can't start on this
+// machine: its program isn't installed, or (in a sandbox) no key is stored
+// for it. A worker started on it would only end blocked. A route isn't held
+// to it: its picks may run on a runner that has the program.
+func (m *Module) startable(p core.Pick) error {
+	h, err := harness.Get(p.Harness)
+	if err != nil {
+		return err
+	}
+	if prog := h.Program(); prog != "hive" && runtime.GOOS != "windows" && !installed(prog) {
+		return fmt.Errorf("%s can't start here: its program %q isn't installed on this machine", p, prog)
+	}
+	s, ok := h.(*harness.Spec)
+	if !ok || s.KeyEnv == "" || s.KeyOptional {
+		return nil
+	}
+	if sb, err := m.C.Sandbox(); err == nil && !sb.Isolated() {
+		return nil // a bare run uses the harness's own login
+	}
+	if raw, err := os.ReadFile(m.C.WS.HarnessKey(s.Name())); err != nil || strings.TrimSpace(string(raw)) == "" {
+		return fmt.Errorf("%s can't start here: no API key is stored for the %s harness (the person stores one with `%s harness key %s`)", p, s.Name(), core.Cmd, s.Name())
+	}
+	return nil
+}
+
+// installed reports whether prog is on PATH or where the sandbox also looks.
+func installed(prog string) bool {
+	if _, err := exec.LookPath(prog); err == nil {
+		return true
+	}
+	for _, d := range []string{filepath.Join(os.Getenv("HOME"), ".local", "bin"), "/usr/local/bin"} {
+		if _, err := os.Stat(filepath.Join(d, prog)); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
 func (m *Module) probe(cfg core.Config, p core.Pick) error {
 	if p.Harness != "open" {
 		if d, ok := downOf(m.C.Runs.Down(), p); ok {
@@ -387,6 +428,9 @@ func (m *Module) opTrial(r core.Run, args json.RawMessage) (any, error) {
 	cfg := m.C.WS.LoadConfig()
 	pick, err := cfg.Pick(b.Model)
 	if err != nil {
+		return nil, err
+	}
+	if err := m.startable(pick); err != nil {
 		return nil, err
 	}
 	if err := m.probe(cfg, pick); err != nil {

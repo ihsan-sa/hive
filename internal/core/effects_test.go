@@ -447,15 +447,67 @@ func TestMainBundleLeavesNoTemp(t *testing.T) {
 	if _, err := c.Effects.MainBundle(p, filepath.Join(dir, "blocked")); err == nil {
 		t.Fatal("rename over a directory should fail")
 	}
-	if left, _ := filepath.Glob(filepath.Join(dir, "*.tmp")); len(left) != 0 {
+	if left, _ := filepath.Glob(filepath.Join(dir, "*.tmp*")); len(left) != 0 {
 		t.Fatalf("temp left behind: %v", left)
 	}
 }
 
+// A run's main.bundle holds main's tip when its turn starts, whatever
+// reopened it (a lead's message too), not main as its task last wrote it
+// (issue #2154); a bundle already at main isn't written again.
+func TestTurnStartsWithMainsTip(t *testing.T) {
+	c, _, p, old := setupProject(t)
+	// Stop the turn and let it end before the hive's temp dir goes
+	// (cleanups run last-first); a turn's end is taken in a tick.
+	t.Cleanup(func() {
+		c.Runs.Stop("w1", "the test is over")
+		for end := time.Now().Add(30 * time.Second); time.Now().Before(end); time.Sleep(200 * time.Millisecond) {
+			if r, _ := c.Runs.Get("w1"); r.Status != StatusRunning {
+				return
+			}
+			c.Runs.Tick(c.WS.LoadConfig())
+		}
+	})
+	host := c.WS.Project(p.Name)
+	path := filepath.Join(c.WS.RunRO("w1"), "main.bundle")
+	os.MkdirAll(filepath.Dir(path), 0o755)
+	if head, err := c.Effects.MainBundle(p, path); err != nil || head != old {
+		t.Fatalf("bundle %q %v, want %q", head, err, old)
+	}
+	mustGit(t, host, "commit", "-q", "--allow-empty", "-m", "main moves on")
+	tip := strings.TrimSpace(mustGit(t, host, "rev-parse", p.Branch))
+	dir, err := c.Effects.NewCheckout(p, "w1", old)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Runs.Start(RunSpec{ID: "w1", Role: "worker", Project: p.Name, Checkout: dir, Harness: "fake"}); err != nil {
+		t.Fatal(err)
+	}
+	ticked := time.Time{}
+	waitFor(t, "the bundle at main's tip", func() bool {
+		if time.Since(ticked) > 200*time.Millisecond { // a tick that didn't start the turn: the next one does
+			c.Runs.Tick(c.WS.LoadConfig())
+			ticked = time.Now()
+		}
+		return BundleHead(path, p.Branch) == tip
+	})
+
+	st, _ := os.Stat(path)
+	if head, err := c.Effects.FreshBundle(p, path); err != nil || head != tip {
+		t.Fatalf("fresh %q %v, want %q", head, err, tip)
+	}
+	if again, _ := os.Stat(path); !os.SameFile(st, again) {
+		t.Fatal("a bundle already at main was written again")
+	}
+	out, err := Git(dir, "fetch", "-q", path, p.Branch)
+	if err != nil {
+		t.Fatalf("fetch: %v %s", err, out)
+	}
+}
+
 // A read is of a change's own diff: it carries to a head with main merged in
-// while the change's own diff is the same, in a self project too, and not to
-// one whose merge changed the change's own files. A host-made revert needs no
-// read outside a self project and its own read in one.
+// while the change's own diff is the same, and not to one whose merge changed
+// the change's own files.
 func TestReadsFollowTheOwnDiff(t *testing.T) {
 	c, f, p, main := setupProject(t)
 	// The reviewer runs below are still running when the test ends; let them
@@ -467,8 +519,6 @@ func TestReadsFollowTheOwnDiff(t *testing.T) {
 			}
 		}
 	})
-	self := p
-	self.Self = true
 	read := func(id, sha string, ch Change) {
 		t.Helper()
 		c.Runs.Start(RunSpec{ID: id, Role: "reviewer", Project: p.Name, ReadOnly: true, Harness: "fake", Inputs: map[string]string{"sha": sha, "diff.patch": ch.Diff}})
@@ -499,11 +549,6 @@ func TestReadsFollowTheOwnDiff(t *testing.T) {
 	ch2, _ := c.Effects.Classify(p, main2, update)
 	if ch2.DiffID != ch.DiffID {
 		t.Fatal("merging an unrelated main changed the change's own diff")
-	}
-	for _, pp := range []Project{p, self} {
-		if !c.Effects.Reviewed(pp, ch2, update) {
-			t.Fatalf("self=%v: a main merge that leaves the own diff alone should keep the read", pp.Self)
-		}
 	}
 	if got := c.Effects.Reads(p.Name, update, ch2.DiffID); len(got) != 1 || got[0] != "r8" {
 		t.Fatalf("reads of the caught-up head: %v", got)
@@ -538,27 +583,12 @@ func TestReadsFollowTheOwnDiff(t *testing.T) {
 	if ch3.DiffID == ch.DiffID {
 		t.Fatal("a conflict resolution that changes the change's files kept its own diff")
 	}
-	for _, pp := range []Project{p, self} {
-		if c.Effects.Reviewed(pp, ch3, resolved) {
-			t.Fatalf("self=%v: the read carried to a head whose own diff changed", pp.Self)
-		}
+	if got := c.Effects.Reads(p.Name, resolved, ch3.DiffID); len(got) != 0 {
+		t.Fatalf("the read carried to a head whose own diff changed: %v", got)
 	}
 	read("r8b", resolved, ch3)
-	if !c.Effects.Reviewed(self, ch3, resolved) {
-		t.Fatal("a read of the new head should do")
-	}
-
-	revert, err := c.Effects.Revert(p, main2, main2, "main moves: it didn't stay")
-	if err != nil {
-		t.Fatal(err)
-	}
-	chr, _ := c.Effects.Classify(p, main2, revert)
-	if !c.Effects.Reviewed(p, chr, revert) || c.Effects.Reviewed(self, chr, revert) {
-		t.Fatal("a host revert needs no read only outside a self project")
-	}
-	read("r8c", revert, chr)
-	if !c.Effects.Reviewed(self, chr, revert) {
-		t.Fatal("a read of the revert's own head should do")
+	if got := c.Effects.Reads(p.Name, resolved, ch3.DiffID); len(got) != 1 || got[0] != "r8b" {
+		t.Fatalf("a read of the new head should do: %v", got)
 	}
 
 	// A fix on the caught-up head is a fix on its diff: the first head, read
@@ -569,9 +599,6 @@ func TestReadsFollowTheOwnDiff(t *testing.T) {
 	}
 	if got := c.Effects.Reads(p.Name, sha, ch.DiffID); len(got) != 0 {
 		t.Fatalf("a land on %s outlived a fix on the same diff at %s: %v", Short(sha), Short(update), got)
-	}
-	if c.Effects.Reviewed(self, ch, sha) {
-		t.Fatal("the first head still reads as reviewed after a fix on its diff")
 	}
 }
 
@@ -1625,7 +1652,7 @@ func TestRecordedLedgerNeedsNoApproval(t *testing.T) {
 		t.Fatal(err)
 	}
 	ch, err := c.Effects.Classify(p, main, sha)
-	if err != nil || len(ch.Protected) != 0 || !slices.Equal(ch.Recorded, []string{"ledger.json"}) || !c.Effects.Reviewed(p, ch, sha) {
+	if err != nil || len(ch.Protected) != 0 || !slices.Equal(ch.Recorded, []string{"ledger.json"}) {
 		t.Fatalf("the Hive's own record: %+v %v", ch, err)
 	}
 	c.Effects.RunCheck(p, sha, "test", "true")

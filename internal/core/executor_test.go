@@ -201,3 +201,41 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 		}
 	}
 }
+
+// Only a worker's turn is handed to an executor module: a sweep's, away or
+// held by the memory budget, waits here however much room there is
+// elsewhere, and a worker held by the same budget goes.
+func TestOnlyWorkersGoToAnExecutor(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("sleep stands in for the turn")
+	}
+	c, _ := testHive(t)
+	cfg := c.WS.LoadConfig()
+	cfg.TurnMB = 1 << 30 // no machine holds a turn this big: every turn waits or goes
+	if MemBudget(cfg.TurnMB, 0) == "" {
+		t.Skip("no memory figures here")
+	}
+	c.Runs.sandbox = func() (sandbox.Sandbox, error) { return isolatedBox{}, nil }
+	var spec sandbox.Spec
+	asked := 0
+	c.Runs.Executor = func() (sandbox.Sandbox, string) {
+		asked++
+		return elsewhereSB{agent: sleeper(t), spec: &spec}, "iiks1"
+	}
+	r, err := c.Runs.Start(RunSpec{ID: "s", Role: "sweep", Harness: "fake", Checkout: t.TempDir(), Away: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Runs.launch(r, cfg)
+	if got, _ := c.Runs.Get("s"); got.Status == StatusRunning || got.Where != "" || asked != 0 {
+		t.Fatalf("a sweep's turn went elsewhere: %s where %q, asked %d", got.Status, got.Where, asked)
+	}
+	r, err = c.Runs.Start(RunSpec{ID: "w", Role: "worker", Harness: "fake", Checkout: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Runs.launch(r, cfg)
+	if got, _ := c.Runs.Get("w"); got.Status != StatusRunning || got.Where != "iiks1" {
+		t.Fatalf("a worker's turn: %s %q where %q", got.Status, got.Reason, got.Where)
+	}
+}

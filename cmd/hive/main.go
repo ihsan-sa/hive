@@ -4,7 +4,6 @@ package main
 
 import (
 	"bufio"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -24,7 +23,6 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 	"github.com/ihsan-sa/hive-standalone-build/internal/daemon"
 	"github.com/ihsan-sa/hive-standalone-build/internal/fakeagent"
-	"github.com/ihsan-sa/hive-standalone-build/internal/gate"
 	"github.com/ihsan-sa/hive-standalone-build/internal/gocache"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/chat"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/kb"
@@ -44,7 +42,6 @@ const usage = `hive: a small team of AI agents working on your projects.
   hive ask "..."           ask the lead [--project name] [--wait]
   hive status              what the Hive is doing
   hive improve             run an improvement sweep now
-  hive gate ...            try a candidate Hive against the current one in child Hives (docs/gate.md)
   hive kb [words]          search the knowledge base: notes and everything the Hive did [--limit n|all]
   hive answer <id> <opt>   answer something waiting on you
   hive approve <id> [note] say yes to it (its first option)
@@ -184,25 +181,6 @@ func run(args []string) int {
 		}
 		fmt.Println(kb.Find(ws.KB(), query, limit))
 		return 0
-	case "gate-check": // inside a gate's sandbox: ask the gate for a sealed run
-		if len(args) < 3 || args[1] != "--" {
-			return 2
-		}
-		return gate.LaunchClient(args[0], args[2:])
-	case "gate-fwd": // inside a gate's sandbox: relay to the meter, run the rest
-		if len(args) < 3 || args[1] != "--" {
-			return 2
-		}
-		return gate.Forward(args[0], args[2:])
-	case "gate-connect": // inside a gate's sandbox: ssh's ProxyCommand, through the meter
-		if len(args) != 2 {
-			return 2
-		}
-		return gate.Connect(args[0], args[1])
-	case "gate-broker": // outside a box of sub-Hives: their GitHub, their own repositories alone
-		return gate.BrokerMain(args)
-	case "gate":
-		return cmdGate(args)
 	case "improve":
 		return withClient(func(c *api.Client) error {
 			var s map[string]any
@@ -1168,11 +1146,6 @@ func cmdUninstall() int {
 	core.ForgetWorkspace()
 	fmt.Printf("Autostart removed. Your folder %s is untouched.\nDelete the binary to finish: %s\n", ws.Root, setup.Executable())
 	return 0
-}
-
-func pretty(v any) string {
-	raw, _ := json.MarshalIndent(v, "", "  ")
-	return string(raw)
 }
 
 // kbArgs splits `hive kb` arguments into the search words and a --limit
