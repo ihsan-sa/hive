@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 )
@@ -97,7 +96,7 @@ func (m *Module) mergedDiff(p core.Project, pr int, head, mergeSHA string) (stri
 	dir := m.C.WS.Project(p.Name)
 	if _, err := core.Git(dir, "cat-file", "-e", head+"^{commit}"); err != nil {
 		ref := "refs/hive/merged/" + strconv.Itoa(pr)
-		if _, err := core.GitEnvT(5*time.Minute, dir, core.ForgeEnv(p.Repo), "fetch", "-q", "--no-tags", "--no-write-fetch-head", "origin", "+refs/pull/"+strconv.Itoa(pr)+"/head:"+ref); err != nil {
+		if err := m.C.Effects.HostFetch(p, "-q", "--no-tags", "--no-write-fetch-head", "origin", "+refs/pull/"+strconv.Itoa(pr)+"/head:"+ref); err != nil {
 			return "", fmt.Errorf("its head %s isn't in the host clone and can't be fetched: %s", core.Short(head), core.Clip(err.Error(), 200))
 		}
 		if _, err := core.Git(dir, "cat-file", "-e", head+"^{commit}"); err != nil {

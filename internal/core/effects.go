@@ -376,10 +376,21 @@ func (e *Effects) Sync(p Project) (string, error) {
 	if err != nil || sha == "" {
 		return "", nil
 	}
-	if _, err := Git(dir, "checkout", "-q", "-f", "-B", p.Branch, sha); err != nil {
+	// A big tree on a loaded machine can take minutes to check out; a
+	// checkout cut off at two left index.lock behind for every task (#2151).
+	if _, err := GitT(10*time.Minute, dir, "checkout", "-q", "-f", "-B", p.Branch, sha); err != nil {
 		return "", err
 	}
 	return sha, nil
+}
+
+// HostFetch fetches from p's origin into the host clone under the project's
+// lock, so it never runs beside Sync's fetch and checkout (#2151). Every git
+// step a module takes that writes the host clone goes through here.
+func (e *Effects) HostFetch(p Project, args ...string) error {
+	defer e.lock(p.Name)()
+	_, err := GitEnvT(5*time.Minute, e.ws.Project(p.Name), ghEnv(p.Repo), append([]string{"fetch"}, args...)...)
+	return err
 }
 
 // MainLine is the set of commits main has been at in the host clone: its

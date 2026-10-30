@@ -309,3 +309,17 @@ func TestErrorStopsComeBackAfterAWait(t *testing.T) {
 		t.Fatalf("waits %s, %s", ReviveWait(1), ReviveWait(40))
 	}
 }
+
+// A busy lock in the project's clone (another git step's index.lock) is no
+// verdict on the task: it waits without counting, however many times it
+// meets one, where 312 such errors stopped tasks on 10-30 (#2151).
+func TestGitLockBusyCountsNoFailure(t *testing.T) {
+	m, _, task, _ := noCommitRig(t, 0)
+	busy := errors.New("git checkout -q -f -B main c0e02c84: exit status 128: fatal: Unable to create '/home/hive/hive/projects/p/.git/index.lock': File exists.")
+	for range 12 {
+		m.settle(task, busy)
+	}
+	if task.Failures != 0 || task.Stage == StageStopped || task.Retry.IsZero() {
+		t.Fatalf("stage %q, failures %d, retry %v", task.Stage, task.Failures, task.Retry)
+	}
+}

@@ -1125,6 +1125,14 @@ func (m *Module) settle(t *Task, err error) {
 		m.save(t, core.Clip(err.Error(), 300)+"; the machine is slow, so the task waits, then goes on")
 		return
 	}
+	if core.GitLockBusy(err.Error()) {
+		// Another git step held the clone's lock past the call's own waits:
+		// no verdict on the task, which waits and goes on, counting nothing.
+		// A lock left by a dead git is cleared once stale (#2151).
+		t.Retry = time.Now().Add(time.Minute)
+		m.save(t, core.Clip(err.Error(), 300)+"; another git step holds the clone's lock, so the task waits, then goes on")
+		return
+	}
 	t.Kills = 0
 	t.Failures++
 	t.Retry = time.Now().Add(time.Duration(min(t.Failures, 6)) * 30 * time.Second)
