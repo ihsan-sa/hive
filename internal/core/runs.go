@@ -486,6 +486,9 @@ type Runs struct {
 	// module lets run's next turn spend, 0 for no limit. Either may be nil.
 	Held       func(Pick) time.Time
 	TurnBudget func(Run) float64
+	// beforeTurn readies what a turn reads from the host before it starts
+	// (its main.bundle brought up to main); nil does nothing.
+	beforeTurn func(Run)
 
 	mu      sync.Mutex
 	runs    map[string]*Run
@@ -2524,6 +2527,9 @@ func (rs *Runs) launch(r Run, cfg Config) {
 	if took != "" {
 		fmt.Printf("hive: %s's turn %d is started again here: %s\n", r.ID, turn, took)
 		rs.append("alert.raised", map[string]string{"kind": "daemon", "ref": "turn-takeover-" + r.ID, "text": fmt.Sprintf("%s's turn %d is started again: %s before journalling its start.", r.ID, turn, took)})
+	}
+	if rs.beforeTurn != nil {
+		rs.beforeTurn(r)
 	}
 	promptFile := filepath.Join(rs.ws.RunHost(r.ID), fmt.Sprintf("turn-%03d.prompt", turn))
 	if err := os.WriteFile(promptFile, []byte(prompt), 0o644); err != nil {
