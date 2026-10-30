@@ -152,7 +152,7 @@ func printedFinish(r Run, res *harness.Result) (Finish, bool) {
 	if !ok || op != "finish" || !lastCommand(res.Text) {
 		return Finish{}, false
 	}
-	f := Finish{Status: args["status"], Account: args["account"], Tested: args["tested"], Unsure: args["unsure"], Printed: true}
+	f := Finish{Status: args["status"], Account: args["account"], Tested: args["tested"], Passed: args["passed"], Unsure: args["unsure"], Printed: true}
 	if namesOnly(r, f.Account) {
 		f.Account = f.Tested
 	}

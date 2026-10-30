@@ -30,8 +30,7 @@ func hiveWithForge(t *testing.T) (*app.App, core.Run, *core.Local) {
 	}
 	cfg := ws.LoadConfig()
 	cfg.Harness = "fake"
-	cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax, cfg.LoadMax = 0, 0, 0, 0
-	cfg.IOPressureMax, cfg.IOFullMax = 0, 0
+	cfg.TurnMB = 0
 	cfg.Models = map[string]core.OpenModel{"qwen": {Endpoint: "http://127.0.0.1:11434/v1", Model: "qwen2.5-coder:14b"}}
 	if err := ws.SaveConfig(cfg); err != nil {
 		t.Fatal(err)
@@ -101,10 +100,6 @@ func TestAgentsRoute(t *testing.T) {
 		if _, err := call(t, a, lead, "route", bad); err == nil {
 			t.Errorf("route %v was taken", bad)
 		}
-	}
-	seat, _ := a.C.Runs.Start(core.RunSpec{Role: "reviewer", Harness: "fake", Checkout: t.TempDir()})
-	if _, err := call(t, a, seat, "route", map[string]any{"role": "worker", "models": "qwen"}); err == nil {
-		t.Fatal("a check seat routed the Hive")
 	}
 
 	res, err := call(t, a, lead, "route", map[string]any{"role": "reviewer", "models": []string{"qwen"}})

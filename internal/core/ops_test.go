@@ -160,7 +160,7 @@ func TestSpawnNeverMakesALead(t *testing.T) {
 		return RunSpec{}, errors.New("not reached")
 	})
 	for _, role := range []string{"lead", "warden", "sweep"} {
-		if _, err := c.Runs.Ops().Call(parent, "spawn", json.RawMessage(`{"role": "`+role+`", "brief": "x"}`)); err == nil || !strings.Contains(err.Error(), "workers or reviewers") {
+		if _, err := c.Runs.Ops().Call(parent, "spawn", json.RawMessage(`{"role": "`+role+`", "brief": "x"}`)); err == nil || !strings.Contains(err.Error(), "a worker or a reviewer") {
 			t.Errorf("spawn as %s: %v, want refused", role, err)
 		}
 	}

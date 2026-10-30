@@ -213,7 +213,7 @@ func TestInstallerHoldsToTheRunsEgressList(t *testing.T) {
 		t.Fatal(err)
 	}
 	var refused bytes.Buffer
-	e := sandbox.ServeEgress(ln, sp.Allow, sp.Local, &refused)
+	e := sandbox.ServeEgress(ln, sp.Allow, sp.Local, sp.Outside, &refused)
 	defer e.Close()
 	c, err := net.Dial("tcp", ln.Addr().String())
 	if err != nil {

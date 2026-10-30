@@ -31,8 +31,7 @@ func (t Task) Withdrawn() bool {
 func (t Task) endedBare() bool { return t.Stage == StageBlocked && t.PR.Number == 0 }
 
 // mayChange checks r may amend or withdraw t: a brief that no worker has
-// started on yet (or, to withdraw, one blocked with no PR), on r's project,
-// and not the person's own unless r filed it.
+// started on yet (or, to withdraw, one blocked with no PR), whoever filed it.
 func (m *Module) mayChange(r core.Run, t Task, verb string) error {
 	if err := m.reach(r, t.Project); err != nil {
 		return err
@@ -42,10 +41,6 @@ func (m *Module) mayChange(r core.Run, t Task, verb string) error {
 		return fmt.Errorf("task %s is a %s, not a filed brief", t.ID, t.Kind)
 	case t.Stage != StageNew && !t.Queued() && !(verb == "withdrawn" && t.endedBare()):
 		return fmt.Errorf("task %s has left the queue (%s), so it can't be %s: message its worker, or close its PR with pr_close (only a blocked task with no PR can still be withdrawn)", t.ID, t.Stage, verb)
-	case t.From == r.ID:
-		return nil
-	case t.From == "person":
-		return fmt.Errorf("task %s is the person's own ask; only they can have it %s", t.ID, verb)
 	}
 	return nil
 }

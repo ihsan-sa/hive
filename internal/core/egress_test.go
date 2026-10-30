@@ -88,6 +88,32 @@ func TestLocalGrantReachesTheSpec(t *testing.T) {
 	}
 }
 
+// A host granted to one project reaches its runs' specs past their list, and
+// no other project's; a grant Check refuses opens nothing.
+func TestProjectGrantReachesItsRunsOnly(t *testing.T) {
+	c, _ := testHive(t)
+	h, _ := harness.Get("claude")
+	cfg := c.WS.LoadConfig()
+	cfg.Egress = Egress{Default: []string{"github.com"}, Projects: map[string][]string{"hifi": {"Broker.example.com:8883", "192.168.1.20:80", "nas.lan:80"}}}
+	if err := cfg.Check(); err == nil || !strings.Contains(err.Error(), "nas.lan:80") {
+		t.Fatalf("Check let a local name through: %v", err)
+	}
+	c.WS.SaveConfig(cfg)
+	outside := func(project string) []string {
+		spec, err := c.Runs.sandboxSpec(c.WS.LoadConfig(), sandbox.Bare{}, h, Run{RunSpec: RunSpec{ID: "r-" + project, Role: "worker", Project: project, Checkout: t.TempDir()}}, 1, false, "", nil, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return spec.Outside
+	}
+	if got, want := outside("hifi"), []string{"broker.example.com:8883", "192.168.1.20:80"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("hifi's run opens %v, want %v", got, want)
+	}
+	if got := outside("other"); got != nil {
+		t.Fatalf("another project's run opens %v", got)
+	}
+}
+
 // Asking to open a local service is always the person's.
 func TestLocalGrantIsThePersons(t *testing.T) {
 	if got := CeilingHit("reach the local Ollama", "hive egress grant 127.0.0.1:11434"); got != "open" {

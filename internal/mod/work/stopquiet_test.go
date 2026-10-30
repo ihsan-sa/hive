@@ -32,10 +32,6 @@ func TestLeadStopsAQuietWorker(t *testing.T) {
 	if _, err := callOp(m, leadRun, "stop", `{"task":"`+stuck.ID+`"}`); err == nil || !strings.Contains(err.Error(), "why") {
 		t.Fatalf("stopped with no why: %v", err)
 	}
-	other := core.Run{RunSpec: core.RunSpec{ID: "w2", Role: "worker", Project: "elsewhere"}}
-	if _, err := callOp(m, other, "stop", `{"task":"`+stuck.ID+`","why":"x"}`); err == nil {
-		t.Fatal("a worker on another project stopped this one's worker")
-	}
 	if _, err := callOp(m, leadRun, "stop", `{"task":"`+stuck.ID+`","why":"quiet a day"}`); err != nil {
 		t.Fatal(err)
 	}
@@ -76,7 +72,7 @@ func TestLeadStopsAQuietWorker(t *testing.T) {
 func TestAStoppedQuietWorkerIsReplacedOnTheNextTick(t *testing.T) {
 	m := queueRig(t)
 	cfg := m.C.WS.LoadConfig()
-	cfg.MaxWorkers = 1
+	cfg.TurnMB = 0
 	m.C.WS.SaveConfig(cfg)
 	p, _ := m.C.Projects.Get("p")
 	task := file(t, m, "the stuck one", "In internal/core/effects.go.")

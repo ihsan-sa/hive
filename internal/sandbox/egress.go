@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"bufio"
+	"cmp"
 	"context"
 	"fmt"
 	"io"
@@ -20,13 +21,18 @@ import (
 // dials the exact address it vetted (so DNS rebinding can't swap it). With an
 // allow list it also refuses every host not on it. The one way to a service on
 // this machine is a local grant: a loopback ip:port the person named
-// (LocalGrant), dialled as that literal address and nothing else.
+// (LocalGrant), dialled as that literal address and nothing else. A host
+// outside this machine the person granted to one project's runs
+// (OutsideGrant) is let through on its port past the list: a name that
+// resolves to public addresses only, or a LAN device by its literal address.
 type Egress struct {
 	ln      net.Listener
 	lookup  func(ctx context.Context, host string) ([]net.IPAddr, error) // net.DefaultResolver's; a test's own
 	own     func() []net.IP                                              // this machine's addresses: OwnAddrs; a test's own
+	connect func(addr string) (net.Conn, error)                          // dials the vetted ip:port: tcp, 15 s; a test's own
 	allow   []string
 	local   []string // granted loopback ip:port, canonical
+	outside []string // granted outside host:port, canonical (OutsideGrant's)
 	mu      sync.Mutex
 	refused io.Writer // one line per refusal, "host:port why"; nil keeps none
 }
@@ -39,9 +45,10 @@ const (
 
 // ServeEgress serves the proxy on ln until it is closed. A nil allow list
 // lets every public host through; local is the granted loopback ip:port
-// (LocalGrant's); refused, if set, gets each refusal and its reason.
-func ServeEgress(ln net.Listener, allow, local []string, refused io.Writer) *Egress {
-	e := &Egress{ln: ln, lookup: net.DefaultResolver.LookupIPAddr, own: OwnAddrs, allow: allow, local: local, refused: refused}
+// (LocalGrant's), outside the granted outside host:port (OutsideGrant's);
+// refused, if set, gets each refusal and its reason.
+func ServeEgress(ln net.Listener, allow, local, outside []string, refused io.Writer) *Egress {
+	e := &Egress{ln: ln, lookup: net.DefaultResolver.LookupIPAddr, own: OwnAddrs, connect: dialTCP, allow: allow, local: local, outside: outside, refused: refused}
 	go func() {
 		for {
 			c, err := ln.Accept()
@@ -53,6 +60,8 @@ func ServeEgress(ln net.Listener, allow, local []string, refused io.Writer) *Egr
 	}()
 	return e
 }
+
+func dialTCP(addr string) (net.Conn, error) { return net.DialTimeout("tcp", addr, 15*time.Second) }
 
 // Close stops the proxy and closes where refusals go.
 func (e *Egress) Close() error {
@@ -130,13 +139,16 @@ func (e *Egress) dial(hostport string) (net.Conn, error) {
 	if addrs := granted(e.local, host, port); len(addrs) > 0 {
 		var lastErr error
 		for _, a := range addrs {
-			c, err := net.DialTimeout("tcp", a, 15*time.Second)
+			c, err := e.connect(a)
 			if err == nil {
 				return c, nil
 			}
 			lastErr = err
 		}
 		return nil, fmt.Errorf("%s is granted but nothing answers there: %v", hostport, lastErr)
+	}
+	if g, err := OutsideGrant(hostport); err == nil && slices.Contains(e.outside, g) {
+		return e.dialOutside(hostport, host, port)
 	}
 	// A local address or name named outright is refused as local, list or
 	// not, so the record says what would open it.
@@ -163,13 +175,52 @@ func (e *Egress) dial(hostport string) (net.Conn, error) {
 	}
 	var lastErr error
 	for _, ip := range ips {
-		c, err := net.DialTimeout("tcp", net.JoinHostPort(ip.IP.String(), port), 15*time.Second)
+		c, err := e.connect(net.JoinHostPort(ip.IP.String(), port))
 		if err == nil {
 			return c, nil
 		}
 		lastErr = err
 	}
 	return nil, lastErr
+}
+
+// dialOutside dials a granted outside host:port. A literal address is dialled
+// as it is, private or not, unless it is this machine's; a name is resolved
+// and refused if any answer isn't public, so DNS can't turn a named grant
+// into a way onto the LAN or this machine.
+func (e *Egress) dialOutside(hostport, host, port string) (net.Conn, error) {
+	mine := e.own()
+	var ips []net.IP
+	if ip := net.ParseIP(host); ip != nil {
+		if slices.ContainsFunc(mine, ip.Equal) {
+			e.refuse(hostport, RefusedLocal)
+			return nil, localErr(host, port)
+		}
+		ips = []net.IP{ip}
+	} else {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		addrs, err := e.lookup(ctx, host)
+		if err != nil || len(addrs) == 0 {
+			return nil, fmt.Errorf("cannot resolve %s", host)
+		}
+		for _, a := range addrs {
+			if Refused(a.IP, mine) != "" {
+				e.refuse(hostport, RefusedLocal)
+				return nil, localErr(fmt.Sprintf("%s (%s)", host, a.IP), port)
+			}
+			ips = append(ips, a.IP)
+		}
+	}
+	var lastErr error
+	for _, ip := range ips {
+		c, err := e.connect(net.JoinHostPort(ip.String(), port))
+		if err == nil {
+			return c, nil
+		}
+		lastErr = err
+	}
+	return nil, fmt.Errorf("%s is granted but nothing answers there: %v", hostport, lastErr)
 }
 
 // localErr is the refusal of a local or private destination (this machine by
@@ -213,6 +264,37 @@ func LocalGrant(entry string) ([]string, error) {
 		ip = v4
 	}
 	return []string{net.JoinHostPort(ip.String(), port)}, nil
+}
+
+// OutsideGrant reads a grant of a host outside this machine, made for one
+// project's runs: a public name with its port ("broker.example.com:8883") or a
+// LAN device by its literal address ("192.168.1.20:80"). It returns the
+// canonical host:port (name lowercased, no trailing dot) and refuses a
+// loopback address, a name that can only be local (LocalName: a LAN device is
+// named by its address, which a name's answer can't change) and an entry
+// without a port. This machine is reached only by a local grant.
+func OutsideGrant(entry string) (string, error) {
+	host, port, err := net.SplitHostPort(strings.TrimSpace(entry))
+	if err != nil {
+		return "", fmt.Errorf("grant %q isn't host:port", entry)
+	}
+	if n, err := strconv.Atoi(port); err != nil || n < 1 || n > 65535 {
+		return "", fmt.Errorf("grant %q has no port", entry)
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		if ip.IsLoopback() || ip.IsUnspecified() {
+			return "", fmt.Errorf("grant %q is this machine: a service here opens by a loopback grant to every run", entry)
+		}
+		if v4 := ip.To4(); v4 != nil {
+			ip = v4
+		}
+		return net.JoinHostPort(ip.String(), port), nil
+	}
+	host = strings.ToLower(strings.TrimSuffix(host, "."))
+	if why := LocalName(host); why != "" || host == "" {
+		return "", fmt.Errorf("grant %q names %s: grant a LAN device by its address (192.168.1.20:80)", entry, cmp.Or(why, "no host"))
+	}
+	return net.JoinHostPort(host, port), nil
 }
 
 // granted is the granted addresses host:port asks for: host as a loopback

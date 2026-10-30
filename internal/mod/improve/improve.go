@@ -109,6 +109,8 @@ type Module struct {
 	cantRuns  map[string]int                                                                          // project@sha -> its checks that couldn't start
 	forgeAt   map[string]time.Time                                                                    // project@sha -> when its measure first waited on the forge's tests (forgetest.go)
 
+	loops map[string]*loopTask // task id -> its way through the loop (loopspeed.go)
+
 	stepbacks map[string]*StepBack
 	busy      map[string]bool
 	alerted   map[string]string // project -> the step-back alert last raised
@@ -118,7 +120,7 @@ type Module struct {
 // New loads measurements and sweeps.
 func New(c *core.Core, a *agents.Agents, w *work.Module, ch *chat.Module) *Module {
 	m := &Module{C: c, Agents: a, Work: w, Chat: ch, scores: map[string][]Measurement{}, sweeps: map[string]*Sweep{}, queue: make(chan work.Task, 64), retryAt: map[string]time.Time{}, pending: map[string]held{},
-		spells: map[string]spell{}, ended: map[string]time.Time{}, took: map[string][]float64{}, stalls: map[string]*Stall{}, fails: map[string][]core.Check{}, heads: map[string][]string{}, merged: map[string]time.Time{}, sighted: map[string][]Sighting{}, fixes: map[string]string{}, lifted: map[string]time.Time{}, liftedBy: map[string]string{}, fixMerged: map[string]bool{}, boarded: map[string]string{}, modules: map[string]string{}, kin: map[string]string{}, judging: map[string]judgingMerge{}, covered: map[string][]Covered{}, cantRuns: map[string]int{}, stepbacks: map[string]*StepBack{}, busy: map[string]bool{}, alerted: map[string]string{}}
+		spells: map[string]spell{}, ended: map[string]time.Time{}, took: map[string][]float64{}, stalls: map[string]*Stall{}, fails: map[string][]core.Check{}, heads: map[string][]string{}, merged: map[string]time.Time{}, sighted: map[string][]Sighting{}, fixes: map[string]string{}, lifted: map[string]time.Time{}, liftedBy: map[string]string{}, fixMerged: map[string]bool{}, boarded: map[string]string{}, modules: map[string]string{}, kin: map[string]string{}, judging: map[string]judgingMerge{}, covered: map[string][]Covered{}, cantRuns: map[string]int{}, loops: map[string]*loopTask{}, stepbacks: map[string]*StepBack{}, busy: map[string]bool{}, alerted: map[string]string{}}
 	apply := func(e core.Event) {
 		m.mu.Lock()
 		defer m.mu.Unlock()
@@ -167,6 +169,7 @@ func New(c *core.Core, a *agents.Agents, w *work.Module, ch *chat.Module) *Modul
 		case "task.saved":
 			var t work.Task
 			if e.Decode(&t) == nil {
+				m.applyLoop(t, e.At)
 				for _, sha := range []string{t.SHA, t.Checkpoint} {
 					if sha != "" && !slices.Contains(m.heads[t.ID], sha) {
 						m.heads[t.ID] = append(m.heads[t.ID], sha)
@@ -1444,6 +1447,9 @@ func (m *Module) Digest(since int64, only string) string {
 		slices.SortStableFunc(lines, func(a, b line) int { return a.at.Compare(b.at) })
 		for _, l := range lines {
 			fmt.Fprintf(&b, "- %s %s\n", l.at.Format("01-02 15:04"), l.text)
+		}
+		if ls := m.LoopSpeed(p.Name, time.Now()); ls != "" {
+			b.WriteString("\n" + ls)
 		}
 		b.WriteString("\nWork:\n")
 		for i, t := range m.Work.List(func(t work.Task) bool { return t.Project == p.Name }) {

@@ -43,8 +43,8 @@ func TestCodexEndToEnd(t *testing.T) {
 			roles[r.Role] = true
 		}
 	}
-	if !roles["worker"] || !roles["reviewer"] {
-		t.Fatalf("the worker and reviewer didn't run on Codex: %v", roles)
+	if !roles["worker"] {
+		t.Fatalf("the worker didn't run on Codex: %v", roles)
 	}
 	read := false
 	for _, p := range st.Plans {

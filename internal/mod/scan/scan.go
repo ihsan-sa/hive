@@ -274,14 +274,25 @@ func Run(names []string, read func(string) ([]byte, error), l Lists) error {
 	if len(hits) == 0 {
 		return nil
 	}
+	return &Found{Hits: hits, Files: len(files)}
+}
+
+// Found is Run's failure on hits: what they are, so a caller can act on each
+// (the release files a brief to reword them), and its message lists them.
+type Found struct {
+	Hits  []Hit
+	Files int // how many published files were read
+}
+
+func (f *Found) Error() string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "the scan found %d thing(s) in %d published file(s) that must never be published:", len(hits), len(files))
-	for i, h := range hits {
+	fmt.Fprintf(&b, "the scan found %d thing(s) in %d published file(s) that must never be published:", len(f.Hits), f.Files)
+	for i, h := range f.Hits {
 		if i == maxShown {
-			fmt.Fprintf(&b, "\n  and %d more", len(hits)-maxShown)
+			fmt.Fprintf(&b, "\n  and %d more", len(f.Hits)-maxShown)
 			break
 		}
 		b.WriteString("\n  " + h.String())
 	}
-	return errors.New(b.String())
+	return b.String()
 }
