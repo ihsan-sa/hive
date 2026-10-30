@@ -213,3 +213,21 @@ func TestPrivateNotesStayInTheProject(t *testing.T) {
 		t.Errorf("the private project's own search lost its note: %s", got)
 	}
 }
+
+// What First gives (the problems board and recent tasks like the query)
+// comes before the knowledge base's own matches.
+func TestSearchShowsTheBoardFirst(t *testing.T) {
+	c, m := newKB(t)
+	os.WriteFile(filepath.Join(c.WS.KB(), "shared.md"), []byte("zebra shared"), 0o644)
+	m.First = func(r core.Run, query string) string {
+		return "## On the problems board\n\n- **p-1**: " + query + " in " + r.Project + "\n"
+	}
+	out, err := c.Runs.Ops().Call(core.Run{RunSpec: core.RunSpec{ID: "r", Project: "open"}}, "search", []byte(`{"query":"zebra"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := out.(string)
+	if i, j := strings.Index(got, "p-1**: zebra in open"), strings.Index(got, "shared.md"); i < 0 || j < i {
+		t.Fatalf("search: %s", got)
+	}
+}

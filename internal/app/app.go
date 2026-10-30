@@ -76,12 +76,16 @@ func New(ws core.Workspace, forge core.Forge) (*App, error) {
 	a.Feedback = feedback.New(c)
 	board := problems.New(c)
 	a.Agents.Board = board.Brief
+	a.Work.Seen = board.Seen
 	a.Improve.Board = func(project, where, text string) {
 		board.Standing(core.Run{ID: "improve", Role: "module", Project: project}, where, text)
 	}
 	a.Stats = stats.New(c.J)
 	a.Improve.Feedback = a.Feedback.Digest
 	a.KB = kb.New(c, a.Agents)
+	a.KB.First = func(r core.Run, query string) string {
+		return board.Match(r.Project, query) + a.Work.Related(r.Project, query)
+	}
 	a.System = system.New(c)
 	a.Risk = risk.New(c, a.Mods, a.Agents)
 	tools.New(c)
