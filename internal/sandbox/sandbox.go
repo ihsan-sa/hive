@@ -50,8 +50,10 @@ type Spec struct {
 	// Tmp, when set, is a host folder on disk the sandbox binds at /tmp,
 	// emptied before the command and removed after it: a tmpfs /tmp is
 	// memory that can't be reclaimed, only swapped, and go build's work dirs
-	// and test binaries go there. Unset, /tmp is a tmpfs capped at TmpfsSize.
+	// and test binaries go there. Unset, /tmp is a tmpfs capped at TmpMB
+	// MiB, or TmpfsSize where TmpMB is 0.
 	Tmp     string   `json:"tmp,omitempty"`
+	TmpMB   int      `json:"tmp_mb,omitempty"`
 	Network bool     `json:"network"`           // outbound through the egress proxy
 	Allow   []string `json:"allow"`             // hosts the proxy lets through; nil is every public host
 	Local   []string `json:"local"`             // services on this machine the person granted, loopback ip:port (LocalGrant's)
@@ -298,6 +300,14 @@ const (
 	ShmSize   = 1 << 30
 	TmpfsSize = 4 << 30
 )
+
+// tmpSize is the cap of s's tmpfs /tmp, in bytes.
+func (s Spec) tmpSize() int {
+	if s.TmpMB > 0 {
+		return s.TmpMB << 20
+	}
+	return TmpfsSize
+}
 
 // InsideEnv is the standard environment inside the sandbox.
 func InsideEnv(home string, network bool) []string {

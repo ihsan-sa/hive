@@ -23,6 +23,10 @@ func TestBwrapTmpOnDisk(t *testing.T) {
 	if got := strings.Join(bwrapArgs(a, "/h/hive"), " "); !strings.Contains(got, "--tmpfs /tmp") {
 		t.Errorf("no folder must mean a tmpfs /tmp:\n%s", got)
 	}
+	a.Spec.TmpMB = 64
+	if got := strings.Join(bwrapArgs(a, "/h/hive"), " "); sizeOK && !strings.Contains(got, "--size 67108864 --tmpfs /tmp") {
+		t.Errorf("TmpMB 64 must size the tmpfs /tmp:\n%s", got)
+	}
 }
 
 // The real sandbox on each path this host allows.
@@ -50,7 +54,7 @@ func TestTmpOnDiskBothPaths(t *testing.T) {
 			os.MkdirAll(filepath.Join(tmp, "stale-ro"), 0o755)
 			os.WriteFile(filepath.Join(tmp, "stale-ro", "f"), nil, 0o644)
 			os.Chmod(filepath.Join(tmp, "stale-ro"), 0o555)
-			run := func(tmpDir string) string {
+			run := func(tmpDir string, tmpMB int) string {
 				s := Spec{
 					ID:     "tmp",
 					Argv:   []string{"/bin/sh", "-c", "test ! -e /tmp/stale && test ! -e /tmp/stale-ro && echo x > /tmp/f && mkdir -p /tmp/ro/d && touch /tmp/ro/d/f && chmod 555 /tmp/ro/d && grep -E ' /(tmp|dev/shm) ' /proc/self/mounts > /work/mounts"},
@@ -59,6 +63,7 @@ func TestTmpOnDiskBothPaths(t *testing.T) {
 					Mounts: []Mount{{Host: work, Inside: "/work", RW: true}},
 					Stdout: filepath.Join(dir, "out"),
 					Tmp:    tmpDir,
+					TmpMB:  tmpMB,
 					UID:    os.Getuid(), GID: os.Getgid(),
 				}
 				spec := filepath.Join(dir, "spec.json")
@@ -74,7 +79,7 @@ func TestTmpOnDiskBothPaths(t *testing.T) {
 				raw, _ := os.ReadFile(filepath.Join(work, "mounts"))
 				return string(raw)
 			}
-			mounts := run(tmp)
+			mounts := run(tmp, 0)
 			for _, l := range strings.Split(strings.TrimSpace(mounts), "\n") {
 				f := strings.Fields(l)
 				if len(f) < 4 {
@@ -90,8 +95,11 @@ func TestTmpOnDiskBothPaths(t *testing.T) {
 			if _, err := os.Stat(tmp); !os.IsNotExist(err) {
 				t.Errorf("the /tmp folder outlived the command: %v", err)
 			}
-			if mounts := run(""); !strings.Contains(mounts, " /tmp tmpfs ") || !strings.Contains(mounts, "size=4194304k") {
+			if mounts := run("", 0); !strings.Contains(mounts, " /tmp tmpfs ") || !strings.Contains(mounts, "size=4194304k") {
 				t.Errorf("no folder must mean a capped tmpfs /tmp:\n%s", mounts)
+			}
+			if mounts := run("", 64); !strings.Contains(mounts, " /tmp tmpfs ") || !strings.Contains(mounts, "size=65536k") {
+				t.Errorf("TmpMB 64 must cap the tmpfs /tmp at 64 MiB:\n%s", mounts)
 			}
 		})
 	}

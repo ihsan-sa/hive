@@ -575,7 +575,7 @@ func Init(argPath string) int {
 		if err := bind(s.Tmp, root+"/tmp", true); err != nil {
 			return fail("tmp", err)
 		}
-	} else if err := mkdirMount("tmpfs", root+"/tmp", "tmpfs", unix.MS_NOSUID|unix.MS_NODEV, "mode=1777,size="+strconv.Itoa(TmpfsSize)); err != nil {
+	} else if err := mkdirMount("tmpfs", root+"/tmp", "tmpfs", unix.MS_NOSUID|unix.MS_NODEV, "mode=1777,size="+strconv.Itoa(s.tmpSize())); err != nil {
 		return fail("tmp", err)
 	}
 	for _, r := range a.Roots {

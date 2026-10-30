@@ -297,7 +297,9 @@ Settings in `.hive/config.json`; none of them stops or parks work.
 - Shared checks (`Effects.shared`): A check asked while an identical one (project, sha, kind, command and, for `RunCheckSince`, the main it is narrowed against) waits or runs takes no slot of its own: it waits for that one and gets its result, journaled once (issue #1880: every main sha was tested 4-5 times over, side by side, by the merge's measure, main's own test and the heads at main, each in its own slot and checkout; 115 of 623 test checks from 10-27 06:04 repeated a sha and kind already run).
   One asked after it ends runs again, so the score's readings in one sitting stay separate.
 - `check_cache_max_mb` (8192): checks have room (`core/disk.go`).
-  A check's home is `.hive/cache/homes/home-*`, its own and removed after, and holds its `TMPDIR` (`/hive/home/tmp`, which the sandbox also binds at `/tmp`);
+  A check's home is `.hive/cache/homes/home-*`, its own and removed after;
+  its `TMPDIR` is the sandbox's `/tmp`, a 2 GiB tmpfs while the Hive's memory keeps 4 GiB over every check's tmpfs (`checkScratch`, #2238: on a saturated disk go test spent most of a check there), else `/hive/home/tmp` in its home on disk, which the sandbox also binds at `/tmp`;
+  a check whose tmpfs run fails saying a disk is full runs once more with its scratch on disk;
   a synchronous sandboxed command (a check) dies with the daemon (Pdeathsig, as the unit keeps children across restarts for agents' turns) and whatever it left running in its process group ends when it returns;
   past this cap its stop file ends it as can't-run.
   A check runs for at most 30 minutes; one cut off there (`sandbox.ErrTimeout`) is can't-run too, marked `slow` (a slow check, not a red one: work holds the change and tries again, improve keeps or reverts nothing on it), and the next try of that commit and kind gets 60 (`checkLimit`).
