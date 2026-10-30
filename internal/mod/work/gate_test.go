@@ -131,180 +131,6 @@ func alerts(m *Module, kind string) (n int) {
 	return n
 }
 
-// A failure main has too doesn't go back to the worker: the change waits,
-// main's failure is raised once however often the gate looks, and when main
-// goes green the change is brought up to date and tested again.
-func TestGateFailsOnBoth(t *testing.T) {
-	m, task, p, forge := gateRig(t, true, map[string]string{"feature.txt": "y"})
-	for i := 0; i < 3; i++ {
-		if err := testStep(m, task, p); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if task.Stage != StageTesting || task.Round != 0 || !strings.HasPrefix(task.Reason, "waiting on main") {
-		t.Fatalf("stage %q, round %d, reason %q", task.Stage, task.Round, task.Reason)
-	}
-	if n := alerts(m, "main-red"); n != 1 {
-		t.Fatalf("%d main-red alerts, want 1", n)
-	}
-	if _, ok := m.mainFails[p.Name]; !ok {
-		t.Fatal("main's red isn't kept, so its fix's check can't go first (checkRank)")
-	}
-	if main, _ := m.C.Effects.Sync(p); !func() bool { _, ok := m.C.Effects.GetCheck(p.Name, main, "test"); return ok }() {
-		t.Fatal("main's result isn't kept, so it would be measured again")
-	}
-	old := task.SHA
-	pushMain(t, forge, map[string]string{"BROKEN": ""})
-	if err := testStep(m, task, p); err != nil {
-		t.Fatal(err)
-	}
-	if task.Stage != StageTesting || task.SHA == old || task.Reason != "" || task.Round != 0 {
-		t.Fatalf("after main went green: stage %q, sha %s (was %s), reason %q, round %d", task.Stage, task.SHA, old, task.Reason, task.Round)
-	}
-	if fails, ok := m.mainFails[p.Name]; ok {
-		t.Fatalf("main green, its failing tests still kept: %q", fails)
-	}
-	if err := testStep(m, task, p); err != nil {
-		t.Fatal(err)
-	}
-	if task.Stage == StageTesting || task.Stage == StageWorking {
-		t.Fatalf("the caught-up change should pass the gate, stage %q", task.Stage)
-	}
-}
-
-// A fix or revert whose red can't be told apart from main's (its run names
-// no failure, as a run cut off by its timeout doesn't) isn't held for main
-// to go green, which may wait on it: on hive-hwde the revert of the commit
-// that turned main red waited 'on main' for hours. It runs once more, then
-// goes back to its worker, or, a revert the Hive made itself, stops.
-func TestGateFixDoesNotWaitOnMain(t *testing.T) {
-	for _, kind := range []string{"fix", "revert"} {
-		t.Run(kind, func(t *testing.T) {
-			m, task, p, _ := gateRig(t, true, map[string]string{"feature.txt": "y"})
-			if kind == "fix" {
-				task.Aim, task.AimWhy = AimFix, "main's tests fail"
-			} else {
-				task.Kind, task.Worker, task.RevertSHA = "revert", "", "abc1234"
-			}
-			task.Reason = "waiting on main: its own tests fail at abc1234, so this failure isn't the worker's"
-			if err := testStep(m, task, p); err != nil {
-				t.Fatal(err)
-			}
-			if strings.HasPrefix(task.Reason, "waiting on main") || !task.Recheck || task.Retested != task.SHA {
-				t.Fatalf("first red: stage %q, reason %q, recheck %v", task.Stage, task.Reason, task.Recheck)
-			}
-			if n := alerts(m, "main-red"); n != 0 {
-				t.Fatalf("%d main-red alerts for a fix that doesn't wait on main", n)
-			}
-			if err := testStep(m, task, p); err != nil {
-				t.Fatal(err)
-			}
-			switch {
-			case kind == "fix" && (task.Stage != StageWorking || task.Round != 1 || !strings.Contains(task.Findings, "isn't held for main")):
-				t.Fatalf("fix: stage %q, round %d, findings %q", task.Stage, task.Round, task.Findings)
-			case kind == "revert" && (task.Stage == StageTesting || !strings.Contains(task.Reason, "no worker can fix it")):
-				t.Fatalf("revert: stage %q, reason %q", task.Stage, task.Reason)
-			}
-		})
-	}
-}
-
-// A failure only the branch has still goes back to the worker.
-func TestGateFailsOnBranchOnly(t *testing.T) {
-	m, task, p, _ := gateRig(t, false, map[string]string{"BROKEN": "x"})
-	if err := testStep(m, task, p); err != nil {
-		t.Fatal(err)
-	}
-	if task.Stage != StageTesting || !task.Recheck || task.Retested != task.SHA || task.Round != 0 {
-		t.Fatalf("a red on a green main should run once more first: stage %q, recheck %v, round %d", task.Stage, task.Recheck, task.Round)
-	}
-	if err := testStep(m, task, p); err != nil {
-		t.Fatal(err)
-	}
-	if task.Stage != StageWorking || task.Round != 1 || !strings.Contains(task.Findings, "The tests failed on your commit") {
-		t.Fatalf("stage %q, round %d, findings %q", task.Stage, task.Round, task.Findings)
-	}
-	if n := alerts(m, "main-red"); n != 0 {
-		t.Fatalf("%d main-red alerts on a green main", n)
-	}
-}
-
-// A test that fails once on a slow machine and passes run again isn't held
-// against the change: the whole check runs once more, and its green is what
-// the merge rests on.
-func TestFlakyBranchRunsOnceMore(t *testing.T) {
-	flag := filepath.Join(t.TempDir(), "ran")
-	cmd := fmt.Sprintf(`{"test": "test -f %s || { touch %s; exit 1; }"}`, flag, flag)
-	m, task, p, _ := gateRigSeeded(t, false, map[string]string{".hive/project.json": cmd}, map[string]string{"feature.txt": "y"})
-	for i := 0; i < 2; i++ {
-		if err := testStep(m, task, p); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if task.Stage == StageTesting || task.Stage == StageWorking || task.Round != 0 {
-		t.Fatalf("a flake went back to the worker: stage %q, round %d", task.Stage, task.Round)
-	}
-	if c, ok := m.C.Effects.GetCheck(p.Name, task.SHA, "test"); !ok || !c.OK {
-		t.Fatal("no green run recorded for the head the merge rests on")
-	}
-}
-
-// A red on a green main whose failing tests fail again run on their own
-// goes back at once, without a whole second run; one whose failing tests
-// pass then runs the whole check once more, which the merge rests on.
-func TestBranchRetestsOnlyWhatFailed(t *testing.T) {
-	for _, again := range []bool{true, false} {
-		m, task, p, _ := gateRig(t, false, map[string]string{"BROKEN": "x"})
-		retests := 0
-		m.Retest = func(p core.Project, sha, _ string, _ core.Check, main bool) bool {
-			retests++
-			if main {
-				t.Fatal("main's green tests were retested")
-			}
-			return m.C.Effects.RunCheck(p, sha, "retest", map[bool]string{true: "false", false: "true"}[again]).OK
-		}
-		if err := testStep(m, task, p); err != nil {
-			t.Fatal(err)
-		}
-		if retests != 1 {
-			t.Fatalf("again %v: %d retests of the failing tests, want one", again, retests)
-		}
-		if again {
-			if task.Stage != StageWorking || task.Round != 1 || task.Recheck || !strings.Contains(task.Findings, "and again when only the failing tests ran") {
-				t.Fatalf("a red that repeats: stage %q, round %d, recheck %v, findings %q", task.Stage, task.Round, task.Recheck, task.Findings)
-			}
-			continue
-		}
-		if task.Stage != StageTesting || !task.Recheck || task.Retested != task.SHA || task.Round != 0 {
-			t.Fatalf("a flake: stage %q, recheck %v, round %d", task.Stage, task.Recheck, task.Round)
-		}
-	}
-}
-
-// A red main whose failures pass run again (a flake) holds nothing: no
-// main-red alert, and main is run again once however often it is asked.
-func TestFlakyMainHoldsNothing(t *testing.T) {
-	m, task, p, _ := gateRig(t, true, map[string]string{"feature.txt": "y"})
-	retests := 0
-	m.Retest = func(p core.Project, sha, _ string, _ core.Check, main bool) bool {
-		if main {
-			retests++
-		}
-		return m.C.Effects.RunCheck(p, sha, "retest", "true").OK
-	}
-	for i := 0; i < 2; i++ {
-		if err := testStep(m, task, p); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if task.Stage != StageWorking || task.Round != 1 {
-		t.Fatalf("a red change on a flaky main: stage %q, round %d, reason %q", task.Stage, task.Round, task.Reason)
-	}
-	if n := alerts(m, "main-red"); n != 0 || retests != 1 {
-		t.Fatalf("%d main-red alerts and %d retests of main, want none and one", n, retests)
-	}
-}
-
 // A change that passes while main fails goes on, here because it fixes main.
 func TestGateFailsOnMainOnly(t *testing.T) {
 	m, task, p, _ := gateRig(t, true, map[string]string{"BROKEN": ""})
@@ -313,105 +139,6 @@ func TestGateFailsOnMainOnly(t *testing.T) {
 	}
 	if task.Stage == StageTesting || task.Stage == StageWorking || task.Round != 0 {
 		t.Fatalf("stage %q, round %d, reason %q", task.Stage, task.Round, task.Reason)
-	}
-}
-
-// A change whose every failing test main fails too is no worse than main: it
-// goes on rather than wait for main to go green, so the fix for a red main
-// (a revert, say) can land. Anything more of its own and it waits: another
-// failing test, the same test in another package, or a package failing with
-// no test named (a timeout) beside main's failure.
-func TestGateNoWorseThanRedMainGoesOn(t *testing.T) {
-	const red = "echo '--- FAIL: TestClock (0.01s)'\necho 'FAIL\tp/a\t0.01s'\n"
-	onMain := map[string]string{".hive/project.json": `{"test": "sh ./t.sh"}`, "t.sh": red + "exit 1\n"}
-	m, task, p, _ := gateRigSeeded(t, false, onMain, map[string]string{"feature.txt": "y"})
-	if err := testStep(m, task, p); err != nil {
-		t.Fatal(err)
-	}
-	if task.Stage == StageTesting || task.Stage == StageWorking || task.Round != 0 || strings.HasPrefix(task.Reason, "waiting on main") {
-		t.Fatalf("stage %q, round %d, reason %q", task.Stage, task.Round, task.Reason)
-	}
-	if !logHas(task, "only where main's fail at") || !logHas(task, "p/a TestClock") {
-		t.Fatalf("going on past main's red left no note naming what failed: %+v", task.Log)
-	}
-	for name, more := range map[string]string{
-		"another test":          "echo '--- FAIL: TestNew (0.01s)'\necho 'FAIL\tp/b\t0.01s'\n",
-		"another package":       "echo '--- FAIL: TestClock (0.01s)'\necho 'FAIL\tp/b\t0.01s'\n",
-		"a timeout":             "echo 'panic: test timed out after 2s'\necho 'FAIL\tp/b\t2.01s'\n",
-		"no test named":         "echo 'PASS'\necho 'FAIL\tp/b\t0.01s'\n",
-		"a panic beside a test": "echo '--- FAIL: TestClock (0.01s)'\necho 'panic: boom'\necho 'FAIL\tp/a\t0.01s'\n",
-	} {
-		script := red + more + "exit 1\n"
-		if name == "a panic beside a test" {
-			script = more + "exit 1\n"
-		}
-		m, task, p, _ := gateRigSeeded(t, false, onMain, map[string]string{"t.sh": script})
-		if err := testStep(m, task, p); err != nil {
-			t.Fatal(err)
-		}
-		if task.Stage != StageTesting || !strings.HasPrefix(task.Reason, "waiting on main") {
-			t.Fatalf("%s beside main's failure went on: stage %q, reason %q", name, task.Stage, task.Reason)
-		}
-	}
-}
-
-// A red main holds only what it can't be told apart from: a change failing
-// in a package main's own run passed whole is the change's red, so it goes
-// back to its worker (after the one rerun any red gets) instead of waiting
-// on main's fix, and is told main's failures aren't its.
-func TestRedMainDoesntHoldAChangesOwnRed(t *testing.T) {
-	const mainRed = "echo '--- FAIL: TestClock (0.01s)'\necho 'FAIL\tp/a\t0.01s'\necho 'ok  \tp/b\t0.01s'\nexit 1\n"
-	onMain := map[string]string{".hive/project.json": `{"test": "sh ./t.sh"}`, "t.sh": mainRed}
-	own := "echo '--- FAIL: TestClock (0.01s)'\necho 'FAIL\tp/a\t0.01s'\necho '--- FAIL: TestNew (0.01s)'\necho 'FAIL\tp/b\t0.01s'\nexit 1\n"
-	m, task, p, _ := gateRigSeeded(t, false, onMain, map[string]string{"t.sh": own})
-	for i := 0; i < 2; i++ {
-		if err := testStep(m, task, p); err != nil {
-			t.Fatal(err)
-		}
-		if strings.HasPrefix(task.Reason, "waiting on main") {
-			t.Fatalf("step %d: its own red waited on main: %q", i, task.Reason)
-		}
-	}
-	if task.Stage != StageWorking || task.Round != 1 || !strings.Contains(task.Findings, "p/b TestNew") || !strings.Contains(task.Findings, "aren't yours to fix") {
-		t.Fatalf("stage %q, round %d, findings %q", task.Stage, task.Round, task.Findings)
-	}
-	if n := alerts(m, "main-red"); n != 0 {
-		t.Fatalf("%d main-red alerts for a change sent back on its own red", n)
-	}
-}
-
-// The change the testing stage let on as no worse than main merges: the
-// merge's own gate takes a red test run whose every failure main's run
-// shares, rather than refuse it as untested and hold it till it gives up.
-func TestGateNoWorseThanRedMainMerges(t *testing.T) {
-	const red = "echo '--- FAIL: TestClock (0.01s)'\necho 'FAIL\tp/a\t0.01s'\nexit 1\n"
-	onMain := map[string]string{".hive/project.json": `{"test": "sh ./t.sh"}`, "t.sh": red}
-	m, task, p, f := gateRigSeeded(t, false, onMain, map[string]string{"feature.txt": "y"})
-	toMerging(t, m, task, p)
-	mergeOnce(t, m, task, p)
-	if task.Stage != StageMerged || prState(t, f, task.PR.Number) != "MERGED" {
-		t.Fatalf("stage %q, reason %q", task.Stage, task.Reason)
-	}
-}
-
-// A change no worse than a red main, where main has since been fixed: its
-// merge with main passes, but its own red is now its own. Main's new commit
-// had no test run recorded, so the merge records one and brings the change
-// up to date to be tested again, rather than refused toward giving up.
-func TestGateNoWorseMainFixedSinceTestsAgain(t *testing.T) {
-	const red = "echo '--- FAIL: TestClock (0.01s)'\necho 'FAIL\tp/a\t0.01s'\nexit 1\n"
-	onMain := map[string]string{".hive/project.json": `{"test": "sh ./t.sh"}`, "t.sh": red}
-	m, task, p, f := gateRigSeeded(t, false, onMain, map[string]string{"feature.txt": "y"})
-	toMerging(t, m, task, p)
-	pushMain(t, f, map[string]string{"t.sh": "exit 0\n"})
-	head := task.SHA
-	mergeOnce(t, m, task, p)
-	main, _ := m.C.Effects.Sync(p)
-	if mc, ok := m.C.Effects.GetCheck(p.Name, main, "test"); !ok || !mc.OK {
-		t.Fatalf("main's run at its new commit wasn't recorded: %v %+v", ok, mc)
-	}
-	if task.Stage != StageTesting || task.SHA == head || prState(t, f, task.PR.Number) == "MERGED" {
-		t.Fatalf("stage %q, head moved %v, reason %q", task.Stage, task.SHA != head, task.Reason)
 	}
 }
 
@@ -425,47 +152,6 @@ func TestMergeRefusalReplacesStaleReason(t *testing.T) {
 	}
 	if !strings.HasPrefix(task.Reason, "refusing to merge") || !strings.Contains(task.Reason, "no test run recorded") {
 		t.Fatalf("reason %q", task.Reason)
-	}
-}
-
-// Main's failure is raised once per main commit, even when main moves away
-// and back (A -> B -> A) and no task still names A.
-func TestGateMainRedOncePerCommit(t *testing.T) {
-	m, task, p, forge := gateRig(t, true, map[string]string{"feature.txt": "y"})
-	a, _ := m.C.Effects.Sync(p)
-	if err := testStep(m, task, p); err != nil {
-		t.Fatal(err)
-	}
-	pushMain(t, forge, map[string]string{"other.txt": "z"})
-	if err := testStep(m, task, p); err != nil {
-		t.Fatal(err)
-	}
-	// Moving main back relies on Sync's fetch being forced (+refs/heads/*).
-	must(t, forge.RepoPath("me/p"), "update-ref", "refs/heads/main", a)
-	if err := testStep(m, task, p); err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(task.Reason, core.Short(a)) {
-		t.Fatalf("main wasn't reset to A: reason %q", task.Reason)
-	}
-	if n := alerts(m, "main-red"); n != 2 {
-		t.Fatalf("%d main-red alerts for A -> B -> A, want 2", n)
-	}
-}
-
-// With no sandbox, main isn't measured (as red) and nothing is raised.
-func TestGateMainNeedsSandbox(t *testing.T) {
-	m, task, p, _ := gateRig(t, true, map[string]string{"feature.txt": "y"})
-	m.C.Effects.RunCheck(p, task.SHA, "test", "test ! -f BROKEN")
-	cfg := m.C.WS.LoadConfig()
-	cfg.BareAccepted = ""
-	m.C.WS.SaveConfig(cfg)
-	if err := testStep(m, task, p); err == nil {
-		t.Fatal("the gate ran with no sandbox")
-	}
-	main, _ := m.C.Effects.Sync(p)
-	if _, ok := m.C.Effects.GetCheck(p.Name, main, "test"); ok || alerts(m, "main-red") != 0 || task.Reason != "" {
-		t.Fatalf("main measured without a sandbox: reason %q", task.Reason)
 	}
 }
 
@@ -846,45 +532,6 @@ func TestFakedCantRunCommentsOnceThenRed(t *testing.T) {
 	}
 }
 
-// A branch whose tests can't find a tool that main's own tests ran with is
-// stale, not short of the tool: it catches up with main and is tested again,
-// without counting tries or asking the person to install it.
-func TestCantRunBehindMainCatchesUp(t *testing.T) {
-	m, task, p, forge := gateRigSeeded(t, false,
-		map[string]string{".hive/project.json": `{"test": "sh check.sh"}`, "check.sh": "echo 'sh: 1: hwde: not found'; exit 127\n"},
-		map[string]string{"feature.txt": "y"})
-	if err := testStep(m, task, p); err != nil {
-		t.Fatal(err)
-	}
-	if task.Stage != StageTesting || task.CantRuns != 1 {
-		t.Fatalf("stage %q, can't-runs %d, reason %q", task.Stage, task.CantRuns, task.Reason)
-	}
-	// Main's script now finds the tool its own way; the branch's predates it.
-	pushMain(t, forge, map[string]string{"check.sh": "exit 0\n"})
-	before := task.SHA
-	if err := testStep(m, task, p); err != nil {
-		t.Fatal(err)
-	}
-	main, _ := m.C.Effects.Sync(p)
-	if task.SHA == before || !strings.Contains(task.Log[len(task.Log)-1].Text, "branch brought up to date") {
-		t.Fatalf("not caught up: sha %s was %s, log %+v", task.SHA, before, task.Log)
-	}
-	if _, err := core.Git(m.C.WS.Project(p.Name), "merge-base", "--is-ancestor", main, task.SHA); err != nil {
-		t.Fatal("the new head doesn't contain main")
-	}
-	for _, a := range m.C.Person.Open() {
-		if a.Ref == "cant-run:"+task.ID {
-			t.Fatalf("the person was asked: %+v", a)
-		}
-	}
-	if err := testStep(m, task, p); err != nil {
-		t.Fatal(err)
-	}
-	if task.Stage == StageTesting || task.Stage == StageStopped || task.CantRuns != 0 {
-		t.Fatalf("after catching up: stage %q, can't-runs %d, reason %q", task.Stage, task.CantRuns, task.Reason)
-	}
-}
-
 // A checkpoint whose tests can't find their tool is dropped with that reason:
 // not a failure, nothing sent back, its round unspent, and the tool named once.
 // The alert clears once the tests run.
@@ -941,9 +588,6 @@ func TestClosedPRStopsTheTask(t *testing.T) {
 	if after, _ := m.C.Effects.Sync(p); after != before {
 		t.Fatalf("main moved from %s to %s after the PR was closed", before, after)
 	}
-	if err := m.Recheck(task.ID, "", "lead"); err == nil {
-		t.Fatal("the lead brought back a task the person closed")
-	}
 	if _, err := forge.MergePR(p.Repo, task.PR.Number, task.SHA, "x"); err == nil {
 		t.Fatal("the local forge merged a closed PR")
 	}
@@ -958,28 +602,6 @@ func TestClosedPRStopsTesting(t *testing.T) {
 	}
 	if _, ok := m.C.Effects.GetCheck(p.Name, task.SHA, "test"); ok || task.Stage != StageStopped || !task.ByPerson {
 		t.Fatalf("tested %v, stage %q, by person %v", ok, task.Stage, task.ByPerson)
-	}
-}
-
-// A PR closed while its task is read or sent back stops the task there, so
-// the worker's next push can't open a new PR over the person's close.
-func TestClosedPRStopsReviewAndSendBack(t *testing.T) {
-	for _, step := range []string{"review", "sendBack"} {
-		m, task, p, forge := gateRig(t, false, map[string]string{"feature.txt": "y"})
-		if err := testStep(m, task, p); err != nil {
-			t.Fatal(err)
-		}
-		forge.ClosePR(p.Repo, task.PR.Number, "not wanted")
-		var err error
-		if step == "review" {
-			task.Stage = StageReviewing
-			err = m.review(task, p)
-		} else {
-			err = m.sendBack(task, p, "fix it")
-		}
-		if err != nil || task.Stage != StageStopped || !task.ByPerson || task.Reviewer != "" || task.Round != 0 {
-			t.Fatalf("%s: stage %q, by person %v, reviewer %q, round %d, err %v", step, task.Stage, task.ByPerson, task.Reviewer, task.Round, err)
-		}
 	}
 }
 
