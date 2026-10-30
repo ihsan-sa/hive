@@ -162,8 +162,9 @@ func TestMeasuringMainMovesAWaiterUp(t *testing.T) {
 func TestSaturatedDiskHoldsNewWorkersAndChecks(t *testing.T) {
 	m, _, _, _ := noCommitRig(t, 0)
 	busy := "waiting: disk (IO pressure full avg60 62%, limit 40%)"
+	was := diskBusy
 	diskBusy = func(float64) string { return busy }
-	defer func() { diskBusy = core.DiskBusy }()
+	defer func() { diskBusy = was }()
 	a, b := file(t, m, "first", ""), file(t, m, "second", "")
 	for _, tk := range []*Task{&a, &b} {
 		tk.Stage = StageQueued
@@ -188,7 +189,7 @@ func TestSaturatedDiskHoldsNewWorkersAndChecks(t *testing.T) {
 	if start, _ = m.admit(m.List(nil)); !start[b.ID] {
 		t.Fatal("the disk eased and the brief still waits")
 	}
-	if n := m.maxChecks(); n != max(2, core.DefaultMaxChecks()) {
+	if n := m.maxChecks(); n != core.DefaultMaxChecks() {
 		t.Fatalf("%d checks at once", n)
 	}
 }
