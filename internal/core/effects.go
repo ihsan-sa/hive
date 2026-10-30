@@ -1977,7 +1977,7 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	var flaky []string                       // a red local test run's known flakes, its only failures
+	var flaky []string                        // a red local test run's known flakes, its only failures
 	tested := e.ForgeTested(p, m.Main, m.SHA) // the forge's checks are the test there
 	switch c, ok := e.GetCheck(p.Name, m.SHA, "test"); {
 	case len(tested) > 0:
