@@ -20,11 +20,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -78,6 +80,12 @@ type Request struct {
 	Joined   []string  `json:"joined,omitempty"` // other runs that asked the same and hear the answer
 	Created  time.Time `json:"created"`
 	Updated  time.Time `json:"updated"`
+
+	// Carries names the request whose script the person said run to and
+	// whose ceiling lines hold this script's, and CarriesDigest is that
+	// script's sha256 (its Digest), so the link is checked against the records.
+	Carries       string `json:"carries,omitempty"`
+	CarriesDigest string `json:"carries_digest,omitempty"`
 }
 
 // Seat is one panelist and its votes by round.
@@ -136,9 +144,9 @@ func New(c *core.Core, mod *modules.Registry, ag *agents.Agents) *Module {
 	}
 	ops := c.Runs.Ops()
 	ops.Register(core.Op{Name: "warden", Help: `{"want","why","steps","tier":"T1|T2|T3","gain":"(optional) large"} -> T1 (inside the Hive, a step you can't take yourself, such as a merge on the forge) and T2 go to a warden, T3 to a tribunal`, Fn: m.opRequest})
-	ops.Register(core.Op{Name: "decide", Roles: []string{"warden"}, Help: `{"decision":"do|safer|decline|tribunal|person","reason","script":"exactly what runs (do, tribunal; person if you have one)","gain":"(optional) large"}`, Fn: m.opDecide})
+	ops.Register(core.Op{Name: "decide", Help: `{"decision":"do|safer|decline|tribunal|person","reason","script":"exactly what runs (do, tribunal; person if you have one)","gain":"(optional) large"}`, Fn: m.opDecide})
 	ops.Register(core.Op{Name: "requests", Help: `{} -> recent requests past the sandbox: who asked, what, why, where each stands`, Fn: m.opRequests})
-	ops.Register(core.Op{Name: "install_module", Roles: core.Peers, Help: `{"url"} or {"project"}: a module built as a project of its own installs from it`, Fn: m.opInstall})
+	ops.Register(core.Op{Name: "install_module", Help: `{"url"} or {"project"}: a module built as a project of its own installs from it`, Fn: m.opInstall})
 	c.Person.Handle("request", m.onAnswer)
 	c.Person.Handle("module", m.onModule)
 	// A warden that asks an agent ends its turn to wait for the reply, so it
@@ -252,6 +260,182 @@ func Digest(script string) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// CarryFor is how long the person's run on a script carries to a later one:
+// a restart or fix is near; a yes from weeks ago is asked again.
+var CarryFor = 7 * 24 * time.Hour
+
+// ceilingLines are the lines of a script that bear its ceiling: each line,
+// outside whole-line comments (they never run), with a money, credential,
+// network or outward mention or a floor entry, and in a script that spends,
+// each line that loops (a loop repeats the spend). Each is counted, with its
+// whitespace collapsed, so a line run twice is two.
+func ceilingLines(floor []string, script string) map[string]int {
+	var lines []string
+	money := false
+	for _, l := range strings.Split(script, "\n") {
+		if l = strings.Join(strings.Fields(l), " "); l != "" && !strings.HasPrefix(l, "#") {
+			lines = append(lines, l)
+			money = money || slices.ContainsFunc(core.ScriptMentions(l), func(x core.Mention) bool { return x.Kind == "money" })
+		}
+	}
+	out := map[string]int{}
+	for _, l := range lines {
+		if len(core.ScriptMentions(l)) > 0 || core.FloorHit(floor, l) != "" || money && loopRe.MatchString(l) {
+			out[l]++
+		}
+	}
+	return out
+}
+
+// loopRe is a shell construct that repeats what it runs.
+var loopRe = regexp.MustCompile(`(^|[\s;&|(])(for|while|until|xargs|parallel|seq|yes|watch)\b`)
+
+// dollarRe is an amount of money a line names.
+var dollarRe = regexp.MustCompile(`\$\s?[\d,]+(\.\d+)?`)
+
+// within says whether line n is line a, or a with no amount of money larger:
+// "--cap $10" sits inside "--cap $25"; "--cap $50", "--budget-usd 5000"
+// against "--budget-usd 25", and a different file don't.
+func within(a, n string) bool {
+	if a == n {
+		return true
+	}
+	// NUL never occurs in a line of shell, so the shapes can't meet by
+	// accident ("$#" is the shell's own argument count).
+	if dollarRe.ReplaceAllLiteralString(a, "\x00") != dollarRe.ReplaceAllLiteralString(n, "\x00") {
+		return false
+	}
+	as, ns := dollarRe.FindAllString(a, -1), dollarRe.FindAllString(n, -1)
+	if len(as) != len(ns) {
+		return false
+	}
+	for i := range ns {
+		x, okA := amount(as[i])
+		y, okN := amount(ns[i])
+		if !okA || !okN || y > x {
+			return false
+		}
+	}
+	return true
+}
+
+// holds says whether every ceiling line of need is one of have's, used once
+// each: the same line, or one with no more money (within). A new line, a
+// larger amount or one more repeat than the approved script had doesn't.
+func holds(have, need map[string]int) bool {
+	left := maps.Clone(have)
+	for n, k := range need {
+		for ; k > 0; k-- {
+			hit := ""
+			if left[n] > 0 {
+				hit = n
+			} else {
+				for a, c := range left {
+					if c > 0 && within(a, n) {
+						hit = a
+						break
+					}
+				}
+			}
+			if hit == "" {
+				return false
+			}
+			left[hit]--
+		}
+	}
+	return true
+}
+
+// covers says whether every mention in need is one in have, or for an amount
+// of money no more than one in have. It only routes an ask to a warden: what
+// runs must still be held line by line (holds).
+func covers(have, need []core.Mention) bool {
+	for _, n := range need {
+		if !slices.ContainsFunc(have, func(h core.Mention) bool {
+			if h.Kind != n.Kind {
+				return false
+			}
+			if same(h.Phrase) == same(n.Phrase) {
+				return true
+			}
+			a, okA := amount(h.Phrase)
+			b, okB := amount(n.Phrase)
+			return h.Kind == "money" && okA && okB && b <= a
+		}) {
+			return false
+		}
+	}
+	return true
+}
+
+func amount(p string) (float64, bool) {
+	t, ok := strings.CutPrefix(strings.TrimSpace(p), "$")
+	if !ok {
+		return 0, false
+	}
+	f, err := strconv.ParseFloat(strings.ReplaceAll(strings.TrimSpace(t), ",", ""), 64)
+	return f, err == nil
+}
+
+// mentions lists a script's ceiling lines once each, for the person.
+func mentions(lines map[string]int) string {
+	out := slices.Sorted(maps.Keys(lines))
+	for i, l := range out {
+		out[i] = "  " + core.Clip(l, 160)
+	}
+	return strings.Join(out, "\n")
+}
+
+// ranOnYes says the person said run to r's exact script within CarryFor: only
+// that carries. A done (they did it themselves) approved nothing the daemon
+// runs, and an agent's words around a script are not what the person ran.
+func ranOnYes(r Request) bool {
+	return r.Settles == nil && r.PersonOK && r.Script != "" && Digest(r.Script) == r.Digest && time.Since(r.Updated) < CarryFor
+}
+
+// yesFor finds the script in project the person said run to that holds
+// need, newest first, so a restart or fix that keeps the money, caps and
+// login lines they approved isn't asked again; a new or larger line still
+// goes to them. A yes the person has since declined one of its lines in
+// carries nothing.
+func (m *Module) yesFor(project string, floor []string, self string, need func(floor []string, r Request) bool) *Request {
+	reqs := m.List()
+	sort.SliceStable(reqs, func(i, j int) bool { return reqs[i].Updated.After(reqs[j].Updated) })
+	var noes []Request
+	for _, r := range reqs {
+		if r.Project != project || r.ID == self || r.Kind != "request" {
+			continue
+		}
+		if r.State == "declined" && r.Outcome == "declined" && r.Ask != "" {
+			noes = append(noes, r)
+			continue
+		}
+		if !ranOnYes(r) || !need(floor, r) || slices.ContainsFunc(noes, func(no Request) bool { return insideYes(floor, r, no) }) {
+			continue
+		}
+		return &r
+	}
+	return nil
+}
+
+// insideYes says whether the person's no touches their yes to r: one of its
+// script's ceiling lines is one of r's (or within one), or, with no script,
+// its words' mentions are held by r's. A no with nothing on the ceiling
+// takes back nothing.
+func insideYes(floor []string, r, no Request) bool {
+	if no.Script != "" {
+		have := ceilingLines(floor, r.Script)
+		for n := range ceilingLines(floor, no.Script) {
+			if holds(have, map[string]int{n: 1}) {
+				return true
+			}
+		}
+		return false
+	}
+	ms := core.AskMentions(no.Want, no.Why, no.Steps)
+	return len(ms) > 0 && covers(core.ScriptMentions(r.Script), ms)
+}
+
 func (m *Module) opRequest(r core.Run, args json.RawMessage) (any, error) {
 	var a struct{ Want, Why, Steps, Tier, Gain string }
 	if err := core.Bind(args, &a); err != nil {
@@ -263,9 +447,18 @@ func (m *Module) opRequest(r core.Run, args json.RawMessage) (any, error) {
 	tier := core.Tier(a.Tier)
 	cfg := m.C.WS.LoadConfig()
 	// Routing reads the ask's words, so a mention it rules out doesn't count;
-	// whatever then runs meets CeilingGuard, which counts every mention.
+	// whatever then runs meets CeilingGuard, which counts every mention. An
+	// ask whose ceiling words the person already said yes to in this project
+	// goes to a warden; the script still has to stay inside that yes.
 	ceiling := core.AskCeiling(cfg.Floor, a.Want, a.Why, a.Steps)
+	held := false
+	if ms := core.AskMentions(a.Want, a.Why, a.Steps); ceiling != "" && len(ms) > 0 && core.FloorHit(cfg.Floor, a.Want, a.Why, a.Steps) == "" {
+		held = m.yesFor(r.Project, cfg.Floor, "", func(_ []string, y Request) bool { return covers(core.ScriptMentions(y.Script), ms) }) != nil
+	}
 	route := core.Route(tier, cfg.Autonomy, ceiling)
+	if held { // only who weighs it first: what runs is held line by line, and is recorded
+		route = core.Route(tier, cfg.Autonomy, "")
+	}
 	m.act.Lock()
 	defer m.act.Unlock()
 	// The same step asked in the same project joins the open request, or gets
@@ -314,6 +507,9 @@ func (m *Module) ask(req *Request, why, detail string, options ...string) {
 		}
 		if options[0] == "run" {
 			body += fmt.Sprintf("\n\nRun to %s; decline to leave it.", run)
+			if s := req.Settles; s == nil {
+				body += fmt.Sprintf(" For %s, your run also carries to a later script in this project whose money, credential, network, outward and floor lines are these same lines, used no more often, or the same with smaller $ amounts; it runs without asking, cites this request and you are told.", CarryFor)
+			}
 		}
 		body += fmt.Sprintf("\n\n%s:\n%s", what, req.Script)
 	}
@@ -492,7 +688,9 @@ func (m *Module) tell(req Request, text string) {
 			continue
 		}
 		if m.C.Runs.Send(id, text) != nil {
-			m.reopen(id, text)
+			if err := m.reopen(id, text); err != nil {
+				m.C.Runs.Progress(id, "late answer, not delivered ("+core.Clip(err.Error(), 200)+"): "+text)
+			}
 		}
 	}
 }
@@ -781,8 +979,16 @@ func (m *Module) execute(id string) {
 			m.act.Unlock()
 			return
 		}
-	} else if err := core.CeilingGuard(req.Script, floor, req.PersonOK); err != nil {
-		m.ask(&req, "Always yours", "Whoever approved it, this script "+core.ScriptCeiling(floor, req.Script)+", which is always yours to decide.", "run", "declined")
+	}
+	req.Carries, req.CarriesDigest = "", ""
+	if !req.PersonOK && req.Settles == nil && core.ScriptCeiling(floor, req.Script) != "" {
+		need := ceilingLines(floor, req.Script)
+		if c := m.yesFor(req.Project, floor, req.ID, func(f []string, y Request) bool { return holds(ceilingLines(f, y.Script), need) }); c != nil {
+			req.Carries, req.CarriesDigest = c.ID, c.Digest
+		}
+	}
+	if err := core.CeilingGuard(req.Script, floor, req.PersonOK || req.Carries != ""); req.Settles == nil && err != nil {
+		m.ask(&req, "Always yours", "Whoever approved it, this script "+core.ScriptCeiling(floor, req.Script)+", which is always yours to decide. The lines that are:\n"+mentions(ceilingLines(floor, req.Script)), "run", "declined")
 		m.act.Unlock()
 		m.tell(req, err.Error()+"; the person decides.")
 		return
@@ -834,7 +1040,11 @@ func (m *Module) execute(id string) {
 	m.tell(req, fmt.Sprintf("%s: %q. Its output is kept for the person.", req.Outcome, core.Clip(req.Want, 80)))
 	m.save(&req)
 	m.act.Unlock()
-	if !req.PersonOK && m.C.WS.LoadConfig().Autonomy >= 3 { // "tell me after"
+	if req.Carries != "" { // the person's yes ran again: they hear it
+		m.C.Person.Tell(core.Ask{Ref: req.ID, Project: req.Project, From: req.Origin,
+			Title:  fmt.Sprintf("A step ran on your yes to %s (%s): %s", req.Carries, req.State, core.Clip(req.Want, 100)),
+			Detail: fmt.Sprintf("Its money, credential, network, outward and floor lines are lines of the script you said run to in request %s (sha256 %s), used no more often, or the same with smaller $ amounts.\n\n%s\n\n%s", req.Carries, core.Short(req.CarriesDigest), req.Script, req.Output)})
+	} else if !req.PersonOK && m.C.WS.LoadConfig().Autonomy >= 3 { // "tell me after"
 		m.C.Person.Tell(core.Ask{Ref: req.ID, Project: req.Project, From: req.Origin,
 			Title: fmt.Sprintf("A %s step ran (%s): %s", req.Tier, req.State, core.Clip(req.Want, 100)), Detail: req.Script + "\n\n" + req.Output})
 	}

@@ -182,6 +182,51 @@ func TestUpdateWithoutNotesLinksThem(t *testing.T) {
 	}
 }
 
+// Notes are outside text: their escape and control characters never reach
+// the terminal, and a CRLF body prints with no CR.
+func TestNotesPrintAsPlainText(t *testing.T) {
+	serve(t, "v9.9.9", build("new"), false)
+	releases = `[{"tag_name": "v9.9.9", "body": "\u001b]0;owned\u0007\u001b[31mred\u009b2J\u202e\r\nnext line\r\n", "html_url": "https://example.com/me/hive/releases/tag/v9.9.9"}]`
+	m, _ := releaseAt(t, "v9.9.8", "me/hive")
+	msg, err := m.Update("")
+	if err != nil || !strings.Contains(msg, `\x1b]0;owned\x07\x1b[31mred\x9b2J\u202e`+"\nnext line") || strings.ContainsAny(msg, "\x1b\x07\u009b\u202e\r") {
+		t.Fatalf("update: %q, %v", msg, err)
+	}
+}
+
+// A releases list past the read limit is read that far, and the notes end
+// with a link to the rest.
+func TestLongNotesEndWithALink(t *testing.T) {
+	serve(t, "v9.9.9", build("new"), false)
+	releases = `[{"tag_name": "v9.9.9", "body": "Faster merges.", "html_url": "https://example.com/me/hive/releases/tag/v9.9.9"},
+ {"tag_name": "v9.9.8", "body": "` + strings.Repeat("x", 4000) + `", "html_url": "https://example.com/me/hive/releases/tag/v9.9.8"}]`
+	limit := maxNotes
+	t.Cleanup(func() { maxNotes = limit })
+	maxNotes = 1000
+	m, _ := releaseAt(t, "v0.1.2", "me/hive")
+	msg, err := m.Update("")
+	if err != nil || !strings.Contains(msg, "Faster merges.") || strings.Contains(msg, "xxx") || !strings.HasSuffix(msg, "…\n"+NotesLink("me/hive")) {
+		t.Fatalf("update: %q, %v", msg, err)
+	}
+}
+
+// A pre-release, which an update to a full release never installed, is left
+// out of its notes; an update to a pre-release shows the ones it passes.
+func TestNotesSkipPrereleases(t *testing.T) {
+	serve(t, "v9.9.8", build("new"), false)
+	releases = `[{"tag_name": "v9.9.9", "body": "Newer beta.", "prerelease": true, "html_url": "x"},
+ {"tag_name": "v9.9.8", "body": "Fixed the lead's chat.", "html_url": "x"},
+ {"tag_name": "v9.9.7", "body": "Beta only.", "prerelease": true, "html_url": "x"}]`
+	m, _ := releaseAt(t, "v0.1.2", "me/hive")
+	msg, err := m.Update("")
+	if err != nil || strings.Contains(msg, "beta") || strings.Contains(msg, "Beta only.") || !strings.Contains(msg, "Fixed the lead's chat.") {
+		t.Fatalf("update: %q, %v", msg, err)
+	}
+	if notes := Notes(m.C.Effects.Forge, "me/hive", "v0.1.2", "v9.9.9"); !strings.Contains(notes, "Newer beta.") || !strings.Contains(notes, "Beta only.") {
+		t.Fatalf("notes up to a pre-release: %q", notes)
+	}
+}
+
 // Past 1.0, a new major version means an update would break the setup: the
 // auto-update leaves it for the person, whose own update installs it.
 func TestAutoUpdateStopsAtANewMajor(t *testing.T) {
@@ -1842,47 +1887,98 @@ func TestAutoUpdateGoesAheadPastLongGates(t *testing.T) {
 	}
 }
 
-// ed8e06d8 was kept but had no effect.merged (its merge's gh call failed
-// though the merge went through), so its release was refused and nothing
-// tried again: the newest kept Hive merge since is tried on Tick, once, and
-// released when its checks pass.
+// A kept commit no effect.merged names whose history git can't place after
+// the last release is refused, and nothing tried again: the newest kept Hive
+// merge since whose history holds it is tried on Tick, once, and released
+// when its checks pass.
 func TestRefusedUnmergedTriesTheNextMerge(t *testing.T) {
 	m, n, merged, land := selfHive(t)
 	linear(m)
 	inHistory := m.Contains
 	m.Contains = func(p core.Project, sha, at string) (bool, error) {
-		if sha == "m2" { // on main, between m1 and m3, though no effect.merged names it
+		if sha == "m2" { // no effect.merged names it, and it doesn't hold m1
 			return at == "m3", nil
 		}
 		return inHistory(p, sha, at)
 	}
 	merged(1, "a1", "m1")
 	land("a1", "r1")
+	n.SetChecks("me/hive", "m1", core.CheckRun{Name: "test", State: core.CheckPass})
+	m.AfterKept("hive", "m1")
+	if len(n.got) != 1 {
+		t.Fatalf("m1 wasn't released: %v", n.got)
+	}
 	for range 2 {
 		m.AfterKept("hive", "m2")
 	}
 	m.retryWaiting()
-	if len(n.got) != 0 || journaledN(m, "release.unmerged") != 1 || !strings.Contains(alertText(m), "no release at m2: it is not a merge") {
+	if len(n.got) != 1 || journaledN(m, "release.unmerged") != 1 || !strings.Contains(alertText(m), "no release at m2: it is not a merge") {
 		t.Fatalf("the refusal: releases %v, %d release.unmerged, alert %q", n.got, journaledN(m, "release.unmerged"), alertText(m))
 	}
 	merged(3, "a3", "m3")
 	land("a3", "r3")
 	n.SetChecks("me/hive", "m3", core.CheckRun{Name: "test", State: core.CheckPass})
 	m.retryWaiting()
-	if len(n.got) != 0 {
+	if len(n.got) != 1 {
 		t.Fatalf("released at a merge not kept yet: %v", n.got)
 	}
 	keptAt(m, "m3", true)
 	m.retryWaiting()
-	if len(n.got) != 1 || !strings.Contains(n.got["v0.0.1"], "#3 at a3") || !strings.Contains(n.got["v0.0.1"], "#1 at a1") {
+	if len(n.got) != 2 || !strings.Contains(n.got["v0.0.2"], "#3 at a3") || strings.Contains(n.got["v0.0.2"], "#1 at a1") {
 		t.Fatalf("the next merge wasn't released: %v", n.got)
 	}
 	m.retryWaiting()
-	if len(n.got) != 1 {
+	if len(n.got) != 2 {
 		t.Fatalf("released again: %v", n.got)
 	}
 	if sha, next := m.unmerged("hive"); sha != "" || next != "" {
 		t.Fatalf("the refusal still waits after a release: %q %q", sha, next)
+	}
+}
+
+// 4b38b782 (10-29) was a pull request the person merged by hand on the
+// forge: kept and green on main, but no effect.merged names it, so its
+// release was refused and none went out for a day (issue #2084). It is
+// released with the Hive's merges its history holds, its manifest saying it
+// was merged by hand; a Hive merge it doesn't hold goes out in the next one.
+func TestAKeptHandMergeIsReleased(t *testing.T) {
+	m, n, merged, land := selfHive(t)
+	linear(m)
+	inHistory := m.Contains
+	m.Contains = func(p core.Project, sha, at string) (bool, error) {
+		switch {
+		case at == "h3":
+			return sha == "h3" || sha == "m1" || sha == "m2", nil
+		case sha == "h3":
+			return at == "m4", nil
+		}
+		return inHistory(p, sha, at)
+	}
+	merged(1, "a1", "m1")
+	land("a1", "r1")
+	n.SetChecks("me/hive", "m1", core.CheckRun{Name: "test", State: core.CheckPass})
+	m.AfterKept("hive", "m1")
+	merged(2, "a2", "m2")
+	land("a2", "r2")
+	merged(4, "a4", "m4") // merged after h3, before h3's release is cut
+	land("a4", "r4")
+	n.SetChecks("me/hive", "h3", core.CheckRun{Name: "test", State: core.CheckPass})
+	m.AfterKept("hive", "h3")
+	body := n.got["v0.0.2"]
+	if len(n.got) != 2 || !strings.Contains(body, "#2 at a2") || !strings.Contains(body, "h3 and what else on main up to it the Hive didn't merge: merged by hand") ||
+		strings.Contains(body, "#1 at") || strings.Contains(body, "#4 at") {
+		t.Fatalf("the hand merge's release: %v", n.got)
+	}
+	if journaledN(m, "release.unmerged") != 0 || len(m.C.Person.Open()) != 0 {
+		t.Fatalf("refused or asked: %d release.unmerged, asks %+v", journaledN(m, "release.unmerged"), m.C.Person.Open())
+	}
+	if _, refuse := m.merges("hive", "m2"); refuse != "a newer release already covers it" {
+		t.Fatalf("m2 after h3's release: %q", refuse)
+	}
+	n.SetChecks("me/hive", "m4", core.CheckRun{Name: "test", State: core.CheckPass})
+	m.AfterKept("hive", "m4")
+	if body := n.got["v0.0.3"]; len(n.got) != 3 || !strings.Contains(body, "#4 at a4") || strings.Contains(body, "#2 at") {
+		t.Fatalf("the merge after the hand release: %v", n.got)
 	}
 }
 

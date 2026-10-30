@@ -73,30 +73,50 @@ func AskCeilingMatch(texts ...string) (kind, phrase string) {
 }
 
 func ceilingMatch(skipRuledOut bool, texts ...string) (string, string) {
-	return matchKinds(skipRuledOut, []string{"money", "credential", "open", "outward"}, texts...)
+	if ms := askMatches(skipRuledOut, true, allKinds, texts...); len(ms) > 0 {
+		return ms[0].Kind, ms[0].Phrase
+	}
+	return "", ""
 }
 
-func matchKinds(skipRuledOut bool, kinds []string, texts ...string) (string, string) {
+// A Mention is one AlwaysPerson match: its category and the words.
+type Mention struct{ Kind, Phrase string }
+
+var allKinds = []string{"money", "credential", "open", "outward"}
+
+func askMatches(skipRuledOut, first bool, kinds []string, texts ...string) []Mention {
 	t := strings.Join(texts, "\n")
+	var out []Mention
 	for _, k := range kinds {
 		for _, m := range alwaysPersonRe[k].FindAllStringIndex(t, -1) {
 			if harmless(k, t[m[0]:m[1]], t[m[1]:]) {
 				continue
 			}
 			if !skipRuledOut || !ruledOut(k, t[:m[0]], t[m[0]:m[1]], t[m[1]:]) {
-				return k, t[m[0]:m[1]]
+				if out = append(out, Mention{k, t[m[0]:m[1]]}); first {
+					return out
+				}
 			}
 		}
 	}
-	return "", ""
+	return out
 }
+
+// AskMentions is every mention AskCeilingMatch counts, not just the first.
+func AskMentions(texts ...string) []Mention { return askMatches(true, false, allKinds, texts...) }
+
+// ScriptMentions is every mention ScriptCeilingMatch counts.
+func ScriptMentions(texts ...string) []Mention { return scriptMatches(false, texts...) }
 
 // DecisionMatch is CeilingMatch for a decision no script carries out (a
 // protected merge, a module install): saying yes spends nothing, so a money
 // mention in its title or diff (a hardware project's score is its unit cost
 // in USD, #1993) doesn't count; every other category still does.
 func DecisionMatch(texts ...string) (kind, phrase string) {
-	return matchKinds(false, []string{"credential", "open", "outward"}, texts...)
+	if ms := askMatches(false, true, []string{"credential", "open", "outward"}, texts...); len(ms) > 0 {
+		return ms[0].Kind, ms[0].Phrase
+	}
+	return "", ""
 }
 
 // harmlessRe is a credential command that reads, mints or rotates nothing:
@@ -122,7 +142,15 @@ func harmless(kind, match, after string) bool {
 // never runs. A mention on a line with code, or one a comment asks for
 // ("# rotate the token"), still counts.
 func ScriptCeilingMatch(texts ...string) (string, string) {
+	if ms := scriptMatches(true, texts...); len(ms) > 0 {
+		return ms[0].Kind, ms[0].Phrase
+	}
+	return "", ""
+}
+
+func scriptMatches(first bool, texts ...string) []Mention {
 	t := strings.Join(texts, "\n")
+	var out []Mention
 	for _, k := range []string{"money", "credential", "open", "outward"} {
 		for _, m := range alwaysPersonRe[k].FindAllStringIndex(t, -1) {
 			start := strings.LastIndexByte(t[:m[0]], '\n') + 1
@@ -135,11 +163,13 @@ func ScriptCeilingMatch(texts ...string) (string, string) {
 			}
 			body, ok := strings.CutPrefix(strings.TrimLeft(t[start:m[0]], " \t"), "#")
 			if !ok || !ruledOut(k, body, t[m[0]:m[1]], t[m[1]:end]) {
-				return k, t[m[0]:m[1]]
+				if out = append(out, Mention{k, t[m[0]:m[1]]}); first {
+					return out
+				}
 			}
 		}
 	}
-	return "", ""
+	return out
 }
 
 var (

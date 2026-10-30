@@ -148,3 +148,50 @@ func TestModuleJobNeverReplacesABuiltin(t *testing.T) {
 		t.Fatal("pruning module jobs took a built-in one")
 	}
 }
+
+// A worker that scheduled a wake-up and then finished blocked (waiting on an
+// outside unit) gets it: its run is reopened, not dropped (issue #2092). One
+// stopped on purpose stays stopped, and the wake-up says it was missed.
+func TestWakeupReopensABlockedWorker(t *testing.T) {
+	dir := t.TempDir()
+	c, err := core.Open(core.Workspace{Root: filepath.Join(dir, "hive")}, &core.Local{Dir: filepath.Join(dir, "forge")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	m := New(c)
+	for _, id := range []string{"w1", "w2"} {
+		c.J.MustAppend("run.created", core.RunSpec{ID: id, Role: "worker"})
+	}
+	c.Runs.SetStatus("w1", core.StatusBlocked, "waiting on the pilot")
+	c.Runs.SetStatus("w2", core.StatusStopped, "stopped by the lead")
+	past := time.Now().Add(-time.Minute)
+	c.J.MustAppend("system.wakeup", Wakeup{ID: "k1", Run: "w1", At: past, Text: "check the pilot"})
+	c.J.MustAppend("system.wakeup", Wakeup{ID: "k2", Run: "w2", At: past, Text: "check again"})
+	m.Tick()
+	r, _ := c.Runs.Get("w1")
+	if r.Status != core.StatusIdle || len(r.Pending) != 1 || r.Pending[0] != "[wake-up you scheduled] check the pilot" {
+		t.Fatalf("blocked worker is %q with %q pending, want idle with its wake-up", r.Status, r.Pending)
+	}
+	if r, _ := c.Runs.Get("w2"); r.Status != core.StatusStopped {
+		t.Fatalf("stopped worker is %q, want it left stopped", r.Status)
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.wakeups["k1"].Done || !m.wakeups["k2"].Done {
+		t.Fatal("a due wake-up wasn't marked done")
+	}
+	var missed []string
+	c.J.Replay(func(e core.Event) {
+		if e.Kind == "system.woke" {
+			var w Wakeup
+			e.Decode(&w)
+			if w.Missed != "" {
+				missed = append(missed, w.ID)
+			}
+		}
+	})
+	if len(missed) != 1 || missed[0] != "k2" {
+		t.Fatalf("missed wake-ups %v, want only k2", missed)
+	}
+}

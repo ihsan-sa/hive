@@ -1,6 +1,7 @@
 package core
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -310,5 +311,19 @@ diff --git a/tools/hwcheck.py b/tools/hwcheck.py
 		if k, _ := DecisionMatch(text); k != want {
 			t.Errorf("DecisionMatch(...%q) = %q, want %q", text[len(diff):], k, want)
 		}
+	}
+}
+
+func TestScriptMentionsAreEveryMention(t *testing.T) {
+	got := ScriptMentions("# no tokens here\n# $25 per arm\ntest -f ~/.netrc && stripe charges create")
+	want := []Mention{{"money", "$25"}, {"money", "stripe"}, {"money", "charges"}, {"credential", ".netrc"}}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	if k, p := ScriptCeilingMatch("# no tokens here\n# $25 per arm"); k != "money" || p != "$25" {
+		t.Fatalf("got %s %q", k, p)
+	}
+	if got := AskMentions("no credentials needed; spend $5.00"); fmt.Sprint(got) != fmt.Sprint([]Mention{{"money", "spend"}, {"money", "$5.00"}}) {
+		t.Fatalf("got %v", got)
 	}
 }

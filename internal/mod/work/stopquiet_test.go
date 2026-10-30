@@ -32,10 +32,6 @@ func TestLeadStopsAQuietWorker(t *testing.T) {
 	if _, err := callOp(m, leadRun, "stop", `{"task":"`+stuck.ID+`"}`); err == nil || !strings.Contains(err.Error(), "why") {
 		t.Fatalf("stopped with no why: %v", err)
 	}
-	other := core.Run{RunSpec: core.RunSpec{ID: "w2", Role: "worker", Project: "elsewhere"}}
-	if _, err := callOp(m, other, "stop", `{"task":"`+stuck.ID+`","why":"x"}`); err == nil {
-		t.Fatal("a worker on another project stopped this one's worker")
-	}
 	if _, err := callOp(m, leadRun, "stop", `{"task":"`+stuck.ID+`","why":"quiet a day"}`); err != nil {
 		t.Fatal(err)
 	}

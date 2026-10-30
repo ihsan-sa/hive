@@ -50,18 +50,57 @@ func strained(proc string, memFloorMB int, memPressureMax, cpuPressureMax float6
 	return ""
 }
 
-// Watched says whether any reading a limit turns on (Strained's and
-// Loaded's) exists on this machine: where none does (no /proc, as on macOS
-// or Windows) they never hold, so nothing is seen at all.
-func Watched(memFloorMB int, memPressureMax, cpuPressureMax, loadMax float64) bool {
-	return watched(procRoot, memFloorMB, memPressureMax, cpuPressureMax, loadMax)
+// IOReason starts the reason IOStrained gives.
+const IOReason = "machine under io pressure"
+
+// IOStrained says why the disk is too saturated to start more work on it, or
+// "": IO pressure's "some avg10" is over someMax, or its "full avg10" (every
+// task stalled on the disk at once) over fullMax; a limit of 0 turns its
+// check off, and where /proc/pressure/io doesn't exist it never holds. It
+// reads IO pressure on its own, whatever the load: Loaded reads it only to
+// tell whose a load is, and its disk-only reason holds nothing, so on 10-29
+// turn starts rose from 5 to 13 per 10 minutes while IO pressure stood at
+// some avg10 87% and 47 of the Hive's git processes sat in D state.
+func IOStrained(someMax, fullMax float64) string { return ioStrained(procRoot, someMax, fullMax) }
+
+func ioStrained(proc string, someMax, fullMax float64) string {
+	raw, err := os.ReadFile(proc + "/pressure/io")
+	if err != nil {
+		return ""
+	}
+	for _, c := range []struct {
+		line string
+		max  float64
+	}{{"full", fullMax}, {"some", someMax}} {
+		if c.max <= 0 {
+			continue
+		}
+		for _, l := range strings.Split(string(raw), "\n") {
+			rest, ok := strings.CutPrefix(l, c.line+" ")
+			if !ok {
+				continue
+			}
+			_, v, _ := strings.Cut(rest, "avg10=")
+			if p, err := strconv.ParseFloat(strings.SplitN(v, " ", 2)[0], 64); err == nil && p > c.max {
+				return fmt.Sprintf("%s (%s avg10 %.0f%%, limit %g%%)", IOReason, c.line, p, c.max)
+			}
+		}
+	}
+	return ""
 }
 
-func watched(proc string, memFloorMB int, memPressureMax, cpuPressureMax, loadMax float64) bool {
+// Watched says whether any reading a limit turns on (Strained's, IOStrained's
+// and Loaded's) exists on this machine: where none does (no /proc, as on
+// macOS or Windows) they never hold, so nothing is seen at all.
+func Watched(memFloorMB int, memPressureMax, cpuPressureMax, ioPressureMax, loadMax float64) bool {
+	return watched(procRoot, memFloorMB, memPressureMax, cpuPressureMax, ioPressureMax, loadMax)
+}
+
+func watched(proc string, memFloorMB int, memPressureMax, cpuPressureMax, ioPressureMax, loadMax float64) bool {
 	for _, r := range []struct {
 		on   bool
 		file string
-	}{{memFloorMB > 0, "meminfo"}, {memPressureMax > 0, "pressure/memory"}, {cpuPressureMax > 0, "pressure/cpu"}, {loadMax > 0, "loadavg"}} {
+	}{{memFloorMB > 0, "meminfo"}, {memPressureMax > 0, "pressure/memory"}, {cpuPressureMax > 0, "pressure/cpu"}, {ioPressureMax > 0, "pressure/io"}, {loadMax > 0, "loadavg"}} {
 		if _, err := os.Stat(proc + "/" + r.file); r.on && err == nil {
 			return true
 		}
