@@ -1,9 +1,11 @@
 package core
 
 import (
+	"fmt"
 	"maps"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 
@@ -129,4 +131,35 @@ func homeMounts(home string, covered []string) []sandbox.Mount {
 		}
 	}
 	return out
+}
+
+// UserRuntime is the hive user's runtime folder (/run/user/<uid>), where its
+// service manager's bus is; "" when there is none (not Linux, no session).
+var UserRuntime = func() string {
+	if runtime.GOOS != "linux" {
+		return ""
+	}
+	dir := fmt.Sprintf("/run/user/%d", os.Getuid())
+	if fi, err := os.Stat(filepath.Join(dir, "bus")); err != nil || fi.Mode()&os.ModeSocket == 0 {
+		return ""
+	}
+	return dir
+}
+
+// runtimeMounts give a run in home the hive user's runtime folder rt, read-write
+// at its own path, and its bus in DBUS_SESSION_BUS_ADDRESS, so systemctl
+// --user, systemd-run --user and journalctl --user reach the hive user's
+// service manager (restart hive.service, run a unit, read its journal).
+// XDG_RUNTIME_DIR stays unset: with it, systemctl goes to systemd's private
+// socket and refuses it, since systemd's pid is outside the run's pid
+// namespace ("No data available"); through the bus it works. Claude Code's
+// sockets there are named by pid, which every run's pid namespace repeats,
+// so cc-socks is a folder of the run's own (own).
+func runtimeMounts(rt, own string) ([]sandbox.Mount, []string) {
+	if rt == "" {
+		return nil, nil
+	}
+	os.MkdirAll(own, 0o700)
+	return []sandbox.Mount{{Host: rt, Inside: rt, RW: true}, {Host: own, Inside: filepath.Join(rt, "cc-socks"), RW: true}},
+		[]string{"DBUS_SESSION_BUS_ADDRESS=unix:path=" + filepath.Join(rt, "bus")}
 }

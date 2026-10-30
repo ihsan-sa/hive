@@ -90,3 +90,25 @@ func TestAgentTokens(t *testing.T) {
 		}
 	}
 }
+
+// A run in home gets the hive user's runtime folder at its own path, with
+// the bus named (and XDG_RUNTIME_DIR unset, which would send systemctl to the
+// private socket it can't use from a run), and Claude Code's per-pid sockets
+// in a folder of its own; no runtime folder gives nothing.
+func TestRuntimeMounts(t *testing.T) {
+	if ms, env := runtimeMounts("", t.TempDir()); ms != nil || env != nil {
+		t.Fatalf("no runtime folder: %v %v", ms, env)
+	}
+	own := filepath.Join(t.TempDir(), "cc-socks")
+	ms, env := runtimeMounts("/run/user/1003", own)
+	if len(ms) != 2 || ms[0].Host != "/run/user/1003" || ms[0].Inside != "/run/user/1003" || !ms[0].RW ||
+		ms[1].Host != own || ms[1].Inside != "/run/user/1003/cc-socks" || !ms[1].RW {
+		t.Fatalf("mounts %+v", ms)
+	}
+	if len(env) != 1 || env[0] != "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1003/bus" {
+		t.Fatalf("env %v", env)
+	}
+	if fi, err := os.Stat(own); err != nil || !fi.IsDir() {
+		t.Fatalf("own sockets folder not made: %v", err)
+	}
+}
