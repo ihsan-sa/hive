@@ -126,7 +126,7 @@ func TestMeasuringMainYieldsTheCPU(t *testing.T) {
 }
 
 // While main is measured on a full CPU, a worker's turn waits and says why,
-// and a lead's starts.
+// and a lead's and a reviewer's start.
 func TestMeasureHoldsAWorkersTurnNotALeads(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("sleep stands in for the agent")
@@ -158,6 +158,16 @@ func TestMeasureHoldsAWorkersTurnNotALeads(t *testing.T) {
 	rs.launch(l, cfg)
 	if n.Load() != 1 {
 		t.Fatalf("a lead's turn waited for main's measure")
+	}
+	// A reviewer's read, a security seat's too, doesn't wait on a measure:
+	// a merge waits on it, and the measure may be another project's.
+	r, err := rs.Start(RunSpec{ID: "s-x-security-0", Role: "reviewer", Harness: "fake", Checkout: t.TempDir(), ReadOnly: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rs.launch(r, cfg)
+	if r, _ = rs.Get(r.ID); n.Load() != 2 || strings.HasPrefix(r.Reason, MeasureWait) {
+		t.Fatalf("a security read waited for main's measure: %d started, reason %q", n.Load(), r.Reason)
 	}
 }
 

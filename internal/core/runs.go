@@ -184,6 +184,13 @@ func (r *Run) NeverWaits() bool {
 	return r.Lead() || r.Role == "warden" || r.Role == "tribunal"
 }
 
+// Reads says whether r reads a change for the Hive (a reviewer's run, a
+// security seat's included): a merge waits on its verdict, so its turns don't
+// wait for a measure of main, which may be another project's and no business
+// of the change's (10-30 12:02Z a disk-full fix's security read waited on
+// dispatch's measure); the memory budget still paces it.
+func (r *Run) Reads() bool { return r.Role == "reviewer" }
+
 // Nice is the Unix nice value the run's processes get (higher is lower
 // priority; a process can only go higher): the Hive-wide lead at the
 // daemon's own, a project's lead just under it, and every other role well
@@ -563,7 +570,7 @@ func (rs *Runs) Holds() []string {
 
 // YieldFor says a measure of main is under way (what); "" says it ended.
 // While one is and the CPU is full (CPUFull), a turn that may wait (not a
-// lead's, warden's or tribunal's) doesn't start, so the measure gets the CPU
+// lead's, warden's or tribunal's, nor a review's) doesn't start, so the measure gets the CPU
 // its reading needs; turns already running go on.
 func (rs *Runs) YieldFor(who, what string) {
 	rs.mu.Lock()
@@ -2451,9 +2458,9 @@ func (rs *Runs) launch(r Run, cfg Config) {
 	}()
 	// One memory budget paces every turn (MemBudget): a lead's or a
 	// warden's never waits; any other waits while the memory left can't
-	// hold it beside the turns launching now, or while a measure of main
-	// runs on a full CPU (Yielding), or (a worker's) goes to an executor
-	// module with room. An away run's goes there first anyway.
+	// hold it beside the turns launching now, or (not a review's) while a
+	// measure of main runs on a full CPU (Yielding), or (a worker's) goes to
+	// an executor module with room. An away run's goes there first anyway.
 	var elsewhere sandbox.Sandbox
 	where := ""
 	// Only a worker's turn is handed to an executor; a lead's, a sweep's or
@@ -2468,7 +2475,7 @@ func (rs *Runs) launch(r Run, cfg Config) {
 		others := rs.launching - 1 // this launch is counted already
 		rs.mu.Unlock()
 		why := MemBudget(cfg.TurnMB, others)
-		if why == "" {
+		if why == "" && !r.Reads() {
 			why = rs.Yielding(cfg.TurnMB)
 		}
 		if why != "" {
