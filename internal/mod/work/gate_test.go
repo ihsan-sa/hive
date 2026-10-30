@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -28,19 +29,34 @@ func must(t *testing.T, dir string, args ...string) string {
 // pushMain commits files onto the forge's main (a file set to "" is removed).
 func pushMain(t *testing.T, f *core.Local, files map[string]string) {
 	t.Helper()
-	tmp := t.TempDir()
-	must(t, "", "clone", "-q", f.RepoPath("me/p"), tmp)
+	commitTo(t, f.RepoPath("me/p"), "main", "main", "main", files)
+}
+
+// commitTo commits files (a file set to "" is removed) on top of from (none
+// if it doesn't exist yet) as ref in the bare repo and returns the commit.
+// It writes straight into the repo with git fast-import, not through a clone
+// and a push: a clone writes a config, refs, logs and an index, some 100 KB a
+// call on disk, and the package's tests make hundreds.
+func commitTo(t *testing.T, repo, ref, from, msg string, files map[string]string) string {
+	t.Helper()
+	var in strings.Builder
+	fmt.Fprintf(&in, "commit refs/heads/%s\ncommitter Hive <hive@localhost> %d +0000\ndata %d\n%s\n", ref, time.Now().Unix(), len(msg), msg)
+	if sha, err := core.Git(repo, "rev-parse", "-q", "--verify", "refs/heads/"+from+"^{commit}"); err == nil {
+		fmt.Fprintf(&in, "from %s\n", sha)
+	}
 	for name, body := range files {
 		if body == "" {
-			os.Remove(filepath.Join(tmp, name))
+			fmt.Fprintf(&in, "D %s\n", name)
 		} else {
-			os.MkdirAll(filepath.Dir(filepath.Join(tmp, name)), 0o755)
-			os.WriteFile(filepath.Join(tmp, name), []byte(body), 0o644)
+			fmt.Fprintf(&in, "M 100644 inline %s\ndata %d\n%s\n", name, len(body), body)
 		}
 	}
-	must(t, tmp, "add", "-A")
-	must(t, tmp, "commit", "-q", "-m", "main")
-	must(t, tmp, "push", "-q", "origin", "HEAD:main")
+	cmd := exec.Command("git", "fast-import", "--quiet")
+	cmd.Dir, cmd.Stdin = repo, strings.NewReader(in.String()+"\n")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git fast-import: %v %s", err, out)
+	}
+	return must(t, repo, "rev-parse", "refs/heads/"+ref)
 }
 
 // gateRig is a project on bare runs whose tests fail while BROKEN exists and

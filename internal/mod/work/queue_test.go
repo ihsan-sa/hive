@@ -3,7 +3,6 @@ package work
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -16,19 +15,14 @@ import (
 // the same file or package, and at most two workers at once.
 func queueRig(t *testing.T) *Module {
 	m, forge, _ := helperRig(t)
-	seed := filepath.Join(t.TempDir(), "seed")
-	mustGit(t, "", "clone", "-q", forge.RepoPath("me/p"), seed)
+	files := map[string]string{}
 	for _, f := range []string{"internal/core/effects.go", "internal/core/runs.go", "internal/tui/views.go", "docs/log.md", "docs/notes/plan.md", "modules/agents/worker.md", "modules/kb/filer.md"} {
-		os.MkdirAll(filepath.Join(seed, filepath.Dir(f)), 0o755)
-		os.WriteFile(filepath.Join(seed, f), []byte("package x\n"), 0o644)
+		files[f] = "package x\n"
 	}
-	os.MkdirAll(filepath.Join(seed, "textkit"), 0o755)
-	os.WriteFile(filepath.Join(seed, "textkit", "__init__.py"), []byte("class Box:\n    def __init__(self):\n        pass\n\n\ndef truncate(text, width):\n    raise NotImplementedError\n\n\nasync def slugify(text):\n    raise NotImplementedError\n\n\ndef wrap(text, width):\n    raise NotImplementedError\n"), 0o644)
-	os.WriteFile(filepath.Join(seed, "internal", "tui", "views.go"), []byte("package tui\n\nfunc (m *Model) render() string { return \"\" }\n\ntype Pane struct{}\n"), 0o644)
-	os.WriteFile(filepath.Join(seed, ".gitattributes"), []byte("* text=auto\n# additive\ndocs/log.md merge=union\nplan.md merge=union\n"), 0o644)
-	mustGit(t, seed, "add", "-A")
-	mustGit(t, seed, "commit", "-q", "-m", "source")
-	mustGit(t, seed, "push", "-q", "origin", "HEAD:main")
+	files["textkit/__init__.py"] = "class Box:\n    def __init__(self):\n        pass\n\n\ndef truncate(text, width):\n    raise NotImplementedError\n\n\nasync def slugify(text):\n    raise NotImplementedError\n\n\ndef wrap(text, width):\n    raise NotImplementedError\n"
+	files["internal/tui/views.go"] = "package tui\n\nfunc (m *Model) render() string { return \"\" }\n\ntype Pane struct{}\n"
+	files[".gitattributes"] = "* text=auto\n# additive\ndocs/log.md merge=union\nplan.md merge=union\n"
+	commitTo(t, forge.RepoPath("me/p"), "main", "main", "source", files)
 	cfg := m.C.WS.LoadConfig()
 	cfg.MaxWorkers = 2
 	m.C.WS.SaveConfig(cfg)
@@ -249,13 +243,7 @@ func moveMain(t *testing.T, m *Module, f, content string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	seed := filepath.Join(t.TempDir(), "seed")
-	mustGit(t, "", "clone", "-q", strings.TrimSpace(origin), seed)
-	os.MkdirAll(filepath.Join(seed, filepath.Dir(f)), 0o755)
-	os.WriteFile(filepath.Join(seed, f), []byte(content), 0o644)
-	mustGit(t, seed, "add", "-A")
-	mustGit(t, seed, "commit", "-q", "-m", "main moves")
-	mustGit(t, seed, "push", "-q", "origin", "HEAD:"+p.Branch)
+	commitTo(t, strings.TrimSpace(origin), p.Branch, p.Branch, "main moves", map[string]string{f: content})
 	if _, err := m.C.Effects.Sync(p); err != nil {
 		t.Fatal(err)
 	}
@@ -631,13 +619,7 @@ func TestBundleIsMainWhenTheWorkerStartsOrResumes(t *testing.T) {
 	m := queueRig(t)
 	repo := m.C.Effects.Forge.(*flakyForge).RepoPath("me/p")
 	push := func(name string) string {
-		seed := filepath.Join(t.TempDir(), "seed")
-		mustGit(t, "", "clone", "-q", repo, seed)
-		os.WriteFile(filepath.Join(seed, name), []byte(name+"\n"), 0o644)
-		mustGit(t, seed, "add", "-A")
-		mustGit(t, seed, "commit", "-q", "-m", name)
-		mustGit(t, seed, "push", "-q", "origin", "HEAD:main")
-		return strings.TrimSpace(must(t, seed, "rev-parse", "HEAD"))
+		return commitTo(t, repo, "main", "main", name, map[string]string{name: name + "\n"})
 	}
 	heads := func(worker string) string {
 		return must(t, "", "bundle", "list-heads", filepath.Join(m.C.WS.RunRO(worker), "main.bundle"))

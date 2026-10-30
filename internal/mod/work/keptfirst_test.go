@@ -1,8 +1,6 @@
 package work
 
 import (
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -14,17 +12,9 @@ import (
 // head changes files, kept by a measured gate against main at measured.
 func keptBeside(t *testing.T, m *Module, p core.Project, f *core.Local, main string, files map[string]string, measured time.Time) *Task {
 	t.Helper()
-	tmp := t.TempDir()
-	must(t, "", "clone", "-q", f.RepoPath(p.Repo), tmp)
-	for name, body := range files {
-		os.MkdirAll(filepath.Dir(filepath.Join(tmp, name)), 0o755)
-		os.WriteFile(filepath.Join(tmp, name), []byte(body), 0o644)
-	}
-	must(t, tmp, "add", "-A")
-	must(t, tmp, "commit", "-q", "-m", "kept")
-	must(t, tmp, "push", "-q", "origin", "HEAD:refs/heads/kept")
+	sha := commitTo(t, f.RepoPath(p.Repo), "kept", "main", "kept", files)
 	must(t, m.C.WS.Project(p.Name), "fetch", "-q", "origin", "+refs/heads/*:refs/remotes/origin/*")
-	u := &Task{ID: "t-kept", Project: p.Name, Stage: StageMerging, Aim: AimGain, SHA: strings.TrimSpace(must(t, tmp, "rev-parse", "HEAD")), PR: core.PR{Number: 99}}
+	u := &Task{ID: "t-kept", Project: p.Name, Stage: StageMerging, Aim: AimGain, SHA: sha, PR: core.PR{Number: 99}}
 	m.mu.Lock()
 	m.tasks[u.ID] = u
 	m.mu.Unlock()
