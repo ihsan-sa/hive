@@ -225,22 +225,6 @@ func TestRetryHint(t *testing.T) {
 	}
 }
 
-// A merge held behind a kept gain waits that keep's own bound, as one held
-// on the recursive gate does: hours of it are no stall to raise.
-func TestAMergeBehindAKeptGainIsNoStall(t *testing.T) {
-	m := rig(t)
-	m.C.J.MustAppend("task.saved", work.Task{ID: "t0", Project: "p", Title: "change t0", Stage: work.StageMerging, Reason: work.KeptFirstWait + ": #99 (faster) was kept on abc against main at def, and this merge would change what that verdict measured; it merges first (or until 10:00Z)"})
-	m.mu.Lock()
-	sp := m.spells["t0"]
-	sp.since, sp.waitSince = time.Now().Add(-5*time.Hour), time.Now().Add(-5*time.Hour)
-	m.spells["t0"] = sp
-	m.mu.Unlock()
-	m.Watch()
-	if s := m.Stalls(); len(s) != 0 {
-		t.Fatalf("stalls = %+v, want none for a merge behind a kept gain", s)
-	}
-}
-
 // A merged task's change is on main: the watcher leaves it be, however long
 // it sits there, as a recheck of it is refused ("task is merged").
 func TestMergedTaskIsNotAStall(t *testing.T) {
@@ -274,25 +258,6 @@ func TestEnqueueDoesNotWaitForRoom(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("the merge never reached the queue")
-	}
-}
-
-// A worker a conflict sends back waits at the pace as a queued brief does
-// (issue #1853): with ~20 conflicts at a pace of 1, hours of it are no
-// stall, while a working task with no such wait still is one.
-func TestConflictWaitingAtThePaceIsNoStall(t *testing.T) {
-	m := rig(t)
-	m.C.J.MustAppend("task.saved", work.Task{ID: "t0", Project: "p", Title: "change t0", Stage: work.StageWorking, Worker: "w0", Resend: "Main moved and your branch conflicts with it.", Reason: "waiting for a worker (at the pace)"})
-	m.C.J.MustAppend("task.saved", work.Task{ID: "t1", Project: "p", Title: "change t1", Stage: work.StageWorking, Worker: "w1"})
-	m.mu.Lock()
-	for _, id := range []string{"t0", "t1"} {
-		m.spells[id] = spell{stage: work.StageWorking, since: time.Now().Add(-48 * time.Hour)}
-	}
-	m.mu.Unlock()
-	m.Watch()
-	s := m.Stalls()
-	if len(s) != 1 || !strings.Contains(fmt.Sprint(s), "t1") || strings.Contains(fmt.Sprint(s), "t0") {
-		t.Fatalf("stalls = %+v, want only t1's", s)
 	}
 }
 

@@ -12,11 +12,12 @@ When what you see says the approach itself is wrong (a mechanism that costs more
 
 ## Where things are
 
-- **Your checkout** is the current directory, on your own branch. You hold no credentials and can't push: when you finish, the Hive tests, reviews and merges your commits.
+- **Your checkout** is the current directory, on your own branch. You hold no credentials and can't push: when you finish, the Hive merges your commits at once (on green forge CI, or on your own passing run of the tests where the project has none) and measures main after; a break is reverted.
 - **`$HIVE_RUN`** (read-only): your brief and this run's inputs. **`$HIVE_BOX/notes.md`**: yours, for whoever picks up after you.
 - **`$HIVE_KB`** (read-only): the knowledge base, with `record/` (everything the Hive did) and `practice/*.md` (how a Hive works; read the one that fits before you act). Search it with `hive agent search` before researching from scratch. The person's essay, the architecture every agent builds against, is `hive/docs/the-hive-essay.md` there.
 - **`$HIVE_MODULES`**, **`$HIVE_PROJECTS`** (read-only): the installed modules; the other projects' clones.
 - **`$HIVE_STATE`** (read-only, when present): everyone's records: `events.jsonl` (the journal, near a GB: don't grep or tail it; read the last 48 hours one file per UTC hour in `$HIVE_KB/record/hours/<YYYY-MM-DDTHH>.jsonl`, and a task's, run's or chat's story in `$HIVE_KB/record/<area>/<id>.md`), `runs/<id>/` (briefs, turn logs, notes), `chats/`, `risk/`, `checks/`, `scores/`, `gates/`, `daemon.log`. Read them to see what others did and what in the Hive could work better.
+- **`$HIVE_SECRETS`** (read-only, when present): your project's own secret files (a broker login, a signing key), which the person or a warden's script puts in `.hive/secrets/<project>/`. Read them where you use them; never copy one into your checkout, a note, a message or a log. A key the project needs that isn't there is a warden ask (T2) to put it there.
 - **Each project** keeps `.hive/goals.md` (the person's words) and `.hive/lessons.md` (what was reverted and why).
 
 You usually run in a sandbox: the machine beyond these paths is hidden, not gone, so a path that looks missing never means a step is done. Network is outbound only, through a proxy; a service on this machine (a local Ollama on 127.0.0.1:11434) needs the warden to run `hive egress grant 127.0.0.1:<port>`.

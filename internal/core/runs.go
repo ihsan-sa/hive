@@ -72,6 +72,7 @@ type Finish struct {
 	Status  string `json:"status"` // done | blocked
 	Account string `json:"account"`
 	Tested  string `json:"tested,omitempty"`
+	Passed  string `json:"passed,omitempty"` // the test command that passed in the turn on the commit it finishes with
 	Unsure  string `json:"unsure,omitempty"`
 	Printed bool   `json:"printed,omitempty"` // the agent printed it as its answer and the Hive ran it
 }
@@ -820,10 +821,11 @@ type egressRefusal struct {
 func refusalWhy(dest, code string) string {
 	switch code {
 	case sandbox.RefusedUnlisted:
-		return "not on this run's egress list (egress in .hive/config.json)"
+		return "not on this run's egress list (egress in .hive/config.json); a host and port open to one project's runs on the person's grant: " +
+			"ask a warden for `" + Cmd + " egress grant " + dest + " --project <its project>`"
 	case sandbox.RefusedLocal:
 		return "a service on this machine or a private network, closed to sandboxes; a loopback port opens only on the person's grant: " +
-			"ask a warden for `" + Cmd + " egress grant " + dest + "`"
+			"ask a warden for `" + Cmd + " egress grant " + dest + "` (a LAN device's address with `--project <its project>`)"
 	}
 	return "refused by the egress proxy"
 }
@@ -2517,7 +2519,9 @@ func (rs *Runs) launch(r Run, cfg Config) {
 	var elsewhere sandbox.Sandbox
 	where := ""
 	why := Strained(floor, memMax, cpuMax)
-	if (why != "" || (r.Away && !r.Lead())) && r.GaveBack == "" {
+	// A run that reads its project's secrets stays here: an executor would
+	// copy the folder to another machine.
+	if (why != "" || (r.Away && !r.Lead())) && r.GaveBack == "" && rs.secretsFor(r) == "" {
 		if rs.handing() {
 			if why != "" {
 				rs.Holding()
@@ -2828,6 +2832,11 @@ func (rs *Runs) sandboxSpec(cfg Config, sb sandbox.Sandbox, h harness.Harness, r
 	}
 	mounts = append(mounts, sandbox.Mount{Host: rs.ws.Tools(), Inside: sandbox.ToolsInside})
 	mounts = append(mounts, rs.hideIsolated(r)...)
+	var secrets *sandbox.Mount
+	if dir := rs.secretsFor(r); dir != "" {
+		secrets = &sandbox.Mount{Host: dir, Inside: "/hive/secrets"}
+		mounts = append(mounts, *secrets)
+	}
 	if r.Isolated && sb.Isolated() {
 		// Only granted modules are visible: mount each over an empty modules dir,
 		// which holds their mount points, since bwrap can't make them inside a
@@ -2876,6 +2885,9 @@ func (rs *Runs) sandboxSpec(cfg Config, sb sandbox.Sandbox, h harness.Harness, r
 	}
 	if !r.Isolated {
 		env = append(env, "HIVE_PROJECTS="+in(mounts[6]), "HIVE_STATE="+in(mounts[7]))
+	}
+	if secrets != nil {
+		env = append(env, "HIVE_SECRETS="+in(*secrets))
 	}
 	if sb.Isolated() {
 		env = append(sandbox.InsideEnv("/hive/home", true), env...)
@@ -2962,9 +2974,26 @@ func (rs *Runs) sandboxSpec(cfg Config, sb sandbox.Sandbox, h harness.Harness, r
 	return sandbox.Spec{
 		ID: r.ID, Argv: argv, Env: env, Cwd: in(mounts[0]), Mounts: mounts, Tools: tools,
 		Stdin: stdin, Stdout: rs.ws.TurnOut(r.ID, turn), StopFile: filepath.Join(rs.ws.RunHost(r.ID), "stop"), Tmp: filepath.Join(rs.ws.RunPrivate(r.ID), "tmp"),
-		Network: true, Allow: allow, Local: cfg.Egress.LocalAddrs(), Guard: rs.ws.Guarded(), Cover: rs.ws.Covered(), UID: os.Getuid(), GID: os.Getgid(),
+		Network: true, Allow: allow, Local: cfg.Egress.LocalAddrs(), Outside: cfg.Egress.OutsideFor(r.Project), Guard: rs.ws.Guarded(), Cover: rs.ws.Covered(), UID: os.Getuid(), GID: os.Getgid(),
 		Nice: r.Nice(),
 	}, nil
+}
+
+// secretsFor is the host folder of r's project's own secret files, when it
+// has one and r may read it: a run that acts for its project, never a
+// read-only one nor a check's (a reviewer, judge, warden or tribunal seat
+// weighs a change or an ask, not the project's keys). The folder (or a symlink to one) is the person's or a
+// warden's to fill; runs only read it, and no other project's run sees it,
+// since .hive/secrets is covered in /hive/state (Workspace.Covered).
+func (rs *Runs) secretsFor(r Run) string {
+	if r.ReadOnly || slices.Contains(CheckRoles, r.Role) || r.Project == "" || r.Project != filepath.Base(r.Project) || strings.HasPrefix(r.Project, ".") {
+		return ""
+	}
+	dir := rs.ws.ProjectSecrets(r.Project)
+	if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
+		return ""
+	}
+	return dir
 }
 
 // Walled refuses r reaching project when either side is hidden (private or

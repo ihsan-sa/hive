@@ -1,7 +1,6 @@
 package work
 
 import (
-	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -464,53 +463,6 @@ func TestLoadHoldsOnlyPastTheStart(t *testing.T) {
 	}
 }
 
-// A gate's wait reason, saved with its task, stays the same as the gates'
-// limit and the machine's readings move: neither is in it.
-func TestGateRoomReasonHoldsAsTheLimitMoves(t *testing.T) {
-	defer func(g func(core.Config) (string, bool)) { gateMachine = g }(gateMachine)
-	strain := ""
-	gateMachine = func(core.Config) (string, bool) { return strain, true }
-	dir := t.TempDir()
-	j, err := core.OpenJournal(filepath.Join(dir, "events.jsonl"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer j.Close()
-	m := &Module{C: &core.Core{J: j, WS: core.Workspace{Root: filepath.Join(dir, "hive")}}}
-	maxGates(m, 5) // the ceiling and start, whatever the host's cores
-	limit := func(l int) {
-		m.gates.mu.Lock()
-		m.gates.limit, m.gates.start, m.gates.at = l, 5, time.Now()
-		m.gates.mu.Unlock()
-	}
-	full := ""
-	for _, l := range []int{1, 2, 3} {
-		limit(l)
-		got := m.gateRoom(l)
-		if full == "" {
-			full = got
-		}
-		if got == "" || got != full {
-			t.Fatalf("limit %d: reason %q, want %q at every limit", l, got, full)
-		}
-	}
-	strained := ""
-	for i, s := range []string{
-		"machine loaded (load 40 on 20 cores, limit 1 per core)",
-		"machine loaded (load 52 on 20 cores, limit 1 per core)",
-	} {
-		strain = s
-		limit(3 + i)
-		got := m.gateRoom(1)
-		if strained == "" {
-			strained = got
-		}
-		if got != "no room for another: machine loaded" || got != strained {
-			t.Fatalf("strain %q at limit %d: reason %q", s, 3+i, got)
-		}
-	}
-}
-
 // Under load, a plan running ahead of its window is still seen, and pulls the
 // workers under their start as load alone wouldn't.
 func TestPaceSeesThePlanUnderLoad(t *testing.T) {
@@ -618,68 +570,6 @@ func TestPaceComesBackToTheStartUnderLoadAlone(t *testing.T) {
 	}
 }
 
-// While the reviewer's plan runs ahead of its week, a review goes on the
-// cheaper model and the task's record says so; a change in a high class
-// still needs its second, separate read (the warden's and tribunal's prompts
-// are high so they never land on one), and that read is paced too.
-func TestPaceHoldsReadsAheadOfTheWeek(t *testing.T) {
-	for _, ahead := range []bool{true, false} {
-		m, task, p, _ := gateRigSeeded(t, false, map[string]string{".hive/project.json": `{"test": "true", "high": ["feature.txt"]}`}, map[string]string{"feature.txt": "y"})
-		pick := m.Agents.Route("reviewer", p.Name)[0]
-		week := 0.1
-		if ahead {
-			week = 0.5
-		}
-		reset := time.Now().Add(3 * time.Hour)
-		m.C.J.MustAppend("plan.usage", core.Plan{Harness: pick.Harness, Limit: harness.RateLimit{Status: "allowed", ResetsAt: reset, Window: "five_hour",
-			Windows: map[string]harness.Window{"five_hour": {Utilization: 0.1, ResetsAt: reset},
-				"seven_day": {Utilization: week, ResetsAt: time.Now().Add(6 * 24 * time.Hour)}}}})
-		if err := testStep(m, task, p); err != nil || task.Stage != StageReviewing {
-			t.Fatalf("stage %q, err %v", task.Stage, err)
-		}
-		for read := 1; read <= 2; read++ {
-			if err := m.review(task, p); err != nil {
-				t.Fatal(err)
-			}
-			r, _ := m.C.Runs.Get(task.Reviewer)
-			if paced := r.Inputs["paced"] != ""; paced != ahead || logged(task, "ahead of its week") != ahead {
-				t.Fatalf("ahead %v, read %d: paced input %v, log %v", ahead, read, paced, task.Log)
-			}
-			if read == 2 && !strings.HasSuffix(r.ID, "-read2") {
-				t.Fatalf("ahead %v: the second read is %q", ahead, r.ID)
-			}
-			m.C.J.MustAppend("run.turn_ended", map[string]any{"id": r.ID, "turn": 1, "status": core.StatusDone,
-				"result": harness.Result{Structured: []byte(`{"verdict":"land","summary":"ok","token":"` + reviewToken(r.ID) + `"}`)}})
-			if err := m.review(task, p); err != nil {
-				t.Fatal(err)
-			}
-			main, _ := m.C.Effects.Sync(p)
-			ch, _ := m.C.Effects.Classify(p, main, task.SHA)
-			if len(ch.High) != 1 || m.C.Effects.Reviewed(p, ch, task.SHA) != (read == 2) {
-				t.Fatalf("ahead %v: high %v, reviewed after %d reads: %v", ahead, ch.High, read, read != 2)
-			}
-		}
-	}
-}
-
-// The cheaper read is sonnet where the reviewer's route is opus.
-func TestCheaperRead(t *testing.T) {
-	for _, c := range []struct {
-		route []core.Pick
-		want  string
-	}{
-		{[]core.Pick{{Harness: "claude", Model: "opus"}}, "claude:sonnet"},
-		{[]core.Pick{{Harness: "claude", Model: "claude-opus-5-5"}}, "claude:claude-sonnet-5-5"},
-		{[]core.Pick{{Harness: "codex", Model: "opus"}, {Harness: "claude", Model: "haiku"}}, "claude:haiku"},
-		{[]core.Pick{{Harness: "claude", Model: "sonnet"}}, "claude:sonnet"},
-		{[]core.Pick{{Harness: "codex", Model: "gpt-5.5"}}, "codex:gpt-5.5"},
-	} {
-		if got := cheaper(c.route).String(); got != c.want {
-			t.Errorf("%v: %s, want %s", c.route, got, c.want)
-		}
-	}
-}
-
 // A load that is the disk's doesn't pull the checks' pace under its start,
 // and brings it back there a growStep after another strain pulled it under:
 // on 10-27 the checks sat at 1 for hours under a load of IO wait that never
@@ -750,29 +640,6 @@ func TestMeasuringMainMovesAWaiterUp(t *testing.T) {
 	hold()
 	if a, b := <-started, <-started; a != "main1" || b != "pr" {
 		t.Fatalf("started %s then %s", a, b)
-	}
-}
-
-// Main's own red tests run again ranked as main's measurement: every red
-// change on that main waits on the answer.
-func TestMainTestsRetestRanksAsMain(t *testing.T) {
-	m, forge, p := helperRig(t)
-	out, _ := core.Git(forge.RepoPath("me/p"), "rev-parse", "main")
-	main := strings.TrimSpace(out)
-	rank := -1
-	m.Retest = func(p core.Project, sha, _ string, _ core.Check, _ bool) bool {
-		rank = m.checkRank(p.Name, sha, "retest")
-		return true
-	}
-	c, err := m.mainTests(p, main, "exit 1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !c.OK || rank != rankMain {
-		t.Fatalf("ok %v, retest ranked %d", c.OK, rank)
-	}
-	if got := m.checkRank(p.Name, main, "test"); got != 0 {
-		t.Fatalf("answered: still ranked %d", got)
 	}
 }
 
@@ -885,5 +752,101 @@ func TestIOPressureHoldsNewWorkers(t *testing.T) {
 	}
 	if why := machineHold("machine low on memory", core.IOReason, "", 4, func() bool { return false })(0); why != "machine low on memory" {
 		t.Errorf("memory and io: %q", why)
+	}
+}
+
+// A restart starts the workers' pace where the last daemon left it, not
+// from what runs: on 10-30 a pace of 1 became 13 at the start, and 29 turns
+// the stop had cut resumed within 60 s (issue #2135).
+func TestPaceResumesWhereTheLastDaemonLeftIt(t *testing.T) {
+	m := queueRig(t)
+	m.workers.mu.Lock()
+	m.workers.limit, m.workers.start = 0, 0
+	m.workers.mu.Unlock()
+	m.C.J.MustAppend("pace.changed", map[string]any{"limit": "checks", "from": 2, "to": 5, "why": "grew"})
+	m.C.J.MustAppend("pace.changed", map[string]any{"limit": "workers", "from": 2, "to": 1, "why": "pulled back"})
+	if l := m.workers.get(); l != 1 {
+		t.Fatalf("before the first read: %d, want the last daemon's 1", l)
+	}
+	if l := m.workers.next(time.Now(), 13, true, "", true, 4, 20); l != 1 {
+		t.Fatalf("first read with 13 at work: %d, want 1", l)
+	}
+	if !strings.Contains(m.workers.String(), "before the restart") {
+		t.Fatalf("says %q", m.workers.String())
+	}
+	p := pace{before: 30}
+	if l := p.next(time.Now(), 3, true, "", true, 4, 8); l != 8 {
+		t.Fatalf("a journaled 30 under a ceiling of 8: %d", l)
+	}
+}
+
+// Every turn of a worker after its first takes a slot under the workers'
+// pace: one resumed (after a restart, a message, a nudge) starts only while
+// the worker turns running, and those let through to start, are under it,
+// and the turn that has waited longest goes first.
+func TestResumedTurnsTakeASlot(t *testing.T) {
+	m := queueRig(t)
+	cfg := m.C.WS.LoadConfig()
+	cfg.MaxWorkers = 0
+	cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax, cfg.LoadMax = 0, 0, 0, 0
+	cfg.IOPressureMax, cfg.IOFullMax = 0, 0
+	m.C.WS.SaveConfig(cfg)
+	set := func(l int) {
+		m.workers.mu.Lock()
+		m.workers.limit, m.workers.start, m.workers.at = l, defaultWorkers, time.Now()
+		m.workers.mu.Unlock()
+	}
+	set(2)
+	a := file(t, m, "first", "")
+	b := file(t, m, "second", "")
+	tick(m)
+	set(1)
+	var ids []string
+	for _, task := range []Task{a, b} {
+		got := stageOf(t, m, task)
+		if got.Worker == "" {
+			t.Fatalf("%q: no worker", task.Title)
+		}
+		ids = append(ids, got.Worker)
+	}
+	turn := func(id string, n int, end bool) {
+		if end {
+			m.C.J.MustAppend("run.turn_ended", map[string]any{"id": id, "turn": n, "status": core.StatusIdle})
+			m.C.J.MustAppend("run.queued", map[string]any{"id": id, "text": "a reply"})
+		} else {
+			m.C.J.MustAppend("run.turn_started", map[string]any{"id": id, "turn": n})
+		}
+	}
+	admit := func(id string) string {
+		r, _ := m.C.Runs.Get(id)
+		return m.C.Runs.Admit(r)
+	}
+	for _, id := range ids { // both took a turn, which ended (a restart cut it)
+		turn(id, 1, false)
+		turn(id, 1, true)
+	}
+	if why := admit(ids[0]); why != "" {
+		t.Fatalf("the first resumed, nothing running: %q", why)
+	}
+	if why := admit(ids[1]); !strings.Contains(why, "takes a slot") {
+		t.Fatalf("the second resumed at a pace of 1 with one let through: %q, want it waiting", why)
+	}
+	if why := admit(ids[0]); why != "" {
+		t.Fatalf("the first again, already let through: %q", why)
+	}
+	turn(ids[0], 2, false)
+	if why := admit(ids[1]); why == "" {
+		t.Fatal("the second while the first's turn runs at a pace of 1: let through")
+	}
+	turn(ids[0], 2, true)
+	if why := admit(ids[0]); why == "" {
+		t.Fatal("the first's next turn went ahead of the second, which waited longer")
+	}
+	if why := admit(ids[1]); why != "" {
+		t.Fatalf("the second once the first's turn ended: %q", why)
+	}
+	set(2)
+	if why := admit(ids[0]); why != "" {
+		t.Fatalf("the first at a pace of 2, one let through: %q", why)
 	}
 }

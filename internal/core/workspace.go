@@ -45,13 +45,23 @@ func (w Workspace) Gates() string              { return filepath.Join(w.Hive(), 
 // made or a file renamed in it mid-turn is covered too.
 func (w Workspace) Private() string { return filepath.Join(w.Hive(), "private") }
 
+// Secrets is where each project's own secret files live, one folder per
+// project, filled by the person or a warden's script: a project's runs read
+// their own folder read-only at /hive/secrets ($HIVE_SECRETS).
+func (w Workspace) Secrets() string { return filepath.Join(w.Hive(), "secrets") }
+
+// ProjectSecrets is project's own secrets folder.
+func (w Workspace) ProjectSecrets(project string) string {
+	return filepath.Join(w.Secrets(), project)
+}
+
 // Covered is the folders covered wherever agents read .hive: the login pool's
-// stored logins, module programs' homes and logs, and Private. No host
+// stored logins, module programs' homes and logs, Private and Secrets. No host
 // interpreter's install bound into a sandbox may hold one or sit inside one.
 // The paths are absolute, so a relative root still guards them.
 func (w Workspace) Covered() []string {
 	hive := filepath.Join(w.abs(), ".hive")
-	return []string{filepath.Join(hive, "logins"), filepath.Join(hive, "modules"), filepath.Join(hive, "private")}
+	return []string{filepath.Join(hive, "logins"), filepath.Join(hive, "modules"), filepath.Join(hive, "private"), filepath.Join(hive, "secrets")}
 }
 
 // Guarded is what no host interpreter's install bound into a sandbox may
@@ -267,11 +277,26 @@ func (t TribunalSeat) MarshalJSON() ([]byte, error) {
 // list in place of it. A run's harness API hosts are added to any list. Local
 // is the services on this machine the person opened to every sandboxed run,
 // one loopback host:port each ("127.0.0.1:11434"); nothing local is reachable
-// otherwise.
+// otherwise. Projects is the hosts outside this machine the person opened to
+// one project's runs and checks, past any list: host:port each, a public name
+// ("broker.example.com:8883") or a LAN device's address ("192.168.1.20:80").
 type Egress struct {
-	Default []string            `json:"default,omitempty"`
-	Roles   map[string][]string `json:"roles,omitempty"` // warden, tribunal, worker, lead, ...
-	Local   []string            `json:"local,omitempty"`
+	Default  []string            `json:"default,omitempty"`
+	Roles    map[string][]string `json:"roles,omitempty"` // warden, tribunal, worker, lead, ...
+	Local    []string            `json:"local,omitempty"`
+	Projects map[string][]string `json:"projects,omitempty"`
+}
+
+// OutsideFor is the host:port granted to project's runs, canonical, skipping
+// any entry Check refuses.
+func (e Egress) OutsideFor(project string) []string {
+	var out []string
+	for _, g := range e.Projects[project] {
+		if a, err := sandbox.OutsideGrant(g); err == nil && !slices.Contains(out, a) {
+			out = append(out, a)
+		}
+	}
+	return out
 }
 
 // LocalAddrs is the loopback ip:port the Local grants open, skipping any
@@ -318,6 +343,13 @@ func (c Config) Check() error {
 	for _, l := range c.Egress.Local {
 		if _, err := sandbox.LocalGrant(l); err != nil {
 			return err
+		}
+	}
+	for _, p := range slices.Sorted(maps.Keys(c.Egress.Projects)) {
+		for _, g := range c.Egress.Projects[p] {
+			if _, err := sandbox.OutsideGrant(g); err != nil {
+				return fmt.Errorf("egress for project %s: %v", p, err)
+			}
 		}
 	}
 	if err := c.checkRoutes(); err != nil {

@@ -69,11 +69,14 @@ type pace struct {
 	mu    sync.Mutex
 	limit int // 0 until first read
 	start int // the start it last read: a new one (a ceiling set) starts it afresh
-	at    time.Time
-	why   string
-	step  time.Duration // the least time between two changes; 0 is paceStep
-	shown time.Time     // when a strain was last seen
-	hard  time.Time     // when a strain other than load alone was last seen
+	// before is the limit the last daemon journaled, which the first read
+	// starts from (resume); 0 when none was.
+	before int
+	at     time.Time
+	why    string
+	step   time.Duration // the least time between two changes; 0 is paceStep
+	shown  time.Time     // when a strain was last seen
+	hard   time.Time     // when a strain other than load alone was last seen
 	// loadCuts lets load alone pull the limit under its start, as for
 	// checks and gates: their builds and child Hives are what load the
 	// machine, unlike the workers' turns.
@@ -107,7 +110,15 @@ func (p *pace) next(now time.Time, running int, waiting bool, strain string, wat
 	if !watching {
 		top = start
 	}
-	if p.limit == 0 || start != p.start { // a restart starts from what already runs
+	switch {
+	case p.limit == 0 && p.before > 0:
+		// A restart starts where the last daemon left off, not from what
+		// runs: its turns, cut by the stop, all come due at once, and the
+		// pressure readings read calm after the gap. On 10-30 a pace of 1
+		// became 13 at the start (what ran), 29 worker turns resumed within
+		// 60 s, and load went from 50 to 158 on 20 cores (issue #2135).
+		p.limit, p.start, p.at, p.why = max(1, min(p.before, cmp.Or(top, p.before))), start, now, "as before the restart"
+	case p.limit == 0 || start != p.start: // a new start (a ceiling set) starts from what already runs
 		p.limit, p.start, p.at, p.why = max(start, min(running, cmp.Or(top, running))), start, now, "the start"
 	}
 	step := cmp.Or(p.step, paceStep)
@@ -169,11 +180,24 @@ func (m *Module) journal(name string, p *pace, before int) {
 	}
 }
 
-// get is the limit, 0 before its first read.
+// get is the limit: before its first read the one the last daemon left
+// (before), else 0.
 func (p *pace) get() int {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return p.limit
+	return cmp.Or(p.limit, p.before)
+}
+
+// resume notes the limit a pace.changed event journaled for p, which a first
+// read starts from.
+func (p *pace) resume(e core.Event) {
+	var c struct{ To int }
+	if e.Decode(&c) != nil || c.To <= 0 {
+		return
+	}
+	p.mu.Lock()
+	p.before = c.To
+	p.mu.Unlock()
 }
 
 // String says the limit and why it is there.
@@ -401,46 +425,4 @@ func (m *Module) paceChecks() {
 // and the lead.
 func (m *Module) Pace() map[string]string {
 	return map[string]string{"workers": m.workers.String(), "checks": m.checks.String(), "gates": m.gates.String(), "heavy": m.heavy.String()}
-}
-
-// pacedRead is the route a review of a change on project goes on while the
-// reviewer's plan spends its week more than aheadSlack ahead of the clock,
-// and why, or "" when it is on pace. The workers' pace holds new changes;
-// this holds what reading each one costs, as reads follow the changes in
-// flight: each read goes on the route's cheaper model, sonnet where the
-// route is opus. On 10-27 a login's week stood at 48% with a tenth of it
-// gone. How many reads a change needs doesn't change: a high class still
-// gets its second, separate read, as the warden's and tribunal's prompts
-// are high so they never land on one (docs/log.md). A change on the
-// security list is read as ever (the caller leaves it out).
-func (m *Module) pacedRead(project string) ([]core.Pick, string) {
-	route := m.Agents.Route("reviewer", project)
-	if len(route) == 0 {
-		return nil, ""
-	}
-	a := m.C.Runs.AheadIn(route[0], "seven_day", "reviewer")
-	if a <= aheadSlack {
-		return nil, ""
-	}
-	c := cheaper(route)
-	return append([]core.Pick{c}, slices.DeleteFunc(slices.Clone(route), c.Same)...), fmt.Sprintf("the reviewer's plan is %.0f%% ahead of its week", a*100)
-}
-
-// cheaper is the cheaper pick for a read on route: a later sonnet or haiku
-// in it, else sonnet on the first's harness where that is an opus on
-// Claude, else the first.
-func cheaper(route []core.Pick) core.Pick {
-	first := route[0]
-	if !strings.Contains(first.Model, "opus") {
-		return first
-	}
-	for _, p := range route[1:] {
-		if strings.Contains(p.Model, "sonnet") || strings.Contains(p.Model, "haiku") {
-			return p
-		}
-	}
-	if core.HarnessName(first.Harness) == "claude" {
-		first.Model = strings.Replace(first.Model, "opus", "sonnet", 1)
-	}
-	return first
 }

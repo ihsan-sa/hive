@@ -169,7 +169,9 @@ const Usage = `hive agent <op> [--key value ...]   (or one JSON object, or - for
 
 A value of @path reads that file. Common ops:
   progress  --text "where I am"                 shown on the dashboard
-  finish    --status done|blocked --account "..." [--tested ...] [--unsure ...]
+  finish    --status done|blocked --account "..." [--tested ...] [--passed "test cmd"] [--unsure ...]
+                                                 --passed: the project's test passed on your final commit,
+                                                 main merged in; with no forge CI the Hive merges on it
   message   --to <id|name|parent|person|lead> --text "..."
   inbox                                          messages waiting for you
   agents                                         who is running

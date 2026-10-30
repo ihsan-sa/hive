@@ -64,6 +64,7 @@ func Observe(r io.Reader, since, until time.Time) (Report, error) {
 	roles := map[string]string{} // run id → role, from every run.created, even before since
 	seen := map[string]bool{}    // tasks, requests and feedback already filed
 	said := map[string]bool{}    // room posts already counted, by sender and text
+	reverts := map[string]bool{} // project and PR of each revert task, which merges as an undo
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 1<<20), 64<<20)
 	for sc.Scan() {
@@ -77,6 +78,13 @@ func Observe(r io.Reader, since, until time.Time) (Report, error) {
 		str := func(k string) string { s, _ := d[k].(string); return s }
 		if e.Kind == "run.created" {
 			roles[str("id")] = str("role")
+		}
+		if e.Kind == "task.saved" && str("kind") == "revert" {
+			if pr, _ := d["pr"].(map[string]any); pr != nil {
+				if n, _ := pr["number"].(float64); n > 0 {
+					reverts[fmt.Sprint(str("project"), "#", n)] = true
+				}
+			}
 		}
 		// The first time the journal names a task, request or feedback is its
 		// filing; later saves of it are not new, even inside the window.
@@ -138,9 +146,12 @@ func Observe(r io.Reader, since, until time.Time) (Report, error) {
 				rep.Posts++
 			}
 		case "effect.merged":
-			rep.Merged++
-		case "effect.reverted", "score.reverted":
-			rep.Reverted++
+			// A revert lands as a merge of its own task's PR: an undo, not work.
+			if n, _ := d["pr"].(float64); reverts[fmt.Sprint(str("project"), "#", n)] {
+				rep.Reverted++
+			} else {
+				rep.Merged++
+			}
 		}
 	}
 	return rep, sc.Err()
@@ -193,8 +204,8 @@ func sorted(m map[string]int) string {
 // Table is the reports side by side, one row per arm, in Markdown.
 func Table(reps []Report) string {
 	var b strings.Builder
-	b.WriteString("| arm | outcome | minutes | runs | turns | messages | peer | room | briefs | helpers | asks | finished | notes | feedback | merged | peak MB | peak load |\n")
-	b.WriteString("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|\n")
+	b.WriteString("| arm | outcome | minutes | runs | turns | messages | peer | room | briefs | helpers | asks | finished | notes | feedback | merged | reverted | peak MB | peak load |\n")
+	b.WriteString("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|\n")
 	for _, r := range reps {
 		runs := 0
 		for _, n := range r.Runs {
@@ -204,8 +215,8 @@ func Table(reps []Report) string {
 		if name == "" {
 			name = "-"
 		}
-		fmt.Fprintf(&b, "| %s | %s | %.0f | %d | %d | %d | %d | %d | %d | %d | %d | %s | %d | %d | %d | %s | %s |\n", name, orDash(r.Outcome),
-			r.To.Sub(r.From).Minutes(), runs, r.Turns, r.Messages, r.Peer, r.Room, r.Briefs, r.Helpers, r.Asks, sorted(r.Finished), r.Notes, r.Feedback, r.Merged,
+		fmt.Fprintf(&b, "| %s | %s | %.0f | %d | %d | %d | %d | %d | %d | %d | %d | %s | %d | %d | %d | %d | %s | %s |\n", name, orDash(r.Outcome),
+			r.To.Sub(r.From).Minutes(), runs, r.Turns, r.Messages, r.Peer, r.Room, r.Briefs, r.Helpers, r.Asks, sorted(r.Finished), r.Notes, r.Feedback, r.Merged, r.Reverted,
 			peak(r.PeakMB > 0, "%d", r.PeakMB), peak(r.PeakLoad > 0, "%.1f", r.PeakLoad))
 	}
 	b.WriteString("\nWho talked to whom, and which roles ran:\n\n")

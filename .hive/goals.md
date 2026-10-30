@@ -10,6 +10,8 @@ So until the loop is closed (a change the Hive proposed itself, kept because it 
 
 Soft layers are a big part of that loop (23:21): sub-Hives in this Hive's state, each with very different agent prompts (specific ones, vague ones, philosophy only, the essay plus one line per role), each tackling real RSI work, and watched for whether they behave as a hive.
 
+Small problems in a tight loop (2026-10-29, 13:28 local): "These speed problems etc seem like good canditates for tight loop RSI on small problems: think karpathy autoresearch on optimizing the speed of something". The project hive-autoresearch came from it (task 261029-172927-2f0db2ee5e).
+
 ## The pivot of 2026-10-27: build in batches, ship once a day, delete first
 
 The person asked (19:36 local): "Given that our current progress have been very predictably roadblock after roadlack, how do we pivot/accelerate". The lead proposed three things, and the person agreed (19:39): "Excellent idea let's do it. We need to be willing to pivot fast and throw stuff away. In somewways the opportunity cost of staying on the same track is too high".
@@ -29,6 +31,8 @@ The person (08:56 local): "stuff is far too rigid still like eerything needs to 
 12:24: "the whole point of the hive is that it doesnt follow set rules and pipelines ... We cannot build a tight fast system if we have a ton of constraints and arbitrary rules at every turn, simply because those rules cannot be updated fast enough to match our intended dev rate".
 
 12:27: "This is not only you but the WHOLE HIVE. The hive is ONE. All agents are the same, just as important as one another, have the same amount of say, etc. They all work together as a HIVE. They enforce rules for one another and guide one another. Thats the whole point of giving up the rigid structure". And: "we gotta think laterally here".
+
+On merging (2026-10-29, 16:01 local, through Slack): "Do we really need this many checks", and "Or can we not just have a soft merge process where some tests run but agents hand merge stuff clearing conflicts dynamically instead of making it all a structured process". The lead filed it as a pivot (task 261029-200923-15c2909213).
 
 ## First milestone
 
@@ -109,6 +113,8 @@ What the person has asked that holds from now on, in their words where they gave
 - **A light core.** "the core should be as lightweight as possible"; "The rest goes into modules", "not the core".
 - **Modules: standard in the repo, extras in their own.** As decided with the person (2026-10-24, 10:40-10:41 local): the standard modules (agents with the common harness adapters, chat, improve, kb, system) stay in ihsan-sa/hive under modules/, each a module of its own; extras (Slack, a call/phone module, extra harnesses) live in their own public repos and install from the marketplace.
 - **Other harnesses.** Codex, Cursor and other open harnesses, not only Claude.
+- **Public where it can be.** "IMO repos that CAN be made public should be made public. It's fine for projects to be public etc, and the pll needs to anyways" (2026-10-29, 13:37 local; task 261029-173834-9ab06ed1f9).
+- **No caps or high caps.** "Just try to go with stuff that has no caps or high caps cuz otherwise were just gonna hit another paywall" (2026-10-29, 13:37 local, the same thread, on what keeps the Hive held back by the machine).
 - **Free models first.** Free models through OpenRouter first; paid ones only inside the $10/month cap.
 - **Stay on the newest release.** "You always should be on th enewest" (2026-10-24, 02:50 local; #237, #322). On the daily release train since: see the pivot of 2026-10-27 and No set rules above.
 - **Tree search over candidate Hives.** "what if we have changes get built very fast in parallel and have them spawn recursively so like changes and then new hives spawn fix those new fixes, etc, and just keep going down trees until we find one that works and is stable, pick that one, and archive the rest" (2026-10-25, 13:22 local). Not built yet: #932 was closed to clear the merge line on 2026-10-27 with its branch kept, to refile.
