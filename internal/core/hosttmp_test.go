@@ -84,7 +84,7 @@ func TestPruneTempRemovesQuietLeftovers(t *testing.T) {
 	other := mk(filepath.Join(shared, "go-build2"), true)
 	fresh := mk(filepath.Join(shared, "hive-gate-4"), false)
 	var gone []string
-	pruneTemp(ws, func(p string) { gone = append(gone, p); RemoveTree(p) })
+	pruneTemp(ws, leftoverAge, func(p string) { gone = append(gone, p); RemoveTree(p) })
 	for p, want := range map[string]bool{stale: false, test: false, own: false, busy: true, sbx: true, other: true, fresh: true} {
 		if Exists(p) != want {
 			t.Errorf("%s exists %v, want %v", p, Exists(p), want)
@@ -134,7 +134,7 @@ func TestPruneTmpRemovesRunsScratch(t *testing.T) {
 	quietIdle := mk("quiet", StatusIdle, true)
 	t.Cleanup(func() { RemoveTree(ws.Root) })
 	var gone []string
-	rs.pruneTmp(func(p string) { gone = append(gone, p); RemoveTree(p) })
+	rs.pruneTmp(leftoverAge, func(p string) { gone = append(gone, p); RemoveTree(p) })
 	for p, want := range map[string]bool{done: false, stopped: false, unknown: false, running: true, idle: true, quietIdle: false} {
 		if Exists(p) != want {
 			t.Errorf("%s exists %v, want %v", p, Exists(p), want)
@@ -182,7 +182,7 @@ func TestPruneHomesKeepsSessions(t *testing.T) {
 	young := mk("young", "", time.Now())
 	t.Cleanup(func() { RemoveTree(ws.Root) })
 	var gone []string
-	rs.pruneHomes(func(p string) { gone = append(gone, p); RemoveTree(p) })
+	rs.pruneHomes(homeAge, func(p string) { gone = append(gone, p); RemoveTree(p) })
 	for home, cut := range map[string]bool{done: true, recent: false, running: false, unknown: true, young: false} {
 		for _, keep := range []string{".claude/projects/x", ".codex", "notes.sh"} {
 			if !Exists(filepath.Join(home, keep)) {
@@ -204,14 +204,35 @@ func TestPruneHomesKeepsSessions(t *testing.T) {
 	// Marked, it is passed by; reopened and ended again since, it is cut again.
 	os.MkdirAll(filepath.Join(done, "venv"), 0o755)
 	gone = nil
-	rs.pruneHomes(func(p string) { gone = append(gone, p); RemoveTree(p) })
+	rs.pruneHomes(homeAge, func(p string) { gone = append(gone, p); RemoveTree(p) })
 	if len(gone) != 0 {
 		t.Errorf("a marked home was walked again: %v", gone)
 	}
 	mark := filepath.Join(filepath.Dir(done), HomePruned)
 	os.Chtimes(mark, old.Add(-time.Hour), old.Add(-time.Hour))
-	rs.pruneHomes(func(p string) { gone = append(gone, p); RemoveTree(p) })
+	rs.pruneHomes(homeAge, func(p string) { gone = append(gone, p); RemoveTree(p) })
 	if len(gone) != 1 || Exists(filepath.Join(done, "venv")) {
 		t.Errorf("a run that ended again after its cut kept its scratch: %v", gone)
+	}
+}
+
+// Under a twentieth of the room free is tight, and the clean takes
+// leftovers and ended runs' scratch sooner then.
+func TestTightRoomCleansSooner(t *testing.T) {
+	if tight([]Room{{Free: 10, Size: 100}}) || !tight([]Room{{Free: 10, Size: 100}, {Free: 4, Size: 100}}) || tight([]Room{{Free: 0, Size: 0}}) {
+		t.Fatal("tight misreads the room")
+	}
+	ws := Workspace{Root: t.TempDir()}
+	left := filepath.Join(ws.Temp(), "go-build1")
+	os.MkdirAll(left, 0o755)
+	aged := time.Now().Add(-2 * tightLeftoverAge)
+	os.Chtimes(left, aged, aged)
+	pruneTemp(ws, leftoverAge, func(p string) { RemoveTree(p) })
+	if !Exists(left) {
+		t.Fatal("a leftover a few hours quiet went with room to spare")
+	}
+	pruneTemp(ws, tightLeftoverAge, func(p string) { RemoveTree(p) })
+	if Exists(left) {
+		t.Fatal("a leftover a few hours quiet stayed on a tight disk")
 	}
 }
