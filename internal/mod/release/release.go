@@ -104,9 +104,9 @@ type Module struct {
 	// or follow, or `hive update`.
 	updating sync.Mutex
 	// checksAt are the checks running when an automatic update first
-	// waited for them (waitChecks) to install checksTag, since checksSince.
+	// waited for them (waitChecks), since checksSince; a newer release
+	// keeps the wait, an install ends it.
 	checksAt    map[string]bool
-	checksTag   string
 	checksSince time.Time
 	// Live installs the default modules from a copy of them (the modules
 	// registry's InstallFrom): following main, main's tip (main.go).

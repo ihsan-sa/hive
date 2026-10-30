@@ -230,3 +230,37 @@ func TestCheckWaitEndsAtItsCap(t *testing.T) {
 		t.Fatalf("binary %q", raw)
 	}
 }
+
+// Following a main that merges every few minutes while the check line is
+// always full, each newer tag inherits the wait the first one started: it
+// installs at the first wait's cap, not checksWaitMax after the latest
+// merge, and a check that started after the first look doesn't hold it.
+func TestCheckWaitSpansNewerTags(t *testing.T) {
+	m, _, _ := onMain(t, "v0.1.2", map[string]string{".hive/project.json": ci, "VERSION": "0.1"})
+	done := m.C.Effects.Slots.Acquire("hive", "abc", "test") // a long check, running all along
+	if msg := m.waitChecks("v0.1.2-main.aaaaaaaa", true); !strings.Contains(msg, "1 check(s) running") {
+		t.Fatalf("didn't wait: %q", msg)
+	}
+	first := time.Now().Add(-30 * time.Minute)
+	m.checksSince = first // the first tag waited half an hour ago
+	by := first.Add(checksWaitMax).UTC().Format("15:04Z")
+	if msg := m.waitChecks("v0.1.2-main.bbbbbbbb", true); !strings.Contains(msg, "at "+by+" at the latest") {
+		t.Fatalf("a newer tag restarted the wait (want %s): %q", by, msg)
+	}
+	m.checksSince = time.Now().Add(-checksWaitMax - time.Minute)
+	if msg := m.waitChecks("v0.1.2-main.cccccccc", true); msg != "" {
+		t.Fatalf("past the first tag's cap, a newer tag still waits: %q", msg)
+	}
+
+	// The check the wait began with ends and another starts with a newer
+	// tag: the newcomer doesn't hold it.
+	if msg := m.waitChecks("v0.1.2-main.dddddddd", true); !strings.Contains(msg, "1 check(s) running") {
+		t.Fatalf("didn't wait: %q", msg)
+	}
+	done()
+	next := m.C.Effects.Slots.Acquire("hive", "def", "test")
+	defer next()
+	if msg := m.waitChecks("v0.1.2-main.eeeeeeee", true); msg != "" {
+		t.Fatalf("a check that started after the first look holds a newer tag: %q", msg)
+	}
+}
