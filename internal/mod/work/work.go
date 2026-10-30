@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"maps"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -183,6 +184,10 @@ type Task struct {
 	// as red. CantRunSaid is the PR told of a can't-run, once per PR.
 	CantRuns    int `json:"cant_runs,omitempty"`
 	CantRunSaid int `json:"cant_run_said,omitempty"`
+	// Slows counts the tries in a row its tests were cut off at their time
+	// limit on a head that already holds main (slowTests); at SlowTries it goes
+	// back to its worker rather than take another check slot.
+	Slows int `json:"slows,omitempty"`
 	// Gate is the recursive gate's latest verdict on its head (self projects, selfgate.go).
 	Gate *core.GateResult `json:"gate,omitempty"`
 	// GateAsked is the gate item last put to the person (askGateFix),
@@ -1129,6 +1134,14 @@ func (m *Module) settle(t *Task, err error) {
 		m.save(t, core.Clip(err.Error(), 300)+"; the machine is slow, so the task waits, then goes on")
 		return
 	}
+	if core.GitLockBusy(err.Error()) {
+		// Another git step held the clone's lock past the call's own waits:
+		// no verdict on the task, which waits and goes on, counting nothing.
+		// A lock left by a dead git is cleared once stale (#2151).
+		t.Retry = time.Now().Add(time.Minute)
+		m.save(t, core.Clip(err.Error(), 300)+"; another git step holds the clone's lock, so the task waits, then goes on")
+		return
+	}
 	t.Kills = 0
 	t.Failures++
 	t.Retry = time.Now().Add(time.Duration(min(t.Failures, 6)) * 30 * time.Second)
@@ -1962,7 +1975,7 @@ func (m *Module) open(t *Task, p core.Project, sha, body string) error {
 	// that had the forge's checks re-run there lately waits for those instead.
 	// A retry of a head whose tests passed keeps that green run: what it
 	// retries is what came after the test, and the test line may be long.
-	t.PR, t.Recheck, t.SHA, t.Stage, t.Failures = pr, t.SHA == sha && !rerunning(t) && t.KeepsTest != sha, sha, StageTesting, 0
+	t.PR, t.Recheck, t.SHA, t.Stage, t.Failures, t.Slows = pr, t.SHA == sha && !rerunning(t) && t.KeepsTest != sha, sha, StageTesting, 0, 0
 	t.KeepsTest, t.Passed = "", ""
 	if w, ok := m.C.Runs.Get(t.Worker); ok && t.Checkpoint == "" && t.Banked == 0 && w.Finish != nil && strings.TrimSpace(w.Finish.Passed) != "" {
 		t.Passed = sha // the commit it finished with, pushed as it is
@@ -2031,14 +2044,18 @@ func (m *Module) test(t *Task, p core.Project) error {
 		return err
 	}
 	cfg := m.C.Effects.Config(p, main)
-	if len(cfg.ForgeTests) > 0 {
+	forged, err := m.forgeTested(p, main, t.SHA)
+	if err != nil {
+		return err
+	}
+	if len(forged) > 0 {
 		// The forge's CI tests every PR on its exact head: that run is the
 		// test, waited on at the merge (forgeChecks), and none runs here.
 		m.mu.Lock()
 		m.dropTestRunLocked(t.ID)
 		m.mu.Unlock()
 		t.Recheck = false
-		return m.passed(t, p, main, "its tests are the forge's ("+strings.Join(cfg.ForgeTests, ", ")+"), weighed before it merges")
+		return m.passed(t, p, main, "its tests are the forge's ("+strings.Join(forged, ", ")+"), weighed before it merges")
 	}
 	switch {
 	case t.Passed != "" && t.Passed == t.SHA:
@@ -2065,9 +2082,12 @@ func (m *Module) test(t *Task, p core.Project) error {
 			// which is the machine's fault and only waits.
 			t.CantRuns++
 		}
+		if c.Slow {
+			return m.slowTests(t, p, main, c)
+		}
 		return m.cantRun(t, p, c)
 	}
-	t.CantRuns = 0
+	t.CantRuns, t.Slows = 0, 0
 	m.RanCheck(p.Name, "test")
 	m.CloseCantRunAsk(p.Name, "cant-run:"+t.ID, "its tests run now")
 	if strings.HasPrefix(t.Reason, "the tests can't run") {
@@ -2101,12 +2121,37 @@ func (m *Module) test(t *Task, p core.Project) error {
 	return m.passed(t, p, main, "tests passed")
 }
 
+// forgeTested names the forge's checks that are head's test in place of a
+// local run: main's ForgeTests, or those of a head that moves its project's
+// tests to the forge once every one it names has a run on that head (its own
+// new workflow, which the forge runs on the PR). Until they show, or if they
+// never do, the local test runs as before.
+func (m *Module) forgeTested(p core.Project, main, head string) ([]string, error) {
+	if ft := m.C.Effects.Config(p, main).ForgeTests; len(ft) > 0 {
+		return ft, nil
+	}
+	ft := m.C.Effects.Config(p, head).ForgeTests
+	if len(ft) == 0 {
+		return nil, nil
+	}
+	runs, err := m.C.Effects.Forge.Checks(p.Repo, head)
+	if err != nil {
+		return nil, err
+	}
+	for _, n := range ft {
+		if !slices.ContainsFunc(runs, func(r core.CheckRun) bool { return r.Name == n }) {
+			return nil, nil
+		}
+	}
+	return ft, nil
+}
+
 // testsText is what a reader of sha gets as its test run: the local run's
 // output, or, where the forge's checks are the test (ForgeTests on main),
 // a line saying so when none ran here.
 func (m *Module) testsText(p core.Project, sha, main string) string {
 	c, ok := m.C.Effects.GetCheck(p.Name, sha, "test")
-	if ft := m.C.Effects.Config(p, main).ForgeTests; !ok && len(ft) > 0 {
+	if ft := m.C.Effects.ForgeTested(p, main, sha); !ok && len(ft) > 0 {
 		return "No local test run: the forge's checks (" + strings.Join(ft, ", ") + ") test this exact head, and it merges only once they pass there.\n"
 	}
 	return core.ClipEnds(c.FullOutput(), 16000)
@@ -2176,6 +2221,64 @@ func (m *Module) cantRun(t *Task, p core.Project, c core.Check) error {
 			again = "it is tested again, with a longer limit"
 		}
 		m.comment(p.Repo, t.PR.Number, "Tests on "+core.Short(t.SHA)+": **can't run**, "+c.CantRun+". That is no verdict on this change, so it isn't sent back; "+again+".\n\n```\n"+core.ClipEnds(c.Output, 1500)+"\n```")
+	}
+	return nil
+}
+
+// SlowTries is how many times in a row a head that holds main may have its
+// tests cut off at their time limit before it stops taking check slots.
+const SlowTries = 2
+
+// slowTests retries tests cut off at their time limit (c.Slow). A branch behind
+// main is first caught up with it: main may already hold what made the suite
+// slow, and a retry of the same stale commit would be cut off again however
+// often it ran (hive-hwde, 10-30: a fix cut its suite to 3 minutes, yet
+// branches cut before it timed out for hours, each try holding a slot up to
+// an hour). A head that holds main and is cut off SlowTries times in a row
+// goes back to its worker (to the lead, stopped, when it has none): the
+// slowness may be its own, and a worker's own --passed run lands it.
+func (m *Module) slowTests(t *Task, p core.Project, main string, c core.Check) error {
+	_, err := core.Git(m.C.WS.Project(p.Name), "merge-base", "--is-ancestor", main, t.SHA)
+	var exit *exec.ExitError
+	if errors.As(err, &exit) && exit.ExitCode() == 1 && t.Checkpoint == "" {
+		t.Slows = 0
+		return m.catchUp(t, p, main)
+	}
+	if err != nil {
+		return m.cantRun(t, p, c) // git can't tell: tried again as before
+	}
+	t.Slows++
+	if t.Slows < SlowTries {
+		return m.cantRun(t, p, c)
+	}
+	t.Slows = 0
+	return m.sendBack(t, p, fmt.Sprintf("The tests were cut off at their time limit %d times in a row on %s, which already holds main at %s, so they gave no verdict and the change stops taking check slots. "+
+		"It may be the machine's load or your change making the suite slow: run the tests yourself, make them faster if your change slowed them, commit if you changed anything, and finish again with --passed once they pass.\n\n```\n%s\n```",
+		SlowTries, core.Short(t.SHA), core.Short(main), core.ClipEnds(c.Output, 1500)))
+}
+
+// catchUp merges main into t's branch after its tests were cut off on a head
+// behind main, pushes it and tests that head instead, at once and with a
+// fresh time limit. A conflict goes to the worker as any other does.
+func (m *Module) catchUp(t *Task, p core.Project, main string) error {
+	next, err := m.C.Effects.UpdateBranch(p, t.SHA, main, t.Base)
+	if errors.Is(err, core.ErrConflict) {
+		return m.conflict(t, p, t.SHA, err)
+	}
+	if err != nil {
+		return err
+	}
+	if m.overtaken(t) {
+		return nil
+	}
+	if err := m.C.Effects.Push(p, t.Branch, next); err != nil {
+		return err
+	}
+	old := t.SHA
+	t.SHA, t.Recheck, t.Reason, t.Retry = next, false, "", time.Time{}
+	m.save(t, "the tests were cut off at their time limit on "+core.Short(old)+", which is behind main at "+core.Short(main)+"; merged main into it as "+core.Short(next)+" and testing that")
+	if t.PR.Number != 0 {
+		m.status(t, p, t.PR.Number, "Tests on "+core.Short(old)+" were cut off at their time limit before a verdict; main had moved on, so the Hive merged main into this branch ("+core.Short(next)+") and tests that instead.")
 	}
 	return nil
 }
@@ -2718,7 +2821,7 @@ func (m *Module) forgeChecks(t *Task, p core.Project, main string) (bool, error)
 	m.sightings(t, p, runs, keys, "", nil) // a red that only warns is evidence too
 	raw := runs
 	runs, req, warned := core.Advisory(p, runs, m.C.Effects.RequiredChecks(p, main), m.C.Effects.AdvisoryChecks(p, main))
-	req = m.C.Effects.Config(p, main).WithForgeTests(req)
+	req = core.ProjectConfig{ForgeTests: m.C.Effects.ForgeTested(p, main, t.SHA)}.WithForgeTests(req)
 	st, which := core.ChecksState(runs, req)
 	if (st == core.CheckFail || st == core.CheckCantStart) && rerunning(t) && t.Retried.before(which) {
 		m.hold(t, p, "waiting for the re-run of the forge's checks on "+core.Short(t.SHA)+" ("+core.CheckNames(which)+")")
@@ -3852,7 +3955,7 @@ func (m *Module) Recheck(id, back, by string) error {
 		m.save(&t, t.Reason)
 		return m.Retry(id)
 	}
-	t.Reason, t.Failures, t.Round, t.Reviews, t.Conflicts, t.CantRuns, t.ByPerson = "", 0, 0, 0, 0, 0, false
+	t.Reason, t.Failures, t.Round, t.Reviews, t.Conflicts, t.CantRuns, t.Slows, t.ByPerson = "", 0, 0, 0, 0, 0, 0, false
 	m.goNow(&t)
 	m.CloseCantRunAsk(t.Project, "cant-run:"+t.ID, "the change is tested again, asked by "+by)
 	if stage, what := m.unmade(t); stage != "" {

@@ -612,11 +612,15 @@ func (m *Module) spawnWarden(req *Request) error {
 	if req.Note != "" {
 		brief += fmt.Sprintf("\n\nThe person said go ahead and added, in their own words: %q", req.Note)
 	}
-	if _, err := m.C.Runs.Start(m.Agents.Spec(id, "warden", req.Project, dir, brief)); err != nil {
-		return err
-	}
+	// Weighing is saved before the run starts, so a restart between the two
+	// never leaves a running warden whose decide finds no request.
 	req.Warden, req.State = id, "weighing"
 	m.save(req)
+	if _, err := m.C.Runs.Start(m.Agents.Spec(id, "warden", req.Project, dir, brief)); err != nil {
+		req.Warden, req.State, req.Outcome = "", "failed", "no warden started: "+err.Error()
+		m.save(req)
+		return err
+	}
 	return nil
 }
 
@@ -627,9 +631,12 @@ func (m *Module) opDecide(r core.Run, args json.RawMessage) (any, error) {
 	}
 	m.act.Lock()
 	defer m.act.Unlock()
-	req, ok := m.find(func(x *Request) bool { return x.Warden == r.ID })
+	req, ok := m.find(func(x *Request) bool { return x.Warden == r.ID || x.Warden == "" && "w-"+x.ID == r.ID })
 	if !ok {
 		return nil, errors.New("you are not weighing a request")
+	}
+	if req.Warden == "" && req.State == "asked" { // its weighing was lost to a restart before this fix
+		req.Warden, req.State = r.ID, "weighing"
 	}
 	if req.State != "weighing" {
 		return nil, fmt.Errorf("request %s is already decided (%s)", req.ID, req.State)

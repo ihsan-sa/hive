@@ -377,10 +377,21 @@ func (e *Effects) Sync(p Project) (string, error) {
 	if err != nil || sha == "" {
 		return "", nil
 	}
-	if _, err := Git(dir, "checkout", "-q", "-f", "-B", p.Branch, sha); err != nil {
+	// A big tree on a loaded machine can take minutes to check out; a
+	// checkout cut off at two left index.lock behind for every task (#2151).
+	if _, err := GitT(10*time.Minute, dir, "checkout", "-q", "-f", "-B", p.Branch, sha); err != nil {
 		return "", err
 	}
 	return sha, nil
+}
+
+// HostFetch fetches from p's origin into the host clone under the project's
+// lock, so it never runs beside Sync's fetch and checkout (#2151). Every git
+// step a module takes that writes the host clone goes through here.
+func (e *Effects) HostFetch(p Project, args ...string) error {
+	defer e.lock(p.Name)()
+	_, err := GitEnvT(5*time.Minute, e.ws.Project(p.Name), ghEnv(p.Repo), append([]string{"fetch"}, args...)...)
+	return err
 }
 
 // MainLine is the set of commits main has been at in the host clone: its
@@ -401,6 +412,19 @@ func (e *Effects) MainLine(p Project) map[string]bool {
 func (e *Effects) Config(p Project, sha string) ProjectConfig {
 	raw, _ := Git(e.ws.Project(p.Name), "show", sha+":.hive/project.json")
 	return ParseProjectConfig(raw)
+}
+
+// ForgeTested names the forge's checks that are the test of head against
+// main: main's ForgeTests, or, for a change that moves its project's tests to
+// the forge, the head's own. The forge runs a PR's own new workflow on its
+// head, and the head's project.json is the person's to approve (BaseProtected)
+// before it merges, so a head can't name them to skip its test unseen; the
+// merge waits for every one named to pass there.
+func (e *Effects) ForgeTested(p Project, main, head string) []string {
+	if ft := e.Config(p, main).ForgeTests; len(ft) > 0 {
+		return ft
+	}
+	return e.Config(p, head).ForgeTests
 }
 
 // ScoreVersion names the score at sha: its command and the content of its
@@ -1991,8 +2015,8 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	var flaky []string                       // a red local test run's known flakes, its only failures
-	tested := e.Config(p, m.Main).ForgeTests // the forge's checks are the test there
+	var flaky []string                        // a red local test run's known flakes, its only failures
+	tested := e.ForgeTested(p, m.Main, m.SHA) // the forge's checks are the test there
 	switch c, ok := e.GetCheck(p.Name, m.SHA, "test"); {
 	case len(tested) > 0:
 		// No local run is needed, and one there is no gate: the forge's

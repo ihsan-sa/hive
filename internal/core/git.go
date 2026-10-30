@@ -9,8 +9,10 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -50,7 +52,16 @@ func GitEnvT(timeout time.Duration, dir string, env []string, args ...string) (s
 		}
 	}
 	out, err := gitOnce(timeout, dir, env, args...)
-	if err != nil && clearStaleLock(dir, err.Error()) {
+	for _, wait := range gitLockWaits {
+		if err == nil || !GitLockBusy(err.Error()) {
+			break
+		}
+		if !clearStaleLock(dir, err.Error()) {
+			if _, _, ok := ownLock(dir, err.Error()); !ok {
+				break // a lock outside dir's own .git isn't the Hive's to wait on
+			}
+			time.Sleep(wait)
+		}
 		out, err = gitOnce(timeout, dir, env, args...)
 	}
 	var exit *exec.ExitError
@@ -142,20 +153,30 @@ func (g *gitMemoT) put(key, out string, err error) {
 	g.m[key] = gitAnswer{out, err, time.Now()}
 }
 
-// clearStaleLock removes the lock a failed git call names when it is a plain
-// file inside dir's own .git and older than staleGitLock, and says whether it
-// did. Anything else (a lock elsewhere, a symlink, a fresh lock) is left alone.
-func clearStaleLock(dir, msg string) bool {
+// gitLockWaits are the pauses before a call that found a live git lock in
+// its repo's own .git (another git step on the same clone, as a fetch beside
+// a checkout) runs again: the other step is usually done within seconds, and
+// a busy lock is no fault of the step that met it (#2151).
+var gitLockWaits = []time.Duration{time.Second, 3 * time.Second, 8 * time.Second}
+
+// GitLockBusy says whether an error's text is git refusing to start because
+// another git call holds a lock (index.lock, a ref's lock) in the repo: no
+// verdict on the step, which waits and goes on.
+func GitLockBusy(text string) bool { return gitLockExists.MatchString(text) }
+
+// ownLock is the lock a failed git call names, when it is a plain file
+// inside dir's own .git (no symlink on the way).
+func ownLock(dir, msg string) (string, os.FileInfo, bool) {
 	m := gitLockExists.FindStringSubmatch(msg)
 	if m == nil || dir == "" {
-		return false
+		return "", nil, false
 	}
 	gitDir, err := filepath.Abs(filepath.Join(dir, ".git"))
 	if err != nil {
-		return false
+		return "", nil, false
 	}
 	if fi, err := os.Lstat(gitDir); err != nil || !fi.IsDir() {
-		return false
+		return "", nil, false
 	}
 	lock := m[1]
 	if !filepath.IsAbs(lock) {
@@ -163,15 +184,26 @@ func clearStaleLock(dir, msg string) bool {
 	}
 	lock = filepath.Clean(lock)
 	if rel, err := filepath.Rel(gitDir, lock); err != nil || rel == "." || strings.HasPrefix(rel, "..") {
-		return false
+		return "", nil, false
 	}
 	if real, err := filepath.EvalSymlinks(filepath.Dir(lock)); err != nil {
-		return false
+		return "", nil, false
 	} else if realGit, err := filepath.EvalSymlinks(gitDir); err != nil || !strings.HasPrefix(real+string(filepath.Separator), realGit+string(filepath.Separator)) {
-		return false
+		return "", nil, false
 	}
 	fi, err := os.Lstat(lock)
-	if err != nil || !fi.Mode().IsRegular() || time.Since(fi.ModTime()) < staleGitLock {
+	if err != nil || !fi.Mode().IsRegular() {
+		return "", nil, false
+	}
+	return lock, fi, true
+}
+
+// clearStaleLock removes the lock a failed git call names when it is a plain
+// file inside dir's own .git and older than staleGitLock, and says whether it
+// did. Anything else (a lock elsewhere, a symlink, a fresh lock) is left alone.
+func clearStaleLock(dir, msg string) bool {
+	lock, fi, ok := ownLock(dir, msg)
+	if !ok || time.Since(fi.ModTime()) < staleGitLock {
 		return false
 	}
 	if os.Remove(lock) != nil {
@@ -189,6 +221,13 @@ func gitOnce(timeout time.Duration, dir string, env []string, args ...string) (s
 	cmd := exec.CommandContext(ctx, "git", full...)
 	cmd.Dir = dir
 	cmd.Env = append(append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GIT_ASKPASS=", "LC_ALL=C"), env...)
+	if runtime.GOOS != "windows" {
+		// A git ended by its timeout gets SIGTERM first, on which it removes
+		// its own lock files; SIGKILL would leave index.lock behind and fail
+		// every later step in the clone until the lock goes stale (#2151).
+		cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
+		cmd.WaitDelay = 10 * time.Second
+	}
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
 	err := cmd.Run()
