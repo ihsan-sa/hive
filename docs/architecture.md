@@ -79,23 +79,17 @@ On host paths (bare, Seatbelt) the tools folder's bins come first on PATH, so an
    The person's asks and the Hive's own briefs (trials, improve) are filed as they come.
 3. work.Tick: issue (idempotent by body marker) → worker run `w-<task>` in a fresh checkout at main → worker `finish`.
 4. Effects.Extract: `git bundle` made **inside the sandbox**, fetched into the host clone with fsck, must descend from the recorded base → push `hive/<task>` → PR (idempotent by head branch).
-5. Soft merge (the person, 10-30: "just send it, minimal gates, fail fast, stuff breaks but revert").
-   The worker merges main into its branch and resolves any conflict in its own turn, runs the project's tests, and finishes with `--passed "<test command>"` when they pass on that commit (`Finish.Passed`; `Task.Passed` is the head it names).
-   The testing stage then goes straight on: a project whose main `.hive/project.json` names `forge_tests` waits for those forge checks at the merge (`forgeChecks`, `Effects.Merge`);
-   one without CI merges on the worker's pass, or a revert at once;
-   anything else (a host-made commit, a worker that didn't pass) runs the test once here (`Effects.RunCheck`, sandboxed, command from main's `.hive/project.json`), and a red goes back to its worker, main red or not.
-6. No reviewer: nothing reads a change before it merges, and there is no small-change rule, high-path second read or recursive gate.
-   Paths in the project's `.hive/project.json` `protected` list still wait for an approval (`StagePerson`).
-7. Red tests or a red forge check → same worker, same checkout, bounded rounds (default 3) → stop with PR open.
+5. No process (the person, 10-30: "they can freely edit everything including the core with no process"; earlier: "just send it, minimal gates, fail fast, stuff breaks but revert").
+   The worker merges main into its branch and resolves any conflict in its own turn, and finishes; it may run the tests, and nothing makes it.
+   The testing stage runs no test and goes straight to the merge.
+6. No reviewer: nothing reads a change before it merges, whatever paths it touches, the core and the security list included; no protected path waits for an approval, and no forge check is waited on.
+7. Red tests show only after the merge, in improve's measure of main (step 10), which reverts the merge.
 8. Merge: no merge line.
-   A PR the forge says conflicts goes straight back to its worker to merge main (`conflict` → `sendBack`, with `main.bundle`); otherwise it merges as it is, and a clash between two PRs is caught after the merge by improve's measurement of main (step 10).
-   A PR whose changed paths match main's `tests/LANDING-security.toml` `paths` (`Change.Security`; decided by paths alone) waits first for its security read on its own diff (`Effects.SecurityOK`): a security seat (`s-<task>-<diff>-security-<n>`, a read-only run on a `tribunal_models` seat), and for a `root` entry a panel of `core.PanelSeats` such runs;
-   a majority of lands passes, else its fixes send it back.
-   An outside read recorded with `hive read` counts in their place.
-   Then the forge's own checks on that exact head: each name in `required_checks` plus `forge_tests` must have succeeded, except a failure main has at its head too (`core.ChecksAgainstMain`).
-   The person's `hold_merges` still holds.
+   A PR the forge says conflicts goes straight back to its worker to merge main (`conflict` → `sendBack`, with `main.bundle`); otherwise it merges as it is, a draft readied, and a clash between two PRs is caught after the merge by improve's measurement of main (step 10).
+   The publish scan sends back a change that would publish private details (a hard limit), and the person's `hold_merges` still holds.
+   An agent may instead push to main itself on its own token; a worker that did and then finishes ends as landed (`alreadyLanded`), and that push is the agent's to watch on CI.
 9. Checkpoints (scored projects): while a worker runs, a change to its checkout's reflog makes the host extract its newest commit and score it; one that beats the best kept score (or the last checkpoint's, until main is measured) by more than the tolerance goes through steps 4-8 as a checkpoint on `hive/<task>[-n]`, its PR not closing the issue.
-   Red tests, a fix verdict, a conflict or a "leave open" drop it with the worker untouched.
+   A conflict drops it with the worker untouched.
    Once merged, the task's base moves to that commit and the worker is told at its next prompt; later commits are laid onto main with that commit as the merge base (`UpdateBranch`, `git merge-tree --merge-base`), since main holds it squashed.
    A finish with nothing past the last checkpoint is done.
    Each merged checkpoint keeps its PR on the task (`Banks`), so a revert of it names that PR.
@@ -207,19 +201,16 @@ Main's own checks stay here, as they write the shared build cache.
 The work queue lets one task a pass go past a strained machine, or past its pace, while an executor has room;
 one started past the pace is an away run (`RunSpec.Away`): its turns go to an executor with room first, strained here or not, and run here when none has room, and it holds no worker slot here while its latest turn ran elsewhere (at most `max_workers`, or 4, are away at once);
 a machine over `load_max` alone holds tasks as it does without an executor (from the workers' start on), since launch would run them here.
-A manifest with `"command": true` gives `hive <name> <args...>`: the CLI runs its program with the arguments, attached to the terminal, from its folder with its own `HOME` and the scrubbed environment, only for a module it would run (one the person put there, or one at the commit its review approved).
+A manifest with `"command": true` gives `hive <name> <args...>`: the CLI runs its program with the arguments, attached to the terminal, from its folder with its own `HOME` and the scrubbed environment, only for a module it would run (any whose commit it can read).
 A built-in command of the same name wins.
 
 **Trust.** A module's program is not sandboxed: a door needs the network and the API on localhost, and a lease needs devices.
 It runs as the person, so it can read anything the person can, including `.hive/daemon.json` (which holds the person's own API token) and the person's `gh` and `ssh` config on disk.
-The review gate below is therefore the trust boundary.
+That is no more than an agent's run in home reaches (it runs as the hive user, with the user bus), so no review reads a module's code before it runs (the person, 10-30: "freely edit everything including the core with no process").
 The scoped token and the scrubbed environment only keep a well-behaved module to its hooks; they don't stop a hostile one.
-A module installed from git is cloned only on the person's "install", and its program starts only once a read-only review run (`module-reviewer`, scratch copy of its files, structured `approve`/`decline`) has read it at the commit checked out, and the brief names that commit.
-An update moves the commit, so it stops and is read again before it runs.
-A decline raises an alert and the program stays stopped.
-A review that ends with no vote (it failed or crashed) is not a decline: it runs again, up to three times in one life of the daemon, then raises one alert and waits until the person presses `r` on the module in the Modules screen (`/api/module/review`) or restarts the Hive.
-A clone whose install failed is removed, and a folder with `.git` but no source record is read like any other git module.
-A module the person put in `.modules/` by hand, with no `.git`, runs as it is, and so does a shipped module (the kb module's `dream/`): its trust comes from the Hive's own merge, where `tests/LANDING-security.toml` puts every `modules/*/module.json` and the shipped program's source behind a security read.
+A module installed from git starts at the commit checked out, and an update moves the commit, so it stops and starts again at the new one.
+A clone whose install failed is removed, and a folder with `.git` but no source record runs at the commit it holds.
+A module the person put in `.modules/` by hand, with no `.git`, runs as it is, and so does a shipped module (the kb module's `dream/`).
 The program never holds the forge credential: its environment drops forge and model tokens and the person's config folders, `HOME` is its own `.hive/modules/<name>/` (covered in every agent's `/hive/state`, so no run reads its login or log), and no scope pushes, merges or reads secrets, so effects stays the only holder.
 
 **Against an in-process hook table.** The other way to build this is a hook table: the loop loads each listed module's file by path and calls its hooks in its own process, a door's hooks come from the registry, and a run gets only the modules its row grants.
@@ -251,8 +242,9 @@ Built-in modules still run in-process, as a hook table would.
   The control center lists each login's expiry and last renewal.
   Every login, the machine's own included, can carry a name the person gives or changes with `hive login name <login> <name>` (`.hive/logins/names.json`, by key; `setup.NameLogin`, a module's, not the core's): `hive status` and the control center show it beside the key (`cc2 (claude)`), while records, usage and folders keep the key, so a rename loses no history.
 - Host git never runs in an agent's checkout (only in host clones and fresh gate clones; hooks disabled, fsck on fetch).
-- Only `hive/*` branches are pushed; main changes only by merge; `PushInitial` only into an empty repo with a host-made commit.
-- Merge requires: host-recorded passing test on that sha (or a red one whose every failure main's own recorded run at the merge's main shares, `core.NoWorse`, as the testing stage lets on; where main's `forge_tests` names checks, none: those checks must have succeeded on the sha instead, or fail only where main's do) + (small | land verdict from a core-started read-only reviewer on that sha's own diff | host-made revert/setup | a change of nothing but files the Hive last wrote from its own record, `Change.Recorded`) + an approval if protected paths changed, other than a recorded file (the person's at autonomy 1, else a warden's; `risk.Weigh`; bound to the sha and its own diff, `DiffID`, so main merged in after the yes doesn't ask again while that diff is unchanged) + each of main's `required_checks` succeeded and no forge check failing, can't-start or running on that sha + for a path on `tests/LANDING-security.toml`, a security read that said land on its own diff (the Hive's security seat, with its panel's majority for a root path, or an outside read from perms or the architect, whose fix outweighs any land).
+- The effects process pushes only `hive/*` branches (`PushInitial` only into an empty repo with a host-made commit); an agent may push to main itself on its own token, and the keep-history ruleset refuses a force-push or deletion of main.
+- Merge requires nothing but the person's hold being off and the steward record (`Effects.Merge`): no test, read, approval or forge check (10-30).
+  What follows on reads still holds where reads are used, at release.
   A read is bound to the diff its reviewer was given (`core.DiffID`: the change's own diff from its merge base with main, `--binary --full-index`, hunk positions and text files' blob-id lines left out; a binary file keeps its index line, since its delta is relative to the old blob), so it carries to a head with main merged in only while that own diff is unchanged;
   a merge whose conflict resolution touches the change's own files needs a new read.
   Any `.gitattributes` is high class, since it picks merge drivers.
@@ -313,6 +305,8 @@ Settings in `.hive/config.json`; none of them stops or parks work.
   A check that fails mentioning `GOCACHEPROG` runs once more without the shared build cache; the hourly sweep empties a project's build cache past 10 GB while no check uses it.
   A check whose output says the disk or a quota is full (`disk quota exceeded`, `no space left on device`, ENOSPC, EDQUOT) is can't-run, with one `disk` alert naming what uses the room until a check runs again, and it starts the `hive.clean` job (hourly and at start): agents' checkouts whose run ended and whose task is merged or done (stopped or blocked ones after 7 days; reviewers', and runs with no task, after 24 hours; leads' after 7 days), check homes this daemon isn't running (at once: only one daemon runs on a workspace, and the home's stop file is written first, which ends a check a dead daemon left), clean checkouts and prefetch folders over 3 hours old, dead sandboxes' runtime folders in `/dev/shm` (a live `sandbox-exec` holds a lock in its own) and specs no sandbox read in an hour, recursive gate runs a dead gate left untidy (`gate.Reap`, never the one in flight), the Hive's leftovers in the host's `/tmp` (`hive-*`, `TestSoftLayer*`; not `hive-sbx-*`, which the sandbox sweep keeps by their locks) and everything in the daemon's own temp folder once nothing in them has changed for 24 hours (`pruneTemp`), runs' own `/tmp` (`Runs.pruneTmp`: an ended or unknown run's at once, a waiting run's once quiet for 24 hours, never one a turn is using), the module cache past 20 GB while no check runs;
   An ended run's home is cut down to its harness's sessions (`.claude`, `.claude-open`, `.codex`, `.hive-open`, and its files) six hours after it ended, so its clones, venvs and build and package caches go (`Runs.pruneHomes`, marked `home-pruned` until the run moves again; 630 GB of them on 10-30).
+When a place the Hive writes has under 5% of its room free, the clean takes temp leftovers and runs' `/tmp` quiet for 3 hours, not 24, and ended runs' homes 30 minutes after they ended, not six hours (`tight`).
+The clean's line names the daemon's temp folder as a part of its own, and what no part names in `.hive/private` by its subfolder (`topOf`), so the space no part names is traced to the folder that holds it.
   then it measures the Hive's disk use and the room on the workspace's and temp filesystems for the dashboard (`State.Disk`).
   A task's checkouts also go the moment it is merged or done.
 - Narrowed checks: a change's check (the work module's testing stage, `RunCheckSince`) runs only what the change can affect (#1161): when the test command is only `go vet ./...` and `go test [flags] ./...` steps, `internal/goscope` reads the clean checkout (parsing, no go command) and names the packages whose result can differ from the merge base's: a package whose build changed (a non-test file or an embedded file), each one importing it, each one whose tests import one, hold a changed file in their folder, or name a changed path (above their own folder, or in or below it where the path is there: `"."`, `"docs/core.md"`; a `"../.."` literal, a `filepath.Join("..", ...)` of literals, constants and local names; a path built by a test counts the built package's changes);

@@ -54,6 +54,27 @@ The person, in the lead's chat (local time):
 
 The lead filed it as a pivot (task 261030-012011-88ac998307).
 
+## Fully open, no process, minimal stuff (2026-10-30)
+
+The person, relayed by autobox into the lead's chat (local time of the relay; the record's times are UTC, four hours ahead):
+
+10:43: "we need to fully open up the hive. We need to accept any and all risk within the hive and let the agents do whatever within the hive. They could in theory write over one another etc, but they need to communicate and be agile for that not to happen. This is critical to the function of the hive."
+And: "Ideally we have very lightweight protection or some sort of external passive backup, but if thats too heavy, axe it and accept the risk within the hive".
+The backup is the nightly copy in ~/hive-backups, which autobox adds to the box's own off-machine backup; what leaves the Hive (money, credentials, private details going out, anything in his name outside, deleting repos or history) stays with the wardens.
+
+11:35: "Any agent in the hive should pretty much be like the same type of session as the open up or free space session spawned in home but within the system that allows them to talk to one another".
+
+11:39, his most important point: "most important tho is that they can freely edit everything including the core with no process so that they can actually make these changes".
+On how agents talk: "should they just be dropped in with no structure and EVERYTHING is a module, including messaging. So all messages are public on a board and agents can add themselves"; "it's a balance. they dont read anything but they find whats needed"; "they get given minimal stuff".
+As agreed with him through autobox: nothing is pushed into an agent's context, it searches the board for what it needs, and a mention only wakes it.
+
+11:49, the one exception to no process, on an agent editing the code that holds the hard limits: "hmm well in that case maybe a change to the warden code needs a warden or someting".
+So a change to the code that enforces the hard limits gets a warden's look before it lands, and nothing else does.
+
+On the hardware talk he shared (10:00 and 10:05): "the difference is that he was still involved whereas the hive must be fully autonomous", and "Like i may still be needed here and there, but the point of closing the loop is having it be critical of its own design, form its own questions, and then build tools to test those to ensure the board will work".
+
+The open-up, prompt-trimming and no-process sessions in home (units hive-openup-261030, hive-prompts-261030, hive-noprocess-261030) carried out the first of these; their reports are in ~/openup-261030/REPORT.md and ~/prompts-261030/REPORT.md.
+
 ## First milestone
 
 You land a change you proposed yourself, which beats your benchmark, with nobody in between. Then you release it and update your own install to that release.
