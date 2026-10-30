@@ -6,7 +6,9 @@ When one of them changes, change it there too.
 How a change lands now, after the simplification of 10-29/30 (the person: "just send it, minimal gates, fail fast, stuff breaks but revert"):
 - Soft merge (9306dd2): a worker finishes with `--passed "<test command>"` once the project's tests pass on its commit with main merged in, and its PR merges at once on green forge CI, or on that pass where the project has no forge CI.
   There is no reviewer stage and no merge line; a PR that conflicts goes back to its worker, who merges main in its own turn.
-  What stays: the security read for paths in `tests/LANDING-security.toml`, protected paths' approval, the person's `hold_merges`, the publish scan, and improve's measure of main after every merge, which reverts a break or a score drop beyond noise ([score.md](score.md)); a fall with tests green after a change taken as a gain goes to a judge ([judge.md](judge.md)).
+  No process since 17d0ea4: no test, read, approval or forge check waits before a merge.
+  The one exception: a change to the code that enforces the hard limits (the `limits` array in `tests/LANDING-security.toml`) waits for a warden's read of its own diff ([risk.md](risk.md#a-wardens-read-of-the-limits-code)).
+  What stays besides: the person's `hold_merges`, the publish scan, and improve's measure of main after every merge, which reverts a break or a score drop beyond noise ([score.md](score.md)); a fall with tests green after a change taken as a gain goes to a judge ([judge.md](judge.md)).
 - No gate: the recursive gate is out of the merge path and its code is deleted (#2142, PR #2166; [gate.md](gate.md)).
   A change to the Hive merges on its tests like any other and is measured after.
 - H0 follows main (8fab9b7, 8474502): behaviour (the default modules) is copied from main into `.modules/` on every merge; the binary is built from the newest main commit whose forge CI passed, stamped `<line>-main.<sha8>`, and installed between turns, with the one it replaced kept as `.old` for `hive agent fallback`.

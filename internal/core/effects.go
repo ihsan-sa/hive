@@ -1793,6 +1793,9 @@ type Change struct {
 	Diff     string   `json:"-"`
 	// ProtectedDiff is the diff of the protected files alone, shown to the person who approves it.
 	ProtectedDiff string `json:"-"`
+	// Limits are files on the list's limits array: code that enforces the
+	// hard limits, which merges only after a warden's read (LimitsHeld).
+	Limits []string `json:"limits,omitempty"`
 }
 
 // SecurityWhere says why the change's Security files need a security read:
@@ -1881,7 +1884,7 @@ func (e *Effects) Classify(p Project, mainSHA, sha string) (Change, error) {
 		protected = append(protected, cfg.Score.Evaluator()...)
 	}
 	list := e.ReadFile(p, mainSHA, SecurityList)
-	security, root := ParseList(list, "paths"), ParseList(list, "root")
+	security, root, limits := ParseList(list, "paths"), ParseList(list, "root"), ParseList(list, "limits")
 	docsOnly := true
 	for _, l := range strings.Split(stat, "\x00") {
 		f := strings.SplitN(l, "\t", 3)
@@ -1900,6 +1903,9 @@ func (e *Effects) Classify(p Project, mainSHA, sha string) (Change, error) {
 		}
 		if under(file, cfg.Root) {
 			c.Root = append(c.Root, file)
+		}
+		if matchAny(file, limits) {
+			c.Limits = append(c.Limits, file)
 		}
 		// What runs with elevated rights (the list's root entries, or the
 		// project's root class) needs the security read and its panel,
@@ -2024,6 +2030,7 @@ type MergeRequest struct {
 	Main    string
 	Subject string
 	Task    string // the task whose PR it is
+	Revert  bool   // a revert the Hive made: it needs no warden's read (LimitsHeld)
 	// Draft is the PR's state at the caller's last look: a draft is readied
 	// as it merges. One made a draft after that look isn't: MergePR refuses
 	// it with ErrDraft, and the next look readies it.
@@ -2036,8 +2043,9 @@ type MergeRequest struct {
 // Merge merges the PR at sha. Nothing is weighed first: no test, read,
 // approval or forge check (the person, 10-30: "freely edit everything
 // including the core with no process"). What breaks main shows in its
-// measurement after the merge, which reverts it. Only the person's hold
-// and the release repository's steward record stop it.
+// measurement after the merge, which reverts it. Only the person's hold,
+// the release repository's steward record and, for a change to the code
+// that enforces the hard limits, a warden's read stop it (LimitsHeld).
 func (e *Effects) Merge(m MergeRequest) (string, error) {
 	p := m.Project
 	if e.MergeHeld != nil {
@@ -2051,6 +2059,9 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 	ch, err := e.Classify(p, m.Main, m.SHA)
 	if err != nil {
 		return "", err
+	}
+	if why := e.LimitsHeld(p, ch, m.SHA, m.Revert); why != "" {
+		return "", refuse("%s: %s", short(m.SHA), why)
 	}
 	if m.Stale != nil && m.Stale() {
 		return "", refuse("#%d: its task was stopped or brought back while the merge was weighed", m.PR)

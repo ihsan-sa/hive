@@ -1305,7 +1305,10 @@ func (m *Module) Weigh(a core.Ask) string {
 	}
 	// Saying yes to a merge spends nothing, so a money word in its title or
 	// diff doesn't make it the person's (DecisionCeiling); the rest still does.
-	if cfg := m.C.WS.LoadConfig(); cfg.Autonomy == 1 || core.DecisionCeiling(cfg.Floor, a.Title, why) != "" {
+	// A read of a change to the code that enforces the hard limits is a
+	// warden's (the person, 10-30): that code names tokens, secrets and
+	// sending outward, so the ceiling's words in its diff don't make it theirs.
+	if cfg := m.C.WS.LoadConfig(); cfg.Autonomy == 1 || a.Kind != core.LimitsRead && core.DecisionCeiling(cfg.Floor, a.Title, why) != "" {
 		m.C.Person.Ask(a)
 		return "person"
 	}

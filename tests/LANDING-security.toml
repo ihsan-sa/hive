@@ -118,3 +118,37 @@ root = [
   "internal/setup/**",
   "internal/mod/release/**",
 ]
+
+# The code that enforces the hard limits: money, credentials, private details
+# going out, anything outward in the person's name, and deleting a repository
+# or its history. Everything else lands with no read, the core included; a
+# change to one of these merges only once a warden has read its exact diff
+# (core.LimitsHeld; the person, 10-30: "maybe a change to the warden code
+# needs a warden"). A revert the Hive makes needs none. The limits are meant
+# to hold outside this code too (token scopes, the forge's rulesets, the
+# accounts' spend limits): this read is the in-code half. Read from main, so
+# a change can't move its own bar; keep it narrow, as each entry is a wait.
+limits = [
+  # This list, and the check that reads it.
+  "tests/LANDING-security.toml",
+  "internal/core/limits.go",
+  "internal/mod/work/limits.go",
+
+  # What is always the person's and what goes to a warden.
+  "internal/core/ceiling.go",
+
+  # Wardens, tribunals and the approved scripts they run outside the sandbox.
+  "internal/mod/risk/**",
+
+  # The scan for private details on every release and export, and the list of
+  # what a release publishes.
+  "internal/mod/scan/**",
+  "cmd/hive-scan/**",
+  ".hive/public.txt",
+
+  # What an agent's turn can reach: credentials covered, egress filtered.
+  "internal/sandbox/**",
+
+  # Which token a push or merge goes out on.
+  "internal/core/tokens.go",
+]

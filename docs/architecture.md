@@ -89,10 +89,7 @@ On host paths (bare, Seatbelt) the tools folder's bins come first on PATH, so an
 7. Red tests or a red forge check → same worker, same checkout, bounded rounds (default 3) → stop with PR open.
 8. Merge: no merge line.
    A PR the forge says conflicts goes straight back to its worker to merge main (`conflict` → `sendBack`, with `main.bundle`); otherwise it merges as it is, and a clash between two PRs is caught after the merge by improve's measurement of main (step 10).
-   A PR whose changed paths match main's `tests/LANDING-security.toml` `paths` (`Change.Security`; decided by paths alone) waits first for its security read on its own diff (`Effects.SecurityOK`): a security seat (`s-<task>-<diff>-security-<n>`, a read-only run on a `tribunal_models` seat), and for a `root` entry a panel of `core.PanelSeats` such runs;
-   a majority of lands passes, else its fixes send it back.
-   An outside read recorded with `hive read` counts in their place.
-   Then the forge's own checks on that exact head: each name in `required_checks` plus `forge_tests` must have succeeded, except a failure main has at its head too (`core.ChecksAgainstMain`).
+   No read and no forge check waits, except one: a PR whose changed paths match main's `tests/LANDING-security.toml` `limits` (`Change.Limits`, the code that enforces the hard limits) waits for a warden's read of its own diff (`limitsRead` asks through `risk.Weigh`; `Effects.Merge` refuses without it, `core.LimitsHeld`), and a no sends it back to its worker.
    The person's `hold_merges` still holds.
 9. Checkpoints (scored projects): while a worker runs, a change to its checkout's reflog makes the host extract its newest commit and score it; one that beats the best kept score (or the last checkpoint's, until main is measured) by more than the tolerance goes through steps 4-8 as a checkpoint on `hive/<task>[-n]`, its PR not closing the issue.
    Red tests, a fix verdict, a conflict or a "leave open" drop it with the worker untouched.

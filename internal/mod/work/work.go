@@ -305,6 +305,10 @@ type Module struct {
 	// Steps sums up the outside steps a worker asked for, and whether every
 	// one ran and succeeded (the risk module).
 	Steps func(run string) (string, bool)
+	// Weigh settles an ask the way autonomy says (the risk module): a
+	// warden reads a change to the code enforcing the hard limits
+	// (limitsRead). Unset, the person does.
+	Weigh func(core.Ask) string
 
 	// Seen, when set, records that a task's worker was handed failing tests
 	// (their keys) and says who else met them lately, with their board item
@@ -454,6 +458,7 @@ func New(c *core.Core, a *agents.Agents, ch *chat.Module) *Module {
 	c.Runs.Ops().Register(core.Op{Name: "batch", Help: `{"tasks":"batch,id,...","why"} -> folds related briefs into one task, the first named: one worker does them all in one session and lands them as one PR, through one round of checks and reads. The first may be waiting or being worked on (its worker is told); each other must be a brief you could withdraw, taken the same way (fixes with fixes), and is withdrawn into the first, its issue closed as covered by the batch's`, Fn: m.opBatch})
 	c.Runs.Ops().Register(core.Op{Name: "hold_merges", Help: `{"project","why","only":[PR numbers],"until":"release"|"","lift":bool} -> on the person's word only (why quotes them): hold every merge on the project but the PRs in only (follow-ups and reverts included) until lifted, or with until "release" until the next release is out; lift ends it. Held PRs still pass their gate and wait ready`, Fn: m.opHold})
 	c.Runs.Ops().Register(core.Op{Name: "pr_close", Help: `{"task"|"project"+"pr","comment","delete_branch":bool} -> closes the Hive's own PR with comment and ends its task (its worker stopped); delete_branch deletes its hive/ branch. A revert you no longer want is closed this way, not left to the person`, Fn: m.opPRClose})
+	c.Person.Handle(core.LimitsRead, m.onLimitsRead)
 	c.Effects.MergeHeld = m.MergeHeld
 	c.Effects.Slots.Resize(m.maxChecks)
 	c.Effects.Slots.Prioritize(m.checkRank, rankRedFix)
@@ -2497,6 +2502,11 @@ func (m *Module) merge(t *Task, p core.Project) error {
 	if wait, err := m.publishScan(t, p, main); wait || err != nil {
 		return err
 	}
+	// The one read before a merge: a warden's, of a change to the code
+	// that enforces the hard limits.
+	if wait, err := m.limitsRead(t, p, main); wait || err != nil {
+		return err
+	}
 	if why := m.MergeHeld(p.Name, t.PR.Number); why != "" {
 		m.hold(t, p, why)
 		return nil
@@ -2516,7 +2526,7 @@ func (m *Module) merge(t *Task, p core.Project) error {
 	// stop is asked again last of all; one landing while the forge merges
 	// can't be refused (architecture.md).
 	merged, err := m.C.Effects.Merge(core.MergeRequest{Project: p, PR: t.PR.Number, SHA: t.SHA, Main: main, Subject: t.Label(), Task: t.ID, Draft: pr.Draft,
-		Stale: func() bool { return m.overtaken(t) }})
+		Revert: t.Kind == "revert", Stale: func() bool { return m.overtaken(t) }})
 	if err != nil && m.overtaken(t) {
 		return nil
 	}
