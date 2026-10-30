@@ -157,8 +157,8 @@ func TestMeasuringMainMovesAWaiterUp(t *testing.T) {
 	}
 }
 
-// On a saturated disk no new worker starts while another works, but one
-// does when none works, so the loop never stops; checks run one at a time.
+// On a saturated disk no new worker starts while another is in a turn, but
+// one does when none is (an idle or parked worker isn't), so the loop never stops; checks run one at a time.
 func TestSaturatedDiskHoldsNewWorkersAndChecks(t *testing.T) {
 	m, _, _, _ := noCommitRig(t, 0)
 	busy := "waiting: disk (IO pressure full avg60 62%, limit 40%)"
@@ -178,6 +178,21 @@ func TestSaturatedDiskHoldsNewWorkersAndChecks(t *testing.T) {
 	m.save(&a, "")
 	if start, wait = m.admit(m.List(nil)); start[b.ID] || wait[b.ID] == "" {
 		t.Fatalf("started beside a working one: start %v, wait %v", start, wait)
+	}
+	// A worker idle on the person, or parked, isn't in a turn: one still
+	// starts. Queued, then idle and parked, then running: only a turn's end
+	// takes a run off running.
+	if _, err := m.C.Runs.Start(core.RunSpec{ID: "w-a", Role: "worker", Project: a.Project, Task: a.ID, Harness: "fake", Checkout: t.TempDir()}); err != nil {
+		t.Fatal(err)
+	}
+	a.Worker = "w-a"
+	m.save(&a, "")
+	for _, st := range []string{core.StatusQueued, core.StatusIdle, core.StatusParked, core.StatusRunning} {
+		m.C.Runs.SetStatus("w-a", st, "")
+		inTurn := st == core.StatusQueued || st == core.StatusRunning
+		if start, wait = m.admit(m.List(nil)); start[b.ID] == inTurn {
+			t.Fatalf("beside a worker %s: start %v, wait %v", st, start, wait)
+		}
 	}
 	if n := m.maxChecks(); n != 1 {
 		t.Fatalf("%d checks at once on a saturated disk", n)

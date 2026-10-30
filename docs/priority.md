@@ -12,7 +12,7 @@ A lead's turn, and a warden's or tribunal seat's, never waits (`Run.NeverWaits`)
 There is no strain hold, ramp, pace, `max_workers` or heavy-command lease any more; checks run at most `max_checks` at once.
 
 The disk is read as a whole, since a turn has no figure of it to budget:
-while Linux's IO pressure says every running task sat stalled on the disk for over `disk_full_max` (40% by default; below 0 is off) of the last minute (`full avg60`, `core.DiskBusy`), the work module starts no new worker while another works (one still starts when none does, so the loop never stops) and runs one check at a time, main's measure first by its rank.
+while Linux's IO pressure says every running task sat stalled on the disk for over `disk_full_max` (40% by default; below 0 is off) of the last minute (`full avg60`, `core.DiskBusy`), the work module starts no new worker while another is in a turn (one still starts when none is, and a worker idle on the person or parked isn't, so the loop never stops) and runs one check at a time, main's measure first by its rank.
 Running turns go on.
 On 10-30 that figure stood at ~60% from boot, some 92%, a write ~0.8 s.
 Checks also write less: Go links in a check drop DWARF (`GOFLAGS=-ldflags=-w`, a quarter of each test binary), and the journal's appends at once share one fsync.
