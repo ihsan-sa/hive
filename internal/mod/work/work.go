@@ -347,10 +347,11 @@ type Module struct {
 	heavyHeld heavyLeases
 	// backMu guards backIn: the workers sent back to their tasks that the
 	// pace has let take their next turn (paceBack).
-	backMu sync.Mutex
-	backIn map[string]bool
-	filing sync.Mutex     // one agent's brief is matched and filed at a time (join.go)
-	steps  sync.WaitGroup // the steps Tick started, and the checks they queued, still going
+	backMu  sync.Mutex
+	backIn  map[string]bool
+	filing  sync.Mutex     // one agent's brief is matched and filed at a time (join.go)
+	meeting sync.Mutex     // one started worker meets its neighbours at a time (meet.go)
+	steps   sync.WaitGroup // the steps Tick started, and the checks they queued, still going
 	// mainRed holds project@sha for every main commit whose red tests were
 	// already raised, so each is raised once whatever the tasks say now. It
 	// grows by one key per red main commit and isn't pruned; that's small.
@@ -482,6 +483,7 @@ func New(c *core.Core, a *agents.Agents, ch *chat.Module) *Module {
 	c.Effects.MergeHeld = m.MergeHeld
 	c.Effects.Slots.Resize(m.checkSlots)
 	c.Effects.Slots.Prioritize(m.checkRank, rankRedFix)
+	m.wrapFinish()
 	return m
 }
 
@@ -1476,6 +1478,7 @@ func workerID(t Task) string {
 func (m *Module) startWorker(t *Task, p core.Project) error {
 	id := workerID(*t)
 	away := m.takeAway(t.ID)
+	brief := "" // set when this call starts the run, so a restart meets no one twice
 	if _, ok := m.C.Runs.Get(id); !ok {
 		base, err := m.C.Effects.Sync(p)
 		if err != nil {
@@ -1493,7 +1496,8 @@ func (m *Module) startWorker(t *Task, p core.Project) error {
 		if err != nil {
 			return err
 		}
-		spec := m.Agents.Spec(id, "worker", p.Name, dir, m.renderBrief(t, p, base))
+		brief = m.renderBrief(t, p, base)
+		spec := m.Agents.Spec(id, "worker", p.Name, dir, brief)
 		spec.Task, spec.Inputs, spec.Away = t.ID, t.Inputs, away
 		if t.Model != "" {
 			pick, err := m.C.WS.LoadConfig().Pick(t.Model)
@@ -1522,6 +1526,9 @@ func (m *Module) startWorker(t *Task, p core.Project) error {
 	}
 	t.Worker, t.Stage, t.Failures, t.Reason, t.Now = id, StageWorking, 0, "", false
 	m.save(t, "worker "+id+" started")
+	if brief != "" {
+		m.meet(t, brief)
+	}
 	return nil
 }
 
@@ -1543,6 +1550,7 @@ func (m *Module) renderBrief(t *Task, p core.Project, base string) string {
 	if n := batchNote(t); n != "" {
 		b.WriteString(n + "\n\n")
 	}
+	b.WriteString(besideText(m.neighbours(*t)))
 	b.WriteString("## The project\n\n")
 	b.WriteString("- Goals: `.hive/goals.md`. Read it; report against it.\n")
 	fmt.Fprintf(&b, "- Tests: `%s`\n", orNone(cfg.Test))
@@ -4169,6 +4177,7 @@ func (m *Module) conflict(t *Task, p core.Project, head string, why error) error
 		msg = "Main moved, and the recursive gate, merging it into your branch to judge the change as it would land, found conflicts in:\n\n- " +
 			strings.Join(g.files, "\n- ") + "\n\nFetch main with " + fetchMain + ", merge FETCH_HEAD, resolve the conflicts, run the tests, commit, and finish again."
 	}
+	msg += m.movedBy(p, cmp.Or(head, t.SHA), t.ConflictMain)
 	t.Stage, t.Resend, t.ResendAt = StageWorking, msg, time.Now()
 	m.save(t, "conflict with main: goes back to the worker when the pace has room")
 	return nil

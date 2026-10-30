@@ -6,6 +6,7 @@
 package stats
 
 import (
+	"regexp"
 	"sync"
 	"time"
 
@@ -48,6 +49,8 @@ type Activity struct {
 	Finished int `json:"finished"` // runs that ended: done, blocked or stopped
 	Merged   int `json:"merged"`   // PRs, reverts included
 	Reverted int `json:"reverted"` // reverts merged
+	Peer     int `json:"peer"`     // messages from one worker to another
+	Helped   int `json:"helped"`   // runs named in a finish account's Helped-by line
 }
 
 // Model is one model's share of the all-time totals.
@@ -69,6 +72,13 @@ type AllTime struct {
 	Merged     int              `json:"merged"`
 	Reverted   int              `json:"reverted"`
 	Releases   int              `json:"releases"`
+	// Peer is worker-to-worker messages; Met the pairs of workers the Hive
+	// introduced on files both briefs name (work.met), Talked those of them
+	// that messaged each other; Helped the runs named in Helped-by lines.
+	Peer   int `json:"peer"`
+	Met    int `json:"met"`
+	Talked int `json:"talked"`
+	Helped int `json:"helped"`
 }
 
 // View is the figures as of one moment.
@@ -88,6 +98,8 @@ const (
 	kFinished
 	kMerged
 	kReverted
+	kPeer
+	kHelped
 )
 
 type point struct {
@@ -111,6 +123,7 @@ type Tally struct {
 	runs     map[string]*run
 	stages   map[string]string // task -> its last stage
 	released map[string]bool   // project + tag
+	met      map[string]bool   // pair of runs introduced -> whether they talked since
 	days     map[string]*Spend // "2006-01-02" in Loc
 	months   map[string]*Spend // "2006-01" in UTC
 	recent   []point           // the last 24 hours before the newest event
@@ -119,7 +132,7 @@ type Tally struct {
 
 // NewTally is an empty tally.
 func NewTally() *Tally {
-	return &Tally{runs: map[string]*run{}, stages: map[string]string{}, released: map[string]bool{},
+	return &Tally{runs: map[string]*run{}, stages: map[string]string{}, released: map[string]bool{}, met: map[string]bool{},
 		days: map[string]*Spend{}, months: map[string]*Spend{}, all: AllTime{Runs: map[string]int{}, Models: map[string]Model{}}}
 }
 
@@ -216,6 +229,39 @@ func (t *Tally) Apply(e core.Event) {
 		}
 	case "run.queued":
 		t.point(e.At, kMessage)
+	case "msg.sent":
+		var s struct{ From, To string }
+		e.Decode(&s)
+		if f, to := t.runs[s.From], t.runs[s.To]; f != nil && to != nil && f.role == "worker" && to.role == "worker" {
+			t.all.Peer++
+			t.point(e.At, kPeer)
+			if talked, ok := t.met[pair(s.From, s.To)]; ok && !talked {
+				t.met[pair(s.From, s.To)] = true
+				t.all.Talked++
+			}
+		}
+	case "work.met":
+		var s struct {
+			Run  string
+			With []struct{ Run string }
+		}
+		e.Decode(&s)
+		for _, w := range s.With {
+			if _, ok := t.met[pair(s.Run, w.Run)]; !ok && w.Run != "" {
+				t.met[pair(s.Run, w.Run)] = false
+				t.all.Met++
+			}
+		}
+	case "run.finish":
+		var s struct{ Finish core.Finish }
+		e.Decode(&s)
+		for _, m := range helpedBy.FindAllStringSubmatch(s.Finish.Account, -1) {
+			n := len(runName.FindAllString(m[1], -1))
+			t.all.Helped += n
+			for range n {
+				t.point(e.At, kHelped)
+			}
+		}
 	case "chat.posted":
 		var s struct{ From string }
 		e.Decode(&s)
@@ -327,7 +373,26 @@ func count(a *Activity, kind int8) {
 		a.Merged++
 	case kReverted:
 		a.Reverted++
+	case kPeer:
+		a.Peer++
+	case kHelped:
+		a.Helped++
 	}
+}
+
+// helpedBy is an account's credit line, open source's Reported-by: the
+// runs whose help changed the work.
+var helpedBy = regexp.MustCompile(`(?im)^[\s*-]*helped[- ]by:\s*(.+)$`)
+
+// runName is a run's id in a Helped-by line.
+var runName = regexp.MustCompile(`\b[a-z]+(?:-[a-z]+)*(?:-[0-9a-f]{6,})+(?:-[0-9]+)?\b`)
+
+// pair is the key of two runs, in either order.
+func pair(a, b string) string {
+	if a > b {
+		a, b = b, a
+	}
+	return a + " " + b
 }
 
 func or(s, def string) string {
