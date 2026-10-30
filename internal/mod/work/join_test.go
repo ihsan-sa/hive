@@ -233,13 +233,18 @@ func TestBriefMatchRecentParaphrase(t *testing.T) {
 			Done: "The forge CI workflow runs hwde at hive-hive-hwde main, not a fixed aa1ec48, and records the hwde version in the run.",
 			Why:  "CI pins HWDE_REF aa1ec48, so none of hwde's 10-30 checks gate any board"}, score, false},
 	} {
+		c.b.From, c.t.From = "lead-x", "stepback-x"
 		if got := match(c.b, c.t) != ""; got != c.same {
 			t.Errorf("%q / %q: same ask %v, want %v", c.b.Title, c.t.Title, got, c.same)
 		}
 	}
+	pad := Task{Title: "add left-pad FAKE:needpackage", From: "lead-x", Created: now}
+	if why := match(Brief{Title: "add right-pad FAKE:needpackage", From: "lead-x"}, pad); why != "" {
+		t.Errorf("an agent's own second ask joined its first: %s", why)
+	}
 	old := dispatch
-	old.Created = now.Add(-2 * time.Hour)
-	if why := match(Brief{Title: "dispatch's score measures the commit, not the day: a real iiks1 outage or a quiet day doesn't make a good commit look worse"}, old); why != "" {
+	old.Created, old.From = now.Add(-2*time.Hour), "stepback-x"
+	if why := match(Brief{From: "lead-x", Title: "dispatch's score measures the commit, not the day: a real iiks1 outage or a quiet day doesn't make a good commit look worse"}, old); why != "" {
 		t.Errorf("an ask filed two hours ago matched by its words: %s", why)
 	}
 }

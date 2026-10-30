@@ -17,8 +17,9 @@ import (
 // as added context instead of starting a second worker on the same thing. A
 // match is a failing test both name in their title or done line,
 // a near-identical title, the same named files under a similar title, or,
-// for a task filed within the hour, most of the words of the shorter ask (a
-// step-back's brief and its lead's paraphrase of it minutes later).
+// for a task another agent filed within the hour, most of the words of the
+// shorter ask (a step-back's brief and its lead's paraphrase of it minutes
+// later; an agent's own two briefs in a row are two asks it means).
 // Pushed tasks aren't joined: their worker is done, so the added ask would be
 // lost. The person's asks and the Hive's own (trials) are always
 // filed as they come; an agent that means separate work says apart.
@@ -40,7 +41,7 @@ func match(b Brief, t Task) string {
 	if f := files(b.Title + "\n" + b.Done + "\n" + b.Known); sim >= 0.3 && len(f) > 0 && slices.Equal(f, files(t.Title+"\n"+t.Done+"\n"+t.Known)) {
 		return "both name " + strings.Join(f, ", ")
 	}
-	if time.Since(t.Created) < recent {
+	if t.From != b.From && time.Since(t.Created) < recent {
 		_, why, _ := b.taken()
 		if overlap(b.Title, t.Title) >= 0.5 || overlap(b.Title+"\n"+b.Done+"\n"+why, t.Title+"\n"+t.Done+"\n"+t.AimWhy) >= 0.5 {
 			return "it was filed within the hour and shares most of its words"
