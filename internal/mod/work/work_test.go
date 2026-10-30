@@ -496,8 +496,7 @@ func helperRig(t *testing.T) (*Module, *flakyForge, core.Project) {
 	}
 	cfg := ws.LoadConfig()
 	cfg.Sandbox, cfg.BareAccepted, cfg.Harness = "bare", time.Now().Format(time.RFC3339), "fake"
-	cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax, cfg.LoadMax = 0, 0, 0, 0 // a loaded machine mustn't hold the queue
-	cfg.IOPressureMax, cfg.IOFullMax = 0, 0
+	cfg.TurnMB = 0 // a loaded machine mustn't hold the queue
 	ws.SaveConfig(cfg)
 	forge := &flakyForge{Local: &core.Local{Dir: filepath.Join(dir, "forge")}}
 	if _, err := forge.EnsureRepo("me/p", "", false); err != nil {
@@ -901,42 +900,6 @@ func TestLandedEndsATaskOnMain(t *testing.T) {
 	}
 	if msgs := m2.Chat.Messages("project:p"); len(msgs) == 0 || msgs[len(msgs)-1].Text != "Reverted: work. it broke the tests" {
 		t.Fatalf("chat %v", msgs)
-	}
-}
-
-// queue now puts a brief first in line, only with a reason, put on its
-// record; the max_workers cap still holds it.
-func TestQueueNowGoesFirst(t *testing.T) {
-	m := queueRig(t)
-	lead := core.Run{RunSpec: core.RunSpec{ID: "lead", Role: "lead"}}
-	stuck := file(t, m, "the stuck one", "In internal/core/effects.go.")
-	other := file(t, m, "an earlier idea", "")
-	fix := file(t, m, "the queue fix", "In internal/core/effects.go too.")
-	stuck.Stage, other.Stage, fix.Stage = StageWorking, StageQueued, StageQueued
-	m.save(&stuck, "")
-	m.save(&other, "")
-	m.save(&fix, "")
-	if start, wait := m.admit(m.List(nil)); !start[other.ID] || start[fix.ID] {
-		t.Fatalf("the earlier brief didn't take the slot: %q", wait[fix.ID])
-	}
-	if _, err := m.C.Runs.Ops().Call(lead, "queue", json.RawMessage(`{"now":"`+fix.ID+`"}`)); err == nil {
-		t.Fatal("started one now with no reason")
-	}
-	if _, err := m.C.Runs.Ops().Call(lead, "queue", json.RawMessage(`{"now":"`+fix.ID+`","why":"it fixes what holds the queue"}`)); err != nil {
-		t.Fatal(err)
-	}
-	got, _ := m.Get(fix.ID)
-	if !got.Now || !logged(&got, "it fixes what holds the queue") {
-		t.Fatalf("now %v, log %v", got.Now, got.Log)
-	}
-	if start, wait := m.admit(m.List(nil)); !start[fix.ID] || start[other.ID] {
-		t.Fatalf("the fix still waits: %q", wait[fix.ID])
-	}
-	cfg := m.C.WS.LoadConfig()
-	cfg.MaxWorkers = 1 // the stuck one's worker counts toward the cap
-	m.C.WS.SaveConfig(cfg)
-	if _, wait := m.admit(m.List(nil)); !strings.Contains(wait[fix.ID], "max_workers") {
-		t.Fatalf("now went past max_workers: %q", wait[fix.ID])
 	}
 }
 

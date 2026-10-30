@@ -39,7 +39,7 @@ func TestEgressRefusesLocal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e := ServeEgress(ln, nil, nil, nil)
+	e := ServeEgress(ln, nil, nil, nil, nil)
 	defer e.Close()
 	for _, dest := range []string{target.Addr().String(), "localhost:" + strings.Split(target.Addr().String(), ":")[1]} {
 		c, err := net.Dial("tcp", ln.Addr().String())
@@ -67,7 +67,7 @@ func TestEgressReachesPublic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e := ServeEgress(ln, nil, nil, nil)
+	e := ServeEgress(ln, nil, nil, nil, nil)
 	defer e.Close()
 	c, err := net.Dial("tcp", ln.Addr().String())
 	if err != nil {
@@ -109,7 +109,7 @@ func TestEgressHoldsToItsList(t *testing.T) {
 		t.Fatal(err)
 	}
 	var refused bytes.Buffer
-	e := ServeEgress(ln, []string{"github.com"}, nil, &refused)
+	e := ServeEgress(ln, []string{"github.com"}, nil, nil, &refused)
 	defer e.Close()
 	c, err := net.Dial("tcp", ln.Addr().String())
 	if err != nil {
@@ -138,7 +138,7 @@ func TestEgressRefusesANameThatResolvesPrivate(t *testing.T) {
 			t.Fatal(err)
 		}
 		var refused bytes.Buffer
-		e := ServeEgress(ln, []string{"llm.example.com"}, nil, &refused)
+		e := ServeEgress(ln, []string{"llm.example.com"}, nil, nil, &refused)
 		e.lookup = func(context.Context, string) ([]net.IPAddr, error) { return []net.IPAddr{{IP: net.ParseIP(ip)}}, nil }
 		code, body := connect(t, "tcp", ln.Addr().String(), "llm.example.com:"+port)
 		e.Close()
@@ -212,7 +212,7 @@ func TestEgressLocalGrant(t *testing.T) {
 		t.Fatal(err)
 	}
 	var refused bytes.Buffer
-	e := ServeEgress(ln, []string{"github.com"}, local, &refused)
+	e := ServeEgress(ln, []string{"github.com"}, local, nil, &refused)
 	defer e.Close()
 	for _, dest := range []string{"127.0.0.1:" + ollama, "localhost:" + ollama} {
 		if code, got := connect(t, "tcp", ln.Addr().String(), dest); code != 200 || got != "echo hi\n" {
@@ -255,7 +255,7 @@ func TestRelayConnect(t *testing.T) {
 	if err != nil {
 		t.Skip("no unix sockets:", err)
 	}
-	e := ServeEgress(ln, []string{}, []string{dest}, nil)
+	e := ServeEgress(ln, []string{}, []string{dest}, nil, nil)
 	defer e.Close()
 	in, out := net.Pipe()
 	go relayConnect(out, sock, dest)
@@ -343,7 +343,7 @@ func TestEgressRefusesThisMachineAndLocalNames(t *testing.T) {
 		t.Fatal(err)
 	}
 	var refused bytes.Buffer
-	e := ServeEgress(ln, nil, nil, &refused)
+	e := ServeEgress(ln, nil, nil, nil, &refused)
 	defer e.Close()
 	e.own = func() []net.IP { return []net.IP{mine} }
 	e.lookup = func(_ context.Context, host string) ([]net.IPAddr, error) {
@@ -358,5 +358,81 @@ func TestEgressRefusesThisMachineAndLocalNames(t *testing.T) {
 	}
 	if n := strings.Count(refused.String(), RefusedLocal); n != 6 {
 		t.Errorf("recorded %q", refused.String())
+	}
+}
+
+// A host granted to a project's runs is reached on its port past the run's
+// list: a public name, or a LAN device by its literal address. Its other
+// ports stay held to the list, a name that resolves privately or to this
+// machine is refused, and so is a granted address that is this machine's.
+func TestEgressOutsideGrant(t *testing.T) {
+	_, port := echo(t)
+	broker, lan, mine := "203.0.114.7", net.ParseIP("192.168.1.20"), net.ParseIP("192.168.1.5")
+	outside := []string{}
+	for _, g := range []string{"Broker.Example.com.:8883", "192.168.1.20:80", "192.168.1.5:80", "lies.example.com:8883"} {
+		a, err := OutsideGrant(g)
+		if err != nil {
+			t.Fatal(err)
+		}
+		outside = append(outside, a)
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var refused bytes.Buffer
+	e := ServeEgress(ln, []string{"github.com"}, nil, outside, &refused)
+	defer e.Close()
+	e.own = func() []net.IP { return []net.IP{net.ParseIP("127.0.0.1"), mine} }
+	e.lookup = func(_ context.Context, host string) ([]net.IPAddr, error) {
+		if host == "lies.example.com" {
+			return []net.IPAddr{{IP: lan}}, nil
+		}
+		return []net.IPAddr{{IP: net.ParseIP(broker)}}, nil
+	}
+	var dialled []string
+	e.connect = func(addr string) (net.Conn, error) {
+		dialled = append(dialled, addr)
+		return net.Dial("tcp", "127.0.0.1:"+port)
+	}
+	for _, dest := range []string{"broker.example.com:8883", "192.168.1.20:80"} {
+		if code, got := connect(t, "tcp", ln.Addr().String(), dest); code != 200 || got != "echo hi\n" {
+			t.Errorf("granted %s: %d %q", dest, code, got)
+		}
+	}
+	if want := []string{broker + ":8883", "192.168.1.20:80"}; !slices.Equal(dialled, want) {
+		t.Errorf("dialled %v, want %v", dialled, want)
+	}
+	for dest, why := range map[string]string{
+		"broker.example.com:443": "unlisted", // another port of a granted host
+		"192.168.1.20:22":        "local",
+		"lies.example.com:8883":  "local", // a granted name that answers with a LAN address
+		"192.168.1.5:80":         "local", // granted, but this machine's own address
+	} {
+		refused.Reset()
+		if code, _ := connect(t, "tcp", ln.Addr().String(), dest); code != http.StatusForbidden || refused.String() != dest+" "+why+"\n" {
+			t.Errorf("%s: %d, recorded %q, want 403 recorded %s", dest, code, refused.String(), why)
+		}
+	}
+	if len(dialled) != 2 {
+		t.Errorf("a refused destination was dialled: %v", dialled)
+	}
+}
+
+func TestOutsideGrant(t *testing.T) {
+	for entry, want := range map[string]string{
+		"Broker.HiveMQ.cloud.:8883": "broker.hivemq.cloud:8883",
+		"192.168.1.20:80":           "192.168.1.20:80",
+		"[::ffff:10.0.0.9]:1883":    "10.0.0.9:1883",
+		"[2001:4860::8]:8883":       "[2001:4860::8]:8883",
+	} {
+		if got, err := OutsideGrant(entry); err != nil || got != want {
+			t.Errorf("OutsideGrant(%s) = %q, %v; want %q", entry, got, err, want)
+		}
+	}
+	for _, bad := range []string{"broker.example.com", "127.0.0.1:11434", "localhost:80", "[::1]:80", "0.0.0.0:80", "nas.lan:80", "printer:631", "x.example.com:0", "x.example.com:99999"} {
+		if _, err := OutsideGrant(bad); err == nil {
+			t.Errorf("OutsideGrant(%s) was accepted", bad)
+		}
 	}
 }

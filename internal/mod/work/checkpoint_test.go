@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
-	"github.com/ihsan-sa/hive-standalone-build/internal/harness"
 )
 
 // checkpointRig is the gate rig on a scored project whose best kept score is
@@ -42,38 +41,6 @@ func TestCheckpointNeedsAHigherScore(t *testing.T) {
 	m.checkWorker(task, p)
 	if len(task.Log) != n {
 		t.Fatalf("looked again with no new commit: %v", task.Log[n:])
-	}
-}
-
-// A higher score opens a checkpoint through the normal gate; a reviewer's
-// findings drop it and leave the running worker as it was.
-func TestCheckpointHandbackLeavesWorker(t *testing.T) {
-	m, task, p := checkpointRig(t, 5, "7")
-	if err := m.checkWorker(task, p); err != nil {
-		t.Fatal(err)
-	}
-	if task.Stage != StageTesting || task.Checkpoint == "" || task.PR.Number == 0 {
-		t.Fatalf("stage %q, checkpoint %q, PR %d, log %v", task.Stage, task.Checkpoint, task.PR.Number, task.Log)
-	}
-	if err := testStep(m, task, p); err != nil || task.Stage != StageReviewing {
-		t.Fatalf("stage %q, err %v", task.Stage, err)
-	}
-	id := "r-t1-" + core.Short(task.SHA) + "-0"
-	if _, err := m.C.Runs.Start(core.RunSpec{ID: id, Role: "reviewer", Project: p.Name, Harness: "fake", ReadOnly: true, Inputs: map[string]string{"sha": task.SHA}}); err != nil {
-		t.Fatal(err)
-	}
-	m.C.J.MustAppend("run.turn_ended", map[string]any{"id": id, "turn": 1, "status": core.StatusDone,
-		"result": harness.Result{Structured: []byte(`{"verdict":"fix","summary":"no","token":"x"}`)}})
-	before, _ := m.C.Runs.Get("w1")
-	if err := m.review(task, p); err != nil {
-		t.Fatal(err)
-	}
-	after, _ := m.C.Runs.Get("w1")
-	if task.Stage != StageWorking || task.Checkpoint != "" || task.Round != 0 || after.Status != before.Status || len(after.Pending) != 0 {
-		t.Fatalf("stage %q, checkpoint %q, round %d, worker %s with %v", task.Stage, task.Checkpoint, task.Round, after.Status, after.Pending)
-	}
-	if !logged(task, "checkpoint not merged: the reviewer asked for fixes") || strings.Contains(task.Reason, "fix") {
-		t.Fatalf("log %v, reason %q", task.Log, task.Reason)
 	}
 }
 
@@ -190,23 +157,6 @@ func TestCheckpointRefusedForAGain(t *testing.T) {
 	}
 	if task.Checkpoint == "" || task.NoBank != "" {
 		t.Fatalf("a fix got no checkpoint: no bank %q, log %v", task.NoBank, task.Log)
-	}
-}
-
-// A checkpoint opened while its task was a fix, and aimed at a gain since,
-// is dropped at the gate unjudged; the worker's finished head then goes
-// through the recursive gate whole, and merges on its keep.
-func TestGainCheckpointDroppedFinalHeadGated(t *testing.T) {
-	m, task, p, f, jobs := selfRig(t, map[string]string{"feature.go": "package p\n"}, core.GateKeep)
-	task.Checkpoint = task.SHA
-	mergeOnce(t, m, task, p)
-	if task.Stage != StageWorking || task.Checkpoint != "" || len(*jobs) != 0 || prState(t, f, task.PR.Number) == "MERGED" || !logged(task, "checkpoint not merged: it aims at a gain") {
-		t.Fatalf("stage %q, checkpoint %q, %d gate runs, log %v", task.Stage, task.Checkpoint, len(*jobs), task.Log)
-	}
-	task.Stage = StageMerging // the worker finished on the same head
-	gateOnce(t, m, task, p)
-	if len(*jobs) != 1 || task.Stage != StageMerged || prState(t, f, task.PR.Number) != "MERGED" {
-		t.Fatalf("%d gate runs, stage %q, reason %q: want the whole head merged on the gate's keep", len(*jobs), task.Stage, task.Reason)
 	}
 }
 

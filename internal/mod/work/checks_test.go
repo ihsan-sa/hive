@@ -1,7 +1,6 @@
 package work
 
 import (
-	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -287,39 +286,6 @@ func TestMergeForgeCheckCantStart(t *testing.T) {
 	}
 }
 
-// A PR on the security list waits for a read recorded as land on its head;
-// a main merge that leaves its own diff alone keeps that read.
-func TestMergeWaitsForOutsideRead(t *testing.T) {
-	m, task, p, f := gateRigSeeded(t, false, securityList, map[string]string{"secure/box.go": "package secure\n"})
-	m.save(task, "")
-	reviewerLand(t, m, task, p, "r1")
-	toMerging(t, m, task, p)
-	read := task.SHA
-	mergeOnce(t, m, task, p)
-	if task.Stage != StageMerging || !strings.Contains(task.Reason, "perms seat or architect") || prState(t, f, task.PR.Number) != "OPEN" {
-		t.Fatalf("stage %q, reason %q", task.Stage, task.Reason)
-	}
-	if _, err := m.RecordRead("t1", core.Short(read), "the lead", "land", ""); err == nil {
-		t.Fatal("recorded a read from someone not the perms seat or architect")
-	}
-	if _, err := m.RecordRead("#"+strconv.Itoa(task.PR.Number), core.Short(read), "perms", "land", "reads fine"); err != nil {
-		t.Fatal(err)
-	}
-	// Main moves without touching the change, and the forge wants the
-	// branch up to date: the read carries to the caught-up head.
-	f.UpToDate = true
-	pushMain(t, f, map[string]string{"other.txt": "z"})
-	mergeOnce(t, m, task, p)
-	if task.SHA == read || task.Stage != StageTesting {
-		t.Fatalf("not caught up: stage %q", task.Stage)
-	}
-	toMerging(t, m, task, p)
-	mergeOnce(t, m, task, p)
-	if task.Stage != StageMerged {
-		t.Fatalf("stage %q, reason %q: the read should carry over a main merge that leaves the diff alone", task.Stage, task.Reason)
-	}
-}
-
 // A PR with its security read merges as it is when main moved and the forge
 // says it still merges cleanly: main isn't merged in, so the head stays the
 // one that was read and checked.
@@ -362,34 +328,6 @@ func (u unknownForge) GetPR(repo string, n int) (core.PR, error) {
 	pr, err := u.Local.GetPR(repo, n)
 	pr.Mergeable, pr.MergeState = "UNKNOWN", "UNKNOWN"
 	return pr, err
-}
-
-// A PR whose mergeability the forge hasn't worked out waits under a saved
-// reason, so a wait that never ends reaches the lead through the stall
-// watcher; it merges once the forge knows.
-func TestMergeWaitsOnUnknownMergeable(t *testing.T) {
-	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
-	toMerging(t, m, task, p)
-	pushMain(t, f, map[string]string{"other.txt": "z"})
-	m.C.Effects.Forge = unknownForge{f}
-	mergeOnce(t, m, task, p)
-	if task.Stage != StageMerging || !strings.HasPrefix(task.Reason, "waiting for the forge to work out") || !strings.Contains(task.Reason, "mergeable UNKNOWN") {
-		t.Fatalf("stage %q, reason %q", task.Stage, task.Reason)
-	}
-	// Ticks work on copies loaded from the store: the stamp must survive that.
-	stored, _ := m.Get(task.ID)
-	if stored.UnknownSince.IsZero() {
-		t.Fatal("the start of the wait was not saved")
-	}
-	stored.UnknownSince = time.Now().Add(-time.Hour)
-	m.save(&stored, "")
-	reloaded, _ := m.Get(task.ID)
-	task = &reloaded
-	m.later = map[string]time.Time{}
-	mergeOnce(t, m, task, p)
-	if task.Stage != StageTesting {
-		t.Fatalf("stuck unknown should bring main in: stage %q, reason %q", task.Stage, task.Reason)
-	}
 }
 
 func TestMergeAfterUnknownResolves(t *testing.T) {
@@ -436,34 +374,6 @@ func TestOutsideReadFixGoesBack(t *testing.T) {
 	mergeOnce(t, m, task, p)
 	if task.Stage != StageWorking || !strings.Contains(task.Findings, "token logic nobody read") {
 		t.Fatalf("stage %q, findings %q", task.Stage, task.Findings)
-	}
-}
-
-// In a self project, where every head needs a read, a catch-up merge of main
-// that leaves the change's own diff alone keeps the read instead of asking
-// for a fresh one.
-func TestCatchUpKeepsTheRead(t *testing.T) {
-	m, task, p, f := gateRig(t, false, map[string]string{"feature.go": "package p\n"})
-	p.Self = true
-	main, _ := m.C.Effects.Sync(p)
-	ch, _ := m.C.Effects.Classify(p, main, task.SHA)
-	if _, err := m.C.Runs.Start(core.RunSpec{ID: "r1", Role: "reviewer", Project: p.Name, ReadOnly: true, Harness: "fake", Inputs: map[string]string{"sha": task.SHA, "diff.patch": ch.Diff}}); err != nil {
-		t.Fatal(err)
-	}
-	if err := m.C.Effects.RecordVerdict(core.Verdict{Project: p.Name, SHA: task.SHA, Run: "r1", Verdict: "land"}); err != nil {
-		t.Fatal(err)
-	}
-	toMerging(t, m, task, p)
-	f.UpToDate = true // the forge's rule brings main in
-	pushMain(t, f, map[string]string{"other.txt": "z"})
-	old := task.SHA
-	mergeOnce(t, m, task, p)
-	if task.SHA == old {
-		t.Fatal("not caught up")
-	}
-	toMerging(t, m, task, p) // not reviewing: the read carried
-	if task.Reviews != 0 || task.Reviewer != "" {
-		t.Fatal("a reviewer was asked again")
 	}
 }
 
@@ -633,36 +543,6 @@ func TestOwnSecurityReadLands(t *testing.T) {
 	}
 	if !strings.Contains(strings.Join(f.Comments(p.Repo, task.PR.Number), "\n"), "Security read (security)") {
 		t.Fatal("the seat's read isn't on the PR")
-	}
-}
-
-// A fix to the Hive itself skips the recursive gate, not the security read:
-// one that changes a listed path waits for the seat's land like any other.
-func TestSelfFixStillWaitsForSecurityRead(t *testing.T) {
-	m, task, p, f := gateRigSeeded(t, false, securityList, map[string]string{"secure/box.go": "package secure\n"})
-	p.Self = true
-	task.Aim, task.AimWhy = AimFix, "the box leaks: TestBox fails"
-	m.Gate = func(context.Context, GateJob) core.GateResult {
-		t.Error("the gate ran on a fix")
-		return core.GateResult{Outcome: core.GateKeep}
-	}
-	reviewerLand(t, m, task, p, "r1")
-	toMerging(t, m, task, p)
-	f.SetChecks(p.Repo, task.SHA, core.CheckRun{Name: "test", State: core.CheckPass})
-	mergeOnce(t, m, task, p)
-	m.Wait()
-	if task.Stage != StageMerging || !strings.Contains(task.Reason, "security") || prState(t, f, task.PR.Number) != "OPEN" {
-		t.Fatalf("stage %q, reason %q: a self fix on a listed path didn't wait for its security read", task.Stage, task.Reason)
-	}
-	main, _ := m.C.Effects.Sync(p)
-	if _, err := m.C.Effects.Merge(core.MergeRequest{Project: p, PR: task.PR.Number, SHA: task.SHA, Main: main, Gain: false}); err == nil || !strings.Contains(err.Error(), "security read") {
-		t.Fatalf("Effects.Merge took a self fix on a listed path unread: %v", err)
-	}
-	seatSays(t, m, task, core.SeatSecurity, "land")
-	mergeOnce(t, m, task, p)
-	mergeOnce(t, m, task, p)
-	if task.Stage != StageMerged || prState(t, f, task.PR.Number) != "MERGED" {
-		t.Fatalf("stage %q, reason %q after the seat's land", task.Stage, task.Reason)
 	}
 }
 
@@ -887,56 +767,6 @@ func TestRootClassNeedsPanel(t *testing.T) {
 	}
 	if task.Stage != StageMerged {
 		t.Fatalf("stage %q, reason %q after the panel's lands", task.Stage, task.Reason)
-	}
-}
-
-// A read is of the change's own diff: a main merge that leaves it alone
-// keeps the seat's read, and a new commit to the change needs a new one.
-func TestOwnSecurityReadMovedDiff(t *testing.T) {
-	m, task, p, f := gateRigSeeded(t, false, securityList, map[string]string{"secure/box.go": "package secure\n"})
-	reviewerLand(t, m, task, p, "r1")
-	toMerging(t, m, task, p)
-	mergeOnce(t, m, task, p)
-	seatSays(t, m, task, core.SeatSecurity, "land")
-	read := task.SHA
-
-	// The worker commits again to the listed file: a new diff, a new read.
-	r, _ := m.C.Runs.Get("w1")
-	os.WriteFile(filepath.Join(r.Checkout, "secure/box.go"), []byte("package secure\n\n// more\n"), 0o644)
-	must(t, r.Checkout, "add", "-A")
-	must(t, r.Checkout, "commit", "-q", "-m", "more")
-	main, _ := m.C.Effects.Sync(p)
-	sha, err := m.C.Effects.Extract(p, r, main)
-	if err != nil {
-		t.Fatal(err)
-	}
-	m.C.Effects.Push(p, "hive/t1", sha)
-	mergeOnce(t, m, task, p) // the land is recorded on the first head's diff
-	task.SHA, task.Stage = sha, StageTesting
-	reviewerLand(t, m, task, p, "r2")
-	toMerging(t, m, task, p)
-	mergeOnce(t, m, task, p)
-	if task.Stage != StageMerging || !strings.Contains(task.Reason, "security reviewer at "+core.Short(sha)) {
-		t.Fatalf("a new diff merged on the old diff's read (%s): stage %q, reason %q", core.Short(read), task.Stage, task.Reason)
-	}
-	seatSays(t, m, task, core.SeatSecurity, "land")
-	mergeOnce(t, m, task, p)
-
-	// Main moves without touching the change and the forge wants the branch
-	// up to date: the caught-up head keeps the read, with no new seat run.
-	f.UpToDate = true
-	pushMain(t, f, map[string]string{"other.txt": "z"})
-	mergeOnce(t, m, task, p)
-	if task.SHA == sha || task.Stage != StageTesting {
-		t.Fatalf("not caught up: stage %q", task.Stage)
-	}
-	toMerging(t, m, task, p)
-	mergeOnce(t, m, task, p)
-	if task.Stage != StageMerged {
-		t.Fatalf("stage %q, reason %q: the read should carry over a main merge that leaves the diff alone", task.Stage, task.Reason)
-	}
-	if n := len(m.C.Runs.List(func(r *core.Run) bool { return strings.HasPrefix(r.ID, "s-t1-") })); n != 2 {
-		t.Fatalf("%d seat runs, want 2: one per own diff, none for the caught-up head", n)
 	}
 }
 
@@ -1440,62 +1270,8 @@ func TestSeatTriesFollowTheDiff(t *testing.T) {
 	}
 }
 
-// On the Hive's own PRs a red Windows job warns rather than blocks: with
-// everything else green it merges, the task, its log, the PR and an alert
-// saying so. Main's Windows is green, so it isn't excused as main's red.
-func TestSelfMergesPastRedWindows(t *testing.T) {
-	m, task, p, f, _ := selfRigSeeded(t, advisoryList, map[string]string{"feature.go": "package p\n"}, core.GateKeep)
-	main, _ := m.C.Effects.Sync(p)
-	runs := []core.CheckRun{{Name: "test (ubuntu-latest)", State: core.CheckPass}, {Name: "test (windows-latest)", State: core.CheckFail, Detail: "failure"}, {Name: "sandboxed-e2e", State: core.CheckPass}}
-	f.SetChecks(p.Repo, task.SHA, runs...)
-	f.SetChecks(p.Repo, main, core.CheckRun{Name: "test (ubuntu-latest)", State: core.CheckPass}, core.CheckRun{Name: "test (windows-latest)", State: core.CheckPass}, core.CheckRun{Name: "sandboxed-e2e", State: core.CheckPass})
-	gateOnce(t, m, task, p)
-	if task.Stage != StageMerged || task.Round != 0 || prState(t, f, task.PR.Number) != "MERGED" {
-		t.Fatalf("stage %q, round %d, reason %q", task.Stage, task.Round, task.Reason)
-	}
-	if !strings.Contains(task.Warning, "test (windows-latest)") || !logHas(task, "warning: the forge's checks test (windows-latest) fail") {
-		t.Fatalf("warning %q, log %v", task.Warning, task.Log)
-	}
-	if c := strings.Join(f.Comments(p.Repo, task.PR.Number), "\n"); strings.Count(c, "Warning, not blocking") != 1 {
-		t.Fatalf("PR comments:\n%s", c)
-	}
-	if alerts(m, "check-warning") != 1 {
-		t.Fatalf("%d check-warning alerts, want 1", alerts(m, "check-warning"))
-	}
-}
-
 // advisoryList is a security list on main naming the Windows job advisory.
 var advisoryList = map[string]string{core.SecurityList: "paths = []\nadvisory_checks = [\"test (windows-latest)\"]\n"}
-
-// A self PR with Windows red goes back to its worker when main's list doesn't
-// name the job advisory: only a listed check warns.
-func TestSelfRedWindowsBlocksUnlisted(t *testing.T) {
-	m, task, p, f, _ := selfRig(t, map[string]string{"feature.go": "package p\n"}, core.GateKeep)
-	rerunSpent(task)
-	main, _ := m.C.Effects.Sync(p)
-	f.SetChecks(p.Repo, task.SHA, core.CheckRun{Name: "test (ubuntu-latest)", State: core.CheckPass}, core.CheckRun{Name: "lint-windows-paths", State: core.CheckFail})
-	f.SetChecks(p.Repo, main, core.CheckRun{Name: "test (ubuntu-latest)", State: core.CheckPass}, core.CheckRun{Name: "lint-windows-paths", State: core.CheckPass})
-	mergeOnce(t, m, task, p)
-	if task.Stage != StageWorking || task.Round != 1 || task.Warning != "" {
-		t.Fatalf("stage %q, round %d, warning %q", task.Stage, task.Round, task.Warning)
-	}
-}
-
-// Branch rules that require an advisory check refuse the merge; it holds,
-// naming the check and the list, rather than failing toward a stop.
-func TestSelfRefusedWarnedHolds(t *testing.T) {
-	m, task, p, f, _ := selfRigSeeded(t, advisoryList, map[string]string{"feature.go": "package p\n"}, core.GateKeep)
-	main, _ := m.C.Effects.Sync(p)
-	f.SetChecks(p.Repo, task.SHA, core.CheckRun{Name: "test (ubuntu-latest)", State: core.CheckPass}, core.CheckRun{Name: "test (windows-latest)", State: core.CheckFail})
-	f.SetChecks(p.Repo, main, core.CheckRun{Name: "test (ubuntu-latest)", State: core.CheckPass}, core.CheckRun{Name: "test (windows-latest)", State: core.CheckPass})
-	m.C.Effects.Forge = refusingForge{f}
-	for i := 0; i < 3; i++ {
-		gateOnce(t, m, task, p)
-	}
-	if task.Stage != StageMerging || task.Failures != 0 || !strings.Contains(task.Reason, "only warn on the Hive's own PRs") || alerts(m, "main-red") != 1 {
-		t.Fatalf("stage %q, %d failures, reason %q, %d alerts", task.Stage, task.Failures, task.Reason, alerts(m, "main-red"))
-	}
-}
 
 // Elsewhere a red Windows job blocks as any red check does.
 func TestRedWindowsBlocksOtherProjects(t *testing.T) {

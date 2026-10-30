@@ -52,9 +52,10 @@ type Spec struct {
 	// memory that can't be reclaimed, only swapped, and go build's work dirs
 	// and test binaries go there. Unset, /tmp is a tmpfs capped at TmpfsSize.
 	Tmp     string   `json:"tmp,omitempty"`
-	Network bool     `json:"network"` // outbound through the egress proxy
-	Allow   []string `json:"allow"`   // hosts the proxy lets through; nil is every public host
-	Local   []string `json:"local"`   // services on this machine the person granted, loopback ip:port (LocalGrant's)
+	Network bool     `json:"network"`           // outbound through the egress proxy
+	Allow   []string `json:"allow"`             // hosts the proxy lets through; nil is every public host
+	Local   []string `json:"local"`             // services on this machine the person granted, loopback ip:port (LocalGrant's)
+	Outside []string `json:"outside,omitempty"` // hosts outside it granted to this run's project, host:port (OutsideGrant's), past Allow
 	// Guard is host paths no host interpreter's install may contain, as
 	// its bind would expose them: the workspace and the folders covered in it
 	// (Workspace.Guarded). Every mount's host path is guarded as well. A spec

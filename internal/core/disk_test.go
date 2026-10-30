@@ -135,6 +135,44 @@ func TestDiskFullIsCantRun(t *testing.T) {
 	}
 }
 
+// A check cut off at its time limit is a slow check, not a red one: no
+// verdict, not kept as the commit's answer, and its next try has twice the
+// limit. An old record that says so only in its output reads the same.
+func TestCutOffIsSlowNotRed(t *testing.T) {
+	c, _, p, main := setupProject(t)
+	saved := checkTimeout
+	checkTimeout = time.Second
+	t.Cleanup(func() { checkTimeout = saved })
+	if l := c.Effects.checkLimit(p.Name, main, "test"); l != time.Second {
+		t.Fatalf("first limit %s", l)
+	}
+	start := time.Now()
+	ch := c.Effects.RunCheck(p, main, "test", "echo '--- FAIL: TestX'; sleep 2")
+	if ch.OK || !ch.Slow || !strings.Contains(ch.CantRun, "slow check") || len(ch.Failed) > 0 {
+		t.Fatalf("cut off: %+v", ch)
+	}
+	if _, ok := c.Effects.GetCheck(p.Name, main, "test"); ok {
+		t.Fatal("a cut-off check was kept as the commit's answer")
+	}
+	if l := c.Effects.checkLimit(p.Name, main, "test"); l != 2*time.Second {
+		t.Fatalf("limit after a cut-off %s, want twice it", l)
+	}
+	if ch := c.Effects.RunCheck(p, main, "test", "sleep 1.3"); !ch.OK || ch.Slow || time.Since(start) < 2*time.Second {
+		t.Fatalf("the longer try: %+v", ch)
+	}
+	if l := c.Effects.checkLimit(p.Name, main, "test"); l != time.Second {
+		t.Fatalf("limit after a verdict %s", l)
+	}
+	c.J.MustAppend("effect.checked", Check{Project: p.Name, SHA: "old", Kind: "test", Output: "timed out\n=== 47% done"})
+	if _, ok := c.Effects.GetCheck(p.Name, "old", "test"); ok || c.Effects.checkLimit(p.Name, "old", "test") != 2*time.Second {
+		t.Fatal("an old cut-off record read as red")
+	}
+	c.J.MustAppend("effect.checked", Check{Project: p.Name, SHA: "own", Kind: "test", Output: "x\ntimed out\n"})
+	if _, ok := c.Effects.GetCheck(p.Name, "own", "test"); !ok {
+		t.Fatal("a command's own 'timed out' line read as a cut-off")
+	}
+}
+
 // A check's home past its cap ends the check by its stop file.
 func TestCheckHomeCap(t *testing.T) {
 	saved := homeEvery

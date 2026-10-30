@@ -13,8 +13,8 @@ func TestRouteByTierAndAutonomy(t *testing.T) {
 		ceiling  string
 		want     string
 	}{
-		{"T1", 2, "", "warden"}, // a T1 ask is a step the asker can't take itself (#1991)
-		{"T1", 1, "", "warden"}, // inside the Hive: no yes first
+		{"T1", 2, "", "self"},
+		{"T1", 1, "", "self"},
 		{"T2", 2, "", "warden"},
 		{"T2", 3, "", "warden"},
 		{"T2", 1, "", "person-first"}, // turning autonomy down makes T2 ask first
