@@ -42,4 +42,12 @@ func TestMemBudget(t *testing.T) {
 	if why := memBudget(proc, root, 240, 2); !strings.Contains(why, "500 of 1000 MB in use") {
 		t.Fatalf("a third didn't wait on the cgroup: %q", why)
 	}
+	// The daemon in its unit's leaf, which has no limit of its own: the
+	// unit's holds.
+	write(proc+"/self/cgroup", "0::/hive.service/daemon\n")
+	write(root+"/hive.service/daemon/memory.max", "max\n")
+	write(root+"/hive.service/daemon/memory.current", "1\n")
+	if why := memBudget(proc, root, 240, 2); !strings.Contains(why, "500 of 1000 MB in use") {
+		t.Fatalf("the leaf didn't wait on its unit's limit: %q", why)
+	}
 }
