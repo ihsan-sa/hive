@@ -25,7 +25,9 @@ No merge waits on a decision any more (the person, 10-30: "freely edit everythin
 What keeps a mistake undoable is outside every agent's reach:
 - each repository's `keep-history` ruleset on its default branch refuses a force-push and a deletion, whoever's token pushes. The person's repositories have it, and one the Hive makes gets it as it is made (`core.GitHub.EnsureRepo`). A free plan has no rulesets on a private repository, so a private one has none;
 - the agents' tokens hold no administration, so no agent can lift a ruleset or delete a repository;
-- a nightly copy of the Hive's own state (`~/hive-backups`);
+- a nightly copy of the Hive's own state (`~/hive-backups`, by `install/hive-backup` installed as `~/.local/bin/hive-backup` and run by `hive-backup.timer`),
+  with a git bundle of every ref in each private repository's clone, the way back a private repository has in place of the ruleset (`git clone ~/hive-backups/<date>/repos/<project>.bundle`).
+  The script runs outside the sandbox on clones agents can write, so it runs no git in them (it bundles a copy of their objects and refs only, with a fresh config and no hooks, links or alternates), copies only plain files, not links, and runs only `/usr/bin` and `/bin` tools;
 - the build H0 ran before its last update (`hive agent fallback`).
 A bad change is reverted with a new commit.
 

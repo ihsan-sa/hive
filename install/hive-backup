@@ -1,0 +1,188 @@
+#!/bin/sh
+# hive-backup: a small nightly copy of the Hive's state to
+# ~/hive-backups/<UTC date>, keeping the last 7 (the person, 10-30: "a small
+# nightly backup of the Hive's state: the journal, config, goals and the KB").
+#
+#   events.jsonl.zst  the journal, compressed
+#   config.json       the Hive's settings
+#   goals/<project>/  each project's goals.md, lessons.md and project.json
+#   kb.tar.zst        the knowledge base without record/, which is filed
+#                     from the journal again
+#   repos/<project>.bundle  a git bundle of every ref in each private repo's
+#                     clone: on the free plan a private repo can't carry the
+#                     keep-history ruleset and the agents' tokens can
+#                     force-push it, so this is its way back
+#                     (`git clone repos/<project>.bundle`). Public repos keep
+#                     their history on the forge and aren't copied.
+#                     Git never runs in the clone: the bundle is made from a
+#                     copy of its objects and refs alone (gitcopy).
+#   SHA256SUMS        of the above
+#
+# It can't fill the disk: it refuses when the inputs (an upper bound on the
+# copy) pass MAX_MB, or when the copy would leave less than MIN_FREE_MB free.
+# A copy is written beside its place and moved in only when whole and
+# checked; old ones are removed only after that. Run by hive-backup.timer;
+# by hand: `systemctl --user start hive-backup`.
+set -eu
+# Only the system's own tools: ~/.local/bin and the like are agent-writable.
+PATH=/usr/bin:/bin
+export PATH
+
+HIVE=${HIVE_HOME:-$HOME/hive}
+OUT=${HIVE_BACKUPS:-$HOME/hive-backups}
+KEEP=${HIVE_BACKUPS_KEEP:-7}
+MAX_MB=${HIVE_BACKUP_MAX_MB:-4096}
+MIN_FREE_MB=${HIVE_BACKUP_MIN_FREE_MB:-20480}
+
+say() { echo "hive-backup: $*"; }
+die() { say "$*" >&2; exit 1; }
+
+# Agents can write every project's clone (its .git and .hive included), so
+# nothing here runs in one or follows a link out of one: git runs only on a
+# clean copy this script made (gitcopy), a file is copied only when it is a
+# plain file, and a name is used only when it is a plain slug.
+#
+# safegit runs git with no system or global config, no hooks and no
+# fsmonitor, in an empty HOME.
+safegit() {
+	timeout 1800 env -i PATH=/usr/bin:/bin HOME=/nonexistent GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null \
+		git -c core.hooksPath=/dev/null -c core.fsmonitor=false "$@"
+}
+# plain <path> says the path is a regular file, not a link.
+plain() { [ -f "$1" ] && [ ! -L "$1" ]; }
+# slug <name> says a project's folder name is safe to use as a word and a path.
+slug() { case "$1" in "" | .* | *[!A-Za-z0-9._-]*) return 1 ;; esac; }
+
+for f in "$HIVE/.hive/events.jsonl" "$HIVE/.hive/config.json"; do
+	plain "$f" || die "no plain file at $f"
+done
+mkdir -p "$OUT"
+OUT=$(cd -P "$OUT" && pwd -P)
+
+ROOT=$(cd -P "$HIVE/projects" 2>/dev/null && pwd -P) || ROOT=""
+# repos lists "<project> <owner/name>" from the journal, which only the daemon
+# writes: the clone's own config (agent-writable) doesn't decide whether a
+# repo is bundled. A later line for a project wins.
+REPOS=$(sed -n 's/^{"seq":[0-9]*,"at":"[^"]*","kind":"project\.\(created\|updated\)","data":{"name":"\([A-Za-z0-9._-]*\)","repo":"\([A-Za-z0-9._-]*\/[A-Za-z0-9._-]*\)".*/\2 \3/p' "$HIVE/.hive/events.jsonl")
+
+# private <project> says whether a project's repo is private: GitHub answers
+# an unauthenticated look at a private repo with 404. Anything it can't tell
+# (no record, no answer) counts as private, so it is kept rather than lost.
+private() {
+	repo=$(echo "$REPOS" | awk -v n="$1" '$1 == n {r = $2} END {print r}')
+	case "/$repo/" in //) return 0 ;; */./* | */../*) return 0 ;; esac
+	code=$(curl -g -s -o /dev/null -w '%{http_code}' --proto =https --max-time 20 "https://api.github.com/repos/$repo") || return 0
+	[ "$code" != 200 ]
+}
+# projects lists the clones as plain folders with slug names, one per line.
+projects() {
+	[ -n "$ROOT" ] || return 0
+	for p in "$ROOT"/*; do
+		name=${p##*/}
+		[ -d "$p" ] && [ ! -L "$p" ] && slug "$name" && echo "$p"
+	done
+}
+# inside <dir> enters dir and checks it is really there, not reached through
+# a link swapped in after a check; what follows reads relative paths from it.
+inside() { cd -P "$1" 2>/dev/null && [ "$(pwd -P)" = "$1" ]; }
+# gitcopy <.git> <dir> copies a clone's objects and refs, and nothing git
+# would run or follow (config, hooks, info, worktrees, links, alternates),
+# into a new bare repo at dir, so git never has to run in the clone itself.
+gitcopy() {
+	rm -rf "$2"
+	mkdir -p "$2"
+	(
+		inside "$1" || exit 1
+		for x in objects refs packed-refs HEAD; do
+			[ -e "$x" ] || [ -L "$x" ] || continue
+			timeout 600 cp -R -P "$x" "$2/" || exit 1
+		done
+	) || return 1
+	find "$2" ! -type f ! -type d -exec rm -f {} +
+	rm -rf "$2/objects/info/alternates" "$2/objects/info/http-alternates"
+	mkdir -p "$2/objects" "$2/refs"
+	plain "$2/HEAD" || echo "ref: refs/heads/main" > "$2/HEAD"
+	printf '[core]\n\trepositoryformatversion = 0\n\tbare = true\n' > "$2/config"
+}
+
+need=$(( $(du -sm "$HIVE/.hive/events.jsonl" | cut -f1) + $(du -sm --exclude=record "$HIVE/.hive/kb" | cut -f1) + 1 ))
+[ "$need" -le "$MAX_MB" ] || die "refused: the inputs are ${need} MB, over the ${MAX_MB} MB cap"
+# A clone that would pass the cap is left out on its own (say), so one big
+# clone can't stop the rest of the copy.
+bundles=""
+for p in $(projects); do
+	name=${p##*/}
+	if [ -d "$p/.git" ] && [ ! -L "$p/.git" ]; then
+		private "$name" || continue
+		mb=$(du -sm "$p/.git" | cut -f1)
+		if [ $((need + mb)) -le "$MAX_MB" ]; then
+			need=$((need + mb))
+			bundles="$bundles $p"
+		else
+			say "skipped $name: its ${mb} MB clone would pass the ${MAX_MB} MB cap" >&2
+		fi
+	elif [ -e "$p/.git" ]; then
+		say "skipped $name: its .git isn't a plain folder" >&2
+	fi
+done
+free=$(df -Pm "$OUT" | awk 'NR==2 {print $4}')
+[ $((free - need)) -ge "$MIN_FREE_MB" ] || die "refused: ${free} MB free, and a copy of up to ${need} MB would leave under ${MIN_FREE_MB} MB"
+
+day=$(date -u +%Y-%m-%d)
+dest="$OUT/$day"
+tmp="$OUT/.$day.partial"
+rm -rf "$tmp"
+mkdir -p "$tmp/goals"
+trap 'rm -rf "$tmp"' EXIT
+
+# Through stdin: the daemon appends to the journal while it is read, and zstd
+# refuses a named file that grows under it.
+zstd -q -3 -T2 -c < "$HIVE/.hive/events.jsonl" > "$tmp/events.jsonl.zst"
+cp -p "$HIVE/.hive/config.json" "$tmp/config.json"
+for p in $(projects); do
+	name=${p##*/}
+	(
+		inside "$p/.hive" || exit 0
+		for f in goals.md lessons.md project.json; do
+			if plain "$f"; then
+				mkdir -p "$tmp/goals/$name"
+				timeout 60 cp -P "$f" "$tmp/goals/$name/$f" || echo "can't copy $name's $f" >> "$tmp/.failed"
+			fi
+		done
+	)
+done
+tar -C "$HIVE/.hive" --exclude=kb/record -cf - kb | zstd -q -3 -T2 -o "$tmp/kb.tar.zst"
+for p in $bundles; do
+	mkdir -p "$tmp/repos"
+	b="$tmp/repos/${p##*/}.bundle"
+	m="$tmp/.repo"
+	# One clone that can't be copied or bundled loses only its own bundle.
+	if ! { gitcopy "$p/.git" "$m" &&
+		safegit --git-dir="$m" bundle create -q "$b" --all &&
+		safegit --git-dir="$m" bundle verify -q "$b" >/dev/null 2>&1; }; then
+		rm -f "$b"
+		echo "can't bundle ${p##*/}" >> "$tmp/.failed"
+	fi
+	rm -rf "$m"
+done
+
+zstd -q -t "$tmp/events.jsonl.zst" "$tmp/kb.tar.zst" || die "a compressed file doesn't check"
+(cd "$tmp" && find . -type f ! -name SHA256SUMS ! -name .failed -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS)
+
+rm -rf "$dest"
+mv "$tmp" "$dest"
+trap - EXIT
+say "$dest: $(du -sh "$dest" | cut -f1)"
+# What was left out is said and fails the run, after the rest is kept.
+failed=""
+if [ -f "$dest/.failed" ]; then
+	failed=$(cat "$dest/.failed")
+	rm -f "$dest/.failed"
+fi
+
+# The last KEEP copies stay; older ones go, only now that this one is whole.
+ls -1d "$OUT"/[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] 2>/dev/null | sort | head -n "-$KEEP" | while read -r old; do
+	rm -rf "$old"
+	say "removed $old"
+done
+[ -z "$failed" ] || die "left out: $(echo "$failed" | paste -sd ';' -)"
