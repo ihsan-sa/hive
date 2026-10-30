@@ -26,6 +26,7 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/report"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/risk"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/runner"
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/standup"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/stats"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/system"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/tools"
@@ -141,6 +142,7 @@ func New(ws core.Workspace, forge core.Forge) (*App, error) {
 	})
 	a.Release.PauseMerges = a.Work.PauseMerges
 	a.System.Register(system.Job{Name: "hive.update", AtStart: true, Fn: a.Release.AutoUpdate})
+	a.System.Register(system.Job{Name: "standup", Default: standup.Default, Fn: standup.New(c, a.Work, a.Chat).Run})
 	a.System.Register(system.Job{Name: "report.send", Fn: (&report.Module{C: c}).Send})
 	a.System.Register(system.Job{Name: "hive.clean", AtStart: true, Fn: func() (string, error) { return a.Clean(), nil }})
 	c.Effects.OnDiskFull = func() { a.System.RunNow("hive.clean") }
