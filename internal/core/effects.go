@@ -1,6 +1,7 @@
 package core
 
 import (
+	"bufio"
 	"cmp"
 	"crypto/sha256"
 	"encoding/hex"
@@ -3147,26 +3148,65 @@ func (e *Effects) hostCommit(p Project, dir string, h HostCommit) (string, error
 }
 
 // MainBundle writes main as a bundle a worker can fetch to resolve conflicts,
-// and returns the commit it holds (read under the same lock, so it is the
-// bundle's head even if main moves just after).
-// It is written under a temp name and renamed, so a fetch running now sees the old or the new file whole.
+// and returns the commit it holds (read from the bundle written, so it is the
+// bundle's head even if main moves just after). It takes no project lock: a
+// bundle only reads the clone, so a fetch holding the lock for minutes
+// doesn't hold up a turn that starts with a fresh one (FreshBundle).
+// It is written under a temp name of its own and renamed, so a fetch running
+// now sees the old or the new file whole, and two writers don't meet.
 func (e *Effects) MainBundle(p Project, path string) (string, error) {
-	defer e.lock(p.Name)()
-	dir := e.ws.Project(p.Name)
-	head, err := Git(dir, "rev-parse", "--verify", p.Branch)
-	if err != nil {
-		return "", err
-	}
-	tmp := path + ".tmp"
-	if _, err := Git(dir, "bundle", "create", tmp, p.Branch); err != nil {
+	tmp := path + ".tmp-" + NewUUID()[:8]
+	if _, err := Git(e.ws.Project(p.Name), "bundle", "create", tmp, p.Branch); err != nil {
 		os.Remove(tmp)
 		return "", err
+	}
+	head := BundleHead(tmp, p.Branch)
+	if head == "" {
+		os.Remove(tmp)
+		return "", fmt.Errorf("the bundle written holds no %s", p.Branch)
 	}
 	if err := os.Rename(tmp, path); err != nil {
 		os.Remove(tmp)
 		return "", err
 	}
-	return strings.TrimSpace(head), nil
+	return head, nil
+}
+
+// FreshBundle rewrites the main.bundle at path when it holds another
+// commit than the clone's main, and returns the commit it holds then.
+// Every turn of a run that has one starts with it (Runs.beforeTurn), so a
+// run reopened by any path, a message from a lead included, fetches main as
+// it is, not as it was when its task last wrote the bundle (issue #2154).
+func (e *Effects) FreshBundle(p Project, path string) (string, error) {
+	main, err := Git(e.ws.Project(p.Name), "rev-parse", "--verify", p.Branch)
+	if err != nil {
+		return "", err
+	}
+	if have := BundleHead(path, p.Branch); have != "" && have == strings.TrimSpace(main) {
+		return have, nil
+	}
+	return e.MainBundle(p, path)
+}
+
+// BundleHead is the commit a git bundle's header names for branch, or ""
+// when it names none (or the file can't be read).
+func BundleHead(path, branch string) string {
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		line := sc.Text()
+		if line == "" { // the header ends; the pack follows
+			break
+		}
+		if sha, ref, ok := strings.Cut(line, " "); ok && ref == "refs/heads/"+branch && !strings.HasPrefix(sha, "-") {
+			return sha
+		}
+	}
+	return ""
 }
 
 func appendLine(path, header, line string) error {
