@@ -1,10 +1,15 @@
 package core
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
+
+	"github.com/ihsan-sa/hive-standalone-build/internal/sandbox"
 )
 
 // The budget holds a turn once the memory left can't take it beside the ones
@@ -49,6 +54,110 @@ func TestMemBudget(t *testing.T) {
 	write(root+"/hive.service/daemon/memory.current", "1\n")
 	if why := memBudget(proc, root, 240, 2); !strings.Contains(why, "500 of 1000 MB in use") {
 		t.Fatalf("the leaf didn't wait on its unit's limit: %q", why)
+	}
+}
+
+// The CPU is full at a 1-minute load of a CPU each, and never when the load
+// can't be read.
+func TestCPUFull(t *testing.T) {
+	proc := t.TempDir()
+	if why := cpuFull(proc, 20); why != "" {
+		t.Fatalf("full with nothing to read: %q", why)
+	}
+	os.WriteFile(proc+"/loadavg", []byte("19.50 30.00 40.00 3/900 123\n"), 0o644)
+	if why := cpuFull(proc, 20); why != "" {
+		t.Fatalf("load 19.5 on 20 CPUs is full: %q", why)
+	}
+	os.WriteFile(proc+"/loadavg", []byte("109.12 101.00 104.00 50/3000 123\n"), 0o644)
+	if why := cpuFull(proc, 20); why != "load 109 on 20 CPUs" {
+		t.Fatalf("load 109 on 20 CPUs: %q", why)
+	}
+}
+
+// A measure of main runs its checks over every other run's turns, and while
+// it runs on a full CPU a turn that may wait doesn't start; once it ends, or
+// with turn_mb 0, they start again.
+func TestMeasuringMainYieldsTheCPU(t *testing.T) {
+	c, _ := testHive(t)
+	proc := t.TempDir()
+	old := procRoot
+	procRoot = proc
+	t.Cleanup(func() { procRoot = old })
+	os.WriteFile(proc+"/loadavg", []byte(fmt.Sprintf("%d 0 0 1/1 1\n", 5*runtime.NumCPU())), 0o644)
+
+	if n := c.Effects.niceFor("demo", "abc"); n != CheckNice {
+		t.Fatalf("a check before any measure runs at %d", n)
+	}
+	if why := c.Runs.Yielding(240); why != "" {
+		t.Fatalf("held with no measure: %q", why)
+	}
+	done := c.Effects.Measuring("demo", "abc1234567")
+	again := c.Effects.Measuring("demo", "abc1234567") // a nested measure of the same commit
+	if n := c.Effects.niceFor("demo", "abc1234567"); n != MeasureNice {
+		t.Fatalf("main's check runs at %d, not %d", n, MeasureNice)
+	}
+	if n := c.Effects.niceFor("demo", "def"); n != CheckNice {
+		t.Fatalf("another commit's check runs at %d", n)
+	}
+	why := c.Runs.Yielding(240)
+	if !strings.HasPrefix(why, MeasureWait) || !strings.Contains(why, "demo main at abc12345") {
+		t.Fatalf("a full CPU didn't hold turns for the measure: %q", why)
+	}
+	if why := c.Runs.Yielding(0); why != "" {
+		t.Fatalf("turn_mb 0 held: %q", why)
+	}
+	os.WriteFile(proc+"/loadavg", []byte("0.5 0 0 1/1 1\n"), 0o644)
+	if why := c.Runs.Yielding(240); why != "" {
+		t.Fatalf("held with CPU free: %q", why)
+	}
+	os.WriteFile(proc+"/loadavg", []byte(fmt.Sprintf("%d 0 0 1/1 1\n", 5*runtime.NumCPU())), 0o644)
+	done()
+	done() // a second call does nothing
+	if n := c.Effects.niceFor("demo", "abc1234567"); n != MeasureNice || c.Runs.Yielding(240) == "" {
+		t.Fatalf("the nested measure's end let go of the outer one")
+	}
+	again()
+	if n := c.Effects.niceFor("demo", "abc1234567"); n != CheckNice {
+		t.Fatalf("a check after the measure runs at %d", n)
+	}
+	if why := c.Runs.Yielding(240); why != "" {
+		t.Fatalf("held after the measure: %q", why)
+	}
+}
+
+// While main is measured on a full CPU, a worker's turn waits and says why,
+// and a lead's starts.
+func TestMeasureHoldsAWorkersTurnNotALeads(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("sleep stands in for the agent")
+	}
+	c, _ := testHive(t)
+	proc := t.TempDir()
+	old := procRoot
+	procRoot = proc
+	t.Cleanup(func() { procRoot = old })
+	os.WriteFile(proc+"/loadavg", []byte(fmt.Sprintf("%d 0 0 1/1 1\n", 5*runtime.NumCPU())), 0o644)
+	rs := c.Runs
+	var n atomic.Int32
+	rs.sandbox = func() (sandbox.Sandbox, error) { return claimSB{n: &n, agent: sleeper(t)}, nil }
+	cfg := rs.ws.LoadConfig()
+	cfg.TurnMB = 1 // pacing on; a megabyte always fits
+	defer c.Effects.Measuring("demo", "abc1234567")()
+	w, err := rs.Start(RunSpec{ID: "w1", Role: "worker", Harness: "fake", Checkout: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rs.launch(w, cfg)
+	if w, _ = rs.Get("w1"); n.Load() != 0 || w.Status == StatusRunning || !strings.HasPrefix(w.Reason, MeasureWait) {
+		t.Fatalf("a worker's turn during main's measure: %d started, status %s, reason %q", n.Load(), w.Status, w.Reason)
+	}
+	l, err := rs.Start(RunSpec{ID: "l1", Role: "lead", Harness: "fake", Checkout: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rs.launch(l, cfg)
+	if n.Load() != 1 {
+		t.Fatalf("a lead's turn waited for main's measure")
 	}
 }
 

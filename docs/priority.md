@@ -8,13 +8,20 @@ One figure paces the Hive: each agent turn is budgeted `turn_mb` (240 MB by defa
 Before a turn starts, `Runs.launch` takes the Hive's cgroup limit (the lowest `memory.max` or `memory.high` of its cgroup and those above it; with none, the machine's `MemTotal`) and what is in use there (the cgroup's `memory.current` less its inactive file cache; on the machine, what `MemAvailable` doesn't cover), and holds the turn while that leaves less than `turn_mb` for it and for each turn launching beside it; an executor module with room takes it instead.
 The work module starts waiting briefs the same way, in line order, while the budget has room for another turn (`admit`).
 A lead's turn, and a warden's or tribunal seat's, never waits (`Run.NeverWaits`).
-There is no strain hold, ramp, pace, load limit, `max_workers` or heavy-command lease any more; checks run at most `max_checks` at once.
+There is no strain hold, ramp, pace, `max_workers` or heavy-command lease any more; checks run at most `max_checks` at once.
 
 The disk is read as a whole, since a turn has no figure of it to budget:
 while Linux's IO pressure says every running task sat stalled on the disk for over `disk_full_max` (40% by default; below 0 is off) of the last minute (`full avg60`, `core.DiskBusy`), the work module starts no new worker while another works (one still starts when none does, so the loop never stops) and runs one check at a time, main's measure first by its rank.
 Running turns go on.
 On 10-30 that figure stood at ~60% from boot, some 92%, a write ~0.8 s.
 Checks also write less: Go links in a check drop DWARF (`GOFLAGS=-ldflags=-w`, a quarter of each test binary), and the journal's appends at once share one fsync.
+
+## Main's measure gets the CPU
+
+The score that keeps or reverts every merge is read from main's measure, so it is the one check the machine's load must not starve (issue #2169: at load 109 on 20 cores on 10-30, hive main's measures were cut off at their limits, and main went 17 hours and about 70 merges without a score).
+While the improve module measures main (`work.MeasuringMain`, which calls `core.Effects.Measuring`), that commit's checks run at `core.MeasureNice` (4), under the leads and over every other run's turns at 10, not at `CheckNice` (15) under them all.
+And while one runs and the 1-minute load average is a CPU each or more (`core.CPUFull`), a turn that may wait doesn't start, and the work module starts no waiting brief (`core.Runs.Yielding`, said as `waiting: main's measure`); an executor module with room takes an away turn instead, as with memory.
+Turns already running go on, a lead's, warden's or tribunal seat's turn never waits, and with `turn_mb` 0 (tests on a loaded machine) neither hold applies.
 
 ## Leads step first
 
@@ -26,7 +33,7 @@ Every sandboxed command carries a nice value (`sandbox.Spec.Nice`, from `Run.Nic
 
 ## Tests
 
-`TestMemBudget`, `TestTickStartsLeadsFirst`, `TestWorkerLaunchWaitsForLeadLaunch`, `TestOverlappingTicksStepEachRunOnce` (the lead's op held open on a channel, not timed by sleeps), `TestHungLeadStepIsSaidOnce`, `TestNiceByRole`, `TestSpawnNeverMakesALead` (internal/core); `TestNicedPrefixesArgv`, `TestNicedResolvesInTheDaemonsPath`, `TestLoweredAddsAndCaps`, `TestLowerPriorityHoldsForTheFork` (nice 0 leaves the level as it is), and, where namespaces can be made (CI), `TestHostPythonBothPaths`, whose command reads its own nice 10 inside the namespace and bubblewrap sandboxes (internal/sandbox); `TestRunGateReadsTheVerdict` (internal/app, the gate's level under a niced daemon too); `TestLeadTurnStartsUnderStrainThatHoldsAWorker` (internal/daemon, a real memory hold, built only from APIs main had, so the gate's fixes step could run it on both sides).
+`TestMemBudget`, `TestCPUFull`, `TestMeasuringMainYieldsTheCPU`, `TestMeasureHoldsAWorkersTurnNotALeads`, `TestTickStartsLeadsFirst`, `TestWorkerLaunchWaitsForLeadLaunch`, `TestOverlappingTicksStepEachRunOnce` (the lead's op held open on a channel, not timed by sleeps), `TestHungLeadStepIsSaidOnce`, `TestNiceByRole`, `TestSpawnNeverMakesALead` (internal/core); `TestNicedPrefixesArgv`, `TestNicedResolvesInTheDaemonsPath`, `TestLoweredAddsAndCaps`, `TestLowerPriorityHoldsForTheFork` (nice 0 leaves the level as it is), and, where namespaces can be made (CI), `TestHostPythonBothPaths`, whose command reads its own nice 10 inside the namespace and bubblewrap sandboxes (internal/sandbox); `TestRunGateReadsTheVerdict` (internal/app, the gate's level under a niced daemon too); `TestLeadTurnStartsUnderStrainThatHoldsAWorker` (internal/daemon, a real memory hold, built only from APIs main had, so the gate's fixes step could run it on both sides).
 
 ## The Hive's memory is bounded (#2143)
 

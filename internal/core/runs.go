@@ -207,6 +207,11 @@ const CheckNice = 15
 // key is stored for it): an infra outcome, not a verdict on the model.
 const CantStartHere = "can't start here: "
 
+// MeasureNice is the nice value a measure of main's checks get
+// (Effects.Measuring): under the leads, over every other run, since the
+// score that keeps or reverts every merge is read from it.
+const MeasureNice = 4
+
 // Paths of one run's folders.
 func (ws Workspace) RunHost(id string) string { return filepath.Join(ws.Run(id), "host") }
 func (ws Workspace) RunRO(id string) string   { return filepath.Join(ws.Run(id), "ro") }
@@ -501,6 +506,7 @@ type Runs struct {
 	busy    map[string]bool    // runs whose tick work is in flight
 	spent   map[string]float64 // "2006-01" (UTC) -> what runs cost that month
 	holds   map[string]string  // why no new turn starts (a restart waiting for a quiet moment), by who holds them
+	yields  map[string]string  // measures of main under way, by who measures: while the CPU is full, only turns that never wait start
 	down    map[string]Down    // picks that can't answer, by Pick.String
 	strikes map[string]strike  // each pick's straight turns ending in the same error
 	cfg     Config             // the config of the latest tick, which a Down is fingerprinted against
@@ -553,6 +559,42 @@ func (rs *Runs) Holds() []string {
 		why = append(why, rs.holds[w])
 	}
 	return why
+}
+
+// YieldFor says a measure of main is under way (what); "" says it ended.
+// While one is and the CPU is full (CPUFull), a turn that may wait (not a
+// lead's, warden's or tribunal's) doesn't start, so the measure gets the CPU
+// its reading needs; turns already running go on.
+func (rs *Runs) YieldFor(who, what string) {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	if what == "" {
+		delete(rs.yields, who)
+		return
+	}
+	if rs.yields == nil {
+		rs.yields = map[string]string{}
+	}
+	rs.yields[who] = what
+}
+
+// Yielding says why a turn that may wait doesn't start now for a measure of
+// main, or "". With turnMB 0 nothing paces turns, this hold neither.
+func (rs *Runs) Yielding(turnMB int) string {
+	if turnMB <= 0 {
+		return ""
+	}
+	rs.mu.Lock()
+	what := slices.Sorted(maps.Values(rs.yields))
+	rs.mu.Unlock()
+	if len(what) == 0 {
+		return ""
+	}
+	full := CPUFull()
+	if full == "" {
+		return ""
+	}
+	return fmt.Sprintf("%s (%s, %s)", MeasureWait, strings.Join(what, ", "), full)
 }
 
 // Live counts the turns whose process is running, and those starting.
@@ -2409,8 +2451,9 @@ func (rs *Runs) launch(r Run, cfg Config) {
 	}()
 	// One memory budget paces every turn (MemBudget): a lead's or a
 	// warden's never waits; any other waits while the memory left can't
-	// hold it beside the turns launching now, or (a worker's) goes to an
-	// executor module with room. An away run's goes there first anyway.
+	// hold it beside the turns launching now, or while a measure of main
+	// runs on a full CPU (Yielding), or (a worker's) goes to an executor
+	// module with room. An away run's goes there first anyway.
 	var elsewhere sandbox.Sandbox
 	where := ""
 	// Only a worker's turn is handed to an executor; a lead's, a sweep's or
@@ -2424,7 +2467,11 @@ func (rs *Runs) launch(r Run, cfg Config) {
 		rs.mu.Lock()
 		others := rs.launching - 1 // this launch is counted already
 		rs.mu.Unlock()
-		if why := MemBudget(cfg.TurnMB, others); why != "" {
+		why := MemBudget(cfg.TurnMB, others)
+		if why == "" {
+			why = rs.Yielding(cfg.TurnMB)
+		}
+		if why != "" {
 			if away {
 				elsewhere, where = rs.executor()
 			}

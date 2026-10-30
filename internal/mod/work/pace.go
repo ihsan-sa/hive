@@ -24,16 +24,20 @@ const (
 )
 
 // MeasuringMain marks sha as main's commit being measured on project until
-// the returned done is called: its checks go ahead of the line.
+// the returned done is called: its checks go ahead of the line, run over
+// the other runs' turns, and hold new turns while the CPU is full
+// (core.Effects.Measuring).
 func (m *Module) MeasuringMain(project, sha string) (done func()) {
 	key := project + "@" + sha
 	m.mu.Lock()
 	m.measuring[key]++
 	m.mu.Unlock()
+	favoured := m.C.Effects.Measuring(project, sha)
 	m.C.Effects.Slots.Fill()
 	var once sync.Once
 	return func() {
 		once.Do(func() {
+			favoured()
 			m.mu.Lock()
 			defer m.mu.Unlock()
 			if m.measuring[key]--; m.measuring[key] <= 0 {

@@ -72,7 +72,8 @@ func (t Task) Overdue() bool {
 
 // admit decides which waiting tasks start a worker now, and why each other
 // one waits: in line order, while the memory budget (core.MemBudget) has
-// room for another turn beside those started this pass, as launch weighs
+// room for another turn beside those started this pass, and no measure of
+// main holds turns on a full CPU (core.Runs.Yielding), as launch weighs
 // every turn. On a saturated disk (core.DiskBusy) none starts while another
 // worker works: the running ones go on, and the loop never stops for want
 // of one. tasks is every task Tick looks at.
@@ -106,6 +107,8 @@ func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]str
 			wait[t.ID] = disk + " for a worker"
 		case core.MemBudget(cfg.TurnMB, n) != "":
 			wait[t.ID] = core.MemWait + " for a worker"
+		case m.C.Runs.Yielding(cfg.TurnMB) != "":
+			wait[t.ID] = core.MeasureWait + " for a worker"
 		default:
 			start[t.ID] = true
 			n++
