@@ -621,9 +621,10 @@ func TestRootPathNoSeatReadsHolds(t *testing.T) {
 	}
 }
 
-// A security read that ran and didn't pass holds the release: an outside fix
-// outweighs the seats' and panel's land, and a security seat's fix isn't
-// outweighed by the panel's majority.
+// A security read that ran and didn't pass holds the release by the Hive's
+// own word, not the person's: an outside fix outweighs the seats' and panel's
+// land, a security seat's fix isn't outweighed by the panel's majority, and a
+// panel majority's fix holds too. The board says so and a fix is filed, once.
 func TestRootReadThatFailedHolds(t *testing.T) {
 	for name, read := range map[string]func(m *Module){
 		"outside fix": func(m *Module) {
@@ -638,21 +639,116 @@ func TestRootReadThatFailedHolds(t *testing.T) {
 				seated(m, "a2", "d2", seat, "land")
 			}
 		},
+		"panel fix": func(m *Module) {
+			seated(m, "a2", "d2", core.SeatSecurity, "land")
+			seated(m, "a2", "d2", core.PanelSeat(0), "land")
+			seated(m, "a2", "d2", core.PanelSeat(1), "fix")
+			seated(m, "a2", "d2", core.PanelSeat(2), "fix")
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			m, n, _, land := selfHive(t)
+			var filed []string
+			m.FileFix = func(project, title, done, known, why string) { filed = append(filed, title) }
 			m.C.J.MustAppend("effect.merged", map[string]any{"project": "hive", "pr": 2, "sha": "a2", "merge_sha": "m2", "root": []string{"install/root.sh"}, "diff": "d2"})
 			land("a2", "r2")
 			read(m)
 			m.AfterKept("hive", "m2")
-			asks := m.C.Person.Open()
-			if len(n.got) != 0 || len(asks) != 1 || !strings.Contains(asks[0].Title, "install/root.sh run with elevated rights") {
-				t.Fatalf("a root path whose security read said fix released: %v %+v", n.got, asks)
+			m.AfterKept("hive", "m2")
+			if len(n.got) != 0 || len(m.C.Person.Open()) != 0 {
+				t.Fatalf("a root path whose security read said fix: released %v, asked %+v", n.got, m.C.Person.Open())
+			}
+			if a := alertText(m); !strings.Contains(a, "The Hive holds its releases from m2") || !strings.Contains(a, "#2 (install/root.sh)") || !strings.Contains(a, "asked for fixes") {
+				t.Fatalf("the board doesn't say the Hive holds it: %q", a)
+			}
+			if len(filed) != 1 || !strings.Contains(filed[0], "#2 (install/root.sh)") || journaledN(m, "release.fix_held") != 1 {
+				t.Fatalf("fixes filed %v, %d release.fix_held, want one each", filed, journaledN(m, "release.fix_held"))
 			}
 			if len(m.C.Person.Told(5)) != 0 {
 				t.Fatal("told the person about a release that didn't go out")
 			}
 		})
+	}
+}
+
+// 004fb91b (10-30): #2212's security seat asked for fixes on
+// install/hive-backup while the Hive's reads of #2215 and #2220 still ran, and
+// the release was asked of the person, who said the Hive didn't need them for
+// it. The Hive holds it itself: an open release ask is answered so, the other
+// reads go on to their end, and the release goes out once a later change to
+// install/hive-backup passes its own security read.
+func TestReleaseHeldByTheHivesOwnFix(t *testing.T) {
+	m, n, _, land := selfHive(t)
+	var filed []string
+	m.FileFix = func(project, title, done, known, why string) { filed = append(filed, title+"\n"+known) }
+	for _, mg := range []struct {
+		pr   int
+		root string
+	}{{2212, "install/hive-backup"}, {2215, "internal/mod/risk/risk.go"}, {2220, "internal/setup/autostart.go"}} {
+		pr := fmt.Sprint(mg.pr)
+		m.C.J.MustAppend("effect.merged", map[string]any{"project": "hive", "pr": mg.pr, "sha": "a" + pr, "merge_sha": "m" + pr, "root": []string{mg.root}, "diff": "d" + pr})
+		land("a"+pr, "r"+pr)
+	}
+	m.C.Person.Ask(core.Ask{Kind: "release", Ref: "hive@m2215", Project: "hive", Title: "Release the Hive at m2215?", Options: []string{"release", "hold"}})
+	reads := map[int]int{}
+	m.ReadMerged = func(p core.Project, pr int, head, mergeSHA, diff string, root []string) (bool, string) {
+		reads[pr]++
+		if pr == 2212 {
+			m.C.J.MustAppend("effect.verdict", core.Verdict{Project: "hive", SHA: head, Run: "s", Verdict: "fix", Diff: diff, Seat: core.SeatSecurity,
+				Summary: "install/hive-backup runs host git as the person inside agent-writable clones"})
+			return false, "the security seat security asked for fixes on the merged #2212"
+		}
+		return m.rootRead("hive", merge{Root: root, Diff: diff}) != "", ""
+	}
+	m.AfterKept("hive", "m2220")
+	if len(n.got) != 0 || len(m.C.Person.Open()) != 0 {
+		t.Fatalf("held: released %v, asks open %+v", n.got, m.C.Person.Open())
+	}
+	if a := alertText(m); !strings.Contains(a, "#2212 (install/hive-backup)") || !strings.Contains(a, "host git as the person") || !strings.Contains(a, "#2215's security read") {
+		t.Fatalf("the board: %q", a)
+	}
+	if len(filed) != 1 || !strings.Contains(filed[0], "#2212") || !strings.Contains(filed[0], "host git as the person") {
+		t.Fatalf("fixes filed: %v", filed)
+	}
+	if m.reading("hive") != "m2220" {
+		t.Fatalf("the other reads stopped: reading at %q", m.reading("hive"))
+	}
+	for _, d := range []string{"2215", "2220"} {
+		for _, seat := range []string{core.SeatSecurity, core.PanelSeat(0), core.PanelSeat(1), core.PanelSeat(2)} {
+			seated(m, "a"+d, "d"+d, seat, "land")
+		}
+	}
+	m.retryReading()
+	m.retryReading()
+	if len(n.got) != 0 || len(m.C.Person.Open()) != 0 || m.reading("hive") != "" || len(filed) != 1 || journaledN(m, "release.fix_held") != 1 {
+		t.Fatalf("after the other reads passed: released %v, asks %+v, reading at %q, filed %v, %d fix_held",
+			n.got, m.C.Person.Open(), m.reading("hive"), filed, journaledN(m, "release.fix_held"))
+	}
+	// An unrelated later root change doesn't clear #2212.
+	m.C.J.MustAppend("effect.merged", map[string]any{"project": "hive", "pr": 2225, "sha": "a2225", "merge_sha": "m2225", "root": []string{".github/CODEOWNERS"}, "diff": "d2225"})
+	land("a2225", "r2225")
+	for _, seat := range []string{core.SeatSecurity, core.PanelSeat(0), core.PanelSeat(1), core.PanelSeat(2)} {
+		seated(m, "a2225", "d2225", seat, "land")
+	}
+	m.AfterKept("hive", "m2225")
+	if len(n.got) != 0 {
+		t.Fatalf("released on an unrelated change: %v", n.got)
+	}
+	m.C.J.MustAppend("effect.merged", map[string]any{"project": "hive", "pr": 2230, "sha": "a2230", "merge_sha": "m2230", "root": []string{"install/hive-backup"}, "diff": "d2230"})
+	land("a2230", "r2230")
+	for _, seat := range []string{core.SeatSecurity, core.PanelSeat(0), core.PanelSeat(1), core.PanelSeat(2)} {
+		seated(m, "a2230", "d2230", seat, "land")
+	}
+	m.AfterKept("hive", "m2230")
+	body := n.got["v0.0.1"]
+	if !strings.Contains(body, "#2212's root paths (install/hive-backup)") || !strings.Contains(body, "went out with #2230's later change") {
+		t.Fatalf("not released once the fix passed: %v", n.got)
+	}
+	if told := m.C.Person.Told(5); len(told) != 1 || !strings.Contains(told[0].Title, "#2212 (install/hive-backup, fixed by #2230)") {
+		t.Fatalf("the person should be told after: %+v", told)
+	}
+	if len(m.fixHeld("hive")) != 0 || len(m.C.Person.Open()) != 0 {
+		t.Fatalf("the hold outlived the release: %+v, asks %+v", m.fixHeld("hive"), m.C.Person.Open())
 	}
 }
 
