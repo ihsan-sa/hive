@@ -1100,7 +1100,7 @@ func (m *model) keys() []string {
 	case m.section == secChats:
 		return []string{"↑↓", "thread", "enter", "open", "n", "new thread", "end", "newest", "space", "collapse", "tab", "pane", "e E", "all"}
 	case len(m.stack) > 0 && m.stack[len(m.stack)-1].kind == "module":
-		return []string{"↑↓", "project", "space", "grant or remove", "r", "review again", "esc", "back", "q", "quit"}
+		return []string{"↑↓", "project", "space", "grant or remove", "esc", "back", "q", "quit"}
 	case len(m.stack) > 0:
 		return []string{"↑↓", "scroll", "esc", "back", "tab", "sidebar", "q", "quit"}
 	case m.section == secDash:

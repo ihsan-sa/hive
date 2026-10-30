@@ -186,49 +186,6 @@ func TestClearedDraftIsReadiedAndMerged(t *testing.T) {
 	}
 }
 
-// A task stopped on GitHub's "still a draft" before the Hive readied its
-// drafts comes back once and merges through the gate; one stopped for
-// anything else stays stopped.
-func TestStoppedOnDraftResumes(t *testing.T) {
-	m, task, p, forge := gateRig(t, false, map[string]string{"x.txt": "x\n"})
-	forge.SetDraft(p.Repo, task.PR.Number, true)
-	task.Stage, task.Failures = StageStopped, 8
-	task.Reason = gaveUpOnErrors + fmt.Sprintf("gh pr merge %d: GraphQL: Pull Request is still a draft (mergePullRequest)", task.PR.Number)
-	m.save(task, task.Reason)
-	other := &Task{ID: "t2", Project: "p", Title: "other", Kind: "work", Stage: StageStopped, Reason: gaveUpOnErrors + "gh pr merge 9: something else"}
-	m.save(other, other.Reason)
-	m.Tick()
-	m.Wait()
-	got, _ := m.Get(task.ID)
-	if got.Stage == StageStopped || got.Failures != 0 || !strings.Contains(fmt.Sprint(got.Log), "brought back") {
-		t.Fatalf("stage %q, failures %d, log %v", got.Stage, got.Failures, got.Log)
-	}
-	if o, _ := m.Get("t2"); o.Stage != StageStopped {
-		t.Fatalf("a task stopped on another error came back: %q", o.Stage)
-	}
-	for i := 0; i < 10 && got.Stage != StageMerged; i++ {
-		m.settle(&got, m.step(&got))
-	}
-	if got.Stage != StageMerged || readied(m) != 1 {
-		t.Fatalf("stage %q, readied %d, log %v", got.Stage, readied(m), got.Log)
-	}
-	// Once a task: stopped on the draft again, it stays for the lead, across
-	// restarts too (the marker is on the task); another task stopped later in
-	// the run comes back on its own.
-	got.Stage, got.Reason = StageStopped, task.Reason
-	m.save(&got, got.Reason)
-	again := &Task{ID: "t3", Project: "p", Title: "again", Kind: "work", Stage: StageStopped, Reason: task.Reason}
-	m.save(again, again.Reason)
-	m.Tick()
-	m.Wait()
-	if g, _ := m.Get(task.ID); g.Stage != StageStopped || !g.DraftRevived {
-		t.Fatalf("brought back twice: %q", g.Stage)
-	}
-	if a, _ := m.Get("t3"); a.Stage == StageStopped || !a.DraftRevived {
-		t.Fatalf("a task stopped later in the run stayed: %q, log %v", a.Stage, a.Log)
-	}
-}
-
 // An update's pause holds a ready merge at the gate, in merging, without a
 // failure; once the gate opens (or after the restart) it merges.
 func TestPausedMergeWaitsAtTheGate(t *testing.T) {

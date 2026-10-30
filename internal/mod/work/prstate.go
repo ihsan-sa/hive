@@ -108,7 +108,7 @@ func (m *Module) ClosePR(id, by, comment string, deleteBranch bool) (string, err
 		}
 	}
 	shas := []string{t.SHA, t.Checkpoint}
-	t.Stage, t.Reason, t.Checkpoint, t.DraftWhy = StageStopped, core.Clip(closedByLead+": "+comment, 300), "", ""
+	t.Stage, t.Reason, t.Checkpoint = StageStopped, core.Clip(closedByLead+": "+comment, 300), ""
 	save(&t, note)
 	m.dropChecks(t, shas)
 	// A merge question already put to the person is about a PR that is gone

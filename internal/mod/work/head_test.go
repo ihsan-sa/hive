@@ -212,7 +212,7 @@ func TestMergeDraftAdoptsTheHivesNewerHead(t *testing.T) {
 	m, task, p, f, next := staleHead(t, false)
 	f.SetDraft(p.Repo, task.PR.Number, true)
 	mergeOnce(t, m, task, p)
-	if task.SHA != next || task.Stage != StageTesting || !task.DraftSince.IsZero() {
+	if task.SHA != next || task.Stage != StageTesting {
 		t.Fatalf("sha %s (head %s), stage %q, reason %q", core.Short(task.SHA), core.Short(next), task.Stage, task.Reason)
 	}
 }

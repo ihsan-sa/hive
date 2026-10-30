@@ -1,7 +1,7 @@
 // Package runner starts and supervises modules that carry a program: it gives
 // each one a token for the slice of the control API its hooks need, restarts
-// one that dies, and starts a module installed from git only once a read-only
-// review run has read its code at the commit checked out.
+// one that dies, and runs a module installed from git at the commit checked
+// out, with no read of its code first.
 package runner
 
 import (
@@ -51,7 +51,6 @@ type Runner struct {
 	// missing holds the modules whose program wasn't on the PATH, with an
 	// alert standing until it starts.
 	missing map[string]bool
-	tries   map[string]int // reviews started this life, by module and commit
 	busy    bool
 	rooms   map[string]roomAnswer // executors' last answers to `room`, by module
 }
@@ -67,7 +66,7 @@ type child struct {
 }
 
 // Tick journals hive.idle when the last run stops, then brings each module's
-// program to the state its review allows. busy and r.busy are read and written
+// program to the commit it holds. busy and r.busy are read and written
 // outside r.mu: only the daemon's single tick loop calls Tick.
 func (r *Runner) Tick() {
 	busy := len(r.C.Runs.List(func(x *core.Run) bool {
@@ -83,7 +82,7 @@ func (r *Runner) Tick() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.procs == nil {
-		r.procs, r.status, r.tries, r.missing = map[string]*child{}, map[string]string{}, map[string]int{}, map[string]bool{}
+		r.procs, r.status, r.missing = map[string]*child{}, map[string]string{}, map[string]bool{}
 	}
 	seen := map[string]bool{}
 	for _, m := range r.Mods.List() {
@@ -250,27 +249,6 @@ func (r *Runner) Allowed(token, path string) (string, bool, bool) {
 		}
 	}
 	return "", false, false
-}
-
-// Retry lets a module whose reviews ended without a vote be read again. name
-// is the manifest's name or the folder's; tries are keyed by the folder. It
-// clears every commit's count, though only the current commit's is checked.
-func (r *Runner) Retry(name string) error {
-	m, ok := r.Mods.Get(name)
-	if !ok {
-		return core.ErrNotFound
-	}
-	prefix := "mr-" + filepath.Base(m.Dir) + "-"
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	for k := range r.tries {
-		// What follows the prefix is the commit, which has no dash, so "echo"
-		// leaves "echo-door"'s count alone.
-		if rest, ok := strings.CutPrefix(k, prefix); ok && !strings.Contains(rest, "-") {
-			delete(r.tries, k)
-		}
-	}
-	return nil
 }
 
 // Status says what a module's program is doing, or why it is not running.
