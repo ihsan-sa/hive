@@ -66,7 +66,7 @@ func (m *Module) releases() (core.Project, []released) {
 		if e.Kind == "hive.released" && e.Decode(&r) == nil && r.Project == p.Name && r.Tag != "" && hexName(r.SHA) {
 			out = append(out, r)
 		}
-	})
+	}, "hive.released")
 	return p, out
 }
 
@@ -392,7 +392,7 @@ func (m *Module) Fallback(why string) (string, error) {
 		if e.Kind == "hive.updated" && e.Decode(&x) == nil && x.To == core.Version {
 			from = x.From
 		}
-	})
+	}, "hive.updated")
 	exe := executable()
 	if from == "" || !core.Exists(exe+".old") {
 		return "", fmt.Errorf("no binary an update replaced is kept beside %s, so there is nothing to fall back to from %s", exe, core.Version)
