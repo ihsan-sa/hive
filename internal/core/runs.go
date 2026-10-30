@@ -2787,7 +2787,7 @@ func (rs *Runs) sandboxSpec(cfg Config, sb sandbox.Sandbox, h harness.Harness, r
 	// home (home.go); a reader, an experiment and an isolated project's run
 	// keep their own view.
 	inHome := sb.Isolated() && sessionInHome(r)
-	var bus []string
+	var bus, caches []string
 	if home, err := os.UserHomeDir(); inHome && err == nil && filepath.IsAbs(home) && home != "/" {
 		mounts = append(mounts, homeMounts(home, rs.ws.Covered(), rs.ws.PrivateFiles())...)
 		if HarnessName(r.Harness) == "claude" {
@@ -2800,6 +2800,7 @@ func (rs *Runs) sandboxSpec(cfg Config, sb sandbox.Sandbox, h harness.Harness, r
 		var rt []sandbox.Mount
 		rt, bus = runtimeMounts(UserRuntime(), filepath.Join(rs.ws.RunPrivate(r.ID), "cc-socks"))
 		mounts = append(mounts, rt...)
+		caches = homeCaches(home)
 	}
 	mounts = append(mounts, rs.hideIsolated(r)...)
 	var secrets *sandbox.Mount
@@ -2859,7 +2860,7 @@ func (rs *Runs) sandboxSpec(cfg Config, sb sandbox.Sandbox, h harness.Harness, r
 	if secrets != nil {
 		env = append(env, "HIVE_SECRETS="+in(*secrets))
 	}
-	env = append(env, bus...)
+	env = append(append(env, bus...), caches...)
 	// git and gh on the agents' own tokens, one per owner, never the Hive's
 	// logins (home.go): GH_TOKEN is the project's owner's (the Hive's own
 	// repo's for a run with no project). An isolated project's run gets its

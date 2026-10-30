@@ -151,6 +151,18 @@ func homeMounts(home string, covered, files []string) []sandbox.Mount {
 	return out
 }
 
+// homeCaches point a run in home at the hive user's own caches: the build,
+// module and package caches a session in that home fills (Go's build and
+// module caches, uv's and pip's, under XDG_CACHE_HOME and GOMODCACHE). A
+// run's HOME is its own, so without these every run started them empty:
+// a worker's go build, vet and one test of hive wrote 463 MB from a cold
+// HOME against 63 MB on the shared caches, on a disk the Hive wears out
+// (48 TB in 17 days, 10-30). The tools take their own locks, so runs share
+// them as concurrent sessions in home do.
+func homeCaches(home string) []string {
+	return []string{"XDG_CACHE_HOME=" + filepath.Join(home, ".cache"), "GOMODCACHE=" + filepath.Join(home, "go", "pkg", "mod")}
+}
+
 // UserRuntime is the hive user's runtime folder (/run/user/<uid>), where its
 // service manager's bus is; "" when there is none (not Linux, no session).
 var UserRuntime = func() string {
