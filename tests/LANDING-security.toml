@@ -1,14 +1,12 @@
 # Files where a mistake weakens the sandbox, leaks a credential or runs
-# something outside the sandbox. The lander merges a PR that touches one of
-# these only after a security read of the PR's own diff, and never takes the
-# light path for it. The Hive gives that read itself: a security reviewer
-# separate from the ordinary one (another model, briefed on the sandbox,
-# credentials and what runs outside it), and for a root entry below a
-# majority of a three-seat panel as well. A read from the box's perms seat or
-# architect, recorded with `hive read`, counts in their place, and its fix
-# sends the PR back. Paths are relative to the repo root; `*` stays inside
-# one path segment and `**` crosses segments. Every entry adds a read to each
-# PR that touches it, so keep the list narrow.
+# something outside the sandbox. Nothing waits on this list before a merge
+# any more (the person, 10-30: "freely edit everything including the core
+# with no process"): a change to these merges as soon as its worker finishes,
+# like any other. A release still reads it: a merge that touched a root entry
+# below goes out in a release only once the Hive's own seats read it there
+# (work.ReadMerged), and a measured rollback of a change here stands with no
+# judge (work.Unjudged). Paths are relative to the repo root; `*` stays inside
+# one path segment and `**` crosses segments.
 paths = [
   # This file and the script that decides what counts as green.
   "tests/LANDING-security.toml",
@@ -91,27 +89,27 @@ paths = [
   "go.sum",
 ]
 
-# The forge's checks that must succeed on a PR's exact head before the Hive
-# merges it (read from main). Neutral, skipped or not reported yet holds the
-# merge like a check still running. Names as GitHub lists them on a PR.
+# The forge's checks that must succeed on a main commit before a Hive that
+# follows main (H0) installs a build of it, and before a release is cut
+# there (read from that commit). No merge waits on them. Names as GitHub
+# lists them.
 required_checks = [
   "test (ubuntu-latest)",
   "sandboxed-e2e",
 ]
 
-# The forge's checks that only warn on the Hive's own PRs (read from main): red
-# here, one doesn't send the change back, and pending or unable to start it
-# isn't waited on; the task and PR say so. A release still needs them green.
-# Exact names; a check left off holds the merge as any other does. Windows is
-# paused for now (issue #564); this keeps its job advisory when it returns.
+# The forge's checks that only warn (read from main): a release still needs
+# them green. Exact names. Windows is paused for now (issue #564); this keeps
+# its job advisory when it returns.
 advisory_checks = [
   "test (windows-latest)",
 ]
 
 # What runs with elevated rights: CI and release with the repository's
-# secrets, install, setup and self-update. A PR that touches one also needs
-# the Hive's panel (PanelSeats seats over tribunal_models) to say land by a
-# majority. A root entry is on the list whether or not paths names it.
+# secrets, install, setup and self-update. A release of a merge that touched
+# one waits for the Hive's panel (PanelSeats seats over tribunal_models) to
+# say land by a majority. A root entry is on the list whether or not paths
+# names it.
 root = [
   ".github/workflows/**",
   "install/**",

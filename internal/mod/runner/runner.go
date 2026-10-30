@@ -7,10 +7,8 @@ package runner
 import (
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -39,9 +37,6 @@ var Scopes = map[string][]string{
 
 // every module may ping and report.
 var always = []string{"/api/ping", "/api/module/report"}
-
-// VoteSchema is the module review's structured answer.
-const VoteSchema = `{"type":"object","properties":{"vote":{"type":"string","enum":["approve","decline"]},"reason":{"type":"string"}},"required":["vote","reason"]}`
 
 // Runner supervises module programs.
 type Runner struct {
@@ -127,99 +122,9 @@ func (r *Runner) Tick() {
 
 // cleared returns the commit a module may run at, or why it may not run yet.
 // A module with neither a git source nor a .git folder was put there by the
-// person and runs as is; a clone with no source record is read like any other.
+// person and runs as is; any other runs at the commit it holds.
 func (r *Runner) cleared(name string, m modules.Module) (string, string) {
-	commit, decided, why := recorded(m)
-	if decided {
-		return commit, why
-	}
-	// A review that ends with no vote (it failed or crashed) is run again, up
-	// to three times in one life of the daemon; restarting it reads it again.
-	base := "mr-" + name + "-" + commit[:min(12, len(commit))]
-	for i := 1; ; i++ {
-		id := base
-		if i > 1 {
-			id = fmt.Sprintf("%s-%d", base, i)
-		}
-		run, ok := r.C.Runs.Get(id)
-		if !ok {
-			if r.tries[base] >= 3 {
-				why := "its review ended without a vote three times (run " + base + "); press r on it in Modules to read it again"
-				if r.status[name] != why {
-					r.C.J.MustAppend("alert.raised", map[string]string{"kind": "module", "module": name, "text": "module " + name + " was not started: " + why})
-				}
-				return commit, why
-			}
-			if err := r.review(id, commit, m); err != nil {
-				return commit, "its review could not start: " + err.Error()
-			}
-			r.tries[base]++
-			return commit, "waiting for its code review"
-		}
-		if !run.Terminal() {
-			return commit, "waiting for its code review"
-		}
-		var out struct{ Vote, Reason string }
-		if run.Status != core.StatusDone || json.Unmarshal(run.Structured, &out) != nil || (out.Vote != "approve" && out.Vote != "decline") {
-			continue
-		}
-		v := modules.Review{Commit: commit, Vote: out.Vote, Reason: core.Clip(out.Reason, 2000), Run: id}
-		if err := r.Mods.SetReview(name, v); err != nil {
-			return commit, "its review could not be recorded: " + err.Error()
-		}
-		if v.Vote != "approve" {
-			r.C.J.MustAppend("alert.raised", map[string]string{"kind": "module", "module": name, "text": "module " + name + " was not started: its review declined it: " + v.Reason})
-			return commit, "declined by its review: " + v.Reason
-		}
-		return commit, ""
-	}
-}
-
-// review starts a read-only run over a copy of the module's files at commit.
-func (r *Runner) review(id, commit string, m modules.Module) error {
-	dir, err := r.Agents.Scratch(id)
-	if err != nil {
-		return err
-	}
-	if err := copyTree(m.Dir, dir); err != nil {
-		return err
-	}
-	brief := fmt.Sprintf(`Read the module in your working folder, at commit %s from %s.
-
-The Hive will run %q from that folder on the person's machine, outside the sandbox, as the person, with no forge credential in its environment and its HOME set to a folder of its own. It asks to serve these hooks: %s. Its manifest says: %q.
-
-Approve only if the code does what the manifest says and nothing else. Decline if it reads or sends credentials or logins (gh, git, ssh, cloud, browser), writes outside its own folder and HOME, keeps a login, token or other secret anywhere but HOME (every agent can read its folder), starts other programs it does not need, fetches and runs code, or hides what it does. Your final answer is the structured vote: vote (approve or decline) and reason.`,
-		commit, m.Source.Source, strings.Join(m.Exec, " "), strings.Join(m.Hooks, ", "), m.Description)
-	s := r.Agents.Spec(id, "module-reviewer", "", dir, brief)
-	s.ReadOnly, s.Schema = true, VoteSchema
-	_, err = r.C.Runs.Start(s)
-	return err
-}
-
-func copyTree(from, to string) error {
-	return filepath.WalkDir(from, func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		rel, _ := filepath.Rel(from, p)
-		if d.Name() == ".git" || d.Name() == ".hive-source.json" {
-			if d.IsDir() {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if d.IsDir() {
-			return os.MkdirAll(filepath.Join(to, rel), 0o755)
-		}
-		if !d.Type().IsRegular() {
-			return nil
-		}
-		raw, err := os.ReadFile(p)
-		if err != nil {
-			return err
-		}
-		return os.WriteFile(filepath.Join(to, rel), raw, 0o644)
-	})
+	return recorded(m)
 }
 
 // start launches the program with a fresh token, its own HOME and no
