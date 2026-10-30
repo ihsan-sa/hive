@@ -30,7 +30,7 @@ func queueRig(t *testing.T) *Module {
 	mustGit(t, seed, "commit", "-q", "-m", "source")
 	mustGit(t, seed, "push", "-q", "origin", "HEAD:main")
 	cfg := m.C.WS.LoadConfig()
-	cfg.MaxWorkers = 2
+	cfg.TurnMB = 0
 	m.C.WS.SaveConfig(cfg)
 	return m
 }
@@ -67,92 +67,14 @@ func stageOf(t *testing.T, m *Module, task Task) Task {
 	return got
 }
 
-// Briefs start a worker in the order they were filed, only as many as
-// max_workers, two on the same file side by side (a conflict is settled at
-// merge); the rest wait as queued, saying why. The lead's order goes first, a held
-// brief waits until released, and a lower cap never stops a started worker.
-func TestQueueCapsOrdersAndGroups(t *testing.T) {
-	m := queueRig(t)
-	lead := core.Run{RunSpec: core.RunSpec{ID: "lead", Role: "lead"}}
-	a := file(t, m, "tidy the readme", "")
-	b := file(t, m, "cap the checks", "Checks run via internal/core/effects.go.")
-	c := file(t, m, "hold strained turns", "Also in internal/core/effects.go, launch.")
-	d := file(t, m, "show the queue", "On the dashboard, internal/tui/views.go.")
-	e := file(t, m, "a later idea", "")
-	tick(m)
-
-	want := func(task Task, stage, reason string) {
-		t.Helper()
-		got := stageOf(t, m, task)
-		if got.Stage != stage || !strings.Contains(got.Reason, reason) {
-			t.Fatalf("%q: stage %q reason %q, want %q with %q", task.Title, got.Stage, got.Reason, stage, reason)
-		}
-	}
-	want(a, StageWorking, "")
-	want(b, StageWorking, "")
-	want(c, StageQueued, "waiting for a worker (max_workers 2)")
-	want(d, StageQueued, "waiting for a worker (max_workers 2)")
-	want(e, StageQueued, "waiting for a worker")
-	if r, ok := m.C.Runs.Get("w-" + d.ID); ok {
-		t.Fatalf("a queued brief has a worker: %+v", r)
-	}
-
-	// The lead puts the last one first and holds the next.
-	out, err := m.opQueue(lead, json.RawMessage(`{"order":["`+e.ID+`"],"hold":["`+d.ID+`"]}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if q := out.(map[string]any)["queue"].([]string); len(q) != 3 || !strings.Contains(q[0], e.ID) || !strings.Contains(q[2], d.ID) {
-		t.Fatalf("queue after ordering: %q", q)
-	}
-	tick(m)
-	want(d, StageQueued, "held by lead")
-
-	// a lands: its slot goes to e, the lead's first, not to the held d.
-	got := stageOf(t, m, a)
-	got.Stage = StageDone
-	m.save(&got, "landed")
-	tick(m)
-	want(e, StageWorking, "")
-	want(d, StageQueued, "held by lead")
-	want(c, StageQueued, "waiting for a worker (max_workers 2)")
-
-	// A lower cap holds new starts only: b and e work on.
-	cfg := m.C.WS.LoadConfig()
-	cfg.MaxWorkers = 1
-	m.C.WS.SaveConfig(cfg)
-	if _, err := m.opQueue(lead, json.RawMessage(`{"release":"`+d.ID+`"}`)); err != nil { // as the CLI sends it
-		t.Fatal(err)
-	}
-	tick(m)
-	want(b, StageWorking, "")
-	want(e, StageWorking, "")
-	want(d, StageQueued, "waiting for a worker (max_workers 1)")
-	for _, id := range []string{"w-" + b.ID, "w-" + e.ID} {
-		if r, _ := m.C.Runs.Get(id); r.Terminal() {
-			t.Fatalf("the queue stopped a started worker: %+v", r)
-		}
-	}
-
-	// A higher cap: c starts beside b, though both touch effects.go.
-	cfg.MaxWorkers = 4
-	m.C.WS.SaveConfig(cfg)
-	tick(m)
-	want(c, StageWorking, "")
-	want(d, StageWorking, "")
-
-	// The op refuses what isn't waiting, and its notes say so.
-	out, _ = m.opQueue(lead, json.RawMessage(`{"hold":["`+c.ID+`"]}`))
-	if notes := out.(map[string]any)["notes"].([]string); len(notes) != 1 || !strings.Contains(notes[0], "left the queue") {
-		t.Fatalf("notes %q", notes)
-	}
-}
-
 // Every agent owns the loop: a worker holds a queued brief on its own project
 // as the lead would, on the record by its run id, and one on another project
 // only saying why.
 func TestWorkerHoldsQueuedBrief(t *testing.T) {
 	m := queueRig(t)
+	cfg := m.C.WS.LoadConfig()
+	cfg.TurnMB = 1 << 30 // no turn fits: every brief stays in line
+	m.C.WS.SaveConfig(cfg)
 	a := file(t, m, "tidy the readme", "")
 	b := file(t, m, "cap the checks", "")
 	c := file(t, m, "a later idea", "")
@@ -203,31 +125,6 @@ func TestWorkerHoldsQueuedBrief(t *testing.T) {
 	}
 }
 
-// Moving a brief in line says the next tick weighs it, not the wait the old
-// line gave it (issue #701).
-func TestQueueOrderDropsStaleWait(t *testing.T) {
-	m := queueRig(t)
-	lead := core.Run{RunSpec: core.RunSpec{ID: "lead", Role: "lead"}}
-	cfg := m.C.WS.LoadConfig()
-	cfg.MaxWorkers = 1
-	m.C.WS.SaveConfig(cfg)
-	file(t, m, "tidy the readme", "")
-	tick(m)
-	file(t, m, "rework effects", "internal/core/effects.go.")
-	c := file(t, m, "cap the checks", "In internal/core/effects.go.")
-	tick(m)
-	if got := stageOf(t, m, c); !strings.Contains(got.Reason, "waiting for a worker") {
-		t.Fatalf("before: %q", got.Reason)
-	}
-	out, err := m.opQueue(lead, json.RawMessage(`{"order":["`+c.ID+`"]}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if q := fmt.Sprint(out); !strings.Contains(q, "the next tick weighs it") {
-		t.Fatalf("reply shows the old wait: %s", q)
-	}
-}
-
 // moveMain commits f on the forge's main and syncs the host clone to it.
 func moveMain(t *testing.T, m *Module, f, content string) {
 	t.Helper()
@@ -248,174 +145,6 @@ func moveMain(t *testing.T, m *Module, f, content string) {
 	mustGit(t, seed, "push", "-q", "origin", "HEAD:"+p.Branch)
 	if _, err := m.C.Effects.Sync(p); err != nil {
 		t.Fatal(err)
-	}
-}
-
-// A working task whose worker has gone quiet holds no slot past its quiet
-// alert until it resumes, when it counts toward max_workers again.
-func TestQuietWorkerHoldsNoOne(t *testing.T) {
-	m := queueRig(t)
-	p, _ := m.C.Projects.Get("p")
-	stuck := file(t, m, "the stuck one", "In internal/core/effects.go.")
-	fix := file(t, m, "the queue fix", "In internal/core/effects.go too.")
-	if _, err := m.C.Runs.Start(core.RunSpec{ID: "wq", Role: "worker", Project: "p", Harness: "fake", Checkout: t.TempDir()}); err != nil {
-		t.Fatal(err)
-	}
-	stuck.Stage, stuck.Worker, fix.Stage = StageWorking, "wq", StageQueued
-	m.save(&stuck, "")
-	m.save(&fix, "")
-	cfg := m.C.WS.LoadConfig()
-	cfg.MaxWorkers = 1
-	m.C.WS.SaveConfig(cfg)
-	if start, wait := m.admit(m.List(nil)); start[fix.ID] {
-		t.Fatalf("the fix took a working one's slot: %q", wait[fix.ID])
-	}
-	m.C.Runs.SetStatus("wq", core.StatusQuiet, "keeps ending turns without finishing")
-	if err := m.checkWorker(&stuck, p); err != nil {
-		t.Fatal(err)
-	}
-	if got, _ := m.Get(stuck.ID); !strings.Contains(got.Reason, "quiet") {
-		t.Fatalf("no quiet note: %q", got.Reason)
-	}
-	if start, wait := m.admit(m.List(nil)); !start[fix.ID] {
-		t.Fatalf("a quiet worker still holds its slot: %q", wait[fix.ID])
-	}
-	m.C.Runs.SetStatus("wq", core.StatusRunning, "a message arrived")
-	other := file(t, m, "another one", "In internal/core/runs.go.")
-	other.Stage = StageQueued
-	m.save(&other, "")
-	if start, wait := m.admit(m.List(nil)); start[other.ID] || !strings.Contains(wait[other.ID], "max_workers") {
-		t.Fatalf("a resumed worker's slot was given away: %q", wait[other.ID])
-	}
-}
-
-// A worker that can't take a turn now holds no slot: one parked until a
-// usage reset hours off, or finished with its task awaiting take-out. On
-// 10-28 such ones held the pace of 4-6 with one turn running while 14 briefs
-// waited 2.5-4h. One parked for a short retry keeps its slot, and a worker
-// sent back is let through past them and then counts.
-func TestWorkersThatCantTakeATurnHoldNoSlot(t *testing.T) {
-	m := queueRig(t) // max_workers 2
-	for _, id := range []string{"wreset", "wdone", "wretry", "wback"} {
-		if _, err := m.C.Runs.Start(core.RunSpec{ID: id, Role: "worker", Project: "p", Harness: "fake", Checkout: t.TempDir()}); err != nil {
-			t.Fatal(err)
-		}
-		task := file(t, m, "worked on by "+id, "")
-		task.Stage, task.Worker = StageWorking, id
-		m.save(&task, "")
-	}
-	park := func(id string, d time.Duration) {
-		m.C.J.MustAppend("run.status", map[string]any{"id": id, "status": core.StatusParked, "reason": "usage limit reached", "until": time.Now().Add(d)})
-	}
-	park("wreset", 5*time.Hour)
-	m.C.Runs.SetStatus("wdone", core.StatusDone, "finished")
-	m.C.Runs.SetStatus("wretry", core.StatusDone, "finished")
-	m.C.Runs.SetStatus("wback", core.StatusDone, "finished")
-	if err := m.C.Runs.Reopen("wback", "A reviewer's findings."); err != nil {
-		t.Fatal(err)
-	}
-	back, _ := m.C.Runs.Get("wback")
-	if why := m.C.Runs.Admit(back); why != "" {
-		t.Fatalf("the worker sent back, past a parked and two finished ones: %q, want it let through", why)
-	}
-	fix := file(t, m, "the brief waiting", "")
-	fix.Stage = StageQueued
-	m.save(&fix, "")
-	if start, wait := m.admit(m.List(nil)); !start[fix.ID] {
-		t.Fatalf("a parked and two finished workers hold the slot: %q", wait[fix.ID])
-	}
-	park("wretry", time.Minute)
-	if start, wait := m.admit(m.List(nil)); start[fix.ID] || !strings.Contains(wait[fix.ID], "waiting for a worker") {
-		t.Fatalf("a worker parked for a minute's retry gave its slot away: %q", wait[fix.ID])
-	}
-}
-
-// A brief that has waited past overdue goes ahead of newer ones the lead
-// ordered, oldest first, and the queue shows how long it has waited (task 065256 waited 10h20m,
-// passed by 30 newer briefs "to go first").
-func TestQueueOverdueGoesAheadOfTheOrder(t *testing.T) {
-	m := queueRig(t) // max_workers 2
-	lead := core.Run{RunSpec: core.RunSpec{ID: "lead", Role: "lead"}}
-	old := file(t, m, "the lead closes PRs", "In internal/core/effects.go.")
-	older := file(t, m, "bound the check homes", "In internal/tui/views.go.")
-	newer := file(t, m, "word the PR states", "Also internal/core/effects.go.")
-	fresh := file(t, m, "a fresh idea", "")
-	for task, ago := range map[*Task]time.Duration{&old: 10 * time.Hour, &older: 11 * time.Hour, &newer: time.Hour} {
-		task.Created, task.Stage = time.Now().Add(-ago), StageQueued
-		m.save(task, "")
-	}
-	fresh.Stage = StageQueued
-	m.save(&fresh, "")
-	if _, err := m.opQueue(lead, json.RawMessage(`{"order":["`+fresh.ID+`","`+newer.ID+`"]}`)); err != nil {
-		t.Fatal(err)
-	}
-	q := m.Queue(lead)
-	if len(q) != 4 || !strings.Contains(q[0], older.ID) || !strings.Contains(q[1], old.ID) || !strings.Contains(q[2], fresh.ID) || !strings.Contains(q[3], newer.ID) {
-		t.Fatalf("queue: %q", q)
-	}
-	if !strings.Contains(q[1], "waited 10h0m0s, overdue: ahead of the lead's order") || strings.Contains(q[3], "overdue") || !strings.Contains(q[3], "waited 1h0m0s") || strings.Contains(q[2], "waited") {
-		t.Fatalf("queue does not show the waits: %q", q)
-	}
-	start, wait := m.admit(m.List(nil))
-	if !start[older.ID] || !start[old.ID] {
-		t.Fatalf("the overdue briefs wait: %q, %q", wait[older.ID], wait[old.ID])
-	}
-	if !strings.Contains(wait[newer.ID], "waiting for a worker") {
-		t.Fatalf("the newer brief: %q, want it to wait for a worker", wait[newer.ID])
-	}
-}
-
-// A brief the pace holds back starts anyway while an executor module has
-// room, one a pass and as many as max_workers, and its worker's turns go to
-// the runner first; it holds no slot here while they do, and none starts so
-// with no room.
-func TestPaceSendsAWorkerToARunnerWithRoom(t *testing.T) {
-	m := queueRig(t)
-	cfg := m.C.WS.LoadConfig()
-	cfg.MaxWorkers = 1
-	m.C.WS.SaveConfig(cfg)
-	if _, err := m.C.Runs.Start(core.RunSpec{ID: "wq", Role: "worker", Project: "p", Harness: "fake", Checkout: t.TempDir()}); err != nil {
-		t.Fatal(err)
-	}
-	busy := file(t, m, "the working one", "")
-	busy.Stage, busy.Worker = StageWorking, "wq"
-	m.save(&busy, "")
-	a, b := file(t, m, "first held", ""), file(t, m, "second held", "")
-	for _, x := range []*Task{&a, &b} {
-		x.Stage = StageQueued
-		m.save(x, "")
-	}
-	room := false
-	m.elsewhere = func() bool { return room }
-	if start, wait := m.admit(m.List(nil)); start[a.ID] || start[b.ID] || !strings.Contains(wait[a.ID], "waiting for a worker") {
-		t.Fatalf("started past the pace with no room elsewhere: %v %q", start, wait[a.ID])
-	}
-	room = true
-	start, wait := m.admit(m.List(nil))
-	if !start[a.ID] || start[b.ID] || !strings.Contains(wait[b.ID], "waiting for a worker") {
-		t.Fatalf("want one past the pace while a runner has room: %v %q", start, wait[b.ID])
-	}
-	p, _ := m.C.Projects.Get("p")
-	if err := m.startWorker(&a, p); err != nil {
-		t.Fatal(err)
-	}
-	if r, _ := m.C.Runs.Get(a.Worker); !r.Away {
-		t.Fatal("the worker started past the pace isn't sent away")
-	}
-	if m.away[a.ID] {
-		t.Error("the away mark outlived its worker's start")
-	}
-	// As many go away as max_workers; then the rest wait for a worker.
-	if start, wait := m.admit(m.List(nil)); start[b.ID] || !strings.Contains(wait[b.ID], "waiting for a worker") {
-		t.Fatalf("more away than max_workers: %v %q", start, wait[b.ID])
-	}
-	// Its turns haven't run here, so it holds no slot here: the working one
-	// done, the next starts here.
-	busy.Stage = StageDone
-	m.save(&busy, "")
-	room = false
-	if start, wait := m.admit(m.List(nil)); !start[b.ID] {
-		t.Fatalf("an away worker holds a slot here: %q", wait[b.ID])
 	}
 }
 
@@ -465,31 +194,5 @@ func TestBundleIsMainWhenTheWorkerStartsOrResumes(t *testing.T) {
 	}
 	if msg := queued(m, got.Worker); !strings.Contains(msg, "main.bundle holds main at "+core.Short(later)) {
 		t.Fatalf("the resend doesn't name the main it holds: %q", msg)
-	}
-}
-
-// An away worker's turn a runner gave back runs here, so it waits on the
-// pace here as a worker sent back to its task does; one still away doesn't.
-func TestGivenBackAwayWorkerWaitsOnThePace(t *testing.T) {
-	m := queueRig(t)
-	cfg := m.C.WS.LoadConfig()
-	cfg.MaxWorkers = 1
-	m.C.WS.SaveConfig(cfg)
-	if _, err := m.C.Runs.Start(core.RunSpec{ID: "wq", Role: "worker", Project: "p", Harness: "fake", Checkout: t.TempDir()}); err != nil {
-		t.Fatal(err)
-	}
-	busy := file(t, m, "the working one", "")
-	busy.Stage, busy.Worker = StageWorking, "wq"
-	m.save(&busy, "")
-	mine := file(t, m, "the away one", "")
-	mine.Stage, mine.Worker = StageWorking, "wa"
-	m.save(&mine, "")
-	r := core.Run{ID: "wa", Role: "worker", Away: true, Returned: true}
-	if why := m.paceBack(r); why != "" {
-		t.Fatalf("an away worker waits on the pace here: %q", why)
-	}
-	r.GaveBack = "iiks1"
-	if why := m.paceBack(r); !strings.Contains(why, "at the pace") {
-		t.Fatalf("a given-back worker went past the pace: %q", why)
 	}
 }

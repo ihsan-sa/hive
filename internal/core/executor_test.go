@@ -28,76 +28,6 @@ func (s elsewhereSB) Start(spec sandbox.Spec) (sandbox.Proc, error) {
 	return s.agent, nil
 }
 
-// A turn this machine is too strained for goes to an executor module with
-// room, built with inside paths as for the local sandbox, and the record says
-// where it ran; with no room it waits as before, and a bare Hive never hands
-// a turn over.
-func TestStrainedTurnGoesToAnExecutor(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("sleep stands in for the turn")
-	}
-	c, _ := testHive(t)
-	cfg := c.WS.LoadConfig()
-	cfg.MemFloorMB = 1 << 30
-	if Strained(cfg.MemFloorMB, 0, 0) == "" {
-		t.Skip("no /proc/meminfo here")
-	}
-	local := sandbox.Sandbox(isolatedBox{})
-	c.Runs.sandbox = func() (sandbox.Sandbox, error) { return local, nil }
-	var spec sandbox.Spec
-	room, asked := false, 0
-	c.Runs.Executor = func() (sandbox.Sandbox, string) {
-		asked++
-		if !room {
-			return nil, ""
-		}
-		return elsewhereSB{agent: sleeper(t), spec: &spec}, "iiks1"
-	}
-	r, err := c.Runs.Start(RunSpec{ID: "w", Role: "worker", Harness: "fake", Checkout: t.TempDir()})
-	if err != nil {
-		t.Fatal(err)
-	}
-	c.Runs.launch(r, cfg)
-	if got, _ := c.Runs.Get("w"); got.Status == StatusRunning || !strings.HasPrefix(got.Reason, "waiting: machine low on memory") || asked != 1 {
-		t.Fatalf("with no room elsewhere: %s %q, asked %d", got.Status, got.Reason, asked)
-	}
-	if c.Runs.Elsewhere() {
-		t.Error("Elsewhere with no room")
-	}
-
-	local = sandbox.Bare{}
-	room = true
-	c.Runs.launch(r, cfg)
-	if got, _ := c.Runs.Get("w"); got.Status == StatusRunning || asked != 2 {
-		t.Fatalf("a bare Hive handed its turn over: %s, asked %d", got.Status, asked)
-	}
-
-	local = isolatedBox{}
-	if !c.Runs.Elsewhere() {
-		t.Error("not Elsewhere with room")
-	}
-	r, _ = c.Runs.Get("w")
-	c.Runs.launch(r, cfg)
-	got, _ := c.Runs.Get("w")
-	if got.Status != StatusRunning || got.Where != "iiks1" {
-		t.Fatalf("with room elsewhere: %s %q where %q", got.Status, got.Reason, got.Where)
-	}
-	if spec.Cwd != "/work" || !strings.Contains(strings.Join(spec.Env, "\n"), "HIVE_BOX=/hive/box") {
-		t.Errorf("the spec handed over isn't built with inside paths: cwd %q env %v", spec.Cwd, spec.Env)
-	}
-	var where string
-	c.J.Replay(func(e Event) {
-		if e.Kind == "run.turn_started" {
-			var ts turnStarted
-			e.Decode(&ts)
-			where = ts.Where
-		}
-	})
-	if where != "iiks1" {
-		t.Errorf("run.turn_started says where %q", where)
-	}
-}
-
 // A test check the line here would make wait runs on an executor module's
 // runner with room, without a slot and without this machine's shared caches,
 // and the record says where; a check waiting in the line leaves it once a
@@ -265,46 +195,6 @@ type liarBox struct{ isolatedBox }
 
 func (liarBox) Run(sandbox.Spec, time.Duration) (int, error) { return 0, nil }
 
-// An away run's turn goes to an executor module with room though the machine
-// isn't strained, and with no room runs here rather than waiting.
-func TestAwayTurnGoesToAnExecutorFirst(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("sleep stands in for the turn")
-	}
-	c, _ := testHive(t)
-	cfg := c.WS.LoadConfig()
-	cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax = 0, 0, 0
-	c.Runs.sandbox = func() (sandbox.Sandbox, error) { return elsewhereSB{agent: sleeper(t), spec: new(sandbox.Spec)}, nil }
-	var spec sandbox.Spec
-	room := true
-	c.Runs.Executor = func() (sandbox.Sandbox, string) {
-		if !room {
-			return nil, ""
-		}
-		return elsewhereSB{agent: sleeper(t), spec: &spec}, "iiks1"
-	}
-	r, err := c.Runs.Start(RunSpec{ID: "w", Role: "worker", Harness: "fake", Checkout: t.TempDir(), Away: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	c.Runs.launch(r, cfg)
-	if got, _ := c.Runs.Get("w"); got.Status != StatusRunning || got.Where != "iiks1" {
-		t.Fatalf("an away turn: %s %q where %q", got.Status, got.Reason, got.Where)
-	}
-	room = false
-	c.Runs.mu.Lock()
-	c.Runs.handedAt = time.Time{} // a step after the last turn went (handing)
-	c.Runs.mu.Unlock()
-	r, err = c.Runs.Start(RunSpec{ID: "w2", Role: "worker", Harness: "fake", Checkout: t.TempDir(), Away: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	c.Runs.launch(r, cfg)
-	if got, _ := c.Runs.Get("w2"); got.Status != StatusRunning || got.Where != "" {
-		t.Fatalf("an away turn with no room elsewhere: %s %q where %q", got.Status, got.Reason, got.Where)
-	}
-}
-
 // waitFor polls cond until it holds, or fails after 10 seconds.
 func waitFor(t *testing.T, what string, cond func() bool) {
 	t.Helper()
@@ -315,9 +205,9 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 	}
 }
 
-// Turns go to an executor one at a time: a strained turn launched within
-// handStep of the last one handed over waits, though the module says it has
-// room, and the work queue hears no room meanwhile (10-29: ~66 turns handed
+// Turns go to an executor one at a time: a turn the memory budget holds,
+// launched within handStep of the last one handed over, waits here though the
+// module says it has room, and Elsewhere says no meanwhile (10-29: ~66 turns handed
 // over in six minutes on one cached answer, 61 of them run here after all).
 func TestTurnsGoToAnExecutorOneAtATime(t *testing.T) {
 	if runtime.GOOS == "windows" {
@@ -325,9 +215,9 @@ func TestTurnsGoToAnExecutorOneAtATime(t *testing.T) {
 	}
 	c, _ := testHive(t)
 	cfg := c.WS.LoadConfig()
-	cfg.MemFloorMB = 1 << 30
-	if Strained(cfg.MemFloorMB, 0, 0) == "" {
-		t.Skip("no /proc/meminfo here")
+	cfg.TurnMB = 1 << 30
+	if MemBudget(cfg.TurnMB, 0) == "" {
+		t.Skip("no memory limit readable here")
 	}
 	c.Runs.sandbox = func() (sandbox.Sandbox, error) { return isolatedBox{}, nil }
 	c.Runs.Executor = func() (sandbox.Sandbox, string) {
@@ -343,7 +233,7 @@ func TestTurnsGoToAnExecutorOneAtATime(t *testing.T) {
 	if got, _ := c.Runs.Get("w1"); got.Status != StatusRunning || got.Where != "iiks1" {
 		t.Fatalf("the first turn: %s %q where %q", got.Status, got.Reason, got.Where)
 	}
-	if got, _ := c.Runs.Get("w2"); got.Status == StatusRunning || !strings.HasPrefix(got.Reason, "waiting: one turn at a time") {
+	if got, _ := c.Runs.Get("w2"); got.Status == StatusRunning || !strings.HasPrefix(got.Reason, MemWait) {
 		t.Fatalf("the second turn, at once: %s %q", got.Status, got.Reason)
 	}
 	if c.Runs.Elsewhere() {
@@ -361,17 +251,17 @@ func TestTurnsGoToAnExecutorOneAtATime(t *testing.T) {
 
 // A turn the executor gave back before it started (exit 125, "dispatch: not
 // run:") is no retry and ran nowhere: it keeps the messages it was handed,
-// waits on the pace as a worker sent back does (Returned), and its next turn
-// runs here, held while the machine is strained rather than handed over again.
+// and its next turn runs here, held while the memory budget can't take it
+// rather than handed over again.
 func TestGivenBackTurnWaitsItsTurnHere(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("sleep stands in for the turn")
 	}
 	c, _ := testHive(t)
 	cfg := c.WS.LoadConfig()
-	cfg.MemFloorMB = 1 << 30
-	if Strained(cfg.MemFloorMB, 0, 0) == "" {
-		t.Skip("no /proc/meminfo here")
+	cfg.TurnMB = 1 << 30
+	if MemBudget(cfg.TurnMB, 0) == "" {
+		t.Skip("no memory limit readable here")
 	}
 	var here sandbox.Spec
 	c.Runs.sandbox = func() (sandbox.Sandbox, error) { return elsewhereSB{agent: sleeper(t), spec: &here}, nil }
@@ -397,7 +287,7 @@ func TestGivenBackTurnWaitsItsTurnHere(t *testing.T) {
 	waitFor(t, "the handed-over turn's process to end", func() bool { return !proc.Alive(away) })
 	c.Runs.endTurn(r)
 	got, _ := c.Runs.Get("w")
-	if got.Status != StatusParked || got.Retries != 0 || got.Where != "" || got.GaveBack != "iiks1" || !got.Returned ||
+	if got.Status != StatusParked || got.Retries != 0 || got.Where != "" || got.GaveBack != "iiks1" ||
 		!strings.Contains(got.Reason, "iiks1 gave its turn back before it started (iiks1 won't take it: full (3 of 3 turns running)") {
 		t.Fatalf("given back: %+v", got)
 	}
@@ -409,15 +299,15 @@ func TestGivenBackTurnWaitsItsTurnHere(t *testing.T) {
 	c.Runs.handedAt = time.Time{}
 	c.Runs.mu.Unlock()
 	c.Runs.launch(got, cfg)
-	if got, _ := c.Runs.Get("w"); got.Status == StatusRunning || !strings.HasPrefix(got.Reason, "waiting: machine low on memory") || asked != 1 {
-		t.Fatalf("strained, a given-back turn: %s %q, executor asked %d times", got.Status, got.Reason, asked)
+	if got, _ := c.Runs.Get("w"); got.Status == StatusRunning || !strings.HasPrefix(got.Reason, MemWait) || asked != 1 {
+		t.Fatalf("over the budget, a given-back turn: %s %q, executor asked %d times", got.Status, got.Reason, asked)
 	}
-	cfg.MemFloorMB = 0
+	cfg.TurnMB = 0
 	got, _ = c.Runs.Get("w")
 	c.Runs.launch(got, cfg)
 	got, _ = c.Runs.Get("w")
 	if got.Status != StatusRunning || got.Where != "" || asked != 1 || got.GaveBack != "" {
-		t.Fatalf("unstrained, a given-back turn: %s %q where %q, asked %d", got.Status, got.Reason, got.Where, asked)
+		t.Fatalf("within the budget, a given-back turn: %s %q where %q, asked %d", got.Status, got.Reason, got.Where, asked)
 	}
 	if raw, _ := os.ReadFile(filepath.Join(c.WS.RunHost("w"), fmt.Sprintf("turn-%03d.prompt", got.Turn))); !strings.Contains(string(raw), "a message for its first turn") {
 		t.Errorf("its turn here wasn't handed the message: %q", raw)

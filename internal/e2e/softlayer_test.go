@@ -133,11 +133,10 @@ const softCPUs = 4
 // softArm runs one arm, on the slot-th group of softCPUs CPUs, and keeps its
 // journal, chats and report in keep.
 func softArm(t *testing.T, arm softlayer.Variant, slot int, essay, task string, wait time.Duration, keep string) softlayer.Report {
-	// The caps: one worker and one check at a time, set as the person's
-	// ceilings so the pace can't raise them, and builds of two packages at
-	// once where a check gets the daemon's environment (a bare sandbox).
-	// The open arm has several agents in its space at once, each its own
-	// worker; checks and gates stay one at a time.
+	// The caps: one check at a time (workers are paced by the memory budget
+	// alone), and builds of two packages at once where a check gets the
+	// daemon's environment (a bare sandbox). The open arm has several agents
+	// in its space at once, each its own worker.
 	open := arm.Name == softlayer.OpenArm
 	workers := 1
 	if open {
@@ -147,7 +146,7 @@ func softArm(t *testing.T, arm softlayer.Variant, slot int, essay, task string, 
 		if os.Getenv("HIVE_SOFT_WARDENS") != "1" {
 			c.Autonomy = 1
 		}
-		c.MaxWorkers, c.MaxChecks, c.MaxGates, c.Ceilings = workers, 1, 1, true
+		c.MaxChecks = 1
 	}, "GOFLAGS=-p=2", fmt.Sprintf("GOMAXPROCS=%d", softCPUs))
 	if err := arm.Install(h.ws.Modules(), essay); err != nil {
 		t.Fatal(err)

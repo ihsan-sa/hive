@@ -2070,6 +2070,33 @@ func bump(tag string) string {
 	return fmt.Sprintf("v%d.%d.%d", a, b, c+1)
 }
 
+// wroteHits names, for each of the scan's hits (scan.Found), the commit that
+// last wrote its line (git blame at sha): a hit that reached main outside
+// work's merge path (a warden's script, a merge on GitHub) never met
+// publishScan, and its commit says how it got in. "" when err holds no hits.
+func (m *Module) wroteHits(project, sha string, err error) string {
+	var f *scan.Found
+	if !errors.As(err, &f) {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("\n\nThe commit that last wrote each line:")
+	for i, h := range f.Hits {
+		if i == 30 {
+			fmt.Fprintf(&b, "\n  and %d more", len(f.Hits)-i)
+			break
+		}
+		by := "one git blame can't name"
+		if out, err := core.Git(m.C.WS.Project(project), "blame", "--porcelain", "-L", fmt.Sprintf("%d,%d", h.Line, h.Line), sha, "--", h.File); err == nil {
+			if w := strings.Fields(out); len(w) > 0 {
+				by = core.Short(w[0])
+			}
+		}
+		fmt.Fprintf(&b, "\n  %s:%d: %s", h.File, h.Line, by)
+	}
+	return b.String()
+}
+
 // scanHit is a line of the scan's failure naming one hit: "  path:line: kind".
 var scanHit = regexp.MustCompile(`(?m)^\s+(\S+?):\d+: `)
 
@@ -2094,6 +2121,6 @@ func (m *Module) fileScanFix(project, sha string, err error) {
 	slices.Sort(files)
 	m.FileFix(project, "Releases go out again: the release scan's hits in "+strings.Join(files, ", ")+" are gone",
 		"The release scan passes on main, so a release can be cut; what the hits said is put another way or left out, never moved to an unscanned file.",
-		"No release since "+core.Short(sha)+": the release scan blocks it. "+core.Clip(err.Error(), 1500),
+		"No release since "+core.Short(sha)+": the release scan blocks it. "+core.Clip(err.Error(), 1500)+m.wroteHits(project, sha, err),
 		"the release scan blocks every release at "+core.Short(sha))
 }

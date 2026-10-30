@@ -103,7 +103,7 @@ type Run struct {
 	Login       string          `json:"login,omitempty"`        // the login its latest turn went on
 	TokenExpiry time.Time       `json:"token_expiry,omitempty"` // when the access token its latest turn was handed runs out
 	Where       string          `json:"where,omitempty"`        // the runner its latest turn went to; empty is this machine
-	GaveBack    string          `json:"gave_back,omitempty"`    // the executor module that gave its latest turn back unstarted: its next runs here, under the holds
+	GaveBack    string          `json:"gave_back,omitempty"`    // the executor module that gave its latest turn back unstarted: its next runs here, under the memory budget
 	Progress    string          `json:"progress,omitempty"`
 	ProgressAt  time.Time       `json:"progress_at,omitempty"`
 	StopAsked   bool            `json:"stop_asked,omitempty"`
@@ -178,6 +178,13 @@ func (r *Run) Terminal() bool {
 // scheduling priority.
 func (r *Run) Lead() bool { return r.Role == "lead" }
 
+// NeverWaits says whether r's turns start however full the machine is: a
+// lead's, which answers the person, and a warden's or tribunal seat's, which
+// an agent waits on.
+func (r *Run) NeverWaits() bool {
+	return r.Lead() || r.Role == "warden" || r.Role == "tribunal"
+}
+
 // Nice is the Unix nice value the run's processes get (higher is lower
 // priority; a process can only go higher): the Hive-wide lead at the
 // daemon's own, a project's lead just under it, and every other role well
@@ -195,12 +202,6 @@ func (r *Run) Nice() int {
 
 // CheckNice is the nice value checks and gate runs get: under every run.
 const CheckNice = 15
-
-// LeadMemFloorMB is the one hold a lead's turn has: below this much
-// available memory its harness would be killed before it answered, so it
-// waits (saying why once, as run.held) rather than crash. Pressure never
-// holds a lead, and mem_floor_mb above this is for the other roles.
-const LeadMemFloorMB = 256
 
 // Paths of one run's folders.
 func (ws Workspace) RunHost(id string) string { return filepath.Join(ws.Run(id), "host") }
@@ -481,9 +482,6 @@ type Runs struct {
 	// Room says whether Executor would hand a turn over now, without
 	// spending the yes it would go on (each Executor call spends one).
 	Room func() bool
-	// Admit says why a run's next turn waits on a module, or "": the work
-	// module's pace for a worker sent back to its task (Returned).
-	Admit func(Run) string
 	// Held is when a module next lets a pick take turns (a model at a
 	// spending cap), zero when it doesn't hold it; TurnBudget is the most a
 	// module lets run's next turn spend, 0 for no limit. Either may be nil.
@@ -518,86 +516,7 @@ type Runs struct {
 	backedOff                map[string]int  // the turn each run last backed off from for another daemon's claim, said once
 	turnLive                 map[string]int  // the turn each run last waited on its own last turn for, said once
 	waking                   sync.Mutex      // one wake at a time, so a run is woken once
-	// heldAt is when a turn last waited on a strained machine, rampLast
-	// when the ramp after it last let one start, and rampedAt when it last
-	// held one back (ramp).
-	heldAt, rampLast, rampedAt time.Time
-	// handedAt is when a turn was last handed to an executor module (handing).
-	handedAt time.Time
-	rampWait map[string]rampWaiter // the runs waiting on the ramp
-}
-
-// rampWaiter is a run waiting on the ramp: whether it was sent back to its
-// work (Returned), when it was created, and when it last asked.
-type rampWaiter struct {
-	returned      bool
-	created, seen time.Time
-}
-
-// before says whether w goes ahead of o on the ramp: one sent back first,
-// then the oldest.
-func (w rampWaiter) before(o rampWaiter, id, oid string) bool {
-	if w.returned != o.returned {
-		return w.returned
-	}
-	if !w.created.Equal(o.created) {
-		return w.created.Before(o.created)
-	}
-	return id < oid
-}
-
-// rampSeen is how lately a run must have asked the ramp to be waiting on it:
-// a tick steps every run about once a second, so one not seen for this long
-// has started elsewhere, been held before it, or ended.
-var rampSeen = 10 * time.Second
-
-// rampStep is the least time between two turns starting after a strain hold
-// (ramp), so the readings see each before the next: on 10-28, the hold
-// lifting started every run it had held at once, and the Hive's slice ran to
-// 42 claude, 87 link and 40 compile processes, load near 400 and an OOM kill.
-var rampStep = 30 * time.Second
-
-// Holding marks a strain hold now, outside launch (a brief the work module
-// held on one), so the turns after it ramp up.
-func (rs *Runs) Holding() {
-	rs.mu.Lock()
-	rs.heldAt = time.Now()
-	rs.mu.Unlock()
-}
-
-// ramp says whether r's turn starting now waits for the ramp: after a strain
-// hold, turns start one a rampStep until none has waited on the ramp for two.
-// Each step goes to the waiting run first in line (rampWaiter.before): every
-// run is stepped in its own goroutine, so the step went to whichever asked
-// first after it, and from 04Z on 10-29 seven workers sent back to their tasks
-// took no turn in 4-7h while 28 newer runs took 46.
-func (rs *Runs) ramp(r Run, now time.Time) bool {
-	rs.mu.Lock()
-	defer rs.mu.Unlock()
-	if now.Sub(rs.heldAt) > 2*rampStep && now.Sub(rs.rampedAt) > 2*rampStep {
-		clear(rs.rampWait)
-		return false
-	}
-	if rs.rampWait == nil {
-		rs.rampWait = map[string]rampWaiter{}
-	}
-	me := rampWaiter{returned: r.Returned, created: r.Created, seen: now}
-	rs.rampWait[r.ID] = me
-	ahead := false
-	for id, w := range rs.rampWait {
-		if now.Sub(w.seen) > rampSeen {
-			delete(rs.rampWait, id)
-		} else if id != r.ID && w.before(me, id, r.ID) {
-			ahead = true
-		}
-	}
-	if ahead || now.Sub(rs.rampLast) < rampStep {
-		rs.rampedAt = now
-		return true
-	}
-	delete(rs.rampWait, r.ID)
-	rs.rampLast = now
-	return false
+	handedAt                 time.Time       // when a turn was last handed to an executor module (handing)
 }
 
 // Hold keeps new turns from starting, saying why; "" lets them start again.
@@ -979,9 +898,8 @@ func (rs *Runs) apply(e Event) {
 			}
 		}
 		if t.GaveBack != "" {
-			// Its turn never started: it ran nowhere, and waits on the pace
-			// here as a worker sent back to its task does (work's paceBack).
-			r.Where, r.GaveBack, r.Returned = "", t.GaveBack, true
+			// Its turn never started: it ran nowhere.
+			r.Where, r.GaveBack = "", t.GaveBack
 		}
 		if t.Status == StatusParked && t.Unavailable == "" && !t.Renewed && t.GaveBack == "" && (t.Result == nil || (t.Result.IsError && !t.Result.Limited)) {
 			r.Retries++
@@ -2188,11 +2106,11 @@ func (rs *Runs) endTurn(r Run) {
 	case tl.Result == nil && r.Where != "" && givenBack(rs.ws.TurnOut(r.ID, r.Turn)) != "":
 		// An executor module gave the turn back before it started (its
 		// runner refused it, or none had room by then): nothing ran, so it
-		// is no retry. It waits its turn here under the pace and the strain
-		// hold, as any turn does, with the messages it was handed.
+		// is no retry. It waits its turn here under the memory budget, as
+		// any turn does, with the messages it was handed.
 		why := givenBack(rs.ws.TurnOut(r.ID, r.Turn))
 		te.Status, te.ParkedUntil, te.GaveBack = StatusParked, time.Now(), r.Where
-		te.Reason = "waiting: " + r.Where + " gave its turn back before it started (" + Clip(why, 200) + "); it runs here when the pace and the machine let it"
+		te.Reason = "waiting: " + r.Where + " gave its turn back before it started (" + Clip(why, 200) + "); it runs here when the memory budget lets it"
 		te.Queue = cur.Given
 	case tl.Result == nil:
 		// Under WSL, sandbox-exec's own early failures go to .wsl.
@@ -2473,7 +2391,7 @@ func (rs *Runs) launch(r Run, cfg Config) {
 		rs.mu.Unlock()
 		return
 	}
-	if !r.Lead() && rs.leadLaunching > 0 {
+	if !r.NeverWaits() && rs.leadLaunching > 0 {
 		// A lead's turn starts first; this one is due again next tick. Leads
 		// launch when a message comes, so this rarely repeats; one that does
 		// (leads launching back to back, tick after tick) is said in daemon.log.
@@ -2506,52 +2424,39 @@ func (rs *Runs) launch(r Run, cfg Config) {
 		delete(rs.starting, r.ID)
 		rs.mu.Unlock()
 	}()
-	floor, memMax, cpuMax := cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax
-	if r.Lead() {
-		// A lead answers however busy the machine is: no pressure hold, and
-		// only the floor under which its turn could not run at all.
-		floor, memMax, cpuMax = min(floor, LeadMemFloorMB), 0, 0
-	}
-	// A turn this machine is too strained for goes to an executor module
-	// with room, or waits; an away run's goes there first anyway.
-	// A turn an executor gave back runs here, under the holds; and turns go
-	// to one one at a time (handing), so a burst isn't judged on one answer.
+	// One memory budget paces every turn (MemBudget): a lead's or a
+	// warden's never waits; any other waits while the memory left can't
+	// hold it beside the turns launching now, or goes to an executor module
+	// with room. An away run's goes there first anyway.
 	var elsewhere sandbox.Sandbox
 	where := ""
-	why := Strained(floor, memMax, cpuMax)
 	// A run that reads its project's secrets stays here: an executor would
 	// copy the folder to another machine.
-	if (why != "" || (r.Away && !r.Lead())) && r.GaveBack == "" && rs.secretsFor(r) == "" {
-		if rs.handing() {
-			if why != "" {
-				rs.Holding()
+	// One an executor gave back runs here too, under the budget; and turns
+	// go to executors one at a time (handing), so a burst isn't judged on
+	// one room answer.
+	away := rs.secretsFor(r) == "" && r.GaveBack == ""
+	handOver := func() {
+		if !rs.handing() {
+			elsewhere, where = rs.executor()
+		}
+	}
+	if r.Away && !r.NeverWaits() && away {
+		handOver()
+	}
+	if !r.NeverWaits() && elsewhere == nil {
+		rs.mu.Lock()
+		others := rs.launching - 1 // this launch is counted already
+		rs.mu.Unlock()
+		if why := MemBudget(cfg.TurnMB, others); why != "" {
+			if away {
+				handOver()
 			}
-			rs.holdTurn(r, "waiting: one turn at a time goes to an executor module")
-			return
+			if elsewhere == nil {
+				rs.holdTurn(r, why)
+				return
+			}
 		}
-		elsewhere, where = rs.executor()
-	}
-	if why != "" && elsewhere == nil {
-		if !r.Lead() {
-			rs.Holding()
-		}
-		rs.holdTurn(r, "waiting: "+why)
-		return
-	}
-	// Admit before the ramp: a run the module holds doesn't spend the
-	// ramp's step, and a pass it gives is kept (work's backIn) until the
-	// ramp lets the turn start. The other way round a run held by both
-	// took the step one tick and the module's hold the next, journalling
-	// two run.held a tick (618 for one worker in 3h on 10-28).
-	if rs.Admit != nil {
-		if why := rs.Admit(r); why != "" {
-			rs.holdTurn(r, why)
-			return
-		}
-	}
-	if !r.Lead() && elsewhere == nil && rs.ramp(r, time.Now()) {
-		rs.holdTurn(r, "waiting: starting one turn at a time after the machine was strained")
-		return
 	}
 	sb, err := rs.sandbox()
 	if err != nil {
