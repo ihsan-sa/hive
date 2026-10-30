@@ -130,12 +130,34 @@ func isWord(c byte) bool {
 
 // Pace says what paces the workers and checks, for the dashboard and the
 // lead: one memory budget (core.MemBudget) for every turn and worker, and
-// max_checks for the checks.
+// max_checks for the checks; a saturated disk (core.DiskBusy) holds new
+// workers and all checks but one.
 func (m *Module) Pace() map[string]string {
 	cfg := m.C.WS.LoadConfig()
 	budget := fmt.Sprintf("as many as memory holds at %d MB a turn (turn_mb)", cfg.TurnMB)
 	if why := core.MemBudget(cfg.TurnMB, 0); why != "" {
 		budget += "; now " + why
 	}
-	return map[string]string{"workers": budget, "checks": fmt.Sprint(cmp.Or(cfg.MaxChecks, core.DefaultMaxChecks()))}
+	checks := fmt.Sprint(cmp.Or(cfg.MaxChecks, core.DefaultMaxChecks()))
+	if why := diskBusy(cfg.DiskFull()); why != "" {
+		budget += "; no new worker while one works, " + why
+		checks = "1, " + why
+	}
+	return map[string]string{"workers": budget, "checks": checks}
+}
+
+// diskBusy is core.DiskBusy; a test sets the disk's state.
+var diskBusy = core.DiskBusy
+
+// maxChecks is how many checks run at once: max_checks, or one while the
+// disk is saturated (core.DiskBusy). A check is mostly writes (Go links and
+// test binaries, kicad-cli's outputs, a build cache), so on a saturated disk
+// more at once only make each slower; main's measure ranks first and so is
+// the one that runs.
+func (m *Module) maxChecks() int {
+	cfg := m.C.WS.LoadConfig()
+	if diskBusy(cfg.DiskFull()) != "" {
+		return 1
+	}
+	return cmp.Or(cfg.MaxChecks, core.DefaultMaxChecks())
 }

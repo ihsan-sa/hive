@@ -156,6 +156,9 @@ type Task struct {
 	NoChecks   time.Time `json:"no_checks,omitempty"`
 	NoChecksOn string    `json:"no_checks_on,omitempty"`
 	CIStarted  string    `json:"ci_started,omitempty"` // the head the Hive started the forge's CI on, once (head.go)
+	// NoChecksMerged is the head the Hive made by merging main into a branch
+	// behind it that got no forge check run, once per task (head.go).
+	NoChecksMerged string `json:"no_checks_merged,omitempty"`
 	// HeadWait is when the forge was first seen still showing HeadWaitOn,
 	// an earlier push of the Hive's than the task's head (head.go).
 	HeadWait   time.Time `json:"head_wait,omitempty"`
@@ -326,6 +329,7 @@ type Module struct {
 	busy      map[string]bool
 	stepAt    map[string]time.Time // when each Tick step began, so one stuck past stepLimit is let go
 	weighing  map[string]weighing  // the checkpoints a step is weighing, so a finish takes them out of the check line
+	bars      map[string]float64   // a worker's base scored under a score main isn't yet measured by, keyed project@sha@version
 	aims      map[string]aimAsk    // aims asked while a step held the task, set as it ends
 	// steered is when the person's stop, retry or recheck (steer) last saved
 	// each task: a step whose copy is older saves nothing after it, nor
@@ -457,7 +461,7 @@ func New(c *core.Core, a *agents.Agents, ch *chat.Module) *Module {
 	c.Runs.Ops().Register(core.Op{Name: "pr_close", Help: `{"task"|"project"+"pr","comment","delete_branch":bool} -> closes the Hive's own PR with comment and ends its task (its worker stopped); delete_branch deletes its hive/ branch. A revert you no longer want is closed this way, not left to the person`, Fn: m.opPRClose})
 	c.Person.Handle("merge", m.onPersonMerge)
 	c.Effects.MergeHeld = m.MergeHeld
-	c.Effects.Slots.Resize(func() int { return cmp.Or(m.C.WS.LoadConfig().MaxChecks, core.DefaultMaxChecks()) })
+	c.Effects.Slots.Resize(m.maxChecks)
 	c.Effects.Slots.Prioritize(m.checkRank, rankRedFix)
 	m.wrapFinish()
 	return m
@@ -1536,8 +1540,10 @@ func (m *Module) renderBrief(t *Task, p core.Project, base string) string {
 	}
 	if cfg.Score != nil {
 		fmt.Fprintf(&b, "- Score: `%s` (%s is better, tolerance %g).", cfg.Score.Command, cfg.Score.Direction, cfg.Score.Tolerance)
-		if best, ok := m.bestScore(p.Name); ok {
+		if best, ok := m.bestScore(p, m.C.Effects.ScoreVersion(p, base, *cfg.Score)); ok {
 			fmt.Fprintf(&b, " Best kept score: %g.", best)
+		} else if best, ok := m.bestScore(p, ""); ok {
+			fmt.Fprintf(&b, " Best kept score: %g, read under the score before it changed; main isn't measured under this one yet.", best)
 		}
 		b.WriteString(" Every merge is measured; after a clear fix a lower score files a brief to look into it, and otherwise it is reverted unless a judge, weighing it with the change, keeps it, so say in your account what the change is for.\n")
 	}
@@ -1583,14 +1589,16 @@ func (m *Module) seenBefore(t *Task, keys []string) string {
 	return ""
 }
 
-// BestScore is provided by the improve module.
-var BestScore func(project string) (float64, bool)
+// BestScore is provided by the improve module: the best kept score of p,
+// false when there is none or it was read under another score version
+// (core.Effects.ScoreVersion) than version; "" takes any version.
+var BestScore func(p core.Project, version string) (float64, bool)
 
-func (m *Module) bestScore(project string) (float64, bool) {
+func (m *Module) bestScore(p core.Project, version string) (float64, bool) {
 	if BestScore == nil {
 		return 0, false
 	}
-	return BestScore(project)
+	return BestScore(p, version)
 }
 
 func (m *Module) priorBlocked(t *Task) string {
@@ -1678,7 +1686,7 @@ func (m *Module) checkWorker(t *Task, p core.Project) error {
 // change to the checkout's reflog, read without running git there. Once the
 // worker has finished and been sent back, its next finish lands instead.
 func (m *Module) checkpoint(t *Task, p core.Project, r core.Run) error {
-	if _, scored := m.bestScore(p.Name); !scored || t.From == "hive" { // the Hive's own setup brief keeps its done line (doneFor)
+	if _, scored := m.bestScore(p, ""); !scored || t.From == "hive" { // the Hive's own setup brief keeps its done line (doneFor)
 		return nil
 	}
 	if p.Self && t.Gain() {
@@ -1743,8 +1751,39 @@ func (m *Module) checkpoint(t *Task, p core.Project, r core.Run) error {
 	// is in it (read before, a stale best let a commit no better than the
 	// last checkpoint merge as one more).
 	unmeasured := len(t.Banks) > 0 && !m.measured(p.Name, t.Banks[len(t.Banks)-1].MergeSHA)
-	best, _ := m.bestScore(p.Name)
-	if unmeasured {
+	// The best kept counts only when it was read under the score the commit
+	// is weighed by: a merge that changed the score command (pll's
+	// tests/score.sh, 261030-031450) left every checkpoint weighed against
+	// the old command's number until main was measured under the new one.
+	// Until then the bar is the worker's base, scored under the same score.
+	ver := m.C.Effects.ScoreVersion(p, sha, *sc)
+	best, comparable := m.bestScore(p, ver)
+	if !comparable {
+		if m.C.Effects.ScoreVersion(p, t.Base, *sc) != ver {
+			m.save(t, fmt.Sprintf("the worker's commit %s changes the score itself, so it has no best to beat and no checkpoint; it lands whole", core.Short(sha)))
+			return nil
+		}
+		key := p.Name + "@" + t.Base + "@" + ver
+		m.mu.Lock()
+		bar, ok := m.bars[key]
+		m.mu.Unlock()
+		if !ok {
+			bc := m.C.Effects.RunCheck(p, t.Base, "score", sc.Command)
+			if bc.Score == nil {
+				t.Tried = "" // weighed again on the worker's next commit
+				m.save(t, fmt.Sprintf("the score changed since main was last measured, and the worker's base %s gave no number under the new one, so no checkpoint yet", core.Short(t.Base)))
+				return nil
+			}
+			bar = *bc.Score
+			m.mu.Lock()
+			if m.bars == nil {
+				m.bars = map[string]float64{}
+			}
+			m.bars[key] = bar
+			m.mu.Unlock()
+		}
+		best = bar
+	} else if unmeasured {
 		if c, ok := m.C.Effects.GetCheck(p.Name, t.Base, "score"); ok && c.Score != nil {
 			best = sc.Best(best, *c.Score)
 		}
@@ -2245,7 +2284,7 @@ func (m *Module) slowTests(t *Task, p core.Project, main string, c core.Check) e
 	var exit *exec.ExitError
 	if errors.As(err, &exit) && exit.ExitCode() == 1 && t.Checkpoint == "" {
 		t.Slows = 0
-		return m.catchUp(t, p, main)
+		return m.catchUp(t, p, main, "the tests were cut off at their time limit on", "Tests on %s were cut off at their time limit before a verdict; main had moved on, so the Hive merged main into this branch (%s) and tests that instead.")
 	}
 	if err != nil {
 		return m.cantRun(t, p, c) // git can't tell: tried again as before
@@ -2260,10 +2299,12 @@ func (m *Module) slowTests(t *Task, p core.Project, main string, c core.Check) e
 		SlowTries, core.Short(t.SHA), core.Short(main), core.ClipEnds(c.Output, 1500)))
 }
 
-// catchUp merges main into t's branch after its tests were cut off on a head
-// behind main, pushes it and tests that head instead, at once and with a
-// fresh time limit. A conflict goes to the worker as any other does.
-func (m *Module) catchUp(t *Task, p core.Project, main string) error {
+// catchUp merges main into t's branch, behind main at a head that got no
+// verdict (why, before the head: tests cut off at their time limit, or no
+// forge check run at all), pushes it and tests that head instead, at once and
+// with a fresh time limit. status is the PR's line, with the old head and the
+// new. A conflict goes to the worker as any other does.
+func (m *Module) catchUp(t *Task, p core.Project, main, why, status string) error {
 	next, err := m.C.Effects.UpdateBranch(p, t.SHA, main, t.Base)
 	if errors.Is(err, core.ErrConflict) {
 		return m.conflict(t, p, t.SHA, err)
@@ -2278,10 +2319,10 @@ func (m *Module) catchUp(t *Task, p core.Project, main string) error {
 		return err
 	}
 	old := t.SHA
-	t.SHA, t.Recheck, t.Reason, t.Retry = next, false, "", time.Time{}
-	m.save(t, "the tests were cut off at their time limit on "+core.Short(old)+", which is behind main at "+core.Short(main)+"; merged main into it as "+core.Short(next)+" and testing that")
+	t.SHA, t.Stage, t.Recheck, t.Reason, t.Retry = next, StageTesting, false, "", time.Time{}
+	m.save(t, why+" "+core.Short(old)+", which is behind main at "+core.Short(main)+"; merged main into it as "+core.Short(next)+" and testing that")
 	if t.PR.Number != 0 {
-		m.status(t, p, t.PR.Number, "Tests on "+core.Short(old)+" were cut off at their time limit before a verdict; main had moved on, so the Hive merged main into this branch ("+core.Short(next)+") and tests that instead.")
+		m.status(t, p, t.PR.Number, fmt.Sprintf(status, core.Short(old), core.Short(next)))
 	}
 	return nil
 }

@@ -302,3 +302,31 @@ func TestRunHeldByThePaceIsNoStall(t *testing.T) {
 		t.Fatalf("stalls = %+v, want only t1's", s)
 	}
 }
+
+// One project's slow measure doesn't hold another's merges (#2175): with
+// the Hive's own measure running, another project's merge is measured.
+func TestSlowMeasureHoldsOnlyItsProject(t *testing.T) {
+	m := &Module{queue: make(chan work.Task)}
+	slow, measured := make(chan struct{}), make(chan string, 4)
+	defer close(slow)
+	go m.measureLoop(func(t work.Task) {
+		measured <- t.Project
+		if t.Project == "hive" {
+			<-slow
+		}
+	})
+	m.enqueue(work.Task{ID: "t0", Project: "hive", MergeSHA: "a"})
+	if got := <-measured; got != "hive" {
+		t.Fatalf("measured %s first, want hive", got)
+	}
+	m.enqueue(work.Task{ID: "t1", Project: "hive", MergeSHA: "b"})
+	m.enqueue(work.Task{ID: "t2", Project: "p", MergeSHA: "c"})
+	select {
+	case got := <-measured:
+		if got != "p" {
+			t.Fatalf("measured %s while hive's measure ran, want p", got)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("p's merge waited on hive's measure")
+	}
+}

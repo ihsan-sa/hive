@@ -255,7 +255,7 @@ func (e *Effects) goModules(sb sandbox.Sandbox, dir string) goMods {
 		unlock()
 	}
 	os.MkdirAll(e.ws.GoModCache(), 0o755) // a module with nothing to fetch still mounts it
-	return goMods{mounts: shared, env: []string{"GOMODCACHE=" + GoModInside, "GOFLAGS=-mod=readonly", "GOPROXY=off"},
+	return goMods{mounts: shared, env: []string{"GOMODCACHE=" + GoModInside, "GOFLAGS=-mod=readonly " + leanLink, "GOPROXY=off"},
 		own: ownModEnv, marker: marker, sum: sum, done: e.modMu.RUnlock}
 }
 
@@ -264,7 +264,14 @@ func (e *Effects) goModules(sb sandbox.Sandbox, dir string) goMods {
 // lacks comes over the network. A check fetching everything from the proxy
 // failed whenever the proxy refused it (2ea48ab0: "Forbidden" twice, then a
 // pass).
-var ownModEnv = []string{"GOPROXY=file://" + GoModInside + "/cache/download,https://proxy.golang.org,direct"}
+var ownModEnv = []string{"GOPROXY=file://" + GoModInside + "/cache/download,https://proxy.golang.org,direct", "GOFLAGS=" + leanLink}
+
+// leanLink links a check's binaries without DWARF: test binaries are
+// written, run once and removed, and no check reads their debug data. A
+// quarter less to write per link (internal/core's test binary 13.1 MB to
+// 9.8 MB), on a disk Go links and test builds kept saturated (10-30). A
+// command's own -ldflags still wins.
+const leanLink = "-ldflags=-w"
 
 // goBuild readies the project's shared build cache for a check of sha in dir,
 // where goModules would share the module cache. A commit on main's line
@@ -876,6 +883,59 @@ func (d DiskUse) Low() bool {
 	return false
 }
 
+// roomFloor is the free space under which a place of size bytes counts as
+// out of room: 2 GiB, or a tenth of a small one (a tmpfs). Git, temp folders
+// and the journal fail somewhere below it, often before any check names
+// ENOSPC. It is a fixed amount, not a share of a big disk, so the Hive's own
+// tests on a busy disk don't raise it.
+func roomFloor(size int64) int64 {
+	return min(2<<30, size/10)
+}
+
+// out names the first place with under margin times its floor free ("" when
+// none has): 1 raises the alert, 2 keeps it until the room is clearly back.
+func (d DiskUse) out(margin int64) string {
+	for _, r := range d.Room {
+		if r.Size > 0 && r.Free < margin*roomFloor(r.Size) {
+			return fmt.Sprintf("%s (%s) %s free of %s", r.Name, r.Path, Bytes(r.Free), Bytes(r.Size))
+		}
+	}
+	return ""
+}
+
+// WatchRoom tells the person when the disk is nearly out of room, whatever
+// fails first: a check's setup (clone, index-pack, a temp folder), a turn or
+// the journal itself may fail with nothing that reads ENOSPC, so the room is
+// read on every tick (a statfs each, no walk), not only from check output.
+// The alert ends once each place has twice its floor free again.
+func (e *Effects) WatchRoom() {
+	d := DiskUse{Room: e.room()}
+	e.mu.Lock()
+	raised := e.roomOut
+	e.mu.Unlock()
+	if !raised {
+		where := d.out(1)
+		if where == "" {
+			return
+		}
+		e.mu.Lock()
+		e.roomOut = true
+		e.mu.Unlock()
+		e.j.MustAppend("alert.raised", map[string]string{"kind": "disk", "ref": "disk:room",
+			"text": "The disk is nearly out of room: " + where + ". Checks, clones and turns start failing for room below this; old checkouts and check folders are being cleaned, and what else fills it needs freeing on the host."})
+		if e.OnDiskFull != nil {
+			go e.OnDiskFull()
+		}
+		return
+	}
+	if d.out(2) == "" {
+		e.mu.Lock()
+		e.roomOut = false
+		e.mu.Unlock()
+		e.j.MustAppend("alert.cleared", map[string]string{"ref": "disk:room"})
+	}
+}
+
 // Bytes says n in the largest unit that keeps it at least 1.
 func Bytes(n int64) string {
 	const unit = 1024
@@ -959,4 +1019,49 @@ func checkTmp(env []string) []string {
 		}
 	}
 	return env
+}
+
+// ScoreCache is a project's score cache: a folder its score check keeps
+// across measures, so a measure re-runs only what changed since the last
+// (hive-chip-flow keeps each gate step's outcome there, #2176).
+func (w Workspace) ScoreCache(project string) string {
+	return filepath.Join(w.Cache(), "score", project)
+}
+
+// scoreCache is what a score check of sha gets of its project's score
+// cache: the folder, writable at /hive/score-cache, only for a commit main
+// has been at (its first-parent line), so only main's own measure writes
+// there and a branch's commit can't leave entries a later measure counts.
+// A folder past the check cache cap is emptied first.
+func (e *Effects) scoreCache(p Project, sha string) []sandbox.Mount {
+	if !e.MainLine(p)[sha] {
+		return nil
+	}
+	dir := e.ws.ScoreCache(p.Name)
+	if Size(dir) > e.checkCacheCap() {
+		e.ClearScoreCache(p.Name, "it passed the check cache cap")
+	}
+	if os.MkdirAll(dir, 0o755) != nil {
+		return nil
+	}
+	return []sandbox.Mount{{Host: dir, Inside: "/hive/score-cache", RW: true}}
+}
+
+// ClearScoreCache empties a project's score cache: the improve module does
+// when a merge is reverted, since entries a bad merge's measure wrote
+// outlive its revert. It is moved aside first, so a check writing there
+// meanwhile writes into what is being removed.
+func (e *Effects) ClearScoreCache(project, why string) {
+	dir := e.ws.ScoreCache(project)
+	if !Exists(dir) {
+		return
+	}
+	aside := filepath.Join(e.ws.Cache(), "removing-"+NewID())
+	e.markLive(aside, true)
+	defer e.markLive(aside, false)
+	if os.Rename(dir, aside) != nil {
+		aside = dir
+	}
+	RemoveTree(aside)
+	e.j.MustAppend("effect.score_cache_cleared", map[string]string{"project": project, "why": why})
 }

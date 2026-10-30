@@ -365,3 +365,21 @@ func TestFixDipIsMeasuredAgain(t *testing.T) {
 		t.Fatalf("best %v, want 4", b)
 	}
 }
+
+// A worker's checkpoint gets main's best only under the score it was read
+// by: kept under one score version, the best is no bar for another (#2179).
+func TestBestUnderItsOwnScore(t *testing.T) {
+	m := rig(t)
+	p, _ := m.C.Projects.Get("hive")
+	five := 5.0
+	m.record(Measurement{Project: "hive", SHA: "a", TestsOK: true, Score: &five, Kept: true, Best: &five, Version: "v1"})
+	if b, ok := m.BestUnder(p, "v1"); !ok || b != 5 {
+		t.Fatalf("under its own score: %g %v", b, ok)
+	}
+	if _, ok := m.BestUnder(p, "v2"); ok {
+		t.Fatal("a best read under v1 was given as the bar under v2")
+	}
+	if b, ok := m.BestUnder(p, ""); !ok || b != 5 {
+		t.Fatalf("under any score: %g %v", b, ok)
+	}
+}

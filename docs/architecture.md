@@ -102,6 +102,7 @@ On host paths (bare, Seatbelt) the tools folder's bins come first on PATH, so an
    A worker that rewinds past a merged checkpoint is told to bring it back.
    The merge base needs git 2.40 or later; on an older git it's an error, not a conflict.
 10. improve: measure merge sha (tests + score) — unless a main commit already measured contains it (a PR that landed before its task closed): then only `score.covered` names that commit and whether it was kept or red, with no score, alert or revert;
+    each project's merges are measured by its own loop, in turn and newest first when it is behind, so one project's slow measure holds only its own (#2175); check slots bound how many run at once;
     measurements are taken to be in main's order, so a merge that comes back late (held for a missing tool, requeued after a failed sync) is covered by a later measurement even when that one is red, and the digest's `red` mark is what says the red may be its — compare with best kept;
     a score past the best kept's tolerance → the merge and its parent scored A B B A in one sitting, and within tolerance of the parent it is kept (issue #1865);
     a merge that changed the score is always paired so, its parent scored under the merge's score (#2090), and starts a new baseline only when the parent gives no number there;
@@ -280,6 +281,7 @@ Settings in `.hive/config.json`; none of them stops or parks work.
 - `turn_mb` (240): one memory budget paces the Hive ([priority.md](priority.md)).
   A turn, and a waiting brief's worker, starts while the Hive's cgroup limit (or the machine's memory, with none) leaves `turn_mb` for it and for each one starting beside it (`core.MemBudget`); a lead's, warden's or tribunal seat's turn never waits.
   Each tick steps the leads before the other runs, and leads run at a higher priority (nice levels).
+- `disk_full_max` (40): on a saturated disk (IO pressure `full avg60` over it, `core.DiskBusy`) the work module starts no new worker while one works and runs one check at a time; below 0 is off.
 - `max_output_tokens` (16000): sets `CLAUDE_CODE_MAX_OUTPUT_TOKENS` on each Claude turn, because a spend budget is checked only between turns and one reply can otherwise run long.
   0 leaves Claude's own default.
 - `monthly_usd` (off): each turn's `cost_usd` is already in its `run.turn_ended` event; the runs fold it into a total per UTC month.

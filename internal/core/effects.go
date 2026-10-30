@@ -104,6 +104,7 @@ type Effects struct {
 	buildMu   sync.RWMutex              // the same for the projects' build caches
 	disk      DiskUse                   // the last measurement of the Hive's disk use
 	diskFull  bool                      // a check couldn't run for room, and the alert is out
+	roomOut   bool                      // a place the Hive writes is nearly out of room, and the alert is out (WatchRoom)
 
 	// OnDiskFull runs once when checks first can't run for room (the clean job).
 	OnDiskFull func()
@@ -702,6 +703,9 @@ func (e *Effects) checkOnce(p Project, sha, main, kind, command, back string) (C
 	dir, err := e.cleanCheckout(p, sha, kind)
 	if err != nil {
 		c.Output = "could not make a clean checkout: " + err.Error()
+		if line := DiskFull(c.Output); line != "" {
+			e.diskAlert(line) // setup fails first when the disk is full
+		}
 		return c, ""
 	}
 	defer e.dropCheckout(dir)
@@ -727,15 +731,16 @@ func (e *Effects) checkOnce(p Project, sha, main, kind, command, back string) (C
 		defer drop()
 		projects = e.checkProjects(p)
 	}
-	var records []sandbox.Mount
+	var records, cache []sandbox.Mount
 	if away == nil && kind == "score" {
 		var drop func()
 		records, drop = e.moduleRecords(p, dir)
 		defer drop()
+		cache = e.scoreCache(p, sha)
 	}
 	limit := e.checkLimit(p.Name, sha, kind)
 	run := func(offline bool) (int, string, error) {
-		ms := append(append(append(append(append(slices.Clone(mounts), build.mounts...), mods.mounts...), installed...), projects...), records...)
+		ms := append(append(append(append(append(append(slices.Clone(mounts), build.mounts...), mods.mounts...), installed...), projects...), records...), cache...)
 		env := append(slices.Clone(build.env), mods.own...)
 		if offline {
 			env = append(slices.Clone(build.env), mods.env...)
@@ -748,6 +753,9 @@ func (e *Effects) checkOnce(p Project, sha, main, kind, command, back string) (C
 		}
 		if len(records) > 0 {
 			env = append(env, "HIVE_HOME="+sandbox.InsidePath(sb, records[0]))
+		}
+		if len(cache) > 0 {
+			env = append(env, "HIVE_SCORE_CACHE="+sandbox.InsidePath(sb, cache[0]))
 		}
 		var disk sandbox.Disk
 		defer func() { c.DiskRead, c.DiskWrote = c.DiskRead+disk.Read, c.DiskWrote+disk.Wrote }()
@@ -797,6 +805,9 @@ func (e *Effects) checkOnce(p Project, sha, main, kind, command, back string) (C
 			mods.done()
 			build.done()
 			c.Output = "could not make a clean checkout: " + cerr.Error()
+			if line := DiskFull(c.Output); line != "" {
+				e.diskAlert(line)
+			}
 			return c, ""
 		}
 		defer e.dropCheckout(again)
