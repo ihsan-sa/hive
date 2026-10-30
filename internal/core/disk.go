@@ -876,6 +876,59 @@ func (d DiskUse) Low() bool {
 	return false
 }
 
+// roomFloor is the free space under which a place of size bytes counts as
+// out of room: 2 GiB, or a tenth of a small one (a tmpfs). Git, temp folders
+// and the journal fail somewhere below it, often before any check names
+// ENOSPC. It is a fixed amount, not a share of a big disk, so the Hive's own
+// tests on a busy disk don't raise it.
+func roomFloor(size int64) int64 {
+	return min(2<<30, size/10)
+}
+
+// out names the first place with under margin times its floor free ("" when
+// none has): 1 raises the alert, 2 keeps it until the room is clearly back.
+func (d DiskUse) out(margin int64) string {
+	for _, r := range d.Room {
+		if r.Size > 0 && r.Free < margin*roomFloor(r.Size) {
+			return fmt.Sprintf("%s (%s) %s free of %s", r.Name, r.Path, Bytes(r.Free), Bytes(r.Size))
+		}
+	}
+	return ""
+}
+
+// WatchRoom tells the person when the disk is nearly out of room, whatever
+// fails first: a check's setup (clone, index-pack, a temp folder), a turn or
+// the journal itself may fail with nothing that reads ENOSPC, so the room is
+// read on every tick (a statfs each, no walk), not only from check output.
+// The alert ends once each place has twice its floor free again.
+func (e *Effects) WatchRoom() {
+	d := DiskUse{Room: e.room()}
+	e.mu.Lock()
+	raised := e.roomOut
+	e.mu.Unlock()
+	if !raised {
+		where := d.out(1)
+		if where == "" {
+			return
+		}
+		e.mu.Lock()
+		e.roomOut = true
+		e.mu.Unlock()
+		e.j.MustAppend("alert.raised", map[string]string{"kind": "disk", "ref": "disk:room",
+			"text": "The disk is nearly out of room: " + where + ". Checks, clones and turns start failing for room below this; old checkouts and check folders are being cleaned, and what else fills it needs freeing on the host."})
+		if e.OnDiskFull != nil {
+			go e.OnDiskFull()
+		}
+		return
+	}
+	if d.out(2) == "" {
+		e.mu.Lock()
+		e.roomOut = false
+		e.mu.Unlock()
+		e.j.MustAppend("alert.cleared", map[string]string{"ref": "disk:room"})
+	}
+}
+
 // Bytes says n in the largest unit that keeps it at least 1.
 func Bytes(n int64) string {
 	const unit = 1024

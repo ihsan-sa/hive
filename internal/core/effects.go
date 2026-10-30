@@ -108,6 +108,7 @@ type Effects struct {
 	buildMu   sync.RWMutex              // the same for the projects' build caches
 	disk      DiskUse                   // the last measurement of the Hive's disk use
 	diskFull  bool                      // a check couldn't run for room, and the alert is out
+	roomOut   bool                      // a place the Hive writes is nearly out of room, and the alert is out (WatchRoom)
 
 	// OnDiskFull runs once when checks first can't run for room (the clean job).
 	OnDiskFull func()
@@ -725,6 +726,9 @@ func (e *Effects) checkOnce(p Project, sha, main, kind, command, back string) (C
 	dir, err := e.cleanCheckout(p, sha, kind)
 	if err != nil {
 		c.Output = "could not make a clean checkout: " + err.Error()
+		if line := DiskFull(c.Output); line != "" {
+			e.diskAlert(line) // setup fails first when the disk is full
+		}
 		return c, ""
 	}
 	defer e.dropCheckout(dir)
@@ -820,6 +824,9 @@ func (e *Effects) checkOnce(p Project, sha, main, kind, command, back string) (C
 			mods.done()
 			build.done()
 			c.Output = "could not make a clean checkout: " + cerr.Error()
+			if line := DiskFull(c.Output); line != "" {
+				e.diskAlert(line)
+			}
 			return c, ""
 		}
 		defer e.dropCheckout(again)

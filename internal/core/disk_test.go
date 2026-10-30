@@ -770,3 +770,60 @@ func TestRunCheckSinceNarrowsToAffectedPackages(t *testing.T) {
 		t.Fatalf("a narrowed pass didn't replace a whole red: %+v", got)
 	}
 }
+
+// The person hears when the disk is nearly out of room, whatever fails first,
+// and the alert ends once the room is clearly back.
+func TestWatchRoomAlertsBeforeAnyCheck(t *testing.T) {
+	c, _, _, _ := setupProject(t)
+	free := int64(50 << 30)
+	saved := roomOf
+	roomOf = func(path string) (int64, int64, bool) { return free, 1800 << 30, true }
+	t.Cleanup(func() { roomOf = saved })
+	cleaned := make(chan bool, 4)
+	c.Effects.OnDiskFull = func() { cleaned <- true }
+	var raised, cleared int
+	c.J.Subscribe(func(e Event) {
+		var a struct{ Kind, Ref, Text string }
+		e.Decode(&a)
+		if e.Kind == "alert.raised" && a.Kind == "disk" && a.Ref == "disk:room" {
+			raised++
+			if !strings.Contains(a.Text, "200.0 MB free") {
+				t.Errorf("alert doesn't say the room left: %s", a.Text)
+			}
+		}
+		if e.Kind == "alert.cleared" && a.Ref == "disk:room" {
+			cleared++
+		}
+	})
+	c.Effects.WatchRoom()
+	if raised != 0 {
+		t.Fatal("raised with room to spare")
+	}
+	free = 200 << 20
+	c.Effects.WatchRoom()
+	c.Effects.WatchRoom()
+	if raised != 1 {
+		t.Fatalf("raised %d times, want once", raised)
+	}
+	select {
+	case <-cleaned:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the clean job wasn't asked for")
+	}
+	free = 3 << 30 // over the floor, under twice it: still short
+	c.Effects.WatchRoom()
+	if cleared != 0 {
+		t.Fatal("cleared before the room was clearly back")
+	}
+	free = 10 << 30
+	c.Effects.WatchRoom()
+	if cleared != 1 {
+		t.Fatalf("cleared %d times, want once", cleared)
+	}
+	// A small tmpfs counts against a tenth of itself, not 2 GiB.
+	roomOf = func(path string) (int64, int64, bool) { return 500 << 20, 1 << 30, true }
+	c.Effects.WatchRoom()
+	if raised != 1 {
+		t.Fatal("a half-empty small tmpfs raised the alert")
+	}
+}
