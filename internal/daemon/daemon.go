@@ -278,6 +278,13 @@ func Run(ws core.Workspace, waitFor int) error {
 	if err := checkStartHarness(ws); err != nil {
 		return err
 	}
+	// Before anything is started on the host: what it writes to its temp
+	// folder must not pile up in an in-memory /tmp.
+	if tmp, err := core.UseDiskTemp(ws); err != nil {
+		fmt.Fprintln(os.Stderr, "hive: scratch files stay in /tmp:", err)
+	} else if tmp != "" {
+		fmt.Printf("hive: /tmp is in memory, so scratch files go to %s\n", tmp)
+	}
 	booted := time.Now()
 	a, err := app.New(ws, Forge())
 	if err != nil {

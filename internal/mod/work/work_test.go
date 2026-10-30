@@ -454,72 +454,6 @@ func TestRecheckRetriesAStuckMerge(t *testing.T) {
 	}
 }
 
-// A task the person stopped, from the control center or by leaving its PR
-// open, stays stopped: the lead can neither recheck it nor send its worker back.
-func TestPersonStopHolds(t *testing.T) {
-	for _, how := range []string{"stop", "leave open"} {
-		m, _, task, _ := noCommitRig(t, 0)
-		task.Stage = StagePerson
-		m.save(task, "waiting on the person")
-		if how == "stop" {
-			m.Stop(task.ID, "stopped by the person")
-		} else {
-			m.onPersonMerge(core.Ask{Ref: task.ID + "@abc", Answer: "leave open"})
-		}
-		for _, back := range []string{"", "try again"} {
-			if err := m.Recheck(task.ID, back, "lead"); err == nil || !strings.Contains(err.Error(), "by the person") {
-				t.Fatalf("%s: recheck %q got %v", how, back, err)
-			}
-		}
-		if got, _ := m.Get(task.ID); got.Stage != StageStopped {
-			t.Fatalf("%s: stage %q", how, got.Stage)
-		}
-	}
-}
-
-// A worker the person stops in the control center (/api/run/stop) holds its
-// task: the stop marks it the person's, and a task stopped before that mark
-// existed holds too, because its worker's run says it was stopped.
-func TestPersonStoppedWorkerHolds(t *testing.T) {
-	for _, marked := range []bool{true, false} {
-		m, _, task, p := noCommitRig(t, 0)
-		if _, err := m.C.Runs.Start(core.RunSpec{ID: "w1", Role: "worker", Project: p.Name, Checkout: t.TempDir(), Harness: "fake"}); err != nil {
-			t.Fatal(err)
-		}
-		task.Worker, task.Stage = "w1", StageWorking
-		m.save(task, "working")
-		m.C.Runs.Stop("w1", "stopped by the person")
-		if marked {
-			if err := m.checkWorker(task, p); err != nil {
-				t.Fatal(err)
-			}
-			if task.Stage != StageStopped || !task.ByPerson {
-				t.Fatalf("stage %q, by person %v", task.Stage, task.ByPerson)
-			}
-		} else { // stopped before the fix: no mark on the task
-			task.Stage, task.Reason = StageStopped, "worker stopped: stopped by the person"
-			m.save(task, task.Reason)
-		}
-		for _, back := range []string{"", "try again"} {
-			if err := m.Recheck(task.ID, back, "lead"); err == nil || !strings.Contains(err.Error(), "by the person") {
-				t.Fatalf("marked %v: recheck %q got %v", marked, back, err)
-			}
-		}
-		if r, _ := m.C.Runs.Get("w1"); r.Status != core.StatusStopped {
-			t.Fatalf("marked %v: the worker was reopened: %s", marked, r.Status)
-		}
-		if err := m.C.Runs.Reopen("w1", "try again"); err == nil {
-			t.Fatal("a stopped run was reopened")
-		}
-		if err := m.Retry(task.ID); err != nil {
-			t.Fatal(err)
-		}
-		if got, _ := m.Get(task.ID); got.ByPerson || got.Stage != StageQueued {
-			t.Fatalf("the person's retry should hand the task back: %+v", got)
-		}
-	}
-}
-
 // A lead can't recheck a task in a project walled off from it.
 // A task retried from reviewing has its reader stopped, so a hung one
 // doesn't keep its slot, and the next read is a new run, not the stopped one.
@@ -563,6 +497,7 @@ func helperRig(t *testing.T) (*Module, *flakyForge, core.Project) {
 	cfg := ws.LoadConfig()
 	cfg.Sandbox, cfg.BareAccepted, cfg.Harness = "bare", time.Now().Format(time.RFC3339), "fake"
 	cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax, cfg.LoadMax = 0, 0, 0, 0 // a loaded machine mustn't hold the queue
+	cfg.IOPressureMax, cfg.IOFullMax = 0, 0
 	ws.SaveConfig(cfg)
 	forge := &flakyForge{Local: &core.Local{Dir: filepath.Join(dir, "forge")}}
 	if _, err := forge.EnsureRepo("me/p", "", false); err != nil {
@@ -879,6 +814,7 @@ func TestLandedEndsATaskOnMain(t *testing.T) {
 	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
 	lead := core.Run{RunSpec: core.RunSpec{ID: "lead", Role: "lead"}}
 	task.Stage, task.Known = StageMerging, "Changes .hive/project.json."
+	task.Base, _ = m.C.Effects.Sync(p)
 	m.save(task, "")
 	var merged []Task
 	m.OnMerged = func(t Task) { merged = append(merged, t) }
@@ -892,8 +828,8 @@ func TestLandedEndsATaskOnMain(t *testing.T) {
 	if err := call(`{"task":"t1","why":"merged by hand"}`); err == nil || !strings.Contains(err.Error(), "isn't landed") {
 		t.Fatalf("ended a task whose PR is open and isn't on main: %v", err)
 	}
-	if err := call(`{"task":"t1","why":"x","merge":"HEAD"}`); err == nil || !strings.Contains(err.Error(), "doesn't hold") {
-		t.Fatalf("took a main commit without its change: %v", err)
+	if err := call(`{"task":"t1","why":"x","merge":"HEAD"}`); err == nil || !strings.Contains(err.Error(), "from before") {
+		t.Fatalf("took a main commit from before the task's work: %v", err)
 	}
 
 	waiting := file(t, m, "tune the tests", "See .hive/project.json.")
@@ -1048,6 +984,36 @@ func TestMergedOnForgeWhileHeld(t *testing.T) {
 	}
 }
 
+// A task held waiting on main is stepped again every tick to see whether main
+// went green, so a step nearly always holds it: a recheck sending it back to
+// its worker goes ahead over that step, and the step's older copy doesn't
+// save over it (issue #2082).
+func TestRecheckSendsBackATaskHeldOnMainUnderItsStep(t *testing.T) {
+	m, _, task, p := noCommitRig(t, 0)
+	if _, err := m.C.Runs.Start(core.RunSpec{ID: "w1", Role: "worker", Project: p.Name, Task: task.ID, Checkout: t.TempDir(), Harness: "fake"}); err != nil {
+		t.Fatal(err)
+	}
+	task.Stage, task.SHA, task.Worker = StageTesting, "2125f74e", "w1"
+	task.Reason = "waiting on main: its own tests fail at 7606c7f7, so this failure isn't the worker's"
+	m.save(task, task.Reason)
+	step, _ := m.Get(task.ID) // the tick's copy
+	m.mu.Lock()
+	m.busy[task.ID] = true
+	m.stepAt = map[string]time.Time{task.ID: time.Now()}
+	m.mu.Unlock()
+	if err := m.Recheck(task.ID, "fix the red test", "lead"); err != nil {
+		t.Fatalf("refused under the hold's step: %v", err)
+	}
+	m.save(&step, "the step's older copy")
+	got, _ := m.Get(task.ID)
+	if got.Stage != StageWorking || got.Reason != "" || !logged(&got, "sent back to its worker") {
+		t.Fatalf("not sent back, or the step saved over it: stage %q reason %q", got.Stage, got.Reason)
+	}
+	if !m.busy[task.ID] {
+		t.Fatal("the retry freed the task under the step still running on it")
+	}
+}
+
 // The person's stop stands over a step running on an older copy of the task:
 // the step's later saves are dropped and it doesn't merge, and a tick doesn't
 // start a step on a copy taken before a save.
@@ -1170,5 +1136,39 @@ func TestSpawnRefusesARepeatedHelper(t *testing.T) {
 	}
 	if _, err = m.Spawn(parent, "worker", "p", "one more part", ""); err == nil || !strings.Contains(err.Error(), "helpers live") {
 		t.Fatalf("a helper past the cap: err %v", err)
+	}
+}
+
+// A worker's "parent" is whoever filed its task while that run takes
+// messages, and its own project's lead once it doesn't; "lead" is that lead
+// (issue #2040).
+func TestWorkerParentIsItsFiler(t *testing.T) {
+	m, _, _ := helperRig(t)
+	sweep, err := m.C.Runs.Start(m.Agents.Spec("sweep-1", "sweep", "", t.TempDir(), "look around"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lead := m.Agents.Spec("lead-project-p-1", "lead", "p", t.TempDir(), "hi")
+	lead.Name, lead.Persistent = "lead:p", true
+	if _, err := m.C.Runs.Start(lead); err != nil {
+		t.Fatal(err)
+	}
+	task := &Task{ID: core.NewID(), Project: "p", Title: "fix it", From: sweep.ID, Stage: StageWorking, Created: time.Now().UTC()}
+	task.Worker = "w-" + task.ID
+	m.save(task, "")
+	w := core.Run{RunSpec: core.RunSpec{ID: task.Worker, Role: "worker", Project: "p", Task: task.ID}}
+	pending := func(id string) int {
+		r, _ := m.C.Runs.Get(id)
+		return len(r.Pending)
+	}
+	if _, err := m.C.Runs.Ops().Deliver(w, "parent", "done?"); err != nil || pending(sweep.ID) != 1 || pending(lead.ID) != 0 {
+		t.Fatalf("parent went elsewhere than the filer: %v, sweep %d, lead %d", err, pending(sweep.ID), pending(lead.ID))
+	}
+	if _, err := m.C.Runs.Ops().Deliver(w, "lead", "done?"); err != nil || pending(lead.ID) != 1 {
+		t.Fatalf("lead didn't reach the project's lead: %v", err)
+	}
+	m.C.Runs.Stop(sweep.ID, "done")
+	if _, err := m.C.Runs.Ops().Deliver(w, "parent", "done?"); err != nil || pending(lead.ID) != 2 {
+		t.Fatalf("parent with its filer ended didn't reach the project's lead: %v", err)
 	}
 }

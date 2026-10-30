@@ -88,9 +88,8 @@ func TestFlakeIsKeptAndBreakIsReverted(t *testing.T) {
 	if !ms.Kept || !strings.Contains(ms.Note, "flaky") || !strings.Contains(ms.Note, "TestRace (race_test.go:9: late)") {
 		t.Fatalf("a flake was not kept as flaky: %+v", ms)
 	}
-	filed := m.Work.List(func(t work.Task) bool { return strings.Contains(t.Title, "flaky TestRace") })
-	if len(filed) != 1 || !strings.Contains(filed[0].Known, "race_test.go:9: late") {
-		t.Fatalf("the flake was filed %d times: %+v", len(filed), filed)
+	if filed := m.Work.List(func(t work.Task) bool { return strings.Contains(t.Title, "flaky TestRace") }); len(filed) != 0 {
+		t.Fatalf("the flake was filed as a brief: %+v", filed)
 	}
 	if _, err := os.Stat(filepath.Join(dir, "ran")); err != nil {
 		t.Fatal("the test did not run twice")

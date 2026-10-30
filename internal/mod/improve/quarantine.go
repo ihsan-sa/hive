@@ -20,7 +20,7 @@ var quarantineWindow = 24 * time.Hour
 // A flake takes down a test or two; a run that fails more was broken by its
 // environment (its folder gone, a full disk) or by the change itself, and
 // reading it as that many flakes would quarantine every test it took down,
-// hiding real regressions, and file a fix brief for each.
+// hiding real regressions.
 const maxSightedPerRun = 10
 
 // brokenRunSigns are output lines that say a run's environment was broken,
@@ -86,7 +86,6 @@ func (m *Module) applyQuarantine(e core.Event) {
 			return
 		}
 		if len(x.Tests) > maxSightedPerRun {
-			m.unsight(x.Project, x.Tests)
 			return
 		}
 		if time.Since(e.At) > quarantineWindow {
@@ -155,7 +154,6 @@ func (m *Module) sightLocal(e core.Event) {
 	// replay doesn't read every red's full log.
 	recent := time.Since(c.At) <= quarantineWindow
 	if len(keys) > maxSightedPerRun || brokenRun(c.Output) || (recent && brokenRun(c.FullOutput())) {
-		m.unsight(c.Project, keys)
 		return
 	}
 	if !recent {
@@ -206,14 +204,6 @@ func (m *Module) contains(project, sha, fix string) bool {
 	return false
 }
 
-// unsight notes project's tests taken down by a run that is no sighting, so
-// a waiting fix brief filed on such a run is taken back; m.mu is held.
-func (m *Module) unsight(project string, tests []string) {
-	for _, t := range tests {
-		m.unsighted[flakeKey(project, t)] = true
-	}
-}
-
 // related reports whether one task follows up or reverts the other, so
 // their branches carry the same change; m.mu is held.
 func (m *Module) related(a, b string) bool {
@@ -235,7 +225,6 @@ func (m *Module) flake(k, task string) (Flake, bool) {
 		// Its reds are the tree's content (a branch's unformatted file), so
 		// two branches failing it is no flake; nor is it ever excused.
 		delete(m.sighted, k)
-		m.unsighted[k] = true
 		return Flake{}, false
 	}
 	var ev []Sighting
@@ -327,75 +316,111 @@ func (m *Module) QuarantinedTests(project, task string) []string {
 	return names
 }
 
-// fileQuarantined gives each quarantined test with no open fix task one,
-// and takes back a waiting one whose test is no longer quarantined and was
-// taken down by a run that is no sighting (brokenRun) or reads the whole
-// tree (core.WholeTree): its quarantine came from reading those as flakes.
-func (m *Module) fileQuarantined() {
-	q := m.Quarantine("")
-	m.withdrawUnsighted(q)
-	for _, f := range q {
-		if t, ok := m.Work.Get(f.Task); ok && f.Task != "" && !t.Terminal() {
+// boardWhere is where improve's entry for a project's quarantined tests
+// stands on the problems board.
+const boardWhere = "quarantined tests"
+
+// boardQuarantined keeps one problems-board entry per project listing its
+// quarantined tests and their evidence, rewritten when the set of tests
+// changes and closed when none is left. Nothing is filed for them: one brief
+// per test filed fixes for reds that weren't flakes, and again after they
+// were withdrawn or fixed. An agent that reads the entry (a sweep, a lead)
+// files a fix where one is warranted; one titled flakyTitle+test lifts that
+// test's quarantine when it merges. improve's waiting per-test briefs from
+// before are withdrawn.
+func (m *Module) boardQuarantined() {
+	m.withdrawFiled()
+	if m.Board == nil {
+		return
+	}
+	by := map[string][]Flake{}
+	for _, f := range m.Quarantine("") {
+		by[f.Project] = append(by[f.Project], f)
+	}
+	m.mu.Lock()
+	if !m.boardRead {
+		// After a restart the board may hold an entry for a project whose
+		// quarantine has since ended: each project is looked at once.
+		m.boardRead = true
+		for _, p := range m.C.Projects.List() {
+			m.boarded[p.Name] = "\x00"
+		}
+	}
+	for p := range m.boarded {
+		if _, ok := by[p]; !ok {
+			by[p] = nil
+		}
+	}
+	m.mu.Unlock()
+	for _, p := range slices.Sorted(maps.Keys(by)) {
+		fs := by[p]
+		var names []string
+		for _, f := range fs {
+			names = append(names, f.Test)
+		}
+		set := strings.Join(names, "\n")
+		m.mu.Lock()
+		last, seen := m.boarded[p]
+		m.boarded[p] = set
+		m.mu.Unlock()
+		if seen && last == set {
 			continue
 		}
-		title := flakyTitle + f.Test
-		if len(m.Work.List(func(t work.Task) bool { return t.Project == f.Project && t.Title == title && !t.Terminal() })) > 0 {
-			continue
-		}
-		var ev []string
-		for _, s := range f.Evidence {
-			where := "task " + s.Task
-			if s.Branch != "" {
-				where += " (" + s.Branch + ")"
+		if len(fs) == 0 {
+			if seen {
+				m.Board(p, boardWhere, "")
+				m.mu.Lock()
+				delete(m.boarded, p)
+				m.mu.Unlock()
 			}
+			continue
+		}
+		m.Board(p, boardWhere, boardText(p, fs))
+	}
+}
+
+// boardText is the board entry for project's quarantined tests fs.
+func boardText(project string, fs []Flake) string {
+	var names []string
+	for _, f := range fs {
+		names = append(names, f.Test)
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "Quarantined in %s: %s. A forge check failing only these doesn't send a PR back or hold its merge. Nothing is filed for them on its own: if one is a real flake worth fixing, file it (titled %q, so its merge lifts the quarantine); a test failing the same way on every main since one commit is a red main with a cause commit, not a flake. The quarantine ends %s after the last red.\n", project, strings.Join(names, ", "), flakyTitle+"<test>", quarantineWindow)
+	for _, f := range fs {
+		fmt.Fprintf(&b, "- %s: %s", f.Test, f.Why)
+		if f.Task != "" {
+			fmt.Fprintf(&b, "; fix task %s (%s)", f.Task, f.TaskStage)
+		}
+		b.WriteString("\n")
+		ev := f.Evidence
+		if len(ev) > 3 {
+			ev = ev[len(ev)-3:]
+		}
+		for _, s := range ev {
+			where := "task " + s.Task
 			if s.Main {
 				where = "main"
 			}
-			line := fmt.Sprintf("- %s: %s at %s, check %s", s.At.Format("01-02 15:04"), where, core.Short(s.SHA), s.Check)
+			line := fmt.Sprintf("  - %s: %s at %s, check %s", s.At.Format("01-02 15:04"), where, core.Short(s.SHA), s.Check)
 			if s.Rerun {
 				line += ", passed when run again"
 			}
 			if s.URL != "" {
 				line += " " + s.URL
 			}
-			ev = append(ev, line)
+			b.WriteString(line + "\n")
 		}
-		m.C.J.MustAppend("alert.raised", map[string]string{"kind": "flake", "project": f.Project, "sha": f.Test, "text": "quarantined the flaky " + f.Test + " in " + f.Project + ": it " + f.Why})
-		m.Work.File(work.Brief{Project: f.Project, From: "improve", Title: title,
-			Done:  "The test passes every time on every platform the forge's checks run: it no longer depends on timing, order or shared state, and running it many times (go test -count=50 -run on it) never fails. Once this merges the quarantine on it is lifted, so its next red sends a PR back again.",
-			Known: "The test is quarantined (a known flake): a forge check failing only it doesn't send a PR back. It " + f.Why + ". Where it failed:\n" + strings.Join(ev, "\n")})
 	}
+	return b.String()
 }
 
-// withdrawUnsighted takes back improve's fix briefs for tests not in q that
-// a run read as no sighting took down: a waiting one is withdrawn, and one a
-// worker already started is retracted, its worker stopped, so it holds no
-// worker slot on a test that was never flaky.
-func (m *Module) withdrawUnsighted(q []Flake) {
-	m.mu.Lock()
-	unsighted := maps.Clone(m.unsighted)
-	m.mu.Unlock()
-	if len(unsighted) == 0 {
-		return
-	}
-	settled := []string{work.StageStopped, work.StageDone, work.StageMerged, work.StageMerging, work.StageReverting, work.StageRecording}
-	held := map[string]bool{}
-	for _, f := range q {
-		held[flakeKey(f.Project, f.Test)] = true
-	}
+// withdrawFiled takes back improve's per-test fix briefs no worker has
+// started: they came from the filing boardQuarantined replaced.
+func (m *Module) withdrawFiled() {
 	for _, t := range m.Work.List(func(t work.Task) bool {
-		return t.From == "improve" && strings.HasPrefix(t.Title, flakyTitle) && !slices.Contains(settled, t.Stage)
+		return t.From == "improve" && strings.HasPrefix(t.Title, flakyTitle) && (t.Stage == work.StageNew || t.Queued())
 	}) {
-		k := flakeKey(t.Project, strings.TrimPrefix(t.Title, flakyTitle))
-		if !unsighted[k] || held[k] {
-			continue
-		}
-		why := "its quarantine came from a check run broken by its environment or failing more than " + fmt.Sprint(maxSightedPerRun) + " tests at once, or it is a test of the whole tree whose reds are a branch's own content, which is no evidence the test is flaky; the test is no longer quarantined"
-		r := core.Run{ID: "improve", Project: t.Project}
-		if t.Stage == work.StageNew || t.Queued() {
-			m.Work.Withdraw(r, t.ID, "", why) // a worker that just started keeps it until the next pass
-			continue
-		}
-		m.Work.Retract(r, t.ID, why) // refused once it is on its way to merge or past it
+		m.Work.Withdraw(core.Run{ID: "improve", Project: t.Project}, t.ID, "", "improve no longer files a brief per flaky test: quarantined tests are listed on the problems board, and an agent files a fix where one is warranted")
 	}
 }

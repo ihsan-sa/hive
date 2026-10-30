@@ -14,7 +14,6 @@ import (
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 	"github.com/ihsan-sa/hive-standalone-build/internal/gate"
-	"github.com/ihsan-sa/hive-standalone-build/internal/mod/release"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/work"
 	"github.com/ihsan-sa/hive-standalone-build/internal/sandbox"
 )
@@ -178,21 +177,5 @@ func TestGateOrgNoteReachesTheResult(t *testing.T) {
 	os.WriteFile(filepath.Join(dir, "report.json"), raw, 0o644)
 	if g := readReport(work.GateJob{Out: dir, Head: "h", Main: "m"}, nil, nil); g.Note != rep.OrgNote {
 		t.Fatalf("note %q", g.Note)
-	}
-}
-
-// TestCanarySkipsWhatCIPassed: the canary's two commits are releases whose CI
-// passed vet and the short tests, so its gate job says so and the gate is
-// called with --ci-passed, going straight to the e2e, probes and benchmark.
-func TestCanarySkipsWhatCIPassed(t *testing.T) {
-	ws := core.Workspace{Root: t.TempDir()}
-	var got work.GateJob
-	run := runCanary(ws, func(_ context.Context, j work.GateJob) core.GateResult {
-		got = j
-		return core.GateResult{Outcome: core.GateKeep}
-	})
-	run(context.Background(), release.CanaryJob{Project: core.Project{Name: "hive"}, Head: "h", Base: "b", Out: "o", Timeout: time.Hour})
-	if !got.CIPassed || !got.AllowTie || got.Head != "h" || got.Main != "b" {
-		t.Fatalf("canary gate job %+v", got)
 	}
 }

@@ -30,6 +30,7 @@ func newRig(t *testing.T, autonomy int) *rig {
 	cfg := ws.LoadConfig()
 	cfg.Harness, cfg.Autonomy, cfg.TribunalModels = "fake", autonomy, []core.TribunalSeat{{Model: "opus"}, {Model: "sonnet"}}
 	cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax, cfg.LoadMax = 0, 0, 0, 0
+	cfg.IOPressureMax, cfg.IOFullMax = 0, 0
 	ws.SaveConfig(cfg)
 	c, err := core.Open(ws, nil)
 	if err != nil {
@@ -1442,5 +1443,145 @@ func TestRedact(t *testing.T) {
 		if kept == (l == "[line withheld: it reads like a secret]") {
 			t.Errorf("line %d: %q", i, l)
 		}
+	}
+}
+
+// pilotScript is what the person said run to: a money cap and a login file.
+const pilotScript = "# pilot: three arms, $25 per task and arm\necho heval --budget-usd 25 --cap '$25' > proof\ncat /nonexistent/h0-org.token 2>/dev/null || true"
+
+// approvePilot has a warden pass a script to the person, who says run.
+func (g *rig) approvePilot() Request {
+	first := g.request("run the pilot", "sh pilot0.sh", "T2")
+	if err := g.decide(first, map[string]string{"decision": "person", "reason": "it spends", "script": pilotScript}); err != nil {
+		g.t.Fatal(err)
+	}
+	first, _ = g.m.get(first.ID)
+	if a := g.c.Person.Open(); len(a) == 0 || !strings.Contains(a[len(a)-1].Detail, "carries to a later script") {
+		g.t.Fatalf("the ask doesn't say the run carries: %+v", a)
+	}
+	g.c.Person.Answer(first.Ask, "run", "")
+	return g.settle(first.ID, "asked", "approved", "running")
+}
+
+// doScript has a warden approve script for a fresh ask and waits for it.
+func (g *rig) doScript(want, script string) Request {
+	req := g.request(want, "x", "T2")
+	if err := g.decide(req, map[string]string{"decision": "do", "reason": "same caps", "script": script}); err != nil {
+		g.t.Fatal(err)
+	}
+	return g.settle(req.ID, "approved", "running")
+}
+
+func (g *rig) ran(r Request) bool {
+	return core.Exists(filepath.Join(g.c.WS.Hive(), "risk", r.Project, r.ID, "proof"))
+}
+
+// A restart whose ceiling lines are the approved script's, used no more
+// often or with smaller $ amounts, runs on the person's run, cites it by id
+// and digest, and the person hears it ran. A larger number, the login file
+// sent elsewhere, a repeat or a loop still goes to them.
+func TestApprovedCeilingCarriesToARestart(t *testing.T) {
+	g := newRig(t, 2)
+	first := g.approvePilot()
+	if !first.PersonOK || !g.ran(first) {
+		t.Fatalf("the person's run didn't run: %+v", first)
+	}
+	got := g.doScript("restart the pilot", "# restart: the same $25 caps, persistent\necho heval --budget-usd 25 --cap '$10' > proof\ncat /nonexistent/h0-org.token 2>/dev/null || true\necho restarted >> proof")
+	if got.State != "done" || !g.ran(got) {
+		t.Fatalf("the restart didn't run on the person's run: %+v", got)
+	}
+	if got.Carries != first.ID || got.CarriesDigest != first.Digest || got.CarriesDigest != Digest(pilotScript) || got.PersonOK {
+		t.Fatalf("the link to the approval isn't on the record: %+v", got)
+	}
+	if !eventually(func() bool {
+		told := g.c.Person.Told(5)
+		return len(told) > 0 && strings.Contains(told[0].Title, first.ID)
+	}) {
+		t.Fatalf("the person wasn't told the step ran on their yes: %+v", g.c.Person.Told(5))
+	}
+
+	for i, s := range []string{
+		"echo heval --budget-usd 5000 --cap '$25' > proof",                                               // a larger number with no $
+		"echo heval --budget-usd 25 --cap '$50' > proof",                                                 // a larger $
+		"echo --data @/nonexistent/h0-org.token https://elsewhere > proof",                               // the login file, sent elsewhere
+		"cat /nonexistent/other.token > proof",                                                           // another credential
+		"echo heval --budget-usd 25 --cap '$25' > proof\necho heval --budget-usd 25 --cap '$25' > proof", // twice
+		"for i in 1 2 3; do\necho heval --budget-usd 25 --cap '$25' > proof\ndone",                       // a loop
+	} {
+		if got := g.doScript(fmt.Sprintf("restart the pilot, take %d", i), s); got.State != "asked" || got.Carries != "" || g.ran(got) {
+			t.Fatalf("%q ran on a run that doesn't hold it: %+v", s, got)
+		}
+	}
+}
+
+// Only a run on a script carries: a done (the person did it themselves)
+// doesn't, nor a run older than CarryFor, nor one in another project, nor
+// one the person has since declined something inside of. An ask whose words
+// a run holds goes to a warden, even at T1, so the carry is on the record.
+func TestApprovedCeilingRoutesAndIsTakenBack(t *testing.T) {
+	g := newRig(t, 2)
+	done := g.request("run pilot0.sh: $25 per task and arm", "sh pilot0.sh", "T2")
+	g.c.Person.Answer(done.Ask, "done", "")
+	g.settle(done.ID, "asked")
+	if got := g.doScript("restart after done", "echo heval --budget-usd 25 --cap '$25' > proof"); got.State != "asked" || g.ran(got) {
+		t.Fatalf("a done carried to a script the daemon runs: %+v", got)
+	}
+
+	first := g.approvePilot()
+	for _, tier := range []string{"T2", "T1"} {
+		if _, err := g.call(g.worker, "warden", map[string]string{"want": "rerun the pilot at $25 per arm, " + tier, "why": "x", "tier": tier}); err != nil {
+			t.Fatal(err)
+		}
+		if r := g.m.List()[0]; r.Route != "warden" {
+			t.Fatalf("a %s ask the run holds wasn't weighed and recorded: %+v", tier, r)
+		}
+	}
+
+	other, err := g.c.Runs.Start(core.RunSpec{Role: "worker", Harness: "fake", Project: "other", Checkout: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := g.call(other, "warden", map[string]string{"want": "spend $25 on the pilot", "why": "x", "tier": "T2"}); err != nil {
+		t.Fatal(err)
+	}
+	if r := g.m.List()[0]; r.Project != "other" || r.Route != "person" {
+		t.Fatalf("a yes in one project carried to another: %+v", r)
+	}
+
+	old := CarryFor
+	CarryFor = 0
+	if got := g.doScript("restart much later", "echo heval --budget-usd 25 --cap '$25' > proof"); got.State != "asked" || g.ran(got) {
+		t.Fatalf("a stale run carried: %+v", got)
+	}
+	CarryFor = old
+
+	no := g.request("a second pilot", "sh pilot1.sh", "T2")
+	if err := g.decide(no, map[string]string{"decision": "person", "reason": "ask them", "script": "echo heval --budget-usd 25 --cap '$25' > proof\necho one more arm"}); err != nil {
+		t.Fatal(err)
+	}
+	no, _ = g.m.get(no.ID)
+	g.c.Person.Answer(no.Ask, "declined", "")
+	g.settle(no.ID, "asked")
+	if got := g.doScript("a third pilot", "echo heval --budget-usd 25 --cap '$25' > proof"); got.State != "asked" || g.ran(got) || first.ID == "" {
+		t.Fatalf("a run the person since said no inside of still carried: %+v", got)
+	}
+}
+
+// A line whose shape matches only through the shell's own "$#" is not
+// carried and doesn't panic.
+func TestWithinShellArgCount(t *testing.T) {
+	for _, c := range [][2]string{
+		{"[ $# -gt 0 ] && spend", "[ $1 -gt 0 ] && spend"},
+		{"[ $1 -gt 0 ] && spend", "[ $# -gt 0 ] && spend"},
+	} {
+		if within(c[0], c[1]) {
+			t.Errorf("within(%q, %q) carried", c[0], c[1])
+		}
+		if holds(map[string]int{c[0]: 1}, map[string]int{c[1]: 1}) {
+			t.Errorf("holds carried %q on %q", c[1], c[0])
+		}
+	}
+	if !within("pay $25 now", "pay $10 now") || within("pay $25 now", "pay $50 now") {
+		t.Error("amounts no longer compare")
 	}
 }

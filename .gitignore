@@ -7,3 +7,4 @@
 __pycache__/
 # left by internal/core TestCheckRecordsItsDisk when a run is cut short
 disk-test-*/
+.bwrap-host-*/

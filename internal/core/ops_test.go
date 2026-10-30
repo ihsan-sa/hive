@@ -56,6 +56,56 @@ func TestDeliverToParentWithNoParentFails(t *testing.T) {
 	}
 }
 
+// A worker's "lead" and "parent" reach its own project's lead, never the
+// newest run whose id starts "lead" (another project's, issue #2040); a
+// project's lead's "lead" is the Hive's, and so is a worker's on a project
+// with no lead yet. Find("lead") is the Hive's lead by name.
+func TestDeliverToLeadStaysOnTheProject(t *testing.T) {
+	ws := Workspace{Root: t.TempDir()}
+	if err := ws.Init(); err != nil {
+		t.Fatal(err)
+	}
+	j, err := OpenJournal(filepath.Join(t.TempDir(), "j.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer j.Close()
+	rs := NewRuns(ws, j, nil, NewTokens(ws), func() []string { return nil })
+	now := time.Now()
+	for i, l := range []struct{ id, name, project string }{
+		{"lead-main-1", "lead", ""}, {"lead-project-hive-1", "lead:hive", "hive"}, {"lead-project-hifi-1", "lead:hifi", "hifi"},
+	} {
+		rs.runs[l.id] = &Run{RunSpec: RunSpec{ID: l.id, Role: "lead", Name: l.name, Project: l.project, Persistent: true}, Status: StatusIdle, Created: now.Add(time.Duration(i) * time.Minute)}
+	}
+	if r, _ := rs.Find("lead"); r.ID != "lead-main-1" {
+		t.Errorf("Find(lead) = %s, want the Hive's lead", r.ID)
+	}
+	sent := func(id string) int {
+		r, _ := rs.Get(id)
+		return len(r.Pending)
+	}
+	for _, c := range []struct {
+		from     Run
+		to, want string
+	}{
+		{Run{RunSpec: RunSpec{ID: "w1", Role: "worker", Project: "hive", Task: "t1"}}, "lead", "lead-project-hive-1"},
+		{Run{RunSpec: RunSpec{ID: "w1", Role: "worker", Project: "hive", Task: "t1"}}, "parent", "lead-project-hive-1"},
+		{Run{RunSpec: RunSpec{ID: "w2", Role: "worker", Project: "pll", Task: "t2"}}, "lead", "lead-main-1"},
+		{Run{RunSpec: RunSpec{ID: "lead-project-hive-1", Role: "lead", Project: "hive"}}, "lead", "lead-main-1"},
+	} {
+		before := sent(c.want)
+		if _, err := rs.ops.Deliver(c.from, c.to, "hi"); err != nil {
+			t.Fatalf("%s to %s: %v", c.from.ID, c.to, err)
+		}
+		if sent(c.want) != before+1 {
+			t.Errorf("%s's message to %s didn't reach %s", c.from.ID, c.to, c.want)
+		}
+	}
+	if sent("lead-project-hifi-1") != 0 {
+		t.Error("another project's lead got a message")
+	}
+}
+
 // A spawner that started its run itself (a helper worker's task) has it
 // started once, not twice; the parent hears where a done helper's commits go,
 // and a blocked helper's account doesn't claim a pull request.
@@ -110,7 +160,7 @@ func TestSpawnNeverMakesALead(t *testing.T) {
 		return RunSpec{}, errors.New("not reached")
 	})
 	for _, role := range []string{"lead", "warden", "sweep"} {
-		if _, err := c.Runs.Ops().Call(parent, "spawn", json.RawMessage(`{"role": "`+role+`", "brief": "x"}`)); err == nil || !strings.Contains(err.Error(), "workers or reviewers") {
+		if _, err := c.Runs.Ops().Call(parent, "spawn", json.RawMessage(`{"role": "`+role+`", "brief": "x"}`)); err == nil || !strings.Contains(err.Error(), "a worker or a reviewer") {
 			t.Errorf("spawn as %s: %v, want refused", role, err)
 		}
 	}

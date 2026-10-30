@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"fmt"
 	"maps"
+	"path"
 	"runtime"
 	"slices"
 	"strings"
@@ -18,7 +19,7 @@ import (
 // plan carry. While something waits on the limit and nothing is strained, it
 // grows by one once nothing has strained for a growStep; when the machine is
 // strained (memory floor, memory or CPU pressure, load per core: the same
-// settings that hold a turn) or the workers' plan is nearly spent or running
+// settings that hold a turn; or IO pressure, which holds it at what runs) or the workers' plan is nearly spent or running
 // ahead of its five-hour or weekly window, it pulls back to three quarters
 // of what is running, or to its start when nothing runs (the strain isn't
 // the Hive's, and from 1 it would take minutes to climb back). Load alone
@@ -90,6 +91,12 @@ func onlyLoad(strain string) bool { return strings.HasPrefix(strain, core.Loaded
 // 30-88 that was IO wait, and the load never fell with them.
 func onlyDisk(strain string) bool { return strings.HasPrefix(strain, core.DiskReason) }
 
+// onlyIO says whether strain is IO pressure over its limit (core.IOStrained):
+// a saturated disk, read on its own rather than through the load. It holds
+// the limit at what runs, so no more turns or checks start while it lasts,
+// stops nothing running, and lets the limit grow back as it falls.
+func onlyIO(strain string) bool { return strings.HasPrefix(strain, core.IOReason) }
+
 // next moves the limit for running things with waiting ones wanting more,
 // strain saying what strains the machine or plan ("" for nothing), watching
 // whether any machine reading is on, from start under ceiling (0: none).
@@ -112,6 +119,9 @@ func (p *pace) next(now time.Time, running int, waiting bool, strain string, wat
 			p.hard = now
 		}
 		if now.Sub(p.at) < step {
+			if onlyIO(strain) && p.limit <= running {
+				p.why = "held: " + strain
+			}
 			break
 		}
 		if soft && p.limit < start && now.Sub(p.at) >= max(step, growStep) && now.Sub(p.hard) >= max(step, growStep) {
@@ -126,11 +136,16 @@ func (p *pace) next(now time.Time, running int, waiting bool, strain string, wat
 			floor = start
 		}
 		l := max(floor, min(p.limit, running)*3/4)
+		if onlyIO(strain) { // hold at what runs: nothing more starts on the disk
+			l = max(1, min(p.limit, running))
+		}
 		if running == 0 {
 			l = min(p.limit, start)
 		}
 		if l < p.limit {
 			p.limit, p.at, p.why = l, now, "pulled back: "+strain
+		} else if onlyIO(strain) {
+			p.why = "held: " + strain
 		}
 	case waiting && running >= p.limit && (top == 0 || p.limit < top) &&
 		now.Sub(p.at) >= max(step, growStep) && now.Sub(p.shown) >= max(step, growStep):
@@ -173,9 +188,12 @@ func (p *pace) String() string {
 func machine(cfg core.Config) (string, bool) {
 	why := core.Strained(cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax)
 	if why == "" {
+		why = core.IOStrained(cfg.IOPressureMax, cfg.IOFullMax)
+	}
+	if why == "" {
 		why = core.Loaded(cfg.LoadMax)
 	}
-	return why, core.Watched(cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax, cfg.LoadMax)
+	return why, core.Watched(cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax, max(cfg.IOPressureMax, cfg.IOFullMax), cfg.LoadMax)
 }
 
 // loadHolds says whether strain holds a new worker with working of them at
@@ -319,22 +337,47 @@ func (m *Module) checkRank(project, sha, _ string) int {
 	return 0
 }
 
-// namesAny says text names one of tests (a subtest by its top test) as a
-// whole word.
+// namesAny says text names one of tests as a whole word: a Go subtest by
+// its top test, a pytest id (path::test[params]) by its test or its file.
 func namesAny(text string, tests []string) bool {
-	for _, n := range tests {
-		n, _, _ = strings.Cut(n, "/")
-		for rest, at := text, 0; n != ""; {
-			i := strings.Index(rest, n)
-			if i < 0 {
-				break
-			}
-			start, end := at+i, at+i+len(n)
-			if (start == 0 || !isWord(text[start-1])) && (end == len(text) || !isWord(text[end])) {
+	for _, id := range tests {
+		for _, n := range testNames(id) {
+			if namesWord(text, n) {
 				return true
 			}
-			rest, at = text[start+1:], start+1
 		}
+	}
+	return false
+}
+
+// testNames are the words that name a failing test's id.
+func testNames(id string) []string {
+	where, _, found := strings.Cut(id, "::")
+	if !found {
+		n, _, _ := strings.Cut(id, "/")
+		return []string{n}
+	}
+	n := id[strings.LastIndex(id, "::")+2:]
+	n, _, _ = strings.Cut(n, "[")
+	if strings.HasSuffix(where, ".py") {
+		return []string{n, path.Base(where)}
+	}
+	n, _, _ = strings.Cut(n, "/")
+	return []string{n}
+}
+
+// namesWord says text holds n as a whole word.
+func namesWord(text, n string) bool {
+	for rest, at := text, 0; n != ""; {
+		i := strings.Index(rest, n)
+		if i < 0 {
+			break
+		}
+		start, end := at+i, at+i+len(n)
+		if (start == 0 || !isWord(text[start-1])) && (end == len(text) || !isWord(text[end])) {
+			return true
+		}
+		rest, at = text[start+1:], start+1
 	}
 	return false
 }
@@ -357,7 +400,7 @@ func (m *Module) paceChecks() {
 // Pace says the workers', checks' and recursive gates' limits now and why, for the dashboard
 // and the lead.
 func (m *Module) Pace() map[string]string {
-	return map[string]string{"workers": m.workers.String(), "checks": m.checks.String(), "gates": m.gates.String()}
+	return map[string]string{"workers": m.workers.String(), "checks": m.checks.String(), "gates": m.gates.String(), "heavy": m.heavy.String()}
 }
 
 // pacedRead is the route a review of a change on project goes on while the
