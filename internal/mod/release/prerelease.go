@@ -91,6 +91,9 @@ func (m *Module) follow() {
 	if p, ok := readPending(m.C.WS); ok && p.To == core.Version && p.RolledBack == "" {
 		return
 	}
+	// Main may have moved by an agent's own push, which no merge event
+	// announces: its modules go live from main as the clone last fetched it.
+	m.goLive(false)
 	go func() {
 		msg, err := m.AutoUpdate()
 		var l *limited

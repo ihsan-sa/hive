@@ -80,8 +80,10 @@ func mainBuild(version string) string {
 }
 
 // mainLooks is how many of main's newest commits a look weighs: a tip whose
-// CI still runs doesn't hold an older green one back.
-const mainLooks = 6
+// CI still runs doesn't hold an older green one back. Merges and agents'
+// own pushes land without waiting on CI, so a busy hour can put a dozen
+// commits on main while CI runs on the first.
+const mainLooks = 30
 
 // mainTag is the build of main to install next: the newest of main's last
 // mainLooks commits whose forge CI passed there, past this build (descended
