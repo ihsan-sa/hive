@@ -36,6 +36,7 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/ui"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/work"
 	"github.com/ihsan-sa/hive-standalone-build/internal/proc"
+	"github.com/ihsan-sa/hive-standalone-build/internal/sandbox"
 	"github.com/ihsan-sa/hive-standalone-build/internal/setup"
 )
 
@@ -284,6 +285,11 @@ func Run(ws core.Workspace, waitFor int) error {
 		fmt.Fprintln(os.Stderr, "hive: scratch files stay in /tmp:", err)
 	} else if tmp != "" {
 		fmt.Printf("hive: /tmp is in memory, so scratch files go to %s\n", tmp)
+	}
+	// Before anything is started on the host: each sandbox then gets a
+	// memory limit of its own inside the unit's.
+	if err := sandbox.SettleMemory(); err != nil {
+		fmt.Fprintln(os.Stderr, "hive: sandboxes run without memory limits of their own:", err)
 	}
 	booted := time.Now()
 	a, err := app.New(ws, Forge())

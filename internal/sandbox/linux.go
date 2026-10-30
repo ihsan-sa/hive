@@ -240,6 +240,13 @@ func Exec(specPath string) int {
 		cmd.SysProcAttr = &syscall.SysProcAttr{Pdeathsig: syscall.SIGKILL}
 	}
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = in, out, errf
+	// Its own memory limit, which the command inherits (memory_linux.go);
+	// failing to is no reason not to run.
+	run, err := enterRun()
+	if err != nil {
+		fmt.Fprintln(errf, "sandbox: running without a memory limit of its own:", err)
+	}
+	defer leaveRun(run, errf)
 	if err := cmd.Start(); err != nil {
 		return fail(fmt.Errorf("start namespaces: %w (are unprivileged user namespaces allowed? on Ubuntu 23.10 and later install bubblewrap)", err))
 	}
