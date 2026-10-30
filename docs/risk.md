@@ -6,6 +6,13 @@ Built in `internal/mod/risk` (spec sections 4, 7 and 15, milestone 6).
 
 Wardens are only for what is outside the hive user or can't be undone (the person, 10-30): money, credentials, publishing private details, opening the machine, anything outward in the person's name, and deleting repos or history. An agent's run is a session in the hive user's home (`internal/core/home.go`), so everything else it does itself. `hive agent warden` hands any other ask straight back as the agent's own (route `self`), whatever tier it names; one that publishes private details or deletes a repository or history (`core.WardenOnly`, `core.WardenHit`) goes to a warden, a deletion as T3 to a tribunal, and the ceiling's own list goes on to the person. A module install (`install_module`) isn't weighed: it installs at once.
 
+But only a step the asker's sandbox can take is its own (#2167: a full host disk, a stale lock in a host clone and a runner on another machine were each handed back as "do it yourself", and nobody could).
+`hive agent warden` reads the ask's words for that (`internal/mod/risk/reach.go`).
+One on another machine (`ssh host2`, an `ssh://` address, "another machine", "network is unreachable") goes to the person, who alone reaches it.
+One about the machine itself ("no space left", "disk full", "the whole filesystem"), one that says the asker's sandbox can't reach it ("hidden from my sandbox", "outside my sandbox"), or one that names a path the asker can't write goes to a warden, as T2 at the least.
+The asker writes its checkout, box, home and tmp, and, as a session in the hive user's home, that home; it can't write the daemon's workspace (host clones, other runs' checkouts, cache, the records), the read-only `$HIVE_` folders or the machine's other paths.
+A tool path an ask runs (`/usr/bin/...`, `/bin/...`) or `/dev/null` doesn't count.
+
 A worker asks with `hive agent warden --want --why --steps --tier T1|T2|T3`. For an ask in those categories, `core.Route` picks who settles it:
 
 - **T1** (inside the Hive, recoverable): the worker's own; nothing is filed.
