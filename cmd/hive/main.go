@@ -24,6 +24,7 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/daemon"
 	"github.com/ihsan-sa/hive-standalone-build/internal/fakeagent"
 	"github.com/ihsan-sa/hive-standalone-build/internal/gocache"
+	"github.com/ihsan-sa/hive-standalone-build/internal/heavy"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/chat"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/kb"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/models"
@@ -139,6 +140,9 @@ func run(args []string) int {
 		return sandbox.Inner(args)
 	case "gocacheprog": // a check's GOCACHEPROG (core.goBuild)
 		return gocache.Main(args)
+	case "heavy": // a build or test suite, one at a time on the machine
+		ws, _ := core.FindWorkspace()
+		return heavy.Main(args, heavy.Path(sandbox.ToolsInside, ws.Tools()))
 	case "sandbox-probe":
 		sb, err := sandbox.Select(sandbox.Options{Mode: "auto"})
 		if err != nil {
@@ -488,6 +492,7 @@ func cmdDaemon(args []string) int {
 		return 0
 	}
 	os.Unsetenv(sandbox.OwnerEnv) // a check's tag, if a check started this daemon
+	heavy.Ready(ws.Tools())       // read-only mounts can flock it only if it exists
 	if err := daemon.Run(ws, *waitFor); err != nil {
 		fmt.Fprintln(os.Stderr, core.Cmd+" daemon:", err)
 		if code, ok := err.(daemon.ExitCode); ok {
