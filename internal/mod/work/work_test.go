@@ -502,12 +502,7 @@ func helperRig(t *testing.T) (*Module, *flakyForge, core.Project) {
 	if _, err := forge.EnsureRepo("me/p", "", false); err != nil {
 		t.Fatal(err)
 	}
-	seed := filepath.Join(dir, "seed")
-	mustGit(t, "", "clone", "-q", forge.RepoPath("me/p"), seed)
-	os.WriteFile(filepath.Join(seed, "README.md"), []byte("# p\n"), 0o644)
-	mustGit(t, seed, "add", "-A")
-	mustGit(t, seed, "commit", "-q", "-m", "seed")
-	mustGit(t, seed, "push", "-q", "origin", "HEAD:main")
+	commitTo(t, forge.RepoPath("me/p"), "main", "main", "seed", map[string]string{"README.md": "# p\n"})
 	c, err := core.Open(ws, forge)
 	if err != nil {
 		t.Fatal(err)

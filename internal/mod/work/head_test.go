@@ -2,8 +2,6 @@ package work
 
 import (
 	"encoding/json"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -15,15 +13,7 @@ import (
 // forge, past the Hive, as someone with the repo's rights would.
 func pushHead(t *testing.T, f *core.Local, branch string, files map[string]string) string {
 	t.Helper()
-	tmp := t.TempDir()
-	must(t, "", "clone", "-q", "-b", branch, f.RepoPath("me/p"), tmp)
-	for name, body := range files {
-		os.WriteFile(filepath.Join(tmp, name), []byte(body), 0o644)
-	}
-	must(t, tmp, "add", "-A")
-	must(t, tmp, "commit", "-q", "-m", "outside")
-	must(t, tmp, "push", "-q", "origin", "HEAD:"+branch)
-	return must(t, tmp, "rev-parse", "HEAD")
+	return commitTo(t, f.RepoPath("me/p"), branch, branch, "outside", files)
 }
 
 // staleHead is the incident of PR #462: the Hive pushed a newer head (here a
