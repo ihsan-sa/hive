@@ -196,7 +196,7 @@ func New(c *core.Core, a *agents.Agents, w *work.Module, ch *chat.Module) *Modul
 	work.Measured = m.measured
 	c.Effects.Quarantined = m.QuarantinedTests
 	c.Runs.Ops().Register(core.Op{Name: "pivot", Help: `{"case","evidence","project"} -> any agent proposes a pivot: a short case (what to stop, throw away or change, and what instead) and the evidence for it. It is filed as a fix, first in line, its worker weighs the case before acting and nothing bounds what it may throw away; the project's lead and the person hear it at once and turn it down with withdraw`, Fn: m.opPivot})
-	go m.measureLoop()
+	go m.measureLoop(m.afterMerge)
 	return m
 }
 
@@ -894,24 +894,45 @@ func (m *Module) enqueue(t work.Task) {
 	}
 }
 
-// measureLoop measures merges as they come. When it is behind, it takes
-// every merge waiting at once and measures each project's newest first, so
-// main is judged as it stands now; the older ones then come through
-// afterMerge covered by it, rather than each one holding the queue for a
-// whole measurement of code main has long moved past.
-func (m *Module) measureLoop() {
+// measureLoop hands each merge to its project's own loop, so one project's
+// slow measure (the Hive's own takes up to half an hour) doesn't hold every
+// other project's merges unmeasured behind it (#2175). How many measure at
+// once is bounded where their checks run: each takes a check slot.
+func (m *Module) measureLoop(measure func(work.Task)) {
+	loops := map[string]chan work.Task{}
 	for t := range m.queue {
+		q, ok := loops[t.Project]
+		if !ok {
+			q = make(chan work.Task, 64)
+			loops[t.Project] = q
+			go m.projectLoop(q, measure)
+		}
+		select {
+		case q <- t:
+		default:
+			go func() { q <- t }()
+		}
+	}
+}
+
+// projectLoop measures one project's merges in turn. When it is behind, it
+// takes every merge waiting at once and measures the newest first, so main
+// is judged as it stands now; the older ones then come through afterMerge
+// covered by it, rather than each one holding the queue for a whole
+// measurement of code main has long moved past.
+func (m *Module) projectLoop(q chan work.Task, measure func(work.Task)) {
+	for t := range q {
 		batch := []work.Task{t}
 		for more := true; more; {
 			select {
-			case u := <-m.queue:
+			case u := <-q:
 				batch = append(batch, u)
 			default:
 				more = false
 			}
 		}
 		for _, t := range m.newestFirst(batch) {
-			m.afterMerge(t)
+			measure(t)
 		}
 	}
 }

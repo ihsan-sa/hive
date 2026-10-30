@@ -102,6 +102,7 @@ On host paths (bare, Seatbelt) the tools folder's bins come first on PATH, so an
    A worker that rewinds past a merged checkpoint is told to bring it back.
    The merge base needs git 2.40 or later; on an older git it's an error, not a conflict.
 10. improve: measure merge sha (tests + score) — unless a main commit already measured contains it (a PR that landed before its task closed): then only `score.covered` names that commit and whether it was kept or red, with no score, alert or revert;
+    each project's merges are measured by its own loop, in turn and newest first when it is behind, so one project's slow measure holds only its own (#2175); check slots bound how many run at once;
     measurements are taken to be in main's order, so a merge that comes back late (held for a missing tool, requeued after a failed sync) is covered by a later measurement even when that one is red, and the digest's `red` mark is what says the red may be its — compare with best kept;
     a score past the best kept's tolerance → the merge and its parent scored A B B A in one sitting, and within tolerance of the parent it is kept (issue #1865);
     a merge that changed the score is always paired so, its parent scored under the merge's score (#2090), and starts a new baseline only when the parent gives no number there;
