@@ -8,6 +8,8 @@ One figure paces the Hive: each agent turn is budgeted `turn_mb` (240 MB by defa
 Before a turn starts, `Runs.launch` takes the Hive's cgroup limit (the lowest `memory.max` or `memory.high` of its cgroup and those above it; with none, the machine's `MemTotal`) and what is in use there (the cgroup's `memory.current` less its inactive file cache; on the machine, what `MemAvailable` doesn't cover), and holds the turn while that leaves less than `turn_mb` for it and for each turn launching beside it; an executor module with room takes it instead.
 Only a worker's turn is handed over, and not one that is a session in the hive user's home (`core.sessionInHome`), whose spec names this machine's home and service manager; a worker that is walled off (an isolated project's, a reader, a one-turn experiment) still is.
 The work module starts waiting briefs the same way, in line order, while the budget has room for another turn (`admit`).
+A brief that the budget, a saturated disk or main's measure would hold starts anyway, one a pass, when an executor module has room for its project's worker (`core.Runs.ElsewhereFor`); its worker is an away run (`RunSpec.Away`), whose turns go there first.
+That is only a worker its turns can leave with: walled off and reading no secrets, as above.
 A lead's turn, and a warden's or tribunal seat's, never waits (`Run.NeverWaits`).
 There is no strain hold, ramp, pace, `max_workers` or heavy-command lease any more; checks run at most `max_checks` at once.
 
