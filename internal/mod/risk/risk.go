@@ -144,7 +144,7 @@ func New(c *core.Core, mod *modules.Registry, ag *agents.Agents) *Module {
 		}
 	}
 	ops := c.Runs.Ops()
-	ops.Register(core.Op{Name: "warden", Help: `{"want","why","steps","tier":"T1|T2|T3","gain":"(optional) large"} -> only for money, credentials, publishing private details, opening the machine, something outward in the person's name, or deleting repos or history; anything else comes back as yours to do yourself`, Fn: m.opRequest})
+	ops.Register(core.Op{Name: "warden", Help: `{"want","why","steps","tier":"T1|T2|T3","gain":"(optional) large"} -> only for money, credentials, publishing private details, opening the machine, something outward in the person's name, deleting repos or history, or a step your sandbox can't take (a path outside it goes to a warden, another machine to the person); anything else comes back as yours to do yourself`, Fn: m.opRequest})
 	ops.Register(core.Op{Name: "decide", Help: `{"decision":"do|safer|decline|tribunal|person","reason","script":"exactly what runs (do, tribunal; person if you have one)","gain":"(optional) large","share":"(optional) output: the script only reads, so what it prints goes back to the asker, secret-looking lines withheld"}`, Fn: m.opDecide})
 	ops.Register(core.Op{Name: "requests", Help: `{} -> recent requests past the sandbox: who asked, what, why, where each stands`, Fn: m.opRequests})
 	ops.Register(core.Op{Name: "install_module", Help: `{"url"} or {"project"}: installs the module at once (a module built as a project of its own installs from it); you hear back when it is in`, Fn: m.opInstall})
@@ -459,9 +459,22 @@ func (m *Module) opRequest(r core.Run, args json.RawMessage) (any, error) {
 	// Wardens only for what is outside the hive user or irreversible: the
 	// ceiling's list (the person's own) and WardenOnly's. Anything else is
 	// the agent's to do itself, whatever tier it asked.
+	// But only a step the asker's sandbox can take is its own: one on another
+	// machine is the person's, one on a path or the machine past its sandbox
+	// a warden's (reach.go).
 	weighed := core.WardenHit(a.Want, a.Why, a.Steps)
+	elsewhere, what := "", ""
 	if ceiling == "" && weighed == "" {
-		return map[string]string{"tier": "T1", "route": "self", "note": "Not a warden's: only money, credentials, publishing private details, opening the machine, something outward in the person's name, or deleting repos or history go to one. Anything else inside the hive user's reach is yours: do it yourself, in your run (you are a session in the hive user's home, with git and gh on your project owner's token)."}, nil
+		elsewhere, what = m.beyond(r, a.Want, a.Why, a.Steps)
+	}
+	if elsewhere == "host" {
+		ceiling = "is on another machine (" + core.Clip(what, 60) + "), which only the person can reach"
+	}
+	if elsewhere != "" && tier == "T1" {
+		tier = "T2"
+	}
+	if ceiling == "" && weighed == "" && elsewhere == "" {
+		return map[string]string{"tier": "T1", "route": "self", "note": "Not a warden's: only money, credentials, publishing private details, opening the machine, something outward in the person's name, or deleting repos or history go to one. Anything else inside the hive user's reach is yours: do it yourself, in your run (you are a session in the hive user's home, with git and gh on your project owner's token). If your sandbox can't reach it, ask again naming the path outside it (a warden's) or the other machine (the person's)."}, nil
 	}
 	switch {
 	case weighed == "history" && tier != "T3":
@@ -502,6 +515,10 @@ func (m *Module) opRequest(r core.Run, args json.RawMessage) (any, error) {
 		Tier: tier, Route: route, Gain: a.Gain, State: "asked", Created: time.Now().UTC()}
 	switch route {
 	case "person":
+		if elsewhere == "host" {
+			m.ask(req, "Another machine", "This step "+ceiling+": no agent's sandbox can, so it is yours. Do it yourself if you agree.", "done", "declined")
+			break
+		}
 		m.ask(req, "Always yours", "This step "+ceiling+", which is on the list that is always yours, so no warden or panel may take it. Do it yourself if you agree.", "done", "declined")
 	case "person-first":
 		m.ask(req, "Ask first", "Your autonomy setting asks you before anything outside the project. Say go ahead to let a warden weigh it.", "go ahead", "declined")
