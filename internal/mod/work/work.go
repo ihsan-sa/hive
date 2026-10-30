@@ -2031,14 +2031,18 @@ func (m *Module) test(t *Task, p core.Project) error {
 		return err
 	}
 	cfg := m.C.Effects.Config(p, main)
-	if len(cfg.ForgeTests) > 0 {
+	forged, err := m.forgeTested(p, main, t.SHA)
+	if err != nil {
+		return err
+	}
+	if len(forged) > 0 {
 		// The forge's CI tests every PR on its exact head: that run is the
 		// test, waited on at the merge (forgeChecks), and none runs here.
 		m.mu.Lock()
 		m.dropTestRunLocked(t.ID)
 		m.mu.Unlock()
 		t.Recheck = false
-		return m.passed(t, p, main, "its tests are the forge's ("+strings.Join(cfg.ForgeTests, ", ")+"), weighed before it merges")
+		return m.passed(t, p, main, "its tests are the forge's ("+strings.Join(forged, ", ")+"), weighed before it merges")
 	}
 	switch {
 	case t.Passed != "" && t.Passed == t.SHA:
@@ -2101,12 +2105,37 @@ func (m *Module) test(t *Task, p core.Project) error {
 	return m.passed(t, p, main, "tests passed")
 }
 
+// forgeTested names the forge's checks that are head's test in place of a
+// local run: main's ForgeTests, or those of a head that moves its project's
+// tests to the forge once every one it names has a run on that head (its own
+// new workflow, which the forge runs on the PR). Until they show, or if they
+// never do, the local test runs as before.
+func (m *Module) forgeTested(p core.Project, main, head string) ([]string, error) {
+	if ft := m.C.Effects.Config(p, main).ForgeTests; len(ft) > 0 {
+		return ft, nil
+	}
+	ft := m.C.Effects.Config(p, head).ForgeTests
+	if len(ft) == 0 {
+		return nil, nil
+	}
+	runs, err := m.C.Effects.Forge.Checks(p.Repo, head)
+	if err != nil {
+		return nil, err
+	}
+	for _, n := range ft {
+		if !slices.ContainsFunc(runs, func(r core.CheckRun) bool { return r.Name == n }) {
+			return nil, nil
+		}
+	}
+	return ft, nil
+}
+
 // testsText is what a reader of sha gets as its test run: the local run's
 // output, or, where the forge's checks are the test (ForgeTests on main),
 // a line saying so when none ran here.
 func (m *Module) testsText(p core.Project, sha, main string) string {
 	c, ok := m.C.Effects.GetCheck(p.Name, sha, "test")
-	if ft := m.C.Effects.Config(p, main).ForgeTests; !ok && len(ft) > 0 {
+	if ft := m.C.Effects.ForgeTested(p, main, sha); !ok && len(ft) > 0 {
 		return "No local test run: the forge's checks (" + strings.Join(ft, ", ") + ") test this exact head, and it merges only once they pass there.\n"
 	}
 	return core.ClipEnds(c.FullOutput(), 16000)
@@ -2718,7 +2747,7 @@ func (m *Module) forgeChecks(t *Task, p core.Project, main string) (bool, error)
 	m.sightings(t, p, runs, keys, "", nil) // a red that only warns is evidence too
 	raw := runs
 	runs, req, warned := core.Advisory(p, runs, m.C.Effects.RequiredChecks(p, main), m.C.Effects.AdvisoryChecks(p, main))
-	req = m.C.Effects.Config(p, main).WithForgeTests(req)
+	req = core.ProjectConfig{ForgeTests: m.C.Effects.ForgeTested(p, main, t.SHA)}.WithForgeTests(req)
 	st, which := core.ChecksState(runs, req)
 	if (st == core.CheckFail || st == core.CheckCantStart) && rerunning(t) && t.Retried.before(which) {
 		m.hold(t, p, "waiting for the re-run of the forge's checks on "+core.Short(t.SHA)+" ("+core.CheckNames(which)+")")

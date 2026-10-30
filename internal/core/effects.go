@@ -402,6 +402,19 @@ func (e *Effects) Config(p Project, sha string) ProjectConfig {
 	return ParseProjectConfig(raw)
 }
 
+// ForgeTested names the forge's checks that are the test of head against
+// main: main's ForgeTests, or, for a change that moves its project's tests to
+// the forge, the head's own. The forge runs a PR's own new workflow on its
+// head, and the head's project.json is the person's to approve (BaseProtected)
+// before it merges, so a head can't name them to skip its test unseen; the
+// merge waits for every one named to pass there.
+func (e *Effects) ForgeTested(p Project, main, head string) []string {
+	if ft := e.Config(p, main).ForgeTests; len(ft) > 0 {
+		return ft
+	}
+	return e.Config(p, head).ForgeTests
+}
+
 // ScoreVersion names the score at sha: its command and the content of its
 // evaluator paths. Scores of two versions are never compared.
 func (e *Effects) ScoreVersion(p Project, sha string, s Score) string {
@@ -1990,8 +2003,8 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	var flaky []string                       // a red local test run's known flakes, its only failures
-	tested := e.Config(p, m.Main).ForgeTests // the forge's checks are the test there
+	var flaky []string                        // a red local test run's known flakes, its only failures
+	tested := e.ForgeTested(p, m.Main, m.SHA) // the forge's checks are the test there
 	switch c, ok := e.GetCheck(p.Name, m.SHA, "test"); {
 	case len(tested) > 0:
 		// No local run is needed, and one there is no gate: the forge's

@@ -1459,3 +1459,51 @@ func TestForgeTestsCoreGate(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// A PR that moves its project's tests to the forge (forge_tests on its head,
+// not yet on main) is tested by the forge's run of its own new workflow once
+// that shows on its head, not by the local line; until it shows, the local
+// test is queued as before. The merge then waits for those checks too.
+func TestForgeTestsOnTheHeadReplaceTheLocalTest(t *testing.T) {
+	cfg := map[string]string{".hive/project.json": `{"test": "false"}`}
+	m, task, p, f := gateRigSeeded(t, false, cfg, map[string]string{".hive/project.json": `{"test": "false", "forge_tests": ["ci"]}`})
+	if err := m.test(task, p); err != nil {
+		t.Fatal(err)
+	}
+	m.mu.Lock()
+	_, queued := m.testRuns[task.ID]
+	m.mu.Unlock()
+	if !queued || task.Stage != StageTesting {
+		t.Fatalf("no forge run on the head yet: queued %v, stage %q", queued, task.Stage)
+	}
+	f.SetChecks(p.Repo, task.SHA, core.CheckRun{Name: "ci", State: core.CheckPending})
+	if err := m.test(task, p); err != nil {
+		t.Fatal(err)
+	}
+	m.mu.Lock()
+	r, queued := m.testRuns[task.ID]
+	kept := queued && !r.gone // a run already started is let go, not waited on
+	m.mu.Unlock()
+	if kept || task.Stage != StagePerson {
+		t.Fatalf("local run kept %v, stage %q, log %+v", kept, task.Stage, task.Log)
+	}
+	main, err := m.C.Effects.Sync(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.C.Effects.Approve("merge", p.Name, task.SHA)
+	task.Stage = StageMerging
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageMerging || prState(t, f, task.PR.Number) != "OPEN" {
+		t.Fatalf("merged with the forge's test pending: stage %q, reason %q", task.Stage, task.Reason)
+	}
+	req := core.MergeRequest{Project: p, PR: task.PR.Number, SHA: task.SHA, Main: main, Subject: "x", Task: task.ID}
+	if _, err := m.C.Effects.Merge(req); err == nil || !strings.Contains(err.Error(), "ci") {
+		t.Fatalf("the core gate merged with ci pending: %v", err)
+	}
+	f.SetChecks(p.Repo, task.SHA, core.CheckRun{Name: "ci", State: core.CheckPass})
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageMerged || prState(t, f, task.PR.Number) != "MERGED" {
+		t.Fatalf("stage %q, reason %q once the forge's tests passed", task.Stage, task.Reason)
+	}
+}
