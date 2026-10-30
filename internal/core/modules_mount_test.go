@@ -98,3 +98,59 @@ func TestChecksSeeInstalledModules(t *testing.T) {
 		}
 	}
 }
+
+// A check sees the other projects' clones read-only at /hive/projects, as the
+// project's agents do, with every hidden project but its own covered, so a
+// score built on another project's main measures the same as in a turn; an
+// isolated project's check sees none.
+func TestChecksSeeOtherProjects(t *testing.T) {
+	c, f := testHive(t)
+	var specs []sandbox.Spec
+	c.Effects.sandbox = func() (sandbox.Sandbox, error) { return mapped{specs: &specs}, nil }
+	add := func(name, sharing string) (Project, string) {
+		seedRepo(t, f, "me/"+name, map[string]string{".hive/project.json": `{"test": "true"}`})
+		p := Project{Name: name, Repo: "me/" + name}
+		p.SetSharing(sharing)
+		p, err := c.Projects.Add(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		main, err := c.Effects.Sync(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return p, main
+	}
+	add("board", SharingShared)
+	add("secret", SharingPrivate)
+	reader, main := add("reader", SharingShared)
+	walled, wmain := add("walled", SharingIsolated)
+	ch := c.Effects.RunCheck(reader, main, "test", "git -C /hive/projects/board rev-parse --verify -q main")
+	if !ch.OK {
+		t.Fatalf("a check can't read another project's main: %+v", ch)
+	}
+	ms := specs[0].Mounts
+	if !slices.ContainsFunc(ms, func(m sandbox.Mount) bool {
+		return m.Inside == "/hive/projects" && m.Host == c.WS.Projects() && !m.RW
+	}) || !slices.Contains(specs[0].Env, "HIVE_PROJECTS=/hive/projects") {
+		t.Fatalf("projects not mounted read-only with HIVE_PROJECTS: %+v", specs[0])
+	}
+	if !slices.ContainsFunc(ms, func(m sandbox.Mount) bool { return m.Inside == "/hive/projects/secret" && m.Hide }) {
+		t.Fatalf("a private project's clone is not covered from another's check: %+v", ms)
+	}
+	for _, m := range ms {
+		if m.Inside == "/hive/projects/board" || m.Inside == "/hive/projects/reader" {
+			t.Fatalf("a shared project's clone is covered: %+v", m)
+		}
+	}
+	specs = nil
+	c.Effects.RunCheck(walled, wmain, "test", "true")
+	for _, m := range specs[0].Mounts {
+		if strings.HasPrefix(m.Inside, "/hive/projects") {
+			t.Fatalf("an isolated project's check sees other projects: %+v", m)
+		}
+	}
+	if slices.ContainsFunc(specs[0].Env, func(v string) bool { return strings.HasPrefix(v, "HIVE_PROJECTS=") }) {
+		t.Fatalf("an isolated project's check gets HIVE_PROJECTS: %v", specs[0].Env)
+	}
+}

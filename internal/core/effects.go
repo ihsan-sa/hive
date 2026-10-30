@@ -705,22 +705,26 @@ func (e *Effects) checkOnce(p Project, sha, main, kind, command, back string) (C
 	c.Log = filepath.Join(e.ws.Hive(), "checks", p.Name, id+".log")
 	mounts := []sandbox.Mount{{Host: dir, Inside: "/work", RW: true}}
 	mods, build := goMods{done: func() {}}, goMods{done: func() {}}
-	var installed []sandbox.Mount
+	var installed, projects []sandbox.Mount
 	if away == nil { // the shared caches are this machine's: a runner fetches its own
 		mods = e.goModules(sb, dir)
 		build = e.goBuild(sb, p, sha, dir)
 		var drop func()
 		installed, drop = e.checkModules(sb, p, dir)
 		defer drop()
+		projects = e.checkProjects(p)
 	}
 	run := func(offline bool) (int, string, error) {
-		ms := append(append(append(slices.Clone(mounts), build.mounts...), mods.mounts...), installed...)
+		ms := append(append(append(append(slices.Clone(mounts), build.mounts...), mods.mounts...), installed...), projects...)
 		env := append(slices.Clone(build.env), mods.own...)
 		if offline {
 			env = append(slices.Clone(build.env), mods.env...)
 		}
 		if len(installed) > 0 {
 			env = append(env, "HIVE_MODULES="+sandbox.InsidePath(sb, installed[0]))
+		}
+		if len(projects) > 0 {
+			env = append(env, "HIVE_PROJECTS="+sandbox.InsidePath(sb, projects[0]))
 		}
 		var disk sandbox.Disk
 		defer func() { c.DiskRead, c.DiskWrote = c.DiskRead+disk.Read, c.DiskWrote+disk.Wrote }()
@@ -1218,6 +1222,28 @@ func (e *Effects) checkModules(sb sandbox.Sandbox, p Project, dir string) ([]san
 		out = append(out, sandbox.Mount{Host: filepath.Join(all.Host, m), Inside: all.Inside + "/" + m})
 	}
 	return out, func() { os.RemoveAll(empty); e.markLive(empty, false) }
+}
+
+// checkProjects is how a check on p sees the other projects' clones, as p's
+// agents do: read-only at /hive/projects, each the Hive's clone of its main,
+// with every hidden project but p covered, so a score built on another
+// project's files (hive-fw's reads hifi-receiver-2's main) measures the same
+// here as in a turn. An isolated project's check sees none. A check on a
+// runner (elsewhere) gets none either: the clones are this machine's.
+func (e *Effects) checkProjects(p Project) []sandbox.Mount {
+	if p.Isolated || !Exists(e.ws.Projects()) {
+		return nil
+	}
+	out := []sandbox.Mount{{Host: e.ws.Projects(), Inside: "/hive/projects"}}
+	if e.runs == nil || e.runs.projs == nil {
+		return out
+	}
+	for _, o := range e.runs.projs.List() {
+		if o.Hidden() && o.Name != p.Name && Exists(e.ws.Project(o.Name)) {
+			out = append(out, sandbox.Mount{Host: e.ws.Project(o.Name), Inside: "/hive/projects/" + o.Name, Hide: true})
+		}
+	}
+	return out
 }
 
 // cleanCheckout clones the host clone fresh and checks out sha.
