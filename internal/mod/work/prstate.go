@@ -56,18 +56,6 @@ func (m *Module) ownPR(r core.Run, id, project string, number int) (Task, core.P
 	return t, p, err
 }
 
-// openPR reads t's PR from the forge and refuses one that isn't open.
-func (m *Module) openPR(t Task, p core.Project) (core.PR, error) {
-	pr, err := m.C.Effects.Forge.GetPR(p.Repo, t.PR.Number)
-	if err != nil {
-		return pr, err
-	}
-	if pr.State != "OPEN" {
-		return pr, fmt.Errorf("PR #%d is %s, not open", pr.Number, strings.ToLower(pr.State))
-	}
-	return pr, nil
-}
-
 // closedByLead starts the reason of a task the lead ended with pr_close. Its
 // PR is closed, so recheck doesn't bring it back; new work is a new brief.
 const closedByLead = "closed by the lead"
