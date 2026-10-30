@@ -1,7 +1,20 @@
-# Status - 2026-10-22
+# Status - 2026-10-30
 
-[overview.md](overview.md) repeats a few facts from here (the untested macOS sandbox, Codex without a real login, the gate's first keep on merit not yet released, no hive-eval pilot run yet).
+[overview.md](overview.md) repeats a few facts from here (the untested macOS sandbox, Codex without a real login, no real model judging a merge yet, no hive-eval pilot run yet).
 When one of them changes, change it there too.
+
+How a change lands now, after the simplification of 10-29/30 (the person: "just send it, minimal gates, fail fast, stuff breaks but revert"):
+- Soft merge (9306dd2): a worker finishes with `--passed "<test command>"` once the project's tests pass on its commit with main merged in, and its PR merges at once on green forge CI, or on that pass where the project has no forge CI.
+  There is no reviewer stage and no merge line; a PR that conflicts goes back to its worker, who merges main in its own turn.
+  What stays: the security read for paths in `tests/LANDING-security.toml`, protected paths' approval, the person's `hold_merges`, the publish scan, and improve's measure of main after every merge, which reverts a break or a score drop beyond noise ([score.md](score.md)); a fall with tests green after a change taken as a gain goes to a judge ([judge.md](judge.md)).
+- No gate: the recursive gate is out of the merge path and its code is deleted (#2142, PR #2166; [gate.md](gate.md)).
+  A change to the Hive merges on its tests like any other and is measured after.
+- H0 follows main (8fab9b7, 8474502): behaviour (the default modules) is copied from main into `.modules/` on every merge; the binary is built from the newest main commit whose forge CI passed, stamped `<line>-main.<sha8>`, and installed between turns, with the one it replaced kept as `.old` for `hive agent fallback`.
+  H0 ran `v0.1.150-main.8474502b` on 2026-10-30.
+  Releases are still cut for every other install.
+
+The first milestone is met, by the record in [goals](../.hive/goals.md#then-the-gate-recursive): #868, proposed by a step-back and kept by the gate on merit, merged as 1f2f0d0 and has run on H0 since v0.1.120 (2026-10-27).
+That release was cut through the lead's warden request; H0 now installs main's builds with no one in between.
 
 Focus, on the person's word (2026-10-24, [goals](../.hive/goals.md#right-now-a-tight-fast-rsi-loop)): a tight, fast self-improvement loop first, at maximum autonomy, with every agent as able as the lead to act on what the loop needs; work that doesn't serve the loop waits.
 
@@ -27,24 +40,22 @@ The Done list as it stood is in `git show df6ae15:docs/status.md`.
 Edit this page only when what it says now stops being true: the focus, what is paused, not verified or next.
 
 Not verified:
-- A change the recursive gate kept on merit, released and run in place of the Hive that kept it (its first keep, PR #441, won only on a flake of the control's; [gate.md](gate.md)).
+- A real model's judgement of a merge whose score fell with tests green: no judge run has happened yet ([judge.md](judge.md)).
 - Sharing against the live endpoint (https://hive-api.ihsan.cc/v1/report) is probed by hand, one report; the tests use a local endpoint that checks the same contract.
 - Issues, comments and an upstream PR from a fork (`FindPR` by `owner:branch`, `onUpstream`) on real GitHub; the live probe covers fork, PR, merge and release on the fork only.
 - Injection resistance of the tribunal and warden by a real model.
 - The bubblewrap path live: `TestProbeBothPaths` (non-short, `internal/sandbox`) runs `hive sandbox-probe` under each path, but skips both inside a nested sandbox.
   Run it on a stock Ubuntu host.
 - Approved steps on Windows: `execute` runs them with Git for Windows' `sh`, but only the three-system CI run exercises it, and a timeout there ends `sh` and not its children.
-- Live agents with real Claude Code: the first-hour probes (`TestLiveAskLands`, `TestLiveModuleLifecycle`, `TestLiveImproveSweep`) are written but haven't run; run `tests/live.sh` on the tower.
+- The live probes with real Claude Code (H0's own turns run on it all day): the first-hour probes (`TestLiveAskLands`, `TestLiveModuleLifecycle`, `TestLiveImproveSweep`) are written but haven't run; run `tests/live.sh` on the tower.
   Sandboxed live runs read a short-lived token from Claude Code's credential file at run time; not exercised.
 - Self-update from a real release asset over the GitHub API on a person's machine (the one-line install was run once, on v0.1.0).
 - macOS Seatbelt sandbox; native Linux host (same namespace code as WSL).
 - Autostart registration on a real account (the tmux test stubs systemctl and loginctl).
 
 Next:
-1. Owner decision: a live smoke run with real Claude (plan usage; bare vs sandboxed).
-   The repo and releases are already public.
-2. Run `go test ./internal/sandbox/ -run TestProbeBothPaths -v` on a stock Ubuntu host, and `HIVE_E2E_HARNESS=claude go test ./internal/e2e/ -run 'TestLiveWarden|TestLiveTribunal' -v -timeout 90m` for a real warden and panel (plan usage).
-3. A live Codex run with a real Codex login: `HIVE_E2E_HARNESS=codex go test ./internal/e2e/ -run TestLiveWorker -v -timeout 60m` (worker, resume, read-only reviewer, merge, sandboxed).
+1. Run `go test ./internal/sandbox/ -run TestProbeBothPaths -v` on a stock Ubuntu host, and `HIVE_E2E_HARNESS=claude go test ./internal/e2e/ -run 'TestLiveWarden|TestLiveTribunal' -v -timeout 90m` for a real warden and panel (plan usage).
+2. A live Codex run with a real Codex login: `HIVE_E2E_HARNESS=codex go test ./internal/e2e/ -run TestLiveWorker -v -timeout 60m` (worker, resume, read-only reviewer, merge, sandboxed).
    The fake path (`TestCodexEndToEnd`) passes; the rollout-file usage format is read from Codex 0.153's strings and an unauthenticated run, not yet from a real reading.
 
 Resume: read CLAUDE.md, then this file; run `go test -short ./...` and `go test ./internal/e2e/`.
