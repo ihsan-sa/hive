@@ -16,7 +16,10 @@ import (
 // worker has pushed for yet (filed, queued or being worked on) joins that task
 // as added context instead of starting a second worker on the same thing. A
 // match is a failing test both name in their title or done line,
-// a near-identical title, or the same named files under a similar title.
+// a near-identical title, the same named files under a similar title, or,
+// for a task another agent filed within the hour, most of the words of the
+// shorter ask (a step-back's brief and its lead's paraphrase of it minutes
+// later; an agent's own two briefs in a row are two asks it means).
 // Pushed tasks aren't joined: their worker is done, so the added ask would be
 // lost. The person's asks and the Hive's own (trials) are always
 // filed as they come; an agent that means separate work says apart.
@@ -38,7 +41,38 @@ func match(b Brief, t Task) string {
 	if f := files(b.Title + "\n" + b.Done + "\n" + b.Known); sim >= 0.3 && len(f) > 0 && slices.Equal(f, files(t.Title+"\n"+t.Done+"\n"+t.Known)) {
 		return "both name " + strings.Join(f, ", ")
 	}
+	if t.From != b.From && time.Since(t.Created) < recent {
+		_, why, _ := b.taken()
+		if overlap(b.Title, t.Title) >= 0.5 || overlap(b.Title+"\n"+b.Done+"\n"+why, t.Title+"\n"+t.Done+"\n"+t.AimWhy) >= 0.5 {
+			return "it was filed within the hour and shares most of its words"
+		}
+	}
 	return ""
+}
+
+// recent is how long a task's ask is matched by its words alone: long enough
+// for a lead to file what a step-back filed minutes before (10-30: three
+// pairs of the same ask, 3 to 9 minutes apart, about 0.25 by likeness).
+const recent = time.Hour
+
+// overlap is the share of the shorter text's words the other has too; a
+// text of fewer than five words has none, as "add left-pad" is all but
+// contained in "add right-pad".
+func overlap(a, b string) float64 {
+	x, y := words(a), words(b)
+	if len(x) > len(y) {
+		x, y = y, x
+	}
+	if len(x) < 5 {
+		return 0
+	}
+	both := 0
+	for w := range x {
+		if y[w] {
+			both++
+		}
+	}
+	return float64(both) / float64(len(x))
 }
 
 // names are the distinct matches of re in s, sorted.
@@ -64,19 +98,22 @@ func files(s string) []string {
 // stop are words too common in titles to make two of them alike.
 var stop = map[string]bool{"the": true, "and": true, "for": true, "with": true, "from": true, "that": true, "this": true, "into": true, "its": true, "are": true, "not": true, "when": true, "one": true, "all": true, "has": true, "but": true, "out": true, "own": true, "again": true, "instead": true}
 
+// words are a text's distinct words of three letters or more, lower case,
+// common ones left out.
+func words(s string) map[string]bool {
+	out := map[string]bool{}
+	for _, w := range strings.FieldsFunc(strings.ToLower(s), func(r rune) bool {
+		return !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9')
+	}) {
+		if len(w) > 2 && !stop[w] {
+			out[w] = true
+		}
+	}
+	return out
+}
+
 // likeness is the share of words two titles have in common (Jaccard).
 func likeness(a, b string) float64 {
-	words := func(s string) map[string]bool {
-		out := map[string]bool{}
-		for _, w := range strings.FieldsFunc(strings.ToLower(s), func(r rune) bool {
-			return !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9')
-		}) {
-			if len(w) > 2 && !stop[w] {
-				out[w] = true
-			}
-		}
-		return out
-	}
 	x, y := words(a), words(b)
 	if len(x) == 0 || len(y) == 0 {
 		return 0
@@ -149,14 +186,23 @@ func (b Brief) fix() bool {
 // why, or ok false when there is none and b is to be filed on its own. lead
 // says a lead filed it, whose thread then follows the task. A task a step
 // holds is waited on briefly, and all of them for a few seconds at most, as
-// every other agent's brief waits on filing meanwhile.
-func (m *Module) join(b Brief, own string, lead bool) (Task, string, bool) {
+// every other agent's brief waits on filing meanwhile; a brief that matched
+// only tasks still held then is refused rather than filed twice (10-29: the
+// same title filed 11 s apart, both kept).
+func (m *Module) join(b Brief, own string, lead bool) (Task, string, bool, error) {
 	open := m.List(func(t Task) bool { return joinable(t, b, own) })
 	slices.Reverse(open) // oldest first, so a third brief joins the first
 	end := time.Now().Add(4 * time.Second)
+	busy := ""
 	for _, o := range open {
 		why := match(b, o)
-		if why == "" || m.workerEnded(o) || !m.claimWithin(o.ID, min(2*time.Second, time.Until(end))) {
+		if why == "" || m.workerEnded(o) {
+			continue
+		}
+		if !m.claimWithin(o.ID, min(2*time.Second, time.Until(end))) {
+			if busy == "" {
+				busy = fmt.Sprintf("%s (%q): %s", o.ID, o.Label(), why)
+			}
 			continue
 		}
 		t, ok := m.Get(o.ID) // afresh, now no step holds it
@@ -174,9 +220,12 @@ func (m *Module) join(b Brief, own string, lead bool) (Task, string, bool) {
 			m.C.Runs.Send(t.Worker, "Another brief was filed for the same ask as your task, so it joins yours rather than starting a second worker. Cover it too, or say in your account what you left out:\n\n"+added)
 		}
 		m.release(o.ID)
-		return t, why, true
+		return t, why, true, nil
 	}
-	return Task{}, "", false
+	if busy != "" {
+		return Task{}, "", false, fmt.Errorf("not filed: your brief matches open task %s, which a step holds right now; brief again in a minute to join it, or with apart if it is different work", busy)
+	}
+	return Task{}, "", false, nil
 }
 
 // addJoin adds an ask (title, done, known) to t as j, how, for the brief
