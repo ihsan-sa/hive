@@ -101,6 +101,12 @@ type Forge interface {
 	// RerunFailed re-runs the failed jobs of every finished workflow run on
 	// sha that failed, and says how many runs it started again.
 	RerunFailed(repo, sha string) (int, error)
+	// StartCI starts CI on PR number's head sha, on which the forge never
+	// ran it (the PR was opened before its workflow landed on main): it
+	// dispatches each workflow on the head that runs on pull requests and
+	// may be dispatched, else closes and reopens the PR, whose reopened
+	// event runs main's workflows on it. It says which it did.
+	StartCI(repo string, number int, branch, sha string) (string, error)
 	// Releases (the Hive on itself). LatestRelease is the newest, a
 	// pre-release included. CreateRelease cuts a pre-release, which installs
 	// don't follow; PublishRelease makes it the latest once ReleaseRuns, the
@@ -1499,6 +1505,45 @@ func short(sha string) string {
 
 // Short abbreviates a commit id.
 func Short(sha string) string { return short(sha) }
+
+// dispatchable is a workflow file that runs on pull requests (not
+// pull_request_target) and may be dispatched by hand.
+var (
+	onPullRequest = regexp.MustCompile(`\bpull_request\b`)
+	onDispatch    = regexp.MustCompile(`\bworkflow_dispatch\b`)
+)
+
+func (GitHub) StartCI(repo string, number int, branch, sha string) (string, error) {
+	out, err := gh(repo, "api", "repos/"+repo+"/actions/workflows?per_page=100", "-q", `.workflows[] | select(.state=="active") | .path`)
+	if err != nil {
+		return "", err
+	}
+	var started []string
+	for _, path := range strings.Fields(out) {
+		if !strings.HasPrefix(path, ".github/workflows/") {
+			continue
+		}
+		body, err := gh(repo, "api", "repos/"+repo+"/contents/"+path+"?ref="+sha, "-H", "Accept: application/vnd.github.raw")
+		if err != nil || !onPullRequest.MatchString(body) || !onDispatch.MatchString(body) {
+			continue // not on the head, or not one to dispatch
+		}
+		if _, err := gh(repo, "api", "-X", "POST", "repos/"+repo+"/actions/workflows/"+filepath.Base(path)+"/dispatches", "-f", "ref="+branch); err != nil {
+			return "", err
+		}
+		started = append(started, filepath.Base(path))
+	}
+	if len(started) > 0 {
+		return "dispatched " + strings.Join(started, ", ") + " on " + branch, nil
+	}
+	pr := fmt.Sprintf("repos/%s/pulls/%d", repo, number)
+	if _, err := gh(repo, "api", "-X", "PATCH", pr, "-f", "state=closed"); err != nil {
+		return "", err
+	}
+	if _, err := gh(repo, "api", "-X", "PATCH", pr, "-f", "state=open"); err != nil {
+		return "", fmt.Errorf("closed PR #%d to reopen it, and reopening failed: %w", number, err)
+	}
+	return fmt.Sprintf("closed and reopened PR #%d (no workflow on its head may be dispatched)", number), nil
+}
 
 // RerunFailed re-runs the failed jobs (gh run rerun --failed) of each
 // finished workflow run on sha that failed, timed out or was cancelled. A run

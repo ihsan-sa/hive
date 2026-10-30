@@ -66,3 +66,53 @@ func TestGitClearsStaleLock(t *testing.T) {
 		t.Fatal("cleared a lock outside the repo's .git")
 	}
 }
+
+// A call fixed by the commits it names runs git once; a ref, a single-commit
+// diff (against the working tree) or merge-tree runs every time, and an
+// ancestry's "no" (exit 1) is kept like its "yes".
+func TestGitMemoPureCalls(t *testing.T) {
+	a, b := strings.Repeat("a", 40), strings.Repeat("b", 40)
+	for _, args := range [][]string{{"merge-base", "--is-ancestor", a, b}, {"diff", "--binary", a, b}, {"show", a + ":x/y"}, {"show", a}} {
+		if !pureGit(args) {
+			t.Errorf("%v isn't taken as pure", args)
+		}
+	}
+	for _, args := range [][]string{{"merge-base", "--is-ancestor", "refs/heads/main", b}, {"diff", "--quiet", a}, {"merge-tree", "--write-tree", a, b}, {"diff", a, b, "--", "x"}, {"show", "main:x"}, {"-c", "x=y", "diff", a, b}, {"rev-parse", a}} {
+		if pureGit(args) {
+			t.Errorf("%v is taken as pure", args)
+		}
+	}
+	dir := t.TempDir()
+	must := func(args ...string) string {
+		out, err := Git(dir, args...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	must("init", "-q")
+	os.WriteFile(filepath.Join(dir, "f"), []byte("1"), 0o644)
+	must("add", "f")
+	must("commit", "-q", "-m", "1")
+	one := must("rev-parse", "HEAD")
+	os.WriteFile(filepath.Join(dir, "f"), []byte("2"), 0o644)
+	must("commit", "-q", "-am", "2")
+	two := must("rev-parse", "HEAD")
+	trace := filepath.Join(t.TempDir(), "trace")
+	t.Setenv("GIT_TRACE", trace)
+	for i := 0; i < 3; i++ {
+		if _, err := Git(dir, "merge-base", "--is-ancestor", two, one); err == nil {
+			t.Fatal("the later commit is taken for an ancestor")
+		}
+		if out, _ := Git(dir, "show", one+":f"); out != "1" {
+			t.Fatalf("show %q", out)
+		}
+		Git(dir, "rev-parse", "HEAD")
+	}
+	got, _ := os.ReadFile(trace)
+	for want, n := range map[string]int{"git merge-base ": 1, "git show ": 1, "git rev-parse ": 3} {
+		if c := strings.Count(string(got), want); c != n {
+			t.Errorf("%s ran %d times, want %d", want, c, n)
+		}
+	}
+}

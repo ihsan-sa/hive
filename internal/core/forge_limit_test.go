@@ -290,6 +290,54 @@ func TestRerunFailedRunsOnlyFailedRuns(t *testing.T) {
 	}
 }
 
+// StartCI dispatches only the workflows on the head that run on pull
+// requests and may be dispatched; with none, it closes and reopens the PR.
+func TestStartCIDispatchesElseReopens(t *testing.T) {
+	files := map[string]string{
+		".github/workflows/ci.yml":      "on:\n  pull_request:\n  workflow_dispatch:\n",
+		".github/workflows/release.yml": "on:\n  release:\n  workflow_dispatch:\n",
+		".github/workflows/target.yml":  "on:\n  pull_request_target:\n  workflow_dispatch:\n",
+	}
+	calls := stubGH(t, func(args []string) (string, string, error) {
+		if strings.Contains(args[1], "actions/workflows?") {
+			return ".github/workflows/ci.yml\n.github/workflows/release.yml\n.github/workflows/target.yml\n", "", nil
+		}
+		if path, ok := strings.CutPrefix(args[1], "repos/o/r/contents/"); ok {
+			path, _, _ = strings.Cut(path, "?")
+			if body, ok := files[path]; ok {
+				return body, "", nil
+			}
+			return "", "HTTP 404", errors.New("HTTP 404")
+		}
+		return "", "", nil
+	})
+	how, err := GitHub{}.StartCI("o/r", 9, "hive/x", "abc")
+	if err != nil || !strings.Contains(how, "ci.yml") {
+		t.Fatalf("how %q, err %v", how, err)
+	}
+	var writes []string
+	for _, c := range *calls {
+		if slices.Contains(c, "-X") {
+			writes = append(writes, strings.Join(c, " "))
+		}
+	}
+	if strings.Join(writes, "; ") != "api -X POST repos/o/r/actions/workflows/ci.yml/dispatches -f ref=hive/x" {
+		t.Fatalf("writes %q", writes)
+	}
+	delete(files, ".github/workflows/ci.yml") // the head predates ci.yml
+	*calls = nil
+	how, err = GitHub{}.StartCI("o/r", 9, "hive/x", "abc")
+	writes = nil
+	for _, c := range *calls {
+		if slices.Contains(c, "-X") {
+			writes = append(writes, strings.Join(c, " "))
+		}
+	}
+	if err != nil || !strings.Contains(how, "reopened") || strings.Join(writes, "; ") != "api -X PATCH repos/o/r/pulls/9 -f state=closed; api -X PATCH repos/o/r/pulls/9 -f state=open" {
+		t.Fatalf("how %q, err %v, writes %q", how, err, writes)
+	}
+}
+
 // A re-run's attempt still queued has no start yet; its larger id makes it
 // the one that counts, not the failed attempt before it.
 func TestChecksNewestAttemptByID(t *testing.T) {
