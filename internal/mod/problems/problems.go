@@ -40,10 +40,33 @@ type Problem struct {
 	Solved  string    `json:"solved,omitempty"` // how, once solved
 	Last    time.Time `json:"last"`             // the latest word on it
 	Key     string    `json:"key,omitempty"`    // the failing test it is, when the Hive posted it (Seen)
+	// Standing: a module's standing report (Standing), kept current by it
+	// and solved when it clears, so it never fades from the briefs.
+	Standing bool `json:"standing,omitempty"`
 }
 
 // Open says whether the problem still stands.
 func (p Problem) Open() bool { return p.Solved == "" }
+
+// Reporters is how many runs have put a word on it, the poster included: a
+// me-too, a clue or the cause each count once per run.
+func (p Problem) Reporters() int {
+	runs := map[string]bool{p.Run: true}
+	for _, n := range p.Notes {
+		runs[n.Run] = true
+	}
+	return len(runs)
+}
+
+// fade is how long a problem with no new word stays in the briefs. Like a
+// trail no ant walks again, it then leaves them (it stays on `problems`
+// until solved), so the board shows what agents meet now, not every old
+// path (docs/research/collaboration.md).
+var fade = 24 * time.Hour
+
+// quorum is the reporters at which a problem is the Hive's, not one run's:
+// it ranks first and a sweep files it as a brief.
+const quorum = 2
 
 // Module is the problems board.
 type Module struct {
@@ -135,13 +158,17 @@ func cmpOr(a, b string) string {
 
 // Post puts a new problem on the board from run r.
 func (m *Module) Post(r core.Run, where, text string) (Problem, error) {
+	return m.post(r, where, text, false)
+}
+
+func (m *Module) post(r core.Run, where, text string, standing bool) (Problem, error) {
 	text = strings.TrimSpace(text)
 	if text == "" {
 		return Problem{}, errors.New("empty problem: say what you ran into and what you found")
 	}
 	now := time.Now().UTC()
 	p := Problem{ID: "p-" + core.NewID(), At: now, Last: now, Run: r.ID, Role: r.Role, Name: r.Name, Project: r.Project,
-		Where: core.Clip(strings.TrimSpace(where), 80), Text: core.Clip(text, 2000)}
+		Where: core.Clip(strings.TrimSpace(where), 80), Text: core.Clip(text, 2000), Standing: standing}
 	_, err := m.C.J.Append("problem.saved", p)
 	return p, err
 }
@@ -157,7 +184,7 @@ func (m *Module) Standing(r core.Run, where, text string) error {
 	case len(open) == 0 && text == "":
 		return nil
 	case len(open) == 0:
-		_, err := m.Post(r, where, text)
+		_, err := m.post(r, where, text, true)
 		return err
 	case text == "":
 		_, err := m.save(r, open[0].ID, func(p *Problem) { p.Solved = "nothing stands any more (" + r.ID + ")" })
@@ -289,6 +316,9 @@ func lines(list []Problem) string {
 		if n := len(p.Notes); n > 0 {
 			fmt.Fprintf(&b, "; %d more", n)
 		}
+		if n := p.Reporters(); n >= quorum && p.Open() {
+			fmt.Fprintf(&b, "; met by %d runs, so a sweep files it as a brief unless one is filed", n)
+		}
 		fmt.Fprintf(&b, "): %s\n", oneLine(core.Clip(p.Text, 300)))
 		if n := len(p.Notes); n > 0 {
 			last := p.Notes[n-1]
@@ -304,22 +334,29 @@ func lines(list []Problem) string {
 func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }
 
 // Brief is the board's section of a run's system prompt: the open problems a
-// run of role in project may see, latest first, or "" when there are none or
-// the role weighs one thing on its own.
+// run of role in project may see that had a word within fade (a sweep
+// sees them all), those more
+// runs met first, then the latest; or "" when there are none or the role
+// weighs one thing on its own.
 func (m *Module) Brief(role, project string) string {
 	if quiet[role] {
 		return ""
 	}
-	list := m.List(func(p Problem) bool { return p.Open() && m.visible(p, project) })
+	cut := time.Now().Add(-fade)
+	if role == "sweep" {
+		cut = time.Time{} // it files the ones open long with no fix
+	}
+	list := m.List(func(p Problem) bool { return p.Open() && m.visible(p, project) && (p.Standing || p.Last.After(cut)) })
 	if len(list) == 0 {
 		return ""
 	}
+	sort.SliceStable(list, func(i, j int) bool { return min(list[i].Reporters(), quorum) > min(list[j].Reporters(), quorum) })
 	more := ""
 	if len(list) > 8 {
 		more = fmt.Sprintf("\n%d more: `hive agent problems`.\n", len(list)-8)
 		list = list[:8]
 	}
-	return "## The Hive's open problems\n\nWhat other agents are running into now, from the problems board. If your work touches one, or you find its cause or a fix on the way, add to it (`hive agent problem --id <id> --also \"...\"`) and message its poster; close it with `--solved \"how\"` once it is. Post what you run into yourself with `hive agent problem --text \"...\" --where \"...\"`.\n\n" + lines(list) + more
+	return "## The Hive's open problems\n\nWhat other agents are running into now, from the problems board. If your work touches one, or you find its cause or a fix on the way, add to it (`hive agent problem --id <id> --also \"...\"`) and message its poster; close it with `--solved \"how\"` once it is. Post what you run into yourself with `hive agent problem --text \"...\" --where \"...\"`; if it is on the board already, add \"me too\" to it instead, which ranks it up. One no one adds to for a day leaves this list.\n\n" + lines(list) + more
 }
 
 // Match is the board items a run in project searching for query should see

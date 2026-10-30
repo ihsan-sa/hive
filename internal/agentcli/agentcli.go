@@ -178,7 +178,7 @@ A value of @path reads that file. Common ops:
                                                  file an ask: it becomes an issue, a worker, a PR; a fix with
                                                  --aim fix --why, or when it names something broken;
                                                  else (or with --aim gain) taken as a gain
-  aim       --aim fix|gain --why "..." [--task id]   your task (or any on your project) is a fix of the failure --why
+  aim       --aim fix|gain --why "..." [--task id]   your task (or any other) is a fix of the failure --why
                                                  names, which merges on its tests and reads and isn't reverted
                                                  for a score dip alone, or a gain, which on the Hive's own
                                                  repository merges only on the recursive gate's clear gain
@@ -201,21 +201,19 @@ A value of @path reads that file. Common ops:
   status                                         projects, work in flight, scores
   github    --pr N | --checks sha | --annotations id | --path "repos/o/r/..." [--repo o/r]
                                                  GitHub's API on the person's login, cached; never curl api.github.com
-Every agent is the same: lead, worker and sweep are names, not ranks, and every op below is yours
-(only the warden and tribunal are set apart). These act on your own project's work, on the record
-with your run id.
+Every agent is the same: lead, worker and sweep are names, not ranks, and every op below is yours,
+on any project's work as on your own, on the record with your run id.
   rerun-checks [--task id]                      the failed forge checks (CI jobs) on a PR's head (yours by default)
                                                  run again, for a flake; at most 2 per head, the merge waits for them
   queue     [--order id,id] [--hold id] [--release id]   briefs waiting for a worker, in order
             [--now id --why "..."]               put it first in line
-                                                 any project's: --why on one not yours, on its record
-  recheck   --task id [--back "..."]           a blocked or stopped task, or one stuck on its way to
-                                                 the merge (say on a stale commit's checks), is pushed and
+  recheck   --task id [--back "..."]           any task: a blocked, stopped or stuck one is pushed and
                                                  checked again from its head; --back sends its worker that
+                                                 (a working one gets it at once)
   landed    --task id --why "..." [--merge sha]  end a task whose PR merged on the forge or whose
                                                  work is on main, so the briefs waiting on it start
   amend     --task id [--title ...] [--done ...] [--known ...] [--why ...]   change a brief no worker
-                                                 has started on, in place (yours; the lead: any but the person's)
+                                                 has started on, in place (anyone's)
   withdraw  --task id --why "..." [--into id]   take back such a brief: it stops, its issue closes
   fallback  --why "..."                         the Hive that follows its own main puts back
                                                  the binary its last update replaced and restarts, at once

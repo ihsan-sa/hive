@@ -144,9 +144,9 @@ func New(c *core.Core, mod *modules.Registry, ag *agents.Agents) *Module {
 	}
 	ops := c.Runs.Ops()
 	ops.Register(core.Op{Name: "warden", Help: `{"want","why","steps","tier":"T1|T2|T3","gain":"(optional) large"} -> T1 you weigh yourself; T2 goes to a warden, T3 to a tribunal`, Fn: m.opRequest})
-	ops.Register(core.Op{Name: "decide", Roles: []string{"warden"}, Help: `{"decision":"do|safer|decline|tribunal|person","reason","script":"exactly what runs (do, tribunal; person if you have one)","gain":"(optional) large"}`, Fn: m.opDecide})
+	ops.Register(core.Op{Name: "decide", Help: `{"decision":"do|safer|decline|tribunal|person","reason","script":"exactly what runs (do, tribunal; person if you have one)","gain":"(optional) large"}`, Fn: m.opDecide})
 	ops.Register(core.Op{Name: "requests", Help: `{} -> recent requests past the sandbox: who asked, what, why, where each stands`, Fn: m.opRequests})
-	ops.Register(core.Op{Name: "install_module", Roles: core.Peers, Help: `{"url"} or {"project"}: a module built as a project of its own installs from it`, Fn: m.opInstall})
+	ops.Register(core.Op{Name: "install_module", Help: `{"url"} or {"project"}: a module built as a project of its own installs from it`, Fn: m.opInstall})
 	c.Person.Handle("request", m.onAnswer)
 	c.Person.Handle("module", m.onModule)
 	// A warden that asks an agent ends its turn to wait for the reply, so it

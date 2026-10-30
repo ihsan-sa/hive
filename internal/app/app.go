@@ -153,6 +153,15 @@ func New(ws core.Workspace, forge core.Forge) (*App, error) {
 	a.System.Register(system.Job{Name: "hive.clean", AtStart: true, Fn: func() (string, error) { return a.Clean(), nil }})
 	c.Effects.OnDiskFull = func() { a.System.RunNow("hive.clean") }
 	c.Effects.Granted = a.Mods.Granted
+	c.Effects.ModuleHomes = func(project string) []string {
+		var homes []string
+		if p, ok := a.C.Projects.Get(project); ok {
+			for _, m := range a.builtFrom(p) {
+				homes = append(homes, runner.Home(a.C.WS, filepath.Base(m.Dir)))
+			}
+		}
+		return homes
+	}
 	return a, nil
 }
 
@@ -175,10 +184,8 @@ func (a *App) followMerge(e core.Event) {
 	}
 	clone := a.C.WS.Project(p.Name)
 	var sources []string
-	for _, m := range a.Mods.List() {
-		if s := m.Source.Source; s == clone || (p.Repo != "" && strings.HasSuffix(strings.TrimSuffix(strings.TrimRight(s, "/"), ".git"), "/"+p.Repo)) {
-			sources = append(sources, s)
-		}
+	for _, m := range a.builtFrom(p) {
+		sources = append(sources, m.Source.Source)
 	}
 	if len(sources) == 0 {
 		return
@@ -189,6 +196,19 @@ func (a *App) followMerge(e core.Event) {
 		}
 	}
 	a.Mods.UpdateFrom(sources)
+}
+
+// builtFrom lists the installed modules whose source is project p: its host
+// clone or its repository on the forge.
+func (a *App) builtFrom(p core.Project) []modules.Module {
+	clone := a.C.WS.Project(p.Name)
+	var out []modules.Module
+	for _, m := range a.Mods.List() {
+		if s := m.Source.Source; s == clone || (p.Repo != "" && strings.HasSuffix(strings.TrimSuffix(strings.TrimRight(s, "/"), ".git"), "/"+p.Repo)) {
+			out = append(out, m)
+		}
+	}
+	return out
 }
 
 // moduleJobs registers the jobs module programs serve (a manifest's

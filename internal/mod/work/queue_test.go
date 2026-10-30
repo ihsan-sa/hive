@@ -159,22 +159,12 @@ func TestWorkerHoldsQueuedBrief(t *testing.T) {
 	tick(m)
 	worker := core.Run{RunSpec: core.RunSpec{ID: "w-" + a.ID, Role: "worker", Project: "p"}}
 	stranger := core.Run{RunSpec: core.RunSpec{ID: "w-other", Role: "worker", Project: "q"}}
-	out, err := m.C.Runs.Ops().Call(stranger, "queue", json.RawMessage(`{"hold":"`+c.ID+`"}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if notes := fmt.Sprint(out.(map[string]any)["notes"]); !strings.Contains(notes, c.ID+" is on project p; say why with why") {
-		t.Fatalf("the stranger wasn't refused by reach: %s", notes)
-	}
-	if got := stageOf(t, m, c); got.Held {
-		t.Fatalf("a worker on another project held the brief without why: %+v", got)
-	}
 	// A new order from the stranger touches only its own project's line: p's
 	// ordered brief keeps its place, with no note about a brief it never named.
 	placed := stageOf(t, m, c)
 	placed.Order = 1
 	m.save(&placed, "")
-	out, err = m.C.Runs.Ops().Call(stranger, "queue", json.RawMessage(`{"order":"nope"}`))
+	out, err := m.C.Runs.Ops().Call(stranger, "queue", json.RawMessage(`{"order":"nope"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
