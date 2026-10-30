@@ -347,11 +347,15 @@ type Module struct {
 	heavyHeld heavyLeases
 	// backMu guards backIn: the workers sent back to their tasks that the
 	// pace has let take their next turn (paceBack).
-	backMu  sync.Mutex
-	backIn  map[string]bool
-	filing  sync.Mutex     // one agent's brief is matched and filed at a time (join.go)
-	meeting sync.Mutex     // one started worker meets its neighbours at a time (meet.go)
-	steps   sync.WaitGroup // the steps Tick started, and the checks they queued, still going
+	// turnIn and turnWait, also under backMu, are the turns given a slot
+	// that haven't started yet and the turns waiting for one (turnSlot).
+	backMu   sync.Mutex
+	backIn   map[string]bool
+	turnIn   map[string]turnPassed
+	turnWait map[string]turnWaiter
+	filing   sync.Mutex     // one agent's brief is matched and filed at a time (join.go)
+	meeting  sync.Mutex     // one started worker meets its neighbours at a time (meet.go)
+	steps    sync.WaitGroup // the steps Tick started, and the checks they queued, still going
 	// mainRed holds project@sha for every main commit whose red tests were
 	// already raised, so each is raised once whatever the tasks say now. It
 	// grows by one key per red main commit and isn't pruned; that's small.
@@ -428,6 +432,13 @@ func New(c *core.Core, a *agents.Agents, ch *chat.Module) *Module {
 	m.backIn = map[string]bool{}
 	c.Runs.Admit = m.paceBack
 	apply := func(e core.Event) {
+		if e.Kind == "pace.changed" {
+			var c struct{ Limit string }
+			if e.Decode(&c) == nil && c.Limit == "workers" {
+				m.workers.resume(e)
+			}
+			return
+		}
 		if e.Kind == "merge.held" || e.Kind == "merge.lifted" {
 			m.applyHold(e)
 			return

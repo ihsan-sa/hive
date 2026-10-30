@@ -887,3 +887,99 @@ func TestIOPressureHoldsNewWorkers(t *testing.T) {
 		t.Errorf("memory and io: %q", why)
 	}
 }
+
+// A restart starts the workers' pace where the last daemon left it, not
+// from what runs: on 10-30 a pace of 1 became 13 at the start, and 29 turns
+// the stop had cut resumed within 60 s (issue #2135).
+func TestPaceResumesWhereTheLastDaemonLeftIt(t *testing.T) {
+	m := queueRig(t)
+	m.workers.mu.Lock()
+	m.workers.limit, m.workers.start = 0, 0
+	m.workers.mu.Unlock()
+	m.C.J.MustAppend("pace.changed", map[string]any{"limit": "checks", "from": 2, "to": 5, "why": "grew"})
+	m.C.J.MustAppend("pace.changed", map[string]any{"limit": "workers", "from": 2, "to": 1, "why": "pulled back"})
+	if l := m.workers.get(); l != 1 {
+		t.Fatalf("before the first read: %d, want the last daemon's 1", l)
+	}
+	if l := m.workers.next(time.Now(), 13, true, "", true, 4, 20); l != 1 {
+		t.Fatalf("first read with 13 at work: %d, want 1", l)
+	}
+	if !strings.Contains(m.workers.String(), "before the restart") {
+		t.Fatalf("says %q", m.workers.String())
+	}
+	p := pace{before: 30}
+	if l := p.next(time.Now(), 3, true, "", true, 4, 8); l != 8 {
+		t.Fatalf("a journaled 30 under a ceiling of 8: %d", l)
+	}
+}
+
+// Every turn of a worker after its first takes a slot under the workers'
+// pace: one resumed (after a restart, a message, a nudge) starts only while
+// the worker turns running, and those let through to start, are under it,
+// and the turn that has waited longest goes first.
+func TestResumedTurnsTakeASlot(t *testing.T) {
+	m := queueRig(t)
+	cfg := m.C.WS.LoadConfig()
+	cfg.MaxWorkers = 0
+	cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax, cfg.LoadMax = 0, 0, 0, 0
+	cfg.IOPressureMax, cfg.IOFullMax = 0, 0
+	m.C.WS.SaveConfig(cfg)
+	set := func(l int) {
+		m.workers.mu.Lock()
+		m.workers.limit, m.workers.start, m.workers.at = l, defaultWorkers, time.Now()
+		m.workers.mu.Unlock()
+	}
+	set(2)
+	a := file(t, m, "first", "")
+	b := file(t, m, "second", "")
+	tick(m)
+	set(1)
+	var ids []string
+	for _, task := range []Task{a, b} {
+		got := stageOf(t, m, task)
+		if got.Worker == "" {
+			t.Fatalf("%q: no worker", task.Title)
+		}
+		ids = append(ids, got.Worker)
+	}
+	turn := func(id string, n int, end bool) {
+		if end {
+			m.C.J.MustAppend("run.turn_ended", map[string]any{"id": id, "turn": n, "status": core.StatusIdle})
+			m.C.J.MustAppend("run.queued", map[string]any{"id": id, "text": "a reply"})
+		} else {
+			m.C.J.MustAppend("run.turn_started", map[string]any{"id": id, "turn": n})
+		}
+	}
+	admit := func(id string) string {
+		r, _ := m.C.Runs.Get(id)
+		return m.C.Runs.Admit(r)
+	}
+	for _, id := range ids { // both took a turn, which ended (a restart cut it)
+		turn(id, 1, false)
+		turn(id, 1, true)
+	}
+	if why := admit(ids[0]); why != "" {
+		t.Fatalf("the first resumed, nothing running: %q", why)
+	}
+	if why := admit(ids[1]); !strings.Contains(why, "takes a slot") {
+		t.Fatalf("the second resumed at a pace of 1 with one let through: %q, want it waiting", why)
+	}
+	if why := admit(ids[0]); why != "" {
+		t.Fatalf("the first again, already let through: %q", why)
+	}
+	turn(ids[0], 2, false)
+	if why := admit(ids[1]); why == "" {
+		t.Fatal("the second while the first's turn runs at a pace of 1: let through")
+	}
+	turn(ids[0], 2, true)
+	if why := admit(ids[0]); why == "" {
+		t.Fatal("the first's next turn went ahead of the second, which waited longer")
+	}
+	if why := admit(ids[1]); why != "" {
+		t.Fatalf("the second once the first's turn ended: %q", why)
+	}
+	set(2)
+	if why := admit(ids[0]); why != "" {
+		t.Fatalf("the first at a pace of 2, one let through: %q", why)
+	}
+}
