@@ -518,8 +518,22 @@ func (m *Module) transcript(r core.Run, n int) string {
 //
 // The commits the setup left (sha, from s.From) go to the worker too, as a
 // patch it can apply: when the step-back ran on the Hive itself they are the
-// change that already won, so the fault asks for them on main first.
+// change that already won, so the fault asks for them on main first. On any
+// other project they go to that project as its own task too, so the score the
+// setup reached isn't left in a copy no one merges.
 func (m *Module) fileFault(s StepBack, p core.Project, exp core.Run, sha string, sc core.Score) string {
+	ported := ""
+	if patch, n := m.leftPatch(p, s.From, sha); n > 0 && !p.Self {
+		t, err := m.Work.File(work.Brief{Project: p.Name, From: s.Run, Aim: work.AimGain,
+			Title:  fmt.Sprintf("Take the step-back's %g onto main: forward-port its %d commit(s)", *s.Score, n),
+			Why:    fmt.Sprintf("a step-back's setup scored %g from %s against main's %g; its commits are the win", *s.Score, core.Short(s.From), *s.Control),
+			Known:  fmt.Sprintf("A step-back ran one plain session on this project from %s (run %s) and its copy scored %g, against main's %g scored beside it. Its %d commit(s) are in $HIVE_RUN/commits.patch (git format-patch from %s). They start from that commit, not main: apply them with `git am -3 $HIVE_RUN/commits.patch` and resolve what main changed since.", core.Short(s.From), exp.ID, *s.Score, *s.Control, n, core.Short(s.From)),
+			Done:   "the setup's commits are forward-ported onto main, keeping what still holds (main may already do some of it) and saying in the account what was left out and why; the score is run before finishing",
+			Inputs: map[string]string{"commits.patch": patch}})
+		if err == nil {
+			ported = t.ID
+		}
+	}
 	var ids []string
 	var shown []core.Run
 	var spent float64
@@ -560,6 +574,9 @@ The setup ran as %s; the Hive's latest runs on the project were %s.
 			} else if n > 0 {
 				inputs["changes.patch"] = patch
 				known += fmt.Sprintf("\n\nWhat the setup changed in its copy (%d commit(s)) is in $HIVE_RUN/changes.patch, to compare with what the Hive's runs did; it is the project's code, so quote none of it either.", n)
+				if ported != "" {
+					known += fmt.Sprintf(" Bringing those commits onto %s is its own task, %s, filed there; this one is about why the Hive's runs didn't get there themselves.", p.Name, ported)
+				}
 			}
 			t, err := m.Work.File(work.Brief{Project: self.Name, Title: title, From: s.Run, Aim: work.AimGain, Why: "a simpler setup scored better; this aims to win that back", Known: known, Inputs: inputs, Done: done})
 			if err == nil {
