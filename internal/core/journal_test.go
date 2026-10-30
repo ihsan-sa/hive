@@ -130,3 +130,49 @@ func TestJournalAppendsShareTheirFsync(t *testing.T) {
 		t.Fatalf("%d events %v, synced %d of %d", len(seqs), seqs, j.synced, j.size)
 	}
 }
+
+// A Replay of some kinds gives the same events as filtering the whole file,
+// in file order, for lines read at open and appended since, with a "*" kind
+// matching a start; once another writer grew the file, it reads the whole
+// file and still sees that writer's line.
+func TestJournalReplaysKindsFromItsIndex(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "events.jsonl")
+	j, err := OpenJournal(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	kinds := []string{"a", "release.ci_waiting", "release.ci_failed", "b"}
+	for i := range 200 {
+		j.MustAppend(kinds[i%len(kinds)], map[string]int{"i": i})
+	}
+	j.Close()
+	if j, err = OpenJournal(path); err != nil {
+		t.Fatal(err)
+	}
+	defer j.Close()
+	for i := range 100 {
+		j.MustAppend(kinds[i%len(kinds)], map[string]int{"i": i})
+	}
+	seqs := func(kinds ...string) (out []int64) {
+		j.Replay(func(e Event) { out = append(out, e.Seq) }, kinds...)
+		return out
+	}
+	var want []int64
+	j.Replay(func(e Event) {
+		if e.Kind == "a" || strings.HasPrefix(e.Kind, "release.ci_") {
+			want = append(want, e.Seq)
+		}
+	})
+	if got := seqs("release.ci_*", "a"); len(want) != 225 || !slices.Equal(got, want) {
+		t.Fatalf("Replay(a, release.ci_*): %d events, want %d of 225 in order", len(got), len(want))
+	}
+	if got := seqs("none"); len(got) != 0 {
+		t.Fatalf("Replay(none): %d events", len(got))
+	}
+	f, _ := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+	f.WriteString(`{"seq":999,"kind":"a"}` + "\n") // a second writer
+	f.Close()
+	if got := seqs("a"); len(got) != 76 || got[len(got)-1] != 999 {
+		t.Fatalf("after another writer: %d events of a, want 76 ending with its 999", len(got))
+	}
+}

@@ -11,7 +11,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -56,6 +58,11 @@ type Journal struct {
 	// size is where the next line goes; marks index the file for Since.
 	size  int64
 	marks []mark
+	// spans index each kind's lines, so a Replay of a few kinds reads those
+	// lines, not the whole journal: on 2026-10-30 the release module's
+	// replays read the 1.09 GB file ~20 times every 5 minutes, ~40 MB/s of
+	// the disk once it fell out of the page cache.
+	spans map[string][]span
 	// syncMu orders the fsyncs; synced is how much of the file the last one
 	// covered. An append waits for an fsync that covers its line, one an
 	// append beside it may already be making: on a saturated disk an fsync
@@ -73,6 +80,17 @@ type Journal struct {
 type mark struct{ off, seq int64 }
 
 const markEvery = 1 << 20
+
+// A span is where one line starts and how long it is, without its newline.
+type span struct{ off, n int64 }
+
+// index notes a line of kind at off.
+func (j *Journal) index(kind string, off int64, n int) {
+	if j.spans == nil {
+		j.spans = map[string][]span{}
+	}
+	j.spans[kind] = append(j.spans[kind], span{off, int64(n)})
+}
 
 // mark notes a line starting at off, before the event it holds is counted.
 func (j *Journal) mark(off int64) {
@@ -99,6 +117,7 @@ func OpenJournal(path string) (*Journal, error) {
 			return
 		}
 		j.mark(off)
+		j.index(e.Kind, off, len(raw))
 		if e.Seq <= j.seq {
 			j.breaks++
 		}
@@ -150,6 +169,9 @@ func (j *Journal) Append(kind string, data any) (Event, error) {
 	e := Event{Seq: j.seq, At: time.Now().UTC(), Kind: kind, Data: raw}
 	line, _ := json.Marshal(e)
 	n, err := j.f.Write(append(line, '\n'))
+	if err == nil {
+		j.index(kind, j.size, len(line))
+	}
 	j.size += int64(n)
 	end := j.size
 	subs := append([]func(Event){}, j.subs...)
@@ -197,14 +219,58 @@ func (j *Journal) MustAppend(kind string, data any) Event {
 	return e
 }
 
-// Replay calls fn for every complete event in the file, in order.
-func (j *Journal) Replay(fn func(Event)) error {
-	return ReadJSONL(j.path, func(raw []byte) {
+// Replay calls fn for every complete event in the file, in order; with
+// kinds, only for the events of those kinds ("release.ci_*" is every kind
+// with that start), read from the index rather than the whole file. If
+// another writer grew the file, the index doesn't cover it and the whole
+// file is read.
+func (j *Journal) Replay(fn func(Event), kinds ...string) error {
+	want := func(kind string) bool {
+		for _, k := range kinds {
+			if pre, ok := strings.CutSuffix(k, "*"); ok && strings.HasPrefix(kind, pre) || kind == k {
+				return true
+			}
+		}
+		return len(kinds) == 0
+	}
+	j.mu.Lock()
+	var at []span
+	for k, s := range j.spans {
+		if want(k) {
+			at = append(at, s...)
+		}
+	}
+	size := j.size
+	j.mu.Unlock()
+	f, err := os.Open(j.path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	if fi, err := f.Stat(); len(kinds) == 0 || j.f == nil || err != nil || fi.Size() != size {
+		return ReadJSONL(j.path, func(raw []byte) {
+			var e Event
+			if json.Unmarshal(raw, &e) == nil && e.Kind != "" && want(e.Kind) {
+				fn(e)
+			}
+		})
+	}
+	sort.Slice(at, func(a, b int) bool { return at[a].off < at[b].off })
+	var buf []byte
+	for _, s := range at {
+		buf = slices.Grow(buf[:0], int(s.n))[:s.n]
+		if _, err := f.ReadAt(buf, s.off); err != nil {
+			return err
+		}
 		var e Event
-		if json.Unmarshal(raw, &e) == nil && e.Kind != "" {
+		if json.Unmarshal(buf, &e) == nil && e.Kind != "" {
 			fn(e)
 		}
-	})
+	}
+	return nil
 }
 
 // Since returns events with Seq > after, reading from the last mark before
