@@ -75,11 +75,11 @@ func (t Task) Overdue() bool {
 // room for another turn beside those started this pass, and no measure of
 // main holds turns on a full CPU (core.Runs.Yielding), as launch weighs
 // every turn. On a saturated disk (core.DiskBusy) none starts while another
-// worker works: the running ones go on, and the loop never stops for want
-// of one. One any of those would hold starts anyway, one a pass, when an
-// executor module has room for its project's worker (core.Runs.ElsewhereFor):
-// it starts as an away run (m.away), whose turns go there first.
-// tasks is every task Tick looks at.
+// worker is in a turn (inTurn): the running ones go on, and the loop never
+// stops for want of one. One any of those would hold starts anyway, one a
+// pass, when an executor module has room for its project's worker
+// (core.Runs.ElsewhereFor): it starts as an away run (m.away), whose turns
+// go there first. tasks is every task Tick looks at.
 func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]string) {
 	start, wait = map[string]bool{}, map[string]string{}
 	cfg := m.C.WS.LoadConfig()
@@ -97,7 +97,7 @@ func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]str
 		disk = diskBusy(cfg.DiskFull())
 	}
 	for _, t := range tasks {
-		if disk != "" && t.Stage == StageWorking && !m.slotless(t) {
+		if disk != "" && t.Stage == StageWorking && m.inTurn(t) {
 			working++
 		}
 	}
@@ -161,6 +161,20 @@ func (m *Module) slotless(t Task) bool {
 		return time.Until(r.ParkedUntil) >= parkedFree
 	}
 	return false
+}
+
+// inTurn reports whether t's worker is in a turn or about to take one (its
+// run is running, queued for a sandbox, or not made yet), which is what the
+// disk gate counts: one idle on the person or parked holds no disk. On 10-30
+// the eval pilot's worker, idle 6h on the person's Waiting item, counted as
+// working and no worker turn started for 94 minutes on a disk the person's
+// own sessions kept busy.
+func (m *Module) inTurn(t Task) bool {
+	r, ok := m.C.Runs.Get(t.Worker)
+	if !ok {
+		return true
+	}
+	return r.Status == core.StatusRunning || r.Status == core.StatusQueued
 }
 
 // pathLike is a word that reads as a path in the project.

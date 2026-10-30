@@ -1555,6 +1555,7 @@ func (m *Module) renderBrief(t *Task, p core.Project, base string) string {
 	b.WriteString("## The project\n\n")
 	b.WriteString("- Goals: `.hive/goals.md`.\n")
 	fmt.Fprintf(&b, "- Tests: `%s`\n", orNone(cfg.Test))
+	b.WriteString("- Run the tests and any other build, test suite or render as `hive heavy -- sh -c '...'`: heavy commands run one at a time on this machine, so each keeps its files in memory instead of re-reading them from a saturated disk.\n")
 	if p.Self {
 		if t.Fix() {
 			b.WriteString("- Aim: a fix (" + orNone(t.AimWhy) + "): a score dip after it merges files a look into it rather than reverting it. Not a fix? `hive agent aim --aim gain`.\n")

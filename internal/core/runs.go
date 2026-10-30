@@ -2790,6 +2790,13 @@ func (rs *Runs) sandboxSpec(cfg Config, sb sandbox.Sandbox, h harness.Harness, r
 	var bus []string
 	if home, err := os.UserHomeDir(); inHome && err == nil && filepath.IsAbs(home) && home != "/" {
 		mounts = append(mounts, homeMounts(home, rs.ws.Covered(), rs.ws.PrivateFiles())...)
+		if HarnessName(r.Harness) == "claude" {
+			dir := rs.ws.abs()
+			if r.Project != "" {
+				dir = filepath.Join(dir, "projects", r.Project)
+			}
+			shareClaudeHome(rs.ws.RunHome(r.ID), home, sandbox.InsidePath(sb, mounts[0]), dir)
+		}
 		var rt []sandbox.Mount
 		rt, bus = runtimeMounts(UserRuntime(), filepath.Join(rs.ws.RunPrivate(r.ID), "cc-socks"))
 		mounts = append(mounts, rt...)
@@ -2821,7 +2828,7 @@ func (rs *Runs) sandboxSpec(cfg Config, sb sandbox.Sandbox, h harness.Harness, r
 	t := harness.Turn{
 		Role: r.Role, SessionID: r.Session, Resume: resume, Model: r.Model, Tools: r.Tools, SystemText: r.System,
 		SystemFile: filepath.Join(in(mounts[1]), "system.md"), ReadOnly: r.ReadOnly, RunDir: in(mounts[1]), Schema: r.Schema, Sandboxed: sb.Isolated(),
-		MaxOutput: cfg.MaxOutputTokens, ConfigDir: cfgDir,
+		MaxOutput: cfg.MaxOutputTokens, ConfigDir: cfgDir, InHome: inHome,
 	}
 	if r.Budget > 0 {
 		// Claude Code counts --max-budget-usd against this process's spend

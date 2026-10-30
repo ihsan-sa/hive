@@ -14,10 +14,22 @@ A lead's turn, and a warden's or tribunal seat's, never waits (`Run.NeverWaits`)
 There is no strain hold, ramp, pace, `max_workers` or heavy-command lease any more; checks run at most `max_checks` at once.
 
 The disk is read as a whole, since a turn has no figure of it to budget:
-while Linux's IO pressure says every running task sat stalled on the disk for over `disk_full_max` (40% by default; below 0 is off) of the last minute (`full avg60`, `core.DiskBusy`), the work module starts no new worker while another works (one still starts when none does, so the loop never stops) and runs one check at a time, main's measure first by its rank.
+while Linux's IO pressure says every running task sat stalled on the disk for over `disk_full_max` (40% by default; below 0 is off) of the last minute (`full avg60`, `core.DiskBusy`), the work module starts no new worker while another is in a turn (one still starts when none is, and a worker idle on the person or parked isn't, so the loop never stops) and runs one check at a time, main's measure first by its rank.
 Running turns go on.
 On 10-30 that figure stood at ~60% from boot, some 92%, a write ~0.8 s.
 Checks also write less: Go links in a check drop DWARF (`GOFLAGS=-ldflags=-w`, a quarter of each test binary), and the journal's appends at once share one fsync.
+
+## Heavy commands run one at a time, and the IO weight is the person's to set (#2207)
+
+On 10-30 the hive user's units re-read ~110 GB an hour from the disk (an eval's cargo build ~74, the daemon ~22), at ~76% IO pressure with ~1.4 GB of file cache left.
+The units sat at their memory bounds (hive.service at 14.8 of its 15 GB `MemoryHigh`, the eval pilot under a 3 GB `MemoryMax`), so each reclaimed its own file cache and read it back; a tighter bound would re-read more, so the bounds stay as they are.
+What cuts the re-reads is fewer heavy things at once: `hive heavy [--what text] [--patience 30m] -- cmd args` (`internal/heavy`) runs a command once no other heavy command runs on the machine.
+It is an exclusive flock on `.hive/tools/.heavy.lock`, which the daemon makes at start and every turn and check mounts (`/hive/tools`, read-only is enough), so it holds across sandboxes, eval units and `systemd-run` steps alike, with no daemon in the way, and the kernel drops it with a killed command.
+A command under it marks its environment (`HIVE_HEAVY=held`), so a heavy command it starts doesn't wait on itself; one that has waited its patience (30 minutes by default; 0 is no limit) runs anyway and says so, and one that can't open the file runs without it and says so.
+A worker's brief asks it to run its tests and builds that way; the daemon's own checks keep their own pace (`max_checks`, one at a time on a busy disk) and don't take the lock.
+An eval unit or long step runs its builds as `/home/hive/hive/.hive/bin/hive heavy -- ...` (or the hive on its PATH).
+The IO weight can't be set from the hive user: the disk's scheduler is `none` and the `io` controller isn't on for `user.slice`, so an `IOWeight=` on any hive user unit does nothing (10-30, read on the box).
+It takes root, once, which is the person's: `sudo systemctl set-property user-1003.slice IOWeight=10` (1003 is the hive user's uid; it persists) and io.cost on the disk so weights count, `echo '259:0 enable=1' | sudo tee /sys/fs/cgroup/io.cost.qos`, kept across reboots by a tmpfiles.d line `w /sys/fs/cgroup/io.cost.qos - - - - 259:0 enable=1` (259:0 is nvme0n1's `/sys/block/nvme0n1/dev`).
 
 ## Main's measure gets the CPU
 
@@ -42,4 +54,6 @@ Every sandboxed command carries a nice value (`sandbox.Spec.Nice`, from `Run.Nic
 
 ## The Hive's memory is bounded (#2143)
 
-The Hive's systemd user unit (`setup.unitText`) has a soft cap that survives a reboot: `MemoryHigh=45%` of the machine's memory, past which the kernel reclaims from the Hive and slows it, never the rest of the machine, and `MemorySwapMax=4G`, so it can't drive the machine deep into swap. With `Delegate=yes` and `DelegateSubgroup=daemon` the daemon runs in the unit's leaf `daemon`, and `sandbox.SettleMemory` turns the memory controller on for the unit's subtree. Each `hive sandbox-exec` (every turn and check) then moves into a cgroup of its own beside it, `run-<pid>`, before it starts the command: its `memory.max` is half the Hive's limit and its `memory.swap.max` a quarter of that, so one runaway test is killed by the kernel inside its run, and the run's stderr log says so. As it ends it kills what the command left there and removes the cgroup; the clean job's sweep removes those of a sandbox-exec that died. Outside the unit, or in a unit not yet delegated (until systemd restarts it with the rewritten unit), nothing changes.
+The Hive's systemd user unit (`setup.unitText`) has a soft cap that survives a reboot: `MemoryHigh=75%` of the machine's memory, past which the kernel reclaims from the Hive and slows it, never the rest of the machine, `MemoryMax=85%`, the hard stop, where the kernel kills inside the Hive, and `MemorySwapMax=1G`, so it can't drive the machine into swap.
+The soft cap was 45% until #2217: the Hive's anon memory sat right at it, so the kernel swapped the Hive's pages out and faulted them back in while half the machine's memory was idle, and that swap (510 of 528 MB written in 30 s) was the IO pressure that held every worker start and check.
+With `Delegate=yes` and `DelegateSubgroup=daemon` the daemon runs in the unit's leaf `daemon`, and `sandbox.SettleMemory` turns the memory controller on for the unit's subtree. Each `hive sandbox-exec` (every turn and check) then moves into a cgroup of its own beside it, `run-<pid>`, before it starts the command: its `memory.max` is half the Hive's limit and its `memory.swap.max` a quarter of that, so one runaway test is killed by the kernel inside its run, and the run's stderr log says so. As it ends it kills what the command left there and removes the cgroup; the clean job's sweep removes those of a sandbox-exec that died. Outside the unit, or in a unit not yet delegated (until systemd restarts it with the rewritten unit), nothing changes.
