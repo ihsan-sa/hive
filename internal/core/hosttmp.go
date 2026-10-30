@@ -32,6 +32,26 @@ func (w Workspace) RunTmp(id string) string { return filepath.Join(w.RunPrivate(
 // hours, a soft-layer arm at a few.
 const leftoverAge = 24 * time.Hour
 
+// When the disk is short of room (tight), the clean job takes leftovers and
+// ended runs' scratch sooner: a temp folder quiet past the longest a gate
+// runs, a home over for half an hour. Room the Hive can rebuild is worth
+// less than room every check and turn needs to write at all.
+const (
+	tightLeftoverAge = 3 * time.Hour
+	tightHomeAge     = 30 * time.Minute
+)
+
+// tight reports whether a place the Hive writes has under a twentieth of
+// its room free.
+func tight(rs []Room) bool {
+	for _, r := range rs {
+		if r.Size > 0 && r.Free < r.Size/20 {
+			return true
+		}
+	}
+	return false
+}
+
 // sharedTmp is the host's shared temp folder, swapped in tests.
 var sharedTmp = "/tmp"
 
@@ -65,9 +85,9 @@ func UseDiskTemp(ws Workspace) (string, error) {
 var hiveLeftovers = []string{"hive-*", "TestSoftLayer*"}
 
 // pruneTemp removes the Hive's leftovers from the shared temp folder and
-// everything in its own temp folder that nothing has changed in for
-// leftoverAge, through drop.
-func pruneTemp(ws Workspace, drop func(string)) {
+// everything in its own temp folder that nothing has changed in for age
+// (leftoverAge, or less when room is tight), through drop.
+func pruneTemp(ws Workspace, age time.Duration, drop func(string)) {
 	var ms []string
 	for _, g := range hiveLeftovers {
 		m, _ := filepath.Glob(filepath.Join(sharedTmp, g))
@@ -79,7 +99,7 @@ func pruneTemp(ws Workspace, drop func(string)) {
 		}
 	}
 	for _, m := range ms {
-		if !strings.HasPrefix(filepath.Base(m), "hive-sbx-") && quiet(m, leftoverAge) {
+		if !strings.HasPrefix(filepath.Base(m), "hive-sbx-") && quiet(m, age) {
 			drop(m)
 		}
 	}
@@ -105,8 +125,8 @@ func quiet(p string, d time.Duration) bool {
 
 // pruneTmp removes, through drop, each run's /tmp that no turn is using: an
 // ended run's and one no run here knows at once, a waiting run's once
-// nothing in it has changed for leftoverAge.
-func (rs *Runs) pruneTmp(drop func(string)) {
+// nothing in it has changed for age.
+func (rs *Runs) pruneTmp(age time.Duration, drop func(string)) {
 	ds, _ := os.ReadDir(filepath.Join(rs.ws.Private(), "runs"))
 	for _, d := range ds {
 		id, tmp := d.Name(), rs.ws.RunTmp(d.Name())
@@ -118,7 +138,7 @@ func (rs *Runs) pruneTmp(drop func(string)) {
 		busy := r != nil && (r.Status == StatusRunning || rs.starting[id])
 		ended := r == nil || r.Terminal()
 		rs.mu.Unlock()
-		if !busy && (ended || quiet(tmp, leftoverAge)) {
+		if !busy && (ended || quiet(tmp, age)) {
 			drop(tmp)
 		}
 	}
@@ -140,9 +160,10 @@ var homeKeep = []string{".claude", ".claude-open", ".codex", ".hive-open"}
 const HomePruned = "home-pruned"
 
 // pruneHomes cuts down, through drop, the home of each run that ended at
-// least homeAge ago, and of one no run here knows once its home is that
-// old: every folder in it but homeKeep's goes, its files stay.
-func (rs *Runs) pruneHomes(drop func(string)) {
+// least age ago (homeAge, or less when room is tight), and of one no run
+// here knows once its home is that old: every folder in it but homeKeep's
+// goes, its files stay.
+func (rs *Runs) pruneHomes(age time.Duration, drop func(string)) {
 	ds, _ := os.ReadDir(filepath.Join(rs.ws.Private(), "runs"))
 	for _, d := range ds {
 		id, home := d.Name(), rs.ws.RunHome(d.Name())
@@ -156,7 +177,7 @@ func (rs *Runs) pruneHomes(drop func(string)) {
 		if r != nil {
 			ended = r.Updated
 		}
-		over := r == nil && time.Since(fi.ModTime()) > homeAge || r != nil && r.Terminal() && !starting && time.Since(ended) > homeAge
+		over := r == nil && time.Since(fi.ModTime()) > age || r != nil && r.Terminal() && !starting && time.Since(ended) > age
 		rs.mu.Unlock()
 		mark := filepath.Join(rs.ws.RunPrivate(id), HomePruned)
 		if mf, err := os.Stat(mark); !over || err == nil && !ended.After(mf.ModTime()) {
