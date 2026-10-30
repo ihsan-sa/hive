@@ -193,3 +193,33 @@ func TestSaturatedDiskHoldsNewWorkersAndChecks(t *testing.T) {
 		t.Fatalf("%d checks at once", n)
 	}
 }
+
+// A task the saturated disk holds starts anyway while an executor module has
+// room, one a pass, and its worker's turns go there first (issue #2203).
+func TestHeldTaskStartsWhenAnExecutorHasRoom(t *testing.T) {
+	m, _, _, _ := noCommitRig(t, 0)
+	busy := "waiting: disk (IO pressure full avg60 62%, limit 40%)"
+	was := diskBusy
+	diskBusy = func(float64) string { return busy }
+	defer func() { diskBusy = was }()
+	a, b, c := file(t, m, "first", ""), file(t, m, "second", ""), file(t, m, "third", "")
+	for _, tk := range []*Task{&a, &b, &c} {
+		tk.Stage = StageQueued
+		m.save(tk, "")
+	}
+	a.Stage = StageWorking
+	m.save(&a, "")
+	room, asks := false, 0
+	m.elsewhere = func() bool { asks++; return room }
+	if start, wait := m.admit(m.List(nil)); start[b.ID] || wait[b.ID] != busy+" for a worker" || asks != 1 {
+		t.Fatalf("no runner has room: start %v, wait %v, %d asks", start, wait, asks)
+	}
+	room, asks = true, 0
+	start, wait := m.admit(m.List(nil))
+	if !start[b.ID] || start[c.ID] || wait[c.ID] != busy+" for a worker" || asks != 1 {
+		t.Fatalf("a runner has room: start %v, wait %v, %d asks", start, wait, asks)
+	}
+	if !m.takeAway(b.ID) || m.takeAway(b.ID) || m.takeAway(c.ID) {
+		t.Fatal("the started task isn't marked away once")
+	}
+}

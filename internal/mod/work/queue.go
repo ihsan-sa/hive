@@ -76,7 +76,12 @@ func (t Task) Overdue() bool {
 // main holds turns on a full CPU (core.Runs.Yielding), as launch weighs
 // every turn. On a saturated disk (core.DiskBusy) none starts while another
 // worker works: the running ones go on, and the loop never stops for want
-// of one. tasks is every task Tick looks at.
+// of one. A task one of those holds starts anyway while an executor module
+// has room (core.Runs.Elsewhere), one a pass as one launch spends that
+// room: its worker's turns go there first (core.RunSpec.Away), and while
+// they do it is no worker on this disk. From 12:00 to 16:00 on 10-30 every
+// queued task waited on the disk here while the dispatch runner sat idle.
+// tasks is every task Tick looks at.
 func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]string) {
 	start, wait = map[string]bool{}, map[string]string{}
 	cfg := m.C.WS.LoadConfig()
@@ -94,27 +99,69 @@ func (m *Module) admit(tasks []Task) (start map[string]bool, wait map[string]str
 		disk = diskBusy(cfg.DiskFull())
 	}
 	for _, t := range tasks {
-		if disk != "" && t.Stage == StageWorking && !m.slotless(t) {
+		if disk != "" && t.Stage == StageWorking && !m.slotless(t) && !m.awayNow(t) {
 			working++
 		}
 	}
+	asked := false
+	elsewhere := func() bool {
+		if asked {
+			return false
+		}
+		asked = true
+		if m.elsewhere != nil {
+			return m.elsewhere()
+		}
+		return m.C.Runs.Elsewhere()
+	}
 	n := 0
 	for _, t := range line {
+		why := ""
 		switch {
 		case t.Held:
 			wait[t.ID] = "held by " + cmp.Or(t.HeldBy, "the lead")
+			continue
 		case disk != "" && working+n > 0:
-			wait[t.ID] = disk + " for a worker"
+			why = disk + " for a worker"
 		case core.MemBudget(cfg.TurnMB, n) != "":
-			wait[t.ID] = core.MemWait + " for a worker"
+			why = core.MemWait + " for a worker"
 		case m.C.Runs.Yielding(cfg.TurnMB) != "":
-			wait[t.ID] = core.MeasureWait + " for a worker"
-		default:
+			why = core.MeasureWait + " for a worker"
+		}
+		switch {
+		case why == "":
 			start[t.ID] = true
 			n++
+		case elsewhere():
+			start[t.ID] = true
+			m.mu.Lock()
+			if m.away == nil {
+				m.away = map[string]bool{}
+			}
+			m.away[t.ID] = true
+			m.mu.Unlock()
+		default:
+			wait[t.ID] = why
 		}
 	}
 	return start, wait
+}
+
+// awayNow reports whether t's worker was started for an executor module
+// and its latest turn didn't run here: it has yet to start one, or that
+// one went to a runner.
+func (m *Module) awayNow(t Task) bool {
+	r, ok := m.C.Runs.Get(t.Worker)
+	return ok && r.Away && (r.Turn == 0 || r.Where != "")
+}
+
+// takeAway says whether admit started t for an executor module, once.
+func (m *Module) takeAway(id string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	a := m.away[id]
+	delete(m.away, id)
+	return a
 }
 
 // parkedFree is how far off a parked worker's next turn must be for it to

@@ -204,9 +204,8 @@ each room answer it is given is spent as it is given.
 A `checks` module's `turn` must run the spec's command and bring its stdout back; the core wraps the command so it prints its own exit with a nonce as its last line and takes the verdict from that, never from `turn`'s exit code, and output without it is "can't run", never green.
 It runs without this machine's shared Go module and build caches, so the runner fetches its own modules through its egress proxy (proxy.golang.org and sum.golang.org must be allowed there); never when the egress config grants a service on this machine; and its record carries `where`.
 Main's own checks stay here, as they write the shared build cache.
-The work queue lets one task a pass go past a strained machine, or past its pace, while an executor has room;
-one started past the pace is an away run (`RunSpec.Away`): its turns go to an executor with room first, strained here or not, and run here when none has room, and it holds no worker slot here while its latest turn ran elsewhere (at most `max_workers`, or 4, are away at once);
-a machine over `load_max` alone holds tasks as it does without an executor (from the workers' start on), since launch would run them here.
+The work queue (`admit`) lets one task a pass start past what holds it here (a saturated disk, the memory budget, a measure of main on a full CPU) while an executor has room (`Runs.Elsewhere`, which asks `Room` and spends nothing);
+it is an away run (`RunSpec.Away`): its turns go to an executor with room first, strained here or not, and run here when none has room, and while its latest turn ran elsewhere it is no worker on this disk.
 A manifest with `"command": true` gives `hive <name> <args...>`: the CLI runs its program with the arguments, attached to the terminal, from its folder with its own `HOME` and the scrubbed environment, only for a module it would run (one the person put there, or one at the commit its review approved).
 A built-in command of the same name wins.
 
@@ -283,7 +282,7 @@ Settings in `.hive/config.json`; none of them stops or parks work.
 - `turn_mb` (240): one memory budget paces the Hive ([priority.md](priority.md)).
   A turn, and a waiting brief's worker, starts while the Hive's cgroup limit (or the machine's memory, with none) leaves `turn_mb` for it and for each one starting beside it (`core.MemBudget`); a lead's, warden's or tribunal seat's turn never waits.
   Each tick steps the leads before the other runs, and leads run at a higher priority (nice levels).
-- `disk_full_max` (40): on a saturated disk (IO pressure `full avg60` over it, `core.DiskBusy`) the work module starts no new worker while one works and runs one check at a time; below 0 is off.
+- `disk_full_max` (40): on a saturated disk (IO pressure `full avg60` over it, `core.DiskBusy`) the work module starts no new worker while one works, except one an executor module has room for, and runs one check at a time; below 0 is off.
 - `max_output_tokens` (16000): sets `CLAUDE_CODE_MAX_OUTPUT_TOKENS` on each Claude turn, because a spend budget is checked only between turns and one reply can otherwise run long.
   0 leaves Claude's own default.
 - `monthly_usd` (off): each turn's `cost_usd` is already in its `run.turn_ended` event; the runs fold it into a total per UTC month.

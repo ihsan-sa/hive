@@ -324,6 +324,11 @@ type Module struct {
 	// retesting is held while main's red tests run once more (mainTests).
 	retesting sync.Mutex
 	busy      map[string]bool
+	// away is the tasks admit started for an executor module's room, until
+	// their worker starts with core.RunSpec.Away (takeAway); elsewhere, when
+	// set, stands in for core.Runs.Elsewhere in a test.
+	away      map[string]bool
+	elsewhere func() bool
 	stepAt    map[string]time.Time // when each Tick step began, so one stuck past stepLimit is let go
 	weighing  map[string]weighing  // the checkpoints a step is weighing, so a finish takes them out of the check line
 	bars      map[string]float64   // a worker's base scored under a score main isn't yet measured by, keyed project@sha@version
@@ -1471,7 +1476,7 @@ func (m *Module) startWorker(t *Task, p core.Project) error {
 		}
 		brief = m.renderBrief(t, p, base)
 		spec := m.Agents.Spec(id, "worker", p.Name, dir, brief)
-		spec.Task, spec.Inputs = t.ID, t.Inputs
+		spec.Task, spec.Inputs, spec.Away = t.ID, t.Inputs, m.takeAway(t.ID)
 		if t.Model != "" {
 			pick, err := m.C.WS.LoadConfig().Pick(t.Model)
 			if err != nil {
