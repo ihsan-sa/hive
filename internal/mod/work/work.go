@@ -1525,28 +1525,28 @@ func (m *Module) renderBrief(t *Task, p core.Project, base string) string {
 	}
 	b.WriteString(besideText(m.neighbours(*t)))
 	b.WriteString("## The project\n\n")
-	b.WriteString("- Goals: `.hive/goals.md`. Read it; report against it.\n")
+	b.WriteString("- Goals: `.hive/goals.md`.\n")
 	fmt.Fprintf(&b, "- Tests: `%s`\n", orNone(cfg.Test))
 	if p.Self {
 		if t.Fix() {
-			b.WriteString("- Aim: a fix (" + orNone(t.AimWhy) + "). It merges on its tests; a score dip after it merges doesn't revert it on its own, but files a brief to look into it. If it isn't a fix of a named failure, say so with `hive agent aim --aim gain --why \"...\"`.\n")
+			b.WriteString("- Aim: a fix (" + orNone(t.AimWhy) + "): a score dip after it merges files a look into it rather than reverting it. Not a fix? `hive agent aim --aim gain`.\n")
 		} else {
-			fmt.Fprintf(&b, "- Aim: %s. It merges on its tests, and main is measured after: a score drop beyond noise reverts it unless a judge, weighing it with the change, keeps it. If it is a fix, say so naming the failure it fixes (a bug, a failing test, a broken path) with `hive agent aim --aim fix --why \"...\"`.\n", t.AimWord())
+			fmt.Fprintf(&b, "- Aim: %s: a score drop beyond noise after it merges reverts it unless a judge keeps it. A fix of a named failure? `hive agent aim --aim fix --why \"...\"`.\n", t.AimWord())
 		}
 	}
 	if cfg.Score != nil {
 		fmt.Fprintf(&b, "- Score: `%s` (%s is better, tolerance %g).", cfg.Score.Command, cfg.Score.Direction, cfg.Score.Tolerance)
 		if best, ok := m.bestScore(p, m.C.Effects.ScoreVersion(p, base, *cfg.Score)); ok {
-			fmt.Fprintf(&b, " Best kept score: %g.", best)
+			fmt.Fprintf(&b, " Best kept: %g.", best)
 		} else if best, ok := m.bestScore(p, ""); ok {
-			fmt.Fprintf(&b, " Best kept score: %g, read under the score before it changed; main isn't measured under this one yet.", best)
+			fmt.Fprintf(&b, " Best kept: %g, under the score before it changed.", best)
 		}
-		b.WriteString(" Every merge is measured; after a clear fix a lower score files a brief to look into it, and otherwise it is reverted unless a judge, weighing it with the change, keeps it, so say in your account what the change is for.\n")
+		b.WriteString(" Main is measured after every merge, so say in your account what the change is for.\n")
 	}
 	if cfg.Score != nil && t.From != "hive" && p.Self && t.Gain() {
-		b.WriteString("- Commit as you go: a change aimed at a gain isn't merged as checkpoints; it merges whole once you finish.\n")
+		b.WriteString("- A gain merges whole when you finish, not as checkpoints.\n")
 	} else if cfg.Score != nil && t.From != "hive" { // as checkpoint() skips the Hive's own setup brief
-		b.WriteString("- Commit each gain as you make it: a commit that beats the best kept score is tested and merged into main as a checkpoint while you keep working on top of it.\n")
+		b.WriteString("- A commit that beats the best kept score merges as a checkpoint while you keep working.\n")
 	}
 	{
 		lessons := m.C.Effects.ReadFile(p, base, ".hive/lessons.md")
@@ -1569,7 +1569,7 @@ func (m *Module) renderBrief(t *Task, p core.Project, base string) string {
 	if prior := m.priorBlocked(t); prior != "" {
 		b.WriteString("\n## Earlier attempts that stopped\n\n" + prior)
 	}
-	b.WriteString("\n## When you finish\n\nCommit on your branch, merge main into it (`git fetch \"$HIVE_RUN/main.bundle\" main && git merge FETCH_HEAD`) and resolve any conflict yourself, run the project's tests, then run `hive agent finish --status done --account \"...\" --tested \"...\" --passed \"<the test command, if it passed on this commit>\" --unsure \"...\"` and end your turn. The Hive merges your PR at once on green forge CI, or on your --passed where the project has none; main is measured after and a break is reverted. If you can't finish, use `--status blocked` and say why.\n")
+	b.WriteString("\n## When you finish\n\nMerge main into your branch (`git fetch \"$HIVE_RUN/main.bundle\" main && git merge FETCH_HEAD`), run the tests, then `hive agent finish --status done|blocked --account \"...\" --passed \"<the test command, if it passed>\"` and end your turn. It merges at once; a break is reverted.\n")
 	return b.String()
 }
 
