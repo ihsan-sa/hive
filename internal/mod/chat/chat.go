@@ -21,6 +21,7 @@ import (
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/agents"
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/board"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/release"
 )
 
@@ -127,7 +128,7 @@ func New(c *core.Core, a *agents.Agents) *Module {
 		json.Unmarshal(raw, &m.read)
 	}
 	m.ensure(Chat{ID: "lead", Title: "lead", Kind: "lead"})
-	c.Runs.Ops().AddRouter(m.route)
+	board.Of(c).AddRouter(m.route)
 	return m
 }
 
@@ -601,7 +602,7 @@ func (m *Module) room(from core.Run, text string) error {
 		return errors.New("nobody else is in the room: no other live lead, worker or sweep on " + orNone(from.Project))
 	}
 	for _, x := range others {
-		if _, err := m.C.Runs.Ops().Deliver(from, x.ID, RoomMark+text); err != nil {
+		if _, err := board.Of(m.C).Deliver(from, x.ID, RoomMark+text); err != nil {
 			return err
 		}
 	}

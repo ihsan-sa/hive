@@ -191,7 +191,11 @@ A value of @path reads that file. Common ops:
   finish    --status done|blocked --account "..." [--tested ...] [--unsure ...]
                                                  your commits merge at once: no test, read or approval
                                                  waits; main is measured after and a break is reverted
-  message   --to <id|name|parent|person|lead> --text "..."
+  message   --to <id|name|parent|person|lead> --text "..." [--thread t]
+                                                 a post on the public board that wakes them with where to read it
+  post      --text "..." [--thread t] [--to a,b]   a post on the board; it wakes only whom it names (or @run in the text)
+  board     [--thread t] [--query "words"] [--from run]   read the board: with none, what is new for you
+  join      --thread t                           add yourself to a thread (leave takes you off); only a mention wakes
   inbox                                          messages waiting for you
   agents                                         who is running
   spawn     --role worker --brief "..." [--project p]   a helper; its account returns to you

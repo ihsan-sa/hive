@@ -384,20 +384,6 @@ func TestIsolatedProjectsAreOutOfReach(t *testing.T) {
 			t.Errorf("%s spawning into %q: %v", tc.from.ID, tc.project, err)
 		}
 	}
-	if _, err := o.Call(sweep, "message", json.RawMessage(`{"to":"secret-run","text":"x"}`)); err == nil {
-		t.Error("a sweep messaged an isolated project's agent")
-	}
-	if _, err := o.Call(secret, "message", json.RawMessage(`{"to":"open-run","text":"x"}`)); err == nil {
-		t.Error("an isolated agent messaged another project's agent")
-	}
-	// Its own lead still reaches it: the wall stands only between projects.
-	lead := Run{RunSpec: RunSpec{ID: "secret-lead", Role: "lead", Project: "secret", Isolated: true}}
-	if _, err := o.Call(lead, "message", json.RawMessage(`{"to":"secret-run","text":"x"}`)); err != nil {
-		t.Errorf("an isolated project's lead can't message its agent: %v", err)
-	}
-	if _, err := o.Call(sweep, "message", json.RawMessage(`{"to":"open-run","text":"x"}`)); err != nil {
-		t.Errorf("a sweep can't message a normal agent: %v", err)
-	}
 	got, _ := o.Call(sweep, "agents", nil)
 	if b, _ := json.Marshal(got); strings.Contains(string(b), "secret") || !strings.Contains(string(b), "open-run") {
 		t.Errorf("agents shows a sweep %s", b)

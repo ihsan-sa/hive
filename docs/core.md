@@ -15,7 +15,7 @@ So the core is the skeleton and nothing else. **New functionality goes into a mo
 | Workspace and state: the folder, config, the project registry, restart-safe state | `internal/core` (`workspace.go`, `projects.go`, `core.go`) |
 | The journal: every state change is an event | `internal/core/journal.go` |
 | Runs and spawning: an agent turn in its own checkout, park/resume, crash retry; spawn | `internal/core/runs.go`, `internal/proc` |
-| Messaging and discovery: message, inbox, progress, finish, spawn, agents; the person's feed | `internal/core/ops.go`, `internal/core/person.go`, `internal/agentcli` (the agent's end) |
+| The mailbox and discovery: an op's request and answer, inbox, progress, finish, spawn, agents; a wake (`Runs.Send`); the person's feed | `internal/core/ops.go`, `internal/core/person.go`, `internal/agentcli` (the agent's end) |
 | The effects process (fx): holds every credential and acts for agents: git, the forge, checks, merge guarantees | `internal/core` (`effects.go`, `forge.go`, `git.go`, `tokens.go`, `slots.go`) |
 | The permissions ceiling and the sandbox | `internal/core/ceiling.go`, `internal/core/strain.go`, `internal/sandbox` |
 | The module seam: how the core gains functionality (the registry and tick list, agent ops, the person's answers, scheduled jobs, module programs, an executor module handed a strained turn's spec, a module's say on whether a turn starts now, a module's own `hive <name>` command) | `internal/mod/modules`, `internal/mod/runner`, `Ops().Register`, `Person.Handle`, `Runs.Executor`, `Runs.Admit` and `sandbox.Delegate` |
@@ -64,6 +64,7 @@ Every other package is module material. Most are compiled-in modules already (`i
 | `internal/mod/improve`, `internal/demo` | the improve module: measure and keep/revert, sweeps, step-backs, and the benchmark project |
 | `internal/mod/kb` | the kb module |
 | `internal/mod/risk` | a risk module: wardens, tribunals, approved scripts. The ceiling itself stays core |
+| `internal/mod/board` | the board module: messaging. Every message is a post on one public board, in threads; agents join threads and search the board, and a post wakes only the runs it names, with where to read (#2235). It left the core whole: the `message` op, who an address means and the routers |
 | `internal/mod/chat`, `internal/mod/feedback`, `internal/mod/problems`, `internal/mod/standup` | the chat module |
 | `internal/mod/work` | a work module: ask → issue → PR → review → merge. The core keeps runs, spawning and the merge guarantees it calls |
 | `internal/mod/projects` | a projects module: adding and onboarding projects (the registry stays core) |
@@ -90,6 +91,8 @@ Step 2 is the target for the core, and it is smaller than the table above:
 
 Everything else is a module, messaging included:
 - **Messaging is a board.** Every message goes to one public board, kept as events; an agent adds itself to a thread, and nothing is pushed into its context. An agent finds what it needs by searching the board, the KB and the log; a mention only wakes it. `hive agent message`, the inbox, the chats and the person's feed become this module's ops, and `ops.go`'s messaging and `person.go` leave the core.
+Done in part (#2235): `internal/mod/board` holds the `message` op and who an address means (the routers, "lead", "parent"), and adds `post`, `board`, `join` and `leave`; a post wakes only the runs it names, with where to read and the thread's first line, never the text.
+Still in the core: the inbox (`Run.Pending`, which a wake fills) and `person.go`; the chats are the chat module's, and their messages to and from the person aren't on the board yet.
 - **Starting context is minimal**: a short orientation and the brief; the rest is found, not handed over (the agents module's prompts).
 - **Landing a change is the agent's**: with nothing waiting before a merge, the work module's pipeline (ask, issue, PR, stages) is one way to land among others, not core; the merge guarantees left in `Effects.Merge` are the hard limits above.
 

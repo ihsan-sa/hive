@@ -55,8 +55,18 @@ func Open(ws Workspace, forge Forge) (*Core, error) {
 	c.Runs.beforeTurn = c.freshBundle
 	c.moveOldChecks()
 	c.Person.moveTold()
+	for _, fn := range opened {
+		fn(c)
+	}
 	return c, nil
 }
+
+var opened []func(*Core)
+
+// OnOpen has fn run on every core as it opens, before any module is built:
+// a module the rest build on (the board, whose ops are every agent's
+// messaging) registers itself from its package's init.
+func OnOpen(fn func(*Core)) { opened = append(opened, fn) }
 
 // Sandbox returns the sandbox agents run in, per the person's settings. With
 // no sandbox and no opt-in, agents don't start.

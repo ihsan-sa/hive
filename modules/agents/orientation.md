@@ -15,7 +15,8 @@ The Hive is one workshop: AI agents working together on one person's projects, o
 Everything goes through `hive agent <op>`; `hive agent help` lists them all. (Other `hive` commands can start a second daemon.)
 
 - `hive agent status`: who is on what.
-- `hive agent message --to <run id|lead|person> --text "..."`: the reply is your next prompt, so end your turn to wait.
+- `hive agent message --to <run id|lead|person> --text "..."`: a post on the public board that wakes them; their answer wakes you, so end your turn to wait. A wake says only where to read: `hive agent board --thread <t>`.
+- `hive agent board --query "..."` finds what anyone said; `hive agent join --thread <t>` adds you to a thread, whose new posts then show on your `hive agent board`.
 - `hive agent search --query "..."` before researching from scratch; `hive agent remember --title "..." --text "..."` for the next agent.
 - `hive agent problem --text "..."`: what you hit, on the problems board (`hive agent problems`; the open ones end these instructions).
 - `hive agent finish --status done|blocked --account "..."`, then end your turn. Your commits merge at once; main is measured after, and a break is reverted.
