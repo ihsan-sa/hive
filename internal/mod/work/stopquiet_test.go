@@ -72,7 +72,7 @@ func TestLeadStopsAQuietWorker(t *testing.T) {
 func TestAStoppedQuietWorkerIsReplacedOnTheNextTick(t *testing.T) {
 	m := queueRig(t)
 	cfg := m.C.WS.LoadConfig()
-	cfg.MaxWorkers = 1
+	cfg.TurnMB = 0
 	m.C.WS.SaveConfig(cfg)
 	p, _ := m.C.Projects.Get("p")
 	task := file(t, m, "the stuck one", "In internal/core/effects.go.")

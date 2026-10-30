@@ -29,7 +29,7 @@ func toldRun(m *Module, id string) []string {
 func TestOverlappingBriefsMeet(t *testing.T) {
 	m := queueRig(t)
 	cfg := m.C.WS.LoadConfig()
-	cfg.MaxWorkers = 5
+	cfg.TurnMB = 0
 	m.C.WS.SaveConfig(cfg)
 	a := file(t, m, "cap the checks", "In internal/core/effects.go; log it in docs/log.md.")
 	c := file(t, m, "draw the pane", "In internal/tui/views.go; log it in docs/log.md.")

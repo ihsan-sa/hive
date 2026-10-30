@@ -184,7 +184,7 @@ func Exec(specPath string) int {
 				refused = f
 			}
 		}
-		defer ServeEgress(ln, s.Allow, s.Local, refused).Close()
+		defer ServeEgress(ln, s.Allow, s.Local, s.Outside, refused).Close()
 	}
 	for _, t := range s.Tools {
 		p, err := findTool(t, s)

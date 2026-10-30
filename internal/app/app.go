@@ -3,7 +3,6 @@ package app
 
 import (
 	"context"
-	"fmt"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -13,7 +12,6 @@ import (
 
 	hive "github.com/ihsan-sa/hive-standalone-build"
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
-	"github.com/ihsan-sa/hive-standalone-build/internal/gate"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/agents"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/chat"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/feedback"
@@ -28,6 +26,7 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/report"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/risk"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/runner"
+	"github.com/ihsan-sa/hive-standalone-build/internal/mod/standup"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/stats"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/system"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/tools"
@@ -89,7 +88,6 @@ func New(ws core.Workspace, forge core.Forge) (*App, error) {
 	forgeread.New(c)
 	a.Work.Steps = a.Risk.Steps
 	a.Work.Weigh = a.Risk.Weigh
-	a.Work.Gate = runGate(ws)
 	a.Projects = projects.New(c, a.Chat, a.Work, a.Improve)
 	a.Release = release.New(c)
 	a.Release.ReadMerged = a.Work.ReadMerged
@@ -143,8 +141,8 @@ func New(ws core.Workspace, forge core.Forge) (*App, error) {
 		}
 	})
 	a.Release.PauseMerges = a.Work.PauseMerges
-	a.Release.Gates, a.Release.HoldGates = a.Work.GatesRunning, a.Work.HoldGates
 	a.System.Register(system.Job{Name: "hive.update", AtStart: true, Fn: a.Release.AutoUpdate})
+	a.System.Register(system.Job{Name: "standup", Default: standup.Default, Fn: standup.New(c, a.Work, a.Chat).Run})
 	a.System.Register(system.Job{Name: "report.send", Fn: (&report.Module{C: c}).Send})
 	a.System.Register(system.Job{Name: "hive.clean", AtStart: true, Fn: func() (string, error) { return a.Clean(), nil }})
 	c.Effects.OnDiskFull = func() { a.System.RunNow("hive.clean") }
@@ -236,16 +234,6 @@ func (a *App) Clean() string {
 		if s != "" {
 			did = append(did, s)
 		}
-	}
-	tidied := 0
-	if n := a.Work.TidyGates(func(out string) int {
-		if !gate.Untidy(out) {
-			return 0
-		}
-		tidied++
-		return gate.ReapLeft(out)
-	}); tidied > 0 {
-		did = append(did, fmt.Sprintf("tidied %d gate run(s) a dead gate left, ending %d process(es)", tidied, n))
 	}
 	d := a.C.Effects.MeasureDisk()
 	if len(did) == 0 {

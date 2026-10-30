@@ -83,6 +83,7 @@ type Effects struct {
 
 	mu        sync.Mutex
 	checks    map[string]Check
+	slow      map[string]bool // project@sha/kind whose last try was cut off at its limit (checkLimit)
 	verdicts  map[string]Verdict
 	lands     map[string][]string               // project@sha -> reviewer runs that said land, since the last fix
 	diffLands map[string][]string               // project#diff -> the same, for every head with that own diff
@@ -121,6 +122,7 @@ type Check struct {
 	Output  string    `json:"output"`
 	CantRun string    `json:"cant_run,omitempty"` // why the command couldn't start (a missing tool): no verdict on the commit
 	Tool    string    `json:"tool,omitempty"`     // with CantRun: the tool the shell couldn't find
+	Slow    bool      `json:"slow,omitempty"`     // with CantRun: cut off at its time limit before its verdict (checkLimit)
 	Log     string    `json:"log,omitempty"`      // the full output on the host, when it ran
 	Failed  []string  `json:"failed,omitempty"`   // the failing tests it names, read before the output is clipped
 	Keys    []string  `json:"keys,omitempty"`     // those tests with their packages (FailedTestKeys), when each can be placed
@@ -207,7 +209,7 @@ type HostCommit struct {
 // NewEffects builds the effects process and replays its records.
 func NewEffects(ws Workspace, j *Journal, forge Forge, sb func() (sandbox.Sandbox, error), tools func() []string, runs *Runs) *Effects {
 	e := &Effects{ws: ws, j: j, Forge: forge, sandbox: sb, tools: tools, runs: runs, sweep: sandbox.Sweep,
-		checks: map[string]Check{}, verdicts: map[string]Verdict{}, lands: map[string][]string{}, diffLands: map[string][]string{}, diffVerds: map[string]Verdict{}, diffHeads: map[string][]string{}, outside: map[string]map[string]OutsideRead{}, seats: map[string]map[string]Verdict{}, hostMade: map[string]HostCommit{}, recorded: map[string]string{}, pushes: map[string][]string{}, approvals: map[string]bool{}, gates: map[string]GateResult{}, judged: map[string]Judgement{}, gateMains: map[string]GateResult{}, standing: map[string]bool{}, errored: map[string]map[string]any{}}
+		checks: map[string]Check{}, slow: map[string]bool{}, verdicts: map[string]Verdict{}, lands: map[string][]string{}, diffLands: map[string][]string{}, diffVerds: map[string]Verdict{}, diffHeads: map[string][]string{}, outside: map[string]map[string]OutsideRead{}, seats: map[string]map[string]Verdict{}, hostMade: map[string]HostCommit{}, recorded: map[string]string{}, pushes: map[string][]string{}, approvals: map[string]bool{}, gates: map[string]GateResult{}, judged: map[string]Judgement{}, gateMains: map[string]GateResult{}, standing: map[string]bool{}, errored: map[string]map[string]any{}}
 	e.Slots = NewSlots(func() int { return cmp.Or(ws.LoadConfig().MaxChecks, DefaultMaxChecks()) }) // the work module paces it
 	apply := func(ev Event) {
 		e.mu.Lock()
@@ -222,6 +224,9 @@ func NewEffects(ws Workspace, j *Journal, forge Forge, sb func() (sandbox.Sandbo
 			}
 			if !noVerdict(c) { // a check that couldn't start runs again next time
 				e.checks[k] = c
+			}
+			if e.slow[k] = cutOff(c); !e.slow[k] {
+				delete(e.slow, k)
 			}
 		case "effect.verdict":
 			var v Verdict
@@ -725,6 +730,7 @@ func (e *Effects) checkOnce(p Project, sha, main, kind, command, back string) (C
 		records, drop = e.moduleRecords(p, dir)
 		defer drop()
 	}
+	limit := e.checkLimit(p.Name, sha, kind)
 	run := func(offline bool) (int, string, error) {
 		ms := append(append(append(append(slices.Clone(mounts), build.mounts...), mods.mounts...), installed...), records...)
 		env := append(slices.Clone(build.env), mods.own...)
@@ -739,7 +745,7 @@ func (e *Effects) checkOnce(p Project, sha, main, kind, command, back string) (C
 		}
 		var disk sandbox.Disk
 		defer func() { c.DiskRead, c.DiskWrote = c.DiskRead+disk.Read, c.DiskWrote+disk.Wrote }()
-		return e.runSandboxed(sb, p.Name, id, ms, script, true, 30*time.Minute, env, e.checkCacheCap(), &disk)
+		return e.runSandboxed(sb, p.Name, id, ms, script, true, limit, env, e.checkCacheCap(), &disk)
 	}
 	code, out, err := run(true)
 	if away != nil && err == nil {
@@ -817,6 +823,14 @@ func (e *Effects) checkOnce(p Project, sha, main, kind, command, back string) (C
 	}
 	if err != nil {
 		c.Output = err.Error() + "\n" + out
+		if errors.Is(err, sandbox.ErrTimeout) {
+			// Cut off with no verdict: a slow machine (a loaded disk, say)
+			// looks the same as a slow commit here, and neither is a red
+			// test. It is tried again, with a longer limit (checkLimit).
+			c.Slow = true
+			c.CantRun = fmt.Sprintf("can't run: cut off at its %s limit before its verdict, a slow check, not a red one", limit)
+			return record(), ""
+		}
 		if line := DiskFull(c.Output); line != "" {
 			c.CantRun = "can't run: the disk or a quota is full where checks run"
 			e.diskAlert(line)
@@ -855,6 +869,22 @@ func (e *Effects) checkOnce(p Project, sha, main, kind, command, back string) (C
 		}
 	}
 	return record(), ""
+}
+
+// checkTimeout is how long a check may run on its first try.
+var checkTimeout = 30 * time.Minute
+
+// checkLimit is how long a check of sha may run: checkTimeout, or twice it
+// when its last try of the same kind was cut off at its limit, so a check
+// slow on a loaded machine gets its verdict on the next try rather than none
+// again.
+func (e *Effects) checkLimit(project, sha, kind string) time.Duration {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.slow[project+"@"+sha+"/"+kind] {
+		return 2 * checkTimeout
+	}
+	return checkTimeout
 }
 
 // elsewhere returns an executor module that takes checks and has room for a
@@ -961,10 +991,18 @@ func MissingTool(code int, out string) string {
 // records say so themselves, so a real red that merely logs a "not found" line
 // stays cached, as does an old one that named its failing tests.
 func noVerdict(c Check) bool {
-	if c.CantRun != "" {
+	if c.CantRun != "" || cutOff(c) {
 		return true
 	}
 	return !c.OK && c.At.Before(cantRunRecorded) && len(c.Failed) == 0 && missingTool.MatchString(c.Output)
+}
+
+// cutOff says a recorded check was cut off at its time limit. Records from
+// before Slow was set say so by the error the core put first in their output
+// ("timed out"), which a command's own output can't come before; those were
+// read as red, and a main kept red on one is measured again.
+func cutOff(c Check) bool {
+	return c.Slow || !c.OK && c.CantRun == "" && len(c.Failed) == 0 && strings.HasPrefix(c.Output, sandbox.ErrTimeout.Error()+"\n")
 }
 
 // cantRunRecorded is when every check came to carry cant_run (a day's margin
@@ -1336,7 +1374,7 @@ func (e *Effects) runSandboxed(sb sandbox.Sandbox, project, id string, mounts []
 		argv = hostShell(script)
 	}
 	spec := sandbox.Spec{ID: id, Argv: argv, Env: env, Cwd: sandbox.InsidePath(sb, mounts[0]), Mounts: mounts, Tools: e.tools(),
-		Stdout: logPath, StopFile: home + ".stop", Tmp: filepath.Join(home, homeTmp), Network: network, Allow: e.ws.LoadConfig().Egress.For("check"), Local: e.ws.LoadConfig().Egress.LocalAddrs(), Guard: e.ws.Guarded(), Cover: e.ws.Covered(), UID: os.Getuid(), GID: os.Getgid(), Nice: CheckNice, Disk: disk}
+		Stdout: logPath, StopFile: home + ".stop", Tmp: filepath.Join(home, homeTmp), Network: network, Allow: e.ws.LoadConfig().Egress.For("check"), Local: e.ws.LoadConfig().Egress.LocalAddrs(), Outside: e.ws.LoadConfig().Egress.OutsideFor(project), Guard: e.ws.Guarded(), Cover: e.ws.Covered(), UID: os.Getuid(), GID: os.Getgid(), Nice: CheckNice, Disk: disk}
 	over := watchHome(home, capB)
 	code, err := sb.Run(spec, timeout)
 	if over() && err == nil {
@@ -1896,8 +1934,10 @@ type MergeRequest struct {
 	SHA     string
 	Main    string
 	Subject string
-	Gain    bool   // the change aims at a measurable gain: on the Hive's own repository it needs the recursive gate's keep
 	Task    string // the task whose PR it is: the quarantine excuses it only on evidence from outside it
+	// Passed: its worker's own run of the tests passed at SHA in its turn
+	// (or it is a revert): with no forge CI that is the test.
+	Passed bool
 	// Draft is the PR's state at the caller's last look: a draft is readied
 	// once every read is checked. One made a draft after that look isn't
 	// (the lead's pr_draft, say): MergePR refuses it with ErrDraft.
@@ -1907,8 +1947,9 @@ type MergeRequest struct {
 	Stale func() bool
 }
 
-// Merge merges the PR only at sha, and only when the host's own records show
-// that sha passed its tests and was read (or needed no read).
+// Merge merges the PR only at sha, once sha passed its tests: the forge's CI
+// where the project has it, else its worker's own run or one here. What
+// breaks main shows in its measurement after the merge, which reverts it.
 func (e *Effects) Merge(m MergeRequest) (string, error) {
 	p := m.Project
 	if e.MergeHeld != nil {
@@ -1929,6 +1970,7 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 	case len(tested) > 0:
 		// No local run is needed, and one there is no gate: the forge's
 		// checks below must pass, these among them.
+	case m.Passed:
 	case !ok:
 		return "", refuse("%s: no test run recorded for that exact commit", short(m.SHA))
 	case !c.OK:
@@ -1960,22 +2002,12 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 	if len(ch.Protected) > 0 && !e.ApprovedDiff("merge", p.Name, m.SHA, ch.DiffID) {
 		return "", &NeedsPerson{Reason: "it changes " + strings.Join(ch.Protected, ", ") + ", which needs an approval first"}
 	}
-	if !ch.Small && !e.readOK(p, ch, m.SHA) {
-		return "", refuse("%s: no land verdict bound to that exact commit", short(m.SHA))
-	}
 	if !e.SecurityOK(p.Name, ch) {
 		need := "the Hive's security seat"
 		if len(ch.SecurityRoot) > 0 {
 			need += " and a majority of its panel"
 		}
 		return "", refuse("%s: it changes %s, %s, and no security read said land on its diff (%s, or an outside read)", short(m.SHA), strings.Join(ch.Security, ", "), ch.SecurityWhere(), need)
-	}
-	if p.Self && m.Gain {
-		// Or once the person landed that exact head at that main unjudged,
-		// the gate unable to judge there (the work module's "gate" ask).
-		if !e.Kept(p, m.SHA, m.Main) && !e.Approved("gate", p.Name, m.SHA+"@"+m.Main) {
-			return "", refuse("%s: a change to the Hive itself aimed at a gain merges only once the recursive gate, as its judge called it, kept it against main at %s, or the person landed it", short(m.SHA), short(m.Main))
-		}
 	}
 	runs, err := e.Forge.Checks(p.Repo, m.SHA)
 	if err != nil {

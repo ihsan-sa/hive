@@ -45,8 +45,32 @@ var AlwaysPerson = map[string]string{
 var alwaysPersonRe = map[string]*regexp.Regexp{
 	"money":      regexp.MustCompile(`(?i)\b(pay|payments?|purchases?|buy|spend|charges?|subscribe|subscriptions?|invoices?|billing|credit card|stripe|usd|eur|dollars?)\b|\$\s?\d+(\.\d\d|,\d{3})|\$\d{2,}`), // not $1: a shell's positional parameter
 	"credential": regexp.MustCompile(`(?i)\b(api[ -]?keys?|tokens?|secrets?|credentials?|passwords?|ssh[ -]?keys?|ssh-keygen|oauth|rotate|mint|private keys?|keychain|gh auth)\b|\.ssh/|\.netrc|\.git-credentials|\.config/gh\b|\.aws/|\.docker/config|\.kube/config|\.gnupg|\.npmrc|\.pypirc`),
-	"open":       regexp.MustCompile(`(?i)\b(open (a |the )?port|listen on|0\.0\.0\.0|expose|port[ -]?forward|firewall(d|-cmd)?|ufw|iptables|nft|public url|tunnel|ngrok|cloudflared|inbound|egress grant|egress\.local)\b`),
+	"open":       regexp.MustCompile(`(?i)\b(open (a |the )?port|listen on|0\.0\.0\.0|expose|port[ -]?forward|firewall(d|-cmd)?|ufw|iptables|nft|public url|tunnel|ngrok|cloudflared|inbound|egress grant|egress\.local|egress\.projects)\b`),
 	"outward":    regexp.MustCompile(`(?i)\b(send (an? )?(e-?mail|mail|message|sms|text|dm)|email to|sendmail|tweet|post (to|on|as)|publish (as|in my name)|on my behalf|in my name)\b`),
+}
+
+// WardenOnly is what, past AlwaysPerson, still goes to a warden: what is
+// outside the hive user or can't be undone (the person, 10-30). Every other
+// step an agent takes itself, inside the hive user's reach.
+var WardenOnly = map[string]string{
+	"private": "publishes private details",
+	"history": "deletes a repository or history",
+}
+
+var wardenOnlyRe = map[string]*regexp.Regexp{
+	"private": regexp.MustCompile(`(?i)\b(make (it|the repo(sitory)?|.{0,40}) public|change (its |the )?visibility|visibility|private (details|data|info(rmation)?)|personal (data|details|info(rmation)?)|pii|doxx?(ing)?|leak)\b`),
+	"history": regexp.MustCompile(`(?i)\b(delete (the |a |its )?(repo|repository|repositories|repos|history|branch(es)?|tags?|releases?)|gh repo delete|repo(sitory)? delete|force[- ]push|push (-f|--force)|--force-with-lease|filter-branch|filter-repo|rewrite (the )?history|rm -rf \.git)\b`),
+}
+
+// WardenHit names the WardenOnly category the texts fall in, or "".
+func WardenHit(texts ...string) string {
+	all := strings.Join(texts, "\n")
+	for _, k := range []string{"history", "private"} {
+		if wardenOnlyRe[k].MatchString(all) {
+			return k
+		}
+	}
+	return ""
 }
 
 // CeilingHit names the AlwaysPerson category the texts fall in, or "".

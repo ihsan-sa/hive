@@ -143,7 +143,9 @@ func TestObserve(t *testing.T) {
 		`{"at":"2026-10-25T02:05:00Z","kind":"risk.saved","data":{"id":"q","kind":"request"}}`,
 		`{"at":"2026-10-25T02:05:01Z","kind":"risk.saved","data":{"id":"q","kind":"request"}}`,
 		`{"at":"2026-10-25T02:06:00Z","kind":"run.finish","data":{"id":"w-2","finish":{"status":"done"}}}`,
-		`{"at":"2026-10-25T02:07:00Z","kind":"effect.merged","data":{}}`,
+		`{"at":"2026-10-25T02:07:00Z","kind":"effect.merged","data":{"project":"hive","pr":5}}`,
+		`{"at":"2026-10-25T02:08:00Z","kind":"task.saved","data":{"id":"t-r","project":"hive","from":"improve","kind":"revert","pr":{"number":7}}}`,
+		`{"at":"2026-10-25T02:09:00Z","kind":"effect.merged","data":{"project":"hive","pr":7}}`,
 		`not json`,
 		`{"at":"2026-10-25T03:00:00Z","kind":"msg.sent","data":{"from":"w-1","to":"w-2","text":"late"}}`,
 	}, "\n")
@@ -158,8 +160,8 @@ func TestObserve(t *testing.T) {
 	if rep.Briefs != 1 || rep.Helpers != 1 || rep.Asks != 1 {
 		t.Errorf("briefs %d, helpers %d, asks %d: want 1 each", rep.Briefs, rep.Helpers, rep.Asks)
 	}
-	if rep.Runs["worker"] != 1 || rep.Runs["lead"] != 1 || rep.Runs["sweep"] != 1 || rep.Finished["done"] != 1 || rep.Merged != 1 {
-		t.Errorf("runs %v, finished %v, merged %d", rep.Runs, rep.Finished, rep.Merged)
+	if rep.Runs["worker"] != 1 || rep.Runs["lead"] != 1 || rep.Runs["sweep"] != 1 || rep.Finished["done"] != 1 || rep.Merged != 1 || rep.Reverted != 1 {
+		t.Errorf("runs %v, finished %v, merged %d, reverted %d", rep.Runs, rep.Finished, rep.Merged, rep.Reverted)
 	}
 	rep.Variant = "vague"
 	if tab := Table([]Report{rep}); !strings.Contains(tab, "| vague |") || !strings.Contains(tab, "worker→worker 2") || !strings.HasSuffix(strings.Split(tab, "\n")[2], "| - | - |") {
