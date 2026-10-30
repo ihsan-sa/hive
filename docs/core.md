@@ -74,6 +74,28 @@ Every other package is module material. Most are compiled-in modules already (`i
 
 Inside the core packages, these parts are module material too: harness specifics in `runs.go` (Codex homes and usage, open-model keys) and `tokens.go` (each harness's credential reader and renewal), `route.go` (model routes, open models), `ceiling.go`'s `Tier` and `Route` (who weighs a step), `forge_local.go` (a dev and test forge), `app/selfgate.go` (the gate's runner), the daemon's routes for chat, feedback, projects, release and work, and `cmd/hive`'s verbs for kb, improve, gate, report, share, model and update.
 
+## Where it goes: the minimal core (pivot, 10-30)
+
+The person, 2026-10-30: "they can freely edit everything including the core with no process"; "EVERYTHING is a module, including messaging. So all messages are public on a board and agents can add themselves"; "they dont read anything but they find whats needed"; "they get given minimal stuff".
+Issue #2200 takes that in two steps.
+
+Step 1, no process for any change, is on main: a worker's finish merges at once, and any agent may push to main itself ([status.md](status.md)).
+What it left behind is deleted rather than kept switched off: the module review (the runner's read before a git module's program starts, `modules.Review`, `/api/module/review`, the `module-reviewer` prompt) and the lead-held draft wait in the work module (`DraftSince`, `DraftWhy`, `reviveDrafts`).
+Kept, because they are the hard limits and the way back, not process: the warden's read of a change to the limits code (`LimitsHeld`), the publish scan, the person's `hold_merges`, keep-history on main, improve's measure-and-revert, H0's fallback build and the nightly backup.
+The release's security read stays while it gates what goes out to other machines, which is outward, not a change inside the Hive.
+
+Step 2 is the target for the core, and it is smaller than the table above:
+- **Sessions within the spend cap**: start, park, resume and stop an agent's session in its own checkout, and refuse one past the cap (`Runs`, `Runs.Spent`, `internal/proc`).
+- **The wardens at the edge**: the sandbox and the permissions ceiling, and the effects process that holds every credential and sends a hard-limit step to a warden (`ceiling.go`, `internal/sandbox`, the credential half of `effects.go`).
+- **The event log**: every state change is a journal event (`journal.go`), which every module and agent reads.
+
+Everything else is a module, messaging included:
+- **Messaging is a board.** Every message goes to one public board, kept as events; an agent adds itself to a thread, and nothing is pushed into its context. An agent finds what it needs by searching the board, the KB and the log; a mention only wakes it. `hive agent message`, the inbox, the chats and the person's feed become this module's ops, and `ops.go`'s messaging and `person.go` leave the core.
+- **Starting context is minimal**: a short orientation and the brief; the rest is found, not handed over (the agents module's prompts).
+- **Landing a change is the agent's**: with nothing waiting before a merge, the work module's pipeline (ask, issue, PR, stages) is one way to land among others, not core; the merge guarantees left in `Effects.Merge` are the hard limits above.
+
+Each move deletes first and rewrites after: the old path goes in the same change that its replacement lands, so the core never carries both.
+
 ## The order to move them
 
 Each move is one change with no behaviour change, so a regression is easy to see and to revert.

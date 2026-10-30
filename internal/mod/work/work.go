@@ -163,13 +163,7 @@ type Task struct {
 	// an earlier push of the Hive's than the task's head (head.go).
 	HeadWait   time.Time `json:"head_wait,omitempty"`
 	HeadWaitOn string    `json:"head_wait_on,omitempty"`
-	DraftSince time.Time `json:"draft_since,omitempty"` // its PR has been a draft, waiting on a read, since then
-	DraftTold  bool      `json:"draft_told,omitempty"`  // the lead was told it has waited long
-	DraftWhy   string    `json:"draft_why,omitempty"`   // why the lead made its PR a draft (pr_draft)
-	// DraftRevived: it was brought back once after stopping on a draft merge
-	// (reviveDrafts), so stopping on one again leaves it for the lead.
-	DraftRevived bool `json:"draft_revived,omitempty"`
-	Failures     int  `json:"failures"`
+	Failures   int       `json:"failures"`
 	// StoppedAt is when its steps' errors last stopped it, and Revivals how
 	// often the Hive has brought it back from such a stop since (revive).
 	StoppedAt time.Time `json:"stopped_at,omitempty"`
@@ -498,9 +492,6 @@ func (m *Module) store(t *Task, note string, steer bool) bool {
 		return false
 	}
 	t.Updated = now
-	if t.Stage != StageMerging { // a draft's wait counts only while it stays in merging
-		t.DraftSince, t.DraftTold = time.Time{}, false
-	}
 	if !t.Updated.After(m.online) {
 		t.Updated = m.online.Add(time.Nanosecond)
 	}
@@ -945,7 +936,6 @@ func (m *Module) prepareRecord(t *Task, p core.Project) error {
 // for a worker goes only when the queue lets it, and otherwise says why it waits.
 func (m *Module) Tick() {
 	m.revive()
-	m.reviveDrafts()
 	m.C.Effects.Slots.Fill()
 	m.reapStuck()
 	m.unweighFinished()
@@ -1279,8 +1269,8 @@ func (m *Module) revive() {
 			said = "brought back: it stopped only because a call was killed by its timeout while the machine was loaded"
 		case core.BaseMoved(why):
 			said = "brought back: it stopped only because main moved while it merged"
-		case paused && core.IsRateLimit(why), slow && core.TimedOut(why), core.ChecksRefused(why), stoppedOnDraft(t):
-			continue // waits for its own cause to clear (above, reviveRefused, reviveDrafts)
+		case paused && core.IsRateLimit(why), slow && core.TimedOut(why), core.ChecksRefused(why):
+			continue // waits for its own cause to clear (above, reviveRefused)
 		case t.StoppedAt.IsZero() || time.Since(t.StoppedAt) < ReviveWait(t.Revivals):
 			continue
 		default:
@@ -1340,42 +1330,6 @@ func (m *Module) reviveRefused() {
 		}
 		t.Reason, t.Failures, t.Round, t.Reviews, t.Conflicts, t.Stage = "", 0, 0, 0, 0, StageLanding
 		m.save(&t, "brought back: the forge's checks on "+core.Short(t.SHA)+" read now, where the token was refused them before")
-	}
-}
-
-// stoppedOnDraft says t was stopped by the merge's repeated refusal of a
-// draft, from before the Hive readied the drafts it cleared, and hasn't been
-// brought back for it yet. "left for a read" is ErrDraft's older wording.
-func stoppedOnDraft(t Task) bool {
-	why := strings.TrimPrefix(t.Reason, gaveUpOnErrors)
-	return t.Stage == StageStopped && !t.ByPerson && !t.DraftRevived && strings.HasPrefix(t.Reason, gaveUpOnErrors) &&
-		(strings.Contains(why, "is still a draft") || strings.Contains(why, core.ErrDraft.Error()) || strings.Contains(why, "is a draft, left for a read"))
-}
-
-// reviveDrafts brings back, once per task, the tasks stopped only because
-// their PR was a draft: they go through the gate again, which readies a draft
-// it clears. One that can't come back says why in its log; one that stops on
-// a draft again waits for the lead's pr_ready or recheck. While GitHub
-// rate-limits the Hive it waits, as revive does.
-func (m *Module) reviveDrafts() {
-	m.mu.Lock()
-	paused := time.Now().Before(m.limit)
-	m.mu.Unlock()
-	if paused {
-		return
-	}
-	for _, t := range m.List(stoppedOnDraft) {
-		err := m.Recheck(t.ID, "", "the Hive")
-		t, ok := m.Get(t.ID)
-		if !ok {
-			continue
-		}
-		t.DraftRevived = true
-		if err != nil {
-			m.save(&t, "not brought back after stopping on a draft: "+core.Clip(err.Error(), 300))
-			continue
-		}
-		m.save(&t, "brought back: it stopped only because its PR was a draft, which the Hive now readies once its gate clears the head")
 	}
 }
 
@@ -2020,9 +1974,6 @@ func (m *Module) open(t *Task, p core.Project, sha, body string) error {
 	if err != nil {
 		return err
 	}
-	if pr.Number != t.PR.Number {
-		t.DraftWhy = "" // the lead held another PR, not this fresh one
-	}
 	if t.PR.Number != 0 && t.SHA != sha {
 		m.status(t, p, pr.Number, fmt.Sprintf("New commit %s after round %d.", core.Short(sha), t.Round))
 	}
@@ -2368,10 +2319,6 @@ func (m *Module) merge(t *Task, p core.Project) error {
 	}
 	if closed, err := m.closedPR(t, p, pr); closed || err != nil {
 		return err
-	}
-	if !t.DraftSince.IsZero() {
-		t.Reason, t.DraftSince, t.DraftTold, t.DraftWhy = "", time.Time{}, false, ""
-		m.save(t, "a draft no longer holds a merge; on to it")
 	}
 	main, err := m.C.Effects.Sync(p)
 	if err != nil {

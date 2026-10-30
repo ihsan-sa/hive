@@ -604,8 +604,6 @@ func (m *model) keyDetailAction(d *detail, key string) (tea.Model, tea.Cmd) {
 				allow := !contains(mod.Projects, p)
 				return m, m.post("/api/module/access", map[string]any{"module": mod.Name, "project": p, "allow": allow}, "access updated")
 			}
-		case "r":
-			return m, m.post("/api/module/review", map[string]any{"module": mod.Name}, "its code will be read again")
 		}
 	}
 	return m, nil

@@ -46,7 +46,7 @@ func newRunnerIn(t *testing.T, dir, name string) (*Runner, modules.Module, strin
 	}
 	commit, _ := core.Git(dir, "rev-parse", "HEAD")
 	m, _ := mods.Get(name)
-	r := &Runner{C: c, Mods: mods, Agents: &agents.Agents{C: c, Mod: mods}, status: map[string]string{}, tries: map[string]int{}, missing: map[string]bool{}}
+	r := &Runner{C: c, Mods: mods, Agents: &agents.Agents{C: c, Mod: mods}, status: map[string]string{}, missing: map[string]bool{}}
 	return r, m, commit
 }
 

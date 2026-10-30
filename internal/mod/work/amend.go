@@ -130,7 +130,7 @@ func (m *Module) Withdraw(r core.Run, id, into, why string) (Task, error) {
 		if t.Worker != "" { // a blocked worker may still wait on a reply: it isn't woken again
 			m.C.Runs.Stop(t.Worker, "its brief was "+withdrawn+r.ID+": "+core.Clip(strings.TrimSpace(why), 300))
 		}
-		t.Checkpoint, t.DraftWhy = "", ""
+		t.Checkpoint = ""
 	}
 	reason := withdrawn + r.ID + ": " + core.Clip(strings.TrimSpace(why), 300)
 	if by.ID != "" {
@@ -230,7 +230,7 @@ func (m *Module) Retract(r core.Run, id, why string) (Task, error) {
 		}
 	}
 	reason := withdrawn + r.ID + " after its worker started: " + why
-	t.Stage, t.Reason, t.Held, t.HeldBy, t.Now, t.Checkpoint, t.DraftWhy = StageStopped, reason, false, "", false, "", ""
+	t.Stage, t.Reason, t.Held, t.HeldBy, t.Now, t.Checkpoint = StageStopped, reason, false, "", false, ""
 	if perr == nil && t.Issue.Number != 0 {
 		m.comment(p.Repo, t.Issue.Number, "Withdrawn by "+r.ID+" after a worker started on it: "+why)
 		t.IssueOpen = true // closed by the step, retried as a done task's is

@@ -286,20 +286,6 @@ func TestModuleDetailReachesEveryProject(t *testing.T) {
 	checkWidth(t, m.View(), 80, 14, "module detail")
 }
 
-// TestModuleReviewKey: in the module detail, r asks for the code to be read
-// again, and the hint line says so.
-func TestModuleReviewKey(t *testing.T) {
-	m := testModel(160, 20)
-	m.pick(sideRow{sec: secModules})
-	m.stack = []detail{{kind: "module", id: "agents"}}
-	if _, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("r")}); cmd == nil {
-		t.Fatal("r in the module detail sent nothing")
-	}
-	if h := ansi.Strip(m.hintLine()); !strings.Contains(h, "review again") {
-		t.Fatalf("module hint line lacks r: %q", h)
-	}
-}
-
 // TestWheelMovesModuleSelection: the module detail windows on its selection,
 // so the wheel moves the selection rather than the unused scroll offset.
 func TestWheelMovesModuleSelection(t *testing.T) {

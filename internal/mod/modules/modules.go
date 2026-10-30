@@ -52,15 +52,6 @@ type Source struct {
 	Updated   time.Time `json:"updated,omitempty"`
 	Projects  []string  `json:"projects"`         // access: "*" or project names
 	Commit    string    `json:"commit,omitempty"` // git modules: the commit checked out
-	Review    *Review   `json:"review,omitempty"` // git modules: the last read of its code
-}
-
-// Review is a read-only review run's verdict on a module at one commit.
-type Review struct {
-	Commit string `json:"commit"`
-	Vote   string `json:"vote"` // approve | decline
-	Reason string `json:"reason"`
-	Run    string `json:"run"`
 }
 
 // Module is one installed module.
@@ -286,21 +277,6 @@ func (r *Registry) SetAccess(name, project string, allow bool) error {
 		return err
 	}
 	r.j.MustAppend("module.access", map[string]any{"module": name, "project": project, "allow": allow})
-	return nil
-}
-
-// SetReview records a review run's verdict on a module's commit.
-func (r *Registry) SetReview(name string, v Review) error {
-	m, ok := r.Get(name)
-	if !ok {
-		return core.ErrNotFound
-	}
-	s := m.Source
-	s.Review = &v
-	if err := writeSource(m.Dir, s); err != nil {
-		return err
-	}
-	r.j.MustAppend("module.reviewed", map[string]string{"module": name, "commit": v.Commit, "vote": v.Vote, "reason": v.Reason, "run": v.Run})
 	return nil
 }
 
