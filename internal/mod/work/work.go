@@ -441,7 +441,7 @@ func New(c *core.Core, a *agents.Agents, ch *chat.Module) *Module {
 	c.J.Replay(apply)
 	c.J.Subscribe(apply)
 	c.Runs.Ops().AddRouter(m.toFiler)
-	c.Runs.Ops().Register(core.Op{Name: "brief", Help: `{"title","done","known","project","aim","why","apart"} (aim: fix, with why naming the failure it fixes, merges on its tests, checks and reads and isn't reverted for a score dip alone; anything else is taken as a gain, which on the Hive's own repository merges only if the recursive gate shows it); one matching an open task not yet pushed (a test both name, a near-identical title) and taken the same way joins it as added context instead, unless apart`, Fn: m.opBrief})
+	c.Runs.Ops().Register(core.Op{Name: "brief", Help: `{"title","done","known","project","aim","why","apart"} (aim: fix, with why naming the failure it fixes, merges on its tests, checks and reads and isn't reverted for a score dip alone; anything else is taken as a gain, which on the Hive's own repository merges only if the recursive gate shows it); one matching an open task not yet pushed (a test both name, a near-identical title, or one filed within the hour sharing most of its words) and taken the same way joins it as added context instead, unless apart`, Fn: m.opBrief})
 	c.Runs.Ops().Register(core.Op{Name: "aim", Help: `{"task","aim":"fix"|"gain","why"} (your own task by default; any other task) -> sets whether the task is a fix of the failure why names, which merges on its tests, checks and reads and isn't reverted for a score dip alone, or a gain, which on the Hive's own repository merges only on the recursive gate's clear gain`, Fn: m.opAim})
 	c.Runs.Ops().Register(core.Op{Name: "recheck", Help: `{"task","back"} -> a blocked or stopped task's commits are pushed and checked again (whoever stopped it); a working one's worker gets back at once; one stuck on its way to the merge (landing, testing, reviewing, merging: say on checks of a commit that is no longer its head) is retried the same way from its branch's head, and a stuck checkpoint is dropped while its worker goes on; with back, its worker gets that text and works on`, Fn: m.opRecheck})
 	c.Runs.Ops().Register(core.Op{Name: "rerun-checks", Help: `{"task"} (your own task by default; any other task) -> re-runs the failed forge checks (CI jobs) on the PR's head, for a flake that isn't the change's fault; at most 2 per head, and the merge waits for the new result`, Fn: m.opRerunChecks})
@@ -743,7 +743,11 @@ func (m *Module) opBrief(r core.Run, args json.RawMessage) (any, error) {
 	defer m.filing.Unlock()
 	if !b.Apart {
 		own, _ := m.taskOf(r.ID)
-		if t, why, ok := m.join(b, own.ID, r.Role == "lead"); ok {
+		t, why, ok, err := m.join(b, own.ID, r.Role == "lead")
+		if err != nil {
+			return nil, err
+		}
+		if ok {
 			return map[string]string{"task": t.ID, "joined": "true", "note": fmt.Sprintf("not filed anew: %s, so your brief joins open task %s (%q, %s) as added context; if it is different work, file it again with apart", why, t.ID, t.Label(), t.Stage)}, nil
 		}
 	}

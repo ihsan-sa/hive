@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 )
@@ -191,5 +192,77 @@ func TestJoinSkipsEndedWorkerAndTellsLeadThread(t *testing.T) {
 	again := brief(t, m, "w-two", map[string]any{"title": "TestQueueOrder still red", "aim": "fix", "why": "TestQueueOrder fails"})
 	if again["task"] == task.ID || again["joined"] != "" {
 		t.Fatalf("a brief joined a task whose worker had ended: %v", again)
+	}
+}
+
+// A lead's paraphrase of what a step-back filed minutes before is the same
+// ask, on the pairs filed on 2026-10-30 (each about 0.25 by likeness); the
+// other briefs filed on the same project in those minutes are not, and an
+// ask filed over an hour ago is matched by its words no more.
+func TestBriefMatchRecentParaphrase(t *testing.T) {
+	now := time.Now().UTC().Add(-5 * time.Minute)
+	dispatch := Task{Title: "dispatch's score depends on the commit, not on whether iiks1 is up today", Created: now,
+		Done:   "'go run ./cmd/dispatch score' runs a home against a local runner in a temp dir through status, a worker turn ending ok, a turn falling back locally; it gives the same number on the same commit every time.",
+		AimWhy: "the score (iiks1 turns ok in 24h) moves with iiks1's uptime and the Hive's load, not the commit"}
+	lite := Task{Title: "Lite is order-ready under today's hwde: D1's TVS rated for a 21 V PD rail, then an order-time re-check and the person told", Created: now,
+		Done:   "On main: lite-main passes every hwde gate (erc, drc_routed, verify, dfm) with hwde 4827325 or later. D1 is a TVS whose standoff covers 21 V and whose clamp still protects CH224 VHV. The fab package is regenerated.",
+		AimWhy: "hwde 4827325 fails lite-main's verify gate: check_ratings: D1 is reversed by 21 V, over its 20 V reverse rating (SMBJ20A on the 20 V PD rail)"}
+	core := Task{Title: "core's open order-stoppers that need no new design: FFC J3 against ultra-front, the TOSLINK pinout and fit, the USB4085 footprint", Created: now,
+		Done:   "python3 tools/known_unknowns.py on main shows parts:64, parts:51, parts:52, dfm:16 and dfm:7 verified or resolved.",
+		AimWhy: "known_unknowns.py --check on main lists 7 open board-stopping facts on core; 5 can be closed now and nothing is filed for them"}
+	score := Task{Title: "The score's 0 means order-ready: open board-stopping facts count, and CI gates with the hwde the Hive runs", Created: now,
+		Done:   "tools/hwcheck.py score adds a fixed cost per open board-stopping fact in docs/known-unknowns. .github/workflows pins HWDE_REF to the hwde commit at /hive/tools/hwde.",
+		AimWhy: "The score reaches 0 when every tier is counted and under budget, but tier 'counted' takes no account of open board-stopping facts"}
+	for _, c := range []struct {
+		b    Brief
+		t    Task
+		same bool
+	}{
+		{Brief{Title: "dispatch's score measures the commit, not the day: a real iiks1 outage or a quiet day doesn't make a good commit look worse", Aim: "fix",
+			Why: "the brief names something broken: dispatch's score measures the commit, not the day"}, dispatch, true},
+		{Brief{Title: "Lite's VBUS TVS is rated above the highest contract voltage, and Lite passes today's hwde", Aim: "fix",
+			Done: "lite-main's D1 swaps to an in-stock TVS whose standoff is above the max VBUS Lite can ever negotiate. hwde 4827325+ verify, stock gate and every rating check pass on lite-main. The fab package is regenerated.",
+			Why:  "hwde 4827325's check_ratings fails lite-main: D1 SMBJ20A (20 V standoff) is below the 21 V a 20 V USB-C contract may deliver"}, lite, true},
+		{Brief{Title: "Core's open facts closed: FFC J3 against ultra-front, the TOSLINK pinout and fit, the USB4085 footprint", Aim: "fix",
+			Why: "core has 7 open facts in known_unknowns --check that could stop it working"}, core, true},
+		{Brief{Title: "Lite's VBUS TVS is rated above the highest contract voltage, and Lite passes today's hwde", Aim: "fix",
+			Why: "hwde 4827325's check_ratings fails lite-main"}, core, false},
+		{Brief{Title: "Core's open facts closed: FFC J3 against ultra-front, the TOSLINK pinout and fit, the USB4085 footprint", Aim: "fix",
+			Why: "core has 7 open facts in known_unknowns --check that could stop it working"}, lite, false},
+		{Brief{Title: "CI runs boards against current hwde, not a pinned aa1ec48", Aim: "fix",
+			Done: "The forge CI workflow runs hwde at hive-hive-hwde main, not a fixed aa1ec48, and records the hwde version in the run.",
+			Why:  "CI pins HWDE_REF aa1ec48, so none of hwde's 10-30 checks gate any board"}, score, false},
+	} {
+		if got := match(c.b, c.t) != ""; got != c.same {
+			t.Errorf("%q / %q: same ask %v, want %v", c.b.Title, c.t.Title, got, c.same)
+		}
+	}
+	old := dispatch
+	old.Created = now.Add(-2 * time.Hour)
+	if why := match(Brief{Title: "dispatch's score measures the commit, not the day: a real iiks1 outage or a quiet day doesn't make a good commit look worse"}, old); why != "" {
+		t.Errorf("an ask filed two hours ago matched by its words: %s", why)
+	}
+}
+
+// A brief matching only a task a step holds past the wait is refused, not
+// filed as a second task (2026-10-29: the same title filed 11 s apart, both
+// kept); once the step lets go, it joins.
+func TestBriefMatchingAHeldTaskIsRefused(t *testing.T) {
+	m := queueRig(t)
+	ask := map[string]any{"title": "check_ratings misses an LED's reverse-voltage rating on hwde-led-test's D1"}
+	first := brief(t, m, "w-one", ask)
+	if !m.claim(first["task"]) {
+		t.Fatal("couldn't hold the task")
+	}
+	raw, _ := json.Marshal(ask)
+	if _, err := m.opBrief(core.Run{RunSpec: core.RunSpec{ID: "w-two", Role: "worker", Project: "p"}}, raw); err == nil || !strings.Contains(err.Error(), first["task"]) {
+		t.Fatalf("a brief matching a held task wasn't refused: %v", err)
+	}
+	if n := len(m.List(nil)); n != 1 {
+		t.Fatalf("want one task, got %d", n)
+	}
+	m.release(first["task"])
+	if again := brief(t, m, "w-two", ask); again["task"] != first["task"] {
+		t.Fatalf("once let go, the brief didn't join: %v", again)
 	}
 }
