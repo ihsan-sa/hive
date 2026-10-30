@@ -154,6 +154,7 @@ type Task struct {
 	// run at all while its required ones were awaited (head.go).
 	NoChecks   time.Time `json:"no_checks,omitempty"`
 	NoChecksOn string    `json:"no_checks_on,omitempty"`
+	CIStarted  string    `json:"ci_started,omitempty"` // the head the Hive started the forge's CI on, once (head.go)
 	// HeadWait is when the forge was first seen still showing HeadWaitOn,
 	// an earlier push of the Hive's than the task's head (head.go).
 	HeadWait   time.Time `json:"head_wait,omitempty"`

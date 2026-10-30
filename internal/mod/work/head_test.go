@@ -110,7 +110,7 @@ func waitedLong(t *testing.T, task *Task) {
 // each of which loads it afresh: else the wait restarts every tick.
 func TestMergeNoCheckRunsWaitSurvivesReload(t *testing.T) {
 	list := map[string]string{core.SecurityList: "paths = [\"secure/**\"]\nrequired_checks = [\"sandboxed-e2e\"]\n"}
-	m, task, p, _ := gateRigSeeded(t, false, list, map[string]string{"feature.txt": "y"})
+	m, task, p, f := gateRigSeeded(t, false, list, map[string]string{"feature.txt": "y"})
 	toMerging(t, m, task, p)
 	mergeOnce(t, m, task, p)
 	setJSON(t, task, map[string]any{"no_checks": nil, "no_checks_on": nil}) // as saved before the wait was bounded
@@ -134,8 +134,39 @@ func TestMergeNoCheckRunsWaitSurvivesReload(t *testing.T) {
 	}
 	waitedLong(t, again)
 	mergeOnce(t, m, again, p)
-	if !strings.Contains(again.Reason, "lead has been told") || alerts(m, "no-checks") != 1 {
-		t.Fatalf("reason %q, %d alerts", again.Reason, alerts(m, "no-checks"))
+	if !strings.Contains(again.Reason, "the CI the Hive started") || alerts(m, "no-checks") != 0 || f.CIStarts(p.Repo, again.SHA) != 1 {
+		t.Fatalf("reason %q, %d alerts, %d CI starts", again.Reason, alerts(m, "no-checks"), f.CIStarts(p.Repo, again.SHA))
+	}
+	again = reload()
+	if !logHas(again, "the Hive started its CI: dispatched") {
+		t.Fatalf("the start isn't on the task's record: %q", again.Reason)
+	}
+	waitedLong(t, again)
+	mergeOnce(t, m, again, p)
+	if !strings.Contains(again.Reason, "lead has been told") || !strings.Contains(again.Reason, "even after the Hive started its CI") || alerts(m, "no-checks") != 1 || f.CIStarts(p.Repo, again.SHA) != 1 {
+		t.Fatalf("reason %q, %d alerts, %d CI starts", again.Reason, alerts(m, "no-checks"), f.CIStarts(p.Repo, again.SHA))
+	}
+}
+
+// A head whose CI the Hive started merges on the checks that start brings
+// (the incident of hive-slack's PRs #9, #10 and #15, opened before ci.yml
+// landed on main).
+func TestMergeStartsCIOnAHeadNeverRun(t *testing.T) {
+	list := map[string]string{core.SecurityList: "paths = [\"secure/**\"]\nrequired_checks = [\"sandboxed-e2e\"]\n"}
+	m, task, p, f := gateRigSeeded(t, false, list, map[string]string{"feature.txt": "y"})
+	toMerging(t, m, task, p)
+	mergeOnce(t, m, task, p)
+	waitedLong(t, task)
+	m.later = map[string]time.Time{}
+	mergeOnce(t, m, task, p)
+	if f.CIStarts(p.Repo, task.SHA) != 1 || task.Stage != StageMerging {
+		t.Fatalf("%d CI starts, stage %q, reason %q", f.CIStarts(p.Repo, task.SHA), task.Stage, task.Reason)
+	}
+	f.SetChecks(p.Repo, task.SHA, core.CheckRun{Name: "sandboxed-e2e", State: core.CheckPass}, core.CheckRun{Name: "test", State: core.CheckPass})
+	m.later = map[string]time.Time{}
+	mergeOnce(t, m, task, p)
+	if task.Stage != StageMerged || alerts(m, "no-checks") != 0 {
+		t.Fatalf("stage %q, reason %q, %d alerts", task.Stage, task.Reason, alerts(m, "no-checks"))
 	}
 }
 
