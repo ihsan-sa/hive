@@ -868,6 +868,37 @@ func TestWeighDeclineAndCeiling(t *testing.T) {
 	}
 }
 
+// A hardware project's score is its unit cost, so its protected merges talk
+// about cost, USD and the BOM; saying yes spends nothing, so a warden weighs
+// them at autonomy 3 and its yes merges (#1993: hifi-receiver-2's PRs #27
+// and #29 went to the person on "in USD").
+func TestWeighCostScoredMergeIsTheWardens(t *testing.T) {
+	g := newRig(t, 3)
+	answered := make(chan core.Ask, 1)
+	g.c.Person.Handle("merge", func(a core.Ask) { answered <- a })
+	diff := `--- a/tools/hwcheck.py
++++ b/tools/hwcheck.py
+     python3 tools/hwcheck.py score   the first-built tier's unit cost at 100,
+                                      in USD, from its board(s)' BOM, printed
++    print(f"unit cost at {QTY}: ${c['total']:.2f}")`
+	if who := g.m.Weigh(core.Ask{Kind: "merge", Ref: "t@1", From: g.worker.ID, Title: `Merge "Cut the BOM price"? It changes tools/hwcheck.py`,
+		Detail: "These hold the project's goals, score or settings.", Diff: diff, Options: []string{"merge", "leave open"}}); who != "warden" {
+		t.Fatalf("a cost-scored merge went to the %s", who)
+	}
+	req := g.m.List()[0]
+	if err := g.decide(req, map[string]string{"decision": "do", "reason": "only the test's docstring"}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case a := <-answered:
+		if a.Answer != "merge" {
+			t.Fatalf("the warden's yes answered %+v", a)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatalf("the warden's yes never merged: %+v", g.settle(req.ID, "weighing", "approved"))
+	}
+}
+
 // A merge that touches the floor goes to the person when it is filed, before
 // any warden sees it.
 func TestWeighFloorGoesToThePerson(t *testing.T) {
