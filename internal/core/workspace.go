@@ -45,13 +45,23 @@ func (w Workspace) Gates() string              { return filepath.Join(w.Hive(), 
 // made or a file renamed in it mid-turn is covered too.
 func (w Workspace) Private() string { return filepath.Join(w.Hive(), "private") }
 
+// Secrets is where each project's own secret files live, one folder per
+// project, filled by the person or a warden's script: a project's runs read
+// their own folder read-only at /hive/secrets ($HIVE_SECRETS).
+func (w Workspace) Secrets() string { return filepath.Join(w.Hive(), "secrets") }
+
+// ProjectSecrets is project's own secrets folder.
+func (w Workspace) ProjectSecrets(project string) string {
+	return filepath.Join(w.Secrets(), project)
+}
+
 // Covered is the folders covered wherever agents read .hive: the login pool's
-// stored logins, module programs' homes and logs, and Private. No host
+// stored logins, module programs' homes and logs, Private and Secrets. No host
 // interpreter's install bound into a sandbox may hold one or sit inside one.
 // The paths are absolute, so a relative root still guards them.
 func (w Workspace) Covered() []string {
 	hive := filepath.Join(w.abs(), ".hive")
-	return []string{filepath.Join(hive, "logins"), filepath.Join(hive, "modules"), filepath.Join(hive, "private")}
+	return []string{filepath.Join(hive, "logins"), filepath.Join(hive, "modules"), filepath.Join(hive, "private"), filepath.Join(hive, "secrets")}
 }
 
 // Guarded is what no host interpreter's install bound into a sandbox may
