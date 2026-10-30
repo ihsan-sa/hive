@@ -1,4 +1,4 @@
-# Status - 2026-10-28
+# Status - 2026-10-22
 
 [overview.md](overview.md) repeats a few facts from here (the untested macOS sandbox, Codex without a real login, the gate's first keep on merit not yet released, no hive-eval pilot run yet).
 When one of them changes, change it there too.
@@ -14,14 +14,17 @@ Not started, by design.
 Paused:
 - macOS and Windows, on the person's word (2026-10-24, issue #564: "only building linux releases for now and only focusing on the RSI").
   CI (`test`, `sandboxed-e2e`, `old-releases`), the update and install-smoke tests run on ubuntu-latest alone, release.yml builds linux/amd64 and linux/arm64 only, and only a Linux Hive follows pre-releases (`runners` in internal/mod/release/prerelease.go).
-  Nothing in the merge path waits on another system; ihsan-sa/hive's main has no branch protection or rulesets requiring the old `test (macos-latest)`/`test (windows-latest)` checks (GitHub's API, 2026-10-25). install.sh on macOS and install.ps1 stop with "Linux only for now" when a release has no binary for them, and the site and README say so.
+  Nothing in the merge path waits on another system; ihsan-sa/hive's main has no branch protection or rulesets requiring the old `test (macos-latest)`/`test (windows-latest)` checks (GitHub's API, 2026-10-25).
+  install.sh on macOS and install.ps1 stop with "Linux only for now" when a release has no binary for them, and the site and README say so.
   The macOS and Windows steps of update.yml, install-smoke.yml and old-releases.yml were removed; `git show 65b1651:<file>` has them.
   They come back once the self-improvement loop is tight and fast: restore the matrices, the release targets and `runners`, with Windows in ci's matrix for pushes to main as well as PRs (issue #595), so a PR's Windows red has main's result to compare against. Decide then whether a release follows the merge rule: today a release needs main's whole ci workflow green (`mainGreen` in internal/mod/release reads the raw runs, not `core.Advisory`), so a flaky Windows job on `advisory_checks` would hold every release.
-  Notes below about macOS or Windows describe how things stood before the pause.
+  Older notes about macOS or Windows (in git history) describe how things stood before the pause.
 
-What's done isn't listed here: `git log` and the journal record every change, [log.md](log.md) the decisions, and each feature's own doc how it works.
-This file holds only what stands now: the focus, what's paused, what isn't verified and what's next, so two changes rarely touch the same line.
-Don't add a line here for a change you made.
+What's done is not listed here: a change doesn't add a line to this page or to [log.md](log.md) (issue #2100).
+Every PR edited the same spot here, so independent PRs conflicted and each conflict cost a worker a turn (docs/status.md was touched 52 times and docs/log.md 51 in the 221 commits of 10-26 to 10-29).
+What a change did and why is its PR's description (the worker's account), in `git log` and the record (`record/task/<id>.md` in the knowledge base).
+The Done list as it stood is in `git show df6ae15:docs/status.md`.
+Edit this page only when what it says now stops being true: the focus, what is paused, not verified or next.
 
 Not verified:
 - A change the recursive gate kept on merit, released and run in place of the Hive that kept it (its first keep, PR #441, won only on a flake of the control's; [gate.md](gate.md)).
