@@ -154,3 +154,46 @@ func TestChecksSeeOtherProjects(t *testing.T) {
 		t.Fatalf("an isolated project's check gets HIVE_PROJECTS: %v", specs[0].Env)
 	}
 }
+
+// A module project's score check reads a read-only copy of its module's
+// records at HIVE_HOME, laid out as the Hive's own, and nothing else of the
+// module's HOME; its test check gets none.
+func TestScoreCheckReadsModuleRecords(t *testing.T) {
+	c, f := testHive(t)
+	home := filepath.Join(t.TempDir(), "mod")
+	os.MkdirAll(home, 0o700)
+	os.WriteFile(filepath.Join(home, "turns.jsonl"), []byte(`{"turn":"w-1","ended":true}`+"\n"), 0o600)
+	os.WriteFile(filepath.Join(home, "id_ed25519"), []byte("secret\n"), 0o600)
+	os.Symlink(filepath.Join(home, "id_ed25519"), filepath.Join(home, "key.jsonl"))
+	c.Effects.ModuleHomes = func(project string) []string {
+		if project == "mod" {
+			return []string{home}
+		}
+		return nil
+	}
+	var specs []sandbox.Spec
+	c.Effects.sandbox = func() (sandbox.Sandbox, error) { return mapped{specs: &specs}, nil }
+	seedRepo(t, f, "me/mod", map[string]string{".hive/project.json": `{"test": "true"}`})
+	p, err := c.Projects.Add(Project{Name: "mod", Repo: "me/mod"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	main, err := c.Effects.Sync(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := "/hive/records/.hive/modules/mod/"
+	ch := c.Effects.RunCheck(p, main, "score", "cat "+dir+"turns.jsonl; ls -a "+dir+"; echo 1")
+	if !ch.OK || !strings.Contains(ch.Output, `"turn":"w-1"`) || strings.Contains(ch.Output, "id_ed25519") || strings.Contains(ch.Output, "key.jsonl") {
+		t.Fatalf("score check didn't read only the module's records: %+v", ch)
+	}
+	if !slices.ContainsFunc(specs[0].Mounts, func(m sandbox.Mount) bool { return m.Inside == "/hive/records" && !m.RW }) ||
+		!slices.Contains(specs[0].Env, "HIVE_HOME=/hive/records") {
+		t.Fatalf("records not mounted read-only with HIVE_HOME: %+v", specs[0])
+	}
+	specs = nil
+	c.Effects.RunCheck(p, main, "test", "true")
+	if slices.ContainsFunc(specs[0].Mounts, func(m sandbox.Mount) bool { return m.Inside == "/hive/records" }) {
+		t.Fatalf("a test check got the module's records: %+v", specs[0].Mounts)
+	}
+}

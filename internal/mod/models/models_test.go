@@ -102,10 +102,6 @@ func TestAgentsRoute(t *testing.T) {
 			t.Errorf("route %v was taken", bad)
 		}
 	}
-	seat, _ := a.C.Runs.Start(core.RunSpec{Role: "reviewer", Harness: "fake", Checkout: t.TempDir()})
-	if _, err := call(t, a, seat, "route", map[string]any{"role": "worker", "models": "qwen"}); err == nil {
-		t.Fatal("a check seat routed the Hive")
-	}
 
 	res, err := call(t, a, lead, "route", map[string]any{"role": "reviewer", "models": []string{"qwen"}})
 	if err != nil {

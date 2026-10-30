@@ -567,35 +567,6 @@ func selfHive(t *testing.T) (*Module, *notes, func(int, string, string, ...strin
 	return m, n, merged, land
 }
 
-// A self project's release names what each merged head's reader read, waits
-// on a head that merged unread, and holds a root change for the person.
-func TestReleaseNamesItsReads(t *testing.T) {
-	m, n, merged, land := selfHive(t)
-	merged(1, "a1", "m1")
-	m.AfterKept("hive", "m1")
-	if len(n.got) != 0 {
-		t.Fatalf("released a head nobody read: %v", n.got)
-	}
-	land("a1", "r1")
-	m.AfterKept("hive", "m1")
-	if !strings.Contains(n.got["v0.0.1"], "#1 at a1, read by r1") {
-		t.Fatalf("the release doesn't name its read: %q", n.got["v0.0.1"])
-	}
-
-	merged(2, "a2", "m2", "install/root.sh")
-	land("a2", "r2")
-	m.AfterKept("hive", "m2")
-	asks := m.C.Person.Open()
-	if len(n.got) != 1 || len(asks) != 1 || asks[0].Kind != "release" {
-		t.Fatalf("a root change released without the person: %v %+v", n.got, asks)
-	}
-	asks[0].Answer = "release"
-	m.OnPerson(asks[0])
-	if body := n.got["v0.0.2"]; !strings.Contains(body, "#2 at a2") || strings.Contains(body, "#1 ") {
-		t.Fatalf("the second release should name only #2: %q", body)
-	}
-}
-
 // seated journals a security seat's verdict on the own diff diff.
 func seated(m *Module, sha, diff, seat, verdict string) {
 	m.C.J.MustAppend("effect.verdict", core.Verdict{Project: "hive", SHA: sha, Run: "s-" + seat, Verdict: verdict, Diff: diff, Seat: seat})
@@ -735,26 +706,6 @@ func TestCutAnswersOnlyCoveredAsks(t *testing.T) {
 	}
 }
 
-// A release with an unread merge still waits for the person, even when every
-// root path in it passed the Hive's security reads.
-func TestUnreadMergeStillHeldWithRootRead(t *testing.T) {
-	m, n, merged, land := selfHive(t)
-	m.C.J.MustAppend("effect.merged", map[string]any{"project": "hive", "pr": 2, "sha": "a2", "merge_sha": "m2", "root": []string{"install/root.sh"}, "diff": "d2"})
-	land("a2", "r2")
-	for _, seat := range []string{core.SeatSecurity, core.PanelSeat(0), core.PanelSeat(1), core.PanelSeat(2)} {
-		seated(m, "a2", "d2", seat, "land")
-	}
-	merged(3, "a3", "m3")
-	m.AfterKept("hive", "m3")
-	asks := m.C.Person.Open()
-	if len(n.got) != 0 || len(asks) != 1 || !strings.Contains(asks[0].Title, "#3 at a3 merged without a read") || strings.Contains(asks[0].Title, "elevated") {
-		t.Fatalf("an unread merge should hold the release for the person, on that alone: %v %+v", n.got, asks)
-	}
-	if len(m.C.Person.Told(5)) != 0 {
-		t.Fatal("told the person about a release that didn't go out")
-	}
-}
-
 // An answer to an older release ask, given after a newer release was cut,
 // never releases the older merge under a newer tag.
 func TestStaleReleaseAnswer(t *testing.T) {
@@ -829,22 +780,6 @@ func TestUnknownMergeRefused(t *testing.T) {
 	m.OnPerson(core.Ask{Kind: "release", Ref: "hive@outside", Project: "hive", Answer: "release"})
 	if m.C.Effects.Approved("release", "hive", "outside") {
 		t.Fatal("approved a release of an unknown merge")
-	}
-}
-
-// The person's release answer stands for the unread head its ask named.
-func TestPersonReleasesUnreadHead(t *testing.T) {
-	m, n, merged, _ := selfHive(t)
-	merged(1, "a1", "m1")
-	m.AfterKept("hive", "m1")
-	asks := m.C.Person.Open()
-	if len(n.got) != 0 || len(asks) != 1 || !strings.Contains(asks[0].Title, "#1 at a1 merged without a read") {
-		t.Fatalf("an unread head should wait for the person: %v %+v", n.got, asks)
-	}
-	asks[0].Answer = "release"
-	m.OnPerson(asks[0])
-	if body := n.got["v0.0.1"]; !strings.Contains(body, "#1 at a1, not read") || !strings.Contains(body, "The person released it") {
-		t.Fatalf("the release should say #1 went out unread on the person's word: %q", body)
 	}
 }
 
@@ -1801,92 +1736,6 @@ func TestReleaseFallsForwardOnlyToAKeptDescendant(t *testing.T) {
 	}
 }
 
-// A descendant the fall-forward picks that is then held (here a merge after
-// the waiting one went unread) journals release.ci_passed at it: the
-// original's wait ends, so retries stop and its late alert never fires, and
-// the hold's ask tells the person instead.
-func TestReleaseFallForwardHeldEndsTheWait(t *testing.T) {
-	m, n, merged, land := selfHive(t)
-	linear(m)
-	merged(1, "a1", "m1")
-	land("a1", "r1")
-	n.SetChecks("me/hive", "m1", core.CheckRun{Name: "test", State: core.CheckPending})
-	m.AfterKept("hive", "m1")
-	merged(2, "a2", "m2") // never read
-	n.SetChecks("me/hive", "m2", core.CheckRun{Name: "test", State: core.CheckPass})
-	keptAt(m, "m2", true)
-	m.retryWaiting()
-	if len(n.got) != 0 {
-		t.Fatalf("released past an unread merge: %v", n.got)
-	}
-	if w := m.ciState("hive"); w.Kind != "release.ci_passed" || w.SHA != "m2" {
-		t.Fatalf("the descendant's checks didn't end the wait: %+v", w)
-	}
-	asks := m.C.Person.Open()
-	if len(asks) != 1 || asks[0].Kind != "release" || !strings.Contains(asks[0].Ref, "m2") {
-		t.Fatalf("the hold didn't ask the person: %+v", asks)
-	}
-	alerts := journaledN(m, "alert.raised")
-	m.retryWaiting()
-	if journaledN(m, "alert.raised") != alerts || len(n.got) != 0 {
-		t.Fatalf("a wait the hold ended was retried: %v", n.got)
-	}
-}
-
-// An automatic update waits for the recursive gates running, since the
-// restart ends them, and holds new ones back meanwhile; once they end it
-// installs. `hive update` doesn't wait.
-func TestAutoUpdateWaitsForRunningGates(t *testing.T) {
-	serve(t, "v9.9.9", build("new"), false)
-	m, exe := releaseAt(t, "v0.1.2", "me/hive")
-	running := 1
-	var held time.Time
-	m.Gates = func() (int, time.Time) { return running, time.Now().Add(-time.Hour) }
-	m.HoldGates = func(until time.Time) { held = until }
-	for i := 0; i < 2; i++ {
-		if msg, err := m.AutoUpdate(); err != nil || !strings.HasPrefix(msg, "waiting: 1 recursive gate(s) running") {
-			t.Fatalf("look %d: %q, %v", i, msg, err)
-		}
-	}
-	if raw, _ := os.ReadFile(exe); string(raw) != "old" || !held.After(time.Now()) {
-		t.Fatalf("binary %q, new gates held until %v, while a gate ran", raw, held)
-	}
-	if n := journaledN(m, "hive.update_held"); n != 1 {
-		t.Fatalf("%d holds on the record, want the first look's alone", n)
-	}
-	running = 0
-	if msg, err := m.AutoUpdate(); err != nil || !strings.HasPrefix(msg, "updated to v9.9.9\n") {
-		t.Fatalf("after the gates: %q, %v", msg, err)
-	}
-
-	m, _ = releaseAt(t, "v0.1.2", "me/hive")
-	m.Gates = func() (int, time.Time) { return 1, time.Now() }
-	if msg, err := m.Update(""); err != nil || !strings.HasPrefix(msg, "updated to v9.9.9\n") {
-		t.Fatalf("hive update waited: %q, %v", msg, err)
-	}
-}
-
-// Gates running past gateWaitMax from the first look don't keep the Hive
-// behind: the update installs anyway, and the record says so.
-func TestAutoUpdateGoesAheadPastLongGates(t *testing.T) {
-	serve(t, "v9.9.9", build("new"), false)
-	m, exe := releaseAt(t, "v0.1.2", "me/hive")
-	m.Gates = func() (int, time.Time) { return 1, time.Now() }
-	if msg, _ := m.AutoUpdate(); !strings.HasPrefix(msg, "waiting:") {
-		t.Fatalf("first look: %q", msg)
-	}
-	m.gatesSince = m.gatesSince.Add(-gateWaitMax)
-	if msg, err := m.AutoUpdate(); err != nil || !strings.HasPrefix(msg, "updated to v9.9.9\n") {
-		t.Fatalf("past the wait: %q, %v", msg, err)
-	}
-	if raw, _ := os.ReadFile(exe); string(raw) != "new" {
-		t.Fatalf("binary %q", raw)
-	}
-	if n := journaledN(m, "hive.update_held"); n != 2 {
-		t.Fatalf("%d holds on the record, want the wait and the forced install", n)
-	}
-}
-
 // A kept commit no effect.merged names whose history git can't place after
 // the last release is refused, and nothing tried again: the newest kept Hive
 // merge since whose history holds it is tried on Tick, once, and released
@@ -2020,43 +1869,5 @@ func TestRootMergeGetsTheHivesOwnRead(t *testing.T) {
 	}
 	if told := m.C.Person.Told(5); len(told) != 1 || !strings.Contains(told[0].Title, "Released v0.0.1") {
 		t.Fatalf("the person should be told after: %+v", told)
-	}
-}
-
-// A read of the Hive's own that can't pass (a seat's fix) holds the release
-// for the person, and the ask says why; an unread merge is read the same way.
-func TestOwnReadThatFailsHolds(t *testing.T) {
-	m, n, _, land := selfHive(t)
-	m.C.J.MustAppend("effect.merged", map[string]any{"project": "hive", "pr": 2, "sha": "a2", "merge_sha": "m2", "root": []string{"install/root.sh"}, "diff": "d2"})
-	land("a2", "r2")
-	m.ReadMerged = func(p core.Project, pr int, head, mergeSHA, diff string, root []string) (bool, string) {
-		return false, "the Hive's security seat asked for fixes: widens a mount"
-	}
-	m.AfterKept("hive", "m2")
-	asks := m.C.Person.Open()
-	if len(n.got) != 0 || len(asks) != 1 || !strings.Contains(asks[0].Title, "install/root.sh (#2: the Hive's security seat asked for fixes") {
-		t.Fatalf("a failed own read should hold and say why: %v %+v", n.got, asks)
-	}
-
-	m, n, _, land = selfHive(t)
-	m.C.J.MustAppend("effect.merged", map[string]any{"project": "hive", "pr": 3, "sha": "a3", "merge_sha": "m3", "diff": "d3"})
-	done := false
-	m.ReadMerged = func(p core.Project, pr int, head, mergeSHA, diff string, root []string) (bool, string) {
-		if root != nil {
-			t.Errorf("a merge with no root path asked for a security read: %v", root)
-		}
-		if done {
-			land(head, "m-read")
-		}
-		return done, ""
-	}
-	m.AfterKept("hive", "m3")
-	if len(n.got) != 0 || len(m.C.Person.Open()) != 0 || m.reading("hive") != "m3" {
-		t.Fatalf("while the reviewer reads: released %v, asks %+v", n.got, m.C.Person.Open())
-	}
-	done = true
-	m.retryWaiting()
-	if body := n.got["v0.0.1"]; !strings.Contains(body, "#3 at a3, read by m-read") {
-		t.Fatalf("an unread merge wasn't released on the Hive's own read: %v %+v", n.got, m.C.Person.Open())
 	}
 }

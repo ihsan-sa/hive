@@ -67,9 +67,8 @@ func (m *Module) adopt(t *Task, head, why string) {
 }
 
 // noChecks bounds the wait for a head on which the forge has reported no
-// check run at all while required ones are awaited. Past noChecksMax a branch
-// behind main is brought up to date, which gives the forge a new head to run
-// on; one already up to date is raised once to the lead and waits.
+// check run at all while required ones are awaited. Past noChecksMax it is
+// raised once to the lead and waits.
 func (m *Module) noChecks(t *Task, p core.Project, main string, runs []core.CheckRun, st string) (bool, error) {
 	if st != core.CheckPending || len(runs) > 0 {
 		return false, nil
@@ -84,12 +83,9 @@ func (m *Module) noChecks(t *Task, p core.Project, main string, runs []core.Chec
 		return false, nil
 	}
 	none := "no forge check run has appeared on " + core.Short(t.SHA) + " in over " + noChecksMax.String()
-	if ok, err := m.catchUp(t, p, main, none); ok || err != nil {
-		return true, err
-	}
 	// No forge call starts CI on a commit as it is (a rerun needs a run to
 	// rerun), so the lead hears of it.
-	m.raiseKind(p, "no-checks", t.SHA+"/nochecks", fmt.Sprintf("%s (PR #%d in %s), which is up to date with main; the forge may not have run CI on it", none, t.PR.Number, p.Name))
+	m.raiseKind(p, "no-checks", t.SHA+"/nochecks", fmt.Sprintf("%s (PR #%d in %s); the forge may not have run CI on it", none, t.PR.Number, p.Name))
 	m.hold(t, p, "waiting for the forge's checks on "+core.Short(t.SHA)+": "+none+"; the lead has been told")
 	return true, nil
 }

@@ -72,6 +72,7 @@ type Finish struct {
 	Status  string `json:"status"` // done | blocked
 	Account string `json:"account"`
 	Tested  string `json:"tested,omitempty"`
+	Passed  string `json:"passed,omitempty"` // the test command that passed in the turn on the commit it finishes with
 	Unsure  string `json:"unsure,omitempty"`
 	Printed bool   `json:"printed,omitempty"` // the agent printed it as its answer and the Hive ran it
 }

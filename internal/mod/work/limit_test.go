@@ -83,51 +83,6 @@ func testComments(f *core.Local, pr int) (n int) {
 	return n
 }
 
-// One test comment per head; a catch-up with main that leaves the PR's own
-// diff and the result as they were posts none, and a changed result does.
-func TestOneTestCommentPerHead(t *testing.T) {
-	m, task, p, forge := gateRig(t, false, map[string]string{"feature.txt": "y"})
-	if err := testStep(m, task, p); err != nil {
-		t.Fatal(err)
-	}
-	task.Stage, task.Recheck = StageTesting, true // tested again on the same head
-	if err := testStep(m, task, p); err != nil {
-		t.Fatal(err)
-	}
-	if n := testComments(forge, task.PR.Number); n != 1 {
-		t.Fatalf("%d test comments on one head", n)
-	}
-	pushMain(t, forge, map[string]string{"other.txt": "z"})
-	main, _ := m.C.Effects.Sync(p)
-	old := task.SHA
-	if ok, err := m.catchUp(task, p, main, "main moved"); !ok || err != nil || task.SHA == old {
-		t.Fatalf("catch-up: %v %v", ok, err)
-	}
-	if err := testStep(m, task, p); err != nil {
-		t.Fatal(err)
-	}
-	if n := testComments(forge, task.PR.Number); n != 1 {
-		t.Fatalf("%d test comments after a catch-up that left the diff alone", n)
-	}
-}
-
-func TestChangedResultComments(t *testing.T) {
-	m, task, p, forge := gateRig(t, true, map[string]string{"feature.txt": "y"})
-	if err := testStep(m, task, p); err != nil { // fails with main
-		t.Fatal(err)
-	}
-	pushMain(t, forge, map[string]string{"BROKEN": ""})
-	if err := testStep(m, task, p); err != nil { // main green: caught up
-		t.Fatal(err)
-	}
-	if err := testStep(m, task, p); err != nil { // passes now
-		t.Fatal(err)
-	}
-	if n := testComments(forge, task.PR.Number); n != 2 {
-		t.Fatalf("%d test comments, want fail then pass", n)
-	}
-}
-
 // A new commit after a round edits the PR's one status comment.
 func TestStatusCommentEditedEachRound(t *testing.T) {
 	m, task, p, forge := gateRig(t, false, map[string]string{"feature.txt": "y"})

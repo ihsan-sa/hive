@@ -3,7 +3,6 @@ package app
 
 import (
 	"context"
-	"fmt"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -13,7 +12,6 @@ import (
 
 	hive "github.com/ihsan-sa/hive-standalone-build"
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
-	"github.com/ihsan-sa/hive-standalone-build/internal/gate"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/agents"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/chat"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/feedback"
@@ -89,7 +87,6 @@ func New(ws core.Workspace, forge core.Forge) (*App, error) {
 	forgeread.New(c)
 	a.Work.Steps = a.Risk.Steps
 	a.Work.Weigh = a.Risk.Weigh
-	a.Work.Gate = runGate(ws)
 	a.Projects = projects.New(c, a.Chat, a.Work, a.Improve)
 	a.Release = release.New(c)
 	a.Release.ReadMerged = a.Work.ReadMerged
@@ -143,12 +140,20 @@ func New(ws core.Workspace, forge core.Forge) (*App, error) {
 		}
 	})
 	a.Release.PauseMerges = a.Work.PauseMerges
-	a.Release.Gates, a.Release.HoldGates = a.Work.GatesRunning, a.Work.HoldGates
 	a.System.Register(system.Job{Name: "hive.update", AtStart: true, Fn: a.Release.AutoUpdate})
 	a.System.Register(system.Job{Name: "report.send", Fn: (&report.Module{C: c}).Send})
 	a.System.Register(system.Job{Name: "hive.clean", AtStart: true, Fn: func() (string, error) { return a.Clean(), nil }})
 	c.Effects.OnDiskFull = func() { a.System.RunNow("hive.clean") }
 	c.Effects.Granted = a.Mods.Granted
+	c.Effects.ModuleHomes = func(project string) []string {
+		var homes []string
+		if p, ok := a.C.Projects.Get(project); ok {
+			for _, m := range a.builtFrom(p) {
+				homes = append(homes, runner.Home(a.C.WS, filepath.Base(m.Dir)))
+			}
+		}
+		return homes
+	}
 	return a, nil
 }
 
@@ -171,10 +176,8 @@ func (a *App) followMerge(e core.Event) {
 	}
 	clone := a.C.WS.Project(p.Name)
 	var sources []string
-	for _, m := range a.Mods.List() {
-		if s := m.Source.Source; s == clone || (p.Repo != "" && strings.HasSuffix(strings.TrimSuffix(strings.TrimRight(s, "/"), ".git"), "/"+p.Repo)) {
-			sources = append(sources, s)
-		}
+	for _, m := range a.builtFrom(p) {
+		sources = append(sources, m.Source.Source)
 	}
 	if len(sources) == 0 {
 		return
@@ -185,6 +188,19 @@ func (a *App) followMerge(e core.Event) {
 		}
 	}
 	a.Mods.UpdateFrom(sources)
+}
+
+// builtFrom lists the installed modules whose source is project p: its host
+// clone or its repository on the forge.
+func (a *App) builtFrom(p core.Project) []modules.Module {
+	clone := a.C.WS.Project(p.Name)
+	var out []modules.Module
+	for _, m := range a.Mods.List() {
+		if s := m.Source.Source; s == clone || (p.Repo != "" && strings.HasSuffix(strings.TrimSuffix(strings.TrimRight(s, "/"), ".git"), "/"+p.Repo)) {
+			out = append(out, m)
+		}
+	}
+	return out
 }
 
 // moduleJobs registers the jobs module programs serve (a manifest's
@@ -216,16 +232,6 @@ func (a *App) Clean() string {
 		if s != "" {
 			did = append(did, s)
 		}
-	}
-	tidied := 0
-	if n := a.Work.TidyGates(func(out string) int {
-		if !gate.Untidy(out) {
-			return 0
-		}
-		tidied++
-		return gate.ReapLeft(out)
-	}); tidied > 0 {
-		did = append(did, fmt.Sprintf("tidied %d gate run(s) a dead gate left, ending %d process(es)", tidied, n))
 	}
 	d := a.C.Effects.MeasureDisk()
 	if len(did) == 0 {
