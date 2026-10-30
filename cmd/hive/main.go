@@ -59,9 +59,11 @@ const usage = `hive: a small team of AI agents working on your projects.
   hive login name [<login> <name>]  name or rename a login, the machine's own included; no name lists them
   hive doctor [--bare]     check the install; --bare opts into unsandboxed agents
   hive report [on|off|show|send]  sharing failures with the developer: state, switch, last report, send now
-  hive egress              the services on this machine agents may reach
-  hive egress grant <host:port>   open one to every sandboxed run (loopback only, e.g. 127.0.0.1:11434)
-  hive egress revoke <host:port>  close it again
+  hive egress              the services on this machine, and hosts outside it, agents may reach
+  hive egress grant <host:port>   open a service on this machine to every sandboxed run (loopback, e.g. 127.0.0.1:11434)
+  hive egress grant <host:port> --project <name>   open a host outside it to one project's runs and checks,
+                                  past any egress list (broker.example.com:8883, or a LAN device's 192.168.1.20:80)
+  hive egress revoke <host:port> [--project <name>]  close it again
   hive model               the named models (free ones too) and the routes that pick each role's model
   hive model add <name> <endpoint> <model id> [--key] [--price IN,OUT] [--no-probe]   a model on an OpenAI-compatible endpoint, e.g.
                            hive model add qwen http://127.0.0.1:11434/v1 qwen2.5-coder:14b
@@ -777,8 +779,9 @@ func cmdDoctor(args []string) int {
 }
 
 // cmdEgress lists, grants or revokes the services on this machine sandboxed
-// runs may reach (egress.local). Each run reads the config as it starts, so a
-// grant holds from the next turn on.
+// runs may reach (egress.local), and with --project the hosts outside it one
+// project's runs may (egress.projects). Each run reads the config as it
+// starts, so a grant holds from the next turn on.
 func cmdEgress(args []string) int {
 	ws, err := workspace()
 	if err != nil {
@@ -793,14 +796,29 @@ func cmdEgress(args []string) int {
 		for _, l := range cfg.Egress.Local {
 			fmt.Println(l)
 		}
+		for _, p := range slices.Sorted(maps.Keys(cfg.Egress.Projects)) {
+			for _, g := range cfg.Egress.Projects[p] {
+				fmt.Printf("%s  (project %s)\n", g, p)
+			}
+		}
 		return 0
 	}
+	var project string
+	if n := len(args); n == 4 && args[2] == "--project" && args[3] != "" {
+		project, args = args[3], args[:2]
+	}
 	if len(args) != 2 || (args[0] != "grant" && args[0] != "revoke") {
-		fmt.Fprintln(os.Stderr, "usage: "+core.Cmd+" egress [grant|revoke <host:port>]")
+		fmt.Fprintln(os.Stderr, "usage: "+core.Cmd+" egress [grant|revoke <host:port> [--project <name>]]")
 		return 2
+	}
+	if project != "" {
+		return egressProject(ws, cfg, args[0], args[1], project)
 	}
 	want, err := sandbox.LocalGrant(args[1])
 	if err != nil {
+		if _, oerr := sandbox.OutsideGrant(args[1]); oerr == nil {
+			err = fmt.Errorf("%s is outside this machine: it opens to one project's runs, with --project <name>", args[1])
+		}
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
@@ -826,6 +844,46 @@ func cmdEgress(args []string) int {
 		fmt.Printf("Agents can reach %s from their next turn.\n", args[1])
 	} else {
 		fmt.Printf("Agents no longer reach %s from their next turn.\n", args[1])
+	}
+	return 0
+}
+
+// egressProject grants or revokes a host outside this machine for project's
+// runs and checks (egress.projects).
+func egressProject(ws core.Workspace, cfg core.Config, op, entry, project string) int {
+	want, err := sandbox.OutsideGrant(entry)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if _, err := os.Stat(ws.Project(project)); op == "grant" && err != nil {
+		fmt.Fprintf(os.Stderr, "no project %q in this Hive\n", project)
+		return 1
+	}
+	var keep []string
+	for _, g := range cfg.Egress.Projects[project] {
+		if has, err := sandbox.OutsideGrant(g); err != nil || has != want {
+			keep = append(keep, g)
+		}
+	}
+	if op == "grant" {
+		keep = append(keep, want)
+	}
+	if cfg.Egress.Projects == nil {
+		cfg.Egress.Projects = map[string][]string{}
+	}
+	cfg.Egress.Projects[project] = keep
+	if len(keep) == 0 {
+		delete(cfg.Egress.Projects, project)
+	}
+	if err := ws.SaveConfig(cfg); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if op == "grant" {
+		fmt.Printf("Project %s's agents and checks can reach %s from their next turn.\n", project, want)
+	} else {
+		fmt.Printf("Project %s's agents and checks no longer reach %s from their next turn.\n", project, want)
 	}
 	return 0
 }

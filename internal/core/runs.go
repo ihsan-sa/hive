@@ -817,10 +817,11 @@ type egressRefusal struct {
 func refusalWhy(dest, code string) string {
 	switch code {
 	case sandbox.RefusedUnlisted:
-		return "not on this run's egress list (egress in .hive/config.json)"
+		return "not on this run's egress list (egress in .hive/config.json); a host and port open to one project's runs on the person's grant: " +
+			"ask a warden for `" + Cmd + " egress grant " + dest + " --project <its project>`"
 	case sandbox.RefusedLocal:
 		return "a service on this machine or a private network, closed to sandboxes; a loopback port opens only on the person's grant: " +
-			"ask a warden for `" + Cmd + " egress grant " + dest + "`"
+			"ask a warden for `" + Cmd + " egress grant " + dest + "` (a LAN device's address with `--project <its project>`)"
 	}
 	return "refused by the egress proxy"
 }
@@ -2898,7 +2899,7 @@ func (rs *Runs) sandboxSpec(cfg Config, sb sandbox.Sandbox, h harness.Harness, r
 	return sandbox.Spec{
 		ID: r.ID, Argv: argv, Env: env, Cwd: in(mounts[0]), Mounts: mounts, Tools: tools,
 		Stdin: stdin, Stdout: rs.ws.TurnOut(r.ID, turn), StopFile: filepath.Join(rs.ws.RunHost(r.ID), "stop"), Tmp: filepath.Join(rs.ws.RunPrivate(r.ID), "tmp"),
-		Network: true, Allow: allow, Local: cfg.Egress.LocalAddrs(), Guard: rs.ws.Guarded(), Cover: rs.ws.Covered(), UID: os.Getuid(), GID: os.Getgid(),
+		Network: true, Allow: allow, Local: cfg.Egress.LocalAddrs(), Outside: cfg.Egress.OutsideFor(r.Project), Guard: rs.ws.Guarded(), Cover: rs.ws.Covered(), UID: os.Getuid(), GID: os.Getgid(),
 		Nice: r.Nice(),
 	}, nil
 }
