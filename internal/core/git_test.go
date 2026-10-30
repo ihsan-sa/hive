@@ -43,6 +43,8 @@ func TestGitMaintenanceStaysInForeground(t *testing.T) {
 // later checkout in the project clone (#440): a stale one is cleared and the
 // call retried; a fresh one, maybe a live git's, is left alone.
 func TestGitClearsStaleLock(t *testing.T) {
+	defer func(w []time.Duration) { gitLockWaits = w }(gitLockWaits)
+	gitLockWaits = []time.Duration{time.Millisecond} // a fresh lock fails after its waits: 12 s of them by default
 	dir := t.TempDir()
 	for _, args := range [][]string{{"init", "-q", "-b", "main"}, {"commit", "-q", "--allow-empty", "-m", "x"}} {
 		if _, err := Git(dir, args...); err != nil {
@@ -157,7 +159,9 @@ func TestGitTimeoutLeavesNoLock(t *testing.T) {
 		t.Fatal(err)
 	}
 	ed := filepath.Join(t.TempDir(), "ed")
-	os.WriteFile(ed, []byte("#!/bin/sh\nsleep 30\n"), 0o755)
+	// Its sleep lets go of git's stdout and stderr, so the call returns once
+	// git ends rather than after WaitDelay, when the pipes are given up on.
+	os.WriteFile(ed, []byte("#!/bin/sh\nexec sleep 30 >/dev/null 2>&1\n"), 0o755)
 	_, err := GitEnvT(time.Second, dir, []string{"GIT_EDITOR=" + ed}, "commit", "-q")
 	if !TimedOut(fmt.Sprint(err)) {
 		t.Fatalf("not ended by its timeout: %v", err)
