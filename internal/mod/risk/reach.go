@@ -44,7 +44,7 @@ func (m *Module) beyond(r core.Run, texts ...string) (kind, what string) {
 	t := strings.Join(texts, "\n")
 	for _, s := range otherHostRe.FindAllStringSubmatch(t, -1) {
 		// ssh WORD is a host when it looks like one: user@ it, a dot or a
-		// digit in it ("ssh iiks1"), not "the ssh key" or "ssh config".
+		// digit in it ("ssh host2"), not "the ssh key" or "ssh config".
 		if h := strings.ToLower(s[4]); h != "" && (selfHosts[h] || s[3] == "" && !strings.ContainsAny(h, ".0123456789")) {
 			continue
 		}

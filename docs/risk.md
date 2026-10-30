@@ -8,7 +8,7 @@ Wardens are only for what is outside the hive user or can't be undone (the perso
 
 But only a step the asker's sandbox can take is its own (#2167: a full host disk, a stale lock in a host clone and a runner on another machine were each handed back as "do it yourself", and nobody could).
 `hive agent warden` reads the ask's words for that (`internal/mod/risk/reach.go`).
-One on another machine (`ssh iiks1`, an `ssh://` address, "another machine", "network is unreachable") goes to the person, who alone reaches it.
+One on another machine (`ssh host2`, an `ssh://` address, "another machine", "network is unreachable") goes to the person, who alone reaches it.
 One about the machine itself ("no space left", "disk full", "the whole filesystem"), one that says the asker's sandbox can't reach it ("hidden from my sandbox", "outside my sandbox"), or one that names a path the asker can't write goes to a warden, as T2 at the least.
 The asker writes its checkout, box, home and tmp, and, as a session in the hive user's home, that home; it can't write the daemon's workspace (host clones, other runs' checkouts, cache, the records), the read-only `$HIVE_` folders or the machine's other paths.
 A tool path an ask runs (`/usr/bin/...`, `/bin/...`) or `/dev/null` doesn't count.

@@ -1647,7 +1647,7 @@ func TestAskBeyondTheSandbox(t *testing.T) {
 		{"disk", "find what filled the whole filesystem and free regenerable data", "/dev/nvme0n1p2 is at 4 KB free; tests fail with No space left on device", "du -xsh /home/hive/hive/cache/*; remove stale build caches", "warden"},
 		{"lock", "remove the stale git lock in the daemon's hive-hwde clone", "9 tasks stopped on index.lock: File exists", "rm " + clone, "warden"},
 		{"hidden", "clear old run homes", "they are hidden from my sandbox", "", "warden"},
-		{"host", "rebuild the dispatch runner on iiks1", "the runner there is out of date; Network is unreachable from my sandbox", "ssh iiks1 'cd runner && make'", "person"},
+		{"host", "rebuild the dispatch runner on host2", "the runner there is out of date; Network is unreachable from my sandbox", "ssh host2 'cd runner && make'", "person"},
 		{"mine", "rm -rf /work/build and /tmp/x", "stale", "ls 2>/dev/null; /usr/bin/env go clean -cache", "self"},
 	} {
 		out, err := g.call(g.worker, "warden", map[string]string{"want": c.want, "why": c.why, "steps": c.steps, "tier": "T1"})
