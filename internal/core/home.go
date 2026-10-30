@@ -41,8 +41,9 @@ var homeSecrets = []string{
 
 // homeReadOnly are the paths under home a run reads but doesn't change:
 // ~/.ssh's authorized_keys says who logs in to this machine, and a run
-// adding to it would open the machine.
-var homeReadOnly = []string{".ssh"}
+// adding to it would open the machine; ~/hive-backups is the nightly copy of
+// the Hive's state, a way back that an agent freeing disk space mustn't take.
+var homeReadOnly = []string{".ssh", "hive-backups"}
 
 // agentTokens is every token saved, by owner as its file is named.
 func agentTokens() map[string]string {

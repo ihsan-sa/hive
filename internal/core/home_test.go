@@ -12,7 +12,7 @@ import (
 // A run in home gets home read-write, .hive/private included, with each login
 // in it covered (a link to one where it points; nothing that isn't there or
 // lies outside home), the workspace's covered folders and files too, and
-// ~/.ssh read-only.
+// ~/.ssh and ~/hive-backups read-only.
 func TestSessionInHome(t *testing.T) {
 	home := t.TempDir()
 	os.MkdirAll(filepath.Join(home, ".config", "gh"), 0o700)
@@ -23,6 +23,7 @@ func TestSessionInHome(t *testing.T) {
 	os.MkdirAll(filepath.Join(home, "elsewhere-ssh"), 0o700)
 	os.Symlink(filepath.Join(home, "elsewhere-ssh"), filepath.Join(home, ".ssh"))
 	os.Symlink("/nonexistent/creds", filepath.Join(home, ".netrc"))
+	os.MkdirAll(filepath.Join(home, "hive-backups"), 0o755)
 	ws := Workspace{Root: filepath.Join(home, "hive")}
 	os.MkdirAll(ws.Private(), 0o700)
 	os.WriteFile(ws.DaemonFile(), []byte(`{"token":"t"}`), 0o600)
@@ -53,8 +54,8 @@ func TestSessionInHome(t *testing.T) {
 			t.Errorf("%s is covered: %v", open, hidden)
 		}
 	}
-	if !slices.Equal(readOnly, []string{"elsewhere-ssh"}) {
-		t.Errorf("read-only: %v, want ~/.ssh where it points", readOnly)
+	if !slices.Equal(readOnly, []string{"elsewhere-ssh", "hive-backups"}) {
+		t.Errorf("read-only: %v, want ~/.ssh where it points and the backups", readOnly)
 	}
 }
 
