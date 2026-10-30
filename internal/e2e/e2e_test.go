@@ -142,7 +142,7 @@ func startOn(t *testing.T, cpus, slot int, exe string, prep func(*core.Config), 
 		cfg.Sandbox, cfg.BareAccepted = "bare", time.Now().Format(time.RFC3339)
 	}
 	cfg.PlateauMerges = 0 // TestStepBack turns it on
-	cfg.Schedules = map[string]string{"improve.sweep": "off", "improve.stepback": "off", "kb.file": "off", "modules.update": "off", "hive.update": "off"}
+	cfg.Schedules = map[string]string{"improve.sweep": "off", "improve.stepback": "off", "kb.file": "off", "modules.update": "off", "hive.update": "off", "standup": "off"}
 	if prep != nil {
 		prep(&cfg)
 	}
