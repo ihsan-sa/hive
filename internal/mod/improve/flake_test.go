@@ -303,6 +303,19 @@ func TestRedAlreadyOnMainBeforeTheMergeIsNotReverted(t *testing.T) {
 	}
 }
 
+// A red that names no test (a script's bare exit 1) main had just before the
+// merge isn't the merge's either: under the soft merge (#2097) a change merges
+// onto a red main, and it isn't reverted for that red. One it brings is.
+func TestUnnamedRedAlreadyOnMainIsNotReverted(t *testing.T) {
+	m, commit, merge := tested(t)
+	if ms := merge(commit(map[string]string{"t.sh": "exit 1\n"})); ms.Kept || reverts(m) != 1 {
+		t.Fatalf("the merge that turned main red: %+v, reverts %d", ms, reverts(m))
+	}
+	if ms := merge(commit(map[string]string{"README.md": "an unrelated change\n"})); ms.Kept || !strings.Contains(ms.Note, "not new at this merge") || reverts(m) != 1 {
+		t.Fatalf("a merge onto that red main: %+v, reverts %d", ms, reverts(m))
+	}
+}
+
 // The same failures listed in another order are filed to fix once.
 func TestRedOnMainInAnotherOrderIsFiledOnce(t *testing.T) {
 	m, commit, merge := tested(t)

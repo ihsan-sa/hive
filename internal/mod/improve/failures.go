@@ -253,8 +253,12 @@ func (m *Module) redBefore(p core.Project, t work.Task, test string) string {
 	if len(keys) == 0 {
 		keys, stopped = core.StopKeys(log), true // vet or the build stopped the command
 	}
-	if len(keys) == 0 {
-		return "" // nothing named to look for before it
+	// A red that names nothing (a script's exit 1) is weighed whole: the
+	// soft merge (#2097) lets a change merge onto a red main, and it isn't
+	// reverted for a red main had before it.
+	unnamed := len(keys) == 0
+	if unnamed {
+		stopped = false
 	}
 	first := t.MergeSHA
 	if len(t.Banks) > 0 {
@@ -271,7 +275,10 @@ func (m *Module) redBefore(p core.Project, t work.Task, test string) string {
 	// Only what failed runs again, unless a package failed with no test
 	// named: a timeout or a build failure the filtered run may never reach.
 	cmd := rerunCommand(test, failures(log))
-	if slices.ContainsFunc(keys, func(k string) bool { return strings.HasSuffix(k, " !") }) {
+	if unnamed && m.C.Effects.Config(p, parent).Test != test {
+		return "" // the merge changed the test command: nothing named, so it is its own red
+	}
+	if unnamed || slices.ContainsFunc(keys, func(k string) bool { return strings.HasSuffix(k, " !") }) {
 		cmd = test
 	}
 	done := m.Work.MeasuringMain(p.Name, parent) // keep/revert waits on it
@@ -289,6 +296,9 @@ func (m *Module) redBefore(p core.Project, t work.Task, test string) string {
 	// behind it since any merge in that stretch. Comparing further back
 	// can't clear this merge, and reverting it only brings the stop back.
 	hidden := !stopped && len(before) == 0 && len(core.StopKeys(bc.FullOutput())) > 0
+	if unnamed && (len(core.RedKeys(bc.FullOutput())) > 0 || len(core.StopKeys(bc.FullOutput())) > 0) {
+		return "" // main just before failed in named tests or stopped: this red is another
+	}
 	for _, k := range keys {
 		if !hidden && !slices.Contains(before, k) {
 			return ""
@@ -299,6 +309,9 @@ func (m *Module) redBefore(p core.Project, t work.Task, test string) string {
 	names := slices.Clone(tc.Failed)
 	if len(names) == 0 {
 		names = slices.Clone(keys)
+	}
+	if len(names) == 0 {
+		names = []string{"the test command (no test named)"}
 	}
 	slices.Sort(names)
 	what := strings.Join(slices.Compact(names), ", ")
