@@ -1,7 +1,9 @@
 package work
 
 import (
+	"errors"
 	"fmt"
+	"os/exec"
 	"time"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
@@ -67,10 +69,14 @@ func (m *Module) adopt(t *Task, head, why string) {
 }
 
 // noChecks bounds the wait for a head on which the forge has reported no
-// check run at all while required ones are awaited. Past noChecksMax the Hive
-// starts the forge's CI on it once (a PR opened before its project's
-// workflow landed on main never had an event to run on) and waits again;
-// past that too, or if it can't, it is raised once to the lead and waits.
+// check run at all while required ones are awaited. Past noChecksMax a head
+// behind main has main merged into it, once per task, and the new head is
+// tested and waited on: a branch cut before its project's workflow landed on
+// main has no workflow to run, and starting CI on that head brings nothing
+// (hive-chip-flow #36, hifi-receiver-2 #88, dispatch #45 on 10-30), while the
+// push of the merge runs main's. A head holding main has the forge's CI
+// started on it once and waits again; past that too, or if it can't, it is
+// raised once to the lead and waits.
 func (m *Module) noChecks(t *Task, p core.Project, main string, runs []core.CheckRun, st string) (bool, error) {
 	if st != core.CheckPending || len(runs) > 0 {
 		return false, nil
@@ -85,6 +91,20 @@ func (m *Module) noChecks(t *Task, p core.Project, main string, runs []core.Chec
 		return false, nil
 	}
 	none := "no forge check run has appeared on " + core.Short(t.SHA) + " in over " + noChecksMax.String()
+	if t.NoChecksMerged == "" && t.Checkpoint == "" {
+		_, err := core.Git(m.C.WS.Project(p.Name), "merge-base", "--is-ancestor", main, t.SHA)
+		if exit := (*exec.ExitError)(nil); errors.As(err, &exit) && exit.ExitCode() == 1 {
+			if err := m.catchUp(t, p, main, none+", perhaps as its branch predates its project's CI workflow; the head was",
+				"No forge check run appeared on %s, a head behind main, perhaps from before the project's CI workflow landed; the Hive merged main into this branch (%s) so main's workflow runs on it."); err != nil {
+				return true, err
+			}
+			if t.SHA != t.NoChecksOn { // caught up, not sent back on a conflict
+				t.NoChecksMerged = t.SHA
+				m.save(t, "")
+			}
+			return true, nil
+		}
+	}
 	if t.CIStarted != t.SHA {
 		t.CIStarted = t.SHA
 		how, err := m.C.Effects.Forge.StartCI(p.Repo, t.PR.Number, t.Branch, t.SHA)

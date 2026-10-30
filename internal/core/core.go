@@ -160,6 +160,7 @@ func linkTestBinary(exe, tmp string) bool {
 // Tick advances runs on one read of the config; modules tick themselves
 // from the daemon loop.
 func (c *Core) Tick() {
+	c.Effects.WatchRoom()
 	c.Runs.Tick(c.WS.LoadConfig())
 }
 
