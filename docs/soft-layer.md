@@ -12,13 +12,13 @@ The hard layer (core, sandbox, merge path, tests, reviews) is the same in every 
 |---|---|---|
 | `standard` | the Hive's own (1015 words) | the Hive's own: the control |
 | `chatty` | standard, plus "talk, a lot": message every related run at every step, reply to everything | standard |
-| `quiet` | standard minus "Talk to each other like a hive", plus "work alone": no peers, no briefs, no helpers | standard minus the worker's "Others are working beside you" |
+| `quiet` | standard minus "Talk to each other like a hive", plus "work alone": no peers, no briefs, no helpers | standard |
 | `essay` | the person's essay, verbatim (2089 words) | one line: "You are a worker." etc. |
 | `essay-tools` | the essay, then the bare list of `hive agent` commands | one line |
 | `philosophy` | a page of principles (simplicity, talk, measure, remember, ask before acting outside, improve the Hive), no procedure | one line |
 | `vague` | "You are an agent in a team of agents working on a software project. Do good work." | one line |
 
-| `open` | a shared space: no one assigns work, say what you take in the room, find what most needs doing from the goals; then the standard "Where things are", "Your reach" and command list | lead, worker, sweep: one line ("You are one of the agents in the space."); reviewer, warden, tribunal, judge: the standard prompts |
+| `open` | a shared space: no one assigns work, say what you take in the room, find what most needs doing from the goals; then the standard "Where things are", "The only limits" and command list | lead, worker, sweep: one line ("You are one of the agents in the space."); reviewer, warden, tribunal, judge: the standard prompts |
 
 From lots of comms (`chatty`) to none (`quiet`), and from very specific (`standard`) to almost nothing (`vague`). `essay` is the person's suggestion as given; `essay-tools` separates "the essay alone doesn't say how to call the Hive" from "the essay doesn't make agents behave as a hive". The structured parts stay whatever the arm: a reviewer still has to answer `land` or `fix` in its schema, and the harness still gives every agent `hive agent` on its PATH.
 

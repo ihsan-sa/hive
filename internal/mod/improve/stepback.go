@@ -276,7 +276,7 @@ First, judge, and needing no number to do it: read the goals critically. Are the
 	default:
 		brief += "The project has no kept score under its current score command, so no experiment runs this time: the judgement is the whole pass. If the missing number is itself what holds the project back, say so and brief what would give it one.\n\n"
 	}
-	brief += `If what holds the loop back is in its queue (off-loop work ahead of a fix, blocked work whose cause is fixed, a task that landed but sits in a stage), steer it yourself with queue, recheck, rerun-checks or landed, as the orientation says; don't route it through the lead.
+	brief += `If what holds the loop back is in its queue (off-loop work ahead of a fix, blocked work whose cause is fixed, a task that landed but sits in a stage), steer it yourself with queue, recheck, rerun-checks or landed; don't route it through the lead.
 
 Write your reasoning to $HIVE_BOX/sweep.md, then finish.`
 	spec := m.Agents.Spec(id, "stepback", p.Name, dir, brief)

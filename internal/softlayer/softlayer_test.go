@@ -36,10 +36,8 @@ func TestEveryArmBuilds(t *testing.T) {
 	if !strings.Contains(built["chatty"]["orientation"], "## Talk, a lot") {
 		t.Error("the chatty arm doesn't ask for talk")
 	}
-	for _, r := range []string{"orientation", "worker"} {
-		if strings.Contains(built["quiet"][r], "message them directly") || strings.Contains(built["quiet"][r], "message that run directly") {
-			t.Errorf("the quiet arm's %s still asks to talk", r)
-		}
+	if strings.Contains(built["quiet"]["orientation"], "Talk to each other") || !strings.Contains(std["orientation"], "Talk to each other") {
+		t.Error("the quiet arm's orientation still asks to talk")
 	}
 	if built["essay"]["orientation"] != essay || built["essay"]["worker"] != "You are a worker.\n" {
 		t.Errorf("the essay arm: %q / %q", built["essay"]["orientation"], built["essay"]["worker"])
@@ -60,11 +58,11 @@ func TestEveryArmBuilds(t *testing.T) {
 			}
 		}
 	}
-	if strings.Contains(tools, "## Your reach") {
+	if strings.Contains(tools, "## What's needed") {
 		t.Errorf("the command list carries the next section's heading:\n%s", tools)
 	}
 	o := built[OpenArm]
-	for _, want := range []string{"--to room", "Nobody assigns you work", "## Your reach", "## Where things are", "- `hive agent warden"} {
+	for _, want := range []string{"--to room", "Nobody assigns you work", "## The only limits", "## Where things are", "`hive agent warden", "- `hive agent finish"} {
 		if !strings.Contains(o["orientation"], want) {
 			t.Errorf("the open arm's orientation has no %q", want)
 		}
@@ -110,8 +108,12 @@ func TestInstallSurvivesTheDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 	r.Update()
+	std, err := Standard()
+	if err != nil {
+		t.Fatal(err)
+	}
 	sys := (&agents.Agents{Mod: r}).System("warden", "p")
-	if !strings.HasPrefix(sys, "You are an agent in a team") || !strings.Contains(sys, "You are a warden.") || strings.Contains(sys, "Your role: warden") {
+	if !strings.HasPrefix(sys, "You are an agent in a team") || !strings.Contains(sys, "You are a warden.") || strings.Contains(sys, std["warden"]) {
 		t.Fatalf("the warden's system prompt isn't the vague arm's:\n%s", sys)
 	}
 }

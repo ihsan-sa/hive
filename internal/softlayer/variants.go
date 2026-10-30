@@ -179,17 +179,13 @@ var Variants = []Variant{
 		out["orientation"] = std["orientation"] + "\n" + comms
 		return out, nil
 	}},
-	{"quiet", "the standard prompts with the talk-to-each-other paragraphs removed, plus: work alone", func(std map[string]string, _ string) (map[string]string, error) {
+	{"quiet", "the standard prompts with the talk-to-each-other paragraph removed, plus: work alone", func(std map[string]string, _ string) (map[string]string, error) {
 		out := clone(std)
-		o, err := drop(std["orientation"], "Talk to each other like a hive.")
+		o, err := drop(std["orientation"], "Talk to each other like a hive")
 		if err != nil {
 			return nil, err
 		}
-		w, err := drop(std["worker"], "Others are working beside you.")
-		if err != nil {
-			return nil, err
-		}
-		out["orientation"], out["worker"] = o+"\n"+quiet, w
+		out["orientation"] = o + "\n" + quiet
 		return out, nil
 	}},
 	{"essay", "the person's essay as the whole orientation, and one line per role", func(_ map[string]string, essay string) (map[string]string, error) {
@@ -208,7 +204,7 @@ var Variants = []Variant{
 	{OpenArm, "one shared room, several agents on the same open brief, no lead routing; only the safety layer as structure", func(std map[string]string, _ string) (map[string]string, error) {
 		out := clone(std)
 		text := open
-		for _, name := range []string{"Where things are", "Your reach"} {
+		for _, name := range []string{"Where things are", "The only limits"} {
 			sec, err := section(std["orientation"], name)
 			if err != nil {
 				return nil, err

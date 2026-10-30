@@ -370,17 +370,17 @@ func leadAsk(ask, system string) (string, error) {
 		out, err := call("requests", map[string]string{}, time.Minute)
 		return "Here's what waits: " + string(out), err
 	}
-	if everythingQ.MatchString(ask) && !strings.Contains(ask, "ask a worker") && strings.Contains(system, "Questions about the Hive itself") {
+	if everythingQ.MatchString(ask) && !strings.Contains(ask, "ask a worker") && strings.Contains(system, "questions about the Hive itself") {
 		return everything()
 	}
-	if hiveQ.MatchString(ask) && strings.Contains(system, "Questions about the Hive itself") {
+	if hiveQ.MatchString(ask) && strings.Contains(system, "questions about the Hive itself") {
 		return aboutHive()
 	}
-	if scoreQ.MatchString(ask) && strings.Contains(system, "Questions about the Hive itself") {
+	if scoreQ.MatchString(ask) && strings.Contains(system, "questions about the Hive itself") {
 		return howScored()
 	}
-	// As a real lead does with its role doc: the Hive's own code is its own project.
-	if hm := selfRe.FindStringSubmatch(ask); hm != nil && strings.Contains(system, "create_project --self") {
+	// As a real lead does from create_project's help: the Hive's own code is its own project.
+	if hm := selfRe.FindStringSubmatch(ask); hm != nil {
 		// The repository is ignored: the Hive's own code lives where the install says.
 		out, err := call("create_project", map[string]any{"self": true, "repo": "someone/else"}, 3*time.Minute)
 		if err != nil {
@@ -396,9 +396,9 @@ func leadAsk(ask, system string) (string, error) {
 	if strings.HasPrefix(strings.ToLower(ask), "hello") {
 		return "Hello. I'm the lead. Tell me what you'd like done.", nil
 	}
-	// As a real lead does with its role doc: a module is a project of its own;
-	// without the doc it files the ask wherever a brief lands.
-	if mm := moduleRe.FindStringSubmatch(ask); mm != nil && strings.Contains(system, "built as a project of its own") {
+	// As a real lead does from install_module's help: a module is built as a
+	// project of its own.
+	if mm := moduleRe.FindStringSubmatch(ask); mm != nil {
 		name := mm[1]
 		if _, err := call("create_project", map[string]any{"name": name, "description": "a Hive module: " + ask, "goals": ask}, 3*time.Minute); err != nil {
 			return "", err
@@ -434,7 +434,7 @@ var selfRe = regexp.MustCompile(`(?i)fix the hive itself: (.+)`)
 var hiveQ = regexp.MustCompile(`(?i)does the hive have`)
 
 // aboutHive answers from the installed modules and the live state, as the
-// lead's role doc tells a real lead to.
+// orientation tells a real agent to.
 func aboutHive() (string, error) {
 	var mods, roles []string
 	dir := os.Getenv("HIVE_MODULES")
@@ -660,7 +660,7 @@ func worker(all, prompt, system string) (string, error) {
 		name := moduleKey.FindStringSubmatch(all)[1]
 		os.WriteFile("module.json", []byte(`{"name": "`+name+`", "description": "FAKE module", "provides": {"procedures": ["ledger.md"]}, "projects": ["*"]}`+"\n"), 0o644)
 		os.WriteFile("ledger.md", []byte("# How to keep the ledger\n"), 0o644)
-	case everythingQ.MatchString(all) && strings.Contains(system, "Questions about the Hive itself"):
+	case everythingQ.MatchString(all) && strings.Contains(system, "questions about the Hive itself"):
 		answer, err := everything()
 		if err == nil {
 			_, err = call("remember", map[string]string{"title": "Everything about the Hive", "text": answer}, time.Minute)
