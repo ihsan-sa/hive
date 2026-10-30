@@ -144,9 +144,11 @@ func (o *Ops) Drain(r Run) {
 }
 
 // WatchRequests looks in the outboxes of the runs a tick drains every poll
-// until ctx ends, and calls wake once for each request it hasn't seen, so a
-// finish or a message is handled at once instead of on the second's tick.
-// It only reads names: each run still drains its own outbox on its step.
+// until ctx ends, answers each run's waiting requests itself unless a step
+// has the run (answer), and calls wake once for each request it hasn't seen,
+// so a finish or a message is handled at once instead of on the second's
+// tick. A request so waits neither for the tick nor behind the leads' steps,
+// which under load held every agent's answer for seconds.
 func (rs *Runs) WatchRequests(ctx context.Context, poll time.Duration, wake func()) {
 	seen := map[string]bool{}
 	for {
@@ -160,15 +162,20 @@ func (rs *Runs) WatchRequests(ctx context.Context, poll time.Duration, wake func
 				continue
 			}
 			entries, _ := os.ReadDir(dir)
+			waiting := false
 			for _, e := range entries {
 				if !strings.HasSuffix(e.Name(), ".json") {
 					continue
 				}
+				waiting = true
 				k := r.ID + "/" + e.Name()
 				now[k] = true
 				if !seen[k] {
 					fresh = true
 				}
+			}
+			if waiting {
+				go rs.answer(r)
 			}
 		}
 		seen = now
@@ -180,6 +187,23 @@ func (rs *Runs) WatchRequests(ctx context.Context, poll time.Duration, wake func
 			return
 		case <-time.After(poll):
 		}
+	}
+}
+
+// answer drains r's outbox now, as its step would, unless a step (or an
+// answer before it) has the run: claim keeps one at a time on a run.
+func (rs *Runs) answer(r Run) {
+	r, ok := rs.claim(r)
+	if !ok {
+		return
+	}
+	defer func() {
+		rs.mu.Lock()
+		delete(rs.busy, r.ID)
+		rs.mu.Unlock()
+	}()
+	if r.Status == StatusRunning || r.Status == StatusIdle || r.Status == StatusQuiet {
+		rs.ops.Drain(r)
 	}
 }
 
