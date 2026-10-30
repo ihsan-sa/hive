@@ -3271,7 +3271,7 @@ func (m *Module) forgeChecks(t *Task, p core.Project, main string) (bool, error)
 			if slices.ContainsFunc(mainRuns, func(mr core.CheckRun) bool {
 				return mr.State == core.CheckCantStart && slices.ContainsFunc(still, func(r core.CheckRun) bool { return r.Name == mr.Name })
 			}) {
-				how = " were cancelled or couldn't start on main in " + p.Name + " at " + core.Short(main) + ", with no finished run on its last " + fmt.Sprint(core.MainLookBack) + " commits, for over " + mainWaitMax.String()
+				how = " were cancelled or couldn't start on main in " + p.Name + " at " + core.Short(main) + ", with no finished run on its last " + fmt.Sprint(core.MainLookBack) + " commits, for over " + callMainWaitMax.Of(m.C.J).String()
 			}
 			m.raiseOnce(p, main+"/pending", "the forge's checks "+core.CheckNames(still)+how+"; PR #"+fmt.Sprint(t.PR.Number)+"'s red on them went back to its worker as its own")
 		}
