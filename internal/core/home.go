@@ -210,8 +210,12 @@ func claudeName(dir string) string {
 // user's home, the project's clone or the workspace: what one agent
 // remembers, the next agent on the project and a session the person opens
 // in that clone read. An entry the run's home already has is left as it is,
-// so a link is made once and an agent's own file is never replaced.
+// so a link is made once and an agent's own file is never replaced. A home
+// with no ~/.claude (no Claude Code there) gets nothing.
 func shareClaudeHome(own, home, work, dir string) {
+	if !exists(filepath.Join(home, ".claude")) {
+		return
+	}
 	link := func(target, at string) {
 		if _, err := os.Lstat(at); err == nil {
 			return

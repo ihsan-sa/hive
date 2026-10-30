@@ -135,6 +135,9 @@ func TestRuntimeMounts(t *testing.T) {
 // replaces what the run's home already has.
 func TestShareClaudeHome(t *testing.T) {
 	home, own := t.TempDir(), t.TempDir()
+	if shareClaudeHome(own, home, "/work", home); exists(filepath.Join(own, ".claude")) {
+		t.Fatal("a home with no ~/.claude linked something")
+	}
 	os.MkdirAll(filepath.Join(home, ".claude", "skills", "synced"), 0o755)
 	os.WriteFile(filepath.Join(home, ".claude", "settings.json"), []byte(`{"theme":"dark"}`), 0o644)
 	os.MkdirAll(filepath.Join(own, ".claude", "plugins"), 0o755)
