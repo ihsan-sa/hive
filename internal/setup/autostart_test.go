@@ -215,7 +215,9 @@ func TestUnitCarriesAPath(t *testing.T) {
 		t.Errorf("a %% in PATH isn't escaped for systemd: %s", got)
 	}
 	// The soft cap survives a reboot, and the daemon may give each run its own.
-	for _, line := range []string{"\nMemoryHigh=45%\n", "\nMemorySwapMax=4G\n", "\nDelegate=yes\n", "\nDelegateSubgroup=daemon\n"} {
+	// A restart gets in while runs outlive the daemon (the controller is off again).
+	for _, line := range []string{"\nMemoryHigh=45%\n", "\nMemorySwapMax=4G\n", "\nDelegate=yes\n", "\nDelegateSubgroup=daemon\n",
+		"\nExecStopPost=-/bin/sh -c 'echo -memory > /sys/fs/cgroup$$(dirname $$(cut -d: -f3 /proc/self/cgroup))/cgroup.subtree_control'\n"} {
 		if !strings.Contains(unit, line) {
 			t.Errorf("unit lacks %q:\n%s", strings.TrimSpace(line), unit)
 		}

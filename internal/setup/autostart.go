@@ -96,9 +96,19 @@ func home() string { h, _ := os.UserHomeDir(); return h }
 // (sandbox.SettleMemory), so one runaway test is killed inside its run;
 // DelegateSubgroup starts the daemon in the unit's leaf, since the kernel
 // lets no process into a cgroup that has controllers on for its children.
+// Runs outlive a daemon (KillMode=process), so the unit's cgroup and that
+// controller stay, and systemd starts the next daemon from the unit's own
+// cgroup: every restart failed with "Device or resource busy" until
+// ExecStopPost turned the controller off (10-30). It runs in the unit's
+// .control leaf once the daemon is gone; the new daemon turns it on again.
 func unitText(exe, root, path string) string {
-	return fmt.Sprintf("[Unit]\nDescription=The Hive\nAfter=network-online.target\n\n[Service]\nEnvironment=HIVE_HOME=%s\nEnvironment=\"PATH=%s\"\nExecStart=%s daemon\nKillMode=process\nRestart=on-failure\nRestartSec=10\nMemoryHigh=45%%\nMemorySwapMax=4G\nDelegate=yes\nDelegateSubgroup=daemon\n\n[Install]\nWantedBy=default.target\n", root, strings.ReplaceAll(path, "%", "%%"), exe)
+	return fmt.Sprintf("[Unit]\nDescription=The Hive\nAfter=network-online.target\n\n[Service]\nEnvironment=HIVE_HOME=%s\nEnvironment=\"PATH=%s\"\nExecStart=%s daemon\nKillMode=process\nRestart=on-failure\nRestartSec=10\nMemoryHigh=45%%\nMemorySwapMax=4G\nDelegate=yes\nDelegateSubgroup=daemon\nExecStopPost=%s\n\n[Install]\nWantedBy=default.target\n", root, strings.ReplaceAll(path, "%", "%%"), exe, releaseMemory)
 }
+
+// releaseMemory is ExecStopPost's command: the memory controller off for the
+// children of the unit's cgroup, the parent of the .control leaf it runs in
+// ($$ is systemd's literal $).
+const releaseMemory = `-/bin/sh -c 'echo -memory > /sys/fs/cgroup$$(dirname $$(cut -d: -f3 /proc/self/cgroup))/cgroup.subtree_control'`
 
 // unitTools are the programs the daemon runs by name.
 var unitTools = []string{"claude", "codex", "gh", "git", "go", "bwrap"}
