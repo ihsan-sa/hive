@@ -242,8 +242,6 @@ on any project's work as on your own, on the record with your run id.
   stop      --task id --why "..." [--fresh]   end a working task's quiet worker (one that keeps ending
                                                  turns without finishing) as blocked; bring the task back
                                                  with recheck, or --fresh hands it to a new worker at once
-  pr_ready  --task id [--why "..."]              mark the Hive's own PR ready; its merge goes on
-  pr_draft  --task id --why "..."                mark it a draft; its task waits, not stopped
   pr_close  --task id --comment "..." [--delete_branch]   close it with a comment, ending its
                                                  task (or --project p --pr N in place of --task)
   models                                         named models, each role's route, what each agent runs on, trials

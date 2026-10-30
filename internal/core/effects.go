@@ -2016,29 +2016,28 @@ func under(file string, paths []string) bool {
 	return false
 }
 
-// MergeRequest is everything the gate needs to merge a pull request.
+// MergeRequest is everything the merge needs.
 type MergeRequest struct {
 	Project Project
 	PR      int
 	SHA     string
 	Main    string
 	Subject string
-	Task    string // the task whose PR it is: the quarantine excuses it only on evidence from outside it
-	// Passed: its worker's own run of the tests passed at SHA in its turn
-	// (or it is a revert): with no forge CI that is the test.
-	Passed bool
+	Task    string // the task whose PR it is
 	// Draft is the PR's state at the caller's last look: a draft is readied
-	// once every read is checked. One made a draft after that look isn't
-	// (the lead's pr_draft, say): MergePR refuses it with ErrDraft.
+	// as it merges. One made a draft after that look isn't: MergePR refuses
+	// it with ErrDraft, and the next look readies it.
 	Draft bool
 	// Stale, when set, is asked last, just before the forge merges: true
 	// (the person stopped the task while the merge was weighed) refuses it.
 	Stale func() bool
 }
 
-// Merge merges the PR only at sha, once sha passed its tests: the forge's CI
-// where the project has it, else its worker's own run or one here. What
-// breaks main shows in its measurement after the merge, which reverts it.
+// Merge merges the PR at sha. Nothing is weighed first: no test, read,
+// approval or forge check (the person, 10-30: "freely edit everything
+// including the core with no process"). What breaks main shows in its
+// measurement after the merge, which reverts it. Only the person's hold
+// and the release repository's steward record stop it.
 func (e *Effects) Merge(m MergeRequest) (string, error) {
 	p := m.Project
 	if e.MergeHeld != nil {
@@ -2053,111 +2052,16 @@ func (e *Effects) Merge(m MergeRequest) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	var flaky []string                        // a red local test run's known flakes, its only failures
-	tested := e.ForgeTested(p, m.Main, m.SHA) // the forge's checks are the test there
-	switch c, ok := e.GetCheck(p.Name, m.SHA, "test"); {
-	case len(tested) > 0:
-		// No local run is needed, and one there is no gate: the forge's
-		// checks below must pass, these among them.
-	case m.Passed:
-	case !ok:
-		return "", refuse("%s: no test run recorded for that exact commit", short(m.SHA))
-	case !c.OK:
-		// Red only where main's own run at m.Main is red too: no worse than
-		// main, as the work module's testing stage let it on, so the fix for
-		// a red main can land. Or red only in quarantined tests, which count
-		// against no head, as the forge's checks below.
-		if flaky = e.ExcusedLocal(p, m.Main, m.Task, ch.Files, c); len(flaky) == 0 {
-			mc, ok := e.MainTests(p.Name, m.Main)
-			switch {
-			case !ok:
-				return "", refuse("%s: its test run is red, and main has no recorded test run at %s to say whether it is red there too", short(m.SHA), short(m.Main))
-			case mc.OK:
-				return "", refuse("%s: its test run is red where main's own passes at %s", short(m.SHA), short(m.Main))
-			case !NoWorse(c, mc):
-				mains, beyond := RedKeys(mc.FullOutput()), []string{}
-				for _, k := range RedKeys(c.FullOutput()) {
-					if !slices.Contains(mains, k) {
-						beyond = append(beyond, k)
-					}
-				}
-				if len(beyond) == 0 {
-					beyond = []string{"a failure no test name accounts for"}
-				}
-				return "", refuse("%s: its test run fails beyond what main's own run at %s fails too (%s)", short(m.SHA), short(m.Main), Clip(strings.Join(beyond, ", "), 300))
-			}
-		}
-	}
-	if len(ch.Protected) > 0 && !e.ApprovedDiff("merge", p.Name, m.SHA, ch.DiffID) {
-		return "", &NeedsPerson{Reason: "it changes " + strings.Join(ch.Protected, ", ") + ", which needs an approval first"}
-	}
-	if !e.SecurityOK(p.Name, ch) {
-		need := "the Hive's security seat"
-		if len(ch.SecurityRoot) > 0 {
-			need += " and a majority of its panel"
-		}
-		return "", refuse("%s: it changes %s, %s, and no security read said land on its diff (%s, or an outside read)", short(m.SHA), strings.Join(ch.Security, ", "), ch.SecurityWhere(), need)
-	}
-	runs, err := e.Forge.Checks(p.Repo, m.SHA)
-	if err != nil {
-		return "", err
-	}
-	runs, req, warned := Advisory(p, runs, e.RequiredChecks(p, m.Main), e.AdvisoryChecks(p, m.Main))
-	req = ProjectConfig{ForgeTests: tested}.WithForgeTests(req)
-	st, which := ChecksState(runs, req)
-	var shared, excused []string
-	var answer map[string]string // check -> the older main commit its answer came from
-	if st == CheckFail {
-		mainRuns, at, err := e.MainAnswer(p, m.Main, which)
-		answer = at
-		if err != nil {
-			return "", err
-		}
-		runs, excused = e.Excused(p, m.Main, m.Task, ch.Files, runs, mainRuns)
-		st, which, shared, _ = ChecksAgainstMain(runs, mainRuns, req, e.FailingTests(p.Repo))
-	}
-	var prose []string
-	if st == CheckFail && ProseOnly(ch.Files) {
-		st, which, prose = ChecksBesidesFailures(runs, req)
-	}
-	if st != CheckPass {
-		return "", refuse("%s: the forge's checks are not all passing there, beyond what fails on main at %s too (%s: %s)", short(m.SHA), short(m.Main), st, CheckNames(which))
-	}
 	if m.Stale != nil && m.Stale() {
 		return "", refuse("#%d: its task was stopped or brought back while the merge was weighed", m.PR)
 	}
-	// Every read above is the Hive's own and bound to sha, and nobody outside
-	// the Hive reads its PRs, so a draft it cleared is its to ready.
 	if m.Draft {
 		if err := e.ReadyPR(p, m.PR, m.SHA); err != nil {
 			return "", err
 		}
 	}
 	ev := map[string]any{"project": p.Name, "pr": m.PR, "sha": m.SHA, "root": ch.Root, "diff": ch.DiffID}
-	if len(excused) > 0 {
-		ev["quarantined"] = excused // red only on known flakes
-	}
-	if len(flaky) > 0 {
-		ev["quarantined_local"] = flaky // its own test run red only on known flakes
-	}
-	if len(warned) > 0 {
-		ev["warned"] = warned
-	}
-	if len(shared) > 0 {
-		// A merge past a red check names the main commits that excused it,
-		// so one that relied on an older main answer can be audited.
-		ev["red_on_main"] = shared
-		if len(answer) > 0 {
-			ev["main_answer"] = answer
-		}
-	}
-	if len(prose) > 0 {
-		ev["red_on_prose"] = prose // a change to prose alone, which can't break them
-	}
 	merged, err := e.Forge.MergePR(p.Repo, m.PR, m.SHA, m.Subject)
-	if red := append(slices.Concat(shared, prose), warned...); err != nil && len(red) > 0 && protectionRefused.MatchString(err.Error()) {
-		return "", &RefusedRed{Checks: red, Warned: warned, Err: err}
-	}
 	if err != nil {
 		if !errors.Is(err, ErrDraft) {
 			// A forge that timed out may have merged all the same: the
@@ -2208,29 +2112,6 @@ func (e *Effects) ReadyPR(p Project, pr int, sha string) error {
 	return err
 }
 
-// RefusedRed is the forge refusing a merge the Hive found no worse than main:
-// its branch rules want a check that is red on main too, or one main's list
-// says only warns (Warned), so retrying won't help until main is fixed or the
-// person relaxes the rule.
-type RefusedRed struct {
-	Checks []string
-	Warned []string
-	Err    error
-}
-
-func (r *RefusedRed) Error() string {
-	why := ", red on main too"
-	if len(r.Warned) > 0 {
-		why = ", red here (" + strings.Join(r.Warned, ", ") + " only warn on the Hive's own PRs, per advisory_checks)"
-	}
-	return "the forge refused the merge: its branch rules want " + strings.Join(r.Checks, ", ") + why + " (" + Clip(r.Err.Error(), 200) + ")"
-}
-
-func (r *RefusedRed) Unwrap() error { return r.Err }
-
-// protectionRefused is how GitHub says a branch rule refused a merge.
-var protectionRefused = regexp.MustCompile(`(?i)required status check|base branch policy|protected branch|repository rule violation`)
-
 // Refusal is Merge declining a merge one of its own conditions doesn't
 // allow yet, so the task can say what holds it.
 type Refusal string
@@ -2240,11 +2121,6 @@ func (r Refusal) Error() string { return string(r) }
 func refuse(format string, a ...any) error {
 	return Refusal(fmt.Sprintf("refusing to merge "+format, a...))
 }
-
-// NeedsPerson means only the person can take this step.
-type NeedsPerson struct{ Reason string }
-
-func (n *NeedsPerson) Error() string { return "needs the person: " + n.Reason }
 
 // RequiredChecks are the forge's checks main's list says must succeed on a
 // head before it merges.

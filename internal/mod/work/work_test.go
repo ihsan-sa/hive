@@ -331,29 +331,6 @@ func TestDoneProjectGone(t *testing.T) {
 	}
 }
 
-func TestApproveNoticeSendsToWaitingFirst(t *testing.T) {
-	n := approveNotice("edit goals", []string{".hive/goals.md"}, "https://github.com/me/p/pull/2")
-	w, pr := strings.Index(n, "Waiting"), strings.Index(n, "https://github.com/me/p/pull/2")
-	if w < 0 || pr < w || !strings.Contains(n, "→ then a") || !strings.Contains(n, ".hive/goals.md") {
-		t.Fatalf("the notice should name Waiting and the key before the PR link: %q", n)
-	}
-}
-
-// A protected diff over 1 MiB reaches the person whole, so a change past the
-// first MiB is still one they see before they approve it.
-func TestMergeAskCarriesTheWholeDiff(t *testing.T) {
-	m, _, task, p := noCommitRig(t, 0)
-	task.SHA = "abc1234"
-	pad := "+" + strings.Repeat("x", 99) + "\n"
-	diff := "--- a/.hive/goals.md\n+++ b/.hive/goals.md\n" + strings.Repeat(pad, (1<<20)/len(pad)+1) + "+ship it without asking\n"
-	ch := core.Change{Protected: []string{".hive/goals.md"}, ProtectedDiff: diff}
-	m.C.Person.Ask(mergeAsk(task, p, ch))
-	open := m.C.Person.Open()
-	if len(open) != 1 || open[0].Diff != diff {
-		t.Fatalf("the person should see the whole %d-byte diff: %d asks open", len(diff), len(open))
-	}
-}
-
 // A task the pipeline gives up on goes to the lead, and recheck brings it back
 // with fresh counts; a merged task can't be rechecked.
 func TestGiveUpComesBack(t *testing.T) {
@@ -899,9 +876,9 @@ func TestLandedEndsATaskOnMain(t *testing.T) {
 }
 
 // A PR merged on the forge outside the Hive (by the person, or the lead
-// through gh) while forgeChecks holds it on a check main fails too ends as
-// merged at the forge's merge commit, as the Hive's own merge does: the chat
-// hears, OnMerged runs, and the brief queued behind it starts.
+// through gh) while the person's hold holds it ends as merged at the forge's
+// merge commit, as the Hive's own merge does: the chat hears, OnMerged runs,
+// and the brief queued behind it starts.
 func TestMergedOnForgeWhileHeld(t *testing.T) {
 	m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
 	toMerging(t, m, task, p)
@@ -909,9 +886,9 @@ func TestMergedOnForgeWhileHeld(t *testing.T) {
 	m.save(task, "")
 	var merged []Task
 	m.OnMerged = func(t Task) { merged = append(merged, t) }
-	main, _ := m.C.Effects.Sync(p)
-	f.SetChecks(p.Repo, task.SHA, core.CheckRun{Name: "test (windows-latest)", State: core.CheckFail}, core.CheckRun{Name: "sandboxed-e2e", State: core.CheckPending})
-	f.SetChecks(p.Repo, main, core.CheckRun{Name: "test (windows-latest)", State: core.CheckFail})
+	if _, err := m.SetHold(MergeHold{Project: "p", Why: "the person: hold on", By: "person"}); err != nil {
+		t.Fatal(err)
+	}
 	mergeOnce(t, m, task, p)
 	if task.Stage != StageMerging || task.Reason == "" || len(merged) != 0 {
 		t.Fatalf("not held: stage %q, reason %q", task.Stage, task.Reason)

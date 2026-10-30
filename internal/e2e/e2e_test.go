@@ -631,13 +631,18 @@ func TestGateAndLoop(t *testing.T) {
 		return len(st.Projects) == 1 && st.Projects[0].Best != nil && *st.Projects[0].Best == 5
 	})
 
+	// Nothing tests a change before it merges: one that breaks the tests
+	// merges, main's measure after it goes red, and the Hive reverts it.
 	h.post("/api/ask", map[string]string{"project": "gate", "title": "break the build", "known": "FAKE:breaktests"}, nil)
-	st := h.wait("the failing change to stop", 4*minute, taskStage("gate", "break the build", work.StageStopped))
-	tk, _ := task(st, "gate", "break the build")
-	pr, _ := h.forge.GetPR("me/gate", tk.PR.Number)
-	if pr.State != "OPEN" || tk.Round != 3 {
-		t.Fatalf("a failing change must stop after 3 rounds with its PR open: round %d, pr %+v", tk.Round, pr)
+	st := h.wait("the breaking change's revert to merge", 4*minute, taskStage("gate", "Revert: break the build", work.StageDone))
+	if rv, _ := task(st, "gate", "Revert: break the build"); !strings.Contains(rv.Lesson, "tests went red") {
+		t.Fatalf("revert reason: %q", rv.Lesson)
 	}
+	h.wait("main green again", minute, func(api.State) bool {
+		core.Git(h.ws.Project("gate"), "fetch", "-q", "origin")
+		_, err := core.Git(h.ws.Project("gate"), "cat-file", "-e", "origin/main:BROKEN")
+		return err != nil
+	})
 
 	h.post("/api/ask", map[string]string{"project": "gate", "title": "lower the score", "known": "FAKE:lowerscore"}, nil)
 	h.wait("the score-lowering change to merge", 3*minute, taskStage("gate", "lower the score", work.StageDone))
@@ -836,18 +841,6 @@ func TestRecovery(t *testing.T) {
 	h.wait("the crashed run to be retried and land", 3*minute, taskStage("rec", "crash once", work.StageDone))
 }
 
-// toldAbout waits for a told in the feed whose title names what was decided.
-func toldAbout(what string) func(api.State) bool {
-	return func(st api.State) bool {
-		for _, a := range st.Told {
-			if strings.Contains(a.Title, what) {
-				return true
-			}
-		}
-		return false
-	}
-}
-
 // The Hive notices its own stalls. A worker, a reviewer and a check that stop
 // moving for longer than their stage takes in this Hive are restarted or
 // handed to the lead, each with one alert that updates when it moves on; a
@@ -878,16 +871,15 @@ func TestStalls(t *testing.T) {
 	cfg.StallFloorSeconds = 20
 	h.ws.SaveConfig(cfg)
 
-	asks := map[string]string{"hung worker": "FAKE:stallworker", "hung check": "FAKE:stallcheck", "slow worker": "FAKE:slowworker:22"}
+	// No check runs before a merge, so only a worker can hang here.
+	asks := map[string]string{"hung worker": "FAKE:stallworker", "slow worker": "FAKE:slowworker:22"}
 	for title, known := range asks {
 		h.post("/api/ask", map[string]string{"project": "stall", "title": title, "known": known}, nil)
 	}
-	// The hung check runs its minute-long test up to three times (its head,
-	// the watcher's retry from its head, then merged with main).
 	for title := range asks {
 		h.wait(title+" to land", 6*minute, taskStage("stall", title, work.StageDone))
 	}
-	hung := map[string]string{"hung worker": "restarted its turn", "hung check": "handed it to the lead"}
+	hung := map[string]string{"hung worker": "restarted its turn"}
 	stalls := func(st api.State) map[string][]string {
 		alerts := map[string][]string{}
 		for _, a := range st.Alerts {
@@ -926,18 +918,11 @@ func TestStalls(t *testing.T) {
 	if slow, _ := task(st, "stall", "slow worker"); len(alerts["task:"+slow.ID]) != 0 {
 		t.Fatalf("a slow worker within this Hive's history was flagged: %q", alerts["task:"+slow.ID])
 	}
-	told := false
-	for _, msg := range h.messages("lead") {
-		told = told || strings.Contains(msg.Text, "Stuck:") && strings.Contains(msg.Text, "hung check")
-	}
-	if !told {
-		t.Fatal("the lead was not told about the hung check")
-	}
 }
 
 // A request past the sandbox goes to a warden, which runs its script, and the
-// outcome reaches the agent. At autonomy 2 a warden approves a module install
-// and a goals change, and the person is told after. A module updates when its
+// outcome reaches the agent. A module installs and a goals change merges with
+// no one weighing either. A module updates when its
 // source releases. The Hive releases itself after a kept merge.
 func TestPersonModulesRelease(t *testing.T) {
 	t.Parallel()
@@ -975,8 +960,7 @@ func TestPersonModulesRelease(t *testing.T) {
 	}
 	h.wait("the module to install at v1.0.0", 2*minute, func(st api.State) bool { m, ok := module(st); return ok && m.Release == "v1.0.0" })
 	h.post("/api/ask", map[string]string{"project": "self", "title": "write down a goal", "known": "FAKE:goals"}, nil)
-	h.wait("a warden to approve the goals change and it to merge", 3*minute, taskStage("self", "write down a goal", work.StageDone))
-	h.wait("the person to be told after", minute, toldAbout("write down a goal"))
+	h.wait("the goals change to merge", 3*minute, taskStage("self", "write down a goal", work.StageDone))
 	os.WriteFile(filepath.Join(src, "tool.sh"), []byte("echo hi\n"), 0o644)
 	git(src, "add", "-A")
 	git(src, "commit", "-q", "-m", "v1.1")
@@ -1117,29 +1101,24 @@ func TestWaitingReachesThePerson(t *testing.T) {
 }
 
 // TestClosedPRStops: a pull request the person closes on the forge while its
-// task waits for them ends the task, even once its merge is approved, so the
-// dashboard never lists it as merging and main never takes it.
+// task waits under their hold ends the task, so the dashboard never lists it
+// as merging and main never takes it, even once the hold is lifted.
 func TestClosedPRStops(t *testing.T) {
 	t.Parallel()
-	// At autonomy 1 the merge waits on the person, not on a fake warden that
-	// answers in a fraction of a second, so the test sees it waiting.
-	h := startWith(t, bin, func(c *core.Config) { c.Autonomy = 1 })
+	h := start(t)
 	h.seed("me/closed", map[string]string{".hive/project.json": `{"test": "true"}`, ".hive/goals.md": "# Goals\n"})
 	h.post("/api/project", map[string]any{"name": "closed", "repo": "me/closed"}, nil)
+	h.post("/api/hold", map[string]any{"project": "closed", "why": "nothing merges for now"}, nil)
 	h.post("/api/ask", map[string]string{"project": "closed", "title": "edit the goals", "known": "FAKE:goals"}, nil)
-	st := h.wait("the goals change to wait for the person", 3*minute, func(st api.State) bool {
+	st := h.wait("the goals change to wait on the hold", 3*minute, func(st api.State) bool {
 		tk, ok := task(st, "closed", "edit the goals")
-		return ok && tk.Stage == work.StagePerson && tk.PR.Number != 0
+		return ok && tk.Stage == work.StageMerging && strings.Contains(tk.Reason, "merges held") && tk.PR.Number != 0
 	})
 	tk, _ := task(st, "closed", "edit the goals")
 	if err := h.forge.ClosePR("me/closed", tk.PR.Number, "not wanted"); err != nil {
 		t.Fatal(err)
 	}
-	for _, a := range st.Asks {
-		if a.Kind == "merge" && strings.Contains(a.Title, "edit the goals") {
-			h.post("/api/answer", map[string]string{"id": a.ID, "answer": "merge"}, nil)
-		}
-	}
+	h.post("/api/hold", map[string]any{"project": "closed", "lift": true}, nil)
 	st = h.wait("the closed PR's task to stop as the person's", 2*minute, func(st api.State) bool {
 		tk, ok := task(st, "closed", "edit the goals")
 		return ok && tk.Stage == work.StageStopped && tk.ByPerson
@@ -1153,69 +1132,6 @@ func TestClosedPRStops(t *testing.T) {
 		time.Sleep(2 * time.Second)
 		if tk, _ := task(h.state(), "closed", "edit the goals"); tk.Stage != work.StageStopped {
 			t.Fatalf("the stopped task came back as %q", tk.Stage)
-		}
-	}
-}
-
-// TestBlockedWorkComesBack replays the first real run: each worker's tests fail
-// on a missing tool, it asks a warden and finishes blocked at once. Where the
-// warden installs the tool, its answer wakes the worker and the PR merges;
-// where it declines and the person installs the tool, the lead re-runs the check.
-func TestBlockedWorkComesBack(t *testing.T) {
-	t.Parallel()
-	h := start(t)
-	// the sandboxed check sees system dirs like /var, not the test's temp dir
-	dir, err := os.MkdirTemp("/var/tmp", "hive-tool-")
-	if err != nil {
-		dir = t.TempDir()
-	} else {
-		t.Cleanup(func() { os.RemoveAll(dir) })
-	}
-	for _, name := range []string{"tool", "rerun"} {
-		marker := filepath.Join(dir, name)
-		// main is green; only the worker's change (under work/) needs the tool
-		h.seed("me/"+name, map[string]string{".hive/project.json": `{"test": "test -f ` + filepath.ToSlash(marker) + ` || test ! -d work"}`, ".hive/goals.md": "# Goals\n"})
-		h.post("/api/project", map[string]any{"name": name, "repo": "me/" + name}, nil)
-		known := "FAKE:needtool " + filepath.ToSlash(marker)
-		if name == "rerun" {
-			known += " FAKE:wardendecline"
-		}
-		h.post("/api/ask", map[string]string{"project": name, "title": name, "known": known}, nil)
-	}
-	h.wait("the warden's answer to wake the worker and its PR to merge", 4*minute, taskStage("tool", "tool", work.StageDone))
-	st := h.wait("the declined worker to stay blocked", 4*minute, func(st api.State) bool {
-		t, ok := task(st, "rerun", "rerun")
-		return ok && t.Stage == work.StageBlocked && strings.Contains(t.Reason, "declined") && t.PR.Number != 0
-	})
-	rerun, _ := task(st, "rerun", "rerun")
-	os.WriteFile(filepath.Join(dir, "rerun"), nil, 0o644) // the person installs the tool
-	h.post("/api/chat", map[string]string{"chat": "lead", "text": "recheck " + rerun.ID}, nil)
-	h.wait("the lead's re-run to pass and merge the PR", 4*minute, taskStage("rerun", "rerun", work.StageDone))
-}
-
-// TestStoppedWorkComesBack: a change whose tests keep failing stops after its
-// fix rounds and goes to the lead, not the person; the lead sends it back with
-// what remains and it merges.
-func TestStoppedWorkComesBack(t *testing.T) {
-	t.Parallel()
-	h := start(t)
-	h.seed("me/stop", map[string]string{".hive/project.json": `{"test": "test ! -f BROKEN"}`, ".hive/goals.md": "# Goals\n"})
-	h.post("/api/project", map[string]any{"name": "stop", "repo": "me/stop"}, nil)
-	h.post("/api/chat", map[string]string{"chat": "lead", "text": "hello"}, nil) // the lead is up to be told
-	title := "break the build FAKE:leadfixes"
-	h.post("/api/ask", map[string]string{"project": "stop", "title": title, "known": "FAKE:breaktests"}, nil)
-	st := h.wait("the lead's call to bring it back past the fix rounds and merge it", 6*minute, taskStage("stop", title, work.StageDone))
-	tk, _ := task(st, "stop", title)
-	stopped := false
-	for _, e := range tk.Log {
-		stopped = stopped || strings.Contains(e.Text, "stopped after 3 rounds")
-	}
-	if !stopped {
-		t.Fatalf("it never stopped after its rounds: %+v", tk.Log)
-	}
-	for _, msg := range h.messages("lead") {
-		if strings.Contains(msg.Text, "Stopped") {
-			t.Fatalf("the person was told of work the lead owns: %q", msg.Text)
 		}
 	}
 }

@@ -106,9 +106,13 @@ func commitInCheckout(t *testing.T, c *Core, p Project, id, base, file, content 
 	return r, dir
 }
 
-func TestMergeNeedsCheckAndVerdictOnExactCommit(t *testing.T) {
+// Nothing is weighed before a merge (the person, 10-30: "freely edit
+// everything including the core with no process"): no test run, a red one,
+// the goals, a security-listed file and red forge checks all merge. Only the
+// forge's own refusal of a head that moved past sha stops it.
+func TestMergeWeighsNothing(t *testing.T) {
 	c, f, p, main := setupProject(t)
-	r, _ := commitInCheckout(t, c, p, "w1", main, "feature.go", "package demo\n// feature\n")
+	r, _ := commitInCheckout(t, c, p, "w1", main, "BROKEN", "x")
 	sha, err := c.Effects.Extract(p, r, main)
 	if err != nil {
 		t.Fatal(err)
@@ -116,113 +120,40 @@ func TestMergeNeedsCheckAndVerdictOnExactCommit(t *testing.T) {
 	if err := c.Effects.Push(p, "hive/t1", sha); err != nil {
 		t.Fatal(err)
 	}
-	pr, err := f.CreatePR(p.Repo, "hive/t1", "main", "feature", "body")
+	pr, err := f.CreatePR(p.Repo, "hive/t1", "main", "broken", "body")
 	if err != nil {
 		t.Fatal(err)
 	}
-	req := MergeRequest{Project: p, PR: pr.Number, SHA: sha, Main: main, Subject: "feature"}
-	if _, err := c.Effects.Merge(req); err == nil || !strings.Contains(err.Error(), "no test run") {
-		t.Fatalf("merged without a test run: %v", err)
+	req := MergeRequest{Project: p, PR: pr.Number, SHA: sha, Main: main, Subject: "broken"}
+	if ch := c.Effects.RunCheck(p, sha, "test", c.Effects.Config(p, main).Test); ch.OK {
+		t.Fatal("tests should fail with BROKEN present")
 	}
-	// A red run main's own run doesn't share (here main has none) is refused.
-	red := "echo '--- FAIL: TestClock (0.01s)'; echo 'FAIL\tp/a\t0.01s'; exit 1"
-	if ch := c.Effects.RunCheck(p, sha, "test", red); ch.OK {
-		t.Fatal("a failing test run passed")
-	}
-	if _, err := c.Effects.Merge(req); err == nil || !strings.Contains(err.Error(), "main has no recorded test run at "+short(main)) {
-		t.Fatalf("merged on a red test run main doesn't share: %v", err)
-	}
-	if ch := c.Effects.RunCheck(p, sha, "test", c.Effects.Config(p, main).Test); !ch.OK {
-		t.Fatalf("tests should pass: %s", ch.Output)
-	}
-	// A verdict from something other than a reviewer bound to sha is refused.
-	if err := c.Effects.RecordVerdict(Verdict{Project: p.Name, SHA: sha, Run: "w1", Verdict: "land"}); err == nil {
-		t.Fatal("accepted a verdict from a worker")
-	}
-	rev, _ := c.Runs.Start(RunSpec{ID: "r1", Role: "reviewer", Project: p.Name, ReadOnly: true, Harness: "fake", Inputs: map[string]string{"sha": sha}})
-	if err := c.Effects.RecordVerdict(Verdict{Project: p.Name, SHA: sha, Run: rev.ID, Verdict: "land"}); err != nil {
-		t.Fatal(err)
-	}
-
-	// A commit pushed after the land verdict can't ride on it.
-	r2, dir := commitInCheckout(t, c, p, "w1b", sha, "sneaky.go", "package demo\n// after the review\n")
-	_ = dir
+	f.SetChecks(p.Repo, sha, CheckRun{Name: "test", State: CheckFail}, CheckRun{Name: "sandboxed-e2e", State: CheckPending})
+	// A commit pushed after sha: the forge refuses to merge sha under it.
+	r2, _ := commitInCheckout(t, c, p, "w1b", sha, "later.go", "package demo\n")
 	sha2, err := c.Effects.Extract(p, r2, main)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := c.Effects.Push(p, "hive/t1", sha2); err != nil {
-		t.Fatal(err)
-	}
+	c.Effects.Push(p, "hive/t1", sha2)
 	if _, err := c.Effects.Merge(req); err == nil || !strings.Contains(err.Error(), "head is") {
-		t.Fatalf("merged the reviewed commit while the PR head moved: %v", err)
+		t.Fatalf("merged sha while the PR head moved: %v", err)
 	}
-	// Back to the reviewed commit: it merges once the forge's checks pass there.
 	c.Effects.Push(p, "hive/t1", sha)
-	f.SetChecks(p.Repo, sha, CheckRun{Name: "test", State: CheckPass}, CheckRun{Name: "sandboxed-e2e", State: CheckPending})
-	if _, err := c.Effects.Merge(req); err == nil || !strings.Contains(err.Error(), "sandboxed-e2e") {
-		t.Fatalf("merged while a forge check still runs: %v", err)
-	}
-	f.SetChecks(p.Repo, sha, CheckRun{Name: "test", State: CheckPass}, CheckRun{Name: "sandboxed-e2e", State: CheckPass})
 	merged, err := c.Effects.Merge(req)
+	if err != nil || merged == "" {
+		t.Fatalf("a red change didn't merge: %q %v", merged, err)
+	}
+	main, err = c.Effects.Sync(p)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if merged == "" {
-		t.Fatal("no merge commit")
-	}
-}
-
-// A red run merges only where main's own recorded run fails the same tests,
-// main read as the work module's testing stage reads it: a red main a later
-// retest passed is green, and the change's red is its own.
-func TestMergeRedNoWorseThanMain(t *testing.T) {
-	c, f, p, main := setupProject(t)
-	r, _ := commitInCheckout(t, c, p, "w1", main, "notes.md", "# notes\n")
-	sha, err := c.Effects.Extract(p, r, main)
-	if err != nil {
-		t.Fatal(err)
-	}
-	c.Effects.Push(p, "hive/t1", sha)
-	pr, _ := f.CreatePR(p.Repo, "hive/t1", "main", "notes", "")
-	req := MergeRequest{Project: p, PR: pr.Number, SHA: sha, Main: main, Subject: "notes"}
-	fail := func(tests ...string) string {
-		s := ""
-		for _, n := range tests {
-			s += "echo '--- FAIL: " + n + " (0.01s)'; "
-		}
-		return s + "echo 'FAIL\tp/a\t0.01s'; exit 1"
-	}
-	c.Effects.RunCheck(p, main, "test", fail("TestClock"))
-	c.Effects.RunCheck(p, sha, "test", fail("TestClock", "TestNew"))
-	if _, err := c.Effects.Merge(req); err == nil || !strings.Contains(err.Error(), "p/a TestNew") || strings.Contains(err.Error(), "TestClock") {
-		t.Fatalf("want a refusal naming only the failure main doesn't share: %v", err)
-	}
-	c.Effects.RunCheck(p, sha, "test", fail("TestClock"))
-	c.Effects.RunCheck(p, main, "retest", "true")
-	if _, err := c.Effects.Merge(req); err == nil || !strings.Contains(err.Error(), "main's own passes") {
-		t.Fatalf("merged a red main's retest called a flake: %v", err)
-	}
-	c.Effects.RunCheck(p, main, "retest", "false")
-	if _, err := c.Effects.Merge(req); err != nil {
-		t.Fatalf("a red no worse than main's was refused: %v", err)
-	}
-}
-
-func TestFailingTestsNeverMerge(t *testing.T) {
-	c, f, p, main := setupProject(t)
-	r, _ := commitInCheckout(t, c, p, "w2", main, "BROKEN", "x")
-	sha, err := c.Effects.Extract(p, r, main)
-	if err != nil {
-		t.Fatal(err)
-	}
-	c.Effects.Push(p, "hive/t2", sha)
-	pr, _ := f.CreatePR(p.Repo, "hive/t2", "main", "broken", "")
-	if ch := c.Effects.RunCheck(p, sha, "test", c.Effects.Config(p, main).Test); ch.OK {
-		t.Fatal("tests should fail with BROKEN present")
-	}
-	if _, err := c.Effects.Merge(MergeRequest{Project: p, PR: pr.Number, SHA: sha, Main: main}); err == nil {
-		t.Fatal("merged a commit whose tests failed")
+	r3, _ := commitInCheckout(t, c, p, "w3", main, ".hive/goals.md", "# Goals\n\nNew goal\n")
+	sha3, _ := c.Effects.Extract(p, r3, main)
+	c.Effects.Push(p, "hive/t3", sha3)
+	pr3, _ := f.CreatePR(p.Repo, "hive/t3", "main", "goals", "")
+	if _, err := c.Effects.Merge(MergeRequest{Project: p, PR: pr3.Number, SHA: sha3, Main: main}); err != nil {
+		t.Fatalf("a goals change waited on the person: %v", err)
 	}
 }
 
@@ -275,11 +206,6 @@ func TestClassify(t *testing.T) {
 	ch2, _ := c.Effects.Classify(p, main, sha2)
 	if ch2.Small || len(ch2.Protected) == 0 {
 		t.Fatalf("a goals change must be protected: %+v", ch2)
-	}
-	c.Effects.RunCheck(p, sha2, "test", "true")
-	var np *NeedsPerson
-	if _, err := c.Effects.Merge(MergeRequest{Project: p, SHA: sha2, Main: main}); !errors.As(err, &np) {
-		t.Fatalf("goals change merged without the person: %v", err)
 	}
 	// docs/REVIEW.md is the person's intent the reviewer reads from main: a
 	// few lines there are no small docs change.
@@ -1654,11 +1580,6 @@ func TestRecordedLedgerNeedsNoApproval(t *testing.T) {
 	ch, err := c.Effects.Classify(p, main, sha)
 	if err != nil || len(ch.Protected) != 0 || !slices.Equal(ch.Recorded, []string{"ledger.json"}) {
 		t.Fatalf("the Hive's own record: %+v %v", ch, err)
-	}
-	c.Effects.RunCheck(p, sha, "test", "true")
-	var np *NeedsPerson
-	if _, err := c.Effects.Merge(MergeRequest{Project: p, SHA: sha, Main: main}); errors.As(err, &np) {
-		t.Fatalf("the record waited on the person: %v", err)
 	}
 	r, _ := commitInCheckout(t, c, p, "w1", main, "ledger.json", "{\"trials\": [1, 2]}\n")
 	own, _ := c.Effects.Extract(p, r, main)

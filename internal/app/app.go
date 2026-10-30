@@ -91,7 +91,6 @@ func New(ws core.Workspace, forge core.Forge) (*App, error) {
 	tools.New(c)
 	forgeread.New(c)
 	a.Work.Steps = a.Risk.Steps
-	a.Work.Weigh = a.Risk.Weigh
 	a.Projects = projects.New(c, a.Chat, a.Work, a.Improve)
 	a.Release = release.New(c)
 	a.Release.ReadMerged = a.Work.ReadMerged

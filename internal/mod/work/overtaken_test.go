@@ -7,7 +7,7 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 )
 
-// stallForge runs on() at the at'th read of checks, from inside the step that
+// stallForge runs on() at the at'th read of a PR, from inside the step that
 // asked, and waits for it: a person's stop landing at that point of a step.
 type stallForge struct {
 	*core.Local
@@ -16,7 +16,7 @@ type stallForge struct {
 	on    func()
 }
 
-func (f *stallForge) Checks(repo, sha string) ([]core.CheckRun, error) {
+func (f *stallForge) GetPR(repo string, number int) (core.PR, error) {
 	f.mu.Lock()
 	f.n++
 	hit := f.n == f.at
@@ -24,12 +24,11 @@ func (f *stallForge) Checks(repo, sha string) ([]core.CheckRun, error) {
 	if hit {
 		f.on()
 	}
-	return f.Local.Checks(repo, sha)
+	return f.Local.GetPR(repo, number)
 }
 
-// A Tick-started merge step stopped mid-way, at every read of the forge's
-// checks it makes (the merge's own last look included), doesn't merge, and the
-// person's stop stands.
+// A Tick-started merge step stopped mid-way, at every read of the PR it
+// makes, doesn't merge, and the person's stop stands.
 func TestStopMidMergeStepStands(t *testing.T) {
 	run := func(at int) (int, Task, string) {
 		m, task, p, f := gateRig(t, false, map[string]string{"feature.txt": "y"})
@@ -54,7 +53,7 @@ func TestStopMidMergeStepStands(t *testing.T) {
 	}
 	n, got, state := run(0)
 	if got.Stage != StageMerged || state != "MERGED" || n == 0 {
-		t.Fatalf("unstopped: stage %q, reason %q, PR %s, %d reads of checks", got.Stage, got.Reason, state, n)
+		t.Fatalf("unstopped: stage %q, reason %q, PR %s, %d reads of the PR", got.Stage, got.Reason, state, n)
 	}
 	for at := 1; at <= n; at++ {
 		_, got, state := run(at)

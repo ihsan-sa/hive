@@ -10,8 +10,8 @@ import (
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 )
 
-// Any agent's hand on the state of the Hive's own pull requests: mark one
-// ready or a draft, or close it with a comment, ending its task. Only a PR a
+// Any agent's hand on the state of the Hive's own pull requests: close one
+// with a comment, ending its task. Only a PR a
 // task opened counts as the Hive's own, and only in a project the agent
 // reaches; no agent holds a forge login, so the daemon acts for it.
 
@@ -66,94 +66,6 @@ func (m *Module) openPR(t Task, p core.Project) (core.PR, error) {
 		return pr, fmt.Errorf("PR #%d is %s, not open", pr.Number, strings.ToLower(pr.State))
 	}
 	return pr, nil
-}
-
-// MarkReady marks a task's PR ready for review, so a merge waiting on the
-// draft goes on at its next look. A task stopped over the draft (before
-// drafts waited) comes back to be checked again, unless the person stopped it.
-func (m *Module) MarkReady(id, by, why string) (string, error) {
-	save, done := m.take(id)
-	defer done()
-	t, _ := m.Get(id)
-	p, err := m.project(&t)
-	if err != nil {
-		return "", err
-	}
-	pr, err := m.openPR(t, p)
-	if err != nil {
-		return "", err
-	}
-	if pr.Draft {
-		if err := m.C.Effects.Forge.SetDraft(p.Repo, pr.Number, false); err != nil {
-			return "", err
-		}
-	}
-	m.mu.Lock()
-	delete(m.later, id) // the draft's wait is over: look again at once
-	m.mu.Unlock()
-	// The forge's record matches the task's: the lead's reason goes on the
-	// PR, and a draft the lead didn't make (DraftWhy empty) says so loudly.
-	note := fmt.Sprintf("PR #%d marked ready by %s", pr.Number, by)
-	if pr.Draft && t.DraftWhy == "" {
-		note += " (a draft the lead didn't make)"
-	}
-	if why != "" {
-		note += ": " + core.Clip(why, 300)
-	}
-	if pr.Draft || why != "" {
-		body := "Marked ready by the Hive's lead"
-		if why != "" {
-			body += ": " + why
-		}
-		if pr.Draft && t.DraftWhy == "" {
-			body += "\n\nThe lead didn't make this draft; if it was held for a read outside the Hive, make it a draft again."
-		}
-		m.comment(p.Repo, pr.Number, body)
-	}
-	t.DraftWhy = ""
-	save(&t, note)
-	switch {
-	case t.Stage != StageStopped && t.Stage != StageBlocked:
-		return note + "; the task goes on", nil
-	case !strings.Contains(strings.ToLower(t.Reason), "draft"):
-		return note + fmt.Sprintf("; task %s stays %s (%s): bring it back with recheck if you want it", t.ID, t.Stage, core.Clip(t.Reason, 200)), nil
-	case t.ByPerson || m.workerStopped(t):
-		return note + fmt.Sprintf("; task %s stays stopped: the person stopped it", t.ID), nil
-	}
-	if err := m.Recheck(id, "", by); err != nil {
-		return "", err
-	}
-	return note + "; it had stopped over the draft, so it is back and checked again", nil
-}
-
-// MarkDraft marks a task's PR a draft, which holds its merge (waitDraft)
-// until it is marked ready again; why goes on the PR and the task.
-func (m *Module) MarkDraft(id, by, why string) (string, error) {
-	save, done := m.take(id)
-	defer done()
-	t, _ := m.Get(id)
-	switch t.Stage {
-	case StageMerged, StageDone:
-		return "", fmt.Errorf("task %s is %s; nothing to hold", id, t.Stage)
-	}
-	p, err := m.project(&t)
-	if err != nil {
-		return "", err
-	}
-	pr, err := m.openPR(t, p)
-	if err != nil {
-		return "", err
-	}
-	if !pr.Draft {
-		if err := m.C.Effects.Forge.SetDraft(p.Repo, pr.Number, true); err != nil {
-			return "", err
-		}
-	}
-	m.comment(p.Repo, pr.Number, "Held as a draft by the Hive's lead: "+why+"\n\nIt merges once marked ready.")
-	t.DraftWhy = core.Clip(why, 200)
-	note := fmt.Sprintf("PR #%d marked a draft by %s: %s", pr.Number, by, core.Clip(why, 300))
-	save(&t, note)
-	return note + "; its merge waits until it is marked ready (pr_ready)", nil
 }
 
 // closedByLead starts the reason of a task the lead ended with pr_close. Its
@@ -278,16 +190,6 @@ func (m *Module) prOp(r core.Run, args json.RawMessage, need string, do func(a p
 		return nil, err
 	}
 	return map[string]string{"task": t.ID, "pr": t.PR.URL, "note": note}, nil
-}
-
-func (m *Module) opPRReady(r core.Run, args json.RawMessage) (any, error) {
-	return m.prOp(r, args, "", func(a prArgs, t Task) (string, error) { return m.MarkReady(t.ID, r.ID, a.Why) })
-}
-
-func (m *Module) opPRDraft(r core.Run, args json.RawMessage) (any, error) {
-	return m.prOp(r, args, "why", func(a prArgs, t Task) (string, error) {
-		return m.MarkDraft(t.ID, r.ID, a.Why)
-	})
 }
 
 func (m *Module) opPRClose(r core.Run, args json.RawMessage) (any, error) {
