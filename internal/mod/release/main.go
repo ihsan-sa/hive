@@ -335,9 +335,12 @@ var checksWaitMax = 45 * time.Minute
 
 // waitChecks says why an automatic update to tag waits, or "": on a channel
 // follow polls (main, pre-release), the checks running when it first looked
-// for tag go on to their verdicts, for at most checksWaitMax, then it
-// installs; one that starts meanwhile doesn't hold
-// it, and dies with the restart. `hive update` doesn't wait.
+// for a release go on to their verdicts, for at most checksWaitMax, then it
+// installs; one that starts meanwhile doesn't hold it, and dies with the
+// restart. The wait runs from the first release that waited until one
+// installs: a newer tag that lands meanwhile inherits it, so a main that
+// merges more often than checksWaitMax still installs. `hive update`
+// doesn't wait.
 func (m *Module) waitChecks(tag string, auto bool) string {
 	if !auto || m.Channel() == Latest {
 		return "" // the latest channel looks every few hours, not every few minutes: a wait would hold it a look
@@ -345,9 +348,6 @@ func (m *Module) waitChecks(tag string, auto bool) string {
 	running, _ := m.C.Effects.Slots.State()
 	key := func(u core.SlotUse) string { return u.Project + "@" + u.SHA + " " + u.Kind + " " + u.Since.String() }
 	now := time.Now()
-	if m.checksTag != tag {
-		m.checksAt, m.checksTag = nil, tag // a wait for another release starts afresh
-	}
 	if m.checksAt == nil {
 		m.checksAt, m.checksSince = map[string]bool{}, now
 		for _, u := range running {
