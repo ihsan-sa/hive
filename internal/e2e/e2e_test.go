@@ -498,14 +498,10 @@ func TestAskLandsAndProjects(t *testing.T) {
 	if len(prs) != 1 || prs[0].State != "MERGED" || h.forge.Issues("local/textkit") != 1 {
 		t.Fatalf("forge: prs %+v issues %d", prs, h.forge.Issues("local/textkit"))
 	}
-	reviewed := false
 	for _, c := range h.forge.Comments("local/textkit", tk.PR.Number) {
-		if strings.Contains(c, "Review of") && strings.Contains(c, "land") {
-			reviewed = true
+		if strings.Contains(c, "Review of") {
+			t.Fatalf("a read before the merge (soft merge has none): %v", c)
 		}
-	}
-	if !reviewed {
-		t.Fatalf("no review on the PR: %v", h.forge.Comments("local/textkit", tk.PR.Number))
 	}
 	merged := false
 	for _, m := range h.messages("lead") {
