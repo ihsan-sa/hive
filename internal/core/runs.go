@@ -2674,6 +2674,13 @@ func (rs *Runs) sandboxSpec(cfg Config, sb sandbox.Sandbox, h harness.Harness, r
 		}
 	}
 	mounts = append(mounts, sandbox.Mount{Host: rs.ws.Tools(), Inside: sandbox.ToolsInside})
+	// A writable run that isn't walled off is a session in the hive user's
+	// home (home.go); a reader, an experiment and an isolated project's run
+	// keep their own view.
+	inHome := sb.Isolated() && !r.ReadOnly && !r.OneTurn && !r.Isolated
+	if home, err := os.UserHomeDir(); inHome && err == nil && filepath.IsAbs(home) && home != "/" {
+		mounts = append(mounts, homeMounts(home, rs.ws.Covered())...)
+	}
 	mounts = append(mounts, rs.hideIsolated(r)...)
 	var secrets *sandbox.Mount
 	if dir := rs.secretsFor(r); dir != "" {
@@ -2731,6 +2738,14 @@ func (rs *Runs) sandboxSpec(cfg Config, sb sandbox.Sandbox, h harness.Harness, r
 	}
 	if secrets != nil {
 		env = append(env, "HIVE_SECRETS="+in(*secrets))
+	}
+	// git and gh on the agents' own token for the project's owner, never the
+	// Hive's logins (home.go); none saved, none given.
+	if rs.projs != nil && !r.ReadOnly && !r.OneTurn {
+		if p, ok := rs.projs.Get(r.Project); ok && p.Repo != "" {
+			env = append(env, "HIVE_REPO="+p.Repo)
+			env = append(env, agentGit(AgentToken(p.Repo))...)
+		}
 	}
 	if sb.Isolated() {
 		env = append(sandbox.InsideEnv("/hive/home", true), env...)
