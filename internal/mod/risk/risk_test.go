@@ -1574,3 +1574,34 @@ func TestWardenOnlyForWhatIsOutside(t *testing.T) {
 		t.Fatalf("deleting a repository isn't a tribunal's: %+v", l)
 	}
 }
+
+// A request is saved as weighing before its warden's run is created, so a
+// restart between the two never strands the warden; and a request whose
+// weighing was lost that way still takes its warden's decide.
+func TestWeighingSavedBeforeWardenStarts(t *testing.T) {
+	g := newRig(t, 2)
+	req := g.request("install a tool", "x", "T2")
+	saved, created := -1, -1
+	for i, e := range g.c.J.Since(0) {
+		var d struct{ ID, State string }
+		json.Unmarshal(e.Data, &d)
+		switch {
+		case e.Kind == "risk.saved" && d.ID == req.ID && d.State == "weighing" && saved < 0:
+			saved = i
+		case e.Kind == "run.created" && d.ID == req.Warden:
+			created = i
+		}
+	}
+	if saved < 0 || created < 0 || saved > created {
+		t.Fatalf("weighing saved at %d, warden created at %d", saved, created)
+	}
+	lost := req
+	lost.Warden, lost.State = "", "asked" // the journal as a restart before the fix left it
+	g.m.save(&lost)
+	if err := g.decide(req, map[string]string{"decision": "decline", "reason": "no"}); err != nil {
+		t.Fatalf("a warden whose weighing was lost can't decide: %v", err)
+	}
+	if got, _ := g.m.get(req.ID); got.State != "declined" || got.Warden != req.Warden {
+		t.Fatalf("decide didn't land: %+v", got)
+	}
+}
