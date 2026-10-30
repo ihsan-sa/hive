@@ -29,6 +29,7 @@ type Turn struct {
 	ConfigDir    string   // the harness's own config folder the Hive made for this turn, if any
 	Writable     []string // folders besides the checkout the agent may write
 	Sandboxed    bool     // inside a Hive sandbox (permission prompts are meaningless there)
+	InHome       bool     // a session in the hive user's home: it loads that user's settings, skills and plugins
 	MaxOutput    int      // cap on one reply's tokens; 0 is the harness default
 	MaxBudgetUSD float64  // cap on the turn's spend; 0 is none
 	Endpoint     string   // a named model's API base URL (OpenClaude)
@@ -178,7 +179,13 @@ func (Claude) LoginCommand() []string { return []string{"claude", "auth", "login
 func (Claude) APIHosts() []string     { return []string{"api.anthropic.com"} }
 
 func (Claude) Args(t Turn) []string {
-	a := []string{"-p", "--output-format", "stream-json", "--verbose", "--strict-mcp-config", "--setting-sources", "project"}
+	// A session in the hive user's home loads its settings as one opened
+	// there does (user, project, local); any other turn the project's alone.
+	src := "project"
+	if t.InHome {
+		src = "user,project,local"
+	}
+	a := []string{"-p", "--output-format", "stream-json", "--verbose", "--strict-mcp-config", "--setting-sources", src}
 	if t.Resume {
 		a = append(a, "--resume", t.SessionID)
 	} else {
