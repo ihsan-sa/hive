@@ -457,6 +457,17 @@ func TestMainBundleLeavesNoTemp(t *testing.T) {
 // (issue #2154); a bundle already at main isn't written again.
 func TestTurnStartsWithMainsTip(t *testing.T) {
 	c, _, p, old := setupProject(t)
+	// Stop the turn and let it end before the hive's temp dir goes
+	// (cleanups run last-first); a turn's end is taken in a tick.
+	t.Cleanup(func() {
+		c.Runs.Stop("w1", "the test is over")
+		for end := time.Now().Add(30 * time.Second); time.Now().Before(end); time.Sleep(200 * time.Millisecond) {
+			if r, _ := c.Runs.Get("w1"); r.Status != StatusRunning {
+				return
+			}
+			c.Runs.Tick(c.WS.LoadConfig())
+		}
+	})
 	host := c.WS.Project(p.Name)
 	path := filepath.Join(c.WS.RunRO("w1"), "main.bundle")
 	os.MkdirAll(filepath.Dir(path), 0o755)
@@ -472,9 +483,14 @@ func TestTurnStartsWithMainsTip(t *testing.T) {
 	if _, err := c.Runs.Start(RunSpec{ID: "w1", Role: "worker", Project: p.Name, Checkout: dir, Harness: "fake"}); err != nil {
 		t.Fatal(err)
 	}
-	c.Runs.Tick(c.WS.LoadConfig())
-	waitFor(t, "the bundle at main's tip", func() bool { return BundleHead(path, p.Branch) == tip })
-	waitFor(t, "the turn to end", func() bool { r, _ := c.Runs.Get("w1"); return r.Status != StatusRunning })
+	ticked := time.Time{}
+	waitFor(t, "the bundle at main's tip", func() bool {
+		if time.Since(ticked) > 200*time.Millisecond { // a tick that didn't start the turn: the next one does
+			c.Runs.Tick(c.WS.LoadConfig())
+			ticked = time.Now()
+		}
+		return BundleHead(path, p.Branch) == tip
+	})
 
 	st, _ := os.Stat(path)
 	if head, err := c.Effects.FreshBundle(p, path); err != nil || head != tip {
