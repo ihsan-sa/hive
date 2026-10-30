@@ -83,9 +83,10 @@ type Module struct {
 	// followed is when follow last looked for a pre-release; red holds each
 	// pre-release whose checks here failed, and waits what the newer ones
 	// wait for, as the last look found.
-	followed time.Time
-	red      map[string]verdict
-	waits    []string
+	followed  time.Time
+	heldSince time.Time // when follow first held an update for main's measures (measureHold)
+	red       map[string]verdict
+	waits     []string
 	// shas are the pre-releases' commits, by repo@tag; tried is the tag the
 	// last update went for and said1 what follow last recorded.
 	shas  map[string]string

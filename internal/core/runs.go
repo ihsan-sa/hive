@@ -585,6 +585,13 @@ func (rs *Runs) YieldFor(who, what string) {
 	rs.yields[who] = what
 }
 
+// Measures names the measures of main whose checks run here now (YieldFor).
+func (rs *Runs) Measures() []string {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	return slices.Compact(slices.Sorted(maps.Values(rs.yields)))
+}
+
 // Yielding says why a turn that may wait doesn't start now for a measure of
 // main, or "". With turnMB 0 nothing paces turns, this hold neither.
 func (rs *Runs) Yielding(turnMB int) string {
