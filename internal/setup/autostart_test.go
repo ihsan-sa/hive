@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -174,5 +175,40 @@ func TestUnitServesItsRootAndDropsADoubledAutostart(t *testing.T) {
 	}
 	if _, err := os.Stat(desk); err == nil {
 		t.Error("hive.desktop is still there")
+	}
+}
+
+// The unit carries a PATH with the person's own bin dirs and where the
+// daemon's tools are, so a daemon started at boot, with systemd's default
+// PATH, still finds claude; a rewrite from such a daemon keeps the PATH the
+// unit had, and the Hive's tools folder, which agents write, stays off it.
+func TestUnitCarriesAPath(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("systemd is Linux's")
+	}
+	home, root, bin := t.TempDir(), t.TempDir(), t.TempDir()
+	os.WriteFile(filepath.Join(bin, "claude"), []byte("#!/bin/sh\n"), 0o755)
+	t.Setenv("HOME", home)
+	t.Setenv("PATH", bin+":"+filepath.Join(root, ".hive", "tools", "go", "bin")+":/usr/bin:/bin")
+	path := unitPath(home, root, nil)
+	for _, want := range []string{bin, filepath.Join(home, ".local", "bin"), filepath.Join(home, "bin"), "/usr/bin"} {
+		if !slices.Contains(filepath.SplitList(path), want) {
+			t.Errorf("PATH %q lacks %s", path, want)
+		}
+	}
+	if strings.Contains(path, filepath.Join(root, ".hive")) {
+		t.Errorf("PATH %q has the Hive's tools folder", path)
+	}
+	unit := unitText("/x/hive", root, path)
+	if !strings.Contains(unit, "\nEnvironment=\"PATH="+path+"\"\n") {
+		t.Fatalf("unit lacks its PATH:\n%s", unit)
+	}
+	// Rewritten from a daemon systemd started with its default PATH.
+	t.Setenv("PATH", "/usr/bin:/bin")
+	if again := unitPath(home, root, []byte(unit)); !slices.Contains(filepath.SplitList(again), bin) {
+		t.Errorf("the rewrite lost %s: %q", bin, again)
+	}
+	if got := unitText("/x/hive", root, "/a%b"); !strings.Contains(got, "PATH=/a%%b") {
+		t.Errorf("a %% in PATH isn't escaped for systemd: %s", got)
 	}
 }

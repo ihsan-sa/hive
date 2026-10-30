@@ -83,8 +83,8 @@ func TestFlakeAfterMergeIsNotReverted(t *testing.T) {
 	if reverts(m) != 0 || !strings.Contains(flakeAlerts(m), "TestJoin") {
 		t.Fatalf("reverts %d, alerts %q", reverts(m), flakeAlerts(m))
 	}
-	if f := m.Work.List(func(t work.Task) bool { return strings.HasPrefix(t.Title, "Fix the flaky") }); len(f) != 1 || !f[0].Fix() {
-		t.Fatalf("the flaky test's brief names its failure, so it is a fix (issue #568): %+v", f)
+	if f := m.Work.List(func(t work.Task) bool { return strings.HasPrefix(t.Title, "Fix the flaky") }); len(f) != 0 {
+		t.Fatalf("the flaky test was filed as a brief; it goes on the board: %+v", f)
 	}
 }
 
