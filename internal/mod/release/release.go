@@ -365,12 +365,12 @@ func (m *Module) lag(out ...string) {
 	seen := map[string]bool{}
 	m.newest, m.behind = core.Version, 0
 	for _, t := range append(slices.Clone(m.ahead), out...) {
-		if t == "" || seen[t] || !modules.Newer(core.Version, t) {
+		if t == "" || seen[t] || !newer(t) {
 			continue
 		}
 		seen[t] = true
 		m.behind++
-		if modules.Newer(m.newest, t) {
+		if m.newest == core.Version || modules.Newer(m.newest, t) {
 			m.newest = t
 		}
 	}
@@ -432,7 +432,7 @@ func (m *Module) update(tag string, auto bool) (string, error) {
 			return "", err
 		}
 	}
-	if !chosen && !modules.Newer(core.Version, tag) || chosen && tag == core.Version {
+	if !chosen && !newer(tag) || chosen && tag == core.Version {
 		msg := "already on " + core.Version
 		if pin {
 			msg += ", pinned there"
