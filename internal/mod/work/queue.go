@@ -382,9 +382,15 @@ func (m *Module) opQueue(r core.Run, args json.RawMessage) (any, error) {
 	}
 	var notes []string
 	if len(a.Order) > 0 { // a new order replaces the old one: the rest go after, as filed
-		// Only in the caller's reach: another project's order is kept, and
+		// Only on the projects it names: another project's order is kept, and
 		// not one note each for the briefs it never named.
-		for _, t := range m.List(func(t Task) bool { return (t.Queued() || t.Resending()) && t.Order > 0 && m.reach(r, t.Project) == nil }) {
+		named := map[string]bool{}
+		for _, id := range a.Order {
+			if t, ok := m.Get(id); ok {
+				named[t.Project] = true
+			}
+		}
+		for _, t := range m.List(func(t Task) bool { return (t.Queued() || t.Resending()) && t.Order > 0 && named[t.Project] }) {
 			if changes[t.ID] == nil {
 				at(t.ID).order = 0
 			}
@@ -398,11 +404,6 @@ func (m *Module) opQueue(r core.Run, args json.RawMessage) (any, error) {
 			continue
 		case m.C.Runs.Walled(r, t.Project) != nil:
 			notes = append(notes, "no task "+id)
-			continue
-		case m.reach(r, t.Project) != nil && strings.TrimSpace(a.Why) == "":
-			// Every agent has the same say (the person, 10-28): another
-			// project's line is anyone's to steer, saying why on the record.
-			notes = append(notes, fmt.Sprintf("%s is on project %s; say why with why to steer another project's line", id, t.Project))
 			continue
 		case !t.Queued() && !t.Resending():
 			// One a conflict sent back waits in the line as the queue lists
