@@ -304,6 +304,10 @@ type Module struct {
 	// Steps sums up the outside steps a worker asked for, and whether every
 	// one ran and succeeded (the risk module).
 	Steps func(run string) (string, bool)
+	// Weigh settles an ask the way autonomy says (the risk module): a
+	// warden reads a change to the code enforcing the hard limits
+	// (limitsRead). Unset, the person does.
+	Weigh func(core.Ask) string
 
 	// Seen, when set, records that a task's worker was handed failing tests
 	// (their keys) and says who else met them lately, with their board item
@@ -454,6 +458,7 @@ func New(c *core.Core, a *agents.Agents, ch *chat.Module) *Module {
 	c.Runs.Ops().Register(core.Op{Name: "batch", Help: `{"tasks":"batch,id,...","why"} -> folds related briefs into one task, the first named: one worker does them all in one session and lands them as one PR. The first may be waiting or being worked on (its worker is told); each other must be a brief you could withdraw, taken the same way (fixes with fixes), and is withdrawn into the first, its issue closed as covered by the batch's`, Fn: m.opBatch})
 	c.Runs.Ops().Register(core.Op{Name: "hold_merges", Help: `{"project","why","only":[PR numbers],"until":"release"|"","lift":bool} -> on the person's word only (why quotes them): hold every merge on the project but the PRs in only (follow-ups and reverts included) until lifted, or with until "release" until the next release is out; lift ends it. Held PRs wait ready`, Fn: m.opHold})
 	c.Runs.Ops().Register(core.Op{Name: "pr_close", Help: `{"task"|"project"+"pr","comment","delete_branch":bool} -> closes the Hive's own PR with comment and ends its task (its worker stopped); delete_branch deletes its hive/ branch. A revert you no longer want is closed this way, not left to the person`, Fn: m.opPRClose})
+	c.Person.Handle(core.LimitsRead, m.onLimitsRead)
 	c.Effects.MergeHeld = m.MergeHeld
 	c.Effects.Slots.Resize(m.maxChecks)
 	c.Effects.Slots.Prioritize(m.checkRank, rankRedFix)
@@ -1015,11 +1020,13 @@ func (m *Module) reapStuck() {
 	}
 }
 
-// waits records why a queued task waits, when that is new. A machine hold's
-// live figures after " (" change every tick, so only a new kind is saved.
+// waits records why a queued task waits, when that is new. A hold's live
+// figures in brackets (a disk's "avg60 67%", a machine's load) change every
+// tick, so a reason that differs only in them isn't saved again: on 10-30,
+// with the disk gate shut, 86% of the journal's events in an hour were
+// queued tasks re-saved for a new avg60, each ~170 times.
 func (m *Module) waits(t Task, why string) {
-	kind, _, _ := strings.Cut(why, " (")
-	if t.Stage == StageQueued && (t.Reason == why || strings.Contains(why, "waiting: machine") && strings.HasPrefix(t.Reason, kind+" (")) {
+	if t.Stage == StageQueued && steady(t.Reason) == steady(why) {
 		return
 	}
 	m.mu.Lock()
@@ -1035,6 +1042,23 @@ func (m *Module) waits(t Task, why string) {
 	m.mu.Lock()
 	delete(m.busy, t.ID)
 	m.mu.Unlock()
+}
+
+// steady is a reason without its bracketed live figures.
+func steady(why string) string {
+	var b strings.Builder
+	depth := 0
+	for _, r := range why {
+		switch {
+		case r == '(':
+			depth++
+		case r == ')' && depth > 0:
+			depth--
+		case depth == 0:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
 
 // Wait returns once every step Tick started has ended, so a test's folders
@@ -1529,28 +1553,28 @@ func (m *Module) renderBrief(t *Task, p core.Project, base string) string {
 	}
 	b.WriteString(besideText(m.neighbours(*t)))
 	b.WriteString("## The project\n\n")
-	b.WriteString("- Goals: `.hive/goals.md`. Read it; report against it.\n")
+	b.WriteString("- Goals: `.hive/goals.md`.\n")
 	fmt.Fprintf(&b, "- Tests: `%s`\n", orNone(cfg.Test))
 	if p.Self {
 		if t.Fix() {
-			b.WriteString("- Aim: a fix (" + orNone(t.AimWhy) + "). It merges as soon as you finish; a score dip after it merges doesn't revert it on its own, but files a brief to look into it. If it isn't a fix of a named failure, say so with `hive agent aim --aim gain --why \"...\"`.\n")
+			b.WriteString("- Aim: a fix (" + orNone(t.AimWhy) + "): a score dip after it merges files a look into it rather than reverting it. Not a fix? `hive agent aim --aim gain`.\n")
 		} else {
-			fmt.Fprintf(&b, "- Aim: %s. It merges as soon as you finish, and main is measured after: a score drop beyond noise reverts it unless a judge, weighing it with the change, keeps it. If it is a fix, say so naming the failure it fixes (a bug, a failing test, a broken path) with `hive agent aim --aim fix --why \"...\"`.\n", t.AimWord())
+			fmt.Fprintf(&b, "- Aim: %s: a score drop beyond noise after it merges reverts it unless a judge keeps it. A fix of a named failure? `hive agent aim --aim fix --why \"...\"`.\n", t.AimWord())
 		}
 	}
 	if cfg.Score != nil {
 		fmt.Fprintf(&b, "- Score: `%s` (%s is better, tolerance %g).", cfg.Score.Command, cfg.Score.Direction, cfg.Score.Tolerance)
 		if best, ok := m.bestScore(p, m.C.Effects.ScoreVersion(p, base, *cfg.Score)); ok {
-			fmt.Fprintf(&b, " Best kept score: %g.", best)
+			fmt.Fprintf(&b, " Best kept: %g.", best)
 		} else if best, ok := m.bestScore(p, ""); ok {
-			fmt.Fprintf(&b, " Best kept score: %g, read under the score before it changed; main isn't measured under this one yet.", best)
+			fmt.Fprintf(&b, " Best kept: %g, under the score before it changed.", best)
 		}
-		b.WriteString(" Every merge is measured; after a clear fix a lower score files a brief to look into it, and otherwise it is reverted unless a judge, weighing it with the change, keeps it, so say in your account what the change is for.\n")
+		b.WriteString(" Main is measured after every merge, so say in your account what the change is for.\n")
 	}
 	if cfg.Score != nil && t.From != "hive" && p.Self && t.Gain() {
-		b.WriteString("- Commit as you go: a change aimed at a gain isn't merged as checkpoints; it merges whole once you finish.\n")
+		b.WriteString("- A gain merges whole when you finish, not as checkpoints.\n")
 	} else if cfg.Score != nil && t.From != "hive" { // as checkpoint() skips the Hive's own setup brief
-		b.WriteString("- Commit each gain as you make it: a commit that beats the best kept score is tested and merged into main as a checkpoint while you keep working on top of it.\n")
+		b.WriteString("- A commit that beats the best kept score merges as a checkpoint while you keep working.\n")
 	}
 	{
 		lessons := m.C.Effects.ReadFile(p, base, ".hive/lessons.md")
@@ -1573,7 +1597,7 @@ func (m *Module) renderBrief(t *Task, p core.Project, base string) string {
 	if prior := m.priorBlocked(t); prior != "" {
 		b.WriteString("\n## Earlier attempts that stopped\n\n" + prior)
 	}
-	b.WriteString("\n## When you finish\n\nCommit on your branch and merge main into it (`git fetch \"$HIVE_RUN/main.bundle\" main && git merge FETCH_HEAD`), resolving any conflict yourself. Then run `hive agent finish --status done --account \"...\" --tested \"...\" --unsure \"...\"` and end your turn: the Hive merges your PR at once. Nothing waits before the merge, no test, read, approval or CI, whatever you changed, the core included; run the tests if you want to. Main is measured after the merge and a break is reverted. You may instead push to main yourself (`git pull --rebase \"https://github.com/$HIVE_REPO\" main && git push \"https://github.com/$HIVE_REPO\" HEAD:main`, again if main moved; never force), then finish: what you pushed is yours to watch (`gh run list --branch main`) and to fix or revert if it goes red. If you can't finish, use `--status blocked` and say why.\n")
+	b.WriteString("\n## When you finish\n\nCommit, merge main into your branch (`git fetch \"$HIVE_RUN/main.bundle\" main && git merge FETCH_HEAD`), then `hive agent finish --status done|blocked --account \"...\"` and end your turn. It merges at once, with nothing waiting before it; main is measured after and a break is reverted. Or push to main yourself (`https://github.com/$HIVE_REPO`, never force) and watch it.\n")
 	return b.String()
 }
 
@@ -2368,6 +2392,11 @@ func (m *Module) merge(t *Task, p core.Project) error {
 	if wait, err := m.publishScan(t, p, main); wait || err != nil {
 		return err
 	}
+	// The one read before a merge: a warden's, of a change to the code
+	// that enforces the hard limits.
+	if wait, err := m.limitsRead(t, p, main); wait || err != nil {
+		return err
+	}
 	if why := m.MergeHeld(p.Name, t.PR.Number); why != "" {
 		m.hold(t, p, why)
 		return nil
@@ -2387,7 +2416,7 @@ func (m *Module) merge(t *Task, p core.Project) error {
 	// stop is asked again last of all; one landing while the forge merges
 	// can't be refused (architecture.md).
 	merged, err := m.C.Effects.Merge(core.MergeRequest{Project: p, PR: t.PR.Number, SHA: t.SHA, Main: main, Subject: t.Label(), Task: t.ID, Draft: pr.Draft,
-		Stale: func() bool { return m.overtaken(t) }})
+		Revert: t.Kind == "revert", Stale: func() bool { return m.overtaken(t) }})
 	if err != nil && m.overtaken(t) {
 		return nil
 	}

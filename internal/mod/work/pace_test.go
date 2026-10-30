@@ -231,3 +231,23 @@ func TestExecutorRoomStartsAHeldBrief(t *testing.T) {
 		t.Fatal("a brief held again is still marked away")
 	}
 }
+
+// A queued task isn't saved again when only the live figures in its waiting
+// reason change: on 10-30 each was re-saved ~170 times an hour for a new avg60.
+func TestWaitingReasonIgnoresLiveFigures(t *testing.T) {
+	m, _, _, _ := noCommitRig(t, 0)
+	a := file(t, m, "first", "")
+	a.Stage = StageQueued
+	m.save(&a, "")
+	m.waits(a, "waiting: disk (IO pressure full avg60 67%, limit 40%) for a worker")
+	a, _ = m.Get(a.ID)
+	at := a.Updated
+	m.waits(a, "waiting: disk (IO pressure full avg60 64%, limit 40%) for a worker")
+	if b, _ := m.Get(a.ID); !b.Updated.Equal(at) || !strings.Contains(b.Reason, "67%") {
+		t.Fatalf("re-saved for a new figure: %q at %v, was %v", b.Reason, b.Updated, at)
+	}
+	m.waits(a, core.MemWait+" for a worker")
+	if b, _ := m.Get(a.ID); b.Reason != core.MemWait+" for a worker" {
+		t.Fatalf("a new kind of wait wasn't saved: %q", b.Reason)
+	}
+}

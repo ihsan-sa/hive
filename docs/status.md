@@ -8,12 +8,13 @@ How a change lands now (the person, 10-30: "they can freely edit everything incl
   A worker's `hive agent finish` merges its PR at once: no test, reviewer, security read, panel, protected-path approval, forge check or lead-held draft waits before it (`Effects.Merge`).
   Or any agent pushes to main itself on its own token (`git push https://github.com/$HIVE_REPO HEAD:main`), as a session in home does, and owns that push's CI after.
   A module's program runs with no code review first.
+  The one exception: a PR that changes the code enforcing the hard limits (the `limits` array in `tests/LANDING-security.toml`) waits for a warden's read of its own diff ([risk.md](risk.md#a-wardens-read-of-the-limits-code)); an agent's own push to main goes around it.
   An agent may run the tests; nothing makes it.
 - What stays is the way back and the hard limits.
   Main keeps its history (the keep-history ruleset: no force-push, no deletion), so any change can be reverted.
   improve measures main after every merge and reverts a break or a score drop beyond noise ([score.md](score.md)); a fall with tests green after a change taken as a gain goes to a judge ([judge.md](judge.md)).
   An agent's own push isn't measured by the Hive: the agent watches its CI (`gh run list --branch main`) and fixes or reverts it.
-  H0 installs only a main commit whose forge CI passed (`required_checks` in `tests/LANDING-security.toml` name them), rolls back a build that fails to start, and keeps the one it replaced for `hive agent fallback`; the nightly backup goes to `~/hive-backups`.
+  H0 installs only a main commit whose forge CI passed (`required_checks` in `tests/LANDING-security.toml` name them), rolls back a build that fails to start, and keeps the one it replaced for `hive agent fallback`; the nightly backup goes to `~/hive-backups`, with a git bundle of each private repository, which has no keep-history ruleset on the free plan.
   The publish scan still sends back a change that would publish private details, the hard limits (money, credentials, private details going out, opening the machine, anything outward in the person's name, deleting repositories or history) go to a warden, and the person's `hold_merges` still holds a project's merges.
 - No gate: the recursive gate is out of the merge path and its code is deleted (#2142, PR #2166; [gate.md](gate.md)).
 - H0 follows main (8fab9b7, 8474502): behaviour (the default modules) is copied from main into `.modules/` on every merge, and on the next five-minute look after a push; the binary is built from the newest main commit whose forge CI passed, stamped `<line>-main.<sha8>`, and installed between turns, with the one it replaced kept as `.old` for `hive agent fallback`.

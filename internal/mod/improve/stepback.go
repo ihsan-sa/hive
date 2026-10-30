@@ -255,14 +255,14 @@ func (m *Module) StartStepBack(p core.Project, why string) error {
 
 The person's goal, in their words: %s
 
-The records are in $HIVE_RUN/digest.md, the project at main is your working directory, and the Hive's own prompts and modules are in $HIVE_MODULES.
+The records are in $HIVE_RUN/digest.md and the project at main is your working directory.
 
-First, judge, and needing no number to do it: read the goals critically. Are they the right goals, and specific enough to tell done from not done? Does the work the Hive did since the last step-back (what merged, what is queued, what it spent) serve them, or has it drifted into what is easy to file? Is the design the simplest that would do, or has it grown parts that hold the loop back? Say plainly what you would stop, start and change. Write that judgement to $HIVE_BOX/judgement.md, short and concrete: the Hive keeps it on the record and posts its opening in the project's chat for the person. Each change worth making goes in as a brief (hive agent brief), one per change, citing what you saw; a model to try goes in as a trial (hive agent trial), never a brief, since a brief's worker runs on the project's route and moves to the next model on it at a usage limit; a change of direction that would make current work obsolete goes in as a pivot (hive agent pivot --case "..." --evidence "..."), which goes first in line and may throw away anything; a goal you would reconsider goes to the person (hive agent message --to person), since .hive/goals.md is theirs to change.
+Judge it: are the goals right and specific enough, does what the Hive did since the last step-back serve them, and is the design the simplest that would do? Say what you would stop, start and change in $HIVE_BOX/judgement.md, short: it goes on the record and its opening to the person. Then act on it as any agent would: briefs, trials, a pivot, steering the queue, or a word to the person about goals that are theirs.
 
 `, p.Name, why, goals)
 	switch {
 	case s.Unspent:
-		brief += "The Hive has spent nothing on the project since the last step-back, so no experiment runs this time: the judgement is the whole pass.\n\n"
+		brief += "The Hive has spent nothing here since the last step-back, so no experiment runs: the judgement is the whole pass.\n\n"
 	case scored:
 		cfg := m.C.Effects.Config(p, st.SHA)
 		h, model := m.Agents.Model("worker", p.Name)
@@ -270,15 +270,13 @@ First, judge, and needing no number to do it: read the goals critically. Are the
 		if cfg.Score != nil && cfg.Score.Direction == "lower" {
 			better = "lower"
 		}
-		brief += fmt.Sprintf(`Then ask what the simplest setup is that might beat it. Its score (%s is better) started at %g, and the best the Hive has kept is %g. If a setup is worth testing, write it to $HIVE_BOX/experiment.json as {"why": "...", "system": "...", "asks": ["..."], "model": "..."}. The Hive runs it once in a fresh copy of the project at its start, in a worker's sandbox: one %s session, "system" appended to the harness's own system prompt (empty for none), the "asks" sent in turn in that session, on "model" (empty for %s). Nothing else is added, and it can only report on its own copy: of "hive agent" it may only call "finish" and "progress" (it can't message, ask a warden or file a brief), so a "system" or ask that wants its findings has it say them when it finishes. It may spend $%.2f, what the Hive has spent on this project since the last step-back. The copy is then scored with the project's score command beside the Hive's main at that time, and if it beats main the Hive files a fault against its own setup with both scores.
+		brief += fmt.Sprintf(`Then ask whether a simpler setup would beat the Hive here. The score (%s is better) started at %g; the best kept is %g. To test one, write $HIVE_BOX/experiment.json as {"why": "...", "system": "...", "asks": ["..."], "model": "..."}: the Hive runs one plain %s session on a fresh copy of the project at its start, with "system" appended to the harness's own prompt, the "asks" sent in turn, on "model" (empty for %s), and nothing else (it can only finish, so it reports there), for up to $%.2f. It scores the copy beside main and files a fault against its own setup if the copy wins.
 
 `, better, *st.Score, s.Best, h, model, s.Budget)
 	default:
-		brief += "The project has no kept score under its current score command, so no experiment runs this time: the judgement is the whole pass. If the missing number is itself what holds the project back, say so and brief what would give it one.\n\n"
+		brief += "The project has no kept score under its current score command, so no experiment runs: the judgement is the whole pass.\n\n"
 	}
-	brief += `If what holds the loop back is in its queue (off-loop work ahead of a fix, blocked work whose cause is fixed, a task that landed but sits in a stage), steer it yourself with queue, recheck, rerun-checks or landed; don't route it through the lead.
-
-Write your reasoning to $HIVE_BOX/sweep.md, then finish.`
+	brief += "Write your reasoning to $HIVE_BOX/sweep.md, then finish."
 	spec := m.Agents.Spec(id, "stepback", p.Name, dir, brief)
 	only := ""
 	if p.Hidden() {
@@ -518,8 +516,22 @@ func (m *Module) transcript(r core.Run, n int) string {
 //
 // The commits the setup left (sha, from s.From) go to the worker too, as a
 // patch it can apply: when the step-back ran on the Hive itself they are the
-// change that already won, so the fault asks for them on main first.
+// change that already won, so the fault asks for them on main first. On any
+// other project they go to that project as its own task too, so the score the
+// setup reached isn't left in a copy no one merges.
 func (m *Module) fileFault(s StepBack, p core.Project, exp core.Run, sha string, sc core.Score) string {
+	ported := ""
+	if patch, n := m.leftPatch(p, s.From, sha); n > 0 && !p.Self {
+		t, err := m.Work.File(work.Brief{Project: p.Name, From: s.Run, Aim: work.AimGain,
+			Title:  fmt.Sprintf("Take the step-back's %g onto main: forward-port its %d commit(s)", *s.Score, n),
+			Why:    fmt.Sprintf("a step-back's setup scored %g from %s against main's %g; its commits are the win", *s.Score, core.Short(s.From), *s.Control),
+			Known:  fmt.Sprintf("A step-back ran one plain session on this project from %s (run %s) and its copy scored %g, against main's %g scored beside it. Its %d commit(s) are in $HIVE_RUN/commits.patch (git format-patch from %s). They start from that commit, not main: apply them with `git am -3 $HIVE_RUN/commits.patch` and resolve what main changed since.", core.Short(s.From), exp.ID, *s.Score, *s.Control, n, core.Short(s.From)),
+			Done:   "the setup's commits are forward-ported onto main, keeping what still holds (main may already do some of it) and saying in the account what was left out and why; the score is run before finishing",
+			Inputs: map[string]string{"commits.patch": patch}})
+		if err == nil {
+			ported = t.ID
+		}
+	}
 	var ids []string
 	var shown []core.Run
 	var spent float64
@@ -560,6 +572,9 @@ The setup ran as %s; the Hive's latest runs on the project were %s.
 			} else if n > 0 {
 				inputs["changes.patch"] = patch
 				known += fmt.Sprintf("\n\nWhat the setup changed in its copy (%d commit(s)) is in $HIVE_RUN/changes.patch, to compare with what the Hive's runs did; it is the project's code, so quote none of it either.", n)
+				if ported != "" {
+					known += fmt.Sprintf(" Bringing those commits onto %s is its own task, %s, filed there; this one is about why the Hive's runs didn't get there themselves.", p.Name, ported)
+				}
 			}
 			t, err := m.Work.File(work.Brief{Project: self.Name, Title: title, From: s.Run, Aim: work.AimGain, Why: "a simpler setup scored better; this aims to win that back", Known: known, Inputs: inputs, Done: done})
 			if err == nil {

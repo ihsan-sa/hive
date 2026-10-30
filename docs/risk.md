@@ -24,7 +24,8 @@ No merge waits on a decision any more (the person, 10-30: "freely edit everythin
 What keeps a mistake undoable is outside every agent's reach:
 - each repository's `keep-history` ruleset on its default branch refuses a force-push and a deletion, whoever's token pushes. The person's repositories have it, and one the Hive makes gets it as it is made (`core.GitHub.EnsureRepo`). A free plan has no rulesets on a private repository, so a private one has none;
 - the agents' tokens hold no administration, so no agent can lift a ruleset or delete a repository;
-- a nightly copy of the Hive's own state (`~/hive-backups`);
+- a nightly copy of the Hive's own state (`~/hive-backups`, by `install/hive-backup` installed as `~/.local/bin/hive-backup` and run by `hive-backup.timer`),
+  with a git bundle of every ref in each private repository's clone, the way back a private repository has in place of the ruleset (`git clone ~/hive-backups/<date>/repos/<project>.bundle`);
 - the build H0 ran before its last update (`hive agent fallback`).
 A bad change is reverted with a new commit.
 
@@ -38,9 +39,21 @@ Three read-only, isolated runs (`modules/agents/tribunal.md`; no other project a
 
 ## Nothing is read at merge
 
-A PR merges as soon as its worker finishes, whatever paths it touches, the core, the sandbox and the security list included: no reviewer, security seat or panel reads it first, and no forge check is waited on (`Effects.Merge` weighs only the person's hold and the steward record). An agent may also push to main itself on its own token. The way back is the measure of main after each merge, which reverts a break, the keep-history ruleset, H0's rule of installing only a main commit whose forge CI passed, and its rollback and fallback builds. `tests/LANDING-security.toml` still names the paths a release reads (below) and, in `required_checks`, the checks H0 needs green before it installs a build of main.
+A PR merges as soon as its worker finishes, whatever paths it touches, the core included: no reviewer, security seat or panel reads it first, and no forge check is waited on (`Effects.Merge` weighs the person's hold, the steward record and the one read below). An agent may also push to main itself on its own token. The way back is the measure of main after each merge, which reverts a break, the keep-history ruleset, H0's rule of installing only a main commit whose forge CI passed, and its rollback and fallback builds. `tests/LANDING-security.toml` still names the paths a release reads (below) and, in `required_checks`, the checks H0 needs green before it installs a build of main.
 
 A draft PR doesn't hold the Hive's merge: `Effects.Merge` readies it (`Forge.ReadyPR`, only at that head; `effect.readied` is journalled only when the forge changed something) and merges at `--match-head-commit`. There is no `pr_draft` any more, so no agent holds another's merge with a draft.
+
+## A warden's read of the limits code
+
+Nothing reads a change before it merges, the core included (the person, 10-30: "they can freely edit everything including the core with no process").
+The one exception is the code that enforces the hard limits (money, credentials, private details going out, anything outward in the person's name, deleting a repository or its history), named by the `limits` array in main's `tests/LANDING-security.toml` (the person, 10-30: "maybe a change to the warden code needs a warden").
+A change to one of those paths (`Change.Limits`) waits in merging until a warden has read its own diff (`DiffID`): the work module's `limitsRead` asks once per head through `risk.Weigh`, and `Effects.Merge` refuses it without that read (`core.LimitsHeld`).
+The warden reads the change rather than a step to run, so the ceiling's words in its diff (tokens, secrets) don't make it the person's; at autonomy 1 it is the person's.
+A land approves that diff (`effect.approved`, kind `limits`), so main merged in after it doesn't ask again while the own diff is unchanged; a no sends the change back to its worker with the warden's reason.
+A revert the Hive makes needs no read, as it puts back what main held.
+The list is read from main and names itself and the check (`internal/core/limits.go`, `internal/mod/work/limits.go`), so a change can't loosen its own bar unread; the calls to the check in `effects.go` and `work.go` are not on it, to keep the core free, so dropping one of them lands unread and shows only in its diff.
+The limits should hold outside the code too (autobox, 10-30): token scopes, the forge's server-side rulesets and the accounts' spend limits; this read is the in-code half.
+An agent's own push to main goes around the merge, so it gets no read: this binds the Hive's merges, and an agent pushing a change to these paths itself is a bypass the server side would have to close.
 
 ## Root paths at release
 
