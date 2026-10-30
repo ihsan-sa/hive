@@ -11,6 +11,8 @@ import (
 	"strings"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
+	// Every agent messages on the board: its ops are there wherever agents are.
+	_ "github.com/ihsan-sa/hive-standalone-build/internal/mod/board"
 	"github.com/ihsan-sa/hive-standalone-build/internal/mod/modules"
 )
 

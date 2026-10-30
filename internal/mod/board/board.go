@@ -56,7 +56,11 @@ var (
 	of   = map[*core.Core]*Module{}
 )
 
-// Of is the board of c, made on first use, so every module that sends a
+// The board's ops are there from the moment a core opens, so a module that
+// wraps one (risk wraps "message") finds it whatever order it is built in.
+func init() { core.OnOpen(func(c *core.Core) { Of(c) }) }
+
+// Of is the board of c, made as c opens, so every module that sends a
 // message (chat, work) reaches the same one without wiring it through.
 func Of(c *core.Core) *Module {
 	ofMu.Lock()
