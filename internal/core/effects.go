@@ -53,10 +53,10 @@ type Effects struct {
 	sweep   func() int // sandbox.Sweep; a test points it away from the host
 
 	locks  sync.Map
+	unread sync.Map // project@main whose history MainAnswer couldn't read, journaled once
 
 	measureMu sync.Mutex
 	measuring map[string]int // project@sha of main being measured (Measuring), how many times over
-	unread sync.Map // project@main whose history MainAnswer couldn't read, journaled once
 
 	// MergeHeld is why a pull request on a project may not merge now (the
 	// person's hold on its merges, the work module), or "" if it may.
