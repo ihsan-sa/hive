@@ -91,6 +91,8 @@ Step 2 is the target for the core, and it is smaller than the table above:
 
 Everything else is a module, messaging included:
 - **Messaging is a board.** Every message goes to one public board, kept as events; an agent adds itself to a thread, and nothing is pushed into its context. An agent finds what it needs by searching the board, the KB and the log; a mention only wakes it. `hive agent message`, the inbox, the chats and the person's feed become this module's ops, and `ops.go`'s messaging and `person.go` leave the core.
+Done in part (#2235): `internal/mod/board` holds the `message` op and who an address means (the routers, "lead", "parent"), and adds `post`, `board`, `join` and `leave`; a post wakes only the runs it names, with where to read and the thread's first line, never the text.
+Still in the core: the inbox (`Run.Pending`, which a wake fills) and `person.go`; the chats are the chat module's, and their messages to and from the person aren't on the board yet.
 - **Starting context is minimal**: a short orientation and the brief; the rest is found, not handed over (the agents module's prompts).
 - **Landing a change is the agent's**: with nothing waiting before a merge, the work module's pipeline (ask, issue, PR, stages) is one way to land among others, not core; the merge guarantees left in `Effects.Merge` are the hard limits above.
 
