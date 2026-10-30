@@ -16,8 +16,8 @@ func sight(m *Module, task, url string, tests ...string) {
 
 // A test red on one branch alone is that branch's, even when it passed on a
 // re-run there; red on a second, unrelated branch or on main, it is
-// quarantined, with its evidence, and gets one fix task. The fix's merge
-// lifts it.
+// quarantined, with its evidence, and listed on the board, not filed. A
+// fix an agent files for it lifts it when it merges.
 func TestQuarantine(t *testing.T) {
 	m := rig(t)
 	sight(m, "t1", "https://ci/1", "TestModuleLifecycle", "TestMine")
@@ -47,34 +47,21 @@ func TestQuarantine(t *testing.T) {
 		t.Fatal("a flake on two branches not quarantined")
 	}
 
-	m.fileQuarantined()
-	m.fileQuarantined()
-	fixes := m.Work.List(func(t work.Task) bool { return strings.HasPrefix(t.Title, flakyTitle) })
-	if len(fixes) != 3 {
-		t.Fatalf("%d fix tasks, want one per test", len(fixes))
+	board := boardOf(m)
+	m.boardQuarantined()
+	m.boardQuarantined()
+	if n := len(m.Work.List(func(t work.Task) bool { return strings.HasPrefix(t.Title, flakyTitle) })); n != 0 {
+		t.Fatalf("%d fix tasks filed, want none: the board lists them", n)
 	}
-	q = m.Quarantine("hive")
-	var fix work.Task
-	for _, f := range q {
-		if f.Task == "" || f.TaskStage == "" {
-			t.Fatalf("%s has no fix task: %+v", f.Test, f)
+	if len(*board) != 1 || !strings.HasPrefix((*board)[0], "hive|quarantined tests|Quarantined in hive: TestModuleLifecycle, TestReportSharing, TestStalls.") || !strings.Contains((*board)[0], "https://ci/3") {
+		t.Fatalf("board posts %q, want one listing the three", *board)
+	}
+	// An agent files the fix, titled for the test.
+	fix, _ := m.Work.File(work.Brief{Project: "hive", From: "sweep", Title: flakyTitle + "TestModuleLifecycle", Done: "d", Known: "k"})
+	for _, f := range m.Quarantine("hive") {
+		if f.Test == "TestModuleLifecycle" && (f.Task != fix.ID || f.TaskStage == "") {
+			t.Fatalf("the fix task isn't on its flake: %+v", f)
 		}
-		if f.Test == "TestModuleLifecycle" {
-			fix, _ = m.Work.Get(f.Task)
-		}
-	}
-	if !strings.Contains(fix.Known, "https://ci/3") || fix.Title != "Fix the flaky TestModuleLifecycle" {
-		t.Fatalf("fix task %q: %q", fix.Title, fix.Known)
-	}
-	raised := 0
-	for _, e := range m.C.J.Since(0) {
-		var x struct{ Kind, Text string }
-		if e.Kind == "alert.raised" && e.Decode(&x) == nil && x.Kind == "flake" && strings.HasPrefix(x.Text, "quarantined the flaky ") {
-			raised++
-		}
-	}
-	if raised != 3 {
-		t.Fatalf("%d quarantine alerts, want 3", raised)
 	}
 
 	// The fix merges: the quarantine on it is lifted, and only a red after
@@ -96,6 +83,63 @@ func TestQuarantine(t *testing.T) {
 	sight(m, "t5", "https://ci/6", "TestModuleLifecycle")
 	if !slices.Contains(m.QuarantinedTests("hive", ""), "TestModuleLifecycle") {
 		t.Fatal("a later save of the fix dropped the reds seen since its merge")
+	}
+}
+
+// boardOf records m's board posts as project|where|text. A close with no
+// entry open is left out, as problems.Standing does nothing with it.
+func boardOf(m *Module) *[]string {
+	var posts []string
+	open := map[string]bool{}
+	m.Board = func(project, where, text string) {
+		if text == "" && !open[project] {
+			return
+		}
+		open[project] = text != ""
+		posts = append(posts, project+"|"+where+"|"+text)
+	}
+	return &posts
+}
+
+// The board entry is rewritten only when the set of quarantined tests
+// changes, and closed once none is left; improve's waiting per-test briefs
+// from before are withdrawn, while a started one and an agent's own stay.
+func TestQuarantineGoesOnTheBoard(t *testing.T) {
+	m := rig(t)
+	board := boardOf(m)
+	waiting, _ := m.Work.File(work.Brief{Project: "hive", From: "improve", Title: flakyTitle + "TestOld", Done: "d", Known: "k"})
+	started, _ := m.Work.File(work.Brief{Project: "hive", From: "improve", Title: flakyTitle + "TestBusy", Done: "d", Known: "k"})
+	started.Stage = work.StageWorking
+	m.C.J.MustAppend("task.saved", started)
+	own, _ := m.Work.File(work.Brief{Project: "hive", From: "sweep", Title: flakyTitle + "TestMine", Done: "d", Known: "k"})
+	m.boardQuarantined()
+	if len(*board) != 0 {
+		t.Fatalf("posted %q with nothing quarantined", *board)
+	}
+	for id, want := range map[string]bool{waiting.ID: true, started.ID: false, own.ID: false} {
+		if got, _ := m.Work.Get(id); got.Withdrawn() != want {
+			t.Fatalf("%s (%s) withdrawn %v, want %v", got.Title, got.Stage, got.Withdrawn(), want)
+		}
+	}
+	sight(m, "t1", "https://ci/1", "TestX")
+	sight(m, "t2", "https://ci/2", "TestX")
+	m.boardQuarantined()
+	sight(m, "t3", "https://ci/3", "TestX") // more evidence, the same tests
+	m.boardQuarantined()
+	sight(m, "t3", "https://ci/3", "TestY")
+	sight(m, "t4", "https://ci/4", "TestY")
+	m.boardQuarantined()
+	if len(*board) != 2 || !strings.Contains((*board)[0], "Quarantined in hive: TestX.") || !strings.Contains((*board)[1], "Quarantined in hive: TestX, TestY.") {
+		t.Fatalf("board posts %q", *board)
+	}
+	old := quarantineWindow
+	quarantineWindow = time.Nanosecond
+	t.Cleanup(func() { quarantineWindow = old })
+	time.Sleep(time.Millisecond)
+	m.boardQuarantined()
+	m.boardQuarantined()
+	if len(*board) != 3 || (*board)[2] != "hive|quarantined tests|" {
+		t.Fatalf("board posts %q, want the entry closed once", *board)
 	}
 }
 
@@ -197,10 +241,10 @@ func TestQuarantineFromLocalChecks(t *testing.T) {
 	if !slices.Contains(m.QuarantinedTests("hive", "t1"), other) {
 		t.Fatal("a local red on main not quarantined")
 	}
-	m.fileQuarantined()
-	fix := m.Work.List(func(t work.Task) bool { return t.Title == flakyTitle+key })
-	if len(fix) != 1 || !strings.Contains(fix[0].Known, "task t1 at headt1, check local test") {
-		t.Fatalf("fix tasks %+v", fix)
+	board := boardOf(m)
+	m.boardQuarantined()
+	if len(*board) != 1 || !strings.Contains((*board)[0], "task t1 at headt1, check local test") {
+		t.Fatalf("board posts %q", *board)
 	}
 }
 
@@ -248,8 +292,7 @@ func TestQuarantineLiftNotUndoneByOldHeads(t *testing.T) {
 
 // A check run broken by its environment (its folder gone) or failing dozens
 // of tests at once is no sighting of any of them: two such runs on unrelated
-// heads quarantine nothing and file no fix briefs, and a fix brief filed on
-// such runs before is taken back, even once its worker started.
+// heads quarantine nothing and put nothing on the board.
 func TestQuarantineSkipsBrokenRuns(t *testing.T) {
 	m := rig(t)
 	pkg := "github.com/x/hive/internal/core::"
@@ -274,30 +317,16 @@ func TestQuarantineSkipsBrokenRuns(t *testing.T) {
 		t.Fatalf("a broken run on main quarantined %v", q)
 	}
 
-	stale, _ := m.Work.File(work.Brief{Project: "hive", From: "improve", Title: flakyTitle + key, Done: "d", Known: "k"})
-	kept, _ := m.Work.File(work.Brief{Project: "hive", From: "improve", Title: flakyTitle + pkg + "TestOther", Done: "d", Known: "k"})
-	started, _ := m.Work.File(work.Brief{Project: "hive", From: "improve", Title: flakyTitle + pkg + "TestManyA", Done: "d", Known: "k"})
-	started.Stage = work.StageWorking
-	m.C.J.MustAppend("task.saved", started)
-	m.fileQuarantined()
-	if n := len(m.Work.List(func(t work.Task) bool { return strings.HasPrefix(t.Title, flakyTitle) })); n != 3 {
-		t.Fatalf("%d fix tasks, want only the three filed by hand", n)
-	}
-	if got, _ := m.Work.Get(started.ID); !got.Withdrawn() {
-		t.Fatalf("the started brief filed on broken runs is %s (%s), want withdrawn", got.Stage, got.Reason)
-	}
-	if got, _ := m.Work.Get(stale.ID); !got.Withdrawn() {
-		t.Fatalf("the brief filed on broken runs is %s (%s), want withdrawn", got.Stage, got.Reason)
-	}
-	if got, _ := m.Work.Get(kept.ID); got.Terminal() {
-		t.Fatalf("a brief for a test no broken run took down was taken back: %s", got.Reason)
+	board := boardOf(m)
+	m.boardQuarantined()
+	if len(*board) != 0 {
+		t.Fatalf("broken runs went on the board: %q", *board)
 	}
 }
 
 // A test in the module's root package reads the whole tree (gofmt, the
 // core's size): two branches each with an unformatted file fail it, and
-// that is their content, not a flake. It is never quarantined, and a
-// waiting fix brief filed for it is taken back.
+// that is their content, not a flake. It is never quarantined.
 func TestQuarantineSkipsWholeTreeTests(t *testing.T) {
 	m := rig(t)
 	m.modules["hive"] = "github.com/x/hive"
@@ -311,9 +340,9 @@ func TestQuarantineSkipsWholeTreeTests(t *testing.T) {
 	if q := m.QuarantinedTests("hive", ""); len(q) != 0 {
 		t.Fatalf("a whole-tree test quarantined: %v", q)
 	}
-	stale, _ := m.Work.File(work.Brief{Project: "hive", From: "improve", Title: flakyTitle + key, Done: "d", Known: "k"})
-	m.fileQuarantined()
-	if got, _ := m.Work.Get(stale.ID); !got.Withdrawn() {
-		t.Fatalf("the brief for a whole-tree test is %s, want withdrawn", got.Stage)
+	board := boardOf(m)
+	m.boardQuarantined()
+	if len(*board) != 0 {
+		t.Fatalf("a whole-tree test went on the board: %q", *board)
 	}
 }

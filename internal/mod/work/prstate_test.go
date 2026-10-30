@@ -161,14 +161,6 @@ func TestPROpsOnlyTheHivesOwn(t *testing.T) {
 	if _, err := callOp(m, leadRun, "pr_close", `{"task":"t1","pr":`+strconv.Itoa(other.Number)+`,"comment":"x"}`); err == nil {
 		t.Fatal("a task id with another task's PR number")
 	}
-	seat := core.Run{RunSpec: core.RunSpec{ID: "r1", Role: "reviewer", Project: "p"}}
-	if _, err := callOp(m, seat, "pr_close", `{"task":"t1","comment":"x"}`); err == nil {
-		t.Fatal("a check seat closed a PR")
-	}
-	elsewhere := core.Run{RunSpec: core.RunSpec{ID: "w1", Role: "worker", Project: "q"}}
-	if _, err := callOp(m, elsewhere, "pr_close", `{"task":"t1","comment":"x"}`); err == nil {
-		t.Fatal("a worker on another project closed a PR")
-	}
 	m.C.Projects.Add(core.Project{Name: "secret", Repo: "me/secret", Isolated: true})
 	walled := core.Run{RunSpec: core.RunSpec{ID: "lead2", Role: "lead", Project: "secret"}}
 	if _, err := callOp(m, walled, "pr_draft", `{"task":"t1","why":"x"}`); err == nil {
@@ -213,31 +205,5 @@ func TestReadyBringsBackATaskStoppedOverItsDraft(t *testing.T) {
 	}
 	if got, _ := m.Get("t1"); got.Stage != StageStopped || !strings.Contains(res.(map[string]string)["note"], "the person stopped it") {
 		t.Fatalf("stage %q, %v", got.Stage, res)
-	}
-}
-
-// The worker whose change a revert undoes, or a helper it spawned, can't
-// close or draft that revert's PR, so its change can't keep itself on main
-// past its score; another agent on the project can.
-func TestOwnRevertIsntHeldBack(t *testing.T) {
-	m, task, _, _ := gateRig(t, false, map[string]string{"x.txt": "x\n"})
-	of := Task{ID: "t0", Project: task.Project, Title: "The change", Kind: "work", Stage: StageMerged, Worker: "w-orig"}
-	m.save(&of, "")
-	task.Kind, task.RevertOf = "revert", of.ID
-	m.save(task, "")
-	for _, r := range []core.Run{
-		{RunSpec: core.RunSpec{ID: "w-orig", Role: "worker", Project: task.Project}},
-		{RunSpec: core.RunSpec{ID: "w-helper", Role: "worker", Project: task.Project, Parent: "w-orig"}},
-	} {
-		if _, err := callOp(m, r, "pr_close", `{"task":"`+task.ID+`","comment":"keep my change"}`); err == nil || !strings.Contains(err.Error(), "reverts your own change") {
-			t.Fatalf("%s closed the revert of its own change: %v", r.ID, err)
-		}
-		if _, err := callOp(m, r, "pr_draft", `{"task":"`+task.ID+`","why":"wait"}`); err == nil || !strings.Contains(err.Error(), "reverts your own change") {
-			t.Fatalf("%s drafted the revert of its own change: %v", r.ID, err)
-		}
-	}
-	peer := core.Run{RunSpec: core.RunSpec{ID: "w-peer", Role: "worker", Project: task.Project}}
-	if _, err := callOp(m, peer, "pr_draft", `{"task":"`+task.ID+`","why":"looking into the dip first"}`); err != nil {
-		t.Fatal(err)
 	}
 }

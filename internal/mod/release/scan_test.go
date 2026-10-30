@@ -1,6 +1,7 @@
 package release
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -53,6 +54,32 @@ func TestScanBlocksTheRelease(t *testing.T) {
 	}
 	if a := alerts(m); len(a) != 1 || !strings.Contains(a[0], "scan blocks it") {
 		t.Fatalf("want one alert that the scan blocked it, got %q", a)
+	}
+}
+
+// A scan that blocks the release files its own fix, naming the files its
+// hits are in and never what they found; a later commit held by the same
+// hits files the same title, which the work module keeps to one open task.
+func TestScanBlockFilesItsFix(t *testing.T) {
+	m, _, merged, land := selfHive(t)
+	hits := errors.New("the scan found 2 thing(s) in 333 published file(s) that must never be published:\n  .hive/goals.md:25: word 2 of the deny list\n  docs/a.md:3: handle 1")
+	m.Scan = func(core.Project, string) error { return hits }
+	var titles []string
+	m.FileFix = func(project, title, done, known, why string) {
+		if project != "hive" || !strings.Contains(known, "goals.md:25") || why == "" {
+			t.Errorf("filed %q %q %q", project, known, why)
+		}
+		titles = append(titles, title)
+	}
+	merged(1, "a1", "m1")
+	land("a1", "r1")
+	m.AfterKept("hive", "m1")
+	if len(titles) != 1 || !strings.Contains(titles[0], ".hive/goals.md, docs/a.md") || strings.Contains(titles[0], "25") {
+		t.Fatalf("filed %q", titles)
+	}
+	m.AfterKept("hive", "m1")
+	if len(titles) != 1 {
+		t.Fatalf("the same hits at the same commit filed again: %q", titles)
 	}
 }
 
@@ -164,43 +191,22 @@ func waitFor[T any](t *testing.T, get func() T, ok func(T) bool) T {
 	}
 }
 
-// A scan that blocks main files one fix naming each hit's file and line and
-// the commit that wrote it, never the thing found; a retry at the same
-// commit files nothing more.
-func TestScanThatBlocksMainFilesAFix(t *testing.T) {
-	m, _, merged, land := selfHive(t)
+// The fix a scan files names the commit that last wrote each hit's line,
+// and never what was found.
+func TestScanFixNamesTheCommitThatWroteEachHit(t *testing.T) {
+	m, _, _, _ := selfHive(t)
 	m.Scan = nil
-	type fix struct{ project, title, why, done, known string }
-	var got []fix
-	m.FileFix = func(project, title, why, done, known string) {
-		got = append(got, fix{project, title, why, done, known})
-	}
+	var known []string
+	m.FileFix = func(project, title, done, known_, why string) { known = append(known, title+done+known_+why) }
 	os.WriteFile(filepath.Join(m.C.WS.Private(), scan.HandlesFile), []byte("alice-k\n"), 0o600)
 	selfClone(t, m, map[string]string{scan.PublicList: "**\n", "README.md": "The Hive.\n"})
 	sha := strings.TrimSpace(selfClone(t, m, map[string]string{"docs/a.md": "one\nthanks alice-k\n"}))
 	p, _ := m.C.Projects.Get("hive")
-	m.Scan = func(p core.Project, _ string) error { return m.scan(p, sha) }
-	merged(1, "a1", "m1")
-	land("a1", "r1")
-	m.AfterKept("hive", "m1")
-	m.AfterKept("hive", "m1")
-	if len(got) != 1 || got[0].project != "hive" || got[0].title != scanFix {
-		t.Fatalf("want one fix filed, got %+v", got)
+	m.fileScanFix("hive", sha, m.scan(p, sha))
+	if len(known) != 1 || !strings.Contains(known[0], "docs/a.md:2: "+core.Short(sha)) {
+		t.Fatalf("the fix doesn't name the commit that wrote the line: %q", known)
 	}
-	if !strings.Contains(got[0].known, "docs/a.md:2: handle 1 of the handle list (the line as ") {
-		t.Fatalf("the fix doesn't name the hit: %q", got[0].known)
-	}
-	// At a commit the clone has, git blame names the one that wrote the line.
-	m.fileScanFix(p, sha, m.scan(p, sha))
-	if len(got) != 2 || !strings.Contains(got[1].known, "docs/a.md:2: handle 1 of the handle list (the line as "+core.Short(sha)+" wrote it)") {
-		t.Fatalf("the fix doesn't name the commit that wrote the line: %+v", got)
-	}
-	if all := fmt.Sprint(got[0]); strings.Contains(all, "alice") {
-		t.Fatalf("the fix says what was found: %s", all)
-	}
-	// Any other failure files nothing.
-	m.fileScanFix(p, sha, os.ErrPermission)
-	if len(got) != 2 {
-		t.Fatalf("a failure with no hits filed a fix: %+v", got)
+	if strings.Contains(known[0], "alice") {
+		t.Fatalf("the fix says what was found: %s", known[0])
 	}
 }

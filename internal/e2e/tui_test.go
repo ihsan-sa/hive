@@ -295,6 +295,7 @@ func TestControlCenterInTmux(t *testing.T) {
 	}
 	cfg.Harness = "fake"
 	cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax, cfg.LoadMax = 0, 0, 0, 0
+	cfg.IOPressureMax, cfg.IOFullMax = 0, 0
 	for k := range cfg.Schedules {
 		cfg.Schedules[k] = "off"
 	}

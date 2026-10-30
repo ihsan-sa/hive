@@ -36,7 +36,7 @@ func Niced(argv []string, n int) []string {
 		})
 		return argv
 	}
-	prog, err := exec.LookPath(argv[0])
+	prog, err := LookTool(argv[0])
 	if err != nil {
 		return argv
 	}
