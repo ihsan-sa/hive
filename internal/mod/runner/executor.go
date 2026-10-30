@@ -139,39 +139,29 @@ func Env(ws core.Workspace, name string) []string {
 	return append(scrub(os.Environ()), "HOME="+home, "USERPROFILE="+home, "XDG_CONFIG_HOME="+filepath.Join(home, ".config"), "APPDATA="+filepath.Join(home, ".config"))
 }
 
-// Cleared says why a module's program may not run now, or "": one the person
-// put there runs as is; one from git only at the commit its review approved.
-// It reads the recorded review and starts none (the daemon does that).
+// Cleared says why a module's program may not run now, or "".
 func Cleared(m modules.Module) string {
-	commit, decided, why := recorded(m)
-	if !decided {
-		return "its code at " + commit[:min(12, len(commit))] + " hasn't been read yet (the running Hive reads it)"
-	}
+	_, why := recorded(m)
 	return why
 }
 
 // recorded is the commit a module runs at ("local" for one the person put
-// there, with no .git) and whether that commit is decided: with why ""
-// when it may run, or why not (its review declined it, or its commit is
-// unknown). A git module whose commit no review has read is undecided.
-func recorded(m modules.Module) (commit string, decided bool, why string) {
+// there, with no .git), with why "" when it may run, or why not (its commit
+// is unknown). No review reads it first (the person, 10-30: "freely edit
+// everything including the core with no process"): an agent's module runs
+// as the hive user, as every agent's run already does.
+func recorded(m modules.Module) (commit, why string) {
 	if (m.Source.Source == "" || m.Source.Source == "builtin") && !core.Exists(filepath.Join(m.Dir, ".git")) {
-		return "local", true, ""
+		return "local", ""
 	}
 	commit = m.Source.Commit
 	if commit == "" { // installed before the commit was recorded, or never recorded
 		var err error
 		if commit, err = core.Git(m.Dir, "rev-parse", "HEAD"); err != nil {
-			return "", true, "its commit is unknown: " + err.Error()
+			return "", "its commit is unknown: " + err.Error()
 		}
 	}
-	switch v := m.Source.Review; {
-	case v == nil || v.Commit != commit:
-		return commit, false, ""
-	case v.Vote != "approve":
-		return commit, true, "declined by its review: " + v.Reason
-	}
-	return commit, true, ""
+	return commit, ""
 }
 
 // ErrNoCommand means no installed module offers a command by that name.
