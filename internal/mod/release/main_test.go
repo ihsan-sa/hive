@@ -31,22 +31,34 @@ func onMain(t *testing.T, version string, files map[string]string) (*Module, str
 	return m, exe, sha
 }
 
-// The Hive that releases the Hive follows main: the commit it just released
-// is built here from its own clone and installed, with no download, release
-// build or canary; the released tag it rolled back from isn't taken again.
-func TestMainInstallsTheReleasedCommitBuiltHere(t *testing.T) {
-	m, exe, sha := onMain(t, "v0.1.2", map[string]string{"VERSION": "0.1", "cmd/hive/main.go": "package main"})
+// green passes the forge's CI on main at sha and returns the tag the build
+// of that commit is stamped with on v0.1.2's line.
+func green(t *testing.T, m *Module, sha string) string {
+	t.Helper()
+	m.C.Effects.Forge.(*core.Local).SetChecks("me/hive", sha, core.CheckRun{Name: "test (ubuntu-latest)", State: core.CheckPass})
+	return "v0.1.2-main." + sha[:8]
+}
+
+// ci is the self project's CI as the Hive's own main names it.
+const ci = `{"test": "true", "forge_tests": ["test (ubuntu-latest)"]}`
+
+// The Hive that releases the Hive follows main: main's newest commit whose
+// forge CI passed is built here from its own clone and installed, with no
+// download, release build or canary; a build it rolled back from isn't taken
+// again.
+func TestMainInstallsMainsGreenCommitBuiltHere(t *testing.T) {
+	m, exe, sha := onMain(t, "v0.1.2", map[string]string{".hive/project.json": ci, "VERSION": "0.1", "cmd/hive/main.go": "package main"})
 	if m.Channel() != Main {
 		t.Fatalf("the Hive that releases the Hive follows %q, not main", m.Channel())
 	}
 	if msg, err := m.AutoUpdate(); err != nil || !strings.HasPrefix(msg, "already on v0.1.2") {
-		t.Fatalf("nothing released yet: %q, %v", msg, err)
+		t.Fatalf("no green commit yet: %q, %v", msg, err)
 	}
-	m.C.J.MustAppend("hive.released", map[string]any{"project": "hive", "tag": "v0.1.3", "sha": sha, "prerelease": true})
+	tag := green(t, m, sha)
 	restarted := make(chan bool, 1)
 	m.Restart = func() { restarted <- true }
 	msg, err := m.AutoUpdate()
-	if raw, _ := os.ReadFile(exe); err != nil || !strings.HasPrefix(msg, "updated to v0.1.3") || string(raw) != "built v0.1.3 from 0.1" {
+	if raw, _ := os.ReadFile(exe); err != nil || !strings.HasPrefix(msg, "updated to "+tag) || string(raw) != "built "+tag+" from 0.1" {
 		t.Fatalf("update: %q, %v, binary %q", msg, err, raw)
 	}
 	if old, _ := os.ReadFile(exe + ".old"); string(old) != "old" {
@@ -57,17 +69,17 @@ func TestMainInstallsTheReleasedCommitBuiltHere(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("no restart")
 	}
-	m.C.J.MustAppend("hive.rolledback", map[string]string{"from": "v0.1.3", "to": "v0.1.2", "why": "x"})
-	if tag := m.mainTag(); tag != "" {
-		t.Fatalf("a release rolled back from is taken again: %q", tag)
+	m.C.J.MustAppend("hive.rolledback", map[string]string{"from": tag, "to": "v0.1.2", "why": "x"})
+	if again := m.mainTag(); again != "" {
+		t.Fatalf("a build rolled back from is taken again: %q", again)
 	}
 }
 
 // A build that fails installs nothing and says why.
 func TestMainBuildFailureInstallsNothing(t *testing.T) {
-	m, exe, sha := onMain(t, "v0.1.2", map[string]string{"VERSION": "0.1"})
+	m, exe, sha := onMain(t, "v0.1.2", map[string]string{".hive/project.json": ci, "VERSION": "0.1"})
 	goBuild = func(core.Workspace, string, string, string, string, string, string) error { return os.ErrInvalid }
-	m.C.J.MustAppend("hive.released", map[string]any{"project": "hive", "tag": "v0.1.3", "sha": sha})
+	green(t, m, sha)
 	_, err := m.AutoUpdate()
 	if raw, _ := os.ReadFile(exe); err == nil || !strings.Contains(err.Error(), "doesn't build") || string(raw) != "old" {
 		t.Fatalf("failed build: %v, binary %q", err, raw)
@@ -77,8 +89,8 @@ func TestMainBuildFailureInstallsNothing(t *testing.T) {
 // An automatic update waits for the checks running when it first looked, and
 // installs once they end; one that starts meanwhile doesn't hold it.
 func TestUpdateWaitsForRunningChecks(t *testing.T) {
-	m, exe, sha := onMain(t, "v0.1.2", map[string]string{"VERSION": "0.1"})
-	m.C.J.MustAppend("hive.released", map[string]any{"project": "hive", "tag": "v0.1.3", "sha": sha})
+	m, exe, sha := onMain(t, "v0.1.2", map[string]string{".hive/project.json": ci, "VERSION": "0.1"})
+	tag := green(t, m, sha)
 	done := m.C.Effects.Slots.Acquire("hive", "abc", "test")
 	if msg, _ := m.AutoUpdate(); !strings.Contains(msg, "1 check(s) running") {
 		t.Fatalf("didn't wait for the running check: %q", msg)
@@ -86,10 +98,10 @@ func TestUpdateWaitsForRunningChecks(t *testing.T) {
 	done()
 	later := m.C.Effects.Slots.Acquire("hive", "def", "test")
 	defer later()
-	if msg, err := m.AutoUpdate(); err != nil || !strings.HasPrefix(msg, "updated to v0.1.3") {
+	if msg, err := m.AutoUpdate(); err != nil || !strings.HasPrefix(msg, "updated to "+tag) {
 		t.Fatalf("after the check ended: %q, %v", msg, err)
 	}
-	if raw, _ := os.ReadFile(exe); string(raw) != "built v0.1.3 from 0.1" {
+	if raw, _ := os.ReadFile(exe); string(raw) != "built "+tag+" from 0.1" {
 		t.Fatalf("binary %q", raw)
 	}
 }
@@ -98,16 +110,16 @@ func TestUpdateWaitsForRunningChecks(t *testing.T) {
 // the release it left as rolled back and restarts; with nothing kept it
 // refuses.
 func TestFallbackPutsTheReplacedBinaryBack(t *testing.T) {
-	m, exe, sha := onMain(t, "v0.1.2", map[string]string{"VERSION": "0.1"})
+	m, exe, sha := onMain(t, "v0.1.2", map[string]string{".hive/project.json": ci, "VERSION": "0.1"})
 	if _, err := m.Fallback("broken"); err == nil {
 		t.Fatal("fell back with no update behind it")
 	}
-	m.C.J.MustAppend("hive.released", map[string]any{"project": "hive", "tag": "v0.1.3", "sha": sha})
+	tag := green(t, m, sha)
 	m.Restart = func() {}
 	if _, err := m.AutoUpdate(); err != nil {
 		t.Fatal(err)
 	}
-	core.Version = "v0.1.3" // the new daemon
+	core.Version = tag // the new daemon
 	restarted := make(chan bool, 1)
 	m.Restart = func() { restarted <- true }
 	msg, err := m.Update("back")
@@ -119,7 +131,7 @@ func TestFallbackPutsTheReplacedBinaryBack(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("no restart")
 	}
-	if !m.rolledBack("v0.1.3") {
+	if !m.rolledBack(tag) {
 		t.Fatal("the release fallen back from isn't recorded as rolled back")
 	}
 }
@@ -202,19 +214,19 @@ func TestScheduledLatestUpdateIgnoresRunningChecks(t *testing.T) {
 // at a release, however far apart the looks are: past checksWaitMax it
 // installs anyway.
 func TestCheckWaitEndsAtItsCap(t *testing.T) {
-	m, exe, sha := onMain(t, "v0.1.2", map[string]string{"VERSION": "0.1"})
+	m, exe, sha := onMain(t, "v0.1.2", map[string]string{".hive/project.json": ci, "VERSION": "0.1"})
 	m.Restart = func() {}
-	m.C.J.MustAppend("hive.released", map[string]any{"project": "hive", "tag": "v0.1.3", "sha": sha})
+	tag := green(t, m, sha)
 	done := m.C.Effects.Slots.Acquire("hive", "abc", "test")
 	defer done()
 	if msg, _ := m.AutoUpdate(); !strings.Contains(msg, "1 check(s) running") {
 		t.Fatalf("didn't wait: %q", msg)
 	}
 	m.checksSince = time.Now().Add(-checksWaitMax - time.Minute) // the first look, long ago
-	if msg, err := m.AutoUpdate(); err != nil || !strings.HasPrefix(msg, "updated to v0.1.3") {
+	if msg, err := m.AutoUpdate(); err != nil || !strings.HasPrefix(msg, "updated to "+tag) {
 		t.Fatalf("past the cap: %q, %v", msg, err)
 	}
-	if raw, _ := os.ReadFile(exe); string(raw) != "built v0.1.3 from 0.1" {
+	if raw, _ := os.ReadFile(exe); string(raw) != "built "+tag+" from 0.1" {
 		t.Fatalf("binary %q", raw)
 	}
 }

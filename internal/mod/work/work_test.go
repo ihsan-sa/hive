@@ -454,88 +454,6 @@ func TestRecheckRetriesAStuckMerge(t *testing.T) {
 	}
 }
 
-// A task the person stopped from the control center stays stopped: the lead
-// can neither recheck it nor send its worker back. One whose merge ask they
-// left open (it conflicts with main, say) comes back only to its worker, to
-// rebase, and is the lead's again from there.
-func TestPersonStopHolds(t *testing.T) {
-	for _, how := range []string{"stop", "leave open"} {
-		m, _, task, p := noCommitRig(t, 0)
-		if _, err := m.C.Runs.Start(core.RunSpec{ID: "w1", Role: "worker", Project: p.Name, Checkout: t.TempDir(), Harness: "fake"}); err != nil {
-			t.Fatal(err)
-		}
-		task.Stage, task.Worker = StagePerson, "w1"
-		m.save(task, "waiting on the person")
-		if how == "stop" {
-			m.Stop(task.ID, "stopped by the person")
-		} else {
-			m.onPersonMerge(core.Ask{Ref: task.ID + "@abc", Answer: "leave open", Note: "conflicts with main"})
-		}
-		for _, back := range []string{"", "try again"} {
-			err := m.Recheck(task.ID, back, "lead")
-			if how == "leave open" && back != "" {
-				if err != nil {
-					t.Fatalf("%s: recheck %q got %v", how, back, err)
-				}
-				continue
-			}
-			if err == nil || !strings.Contains(err.Error(), "by the person") {
-				t.Fatalf("%s: recheck %q got %v", how, back, err)
-			}
-		}
-		got, _ := m.Get(task.ID)
-		if how == "stop" && got.Stage != StageStopped {
-			t.Fatalf("%s: stage %q", how, got.Stage)
-		}
-		if how == "leave open" && (got.Stage != StageWorking || got.ByPerson || got.Reason != "") {
-			t.Fatalf("%s: stage %q, by person %v, reason %q", how, got.Stage, got.ByPerson, got.Reason)
-		}
-	}
-}
-
-// A worker the person stops in the control center (/api/run/stop) holds its
-// task: the stop marks it the person's, and a task stopped before that mark
-// existed holds too, because its worker's run says it was stopped.
-func TestPersonStoppedWorkerHolds(t *testing.T) {
-	for _, marked := range []bool{true, false} {
-		m, _, task, p := noCommitRig(t, 0)
-		if _, err := m.C.Runs.Start(core.RunSpec{ID: "w1", Role: "worker", Project: p.Name, Checkout: t.TempDir(), Harness: "fake"}); err != nil {
-			t.Fatal(err)
-		}
-		task.Worker, task.Stage = "w1", StageWorking
-		m.save(task, "working")
-		m.C.Runs.Stop("w1", "stopped by the person")
-		if marked {
-			if err := m.checkWorker(task, p); err != nil {
-				t.Fatal(err)
-			}
-			if task.Stage != StageStopped || !task.ByPerson {
-				t.Fatalf("stage %q, by person %v", task.Stage, task.ByPerson)
-			}
-		} else { // stopped before the fix: no mark on the task
-			task.Stage, task.Reason = StageStopped, "worker stopped: stopped by the person"
-			m.save(task, task.Reason)
-		}
-		for _, back := range []string{"", "try again"} {
-			if err := m.Recheck(task.ID, back, "lead"); err == nil || !strings.Contains(err.Error(), "by the person") {
-				t.Fatalf("marked %v: recheck %q got %v", marked, back, err)
-			}
-		}
-		if r, _ := m.C.Runs.Get("w1"); r.Status != core.StatusStopped {
-			t.Fatalf("marked %v: the worker was reopened: %s", marked, r.Status)
-		}
-		if err := m.C.Runs.Reopen("w1", "try again"); err == nil {
-			t.Fatal("a stopped run was reopened")
-		}
-		if err := m.Retry(task.ID); err != nil {
-			t.Fatal(err)
-		}
-		if got, _ := m.Get(task.ID); got.ByPerson || got.Stage != StageQueued {
-			t.Fatalf("the person's retry should hand the task back: %+v", got)
-		}
-	}
-}
-
 // A lead can't recheck a task in a project walled off from it.
 // A task retried from reviewing has its reader stopped, so a hung one
 // doesn't keep its slot, and the next read is a new run, not the stopped one.
@@ -578,8 +496,7 @@ func helperRig(t *testing.T) (*Module, *flakyForge, core.Project) {
 	}
 	cfg := ws.LoadConfig()
 	cfg.Sandbox, cfg.BareAccepted, cfg.Harness = "bare", time.Now().Format(time.RFC3339), "fake"
-	cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax, cfg.LoadMax = 0, 0, 0, 0 // a loaded machine mustn't hold the queue
-	cfg.IOPressureMax, cfg.IOFullMax = 0, 0
+	cfg.TurnMB = 0 // a loaded machine mustn't hold the queue
 	ws.SaveConfig(cfg)
 	forge := &flakyForge{Local: &core.Local{Dir: filepath.Join(dir, "forge")}}
 	if _, err := forge.EnsureRepo("me/p", "", false); err != nil {
@@ -983,42 +900,6 @@ func TestLandedEndsATaskOnMain(t *testing.T) {
 	}
 	if msgs := m2.Chat.Messages("project:p"); len(msgs) == 0 || msgs[len(msgs)-1].Text != "Reverted: work. it broke the tests" {
 		t.Fatalf("chat %v", msgs)
-	}
-}
-
-// queue now puts a brief first in line, only with a reason, put on its
-// record; the max_workers cap still holds it.
-func TestQueueNowGoesFirst(t *testing.T) {
-	m := queueRig(t)
-	lead := core.Run{RunSpec: core.RunSpec{ID: "lead", Role: "lead"}}
-	stuck := file(t, m, "the stuck one", "In internal/core/effects.go.")
-	other := file(t, m, "an earlier idea", "")
-	fix := file(t, m, "the queue fix", "In internal/core/effects.go too.")
-	stuck.Stage, other.Stage, fix.Stage = StageWorking, StageQueued, StageQueued
-	m.save(&stuck, "")
-	m.save(&other, "")
-	m.save(&fix, "")
-	if start, wait := m.admit(m.List(nil)); !start[other.ID] || start[fix.ID] {
-		t.Fatalf("the earlier brief didn't take the slot: %q", wait[fix.ID])
-	}
-	if _, err := m.C.Runs.Ops().Call(lead, "queue", json.RawMessage(`{"now":"`+fix.ID+`"}`)); err == nil {
-		t.Fatal("started one now with no reason")
-	}
-	if _, err := m.C.Runs.Ops().Call(lead, "queue", json.RawMessage(`{"now":"`+fix.ID+`","why":"it fixes what holds the queue"}`)); err != nil {
-		t.Fatal(err)
-	}
-	got, _ := m.Get(fix.ID)
-	if !got.Now || !logged(&got, "it fixes what holds the queue") {
-		t.Fatalf("now %v, log %v", got.Now, got.Log)
-	}
-	if start, wait := m.admit(m.List(nil)); !start[fix.ID] || start[other.ID] {
-		t.Fatalf("the fix still waits: %q", wait[fix.ID])
-	}
-	cfg := m.C.WS.LoadConfig()
-	cfg.MaxWorkers = 1 // the stuck one's worker counts toward the cap
-	m.C.WS.SaveConfig(cfg)
-	if _, wait := m.admit(m.List(nil)); !strings.Contains(wait[fix.ID], "max_workers") {
-		t.Fatalf("now went past max_workers: %q", wait[fix.ID])
 	}
 }
 

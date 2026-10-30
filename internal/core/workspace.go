@@ -45,13 +45,23 @@ func (w Workspace) Gates() string              { return filepath.Join(w.Hive(), 
 // made or a file renamed in it mid-turn is covered too.
 func (w Workspace) Private() string { return filepath.Join(w.Hive(), "private") }
 
+// Secrets is where each project's own secret files live, one folder per
+// project, filled by the person or a warden's script: a project's runs read
+// their own folder read-only at /hive/secrets ($HIVE_SECRETS).
+func (w Workspace) Secrets() string { return filepath.Join(w.Hive(), "secrets") }
+
+// ProjectSecrets is project's own secrets folder.
+func (w Workspace) ProjectSecrets(project string) string {
+	return filepath.Join(w.Secrets(), project)
+}
+
 // Covered is the folders covered wherever agents read .hive: the login pool's
-// stored logins, module programs' homes and logs, and Private. No host
+// stored logins, module programs' homes and logs, Private and Secrets. No host
 // interpreter's install bound into a sandbox may hold one or sit inside one.
 // The paths are absolute, so a relative root still guards them.
 func (w Workspace) Covered() []string {
 	hive := filepath.Join(w.abs(), ".hive")
-	return []string{filepath.Join(hive, "logins"), filepath.Join(hive, "modules"), filepath.Join(hive, "private")}
+	return []string{filepath.Join(hive, "logins"), filepath.Join(hive, "modules"), filepath.Join(hive, "private"), filepath.Join(hive, "secrets")}
 }
 
 // Guarded is what no host interpreter's install bound into a sandbox may
@@ -146,38 +156,15 @@ type Config struct {
 	// on them is under it (internal/mod/models/paid.go). 0 keeps OpenRouter
 	// free-only.
 	OpenRouterUSD float64 `json:"openrouter_monthly_usd,omitempty"`
-	// A turn waits while available memory is under MemFloorMB, or memory or
-	// CPU pressure (Linux PSI "some avg10", percent) is over its limit; 0 turns a check off.
-	MemFloorMB     int     `json:"mem_floor_mb"`
-	MemPressureMax float64 `json:"mem_pressure_max"`
-	CPUPressureMax float64 `json:"cpu_pressure_max"`
-	// While IO pressure (Linux PSI, percent) is over IOPressureMax ("some
-	// avg10") or IOFullMax ("full avg10"), the work module's pace starts no
-	// more workers or checks (internal/mod/work/pace.go); running ones go on.
-	// 0 turns a check off.
-	IOPressureMax float64 `json:"io_pressure_max"`
-	IOFullMax     float64 `json:"io_full_max"`
-	// MaxWorkers is the most workers that may work at once, the person's
-	// ceiling: below it the work module's pace sets the limit from what the
-	// machine and the plan carry (internal/mod/work/pace.go). Briefs past the
-	// limit wait in the queue, in order; 0 is no ceiling.
-	MaxWorkers int `json:"max_workers"`
-	// LoadMax holds new workers past the pace's start while the machine's
-	// 1-minute load per core is over it (Linux /proc/loadavg); 0 is off.
-	LoadMax float64 `json:"load_max"`
-	// MaxChecks is the most checks (the gate's tests, scores and dry runs,
-	// improve's measures) that run at once, a ceiling over the pace as
-	// MaxWorkers is; the rest wait in order. 0 is no ceiling.
+	// TurnMB is the memory each agent turn (and each worker started, and
+	// each check) is budgeted against the Hive's cgroup limit, or the
+	// machine's memory where it has none (MemBudget): the one figure that
+	// paces the Hive. 0 turns the budget off.
+	TurnMB int `json:"turn_mb"`
+	// MaxChecks is the most checks (tests, scores and dry runs, improve's
+	// measures) that run at once; the rest wait in order. 0 is the default
+	// (DefaultMaxChecks).
 	MaxChecks int `json:"max_checks"`
-	// Ceilings says max_workers and max_checks are the person's ceilings. A
-	// config without it is from before the pace (internal/mod/work/pace.go),
-	// when every install saved the then defaults (4, and the checks' start):
-	// reading one clears those two values, so the pace can grow there.
-	Ceilings bool `json:"ceilings"`
-	// MaxGates is the most recursive gate runs (self projects' gains, each
-	// two child Hives and their suites) at once, a ceiling over their pace;
-	// 0 is one per 6 cores (internal/mod/work/selfgate.go).
-	MaxGates int `json:"max_gates,omitempty"`
 	// CheckCacheMaxMB caps one check's own home (its build cache and
 	// scratch): past it the check is ended as can't-run; 0 is the default
 	// (8 GB). See disk.go.
@@ -267,11 +254,26 @@ func (t TribunalSeat) MarshalJSON() ([]byte, error) {
 // list in place of it. A run's harness API hosts are added to any list. Local
 // is the services on this machine the person opened to every sandboxed run,
 // one loopback host:port each ("127.0.0.1:11434"); nothing local is reachable
-// otherwise.
+// otherwise. Projects is the hosts outside this machine the person opened to
+// one project's runs and checks, past any list: host:port each, a public name
+// ("broker.example.com:8883") or a LAN device's address ("192.168.1.20:80").
 type Egress struct {
-	Default []string            `json:"default,omitempty"`
-	Roles   map[string][]string `json:"roles,omitempty"` // warden, tribunal, worker, lead, ...
-	Local   []string            `json:"local,omitempty"`
+	Default  []string            `json:"default,omitempty"`
+	Roles    map[string][]string `json:"roles,omitempty"` // warden, tribunal, worker, lead, ...
+	Local    []string            `json:"local,omitempty"`
+	Projects map[string][]string `json:"projects,omitempty"`
+}
+
+// OutsideFor is the host:port granted to project's runs, canonical, skipping
+// any entry Check refuses.
+func (e Egress) OutsideFor(project string) []string {
+	var out []string
+	for _, g := range e.Projects[project] {
+		if a, err := sandbox.OutsideGrant(g); err == nil && !slices.Contains(out, a) {
+			out = append(out, a)
+		}
+	}
+	return out
 }
 
 // LocalAddrs is the loopback ip:port the Local grants open, skipping any
@@ -318,6 +320,13 @@ func (c Config) Check() error {
 	for _, l := range c.Egress.Local {
 		if _, err := sandbox.LocalGrant(l); err != nil {
 			return err
+		}
+	}
+	for _, p := range slices.Sorted(maps.Keys(c.Egress.Projects)) {
+		for _, g := range c.Egress.Projects[p] {
+			if _, err := sandbox.OutsideGrant(g); err != nil {
+				return fmt.Errorf("egress for project %s: %v", p, err)
+			}
 		}
 	}
 	if err := c.checkRoutes(); err != nil {
@@ -368,13 +377,7 @@ func DefaultConfig() Config {
 		ChatMaxMB:      300,
 
 		MaxOutputTokens: 16000,
-		MemFloorMB:      1024,
-		MemPressureMax:  10,
-		CPUPressureMax:  40,
-		IOPressureMax:   80,
-		IOFullMax:       50,
-		LoadMax:         1,
-		Ceilings:        true,
+		TurnMB:          DefaultTurnMB,
 		PlateauMerges:   3,
 		Schedules: map[string]string{
 			"improve.sweep":    "every 12h",
@@ -413,20 +416,10 @@ func (w Workspace) ReadConfig() (Config, error) {
 		// lead's; the old default ("sonnet") moves the lead to opus.
 		var had struct {
 			LeadModel  *string          `json:"lead_model"`
-			Ceilings   *bool            `json:"ceilings"`
 			UsageStops *json.RawMessage `json:"usage_stops"`
 		}
 		if json.Unmarshal(raw, &had) == nil && had.LeadModel == nil && c.Model != "sonnet" {
 			c.LeadModel = c.Model
-		}
-		if had.Ceilings == nil {
-			if c.MaxWorkers == 4 {
-				c.MaxWorkers = 0
-			}
-			if c.MaxChecks == DefaultMaxChecks() {
-				c.MaxChecks = 0
-			}
-			c.Ceilings = true
 		}
 		if had.UsageStops == nil {
 			// A config from before usage_stops keeps the stops every

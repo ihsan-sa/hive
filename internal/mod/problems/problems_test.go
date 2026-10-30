@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ihsan-sa/hive-standalone-build/internal/core"
 )
@@ -126,6 +127,46 @@ func TestSolveNeedsHow(t *testing.T) {
 	}
 	if got, _ := m.Get(p.ID); !got.Open() {
 		t.Fatalf("closed anyway: %+v", got)
+	}
+}
+
+// The board decays and adds up: a problem with no word for a day leaves the
+// briefs (a sweep's aside, and `problems` still lists it), and one a second
+// run met ranks above a newer one only its poster met, marked for a sweep.
+func TestBoardFadesAndQuorumRanks(t *testing.T) {
+	_, m := open(t)
+	a, b, c := core.Run{ID: "w-a", Role: "worker", Project: "hive"}, core.Run{ID: "w-b", Role: "worker", Project: "hive"}, core.Run{ID: "w-c", Role: "worker", Project: "hive"}
+	old, _ := m.Post(a, "", "stale trail nobody walks")
+	shared, _ := m.Post(a, "", "the check slot starves")
+	m.Add(b, shared.ID, "me too")
+	m.Add(a, shared.ID, "and again, from the poster") // the poster counts once
+	lone, _ := m.Post(c, "", "a lone newer report")
+	o, _ := m.Get(old.ID)
+	o.Last = time.Now().Add(-25 * time.Hour)
+	m.C.J.Append("problem.saved", o)
+	brief := m.Brief("worker", "hive")
+	if strings.Contains(brief, old.ID) {
+		t.Fatalf("a day-old problem stays in the brief:\n%s", brief)
+	}
+	if i, j := strings.Index(brief, shared.ID), strings.Index(brief, lone.ID); i < 0 || j < 0 || i > j {
+		t.Fatalf("the problem two runs met isn't first:\n%s", brief)
+	}
+	if !strings.Contains(brief, "met by 2 runs") || strings.Count(brief, "met by") != 1 {
+		t.Fatalf("quorum mark:\n%s", brief)
+	}
+	if !strings.Contains(m.Brief("sweep", "hive"), old.ID) {
+		t.Fatal("the sweep doesn't see the faded problem")
+	}
+	// A module's standing report is current while it stands, however old.
+	m.Standing(core.Run{ID: "improve", Role: "module", Project: "hive"}, "quarantined tests", "TestA")
+	st := m.List(func(p Problem) bool { return p.Standing })[0]
+	st.Last = time.Now().Add(-48 * time.Hour)
+	m.C.J.Append("problem.saved", st)
+	if !strings.Contains(m.Brief("worker", "hive"), st.ID) {
+		t.Fatal("a standing problem faded from the brief")
+	}
+	if got := m.List(func(p Problem) bool { return p.Open() }); len(got) != 4 {
+		t.Fatalf("problems lists %d open, want 4", len(got))
 	}
 }
 

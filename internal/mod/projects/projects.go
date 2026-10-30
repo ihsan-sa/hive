@@ -39,8 +39,8 @@ type Module struct {
 func New(c *core.Core, ch *chat.Module, w *work.Module, im *improve.Module) *Module {
 	m := &Module{C: c, Chat: ch, Work: w, Improve: im, retry: map[string]time.Time{}, lastErr: map[string]string{}, claimed: map[string]bool{}}
 	ops := c.Runs.Ops()
-	ops.Register(core.Op{Name: "create_project", Roles: core.Peers, Help: `{"name","repo","description","goals","sharing","visibility","self"} (visibility: private (default) or public: public in public_owners (Hive-RSI-Lab) is made and the person told, public anywhere else, or for a project whose sharing isn't shared, waits for their yes; an existing repository keeps its visibility, changing it is the person's; sharing: shared (default), private (its agents read the shared Hive, no one else sees it) or isolated (walled both ways); self: the Hive's own code, in a fork of it, or in the release repository itself only when this Hive is its steward)`, Fn: m.opCreate})
-	ops.Register(core.Op{Name: "retire_project", Roles: core.Peers, Help: `{"name","why"} takes a project made by mistake out of the Hive: one whose setup never finished, or with no work in flight or merged (stop its tasks first). Its repository on the forge is left as it is, and the name is free again; one with work merged is the person's to retire`, Fn: m.opRetire})
+	ops.Register(core.Op{Name: "create_project", Help: `{"name","repo","description","goals","sharing","visibility","self"} (visibility: private (default) or public: public in public_owners (Hive-RSI-Lab) is made and the person told, public anywhere else, or for a project whose sharing isn't shared, waits for their yes; an existing repository keeps its visibility, changing it is the person's; sharing: shared (default), private (its agents read the shared Hive, no one else sees it) or isolated (walled both ways); self: the Hive's own code, in a fork of it, or in the release repository itself only when this Hive is its steward)`, Fn: m.opCreate})
+	ops.Register(core.Op{Name: "retire_project", Help: `{"name","why"} takes a project made by mistake out of the Hive: one whose setup never finished, or with no work in flight or merged (stop its tasks first). Its repository on the forge is left as it is, and the name is free again; one with work merged is the person's to retire`, Fn: m.opRetire})
 	c.Person.Handle("public_repo", m.onPublic)
 	ops.Register(core.Op{Name: "status", Help: `{} -> projects, work in flight, scores, what waits on the person, the live settings (models, autonomy, schedules)`, Fn: func(r core.Run, _ json.RawMessage) (any, error) { return m.Status(r), nil }})
 	return m
@@ -535,10 +535,8 @@ func (m *Module) Status(r core.Run) map[string]any {
 	pace := m.Work.Pace()
 	return map[string]any{"projects": ps, "waiting_on_person": waiting, "config": View(cfg),
 		"queue":   m.Work.Queue(r), // briefs waiting for a worker, in the order they start; the queue op reorders or holds them
-		"checks":  fmt.Sprintf("%d running, %d waiting (at once: %s; max_checks %d, 0 is no ceiling)%s", len(running), len(waitingChecks), pace["checks"], cfg.MaxChecks, checkLine(waitingChecks)),
-		"workers": fmt.Sprintf("at once: %s; max_workers %d, 0 is no ceiling", pace["workers"], cfg.MaxWorkers),
-		"gates":   fmt.Sprintf("recursive gates at once: %s; max_gates %d, 0 is one per 6 cores", pace["gates"], cfg.MaxGates),
-		"heavy":   fmt.Sprintf("%d heavy commands in turns (hive agent heavy -- cmd); at once: %s", m.Work.Heavy(), pace["heavy"])}
+		"checks":  fmt.Sprintf("%d running, %d waiting (at once: %s, max_checks)%s", len(running), len(waitingChecks), pace["checks"], checkLine(waitingChecks)),
+		"workers": pace["workers"]}
 }
 
 // checkLine names the waiting checks in the order they start, each ranked
@@ -578,9 +576,7 @@ type ConfigView struct {
 	Schedules      map[string]string   `json:"schedules"`
 	ReviewRounds   int                 `json:"review_rounds"`
 	PlateauMerges  int                 `json:"plateau_merges"`
-	MaxWorkers     int                 `json:"max_workers"`
 	MaxChecks      int                 `json:"max_checks"`
-	MaxGates       int                 `json:"max_gates"`
 	AutoUpdate     bool                `json:"auto_update"`
 	Routes         map[string][]string `json:"routes,omitempty"` // each role's models in fallback order (the models op says more)
 	OpenModels     []string            `json:"open_models,omitempty"`
@@ -589,5 +585,5 @@ type ConfigView struct {
 // View is c as agents see it.
 func View(c core.Config) ConfigView {
 	return ConfigView{c.Autonomy, c.Harness, c.Model, c.LeadModel, c.ReviewerModel, c.TribunalModels,
-		append(harness.Models(c.Harness), c.ModelChoices...), c.Schedules, c.ReviewRounds, c.PlateauMerges, c.MaxWorkers, c.MaxChecks, c.MaxGates, c.AutoUpdate, c.Routes, slices.Sorted(maps.Keys(c.Models))}
+		append(harness.Models(c.Harness), c.ModelChoices...), c.Schedules, c.ReviewRounds, c.PlateauMerges, c.MaxChecks, c.AutoUpdate, c.Routes, slices.Sorted(maps.Keys(c.Models))}
 }

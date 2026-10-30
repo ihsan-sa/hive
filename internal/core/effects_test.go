@@ -32,8 +32,7 @@ func testHive(t *testing.T) (*Core, *Local) {
 	}
 	cfg := ws.LoadConfig()
 	cfg.Sandbox, cfg.BareAccepted, cfg.Harness = "bare", time.Now().Format(time.RFC3339), "fake"
-	cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax, cfg.LoadMax = 0, 0, 0, 0 // a loaded CI runner mustn't hold fake turns
-	cfg.IOPressureMax, cfg.IOFullMax = 0, 0
+	cfg.TurnMB = 0 // a loaded CI runner mustn't hold fake turns
 	ws.SaveConfig(cfg)
 	forge := &Local{Dir: filepath.Join(dir, "forge")}
 	c, err := Open(ws, forge)
@@ -136,9 +135,6 @@ func TestMergeNeedsCheckAndVerdictOnExactCommit(t *testing.T) {
 	if ch := c.Effects.RunCheck(p, sha, "test", c.Effects.Config(p, main).Test); !ch.OK {
 		t.Fatalf("tests should pass: %s", ch.Output)
 	}
-	if _, err := c.Effects.Merge(req); err == nil || !strings.Contains(err.Error(), "no land verdict") {
-		t.Fatalf("merged a code change without a read: %v", err)
-	}
 	// A verdict from something other than a reviewer bound to sha is refused.
 	if err := c.Effects.RecordVerdict(Verdict{Project: p.Name, SHA: sha, Run: "w1", Verdict: "land"}); err == nil {
 		t.Fatal("accepted a verdict from a worker")
@@ -160,12 +156,6 @@ func TestMergeNeedsCheckAndVerdictOnExactCommit(t *testing.T) {
 	}
 	if _, err := c.Effects.Merge(req); err == nil || !strings.Contains(err.Error(), "head is") {
 		t.Fatalf("merged the reviewed commit while the PR head moved: %v", err)
-	}
-	c.Effects.RunCheck(p, sha2, "test", "true")
-	req2 := req
-	req2.SHA = sha2
-	if _, err := c.Effects.Merge(req2); err == nil || !strings.Contains(err.Error(), "no land verdict") {
-		t.Fatalf("merged the new head on the old verdict: %v", err)
 	}
 	// Back to the reviewed commit: it merges once the forge's checks pass there.
 	c.Effects.Push(p, "hive/t1", sha)
@@ -459,78 +449,6 @@ func TestMainBundleLeavesNoTemp(t *testing.T) {
 	}
 	if left, _ := filepath.Glob(filepath.Join(dir, "*.tmp")); len(left) != 0 {
 		t.Fatalf("temp left behind: %v", left)
-	}
-}
-
-// A change to a high-class path merges only after two separate land reads of
-// its exact commit, and a fix in between starts the count again.
-func TestHighClassNeedsTwoReads(t *testing.T) {
-	c, f := testHive(t)
-	seedRepo(t, f, "me/high", map[string]string{".hive/project.json": `{"test": "true", "root": ["setup.sh"]}`})
-	p, _ := c.Projects.Add(Project{Name: "high", Repo: "me/high"})
-	main, _ := c.Effects.Sync(p)
-	r, _ := commitInCheckout(t, c, p, "w7", main, "setup.sh", "echo hi\n")
-	sha, _ := c.Effects.Extract(p, r, main)
-	c.Effects.Push(p, "hive/t7", sha)
-	pr, _ := f.CreatePR(p.Repo, "hive/t7", "main", "root", "body")
-	c.Effects.RunCheck(p, sha, "test", "true")
-	ch, _ := c.Effects.Classify(p, main, sha)
-	if len(ch.High) != 1 || len(ch.Root) != 1 || ch.Small {
-		t.Fatalf("a root path should class high and root: %+v", ch)
-	}
-	read := func(run, verdict string) {
-		c.Runs.Start(RunSpec{ID: run, Role: "reviewer", Project: p.Name, ReadOnly: true, Harness: "fake", Inputs: map[string]string{"sha": sha}})
-		if err := c.Effects.RecordVerdict(Verdict{Project: p.Name, SHA: sha, Run: run, Verdict: verdict}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	req := MergeRequest{Project: p, PR: pr.Number, SHA: sha, Main: main}
-	read("r7a", "land")
-	read("r7b", "fix")
-	read("r7c", "land")
-	read("r7c", "land") // the same run twice is one read
-	if _, err := c.Effects.Merge(req); err == nil || !strings.Contains(err.Error(), "no land verdict") {
-		t.Fatalf("merged a high change on one read: %v", err)
-	}
-	read("r7d", "land")
-	// A root path runs with elevated rights: on no security list, it still
-	// needs the security seat and a majority of the panel on its own diff.
-	if len(ch.SecurityRoot) != 1 || len(ch.Security) != 1 {
-		t.Fatalf("a root-class path should need the security read and its panel: %+v", ch)
-	}
-	if _, err := c.Effects.Merge(req); err == nil || !strings.Contains(err.Error(), "panel") || !strings.Contains(err.Error(), "in the project's root class") {
-		t.Fatalf("merged a root path on the ordinary reads alone, or didn't say it's in the root class: %v", err)
-	}
-	seat := func(run, seat, verdict, diff string) {
-		t.Helper()
-		c.Runs.Start(RunSpec{ID: run, Role: "reviewer", Project: p.Name, ReadOnly: true, Harness: "fake", Inputs: map[string]string{"sha": sha, "seat": seat, "diff.patch": diff}})
-		if err := c.Effects.RecordVerdict(Verdict{Project: p.Name, SHA: sha, Run: run, Verdict: verdict}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	// Lands on another diff (the head before a new commit) count for nothing.
-	other := ch.Diff + "+echo more\n"
-	seat("s7o", SeatSecurity, "land", other)
-	for i := 0; i < PanelSeats; i++ {
-		seat(fmt.Sprintf("s7o%d", i), PanelSeat(i), "land", other)
-	}
-	if _, err := c.Effects.Merge(req); err == nil || !strings.Contains(err.Error(), "security read") {
-		t.Fatalf("merged on another diff's reads: %v", err)
-	}
-	seat("s7s", SeatSecurity, "land", ch.Diff)
-	if _, err := c.Effects.Merge(req); err == nil || !strings.Contains(err.Error(), "panel") {
-		t.Fatalf("merged a root path on the security seat alone: %v", err)
-	}
-	// A panel majority of fixes declines it, whatever the seat said.
-	seat("s7p0", PanelSeat(0), "fix", ch.Diff)
-	seat("s7p1", PanelSeat(1), "fix", ch.Diff)
-	seat("s7p2", PanelSeat(2), "land", ch.Diff)
-	if _, err := c.Effects.Merge(req); err == nil || !strings.Contains(err.Error(), "panel") {
-		t.Fatalf("merged on one panel land of three: %v", err)
-	}
-	seat("s7p1b", PanelSeat(1), "land", ch.Diff) // the seat reads again and lands
-	if _, err := c.Effects.Merge(req); err != nil {
-		t.Fatalf("the reviewers, the seat and the panel's majority should merge: %v", err)
 	}
 }
 

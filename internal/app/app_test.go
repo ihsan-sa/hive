@@ -47,8 +47,7 @@ func appWithWarden(t *testing.T, withParent bool) (*App, core.Run) {
 	}
 	cfg := ws.LoadConfig()
 	cfg.Harness = "fake"
-	cfg.MemFloorMB, cfg.MemPressureMax, cfg.CPUPressureMax, cfg.LoadMax = 0, 0, 0, 0
-	cfg.IOPressureMax, cfg.IOFullMax = 0, 0
+	cfg.TurnMB = 0
 	if err := ws.SaveConfig(cfg); err != nil {
 		t.Fatal(err)
 	}

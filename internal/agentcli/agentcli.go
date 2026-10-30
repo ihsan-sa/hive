@@ -188,7 +188,9 @@ const Usage = `hive agent <op> [--key value ...]   (or one JSON object, or - for
 
 A value of @path reads that file. Common ops:
   progress  --text "where I am"                 shown on the dashboard
-  finish    --status done|blocked --account "..." [--tested ...] [--unsure ...]
+  finish    --status done|blocked --account "..." [--tested ...] [--passed "test cmd"] [--unsure ...]
+                                                 --passed: the project's test passed on your final commit,
+                                                 main merged in; with no forge CI the Hive merges on it
   message   --to <id|name|parent|person|lead> --text "..."
   inbox                                          messages waiting for you
   agents                                         who is running
@@ -197,13 +199,15 @@ A value of @path reads that file. Common ops:
                                                  file an ask: it becomes an issue, a worker, a PR; a fix with
                                                  --aim fix --why, or when it names something broken;
                                                  else (or with --aim gain) taken as a gain
-  aim       --aim fix|gain --why "..." [--task id]   your task (or any on your project) is a fix of the failure --why
+  aim       --aim fix|gain --why "..." [--task id]   your task (or any other) is a fix of the failure --why
                                                  names, which merges on its tests and reads and isn't reverted
                                                  for a score dip alone, or a gain, which on the Hive's own
                                                  repository merges only on the recursive gate's clear gain
   pivot     --case "..." --evidence "..." [--project p]   any agent: a change of direction, filed first in
                                                  line as a fix; its worker weighs the case, then may throw away anything
-  warden    --want "..." --why "..." --steps "..."   for anything past your reach; the person decides
+  warden    --want "..." --why "..." --steps "..."   only money, credentials, publishing private details,
+                                                 opening the machine, outward in the person's name, or
+                                                 deleting repos or history; anything else is yours
   install   --tool python|uv|node|go [--version 3.12]   installs it for every agent, no root,
                                                  on your PATH at once; give the call a 25-minute timeout
   install   --system "sudo apt-get install -y x" --why "..."   a root install: goes to the person
@@ -214,27 +218,22 @@ A value of @path reads that file. Common ops:
   feedback  --text "..." [--about "agents/worker.md"]   what about the Hive got in your way, for the person
   feedback  --fixed <feedback id> --task <task id>   that task fixes it: it closes when the task lands
   schedule  --in 2h --text "..."                 a wake-up message to yourself
-  heavy     --what "the test suite" -- cmd args   run a heavy command (a test suite, a router, a build)
-                                                 once the machine has room: it waits while others run
-                                                 and the machine is strained, at most --patience (3m)
   status                                         projects, work in flight, scores
   github    --pr N | --checks sha | --annotations id | --path "repos/o/r/..." [--repo o/r]
                                                  GitHub's API on the person's login, cached; never curl api.github.com
-Every agent is the same: lead, worker and sweep are names, not ranks, and every op below is yours
-(only the warden and tribunal are set apart). These act on your own project's work, on the record
-with your run id.
+Every agent is the same: lead, worker and sweep are names, not ranks, and every op below is yours,
+on any project's work as on your own, on the record with your run id.
   rerun-checks [--task id]                      the failed forge checks (CI jobs) on a PR's head (yours by default)
                                                  run again, for a flake; at most 2 per head, the merge waits for them
   queue     [--order id,id] [--hold id] [--release id]   briefs waiting for a worker, in order
             [--now id --why "..."]               put it first in line
-                                                 any project's: --why on one not yours, on its record
-  recheck   --task id [--back "..."]           a blocked or stopped task, or one stuck on its way to
-                                                 the merge (say on a stale commit's checks), is pushed and
+  recheck   --task id [--back "..."]           any task: a blocked, stopped or stuck one is pushed and
                                                  checked again from its head; --back sends its worker that
+                                                 (a working one gets it at once)
   landed    --task id --why "..." [--merge sha]  end a task whose PR merged on the forge or whose
                                                  work is on main, so the briefs waiting on it start
   amend     --task id [--title ...] [--done ...] [--known ...] [--why ...]   change a brief no worker
-                                                 has started on, in place (yours; the lead: any but the person's)
+                                                 has started on, in place (anyone's)
   withdraw  --task id --why "..." [--into id]   take back such a brief: it stops, its issue closes
   fallback  --why "..."                         the Hive that follows its own main puts back
                                                  the binary its last update replaced and restarts, at once
@@ -256,7 +255,7 @@ with your run id.
                                                  a bare name goes in repo_owner, else self_fork, else the gh login
   retire_project --name n --why "..."            one made by mistake: setup never finished, or nothing
                                                  in flight or merged; the repository is left as it is
-  install_module --url <git url> | --project <module>   a warden weighs it; you hear back
+  install_module --url <git url> | --project <module>   installs it at once; you hear back
   requests                                       each request past a sandbox and where it stands
 In $HIVE_STATE, logins/ and private/ (the daemon's token, every agent's home) are covered, and so are an
 isolated project's records (and the journal, while any project is isolated): hidden there, not missing.`

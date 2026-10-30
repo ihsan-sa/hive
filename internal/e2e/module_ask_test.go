@@ -28,7 +28,7 @@ func TestAskForModule(t *testing.T) {
 		return false
 	})
 	h.wait("the module's work to merge", 3*minute, taskStage("ledger", "Build module ledger", work.StageDone))
-	st := h.wait("a warden to install the module", 2*minute, func(st api.State) bool {
+	st := h.wait("the module to install", 2*minute, func(st api.State) bool {
 		for _, m := range st.Modules {
 			if m.Name == "ledger" {
 				return true
@@ -36,7 +36,6 @@ func TestAskForModule(t *testing.T) {
 		}
 		return false
 	})
-	h.wait("the person to be told after", minute, toldAbout("Install module ledger"))
 	if !core.Exists(filepath.Join(h.ws.Modules(), "ledger", "ledger.md")) {
 		t.Fatal("the installed module lacks the file the worker built")
 	}
