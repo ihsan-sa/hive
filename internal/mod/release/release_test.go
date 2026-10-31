@@ -1967,3 +1967,42 @@ func TestRootMergeGetsTheHivesOwnRead(t *testing.T) {
 		t.Fatalf("the person should be told after: %+v", told)
 	}
 }
+
+// A release candidate main has moved past is dropped for the newest kept main:
+// on 2026-10-30 107700f9 was measured kept 27 minutes after it merged, by when
+// later merges had fixed the backup script #2212's security read asked fixes
+// on, and the person was asked again about a release they would always hold.
+func TestCandidateMainMovedPastIsCutFromTheNewestKeptMain(t *testing.T) {
+	m, n, merged, land := selfHive(t)
+	linear(m)
+	m.C.J.MustAppend("effect.merged", map[string]any{"project": "hive", "pr": 2212, "sha": "a2212", "merge_sha": "m2212", "root": []string{"install/hive-backup"}, "diff": "d2212"})
+	land("a2212", "r2212")
+	seated(m, "a2212", "d2212", core.SeatSecurity, "fix")
+	merged(2236, "a2236", "107700f9")
+	land("a2236", "r2236")
+	m.C.Person.Ask(core.Ask{Kind: "release", Ref: "hive@107700f9", Project: "hive", Title: "Release the Hive at 107700f9?", Options: []string{"release", "hold"}})
+	m.C.J.MustAppend("effect.merged", map[string]any{"project": "hive", "pr": 2240, "sha": "a2240", "merge_sha": "m2240", "root": []string{"install/hive-backup"}, "diff": "d2240"})
+	land("a2240", "r2240")
+	for _, seat := range []string{core.SeatSecurity, core.PanelSeat(0), core.PanelSeat(1), core.PanelSeat(2)} {
+		seated(m, "a2240", "d2240", seat, "land")
+	}
+	merged(2241, "a2241", "m2241") // merged, not yet kept: not cut from
+	land("a2241", "r2241")
+	keptAt(m, "m2240", true)
+	keptAt(m, "107700f9", true)
+	m.AfterKept("hive", "107700f9")
+	body := n.got["v0.0.1"]
+	if len(n.got) != 1 || !strings.Contains(body, "#2240 at a2240") || strings.Contains(body, "#2241") || !strings.Contains(body, "went out with #2240's later change") {
+		t.Fatalf("not cut from the newest kept main m2240: %v", n.got)
+	}
+	if open := m.C.Person.Open(); len(open) != 0 {
+		t.Fatalf("the ask at 107700f9 is still open: %+v", open)
+	}
+	if journaledN(m, "release.superseded") != 1 || journaledN(m, "person.asked") != 1 {
+		t.Fatalf("%d release.superseded, %d person.asked", journaledN(m, "release.superseded"), journaledN(m, "person.asked"))
+	}
+	m.AfterKept("hive", "107700f9")
+	if len(n.got) != 1 || journaledN(m, "person.asked") != 1 {
+		t.Fatalf("asked or released again: %v", n.got)
+	}
+}

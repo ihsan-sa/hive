@@ -114,6 +114,7 @@ On host paths (bare, Seatbelt) the tools folder's bins come first on PATH, so an
     Still red, but every failing test also failed within 72h at a commit without the change (checked before the merge, none of the task's heads or checkpoints), is a flake too → `flake` alert, no revert.
 11. release (self projects, one at a time per project): on a kept merge, list the merges after the one the last release was cut at, up to this one, with the reviewer runs that read each exact head;
     a merge a newer release already covers is refused with an alert;
+    unless the person said "release" at it, a kept commit main has moved past (a later merge improve kept whose history holds it: `superseded`) is dropped for the newest such merge, its open release ask answered by the Hive and its read wait ended (`release.superseded`), and the release is cut from there, so a candidate measured late is never asked about again;
     unless the person said "release", main's own checks (CI) on the kept commit must have passed (`ChecksState` with main's `required_checks`) before it is cut or offered: a failure alerts once (`release.ci_failed`);
     one still running, that can't start or can't be read journals `release.ci_waiting`;
     the tick tries the newest such commit, failed or waiting, again every 10 minutes (`retryWaiting`, a wait raised once after 6h) until it passes (`release.ci_passed`), so a re-run that passes releases it, and the next kept merge covers it too;
