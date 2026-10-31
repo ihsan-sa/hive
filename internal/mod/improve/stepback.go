@@ -229,9 +229,11 @@ func (m *Module) StartStepBack(p core.Project, why string) error {
 	if s.Budget <= 0 {
 		// Nothing spent leaves nothing new to measure or to hold an
 		// experiment to, but goals no step-back has judged still get judged.
+		// That is the quiet outcome, not one to raise: a plateau of merges
+		// that cost nothing (a step-back's own forward-port, an unpaid
+		// task) lands here, and its record says why.
 		if m.judged(p.Name, digest) {
 			s.Status, s.Note, s.Ended = "none", "the Hive has spent nothing on it since the last step-back, and its goals were judged as they stand, so there is nothing new to judge or spend", time.Now().UTC()
-			m.alert(p.Name, "the step-back on "+p.Name+" did not run: "+s.Note)
 			m.saveStepBack(s)
 			return nil
 		}
