@@ -924,6 +924,13 @@ func (m *Module) afterKept(project, sha string) {
 		return
 	}
 	approved := m.C.Effects.Approved("release", project, sha)
+	if !approved {
+		if next := m.superseded(p, sha); next != "" {
+			m.supersede(project, sha, next)
+			m.afterKept(project, next)
+			return
+		}
+	}
 	// A merge without the read a release needs gets it from the Hive's own
 	// seats (ReadMerged) while the release waits; a fix holds it by the
 	// Hive's word, and only a read that can't end leaves it to the person.
@@ -1160,6 +1167,24 @@ func (m *Module) afterKept(project, sha string) {
 		Detail: "The Hive released " + next + " on " + p.Repo + ". Yes opens one pull request on " + up + " in your name, which grows with each kept change."})
 }
 
+// supersede drops the release candidate at sha for next, the newest kept
+// merge after it: a release ask still open at sha is answered by the Hive,
+// and a wait on reads at sha ends, so neither is retried or asked again;
+// next's own afterKept takes up what it waits on.
+func (m *Module) supersede(project, sha, next string) {
+	ref := project + "@" + sha
+	for _, a := range m.C.Person.Open() {
+		if a.Kind == "release" && a.Ref == ref {
+			m.C.Person.Answer(a.ID, "hold", "the Hive, not the person: main has moved past "+core.Short(sha)+", so the release is cut from the newest kept main, "+core.Short(next))
+		}
+	}
+	if m.reading(project) == sha {
+		m.C.J.MustAppend("release.read_ended", map[string]string{"project": project, "sha": sha})
+	}
+	m.C.J.MustAppend("release.superseded", map[string]string{"project": project, "sha": sha, "by": next,
+		"why": "main has moved past it: " + core.Short(next) + " is kept and holds it"})
+}
+
 // mainGreen says whether main's own checks (CI) passed at sha, so the Hive
 // offers or cuts a release only at a commit its CI found green. A failure is
 // raised once; one still running, that can't start or can't be read is
@@ -1382,6 +1407,36 @@ const greenAfterN = 10
 // reads, journaling nothing; afterKept reads main's checks at the chosen
 // commit again and journals them.
 func (m *Module) greenAfter(p core.Project, sha string) string {
+	later := m.keptLater(p.Name, sha)
+	contains := m.Contains
+	if contains == nil {
+		contains = m.contains
+	}
+	for i, n := len(later)-1, 0; i >= 0 && n < greenAfterN; i, n = i-1, n+1 {
+		runs, err := m.C.Effects.Forge.Checks(p.Repo, later[i])
+		if err != nil {
+			continue
+		}
+		if state, _ := core.ChecksState(runs, m.C.Effects.RequiredChecks(p, later[i])); state != core.CheckPass {
+			continue
+		}
+		// The journal's order of merges stands in for main's history; the
+		// history itself says so, and one that can't be read is passed over.
+		if in, err := contains(p, sha, later[i]); err != nil || !in {
+			if err != nil {
+				log.Printf("release: %s: can't tell whether %s contains %s: %v", p.Name, core.Short(later[i]), core.Short(sha), err)
+			}
+			continue
+		}
+		return later[i]
+	}
+	return ""
+}
+
+// keptLater is the project's merges journaled after the newest sighting of
+// sha's merge that improve kept (its own score.measured, or a later kept one
+// covering it), oldest first; nil when sha is no merge the journal saw.
+func (m *Module) keptLater(project, sha string) (out []string) {
 	var later []string
 	kept := map[string]bool{}
 	m.C.J.Replay(func(e core.Event) {
@@ -1393,7 +1448,7 @@ func (m *Module) greenAfter(p core.Project, sha string) string {
 			Red      bool
 			NoResult bool `json:"no_result"`
 		}
-		if e.Decode(&x) != nil || x.Project != p.Name {
+		if e.Decode(&x) != nil || x.Project != project {
 			return
 		}
 		switch e.Kind {
@@ -1416,30 +1471,30 @@ func (m *Module) greenAfter(p core.Project, sha string) string {
 			}
 		}
 	}, "score.measured", "score.covered", "effect.merged")
+	for _, l := range later {
+		if kept[l] {
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
+// superseded is the newest kept merge after sha whose history holds it, or
+// "" when main hasn't moved past sha with a kept merge. A release candidate
+// main has moved past is dropped for it: on 2026-10-30 the release at
+// 107700f9, measured 27 minutes after it merged, still carried the backup
+// script later merges had reverted and fixed, and asked the person again
+// about a release they would always hold.
+func (m *Module) superseded(p core.Project, sha string) string {
+	later := m.keptLater(p.Name, sha)
 	contains := m.Contains
 	if contains == nil {
 		contains = m.contains
 	}
-	for i, n := len(later)-1, 0; i >= 0 && n < greenAfterN; i, n = i-1, n+1 {
-		if !kept[later[i]] {
-			continue
+	for i := len(later) - 1; i >= 0; i-- {
+		if in, err := contains(p, sha, later[i]); err == nil && in {
+			return later[i]
 		}
-		runs, err := m.C.Effects.Forge.Checks(p.Repo, later[i])
-		if err != nil {
-			continue
-		}
-		if state, _ := core.ChecksState(runs, m.C.Effects.RequiredChecks(p, later[i])); state != core.CheckPass {
-			continue
-		}
-		// The journal's order of merges stands in for main's history; the
-		// history itself says so, and one that can't be read is passed over.
-		if in, err := contains(p, sha, later[i]); err != nil || !in {
-			if err != nil {
-				log.Printf("release: %s: can't tell whether %s contains %s: %v", p.Name, core.Short(later[i]), core.Short(sha), err)
-			}
-			continue
-		}
-		return later[i]
 	}
 	return ""
 }
