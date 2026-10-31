@@ -436,13 +436,19 @@ func (mapped) Isolated() bool { return true }
 
 func (m mapped) Run(s sandbox.Spec, timeout time.Duration) (int, error) {
 	*m.specs = append(*m.specs, s)
-	script := s.Argv[len(s.Argv)-1]
-	for _, mt := range s.Mounts {
+	// One pass, longest path first: a host path under another mount's
+	// inside path (a test's temp dir under /hive/home when the tests run in
+	// a turn) isn't mapped again.
+	ms := slices.Clone(s.Mounts)
+	slices.SortStableFunc(ms, func(a, b sandbox.Mount) int { return len(b.Inside) - len(a.Inside) })
+	var pairs []string
+	for _, mt := range ms {
 		if s.Cwd == mt.Inside {
 			s.Cwd = mt.Host
 		}
-		script = strings.ReplaceAll(script, mt.Inside, mt.Host)
+		pairs = append(pairs, mt.Inside, mt.Host)
 	}
+	script := strings.NewReplacer(pairs...).Replace(s.Argv[len(s.Argv)-1])
 	s.Argv = []string{"/bin/sh", "-c", script}
 	var env []string
 	for _, kv := range s.Env {
