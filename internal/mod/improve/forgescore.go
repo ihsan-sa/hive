@@ -20,14 +20,20 @@ import (
 // times too low (issue #2172).
 const ScoreJob = "score"
 
+// scoreJobWait bounds the wait for a score job the forge lists as going:
+// GitHub ends a job at 6 hours, and one queued past an hour reads as unable
+// to start, so a job still pending after this is a forge that lost it.
+var scoreJobWait = 7 * time.Hour
+
 // ScoreLine is the job's last line of its own: "hive-score: <number>". The
 // script's own text, which a job log echoes, holds no number there.
 var ScoreLine = regexp.MustCompile(`(?m)^hive-score: (-?[0-9]+(?:\.[0-9]+)?)\s*$`)
 
 // forgeScore reads sha's score from the forge's ScoreJob, as forgeTest reads
 // its tests: ok is a number, recorded as sha's score check (Where "forge");
-// wait is the job still going or not yet listed while the merge is younger
-// than forgeWait. Anything else (no such job on this commit, a red, a log
+// wait is the job not yet listed while the merge is younger than forgeWait,
+// or listed and still going while it is younger than scoreJobWait. Anything
+// else (no such job on this commit, a red, a log
 // with no number, a forge that can't be read) gives neither and the score
 // runs here, as it did before.
 func (m *Module) forgeScore(p core.Project, sha string) (c core.Check, ok, wait bool) {
@@ -68,7 +74,15 @@ func (m *Module) forgeScore(p core.Project, sha string) (c core.Check, ok, wait 
 		m.mu.Unlock()
 		// A commit whose workflow has no score job lists every other check
 		// and never this one: once the rest are done, it isn't coming.
-		if time.Since(first) < forgeWait && (job != nil || !settled(runs)) {
+		if job == nil && time.Since(first) < forgeWait && !settled(runs) {
+			return core.Check{}, false, true
+		}
+		// A score job that is listed and going ends on its own: the forge
+		// counts one queued past an hour as unable to start, and stops one
+		// at its timeout. Dropping it at forgeWait for a score here threw
+		// away a run hive-chip-flow's 330-minute job was half through, for a
+		// local one cut off at its 30-minute limit with no number (#2259).
+		if job != nil && time.Since(first) < scoreJobWait {
 			return core.Check{}, false, true
 		}
 		return none()
