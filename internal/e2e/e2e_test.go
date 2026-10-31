@@ -386,7 +386,7 @@ func (h *hive) wait(what string, timeout time.Duration, cond func(api.State) boo
 	}
 	var reqs []string // a step that never settles leaves its asker unwoken
 	for _, r := range st.Requests {
-		reqs = append(reqs, fmt.Sprintf("%s from %s: %s %s %q", r.ID, r.Origin, r.State, core.Clip(r.Outcome, 200), core.Clip(r.Want, 80)))
+		reqs = append(reqs, fmt.Sprintf("%s from %s: %s %s %q %q", r.ID, r.Origin, r.State, core.Clip(r.Outcome, 200), core.Clip(r.Want, 80), core.Clip(r.Output, 300)))
 	}
 	h.t.Fatalf("timed out waiting for %s; runs:\n%s\nrequests:\n%s\nprojects: %s\nalerts: %+v", what, strings.Join(runs, "\n"), strings.Join(reqs, "\n"), core.Clip(string(raw), 4000), st.Alerts)
 	return st
@@ -1022,6 +1022,9 @@ func TestRiskPaths(t *testing.T) {
 	if r, _ := req(st, "split"); r.Output != "" || !strings.Contains(r.Reason, "tribunal declined") {
 		t.Fatalf("split panel ran or said nothing: %+v", r)
 	}
+	// The worker hears the panel and lands first, as on a fast machine, and
+	// its checkout goes with it: the person's yes still runs the script.
+	h.wait("the split worker to land before the person answers", 3*minute, taskStage("risk", "split", work.StageDone))
 	answer(st, "split", "run")
 	h.wait("the person's run to run the declined script", 2*minute, state("split", "done"))
 
