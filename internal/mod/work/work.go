@@ -433,7 +433,9 @@ func New(c *core.Core, a *agents.Agents, ch *chat.Module) *Module {
 			return
 		}
 		var t Task
-		e.Decode(&t)
+		if e.Decode(&t); t.ID == "" {
+			return // a torn line that read as a task.saved (10-30: one the restart's next record was glued to) is no task
+		}
 		m.mu.Lock()
 		m.tasks[t.ID] = &t
 		m.mu.Unlock()

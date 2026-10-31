@@ -172,7 +172,7 @@ func OpenJournal(path string) (*Journal, error) {
 		return nil, err
 	}
 	j := &Journal{path: path}
-	if _, err := scan(path, 0, func(off int64, raw []byte) {
+	whole, err := scan(path, 0, func(off int64, raw []byte) {
 		e, ok := parseEvent(raw, nil)
 		if !ok {
 			return
@@ -190,7 +190,8 @@ func OpenJournal(path string) (*Journal, error) {
 		if e.Kind == "alert.raised" && e.Decode(&a) == nil && a.Kind == "journal" {
 			j.flagged = max(j.flagged, a.Breaks)
 		}
-	}); err != nil {
+	})
+	if err != nil {
 		return nil, err
 	}
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
@@ -199,6 +200,18 @@ func OpenJournal(path string) (*Journal, error) {
 	}
 	if fi, err := f.Stat(); err == nil {
 		j.size = fi.Size()
+	}
+	if j.size > whole {
+		// A torn last line is ended, so the next event starts a line of its
+		// own: on 2026-10-30 a start's hive.started was glued onto a torn
+		// task.saved, the pair read as one task.saved with no task in it,
+		// and the start's own event was lost.
+		n, err := f.Write([]byte("\n"))
+		j.size += int64(n)
+		if err != nil {
+			f.Close()
+			return nil, err
+		}
 	}
 	j.f = f
 	return j, nil
