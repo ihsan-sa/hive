@@ -442,6 +442,12 @@ func TestStepBackJudgesUnjudgedGoalsWithNothingSpent(t *testing.T) {
 	if len(sbs) != 2 || last.Status != "none" || !strings.Contains(last.Note, "spent nothing") {
 		t.Fatalf("with nothing spent and its goals judged, a step-back must not run: %+v", sbs)
 	}
+	for _, e := range m.C.J.Since(0) {
+		var a struct{ Kind, Text string }
+		if e.Kind == "alert.raised" && e.Decode(&a) == nil && a.Kind == "stepback" {
+			t.Fatalf("a step-back with nothing to do must not raise an alert: %s", a.Text)
+		}
+	}
 }
 
 // A regular step-back needs something new since the last one: a score that
