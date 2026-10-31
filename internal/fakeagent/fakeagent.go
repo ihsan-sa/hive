@@ -820,6 +820,12 @@ func warden(all string) error {
 	if strings.Contains(all, "FAKE:wardentribunal") {
 		d = "tribunal"
 	}
+	if strings.Contains(all, "FAKE:paneldecline") {
+		// The person's yes comes after the worker has heard the panel and
+		// landed, and a landed task's checkout is removed (work.ended), so
+		// this script mustn't read it.
+		script = "echo installing left-pad"
+	}
 	if strings.Contains(all, "FAKE:wardenmoney") {
 		script = "echo buying && stripe charges create"
 	}
