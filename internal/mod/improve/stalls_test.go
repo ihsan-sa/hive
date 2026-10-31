@@ -330,3 +330,25 @@ func TestSlowMeasureHoldsOnlyItsProject(t *testing.T) {
 		t.Fatal("p's merge waited on hive's measure")
 	}
 }
+
+// A task.saved with no task in it (10-30: a torn journal line the restart's
+// next record was glued to) is no task: neither the work module nor the
+// watcher keeps it, so no stall goes to the lead for the key "task:".
+func TestEmptyTaskIsNoStall(t *testing.T) {
+	m := rig(t)
+	m.C.J.MustAppend("task.saved", work.Task{})
+	m.mu.Lock()
+	_, spelled := m.spells[""]
+	m.spells[""] = spell{since: time.Now().Add(-10 * time.Hour)}
+	m.mu.Unlock()
+	if spelled {
+		t.Error("the watcher kept a spell for an empty task")
+	}
+	if _, ok := m.Work.Get(""); ok {
+		t.Error("the work module kept a task with no id")
+	}
+	m.Watch()
+	if s := m.Stalls(); len(s) != 0 {
+		t.Fatalf("stalls = %+v, want none", s)
+	}
+}

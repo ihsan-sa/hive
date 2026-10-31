@@ -232,3 +232,29 @@ func TestJournalReadsItsLinesAsUnmarshalWould(t *testing.T) {
 		t.Errorf("seq %d, want 10", j.Seq())
 	}
 }
+
+// A torn last line is ended on open, so the next event is a line of its own
+// rather than glued onto it (10-30: a start's hive.started was lost so).
+func TestTornTailIsEndedBeforeTheNextAppend(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "events.jsonl")
+	torn := `{"seq":1,"at":"2026-10-30T01:02:03Z","kind":"task.saved","data":{"id":"t1","log":[{"at":"2026-10-30T01:02:`
+	if err := os.WriteFile(path, []byte(torn), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	j, err := OpenJournal(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	j.MustAppend("hive.started", map[string]string{"pid": "1"})
+	j.Close()
+	j, err = OpenJournal(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer j.Close()
+	var kinds []string
+	j.Replay(func(e Event) { kinds = append(kinds, e.Kind) })
+	if strings.Join(kinds, " ") != "hive.started" {
+		t.Errorf("replay got %v, want the start's event alone", kinds)
+	}
+}

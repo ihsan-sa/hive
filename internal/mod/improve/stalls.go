@@ -79,7 +79,9 @@ func (m *Module) applyStall(e core.Event) {
 	switch e.Kind {
 	case "task.saved":
 		var t work.Task
-		e.Decode(&t)
+		if e.Decode(&t); t.ID == "" {
+			return // no task: a torn line, which the work module keeps no task for either
+		}
 		sp, ok := m.spells[t.ID]
 		if ok && sp.stage == t.Stage {
 			m.spells[t.ID] = sp.held(t, e.At)
@@ -182,7 +184,7 @@ func (m *Module) Watch() {
 	// A merged task's change is on main: what is left (its follow-up brief,
 	// then done) is the Hive's bookkeeping, which a recheck can't retry.
 	for _, t := range m.Work.List(func(t work.Task) bool {
-		return !t.Terminal() && t.Stage != work.StagePerson && t.Stage != work.StageMerged
+		return t.ID != "" && !t.Terminal() && t.Stage != work.StagePerson && t.Stage != work.StageMerged
 	}) {
 		now["task:"+t.ID] = t.Stage
 		if sha := checked(t); sha != "" {
