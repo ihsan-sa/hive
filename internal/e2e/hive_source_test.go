@@ -94,7 +94,7 @@ func TestWorkerKnowsTheHive(t *testing.T) {
 	note := filepath.Join(h.ws.KB(), "everything-about-the-hive.md")
 	h.wait("the worker's answer in the knowledge base", 2*minute, func(api.State) bool { return core.Exists(note) })
 	worker, _ := os.ReadFile(note)
-	for _, fact := range []string{"Installed modules: agents, chat, improve, kb, system", "panel of three", "value >= best-s.Tolerance", "the sweep runs off"} {
+	for _, fact := range []string{"Installed modules: agents, board, chat, improve, kb, system, workers", "panel of three", "value >= best-s.Tolerance", "the sweep runs off"} {
 		if !strings.Contains(lead, fact) || !strings.Contains(string(worker), fact) {
 			t.Errorf("the lead and the worker don't both say %q:\nlead: %s\nworker: %s", fact, lead, worker)
 		}
