@@ -118,3 +118,33 @@ func TestOnlyMainsTipIsMeasured(t *testing.T) {
 		t.Fatalf("the merge under the tip should be covered by it: %+v", cov)
 	}
 }
+
+// A score job the forge lists as going is waited for past forgeWait, up to
+// scoreJobWait: a long job half through isn't dropped for a score here
+// (#2259). One not listed yet still gives up at forgeWait.
+func TestARunningScoreJobOutwaitsForgeWait(t *testing.T) {
+	m, commit, _ := tested(t)
+	p, _ := m.C.Projects.Get("p")
+	sha := commit(map[string]string{"README.md": "x\n"})
+	forge := m.C.Effects.Forge.(*core.Local)
+	forge.SetChecks("me/p", sha, core.CheckRun{Name: "ci", State: core.CheckPass}, core.CheckRun{Name: ScoreJob, State: core.CheckPending})
+	ago := func(d time.Duration) {
+		m.mu.Lock()
+		delete(m.forgeAt, "score:p@"+sha)
+		m.merged[sha] = time.Now().Add(-d)
+		m.mu.Unlock()
+	}
+	ago(forgeWait + time.Hour)
+	if _, ok, wait := m.forgeScore(p, sha); !wait || ok {
+		t.Fatalf("dropped a running score job at forgeWait: ok %v wait %v", ok, wait)
+	}
+	ago(scoreJobWait + time.Minute)
+	if _, ok, wait := m.forgeScore(p, sha); wait || ok {
+		t.Fatalf("waited past scoreJobWait: ok %v wait %v", ok, wait)
+	}
+	forge.SetChecks("me/p", sha, core.CheckRun{Name: "ci", State: core.CheckPending})
+	ago(forgeWait + time.Minute)
+	if _, ok, wait := m.forgeScore(p, sha); wait || ok {
+		t.Fatalf("waited past forgeWait for a score job never listed: ok %v wait %v", ok, wait)
+	}
+}
