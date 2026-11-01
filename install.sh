@@ -7,7 +7,7 @@ CORE="$(cd "$(dirname "$0")" && pwd)"; SERVICE=1; SHARED=0
 if [ "$(id -u)" = 0 ]; then
   U="${1:-hive}"
   command -v git >/dev/null && command -v python3 >/dev/null && command -v curl >/dev/null || die "install git, python3 and curl first"
-  id "$U" >/dev/null 2>&1 && [ -e "$(eval echo "~$U")/.hive-installed" ] && die "$U already has it: sudo -iu $U, then git -C ~/core pull"
+  id "$U" >/dev/null 2>&1 && [ -e "$(eval echo "~$U")/.hive-installed" ] && { echo "$U already has it: sudo -iu $U, then git -C ~/core pull"; exit 0; }
   id "$U" >/dev/null 2>&1 || useradd -m -s /bin/bash "$U"
   H="$(eval echo "~$U")"
   loginctl enable-linger "$U" 2>/dev/null || echo "NOTE: couldn't enable linger; the hive stops when $U logs out"
@@ -40,10 +40,12 @@ top=$(git -C "$HOME" rev-parse --show-toplevel 2>/dev/null || true)
 
 mkdir -p "$HOME/.local/bin" "$HOME/kb" "$HOME/projects" "$HOME/.config/systemd/user"
 ln -sf "$CORE/hive" "$HOME/.local/bin/hive"
+# A login bash reads only the first of these it finds (Fedora and RHEL make ~/.bash_profile, so ~/.profile would be skipped)
+for PROFILE in "$HOME/.bash_profile" "$HOME/.bash_login" "$HOME/.profile"; do [ -e "$PROFILE" ] && break; done
 # ~/.local/bin may not be on PATH in a fresh login shell
-grep -qs '.local/bin' "$HOME/.profile" || echo 'PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.profile"
+grep -qs '.local/bin' "$PROFILE" || echo 'PATH="$HOME/.local/bin:$PATH"' >> "$PROFILE"
 # sudo -iu and su - don't set this, and systemctl --user needs it
-grep -qs 'XDG_RUNTIME_DIR' "$HOME/.profile" || echo 'export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"' >> "$HOME/.profile"
+grep -qs 'XDG_RUNTIME_DIR' "$PROFILE" || echo 'export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"' >> "$PROFILE"
 
 # Backup: the starter commits ~ every few minutes. Only the board, log and notes; core is its own repo.
 [ -e "$HOME/.gitignore" ] || printf '/*\n!/.gitignore\n!/board.jsonl\n!/log.jsonl\n!/kb/\n' > "$HOME/.gitignore"
