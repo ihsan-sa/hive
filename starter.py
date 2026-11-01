@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Hive starter: watch ~/board.jsonl, start a session per @mention, pace on weekly usage, log, back up ~ to git."""
-import datetime as dt, json, os, re, secrets, signal, subprocess, time, urllib.request, uuid
+import datetime as dt, json, os, re, secrets, shutil, signal, subprocess, time, urllib.request, uuid
 from pathlib import Path
 
 HOME = Path.home()
@@ -28,6 +28,8 @@ def mentions(p):
     if isinstance(to, str): to = to.replace(",", " ").split()
     found = [t.lstrip("@").lower() for t in to] + [m.lower() for m in MENTION.findall(str(p.get("text", "")))]
     return list(dict.fromkeys(found))
+
+MODELS = ("opus", "sonnet", "haiku", "fable")  # what a post may ask for with `hive post --model`
 
 LIMIT_TEXT = re.compile(r"usage limit|rate limit|hit your limit|limit reached|out of (extra )?usage", re.I)
 
@@ -198,6 +200,7 @@ def start(c, name, posts, login, resume=None, reaped=None, extra=()):
     hook_inbox(c)  # a login can be added to config.json while the starter runs
     sid = resume or str(uuid.uuid4())  # the claude session id, so `claude --resume <session>` works
     first = posts[0]
+    model = next((p["model"] for p in posts if p.get("model") in MODELS), None)  # none: the login's default
     kind = "warden" if name == "warden" else "agent"
     system = (CORE / "orientation.md").read_text() + ("\n\n" + (CORE / "warden.md").read_text() if kind == "warden" else "")
     prompt = (f"You are @{name}. You were woken by board post {', '.join(p['id'] for p in posts)} "
@@ -217,12 +220,12 @@ def start(c, name, posts, login, resume=None, reaped=None, extra=()):
     path = HOME / "sessions" / f"{name}-{dt.datetime.now():%m%d-%H%M%S}.jsonl"
     env = {**os.environ, "HIVE_NAME": name, "CLAUDE_CONFIG_DIR": login}
     proc = subprocess.Popen(["claude", "-p", prompt, "--append-system-prompt", system,
-                             *(["--resume", sid] if resume else ["--session-id", sid]), *c["claude_args"]],
+                             *(["--resume", sid] if resume else ["--session-id", sid]), *(["--model", model] if model else []), *c["claude_args"]],
                             cwd=HOME, env=env, stdout=path.open("w"), stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)
     children[name] = proc
     (STATE / "delivered" / name).unlink(missing_ok=True)  # the inbox hook starts fresh with this run
     rec = {"name": name, "pid": proc.pid, "session": sid, "at": now(), "post": first["id"], "login": login,
-           "thread": first.get("thread"), "from": first.get("from"), "out": str(path), **({"resumed": True} if resume else {})}
+           "thread": first.get("thread"), "from": first.get("from"), "out": str(path), **({"resumed": True} if resume else {}), **({"model": model} if model else {})}
     (RUN / f"{name}.json").write_text(json.dumps(rec))
     log(event="start", **rec)
 
@@ -292,7 +295,7 @@ def main():
                     # "done" post from a run that has already ended; a running agent mentioning itself doesn't
                     if n == str(p.get("from", "")).lower() and runs_now(n): continue
                     if n == "new": n = "a" + secrets.token_hex(2)
-                    st["pending"].setdefault(n, []).append({k: p.get(k) for k in ("id", "thread", "from")})
+                    st["pending"].setdefault(n, []).append({k: p.get(k) for k in ("id", "thread", "from", "model")})
         alive = running(st)
         u = usage(c, u)
         if (pick_login(c, u) is None) != paused:
@@ -303,19 +306,16 @@ def main():
         login = pick_login(c, u, st.get("limits"))  # None: every login is past the stop line or held on a limit
         for n, r in list(st.get("resume", {}).items()):  # resume limit-stopped sessions first, same name and session
             if not login or n in alive or len(alive) >= (c.get("max_sessions") or float("inf")): continue
-            own = r.get("login")
-            if own == login or own not in u or (time.time() >= r["reset"] and pick_login(c, {own: u[own]}, st.get("limits"))):
-                to = own if own in u else login  # its own login, once that has room again
-            elif move_session(r["session"], own, login): to = login  # a stopped session moves to a login with room
-            elif time.time() >= r["reset"]: to = login
+            own, limits = r.get("login"), st.get("limits")
+            if own in u and time.time() >= r["reset"] and pick_login(c, {own: u[own]}, limits): to = own  # its login has room again
+            elif own != login and move_session(r["session"], own, login):  # or it moves to one that does
+                to = login; log(event="moved", name=n, session=r["session"], src=own, dst=to)
             else: continue
-            if own != to: log(event="moved", name=n, session=r["session"], src=own, dst=to)
-            if True:
-                st["resume"].pop(n)
-                waiting = st["pending"].pop(n, []) if r.get("reaped") else []  # hand queued posts to the resumed run
-                start(c, n, [{"id": r["post"], "thread": r.get("thread"), "from": r.get("from")}], to,
-                      resume=r["session"], reaped=r.get("reaped"), extra=[p["id"] for p in waiting])
-                alive[n] = True
+            st["resume"].pop(n)
+            waiting = st["pending"].pop(n, []) if r.get("reaped") else []  # hand queued posts to the resumed run
+            start(c, n, [{"id": r["post"], "thread": r.get("thread"), "from": r.get("from"), "model": r.get("model")}], to,
+                  resume=r["session"], reaped=r.get("reaped"), extra=[p["id"] for p in waiting])
+            alive[n] = True
         for n in list(st["pending"]):
             if n in alive or n in st.get("resume", {}): continue
             got = STATE / "delivered" / n  # posts the inbox hook already handed this agent mid-run

@@ -69,7 +69,7 @@ if [ "$SERVICE" = 1 ]; then
     "$(dirname "$(command -v claude)")" > "$U/hive-starter.service.d/local.conf"
   [ "$(loginctl show-user "$(id -un)" -p Linger --value 2>/dev/null)" = yes ] || loginctl enable-linger "$(id -un)" 2>/dev/null \
     || echo "NOTE: the Hive stops when you log out until an admin runs: sudo loginctl enable-linger $(id -un)"
-  for _ in 1 2 3 4 5 6 7 8 9 10; do [ -e "$XDG_RUNTIME_DIR/bus" ] && break; sleep 1; done  # the user manager starts after linger, not with it
+  for _ in 1 2 3 4 5 6 7 8 9 10; do systemctl --user show-environment >/dev/null 2>&1 && break; sleep 1; done  # the user manager starts after linger, not with it; the bus socket alone needs dbus-user-session
   systemctl --user daemon-reload
   systemctl --user enable --now hive-starter
 fi

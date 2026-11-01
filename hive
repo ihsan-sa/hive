@@ -39,6 +39,7 @@ def cmd_post(a):
     pid = dt.datetime.now().strftime("%m%d%H%M") + secrets.token_hex(2)
     p = {"id": pid, "at": now(), "from": a.as_ or os.environ.get("HIVE_NAME", "anon"),
          "to": ["@" + n for n in dict.fromkeys(to)], "thread": a.thread or pid, "text": text}
+    if a.model: p["model"] = a.model
     with BOARD.open("a") as f:
         fcntl.flock(f, fcntl.LOCK_EX); f.write(json.dumps(p) + "\n")
     print(pid)
@@ -202,8 +203,9 @@ if len(sys.argv) == 1 or (sys.argv[1].startswith("-") and sys.argv[1] not in ("-
 
 ap = argparse.ArgumentParser(prog="hive", description="With no command: open the door, a Claude Code session that talks to the hive for you. Commands: the board itself.")
 sp = ap.add_subparsers(required=True)
-p = sp.add_parser("post", help="hive post [--to @a,@b] [--thread T] text   (@mentions in text wake those agents)")
+p = sp.add_parser("post", help="hive post [--to @a,@b] [--thread T] [--model sonnet] text   (@mentions in text wake those agents; --model picks the model of any run this post starts)")
 p.add_argument("--to"); p.add_argument("--thread"); p.add_argument("--as", dest="as_", help="from name (default $HIVE_NAME)")
+p.add_argument("--model", choices=["opus", "sonnet", "haiku", "fable"], help="model for any run this post starts (default: the login's)")
 p.add_argument("text", nargs="*"); p.set_defaults(f=cmd_post)
 p = sp.add_parser("read", help="hive read [--thread T] [--since 2h|ISO] [--from X] [--to X] [--id ID] [-n 30]")
 p.add_argument("--thread"); p.add_argument("--since"); p.add_argument("--from", dest="from_"); p.add_argument("--to")
