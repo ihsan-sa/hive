@@ -1,0 +1,13 @@
+[Unit]
+Description=Hive starter (board watcher)
+
+[Service]
+ExecStart=/usr/bin/python3 %h/core/starter.py
+WorkingDirectory=%h
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+Restart=always
+RestartSec=5
+KillMode=process
+
+[Install]
+WantedBy=default.target

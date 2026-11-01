@@ -1,0 +1,1 @@
+{"name": "extras", "description": "Optional helpers: a reviewer prompt for one commit, a safe merge helper, a usage pace readout, and prompts for a sweep, a step-back and a notes cleanup.", "bin": {"hive-extras": "hive-extras"}}

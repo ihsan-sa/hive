@@ -1,0 +1,290 @@
+#!/usr/bin/env python3
+"""hive-extras: The extras (review, merge line, pacing, sweep, step-back, tribunal, filer, practice)
+as optional helpers for Hive agents. Helpers only: nothing here gates anything, and the core never
+depends on it. Prompt commands print a prompt; --run feeds it to a fresh `claude -p`."""
+import argparse, json, os, subprocess as sp, sys, time
+from datetime import datetime, timezone
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+HOME = Path.home()
+KB = Path(os.environ.get("HIVE_KB", HOME / "kb"))
+CLIP = 60000  # characters of diff/digest put into a prompt
+
+
+def sh(args, cwd=None, check=True):
+    r = sp.run(args, cwd=cwd, text=True, capture_output=True)
+    if check and r.returncode:
+        sys.exit(f"hive-extras: {' '.join(args)} failed ({r.returncode}):\n{r.stderr.strip()}")
+    return r.stdout
+
+
+def prompt(name, **kw):
+    t = (HERE / "prompts" / f"{name}.md").read_text()
+    for k, v in kw.items():
+        t = t.replace("{" + k + "}", str(v))
+    return t
+
+
+def clip(s, n=CLIP):
+    return s if len(s) <= n else s[:n] + f"\n[... clipped, {len(s) - n} more characters]\n"
+
+
+def emit(text, a, cwd=None):
+    """Print the prompt, or with --run hand it to a fresh claude -p and print its answer."""
+    if not getattr(a, "run", False):
+        print(text)
+        return
+    cmd = ["claude", "-p", "--permission-mode", "bypassPermissions"]
+    if a.model:
+        cmd += ["--model", a.model]
+    r = sp.run(cmd, input=text, text=True, cwd=cwd or HOME)  # prompt on stdin (claude -p waits 3s otherwise)
+    sys.exit(r.returncode)
+
+
+def goals_of(repo):
+    for p in ("goals.md", ".hive/goals.md"):
+        f = Path(repo) / p
+        if f.exists():
+            return clip(f.read_text(), 6000)
+    return "(none found)"
+
+
+# --- review -----------------------------------------------------------------
+def cmd_review(a):
+    repo = str(Path(a.repo).resolve())
+    sha = sh(["git", "rev-parse", "--verify", a.commit + "^{commit}"], cwd=repo).strip()
+    diff = sh(["git", "show", "--stat", "--patch", "--format=commit %H%nAuthor: %an%nDate: %ad%n%n%B", sha], cwd=repo)
+    text = prompt("review", repo=repo, commit=sha, ask=a.ask or "(not given; infer it from the commit message)",
+                  goals=goals_of(repo), diff="```diff\n" + clip(diff) + "\n```")
+    emit(text, a, cwd=repo)
+
+
+# --- merge line -------------------------------------------------------------
+def cmd_merge(a):
+    repo = str(Path(a.repo).resolve())
+    g = lambda *x, check=True: sh(["git", *x], cwd=repo, check=check)
+    say = lambda m: print(f"merge: {m}", flush=True)
+    if g("status", "--porcelain", "--untracked-files=no").strip():
+        sys.exit("merge: the checkout has uncommitted changes; commit or stash them first")
+    start = g("rev-parse", "--abbrev-ref", "HEAD").strip()
+    if start == "HEAD":
+        start = g("rev-parse", "HEAD").strip()
+    main, remote, br = a.main, a.remote, a.branch
+    has_remote = bool(g("remote").split()) and remote in g("remote").split()
+    base = f"{remote}/{main}" if has_remote else main
+    try:
+        if has_remote:
+            say(f"fetch {remote}")
+            g("fetch", remote)
+            if g("rev-parse", "--verify", "--quiet", main, check=False).strip():
+                g("checkout", "--quiet", main)
+                g("merge", "--ff-only", "--quiet", base)
+        g("checkout", "--quiet", br)
+        say(f"rebase {br} onto {base}")
+        r = sp.run(["git", "rebase", base], cwd=repo, text=True, capture_output=True)
+        if r.returncode:
+            sp.run(["git", "rebase", "--abort"], cwd=repo, capture_output=True)
+            sys.exit(f"merge: rebase onto {base} conflicts; resolve by hand (rebase aborted, {br} unchanged)\n{r.stdout[-2000:]}")
+        if a.test:
+            say(f"test: {a.test}")
+            t = sp.run(["nice", "-n", "10", "sh", "-c", a.test], cwd=repo)
+            say(f"tests {'passed' if t.returncode == 0 else 'FAILED (exit %d)' % t.returncode}")
+            if t.returncode and not a.anyway:
+                sys.exit("merge: stopped before merging. The tests are evidence, not a gate: if you judge the "
+                         "change should land anyway, re-run with --anyway (and say why in your thread).")
+        log = g("log", "--oneline", f"{main}..{br}").strip()
+        if not log:
+            say(f"{br} has nothing new over {main}")
+            return
+        print(log)
+        if a.dry_run:
+            say("dry run: not merging or pushing")
+            return
+        g("checkout", "--quiet", main)
+        g("merge", "--ff-only", "--quiet", br)
+        say(f"{main} fast-forwarded to {g('rev-parse', '--short', 'HEAD').strip()}")
+        if has_remote and not a.no_push:
+            say(f"push {remote} {main} (never forced)")
+            g("push", remote, f"{main}:{main}")
+    finally:
+        sp.run(["git", "checkout", "--quiet", start], cwd=repo, capture_output=True)
+
+
+# --- pace -------------------------------------------------------------------
+WEEK = 7 * 86400
+
+
+def live_week(login):
+    """GET the weekly window from the usage endpoint the starter reads. Uses the token, never prints it."""
+    import urllib.request
+    tok = json.loads((Path(login).expanduser() / ".credentials.json").read_text())["claudeAiOauth"]["accessToken"]
+    req = urllib.request.Request("https://api.anthropic.com/api/oauth/usage",
+                                 headers={"Authorization": f"Bearer {tok}", "anthropic-beta": "oauth-2025-04-20"})
+    w = json.load(urllib.request.urlopen(req, timeout=15))["seven_day"]
+    return w.get("used_percentage", w.get("utilization")), w.get("resets_at")
+
+
+def cmd_pace(a):
+    cache = HOME / ".cache/hive-extras/week.json"
+    u = json.loads((HOME / ".hive/usage.json").read_text()) if (HOME / ".hive/usage.json").exists() else {}
+    known = json.loads(cache.read_text()) if cache.exists() else {}
+    resets = a.resets or known.get("resets_at")
+    if a.live:
+        try:
+            pct, resets_live = live_week("~/.claude")
+            u["~/.claude (live)"] = pct
+            resets = resets_live or resets
+        except Exception as e:
+            print(f"pace: live read failed ({type(e).__name__}); using ~/.hive/usage.json")
+    if resets and resets != known.get("resets_at"):
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        cache.write_text(json.dumps({"resets_at": resets}))
+    checked = u.pop("_checked", None)
+    if checked:
+        print(f"usage.json checked {int((time.time() - checked) / 60)} min ago")
+    elapsed = None
+    if resets:
+        end = datetime.fromisoformat(resets.replace("Z", "+00:00"))
+        left = (end - datetime.now(timezone.utc)).total_seconds()
+        while left < 0:  # a reset we cached has passed: the next is a week later
+            left += WEEK
+        elapsed = 100 * (1 - left / WEEK)
+        print(f"week resets in {left / 3600:.1f} h; {elapsed:.0f}% of the week has passed")
+    else:
+        print("week reset time unknown: pass --resets ISO once, or --live (it is cached after)")
+    for k, v in u.items():
+        if v is None:
+            print(f"{k}: weekly usage unknown")
+            continue
+        line = f"{k}: {v:.0f}% of the week used"
+        if elapsed is not None and elapsed < 5:
+            line += f" with {elapsed:.1f}% of the week gone: too early to read a pace"
+        elif elapsed:
+            r = v / elapsed
+            hint = ("well under pace: room for bigger or parallel work" if r < 0.8 else
+                    "on pace" if r <= 1.1 else
+                    "ahead of pace: prefer small, cheap work and fewer mentions")
+            line += f" vs {elapsed:.0f}% elapsed (x{r:.2f}): {hint}"
+        if v >= 90:
+            line += ". Near the starter's stop line: keep what's left for finishing work already written."
+        print(line)
+    print("This is advice; the starter's own stop line is the only limit.")
+
+
+# --- sweep / stepback / tribunal / filer / practice ---------------------------
+def cmd_sweep(a):
+    parts = []
+    r = sp.run(["hive", "read", "--since", a.since, "-n", str(a.posts)], text=True, capture_output=True)
+    parts.append(f"## Board, last {a.since}\n" + (r.stdout.strip() or r.stderr.strip() or "(nothing)"))
+    lg = HOME / "log.jsonl"
+    if lg.exists():
+        parts.append("## ~/log.jsonl (last 40)\n" + "\n".join(lg.read_text().splitlines()[-40:]))
+    if KB.exists():
+        notes = sorted((p for p in KB.rglob("*.md")), key=lambda p: p.stat().st_mtime, reverse=True)[:15]
+        parts.append("## Newest kb notes\n" + "\n".join(
+            f"- {p.relative_to(KB)} ({datetime.fromtimestamp(p.stat().st_mtime):%m-%d %H:%M})" for p in notes))
+    pj = HOME / "projects"
+    for g in sorted(pj.glob("*/goals.md")) if pj.exists() else []:
+        parts.append(f"## Goals: {g.parent.name}\n" + clip(g.read_text(), 3000))
+    emit(prompt("sweep", digest=clip("\n\n".join(parts))), a)
+
+
+def cmd_stepback(a):
+    p = Path(a.project).resolve()
+    log = sh(["git", "log", "--oneline", "-40"], cwd=p, check=False) or "(no git history)"
+    emit(prompt("stepback", project=p.name, path=p, goals=goals_of(p), log=log), a, cwd=p)
+
+
+def cmd_tribunal(a):
+    step = Path(a.step).read_text() if Path(a.step).is_file() else a.step
+    others = ""
+    if a.others:
+        others = "\n## The other seats' votes (round 2: weigh them, change your mind if they found something)\n" + \
+                 (Path(a.others).read_text() if Path(a.others).is_file() else a.others) + "\n"
+    text = prompt("tribunal", step="```\n" + clip(step) + "\n```", others=others)
+    if not a.run or a.seats == 1:
+        return emit(text, a)
+    votes = []
+    for i in range(a.seats):  # one at a time, to stay light on the shared machine
+        cmd = ["claude", "-p", "--permission-mode", "bypassPermissions"] + (["--model", a.model] if a.model else [])
+        out = sp.run(cmd, input=text, text=True, capture_output=True, cwd=HOME).stdout
+        print(f"--- seat {i + 1}\n{out.strip()}\n")
+        v = [l.split(":", 1)[1].strip().lower() for l in out.splitlines() if l.startswith("VOTE:")]
+        votes.append(v[-1] if v else "none")
+    print("votes:", ", ".join(votes), "| majority:", max(set(votes), key=votes.count))
+
+
+def cmd_filer(a):
+    emit(prompt("filer", kb=KB), a)
+
+
+def cmd_practice(a):
+    src = HERE / "practice"
+    if a.file:
+        dst = KB / "practice"
+        dst.mkdir(parents=True, exist_ok=True)
+        for f in sorted(src.glob("*.md")):
+            if (dst / f.name).exists():
+                print(f"kept {dst / f.name} (exists)")
+            else:
+                (dst / f.name).write_text(f.read_text())
+                print(f"filed {dst / f.name}")
+        return
+    names = [a.name] if a.name else sorted(f.stem for f in src.glob("*.md"))
+    for n in names:
+        print((src / f"{n}.md").read_text())
+
+
+def main():
+    ap = argparse.ArgumentParser(prog="hive-extras", description=__doc__)
+    sub = ap.add_subparsers(dest="cmd", required=True)
+
+    def runnable(p):
+        p.add_argument("--run", action="store_true", help="feed the prompt to a fresh `claude -p` (costs usage)")
+        p.add_argument("--model", help="model for --run")
+        return p
+
+    p = runnable(sub.add_parser("review", help="reviewer prompt for one commit"))
+    p.add_argument("repo"); p.add_argument("commit", nargs="?", default="HEAD")
+    p.add_argument("--ask", help="what the change was for")
+    p.set_defaults(f=cmd_review)
+
+    p = sub.add_parser("merge", help="fetch, rebase onto main, test, fast-forward, push (never force)")
+    p.add_argument("repo"); p.add_argument("branch")
+    p.add_argument("--test", help="shell command to run after the rebase (evidence, not a gate)")
+    p.add_argument("--anyway", action="store_true", help="merge even though --test failed (your call)")
+    p.add_argument("--main", default="main"); p.add_argument("--remote", default="origin")
+    p.add_argument("--no-push", action="store_true"); p.add_argument("--dry-run", action="store_true")
+    p.set_defaults(f=cmd_merge)
+
+    p = sub.add_parser("pace", help="weekly usage vs week elapsed (advice only)")
+    p.add_argument("--resets", help="ISO time the weekly window resets (cached)")
+    p.add_argument("--live", action="store_true", help="read usage and reset time from the usage endpoint now")
+    p.set_defaults(f=cmd_pace)
+
+    p = runnable(sub.add_parser("sweep", help="sweep prompt with a digest of board, log, kb, goals"))
+    p.add_argument("--since", default="24h"); p.add_argument("--posts", type=int, default=80)
+    p.set_defaults(f=cmd_sweep)
+
+    p = runnable(sub.add_parser("stepback", help="step-back prompt for one project"))
+    p.add_argument("project"); p.set_defaults(f=cmd_stepback)
+
+    p = runnable(sub.add_parser("tribunal", help="one panel seat's prompt for a step (text or file)"))
+    p.add_argument("step"); p.add_argument("--others", help="round 2: the other seats' votes (text or file)")
+    p.add_argument("--seats", type=int, default=3, help="with --run: seats to run, one after another")
+    p.set_defaults(f=cmd_tribunal)
+
+    p = runnable(sub.add_parser("filer", help="prompt to consolidate ~/kb"))
+    p.set_defaults(f=cmd_filer)
+
+    p = sub.add_parser("practice", help="print the practice notes (or --file them into ~/kb/practice)")
+    p.add_argument("name", nargs="?"); p.add_argument("--file", action="store_true")
+    p.set_defaults(f=cmd_practice)
+
+    a = ap.parse_args()
+    a.f(a)
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,220 @@
+#!/usr/bin/env python3
+"""hive: the board CLI. Board = ~/board.jsonl, one JSON post per line: {id, at, from, to, thread, text}."""
+import argparse, datetime as dt, fcntl, json, os, re, secrets, shutil, subprocess, sys, time, uuid
+from pathlib import Path
+
+HOME = Path.home()
+BOARD, RUN, STATE = HOME / "board.jsonl", HOME / "run", HOME / ".hive"
+CORE, MODULES, BIN = HOME / "core", HOME / "modules", HOME / ".local" / "bin"
+MENTION = re.compile(r"(?<![\w.])@([a-z0-9][a-z0-9_-]*)", re.I)
+
+def now(): return dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
+
+def posts():
+    if not BOARD.exists(): return
+    for line in BOARD.open(errors="replace"):
+        try: yield json.loads(line)
+        except ValueError: pass
+
+def names(to):  # "to" may be a list or a string; normalise to bare lowercase names
+    if isinstance(to, str): to = to.replace(",", " ").split()
+    return [t.lstrip("@").lower() for t in (to or [])]
+
+def show(p):
+    to = " ".join("@" + n for n in names(p.get("to")))
+    print(f"[{p.get('id')}] {p.get('at','')[:19]} {p.get('from')}{' -> ' + to if to else ''} (thread {p.get('thread')})\n  "
+          + str(p.get("text", "")).replace("\n", "\n  "))
+
+def since_ok(p, since):
+    if not since: return True
+    m = re.fullmatch(r"(\d+)([mhd])", since)
+    if m:
+        unit = {"m": "minutes", "h": "hours", "d": "days"}[m[2]]
+        since = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(**{unit: int(m[1])})).isoformat()
+    return p.get("at", "") > since
+
+def cmd_post(a):
+    text = " ".join(a.text) if a.text else sys.stdin.read()
+    to = names(a.to) + [m.lower() for m in MENTION.findall(text)]
+    pid = dt.datetime.now().strftime("%m%d%H%M") + secrets.token_hex(2)
+    p = {"id": pid, "at": now(), "from": a.as_ or os.environ.get("HIVE_NAME", "anon"),
+         "to": ["@" + n for n in dict.fromkeys(to)], "thread": a.thread or pid, "text": text}
+    with BOARD.open("a") as f:
+        fcntl.flock(f, fcntl.LOCK_EX); f.write(json.dumps(p) + "\n")
+    print(pid)
+
+def cmd_read(a):
+    sel = [p for p in posts() if (not a.thread or p.get("thread") == a.thread or p.get("id") == a.thread)
+           and (not a.id or p.get("id") == a.id) and since_ok(p, a.since)
+           and (not a.from_ or p.get("from") == a.from_) and (not a.to or a.to.lstrip("@").lower() in names(p.get("to")))]
+    for p in sel[-a.n:]: show(p)
+
+def cmd_search(a):
+    words = [w.lower() for w in a.words]
+    for p in posts():
+        blob = json.dumps(p).lower()
+        if all(w in blob for w in words): show(p)
+
+def cmd_who(a):
+    for f in sorted(RUN.glob("*.json")):
+        r = json.loads(f.read_text())
+        try: os.kill(r["pid"], 0); alive = "running"
+        except OSError: alive = "gone"
+        print(f"@{r['name']:<16} {alive:<8} since {r['at'][:19]}  woken by {r['post']}  login {r['login']}")
+    u = STATE / "usage.json"
+    if u.exists():
+        for k, v in json.loads(u.read_text()).items():
+            if k != "_checked": print(f"weekly usage {k}: {'unknown' if v is None else f'{v:.0f}%'}")
+
+def cmd_wait(a):
+    """Block until a post made from now on is addressed to --to (default: you) or lands in --thread; print it.
+    Run it in the background to be woken: exit 0 on a post, 1 on --timeout."""
+    me = os.environ.get("HIVE_NAME", "").lower()
+    who, start, end = (a.to or me).lstrip("@").lower(), now(), time.time() + a.timeout
+    while time.time() < end:
+        got = [p for p in posts() if p.get("at", "") >= start and str(p.get("from", "")).lower() != me
+               and ((a.thread and p.get("thread") == a.thread) or (not a.thread and who in names(p.get("to"))))]
+        if got:
+            for p in got: show(p)
+            return
+        time.sleep(3)
+    print("no post before the timeout"); sys.exit(1)
+
+def door(extra):
+    """The person's way in: an ordinary Claude Code session in ~, told it is the door (door.md), signed as person.
+    `hive` resumes the same conversation, `hive --new` starts another; other args go to claude."""
+    st = STATE / "starter.json"
+    if not st.exists() or time.time() - st.stat().st_mtime > 60:
+        print("Note: the starter isn't running, so posts won't start agents. Try: systemctl --user start hive-starter", file=sys.stderr)
+    try: login = str(Path(json.loads((CORE / "config.json").read_text())["logins"][0]).expanduser())
+    except (OSError, ValueError, KeyError, IndexError): login = str(HOME / ".claude")
+    STATE.mkdir(exist_ok=True)
+    f = STATE / "door_session"
+    if "--new" in extra or not f.exists(): f.write_text(str(uuid.uuid4()))
+    sid, extra = f.read_text().strip(), [x for x in extra if x != "--new"]
+    said = any(Path(login, "projects").glob(f"*/{sid}.jsonl"))  # resume only a session that holds a conversation
+    system = (CORE / "orientation.md").read_text() + "\n\n" + (CORE / "door.md").read_text()
+    os.chdir(HOME)
+    os.environ.update(HIVE_NAME="person", HIVE_DOOR="1", CLAUDE_CONFIG_DIR=login)
+    os.execvp("claude", ["claude", "--append-system-prompt", system, "--allowedTools", "Bash(hive *)",
+                         "--resume" if said else "--session-id", sid, *extra])
+
+def manifest(d):
+    try: return json.loads((d / "module.json").read_text())
+    except (OSError, ValueError): return {}
+
+def catalog():
+    """What can be added: core's modules.json (name -> repo, about, needs) plus what ships in core/modules."""
+    try: c = json.loads((CORE / "modules.json").read_text())
+    except (OSError, ValueError): c = {}
+    for d in sorted((CORE / "modules").glob("*/")): c.setdefault(d.name, {"about": manifest(d).get("description", ""), "bundled": True})
+    return c
+
+def module_links(d):
+    """(link, target) pairs a module wants: its commands on PATH, its skills in each login."""
+    m, out = manifest(d), []
+    bins = {k: d / v for k, v in m.get("bin", {}).items()} or {f.name: f for f in sorted((d / "bin").glob("*")) if os.access(f, os.X_OK) and f.is_file()}
+    out += [(BIN / k, t) for k, t in bins.items()]
+    try: logins = json.loads((CORE / "config.json").read_text())["logins"]
+    except (OSError, ValueError, KeyError): logins = ["~/.claude"]
+    for s in m.get("provides", {}).get("skills", []):
+        out += [(Path(l).expanduser() / "skills" / Path(s).parent.name, (d / s).parent) for l in logins]
+    return out
+
+def cmd_module(a):
+    """Modules are optional folders in ~/modules with a module.json: commands, skills, docs. The core never uses them."""
+    cat = catalog()
+    if a.do == "list":
+        have = sorted(d for d in MODULES.glob("*/") if (d / "module.json").exists())
+        for d in have: print(f"{d.name:<14} installed  {manifest(d).get('description', '')[:110]}")
+        for n, c in cat.items():
+            if not (MODULES / n).exists(): print(f"{n:<14} available  {c.get('about', '')[:110]}" + (f" [needs {c['needs']}]" if c.get("needs") else ""))
+        return
+    if not a.name: sys.exit(f"hive module {a.do}: name which module")
+    name = re.sub(r"\.git$", "", a.name.rstrip("/").rsplit("/", 1)[-1]).removeprefix("hive-")
+    d = MODULES / name
+    if a.do == "remove":
+        if not d.is_dir(): sys.exit(f"{name} isn't installed")
+        if (d / ".git").exists() and subprocess.run(["git", "-C", str(d), "status", "--porcelain"], capture_output=True, text=True).stdout.strip():
+            sys.exit(f"{d} has uncommitted changes; commit or discard them first")
+        for link, _ in module_links(d): link.unlink(missing_ok=True)
+        shutil.rmtree(d); print(f"removed {name}")
+        return
+    if not d.exists():
+        MODULES.mkdir(exist_ok=True)
+        c = cat.get(a.name, {})
+        if c.get("bundled"): shutil.copytree(CORE / "modules" / a.name, d)
+        else:
+            url = c.get("repo") or (a.name if "/" in a.name else None)
+            if not url: sys.exit(f"no module {a.name}; see hive module list, or give a git URL")
+            if subprocess.run(["git", "clone", "-q", "--depth", "1", url, str(d)]).returncode:
+                shutil.rmtree(d, ignore_errors=True); sys.exit(f"couldn't clone {url}; {a.name} wasn't added")
+    if not manifest(d): print(f"note: {d} has no module.json, so nothing was linked")
+    for link, target in module_links(d):
+        link.parent.mkdir(parents=True, exist_ok=True)
+        link.unlink(missing_ok=True); link.symlink_to(target); print(f"linked {link} -> {target}")
+    m = manifest(d)
+    print(f"{name}: {m.get('description', '')[:300]}")
+    for doc in m.get("provides", {}).get("procedures", []) or ["README.md"]: print(f"read first: {d / doc}")
+    needs = cat.get(a.name, {}).get("needs")
+    if needs: print(f"needs: {needs}")
+
+DONE = re.compile(r"\b(done|merged|closed|released|shipped|fixed|no action|nothing to do|stopping)\b", re.I)
+
+def jobs_of(name):
+    """Live processes that carry HIVE_NAME=name (nohup'd sims and waiters too)."""
+    key, n = f"HIVE_NAME={name}".encode(), 0
+    for d in Path("/proc").iterdir():
+        try: n += d.name.isdigit() and key in (d / "environ").read_bytes().split(b"\0")
+        except OSError: pass
+    return n
+
+def cmd_stalled(a):
+    """Threads gone quiet: last post older than --quiet, newer than --within, nobody in it running or queued,
+    and the last post doesn't read as finished. A lead for the keeper, not a verdict."""
+    def ago(s):
+        m = re.fullmatch(r"(\d+)([mhd])", s); return dt.timedelta(**{{"m": "minutes", "h": "hours", "d": "days"}[m[2]]: int(m[1])})
+    t_now = dt.datetime.now(dt.timezone.utc)
+    quiet, within = (t_now - ago(a.quiet)).isoformat(), (t_now - ago(a.within)).isoformat()
+    threads = {}
+    for p in posts(): threads.setdefault(p.get("thread") or p.get("id"), []).append(p)
+    try: st = json.loads((STATE / "starter.json").read_text())
+    except (OSError, ValueError): st = {}
+    queued = set(st.get("pending", {})) | set(st.get("resume", {}))
+    live = set()
+    for f in RUN.glob("*.json"):
+        try: r = json.loads(f.read_text()); os.kill(r["pid"], 0); live.add(r["name"])
+        except (OSError, ValueError, KeyError): pass
+    ext = {"person", "starter", "anon", "all"}
+    for t, ps in sorted(threads.items(), key=lambda kv: kv[1][-1].get("at", "")):
+        last = ps[-1]
+        if not (within < last.get("at", "") < quiet) or t in ("keeper",): continue
+        who = list(dict.fromkeys(str(p.get("from", "")).lower() for p in ps if str(p.get("from", "")).lower() not in ext))
+        if not who or any(w in live or w in queued for w in who): continue
+        if DONE.search(str(last.get("text", ""))[:300]) and last.get("from") not in ("person", "hives"): continue
+        jobs = {w: jobs_of(w) for w in who}
+        print(f"{t}  last {last.get('at','')[:16]} by {last.get('from')}  agents {' '.join(who[-4:])}"
+              + (f"  jobs alive: {', '.join(f'{w}:{n}' for w, n in jobs.items() if n)}" if any(jobs.values()) else "")
+              + "\n  " + str(last.get("text", ""))[:240].replace("\n", " "))
+
+if len(sys.argv) == 1 or (sys.argv[1].startswith("-") and sys.argv[1] not in ("-h", "--help")):
+    door(sys.argv[1:])  # flags pass through to claude; a mistyped command must not open a session in an agent's shell
+
+ap = argparse.ArgumentParser(prog="hive", description="With no command: open the door, a Claude Code session that talks to the hive for you. Commands: the board itself.")
+sp = ap.add_subparsers(required=True)
+p = sp.add_parser("post", help="hive post [--to @a,@b] [--thread T] text   (@mentions in text wake those agents)")
+p.add_argument("--to"); p.add_argument("--thread"); p.add_argument("--as", dest="as_", help="from name (default $HIVE_NAME)")
+p.add_argument("text", nargs="*"); p.set_defaults(f=cmd_post)
+p = sp.add_parser("read", help="hive read [--thread T] [--since 2h|ISO] [--from X] [--to X] [--id ID] [-n 30]")
+p.add_argument("--thread"); p.add_argument("--since"); p.add_argument("--from", dest="from_"); p.add_argument("--to")
+p.add_argument("--id"); p.add_argument("-n", type=int, default=30); p.set_defaults(f=cmd_read)
+p = sp.add_parser("search", help="hive search words...  (all words, case-insensitive)")
+p.add_argument("words", nargs="+"); p.set_defaults(f=cmd_search)
+p = sp.add_parser("who", help="who's running, and usage"); p.set_defaults(f=cmd_who)
+p = sp.add_parser("wait", help="hive wait [--to X] [--thread T] [--timeout 3600]: block until a new post for X or in T arrives")
+p.add_argument("--to"); p.add_argument("--thread"); p.add_argument("--timeout", type=int, default=3600); p.set_defaults(f=cmd_wait)
+p = sp.add_parser("module", help="hive module list | add NAME|GIT-URL | remove NAME")
+p.add_argument("do", choices=["list", "add", "remove"]); p.add_argument("name", nargs="?"); p.set_defaults(f=cmd_module)
+p = sp.add_parser("stalled", help="hive stalled [--quiet 2h] [--within 3d]: quiet threads nobody is on")
+p.add_argument("--quiet", default="2h"); p.add_argument("--within", default="3d"); p.set_defaults(f=cmd_stalled)
+a = ap.parse_args(); a.f(a)

@@ -1,0 +1,2 @@
+# extras
+Optional helpers. Nothing here gates anything. `hive-extras <cmd>`: `review <repo> [commit]` (a reviewer prompt for one commit), `merge <repo> <branch>` (rebase, test, fast-forward, push, never force), `pace` (weekly usage against the week gone), and prompts for `sweep`, `stepback`, `tribunal`, `filer`, `practice`. Prompt commands print a prompt; `--run` hands it to a fresh Claude session, which costs usage. See `hive-extras --help`.

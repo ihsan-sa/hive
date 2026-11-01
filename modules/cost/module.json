@@ -1,0 +1,1 @@
+{"name": "cost", "description": "What the hive's model use would cost at API list prices, per project, thread, agent or day, from the transcripts Claude Code keeps.", "bin": {"hive-cost": "cost.py"}}
