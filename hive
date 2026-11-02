@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """hive: the board CLI. Board = ~/board.jsonl, one JSON post per line: {id, at, from, to, thread, text}."""
-import argparse, datetime as dt, fcntl, json, os, re, secrets, shutil, subprocess, sys, time, uuid
+import argparse, datetime as dt, fcntl, json, os, re, secrets, shutil, socket, subprocess, sys, tempfile, time, urllib.request, uuid
 from pathlib import Path
 
 HOME = Path.home()
 BOARD, RUN, STATE = HOME / "board.jsonl", HOME / "run", HOME / ".hive"
 CORE, MODULES, BIN = HOME / "core", HOME / "modules", HOME / ".local" / "bin"
+FILES, MAX_FILE = HOME / "files", 100 * 2**20  # a post's files, in ~/files/<post id>/; not in the backup of ~
 MENTION = re.compile(r"(?<![\w.])@([a-z0-9][a-z0-9_-]*)", re.I)
+CODE = re.compile(r"```.*?```|`[^`\n]*`", re.S)  # a name in backticks is being written about, not called
 
 def now(): return dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
 
@@ -24,6 +26,28 @@ def show(p):
     to = " ".join("@" + n for n in names(p.get("to")))
     print(f"[{p.get('id')}] {p.get('at','')[:19]} {p.get('from')}{' -> ' + to if to else ''} (thread {p.get('thread')})\n  "
           + str(p.get("text", "")).replace("\n", "\n  "))
+    for f in p.get("files") or []: print(f"  file: {f.get('path')} ({f.get('size', 0)} bytes)")
+
+def attachable(raw):
+    """A readable file under the size cap, and not from a dot directory or dotfile in ~: those hold logins and tokens,
+    and a post's files can go out to Slack and the public dashboard."""
+    src = Path(raw).expanduser().resolve()
+    if not src.is_file(): sys.exit(f"hive post: no such file: {raw}")
+    if src.is_relative_to(HOME) and any(x.startswith(".") for x in src.relative_to(HOME).parts):
+        sys.exit(f"hive post: won't attach {raw}: dotfiles in ~ can hold credentials")
+    if src.stat().st_size > MAX_FILE: sys.exit(f"hive post: {raw} is over {MAX_FILE // 2**20} MB")
+    return src
+
+def attach(srcs, pid):
+    out = []
+    for i, src in enumerate(srcs):
+        name = re.sub(r"[^A-Za-z0-9_.-]+", "_", src.name).lstrip(".-") or "file"
+        if any(f["name"] == name for f in out): name = f"{i}-{name}"
+        dest = FILES / pid / name
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(src, dest)
+        out.append({"name": name, "path": str(dest), "size": dest.stat().st_size})
+    return out
 
 def since_ok(p, since):
     if not since: return True
@@ -33,22 +57,71 @@ def since_ok(p, since):
         since = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(**{unit: int(m[1])})).isoformat()
     return p.get("at", "") > since
 
+HASH_NAME = re.compile(r"[a-z][0-9a-f]{4,}")  # what new/claude/codex/free/warden hand out (a9aba, c12cd, f12cd, w0e1f)
+
+def agents(c):
+    """Same rule as known_agents in starter.py: new, claude, codex, free, the warden, anyone who has run, except past accidents."""
+    found = {"new", "claude", "codex", "free", "warden", "all", "here"}
+    try:
+        for line in (HOME / "log.jsonl").open(errors="replace"):
+            if '"start"' in line:
+                try: found.add(json.loads(line)["name"].lower())
+                except (ValueError, KeyError, AttributeError, TypeError): pass
+    except OSError: pass
+    return found - set(c.get("not_agents", []))
+
+def receipt(to, ignored, ext, me):
+    """One line on stderr: who this post is about to start or reach, so a slip shows at once."""
+    start, reach = [], []
+    for n in to:
+        if n == "all": reach.append("all running agents in the hive")
+        elif n == "here": reach.append("all running agents in this thread")
+        elif n == "new": start.append("a new agent")
+        elif n == "warden": start.append("a new warden")
+        elif n == "free": start.append("a new agent on a free OpenRouter model")
+        elif n == "claude": start.append("a new agent on Claude")
+        elif n == "codex": start.append("a new agent on Codex")
+        elif n in ext or n == me: continue
+        elif (RUN / f"{n}.json").exists(): reach.append(n)
+        else: start.append(n)
+    bits = [f"starts {', '.join(start)}"] * bool(start) + [f"reaches {', '.join(reach)}"] * bool(reach)
+    if ignored: bits.append(f"ignored {', '.join(ignored)}: no such agent (--to starts one under a code like a1b2c)")
+    if bits: print("hive post: " + "; ".join(bits), file=sys.stderr)
+
 def cmd_post(a):
     text = " ".join(a.text) if a.text else sys.stdin.read()
-    to = names(a.to) + [m.lower() for m in MENTION.findall(text)]
+    try: c = read_cfg()
+    except (OSError, ValueError): c = {}
+    ext = set(c.get("external", []))
+    said = list(dict.fromkeys(m.lower() for m in MENTION.findall(CODE.sub(" ", text))))
+    asked = names(a.to)
+    if (bad := [n for n in asked if n not in ext and n not in {"new", "claude", "codex", "free", "warden"} and not HASH_NAME.fullmatch(n) and n not in agents(c)]):
+        sys.exit(f"hive post: {', '.join(bad)}: an agent's name is a letter and 4+ hex digits (a9aba), never a word. "
+                 "Use new (or claude, codex, free) for a fresh agent; --to takes a name that has run or a code like that.")
+    known = agents(c) if any(n not in asked and n not in ext for n in said) else set()
+    ignored = [n for n in said if n not in asked and n not in ext and n not in known]
+    to = asked + [n for n in said if n not in ignored]
     pid = dt.datetime.now().strftime("%m%d%H%M") + secrets.token_hex(2)
+    files = attach([attachable(f) for f in a.file or []], pid)
+    if files and not text.strip(): text = "Attached: " + ", ".join(f["name"] for f in files)
     p = {"id": pid, "at": now(), "from": a.as_ or os.environ.get("HIVE_NAME", "anon"),
          "to": ["@" + n for n in dict.fromkeys(to)], "thread": a.thread or pid, "text": text}
     if a.model: p["model"] = a.model
+    if files: p["files"] = files
     with BOARD.open("a") as f:
         fcntl.flock(f, fcntl.LOCK_EX); f.write(json.dumps(p) + "\n")
     print(pid)
+    me = (a.as_ or os.environ.get("HIVE_NAME", "")).lower()
+    receipt(list(dict.fromkeys(to)), ignored, ext, me)
 
 def cmd_read(a):
     sel = [p for p in posts() if (not a.thread or p.get("thread") == a.thread or p.get("id") == a.thread)
            and (not a.id or p.get("id") == a.id) and since_ok(p, a.since)
            and (not a.from_ or p.get("from") == a.from_) and (not a.to or a.to.lstrip("@").lower() in names(p.get("to")))]
-    for p in sel[-a.n:]: show(p)
+    if a.n and len(sel) > a.n: print(f"({len(sel) - a.n} older posts not shown; -n 0 for all)", file=sys.stderr)
+    for p in sel[-a.n:]:
+        if a.short: print(f"[{p.get('id')}] {p.get('at', '')[5:16]} {p.get('from')}: " + " ".join(str(p.get("text", "")).split())[:100])
+        else: show(p)
 
 def cmd_search(a):
     words = [w.lower() for w in a.words]
@@ -57,15 +130,21 @@ def cmd_search(a):
         if all(w in blob for w in words): show(p)
 
 def cmd_who(a):
+    try: c = read_cfg()
+    except (OSError, ValueError): c = {}
     for f in sorted(RUN.glob("*.json")):
         r = json.loads(f.read_text())
         try: os.kill(r["pid"], 0); alive = "running"
         except OSError: alive = "gone"
-        print(f"@{r['name']:<16} {alive:<8} since {r['at'][:19]}  woken by {r['post']}  login {r['login']}")
+        print(f"@{r['name']:<16} {alive:<8} since {r['at'][:19]}  woken by {r['post']}  login {login_name(c, r['login'])}")
     u = STATE / "usage.json"
+    try: five = json.loads((STATE / "usage_5h.json").read_text())
+    except (OSError, ValueError): five = {}
     if u.exists():
         for k, v in json.loads(u.read_text()).items():
-            if k != "_checked": print(f"weekly usage {k}: {'unknown' if v is None else f'{v:.0f}%'}")
+            if k == "_checked": continue
+            f = five.get(k) if isinstance(five, dict) else None
+            print(f"weekly usage {login_name(c, k)}: {pct(v)}{f', 5-hour {pct(f)}' if f is not None else ''}{' (paused)' if k in paused_logins() else ''}  ({lines_text(c, k)})")
 
 def cmd_wait(a):
     """Block until a post made from now on is addressed to --to (default: you) or lands in --thread; print it.
@@ -127,9 +206,9 @@ def cmd_module(a):
     cat = catalog()
     if a.do == "list":
         have = sorted(d for d in MODULES.glob("*/") if (d / "module.json").exists())
-        for d in have: print(f"{d.name:<14} installed  {manifest(d).get('description', '')[:110]}")
+        for d in have: print(f"{d.name:<14} installed  {manifest(d).get('description', '')[:240]}")
         for n, c in cat.items():
-            if not (MODULES / n).exists(): print(f"{n:<14} available  {c.get('about', '')[:110]}" + (f" [needs {c['needs']}]" if c.get("needs") else ""))
+            if not (MODULES / n).exists(): print(f"{n:<14} available  {c.get('about', '')[:240]}" + (f" [needs {c['needs']}]" if c.get("needs") else ""))
         return
     if not a.name: sys.exit(f"hive module {a.do}: name which module")
     name = re.sub(r"\.git$", "", a.name.rstrip("/").rsplit("/", 1)[-1]).removeprefix("hive-")
@@ -160,6 +239,33 @@ def cmd_module(a):
     needs = cat.get(a.name, {}).get("needs")
     if needs: print(f"needs: {needs}")
 
+def cmd_web(a):
+    """The local web app's address. The app is on only where ~/.hive/web.json exists: install makes it (--setup), with a new secret."""
+    f = STATE / "web.json"
+    try: web = json.loads(f.read_text())
+    except OSError: web = None
+    except ValueError: sys.exit(f"{f} can't be read; fix or delete it, then run hive web --setup")
+    if web is None and not a.setup: sys.exit("The web app isn't set up on this account (hive web --setup does that).")
+    if web is None:
+        web = {"port": next(p for p in range(8077, 8177) if port_free(p))}
+    if a.setup and not web.get("secret") or a.new_secret: web["secret"] = secrets.token_urlsafe(32)
+    if a.setup or a.new_secret:
+        STATE.mkdir(exist_ok=True)
+        t = STATE / f".web.json.{os.getpid()}"
+        t.touch(mode=0o600); t.chmod(0o600); t.write_text(json.dumps(web, indent=1) + "\n"); t.replace(f)
+        if a.new_secret: print("New secret: every browser has to open the new address, and the old one no longer works.", file=sys.stderr)
+    port = web.get("port", 8077)
+    if a.setup: return
+    print(f"http://127.0.0.1:{port}/login#{web['secret']}")
+    if port_free(port): print(f"The app isn't running. Start it: systemctl --user start hive-dash  (or: python3 ~/modules/dash/dash.py serve)", file=sys.stderr)
+    print(f"That address is the key to this hive, so keep it to yourself. On another machine: ssh -L {port}:127.0.0.1:{port} <this-machine>, then open it there.", file=sys.stderr)
+
+def port_free(p):
+    with socket.socket() as s:
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try: s.bind(("127.0.0.1", p)); return True
+        except OSError: return False
+
 DONE = re.compile(r"\b(done|merged|closed|released|shipped|fixed|no action|nothing to do|stopping)\b", re.I)
 
 def jobs_of(name):
@@ -186,7 +292,7 @@ def cmd_stalled(a):
     for f in RUN.glob("*.json"):
         try: r = json.loads(f.read_text()); os.kill(r["pid"], 0); live.add(r["name"])
         except (OSError, ValueError, KeyError): pass
-    ext = {"person", "starter", "anon", "all"}
+    ext = {"person", "starter", "watchdog", "anon", "all"}
     for t, ps in sorted(threads.items(), key=lambda kv: kv[1][-1].get("at", "")):
         last = ps[-1]
         if not (within < last.get("at", "") < quiet) or t in ("keeper",): continue
@@ -198,18 +304,182 @@ def cmd_stalled(a):
               + (f"  jobs alive: {', '.join(f'{w}:{n}' for w, n in jobs.items() if n)}" if any(jobs.values()) else "")
               + "\n  " + str(last.get("text", ""))[:240].replace("\n", " "))
 
+# ---------- logins ----------
+
+def read_cfg(): return json.loads((CORE / "config.json").read_text())
+
+def post_model(m):
+    """--model: a Claude alias, or provider:model where provider is in config.json's providers (see starter.provider_of)."""
+    if m in ("opus", "sonnet", "haiku", "fable"): return m
+    try: provs = read_cfg().get("providers", {})
+    except (OSError, ValueError): provs = {}
+    if re.match(r"^([a-z0-9-]+):([A-Za-z0-9][A-Za-z0-9._/:@-]*)$", m) and m.split(":", 1)[0] in provs: return m
+    raise argparse.ArgumentTypeError(f"{m!r}: use opus, sonnet, haiku, fable or provider:model with a provider from {sorted(provs) or 'config.json providers (none set)'}")
+
+def write_cfg(c):
+    t = CORE / f".config.json.{os.getpid()}"
+    t.write_text(json.dumps(c, indent=2) + "\n"); t.replace(CORE / "config.json")  # the starter reads it every poll
+
+def login_name(c, path):
+    """A login's short name: login_names in config.json, by path; else its directory's name."""
+    path = str(Path(path).expanduser())
+    for k, v in (c.get("login_names") or {}).items():
+        if str(Path(k).expanduser()) == path: return v
+    return Path(path).name.removeprefix(".claude-").lstrip(".")
+
+def login_env(d):
+    return {**{k: v for k, v in os.environ.items() if k not in ("ANTHROPIC_API_KEY", "HIVE_NAME")}, "CLAUDE_CONFIG_DIR": str(d)}
+
+def login_status(d):
+    """What `claude auth status` says about login dir d, {} if not signed in. Uses no model usage."""
+    try:
+        s = json.loads(subprocess.run(["claude", "auth", "status", "--json"], env=login_env(d), capture_output=True, text=True, timeout=30).stdout)
+        return s if s.get("loggedIn") else {}
+    except (OSError, ValueError, subprocess.SubprocessError): return {}
+
+def login_weekly(d):
+    """The login's weekly usage %, live; None if unknown. The same read as the starter's, and it never refreshes a token."""
+    try:
+        tok = json.loads((Path(d) / ".credentials.json").read_text())["claudeAiOauth"]["accessToken"]
+        req = urllib.request.Request("https://api.anthropic.com/api/oauth/usage", headers={
+            "Authorization": f"Bearer {tok}", "anthropic-beta": "oauth-2025-04-20"})
+        w = json.load(urllib.request.urlopen(req, timeout=15))["seven_day"]
+        return w.get("used_percentage", w.get("utilization"))
+    except Exception: return None
+
+def pct(v): return "unknown" if v is None else f"{v:.0f}%"
+
+def paused_logins():
+    """Login paths paused by the person (~/.hive/paused.json): still read for usage, never picked by the starter."""
+    try:
+        v = json.loads((STATE / "paused.json").read_text())
+        return v if isinstance(v, list) else []
+    except (OSError, ValueError): return []
+
+def set_paused(path, on):
+    v = [x for x in paused_logins() if x != path] + ([path] if on else [])
+    STATE.mkdir(exist_ok=True)
+    t = STATE / f".paused.json.{os.getpid()}"
+    t.write_text(json.dumps(v, indent=1)); t.replace(STATE / "paused.json")  # the starter reads it every poll
+
+def login_limits():
+    """Per-login stop lines (~/.hive/login_limits.json): {login path: {"weekly": N, "five_hour": N}}. See starter.stop_lines."""
+    try:
+        v = json.loads((STATE / "login_limits.json").read_text())
+        return v if isinstance(v, dict) else {}
+    except (OSError, ValueError): return {}
+
+def set_limit(path, key, v):
+    """Set (a number, clamped to 0-100) or clear (None) one stop line. A line above the global one is the person's to set."""
+    allv = login_limits(); mine = allv.get(path) if isinstance(allv.get(path), dict) else {}
+    if v is None: mine.pop(key, None)
+    else: mine[key] = min(100.0, max(0.0, float(v)))
+    if mine: allv[path] = mine
+    else: allv.pop(path, None)
+    STATE.mkdir(exist_ok=True)
+    t = STATE / f".login_limits.json.{os.getpid()}"
+    t.write_text(json.dumps(allv, indent=1)); t.replace(STATE / "login_limits.json")  # the starter reads it every poll
+
+def lines_text(c, path):
+    m = login_limits().get(path) or {}
+    w, h = m.get("weekly"), m.get("five_hour")
+    return f"stop at {pct(w) if w is not None else str(c.get('usage_stop_pct', '?')) + '% (global)'} weekly, " + (f"{pct(h)} 5-hour" if h is not None else "no 5-hour stop")
+
+def login_add(name, paused=False):
+    c = read_cfg()
+    if not re.fullmatch(r"[a-z0-9][a-z0-9-]*", name): sys.exit("A login name is lowercase letters, digits and dashes, like cc3.")
+    listed = {login_name(c, l): l for l in c["logins"]}
+    if name in listed: sys.exit(f"{name} is already a login ({listed[name]}).")
+    d = HOME / f".claude-{name}"
+    if not login_status(d):
+        if not sys.stdin.isatty(): sys.exit("Signing in needs a terminal: run this yourself, as this account.")
+        print(f"Sign in with the account for {name}. If no browser opens, open the link it prints, then paste the code back here.")
+        d.mkdir(exist_ok=True, mode=0o700)
+        subprocess.run(["claude", "auth", "login", "--claudeai"], env=login_env(d))
+    st = login_status(d)
+    if not st: sys.exit(f"{name} isn't signed in, so nothing changed. Run the command again to retry.")
+    for other, l in listed.items():  # the same account twice would look like room it doesn't have
+        if login_status(Path(l).expanduser()).get("email") == st.get("email"):
+            sys.exit(f"That account ({st.get('email')}) is already login {other}, so nothing changed. "
+                     f"To use another account: CLAUDE_CONFIG_DIR={d} claude auth logout, then run this again.")
+    f, first = d / "settings.json", Path(c["logins"][0]).expanduser() / "settings.json"
+    if not f.exists() and first.exists():  # the same settings as the first login; the starter adds the hooks itself
+        s = json.loads(first.read_text()); s.pop("hooks", None); f.write_text(json.dumps(s, indent=2) + "\n")
+    used = login_weekly(d)
+    stop = c["usage_stop_pct"]
+    if used is None or used < 100:  # a real one-word run, with the flags agents run with, on the cheapest model
+        with tempfile.TemporaryDirectory() as cwd:
+            r = subprocess.run(["claude", "-p", "Reply with the single word ok.", "--model", "haiku", *c["claude_args"]], cwd=cwd,
+                               env=login_env(d), capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=180)
+        if r.returncode and not re.search(r"usage limit|rate limit|hit your limit|limit reached|out of (extra )?usage", r.stdout + r.stderr, re.I):
+            sys.exit(f"A test run on {name} failed, so it wasn't added (exit {r.returncode}):\n{(r.stdout + r.stderr)[-800:]}")
+    c = read_cfg()  # again: the config may have changed during the sign-in
+    home = str(d).replace(str(HOME), "~", 1)
+    if paused: set_paused(str(d), True)  # before the config, so the starter never sees it unpaused
+    c["logins"].append(home); c.setdefault("login_names", {})[home] = name
+    write_cfg(c)
+    room = used is None or used < stop
+    print(f"Added {name} ({st.get('email')}, {st.get('subscriptionType') or 'plan unknown'}), weekly usage {pct(used)}.")
+    print(f"It's paused, so the starter won't use it. To start using it: hive login resume {name}, or Resume on the dashboard." if paused else
+          f"The starter uses it within {c['usage_check_s'] // 60} min" + (", for new runs, whichever login has the most room."
+          if room else f" once it's under the {stop}% stop line."))
+    print("It shows on the dashboard's Usage tab, in `hive who` and in `hive login list`.")
+    text = (f"Login {name} is added but paused, by `hive login add --paused`: the starter won't use it, and the hold in kb/priorities.md stands." if paused else
+            f"Login {name} is added (weekly usage {pct(used)}, stop line {stop}%), by `hive login add`. New runs go to whichever login has the most room. "
+            + "The hold in kb/priorities.md stands: a new login doesn't lift it, only the person does.")
+    cmd_post(argparse.Namespace(text=[text], to=None, thread="keeper", as_="hive-login", model=None, file=None))
+
+def cmd_login(a):
+    if a.do == "add":
+        if not a.name: sys.exit("Usage: hive login add NAME  (for example: hive login add cc3)")
+        return login_add(a.name, a.paused)
+    c = read_cfg()
+    if a.do in ("pause", "resume"):
+        hit = [l for l in c["logins"] if a.name == login_name(c, l)]
+        if not hit: sys.exit(f"Usage: hive login {a.do} NAME. No login called {a.name}. See: hive login list")
+        set_paused(str(Path(hit[0]).expanduser()), a.do == "pause")
+        print(f"{a.name} is {'paused: its usage is still read, runs on it finish, and the starter gives it no new ones' if a.do == 'pause' else 'back in use'}.")
+        return
+    if a.do == "limit":
+        hit = [l for l in c["logins"] if a.name == login_name(c, l)]
+        if not hit or (a.weekly is None and a.five_hour is None):
+            sys.exit("Usage: hive login limit NAME [--weekly N|off] [--five-hour N|off]. Stop giving NAME runs at N% of its weekly "
+                     "or 5-hour limit (off: weekly back to the global line, no 5-hour stop). A line above the global "
+                     f"{c['usage_stop_pct']}% is the person's to set, not an agent's.")
+        path = str(Path(hit[0]).expanduser())
+        for key, v in (("weekly", a.weekly), ("five_hour", a.five_hour)):
+            if v is None: continue
+            if v.lower() in ("off", "none", "-"): set_limit(path, key, None); continue
+            try: set_limit(path, key, float(v.rstrip("%")))
+            except ValueError: sys.exit(f"{v} isn't a number or off.")
+        print(f"{a.name}: {lines_text(c, path)}. Your own posts still start runs past these lines, up to a real limit.")
+        return
+    if a.do == "rename":
+        if not a.name or not a.new: sys.exit("Usage: hive login rename OLD NEW")
+        if not re.fullmatch(r"[a-z0-9][a-z0-9-]*", a.new): sys.exit("A login name is lowercase letters, digits and dashes, like cc3.")
+        if a.new in (login_name(c, l) for l in c["logins"]): sys.exit(f"{a.new} is already a login.")
+        hit = [l for l in c["logins"] if a.name == login_name(c, l)]
+        if not hit: sys.exit(f"No login called {a.name}. See: hive login list")
+        c.setdefault("login_names", {})[hit[0]] = a.new
+        write_cfg(c); print(f"{a.name} is now {a.new} ({hit[0]}). Only the name changed.")
+        return
+    for l in c["logins"]:
+        d = Path(l).expanduser(); st = login_status(d)
+        print(f"{login_name(c, l):<12} {l:<20} weekly {pct(login_weekly(d)):<8} {st.get('subscriptionType') or '':<8} {st.get('email') or 'NOT SIGNED IN'}{'  PAUSED' if str(d) in paused_logins() else ''}  ({lines_text(c, str(d))})")
+
 if len(sys.argv) == 1 or (sys.argv[1].startswith("-") and sys.argv[1] not in ("-h", "--help")):
     door(sys.argv[1:])  # flags pass through to claude; a mistyped command must not open a session in an agent's shell
 
 ap = argparse.ArgumentParser(prog="hive", description="With no command: open the door, a Claude Code session that talks to the hive for you. Commands: the board itself.")
 sp = ap.add_subparsers(required=True)
-p = sp.add_parser("post", help="hive post [--to @a,@b] [--thread T] [--model sonnet] text   (@mentions in text wake those agents; --model picks the model of any run this post starts)")
+p = sp.add_parser("post", help="hive post [--to @a,@b] [--thread T] [--model sonnet] [--file PATH ...] text   (@mentions of known agents in text wake them, --to starts a name that has run or a new code like a1b2c; --model picks the model of any run this post starts)")
 p.add_argument("--to"); p.add_argument("--thread"); p.add_argument("--as", dest="as_", help="from name (default $HIVE_NAME)")
-p.add_argument("--model", choices=["opus", "sonnet", "haiku", "fable"], help="model for any run this post starts (default: the login's)")
+p.add_argument("--model", type=post_model, help="model for any run this post starts: opus, sonnet, haiku, fable, or provider:model for a provider in config.json (openrouter:openai/gpt-5); default: the login's")
+p.add_argument("--file", action="append", help="attach a file (repeatable): copied to ~/files/<post id>/, shown in hive read, Slack and the dashboard")
 p.add_argument("text", nargs="*"); p.set_defaults(f=cmd_post)
-p = sp.add_parser("read", help="hive read [--thread T] [--since 2h|ISO] [--from X] [--to X] [--id ID] [-n 30]")
+p = sp.add_parser("read", help="hive read [--thread T] [--since 2h|ISO] [--from X] [--to X] [--id ID] [-n 30, 0 for all] [--short: one line per post]")
 p.add_argument("--thread"); p.add_argument("--since"); p.add_argument("--from", dest="from_"); p.add_argument("--to")
-p.add_argument("--id"); p.add_argument("-n", type=int, default=30); p.set_defaults(f=cmd_read)
+p.add_argument("--id"); p.add_argument("-n", type=int, default=30); p.add_argument("--short", action="store_true"); p.set_defaults(f=cmd_read)
 p = sp.add_parser("search", help="hive search words...  (all words, case-insensitive)")
 p.add_argument("words", nargs="+"); p.set_defaults(f=cmd_search)
 p = sp.add_parser("who", help="who's running, and usage"); p.set_defaults(f=cmd_who)
@@ -217,6 +487,11 @@ p = sp.add_parser("wait", help="hive wait [--to X] [--thread T] [--timeout 3600]
 p.add_argument("--to"); p.add_argument("--thread"); p.add_argument("--timeout", type=int, default=3600); p.set_defaults(f=cmd_wait)
 p = sp.add_parser("module", help="hive module list | add NAME|GIT-URL | remove NAME")
 p.add_argument("do", choices=["list", "add", "remove"]); p.add_argument("name", nargs="?"); p.set_defaults(f=cmd_module)
+p = sp.add_parser("web", help="hive web: the address of the local web app, with its secret. --new-secret replaces the secret; --setup is install's")
+p.add_argument("--setup", action="store_true"); p.add_argument("--new-secret", action="store_true"); p.set_defaults(f=cmd_web)
 p = sp.add_parser("stalled", help="hive stalled [--quiet 2h] [--within 3d]: quiet threads nobody is on")
 p.add_argument("--quiet", default="2h"); p.add_argument("--within", default="3d"); p.set_defaults(f=cmd_stalled)
+p = sp.add_parser("login", help="hive login list | add NAME [--paused] | rename OLD NEW | pause NAME | resume NAME | limit NAME --weekly N --five-hour N: the Claude logins Hive runs on (add signs in and puts it to use; a paused login is still read for usage but gets no runs)")
+p.add_argument("do", choices=["list", "add", "rename", "pause", "resume", "limit"]); p.add_argument("name", nargs="?"); p.add_argument("new", nargs="?"); p.add_argument("--paused", action="store_true", help="with add: add it paused")
+p.add_argument("--weekly", help="with limit: stop at N%% weekly, or off"); p.add_argument("--five-hour", dest="five_hour", help="with limit: stop at N%% of the 5-hour limit, or off"); p.set_defaults(f=cmd_login)
 a = ap.parse_args(); a.f(a)

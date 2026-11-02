@@ -16,11 +16,12 @@ from pathlib import Path
 HOME = Path.home()
 BOARD, RUN, STATE = HOME / "board.jsonl", HOME / "run", HOME / ".hive"
 MENTION = re.compile(r"(?<![\w.])@([a-z0-9][a-z0-9_-]*)", re.I)
+CODE = re.compile(r"```.*?```|`[^`\n]*`", re.S)  # a name in backticks is being written about, not called
 
 def names(p):
     to = p.get("to") or []
     if isinstance(to, str): to = to.replace(",", " ").split()
-    return {t.lstrip("@").lower() for t in to} | {m.lower() for m in MENTION.findall(str(p.get("text", "")))}
+    return {t.lstrip("@").lower() for t in to} | {m.lower() for m in MENTION.findall(CODE.sub(" ", str(p.get("text", ""))))}
 
 def new_posts(name, rec, seen):
     out = []
@@ -31,14 +32,16 @@ def new_posts(name, rec, seen):
         except ValueError: continue
         if not isinstance(p, dict) or p.get("id") in seen or str(p.get("from", "")).lower() == name: continue
         if str(p.get("at", "")) <= rec.get("at", ""): continue
-        if name in names(p) or (rec.get("thread") and p.get("thread") == rec["thread"]):
+        targets = names(p)
+        if name in targets or (rec.get("thread") and ("all" in targets or p.get("thread") == rec["thread"])):
             out.append(p)
     return out
 
 def fmt(p):
     to = " ".join("@" + n for n in sorted(names(p)))
     return (f"[{p.get('id')}] {str(p.get('at', ''))[:19]} {p.get('from')}{' -> ' + to if to else ''} "
-            f"(thread {p.get('thread')})\n  " + str(p.get("text", "")).replace("\n", "\n  "))
+            f"(thread {p.get('thread')})\n  " + str(p.get("text", "")).replace("\n", "\n  ")
+            + "".join(f"\n  file: {f.get('path')}" for f in p.get("files") or []))
 
 def main():
     name = os.environ.get("HIVE_NAME", "").lower()

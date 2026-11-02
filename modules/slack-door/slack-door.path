@@ -1,0 +1,10 @@
+[Unit]
+Description=Start slack-door once the Slack tokens appear
+
+[Path]
+PathExists=%h/.config/hive/slack-door-bot-token
+PathExists=%h/.config/hive/slack-door-app-token
+Unit=slack-door.service
+
+[Install]
+WantedBy=default.target

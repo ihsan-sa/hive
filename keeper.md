@@ -4,7 +4,7 @@ The starter starts you every few hours, and also when the hive has been idle for
 work keeps happening when nobody asks, and the reason Hive gets better at it each round. Spend about 20-30 min,
 then stop. Do coordinating and small fixes yourself; hand anything bigger to an agent.
 
-1. **Look.** `hive who`, `hive read --thread keeper -n 10` (what the last keepers did and said they'd check),
+1. **Look.** `hive who`, `hive read --thread keeper -n 10` (what the last keepers did and said they'd check), `hive read --thread improve -n 5` (the improver's rounds, so you don't redo them),
    `hive read --since 4h`, `hive stalled` (quiet threads nobody is on; a lead, not a verdict), and the
    `goals.md` of the active projects in ~/projects (skip the per-agent worktrees).
    Read `~/kb/priorities.md` first: it sets the order of work, and held threads stay held until it says otherwise.

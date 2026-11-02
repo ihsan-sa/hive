@@ -1,0 +1,1505 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Hive</title>
+<script>{const t=localStorage.getItem("theme");if(t==="light"||t==="dark")document.documentElement.dataset.theme=t;}</script>
+<style>
+:root{color-scheme:light;
+ --bg:#f3f3f0;--surface:#fcfcfb;--line:#e4e3de;--line2:#d2d1ca;--ink:#0b0b0b;--ink2:#52514e;--ink3:#85837d;
+ --t1:#2a78d6;--t2:#eb6834;--held:#1baf7a;--other:#8e8c85;--good:#1a8f5c;--warn:#b97a00;--bad:#c93a39;--hl:#2a78d61f}
+@media(prefers-color-scheme:dark){:root:not([data-theme=light]){color-scheme:dark;
+ --bg:#121211;--surface:#1a1a19;--line:#2b2b29;--line2:#3b3b38;--ink:#f0efec;--ink2:#c3c2b7;--ink3:#8b8a80;
+ --t1:#3987e5;--t2:#d95926;--held:#199e70;--other:#77756d;--good:#3cb580;--warn:#d39a1f;--bad:#e66767;--hl:#3987e526}}
+:root[data-theme=dark]{color-scheme:dark;
+ --bg:#121211;--surface:#1a1a19;--line:#2b2b29;--line2:#3b3b38;--ink:#f0efec;--ink2:#c3c2b7;--ink3:#8b8a80;
+ --t1:#3987e5;--t2:#d95926;--held:#199e70;--other:#77756d;--good:#3cb580;--warn:#d39a1f;--bad:#e66767;--hl:#3987e526}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{font:14px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif;background:var(--bg);color:var(--ink);display:flex;flex-direction:column}
+button,input,select{font:inherit;color:inherit}
+a{color:inherit}
+header{display:flex;align-items:center;gap:1rem;padding:.5rem 1rem;background:var(--surface);border-bottom:1px solid var(--line);flex:none;flex-wrap:wrap}
+header b.brand{font-size:1.05rem;letter-spacing:.01em}
+nav{display:flex;gap:.15rem}
+nav button{background:none;border:0;border-radius:6px;padding:.3rem .75rem;color:var(--ink2);cursor:pointer}
+nav button:hover{background:var(--bg)}
+nav button.on{background:var(--ink);color:var(--surface);font-weight:550}
+#status{margin-left:auto;color:var(--ink2);font-size:13px;display:flex;gap:.9rem;align-items:center}
+#status .bad{color:var(--bad);font-weight:600}
+#theme{background:none;border:1px solid var(--line2);border-radius:6px;padding:.15rem .5rem;color:var(--ink2);cursor:pointer;font-size:13px;white-space:nowrap}
+#theme:hover{border-color:var(--ink3);color:var(--ink)}
+main{flex:1;min-height:0;position:relative}
+.view{position:absolute;inset:0;display:none}
+.view.on{display:flex}
+.scroll{overflow:auto;width:100%}
+.dim{color:var(--ink2)}.dim3{color:var(--ink3)}.sm{font-size:12.5px}
+.chip{display:inline-flex;align-items:center;gap:.3rem;border:1px solid var(--line2);border-radius:99px;padding:0 .5rem;font-size:12px;line-height:1.6;background:none;color:var(--ink2);cursor:pointer;white-space:nowrap}
+.chip:hover{border-color:var(--ink3);color:var(--ink)}
+.dot{display:inline-block;width:.55rem;height:.55rem;border-radius:50%;flex:none;background:var(--other)}
+.live{box-shadow:0 0 0 3px color-mix(in srgb,var(--good) 30%,transparent)}
+.seg{display:inline-flex;border:1px solid var(--line2);border-radius:7px;overflow:hidden}
+.seg button{background:none;border:0;padding:.15rem .6rem;cursor:pointer;color:var(--ink2);font-size:13px}
+.seg button+button{border-left:1px solid var(--line2)}
+.seg button.on{background:var(--ink);color:var(--surface)}
+input[type=search]{background:var(--surface);border:1px solid var(--line2);border-radius:7px;padding:.25rem .55rem;width:100%}
+
+/* now */
+.wrap{width:100%;max-width:1240px;margin:0 auto;padding:1.1rem 1rem 3rem}
+#headline,.headline{font-size:1.3rem;font-weight:550;line-height:1.3;margin:0 0 .2rem}
+h2{font-size:.82rem;text-transform:uppercase;letter-spacing:.06em;color:var(--ink2);margin:1.7rem 0 .55rem;font-weight:600}
+h2 small{font-weight:400;text-transform:none;letter-spacing:0;color:var(--ink3);margin-left:.4rem;font-size:12.5px}
+.grid{display:grid;gap:.6rem}
+.tiles{grid-template-columns:repeat(auto-fill,minmax(190px,1fr))}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:9px;padding:.65rem .8rem;min-width:0}
+.tile b{display:block;font-size:1.45rem;line-height:1.2;font-weight:600}
+.tile .l{font-size:12.5px;font-weight:550}
+.acard{display:flex;flex-wrap:wrap;gap:.3rem;margin-top:.45rem}
+.acard span{display:inline-flex;align-items:baseline;gap:.3rem;border:1px solid var(--line2);border-radius:6px;padding:.05rem .45rem;font-size:12.5px;background:var(--surface);white-space:nowrap}
+.acard i{font-style:normal;color:var(--ink3);font-size:11.5px}
+.acard b{font-weight:550}
+.tile .c{font-size:12px;color:var(--ink3);line-height:1.3;margin-top:.15rem}
+.charts{grid-template-columns:repeat(auto-fit,minmax(320px,1fr))}
+.chart .t{font-size:13px;font-weight:550}
+.chart svg{display:block;width:100%;height:auto;margin-top:.3rem}
+.agents{grid-template-columns:repeat(auto-fill,minmax(370px,1fr))}
+.agent .h{display:flex;align-items:center;gap:.45rem;flex-wrap:wrap}
+.agent .h b{font-size:14.5px}
+.agent .state{font-size:12px;font-weight:550}
+.agent dl{margin:.4rem 0 0;display:grid;grid-template-columns:3.4rem 1fr;gap:.12rem .4rem;font-size:13px}
+.agent dt{color:var(--ink3)}.agent dd{margin:0;overflow-wrap:anywhere}
+.two{grid-template-columns:repeat(auto-fit,minmax(380px,1fr))}
+.row{padding:.42rem .1rem;border-top:1px solid var(--line);cursor:pointer;overflow-wrap:anywhere}
+.row:first-child{border-top:0}
+.row:hover{background:var(--hl)}
+.clip2{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.stack{display:flex;gap:2px;height:14px;margin:.3rem 0 .45rem}
+.stack i{display:block;border-radius:3px;min-width:3px}
+.legend{display:flex;flex-wrap:wrap;gap:.2rem .9rem;font-size:12.5px;color:var(--ink2)}
+.legend span{display:inline-flex;align-items:center;gap:.35rem}
+details>summary{cursor:pointer;color:var(--ink2)}
+
+/* usage + agent page */
+.meter{height:12px;border-radius:6px;background:var(--line);overflow:hidden;margin:.45rem 0 .3rem;position:relative}
+.meter i{display:block;height:100%;border-radius:6px}
+.meter u{position:absolute;top:0;bottom:0;width:2px;background:var(--ink)}
+.big{font-size:1.65rem;font-weight:600;line-height:1.15}
+.bar{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:.1rem .6rem;padding:.35rem .1rem;border-top:1px solid var(--line);cursor:pointer;font-size:13px}
+.bar:first-child{border-top:0}.bar:hover{background:var(--hl)}
+.bar .tr{grid-column:1/3;height:5px;background:var(--line);border-radius:3px;overflow:hidden}.bar .tr i{display:block;height:100%;border-radius:3px}
+.ah{display:flex;gap:.6rem;align-items:center;flex-wrap:wrap}
+.ah h1{margin:0;font-size:1.5rem}
+table.t{border-collapse:collapse;width:100%;font-size:13px}
+table.t th{text-align:left;color:var(--ink3);font-weight:500;padding:.2rem .4rem}
+table.t td{padding:.3rem .4rem;border-top:1px solid var(--line);vertical-align:top}
+table.t .n{text-align:right;font-variant-numeric:tabular-nums}
+.feed{font-size:13px;max-height:560px;overflow:auto}
+.feed .f{display:grid;grid-template-columns:3.6rem 1fr;gap:.45rem;padding:.25rem .1rem;border-top:1px solid var(--line);overflow-wrap:anywhere}
+.feed .f:first-child{border-top:0}.feed .said{color:var(--ink);white-space:pre-wrap}.feed .tool{color:var(--ink2)}
+.feed .tool b{font-weight:550;color:var(--ink3)}
+.link{background:none;border:0;padding:0;font-weight:600;cursor:pointer;text-align:left}
+.link:hover{text-decoration:underline}
+#ego{display:block;width:100%;max-width:440px;margin:auto}
+#ego g{cursor:pointer}
+#ego text{font:11.5px system-ui,sans-serif;fill:var(--ink2)}
+
+/* mesh */
+#mesh{flex-direction:row}
+#stage{flex:1;min-width:0;position:relative;background:var(--surface)}
+#cv{position:absolute;inset:0;width:100%;height:100%;cursor:grab;display:block}
+#meshbar{position:absolute;top:.6rem;left:.7rem;right:.7rem;display:flex;gap:.6rem;align-items:center;flex-wrap:wrap;pointer-events:none}
+#meshbar>*{pointer-events:auto;background:var(--surface)}
+#replay{position:absolute;bottom:.6rem;left:.7rem;right:.7rem;display:flex;gap:.6rem;align-items:center;background:color-mix(in srgb,var(--surface) 88%,transparent);padding:.2rem .4rem;border-radius:8px}
+#replay input{flex:1;accent-color:var(--t1)}
+#replay button{border:1px solid var(--line2);background:var(--surface);border-radius:6px;padding:.1rem .6rem;cursor:pointer}
+#rtime{font-size:12.5px;color:var(--ink2);min-width:8.5rem;text-align:right;font-variant-numeric:tabular-nums}
+#mlegend{position:absolute;left:.7rem;bottom:2.9rem;font-size:12px;color:var(--ink2);background:color-mix(in srgb,var(--surface) 88%,transparent);padding:.3rem .5rem;border-radius:8px;display:flex;flex-direction:column;gap:.1rem}
+#mlegend div{display:flex;gap:.8rem;flex-wrap:wrap}
+#mlegend span{display:inline-flex;align-items:center;gap:.3rem}
+.att{display:flex;flex-wrap:wrap;gap:.45rem;margin-top:.4rem}
+.thumb{border:1px solid var(--line2);border-radius:8px;padding:0;background:var(--surface);cursor:zoom-in;overflow:hidden;display:flex;flex-direction:column;max-width:320px}
+.thumb img{display:block;max-width:320px;max-height:200px;object-fit:contain;background:repeating-conic-gradient(var(--line) 0 25%,transparent 0 50%) 0 0/14px 14px}
+.thumb span{font-size:12px;color:var(--ink2);padding:.15rem .45rem;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.fcard{display:flex;gap:.5rem;align-items:center;border:1px solid var(--line2);border-radius:8px;padding:.35rem .6rem;background:var(--surface);cursor:pointer;color:var(--ink);text-decoration:none;font:inherit;text-align:left;max-width:320px}
+.fcard b{font-size:10.5px;letter-spacing:.04em;background:var(--line);border-radius:4px;padding:.25rem .3rem;color:var(--ink2)}
+.fcard>span{display:flex;flex-direction:column;min-width:0}.fcard .fn{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+dialog.viewer{width:min(94vw,1400px);height:min(92vh,1000px);max-width:none;max-height:none;padding:0;border:1px solid var(--line2);border-radius:10px;background:var(--surface);color:var(--ink);display:flex;flex-direction:column}
+dialog.viewer:not([open]){display:none}
+dialog.viewer::backdrop{background:rgba(0,0,0,.55)}
+.vbar{display:flex;align-items:center;gap:.6rem;padding:.5rem .8rem;border-bottom:1px solid var(--line)}
+.vbar a.chip{text-decoration:none}
+.vstage{flex:1;min-height:0;overflow:auto;display:flex;align-items:flex-start;justify-content:center;background:var(--bg)}
+.vstage img{max-width:100%;max-height:100%;object-fit:contain;margin:auto;cursor:zoom-in}
+.vstage img.full{max-width:none;max-height:none;cursor:zoom-out;margin:0}
+.vtext{margin:0;padding:.8rem 1rem;width:100%;box-sizing:border-box;font:12.5px/1.45 ui-monospace,monospace;white-space:pre-wrap;overflow-wrap:anywhere}
+#sgrip{width:7px;flex:none;margin-right:-4px;cursor:col-resize;z-index:3;position:relative}
+#sgrip:hover,#sgrip.on{background:color-mix(in srgb,var(--t1) 35%,transparent)}
+.astat{display:grid;grid-template-columns:repeat(auto-fit,minmax(88px,1fr));gap:.35rem;margin-top:.5rem}
+.astat div{border:1px solid var(--line);border-radius:7px;padding:.25rem .45rem;background:var(--surface)}
+.astat b{display:block;font-size:1rem;font-weight:600}
+.alog{font-size:12px;font-family:ui-monospace,monospace;line-height:1.35}
+.alog div{padding:.2rem 0;border-bottom:1px solid var(--line);overflow-wrap:anywhere}
+.alog i{font-style:normal;color:var(--ink2);margin-right:.35rem}
+#side{width:370px;flex:none;border-left:1px solid var(--line);overflow:auto;padding:.8rem .9rem;background:var(--bg)}
+#side h3{margin:.1rem 0 .1rem;font-size:1.05rem}
+#side h4{font-size:.76rem;text-transform:uppercase;letter-spacing:.05em;color:var(--ink2);margin:1rem 0 .3rem}
+
+/* comms */
+#threads{width:300px;flex:none;border-right:1px solid var(--line);display:flex;flex-direction:column;background:var(--surface);min-height:0}
+#tfilters{padding:.55rem .6rem;display:flex;flex-direction:column;align-items:flex-start;gap:.4rem;border-bottom:1px solid var(--line)}
+#tlist{overflow:auto;flex:1}
+.th{padding:.4rem .65rem;border-bottom:1px solid var(--line);cursor:pointer}
+.th:hover{background:var(--hl)}
+.th.on{background:var(--hl);box-shadow:inset 3px 0 0 var(--ink)}
+.th .n{display:flex;align-items:center;gap:.4rem;font-weight:550;font-size:13.5px}
+.th .n span.nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
+.th .s{font-size:12px;color:var(--ink3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#convo{flex:1;min-width:0;display:flex;flex-direction:column;min-height:0}
+#chead{padding:.55rem .9rem;background:var(--surface);border-bottom:1px solid var(--line)}
+#chead .tt{display:flex;gap:.6rem;align-items:center;flex-wrap:wrap}
+#chead b{font-size:1.02rem}
+#people{display:flex;gap:.25rem;flex-wrap:wrap;margin-top:.3rem}
+#msgs{flex:1;overflow:auto;padding:.4rem .9rem 2rem;min-height:0}
+.day{color:var(--ink3);font-size:12px;text-align:center;margin:.9rem 0 .4rem}
+.msg{padding:.42rem .55rem;border-radius:7px;max-width:980px;margin:0 auto;overflow-wrap:anywhere}
+.msg:hover{background:color-mix(in srgb,var(--surface) 75%,transparent)}
+.msg .m{display:flex;gap:.4rem;align-items:center;flex-wrap:wrap}
+.msg .who{font-weight:600;cursor:pointer;background:none;border:0;padding:0;display:inline-flex;gap:.35rem;align-items:center}
+.msg .who:hover{text-decoration:underline}
+.msg .tm{font-size:12px;color:var(--ink3)}
+.msg .body{white-space:pre-wrap;margin-top:.1rem}
+.md>:first-child{margin-top:0}.md>:last-child{margin-bottom:0}
+.md p{margin:.45em 0}
+.md h1,.md h2,.md h3,.md h4,.md h5,.md h6{margin:.7em 0 .25em;line-height:1.25;font-weight:650;text-transform:none;letter-spacing:normal;color:inherit}
+.md h1{font-size:1.25em}.md h2{font-size:1.15em}.md h3{font-size:1.05em}.md h4,.md h5,.md h6{font-size:1em;color:var(--ink2)}
+.md ul,.md ol{margin:.35em 0;padding-left:1.5em}
+.md li{margin:.12em 0}.md li>p{margin:0}.md li>p+*{margin-top:.25em}
+.md a{color:var(--t1);text-underline-offset:2px}
+.md code{font:.9em ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;background:color-mix(in srgb,var(--ink) 8%,transparent);border-radius:4px;padding:.05em .3em}
+.md pre{margin:.45em 0;padding:.45em .6em;background:var(--bg);border:1px solid var(--line);border-radius:6px;overflow:auto;white-space:pre;overflow-wrap:normal}
+.md pre code{background:none;padding:0;font-size:12.5px;line-height:1.4}
+.md blockquote{margin:.45em 0;padding-left:.7em;border-left:3px solid var(--line2);color:var(--ink2)}
+.md hr{border:0;border-top:1px solid var(--line2);margin:.7em 0}
+.md .tw{overflow:auto;margin:.45em 0}
+.md table{border-collapse:collapse;font-size:13px}
+.md th,.md td{border:1px solid var(--line2);padding:.15em .5em;vertical-align:top;overflow-wrap:normal}
+.md th{background:color-mix(in srgb,var(--ink) 5%,transparent);font-weight:600}
+.msg .more{background:none;border:0;color:var(--ink2);text-decoration:underline;cursor:pointer;padding:0;font-size:12.5px}
+.msg.sys{opacity:.62}
+.msg.person{background:var(--hl)}
+.arrow{color:var(--ink3);font-size:12px}
+.woke{font-size:12px;color:var(--ink3)}
+
+/* timeline */
+#timeline{flex-direction:column}
+#tbar{padding:.5rem 1rem;display:flex;gap:.8rem;align-items:center;flex-wrap:wrap;background:var(--surface);border-bottom:1px solid var(--line);flex:none}
+#tscroll{flex:1;overflow:auto;background:var(--surface)}
+#tl text{font:12px system-ui,sans-serif;fill:var(--ink2)}
+#tl{user-select:none;-webkit-user-select:none}
+#tscroll{touch-action:pan-y}
+#tscroll.drag,#tscroll.drag .lane{cursor:grabbing}
+#tl .lane{cursor:pointer}
+#tl .lane:hover rect.bgl{fill:var(--hl)}
+.tswatch{display:inline-block;width:1.5rem;height:.6rem;border-radius:2px;vertical-align:-.03rem;margin-right:.3rem;box-sizing:border-box}
+.tswatch.live{background:var(--other);border-right:.3rem solid var(--good);box-shadow:none}
+.tswatch.ended{background:color-mix(in srgb,var(--other) 14%,transparent);border:1px dashed var(--other)}
+
+#tip{position:fixed;z-index:9;pointer-events:none;background:var(--ink);color:var(--surface);padding:.3rem .55rem;border-radius:6px;font-size:12.5px;max-width:380px;display:none;line-height:1.35;overflow-wrap:anywhere}
+#tip i{opacity:.72;font-style:normal}
+@media(max-width:880px){#side,#sgrip{display:none}#threads{width:190px}.agents,.two{grid-template-columns:1fr}}
+[hidden]{display:none!important}
+.namechip{padding:0;gap:0}.namechip>button{background:none;border:0;color:inherit;cursor:pointer;font:inherit;display:inline-flex;align-items:center;gap:.3rem;padding:0 .1rem 0 .5rem;line-height:1.6}
+.namechip>button:only-child{padding-right:.5rem}.namechip .st{color:var(--ink3);margin-left:.1rem}
+.copy{background:none;border:0;color:var(--ink3);cursor:pointer;font-size:11px;padding:0 .35rem;line-height:1.6}.copy:hover{color:var(--ink)}
+.msg .copy{opacity:0}.msg:hover .copy{opacity:1}@media(hover:none){.msg .copy{opacity:1}}
+.dicon{width:1.9rem;height:1.9rem;border-radius:50%;border:1px solid var(--line2);background:var(--surface);color:var(--ink);cursor:pointer;font-size:14px;line-height:1;padding:0}.dicon:hover{background:var(--hl)}
+.rcpt{font-size:11px;font-weight:700;margin-left:-.1rem;cursor:default}
+.ahero{--c:var(--ink3);border-left:4px solid var(--c);background:color-mix(in srgb,var(--c) 9%,var(--surface));border-radius:10px;padding:.7rem .9rem;margin-top:.2rem}
+.spill{display:inline-block;padding:.05rem .6rem;border-radius:99px;font-size:12.5px;font-weight:600;color:#fff;background:var(--c)}
+.ahero .now{font-size:1.02rem;margin-top:.55rem;overflow-wrap:anywhere}.ahero .sub{margin-top:.3rem;font-size:12.5px;color:var(--ink2);white-space:pre-wrap;overflow-wrap:anywhere}
+.tiles.col .tile:nth-child(6n+1),.astat.col div:nth-child(6n+1){--a:var(--t1)}.tiles.col .tile:nth-child(6n+2),.astat.col div:nth-child(6n+2){--a:var(--t2)}.tiles.col .tile:nth-child(6n+3),.astat.col div:nth-child(6n+3){--a:var(--held)}.tiles.col .tile:nth-child(6n+4),.astat.col div:nth-child(6n+4){--a:var(--warn)}.tiles.col .tile:nth-child(6n+5),.astat.col div:nth-child(6n+5){--a:var(--good)}.tiles.col .tile:nth-child(6n),.astat.col div:nth-child(6n){--a:var(--other)}
+.tiles.col .tile,.astat.col div{border-top:3px solid var(--a)}.tiles.col .tile b,.astat.col b{color:var(--a)}
+.tbadge{display:inline-block;flex:none;font:600 11px/1.5 system-ui,sans-serif;padding:0 .4rem;border-radius:5px;color:var(--c);background:color-mix(in srgb,var(--c) 14%,transparent);white-space:nowrap}
+.act{display:flex;gap:.45rem;align-items:baseline;padding:.3rem .1rem;border-top:1px solid var(--line);font-size:12.5px;line-height:1.4;overflow-wrap:anywhere}.act:first-child{border-top:0}.act>time{color:var(--ink3);font-size:11.5px;flex:none;font-variant-numeric:tabular-nums}.act>.x{min-width:0;color:var(--ink2);font-family:ui-monospace,monospace;font-size:12px}
+.act.said>.x{color:var(--ink);font-family:inherit;font-size:13px;white-space:pre-wrap;border-left:3px solid var(--t1);padding-left:.5rem}
+.tstack{display:flex;height:.7rem;border-radius:4px;overflow:hidden;margin:.2rem 0 .45rem}.tstack i{display:block}
+#drawer{position:fixed;top:0;right:0;bottom:0;width:min(680px,94vw);background:var(--bg);border-left:1px solid var(--line2);box-shadow:-10px 0 28px rgba(0,0,0,.2);z-index:8;overflow:auto;display:none;padding:.5rem .9rem 2rem}
+#drawer.on{display:block}#drawerbar{display:flex;justify-content:flex-end;gap:.3rem;position:sticky;top:0;z-index:1}#drawer .two{grid-template-columns:1fr}
+#composer{border-top:1px solid var(--line);padding:.5rem .9rem .7rem;background:var(--surface)}
+.cprow{display:flex;gap:.4rem;align-items:flex-end}.cpinput{background:var(--bg);color:var(--ink);border:1px solid var(--line2);border-radius:7px;padding:.3rem .55rem;width:100%;font:inherit;box-sizing:border-box}
+textarea.cpinput{resize:vertical}.cpinput.num{width:7rem}#cpname{margin:.25rem 0}#cptarget{min-height:1.2em;margin-bottom:.25rem}
+.btn1,.btn2{border-radius:7px;padding:.28rem .8rem;cursor:pointer;font:inherit;white-space:nowrap}.btn1{background:var(--ink);color:var(--surface);border:1px solid var(--ink)}.btn2{background:none;color:var(--ink);border:1px solid var(--line2)}.btn1:disabled{opacity:.45;cursor:default}
+.unread b{font-weight:700}#ibadge{color:var(--t1);font-weight:700}#routetag{margin-left:.3rem}.step{margin-top:.6rem}.step.done{opacity:.72}.step p{margin:.3rem 0}
+.setf{display:grid;grid-template-columns:13rem 1fr;gap:.1rem .7rem;align-items:center;margin:.4rem 0}.setf .sm{grid-column:2}.setc{display:block;margin:.15rem 0}.signin{margin-top:.5rem}
+#lgbar{display:flex;gap:.6rem;align-items:center;flex-wrap:wrap;padding:.3rem 0 .6rem;position:sticky;top:0;background:var(--bg);z-index:1}
+.lrow.trouble .lbody{color:var(--bad)}.lrow.trouble .lname{color:var(--bad)}.mback{display:none}
+.lrow{display:flex;gap:.55rem;align-items:baseline;padding:.16rem .3rem;border-bottom:1px solid var(--line);font-size:13px;line-height:1.45}.lrow .dot{align-self:center}
+.ltime{color:var(--ink3);font-size:12px;flex:none;width:4.8rem;text-align:right;font-variant-numeric:tabular-nums}.lbody{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.lname{background:none;border:0;padding:0;font:inherit;font-weight:600;color:var(--ink);cursor:pointer;display:inline;vertical-align:baseline}.lname .dot{margin-right:.28rem;vertical-align:.03rem}.lname:hover{text-decoration:underline}.lth{font-weight:500;color:var(--ink2)}.lq{color:var(--ink2)}
+@keyframes lfresh{from{background:color-mix(in srgb,var(--good) 28%,transparent)}to{background:transparent}}.lrow.fresh{animation:lfresh 2.5s ease-out}
+@media(max-width:640px){
+ .desk,.brand,#theme,#status,#mlegend,#side,#sgrip,#tbar>.sm.dim,#tleg,#people .st{display:none!important}
+ header{flex-wrap:nowrap;gap:.3rem;padding:.3rem .4rem}#tabs{display:flex;overflow-x:auto;white-space:nowrap;scrollbar-width:none}
+ .wrap{padding:.5rem .55rem 3rem}.agents,.two,.setf{grid-template-columns:1fr}.setf .sm{grid-column:1}
+ .agent{padding:.45rem .6rem}.agent .h{flex-wrap:nowrap;overflow:hidden;padding:.2rem}.agent .h .state,.agent .h>.chip:last-child:not(:first-child){display:none}.agent .acard,.agent dl{display:none}
+ .agent.open .h{flex-wrap:wrap}.agent.open .h .state,.agent.open .h>.chip:last-child{display:inline-flex}.agent.open dl{display:grid}.agent.open .acard{display:flex}
+ #threads{width:100%;border-right:0}body.inthread #threads{display:none}body:not(.inthread) #convo{display:none}.mback{display:inline-flex}#chead .tt>div:last-child,#ctier,#cinfo{display:none!important}
+ #msgs{padding:.3rem .5rem 1rem}#composer{padding:.4rem .5rem}#drawer{width:100vw;border-left:0}
+ .lrow{flex-wrap:wrap;gap:.1rem .5rem}.ltime{width:auto;text-align:left}.lbody{white-space:normal;width:100%}#meshbar{flex-wrap:wrap}
+}
+</style></head><body>
+<header>
+ <b class="brand">Hive</b>
+ <nav id="tabs">
+  <button data-v="start" hidden>Start</button><button data-v="now">Now</button><button data-v="inbox" hidden>Inbox <b id="ibadge"></b></button><button data-v="ledger">Ledger</button><button data-v="mesh">Mesh</button><button data-v="comms">Comms</button><button data-v="timeline">Timeline</button><button data-v="usage">Usage</button><button data-v="settings" hidden>Settings</button>
+ </nav>
+ <span id="routetag" class="sm dim"></span><div id="status"></div>
+ <button id="theme" title="Colour theme: Auto follows your system setting"></button>
+</header>
+<main>
+ <section class="view scroll" id="now"><div class="wrap">
+  <p id="headline">Loading the board…</p><div class="dim" id="subline"></div>
+  <h2>Agents at work <small id="agcount"></small></h2><div class="grid agents" id="agents"></div>
+  <div class="grid two">
+   <div><h2>Addressed to you, no reply yet <small>last 3 days, newest first</small></h2><div class="card" id="foryou"></div></div>
+   <div><h2>Gone quiet <small>nobody on it, not marked done (leads, not verdicts)</small></h2><div class="card" id="stalled"></div></div>
+  </div>
+  <h2 class="desk">How it's working as a hive <small>last 24 hours</small></h2><div class="grid tiles desk" id="hive"></div>
+  <div class="grid charts desk" style="margin-top:.6rem" id="charts"></div>
+  <div class="card desk" style="margin-top:.6rem"><div class="sm" style="font-weight:550">Where the agent hours went, against your priority list</div><div class="stack" id="tierbar"></div><div class="legend" id="tierleg"></div></div>
+  <h2 class="desk">Just finished</h2><div class="card desk" id="ended"></div>
+  <h2 class="desk">Projects</h2><details class="card desk"><summary id="psum">Show projects</summary><div id="projects"></div></details>
+ </div></section>
+
+ <section class="view scroll" id="usage"><div class="wrap">
+  <div class="dim" id="usub"></div>
+  <h2>Limits <small>one block per login, then the other providers. Pause an account to keep the starter off it, or set where it stops</small></h2><div class="grid two" id="limits" style="align-items:start"></div>
+  <h2>Spend <small id="unote"></small></h2><div class="grid tiles" id="utiles"></div>
+  <div class="grid charts" style="margin-top:.6rem" id="ucharts"></div>
+  <div class="card" style="margin-top:.6rem"><div class="sm" style="font-weight:550">Spend against your priority list, last 24 hours</div><div class="stack" id="utier"></div><div class="legend" id="utierleg"></div></div>
+  <div class="grid two"><div><h2>Costliest threads <small>last 24 hours</small></h2><div class="card" id="uthreads"></div></div>
+   <div><h2>Costliest agents <small>last 24 hours</small></h2><div class="card" id="uagents"></div></div></div>
+  <h2>By model <small>all of it</small></h2><div class="card" id="umodels"></div>
+ </div></section>
+
+ <section class="view scroll" id="agent"><div class="wrap" id="agentbody"></div></section>
+ <section class="view scroll" id="ledger"><div class="wrap"><div id="lgbar"><div class="seg" id="lgkind"></div><input type="search" id="lgq" placeholder="Filter by agent, thread or words" style="width:260px"><span id="lgcount" class="sm dim"></span></div><div id="lgrows"></div></div></section>
+ <section class="view scroll" id="inbox"><div class="wrap" id="inboxbody"></div></section>
+ <section class="view scroll" id="start"><div class="wrap" id="startbody" style="max-width:44rem"></div></section>
+ <section class="view scroll" id="settings"><div class="wrap" id="setbody" style="max-width:52rem"></div></section>
+
+ <section class="view" id="mesh">
+  <div id="stage"><canvas id="cv"></canvas>
+   <div id="meshbar">
+    <div class="seg" id="mwin"></div><div class="seg" id="mmode"></div><div class="seg" id="mact"></div>
+    <span id="mcount" class="sm dim" style="background:none"></span>
+   </div>
+   <div id="mlegend"></div>
+   <div id="replay"><button id="rplay" title="Replay this window">▶ Replay</button><input id="rslider" type="range" min="0" max="1000" value="1000" aria-label="Time in window"><span id="rtime">live</span></div>
+  </div>
+  <div id="sgrip" title="Drag to resize"></div><aside id="side"></aside>
+ </section>
+
+ <section class="view" id="comms">
+  <div id="threads">
+   <div id="tfilters"><input type="search" id="tq" placeholder="Find a thread"><div class="seg" id="tscope"></div></div>
+   <div id="tlist"></div>
+  </div>
+  <div id="convo">
+   <div id="chead"></div>
+   <div id="msgs"></div>
+   <div id="composer" hidden></div>
+  </div>
+ </section>
+
+ <section class="view" id="timeline">
+  <div id="tbar"><div class="seg" id="twin"></div><div class="seg" id="tzoom"></div><div class="seg" id="tact"></div><span id="trange" class="sm"></span><span id="tcount" class="sm dim"></span>
+   <span class="sm dim">Each row is a thread, each bar an agent's session (solid with a green end while running, pale and dashed once ended; rows with someone running come first), each tick along the top of a row a post. Stacked bars mean agents worked in parallel. Click a bar for the agent, a row to read the thread. To zoom: Ctrl+scroll or pinch, or the − and + buttons. Drag sideways to move through time.</span><div class="legend" id="tleg"></div></div>
+  <div id="tscroll"><svg id="tl"></svg></div>
+ </section>
+</main>
+<div id="tip"></div>
+<aside id="drawer" aria-label="Agent"><div id="drawerbar"><button class="dicon" id="drawerfull" title="Open as a full page" aria-label="Open as a full page">↗</button><button class="dicon" id="drawerclose" title="Close (Esc)" aria-label="Close">✕</button></div><div id="drawerbody"></div></aside>
+<script>
+"use strict";
+// Everything here is read-only. Board text is shown through textContent only, never as HTML.
+const $=s=>document.querySelector(s);
+function el(tag,a,...kids){const e=document.createElement(tag);
+ for(const k in a||{}){const v=a[k];if(v==null||v===false)continue;
+  if(k==="class")e.className=v;else if(k==="style")e.style.cssText=v;
+  else if(k.startsWith("on"))e.addEventListener(k.slice(2),v);else e.setAttribute(k,v);}
+ for(const c of kids.flat()){if(c==null||c===false)continue;e.append(c.nodeType?c:String(c));}
+ return e;}
+function fill(n,...kids){n.replaceChildren();for(const c of kids.flat()){if(c!=null&&c!==false)n.append(c.nodeType?c:String(c));}}
+const SVG="http://www.w3.org/2000/svg";
+function sv(tag,a,...kids){const e=document.createElementNS(SVG,tag);for(const k in a||{}){if(a[k]!=null)e.setAttribute(k,a[k]);}
+ for(const c of kids)e.append(c);return e;}
+const HOUR=36e5,DAY=864e5,MIN=6e4;
+const OUTSIDE=new Set(["person","hives"]);
+const SYS=new Set(["starter","dash","anon","all","400","mention","name"]);
+const DONE=/\b(done|merged|closed|released|shipped|fixed|no action|nothing to do|stopping)\b/i;
+const TIERS=[["tier1","Tier 1","--t1"],["tier2","Tier 2","--t2"],["held","Held","--held"],["other","Everything else","--other"]];
+
+const APP={route:"open",can:null,app:false};
+const S={ledger:[],stCache:new Map(),lastSess:{},killed:{},posts:[],byId:{},off:0,logOff:0,sessions:[],open:{},limited:[],threads:new Map(),agents:new Set(),
+ woke:{},byOut:{},limitedSess:new Set(),usage:null,live:null,running:new Map(),pending:{},fresh:0,failed:false,ver:0,projects:null};
+const now=()=>Date.now();
+function ago(t){if(t==null)return"?";const d=Math.max(0,now()-t)/1e3;
+ if(d<5)return"just now";if(d<60)return Math.round(d)+"s ago";if(d<3600)return Math.round(d/60)+"m ago";if(d<86400){const h=d/3600;return(h<10?h.toFixed(1):Math.round(h))+"h ago";}return Math.round(d/86400)+"d ago";}
+function dur(ms){const m=Math.round(ms/MIN);if(m<1)return"under a minute";if(m<60)return m+"m";const h=m/60;if(h<48)return(h<10?h.toFixed(1):Math.round(h))+"h";return Math.round(h/24)+"d";}
+const clock=t=>new Date(t).toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"});
+const dayName=t=>new Date(t).toLocaleDateString([],{weekday:"short",month:"short",day:"numeric"});
+const stamp=t=>dayName(t)+" "+clock(t);
+const short=(s,n)=>{s=String(s||"").replace(/\s+/g," ").trim();return s.length<=n?s:s.slice(0,n-1)+"…";};
+const cssv=n=>getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+function tierOf(th){const P=S.live&&S.live.priorities||{};th=th||"";
+ if(P.set&&P.set[th])return P.set[th];
+ for(const k of["tier1","tier2","held"])for(const w of P[k]||[]){
+  if(w.endsWith("*")?th.startsWith(w.slice(0,-1)):(th===w||th.startsWith(w+"-")||th.endsWith("-"+w)||th.includes("-"+w+"-")))return k;}
+ return"other";}
+const tierVar=t=>TIERS.find(x=>x[0]===t)[2];
+const isAgent=n=>S.agents.has(n);
+const isRunning=n=>S.running.has(n);
+function agentThread(n){for(let i=S.sessions.length-1;i>=0;i--)if(S.sessions[i].name===n)return S.sessions[i].thread;return null;}
+// An agent's colour says how it is, not what tier its thread is. A post that mentions an ended agent wakes it, so ended isn't final.
+const STATUS=[["working","--good","running, active in the last 3 minutes"],["idle","--warn","running, but quiet: on a long job or a waiter"],["stuck","--bad","running, but hasn't seen posts for it, or its process is gone"],["queued","--t1","a post is waiting to start it"],["limited","--warn","stopped at a usage limit, resumes on reset"],["failed","--bad","its last run ended with an error"],["killed","--ink2","killed from here"],["ended","--ink3","finished its turn; a post wakes it"]];
+function agentStatus(n){let v=S.stCache.get(n);if(v)return v;
+ const mk=(k,label)=>{const row=STATUS.find(x=>x[0]===k);return{k,label:label||k,v:row[1]};};
+ const L=S.running.get(n),s=S.lastSess[n];
+ if(OUTSIDE.has(n))v={k:"outside",label:"",v:"--ink"};
+ else if(L){const[txt,col]=agentState(L);v=mk(col==="var(--good)"?"working":col==="var(--bad)"?"stuck":"idle",txt);}
+ else if(S.pending[n])v=mk("queued");
+ else if(!s)v={k:"none",label:"hasn't run",v:"--ink3"};
+ else if(S.killed[n]>=s.start)v=mk("killed");
+ else if(S.limitedSess.has(s.session))v=mk("limited","stopped at a limit");
+ else if(s.exit)v=mk("failed",`failed (exit ${s.exit})`);
+ else v=mk("ended","ended "+ago(sEnd(s)));
+ S.stCache.set(n,v);return v;}
+function agentColor(n){return`var(${agentStatus(n).v})`;}
+function sEnd(s){return s.end??(isRunning(s.name)?now():s.start);}
+// when an agent was last at work, up to time t1, however far back that is
+function lastSeen(id,t1){let l=0;for(const s of S.sessions)if(s.name===id&&s.start<=t1)l=Math.max(l,Math.min(sEnd(s),t1));
+ for(let i=S.posts.length-1;i>=0;i--){const p=S.posts[i];if(p.t<=t1&&p.from===id){l=Math.max(l,p.t);break;}}return l;}
+
+// ---------- data: only appended bytes are fetched after the first load ----------
+function ledgerAdd(r,words){r.lc=words.join(" ").toLowerCase();S.ledger.push(r);}
+function ingestLog(items){for(const e of items){const t=Date.parse(e.at);
+  {const r=logRow(e,t);if(r)ledgerAdd(r,[e.event,e.name||"",e.thread||"",e.by||""]);}
+  if(e.event==="start"){const s={out:e.out?String(e.out).split("/").pop().replace(/\.jsonl$/,""):null,name:e.name,session:e.session,start:t,end:null,exit:null,thread:e.thread,from:e.from,post:e.post,resumed:!!e.resumed,model:e.model||null,effort:e.effort||null,harness:e.harness||null,provider:e.provider||null,login:e.login||null};
+   S.sessions.push(s);S.lastSess[e.name]=s;S.open[e.name+e.session]=s;S.agents.add(e.name);
+   {const by=e.from,th=e.thread,n=e.name,re=!!e.resumed;ledgerAdd({t,kind:"agent",make:()=>[by&&by!=="anon"?lagent(by):"",by&&by!=="anon"?(re?" woke ":" started "):(re?"Woke ":"Started "),lagent(n),th?" in ":"",lthread(th)]},["started woke",n,by||"",th||""]);}
+   if(s.out)S.byOut[s.out]=s;if(e.post)(S.woke[e.post]=S.woke[e.post]||[]).push(s);}
+  else if(e.event==="end"){const s=S.open[e.name+e.session];if(s){s.end=t;s.exit=e.exit;delete S.open[e.name+e.session];}
+   {const n=e.name,x=e.exit,th=s&&s.thread;ledgerAdd({t,kind:x?"trouble":"agent",make:()=>[lagent(n),x?` failed (exit ${x})`:" ended",th?" in ":"",lthread(th)]},[x?"failed":"ended",n,th||""]);}}
+  else if(e.event==="killed"){S.killed[e.name]=t;}
+  else if(e.event==="limited"){S.limited.push(t);S.limitedSess.add(e.session);}}}
+function ingestBoard(items,initial){for(const p of items){p.t=Date.parse(p.at);p.men=(p.to||[]).map(x=>String(x).replace(/^@/,""));
+  p.lc=null;S.posts.push(p);S.byId[p.id]=p;const th=p.thread||"(none)";p.th=th;
+  let d=S.threads.get(th);if(!d){d={name:th,posts:[],who:new Set(),first:p.t,last:p.t};S.threads.set(th,d);ledgerAdd({t:p.t,kind:"thread",make:()=>["New thread ",lthread(th)," from ",lagent(p.from)]},["new thread",th,p.from]);}
+  {const tos=p.men.filter(m=>m!=="new");ledgerAdd({t:p.t+.5,kind:SYS.has(p.from)?"hive":"post",make:()=>[lagent(p.from),tos.length?" → ":" in ",tos.length?tos.flatMap((m,i)=>i?[", ",lagent(m)]:[lagent(m)]):lthread(th),tos.length?" in ":"",tos.length?lthread(th):null,el("span",{class:"lq"},": "+short(mdPlain(p.text).replace(/^(@\S+\s+)+/,""),170)),(p.files||[]).length?el("span",{class:"lq"}," 📎"):null]},[p.from,th,...tos,p.text.slice(0,600)]);}
+  d.posts.push(p);d.last=p.t;if(!SYS.has(p.from))d.who.add(p.from);
+  if(!initial)Mesh.onPost(p);}}
+async function jget(u){const r=await fetch(u,{cache:"no-store"});if(r.status===401)location.replace("/");if(!r.ok)throw Error(r.status);return r.json();}
+let first=true,polling=false;
+async function poll(){if(polling)return;polling=true;try{
+  const [l,lg,b]=await Promise.all([jget("/api/live"),jget("/api/log?from="+S.logOff),jget("/api/board?from="+S.off)]);
+  S.stCache.clear();S.live=l;S.running=new Map(l.agents.filter(a=>a.alive).map(a=>[a.name,a]));
+  S.pending=Object.fromEntries(l.pending.map(p=>[p.name,p]));
+  const runSig=[...S.running.keys()].sort().join();
+  const changed=b.items.length||lg.items.length||runSig!==S.runSig;S.runSig=runSig;
+  S.logOff=lg.offset;S.off=b.offset;ingestLog(lg.items);ingestBoard(b.items,first);
+  if(changed)S.ver++;
+  S.fresh=now();S.failed=false;first=false;render();
+ }catch(e){S.failed=true;renderStatus();}finally{polling=false;}}
+async function pollUsage(){try{S.usage=await jget("/api/usage");S.uver=(S.uver||0)+1;renderStatus();if(view==="usage")renderUsage();}catch(e){}}
+setInterval(()=>{if(!document.hidden)poll();},1500);
+setInterval(()=>{if(!document.hidden)pollUsage();},3000);pollUsage();
+document.addEventListener("visibilitychange",()=>{if(!document.hidden)poll();});
+
+// ---------- routing: the address bar holds the view, so Back works and a page can be linked ----------
+const VIEWS=["now","ledger","mesh","comms","timeline","usage","agent","inbox","start","settings"];
+let view="now";
+function setView(v){view=v;for(const b of document.querySelectorAll("#tabs button"))b.classList.toggle("on",b.dataset.v===v);
+ for(const s of document.querySelectorAll(".view"))s.classList.toggle("on",s.id===v);
+ render(true);if(v==="mesh")Mesh.resize();if(v==="inbox")renderInbox();else if(v==="start")renderStart();else if(v==="settings")renderSettings();if(v==="comms")updateComposer();}
+function route(){const[v,arg]=location.hash.slice(1).split("/");const a=arg?decodeURIComponent(arg):null;
+ const w=VIEWS.includes(v)?v:"now";
+ if(w==="comms"&&a&&C.thread!==a){Object.assign(C,{thread:a,agent:null,pair:null});C.dirty=true;}
+ if(w==="agent"){closeDrawer();if(!a)return location.hash="#now";if(A.name!==a){A.name=a;A.feed=null;$("#agent").scrollTop=0;}fetchFeed();}
+ setView(w);}
+function go(v,arg){const h="#"+v+(arg?"/"+encodeURIComponent(arg):"");if(location.hash===h)route();else location.hash=h;}
+addEventListener("hashchange",route);
+document.querySelector("#tabs").addEventListener("click",e=>{if(e.target.dataset.v)go(e.target.dataset.v);});
+function openThread(th){Object.assign(C,{thread:th,agent:null,pair:null,q:""});$("#mq")&&($("#mq").value="");C.dirty=true;go("comms",th);}
+function openPosts(n){Object.assign(C,{thread:null,agent:n,pair:null,q:""});$("#mq")&&($("#mq").value="");C.dirty=true;go("comms");}
+function openAgent(n){if(!isAgent(n))return openPosts(n);if(view==="agent")return go("agent",n);if(A.name!==n)A.feed=null;A.name=n;A.drawer=true;$("#drawer").classList.add("on");$("#drawer").scrollTop=0;renderAgent();fetchFeed();}
+function closeDrawer(){A.drawer=false;$("#drawer").classList.remove("on");}
+function openPair(a,b){Object.assign(C,{thread:null,agent:null,pair:[a,b],q:""});C.dirty=true;go("comms");}
+// The agent card: what an agent runs on. One list of [label, value, hint], so a new harness or option adds a row here.
+function modelName(id){const m=/^claude-([a-z]+)-(\d+)-(\d+)(?:-\d{8})?$/.exec(id||"");return m?`${m[1][0].toUpperCase()+m[1].slice(1)} ${m[2]}.${m[3]}`:id;}
+function loginName(path){const l=((S.live&&S.live.logins)||[]).find(x=>x.path===path);return l?l.name:path?String(path).replace(/^.*\/\.claude-?/,"")||"main":null;}
+function agentCard(n){const ss=S.sessions.filter(s=>s.name===n);const s=ss[ss.length-1];if(!s)return[];
+ const files=(S.usage&&S.usage.files)||{};const init=(s.out&&files[s.out]&&files[s.out].init)||{};
+ // Only this session's own start: an earlier run of the same name (say on Codex) must not colour a later Claude Code run.
+ const L=S.running.get(n),asked=s.model,prov=s.provider||(asked&&asked.includes(":")?asked.split(":")[0]:null);
+ const rows=[];
+ rows.push(["Model",init.model?modelName(init.model):asked?(prov?asked.slice(prov.length+1):modelName(asked)):"login default",
+  (init.model?`model id ${init.model}`:"")+(asked?` · asked for with --model ${asked}`:" · no --model given, so the login's default")]);
+ const h=s.harness||"claude-code",hn={"claude-code":"Claude Code",codex:"Codex"}[h]||h;
+ const via=h==="claude-code"&&prov&&prov!=="codex";  // Codex runs in its own CLI, not Claude Code pointed elsewhere
+ rows.push(["Harness",hn+(init.cc&&h==="claude-code"?" "+init.cc:"")+(via?` via ${prov}`:""),via?`Claude Code pointed at the ${prov} API`:"the program the agent runs in"]);
+ const eff=s.effort||(L&&L.effort);
+ if(eff&&!s.effort&&L)s.effort=eff;  // keep what the live view saw once the run ends
+ rows.push(["Effort",eff||(L?"not seen yet":"not recorded"),eff?"reasoning effort, as the harness reports it":L?"shows once it runs its first tool":"this session's start didn't record an effort"]);
+ const acct=prov?prov:loginName(s.login);if(acct)rows.push(["Account",acct,prov?"provider account":"the Claude login it runs on"]);
+ if(init.fast==="on")rows.push(["Fast mode","on",""]);
+ if(init.perm&&init.perm!=="bypassPermissions")rows.push(["Permissions",init.perm,""]);
+ return rows;}
+function toolColor(t){return /^(Bash)$/.test(t)?"var(--warn)":/^(Read|Grep|Glob|WebFetch|WebSearch)$/.test(t)?"var(--t1)":/^(Edit|Write|NotebookEdit)$/.test(t)?"var(--good)":/^(Agent|Task|Skill)$/.test(t)?"var(--t2)":"var(--other)";}
+function actRow(e,n){const said=e.k!=="tool";return el("div",{class:"act"+(said?" said":"")},el("time",null,e.t?clock(e.t*1e3):""),said?el("span",{class:"tbadge",style:"--c:var(--t1)"},"said"):el("span",{class:"tbadge",style:`--c:${toolColor(e.tool)}`},e.tool),el("div",{class:"x"},short(said?e.x:e.x.replace(/^Running: /,""),n)));}
+function agentCardEl(n){const rows=agentCard(n);return rows.length?el("div",{class:"acard"},rows.map(([k,v,t])=>el("span",{title:t},el("i",null,k),el("b",null,v)))):null;}
+const THEMES=[["auto","◐ Auto"],["light","☀ Light"],["dark","☾ Dark"]];
+function setTheme(t){const r=document.documentElement;if(t==="auto"){delete r.dataset.theme;localStorage.removeItem("theme");}else{r.dataset.theme=t;localStorage.setItem("theme",t);}
+ $("#theme").textContent=THEMES.find(x=>x[0]===t)[1];dispatchEvent(new Event("themechange"));T.ver=-1;C.dirty=true;render(true);}
+function render(force){renderStatus();if(!S.live)return;
+ if(view==="now")renderNow();else if(view==="comms")renderComms(force);else if(view==="timeline")renderTimeline();
+ else if(view==="mesh")Mesh.refresh();else if(view==="usage")renderUsage();else if(view==="agent")renderAgent();else if(view==="ledger")renderLedger();
+ if(A.drawer)renderAgent();}
+// A login's weekly share: the newest figure the session logs report, else the starter's own reading.
+function fresh7(l){const w=l.limits&&l.limits.seven_day;return w&&w.r*1e3>now()?w.u*100:l.weekly;}
+// In use: an account the starter can still give new runs to (not paused, under its weekly stop line).
+function inUse(l,U){if(l.paused)return false;const v=fresh7(l),st=l.stop||{},g=st.weekly??st.global??(U&&U.stop_pct)??98;return v==null||v<g;}
+function renderStatus(){const n=S.running.size;const all=S.usage&&S.usage.logins||S.live&&S.live.logins||[],us=all.filter(l=>inUse(l,S.usage));
+ const hold=S.live&&S.live.limit_until;
+ fill($("#status"),S.failed?el("span",{class:"bad"},"Lost contact, last data "+ago(S.fresh)):null,
+  el("span",null,n+" running"),us.length?el("span",null,"weekly "+us.map(l=>{const v=fresh7(l);return l.name+" "+(v==null?"?":Math.round(v)+"%");}).join(", ")):all.length?el("span",{class:"bad"},"no account has room"):null,
+  hold?el("span",{class:"bad"},"starts held until "+clock(hold*1e3)):null,
+  ...us.map(l=>{const w=l.limits&&l.limits.five_hour;return w&&w.r*1e3>now()?el("span",{class:w.u>=.9?"bad":null},"5-hour "+l.name+" "+Math.round(w.u*100)+"%"):null;}));
+ document.title="Hive · "+n+" running";}
+
+// ---------- shared ----------
+const tip=$("#tip");
+function showTip(x,y,...kids){fill(tip,kids);tip.style.display="block";const r=tip.getBoundingClientRect();
+ tip.style.left=Math.min(x+14,innerWidth-r.width-6)+"px";tip.style.top=Math.min(y+14,innerHeight-r.height-6)+"px";}
+const hideTip=()=>{tip.style.display="none";};
+function copyName(n,b){const t="@"+n,ok=()=>{b.textContent="✓";setTimeout(()=>{b.textContent="⧉";},900);};
+ if(navigator.clipboard)navigator.clipboard.writeText(t).then(ok,()=>{b.title=t;});
+ else{const x=el("textarea",{style:"position:fixed;opacity:0"});x.value=t;document.body.append(x);x.select();try{document.execCommand("copy");ok();}catch(e){}x.remove();}}
+function copyBtn(n){return el("button",{class:"copy",title:`Copy @${n}`,"aria-label":`Copy @${n}`,onclick:e=>{e.stopPropagation();copyName(n,e.currentTarget);}},"⧉");}
+function nameChip(n,fn,showState){const st=agentStatus(n),run=isRunning(n);return el("span",{class:"chip namechip"},
+  el("button",{onclick:e=>{e.stopPropagation();(fn||(()=>openAgent(n)))();},title:st.label?`${n}: ${st.label}`:n},
+   el("span",{class:"dot"+(run?" live":""),style:`background:${agentColor(n)}`}),n,showState&&st.k!=="outside"&&st.k!=="none"?el("span",{class:"st"},st.k):null),
+  isAgent(n)?copyBtn(n):null);}
+function threadChip(th){return el("button",{class:"chip",onclick:()=>openThread(th),title:"Open thread"},
+  el("span",{class:"dot",style:`background:var(${tierVar(tierOf(th))})`}),th);}
+function selecting(){const s=getSelection();return s&&!s.isCollapsed;}
+
+// ---------- NOW ----------
+function agentState(a){const q=now()-(a.last?a.last*1e3:0);
+ if(!a.alive)return["process gone","var(--bad)"];if(q<3*MIN)return["working","var(--good)"];
+ const since=a.last?a.last*1e3:0,unseen=a.name?S.posts.filter(p=>p.t>since&&p.from!==a.name&&(p.men.includes(a.name)||(a.thread&&p.thread===a.thread))).length:0;
+ if(unseen)return[`idle ${dur(q)}, hasn't seen ${unseen} new post${unseen>1?"s":""} for it`,"var(--bad)"];
+ if(q<20*MIN)return["quiet "+dur(q),"var(--warn)"];return["quiet "+dur(q)+", ended its turn or on a long job","var(--ink3)"];}
+function firstSentence(s){s=mdPlain(s).replace(/^(@\S+\s+)+/,"").replace(/\s+/g," ").trim();const m=s.match(/^.{20,240}?[.!?](\s|$)/);return m?m[0].trim():short(s,240);}
+function median(a){if(!a.length)return null;a=[...a].sort((x,y)=>x-y);return a[a.length>>1];}
+function hiveStats(from,to){const P=S.posts.filter(p=>p.t>=from&&p.t<=to&&!SYS.has(p.from));
+ let a2a=0,lat=[],asked=0;const byAuthor={};
+ for(const p of S.posts)(byAuthor[p.from]=byAuthor[p.from]||[]).push(p.t);
+ for(const p of P){const ms=p.men.filter(m=>isAgent(m)&&m!==p.from);if(isAgent(p.from)&&ms.length)a2a++;
+  for(const m of ms){asked++;const arr=byAuthor[m]||[];let lo=0,hi=arr.length;while(lo<hi){const x=lo+hi>>1;if(arr[x]<=p.t)lo=x+1;else hi=x;}
+   if(lo<arr.length&&arr[lo]-p.t<6*HOUR)lat.push(arr[lo]-p.t);}}
+ const ss=S.sessions.filter(s=>s.start>=from&&s.start<=to);const fresh=ss.filter(s=>!s.resumed);
+ const byAgents=fresh.filter(s=>isAgent(s.from)).length,byYou=fresh.filter(s=>OUTSIDE.has(s.from)).length,bySys=fresh.length-byAgents-byYou;
+ const th={};for(const p of P)if(isAgent(p.from))(th[p.th]=th[p.th]||new Set()).add(p.from);
+ const tl=Object.values(th);const multi=tl.filter(s=>s.size>1).length;
+ const links={};for(const p of P)for(const m of p.men)if(isAgent(p.from)&&isAgent(m)&&m!==p.from){(links[p.from]=links[p.from]||new Set()).add(m);(links[m]=links[m]||new Set()).add(p.from);}
+ let hub=null,hubN=0;for(const k in links)if(links[k].size>hubN){hub=k;hubN=links[k].size;}
+ const ended=S.sessions.filter(s=>s.end&&s.end>=from&&s.end<=to);
+ return{total:P.length,a2a,asked,answered:lat.length,lat:median(lat),fresh:fresh.length,byAgents,byYou,bySys,threads:tl.length,multi,hub,hubN,
+  clean:ended.filter(s=>s.exit===0||s.exit==null).length,stopped:ended.filter(s=>s.exit===143).length,failed:ended.filter(s=>s.exit===1&&!S.limitedSess.has(s.session)).length,
+  limited:S.limited.filter(t=>t>=from&&t<=to).length,ppl:P.filter(p=>OUTSIDE.has(p.from)).length};}
+function tile(v,l,c){return el("div",{class:"card tile"},el("div",{class:"l"},l),el("b",null,v),el("div",{class:"c"},c));}
+function pct(a,b){return b?Math.round(100*a/b)+"%":"–";}
+const NOW_OPEN=new Set();// on a phone a card is one line until tapped
+function renderNow(){if(selecting())return;const L=S.live,t=now();
+ // Working agents keep a fixed order (longest up first), so a new turn doesn't move a card. The rest follow, least quiet first; gone processes last.
+ const isWorking=a=>a.alive&&t-(a.last||0)*1e3<3*MIN,group=a=>isWorking(a)?0:a.alive?1:2;
+ const run=[...L.agents].sort((a,b)=>group(a)-group(b)||(group(a)?(b.last||0)-(a.last||0):(a.since||0)-(b.since||0))||String(a.name).localeCompare(String(b.name)));
+ const working=run.filter(isWorking).length;
+ const ths=new Set(run.map(a=>a.thread));
+ const waiting=L.pending.filter(p=>!isRunning(p.name));
+ const lastHour=S.posts.filter(p=>p.t>t-HOUR&&!SYS.has(p.from)).length;
+ $("#headline").textContent=run.length?`${run.length} agent${run.length>1?"s":""} on ${ths.size} thread${ths.size>1?"s":""}: ${working} active in the last 3 minutes, ${run.length-working} quiet (usually waiting on a job).`:"Nobody is running right now.";
+ $("#subline").textContent=`${lastHour} post${lastHour===1?"":"s"} in the last hour`+(waiting.length?` · ${waiting.length} waiting to start`:"")+(L.limit_until?` · starts held for the usage limit until ${clock(L.limit_until*1e3)}`:"")+(S.usage?` · ${money(spendSince(t-DAY))} of work in 24h, at list prices`:"");
+ $("#agcount").textContent="what each one was asked and what it's doing";
+ fill($("#agents"),run.map(a=>{const[st,col]=agentState(a);const task=S.byId[a.post];const pend=S.pending[a.name];
+  return el("div",{class:"card agent"+(NOW_OPEN.has(a.name)?" open":""),onclick:e=>{if(!matchMedia("(max-width:640px)").matches||e.target.closest("button,a"))return;NOW_OPEN.has(a.name)?NOW_OPEN.delete(a.name):NOW_OPEN.add(a.name);e.currentTarget.classList.toggle("open");}},
+   el("div",{class:"h"},el("span",{class:"dot"+(a.alive?" live":""),style:`background:${agentColor(a.name)}`}),el("button",{class:"link",style:"font-size:14.5px",onclick:()=>openAgent(a.name)},a.name),threadChip(a.thread),
+     el("span",{class:"state",style:`color:${col};margin-left:auto`},st),a.alive?killButton(a.name):null),
+   agentCardEl(a.name),
+   el("dl",null,
+    el("dt",null,"Now"),el("dd",null,a.doing||"Starting"),
+    el("dt",null,"Asked"),el("dd",{class:"clip2",title:task?task.text:""},a.from?a.from+": ":"",firstSentence(task&&task.text)),
+    a.said?el("dt",null,"Said"):null,a.said?el("dd",{class:"clip2 dim",title:a.said},firstSentence(a.said)):null,
+    el("dt",null,"Up"),el("dd",{class:"dim"},dur(t-a.since*1e3),pend?` · ${pend.posts} more post${pend.posts>1?"s":""} queued`:"")));}));
+ if(!run.length)fill($("#agents"),el("div",{class:"dim"},"None."));
+ // for you
+ const lastYou={};for(const p of S.posts)if(p.from==="person")lastYou[p.th]=p.t;
+ const fy={};for(const p of S.posts)if(p.t>t-3*DAY&&p.men.includes("person")&&p.t>(lastYou[p.th]||0))fy[p.th]=p;
+ const fyl=Object.values(fy).sort((a,b)=>b.t-a.t);
+ fill($("#foryou"),fyl.slice(0,8).map(p=>el("div",{class:"row",onclick:()=>openThread(p.th)},
+   el("div",{class:"sm"},el("b",null,p.th),el("span",{class:"dim3"},` · ${p.from} · ${ago(p.t)}`)),
+   el("div",{class:"clip2 sm dim"},firstSentence(p.text)))),
+   fyl.length>8?el("div",{class:"sm dim3",style:"padding-top:.3rem"},`and ${fyl.length-8} older`):null,fyl.length?null:el("div",{class:"dim sm"},"Nothing open."));
+ // stalled (same test as `hive stalled`)
+ const stale=[];for(const d of S.threads.values()){const lp=d.posts[d.posts.length-1];
+  if(d.name==="keeper"||lp.t>t-2*HOUR||lp.t<t-3*DAY)continue;
+  const who=[...d.who].filter(n=>!OUTSIDE.has(n));
+  if(!who.length||who.some(n=>isRunning(n)||S.pending[n]))continue;
+  if(DONE.test(String(lp.text).slice(0,300))&&lp.from!=="person"&&lp.from!=="hives")continue;
+  stale.push({d,lp});}
+ stale.sort((a,b)=>tierRank(a.d.name)-tierRank(b.d.name)||b.lp.t-a.lp.t);
+ fill($("#stalled"),stale.slice(0,8).map(({d,lp})=>el("div",{class:"row",onclick:()=>openThread(d.name)},
+   el("div",{class:"sm",style:"display:flex;gap:.4rem;align-items:center"},el("span",{class:"dot",style:`background:var(${tierVar(tierOf(d.name))})`}),el("b",null,d.name),el("span",{class:"dim3"},`${lp.from} · ${ago(lp.t)}`)),
+   el("div",{class:"clip2 sm dim"},firstSentence(lp.text)))),
+   stale.length>8?el("div",{class:"sm dim3",style:"padding-top:.3rem"},`and ${stale.length-8} more`):null,stale.length?null:el("div",{class:"dim sm"},"Nothing stalled."));
+ // hive
+ const h=hiveStats(t-DAY,t);
+ fill($("#hive"),
+  tile(pct(h.a2a,h.total),"Agents talking to agents",`${h.a2a} of ${h.total} posts mention another agent`),
+  tile(h.lat==null?"–":dur(h.lat),"Time to answer a mention",`median; ${pct(h.answered,h.asked)} of ${h.asked} mentions answered within 6h`),
+  tile(pct(h.byAgents,h.fresh),"New agents started by agents",`${h.byAgents} by agents, ${h.byYou} by you, ${h.bySys} by the keeper or starter`),
+  tile(`${h.multi} / ${h.threads}`,"Threads with 2+ agents","threads where more than one agent posted"),
+  tile(h.hub||"–","Best connected",h.hub?`talked with ${h.hubN} other agents`+(agentThread(h.hub)?`, on ${agentThread(h.hub)}`:""):"no agent-to-agent mentions"),
+  tile(h.failed?`${h.failed} errored`:`${h.clean} finished`,"Session ends",`${h.clean} finished, ${h.stopped} stopped by a signal, ${h.failed} errored; ${h.limited} usage-limit stops`));
+ renderCharts(t);
+ // tiers
+ const hrs={tier1:0,tier2:0,held:0,other:0};for(const s of S.sessions){const a=Math.max(s.start,t-DAY),b=Math.min(sEnd(s),t);if(b>a)hrs[tierOf(s.thread)]+=b-a;}
+ const tot=Object.values(hrs).reduce((x,y)=>x+y,0)||1;
+ fill($("#tierbar"),TIERS.filter(x=>hrs[x[0]]>0).map(x=>el("i",{style:`flex:${hrs[x[0]]/tot};background:var(${x[2]})`,title:`${x[1]}: ${(hrs[x[0]]/HOUR).toFixed(1)} agent-hours`})));
+ fill($("#tierleg"),TIERS.map(x=>el("span",null,el("span",{class:"dot",style:`background:var(${x[2]})`}),`${x[1]}: ${(hrs[x[0]]/HOUR).toFixed(1)}h (${Math.round(100*hrs[x[0]]/tot)}%)`)));
+ // ended
+ const ended=S.sessions.filter(s=>s.end).sort((a,b)=>b.end-a.end).slice(0,8);
+ fill($("#ended"),ended.map(s=>el("div",{class:"row sm",onclick:()=>openThread(s.thread)},
+   el("b",null,s.name),` on ${s.thread}, `,el("span",{class:"dim"},`ran ${dur(s.end-s.start)}, ended ${ago(s.end)}`),
+   s.exit===0||s.exit==null?null:el("span",{style:"color:var(--warn)"},s.exit===143?" · stopped by a signal":` · exit ${s.exit}`))));
+ if(!S.projects&&$("#projects").parentElement.open)loadProjects();}
+const tierRank=th=>["tier1","tier2","other","held"].indexOf(tierOf(th));
+$("#projects").parentElement.addEventListener("toggle",e=>{if(e.target.open&&!S.projects)loadProjects();});
+async function loadProjects(){S.projects=[];try{S.projects=await jget("/api/projects");}catch(e){S.projects=null;return;}
+ S.projects.sort((a,b)=>(b.t||0)-(a.t||0));
+ fill($("#projects"),S.projects.map(p=>el("div",{class:"row sm",style:"cursor:default"},el("b",null,p.name),el("span",{class:"dim"}," · "+short(p.head,80)),
+   p.t?el("div",{class:"dim3"},ago(p.t*1e3)+": "+short(p.commit,110)):null)));}
+function renderCharts(t){const span=Math.max(6,Math.min(48,Math.ceil((t-(S.posts[0]?S.posts[0].t:t))/HOUR))),start=t-span*HOUR,step=HOUR;
+ const bars=new Array(span).fill(0);for(const p of S.posts)if(p.t>=start&&!SYS.has(p.from)){const i=Math.min(span-1,Math.floor((p.t-start)/step));bars[i]++;}
+ const N=span*4,conc=new Array(N).fill(0);for(const s of S.sessions){const b=sEnd(s);if(b<start)continue;
+  const i0=Math.max(0,Math.floor((s.start-start)/(step/4))),i1=Math.min(N-1,Math.floor((b-start)/(step/4)));for(let i=i0;i<=i1;i++)conc[i]++;}
+ fill($("#charts"),
+  chart("Agents running at once",conc,"step",start,step/4,v=>`${v} running`),
+  chart("Board posts per hour",bars,"bar",start,step,v=>`${v} post${v===1?"":"s"}`));}
+function chart(title,vals,kind,start,step,fmt,opt){opt=opt||{};const W=600,H=96,B=16,T=6,R=30;const max=opt.max||Math.max(1,...vals.map(v=>v||0));
+ const x=i=>i/vals.length*(W-R),y=v=>T+(H-B-T)*(1-v/max);
+ const svg=sv("svg",{viewBox:`0 0 ${W} ${H}`});
+ const ink=cssv("--line2"),col=cssv("--t1");
+ svg.append(sv("line",{x1:0,x2:W-R,y1:H-B,y2:H-B,stroke:ink}));
+ const lab=(tx,xx,yy,anc)=>{const e=sv("text",{x:xx,y:yy,"text-anchor":anc||"middle","font-size":11,fill:cssv("--ink3")});e.textContent=tx;return e;};
+ svg.append(lab(opt.top||String(Math.round(max*100)/100),W-R+4,T+9,"start"),lab("0",W-R+4,H-B,"start"));
+ const hrStep=vals.length*step>24*HOUR?12*HOUR:6*HOUR;for(let tt=Math.ceil(start/hrStep)*hrStep;tt<start+vals.length*step;tt+=hrStep){const xx=(tt-start)/step/vals.length*(W-R);svg.append(lab(new Date(tt).toLocaleTimeString([],{hour:"numeric"}),xx,H-3));}
+ if(kind==="bar"){const w=(W-R)/vals.length;vals.forEach((v,i)=>{if(v)svg.append(sv("rect",{x:x(i)+1,y:y(v),width:Math.max(1,w-2),height:H-B-y(v),rx:2,fill:col}));});}
+ else{let d="",pen=false;vals.forEach((v,i)=>{if(v==null){pen=false;return;}d+=`${pen?"L":"M"}${x(i)} ${y(v)}L${x(i+1)} ${y(v)}`;pen=true;});
+  const i0=vals.findIndex(v=>v!=null);
+  if(!opt.line&&i0>=0)svg.append(sv("path",{d:d+`L${W-R} ${H-B}L${x(i0)} ${H-B}Z`,fill:col,opacity:.13}));
+  svg.append(sv("path",{d,fill:"none",stroke:col,"stroke-width":2,"vector-effect":"non-scaling-stroke"}));
+  if(opt.mark!=null){const m=sv("line",{x1:0,x2:W-R,y1:y(opt.mark),y2:y(opt.mark),stroke:cssv("--ink3"),"stroke-dasharray":"4 3"});svg.append(m);}}
+ const cross=sv("line",{y1:T,y2:H-B,stroke:cssv("--ink3"),"stroke-dasharray":"2 2",visibility:"hidden"});svg.append(cross);
+ svg.addEventListener("mousemove",e=>{const r=svg.getBoundingClientRect();const fx=(e.clientX-r.left)/r.width*W;const i=Math.max(0,Math.min(vals.length-1,Math.floor(fx/(W-R)*vals.length)));
+  cross.setAttribute("x1",x(i));cross.setAttribute("x2",x(i));cross.setAttribute("visibility","visible");
+  showTip(e.clientX,e.clientY,stamp(start+i*step),el("br"),vals[i]==null?"no data":fmt(vals[i]));});
+ svg.addEventListener("mouseleave",()=>{cross.setAttribute("visibility","hidden");hideTip();});
+ return el("div",{class:opt.bare?"chart":"card chart",style:opt.bare?"margin-top:.7rem":null},el("div",{class:"t"},title,el("span",{class:"dim3",style:"font-weight:400"},` · last ${Math.round(vals.length*step/HOUR)} hours`)),svg);}
+
+// ---------- MESH ----------
+const Mesh=(()=>{
+ const cv=$("#cv"),ctx=cv.getContext("2d");
+ const M={win:6*HOUR,mode:"agents",active:localStorage.getItem("meshActive")==="1",nodes:new Map(),edges:[],adj:new Map(),view:{x:0,y:0,k:1},fit:true,alpha:1,hover:null,sel:null,selEdge:null,cut:null,playing:false,pulses:[],ripples:[],W:0,H:0,sig:"",lastBuild:0};
+ const pos=new Map();// layout survives rebuilds
+ let colors={};
+ const readColors=()=>{colors={ink:cssv("--ink"),ink2:cssv("--ink2"),ink3:cssv("--ink3"),surface:cssv("--surface"),line:cssv("--line2"),"--good":cssv("--good"),"--warn":cssv("--warn"),"--bad":cssv("--bad"),"--t1":cssv("--t1"),"--ink2":cssv("--ink2"),"--ink3":cssv("--ink3"),"--ink":cssv("--ink"),good:cssv("--good"),tier1:cssv("--t1"),tier2:cssv("--t2"),held:cssv("--held"),other:cssv("--other")};};
+ const WINS=[["1h",HOUR],["6h",6*HOUR],["24h",DAY],["3d",3*DAY],["All",0]];
+ const winStart=()=>M.win?now()-M.win:(S.posts[0]?S.posts[0].t:now()-DAY);
+ const curT=()=>M.cut??now();
+ function build(){const t1=curT(),t0=winStart();const nodes=new Map(),E=new Map();
+  const node=(id,kind)=>{let n=nodes.get(id);if(!n){n={id,kind,posts:0,last:0,tier:"other",deg:0,live:false};nodes.set(id,n);}return n;};
+  const edge=(a,b,kind)=>{const k=a<b?a+"|"+b:b+"|"+a;let e=E.get(k);if(!e){e={a:a<b?a:b,b:a<b?b:a,n:0,spawn:0,last:0,kind};E.set(k,e);}return e;};
+  const known=n=>isAgent(n)||OUTSIDE.has(n);
+  const kindOf=n=>OUTSIDE.has(n)?"outside":"agent";
+  for(const p of S.posts){if(p.t<t0)continue;if(p.t>t1)break;if(SYS.has(p.from)||!known(p.from))continue;
+   const f=node(p.from,kindOf(p.from));f.posts++;f.last=Math.max(f.last,p.t);if(f.kind==="agent")f.tier=tierOf(p.th);
+   for(const m of p.men){if(m===p.from||!known(m))continue;node(m,kindOf(m)).last||=0;const e=edge(p.from,m,"msg");e.n++;e.last=Math.max(e.last,p.t);}
+   if(M.mode==="threads"){const tid="#"+p.th;const tn=node(tid,"thread");tn.posts++;tn.last=Math.max(tn.last,p.t);tn.tier=tierOf(p.th);tn.name=p.th;
+    const e=edge(p.from,tid,"thread");e.n++;e.last=Math.max(e.last,p.t);}}
+  for(const s of S.sessions){if(s.start>t1)continue;const en=sEnd(s);if(en<t0)continue;
+   const n=node(s.name,"agent");n.tier=tierOf(s.thread);n.thread=s.thread;n.last=Math.max(n.last,Math.min(en,t1));
+   if(s.start<=t1&&en>=t1&&(M.cut!=null||isRunning(s.name)))n.live=true;
+   if(M.mode==="threads"&&n.live){const tid="#"+s.thread,tn=node(tid,"thread");tn.tier=tierOf(s.thread);tn.name=s.thread;tn.last=Math.max(tn.last,t1);const e=edge(s.name,tid,"thread");e.last=Math.max(e.last,t1);e.n||=1;}
+   if(!s.resumed&&s.start>=t0&&s.from&&known(s.from)&&s.from!==s.name){node(s.from,kindOf(s.from));const e=edge(s.from,s.name,"msg");e.spawn++;e.spawnFrom=s.from;e.last=Math.max(e.last,s.start);}}
+  // a node with no sessions at all left in the window still gets its thread label
+  for(const n of nodes.values())if(n.kind==="agent"&&!n.thread){n.thread=agentThread(n.id);n.tier=tierOf(n.thread);}
+  // an agent only named in this window (mentioned, or an old post of theirs started someone) did nothing in it: look further back
+  for(const n of nodes.values())if(n.kind==="agent"&&!n.last)n.last=lastSeen(n.id,t1);
+  // active only: running agents, the links among them, and the threads they touch
+  if(M.active){for(const n of [...nodes.values()])if(n.kind!=="thread"&&!n.live)nodes.delete(n.id);
+   for(const[k,e]of [...E])if(!nodes.has(e.a)||!nodes.has(e.b))E.delete(k);
+   const linked=new Set();for(const e of E.values())linked.add(e.a).add(e.b);
+   for(const n of [...nodes.values()])if(n.kind==="thread"&&!linked.has(n.id))nodes.delete(n.id);}
+  const adj=new Map();for(const e of E.values()){(adj.get(e.a)||adj.set(e.a,new Set()).get(e.a)).add(e.b);(adj.get(e.b)||adj.set(e.b,new Set()).get(e.b)).add(e.a);nodes.get(e.a).deg++;nodes.get(e.b).deg++;}
+  // keep positions; place new nodes next to someone they know
+  let added=0;for(const n of nodes.values()){let p=pos.get(n.id);if(!p){const nb=[...(adj.get(n.id)||[])].map(i=>pos.get(i)).find(Boolean);
+    const a=Math.random()*6.28,r=nb?30:120+Math.random()*120;p={x:(nb?nb.x:0)+Math.cos(a)*r,y:(nb?nb.y:0)+Math.sin(a)*r,vx:0,vy:0};pos.set(n.id,p);added++;}
+   Object.assign(n,{p});n.r=n.kind==="thread"?Math.min(16,4+1.5*Math.sqrt(n.posts)):Math.min(20,5+1.6*Math.sqrt(n.posts));if(n.kind==="outside")n.r=Math.max(n.r,10);}
+  // an ended agent with no link to anyone in this window is only dust
+  for(const n of [...nodes.values()])if(n.kind==="agent"&&!n.live&&!adj.has(n.id)&&!M.showAll)nodes.delete(n.id);
+  const left=[...M.nodes.keys()].some(id=>!nodes.has(id));
+  M.nodes=nodes;M.edges=[...E.values()];M.adj=adj;
+  // someone left: the rest resettle, and a lone agent goes back to the middle even after a pan or zoom
+  if(left){M.alpha=Math.max(M.alpha,.3);if(nodes.size<=1)M.fit=true;}
+  const was=M.edges.length;
+  if(added){M.alpha=Math.max(M.alpha,added>8?1:.35);if(added>8){for(let i=0;i<220;i++)step();M.alpha=.2;if(M.fit)fitView(1);}}
+  M.sel=M.sel&&nodes.has(M.sel)?M.sel:null;
+  const ag=[...nodes.values()].filter(n=>n.kind==="agent");
+  fill($("#mcount"),M.active&&!ag.length?(M.cut==null?"Nobody is running right now":"Nobody was running at this moment"):`${ag.filter(n=>n.live).length} live`+(M.active?"":`, ${ag.filter(n=>!n.live).length} ended`)+` · ${M.edges.filter(e=>e.kind==="msg").length} links`);
+  return was;}
+ function step(){const ns=[...M.nodes.values()],a=M.alpha;
+  // with few nodes repulsion only fights the centre pull, so two unlinked agents would fly to opposite sides
+  const rep=1200*Math.min(1,.35+.65*Math.max(0,ns.length-2)/20);
+  for(let i=0;i<ns.length;i++){const A=ns[i],p=A.p;for(let j=i+1;j<ns.length;j++){const q=ns[j].p;let dx=p.x-q.x,dy=p.y-q.y,d2=dx*dx+dy*dy;if(d2<1){dx=Math.random();dy=Math.random();d2=1;}if(d2>4e5)continue;
+    const f=rep*a/d2;p.vx+=dx*f;p.vy+=dy*f;q.vx-=dx*f;q.vy-=dy*f;
+    const min=A.r+ns[j].r+8;if(d2<min*min){const d=Math.sqrt(d2),o=(min-d)/d*.25;p.vx+=dx*o;p.vy+=dy*o;q.vx-=dx*o;q.vy-=dy*o;}}}
+  for(const e of M.edges){const NA=M.nodes.get(e.a),NB=M.nodes.get(e.b);const A=NA.p,B=NB.p;const dx=B.x-A.x,dy=B.y-A.y,d=Math.hypot(dx,dy)||1;
+   // you and the other Hives touch everyone: a loose spring, or the graph collapses into one star
+   const hub=NA.kind==="outside"||NB.kind==="outside";
+   const L=e.kind==="thread"?55:hub?170:70,s=(hub?.006:Math.min(.14,.04+.014*Math.log2(1+e.n+e.spawn)))*a,f=(d-L)/d*s;A.vx+=dx*f;A.vy+=dy*f;B.vx-=dx*f;B.vy-=dy*f;}
+  // agents on one thread gather, so the work shows up as clusters
+  if(M.mode==="agents"){const cen={};for(const n of ns)if(n.kind==="agent"&&n.thread){const c=cen[n.thread]||(cen[n.thread]={x:0,y:0,n:0});c.x+=n.p.x;c.y+=n.p.y;c.n++;}
+   for(const n of ns){const c=n.kind==="agent"&&cen[n.thread];if(c&&c.n>1){n.p.vx+=(c.x/c.n-n.p.x)*.03*a;n.p.vy+=(c.y/c.n-n.p.y)*.03*a;}}}
+  for(const n of ns){const p=n.p;p.vx-=p.x*.012*a;p.vy-=p.y*.012*a;if(p.fixed)continue;p.vx=Math.max(-60,Math.min(60,p.vx*.72));p.vy=Math.max(-60,Math.min(60,p.vy*.72));p.x+=p.vx;p.y+=p.vy;}
+  M.alpha*=.985;if(M.alpha<.012)M.alpha=0;}
+ function fitView(sm){const ns=[...M.nodes.values()];if(!ns.length)return;let x0=1e9,x1=-1e9,y0=1e9,y1=-1e9;
+  for(const n of ns){x0=Math.min(x0,n.p.x-n.r);x1=Math.max(x1,n.p.x+n.r);y0=Math.min(y0,n.p.y-n.r);y1=Math.max(y1,n.p.y+n.r);}
+  const top=50,bot=110,pad=50;const k=Math.min(1.5,(M.W-pad*2)/(x1-x0||1),(M.H-top-bot)/(y1-y0||1));
+  const tx=M.W/2-k*(x0+x1)/2,ty=top+(M.H-top-bot)/2-k*(y0+y1)/2;const v=M.view;v.k+=(k-v.k)*sm;v.x+=(tx-v.x)*sm;v.y+=(ty-v.y)*sm;}
+ const agentState=n=>n.live?"running":n.last?"ended "+ago(n.last):"not started yet";
+ const nodeOpacity=n=>{if(n.kind==="outside"||n.live)return 1;const age=curT()-n.last;if(n.kind==="thread")return Math.max(.28,1-age/(12*HOUR));return Math.max(.5,.8*Math.exp(-age/(6*HOUR)));};
+ function draw(){const c=ctx,v=M.view,dpr=devicePixelRatio||1,t=performance.now();
+  const zoomOut=Math.max(1,.85/v.k);for(const n of M.nodes.values())n.dr=n.r*zoomOut;
+  c.setTransform(dpr,0,0,dpr,0,0);c.clearRect(0,0,M.W,M.H);c.translate(v.x,v.y);c.scale(v.k,v.k);
+  const focus=M.hover||M.sel;const near=focus?M.adj.get(focus)||new Set():null;
+  const dimN=id=>focus&&id!==focus&&!near.has(id);
+  for(const e of M.edges){const A=M.nodes.get(e.a),B=M.nodes.get(e.b);const on=focus&&(e.a===focus||e.b===focus);const sel=M.selEdge===e;
+   const age=curT()-e.last;let al=Math.max(.14,.75*Math.exp(-age/(8*HOUR)));if(A.live&&B.live)al=Math.max(al,.6);if(e.kind==="thread")al*=.55;
+   if(focus)al=on?.95:.04;if(sel)al=1;
+   c.globalAlpha=al;c.strokeStyle=on||sel?colors.ink:colors.ink3;c.lineWidth=Math.min(6,.8+Math.log2(1+e.n)*.8)*zoomOut;
+   if(e.spawn&&!e.n){c.setLineDash([5,4]);}else c.setLineDash([]);
+   c.beginPath();c.moveTo(A.p.x,A.p.y);c.lineTo(B.p.x,B.p.y);c.stroke();
+   if(e.spawn){const from=e.spawnFrom===e.a?A:B,to=from===A?B:A;const dx=to.p.x-from.p.x,dy=to.p.y-from.p.y,d=Math.hypot(dx,dy)||1,ux=dx/d,uy=dy/d,tipx=to.p.x-ux*(to.dr+3),tipy=to.p.y-uy*(to.dr+3);
+    c.setLineDash([]);c.fillStyle=c.strokeStyle;c.beginPath();c.moveTo(tipx,tipy);c.lineTo(tipx-ux*8-uy*4,tipy-uy*8+ux*4);c.lineTo(tipx-ux*8+uy*4,tipy-uy*8-ux*4);c.fill();}}
+  c.setLineDash([]);
+  const pn=t;M.pulses=M.pulses.filter(p=>pn-p.t0<p.dur);for(const p of M.pulses){const A=M.nodes.get(p.a),B=M.nodes.get(p.b);if(!A||!B)continue;const f=(pn-p.t0)/p.dur;
+   c.globalAlpha=1;c.fillStyle=colors.good;c.beginPath();c.arc(A.p.x+(B.p.x-A.p.x)*f,A.p.y+(B.p.y-A.p.y)*f,4*zoomOut,0,6.3);c.fill();}
+  M.ripples=M.ripples.filter(p=>pn-p.t0<900);for(const p of M.ripples){const A=M.nodes.get(p.a);if(!A)continue;const f=(pn-p.t0)/900;c.globalAlpha=(1-f)*.7;c.strokeStyle=colors.good;c.lineWidth=1.5;c.beginPath();c.arc(A.p.x,A.p.y,A.dr+f*22*zoomOut,0,6.3);c.stroke();}
+  for(const n of M.nodes.values()){const p=n.p;let op=nodeOpacity(n);if(dimN(n.id))op=Math.min(op,.1);else if(n.id===focus)op=1;c.globalAlpha=op;
+   const fillc=n.kind==="outside"?colors.ink:n.kind==="agent"?colors[agentStatus(n.id).v]:colors[n.tier];
+   if(n.live&&!dimN(n.id)){const w=(t/1400+n.id.charCodeAt(1))%1;c.globalAlpha=(1-w)*.55;c.strokeStyle=colors.good;c.lineWidth=1.5;c.beginPath();c.arc(p.x,p.y,n.dr+(3+w*9)*zoomOut,0,6.3);c.stroke();c.globalAlpha=op;}
+   c.fillStyle=fillc;c.strokeStyle=colors.surface;c.lineWidth=2*zoomOut;
+   if(n.kind==="outside"){const r=n.dr*1.15;c.beginPath();c.moveTo(p.x,p.y-r);c.lineTo(p.x+r,p.y);c.lineTo(p.x,p.y+r);c.lineTo(p.x-r,p.y);c.closePath();c.fill();c.stroke();}
+   else if(n.kind==="thread"){const r=n.dr;c.beginPath();c.roundRect(p.x-r,p.y-r*.72,r*2,r*1.44,3);c.globalAlpha=op*.28;c.fill();c.globalAlpha=op;c.strokeStyle=fillc;c.lineWidth=1.5;c.stroke();}
+   else{c.beginPath();c.arc(p.x,p.y,n.dr,0,6.3);c.fill();c.stroke();}
+   if(M.sel===n.id){c.globalAlpha=1;c.strokeStyle=colors.ink;c.lineWidth=2;c.beginPath();c.arc(p.x,p.y,n.dr+4*zoomOut,0,6.3);c.stroke();}}
+  // labels, most important first, skipping any that would collide
+  c.setTransform(dpr,0,0,dpr,0,0);c.font="12px system-ui,sans-serif";c.textAlign="center";c.textBaseline="top";c.lineJoin="round";
+  const rank=n=>(n.id===focus?1e6:0)+(near&&near.has(n.id)?5e5:0)+(n.kind==="outside"?4e5:0)+(n.live?3e5:0)+(n.kind==="thread"?1e5:0)+n.posts*10+n.deg;
+  const used=[];for(const n of [...M.nodes.values()].sort((a,b)=>rank(b)-rank(a))){
+   if(dimN(n.id))continue;const big=n.kind!=="agent"||n.live||n.id===focus||(near&&near.has(n.id))||n.posts>=6;if(!big)continue;
+   let tx=n.kind==="thread"?n.name:n.id;if(n.live&&n.kind==="agent"&&n.thread&&M.mode==="agents")tx=n.id+" · "+short(n.thread,18);
+   const sx=n.p.x*v.k+v.x,sy=(n.p.y+n.dr)*v.k+v.y+3+(n.kind==="outside"?3:0),w=c.measureText(tx).width,box=[sx-w/2-2,sy-1,sx+w/2+2,sy+14];
+   if(used.some(u=>box[0]<u[2]&&box[2]>u[0]&&box[1]<u[3]&&box[3]>u[1]))continue;used.push(box);
+   c.globalAlpha=Math.max(.6,nodeOpacity(n));c.strokeStyle=colors.surface;c.lineWidth=3;c.strokeText(tx,sx,sy);c.fillStyle=n.live||n.kind==="outside"?colors.ink:colors.ink2;c.fillText(tx,sx,sy);}
+  c.globalAlpha=1;}
+ let lastF=0;
+ function frame(ts){requestAnimationFrame(frame);if(view!=="mesh"||document.hidden||!M.W)return;if(ts-lastF<33)return;lastF=ts;
+  if(M.playing)advance(ts);
+  if(M.alpha>0)step();if(M.fit)fitView(.12);
+  draw();}
+ function resize(){const r=$("#stage").getBoundingClientRect(),dpr=devicePixelRatio||1;M.W=r.width;M.H=r.height;cv.width=r.width*dpr;cv.height=r.height*dpr;readColors();if(M.fit)fitView(1);}
+ addEventListener("resize",()=>{if(view==="mesh")resize();});
+ // the side panel's width: drag the grip on its left edge; kept per browser
+ {const side=$("#side"),grip=$("#sgrip"),setW=w=>{w=Math.max(260,Math.min(innerWidth-320,w));side.style.width=w+"px";return w;};
+  const saved=+localStorage.getItem("sideW");if(saved)setW(saved);
+  grip.addEventListener("pointerdown",e=>{e.preventDefault();grip.setPointerCapture(e.pointerId);grip.classList.add("on");const x0=e.clientX,w0=side.getBoundingClientRect().width;
+   const mv=ev=>{setW(w0+x0-ev.clientX);resize();},up=()=>{grip.classList.remove("on");grip.removeEventListener("pointermove",mv);localStorage.setItem("sideW",Math.round(side.getBoundingClientRect().width));};
+   grip.addEventListener("pointermove",mv);grip.addEventListener("pointerup",up,{once:true});});
+  grip.addEventListener("dblclick",()=>{side.style.width="";localStorage.removeItem("sideW");resize();});}
+ matchMedia("(prefers-color-scheme: dark)").addEventListener("change",readColors);
+ addEventListener("themechange",readColors);
+ // replay
+ const slider=$("#rslider"),rtime=$("#rtime"),rplay=$("#rplay");let lastAdv=0,lastRB=0;
+ function setCut(c){M.cut=c;const a=winStart(),b=now();slider.value=c==null?1000:Math.round((c-a)/(b-a)*1000);rtime.textContent=c==null?"live":stamp(c);build();M.alpha=Math.max(M.alpha,.15);if(c==null)renderSide();}
+ slider.addEventListener("input",()=>{M.playing=false;rplay.textContent="▶ Replay";const v=+slider.value;if(v>=999){setCut(null);return;}const a=winStart();setCut(a+(now()-a)*v/1000);});
+ rplay.addEventListener("click",()=>{if(M.playing){M.playing=false;rplay.textContent="▶ Replay";return;}
+  if(M.cut==null)M.cut=winStart();M.playing=true;lastAdv=0;rplay.textContent="❚❚ Pause";});
+ function advance(ts){if(!lastAdv){lastAdv=ts;return;}const a=winStart(),b=now();const speed=(b-a)/45000;const was=M.cut,dt=ts-lastAdv;lastAdv=ts;M.cut=Math.min(b,M.cut+dt*speed);
+  if(M.cut>=b){M.playing=false;rplay.textContent="▶ Replay";setCut(null);return;}
+  let n=0;for(const p of S.posts){if(p.t<=was)continue;if(p.t>M.cut)break;n++;emit(p);if(n>12)break;}
+  if(ts-lastRB>180){lastRB=ts;slider.value=Math.round((M.cut-a)/(b-a)*1000);rtime.textContent=stamp(M.cut);build();}}
+ function emit(p){const t=performance.now(),ms=p.men.filter(m=>M.nodes.has(m)&&m!==p.from);
+  if(!M.nodes.has(p.from))return;M.ripples.push({a:p.from,t0:t});
+  for(const m of ms)M.pulses.push({a:p.from,b:m,t0:t,dur:1100});
+  if(M.mode==="threads"&&M.nodes.has("#"+p.th))M.pulses.push({a:p.from,b:"#"+p.th,t0:t,dur:800});}
+ // interaction
+ const toWorld=(x,y)=>[(x-M.view.x)/M.view.k,(y-M.view.y)/M.view.k];
+ function hit(x,y){const[wx,wy]=toWorld(x,y);let best=null,bd=1e9;for(const n of M.nodes.values()){const d=Math.hypot(n.p.x-wx,n.p.y-wy);if(d<Math.max((n.dr||n.r)+4,9/M.view.k)&&d<bd){best=n;bd=d;}}return best;}
+ function hitEdge(x,y){const[wx,wy]=toWorld(x,y);let best=null,bd=7/M.view.k;for(const e of M.edges){const A=M.nodes.get(e.a).p,B=M.nodes.get(e.b).p,dx=B.x-A.x,dy=B.y-A.y,l=dx*dx+dy*dy||1;
+   let f=((wx-A.x)*dx+(wy-A.y)*dy)/l;f=Math.max(0,Math.min(1,f));const d=Math.hypot(A.x+f*dx-wx,A.y+f*dy-wy);if(d<bd){bd=d;best=e;}}return best;}
+ let drag=null;
+ const mpos=e=>{const r=cv.getBoundingClientRect();return[e.clientX-r.left,e.clientY-r.top];};
+ cv.addEventListener("pointerdown",e=>{const[x,y]=mpos(e);const n=hit(x,y);cv.setPointerCapture(e.pointerId);
+  drag=n?{n,x,y,moved:false}:{pan:true,x,y,vx:M.view.x,vy:M.view.y,moved:false};if(n)n.p.fixed=true;});
+ cv.addEventListener("pointermove",e=>{const[x,y]=mpos(e);
+  if(drag){if(Math.hypot(x-drag.x,y-drag.y)>3)drag.moved=true;if(!drag.moved)return;
+   if(drag.pan){M.fit=false;M.view.x=drag.vx+x-drag.x;M.view.y=drag.vy+y-drag.y;}
+   else{M.fit=false;const[wx,wy]=toWorld(x,y);drag.n.p.x=wx;drag.n.p.y=wy;drag.n.p.vx=drag.n.p.vy=0;M.alpha=Math.max(M.alpha,.25);}
+   hideTip();return;}
+  const n=hit(x,y);M.hover=n?n.id:null;cv.style.cursor=n?"pointer":"grab";
+  if(n)showTip(e.clientX,e.clientY,nodeTip(n));else{const ed=hitEdge(x,y);if(ed){cv.style.cursor="pointer";showTip(e.clientX,e.clientY,edgeTip(ed));}else hideTip();}});
+ cv.addEventListener("pointerleave",()=>{M.hover=null;hideTip();});
+ cv.addEventListener("pointerup",e=>{const[x,y]=mpos(e);if(drag&&drag.n)drag.n.p.fixed=false;const moved=drag&&drag.moved;drag=null;if(moved)return;
+  const n=hit(x,y);M.selEdge=null;if(n){M.sel=n.id;}else{M.sel=null;M.selEdge=hitEdge(x,y);}renderSide();});
+ cv.addEventListener("wheel",e=>{e.preventDefault();M.fit=false;const[x,y]=mpos(e);const k=Math.exp(-e.deltaY*.0012),v=M.view,nk=Math.max(.15,Math.min(5,v.k*k));
+  v.x=x-(x-v.x)*nk/v.k;v.y=y-(y-v.y)*nk/v.k;v.k=nk;},{passive:false});
+ cv.addEventListener("dblclick",e=>{const[x,y]=mpos(e),n=hit(x,y);if(n&&n.kind==="agent"){hideTip();return openAgent(n.id);}M.fit=true;M.alpha=Math.max(M.alpha,.05);fitView(1);});
+ function nodeTip(n){const f=document.createDocumentFragment();
+  f.append(el("b",null,n.kind==="thread"?n.name:n.id),el("br"));
+  f.append(el("i",null,n.kind==="thread"?`thread · ${n.posts} posts · last ${ago(n.last)}`:n.kind==="outside"?`outside the agents · ${n.posts} posts`:`${agentState(n)} · ${n.thread||""} · ${n.posts} posts`));return f;}
+ function edgeTip(e){const f=document.createDocumentFragment();const nm=i=>i.startsWith("#")?i.slice(1):i;
+  f.append(el("b",null,`${nm(e.b)} and ${nm(e.a)}`),el("br"),el("i",null,e.kind==="thread"?`${e.n} posts in this thread`:`${e.n} mention${e.n===1?"":"s"}`+(e.spawn?`, ${e.spawnFrom} started the other`:"")+` · last ${ago(e.last)}`));return f;}
+ // the side panel
+ function postLine(p,pairTh){return el("div",{class:"row",onclick:()=>openThread(p.th)},
+   el("div",{class:"sm"},el("b",null,p.from),p.men.length?el("span",{class:"arrow"}," → "+p.men.join(", ")):null,el("span",{class:"dim3"},` · ${pairTh?"":p.th+" · "}${ago(p.t)}`)),
+   el("div",{class:"sm dim clip2"},firstSentence(p.text)));}
+ function renderSide(){const P=$("#side"),t0=winStart(),t1=curT();const inw=p=>p.t>=t0&&p.t<=t1;
+  if(M.selEdge){const e=M.selEdge;if(e.kind==="thread"){openThread(e.b.startsWith("#")?e.b.slice(1):e.a.slice(1));return;}
+   const ps=S.posts.filter(p=>inw(p)&&((p.from===e.a&&p.men.includes(e.b))||(p.from===e.b&&p.men.includes(e.a))));
+   fill(P,el("h3",null,`${e.a} and ${e.b}`),el("div",{class:"sm dim"},`${e.n} mentions in this window`+(e.spawn?`, ${e.spawnFrom} started the other`:"")),
+    el("button",{class:"chip",style:"margin-top:.4rem",onclick:()=>openPair(e.a,e.b)},"Read the whole exchange"),
+    el("h4",null,"Latest"),ps.slice(-14).reverse().map(p=>postLine(p)));return;}
+  if(M.sel){const n=M.nodes.get(M.sel);if(!n)return;
+   if(n.kind==="thread"){const d=S.threads.get(n.name);fill(P,el("h3",null,n.name),el("div",{class:"sm dim"},`${n.posts} posts in this window · ${d?d.posts.length:0} in all`),
+     el("div",{style:"display:flex;gap:.4rem;margin-top:.4rem"},el("button",{class:"chip",onclick:()=>openThread(n.name)},"Open thread"),tierButton(n.name)),
+     el("h4",null,"People"),el("div",{style:"display:flex;gap:.25rem;flex-wrap:wrap"},[...(M.adj.get(n.id)||[])].map(i=>nameChip(i,()=>selectNode(i)))),
+     el("h4",null,"Latest"),(d?d.posts:[]).filter(inw).slice(-12).reverse().map(p=>postLine(p,true)));return;}
+   const ps=S.posts.filter(p=>inw(p)&&(p.from===n.id||p.men.includes(n.id)));
+   const sessions=S.sessions.filter(s=>s.name===n.id);const firstS=sessions.find(s=>!s.resumed)||sessions[0];const started=firstS&&firstS.from;
+   const ths={};for(const p of ps)if(p.from===n.id)ths[p.th]=(ths[p.th]||0)+1;
+   const sp=sessions.reduce((x,s)=>x+Math.max(0,sEnd(s)-s.start),0);
+   const counter=[...(M.adj.get(n.id)||[])].filter(i=>!i.startsWith("#")).map(i=>{const e=M.edges.find(e=>(e.a===i&&e.b===n.id)||(e.b===i&&e.a===n.id));return[i,e?e.n:0];}).sort((a,b)=>b[1]-a[1]);
+   const L=S.running.get(n.id);
+   fill(P,el("h3",null,n.id),
+    el("div",{class:"sm dim"},n.kind==="outside"?"outside the agents":agentState(n)+(sessions.length?` · ${sessions.length} session${sessions.length>1?"s":""}, ${dur(sp)} in all`:"")),
+    started&&n.kind==="agent"?el("div",{class:"sm dim"},"started by "+started):null,
+    n.kind==="agent"?agentCardEl(n.id):null,
+    L&&L.doing?el("div",{class:"sm",style:"margin-top:.35rem"},"Now: "+L.doing):null,
+    el("button",{class:"chip",style:"margin-top:.4rem;background:var(--ink);color:var(--surface);border-color:var(--ink)",onclick:()=>openAgent(n.id)},n.kind==="outside"?"Read their posts":"Open agent page"),
+    n.kind==="agent"?agentStats(n.id,sessions,sp,ps.filter(p=>p.from===n.id).length):null,
+    n.kind==="agent"?el("h4",null,"Recent actions"):null,n.kind==="agent"?agentActions(n.id):null,
+    Object.keys(ths).length?el("h4",null,"Threads"):null,el("div",{style:"display:flex;gap:.25rem;flex-wrap:wrap"},Object.keys(ths).sort((a,b)=>ths[b]-ths[a]).slice(0,10).map(threadChip)),
+    counter.length?el("h4",null,"Talks with"):null,el("div",{style:"display:flex;gap:.25rem;flex-wrap:wrap"},counter.slice(0,24).map(([i,c])=>nameChip(i,()=>selectNode(i)))),
+    el("h4",null,"Latest posts"),ps.slice(n.kind==="agent"?-5:-12).reverse().map(p=>postLine(p)));return;}
+  // nothing selected: the graph as a list
+  const links=M.edges.filter(e=>e.kind==="msg").sort((a,b)=>b.n+b.spawn-a.n-a.spawn).slice(0,16);
+  const ppl=[...M.nodes.values()].filter(n=>n.kind==="agent").sort((a,b)=>(M.adj.get(b.id)?.size||0)-(M.adj.get(a.id)?.size||0)).slice(0,8);
+  fill(P,el("h3",null,"The mesh"),
+   el("div",{class:"sm dim"},"Each dot is an agent, and a line means they mentioned each other on the board or one started the other. Solid colour with a ring is running; the longer ago an agent ended, the paler it gets. Things that work together drift together. Click anything for detail, double-click an agent for its page; drag to move, scroll to zoom, double-click empty space to refit."),
+   el("h4",null,"Strongest links"),links.length?links.map(e=>el("div",{class:"row sm",onclick:()=>{M.sel=null;M.selEdge=e;renderSide();}},
+     el("b",null,e.a)," and ",el("b",null,e.b),el("span",{class:"dim3"},` · ${e.n} mention${e.n===1?"":"s"}`+(e.spawn?", started":"")+` · ${ago(e.last)}`))):el("div",{class:"sm dim"},"None in this window."),
+   ppl.length?el("h4",null,"Most connected"):null,el("div",{style:"display:flex;gap:.25rem;flex-wrap:wrap"},ppl.map(n=>nameChip(n.id,()=>selectNode(n.id)))));}
+ // cost, tokens and tool use from the session logs (the Usage scan), for one agent
+ function agentStats(name,sessions,sp,posts){const files=S.usage&&S.usage.files||{};let c=0,c24=0,out=0,inp=0,turns=0,tools=0;const t=now(),byTool={};
+  for(const[k,f]of Object.entries(files)){if(fileInfo(k).name!==name)continue;c+=f.c;turns+=f.turns;out+=f.t[1];inp+=f.t[0]+f.t[2]+f.t[3];
+   for(const h in f.h)if(+h*1e3>=t-DAY)c24+=f.h[h];for(const[tn,v]of Object.entries(f.tools||{})){tools+=v;byTool[tn]=(byTool[tn]||0)+v;}}
+  const top=Object.entries(byTool).sort((a,b)=>b[1]-a[1]).slice(0,4).map(([k,v])=>`${k} ${v}`).join(", ");
+  const L=S.running.get(name),box=(v,l)=>el("div",null,el("b",null,v),el("span",{class:"sm dim"},l));
+  return el("div",null,el("div",{class:"astat col"},box(money(c),"cost, all"),box(money(c24),"last 24h"),box(sp?money(c/(sp/HOUR)):"–","per hour"),
+    box(String(tools),"tool calls"),box(toks(out),"tokens out"),box(toks(inp),"tokens in"),box(String(turns),"turns"),box(String(posts),"posts"),
+    box(L&&L.last?ago(L.last*1e3):"–","last action")),
+   Object.keys(byTool).length?el("div",{class:"tstack",style:"margin-top:.45rem",title:"Most used: "+top},Object.entries(byTool).sort((a,b)=>b[1]-a[1]).map(([k,v])=>el("i",{title:`${k} ${v}`,style:`flex:${v};background:${toolColor(k)}`}))):null,top?el("div",{class:"sm dim"},"Most used: "+top):null);}
+ // the agent's last tool calls and words, from its newest session log; refetched at most every 8 s
+ const feeds={};
+ function agentActions(name){const f=feeds[name],box=el("div");
+  const draw=items=>fill(box,items.length?items.slice(-10).reverse().map(x=>actRow(x,x.k==="tool"?220:260)):el("div",{class:"sm dim"},"No session log yet."));
+  if(f)draw(f.items);
+  if(!f||now()-f.at>8000){feeds[name]={at:now(),items:f?f.items:[]};jget("/api/agent?name="+encodeURIComponent(name)).then(items=>{feeds[name]={at:now(),items};if(M.sel===name&&!selecting())renderSide();}).catch(()=>{});}
+  return box;}
+ function selectNode(i){if(!M.nodes.has(i))return;M.sel=i;M.selEdge=null;renderSide();}
+ // controls
+ const wb=$("#mwin");WINS.forEach(([l,w])=>wb.append(el("button",{class:w===M.win?"on":null,onclick:e=>{M.win=w;for(const b of wb.children)b.classList.toggle("on",b===e.target);M.fit=true;M.cut=null;M.playing=false;rplay.textContent="▶ Replay";rtime.textContent="live";slider.value=1000;build();M.alpha=1;renderSide();}},l)));
+ const mb=$("#mmode");[["agents","Agents"],["threads","Agents + threads"]].forEach(([k,l])=>mb.append(el("button",{class:k===M.mode?"on":null,onclick:e=>{M.mode=k;for(const b of mb.children)b.classList.toggle("on",b===e.target);M.fit=true;build();M.alpha=1;renderSide();}},l)));
+ const ab=el("button",{class:M.active?"on":null,title:"Show only the agents running now. During replay: only those running at that moment.",onclick:()=>{M.active=!M.active;localStorage.setItem("meshActive",M.active?"1":"0");ab.classList.toggle("on",M.active);M.selEdge=null;M.fit=true;build();M.alpha=1;renderSide();}},"Active only");$("#mact").append(ab,el("button",{title:"Throw away this layout and lay the mesh out again",onclick:()=>{M.nodes=new Map();M.selEdge=null;M.fit=true;build();M.alpha=1;renderSide();}},"Redraw"));
+ fill($("#mlegend"),
+  el("div",null,STATUS.map(x=>el("span",{title:x[2]},el("span",{class:"dot",style:`background:var(${x[1]})`}),x[0])),el("span",null,"◆ you")),
+  el("div",null,el("span",null,el("span",{class:"dot live",style:"background:var(--other)"}),"running"),el("span",null,el("span",{class:"dot",style:"background:var(--other);opacity:.8"}),"ended lately"),el("span",null,el("span",{class:"dot",style:"background:var(--other);opacity:.5"}),"ended long ago"),el("span",null,"– – started by")));
+ requestAnimationFrame(frame);
+ let seenVer=-1,lastSide=0;
+ return{resize,select:selectNode,
+  refresh(){if(M.cut!=null)return;if(!M.W)resize();if(seenVer!==S.ver||now()-M.lastBuild>6e4){seenVer=S.ver;M.lastBuild=now();build();if(now()-lastSide>4000){lastSide=now();if(!selecting())renderSide();}}else if(!$("#side").childNodes.length)renderSide();},
+  onPost(p){if(view==="mesh"&&M.cut==null){if(!M.nodes.has(p.from))build();emit(p);}}};
+})();
+
+// ---------- MARKDOWN ----------
+// Posts become DOM nodes, never an HTML string: any HTML in a post stays visible text, only http(s) links are made,
+// and images stay links because this page loads nothing from elsewhere. Single line breaks are kept, as the board means them.
+// Emphasis is stricter than GFM on purpose: `*` has to open after a space or bracket, so globs and products stay as written.
+const MD_INLINE=new RegExp([
+ "\\\\([\\\\`*_~\\[\\]()#>|!-])",                                        // 1 escaped character
+ "(`+)(?!`)(.+?)(?<!`)\\2(?!`)",                                         // 2,3 code
+ "!?\\[([^\\]\\n]+)\\]\\((https?:\\/\\/[^\\s)]+)(?:\\s+\"[^\"]*\")?\\)", // 4,5 link or image
+ "\\*\\*(?=\\S)(.+?)(?<=\\S)\\*\\*",                                     // 6 bold
+ "(?<![A-Za-z0-9_])__(?=\\S)(.+?)(?<=\\S)__(?![A-Za-z0-9_])",            // 7 bold
+ "(?<![^\\s(\\[\"'>])\\*(?=[^\\s*])(.+?)(?<=[^\\s*/])\\*(?![A-Za-z0-9*])", // 8 italic
+ "(?<![A-Za-z0-9_])_(?=[^\\s_])(.+?)(?<=[^\\s_])_(?![A-Za-z0-9_])",      // 9 italic
+ "~~(?=\\S)(.+?)(?<=\\S)~~",                                             // 10 struck out
+ "https?:\\/\\/[^\\s<>]+",                                               // bare link
+].join("|"),"g");
+const mdLink=(href,...kids)=>el("a",{href,target:"_blank",rel:"noopener noreferrer"},...kids);
+function mdInline(s){const out=[];let at=0;
+ for(const m of s.matchAll(MD_INLINE)){if(m.index<at)continue;
+  let end=m.index+m[0].length,node;
+  if(m[1]!=null)node=m[1];
+  else if(m[3]!=null){const c=m[3];node=el("code",null,/^ .*[^ ].* $|^ [^ ] $/.test(c)?c.slice(1,-1):c);}
+  else if(m[5]!=null)node=mdLink(m[5],mdInline(m[4]));
+  else if(m[6]!=null||m[7]!=null)node=el("strong",null,mdInline(m[6]??m[7]));
+  else if(m[8]!=null||m[9]!=null)node=el("em",null,mdInline(m[8]??m[9]));
+  else if(m[10]!=null)node=el("del",null,mdInline(m[10]));
+  else{let u=m[0].replace(/[.,;:!?'"*_`\]]+$/,"");// a bare link: leave sentence punctuation and an unmatched ) outside it
+   while(u.endsWith(")")&&(u.match(/\)/g).length>(u.match(/\(/g)||[]).length))u=u.slice(0,-1);
+   end=m.index+u.length;node=mdLink(u,u);}
+  if(m.index>at)out.push(s.slice(at,m.index));out.push(node);at=end;}
+ if(at<s.length)out.push(s.slice(at));return out;}
+const MD_FENCE=/^ *(`{3,}|~{3,})/,MD_HEAD=/^ {0,3}(#{1,6})[ \t]+(.*?)(?:[ \t]+#+)?[ \t]*$/,MD_HR=/^ {0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*$/,MD_QUOTE=/^ {0,3}> ?/,
+ MD_ITEM=/^( *)([-*+]|\d{1,9}[.)])([ \t]+)(.*)$/,MD_TSEP=/^ *\|?[ \t]*:?-+:?[ \t]*(\|[ \t]*:?-+:?[ \t]*)*\|?[ \t]*$/;
+const mdIndent=l=>l.match(/^ */)[0].length;
+function mdCells(l){l=l.trim().replace(/^\|/,"");const out=[];let c="",tick=false;// a | inside code doesn't split a cell
+ for(let i=0;i<l.length;i++){const k=l[i];if(k==="\\"&&l[i+1]==="|"){c+="\\|";i++;}else if(k==="`"){tick=!tick;c+=k;}else if(k==="|"&&!tick){out.push(c.trim());c="";}else c+=k;}
+ if(c.trim())out.push(c.trim());return out;}
+const mdIsTable=(l,n)=>l.includes("|")&&n!=null&&n.includes("-")&&n.includes("|")&&MD_TSEP.test(n);
+const mdStarts=(l,n)=>MD_FENCE.test(l)||MD_HEAD.test(l)||MD_HR.test(l)||MD_QUOTE.test(l)||MD_ITEM.test(l)||mdIsTable(l,n);
+function mdBlocks(ls){const out=[];let i=0;
+ while(i<ls.length){const l=ls[i];let m;
+  if(!l.trim()){i++;continue;}
+  if(m=l.match(MD_FENCE)){const pad=mdIndent(l),end=new RegExp("^ *"+m[1][0]+"{"+m[1].length+",}[ \\t]*$"),code=[];// an unclosed fence runs to the end
+   for(i++;i<ls.length&&!end.test(ls[i]);i++)code.push(ls[i].slice(Math.min(pad,mdIndent(ls[i]))));
+   i++;out.push(el("pre",null,el("code",null,code.join("\n"))));continue;}
+  if(mdIsTable(l,ls[i+1])){const head=mdCells(l),rows=[];
+   for(i+=2;i<ls.length&&ls[i].trim()&&ls[i].includes("|");i++)rows.push(mdCells(ls[i]));
+   out.push(el("div",{class:"tw"},el("table",null,el("thead",null,el("tr",null,head.map(c=>el("th",null,mdInline(c))))),
+    el("tbody",null,rows.map(r=>el("tr",null,head.map((_,k)=>el("td",null,mdInline(r[k]||""))))))))); continue;}
+  if(m=l.match(MD_HEAD)){out.push(el("h"+m[1].length,null,mdInline(m[2])));i++;continue;}
+  if(MD_HR.test(l)){out.push(el("hr"));i++;continue;}
+  if(MD_QUOTE.test(l)){const q=[];for(;i<ls.length&&MD_QUOTE.test(ls[i]);i++)q.push(ls[i].replace(MD_QUOTE,""));out.push(el("blockquote",null,mdBlocks(q)));continue;}
+  if(m=l.match(MD_ITEM)){const ord=/\d/.test(m[2]),pad=m[1].length,items=[];
+   while(i<ls.length){const k=ls[i].match(MD_ITEM);
+    if(!k||/\d/.test(k[2])!==ord||k[1].length>pad+1||MD_HR.test(ls[i]))break;
+    const width=k[1].length+k[2].length+k[3].length,body=[k[4]];
+    for(i++;i<ls.length;i++){const x=ls[i];
+     if(x.trim()){if(mdIndent(x)<=k[1].length)break;body.push(x.slice(Math.min(width,mdIndent(x))));continue;}
+     let j=i;while(j<ls.length&&!ls[j].trim())j++;// blank lines stay in the item only if indented text follows
+     if(j>=ls.length||mdIndent(ls[j])<=k[1].length)break;body.push("");}
+    items.push(el("li",null,mdBlocks(body)));
+    let j=i;while(j<ls.length&&!ls[j].trim())j++;i=j;}
+   const start=ord?parseInt(m[2],10):1;out.push(el(ord?"ol":"ul",start!==1?{start}:null,items));continue;}
+  const para=[l];for(i++;i<ls.length&&ls[i].trim()&&!mdStarts(ls[i],ls[i+1]);i++)para.push(ls[i]);
+  out.push(el("p",null,mdInline(para.join("\n"))));}
+ return out;}
+const mdRender=s=>mdBlocks(String(s||"").replace(/\r\n?/g,"\n").split("\n"));
+// The collapsed view of a long post: cut on a line end if one is near, and close any bold or code the cut left open.
+function mdCut(s,n){let c=s.slice(0,n);const nl=c.lastIndexOf("\n");if(nl>n/2)c=c.slice(0,nl);else{const sp=c.lastIndexOf(" ");if(sp>n/2)c=c.slice(0,sp);}
+ c=c.trimEnd().replace(/[.,;:]+$/,"");const last=c.slice(c.lastIndexOf("\n")+1);
+ if(!MD_FENCE.test(last)){const odd=x=>(last.split(x).length-1)%2===1;if(odd("`"))c+="`";if(odd("**"))c+="**";}
+ return c+"…";}
+// One-line previews (thread list, Now, tooltips) stay plain text, so they drop the marks they can't show.
+const mdPlain=s=>String(s||"").replace(/\[([^\]\n]+)\]\(https?:[^\s)]+\)/g,"$1").replace(/\*\*|~~|`/g,"").replace(/^ {0,3}#{1,6}[ \t]+/gm,"");
+
+// ---------- COMMS ----------
+const C={thread:null,agent:null,pair:null,q:"",scope:"active",sys:false,limit:250,tq:"",dirty:true,open:new Set(),ver:-1};
+const scope=$("#tscope");[["active","Last 24h"],["all","All"]].forEach(([k,l])=>scope.append(el("button",{class:k===C.scope?"on":null,onclick:e=>{C.scope=k;for(const b of scope.children)b.classList.toggle("on",b===e.target);C.dirty=true;renderComms(true);}},l)));
+$("#tq").addEventListener("input",e=>{C.tq=e.target.value.toLowerCase();renderThreads();});
+function renderThreads(){const t=now();const ran=new Set(S.live?S.live.agents.map(a=>a.thread):[]);
+ let ds=[...S.threads.values()];if(C.scope==="active")ds=ds.filter(d=>d.last>t-DAY||ran.has(d.name)||d.name===C.thread);
+ if(C.tq)ds=ds.filter(d=>d.name.toLowerCase().includes(C.tq));ds.sort((a,b)=>b.last-a.last);
+ fill($("#tlist"),
+  el("div",{class:"th"+(!C.thread&&!C.agent&&!C.pair?" on":""),onclick:()=>{Object.assign(C,{thread:null,agent:null,pair:null});C.dirty=true;go("comms");}},el("div",{class:"n"},el("span",{class:"nm"},"Everything")),el("div",{class:"s"},S.posts.length+" posts, newest last")),
+  ds.map(d=>{const lp=d.posts[d.posts.length-1];const live=ran.has(d.name);
+   return el("div",{class:"th"+(C.thread===d.name?" on":""),onclick:()=>openThread(d.name)},
+    el("div",{class:"n"},el("span",{class:"dot"+(live?" live":""),style:`background:var(${tierVar(tierOf(d.name))})`}),el("span",{class:"nm"},d.name),el("span",{class:"dim3 sm",style:"font-weight:400"},ago(d.last).replace(" ago",""))),
+    el("div",{class:"s"},`${d.posts.length} · ${lp.from}: ${short(mdPlain(lp.text).replace(new RegExp("^(@\\S+\\s+)*"+lp.from+":\\s*"),""),60)}`));}));}
+// Attachments: images as thumbnails, text files as a card that opens in place, anything else as a download card.
+// All open in one viewer window; text is shown through textContent only, and svg is never rendered.
+const IMG=/\.(png|jpe?g|gif)$/i,TXT=/\.(txt|md|log|json|jsonl|csv|tsv|py|js|mjs|ts|sh|c|h|cpp|v|sv|vh|yaml|yml|toml|ini|cfg|xml|html|css|go|rs|kicad_pcb|kicad_sch|net|sp|cir|spice|lef|def|sdc|tcl)$/i;
+const fileUrl=(p,f)=>`files/${encodeURIComponent(p.id)}/${encodeURIComponent(f.name)}`;
+const fsize=n=>n==null?"":n>=1048576?(n/1048576).toFixed(1)+" MB":n>=1024?Math.round(n/1024)+" kB":n+" B";
+function attachment(p,f){const u=fileUrl(p,f);
+ if(IMG.test(f.name))return el("button",{class:"thumb",title:f.name+" · click to view",onclick:e=>{e.stopPropagation();viewFile(p,f);}},el("img",{src:u,alt:f.name,loading:"lazy"}),el("span",null,f.name));
+ const txt=TXT.test(f.name)&&(f.size==null||f.size<2*1048576);
+ return el(txt?"button":"a",{class:"fcard",...(txt?{onclick:e=>{e.stopPropagation();viewFile(p,f);}}:{href:u,download:f.name}),title:txt?"Click to read":"Download"},
+  el("b",null,(f.name.split(".").pop()||"file").slice(0,5).toUpperCase()),el("span",null,el("span",{class:"fn"},f.name),el("span",{class:"sm dim"},fsize(f.size)+(txt?" · click to read":" · download"))));}
+function viewFile(p,f){const u=fileUrl(p,f),all=(p.files||[]).filter(x=>IMG.test(x.name)||TXT.test(x.name));let i=Math.max(0,all.findIndex(x=>x.name===f.name));
+ const stage=el("div",{class:"vstage"}),cap=el("div",{class:"sm dim"}),dlg=el("dialog",{class:"viewer"},
+  el("div",{class:"vbar"},cap,el("span",{style:"margin-left:auto;display:flex;gap:.4rem"},
+   all.length>1?el("button",{class:"chip",onclick:()=>show(i-1)},"‹ Prev"):null,all.length>1?el("button",{class:"chip",onclick:()=>show(i+1)},"Next ›"):null,
+   el("a",{class:"chip",id:"vopen",target:"_blank",rel:"noopener"},"Open original"),el("button",{class:"chip",onclick:()=>dlg.close()},"Close ✕"))),stage);
+ async function show(k){i=(k+all.length)%all.length;const g=all[i],gu=fileUrl(p,g);dlg.querySelector("#vopen").href=gu;cap.textContent=`${g.name} · ${fsize(g.size)} · from ${p.from}, ${stamp(p.t)}`;
+  if(IMG.test(g.name)){const im=el("img",{src:gu,alt:g.name,title:"Click to zoom"});im.onclick=()=>im.classList.toggle("full");fill(stage,im);return;}
+  const pre=el("pre",{class:"vtext"},"Loading…");fill(stage,pre);
+  try{const r=await fetch(gu,{cache:"no-store"});if(!r.ok)throw Error(r.status);let t=await r.text();const cut=t.length>400000;if(cut)t=t.slice(0,400000);pre.textContent=t+(cut?"\n\n… (cut here; open the original for the rest)":"");}
+  catch(e){pre.textContent="Couldn't load it: "+e.message;}}
+ dlg.addEventListener("keydown",e=>{if(all.length>1&&e.key==="ArrowRight")show(i+1);if(all.length>1&&e.key==="ArrowLeft")show(i-1);});
+ dlg.addEventListener("click",e=>{if(e.target===dlg)dlg.close();});
+ dlg.addEventListener("close",()=>dlg.remove());document.body.append(dlg);dlg.showModal();show(i);}
+// Has this post reached the agent it names? Read: handed to it mid-run (the inbox hook's record), or a session of it began after the post, whose prompt carries it.
+const DELIV={sets:{},sig:""};
+function receipt(p,m){if(!isAgent(m)||now()-p.t>3*DAY||p.from===m)return null;
+ const q=(S.live&&S.live.pending||[]).find(x=>x.name===m),queued=q&&(q.ids||[]).includes(p.id);
+ const read=(DELIV.sets[m]&&DELIV.sets[m].has(p.id))||(!queued&&S.sessions.some(s=>s.name===m&&s.start>=p.t-2000));
+ const[mark,col,t]=read?["✓","--good",`${m} has this`]:queued?["…","--t1",`queued: it reaches ${m} when it starts`]:isRunning(m)?["…","--warn",`waiting: ${m} sees this after its current step`]:["○","--bad",`hasn't reached ${m}`];
+ return el("span",{class:"rcpt",style:`color:var(${col})`,title:t,"aria-label":t},mark);}
+async function pollDelivered(){if(document.hidden||(view!=="comms"&&view!=="agent"&&!A.drawer))return;try{const v=await jget("/api/delivered");const sig=JSON.stringify(v)+JSON.stringify(S.live&&S.live.pending);if(sig===DELIV.sig)return;DELIV.sig=sig;
+  DELIV.sets=Object.fromEntries(Object.entries(v).map(([k,x])=>[k,new Set(x)]));C.dirty=true;C.keep=true;if(view==="comms")renderComms(true);}catch(e){}}
+setInterval(pollDelivered,3000);
+function msgEl(p,showThread){const sys=SYS.has(p.from);const you=p.from==="person";const long=p.text.length>700;const open=C.open.has(p.id);
+ const woke=(S.woke[p.id]||[]).filter(s=>!p.men.includes(s.name)||!s.resumed);
+ const tos=p.men.filter(m=>m!=="new");
+ const body=el("div",{class:"body md"},mdRender(long&&!open?mdCut(p.text,600):p.text));
+ return el("div",{class:"msg"+(sys?" sys":"")+(you?" person":""),"data-id":p.id},
+  el("div",{class:"m"},
+   el("button",{class:"who",onclick:()=>openAgent(p.from),title:p.from+": "+agentStatus(p.from).label},el("span",{class:"dot",style:`background:${agentColor(p.from)}`}),p.from),isAgent(p.from)?copyBtn(p.from):null,
+   tos.length?el("span",{class:"arrow"},"→"):null,tos.flatMap(m=>[nameChip(m),receipt(p,m)]),
+   showThread?threadChip(p.th):null,
+   woke.length?el("span",{class:"woke"},woke.map(s=>(s.resumed?"woke ":"started ")+s.name).join(", ")):null,
+   APP.app&&can("post")?el("button",{class:"copy",title:"Reply to this post; wakes its author",onclick:()=>replyTo(p)},"Reply"):null,el("span",{class:"tm",title:p.at},clock(p.t))),
+  body,(p.files||[]).length?el("div",{class:"att"},p.files.map(f=>attachment(p,f))):null,long?el("button",{class:"more",onclick:()=>{open?C.open.delete(p.id):C.open.add(p.id);C.dirty=true;C.keep=true;renderComms(true);}},open?"Show less":`Show all ${p.text.length} characters`):null);}
+// Everyone on a thread: who has posted, who has run or is running on it (a new agent shows from the moment it starts, before it posts), who's queued for it.
+function threadMembers(th){const d=S.threads.get(th),m=new Set(d?d.who:[]);for(const s of S.sessions)if(s.thread===th)m.add(s.name);
+ for(const a of (S.live?S.live.agents:[]))if(a.thread===th&&a.name)m.add(a.name);for(const p of (S.live?S.live.pending:[]))if((p.threads||[]).includes(th))m.add(p.name);
+ const rank=n=>OUTSIDE.has(n)?0:isRunning(n)?1:S.pending[n]?2:3;return[...m].sort((a,b)=>rank(a)-rank(b));}
+function renderComms(force){const fresh=C.ver!==S.ver;if(!fresh&&!C.dirty&&!force)return;if(selecting()&&!C.dirty)return;renderThreads();
+ if(!fresh&&!C.dirty){return;}
+ document.body.classList.toggle("inthread",!!(C.thread||C.agent||C.pair));C.ver=S.ver;const box=$("#msgs"),stick=box.scrollTop+box.clientHeight>box.scrollHeight-60;const keep=C.keep?box.scrollTop:null;const chg=C.dirty&&!C.keep;C.dirty=false;C.keep=false;
+ const q=C.q.toLowerCase().split(/\s+/).filter(Boolean);
+ let src=C.thread?(S.threads.get(C.thread)||{posts:[]}).posts:S.posts;
+ let ps=src.filter(p=>{if(C.agent&&p.from!==C.agent&&!p.men.includes(C.agent))return false;
+  if(C.pair&&!((p.from===C.pair[0]&&p.men.includes(C.pair[1]))||(p.from===C.pair[1]&&p.men.includes(C.pair[0]))))return false;
+  if(!C.sys&&SYS.has(p.from)&&!C.thread)return false;
+  if(q.length){if(p.lc==null)p.lc=(p.text+" "+p.from+" "+p.th).toLowerCase();if(!q.every(w=>p.lc.includes(w)))return false;}
+  return true;});
+ const total=ps.length;ps=ps.slice(-C.limit);
+ const title=C.thread||(C.agent?"Everything by or to "+C.agent:C.pair?`${C.pair[0]} and ${C.pair[1]}`:"Everything");
+ const d=C.thread&&S.threads.get(C.thread);
+ const who=d?[...d.who]:C.agent?[...new Set(src.filter(p=>p.from===C.agent).map(p=>p.th))].slice(-14):[];
+ if(!$("#mq")){fill($("#chead"),el("div",{class:"tt"},el("button",{class:"chip mback",onclick:()=>{Object.assign(C,{thread:null,agent:null,pair:null});C.dirty=true;go("comms");}},"‹ Threads"),el("b",{id:"ctitle"}),el("span",{class:"sm dim",id:"cinfo"}),el("span",{id:"ctier"}),
+   el("div",{style:"margin-left:auto;display:flex;gap:.6rem;align-items:center"},el("label",{class:"sm dim",style:"white-space:nowrap"},el("input",{type:"checkbox",id:"msys",style:"vertical-align:-1px",onchange:e=>{C.sys=e.target.checked;C.dirty=true;renderComms(true);}})," starter notices"),
+    el("input",{type:"search",id:"mq",placeholder:"Search messages",style:"width:230px",oninput:e=>{C.q=e.target.value;C.dirty=true;renderComms(true);}}))),el("div",{id:"people"}));}
+ $("#ctitle").textContent=title;
+ $("#cinfo").textContent=(q.length?`${total} match${total===1?"":"es"}`:`${total} post${total===1?"":"s"}`)+(d?` · since ${stamp(d.first)}`:"");
+ fill($("#people"),C.thread?threadMembers(C.thread).map(n=>nameChip(n,null,true)):C.agent?who.map(threadChip):null);updateComposer();
+ const tk=C.thread?C.thread+"|"+tierOf(C.thread)+"|"+!!(S.live&&S.live.priorities&&(S.live.priorities.set||{})[C.thread]):"";
+ if($("#ctier").dataset.k!==tk){$("#ctier").dataset.k=tk;fill($("#ctier"),C.thread?tierButton(C.thread):null);}
+ const out=[];if(total>ps.length)out.push(el("div",{style:"text-align:center;padding:.5rem"},el("button",{class:"chip",onclick:()=>{C.limit+=500;C.dirty=true;C.keep=true;renderComms(true);}},`Show older (${total-ps.length} more)`)));
+ let day="";for(const p of ps){const dn=dayName(p.t);if(dn!==day){day=dn;out.push(el("div",{class:"day"},dn));}out.push(msgEl(p,!C.thread));}
+ if(!ps.length)out.push(el("div",{class:"dim",style:"padding:2rem;text-align:center"},"No posts match."));
+ fill(box,out);
+ if(keep!=null)box.scrollTop=keep;else if(chg||stick)box.scrollTop=box.scrollHeight;}
+
+// ---------- TIMELINE ----------
+// T.win is the span shown, T.end its right edge; a null end means it follows now.
+const T={win:DAY,end:null,last:0,ver:-1,w:0,raf:0,active:localStorage.getItem("tlActive")==="1"};
+const TL=190,TR=18,TMIN=5*MIN,TMAX=30*DAY;
+const tw=$("#twin");const TPRE=[["1h",HOUR],["6h",6*HOUR],["24h",DAY],["3d",3*DAY],["7d",7*DAY]];
+TPRE.forEach(([l,w])=>tw.append(el("button",{onclick:()=>tset(w,null)},l)));
+const tz=$("#tzoom");const tcentre=()=>T.end==null?1:.5;// following now, zoom keeps now on the right edge
+tz.append(el("button",{title:"Zoom out",onclick:()=>tzoom(1.6,tcentre())},"−"),el("button",{title:"Zoom in",onclick:()=>tzoom(1/1.6,tcentre())},"+"));
+const tback=el("button",{title:"Back to the latest, following now",onclick:()=>tset(T.win,null)},"Now");tz.append(tback);
+function tsync(){TPRE.forEach(([,w],i)=>tw.children[i].classList.toggle("on",w===T.win&&T.end==null));tback.style.display=T.end==null?"none":"";
+ const b=T.end??now();$("#trange").textContent=`${stamp(b-T.win)} – ${T.end==null?"now":stamp(b)} (${dur(T.win)})`;}
+function tset(win,end){T.win=Math.max(TMIN,Math.min(TMAX,win));T.end=end==null||end>=now()-1000?null:end;tsync();T.ver=-1;
+ if(!T.raf)T.raf=requestAnimationFrame(()=>{T.raf=0;renderTimeline();});}
+function tzoom(k,frac){const c=(T.end??now())-T.win+frac*T.win,w=Math.max(TMIN,Math.min(TMAX,T.win*k));tset(w,c+(1-frac)*w);}
+{const box=$("#tscroll");const span=()=>Math.max(1,box.clientWidth-TL-TR);let d=null,swallow=false;
+ box.addEventListener("wheel",e=>{
+  if(e.ctrlKey||e.metaKey){e.preventDefault();const f=(e.clientX-box.getBoundingClientRect().left-TL)/span();tzoom(Math.exp(e.deltaY*(e.deltaMode?.05:Math.abs(e.deltaY)<40?.015:.004)),Math.max(0,Math.min(1,f)));return;}
+  const dx=e.shiftKey?e.deltaY:e.deltaX;
+  if(Math.abs(dx)>Math.abs(e.shiftKey?0:e.deltaY)){e.preventDefault();tset(T.win,(T.end??now())+dx/span()*T.win);}},{passive:false});
+ box.addEventListener("pointerdown",e=>{if(e.button===0)d={x:e.clientX,end:T.end??now(),id:e.pointerId,on:false};});
+ box.addEventListener("pointermove",e=>{if(!d)return;const dx=e.clientX-d.x;if(!d.on){if(Math.abs(dx)<5)return;d.on=true;box.setPointerCapture(d.id);box.classList.add("drag");hideTip();}
+  tset(T.win,d.end-dx/span()*T.win);});
+ const stop=()=>{if(d&&d.on){swallow=true;setTimeout(()=>swallow=false,0);box.classList.remove("drag");}d=null;};
+ box.addEventListener("pointerup",stop);box.addEventListener("pointercancel",stop);
+ box.addEventListener("click",e=>{if(swallow){e.stopPropagation();e.preventDefault();}},true);}
+tsync();
+{const ab=el("button",{class:T.active?"on":null,title:"Show only the agents running now, and the rows they're on",onclick:()=>{T.active=!T.active;localStorage.setItem("tlActive",T.active?"1":"0");ab.classList.toggle("on",T.active);T.ver=-1;renderTimeline();}},"Active only");$("#tact").append(ab);}
+fill($("#tleg"),el("span",null,el("span",{class:"tswatch live"}),"running"),el("span",null,el("span",{class:"tswatch ended"}),"ended"),el("span",null,el("span",{class:"dot",style:"background:var(--bad)"}),"error or stuck"),el("span",null,el("span",{class:"dot",style:"background:var(--warn)"}),"idle"),el("span",null,el("span",{class:"dot",style:"background:var(--good)"}),"working"));
+function renderTimeline(){const box=$("#tscroll"),W=box.clientWidth;const t=now();
+ if(T.ver===S.ver&&T.w===W&&t-T.last<Math.min(3e4,T.win/60))return;T.ver=S.ver;T.w=W;T.last=t;tsync();
+ const svg=$("#tl"),t1=T.end??t,t0=t1-T.win,LW=TL,R=TR,AX=26,RH=15,PAD=5;const x=v=>LW+(v-t0)/T.win*(W-LW-R);
+ const lanes=new Map();const lane=th=>{let l=lanes.get(th);if(!l){l={th,bars:[],ticks:[],last:0};lanes.set(th,l);}return l;};
+ const sLive=s=>!s.end&&isRunning(s.name);let nLive=0,nDone=0;
+ for(const s of S.sessions){const e=sEnd(s);if(e<t0||s.start>t1)continue;if(sLive(s))nLive++;else{nDone++;if(T.active)continue;}const l=lane(s.thread||"(none)");l.bars.push(s);l.last=Math.max(l.last,e);}
+ for(const p of S.posts){if(p.t<t0||p.t>t1||SYS.has(p.from))continue;if(T.active&&!lanes.has(p.th))continue;const l=lane(p.th);l.ticks.push(p);l.last=Math.max(l.last,p.t);}
+ const rankT=l=>Math.max(l.last,S.threads.get(l.th)?.last||0);// rows keep their order as the view moves
+ const hasLive=l=>l.bars.some(sLive);
+ const list=[...lanes.values()].sort((a,b)=>hasLive(b)-hasLive(a)||rankT(b)-rankT(a));
+ $("#tcount").textContent=`${nLive} running, ${nDone} ended in this range`;
+ let y=AX;const kids=[];const colLine=cssv("--line"),ink3=cssv("--ink3");
+ // hour grid drawn after we know the height
+ const laneEls=[];
+ for(const l of list){l.bars.sort((a,b)=>a.start-b.start);const rows=[];for(const s of l.bars){let r=rows.findIndex(end=>end<s.start);if(r<0){r=rows.length;rows.push(0);}rows[r]=sEnd(s);s._r=r;}
+  const n=Math.max(1,rows.length),h=n*RH+PAD*2,laneLive=hasLive(l);
+  const g=sv("g",{class:"lane"});g.addEventListener("click",()=>openThread(l.th));
+  g.append(sv("rect",{class:"bgl",x:0,y,width:W,height:h,fill:"transparent"}),sv("line",{x1:0,x2:W,y1:y+h,y2:y+h,stroke:laneLive&&!hasLive(list[list.indexOf(l)+1]||{bars:[]})?ink3:colLine}));
+  const lab=sv("text",{x:16,y:y+h/2+4,style:laneLive?"fill:var(--ink);font-weight:600":null});lab.textContent=short(l.th,24);g.append(lab);
+  if(laneLive)g.append(sv("circle",{cx:8,cy:y+h/2,r:3.5,fill:"var(--good)"}));
+    for(const s of l.bars){const a=Math.max(LW,x(s.start)),b=Math.max(a+2.5,Math.min(W-R,x(sEnd(s))));const live=sLive(s),by=y+PAD+s._r*RH+1,tv=live?agentColor(s.name):s.exit?"var(--bad)":"var(--ink3)";
+   const r=sv("rect",live?{x:a,y:by,width:b-a,height:RH-3,rx:3,fill:tv}:{x:a+.5,y:by+.5,width:Math.max(1.5,b-a-1),height:RH-4,rx:2.5,fill:tv,"fill-opacity":.14,stroke:tv,"stroke-width":1,"stroke-dasharray":"3 2"});
+   r.addEventListener("mousemove",e=>showTip(e.clientX,e.clientY,el("b",null,s.name),el("br"),el("i",null,`${l.th} · ${clock(s.start)}${s.end?"–"+clock(s.end):", still running"} · ${dur(sEnd(s)-s.start)}`),el("br"),el("i",null,`${s.resumed?"woken":"started"} by ${s.from||"?"}`+(s.exit&&s.exit!==0?` · exit ${s.exit}`:""))));
+   r.addEventListener("mouseleave",hideTip);r.addEventListener("click",e=>{e.stopPropagation();hideTip();openAgent(s.name);});g.append(r);
+   if(b-a>52){const tx=sv("text",{x:a+4,y:by+10,style:`fill:${live?"#fff":"var(--ink2)"};font-size:10.5px;pointer-events:none;${live?"font-weight:600":""}`});tx.textContent=s.name;g.append(tx);}
+   if(live&&T.end==null)g.append(sv("circle",{cx:b,cy:by+(RH-3)/2,r:4.5,fill:"var(--good)",stroke:"var(--surface)","stroke-width":1.5,style:"pointer-events:none"}));}
+  for(const p of l.ticks){const px=x(p.t);const tk=sv("rect",{x:px-.75,y:y,width:1.5,height:5,fill:cssv("--ink"),opacity:.6});
+   const hit=sv("rect",{x:px-3,y,width:6,height:h,fill:"transparent"});hit.addEventListener("mousemove",e=>showTip(e.clientX,e.clientY,el("b",null,p.from),el("i",null," · "+clock(p.t)),el("br"),short(mdPlain(p.text),180)));hit.addEventListener("mouseleave",hideTip);g.append(tk,hit);}
+  laneEls.push(g);y+=h;}
+ const H=Math.max(y+10,box.clientHeight-2);
+ const stepH=[1,2,5,10,15,30,60,120,180,360,720,1440,2880].map(m=>m*MIN).find(v=>v/T.win*(W-LW-R)>=72)||7*DAY;
+ const off=new Date().getTimezoneOffset()*MIN;
+ for(let m=Math.ceil((t0-off)/stepH)*stepH+off;m<=t1;m+=stepH){kids.push(sv("line",{x1:x(m),x2:x(m),y1:AX-4,y2:H,stroke:colLine}));
+  const tx=sv("text",{x:x(m),y:15,"text-anchor":"middle"});tx.textContent=stepH>=DAY?dayName(m):new Date(m).toLocaleTimeString([],stepH<HOUR?{hour:"numeric",minute:"2-digit"}:{hour:"numeric"})+(new Date(m).getHours()===0?" "+dayName(m):"");kids.push(tx);}
+ kids.push(...laneEls);if(T.end==null)kids.push(sv("line",{x1:x(t),x2:x(t),y1:AX-4,y2:H,stroke:cssv("--good"),"stroke-width":1.5}));
+ svg.setAttribute("width",W);svg.setAttribute("height",H);svg.replaceChildren(...kids);
+ if(!list.length){const tx=sv("text",{x:W/2,y:60,"text-anchor":"middle"});tx.textContent=T.active?"Nobody running in this range.":"Nothing in this window.";svg.append(tx);}}
+
+// ---------- USAGE ----------
+const money=c=>c==null?"–":c>=100?"$"+Math.round(c).toLocaleString():"$"+c.toFixed(c<10?2:1);
+const toks=n=>n>=1e9?(n/1e9).toFixed(1)+"B":n>=1e6?(n/1e6).toFixed(1)+"M":n>=1e3?Math.round(n/1e3)+"k":String(n);
+const LIST="At API list prices, what this would cost if billed per token. It's a measure of work, not what the plan charges.";
+function fileInfo(k){const s=S.byOut[k];return{name:s?s.name:k.split("-")[0],thread:s?s.thread:null};}
+function spendSince(from){let c=0;const U=S.usage;if(!U)return 0;for(const f of Object.values(U.files))for(const h in f.h)if(+h*1e3>=from)c+=f.h[h];return c;}
+function untilText(ms){return ms<=0?"now":dur(ms);}
+function usageProjection(series){const pts=series.filter(x=>x[2]!=null&&x[0]*1e3>now()-6*HOUR);if(pts.length<2)return null;
+ const a=pts[0],b=pts[pts.length-1];if(b[0]-a[0]<1800)return null;const rate=(b[2]-a[2])/(b[0]-a[0]);return rate>0?{rate,at:b[2]}:null;}
+function limitPart(title,w,opts){const past=w.r!=null&&w.r*1e3<now();const pct=past?0:Math.round(w.u*100),stop=opts.stop;
+ const col=pct>=90?"var(--bad)":pct>=75?"var(--warn)":"var(--t1)";const left=w.r*1e3-now();
+ return el("div",null,el("div",{class:"sm",style:"font-weight:550"},title),
+  el("div",{class:"big"},pct+"%"),
+  el("div",{class:"meter"},el("i",{style:`width:${Math.min(100,pct)}%;background:${col}`}),stop?el("u",{style:`left:${stop}%`,title:"Where the starter stops new agents"}):null),
+  el("div",{class:"sm dim"},w.r==null?"":past?`reset at ${clock(w.r*1e3)}, no new reading yet`:`resets ${left>DAY?dayName(w.r*1e3)+" "+clock(w.r*1e3):clock(w.r*1e3)}, in ${untilText(left)}`,opts.note?el("div",null,opts.note):null));}
+let lastU=-1;
+// One block per login: weekly, the 5-hour limit if the login's plan has one, and the history of each that has any.
+function loginBlock(U,l,t){const no5=!!l.no_five_hour;const L=l.limits||{},pr=usageProjection(l.series||[]);let note=null;
+ const st=l.stop||{},wStop=st.weekly??U.stop_pct,hStop=st.five_hour;
+ if(pr&&L.seven_day&&wStop){const hrs=(wStop/100-pr.at)/pr.rate/3600,left=(L.seven_day.r*1e3-t)/HOUR;
+  note=hrs<=0?`At or past ${wStop}%, where the starter stops new agents.`:hrs<left?`At the last 6 hours' pace it reaches ${wStop}%, where the starter stops new agents, in about ${dur(hrs*HOUR)}. That's before it resets.`:`At the last 6 hours' pace it won't reach ${wStop}% before it resets.`;}
+ // Each limit is the session's own reading if it is current, else the starter's reading, drawn the same way (bar, stop line, reset).
+ const rs=l.resets||{},src=l.read_at?"read "+ago(l.read_at*1e3):"from the last reading";
+ const fresh=!l.read_at||(L.at||0)>=l.read_at||l.weekly==null; // a session's reading only if newer than the API reading
+ const weekly=L.seven_day&&fresh&&(L.seven_day.r*1e3>t||l.weekly==null)?limitPart("Weekly",L.seven_day,{stop:wStop,note})
+  :l.weekly!=null?limitPart("Weekly",{u:l.weekly/100,r:rs.weekly},{stop:wStop,note:src})
+  :el("div",null,el("div",{class:"sm",style:"font-weight:550"},"Weekly"),el("div",{class:"big"},"?"),el("div",{class:"sm dim"},"not read yet"));
+ const five=no5?null:L.five_hour&&fresh&&L.five_hour.r*1e3>t?limitPart("5-hour",L.five_hour,{stop:hStop,note:L.five_hour.u>=.9?"A session stopped by this limit resumes after the reset.":null})
+  :l.five!=null?limitPart("5-hour",{u:l.five/100,r:rs.five_hour},{stop:hStop,note:src})
+  :l.weekly!=null?limitPart("5-hour",{u:0,r:null},{stop:hStop,note:"the last reading shows no 5-hour window open: no use in the last 5 hours"})
+  :L.five_hour?limitPart("5-hour",L.five_hour,{stop:hStop}):null;
+ const lineText=`Stops at ${wStop}% weekly${st.weekly==null?" (global)":""}`+(no5?". This plan has no 5-hour limit":", "+(hStop!=null?`${hStop}% 5-hour`:"no 5-hour stop"));
+ // limit history, 15-minute buckets carried forward
+ const span=48*HOUR,start=t-span,step=15*MIN,N=span/step,a5=new Array(N).fill(null),a7=new Array(N).fill(null);
+ for(const[w,u5,u7]of l.series||[]){const i=Math.floor((w*1e3-start)/step);if(i>=0&&i<N){if(u5!=null)a5[i]=u5*100;if(u7!=null)a7[i]=u7*100;}}
+ for(const a of[a5,a7])for(let i=1;i<N;i++)if(a[i]==null&&a[i-1]!=null)a[i]=a[i-1];
+ const any=a=>a.some(v=>v!=null),pc=v=>Math.round(v)+"%";
+ return el("div",{class:"card",style:l.paused?"border-style:dashed":null},el("div",{style:"display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;margin-bottom:.4rem"},el("b",{style:"font-weight:600"},l.name),
+   l.plan?el("span",{class:"chip",title:"The account's plan, from its login"},l.plan):null,
+   l.paused?el("span",{class:"chip",style:"color:var(--warn);border-color:var(--warn)"},"paused: no new runs"):null,
+   !can("limits")?null:el("button",{class:"chip",style:"margin-left:auto;background:none;cursor:pointer",title:lineText,onclick:()=>askLimits(U,l)},"Stop lines"),
+   !can("limits")?null:el("button",{class:"chip",style:"background:none;cursor:pointer",onclick:()=>askPause(U,l)},l.paused?"Resume account":"Pause account")),
+  el("div",{class:"sm dim",style:"margin:-.2rem 0 .4rem"},lineText),
+  el("div",{class:"grid",style:"grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:.8rem"},weekly,five),
+  any(a7)?chart("Weekly",a7,"step",start,step,pc,{max:100,top:"100%",mark:wStop,bare:1}):null,
+  !no5&&any(a5)?chart("5-hour",a5,"step",start,step,pc,{max:100,top:"100%",bare:1}):null);}
+// One block per other provider (from providers.status()): OpenRouter as dollars this month against the monthly cap the
+// starter holds runs at; Codex as its own 5-hour/weekly windows with the stop line at stop_pct.
+function providerBlock(name,p,checked){const btn=can("limits")&&(p.kind==="codex"||p.kind==="key")?el("button",{class:"chip",style:"margin-left:auto;background:none;cursor:pointer",onclick:()=>askProviderLine(name,p)},p.kind==="codex"?"Stop line":"Monthly limit"):null;
+ const head=(...x)=>el("div",{style:"display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;margin-bottom:.4rem"},el("b",{style:"font-weight:600"},name),...x,btn);
+ const read=el("div",{class:"sm dim",style:"margin-top:.4rem"},checked?"read "+ago(checked*1e3)+", every minute":"");
+ const msg=t=>el("div",{class:"card",style:"border-style:dashed"},head(el("span",{class:"chip"},p.kind==="codex"?"Codex CLI":"API")),el("div",{class:"sm dim"},t),read);
+ if(p.kind==="key"){if(p.error)return msg(p.error);const m=p.monthly||0,cap=p.monthly_cap,u=cap?m/cap:0,pct=Math.round(u*100);const b=p.budget,f=p.free&&p.free.limit?p.free:null,fu=f?f.used/f.limit:0;
+  const col=pct>=90?"var(--bad)":pct>=75?"var(--warn)":"var(--t1)",$$=v=>v==null?"?":v>0&&v<.01?"<$0.01":"$"+(v<10?v.toFixed(2):v.toFixed(0));
+  return el("div",{class:"card"},head(el("span",{class:"chip",title:"Pay per token: real money"},"API · pays per token")),
+   el("div",{class:"sm dim",style:"margin:-.2rem 0 .4rem"},cap?`The starter holds runs here once this month's spend reaches $${cap}.`:"No monthly limit set in config.json."),
+   el("div",{class:"sm",style:"font-weight:550"},"This month (UTC)"),el("div",{class:"big"},$$(m)+(cap?` of $${cap}`:"")),
+   cap?el("div",{class:"meter"},el("i",{style:`width:${Math.min(100,Math.max(u*100,m>0?1:0))}%;background:${col}`})):null,
+   el("div",{class:"sm dim"},`${$$(p.daily)} today`+(b&&b.remaining_usd!=null?` · ${$$(b.remaining_usd)} credit left`+(b.limit_usd!=null?` of ${$$(b.limit_usd)}`:"")+(b.scope==="workspace"?" on the account":b.scope==="api_key"||b.scope==="key_limit"?" on the key":""):p.remaining!=null?` · ${$$(p.remaining)} credit left on the key`+(p.limit!=null?` (of ${$$(p.limit)})`:""):"")),
+   f?el("div",{style:"margin-top:.7rem"},el("div",{class:"sm",style:"font-weight:550"},"Free models today (UTC)"),
+    el("div",{class:"big"},`${f.used} of ${f.limit} requests`),
+    el("div",{class:"meter"},el("i",{style:`width:${Math.min(100,Math.max(fu*100,f.used>0?1:0))}%;background:${fu>=.9?"var(--bad)":fu>=.75?"var(--warn)":"var(--t1)"}`})),
+    el("div",{class:"sm dim"},`${f.remaining} left, resets at 00:00 UTC · also capped at 20 a minute`)):null,read);}
+ if(p.kind==="codex"){if(!p.logged_in)return msg((p.error||"not logged in")+": the starter sends no runs to Codex until the ChatGPT login is set up (codex login).");
+  const ws=(p.windows||[]).slice().sort((a,b)=>(a.minutes||0)-(b.minutes||0)),nm=m=>m===300?"5-hour":m===10080?"Weekly":m?dur(m*MIN):"Limit";
+  return el("div",{class:"card"},head(el("span",{class:"chip",title:"The ChatGPT plan Codex runs on"},p.plan||"Codex CLI")),
+   el("div",{class:"sm dim",style:"margin:-.2rem 0 .4rem"},`Stops at ${p.stop_pct}% of any window.`),
+   ws.length?el("div",{class:"grid",style:"grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:.8rem"},ws.map(w=>limitPart(nm(w.minutes),{u:w.used/100,r:w.resets},{stop:p.stop_pct}))):el("div",{class:"sm dim"},"No limit windows reported."),read);}
+ return msg(p.error||"No limits to show.");}
+// Pause or resume a login, after a confirmation window. Everything the person needs to weigh is in the window.
+function askPause(U,l){const on=!l.paused,others=(U.logins||[]).filter(x=>x!==l&&!x.paused),i=(U.logins||[]).indexOf(l);
+ const say=on?[`The starter gives ${l.name} no new runs, and resumes none on it. Its usage keeps being read and shown here.`,
+   "Agents already running on it finish their runs. Runs stopped on a limit move to another account.",
+   null,
+   !others.length?"This is the last account not paused. Nothing can start until you resume one, not even runs you ask for.":null]
+  :[`The starter can use ${l.name} again. New runs go to whichever account has the most weekly room.`];
+ const err=el("div",{class:"sm",style:"color:var(--bad)"}),dlg=el("dialog",{style:"background:var(--surface);color:var(--ink);border:1px solid var(--line2);border-radius:9px;padding:1rem 1.1rem;max-width:30rem"},
+  el("div",{style:"font-weight:600;font-size:1.05rem;margin-bottom:.5rem"},(on?"Pause ":"Resume ")+l.name+"?"),
+  say.filter(Boolean).map(t=>el("p",{style:"margin:.4rem 0"},t)),err,
+  el("div",{style:"display:flex;justify-content:flex-end;gap:.5rem;margin-top:.8rem"},
+   el("button",{style:"background:none;border:1px solid var(--line2);border-radius:7px;padding:.25rem .8rem;cursor:pointer",onclick:()=>dlg.close()},"Cancel"),
+   el("button",{id:"pause-yes",style:"background:var(--ink);color:var(--surface);border:0;border-radius:7px;padding:.25rem .8rem;cursor:pointer",onclick:async()=>{
+     try{const r=await fetch("/api/login-pause",{method:"POST",headers:{"Content-Type":"application/json","X-Hive-Dash":"1"},body:JSON.stringify({name:l.name,paused:on})});
+      if(!r.ok)throw Error("the server said "+r.status);if(r.redirected)throw Error("sign in again and reload the page");
+      dlg.close();await pollUsage();}
+     catch(e){err.textContent="Nothing changed: "+e.message+".";}}},on?"Pause account":"Resume account")));
+ dlg.addEventListener("close",()=>dlg.remove());document.body.append(dlg);dlg.showModal();}
+// A confirmation window, the same look as the pause one. body: nodes; ok: async () => throws to show an error.
+function askBox(title,body,okText,ok){const err=el("div",{class:"sm",style:"color:var(--bad)"}),dlg=el("dialog",{style:"background:var(--surface);color:var(--ink);border:1px solid var(--line2);border-radius:9px;padding:1rem 1.1rem;max-width:30rem"},
+  el("div",{style:"font-weight:600;font-size:1.05rem;margin-bottom:.5rem"},title),...[body].flat(3),err,
+  el("div",{style:"display:flex;justify-content:flex-end;gap:.5rem;margin-top:.8rem"},
+   el("button",{style:"background:none;border:1px solid var(--line2);border-radius:7px;padding:.25rem .8rem;cursor:pointer",onclick:()=>dlg.close()},"Cancel"),
+   el("button",{style:"background:var(--ink);color:var(--surface);border:0;border-radius:7px;padding:.25rem .8rem;cursor:pointer",onclick:async()=>{
+     try{await ok();dlg.close();}catch(e){err.textContent="Nothing changed: "+e.message+".";}}},okText)));
+ dlg.addEventListener("close",()=>dlg.remove());document.body.append(dlg);dlg.showModal();return dlg;}
+async function postJ(path,body){const r=await fetch(path,{method:"POST",headers:{"Content-Type":"application/json","X-Hive-Dash":"1"},body:JSON.stringify(body)});
+ if(!r.ok)throw Error("the server said "+r.status);if(r.redirected)throw Error("sign in again and reload the page");}
+// Kill an agent's run: this window is the first step, typing its exact code the second. The server checks the code again.
+function killButton(n){return !can("stop")?null:el("button",{class:"chip",style:"color:var(--bad)",title:"Stop this agent's run now",onclick:e=>{e.stopPropagation();askKill(n);}},"Kill");}
+function askKill(n){const L=S.running.get(n),say={400:"the code didn't match",403:"this connection isn't allowed to kill",409:`${n} isn't running any more`};
+ const btn=el("button",{id:"kill-yes",style:"background:var(--bad);color:#fff;border:0;border-radius:7px;padding:.25rem .8rem;cursor:pointer"},"Kill "+n);
+ const input=el("input",{id:"kill-code",autocomplete:"off",spellcheck:"false",placeholder:n,style:"width:100%;box-sizing:border-box;margin-top:.2rem;padding:.3rem .5rem;font:inherit;background:var(--surface);color:var(--ink);border:1px solid var(--line2);border-radius:7px"});
+ const err=el("div",{id:"kill-err",class:"sm",style:"color:var(--bad);margin-top:.4rem"});
+ const dlg=el("dialog",{style:"background:var(--surface);color:var(--ink);border:1px solid var(--line2);border-radius:9px;padding:1rem 1.1rem;max-width:30rem"},
+  el("div",{style:"font-weight:600;font-size:1.05rem;margin-bottom:.5rem"},`Kill ${n}?`),
+  L&&L.doing?el("p",{class:"sm dim",style:"margin:.4rem 0;overflow-wrap:anywhere"},"Doing now: "+short(L.doing,160)):null,
+  el("p",{style:"margin:.4rem 0"},"This ends the run and the shells it started, right away, without letting it save its work."),
+  el("p",{style:"margin:.4rem 0"},"The starter won't resume it, and any wakes queued for it are dropped. A new post that mentions it starts it again. Jobs it detached with nohup keep running, and you'll be told their pids."),
+  el("label",{style:"display:block;margin-top:.6rem"},"Type ",el("b",null,n)," to confirm",input),err,
+  el("div",{style:"display:flex;justify-content:flex-end;gap:.5rem;margin-top:.8rem"},
+   el("button",{style:"background:none;border:1px solid var(--line2);border-radius:7px;padding:.25rem .8rem;cursor:pointer",onclick:()=>dlg.close()},"Cancel"),btn));
+ const upd=()=>{const ok=input.value===n;btn.disabled=!ok;btn.style.opacity=ok?1:.4;btn.style.cursor=ok?"pointer":"not-allowed";};
+ const go=async()=>{if(input.value!==n||btn.dataset.busy)return;btn.dataset.busy=1;btn.disabled=true;btn.textContent="Killing…";err.textContent="";
+  try{const r=await fetch("/api/kill",{method:"POST",headers:{"Content-Type":"application/json","X-Hive-Dash":"1"},body:JSON.stringify({name:n,confirm:input.value})});
+   if(r.redirected)throw Error("sign in again and reload the page");if(!r.ok)throw Error(say[r.status]||"the server said "+r.status);
+   const d=await r.json();await poll();S.ver++;render();
+   const left=[d.stuck.length?`These didn't die: ${d.stuck.join(", ")}.`:"",d.detached.length?`Detached jobs still running: ${d.detached.join(", ")}.`:""].filter(Boolean).join(" ");
+   if(!left){dlg.close();return;}
+   input.disabled=true;btn.remove();err.style.color="var(--ink)";err.textContent=`${n} was killed. ${left}`;}
+  catch(e){delete btn.dataset.busy;btn.textContent="Kill "+n;upd();err.textContent="Nothing was killed: "+e.message+".";}};
+ btn.onclick=go;input.oninput=upd;input.onkeydown=e=>{if(e.key==="Enter"){e.preventDefault();go();}};upd();
+ dlg.addEventListener("close",()=>dlg.remove());document.body.append(dlg);dlg.showModal();input.focus();}
+// A thread's tier, and a window to change it. It writes kb/priorities.md, the file the keeper follows.
+function tierButton(th){const t=tierOf(th);return el("button",{class:"chip",title:can("tier")?"Change this thread's tier":"This thread's tier",onclick:e=>{e.stopPropagation();if(can("tier"))askTier(th);}},
+  el("span",{class:"dot",style:`background:var(${tierVar(t)})`}),TIERS.find(x=>x[0]===t)[1]+" ▾");}
+function askTier(th){const P=S.live&&S.live.priorities||{},was=tierOf(th),setNow=(P.set||{})[th];let pick=was;
+ const opts=[["tier1","Tier 1","goes first; its jobs use the heavy fast lane"],["tier2","Tier 2","next"],["held","Held","agents save it and stop; nothing new starts"],["other","Not in the order","after tier 2"]];
+ const warn=el("p",{class:"sm",style:"color:var(--warn);margin:.4rem 0"});
+ const upd=()=>{warn.textContent=was==="held"&&pick!=="held"?"This takes it off hold. The keeper may start work on it again.":"";};
+ const radios=opts.map(([k,l,d])=>el("label",{style:"display:block;margin:.25rem 0;cursor:pointer"},el("input",{type:"radio",name:"tierpick",value:k,checked:k===was?true:null,onchange:()=>{pick=k;upd();}})," ",el("b",null,l),el("span",{class:"sm dim"}," · "+d)));
+ const clear=setNow?el("label",{style:"display:block;margin:.25rem 0;cursor:pointer"},el("input",{type:"radio",name:"tierpick",value:"",onchange:()=>{pick=null;warn.textContent="This goes back to what the list in kb/priorities.md says.";}})," ",el("b",null,"Back to the list"),el("span",{class:"sm dim"}," · remove your dashboard setting")):null;
+ askBox("Tier for "+th,[el("p",{class:"sm dim",style:"margin:.2rem 0 .5rem"},`Now: ${TIERS.find(x=>x[0]===was)[1]}${setNow?", set here on the dashboard":", from the list in kb/priorities.md"}. Your choice is saved there, in its own section, and beats the list for this thread.`),radios,clear,warn],"Save",
+  async()=>{if(pick===was&&setNow)return;await postJ("/api/tier",{thread:th,tier:pick});await poll();S.ver++;render();});}
+// A provider's line: Codex's stop percent (any window), OpenRouter's monthly dollar limit. Empty: back to config.json's.
+function askProviderLine(name,p){const cx=p.kind==="codex",now=cx?p.stop_pct:p.monthly_cap;
+ const i=el("input",{type:"number",min:0,max:cx?100:1000,step:cx?1:0.5,value:now??"",placeholder:cx?"95":"10",style:"width:6rem"});
+ askBox((cx?"Stop line for ":"Monthly limit for ")+name,[el("p",{class:"sm dim",style:"margin:.2rem 0"},cx?`The starter sends no new runs to ${name} once any of its windows (5-hour, weekly) passes this line. Runs already on it finish.`:`The starter sends no new runs to ${name} once this month's spend (UTC) reaches this many dollars. It is real money: raising it lets the hive spend more.`),
+   el("label",{style:"display:flex;gap:.6rem;align-items:center;margin:.5rem 0"},el("b",{style:"min-width:6.5rem"},cx?"Stop at":"Limit"),cx?null:"$",i,cx?"%":null),
+   el("div",{class:"sm dim"},"Empty: back to the value in config.json.")],"Save",
+  async()=>{const v=i.value.trim(),n=v===""?null:Number(v);if(n!=null&&(!isFinite(n)||n<0||n>(cx?100:1000)))throw Error(v+" isn't a number from 0 to "+(cx?100:1000));
+   await postJ("/api/provider-limit",{name,key:cx?"stop_pct":"monthly_usd",value:n});setTimeout(pollUsage,2500);});}
+// A login's stop lines: weekly and 5-hour. Empty means the default (the global weekly line; no 5-hour stop).
+function askLimits(U,l){const st=l.stop||{},g=st.global??U.stop_pct;
+ const inp=(v,ph)=>el("input",{type:"number",min:0,max:100,step:1,value:v??"",placeholder:ph,style:"width:5.5rem"});
+ const w=inp(st.weekly,String(g)),f=inp(st.five_hour,"none");
+ const row=(lab,i,help)=>el("div",{style:"margin:.5rem 0"},el("label",{style:"display:flex;gap:.6rem;align-items:center"},el("b",{style:"min-width:6.5rem"},lab),i,"%"),el("div",{class:"sm dim"},help));
+ const val=i=>{const v=i.value.trim();if(v==="")return null;const n=Number(v);if(!isFinite(n)||n<0||n>100)throw Error(v+" isn't a number from 0 to 100");return n;};
+ askBox("Stop lines for "+l.name,[el("p",{class:"sm dim",style:"margin:.2rem 0"},`The starter stops giving ${l.name} new runs once it passes either line. Runs already on it finish. Your own posts still start runs past the lines, up to the real limit.`),
+   row("Weekly",w,`Empty: the global line, ${g}%.`),l.no_five_hour?null:row("5-hour",f,"Empty: no 5-hour stop. Running sessions report it every turn; the usage API is read every 30 s at best, slower when it rate-limits.")],"Save",
+  async()=>{await postJ("/api/login-limit",{name:l.name,weekly:val(w),five_hour:l.no_five_hour?st.five_hour??null:val(f)});await pollUsage();});}
+function renderUsage(){const U=S.usage;if(!U)return;if(selecting())return;const t=now(),us=U.logins||[];
+ const d1=spendSince(t-DAY),h1=spendSince(t-HOUR*2)/2;let all=0;const files=U.files;for(const f of Object.values(files))all+=f.c;
+ const lastAt=Math.max(0,...us.map(l=>l.limits&&l.limits.at||0));
+ $("#usub").textContent=`${money(d1)} of work in the last 24 hours`+(U.scanning?" · still reading the older logs":"")+(lastAt?` · limits as last reported ${ago(lastAt*1e3)}`:"");
+ const P=U.providers||{};
+ fill($("#limits"),...us.map(l=>loginBlock(U,l,t)),...Object.keys(P).filter(k=>!k.startsWith("_")).map(k=>providerBlock(k,P[k],P._checked)));
+ // totals
+ let tk=[0,0,0,0],d1Hours=0;for(const f of Object.values(files)){for(let i=0;i<4;i++)tk[i]+=f.t[i];}
+ for(const s of S.sessions){const a=Math.max(s.start,t-DAY),b=Math.min(sEnd(s),t);if(b>a)d1Hours+=(b-a)/HOUR;}
+ const posts=S.posts.filter(p=>p.t>t-DAY&&!SYS.has(p.from)).length;
+ $("#unote").textContent=LIST;
+ fill($("#utiles"),tile(money(d1),"Last 24 hours",`${money(h1)} an hour lately`),tile(money(all),"All of it",`since ${S.posts[0]?dayName(S.posts[0].t):"?"}`),
+  tile(d1Hours?money(d1/d1Hours):"–","Per agent-hour",`${d1Hours.toFixed(0)} agent-hours in 24h`),tile(posts?money(d1/posts):"–","Per board post",`${posts} posts in 24h`),
+  tile(toks(tk[1]),"Tokens written",`output, all of it; ${toks(tk[0])} plain input`),
+  tile(pct(tk[2],tk[0]+tk[2]+tk[3]),"Input served from cache",`${toks(tk[2])} read from cache, ${toks(tk[3])} written to it`));
+ const hN=Math.max(6,Math.min(48,Math.ceil((t-(S.posts[0]?S.posts[0].t:t))/HOUR))),hStart=Math.floor((t-hN*HOUR)/HOUR)*HOUR,bars=new Array(hN+1).fill(0);
+ for(const f of Object.values(files))for(const h in f.h){const i=Math.floor((+h*1e3-hStart)/HOUR);if(i>=0&&i<=hN)bars[i]+=f.h[h];}
+ let run=0;const cum=bars.map(v=>run+=v);
+ fill($("#ucharts"),chart("Spend per hour",bars,"bar",hStart,HOUR,v=>money(v),{top:money(Math.max(...bars))}),chart("Spend so far",cum,"step",hStart,HOUR,v=>money(v),{top:money(run)}));
+ // who and where, last 24h
+ const byT={},byA={},tier={tier1:0,tier2:0,held:0,other:0};
+ for(const[k,f]of Object.entries(files)){let c=0;for(const h in f.h)if(+h*1e3>=t-DAY)c+=f.h[h];if(!c)continue;const i=fileInfo(k);const th=i.thread||"(unknown)";
+  byT[th]=(byT[th]||0)+c;byA[i.name]=(byA[i.name]||0)+c;tier[tierOf(th)]+=c;}
+ const tot=d1||1;
+ fill($("#utier"),TIERS.filter(x=>tier[x[0]]>0).map(x=>el("i",{style:`flex:${tier[x[0]]/tot};background:var(${x[2]})`,title:`${x[1]}: ${money(tier[x[0]])}`})));
+ fill($("#utierleg"),TIERS.map(x=>el("span",null,el("span",{class:"dot",style:`background:var(${x[2]})`}),`${x[1]}: ${money(tier[x[0]])} (${Math.round(100*tier[x[0]]/tot)}%)`)));
+ const barList=(o,fn,col)=>{const r=Object.entries(o).sort((a,b)=>b[1]-a[1]).slice(0,12),mx=r.length?r[0][1]:1;return r.map(([k,v])=>el("div",{class:"bar",onclick:()=>fn(k)},el("span",null,k),el("span",{class:"dim"},money(v)),el("span",{class:"tr"},el("i",{style:`width:${100*v/mx}%;background:${col(k)}`}))));};
+ fill($("#uthreads"),barList(byT,openThread,k=>`var(${tierVar(tierOf(k))})`));
+ fill($("#uagents"),barList(byA,openAgent,k=>agentColor(k)));
+ const byM={};for(const f of Object.values(files))for(const m in f.m)byM[m]=(byM[m]||0)+f.m[m];
+ fill($("#umodels"),barList(byM,()=>{},()=>"var(--t1)"));}
+
+// ---------- AGENT PAGE ----------
+const A={name:null,feed:null,timer:null,drawer:false};
+$("#drawerclose").addEventListener("click",closeDrawer);$("#drawerfull").addEventListener("click",()=>{const n=A.name;closeDrawer();go("agent",n);});
+addEventListener("keydown",e=>{if(e.key==="Escape"&&A.drawer&&!document.querySelector("dialog[open]"))closeDrawer();});
+document.addEventListener("pointerdown",e=>{if(A.drawer&&!e.target.closest("#drawer,button,a,input,textarea,dialog,canvas,svg"))closeDrawer();});
+async function fetchFeed(){const n=A.name;if(!n)return;try{const f=await jget("/api/agent?name="+encodeURIComponent(n));if(n===A.name){A.feed=f;if(view==="agent"||A.drawer)renderAgent();}}catch(e){}}
+setInterval(()=>{if((view==="agent"||A.drawer)&&!document.hidden&&isRunning(A.name))fetchFeed();},2000);
+function ego(n,links){const W=440,H=300,cx=W/2,cy=H/2,rx=W/2-62,ry=H/2-26;const svg=sv("svg",{id:"ego",viewBox:`0 0 ${W} ${H}`});
+ const top=links.slice(0,14),mx=Math.max(1,...top.map(l=>l[1]));
+ const dotFor=(id,x,y,r)=>{const g=sv("g",{});const run=isRunning(id)||OUTSIDE.has(id);g.append(sv("circle",{cx:x,cy:y,r,style:`fill:${agentColor(id)}`,stroke:cssv("--surface"),"stroke-width":2}));
+  const tx=sv("text",{x,y:y+r+12,"text-anchor":"middle"});tx.textContent=id;g.append(tx);g.addEventListener("click",()=>openAgent(id));return g;};
+ const lines=[],dots=[];top.forEach(([id,c],i)=>{const a=-Math.PI/2+i/top.length*Math.PI*2,x=cx+Math.cos(a)*rx,y=cy+Math.sin(a)*ry;
+  lines.push(sv("line",{x1:cx,y1:cy,x2:x,y2:y,stroke:cssv("--ink3"),"stroke-width":1+3*c/mx,opacity:.3+.5*c/mx}));dots.push(dotFor(id,x,y,6+6*Math.sqrt(c/mx)));});
+ svg.append(...lines,...dots,dotFor(n,cx,cy,15));return svg;}
+function renderAgent(){const n=A.name;if(!n)return;if(selecting())return;const box=A.drawer?$("#drawerbody"):$("#agentbody"),t=now();
+ const ss=S.sessions.filter(s=>s.name===n);const L=S.running.get(n);
+ const mine=S.posts.filter(p=>p.from===n),toMe=S.posts.filter(p=>p.men.includes(n)&&p.from!==n);
+ const first=ss.find(s=>!s.resumed)||ss[0];
+ const active=ss.reduce((x,s)=>x+Math.max(0,sEnd(s)-s.start),0);
+ // cost
+ let cost=0,tk=[0,0,0,0],tools={},byOut={},models={};if(S.usage)for(const s of ss){const f=s.out&&S.usage.files[s.out];if(!f)continue;cost+=f.c;byOut[s.out]=f.c;for(let i=0;i<4;i++)tk[i]+=f.t[i];for(const k in f.tools)tools[k]=(tools[k]||0)+f.tools[k];for(const m in f.m)models[m]=(models[m]||0)+f.m[m];}
+ const[st,col]=L?agentState(L):["ended "+ago(ss.length?sEnd(ss[ss.length-1]):null),"var(--ink3)"];
+ const links={};for(const p of mine)for(const m of p.men)if(m!==n&&(isAgent(m)||OUTSIDE.has(m)))links[m]=(links[m]||0)+1;for(const p of toMe)if(!SYS.has(p.from))links[p.from]=(links[p.from]||0)+1;
+ const started=S.sessions.filter(s=>!s.resumed&&s.from===n);
+ const chain=[];let cur=first;for(let i=0;cur&&cur.from&&i<8;i++){chain.unshift(cur.from);if(!isAgent(cur.from))break;cur=S.sessions.find(s=>s.name===cur.from&&!s.resumed)||S.sessions.find(s=>s.name===cur.from);}
+ const ths={};for(const s of ss)ths[s.thread]=(ths[s.thread]||0);for(const p of mine)ths[p.th]=(ths[p.th]||0)+1;
+ const task=L&&S.byId[L.post];
+ const tl=Object.entries(links).sort((a,b)=>b[1]-a[1]);
+ const tlist=Object.entries(tools).sort((a,b)=>b[1]-a[1]).slice(0,8),tmx=tlist.length?tlist[0][1]:1;
+ const scrollEl=box.querySelector(".feed");const fs=scrollEl?scrollEl.scrollTop:null;
+ fill(box,
+  el("div",{class:"ahero",style:`--c:${agentColor(n)}`},el("div",{class:"ah"},el("h1",null,n),copyBtn(n),
+    el("span",{class:"spill",title:st},agentStatus(n).k==="none"?"new":agentStatus(n).k),L?el("span",{class:"sm dim"},st):null,
+    el("span",{style:"margin-left:auto;display:flex;gap:.3rem"},el("button",{class:"chip",onclick:()=>openPosts(n)},"All their posts"),L?threadChip(L.thread):null,L?killButton(n):null)),
+  el("div",{class:"sm dim",style:"margin-top:.2rem"},chain.length?["Started by ",chain.join(" → ")," → ",n].join(""):"",first?` · first seen ${stamp(first.start)}`:""),
+  agentCardEl(n),
+  L?el("div",{class:"now"},L.doing||"Starting"):null,
+  L&&task?el("div",{class:"sub"},`Asked by ${task.from}: `,short(mdPlain(task.text),600)):null,
+  L&&L.said?el("div",{class:"sub"},"Last said: ",L.said):null),
+  el("h2",null,"In numbers"),
+  el("div",{class:"grid tiles col"},
+   tile(S.usage?money(cost):"…","Cost",L?"as of its last finished turn, at API list prices":"at API list prices"),
+   tile(toks(tk[1]),"Tokens written",`${toks(tk[0]+tk[2]+tk[3])} read, ${pct(tk[2],tk[0]+tk[2]+tk[3])} from cache`),
+   tile(dur(active),"Time running",`${ss.length} session${ss.length===1?"":"s"}`),
+   tile(String(mine.length),"Posts written",`${toMe.length} mention${toMe.length===1?"":"s"} of it by others`),
+   tile(String(started.length),"Agents it started",started.length?`${new Set(started.map(s=>s.thread)).size} thread${started.length>1?"s":""}`:"none"),
+   tile(String(tl.length),"Talks with",tl.length?`most with ${tl[0][0]}`:"nobody yet")),
+  el("div",{class:"grid two"},
+   el("div",null,el("h2",null,"Its corner of the hive"),el("div",{class:"card"},tl.length?ego(n,tl):el("div",{class:"dim sm"},"No exchanges yet."),
+     started.length?el("div",{style:"margin-top:.4rem"},el("div",{class:"sm dim"},"Started"),el("div",{style:"display:flex;gap:.25rem;flex-wrap:wrap;margin-top:.2rem"},[...new Set(started.map(s=>s.name))].slice(0,30).map(x=>nameChip(x)))):null,
+     Object.keys(ths).length?el("div",{style:"margin-top:.5rem"},el("div",{class:"sm dim"},"Threads"),el("div",{style:"display:flex;gap:.25rem;flex-wrap:wrap;margin-top:.2rem"},Object.keys(ths).sort((a,b)=>ths[b]-ths[a]).slice(0,16).map(threadChip))):null),
+    tlist.length?el("h2",null,"What it reached for"):null,tlist.length?el("div",{class:"card"},el("div",{class:"tstack"},tlist.map(([k,v])=>el("i",{title:`${k} ${v}`,style:`flex:${v};background:${toolColor(k)}`}))),tlist.map(([k,v])=>el("div",{class:"bar",style:"cursor:default"},el("span",null,k),el("span",{class:"dim"},v),el("span",{class:"tr"},el("i",{style:`width:${100*v/tmx}%;background:${toolColor(k)}`}))))):null),
+   el("div",null,el("h2",null,"Latest activity ",el("small",null,"tool calls and what it said, newest first")),el("div",{class:"card feed"},
+     A.feed==null?el("div",{class:"dim sm"},"Loading…"):A.feed.length?[...A.feed].reverse().map(e=>actRow(e,700)):el("div",{class:"dim sm"},"No session log left to read.")))),
+  el("h2",null,"Sessions"),el("div",{class:"card scroll"},el("table",{class:"t"},el("thead",null,el("tr",null,["Started","Thread","Woken by","Ran","Cost","How it ended"].map((h,i)=>el("th",{class:i===3||i===4?"n":null},h)))),
+    el("tbody",null,[...ss].reverse().slice(0,40).map(s=>el("tr",null,el("td",null,stamp(s.start)),el("td",null,el("button",{class:"chip",onclick:()=>openThread(s.thread)},s.thread)),el("td",null,s.from||"?",s.resumed?" (resumed)":""),
+      el("td",{class:"n"},dur(sEnd(s)-s.start)),el("td",{class:"n"},s.out&&byOut[s.out]!=null?money(byOut[s.out]):"–"),
+      el("td",null,!s.end?(isRunning(s.name)?"running":"unknown"):s.exit===0?"finished":s.exit===143?"stopped by a signal":s.exit==null?"ended, no exit code":S.limitedSess.has(s.session)?"usage limit":`exit ${s.exit}`)))))),
+  el("h2",null,"Latest posts"),el("div",null,mine.slice(-12).reverse().map(p=>msgEl(p,true))));
+ const nf=box.querySelector(".feed");if(nf&&fs!=null)nf.scrollTop=fs;}
+
+// ---------- start ----------
+poll().then(route);
+// ---------- the app: chat, inbox, first run, settings. Only where the server says so (/api/app); all text goes in as text. ----------
+// ---------- LEDGER: one row per event, everything, newest first ----------
+const LG={kind:"all",q:"",limit:300,seen:0,ver:-1};
+const LKIND={post:["Messages","--ink3"],agent:["Agents","--good"],thread:["Threads","--t1"],trouble:["Trouble","--bad"],hive:["Hive","--ink2"]};
+function lagent(n){return n?el("button",{class:"lname",onclick:e=>{e.stopPropagation();openAgent(n);}},isAgent(n)?el("span",{class:"dot",style:`background:${agentColor(n)}`}):null,n):"?";}
+function lthread(th){return th?el("button",{class:"lname lth",onclick:e=>{e.stopPropagation();openThread(th);}},th):null;}
+const LOGTEXT={delivered:"had queued posts handed to it mid-run",kill_dropped:"had its queued wakes dropped after a kill",paced:"start was paced",provider_held:"waits for its provider",fallback_held:"waits: no fallback has room",unknown_mention:"was mentioned, but nobody has that name",free_spawn_ignored:"tried to start agents from a free model; ignored",reaped:"was ended by the starter after going quiet",moved:"moved to another login",login_rejected:"hit a rejected login"};
+function logRow(e,t){const k=e.event,n=e.name;
+ if(k==="start")return null;// the session's own row, below
+ if(k==="end")return null;
+ if(k==="killed")return{t,kind:"trouble",make:()=>[lagent(n)," was killed",e.by?" by "+e.by:""]};
+ if(k==="limited")return{t,kind:"trouble",make:()=>[lagent(n)," stopped at a usage limit"]};
+ if(k==="login_rejected")return{t,kind:"trouble",make:()=>[lagent(n)," hit a rejected login"]};
+ if(k==="paused"||k==="resumed")return{t,kind:"hive",make:()=>[k==="paused"?"The hive stopped starting agents: usage":"The hive started agents again"]};
+ if(k==="logins_paused")return{t,kind:"hive",make:()=>["Logins paused: "+((e.logins||[]).length||"none")]};
+ if(k==="keeper")return{t,kind:"hive",make:()=>["The keeper started a round ("+(e.why||"periodic")+")"]};
+ if(k==="stop_dropped")return{t,kind:"hive",make:()=>["Stop: queued starts dropped in ",lthread(e.thread)]};
+ if(k==="fallback")return{t,kind:"agent",make:()=>[lagent(n)," went to a fallback model"]};
+ const words=LOGTEXT[k];return{t,kind:k==="reaped"?"trouble":"hive",make:()=>n?[lagent(n)," "+(words||k)]:[words||k]};}
+function renderLedger(){if(view!=="ledger"||selecting())return;const box=$("#lgrows");if(LG.ver===S.ver&&!LG.dirty)return;LG.ver=S.ver;LG.dirty=false;
+ const q=LG.q.toLowerCase().split(/\s+/).filter(Boolean);
+ const rows=[];for(const r of S.ledger){if(LG.kind!=="all"&&r.kind!==LG.kind)continue;if(q.length&&!q.every(w=>r.lc.includes(w)))continue;rows.push(r);}
+ rows.sort((a,b)=>b.t-a.t);const newest=LG.seen;LG.seen=rows.length?Math.max(LG.seen,rows[0].t):LG.seen;
+ const keep=$("#ledger").scrollTop;
+ fill(box,rows.slice(0,LG.limit).map(r=>el("div",{class:"lrow "+r.kind+(newest&&r.t>newest?" fresh":"")},el("span",{class:"ltime",title:new Date(r.t).toISOString()},clock(r.t)),
+   el("span",{class:"lbody"},r.make().flat(3)))),
+  rows.length>LG.limit?el("div",{style:"text-align:center;padding:.5rem"},el("button",{class:"chip",onclick:()=>{LG.limit+=500;LG.dirty=true;renderLedger();}},`Show older (${rows.length-LG.limit} more)`)):null);
+ $("#ledger").scrollTop=keep;$("#lgcount").textContent=rows.length+" events";}
+{const seg=$("#lgkind");[["all","Everything"],...Object.entries(LKIND).map(([k,v])=>[k,v[0]])].forEach(([k,l])=>seg.append(el("button",{class:k==="all"?"on":null,onclick:e=>{LG.kind=k;for(const b of seg.children)b.classList.toggle("on",b===e.target);LG.dirty=true;renderLedger();}},l)));
+ $("#lgq").addEventListener("input",e=>{LG.q=e.target.value;LG.dirty=true;renderLedger();});}
+
+const can=c=>!APP.can||APP.can.includes(c);
+async function apiJ(path,body){const r=await fetch(path,{method:"POST",headers:{"Content-Type":"application/json","X-Hive-Dash":"1"},body:JSON.stringify(body)});
+ const j=await r.json().catch(()=>({}));if(!r.ok)throw Error(j.error||"the server said "+r.status);return j;}
+async function loadApp(){try{const was=JSON.stringify(APP.setup||null);Object.assign(APP,await jget("/api/app"));applyApp(was!==JSON.stringify(APP.setup||null));}catch(e){}}
+function setupDone(){const s=APP.setup;return !s||(s.signed_in||s.api_key)&&s.has_posts;}
+function applyApp(changed){const tab=(v,on)=>{document.querySelector(`#tabs button[data-v=${v}]`).hidden=!on;};
+ tab("inbox",APP.app&&can("read"));tab("settings",APP.app&&(can("config")||can("modules")||can("logins")));tab("start",APP.app&&can("post")&&!setupDone());
+ $("#routetag").textContent=APP.route==="outside"?(can("post")?"outside access":"read-only"):"";
+ $("#routetag").title=APP.route==="outside"?"Allowed from outside: "+APP.can.join(", "):"";
+ if(APP.app&&!APP.routed){APP.routed=true;if(!location.hash&&!setupDone()&&can("post"))return go("start");}
+ if(changed&&view==="start")renderStart();updateComposer();}
+
+// ---------- composer ----------
+const CP={files:[],reply:null,key:null,note:"",busy:false};
+function composerOn(){return APP.app&&can("post")&&!C.agent&&!C.pair;}
+function buildComposer(){const b=$("#composer");if(b.firstChild)return;
+ const send=()=>sendPost();
+ const pick=el("input",{type:"file",multiple:"multiple",hidden:"hidden",id:"cpfile",onchange:e=>{CP.files.push(...e.target.files);e.target.value="";drawFiles();}});
+ fill(b,el("div",{id:"cptarget",class:"sm dim"}),el("div",{id:"cpfiles"}),
+  el("input",{id:"cpname",placeholder:"Name this job (optional, like fix-login)",class:"cpinput"}),
+  el("div",{class:"cprow"},
+   el("textarea",{id:"cpt",rows:"2",class:"cpinput",placeholder:"Message",onkeydown:e=>{if(e.key==="Enter"&&!e.shiftKey&&!e.isComposing){e.preventDefault();send();}}}),
+   pick,el("button",{class:"btn2",title:"Attach files",onclick:()=>pick.click()},"Attach"),el("button",{class:"btn1",id:"cpsend",onclick:send},"Send")));}
+function drawFiles(){fill($("#cpfiles"),CP.files.map((f,i)=>el("span",{class:"chip",style:"margin:.15rem .2rem 0 0"},f.name+" ("+fsize(f.size)+")",el("button",{class:"copy",title:"Remove",onclick:()=>{CP.files.splice(i,1);drawFiles();}},"×"))));}
+function targetLine(th){const box=$("#cptarget");
+ if(CP.reply){fill(box,`Replying to ${CP.reply.from}. `,el("button",{class:"link",onclick:()=>{CP.reply=null;CP.key=null;updateComposer();}},"Cancel"));return;}
+ if(CP.note){fill(box,CP.note);return;}
+ if(!th){fill(box,"New work: a fresh agent starts on this.");return;}
+ const k=th+"|"+S.ver;if(CP.key===k)return;CP.key=k;
+ jget("/api/target?thread="+encodeURIComponent(th)).then(t=>{if(C.thread!==th||CP.reply||CP.note)return;
+  fill(box,!t.who?"No agent has worked here yet, so this starts a new one.":t.running?`Goes to ${t.who}, running. It sees this after its current step.`:`Wakes ${t.who}, the last agent here.`," Naming another agent with @ sends it to them instead.");}).catch(()=>{});}
+function updateComposer(){const b=$("#composer");if(!b)return;const on=composerOn();b.hidden=!on;if(!on)return;buildComposer();
+ $("#cpname").hidden=!!C.thread||!!CP.reply;$("#cpt").placeholder=C.thread||CP.reply?"Message":"Say what you want done";targetLine(C.thread);}
+async function sendPost(){if(CP.busy)return;const ta=$("#cpt"),text=ta.value;const name=$("#cpname").value.trim();
+ const th=CP.reply?CP.reply.th:C.thread||name||null;if(!text.trim()&&!CP.files.length)return;
+ CP.busy=true;$("#cpsend").disabled=true;
+ try{const refs=[];for(const f of CP.files){if(f.size>100*1048576)throw Error(f.name+" is over 100 MB");
+   CP.note=`Uploading ${f.name}…`;fill($("#cptarget"),CP.note);
+   const r=await fetch("api/upload?name="+encodeURIComponent(f.name),{method:"POST",headers:{"X-Hive-Dash":"1","Content-Type":"application/octet-stream"},body:f});
+   const j=await r.json().catch(()=>({}));if(!r.ok)throw Error(j.error||"upload failed: "+r.status);refs.push(j.ref);}
+  const res=await apiJ("/api/post",{text,thread:th,reply_to:CP.reply?CP.reply.id:null,files:refs});
+  ta.value="";$("#cpname").value="";CP.files=[];CP.reply=null;drawFiles();CP.note="Sent"+(res.said?": "+res.said:"")+".";CP.key=null;
+  setTimeout(()=>{CP.note="";CP.key=null;updateComposer();},6000);
+  if(C.thread!==res.thread)openThread(res.thread);poll();
+ }catch(e){CP.note="";CP.key=null;fill($("#cptarget"),el("span",{style:"color:var(--bad)"},"Not sent: "+e.message+". Your text is still here."));}
+ finally{CP.busy=false;$("#cpsend").disabled=false;updateComposer2();}}
+function updateComposer2(){if(CP.note)fill($("#cptarget"),CP.note);}
+function replyTo(p){CP.reply=p;CP.note="";if(C.thread!==p.th)openThread(p.th);updateComposer();$("#cpt").focus();}
+
+// ---------- inbox ----------
+const IB={items:[],unread:0,sig:""};
+async function pollInbox(){if(!APP.app||!can("read")||document.hidden)return;try{const v=await jget("/api/inbox");const sig=JSON.stringify(v);if(sig===IB.sig)return;IB.sig=sig;Object.assign(IB,v);
+  $("#ibadge").textContent=v.unread?String(v.unread):"";if(view==="inbox")renderInbox();}catch(e){}}
+setInterval(pollInbox,3000);
+function renderInbox(){if(selecting())return;const w=can("post");
+ fill($("#inboxbody"),el("div",{style:"display:flex;align-items:baseline;gap:.6rem"},el("h2",null,"For you ",el("small",null,"posts agents addressed to you, newest first")),
+   w&&IB.unread?el("button",{class:"chip",style:"margin-left:auto",onclick:async()=>{await apiJ("/api/inbox-read",{all:true});IB.sig="";pollInbox();}},"Mark all read"):null),
+  el("div",{class:"card"},IB.items.length?IB.items.map(p=>el("div",{class:"row"+(p.read?"":" unread"),onclick:async()=>{if(w&&!p.read){try{await apiJ("/api/inbox-read",{ids:[p.id]});}catch(e){}IB.sig="";pollInbox();}openThread(p.thread);}},
+    el("div",{class:"sm"},p.read?null:el("span",{class:"dot",style:"background:var(--t1);margin-right:.35rem"}),el("b",null,p.from),el("span",{class:"dim3"},` · ${p.thread} · ${ago(Date.parse(p.at))}`),p.answered?el("span",{class:"dim3"}," · you've replied since"):null,p.files?el("span",{class:"dim3"},` · ${p.files} file${p.files>1?"s":""}`):null),
+    el("div",{class:"sm dim clip2"},firstSentence(p.text)))):el("div",{class:"dim",style:"padding:1rem;text-align:center"},"Nothing yet. When an agent needs you or finishes something you asked for, it shows here.")));}
+
+// ---------- signing in, with no terminal ----------
+function signinBox(name,console_){const box=el("div",{class:"signin"});let stop=false;
+ const tick=async()=>{if(stop)return;if(!box.isConnected&&box.dataset.up){stop=true;return;}let v;try{v=await jget("/api/signin");}catch(e){return;}
+  if(v.name&&name&&v.name!==name&&v.state!=="idle")return;
+  const fallback=v.command?el("div",{class:"sm dim",style:"margin-top:.4rem"},"Doesn't work here? In a terminal, as this account: ",el("code",null,v.command)):null;
+  if(v.state==="waiting"){if(box.dataset.url!==v.url){box.dataset.url=v.url;const code=el("input",{class:"cpinput",placeholder:"Paste the code here",autocomplete:"off"});const err=el("div",{class:"sm",style:"color:var(--bad)"});
+     box._err=err;box._sent=(v.out||"").length;const go2=async()=>{try{await apiJ("/api/signin/code",{code:code.value});code.value="";err.textContent="Checking…";box._sent=(await jget("/api/signin")).out.length;}catch(e){err.textContent=e.message;}};
+     code.addEventListener("keydown",e=>{if(e.key==="Enter")go2();});
+     fill(box,el("div",null,"1. ",/^https:\/\//.test(v.url)?el("a",{href:v.url,target:"_blank",rel:"noreferrer noopener"},"Open the sign-in page"):"The sign-in page didn't give a usable link."," and sign in."),
+      el("div",{style:"margin-top:.4rem"},"2. If it shows a code, paste it here:"),el("div",{class:"cprow",style:"margin-top:.2rem"},code,el("button",{class:"btn1",onclick:go2},"Send")),err,
+      el("button",{class:"link sm",style:"margin-top:.3rem",onclick:async()=>{await apiJ("/api/signin/cancel",{});}},"Cancel"),fallback);}}
+  if(v.state==="waiting"&&box._err){const m=(v.out||"").match(/[^\r\n]*(invalid|error|failed|expired)[^\r\n]*/ig);if(m)box._err.textContent=m[m.length-1].trim();}
+  if(v.state==="waiting"){}
+  else if(v.state==="done"){stop=true;fill(box,el("div",{style:"color:var(--good)"},`Signed in${v.name?" as login "+v.name:""}.`,v.said?" "+v.said:""));loadApp();}
+  else if(v.state==="failed"){stop=true;fill(box,el("div",{style:"color:var(--bad)"},v.why||"That didn't work."),fallback);}
+  else if(v.state==="cancelled"){stop=true;fill(box,"Cancelled.");}
+  else fill(box,el("span",{class:"dim"},"Starting Claude's sign-in…"));
+  if(!stop)setTimeout(tick,1500);};
+ apiJ("/api/signin",{name:name||null,console:!!console_}).then(()=>{box.dataset.up="1";tick();}).catch(e=>{fill(box,el("span",{style:"color:var(--bad)"},e.message));
+  if(/under way/.test(e.message)){box.dataset.up="1";tick();}});
+ fill(box,el("span",{class:"dim"},"Starting Claude's sign-in…"));return box;}
+
+// ---------- first run ----------
+function renderStart(){const s=APP.setup||{},box=$("#startbody"),signed=s.signed_in||s.api_key;
+ const step=(done,title,...body)=>el("div",{class:"card step"+(done?" done":"")},el("div",{style:"font-weight:600"},done?"✓ ":"",title),...body);
+ const signArea=el("div",{style:"margin-top:.4rem"});
+ const ta=el("textarea",{rows:"3",class:"cpinput",placeholder:"For example: set up a repo for a small web scraper and get its tests passing"}),err=el("div",{class:"sm",style:"color:var(--bad)"});
+ const start=async()=>{if(!ta.value.trim())return;try{const r=await apiJ("/api/post",{text:ta.value});await loadApp();openThread(r.thread);poll();}catch(e){err.textContent=e.message;}};
+ fill(box,el("h1",{style:"font-size:1.4rem;margin:.6rem 0 .2rem"},"Set up your hive"),el("p",{class:"dim"},"A hive is a team of Claude Code agents on this machine. You say what you want here, and they work on it in the background and report back."),
+  s.claude===false?step(false,"Install Claude Code",el("p",null,"It isn't on this account's PATH. In a terminal, as this account: ",el("code",null,"curl -fsSL https://claude.ai/install.sh | bash"),". Then restart this app: ",el("code",null,"systemctl --user restart hive-dash"))):null,
+  step(signed,"Sign in to Claude",signed?el("p",{class:"dim"},"Done. More logins and their limits are in Settings."):
+   el("div",null,el("p",{class:"dim"},"Agents run on your Claude subscription, or on API billing."),el("div",{style:"display:flex;gap:.4rem"},
+     el("button",{class:"btn1",onclick:()=>fill(signArea,signinBox())},"Sign in with a Claude subscription"),el("button",{class:"btn2",onclick:()=>fill(signArea,signinBox(null,true))},"Use API billing instead")),signArea)),
+  s.starter===false?step(false,"Start the hive",el("p",{class:"dim"},"The service that starts agents isn't running, so nothing you post would start one."),
+    el("button",{class:"btn1",onclick:async e=>{try{await apiJ("/api/starter",{do:"start"});e.target.textContent="Starting…";setTimeout(loadApp,4000);}catch(x){err.textContent=x.message;}}},"Start it")):null,
+  step(s.has_posts,"Say what you want done",s.has_posts?el("p",{class:"dim"},"Done. Your threads are under Comms."):el("div",null,el("p",{class:"dim"},"One message starts one agent. It can start others if the job has separate parts."),ta,err,el("button",{class:"btn1",style:"margin-top:.4rem",disabled:signed?null:"disabled",onclick:start},"Start"))),
+  el("div",{class:"card step"},el("div",{style:"font-weight:600"},"Good to know"),el("ul",{style:"margin:.3rem 0 0;padding-left:1.1rem"},
+    el("li",null,"Agents can do anything this account can do, so it should be an account of its own."),
+    el("li",null,"They spend your usage on their own. New agents stop at the usage line in Settings, but only on a subscription: with API billing, set a limit in the Anthropic Console."),
+    el("li",null,"This page answers only on this machine, and only to a browser that opened the address from ",el("code",null,"hive web"),"."))));}
+
+// ---------- settings ----------
+function field(label,input,hint){return el("label",{class:"setf"},el("span",null,label),input,hint?el("span",{class:"sm dim"},hint):null);}
+async function renderSettings(){const box=$("#setbody");const out=[];
+ if(can("config")){let c={};try{c=await jget("/api/config");}catch(e){}
+  const ms=el("input",{type:"number",min:"1",max:"200",class:"cpinput num",value:c.max_sessions??""}),us=el("input",{type:"number",min:"1",max:"100",class:"cpinput num",value:c.usage_stop_pct??""});
+  const kp=el("input",{type:"checkbox",checked:c.keeper_every_s?"checked":null}),say=el("div",{class:"sm"});
+  const save=async()=>{try{await apiJ("/api/config",{max_sessions:ms.value===""?null:+ms.value,keeper_every_s:kp.checked?(c.keeper_every_s||10800):0,usage_stop_pct:+us.value});say.style.color="var(--good)";say.textContent="Saved. The hive uses it within seconds.";}catch(e){say.style.color="var(--bad)";say.textContent=e.message;}};
+  const up=APP.setup&&APP.setup.starter;
+  out.push(el("h2",null,"The hive"),el("div",{class:"card"},
+   field("Session limit",ms,"How many agents run at once. Empty means no limit."),
+   field("Stop at weekly usage, %",us,"No new agents past this, except ones you ask for. Subscription logins only."),
+   el("label",{class:"setf"},el("span",null,"Keeper"),el("span",null,kp," on"),el("span",{class:"sm dim"},"A round every 3 hours that revives stalled work and starts work nobody asked for. It spends usage.")),
+   el("div",{style:"display:flex;gap:.5rem;align-items:center;margin-top:.5rem"},el("button",{class:"btn1",onclick:save},"Save"),say),
+   el("div",{style:"display:flex;gap:.5rem;align-items:center;margin-top:.8rem;border-top:1px solid var(--line);padding-top:.6rem"},el("span",null,"Starter: ",el("b",null,up?"running":"not running")),
+    el("button",{class:"btn2",onclick:async()=>{try{await apiJ("/api/starter",{do:up?"stop":"start"});setTimeout(async()=>{await loadApp();renderSettings();},up?500:4000);}catch(e){say.style.color="var(--bad)";say.textContent=e.message;}}},up?"Stop (running agents finish their turn)":"Start"))));}
+ if(can("logins")){const area=el("div"),nm=el("input",{class:"cpinput",placeholder:"name, like work",style:"width:12rem"});
+  out.push(el("h2",null,"Logins ",el("small",null,"pausing and stop lines are on the Usage tab")),el("div",{class:"card"},
+   ((APP.setup&&APP.setup.logins)||[]).map(l=>el("div",{class:"row",style:"cursor:default;display:flex;align-items:center;gap:.5rem"},el("b",null,l.name),el("span",{class:"sm",style:`color:var(${l.signed_in?"--good":"--bad"})`},l.signed_in?"signed in":"not signed in"),
+     el("button",{class:"btn2",style:"margin-left:auto",onclick:()=>fill(area,signinBox(l.name))},l.signed_in?"Sign in again":"Sign in"))),
+   el("div",{style:"display:flex;gap:.4rem;align-items:center;margin-top:.6rem"},nm,el("button",{class:"btn2",onclick:()=>{if(nm.value.trim())fill(area,signinBox(nm.value.trim()));}},"Add a login")),
+   el("div",{class:"sm dim",style:"margin-top:.2rem"},"Adding one signs in, checks it isn't an account you already have, and makes one short test run."),area));}
+ if(can("modules")){const list=el("div",null,"Loading…"),say=el("div",{class:"sm",style:"white-space:pre-wrap;overflow-wrap:anywhere"}),url=el("input",{class:"cpinput",placeholder:"Git URL of a module",style:"flex:1"});
+  const act=async(what,name,btn)=>{if(btn)btn.disabled=true;say.style.color="";say.textContent=(what==="add"?"Adding ":"Removing ")+name+"…";
+    try{const r=await apiJ("/api/module",{do:what,name});say.textContent=r.said;}catch(e){say.style.color="var(--bad)";say.textContent=e.message;}drawMods();};
+  const drawMods=async()=>{let m=[];try{m=await jget("/api/modules");}catch(e){}
+    fill(list,m.map(x=>el("div",{class:"row",style:"cursor:default;display:flex;gap:.6rem;align-items:baseline"},el("b",{style:"flex:none"},x.name),el("span",{class:"sm dim",style:"flex:1"},x.about,x.needs?" Needs "+x.needs+".":""),
+      x.name==="dash"?el("span",{class:"sm dim"},"this app"):el("button",{class:"btn2",style:"flex:none",onclick:e=>act(x.state==="installed"?"remove":"add",x.name,e.target)},x.state==="installed"?"Remove":"Add"))));};
+  drawMods();out.push(el("h2",null,"Modules ",el("small",null,"optional tools your agents can use")),el("div",{class:"card"},list,el("div",{style:"display:flex;gap:.4rem;margin-top:.6rem"},url,el("button",{class:"btn2",onclick:()=>{if(url.value.trim())act("add",url.value.trim());}},"Add")),say));}
+ if(APP.route==="local"&&APP.outside){const o=APP.outside,say=el("div",{class:"sm"}),boxes=o.caps.map(c=>[c,el("input",{type:"checkbox",checked:o.can.includes(c)?"checked":null})]);
+  const hosts=el("input",{class:"cpinput",value:o.hosts.join(" "),placeholder:"hive.example.com"}),team=el("input",{class:"cpinput",value:o.team,placeholder:"yourteam.cloudflareaccess.com"}),aud=el("input",{class:"cpinput",value:o.aud,placeholder:"the Access application's AUD tag"}),em=el("input",{class:"cpinput",value:o.emails.join(" "),placeholder:"optional: only these emails"});
+  const CAPTEXT={read:"Read everything",post:"Post as you, which starts agents",stop:"Kill agents",tier:"Change a thread's tier",limits:"Pause logins and change stop lines",logins:"Sign in and add logins",config:"Change settings",modules:"Add and remove modules"};
+  out.push(el("h2",null,"Access from outside ",el("small",null,"only changeable from this machine")),el("div",{class:"card"},
+   el("p",{class:"sm dim",style:"margin-top:0"},"Off until set up. From this machine, the secret gets everything. Through a tunnel, each request must carry a token signed by Cloudflare Access, and it can do only what's ticked here. Opening a name also takes a Cloudflare tunnel and an Access policy, set up in Cloudflare."),
+   boxes.map(([c,b])=>el("label",{class:"setc"},b," ",CAPTEXT[c]||c)),field("Hostnames",hosts),field("Access team domain",team),field("Application audience",aud),field("Allowed emails",em),
+   el("div",{style:"display:flex;gap:.5rem;align-items:center;margin-top:.5rem"},el("button",{class:"btn1",onclick:async()=>{try{await apiJ("/api/access",{can:boxes.filter(x=>x[1].checked).map(x=>x[0]),hosts:hosts.value.split(/\s+/).filter(Boolean),access:{team:team.value,aud:aud.value,emails:em.value.split(/\s+/).filter(Boolean)}});say.style.color="var(--good)";say.textContent="Saved.";}catch(e){say.style.color="var(--bad)";say.textContent=e.message;}}},"Save"),say)));}
+ fill(box,out);}
+
+route();loadApp();setInterval(()=>{if(!document.hidden&&APP.app)loadApp();},8000);setTimeout(pollInbox,500);
+{const cur=()=>localStorage.getItem("theme")||"auto";$("#theme").textContent=THEMES.find(x=>x[0]===cur())[1];
+ $("#theme").addEventListener("click",()=>{const k=THEMES.findIndex(x=>x[0]===cur());setTheme(THEMES[(k+1)%3][0]);});
+ matchMedia("(prefers-color-scheme: dark)").addEventListener("change",()=>{if(cur()==="auto")setTheme("auto");});}
+</script>
+</body></html>

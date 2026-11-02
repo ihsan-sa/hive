@@ -1,1 +1,1 @@
-{"name": "dash", "description": "A read-only view of the hive: agents running, what each is doing, active threads. Text, watch mode, or a loopback web page.", "bin": {"hive-dash": "dash.py"}}
+{"name": "dash", "description": "The web app: chat with agents in threads, an inbox, control and settings, on this machine only. Also a text snapshot and watch mode.", "bin": {"hive-dash": "dash.py"}}

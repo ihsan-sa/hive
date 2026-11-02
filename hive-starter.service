@@ -8,6 +8,8 @@ Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
 Restart=always
 RestartSec=5
 KillMode=process
+# A job OOM-killed in this cgroup is that job's problem. Default (stop) restarted the starter 5 times on 2026-11-02.
+OOMPolicy=continue
 
 [Install]
 WantedBy=default.target

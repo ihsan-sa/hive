@@ -1,0 +1,1 @@
+{"name": "slack-door", "description": "Slack as a plain way in: people on a list type a message and get the answer in its Slack thread, from one bot, with no agent names or board traffic.", "bin": {"slack-door": "door.py"}}

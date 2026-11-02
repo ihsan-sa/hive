@@ -15,7 +15,7 @@ if [ "$(id -u)" = 0 ]; then
   su - "$U" -c 'command -v claude >/dev/null || [ -x ~/.local/bin/claude ] || curl -fsSL https://claude.ai/install.sh | bash'
   su - "$U" -c 'PATH="$HOME/.local/bin:$PATH" XDG_RUNTIME_DIR=/run/user/$(id -u) ~/core/install.sh' \
     || die "the install as $U failed; fix the error above and rerun this"
-  echo; echo "Now:  sudo -iu $U   then:  hive"; exit 0
+  echo; echo "To print that address again:  sudo -iu $U hive web"; exit 0
 fi
 for a in "$@"; do case "$a" in
   --no-service) SERVICE=0 ;;
@@ -30,7 +30,7 @@ for t in python3 git claude; do command -v "$t" >/dev/null || die "$t not found 
 # Agents run with bypassed permissions and everything this account can reach, so insist on a spare account.
 if [ "$SHARED" = 0 ]; then
   other=$(find "$HOME" -mindepth 1 -maxdepth 1 ! -name '.*' ! -name core ! -name kb ! -name projects \
-          ! -name run ! -name sessions ! -name board.jsonl ! -name log.jsonl | head -3)
+          ! -name run ! -name sessions ! -name board.jsonl ! -name log.jsonl ! -name modules ! -name files | head -3)
   [ ! -e "$HOME/.ssh" ] && [ -z "$other" ] || die "this account has files or ~/.ssh, and its agents would have full rights to them.
 Use a new user (sudo ./install.sh), or pass --this-account if you accept that."
 fi
@@ -56,8 +56,13 @@ git -C "$HOME" config user.email >/dev/null || git -C "$HOME" config user.email 
 git config --global user.name >/dev/null  || git config --global user.name hive
 git config --global user.email >/dev/null || git config --global user.email hive@localhost
 
+# The web app is the bundled dash. It's copied fresh, so rerunning this after a pull updates it; the secret stays.
+rm -rf "$HOME/modules/dash"
+"$CORE/hive" module add dash >/dev/null
+"$CORE/hive" web --setup
+
 if [ ! -s "$HOME/.claude/.credentials.json" ] && [ -z "${ANTHROPIC_API_KEY:-}" ]; then
-  echo "NOTE: no Claude login yet. The first time you run hive, Claude Code asks you to log in."
+  echo "NOTE: no Claude login yet. The web app walks you through it."
 fi
 
 if [ "$SERVICE" = 1 ]; then
@@ -74,11 +79,22 @@ if [ "$SERVICE" = 1 ]; then
   for _ in 1 2 3 4 5 6 7 8 9 10; do systemctl --user show-environment >/dev/null 2>&1 && break; sleep 1; done  # the user manager starts after linger, not with it; the bus socket alone needs dbus-user-session
   systemctl --user daemon-reload
   systemctl --user enable --now hive-starter
+  ln -sf "$HOME/modules/dash/hive-dash.service" "$U/hive-dash.service"
+  mkdir -p "$U/hive-dash.service.d"
+  printf '[Service]\nEnvironment=PATH=%s:%%h/.local/bin:/usr/local/bin:/usr/bin:/bin\nEnvironmentFile=-%%h/.config/hive/env\n' \
+    "$(dirname "$(command -v claude)")" > "$U/hive-dash.service.d/local.conf"
+  systemctl --user daemon-reload
+  systemctl --user enable hive-dash
+  systemctl --user restart hive-dash
 fi
 touch "$HOME/.hive-installed"  # only now: a failure above can be rerun
 
 cat <<MSG
 
-The Hive is installed. Open it and say what you want done:
-  hive
+The Hive is installed. Open this address in a browser on this machine, and it takes you from there:
+  $("$CORE/hive" web 2>/dev/null)
+It's the key to this hive, so keep it to yourself. Run hive web to see it again.
+On another machine: ssh -L PORT:127.0.0.1:PORT this-machine, with the port from that address, then open it there.
+If you'd rather stay in a terminal: hive
 MSG
+[ "$SERVICE" = 1 ] || echo "You chose no service, so start the app and the hive yourself: python3 ~/modules/dash/dash.py serve   and   python3 ~/core/starter.py"

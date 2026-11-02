@@ -1,0 +1,17 @@
+[Unit]
+Description=Slack door (outbound only, no port)
+
+[Service]
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStartPre=/usr/bin/test -s %h/.config/hive/slack-door-bot-token
+ExecStartPre=/usr/bin/test -s %h/.config/hive/slack-door-app-token
+ExecStartPre=/usr/bin/test -s %h/.config/hive/slack-door.json
+ExecStart=/usr/bin/env uv run --script %h/modules/slack-door/door.py serve
+Restart=always
+RestartSec=30
+MemoryMax=200M
+CPUQuota=25%
+Nice=15
+
+[Install]
+WantedBy=default.target
