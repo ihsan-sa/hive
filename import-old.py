@@ -206,14 +206,16 @@ def main():
     force_rm(staging)
 
     n = len(state["projects"])
-    print(f"Brought across from the old Hive: {n} project{'' if n == 1 else 's'}, {state['notes']} notes, {state['chats']} chats.")
+    def many(k, what):
+        return f"{k} {what}{'' if k == 1 else 's'}"
+    print(f"Brought across from the old Hive: {many(n, 'project')}, {many(state['notes'], 'knowledge base file')}, {many(state['chats'], 'chat')}.")
     for name, to in sorted(state["projects"].items()):
         if name != to:
             print(f"  {name} is now projects/{to}, because a project called {name} was already here.")
     if state["left"]:
         print(f"  Left in the old folder (the old Hive's own): {', '.join(state['left'])}")
     if state["tokens"]:
-        print(f"  Took {state['tokens']} old sign-in token(s) out of project git settings.")
+        print(f"  Took {many(state['tokens'], 'old sign-in token')} out of project git settings.")
 
 
 def readme(dest, state, reg, staging, old_folder):

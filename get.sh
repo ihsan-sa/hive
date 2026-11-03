@@ -12,9 +12,12 @@ die() { tick_stop; line_end; echo "hive: $*" >&2; exit 1; }
 
 # What you see: one numbered line per step, a dot every few seconds while it works. What the commands print goes to fd 3, a log, and it's shown when something fails.
 # HIVE_INSIDE=1: another installer is around this one (Windows, Mac) and has its own steps and ending, so this prints plain lines, and NOTE: on what it should show.
-OPEN=0; TICK=""; STEP=0; STEPS=0; LOG=""; INSIDE=${HIVE_INSIDE:-}; OLD_SAID=""
+OPEN=0; HELD=""; TICK=""; STEP=0; STEPS=0; LOG=""; INSIDE=${HIVE_INSIDE:-}; OLD_SAID=""
 tick_stop() { [ -z "$TICK" ] || { kill "$TICK" 2>/dev/null; wait "$TICK" 2>/dev/null || true; TICK=""; }; }
-line_end() { [ "$OPEN" = 0 ] || { echo; OPEN=0; }; }
+line_end() {
+  [ "$OPEN" = 0 ] || { echo; OPEN=0; }
+  [ -z "$HELD" ] || { printf '%s\n' "$HELD"; HELD=; }
+}
 # Each non-empty argument is a step this run will take. The log starts here, so what stops before anything changes doesn't wipe the last run's.
 begin() {
   for c in "$@"; do [ -z "$c" ] || STEPS=$((STEPS + 1)); done
@@ -27,23 +30,25 @@ begin() {
   trap on_exit EXIT; trap 'exit 130' INT TERM
 }
 step() {
-  tick_stop; line_end; STEP=$((STEP + 1)); STEP_TEXT=$1
+  tick_stop; line_end; STEP=$((STEP + 1))
   if [ -n "$INSIDE" ]; then echo "$1"; return 0; fi
   printf '[%s/%s] %s ' "$STEP" "$STEPS" "$1"; OPEN=1
   ( while sleep 5 >/dev/null 2>&1; do kill -0 $$ 2>/dev/null || exit; printf .; done ) </dev/null 3>&- &
   TICK=$!
 }
-# A line that has to be seen, in the middle of a step.
+# A line that has to be seen. In the middle of a step it waits under that step's line, so the dots stay on one line.
 note() {
   if [ -n "$INSIDE" ]; then echo "NOTE: $*"; return 0; fi
-  line_end; echo "$*"
-  [ -z "$TICK" ] || { printf '[%s/%s] %s ' "$STEP" "$STEPS" "$STEP_TEXT"; OPEN=1; }
+  if [ "$OPEN" = 0 ]; then echo "$*"; else HELD="${HELD:+$HELD
+}$*"; fi
 }
 # One command into the log, and its NOTE: lines onto the screen. Only for a plain command or in_hive, and with nothing after it that hides its status.
 quietly() {
   from=1; [ -z "$LOG" ] || from=$(($(wc -l <"$LOG") + 1))
   rc=0; "$@" >&3 2>&3 </dev/null || rc=$?
-  [ -z "$LOG" ] || sed -n "$from,\$s/^NOTE: //p" "$LOG" | while IFS= read -r l; do note "$l"; done
+  [ -z "$LOG" ] || while IFS= read -r l; do [ -z "$l" ] || note "$l"; done <<EOF
+$(sed -n "$from,\$s/^NOTE: //p" "$LOG")
+EOF
   return $rc
 }
 on_exit() {

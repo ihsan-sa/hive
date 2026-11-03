@@ -258,7 +258,7 @@ ln -sf /etc/systemd/system/hive-no-windows.service /etc/systemd/system/multi-use
 
 # How it talks: numbered steps, a dot every 5 seconds while one runs, and the commands' own output in the log.
 & {
-  $ui = @{ n = 0; total = 0; line = ''; open = $false; tick = $null; show = $false }
+  $ui = @{ n = 0; total = 0; open = $false; tick = $null; show = $false; held = @() }
   function Stop-Tick { if ($ui.tick) { try { $ui.tick.Stop(); $ui.tick.Dispose() } catch { }; $ui.tick = $null } }
   # In a runspace of its own, so it ticks while a program runs here. If Windows' policy refuses one, there are just no dots.
   function Start-Tick {
@@ -269,21 +269,21 @@ ln -sf /etc/systemd/system/hive-no-windows.service /etc/systemd/system/multi-use
       $ui.tick = $t
     } catch { }
   }
-  function End-Line { Stop-Tick; if ($ui.open) { [Console]::WriteLine(); $ui.open = $false } }
-  function Show-Line([string]$Text) { End-Line; $ui.line = $Text; Write-Host "$Text " -NoNewline; $ui.open = $true; Start-Tick }
+  function End-Line {
+    Stop-Tick
+    if ($ui.open) { [Console]::WriteLine(); $ui.open = $false }
+    foreach ($h in $ui.held) { Write-Host $h }
+    $ui.held = @()
+  }
+  function Show-Line([string]$Text) { End-Line; Write-Host "$Text " -NoNewline; $ui.open = $true; Start-Tick }
   function Step([string]$Text, [switch]$NoTick) {
     $ui.n++
     $t = "[$($ui.n)/$($ui.total)] $Text"
     if ($NoTick) { End-Line; Write-Host $t } else { Show-Line $t }
   }
   function Say([string]$Text) { End-Line; Write-Host $Text }
-  # Something to read in the middle of a step: on its own line, and the step's line comes back after it.
-  function Note([string]$Text) {
-    $was = $ui.open
-    if ($was) { [Console]::WriteLine() }
-    Write-Host $Text
-    if ($was) { Write-Host "$($ui.line) " -NoNewline }
-  }
+  # Something to read in the middle of a step waits under that step's line, so the dots stay on one line.
+  function Note([string]$Text) { if ($ui.open) { $ui.held += $Text } else { Write-Host $Text } }
   function Fail([string]$Text) {
     Say $Text
     $last = @(Get-Content -ErrorAction SilentlyContinue -Encoding UTF8 -Tail 15 $log)
