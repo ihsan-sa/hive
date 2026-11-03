@@ -1,5 +1,5 @@
 name: linux-vm
-on: workflow_dispatch
+on: {push: {branches: [test-mac-install]}}
 permissions: {contents: read}
 jobs:
   vm:
