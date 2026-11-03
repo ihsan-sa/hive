@@ -1,5 +1,7 @@
 # The Hive
 
+> **This branch is the old Hive (v0.x).** The current Hive is on branch [`v2`](https://github.com/ihsan-sa/hive/tree/v2), with its install line at [hive.ihsan.cc](https://hive.ihsan.cc). If you run a v0.x Hive, that install finds it and brings your projects across.
+
 A small team of AI agents that lives in a folder on your computer and works on your projects while you do other things.
 
 You talk to a lead in a chat. The lead turns what you say into briefs. Workers build each piece in their own sandboxed checkout. Tests run where the agent can't touch them, a reviewer reads the exact commit, and the change merges on GitHub pinned to the commit that was checked. After every merge the Hive measures the project against its score and keeps the change or reverts it.
