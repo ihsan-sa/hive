@@ -46,6 +46,17 @@ portForwards:
 provision:
 - mode: system
   script: |
+    #!/bin/sh
+    # Lima 2.2.1 on Ubuntu 24.04: ending the first login at boot can leave logind spinning. Logins then take
+    # minutes and linger is lost, so the install's own linger fails too (lima-vm/lima#5730, reported on Apple silicon).
+    # logind ignores SIGTERM in that state, and sessions survive the kill.
+    if ! timeout 5 loginctl list-sessions >/dev/null 2>&1; then
+      systemctl kill --signal=SIGKILL systemd-logind.service || true
+      systemctl start systemd-logind || true
+    fi
+    loginctl enable-linger "\${LIMA_CIDATA_USER}" || true
+- mode: system
+  script: |
     #!/bin/bash
     set -eu
     command -v nft >/dev/null || { apt-get update -qq; DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nftables; }
@@ -63,13 +74,43 @@ provision:
       }
     }
     N
-    # Ubuntu 24.04 stops a normal user making a user namespace unless a profile allows it, and the sandbox around agents is made of them. This allows bubblewrap and nothing else.
+    # Ubuntu 24.04 stops a normal user making a user namespace unless a profile allows it, and the sandbox around agents is made of them. This re-allows them for bubblewrap, with no capabilities for what runs inside. The same bytes as get.sh.
     if command -v apparmor_parser >/dev/null; then
       cat > /etc/apparmor.d/bwrap <<'A'
+    # installed by the Hive
     abi <abi/4.0>,
     include <tunables/global>
-    profile bwrap /usr/bin/bwrap flags=(unconfined) {
-      userns,
+    profile bwrap /usr/bin/bwrap flags=(attach_disconnected,mediate_deleted) {
+      allow capability,
+      allow file rwlkm /{**,},
+      allow network,
+      allow unix,
+      allow ptrace,
+      allow signal,
+      allow mqueue,
+      allow io_uring,
+      allow userns,
+      allow mount,
+      allow umount,
+      allow pivot_root,
+      allow dbus,
+      allow pix /** -> &bwrap//&unpriv_bwrap,
+    }
+    profile unpriv_bwrap flags=(attach_disconnected,mediate_deleted) {
+      allow file rwlkm /{**,},
+      allow network,
+      allow unix,
+      allow ptrace,
+      allow signal,
+      allow mqueue,
+      allow io_uring,
+      allow userns,
+      allow mount,
+      allow umount,
+      allow pivot_root,
+      allow dbus,
+      allow pix /** -> &unpriv_bwrap,
+      audit deny capability,
     }
     A
       apparmor_parser -r /etc/apparmor.d/bwrap || echo "couldn't load the bubblewrap profile: the sandbox check will say so" >&2
@@ -101,7 +142,7 @@ case "${1:-}" in
     ;;
   open)
     up; a=$(address)
-    case "$a" in http://127.0.0.1*) open "$a" ;; *) echo "hive: no address yet. Try: hive web" >&2; exit 1 ;; esac
+    case "$a" in http://localhost*|http://127.0.0.1*) open "$a" ;; *) echo "hive: no address yet. Try: hive web" >&2; exit 1 ;; esac
     ;;
   *) up; in_vm hive "$@" ;;
 esac
@@ -195,7 +236,7 @@ main() {
   # The normal Linux install, as root in the VM. Run again, it updates.
   echo "Installing the Hive in the VM..."
   # shellcheck disable=SC2016  # these expand in the VM
-  "$L" shell --workdir / "$VM" sudo env HIVE_BRANCH="${HIVE_BRANCH:-}" SITE="$SITE" sh -c \
+  "$L" shell --workdir / "$VM" sudo env HIVE_INSIDE=1 HIVE_BRANCH="${HIVE_BRANCH:-}" SITE="$SITE" sh -c \
     '[ -n "$HIVE_BRANCH" ] || unset HIVE_BRANCH; f=$(mktemp); curl -fsSL -o "$f" "$SITE/install.sh" && sh "$f"' </dev/null \
     || die "the install in the VM failed. Run this line again to retry"
 
@@ -212,7 +253,7 @@ main() {
   echo "Open it at: $address"
   echo "To open it again, in a new Terminal window: hive open"
   case "$address" in
-    http://127.0.0.1*)
+    http://localhost*|http://127.0.0.1*)
       # Lima forwards the port a moment after the app listens. If it never does, something on the Mac holds that port.
       n=0; while [ "$n" -lt 30 ] && ! curl -fsS -o /dev/null -m 2 "${address%%#*}" 2>/dev/null; do n=$((n + 1)); sleep 2; done
       if [ "$n" -lt 30 ]; then open "$address" || true
