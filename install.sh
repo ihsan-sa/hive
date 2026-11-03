@@ -9,14 +9,18 @@ if [ "$(id -u)" = 0 ]; then
   U="${1:-hive}"
   command -v git >/dev/null && command -v python3 >/dev/null && command -v curl >/dev/null || die "install git, python3 and curl first"
   id "$U" >/dev/null 2>&1 && [ -e "$(eval echo "~$U")/.hive-installed" ] && { echo "$U already has it: sudo -iu $U, then git -C ~/core pull"; exit 0; }
-  id "$U" >/dev/null 2>&1 || useradd -m -s /bin/bash "$U"
+  new=""; id "$U" >/dev/null 2>&1 || { useradd -m -s /bin/bash "$U"; new=1; }
   H="$(eval echo "~$U")"
+  # Some systems make homes readable by a group. The Hive's sign-ins are in this one.
+  [ -z "$new" ] || chmod 700 "$H"
   loginctl enable-linger "$U" 2>/dev/null || echo "NOTE: couldn't enable linger; the hive stops when $U logs out"
   [ -e "$H/core" ] || { cp -a "$CORE" "$H/core"; chown -R "$U:" "$H/core"; }
   su - "$U" -c 'command -v claude >/dev/null || [ -x ~/.local/bin/claude ] || curl -fsSL https://claude.ai/install.sh | bash'
-  su - "$U" -c 'PATH="$HOME/.local/bin:$PATH" XDG_RUNTIME_DIR=/run/user/$(id -u) ~/core/install.sh' \
+  P=""; [ -z "${HIVE_PLAIN:-}" ] || P="HIVE_PLAIN=1 "
+  su - "$U" -c "$P"'PATH="$HOME/.local/bin:$PATH" XDG_RUNTIME_DIR=/run/user/$(id -u) ~/core/install.sh' \
     || die "the install as $U failed; fix the error above and rerun this"
-  echo; echo "To print that address again:  sudo -iu $U hive web"; exit 0
+  [ -n "${HIVE_PLAIN:-}" ] || { echo; echo "To print that address again:  sudo -iu $U hive web"; }
+  exit 0
 fi
 for a in "$@"; do case "$a" in
   --no-service) SERVICE=0 ;;
@@ -47,7 +51,7 @@ fi
 # Once installed, the files here are the Hive's own work, and an update has to get past this.
 if [ ! -e "$HOME/.hive-installed" ]; then
   other=$(find "$HOME" -mindepth 1 -maxdepth 1 ! -name '.*' ! -name core ! -name kb ! -name projects \
-          ! -name run ! -name sessions ! -name board.jsonl ! -name log.jsonl ! -name modules ! -name files ! -name settings.json | head -3)
+          ! -name run ! -name sessions ! -name board.jsonl ! -name log.jsonl ! -name modules ! -name files ! -name settings.json ! -name 'hive-old-*' | head -3)
   [ ! -e "$HOME/.ssh" ] && [ -z "$other" ] || die "this account has files or ~/.ssh, and its agents would have full rights to them.
 Use a new user (sudo ./install.sh), or install in a folder of this account with the --this-account line on the Hive's site."
 fi
@@ -91,14 +95,15 @@ git config --global user.email >/dev/null || git config --global user.email hive
 # The web app is the bundled dash. It's copied fresh, so rerunning this after a pull updates it; the secret stays.
 rm -rf "$HOME/modules/dash" "$HOME/modules/report" "$HOME/modules/providers"
 for m in dash report providers; do "$CORE/hive" module add "$m" >/dev/null; done
-"$CORE/hive" web --setup
+# It can print the address, which is the key, and with HIVE_PLAIN what this prints goes to a log.
+if [ -n "${HIVE_PLAIN:-}" ]; then "$CORE/hive" web --setup >/dev/null; else "$CORE/hive" web --setup; fi
 
 # A new Hive gets the setup walkthrough and the sandbox. Only here: no file means an install from before these, which carries on as it was.
 if [ ! -e "$HOME/.hive-installed" ] && [ ! -e "$HOME/settings.json" ]; then
   (umask 077; printf '{"power":2,"sandbox":"on","share":{"failures":false,"usage":false},"setup_done":false}\n' > "$HOME/settings.json")
 fi
 
-if [ ! -s "$HOME/.claude/.credentials.json" ] && [ -z "${ANTHROPIC_API_KEY:-}" ]; then
+if [ -z "${HIVE_PLAIN:-}" ] && [ ! -s "$HOME/.claude/.credentials.json" ] && [ -z "${ANTHROPIC_API_KEY:-}" ]; then
   echo "NOTE: no Claude login yet. The web app walks you through it."
 fi
 
@@ -144,6 +149,9 @@ if [ "$SERVICE" = 1 ]; then
   systemctl --user enable --now hive-report.timer
 fi
 touch "$HOME/.hive-installed"  # only now: a failure above can be rerun
+
+# get.sh is around this, and says all of this itself.
+[ -z "${HIVE_PLAIN:-}" ] || exit 0
 
 # Whether the sandbox works here, in plain words. Never fails the install: the app asks what to do when it doesn't.
 [ ! -e "$HOME/settings.json" ] || "$CORE/hive" sandbox check || true

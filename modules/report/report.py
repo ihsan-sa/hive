@@ -170,15 +170,20 @@ def post(body):
     except urllib.error.HTTPError as e: return e.code
     except Exception: return 0
 
-def send(dry=False):
-    wf, wu = load_share()
-    if not (wf or wu): return "sharing is off; nothing read or sent"
+def installed_state():
+    """The state, with an install id made on first use. Any first use counts: a bundle can come before the first send."""
     st = state()
     if not st.get("install"):
         st = {"install": uuid.uuid4().hex, "since": time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime()), "offset": 0}
         try: st["offset"] = os.path.getsize(logpath())   # nothing from before the opt-in
         except OSError: pass
         save_state(st)
+    return st
+
+def send(dry=False):
+    wf, wu = load_share()
+    if not (wf or wu): return "sharing is off; nothing read or sent"
+    st = installed_state()
     new, off = build(st, wf, wu)
     if wf: new += unit_failures(st)
     q = [r for r in pending() if (r["type"] == "failure" and wf) or (r["type"] == "usage" and wu)] + new
@@ -221,7 +226,7 @@ def bundle(yes=False):
     for n in ("log.jsonl", "board.jsonl"):
         try: parts[n] = scrub("".join(open(os.path.join(root, n), errors="replace").readlines()[-500:]))[-150000:]
         except OSError: pass
-    st = state(); body = json.dumps({"install": st.get("install", ""), "version": version(), "type": "bundle", "files": parts}).encode()
+    st = installed_state(); body = json.dumps({"install": st["install"], "version": version(), "type": "bundle", "files": parts}).encode()
     bd = os.path.join(rdir(), "bundles"); os.makedirs(bd, exist_ok=True)
     name = os.path.join(bd, time.strftime("%y%m%d-%H%M%S") + ".json")
     with open(name, "wb") as f: f.write(body)

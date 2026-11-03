@@ -67,13 +67,23 @@ def _python():
 def _filter():
     """A seccomp program, as a file bwrap reads, or None on a machine we don't ship for. A network namespace doesn't cover vsock, and under WSL or a VM that reaches the host
     outside any proxy, so socket(AF_VSOCK) is refused. io_uring can make sockets without that call, and other ABIs reach socket by another number: both refused, and programs fall back."""
-    arch, sock = {"x86_64": (0xC000003E, 41), "aarch64": (0xC00000B7, 198)}.get(os.uname().machine, (None, None))
+    arch, sock, unshare, clone = {"x86_64": (0xC000003E, 41, 272, 56), "aarch64": (0xC00000B7, 198, 97, 220)}.get(os.uname().machine, (None,) * 4)
     if not arch: return None
-    LD, JEQ, JGE, RET, ERR = 0x20, 0x15, 0x35, 0x06, 0x00050000
-    prog = [(LD, 0, 0, 4), (JEQ, 1, 0, arch), (RET, 0, 0, ERR | errno.ENOSYS),
-            (LD, 0, 0, 0), (JGE, 7, 0, 0x40000000), (JEQ, 6, 0, 425), (JEQ, 5, 0, 426), (JEQ, 4, 0, 427),
-            (JEQ, 0, 2, sock), (LD, 0, 0, 16), (JEQ, 2, 0, socket.AF_VSOCK if hasattr(socket, "AF_VSOCK") else 40),
-            (RET, 0, 0, 0x7FFF0000), (RET, 0, 0, ERR | errno.ENOSYS), (RET, 0, 0, ERR | errno.EAFNOSUPPORT)]
+    LD, JEQ, JGE, JSET, RET, ERR = 0x20, 0x15, 0x35, 0x45, 0x06, 0x00050000
+    # A bwrap without a working --disable-userns (Ubuntu 22.04's 0.6.1) leaves nothing else stopping an agent making a nested user namespace, and with it more of the kernel to attack.
+    # clone3 keeps its flags behind a pointer a filter can't read, so it's refused whole and libc falls back to clone. bwrap makes its own namespaces before this filter loads.
+    old = not FLAGS.get("nouserns", True)
+    code = [(LD, 0, 0, 4), (JEQ, "native", 0, arch), (RET, 0, 0, ERR | errno.ENOSYS), "native",
+            (LD, 0, 0, 0), (JGE, "nosys", 0, 0x40000000), (JEQ, "nosys", 0, 425), (JEQ, "nosys", 0, 426), (JEQ, "nosys", 0, 427),
+            *([(JEQ, "nosys", 0, 435), (JEQ, "flags", 0, clone), (JEQ, "flags", 0, unshare)] if old else []),
+            (JEQ, 0, "allow", sock), (LD, 0, 0, 16), (JEQ, "family", "allow", socket.AF_VSOCK if hasattr(socket, "AF_VSOCK") else 40),
+            *(["flags", (LD, 0, 0, 16), (JSET, "perm", "allow", 0x10000000), "perm", (RET, 0, 0, ERR | errno.EPERM)] if old else []),
+            "allow", (RET, 0, 0, 0x7FFF0000), "nosys", (RET, 0, 0, ERR | errno.ENOSYS), "family", (RET, 0, 0, ERR | errno.EAFNOSUPPORT)]
+    prog, at = [], {}
+    for i in code:
+        if isinstance(i, str): at[i] = len(prog)
+        else: prog.append(i)
+    prog = [(c, at[t] - n - 1 if t else 0, at[f] - n - 1 if f else 0, k) for n, (c, t, f, k) in enumerate(prog)]
     data = b"".join(struct.pack("=HBBI", *i) for i in prog)
     p = STATE / "sandbox.bpf"
     try:
@@ -295,6 +305,9 @@ def check():
                  "try: s.connect(('1.1.1.1',53))\n"
                  "except OSError: pass\n"
                  "else: sys.exit('it reaches the network directly')\n"
+                 "try: import ctypes; made=ctypes.CDLL(None).unshare(0x10000000)==0\n"
+                 "except (ImportError,OSError): made=False\n"
+                 "if made: sys.exit('it can make a user namespace')\n"
                  "open(os.path.expanduser('~/ok'),'w')\n")
         env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin")}
         a, e = wrap([_python(), "-I", "-c", probe], env, "check", d / "home", d / "sock")

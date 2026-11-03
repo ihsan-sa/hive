@@ -25,6 +25,8 @@ It sets up WSL 2 if needed (a restart, then run the line again) and makes a sepa
 
 To read it first: `https://github.com/ihsan-sa/hive` (branch `v2`), files `get.sh` and `get.ps1`. macOS isn't supported yet.
 
+Coming from a v0.x Hive? The install finds it, says what it found and asks, then stops and removes the old program and brings your projects, notes and chats across. Logins and keys stay behind, so you sign in again. The old folder stays whole as your backup (`hive-old-DATE` if its name was needed); nothing in it is deleted. If a run fails halfway, run the line again and it carries on. `HIVE_ACCEPT=1` skips the question.
+
 No sudo, or on a laptop? Install in a folder of your own account:
 ```sh
 curl -fsSL https://hive.ihsan.cc/install.sh | sh -s -- --this-account

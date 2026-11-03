@@ -15,11 +15,11 @@ export function openRef(e, kind, name) {
 }
 
 /** agentRef(name, {copy, state}) — state: also show the status word. */
-export function agentRef(n, { copy, state, href } = {}) {
+export function agentRef(n, { copy, state, href, dot = true } = {}) {
   if (!n) return "?";
   const s = agentStatus(n), agent = isAgent(n), warden = isWarden(n);
   const a = h("a", { class: "ref", "data-kind": "agent", href: href || (agent ? agentHref(n) : threadHref("@" + n)), title: `${n}${warden ? ", a warden" : ""}${s.label ? `: ${s.label}` : ""}`, onclick: !href && agent ? e => openRef(e, "agent", n) : null },
-    statusDot(s.key, { live: isRunning(n) }), h("span", { class: "ref-n" }, n), warden ? wardenMark() : null,
+    dot ? statusDot(s.key, { live: isRunning(n) }) : null, h("span", { class: "ref-n" }, n), warden ? wardenMark() : null,
     state && s.label && s.key !== "none" ? h("span", { class: "sl", "data-tone": null, style: "font-weight:400" }, status(s.key).label) : null);
   if (!copy || !agent) return a;
   return h("span", { class: "ref-wrap" }, a, copyButton("@" + n));

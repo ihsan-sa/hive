@@ -54,6 +54,7 @@ export function closePanel() {
   const back = P.back;
   Object.assign(P, { name: null, root: null, body: null, bar: null, unsub: null, timer: 0, back: null });
   if (back && back.isConnected && back.focus) back.focus({ preventScroll: true });
+  dispatchEvent(new Event("panelclose"));
 }
 
 // Capture, so Escape closes the panel and doesn't also reach the view under it. A window open on top gets Escape first.

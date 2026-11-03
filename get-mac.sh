@@ -131,7 +131,7 @@ case "${1:-}" in
     ;;
   open)
     up; a=$(address)
-    case "$a" in http://127.0.0.1*) open "$a" ;; *) echo "hive: no address yet. Try: hive web" >&2; exit 1 ;; esac
+    case "$a" in http://localhost*|http://127.0.0.1*) open "$a" ;; *) echo "hive: no address yet. Try: hive web" >&2; exit 1 ;; esac
     ;;
   *) up; in_vm hive "$@" ;;
 esac
@@ -225,7 +225,7 @@ main() {
   # The normal Linux install, as root in the VM. Run again, it updates.
   echo "Installing the Hive in the VM..."
   # shellcheck disable=SC2016  # these expand in the VM
-  "$L" shell --workdir / "$VM" sudo env HIVE_BRANCH="${HIVE_BRANCH:-}" SITE="$SITE" sh -c \
+  "$L" shell --workdir / "$VM" sudo env HIVE_INSIDE=1 HIVE_BRANCH="${HIVE_BRANCH:-}" SITE="$SITE" sh -c \
     '[ -n "$HIVE_BRANCH" ] || unset HIVE_BRANCH; f=$(mktemp); curl -fsSL -o "$f" "$SITE/install.sh" && sh "$f"' </dev/null \
     || die "the install in the VM failed. Run this line again to retry"
 
@@ -242,7 +242,7 @@ main() {
   echo "Open it at: $address"
   echo "To open it again, in a new Terminal window: hive open"
   case "$address" in
-    http://127.0.0.1*)
+    http://localhost*|http://127.0.0.1*)
       # Lima forwards the port a moment after the app listens. If it never does, something on the Mac holds that port.
       n=0; while [ "$n" -lt 30 ] && ! curl -fsS -o /dev/null -m 2 "${address%%#*}" 2>/dev/null; do n=$((n + 1)); sleep 2; done
       if [ "$n" -lt 30 ]; then open "$address" || true

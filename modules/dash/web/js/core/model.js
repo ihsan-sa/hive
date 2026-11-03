@@ -185,6 +185,35 @@ export function threadTitle(th) {
 }
 /** Only the starter, keeper or box ever posted here. */
 export const isSystemThread = d => !!d && d.posts.every(p => SYS.has(p.from));
+
+// ---- how much of the board someone wants to see: Chat's For you / Updates / Everything ----
+export const SHOW = { you: 0, updates: 1, all: 2 };
+const OPS = new Set(["watchdog", "memguard"]), HOUSE = new Set(["keeper", "improve", "watchdog"]);   // the hive looking after itself
+/** The narrowest level a post belongs to. 0: from or to the person. 1: an agent or outsider saying how it's going. 2: agents talking to each other, and the hive's own notices. */
+export function postLevel(p) {
+  if (p.lv !== undefined) return p.lv;
+  if (p.from === "person" || p.men.includes("person")) return p.lv = 0;
+  if (SYS.has(p.from) || OPS.has(p.from) || isWarden(p.from) || HOUSE.has(p.th)) return p.lv = 2;
+  return p.lv = p.men.some(m => m !== p.from && !OUTSIDE.has(m)) ? 2 : 1;
+}
+/** The narrowest level anything in a thread belongs to: a thread with nothing at a level isn't listed there. */
+export function threadLevel(d) {
+  if (d.lvN !== d.posts.length) { let v = d.lvN ? d.lv : 2; for (let i = d.lvN || 0; i < d.posts.length; i++) v = Math.min(v, postLevel(d.posts[i])); d.lv = v; d.lvN = d.posts.length; }
+  return d.lv;
+}
+/** Each finished run's last word in a thread the person is part of. Agents report a result without naming the person, so For you needs these or it never shows the answer. */
+export function closingPosts() {
+  const out = new Set();
+  for (const s of S.sessions) {
+    const d = s.end && s.thread ? S.threads.get(s.thread) : null;
+    if (!d || threadLevel(d) > SHOW.you) continue;
+    for (let i = d.posts.length - 1; i >= 0 && d.posts[i].t >= s.start; i--) {
+      const p = d.posts[i];
+      if (p.from === s.name && p.t <= s.end + 5000) { if (postLevel(p) <= SHOW.updates) out.add(p.id); break; }
+    }
+  }
+  return out;
+}
 /** Everyone who took part in a thread: posted, ran, or is queued for it. Outside names first, then running, queued, the rest. */
 export function threadPeople(th) {
   const d = S.threads.get(th), m = new Set(d ? d.who : []);

@@ -624,11 +624,13 @@ def text(s, width=None):
 
 # ---------- cost, tokens, limits, from the session logs ----------
 
-SECRET = re.compile(r"(gh[pousr]_|github_pat_|sk-ant-|xox[abp]-)[\w-]+|(Bearer\s+|token[=:]\s*)[\w.+/=-]{8,}", re.I)
+SECRET = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|\Z)"
+                    r"|(?:gh[pousr]_|github_pat_|xox[abp]-|\bsk-(?:ant|or|proj|svcacct|admin)-)[\w-]+|\bsk-[A-Za-z0-9]{20,}|\bAKIA[0-9A-Z]{16}\b|\bAIza[\w-]{30,}"
+                    r"|Bearer\s+[\w.+/=-]{8,}|(?P<label>(?:api[_-]?key|passw(?:or)?d|secret|token)[\"']?\s*[=:]\s*[\"']?)[\w.+/=-]{8,}", re.I | re.S)
 
 
 def redact(s):
-    return SECRET.sub("[hidden]", str(s or ""))
+    return SECRET.sub(lambda m: (m["label"] or "") + "[hidden]", str(s or ""))
 
 
 class Usage:
@@ -834,6 +836,11 @@ def set_provider_line(name, k, v):
     return True
 
 
+def web_stamp():
+    """Changes when the page's files do, so a tab left open can tell it's running old code: modules load once, so a landed fix doesn't reach it until a reload."""
+    files = [UI_DIR / "index.html", *(UI_DIR / "css").rglob("*.css"), *(UI_DIR / "js").rglob("*.js")]
+    return hashlib.sha256(repr(sorted((str(f), f.stat().st_mtime_ns, f.stat().st_size) for f in files if f.exists())).encode()).hexdigest()[:12]
+
 class Cached:
     """At most one computation per `ttl` seconds, however many tabs are open."""
     def __init__(self, fn, ttl): self.fn, self.ttl, self.t, self.v, self.lock = fn, ttl, 0, None, threading.Lock()
@@ -842,6 +849,27 @@ class Cached:
             if time.time() - self.t > self.ttl:
                 self.v, self.t = self.fn(), time.time()
             return self.v
+
+
+class CachedStale(Cached):
+    """For an answer that's slow to get and rarely changes: past `ttl` the old answer goes out while a new one is read behind it,
+    so no request waits. Only the first read waits, and a read after .t = 0, which is how a change asks for the truth."""
+    busy = False
+
+    def get(self):
+        with self.lock:
+            if self.v is None or not self.t: self.v, self.t = self.fn(), time.time()
+            elif time.time() - self.t > self.ttl and not self.busy:
+                self.busy = True
+                threading.Thread(target=self.refresh, daemon=True).start()
+            return self.v
+
+    def refresh(self):
+        try:
+            v = self.fn()
+            with self.lock:
+                if self.t: self.v, self.t = v, time.time()  # .t = 0 meanwhile: what was just read may predate the change
+        finally: self.busy = False
 
 
 # Defaults of ~/.local/bin/heavy's start gates; test_jobs.py checks they still match the script.
@@ -1071,11 +1099,12 @@ def tail_lines(path, offset):
 # With one: full rights rest only on the secret (local route); anything that looks forwarded is the outside route, which needs
 # a signed Cloudflare Access token and gets only outside.can, read-only by default. A forwarding header can only ever lower
 # what a request may do, and nobody gets the local route without the secret, so spoofing headers gains nothing.
-CAPS = ("read", "post", "stop", "tier", "limits", "logins", "config", "modules", "plans", "secrets")
+CAPS = ("read", "post", "stop", "tier", "limits", "logins", "config", "modules", "plans", "secrets", "files")
 # outside.people {email: "limited" or "full"} in web.json: what each signed-in person may do from outside. Not listed: refused.
 # outside.sites {host: {access, people, names}}: a name with its own Access team, aud and list. A token counts only for its own
 # host's team and aud, so one Cloudflare account's sign-in can't be used on another's name. Anything malformed refuses everyone.
 LIMITED_CAN = ("read", "post", "stop")
+LIMITED_FILES = STATE / "limited-files"  # this file present: limited sign-ins here may also read the Knowledge page. Off unless a Hive has decided to, since limited people differ per install.
 FULL_FOR_S = 3600  # full rights need an Access token issued this recently; after that the same session is limited until they sign in again
 OPEN_CAN = ("read", "stop", "tier", "limits")
 WEB = STATE / "web.json"
@@ -1085,11 +1114,12 @@ FORWARDED = ("cf-ray", "cf-connecting-ip", "cf-access-jwt-assertion", "cf-ipcoun
 GET_CAP = {"/api/live": "read", "/api/board": "read", "/api/log": "read", "/api/usage": "read", "/api/jobs": "read", "/api/agent": "read",
            "/api/projects": "read", "/api/agent-costs": "read", "/api/thread-names": "read", "/json": "read", "/api/target": "read", "/api/inbox": "read", "/api/delivered": "read",
            "/api/config": "config", "/api/modules": "modules", "/api/signin": "logins", "/api/plans": "plans", "/api/secrets": "secrets",
-           "/api/settings": "config", "/api/signin-codex": "logins"}
+           "/api/settings": "config", "/api/signin-codex": "logins", "/api/design": "logins",
+           "/api/kb/home": "files", "/api/kb/open": "files", "/api/kb/search": "files", "/api/kb/raw": "files"}
 POST_CAP = {"/api/kill": "stop", "/api/tier": "tier", "/api/login-pause": "limits", "/api/login-limit": "limits", "/api/provider-limit": "limits",
             "/api/post": "post", "/api/upload": "post", "/api/inbox-read": "post", "/api/config": "config", "/api/starter": "config",
             "/api/module": "modules", "/api/signin": "logins", "/api/signin/code": "logins", "/api/signin/cancel": "logins", "/api/plan": "plans", "/api/secret": "secrets",
-            "/api/signin-codex": "logins", "/api/account-key": "logins"}
+            "/api/signin-codex": "logins", "/api/account-key": "logins", "/api/design": "logins"}
 LOCAL_ONLY = {"/api/access", "/api/settings"}  # who may do what is never changed from outside, whatever outside.can says
 
 
@@ -1234,18 +1264,22 @@ def signer_of(claims, out):
     return re.sub(r"[^\w .@+-]", "", names.get(email, email))[:60] or "unknown"
 
 
+def limited_can():
+    return LIMITED_CAN + ("files",) if LIMITED_FILES.exists() else LIMITED_CAN
+
+
 def person_can(claims, out, now=None):
     """(can, mode, seconds of full left) for a verified token, or None if this person isn't let in. Without outside.people: outside.can, for anyone Access let through."""
     if "people" not in out: return tuple(c for c in out.get("can", ["read"]) if c in CAPS), None, 0
     people = out["people"] if isinstance(out["people"], dict) else {}
     email = str(claims.get("email") or "").strip().lower()
     mode = {str(k).strip().lower(): v for k, v in people.items()}.get(email) if email else None
-    if mode == "limited": return LIMITED_CAN, "limited", 0
+    if mode == "limited": return limited_can(), "limited", 0
     if mode != "full": return None
     iat = claims.get("iat")
     left = iat + FULL_FOR_S - (now or time.time()) if isinstance(iat, (int, float)) and not isinstance(iat, bool) else 0
     if 0 < left <= FULL_FOR_S + 60: return CAPS, "full", int(left)  # a token dated well ahead is no proof of a recent sign-in
-    return LIMITED_CAN, "expired", 0
+    return limited_can(), "expired", 0
 
 
 def site_profile(v):
@@ -1522,6 +1556,220 @@ def save_plan(name, text, version, start, signer):
     return res
 
 
+# ---------- the Knowledge page: read-only browsing of what the Hive keeps ----------
+# Paths are relative to home and always start with one of KB_ROOTS. Nothing here writes; plans are saved by save_plan.
+KB_ROOTS = ("kb", "modules", "core", "tools", "projects", "files", "investigations", "archive")
+KB_SHELVES = (("kb", "Notes", "What agents learned and wrote down"), ("modules", "Modules", "Extras and shared tools, each with its README"),
+              ("modules/bin", "Scripts", "The commands agents run"), ("core", "Core", "The starter, hive and the rules"),
+              ("projects", "Projects", "Plans and code, one folder each"), ("files", "Post files", "What was attached to posts"),
+              ("investigations", "Investigations", "Longer digs and their evidence"), ("tools", "Tools", "Installed toolchains"), ("archive", "Archive", "Kept from older Hives"))
+KB_SKIP = {"node_modules", "__pycache__", "venv", "site-packages"}
+KB_DENY = re.compile(r"^id_(rsa|dsa|ecdsa|ed25519)|\.(pem|key|p12|pfx|keystore|jks|gpg|asc|kdbx|env)$|^(web|auth|logins?)\.json$|^hosts\.ya?ml$|^(authorized_keys|known_hosts|htpasswd)$|credential", re.I)
+KB_WORDS = re.compile(r"secret|token|passw(or)?d|api[_-]?key", re.I)
+KB_CODE = {".py", ".go", ".js", ".mjs", ".ts", ".tsx", ".css", ".md", ".html", ".c", ".h", ".rs"}  # a name like tokens.css is code, not a token
+KB_BLOB = re.compile(r"[A-Za-z0-9+/=_-]{40,}")  # a search shows one line, so a key's middle line has none of the marks redact() looks for
+KB_IMAGE = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp"}
+KB_RAW_MAX = 200 * 1024 * 1024
+KB_TEXT_MAX, KB_LIST_MAX, KB_INDEX_MAX, KB_HITS_MAX = 512 * 1024, 2000, 40000, 200
+KB_SEARCH = threading.Semaphore(2)
+kb_index_memo = {"t": 0, "items": [], "more": False}
+kb_index_lock = threading.Lock()
+
+
+def kb_name_ok(n):
+    """A file or folder name that may be shown: no dotfiles, nothing named like a key. Code about tokens stays readable."""
+    if not n or n.startswith(".") or KB_DENY.search(n): return False
+    return not KB_WORDS.search(n) or Path(n).suffix.lower() in KB_CODE
+
+
+def kb_parts_ok(parts):
+    return bool(parts) and parts[0] in KB_ROOTS and all(p not in ("", ".", "..") and kb_name_ok(p) for p in parts)
+
+
+def kb_path(rel):
+    """The real path for a home-relative one, or None. Checks the name asked for and, after following links, where it really is."""
+    rel = str(rel or "").strip("/")
+    if not rel or len(rel) > 1024 or "\0" in rel or not kb_parts_ok(rel.split("/")): return None
+    try:
+        real, base = (HOME / rel).resolve(), HOME.resolve()
+        if not kb_parts_ok(real.relative_to(base).parts) or not real.exists(): return None
+    except (OSError, ValueError, RuntimeError): return None
+    return real
+
+
+def kb_is_worktree(d):
+    try: return (d / ".git").is_file()
+    except OSError: return False
+
+
+def kb_title(f, text=None):
+    """A note's first heading, or the first line of prose, for lists."""
+    try:
+        if text is None:
+            with f.open(errors="replace") as src: text = src.read(4096)
+    except OSError: return ""
+    for line in text.splitlines():
+        line = line.strip()
+        if line and not line.startswith(("---", "```", "<!--", "![")): return redact(line.lstrip("# ").strip())[:160]
+    return ""
+
+
+def kb_kind(f, head):
+    suf = f.suffix.lower()
+    if suf in KB_IMAGE: return "image"
+    if suf == ".pdf": return "pdf"
+    if b"\0" in head: return "binary"
+    return "md" if suf in (".md", ".markdown") else "text"
+
+
+def kb_list(p, rel):
+    out, more = [], False
+    try: found = sorted(os.scandir(p), key=lambda e: e.name.lower())
+    except OSError: found = []
+    md_titles = sum(e.name.endswith(".md") for e in found) <= 300
+    for e in found:
+        if not kb_name_ok(e.name) or e.name in KB_SKIP: continue
+        if len(out) >= KB_LIST_MAX: more = True; break
+        child = f"{rel}/{e.name}"
+        real = kb_path(child)
+        if not real: continue
+        st = real.stat(); row = {"name": e.name, "path": child, "t": int(st.st_mtime)}
+        if real.is_dir():
+            row["dir"] = True
+            if kb_is_worktree(real): row["worktree"] = True
+            elif rel in ("modules", "projects"):
+                for doc in ("goals.md", "README.md", "readme.md"):
+                    if (real / doc).is_file() and kb_path(f"{child}/{doc}"):
+                        row["title"] = kb_title(real / doc)
+                        if doc == "goals.md": row["plan"] = True
+                        break
+        else:
+            row["size"] = st.st_size
+            if md_titles and e.name.endswith(".md"): row["title"] = kb_title(real)
+        out.append(row)
+    out.sort(key=lambda r: (bool(r.get("worktree")), not r.get("plan"), not r.get("dir")))
+    return out, more
+
+
+def kb_doc(p, rel):
+    """The note that explains a folder: a project's goals.md, or its README."""
+    for doc in ("goals.md", "README.md", "readme.md", "README.txt", "README"):
+        f = p / doc
+        if f.is_file() and kb_path(f"{rel}/{doc}"):
+            with f.open(errors="replace") as src: text = src.read(KB_TEXT_MAX)
+            return {"path": f"{rel}/{doc}", "name": doc, "text": redact(text), "t": int(f.stat().st_mtime), "kind": "text" if doc in ("README", "README.txt") else "md"}
+    return None
+
+
+def kb_linked(name, rel):
+    """Notes that name this file."""
+    if not shutil.which("grep") or not (HOME / "kb").is_dir(): return []
+    try: r = subprocess.run(["grep", "-rlIF", "--include=*.md", "--", name, "kb"], cwd=HOME, capture_output=True, text=True, timeout=3)
+    except (OSError, subprocess.SubprocessError): return []
+    return [x for x in r.stdout.splitlines() if x != rel and kb_path(x)][:20]
+
+
+def kb_open(rel):
+    """A folder with its listing, or a file ready to read."""
+    rel = str(rel or "").strip("/"); p = kb_path(rel)
+    if not p: return None
+    st = p.stat()
+    res = {"path": rel, "name": rel.rsplit("/", 1)[-1], "t": int(st.st_mtime)}
+    if p.is_dir():
+        res["entries"], res["more"] = kb_list(p, rel)
+        res.update(type="dir", doc=kb_doc(p, rel))
+        return res
+    if not p.is_file(): return None
+    with p.open("rb") as src: head = src.read(KB_TEXT_MAX)
+    kind = kb_kind(p, head[:8192])
+    res.update(type=kind, size=st.st_size, linked=kb_linked(p.name, rel) if rel.startswith(("kb/", "modules/", "core/")) else [])
+    if kind in ("md", "text"):
+        res.update(text=redact(head.decode(errors="replace")), truncated=st.st_size > KB_TEXT_MAX)
+    return res
+
+
+def kb_walk(rel, depth, room):
+    """(path, mtime) of the files under rel, nearest first, skipping worktrees and links."""
+    start = HOME / rel
+    if not start.is_dir() or start.is_symlink(): return []
+    out, todo = [], [(start, rel, 0)]
+    while todo and len(out) < room:
+        d, r, n = todo.pop(0)
+        try: found = list(os.scandir(d))
+        except OSError: continue
+        for e in found:
+            if not kb_name_ok(e.name) or e.name in KB_SKIP or e.is_symlink(): continue
+            try:
+                if e.is_dir(follow_symlinks=False):
+                    if n < depth and not kb_is_worktree(Path(e.path)): todo.append((Path(e.path), f"{r}/{e.name}", n + 1))
+                elif e.is_file(follow_symlinks=False): out.append((f"{r}/{e.name}", e.stat(follow_symlinks=False).st_mtime))
+            except OSError: continue
+    return out[:room]
+
+
+def kb_index():
+    """Every file's path and time, for name search and "changed lately". Bounded, and at most a minute old."""
+    with kb_index_lock:
+        if time.time() - kb_index_memo["t"] < 60: return kb_index_memo
+        items = []
+        for rel, depth in (("kb", 12), ("core", 12), ("modules", 12), ("files", 2), ("investigations", 8), ("archive", 6), ("projects", 3), ("tools", 2)):
+            items += kb_walk(rel, depth, KB_INDEX_MAX - len(items))
+        kb_index_memo.update(t=time.time(), items=items, more=len(items) >= KB_INDEX_MAX)
+        return kb_index_memo
+
+
+def kb_home():
+    shelves = []
+    for rel, label, about in KB_SHELVES:
+        p = kb_path(rel)
+        if not p or not p.is_dir(): continue
+        try: n = sum(kb_name_ok(e.name) for e in os.scandir(p))
+        except OSError: n = 0
+        shelves.append({"path": rel, "label": label, "about": about, "n": n})
+    busy = [x for x in kb_index()["items"] if x[0].split("/")[0] in ("kb", "modules", "core", "investigations") and x[0].endswith((".md", ".py", ".sh", ".txt", ".json", ".go", ".mjs", ".js"))]
+    recent = []
+    for path, t in sorted(busy, key=lambda x: -x[1])[:14]:
+        f = HOME / path
+        recent.append({"path": path, "name": f.name, "t": int(t), "title": kb_title(f) if f.suffix == ".md" else ""})
+    return {"shelves": shelves, "recent": recent}
+
+
+def kb_search(q):
+    """Names first, then lines inside files. A plain string, any case; a hard time limit, and never in worktrees or toolchains."""
+    q = str(q or "").strip()[:200]
+    if len(q) < 2: return {"q": q, "names": [], "hits": [], "more": False}
+    ws = q.lower().split(); names = []
+    for path, t in kb_index()["items"]:
+        low = path.lower()  # the index only holds names kb_walk let through, and no links
+        if all(w in low for w in ws): names.append({"path": path, "t": int(t)})
+        if len(names) >= 60: break
+    names.sort(key=lambda x: (not x["path"].startswith("kb/"), x["path"].count("/"), -x["t"]))
+    if not KB_SEARCH.acquire(timeout=4): return {"q": q, "names": names, "hits": [], "more": True, "busy": True}
+    hits, more, deadline = [], False, time.time() + 6
+    try:
+        dirs = [d for d in ("kb", "core", "modules", "investigations", "archive", "files") if (HOME / d).is_dir() and not (HOME / d).is_symlink()]
+        try: dirs += [f"projects/{e.name}" for e in os.scandir(PROJECTS) if kb_name_ok(e.name) and e.is_dir(follow_symlinks=False) and not kb_is_worktree(Path(e.path))]
+        except OSError: pass
+        skip = sorted(KB_SKIP)
+        cmd = (["rg", "--no-config", "--no-ignore-parent", "-FinH", "--no-heading", "--color=never", "--max-count=3", "--max-filesize=1M", "--max-columns=400", *[f"--glob=!{d}" for d in skip], "-e", q, "--", *dirs]
+               if shutil.which("rg") else ["grep", "-rFinIH", "-m3", *[f"--exclude-dir={d}" for d in skip], "--exclude-dir=.*", "-e", q, "--", *dirs])
+        if not dirs: return {"q": q, "names": names, "hits": [], "more": False}
+        pr = subprocess.Popen(cmd, cwd=HOME, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, errors="replace")
+        timer = threading.Timer(6, pr.kill); timer.start()
+        try:
+            for line in pr.stdout:
+                m = re.match(r"([^:\n]+):(\d+):(.*)", line)
+                if not m or not kb_path(m[1]): continue
+                if len(hits) >= KB_HITS_MAX: more = True; break
+                hits.append({"path": m[1], "line": int(m[2]), "text": KB_BLOB.sub("[hidden]", redact(m[3]))[:400]})
+            more = more or time.time() > deadline
+        finally:
+            timer.cancel(); pr.kill(); pr.wait(); pr.stdout.close()
+    except OSError: pass
+    finally: KB_SEARCH.release()
+    return {"q": q, "names": names, "hits": hits, "more": more}
+
+
 def delivered_view(days=3):
     """{agent: post ids the inbox hook handed it mid-run}, for read marks on messages. Only files touched lately, and only their ends."""
     out, cut, d = {}, time.time() - days * 86400, STATE / "delivered"
@@ -1725,6 +1973,103 @@ class SignIn:
 SIGNIN = SignIn()
 
 
+class DesignRoom:
+    """Claude Design from the Design page: a real interactive Claude Code on a login, because /design needs one (artifacts are off under -p and for
+    agents). The person starts it and types into it. It runs in tmux in its own unit, so it outlives a dash restart and has its own memory ceiling
+    (the dash's is 300M). One at a time, fixed command, a short list of keys, gone after 6 hours. No agent drives it: see kb/claude-design-access.md."""
+    SOCK, CONF, DIR, UNIT = HOME / ".hive" / "design.tmux", HOME / ".hive" / "design.tmux.conf", HOME / "designs", "hive-design"
+    KEYS = {"enter": "Enter", "esc": "Escape", "up": "Up", "down": "Down", "tab": "Tab", "stop": "C-c"}
+    LINK = re.compile(r"https://claude\.ai/(?:code/)?artifact/[\w-]+")
+
+    def __init__(self):
+        self.lock = threading.Lock()
+
+    def tmux(self, *args, stdin=None):
+        return subprocess.run(["tmux", "-u", "-S", str(self.SOCK), "-f", str(self.CONF), *args], input=stdin, capture_output=True, text=True, errors="replace", timeout=10)
+
+    @staticmethod
+    def open_logins():
+        """The logins it may start on: the same stops as agents, so not one that's paused or past its weekly line."""
+        def room(l):
+            line = (l.get("stop") or {}).get("weekly") or (l.get("stop") or {}).get("global") or 100
+            return not l.get("paused") and (l.get("weekly") or 0) < line
+        return [l for l in logins() if room(l)]
+
+    def running(self):
+        return self.SOCK.exists() and self.tmux("has-session", "-t", "design").returncode == 0
+
+    def links(self, screen=""):
+        """The designs seen so far, newest first, kept so they outlast the session."""
+        path, have = self.DIR / "links.json", []
+        try: have = json.loads(path.read_text())
+        except (OSError, ValueError): pass
+        new = [u for u in dict.fromkeys(self.LINK.findall(screen)) if u not in {x.get("url") for x in have}]
+        if new:
+            have = [{"url": u, "at": int(time.time())} for u in reversed(new)] + have
+            self.DIR.mkdir(exist_ok=True); path.write_text(json.dumps(have))
+        return have
+
+    def view(self):
+        run, screen = self.running(), ""
+        if run:
+            screen = self.tmux("capture-pane", "-p", "-J", "-S", "-5000", "-t", "design").stdout.rstrip()[-200000:]
+        return {"running": run, "screen": screen, "links": self.links(screen), "logins": [{"name": l["name"], "weekly": l.get("weekly")} for l in self.open_logins()], "dir": str(self.DIR)}
+
+    def start(self, name):
+        with self.lock:
+            if self.running(): return {"ok": True}
+            hit = [l for l in self.open_logins() if l["name"] == name]
+            if not hit: raise ValueError("that login isn't open: it's paused, past its weekly line, or not a login")
+            self.DIR.mkdir(exist_ok=True)
+            self.CONF.write_text("set -g status off\nset -g history-limit 20000\n")
+            subprocess.run(["systemctl", "--user", "reset-failed", self.UNIT + ".service"], capture_output=True, timeout=10)
+            # env -i: not the dash's environment. An API key there would bill the key and turn artifacts off.
+            cmd = ["env", "-i", f"HOME={HOME}", f"PATH={os.environ.get('PATH', '')}", "TERM=xterm-256color", "LANG=C.UTF-8", f"TMPDIR={os.environ.get('TMPDIR') or HOME / '.cache' / 'hive-tmp'}", f"CLAUDE_CONFIG_DIR={hit[0]['path']}", "claude"]
+            r = subprocess.run(["systemd-run", "--user", "--quiet", "--collect", f"--unit={self.UNIT}", "-p", "Type=forking", "-p", "MemoryMax=2G", "-p", "RuntimeMaxSec=21600", f"--working-directory={self.DIR}",
+                                "tmux", "-u", "-S", str(self.SOCK), "-f", str(self.CONF), "new-session", "-d", "-s", "design", "-x", "110", "-y", "40", *cmd], capture_output=True, text=True, timeout=30)
+            if r.returncode: raise ValueError("couldn't start it: " + (r.stderr.strip()[:300] or "no reason given"))
+            return {"ok": True}
+
+    def send(self, text):
+        text = "".join(c for c in str(text or "") if c >= " " or c in "\n\t").strip()
+        if not text or len(text) > 20000: raise ValueError("type something to send, under 20,000 characters")
+        if not self.running(): raise ValueError("no session is running")
+        with self.lock:
+            self.tmux("load-buffer", "-b", "typed", "-", stdin=text)
+            self.tmux("paste-buffer", "-d", "-p", "-b", "typed", "-t", "design")
+            time.sleep(0.4)  # or Enter lands inside the paste and starts a new line
+            self.tmux("send-keys", "-t", "design", "Enter")
+        return {"ok": True}
+
+    def grant(self, name):
+        """The person's button: types /design consent for them, once, in the page's session, with the answer on its screen. Never called by anything else."""
+        if not self.running(): self.start(name)
+        def go():
+            end = time.time() + 40
+            while time.time() < end:
+                if self.running() and "\u276f" in self.tmux("capture-pane", "-p", "-t", "design").stdout:
+                    self.send("/design consent"); return
+                time.sleep(0.5)
+        threading.Thread(target=go, daemon=True).start()
+        return {"ok": True}
+
+    def act(self, d):
+        what = d.get("do")
+        if what == "start": return self.start(d.get("login"))
+        if what == "grant": return self.grant(d.get("login"))
+        if what == "send": return self.send(d.get("text"))
+        if what == "key":
+            if d.get("key") not in self.KEYS: raise ValueError("that key isn't on the list")
+            if not self.running(): raise ValueError("no session is running")
+            self.tmux("send-keys", "-t", "design", self.KEYS[d["key"]]); return {"ok": True}
+        if what == "stop":
+            subprocess.run(["systemctl", "--user", "stop", self.UNIT + ".service"], capture_output=True, timeout=30); return {"ok": True}
+        raise ValueError("start, send, key, grant or stop")
+
+
+DESIGN = DesignRoom()
+
+
 def login_ok(path):
     """Is this login directory signed in? `claude auth status`, which uses no model usage."""
     env = {**{k: v for k, v in child_env().items() if k != "ANTHROPIC_API_KEY"}, "CLAUDE_CONFIG_DIR": str(path)}
@@ -1740,7 +2085,7 @@ def setup_state():
             "claude": bool(shutil.which("claude")), "other": other_account()}
 
 
-SETUP = Cached(setup_state, 20)  # set .t = 0 to read again
+SETUP = CachedStale(setup_state, 20)  # set .t = 0 to read again. Stale, since every login is a `claude auth status`: up to 16 s on a busy machine, and the page has no tabs of its own until /api/app answers
 
 # ---------- consumer setup: settings.json, the walkthrough's and Settings' file. The starter and the report module read it. ----------
 # No file (Hive itself, and every install from before it) means today's behaviour: nothing here writes, and no route can create it.
@@ -2027,6 +2372,7 @@ def serve_socket(path, handler):
     import socketserver
     class Srv(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
         daemon_threads = True
+        request_queue_size = 256  # the default is 5, and cloudflared's connect doesn't wait: a page's burst of requests past that came back as 502s
         def get_request(self):
             conn, _ = self.socket.accept()
             return conn, ("unix", 0)  # a unix peer has no address; route_of reads this
@@ -2062,6 +2408,7 @@ def serve(port):
     threading.Thread(target=sync_accounts, daemon=True).start()  # an account already signed in before the app first ran; does nothing without settings.json
     live_c, proj_c, usage_c, jobs_c = Cached(live, 1), Cached(projects, 60), Cached(usage.view, 2), Cached(Jobs().view, 2)
     deliv_c = Cached(delivered_view, 2.5)
+    web_c = Cached(web_stamp, 10)
     agent_costs = AgentCosts()
 
     class H(BaseHTTPRequestHandler):
@@ -2074,7 +2421,7 @@ def serve(port):
             if cookie: self.send_header("Set-Cookie", cookie)
             # Board text is written by agents: the page takes nothing from elsewhere and sends nothing anywhere.
             framing = "; frame-ancestors 'self'" if framed_here else "" if self.route == "open" else "; frame-ancestors 'none'"  # the page can post as the person, so it can't sit in someone's frame; a TV page may sit in this site's own (the deck's single screen)
-            self.send_header("Content-Security-Policy", "default-src 'none'; connect-src 'self'; frame-src 'self'; img-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; base-uri 'none'; form-action 'none'" + framing)
+            self.send_header("Content-Security-Policy", "default-src 'none'; connect-src 'self'; frame-src 'self'; img-src 'self' blob: data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; base-uri 'none'; form-action 'none'" + framing)
             if self.route != "open": self.send_header("Referrer-Policy", "no-referrer")
             if gz: self.send_header("Content-Encoding", "gzip")
             self.end_headers(); self.wfile.write(body)
@@ -2090,6 +2437,21 @@ def serve(port):
             self.send_header("Content-Type", ct or "application/octet-stream")
             self.send_header("Content-Length", str(f.stat().st_size))
             self.send_header("Content-Disposition", ("inline" if ct else "attachment") + f'; filename="{f.name}"')
+            self.send_header("Content-Security-Policy", "sandbox; default-src 'none'")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            with f.open("rb") as src: shutil.copyfileobj(src, self.wfile)
+
+        def send_kb_raw(self, rel):
+            """An image or PDF for the Knowledge page. Text never comes this way, so it can't skip the redaction; nothing here runs in the page's origin."""
+            f = kb_path(rel); ct = KB_IMAGE.get(f.suffix.lower()) if f else None
+            if not f or not f.is_file() or not (ct or f.suffix.lower() == ".pdf") or f.stat().st_size > KB_RAW_MAX: return self.send_error(404)
+            name = re.sub(r"[^A-Za-z0-9_.-]", "_", f.name)
+            self.send_response(200)
+            self.send_header("Content-Type", ct or "application/octet-stream")
+            self.send_header("Content-Length", str(f.stat().st_size))
+            self.send_header("Content-Disposition", ("inline" if ct else "attachment") + f'; filename="{name}"')
             self.send_header("Content-Security-Policy", "sandbox; default-src 'none'")
             self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header("Cache-Control", "no-store")
@@ -2174,8 +2536,18 @@ def serve(port):
             J = "application/json"
             if u.path == "/api/app":
                 self.send(json.dumps(self.app_info(), default=str).encode(), J)
-            elif u.path in ("/api/target", "/api/inbox", "/api/config", "/api/modules", "/api/signin", "/api/plans", "/api/secrets", "/api/settings", "/api/signin-codex") and self.route == "open":
+            elif u.path in ("/api/target", "/api/inbox", "/api/config", "/api/modules", "/api/signin", "/api/plans", "/api/secrets", "/api/settings", "/api/signin-codex", "/api/design", "/api/kb/home", "/api/kb/open", "/api/kb/search", "/api/kb/raw") and self.route == "open":
                 self.send_error(404)
+            elif u.path == "/api/kb/home":
+                self.send(json.dumps(kb_home()).encode(), J)
+            elif u.path == "/api/kb/search":
+                self.send(json.dumps(kb_search(q.get("q", [""])[0])).encode(), J)
+            elif u.path == "/api/kb/open":
+                v = kb_open(q.get("path", [""])[0])
+                if v is None: return self.deny(404, "that isn't here, or isn't shown")
+                self.send(json.dumps(v).encode(), J)
+            elif u.path == "/api/kb/raw":
+                self.send_kb_raw(q.get("path", [""])[0])
             elif u.path == "/api/plans":
                 self.send(json.dumps(plans_view()).encode(), J)
             elif u.path == "/api/secrets":
@@ -2192,10 +2564,12 @@ def serve(port):
                 self.send(json.dumps(SIGNIN.view()).encode(), J)
             elif u.path == "/api/settings":
                 self.send(json.dumps(settings_page()).encode(), J)
+            elif u.path == "/api/design":
+                self.send(json.dumps(DESIGN.view()).encode(), J)
             elif u.path == "/api/signin-codex":
                 self.send(json.dumps(CODEX.view()).encode(), J)
             elif u.path == "/api/live":
-                self.send(json.dumps(live_c.get(), default=str).encode(), J)
+                self.send(json.dumps({**live_c.get(), "web": web_c.get()}, default=str).encode(), J)
             elif u.path == "/api/jobs":
                 self.send(json.dumps(jobs_for(jobs_c.get(), self.route != "outside" or self.mode == "full"), default=str).encode(), J)
             elif u.path in ("/api/board", "/api/log"):
@@ -2251,7 +2625,7 @@ def serve(port):
             if not isinstance(d, dict): return self.send_error(400)
             num = lambda v: v is None or (isinstance(v, (int, float)) and not isinstance(v, bool))
             J = "application/json"
-            if u.path in ("/api/post", "/api/inbox-read", "/api/config", "/api/starter", "/api/module", "/api/signin", "/api/signin/code", "/api/signin/cancel", "/api/access", "/api/plan", "/api/secret", "/api/settings", "/api/signin-codex", "/api/account-key"):
+            if u.path in ("/api/post", "/api/inbox-read", "/api/config", "/api/starter", "/api/module", "/api/signin", "/api/signin/code", "/api/signin/cancel", "/api/access", "/api/plan", "/api/secret", "/api/settings", "/api/signin-codex", "/api/account-key", "/api/design"):
                 try:
                     if u.path == "/api/post": res = person_post(d.get("text"), d.get("thread"), d.get("reply_to"), d.get("files"), signer=self.signer)
                     elif u.path == "/api/plan": res = save_plan(d.get("name"), d.get("text"), d.get("version"), bool(d.get("start")), self.signer)
@@ -2264,6 +2638,7 @@ def serve(port):
                     elif u.path == "/api/signin/code": SIGNIN.code(d.get("code")); res = {"ok": True}
                     elif u.path == "/api/signin/cancel": SIGNIN.cancel(); res = {"ok": True}
                     elif u.path == "/api/settings": res = set_settings(d)
+                    elif u.path == "/api/design": res = DESIGN.act(d)
                     elif u.path == "/api/signin-codex": res = CODEX.cancel() if d.get("cancel") else CODEX.start()
                     elif u.path == "/api/account-key" and not self.secrets_on: return self.deny(403, "secrets are off on this name")
                     elif u.path == "/api/account-key": res = set_account_key(d.get("kind"), d.get("value"), delete=d.get("delete") is True)
@@ -2302,10 +2677,12 @@ def serve(port):
 
     threading.Thread(target=live_usage, daemon=True).start()
     threading.Thread(target=provider_status, daemon=True).start()
+    threading.Thread(target=SETUP.get, daemon=True).start()  # so the first page after a restart doesn't pay for it
     srv = ThreadingHTTPServer(("127.0.0.1", port), H)  # loopback only: never opens the machine
     srv.daemon_threads = True
-    sock = ((web_cfg() or {}).get("outside") or {}).get("socket")
-    if sock: threading.Thread(target=serve_socket(Path(sock).expanduser(), H).serve_forever, daemon=True).start()
+    cfg = web_cfg() or {}; sock = (cfg.get("outside") or {}).get("socket")
+    # Only on this install's own port. A test copy on another port shares the home and so the config: it would take the tunnel's socket and leave it dead when it stopped (2026-11-03).
+    if sock and port == int(cfg.get("port") or 8077): threading.Thread(target=serve_socket(Path(sock).expanduser(), H).serve_forever, daemon=True).start()
     print(f"hive-dash on http://127.0.0.1:{port}/  (from elsewhere: ssh -L {port}:localhost:{port} <this-machine>)", flush=True)
     srv.serve_forever()
 
