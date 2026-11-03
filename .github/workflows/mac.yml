@@ -22,7 +22,8 @@ jobs:
     - name: The real install line, real tools, as far as it gets here
       if: always()
       continue-on-error: true
-      run: HIVE_MAC_TEST=1 timeout 240 sh get-mac.sh 2>&1 | tail -n 40 || true
+      timeout-minutes: 8
+      run: HIVE_MAC_TEST=1 sh get-mac.sh 2>&1 | tee install.log | tail -n 60 || true
     - name: Lima as downloaded
       if: always()
       run: |
@@ -33,5 +34,6 @@ jobs:
     - name: What the line left, and Lima's log
       if: always()
       run: |
+        tail -n 60 install.log 2>/dev/null || true
         ls -la "$HOME/.hive" "$HOME/.hive/lima" 2>/dev/null || true; tail -n 30 "$HOME/.hive/lima/hive/ha.stderr.log" 2>/dev/null || true
         cat "$HOME/.zprofile" 2>/dev/null || true
