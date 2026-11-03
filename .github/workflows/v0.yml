@@ -1,5 +1,5 @@
 name: v0-migrate
-on: {push: {branches: [test-v0-migrate]}}
+on: {push: {branches: [test-train]}}
 permissions: {contents: read}
 jobs:
   v0:
@@ -22,7 +22,7 @@ jobs:
         IMAGE_URL: https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img
         INSIDE: inside-v0.sh
         CASE: ${{ matrix.case }}
-        CAND: v2
+        CAND: train-candidate
       run: bash run-vm.sh
   clean:
     strategy:
@@ -46,4 +46,6 @@ jobs:
     - name: Clean machine test
       env:
         IMAGE_URL: ${{ matrix.image.url }}
+        HIVE_BRANCH: train-candidate
+        INSTALL_URL: https://raw.githubusercontent.com/ihsan-sa/hive/train-candidate/get.sh
       run: bash run-vm.sh

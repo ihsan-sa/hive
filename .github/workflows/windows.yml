@@ -1,0 +1,14 @@
+name: windows install test
+on: { push: { branches: [test-train] } }
+permissions: { contents: read }
+jobs:
+  install:
+    strategy: { fail-fast: false, matrix: { os: [windows-2025], block: [on] } }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run
+        shell: powershell
+        env: { BLOCK: "${{ matrix.block }}" }
+        run: ./win-test.ps1
