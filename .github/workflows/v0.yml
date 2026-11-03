@@ -22,7 +22,7 @@ jobs:
         IMAGE_URL: https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img
         INSIDE: inside-v0.sh
         CASE: ${{ matrix.case }}
-        CAND: candidate-v2
+        CAND: v2
       run: bash run-vm.sh
   clean:
     strategy:
@@ -46,6 +46,4 @@ jobs:
     - name: Clean machine test
       env:
         IMAGE_URL: ${{ matrix.image.url }}
-        HIVE_BRANCH: candidate-v2
-        INSTALL_URL: https://raw.githubusercontent.com/ihsan-sa/hive/candidate-v2/get.sh
       run: bash run-vm.sh
