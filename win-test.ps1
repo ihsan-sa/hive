@@ -13,6 +13,13 @@ try { & wsl.exe --status 2>&1 | Out-Host; "status rc=$LASTEXITCODE" } catch { "s
 try { & wsl.exe --version 2>&1 | Out-Host; "version rc=$LASTEXITCODE" } catch { "version threw: $_" }
 
 Step 'first run of the candidate get.ps1'
+"blocks: $env:BLOCK"
+if ($env:BLOCK -eq 'off') {
+  $c = Get-Content -Raw .\get-candidate.ps1
+  $c = $c -replace "(?m)^ExecStart=/bin/sh -c 'chmod.*$", 'ExecStart=/bin/true' -replace '(?m)^KERNEL==.*$', ''
+  Set-Content -Path .\get-candidate.ps1 -Value $c -Encoding UTF8
+  Select-String -Path .\get-candidate.ps1 -Pattern 'ExecStart' | Out-Host
+}
 $t = Get-Date
 Get-Content -Raw .\get-candidate.ps1 | iex
 "took $([int]((Get-Date) - $t).TotalSeconds) s"
@@ -44,15 +51,6 @@ for port in (50000, 1, 12345):
     except Exception as e: print(\"vsock\", port, e)
 " 2>&1'
 InU $probe
-Step 'control: the same probe with the blocks taken off'
-InR 'sed -i "/interop/,/^$/s/^enabled=false/enabled=true/" /etc/wsl.conf; rm /etc/systemd/system/multi-user.target.wants/hive-no-windows.service; rm /etc/udev/rules.d/99-hive.rules; cat /etc/wsl.conf | tail -3'
-& wsl.exe --terminate Hive | Out-Null
-InR 'for i in 1 2 3 4 5 6 7 8 9 10; do test -d /run/systemd/system && break; sleep 2; done; sleep 15; ls -l /dev/vsock /dev/dxg'
-InU $probe
-InR 'sed -i "s/^enabled=true/enabled=false/" /etc/wsl.conf; rm -f /etc/systemd/system/hive-no-windows.service; rm -rf /home/hive/pe; cat /etc/wsl.conf | tail -3'
-Step 'candidate rerun puts the blocks back'
-Get-Content -Raw .\get-candidate.ps1 | iex
-InR 'systemctl is-active hive-no-windows; ls -l /dev/vsock'
 Step 'the app from Windows'
 $a = (& wsl.exe -d Hive -u hive --cd ~ -- bash -lc 'hive web 2>/dev/null' | Select-Object -First 1)
 "address shape: " + ($a -replace '#.*', '#...')
@@ -73,6 +71,25 @@ Step 'sandbox parts, if this release has them'
 InU 'hive sandbox check 2>&1 | head -5; which bwrap'
 InR 'export DEBIAN_FRONTEND=noninteractive; apt-get -o DPkg::Lock::Timeout=120 -qq update >/dev/null 2>&1; apt-get -o DPkg::Lock::Timeout=120 -qq install -y bubblewrap >/dev/null 2>&1; echo apt rc=$?; which bwrap'
 InU 'bwrap --unshare-user --unshare-all --new-session --ro-bind / / /bin/true; echo bwrap rc=$?; bwrap --unshare-user --disable-userns --ro-bind / / /bin/true; echo nouserns rc=$?'
+Step 'restart with the keep-alive running: terminate, as a rerun that changes wsl.conf would'
+function Back($what) {
+  $t = Get-Date
+  & wsl.exe -l -v 2>&1 | Out-Host
+  $o = & wsl.exe -d Hive -u root -- sh -c "for i in 1 2 3 4 5 6 7 8 9 10 11 12; do test -d /run/systemd/system && break; sleep 5; done; sleep 10; systemctl is-system-running; systemctl is-active hive-no-windows; systemctl --failed --no-legend; ls -l /dev/vsock; cat /proc/sys/fs/binfmt_misc/WSLInterop 2>&1 | head -1" 2>&1
+  "$what rc=$LASTEXITCODE after $([int]((Get-Date) - $t).TotalSeconds) s"; $o | Out-Host
+  & wsl.exe -d Hive -u hive --cd ~ -- bash -lc "systemctl --user is-active hive-starter hive-dash; hive web" 2>&1 | Out-Host
+}
+& wsl.exe --terminate Hive 2>&1 | Out-Host; "terminate rc=$LASTEXITCODE"
+Back 'after terminate'
+& wsl.exe --terminate Hive 2>&1 | Out-Host; "terminate rc=$LASTEXITCODE"
+Back 'after second terminate'
+Step 'restart of the whole WSL machine: shutdown, as a Windows restart would'
+& wsl.exe --shutdown 2>&1 | Out-Host; "shutdown rc=$LASTEXITCODE"
+Start-Sleep 10
+Back 'after shutdown'
+Start-Process (Join-Path $env:WINDIR 'System32\conhost.exe') -ArgumentList '--headless wsl.exe -d Hive -u hive --exec sleep infinity'
+Start-Sleep 5
+
 Step 'rerun with the candidate get.ps1: updates, keeps the system'
 InU 'date > ~/mark; mkdir -p ~/keepme'
 $t = Get-Date
