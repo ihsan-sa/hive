@@ -35,7 +35,7 @@ export const plural = (n, one, many = one + "s") => `${n} ${n === 1 ? one : many
 export function median(a) { if (!a.length) return null; a = [...a].sort((x, y) => x - y); return a[a.length >> 1]; }
 
 // Markdown to plain text, for one-line previews.
-export const mdPlain = s => String(s || "").replace(/\[([^\]\n]+)\]\(https?:[^\s)]+\)/g, "$1").replace(/\*\*|~~|`/g, "").replace(/^ {0,3}#{1,6}[ \t]+/gm, "");
+export const mdPlain = s => String(s || "").replace(/\[([^\]\n]+)\]\(https?:[^\s)]+\)/g, "$1").replace(/\*\*|~~|`/g, "").replace(/^ {0,3}#{1,6}[ \t]+/gm, "").replace(/^\s*\|(.*)\|\s*$/gm, (m, c) => (/^[\s|:-]+$/.test(c) ? "" : c.split("|").map(x => x.trim()).join(", ")));
 export function firstSentence(s) {
   s = mdPlain(s).replace(/^(@\S+\s+)+/, "").replace(/\s+/g, " ").trim();
   const m = s.match(/^.{20,240}?[.!?](\s|$)/);

@@ -2,6 +2,7 @@
 // It only watches the page. It sends nothing, presses nothing and never asks for a click that changes the hive, except sending a first job, which the user types and can skip.
 // A view's tree is morphed, so the window and the ring live on <body>. The deck's own tour is js/deck/tour.js.
 import { S, can, subscribe } from "../core/store.js";
+import { simpleOn } from "../core/simple.js";
 import { go, parse } from "../core/router.js";
 import { OUT } from "./composer.js";
 
@@ -31,13 +32,13 @@ const STEPS = [
   { title: "Reply any time", text: "Write here to carry on the conversation, even while the agent works. The To button shows who gets it, and you can change that. Nothing is sent until you press Send.", ring: () => q('.cp[data-place="thread"] .cp-t'), skip: () => !inThread() },
   { title: "Attach files", text: "Attach adds files to your message. You can also paste them or drop them on the conversation.", ring: () => [...document.querySelectorAll('.cp[data-place="thread"] .cp-bar button')].find(b => b.textContent === "Attach") || null, skip: () => !inThread() },
   { title: "See every agent", text: "Click Agents at the top.", ring: tab("now"), done: () => here() === "now", skip: () => !hasTab("now") },
-  { title: "Agents", text: "Everyone working right now and what they're doing. Click a name to see its whole session.", ring: () => heading("What each is doing"), skip: () => here() !== "now" },
+  { title: "Agents", text: "Everyone working right now and what they're doing. Click a name to see its whole session. The row under the top bar has the rest: every agent, the timeline, the map and the history.", ring: () => heading("What each is doing"), skip: () => here() !== "now" },
   { title: "Check your limits", text: "Click Usage at the top.", ring: tab("usage"), done: () => here() === "usage", skip: () => !hasTab("usage") },
   { title: "Usage", text: "How much of your Claude limits is left and when it comes back. New agents stop at a usage line so they don't use it all. You can change that line, or pause an account, under Claude accounts.", ring: () => heading("Claude accounts"), skip: () => here() !== "usage" },
   { title: "Settings", text: "Click Settings at the top.", ring: tab("settings"), done: () => here() === "settings", skip: () => !hasTab("settings") },
   { title: "How the hive runs", text: "Add a second Claude account here, and turn on extras: optional tools your agents can use.", ring: () => heading("Accounts"), skip: () => here() !== "settings" },
   { title: "One more", text: "Click More at the top.", ring: () => q(".more > button"), done: () => !!q(".more > button[aria-expanded=true]"), skip: () => !q(".more > button") },
-  { title: "Help is under More", text: "Help opens the user guide, and Take the tour brings this window back. The other views here are for looking deeper. That's it: say what you want done in Chat.", ring: () => q('.more-i[data-key="help"]'), last: true },
+  { title: "Help is under More", text: "The user guide is here, and Take the tour brings this window back. That's it: say what you want done in Chat.", ring: () => q('.more-i[data-key="help"]'), last: true },
 ];
 
 let win = null, ringEl = null, at = 0, timer = 0, raf = 0, dragged = false, spot = 0, moving = 0, dodged = "", armed = true;
@@ -138,7 +139,7 @@ function end() {
 /** Offer it once in this browser, once someone is signed in and the install's setup is finished: not over the walkthrough. */
 export function offerTour() {
   const look = () => {
-    if (win || !S.app || !S.app.app || !can("post") || document.querySelector("dialog[open]")) return;
+    if (win || !S.app || !S.app.app || simpleOn() || !can("post") || document.querySelector("dialog[open]")) return;
     const s = S.app.setup || {}; if (!(s.signed_in || s.api_key)) return;
     if (S.app.settings && S.app.settings.setup_done === false) return;
     let seen = "1"; try { seen = localStorage.getItem(SEEN); } catch (e) { /* no storage: don't nag */ }

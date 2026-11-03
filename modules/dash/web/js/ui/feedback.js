@@ -116,7 +116,7 @@ export async function openFeedback() {
   function show(why) {
     if (pic) { stage.replaceChildren(view); paint(); view.classList.toggle("fb-full", frozen); }
     else stage.replaceChildren(h("div", { class: "fb-none" },
-      h("p", null, (why ? why + " " : "") + "You can paste a picture here, choose one, or just write a comment."),
+      h("p", null, (why ? why + " " : "") + "You can paste or drop a picture here, choose one, or just write a comment."),
       h("div", { class: "fb-r" }, button("Take a screenshot", () => take(), { size: "s" }), button("Choose an image", () => pick.click(), { size: "s" }))));
     sync();
   }
@@ -135,6 +135,9 @@ export async function openFeedback() {
     const it = [...(e.clipboardData ? e.clipboardData.items : [])].find(i => i.type.startsWith("image/")); if (!it) return;
     e.preventDefault(); load(it.getAsFile());
   });
+
+  dlg.addEventListener("dragover", e => { if ([...(e.dataTransfer.items || [])].some(i => i.type.startsWith("image/"))) e.preventDefault(); });
+  dlg.addEventListener("drop", e => { const f = [...e.dataTransfer.files].find(f => f.type.startsWith("image/")); if (f) { e.preventDefault(); load(f); } });
 
   // ---- boxes: canvas pixels, whatever size it's shown at ----
   const at = e => { const r = view.getBoundingClientRect(), k = pic.width / r.width;
@@ -177,6 +180,7 @@ export async function openFeedback() {
       say.textContent = "It wasn't sent: " + e.message; say.hidden = false; send.disabled = false; send.textContent = "Send";
     }
   }
+  dlg.addEventListener("keydown", e => e.stopPropagation());   // what's open under the picture stays as it is: Escape closes this overlay only, and no shortcut acts on the page under it
   dlg.addEventListener("close", () => { if (!away) { dlg.remove(); FB.open = false; } });
   document.body.append(dlg); dlg.showModal(); text.focus();
   await new Promise(r => { requestAnimationFrame(() => setTimeout(r)); setTimeout(r, 100); });   // let the grey show first: copying a big page takes a moment (the timeout is for a tab with no frames)

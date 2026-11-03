@@ -1,6 +1,7 @@
 // Things that change the hive. Each is a confirm window; controls appear only where can() allows.
 import { h } from "./core/dom.js";
 import { S, can, built, post, poll, pollUsage } from "./core/store.js";
+import { simpleOn } from "./core/simple.js";
 import { short } from "./core/format.js";
 import { threadTitle, tierOf } from "./core/model.js";
 import { TIERS, tier } from "./core/status.js";
@@ -39,6 +40,11 @@ export function askKill(n) {
 // with its typed code, one click further.
 export function askStop(n) {
   if (!can("stop")) return;
+  if (simpleOn()) return confirm({
+    title: "Stop this work?", ok: "Stop", kind: "danger", failText: "It didn't stop",
+    body: ["This stops it right away. Anything it hasn't saved yet may be lost. Send a message here when you want it to carry on."],
+    onOk: async () => { await post("/api/kill", { name: n, confirm: n }); await poll(); },
+  });
   if (!built("stop")) return askKill(n);
   const L = S.running.get(n);
   const dlg = confirm({

@@ -42,14 +42,26 @@ function keepFixed(cs, t, ox, oy) {
   t.style.inset = "auto"; t.style.width = cs.width; t.style.height = cs.height;
   t.style.left = (parseFloat(cs.left) + ox) + "px"; t.style.top = (parseFloat(cs.top) + oy) + "px";
 }
+/** A window opened with showModal sits in the browser's top layer, centred, over a backdrop. A copy has neither, so it would land behind or below the page:
+ *  put it back where it is on the screen, on top of everything, with its backdrop as a plain element. Later windows go over earlier ones, as they were opened. */
+function keepModal(modals, copy, ox, oy) {
+  const W = document.documentElement.clientWidth, H = document.documentElement.clientHeight;
+  modals.forEach(([el, t], i) => {
+    const r = el.getBoundingClientRect(), z = 2147480000 + i * 2, shade = document.createElement("div");
+    shade.style.cssText = `position:fixed;left:${ox}px;top:${oy}px;width:${W}px;height:${H}px;z-index:${z};background:${getComputedStyle(el, "::backdrop").backgroundColor}`;
+    Object.assign(t.style, { position: "fixed", inset: "auto", left: r.left + ox + "px", top: r.top + oy + "px", width: r.width + "px", height: r.height + "px", margin: "0", maxWidth: "none", maxHeight: "none", boxSizing: "border-box", overflow: "hidden", zIndex: z + 1 });
+    copy.append(shade, t);   // out of whatever it was opened in, which might clip it
+  });
+}
 function copyPage(scale) {
   const body = document.body, W = document.documentElement.clientWidth;
   const copy = body.cloneNode(true), all = [...body.querySelectorAll("*")], twins = [...copy.querySelectorAll("*")];
-  const drop = [], stuck = [], b = body.getBoundingClientRect(), ox = -b.left - body.clientLeft, oy = -b.top - body.clientTop, moved = scrollX || scrollY;
+  const drop = [], stuck = [], modals = [], b = body.getBoundingClientRect(), ox = -b.left - body.clientLeft, oy = -b.top - body.clientTop, moved = scrollX || scrollY;
   all.forEach((el, i) => {
     const t = twins[i];
     if (el.matches("script,noscript,dialog.fb,.fb-sent,.new-ver")) { drop.push(t); return; }
     if (el.scrollLeft || el.scrollTop) keepScroll(el, t);
+    if (el.matches("dialog:modal")) modals.push([el, t]);
     const cs = getComputedStyle(el);
     if (cs.position === "sticky") stuck.push([el, t]);
     else if (cs.position === "fixed" && moved) keepFixed(cs, t, ox, oy);
@@ -72,6 +84,7 @@ function copyPage(scale) {
     }
   });
   if (stuck.length) keepStuck(stuck);
+  if (modals.length) keepModal(modals, copy, moved ? ox : 0, moved ? oy : 0);
   for (const t of drop) t.remove();
   if (scrollX || scrollY) copy.style.translate = `${-scrollX}px ${-scrollY}px`;
   return copy;

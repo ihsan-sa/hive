@@ -4,7 +4,13 @@ Extras (modules) give agents tools and know-how for a kind of work. The Hive wor
 
 ## Add one
 
-Go to **Settings**, then **Extras**, and click **Add** next to one. Or ask in Chat:
+**Settings**, then **Extras**, shows three groups:
+
+- **Public, installed:** what's on this Hive from the public list. The ones marked "comes with the Hive" are there from the start.
+- **Recommended:** a few worth having, with **Add**. **Browse all** shows the whole public list, with a filter.
+- **This Hive's own:** extras made on this Hive or added from a Git URL, each saying where it lives: on GitHub or only on this machine.
+
+Click **Add** next to one. Or ask in Chat:
 
 > Design a circuit board for this. Add whatever extra you need, and tell me what it has to download first.
 
@@ -21,7 +27,7 @@ Go to **Settings**, then **Extras**, and click **Add** next to one. Or ask in Ch
 
 ## Add one from elsewhere
 
-Paste a Git URL in **Add from a Git URL** under Extras. A module's code runs in your Hive, so only add ones you trust.
+Paste a Git URL in **Add from a Git URL**, under **This Hive's own**. A module's code runs in your Hive, so only add ones you trust.
 
 ## Make your own
 

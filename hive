@@ -258,11 +258,27 @@ def module_blurb(text, cap=160):
     return re.sub(r"(\s+(a|an|the|and|or|of|to|from|in|with|for|by))+$", "", cut.rstrip()).rstrip(" ,:;-") + "…"
 
 def catalog():
-    """What can be added: core's modules.json (name -> repo, about, needs) plus what ships in core/modules."""
-    try: c = json.loads((CORE / "modules.json").read_text())
+    """What can be added: core's modules.json (name -> repo, about, needs, recommended) plus what ships in core/modules (default: put in place at install).
+    A source tree has neither at its top, only dist/, whose bundled folders hold manifests without the code: those count only if already installed."""
+    released = (CORE / "modules.json").exists() or (CORE / "modules").is_dir()
+    pub = CORE if released else CORE / "dist"
+    try: c = json.loads((pub / "modules.json").read_text())
     except (OSError, ValueError): c = {}
-    for d in sorted((CORE / "modules").glob("*/")): c.setdefault(d.name, {"about": manifest(d).get("description", ""), "bundled": True})
+    for d in sorted((pub / "modules").glob("*/")):
+        if released or (MODULES / d.name).is_dir():
+            m = manifest(d); c.setdefault(d.name, {"about": m.get("description", ""), "bundled": True, "default": bool(m.get("default")), "recommended": bool(m.get("recommended"))})
     return c
+
+def module_rows():
+    """Every module the app shows. source: included (ships with the release), public (in its catalog), own (anything else here: made on this Hive, or added by URL)."""
+    cat, rows = catalog(), []
+    for n, c in cat.items():
+        d = MODULES / n
+        rows.append({"name": n, "state": "installed" if d.is_dir() else "available", "source": "included" if c.get("bundled") else "public", "about": module_blurb(manifest(d).get("description") or c.get("about")), "needs": c.get("needs"), "default": bool(c.get("default")), "recommended": bool(c.get("recommended"))})
+    for d in sorted(MODULES.glob("*/")):
+        if d.name not in cat and (d / "module.json").exists():
+            rows.append({"name": d.name, "state": "installed", "source": "own", "about": module_blurb(manifest(d).get("description")), "needs": None, "default": False, "recommended": False})
+    return rows
 
 MODULE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")  # a folder in ~/modules or a command in ~/.local/bin: never a path, and never ..
 
@@ -280,6 +296,7 @@ def module_links(d):
 def cmd_module(a):
     """Modules are optional folders in ~/modules with a module.json: commands, skills, docs. The core never uses them."""
     cat = catalog()
+    if a.do == "list" and a.json: print(json.dumps(module_rows())); return
     if a.do == "list":
         have = sorted(d for d in MODULES.glob("*/") if (d / "module.json").exists())
         for d in have: print(f"{d.name:<14} installed  {module_blurb(manifest(d).get('description'))}")
@@ -622,8 +639,8 @@ p = sp.add_parser("done", help="hive done: your work is finished and needs no fo
 p = sp.add_parser("who", help="who's running, and usage"); p.set_defaults(f=cmd_who)
 p = sp.add_parser("wait", help="hive wait [--to X] [--thread T] [--timeout 3600]: block until a new post for X or in T arrives")
 p.add_argument("--to"); p.add_argument("--thread"); p.add_argument("--timeout", type=int, default=3600); p.set_defaults(f=cmd_wait)
-p = sp.add_parser("module", help="hive module list | add NAME|GIT-URL | remove NAME")
-p.add_argument("do", choices=["list", "add", "remove"]); p.add_argument("name", nargs="?"); p.set_defaults(f=cmd_module)
+p = sp.add_parser("module", help="hive module list [--json] | add NAME|GIT-URL | remove NAME")
+p.add_argument("do", choices=["list", "add", "remove"]); p.add_argument("name", nargs="?"); p.add_argument("--json", action="store_true"); p.set_defaults(f=cmd_module)
 p = sp.add_parser("update", help="hive update [--check]: an installed Hive goes to the newest release, and back if that fails")
 p.add_argument("--check", action="store_true"); p.add_argument("--auto", action="store_true"); p.set_defaults(f=cmd_update)
 p = sp.add_parser("web", help="hive web: the address of the local web app, with its secret. --new-secret replaces the secret; --setup is install's")

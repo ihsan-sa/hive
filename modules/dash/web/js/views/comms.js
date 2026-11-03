@@ -8,6 +8,7 @@
 // the messages still on their way (.cm-out), which sync() keeps apart.
 import { h, morph } from "../core/dom.js";
 import { S, can, OUTSIDE, built, post as apiPost, poll } from "../core/store.js";
+import { simpleOn, plainName, HIVE } from "../core/simple.js";
 import { agentState, agentStatus, isAgent, isRunning, tierOf, threadTitle, threadState, threadPeople, isSystemThread, SHOW, postKind, threadKinds, closingPosts, displayText, postSource, inUse, fresh7 } from "../core/model.js";
 import { ago, dayName, stamp, clock, dur, short, mdPlain, now, plural, firstSentence, DAY, MIN, HOUR } from "../core/format.js";
 import { href, threadHref, go } from "../core/router.js";
@@ -17,7 +18,7 @@ import { seen, unreadIn, markRead, onInbox } from "../core/inbox.js";
 import { button, empty, input, list, seg, statusDot } from "../ui/kit.js";
 import { agentRef, copyButton, threadRef } from "../ui/refs.js";
 import { message, messageHead, messageReceipt, localMessage, markWords, pollDelivered, marksSig, delivery, onJump } from "../ui/message.js";
-import { composer, cancelReply, replyTo, say, outFor, outSig, actions as outActions, dropZone, recipient } from "../ui/composer.js";
+import { composer, cancelReply, replyTo, say, outFor, outSig, actions as outActions, dropZone, recipient, draft, focusComposer } from "../ui/composer.js";
 
 const STEP = 500, FIRST = 250, NEAR = 60, GROUP = 10 * MIN, HELPER_AFTER = 3 * MIN;
 const NONE = [];
@@ -48,6 +49,7 @@ const hay = p => (p.lc ??= [p.text, p.from, ...(p.files || []).map(f => f.name)]
 // What to show: any of For you, Updates and Agent comms, as a mask of SHOW bits. Kept in this browser. Searching ignores it, so a hidden message can still be found.
 const SHOW_KEY = "hive.comms.kinds", OLD_KEY = "hive.comms.show", OLD = { you: SHOW.you, updates: SHOW.you | SHOW.updates, all: SHOW.ALL };
 function showMask() {
+  if (simpleOn()) return SHOW.you | SHOW.updates;   // fixed: there's no Show bar here
   if (C.show === null) {
     try { const v = localStorage.getItem(SHOW_KEY); C.show = v !== null ? Number(v) & SHOW.ALL : OLD[localStorage.getItem(OLD_KEY)]; } catch (e) { /* no storage: the default, for this page */ }
     if (C.show == null) C.show = app() ? SHOW.you | SHOW.updates : SHOW.ALL;
@@ -56,7 +58,9 @@ function showMask() {
 }
 function setShow(mask, ctx) { C.show = mask; try { localStorage.setItem(SHOW_KEY, mask); } catch (e) { /* no storage: this page only */ } ctx.update(); }
 /** What this conversation's messages are cut to. By or to a name you asked for by name, and a search, show everything. */
-const maskFor = c => ((c.thread || c.all) && !words(C.q).length ? showMask() : SHOW.ALL);
+const maskFor = c => (simpleOn() || ((c.thread || c.all) && !words(C.q).length) ? showMask() : SHOW.ALL);
+/** A conversation this person is part of. In simple mode the hive's own (its upkeep, its agents between themselves) stay out of the list. */
+const theirs = d => !simpleOn() || d.posts.some(p => p.from === "person");
 const closing = { n: -1, set: null };
 const endedRuns = () => { let n = 0; for (const s of S.sessions) if (s.end) n++; return n; };
 function closers(n) { const k = n + ":" + S.posts.length; if (closing.n !== k) { closing.n = k; closing.set = closingPosts(); } return closing.set; }   // the run's end and its last post can reach us in either order
@@ -79,8 +83,8 @@ function threadEvents(th) {
   if (!app()) return out;
   for (const s of S.sessions) {
     if (s.thread !== th || !s.end) continue;
-    if (S.limitedSess.has(s.session)) out.push({ ev: true, key: "ev:" + s.session, t: s.end, tone: "limited", text: `${s.name} stopped at a usage limit`, sub: "It carries on by itself once there's room." });
-    else if (s.exit && s.exit !== 143) out.push({ ev: true, key: "ev:" + s.session, t: s.end, tone: "failed", text: `${s.name} stopped with an error (exit ${s.exit})`, sub: "Its last message above is where it got to." });
+    if (S.limitedSess.has(s.session)) out.push({ ev: true, key: "ev:" + s.session, t: s.end, tone: "limited", text: simpleOn() ? "Your Hive took a break" : `${s.name} stopped at a usage limit`, sub: "It carries on by itself once there's room." });
+    else if (s.exit && s.exit !== 143) out.push({ ev: true, key: "ev:" + s.session, t: s.end, tone: "failed", text: simpleOn() ? "Your Hive ran into a problem" : `${s.name} stopped with an error (exit ${s.exit})`, sub: simpleOn() ? "Send a message and it tries again." : "Its last message above is where it got to." });
   }
   return out;
 }
@@ -236,12 +240,12 @@ function snippet(p, ws) {
   const from = Math.max(0, at - 16);
   return markWords((from ? "…" : "") + text.slice(from, from + 90), ws);
 }
-const authorName = n => (n === "person" ? "You" : n);
+const authorName = n => (n === "person" ? "You" : plainName(n));
 const tierLead = th => (app() ? null : h("span", { class: "ref-sw", "data-tone": tier(tierOf(th)).tone, title: tier(tierOf(th)).label }));
 
 /** One thread's state in a few words, for the list: shape, colour and the words. */
-const STATE_WORDS = { asks: () => "Waiting for your answer", working: s => `${s.who} working`, quiet: s => `${s.who} quiet`, stuck: () => "Stuck", queue: s => `${s.who} in the job queue`,
-  queued: () => "Waiting to start", limited: () => "Stopped at a usage limit", failed: () => "Stopped with an error", foryou: () => "New reply for you", done: () => null };
+const STATE_WORDS = { asks: () => "Waiting for your answer", working: s => (simpleOn() ? "Working on it" : `${s.who} working`), quiet: s => (simpleOn() ? null : `${s.who} quiet`), stuck: () => (simpleOn() ? "Taking longer than it should" : "Stuck"), queue: s => (simpleOn() ? "Waiting its turn" : `${s.who} in the job queue`),
+  queued: () => "Waiting to start", limited: () => (simpleOn() ? "Taking a break" : "Stopped at a usage limit"), failed: () => (simpleOn() ? "Ran into a problem" : "Stopped with an error"), foryou: () => "New reply for you", done: () => null };
 function stateTag(st) {
   const w = (STATE_WORDS[st.key] || (() => null))(st);
   return w ? h("span", { class: "cm-st", "data-tone": status(st.key).tone }, w) : null;
@@ -252,6 +256,7 @@ function searchRows(c, ctx, ws) {
   const open = (name, q) => () => { if (name === (c.thread ?? null)) C.q = q; else C.next = q; ctx.update(); };
   let total = 0; const found = [];
   for (const d of S.threads.values()) {
+    if (!theirs(d)) continue;
     const lc = (d.name + " " + threadTitle(d.name)).toLowerCase(), rest = ws.filter(w => !lc.includes(w));
     if (!rest.length) { total += d.posts.length; found.push({ d, hits: d.posts, rest }); continue; }
     const hits = d.posts.filter(p => rest.every(w => hay(p).includes(w)));
@@ -260,7 +265,7 @@ function searchRows(c, ctx, ws) {
   found.sort((a, b) => b.hits.at(-1).t - a.hits.at(-1).t);
   const all = C.tq.trim();
   return [
-    { key: "(everything)", href: href("comms", "~all"), title: "All messages", text: `${plural(total, "match", "matches")} in ${plural(found.length, app() ? "conversation" : "thread")}`, current: c.all, onClick: () => { if (c.all) C.q = all; else C.next = all; ctx.update(); } },
+    simpleOn() ? null : { key: "(everything)", href: href("comms", "~all"), title: "All messages", text: `${plural(total, "match", "matches")} in ${plural(found.length, app() ? "conversation" : "thread")}`, current: c.all, onClick: () => { if (c.all) C.q = all; else C.next = all; ctx.update(); } },
     ...found.map(({ d, hits, rest }) => ({ key: d.name, href: threadHref(d.name), current: c.thread === d.name, title: threadTitle(d.name), meta: ago(hits.at(-1).t).replace(" ago", ""),
       lead: tierLead(d.name), onClick: open(d.name, rest.join(" ")),
       text: rest.length ? [`${hits.length} · ${authorName(hits.at(-1).from)}: `, snippet(hits.at(-1), rest)] : `${d.posts.length} · name matches` })),
@@ -271,8 +276,8 @@ function threadRows(c, ctx) {
   const ws = words(C.tq);
   if (ws.length) return searchRows(c, ctx, ws);
   const t = now(), mask = showMask(), ran = new Set(S.live ? S.live.agents.map(a => a.thread) : []);
-  let ds = [...S.threads.values()].filter(d => (threadKinds(d) & mask) || d.name === c.thread);
-  if (C.scope === "recent") ds = ds.filter(d => d.last > t - (app() ? 7 : 1) * DAY || ran.has(d.name) || d.name === c.thread || (app() && threadState(d.name, seen).key === "asks"));
+  let ds = [...S.threads.values()].filter(d => ((threadKinds(d) & mask) && theirs(d)) || d.name === c.thread);
+  if (C.scope === "recent" && !simpleOn()) ds = ds.filter(d => d.last > t - (app() ? 7 : 1) * DAY || ran.has(d.name) || d.name === c.thread || (app() && threadState(d.name, seen).key === "asks"));
   ds.sort((a, b) => b.last - a.last);
   const rowsOut = ds.map(d => {
     const lp = d.posts[d.posts.length - 1], live = ran.has(d.name);
@@ -298,7 +303,7 @@ function syncThreads(c, ctx) {
   if (tl === L.tl && sig === L.tlSig) return;
   const fresh = tl !== L.tl || c.arg !== L.tlConv;
   L.tl = tl; L.tlSig = sig; L.tlConv = c.arg;
-  const tree = list(threadRows(c, ctx), { dense: true, empty: S.threads.size ? "Nothing here with what Show has on. Turn on Agent comms to see all of them." : app() ? "No conversations yet. Start one with New." : "No threads." });
+  const tree = list(threadRows(c, ctx), { dense: true, empty: simpleOn() ? "No conversations yet. Start one with New conversation." : S.threads.size ? "Nothing here with what Show has on. Turn on Agent comms to see all of them." : app() ? "No conversations yet. Start one with New." : "No threads." });
   if (tl.firstChild) morph(tl.firstChild, tree); else tl.append(tree);
   if (fresh) { const cur = tl.querySelector("[aria-current]"); if (cur) { const r = cur.getBoundingClientRect(), b = tl.getBoundingClientRect(); if (r.top < b.top || r.bottom > b.bottom) tl.scrollTop += r.top - b.top - 40; } }
 }
@@ -316,7 +321,7 @@ function line(key, text, act, opts = {}) {
   return h("div", { class: "cm-line", "data-key": opts.key || key, "data-tone": status(key).tone }, statusDot(key, { live: opts.live }), h("span", { class: "cm-line-x" }, text), act ? h("span", { class: "cm-line-a" }, act) : null);
 }
 /** An agent's name in a strip line: a link to it, without a second dot (the line has its own). */
-const who = n => agentRef(n, { dot: false });
+const who = n => (simpleOn() ? HIVE : agentRef(n, { dot: false }));
 function lastMine(th) { const d = S.threads.get(th); if (!d) return null; for (let i = d.posts.length - 1; i >= 0; i--) if (d.posts[i].from === "person") return d.posts[i]; return null; }
 const notBuilt = () => h("span", { class: "nb", title: "Designed, not built yet: the server needs to do this" }, "not built yet");
 
@@ -326,23 +331,24 @@ function strip(th) {
     post ? button("Answer", () => replyTo(st.post), { size: "s" }) : null, { key: "asks" }));
   if (st.key === "limited") {
     const room = hasRoom(), r = nextReset();
-    out.push(line("limited", [who(st.who), ` stopped at a usage limit ${ago(st.t)} and hasn't carried on. `, room ? "There's room again now, so it should carry on by itself soon." : r ? `It carries on by itself after ${stamp(r)}.` : "It carries on by itself once there's room."],
+    out.push(line("limited", [who(st.who), simpleOn() ? " is taking a break. " : ` stopped at a usage limit ${ago(st.t)} and hasn't carried on. `, room ? "There's room again now, so it should carry on by itself soon." : r ? `It carries on by itself after ${stamp(r)}.` : "It carries on by itself once there's room."],
       room && post ? button("Carry on", () => say(th, "Please carry on where you stopped.", st.who), { size: "s" }) : null, { key: "limited" }));
   }
-  if (st.key === "failed") out.push(line("failed", [who(st.who), ` stopped with an error ${ago(st.t)}. A message wakes it to try again.`], null, { key: "failed" }));
+  if (st.key === "failed") out.push(line("failed", [who(st.who), simpleOn() ? " ran into a problem. Send a message and it tries again." : ` stopped with an error ${ago(st.t)}. A message wakes it to try again.`], null, { key: "failed" }));
   for (const a of run) {
     if (st.key === "asks" && a.name === st.who) continue;
     const s = agentState(a);
+    if (simpleOn()) { if (!out.some(x => x.dataset.key === "run")) out.push(line("working", "Your Hive is working on it.", can("stop") ? button("Stop…", () => askStop(a.name), { size: "s", kind: "quiet" }) : null, { key: "run", live: true })); continue; }
     out.push(line(s.key, [who(a.name), " ", AGENT_WORDS[s.key] || s.text, a.doing ? ": " + a.doing : "", h("span", { class: "meta" }, " · " + (s.key === "working" ? "active " + ago(a.last * 1e3) : s.text))],
       can("stop") ? button("Stop…", () => askStop(a.name), { size: "s", kind: "quiet", title: `Stop ${a.name}` }) : null, { key: "run:" + a.name, live: true }));
   }
   // A second helper when the agent you wrote to is busy (not built): see PART1.md.
   const mine = lastMine(th), wait = mine && now() - mine.t > HELPER_AFTER && now() - mine.t < 2 * HOUR ? mine.men.map(m => delivery(mine, m)).find(x => x && x.key === "waiting") : null;
-  if (wait && built("helper")) out.push(line("queue", [who(wait.who), ` is busy and hasn't seen your message for ${dur(now() - mine.t)}. If it still hasn't by ${clock(mine.t + 10 * MIN)}, a helper starts on it. `, notBuilt()],
+  if (wait && built("helper") && !simpleOn()) out.push(line("queue", [who(wait.who), ` is busy and hasn't seen your message for ${dur(now() - mine.t)}. If it still hasn't by ${clock(mine.t + 10 * MIN)}, a helper starts on it. `, notBuilt()],
     post ? [button("Start a helper now", async (e, b) => { b.disabled = true; try { await apiPost("/api/helper", { post: mine.id }); poll(); } catch (x) { b.disabled = false; b.title = x.message; } }, { size: "s" })] : null, { key: "helper" }));
   if (!out.length && th) {
     const r = recipient(th);
-    out.push(line("done", r.who && r.who !== "new" ? `Nobody is on this right now. A message wakes ${r.who}.` : "Nobody is on this right now. A message starts an agent on it.", null, { key: "idle" }));
+    out.push(line("done", simpleOn() ? "Your Hive has stopped for now. Send a message when you want more." : r.who && r.who !== "new" ? `Nobody is on this right now. A message wakes ${r.who}.` : "Nobody is on this right now. A message starts an agent on it.", null, { key: "idle" }));
   }
   return h("div", { class: "cm-strip", "data-key": "strip", role: "status", "aria-live": "polite" }, out);
 }
@@ -361,9 +367,9 @@ function moreMenu(c, ctx) {
     h("div", { class: "cm-menu-find" }, input({ type: "search", class: "input", placeholder: "Search here", "aria-label": "Search these messages", value: C.q, oninput: e => { C.q = e.target.value; clearTimeout(qTimer); qTimer = setTimeout(ctx.update, 120); } })));
 }
 function head(c, ctx) {
-  const d = c.thread && S.threads.get(c.thread), n = L.matched.length, off = maskFor(c) !== SHOW.ALL ? L.src.length - n : 0;
+  const d = c.thread && S.threads.get(c.thread), n = L.matched.length, off = maskFor(c) !== SHOW.ALL && !C.q.trim() ? L.src.length - n : 0;
   const title = c.thread ? threadTitle(c.thread) : c.agent ? (c.agent === "person" ? "Everything you sent" : "Everything by or to " + c.agent) : c.pair ? `${c.pair[0]} and ${c.pair[1]}` : app() ? "All messages" : "Everything";
-  const who = c.thread ? threadPeople(c.thread).filter(m => m !== "person").map(m => agentRef(m, { copy: true, state: true }))
+  const who = simpleOn() ? [] : c.thread ? threadPeople(c.thread).filter(m => m !== "person").map(m => agentRef(m, { copy: true, state: true }))
     : c.agent ? [...new Set(S.posts.filter(p => p.from === c.agent).map(p => p.th))].slice(-14).map(t => threadRef(t)) : [];
   return h("header", { class: "cm-head", "data-key": "head" },
     h("div", { class: "cm-tt", "data-dev": app() ? null : "" },
@@ -373,10 +379,10 @@ function head(c, ctx) {
       c.thread && !app() && title !== c.thread ? h("span", { class: "cm-id" }, h("code", { class: "meta", title: "Its id on the board" }, c.thread), copyButton(c.thread)) : null,
       c.thread && !app() ? tierControl(c.thread) : null,
       h("div", { class: "cm-tools" },
-        off > 0 ? button(`Show ${off} hidden`, () => setShow(SHOW.ALL, ctx), { size: "s", kind: "quiet", cls: "cm-hid", title: "Turn everything on, messages between agents and the hive's own notices too" }) : null,
+        off > 0 && !simpleOn() ? button(`Show ${off} hidden`, () => setShow(SHOW.ALL, ctx), { size: "s", kind: "quiet", cls: "cm-hid", title: "Turn everything on, messages between agents and the hive's own notices too" }) : null,
         input({ type: "search", class: "input cm-find", placeholder: c.thread ? "Search here" : "Search messages", "aria-label": "Search these messages", value: C.q, oninput: e => { C.q = e.target.value; clearTimeout(qTimer); qTimer = setTimeout(ctx.update, 120); } }),
-        c.thread && app() ? button("More", () => { C.more = !C.more; ctx.update(); }, { size: "s", kind: "quiet", title: "Priority, timeline" }) : null)),
-    C.more && c.thread && app() ? moreMenu(c, ctx) : null,
+        c.thread && app() && !simpleOn() ? button("More", () => { C.more = !C.more; ctx.update(); }, { size: "s", kind: "quiet", title: "Priority, timeline" }) : null)),
+    C.more && c.thread && app() && !simpleOn() ? moreMenu(c, ctx) : null,
     who.length ? h("div", { class: "cm-people" }, who) : null);
 }
 function tierControl(th) {
@@ -389,7 +395,7 @@ function tierControl(th) {
 function needs() {
   const g = { asks: [], foryou: [], trouble: [], working: [] };
   for (const d of S.threads.values()) {
-    if (isSystemThread(d)) continue;
+    if (isSystemThread(d) || !theirs(d)) continue;
     const st = threadState(d.name, seen);
     if (st.key === "asks") g.asks.push({ d, st });
     else if (st.key === "foryou") g.foryou.push({ d, st });
@@ -400,14 +406,18 @@ function needs() {
   return g;
 }
 function needRow({ d, st }) {
-  const lp = d.posts[d.posts.length - 1];
-  const text = st.key === "asks" ? [h("b", null, st.who + " asks: "), lastQuestion(st.post)]
-    : st.key === "foryou" ? [h("b", null, st.who + ": "), firstSentence(displayText(st.post))]
+  const lp = d.posts[d.posts.length - 1], plain = simpleOn(), name = plainName(st.who);
+  const text = st.key === "asks" ? [h("b", null, name + " asks: "), lastQuestion(st.post)]
+    : st.key === "foryou" ? [h("b", null, name + ": "), firstSentence(displayText(st.post))]
+    : plain && st.key === "limited" ? [h("b", null, "Your Hive is taking a break. "), "It carries on by itself."]
+    : plain && st.key === "failed" ? [h("b", null, "Something went wrong. "), "Send a message and it tries again."]
+    : plain ? [h("b", null, "Your Hive is working on it.")]
     : st.key === "limited" ? [h("b", null, `${st.who} stopped at a usage limit ${ago(st.t)}. `), "Where it got to: " + firstSentence(displayText(lp))]
     : st.key === "failed" ? [h("b", null, `${st.who} stopped with an error ${ago(st.t)}.`)]
     : [h("b", null, st.who + ": "), (S.running.get(st.who) || {}).doing || st.label];
   return { key: d.name, href: threadHref(d.name), title: threadTitle(d.name), meta: ago(st.post ? st.post.t : d.last), lead: statusDot(st.key, { live: isRunning(st.who) }), text };
 }
+const STARTERS = ["Help me plan my small business", "Make me a simple website", "Help me pick a name"];
 function homePane(ctx) {
   const g = needs(), w = can("post"), n = g.asks.length + g.foryou.length + g.trouble.length;
   const local = outFor(null);
@@ -416,18 +426,20 @@ function homePane(ctx) {
   return h("div", { class: "cm-home", "data-key": "home" },
     w ? h("div", { class: "cm-new", "data-key": "new" },
       h("h1", { class: "cm-home-t" }, "What do you want done?"),
-      h("p", { class: "cm-home-l" }, "Say it the way you'd tell a person. An agent starts on it and answers here; it may bring in helpers if the job has parts."),
-      !room ? h("p", { class: "cm-home-warn", "data-tone": "limited", role: "status" }, statusDot("limited"), "Every Claude account is past its usage line, so new work waits until there's room. See Usage.") : null,
+      h("p", { class: "cm-home-l" }, simpleOn() ? "Say it the way you'd tell a person. Your Hive starts on it and answers here." : "Say it the way you'd tell a person. An agent starts on it and answers here; it may bring in helpers if the job has parts."),
+      !room ? h("p", { class: "cm-home-warn", "data-tone": "limited", role: "status" }, statusDot("limited"), simpleOn() ? "Your Hive has used up its allowance for now, so new work waits until it comes back." : "Every Claude account is past its usage line, so new work waits until there's room. See Usage.") : null,
       composer({ thread: null, update: ctx.update, place: "home", autofocus: conversation(ctx.arg).open }),
+      simpleOn() && !n && !local.length && ![...S.threads.values()].some(d => d.posts.some(p => p.from === "person")) ? h("div", { class: "frow", "data-key": "starters", "aria-label": "Ideas to start with" }, STARTERS.map(t =>
+        button(t, () => { draft(null).text = t; focusComposer(); }, { size: "s" }))) : null,
       local.length ? h("div", { class: "cm-out", "data-key": "out" }, local.map(it => localMessage(it, outActions))) : null) : null,
     h("div", { class: "cm-needs", "data-key": "needs" },
-      h("h2", { class: "cm-needs-t" }, n ? `${plural(n, "thing")} for you` : "Nothing needs you"),
-      sec("Waiting for your answer", "an agent asked you something", g.asks),
+      n || !simpleOn() ? h("h2", { class: "cm-needs-t" }, n ? `${plural(n, "thing")} for you` : "Nothing needs you") : null,
+      sec("Waiting for your answer", simpleOn() ? null : "an agent asked you something", g.asks),
       sec("New for you", "answers you haven't opened", g.foryou),
-      sec("Stopped", "one stopped by a usage limit carries on by itself; others need a message", g.trouble),
+      sec(simpleOn() ? "On hold" : "Stopped", simpleOn() ? null : "one stopped by a usage limit carries on by itself; others need a message", g.trouble),
       sec("Working now", null, g.working),
-      !n && !g.working.length ? h("p", { class: "meta" }, "When an agent asks you something, finishes, or stops, it shows here.") : null,
-      h("p", { class: "cm-home-all" }, button("All messages", null, { href: href("comms", "~all"), size: "s", kind: "quiet" }), app() ? button("Inbox", null, { href: href("inbox"), size: "s", kind: "quiet" }) : null)));
+      !n && !g.working.length ? h("p", { class: "meta" }, simpleOn() ? "When your Hive asks you something or finishes, it shows here." : "When an agent asks you something, finishes, or stops, it shows here.") : null,
+      simpleOn() ? null : h("p", { class: "cm-home-all" }, button("All messages", null, { href: href("comms", "~all"), size: "s", kind: "quiet" }), app() ? button("Inbox", null, { href: href("inbox"), size: "s", kind: "quiet" }) : null)));
 }
 
 // Over the whole page, not in the list: it sets what you see of the hive's talk, both in a conversation and in which ones are listed. Each one turns on and off by itself.
@@ -475,15 +487,15 @@ export default {
         post && c.thread ? composer({ thread: c.thread, update: ctx.update }) : null,
         post && c.all ? h("p", { class: "cm-hint meta", "data-key": "hint" }, "To start something new, use New conversation.") : null];
     return h("div", { class: "cm", "data-key": "comms", "data-in": c.arg ? "" : null, "data-home": c.home ? "" : null, style: `--top-h:${top ? top.offsetHeight : 47}px` },
-      showBar(ctx),
+      simpleOn() ? null : showBar(ctx),
       h("nav", { class: "cm-side", "aria-label": app() ? "Conversations" : "Threads" },
         h("div", { class: "cm-filters" },
           post ? button("New conversation", null, { href: href("comms", "~new"), kind: "primary", cls: "cm-newbtn" }) : null,
           input({ type: "search", placeholder: app() ? "Search all conversations" : "Search all threads", "aria-label": "Search all conversations by name or content", value: C.tq, oninput: e => { C.tq = e.target.value; ctx.update(); } }),
-          words(C.tq).length ? null : h("div", { class: "cm-scope" }, h("span", null, app() ? "Conversations" : "Threads"),
+          words(C.tq).length || simpleOn() ? null : h("div", { class: "cm-scope" }, h("span", null, app() ? "Conversations" : "Threads"),
             seg([["recent", app() ? "Recent" : "Last 24h"], ["all", "All"]], C.scope, k => { C.scope = k; ctx.update(); }, { label: "Which conversations" }))),
         h("div", { class: "cm-tl", "data-own": "", "data-sig": "own", tabindex: "-1" }),
-        app() ? h("div", { class: "cm-side-f" }, button("All messages", null, { href: href("comms", "~all"), size: "s", kind: "quiet" })) : null),
+        app() && !simpleOn() ? h("div", { class: "cm-side-f" }, button("All messages", null, { href: href("comms", "~all"), size: "s", kind: "quiet" })) : null),
       h("section", { class: "cm-convo", "aria-label": "Conversation", ...(post && c.thread ? dropZone(c.thread) : {}) },
         convo,
         post && c.thread ? h("div", { class: "cm-drop", "aria-hidden": "true", "data-key": "drop" }, "Drop files to attach them") : null));

@@ -3,6 +3,7 @@ Description=Hive update to the newest release
 
 [Service]
 Type=oneshot
+SuccessExitStatus=75
 ExecStart=/usr/bin/python3 %h/core/update.py --auto
 WorkingDirectory=%h
 Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin

@@ -1,4 +1,4 @@
-// Inbox: posts agents addressed to the person, newest first. In the app it sits under More: Chat's home answers
+// Inbox: posts agents addressed to the person, newest first. In the app it sits under the Chat tab, opened from the button on Chat's home: Chat's home answers
 // "what needs me?" from the same data. Kept as a page for the whole list and for marking read.
 import { h } from "../core/dom.js";
 import { S, can } from "../core/store.js";

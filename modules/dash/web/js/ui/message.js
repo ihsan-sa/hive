@@ -3,8 +3,9 @@
 // message(post, opts) returns the whole article. Its head (.msg-h) and receipt (.msg-rc) can be redrawn on their own with
 // messageHead() and messageReceipt(), so a long list refreshes names and read marks without touching the bodies.
 // localMessage(item) draws a message that hasn't reached the board yet: sending, or failed with Retry.
-import { h } from "../core/dom.js";
+import { h, copyText } from "../core/dom.js";
 import { S, can, jget, SYS, OUTSIDE } from "../core/store.js";
+import { simpleOn, HIVE } from "../core/simple.js";
 import { isAgent, isRunning, displayText, postSource } from "../core/model.js";
 import { clock, stamp, now, short, mdPlain, ago, DAY, MIN } from "../core/format.js";
 import { markdown, mdCut } from "./markdown.js";
@@ -63,6 +64,10 @@ export function messageReceipt(p) {
   const el = h("div", { class: "msg-rc", role: "status" });
   if (!S.app.app || !OUTSIDE.has(p.from) || now() - p.t > 3 * DAY) return el;
   const ds = p.men.map(m => delivery(p, m)).filter(Boolean), last = isLastMine(p);
+  if (simpleOn()) {  // no names and no machinery: one word, on your latest message
+    if (last && ds.length) el.append(h("span", { "data-tone": "quiet" }, ds.some(d => d.key === "seen") ? "Seen" : "Sent"));
+    return el;
+  }
   const show = ds.filter(d => last || d.key !== "seen");
   for (const d of show) el.append(h("span", { "data-tone": d.tone }, h("b", { "aria-hidden": "true" }, RMARK[d.key]), d.text));
   return el;
@@ -72,7 +77,9 @@ export function messageReceipt(p) {
 // All open in one viewer window. Text is shown through textContent only, and svg is never rendered.
 export const IMG = /\.(png|jpe?g|gif|webp)$/i;
 const TXT = /\.(txt|md|log|json|jsonl|csv|tsv|py|js|mjs|ts|sh|c|h|cpp|v|sv|vh|yaml|yml|toml|ini|cfg|xml|html|css|go|rs|kicad_pcb|kicad_sch|net|sp|cir|spice|lef|def|sdc|tcl)$/i;
-const fileUrl = (p, f) => `/files/${encodeURIComponent(p.id)}/${encodeURIComponent(f.name)}`;
+export const fileUrl = (p, f) => `/files/${encodeURIComponent(p.id)}/${encodeURIComponent(f.name)}`;
+export const PAGE = /\.html?$/i;
+export const pageUrl = (p, f) => fileUrl(p, f) + "?view=1";
 export const fsize = n => (n == null ? "" : n >= 1048576 ? (n / 1048576).toFixed(1) + " MB" : n >= 1024 ? Math.round(n / 1024) + " kB" : n + " B");
 const ext = name => (name.split(".").pop() || "file").slice(0, 5).toUpperCase();
 
@@ -80,6 +87,8 @@ function attachment(p, f) {
   const u = fileUrl(p, f);
   if (IMG.test(f.name)) return h("button", { type: "button", class: "msg-thumb", title: f.name + ", click to view", onclick: () => viewFile(p, f) },
     h("img", { src: u, alt: f.name, loading: "lazy" }), h("span", null, f.name));
+  if (simpleOn() && PAGE.test(f.name)) return h("a", { class: "msg-file", title: "Open this page in a new tab", href: pageUrl(p, f), target: "_blank", rel: "noopener noreferrer" },
+    h("b", null, "PAGE"), h("span", null, h("span", { class: "msg-fn" }, f.name), h("span", { class: "meta" }, "open the page")));
   const txt = TXT.test(f.name) && (f.size == null || f.size < 2 * 1048576);
   const props = txt ? { type: "button", onclick: () => viewFile(p, f) } : { href: u, download: f.name };
   return h(txt ? "button" : "a", { class: "msg-file", title: txt ? "Click to read" : "Download", ...props },
@@ -141,6 +150,41 @@ function fold(t) {
   return { head: b.slice(0, i).join("\n\n"), tail: b.slice(j).join("\n\n"), lines: mid.split("\n").filter(l => l.trim()).length, chars: mid.length };
 }
 
+// ---- the whole post: copy it, or see it as written ----
+const SOURCE = new Set(); let menuFor = null;
+function sourceView(p, ws) {
+  return h("div", { class: "msg-b" },
+    h("pre", { class: "rc-raw", tabindex: "0" }, p.text),
+    h("div", { class: "rc-rawnote" }, h("span", null, "What is on the board, as written."),
+      h("button", { type: "button", class: "rc-t", onclick: (e, b) => flash(b, p.text) }, "Copy"),
+      h("button", { type: "button", class: "rc-t", onclick: (e, b) => { SOURCE.delete(p.id); b.closest(".msg-b").replaceWith(body(p, ws)); } }, "Back to the post")));
+}
+const flash = (b, text) => copyText(text).then(() => { const was = b.textContent; b.dataset.ok = ""; b.textContent = "Copied"; setTimeout(() => { delete b.dataset.ok; b.textContent = was; }, 1400); }, () => {});
+function closeMenu() {
+  document.querySelector(".rc-menu")?.remove();
+  document.querySelector('.rc-moreb[aria-expanded="true"]')?.setAttribute("aria-expanded", "false");
+  menuFor = null;
+}
+addEventListener("click", e => { if (menuFor && !e.target.closest?.(".rc-more,dialog.fb")) closeMenu(); }, true);
+const moreMenu = (p, ws) => h("div", { class: "rc-menu", role: "menu" },
+  h("button", { type: "button", role: "menuitem", onclick: () => { copyText(displayText(p)); closeMenu(); } }, "Copy as Markdown"),
+  h("button", { type: "button", role: "menuitem", onclick: () => { copyText(mdPlain(displayText(p))); closeMenu(); } }, "Copy as plain text"),
+  h("button", { type: "button", role: "menuitem", onclick: (e, b) => {
+    const was = b.closest(".msg")?.querySelector(".msg-b"); closeMenu();
+    if (SOURCE.has(p.id)) SOURCE.delete(p.id); else SOURCE.add(p.id);
+    was?.replaceWith(body(p, ws));
+  } }, SOURCE.has(p.id) ? "Back to the post" : "View source"));
+function more(p, ws) {
+  const open = menuFor === p.id;
+  return h("span", { class: "rc-more" },
+    h("button", { type: "button", class: "rc-t rc-moreb", "aria-haspopup": "menu", "aria-expanded": String(open), "aria-label": "More for this message", onclick: (e, b) => {
+      const was = menuFor === p.id;
+      closeMenu();
+      if (!was) { menuFor = p.id; b.setAttribute("aria-expanded", "true"); b.parentNode.append(moreMenu(p, ws)); }
+    } }, "⋯"),
+    open ? moreMenu(p, ws) : null);
+}
+
 // ---- search marks ----
 const wordsRe = ws => new RegExp(ws.map(w => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|"), "gi");
 /** A string as text and <mark> nodes, for h(). */
@@ -151,15 +195,18 @@ export function markWords(text, ws) {
   return out;
 }
 /** Mark the words in a rendered post, whatever formatting they sit in. Only touches text nodes, so a post's HTML stays text. */
-function markBody(el, ws) {
+export function markBody(el, ws) {
   if (!ws || !ws.length) return el;
   const re = wordsRe(ws), walk = document.createTreeWalker(el, NodeFilter.SHOW_TEXT), found = [];
-  while (walk.nextNode()) if (walk.currentNode.nodeValue.search(re) >= 0) found.push(walk.currentNode);
+  while (walk.nextNode()) if (walk.currentNode.nodeValue.search(re) >= 0 && !walk.currentNode.parentNode.closest(".rc-bar,.rc-eq-a,.rc-foldb")) found.push(walk.currentNode);
   for (const n of found) n.replaceWith(...markWords(n.nodeValue, ws));
+  // A code block or equation keeps its drawing until its source changes: tell it the marks did, going in and coming out of a search.
+  for (const o of el.querySelectorAll("[data-own][data-sig]")) if (o.querySelector("mark")) o.dataset.sig += ":" + ws.join();
   return el;
 }
 
 function body(p, ws) {
+  if (SOURCE.has(p.id)) return sourceView(p, ws);
   const t = displayText(p), f = t.length > LONG && !OPEN.has(p.id) ? fold(t) : null;
   if (!f) return h("div", { class: "msg-b" }, markBody(markdown(t), ws));
   return h("div", { class: "msg-b", "data-folded": "" },
@@ -171,7 +218,7 @@ function body(p, ws) {
 // ---- jumping to the post a reply answers. The view that lists posts says how. ----
 let jumper = null;
 export const onJump = fn => { jumper = fn; };
-const who = n => (n === "person" ? "You" : n);
+const who = n => (n === "person" ? "You" : simpleOn() ? HIVE : n);
 
 function quote(p) {
   const q = S.byId[p.reply_to];
@@ -180,7 +227,7 @@ function quote(p) {
 }
 
 /** The line above a message: author, who it went to, thread (outside a thread), who it woke, Reply, time. */
-export function messageHead(p, { showThread = true } = {}) {
+export function messageHead(p, { showThread = true, mark } = {}) {
   if (!S.app.app) return devHead(p, showThread);
   const mine = OUTSIDE.has(p.from) && p.from === "person";
   const woke = (S.woke[p.id] || []).filter(s => !p.men.includes(s.name) || !s.resumed), tos = p.men.filter(m => m !== "new" && m !== p.from);
@@ -188,6 +235,9 @@ export function messageHead(p, { showThread = true } = {}) {
   const src = mine ? postSource(p) : null, me = S.app.signer;
   // Someone else signed in to this Hive wrote it: their name, not "You". A name you can't tell apart goes on the badge.
   const other = src && src.how === "Web" && src.name && me && src.name !== me;
+  if (simpleOn()) return h("div", { class: "msg-h" },
+    mine ? h("b", { class: "msg-me" }, other ? src.name : "You") : h("b", null, OUTSIDE.has(p.from) ? who(p.from) : HIVE),
+    h("span", { class: "msg-end" }, more(p, mark), h("time", { class: "meta num", datetime: p.at, title: stamp(p.t) }, clock(p.t))));
   return h("div", { class: "msg-h" },
     mine ? h("b", { class: "msg-me", title: other ? src.said : "you (person)" }, other ? src.name : "You") : agentRef(p.from, { copy: true }),
     src ? h("span", { class: "msg-src", title: src.said }, (src.name && src.name !== me && !other ? src.name + " · " : "") + src.how) : null,
@@ -201,6 +251,7 @@ export function messageHead(p, { showThread = true } = {}) {
     woke.length && !mine ? h("span", { class: "meta" }, woke.map(s => (s.resumed ? "woke " : "started ") + s.name).join(", ")) : null,
     h("span", { class: "msg-end" },
       S.app.app && can("post") ? button("Reply", () => replyTo(p), { kind: "quiet", size: "s", cls: "msg-reply", title: "Reply to this message; it goes to its author" }) : null,
+      more(p, mark),
       h("time", { class: "meta num", datetime: p.at, title: stamp(p.t) }, clock(p.t))));
 }
 
@@ -262,7 +313,7 @@ export function localMessage(it, { retry, edit, discard }) {
   const failed = it.state === "failed";
   return h("article", { class: "msg", "data-key": "local:" + it.lid, "data-who": "me", "data-state": it.state, "aria-label": failed ? "Your message, not sent" : "Your message, sending" },
     h("div", { class: "msg-h" }, h("b", { class: "msg-me" }, "You"),
-      it.to ? [h("span", { class: "msg-to" }, "to"), it.to === "new" ? h("span", { class: "muted" }, "a new agent") : agentRef(it.to)] : null,
+      it.to && !simpleOn() ? [h("span", { class: "msg-to" }, "to"), it.to === "new" ? h("span", { class: "muted" }, "a new agent") : agentRef(it.to)] : null,
       h("span", { class: "msg-end" }, h("time", { class: "meta num" }, clock(it.t)))),
     it.reply ? h("div", { class: "msg-q", "data-static": "" }, h("b", null, who(it.reply.from)), h("span", null, short(mdPlain(displayText(it.reply)), 140))) : null,
     it.text.trim() ? h("div", { class: "msg-b" }, markdown(it.text)) : null,

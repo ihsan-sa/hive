@@ -1,6 +1,7 @@
 // Settings: the hive, logins, modules, access from outside. Shown only where can() allows each part.
 import { h } from "../core/dom.js";
 import { S, can, built, jget, post, loadApp } from "../core/store.js";
+import { simpleOn, setSimple } from "../core/simple.js";
 import { form } from "../templates.js";
 import { pageHeader, section, block, blocks, button, field, input, empty, statusLabel } from "../ui/kit.js";
 import { act, isBusy } from "../ui/activity.js";
@@ -8,7 +9,7 @@ import { startSignin, signinBox, clearSignin } from "../ui/signin.js";
 import { ago, plural } from "../core/format.js";
 import { href } from "../core/router.js";
 import { copyButton } from "../ui/refs.js";
-import { POWER, codexPart, forget, keysPart, loadPage, pageData, powerPart, reading, rootNote, sandboxPart, sharePart } from "../ui/setup.js";
+import { MODELS, POWER, codexPart, forget, keysPart, loadPage, modelPart, pageData, powerPart, reading, rootNote, sandboxPart, sharePart } from "../ui/setup.js";
 import { forgetSecrets, secretParts } from "./secrets.js";
 
 // Everything the person is typing lives here, so a poll never loses it.
@@ -29,7 +30,7 @@ async function loadUpdate(ctx) {
   try { F.up = await jget("/api/update"); } catch (e) { return false; }   // an update restarts the app, so a poll can miss
   ctx.update(); return true;
 }
-const EVERY = [[900, "Every 15 minutes"], [3600, "Every hour"], [21600, "Every 6 hours"], [86400, "Every day"], [604800, "Every week"]];
+const EVERY = [[300, "Every 5 minutes"], [900, "Every 15 minutes"], [3600, "Every hour"], [21600, "Every 6 hours"], [86400, "Every day"], [604800, "Every week"]];
 const pause = ms => new Promise(r => setTimeout(r, ms));
 async function checkNow(ctx) {
   say("up", "");
@@ -84,6 +85,13 @@ async function loadMods(ctx) {
 
 const check = (label, on, onChange, hint) => h("label", { class: "check" }, h("input", { type: "checkbox", checked: on, onchange: (e, n) => onChange(n.checked) }), h("span", null, label, hint ? h("span", { class: "field-h" }, hint) : null));
 
+// Kept in this browser, like the theme: another person signed in elsewhere keeps theirs.
+function viewSection(ctx) {
+  const on = simpleOn();
+  return section({ title: "Simple view", level: 1 },
+    h("p", null, on ? "On: you see a chat and what your Hive has made, and it talks to you in plain words." : "Off: you see every tab, and what the agents say to each other. Turn it on for just a chat and what's been made, with agents told to use plain words."),
+    button(on ? "Show everything" : "Turn on simple view", () => { setSimple(!on); ctx.update(); }, { size: "s" }));
+}
 function hiveSection(ctx) {
   if (!can("config")) return null;
   if (!F.ed) return section({ title: "The hive", level: 1 }, empty("Reading…", { kind: "loading" }));
@@ -161,6 +169,7 @@ function setupSections(ctx) {
   if (!can("config")) return [];
   return [
     section({ title: "Data sharing", level: 1, note: "what's sent, and whether it is" }, pg ? sharePart(ctx.update) : reading()),
+    section({ title: "Model", level: 1, note: "what agents run on" }, pg ? modelPart(ctx.update) : reading()),
     section({ title: "Power", level: 1, note: "who decides what agents may do" }, pg ? powerPart(ctx.update) : reading()),
     section({ title: "Sandbox", level: 1 }, pg ? sandboxPart(ctx.update) : reading())];
 }
@@ -173,13 +182,45 @@ function modulesSection(ctx) {
     try { const r = await post("/api/module", { do: what, name }); say("mods", r.said); } catch (e) { say("mods", e.message, "bad"); }
     delete F.busy[name]; await loadMods(ctx);
   };
+  const about = x => x.about.replace(/`/g, "") + (x.needs ? ` Needs ${x.needs}.` : "");
+  const WHERE = { github: "On GitHub", git: "In a Git repository elsewhere", local: "Only on this machine" };
+  const slackBtn = () => button(F.slack ? "Close" : "Set up", () => { F.slack = F.slack ? null : { step: 1, bot: "", app: "", channel: "#hive" }; ctx.update(); }, { size: "s", kind: F.slack ? "quiet" : null });
+  const end = (x, inBrowse) => {
+    if (x.name === "dash") return h("span", { class: "meta" }, "this app");
+    if (x.name === "slack-door" && x.state !== "installed" && built("slack-door")) return slackBtn();
+    if (x.state === "installed" && x.default) return h("span", { class: "meta" }, "comes with the Hive");
+    if (x.state === "installed" && inBrowse) return h("span", { class: "meta" }, "installed");
+    return button(x.state === "installed" ? "Remove" : "Add", () => act(x.state === "installed" ? "remove" : "add", x.name), { size: "s", busy: F.busy[x.name] });
+  };
+  const row = (x, inBrowse) => h("li", { class: "lr", "data-key": x.name },
+    h("div", { class: "lr-in mod-row" },
+      h("b", { class: "mod-name" }, x.repo ? h("a", { href: x.repo, target: "_blank", rel: "noreferrer noopener" }, x.name) : x.name),
+      h("span", { class: "muted mod-about" }, about(x), x.source === "own" ? h("span", { class: "mod-where" }, WHERE[x.where] || WHERE.local) : null),
+      end(x, inBrowse)));
+  const list = (rows, inBrowse) => h("ul", { class: "list" }, rows.map(x => row(x, inBrowse)));
+  const group = (key, title, note, ...body) => h("div", { class: "mod-group", "data-group": key }, h("h3", { class: "mod-gt" }, title, note ? h("span", { class: "mod-gn" }, note) : null), body);
+  const shelves = () => {
+    const pub = F.mods.filter(x => x.source !== "own"), own = F.mods.filter(x => x.source === "own");
+    const have = pub.filter(x => x.state === "installed"), rec = pub.filter(x => x.recommended && x.state !== "installed");
+    const q = (F.modQ || "").trim().toLowerCase(), shown = pub.filter(x => !q || (x.name + " " + x.about).toLowerCase().includes(q));
+    return [
+      group("public", "Public, installed", null, have.length ? list(have) : empty("None installed yet.")),
+      group("recommended", "Recommended", null,
+        rec.length ? list(rec) : h("p", { class: "muted mod-none" }, "You have everything we recommend."),
+        h("div", { class: "lr-more" }, button(F.browse ? "Hide the full list" : `Browse all ${pub.length} public extras`, () => { F.browse = !F.browse; ctx.update(); }, { size: "s", kind: "quiet" })),
+        F.browse ? h("div", { class: "mod-browse" },
+          field("Filter", input({ placeholder: "Name or what it does", value: F.modQ || "", oninput: (e, n) => { F.modQ = n.value; ctx.update(); } })),
+          shown.length ? list(shown, true) : empty("No extra matches that.")) : null),
+      group("own", "This Hive's own", "made here, or added from a Git URL",
+        own.length ? list(own) : h("p", { class: "muted mod-none" }, "Nothing yet. Ask an agent to make something into an extra and it shows up here."),
+        h("form", { class: "frow", onsubmit: e => { e.preventDefault(); if (F.url.trim()) act("add", F.url.trim()); } },
+          h("div", { style: "flex:1;min-width:12rem" }, field("Add from a Git URL", input({ placeholder: "Git URL of a module", value: F.url, oninput: (e, n) => { F.url = n.value; } }))),
+          button("Add", null, { type: "submit", busy: F.busy[F.url.trim()] })),
+        h("p", { class: "muted mod-none" }, "An extra's code runs with the same rights as your agents, so only add ones you trust.")),
+    ];
+  };
   return section({ title: "Extras", level: 1, note: "optional tools your agents can use (modules)" },
-    F.mods == null ? empty("Reading…", { kind: "loading" }) : F.mods.length ? h("ul", { class: "list" }, F.mods.map(x => h("li", { class: "lr", "data-key": x.name },
-      h("div", { class: "lr-in mod-row" }, h("b", { class: "mod-name" }, x.repo ? h("a", { href: x.repo, target: "_blank", rel: "noreferrer noopener" }, x.name) : x.name), h("span", { class: "muted mod-about" }, x.about.replace(/`/g, ""), x.needs ? ` Needs ${x.needs}.` : ""),
-        x.name === "dash" ? h("span", { class: "meta" }, "this app") : x.name === "slack-door" && x.state !== "installed" && built("slack-door") ? button(F.slack ? "Close" : "Set up", () => { F.slack = F.slack ? null : { step: 1, bot: "", app: "", channel: "#hive" }; ctx.update(); }, { size: "s", kind: F.slack ? "quiet" : null }) : button(x.state === "installed" ? "Remove" : "Add", () => act(x.state === "installed" ? "remove" : "add", x.name), { size: "s", busy: F.busy[x.name] }))))) : empty("No modules listed."),
-    h("form", { class: "frow", onsubmit: e => { e.preventDefault(); if (F.url.trim()) act("add", F.url.trim()); } },
-      h("div", { style: "flex:1;min-width:12rem" }, field("Add from a Git URL", input({ placeholder: "Git URL of a module", value: F.url, oninput: (e, n) => { F.url = n.value; } }))),
-      button("Add", null, { type: "submit", busy: F.busy[F.url.trim()] })),
+    F.mods == null ? empty("Reading…", { kind: "loading" }) : F.mods.length ? shelves() : empty("No modules listed."),
     F.slack ? slackSetup(ctx) : null,
     msg("mods"));
 }
@@ -268,6 +309,7 @@ function glance(ctx) {
   if (can("config")) row("The hive", "Hive", s.starter ? "working" : "ended", s.starter ? "running" : "not running");
   if (can("logins") && logins.length) row("Accounts", "Claude", logins.some(l => !l.signed_in) ? "out" : "working", `${logins.filter(l => l.signed_in).length} of ${logins.length} signed in`);
   if (pg) {
+    row("Model", "Model", "off", (MODELS.find(x => x[0] === pg.settings.model) || [0, pg.settings.model])[1]);
     row("Power", "Power", "off", (POWER.find(x => x[0] === pg.settings.power) || [0, "level " + pg.settings.power])[1]);
     const c = pg.sandbox_check.state;
     row("Sandbox", "Sandbox", pg.settings.sandbox === "bare" ? "limited" : c === "works" ? "working" : c === "broken" ? "failed" : "ended", pg.settings.sandbox === "bare" ? "off" : c === "works" ? "on" : c === "broken" ? "not working" : "unknown");
@@ -282,8 +324,8 @@ export default {
   leave() { forget(); forgetSecrets(); },
   render(ctx) {
     if (!S.app.app) return h("div", { class: "page" }, empty("Settings show only in the app, opened from this machine.", { kind: "page", title: "Settings" }));
-    const secs = [hiveSection(ctx), loginsSection(ctx), ...setupSections(ctx), secretsSection(ctx), modulesSection(ctx), accessSection(ctx)].filter(Boolean);
-    const header = pageHeader({ title: "Settings", lead: "How the hive runs, which accounts it uses, and what extras it has." });
+    const secs = [viewSection(ctx), hiveSection(ctx), loginsSection(ctx), ...setupSections(ctx), secretsSection(ctx), modulesSection(ctx), accessSection(ctx)].filter(Boolean);
+    const header = pageHeader({ title: "Settings", lead: simpleOn() ? "Choices for your Hive." : "How the hive runs, which accounts it uses, and what extras it has." });
     if (!secs.length) return form({ header, sections: [empty("This connection can't change any settings.")] });
     const nav = secs.map(n => n.getAttribute("aria-label"));
     return h("div", { class: "page set", "data-key": "settings" }, header, glance(ctx),

@@ -13,7 +13,7 @@ import { agentRef, threadRef } from "../ui/refs.js";
 import { createGraph, keep } from "../ui/graph.js";
 import { closePanel, openPanel, panelOpen } from "../ui/panel.js";
 import { showTip, hideTip } from "../ui/tip.js";
-import { toolTone } from "../ui/feed.js";
+import { feedHiddenNote, toolTone } from "../ui/feed.js";
 
 const WINS = [["1h", HOUR], ["6h", 6 * HOUR], ["24h", DAY], ["3d", 3 * DAY], ["All", 0]];
 const MODES = [["agents", "Agents"], ["threads", "Agents + threads"]];
@@ -226,7 +226,7 @@ function agentActions(name) {
     M.feeds[name] = { at: now(), items: f ? f.items : [] };
     jget("/api/agent?name=" + encodeURIComponent(name)).then(items => { M.feeds[name] = { at: now(), items }; const s = G.selected(); if (s && s.id === name && !selecting()) M.update(); }).catch(() => {});
   }
-  return list(((f && f.items) || []).slice(-10).reverse().map((x, i) => ({ key: (x.t || 0) + ":" + i, lead: h("span", { class: "feed-k", "data-tone": x.k === "tool" ? toolTone(x.tool) : "tier1" }, x.k === "tool" ? x.tool : "said"), meta: x.t ? clock(x.t * 1e3) : "", text: short(x.k === "tool" ? x.x.replace(/^Running: /, "") : x.x, 240) })), { empty: "No session log yet.", dense: true });
+  return [f && feedHiddenNote(f.items), list(((f && f.items) || []).slice(-10).reverse().map((x, i) => ({ key: (x.t || 0) + ":" + i, lead: h("span", { class: "feed-k", "data-tone": x.k === "tool" ? toolTone(x.tool) : "tier1" }, x.k === "tool" ? x.tool : "said"), meta: x.t ? clock(x.t * 1e3) : "", text: short(x.k === "tool" ? x.x.replace(/^Running: /, "") : x.x, 240) })), { empty: "No session log yet.", dense: true })];
 }
 function edgePane(e) {
   const inw = inWindow(), ps = S.posts.filter(p => inw(p) && ((p.from === e.a && p.men.includes(e.b)) || (p.from === e.b && p.men.includes(e.a))));
