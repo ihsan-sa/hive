@@ -1,5 +1,5 @@
 name: clean-vm
-on: {push: {branches: [test-clean-vm]}}
+on: {push: {branches: [test-userns-2204]}}
 permissions: {contents: read}
 jobs:
   vm:
@@ -7,10 +7,7 @@ jobs:
       fail-fast: false
       matrix:
         image:
-          - {name: ubuntu-24.04, url: "https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img"}
-          - {name: ubuntu-26.04, url: "https://cloud-images.ubuntu.com/resolute/current/resolute-server-cloudimg-amd64.img"}
           - {name: ubuntu-22.04, url: "https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img"}
-          - {name: debian-12, url: "https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-genericcloud-amd64.qcow2"}
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
