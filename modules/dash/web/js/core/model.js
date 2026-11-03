@@ -31,6 +31,7 @@ export function agentState(a) {
   const j = a.jobs || {}, more = unseen ? `, ${unseen} new post${unseen > 1 ? "s" : ""} when it returns` : "";
   if (j.running) return { key: "working", text: (j.running > 1 ? j.running + " jobs" : "job") + " running" + (j.queued ? `, ${j.queued} more queued` : "") + more };
   if (j.queued) return { key: "queue", text: `${j.queued > 1 ? j.queued + " jobs" : "job"} in the queue ${dur(j.waited * 1e3)}` + more };
+  if (a.shells) return { key: "quiet", text: `waiting on ${a.shells > 1 ? a.shells + " jobs" : "a job"} it started` + more };   // the starter hands it new posts itself
   if (unseen) return { key: "stuck", text: `quiet ${dur(q)}, hasn't seen ${unseen} new post${unseen > 1 ? "s" : ""} for it` };
   return { key: "quiet", text: "quiet " + dur(q) + (S.app.app ? "" : ", no job in the queue") };
 }
@@ -44,7 +45,7 @@ export function agentStatus(n) {
   else if (!s) v = { key: "none", label: "hasn't run" };
   else if (S.killed[n] >= s.start) v = { key: "killed", label: "killed" };
   else if (S.limitedNow.has(s.session)) v = { key: "limited", label: "stopped at a limit" };
-  else if (s.exit) v = { key: "failed", label: `failed (exit ${s.exit})` };
+  else if (s.exit && s.exit !== 143) v = { key: "failed", label: `failed (exit ${s.exit})` };
   else v = { key: "ended", label: "ended " + ago(sEnd(s)) };
   S.stCache.set(n, v); return v;
 }

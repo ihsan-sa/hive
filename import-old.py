@@ -5,6 +5,7 @@ STAGING is a copy made by the installer, on the same disk as $HOME, laid out as 
 projects/, .hive/kb/, .hive/chats/, .hive/config.json, plus projects.jsonl (the old journal's project records).
 Run as the Hive's own user, with $HOME its home. Safe to run again: each item moves once, and nothing already here is overwritten.
 Sign-ins, tokens and keys are never in STAGING, and this prints counts and names of projects, never contents.
+Git repos come with their history but not their hooks or settings that run commands or sign in: another account wrote them, and the agents here would run them. The old folder keeps them.
 """
 import json
 import os
@@ -17,8 +18,8 @@ from pathlib import Path
 CHAT_IGNORE = "/kb/old-hive/chats/"
 
 
-def git(repo, *args):
-    return subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True, stdin=subprocess.DEVNULL)
+def git(gitdir, *args):
+    return subprocess.run(["git", f"--git-dir={gitdir}", *args], capture_output=True, text=True, stdin=subprocess.DEVNULL)
 
 
 def registry(staging):
@@ -42,25 +43,99 @@ def registry(staging):
     return out
 
 
-def clean_git(p):
-    """Old sign-ins mustn't stay in a moved repo: the helper the old Hive set, tokens in remote addresses, auth headers. Returns how many tokens came out."""
-    if not (p / ".git").is_dir():
-        return 0
-    git(p, "worktree", "prune")
-    git(p, "config", "--local", "--unset-all", "credential.helper")
-    cleaned = 0
-    urls = git(p, "config", "--local", "--get-regexp", r"^remote\..*\.(url|pushurl)$").stdout
-    for line in urls.splitlines():
-        key, _, url = line.partition(" ")
+# The only settings a moved repo keeps. Anything else can run a command (core.hookspath, core.fsmonitor, core.sshcommand, diff and filter drivers, aliases, include.path...), carry a sign-in (credential.*, http.*.extraheader, url.*.insteadof), or send it elsewhere.
+KEEP_GIT = re.compile(r"(core\.(repositoryformatversion|filemode|bare|logallrefupdates|ignorecase|precomposeunicode|symlinks|autocrlf|eol|safecrlf|longpaths|quotepath)"
+                      r"|extensions\..*"
+                      r"|remote\..*\.(url|pushurl|fetch|tagopt|mirror|prune|promisor|partialclonefilter)"
+                      r"|branch\..*\.(remote|merge|rebase|pushremote)"
+                      r"|submodule\..*\.(url|active|branch)"
+                      r"|user\.(name|email)|pull\.(rebase|ff)|push\.default|init\.defaultbranch)", re.DOTALL)
+
+
+def clean_gitdir(g):
+    """One repo's settings and hooks. Returns (tokens taken out, hooks taken out)."""
+    cfg, hooks = g / "config", g / "hooks"
+    tokens = removed = 0
+    keys = None
+    # This would make git take its settings and hooks from another folder.
+    (g / "commondir").unlink(missing_ok=True)
+    if cfg.is_file() and not cfg.is_symlink():
+        r = git(g, "config", "--local", "--null", "--name-only", "--list")
+        if r.returncode == 0:
+            keys = [k for k in r.stdout.split("\0") if k]
+    if keys is None:
+        # A link, or nothing git can read: start it again. The repo's own data doesn't depend on it.
+        if cfg.is_dir() and not cfg.is_symlink():
+            force_rm(cfg)
+        else:
+            cfg.unlink(missing_ok=True)
+        cfg.write_text("[core]\n\trepositoryformatversion = 0\n\tbare = false\n")
+        keys = []
+    for k in dict.fromkeys(keys):
+        if not KEEP_GIT.fullmatch(k):
+            if re.fullmatch(r"(http\.(.*\.)?extraheader|url\..*\.(insteadof|pushinsteadof))", k, re.DOTALL):
+                tokens += 1
+            git(g, "config", "--local", "--unset-all", k)
+    urls = git(g, "config", "--local", "--null", "--get-regexp", r"^remote\..*\.(url|pushurl)$").stdout
+    for item in urls.split("\0"):
+        key, _, url = item.partition("\n")
+        if not key:
+            continue
+        # ext::, fd:: and the like run a command when someone fetches.
+        if re.match(r"[A-Za-z0-9][A-Za-z0-9+.-]*::", url):
+            git(g, "config", "--local", "--unset-all", key)
+            continue
         # ssh://git@host is a user name, not a sign-in, so only the web addresses.
         bare = re.sub(r"^(https?://)[^/@]*@", r"\1", url)
-        if bare != url:
-            if git(p, "config", "--local", "--replace-all", key, bare).returncode == 0:
-                cleaned += 1
-    for line in git(p, "config", "--local", "--get-regexp", r"^http\..*\.extraheader$").stdout.splitlines():
-        if git(p, "config", "--local", "--unset-all", line.partition(" ")[0]).returncode == 0:
-            cleaned += 1
-    return cleaned
+        if bare != url and git(g, "config", "--local", "--replace-all", key, bare).returncode == 0:
+            tokens += 1
+    w = g / "config.worktree"
+    if w.is_dir() and not w.is_symlink():
+        force_rm(w)
+    else:
+        w.unlink(missing_ok=True)
+    if hooks.is_symlink():
+        hooks.unlink()
+    if hooks.is_dir():
+        for h in hooks.iterdir():
+            if h.name.endswith(".sample") and h.is_file() and not h.is_symlink():
+                continue
+            if h.is_dir() and not h.is_symlink():
+                force_rm(h)
+            else:
+                h.unlink()
+            removed += 1
+    git(g, "worktree", "prune")
+    return tokens, removed
+
+
+def is_gitdir(d, dirs, files):
+    # Git accepts more shapes than a normal repo has: HEAD can be a link to a folder, and objects can be a file.
+    names = {*dirs, *files}
+    return "HEAD" in names and ("objects" in names or "commondir" in names)
+
+
+def clean_git(p):
+    """Every repo in a moved project, however deep: its own, submodules', and any bare one, which git uses as soon as you're in its folder. Returns (tokens, hooks)."""
+    top = os.path.realpath(p)
+    tokens = hooks = 0
+    for d, dirs, files in os.walk(p):
+        dot = Path(d) / ".git"
+        if dot.is_symlink():
+            dot.unlink()
+        elif ".git" in files and not dot.is_file():
+            dot.unlink()
+        elif ".git" in files:
+            # A submodule's pointer to its repo under .git/modules. Anywhere else, git would use settings and hooks from there.
+            m = re.match(r"gitdir: *(.*)", dot.read_text(errors="replace").strip())
+            to = os.path.realpath(os.path.join(d, m.group(1))) if m else ""
+            if not (to.startswith(top + os.sep) and "/.git/modules/" in to[len(top):]):
+                dot.unlink()
+        if is_gitdir(d, dirs, files):
+            t, h = clean_gitdir(Path(d))
+            tokens += t
+            hooks += h
+    return tokens, hooks
 
 
 def goals(p, rec):
@@ -79,7 +154,7 @@ def goals(p, rec):
     g.write_text(text if text.endswith("\n") else text + "\n", encoding="utf-8")
     # Not a change to their repo, so it doesn't show up as one.
     ex = p / ".git" / "info" / "exclude"
-    if ex.parent.is_dir():
+    if ex.parent.is_dir() and not ex.parent.is_symlink() and not ex.is_symlink():
         with open(ex, "a", encoding="utf-8") as f:
             f.write("/goals.md\n")
 
@@ -166,7 +241,9 @@ def main():
                 state["left"].append(name)
             continue
         to = free_name(home / "projects", name)
-        state["tokens"] += clean_git(p)
+        tokens, hooks = clean_git(p)
+        state["tokens"] += tokens
+        state["hooks"] = state.get("hooks", 0) + hooks
         goals(p, rec)
         os.replace(p, home / "projects" / to)
         state["projects"][name] = to
@@ -216,6 +293,8 @@ def main():
         print(f"  Left in the old folder (the old Hive's own): {', '.join(state['left'])}")
     if state["tokens"]:
         print(f"  Took {many(state['tokens'], 'old sign-in token')} out of project git settings.")
+    if state.get("hooks"):
+        print(f"  Took {many(state['hooks'], 'git hook')} out of the projects. They're still in the old folder.")
 
 
 def readme(dest, state, reg, staging, old_folder):
@@ -244,6 +323,7 @@ def readme(dest, state, reg, staging, old_folder):
         lines += ["These were walled off in the old Hive. This Hive has no walls between projects, so other agents can see them now: "
                   + ", ".join(f"`{state['projects'][n]}`" for n in walled), ""]
     lines += ["## What didn't come", "", "- Sign-ins, tokens and keys. Sign in again in this Hive. Projects use this Hive's sign-in now.",
+              "- Git hooks, and git settings that run commands or sign in. The repos' own settings in the old folder still have them. Read one before you copy it back, because agents here would run it.",
               "- Running work, past runs, task lists and schedules. Tell the Hive what you want next, and point it at `goals.md`.",
               "- `.checkouts` folders: agents' working copies. Anything not pushed from one is still in the old folder.", ""]
     if state["left"]:

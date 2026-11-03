@@ -83,10 +83,13 @@ function ingestLog(items) {
       if (e.post) (S.woke[e.post] ||= []).push(s);
     } else if (e.event === "end") {
       const s = S.open[e.name + e.session];
-      if (s) { s.end = t; s.exit = e.exit; delete S.open[e.name + e.session]; }
-      const th = s && s.thread;
-      ledgerAdd({ t, kind: e.exit ? "trouble" : "agent", parts: [{ a: e.name }, e.exit ? ` failed (exit ${e.exit})` : " ended", th ? " in " : "", th ? { th } : ""] }, [e.exit ? "failed" : "ended", e.name, th || ""]);
-    } else if (e.event === "killed") S.killed[e.name] = t;
+      // -9 right after the starter said it was handing over or tidying up is the starter's own doing, not a crash: it counts as 143, a run the hive ended.
+      const handed = e.exit === -9 && s && s.byStarter, exit = handed ? 143 : e.exit;
+      if (s) { s.end = t; s.exit = exit; delete S.open[e.name + e.session]; }
+      const th = s && s.thread, bad = exit && !handed;
+      ledgerAdd({ t, kind: bad ? "trouble" : "agent", parts: [{ a: e.name }, bad ? ` failed (exit ${exit})` : " ended", th ? " in " : "", th ? { th } : ""] }, [bad ? "failed" : "ended", e.name, th || ""]);
+    } else if (e.event === "woken" || e.event === "reaped") { const s = S.open[e.name + e.session]; if (s) s.byStarter = true; }
+    else if (e.event === "killed") S.killed[e.name] = t;
     else if (e.event === "limited") { S.limited.push(t); S.limitedSess.add(e.session); S.limitedNow.add(e.session); }
   }
 }

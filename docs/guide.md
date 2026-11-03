@@ -11,7 +11,7 @@ All screenshots use a made-up Hive.
 Three things are worth knowing first.
 
 - **Agents run in a sandbox.** Inside it, around the Hive's folder, they work without asking. A step outside it needs an approval. It has [limits](#sandbox-limits): agents can read the Claude sign-in they run on and use the internet, so anything they can read they can send.
-- **It uses your Claude limits by itself.** Every agent is a Claude session, and agents can start other agents. At most 3 run at once to begin with. On a subscription, the Hive stops starting new agents at 95% of your weekly limit. With an API key it can't see your spending and won't stop, so set a limit in the Anthropic Console.
+- **It uses your Claude limits by itself.** Every agent is a Claude session, and agents can start other agents. There is no limit on how many run at once until you set **Agents at once** in Settings. On a subscription, the Hive stops starting new agents at 95% of your weekly limit. With an API key it can't see your spending and won't stop, so set a limit in the Anthropic Console.
 - **One Hive is one group of people who trust each other.** Anyone who can use a Hive has its full rights, including its Claude sign-in. Give each person or group their own.
 
 **Power** in Settings sets who approves a step outside the sandbox: you, a warden (an agent whose only job is judging these steps), or a warden that tells you afterwards. At every level, these stay your call: spending money, credentials, opening this machine to the network, anything sent off this machine with your accounts or keys (`git push`, `gh`, publishing, mail, posting), publishing private details, and deleting repos, commits or history.

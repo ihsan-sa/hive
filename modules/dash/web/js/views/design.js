@@ -2,9 +2,9 @@
 import { h, selecting } from "../core/dom.js";
 import { S, can, jget, post } from "../core/store.js";
 import { ago } from "../core/format.js";
-import { pageHeader, section, button, input, empty } from "../ui/kit.js";
+import { pageHeader, section, button, input, empty, meter, note } from "../ui/kit.js";
 
-const D = { v: null, text: "", err: "", busy: false };
+const D = { v: null, text: "", code: "", err: "", busy: false, full: false };
 const SAVE = "Save the full source of the design you just made into a new folder here, named after it, and tell me the path.";
 
 async function act(body, ctx) {
@@ -20,11 +20,81 @@ function redraw(ctx) { look(); ctx.update(); queueMicrotask(follow); }   // upda
 // morph leaves a focused field alone, so set it here as well
 function setText(v, focus) { D.text = v; const n = document.querySelector(".dtype input"); if (n) { n.value = v; if (focus) n.focus(); } }
 
-const linksPart = v => v.links && v.links.length ? section({ title: "Your designs", note: "only you can open them until you share them", key: "links" },
-  h("ul", { class: "list" }, v.links.map(l => h("li", { class: "lr", "data-key": l.url },
-    h("div", { class: "lr-in frow fsplit" }, h("a", { href: /^https:\/\//.test(l.url) ? l.url : "#", target: "_blank", rel: "noreferrer noopener" }, l.url), h("span", { class: "muted", style: "margin-left:auto" }, (l.by ? l.by + ": " + (l.brief || "") + " · " : "") + ago(l.at * 1e3))))))) : null;
+// One screen of the session, not its whole history: old banners and old answers read as if they were happening now.
+const SCREEN_LINES = 40;
+const tailOf = t => { const lines = (t || "").split("\n"); return lines.length > SCREEN_LINES ? lines.slice(-SCREEN_LINES).join("\n") : t || ""; };
+const working = t => /esc to interrupt/i.test((t || "").split("\n").slice(-8).join("\n"));
+const state = (tone, text, title) => h("span", { class: "sl", "data-tone": tone, title: title || null }, h("span", { class: "sd", "data-tone": tone, "data-shape": tone === "bad" ? "tri" : tone === "warn" ? "square" : "dot", "aria-hidden": "true" }), h("span", null, text));
+const GUIDE = "https://support.claude.com/en/articles/14604406-claude-design-admin-guide-for-team-and-enterprise-plans";
 
-const grantNote = v => "Lets agents read and change your claude.ai/design projects on this account." + (v.agents_design ? " Agents can already make new designs without this." : "") + " If it needs you to sign in, a link appears on the session's screen: open it, approve, and paste any code it gives you into the box. You can take it back with /design revoke.";
+const designCell = a => a.used_here ? state("good", "Yes, working here")
+  : a.design === "yes" ? state("info", "Yes", "This plan includes it. Not tried on this account yet.")
+  : a.design === "admin" ? state("warn", "Yes, if your admin allows it", "An admin of this organization can turn it off. Not tried on this account yet.")
+  : state("warn", "Can't tell", "The plan isn't known. This account may be signed out.");
+
+const designDate = d => new Date(d + "T12:00:00").toLocaleDateString(undefined, { month: "long", day: "numeric", year: "numeric" });
+
+function accountsPart(v, ctx) {
+  const session = v.running ? v.session_login : null, cc = v.can_connect !== false;
+  const row = a => {
+    const here = session === a.name, other = !!session && !here;
+    const why = other ? `The session is on ${session}. End it first.` : a.open ? null : `This account is ${a.closed_why}.`;
+    return h("tr", { "data-key": a.name },
+      h("td", { "data-label": "Account" }, h("strong", null, a.name), here ? h("span", { class: "meta dhere" }, "in session") : null),
+      h("td", { "data-label": "Plan" }, a.plan || h("span", { class: "muted" }, "Not known")),
+      h("td", { "data-label": "Claude Design" }, designCell(a)),
+      cc ? h("td", { "data-label": "Agents' access" }, a.connected ? state("good", "Approved") : h("span", { class: "muted" }, "Not approved")) : null,
+      h("td", { "data-label": "This week", class: "dweek" }, a.weekly == null ? h("span", { class: "muted" }, "No reading") : h("span", { class: "dmeter" }, meter({ value: a.weekly, stop: a.stop, label: `${a.name}, this week` }), h("span", { class: "meta" }, Math.round(a.weekly) + "%"))),
+      h("td", { "data-label": "", class: "dacts" }, h("span", { class: "frow" },
+        !a.open ? h("span", { class: "meta" }, a.closed_why[0].toUpperCase() + a.closed_why.slice(1)) : session ? null : button("Start session", () => act({ do: "start", login: a.name }, ctx), { kind: "primary", size: "s", disabled: D.busy }),
+        !cc || (!a.open && !here) ? null : a.connected
+          ? button("Take back", () => act({ do: "revoke", login: a.name }, ctx), { size: "s", kind: "quiet", disabled: D.busy || other || !!v.step, title: why || "Stops agents opening your Claude Design projects on this account" })
+          : button("Sign in & approve", () => act({ do: "grant", login: a.name }, ctx), { size: "s", disabled: D.busy || other || !!v.step, title: why || "Signs in to Claude Design if it needs to, then approves agents' access" }))));
+  };
+  return section({ title: "Your Claude accounts", key: "accounts", note: session ? `one session at a time: this one is on ${session}` : "start a session on any of them; it ends by itself after 6 hours" },
+    h("div", { class: "tbl-w" }, h("table", { class: "tbl dacct" },
+      h("thead", null, h("tr", null, h("th", null, "Account"), h("th", null, "Plan"), h("th", null, "Claude Design"), cc ? h("th", null, "Agents' access") : null, h("th", null, "This week"), h("th", null, h("span", { class: "vh" }, "Actions")))),
+      h("tbody", null, v.accounts.map(row)))),
+    h("p", { class: "field-h dfoot" }, "You can make new designs without approving anything. ",
+      cc ? `Approving lets agents open and change the projects you already have at claude.ai/design. It asks you to sign in only if it needs to, and goes away when standalone Claude Design closes on ${designDate(v.connect_until)}. ` : null,
+      h("a", { href: GUIDE, target: "_blank", rel: "noreferrer noopener" }, "Which plans include it")));
+}
+
+function stepPart(v, ctx) {
+  const st = v.step; if (!st) return null;
+  const on = st.login || "this account";
+  if (st.phase === "starting") return note({ key: "step", title: `Starting a session on ${on}…` });
+  if (st.phase === "asking") return note({ key: "step", title: `Asking Claude to approve on ${on}…` });
+  if (st.phase === "revoking") return note({ key: "step", title: `Taking back agents' access on ${on}…` });
+  if (st.phase === "done") return note({ key: "step", tone: "good", title: `Approved on ${on}. Agents can now open your Claude Design projects there.` });
+  if (st.phase === "revoked") return note({ key: "step", tone: "good", title: `Agents' access is taken back on ${on}.` });
+  if (st.phase === "failed") return note({ key: "step", tone: "bad", title: `That didn't finish on ${on}.` }, st.why);
+  const sendCode = () => { const text = D.code.trim(); if (!text) return; D.code = ""; const n = document.querySelector(".dcode input"); if (n) n.value = ""; act({ do: "send", text }, ctx); };
+  return note({ key: "step", tone: "warn", title: `Sign in to Claude Design on ${on}` },
+    h("p", null, /^https:\/\//.test(st.link || "") ? "Open the sign-in page and approve it. If it gives you a code, paste it here. This page carries on by itself once it has worked." : "The sign-in link appears on the session's screen below in a moment. Approve it there. If it gives you a code, paste it here."),
+    h("form", { class: "frow dcode", onsubmit: e => { e.preventDefault(); sendCode(); } },
+      /^https:\/\//.test(st.link || "") ? h("a", { class: "btn", "data-kind": "primary", href: st.link, target: "_blank", rel: "noreferrer noopener" }, "Open the sign-in page") : null,
+      h("div", { style: "flex:1;min-width:12rem" }, input({ "aria-label": "Sign-in code", placeholder: "Paste the code", autocomplete: "off", spellcheck: "false", value: D.code, oninput: (e, n) => { D.code = n.value; } })),
+      button("Send code", null, { type: "submit" })));
+}
+
+function sessionPart(v, ctx) {
+  const send = () => { const text = D.text; if (!text.trim()) return; setText(""); stuck = true; act({ do: "send", text }, ctx); };
+  const key = (label, k) => button(label, () => act({ do: "key", key: k }, ctx), { size: "s", kind: "quiet" });
+  return section({ title: v.session_login ? `Session on ${v.session_login}` : "Session", key: "session", actions: [working(v.screen) ? state("info", "Claude is working") : state("good", "Waiting for you"), button("End session", () => act({ do: "stop" }, ctx), { size: "s" })] },
+    h("pre", { class: "dscreen", tabindex: "0", "aria-label": "The session's screen" }, D.full ? v.screen : tailOf(v.screen)),
+    h("form", { class: "frow dtype", onsubmit: e => { e.preventDefault(); send(); } },
+      h("div", { style: "flex:1;min-width:14rem" }, input({ "aria-label": "Type to Claude", placeholder: "/design a landing page for…", autocomplete: "off", spellcheck: "false", value: D.text, oninput: (e, n) => { D.text = n.value; } })),
+      button("Send", null, { kind: "primary", type: "submit" })),
+    h("div", { class: "frow dkeys" }, h("span", { class: "meta" }, "If it asks something:"), key("Up", "up"), key("Down", "down"), key("Enter", "enter"), key("Esc", "esc"), key("Tab", "tab"), key("Interrupt", "stop"),
+      h("span", { class: "frow dright" }, button(D.full ? "Show less" : "Show whole session", () => { D.full = !D.full; stuck = true; redraw(ctx); }, { size: "s", kind: "quiet" }), button("Save it for the hive", () => setText(SAVE, true), { size: "s", title: `Fills in the message; Send sends it. Saved designs go under ${v.dir}, where agents can read them.` }))));
+}
+
+const linksPart = (v, ctx) => v.links && v.links.length ? section({ title: "Your designs", note: "only you can open them until you share them; export to PNG or PDF from a design's page", key: "links" },
+  h("ul", { class: "list" }, v.links.map(l => h("li", { class: "lr", "data-key": l.url },
+    h("div", { class: "lr-in frow fsplit" },
+      h("span", { class: "dname" }, h("a", { href: /^https:\/\//.test(l.url) ? l.url : "#", target: "_blank", rel: "noreferrer noopener" }, l.brief || "Untitled design"), h("span", { class: "meta" }, [l.by, l.login, ago(l.at * 1e3)].filter(Boolean).join(" · "))),
+      button("Remove", () => act({ do: "forget", url: l.url }, ctx), { size: "s", kind: "quiet", title: "Takes it off this list. The design stays on claude.ai." })))))) : null;
 
 export default {
   id: "design", label: "Design", about: "make designs with Claude Design", tab: () => !!S.app.app && can("logins"),
@@ -33,24 +103,12 @@ export default {
     if (!can("logins")) return h("div", { class: "page" }, empty("This page isn't open from here.", { kind: "page", title: "Design" }));
     const v = D.v;
     if (!v) return h("div", { class: "page" }, empty("Reading…", { kind: "loading" }));
-    const say = D.err ? h("p", { class: "fmsg", "data-tone": "bad", role: "status" }, D.err) : null;
-    const header = pageHeader({ title: "Design", lead: "Tell Claude what to design and get a link to it. This is a real Claude Code session on your account: what you type goes straight to it, and it uses that account's limits." });
-    if (!v.running) return h("div", { class: "page", "data-key": "design" }, header,
-      section({ title: "Start a session", key: "start", note: "it ends by itself after 6 hours" },
-        h("div", { class: "frow" }, v.logins.map(l => button(`Start on ${l.name}` + (l.weekly != null ? ` (${Math.round(l.weekly)}% of the week used)` : ""), () => act({ do: "start", login: l.name }, ctx), { kind: "primary", busy: D.busy, type: "button" })), v.logins.length ? null : h("p", { class: "field-h" }, "Every login is paused or past its weekly line right now.")), say),
-      v.can_connect !== false ? section({ title: "Give agents your Claude Design projects", key: "grant", note: grantNote(v) },
-        h("div", { class: "frow" }, v.logins.map(l => (v.connected || []).includes(l.name) ? h("span", { class: "field-h" }, `Connected on ${l.name}`) : button(`Give access on ${l.name}`, () => act({ do: "grant", login: l.name }, ctx), { size: "s", type: "button", disabled: D.busy })))) : null,
-      say, linksPart(v));
-    const send = () => { const text = D.text; if (!text.trim()) return; setText(""); stuck = true; act({ do: "send", text }, ctx); };
-    const key = (label, k) => button(label, () => act({ do: "key", key: k }, ctx), { size: "s", kind: "quiet", type: "button" });
-    return h("div", { class: "page", "data-key": "design" }, header,
-      h("pre", { class: "dscreen", tabindex: "0", "aria-label": "The session's screen" }, v.screen),
-      h("form", { class: "frow dtype", onsubmit: e => { e.preventDefault(); send(); } },
-        h("div", { style: "flex:1;min-width:14rem" }, input({ "aria-label": "Type to Claude", placeholder: "/design a landing page for…", autocomplete: "off", spellcheck: "false", value: D.text, oninput: (e, n) => { D.text = n.value; } })),
-        button("Send", null, { kind: "primary", type: "submit" })),
-      h("div", { class: "frow" }, key("Up", "up"), key("Down", "down"), key("Enter", "enter"), key("Esc", "esc"), key("Tab", "tab"), key("Interrupt", "stop"), v.can_connect === false ? null : (v.connected || []).includes(v.session_login) ? h("span", { class: "field-h" }, `Connected on ${v.session_login}`) : button("Give agents my Claude Design projects", () => { stuck = true; act({ do: "grant" }, ctx); }, { size: "s", type: "button", title: grantNote(v) }),
-        h("span", { style: "margin-left:auto" }, button("Save it for the hive", () => setText(SAVE, true), { size: "s", type: "button", title: "Fills in the message; Send sends it" }), " ", button("End session", () => act({ do: "stop" }, ctx), { size: "s", kind: "quiet", type: "button" }))),
-      h("p", { class: "field-h" }, "Use the keys to answer questions on its screen. Saved designs go under ", h("code", null, v.dir), ", where agents can read them."),
-      say, linksPart(v));
+    return h("div", { class: "page dpage", "data-key": "design" },
+      pageHeader({ title: "Design", lead: "Tell Claude what to design and get a link to it." }),
+      D.err ? h("p", { class: "fmsg", "data-tone": "bad", role: "status" }, D.err) : null,
+      stepPart(v, ctx),
+      v.running ? sessionPart(v, ctx) : null,
+      accountsPart(v, ctx),
+      linksPart(v, ctx));
   },
 };

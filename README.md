@@ -36,7 +36,7 @@ To read the scripts first: `https://github.com/ihsan-sa/hive` (branch `v2`), fil
 
 ## Read this first
 - **Agents run in a sandbox.** They work without asking permission for each step, inside a sandbox around the Hive's folder, on Linux. A step outside it needs an approval. Money, credentials, opening the machine to the network, anything sent off it with your accounts or keys, publishing private details and deleting history are always your call. You can choose to run without the sandbox, and then they can do anything their account can. Either way they can use the network and read the sign-in they run on, so anything they can read they can send. Use a virtual machine if that matters to you. [What the sandbox doesn't do](https://hive.ihsan.cc/guide/guide.html#sandbox-limits).
-- **It spends your usage.** Every agent is a Claude session, and agents can start agents. At most 3 run at once to start with. It stops starting agents at 95% of your weekly usage, but only on a subscription: with an API key it can't see what you've spent, so set a limit in the Anthropic Console.
+- **It spends your usage.** Every agent is a Claude session, and agents can start agents. There is no limit on how many run at once until you set one in Settings. It stops starting agents at 95% of your weekly usage, but only on a subscription: with an API key it can't see what you've spent, so set a limit in the Anthropic Console.
 - **One Hive, one group of people.** Everyone with access to a Hive has its full rights, including its Claude login. Give each person or group their own.
 
 ## Use it

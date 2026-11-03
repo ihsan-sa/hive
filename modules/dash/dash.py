@@ -98,6 +98,24 @@ def run_effort(pid):
     return v
 
 
+def bg_shells(pid):
+    """How many background shells a run is parked on. Their stdout is a task file (the starter's release_shells uses the same test), and what
+    they start inherits it, so only the topmost counts. The heavy queue can't see these, so without this a run waiting on one looks stuck."""
+    n, todo = 0, []
+    def kids(p):
+        try:
+            for t in Path(f"/proc/{p}/task").iterdir(): todo.extend((t / "children").read_text().split())
+        except OSError: pass
+    kids(pid)
+    while todo:
+        q = todo.pop()
+        try: shell = "/tasks/" in os.readlink(f"/proc/{q}/fd/1")
+        except OSError: shell = False
+        if shell: n += 1
+        else: kids(q)
+    return n
+
+
 def describe_tool(name, inp):
     """What a tool call is doing, in plain words where the call gives us any."""
     inp = inp or {}
@@ -423,7 +441,7 @@ def live():
             "name": r.get("name", f.stem), "pid": r.get("pid"), "alive": alive(r.get("pid")),
             "since": ts(r.get("at")), "thread": r.get("thread"), "from": r.get("from"), "post": r.get("post"),
             "last": a["last"], "doing": a["doing"], "said": a["said"], "out": r.get("out"), "effort": run_effort(r.get("pid")),
-            "jobs": jobs.get(r.get("name", f.stem)),
+            "jobs": jobs.get(r.get("name", f.stem)), "shells": bg_shells(r.get("pid")),
         })
     keep = {str(a["out"]) for a in agents}
     for k in [k for k in _activity if k not in keep]: del _activity[k]
@@ -2069,11 +2087,53 @@ class DesignRoom:
     # Claude Code's own words on the screen. Standalone Claude Design, and with it this sign-in and grant, closes by this date (its message, 2026-11-03).
     NEEDS_SIGNIN, SIGNED_IN, GRANTED, REVOKED = "run /design-login", "Design-system access authorized", "Design agent access granted", "Design agent access revoked"
     CONNECT_UNTIL = "2026-12-14"
+    # The sign-in page Claude Code gives, on Anthropic's hosts only, because anything can print a link on that screen. No sample of it has survived, so this is forgiving.
+    SIGNIN_LINK = re.compile(r"https://(?:[\w-]+\.)*(?:claude\.ai|claude\.com|anthropic\.com)/[^\s\"'<>]*")
+    STEP_KEEP_S = 120  # how long "approved" or "that failed" stays on the page
 
     def __init__(self):
         self.lock = threading.Lock()
         self.connecting = threading.Lock()
         self.who = None
+        self.step = None
+
+    def set_step(self, login, phase, why=""):
+        self.step = {"login": login, "phase": phase, "why": why, "at": time.time()}
+
+    @classmethod
+    def signin_link(cls, screen):
+        """The sign-in link the last /design-login put on the screen, or None. Claude Code can break a long link across lines, so a full line runs on into the next."""
+        at = max(screen.rfind("\u276f /design-login"), screen.rfind("> /design-login"))
+        if at < 0: at = screen.rfind("/design-login")
+        if at < 0: return None
+        lines, url = screen[at:].split("\n"), None
+        for i, line in enumerate(lines[1:], 1):
+            m = cls.SIGNIN_LINK.search(line)
+            if not m: continue
+            url = m.group(0)
+            for more in lines[i + 1:]:
+                if len(line.rstrip()) < 90 or not re.fullmatch(r"\s*[\w\-.~:/?#\[\]@!$&()*+,;=%]+\s*", more): break
+                url += more.strip(); line = more
+        return url
+
+    @staticmethod
+    def design_on(plan):
+        """Can this plan use Claude Design? Anthropic's admin guide, read 2026-11-03: Free, Pro, Max, Ultra, Team and Enterprise, and on the last two an admin can turn it off."""
+        word = (plan or "").split(" ")[0]
+        if word in ("Free", "Pro", "Max", "Ultra"): return "yes"
+        if word in ("Team", "Enterprise"): return "admin"
+        return "unknown"
+
+    def accounts(self, connected, links):
+        """Every login, including those it can't start on now, and why not. Never the path: this goes to the page."""
+        used = {l.get("login") for l in links} | set(connected)
+        open_now = {l["name"] for l in self.open_logins()}
+        out = []
+        for l in logins():
+            line = (l.get("stop") or {}).get("weekly") or (l.get("stop") or {}).get("global") or 100
+            out.append({"name": l["name"], "plan": l.get("plan"), "design": self.design_on(l.get("plan")), "used_here": l["name"] in used, "connected": l["name"] in connected,
+                        "weekly": l.get("weekly"), "stop": line, "open": l["name"] in open_now, "closed_why": "" if l["name"] in open_now else "paused" if l.get("paused") else "past its weekly line"})
+        return out
 
     def tmux(self, *args, stdin=None):
         return subprocess.run(["tmux", "-u", "-S", str(self.SOCK), "-f", str(self.CONF), *args], input=stdin, capture_output=True, text=True, errors="replace", timeout=10)
@@ -2096,7 +2156,8 @@ class DesignRoom:
         except (OSError, ValueError): pass
         new = [u for u in dict.fromkeys(self.LINK.findall(screen)) if u not in {x.get("url") for x in have}]
         if new:
-            have = [{"url": u, "at": int(time.time())} for u in reversed(new)] + have
+            who = self.session_login()
+            have = [{"url": u, "at": int(time.time()), **({"login": who} if who else {})} for u in reversed(new)] + have
             self.DIR.mkdir(exist_ok=True); path.write_text(json.dumps(have))
         return have
 
@@ -2104,8 +2165,12 @@ class DesignRoom:
         run, screen = self.running(), ""
         if run:
             screen = self.tmux("capture-pane", "-p", "-J", "-S", "-5000", "-t", "design").stdout.rstrip()[-200000:]
-        return {"running": run, "screen": screen, "links": self.links(screen), "logins": [{"name": l["name"], "weekly": l.get("weekly")} for l in self.open_logins()], "dir": str(self.DIR),
-                "connected": self.connected(screen), "session_login": self.session_login() if run else None, "can_connect": time.strftime("%Y-%m-%d") <= self.CONNECT_UNTIL, "agents_design": shutil.which("hive-design") is not None}
+        links, connected = self.links(screen), self.connected(screen)
+        step = self.step
+        if step and (not run or (step["phase"] in ("done", "revoked", "failed") and time.time() - step["at"] > self.STEP_KEEP_S)): step = self.step = None
+        if step and step["phase"] == "signin": step = {**step, "link": self.signin_link(screen)}
+        return {"running": run, "screen": screen, "links": [l for l in links if not l.get("gone")], "accounts": self.accounts(connected, links), "dir": str(self.DIR), "step": step,
+                "connected": connected, "session_login": self.session_login() if run else None, "can_connect": time.strftime("%Y-%m-%d") <= self.CONNECT_UNTIL, "connect_until": self.CONNECT_UNTIL, "agents_design": shutil.which("hive-design") is not None}
 
     def session_login(self):
         """The login the running session is on, from its unit's command line."""
@@ -2155,9 +2220,23 @@ class DesignRoom:
 
     def grant(self, name):
         """The person's button, and only theirs: one press types the commands for them in the page's session, with every answer on its screen. Never called by anything else."""
-        if not self.running(): self.start(name)
+        self.ready_on(name)
         threading.Thread(target=self.connect, daemon=True).start()
         return {"ok": True}
+
+    def revoke(self, name):
+        """Also the person's button and only theirs: takes agents' access back on this account."""
+        self.ready_on(name)
+        threading.Thread(target=self.take_back, daemon=True).start()
+        return {"ok": True}
+
+    def ready_on(self, name):
+        """A session on that login. Consent is per account, so never type it into a session on another one."""
+        if not self.running():
+            self.start(name)
+        elif name and name != self.session_login():
+            raise ValueError(f"the session is on {self.session_login()}: end it first, so this goes to {name}")
+        if not self.connecting.locked(): self.set_step(name or self.session_login(), "starting")
 
     def count(self, words):
         return self.tmux("capture-pane", "-p", "-J", "-S", "-5000", "-t", "design").stdout.count(words)
@@ -2174,22 +2253,61 @@ class DesignRoom:
     def connect(self, ask_s=120, signin_s=330):
         """Try the grant. If it says to sign in, start the sign-in, which the person answers on the screen, and try again once it has worked. A second press while this runs does nothing."""
         if not self.connecting.acquire(blocking=False): return
+        who = None
         try:
-            if not self.until(lambda: "\u276f" in self.tmux("capture-pane", "-p", "-t", "design").stdout, 40): return
+            who = self.session_login()
+            if not self.until(lambda: "\u276f" in self.tmux("capture-pane", "-p", "-t", "design").stdout, 40):
+                return self.set_step(who, "failed", "The session didn't get ready.")
+            self.set_step(who, "asking")
             asked, done = self.count(self.NEEDS_SIGNIN), self.count(self.GRANTED)
             self.send("/design consent")
-            if not self.until(lambda: self.count(self.NEEDS_SIGNIN) > asked or self.count(self.GRANTED) > done, ask_s) or self.count(self.GRANTED) > done: return
+            if not self.until(lambda: self.count(self.NEEDS_SIGNIN) > asked or self.count(self.GRANTED) > done, ask_s):
+                return self.set_step(who, "failed", "Claude didn't answer in time. The session's screen shows where it got to.")
+            if self.count(self.GRANTED) > done: return self.set_step(who, "done")
+            self.set_step(who, "signin")
             signed = self.count(self.SIGNED_IN)
             self.send("/design-login")
-            if self.until(lambda: self.count(self.SIGNED_IN) > signed, signin_s):
-                time.sleep(self.TICK); self.send("/design consent")
-        except (OSError, ValueError, subprocess.SubprocessError): pass  # the session ended under it: the page shows that, and the button is still there
+            if not self.until(lambda: self.count(self.SIGNED_IN) > signed, signin_s):
+                return self.set_step(who, "failed", "The sign-in wasn't finished in time.")
+            self.set_step(who, "asking")
+            time.sleep(self.TICK); asked = self.count(self.NEEDS_SIGNIN); self.send("/design consent")
+            if not self.until(lambda: self.count(self.NEEDS_SIGNIN) > asked or self.count(self.GRANTED) > done, ask_s) or self.count(self.GRANTED) <= done:
+                return self.set_step(who, "failed", "You signed in, but Claude still didn't grant it. The session's screen has its answer.")
+            self.set_step(who, "done")
+        except (OSError, ValueError, subprocess.SubprocessError): self.set_step(who, "failed", "The session ended before this finished.")
         finally: self.connecting.release()
+
+    def take_back(self, ask_s=120):
+        if not self.connecting.acquire(blocking=False): return
+        who = None
+        try:
+            who = self.session_login()
+            if not self.until(lambda: "\u276f" in self.tmux("capture-pane", "-p", "-t", "design").stdout, 40):
+                return self.set_step(who, "failed", "The session didn't get ready.")
+            self.set_step(who, "revoking")
+            gone = self.count(self.REVOKED)
+            self.send("/design revoke")
+            if self.until(lambda: self.count(self.REVOKED) > gone, ask_s): return self.set_step(who, "revoked")
+            self.set_step(who, "failed", "Claude didn't confirm it. The session's screen shows where it got to.")
+        except (OSError, ValueError, subprocess.SubprocessError): self.set_step(who, "failed", "The session ended before this finished.")
+        finally: self.connecting.release()
+
+    def forget(self, url):
+        """Takes a design off the page's list. The design itself stays on claude.ai. Kept as gone, so a link still on the screen doesn't come back."""
+        path = self.DIR / "links.json"
+        with open(STATE / "design-links.lock", "w") as lock:  # hive-design writes this list too
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            have = json.loads(path.read_text())
+            if url not in {l.get("url") for l in have}: raise ValueError("that design isn't on the list")
+            path.write_text(json.dumps([{**l, "gone": True} if l.get("url") == url else l for l in have]))
+        return {"ok": True}
 
     def act(self, d):
         what = d.get("do")
         if what == "start": return self.start(d.get("login"))
         if what == "grant": return self.grant(d.get("login"))
+        if what == "revoke": return self.revoke(d.get("login"))
+        if what == "forget": return self.forget(d.get("url"))
         if what == "send": return self.send(d.get("text"))
         if what == "key":
             if d.get("key") not in self.KEYS: raise ValueError("that key isn't on the list")
@@ -2197,7 +2315,7 @@ class DesignRoom:
             self.tmux("send-keys", "-t", "design", self.KEYS[d["key"]]); return {"ok": True}
         if what == "stop":
             subprocess.run(["systemctl", "--user", "stop", self.UNIT + ".service"], capture_output=True, timeout=30); return {"ok": True}
-        raise ValueError("start, send, key, grant or stop")
+        raise ValueError("start, send, key, grant, revoke, forget or stop")
 
 
 DESIGN = DesignRoom()
