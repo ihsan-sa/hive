@@ -7,11 +7,11 @@ function Head($t) { Write-Host ""; Write-Host "=== $t" }
 function Check($name, $ok) { if ($ok) { Write-Host "ok   $name" } else { Write-Host "FAIL $name"; $script:bad++ } }
 function B64($s) { [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($s)) }
 function InU($c) { $b = B64 $c; $ErrorActionPreference='Continue'; & wsl.exe -d Hive -u hive --cd ~ -- bash -lc "echo $b | base64 -d | bash -l 2>&1" }
-$raw = 'https://raw.githubusercontent.com/ihsan-sa/hive/candidate-v2'
+$raw = 'https://raw.githubusercontent.com/ihsan-sa/hive/v2'
 $real = irm "$raw/get.ps1"
 function Run-Candidate($site) {
   $c = $real -replace "\`$site = '[^']*'", "`$site = '$site'"
-  $c = $c.Replace("'/install.sh -o", "'/get.sh -o").Replace('HIVE_INSIDE=1 sh', 'HIVE_BRANCH=candidate-v2 HIVE_INSIDE=1 sh')
+  $c = $c.Replace("'/install.sh -o", "'/get.sh -o").Replace('HIVE_INSIDE=1 sh', 'HIVE_BRANCH=v2 HIVE_INSIDE=1 sh')
   $t = Get-Date
   $log = Join-Path $env:TEMP ("run" + (Get-Random) + ".txt")
   Start-Transcript -Path $log | Out-Null
