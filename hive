@@ -333,7 +333,7 @@ def cmd_web(a):
             if not port_free(web["port"]): break
             time.sleep(0.1)
     if a.setup and not recover: return
-    print(f"http://127.0.0.1:{port}/login#{web['secret']}")
+    print(f"http://localhost:{port}/login#{web['secret']}")
     if port_free(port): print(f"The app isn't running. Start it: systemctl --user start hive-dash  (or: python3 ~/modules/dash/dash.py serve)", file=sys.stderr)
     print(f"That address is the key to this hive, so keep it to yourself. On another machine: ssh -L {port}:127.0.0.1:{port} <this-machine>, then open it there.", file=sys.stderr)
 

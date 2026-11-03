@@ -724,6 +724,12 @@ def wake_home(c, n, run, sid, posts, to, room, limits):
     if own != where: return to if move_session(sid, own, where) else None
     return to if list(Path(own).glob(f"projects/*/{sid}.jsonl")) else None
 
+def fresh_name(st, prefix):
+    """A code nobody has used: a code with a past run would resume that agent's session, not start a new one (@new drew a5d1f, 2026-11-03)."""
+    while True:
+        n = prefix + secrets.token_hex(2)
+        if n not in st.get("pending", {}) and n not in st.get("resume", {}) and not last_run(n): return n
+
 def wake(c, st, n, posts, to, room):
     """Start n for these posts: fresh if it never ran, resumed if asleep or named by the person (or itself: its own waiter), else its heir takes them.
     Returns the name that started, or None if the posts went to an heir's queue."""
@@ -743,7 +749,7 @@ def wake(c, st, n, posts, to, room):
     if (heir := st.get("heirs", {}).get(n)):  # it has one already, maybe still reading the thread
         st["pending"].setdefault(heir, []).extend(posts)
         log(event="to_heir", name=n, heir=heir, posts=[p["id"] for p in posts]); return None
-    new = (n[0] if re.fullmatch(r"[a-z][0-9a-f]{4}", n) else "a") + secrets.token_hex(2)
+    new = fresh_name(st, n[0] if re.fullmatch(r"[a-z][0-9a-f]{4}", n) else "a")
     st.setdefault("heirs", {})[n] = new
     if n in st.get("chosen", {}): st["chosen"][new] = st["chosen"][n]
     log(event="heir", name=n, heir=new, why=why)
@@ -1030,9 +1036,9 @@ def main():
                     q["model"] = asked_model(p, c)
                     if src_free and tier_of(q["model"]) == "paid, real money": q["model"] = None  # a free agent's post doesn't spend money
                     fresh = n == "warden" or n in SPAWN
-                    if n == "warden": n = "w" + secrets.token_hex(2)  # each warden run gets its own code too
+                    if n == "warden": n = fresh_name(st, "w")  # each warden run gets its own code too
                     elif n in SPAWN:
-                        word, n = n, SPAWN[n] + secrets.token_hex(2)
+                        word, n = n, fresh_name(st, SPAWN[n])
                         q["spawn"] = word
                         # @new: the default (or --model); @claude: Claude only, never a provider or a fallback;
                         # @codex: Codex CLI (--model codex:... picks which); @free: an OpenRouter free model (fallback.free)

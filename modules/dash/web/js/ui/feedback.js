@@ -1,15 +1,18 @@
-// Feedback from anywhere in the app: a shortcut or More > Send feedback, then a screenshot, boxes drawn on it, a comment, Send.
-// The picture comes from the browser's own screen capture, so nothing is loaded from elsewhere, and the browser asks first. Where it can't
-// (a plain http address, most phones, or a No) the person can paste or choose an image, or send the comment alone.
-// It goes to this Hive's own board, in the thread "feedback", like any message. There's no route to the makers yet, so the dialog says so.
+// Feedback from anywhere in the app: a shortcut or More > Send feedback. The screen freezes and greys at once, the person drags boxes straight on it, writes a comment, Send.
+// The frozen picture is a copy of the page (snapshot.js), so there's no browser prompt and nothing is loaded from elsewhere. Where that fails, or the picture looks wrong,
+// the browser's own capture is one button away (it asks first); where that can't either (a plain http address, most phones, or a No) the person can paste or choose an image, or send the comment alone.
+// It goes to this Hive's own board, in the thread "feedback", like any message. There's no route to the makers yet, so the overlay says so.
 import { h } from "../core/dom.js";
 import { S, can, post, setupDone } from "../core/store.js";
 import { threadHref } from "../core/router.js";
 import { button } from "./kit.js";
+import { snapshot } from "./snapshot.js";
+import { uploadFile } from "../core/upload.js";
 
 const MAC = /Mac|iPhone|iPad/.test(navigator.platform || "");
 export const FEEDBACK_KEY = MAC ? "⌥⇧S" : "Alt+Shift+S";
 const BOX = "#e5484d";   // the same on any picture, whatever the theme
+const GREY = "rgb(0 0 0 / .38)";   // over the frozen screen; a box shows through it at full brightness. Never in the file that's sent.
 const FB = { open: false, comment: "" };
 export const canFeedback = () => !!S.app.app && can("post") && setupDone();
 addEventListener("keydown", e => {
@@ -36,20 +39,20 @@ async function grab() {
   } catch (e) { return { why: "The screenshot didn't work: " + e.message }; }
   finally { for (const t of stream.getTracks()) t.stop(); }
 }
-async function upload(f) {
-  const r = await fetch("/api/upload?name=" + encodeURIComponent(f.name), { method: "POST", headers: { "X-Hive-Dash": "1", "Content-Type": "application/octet-stream" }, body: f });
-  const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw Error(j.error || "the upload failed (" + r.status + ")");
-  return j.ref;
+function sentNote() {   // Sending ends the overlay: the person is back on the page they were on, with a small note in the corner
+  for (const old of document.querySelectorAll(".fb-sent")) old.remove();
+  const note = h("div", { class: "fb-sent", role: "status" }, h("span", null, "Sent. An agent in your Hive will read it."),
+    button("Open the conversation", null, { href: threadHref("feedback"), size: "s" }), button("Close", () => note.remove(), { size: "s", kind: "quiet" }));
+  note.querySelector("a").addEventListener("click", () => note.remove());
+  document.body.append(note); setTimeout(() => note.remove(), 10000);
 }
 
-/** Open the dialog: takes the picture first, so the dialog isn't in it. Must start from a key press or click: browsers require that. */
+/** Open the overlay: the grey comes up at once, then the frozen picture under it. The overlay itself is left out of the picture. */
 export async function openFeedback() {
   if (FB.open) return; FB.open = true;
-  let pic = null, boxes = [], drag = null, only = false, away = false;
-  const g = await grab(); pic = g.pic || null;
-  const view = h("canvas", { class: "fb-c", "aria-label": "The screenshot. Drag to draw a box." });
-  const stage = h("div", { class: "viewer-s fb-s" });
+  let pic = null, boxes = [], drag = null, only = false, away = false, frozen = false;
+  const view = h("canvas", { class: "fb-c", "aria-label": "The screen, frozen. Drag to draw a box." });
+  const stage = h("div", { class: "fb-s" });
   const say = h("p", { class: "meta", role: "alert", "data-tone": "bad", style: "color:var(--ci)", hidden: true });
   const text = h("textarea", { class: "input fb-t", "aria-label": "Your comment", placeholder: "What's wrong, or what would you change?" });
   text.value = FB.comment; text.addEventListener("input", () => { FB.comment = text.value; });
@@ -58,13 +61,14 @@ export async function openFeedback() {
   const onlyBox = h("input", { type: "checkbox" }); onlyBox.addEventListener("change", () => { only = onlyBox.checked; });
   const onlyL = h("label", { class: "meta" }, onlyBox, " Send only the boxed part");
   const send = button("Send", () => go(), { kind: "primary", cls: "fb-send" });
-  const again = button("Retake", () => take(), { size: "s", kind: "quiet" });
-  const dlg = h("dialog", { class: "viewer fb", "aria-label": "Send feedback" },
-    h("div", { class: "viewer-b" }, h("b", { class: "viewer-c" }, "Send feedback"), again, undo, onlyL, button("Close", () => dlg.close(), { size: "s" })),
-    stage,
-    h("div", { class: "fb-f" }, text, say, h("div", { class: "fb-r" },
-      h("span", { class: "meta" }, "This goes to your own Hive, in the conversation called feedback, where an agent reads it. It isn't sent to the makers of Hive."), send)),
-    pick);
+  const again = button("Browser capture", () => take(), { size: "s", kind: "quiet", title: "If the picture looks wrong: take it with the browser's own screen capture, which asks first" });
+  const hint = h("div", { class: "fb-hint", hidden: true }, "Drag on the screen to draw a box");
+  const card = h("div", { class: "fb-card" },
+    h("div", { class: "fb-r" }, h("b", { class: "fb-title" }, "Send feedback"), undo, button("Close", () => dlg.close(), { size: "s" })),
+    text, say, h("div", { class: "fb-r" }, onlyL),
+    h("div", { class: "fb-r" }, again, h("span", { class: "fb-gap" }), send),
+    h("p", { class: "meta" }, "This goes to your own Hive, in the conversation called feedback, where an agent reads it. It isn't sent to the makers of Hive."));
+  const dlg = h("dialog", { class: "fb", "aria-label": "Send feedback" }, stage, hint, card, pick);
 
   function drawBoxes(ctx, list, dx = 0, dy = 0) {
     ctx.strokeStyle = BOX; ctx.lineWidth = Math.max(2, pic.width / 500);
@@ -73,28 +77,37 @@ export async function openFeedback() {
   function paint() {
     if (!pic) return;
     view.width = pic.width; view.height = pic.height;
-    const c = view.getContext("2d"); c.drawImage(pic, 0, 0);
-    drawBoxes(c, drag ? [...boxes, drag] : boxes);
+    const c = view.getContext("2d"), list = drag ? [...boxes, drag] : boxes; c.drawImage(pic, 0, 0);
+    c.fillStyle = GREY; c.fillRect(0, 0, pic.width, pic.height);
+    for (const b of list) if (b.w && b.h) c.drawImage(pic, b.x, b.y, b.w, b.h, b.x, b.y, b.w, b.h);
+    drawBoxes(c, list);
+    dodge(list[list.length - 1]);
+  }
+  function dodge(b) {   // the card moves to the other corner rather than sit on what's being boxed
+    if (!b) return;
+    const k = view.getBoundingClientRect().width / pic.width, v = view.getBoundingClientRect(), r = card.getBoundingClientRect();
+    const hit = v.left + b.x * k < r.right && v.left + (b.x + b.w) * k > r.left && v.top + b.y * k < r.bottom && v.top + (b.y + b.h) * k > r.top;
+    if (hit) card.toggleAttribute("data-left");
   }
   function sync() {
-    undo.hidden = !boxes.length; onlyL.hidden = !boxes.length; again.hidden = !pic;
+    undo.hidden = !boxes.length; onlyL.hidden = !boxes.length; again.hidden = !pic; hint.hidden = !pic || !!boxes.length;
     if (!boxes.length) { only = false; onlyBox.checked = false; }
   }
   function show(why) {
-    if (pic) { stage.replaceChildren(view); paint(); }
+    if (pic) { stage.replaceChildren(view); paint(); view.classList.toggle("fb-full", frozen); }
     else stage.replaceChildren(h("div", { class: "fb-none" },
       h("p", null, (why ? why + " " : "") + "You can paste a picture here, choose one, or just write a comment."),
       h("div", { class: "fb-r" }, button("Take a screenshot", () => take(), { size: "s" }), button("Choose an image", () => pick.click(), { size: "s" }))));
     sync();
   }
-  async function take() {   // the dialog steps aside so it isn't in the picture
+  async function take() {   // the browser's own capture; the overlay steps aside so it isn't in the picture
     away = true; dlg.close();
     const r = await grab();
-    if (r.pic) { pic = r.pic; boxes = []; }
+    if (r.pic) { pic = r.pic; boxes = []; frozen = false; }
     dlg.showModal(); away = false; show(r.why); text.focus();
   }
   async function load(f) {
-    try { const b = await createImageBitmap(f); pic = toCanvas(b, b.width, b.height); boxes = []; b.close(); say.hidden = true; show(); }
+    try { const b = await createImageBitmap(f); pic = toCanvas(b, b.width, b.height); boxes = []; frozen = false; b.close(); say.hidden = true; show(); }
     catch (e) { say.textContent = "That file isn't a picture this browser can read."; say.hidden = false; }
   }
   pick.addEventListener("change", () => { if (pick.files[0]) load(pick.files[0]); pick.value = ""; });
@@ -128,17 +141,18 @@ export async function openFeedback() {
     say.hidden = true; send.disabled = true; send.textContent = "Sending…";
     const where = location.hash.slice(1).split(/[/?]/)[0] || "home";
     try {
-      const files = pic ? [await upload(await picture())] : [];
+      const files = pic ? [await uploadFile(await picture())] : [];
       await post("/api/post", { text: `Feedback on the app, from the ${where} page:\n\n${said || "(no comment, see the screenshot)"}`, thread: "feedback", files });
       FB.comment = "";
-      dlg.replaceChildren(h("div", { class: "fb-f" }, h("p", null, "Sent. An agent in your Hive will read it."),
-        h("div", { class: "fb-r" }, button("Open the conversation", null, { href: threadHref("feedback"), size: "s" }), button("Close", () => dlg.close(), { size: "s" }))));
-      dlg.querySelector("a").addEventListener("click", () => dlg.close());
+      dlg.close(); sentNote();
     } catch (e) {   // the comment and picture stay, so it can be sent again
       say.textContent = "It wasn't sent: " + e.message; say.hidden = false; send.disabled = false; send.textContent = "Send";
     }
   }
-  dlg.addEventListener("click", e => { if (e.target === dlg) dlg.close(); });
   dlg.addEventListener("close", () => { if (!away) { dlg.remove(); FB.open = false; } });
-  document.body.append(dlg); dlg.showModal(); show(g.why); text.focus();
+  document.body.append(dlg); dlg.showModal(); text.focus();
+  await new Promise(r => { requestAnimationFrame(() => setTimeout(r)); setTimeout(r, 100); });   // let the grey show first: copying a big page takes a moment (the timeout is for a tab with no frames)
+  let why = "";
+  try { pic = await snapshot(); frozen = true; } catch (e) { why = "The screen couldn't be frozen here."; console.warn("feedback: snapshot failed:", e); }
+  if (dlg.open) show(why);
 }

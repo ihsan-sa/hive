@@ -55,9 +55,9 @@ export function meter({ value, stop, tone, label }) {
 }
 
 /** Button. kind: default | primary | danger | quiet. size: s. tone colours quiet text (e.g. bad for Kill). */
-export function button(label, onClick, { kind, size, tone, title, disabled, type, cls, href } = {}) {
+export function button(label, onClick, { kind, size, tone, title, disabled, type, cls, href, busy } = {}) {
   if (href) return h("a", { class: ["btn", cls], href, "data-kind": kind || null, "data-size": size || null, "data-tone": tone || null, title: title || null }, label);
-  return h("button", { type: type || "button", class: ["btn", cls], "data-kind": kind || null, "data-size": size || null, "data-tone": tone || null, title: title || null, disabled: disabled || null, onclick: onClick }, label);
+  return h("button", { type: type || "button", class: ["btn", cls], "data-kind": kind || null, "data-size": size || null, "data-tone": tone || null, title: title || null, disabled: disabled || busy || null, "data-busy": busy ? "" : null, "aria-busy": busy ? "true" : null, onclick: onClick }, label);
 }
 
 /** Segmented choice. options: [[key, label]] */

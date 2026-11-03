@@ -4,13 +4,13 @@ import { S, SYS, can } from "../core/store.js";
 import { spendSince, fresh7, inUse, runway, weeklyStop, fileInfo, threadTitle, tierOf, agentStatus, sEnd } from "../core/model.js";
 import { now, ago, dur, clock, dayName, untilText, money, money$, toks, pct, plural, HOUR, DAY, MIN } from "../core/format.js";
 import { TIERS, tier, status } from "../core/status.js";
-import { threadHref, agentHref } from "../core/router.js";
+import { threadHref, agentHref, href } from "../core/router.js";
 import { metrics, cols } from "../templates.js";
 import { pageHeader, section, tally, stats, share, rank, empty, button } from "../ui/kit.js";
 import { gaugeRows } from "../ui/gauge.js";
 import { openRef } from "../ui/refs.js";
 import { chart, carry } from "../ui/chart.js";
-import { askPause, askLimits, askProviderLine } from "../actions.js";
+import { askPause, askLimits, askProviderLine, askStopLine } from "../actions.js";
 
 const LIST = "At API list prices: what this would cost if billed per token. A measure of work, not what the plan charges.";
 
@@ -42,13 +42,16 @@ export function loginRow(U, l, t) {
   for (const [w, u5, u7] of l.series || []) { const i = Math.floor((w * 1e3 - start) / step); if (i >= 0 && i < N) { if (u5 != null) a5[i] = u5 * 100; if (u7 != null) a7[i] = u7 * 100; } }
   carry(a5); carry(a7);
   const any = a => a.some(v => v != null), series = [a7, ...(!no5 && any(a5) ? [a5] : [])];
+  // Signing in lives in Settings; a lapsed account says so here too, because this is where it stops working.
+  const out = S.app.app && ((S.app.setup && S.app.setup.logins) || []).some(x => x.name === l.name && !x.signed_in);
   return {
     key: l.name, name: l.name, tag: l.plan ? `plan: ${l.plan}` : null, dim: l.paused,
-    state: l.paused ? { key: "paused", text: "paused: no new runs" } : inUse(l, U) ? { key: "inuse" } : { key: "atstop" },
+    state: out ? { key: "out" } : l.paused ? { key: "paused", text: "paused: no new runs" } : inUse(l, U) ? { key: "inuse" } : { key: "atstop" },
     note: `Stops at ${wStop}% weekly${st.weekly == null ? " (global)" : ""}` + (no5 ? ". No 5-hour limit on this plan." : hStop != null ? `, ${hStop}% 5-hour.` : ", no 5-hour stop."),
     gauges: [weekly, five].filter(Boolean),
     history: any(a7) || any(a5) ? chart({ series, kind: "step", start, step, max: 100, mark: wStop, compact: true, height: 44, area: false, names: ["weekly", "5-hour"], fmt: v => Math.round(v) + "%" }) : h("span", { class: "meta" }, "no history yet"),
-    actions: can("limits") ? [button(S.app.app ? "Usage line" : "Stop lines", () => askLimits(U, l), { size: "s" }), button(l.paused ? "Resume" : "Pause", () => askPause(U, l), { size: "s", kind: "quiet" })] : null,
+    actions: [out && can("logins") ? button("Sign in", null, { size: "s", href: href("settings") }) : null,
+      ...(can("limits") ? [button(S.app.app ? "Usage line" : "Stop lines", () => askLimits(U, l), { size: "s" }), button(l.paused ? "Resume" : "Pause", () => askPause(U, l), { size: "s", kind: "quiet" })] : [])],
   };
 }
 
@@ -138,7 +141,8 @@ export default {
     });
 
     const key = h("span", { class: "chart-key" }, h("span", null, h("i"), "weekly"), h("span", null, h("i", { "data-k": "1" }), "5-hour"), h("span", null, h("i", { "data-k": "mark" }), "stop"), h("span", null, "· last 48h"));
-    const limits = section({ title: app ? "Claude accounts" : "Logins", note: app ? "pause one to keep new agents off it, or change where it stops" : "pause one to keep the starter off it, or set where it stops" },
+    const limits = section({ title: app ? "Claude accounts" : "Logins", note: app ? `new agents stop at ${U.stop_pct}% of the week, unless an account has its own line` : "pause one to keep the starter off it, or set where it stops",
+        actions: app && can("config") ? button("Change", () => askStopLine(U), { size: "s", kind: "quiet" }) : null },
       gaugeRows({ head: ["Login", "Limits", key, ""], histKey: key, rows: us.map(l => loginRow(U, l, t)) }));
     const provs = Object.keys(P).filter(k => !k.startsWith("_"));
     const others = provs.length ? section({ title: "Other providers" }, gaugeRows({ rows: provs.map(k => providerRow(k, P[k], P._checked)) })) : null;

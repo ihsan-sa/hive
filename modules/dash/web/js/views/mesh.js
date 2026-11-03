@@ -11,7 +11,7 @@ import { canvas } from "../templates.js";
 import { button, list, section, seg, statusDot, stats, share, wardenMark } from "../ui/kit.js";
 import { agentRef, threadRef } from "../ui/refs.js";
 import { createGraph, keep } from "../ui/graph.js";
-import { openPanel } from "../ui/panel.js";
+import { closePanel, openPanel, panelOpen } from "../ui/panel.js";
 import { showTip, hideTip } from "../ui/tip.js";
 import { toolTone } from "../ui/feed.js";
 
@@ -123,13 +123,21 @@ const nodeTip = n => [n.kind === "thread" ? threadTitle(n.name) : n.id,
   n.kind === "thread" ? `thread · ${plural(n.posts, "post")} · last ${ago(n.last)}` : n.kind === "outside" ? `outside the agents · ${plural(n.posts, "post")}` : `${n.warden ? "warden · " : ""}${stateText(n)} · ${(n.homes || []).map(x => x[0]).join(", ") || n.thread || ""} · ${plural(n.posts, "post")}`];
 const edgeTip = e => [`${nm(e.b)} and ${nm(e.a)}`, e.kind === "thread" ? `${plural(e.n, "post")} in this thread` : plural(e.n, "mention") + (e.spawn ? `, ${e.spawnFrom} started the other` : "") + ` · last ${ago(e.last)}`];
 
+// A click on an agent brings up its page, with the map still beside it and the agent marked on it. The compact pane is for walking the map with the arrow keys or the deck, where a page would take the focus at every step, and for a TV, which has nothing to read a page with.
+const showAgent = id => { M.paged = id; G.select(id); hideTip(); openPanel("agent", id); M.update(); };
+// Its page closing takes the mark off the map, unless the click that closed it has just marked something else.
+addEventListener("panelclose", () => { if (!M.paged) return; const it = G.selected(); if (it && it.id === M.paged) G.clear(); M.paged = null; if (unsub) M.update(); });
 const openWho = n => { if (n.startsWith("#")) openPanel("thread", n.slice(1)); else if (isAgent(n)) openPanel("agent", n); else location.hash = threadHref("@" + n); };
 
 const G = createGraph({
   // nothing lands under the legend or the replay bar, whichever of them this page shows
   margins: W => { const low = [...(stage ? stage.querySelectorAll(".graph-legend,.graph-replay") : [])].filter(e => e.offsetParent).map(e => e.offsetTop), H = stage ? stage.clientHeight : 0; return { top: 12, side: W < 640 ? 14 : 28, bottom: low.length && H ? H - Math.min(...low) + 8 : 16 }; },
   onHover: (it, e) => { if (!it) hideTip(); else showTip(e.clientX, e.clientY, ...(it.id ? nodeTip(it) : edgeTip(it))); },
-  onSelect: it => {
+  onSelect: (it, e) => {
+    if (!M.tile && e && e.type.startsWith("pointer")) {
+      if (it && it.id && isAgent(it.id)) return showAgent(it.id);
+      if (panelOpen()) closePanel();   // a click anywhere else on the map is a click away from the page
+    }
     if (it && !it.id && it.kind === "thread") { openPanel("thread", nm(it.a.startsWith("#") ? it.a : it.b)); return; }
     M.update();
   },
@@ -188,8 +196,8 @@ grip.addEventListener("keydown", e => { if (e.key !== "ArrowLeft" && e.key !== "
 // ---- the side pane ----
 const inWindow = () => { const t0 = winStart(), t1 = curT(); return p => p.t >= t0 && p.t <= t1; };
 const stay = (e, f) => { e.preventDefault(); f(); };
-// a name here selects that agent in the graph, as the old pane did; passing href keeps refs.js from opening the panel
-const pick = id => h("span", { onclick: e => stay(e, () => { if (G.select(id)) M.update(); else openWho(id); }) }, agentRef(id, { copy: true, href: isAgent(id) ? agentHref(id) : threadHref("@" + id) }));
+// a name here opens that agent's page like a click on it (a thread or someone outside is selected in the graph); passing href keeps refs.js from opening the panel
+const pick = id => h("span", { onclick: e => stay(e, () => { if (isAgent(id) && !M.tile) showAgent(id); else if (G.select(id)) M.update(); else openWho(id); }) }, agentRef(id, { copy: true, href: isAgent(id) ? agentHref(id) : threadHref("@" + id) }));
 const threadChip = th => h("span", { onclick: e => stay(e, () => openPanel("thread", th)) }, threadRef(th));
 const postRow = (p, inThread) => ({ key: p.id, title: p.from, sub: p.men.length ? "→ " + p.men.join(", ") : null, meta: `${inThread ? "" : threadTitle(p.th) + " · "}${ago(p.t)}`, text: firstSentence(p.text),
   href: threadHref(p.th), onClick: e => stay(e, () => openPanel("thread", p.th)) });
@@ -261,7 +269,7 @@ function overviewPane() {
 }
 function sidePane() {
   const it = G.selected();
-  if (!it) return overviewPane();
+  if (!it || it.id === M.paged) return overviewPane();
   if (!it.id) return edgePane(it);
   return it.kind === "thread" ? threadPane(it) : agentPane(it);
 }
@@ -286,7 +294,7 @@ export { G as graph };   // for tests
 /** What a display tile says in its head. */
 export const meshNote = () => M.count;
 /** A display tile shows the last 2 hours: what is running now and who it just talked to. Not saved, so the Mesh tab keeps its own window. */
-export function meshForDisplay() { M.win = getPref("meshWin", 6 * HOUR); }   // a TV's own choice wins; 6 hours until it makes one, so running agents still show who they talked to
+export function meshForDisplay() { M.tile = true; M.win = getPref("meshWin", 6 * HOUR); }   // a TV's own choice wins; 6 hours until it makes one, so running agents still show who they talked to
 let unsub = null;
 // The deck: BROWSE walks the nodes the way the arrow keys do. Crossfader and left jog scrub the replay; far right is live.
 const walk = () => [...G.nodes.values()].filter(n => !n.anchor).sort((a, b) => (b.labelRank || 0) - (a.labelRank || 0) || (a.id < b.id ? -1 : 1));
@@ -311,7 +319,7 @@ export default {
     M.update = ctx.update;
     unsub = subscribe(w => { if (w.posts && w.posts.length && w.posts.length <= 20 && M.cut == null) { if (w.posts.some(p => !G.nodes.has(p.from))) build(); w.posts.forEach(emit); } });
   },
-  leave() { if (unsub) unsub(); unsub = null; stopPlay(); hideTip(); },
+  leave() { if (unsub) unsub(); unsub = null; M.tile = false; stopPlay(); hideTip(); },
   escape() { if (G.selected()) { G.clear(); M.update(); } },
   render(ctx) {
     M.update = ctx.update;

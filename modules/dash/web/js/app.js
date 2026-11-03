@@ -8,6 +8,7 @@ import views, { APP_NAV } from "./views/index.js";
 import { resume, setViews, watch } from "./deck/control.js";
 import { offer as offerDeckTour } from "./deck/tour.js";
 import { offerTour } from "./ui/tour.js";
+import { watchVersion } from "./ui/newversion.js";
 
 const byId = new Map(views.map(v => [v.id, v]));
 const top = document.getElementById("top"), main = document.getElementById("main");
@@ -27,6 +28,7 @@ function render(force) {
 function schedule(force) { if (raf) { raf.force ||= force; return; } raf = { force }; queueMicrotask(() => { const f = raf.force; raf = 0; render(f); }); }
 
 function route() {
+  if (parse().id === "plans") { location.replace("#knowledge/projects"); return; }   // the old Plans page lives in Knowledge now
   const r = parse(), next = (r.id && byId.get(r.id)) || home();
   if (next !== cur || r.arg !== arg) {
     scrolls[cur.id + (arg || "")] = scrollY;
@@ -46,6 +48,7 @@ addEventListener("hashchange", route);
 addEventListener("keydown", e => { if (e.key === "Escape" && cur.escape) cur.escape(ctx); });
 const markRoute = () => document.documentElement.toggleAttribute("data-dev", !S.app.app);   // the developer route keeps its dense log (components.css)
 markRoute();
+watchVersion();
 subscribe(() => { markRoute(); schedule(false); });
 start().then(() => {
   markRoute();

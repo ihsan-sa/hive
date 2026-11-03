@@ -298,28 +298,30 @@ const AGENT_WORDS = { working: "is working", quiet: "is here, quiet", stuck: "lo
 function line(key, text, act, opts = {}) {
   return h("div", { class: "cm-line", "data-key": opts.key || key, "data-tone": status(key).tone }, statusDot(key, { live: opts.live }), h("span", { class: "cm-line-x" }, text), act ? h("span", { class: "cm-line-a" }, act) : null);
 }
+/** An agent's name in a strip line: a link to it, without a second dot (the line has its own). */
+const who = n => agentRef(n, { dot: false });
 function lastMine(th) { const d = S.threads.get(th); if (!d) return null; for (let i = d.posts.length - 1; i >= 0; i--) if (d.posts[i].from === "person") return d.posts[i]; return null; }
 const notBuilt = () => h("span", { class: "nb", title: "Designed, not built yet: the server needs to do this" }, "not built yet");
 
 function strip(th) {
   const st = threadState(th, seen), out = [], run = (S.live ? S.live.agents : []).filter(a => a.thread === th), post = can("post") && app();
-  if (st.key === "asks") out.push(line("asks", [h("b", null, st.who), " is waiting for your answer: ", h("q", null, short(lastQuestion(st.post), 110))],
+  if (st.key === "asks") out.push(line("asks", [who(st.who), " is waiting for your answer: ", h("q", null, short(lastQuestion(st.post), 110))],
     post ? button("Answer", () => replyTo(st.post), { size: "s" }) : null, { key: "asks" }));
   if (st.key === "limited") {
     const room = hasRoom(), r = nextReset();
-    out.push(line("limited", [h("b", null, st.who), ` stopped at a usage limit ${ago(st.t)} and hasn't carried on. `, room ? "There's room again now, so it should carry on by itself soon." : r ? `It carries on by itself after ${stamp(r)}.` : "It carries on by itself once there's room."],
+    out.push(line("limited", [who(st.who), ` stopped at a usage limit ${ago(st.t)} and hasn't carried on. `, room ? "There's room again now, so it should carry on by itself soon." : r ? `It carries on by itself after ${stamp(r)}.` : "It carries on by itself once there's room."],
       room && post ? button("Carry on", () => say(th, "Please carry on where you stopped.", st.who), { size: "s" }) : null, { key: "limited" }));
   }
-  if (st.key === "failed") out.push(line("failed", [h("b", null, st.who), ` stopped with an error ${ago(st.t)}. A message wakes it to try again.`], null, { key: "failed" }));
+  if (st.key === "failed") out.push(line("failed", [who(st.who), ` stopped with an error ${ago(st.t)}. A message wakes it to try again.`], null, { key: "failed" }));
   for (const a of run) {
     if (st.key === "asks" && a.name === st.who) continue;
     const s = agentState(a);
-    out.push(line(s.key, [h("b", null, a.name), " ", AGENT_WORDS[s.key] || s.text, a.doing ? ": " + a.doing : "", h("span", { class: "meta" }, " · " + (s.key === "working" ? "active " + ago(a.last * 1e3) : s.text))],
+    out.push(line(s.key, [who(a.name), " ", AGENT_WORDS[s.key] || s.text, a.doing ? ": " + a.doing : "", h("span", { class: "meta" }, " · " + (s.key === "working" ? "active " + ago(a.last * 1e3) : s.text))],
       can("stop") ? button("Stop…", () => askStop(a.name), { size: "s", kind: "quiet", title: `Stop ${a.name}` }) : null, { key: "run:" + a.name, live: true }));
   }
   // A second helper when the agent you wrote to is busy (not built): see PART1.md.
   const mine = lastMine(th), wait = mine && now() - mine.t > HELPER_AFTER && now() - mine.t < 2 * HOUR ? mine.men.map(m => delivery(mine, m)).find(x => x && x.key === "waiting") : null;
-  if (wait && built("helper")) out.push(line("queue", [h("b", null, wait.who), ` is busy and hasn't seen your message for ${dur(now() - mine.t)}. If it still hasn't by ${clock(mine.t + 10 * MIN)}, a helper starts on it. `, notBuilt()],
+  if (wait && built("helper")) out.push(line("queue", [who(wait.who), ` is busy and hasn't seen your message for ${dur(now() - mine.t)}. If it still hasn't by ${clock(mine.t + 10 * MIN)}, a helper starts on it. `, notBuilt()],
     post ? [button("Start a helper now", async (e, b) => { b.disabled = true; try { await apiPost("/api/helper", { post: mine.id }); poll(); } catch (x) { b.disabled = false; b.title = x.message; } }, { size: "s" })] : null, { key: "helper" }));
   if (!out.length && th) {
     const r = recipient(th);

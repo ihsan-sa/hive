@@ -3,6 +3,7 @@
 // - a draft per thread (text, reply, chosen recipient, name), kept in localStorage, so it survives leaving and reloading;
 // - OUT, messages on their way: they show at once as "Sending…", settle when the board has them, and a failed one keeps
 //   its text and offers Retry, Edit and Discard. The board is append-only, so nothing here suggests unsending a posted one.
+import { uploadFile } from "../core/upload.js";
 import { h } from "../core/dom.js";
 import { S, jget, post, poll, loadApp } from "../core/store.js";
 import { go } from "../core/router.js";
@@ -92,16 +93,10 @@ function prune() {
 export function outFor(th) { prune(); return OUT.filter(x => x.th === (th || null)); }
 export const outSig = th => outFor(th).map(x => x.lid + x.state + (x.uploading ? "u" : "")).join();
 
-async function upload(f) {
-  const r = await fetch("/api/upload?name=" + encodeURIComponent(f.name), { method: "POST", headers: { "X-Hive-Dash": "1", "Content-Type": "application/octet-stream" }, body: f });
-  const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw Error(j.error || "the upload of " + f.name + " failed (" + r.status + ")");
-  return j.ref;
-}
 async function deliver(it) {
   it.state = "sending"; it.err = ""; refresh();
   try {
-    if (!it.refs) { it.uploading = it.files.length > 0; refresh(); const refs = []; for (const f of it.files) refs.push(await upload(f.file)); it.refs = refs; it.uploading = false; }
+    if (!it.refs) { it.uploading = it.files.length > 0; refresh(); const refs = []; for (const f of it.files) refs.push(await uploadFile(f.file)); it.refs = refs; it.uploading = false; }
     const res = await post("/api/post", { text: it.wire, thread: it.th || it.name || null, reply_to: it.reply ? it.reply.id : null, files: it.refs });
     it.id = res.id; it.state = "sent";
     if (!it.th && res.thread) { it.th = res.thread; go("comms", res.thread); loadApp(); }

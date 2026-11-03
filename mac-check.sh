@@ -30,7 +30,7 @@ answers() { a=$(address); curl -fsS -o /dev/null -m 5 "${a%%#*}"; }
 answers_soon() { t0_=$(date +%s); while [ $(( $(date +%s) - t0_ )) -lt 180 ]; do answers 2>/dev/null && { waited=$(( $(date +%s) - t0_ )); return 0; }; sleep 2; done; waited=never; return 1; }
 # For the report when the app doesn't answer. The port and states only: the address holds a login key.
 why_no_answer() {
-  a=$(address); p=${a#http://127.0.0.1:}; p=${p%%/*}
+  a=$(address); p=${a#http://*:}; p=${p%%/*}
   say "      answered after: ${waited:-?} s. Port: ${p:-no address}"
   say "      in the VM: $(as_hive 'systemctl --user is-active hive-dash; ss -ltn | grep -c ":'"${p:-8077}"' "; curl -s -o /dev/null -m 5 -w "%{http_code}" http://127.0.0.1:'"${p:-8077}"'/login' 2>&1 | tr -d '\r' | tr '\n' ' ' | cut -c1-120)"
   say "      on this Mac: $(curl -s -o /dev/null -m 5 -w '%{http_code}' "http://127.0.0.1:${p:-8077}/login" 2>&1 | cut -c1-40)"
