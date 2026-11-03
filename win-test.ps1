@@ -1,8 +1,9 @@
 # What the public Windows install does on a real Windows, in Windows PowerShell 5.1. Throwaway runner, no logins.
 $env:WSL_UTF8 = '1'
 function Step($t) { Write-Host ""; Write-Host "=== $t" }
-function InU { & wsl.exe -d Hive -u hive --cd ~ -- bash -lc $args[0] 2>&1 | ForEach-Object { "  $_" } | Out-Host; "  rc=$LASTEXITCODE" | Out-Host }
-function InR { & wsl.exe -d Hive -u root -- sh -c $args[0] 2>&1 | ForEach-Object { "  $_" } | Out-Host; "  rc=$LASTEXITCODE" | Out-Host }
+function B64($s) { [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($s)) }
+function InU { $b = B64 $args[0]; $ErrorActionPreference='Continue'; & wsl.exe -d Hive -u hive --cd ~ -- bash -lc "echo $b | base64 -d | bash -l 2>&1" | ForEach-Object { "  $_" } | Out-Host; "  rc=$LASTEXITCODE" | Out-Host }
+function InR { $b = B64 $args[0]; $ErrorActionPreference='Continue'; & wsl.exe -d Hive -u root -- sh -c "echo $b | base64 -d | sh 2>&1" | ForEach-Object { "  $_" } | Out-Host; "  rc=$LASTEXITCODE" | Out-Host }
 Step 'machine'
 $PSVersionTable.PSVersion.ToString()
 (Get-CimInstance Win32_OperatingSystem).Caption
@@ -53,16 +54,16 @@ Step 'sandbox parts, if this release has them'
 InU 'hive sandbox check 2>&1 | head -5; which bwrap'
 InR 'export DEBIAN_FRONTEND=noninteractive; apt-get -o DPkg::Lock::Timeout=120 -qq update >/dev/null 2>&1; apt-get -o DPkg::Lock::Timeout=120 -qq install -y bubblewrap >/dev/null 2>&1; echo apt rc=$?; which bwrap'
 InU 'bwrap --unshare-user --unshare-all --new-session --ro-bind / / /bin/true; echo bwrap rc=$?; bwrap --unshare-user --disable-userns --ro-bind / / /bin/true; echo nouserns rc=$?'
-Step 'rerun: updates, keeps the system'
+Step 'rerun with the candidate get.ps1: updates, keeps the system'
 InU 'date > ~/mark; mkdir -p ~/keepme'
 $t = Get-Date
-irm https://hive.ihsan.cc/install.ps1 | iex
+Get-Content -Raw .\get-candidate.ps1 | iex
 "took $([int]((Get-Date) - $t).TotalSeconds) s"
-InU 'cat ~/mark; systemctl --user is-active hive-starter'
+InU 'uptime; cat ~/mark; systemctl --user is-active hive-starter'
 Step 'remove'
 # Answer the typed prompt the way a person does, by overriding Read-Host for this one call.
 function global:Read-Host { 'delete' }
-irm https://hive.ihsan.cc/uninstall.ps1 | iex
+Get-Content -Raw .\remove-candidate.ps1 | iex
 Remove-Item function:global:Read-Host
 & wsl.exe -l -q 2>&1 | Out-Host
 "lnk: " + (Test-Path (Join-Path ([Environment]::GetFolderPath('Startup')) 'Hive.lnk'))
