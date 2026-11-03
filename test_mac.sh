@@ -133,8 +133,9 @@ hv ask "two words" '$(boom)' >/dev/null
 yes_if "hive: runs in the VM as the hive user" grep -q 'arg\[hive\]' "$T/mark.args"
 yes_if "hive: a spaced word stays one word" grep -qF 'arg[two words]' "$T/mark.args"
 yes_if "hive: nothing is expanded on the Mac" grep -qF 'arg[$(boom)]' "$T/mark.args"
-yes_if "hive: the VM's login shell gets no word to expand" sh -c "! grep -q 'sudo -i' '$H/.hive/bin/hive'"
-yes_if "mac-check: a check keeps its label" sh -c 'eval "$(grep -E "^(say|pass|bad|check)\(\)" "$0")"; R=/dev/null; fails=0; f() { n=5; }; check "my label" f | grep -q "ok    my label"' "$(dirname "$0")/mac-check.sh"
+yes_if "hive: the VM's login shell gets no word to expand" grep -qF 'sudo -u hive -H bash -lc' "$H/.hive/bin/hive"
+yes_if "mac-check: the report never gets the path of the home folder" sh -c "! grep -E 'say \\"[^\\"\\$]*\\\$(R|HOME)' '$D/mac-check.sh'"
+yes_if "mac-check: a check keeps its label" sh -c 'eval "$(grep -E "^(say|pass|bad|check)\(\)" "$0")"; R=/dev/null; fails=0; f() { n=5; }; check "my label" f | grep -q "ok    my label"' "$D/mac-check.sh"
 rm -f "$T/mark.running"; : > "$T/mark"; hv web >/dev/null 2>&1; yes_if "hive: starts a stopped VM first" mark_has ' start '
 : > "$T/mark"; hv open >/dev/null 2>&1; yes_if "hive open: the Mac's browser" mark_has 'open http://127.0.0.1:8077/login#sekret'
 

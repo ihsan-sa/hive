@@ -38,7 +38,7 @@ after_uninstall() {
   [ ! -e "$HOME/Library/LaunchAgents/hive.vm.plist" ] && pass "the login start is gone" || bad "the login start is still there"
   if grep -qF '.hive/bin' "$HOME/.zprofile" "$HOME/.bash_profile" "$HOME/.profile" 2>/dev/null; then bad "a PATH line is still there"; else pass "PATH lines are gone"; fi
   pgrep -f 'hive/lima' >/dev/null && bad "VM programs are still running" || pass "no VM programs running"
-  say "done, $fails failed. Please send back: $R"
+  say "done, $fails failed."; echo "Please send back: $R"
 }
 
 main() {
@@ -112,7 +112,8 @@ main() {
 
   say; say "done, $fails failed."
   yes_no "Anything confusing or broken that this didn't catch? Answer n if something was, and type it." "nothing else to report"
-  say; say "To test uninstall: curl -fsSL $SITE/uninstall-mac.sh | sh"
+  un="curl -fsSL $SITE/uninstall-mac.sh | sh"; [ -z "$LINE" ] || un="sh $(dirname "$LINE")/remove-mac.sh"
+  say; say "To test uninstall: $un"
   say "Then: sh mac-check.sh --after-uninstall"
   echo; echo "Please send back this file: $R"
 }
