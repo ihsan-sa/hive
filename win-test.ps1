@@ -97,7 +97,8 @@ $w = & cmd.exe /c 'where hive' 2>&1
 $w | Out-Host
 Check 'old hive not found first' ($w -notmatch 'Programs\\hive')
 Check 'hive is the new one' ("$($w | Select-Object -First 1)" -match 'Hive\\bin\\hive.cmd')
-$a = & cmd.exe /c 'hive web' 2>$null | Select-Object -First 1
+$ErrorActionPreference = 'Continue'
+$a = @(& cmd.exe /c 'hive web 2>nul')[0]
 "address shape: " + ($a -replace '#.*', '#...')
 Check 'hive web says localhost' ("$a" -match '^http://localhost:\d+/login#')
 
