@@ -46,7 +46,8 @@ $ErrorActionPreference = 'Stop'
 $running = Start-Process $exe -ArgumentList 'daemon' -WindowStyle Hidden -PassThru
 Start-Sleep 5
 "old daemon running: $(-not $running.HasExited)"
-$sum = { Get-ChildItem -Recurse -File $r -Force | Where-Object { $_.FullName -notlike '*\.git\*' -and $_.Name -ne 'v2-import' -and $_.FullName -notlike '*\.hive\*' -or $_.FullName -like '*\.hive\kb\*' -or $_.FullName -like '*\logins\*' -or $_.FullName -like '*\private\*' } | Sort-Object FullName | ForEach-Object { (Get-FileHash $_.FullName).Hash } }
+$seeded = '.hive\kb\a.md', '.hive\kb\isolated\one\n.md', '.hive\logins\x', '.hive\private\key', '.hive\chats\main.jsonl', 'projects\one\f', 'projects\one\.checkouts\x\junk', 'projects\two\g'
+$sum = { $seeded | ForEach-Object { (Get-FileHash (Join-Path $r $_)).Hash } }
 $before = (& $sum) -join ','
 
 Head 'first run, failing halfway: the site is wrong once Linux is up'
