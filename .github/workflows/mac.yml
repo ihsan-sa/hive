@@ -1,0 +1,34 @@
+name: macos
+on: workflow_dispatch
+permissions: {contents: read}
+jobs:
+  mac:
+    strategy:
+      fail-fast: false
+      matrix: {os: [macos-15, macos-15-intel]}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 8
+    steps:
+    - uses: actions/checkout@v4
+    - name: Where this runs
+      run: sw_vers; uname -m; sysctl -n hw.optional.arm64 || true; sysctl -n hw.memsize hw.ncpu; df -k "$HOME" | tail -1; bash --version | head -1
+    - name: The stub test, on BSD tools
+      run: bash test_mac.sh
+    - name: The login item is valid for plutil
+      run: |
+        sed '/^main "\$@"$/d' get-mac.sh > funcs.sh
+        ( set +e; . ./funcs.sh; D="$HOME/.hive"; agent_plist > hive.plist ); plutil -lint hive.plist
+    - name: The real install line, real tools, as far as it gets here
+      continue-on-error: true
+      run: HIVE_MAC_TEST=1 timeout 240 sh get-mac.sh 2>&1 | tail -n 40 || true
+    - name: Lima as downloaded
+      run: |
+        L="$HOME/.hive/lima-dist/bin/limactl"; "$L" --version; file "$L"
+        codesign -d --entitlements - "$L" 2>&1 | tail -n 15
+        sh get-mac.sh --print-yaml > vm.yaml; "$L" validate vm.yaml
+        LIMA_HOME="$HOME/.hive/lima" "$L" list || true
+    - name: What the line left, and Lima's log
+      if: always()
+      run: |
+        ls -la "$HOME/.hive" "$HOME/.hive/lima" 2>/dev/null || true; tail -n 30 "$HOME/.hive/lima/hive/ha.stderr.log" 2>/dev/null || true
+        cat "$HOME/.zprofile" 2>/dev/null || true

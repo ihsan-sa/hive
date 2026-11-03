@@ -1,0 +1,25 @@
+name: linux-vm
+on: workflow_dispatch
+permissions: {contents: read}
+jobs:
+  vm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+    - uses: actions/checkout@v4
+    - name: Give this user KVM
+      run: |
+        echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm.rules
+        sudo udevadm control --reload-rules; sudo udevadm trigger --name-match=kvm; ls -l /dev/kvm
+    - name: Install QEMU and Lima
+      run: |
+        sudo apt-get update -qq; sudo apt-get install -y -qq qemu-system-x86 qemu-utils
+        curl -fsSL -o lima.tgz https://github.com/lima-vm/lima/releases/download/v2.2.1/lima-2.2.1-Linux-x86_64.tar.gz
+        echo 'b391ac7fcac2b2a5a1628107756463188ded4d18d3104a40a66a8bb6fec01bcb  lima.tgz' | sha256sum -c
+        sudo tar -xzf lima.tgz -C /usr/local; rm lima.tgz; limactl --version
+    - name: Real VM test
+      env: {HIVE_SITE: "https://hive.ihsan.cc"}
+      run: bash test_mac_vm.sh
+    - name: Lima's log
+      if: failure()
+      run: tail -n 60 ~/.hive-test-lima/hive/ha.stderr.log || true
