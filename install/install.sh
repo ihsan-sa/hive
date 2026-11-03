@@ -2,7 +2,8 @@
 # Install the Hive on Linux or macOS. One line:
 #   curl -fsSL https://hive.ihsan.cc/install.sh | sh
 # Running it again reinstalls. HIVE_VERSION=v0.1.2 installs that release instead
-# of the latest. The binary is static; no runtime is needed.
+# of v0.1.154, the last release of this line: the repo's latest is now Hive 2,
+# which this script can't install. The binary is static; no runtime is needed.
 #
 # As root on Linux, HIVE_USER=<name> installs it for that user, run by a
 # system service (save this file and run it, `sudo HIVE_USER=hive sh install.sh`):
@@ -11,7 +12,7 @@ set -eu
 
 REPO="${HIVE_REPO:-ihsan-sa/hive}"
 CMD="${HIVE_CMD:-hive}"
-VERSION="${HIVE_VERSION:-latest}"
+VERSION="${HIVE_VERSION:-v0.1.154}"
 DIR="${HIVE_BIN_DIR:-$HOME/.local/bin}"
 
 # Names are matched whole, as fixed strings: a/x.y is not a/x-y.
