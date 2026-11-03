@@ -68,9 +68,26 @@ mountFsTab=false
 enabled=false
 appendWindowsPath=false
 CONF
+# wsl.conf leaves a few other ways to the Windows side open to ordinary users: the VM socket, the GPU device, the desktop's sockets, and running .exe files. Root still has them: WSL can't take those from root.
+cat > /etc/udev/rules.d/99-hive.rules <<'CONF'
+KERNEL=="vsock", MODE="0600"
+KERNEL=="dxg", MODE="0600"
+CONF
+cat > /etc/systemd/system/hive-no-windows.service <<'CONF'
+[Unit]
+Description=Keep the users of this system away from Windows
+After=systemd-udev-trigger.service
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh -c 'chmod 600 /dev/vsock /dev/dxg; chmod 700 /run/WSL /mnt/wslg /mnt/wsl; umount -l /tmp/.X11-unix; echo 0 > /proc/sys/fs/binfmt_misc/WSLInterop; true'
+[Install]
+WantedBy=multi-user.target
+CONF
+ln -sf /etc/systemd/system/hive-no-windows.service /etc/systemd/system/multi-user.target.wants/hive-no-windows.service
 '@
   # A rerun that finds this already in place leaves the system up, so agents at work aren't killed.
-  $set = (Invoke-InHive "grep -qx 'enabled=false' /etc/wsl.conf && grep -q '^\[interop\]' /etc/wsl.conf && test -d /run/systemd/system") -eq 0
+  $set = (Invoke-InHive "grep -qx 'enabled=false' /etc/wsl.conf && grep -q '^\[interop\]' /etc/wsl.conf && test -e /etc/systemd/system/hive-no-windows.service && test -d /run/systemd/system") -eq 0
   if (-not $set) {
     if ((Invoke-InHive $conf) -ne 0) { Write-Host "Couldn't configure the Hive system."; return }
     & wsl.exe --terminate $distro | Out-Null
