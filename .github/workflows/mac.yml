@@ -15,13 +15,16 @@ jobs:
     - name: The stub test, on BSD tools
       run: bash test_mac.sh
     - name: The login item is valid for plutil
+      if: always()
       run: |
         sed '/^main "\$@"$/d' get-mac.sh > funcs.sh
         ( set +e; . ./funcs.sh; D="$HOME/.hive"; agent_plist > hive.plist ); plutil -lint hive.plist
     - name: The real install line, real tools, as far as it gets here
+      if: always()
       continue-on-error: true
       run: HIVE_MAC_TEST=1 timeout 240 sh get-mac.sh 2>&1 | tail -n 40 || true
     - name: Lima as downloaded
+      if: always()
       run: |
         L="$HOME/.hive/lima-dist/bin/limactl"; "$L" --version; file "$L"
         codesign -d --entitlements - "$L" 2>&1 | tail -n 15

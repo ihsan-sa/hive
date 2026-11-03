@@ -138,15 +138,17 @@ rm -f "$T/mark.running"; : > "$T/mark"; hv web >/dev/null 2>&1; yes_if "hive: st
 
 # Uninstall. It reads the word from a terminal, so give it one, in each system's way.
 if script -qc true /dev/null >/dev/null 2>&1; then pty() { script -qec "$1" /dev/null; }; else pty() { script -q /dev/null sh -c "$1"; }; fi
-rm_it() { printf '%s\n' "$1" | env TLOG="$T/mark" HOME="$H" PATH="$B:$PATH" bash -c "$(declare -f pty); pty 'sh $D/remove-mac.sh'" 2>&1; }
+# The word comes after a pause and the pipe stays open: a word typed before the terminal is ready can be lost, and BSD script passes the end of the pipe on as an end of input.
+rm_it() { { sleep 1; printf '%s\n' "$1"; sleep 1; } | env TLOG="$T/mark" HOME="$H" PATH="$B:$PATH" bash -c "$(declare -f pty); pty 'sh $D/remove-mac.sh'" 2>&1; }
 
 fresh; out=$(env TLOG="$T/mark" HOME="$H" PATH="$B:$PATH" sh "$D/remove-mac.sh" 2>&1); rc=$?
 if [ "$rc" != 0 ] && grep -q 'nothing changed' <<<"$out"; then ok "uninstall with no Hive here: nothing changed"; else bad "uninstall with no Hive"; echo "$out"; fi
 out=$(env TLOG="$T/mark" HOME="$H" PATH="$B:$PATH" FAKE_UNAME=Linux sh "$D/remove-mac.sh" 2>&1); [ $? != 0 ] && grep -q 'uninstall.sh' <<<"$out" && ok "uninstall on Linux: points to the Linux line" || bad "uninstall on Linux"
 
 fresh; printf 'mine\n' > "$H/.zprofile"; run env >/dev/null 2>&1; mkdir -p "$H/.lima/own" "$H/Documents"; echo keep > "$H/Documents/f"; : > "$T/mark"
-if out=$(rm_it no); [ -d "$H/.hive" ] && mark_lacks ' delete '; then ok "uninstall: any other word changes nothing"; else bad "uninstall: other word"; echo "$out"; fi
+if out=$(rm_it no); [ -d "$H/.hive" ] && mark_lacks ' delete ' && grep -q 'nothing changed' <<<"$out"; then ok "uninstall: any other word changes nothing"; else bad "uninstall: other word"; echo "$out"; fi
 out=$(rm_it delete); rc=$?
+grep -q 'gone from this Mac' <<<"$out" || { bad "uninstall: says it's done"; echo "$out"; }
 yes_if "uninstall: deletes the VM" mark_has "limactl LIMA_HOME=$H/.hive/lima delete --force hive"
 yes_if "uninstall: stops the login start" mark_has 'launchctl bootout gui/501/hive.vm'
 yes_if "uninstall: login start gone" test ! -e "$H/Library/LaunchAgents/hive.vm.plist"
