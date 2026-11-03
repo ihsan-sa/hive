@@ -4,7 +4,10 @@
 Reads `share` ({"failures": bool, "usage": bool}) from settings.json. Both false
 (or no settings.json) means nothing is read, queued or sent. Every report that
 leaves is first written byte-for-byte to reports/sent/, and `hive-report show`
-prints it. Commands: status | send [--dry-run] | show [N] | question | bundle [--yes] | issue TITLE [--submit] <body on stdin>
+prints it. Commands: status | send [--dry-run] | show [N] | question | bundle [--yes] | issue TITLE [--submit] <body on stdin> | feedback <JSON on stdin>
+
+`feedback` is apart from all of that: it runs only when a person presses Send in the app's feedback dialog, which
+says what goes and to whom, so it doesn't depend on `share`. A copy lands in reports/sent/ first, like every report.
 """
 import json, os, re, sys, time, uuid, urllib.request, urllib.error, platform, getpass, socket
 
@@ -218,6 +221,40 @@ def bundle_url():
     d = url()
     return u or (d.rsplit("/", 1)[0] + "/bundle" if d.endswith("/report") else "")
 
+def feedback_url():
+    u = share_cfg().get("share_feedback_url") or os.environ.get("HIVE_SHARE_FEEDBACK_URL")
+    d = url()
+    return u or (d.rsplit("/", 1)[0] + "/feedback" if d.endswith("/report") else "")
+
+def installed_version():
+    """The release update.py recorded, which is what the app shows; the VERSION file for a Hive without one."""
+    try: v = json.load(open(os.path.join(home(), ".hive", "update.json"))).get("tag")
+    except (OSError, ValueError, AttributeError): v = None
+    return re.sub(r"[^A-Za-z0-9._+-]+", "-", v)[:32] if v else version()
+
+FEEDBACK_REFUSED = {413: "it's too large", 429: "this Hive has sent its limit of feedback for today", 507: "the makers' inbox is full for today"}
+
+def feedback(raw):
+    """The app's dialog pressed Send. Comment scrubbed here; the picture is what the person saw and framed in the dialog."""
+    try: d = json.loads(raw); text, page, image = d.get("text") or "", d.get("page") or "app", d.get("image")
+    except (ValueError, AttributeError): raise SystemExit("not sent: that wasn't a feedback report")
+    u = feedback_url()
+    if not u: raise SystemExit("not sent: this Hive has no feedback address")
+    st = installed_state()
+    r = {"install": st["install"], "version": installed_version(), "type": "feedback",
+         "page": re.sub(r"[^A-Za-z0-9_-]+", "-", str(page))[:32] or "app", "text": scrub(str(text))[:8000]}
+    if image: r["image"] = image
+    body = json.dumps(r, ensure_ascii=False).encode()
+    sent = os.path.join(rdir(), "sent"); os.makedirs(sent, exist_ok=True)
+    with open(os.path.join(sent, time.strftime("%y%m%d-%H%M%S") + "-feedback.json"), "wb") as f: f.write(body)
+    req = urllib.request.Request(u, body, {"Content-Type": "application/json", "User-Agent": "hive-report/1"})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp: return "sent (%d)" % resp.status
+    except urllib.error.HTTPError as e:
+        raise SystemExit("not sent: " + FEEDBACK_REFUSED.get(e.code, "the makers' server refused it (%d)" % e.code))
+    except Exception:
+        raise SystemExit("not sent: couldn't reach the makers' server. Is this machine online?")
+
 def bundle(yes=False):
     """Scrubbed copy of the log tail and board tail (chats included). Needs share.everything and, to send, --yes."""
     c = share_cfg()
@@ -259,6 +296,7 @@ def main(a):
     if cmd == "question": print(question())
     elif cmd == "send": print(send("--dry-run" in a))
     elif cmd == "bundle": print(bundle("--yes" in a))
+    elif cmd == "feedback": print(feedback(sys.stdin.read()))
     elif cmd == "issue": print(issue(a[1] if len(a) > 1 else "", sys.stdin.read() if not sys.stdin.isatty() else "", "--submit" in a))
     elif cmd == "show":
         fs = sent_files(); n = int(a[1]) if len(a) > 1 else 1

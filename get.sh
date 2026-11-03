@@ -337,7 +337,7 @@ this_account() {
   cat <<WARN
 
 The Hive will run in your own account, as you, with its files in $H.
-Agents work there without asking permission for each step, inside a sandbox around that folder. From inside, your other files, ~/.ssh and your other logins aren't there to read.
+Agents run in a sandbox around that folder, and work there without asking. From inside, your other files, ~/.ssh and your other logins aren't there to read.
 Three things stay open to them: that folder, the sign-in of the account they run on, and the internet, so anything they can read they can send.
 To do something outside the sandbox they ask. The app asks you how much of that the Hive may settle by itself; an approved step runs as you.
 WARN
@@ -423,7 +423,7 @@ It makes a separate Linux system with the Windows drives switched off. To instal
   elif command -v sudo >/dev/null 2>&1; then ROOT="sudo"; echo "The Hive gets its own Linux user, which takes sudo once."
   else
     die "this needs root to make a user called $U, and there's no sudo here.
-Without root, in a folder of your own account (agents then work in a sandbox around that folder, if this machine allows it; the app says): curl -fsSL https://hive.ihsan.cc/install.sh | sh -s -- --this-account
+Without root, in a folder of your own account (agents then run in a sandbox around that folder, if this machine allows it; the app says): curl -fsSL https://hive.ihsan.cc/install.sh | sh -s -- --this-account
 Or in a spare account: git clone -b $BRANCH $REPO ~/core, install Claude Code, and run ~/core/install.sh"
   fi
 

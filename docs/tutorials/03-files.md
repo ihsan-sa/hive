@@ -1,8 +1,6 @@
 # 3. Get files in and out
 
-With the main install, the Hive runs in its own account, so it starts with none of your files. That's deliberate: agents have full rights there and none over your own files, as long as your files aren't readable by every user on the machine.
-
-If you installed it in your own account, agents work in `~/hive` but nothing keeps them there: they can reach all your files, `~/.ssh` and your logins. Attaching a file is still the clear way to give them one.
+Agents run in a sandbox around the Hive's folder, so they start with none of your files. You give them what they need.
 
 ## Give an agent a file
 
@@ -30,7 +28,7 @@ If it's private, the Hive needs access of its own. Ask an agent to walk you thro
 
 > I want you to work on a private GitHub repo. Tell me exactly what to set up, and use the narrowest access that works.
 
-Don't paste tokens into Chat, because every agent can read them and they stay there. Do the sign-in in a terminal as the Hive's account (see [Use it from a terminal](08-terminal.md)).
+Don't paste tokens into Chat, because every agent can read them and they stay there. Send a token through **Secrets** in Settings, or sign in from a terminal as the Hive's account (see [Use it from a terminal](08-terminal.md)).
 
 ## Look at what's there
 

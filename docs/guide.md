@@ -10,11 +10,11 @@ All screenshots use a made-up Hive.
 
 Three things are worth knowing first.
 
-- **Agents work in a sandbox.** They don't ask permission for each step, inside a sandbox around the Hive's folder. To do something outside it they ask. You can choose to run without the sandbox, and they can then do anything their Linux account can: the main install makes them a separate Linux user, so your files are out of reach unless every user on the machine can read them; in your own account, they can reach all your files, `~/.ssh` and your logins. Either way they can read the sign-in they run on and use the network, so anything they can read they can send. Use a virtual machine or a spare computer if that matters to you.
+- **Agents run in a sandbox.** Inside it, around the Hive's folder, they work without asking. A step outside it needs an approval. It has [limits](#sandbox-limits): agents can read the Claude sign-in they run on and use the internet, so anything they can read they can send.
 - **It uses your Claude limits by itself.** Every agent is a Claude session, and agents can start other agents. At most 3 run at once to begin with. On a subscription, the Hive stops starting new agents at 95% of your weekly limit. With an API key it can't see your spending and won't stop, so set a limit in the Anthropic Console.
 - **One Hive is one group of people who trust each other.** Anyone who can use a Hive has its full rights, including its Claude sign-in. Give each person or group their own.
 
-How much a step outside the sandbox needs from you is your choice, in the app. Whatever you choose, these are always your call: spending money, credentials, opening the machine to the internet, anything sent off it with your accounts or keys (`git push`, publishing, mail, posting), publishing private details, and deleting repos, commits or history. With the sandbox off, those are instructions agents follow, not locks, so don't rely on them to protect something an agent could reach.
+**Power** in Settings sets who approves a step outside the sandbox: you, a warden (an agent whose only job is judging these steps), or a warden that tells you afterwards. At every level, these stay your call: spending money, credentials, opening this machine to the network, anything sent off this machine with your accounts or keys (`git push`, `gh`, publishing, mail, posting), publishing private details, and deleting repos, commits or history.
 
 ## What you need
 
@@ -36,26 +36,25 @@ curl -fsSL https://hive.ihsan.cc/install.sh | sh -s -- --this-account
 ```
 It puts everything in `~/hive` (`HIVE_DIR=/path` picks another folder) and runs as you. It needs git and Python already there, and it has its own Claude Code in that folder.
 
-**Agents then run in a sandbox inside your account.** If this machine can't run it, the app says so, and no agent starts until you fix that or choose to run without it. Without it they have full rights to your account: all your files, `~/.ssh` and any keys in it, your logins and tokens, and the whole machine if you have sudo without a password. It tells you this and asks you to type `yes`. Use the line above if you can, because a separate user adds a wall that doesn't rest on the sandbox alone.
+**Agents still run in a sandbox,** around that folder. If this machine can't run it, the app says so, and no agent starts until you fix that or [choose to run without it](#running-without-the-sandbox). Use the line above if you can, because a separate user adds a wall that doesn't rest on the sandbox alone.
 
-Agents stop while the machine sleeps and carry on when it wakes. They also stop when you log out, unless your system lets them keep running; the install says so if it can't. You sign in to Claude in the web app, separately from any Claude Code you already use. If it's the same Claude account, it's the same usage. Uninstall with `curl -fsSL https://hive.ihsan.cc/uninstall.sh | sh -s -- --this-account`.
+Agents stop while the machine sleeps and carry on when it wakes. They also stop when you log out, unless your system lets them keep running; the install says so if it can't. You sign in to Claude in the web app, separately from any Claude Code you already use. If it's the same Claude account, it's the same usage.
 
 **Windows,** in PowerShell:
 ```powershell
 irm https://hive.ihsan.cc/install.ps1 | iex
 ```
-If WSL 2 is missing it installs it, which needs your approval and a restart; then run the line again. It makes a separate Linux system called `Hive`, with your Windows drives and programs switched off inside it, and opens the app in your browser. The Windows installer is new and has had little testing on real PCs, so tell us if it goes wrong.
+If WSL 2 is missing it installs it, which needs your approval and a restart; then run the line again. It makes a separate Linux system called `Hive`, with your Windows drives and programs switched off inside it, and opens the app in your browser.
 
 **The address is the key to your Hive.** Anyone who has it and can reach the machine gets full control, so keep it to yourself. To see it again:
 
 | Where | Command |
 |---|---|
 | Linux | `sudo -iu hive hive web` |
+| Linux, in your own account | `hive web` |
 | Windows | `hive web` in a new PowerShell window |
 
 **On a server,** forward the port from your own computer, then open the address there: `ssh -L PORT:127.0.0.1:PORT server`.
-
-**No sudo?** Clone the [source](https://github.com/ihsan-sa/hive) (branch `v2`) to `~/core` in a spare account, install Claude Code, and run `~/core/install.sh`.
 
 ## Words you'll see
 
@@ -71,7 +70,7 @@ When setup is finished, the app offers a short guided tour. It says what to clic
 
 ![The first step of the tour, in a small window over the Chat page](https://hive.ihsan.cc/img/guide/tour.png)
 
-The top bar has **Chat, Agents, Usage, Settings** and a **More** menu. On the right it shows how many agents are working and how much of the week is used, and it has the colour theme and full-screen buttons.
+The top bar has **Chat, Knowledge, Agents, Usage, Settings** and a **More** menu. On the right it shows how many agents are working and how much of the week is used, and it has the colour theme and full-screen buttons.
 
 If the Hive has stopped starting agents, a band under the bar says why and where to look.
 
@@ -102,13 +101,17 @@ In a conversation:
 
 Drafts are kept for each conversation in this browser, even if you reload. A message that fails to send keeps its text and offers Retry, Edit and Discard. Sent messages can't be unsent.
 
-**For you, Updates, Everything,** over the list, choose how much you see, both of conversations and inside them. The work carries on the same whichever you pick, and this browser remembers it.
+**Show,** across the top of Chat, chooses what you see, both inside a conversation and which ones are listed. Each choice turns on and off by itself, so you can have any mix. The work carries on the same whichever you pick, and this browser remembers it.
 
 - **For you:** your messages, what agents ask or tell you, and the result of each job. The rest runs in the background.
-- **Updates:** also the agents' progress reports, but not what they say to each other.
-- **Everything:** every message, including agents talking to each other and the Hive's own notes.
+- **Updates:** the agents' progress reports.
+- **Agent comms:** agents talking to each other and the Hive's own notes.
 
-**Show N hidden** at the top of a conversation shows what the setting left out. Search always looks through everything. **All messages,** at the bottom left, is every conversation in one list.
+**Show N hidden** at the top of a conversation turns all three on. Search always looks through everything. **All messages,** at the bottom left, is every conversation in one list.
+
+### Knowledge
+
+What the Hive keeps: notes, projects and the files attached to posts, to browse, search and read. Keys and passwords are blanked out of what it shows. It only reads, apart from a project's plan, which you can edit here and hand to an agent with **Save and start an agent**.
 
 ### Agents
 
@@ -140,12 +143,15 @@ When every account is past its line, new agents wait, and running ones finish th
 
 ![The Settings page](https://hive.ihsan.cc/img/guide/settings.png)
 
-- **Agents at once:** how many can work at the same time. Others wait their turn. More means faster, and your limits go faster too.
-- **Stop new agents at:** the weekly line, 95% to begin with.
-- **Keep work moving:** every 3 hours an agent picks up stalled work and starts work nobody asked for. It uses your limits, so it's off to begin with.
-- **Update by itself:** see [Updates](#updates).
 - **Stop the hive:** no new agents start, and running ones finish their turn.
-- **Claude accounts:** sign in again, or add another subscription. New agents go to the one with the most left.
+- **Keep work moving:** every 3 hours an agent picks up stalled work and starts work nobody asked for. It uses your limits, so it's off to begin with.
+- **Version, Look for new releases, Update by itself:** see [Updates](#updates).
+- **Agents at once:** how many can work at the same time. Others wait their turn. More means faster, and your limits go faster too. Empty means no limit.
+- **Accounts:** sign in again, or add another subscription. New agents go to the one with the most left.
+- **Data sharing:** what's sent to the Hive's developer, if anything. It's all off until you turn something on.
+- **Power:** who approves a step outside the sandbox. See [Before you install](#before-you-install).
+- **Sandbox:** whether it works on this machine, and the choice to [run without it](#running-without-the-sandbox).
+- **Secrets:** send a token to the Hive. It's never shown back.
 - **Extras:** add or remove tools, by name or from a Git URL.
 - **Access from outside:** see [tutorial 7](tutorials/07-remote.md). You can only change this on the machine itself.
 
@@ -174,7 +180,7 @@ Talk to it as you would a capable new colleague who has never seen your setup:
 
 ## Files
 
-With the main install, the Hive has its own account, so **agents can't see your files until you give them some.** On Windows your drives are switched off inside the Hive on purpose. If you installed it in your own account, they start in `~/hive` but can reach all your files.
+Agents run in a sandbox around the Hive's folder, so **they can't see your files until you give them some.** On Windows your drives are switched off inside the Hive as well.
 
 - **In:** Attach or paste, or drag onto an open conversation, up to 100 MB per file. For more, give it a link, a Git repo or a folder it can reach.
 - **Out:** ask the agent to attach the result. It appears in the message and you click it to download.
@@ -182,7 +188,50 @@ With the main install, the Hive has its own account, so **agents can't see your 
 
 ## Passwords and accounts
 
-Don't paste passwords or keys into Chat. Messages are plain text that every agent can read, and they stay there. If an agent needs a login, ask it what it needs and where to put it, and sign in from a terminal as the Hive's account where you can. Anything you give the Hive, every agent on it can use. Give it its own limited tokens rather than your main ones.
+Don't paste passwords or keys into Chat. Messages are plain text that every agent can read, and they stay there. Send a token through **Secrets** in Settings instead. An agent in the sandbox can't open it, but a step outside the sandbox can, so use a limited token you can replace, not your main one. If an agent needs a login, ask it what it needs, and sign in from a terminal as the Hive's account.
+
+## Sandbox limits
+
+Inside the sandbox an agent can't reach this machine's services or your private network, and your other logins, `~/.ssh` and the rest of your home aren't there. `hive sandbox check` tests it on this machine. It doesn't stop everything, so if these matter to you, use a virtual machine or a spare computer:
+
+- **An agent can send what it can read.** The sign-in a run uses, and any provider key, can be read inside the sandbox, and the internet is open through its proxy.
+- **This machine's public IP** can be reached through the proxy. Nothing usually listens there.
+- **The app's web terminal** is your own shell, outside the sandbox.
+- **Approvals rest on a reading.** The check that sorts steps by risk is a helper. A second agent reading the step is the real check, and the agent doing that has not reviewed the sandbox's own code.
+- **Step history** is kept per agent. A refused script is matched by its exact bytes, so a changed script can be asked again. A run can forge lines in its own output.
+- **A run's `.claude.json` is writable.** That's safe only while nothing outside the sandbox runs `claude mcp` on an agent's login folder.
+- **Codex** runs without its built-in system skills, because that folder is read-only inside.
+- **Ubuntu 24.04:** the main install adds an AppArmor profile that allows unprivileged user namespaces for bubblewrap, a limit Ubuntu turns on by default. It applies to every user of the machine and widens the kernel's attack surface for them. Uninstalling doesn't remove it: it prints the command, because other bubblewrap programs may have come to rely on it. In your own account the install prints the command for an administrator instead.
+- **Older systems** with no AppArmor limit and a bubblewrap without `--disable-userns`: nothing stops an agent making further namespaces inside the sandbox.
+- **The app's page policy** allows inline scripts (`unsafe-inline`), so it wouldn't stop an injection if one turned up. Page text goes in as text, so nothing relies on it today.
+
+### Running without the sandbox
+
+You can choose this under **Sandbox** in Settings. Agents can then do anything their Linux account can:
+
+- **Main install:** they're a separate Linux user, so your files are out of reach unless every user on the machine can read them.
+- **In your own account:** all your files, `~/.ssh` and any keys in it, your logins and tokens, and the whole machine if you have sudo without a password.
+
+The **Power** levels and the list of what stays your call are then instructions agents follow, not locks.
+
+## Not tested yet
+
+An independent review tried to break out of the sandbox and found no way out, but it was one model, one pass of about 15 minutes. The checks against script injection and cross-site requests were read in the code, not attacked in a live browser. Nobody independent has read the whole web app: searches of the risky spots found nothing, which isn't a full review.
+
+Installs have run on clean Ubuntu 22.04, 24.04 and 26.04 and Debian 12, and over a real old Hive on Linux and Windows Server 2025. They used a stand-in for Claude, with no real sign-in and no browser on the pages. These haven't been run:
+
+- A person signing in to Claude in the app, on those machines. One real Claude agent has run on Linux, none on Windows.
+- Real Claude Code in the sandbox on Ubuntu 22.04.
+- Updating and rolling back on real machines.
+- An agent on a long job, or using `hive step`.
+- A real Codex agent's shell tool in the sandbox.
+- WSL and aarch64 with the sandbox's system-call filter.
+- Apps that nest bubblewrap, like Chromium or Electron, under the AppArmor profile. They may break inside an agent.
+- A machine that installs on Ubuntu 24.04 and later upgrades to 26.04. It ends up with two files defining `profile bwrap`, with no known fix yet, and the `sudo rm` line the uninstall prints isn't confirmed as one.
+- A real logout or suspend with the Hive in your own account.
+- `/api/account-key` refusing behind a validly signed token. That was read in the code only.
+- Windows: a desktop PC, a first-time WSL install, sleep and restart. The Windows installer has had little testing on real PCs, so tell us if it goes wrong.
+- macOS on a real Mac.
 
 ## Stopping things
 
@@ -195,9 +244,9 @@ Don't paste passwords or keys into Chat. Messages are plain text that every agen
 
 ## Updates
 
-Your Hive looks for a new release every 15 minutes and installs it. Your settings and your agents' committed changes stay. If a release conflicts with them, or the Hive doesn't come back up, it goes back to what it was running, skips that release and tells you in the Inbox.
+Your Hive looks for a new release every 15 minutes, or as often as **Look for new releases** says in Settings, and installs it. Your settings and your agents' committed changes stay. If a release conflicts with them, or the Hive doesn't come back up, it goes back to what it was running, skips that release and tells you in the Inbox.
 
-Updates are code that runs with your agents' rights. If you'd rather read each release first, turn off **Update by itself**, then run `hive update --check` to look and `hive update` to install.
+Updates are code that runs as the Hive's account. If you'd rather read each release first, turn off **Update by itself**. The Hive still looks and says so in Settings, and you install with **Update now**, or `hive update --check` and `hive update` in a terminal.
 
 ## Backups
 
@@ -217,7 +266,7 @@ After you type `delete`, this removes the `hive` user or the `Hive` system with 
 | The app doesn't load at all | As the Hive's account: `systemctl --user restart hive-dash`. If `hive web` says it isn't set up, `hive web --setup` makes a new address |
 | "The hive isn't running" | **Start the hive** in Settings, or `systemctl --user start hive-starter` |
 | "Stopped: usage limit" | Wait for the time shown on Usage, add an account or raise the line. Agents usually resume by themselves after the reset. If one hasn't, use **Carry on** |
-| Sent a message and nothing started | You may be at **Agents at once**: look for "Waiting to start". Otherwise check Usage, and set the list to **Everything** to see the Hive's own notes |
+| Sent a message and nothing started | You may be at **Agents at once**: look for "Waiting to start". Otherwise check Usage, and turn on **Agent comms** under **Show** to see the Hive's own notes |
 | An agent looks stuck or quiet too long | Ask it where it is. A message wakes it. If it doesn't help, **Stop…** it and start a fresh conversation |
 | "Stopped with an error" | A message wakes it to try again. If it repeats, look at its page under Agents |
 | Sign-in doesn't work in the page | As the Hive's account in a terminal: `claude auth login` |

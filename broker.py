@@ -23,7 +23,9 @@ STEPS = STATE / "steps"
 MAX_HEAD, MAX_BLOB, MAX_SCRIPT, MAX_PENDING = 2 ** 20, 100 * 2 ** 20, 64 * 2 ** 10, 5
 STEP_S, WARDEN_S, PERSON_S = 600, 1800, 86400
 WARDEN_NAME = re.compile(r"w[0-9a-f]{4}")
-NAMES_WARDEN = re.compile(r"(?<![\w@])@w[0-9a-f]{4}\b")
+# Read a mention as the starter and the inbox hook do (inbox.py MENTION, CODE), or a spelling they count gets past this.
+NAMES_WARDEN = re.compile(r"(?<![\w.])@w[0-9a-f]{4}\b", re.I)
+CODE = re.compile(r"```.*?```|`[^`\n]*`", re.S)
 WORD = re.compile(r"^\s*(approve|deny) step ([0-9a-f]{6})-([0-9a-f]{8})\s*$", re.I | re.M)
 # A first filter, not a wall: a script can hide a word, so the warden's `person` is the real check. A hit still goes past the warden first, the reader who looks for traps:
 # otherwise writing "token" in a reason would skip that reader. The warden can only refuse a hit or pass it on to the person.
@@ -165,6 +167,7 @@ def verdict(name, req):
     i, v, why = str(req.get("id")), req.get("verdict"), one_line(str(req.get("why", "")))
     if not is_warden(name): return {"err": "only a warden gives a verdict"}
     if v not in ("allow", "hard", "deny", "person"): return {"err": "allow, hard, deny or person"}
+    if not re.fullmatch(r"[0-9a-f]{6}", i): return {"err": f"no step {i}"}  # it becomes a path
     with lock:
         try: s = load(i)
         except (OSError, ValueError): return {"err": f"no step {i}"}
@@ -238,7 +241,7 @@ def post(name, req, blobs):
     thread = str(req.get("thread") or "")
     if thread.startswith("step-") and run_of(name).get("thread") != thread: return {"err": "a step-... thread is its judge's alone; post in your own thread"}  # mid-run posts reach the judge: nothing else may steer it
     if not is_warden(name):  # a warden judging a step hears no agent: naming one would also start a plain run under a warden-shaped name
-        if any(WARDEN_NAME.fullmatch(t.strip().lstrip("@")) for t in re.split(r"[,\s]+", str(req.get("to") or ""))) or NAMES_WARDEN.search(re.sub(r"`[^`]*`", "", str(req.get("text", "")))):
+        if any(WARDEN_NAME.fullmatch(t.strip().lstrip("@").lower()) for t in re.split(r"[,\s]+", str(req.get("to") or ""))) or NAMES_WARDEN.search(CODE.sub(" ", str(req.get("text", "")))):
             return {"err": "a warden judging a step hears only the step: don't name one. Say what you need in your own thread"}
     names = req.get("names") or []
     if len(names) != len(blobs): return {"err": "a name for each file"}

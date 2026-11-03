@@ -7,7 +7,7 @@ Read-only. Reads the transcripts Claude Code already writes
 
 Attribution of one model call (one assistant message):
   project/board  from the call's cwd: ~/projects/<p>[-<agent>...]/boards/<b>/...
-                 (worktrees like hw-lab-a73b6 fold into hw-lab), ~/modules/<m> -> module:<m>.
+                 (worktrees like proj-a73b6 fold into proj), ~/modules/<m> -> module:<m>.
                  If cwd is ~ (agent working by absolute paths), the session's last
                  known project/board is carried forward; before any, it's "(home)".
                  If cwd gives a project but no board, the board is taken from the git
@@ -74,8 +74,8 @@ def boards_of(project):
 _bases = {}
 def base_project(name):
     """Fold worktrees and per-agent clones into their project:
-    a git worktree -> the repo it belongs to (hw-lab-vna -> hw-lab, hifi-lite-esd -> hifi-receiver);
-    a clone named <base>-a<4 hex>... -> <base> (hw-lab-a73b6 -> hw-lab)."""
+    a git worktree -> the repo it belongs to;
+    a clone named <base>-a<4 hex>... -> <base>."""
     if name in _bases:
         return _bases[name]
     out = name
@@ -230,7 +230,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--since", help="24h, 7d, 2w or an ISO date/time (local, like the board)")
     ap.add_argument("--by", default="board", choices=["board", "project", "thread", "agent", "day", "model"])
-    ap.add_argument("--project", help="only this project (e.g. hw-lab)")
+    ap.add_argument("--project", help="only this project")
     ap.add_argument("--json", action="store_true")
     a = ap.parse_args()
     since = parse_since(a.since)

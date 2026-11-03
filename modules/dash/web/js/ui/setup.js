@@ -166,14 +166,14 @@ const enforced = pg => pg.settings.sandbox === "on" && pg.sandbox_check.state ==
 export function powerPart(update) {
   const pg = P.page, cur = pg.settings.power, a = pg.accounts, claude = a.claude.some(l => l.signed_in);
   return [
-    h("p", null, enforced(pg) ? "Agents work inside a sandbox on this machine. This sets who decides when one needs a step outside it, like installing something or changing a file elsewhere on this computer."
+    h("p", null, enforced(pg) ? "Agents run in a sandbox on this machine. This sets who decides when one needs a step outside it, like installing something or changing a file elsewhere on this computer."
       : "This sets who decides when an agent wants to do something bigger. Read the sandbox note below: without a working sandbox, this is an instruction to the agents, and nothing on this machine holds them to it."),
     h("div", { class: "checks cards", role: "radiogroup", "aria-label": "How much power the Hive has" }, POWER.map(([n, label, hint, loose]) => h("label", { class: "check", "data-key": "power-" + n },
       h("input", { type: "radio", name: "power", checked: cur === n, disabled: !local(), onchange: () => saveSettings({ power: n }, update) }),
       h("span", null, `${n}. ${label}`, h("span", { class: "field-h" }, (!enforced(pg) && loose) || hint))))),
     saveLine("power"),
     h("p", { "data-key": "always" }, h("b", null, "At every level, these stay your call: "), ALWAYS.join(", ") + "."),
-    h("p", { class: "field-h", "data-key": "approve-word" }, "When a step comes to you, you answer in the thread with approve step and the step's code. The code isn't a password and doesn't say what the step does, so read the step first. It ties your answer to that exact script, only you can give it, and it works once."),
+    h("p", { class: "field-h", "data-key": "approve-word" }, "When a step comes to you, you answer in the conversation with approve step and the step's code. The code isn't a password and doesn't say what the step does, so read the step first. It ties your answer to that exact script, only you can give it, and it works once."),
     claude ? null : h("p", { class: "fmsg", "data-tone": "warn", "data-key": "no-warden" }, "Wardens run on Claude, and this Hive has no Claude login signed in. So there's no warden: every step comes to you, whichever level is set."),
     localOnly(), saveErr()];
 }

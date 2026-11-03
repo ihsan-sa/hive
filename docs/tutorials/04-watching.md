@@ -31,7 +31,7 @@ The first sentence tells you how much is left, when it comes back and when you'd
 3. Lower the **Usage line**, so new agents stop sooner and keep some of the week for your own use.
 4. Make sure **Keep work moving** is off in Settings, unless you want it.
 
-**If you need more room:** add another Claude subscription in Settings, under **Claude accounts**. New agents go to the one with the most left.
+**If you need more room:** add another Claude subscription in Settings, under **Accounts**. New agents go to the one with the most left.
 
 ## Go through everything that happened
 
