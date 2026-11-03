@@ -216,7 +216,7 @@ The **Power** levels and the list of what stays your call are then instructions 
 
 ## Not tested yet
 
-An independent review tried to break out of the sandbox and found no way out, but it was one model, one pass of about 15 minutes. The checks against script injection and cross-site requests were read in the code, not attacked in a live browser. Nobody independent has read the whole web app: searches of the risky spots found nothing, which isn't a full review.
+An independent review tried to break out of the sandbox and found no way out, but it was one model, one pass of about 15 minutes. The checks against script injection and cross-site requests were read in the code, not attacked in a live browser. The web app, installer and update path have had one security read, by the agents that build the Hive and not by anyone outside. It read the code and ran none of it.
 
 Installs have run on clean Ubuntu 22.04, 24.04 and 26.04 and Debian 12, and over a real old Hive on Linux and Windows Server 2025. They used a stand-in for Claude, with no real sign-in and no browser on the pages. These haven't been run:
 
@@ -246,7 +246,7 @@ Installs have run on clean Ubuntu 22.04, 24.04 and 26.04 and Debian 12, and over
 
 Your Hive looks for a new release every 15 minutes, or as often as **Look for new releases** says in Settings, and installs it. Your settings and your agents' committed changes stay. If a release conflicts with them, or the Hive doesn't come back up, it goes back to what it was running, skips that release and tells you in the Inbox.
 
-Updates are code that runs as the Hive's account. If you'd rather read each release first, turn off **Update by itself**. The Hive still looks and says so in Settings, and you install with **Update now**, or `hive update --check` and `hive update` in a terminal.
+Updates are code that runs as the Hive's account. Updates aren't signed, so whoever controls the GitHub repo can run code on every Hive that updates by itself. If you'd rather read each release first, turn off **Update by itself**. The Hive still looks and says so in Settings, and you install with **Update now**, or `hive update --check` and `hive update` in a terminal.
 
 ## Backups
 
