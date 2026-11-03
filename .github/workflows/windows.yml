@@ -3,7 +3,7 @@ on: { push: { branches: [test-windows-install] } }
 permissions: { contents: read }
 jobs:
   install:
-    strategy: { fail-fast: false, matrix: { os: [windows-2025], block: [on, upgrade] } }
+    strategy: { fail-fast: false, matrix: { os: [windows-2025], block: [on] } }
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     steps:

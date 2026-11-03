@@ -12,7 +12,7 @@ $PSVersionTable.PSVersion.ToString()
 try { & wsl.exe --status 2>&1 | Out-Host; "status rc=$LASTEXITCODE" } catch { "status threw: $_" }
 try { & wsl.exe --version 2>&1 | Out-Host; "version rc=$LASTEXITCODE" } catch { "version threw: $_" }
 
-Step 'first run of the candidate get.ps1'
+Step 'first run of the public install line'
 "blocks: $env:BLOCK"
 if ($env:BLOCK -eq 'upgrade') {
   irm https://hive.ihsan.cc/install.ps1 | iex
@@ -20,7 +20,7 @@ if ($env:BLOCK -eq 'upgrade') {
   & wsl.exe -d Hive -u root -- sh -c 'cat /proc/uptime; test -e /etc/systemd/system/hive-no-windows.service; echo unit-before=$?' 2>&1 | Out-Host
 }
 $t = Get-Date
-Get-Content -Raw .\get-candidate.ps1 | iex
+irm https://hive.ihsan.cc/install.ps1 | iex
 "took $([int]((Get-Date) - $t).TotalSeconds) s"
 $have = @(& wsl.exe -l -q) | ForEach-Object { ($_ -replace "`0", '').Trim() }
 "systems: $($have -join ', ')"
@@ -37,6 +37,9 @@ Step 'inside'
 & wsl.exe -l -v 2>&1 | Out-Host
 InR 'cat /etc/wsl.conf; uname -r; systemctl is-system-running; systemctl --failed --no-legend | head -20; cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns /proc/sys/user/max_user_namespaces; which bwrap'
 InU 'id; echo "$XDG_RUNTIME_DIR"; which hive; hive --help | head -3; systemctl --user is-active hive-starter hive-dash hive-update.timer; systemctl --user list-timers --no-pager | head; loginctl show-user $(id -un) -p Linger'
+Step 'release, sandbox'
+InU 'cat ~/.hive/VERSION 2>/dev/null; hive version 2>&1 | head -2; hive sandbox check 2>&1 | tail -30; echo sandbox-rc=$?; bwrap --version; ls -l /etc/apparmor.d 2>/dev/null | grep -i bwrap'
+InR 'cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns 2>&1; grep Seccomp /proc/self/status; uname -m'
 Step 'cut off from Windows, as the hive user'
 InU 'ls /mnt /mnt/c 2>&1 | head; ls /init; which powershell.exe cmd.exe; /mnt/c/Windows/System32/cmd.exe /c ver 2>&1 | head -2; mount -t drvfs C: /tmp/x 2>&1 | head -2; sudo -n true 2>&1 | head -1; ls /proc/sys/fs/binfmt_misc 2>&1'
 Step 'as root, what could an escalation reach'
@@ -90,16 +93,16 @@ Back 'after shutdown'
 Start-Process (Join-Path $env:WINDIR 'System32\conhost.exe') -ArgumentList '--headless wsl.exe -d Hive -u hive --exec sleep infinity'
 Start-Sleep 5
 
-Step 'rerun with the candidate get.ps1: updates, keeps the system'
+Step 'rerun of the public line: updates, keeps the system'
 InU 'date > ~/mark; mkdir -p ~/keepme'
 $t = Get-Date
-Get-Content -Raw .\get-candidate.ps1 | iex
+irm https://hive.ihsan.cc/install.ps1 | iex
 "took $([int]((Get-Date) - $t).TotalSeconds) s"
 InU 'uptime; cat ~/mark; systemctl --user is-active hive-starter'
 Step 'remove'
 # Answer the typed prompt the way a person does, by overriding Read-Host for this one call.
 function global:Read-Host { 'delete' }
-Get-Content -Raw .\remove-candidate.ps1 | iex
+irm https://hive.ihsan.cc/uninstall.ps1 | iex
 Remove-Item function:global:Read-Host
 & wsl.exe -l -q 2>&1 | Out-Host
 "lnk: " + (Test-Path (Join-Path ([Environment]::GetFolderPath('Startup')) 'Hive.lnk'))
