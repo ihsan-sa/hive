@@ -62,8 +62,10 @@ export function morph(a, b) {
   return a;
 }
 function morphKids(a, b) {
-  const next = [...b.childNodes], keyed = new Map();
-  for (const c of a.childNodes) if (c.nodeType === 1 && c.hasAttribute("data-key")) keyed.set(c.getAttribute("data-key"), c);
+  const next = [...b.childNodes], keyed = new Map(), kept = new Set();
+  for (const c of next) if (c.nodeType === 1 && c.hasAttribute("data-key")) kept.add(c.getAttribute("data-key"));
+  // Drop what's going first: otherwise the nodes after it get moved in front of it, and moving a node takes focus out of it.
+  for (const c of [...a.childNodes]) if (c.nodeType === 1 && c.hasAttribute("data-key")) { const k = c.getAttribute("data-key"); if (kept.has(k)) keyed.set(k, c); else c.remove(); }
   let cur = a.firstChild;
   for (const nb of next) {
     const k = nb.nodeType === 1 ? nb.getAttribute("data-key") : null;

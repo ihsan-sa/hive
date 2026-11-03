@@ -147,22 +147,21 @@ clone() {
 
 # The old Hive (v0.x), a Go program with its own folder. It's removed first, then the new one goes in, then its things are brought across.
 # Its folder is the backup: it's only ever renamed, never changed apart from its state file, .hive/v2-import ("pending", then "done"), which is how a rerun carries on.
+# Anything in that account could have been written by whatever ran there, so root never reads or writes in it: as_old does, and only exact expected values are taken from what comes back.
 OLD_A=""; OLD_HM=""; OLD_ROOT=""; OLD_STATE=""; OLD_BINS=""; OLD_UNIT=""; OLD_SYS=""; OLD_HALF=0; OLD_DONE=""
 OLD_PROBE='
-hm=$1; a=$2; etc=$3
 for b in hive hive-v0; do f=$hm/.local/bin/$b
   if [ -f "$f" ] && [ ! -L "$f" ] && grep -aqs hive-standalone-build "$f"; then echo "bin $f"; fi
 done
 [ ! -e "$hm/.config/systemd/user/hive.service" ] || echo "unit $hm/.config/systemd/user/hive.service"
-! grep -qs "/\.local/bin/.* daemon" "$etc/systemd/system/hive-$a.service" || echo "sys $etc/systemd/system/hive-$a.service"
-p=$(cat "$hm/.config/hive/workspace" 2>/dev/null || true); p=${p%/}
+p=""; [ ! -f "$hm/.config/hive/workspace" ] || p=$(cat "$hm/.config/hive/workspace" 2>/dev/null || true); p=${p%/}
 for r in "$p" "$hm/hive" "$hm"/hive-old-*; do
   [ -n "$r" ] && [ -e "$r/.hive" ] || continue
   # The new Hive in a folder has a .hive too.
   [ ! -e "$r/.hive-account" ] && [ ! -e "$r/.hive-installed" ] || continue
   [ -e "$r/.hive/events.jsonl" ] || [ -e "$r/.hive/config.json" ] || continue
-  s=$(cat "$r/.hive/v2-import" 2>/dev/null || echo new)
-  [ "$s" != done ] || continue
+  s=new; [ ! -f "$r/.hive/v2-import" ] || s=$(cat "$r/.hive/v2-import" 2>/dev/null || echo new)
+  case "$s" in done) continue;; pending) ;; *) s=new;; esac
   echo "root $s $r"
 done
 '
@@ -171,21 +170,31 @@ home_of() { if [ "$1" = "$(id -un)" ] && [ -n "${HOME:-}" ] && [ "${HIVE_OWN:-0}
 q() { printf "'%s'" "$(printf %s "$1" | sed "s/'/'\\\\''/g")"; }
 # A command as that account. Not through su when it's already us.
 as_user() { if [ "$1" = "$(id -un)" ]; then sh -c "$2"; else $ROOT su - "$1" -c "$2"; fi; }
+# A command on the old Hive's files, as its account. No login shell, so nothing of that account's runs and its stdout is only what the command says (a tar stream, for one), and it needn't have a shell of its own. None of root's environment.
+as_old() { if [ "$1" = "$(id -un)" ]; then sh -c "$2" </dev/null; else $ROOT su -s /bin/sh "$1" -c "cd / && exec env -i PATH=\"\$PATH\" sh -c $(q "$2")" </dev/null; fi; }
+# A folder as it came back from that account: one absolute path with nothing odd in it.
+old_path_ok() { case "$1" in /*) ;; *) return 1;; esac; case "$1" in *[[:cntrl:]]* | */../* | */..) return 1;; esac; }
+old_first_root() { printf '%s\n' "$1" | sed -n "s/^root $2 //p" | while IFS= read -r x; do if old_path_ok "$x"; then printf '%s\n' "$x"; break; fi; done; }
+old_said() { printf '%s\n' "$1" | grep -Fxq -- "$2"; }
 
 # Sets OLD_* for the first of these accounts with anything of the old Hive's. Another's is only mentioned: it's somebody else's.
 old_scan() {
   for a in "$@"; do
     [ -n "$a" ] && id "$a" >/dev/null 2>&1 || continue
     hm=$(home_of "$a"); [ -n "$hm" ] || continue
-    found=$($ROOT sh -c "$OLD_PROBE" sh "$hm" "$a" "${HIVE_ETC:-/etc}" 2>/dev/null) || found=""
-    [ -n "$found" ] || continue
+    found=$(as_old "$a" "hm=$(q "$hm"); $OLD_PROBE" 2>/dev/null) || found=""
+    # This one is root's own file, so root reads it.
+    sys="${HIVE_ETC:-/etc}/systemd/system/hive-$a.service"; $ROOT grep -qs '/\.local/bin/.* daemon' "$sys" || sys=""
+    [ -n "$found$sys" ] || continue
     if [ -n "$OLD_A" ]; then [ "$a" = "$OLD_A" ] || echo "NOTE: $a also has an old Hive. I'm leaving that one alone. To bring it across instead, run this with HIVE_OLD_USER=$a."; continue; fi
-    OLD_A=$a; OLD_HM=$hm
-    OLD_BINS=$(printf '%s\n' "$found" | sed -n 's/^bin //p')
-    OLD_UNIT=$(printf '%s\n' "$found" | sed -n 's/^unit //p')
-    OLD_SYS=$(printf '%s\n' "$found" | sed -n 's/^sys //p')
-    r=$(printf '%s\n' "$found" | sed -n 's/^root pending //p' | head -n 1); OLD_STATE=pending
-    [ -n "$r" ] || { r=$(printf '%s\n' "$found" | sed -n 's/^root new //p' | head -n 1); OLD_STATE=new; }
+    OLD_A=$a; OLD_HM=$hm; OLD_SYS=$sys
+    for b in hive hive-v0; do
+      ! old_said "$found" "bin $hm/.local/bin/$b" || OLD_BINS="$OLD_BINS${OLD_BINS:+
+}$hm/.local/bin/$b"
+    done
+    ! old_said "$found" "unit $hm/.config/systemd/user/hive.service" || OLD_UNIT="$hm/.config/systemd/user/hive.service"
+    r=$(old_first_root "$found" pending); OLD_STATE=pending
+    [ -n "$r" ] || { r=$(old_first_root "$found" new); OLD_STATE=new; }
     OLD_ROOT=$r
   done
   for f in "${HIVE_ETC:-/etc}"/systemd/system/hive-*.service; do
@@ -213,15 +222,19 @@ old_preflight() {
   # The new Hive refuses an account with other things in it, because its agents would have full rights to them.
   if [ "$1" = "$OLD_A" ] && [ "$2" = "$OLD_HM" ]; then
     skip=""; [ -z "$OLD_RENAME" ] || skip=${OLD_ROOT##*/}
-    other=$($ROOT find "$OLD_HM" -mindepth 1 -maxdepth 1 ! -name '.*' ! -name core ! -name kb ! -name projects ! -name run ! -name sessions ! -name board.jsonl ! -name log.jsonl ! -name modules ! -name files ! -name settings.json ! -name 'hive-old-*' ! -name "${skip:-.}" | head -n 3)
-    if [ -n "$other" ] || $ROOT test -e "$OLD_HM/.ssh"; then
+    other=$(as_old "$OLD_A" "find $(q "$OLD_HM") -mindepth 1 -maxdepth 1 ! -name '.*' ! -name core ! -name kb ! -name projects ! -name run ! -name sessions ! -name board.jsonl ! -name log.jsonl ! -name modules ! -name files ! -name settings.json ! -name 'hive-old-*' ! -name $(q "${skip:-.}") | head -n 3")
+    if [ -n "$other" ] || as_old "$OLD_A" "test -e $(q "$OLD_HM/.ssh")"; then
       die "the old Hive is in the account $OLD_A, which also has ~/.ssh or other files, and the new Hive's agents would have full rights to them. Nothing changed. Put the new Hive in its own user and bring the old one's things across:
   HIVE_USER=newhive HIVE_OLD_USER=$OLD_A  in front of the sh of the same line"
     fi
   fi
   [ -n "$OLD_ROOT" ] || return 0
-  OLD_KB=$($ROOT sh -c 'cd "$1" && du -sk --exclude=.checkouts projects .hive/kb .hive/chats 2>/dev/null' sh "$OLD_ROOT" | awk '{n+=$1} END {print n+0}')
-  OLD_N=$($ROOT sh -c 'cd "$1/projects" 2>/dev/null && ls -1 | wc -l || echo 0' sh "$OLD_ROOT")
+  # What only root could read (made by a container, say) would stop the copy after the old Hive is off, so it's found now.
+  unread=$(as_old "$OLD_A" "cd $(q "$OLD_ROOT") && find projects .hive/kb .hive/chats .hive/config.json -path 'projects/*/.checkouts' -prune -o ! -type l \\( ! -readable -o -type d ! -executable \\) -print 2>/dev/null | head -n 3" | tr -cd '[:print:]\n')
+  [ -z "$unread" ] || die "the account $OLD_A can't read some of the old Hive's files, so they can't be brought across. Nothing changed. Give them to that account, then run this again. In $OLD_ROOT:
+$unread"
+  OLD_KB=$(as_old "$OLD_A" "cd $(q "$OLD_ROOT") && du -sk --exclude=.checkouts projects .hive/kb .hive/chats 2>/dev/null" | awk '{n+=$1} END {print n+0}')
+  OLD_N=$(as_old "$OLD_A" "cd $(q "$OLD_ROOT/projects") 2>/dev/null && ls -1 | wc -l || echo 0")
   d=$2; while [ ! -d "$d" ]; do d=${d%/*}; [ -n "$d" ] || d=/; done
   free=$(df -Pk "$d" | awk 'NR==2 {print $4}')
   [ "$((OLD_KB + OLD_KB / 10 + 1048576))" -lt "$free" ] || die "the old Hive's things take $((OLD_KB / 1024)) MB, and they're copied, so the old folder stays as the backup. $d has $((free / 1024)) MB free, and that's too tight. Nothing changed."
@@ -253,12 +266,15 @@ ask_yes() {
   [ "$answer" = yes ] || die "nothing changed"
 }
 
+# The state file is replaced rather than written through, so a link there points nowhere new, and one left by root's write in an older installer still goes.
+old_state() { as_old "$OLD_A" "f=$(q "$OLD_ROOT/.hive/v2-import"); rm -f \"\$f\" && printf %s $1 > \"\$f\""; }
+
 # Stop it and take it off. Run twice, it does nothing new.
 old_remove() {
   [ -n "$OLD_A" ] || return 0
   [ -e "$T/import-old.py" ] || die "this Hive's release can't bring an old one across yet. Nothing changed. Your old Hive is still running"
   OLD_HALF=1
-  [ -z "$OLD_ROOT" ] || [ "$OLD_STATE" = pending ] || { printf '%s' 'pending' | $ROOT tee "$OLD_ROOT/.hive/v2-import" >/dev/null; OLD_STATE=pending; }
+  [ -z "$OLD_ROOT" ] || [ "$OLD_STATE" = pending ] || { old_state "pending"; OLD_STATE=pending; }
   step "Stopping the old Hive"
   if [ -n "$OLD_SYS" ]; then
     $ROOT systemctl disable --now "${OLD_SYS##*/}" </dev/null >/dev/null 2>&1 || true
@@ -268,18 +284,18 @@ old_remove() {
   printf '%s\n' "$OLD_BINS" | while IFS= read -r b; do [ -z "$b" ] || as_user "$OLD_A" "timeout 60 $(q "$b") uninstall" </dev/null >/dev/null 2>&1 || true; done
   # Whatever its uninstall didn't get to, or a program too old or broken to run it.
   as_user "$OLD_A" 'XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/$(id -u)} systemctl --user disable --now hive.service; pkill -u "$(id -u)" -f "/\.local/bin/hive(-v0)? daemon"; true' </dev/null >/dev/null 2>&1 || true
-  printf '%s\n' "$OLD_BINS" | while IFS= read -r b; do [ -z "$b" ] || $ROOT rm -f "$b"; done
-  [ -z "$OLD_UNIT" ] || $ROOT rm -f "$OLD_UNIT"
+  printf '%s\n' "$OLD_BINS" | while IFS= read -r b; do [ -z "$b" ] || as_old "$OLD_A" "rm -f $(q "$b")"; done
+  [ -z "$OLD_UNIT" ] || as_old "$OLD_A" "rm -f $(q "$OLD_UNIT")"
   OLD_BINS=""; OLD_UNIT=""; OLD_SYS=""
   if [ -n "$OLD_ROOT" ] && [ -n "$OLD_RENAME" ]; then
     to="${OLD_ROOT%/*}/hive-old-$(date +%Y%m%d)"; i=1
-    while $ROOT test -e "$to"; do i=$((i + 1)); to="${OLD_ROOT%/*}/hive-old-$(date +%Y%m%d)-$i"; done
-    $ROOT mv "$OLD_ROOT" "$to"
+    while as_old "$OLD_A" "test -e $(q "$to")"; do i=$((i + 1)); to="${OLD_ROOT%/*}/hive-old-$(date +%Y%m%d)-$i"; done
+    as_old "$OLD_A" "mv $(q "$OLD_ROOT") $(q "$to")"
     OLD_ROOT=$to
     note "The old folder is now $to"
   fi
   # Its uninstall forgets where the folder is, and a rerun after a failure has to find it. It goes when the import is done.
-  [ -z "$OLD_ROOT" ] || as_user "$OLD_A" "mkdir -p $(q "$OLD_HM/.config/hive") && printf '%s\\n' $(q "$OLD_ROOT") > $(q "$OLD_HM/.config/hive/workspace")" </dev/null
+  [ -z "$OLD_ROOT" ] || as_old "$OLD_A" "mkdir -p $(q "$OLD_HM/.config/hive") && printf '%s\\n' $(q "$OLD_ROOT") > $(q "$OLD_HM/.config/hive/workspace")"
 }
 
 # Copy across and sort out. $1 is the account the new Hive is in, $2 its home. Stays out of the old folder apart from the state file.
@@ -288,16 +304,16 @@ old_import() {
   S="$2/.old-hive-incoming"; rc="$T/old-tar-rc"
   step "Bringing your old Hive's things across"
   $ROOT true </dev/null
-  { $ROOT sh -c 'cd "$1" && shift && tar c -T /dev/null --exclude="projects/*/.checkouts" $(for p in projects .hive/kb .hive/chats .hive/config.json; do [ ! -e "$p" ] || echo "$p"; done) 2>/dev/null' sh "$OLD_ROOT"; echo $? > "$rc"; } \
+  { r=0; as_old "$OLD_A" "cd $(q "$OLD_ROOT") && tar c -T /dev/null --exclude='projects/*/.checkouts' \$(for p in projects .hive/kb .hive/chats .hive/config.json; do [ ! -e \"\$p\" ] || echo \"\$p\"; done) 2>/dev/null" || r=$?; echo "$r" > "$rc"; } \
     | as_user "$1" "chmod -R u+w $(q "$S") 2>/dev/null; rm -rf $(q "$S"); mkdir -p $(q "$S") && tar x --no-same-owner -f - -C $(q "$S")" 2>&3 \
     || die "couldn't copy the old Hive's things into $S"
   # 1 is a file that changed while it was being read: an agent finishing its turn. Anything above that is a real failure.
   [ "$(cat "$rc")" -le 1 ] || die "couldn't read all of the old Hive's things from $OLD_ROOT"
-  $ROOT sh -c 'grep -hs "\"kind\":\"project\." "$1/.hive/events.jsonl" || true' sh "$OLD_ROOT" | as_user "$1" "cat > $(q "$S/projects.jsonl")"
+  as_old "$OLD_A" "f=$(q "$OLD_ROOT/.hive/events.jsonl"); [ ! -f \"\$f\" ] || grep -hs '\"kind\":\"project\.' \"\$f\" || true" | as_user "$1" "cat > $(q "$S/projects.jsonl")"
   if [ "$1" = "$(id -un)" ]; then OLD_SAID=$(env -u XDG_CONFIG_HOME -u XDG_DATA_HOME -u XDG_CACHE_HOME -u XDG_STATE_HOME HOME="$2" python3 -I - "$S" "$OLD_ROOT" < "$T/import-old.py" 2>&3)
   else OLD_SAID=$($ROOT su - "$1" -c "python3 -I - $(q "$S") $(q "$OLD_ROOT")" < "$T/import-old.py" 2>&3); fi
-  printf '%s' 'done' | $ROOT tee "$OLD_ROOT/.hive/v2-import" >/dev/null
-  $ROOT rm -f "$OLD_HM/.config/hive/workspace"
+  old_state "done"
+  as_old "$OLD_A" "rm -f $(q "$OLD_HM/.config/hive/workspace")"
   OLD_HALF=0; OLD_DONE=1
 }
 
@@ -337,7 +353,7 @@ this_account() {
   cat <<WARN
 
 The Hive will run in your own account, as you, with its files in $H.
-Agents work there without asking permission for each step, inside a sandbox around that folder. From inside, your other files, ~/.ssh and your other logins aren't there to read.
+Agents run in a sandbox around that folder, and work there without asking. From inside, your other files, ~/.ssh and your other logins aren't there to read.
 Three things stay open to them: that folder, the sign-in of the account they run on, and the internet, so anything they can read they can send.
 To do something outside the sandbox they ask. The app asks you how much of that the Hive may settle by itself; an approved step runs as you.
 WARN
@@ -374,7 +390,8 @@ WARN
   begin "$need" "$OLD_A" "$cl" 1 "$OLD_ROOT"
   [ -z "$need" ] || clone
   old_remove
-  mkdir -p "$H"
+  # Its sign-ins will be in here, and other users of this machine could read it.
+  mkdir -p "$H"; chmod 700 "$H"
   echo "$HOME" > "$H/.hive-account"
   [ -e "$H/core" ] || mv "$T/hive" "$H/core"
   # Its own Claude Code in its own home: yours, its sign-in and its updates aren't touched. The Hive signs in separately, in the web app.
@@ -423,7 +440,7 @@ It makes a separate Linux system with the Windows drives switched off. To instal
   elif command -v sudo >/dev/null 2>&1; then ROOT="sudo"; echo "The Hive gets its own Linux user, which takes sudo once."
   else
     die "this needs root to make a user called $U, and there's no sudo here.
-Without root, in a folder of your own account (agents then work in a sandbox around that folder, if this machine allows it; the app says): curl -fsSL https://hive.ihsan.cc/install.sh | sh -s -- --this-account
+Without root, in a folder of your own account (agents then run in a sandbox around that folder, if this machine allows it; the app says): curl -fsSL https://hive.ihsan.cc/install.sh | sh -s -- --this-account
 Or in a spare account: git clone -b $BRANCH $REPO ~/core, install Claude Code, and run ~/core/install.sh"
   fi
 

@@ -264,10 +264,12 @@ def catalog():
     for d in sorted((CORE / "modules").glob("*/")): c.setdefault(d.name, {"about": manifest(d).get("description", ""), "bundled": True})
     return c
 
+MODULE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")  # a folder in ~/modules or a command in ~/.local/bin: never a path, and never ..
+
 def module_links(d):
     """(link, target) pairs a module wants: its commands on PATH, its skills in each login."""
     m, out = manifest(d), []
-    bins = {k: d / v for k, v in m.get("bin", {}).items()} or {f.name: f for f in sorted((d / "bin").glob("*")) if os.access(f, os.X_OK) and f.is_file()}
+    bins = {k: d / v for k, v in m.get("bin", {}).items() if MODULE_NAME.fullmatch(k)} or {f.name: f for f in sorted((d / "bin").glob("*")) if os.access(f, os.X_OK) and f.is_file()}
     out += [(BIN / k, t) for k, t in bins.items()]
     try: logins = json.loads((CORE / "config.json").read_text())["logins"]
     except (OSError, ValueError, KeyError): logins = ["~/.claude"]
@@ -286,6 +288,7 @@ def cmd_module(a):
         return
     if not a.name: sys.exit(f"hive module {a.do}: name which module")
     name = re.sub(r"\.git$", "", a.name.rstrip("/").rsplit("/", 1)[-1]).removeprefix("hive-")
+    if not MODULE_NAME.fullmatch(name): sys.exit(f"hive module {a.do}: {a.name} isn't a module's name or a git URL")
     d = MODULES / name
     if a.do == "remove":
         if not d.is_dir(): sys.exit(f"{name} isn't installed")

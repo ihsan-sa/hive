@@ -2,7 +2,7 @@
 
 The app only answers on the machine it runs on, which is the safe default. There are three ways to reach it from somewhere else. **Take the first that does the job.**
 
-Agents have full rights on their account, so whoever reaches the Hive with full access has those rights too. Treat each of these as a door to that account.
+Whoever reaches the Hive with full access controls it, including its Claude sign-in. Treat each of these as a door to its account.
 
 ## Option A: an SSH tunnel
 
@@ -23,7 +23,7 @@ In a terminal as the Hive's account (see [tutorial 8](08-terminal.md)):
 1. Install [uv](https://docs.astral.sh/uv/), which runs the door. Then `hive module add slack-door`, then `slack-door install`.
 2. At [api.slack.com/apps](https://api.slack.com/apps), create an app from a manifest, and paste `~/modules/slack-door/slack-app.json`. Install it to your workspace.
 3. Save the two tokens, each as a file with mode 600: the Bot token (`xoxb-`) as `~/.config/hive/slack-door-bot-token`, and an App token with `connections:write` (`xapp-`) as `~/.config/hive/slack-door-app-token`.
-4. Add your Slack member ID under `owners` in `~/.config/hive/slack-door.json`. **Everyone you list directs agents with full rights.**
+4. Add your Slack member ID under `owners` in `~/.config/hive/slack-door.json`. **Everyone you list can direct your agents.**
 5. `systemctl --user daemon-reload && systemctl --user enable --now slack-door.path`.
 6. Invite the bot to a channel, then run `slack-door channels` to see which ones it isn't in yet. Or DM it. Say something. 👀 appears within seconds, and the answer follows.
 

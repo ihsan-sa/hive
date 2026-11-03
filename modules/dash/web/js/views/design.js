@@ -22,9 +22,9 @@ function setText(v, focus) { D.text = v; const n = document.querySelector(".dtyp
 
 const linksPart = v => v.links && v.links.length ? section({ title: "Your designs", note: "only you can open them until you share them", key: "links" },
   h("ul", { class: "list" }, v.links.map(l => h("li", { class: "lr", "data-key": l.url },
-    h("div", { class: "lr-in frow fsplit" }, h("a", { href: l.url, target: "_blank", rel: "noreferrer noopener" }, l.url), h("span", { class: "muted", style: "margin-left:auto" }, (l.by ? l.by + ": " + (l.brief || "") + " · " : "") + ago(l.at * 1e3))))))) : null;
+    h("div", { class: "lr-in frow fsplit" }, h("a", { href: /^https:\/\//.test(l.url) ? l.url : "#", target: "_blank", rel: "noreferrer noopener" }, l.url), h("span", { class: "muted", style: "margin-left:auto" }, (l.by ? l.by + ": " + (l.brief || "") + " · " : "") + ago(l.at * 1e3))))))) : null;
 
-const GRANT = "Lets agents read and change your claude.ai/design projects on this account. Agents can already make new designs without this. You can take it back with /design revoke.";
+const grantNote = v => "Lets agents read and change your claude.ai/design projects on this account." + (v.agents_design ? " Agents can already make new designs without this." : "") + " If it needs you to sign in, a link appears on the session's screen: open it, approve, and paste any code it gives you into the box. You can take it back with /design revoke.";
 
 export default {
   id: "design", label: "Design", about: "make designs with Claude Design", tab: () => !!S.app.app && can("logins"),
@@ -38,8 +38,8 @@ export default {
     if (!v.running) return h("div", { class: "page", "data-key": "design" }, header,
       section({ title: "Start a session", key: "start", note: "it ends by itself after 6 hours" },
         h("div", { class: "frow" }, v.logins.map(l => button(`Start on ${l.name}` + (l.weekly != null ? ` (${Math.round(l.weekly)}% of the week used)` : ""), () => act({ do: "start", login: l.name }, ctx), { kind: "primary", busy: D.busy, type: "button" })), v.logins.length ? null : h("p", { class: "field-h" }, "Every login is paused or past its weekly line right now.")), say),
-      section({ title: "Give agents your Claude Design projects", key: "grant", note: GRANT },
-        h("div", { class: "frow" }, v.logins.map(l => button(`Give access on ${l.name}`, () => act({ do: "grant", login: l.name }, ctx), { size: "s", type: "button", disabled: D.busy })))),
+      v.can_connect !== false ? section({ title: "Give agents your Claude Design projects", key: "grant", note: grantNote(v) },
+        h("div", { class: "frow" }, v.logins.map(l => (v.connected || []).includes(l.name) ? h("span", { class: "field-h" }, `Connected on ${l.name}`) : button(`Give access on ${l.name}`, () => act({ do: "grant", login: l.name }, ctx), { size: "s", type: "button", disabled: D.busy })))) : null,
       say, linksPart(v));
     const send = () => { const text = D.text; if (!text.trim()) return; setText(""); stuck = true; act({ do: "send", text }, ctx); };
     const key = (label, k) => button(label, () => act({ do: "key", key: k }, ctx), { size: "s", kind: "quiet", type: "button" });
@@ -48,7 +48,7 @@ export default {
       h("form", { class: "frow dtype", onsubmit: e => { e.preventDefault(); send(); } },
         h("div", { style: "flex:1;min-width:14rem" }, input({ "aria-label": "Type to Claude", placeholder: "/design a landing page for…", autocomplete: "off", spellcheck: "false", value: D.text, oninput: (e, n) => { D.text = n.value; } })),
         button("Send", null, { kind: "primary", type: "submit" })),
-      h("div", { class: "frow" }, key("Up", "up"), key("Down", "down"), key("Enter", "enter"), key("Esc", "esc"), key("Tab", "tab"), key("Interrupt", "stop"), button("Give agents my Claude Design projects", () => { stuck = true; act({ do: "grant" }, ctx); }, { size: "s", type: "button", title: GRANT }),
+      h("div", { class: "frow" }, key("Up", "up"), key("Down", "down"), key("Enter", "enter"), key("Esc", "esc"), key("Tab", "tab"), key("Interrupt", "stop"), v.can_connect === false ? null : (v.connected || []).includes(v.session_login) ? h("span", { class: "field-h" }, `Connected on ${v.session_login}`) : button("Give agents my Claude Design projects", () => { stuck = true; act({ do: "grant" }, ctx); }, { size: "s", type: "button", title: grantNote(v) }),
         h("span", { style: "margin-left:auto" }, button("Save it for the hive", () => setText(SAVE, true), { size: "s", type: "button", title: "Fills in the message; Send sends it" }), " ", button("End session", () => act({ do: "stop" }, ctx), { size: "s", kind: "quiet", type: "button" }))),
       h("p", { class: "field-h" }, "Use the keys to answer questions on its screen. Saved designs go under ", h("code", null, v.dir), ", where agents can read them."),
       say, linksPart(v));

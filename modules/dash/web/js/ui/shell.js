@@ -55,12 +55,13 @@ export function hiveStopped() {
 }
 function appBits() {
   const n = S.running.size, us = logins().filter(l => inUse(l, S.usage)), stop = hiveStopped();
-  const wk = us.map(fresh7).filter(v => v != null);
+  // The account with the most room: the one the starter gives the next agent, and the one the Usage page answers for.
+  const next = us.map(l => ({ l, v: fresh7(l) })).filter(x => x.v != null).sort((a, b) => a.v - b.v)[0];
   return [
     S.failed ? h("span", { "data-tone": "bad", style: "color:var(--ci)" }, statusDot("stuck"), "Lost contact, last data " + ago(S.fresh)) : null,
     h("span", { title: "agents running now" }, statusDot("working", { live: n > 0 }), plural(n, "agent") + " working"),
     stop ? h("span", { "data-tone": "bad", style: "color:var(--ci)" }, statusDot("limited"), stop.why === "off" ? "Not running" : "Stopped: usage limit")
-      : wk.length ? h("span", { title: "the most-used Claude account's share of its weekly limit" }, Math.round(Math.max(...wk)) + "% of the week used") : null,
+      : next ? h("span", { title: `${next.l.name}, the account new agents start on: its share of its weekly limit` }, Math.round(next.v) + "% of the week used") : null,
   ];
 }
 /** The band under the bar when the hive has stopped: says why in words, and where to look. */
