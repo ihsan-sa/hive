@@ -92,7 +92,7 @@ def version():
     return re.sub(r"[^A-Za-z0-9._+-]+", "-", v)[:32] or "0"
 
 def base(st, typ):
-    return {"install": st["install"], "version": version(), "type": typ, "os": platform.system().lower() + "/" + platform.machine().lower()}
+    return {"install": st["install"], "version": installed_version(), "type": typ, "os": platform.system().lower() + "/" + platform.machine().lower()}
 
 def url():
     try: u = json.load(open(settings_path())).get("share_url")
@@ -109,6 +109,17 @@ EVENT_FAILS = {"lost_subagents": "lost-subagents", "logins_paused": "logins-paus
 EVENT_MSG = {"lost_subagents": "background helpers were lost when an agent ended", "logins_paused": "all logins were paused",
              "provider_held": "a model provider was held back", "killed": "an agent was killed"}
 
+def update_why(unit):
+    """Why the updater failed: its own last lines, which are git's and install.sh's errors, and never the starter's or the app's, which can quote chat."""
+    if not unit.endswith("-update.service"): return ""
+    import subprocess
+    try: out = subprocess.run(["journalctl", "--user", "-u", unit, "-n", "3", "-o", "cat", "--no-pager"], capture_output=True, text=True, timeout=20).stdout.strip()
+    except Exception: out = ""
+    if not out:
+        try: out = json.load(open(os.path.join(home(), ".hive", "update.json"))).get("error") or ""
+        except (OSError, ValueError, AttributeError): out = ""
+    return ": " + str(out) if out else ""
+
 def unit_failures(st):
     """The doctor check: the Hive's own systemd user units that are in a failed state. Names only (hive-*/hive-*),
     reported once per failure; a unit that recovers is forgotten, so a later failure is reported again."""
@@ -120,7 +131,7 @@ def unit_failures(st):
     reps = []
     for u in now:
         if u in seen: continue
-        r = base(st, "failure"); r.update(kind="unit-failed", at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), message=clip(scrub("systemd unit %s is in a failed state" % u), MAX_TEXT)); reps.append(r)
+        r = base(st, "failure"); r.update(kind="unit-failed", at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), message=clip(scrub(("systemd unit %s is in a failed state" % u) + update_why(u)), MAX_TEXT)); reps.append(r)
     return reps
 
 def build(st, want_fail, want_use):
@@ -189,6 +200,8 @@ def send(dry=False):
     st = installed_state()
     new, off = build(st, wf, wu)
     if wf: new += unit_failures(st)
+    if wu and not st.get("hello"):                    # the first send after opting in says so, with counts of nothing, so a quiet Hive can be told from a broken route
+        r = base(st, "usage"); r.update(at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), message="sharing is on", usage={"runs": 0}); new.insert(0, r); st["hello"] = True
     q = [r for r in pending() if (r["type"] == "failure" and wf) or (r["type"] == "usage" and wu)] + new
     if len(q) > MAX_PER_RUN: q = q[-MAX_PER_RUN:]
     if dry: return "would send %d report(s):\n" % len(q) + "\n".join(json.dumps(r) for r in q)

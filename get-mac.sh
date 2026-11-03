@@ -46,6 +46,17 @@ portForwards:
 provision:
 - mode: system
   script: |
+    #!/bin/sh
+    # Lima 2.2.1 on Ubuntu 24.04: ending the first login at boot can leave logind spinning. Logins then take
+    # minutes and linger is lost, so the install's own linger fails too (lima-vm/lima#5730, reported on Apple silicon).
+    # logind ignores SIGTERM in that state, and sessions survive the kill.
+    if ! timeout 5 loginctl list-sessions >/dev/null 2>&1; then
+      systemctl kill --signal=SIGKILL systemd-logind.service || true
+      systemctl start systemd-logind || true
+    fi
+    loginctl enable-linger "\${LIMA_CIDATA_USER}" || true
+- mode: system
+  script: |
     #!/bin/bash
     set -eu
     command -v nft >/dev/null || { apt-get update -qq; DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nftables; }
@@ -223,7 +234,10 @@ main() {
     || die "the VM didn't start. Its log is in $LIMA_HOME/$VM/ha.stderr.log"
 
   # The normal Linux install, as root in the VM. Run again, it updates.
-  echo "Installing the Hive in the VM..."
+  echo "Installing the Hive in the VM. This can sit quiet for several minutes, so please leave it running..."
+  # A VM made before its provisioning recovered logind, or one whose logind spun later: a rerun has to fix this itself
+  # or it fails the same way, with "Failed to connect to bus" after the linger note (lima-vm/lima#5730).
+  "$L" shell --workdir / "$VM" sudo sh -c 'timeout 5 loginctl list-sessions >/dev/null 2>&1 || { systemctl kill --signal=SIGKILL systemd-logind.service; systemctl start systemd-logind; }' </dev/null || true
   # shellcheck disable=SC2016  # these expand in the VM
   "$L" shell --workdir / "$VM" sudo env HIVE_INSIDE=1 HIVE_BRANCH="${HIVE_BRANCH:-}" SITE="$SITE" sh -c \
     '[ -n "$HIVE_BRANCH" ] || unset HIVE_BRANCH; f=$(mktemp); curl -fsSL -o "$f" "$SITE/install.sh" && sh "$f"' </dev/null \

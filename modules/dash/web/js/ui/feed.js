@@ -1,9 +1,19 @@
 // Activity feed: tool calls and what an agent said, newest first. Keeps its own scroll, which morph leaves alone.
 import { h } from "../core/dom.js";
+import { S } from "../core/store.js";
 import { clock, short } from "../core/format.js";
-import { empty } from "./kit.js";
+import { button, empty, note } from "./kit.js";
 
 export const toolTone = t => (/^Bash$/.test(t) ? "warn" : /^(Read|Grep|Glob|WebFetch|WebSearch)$/.test(t) ? "tier1" : /^(Edit|Write|NotebookEdit)$/.test(t) ? "good" : /^(Agent|Task|Skill)$/.test(t) ? "tier2" : "other");
+
+/** The server blanks these below full rights (feed_for in dash.py), so a row with a tool and no words needs saying why. Null when nothing is hidden. */
+export function feedHiddenNote(items) {
+  if (!items || !items.length || items.some(e => e.k !== "tool" || e.x)) return null;
+  const limited = S.app.mode === "limited";
+  return note({ key: "feed-hidden", actions: limited ? null : button("Sign in again", null, { size: "s", href: "/cdn-cgi/access/logout", title: "This signs you out; open this page again and sign in with Google." }) },
+    limited ? "Your sign-in is limited, so you see which tools this agent used, not its commands or what it said."
+      : "Commands and what this agent said are hidden: full mode lasts an hour after you sign in. Sign in again to see them.");
+}
 
 /** items: [{t, k: "tool"|"said", tool, x}], oldest first as the server sends them. null: still loading. */
 export function feed(items, { max = 700 } = {}) {
@@ -17,5 +27,5 @@ export function feed(items, { max = 700 } = {}) {
       h("span", { class: "feed-k", "data-tone": said ? "tier1" : toolTone(e.tool) }, said ? "said" : e.tool),
       h("div", { class: "feed-x" }, short(said ? e.x : String(e.x).replace(/^Running: /, ""), max)));
   });
-  return h("ol", { class: "feed", tabindex: 0, "aria-label": "Latest activity" }, rows.reverse());
+  return [feedHiddenNote(items), h("ol", { class: "feed", "data-key": "feed", tabindex: 0, "aria-label": "Latest activity" }, rows.reverse())];
 }

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Hive starter: watch ~/board.jsonl, start a session per @mention, pace on weekly usage, log, back up ~ to git."""
-import datetime as dt, json, os, re, secrets, shutil, signal, subprocess, time, urllib.request, uuid
+import datetime as dt, json, os, re, secrets, shutil, signal, subprocess, sys, time, urllib.request, uuid
 from pathlib import Path
 
 HOME = Path.home()
@@ -9,6 +9,7 @@ MENTION = re.compile(r"(?<![\w.])@([a-z0-9][a-z0-9_-]*)", re.I)
 CODE = re.compile(r"```.*?```|`[^`\n]*`", re.S)  # a name in backticks is being written about, not called
 MEMINFO, PSI_MEM = "/proc/meminfo", "/proc/pressure/memory"
 last_start = [0.0]  # when this process last started a run, for under_pressure
+recent_starts = []  # when, for under_pressure: runs too young to show in MemAvailable
 children = {}  # name -> Popen, for sessions this process started (others are tracked by pid file only)
 
 def now(): return dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
@@ -20,12 +21,13 @@ def load(name, default):
     except (OSError, ValueError): return default
 def save(name, v): (STATE / name).write_text(json.dumps(v, indent=1))
 
-def post(text, to=(), thread=None):
+def post(text, to=(), thread=None, model=None):
     p = {"id": dt.datetime.now().strftime("%m%d%H%M") + secrets.token_hex(2), "at": now(), "from": "starter",
          "to": ["@" + t for t in to], "text": text}
     # Keeper and improver dispatches are work requests; operational notices share one thread.
-    p["thread"] = thread if thread in ("keeper", "improve") else "starter"
-    if thread and thread not in ("keeper", "improve", "starter"):
+    if model: p["model"] = model
+    p["thread"] = thread if thread in ("keeper", "improve", "kb-dream") else "starter"
+    if thread and thread not in ("keeper", "improve", "kb-dream", "starter"):
         p["text"] = f"[source thread: {thread}] {text}"
     with BOARD.open("a") as f: f.write(json.dumps(p) + "\n")
 
@@ -99,6 +101,15 @@ def provider_of(c, model):
     return m[1], c["providers"][m[1]], m[2]
 
 def model_ok(c, model): return model in MODELS or provider_of(c, model) is not None
+
+def default_model():
+    """The model of a run nobody asked a model for. An installed Hive: the Model choice in Settings, Opus until one is made, so it
+    doesn't hang on what the account's plan defaults to (the person, 2026-11-03). No settings.json (Hive itself): the login's default."""
+    try: v = json.loads((HOME / "settings.json").read_text())
+    except FileNotFoundError: return None
+    except (OSError, ValueError): v = None
+    m = v.get("model") if isinstance(v, dict) else None
+    return m if m in MODELS else "opus"
 
 TYPED_MODEL = re.compile(r"(?:^|\s)(?:--|\u2014|\u2013)model[ =](\S+)")  # a phone may turn -- into a dash
 
@@ -618,13 +629,19 @@ def pick_login(c, u, limits=None, stop=None):
 def under_pressure(c, posts=()):
     """Why a new run should wait a moment, or None. This paces starts, it is not a cap: the run still starts once the
     machine can take it, however many are running (2026-11-02: 44 starts in 20 min took swap to full and load to 292).
+    Runs start at once while memory lasts (the person, 2026-11-03: a fan-out should all spawn instantly). A run started
+    moments ago doesn't show in MemAvailable yet, so each one counts as start_reserve_mb until start_settle_s has passed:
+    without that a burst reads the same free memory for every start. start_gap_s, off by default, spaces starts as well.
     The person, the box and the warden never wait."""
     if any(p.get("from") == "person" or p.get("from") == "hives" for p in posts): return None
-    if time.time() - last_start[0] < c.get("start_gap_s", 10): return "gap"
+    if time.time() - last_start[0] < c.get("start_gap_s", 0): return "gap"
     try:
         avail = int(re.search(r"MemAvailable:\s+(\d+)", Path(MEMINFO).read_text())[1]) // 1024
         stall = float(re.search(r"full avg10=\S+ avg60=([\d.]+)", Path(PSI_MEM).read_text())[1])
     except (OSError, TypeError): return None
+    settle = time.time() - c.get("start_settle_s", 30)
+    recent_starts[:] = [t for t in recent_starts if t > settle]
+    avail -= len(recent_starts) * c.get("start_reserve_mb", 400)
     if avail < c.get("start_min_avail_mb", 3000): return f"{avail} MB available"
     if stall >= c.get("start_max_stall", 20): return f"memory stall {stall:.0f}%"
     return None
@@ -762,7 +779,8 @@ def start(c, name, posts, login, resume=None, reaped=None, extra=(), moved=False
     sid = resume or str(uuid.uuid4())  # the claude session id, so `claude --resume <session>` works
     first = posts[0]
     model = (next((p["model"] for p in posts if provider_of(c, p.get("model"))), None)  # a provider wins: main loop picked it
-             or next((p["model"] for p in posts if p.get("model") in MODELS), None))  # none: the login's default
+             or next((p["model"] for p in posts if p.get("model") in MODELS), None)
+             or default_model())
     prov = provider_of(c, model)
     kind = "warden" if is_warden(name) else "agent"
     system = (CORE / "orientation.md").read_text() + ("\n\n" + (CORE / "warden.md").read_text() if kind == "warden" else "")
@@ -808,7 +826,7 @@ def start(c, name, posts, login, resume=None, reaped=None, extra=(), moved=False
     fb = next((p["fallback"] for p in posts if p.get("fallback")), None)
     if fb: prompt += "\n\n" + FALLBACK_NOTE[fb].format(model=model, tier=tier_of(model))
     path = HOME / "sessions" / f"{name}-{dt.datetime.now():%m%d-%H%M%S}.jsonl"
-    last_start[0] = time.time()
+    last_start[0] = time.time(); recent_starts.append(last_start[0])
     tmp = HOME / ".cache" / "hive-tmp"; tmp.mkdir(parents=True, exist_ok=True)  # on disk: /tmp is tmpfs, its files hold RAM and swap
     # ENABLE_CLAUDEAI_MCP_SERVERS: the logins' claude.ai connectors (the person's Slack, Vercel buy_domain, ...) are 12k tokens on
     # every reply, and 12 calls in 542 transcripts, all Exa search; they also let an agent act in the person's name (kb/model-cost.md)
@@ -873,6 +891,23 @@ def improver(c, st, alive, login):
     st["improve_at"] = t
     post(IMPROVE, ["new"], "improve")
     log(event="improve")
+
+def dreamer(c, st, alive, login):
+    """Every dream_every_s, one agent on ~/core/kb-dream.md, and only if `kb due` finds misses or filings to work from.
+    Same limits as the improver; 0 turns it off. The check costs no model use, so a quiet knowledge base costs nothing."""
+    every = c.get("dream_every_s", 0)
+    if not every or not login: return
+    if any(isinstance(r, dict) and r.get("thread") == "kb-dream" for r in alive.values()): return
+    if any(p.get("thread") == "kb-dream" for ps in st["pending"].values() for p in ps): return
+    if any(r.get("thread") == "kb-dream" for r in st.get("resume", {}).values()): return
+    t = time.time()
+    if t - st.setdefault("dream_at", t) < every: return
+    st["dream_at"] = t
+    try: due = subprocess.run([sys.executable, "-I", str(CORE / "kb.py"), "due", "--mark"], capture_output=True, text=True, timeout=120)
+    except (OSError, subprocess.TimeoutExpired): return
+    if due.returncode: return
+    post("@new Knowledge base dream: read ~/core/kb-dream.md and follow it. Work since the last one:\n" + due.stdout[:3000], ["new"], "kb-dream", "sonnet")
+    log(event="kb-dream")
 
 def backup(c, st):
     if time.time() - st.get("committed", 0) < c["commit_s"]: return
@@ -1110,6 +1145,7 @@ def main():
         if not hold:
             keeper(c, st, alive, login)
             improver(c, st, alive, login)
+            dreamer(c, st, alive, login)
         save("starter.json", st)
         backup(c, st)
         time.sleep(c["poll_s"])

@@ -1,7 +1,7 @@
 // Usage: are we about to run out, then where the work went. Template: metrics.
 import { h } from "../core/dom.js";
 import { S, SYS, can } from "../core/store.js";
-import { spendSince, fresh7, sessionNewer, inUse, runway, weeklyStop, fileInfo, threadTitle, tierOf, agentStatus, sEnd } from "../core/model.js";
+import { spendSince, fresh7, sessionNewer, inUse, runway, nextBack, weeklyStop, fileInfo, threadTitle, tierOf, agentStatus, sEnd } from "../core/model.js";
 import { now, ago, dur, clock, dayName, untilText, money, money$, toks, pct, plural, HOUR, DAY, MIN } from "../core/format.js";
 import { TIERS, tier, status } from "../core/status.js";
 import { threadHref, agentHref, href } from "../core/router.js";
@@ -83,22 +83,23 @@ export function providerRow(name, p, checked) {
   return msg(p.error || "No limits to show.");
 }
 
-/** The app's answer: how much is left, and when it comes back. One account usually; with several, the one with most room. */
+/** The app's answer: how much is left, and when more comes in. One account usually; with several, what's left is the one with most room, and when it comes back is the next one due that isn't paused. */
 export function leftAnswer(U, t = now()) {
-  const us = U.logins || [], live = us.filter(l => inUse(l, U)), pick = (live.length ? live : us).map(l => ({ l, v: fresh7(l), r: runway(l, U) })).sort((a, b) => (a.v ?? 0) - (b.v ?? 0))[0];
+  const us = U.logins || [], live = us.filter(l => inUse(l, U)), awake = us.filter(l => !l.paused), pick = (live.length ? live : awake.length ? awake : us).map(l => ({ l, v: fresh7(l), r: runway(l, U) })).sort((a, b) => (a.v ?? 0) - (b.v ?? 0))[0];
   if (!pick) return { lead: "No Claude account yet. Sign in under Settings.", tone: "quiet", figures: [] };
   const { l, v, r } = pick, L = l.limits || {}, w5 = !l.no_five_hour && L.five_hour && L.five_hour.r * 1e3 > t ? L.five_hour : null;
-  const back = r.toReset != null ? t + r.toReset : null, left = v == null ? null : Math.max(0, 100 - Math.round(v)), room = v == null ? null : Math.max(0, Math.round(r.stop - v));
+  const next = nextBack(U, t), back = next && next.at, several = us.length > 1, whose = next && several && next.l.name, left = v == null ? null : Math.max(0, 100 - Math.round(v)), room = v == null ? null : Math.max(0, Math.round(r.stop - v));
   let lead, tone = null;
-  if (!live.length) { lead = `The hive has stopped starting agents: ${us.length > 1 ? "every account is" : "your account is"} past its ${r.stop}% line.` + (back ? ` It comes back ${dayName(back)} ${clock(back)}, in ${dur(r.toReset)}.` : ""); tone = "bad"; }
+  const when = back ? `${dayName(back)} ${clock(back)}, in ${dur(next.in)}` : "";
+  if (!live.length) { lead = `The hive has stopped starting agents: ${!awake.length ? (several ? "every account is paused" : "your account is paused") : several ? "every account is paused or past its line" : `your account is past its ${r.stop}% line`}.` + (back ? ` ${whose || "It"} comes back ${when}.` : ""); tone = "bad"; }
   else {
-    lead = (left == null ? "Claude hasn't said yet how much of this week is left" : `${left}% of this week is left`) + (back ? `, and it comes back in full ${dayName(back)} ${clock(back)}, in ${dur(r.toReset)}.` : ".");
+    lead = (left == null ? "Claude hasn't said yet how much of this week is left" : `${left}% of this week is left`) + (!back ? "." : whose ? `, and ${whose} is the next to come back, ${when}.` : `, and it comes back in full ${when}.`);
     if (r.before) { lead += ` At the last 6 hours' pace, new agents stop in about ${dur(r.toStop)}, at the ${r.stop}% line.`; tone = "warn"; }
     else if (back && left != null) lead += " At the current pace it lasts until then.";
   }
   const figures = [
     { label: "Left this week", value: left == null ? "?" : left + "%", meter: { value: v, stop: r.stop, label: "weekly use" }, note: room != null ? `${room} points before new agents stop, at ${r.stop}%` : null, tone: !live.length ? "bad" : null },
-    { label: "Comes back", value: back ? `${dayName(back).split(",")[0]} ${clock(back)}` : "?", note: back ? "in " + dur(r.toReset) + ", all of it" : null },
+    { label: "Comes back", value: back ? `${dayName(back).split(",")[0]} ${clock(back)}` : "?", note: back ? "in " + dur(next.in) + (whose ? `, when ${whose} resets` : ", all of it") : !awake.length ? "every account is paused" : null },
     w5 ? { label: "Left in this 5 hours", value: Math.max(0, 100 - Math.round(w5.u * 100)) + "%", meter: { value: w5.u * 100, label: "5-hour use" }, note: `refills ${clock(w5.r * 1e3)}, in ${dur(w5.r * 1e3 - t)}`, tone: w5.u >= 0.9 ? "bad" : null } : null,
   ];
   return { lead, tone, figures, account: us.length > 1 ? l.name : null };
@@ -110,8 +111,8 @@ export function usageAnswer(U, t = now()) {
   let lead, tone;
   if (!us.length) { lead = "No logins reported yet."; tone = "quiet"; }
   else if (!live.length) {
-    const next = us.filter(l => !l.paused).map(l => ({ l, r: runway(l, U).toReset })).filter(x => x.r != null).sort((a, b) => a.r - b.r)[0];
-    lead = `No login has room, so nothing new starts.` + (next ? ` The first to reset is ${next.l.name}, in ${dur(next.r)}.` : ""); tone = "bad";
+    const next = nextBack(U, t);
+    lead = `No login has room, so nothing new starts.` + (next ? ` The first to reset is ${next.l.name}, in ${dur(next.in)}.` : ""); tone = "bad";
   } else {
     const soon = live.map(l => ({ l, r: runway(l, U) })).filter(x => x.r.before).sort((a, b) => a.r.toStop - b.r.toStop)[0];
     const which = live.length === 1 ? `Only ${live[0].name} can take new runs` : `${live.length} of ${us.length} logins can take new runs`;

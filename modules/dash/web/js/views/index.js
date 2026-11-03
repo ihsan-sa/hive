@@ -19,6 +19,7 @@ import secrets from "./secrets.js";
 import deck from "./deck.js";
 import knowledge from "./knowledge.js";
 import design from "./design.js";
+import made from "./made.js";
 
 export default [
   start,
@@ -35,14 +36,11 @@ export default [
   settings,
   knowledge,
   design,
+  made,
   agent,
   system,
   deck,
 ];
 
-// In the app the bar is short: these up front, in this order; the rest under More, in that order.
-// A view named in neither goes at the end of More, so a new view is still one line above.
-export const APP_NAV = {
-  main: ["start", "comms", "knowledge", "now", "usage", "settings"],
-  more: ["design", "inbox", "agents", "ledger", "timeline", "mesh", "jobs"],
-};
+// Where each view sits in the app's bar: core/nav.js.
+export { APP_NAV, SIMPLE_NAV } from "../core/nav.js";

@@ -8,13 +8,20 @@ import { copyButton } from "./refs.js";
 import { act, begin, finish, isBusy } from "./activity.js";
 
 // What's being typed lives here, so a poll never loses it. A key is held only until it's sent.
-const P = { page: null, asked: false, err: "", keyKind: "anthropic", key: "", keySay: null, codexSay: "", ticking: false, codexSeen: null, seq: 0, saving: {}, saved: null };
+const P = { page: null, asked: false, err: "", keyKind: "anthropic", key: "", keySay: null, codexSay: "", ticking: false, codexSeen: null, seq: 0, saving: {}, saved: null, want: [] };
 const BARE = "Agents would run without a sandbox. An unsandboxed agent acts on everything your logins and files reach: it can read your credentials, change any file you can, and reach every service on this machine and network.";
 const ALWAYS = ["spending money", "credentials", "opening this machine to the network", "anything sent off this machine with your accounts or keys (git push, gh, publishing, mail, posting)", "publishing private details", "deleting repos, commits or history"];
 export const POWER = [
   [1, "Ask me first", "Agents work inside the sandbox on their own. A step that has to leave the sandbox comes to you, and waits for your answer.", "A bigger step comes to you first, and the agent waits for your answer."],
   [2, "A warden decides", "A warden, an agent whose only job is judging these steps, approves the step and it runs as your computer account. A step that's hard to undo needs more than one opinion."],
   [3, "A warden decides, I hear afterwards", "A warden settles it without you, and you're told what happened afterwards."],
+];
+
+export const MODELS = [
+  ["opus", "Opus", "Where it starts. For hard work. It uses up a plan's limits faster than Sonnet."],
+  ["sonnet", "Sonnet", "Uses a plan's limits more slowly. For everyday work."],
+  ["haiku", "Haiku", "The lightest. For small chores."],
+  ["fable", "Fable", "Another Claude model. Your plan may not include it."],
 ];
 
 export const local = () => S.app.route === "local";
@@ -26,9 +33,15 @@ export async function loadPage(update) {
   try { P.page = await jget("/api/settings"); P.err = ""; } catch (e) { P.err = e.message; }
   update();
 }
+/** The page as it should look: what the Hive last said, plus any choice still on its way there. A re-render during a save would otherwise put the old choice back. */
+function shown() {
+  if (!P.want.length || !P.page || !P.page.settings) return P.page;
+  const settings = P.want.reduce((v, d) => ({ ...v, ...d, share: { ...v.share, ...d.share } }), P.page.settings);
+  return { ...P.page, settings };
+}
 export function pageData(update) {
   if (!P.asked && can("config")) loadPage(update);
-  return P.page && P.page.settings ? P.page : null;
+  return P.page && P.page.settings ? shown() : null;
 }
 export const reading = () => P.err ? sayMsg(P.err, "bad") : empty("Reading…", { kind: "loading" });
 export const forget = () => { P.asked = false; P.key = ""; P.keySay = null; P.codexSay = ""; P.saved = null; };
@@ -38,21 +51,22 @@ function saying(d) {
   if (d.setup_done) return ["finish", "Finishing setup", "Setup finished"];
   if (d.share) { const [k, on] = Object.entries(d.share)[0], n = (SHARES.find(s => s[0] === k) || [k, k])[1]; return ["share", `Turning ${on ? "on" : "off"}: ${n}`, `${n}: ${on ? "on" : "off"}`]; }
   if (d.power) { const n = (POWER.find(x => x[0] === d.power) || [0, d.power])[1]; return ["power", `Setting the power level to ${n}`, `Power level: ${n}`]; }
+  if (d.model) { const n = (MODELS.find(x => x[0] === d.model) || [0, d.model])[1]; return ["model", `Setting the model to ${n}`, `Model: ${n}`]; }
   if (d.sandbox) return ["sandbox", d.sandbox === "bare" ? "Turning the sandbox off" : "Turning the sandbox on", d.sandbox === "bare" ? "Sandbox off" : "Sandbox on"];
   return ["other", "Saving", "Done"];
 }
 /** Save settings; the answer is the whole page. Returns false if it was refused. */
 export async function saveSettings(d, update) {
   const [part, doing, done] = saying(d);
-  P.saved = null; P.saving[part] = (P.saving[part] || 0) + 1;
+  P.saved = null; P.saving[part] = (P.saving[part] || 0) + 1; P.want.push(d);
   try {
-    if (await act(part === "finish" ? part : "save" + ++P.seq, doing, async () => { P.page = await post("/api/settings", d); P.err = ""; await loadApp(); }, update, done) === false) return false;
+    if (await act(part === "finish" ? part : "save" + ++P.seq, doing, async () => { P.page = await post("/api/settings", d); P.err = ""; P.want.splice(P.want.indexOf(d), 1); await loadApp(); }, update, done) === false) return false;
     P.saved = part;
     const n = P.seq; setTimeout(() => { if (P.saved === part && P.seq === n) { P.saved = null; update(); } }, 4000);  // "Saved." is news, not a state
     return true;
   }
   catch (e) { P.err = e.message; return false; }
-  finally { P.saving[part]--; update(); }
+  finally { if (P.want.includes(d)) P.want.splice(P.want.indexOf(d), 1); P.saving[part]--; update(); }
 }
 const saveErr = () => P.err ? sayMsg(P.err, "bad") : null;
 /** Under a choice that saves as you click: says it's going, then that it went. */
@@ -146,25 +160,46 @@ export const rootNote = () => P.page.accounts.root ? h("p", { class: "fmsg", "da
 const SHARES = [
   ["failures", "Failure reports", "What failed, when and why."],
   ["usage", "Usage reports", "Counts of runs, restarts and limit hits."],
-  ["everything", "Everything, when I say so", "Separate from the reports above: a scrubbed copy of recent logs and of the board, and that includes your chats. It goes only when you run hive-report bundle --yes yourself, and you can read it first."],
+  ["everything", "Everything, when I say so", "Separate from the reports above: a scrubbed copy of recent logs and of the board, and that includes your chats. Ticking this sends nothing: it goes only when you press Send a copy now, and each one is kept in reports/bundles in your Hive folder."],
 ];
+async function sendCopy(update) {
+  if (!confirm("Send the makers a scrubbed copy of your recent logs and board, chats included? They keep it for 30 days.")) return;
+  P.copyBusy = true; P.copySay = null; update();
+  try { await post("/api/share-copy", {}); P.copySay = { text: "Sent. A copy of what went is in reports/bundles in your Hive folder.", tone: "good" }; }
+  catch (e) { P.copySay = { text: e.message, tone: "warn" }; }
+  finally { P.copyBusy = false; update(); }
+}
 export function sharePart(update) {
-  const pg = P.page, on = pg.settings.share;
+  const pg = shown(), on = pg.settings.share;
   return [
     pg.share_text ? h("div", { class: "share-text", "data-key": "share-text" }, pg.share_text.split(/\n+/).map(t => h("p", null, t)))
       : h("p", { "data-key": "share-text" }, "The report module isn't installed here, so nothing can be sent, whatever is ticked."),
     h("div", { class: "checks cards", role: "group", "aria-label": "What to share" }, SHARES.map(([k, label, hint]) => h("label", { class: "check", "data-key": k },
       h("input", { type: "checkbox", checked: on[k], disabled: !local(), onchange: (e, n) => saveSettings({ share: { [k]: n.checked } }, update) }),
       h("span", null, label, h("span", { class: "field-h" }, hint))))),
+    on.everything && local() ? h("div", { class: "frow", "data-key": "send-copy" }, button("Send a copy now", () => sendCopy(update), { kind: "quiet", size: "s", busy: P.copyBusy })) : null,
+    P.copySay ? sayMsg(P.copySay.text, P.copySay.tone) : null,
     h("p", { class: "field-h" }, "All off until you turn one on. You can change this in Settings at any time."),
     saveLine("share"), localOnly(), saveErr()];
+}
+
+// ---- the model ----
+export function modelPart(update) {
+  const cur = shown().settings.model;
+  return [
+    h("p", null, "The Claude model an agent runs on, unless you ask for another in a message by writing --model and its name, like --model sonnet."),
+    h("div", { class: "checks cards", role: "radiogroup", "aria-label": "Which model agents use" }, MODELS.map(([m, label, hint]) => h("label", { class: "check", "data-key": "model-" + m },
+      h("input", { type: "radio", name: "model", checked: cur === m, disabled: !local(), onchange: () => saveSettings({ model: m }, update) }),
+      h("span", null, label, h("span", { class: "field-h" }, hint))))),
+    h("p", { class: "field-h" }, "An agent changes the next time it starts or wakes. One already working finishes on the model it has. If agents fail to start after a change, your plan may not include that model, so choose another."),
+    saveLine("model"), localOnly(), saveErr()];
 }
 
 // ---- power and the sandbox ----
 /** "enforced": the sandbox is on and its own check says it works here. Anything else, the levels are not a limit and the page says so. */
 const enforced = pg => pg.settings.sandbox === "on" && pg.sandbox_check.state === "works";
 export function powerPart(update) {
-  const pg = P.page, cur = pg.settings.power, a = pg.accounts, claude = a.claude.some(l => l.signed_in);
+  const pg = shown(), cur = pg.settings.power, a = pg.accounts, claude = a.claude.some(l => l.signed_in);
   return [
     h("p", null, enforced(pg) ? "Agents run in a sandbox on this machine. This sets who decides when one needs a step outside it, like installing something or changing a file elsewhere on this computer."
       : "This sets who decides when an agent wants to do something bigger. Read the sandbox note below: without a working sandbox, this is an instruction to the agents, and nothing on this machine holds them to it."),
@@ -178,7 +213,7 @@ export function powerPart(update) {
     localOnly(), saveErr()];
 }
 export function sandboxPart(update) {
-  const pg = P.page, c = pg.sandbox_check, bare = pg.settings.sandbox === "bare";
+  const pg = shown(), c = pg.sandbox_check, bare = pg.settings.sandbox === "bare";
   const leave = () => { if (confirm(BARE + "\n\nRun without the sandbox anyway?")) saveSettings({ sandbox: "bare" }, update); };
   const back = () => saveSettings({ sandbox: "on" }, update);
   const leaveBtn = () => local() ? h("div", { class: "frow" }, button("Run without the sandbox", leave, { kind: "quiet", size: "s", busy: P.saving.sandbox > 0 })) : null;
@@ -196,7 +231,7 @@ export function sandboxPart(update) {
 }
 /** What the Secrets box can truthfully say about who reads the file, given the sandbox. */
 export function secretsReach() {
-  const pg = P.page;
+  const pg = shown();
   if (!pg || !pg.settings || pg.settings.sandbox === "bare") return "Every agent on this account can read the file, so use tokens you can rotate.";
   return "An agent in the sandbox can't open the file. A step that runs outside the sandbox can, and that step goes through the power level you set. Use tokens you can rotate.";
 }

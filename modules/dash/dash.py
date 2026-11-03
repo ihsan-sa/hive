@@ -26,9 +26,9 @@ HOME_FILES = HOME / "files"
 STATE, PROJECTS = HOME / ".hive", HOME / "projects"
 PRIORITIES = HOME / "kb" / "priorities.md"
 UI = Path(__file__).resolve().parent / "ui.html"
-UI_DIR = Path(__file__).resolve().parent / "web"  # the rebuilt page: index.html, css/, js/. Only those are served, not its preview or fixtures.
+UI_DIR = Path(__file__).resolve().parent / "web"  # the rebuilt page: index.html, css/, js/, vendor/ (local copies of the libraries the chat draws with). Only those are served, not its preview or fixtures.
 DISPLAY_PAGES = ("/single-screen", "/dual-screen", "/dual-screen/1", "/dual-screen/2")  # TV pages: web/display.html; which tiles each shows is in js/display/layouts.js
-UI_CT = {".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8"}
+UI_CT = {".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".woff2": "font/woff2"}
 THREAD_HOURS = 12
 
 
@@ -410,6 +410,12 @@ def peer_uid(addr):
             if f[1] == want: return int(f[7])
     except (OSError, IndexError, ValueError): pass
     return None
+
+
+def may_kill(uid, me=None):
+    """Whose connection may kill: this user's, or root's. A Mac's browser arrives through Lima's guest agent, which runs as root, so
+    without root the Kill button could never work there. Root can already end anything here, so this hands nothing to the other users."""
+    return uid is not None and uid in (os.getuid() if me is None else me, 0)
 
 
 def heavy_jobs(t=None):
@@ -1146,10 +1152,10 @@ GET_CAP = {"/api/live": "read", "/api/board": "read", "/api/log": "read", "/api/
            "/api/settings": "config", "/api/update": "config", "/api/signin-codex": "logins", "/api/design": "logins",
            "/api/kb/home": "files", "/api/kb/open": "files", "/api/kb/search": "files", "/api/kb/raw": "files"}
 POST_CAP = {"/api/kill": "stop", "/api/tier": "tier", "/api/login-pause": "limits", "/api/login-limit": "limits", "/api/provider-limit": "limits",
-            "/api/post": "post", "/api/feedback": "post", "/api/update": "config", "/api/upload": "post", "/api/inbox-read": "post", "/api/config": "config", "/api/starter": "config",
+            "/api/post": "post", "/api/feedback": "post", "/api/update": "config", "/api/share-copy": "config", "/api/upload": "post", "/api/inbox-read": "post", "/api/config": "config", "/api/starter": "config",
             "/api/module": "modules", "/api/signin": "logins", "/api/signin/code": "logins", "/api/signin/cancel": "logins", "/api/plan": "plans", "/api/secret": "secrets",
             "/api/signin-codex": "logins", "/api/account-key": "logins", "/api/design": "logins"}
-LOCAL_ONLY = {"/api/access", "/api/settings"}  # who may do what is never changed from outside, whatever outside.can says
+LOCAL_ONLY = {"/api/access", "/api/settings", "/api/share-copy"}  # who may do what is never changed from outside, whatever outside.can says
 
 
 def web_cfg():
@@ -1454,7 +1460,13 @@ def thread_target(thread):
 STEP_WORD = re.compile(r"(approve|deny) step [0-9a-f]{6}-[0-9a-f]{8}", re.I)
 
 
-def person_post(text, thread=None, reply_to=None, uploads=(), signer=None, limited=False):
+# Simple mode's word to the agents, on each post sent from it. Inside the head's parentheses, so the web app hides it (SOURCE in web/js/core/model.js):
+# no ")" and no newline, and no "@", which would call someone. The core and the agents' prompts don't change.
+PAGE_CSP = "sandbox allow-scripts; default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:; font-src data:; media-src data:; form-action 'none'; base-uri 'none'"
+SIMPLE_NOTE = ("simple mode: this person isn't technical. Plain words, no agent names or jargon, speak as one assistant, one question at a time with your recommendation, "
+               "show results as links or files, a draft website as one .html file holding its own styles and pictures. For anything they must approve, say what it does, what it costs and whether it can be undone")
+
+def person_post(text, thread=None, reply_to=None, uploads=(), signer=None, limited=False, simple=False):
     """A post as the person. As the Slack mirror does it: a plain message wakes the agent last on the thread, a reply wakes the author
     of the post replied to, and no thread (or a thread with no agent yet) starts a new agent. Mentions in the text win.
     signer: who signed in, from a verified Access token, when more than one person can: it heads the text, so an agent and the board can see who wrote it.
@@ -1470,8 +1482,8 @@ def person_post(text, thread=None, reply_to=None, uploads=(), signer=None, limit
     # Approving a step goes to the broker, which takes only a whole line in this form from a plain person post. So it stays bare, with nothing added;
     # a limited sign-in's posts are marked and never count, whatever lines they hold.
     word = not limited and not paths and bool(STEP_WORD.fullmatch(text.strip()))
-    if word: text, reply_to, signer = text.strip(), None, None
-    if signer: text = f"(from {signer}, web app) {text}"
+    if word: text, reply_to, signer, simple = text.strip(), None, None, False
+    if signer or simple: text = "(" + (f"from {signer}, " if signer else "") + "web app" + (f", {SIMPLE_NOTE}" if simple else "") + f") {text}"
     INDEX.refresh()
     who = None
     if reply_to:
@@ -1875,7 +1887,7 @@ def set_config(d):
         new["auto_update"] = d["auto_update"]
     if "update_every_s" in d:
         v = d["update_every_s"]
-        if type(v) is not int or not 900 <= v <= 7 * 86400: raise ValueError("how often to look for a release is 15 minutes to 7 days")
+        if type(v) is not int or not 300 <= v <= 7 * 86400: raise ValueError("how often to look for a release is 5 minutes to 7 days")
         new["update_every_s"] = v
     if not new: raise ValueError("nothing to change")
     with _cfg_lock:
@@ -1916,7 +1928,7 @@ def update_view():
         except (OSError, subprocess.SubprocessError): pass
     c = cfg()
     return {"installed": INSTALLED.exists(), "tag": tag, "newest": st.get("newest"), "checked": st.get("checked"), "at": st.get("at"), "failed": st.get("failed") or [],
-            "error": st.get("error") or st.get("stuck"), "running": running, "auto_update": c.get("auto_update", True), "update_every_s": c.get("update_every_s") or 900}
+            "error": st.get("error") or st.get("stuck"), "running": running, "auto_update": c.get("auto_update", True), "update_every_s": c.get("update_every_s") or 300}
 
 
 def update_do(what):
@@ -1954,6 +1966,25 @@ def send_feedback(d):
     return {"ok": True}
 
 
+def report_now():
+    """Sharing was just turned on: send now instead of at the next 6-hour timer, so the makers and the person needn't wonder. Best effort; the timer is still there."""
+    f = HOME / "modules" / "report" / "report.py"
+    if not f.is_file(): return
+    try: subprocess.Popen([sys.executable, "-I", str(f), "send"], env=child_env(), start_new_session=True, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except OSError: pass
+
+
+def share_copy():
+    """Settings' Send a copy now: the same scrubbed bundle as `hive-report bundle --yes`, for someone who never opens a terminal. The report module refuses unless share.everything is on."""
+    f = HOME / "modules" / "report" / "report.py"
+    if not SETTINGS.is_file() or not f.is_file(): raise ValueError("this Hive has no way to send a copy to the makers")
+    try: r = subprocess.run([sys.executable, "-I", str(f), "bundle", "--yes"], env=child_env(), capture_output=True, text=True, timeout=90)
+    except (OSError, subprocess.SubprocessError) as e: raise ValueError(f"couldn't send it: {e}")
+    said = r.stdout.strip()
+    if r.returncode or not said.startswith("bundle sent"): raise ValueError(short(said or r.stderr, 300) or "couldn't send it")
+    return {"ok": True}
+
+
 def module_repo(name):
     """The GitHub page of a module that is its own clone, or None. Built from owner/repo alone, so a token in the remote's URL can't reach the page."""
     d = HOME / "modules" / name
@@ -1963,15 +1994,24 @@ def module_repo(name):
     return f"https://github.com/{m[1]}" if m else None
 
 
+def module_where(name):
+    """Where a module's code lives, for the page: "github" (repo holds the link), "git" (a remote elsewhere, never named here, since a URL can hold a token), or "local"."""
+    d = HOME / "modules" / name
+    if module_repo(name): return "github"
+    if not (d / ".git").exists(): return "local"
+    r = subprocess.run(["git", "-C", str(d), "config", "--get", "remote.origin.url"], capture_output=True, text=True, timeout=10)
+    return "git" if r.stdout.strip() else "local"
+
+
 def modules_view():
-    """`hive module list`, parsed: {name, state, about, needs, repo}."""
-    r = subprocess.run([str(HIVE_BIN), "module", "list"], capture_output=True, text=True, env=child_env(), cwd=str(HOME), timeout=30)
-    out = []
-    for ln in r.stdout.splitlines():
-        if not (m := re.match(r"(\S+)\s+(installed|available)\s*(.*)$", ln)): continue
-        about = m[3]; needs = re.search(r" \[needs (.*)\]$", about)
-        out.append({"name": m[1], "state": m[2], "about": about[:needs.start()] if needs else about, "needs": needs[1] if needs else None, "repo": module_repo(m[1])})
-    return out
+    """`hive module list --json`, with where each installed one's code lives: {name, state, source, about, needs, default, recommended, repo, where}."""
+    r = subprocess.run([str(HIVE_BIN), "module", "list", "--json"], capture_output=True, text=True, env=child_env(), cwd=str(HOME), timeout=30)
+    try: rows = json.loads(r.stdout)
+    except ValueError: return []
+    for m in rows:
+        m["repo"] = module_repo(m["name"])
+        m["where"] = module_where(m["name"]) if m["state"] == "installed" else None
+    return rows
 
 
 def module_do(what, name):
@@ -2341,6 +2381,7 @@ SETUP = CachedStale(setup_state, 20)  # set .t = 0 to read again. Stale, since e
 # ---------- consumer setup: settings.json, the walkthrough's and Settings' file. The starter and the report module read it. ----------
 # No file (Hive itself, and every install from before it) means today's behaviour: nothing here writes, and no route can create it.
 SETTINGS = HOME / "settings.json"
+AGENT_MODELS = ("opus", "sonnet", "haiku", "fable")  # the Claude models a post may ask for too (the starter's MODELS)
 SHARE_KEYS = ("failures", "usage", "everything")
 _settings_lock = threading.Lock()
 
@@ -2356,6 +2397,7 @@ def settings_norm(v):
     sh = v.get("share") if isinstance(v.get("share"), dict) else {}
     p = v.get("power")
     return {"power": p if type(p) is int and 1 <= p <= 3 else 2, "sandbox": "bare" if v.get("sandbox") == "bare" else "on",
+            "model": v.get("model") if v.get("model") in AGENT_MODELS else "opus",  # the starter reads it the same way (default_model)
             "share": {k: sh.get(k) is True for k in SHARE_KEYS}, "setup_done": v.get("setup_done") is not False}
 
 
@@ -2373,13 +2415,16 @@ def set_settings(d):
     """The fields the app may change. Anything else already in the file stays, and share_url can't be set from here."""
     new = {}
     for k in d:
-        if k not in ("power", "sandbox", "share", "setup_done"): raise ValueError("that isn't a setting")
+        if k not in ("power", "sandbox", "model", "share", "setup_done"): raise ValueError("that isn't a setting")
     if "power" in d:
         if type(d["power"]) is not int or not 1 <= d["power"] <= 3: raise ValueError("power is 1, 2 or 3")
         new["power"] = d["power"]
     if "sandbox" in d:
         if d["sandbox"] not in ("on", "bare"): raise ValueError("the sandbox is on or bare")
         new["sandbox"] = d["sandbox"]
+    if "model" in d:
+        if d["model"] not in AGENT_MODELS: raise ValueError("the model is " + ", ".join(AGENT_MODELS))
+        new["model"] = d["model"]
     if "setup_done" in d:
         if type(d["setup_done"]) is not bool: raise ValueError("setup_done is true or false")
         new["setup_done"] = d["setup_done"]
@@ -2390,10 +2435,12 @@ def set_settings(d):
     with _settings_lock:
         cur = settings_raw()
         if cur is None: raise ValueError("this Hive has no settings file, so there's nothing to change")
-        if share: new["share"] = {**settings_norm(cur)["share"], **share}
+        was = settings_norm(cur)["share"]
+        if share: new["share"] = {**was, **share}
         cur.update(new)
         write_text_private(SETTINGS, json.dumps(cur, indent=1) + "\n")
     SETUP.t = SHARE_TEXT.t = 0
+    if share and any(share.get(k) and not was.get(k) for k in ("failures", "usage")): report_now()
     if "setup_done" in d: sync_accounts()  # a Codex login made in a terminal counts too: nothing else would tell the starter
     return settings_page()
 
@@ -2663,33 +2710,38 @@ def serve(port):
     agent_costs = AgentCosts()
 
     class H(BaseHTTPRequestHandler):
-        def send(self, body, ct, status=200, cookie=None, framed_here=False):
+        def send(self, body, ct, status=200, cookie=None, framed_here=False, cache="no-store"):
             gz = len(body) > 4096 and "gzip" in self.headers.get("Accept-Encoding", "")
             if gz: body = gzip.compress(body, 5)
             self.send_response(status)
             self.send_header("Content-Type", ct); self.send_header("Content-Length", str(len(body)))
-            self.send_header("Cache-Control", "no-store")
+            self.send_header("Cache-Control", cache)
             if cookie: self.send_header("Set-Cookie", cookie)
             # Board text is written by agents: the page takes nothing from elsewhere and sends nothing anywhere.
             framing = "; frame-ancestors 'self'" if framed_here else "" if self.route == "open" else "; frame-ancestors 'none'"  # the page can post as the person, so it can't sit in someone's frame; a TV page may sit in this site's own (the deck's single screen)
-            self.send_header("Content-Security-Policy", "default-src 'none'; connect-src 'self'; frame-src 'self'; img-src 'self' blob: data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; base-uri 'none'; form-action 'none'" + framing)
+            self.send_header("Content-Security-Policy", "default-src 'none'; connect-src 'self'; frame-src 'self'; img-src 'self' blob: data:; font-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; base-uri 'none'; form-action 'none'" + framing)
             if self.route != "open": self.send_header("Referrer-Policy", "no-referrer")
             if gz: self.send_header("Content-Encoding", "gzip")
             self.end_headers(); self.wfile.write(body)
 
-        def send_file(self, path):
+        def send_file(self, path, view=False):
             """A post's file. Agents and Slack write these, so nothing here runs in the page's origin:
-            sandboxed, no sniffing, and only plain images open in the tab."""
+            sandboxed, no sniffing, and only plain images open in the tab.
+            view=True opens an .html file as a page, which is how someone sees a draft website. Its scripts run in a sandbox with
+            no origin (no cookies, no reading the dash) and no network at all, so the page has to carry its own styles and pictures."""
             m = re.fullmatch(r"/files/([0-9a-f]{12})/([A-Za-z0-9_][A-Za-z0-9_.-]*)", path)
             f = HOME_FILES / m[1] / m[2] if m else None
             if not f or f.is_symlink() or not f.is_file() or not f.resolve().is_relative_to(HOME_FILES.resolve()): return self.send_error(404)
             ct = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif"}.get(f.suffix.lower())
+            page = view and f.suffix.lower() in (".html", ".htm")
+            if page: ct = "text/html; charset=utf-8"
             self.send_response(200)
             self.send_header("Content-Type", ct or "application/octet-stream")
             self.send_header("Content-Length", str(f.stat().st_size))
             self.send_header("Content-Disposition", ("inline" if ct else "attachment") + f'; filename="{f.name}"')
-            self.send_header("Content-Security-Policy", "sandbox; default-src 'none'")
+            self.send_header("Content-Security-Policy", PAGE_CSP if page else "sandbox; default-src 'none'")
             self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Referrer-Policy", "no-referrer")
             self.send_header("Cache-Control", "no-store")
             self.end_headers()
             with f.open("rb") as src: shutil.copyfileobj(src, self.wfile)
@@ -2709,7 +2761,7 @@ def serve(port):
             self.end_headers()
             with f.open("rb") as src: shutil.copyfileobj(src, self.wfile)
 
-        route, can, signed, signer, mode, full_left, secrets_on = "open", OPEN_CAN, False, None, None, 0, False
+        route, can, signed, signer, mode, full_left, secrets_on, simple = "open", OPEN_CAN, False, None, None, 0, False, False
 
         def deny(self, code, why):
             self.send(json.dumps({"error": why}).encode(), "application/json", status=code)
@@ -2718,7 +2770,7 @@ def serve(port):
             """Sets route, can and signed for this request, or answers it and returns False. Checked on every request."""
             web = web_cfg()
             if web is None: return True  # the open dash: no web.json here, as on a site that hasn't set one up
-            self.route, self.can, self.signed, self.signer = "refused", (), False, None
+            self.route, self.can, self.signed, self.signer, self.simple = "refused", (), False, None, False
             if web.get("broken"): self.deny(500, "web.json is missing or can't be read, so nothing is served. Fix or delete it, then run hive web --setup"); return False
             hd = {k.lower(): v for k, v in self.headers.items()}
             route = route_of(hd, self.client_address[0], port, web)
@@ -2733,6 +2785,9 @@ def serve(port):
                 allowed = person_can(claims, out)
                 if not allowed: self.deny(403, "this sign-in isn't on this app's list"); return False
                 self.signer = signer_of(claims, out)
+                # web.json "simple": sign-ins that open in simple mode until their browser says otherwise. Presentation only, so a bad value just means no.
+                names = web.get("simple")
+                self.simple = isinstance(names, list) and str(claims.get("email") or "").strip().lower() in {str(n).lower() for n in names}
                 (self.can, self.mode, self.full_left), self.signed = allowed, True
             elif has_session(hd.get("cookie"), web, port):
                 self.can, self.signed = CAPS, True
@@ -2747,6 +2802,7 @@ def serve(port):
             if self.route != "open": info.update(setup=SETUP.get(), secrets_on=self.secrets_on, settings=settings_brief())
             if self.mode: info.update(mode=self.mode, full_left=self.full_left)
             if self.signer: info["signer"] = self.signer
+            if self.simple: info["simple"] = True
             if self.route == "local":
                 out = web.get("outside") or {}
                 acc = out.get("access") or {}
@@ -2783,6 +2839,11 @@ def serve(port):
                 f = UI_DIR / m[1]
                 if f.is_symlink() or not f.is_file(): return self.send_error(404)
                 return self.send(f.read_bytes(), UI_CT[f.suffix])
+            m = re.fullmatch(r"(?:/new)?/(vendor(?:/[a-zA-Z0-9_-][a-zA-Z0-9_.-]*)+\.(?:js|css|woff2))", u.path)  # no segment starts with a dot, so no way up
+            if m:
+                f = UI_DIR / m[1]
+                if f.is_symlink() or not f.is_file(): return self.send_error(404)
+                return self.send(f.read_bytes(), UI_CT[f.suffix], cache="private, max-age=86400")  # Mermaid is 1.6 MB: fetched once a day, not per page
             off = int(q["from"][0]) if q.get("from", [""])[0].isdigit() else 0
             J = "application/json"
             if u.path == "/api/app":
@@ -2843,7 +2904,7 @@ def serve(port):
             elif u.path == "/json":
                 self.send(json.dumps(agents_for(snapshot(), self.route != "outside" or self.mode == "full"), default=str).encode(), J)
             elif u.path.startswith("/files/"):
-                self.send_file(u.path)
+                self.send_file(u.path, view=parse_qs(u.query).get("view") == ["1"])
             else:
                 self.send_error(404)
 
@@ -2880,7 +2941,7 @@ def serve(port):
             J = "application/json"
             if u.path in ("/api/post", "/api/feedback", "/api/update", "/api/inbox-read", "/api/config", "/api/starter", "/api/module", "/api/signin", "/api/signin/code", "/api/signin/cancel", "/api/access", "/api/plan", "/api/secret", "/api/settings", "/api/signin-codex", "/api/account-key", "/api/design"):
                 try:
-                    if u.path == "/api/post": res = person_post(d.get("text"), d.get("thread"), d.get("reply_to"), d.get("files"), signer=self.signer, limited="config" not in self.can)
+                    if u.path == "/api/post": res = person_post(d.get("text"), d.get("thread"), d.get("reply_to"), d.get("files"), signer=self.signer, limited="config" not in self.can, simple=d.get("simple") is True)
                     elif u.path == "/api/feedback": res = send_feedback(d)
                     elif u.path == "/api/update": res = update_do(d.get("do"))
                     elif u.path == "/api/plan": res = save_plan(d.get("name"), d.get("text"), d.get("version"), bool(d.get("start")), self.signer)
@@ -2893,6 +2954,7 @@ def serve(port):
                     elif u.path == "/api/signin/code": SIGNIN.code(d.get("code")); res = {"ok": True}
                     elif u.path == "/api/signin/cancel": SIGNIN.cancel(); res = {"ok": True}
                     elif u.path == "/api/settings": res = set_settings(d)
+                    elif u.path == "/api/share-copy": res = share_copy()
                     elif u.path == "/api/design": res = DESIGN.act(d)
                     elif u.path == "/api/signin-codex": res = CODEX.cancel() if d.get("cancel") else CODEX.start()
                     elif u.path == "/api/account-key" and not self.secrets_on: return self.deny(403, "secrets are off on this name")
@@ -2904,7 +2966,7 @@ def serve(port):
                 live_c.t = usage_c.t = 0
                 return self.send(json.dumps(res).encode(), J)
             if u.path == "/api/kill":  # the one switch that can't be undone: more checks than the others
-                if (os.getuid() if self.client_address[0] == "unix" else peer_uid(self.client_address)) != os.getuid() or self.headers.get("Sec-Fetch-Site", "same-origin") != "same-origin":
+                if not may_kill(os.getuid() if self.client_address[0] == "unix" else peer_uid(self.client_address)) or self.headers.get("Sec-Fetch-Site", "same-origin") != "same-origin":
                     return self.send_error(403)
                 if d.get("confirm") != d.get("name"): return self.send_error(400)  # the code the person typed
                 with KILL_LOCK:

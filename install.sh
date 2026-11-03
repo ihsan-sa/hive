@@ -16,6 +16,7 @@ if [ "$(id -u)" = 0 ]; then
   loginctl enable-linger "$U" 2>/dev/null || echo "NOTE: couldn't enable linger; the hive stops when $U logs out"
   [ -e "$H/core" ] || { cp -a "$CORE" "$H/core"; chown -R "$U:" "$H/core"; }
   su - "$U" -c 'command -v claude >/dev/null || [ -x ~/.local/bin/claude ] || curl -fsSL https://claude.ai/install.sh | bash'
+  echo "Claude Code is in place. The Hive's install isn't finished yet, so keep this window open..."
   P=""; [ -z "${HIVE_PLAIN:-}" ] || P="HIVE_PLAIN=1 "
   su - "$U" -c "$P"'PATH="$HOME/.local/bin:$PATH" XDG_RUNTIME_DIR=/run/user/$(id -u) ~/core/install.sh' \
     || die "the install as $U failed; fix the error above and rerun this"

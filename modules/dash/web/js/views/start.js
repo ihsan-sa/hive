@@ -2,6 +2,7 @@
 // the start of the conversation: Hive says what it is, you sign in, (start the hive if it's down), and say what you want done in the composer Chat uses.
 import { h } from "../core/dom.js";
 import { S, can, post, loadApp, setupDone } from "../core/store.js";
+import { simpleOn } from "../core/simple.js";
 import { button, statusLabel } from "../ui/kit.js";
 import { startSignin, signinBox, signingIn } from "../ui/signin.js";
 import { act, activityLog, isBusy } from "../ui/activity.js";
@@ -25,17 +26,18 @@ function walkthrough(ctx, s) {
     h("span", { class: "wt-n", "aria-hidden": "true" }, F.step > i + 1 ? "\u2713" : String(i + 1)), h("span", null, t))));
   const page = (...rows) => h("div", { class: "page wt", "data-key": "start" },
     h("h1", { class: "wt-h" }, "Set up your Hive"),
-    h("p", { class: "wt-lead" }, "Hive runs agents on this computer: you say what you want done, and they work on it in the background. Three things first. You can change all of them later in Settings."),
+    h("p", { class: "wt-lead" }, simpleOn() ? "Your Hive is a helper you talk to. Three things first, and you can change them later." : "Hive runs agents on this computer: you say what you want done, and they work on it in the background. Three things first. You can change all of them later in Settings."),
     head, h("div", { class: "wt-g" }, h("div", { class: "wt-m" }, rows), activityLog()));
   const card = (key, title, ...body) => h("section", { class: "wt-card", "data-key": key }, h("h2", { class: "wt-t" }, title), body);
   const foot = (back, next) => h("div", { class: "wt-foot" }, back ? button("Back", () => go(F.step - 1), { kind: "quiet" }) : null, h("span", { class: "wt-next" }, next));
+  if (!local() && simpleOn()) return h("div", { class: "page wt", "data-key": "start" }, card("away", "Your Hive isn't ready yet", p("The person setting it up still has a step to finish. There's nothing for you to do here. Check back soon.")));
   if (!local()) return page(card("away", "Finish this on the Hive's computer", p("Setup is only done on this computer, because it decides what the Hive may do. Open the app there to finish it.")));
   if (!pg) return page(card("reading", "Getting ready", reading()));
   if (F.step === 1) {
     const signIn = api => { F.chose = api ? "api" : "claude"; startSignin("start", null, api, up); };
     const logins = s.logins || [];
     return page(
-      card("account", "Add an account", p("Agents need one to run on. A Claude or ChatGPT subscription uses its own limits. An API key charges per use. Add one now, and more whenever you like."),
+      card("account", "Add an account", p(simpleOn() ? "Your Hive works through your Claude account. Sign in to it here." : "Agents need one to run on. A Claude or ChatGPT subscription uses its own limits. An API key charges per use. Add one now, and more whenever you like."),
         rootNote(),
         h("div", { class: "signin", "data-key": "claude" },
           h("div", { class: "frow fsplit" }, h("b", null, "Claude"), s.claude === false ? statusLabel("ended", "not installed") : statusLabel(s.signed_in ? "working" : "ended", s.signed_in ? "signed in" : "not signed in"),
@@ -43,7 +45,7 @@ function walkthrough(ctx, s) {
           s.claude === false ? p("To use it, in a terminal as this account: ", h("code", null, "curl -fsSL https://claude.ai/install.sh | bash"), " Then restart this app.") : null,
           logins.length > 1 ? h("p", { class: "field-h" }, logins.filter(l => l.signed_in).length + " of " + logins.length + " logins signed in.") : null,
           signinBox("start", up)),
-        codexPart(up), keysPart(up)),
+        simpleOn() ? null : codexPart(up), simpleOn() ? null : keysPart(up)),
       foot(false, anyAccount() ? button("Next: what to share", () => go(2), { kind: "primary" }) : h("span", { class: "meta" }, "Add one account to go on."))
     );
   }

@@ -1,5 +1,6 @@
 // What the data means: statuses, the agent card, hive stats, usage pace. Pure reads of the store.
 import { S, OUTSIDE, SYS } from "./store.js";
+import { simpleOn } from "./simple.js";
 import { now, ago, dur, median, short, mdPlain, MIN, HOUR, DAY } from "./format.js";
 
 export const isAgent = n => S.agents.has(n);
@@ -152,6 +153,12 @@ export function runway(l, U) {
   const toStop = pr ? ((stop / 100 - pr.at) / pr.rate) * 1e3 : null;
   return { stop, toStop, toReset: reset ? reset - now() : null, before: toStop != null && reset != null && toStop < reset - now() };
 }
+/** The next account to come in: the soonest weekly reset among the accounts that can use it. Not a paused one, a signed-out one, one whose line never lets it run, or a reset that has already passed with no new reading. {l, at, in}, or null. */
+export function nextBack(U, t = now()) {
+  const out = new Set(((S.app && S.app.app && S.app.setup && S.app.setup.logins) || []).filter(x => !x.signed_in).map(x => x.name));
+  const when = l => { const L = l.limits || {}, rs = l.resets || {}; return [L.seven_day && L.seven_day.r, rs.weekly].map(r => (r ? r * 1e3 : 0)).find(r => r > t) ?? null; };
+  return (U.logins || []).filter(l => !l.paused && !out.has(l.name) && weeklyStop(l, U) > 0).map(l => ({ l, at: when(l) })).filter(x => x.at != null).sort((a, b) => a.at - b.at).map(x => ({ ...x, in: x.at - t }))[0] || null;
+}
 // ---- conversations: what a thread is called, who is in it, what state it is in ----
 const MENTIONS = /^(?:[ \t]*@[\w.-]+[,:]?[ \t]+)+/;
 const SOURCE = /^\((?:from ([^,)\n]{1,80}), )?(web app|in Slack|via the box)(?:, replying to ".*?"|, [^)\n]*)?\)[ \t]*/;
@@ -171,6 +178,16 @@ export function displayText(p) {
   if (m) t = t.slice(m[0].length).replace(MENTIONS, "");
   return (p.disp = t);
 }
+/** What the person typed, for sending again: no reply line, no source head and no agent's name (that agent may have moved on, so the To chip decides). @new and the like stay, since the person often types them. On every route, unlike displayText. */
+export function typedText(p) {
+  let t = String(p.text || ""); const kept = [];
+  const heads = () => { const m = t.match(MENTIONS); if (m) { t = t.slice(m[0].length); kept.push(...m[0].trim().split(/[\s,:]+/)); } };
+  heads(); t = t.replace(/^reply to message [0-9a-f]+:\s*/i, "");
+  const m = t.match(SOURCE); if (m) t = t.slice(m[0].length);
+  heads();
+  const say = simpleOn() ? [] : kept.filter(n => !/^@[a-z][0-9a-f]{4}$/.test(n) && n !== "@person");
+  return (say.length ? say.join(" ") + " " : "") + t;
+}
 /** Where one of the person's posts was written, in the app: {name or null, how: "Web" | "Slack" | "Box", said: the words as on the board}, or null. */
 export function postSource(p) {
   if (!S.app.app) return null;
@@ -180,7 +197,7 @@ export function postSource(p) {
 const HEX = /^[0-9a-f]{12}$/;
 /** A thread's title: its name, the name the indexer gave a number thread, or in the app the start of its first message. */
 export function threadTitle(th) {
-  if (!HEX.test(th || "")) return th;
+  if (!HEX.test(th || "")) return simpleOn() && th ? (t => t[0].toUpperCase() + t.slice(1))(th.replace(/[-_]+/g, " ")) : th;
   if (S.threadNames[th]) return S.threadNames[th];
   if (!S.app.app) return th;
   const d = S.threads.get(th), p = d && d.posts[0];

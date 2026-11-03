@@ -1,1 +1,1 @@
-{"name": "report", "description": "Opt-in failure and usage reports to the developer, scrubbed on this machine, with a local copy of everything sent. Off until the person turns it on in Settings.", "bin": {"hive-report": "report.py"}}
+{"name": "report", "description": "Opt-in failure and usage reports to the developer, scrubbed on this machine, with a local copy of everything sent. Off until the person turns it on in Settings.", "bin": {"hive-report": "report.py"}, "default": true}

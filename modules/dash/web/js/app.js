@@ -1,10 +1,12 @@
 // App: mounts the shell, routes, and re-renders the current view when data or the route changes.
 // Rendering is a morph of a freshly built tree onto the live one: only changed nodes are touched.
+import { dropFiles } from "./ui/dropfiles.js";
 import { S, can, setupDone, start, subscribe } from "./core/store.js";
 import { mount, delegate, selecting } from "./core/dom.js";
 import { go, parse } from "./core/router.js";
 import { topBar } from "./ui/shell.js";
-import views, { APP_NAV } from "./views/index.js";
+import views, { APP_NAV, SIMPLE_NAV } from "./views/index.js";
+import { simpleOn } from "./core/simple.js";
 import { resume, setViews, watch } from "./deck/control.js";
 import { offer as offerDeckTour } from "./deck/tour.js";
 import { offerTour } from "./ui/tour.js";
@@ -12,6 +14,7 @@ import { watchVersion } from "./ui/newversion.js";
 
 const byId = new Map(views.map(v => [v.id, v]));
 const top = document.getElementById("top"), main = document.getElementById("main");
+new ResizeObserver(() => { if (top.offsetHeight) document.documentElement.style.setProperty("--bar-h", top.offsetHeight + "px"); }).observe(top);   // phones wrap the bar and a tab's row adds to it; sticky headers and full-height pages follow
 const scrolls = {};
 // Where an empty address lands: the chat in the app, Now on the developer route.
 const home = () => byId.get(S.app.app ? "comms" : "now");
@@ -21,7 +24,7 @@ const ctx = { update: () => schedule(true), get arg() { return arg; } };
 
 function render(force) {
   if (S.live) document.title = `Hive · ${S.live.agents.length} running`;
-  mount(top, topBar({ views, current: cur.id, update: ctx.update, nav: APP_NAV }));
+  mount(top, topBar({ views, current: cur.id, update: ctx.update, nav: simpleOn() ? SIMPLE_NAV : APP_NAV }));
   if (!force && selecting()) return;          // hold still while text is selected
   mount(main, cur.render(ctx));
 }
@@ -42,7 +45,7 @@ function route() {
   }
 }
 
-delegate(document);
+delegate(document); dropFiles(document);
 setViews(views); watch(() => schedule(false)); offerDeckTour(); resume();
 addEventListener("hashchange", route);
 addEventListener("keydown", e => { if (e.key === "Escape" && cur.escape) cur.escape(ctx); });

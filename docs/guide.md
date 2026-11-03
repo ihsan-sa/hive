@@ -149,6 +149,7 @@ When every account is past its line, new agents wait, and running ones finish th
 - **Agents at once:** how many can work at the same time. Others wait their turn. More means faster, and your limits go faster too. Empty means no limit.
 - **Accounts:** sign in again, or add another subscription. New agents go to the one with the most left.
 - **Data sharing:** what's sent to the Hive's developer, if anything. It's all off until you turn something on.
+- **Model:** which Claude model new agents use, Opus unless you change it. For one agent, put `--model sonnet` in the message. If your plan doesn't include the model you picked, agents can't start until you pick another.
 - **Power:** who approves a step outside the sandbox. See [Before you install](#before-you-install).
 - **Sandbox:** whether it works on this machine, and the choice to [run without it](#running-without-the-sandbox).
 - **Secrets:** send a token to the Hive. It's never shown back.
@@ -244,7 +245,7 @@ Installs have run on clean Ubuntu 22.04, 24.04 and 26.04 and Debian 12, and over
 
 ## Updates
 
-Your Hive looks for a new release every 15 minutes, or as often as **Look for new releases** says in Settings, and installs it. Your settings and your agents' committed changes stay. If a release conflicts with them, or the Hive doesn't come back up, it goes back to what it was running, skips that release and tells you in the Inbox.
+Your Hive looks for a new release every 5 minutes, or as often as **Look for new releases** says in Settings, and installs it. Your settings and your agents' committed changes stay. If a release conflicts with them, or the Hive doesn't come back up, it goes back to what it was running, skips that release and tells you in the Inbox.
 
 Updates are code that runs as the Hive's account. Updates aren't signed, so whoever controls the GitHub repo can run code on every Hive that updates by itself. If you'd rather read each release first, turn off **Update by itself**. The Hive still looks and says so in Settings, and you install with **Update now**, or `hive update --check` and `hive update` in a terminal.
 
