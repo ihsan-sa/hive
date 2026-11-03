@@ -68,9 +68,8 @@ mountFsTab=false
 enabled=false
 appendWindowsPath=false
 CONF
-# wsl.conf leaves a few other ways to the Windows side open to ordinary users: the VM socket, the GPU device, the desktop's sockets, and running .exe files. Root still has them: WSL can't take those from root.
+# wsl.conf leaves other ways to the Windows side open to ordinary users: the GPU device, the desktop's sockets, and running .exe files. Root still has them. /mnt/wsl stays open: /etc/resolv.conf lives there, and closing it stops DNS.
 cat > /etc/udev/rules.d/99-hive.rules <<'CONF'
-KERNEL=="vsock", MODE="0600"
 KERNEL=="dxg", MODE="0600"
 CONF
 cat > /etc/systemd/system/hive-no-windows.service <<'CONF'
@@ -80,7 +79,7 @@ After=systemd-udev-trigger.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/bin/sh -c 'chmod 600 /dev/vsock /dev/dxg; chmod 700 /run/WSL /mnt/wslg /mnt/wsl; umount -l /tmp/.X11-unix; echo 0 > /proc/sys/fs/binfmt_misc/WSLInterop; true'
+ExecStart=/bin/sh -c 'chmod 600 /dev/dxg; chmod 700 /run/WSL /mnt/wslg; umount -l /tmp/.X11-unix; echo 0 > /proc/sys/fs/binfmt_misc/WSLInterop; true'
 [Install]
 WantedBy=multi-user.target
 CONF

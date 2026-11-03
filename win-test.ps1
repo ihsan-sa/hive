@@ -42,7 +42,7 @@ InU 'ls /mnt /mnt/c 2>&1 | head; ls /init; which powershell.exe cmd.exe; /mnt/c/
 Step 'as root, what could an escalation reach'
 InR 'mkdir -p /tmp/x; mount -t drvfs C: /tmp/x 2>&1 | head -2; ls /tmp/x 2>/dev/null | head -3; umount /tmp/x 2>/dev/null; true'
 Step 'boundary: can the hive user reach Windows at all'
-InR 'systemctl is-active hive-no-windows; systemctl --failed --no-legend; cat /proc/sys/fs/binfmt_misc/WSLInterop | head -1; ls -l /dev/vsock /dev/dxg; ls -ld /run/WSL /mnt/wslg /mnt/wsl; mountpoint /tmp/.X11-unix; mkdir -p /tmp/x /home/hive/pe; mount -t drvfs C: /tmp/x; cp /tmp/x/Windows/System32/whoami.exe /tmp/x/Windows/System32/cmd.exe /home/hive/pe/; umount /tmp/x; chown -R hive /home/hive/pe; chmod +x /home/hive/pe/*; rmdir /tmp/x'
+InR 'systemctl is-active hive-no-windows; systemctl --failed --no-legend; cat /proc/sys/fs/binfmt_misc/WSLInterop | head -1; ls -l /dev/dxg; ls -ld /run/WSL /mnt/wslg; ls -lL /etc/resolv.conf; mountpoint /tmp/.X11-unix; mkdir -p /tmp/x /home/hive/pe; mount -t drvfs C: /tmp/x; cp /tmp/x/Windows/System32/whoami.exe /tmp/x/Windows/System32/cmd.exe /home/hive/pe/; umount /tmp/x; chown -R hive /home/hive/pe; chmod +x /home/hive/pe/*; rmdir /tmp/x'
 $probe = 'ls -l ~/pe | wc -l; ~/pe/whoami.exe; echo "whoami.exe rc=$?"; ~/pe/cmd.exe /c ver; echo "cmd.exe rc=$?"; ls /run/WSL /mnt/wslg /mnt/wsl /tmp/.X11-unix 2>&1 | head -8; for s in /run/WSL/*; do WSL_INTEROP=$s ~/pe/whoami.exe; echo "via $s rc=$?"; done; unshare -Urm sh -c "mkdir -p /tmp/y; mount -t drvfs C: /tmp/y; echo userns-drvfs rc=\$?"; python3 -c "
 import socket
 for port in (50000, 1, 12345):
@@ -75,7 +75,7 @@ Step 'restart with the keep-alive running: terminate, as a rerun that changes ws
 function Back($what) {
   $t = Get-Date
   & wsl.exe -l -v 2>&1 | Out-Host
-  $o = & wsl.exe -d Hive -u root -- sh -c "for i in 1 2 3 4 5 6 7 8 9 10 11 12; do test -d /run/systemd/system && break; sleep 5; done; sleep 10; systemctl is-system-running; systemctl is-active hive-no-windows; systemctl --failed --no-legend; ls -l /dev/vsock; cat /proc/sys/fs/binfmt_misc/WSLInterop 2>&1 | head -1" 2>&1
+  $o = & wsl.exe -d Hive -u root -- sh -c "for i in 1 2 3 4 5 6 7 8 9 10 11 12; do test -d /run/systemd/system && break; sleep 5; done; sleep 10; systemctl is-system-running; systemctl is-active hive-no-windows; systemctl --failed --no-legend; ls -l /dev/dxg; cat /proc/sys/fs/binfmt_misc/WSLInterop 2>&1 | head -1" 2>&1
   "$what rc=$LASTEXITCODE after $([int]((Get-Date) - $t).TotalSeconds) s"; $o | Out-Host
   & wsl.exe -d Hive -u hive --cd ~ -- bash -lc "systemctl --user is-active hive-starter hive-dash; hive web" 2>&1 | Out-Host
 }
