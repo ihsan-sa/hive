@@ -1,7 +1,7 @@
 # Install the Hive on Windows. One line:
 #   irm https://hive.ihsan.cc/install.ps1 | iex
 # Running it again reinstalls; $env:HIVE_VERSION = 'v0.1.2' installs that release
-# instead of the latest. Agents are sandboxed inside WSL 2, so the Linux
+# instead of v0.1.154, the last of this line. Agents are sandboxed inside WSL 2, so the Linux
 # build is installed next to the Windows one, and Claude Code is installed or
 # updated inside WSL.
 $ErrorActionPreference = 'Stop'
@@ -9,7 +9,7 @@ $ProgressPreference = 'SilentlyContinue'   # Windows PowerShell's progress bar m
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 $repo = if ($env:HIVE_REPO) { $env:HIVE_REPO } else { 'ihsan-sa/hive' }
 $cmd = if ($env:HIVE_CMD) { $env:HIVE_CMD } else { 'hive' }
-$version = if ($env:HIVE_VERSION) { $env:HIVE_VERSION } else { 'latest' }
+$version = if ($env:HIVE_VERSION) { $env:HIVE_VERSION } else { 'v0.1.154' }
 $dir = if ($env:HIVE_BIN_DIR) { $env:HIVE_BIN_DIR } else { Join-Path $env:LOCALAPPDATA "Programs\$cmd" }
 $tmp = Join-Path $env:TEMP ('hive-install-' + [guid]::NewGuid())
 New-Item -ItemType Directory -Force $dir, $tmp | Out-Null

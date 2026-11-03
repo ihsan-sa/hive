@@ -13,7 +13,7 @@ while [ $# -gt 0 ]; do
   shift
 done
 case "$url" in
-  https://github.com/ihsan-sa/hive/releases/latest/download/*) ;;
+  https://github.com/ihsan-sa/hive/releases/latest/download/*|https://github.com/ihsan-sa/hive/releases/download/v0.1.154/*) ;;
   *) echo "curl (test): no network for $url" >&2; exit 22 ;;
 esac
 cp "/stage/release/${url##*/}" "$out"
