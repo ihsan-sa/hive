@@ -69,7 +69,8 @@ Check 'one address, on localhost' (([regex]::Matches($t2, 'http://localhost:\d+/
 Check 'no 127.0.0.1 address' ($t2 -notmatch '127\.0\.0\.1')
 Check 'no sudo line' ($t2 -notmatch 'sudo -iu')
 Check 'no secrets shown' ($t2 -notmatch 'SEEDSECRET')
-Check 'no broken characters' ($t2 -notmatch "â€|ΓÇ")
+$broken = ([string][char]0xE2 + [char]0x20AC) + '|' + ([string][char]0x393 + [char]0xC7)
+Check 'no broken characters' ($t2 -notmatch $broken)
 Check 'marked done' ((Get-Content -Raw (Join-Path $r '.hive\v2-import')).Trim() -eq 'done')
 Check 'old folder still whole' (((& $sum) -join ',') -eq $before)
 foreach ($l in Get-ChildItem (Join-Path $env:LOCALAPPDATA 'Hive') -Filter '*.log' -Force -ErrorAction SilentlyContinue) {
