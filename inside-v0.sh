@@ -9,6 +9,10 @@ SITE=https://hive.ihsan.cc; RAW="https://raw.githubusercontent.com/ihsan-sa/hive
 ok() { echo "ok   $1"; }; bad() { echo "FAIL $1"; fail=1; }
 note() { echo "--   $1"; }
 hide() { sed -E 's/#[A-Za-z0-9_-]{20,}/#SECRET/'; }
+run() { # $1 log; the rest is the environment and arguments
+  log=$1; shift; "$@" > "$log" 2>&1; rc=$?; hide < "$log" | tail -n 30 | sed 's/^/   | /'
+  if grep -q "Couldn't update" "$log"; then note "what the update said:"; hide < /tmp/o.log | tail -n 15 | sed 's/^/   . /'; fi
+  return $rc; }
 yes_if() { if eval "$2" >/dev/null 2>&1; then ok "$1"; else bad "$1"; fi; }
 no_if() { if eval "$2" >/dev/null 2>&1; then bad "$1"; else ok "$1"; fi; }
 
@@ -45,9 +49,6 @@ grep -aqs hive-standalone-build $H/.local/bin/hive && ok "old program carries th
 sums() { (cd "$1" && find projects .hive/kb -type f -not -path '*/.git/*' -print0 | sort -z | xargs -0 sha256sum); }
 sums $H/hive > /tmp/sums0
 
-run() { # $1 log; the rest is the environment and arguments
-  log=$1; shift; "$@" > "$log" 2>&1; rc=$?; hide < "$log" | tail -n 30 | sed 's/^/   | /'; return $rc; }
-
 # What's in the old account isn't believed, and root does nothing in there.
 repo=$(ls -d $H/hive/projects/*/.git 2>/dev/null | head -n 1)
 if [ -n "$repo" ]; then
@@ -78,22 +79,23 @@ curl -fsSL "$RAW/get.sh" -o /tmp/get.sh; chmod 644 /tmp/get.sh
 case "$CASE" in
   own)
     if run /tmp/out1 su - $A -c "HIVE_LOG=/tmp/o.log HIVE_ACCEPT=1 HIVE_BRANCH=$CAND sh /tmp/get.sh"; then ok "install over it"; else bad "install over it"; hide < /tmp/o.log | tail -n 20; fi
+    # Straight after installing, a second run: does the update step say it couldn't? Shown, not judged.
+    run /tmp/outq su - $A -c "HIVE_LOG=/tmp/o.log HIVE_ACCEPT=1 HIVE_BRANCH=$CAND sh /tmp/get.sh"; note "second run straight after: rc=$?"
     N=hive; NH=/home/hive; OLDF=$H/hive ;;
   this)
     if run /tmp/out1 su - $A -c "HIVE_LOG=/tmp/o.log HIVE_ACCEPT=1 HIVE_BRANCH=$CAND sh /tmp/get.sh --this-account"; then ok "install over it, this account"; else bad "install over it, this account"; hide < /tmp/o.log | tail -n 20; fi
     N=$A; NH=$H/hive; OLDF=$(ls -d $H/hive-old-* 2>/dev/null | head -n 1); [ -n "$OLDF" ] && ok "old folder renamed" || bad "old folder renamed" ;;
   sys)
-    # A failure partway: reading the old things breaks after the old Hive has been stopped.
-    # At the real path, not on PATH: get.sh reads the old account through su and env -i.
-    mv /usr/bin/tar /usr/bin/tar.real; cat > /usr/bin/tar <<'S'
+    # A failure partway: reading the old things breaks after the old Hive has been stopped. In place of the real tar, because that read runs as the old account with whatever PATH su gives it.
+    rm -f /tmp/shim-fired; mv /usr/bin/tar /usr/bin/tar.real; cat > /usr/bin/tar <<'S'
 #!/bin/sh
-case "$*" in *.checkouts*) echo "tar: pretend disk trouble" >&2; touch /tmp/tar-failed; chmod 666 /tmp/tar-failed; exit 2;; esac
+case "$*" in *.checkouts*) : > /tmp/shim-fired; echo "tar: pretend disk trouble" >&2; exit 2;; esac
 exec /usr/bin/tar.real "$@"
 S
     chmod 755 /usr/bin/tar
-    if run /tmp/out0 env HIVE_LOG=/tmp/o0.log HIVE_ACCEPT=1 HIVE_BRANCH=$CAND HIVE_USER=$A sh /tmp/get.sh; then bad "a tar failure should fail the run"; else ok "the run fails"; fi
+    if run /tmp/out0 env HIVE_LOG=/tmp/o0.log HIVE_ACCEPT=1 HIVE_BRANCH=$CAND HIVE_USER=$A sh /tmp/get.sh; then bad "the first run was meant to fail"; else ok "first run fails halfway"; fi
     mv -f /usr/bin/tar.real /usr/bin/tar
-    [ -e /tmp/tar-failed ] && ok "the failure really fired" || bad "the fake tar never fired"
+    [ -e /tmp/shim-fired ] && ok "the failure really fired, in the old account's read" || bad "the failure never fired"
     grep -q 'installed\|Hive is installed' /tmp/out0 && ! grep -q 'to keep it to yourself' /tmp/out0 || true
     grep -q '/tmp/o0.log' /tmp/out0 && ok "failure names the log" || bad "failure names the log"
     no_if "old Hive stopped after the failure" "up $A"
