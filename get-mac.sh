@@ -63,6 +63,17 @@ provision:
       }
     }
     N
+    # Ubuntu 24.04 stops a normal user making a user namespace unless a profile allows it, and the sandbox around agents is made of them. This allows bubblewrap and nothing else.
+    if command -v apparmor_parser >/dev/null; then
+      cat > /etc/apparmor.d/bwrap <<'A'
+    abi <abi/4.0>,
+    include <tunables/global>
+    profile bwrap /usr/bin/bwrap flags=(unconfined) {
+      userns,
+    }
+    A
+      apparmor_parser -r /etc/apparmor.d/bwrap || echo "couldn't load the bubblewrap profile: the sandbox check will say so" >&2
+    fi
 Y
 }
 
@@ -75,7 +86,9 @@ set -eu
 export LIMA_HOME="$HOME/.hive/lima"
 L="$HOME/.hive/lima-dist/bin/limactl"
 up() { [ "$("$L" list hive --format '{{.Status}}' 2>/dev/null)" = Running ] || "$L" start --tty=false hive >&2; }
-in_vm() { "$L" shell --workdir / hive sudo -iu hive "$@"; }
+# Not sudo -i: it leaves each $ for the VM's login shell to expand, so a word like "costs $5" would change on the way.
+# shellcheck disable=SC2016  # these expand in the VM
+in_vm() { "$L" shell --workdir / hive sudo -u hive -H bash -lc 'cd; export XDG_RUNTIME_DIR=/run/user/$(id -u); exec "$@"' _ "$@"; }
 address() { in_vm hive web 2>/dev/null | tr -d '\r' | sed -n 's/.*\(http:[^ ]*\).*/\1/p' | head -n 1; }
 case "${1:-}" in
   vm)

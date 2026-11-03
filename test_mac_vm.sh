@@ -52,8 +52,22 @@ echo "address: ${address%%#*}"
 sleep 10
 yes_if "the app answers on the host" curl -fsS -m 10 -o /dev/null "${address%%#*}"
 as_hive 'cd ~/core && python3 -c "import sandbox, json; print(json.dumps(sandbox.check()))"' 2>/dev/null || echo "sandbox: this release has no sandbox check"
-# A word with a space, through the same quoting the Mac's command uses.
-yes_if "a spaced word survives to the VM" sh -c "limactl shell --workdir / $VM sudo -iu hive bash -c '[ \"\$1\" = \"two words\" ]' _ 'two words'"
+# Words through the Mac command's own line, not a copy of it.
+L=limactl; eval "$(grep '^in_vm() ' "$(dirname "$0")/get-mac.sh")"
+got=$(in_vm printf '[%s]' 'two words' '$HOME' '$(boom)' 2>/dev/null | tr -d '\r'); echo "words: $got"
+yes_if "words reach the VM unchanged" test "$got" = '[two words][$HOME][$(boom)]'
+yes_if "the Mac command's line finds the hive command" in_vm hive web
+yes_if "the Mac command's line reaches the user's services" in_vm systemctl --user is-active hive-starter
+
+# The sandbox is made of bubblewrap, and the installed release may be too old to bring it. Try it both ways, to show the profile is what does it.
+vm sudo sh -c 'command -v bwrap >/dev/null || { apt-get update -qq; DEBIAN_FRONTEND=noninteractive apt-get install -y -qq bubblewrap; }' </dev/null >/dev/null 2>&1
+bw='bwrap --unshare-user --unshare-all --new-session --ro-bind / / /bin/true'
+yes_if "bubblewrap works for the hive user" as_hive "$bw"
+vm sysctl kernel.apparmor_restrict_unprivileged_userns || true
+vm sudo apparmor_parser -R /etc/apparmor.d/bwrap
+if as_hive "$bw" 2>&1; then echo "without the profile: bubblewrap works"; else echo "without the profile: bubblewrap fails"; fi
+vm sudo apparmor_parser -r /etc/apparmor.d/bwrap
+yes_if "bubblewrap works once the profile is back" as_hive "$bw"
 
 # A sleep, as near as this gets: every VCPU stopped for 90 s. Then the guest agent should set the clock, and the boot clock shouldn't have moved.
 pid=$(cat "$LIMA_HOME/$VM/qemu.pid")

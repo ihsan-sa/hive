@@ -20,7 +20,7 @@ fails=0
 say() { printf '%s\n' "$*" | tee -a "$R"; }
 pass() { say "ok    $1"; }
 bad() { say "FAIL  $1"; fails=$((fails + 1)); }
-check() { n=$1; shift; if "$@" >/dev/null 2>&1; then pass "$n"; else bad "$n"; fi; }
+check() { label=$1; shift; if "$@" >/dev/null 2>&1; then pass "$label"; else bad "$label"; fi; }  # label: what it runs has its own n
 hive_() { "$HOME/.hive/bin/hive" "$@"; }
 vm() { "$L" shell --workdir / hive "$@"; }
 as_hive() { vm sudo -iu hive sh -c "$1"; }
@@ -72,7 +72,9 @@ main() {
   kill "$nc_pid" 2>/dev/null
   check "the hive user has no sudo" sh -c "! '$L' shell --workdir / hive sudo -iu hive sudo -n true"
   check "a port an agent opens elsewhere doesn't reach this Mac" sh -c "'$L' shell --workdir / hive sudo -iu hive sh -c 'nohup timeout 15 python3 -m http.server 18078 --bind 127.0.0.1 >/dev/null 2>&1 &' ; sleep 6; ! curl -fsS -m 3 -o /dev/null http://127.0.0.1:18078/"
-  check "the sandbox works in the VM" as_hive 'cd ~/core && python3 -c "import sandbox, sys; sys.exit(0 if sandbox.check()[\"works\"] else 1)"'
+  if as_hive 'test -f ~/core/sandbox.py'; then
+    check "the sandbox works in the VM" as_hive 'cd ~/core && python3 -c "import sandbox, sys; sys.exit(0 if sandbox.check()[\"works\"] else 1)"'
+  else say "skip  the sandbox works in the VM (this release has no sandbox yet)"; fi
 
   ask "Sign in and try it: run  ~/.hive/bin/hive open  in a new Terminal window (or use the page it opened). Sign in to Claude there and ask for something small, such as: write a haiku in a file."
   yes_no "Did the sign-in work, and did an agent do the task?" "sign-in and a first agent, in the Mac's browser"
