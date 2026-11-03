@@ -20,4 +20,4 @@ S=(ssh -i key -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/nul
 for i in $(seq 90); do "${S[@]}" true 2>/dev/null && break; sleep 5; [ "$i" = 90 ] && { SHOW=1; echo "FAIL the VM did not answer"; exit 1; }; done
 "${S[@]}" 'sudo cloud-init status --wait >/dev/null 2>&1 || true; systemctl is-system-running --wait >/dev/null 2>&1 || true'
 "${S[@]}" 'cat > /tmp/inside.sh' < "$R/inside.sh"
-"${S[@]}" 'HIVE_SITE='"${HIVE_SITE:-https://hive.ihsan.cc}"' sudo -E bash /tmp/inside.sh'
+"${S[@]}" 'sudo env HIVE_SITE='"${HIVE_SITE:-https://hive.ihsan.cc}"' HIVE_BRANCH='"${HIVE_BRANCH:-}"' bash /tmp/inside.sh'
