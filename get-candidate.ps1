@@ -68,7 +68,9 @@ mountFsTab=false
 enabled=false
 appendWindowsPath=false
 CONF
-# wsl.conf leaves other ways to the Windows side open to ordinary users: the GPU device, the desktop's sockets, and running .exe files. Root still has them. /mnt/wsl stays open: /etc/resolv.conf lives there, and closing it stops DNS.
+'@
+  # wsl.conf leaves other ways to the Windows side open to ordinary users: the GPU device, the desktop's sockets, and running .exe files. Root still has them. /mnt/wsl stays open: /etc/resolv.conf lives there, and closing it stops DNS.
+  $block = @'
 cat > /etc/udev/rules.d/99-hive.rules <<'CONF'
 KERNEL=="dxg", MODE="0600"
 CONF
@@ -86,10 +88,13 @@ CONF
 ln -sf /etc/systemd/system/hive-no-windows.service /etc/systemd/system/multi-user.target.wants/hive-no-windows.service
 '@
   # A rerun that finds this already in place leaves the system up, so agents at work aren't killed.
-  $set = (Invoke-InHive "grep -qx 'enabled=false' /etc/wsl.conf && grep -q '^\[interop\]' /etc/wsl.conf && test -e /etc/systemd/system/hive-no-windows.service && test -d /run/systemd/system") -eq 0
+  $set = (Invoke-InHive "grep -qx 'enabled=false' /etc/wsl.conf && grep -q '^\[interop\]' /etc/wsl.conf && test -d /run/systemd/system") -eq 0
   if (-not $set) {
-    if ((Invoke-InHive $conf) -ne 0) { Write-Host "Couldn't configure the Hive system."; return }
+    if ((Invoke-InHive ($conf + "`n" + $block)) -ne 0) { Write-Host "Couldn't configure the Hive system."; return }
     & wsl.exe --terminate $distro | Out-Null
+  } elseif ((Invoke-InHive "test -e /etc/systemd/system/hive-no-windows.service") -ne 0) {
+    # A Hive from before this block: put it in with no restart, since starting again after a terminate can fail until wsl --shutdown.
+    if ((Invoke-InHive ($block + "`nudevadm control --reload; systemctl daemon-reload; systemctl start hive-no-windows")) -ne 0) { Write-Host "Couldn't configure the Hive system."; return }
   }
   $up = $false
   foreach ($i in 1..30) {
@@ -97,7 +102,7 @@ ln -sf /etc/systemd/system/hive-no-windows.service /etc/systemd/system/multi-use
     if ($LASTEXITCODE -eq 0) { $up = $true; break }
     Start-Sleep -Seconds 1
   }
-  if (-not $up) { Write-Host "systemd didn't start in the Hive system. Update WSL with: wsl --update   then run this again."; return }
+  if (-not $up) { Write-Host "The Hive system didn't start. Run: wsl --shutdown   then run this again. If it still fails, update WSL with: wsl --update"; return }
 
   # 4. The Linux installer does the rest. It updates a Hive that's already there.
   if ((Invoke-InHive "curl -fsSL $site/install.sh | sh") -ne 0) { Write-Host 'The install inside the Hive system failed; the lines above say why. Fix that and run this again.'; return }

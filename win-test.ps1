@@ -14,11 +14,10 @@ try { & wsl.exe --version 2>&1 | Out-Host; "version rc=$LASTEXITCODE" } catch { 
 
 Step 'first run of the candidate get.ps1'
 "blocks: $env:BLOCK"
-if ($env:BLOCK -eq 'off') {
-  $c = Get-Content -Raw .\get-candidate.ps1
-  $c = $c -replace "(?m)^ExecStart=/bin/sh -c 'chmod.*$", 'ExecStart=/bin/true' -replace '(?m)^KERNEL==.*$', ''
-  Set-Content -Path .\get-candidate.ps1 -Value $c -Encoding UTF8
-  Select-String -Path .\get-candidate.ps1 -Pattern 'ExecStart' | Out-Host
+if ($env:BLOCK -eq 'upgrade') {
+  irm https://hive.ihsan.cc/install.ps1 | iex
+  "public install done; now the candidate over it"
+  & wsl.exe -d Hive -u root -- sh -c 'cat /proc/uptime; test -e /etc/systemd/system/hive-no-windows.service; echo unit-before=$?' 2>&1 | Out-Host
 }
 $t = Get-Date
 Get-Content -Raw .\get-candidate.ps1 | iex
@@ -34,6 +33,7 @@ if ($have -notcontains 'Hive') {
   if ($have -notcontains 'Hive') { Write-Host 'NO HIVE SYSTEM: stop here'; exit 0 }
 }
 Step 'inside'
+& wsl.exe -d Hive -u root -- sh -c 'cat /proc/uptime; systemctl is-active hive-no-windows; ls -l /dev/dxg; ls -lL /etc/resolv.conf; getent hosts claude.ai | head -1' | Out-Host
 & wsl.exe -l -v 2>&1 | Out-Host
 InR 'cat /etc/wsl.conf; uname -r; systemctl is-system-running; systemctl --failed --no-legend | head -20; cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns /proc/sys/user/max_user_namespaces; which bwrap'
 InU 'id; echo "$XDG_RUNTIME_DIR"; which hive; hive --help | head -3; systemctl --user is-active hive-starter hive-dash hive-update.timer; systemctl --user list-timers --no-pager | head; loginctl show-user $(id -un) -p Linger'
@@ -77,7 +77,7 @@ function Back($what) {
   & wsl.exe -l -v 2>&1 | Out-Host
   $o = & wsl.exe -d Hive -u root -- sh -c "for i in 1 2 3 4 5 6 7 8 9 10 11 12; do test -d /run/systemd/system && break; sleep 5; done; sleep 10; systemctl is-system-running; systemctl is-active hive-no-windows; systemctl --failed --no-legend; ls -l /dev/dxg; cat /proc/sys/fs/binfmt_misc/WSLInterop 2>&1 | head -1" 2>&1
   "$what rc=$LASTEXITCODE after $([int]((Get-Date) - $t).TotalSeconds) s"; $o | Out-Host
-  & wsl.exe -d Hive -u hive --cd ~ -- bash -lc "systemctl --user is-active hive-starter hive-dash; hive web" 2>&1 | Out-Host
+  & wsl.exe -d Hive -u hive --cd ~ -- bash -lc "systemctl --user is-active hive-starter hive-dash; hive web 2>&1 | sed 's/#.*/#.../'" | Out-Host
 }
 & wsl.exe --terminate Hive 2>&1 | Out-Host; "terminate rc=$LASTEXITCODE"
 Back 'after terminate'
