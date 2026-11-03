@@ -7,7 +7,8 @@ function Uninstall-Hive {
   $distro = 'Hive'
   $base = Join-Path $env:LOCALAPPDATA 'Hive'
   $bin = Join-Path $base 'bin'
-  $have = @(& wsl.exe -l -q) | ForEach-Object { ($_ -replace "`0", '').Trim() }
+  $have = @()
+  try { $have = @(& wsl.exe -l -q) | ForEach-Object { ($_ -replace "`0", '').Trim() } } catch { }
   if ($have -notcontains $distro) { Write-Host 'No Hive system here, so nothing to remove.'; return }
   Write-Host 'This deletes the Hive system and everything in it: its projects, notes, board and Claude sign-in.'
   if ((Read-Host 'Type delete to go ahead') -ne 'delete') { Write-Host 'Nothing changed.'; return }

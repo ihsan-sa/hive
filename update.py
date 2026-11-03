@@ -34,6 +34,16 @@ def config():
     try: return json.loads((CORE / "config.json").read_text())
     except (OSError, ValueError): return {}
 
+def claude_update(st):
+    """A Hive with a sandbox: agents can't change their own Claude Code, so it's updated from here, once a day.
+    With a config folder nothing inside can write: an agent's login folder holds settings that would run commands out here. Failing is fine: it tries tomorrow."""
+    if not (HOME / "settings.json").exists() or time.time() - st.get("claude_update", 0) < 86400 or not (claude := shutil.which("claude")): return
+    st["claude_update"] = time.time(); save(st)
+    d = STATE / "claude-update"; d.mkdir(mode=0o700, exist_ok=True)
+    env = {"HOME": str(HOME), "PATH": os.environ.get("PATH", "/usr/bin:/bin"), "LANG": os.environ.get("LANG", "C.UTF-8"), "CLAUDE_CONFIG_DIR": str(d)}
+    try: subprocess.run([claude, "update"], cwd=d, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=300)
+    except (OSError, subprocess.SubprocessError): pass
+
 def tags():
     out = git("ls-remote", "--tags", "--refs", "origin", f"v{MAJOR}.*", timeout=60)
     return sorted((t for t in (l.rsplit("/", 1)[-1] for l in out.splitlines()) if TAG.match(t)), key=key)
@@ -142,6 +152,7 @@ def main():
     try: fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError: sys.exit("hive update: another update is running")
     st = load()
+    if not a.check: claude_update(st)
     try: all_tags = tags()
     except (Failed, subprocess.SubprocessError) as e: sys.exit(f"hive update: can't read releases: {e}")  # offline: the next run tries again
     skip = st.get("failed", [])
@@ -149,6 +160,10 @@ def main():
     if a.check: return print(f"installed: {st.get('tag', 'before the first release')}; newest: {all_tags[-1] if all_tags else 'none'}" + (f"; skipped: {', '.join(skip)}" if skip else ""))
     if not new: return print(f"up to date ({st.get('tag', 'no release yet')})")
     tag = new[-1]
+    # A fresh install is already on this tag: nothing to do, and nothing to tell anyone.
+    if not st.get("tag") and git("rev-parse", "HEAD", check=False).stdout == git("rev-parse", "-q", "--verify", f"{tag}^{{commit}}", check=False).stdout:
+        st["tag"] = tag; save(st)
+        return print(f"up to date ({tag})")
     try:
         apply(tag, st)
     except Stuck as e:

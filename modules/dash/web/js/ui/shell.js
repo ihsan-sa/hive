@@ -1,5 +1,6 @@
 // The top bar: brand, tabs from the view registry, and the two numbers you check most (running, weekly room).
 import { HELP, startTour } from "./tour.js";
+import { canFeedback, openFeedback, FEEDBACK_KEY } from "./feedback.js";
 import { h, s } from "../core/dom.js";
 import { S, can } from "../core/store.js";
 import { fresh7, inUse, runway } from "../core/model.js";
@@ -22,18 +23,19 @@ export function statusBits() {
 }
 
 // ---- full screen: a button on every page, and the F key. Absent where the browser can't do it (an iPhone, for one). ----
-const fsOn = () => !!document.fullscreenElement;
-const fsToggle = () => (fsOn() ? document.exitFullscreen() : document.documentElement.requestFullscreen()).catch(() => {});
+const fsDoc = (() => { try { return window.top.document; } catch (e) { return document; } })();   // inside the deck's single screen, the dashboard around it is what goes full screen
+const fsOn = () => !!fsDoc.fullscreenElement;
+const fsToggle = () => (fsOn() ? fsDoc.exitFullscreen() : fsDoc.documentElement.requestFullscreen()).catch(() => {});
 const fsSay = () => (fsOn() ? "Leave full screen (F)" : "Full screen (F)");
 const fsIcon = () => s("svg", { viewBox: "0 0 16 16", width: 14, height: 14, fill: "none", stroke: "currentColor", "stroke-width": 1.6, "aria-hidden": "true" },
   s("path", { d: fsOn() ? "M6 2v4H2M10 2v4h4M6 14v-4H2M10 14v-4h4" : "M2 6V2h4M14 6V2h-4M2 10v4h4M14 10v4h-4" }));
 export function fullscreenButton() {
-  if (!document.fullscreenEnabled) return null;
+  if (!fsDoc.fullscreenEnabled) return null;
   return h("button", { type: "button", class: "btn fs", "data-size": "s", "data-kind": "quiet", title: fsSay(), "aria-label": fsSay(), onclick: fsToggle }, fsIcon());
 }
-document.addEventListener("fullscreenchange", () => { for (const b of document.querySelectorAll(".fs")) { b.replaceChildren(fsIcon()); b.title = fsSay(); b.setAttribute("aria-label", fsSay()); } });
+fsDoc.addEventListener("fullscreenchange", () => { for (const b of document.querySelectorAll(".fs")) { b.replaceChildren(fsIcon()); b.title = fsSay(); b.setAttribute("aria-label", fsSay()); } });
 addEventListener("keydown", e => {
-  if ((e.key !== "f" && e.key !== "F") || e.ctrlKey || e.metaKey || e.altKey || !document.fullscreenEnabled) return;
+  if ((e.key !== "f" && e.key !== "F") || e.ctrlKey || e.metaKey || e.altKey || !fsDoc.fullscreenEnabled) return;
   if (e.target.closest && e.target.closest("input,textarea,select,[contenteditable]")) return;
   e.preventDefault(); fsToggle();
 });
@@ -44,7 +46,7 @@ const logins = () => (S.usage && S.usage.logins) || (S.live && S.live.logins) ||
 export function hiveStopped() {
   const all = logins(), hold = S.live && S.live.limit_until;
   if (hold) return { why: "limit", until: hold * 1e3 };
-  if (all.length && !all.some(l => inUse(l, S.usage))) {
+  if (all.length && !all.some(l => inUse(l, S.usage)) && !(S.app.setup && S.app.setup.other)) {  // with a Codex login or a key, agents still start
     const r = all.filter(l => !l.paused).map(l => runway(l, S.usage).toReset).filter(x => x != null).sort((a, b) => a - b)[0];
     return { why: all.every(l => l.paused) ? "paused" : "limit", until: r != null ? now() + r : null };
   }
@@ -98,7 +100,8 @@ export function topBar({ views, current, update, nav }) {
         NAV.open ? h("div", { class: "more-m", role: "menu" }, more.map(v => h("a", { class: "more-i", role: "menuitem", href: href(v.id), "data-key": v.id, "aria-current": v.id === current ? "page" : null },
           h("b", null, lab(v)), v.about ? h("span", null, typeof v.about === "function" ? v.about() : v.about) : null))
           .concat(h("a", { class: "more-i", role: "menuitem", href: HELP, target: "_blank", rel: "noopener", "data-key": "help" }, h("b", null, "Help"), h("span", null, "the user guide")),
-            h("button", { type: "button", class: "more-i", role: "menuitem", "data-key": "tour", onclick: () => { NAV.open = false; update(); startTour(); } }, h("b", null, "Take the tour"), h("span", null, "a few minutes, step by step")))) : null) : null];
+            h("button", { type: "button", class: "more-i", role: "menuitem", "data-key": "tour", onclick: () => { NAV.open = false; update(); startTour(); } }, h("b", null, "Take the tour"), h("span", null, "a few minutes, step by step")),
+            canFeedback() ? h("button", { type: "button", class: "more-i", role: "menuitem", "data-key": "feedback", onclick: () => { NAV.open = false; update(); openFeedback(); } }, h("b", null, "Send feedback"), h("span", null, `a screenshot and a comment (${FEEDBACK_KEY})`)) : null)) : null) : null];
   }
   const bits = app ? appBits : statusBits;
   return h("div", null,

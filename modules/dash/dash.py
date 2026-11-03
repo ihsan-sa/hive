@@ -15,7 +15,7 @@ The web page is web/ next to this file (ui.html, the previous page, is at /old);
   hive-dash serve [--port P] web UI on http://127.0.0.1:P/ (loopback only; default 8077)
   hive-dash --json          the snapshot as JSON
 """
-import base64, fcntl, gzip, hashlib, hmac, importlib.util, json, os, pty, pwd, re, secrets, select, shutil, signal, struct, subprocess, sys, termios, threading, time
+import base64, fcntl, gzip, hashlib, hmac, importlib.util, json, os, pty, pwd, re, secrets, select, shutil, signal, sqlite3, stat, struct, subprocess, sys, termios, threading, time
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -261,6 +261,29 @@ def set_paused(name, on):
     return True
 
 
+# ---------- readable thread names (GET /api/thread-names) ----------
+# The Slack mirror's indexer names each number thread (modules/slack-mirror/threads.py). The board keeps its ids; the page shows these
+# in their place. No mirror, or a database it can't read, means no names, and the page shows ids as it always did.
+THREAD_NAMES_DB = Path(os.environ.get("HIVE_MIRROR_STATE", HOME / ".local/state/hive-slack-mirror")) / "threads.db"
+THREAD_ID = re.compile(r"[0-9a-f]{12}")
+_names = {"mtime": None, "names": {}}
+
+def thread_names():
+    """{thread id: name} for number threads, reread only when the indexer's database changes."""
+    try: mtime = THREAD_NAMES_DB.stat().st_mtime
+    except OSError: return {}
+    if mtime != _names["mtime"]:
+        db = None
+        try:
+            db = sqlite3.connect(f"file:{THREAD_NAMES_DB}?mode=ro", uri=True, timeout=2)
+            names = {t: n for t, n in db.execute("select thread, name from label") if n and THREAD_ID.fullmatch(t)}
+        except sqlite3.Error: return _names["names"]
+        finally:
+            if db: db.close()
+        _names.update(mtime=mtime, names=names)
+    return _names["names"]
+
+
 # ---------- killing an agent's run (POST /api/kill) ----------
 AGENT_CODE = re.compile(r"[a-z][0-9a-f]{4,}")  # every agent's name is a letter and hex digits, so this is also safe in a path
 KILL_LOCK = threading.Lock()
@@ -479,16 +502,46 @@ def set_tier(thread, tier, who="the person"):
     return True
 
 
+def plain_file(path, tail=False, size=8192):
+    """Part of a file agents wrote, or "": never through a link at its end, never waiting on a pipe, only a regular file."""
+    try: fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    except OSError: return ""
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode): return ""
+        if tail: os.lseek(fd, max(0, st.st_size - size), os.SEEK_SET)
+        return os.read(fd, size).decode(errors="replace")
+    except OSError: return ""
+    finally: os.close(fd)
+
+
+def last_commit_boxed(d):
+    """(time, subject) from .git/logs/HEAD. With a sandbox, projects are written from inside it and this process is outside: git obeys a repo's own .git/config
+    even for `git log` (fsmonitor, gpg.program, a partial clone's uploadpack), so it's not run here."""
+    lines = plain_file(d / ".git/logs/HEAD", tail=True).splitlines()
+    m = re.search(r" (\d+) [-+]\d{4}\t(?:[^:\t]*: )?(.*)$", lines[-1]) if lines else None
+    return (float(m[1]), m[2]) if m else (None, "")
+
+
 def projects():
     res = []
+    boxed = SETTINGS.exists()
     for d in sorted(PROJECTS.glob("*/")):
         head = ""
         for fn in ("goals.md", "README.md"):
-            if (d / fn).exists():
+            if boxed:
+                if (text := plain_file(d / fn)):
+                    head = next((ln.strip("# ").strip() for ln in text.splitlines() if ln.strip()), "")
+                    break
+            elif (d / fn).exists():
                 for ln in (d / fn).read_text(errors="replace").splitlines():
                     if ln.strip(): head = ln.strip("# ").strip(); break
                 break
         commit, t = "", None
+        if boxed:
+            t, commit = last_commit_boxed(d)
+            res.append({"name": d.name, "head": head, "commit": commit, "t": t})
+            continue
         try:
             o = subprocess.run(["git", "-C", str(d), "log", "-1", "--format=%ct %s"],
                                capture_output=True, text=True, timeout=5).stdout.strip()
@@ -692,6 +745,36 @@ class Usage:
                     "scanning": self.scanning, "stop_pct": cfg.get("usage_stop_pct"), "providers": dict(PROVIDERS)}
 
 
+class AgentCosts:
+    """Each agent's cost and tokens from its transcripts, by hive-cost in its own process (the session logs Usage reads undercount and
+    miss killed runs). It takes seconds of disk, so it runs only when somebody asks, at most once per `every` seconds; a request
+    never waits for it, and gets the last result with "refreshing" set. No hive-cost: "by" stays empty and the page uses Usage's figures."""
+    TOOL = Path(__file__).resolve().parent.parent / "cost" / "cost.py"
+
+    def __init__(self, every=300):
+        self.every, self.at, self.by, self.busy, self.lock = every, None, {}, False, threading.Lock()
+
+    def refresh(self):
+        try:
+            r = subprocess.run(["nice", sys.executable, "-I", str(self.TOOL), "--by", "agent", "--json"], capture_output=True, text=True, timeout=180)
+            rows = json.loads(r.stdout)["rows"] if r.returncode == 0 else None
+        except (OSError, ValueError, KeyError, subprocess.SubprocessError):
+            rows = None
+        with self.lock:
+            self.busy = False
+            if rows is not None:
+                self.at = time.time()
+                self.by = {x["key"][0]: {"usd": x["usd"], "calls": x["calls"], "t": x["tokens"], "sub": x["sub_usd"],
+                                         "m": {k: v for k, v in x["models"].items() if k != "<synthetic>"}} for x in rows}
+
+    def view(self):
+        with self.lock:
+            if not self.busy and time.time() - (self.at or 0) > self.every and self.TOOL.exists():
+                self.busy = True
+                threading.Thread(target=self.refresh, daemon=True).start()
+            return {"at": self.at, "refreshing": self.busy, "by": self.by}
+
+
 def agent_feed(name, limit=70):
     """What an agent has been doing: tool calls and what it said, from the end of its newest session log."""
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,40}", name or ""): return []
@@ -810,6 +893,14 @@ def nvidia():
 gpu_c = Cached(nvidia, 15)
 
 
+def jobs_for(view, full):
+    """/api/jobs as a caller may see it: command lines only with full rights. A limited or expired sign-in from outside sees who runs what
+    and what it uses, not the commands, which can carry paths and arguments. (From H3, b52266fe.)"""
+    if full or not isinstance(view, dict): return view
+    return {k: [{f: v for f, v in r.items() if f != "cmd"} if isinstance(r, dict) else r for r in rows] if isinstance(rows, list) else rows
+            for k, rows in view.items()}
+
+
 class Jobs:
     """What /api/jobs serves: heavy's running and queued jobs, what each uses, and the machine's resources.
     Reads /proc and heavy's files only; computed only while a tab has the Jobs view open."""
@@ -841,14 +932,19 @@ class Jobs:
             big = max(pids, key=lambda x: (procs[x]["cores"] + procs[x]["mem"] / 1024, x))
             return redact(" ".join(proc_cmd(big)) or procs[big]["comm"])[:200]
 
-        # Running: the heavy shell whose fd 9 is that lane's lock file and that has no ticket left in the queue. /proc/locks
+        # Running: the heavy shell holding that lane's lock file open and with no ticket left in the queue. Any fd, because sh moves
+        # fd 9 elsewhere while it runs the job with 9>&-. /proc/locks
         # can't say: the lock is taken by the flock binary, which exits at once, so it names a dead pid.
         waiting = {q.name.rsplit(".", 1)[-1] for q in [*d.glob("w.*"), *d.glob("q.*"), *d.glob("f.*")]}
         holders = {}
         for pid, p in procs.items():
             if p["uid"] != me or str(pid) in waiting or not p["comm"].startswith(("sh", "dash", "bash", "heavy")): continue
             if not any(a.endswith("/heavy") for a in proc_cmd(pid)[:2]): continue
-            try: holders[os.readlink(f"/proc/{pid}/fd/9")] = pid
+            try:
+                for fd in os.scandir(f"/proc/{pid}/fd"):
+                    try: link = os.readlink(fd.path)
+                    except OSError: continue
+                    if os.path.dirname(link) == str(d): holders[link] = pid
             except OSError: pass
         running, in_jobs = [], set()
         for who in d.glob("*.who"):
@@ -899,7 +995,9 @@ class Jobs:
         for (kind, name), pids in groups.items():
             c, m = sum(procs[x]["cores"] for x in pids), sum(procs[x]["mem"] for x in pids)
             if c >= JOB_ROW_CORES or m >= JOB_ROW_MB:
-                outside.append({"who": name, "agent": kind == "outside", "cores": round(c, 2), "mem": round(m), "procs": len(pids), "cmd": top_cmd(pids)})
+                row = {"who": name, "agent": kind == "outside", "cores": round(c, 2), "mem": round(m), "procs": len(pids)}
+                if kind != "other" or procs[pids[0]]["uid"] == me: row["cmd"] = top_cmd(pids)  # another account's command lines are theirs, not this app's to show
+                outside.append(row)
         outside.sort(key=lambda r: (r["agent"], r["cores"] + r["mem"] / 1024), reverse=True)
 
         # The machine.
@@ -975,6 +1073,8 @@ def tail_lines(path, offset):
 # what a request may do, and nobody gets the local route without the secret, so spoofing headers gains nothing.
 CAPS = ("read", "post", "stop", "tier", "limits", "logins", "config", "modules", "plans", "secrets")
 # outside.people {email: "limited" or "full"} in web.json: what each signed-in person may do from outside. Not listed: refused.
+# outside.sites {host: {access, people, names}}: a name with its own Access team, aud and list. A token counts only for its own
+# host's team and aud, so one Cloudflare account's sign-in can't be used on another's name. Anything malformed refuses everyone.
 LIMITED_CAN = ("read", "post", "stop")
 FULL_FOR_S = 3600  # full rights need an Access token issued this recently; after that the same session is limited until they sign in again
 OPEN_CAN = ("read", "stop", "tier", "limits")
@@ -983,12 +1083,14 @@ INSTALLED = HOME / ".hive-installed"
 FORWARDED = ("cf-ray", "cf-connecting-ip", "cf-access-jwt-assertion", "cf-ipcountry", "cf-visitor", "cdn-loop", "x-forwarded-for",
              "x-forwarded-host", "x-forwarded-proto", "x-real-ip", "forwarded", "via", "true-client-ip")
 GET_CAP = {"/api/live": "read", "/api/board": "read", "/api/log": "read", "/api/usage": "read", "/api/jobs": "read", "/api/agent": "read",
-           "/api/projects": "read", "/json": "read", "/api/target": "read", "/api/inbox": "read", "/api/delivered": "read",
-           "/api/config": "config", "/api/modules": "modules", "/api/signin": "logins", "/api/plans": "plans", "/api/secrets": "secrets"}
+           "/api/projects": "read", "/api/agent-costs": "read", "/api/thread-names": "read", "/json": "read", "/api/target": "read", "/api/inbox": "read", "/api/delivered": "read",
+           "/api/config": "config", "/api/modules": "modules", "/api/signin": "logins", "/api/plans": "plans", "/api/secrets": "secrets",
+           "/api/settings": "config", "/api/signin-codex": "logins"}
 POST_CAP = {"/api/kill": "stop", "/api/tier": "tier", "/api/login-pause": "limits", "/api/login-limit": "limits", "/api/provider-limit": "limits",
             "/api/post": "post", "/api/upload": "post", "/api/inbox-read": "post", "/api/config": "config", "/api/starter": "config",
-            "/api/module": "modules", "/api/signin": "logins", "/api/signin/code": "logins", "/api/signin/cancel": "logins", "/api/plan": "plans", "/api/secret": "secrets"}
-LOCAL_ONLY = {"/api/access"}  # who may do what is never changed from outside, whatever outside.can says
+            "/api/module": "modules", "/api/signin": "logins", "/api/signin/code": "logins", "/api/signin/cancel": "logins", "/api/plan": "plans", "/api/secret": "secrets",
+            "/api/signin-codex": "logins", "/api/account-key": "logins"}
+LOCAL_ONLY = {"/api/access", "/api/settings"}  # who may do what is never changed from outside, whatever outside.can says
 
 
 def web_cfg():
@@ -1014,13 +1116,46 @@ def has_session(cookies, web, port):
     return any(hmac.compare_digest(c.strip().encode(), want.encode()) for c in (cookies or "").split(";"))
 
 
+def site_key(host):
+    """A name as outside.sites compares it: a hand-written "A.example. " is the site a.example, not a miss that falls through."""
+    return str(host or "").strip().lower().rstrip(".")
+
+
+def outside_hosts(out):
+    """Every outside name: outside.hosts (which share the top-level profile) and the keys of outside.sites."""
+    sites = out.get("sites") if isinstance(out.get("sites"), dict) else {}
+    return {str(h).lower() for h in out.get("hosts") or []} | {site_key(h) for h in sites}
+
+
+REFUSE_ALL = {"access": {}, "people": {}}  # no team or aud, so verify_access refuses every token
+
+
+def profile_for(out, host):
+    """The access profile (access, people, names) for one outside Host. A name in outside.sites gets only its own entry, never
+    the top-level one. Hosts not in sites (outside.hosts, or a forwarded request to a local address) get the top-level profile,
+    as before sites existed. Only Host chooses: X-Forwarded-Host can be sent by anyone. Fails closed on a hand-edited file: sites
+    present but not a dict, an entry that isn't a dict, one name written twice, or an entry with no people all refuse everyone,
+    since person_can lets in anyone Access passed when a profile has no people."""
+    if "sites" not in out: return out
+    if not isinstance(out["sites"], dict): return REFUSE_ALL
+    found = [v for k, v in out["sites"].items() if site_key(k) == site_key(host)]
+    if not found: return out
+    site = found[0] if len(found) == 1 else None
+    return site if isinstance(site, dict) and isinstance(site.get("people"), dict) and site["people"] else REFUSE_ALL
+
+
 def route_of(headers, peer, port, web):
     """"local", "outside" or "refused". headers: lowercased names. Host is checked for DNS rebinding: a page on evil.example
-    that rebinds to 127.0.0.1 still sends its own Host. Loopback alone proves nothing, since a tunnel connects over loopback."""
+    that rebinds to 127.0.0.1 still sends its own Host. Loopback alone proves nothing, since a tunnel connects over loopback.
+    peer "unix": this came through outside.socket, so it's outside whatever it says, and only for an outside name."""
     host = (headers.get("host") or "").lower()
-    outside = {str(h).lower() for h in (web.get("outside") or {}).get("hosts") or []}
+    outside = outside_hosts(web.get("outside") or {})
+    if peer == "unix": return "outside" if host in outside else "refused"
     if host not in {f"127.0.0.1:{port}", f"localhost:{port}", f"[::1]:{port}"} | outside: return "refused"
-    if host in outside or peer not in ("127.0.0.1", "::1") or any(h in headers for h in FORWARDED): return "outside"
+    if host in outside or peer not in ("127.0.0.1", "::1") or any(h in headers for h in FORWARDED):
+        # With outside.socket the tunnel comes only through that socket. Another account can bind the TCP port while the dash
+        # restarts and catch a token the tunnel sends there, so a token on TCP proves nothing and is never looked at.
+        return "refused" if (web.get("outside") or {}).get("socket") else "outside"
     return "local"
 
 
@@ -1047,25 +1182,25 @@ def rs256_ok(n, e, signed, sig):
 
 
 class AccessKeys:
-    """Cloudflare Access's public keys, from https://<team>/cdn-cgi/access/certs. Read hourly, or when a token names an unknown
-    key, at most once a minute. If they can't be read, tokens signed with an unknown key are refused."""
-    def __init__(self): self.keys, self.url, self.t, self.lock = {}, None, 0, threading.Lock()
+    """Cloudflare Access's public keys, from https://<team>/cdn-cgi/access/certs, kept per URL, since each outside host can have
+    its own team. Each is read hourly, or when a token names an unknown key, at most once a minute. If they can't be read,
+    tokens signed with an unknown key are refused. One team's keys never answer for another's URL."""
+    def __init__(self): self.sets, self.lock = {}, threading.Lock()  # url -> (keys, read at)
 
     def get(self, url, kid):
         import urllib.request
         with self.lock:
-            age = time.time() - self.t
-            if url != self.url or age > 3600 or (kid not in self.keys and age > 60):
-                self.t = time.time()
+            keys, t = self.sets.get(url, ({}, 0))
+            age = time.time() - t
+            if url not in self.sets or age > 3600 or (kid not in keys and age > 60):
                 try:
                     with urllib.request.urlopen(url, timeout=10) as r: got = json.load(r)["keys"]
-                    self.keys = {k["kid"]: (int.from_bytes(b64u(k["n"]), "big"), int.from_bytes(b64u(k["e"]), "big"))
-                                 for k in got if k.get("kty") == "RSA" and k.get("kid")}
-                    self.url = url
+                    keys = {k["kid"]: (int.from_bytes(b64u(k["n"]), "big"), int.from_bytes(b64u(k["e"]), "big"))
+                            for k in got if k.get("kty") == "RSA" and k.get("kid")}
                 except Exception as e:
                     print(f"can't read the Access keys: {type(e).__name__}", file=sys.stderr, flush=True)
-                    if url != self.url: self.keys = {}
-            return self.keys.get(kid) if url == self.url else None
+                self.sets[url] = (keys, time.time())
+            return keys.get(kid)
 
 
 ACCESS_KEYS = AccessKeys()
@@ -1113,6 +1248,27 @@ def person_can(claims, out, now=None):
     return LIMITED_CAN, "expired", 0
 
 
+def site_profile(v):
+    """One outside.sites entry as /api/access stores it; None if any part is malformed or it would refuse everyone anyway. It must
+    have a team, an aud and people. No `can`: with people, can never applies, so accepting one would promise a limit that isn't there."""
+    if not isinstance(v, dict) or "can" in v: return None
+    one = {}
+    if "names" in v:
+        if not isinstance(v["names"], dict) or not all(isinstance(k, str) and isinstance(x, str) for k, x in v["names"].items()): return None
+        one["names"] = v["names"]
+    p = v.get("people")
+    if not isinstance(p, dict) or not p or any(not isinstance(k, str) or "@" not in k or x not in ("limited", "full") for k, x in p.items()): return None
+    one["people"] = {k.strip().lower(): x for k, x in p.items()}
+    a = v.get("access")
+    if not isinstance(a, dict) or any(not isinstance(a.get(k), str) for k in ("team", "aud")): return None
+    team, aud = a["team"].strip(), a["aud"].strip()
+    if not re.fullmatch(r"[A-Za-z0-9.-]+", team) or not aud: return None  # team goes into the URL the keys are read from
+    one["access"] = {"team": team, "aud": aud}
+    emails = [str(e).strip() for e in a.get("emails") or [] if str(e).strip()]
+    if emails: one["access"]["emails"] = emails
+    return one
+
+
 def set_access(d):
     """The outside profile in web.json, from the local route only. Fields not given stay. The secret is never touched."""
     web = web_cfg()
@@ -1130,9 +1286,18 @@ def set_access(d):
     if "people" in d:
         if not isinstance(d["people"], dict) or any(not isinstance(k, str) or "@" not in k or v not in ("limited", "full") for k, v in d["people"].items()): return False
         out["people"] = {k.strip().lower(): v for k, v in d["people"].items()}
+    if "sites" in d:
+        if not isinstance(d["sites"], dict): return False
+        clean = {}
+        for h, v in d["sites"].items():
+            one = site_profile(v)
+            if one is None or not re.fullmatch(r"[A-Za-z0-9.-]+(:\d+)?", h) or not site_key(h) or site_key(h) in clean: return False
+            clean[site_key(h)] = one
+        out["sites"] = clean
     if "access" in d:
         a = d["access"]
         if not isinstance(a, dict) or any(not isinstance(a.get(k, ""), str) for k in ("team", "aud")): return False
+        if a.get("team", "").strip() and not re.fullmatch(r"[A-Za-z0-9.-]+", a["team"].strip()): return False  # it goes into the URL the keys are read from
         out["access"] = {k: v for k, v in {"team": a.get("team", "").strip(), "aud": a.get("aud", "").strip(),
                                            "emails": [str(e).strip() for e in a.get("emails") or [] if str(e).strip()]}.items() if v}
     write_private(WEB, {**web, "outside": out})
@@ -1541,6 +1706,7 @@ class SignIn:
             else: res["said"] = short(r.stdout, 500)
         with self.lock: self.st.update(res); self.st.pop("url", None)
         SETUP.t = 0
+        sync_accounts()
 
     def code(self, code):
         code = str(code or "").strip()
@@ -1571,10 +1737,272 @@ def setup_state():
     ls = [{"name": l["name"], "signed_in": login_ok(l["path"])} for l in logins()]
     return {"logins": ls, "signed_in": any(l["signed_in"] for l in ls), "api_key": bool(os.environ.get("ANTHROPIC_API_KEY")),
             "has_posts": BOARD.exists() and BOARD.stat().st_size > 0, "starter": starter_up(),
-            "claude": bool(shutil.which("claude"))}
+            "claude": bool(shutil.which("claude")), "other": other_account()}
 
 
 SETUP = Cached(setup_state, 20)  # set .t = 0 to read again
+
+# ---------- consumer setup: settings.json, the walkthrough's and Settings' file. The starter and the report module read it. ----------
+# No file (Hive itself, and every install from before it) means today's behaviour: nothing here writes, and no route can create it.
+SETTINGS = HOME / "settings.json"
+SHARE_KEYS = ("failures", "usage", "everything")
+_settings_lock = threading.Lock()
+
+
+def settings_raw():
+    try: v = json.loads(SETTINGS.read_text())
+    except (OSError, ValueError): return None
+    return v if isinstance(v, dict) else None
+
+
+def settings_norm(v):
+    """What the app shows. A missing field reads the way the contract says: sandbox on, power 2, nothing shared, setup done."""
+    sh = v.get("share") if isinstance(v.get("share"), dict) else {}
+    p = v.get("power")
+    return {"power": p if type(p) is int and 1 <= p <= 3 else 2, "sandbox": "bare" if v.get("sandbox") == "bare" else "on",
+            "share": {k: sh.get(k) is True for k in SHARE_KEYS}, "setup_done": v.get("setup_done") is not False}
+
+
+def settings_brief():
+    v = settings_raw()
+    return settings_norm(v) if v is not None else None
+
+
+def secrets_allowed(web, site=False):
+    """site: an outside.sites name. Those need secrets_on itself: settings.json appearing must not hand a public name the secrets."""
+    return web.get("secrets_on") is True or (not site and SETTINGS.is_file())
+
+
+def set_settings(d):
+    """The fields the app may change. Anything else already in the file stays, and share_url can't be set from here."""
+    new = {}
+    for k in d:
+        if k not in ("power", "sandbox", "share", "setup_done"): raise ValueError("that isn't a setting")
+    if "power" in d:
+        if type(d["power"]) is not int or not 1 <= d["power"] <= 3: raise ValueError("power is 1, 2 or 3")
+        new["power"] = d["power"]
+    if "sandbox" in d:
+        if d["sandbox"] not in ("on", "bare"): raise ValueError("the sandbox is on or bare")
+        new["sandbox"] = d["sandbox"]
+    if "setup_done" in d:
+        if type(d["setup_done"]) is not bool: raise ValueError("setup_done is true or false")
+        new["setup_done"] = d["setup_done"]
+    share = d.get("share")
+    if "share" in d and (not isinstance(share, dict) or not share or any(k not in SHARE_KEYS or type(v) is not bool for k, v in share.items())):
+        raise ValueError("share is failures, usage and everything, each on or off")
+    if not new and not share: raise ValueError("nothing to change")
+    with _settings_lock:
+        cur = settings_raw()
+        if cur is None: raise ValueError("this Hive has no settings file, so there's nothing to change")
+        if share: new["share"] = {**settings_norm(cur)["share"], **share}
+        cur.update(new)
+        write_text_private(SETTINGS, json.dumps(cur, indent=1) + "\n")
+    SETUP.t = SHARE_TEXT.t = 0
+    if "setup_done" in d: sync_accounts()  # a Codex login made in a terminal counts too: nothing else would tell the starter
+    return settings_page()
+
+
+def sandbox_state():
+    """The sandbox's own answer, from its check. Anything but a clear answer is `unknown`: the app then claims no limit."""
+    try:
+        r = subprocess.run([str(HIVE_BIN), "sandbox", "check", "--json"], env=child_env(), capture_output=True, text=True, timeout=20)
+        v = json.loads(r.stdout)
+        if r.returncode == 0 and isinstance(v, dict) and type(v.get("works")) is bool:
+            return {"state": "works" if v["works"] else "broken", "why": str(v.get("why") or ""), "fix": str(v.get("fix") or "")}
+    except (OSError, ValueError, subprocess.SubprocessError): pass
+    return {"state": "unknown", "why": "", "fix": ""}
+
+
+SANDBOX = Cached(sandbox_state, 60)
+
+
+def share_text():
+    """The report module's own words for the question, so this page can't say something it doesn't do. None: not installed."""
+    f = HOME / "modules" / "report" / "report.py"
+    if not f.is_file(): return None
+    try:
+        r = subprocess.run([sys.executable, "-I", str(f), "question"], env=child_env(), capture_output=True, text=True, timeout=10)
+        return r.stdout.strip() if r.returncode == 0 and r.stdout.strip() else None
+    except (OSError, subprocess.SubprocessError): return None
+
+
+SHARE_TEXT = Cached(share_text, 30)
+
+
+def has_root():
+    """The starter holds outside models on an account with passwordless sudo; the app has to say so."""
+    try: return subprocess.run(["sudo", "-n", "-l", "true"], env=child_env(), capture_output=True, timeout=5).returncode == 0
+    except (OSError, subprocess.SubprocessError): return False
+
+
+ROOT = Cached(has_root, 300)
+ANSI = re.compile(r"\x1b\][^\x07\x1b]*(\x07|\x1b\\)|\x1b\[[0-9;?]*[ -/]*[@-~]")
+CODEX_CODE = re.compile(r"\b[A-Z0-9]{4}-[A-Z0-9]{4,}\b")
+CODEX_LINK = re.compile(r"https://auth\.openai\.com/\S+")
+
+
+def codex_env(): return {**child_env(), "CODEX_HOME": str(HOME / ".codex"), "BROWSER": "true"}
+
+
+def codex_signed_in():
+    if not shutil.which("codex"): return False
+    try: return subprocess.run(["codex", "login", "status"], env=codex_env(), capture_output=True, timeout=10, stdin=subprocess.DEVNULL).returncode == 0
+    except (OSError, subprocess.SubprocessError): return False
+
+
+CODEX_IN = Cached(codex_signed_in, 20)
+
+
+class CodexSignIn:
+    """`codex login --device-auth`: Codex prints a link and a one-time code, the person enters it in their own browser. One at a time."""
+    def __init__(self): self.lock, self.proc, self.st = threading.Lock(), None, {"state": "idle"}
+
+    def view(self):
+        with self.lock: st = dict(self.st)
+        return {**st, "installed": bool(shutil.which("codex")), "signed_in": CODEX_IN.get()}
+
+    def start(self):
+        if not SETTINGS.is_file(): raise ValueError("this Hive has no settings file, so it adds accounts another way")
+        if not shutil.which("codex"): raise ValueError("Codex isn't installed for this account")
+        with self.lock:
+            if self.proc and self.proc.poll() is None: raise ValueError("a Codex sign-in is already running")
+            (HOME / ".codex").mkdir(mode=0o700, exist_ok=True)
+            self.proc = subprocess.Popen(["codex", "login", "--device-auth"], env=codex_env(), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                         stderr=subprocess.STDOUT, text=True, errors="replace", start_new_session=True)
+            self.st = {"state": "starting"}
+            threading.Thread(target=self.watch, args=(self.proc,), daemon=True).start()
+            t = threading.Timer(960, self.stop, args=(self.proc,)); t.daemon = True; t.start()  # the code lasts 15 minutes
+        return self.view()
+
+    def watch(self, proc):
+        for line in proc.stdout:
+            text = ANSI.sub("", line)
+            with self.lock:
+                if self.proc is not proc: continue
+                link, code = CODEX_LINK.search(text), CODEX_CODE.search(text)
+                if link: self.st["url"] = link[0]
+                if code and "code" not in self.st: self.st["code"] = code[0]
+                if self.st.get("url") and self.st.get("code"): self.st["state"] = "waiting"
+        rc = proc.wait()
+        CODEX_IN.t = 0
+        with self.lock:
+            if self.proc is not proc: return
+            if self.st.get("state") == "cancelled": return
+            self.st = {"state": "done"} if rc == 0 else {"state": "failed", "error": "Codex's sign-in ended before it finished. Try again."}
+        if rc == 0: sync_accounts()
+
+    def stop(self, proc):
+        if proc.poll() is None:
+            try: os.killpg(proc.pid, signal.SIGTERM)
+            except OSError: pass
+
+    def cancel(self):
+        with self.lock:
+            proc = self.proc
+            if proc and proc.poll() is None: self.st = {"state": "cancelled"}
+        if proc: self.stop(proc)
+        return self.view()
+
+
+CODEX = CodexSignIn()
+KEY_DIR = STATE / "keys"
+KEY_KINDS = {"anthropic": "Anthropic API key", "openrouter": "OpenRouter API key"}
+KEY_WRONG = {"anthropic": "sk-or-", "openrouter": "sk-ant-"}
+MAX_KEY = 2048
+
+
+def key_list():
+    out = []
+    for kind, label in KEY_KINDS.items():
+        f = KEY_DIR / kind
+        try:
+            v, at = f.read_text().strip(), f.stat().st_mtime
+        except OSError: continue
+        out.append({"kind": kind, "label": label, "ends": v[-4:] if len(v) >= 24 else "", "at": at})  # the last four, and only of a long key
+    return out
+
+
+def set_account_key(kind, value, delete=False):
+    """A provider's API key, in a file of mode 600. Written here, read by providers.py, never sent back or put on the board. Errors never hold the value."""
+    if not SETTINGS.is_file(): raise ValueError("this Hive has no settings file, so it adds accounts another way")
+    if kind not in KEY_KINDS: raise ValueError("that isn't a kind of key this app knows")
+    f = KEY_DIR / kind
+    if delete:
+        if not f.is_file(): raise ValueError("there's no such key")
+        f.unlink()
+    else:
+        if not isinstance(value, str) or not value.strip(): raise ValueError("the key is empty")
+        value = value.strip()
+        if not 8 <= len(value) <= MAX_KEY or re.search(r"\s", value): raise ValueError("that doesn't look like an API key: wrong length, or it has spaces in it")
+        if value.startswith(KEY_WRONG[kind]): raise ValueError(f"that looks like a key from the other provider, not an {KEY_KINDS[kind]}")
+        KEY_DIR.mkdir(parents=True, exist_ok=True); KEY_DIR.chmod(0o700)
+        write_text_private(f, value + "\n")
+    sync_accounts()
+    SETUP.t = 0
+    return settings_page()
+
+
+def other_account():
+    """An account that isn't a Claude login. False on every Hive without settings.json, without asking Codex."""
+    return SETTINGS.is_file() and (bool(key_list()) or CODEX_IN.get())
+
+
+PROVIDER_IMPL = "~/modules/providers/providers.py"
+FALLBACK_MODELS = (("codex", "codex:default"), ("anthropic", "anthropic:claude-sonnet-5-5"), ("openrouter", "openrouter:anthropic/claude-haiku-5.5"))
+
+
+def sync_accounts():
+    """Make core/config.json match the accounts: one provider per account, tried in order when no Claude login can take a run, for
+    every post (agents' too, or a Codex-only Hive would never start a helper). Free before paid. A Claude login nobody has signed in
+    to is paused while another account exists, or the starter would pick it. Only with settings.json; only the entries it owns."""
+    if not SETTINGS.is_file(): return
+    CODEX_IN.t = 0
+    codex, keys = CODEX_IN.get(), {k["kind"] for k in key_list()}
+    owned = {}
+    if codex: owned["codex"] = {"impl": PROVIDER_IMPL, "harness": "codex", "codex_home": "~/.codex", "stop_pct": 95}
+    if "anthropic" in keys:
+        owned["anthropic"] = {"impl": PROVIDER_IMPL, "base_url": "https://api.anthropic.com", "config_dir": "~/.claude-anthropic",
+                              "key_file": "~/" + str((KEY_DIR / "anthropic").relative_to(HOME)), "key_env": "api"}
+    if "openrouter" in keys:
+        owned["openrouter"] = {"impl": PROVIDER_IMPL, "base_url": "https://openrouter.ai/api", "config_dir": "~/.claude-openrouter",
+                               "key_check": "https://openrouter.ai/api/v1/key", "min_credit": 1,
+                               "key_file": "~/" + str((KEY_DIR / "openrouter").relative_to(HOME))}
+    with _cfg_lock:
+        path = HOME / "core" / "config.json"
+        c = jload(path, {})
+        if not isinstance(c, dict): return
+        prov = {k: v for k, v in (c.get("providers") or {}).items() if k not in ("codex", "anthropic", "openrouter")}
+        prov.update(owned)
+        if prov: c["providers"] = prov
+        else: c.pop("providers", None)
+        chain = [m for n, m in FALLBACK_MODELS if n in owned]
+        if chain: c["fallback"] = {"for": ["*"], "chain": chain, "free": []}
+        else: c.pop("fallback", None)
+        t = path.parent / f".config.json.{os.getpid()}.{threading.get_ident()}"
+        t.write_text(json.dumps(c, indent=2) + "\n"); t.replace(path)
+    held_f = STATE / "setup_paused.json"
+    held = jload(held_f, [])
+    held = held if isinstance(held, list) else []
+    for l in logins():
+        signed = login_ok(l["path"])
+        if owned and not signed and l["path"] not in paused_logins():
+            set_paused(l["name"], True); held.append(l["path"])
+        elif l["path"] in held and (signed or not owned):
+            set_paused(l["name"], False); held.remove(l["path"])
+    write_text_private(held_f, json.dumps(held))
+    SETUP.t = 0
+
+
+def accounts_view():
+    return {"claude": [{"name": l["name"], "signed_in": login_ok(l["path"])} for l in logins()], "codex": CODEX.view(), "keys": key_list(), "root": ROOT.get()}
+
+
+def settings_page():
+    """GET /api/settings: the settings, and the facts the page must state truthfully. Null on a Hive with no file."""
+    v = settings_brief()
+    if v is None: return {"settings": None}
+    return {"settings": v, "sandbox_check": SANDBOX.get(), "share_text": SHARE_TEXT.get(), "accounts": accounts_view()}
+
 
 
 LOGIN_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Sign in</title>
@@ -1593,16 +2021,51 @@ document.getElementById("s").addEventListener("keydown",e=>{if(e.key==="Enter")g
 """
 
 
+def serve_socket(path, handler):
+    """The tunnel's way in when web.json sets outside.socket: a unix socket in a directory only this user can enter. Nobody else
+    can connect to it or take its name, which they could do to the TCP port during a restart. Run with restart to pick up a change."""
+    import socketserver
+    class Srv(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
+        daemon_threads = True
+        def get_request(self):
+            conn, _ = self.socket.accept()
+            return conn, ("unix", 0)  # a unix peer has no address; route_of reads this
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True); path.parent.chmod(0o700)
+    path.unlink(missing_ok=True)
+    old = os.umask(0o177)
+    try: return Srv(str(path), handler)
+    finally: os.umask(old)
+
+
+def local_get(path, port=None, timeout=10):
+    """GET from this user's own dash, for tools on this machine: sends the session cookie when web.json has a secret, and only after
+    checking this user holds the port, since another account can bind it while the dash restarts. Returns the response body."""
+    import urllib.request
+    web = web_cfg() or {}
+    port = port or web.get("port") or 8077
+    hd = {}
+    if web.get("secret"):
+        want = "0100007F:%04X" % port
+        rows = [ln.split() for ln in Path("/proc/net/tcp").read_text().splitlines()[1:]]
+        if not any(f[1] == want and f[3] == "0A" and int(f[7]) == os.getuid() for f in rows):
+            raise RuntimeError(f"port {port} isn't held by this user, so the session cookie isn't sent")
+        hd["Cookie"] = f"app_session_{port}={session_value(web)}"
+    with urllib.request.urlopen(urllib.request.Request(f"http://127.0.0.1:{port}{path}", headers=hd), timeout=timeout) as r:
+        return r.read()
+
+
 def serve(port):
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
     from urllib.parse import parse_qs, urlparse
     usage = Usage()
     threading.Thread(target=usage.run, daemon=True).start()
+    threading.Thread(target=sync_accounts, daemon=True).start()  # an account already signed in before the app first ran; does nothing without settings.json
     live_c, proj_c, usage_c, jobs_c = Cached(live, 1), Cached(projects, 60), Cached(usage.view, 2), Cached(Jobs().view, 2)
     deliv_c = Cached(delivered_view, 2.5)
+    agent_costs = AgentCosts()
 
     class H(BaseHTTPRequestHandler):
-        def send(self, body, ct, status=200, cookie=None):
+        def send(self, body, ct, status=200, cookie=None, framed_here=False):
             gz = len(body) > 4096 and "gzip" in self.headers.get("Accept-Encoding", "")
             if gz: body = gzip.compress(body, 5)
             self.send_response(status)
@@ -1610,8 +2073,8 @@ def serve(port):
             self.send_header("Cache-Control", "no-store")
             if cookie: self.send_header("Set-Cookie", cookie)
             # Board text is written by agents: the page takes nothing from elsewhere and sends nothing anywhere.
-            framing = "" if self.route == "open" else "; frame-ancestors 'none'"  # the page can post as the person, so it can't sit in someone's frame
-            self.send_header("Content-Security-Policy", "default-src 'none'; connect-src 'self'; img-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; base-uri 'none'; form-action 'none'" + framing)
+            framing = "; frame-ancestors 'self'" if framed_here else "" if self.route == "open" else "; frame-ancestors 'none'"  # the page can post as the person, so it can't sit in someone's frame; a TV page may sit in this site's own (the deck's single screen)
+            self.send_header("Content-Security-Policy", "default-src 'none'; connect-src 'self'; frame-src 'self'; img-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; base-uri 'none'; form-action 'none'" + framing)
             if self.route != "open": self.send_header("Referrer-Policy", "no-referrer")
             if gz: self.send_header("Content-Encoding", "gzip")
             self.end_headers(); self.wfile.write(body)
@@ -1633,7 +2096,7 @@ def serve(port):
             self.end_headers()
             with f.open("rb") as src: shutil.copyfileobj(src, self.wfile)
 
-        route, can, signed, signer, mode, full_left = "open", OPEN_CAN, False, None, None, 0
+        route, can, signed, signer, mode, full_left, secrets_on = "open", OPEN_CAN, False, None, None, 0, False
 
         def deny(self, code, why):
             self.send(json.dumps({"error": why}).encode(), "application/json", status=code)
@@ -1650,7 +2113,7 @@ def serve(port):
             if not same_origin(hd, page_nav=page): self.deny(403, "request from another site"); return False
             self.route = route
             if route == "outside":
-                out = web.get("outside") or {}
+                out = profile_for(web.get("outside") or {}, hd.get("host"))
                 claims = verify_access(hd.get("cf-access-jwt-assertion"), out.get("access") or {})
                 if not claims:
                     self.deny(403, "outside access needs a valid Cloudflare Access token"); return False
@@ -1660,19 +2123,23 @@ def serve(port):
                 (self.can, self.mode, self.full_left), self.signed = allowed, True
             elif has_session(hd.get("cookie"), web, port):
                 self.can, self.signed = CAPS, True
-            if web.get("secrets_on") is not True: self.can = tuple(c for c in self.can if c != "secrets")  # off unless web.json says so; no route can set it
+            sites = (web.get("outside") or {}).get("sites")
+            self.secrets_on = secrets_allowed(web, site=route == "outside" and isinstance(sites, dict) and site_key(hd.get("host")) in {site_key(k) for k in sites})
+            if not self.secrets_on: self.can = tuple(c for c in self.can if c != "secrets")  # off unless web.json says so, or this is a consumer install; no route can set it
             return True
 
         def app_info(self):
             web = web_cfg() or {}
             info = {"route": self.route, "can": list(self.can), "app": self.route != "open"}
-            if self.route != "open": info.update(setup=SETUP.get(), secrets_on=web.get("secrets_on") is True)
+            if self.route != "open": info.update(setup=SETUP.get(), secrets_on=self.secrets_on, settings=settings_brief())
             if self.mode: info.update(mode=self.mode, full_left=self.full_left)
+            if self.signer: info["signer"] = self.signer
             if self.route == "local":
                 out = web.get("outside") or {}
                 acc = out.get("access") or {}
                 info["outside"] = {"can": out.get("can", ["read"]), "hosts": out.get("hosts") or [], "team": acc.get("team", ""), "aud": acc.get("aud", ""),
-                                   "emails": acc.get("emails") or [], "people": out.get("people") or {}, "caps": [c for c in CAPS if c != "secrets" or web.get("secrets_on") is True]}
+                                   "emails": acc.get("emails") or [], "people": out.get("people") or {}, "caps": [c for c in CAPS if c != "secrets" or secrets_allowed(web)],
+                                   "sites": out.get("sites") if isinstance(out.get("sites"), dict) else {}}
             return info
 
         def do_GET(self):
@@ -1691,7 +2158,7 @@ def serve(port):
             if display and shown[1] == "/dual-screen":
                 self.send_response(302); self.send_header("Location", "/dual-screen/1" + (shown[2] or "")); self.send_header("Content-Length", "0"); self.end_headers(); return
             if display:
-                return self.send((UI_DIR / "display.html").read_bytes(), "text/html; charset=utf-8")
+                return self.send((UI_DIR / "display.html").read_bytes(), "text/html; charset=utf-8", framed_here=True)
             if u.path == "/new":  # index.html's links are relative, so it needs the slash
                 self.send_response(302); self.send_header("Location", "/new/"); self.send_header("Content-Length", "0"); self.end_headers(); return
             if u.path in ("/", "/index.html", "/new/"):
@@ -1707,7 +2174,7 @@ def serve(port):
             J = "application/json"
             if u.path == "/api/app":
                 self.send(json.dumps(self.app_info(), default=str).encode(), J)
-            elif u.path in ("/api/target", "/api/inbox", "/api/config", "/api/modules", "/api/signin", "/api/plans", "/api/secrets") and self.route == "open":
+            elif u.path in ("/api/target", "/api/inbox", "/api/config", "/api/modules", "/api/signin", "/api/plans", "/api/secrets", "/api/settings", "/api/signin-codex") and self.route == "open":
                 self.send_error(404)
             elif u.path == "/api/plans":
                 self.send(json.dumps(plans_view()).encode(), J)
@@ -1723,10 +2190,14 @@ def serve(port):
                 self.send(json.dumps(modules_view()).encode(), J)
             elif u.path == "/api/signin":
                 self.send(json.dumps(SIGNIN.view()).encode(), J)
+            elif u.path == "/api/settings":
+                self.send(json.dumps(settings_page()).encode(), J)
+            elif u.path == "/api/signin-codex":
+                self.send(json.dumps(CODEX.view()).encode(), J)
             elif u.path == "/api/live":
                 self.send(json.dumps(live_c.get(), default=str).encode(), J)
             elif u.path == "/api/jobs":
-                self.send(json.dumps(jobs_c.get(), default=str).encode(), J)
+                self.send(json.dumps(jobs_for(jobs_c.get(), self.route != "outside" or self.mode == "full"), default=str).encode(), J)
             elif u.path in ("/api/board", "/api/log"):
                 off, lines = tail_lines(BOARD if u.path == "/api/board" else LOG, off)
                 self.send(('{"offset":%d,"items":[%s]}' % (off, ",".join(lines))).encode(), J)
@@ -1734,6 +2205,10 @@ def serve(port):
                 self.send(json.dumps(deliv_c.get()).encode(), J)
             elif u.path == "/api/usage":
                 self.send(json.dumps(usage_c.get()).encode(), J)
+            elif u.path == "/api/agent-costs":
+                self.send(json.dumps(agent_costs.view()).encode(), J)
+            elif u.path == "/api/thread-names":
+                self.send(json.dumps(thread_names()).encode(), J)
             elif u.path == "/api/agent":
                 self.send(json.dumps(agent_feed(q.get("name", [""])[0])).encode(), J)
             elif u.path == "/api/projects":
@@ -1776,7 +2251,7 @@ def serve(port):
             if not isinstance(d, dict): return self.send_error(400)
             num = lambda v: v is None or (isinstance(v, (int, float)) and not isinstance(v, bool))
             J = "application/json"
-            if u.path in ("/api/post", "/api/inbox-read", "/api/config", "/api/starter", "/api/module", "/api/signin", "/api/signin/code", "/api/signin/cancel", "/api/access", "/api/plan", "/api/secret"):
+            if u.path in ("/api/post", "/api/inbox-read", "/api/config", "/api/starter", "/api/module", "/api/signin", "/api/signin/code", "/api/signin/cancel", "/api/access", "/api/plan", "/api/secret", "/api/settings", "/api/signin-codex", "/api/account-key"):
                 try:
                     if u.path == "/api/post": res = person_post(d.get("text"), d.get("thread"), d.get("reply_to"), d.get("files"), signer=self.signer)
                     elif u.path == "/api/plan": res = save_plan(d.get("name"), d.get("text"), d.get("version"), bool(d.get("start")), self.signer)
@@ -1788,6 +2263,10 @@ def serve(port):
                     elif u.path == "/api/signin": res = SIGNIN.start(d.get("name"), bool(d.get("console")))
                     elif u.path == "/api/signin/code": SIGNIN.code(d.get("code")); res = {"ok": True}
                     elif u.path == "/api/signin/cancel": SIGNIN.cancel(); res = {"ok": True}
+                    elif u.path == "/api/settings": res = set_settings(d)
+                    elif u.path == "/api/signin-codex": res = CODEX.cancel() if d.get("cancel") else CODEX.start()
+                    elif u.path == "/api/account-key" and not self.secrets_on: return self.deny(403, "secrets are off on this name")
+                    elif u.path == "/api/account-key": res = set_account_key(d.get("kind"), d.get("value"), delete=d.get("delete") is True)
                     else:
                         if not set_access(d): raise ValueError("that isn't a valid access setting")
                         res = {"ok": True}
@@ -1795,7 +2274,7 @@ def serve(port):
                 live_c.t = usage_c.t = 0
                 return self.send(json.dumps(res).encode(), J)
             if u.path == "/api/kill":  # the one switch that can't be undone: more checks than the others
-                if peer_uid(self.client_address) != os.getuid() or self.headers.get("Sec-Fetch-Site", "same-origin") != "same-origin":
+                if (os.getuid() if self.client_address[0] == "unix" else peer_uid(self.client_address)) != os.getuid() or self.headers.get("Sec-Fetch-Site", "same-origin") != "same-origin":
                     return self.send_error(403)
                 if d.get("confirm") != d.get("name"): return self.send_error(400)  # the code the person typed
                 with KILL_LOCK:
@@ -1825,6 +2304,8 @@ def serve(port):
     threading.Thread(target=provider_status, daemon=True).start()
     srv = ThreadingHTTPServer(("127.0.0.1", port), H)  # loopback only: never opens the machine
     srv.daemon_threads = True
+    sock = ((web_cfg() or {}).get("outside") or {}).get("socket")
+    if sock: threading.Thread(target=serve_socket(Path(sock).expanduser(), H).serve_forever, daemon=True).start()
     print(f"hive-dash on http://127.0.0.1:{port}/  (from elsewhere: ssh -L {port}:localhost:{port} <this-machine>)", flush=True)
     srv.serve_forever()
 

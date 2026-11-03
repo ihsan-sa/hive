@@ -4,7 +4,7 @@ You never have to, but it's there if you prefer it.
 
 ## Get to the Hive's account
 
-- **Linux:** `sudo -iu hive`
+- **Linux:** `sudo -iu hive`. Installed in your own account, you're already there: `hive` works from your own shell.
 - **Windows:** in PowerShell, `hive` commands already go to the right place, and `wsl -d Hive -u hive --cd ~` opens a shell inside. For messages with spaces or quotes, use that shell.
 
 ## Talk to it in Claude Code
@@ -42,7 +42,7 @@ hive post --thread moon-page "@new Make a one-page web page about the moon."
 | `hive update --check`, `hive update` | Looks for a release, or installs it |
 | `hive login list` | Your Claude accounts |
 | `hive module list` | Extras |
-| `systemctl --user stop hive-starter` | Stops new agents. `start` brings them back, as does a restart or an update. `pkill claude` ends the running ones, and any `hive` session of yours |
+| `systemctl --user stop hive-starter` | Stops new agents. `start` brings them back, as does a restart or an update. `systemctl --user kill hive-starter` after it ends the running ones |
 
 ## Change how it behaves
 

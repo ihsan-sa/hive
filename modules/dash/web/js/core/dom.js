@@ -82,14 +82,14 @@ export function mount(container, tree) {
 }
 
 // ---- events: one delegated listener per type; handlers live on nodes as _on and survive morph ----
-const TYPES = ["click", "input", "change", "keydown", "submit", "paste", "dragover", "dragleave", "drop", "focusout"];
+const TYPES = ["click", "input", "change", "keydown", "submit", "paste", "dragover", "dragleave", "drop", "focusout", "toggle"];
 export function delegate(root = document) {
   for (const type of TYPES) root.addEventListener(type, ev => {
     for (let n = ev.target; n && n !== root; n = n.parentNode) {
       const f = n._on && n._on[type];
       if (f) { f(ev, n); if (ev.cancelBubble) break; }
     }
-  });
+  }, type === "toggle"); // toggle doesn't bubble, so catch it on the way down
 }
 
 /** True while the person has text selected on the page: views hold still so the selection isn't lost. */

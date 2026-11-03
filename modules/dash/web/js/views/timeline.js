@@ -2,7 +2,7 @@
 // so recent work doesn't sit in a sliver at the right. A bar's name shows only if it fits; hover or focus shows it always.
 import { h, s, morph } from "../core/dom.js";
 import { S, SYS, getPref, setPref } from "../core/store.js";
-import { agentStatus, isRunning, sEnd, tierOf } from "../core/model.js";
+import { agentStatus, isRunning, sEnd, threadTitle, tierOf } from "../core/model.js";
 import { clock, dayName, dur, mdPlain, now, short, stamp, DAY, HOUR, MIN } from "../core/format.js";
 import { agentHref, threadHref } from "../core/router.js";
 import { status, tier } from "../core/status.js";
@@ -78,7 +78,7 @@ function lanes(t0, t1) {
   return [...all.values()].sort((a, b) => b.live - a.live || rank(b) - rank(a));
 }
 const barTone = x => (sLive(x) ? status(agentStatus(x.name).key) : x.exit ? { tone: "bad", shape: "diamond" } : { tone: "ended", shape: "dot" });
-const barTip = (x, th) => () => [x.name, `${th} · ${clock(x.start)}${x.end ? "–" + clock(x.end) : ", still running"} · ${dur(sEnd(x) - x.start)}`, `${x.resumed ? "woken" : "started"} by ${x.from || "?"}` + (x.exit ? ` · exit ${x.exit}` : "")];
+const barTip = (x, th) => () => [x.name, `${threadTitle(th)} · ${clock(x.start)}${x.end ? "–" + clock(x.end) : ", still running"} · ${dur(sEnd(x) - x.start)}`, `${x.resumed ? "woken" : "started"} by ${x.from || "?"}` + (x.exit ? ` · exit ${x.exit}` : "")];
 
 // Rows by pixels, not by time: two short sessions never share a spot, however far out the zoom.
 // On a display tile only running bars add height: ended ones go inline where they fit, newest first, and the rest are left out.
@@ -102,7 +102,7 @@ function placeBars(l, W, x) {
 function drawLane(l, y, W, x, follows, nextLive) {
   const L = gutter(W), RH = T.rowPx || rowH(W), tight = RH < rowH(W), TICK = tight ? 2 : 6, PAD = tight ? 1 : 3;
   const { placed, nRows } = placeBars(l, W, x);
-  const h_ = Math.max(1, nRows) * RH + TICK + PAD, label = fitText(l.th, T.F.name, L - 22);
+  const h_ = Math.max(1, nRows) * RH + TICK + PAD, label = fitText(threadTitle(l.th), T.F.name, L - 22);
   const kids = [
     s("rect", { class: "tl-bg", x: 0, y, width: W, height: h_ }),
     s("line", { class: "tl-rule", "data-live": l.live && !nextLive ? "" : null, x1: 0, x2: W, y1: y + h_, y2: y + h_ }),

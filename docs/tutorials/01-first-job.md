@@ -16,7 +16,7 @@ irm https://hive.ihsan.cc/install.ps1 | iex
 
 When it finishes, it prints an address starting `http://127.0.0.1`. Windows opens it for you. On Linux, open it in a browser on the same machine. On a server, see [Install](../guide.md#install) in the guide.
 
-**That address is your key, so don't share it.** You can get it again at any time with `sudo -iu hive hive web` on Linux, or `hive web` in a new PowerShell window on Windows.
+**That address is your key, so don't share it.** You can get it again at any time with `sudo -iu hive hive web` on Linux (`hive web` if you installed it in your own account), or `hive web` in a new PowerShell window on Windows.
 
 ## Sign in to Claude
 

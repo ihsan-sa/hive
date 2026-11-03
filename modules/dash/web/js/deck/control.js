@@ -4,10 +4,11 @@
 // What the server allows (can()) still decides: full control unlocks the deck, not the server. Each change goes through the same confirm window as the mouse.
 import { h } from "../core/dom.js";
 import { S, can, subscribe } from "../core/store.js";
-import { agentStatus, agentThread, fresh7 as weekly } from "../core/model.js";
+import { agentStatus, agentThread, fresh7 as weekly, threadTitle } from "../core/model.js";
 import { go, parse } from "../core/router.js";
 import { askKill, askPause, askTier } from "../actions.js";
 import { closePanel, openPanel, panelOpen } from "../ui/panel.js";
+import { singleOpen, toggleSingle, leaveSingle, sendSingle } from "./single.js";
 import { decoder, HELLO, isFlx4, KEEP_ALIVE, LED, PAGES, vuMsg } from "./flx4.js";
 
 const ARM_HOLD = 1500, CONFIRM_HOLD = 1200, ARM_IDLE = 10 * 60e3;
@@ -30,6 +31,9 @@ export const watch = fn => (watchers.add(fn), () => watchers.delete(fn));
 export const watchLog = fn => (logWatchers.add(fn), () => logWatchers.delete(fn));
 const changed = () => { for (const f of watchers) f(); };
 const shownViews = () => views.filter(v => (typeof v.tab === "function" ? v.tab() : v.tab));
+/** Single screen, for the deck's EXIT button. display: where its messages go while it's open; leaving: what EXIT does on a TV page opened by its address. */
+let display = null, leaving = null;
+export const setDisplay = (fn, out) => { display = fn; leaving = out; };
 const curView = () => views.find(v => v.id === parse().id);
 const dialog = () => document.querySelector("dialog[open]");
 
@@ -198,7 +202,11 @@ function inDialog(dlg, e) {
 // ---- what each control does ----
 const need = (c, what) => { if (!D.armed) { say(`${what} needs full control: hold SHIFT + BEAT FX ON/OFF`, { tone: "warn" }); return false; } if (!can(c)) { say(`The server doesn't allow ${what.toLowerCase()} here`, { tone: "warn" }); return false; } return true; };
 export const runningAgents = () => [...((S.live && S.live.agents) || [])].sort((a, b) => (a.since || 0) - (b.since || 0) || (a.name < b.name ? -1 : 1));
+const LEAVES = new Set(["cue", "pad", "load", "callPrev", "callNext", "loopIn", "loopOut"]);   // these act on the dashboard, so they come back to it first
 function act(e) {
+  if (e.c === "reloop") { if (e.on) { if (display) leaving(); else toggleSingle(say); } return; }
+  if (display) return display(e, say);
+  if (singleOpen() && e.c !== "fxOn") { if (!LEAVES.has(e.c)) return sendSingle(e, say); leaveSingle(); if (e.c === "cue") return; }
   const v = curView(), deck = (v && v.deck) || {};
   switch (e.c) {
     case "browse": if (deck.browse && deck.browse(e.d)) return; return move(e.d * (e.shift ? 5 : 1));
@@ -238,7 +246,7 @@ function act(e) {
       }
       const a = runningAgents()[at];
       if (!a) return say(`No running agent on pad ${e.i + 1}`);
-      if (!e.shift) { openPanel("agent", a.name); return say(a.name + (a.thread ? ` · ${a.thread}` : "")); }
+      if (!e.shift) { openPanel("agent", a.name); return say(a.name + (a.thread ? ` · ${threadTitle(a.thread)}` : "")); }
       if (need("stop", "Killing " + a.name)) askKill(a.name);
       return;
     }
@@ -304,7 +312,7 @@ function lights() {
     const st = a && agentStatus(a.name).key;
     led(...LED.pad(2, D.pageOf[2], i), a && (st === "stuck" ? blink : true));
   }
-  for (const d of [1, 2]) { led(...LED.padMode(d, D.pageOf[d]), true); led(...LED.play(d), true); led(...LED.cue(d), panelOpen() || !!dialog()); led(...LED.loopIn(d), D.armed); led(...LED.loopOut(d), D.armed); }
+  for (const d of [1, 2]) { led(...LED.padMode(d, D.pageOf[d]), true); led(...LED.play(d), true); led(...LED.cue(d), panelOpen() || !!dialog()); led(...LED.loopIn(d), D.armed); led(...LED.loopOut(d), D.armed); led(...LED.reloop(d), !!display || singleOpen()); }
   led(...LED.fxOn(), D.armed && (blink || Date.now() - D.armedAt > 3000));
   const n = agents.length, l = ((S.usage && S.usage.logins) || []).filter(x => !x.paused).map(x => weekly(x)).filter(x => x != null);
   const vu = [Math.min(1, n / 24), l.length ? Math.min(...l) / 100 : 0];
@@ -319,6 +327,7 @@ export const MAP = [
   ["pad", "Left pads", "Views, in tab order. Other pad-mode buttons are more pages.", "SHIFT + pad: pause or resume that account"],
   ["pad", "Right pads", "Running agents, oldest first: opens the side panel. Lit: running. Blinking: stuck. Other pad-mode buttons: agents 9 to 32.", "SHIFT + pad: kill that agent"],
   ["jog", "Jog wheels", "Scroll. Left: the page, or the left pane where the page itself doesn't scroll. Right: the side panel, else the right pane, else the page. Side ring and SHIFT go faster. Mesh: left scrubs replay, right zooms. Timeline: left pans, right zooms.", ""],
+  ["reloop", "RELOOP/EXIT", "Single screen in full screen, and back. The browser wants one click for full screen unless it already fills the screen (F11). There: TEMPO right sizes, BROWSE walks the links, jogs and crossfader work the Timeline and Mesh tiles, pads and ◀ ▶ come back to the dashboard.", ""],
   ["cue", "CUE", "Back: closes the panel, drops the cursor, then the browser's Back. In a window: Cancel.", ""],
   ["callPrev", "CUE/LOOP CALL ◀ ▶", "Previous / next view", ""],
   ["play", "PLAY", "Top of the page. Mesh: replay on and off. Timeline: follow now.", "In a window: hold 1.2 s to confirm, code filled in for you"],

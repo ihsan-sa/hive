@@ -35,8 +35,10 @@ Good for the whole app from anywhere, including your phone. It's the most work, 
 
 1. Set up a Cloudflare Tunnel from the machine to `http://127.0.0.1:PORT`, on a hostname such as `hive.example.com`. An agent can walk you through this, but do the sign-ins yourself.
 2. Create a Cloudflare Access application on that hostname, and allow only your own email. Prefer a Google or similar sign-in with 2-step verification over emailed codes, because the login is only as strong as the mailbox.
-3. On the machine itself, open **Settings**, then **Access from outside**. Enter the hostname, the Access team domain, the application's audience tag and your email.
+3. On the machine itself, open **Settings**, then **Access from outside**. Enter the hostname, the Access team domain, the application's audience tag and your email. Type these yourself: an agent's tools can refuse your account's address.
 4. Tick only what you need. It's read-only until you tick more. **Post as you** lets you give agents orders from outside, and that means anyone with that sign-in can too.
+
+To let other people in, name them under **People with full access** or **People with limited access**. Limited can read, chat and stop agents. Full can do everything for an hour after signing in, and then drops to limited. Once you've named anyone, the ticks don't apply, and everyone else is refused.
 
 A request from outside must carry a token signed by Cloudflare Access. The secret in your address stays for the machine itself. Only the machine itself can change these settings.
 

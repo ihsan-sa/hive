@@ -3,17 +3,17 @@ import { h } from "../core/dom.js";
 import { status as st } from "../core/status.js";
 
 /** Page header: the answer first. {title, lead, tone, meta:[...], actions, after} */
-export function pageHeader({ title, lead, tone, meta, actions, after }) {
-  return h("header", { class: "ph" },
+export function pageHeader({ title, lead, tone, meta, actions, after, size }) {
+  return h("header", { class: "ph", "data-size": size || null },
     title || actions ? h("div", { class: "ph-row" }, title ? h("h1", { class: "ph-title" }, title) : null, actions ? h("div", { class: "ph-actions" }, actions) : null) : null,
     lead ? h("p", { class: "ph-lead", "data-tone": tone || null }, lead) : null,
     after || null,
     meta && meta.filter(Boolean).length ? h("p", { class: "ph-meta" }, meta.filter(Boolean).map(m => h("span", null, m))) : null);
 }
 
-/** Section: a titled block. {title, note, actions, id} + body nodes */
-export function section({ title, note, actions, id, key }, ...body) {
-  return h("section", { class: "sec", id: id || null, "data-key": key || null, "aria-label": title || null },
+/** Section: a titled block. {title, note, actions, id, level} + body nodes. level 1: a part of a long page, with a rule under its title. */
+export function section({ title, note, actions, id, key, level }, ...body) {
+  return h("section", { class: "sec", id: id || null, "data-key": key || null, "data-level": level || null, "aria-label": title || null },
     title ? h("header", { class: "sec-h" }, h("h2", { class: "sec-t" }, title), note ? h("span", { class: "sec-n" }, note) : null, actions ? h("div", { class: "sec-a" }, actions) : null) : null,
     body);
 }
@@ -23,6 +23,10 @@ export function statusDot(key, { live } = {}) {
   const S = st(key);
   return h("span", { class: "sd", "data-tone": S.tone, "data-shape": S.shape, "data-live": live ? "" : null, "aria-hidden": "true" });
 }
+/** A warden's mark, the hexagon the graphs draw around a warden. */
+export const wardenMark = () => h("span", { class: "wm", "aria-hidden": "true" });
+/** The word and the mark, for the head of a warden's page. */
+export const wardenBadge = title => h("span", { class: "wb", title }, wardenMark(), "Warden");
 /** Status label: dot and words, coloured by tone. text overrides the table's label. */
 export function statusLabel(key, text, { live, title } = {}) {
   const S = st(key);
@@ -105,6 +109,32 @@ export function share(parts, { total, label, legend: withLegend = true } = {}) {
 }
 export function legend(parts) {
   return h("div", { class: "legend" }, parts.map(p => h("span", { "data-tone": p.tone }, h("i", { class: "sw" }), `${p.label}: ${p.text}`)));
+}
+
+/** Note: something to read before acting. tone info | warn | bad; title is one line, body short points. */
+export function note({ tone = "info", title, actions, key }, ...body) {
+  const shape = { info: "dot", warn: "square", bad: "tri" }[tone] || "ring";
+  return h("aside", { class: "note", "data-tone": tone, "data-key": key || null },
+    h("span", { class: "sd", "data-shape": shape, "aria-hidden": "true" }),
+    h("div", { class: "note-in" }, title ? h("p", { class: "note-t" }, title) : null,
+      body.flat().filter(Boolean).length ? h("div", { class: "note-b" }, body) : null,
+      actions ? h("div", { class: "note-a" }, actions) : null));
+}
+
+/** Block: one setting or account, in a .blks group. {title, sub, state, actions, key, fold, open, onToggle}.
+ *  fold makes it a <details>: keep open in view state and pass onToggle, or a refresh closes it. Put actions in the body when folded. */
+export function block({ title, sub, state, actions, key, fold, open, onToggle }, ...body) {
+  const head = [h("b", { class: "blk-t" }, title), sub ? h("span", { class: "blk-s" }, sub) : null, state || null, actions ? h("span", { class: "blk-a" }, actions) : null];
+  const b = body.flat().filter(Boolean), inner = b.length ? h("div", { class: "blk-b" }, b) : null;
+  if (fold) return h("details", { class: "blk", "data-key": key || null, open: open ? "" : null, ontoggle: onToggle ? e => onToggle(e.target.open) : null }, h("summary", { class: "blk-h" }, head), inner);
+  return h("div", { class: "blk", "data-key": key || null }, h("div", { class: "blk-h" }, head), inner);
+}
+export const blocks = (...kids) => h("div", { class: "blks" }, kids);
+
+/** Command: a line to copy, with a Copy button. */
+export function cmd(text) {
+  return h("div", { class: "cmd" }, h("code", null, text),
+    button("Copy", (e, b) => { navigator.clipboard?.writeText(text).then(() => { b.textContent = "Copied"; setTimeout(() => (b.textContent = "Copy"), 1200); }); }, { size: "s" }));
 }
 
 /** Toolbar: a row of filters and controls above a list or a canvas. */

@@ -1,19 +1,18 @@
-// Now: what each agent is doing, and what needs you. Template: overview.
+// Now: what each agent is doing. Template: overview.
 import { h } from "../core/dom.js";
-import { S, SYS, OUTSIDE, loadProjects } from "../core/store.js";
-import { threadTitle, agentState, isRunning, hiveStats, tierHours, tierOf, tierRank, agentThread, spendSince, sEnd } from "../core/model.js";
+import { S, SYS, loadProjects } from "../core/store.js";
+import { threadTitle, agentState, isRunning, hiveStats, tierHours, agentThread, spendSince, sEnd } from "../core/model.js";
 import { now, ago, dur, clock, money, pct, plural, firstSentence, short, HOUR, DAY, MIN } from "../core/format.js";
-import { TIERS, tier, status } from "../core/status.js";
+import { TIERS, status } from "../core/status.js";
 import { threadHref, agentHref } from "../core/router.js";
 import { overview, cols } from "../templates.js";
 import { pageHeader, section, tally, stats, list, share, empty, button, statusDot } from "../ui/kit.js";
 import { agentCard } from "../ui/agentCard.js";
 import { chart } from "../ui/chart.js";
 
-const DONE = /\b(done|merged|closed|released|shipped|fixed|no action|nothing to do|stopping)\b/i;
-const V = { open: new Set(), all: {} };
+const V = { open: new Set() };
 
-/** Addressed to the person, no reply yet, last 3 days: one row per thread. */
+/** Addressed to the person, no reply yet, last 3 days: one row per thread. For the TV tile; the page itself leaves this to Chat. */
 export function forYouRows(t = now()) {
   const lastYou = {}; for (const p of S.posts) if (p.from === "person" || p.from === "box") lastYou[p.th] = p.t;
   const fy = {}; for (const p of S.posts) if (p.t > t - 3 * DAY && p.men.includes("person") && p.t > (lastYou[p.th] || 0)) fy[p.th] = p;
@@ -51,7 +50,6 @@ export default {
   render(ctx) {
     const L = S.live, t = now();
     if (!L) return h("div", { class: "page" }, empty("Reading the board…", { kind: "loading" }));
-    const more = k => ({ limit: V.all[k] ? Infinity : 5, onMore: () => { V.all[k] = true; ctx.update(); } });
 
     // Working agents keep a fixed order (longest up first), so a new turn doesn't move a card. The rest follow, least quiet first; gone processes last.
     const isWorking = a => a.alive && t - (a.last || 0) * 1e3 < 3 * MIN, group = a => (isWorking(a) ? 0 : a.alive ? 1 : 2);
@@ -84,29 +82,10 @@ export default {
       run.length ? h("div", { class: "agents" }, run.map(a => agentCard(a, { open: V.open.has(a.name), onToggle: n => { V.open.has(n) ? V.open.delete(n) : V.open.add(n); ctx.update(); } })))
         : empty("None."));
 
-    // Gone quiet: same test as `hive stalled`
-    const stale = [];
-    for (const d of S.threads.values()) {
-      const lp = d.posts[d.posts.length - 1];
-      if (d.name === "keeper" || lp.t > t - 2 * HOUR || lp.t < t - 3 * DAY) continue;
-      const who = [...d.who].filter(n => !OUTSIDE.has(n));
-      if (!who.length || who.some(n => isRunning(n) || S.pending[n])) continue;
-      if (DONE.test(String(lp.text).slice(0, 300)) && lp.from !== "person" && lp.from !== "hives") continue;
-      stale.push({ d, lp });
-    }
-    stale.sort((a, b) => tierRank(a.d.name) - tierRank(b.d.name) || b.lp.t - a.lp.t);
     const stuck = run.filter(a => states.get(a.name).key === "stuck");
 
-    const aside = [
-      stuck.length ? section({ title: "Stuck", note: "running but not moving" },
-        list(stuck.map(a => ({ key: a.name, href: agentHref(a.name), lead: statusDot("stuck"), title: a.name, sub: threadTitle(a.thread), text: states.get(a.name).text })))) : null,
-      section({ title: "For you", note: "addressed to you, no reply yet · 3 days", actions: S.app.app ? button("Open in Chat", null, { href: "#comms", size: "s", kind: "quiet" }) : null },
-        list(forYouRows(t), { empty: "Nothing open.", ...more("fy") })),
-    ];
-    const later = [
-      section({ title: "Gone quiet", note: "nobody on it, not marked done · leads, not verdicts" },
-        list(stale.map(({ d, lp }) => ({ key: d.name, href: threadHref(d.name), lead: h("span", { class: "ref-sw", "data-tone": tier(tierOf(d.name)).tone, title: tier(tierOf(d.name)).label }), title: threadTitle(d.name), sub: lp.from, meta: ago(lp.t), text: firstSentence(lp.text) })), { empty: "Nothing stalled.", ...more("q") })),
-    ];
+    const stuckList = stuck.length ? section({ title: "Stuck", note: "running but not moving" },
+      list(stuck.map(a => ({ key: a.name, href: agentHref(a.name), lead: statusDot("stuck"), title: a.name, sub: threadTitle(a.thread), text: states.get(a.name).text })))) : null;
 
     const hive = section({ title: "How it's working as a hive", note: "last 24 hours" }, stats(hiveFigures(t)));
     const charts = cols(...activityCharts(t));
@@ -127,6 +106,6 @@ export default {
         : P === "loading" ? empty("Reading projects…", { kind: "loading" }) : !P ? empty("Couldn't read the projects.", { kind: "error" })
         : list(P.map(p => ({ key: p.name, title: p.name, sub: short(p.head, 80), text: p.t ? `${ago(p.t * 1e3)}: ${short(p.commit, 110)}` : null })), { dense: true }));
 
-    return overview({ header, main, aside, later, after: [hive, charts, tiers, cols(finished, projects)] });
+    return overview({ header, main: [stuckList, main], after: [hive, charts, tiers, cols(finished, projects)] });
   },
 };

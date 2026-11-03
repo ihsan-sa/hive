@@ -1,0 +1,10 @@
+[Unit]
+Description=Hive opt-in reports, every 6 hours
+
+[Timer]
+OnBootSec=30min
+OnUnitActiveSec=6h
+RandomizedDelaySec=10min
+
+[Install]
+WantedBy=timers.target

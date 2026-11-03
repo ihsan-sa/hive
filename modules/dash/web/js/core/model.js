@@ -3,6 +3,9 @@ import { S, OUTSIDE, SYS } from "./store.js";
 import { now, ago, dur, median, short, mdPlain, MIN, HOUR, DAY } from "./format.js";
 
 export const isAgent = n => S.agents.has(n);
+/** A warden judges whether work crosses the hard limits. The starter names them w + 4 hex (core/starter.py is_warden); `warden` and `rootwarden` are the fixed names. */
+export const isWarden = n => /^(warden|rootwarden|w[0-9a-f]{4})$/.test(n);
+export const WARDEN_HINT = "A warden: it judges whether work crosses the hard limits, and doesn't take ordinary work.";
 export const isRunning = n => S.running.has(n);
 export const sEnd = s => s.end ?? (isRunning(s.name) ? now() : s.start);
 export function agentThread(n) { for (let i = S.sessions.length - 1; i >= 0; i--) if (S.sessions[i].name === n) return S.sessions[i].thread; return null; }
@@ -40,7 +43,7 @@ export function agentStatus(n) {
   else if (S.pending[n]) v = { key: "queued", label: "queued" };
   else if (!s) v = { key: "none", label: "hasn't run" };
   else if (S.killed[n] >= s.start) v = { key: "killed", label: "killed" };
-  else if (S.limitedSess.has(s.session)) v = { key: "limited", label: "stopped at a limit" };
+  else if (S.limitedNow.has(s.session)) v = { key: "limited", label: "stopped at a limit" };
   else if (s.exit) v = { key: "failed", label: `failed (exit ${s.exit})` };
   else v = { key: "ended", label: "ended " + ago(sEnd(s)) };
   S.stCache.set(n, v); return v;
@@ -71,6 +74,15 @@ export function agentCard(n) {
   if (init.fast === "on") rows.push({ k: "Fast mode", v: "on", short: "fast mode", hint: "" });
   if (init.perm && init.perm !== "bypassPermissions") rows.push({ k: "Permissions", v: init.perm, short: "permissions " + init.perm, hint: "" });
   return rows;
+}
+
+/** An agent's spend from its transcripts (S.agentCosts), or from the session logs when those say more: a running agent's newest
+ *  turns since the last read, or a harness with no transcripts to read. stream: {c, t:[in, out, cache read, cache write]}.
+ *  -> {usd, t, calls (null if unknown), m (model id -> usd), sub (usd of subagents), src} */
+export function agentSpend(n, stream) {
+  const A = S.agentCosts && S.agentCosts.by[n];
+  if (A && A.usd >= stream.c) return { usd: A.usd, t: A.t, calls: A.calls, m: A.m, sub: A.sub, src: "transcripts" };
+  return { usd: stream.c, t: stream.t, calls: A ? A.calls : null, m: stream.m || (A ? A.m : {}), sub: A ? A.sub : 0, src: "session logs" };
 }
 
 // ---- hive stats, last window ----
@@ -138,20 +150,36 @@ export function runway(l, U) {
   return { stop, toStop, toReset: reset ? reset - now() : null, before: toStop != null && reset != null && toStop < reset - now() };
 }
 // ---- conversations: what a thread is called, who is in it, what state it is in ----
+const MENTIONS = /^(?:[ \t]*@[\w.-]+[,:]?[ \t]+)+/;
+const SOURCE = /^\((?:from ([^,)\n]{1,80}), )?(web app|in Slack|via the box)(?:, replying to ".*?"|, [^)\n]*)?\)[ \t]*/;
+const SOURCE_LABEL = { "web app": "Web", "in Slack": "Slack", "via the box": "Box" };
 /** What the person typed, without the routing the server writes into the text ("@a7c31 ", "reply to message <id>: ").
  *  The board keeps the text as it is; this is for display only. */
 // The developer route reads the board as it is: mentions, reply lines and thread ids stay.
 export function displayText(p) {
   if (!S.app.app) return String(p.text || "");
   if (p.disp != null) return p.disp;
-  let t = String(p.text || "").replace(/^(?:[ \t]*@[\w.-]+[,:]?[ \t]+)+/, "");
+  let t = String(p.text || "").replace(MENTIONS, "");
   t = t.replace(/^reply to message [0-9a-f]+:\s*/i, "");
+  // Where the person wrote it: the server and the Slack door head the text with it for agents to read. In the app it's a badge (postSource).
+  // Only on the person's own posts, so an agent quoting one keeps its words.
+  const m = p.from === "person" && t.match(SOURCE);
+  p.src = m ? { name: m[1] || null, how: SOURCE_LABEL[m[2]], said: m[0].trim().slice(1, -1) } : null;
+  if (m) t = t.slice(m[0].length).replace(MENTIONS, "");
   return (p.disp = t);
 }
+/** Where one of the person's posts was written, in the app: {name or null, how: "Web" | "Slack" | "Box", said: the words as on the board}, or null. */
+export function postSource(p) {
+  if (!S.app.app) return null;
+  displayText(p);
+  return p.src || null;
+}
 const HEX = /^[0-9a-f]{12}$/;
-/** A thread's title: its name, or for an unnamed job (a hex id) the start of its first message. */
+/** A thread's title: its name, the name the indexer gave a number thread, or in the app the start of its first message. */
 export function threadTitle(th) {
-  if (!S.app.app || !HEX.test(th || "")) return th;
+  if (!HEX.test(th || "")) return th;
+  if (S.threadNames[th]) return S.threadNames[th];
+  if (!S.app.app) return th;
   const d = S.threads.get(th), p = d && d.posts[0];
   return p ? short(mdPlain(displayText(p)).split("\n")[0], 64) : th;
 }
@@ -190,7 +218,7 @@ export function threadState(th, read) {
   if (busy) { const st = agentState(busy); return { key: st.key, label: st.key === "working" ? "working" : st.text, who: busy.name, doing: busy.doing }; }
   const q = (S.live ? S.live.pending : []).find(p => (p.threads || []).includes(th));
   if (q) return { key: "queued", label: "waiting to start", who: q.name };
-  if (last && last.end && S.limitedSess.has(last.session)) return { key: "limited", label: "stopped at a usage limit", who: last.name, t: last.end };
+  if (last && last.end && S.limitedNow.has(last.session)) return { key: "limited", label: "stopped at a usage limit", who: last.name, t: last.end };
   if (last && last.end && last.exit && last.exit !== 143 && !S.limitedSess.has(last.session)) return { key: "failed", label: "stopped with an error", who: last.name, t: last.end };
   if (ask && !(read && read(ask))) return { key: "foryou", label: "new reply for you", who: ask.from, post: ask };
   return { key: "done", label: last ? "done" : "", who: last ? last.name : null };

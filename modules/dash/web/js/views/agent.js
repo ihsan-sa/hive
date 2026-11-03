@@ -1,12 +1,12 @@
 // The Agent page: one agent's numbers, what it runs on, its corner of the hive, activity, sessions and posts.
 // agentPage(name) is the whole page; the side panel (ui/panel.js) draws the same thing in a narrower container.
 import { h } from "../core/dom.js";
-import { S, OUTSIDE, SYS, jget } from "../core/store.js";
-import { agentCard, agentState, agentStatus, isAgent, isRunning, sEnd, displayText } from "../core/model.js";
+import { S, OUTSIDE, SYS, jget, loadAgentCosts } from "../core/store.js";
+import { agentCard, agentSpend, agentState, agentStatus, isAgent, isRunning, isWarden, modelName, WARDEN_HINT, sEnd, displayText } from "../core/model.js";
 import { dur, mdPlain, money, pct, plural, short, stamp, toks } from "../core/format.js";
 import { threadHref } from "../core/router.js";
 import { metrics, cols } from "../templates.js";
-import { button, defs, empty, pageHeader, rank, section, share, statusLabel, stats } from "../ui/kit.js";
+import { button, defs, empty, pageHeader, rank, section, share, statusLabel, stats, wardenBadge } from "../ui/kit.js";
 import { table } from "../ui/table.js";
 import { agentRef, copyButton, threadRef } from "../ui/refs.js";
 import { message, pollDelivered } from "../ui/message.js";
@@ -17,7 +17,7 @@ import { killButton } from "../actions.js";
 // ---- the feed: /api/agent, for one agent at a time (the panel closes when the full page opens) ----
 const F = { name: null, items: null, sig: "" };
 export async function loadFeed(n, onChange) {
-  if (F.name !== n) Object.assign(F, { name: n, items: null, sig: "" });
+  if (F.name !== n) { Object.assign(F, { name: n, items: null, sig: "" }); loadAgentCosts().then(onChange); }
   try {
     const items = await jget("/api/agent?name=" + encodeURIComponent(n)), sig = JSON.stringify(items);
     if (F.name === n && sig !== F.sig) { F.items = items; F.sig = sig; onChange(); }
@@ -37,11 +37,12 @@ function gather(n) {
   if (memo.key === key) return memo;
   const ss = S.sessions.filter(x => x.name === n), mine = S.posts.filter(p => p.from === n), toMe = S.posts.filter(p => p.men.includes(n) && p.from !== n);
   const first = ss.find(x => !x.resumed) || ss[0], active = ss.reduce((a, x) => a + Math.max(0, sEnd(x) - x.start), 0);
-  let cost = 0; const tk = [0, 0, 0, 0], tools = {}, byOut = {};
+  let cost = 0; const tk = [0, 0, 0, 0], tools = {}, byOut = {}, models = {};
   if (S.usage) for (const x of ss) {
     const f = x.out && S.usage.files[x.out]; if (!f) continue;
     cost += f.c; byOut[x.out] = f.c;
     for (let i = 0; i < 4; i++) tk[i] += f.t[i];
+    for (const k in f.m) models[k] = (models[k] || 0) + f.m[k];
     for (const k in f.tools) tools[k] = (tools[k] || 0) + f.tools[k];
   }
   const counts = {};
@@ -59,7 +60,9 @@ function gather(n) {
   for (const p of mine) ths[p.th] = (ths[p.th] || 0) + 1;
   const threads = Object.keys(ths).sort((a, b) => ths[b] - ths[a]);
   const toolList = Object.entries(tools).sort((a, b) => b[1] - a[1]).slice(0, 8);
-  return memo = { key, ss, mine, toMe, first, active, cost, tk, byOut, links, started, startedNames, chain, threads, toolList };
+  const spend = agentSpend(n, { c: cost, t: tk, m: models }), turns = ss.reduce((a, x) => a + ((S.usage && x.out && S.usage.files[x.out] && S.usage.files[x.out].turns) || 0), 0);
+  const toolCalls = Object.values(tools).reduce((a, b) => a + b, 0);
+  return memo = { key, ss, mine, toMe, first, active, spend, turns, toolCalls, byOut, links, started, startedNames, chain, threads, toolList };
 }
 
 const ended = x => (!x.end ? (isRunning(x.name) ? "running" : "unknown") : x.exit === 0 ? "finished" : x.exit === 143 ? "stopped by a signal" : x.exit == null ? "ended, no exit code" : S.limitedSess.has(x.session) ? "usage limit" : `exit ${x.exit}`);
@@ -69,13 +72,13 @@ export function agentPage(n, host = "page") {
   if (!S.live) return empty("Reading…", { kind: "loading" });
   const D = gather(n), L = S.running.get(n), st = agentStatus(n), task = L && S.byId[L.post];
   const state = L ? agentState(L).text : null;
-  const { ss, mine, toMe, first, tk, links, started, startedNames, threads, toolList } = D;
-  const read = tk[0] + tk[2] + tk[3], corner = ego({ name: n, links, started: startedNames, threads, parent: first && first.from, version: D.key, host });
+  const { ss, mine, toMe, first, spend, links, started, startedNames, threads, toolList } = D;
+  const tk = spend.t, read = tk[0] + tk[2] + tk[3], byModel = Object.entries(spend.m || {}).filter(x => x[1] > 0).sort((a, b) => b[1] - a[1]), corner = ego({ name: n, links, started: startedNames, threads, parent: first && first.from, version: D.key, host });
   const line = [D.chain.length ? `Started by ${D.chain.join(" → ")} → ${n}` : null, first ? `first seen ${stamp(first.start)}` : null];
   return h("div", { "data-key": n }, metrics({
     header: pageHeader({
-      title: h("span", { class: "ref-wrap" }, n, isAgent(n) ? copyButton("@" + n) : null),
-      lead: L ? L.doing || "Starting" : null,
+      title: h("span", { class: "ref-wrap" }, n, isAgent(n) ? copyButton("@" + n) : null, isWarden(n) ? wardenBadge(WARDEN_HINT) : null),
+      lead: L ? L.doing || "Starting" : isWarden(n) ? WARDEN_HINT : null,
       actions: [button("All their posts", null, { href: threadHref("@" + n), size: "s" }), L ? threadRef(L.thread) : null, L ? killButton(n) : null],
       meta: [st.key === "outside" ? null : statusLabel(st.key, state || st.label || null, { live: isRunning(n) }), ...line],
       after: L && (task || L.said) ? h("dl", { class: "ac-dl" },
@@ -85,8 +88,10 @@ export function agentPage(n, host = "page") {
     sections: [
       defs(agentCard(n)),
       section({ title: "In numbers" }, stats([
-        { label: "Cost", value: S.usage ? money(D.cost) : "…", note: L ? "as of its last finished turn, at API list prices" : "at API list prices" },
-        { label: "Tokens written", value: toks(tk[1]), note: `${toks(read)} read, ${pct(tk[2], read)} from cache` },
+        { label: "Cost", value: S.usage ? money(spend.usd) : "…", note: (spend.sub ? `${money(spend.sub)} of it in subagents; ` : "") + "at API list prices", title: `From the ${spend.src}.` + (L ? " A turn under way may not be counted yet." : "") },
+        { label: "Tokens", value: toks(tk[0] + tk[1] + tk[2] + tk[3]), note: `${toks(tk[1])} written, ${toks(read)} read, ${pct(tk[2], read)} from cache` },
+        spend.calls != null ? { label: "Model calls", value: spend.calls.toLocaleString(), note: D.turns ? plural(D.turns, "finished turn") : null } : null,
+        D.toolCalls ? { label: "Tool calls", value: D.toolCalls.toLocaleString(), note: toolList[0] ? `most: ${toolList[0][0]}` : null } : null,
         { label: "Time running", value: ss.length ? dur(D.active) : "none", note: plural(ss.length, "session") },
         { label: "Posts written", value: mine.length, note: `${plural(toMe.length, "mention")} of it by others` },
         { label: "Agents it started", value: started.length, note: started.length ? plural(new Set(started.map(x => x.thread)).size, "thread") : "none" },
@@ -97,11 +102,12 @@ export function agentPage(n, host = "page") {
           section({ title: "Its corner of the hive", note: corner ? "Thicker line: more messages. Arrow: started. Box: thread. Drag a node; ctrl+scroll or pinch zooms." : null }, corner || empty("No exchanges yet.")),
           startedNames.length ? section({ title: "Started" }, h("div", { class: "ref-row" }, startedNames.slice(0, 30).map(x => h("span", { "data-key": x }, agentRef(x, { copy: true }))))) : null,
           threads.length ? section({ title: "Threads" }, h("div", { class: "ref-row" }, threads.slice(0, 16).map(x => h("span", { "data-key": x }, threadRef(x))))) : null,
+          byModel.length > 1 ? section({ title: "Cost by model" }, rank(byModel.map(([k, v]) => ({ key: k, label: modelName(k), value: v, text: money(v) })))) : null,
           toolList.length ? section({ title: "What it reached for" },
             share(toolList.map(([k, v]) => ({ key: k, label: k, value: v, tone: toolTone(k), text: String(v) })), { label: "Tool calls by tool" }),
             rank(toolList.map(([k, v]) => ({ key: k, label: k, value: v, text: String(v), tone: toolTone(k) })))) : null),
         section({ title: "Latest activity", note: "tool calls and what it said, newest first" }, feed(F.name === n ? F.items : null))),
-      section({ title: "Sessions" }, table({
+      section({ title: "Sessions", note: "Cost per session is from its session log, so these can add up to less than the total above." }, table({
         rows: [...ss].reverse().slice(0, 40), key: x => String(x.start), empty: "No sessions.", caption: `${n}'s sessions`,
         columns: [
           { label: "Started", render: x => stamp(x.start) },

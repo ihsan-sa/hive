@@ -1,10 +1,10 @@
 // References to agents and threads. Real links (#agent/<name>, #comms/<thread>), so they open in a new tab,
 // show in the status bar, and work by keyboard. Status is shape + colour + the label in the tooltip.
 import { h, copyText } from "../core/dom.js";
-import { agentStatus, isAgent, isRunning, threadTitle, tierOf } from "../core/model.js";
+import { agentStatus, isAgent, isRunning, isWarden, threadTitle, tierOf } from "../core/model.js";
 import { agentHref, threadHref } from "../core/router.js";
 import { status, tier } from "../core/status.js";
-import { statusDot } from "./kit.js";
+import { statusDot, wardenMark } from "./kit.js";
 import { openPanel } from "./panel.js";
 
 /** A ref's click: plain clicks open where the old page opened them; ctrl, shift and middle clicks stay ordinary links. */
@@ -17,9 +17,9 @@ export function openRef(e, kind, name) {
 /** agentRef(name, {copy, state}) — state: also show the status word. */
 export function agentRef(n, { copy, state, href } = {}) {
   if (!n) return "?";
-  const s = agentStatus(n), agent = isAgent(n);
-  const a = h("a", { class: "ref", "data-kind": "agent", href: href || (agent ? agentHref(n) : threadHref("@" + n)), title: s.label ? `${n}: ${s.label}` : n, onclick: !href && agent ? e => openRef(e, "agent", n) : null },
-    statusDot(s.key, { live: isRunning(n) }), h("span", { class: "ref-n" }, n),
+  const s = agentStatus(n), agent = isAgent(n), warden = isWarden(n);
+  const a = h("a", { class: "ref", "data-kind": "agent", href: href || (agent ? agentHref(n) : threadHref("@" + n)), title: `${n}${warden ? ", a warden" : ""}${s.label ? `: ${s.label}` : ""}`, onclick: !href && agent ? e => openRef(e, "agent", n) : null },
+    statusDot(s.key, { live: isRunning(n) }), h("span", { class: "ref-n" }, n), warden ? wardenMark() : null,
     state && s.label && s.key !== "none" ? h("span", { class: "sl", "data-tone": null, style: "font-weight:400" }, status(s.key).label) : null);
   if (!copy || !agent) return a;
   return h("span", { class: "ref-wrap" }, a, copyButton("@" + n));

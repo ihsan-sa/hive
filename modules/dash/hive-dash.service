@@ -2,6 +2,8 @@
 Description=Hive web app (module dash, loopback only)
 
 [Service]
+# The app runs claude (sign-in, login checks): the manager's default PATH has no ~/.local/bin, where it installs.
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
 ExecStart=/usr/bin/python3 -I %h/modules/dash/dash.py serve
 Restart=on-failure
 MemoryMax=300M

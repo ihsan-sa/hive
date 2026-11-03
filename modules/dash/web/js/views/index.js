@@ -8,6 +8,7 @@ import usage from "./usage.js";
 import system from "./system.js";
 import jobs from "./jobs.js";
 import ledger from "./ledger.js";
+import agents from "./agents.js";
 import comms from "./comms.js";
 import inbox from "./inbox.js";
 import mesh from "./mesh.js";
@@ -24,6 +25,7 @@ export default [
   now,
   jobs,
   inbox,
+  agents,
   ledger,
   mesh,
   comms,
@@ -42,5 +44,5 @@ export default [
 // A view named in neither goes at the end of More, so a new view is still one line above.
 export const APP_NAV = {
   main: ["start", "comms", "now", "usage", "settings"],
-  more: ["knowledge", "inbox", "ledger", "timeline", "mesh", "jobs"],
+  more: ["knowledge", "inbox", "agents", "ledger", "timeline", "mesh", "jobs"],
 };

@@ -16,12 +16,14 @@
   --fs-lead:17px;    /* page answer sentence */
   --fs-head:21px;    /* page headline */
   --fs-figure:24px;  /* numbers in stats and gauges */
+  --fs-display:30px; /* the website's and the guide's page title, nowhere in the app */
+  --measure:70ch;    /* longest line of prose */
   --lh:1.45; --lh-tight:1.2;
   --w-med:550; --w-bold:650;
 
   /* space: 4px grid */
   --s1:4px; --s2:8px; --s3:12px; --s4:16px; --s5:24px; --s6:32px; --s7:48px;
-  --gutter:28px; --page-max:1360px; --rail:340px;
+  --gutter:28px; --page-max:1360px;
 
   /* radius */
   --r-s:4px; --r-m:6px; --r-l:10px; --r-pill:999px;
@@ -61,6 +63,7 @@
   --tier2: light-dark(oklch(66% .16 45),  oklch(71% .15 45));
   --held:  light-dark(oklch(62% .1 180),  oklch(69% .1 180));
   --other: light-dark(oklch(74% .008 95), oklch(48% .008 95));
+  --warden: light-dark(oklch(50% .17 305), oklch(72% .15 305));
 
   /* elevation: only things that float */
   --e1: 0 1px 2px oklch(0% 0 0 / .06), 0 6px 18px oklch(0% 0 0 / .10);

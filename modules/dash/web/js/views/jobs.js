@@ -15,7 +15,7 @@ const OWNERS = [["jobs", "Queue jobs", "tier1"], ["outside", "Agents' work outsi
 const who = n => (n && n !== "?" ? agentRef(n) : "?");
 const num = (label, render) => ({ label, num: true, render });
 const col = (label, render) => ({ label, render });
-const cmd = { label: "Command", mono: true, clip: true, render: r => h("span", { title: r.cmd }, r.cmd) };
+const cmd = { label: "Command", mono: true, clip: true, render: r => (r.cmd == null ? "not shown" : h("span", { title: r.cmd }, r.cmd)) };
 
 function headline(V) {
   const held = V.gates.filter(g => !g.ok);

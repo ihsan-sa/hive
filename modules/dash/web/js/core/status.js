@@ -13,21 +13,22 @@ export const STATUS = {
   failed:   { label: "failed",       tone: "bad",   shape: "diamond", hint: "its last run ended with an error" },
   killed:   { label: "killed",       tone: "quiet", shape: "diamond", hint: "killed from here" },
   ended:    { label: "ended",        tone: "ended", shape: "dot",     hint: "finished its turn; a post wakes it" },
-  none:     { label: "hasn't run",   tone: "ended", shape: "dot",     hint: "" },
+  none:     { label: "hasn't run",   tone: "ended", shape: "dot",     hint: "known, but no run has started yet" },
   // conversations, for the person
   asks:     { label: "waiting for your answer", tone: "info", shape: "square", hint: "an agent asked you something and is waiting" },
   foryou:   { label: "new reply for you", tone: "info", shape: "dot", hint: "an agent wrote to you since you last opened this" },
   done:     { label: "done", tone: "ended", shape: "dot", hint: "nobody is on it; a message wakes the last agent" },
-  sending:  { label: "sending", tone: "quiet", shape: "ring", hint: "" },
+  sending:  { label: "sending", tone: "quiet", shape: "ring", hint: "your message is on its way to the board" },
   outside:  { label: "",             tone: "ink",   shape: "diamond", hint: "you, or someone outside this hive" },
   // logins and providers
   inuse:    { label: "in use",       tone: "good",  shape: "dot",     hint: "the starter can give it new runs" },
   paused:   { label: "paused",       tone: "warn",  shape: "half",    hint: "no new runs until resumed" },
   atstop:   { label: "at its stop line", tone: "bad", shape: "tri",   hint: "past the line where the starter stops new runs" },
-  off:      { label: "not set up",   tone: "quiet", shape: "ring",    hint: "" },
-  // job results
-  ok:       { label: "ok",           tone: "good",  shape: "dot",     hint: "" },
-  error:    { label: "failed",       tone: "bad",   shape: "tri",     hint: "" },
+  off:      { label: "not set up",   tone: "quiet", shape: "ring",    hint: "nothing to run on yet: no login or key" },
+  out:      { label: "not signed in", tone: "quiet", shape: "ring",   hint: "set up once, but its sign-in has ended; sign in again" },
+  // job results: a job is not an agent, so these say "job"
+  ok:       { label: "job ok",       tone: "good",  shape: "dot",     hint: "the job finished without an error" },
+  error:    { label: "job failed",   tone: "bad",   shape: "diamond", hint: "the job ended with an error" },
 };
 export const status = k => STATUS[k] || STATUS.none;
 

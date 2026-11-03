@@ -242,24 +242,58 @@ def session_in(out):
     except (OSError, TypeError): pass
     return sid
 
+woke, slept_was = 0.0, None
+
+def note_sleep():
+    """A suspended machine's wall clock jumps, and everything timed by it looks long quiet. So the moment it wakes counts as activity.
+    Two signs, since inside a VM (the Mac version) the boot clock stands still while the host sleeps, and only the wall clock moves, when Lima's guest agent sets it."""
+    global woke, slept_was
+    mono = time.clock_gettime(time.CLOCK_MONOTONIC)
+    slept = (time.clock_gettime(time.CLOCK_BOOTTIME) - mono, time.clock_gettime(time.CLOCK_REALTIME) - mono)
+    if slept_was is not None and (slept[0] - slept_was[0] > 5 or slept[1] - slept_was[1] > 5): woke = time.time()
+    slept_was = slept
+
 def finished_but_alive(r, grace):
     """The run printed its final result and nothing since for `grace` s: it is done, and only something it
     left behind (a background shell that never ends, e.g. a `pgrep -f` loop that matches itself) keeps
     `claude -p` alive, since -p waits on background shells. True means: end it so its waiting posts start it."""
     out = Path(r.get("out", ""))
     try:
-        if time.time() - out.stat().st_mtime < grace: return False
+        if time.time() - max(out.stat().st_mtime, woke) < grace: return False
         with out.open("rb") as f:
             f.seek(max(0, out.stat().st_size - 65536)); last = f.read().strip().splitlines()[-1]
         return json.loads(last).get("type") in ("result", "turn.completed", "session.resume_hint")  # turn.completed: codex; session.resume_hint: kimi
     except (OSError, IndexError, ValueError): return False
 
+def box():
+    """The sandbox module on a consumer install with it on, else None. With no ~/settings.json (Hive itself) it is never even imported."""
+    if not (HOME / "settings.json").exists(): return None
+    import sys; sys.path.insert(0, str(CORE)); import sandbox
+    return sandbox if sandbox.on() else None
+
+BOX_SHAPE = 4  # in a sandbox the run is: bwrap, its init, the supervisor, then the agent's own process. Under that are its jobs.
+box_state = {"ok": None, "at": 0.0}
+
+def box_holds():
+    """On with a failing check: nothing starts, there's no quiet fallback. The person is told once, and it's tried again each minute."""
+    if not (sb := box()): box_state["ok"] = None; return False
+    sb.ensure_broker()
+    if time.time() - box_state["at"] < (600 if box_state["ok"] else 60): return not box_state["ok"]
+    r, was = sb.check(), box_state["ok"]
+    box_state.update(ok=r["works"], at=time.time())
+    if not r["works"] and was is not False:
+        post(f"No agent can start: the sandbox doesn't work on this machine. {r['why']} {r['fix']} Agents start once that's fixed, or if you choose to run without it in Settings: they then have the full rights of this account.", ["person"])
+        log(event="sandbox-failed", why=r["why"])
+    elif r["works"] and was is False: post("The sandbox works again; starting agents.", ["person"])
+    return not r["works"]
+
 def cpu_of(name, skip):
     """CPU seconds used so far by live processes that carry HIVE_NAME=name (detached ones too: nohup/setsid
     keep the env) and by their reaped children, except pid `skip` (the agent's own claude)."""
     tot, tick, key = 0.0, os.sysconf("SC_CLK_TCK"), f"HIVE_NAME={name}".encode()
+    skips = set(tree_of(skip)[:BOX_SHAPE]) if box() else {skip}
     for d in Path("/proc").iterdir():
-        if not d.name.isdigit() or int(d.name) == skip: continue
+        if not d.name.isdigit() or int(d.name) in skips: continue
         try:
             if key not in (d / "environ").read_bytes().split(b"\0"): continue
             st = (d / "stat").read_text().rsplit(")", 1)[1].split()
@@ -295,7 +329,7 @@ def working(r, grace):
         c = cpu_of(r["name"], r["pid"])
         if w[0] and c - w[1] >= 0.05 * (t - w[0]): w[2] = t
         w[0], w[1] = t, c
-    return t - w[2] < grace
+    return t - max(w[2], woke) < grace
 
 def bg_tasks(out):
     """Descriptions of background tasks the run started and that had not ended when it went quiet."""
@@ -345,7 +379,7 @@ WAITERS = {"bash", "sh", "timeout", "sleep", "tail", "cat", "grep", "wc", "date"
 def only_waiters(pid):
     """Is everything under this run a wait loop? Then ending the run loses nothing but the wait. Jobs started with nohup or
     setsid have left the tree and survive; a job that is still a child of the run shows here, so the run stays where it is."""
-    for q in tree_of(pid)[1:]:
+    for q in tree_of(pid)[BOX_SHAPE if box() else 1:]:
         try:
             if Path(f"/proc/{q}/comm").read_text().strip() not in WAITERS: return False
         except OSError: pass
@@ -405,6 +439,7 @@ def runs_now(name):
 
 def running(st=None):
     alive = {}
+    note_sleep()
     grace = cfg().get("done_grace_s", 900)
     for f in RUN.glob("*.json"):
         r = json.loads(f.read_text())
@@ -609,6 +644,7 @@ def login_for(c, u, limits, posts, login):
     return pick_login(c, u, limits, 100) if any(p.get("from") == "person" for p in posts) else None
 
 def move_session(sid, src, dst):
+    if (sb := box()): return sb.move_session(sid, src, dst)  # a login folder is agents' to write: no following their links out here
     """Copy a session's transcript to another login so --resume finds it there. False if there's nothing to copy."""
     src, dst = Path(src), Path(dst)
     found = list(src.glob(f"projects/*/{sid}.jsonl"))
@@ -724,6 +760,7 @@ def start(c, name, posts, login, resume=None, reaped=None, extra=(), moved=False
     prov = provider_of(c, model)
     kind = "warden" if is_warden(name) else "agent"
     system = (CORE / "orientation.md").read_text() + ("\n\n" + (CORE / "warden.md").read_text() if kind == "warden" else "")
+    if (sb := box()): system += sb.NOTE + ("\n" + (CORE / "warden-step.md").read_text() if kind == "warden" else "")
     prompt = (f"You are @{name}. You were woken by board post {', '.join(p['id'] for p in posts)} "
               f"(thread {first.get('thread', first['id'])}, from {first.get('from')}). "
               f"Start with `hive read --thread {first.get('thread', first['id'])}`.")
@@ -774,17 +811,23 @@ def start(c, name, posts, login, resume=None, reaped=None, extra=(), moved=False
     # Compacting near resume_max_context also keeps a run resumable instead of leaving an heir. 0 or absent: Claude Code's default.
     if c.get("auto_compact_window"): env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] = str(c["auto_compact_window"])
     if prov:  # main loop's provider_hold just loaded its module and found room
-        impl = prov[1]["_impl"]; env.update(impl.env(prov[1], prov[2]))
+        impl = prov[1]["_impl"]; keep = impl.env(prov[1], prov[2]); env.update(keep); env["_BOX_KEEP"] = " ".join(keep)
         if prov[1].get("config_dir"): env["CLAUDE_CONFIG_DIR"] = str(Path(prov[1]["config_dir"]).expanduser())
         login = env.get("CODEX_HOME") or env.get("KIMI_CODE_HOME") or env["CLAUDE_CONFIG_DIR"]
         if hasattr(impl, "command") and (argv := impl.command(prov[1], prov[2], prompt, system, sid, resume)):  # another harness (codex)
             env.pop("CLAUDE_CONFIG_DIR", None)
-    proc = subprocess.Popen(argv or ["claude", "-p", prompt, "--append-system-prompt", system,
-                             *(["--resume", sid] if resume else ["--session-id", sid]),
-                             *(["--model", prov[2] if prov else model] if model else []), *c["claude_args"]],
-                            cwd=HOME, env=env, stdout=path.open("w"), stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)
+    cmd = argv or ["claude", "-p", prompt, "--append-system-prompt", system,
+                   *(["--resume", sid] if resume else ["--session-id", sid]),
+                   *(["--model", prov[2] if prov else model] if model else []), *c["claude_args"]]
+    if sb:  # the delivered file is mounted by inode, so it's emptied before the run rather than removed after
+        sb.prepare(name)
+        if not resume: (STATE / "delivered" / name).write_text("")
+        sb.ensure_broker(); sb.ready(name)
+        cmd, env = sb.wrap(cmd, env, name)
+    else: env.pop("_BOX_KEEP", None)
+    proc = subprocess.Popen(cmd, cwd=HOME, env=env, stdout=path.open("w"), stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)
     children[name] = proc
-    if not resume: (STATE / "delivered" / name).unlink(missing_ok=True)  # the inbox hook starts fresh with this run; a resumed one keeps its list so an @all isn't handed over twice
+    if not resume and not sb: (STATE / "delivered" / name).unlink(missing_ok=True)  # the inbox hook starts fresh with this run; a resumed one keeps its list so an @all isn't handed over twice
     rec = {"name": name, "pid": proc.pid, "session": sid, "at": now(), "post": first["id"], "login": login,
            "thread": first.get("thread"), "from": first.get("from"), "out": str(path), **({"resumed": True} if resume else {}), **({"slept": posts} if slept else {}), **({"heir_of": heir_of["name"]} if heir_of else {}), **({"all_since": all_since} if all_since else {}), **({"model": model} if model else {}), **({"fallback": fb} if fb else {}),
            "harness": prov[1].get("harness", "claude-code") if prov else "claude-code", **({"provider": prov[0]} if prov else {}), **({"effort": env["CLAUDE_EFFORT"]} if env.get("CLAUDE_EFFORT") else {})}
@@ -828,7 +871,9 @@ def improver(c, st, alive, login):
 def backup(c, st):
     if time.time() - st.get("committed", 0) < c["commit_s"]: return
     st["committed"] = time.time()
-    subprocess.run("git add -A && git commit -qm 'auto backup' || true", shell=True, cwd=HOME,
+    # With a sandbox, kb is agents' to write. A repo in it has its own .git/config, and git would run what that says to check its status, out here.
+    git = "GIT_NO_LAZY_FETCH=1 git -c diff.ignoreSubmodules=all -c core.fsmonitor=false" if box() else "git"
+    subprocess.run(f"{git} add -A && {git} commit -qm 'auto backup' || true", shell=True, cwd=HOME,
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 def hook_inbox(c):
@@ -930,7 +975,7 @@ def fallback(c, st, n, posts, claude_ok, cache):
     fb = c.get("fallback") or {}
     free = any(p.get("free") for p in posts)
     if free: chain = fb.get("free", [])
-    elif not claude_ok and any(p.get("from") in fb.get("for", ["person"]) for p in posts): chain = fb.get("chain", [])
+    elif not claude_ok and any("*" in fb.get("for", ["person"]) or p.get("from") in fb.get("for", ["person"]) for p in posts): chain = fb.get("chain", [])
     else: return False
     model = fallback_model(c, st, chain, cache)
     held = st.setdefault("fallback_held", {})
@@ -1019,7 +1064,8 @@ def main():
                  if paused else "Usage has room again; starting sessions.", ["person"])
             log(event="paused" if paused else "resumed", usage=u)
         login = pick_login(c, room, st.get("limits"))  # None: every login is paused, past the stop line or held on a limit
-        for n, r in list(st.get("resume", {}).items()):  # resume limit-stopped sessions first, same name and session
+        hold = box_holds()
+        for n, r in ([] if hold else list(st.get("resume", {}).items())):  # resume limit-stopped sessions first, same name and session
             if (not login and not provider_of(c, r.get("model"))) or n in alive or len(alive) >= (c.get("max_sessions") or float("inf")): continue
             if paced(c, st, n, [{"from": r.get("from")}]): continue
             own, limits = r.get("login"), st.get("limits")
@@ -1036,7 +1082,7 @@ def main():
                   resume=r["session"], reaped=r.get("reaped"), extra=[p["id"] for p in waiting], moved=r.get("move", False), lost=r.get("lost", False),
                   woken={"shells": r["shells"], "posts": waiting} if "shells" in r else None, all_since=r.get("all_since") or r.get("at"))
             alive[n] = {"name": n, "thread": r.get("thread")}  # a dict, so keeper() sees a resumed keeper (two rounds at once, 2026-11-02)
-        for n in list(st["pending"]):
+        for n in ([] if hold else list(st["pending"])):
             if n in alive or n in st.get("resume", {}): continue
             got = STATE / "delivered" / n  # posts the inbox hook already handed this agent mid-run
             if got.exists():
@@ -1055,8 +1101,9 @@ def main():
             if to and len(alive) < (c.get("max_sessions") or float("inf")) and not paced(c, st, n, st["pending"][n]):
                 ps = st["pending"].pop(n)
                 if (who := wake(c, st, n, ps, to, room)): alive[who] = {"name": who, "thread": ps[0].get("thread")}
-        keeper(c, st, alive, login)
-        improver(c, st, alive, login)
+        if not hold:
+            keeper(c, st, alive, login)
+            improver(c, st, alive, login)
         save("starter.json", st)
         backup(c, st)
         time.sleep(c["poll_s"])

@@ -3,13 +3,13 @@ import { h } from "../core/dom.js";
 import { STATUS, TIERS } from "../core/status.js";
 import { HOUR, now } from "../core/format.js";
 import { metrics, cols } from "../templates.js";
-import { pageHeader, section, tally, stats, meter, button, seg, field, input, empty, list, rank, share, statusLabel } from "../ui/kit.js";
+import { pageHeader, section, tally, stats, meter, button, seg, field, input, empty, list, rank, share, statusLabel, note, block, blocks, cmd } from "../ui/kit.js";
 import { table } from "../ui/table.js";
 import { chart } from "../ui/chart.js";
 import { gaugeRows } from "../ui/gauge.js";
 import { confirm } from "../ui/dialog.js";
 
-const V = { seg: "6h" };
+const V = { seg: "6h", fold: false };
 const sw = (name, token) => h("div", { class: "swatch", "data-key": token }, h("i", { style: `--c:var(${token})` }), h("span", null, h("b", null, name), " ", h("span", { class: "mono" }, token)));
 const spec = (token, size, weight, text) => [h("span", null, `${token} ${size}`), h("div", { style: `font-size:var(${token});font-weight:${weight};line-height:1.3` }, text)];
 
@@ -30,6 +30,7 @@ export default {
           h("div", { class: "swatches" }, TIERS.map(x => sw(x.label, "--" + x.tone)))),
         section({ title: "Type", note: "system UI font, no web fonts; tabular numbers for figures" },
           h("div", { class: "specimen" },
+            spec("--fs-display", "30", 650, "The Hive (website and guide only)"),
             spec("--fs-head", "21", 650, "24 agents on 23 threads"), spec("--fs-lead", "17", 400, "Only acct-3 can take new runs."), spec("--fs-figure", "24", 600, "$369 · 16%"),
             spec("--fs-title", "15.5", 650, "a6a89 (names)"), spec("--fs-body", "14", 400, "can start once the queue clears and the review passes"),
             spec("--fs-small", "13", 400, "Secondary text, tables, lists, section titles at 650"), spec("--fs-meta", "12", 400, "Metadata, notes, timestamps · 4m ago"), spec("--fs-micro", "11", 400, "Axis ticks, badges"))),
@@ -48,6 +49,26 @@ export default {
             seg([["1h", "1h"], ["6h", "6h"], ["24h", "24h"], ["all", "All"]], V.seg, k => { V.seg = k; ctx.update(); }, { label: "Window" }),
             button("Open a confirm window", () => confirm({ title: "Kill a6a89?", kind: "danger", ok: "Kill a6a89", typed: "a6a89", body: ["This ends the run right away. Type the code to enable the button."], onOk: async () => { throw Error("this is the system page"); } }))),
           h("div", { class: "cols", style: "margin-top:var(--s4)" }, field("Session limit", input({ type: "number", value: "40" }), "How many agents run at once. Empty means no limit."), field("Find", input({ type: "search", placeholder: "Filter by agent, thread or words" })))),
+        section({ title: "Section heads", note: "two levels, one component: section() in kit.js" },
+          h("div", { class: "stack" },
+            section({ title: "Level 1: a part of a long page", note: "Settings groups, website parts, guide h2", level: 1 }, h("p", { class: "muted" }, "15.5 px, a rule under it. Use it where a page has parts someone scans for.")),
+            section({ title: "Level 2: a group inside a part", note: "the default; every view's sections" }, h("p", { class: "muted" }, "13 px bold with a quiet note beside it. No rule; the list under it draws its own.")))),
+        section({ title: "Notes and warnings", note: "note() in kit.js; a title line and short points, never a paragraph wall" },
+          h("div", { class: "notes" },
+            note({ tone: "bad", title: "The sandbox isn't working on this machine" }, h("ul", null, h("li", null, "Agents can reach everything this account can."), h("li", null, "No new agent starts until you fix it or choose to run without it."))),
+            note({ tone: "warn", title: "Agents run without asking first" }, h("ul", null, h("li", null, "Inside the sandbox, each step just runs."), h("li", null, "Money, credentials and the network still need your yes."))),
+            note({ tone: "info", title: "It spends your usage", actions: button("Usage", () => {}, { size: "s" }) }, "New agents stop at 95% of your week."))),
+        section({ title: "Blocks", note: "block() in a blocks() group: one setting or account per row, hairlines not boxes" },
+          blocks(
+            block({ title: "Claude", sub: "your subscription", state: statusLabel("working", "signed in"), actions: button("Sign in again", () => {}, { size: "s" }) }),
+            block({ title: "Codex", sub: "with a ChatGPT login", state: statusLabel("off"), actions: button("Sign in", () => {}, { size: "s" }) }),
+            block({ title: "API keys", sub: "charged per use, for when no login has room", fold: true, open: V.fold, onToggle: o => { V.fold = o; } },
+              h("p", null, "Every run costs money on that key, so set a spending limit with the provider."),
+              h("div", { class: "frow" }, h("div", { style: "flex:1;min-width:12rem" }, field("Key", input({ placeholder: "sk-…" }))), button("Save key", () => {}))),
+            block({ title: "Reach the hive from Slack", state: h("span", { class: "nb" }, "not built yet") }, h("p", null, "One channel is one conversation.")))),
+        section({ title: "Command, not built yet" },
+          cmd("curl -fsSL https://<THIS-SITE>/install.sh | sh -s -- --this-account"),
+          h("p", { class: "muted", style: "margin-top:var(--s3)" }, "Stop from the conversation ", h("span", { class: "nb" }, "not built yet"), " Neutral and dashed: amber is the job queue, and this isn't a state.")),
         section({ title: "Tally, stats, meter" },
           tally([{ n: 9, label: "active now", status: "working" }, { n: 12, label: "in the job queue", status: "queue" }, { n: 0, label: "quiet", status: "quiet" }, { n: 1, label: "stuck", status: "stuck" }]),
           h("div", { style: "margin-top:var(--s4)" }, stats([{ label: "CPU", value: "97%", meter: { value: 97 }, note: "89% programs, 8% system" }, { label: "Load", value: "33", tone: "bad", meter: { value: 100, tone: "bad" }, note: "on 20 threads" }, { label: "Last 24 hours", value: "$369", note: "$15 an hour lately" }, { label: "Weekly", value: "16%", meter: { value: 16, stop: 98 }, note: "stop line at 98%" }]))),
@@ -64,7 +85,7 @@ export default {
         section({ title: "Empty, loading, error" }, empty("Nothing stalled."), empty("Reading the board…", { kind: "loading" }), empty("Couldn't read the job data.", { kind: "error" })),
         section({ title: "Templates", note: "js/templates.js" },
           h("ul", { class: "rules" },
-            h("li", null, h("b", null, "overview"), ": header, main column, sticky rail of what needs you, then full-width sections. Now."),
+            h("li", null, h("b", null, "overview"), ": header, main sections, then full-width sections. Now."),
             h("li", null, h("b", null, "metrics"), ": header with the answer, then sections. Usage, Jobs, Agent page."),
             h("li", null, h("b", null, "listDetail"), ": list beside a reading pane, one pane at a time on a phone. Comms, Inbox, Ledger. (next pass)"),
             h("li", null, h("b", null, "canvas"), ": toolbar, full-bleed stage, side panel. Mesh, Timeline. (next pass)"),

@@ -1,7 +1,7 @@
 // Usage: are we about to run out, then where the work went. Template: metrics.
 import { h } from "../core/dom.js";
 import { S, SYS, can } from "../core/store.js";
-import { spendSince, fresh7, inUse, runway, weeklyStop, fileInfo, tierOf, agentStatus, sEnd } from "../core/model.js";
+import { spendSince, fresh7, inUse, runway, weeklyStop, fileInfo, threadTitle, tierOf, agentStatus, sEnd } from "../core/model.js";
 import { now, ago, dur, clock, dayName, untilText, money, money$, toks, pct, plural, HOUR, DAY, MIN } from "../core/format.js";
 import { TIERS, tier, status } from "../core/status.js";
 import { threadHref, agentHref } from "../core/router.js";
@@ -175,7 +175,7 @@ export default {
     const tiers = section({ title: "Spend against your priority list", note: "last 24 hours" },
       share(TIERS.map(x => ({ key: x.key, label: x.label, tone: x.tone, value: byTier[x.key], text: `${money(byTier[x.key])} (${Math.round((100 * byTier[x.key]) / tot)}%)` }))));
     const who = cols(
-      section({ title: "Costliest threads", note: "last 24 hours" }, rank(top(byT).map(([k, v]) => ({ key: k, label: k, value: v, text: money(v), tone: tier(tierOf(k)).tone, href: threadHref(k) })))),
+      section({ title: "Costliest threads", note: "last 24 hours" }, rank(top(byT).map(([k, v]) => ({ key: k, label: threadTitle(k), value: v, text: money(v), tone: tier(tierOf(k)).tone, href: threadHref(k) })))),
       section({ title: "Costliest agents", note: "last 24 hours" }, rank(top(byA).map(([k, v]) => ({ key: k, label: k, value: v, text: money(v), tone: status(agentStatus(k).key).tone, href: agentHref(k), onClick: e => openRef(e, "agent", k) })))));
     const models = section({ title: "By model", note: "all of it" }, rank(top(byM).map(([k, v]) => ({ key: k, label: k, value: v, text: money(v), tone: "info" }))));
 

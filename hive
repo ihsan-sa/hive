@@ -31,10 +31,13 @@ def show(p):
 
 def attachable(raw):
     """A readable file under the size cap, and not from a dot directory or dotfile in ~: those hold logins and tokens,
-    and a post's files can go out to Slack and the public dashboard."""
+    and a post's files can go out to Slack and the public dashboard. Agents' $TMPDIR is the one exception: they're told to work there.
+    Resolved first, so a link in it to a login doesn't get through."""
     src = Path(raw).expanduser().resolve()
     if not src.is_file(): sys.exit(f"hive post: no such file: {raw}")
-    if src.is_relative_to(HOME) and any(x.startswith(".") for x in src.relative_to(HOME).parts):
+    tmp = HOME / ".cache" / "hive-tmp"
+    base = tmp if src.is_relative_to(tmp) else HOME
+    if src.is_relative_to(base) and any(x.startswith(".") for x in src.relative_to(base).parts):
         sys.exit(f"hive post: won't attach {raw}: dotfiles in ~ can hold credentials")
     if src.stat().st_size > MAX_FILE: sys.exit(f"hive post: {raw} is over {MAX_FILE // 2**20} MB")
     return src
@@ -89,8 +92,31 @@ def receipt(to, ignored, ext, me):
     if ignored: bits.append(f"ignored {', '.join(ignored)}: no such agent (--to starts one under a code like a1b2c)")
     if bits: print("hive post: " + "; ".join(bits), file=sys.stderr)
 
+def box():
+    """The sandbox module. Only reached on a consumer install, or when someone asks for the check."""
+    sys.path.insert(0, str(CORE)); import sandbox
+    return sandbox
+
+def boxed():
+    return box() if (HOME / "settings.json").exists() and box().on() else None
+
+def forward(req, files=()):
+    """Inside the sandbox the board is read-only: the broker outside does this, signed with this run's name."""
+    blobs = []
+    for f in files:
+        try: blobs.append(Path(f).read_bytes())
+        except OSError as x: sys.exit(f"hive: can't read {f}: {x.strerror}")
+        if len(blobs[-1]) > MAX_FILE: sys.exit(f"hive: {f} is over {MAX_FILE // 2**20} MB")
+    out = box().call({**req, "names": [Path(f).name for f in files]}, blobs)
+    if out.get("out"): print(out["out"])
+    if out.get("err_out"): print(out["err_out"], file=sys.stderr)
+    if out.get("err"): sys.exit(f"hive: {out['err']}")
+    sys.exit(out.get("rc", 0))
+
 def cmd_post(a):
     text = " ".join(a.text) if a.text else sys.stdin.read()
+    if os.environ.get("HIVE_BROKER"):
+        forward({"verb": "post", "thread": a.thread, "to": a.to, "model": a.model, "reply_to": a.reply_to, "text": text}, a.file or [])
     try: c = read_cfg()
     except (OSError, ValueError): c = {}
     ext = set(c.get("external", []))
@@ -111,6 +137,7 @@ def cmd_post(a):
     if a.model: p["model"] = a.model
     if a.routed: p["routed"] = True
     if a.reply_to: p["reply_to"] = a.reply_to
+    if os.environ.get("HIVE_POST_VIA"): p["via"] = os.environ["HIVE_POST_VIA"]
     if re.fullmatch(r"f[0-9a-f]{4}", str(p["from"]).lower()) and (w := [n for n in said if n in ("new", "claude", "codex", "free")]):
         print(f"hive post: from a free agent, {', '.join(w)} in the text starts nothing: leave the word out and use --to new", file=sys.stderr)
     if files: p["files"] = files
@@ -136,6 +163,7 @@ def cmd_search(a):
         if all(w in blob for w in words): show(p)
 
 def cmd_done(a):
+    if os.environ.get("HIVE_BROKER"): forward({"verb": "done"})
     me = os.environ.get("HIVE_NAME", "").lower()
     if not me: sys.exit("hive done: no $HIVE_NAME; only an agent can say it's done")
     d = STATE / "done"; d.mkdir(parents=True, exist_ok=True)
@@ -203,6 +231,13 @@ def door(extra):
     system = (CORE / "orientation.md").read_text() + "\n\n" + (CORE / "door.md").read_text()
     os.chdir(HOME)
     os.environ.update(HIVE_NAME="person", HIVE_DOOR="1", CLAUDE_CONFIG_DIR=login)
+    if (sb := boxed()):  # the door's model reads what agents write, so it's in the sandbox too; its posts are marked, and approve nothing
+        r = sb.check()
+        if not r["works"]: sys.exit(f"{r['why']}\n{r['fix']}\nNo agent starts until that's fixed, or until you choose to run without the sandbox (\"sandbox\": \"bare\" in {sb.SETTINGS}).".replace("\n\n", "\n"))
+        sb.prepare("person"); sb.ensure_broker(); sb.ready("person")
+        cmd, env = sb.wrap(["claude", "--append-system-prompt", system + sb.NOTE + sb.DOOR_NOTE, "--allowedTools", "Bash(hive *)",
+                            "--resume" if said else "--session-id", sid, *extra], dict(os.environ), "person")
+        os.execvpe(cmd[0], cmd, env)
     os.execvp("claude", ["claude", "--append-system-prompt", system, "--allowedTools", "Bash(hive *)",
                          "--resume" if said else "--session-id", sid, *extra])
 
@@ -512,6 +547,47 @@ def cmd_login(a):
 if len(sys.argv) == 1 or (sys.argv[1].startswith("-") and sys.argv[1] not in ("-h", "--help")):
     door(sys.argv[1:])  # flags pass through to claude; a mistyped command must not open a session in an agent's shell
 
+def cmd_sandbox(a):
+    """The check the installer and the setup screens read. Exit 0 either way."""
+    if os.environ.get("HIVE_BROKER"): r = {"works": True, "why": "This is already inside the sandbox.", "fix": ""}
+    else: r = box().check()
+    if a.json: print(json.dumps(r)); return
+    if r["works"]: print("The sandbox works on this machine." if not r["why"] else r["why"]); return
+    print(f"The sandbox doesn't work on this machine. {r['why']}")
+    if r["fix"]: print(r["fix"])
+    if not box().on(): print("This Hive isn't set to use the sandbox, so this doesn't stop agents starting: they have the full rights of this account."); return
+    print(f"No agent starts until that's fixed, or until you choose to run without the sandbox (\"sandbox\": \"bare\" in {HOME / 'settings.json'}): agents then have the full rights of this account.")
+
+def steps():
+    out = []
+    for f in sorted((STATE / "steps").glob("*/step.json")):
+        try: out.append(json.loads(f.read_text()))
+        except (OSError, ValueError): pass
+    return out
+
+def cmd_step(a):
+    """Ask for something to run outside the sandbox (from inside), or answer one (from outside: the person's own terminal)."""
+    inside = bool(os.environ.get("HIVE_BROKER"))
+    if a.do == "ask":
+        if not inside: sys.exit("hive step ask: only from inside the sandbox; out here there's nothing to leave")
+        if not a.id_or_script and not a.script: sys.exit("hive step ask --why \"what and why\" --script PATH")
+        forward({"verb": "ask", "why": a.why}, [a.script or a.id_or_script])
+    if a.do == "verdict":
+        if not inside: sys.exit("hive step verdict: only a warden judging a step, inside the sandbox")
+        forward({"verb": "verdict", "id": a.id_or_script, "verdict": a.verdict, "why": a.why})
+    if a.do == "status" and inside: forward({"verb": "status"})
+    if inside: sys.exit(f"hive step {a.do}: that's the person's, from outside the sandbox")
+    if a.do in ("status", "list"):
+        for s in steps(): print(f"{s['id']} {s['state']} from {s['from']}: " + " ".join(str(s.get("why", "")).split())[:100])
+        return
+    if not a.id_or_script: sys.exit(f"hive step {a.do} ID")
+    s = next((s for s in steps() if s["id"] == a.id_or_script), None)
+    if not s: sys.exit(f"hive step {a.do}: no step {a.id_or_script}")
+    if s["state"] != "person": sys.exit(f"hive step {a.do}: step {s['id']} isn't waiting for you ({s['state']})")
+    r = subprocess.run([sys.executable, str(CORE / "hive"), "post", "--as", "person", "--thread", s.get("thread") or f"step-{s['id']}"],
+                       input=f"{a.do} step {s['id']}-{s['sha'][:8]}", text=True)
+    sys.exit(r.returncode)
+
 ap = argparse.ArgumentParser(prog="hive", description="With no command: open the door, a Claude Code session that talks to the hive for you. Commands: the board itself.")
 sp = ap.add_subparsers(required=True)
 p = sp.add_parser("post", help="hive post [--to @a,@b] [--thread T] [--model sonnet] [--file PATH ...] text   (@mentions of known agents in text wake them, --to starts a name that has run or a new code like a1b2c; --model picks the model of any run this post starts, and the agent stays on it when woken later)")
@@ -541,4 +617,9 @@ p.add_argument("--quiet", default="2h"); p.add_argument("--within", default="3d"
 p = sp.add_parser("login", help="hive login list | add NAME [--paused] | rename OLD NEW | pause NAME | resume NAME | limit NAME --weekly N --five-hour N: the Claude logins Hive runs on (add signs in and puts it to use; a paused login is still read for usage but gets no runs)")
 p.add_argument("do", choices=["list", "add", "rename", "pause", "resume", "limit"]); p.add_argument("name", nargs="?"); p.add_argument("new", nargs="?"); p.add_argument("--paused", action="store_true", help="with add: add it paused")
 p.add_argument("--weekly", help="with limit: stop at N%% weekly, or off"); p.add_argument("--five-hour", dest="five_hour", help="with limit: stop at N%% of the 5-hour limit, or off"); p.set_defaults(f=cmd_login)
+p = sp.add_parser("sandbox", help="hive sandbox check [--json]: does the sandbox work on this machine, by trying it")
+p.add_argument("do", choices=["check"]); p.add_argument("--json", action="store_true"); p.set_defaults(f=cmd_sandbox)
+p = sp.add_parser("step", help="hive step ask --why \"...\" --script PATH | status | list | approve ID | deny ID: run something once outside the sandbox")
+p.add_argument("do", choices=["ask", "status", "list", "approve", "deny", "verdict"]); p.add_argument("id_or_script", nargs="?"); p.add_argument("verdict", nargs="?")
+p.add_argument("--why", default=""); p.add_argument("--script"); p.set_defaults(f=cmd_step)
 a = ap.parse_args(); a.f(a)

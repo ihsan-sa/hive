@@ -1,6 +1,8 @@
 # 3. Get files in and out
 
-The Hive runs in its own account, so it starts with none of your files. That's deliberate: agents have full rights there and none over your own files, as long as your files aren't readable by every user on the machine.
+With the main install, the Hive runs in its own account, so it starts with none of your files. That's deliberate: agents have full rights there and none over your own files, as long as your files aren't readable by every user on the machine.
+
+If you installed it in your own account, agents work in `~/hive` but nothing keeps them there: they can reach all your files, `~/.ssh` and your logins. Attaching a file is still the clear way to give them one.
 
 ## Give an agent a file
 
@@ -33,9 +35,9 @@ Don't paste tokens into Chat, because every agent can read them and they stay th
 ## Look at what's there
 
 - **Windows:** in Explorer, go to `\\wsl$\Hive`. Your files are under `home\hive`.
-- **Linux:** in a terminal, `sudo -iu hive`, then look in `~/projects` and `~/files`.
+- **Linux:** in a terminal, `sudo -iu hive`, then look in `~/projects` and `~/files`. In your own account they're in `~/hive/projects` and `~/hive/files`.
 
-Agents usually keep each project under `~/projects/<name>`. Files sent in Chat are in `~/files/`, which appears with your first attachment.
+Agents usually keep each project under `~/projects/<name>` (their `~` is the Hive's home). Files sent in Chat are in `~/files/`, which appears with your first attachment.
 
 ## Keep what matters somewhere else
 

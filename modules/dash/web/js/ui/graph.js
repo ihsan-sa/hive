@@ -8,7 +8,7 @@
 //
 // createGraph({ onHover(node|edge|null, event), onSelect(node|edge|null), onOpen(node), margins })
 //   .el                  the canvas; put it in a data-own stage
-//   .set(nodes, edges)   nodes: {id, kind, cluster, anchor, r, opacity, tone, shape, live, label, labelRank, big, labelStrong}
+//   .set(nodes, edges)   nodes: {id, kind, cluster, anchor, r, opacity, tone, shape, live, label, labelRank, big, labelStrong, warden}
 //                          anchor: an invisible node that only holds its cluster's place (a thread with nobody only in it)
 //                        edges: {a, b, weight, age, faint, dashed, arrowTo, hub, tether, to, share}
 //                          tether: b or a (the one named in to) is an anchor or member of the disc this node also belongs to
@@ -31,11 +31,13 @@ export function shapePath(shape, x, y, r) {
   }
 }
 export const hollow = shape => shape === "ring";
+/** A warden's mark: a hexagon around the node. It goes around the status shape, so shape and colour still say the status. */
+const hexPath = (x, y, r) => { const q = r * .866, m = r / 2; return `M${x} ${y - r}L${x + q} ${y - m}L${x + q} ${y + m}L${x} ${y + r}L${x - q} ${y + m}L${x - q} ${y - m}Z`; };
 /** A long-lived element for a data-own slot: itself the first time, then a bare copy so morph leaves the real one alone. */
 export const keep = el => (el.isConnected ? el.cloneNode(false) : el);
 
 const RECT_H = .72;   // a thread's rectangle: half its height, as a share of half its width
-const TOKENS = ["--ink", "--ink-2", "--ink-3", "--surface", "--line", "--line-2", "--good", "--warn", "--bad", "--info", "--quiet", "--ended", "--tier1", "--tier2", "--held", "--other"];
+const TOKENS = ["--ink", "--ink-2", "--ink-3", "--surface", "--line", "--line-2", "--good", "--warn", "--bad", "--info", "--quiet", "--ended", "--tier1", "--tier2", "--held", "--other", "--warden"];
 const TONES = { good: "--good", warn: "--warn", bad: "--bad", info: "--info", quiet: "--quiet", ended: "--ended", ink: "--ink", tier1: "--tier1", tier2: "--tier2", held: "--held", other: "--other" };
 
 // inPage: the graph sits in a page that scrolls, so plain wheel and a one-finger swipe scroll the page; ctrl+wheel and pinch zoom, and a swipe that starts on a node drags it.
@@ -270,6 +272,10 @@ export function createGraph({ onHover, onSelect, onOpen, onViewChange, margins =
       const p = n.p, dim = dimN(n.id); let op = n.opacity ?? 1; if (dim) op = Math.min(op, .1); else if (n.id === focus) op = 1;
       c.globalAlpha = op;
       if (n.live && !dim) { const w = (t / 1400 + seeded(n.id)) % 1; c.globalAlpha = (1 - w) * .55; c.strokeStyle = col["--good"]; c.lineWidth = 1.5; c.beginPath(); c.arc(p.x, p.y, n.dr + (3 + w * 9) * zoomOut, 0, 6.3); c.stroke(); c.globalAlpha = op; }
+      if (n.warden) {
+        const hex = new Path2D(hexPath(p.x, p.y, n.dr + 5 * zoomOut)), a = dim ? op : Math.max(op, .85);
+        c.fillStyle = col["--warden"]; c.globalAlpha = a * .16; c.fill(hex); c.globalAlpha = a; c.strokeStyle = col["--warden"]; c.lineWidth = 2 * zoomOut; c.stroke(hex); c.globalAlpha = op;
+      }
       const fill = tone(n.tone);
       if (n.kind === "thread") {
         const r = n.dr; c.beginPath(); c.roundRect(p.x - r, p.y - r * RECT_H, r * 2, r * 2 * RECT_H, 3); c.fillStyle = fill; c.globalAlpha = op * .28; c.fill(); c.globalAlpha = op; c.strokeStyle = fill; c.lineWidth = 1.5; c.stroke();
@@ -281,7 +287,7 @@ export function createGraph({ onHover, onSelect, onOpen, onViewChange, margins =
           if (n.shape === "half") { c.fillStyle = col["--surface"]; c.beginPath(); c.arc(p.x, p.y, n.dr * .7, -Math.PI / 2, Math.PI / 2); c.fill(); }
         }
       }
-      if (G.sel === n.id || n.ring) { c.globalAlpha = 1; c.strokeStyle = col["--ink"]; c.lineWidth = 2 * zoomOut; c.beginPath(); c.arc(p.x, p.y, n.dr + 4 * zoomOut, 0, 6.3); c.stroke(); }
+      if (G.sel === n.id || n.ring) { c.globalAlpha = 1; c.strokeStyle = col["--ink"]; c.lineWidth = 2 * zoomOut; c.beginPath(); c.arc(p.x, p.y, n.dr + (n.warden ? 9 : 4) * zoomOut, 0, 6.3); c.stroke(); }
     }
     // labels, screen space: groups first, then people most important first; any that would collide is dropped and shows on hover
     c.setTransform(px, 0, 0, px, 0, 0); c.font = font; c.textAlign = "center"; c.textBaseline = "top"; c.lineJoin = "round";

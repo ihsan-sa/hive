@@ -96,3 +96,6 @@
 
 /* figures */
 .dt-body .stats{grid-template-columns:repeat(auto-fill,minmax(14em,1fr))}
+
+/* the deck's BROWSE, on a TV page */
+[data-deck-here]{outline:3px solid var(--info,var(--ink));outline-offset:2px;border-radius:var(--r-s)}

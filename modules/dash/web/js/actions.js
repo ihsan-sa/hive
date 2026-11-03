@@ -2,7 +2,7 @@
 import { h } from "./core/dom.js";
 import { S, can, built, post, poll, pollUsage } from "./core/store.js";
 import { short } from "./core/format.js";
-import { tierOf } from "./core/model.js";
+import { threadTitle, tierOf } from "./core/model.js";
 import { TIERS, tier } from "./core/status.js";
 import { confirm } from "./ui/dialog.js";
 import { button, input, field } from "./ui/kit.js";
@@ -103,7 +103,7 @@ export function askTier(th) {
   const warn = h("p", { class: "meta", style: "color:var(--warn-ink)" });
   const opt = (k, l, d, onPick) => h("label", { class: "opt" }, h("input", { type: "radio", name: "tierpick", value: k, checked: k === was || null, onchange: onPick }), h("b", null, l), h("span", { class: "meta" }, d));
   confirm({
-    title: "Tier for " + th, ok: "Save",
+    title: "Tier for " + threadTitle(th), ok: "Save",
     body: [h("p", { class: "meta" }, `Now: ${tier(was).label}${setNow ? ", set here on the dashboard" : ", from the list in kb/priorities.md"}. Your choice is saved there, in its own section, and beats the list for this thread.`),
       ...TIERS.map(t => opt(t.key, t.key === "other" ? "Not in the order" : t.label, desc[t.key], () => { pick = t.key; warn.textContent = was === "held" && pick !== "held" ? "This takes it off hold. The keeper may start work on it again." : ""; })),
       setNow ? opt("", "Back to the list", "remove your dashboard setting", () => { pick = null; warn.textContent = "This goes back to what the list in kb/priorities.md says."; }) : null,

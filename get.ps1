@@ -1,7 +1,7 @@
 # Install the Hive, or update it, on Windows 10 or 11. One line, in PowerShell:
 #   irm https://hive.ihsan.cc/install.ps1 | iex
-# The Hive runs on Linux, so this makes a separate WSL 2 system called Hive. Agents have full rights inside it, so its
-# Windows drives and Windows programs are switched off there: agents can't reach your files.
+# The Hive runs on Linux, so this makes a separate WSL 2 system called Hive. Agents work inside it as an ordinary user, so
+# its Windows drives and Windows programs are switched off for its users. Root inside could turn them back on.
 # Everything is inside one function, so a download cut short runs nothing, and "exit" would close your window: it returns instead.
 function Install-Hive {
   $ErrorActionPreference = 'Stop'
@@ -52,8 +52,8 @@ function Install-Hive {
     if (-not $want -or $want.ToLower() -ne $got) { Remove-Item $image; Write-Host "The download doesn't match Ubuntu's checksum, so it was deleted. Run this again."; return }
     & wsl.exe --import $distro (Join-Path $base 'system') $image --version 2 | Out-Host
     $code = $LASTEXITCODE
-    Remove-Item $image
-    if ($code -ne 0) { Write-Host "WSL couldn't create the system (code $code). If you've just installed WSL, restart Windows and run this again. Otherwise try: wsl --update"; return }
+    Remove-Item -ErrorAction SilentlyContinue $image
+    if ($code -ne 0) { Write-Host "WSL couldn't create the system (code $code). If you've just installed WSL, restart Windows and run this again. If the message above mentions virtualization, turn it on in your PC's BIOS or UEFI settings. Otherwise try: wsl --update"; return }
   }
 
   # 3. Cut it off from Windows and turn systemd on. wsl.conf is read when the system starts, so restart it.
@@ -69,15 +69,40 @@ enabled=false
 appendWindowsPath=false
 CONF
 '@
-  if ((Invoke-InHive $conf) -ne 0) { Write-Host "Couldn't configure the Hive system."; return }
-  & wsl.exe --terminate $distro | Out-Null
+  # wsl.conf leaves other ways to the Windows side open to ordinary users: the GPU device, the desktop's sockets, and running .exe files. Root still has them. /mnt/wsl stays open: /etc/resolv.conf lives there, and closing it stops DNS.
+  $block = @'
+cat > /etc/udev/rules.d/99-hive.rules <<'CONF'
+KERNEL=="dxg", MODE="0600"
+CONF
+cat > /etc/systemd/system/hive-no-windows.service <<'CONF'
+[Unit]
+Description=Keep the users of this system away from Windows
+After=systemd-udev-trigger.service
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh -c 'chmod 600 /dev/dxg; chmod 700 /run/WSL /mnt/wslg; umount -l /tmp/.X11-unix; echo 0 > /proc/sys/fs/binfmt_misc/WSLInterop; true'
+[Install]
+WantedBy=multi-user.target
+CONF
+ln -sf /etc/systemd/system/hive-no-windows.service /etc/systemd/system/multi-user.target.wants/hive-no-windows.service
+'@
+  # A rerun that finds this already in place leaves the system up, so agents at work aren't killed.
+  $set = (Invoke-InHive "grep -qx 'enabled=false' /etc/wsl.conf && grep -q '^\[interop\]' /etc/wsl.conf && test -d /run/systemd/system") -eq 0
+  if (-not $set) {
+    if ((Invoke-InHive ($conf + "`n" + $block)) -ne 0) { Write-Host "Couldn't configure the Hive system."; return }
+    & wsl.exe --terminate $distro | Out-Null
+  } elseif ((Invoke-InHive "test -e /etc/systemd/system/hive-no-windows.service") -ne 0) {
+    # A Hive from before this block: put it in with no restart, since starting again after a terminate can fail until wsl --shutdown.
+    if ((Invoke-InHive ($block + "`nudevadm control --reload; systemctl daemon-reload; systemctl start hive-no-windows")) -ne 0) { Write-Host "Couldn't configure the Hive system."; return }
+  }
   $up = $false
   foreach ($i in 1..30) {
     & wsl.exe -d $distro -u root -- test -d /run/systemd/system | Out-Null
     if ($LASTEXITCODE -eq 0) { $up = $true; break }
     Start-Sleep -Seconds 1
   }
-  if (-not $up) { Write-Host "systemd didn't start in the Hive system. Update WSL with: wsl --update   then run this again."; return }
+  if (-not $up) { Write-Host "The Hive system didn't start. Run: wsl --shutdown   then run this again. If it still fails, update WSL with: wsl --update"; return }
 
   # 4. The Linux installer does the rest. It updates a Hive that's already there.
   if ((Invoke-InHive "curl -fsSL $site/install.sh | sh") -ne 0) { Write-Host 'The install inside the Hive system failed; the lines above say why. Fix that and run this again.'; return }
@@ -111,7 +136,7 @@ CONF
   $address = (& wsl.exe -d $distro -u hive --cd ~ -- bash -lc 'hive web 2>/dev/null' | Select-Object -First 1)
   Write-Host ''
   Write-Host 'The Hive is installed. This address is the key to it, so keep it to yourself:'
-  Write-Host "  $address"
+  if ($address) { Write-Host "  $address" } else { Write-Host "  (it didn't print just now: wait a minute, then run: hive web)" }
   Write-Host 'To see it again, open a new window and run: hive web'
   if ($address -like 'http://127.0.0.1*') { try { Start-Process $address } catch { } }
 }

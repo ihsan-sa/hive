@@ -53,12 +53,10 @@
 .page{max-width:var(--page-max);margin:0 auto;padding:var(--s5) var(--gutter) var(--s7)}
 @container (max-width:640px){.page{--gutter:14px;--fs-head:19px;--fs-lead:15.5px;--fs-figure:21px}}
 .page[data-width=narrow]{max-width:820px}
-.ov{display:grid;grid-template-columns:minmax(0,1fr) var(--rail);gap:var(--s7);align-items:start;margin-top:var(--s5)}
-.ov-aside{position:sticky;top:70px;max-height:calc(100vh - 86px);overflow:hidden auto;scrollbar-width:thin;display:grid;grid-template-columns:minmax(0,1fr);gap:var(--s6);padding-bottom:var(--s2)}
+.ov{display:grid;grid-template-columns:minmax(0,1fr);gap:var(--s6);margin-top:var(--s5)}
 .after{margin-top:var(--s7);display:grid;grid-template-columns:minmax(0,1fr);gap:var(--s6)}
 .cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,400px),1fr));gap:var(--s5) var(--s6);align-items:start}
-@container (max-width:1060px){.ov{grid-template-columns:minmax(0,1fr);gap:var(--s6)}.ov-aside{display:contents}.ov-aside>*{order:-1}.ov-aside>.ov-late{order:1}}
-@container (max-width:640px){.page{padding-top:var(--s4)}.ov{margin-top:var(--s4)}.ov-aside{gap:var(--s5)}}
+@container (max-width:640px){.page{padding-top:var(--s4)}.ov{margin-top:var(--s4)}}
 
 /* ---- pageHeader ---- */
 .ph{display:grid;grid-template-columns:minmax(0,1fr);gap:6px}
@@ -72,6 +70,8 @@
 .ph-meta{font-size:var(--fs-small);color:var(--ink-2);text-wrap:pretty}
 .ph-meta>span+span::before{content:"·";margin:0 8px;color:var(--ink-3)}
 .ph-actions{margin-left:auto;display:flex;gap:var(--s2)}
+.ph[data-size=display] .ph-title{font-size:var(--fs-display);letter-spacing:-.02em;line-height:1.15}
+@container (max-width:640px){.ph[data-size=display] .ph-title{font-size:26px}}
 
 /* ---- tally: counts by status ---- */
 .tally{display:flex;flex-wrap:wrap;gap:var(--s2) var(--s5);list-style:none;margin-top:var(--s2)}
@@ -89,9 +89,15 @@
 .sec-n{font-size:var(--fs-meta);color:var(--ink-3)}
 .sec-a{margin-left:auto;display:flex;gap:var(--s2);align-items:center}
 .sec-more{margin-top:var(--s2)}
+/* level 1: a part of a long page (Settings groups, the website, the guide). Level 2, the default, is a group inside a part. */
+.sec[data-level="1"]>.sec-h{margin-bottom:var(--s3);padding-bottom:var(--s2);border-bottom:1px solid var(--line)}
+.sec[data-level="1"]>.sec-h .sec-t{font-size:var(--fs-title)}
 
 /* ---- statusDot + statusLabel ---- */
 .sd{display:inline-block;flex:none;width:8px;height:8px;border-radius:50%;background:var(--c,var(--quiet))}
+.wm{position:relative;display:inline-block;flex:none;width:10px;height:11px;background:var(--warden);clip-path:polygon(50% 0,100% 25%,100% 75%,50% 100%,0 75%,0 25%)}
+.wm::after{content:"";position:absolute;inset:1.6px;background:color-mix(in oklch,var(--warden) 16%,var(--surface));clip-path:inherit}
+.wb{display:inline-flex;align-items:center;gap:5px;margin-left:var(--s2);padding:1px 8px;border-radius:999px;font-size:var(--fs-meta);font-weight:var(--w-med);letter-spacing:0;color:var(--warden);background:color-mix(in oklch,var(--warden) 12%,transparent);vertical-align:middle}
 .sd[data-shape=square]{border-radius:1.5px}
 .sd[data-shape=ring]{background:transparent;box-shadow:inset 0 0 0 1.6px var(--c)}
 .sd[data-shape=half]{background:linear-gradient(90deg,var(--c) 50%,transparent 50%);box-shadow:inset 0 0 0 1.6px var(--c)}
@@ -524,6 +530,7 @@ button.lr-in{width:calc(100% + 16px);border:0;background:none;text-align:left;fo
 @keyframes msg-flash{from{background:color-mix(in oklch,var(--warn) 30%,transparent)}to{background:transparent}}
 .msg-h{display:flex;flex-wrap:wrap;align-items:center;gap:2px 6px;font-size:var(--fs-small);min-height:var(--ctl-s)}
 .msg-me{font-weight:600}
+.msg-src{padding:0 5px;border:1px solid var(--line-2);border-radius:var(--r-s);font-size:var(--fs-micro);line-height:1.5;color:var(--ink-3);white-space:nowrap}
 .msg-to{color:var(--ink-3)}
 .msg-r{color:var(--ci);font-size:var(--fs-meta)}
 .msg-end{margin-left:auto;display:inline-flex;align-items:center;gap:6px}
@@ -595,6 +602,7 @@ span.msg-thumb,span.msg-file{cursor:default}
 .cp-ac{bottom:calc(100% + 4px);left:6px}
 .cp-opt{display:flex;align-items:center;gap:7px;width:100%;padding:6px 8px;border:0;border-radius:var(--r-m);background:none;color:var(--ink);font-size:var(--fs-small);text-align:left;cursor:pointer}
 .cp-opt:hover,.cp-opt[aria-selected=true]{background:var(--hover)}
+.cm-id{display:inline-flex;align-items:center;gap:4px;flex:none}
 .cp-opt .meta{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
 .cp-menu-n{margin:4px 8px 4px;font-size:var(--fs-meta);color:var(--ink-3);line-height:1.4;text-wrap:pretty}
 .cp-reply{display:flex;align-items:center;gap:6px;min-width:0;padding:4px 6px 4px 10px;border-left:2px solid var(--info);font-size:var(--fs-small)}
@@ -689,7 +697,9 @@ span.msg-thumb,span.msg-file{cursor:default}
   .cm-head{padding:6px 12px 8px}
   .cm-tt{flex-wrap:nowrap;gap:var(--s2)}
   .cm-title{flex:1 1 auto;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .cm-count{display:none}
+  .cm-count,.cm-id{display:none}
+  .cm-tt[data-dev]{flex-wrap:wrap}
+  .cm-tt[data-dev] .cm-title{order:9;flex:1 0 100%}
   .cm-tools{margin-left:auto;flex:none}
   .cm-tools .cm-find{display:none}
   .cm-head:not(:has(.cm-menu)) .cm-tools:not(:has(.btn)) .cm-find{display:block;width:140px}
@@ -707,7 +717,40 @@ span.msg-thumb,span.msg-file{cursor:default}
 }
 
 /* ---- not built yet: a mark on designed features the server can't do yet ---- */
-.nb{display:inline-flex;align-items:center;padding:0 6px;border:1px dashed var(--warn);border-radius:var(--r-pill);color:var(--warn-ink);font-size:var(--fs-micro);font-weight:var(--w-med);line-height:16px;white-space:nowrap;vertical-align:.08em}
+/* Neutral on purpose: amber means "in the job queue", and this is a note to the owner, not a state. */
+.nb{display:inline-flex;align-items:center;padding:0 6px;border:1px dashed var(--ink-3);border-radius:var(--r-pill);color:var(--ink-2);font-size:var(--fs-micro);font-weight:var(--w-med);line-height:16px;white-space:nowrap;vertical-align:.08em}
+
+/* ---- note: something to read before acting. One title line, then short points. tone: info | warn | bad ---- */
+.note{display:grid;grid-template-columns:auto minmax(0,1fr);gap:0 var(--s3);padding:var(--s3) var(--s4);border:1px solid color-mix(in oklch,var(--c,var(--ink-3)) 40%,var(--line));border-radius:var(--r-m);background:color-mix(in oklch,var(--c,var(--ink-3)) 6%,var(--surface));font-size:var(--fs-small);color:var(--ink);max-width:var(--measure)}
+.note>.sd{margin-top:6px}
+.note-in{display:grid;gap:var(--s2);min-width:0}
+.note-t{font-size:var(--fs-body);font-weight:var(--w-bold);text-wrap:pretty}
+.note-b{display:grid;gap:var(--s2);text-wrap:pretty}
+.note-b ul{list-style:disc;padding-left:1.1em;display:grid;gap:var(--s1)}
+.note-a{display:flex;flex-wrap:wrap;gap:var(--s2);align-items:center}
+.notes{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,280px),1fr));gap:var(--s3)}
+.notes>.note{max-width:none}
+
+/* ---- block: one setting or account. A row with its state and action, its body below. Hairlines, not boxes. A <details> block folds. ---- */
+.blks{display:grid;border-top:1px solid var(--line)}
+.blk{padding:var(--s3) 0;border-bottom:1px solid var(--line);min-width:0}
+.blk-h{display:flex;flex-wrap:wrap;align-items:center;gap:var(--s1) var(--s3);min-height:var(--ctl)}
+.blk-t{font-size:var(--fs-body);font-weight:var(--w-bold)}
+.blk-s{font-size:var(--fs-small);color:var(--ink-2)}
+.blk-a{margin-left:auto;display:flex;flex-wrap:wrap;gap:var(--s2);align-items:center}
+.blk-b{display:grid;gap:var(--s2);margin-top:var(--s2);font-size:var(--fs-small);min-width:0}
+.blk-b>p{max-width:var(--measure);color:var(--ink-2);text-wrap:pretty}
+details.blk>summary{list-style:none;cursor:pointer;border-radius:var(--r-s)}
+details.blk>summary::-webkit-details-marker{display:none}
+details.blk>summary .blk-t::after{content:"";display:inline-block;width:6px;height:6px;margin:0 0 3px 9px;border-right:1.5px solid var(--ink-3);border-bottom:1.5px solid var(--ink-3);transform:rotate(45deg)}
+details.blk[open]>summary .blk-t::after{margin-bottom:-1px;transform:rotate(225deg)}
+.blk-save{font-size:var(--fs-meta);color:var(--ink-3)}
+
+/* ---- cmd: a command to copy. It wraps rather than hide its end on a phone. ---- */
+.cmd{display:flex;align-items:flex-start;gap:var(--s3);padding:7px 7px 7px var(--s3);border:1px solid var(--line-2);border-radius:var(--r-m);background:var(--surface)}
+.cmd+.cmd{margin-top:var(--s2)}
+.cmd code{flex:1;min-width:0;padding:4px 0;font-family:var(--mono);font-size:var(--fs-small);line-height:1.45;white-space:pre-wrap;overflow-wrap:anywhere;user-select:all}
+.cmd .btn{flex:none}
 .linkbtn{padding:0;border:0;background:none;color:var(--link);text-decoration:underline;text-underline-offset:2px;cursor:pointer;font:inherit}
 .linkbtn:hover{color:var(--ink)}
 
@@ -787,6 +830,8 @@ span.msg-thumb,span.msg-file{cursor:default}
 .deck-cursor{position:fixed;z-index:55;pointer-events:none;border:2px solid var(--info,var(--ink));border-radius:var(--r-s);transition:left .07s,top .07s,width .07s,height .07s}
 .deck-cursor[data-armed]{border-color:var(--bad)}
 .deck-hud{position:fixed;left:50%;bottom:28px;transform:translateX(-50%);z-index:61;pointer-events:none;max-width:min(40rem,90vw);padding:7px 14px;border-radius:var(--r-m);background:var(--ink);color:var(--on-ink);font-size:var(--fs-small);box-shadow:var(--e2)}
+.deck-single{position:fixed;inset:0;width:100%;height:100%;border:0;z-index:60;background:var(--bg,#fff)}
+.deck-single-ask{position:fixed;inset:0;z-index:60;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.35);border:0;cursor:pointer;color:#fff;font-size:1.6rem;font-weight:600;width:100%}
 .deck-hud[hidden]{display:none}
 .deck-hud[data-tone=bad]{background:var(--bad)}
 .deck-hud[data-tone=warn]{background:var(--warn)}
@@ -846,3 +891,37 @@ span.msg-thumb,span.msg-file{cursor:default}
 @keyframes tour-pulse{50%{box-shadow:0 0 0 5px color-mix(in oklch,var(--info) 30%,transparent)}}
 @media (prefers-reduced-motion:reduce){.tour-ring{animation:none}}
 button.more-i{background:none;border:0;font:inherit;text-align:left;cursor:pointer;width:100%}
+
+/* Agents: every agent, one row; the headers sort */
+.toolbar select.input{width:auto;min-width:0;max-width:100%}
+.ag-w{margin-top:var(--s3)}
+.ag .ag-s{all:unset;cursor:pointer;display:inline-flex;gap:4px;align-items:baseline;border-radius:2px}
+.ag .ag-s:hover{color:var(--ink)}
+.ag .ag-s:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+.ag th[aria-sort] .ag-s{color:var(--ink);font-weight:600}
+.ag th.num .ag-s{flex-direction:row-reverse}
+.ag .ag-tm{min-width:9rem}
+.ag .ag-m{max-width:7rem;overflow:hidden;text-overflow:ellipsis}
+.ag th:first-child,.ag td:first-child{position:sticky;left:0;background:var(--bg,var(--surface));z-index:1}
+/* The header stays in view. Narrow: the table is its own scroll box, sideways and down. Wide enough to fit: the page scrolls, under the top bar. */
+.ag-w{--bar:47px;position:sticky;top:var(--bar);max-height:calc(100dvh - var(--bar) - 56px);overflow:auto}
+@media (max-width:640px){.ag-w{--bar:69px}}
+.ag th{position:sticky;top:0;z-index:2;background:var(--bg);padding-top:6px;box-shadow:inset 0 -1px 0 var(--line)}
+.ag th:first-child{z-index:3}
+@media (min-width:1340px){.ag-w{position:static;max-height:none;overflow:visible}.ag th{top:47px}}
+.ag tbody tr:hover td:first-child{background:var(--hover)}
+
+/* ---- consumer first run: where you are in the three steps ---- */
+.wt-steps{list-style:none;display:flex;flex-wrap:wrap;gap:var(--s1) var(--s3);margin:0 0 var(--s4);padding:0;font-size:var(--fs-small);color:var(--ink-2)}
+.wt-steps [aria-current]{color:var(--ink);font-weight:var(--w-bold)}
+.share-text{font-size:var(--fs-small);color:var(--ink-2)}
+
+/* ---- feedback: a picture with boxes on it, and a comment ---- */
+dialog.fb[open] .tour-w{display:none}
+.fb-s{display:flex;align-items:center;justify-content:center;background:var(--sunken)}
+.fb-c{display:block;max-width:100%;max-height:100%;cursor:crosshair;touch-action:none;box-shadow:var(--e2)}
+.fb-none{display:flex;flex-direction:column;align-items:center;gap:var(--s2);text-align:center}
+.fb-f{display:flex;flex-direction:column;gap:6px;padding:8px 12px;border-top:1px solid var(--line)}
+.fb-t{width:100%;min-height:64px;resize:vertical}
+.fb-r{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
+.fb-r>.meta{flex:1 1 240px;min-width:0}

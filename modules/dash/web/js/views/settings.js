@@ -5,6 +5,8 @@ import { form } from "../templates.js";
 import { pageHeader, section, button, field, input, empty, statusLabel } from "../ui/kit.js";
 import { startSignin, signinBox } from "../ui/signin.js";
 import { copyButton } from "../ui/refs.js";
+import { codexPart, forget, keysPart, loadPage, pageData, powerPart, reading, rootNote, sandboxPart, sharePart } from "../ui/setup.js";
+import { forgetSecrets, secretParts } from "./secrets.js";
 
 // Everything the person is typing lives here, so a poll never loses it.
 const F = { cfg: null, ed: null, mods: null, say: {}, newLogin: "", url: "", busy: {}, access: null };
@@ -67,6 +69,19 @@ function loginsSection(ctx) {
     signinBox("login-new", ctx.update));
 }
 
+// ---- with settings.json only: the choices the first run made, to change here ----
+function setupSections(ctx) {
+  if (!S.app.settings) return [];
+  const pg = pageData(ctx.update);
+  const accounts = can("logins") ? section({ title: "Other accounts", note: "Codex and API keys" }, pg ? [rootNote(), codexPart(ctx.update), keysPart(ctx.update)] : reading()) : null;
+  if (!can("config")) return [accounts];
+  return [accounts,
+    section({ title: "Data sharing", note: "what's sent, and whether it is" }, pg ? sharePart(ctx.update) : reading()),
+    section({ title: "Power", note: "who decides what agents may do" }, pg ? powerPart(ctx.update) : reading()),
+    section({ title: "Sandbox" }, pg ? sandboxPart(ctx.update) : reading())];
+}
+const secretsSection = ctx => S.app.settings && can("secrets") ? section({ title: "Secrets", note: "send a token to the hive; it's never shown back" }, secretParts(ctx)) : null;
+
 function modulesSection(ctx) {
   if (!can("modules")) return null;
   const act = async (what, name) => {
@@ -126,28 +141,41 @@ function slackSetup(ctx) {
 function accessSection(ctx) {
   const o = S.app.route === "local" && S.app.outside;
   if (!o) return null;
-  const A = F.access ||= { can: new Set(o.can), hosts: o.hosts.join(" "), team: o.team || "", aud: o.aud || "", emails: o.emails.join(" ") };
+  const who = mode => Object.keys(o.people || {}).filter(k => o.people[k] === mode).join(" ");
+  const A = F.access ||= { can: new Set(o.can), hosts: o.hosts.join(" "), team: o.team || "", aud: o.aud || "", emails: o.emails.join(" "), full: who("full"), limited: who("limited") };
   const words = s => s.split(/\s+/).filter(Boolean);
   const save = async () => {
-    try { await post("/api/access", { can: o.caps.filter(c => A.can.has(c)), hosts: words(A.hosts), access: { team: A.team, aud: A.aud, emails: words(A.emails) } }); say("access", "Saved.", "good"); }
+    const people = {};
+    for (const a of words(A.limited)) people[a] = "limited";
+    for (const a of words(A.full)) people[a] = people[a] ? "both" : "full";
+    const both = Object.keys(people).find(a => people[a] === "both");
+    // Lists stay absent until someone is named, so a Hive without them keeps the ticks. Emptied later, they let nobody in: never back to anyone Access passes.
+    const named = Object.keys(people).length || Object.keys(o.people || {}).length;
+    try {
+      if (both) throw new Error(`${both} is on both lists. Keep it on one.`);
+      await post("/api/access", { can: o.caps.filter(c => A.can.has(c)), hosts: words(A.hosts), access: { team: A.team, aud: A.aud, emails: words(A.emails) }, ...(named ? { people } : {}) });
+      say("access", "Saved.", "good");
+    }
     catch (e) { say("access", e.message, "bad"); }
     ctx.update();
   };
   const txt = (label, k, ph) => field(label, input({ placeholder: ph, value: A[k], oninput: (e, n) => { A[k] = n.value; } }));
   return section({ title: "Access from outside", note: "only changeable from this machine" },
-    h("p", { class: "field-h" }, "Off until set up. If web.json lists outside.people, each listed person gets limited (read, chat, kill agents) or full (everything here, for an hour after signing in), and the ticks below don't apply. From this machine, the secret gets everything. Through a tunnel, each request must carry a token signed by Cloudflare Access, and it can do only what's ticked here. Opening a name also takes a Cloudflare tunnel and an Access policy, set up in Cloudflare."),
+    h("p", { class: "field-h" }, "Off until set up. If you name people at the bottom, each gets limited (read, chat, kill agents) or full (everything here, for an hour after signing in), and the ticks don't apply. Anyone else is refused, and emptying both lists afterwards refuses everyone. Type addresses here yourself: an agent's tools can refuse your account's address. From this machine, the secret gets everything. Through a tunnel, each request must carry a token signed by Cloudflare Access, and it can do only what's ticked here. Opening a name also takes a Cloudflare tunnel and an Access policy, set up in Cloudflare."),
     h("div", { class: "checks", role: "group", "aria-label": "What outside requests may do" }, o.caps.map(c => check(CAPTEXT[c] || c, A.can.has(c), v => { v ? A.can.add(c) : A.can.delete(c); }))),
     h("div", { class: "fgrid" }, txt("Hostnames", "hosts", "hive.example.com"), txt("Access team domain", "team", "yourteam.cloudflareaccess.com"),
-      txt("Application audience", "aud", "the Access application's AUD tag"), txt("Allowed emails", "emails", "optional: only these emails")),
+      txt("Application audience", "aud", "the Access application's AUD tag"), txt("Allowed emails", "emails", "optional: only these emails"),
+      txt("People with full access", "full", "you@example.com"), txt("People with limited access", "limited", "friend@example.com")),
     h("div", { class: "frow" }, button("Save", save, { kind: "primary" }), msg("access")));
 }
 
 export default {
   id: "settings", label: "Settings", about: "accounts, extras, access", tab: () => S.app.app && (can("config") || can("modules") || can("logins")),
-  enter(ctx) { F.ed = null; F.access = null; F.say = {}; loadCfg(ctx); loadMods(ctx); },
+  enter(ctx) { F.ed = null; F.access = null; F.say = {}; forget(); loadCfg(ctx); loadMods(ctx); if (S.app.settings && can("config")) loadPage(ctx.update); },
+  leave() { forget(); forgetSecrets(); },
   render(ctx) {
     if (!S.app.app) return h("div", { class: "page" }, empty("Settings show only in the app, opened from this machine.", { kind: "page", title: "Settings" }));
-    const secs = [hiveSection(ctx), loginsSection(ctx), modulesSection(ctx), accessSection(ctx)].filter(Boolean);
+    const secs = [hiveSection(ctx), loginsSection(ctx), ...setupSections(ctx), secretsSection(ctx), modulesSection(ctx), accessSection(ctx)].filter(Boolean);
     return form({ header: pageHeader({ title: "Settings", lead: "How the hive runs, which Claude accounts it uses, and what extras it has." }), sections: secs.length ? secs : [empty("This connection can't change any settings.")] });
   },
 };

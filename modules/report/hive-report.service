@@ -1,0 +1,9 @@
+[Unit]
+Description=Hive opt-in reports (does nothing unless sharing is on)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 %h/modules/report/report.py send
+WorkingDirectory=%h
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+TimeoutStartSec=300

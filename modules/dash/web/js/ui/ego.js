@@ -4,7 +4,7 @@
 // unless the data changed. The page scrolls around it: plain wheel scrolls, ctrl+wheel or pinch zooms.
 import { h } from "../core/dom.js";
 import { S, OUTSIDE, SYS, subscribe } from "../core/store.js";
-import { agentStatus, isAgent, isRunning, sEnd, tierOf } from "../core/model.js";
+import { agentStatus, isAgent, isRunning, isWarden, sEnd, threadTitle, tierOf } from "../core/model.js";
 import { agentHref, threadHref } from "../core/router.js";
 import { ago, now, plural, short } from "../core/format.js";
 import { status, tier } from "../core/status.js";
@@ -110,9 +110,9 @@ export function ego({ name: n, links, started, threads, parent, version, host = 
     const nodes = nodeIds.map(id => {
       const th = isTh(id), out = OUTSIDE.has(id), st = agentStatus(id), S_ = th || out ? null : status(st.key), c = direct.get(id) || 0;
       return { id, kind: th ? "thread" : out ? "outside" : "agent", tone: th ? tier(tierOf(tid(id))).tone : out ? "ink" : S_.tone, shape: out ? "diamond" : th ? null : S_.shape,
-        live: !th && !out && isRunning(id), label: th ? short(tid(id), 16) : id, big: true, labelStrong: id === n, ring: id === n, labelRank: id === n ? 1000 : th ? 5 : 10 + c,
+        live: !th && !out && isRunning(id), label: th ? short(threadTitle(tid(id)), 16) : id, big: true, labelStrong: id === n, ring: id === n, warden: !th && !out && isWarden(id), labelRank: id === n ? 1000 : th ? 5 : 10 + c,
         r: id === n ? 15 : th ? 9 : out ? 10 : c ? 6 + 6 * Math.sqrt(c / mx) : 6,
-        tip: [th ? tid(id) : id, th ? "thread" : out ? "outside the agents" : st.label + (c ? `, ${plural(c, "exchange")} with ${n}` : "")] };
+        tip: [th ? threadTitle(tid(id)) : id, th ? "thread" : out ? "outside the agents" : (isWarden(id) ? "warden · " : "") + st.label + (c ? `, ${plural(c, "exchange")} with ${n}` : "")] };
     });
     const list = edges.map(e => { const mine = e.a === n || e.b === n; return { a: e.a, b: e.b, n: e.n, kind: e.kind, spawn: e.spawn, spawnFrom: e.spawnFrom, last: e.last,
       weight: Math.max(1, e.n), age: e.last ? t - e.last : 0, faint: !mine || e.kind === "thread", dashed: e.spawn && !e.n, arrowTo: e.spawn ? e.spawnTo : null, hub: OUTSIDE.has(e.a) || OUTSIDE.has(e.b), floor: mine ? (e.kind === "msg" ? 0.5 : 0.28) : 0 }; });

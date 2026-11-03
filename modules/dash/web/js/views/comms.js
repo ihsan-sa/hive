@@ -8,14 +8,14 @@
 // the messages still on their way (.cm-out), which sync() keeps apart.
 import { h, morph } from "../core/dom.js";
 import { S, can, SYS, OUTSIDE, built, post as apiPost, poll } from "../core/store.js";
-import { agentState, agentStatus, isAgent, isRunning, tierOf, threadTitle, threadState, threadPeople, isSystemThread, displayText, inUse, fresh7 } from "../core/model.js";
+import { agentState, agentStatus, isAgent, isRunning, tierOf, threadTitle, threadState, threadPeople, isSystemThread, displayText, postSource, inUse, fresh7 } from "../core/model.js";
 import { ago, dayName, stamp, clock, dur, short, mdPlain, now, plural, firstSentence, DAY, MIN, HOUR } from "../core/format.js";
 import { href, threadHref, go } from "../core/router.js";
 import { tier, status } from "../core/status.js";
 import { askTier, askStop } from "../actions.js";
 import { seen, unreadIn, markRead, onInbox } from "../core/inbox.js";
 import { button, empty, input, list, seg, statusDot } from "../ui/kit.js";
-import { agentRef, threadRef } from "../ui/refs.js";
+import { agentRef, copyButton, threadRef } from "../ui/refs.js";
 import { message, messageHead, messageReceipt, localMessage, markWords, pollDelivered, marksSig, delivery, onJump } from "../ui/message.js";
 import { composer, cancelReply, replyTo, say, outFor, outSig, actions as outActions, dropZone, recipient } from "../ui/composer.js";
 
@@ -52,7 +52,7 @@ function matcher(c) {
     if (c.agent && p.from !== c.agent && !p.men.includes(c.agent)) return false;
     if (c.pair && !((p.from === c.pair[0] && p.men.includes(c.pair[1])) || (p.from === c.pair[1] && p.men.includes(c.pair[0])))) return false;
     if (!C.sys && SYS.has(p.from) && !c.thread) return false;
-    if (q.length && !q.every(w => hay(p).includes(w) || (!c.thread && p.th.toLowerCase().includes(w)))) return false;
+    if (q.length && !q.every(w => hay(p).includes(w) || (!c.thread && (p.th + " " + threadTitle(p.th)).toLowerCase().includes(w)))) return false;
     return true;
   };
 }
@@ -88,6 +88,7 @@ function refresh(c) {
 // ---- the message list ----
 const atEnd = b => b.scrollTop + b.clientHeight > b.scrollHeight - NEAR;
 const sameTo = (a, b) => a.men.join() === b.men.join();
+const sameSource = (a, b) => { const x = postSource(a), y = postSource(b); return (x && x.name + x.how) === (y && y.name + y.how); };
 
 function evRow(e) {
   return h("div", { class: "cm-ev", "data-key": e.key, "data-tone": status(e.tone).tone, role: "note" }, statusDot(e.tone), h("b", null, e.text), h("span", { class: "meta" }, clock(e.t) + " · " + e.sub));
@@ -99,7 +100,7 @@ function rows(items) {
     if (d !== L.day) { L.day = d; L.prev = null; out.push(h("div", { class: "cm-day", "data-key": "d:" + d }, h("span", null, d))); }
     if (p.ev) { out.push(evRow(p)); L.prev = null; continue; }
     L.names.add(p.from); for (const m of p.men) L.names.add(m);
-    const q = L.prev, cont = app() && !!q && q.from === p.from && q.th === p.th && !p.reply_to && p.t - q.t < GROUP && sameTo(q, p);
+    const q = L.prev, cont = app() && !!q && q.from === p.from && q.th === p.th && !p.reply_to && p.t - q.t < GROUP && sameTo(q, p) && sameSource(q, p);
     const a = message(p, { ...L.opts, cont });
     L.prev = p; a._head = L.heads; L.io.observe(a); out.push(a);
   }
@@ -261,7 +262,7 @@ function threadRows(c, ctx) {
     // The developer route keeps its one-line log row: 100+ threads have to fit.
     if (!app()) {
       const who = lp.from.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      return { key: d.name, href: threadHref(d.name), current: c.thread === d.name, title: d.name, meta: ago(d.last).replace(" ago", ""),
+      return { key: d.name, href: threadHref(d.name), current: c.thread === d.name, title: threadTitle(d.name), meta: ago(d.last).replace(" ago", ""),
         lead: [tierLead(d.name), live ? h("span", { title: "an agent is on this thread now" }, statusDot("working", { live: true })) : null],
         text: `${d.posts.length} · ${lp.from}: ${short(mdPlain(lp.text).replace(new RegExp("^(@\\S+\\s+)*" + who + ":\\s*"), ""), 60)}` };
     }
@@ -347,10 +348,11 @@ function head(c, ctx) {
   const who = c.thread ? threadPeople(c.thread).filter(m => m !== "person").map(m => agentRef(m, { copy: true, state: true }))
     : c.agent ? [...new Set(S.posts.filter(p => p.from === c.agent).map(p => p.th))].slice(-14).map(t => threadRef(t)) : [];
   return h("header", { class: "cm-head", "data-key": "head" },
-    h("div", { class: "cm-tt" },
+    h("div", { class: "cm-tt", "data-dev": app() ? null : "" },
       h("a", { class: "btn cm-back", href: href("comms"), "data-kind": "quiet", "data-size": "s" }, app() ? "‹ Chats" : "‹ Threads"),
       h("h1", { class: "cm-title" }, title),
       h("span", { class: "meta cm-count" }, (C.q.trim() ? plural(n, "match", "matches") : plural(n, app() ? "message" : "post")) + (d ? ` · since ${stamp(d.first)}` : "")),
+      c.thread && !app() && title !== c.thread ? h("span", { class: "cm-id" }, h("code", { class: "meta", title: "Its id on the board" }, c.thread), copyButton(c.thread)) : null,
       c.thread && !app() ? tierControl(c.thread) : null,
       h("div", { class: "cm-tools" },
         !c.thread && !app() ? h("label", { class: "cm-sys meta" }, h("input", { type: "checkbox", checked: C.sys, onchange: e => { C.sys = e.target.checked; ctx.update(); } }), "starter notices") : null,

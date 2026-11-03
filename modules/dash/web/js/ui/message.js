@@ -5,7 +5,7 @@
 // localMessage(item) draws a message that hasn't reached the board yet: sending, or failed with Retry.
 import { h } from "../core/dom.js";
 import { S, can, jget, SYS, OUTSIDE } from "../core/store.js";
-import { isAgent, isRunning, displayText } from "../core/model.js";
+import { isAgent, isRunning, displayText, postSource } from "../core/model.js";
 import { clock, stamp, now, short, mdPlain, ago, DAY, MIN } from "../core/format.js";
 import { markdown, mdCut } from "./markdown.js";
 import { agentRef, threadRef } from "./refs.js";
@@ -185,8 +185,12 @@ export function messageHead(p, { showThread = true } = {}) {
   const mine = OUTSIDE.has(p.from) && p.from === "person";
   const woke = (S.woke[p.id] || []).filter(s => !p.men.includes(s.name) || !s.resumed), tos = p.men.filter(m => m !== "new" && m !== p.from);
   const toYou = tos.length === 1 && tos[0] === "person";
+  const src = mine ? postSource(p) : null, me = S.app.signer;
+  // Someone else signed in to this Hive wrote it: their name, not "You". A name you can't tell apart goes on the badge.
+  const other = src && src.how === "Web" && src.name && me && src.name !== me;
   return h("div", { class: "msg-h" },
-    mine ? h("b", { class: "msg-me", title: "you (person)" }, "You") : agentRef(p.from, { copy: true }),
+    mine ? h("b", { class: "msg-me", title: other ? src.said : "you (person)" }, other ? src.name : "You") : agentRef(p.from, { copy: true }),
+    src ? h("span", { class: "msg-src", title: src.said }, (src.name && src.name !== me && !other ? src.name + " · " : "") + src.how) : null,
     tos.length ? h("span", { class: "msg-to" }, toYou ? "to you" : "to") : null,
     toYou ? null : tos.flatMap(m => {
       const d = mine ? null : delivery(p, m);

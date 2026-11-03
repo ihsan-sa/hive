@@ -9,12 +9,14 @@
 // So a bigger size shows fewer, larger rows and a smaller size shows more; nothing is ever cut in half.
 import { S, start, subscribe } from "../core/store.js";
 import { h, mount, delegate } from "../core/dom.js";
-import { agentState, inUse, runway } from "../core/model.js";
+import { agentState, inUse, runway, threadTitle } from "../core/model.js";
 import { ago, clock, dur, now } from "../core/format.js";
 import { statusDot } from "../ui/kit.js";
 import { fullscreenButton } from "../ui/shell.js";
 import { LAYOUTS, evenLayout } from "./layouts.js";
 import { TILES } from "./tiles.js";
+import { deckEvent, deckMark } from "./deck.js";
+import { resume, setDisplay } from "../deck/control.js";
 
 const APP = "/";               // where a click on a name or a tile title leads
 const RELOAD = 6 * 3600e3;     // a TV stays open for days: pick up new code now and then
@@ -126,7 +128,7 @@ function trouble() {
   if (S.failed) out.push(["Lost contact", "last data " + ago(S.fresh)]);
   if (Lv) {
     const stuck = Lv.agents.map(a => [a, agentState(a)]).filter(([, s]) => s.key === "stuck");
-    if (stuck.length) out.push([`${stuck.length} stuck`, stuck.map(([a, s]) => `${a.name} on ${a.thread}, ${s.text}`).join(" · ")]);
+    if (stuck.length) out.push([`${stuck.length} stuck`, stuck.map(([a, s]) => `${a.name} on ${threadTitle(a.thread)}, ${s.text}`).join(" · ")]);
     if (Lv.limit_until) out.push(["Starts held", "until " + clock(Lv.limit_until * 1e3)]);
   }
   if (U && (U.logins || []).length) {
@@ -153,11 +155,23 @@ function render() {
       mount(p.head, h("div", { class: "dt-head-in" }, more ? h("span", { class: "dt-more" }, more) : null, head ? h("span", null, head) : null));
     } catch (e) { console.error(p.t.id, e); mount(p.body, h("div", { class: "dt-broken" }, "This tile hit an error: " + e.message)); }
   }
+  deckMark();
 }
 
 // ---- things a TV needs ----
 // Anything that navigates (a thread, a page link in the agent panel) goes to the app; the display has no routes of its own.
-addEventListener("hashchange", () => { location.href = APP + location.hash; });
+// In the deck's single screen this page is a frame of the dashboard, which holds the deck and full screen: links go back through it.
+const framed = window !== window.top;   // window.top: this file has its own `top`
+const toApp = hash => { if (framed) window.top.postMessage({ leaveSingle: hash }, location.origin); else location.href = APP + hash; };
+addEventListener("hashchange", () => toApp(location.hash));
+if (framed) {
+  addEventListener("click", e => { const a = e.target.closest && e.target.closest('a[href^="/#"]'); if (a) { e.preventDefault(); e.stopPropagation(); toApp(a.getAttribute("href").slice(1)); } }, true);
+  addEventListener("keydown", e => { if (e.key === "Escape") toApp(""); });
+}
+// The deck: the frame's messages come from the dashboard; on its own address the page connects, and EXIT goes to the dashboard.
+const deck = { TILES: () => parts.map(p => p.t), resize: v => { size = Math.round(Math.pow(2, (v - .5) * 1.4) * 100) / 100; localStorage.setItem(SIZE, size); fit(); schedule(); }, redraw: schedule, toApp };
+if (framed) window.deckEvent = (e, say) => deckEvent(e, say, deck);
+else { setDisplay((e, say) => deckEvent(e, say, deck), () => { const out = () => { location.href = APP; }; document.fullscreenElement ? document.exitFullscreen().finally(out) : out(); }); resume(); }
 // Keep the screen on, where the browser allows it (https only).
 const stayOn = () => { if (navigator.wakeLock && !document.hidden) navigator.wakeLock.request("screen").catch(() => {}); };
 stayOn(); document.addEventListener("visibilitychange", stayOn);

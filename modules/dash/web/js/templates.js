@@ -1,12 +1,10 @@
 // Page templates. Every view returns one of these; layout CSS lives with them in components.css.
 import { h } from "./core/dom.js";
 
-/** Overview: header, a main column and a sticky rail (things that need you), then full-width sections.
- *  On narrow screens the rail goes above main; "later" rail sections go below it. */
-export const overview = ({ header, main, aside = [], later = [], after }) =>
+/** Overview: header, the main sections, then the full-width ones after them. */
+export const overview = ({ header, main, after }) =>
   h("div", { class: "page" }, header,
-    h("div", { class: "ov" }, h("div", { class: "ov-main" }, main),
-      h("aside", { class: "ov-aside", "aria-label": "Needs you" }, aside, later.filter(Boolean).map(x => h("div", { class: "ov-late" }, x)))),
+    h("div", { class: "ov" }, main),
     after && after.length ? h("div", { class: "after" }, after) : null);
 
 /** Metrics: header, then sections stacked. */

@@ -2,13 +2,13 @@
 // an agent on several threads sits between them with a line to each. Links between discs run as bundles; weak links fade when busy.
 import { h, selecting } from "../core/dom.js";
 import { S, OUTSIDE, SYS, can, jget, subscribe, getPref, setPref, onTV } from "../core/store.js";
-import { agentCard, agentThread, agentStatus, isAgent, isRunning, sEnd, tierOf, fileInfo } from "../core/model.js";
+import { agentCard, agentThread, agentStatus, isAgent, isRunning, isWarden, WARDEN_HINT, sEnd, threadTitle, tierOf, fileInfo } from "../core/model.js";
 import { ago, clock, dur, firstSentence, money, now, short, stamp, toks, plural, DAY, HOUR } from "../core/format.js";
 import { agentHref, threadHref, href } from "../core/router.js";
 import { status, tier, STATUS } from "../core/status.js";
 import { askTier } from "../actions.js";
 import { canvas } from "../templates.js";
-import { button, list, section, seg, statusDot, stats, share } from "../ui/kit.js";
+import { button, list, section, seg, statusDot, stats, share, wardenMark } from "../ui/kit.js";
 import { agentRef, threadRef } from "../ui/refs.js";
 import { createGraph, keep } from "../ui/graph.js";
 import { openPanel } from "../ui/panel.js";
@@ -85,7 +85,7 @@ function build() {
     const sum = n.homes.reduce((x, [, w]) => x + w, 0) || 1;
     for (const [th] of n.homes) {
       const tn = node("#" + th, "thread"); tn.name = th; tn.tier = tierOf(th); tn.posts = tposts.get(th) || 0; tn.last = Math.max(tn.last, n.last); if (n.live) tn.live = true;
-      labels[th] = short(th, 28);
+      labels[th] = short(threadTitle(th), 28);
     }
     n.cluster = n.homes.length === 1 ? n.homes[0][0] : null;
     if (threadMode || n.homes.length > 1) for (const [th, w] of n.homes) { const e = edge(n.id, "#" + th, "thread"); e.tether = true; e.to = "#" + th; e.share = w / sum; e.n = posted.get(n.id + "\n" + th) || 0; e.last = Math.max(e.last, n.last); }
@@ -97,10 +97,11 @@ function build() {
     n.r = n.anchor ? 0 : n.kind === "thread" ? Math.min(16, 4 + 1.5 * Math.sqrt(n.posts)) : Math.min(18, 5 + 1.4 * Math.sqrt(n.posts));
     if (n.kind === "outside") n.r = Math.max(n.r, 10);
     n.opacity = opacity(n);
-    n.big = !n.anchor && (n.kind !== "agent" || n.live || n.posts >= 6);
+    n.warden = n.kind === "agent" && isWarden(n.id);
+    n.big = !n.anchor && (n.kind !== "agent" || n.live || n.posts >= 6 || n.warden);   // few and rare, so each gets its name
     n.labelStrong = n.live || n.kind === "outside";
     n.labelRank = (n.kind === "outside" ? 4e5 : 0) + (n.live ? 3e5 : 0) + (n.kind === "thread" ? 1e5 : 0) + n.posts * 10 + n.deg;
-    n.label = n.kind === "thread" ? n.name : n.id;
+    n.label = n.kind === "thread" ? short(threadTitle(n.name), 28) : n.id;   // the whole title is in the tip and the side pane
   }
   const edges = [...E.values()].map(e => {
     const hub = nodes.get(e.a).kind === "outside" || nodes.get(e.b).kind === "outside";
@@ -118,8 +119,8 @@ function build() {
 }
 
 // ---- tips ----
-const nodeTip = n => [n.kind === "thread" ? n.name : n.id,
-  n.kind === "thread" ? `thread · ${plural(n.posts, "post")} · last ${ago(n.last)}` : n.kind === "outside" ? `outside the agents · ${plural(n.posts, "post")}` : `${stateText(n)} · ${(n.homes || []).map(x => x[0]).join(", ") || n.thread || ""} · ${plural(n.posts, "post")}`];
+const nodeTip = n => [n.kind === "thread" ? threadTitle(n.name) : n.id,
+  n.kind === "thread" ? `thread · ${plural(n.posts, "post")} · last ${ago(n.last)}` : n.kind === "outside" ? `outside the agents · ${plural(n.posts, "post")}` : `${n.warden ? "warden · " : ""}${stateText(n)} · ${(n.homes || []).map(x => x[0]).join(", ") || n.thread || ""} · ${plural(n.posts, "post")}`];
 const edgeTip = e => [`${nm(e.b)} and ${nm(e.a)}`, e.kind === "thread" ? `${plural(e.n, "post")} in this thread` : plural(e.n, "mention") + (e.spawn ? `, ${e.spawnFrom} started the other` : "") + ` · last ${ago(e.last)}`];
 
 const openWho = n => { if (n.startsWith("#")) openPanel("thread", n.slice(1)); else if (isAgent(n)) openPanel("agent", n); else location.hash = threadHref("@" + n); };
@@ -142,7 +143,7 @@ const slider = h("input", { type: "range", min: 0, max: 1000, value: 1000, "aria
 const rplay = button("▶ Replay", () => { if (M.playing) return stopPlay(); if (M.cut == null) M.cut = winStart(); M.playing = true; lastAdv = 0; rplay.textContent = "❚❚ Pause"; requestAnimationFrame(advance); }, { size: "s", title: "Replay this window" });
 const legendBody = () => [
   h("div", { class: "legend" }, ["working", "queue", "quiet", "stuck", "limited", "failed", "queued", "killed"].map(k => h("span", { title: STATUS[k].hint }, statusDot(k), STATUS[k].label)), h("span", null, statusDot("outside"), "you, box, other Hives")),
-  h("div", { class: "legend" }, h("span", null, "Ringed: running"), h("span", null, "Pale: ended, paler is longer ago"), h("span", null, "– – started by"), h("span", null, "Rectangle or grey name: a thread"), h("span", null, "Line to a thread: worked on it")),
+  h("div", { class: "legend" }, h("span", null, "Ringed: running"), h("span", null, "Pale: ended, paler is longer ago"), h("span", null, "– – started by"), h("span", null, "Rectangle or grey name: a thread"), h("span", null, "Line to a thread: worked on it"), h("span", { title: WARDEN_HINT }, wardenMark(), "a warden")),
 ];
 const stage = h("div", { class: "cvp-stage", "data-own": "", "data-sig": "mesh" }, G.el,
   h("div", { class: "graph-legend" }, legendBody()),
@@ -190,7 +191,7 @@ const stay = (e, f) => { e.preventDefault(); f(); };
 // a name here selects that agent in the graph, as the old pane did; passing href keeps refs.js from opening the panel
 const pick = id => h("span", { onclick: e => stay(e, () => { if (G.select(id)) M.update(); else openWho(id); }) }, agentRef(id, { copy: true, href: isAgent(id) ? agentHref(id) : threadHref("@" + id) }));
 const threadChip = th => h("span", { onclick: e => stay(e, () => openPanel("thread", th)) }, threadRef(th));
-const postRow = (p, inThread) => ({ key: p.id, title: p.from, sub: p.men.length ? "→ " + p.men.join(", ") : null, meta: `${inThread ? "" : p.th + " · "}${ago(p.t)}`, text: firstSentence(p.text),
+const postRow = (p, inThread) => ({ key: p.id, title: p.from, sub: p.men.length ? "→ " + p.men.join(", ") : null, meta: `${inThread ? "" : threadTitle(p.th) + " · "}${ago(p.t)}`, text: firstSentence(p.text),
   href: threadHref(p.th), onClick: e => stay(e, () => openPanel("thread", p.th)) });
 const title = (t, ...x) => [h("h2", { class: "cvp-side-t" }, t), ...x.filter(Boolean).map(l => h("p", { class: "cvp-side-x" }, l))];
 const edgeBetween = (a, b) => M.edges.find(e => (e.a === a && e.b === b) || (e.a === b && e.b === a));
@@ -227,7 +228,7 @@ function edgePane(e) {
 }
 function threadPane(n) {
   const inw = inWindow(), d = S.threads.get(n.name), t = tier(tierOf(n.name));
-  return [...title(n.name, `${plural(n.posts, "post")} in this window · ${d ? d.posts.length : 0} in all`),
+  return [...title(threadTitle(n.name), `${plural(n.posts, "post")} in this window · ${d ? d.posts.length : 0} in all`),
     h("div", { class: "cvp-acts" }, button("Open thread", () => openPanel("thread", n.name), { size: "s", kind: "primary" }),
       can("tier") ? button(t.label, () => askTier(n.name), { size: "s", title: "Change this thread's tier" }) : h("span", { class: "meta" }, t.label)),
     section({ title: "People" }, h("div", { class: "cvp-chips" }, [...M.raw.values()].filter(x => x.kind === "agent" && G.nodes.has(x.id) && (x.homes || []).some(([t]) => t === n.name)).map(x => pick(x.id)))),
@@ -240,7 +241,7 @@ function agentPane(n) {
   const spent = sessions.reduce((x, s) => x + Math.max(0, sEnd(s) - s.start), 0);
   const talks = [...(G.adj.get(n.id) || [])].filter(i => !i.startsWith("#")).map(i => { const e = edgeBetween(i, n.id); return [i, e ? e.n : 0]; }).sort((a, b) => b[1] - a[1]);
   const L = S.running.get(n.id), card = agent ? agentCard(n.id) : [];
-  return [...title(n.id, agent ? stateText(n) + (sessions.length ? ` · ${plural(sessions.length, "session")}, ${dur(spent)} in all` : "") : "outside the agents", started && agent ? "started by " + started : null),
+  return [...title(n.id, agent ? (n.warden ? "warden · " : "") + stateText(n) + (sessions.length ? ` · ${plural(sessions.length, "session")}, ${dur(spent)} in all` : "") : "outside the agents", started && agent ? "started by " + started : null),
     card.length ? h("div", { class: "ac-f", style: "margin-top:0" }, card.map(r => h("span", { title: `${r.k}: ${r.v}${r.hint ? " · " + r.hint : ""}` }, r.short))) : null,
     L && L.doing ? h("p", { class: "cvp-side-x clamp-3", title: L.doing }, "Now: " + L.doing) : null,
     h("div", { class: "cvp-acts" }, button(agent ? "Open agent page" : "Read their posts", () => openWho(n.id), { size: "s", kind: "primary" })),

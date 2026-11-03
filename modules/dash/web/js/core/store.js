@@ -7,10 +7,10 @@ export const SYS = new Set(["starter", "dash", "anon", "all", "400", "mention", 
 
 export const S = {
   app: { route: "open", can: null, app: false, setup: null },
-  live: null, usage: null, projects: null,
+  live: null, usage: null, projects: null, agentCosts: null, threadNames: {},
   posts: [], byId: {}, threads: new Map(), off: 0,
   sessions: [], lastSess: {}, open: {}, byOut: {}, woke: {}, logOff: 0,
-  agents: new Set(), killed: {}, limited: [], limitedSess: new Set(),
+  agents: new Set(), killed: {}, limited: [], limitedSess: new Set(), limitedNow: new Set(),
   ledger: [],                 // {t, kind, parts:[string | {a:name} | {th:thread}], lc}
   running: new Map(), pending: {},
   stCache: new Map(),
@@ -25,7 +25,7 @@ export const can = c => !S.app.can || S.app.can.includes(c);
 // What the server says it has of the features designed ahead of it (/api/app "features"): stop, helper, knowledge, slack-door.
 // A feature it doesn't list stays out of the app, so nobody meets a button that can't work. The preview shim lists them all.
 export const built = f => (S.app.features || []).includes(f);
-export const setupDone = () => { const s = S.app.setup; return !s || ((s.signed_in || s.api_key) && s.has_posts); };
+export const setupDone = () => { const s = S.app.setup; if (S.app.settings && S.app.settings.setup_done === false) return false; return !s || ((s.signed_in || s.api_key || s.other) && s.has_posts); };
 
 // ---- change notification ----
 const subs = new Set();
@@ -73,6 +73,7 @@ function ingestLog(items) {
     const t = Date.parse(e.at);
     const r = logRow(e, t); if (r) ledgerAdd(r, [e.event, e.name || "", e.thread || "", e.by || ""]);
     if (e.event === "start") {
+      S.limitedNow.delete(e.session); // resumed: limitedSess keeps the history, limitedNow means still stopped
       const s = { out: e.out ? String(e.out).split("/").pop().replace(/\.jsonl$/, "") : null, name: e.name, session: e.session, start: t, end: null, exit: null,
         thread: e.thread, from: e.from, post: e.post, resumed: !!e.resumed, model: e.model || null, effort: e.effort || null, harness: e.harness || null, provider: e.provider || null, login: e.login || null };
       S.sessions.push(s); S.lastSess[e.name] = s; S.open[e.name + e.session] = s; S.agents.add(e.name);
@@ -86,7 +87,7 @@ function ingestLog(items) {
       const th = s && s.thread;
       ledgerAdd({ t, kind: e.exit ? "trouble" : "agent", parts: [{ a: e.name }, e.exit ? ` failed (exit ${e.exit})` : " ended", th ? " in " : "", th ? { th } : ""] }, [e.exit ? "failed" : "ended", e.name, th || ""]);
     } else if (e.event === "killed") S.killed[e.name] = t;
-    else if (e.event === "limited") { S.limited.push(t); S.limitedSess.add(e.session); }
+    else if (e.event === "limited") { S.limited.push(t); S.limitedSess.add(e.session); S.limitedNow.add(e.session); }
   }
 }
 function ingestBoard(items) {
@@ -126,8 +127,21 @@ export async function poll() {
 export async function pollUsage() {
   try { S.usage = await jget("/api/usage"); S.uver++; emit({ usage: true }); } catch (e) {}
 }
+/** Cost and tokens per agent from the transcripts. Asked for only while a page that shows them is open; the server refreshes at most every 5 minutes. */
+export async function loadAgentCosts() {
+  try {
+    const was = S.agentCosts, v = await jget("/api/agent-costs");
+    S.agentCosts = v;
+    if (!was || v.at !== was.at || v.refreshing !== was.refreshing) { S.uver++; emit({ usage: true }); }
+    return v;
+  } catch (e) { return S.agentCosts; }
+}
 export async function loadApp() {
   try { const v = await jget("/api/app"); const was = JSON.stringify(S.app); Object.assign(S.app, v); if (JSON.stringify(S.app) !== was) emit({ app: true }); } catch (e) {}
+}
+/** Readable names for number threads, from the Slack mirror's indexer. Display only: the board and every link keep the id. */
+export async function loadThreadNames() {
+  try { const v = await jget("/api/thread-names"); if (JSON.stringify(v) !== JSON.stringify(S.threadNames)) { S.threadNames = v; S.ver++; emit({ names: true }); } } catch (e) {}
 }
 export async function loadProjects() {
   if (S.projects) return; S.projects = "loading"; emit({ projects: true });
@@ -136,7 +150,7 @@ export async function loadProjects() {
 }
 export function start() {
   const every = (ms, f) => setInterval(() => { if (!document.hidden) f(); }, ms);
-  every(1500, poll); every(3000, pollUsage); every(15000, loadApp);
+  every(1500, poll); every(3000, pollUsage); every(15000, loadApp); every(60000, loadThreadNames);
   document.addEventListener("visibilitychange", () => { if (!document.hidden) { poll(); pollUsage(); } });
-  return Promise.all([loadApp(), pollUsage(), poll()]);
+  return Promise.all([loadApp(), pollUsage(), poll(), loadThreadNames()]);
 }

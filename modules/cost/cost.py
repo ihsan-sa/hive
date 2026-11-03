@@ -56,6 +56,13 @@ def price(model, u):
     return usd + (stu.get("web_search_requests", 0) or 0) * WEB_SEARCH
 
 
+def tokens_of(u):
+    """[input, output, cache read, cache write] of one call."""
+    cc = u.get("cache_creation") or {}
+    write = (cc.get("ephemeral_1h_input_tokens", 0) or 0) + (cc.get("ephemeral_5m_input_tokens", 0) or 0) if cc else u.get("cache_creation_input_tokens", 0) or 0
+    return [u.get("input_tokens", 0) or 0, u.get("output_tokens", 0) or 0, u.get("cache_read_input_tokens", 0) or 0, write]
+
+
 _boards = {}
 def boards_of(project):
     if project not in _boards:
@@ -198,7 +205,7 @@ def calls(since=None):
                     continue
                 yield {"ts": ts, "session": session, "model": model, "usd": price(model, u),
                        "project": pl[0], "board": pl[1], "agent": name, "thread": thread, "sub": sub,
-                       "out": u.get("output_tokens", 0) or 0}
+                       "out": u.get("output_tokens", 0) or 0, "tokens": tokens_of(u)}
 
 
 def local_day(ts):
@@ -229,6 +236,9 @@ def main():
     since = parse_since(a.since)
     tot = collections.defaultdict(lambda: [0.0, 0, 0])  # usd, calls, sessions(set later)
     sess = collections.defaultdict(set)
+    toks = collections.defaultdict(lambda: [0, 0, 0, 0])
+    models = collections.defaultdict(collections.Counter)  # key -> model -> usd
+    sub_usd = collections.Counter()
     grand = 0.0
     for c in calls(since):
         if a.project and c["project"] != a.project:
@@ -240,6 +250,11 @@ def main():
         t[0] += c["usd"]; t[1] += 1
         sess[key].add(c["session"])
         grand += c["usd"]
+        for i, n in enumerate(c["tokens"]):
+            toks[key][i] += n
+        models[key][c["model"] or "?"] += c["usd"]
+        if c["sub"]:
+            sub_usd[key] += c["usd"]
     rows = sorted(tot.items(), key=lambda kv: (-kv[1][0]) if a.by != "day" else kv[0])
     if a.by == "board":  # group boards under their project, projects by total
         ptot = collections.Counter()
@@ -248,7 +263,8 @@ def main():
         rows = sorted(tot.items(), key=lambda kv: (-ptot[kv[0][0]], kv[0][0], -kv[1][0]))
     if a.json:
         print(json.dumps({"since": a.since, "by": a.by, "total_usd": round(grand, 2),
-                          "rows": [{"key": list(k), "usd": round(v[0], 4), "calls": v[1], "sessions": len(sess[k])} for k, v in rows],
+                          "rows": [{"key": list(k), "usd": round(v[0], 4), "calls": v[1], "sessions": len(sess[k]),
+                                   "tokens": toks[k], "models": {m: round(u, 4) for m, u in models[k].items()}, "sub_usd": round(sub_usd[k], 4)} for k, v in rows],
                           "unknown_models": dict(unknown_models)}, indent=1))
         return
     print(f"API-list-price cost of Hive model use{' since ' + a.since if a.since else ''} (by {a.by}); Hive is on a plan, nobody is billed this.")

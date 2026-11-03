@@ -31,7 +31,7 @@ const STEPS = [
   { title: "Reply any time", text: "Write here to carry on the conversation, even while the agent works. The To button shows who gets it, and you can change that. Nothing is sent until you press Send.", ring: () => q('.cp[data-place="thread"] .cp-t'), skip: () => !inThread() },
   { title: "Attach files", text: "Attach adds files to your message. You can also paste them or drop them on the conversation.", ring: () => [...document.querySelectorAll('.cp[data-place="thread"] .cp-bar button')].find(b => b.textContent === "Attach") || null, skip: () => !inThread() },
   { title: "See every agent", text: "Click Agents at the top.", ring: tab("now"), done: () => here() === "now", skip: () => !hasTab("now") },
-  { title: "Agents", text: "Everyone working right now and what they're doing. Click a name to see its whole session.", ring: () => heading("Agents at work"), skip: () => here() !== "now" },
+  { title: "Agents", text: "Everyone working right now and what they're doing. Click a name to see its whole session.", ring: () => heading("What each is doing"), skip: () => here() !== "now" },
   { title: "Check your limits", text: "Click Usage at the top.", ring: tab("usage"), done: () => here() === "usage", skip: () => !hasTab("usage") },
   { title: "Usage", text: "How much of your Claude limits is left and when it comes back. New agents stop at a usage line so they don't use it all. You can change that line, or pause an account, under Claude accounts.", ring: () => heading("Claude accounts"), skip: () => here() !== "usage" },
   { title: "Settings", text: "Click Settings at the top.", ring: tab("settings"), done: () => here() === "settings", skip: () => !hasTab("settings") },
@@ -40,7 +40,7 @@ const STEPS = [
   { title: "Help is under More", text: "Help opens the user guide, and Take the tour brings this window back. The other views here are for looking deeper. That's it: say what you want done in Chat.", ring: () => q('.more-i[data-key="help"]'), last: true },
 ];
 
-let win = null, ringEl = null, at = 0, timer = 0, raf = 0, dragged = false, spot = 0, moving = 0;
+let win = null, ringEl = null, at = 0, timer = 0, raf = 0, dragged = false, spot = 0, moving = 0, dodged = "", armed = true;
 const SPOTS = ["bl", "br", "tr", "tl"];
 const step = () => STEPS[at];
 const val = x => (typeof x === "function" ? x() : x);
@@ -62,19 +62,21 @@ function show(i, dir = 1) {
   if (!STEPS[i]) { if (dir > 0) return end(); i = 0; }
   at = i;
   const s = step(); if (s.enter) s.enter();
+  armed = dir > 0 || !s.done || !s.done();   // back on a step already done: wait for it, or it would bounce straight forward again
   paint();
   setTimeout(() => { const e = s.ring && s.ring(); if (e && step() === s) e.scrollIntoView({ block: "nearest" }); }, 60);
 }
 const next = () => (step().last ? end() : show(at + 1));
 
 // ---- the ring follows its target through morphs and scrolling; the window stays out of its way ----
-function setSpot(n) {
-  const st = win.style; spot = n;
+function setSpot(n) { moveTo(n); spot = n; }
+function moveTo(n) {
+  const st = win.style;
   const topH = (document.getElementById("top") || { offsetHeight: 0 }).offsetHeight + 12, k = SPOTS[n];
   st.left = k[1] === "l" ? "16px" : "auto"; st.right = k[1] === "r" ? "16px" : "auto";
   st.top = k[0] === "t" ? topH + "px" : "auto"; st.bottom = k[0] === "b" ? "16px" : "auto";
 }
-const overlap = (a, b) => a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
+const covered = (a, b) => Math.max(0, Math.min(a.right, b.right) - Math.max(a.left, b.left)) * Math.max(0, Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top));
 function follow() {
   if (!win) return;
   raf = requestAnimationFrame(follow);
@@ -82,8 +84,16 @@ function follow() {
   ringEl.hidden = !r;
   if (!r) return;
   const st = ringEl.style, p = 4; st.left = r.left - p + "px"; st.top = r.top - p + "px"; st.width = r.width + 2 * p + "px"; st.height = r.height + 2 * p + "px";
-  if (dragged || !overlap(r, win.getBoundingClientRect())) return;
-  for (let k = 1; k < SPOTS.length; k++) { setSpot((spot + 1) % SPOTS.length); if (!overlap(r, win.getBoundingClientRect())) return; }
+  if (!dragged) dodge(r);
+}
+/** Put the window in the corner that covers least of the target, and leave it there. A target too big to clear, like a whole conversation, is under every corner, so the first clear corner would never come and the window would jump between them on every frame. */
+function dodge(r) {
+  const w = win.getBoundingClientRect(), key = [r.left, r.top, r.width, r.height, w.width, w.height, innerWidth, innerHeight].join();
+  if (key === dodged) return;
+  dodged = key;
+  let best = spot, least = covered(r, w);
+  for (let k = 1; least && k < SPOTS.length; k++) { const n = (spot + k) % SPOTS.length; moveTo(n); const c = covered(r, win.getBoundingClientRect()); if (c < least) { best = n; least = c; } }
+  setSpot(best);
 }
 /** What runs on its own every moment: a modal window sits above the page, so the tour rides inside it; and a waiting step moves on when it's done. */
 function tick() {
@@ -91,7 +101,9 @@ function tick() {
   const home = document.querySelector("dialog[open]") || document.body;
   if (win.parentNode !== home) home.append(win);
   const s = step();
-  if (s.done && !moving && s.done()) moving = setTimeout(() => { moving = 0; if (win && step() === s) next(); }, 500);
+  const isDone = !!s.done && s.done();
+  if (!isDone) armed = true;
+  if (isDone && armed && !moving) moving = setTimeout(() => { moving = 0; if (win && step() === s) next(); }, 500);
   else if (typeof s.text === "function") { const t = val(s.text), p = win.querySelector(".tw-p"); if (p.textContent !== t) p.textContent = t; }
 }
 function drag(handle) {
@@ -115,7 +127,7 @@ export function startTour() {
   ringEl = document.createElement("div"); ringEl.className = "tour-ring"; ringEl.setAttribute("aria-hidden", "true"); ringEl.hidden = true;
   document.body.append(ringEl, win);
   drag(win.querySelector(".tw-top"));
-  dragged = false; setSpot(0); at = 0; show(0);
+  dragged = false; dodged = ""; setSpot(0); at = 0; show(0);
   timer = setInterval(tick, 200); raf = requestAnimationFrame(follow);
 }
 function end() {

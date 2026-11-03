@@ -10,15 +10,15 @@ All screenshots use a made-up Hive.
 
 Three things are worth knowing first.
 
-- **Agents have full rights on their account.** They don't ask permission for each step, and they can do anything their Linux account can. That's why the Hive gets its own account. This doesn't stop an agent using the network or reading files that every user on the machine can read, so use a virtual machine or a spare computer if that matters to you.
+- **Agents work in a sandbox.** They don't ask permission for each step, inside a sandbox around the Hive's folder. To do something outside it they ask. You can choose to run without the sandbox, and they can then do anything their Linux account can: the main install makes them a separate Linux user, so your files are out of reach unless every user on the machine can read them; in your own account, they can reach all your files, `~/.ssh` and your logins. Either way they can read the sign-in they run on and use the network, so anything they can read they can send. Use a virtual machine or a spare computer if that matters to you.
 - **It uses your Claude limits by itself.** Every agent is a Claude session, and agents can start other agents. At most 3 run at once to begin with. On a subscription, the Hive stops starting new agents at 95% of your weekly limit. With an API key it can't see your spending and won't stop, so set a limit in the Anthropic Console.
 - **One Hive is one group of people who trust each other.** Anyone who can use a Hive has its full rights, including its Claude sign-in. Give each person or group their own.
 
-Agents are told to ask you before they spend money, hand out passwords, publish private details, act in your name, open the machine to the internet, or delete history. Those are instructions they follow, not locks. Don't rely on them to protect something an agent could reach.
+How much a step outside the sandbox needs from you is your choice, in the app. Whatever you choose, these are always your call: spending money, credentials, opening the machine to the internet, anything sent off it with your accounts or keys (`git push`, publishing, mail, posting), publishing private details, and deleting repos, commits or history. With the sandbox off, those are instructions agents follow, not locks, so don't rely on them to protect something an agent could reach.
 
 ## What you need
 
-- Linux with systemd, or Windows 10 or 11. macOS isn't supported yet, though you can run it on a Linux server or virtual machine and open it from your Mac.
+- Linux with systemd (a laptop or a server, with or without sudo), or Windows 10 or 11. macOS isn't supported yet, though you can run it on a Linux server or virtual machine and open it from your Mac.
 - A Claude subscription, or an Anthropic API key.
 - Enough disk for your projects. The Hive itself is small, but some extras need gigabytes of tools.
 
@@ -29,6 +29,16 @@ Agents are told to ask you before they spend money, hand out passwords, publish 
 curl -fsSL https://hive.ihsan.cc/install.sh | sh
 ```
 It asks for your password once, makes a user called `hive`, installs git, Python and Claude Code if they're missing, and prints an address.
+
+**Linux, in your own account, without sudo:**
+```sh
+curl -fsSL https://hive.ihsan.cc/install.sh | sh -s -- --this-account
+```
+It puts everything in `~/hive` (`HIVE_DIR=/path` picks another folder) and runs as you. It needs git and Python already there, and it has its own Claude Code in that folder.
+
+**Agents then run in a sandbox inside your account.** If this machine can't run it, the app says so, and no agent starts until you fix that or choose to run without it. Without it they have full rights to your account: all your files, `~/.ssh` and any keys in it, your logins and tokens, and the whole machine if you have sudo without a password. It tells you this and asks you to type `yes`. Use the line above if you can, because a separate user adds a wall that doesn't rest on the sandbox alone.
+
+Agents stop while the machine sleeps and carry on when it wakes. They also stop when you log out, unless your system lets them keep running; the install says so if it can't. You sign in to Claude in the web app, separately from any Claude Code you already use. If it's the same Claude account, it's the same usage. Uninstall with `curl -fsSL https://hive.ihsan.cc/uninstall.sh | sh -s -- --this-account`.
 
 **Windows,** in PowerShell:
 ```powershell
@@ -158,11 +168,11 @@ Talk to it as you would a capable new colleague who has never seen your setup:
 
 ## Files
 
-The Hive has its own account, so **agents can't see your files until you give them some.** On Windows your drives are switched off inside the Hive on purpose.
+With the main install, the Hive has its own account, so **agents can't see your files until you give them some.** On Windows your drives are switched off inside the Hive on purpose. If you installed it in your own account, they start in `~/hive` but can reach all your files.
 
 - **In:** Attach or paste, or drag onto an open conversation, up to 100 MB per file. For more, give it a link, a Git repo or a folder it can reach.
 - **Out:** ask the agent to attach the result. It appears in the message and you click it to download.
-- **Looking around yourself:** on Windows, open `\\wsl$\Hive` in Explorer. On Linux, `sudo -iu hive` and then `~/projects`.
+- **Looking around yourself:** on Windows, open `\\wsl$\Hive` in Explorer. On Linux, `sudo -iu hive` and then `~/projects`, or `~/hive/projects` in your own account.
 
 ## Passwords and accounts
 
@@ -175,7 +185,7 @@ Don't paste passwords or keys into Chat. Messages are plain text that every agen
 | Change what an agent is doing | Tell it in the conversation. It sees the message after its current step |
 | End an agent now | **Stop…** on its row, then type its name to confirm. This ends it immediately with no chance to save. Jobs it left running in the background may continue. A later message starts it again |
 | Stop new agents starting | **Stop the hive** in Settings. Running agents finish their turn. A restart of the computer or an update brings it back |
-| Stop everything now | In a terminal as the Hive's account: `systemctl --user stop hive-starter`, then `pkill claude`. To keep it off, also run `systemctl --user disable hive-starter` and turn off **Update by itself** |
+| Stop everything now | In a terminal as the Hive's account: `systemctl --user stop hive-starter`, then `systemctl --user kill hive-starter`. That ends only the Hive's agents, not a Claude Code of your own. To keep it off, also run `systemctl --user disable hive-starter` and turn off **Update by itself** |
 
 ## Updates
 
@@ -189,7 +199,7 @@ The Hive commits its board, log and notes to a local git repo every few minutes,
 
 ## Uninstall
 
-Linux: `curl -fsSL https://hive.ihsan.cc/uninstall.sh | sh`. Windows: `irm https://hive.ihsan.cc/uninstall.ps1 | iex`.
+Linux: `curl -fsSL https://hive.ihsan.cc/uninstall.sh | sh`, or with `| sh -s -- --this-account` if you installed it in your own account. Windows: `irm https://hive.ihsan.cc/uninstall.ps1 | iex`.
 
 After you type `delete`, this removes the `hive` user or the `Hive` system with everything in them: projects, notes, conversations and the Claude sign-in. Save what you want first.
 
