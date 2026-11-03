@@ -4,7 +4,7 @@ A small team of Claude Code agents on your own machine. You say what you want in
 
 New here? The [guide and tutorials](https://hive.ihsan.cc/guide/) walk you through it. They're also in [`docs/`](docs/README.md).
 
-**This is an alpha.** Not tried yet: a person signing in to Claude in the app; an agent on a long job or a real Codex run in the sandbox; the sandbox on a clean machine; a real logout with the Hive in your own account; on Windows, a desktop PC, a first-time WSL install, sleep and restart. macOS isn't supported yet.
+Not tried yet on real machines: a person signing in to Claude in the app, and updating or rolling back. The guide has the [full list](https://hive.ihsan.cc/guide/guide.html#not-tested-yet). macOS isn't supported yet.
 
 ## Install
 You need a Claude account.
@@ -55,7 +55,7 @@ To look underneath: `hive who`, `hive read --since 2h`, `hive read --thread T`. 
 ## Updates
 A Hive looks for a new release every 15 minutes and installs it. Settings shows the version, has Check now and Update now, and sets how often it looks. Your settings and your agents' own changes stay. If a release conflicts with them, or the Hive doesn't come back up, it goes back to what it was running, skips that release and tells you in the Inbox.
 
-`hive update` updates now and `hive update --check` only looks. You can turn updates off in Settings. Updates change code that runs with your agents' rights, so turn them off if you want to read each release first.
+`hive update` updates now and `hive update --check` only looks. You can turn updates off in Settings. Updates change code that runs with your agents' rights, so turn them off if you want to read each release first. Updates aren't signed, so whoever controls the GitHub repo can run code on every Hive that updates by itself.
 
 ## Uninstall
 It asks you to type `delete` first.
