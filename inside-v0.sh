@@ -42,7 +42,8 @@ sleep 5
 if up $A; then ok "the real old Hive is running"; else note "old daemon not running: $(tail -n 3 $H/hive/.hive/*.log 2>/dev/null | cut -c1-200)"; fi
 note "old folder: $(ls -A $H/hive/.hive | tr '\n' ' ')"
 grep -aqs hive-standalone-build $H/.local/bin/hive && ok "old program carries the marker" || bad "old program marker"
-sha=$(cd $H/hive && find projects .hive/kb -type f -not -path '*/.git/*' | sort | xargs sha256sum | sha256sum)
+sums() { (cd "$1" && find projects .hive/kb -type f -not -path '*/.git/*' -print0 | sort -z | xargs -0 sha256sum); }
+sums $H/hive > /tmp/sums0
 
 curl -fsSL "$RAW/get.sh" -o /tmp/get.sh; chmod 644 /tmp/get.sh
 run() { # $1 log; the rest is the environment and arguments
@@ -84,7 +85,12 @@ sleep 5; no_if "old Hive stopped" "up $A"
 no_if "old program gone" "grep -aqs hive-standalone-build $H/.local/bin/hive"
 [ ! -e $H/.config/systemd/user/hive.service ] && ok "old user unit gone" || bad "old user unit gone"
 [ ! -e /etc/systemd/system/hive-$A.service ] && ok "old system unit gone" || bad "old system unit gone"
-[ -n "${OLDF:-}" ] && [ "$(cd "$OLDF" && find projects .hive/kb -type f -not -path '*/.git/*' | sort | xargs sha256sum | sha256sum)" = "$sha" ] && ok "backup is whole" || bad "backup is whole"
+# The running old Hive may write its own files after the snapshot, so: what's different is shown, and nothing that was there may be lost, and what was seeded stays the same.
+sums "$OLDF" > /tmp/sums1; note "backup differences: $(diff /tmp/sums0 /tmp/sums1 | grep '^[<>]' | cut -c1-2,68- | tr '\n' ' ')"
+lost=$(awk '{print $2}' /tmp/sums0 | while read -r f; do [ -e "$OLDF/$f" ] || echo "$f"; done)
+[ -z "$lost" ] && ok "backup lost nothing" || bad "backup lost: $lost"
+seeded=$(grep -E ' (projects/one/f|projects/two/.*|\.hive/kb/a\.md|\.hive/kb/isolated/one/n\.md)$' /tmp/sums0)
+[ -n "$seeded" ] && (cd "$OLDF" && printf '%s\n' "$seeded" | sha256sum -c --quiet) && ok "seeded files unchanged in the backup" || bad "seeded files changed in the backup"
 [ "$(cat "$OLDF/.hive/v2-import" 2>/dev/null)" = done ] && ok "marked done" || bad "marked done"
 
 yes_if "project one moved" "[ -f $NH/projects/one/f ]"
