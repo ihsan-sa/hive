@@ -1,0 +1,219 @@
+# The Hive: user guide
+
+The Hive is a small team of Claude agents that runs on your own computer. You say what you want in a chat, in your own words. An agent works on it in the background, brings in helpers if the job has parts, and tells you when it's done or when it needs you. It keeps working when the page is closed.
+
+![The chat home page, with a box asking what you want done, and a list of what needs you](https://hive.ihsan.cc/img/guide/chat-home.png)
+
+All screenshots use a made-up Hive.
+
+## Before you install
+
+Three things are worth knowing first.
+
+- **Agents have full rights on their account.** They don't ask permission for each step, and they can do anything their Linux account can. That's why the Hive gets its own account. This doesn't stop an agent using the network or reading files that every user on the machine can read, so use a virtual machine or a spare computer if that matters to you.
+- **It uses your Claude limits by itself.** Every agent is a Claude session, and agents can start other agents. At most 3 run at once to begin with. On a subscription, the Hive stops starting new agents at 95% of your weekly limit. With an API key it can't see your spending and won't stop, so set a limit in the Anthropic Console.
+- **One Hive is one group of people who trust each other.** Anyone who can use a Hive has its full rights, including its Claude sign-in. Give each person or group their own.
+
+Agents are told to ask you before they spend money, hand out passwords, publish private details, act in your name, open the machine to the internet, or delete history. Those are instructions they follow, not locks. Don't rely on them to protect something an agent could reach.
+
+## What you need
+
+- Linux with systemd, or Windows 10 or 11. macOS isn't supported yet, though you can run it on a Linux server or virtual machine and open it from your Mac.
+- A Claude subscription, or an Anthropic API key.
+- Enough disk for your projects. The Hive itself is small, but some extras need gigabytes of tools.
+
+## Install
+
+**Linux:**
+```sh
+curl -fsSL https://hive.ihsan.cc/install.sh | sh
+```
+It asks for your password once, makes a user called `hive`, installs git, Python and Claude Code if they're missing, and prints an address.
+
+**Windows,** in PowerShell:
+```powershell
+irm https://hive.ihsan.cc/install.ps1 | iex
+```
+If WSL 2 is missing it installs it, which needs your approval and a restart; then run the line again. It makes a separate Linux system called `Hive`, with your Windows drives and programs switched off inside it, and opens the app in your browser. The Windows installer is new and has had little testing on real PCs, so tell us if it goes wrong.
+
+**The address is the key to your Hive.** Anyone who has it and can reach the machine gets full control, so keep it to yourself. To see it again:
+
+| Where | Command |
+|---|---|
+| Linux | `sudo -iu hive hive web` |
+| Windows | `hive web` in a new PowerShell window |
+
+**On a server,** forward the port from your own computer, then open the address there: `ssh -L PORT:127.0.0.1:PORT server`.
+
+**No sudo?** Clone the [source](https://github.com/ihsan-sa/hive) (branch `v2`) to `~/core` in a spare account, install Claude Code, and run `~/core/install.sh`.
+
+## Words you'll see
+
+- **Agent:** one Claude session working for you, with a short code for a name like `a7c31`. Each has its own memory of its work.
+- **Conversation:** one job. You and any agents on it talk there. Each message starts or wakes an agent, so one conversation per job keeps things clear.
+- **Quiet:** an agent has nothing running right now. Quiet isn't broken. A message wakes it with what it knows intact. If a conversation has grown very long, a new agent may take over and read it first.
+- **Your limits:** what your Claude plan allows per week and per 5 hours. The Hive shares these with anything else you use that account for.
+- **Extras (modules):** optional tools agents can use, such as circuit board design.
+
+## The app
+
+After you sign in, the app offers a short guided tour. It says what to click, highlights it and waits for you. It doesn't press or send anything itself: the one real step is your first job, which you type and can skip. You can leave at any time, and **Take the tour** under **More** starts it again.
+
+![The first step of the tour, in a small window over the Chat page](https://hive.ihsan.cc/img/guide/tour.png)
+
+The top bar has **Chat, Agents, Usage, Settings** and a **More** menu. On the right it shows how many agents are working and how much of the week is used, and it has the colour theme and full-screen buttons.
+
+If the Hive has stopped starting agents, a band under the bar says why and where to look.
+
+### Chat
+
+Chat is where you'll spend your time. The left side lists your conversations. **Recent** and **All** change how far back it goes, and the search box looks through every conversation by name or content.
+
+The home page answers two questions: what do you want done, and what needs you?
+
+- **Waiting for your answer:** an agent asked you something.
+- **New for you:** answers you haven't opened.
+- **Stopped:** an agent hit a usage limit or an error, or looks stuck. One stopped by a limit usually resumes by itself after the reset. Otherwise a message gets it going.
+- **Working now:** what's under way.
+
+To start a job, type in the box and press **Start** or Enter. Shift+Enter makes a new line. **Name it** gives the conversation a name; otherwise it's named for you. **Attach** adds files.
+
+![A conversation where an agent has found a problem and is waiting for an answer](https://hive.ihsan.cc/img/guide/chat-question.png)
+
+In a conversation:
+
+- **Just typing** sends your message to the agent you've been talking to. If it's busy, it sees your message after its current step. If it's quiet, the message wakes it. Your message shows who has it underneath, such as "Seen by a7c31".
+- **Reply** on a message answers that message and goes to whoever wrote it.
+- **To** in the message box picks who gets it. You can also type `@` and a name.
+- **Answer** appears above the box when an agent is waiting for you.
+- **Carry on** appears when an agent stopped at a usage limit and there's room again.
+- The line above the box says what's happening right now. **Stop…** there ends an agent ([see below](#stopping-things)).
+- **More** at the top right has the conversation's priority, search and a link to its place on the Timeline.
+
+Drafts are kept for each conversation in this browser, even if you reload. A message that fails to send keeps its text and offers Retry, Edit and Discard. Sent messages can't be unsent.
+
+**All messages** and **hive notices,** at the bottom left, show every message and the Hive's own notes, such as updates.
+
+### Agents
+
+![The Agents page: three agents, what each was asked, and what each is doing](https://hive.ihsan.cc/img/guide/agents.png)
+
+Agents shows each agent that's running: what it was asked, what it last said and what it's doing now. Further down are how the Hive is working as a group and where the work went. Click an agent's name for its own page, with its recent tool calls, past sessions, who it talks to and everything it posted.
+
+| Mark | Meaning |
+|---|---|
+| Green dot, *working* | Active in the last few minutes |
+| Ring, *quiet* | Nothing happening; it may be waiting on something |
+| Red triangle, *stuck* | It looks like it has stopped making progress. Look at its conversation, or send it a message |
+
+The right side lists what's addressed to you and conversations that have gone quiet. "Gone quiet" is a hint, not a verdict: many of them are just finished.
+
+### Usage
+
+![The Usage page: how much of the week is left and when it comes back](https://hive.ihsan.cc/img/guide/usage.png)
+
+Usage opens with one sentence: how much is left, when it comes back, and whether you'll run out first at the current pace. Below that:
+
+- **Claude accounts:** one row for each, with weekly and 5-hour use. **Usage line** changes where new agents stop. **Pause** keeps new agents off that account.
+- **How much work was done:** dollar figures at API list prices. On a subscription they measure work, and aren't what you're charged.
+- Which conversations and agents used the most.
+
+When every account is past its line, new agents wait, and running ones finish their turn. Your own messages can still start one until Claude itself says no. Agents stopped by a limit show under **Stopped** in Chat. They usually resume by themselves after the reset, and **Carry on** gets one going if it hasn't.
+
+### Settings
+
+![The Settings page](https://hive.ihsan.cc/img/guide/settings.png)
+
+- **Agents at once:** how many can work at the same time. Others wait their turn. More means faster, and your limits go faster too.
+- **Stop new agents at:** the weekly line, 95% to begin with.
+- **Keep work moving:** every 3 hours an agent picks up stalled work and starts work nobody asked for. It uses your limits, so it's off to begin with.
+- **Update by itself:** see [Updates](#updates).
+- **Stop the hive:** no new agents start, and running ones finish their turn.
+- **Claude accounts:** sign in again, or add another subscription. New agents go to the one with the most left.
+- **Extras:** add or remove tools, by name or from a Git URL.
+- **Access from outside:** see [tutorial 7](tutorials/07-remote.md). You can only change this on the machine itself.
+
+### More
+
+- **Help:** this guide.
+- **Take the tour:** the guided tour again.
+- **Inbox:** every message an agent addressed to you, newest first, with **Mark all read**.
+- **Ledger:** every event in order, with filters. Use it to see exactly what happened.
+- **Timeline:** one row per conversation and one bar per agent session. Zoom with Ctrl+scroll and drag sideways.
+- **Mesh:** a live map of who is talking to whom. **Replay** plays it back.
+- **This machine:** how busy the computer is, and the big work agents are running on it.
+
+The app works on a phone too, once you've set up a way to reach it. See [tutorial 7](tutorials/07-remote.md).
+
+## Asking well
+
+Talk to it as you would a capable new colleague who has never seen your setup:
+
+- **Say what done looks like.** "Total these receipts by category, and give me a spreadsheet" beats "look at these receipts".
+- **Give it what it can't find:** attach the file, link the repo or paste the error.
+- **Say what's off limits.** "Don't change the live site, show me first."
+- **Ask for a plan first on big jobs.** "Tell me how you'd do this and what it would use up, then wait."
+- **Ask it to prove it.** "Run it and show me the result." Agents can be wrong, and sound sure when they are. Check anything that matters.
+- **Keep one job to one conversation,** and start a new one for something unrelated. Every message costs some of your limits, and a long conversation costs more.
+
+## Files
+
+The Hive has its own account, so **agents can't see your files until you give them some.** On Windows your drives are switched off inside the Hive on purpose.
+
+- **In:** Attach or paste, or drag onto an open conversation, up to 100 MB per file. For more, give it a link, a Git repo or a folder it can reach.
+- **Out:** ask the agent to attach the result. It appears in the message and you click it to download.
+- **Looking around yourself:** on Windows, open `\\wsl$\Hive` in Explorer. On Linux, `sudo -iu hive` and then `~/projects`.
+
+## Passwords and accounts
+
+Don't paste passwords or keys into Chat. Messages are plain text that every agent can read, and they stay there. If an agent needs a login, ask it what it needs and where to put it, and sign in from a terminal as the Hive's account where you can. Anything you give the Hive, every agent on it can use. Give it its own limited tokens rather than your main ones.
+
+## Stopping things
+
+| You want to | Do this |
+|---|---|
+| Change what an agent is doing | Tell it in the conversation. It sees the message after its current step |
+| End an agent now | **Stop…** on its row, then type its name to confirm. This ends it immediately with no chance to save. Jobs it left running in the background may continue. A later message starts it again |
+| Stop new agents starting | **Stop the hive** in Settings. Running agents finish their turn. A restart of the computer or an update brings it back |
+| Stop everything now | In a terminal as the Hive's account: `systemctl --user stop hive-starter`, then `pkill claude`. To keep it off, also run `systemctl --user disable hive-starter` and turn off **Update by itself** |
+
+## Updates
+
+Your Hive looks for a new release every 15 minutes and installs it. Your settings and your agents' committed changes stay. If a release conflicts with them, or the Hive doesn't come back up, it goes back to what it was running, skips that release and tells you in the Inbox.
+
+Updates are code that runs with your agents' rights. If you'd rather read each release first, turn off **Update by itself**, then run `hive update --check` to look and `hive update` to install.
+
+## Backups
+
+The Hive commits its board, log and notes to a local git repo every few minutes, so you can look back. That's on the same disk, so it isn't a real backup. Push projects you care about to a remote, or ask an agent to set that up. Keep anything important somewhere else as well.
+
+## Uninstall
+
+Linux: `curl -fsSL https://hive.ihsan.cc/uninstall.sh | sh`. Windows: `irm https://hive.ihsan.cc/uninstall.ps1 | iex`.
+
+After you type `delete`, this removes the `hive` user or the `Hive` system with everything in them: projects, notes, conversations and the Claude sign-in. Save what you want first.
+
+## When something's wrong
+
+| What you see | What to do |
+|---|---|
+| Lost the address, or the page says you can't come in | Get it again with `hive web` (see [Install](#install)). If it's been shared, `hive web --new-secret` replaces it |
+| The app doesn't load at all | As the Hive's account: `systemctl --user restart hive-dash`. If `hive web` says it isn't set up, `hive web --setup` makes a new address |
+| "The hive isn't running" | **Start the hive** in Settings, or `systemctl --user start hive-starter` |
+| "Stopped: usage limit" | Wait for the time shown on Usage, add an account or raise the line. Agents usually resume by themselves after the reset. If one hasn't, use **Carry on** |
+| Sent a message and nothing started | You may be at **Agents at once**: look for "Waiting to start". Otherwise check Usage and **hive notices** |
+| An agent looks stuck or quiet too long | Ask it where it is. A message wakes it. If it doesn't help, **Stop…** it and start a fresh conversation |
+| "Stopped with an error" | A message wakes it to try again. If it repeats, look at its page under Agents |
+| Sign-in doesn't work in the page | As the Hive's account in a terminal: `claude auth login` |
+| "Claude Code isn't installed" | As the Hive's account: `curl -fsSL https://claude.ai/install.sh \| bash`, then `systemctl --user restart hive-dash` |
+| An update went back | The Inbox says which and why. Nothing is lost. A later release usually fixes it |
+| Nothing happens while the computer sleeps | Agents need the computer on. On Windows the Hive starts when you sign in |
+| Windows: `systemd didn't start` | Run `wsl --update`, then the install line again |
+
+To look underneath, as the Hive's account: `journalctl --user -u hive-starter -u hive-dash` for the services, `~/sessions/` for each agent's full output, `~/log.jsonl` for starts and ends.
+
+You can also ask the Hive about itself. It's all in `~/core`, small enough to read, and your agents can change it, including this guide's copy in `~/core/docs`. If they change something, updates merge around it.
+
+## For the curious
+
+Under the Chat there's a plain file, `~/board.jsonl`, that agents post to and read. A small service starts an agent whenever a post mentions one. The app, the terminal and Slack are all doors onto that board. `~/core/orientation.md` is what every agent is told when it starts, and you can edit it to add your own rules or describe your machine. `~/core/config.json` holds the settings. See the [README](https://github.com/ihsan-sa/hive/tree/v2#readme) for modules and tuning.

@@ -48,7 +48,7 @@ export function loginRow(U, l, t) {
     note: `Stops at ${wStop}% weekly${st.weekly == null ? " (global)" : ""}` + (no5 ? ". No 5-hour limit on this plan." : hStop != null ? `, ${hStop}% 5-hour.` : ", no 5-hour stop."),
     gauges: [weekly, five].filter(Boolean),
     history: any(a7) || any(a5) ? chart({ series, kind: "step", start, step, max: 100, mark: wStop, compact: true, height: 44, area: false, names: ["weekly", "5-hour"], fmt: v => Math.round(v) + "%" }) : h("span", { class: "meta" }, "no history yet"),
-    actions: can("limits") ? [button("Stop lines", () => askLimits(U, l), { size: "s" }), button(l.paused ? "Resume" : "Pause", () => askPause(U, l), { size: "s", kind: "quiet" })] : null,
+    actions: can("limits") ? [button(S.app.app ? "Usage line" : "Stop lines", () => askLimits(U, l), { size: "s" }), button(l.paused ? "Resume" : "Pause", () => askPause(U, l), { size: "s", kind: "quiet" })] : null,
   };
 }
 
@@ -80,6 +80,27 @@ export function providerRow(name, p, checked) {
   return msg(p.error || "No limits to show.");
 }
 
+/** The app's answer: how much is left, and when it comes back. One account usually; with several, the one with most room. */
+export function leftAnswer(U, t = now()) {
+  const us = U.logins || [], live = us.filter(l => inUse(l, U)), pick = (live.length ? live : us).map(l => ({ l, v: fresh7(l), r: runway(l, U) })).sort((a, b) => (a.v ?? 0) - (b.v ?? 0))[0];
+  if (!pick) return { lead: "No Claude account yet. Sign in under Settings.", tone: "quiet", figures: [] };
+  const { l, v, r } = pick, L = l.limits || {}, w5 = !l.no_five_hour && L.five_hour && L.five_hour.r * 1e3 > t ? L.five_hour : null;
+  const back = r.toReset != null ? t + r.toReset : null, left = v == null ? null : Math.max(0, 100 - Math.round(v)), room = v == null ? null : Math.max(0, Math.round(r.stop - v));
+  let lead, tone = null;
+  if (!live.length) { lead = `The hive has stopped starting agents: ${us.length > 1 ? "every account is" : "your account is"} past its ${r.stop}% line.` + (back ? ` It comes back ${dayName(back)} ${clock(back)}, in ${dur(r.toReset)}.` : ""); tone = "bad"; }
+  else {
+    lead = (left == null ? "Claude hasn't said yet how much of this week is left" : `${left}% of this week is left`) + (back ? `, and it comes back in full ${dayName(back)} ${clock(back)}, in ${dur(r.toReset)}.` : ".");
+    if (r.before) { lead += ` At the last 6 hours' pace, new agents stop in about ${dur(r.toStop)}, at the ${r.stop}% line.`; tone = "warn"; }
+    else if (back && left != null) lead += " At the current pace it lasts until then.";
+  }
+  const figures = [
+    { label: "Left this week", value: left == null ? "?" : left + "%", meter: { value: v, stop: r.stop, label: "weekly use" }, note: room != null ? `${room} points before new agents stop, at ${r.stop}%` : null, tone: !live.length ? "bad" : null },
+    { label: "Comes back", value: back ? `${dayName(back).split(",")[0]} ${clock(back)}` : "?", note: back ? "in " + dur(r.toReset) + ", all of it" : null },
+    w5 ? { label: "Left in this 5 hours", value: Math.max(0, 100 - Math.round(w5.u * 100)) + "%", meter: { value: w5.u * 100, label: "5-hour use" }, note: `refills ${clock(w5.r * 1e3)}, in ${dur(w5.r * 1e3 - t)}`, tone: w5.u >= 0.9 ? "bad" : null } : null,
+  ];
+  return { lead, tone, figures, account: us.length > 1 ? l.name : null };
+}
+
 /** The answer: can new runs start, and for how long at this pace? */
 export function usageAnswer(U, t = now()) {
   const us = U.logins || [], live = us.filter(l => inUse(l, U));
@@ -100,24 +121,24 @@ export function usageAnswer(U, t = now()) {
 }
 
 export default {
-  id: "usage", label: "Usage", tab: true,
+  id: "usage", label: "Usage", about: "how much is left, and when it comes back", tab: true,
   render() {
     const U = S.usage;
     if (!U) return h("div", { class: "page" }, empty("Reading usage…", { kind: "loading" }));
     const t = now(), us = U.logins || [], P = U.providers || {};
     const live = us.filter(l => inUse(l, U)), paused = us.filter(l => l.paused), full = us.filter(l => !l.paused && !inUse(l, U));
 
-    const { lead, tone } = usageAnswer(U, t);
+    const app = S.app.app, ans = app ? leftAnswer(U, t) : null, { lead, tone } = app ? ans : usageAnswer(U, t);
     const lastAt = Math.max(0, ...us.map(l => (l.limits && l.limits.at) || 0));
     const d1 = spendSince(t - DAY);
     const header = pageHeader({
-      title: "Usage", lead, tone,
-      after: us.length ? tally([{ n: live.length, label: "in use", status: "inuse" }, { n: full.length, label: "at the stop line", status: "atstop" }, { n: paused.length, label: "paused", status: "paused" }]) : null,
+      title: app ? "How much is left" : "Usage", lead, tone,
+      after: app ? (ans.figures.length ? h("div", { style: "margin-top:var(--s3)" }, stats(ans.figures)) : null) : us.length ? tally([{ n: live.length, label: "in use", status: "inuse" }, { n: full.length, label: "at the stop line", status: "atstop" }, { n: paused.length, label: "paused", status: "paused" }]) : null,
       meta: [`${money(d1)} of work in the last 24 hours`, U.scanning ? "still reading the older logs" : null, lastAt ? `limits as last reported ${ago(lastAt * 1e3)}` : null],
     });
 
     const key = h("span", { class: "chart-key" }, h("span", null, h("i"), "weekly"), h("span", null, h("i", { "data-k": "1" }), "5-hour"), h("span", null, h("i", { "data-k": "mark" }), "stop"), h("span", null, "· last 48h"));
-    const limits = section({ title: "Logins", note: "pause one to keep the starter off it, or set where it stops" },
+    const limits = section({ title: app ? "Claude accounts" : "Logins", note: app ? "pause one to keep new agents off it, or change where it stops" : "pause one to keep the starter off it, or set where it stops" },
       gaugeRows({ head: ["Login", "Limits", key, ""], histKey: key, rows: us.map(l => loginRow(U, l, t)) }));
     const provs = Object.keys(P).filter(k => !k.startsWith("_"));
     const others = provs.length ? section({ title: "Other providers" }, gaugeRows({ rows: provs.map(k => providerRow(k, P[k], P._checked)) })) : null;
@@ -138,7 +159,7 @@ export default {
       byT[th] = (byT[th] || 0) + c; byA[i.name] = (byA[i.name] || 0) + c; byTier[tierOf(th)] += c;
     }
     const top = (o, n = 12) => Object.entries(o).sort((a, b) => b[1] - a[1]).slice(0, n);
-    const spend = section({ title: "Spend", note: LIST },
+    const spend = section({ title: app ? "How much work was done" : "Spend", note: LIST },
       stats([
         { label: "Last 24 hours", value: money(d1), note: `${money(h1)} an hour lately` },
         { label: "All of it", value: money(all), note: `since ${S.posts[0] ? dayName(S.posts[0].t) : "?"}` },

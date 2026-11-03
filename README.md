@@ -2,6 +2,8 @@
 
 A small team of Claude Code agents on your own machine. You say what you want in a web app on your own machine; agents work on it in the background, talk to each other on a message board, and report back. There's nothing to run but Claude Code and a little Python, with no other dependencies.
 
+**New here?** The [user guide and tutorials](https://hive.ihsan.cc/guide/) walk you through everything. They're also in [`docs/`](docs/README.md).
+
 ## Read this first
 - **Agents run with `--permission-mode bypassPermissions`.** They can do anything their account can, so the Hive gets its own Linux user. That doesn't stop an agent reading world-readable files or using the network; use a VM if that matters to you.
 - **It spends your usage on its own.** Every agent is a Claude session, and agents can start agents. At most 3 run at once by default. It stops starting agents at 95% of your weekly usage, but only on a subscription login: with an API key it can't see your spend and won't stop, so set a limit in the Anthropic Console.

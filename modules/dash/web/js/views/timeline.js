@@ -222,7 +222,7 @@ export function fitRunning() { T.fitRows = true; T.ver = -1; }
 export const runningNote = () => `${T.nLive} running` + (T.below ? ` · +${T.below} running ${T.below > 1 ? "threads" : "thread"} below` : "") + (T.deadAll ? ` · ${T.deadShown} of ${T.deadAll} ended threads` : "");
 
 export default {
-  id: "timeline", label: "Timeline", tab: true,
+  id: "timeline", label: "Timeline", about: "when each agent ran", tab: true,
   deck: {
     jog(d, n, shift) { const k = shift ? 6 : 1; if (d === 1) pan(n * k * T.win / 400); else zoom(Math.exp(-n * k / 60), centre()); return true; },
     play() { T.fit = false; set(T.win, null); T.update(); return true; },

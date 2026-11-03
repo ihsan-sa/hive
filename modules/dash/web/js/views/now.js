@@ -1,7 +1,7 @@
 // Now: what each agent is doing, and what needs you. Template: overview.
 import { h } from "../core/dom.js";
 import { S, SYS, OUTSIDE, loadProjects } from "../core/store.js";
-import { agentState, isRunning, hiveStats, tierHours, tierOf, tierRank, agentThread, spendSince, sEnd } from "../core/model.js";
+import { threadTitle, agentState, isRunning, hiveStats, tierHours, tierOf, tierRank, agentThread, spendSince, sEnd } from "../core/model.js";
 import { now, ago, dur, clock, money, pct, plural, firstSentence, short, HOUR, DAY, MIN } from "../core/format.js";
 import { TIERS, tier, status } from "../core/status.js";
 import { threadHref, agentHref } from "../core/router.js";
@@ -17,7 +17,7 @@ const V = { open: new Set(), all: {} };
 export function forYouRows(t = now()) {
   const lastYou = {}; for (const p of S.posts) if (p.from === "person" || p.from === "box") lastYou[p.th] = p.t;
   const fy = {}; for (const p of S.posts) if (p.t > t - 3 * DAY && p.men.includes("person") && p.t > (lastYou[p.th] || 0)) fy[p.th] = p;
-  return Object.values(fy).sort((a, b) => b.t - a.t).map(p => ({ key: p.th, href: threadHref(p.th), title: p.th, sub: p.from, meta: ago(p.t), text: firstSentence(p.text) }));
+  return Object.values(fy).sort((a, b) => b.t - a.t).map(p => ({ key: p.th, href: threadHref(p.th), title: threadTitle(p.th), sub: p.from, meta: ago(p.t), text: firstSentence(p.text) }));
 }
 
 /** How it's working as a hive, last 24 hours: the figures for stats(). */
@@ -26,7 +26,7 @@ export function hiveFigures(t = now()) {
   return [
     { label: "Agents talking to agents", value: pct(hs.a2a, hs.total), note: `${hs.a2a} of ${hs.total} posts mention another agent` },
     { label: "Time to answer a mention", value: hs.lat == null ? "–" : dur(hs.lat), note: `median; ${pct(hs.answered, hs.asked)} of ${hs.asked} mentions answered within 6h` },
-    { label: "New agents started by agents", value: pct(hs.byAgents, hs.fresh), note: `${hs.byAgents} by agents, ${hs.byYou} by you or the box, ${hs.bySys} by the keeper or starter` },
+    { label: "New agents started by agents", value: pct(hs.byAgents, hs.fresh), note: `${hs.byAgents} by agents, ${hs.byYou} by ${S.app.app ? "you" : "you or the box"}, ${hs.bySys} by the keeper or starter` },
     { label: "Threads with 2+ agents", value: `${hs.multi} of ${hs.threads}`, note: "threads where more than one agent posted" },
     { label: "Best connected", value: hs.hub || "–", note: hs.hub ? `talked with ${hs.hubN} other agents` + (agentThread(hs.hub) ? `, on ${agentThread(hs.hub)}` : "") : "no agent-to-agent mentions" },
     { label: "Session ends", value: hs.failed ? `${hs.failed} errored` : `${hs.clean} finished`, tone: hs.failed ? "bad" : null, note: `${hs.clean} finished, ${hs.stopped} stopped by a signal, ${hs.failed} errored; ${hs.limited} usage-limit stops` },
@@ -47,7 +47,7 @@ export function activityCharts(t = now()) {
 }
 
 export default {
-  id: "now", label: "Now", tab: true,
+  id: "now", label: () => (S.app.app ? "Agents" : "Now"), about: "what each agent is doing", tab: true,
   render(ctx) {
     const L = S.live, t = now();
     if (!L) return h("div", { class: "page" }, empty("Reading the board…", { kind: "loading" }));
@@ -63,16 +63,16 @@ export default {
     const lastHour = S.posts.filter(p => p.t > t - HOUR && !SYS.has(p.from)).length;
 
     const header = pageHeader({
-      title: run.length ? `${plural(run.length, "agent")} on ${plural(threads, "thread")}` : "Nobody is running right now",
+      title: run.length ? `${plural(run.length, "agent")} on ${plural(threads, S.app.app ? "conversation" : "thread")}` : S.app.app ? "No agents are working right now" : "Nobody is running right now",
       after: run.length ? tally([
         { n: active, label: "active now", status: "working" },
-        { n: count("working") - active, label: "on a running job", status: "working" },
-        { n: count("queue"), label: "in the job queue", status: "queue" },
+        ...(!S.app.app || count("working") > active ? [{ n: count("working") - active, label: "on a running job", status: "working" }] : []),  // the app's install has no queue: don't show its counts at 0
+        ...(!S.app.app || count("queue") ? [{ n: count("queue"), label: "in the job queue", status: "queue" }] : []),
         { n: count("quiet"), label: "quiet", status: "quiet" },
         { n: count("stuck"), label: "stuck", status: "stuck" },
       ]) : null,
       meta: [
-        L.jobs ? `Machine: ${L.jobs.running} jobs running, ${L.jobs.queued} queued` : null,
+        L.jobs && (!S.app.app || L.jobs.running || L.jobs.queued) ? `Machine: ${L.jobs.running} jobs running, ${L.jobs.queued} queued` : null,
         `${plural(lastHour, "post")} in the last hour`,
         waiting.length ? `${waiting.length} waiting to start` : null,
         L.limit_until ? `starts held for the usage limit until ${clock(L.limit_until * 1e3)}` : null,
@@ -80,7 +80,7 @@ export default {
       ],
     });
 
-    const main = section({ title: "Agents at work", note: "what each was asked and what it's doing" },
+    const main = section({ title: S.app.app ? "What each is doing" : "Agents at work", note: "what each was asked and what it's doing" },
       run.length ? h("div", { class: "agents" }, run.map(a => agentCard(a, { open: V.open.has(a.name), onToggle: n => { V.open.has(n) ? V.open.delete(n) : V.open.add(n); ctx.update(); } })))
         : empty("None."));
 
@@ -99,13 +99,13 @@ export default {
 
     const aside = [
       stuck.length ? section({ title: "Stuck", note: "running but not moving" },
-        list(stuck.map(a => ({ key: a.name, href: agentHref(a.name), lead: statusDot("stuck"), title: a.name, sub: a.thread, text: states.get(a.name).text })))) : null,
-      section({ title: "For you", note: "addressed to you, no reply yet · 3 days" },
+        list(stuck.map(a => ({ key: a.name, href: agentHref(a.name), lead: statusDot("stuck"), title: a.name, sub: threadTitle(a.thread), text: states.get(a.name).text })))) : null,
+      section({ title: "For you", note: "addressed to you, no reply yet · 3 days", actions: S.app.app ? button("Open in Chat", null, { href: "#comms", size: "s", kind: "quiet" }) : null },
         list(forYouRows(t), { empty: "Nothing open.", ...more("fy") })),
     ];
     const later = [
       section({ title: "Gone quiet", note: "nobody on it, not marked done · leads, not verdicts" },
-        list(stale.map(({ d, lp }) => ({ key: d.name, href: threadHref(d.name), lead: h("span", { class: "ref-sw", "data-tone": tier(tierOf(d.name)).tone, title: tier(tierOf(d.name)).label }), title: d.name, sub: lp.from, meta: ago(lp.t), text: firstSentence(lp.text) })), { empty: "Nothing stalled.", ...more("q") })),
+        list(stale.map(({ d, lp }) => ({ key: d.name, href: threadHref(d.name), lead: h("span", { class: "ref-sw", "data-tone": tier(tierOf(d.name)).tone, title: tier(tierOf(d.name)).label }), title: threadTitle(d.name), sub: lp.from, meta: ago(lp.t), text: firstSentence(lp.text) })), { empty: "Nothing stalled.", ...more("q") })),
     ];
 
     const hive = section({ title: "How it's working as a hive", note: "last 24 hours" }, stats(hiveFigures(t)));
@@ -117,7 +117,7 @@ export default {
 
     const ended = S.sessions.filter(s => s.end).sort((a, b) => b.end - a.end).slice(0, 8);
     const finished = section({ title: "Just finished" },
-      list(ended.map(s => ({ key: s.name + s.session, href: threadHref(s.thread), lead: statusDot(s.exit && s.exit !== 143 ? "failed" : "ended"), title: s.name, sub: `on ${s.thread}`,
+      list(ended.map(s => ({ key: s.name + s.session, href: threadHref(s.thread), lead: statusDot(s.exit && s.exit !== 143 ? "failed" : "ended"), title: s.name, sub: `on ${threadTitle(s.thread)}`,
         meta: ago(s.end), text: `ran ${dur(s.end - s.start)}` + (s.exit === 0 || s.exit == null ? "" : s.exit === 143 ? " · stopped by a signal" : ` · exit ${s.exit}`) })), { empty: "None yet.", dense: true }));
 
     const P = S.projects;

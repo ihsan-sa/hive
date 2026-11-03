@@ -55,6 +55,11 @@ Without root: in a spare account, git clone -b $BRANCH $REPO ~/core, install Cla
   trap 'rm -rf "$T"' EXIT
   echo "Getting the Hive"
   git clone -q --single-branch -b "$BRANCH" "$REPO" "$T/hive" </dev/null
+  # A release is a tag, and only a tag has been through the tests. HIVE_BRANCH asks for that branch as it stands.
+  if [ -z "${HIVE_BRANCH:-}" ]; then
+    TAG=$(git -C "$T/hive" tag -l 'v2.*' | grep -E '^v2\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1 || true)
+    [ -z "$TAG" ] || git -C "$T/hive" checkout -q -B "$BRANCH" "$TAG"
+  fi
   $ROOT "$T/hive/install.sh" "$U" </dev/null
 }
 

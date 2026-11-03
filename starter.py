@@ -161,6 +161,7 @@ def provider_room(c, name, pc, cache):
     ~/modules/providers): it reads the key and runs the spend guard. A missing or broken module holds only provider runs.
     Every non-Claude run comes through here, so this is also where root holds them."""
     if has_root(): return "this account has passwordless sudo, and an outside model must not share an account with root"
+    if pc.get("paused"): return f"paused: {pc['paused']}"  # config.json providers.<name>.paused; remove the key to unpause
     try:
         f = str(Path(pc["impl"]).expanduser())
         if f not in _impls:
@@ -715,6 +716,7 @@ def wake(c, st, n, posts, to, room):
 
 def start(c, name, posts, login, resume=None, reaped=None, extra=(), moved=False, lost=False, woken=None, all_since=None, slept=None, heir_of=None):
     hook_inbox(c)  # a login can be added to config.json while the starter runs
+    wire_deny(c)
     sid = resume or str(uuid.uuid4())  # the claude session id, so `claude --resume <session>` works
     first = posts[0]
     model = (next((p["model"] for p in posts if provider_of(c, p.get("model"))), None)  # a provider wins: main loop picked it
@@ -849,6 +851,35 @@ def hook_inbox(c):
         hooks.setdefault("PostToolUse", []).append({"matcher": "*", **h}); hooks.setdefault("Stop", []).append(h)
         f.write_text(json.dumps(s, indent=2) + "\n")
 
+DENY_SEEN = None
+def wire_deny(c):
+    """When ~/.cc/github-deny is there, the GitHub orgs on it are refused (bin/cc-github-deny has the layers). The list is
+    placed by the machine's admin and never leaves it. Runs at start and with each agent, so a new or edited list is picked up.
+    No list: nothing is linked, written or hooked, so an ordinary install has none of this."""
+    global DENY_SEEN
+    lst, bin_ = HOME / ".cc/github-deny", CORE / "bin"
+    if not os.access(lst, os.R_OK): return
+    hook = {"matcher": "Bash|WebFetch", "hooks": [{"type": "command", "command": str(bin_ / "cc-github-deny-hook"), "timeout": 10}]}
+    for login in c["logins"] + [pc["config_dir"] for pc in c.get("providers", {}).values() if pc.get("config_dir")]:
+        f = Path(login).expanduser() / "settings.json"
+        f.parent.mkdir(parents=True, exist_ok=True)
+        try: s = json.loads(f.read_text()) if f.exists() else {}
+        except ValueError: continue
+        if "cc-github-deny-hook" in json.dumps(s.get("hooks", {})): continue
+        s.setdefault("hooks", {}).setdefault("PreToolUse", []).append(hook)
+        f.write_text(json.dumps(s, indent=2) + "\n")
+    seen = lst.stat().st_mtime_ns
+    if seen == DENY_SEEN: return
+    (HOME / ".local/bin").mkdir(parents=True, exist_ok=True)
+    for name in ("cc-github-deny", "git-remote-cc-github-deny", "gh"):
+        link = HOME / ".local/bin" / name
+        if link.exists() and not link.is_symlink():  # a real gh lives here: never overwrite it. Git and the hook still hold.
+            log(event="github_deny", problem=f"{link} is a real file, so the {name} layer isn't wired"); continue
+        tmp = link.with_name(f".{name}.{os.getpid()}"); tmp.symlink_to(bin_ / name); tmp.replace(link)
+    r = subprocess.run([str(bin_ / "cc-github-deny"), "install"], capture_output=True, text=True, timeout=60)
+    if r.returncode: log(event="github_deny", problem=(r.stderr or r.stdout)[-300:])
+    else: DENY_SEEN = seen
+
 def provider_hold(c, st, n, pv, cache, thread):
     """True if agent n's provider can't take a run now; says why in its thread once per reason, so a post doesn't wait in silence."""
     why = provider_room(c, pv[0], pv[1], cache)
@@ -856,7 +887,7 @@ def provider_hold(c, st, n, pv, cache, thread):
     if why is None: held.pop(n, None); return False
     if held.get(n) != why:
         held[n] = why; log(event="provider_held", name=n, provider=pv[0], why=why)
-        post(f"`{n}` waits for provider `{pv[0]}`: {why}. It starts once that's fixed; the key and its credit are the person's.", ["person"], thread)
+        post(f"`{n}` waits for provider `{pv[0]}`: {why}. It starts once that's fixed; the key and its credit are the person's.", [] if pv[1].get("paused") else ["person"], thread)
     return True
 
 FALLBACK_NOTE = {
@@ -917,6 +948,7 @@ def fallback(c, st, n, posts, claude_ok, cache):
 def main():
     for d in (RUN, STATE, HOME / "sessions"): d.mkdir(exist_ok=True)
     hook_inbox(cfg())
+    wire_deny(cfg())
     st = load("starter.json", {"offset": 0, "pending": {}})
     u, paused, pcache = {}, False, {}
     while True:

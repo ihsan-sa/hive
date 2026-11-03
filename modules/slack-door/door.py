@@ -59,10 +59,6 @@ FOLDER = ("\n\n(This channel's work and notes are usually in ~/projects/{folder}
 UNSEEN = ("(The agent on this thread is busy and hasn't seen {ids} for {mins} minutes, so you're starting on {it}. Answer {it} with "
           "`--reply-to` and leave its work to it. It will see this post when it's free, and won't answer {it} too.)\n\n")
 
-# Exact words that ask only "are you there, is it moving?". Answered here while something runs, so no model is spent on them.
-NUDGES = {"?", "hello", "hi", "hey", "ping", "test", "testing", "update", "updates", "any update", "any updates", "anything", "news", "resume"}
-
-
 def plain_word(text):
     """A short message as a word to match: `!status`, `Status.` and `status?` are one word; only punctuation is `?`."""
     t = text.lower().strip().lstrip("!")
@@ -332,12 +328,6 @@ class Door:
             ch = None if ask else self.chan(cid, ev)
             if ch and word in ("status", "stop"):
                 return self.command(ch, under, word)
-            if ch and word in NUDGES:
-                if self.state_fn(self.threads_of(cid), ch["agent"]) != "none":
-                    return self.command(ch, under, "status")
-                # nothing runs: in a Slack thread, or with something unanswered, a nudge is how they restart it
-                if not under and not self.waiting(cid):
-                    return None if late else self.say(cid, None, "I'm here. Tell me what you need.")
             self.soft("reactions_add", channel=cid, timestamp=ts, name="white_check_mark" if ask else "eyes")
             who = self.display(user)
             head = "(" + (f"from {who}, " if who else "") + "in Slack"

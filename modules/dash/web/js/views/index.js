@@ -1,5 +1,6 @@
 // The view registry. Adding a view: write views/<name>.js exporting {id, label, tab, render}, then add one line here.
-// Order here is the tab order. tab: true, false, or a function of what the server allows.
+// Order here is the tab order on the developer route. tab: true, false, or a function of what the server allows.
+// label and about may be functions of the mode (S.app.app: the app anyone installs).
 import { S, can } from "../core/store.js";
 import now from "./now.js";
 import agent from "./agent.js";
@@ -11,13 +12,12 @@ import comms from "./comms.js";
 import inbox from "./inbox.js";
 import mesh from "./mesh.js";
 import timeline from "./timeline.js";
-import { pending } from "./pending.js";
 import start from "./start.js";
 import settings from "./settings.js";
 import plans from "./plans.js";
 import secrets from "./secrets.js";
 import deck from "./deck.js";
-
+import knowledge from "./knowledge.js";
 
 export default [
   start,
@@ -32,7 +32,15 @@ export default [
   plans,
   secrets,
   settings,
+  knowledge,
   agent,
   system,
   deck,
 ];
+
+// In the app the bar is short: these up front, in this order; the rest under More, in that order.
+// A view named in neither goes at the end of More, so a new view is still one line above.
+export const APP_NAV = {
+  main: ["start", "comms", "now", "usage", "settings"],
+  more: ["knowledge", "inbox", "ledger", "timeline", "mesh", "jobs"],
+};

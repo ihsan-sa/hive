@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# gh — a shim ahead of the real gh on PATH (~/.local/bin comes first): a call that names a GitHub org this box may not touch —
+# in its arguments (a body, title, subject or notes is text, not a target), in GH_REPO, or as one of the cwd's
+# remotes — is refused with the org and the list named, and the
+# real gh never runs. Every other call IS the real gh, exec'd with the same arguments: nothing here reads its output.
+# The list, and what counts as naming an org, are cc-github-deny's (beside this file); with no list,
+# or no cc-github-deny to ask, every call passes. A caller that spells /usr/bin/gh walks past this shim — cc-github-deny-hook
+# reads that line, and the git layers still stand behind it.
+me=$(readlink -f -- "$0"); d=${me%/*}
+real=""; IFS=:; for p in $PATH; do
+  [ -x "$p/gh" ] && [ ! -d "$p/gh" ] || continue
+  [ "$(readlink -f -- "$p/gh")" = "$me" ] && continue
+  real=$p/gh; break
+done; unset IFS
+[ -n "$real" ] || { echo "gh: this is the deny-list shim and no real gh is behind it on PATH" >&2; exit 127; }
+# A FREE-TEXT VALUE IS NOT A TARGET. `cc done` passes the brief as `gh pr create --body`, and a brief that named a
+# listed org was refused as if it touched the org, so the PR never opened (2026-09-12). The value of a text flag —
+# the body, title, subject or notes of `pr|issue create|edit|comment|review|merge` and `release create|edit`, taken
+# the way gh itself takes it (`--body X`, `--body=X`, `-b X`, `-bX`) — is left out of the check; every other argument,
+# GH_REPO and the remotes are still read. Only there: `-b`, `-t` and `-n` mean other things under other commands.
+args=("$@")
+case "${1:-} ${2:-}" in
+  "pr create"|"pr edit"|"pr comment"|"pr review"|"pr merge"|"issue create"|"issue edit"|"issue comment"|"release create"|"release edit")
+    args=(); skip=""; rest=""
+    for a in "$@"; do
+      if [ -n "$rest" ]; then args+=("$a"); continue; fi
+      if [ -n "$skip" ]; then skip=""; continue; fi
+      case $a in
+        --) rest=1; args+=("$a");;                     # after `--` gh reads no flags, so nothing is text
+        --body|--title|--subject|--notes|-b|-t|-n) skip=1;;
+        --body=*|--title=*|--subject=*|--notes=*|-b?*|-t?*|-n?*) ;;
+        *) args+=("$a");;
+      esac
+    done;;
+esac
+if [ -x "$d/cc-github-deny" ]; then
+  "$d/cc-github-deny" check "${args[@]}" "${GH_REPO:-}" "$(git config --get-regexp '^remote\..*\.url$' 2>/dev/null)"
+  [ $? = 77 ] && exit 77   # any other answer — allowed, or the check itself failed — is the real gh, untouched
+fi
+exec "$real" "$@"

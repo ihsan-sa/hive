@@ -1,6 +1,6 @@
 // Things that change the hive. Each is a confirm window; controls appear only where can() allows.
 import { h } from "./core/dom.js";
-import { S, can, post, poll, pollUsage } from "./core/store.js";
+import { S, can, built, post, poll, pollUsage } from "./core/store.js";
 import { short } from "./core/format.js";
 import { tierOf } from "./core/model.js";
 import { TIERS, tier } from "./core/status.js";
@@ -10,6 +10,7 @@ import { button, input, field } from "./ui/kit.js";
 // ---- Kill: the window is the first step, typing the exact code the second. The server checks the code again. ----
 export function killButton(n) {
   if (!can("stop")) return null;
+  if (S.app.app) return button("Stop…", e => { e.stopPropagation(); askStop(n); }, { kind: "quiet", size: "s", title: `Stop ${n}`, cls: "ac-kill" });
   return button("Kill", e => { e.stopPropagation(); askKill(n); }, { kind: "quiet", size: "s", tone: "bad", title: `Stop ${n}'s run now`, cls: "ac-kill" });
 }
 export function askKill(n) {
@@ -30,6 +31,25 @@ export function askKill(n) {
       const left = [stuck.length ? `These didn't die: ${stuck.join(", ")}.` : "", det.length ? `Detached jobs still running: ${det.join(", ")}.` : ""].filter(Boolean).join(" ");
       return left ? `${n} was killed. ${left}` : "";
     },
+  });
+}
+
+// ---- Stop: the plain way to stop an agent, from the conversation. Not built yet on the server (POST /api/stop). ----
+// "After this step" lets it finish what it's doing and save, then end; a message wakes it again. Kill stays the hard stop
+// with its typed code, one click further.
+export function askStop(n) {
+  if (!can("stop")) return;
+  if (!built("stop")) return askKill(n);
+  const L = S.running.get(n);
+  const dlg = confirm({
+    title: `Stop ${n}?`, ok: "Stop after this step", failText: "It wasn't stopped",
+    body: [
+      L && L.doing ? h("p", { class: "meta" }, "Doing now: " + short(L.doing, 160)) : null,
+      `${n} finishes the step it's on, saves what it has, and stops. Nothing is lost, and a message in its conversation wakes it again.`,
+      h("p", { class: "meta" }, h("span", { class: "nb" }, "not built yet"), " The server needs POST /api/stop; see PART1.md."),
+      h("p", { class: "meta" }, "Need it to stop this second? ", h("button", { type: "button", class: "linkbtn", onclick: () => { dlg.close(); askKill(n); } }, "Kill it instead"), ", which ends it at once without saving."),
+    ],
+    onOk: async () => { await post("/api/stop", { name: n, when: "after-step" }); await poll(); },
   });
 }
 

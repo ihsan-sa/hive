@@ -36,14 +36,14 @@ function rows() {
 }
 
 export default {
-  id: "ledger", label: "Ledger", tab: true,
+  id: "ledger", label: () => (S.app.app ? "History" : "Ledger"), about: "everything that happened, in order", tab: true,
   render(ctx) {
     const sig = [S.ver, L.kind, L.q, L.limit].join("|"), changed = sig !== L.sig; L.sig = sig;
     const built = changed ? rows() : null;     // on an unchanged poll the list below is an empty node with the same sig: morph leaves the page's list alone
     const set = (k, v) => { L[k] = v; ctx.update(); };
     return metrics({
-      header: pageHeader({ title: "Ledger", after: toolbar(
-        seg(KINDS, L.kind, k => set("kind", k), { label: "Kind of event" }),
+      header: pageHeader({ title: S.app.app ? "History" : "Ledger", lead: S.app.app ? "Everything that happened, newest first: messages, agents starting and ending, and trouble." : null, after: toolbar(
+        seg(S.app.app ? KINDS.map(([k, l]) => [k, k === "thread" ? "Conversations" : l]) : KINDS, L.kind, k => set("kind", k), { label: "Kind of event" }),
         input({ type: "search", placeholder: "Filter by agent, thread or words", "aria-label": "Filter", value: L.q, oninput: e => set("q", e.target.value) }),
         h("span", { class: "meta" }, plural(L.count, "event"))) }),
       sections: [

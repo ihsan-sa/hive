@@ -305,7 +305,7 @@ const meshDeck = {
 };
 export default {
   deck: meshDeck,
-  id: "mesh", label: "Mesh", tab: true,
+  id: "mesh", label: () => (S.app.app ? "Map" : "Mesh"), about: "who talked to whom", tab: true,
   enter(ctx) {
     M.update = ctx.update;
     unsub = subscribe(w => { if (w.posts && w.posts.length && w.posts.length <= 20 && M.cut == null) { if (w.posts.some(p => !G.nodes.has(p.from))) build(); w.posts.forEach(emit); } });

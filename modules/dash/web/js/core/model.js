@@ -1,6 +1,6 @@
 // What the data means: statuses, the agent card, hive stats, usage pace. Pure reads of the store.
 import { S, OUTSIDE, SYS } from "./store.js";
-import { now, ago, dur, median, MIN, HOUR, DAY } from "./format.js";
+import { now, ago, dur, median, short, mdPlain, MIN, HOUR, DAY } from "./format.js";
 
 export const isAgent = n => S.agents.has(n);
 export const isRunning = n => S.running.has(n);
@@ -29,7 +29,7 @@ export function agentState(a) {
   if (j.running) return { key: "working", text: (j.running > 1 ? j.running + " jobs" : "job") + " running" + (j.queued ? `, ${j.queued} more queued` : "") + more };
   if (j.queued) return { key: "queue", text: `${j.queued > 1 ? j.queued + " jobs" : "job"} in the queue ${dur(j.waited * 1e3)}` + more };
   if (unseen) return { key: "stuck", text: `quiet ${dur(q)}, hasn't seen ${unseen} new post${unseen > 1 ? "s" : ""} for it` };
-  return { key: "quiet", text: "quiet " + dur(q) + ", no job in the queue" };
+  return { key: "quiet", text: "quiet " + dur(q) + (S.app.app ? "" : ", no job in the queue") };
 }
 /** Any name's status: {key, label}. Cached per poll. */
 export function agentStatus(n) {
@@ -136,5 +136,63 @@ export function runway(l, U) {
   const reset = L.seven_day ? L.seven_day.r * 1e3 : l.resets && l.resets.weekly ? l.resets.weekly * 1e3 : null;
   const toStop = pr ? ((stop / 100 - pr.at) / pr.rate) * 1e3 : null;
   return { stop, toStop, toReset: reset ? reset - now() : null, before: toStop != null && reset != null && toStop < reset - now() };
+}
+// ---- conversations: what a thread is called, who is in it, what state it is in ----
+/** What the person typed, without the routing the server writes into the text ("@a7c31 ", "reply to message <id>: ").
+ *  The board keeps the text as it is; this is for display only. */
+// The developer route reads the board as it is: mentions, reply lines and thread ids stay.
+export function displayText(p) {
+  if (!S.app.app) return String(p.text || "");
+  if (p.disp != null) return p.disp;
+  let t = String(p.text || "").replace(/^(?:[ \t]*@[\w.-]+[,:]?[ \t]+)+/, "");
+  t = t.replace(/^reply to message [0-9a-f]+:\s*/i, "");
+  return (p.disp = t);
+}
+const HEX = /^[0-9a-f]{12}$/;
+/** A thread's title: its name, or for an unnamed job (a hex id) the start of its first message. */
+export function threadTitle(th) {
+  if (!S.app.app || !HEX.test(th || "")) return th;
+  const d = S.threads.get(th), p = d && d.posts[0];
+  return p ? short(mdPlain(displayText(p)).split("\n")[0], 64) : th;
+}
+/** Only the starter, keeper or box ever posted here. */
+export const isSystemThread = d => !!d && d.posts.every(p => SYS.has(p.from));
+/** Everyone who took part in a thread: posted, ran, or is queued for it. Outside names first, then running, queued, the rest. */
+export function threadPeople(th) {
+  const d = S.threads.get(th), m = new Set(d ? d.who : []);
+  for (const s of S.sessions) if (s.thread === th) m.add(s.name);
+  for (const a of (S.live ? S.live.agents : [])) if (a.thread === th && a.name) m.add(a.name);
+  for (const p of (S.live ? S.live.pending : [])) if ((p.threads || []).includes(th)) m.add(p.name);
+  const rank = n => (OUTSIDE.has(n) ? 0 : isRunning(n) ? 1 : S.pending[n] ? 2 : 3);
+  return [...m].sort((a, b) => rank(a) - rank(b));
+}
+const asksQuestion = p => { const lines = mdPlain(displayText(p)).trim().split("\n").filter(l => l.trim()); return /\?["')]*\s*$/.test(lines[lines.length - 1] || ""); };
+/** Who the person has been talking to in a thread: the last agent that wrote to them, or that they named. */
+export function partner(th) {
+  const d = S.threads.get(th); if (!d) return null;
+  for (let i = d.posts.length - 1; i >= 0; i--) {
+    const p = d.posts[i];
+    if (OUTSIDE.has(p.from)) { const a = p.men.find(isAgent); if (a) return a; }
+    else if (isAgent(p.from) && p.men.includes("person")) return p.from;
+  }
+  return null;
+}
+/** A thread's state for the person, most urgent first: {key (a STATUS key), label, who, post}. */
+export function threadState(th, read) {
+  const d = S.threads.get(th); if (!d) return { key: "none", label: "" };
+  let lastYou = 0; for (const p of d.posts) if (OUTSIDE.has(p.from)) lastYou = p.t;
+  let ask = null; for (let i = d.posts.length - 1; i >= 0 && d.posts[i].t > lastYou; i--) { const p = d.posts[i]; if (isAgent(p.from) && p.men.includes("person")) { ask = p; break; } }
+  const run = S.live ? S.live.agents.filter(a => a.thread === th) : [];
+  const ss = S.sessions.filter(s => s.thread === th), last = ss[ss.length - 1];
+  if (ask && asksQuestion(ask)) return { key: "asks", label: "waiting for your answer", who: ask.from, post: ask };
+  for (const a of run) { const st = agentState(a); if (st.key === "stuck") return { key: "stuck", label: "stuck: " + st.text, who: a.name }; }
+  const busy = run.find(a => agentState(a).key === "working") || run[0];
+  if (busy) { const st = agentState(busy); return { key: st.key, label: st.key === "working" ? "working" : st.text, who: busy.name, doing: busy.doing }; }
+  const q = (S.live ? S.live.pending : []).find(p => (p.threads || []).includes(th));
+  if (q) return { key: "queued", label: "waiting to start", who: q.name };
+  if (last && last.end && S.limitedSess.has(last.session)) return { key: "limited", label: "stopped at a usage limit", who: last.name, t: last.end };
+  if (last && last.end && last.exit && last.exit !== 143 && !S.limitedSess.has(last.session)) return { key: "failed", label: "stopped with an error", who: last.name, t: last.end };
+  if (ask && !(read && read(ask))) return { key: "foryou", label: "new reply for you", who: ask.from, post: ask };
+  return { key: "done", label: last ? "done" : "", who: last ? last.name : null };
 }
 export { DAY, HOUR };

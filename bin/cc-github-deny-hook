@@ -1,0 +1,24 @@
+#!/usr/bin/env python3
+"""Layer 4 of cc-github-deny: a Claude Code PreToolUse hook on Bash and WebFetch.
+It refuses a Bash line that runs git or gh or reaches GitHub and names a listed org as an owner, and a WebFetch of such a URL.
+It's the only layer that sees a raw API call (curl, python, /usr/bin/gh). A repo of that name under another owner, the word
+in prose on a line with no such command, and a longer name all pass. No list, or a hook input it can't read: nothing is refused."""
+import json, os, re, sys
+
+LIST = os.environ.get("CC_GITHUB_DENY") or os.path.expanduser("~/.cc/github-deny")
+RUNS = re.compile(r"(^|[^A-Za-z0-9_.-])(gh|git)([^A-Za-z0-9_.-]|$)|github", re.I)
+
+def main():
+    try:
+        with open(LIST) as f: orgs = [o for o in (re.sub(r"\s", "", l.split("#")[0]) for l in f) if re.fullmatch(r"[A-Za-z0-9-]+", o)]
+        e = json.load(sys.stdin); tool = e.get("tool_name"); ti = e.get("tool_input") or {}
+    except (OSError, ValueError, AttributeError): return 0
+    text = ti.get("command") if tool == "Bash" else ti.get("url") if tool == "WebFetch" else None
+    if not isinstance(text, str) or not RUNS.search(text): return 0
+    for o in orgs:
+        if re.search(r"(^|[^A-Za-z0-9_./-]|(^|[^A-Za-z0-9_.-])(orgs|users|repos)/|github(usercontent)?\.com[/:])" + o + r"(/|[^A-Za-z0-9_.-]|$)", text, re.I | re.M):
+            print(f"cc-github-deny: blocked: this touches '{o}', a GitHub org this machine may not ({LIST}). Nothing here may reach it. Do the rest, and say what was left out.", file=sys.stderr)
+            return 2
+    return 0
+
+sys.exit(main())

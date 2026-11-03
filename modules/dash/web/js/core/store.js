@@ -22,6 +22,9 @@ export const onTV = () => document.body.classList.contains("dt-page");
 export function getPref(k, dflt) { try { const v = localStorage.getItem(prefKey(k)); return v == null ? dflt : JSON.parse(v); } catch (e) { return dflt; } }
 export const setPref = (k, v) => localStorage.setItem(prefKey(k), JSON.stringify(v));
 export const can = c => !S.app.can || S.app.can.includes(c);
+// What the server says it has of the features designed ahead of it (/api/app "features"): stop, helper, knowledge, slack-door.
+// A feature it doesn't list stays out of the app, so nobody meets a button that can't work. The preview shim lists them all.
+export const built = f => (S.app.features || []).includes(f);
 export const setupDone = () => { const s = S.app.setup; return !s || ((s.signed_in || s.api_key) && s.has_posts); };
 
 // ---- change notification ----
@@ -47,7 +50,7 @@ export async function post(path, body) {
 
 // ---- ingest ----
 const ledgerAdd = (r, words) => { r.lc = words.join(" ").toLowerCase(); S.ledger.push(r); };
-const LOGTEXT = { delivered: "had queued posts handed to it mid-run", kill_dropped: "had its queued wakes dropped after a kill", paced: "start was paced", provider_held: "waits for its provider", fallback_held: "waits: no fallback has room", unknown_mention: "was mentioned, but nobody has that name", free_spawn_ignored: "tried to start agents from a free model; ignored", reaped: "was ended by the starter after going quiet", moved: "moved to another login", login_rejected: "hit a rejected login" };
+const LOGTEXT = { delivered: "had queued posts handed to it mid-run", kill_dropped: "had its queued wakes dropped after a kill", paced: "start was paced", provider_held: "waits for its provider", fallback_held: "waits: no fallback has room", unknown_mention: "was mentioned, but nobody has that name", free_spawn_ignored: "tried to start agents from a free model; ignored", reaped: "was ended by the starter after going quiet", moved: "moved to another login", login_rejected: "hit a rejected login", helper: "started as a helper: the agent asked was busy" };
 function logRow(e, t) {
   const k = e.event, n = e.name, a = { a: n };
   switch (k) {

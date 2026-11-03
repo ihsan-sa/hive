@@ -3,7 +3,7 @@ Slack as a plain way in, for people who want to send a message and get an answer
 
 **What a person sees.** They type in any channel the bot is in, or DM it. 👀 appears within seconds. The answer comes in the channel, or under a message if it answers that message, and the 👀 goes. With no answer after 3 minutes a status line appears under what they're waiting on, edited in place and removed when the answer comes. If the run ends with nothing addressed to them, its last post is sent anyway; if there is none, they're told it stopped. The same goes for a run that sent an interim message and then carried on: an unaddressed result is sent, and after 5 quiet minutes they're told it ended.
 
-**Handled here, with no model.** `status` and `stop` (with or without `!`). A nudge (`?`, `hello`, `any update`, a one-word ping) gets the agent's state while something runs. With nothing running, it wakes the agent if it's in a Slack thread or something is unanswered, and otherwise gets "I'm here" and starts nothing. These match the whole message only, so a sentence is always a message for the agent.
+**Handled here, with no model.** `status` and `stop` (with or without `!`). These match the whole message only, so anything else, a greeting or `test` included, is a message for the agent and never gets a canned reply.
 
 **How a message finds an agent.**
 - A channel is one board thread (`slack-<channel>`), for good. No model decides anything here.

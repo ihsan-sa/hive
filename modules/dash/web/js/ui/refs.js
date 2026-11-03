@@ -1,7 +1,7 @@
 // References to agents and threads. Real links (#agent/<name>, #comms/<thread>), so they open in a new tab,
 // show in the status bar, and work by keyboard. Status is shape + colour + the label in the tooltip.
 import { h, copyText } from "../core/dom.js";
-import { agentStatus, isAgent, isRunning, tierOf } from "../core/model.js";
+import { agentStatus, isAgent, isRunning, threadTitle, tierOf } from "../core/model.js";
 import { agentHref, threadHref } from "../core/router.js";
 import { status, tier } from "../core/status.js";
 import { statusDot } from "./kit.js";
@@ -30,7 +30,7 @@ export function threadRef(th, { strong } = {}) {
   if (!th) return null;
   const t = tier(tierOf(th));
   return h("a", { class: "ref", "data-kind": strong ? null : "thread", href: threadHref(th), title: `${th} · ${t.label}` },
-    h("span", { class: "ref-sw", "data-tone": t.tone, "aria-hidden": "true" }), h("span", { class: "ref-n" }, th));
+    h("span", { class: "ref-sw", "data-tone": t.tone, "aria-hidden": "true" }), h("span", { class: "ref-n" }, threadTitle(th)));
 }
 
 export function copyButton(text) {

@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# git-remote-cc-github-deny — the git remote helper a denied org's URL is routed to. `cc-github-deny install` writes a
+# url.insteadOf per listed org that rewrites its URLs to `cc-github-deny::…`, and git runs this for those. It speaks no
+# git protocol at all: it prints why and exits, so clone, fetch, ls-remote and push to that URL fail here, public or
+# private, before any credential is asked. git calls it as `<remote-name> <url>` or `<url> <url>`; the URL is the last.
+d=$(dirname -- "$(readlink -f -- "$0")")
+[ -x "$d/cc-github-deny" ] && exec "$d/cc-github-deny" refuse "${2:-${1:-}}"
+echo "cc-github-deny: refused — '${2:-${1:-}}' is under a GitHub org this box may not touch (git config routes it here; cc-github-deny is missing beside this helper)" >&2
+exit 1

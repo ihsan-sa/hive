@@ -1,0 +1,297 @@
+#!/usr/bin/env bash
+# cc-github-deny — the GitHub orgs this box may not touch, and the git and gh side of refusing them.
+# THE LIST is ~/.cc/github-deny (CC_GITHUB_DENY overrides the path): one org per line, # comments, matched
+# case-insensitively. The names are the box's identity, so they live in ~/.cc and never in this tree. No list, or
+# one that cannot be read, denies nothing — every layer passes, and only `status` says so.
+#   cc-github-deny list               the orgs, one per line, comments and blanks gone
+#   cc-github-deny check <text>...    rc 77 and one line naming the org and the list when any argument names a listed
+#                                     org AS AN OWNER — `<org>/…`, `orgs/<org>`, `github.com/<org>/…` — rc 0 otherwise.
+#                                     A repository merely called that under somebody else (`x/<org>`) is not the org.
+#   cc-github-deny get|store|erase    git's credential-helper protocol on stdin: `quit=true` for a listed owner, so git
+#                                     asks no other helper and the fetch or push fails naming the org; silent otherwise
+#   cc-github-deny refuse <url>       what git-remote-cc-github-deny prints for the URL git routed to it: the refusal
+#                                     naming the org (https://, git@github.com:, ssh://; any case), rc 1 — and, for an
+#                                     owner the list no longer names, that the git config is stale and install refreshes it
+#   cc-github-deny install            git config, idempotent — run it after editing the list (install.sh runs it too):
+#                                     this helper FIRST for https://github.com and https://gist.github.com, with
+#                                     credential.useHttpPath on so it sees the path; and ~/.cc/github-deny.gitconfig,
+#                                     included from ~/.gitconfig, holding one url.insteadOf per org and URL form onto
+#                                     the refusing remote helper. Nothing is written on a box with no list.
+#   cc-github-deny status             what is wired, what is on PATH, and whether the git config matches the list
+#   cc-github-deny selfcheck          every layer below, on a fake list, a HOME and a PATH of its own; no network
+#
+# THE LAYERS, and what each one covers. None of them can break an allowed call: each answers only for a listed org.
+#   1. git, by URL: `install` rewrites every `https://github.com/<org>/…` (and the http, git@, ssh:// and git:// forms,
+#      in the case the list gives, lower and upper) to `cc-github-deny::…`, and git hands that to
+#      git-remote-cc-github-deny, which prints the refusal and exits — so clone, fetch, ls-remote and push all fail
+#      here, PUBLIC repos included, before any credential is asked. Prefix match, so a case the list does not spell
+#      walks past it — to layer 2 or 4.
+#   2. git, by credential: any letter case. Only a call that asks for a credential (a private repo, a push) gets here.
+#   3. gh: the `gh` beside this file is a shim ahead of the real one on PATH. A call naming a listed org in its
+#      arguments, in GH_REPO or in the cwd's remotes is refused; everything else is the real gh. The body, title,
+#      subject or notes of a `pr|issue` or `release` write is text, not a target, and is left out of the check. `/usr/bin/gh` by
+#      full path walks past it — to layer 4.
+#   4. a session's Bash line: cc-github-deny-hook reads the same list, for EVERY Claude session, and refuses a line that names a listed
+#      org in a github.com URL (git, curl, python, anything) or in a gh call. It is the only layer that sees a raw
+#      API call.
+# The starter wires all of this whenever a list is there (wire_deny). No list: nothing is linked or written.
+set -uo pipefail
+LIST=${CC_GITHUB_DENY:-$HOME/.cc/github-deny}
+INC=${CC_GITHUB_DENY_GITCONFIG:-$HOME/.cc/github-deny.gitconfig}
+ME=$(readlink -f -- "$0")
+
+orgs(){   # the list, cleaned: one org per line; a line that is not an org name ([A-Za-z0-9-]) is skipped
+  [ -r "$LIST" ] || return 0
+  local l
+  while IFS= read -r l || [ -n "$l" ]; do
+    l=${l%%#*}; l=${l//[[:space:]]/}
+    [ -n "$l" ] || continue
+    case $l in *[!A-Za-z0-9-]*) continue;; esac
+    printf '%s\n' "$l"
+  done < "$LIST"
+}
+owner_re(){   # $1 org [arg] → the ERE (use with -i) that finds it in OWNER position and nowhere else. In an ARGUMENT a
+  # space after the name makes it prose (`-t "zork rules"`), on a line it ends the name (`gh repo list zork --limit 5`).
+  local t='(/|[^A-Za-z0-9_.-]|$)'; [ "${2:-}" = arg ] && t='(/|[^A-Za-z0-9_. -]|$)'
+  printf '(^|[^A-Za-z0-9_./-]|(^|[^A-Za-z0-9_.-])(orgs|users|repos)/|github(usercontent)?\.com[/:])%s%s' "$1" "$t"
+}
+url_owner(){   # $1 url → host and owner on stdout as "host owner"; a local path has no host, so nothing to judge
+  local a=$1 p h
+  p=${a#*://}; p=${p#*@}
+  case $p in *:*) h=${p%%:*}; p=${p#*:};; *) h=${p%%/*}; p=${p#*/};; esac
+  p=${p#/}
+  case $p in repos/*|orgs/*|users/*) p=${p#*/};; esac   # the API's and the site's own org-scoped paths
+  printf '%s %s\n' "${h,,}" "${p%%/*}"
+}
+listed(){   # $1 owner → rc 0 and the org as written on the list
+  local o
+  [ -n "$1" ] || return 1
+  while IFS= read -r o; do [ "${o,,}" = "${1,,}" ] && { printf '%s\n' "$o"; return 0; }; done < <(orgs)
+  return 1
+}
+github_host(){ case ${1,,} in github.com|*.github.com|*.githubusercontent.com) return 0;; esac; return 1; }
+
+case "${1:-}" in
+  list) orgs; exit 0;;
+  check) shift
+    while IFS= read -r org; do
+      hit=$(printf '%s\n' "$@" | grep -m1 -iE "$(owner_re "$org" arg)") || continue
+      echo "cc-github-deny: refused — '$hit' names '$org', a GitHub org this box may not touch ($LIST)" >&2; exit 77
+    done < <(orgs)
+    exit 0;;
+  refuse) u=${2:-}
+    # git routed this URL here because `install` listed its owner; say so — and say if the list has moved on since
+    read -r host owner <<<"$(url_owner "$u")"
+    if github_host "$host" && org=$(listed "$owner"); then
+      echo "cc-github-deny: refused — $u is under '$org', a GitHub org this box may not touch ($LIST)" >&2
+    else
+      echo "cc-github-deny: refused — $u is under '${owner:-?}', which git config still routes here though the list ($LIST) no longer names it: run 'cc-github-deny install' to refresh the config" >&2
+    fi
+    exit 1;;
+  get|store|erase)
+    host=; path=
+    while IFS= read -r line; do
+      case $line in host=*) host=${line#host=};; path=*) path=${line#path=};; '') break;; esac
+    done
+    [ "$1" = get ] || exit 0
+    github_host "$host" || exit 0
+    org=$(listed "${path%%/*}") || exit 0
+    echo "cc-github-deny: refused — $host/$path is under '$org', a GitHub org this box may not touch ($LIST)" >&2
+    echo quit=true; exit 0;;
+  install)
+    if [ ! -r "$LIST" ] && [ ! -e "$INC" ]; then echo "cc-github-deny: no list at $LIST — nothing is denied and nothing was written"; exit 0; fi
+    changed=""
+    helper=$HOME/bin/cc-github-deny   # the installed link, which outlives a checkout that moves; this file itself otherwise
+    [ "$(readlink -f -- "$helper" 2>/dev/null)" = "$ME" ] || helper=$ME
+    for url in https://github.com https://gist.github.com; do
+      cur=$(git config --global --get-all "credential.$url.helper" 2>/dev/null) || cur=""
+      # ours first, after the `helper =` that empties whatever a lower level set; every other helper kept, in its order;
+      # an older copy of this helper (another path) dropped, which is what moves a box off a hand-installed one
+      want=$(printf '\n!%s\n' "$helper"; grep -v -e '^$' -e 'cc-github-deny' <<<"$cur")
+      [ "$cur" = "$want" ] && continue
+      git config --global --unset-all "credential.$url.helper" 2>/dev/null
+      while IFS= read -r h; do git config --global --add "credential.$url.helper" "$h"; done <<<"$want"
+      changed="$changed credential.$url"
+    done
+    # A section for one org (`credential.https://github.com/<org>`) must stay below the host's: the host's `helper =` empties
+    # the helper list, and git reads in file order. Rewriting the host's helpers moved them to the end of the file, which cut
+    # off that org's token, so anything now above them moves back below. Values and their order are kept.
+    while :; do
+      names=$(git config --global --name-only --list 2>/dev/null)
+      last=$(grep -inE '^credential\.https://(gist\.)?github\.com\.helper$' <<<"$names" | tail -1 | cut -d: -f1)
+      sec=$(grep -inE '^credential\.https://(gist\.)?github\.com/' <<<"$names" | awk -F: -v l="${last:-0}" '$1<l{print substr($0,index($0,":")+1);exit}' | sed 's/\.[^.]*$//')
+      [ -n "$sec" ] || break
+      kv=$(grep -iE "^$(sed 's/[.[\*^$/]/\\&/g' <<<"$sec")\.[^.]*$" <<<"$names" | awk '!s[$0]++')
+      declare -A vals=(); while IFS= read -r k; do vals[$k]=$(git config --global --get-all "$k"); done <<<"$kv"
+      git config --global --remove-section "$sec" || break
+      while IFS= read -r k; do while IFS= read -r v; do git config --global --add "$k" "$v"; done <<<"${vals[$k]}"; done <<<"$kv"
+      unset vals; changed="$changed $sec"
+    done
+    [ "$(git config --global --get credential.useHttpPath 2>/dev/null)" = true ] || { git config --global credential.useHttpPath true; changed="$changed useHttpPath"; }
+    # the include: regenerated whole from the list, so an org taken off the list comes out of git config too
+    mkdir -p "${INC%/*}"; tmp=$(mktemp "${INC}.XXXXXX") || exit 1
+    { echo "# written by 'cc-github-deny install' from $LIST — do not edit; edit the list and run it again"
+      while IFS= read -r org; do
+        printf '%s\n' "$org" "${org,,}" "${org^^}" | awk '!s[$0]++' | while IFS= read -r o; do
+          for form in "https://github.com/$o/" "http://github.com/$o/" "git@github.com:$o/" "ssh://git@github.com/$o/" "git://github.com/$o/"; do
+            printf '[url "cc-github-deny::%s"]\n\tinsteadOf = %s\n' "$form" "$form"
+          done
+        done
+      done < <(orgs); } > "$tmp"
+    if cmp -s "$tmp" "$INC"; then rm -f "$tmp"; else mv -f "$tmp" "$INC"; changed="$changed $INC"; fi
+    # shellcheck disable=SC2088  # git expands the ~ itself, and a path that names no user follows HOME wherever it goes
+    incpath='~/.cc/github-deny.gitconfig'; [ "$INC" = "$HOME/.cc/github-deny.gitconfig" ] || incpath=$INC
+    git config --global --get-all include.path 2>/dev/null | grep -qxF -- "$incpath" \
+      || { git config --global --add include.path "$incpath"; changed="$changed include.path"; }
+    [ -n "$changed" ] && echo "cc-github-deny: git config updated:$changed ($(orgs | wc -l) orgs)"
+    exit 0;;
+  status)
+    if [ -r "$LIST" ]; then echo "list: $LIST ($(orgs | wc -l) orgs)"; else echo "list: none at $LIST — nothing is denied"; fi
+    for url in https://github.com https://gist.github.com; do
+      echo "credential.$url.helper:"; git config --global --get-all "credential.$url.helper" 2>/dev/null | sed 's/^/  /'
+    done
+    echo "credential.useHttpPath: $(git config --global --get credential.useHttpPath 2>/dev/null || echo unset)"
+    if git config --global --get-all include.path 2>/dev/null | grep -qE '(^|/)\.cc/github-deny\.gitconfig$'; then echo "include: $INC"; else echo "include: NOT in ~/.gitconfig — run 'cc-github-deny install'"; fi
+    if [ -f "$INC" ]; then
+      have=$(grep -oE 'insteadOf = https://github\.com/[^/]+/' "$INC" | sed 's|.*/\([^/]*\)/$|\1|' | tr '[:upper:]' '[:lower:]' | sort -u)
+      want=$(orgs | tr '[:upper:]' '[:lower:]' | sort -u)
+      [ "$have" = "$want" ] && echo "insteadOf: matches the list" || echo "insteadOf: STALE against the list — run 'cc-github-deny install'"
+    fi
+    echo "gh on PATH:"; IFS=:; for p in $PATH; do [ -x "$p/gh" ] || continue
+      if [ "$(readlink -f -- "$p/gh")" = "${ME%/*}/gh" ]; then echo "  $p/gh (this shim)"; else echo "  $p/gh"; fi; done; unset IFS
+    echo "remote helper: $(command -v git-remote-cc-github-deny || echo 'NOT on PATH — the url.insteadOf layer cannot refuse')"
+    exit 0;;
+  selfcheck) ;;
+  *) sed -n '2,/^set -uo/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//' >&2; exit 2;;
+esac
+
+# ---- selfcheck ----------------------------------------------------------------------------------------------
+# Every case builds its own state — a fake list, a HOME, a PATH with a fake real gh — and asserts BOTH sides: the
+# listed org refused, and the neighbour that must still pass. Nothing here reads the box's list or reaches GitHub:
+# the one allowed git call is pointed at a proxy on a closed local port and judged on what it does NOT say.
+unset GIT_CONFIG_GLOBAL XDG_CONFIG_HOME GIT_CONFIG_NOSYSTEM GH_REPO
+T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
+n=0; f=0
+ok(){ n=$((n+1)); if [ "$2" = 0 ]; then echo "  ✓ $1"; else f=$((f+1)); echo "  ✗ $1"; fi; }
+D=${ME%/*}; H=$T/home; L=$T/deny; NOL=$T/no-such-list
+mkdir -p "$H/bin" "$T/real" "$T/bin"
+printf '# fake orgs for the selfcheck\nAcme-Denied   # the case the list spells\nzork\nnot an org name!\n\n' > "$L"
+for t in cc-github-deny gh git-remote-cc-github-deny; do ln -s "$D/$t" "$T/bin/$t"; done
+printf '#!/bin/sh\necho "real gh: $*"\n' > "$T/real/gh"; chmod +x "$T/real/gh"
+P="$T/bin:$T/real:/usr/bin:/bin"
+run(){ env -i HOME="$H" PATH="$P" CC_GITHUB_DENY="${GL:-$L}" GIT_TERMINAL_PROMPT=0 "$@"; }   # a clean env: the box's own never leaks in
+
+# 1. the list, read: comments, blanks and a line that is not a name are dropped; a missing list is empty and rc 0
+got=$(run cc-github-deny list | tr '\n' ' '); none=$(GL=$NOL run cc-github-deny list; echo "rc=$?")
+r=1; [ "$got" = "Acme-Denied zork " ] && [ "$none" = "rc=0" ] && r=0
+ok "list: two orgs out of a commented list; a missing list is empty, not an error" $r
+
+# 2. check: an owner position is refused in any case, naming the org and the list; a repo of that name under
+#    somebody else, a bare word in prose, and an unlisted owner all pass. No list: everything passes.
+e=$T/e2
+r=0
+run cc-github-deny check repo clone acme-denied/x 2>"$e"; [ $? = 77 ] && grep -qF "'acme-denied/x' names 'Acme-Denied'" "$e" && grep -qF "($L)" "$e" || r=1
+run cc-github-deny check api orgs/ZORK/repos 2>/dev/null;               [ $? = 77 ] || r=1
+run cc-github-deny check pr list -R "https://github.com/Zork/y" 2>/dev/null; [ $? = 77 ] || r=1
+run cc-github-deny check repo clone other/zork 2>/dev/null;             [ $? = 0 ] || r=1     # a repo called zork is not the org
+run cc-github-deny check issue create -t "zork rules" 2>/dev/null;      [ $? = 0 ] || r=1     # a word, not an owner
+run cc-github-deny check repo clone zorkish/x 2>/dev/null;              [ $? = 0 ] || r=1     # a longer name is another org
+run cc-github-deny check api user 2>/dev/null;                          [ $? = 0 ] || r=1
+GL=$NOL run cc-github-deny check repo clone acme-denied/x 2>/dev/null;  [ $? = 0 ] || r=1
+ok "check: owner positions refused case-insensitively with the org and the list named; a same-named repo, a word and a longer name pass; no list, nothing refused" $r
+
+# 3. refuse (what the remote helper prints): every URL form, any case, names the org as the list spells it and the list;
+#    a URL whose owner is no longer listed still fails, and says the config is stale and what refreshes it
+r=0
+for u in https://github.com/acme-denied/x.git git@github.com:ACME-DENIED/x ssh://git@github.com/Acme-Denied/x git://github.com/acme-denied/x http://github.com/Acme-Denied/x; do
+  out=$(run cc-github-deny refuse "$u" 2>&1); rc=$?
+  [ "$rc" = 1 ] && grep -qF "$u is under 'Acme-Denied'" <<<"$out" && grep -qF "($L)" <<<"$out" || { r=1; echo "      $u: rc $rc, $out"; }; done
+out=$(run cc-github-deny refuse https://github.com/ZORK/y 2>&1); grep -qF "under 'zork'" <<<"$out" || r=1
+for u in https://github.com/other/zork https://github.com/gone-org/x; do
+  out=$(run cc-github-deny refuse "$u" 2>&1); rc=$?
+  [ "$rc" = 1 ] && grep -qF "no longer names it" <<<"$out" && grep -qF "cc-github-deny install" <<<"$out" || { r=1; echo "      $u: rc $rc, $out"; }; done
+ok "refuse: five URL forms name the org as listed and the list; an owner the list no longer names still fails and names the install that clears the stale config" $r
+
+# 4. the credential helper: quit=true and the reason for a listed owner, nothing for anyone else or another host;
+#    store and erase say nothing
+cred(){ printf 'protocol=https\nhost=%s\npath=%s\n\n' "$1" "$2" | run cc-github-deny "${3:-get}" 2>"$T/e4"; }
+r=0
+[ "$(cred github.com acme-denied/x.git)" = quit=true ] && grep -qF "under 'Acme-Denied'" "$T/e4" && grep -qF "($L)" "$T/e4" || r=1
+[ -z "$(cred github.com acme-ok/x.git)" ] && [ ! -s "$T/e4" ] || r=1
+[ -z "$(cred gitlab.com zork/x.git)" ] || r=1
+[ -z "$(cred github.com zork/x.git store)" ] && [ -z "$(cred github.com zork/x.git erase)" ] || r=1
+[ -z "$(GL=$NOL cred github.com zork/x.git)" ] || r=1
+ok "credential helper: quit=true naming the org for a listed owner; silent for another owner, another host, store, erase and no list" $r
+
+# 5. install, on a ~/.gitconfig in the hand-wired shape: this helper's path replaces the old copy's, gh's own helper is
+#    kept in its place, useHttpPath is on, the include is added once, and the include holds every org, case and form.
+#    A second run writes nothing. An org taken off the list leaves the include. A HOME with no list gets nothing.
+printf '[user]\n\tname = t\n[credential "https://github.com"]\n\thelper = \n\thelper = !/old/place/cc-github-deny\n\thelper = !/usr/bin/gh auth git-credential\n' > "$H/.gitconfig"
+mkdir -p "$H/.cc"
+r=0
+run cc-github-deny install >/dev/null 2>&1 || r=1
+hl=$(run git config --global --get-all credential.https://github.com.helper | tr '\n' '|')
+[ "$hl" = "|!$D/cc-github-deny|!/usr/bin/gh auth git-credential|" ] || { r=1; echo "      helpers: $hl"; }
+gl=$(run git config --global --get-all credential.https://gist.github.com.helper | tr '\n' '|')
+[ "$gl" = "|!$D/cc-github-deny|" ] || { r=1; echo "      gist helpers: $gl"; }
+[ "$(run git config --global credential.useHttpPath)" = true ] || r=1
+[ "$(run git config --global --get-all include.path | grep -cxF -- '~'/.cc/github-deny.gitconfig)" = 1 ] || r=1
+inc=$H/.cc/github-deny.gitconfig
+for form in https://github.com/Acme-Denied/ https://github.com/acme-denied/ https://github.com/ACME-DENIED/ git@github.com:zork/ ssh://git@github.com/ZORK/ git://github.com/zork/ http://github.com/zork/; do
+  grep -qxF "	insteadOf = $form" "$inc" || { r=1; echo "      include lacks $form"; }; done
+before=$(cat "$H/.gitconfig" "$inc"); run cc-github-deny install >/dev/null 2>&1
+[ "$before" = "$(cat "$H/.gitconfig" "$inc")" ] || { r=1; echo "      a second install changed the config"; }
+printf 'Acme-Denied\n' > "$T/deny5"; GL=$T/deny5 run cc-github-deny install >/dev/null 2>&1
+! grep -qi zork "$inc" && grep -q Acme-Denied "$inc" || { r=1; echo "      zork stayed in the include"; }
+H5=$T/home5; mkdir -p "$H5"; out=$(env -i HOME="$H5" PATH="$P" CC_GITHUB_DENY="$NOL" "$D/cc-github-deny" install)
+[ ! -e "$H5/.gitconfig" ] && [ ! -e "$H5/.cc/github-deny.gitconfig" ] && grep -q "no list" <<<"$out" || { r=1; echo "      no-list install wrote something: $out"; }
+ok "install: helper path replaced and gh's kept, useHttpPath on, include added once with every org/case/form; idempotent; an org removed leaves; no list writes nothing" $r
+
+# 6. git itself, through that config — in a HOME of this case's own, wired by install: clone, ls-remote and push to a
+#    listed org fail HERE naming the org and the list — public or private, any URL form, no credential asked, nothing
+#    reaches the network; an unlisted owner's URL is not touched (it goes to the network, which a closed local proxy
+#    port stands in for, and the refusal is absent).
+H=$T/home6; mkdir -p "$H/.cc"; printf '[user]\n\tname = t\n' > "$H/.gitconfig"
+run cc-github-deny install >/dev/null 2>&1
+r=0
+for u in https://github.com/acme-denied/pub.git https://github.com/ZORK/priv git@github.com:Acme-Denied/x ssh://git@github.com/zork/x; do
+  run git ls-remote "$u" >/dev/null 2>"$T/e6" && { r=1; echo "      ls-remote passed: $u"; }
+  grep -qF "GitHub org this box may not touch ($L)" "$T/e6" && grep -qiF "under '" "$T/e6" || { r=1; echo "      ls-remote $u: $(head -c 120 "$T/e6")"; }
+done
+run git clone https://github.com/zork/x "$T/c6" >/dev/null 2>"$T/e6" && r=1
+grep -qF "under 'zork'" "$T/e6" && [ ! -d "$T/c6" ] || { r=1; echo "      clone: $(head -c 120 "$T/e6")"; }
+git init -q "$T/p6" && git -C "$T/p6" -c user.name=t -c user.email=t@x commit -q --allow-empty -m x && git -C "$T/p6" remote add origin https://github.com/Acme-Denied/x.git
+run git -C "$T/p6" push origin HEAD:refs/heads/t >/dev/null 2>"$T/e6" && r=1
+grep -qF "under 'Acme-Denied'" "$T/e6" || { r=1; echo "      push: $(head -c 120 "$T/e6")"; }
+run git -c http.proxy=http://127.0.0.1:1 ls-remote https://github.com/other/acme-denied.git >/dev/null 2>"$T/e6"
+grep -qF cc-github-deny "$T/e6" && { r=1; echo "      an unlisted owner was routed to the refusal: $(head -c 120 "$T/e6")"; }
+ok "git: ls-remote, clone and push to a listed org fail before the network, naming the org and the list, in four URL forms and both cases; another owner's URL is left alone" $r
+
+# 7. the gh shim: refused on an argument, on GH_REPO and on the cwd's remote, each naming the org and the list; the
+#    real gh runs for everything else, a same-named repo under another owner included; no list, everything runs.
+r=0
+run gh repo clone acme-denied/x >/dev/null 2>"$T/e7"; [ $? = 77 ] && grep -qF "names 'Acme-Denied'" "$T/e7" && grep -qF "($L)" "$T/e7" || { r=1; echo "      arg: $(head -c 120 "$T/e7")"; }
+run env GH_REPO=Zork/y gh pr list >/dev/null 2>"$T/e7"; [ $? = 77 ] && grep -qF "names 'zork'" "$T/e7" || { r=1; echo "      GH_REPO: $(head -c 120 "$T/e7")"; }
+mkdir -p "$T/w7" && git init -q "$T/w7" && git -C "$T/w7" remote add upstream https://github.com/ZORK/y.git
+(cd "$T/w7" && run gh pr list >/dev/null 2>"$T/e7"); [ $? = 77 ] && grep -qF "names 'zork'" "$T/e7" || { r=1; echo "      cwd remote: $(head -c 120 "$T/e7")"; }
+[ "$(run gh api user 2>&1)" = "real gh: api user" ] || r=1
+[ "$(run gh repo clone other/zork 2>&1)" = "real gh: repo clone other/zork" ] || r=1
+mkdir -p "$T/o7" && git init -q "$T/o7" && git -C "$T/o7" remote add origin https://github.com/Acme-Denied/x.git
+[ "$(cd "$T/o7" && run gh pr list 2>&1)" = "real gh: pr list" ] && r=1   # origin is a listed org: refused there
+[ "$(GL=$NOL run gh repo clone acme-denied/x 2>&1)" = "real gh: repo clone acme-denied/x" ] || r=1
+ok "gh shim: an argument, GH_REPO and a cwd remote naming a listed org are refused with the org and the list; the real gh runs for the rest; no list, it runs for all" $r
+
+# 8. a PR body is text, not a target (2026-09-12: the deny row's own `cc done` could not open its PR, its brief named
+#    the orgs). The text flags of a pr/issue/release write pass in every spelling; a target beside them is still
+#    refused, and the same short flag under another command is still read.
+r=0
+out=$(run gh pr create --title "Zork/x stays out" --body "refuse acme-denied/x and zork/y" 2>&1); [ $? = 0 ] && [ "${out#real gh: pr create}" != "$out" ] || { r=1; echo "      body: $out"; }
+out=$(run gh pr comment 5 --body=zork/x -bacme-denied/y -t zork/z 2>&1); [ $? = 0 ] || { r=1; echo "      comment: $out"; }
+run gh pr comment 5 --body "zork/x" -R zork/x >/dev/null 2>"$T/e8"; [ $? = 77 ] && grep -qF "names 'zork'" "$T/e8" || { r=1; echo "      -R beside a body: $(head -c 120 "$T/e8")"; }
+run gh release create v1 --notes ok acme-denied/x >/dev/null 2>&1; [ $? = 77 ] || { r=1; echo "      positional beside notes passed"; }
+run gh pr diff -n https://github.com/zork/x/pull/1 >/dev/null 2>&1; [ $? = 77 ] || { r=1; echo "      -n outside a write passed"; }
+run gh pr comment -- -b https://github.com/zork/x/pull/1 >/dev/null 2>&1; [ $? = 77 ] || { r=1; echo "      a -b after -- passed"; }
+ok "gh shim: the body, title, subject and notes of a pr/issue/release write are text and pass; a -R or positional target beside them, and the same flag under another command, are still refused" $r
+
+echo "cc-github-deny selfcheck: $((n - f)) passed, $f failed"
+[ "$f" = 0 ] || exit 1

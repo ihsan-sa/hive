@@ -2,7 +2,7 @@
 // agentPage(name) is the whole page; the side panel (ui/panel.js) draws the same thing in a narrower container.
 import { h } from "../core/dom.js";
 import { S, OUTSIDE, SYS, jget } from "../core/store.js";
-import { agentCard, agentState, agentStatus, isAgent, isRunning, sEnd } from "../core/model.js";
+import { agentCard, agentState, agentStatus, isAgent, isRunning, sEnd, displayText } from "../core/model.js";
 import { dur, mdPlain, money, pct, plural, short, stamp, toks } from "../core/format.js";
 import { threadHref } from "../core/router.js";
 import { metrics, cols } from "../templates.js";
@@ -79,7 +79,7 @@ export function agentPage(n, host = "page") {
       actions: [button("All their posts", null, { href: threadHref("@" + n), size: "s" }), L ? threadRef(L.thread) : null, L ? killButton(n) : null],
       meta: [st.key === "outside" ? null : statusLabel(st.key, state || st.label || null, { live: isRunning(n) }), ...line],
       after: L && (task || L.said) ? h("dl", { class: "ac-dl" },
-        task ? [h("dt", null, "Asked"), h("dd", null, `${task.from}: `, short(mdPlain(task.text), 600))] : null,
+        task ? [h("dt", null, "Asked"), h("dd", null, `${task.from === "person" && S.app.app ? "you" : task.from}: `, short(mdPlain(displayText(task)), 600))] : null,
         L.said ? [h("dt", null, "Said"), h("dd", null, L.said)] : null) : null,
     }),
     sections: [

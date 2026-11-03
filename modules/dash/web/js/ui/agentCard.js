@@ -3,7 +3,7 @@
 // then one quiet line of what it runs on. On a phone it folds to name, state and the now line; tap to open.
 import { h } from "../core/dom.js";
 import { S } from "../core/store.js";
-import { agentState, agentCard as cardRows } from "../core/model.js";
+import { agentState, agentCard as cardRows , displayText } from "../core/model.js";
 import { dur, firstSentence, now } from "../core/format.js";
 import { status } from "../core/status.js";
 import { killButton } from "../actions.js";
@@ -21,7 +21,7 @@ export function agentCard(a, { open, onToggle } = {}) {
       h("span", { class: "ac-st", title: S_.hint }, st.text)),
     h("p", { class: "ac-now clamp-2" }, a.doing || "Starting"),
     h("dl", { class: "ac-dl" },
-      h("dt", null, "Asked"), h("dd", { class: "clamp-2", title: task ? task.text : null }, a.from ? a.from + ": " : "", firstSentence(task && task.text)),
+      h("dt", null, "Asked"), h("dd", { class: "clamp-2", title: task ? task.text : null }, a.from ? (a.from === "person" && S.app.app ? "you" : a.from) + ": " : "", firstSentence(task && displayText(task))),
       a.said ? [h("dt", null, "Said"), h("dd", { class: "clamp-2", title: a.said }, firstSentence(a.said))] : null),
     h("footer", { class: "ac-f" },
       rows.map(r => h("span", { title: `${r.k}: ${r.v}${r.hint ? " · " + r.hint : ""}` }, r.short)),

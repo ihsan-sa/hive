@@ -1,6 +1,6 @@
 // Jobs: the machine and the heavy queue. /api/jobs is polled only while this view is open.
 import { h, selecting } from "../core/dom.js";
-import { jget } from "../core/store.js";
+import { S, jget } from "../core/store.js";
 import { ago, clock, gb, now, plural, secs } from "../core/format.js";
 import { metrics } from "../templates.js";
 import { empty, pageHeader, section, share, stats, statusLabel } from "../ui/kit.js";
@@ -8,6 +8,8 @@ import { agentRef } from "../ui/refs.js";
 import { table } from "../ui/table.js";
 
 const J = { v: null, failed: false };
+// In the app: the same four, in plain words. The queue line goes when there's no queue.
+const APP_OWNERS = { jobs: "Big jobs in the queue", outside: "What the agents are running", agents: "The agents themselves", other: "Everything else on the computer" };
 const OWNERS = [["jobs", "Queue jobs", "tier1"], ["outside", "Agents' work outside the queue", "held"], ["agents", "The agents themselves", "tier2"], ["other", "Everything else", "other"]];
 
 const who = n => (n && n !== "?" ? agentRef(n) : "?");
@@ -45,12 +47,22 @@ function split(V) {
       share(OWNERS.map(([k, l, tone]) => ({ key: k, label: l, tone, value: V.split[k][field], text: fmt(V.split[k][field]) })), { total, label: `${label}: ${fmt(used)} of ${fmt(total)}${unit}`, legend: false }));
   };
   const memTotal = Math.max(V.held, OWNERS.reduce((a, [k]) => a + V.split[k].mem, 0)) || 1;
+  const own = OWNERS.filter(([k]) => !(S.app.app && k === "jobs" && !hasQueue(V))).map(([k, l, tone]) => [k, S.app.app ? APP_OWNERS[k] : l, tone]);
   return [bar("CPU", "cores", V.machine.cpus, " threads", v => v.toFixed(1)), bar("Memory", "mem", memTotal, "", gb),
-    h("div", { class: "legend" }, OWNERS.map(([k, l, tone]) => h("span", { "data-tone": tone }, h("i", { class: "sw" }), `${l}: ${V.split[k].cores.toFixed(1)} threads, ${gb(V.split[k].mem)}`)))];
+    h("div", { class: "legend" }, own.map(([k, l, tone]) => h("span", { "data-tone": tone }, h("i", { class: "sw" }), `${l}: ${V.split[k].cores.toFixed(1)} threads, ${gb(V.split[k].mem)}`)))];
+}
+
+/** The queue tool is installed: it has slots, or something has used it. The app's install doesn't include it. */
+const hasQueue = V => V.slots > 0 || V.running.length || V.queued.length || V.done.length;
+/** The app's answer: is the computer coping? */
+function machineAnswer(T) {
+  const M = T.mem, cpu = 100 - T.busy.idle - T.busy.iowait, free = gb(M.MemAvailable);
+  const tight = M.MemAvailable < 2000 || T.busy.iowait >= 30 || T.load >= T.cpus * 1.5;
+  return { text: tight ? `The computer is busy: ${cpu}% CPU, ${free} of memory free. Agents may be slow.` : `The computer has room: ${cpu}% CPU in use, ${free} of memory free.`, tone: tight ? "warn" : null };
 }
 
 export default {
-  id: "jobs", label: "Jobs", tab: true,
+  id: "jobs", label: () => (S.app.app ? "This machine" : "Jobs"), about: "how busy the computer is", tab: true,
   poll: {
     every: 3000,
     async run(ctx) {
@@ -61,32 +73,33 @@ export default {
   render() {
     const V = J.v;
     if (!V) return h("div", { class: "page" }, J.failed ? empty("Couldn't read the job data.", { kind: "error" }) : empty("Reading…", { kind: "loading" }));
-    const t = now() / 1e3, head = headline(V);
+    const t = now() / 1e3, app = S.app.app, q = hasQueue(V), head = app ? machineAnswer(V.machine) : headline(V);
     let pos = 0;
     return metrics({
-      header: pageHeader({ title: "Jobs", lead: head.text, tone: head.tone,
+      header: pageHeader({ title: app ? "This machine" : "Jobs", lead: head.text, tone: head.tone,
+        after: app && !q ? h("p", { class: "ph-meta" }, "The queue for big jobs isn't installed here, so agents run their work directly. Its sections show once it is.") : null,
         meta: [J.failed ? "Couldn't refresh: this may be out of date" : `Updated ${clock(V.at * 1e3)}`, "CPU in threads in use, averaged since the last refresh"] }),
       sections: [
         section({ title: "The machine" }, stats(tiles(V.machine))),
         section({ title: "Who's using it", note: "Memory is what's in use, RAM plus swap. The unfilled part of its bar is the kernel, shared memory and tmpfs." }, split(V)),
-        section({ title: "Running", note: `${V.running.length} of ${V.slots} slots, longest first` }, table({
+        ...(app && !q ? [] : [section({ title: "Running", note: `${V.running.length} of ${V.slots} slots, longest first` }, table({
           rows: V.running, key: r => r.lane + r.since, empty: "Nothing running in the queue.",
           columns: [col("Agent", r => who(r.agent)), col("Lane", r => r.lane), col("Running", r => secs(t - r.since)), num("Threads", r => r.cores.toFixed(1)), num("Memory", r => gb(r.mem)), cmd],
         })),
         section({ title: "Queued", note: "in the order they'll start" }, table({
           rows: V.queued, key: q => q.agent + q.since + q.cmd, empty: "The queue is empty.",
           columns: [col("#", q => (q.first ? "first lane" : String(++pos))), col("Agent", q => who(q.agent)), col("Waiting", q => secs(t - q.since)), cmd],
-        })),
-        section({ title: "Outside the queue", note: "the queue's limits don't apply to these" }, table({
+        }))]),
+        section({ title: app ? "Big work the agents are running" : "Outside the queue", note: app ? null : "the queue's limits don't apply to these" }, table({
           rows: V.outside, key: o => o.who, empty: "Nothing big outside the queue.",
           columns: [col("Who", o => (o.agent ? who(o.who) : o.who)), num("Threads", o => o.cores.toFixed(1)), num("Memory", o => gb(o.mem)), num("Processes", o => o.procs), { ...cmd, label: "Biggest command" }],
         })),
-        section({ title: "Just finished", note: "last 10 queue jobs" }, table({
+        ...(app && !q ? [] : [section({ title: "Just finished", note: "last 10 queue jobs" }, table({
           rows: V.done, key: d => d.end + d.cmd, empty: "None yet.",
           columns: [col("Finished", d => ago(d.end * 1e3)), col("Agent", d => who(d.agent)), col("Waited", d => secs(d.waited)), col("Ran", d => secs(d.ran)),
             col("Result", d => (d.rc ? statusLabel("error", `failed (${d.rc})`) : statusLabel("ok"))), cmd],
-        })),
-      ],
+        }))]),
+      ].filter(Boolean),
     });
   },
 };

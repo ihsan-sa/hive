@@ -82,7 +82,7 @@ export function mount(container, tree) {
 }
 
 // ---- events: one delegated listener per type; handlers live on nodes as _on and survive morph ----
-const TYPES = ["click", "input", "change", "keydown", "submit"];
+const TYPES = ["click", "input", "change", "keydown", "submit", "paste", "dragover", "dragleave", "drop", "focusout"];
 export function delegate(root = document) {
   for (const type of TYPES) root.addEventListener(type, ev => {
     for (let n = ev.target; n && n !== root; n = n.parentNode) {

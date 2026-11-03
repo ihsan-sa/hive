@@ -14,7 +14,12 @@ export const STATUS = {
   killed:   { label: "killed",       tone: "quiet", shape: "diamond", hint: "killed from here" },
   ended:    { label: "ended",        tone: "ended", shape: "dot",     hint: "finished its turn; a post wakes it" },
   none:     { label: "hasn't run",   tone: "ended", shape: "dot",     hint: "" },
-  outside:  { label: "",             tone: "ink",   shape: "diamond", hint: "you, the box, or other Hives" },
+  // conversations, for the person
+  asks:     { label: "waiting for your answer", tone: "info", shape: "square", hint: "an agent asked you something and is waiting" },
+  foryou:   { label: "new reply for you", tone: "info", shape: "dot", hint: "an agent wrote to you since you last opened this" },
+  done:     { label: "done", tone: "ended", shape: "dot", hint: "nobody is on it; a message wakes the last agent" },
+  sending:  { label: "sending", tone: "quiet", shape: "ring", hint: "" },
+  outside:  { label: "",             tone: "ink",   shape: "diamond", hint: "you, or someone outside this hive" },
   // logins and providers
   inuse:    { label: "in use",       tone: "good",  shape: "dot",     hint: "the starter can give it new runs" },
   paused:   { label: "paused",       tone: "warn",  shape: "half",    hint: "no new runs until resumed" },
