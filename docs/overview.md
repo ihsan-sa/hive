@@ -38,11 +38,11 @@ The diagram is drawn from [arch.json](arch.json). To change it, edit that file a
 
 macOS or Linux:
 
-    curl -fsSL https://hive.ihsan.cc/install.sh | sh
+    curl -fsSL https://hive.ihsan.cc/v1/install.sh | sh
 
 Windows (PowerShell):
 
-    irm https://hive.ihsan.cc/install.ps1 | iex
+    irm https://hive.ihsan.cc/v1/install.ps1 | iex
 
 The installer downloads the release binary for your platform from GitHub, checks it against the release's `checksums.txt` and puts it in `~/.local/bin` (on Windows, `%LOCALAPPDATA%\Programs\hive`). No GitHub login is needed to install. Then run `hive`: the first run checks for git, Claude Code and the GitHub CLI and offers their logins, asks for a folder and a repository (Enter makes a small private demo project), sets the Hive to start with the machine and opens the control center. On Windows the agents run inside WSL 2.
 

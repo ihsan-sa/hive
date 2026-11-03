@@ -14,11 +14,11 @@ You talk to a lead in a chat. The lead turns what you say into briefs. Workers b
 
 macOS / Linux:
 
-    curl -fsSL https://hive.ihsan.cc/install.sh | sh
+    curl -fsSL https://hive.ihsan.cc/v1/install.sh | sh
 
 Windows (PowerShell; on Windows PowerShell 5.1, run `[Net.ServicePointManager]::SecurityProtocol = 'Tls12'` first so the download can use TLS 1.2):
 
-    irm https://hive.ihsan.cc/install.ps1 | iex
+    irm https://hive.ihsan.cc/v1/install.ps1 | iex
 
 No GitHub login is needed to install. Running the line again reinstalls.
 
@@ -81,10 +81,10 @@ See [docs/architecture.md](docs/architecture.md) and [docs/risk.md](docs/risk.md
 
 macOS / Linux:
 
-    curl -fsSL https://hive.ihsan.cc/uninstall.sh | sh
+    curl -fsSL https://hive.ihsan.cc/v1/uninstall.sh | sh
 
 Windows (PowerShell):
 
-    irm https://hive.ihsan.cc/uninstall.ps1 | iex
+    irm https://hive.ihsan.cc/v1/uninstall.ps1 | iex
 
 Your folder is left alone.
