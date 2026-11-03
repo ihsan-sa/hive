@@ -245,6 +245,18 @@ def manifest(d):
     try: return json.loads((d / "module.json").read_text())
     except (OSError, ValueError): return {}
 
+def module_blurb(text, cap=160):
+    """A module's description for a list: the first sentence, and if that's long, whole words up to a clause. Never cut mid-word."""
+    text = " ".join(str(text or "").split())
+    first = re.split(r"(?<!e\.g\.)(?<!i\.e\.)(?<!vs\.)(?<=[.!?])\s+", text, maxsplit=1)[0]
+    if len(first) <= cap: return first
+    cut = first[:cap + 1].rsplit(" ", 1)[0]
+    clause = max(cut.rfind(c) for c in (",", ":", ";"))
+    if clause >= cap // 2: cut = cut[:clause]
+    if cut.count("(") > cut.count(")"): cut = cut[:cut.rfind("(")]
+    if cut.count("`") % 2: cut = cut[:cut.rfind("`")]
+    return re.sub(r"(\s+(a|an|the|and|or|of|to|from|in|with|for|by))+$", "", cut.rstrip()).rstrip(" ,:;-") + "…"
+
 def catalog():
     """What can be added: core's modules.json (name -> repo, about, needs) plus what ships in core/modules."""
     try: c = json.loads((CORE / "modules.json").read_text())
@@ -268,9 +280,9 @@ def cmd_module(a):
     cat = catalog()
     if a.do == "list":
         have = sorted(d for d in MODULES.glob("*/") if (d / "module.json").exists())
-        for d in have: print(f"{d.name:<14} installed  {manifest(d).get('description', '')[:240]}")
+        for d in have: print(f"{d.name:<14} installed  {module_blurb(manifest(d).get('description'))}")
         for n, c in cat.items():
-            if not (MODULES / n).exists(): print(f"{n:<14} available  {c.get('about', '')[:240]}" + (f" [needs {c['needs']}]" if c.get("needs") else ""))
+            if not (MODULES / n).exists(): print(f"{n:<14} available  {module_blurb(c.get('about'))}" + (f" [needs {c['needs']}]" if c.get("needs") else ""))
         return
     if not a.name: sys.exit(f"hive module {a.do}: name which module")
     name = re.sub(r"\.git$", "", a.name.rstrip("/").rsplit("/", 1)[-1]).removeprefix("hive-")
@@ -548,15 +560,16 @@ if len(sys.argv) == 1 or (sys.argv[1].startswith("-") and sys.argv[1] not in ("-
     door(sys.argv[1:])  # flags pass through to claude; a mistyped command must not open a session in an agent's shell
 
 def cmd_sandbox(a):
-    """The check the installer and the setup screens read. Exit 0 either way."""
+    """The check the installer and the setup screens read. Words exit 1 when it doesn't work. --json exits 0 with an answer in "works": the app takes any other exit as no answer."""
     if os.environ.get("HIVE_BROKER"): r = {"works": True, "why": "This is already inside the sandbox.", "fix": ""}
     else: r = box().check()
     if a.json: print(json.dumps(r)); return
     if r["works"]: print("The sandbox works on this machine." if not r["why"] else r["why"]); return
     print(f"The sandbox doesn't work on this machine. {r['why']}")
     if r["fix"]: print(r["fix"])
-    if not box().on(): print("This Hive isn't set to use the sandbox, so this doesn't stop agents starting: they have the full rights of this account."); return
+    if not box().on(): print("This Hive isn't set to use the sandbox, so this doesn't stop agents starting: they have the full rights of this account."); sys.exit(1)
     print(f"No agent starts until that's fixed, or until you choose to run without the sandbox (\"sandbox\": \"bare\" in {HOME / 'settings.json'}): agents then have the full rights of this account.")
+    sys.exit(1)
 
 def steps():
     out = []

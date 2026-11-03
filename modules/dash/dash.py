@@ -2041,9 +2041,22 @@ class DesignRoom:
             self.tmux("send-keys", "-t", "design", "Enter")
         return {"ok": True}
 
+    def grant(self, name):
+        """The person's button: types /design consent for them, once, in the page's session, with the answer on its screen. Never called by anything else."""
+        if not self.running(): self.start(name)
+        def go():
+            end = time.time() + 40
+            while time.time() < end:
+                if self.running() and "\u276f" in self.tmux("capture-pane", "-p", "-t", "design").stdout:
+                    self.send("/design consent"); return
+                time.sleep(0.5)
+        threading.Thread(target=go, daemon=True).start()
+        return {"ok": True}
+
     def act(self, d):
         what = d.get("do")
         if what == "start": return self.start(d.get("login"))
+        if what == "grant": return self.grant(d.get("login"))
         if what == "send": return self.send(d.get("text"))
         if what == "key":
             if d.get("key") not in self.KEYS: raise ValueError("that key isn't on the list")
@@ -2051,7 +2064,7 @@ class DesignRoom:
             self.tmux("send-keys", "-t", "design", self.KEYS[d["key"]]); return {"ok": True}
         if what == "stop":
             subprocess.run(["systemctl", "--user", "stop", self.UNIT + ".service"], capture_output=True, timeout=30); return {"ok": True}
-        raise ValueError("start, send, key or stop")
+        raise ValueError("start, send, key, grant or stop")
 
 
 DESIGN = DesignRoom()

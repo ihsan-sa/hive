@@ -202,6 +202,10 @@ a.lr-in:hover{background:var(--hover);color:inherit}
 .lr-t .meta{margin-left:auto;white-space:nowrap;flex:none}
 .lr-x{font-size:var(--fs-small);color:var(--ink-2);margin-top:2px}
 .lr-more{display:flex;padding:8px 0 0}
+/* Extras: the names, the words and the buttons each keep their own column */
+.mod-row{display:grid;grid-template-columns:9rem minmax(0,1fr) auto;column-gap:var(--s3);align-items:center}
+.mod-name{overflow-wrap:anywhere}
+@container (max-width:640px){.mod-row{grid-template-columns:minmax(0,1fr) auto;row-gap:2px}.mod-about{grid-column:1/-1;grid-row:2}}
 .list[data-dense] .lr-in{padding:6px 8px}
 
 /* ---- rank: ranked bars (costliest threads, models) ---- */
@@ -645,7 +649,6 @@ span.msg-thumb,span.msg-file{cursor:default}
 .cm-tier{display:inline-flex;align-items:center;gap:6px}
 .cm-tools{margin-left:auto;display:flex;align-items:center;gap:var(--s2)}
 .cm-tools .input{width:210px;height:var(--ctl-s);font-size:var(--fs-small)}
-.cm-sys{display:inline-flex;align-items:center;gap:4px;white-space:nowrap;cursor:pointer}
 .cm-menu{display:flex;flex-wrap:wrap;align-items:center;gap:var(--s2) var(--s4);padding:6px 0 2px;border-top:1px solid var(--line);font-size:var(--fs-small)}
 .cm-menu .check{align-items:center}
 .cm-menu .check input{margin-top:0}

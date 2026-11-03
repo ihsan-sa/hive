@@ -67,7 +67,7 @@ If WSL 2 is missing it installs it, which needs your approval and a restart; the
 
 ## The app
 
-After you sign in, the app offers a short guided tour. It says what to click, highlights it and waits for you. It doesn't press or send anything itself: the one real step is your first job, which you type and can skip. You can leave at any time, and **Take the tour** under **More** starts it again.
+When setup is finished, the app offers a short guided tour. It says what to click, highlights it and waits for you. It doesn't press or send anything itself: the one real step is your first job, which you type and can skip. You can leave at any time, and **Take the tour** under **More** starts it again.
 
 ![The first step of the tour, in a small window over the Chat page](https://hive.ihsan.cc/img/guide/tour.png)
 
@@ -102,7 +102,13 @@ In a conversation:
 
 Drafts are kept for each conversation in this browser, even if you reload. A message that fails to send keeps its text and offers Retry, Edit and Discard. Sent messages can't be unsent.
 
-**All messages** and **hive notices,** at the bottom left, show every message and the Hive's own notes, such as updates.
+**For you, Updates, Everything,** over the list, choose how much you see, both of conversations and inside them. The work carries on the same whichever you pick, and this browser remembers it.
+
+- **For you:** your messages, what agents ask or tell you, and the result of each job. The rest runs in the background.
+- **Updates:** also the agents' progress reports, but not what they say to each other.
+- **Everything:** every message, including agents talking to each other and the Hive's own notes.
+
+**Show N hidden** at the top of a conversation shows what the setting left out. Search always looks through everything. **All messages,** at the bottom left, is every conversation in one list.
 
 ### Agents
 
@@ -211,7 +217,7 @@ After you type `delete`, this removes the `hive` user or the `Hive` system with 
 | The app doesn't load at all | As the Hive's account: `systemctl --user restart hive-dash`. If `hive web` says it isn't set up, `hive web --setup` makes a new address |
 | "The hive isn't running" | **Start the hive** in Settings, or `systemctl --user start hive-starter` |
 | "Stopped: usage limit" | Wait for the time shown on Usage, add an account or raise the line. Agents usually resume by themselves after the reset. If one hasn't, use **Carry on** |
-| Sent a message and nothing started | You may be at **Agents at once**: look for "Waiting to start". Otherwise check Usage and **hive notices** |
+| Sent a message and nothing started | You may be at **Agents at once**: look for "Waiting to start". Otherwise check Usage, and set the list to **Everything** to see the Hive's own notes |
 | An agent looks stuck or quiet too long | Ask it where it is. A message wakes it. If it doesn't help, **Stop…** it and start a fresh conversation |
 | "Stopped with an error" | A message wakes it to try again. If it repeats, look at its page under Agents |
 | Sign-in doesn't work in the page | As the Hive's account in a terminal: `claude auth login` |

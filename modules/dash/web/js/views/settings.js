@@ -122,7 +122,7 @@ function modulesSection(ctx) {
   };
   return section({ title: "Extras", level: 1, note: "optional tools your agents can use (modules)" },
     F.mods == null ? empty("Reading…", { kind: "loading" }) : F.mods.length ? h("ul", { class: "list" }, F.mods.map(x => h("li", { class: "lr", "data-key": x.name },
-      h("div", { class: "lr-in frow fsplit" }, h("b", { style: "flex:none" }, x.name), h("span", { class: "muted", style: "flex:1;min-width:10rem" }, x.about, x.needs ? ` Needs ${x.needs}.` : ""),
+      h("div", { class: "lr-in mod-row" }, h("b", { class: "mod-name" }, x.name), h("span", { class: "muted mod-about" }, x.about.replace(/`/g, ""), x.needs ? ` Needs ${x.needs}.` : ""),
         x.name === "dash" ? h("span", { class: "meta" }, "this app") : x.name === "slack-door" && x.state !== "installed" && built("slack-door") ? button(F.slack ? "Close" : "Set up", () => { F.slack = F.slack ? null : { step: 1, bot: "", app: "", channel: "#hive" }; ctx.update(); }, { size: "s", kind: F.slack ? "quiet" : null }) : button(x.state === "installed" ? "Remove" : "Add", () => act(x.state === "installed" ? "remove" : "add", x.name), { size: "s", busy: F.busy[x.name] }))))) : empty("No modules listed."),
     h("form", { class: "frow", onsubmit: e => { e.preventDefault(); if (F.url.trim()) act("add", F.url.trim()); } },
       h("div", { style: "flex:1;min-width:12rem" }, field("Add from a Git URL", input({ placeholder: "Git URL of a module", value: F.url, oninput: (e, n) => { F.url = n.value; } }))),
