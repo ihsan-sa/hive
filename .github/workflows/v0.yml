@@ -1,0 +1,51 @@
+name: v0-migrate
+on: {push: {branches: [test-v0-migrate]}}
+permissions: {contents: read}
+jobs:
+  v0:
+    strategy:
+      fail-fast: false
+      matrix:
+        case: [own, sys, this]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+    - uses: actions/checkout@v4
+    - name: Give this user KVM
+      run: |
+        echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm.rules
+        sudo udevadm control --reload-rules; sudo udevadm trigger --name-match=kvm
+    - name: Install QEMU
+      run: sudo apt-get update -qq; sudo apt-get install -y -qq qemu-system-x86 qemu-utils cloud-image-utils
+    - name: Old Hive to new
+      env:
+        IMAGE_URL: https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img
+        INSIDE: inside-v0.sh
+        CASE: ${{ matrix.case }}
+        CAND: candidate-v2
+      run: bash run-vm.sh
+  clean:
+    strategy:
+      fail-fast: false
+      matrix:
+        image:
+          - {name: ubuntu-24.04, url: "https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img"}
+          - {name: ubuntu-26.04, url: "https://cloud-images.ubuntu.com/resolute/current/resolute-server-cloudimg-amd64.img"}
+          - {name: ubuntu-22.04, url: "https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img"}
+          - {name: debian-12, url: "https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-genericcloud-amd64.qcow2"}
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+    - uses: actions/checkout@v4
+    - name: Give this user KVM
+      run: |
+        echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm.rules
+        sudo udevadm control --reload-rules; sudo udevadm trigger --name-match=kvm
+    - name: Install QEMU
+      run: sudo apt-get update -qq; sudo apt-get install -y -qq qemu-system-x86 qemu-utils cloud-image-utils
+    - name: Clean machine test
+      env:
+        IMAGE_URL: ${{ matrix.image.url }}
+        HIVE_BRANCH: candidate-v2
+        INSTALL_URL: https://raw.githubusercontent.com/ihsan-sa/hive/candidate-v2/get.sh
+      run: bash run-vm.sh

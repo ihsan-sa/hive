@@ -19,5 +19,5 @@ Q=$!; trap 'kill $Q 2>/dev/null || true; [ -f serial.log ] && [ "${SHOW:-}" = 1 
 S=(ssh -i key -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=5 tester@127.0.0.1)
 for i in $(seq 90); do "${S[@]}" true 2>/dev/null && break; sleep 5; [ "$i" = 90 ] && { SHOW=1; echo "FAIL the VM did not answer"; exit 1; }; done
 "${S[@]}" 'sudo cloud-init status --wait >/dev/null 2>&1 || true; systemctl is-system-running --wait >/dev/null 2>&1 || true'
-"${S[@]}" 'cat > /tmp/inside.sh' < "$R/inside.sh"
-"${S[@]}" 'sudo env HIVE_SITE='"${HIVE_SITE:-https://hive.ihsan.cc}"' HIVE_BRANCH='"${HIVE_BRANCH:-}"' bash /tmp/inside.sh'
+"${S[@]}" 'cat > /tmp/inside.sh' < "$R/${INSIDE:-inside.sh}"
+"${S[@]}" 'sudo env HIVE_SITE='"${HIVE_SITE:-https://hive.ihsan.cc}"' HIVE_BRANCH='"${HIVE_BRANCH:-}"' INSTALL_URL='"${INSTALL_URL:-}"' CASE='"${CASE:-}"' CAND='"${CAND:-}"' bash /tmp/inside.sh'

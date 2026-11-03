@@ -30,7 +30,7 @@ STUB
 chmod +x /usr/local/bin/claude
 
 [ -n "${HIVE_BRANCH:-}" ] && export HIVE_BRANCH || unset HIVE_BRANCH  # a candidate branch; empty means the released tag
-if curl -fsSL "$SITE/install.sh" | HIVE_ACCEPT=1 sh > /tmp/install.out 2>&1; then ok "install from the site"; else bad "install from the site"; fi
+if curl -fsSL "${INSTALL_URL:-$SITE/install.sh}" | HIVE_ACCEPT=1 sh > /tmp/install.out 2>&1; then ok "install from the site"; else bad "install from the site"; fi
 tail -n 25 /tmp/install.out | sed -E 's/#[A-Za-z0-9_-]{20,}/#SECRET/'
 note "$(bwrap --version 2>&1 | head -1)"
 id hive >/dev/null 2>&1 && HH=$(getent passwd hive | cut -d: -f6) || { echo "FAIL no hive user"; exit 1; }
