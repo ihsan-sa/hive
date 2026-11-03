@@ -45,9 +45,35 @@ grep -aqs hive-standalone-build $H/.local/bin/hive && ok "old program carries th
 sums() { (cd "$1" && find projects .hive/kb -type f -not -path '*/.git/*' -print0 | sort -z | xargs -0 sha256sum); }
 sums $H/hive > /tmp/sums0
 
-curl -fsSL "$RAW/get.sh" -o /tmp/get.sh; chmod 644 /tmp/get.sh
 run() { # $1 log; the rest is the environment and arguments
   log=$1; shift; "$@" > "$log" 2>&1; rc=$?; hide < "$log" | tail -n 30 | sed 's/^/   | /'; return $rc; }
+
+# What's in the old account isn't believed, and root does nothing in there.
+repo=$(ls -d $H/hive/projects/*/.git 2>/dev/null | head -n 1)
+if [ -n "$repo" ]; then
+  printf '#!/bin/sh\ntouch /tmp/hook-ran\n' > $repo/hooks/post-checkout; chmod 755 $repo/hooks/post-checkout
+  git --git-dir=$repo config core.fsmonitor /tmp/evil-monitor; git --git-dir=$repo config http.extraheader 'AUTHORIZATION: SEEDSECRET-PLAIN'
+  chown -R $A: $repo; note "planted a hook in $repo"
+else bad "no repo to plant a hook in"; fi
+case "$CASE" in
+  sys)
+    echo keep > /etc/hive-victim; chmod 644 /etc/hive-victim
+    mkdir -p /root/secretdir; echo ROOTSECRET > /root/secretdir/f; chmod 755 /root; chmod 755 /root/secretdir
+    su -s /bin/sh $A -c "ln -sf /etc/hive-victim $H/hive/.hive/v2-import; ln -s /root/secretdir $H/hive/projects/linked"
+    # Only root can read this one, so it stops first and nothing changes.
+    F=$H/hive/projects/rootonly; echo x > $F; chown root: $F; chmod 600 $F
+    curl -fsSL "$RAW/get.sh" -o /tmp/get-pre.sh; chmod 644 /tmp/get-pre.sh
+    if run /tmp/outp env HIVE_LOG=/tmp/op.log HIVE_ACCEPT=1 HIVE_BRANCH=$CAND HIVE_USER=$A sh /tmp/get-pre.sh; then bad "a file only root can read should stop it"; else
+      grep -q "can't read" /tmp/outp && grep -q 'Nothing changed' /tmp/outp && ok "file only root can read: stops first" || { bad "unreadable message"; tail -n 5 /tmp/outp; }
+      up $A && ok "still running after that stop" || bad "old Hive stopped by the preflight"
+    fi
+    rm -f $F ;;
+  own)
+    # A half-done v2.3.0 run left this as root's.
+    printf pending > $H/hive/.hive/v2-import; chown root: $H/hive/.hive/v2-import ;;
+esac
+
+curl -fsSL "$RAW/get.sh" -o /tmp/get.sh; chmod 644 /tmp/get.sh
 
 case "$CASE" in
   own)
@@ -58,13 +84,16 @@ case "$CASE" in
     N=$A; NH=$H/hive; OLDF=$(ls -d $H/hive-old-* 2>/dev/null | head -n 1); [ -n "$OLDF" ] && ok "old folder renamed" || bad "old folder renamed" ;;
   sys)
     # A failure partway: reading the old things breaks after the old Hive has been stopped.
-    mkdir -p /opt/shim; cat > /opt/shim/tar <<'S'
+    # At the real path, not on PATH: get.sh reads the old account through su and env -i.
+    mv /usr/bin/tar /usr/bin/tar.real; cat > /usr/bin/tar <<'S'
 #!/bin/sh
-case "$*" in *.checkouts*) echo "tar: pretend disk trouble" >&2; exit 2;; esac
-exec /usr/bin/tar "$@"
+case "$*" in *.checkouts*) echo "tar: pretend disk trouble" >&2; touch /tmp/tar-failed; chmod 666 /tmp/tar-failed; exit 2;; esac
+exec /usr/bin/tar.real "$@"
 S
-    chmod +x /opt/shim/tar
-    if run /tmp/out0 env PATH=/opt/shim:$PATH HIVE_LOG=/tmp/o0.log HIVE_ACCEPT=1 HIVE_BRANCH=$CAND HIVE_USER=$A sh /tmp/get.sh; then bad "the first run was meant to fail"; else ok "first run fails halfway"; fi
+    chmod 755 /usr/bin/tar
+    if run /tmp/out0 env HIVE_LOG=/tmp/o0.log HIVE_ACCEPT=1 HIVE_BRANCH=$CAND HIVE_USER=$A sh /tmp/get.sh; then bad "a tar failure should fail the run"; else ok "the run fails"; fi
+    mv -f /usr/bin/tar.real /usr/bin/tar
+    [ -e /tmp/tar-failed ] && ok "the failure really fired" || bad "the fake tar never fired"
     grep -q 'installed\|Hive is installed' /tmp/out0 && ! grep -q 'to keep it to yourself' /tmp/out0 || true
     grep -q '/tmp/o0.log' /tmp/out0 && ok "failure names the log" || bad "failure names the log"
     no_if "old Hive stopped after the failure" "up $A"
@@ -121,5 +150,18 @@ case "$CASE" in
 esac && ok "third run" || bad "third run"
 no_if "third run brings nothing" "grep -q 'Found an old Hive' /tmp/out2"
 [ "$(find $NH/projects -type f -not -path '*/.git/*' | wc -l)" = "$before" ] && ok "same files" || bad "files changed"
+case "$CASE" in
+  sys)
+    [ "$(cat /etc/hive-victim)" = keep ] && ok "a link as the state file didn't write through" || bad "system file overwritten"
+    ! grep -rqs ROOTSECRET $NH/projects $NH/kb && ok "nothing from elsewhere came over a link" || bad "link followed"
+    systemctl cat hive-$A.service >/dev/null 2>&1 || true ;;
+  this)
+    [ "$(stat -c %a $NH)" = 700 ] && ok "folder is 0700" || bad "folder mode $(stat -c %a $NH)" ;;
+esac
+r=$(ls -d $NH/projects/*/.git 2>/dev/null | head -n 1)
+[ -n "$r" ] && [ ! -e $r/hooks/post-checkout ] && ok "hook stayed behind" || bad "hook came over"
+[ ! -e /tmp/hook-ran ] && ok "hook never ran" || bad "hook ran"
+[ -n "$r" ] && [ -z "$(git --git-dir=$r config core.fsmonitor)" ] && ok "command setting stayed behind" || bad "fsmonitor came over"
+! grep -rqs SEEDSECRET-PLAIN $NH/projects && ok "plain extraheader stayed behind" || bad "plain extraheader came over"
 [ "$fail" = 0 ] && echo PASS || echo FAILED
 exit $fail
