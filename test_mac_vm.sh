@@ -14,6 +14,8 @@ vm() { limactl shell --workdir / "$VM" "$@"; }
 as_hive() { vm sudo -iu hive bash -c "$1"; }
 
 HIVE_VMTYPE=qemu sh "$D/get-mac.sh" --print-yaml > "$LIMA_HOME.yaml"
+# Under QEMU, Lima's host resolver redirects DNS to a high port on 192.168.5.2, which the block rejects. On Apple's framework DNS goes to 192.168.5.3:53 directly, so use QEMU's own DNS at that address to match it.
+printf 'hostResolver:\n  enabled: false\ndns: [192.168.5.3]\n' >> "$LIMA_HOME.yaml"
 limactl create --tty=false --name="$VM" "$LIMA_HOME.yaml" || exit 1
 limactl start --tty=false "$VM" || { tail -n 40 "$LIMA_HOME/$VM/ha.stderr.log"; exit 1; }
 ok "the VM starts"

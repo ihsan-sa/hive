@@ -3,6 +3,8 @@
 #   curl -fsSL https://hive.ihsan.cc/mac-check.sh -o mac-check.sh && sh mac-check.sh
 # It installs the Hive if it isn't there, checks it, asks you to do three things, and writes a report you send back.
 # The report has versions, memory and results. It has no address, secret, user name or file of yours.
+# HIVE_CHECK_AUTO=1 is for a Mac runner with no person: nothing is asked, and sleep is only a pause of the VM.
+# HIVE_CHECK_LINE=FILE installs from that file, not the site.
 # After the check, to test uninstall: run the uninstall line it prints, then: sh mac-check.sh --after-uninstall
 set -u
 
@@ -11,6 +13,8 @@ R="$HOME/hive-mac-report.txt"
 L="$HOME/.hive/lima-dist/bin/limactl"
 export LIMA_HOME="$HOME/.hive/lima"
 export HIVE_MAC_TEST=1  # this script exists to test the test build
+AUTO="${HIVE_CHECK_AUTO:-}"
+LINE="${HIVE_CHECK_LINE:-}"
 fails=0
 
 say() { printf '%s\n' "$*" | tee -a "$R"; }
@@ -23,8 +27,9 @@ as_hive() { vm sudo -iu hive sh -c "$1"; }
 address() { hive_ web 2>/dev/null | tr -d '\r' | sed -n 's/.*\(http:[^ ]*\).*/\1/p' | head -n 1; }
 answers() { a=$(address); curl -fsS -o /dev/null -m 5 "${a%%#*}"; }
 answers_soon() { n=0; while [ "$n" -lt 30 ]; do answers 2>/dev/null && return 0; n=$((n + 1)); sleep 2; done; return 1; }
-ask() { printf '\n%s\nPress Return when done. ' "$1"; read -r _ </dev/tty; }
-yes_no() { printf '\n%s [y/n] ' "$1"; read -r a </dev/tty; case "$a" in y* | Y*) pass "$2" ;; *) bad "$2"; printf 'What happened? (Return to skip) '; read -r a </dev/tty; [ -z "$a" ] || say "      said: $a" ;; esac; }
+the_line() { if [ -n "$LINE" ]; then sh "$LINE"; else curl -fsSL "$SITE/install-mac.sh" | sh; fi; }
+ask() { [ -z "$AUTO" ] || return 0; printf '\n%s\nPress Return when done. ' "$1"; read -r _ </dev/tty; }
+yes_no() { [ -z "$AUTO" ] || { say "skip  $2 (no person here)"; return 0; }; printf '\n%s [y/n] ' "$1"; read -r a </dev/tty; case "$a" in y* | Y*) pass "$2" ;; *) bad "$2"; printf 'What happened? (Return to skip) '; read -r a </dev/tty; [ -z "$a" ] || say "      said: $a" ;; esac; }
 clock_gap() { echo $(( $(vm date +%s | tr -d '\r') - $(date +%s) )); }
 
 after_uninstall() {
@@ -39,7 +44,7 @@ after_uninstall() {
 main() {
   [ "${1:-}" != --after-uninstall ] || { after_uninstall; exit 0; }
   [ "$(uname -s)" = Darwin ] || { echo "This is for a Mac."; exit 1; }
-  ( : </dev/tty ) 2>/dev/null || { echo "This needs a terminal, as it asks you things. Save it to a file and run: sh mac-check.sh"; exit 1; }
+  [ -n "$AUTO" ] || ( : </dev/tty ) 2>/dev/null || { echo "This needs a terminal, as it asks you things. Save it to a file and run: sh mac-check.sh"; exit 1; }
   : > "$R"
   say "Hive Mac check $(date -u +%Y-%m-%dT%H:%MZ)"
   say "macOS $(sw_vers -productVersion), $(sysctl -n machdep.cpu.brand_string 2>/dev/null), arm64=$(sysctl -n hw.optional.arm64 2>/dev/null || echo 0), shell arch $(uname -m)"
@@ -50,7 +55,7 @@ main() {
 
   say; say "--- the install line"
   t0=$(date +%s)
-  if curl -fsSL "$SITE/install-mac.sh" | sh; then pass "the line finished in $(( ($(date +%s) - t0) / 60 )) min"; else bad "the line failed"; say "See above in your Terminal; please paste what it said."; exit 1; fi
+  if the_line; then pass "the line finished in $(( ($(date +%s) - t0) / 60 )) min"; else bad "the line failed"; say "See above in your Terminal; please paste what it said."; exit 1; fi
   check "the VM is running" sh -c "[ \"\$('$L' list hive --format '{{.Status}}')\" = Running ]"
   say "VM: $(vm uname -m | tr -d '\r') $(vm sh -c '. /etc/os-release; echo $PRETTY_NAME' | tr -d '\r'), Lima $("$L" --version 2>/dev/null | cut -d' ' -f3), Claude Code $(as_hive 'claude --version' 2>/dev/null | head -n 1 | tr -d '\r')"
   check "the VM uses Apple's framework" sh -c "'$L' list hive --format '{{.VMType}}' | grep -qx vz"
@@ -75,6 +80,10 @@ main() {
   say; say "--- sleep and wake"
   before=$(as_hive 'systemctl --user is-active hive-starter hive-dash' | tr -d '\r' | tr '\n' ' ')
   ask "Put the Mac to sleep: Apple menu, Sleep. Leave it for at least 3 minutes. Then wake it and come back here. (Start a small task in the Hive first, if you can.)"
+  if [ -n "$AUTO" ]; then
+    say "This is a pause of the VM for 90 s, not a real sleep."
+    pkill -STOP -f com.apple.Virtualization.VirtualMachine; sleep 90; pkill -CONT -f com.apple.Virtualization.VirtualMachine
+  fi
   t0=$(date +%s); gap=99999; while [ $(( $(date +%s) - t0 )) -lt 60 ]; do gap=$(clock_gap); g=${gap#-}; [ "$g" -gt 3 ] || break; sleep 3; done
   say "VM clock vs Mac after waking: ${gap} s, after $(( $(date +%s) - t0 )) s"
   g=${gap#-}; if [ "$g" -le 3 ]; then pass "the VM's clock caught up"; else bad "the VM's clock is still off"; fi
@@ -95,7 +104,7 @@ main() {
   check "the hive command works from a stopped state" sh -c "'$HOME/.hive/bin/hive' web"
 
   say; say "--- update"
-  if curl -fsSL "$SITE/install-mac.sh" | sh >/dev/null 2>&1; then pass "running the line again works"; else bad "running the line again failed"; fi
+  if the_line >/dev/null 2>&1; then pass "running the line again works"; else bad "running the line again failed"; fi
   check "the app answers after the update" answers_soon
   check "hive update runs" hive_ update
 

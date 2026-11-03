@@ -7,7 +7,7 @@ jobs:
       fail-fast: false
       matrix: {os: [macos-15, macos-15-intel]}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 8
+    timeout-minutes: 45
     steps:
     - uses: actions/checkout@v4
     - name: Where this runs
@@ -19,11 +19,11 @@ jobs:
       run: |
         sed '/^main "\$@"$/d' get-mac.sh > funcs.sh
         ( set +e; . ./funcs.sh; D="$HOME/.hive"; agent_plist > hive.plist ); plutil -lint hive.plist
-    - name: The real install line, real tools, as far as it gets here
+    - name: The whole check with no person, real Lima, real VM if this Mac allows one
       if: always()
       continue-on-error: true
-      timeout-minutes: 8
-      run: HIVE_MAC_TEST=1 sh get-mac.sh 2>&1 | tee install.log | tail -n 60 || true
+      timeout-minutes: 25
+      run: HIVE_CHECK_AUTO=1 HIVE_CHECK_LINE=get-mac.sh HIVE_MAC_TEST=1 sh mac-check.sh 2>&1 | tee install.log | tail -n 80 || true
     - name: Lima as downloaded
       if: always()
       run: |
@@ -31,9 +31,19 @@ jobs:
         codesign -d --entitlements - "$L" 2>&1 | tail -n 15
         sh get-mac.sh --print-yaml > vm.yaml; "$L" validate vm.yaml
         LIMA_HOME="$HOME/.hive/lima" "$L" list || true
+    - name: The report
+      if: always()
+      run: cat "$HOME/hive-mac-report.txt" || true
     - name: What the line left, and Lima's log
       if: always()
       run: |
         tail -n 60 install.log 2>/dev/null || true
         ls -la "$HOME/.hive" "$HOME/.hive/lima" 2>/dev/null || true; tail -n 30 "$HOME/.hive/lima/hive/ha.stderr.log" 2>/dev/null || true
         cat "$HOME/.zprofile" 2>/dev/null || true
+    - name: Uninstall, for real
+      if: always()
+      timeout-minutes: 5
+      run: |
+        { sleep 5; echo delete; sleep 5; } | script -q /dev/null sh remove-mac.sh || true
+        sleep 5
+        HIVE_CHECK_AUTO=1 sh mac-check.sh --after-uninstall || true
