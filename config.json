@@ -2,7 +2,6 @@
   "usage_stop_pct": 95,
   "logins": ["~/.claude"],
   "external": ["person", "all", "anon", "starter"],
-  "max_sessions": 3,
   "poll_s": 3,
   "usage_check_s": 300,
   "commit_s": 300,

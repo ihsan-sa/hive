@@ -1,7 +1,8 @@
 // Feedback from anywhere in the app: a shortcut or More > Send feedback. The screen freezes and greys at once, the person drags boxes straight on it, writes a comment, Send.
 // The frozen picture is a copy of the page (snapshot.js), so there's no browser prompt and nothing is loaded from elsewhere. Where that fails, or the picture looks wrong,
 // the browser's own capture is one button away (it asks first); where that can't either (a plain http address, most phones, or a No) the person can paste or choose an image, or send the comment alone.
-// It goes to this Hive's own board, in the thread "feedback", like any message. There's no route to the makers yet, so the overlay says so.
+// In a consumer Hive (one with settings.json) it goes to the makers, through /api/feedback and the report module; nothing lands on the board and no agent starts.
+// In a Hive that is its makers' own, it goes on the board in the thread "feedback", like any message. The overlay says which, and what's in it.
 import { h } from "../core/dom.js";
 import { S, can, post, setupDone } from "../core/store.js";
 import { threadHref } from "../core/router.js";
@@ -14,7 +15,8 @@ export const FEEDBACK_KEY = MAC ? "⌥⇧S" : "Alt+Shift+S";
 const BOX = "#e5484d";   // the same on any picture, whatever the theme
 const GREY = "rgb(0 0 0 / .38)";   // over the frozen screen; a box shows through it at full brightness. Never in the file that's sent.
 const FB = { open: false, comment: "" };
-export const canFeedback = () => !!S.app.app && can("post") && setupDone();
+const toMakers = () => !!S.app.settings;
+export const canFeedback = () => !!S.app.app && can("post") && (toMakers() || setupDone());   // to the makers it needs no agents, so it works when setup is what's wrong
 addEventListener("keydown", e => {
   if (!e.altKey || !e.shiftKey || e.ctrlKey || e.metaKey || e.code !== "KeyS" || e.repeat || !canFeedback()) return;
   e.preventDefault(); openFeedback();
@@ -39,11 +41,24 @@ async function grab() {
   } catch (e) { return { why: "The screenshot didn't work: " + e.message }; }
   finally { for (const t of stream.getTracks()) t.stop(); }
 }
+/** Base64 JPEG small enough for the makers' receiver. The picture only loses detail if it has to: try the sharpest first. */
+function jpeg(c) {
+  for (const [wide, q] of [[1600, .8], [1600, .6], [1280, .6], [1024, .5], [800, .4], [640, .3]]) {
+    const k = Math.min(1, wide / c.width), o = document.createElement("canvas");
+    o.width = Math.round(c.width * k); o.height = Math.round(c.height * k);
+    const x = o.getContext("2d"); x.fillStyle = "#fff"; x.fillRect(0, 0, o.width, o.height); x.drawImage(c, 0, 0, o.width, o.height);   // JPEG has no see-through: white, not black
+    const b64 = o.toDataURL("image/jpeg", q).split(",")[1];
+    if (b64.length <= 400000) return b64;
+  }
+  throw Error("the picture is too large. Tick Send only the boxed part, or leave the picture out.");
+}
 function sentNote() {   // Sending ends the overlay: the person is back on the page they were on, with a small note in the corner
   for (const old of document.querySelectorAll(".fb-sent")) old.remove();
-  const note = h("div", { class: "fb-sent", role: "status" }, h("span", null, "Sent. An agent in your Hive will read it."),
-    button("Open the conversation", null, { href: threadHref("feedback"), size: "s" }), button("Close", () => note.remove(), { size: "s", kind: "quiet" }));
-  note.querySelector("a").addEventListener("click", () => note.remove());
+  const note = toMakers()
+    ? h("div", { class: "fb-sent", role: "status" }, h("span", null, "Sent to the makers of Hive. Thank you."), button("Close", () => note.remove(), { size: "s", kind: "quiet" }))
+    : h("div", { class: "fb-sent", role: "status" }, h("span", null, "Sent. An agent in your Hive will read it."),
+        button("Open the conversation", null, { href: threadHref("feedback"), size: "s" }), button("Close", () => note.remove(), { size: "s", kind: "quiet" }));
+  note.querySelector("a")?.addEventListener("click", () => note.remove());
   document.body.append(note); setTimeout(() => note.remove(), 10000);
 }
 
@@ -60,14 +75,19 @@ export async function openFeedback() {
   const undo = button("Undo box", () => { boxes.pop(); paint(); sync(); }, { size: "s", kind: "quiet" });
   const onlyBox = h("input", { type: "checkbox" }); onlyBox.addEventListener("change", () => { only = onlyBox.checked; });
   const onlyL = h("label", { class: "meta" }, onlyBox, " Send only the boxed part");
+  const noPicBox = h("input", { type: "checkbox" });
+  const noPicL = h("label", { class: "meta" }, noPicBox, " Leave the picture out");
+  noPicL.hidden = !toMakers();
   const send = button("Send", () => go(), { kind: "primary", cls: "fb-send" });
   const again = button("Browser capture", () => take(), { size: "s", kind: "quiet", title: "If the picture looks wrong: take it with the browser's own screen capture, which asks first" });
   const hint = h("div", { class: "fb-hint", hidden: true }, "Drag on the screen to draw a box");
   const card = h("div", { class: "fb-card" },
     h("div", { class: "fb-r" }, h("b", { class: "fb-title" }, "Send feedback"), undo, button("Close", () => dlg.close(), { size: "s" })),
-    text, say, h("div", { class: "fb-r" }, onlyL),
+    text, say, h("div", { class: "fb-r" }, onlyL, noPicL),
     h("div", { class: "fb-r" }, again, h("span", { class: "fb-gap" }), send),
-    h("p", { class: "meta" }, "This goes to your own Hive, in the conversation called feedback, where an agent reads it. It isn't sent to the makers of Hive."));
+    h("p", { class: "meta" }, toMakers()
+      ? "This goes to the makers of Hive: your comment, the picture, the page you're on, this Hive's version and a random install id. The picture holds whatever is on the screen, so box only the part that matters or leave it out. A copy stays on this machine, in reports/sent."
+      : "This goes to your own Hive, in the conversation called feedback, where an agent reads it. It isn't sent to the makers of Hive."));
   const dlg = h("dialog", { class: "fb", "aria-label": "Send feedback" }, stage, hint, card, pick);
 
   function drawBoxes(ctx, list, dx = 0, dy = 0) {
@@ -126,23 +146,31 @@ export async function openFeedback() {
   const end = () => { if (drag && drag.w > 6 && drag.h > 6) boxes.push(drag); start = drag = null; paint(); sync(); };
   view.addEventListener("pointerup", end); view.addEventListener("pointercancel", end);
 
-  function picture() {   // the file to send: the whole picture with its boxes, or only what they cover
+  function framed() {   // what's sent: the whole picture with its boxes, or only what they cover
     const u = only && boxes.length ? boxes.reduce((a, b) => ({ x0: Math.min(a.x0, b.x), y0: Math.min(a.y0, b.y), x1: Math.max(a.x1, b.x + b.w), y1: Math.max(a.y1, b.y + b.h) }), { x0: 1e9, y0: 1e9, x1: 0, y1: 0 }) : null;
     const pad = u ? Math.max(4, pic.width / 200) : 0;
     const x = u ? Math.max(0, Math.floor(u.x0 - pad)) : 0, y = u ? Math.max(0, Math.floor(u.y0 - pad)) : 0;
     const w = u ? Math.min(pic.width, Math.ceil(u.x1 + pad)) - x : pic.width, hh = u ? Math.min(pic.height, Math.ceil(u.y1 + pad)) - y : pic.height;
     const c = document.createElement("canvas"); c.width = w; c.height = hh;
     const ctx = c.getContext("2d"); ctx.drawImage(pic, -x, -y); drawBoxes(ctx, boxes, x, y);
+    return c;
+  }
+  function picture() {
+    const c = framed();
     return new Promise((ok, no) => c.toBlob(b => (b ? ok(new File([b], "screenshot.png", { type: "image/png" })) : no(Error("the picture couldn't be made"))), "image/png"));
   }
   async function go() {
     const said = text.value.trim();
-    if (!said && !pic) { say.textContent = "Write a comment or add a picture first."; say.hidden = false; return; }
+    const withPic = pic && !(toMakers() && noPicBox.checked);
+    if (!said && !withPic) { say.textContent = "Write a comment or add a picture first."; say.hidden = false; return; }
     say.hidden = true; send.disabled = true; send.textContent = "Sending…";
     const where = location.hash.slice(1).split(/[/?]/)[0] || "home";
     try {
-      const files = pic ? [await uploadFile(await picture())] : [];
-      await post("/api/post", { text: `Feedback on the app, from the ${where} page:\n\n${said || "(no comment, see the screenshot)"}`, thread: "feedback", files });
+      if (toMakers()) await post("/api/feedback", { text: said, page: where, ...(withPic ? { image: jpeg(framed()) } : {}) });
+      else {
+        const files = pic ? [await uploadFile(await picture())] : [];
+        await post("/api/post", { text: `Feedback on the app, from the ${where} page:\n\n${said || "(no comment, see the screenshot)"}`, thread: "feedback", files });
+      }
       FB.comment = "";
       dlg.close(); sentNote();
     } catch (e) {   // the comment and picture stay, so it can be sent again

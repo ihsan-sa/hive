@@ -15,7 +15,7 @@ The web page is web/ next to this file (ui.html, the previous page, is at /old);
   hive-dash serve [--port P] web UI on http://127.0.0.1:P/ (loopback only; default 8077)
   hive-dash --json          the snapshot as JSON
 """
-import base64, fcntl, gzip, hashlib, hmac, importlib.util, json, os, pty, pwd, re, secrets, select, shutil, signal, sqlite3, stat, struct, subprocess, sys, termios, threading, time
+import base64, fcntl, gzip, hashlib, hmac, importlib.util, json, os, pty, pwd, re, secrets, select, shutil, signal, sqlite3, stat, struct, subprocess, sys, tempfile, termios, threading, time
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -96,6 +96,24 @@ def run_effort(pid):
     v = env_of(pid) or next((e for k in kids if (e := env_of(k))), None)
     if v: _effort[pid] = v
     return v
+
+
+def bg_shells(pid):
+    """How many background shells a run is parked on. Their stdout is a task file (the starter's release_shells uses the same test), and what
+    they start inherits it, so only the topmost counts. The heavy queue can't see these, so without this a run waiting on one looks stuck."""
+    n, todo = 0, []
+    def kids(p):
+        try:
+            for t in Path(f"/proc/{p}/task").iterdir(): todo.extend((t / "children").read_text().split())
+        except OSError: pass
+    kids(pid)
+    while todo:
+        q = todo.pop()
+        try: shell = "/tasks/" in os.readlink(f"/proc/{q}/fd/1")
+        except OSError: shell = False
+        if shell: n += 1
+        else: kids(q)
+    return n
 
 
 def describe_tool(name, inp):
@@ -423,7 +441,7 @@ def live():
             "name": r.get("name", f.stem), "pid": r.get("pid"), "alive": alive(r.get("pid")),
             "since": ts(r.get("at")), "thread": r.get("thread"), "from": r.get("from"), "post": r.get("post"),
             "last": a["last"], "doing": a["doing"], "said": a["said"], "out": r.get("out"), "effort": run_effort(r.get("pid")),
-            "jobs": jobs.get(r.get("name", f.stem)),
+            "jobs": jobs.get(r.get("name", f.stem)), "shells": bg_shells(r.get("pid")),
         })
     keep = {str(a["out"]) for a in agents}
     for k in [k for k in _activity if k not in keep]: del _activity[k]
@@ -929,6 +947,17 @@ def jobs_for(view, full):
             for k, rows in view.items()}
 
 
+def agents_for(view, full):
+    """/api/live and /json as a caller may see them: the same rule as jobs_for. What an agent is doing or said can quote a command, so a limited sign-in sees who runs, not that."""
+    if full or not isinstance(view, dict): return view
+    return {**view, "agents": [{f: v for f, v in a.items() if f not in ("doing", "said")} for a in view.get("agents") or []]}
+
+
+def feed_for(rows, full):
+    """/api/agent by the same rule: a limited sign-in sees when an agent acted and with which tool, not the arguments or what it said."""
+    return rows if full else [{**r, "x": ""} for r in rows if r.get("k") == "tool"]
+
+
 class Jobs:
     """What /api/jobs serves: heavy's running and queued jobs, what each uses, and the machine's resources.
     Reads /proc and heavy's files only; computed only while a tab has the Jobs view open."""
@@ -1114,10 +1143,10 @@ FORWARDED = ("cf-ray", "cf-connecting-ip", "cf-access-jwt-assertion", "cf-ipcoun
 GET_CAP = {"/api/live": "read", "/api/board": "read", "/api/log": "read", "/api/usage": "read", "/api/jobs": "read", "/api/agent": "read",
            "/api/projects": "read", "/api/agent-costs": "read", "/api/thread-names": "read", "/json": "read", "/api/target": "read", "/api/inbox": "read", "/api/delivered": "read",
            "/api/config": "config", "/api/modules": "modules", "/api/signin": "logins", "/api/plans": "plans", "/api/secrets": "secrets",
-           "/api/settings": "config", "/api/signin-codex": "logins", "/api/design": "logins",
+           "/api/settings": "config", "/api/update": "config", "/api/signin-codex": "logins", "/api/design": "logins",
            "/api/kb/home": "files", "/api/kb/open": "files", "/api/kb/search": "files", "/api/kb/raw": "files"}
 POST_CAP = {"/api/kill": "stop", "/api/tier": "tier", "/api/login-pause": "limits", "/api/login-limit": "limits", "/api/provider-limit": "limits",
-            "/api/post": "post", "/api/upload": "post", "/api/inbox-read": "post", "/api/config": "config", "/api/starter": "config",
+            "/api/post": "post", "/api/feedback": "post", "/api/update": "config", "/api/upload": "post", "/api/inbox-read": "post", "/api/config": "config", "/api/starter": "config",
             "/api/module": "modules", "/api/signin": "logins", "/api/signin/code": "logins", "/api/signin/cancel": "logins", "/api/plan": "plans", "/api/secret": "secrets",
             "/api/signin-codex": "logins", "/api/account-key": "logins", "/api/design": "logins"}
 LOCAL_ONLY = {"/api/access", "/api/settings"}  # who may do what is never changed from outside, whatever outside.can says
@@ -1422,7 +1451,10 @@ def thread_target(thread):
     return {"who": who, "running": bool(who and alive((jload(RUN / f"{who}.json") or {}).get("pid")))}
 
 
-def person_post(text, thread=None, reply_to=None, uploads=(), signer=None):
+STEP_WORD = re.compile(r"(approve|deny) step [0-9a-f]{6}-[0-9a-f]{8}", re.I)
+
+
+def person_post(text, thread=None, reply_to=None, uploads=(), signer=None, limited=False):
     """A post as the person. As the Slack mirror does it: a plain message wakes the agent last on the thread, a reply wakes the author
     of the post replied to, and no thread (or a thread with no agent yet) starts a new agent. Mentions in the text win.
     signer: who signed in, from a verified Access token, when more than one person can: it heads the text, so an agent and the board can see who wrote it.
@@ -1435,6 +1467,10 @@ def person_post(text, thread=None, reply_to=None, uploads=(), signer=None):
     if thread and not THREAD_NAME.fullmatch(str(thread)): raise ValueError("a thread name is letters, digits and . _ : -")
     if not text and not paths: raise ValueError("nothing to send")
     if not text: text = "Attached: " + ", ".join(p.name for p in paths)
+    # Approving a step goes to the broker, which takes only a whole line in this form from a plain person post. So it stays bare, with nothing added;
+    # a limited sign-in's posts are marked and never count, whatever lines they hold.
+    word = not limited and not paths and bool(STEP_WORD.fullmatch(text.strip()))
+    if word: text, reply_to, signer = text.strip(), None, None
     if signer: text = f"(from {signer}, web app) {text}"
     INDEX.refresh()
     who = None
@@ -1445,13 +1481,13 @@ def person_post(text, thread=None, reply_to=None, uploads=(), signer=None):
         who = author if AGENT_CODE.fullmatch(author) else None
         text = f"reply to message {reply_to}: {text}"
     routed = False
-    if not calls_someone(text):
+    if not word and not calls_someone(text):
         who = who or (INDEX.last.get(thread) if thread else None)
         text = f"@{who or 'new'} {text}"
         routed = bool(who)  # we picked the name, so a dead agent's heir may take it; only a typed name brings a dead agent back
     cmd = [str(HIVE_BIN), "post", "--as", PERSON] + (["--thread", str(thread)] if thread else []) + (["--to", who] if who else []) + (["--routed"] if routed else []) + (["--reply-to", reply_to] if reply_to else [])
     for p in paths: cmd += ["--file", str(p)]
-    r = subprocess.run(cmd, input=text, text=True, capture_output=True, env=child_env(), cwd=str(HOME), timeout=60)
+    r = subprocess.run(cmd, input=text, text=True, capture_output=True, env={**child_env(), **({"HIVE_POST_VIA": "limited"} if limited else {})}, cwd=str(HOME), timeout=60)
     if r.returncode: raise ValueError(short(r.stderr, 300) or "the post failed")
     for p in paths: shutil.rmtree(p.parent, ignore_errors=True)
     pid = r.stdout.strip()
@@ -1548,8 +1584,9 @@ def save_plan(name, text, version, start, signer):
     now_v = str(f.stat().st_mtime_ns) if f.exists() else None
     if now_v != version: raise ValueError("this plan changed since you opened it. Copy your text, reload and try again")
     d.mkdir(parents=True, exist_ok=True)
-    t = f.with_name(f".goals.md.{os.getpid()}.{threading.get_ident()}")
-    t.write_text(text); t.replace(f)
+    fd, t = tempfile.mkstemp(dir=d, prefix=".goals.md.")  # agents write in this folder: never a name they could have put a link at
+    with os.fdopen(fd, "w") as o: os.fchmod(fd, 0o644); o.write(text)
+    os.replace(t, f)
     res = {"version": str(f.stat().st_mtime_ns)}
     if start: res.update(person_post(f"Plan saved in `~/projects/{name}/goals.md`. Read it and start the work.", signer=signer))
     else: dash_note(f"Plan for `{name}` saved by {signer or 'this machine'}, in the web app. Nothing was started.", "plans")
@@ -1815,7 +1852,7 @@ _cfg_lock = threading.Lock()
 
 def config_view():
     c = cfg()
-    return {k: c.get(k) for k in ("max_sessions", "keeper_every_s", "keeper_idle_s", "usage_stop_pct", "auto_update")}
+    return {k: c.get(k) for k in ("max_sessions", "keeper_every_s", "keeper_idle_s", "usage_stop_pct", "auto_update", "update_every_s")}
 
 
 def set_config(d):
@@ -1836,6 +1873,10 @@ def set_config(d):
     if "auto_update" in d:
         if type(d["auto_update"]) is not bool: raise ValueError("auto_update is on or off")
         new["auto_update"] = d["auto_update"]
+    if "update_every_s" in d:
+        v = d["update_every_s"]
+        if type(v) is not int or not 900 <= v <= 7 * 86400: raise ValueError("how often to look for a release is 15 minutes to 7 days")
+        new["update_every_s"] = v
     if not new: raise ValueError("nothing to change")
     with _cfg_lock:
         c = jload(HOME / "core" / "config.json")
@@ -1859,14 +1900,77 @@ def starter_do(what):
     if r.returncode: raise ValueError(short(r.stderr, 300) or f"systemctl {what} failed")
 
 
+def update_view():
+    """What Settings shows about releases: update.py's own record, and whether it's running now (it holds this lock)."""
+    st = jload(STATE / "update.json", {})
+    if not isinstance(st, dict): st = {}
+    running = False
+    try:
+        with open(STATE / "update.lock", "a") as f:
+            try: fcntl.flock(f, fcntl.LOCK_SH | fcntl.LOCK_NB)
+            except OSError: running = True
+    except OSError: pass
+    tag = st.get("tag")
+    if not tag and INSTALLED.exists():  # the timer hasn't run yet on a fresh install
+        try: tag = subprocess.run(["git", "-C", str(HOME / "core"), "describe", "--tags", "--abbrev=0"], capture_output=True, text=True, timeout=10).stdout.strip() or None
+        except (OSError, subprocess.SubprocessError): pass
+    c = cfg()
+    return {"installed": INSTALLED.exists(), "tag": tag, "newest": st.get("newest"), "checked": st.get("checked"), "at": st.get("at"), "failed": st.get("failed") or [],
+            "error": st.get("error") or st.get("stuck"), "running": running, "auto_update": c.get("auto_update", True), "update_every_s": c.get("update_every_s") or 900}
+
+
+def update_do(what):
+    """Check now waits for the answer. Update now runs outside this app, in the timer's own service: an update restarts this app."""
+    if not INSTALLED.exists(): raise ValueError("this Hive wasn't installed from a release, so it has nothing to update")
+    f = HOME / "core" / "update.py"
+    if what == "check":
+        try: r = subprocess.run([sys.executable, "-I", str(f), "--check"], env=child_env(), capture_output=True, text=True, timeout=120)
+        except OSError as e: raise ValueError(f"couldn't look for a release: {e}")
+        if r.returncode: raise ValueError(short(r.stderr, 300))
+    elif what == "install":
+        now = STATE / "update-now"
+        now.write_text("")
+        try: done = subprocess.run(["systemctl", "--user", "start", "--no-block", "hive-update.service"], capture_output=True, timeout=30, env=child_env()).returncode == 0
+        except (OSError, subprocess.SubprocessError): done = False
+        if not done:
+            now.unlink(missing_ok=True)
+            try: subprocess.Popen([sys.executable, "-I", str(f)], env=child_env(), start_new_session=True, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            except OSError as e: raise ValueError(f"couldn't start the update: {e}")
+    else: raise ValueError("check or install")
+    return update_view()
+
+
+def send_feedback(d):
+    """A consumer Hive's Send feedback: to the makers through the report module, which scrubs the comment and keeps a copy. Never onto this board."""
+    f = HOME / "modules" / "report" / "report.py"
+    if not SETTINGS.is_file() or not f.is_file(): raise ValueError("this Hive has no way to send feedback to the makers")
+    text, page, image = d.get("text"), d.get("page"), d.get("image")
+    if not isinstance(text, str) or len(text) > 8000: raise ValueError("a comment can be up to 8,000 characters")
+    if image is not None and not (isinstance(image, str) and image.startswith("/9j/") and len(image) <= 450000): raise ValueError("the picture is too large to send")
+    if not text.strip() and not image: raise ValueError("write a comment or add a picture first")
+    try: r = subprocess.run([sys.executable, "-I", str(f), "feedback"], input=json.dumps({"text": text, "page": page, "image": image}), env=child_env(), capture_output=True, text=True, timeout=45)
+    except OSError as e: raise ValueError(f"couldn't send it: {e}")
+    if r.returncode: raise ValueError(short(r.stderr, 300).removeprefix("not sent: ") or "couldn't send it")
+    return {"ok": True}
+
+
+def module_repo(name):
+    """The GitHub page of a module that is its own clone, or None. Built from owner/repo alone, so a token in the remote's URL can't reach the page."""
+    d = HOME / "modules" / name
+    if not (d / ".git").exists(): return None  # otherwise git would answer for ~, the repo around it
+    r = subprocess.run(["git", "-C", str(d), "config", "--get", "remote.origin.url"], capture_output=True, text=True, timeout=10)
+    m = re.fullmatch(r"(?:https://(?:[^@/]+@)?github\.com/|ssh://git@github\.com/|git@github\.com:)([\w.-]+/[\w.-]+?)(?:\.git)?/?", r.stdout.strip())
+    return f"https://github.com/{m[1]}" if m else None
+
+
 def modules_view():
-    """`hive module list`, parsed: {name, state, about, needs}."""
+    """`hive module list`, parsed: {name, state, about, needs, repo}."""
     r = subprocess.run([str(HIVE_BIN), "module", "list"], capture_output=True, text=True, env=child_env(), cwd=str(HOME), timeout=30)
     out = []
     for ln in r.stdout.splitlines():
         if not (m := re.match(r"(\S+)\s+(installed|available)\s*(.*)$", ln)): continue
         about = m[3]; needs = re.search(r" \[needs (.*)\]$", about)
-        out.append({"name": m[1], "state": m[2], "about": about[:needs.start()] if needs else about, "needs": needs[1] if needs else None})
+        out.append({"name": m[1], "state": m[2], "about": about[:needs.start()] if needs else about, "needs": needs[1] if needs else None, "repo": module_repo(m[1])})
     return out
 
 
@@ -1980,9 +2084,14 @@ class DesignRoom:
     SOCK, CONF, DIR, UNIT = HOME / ".hive" / "design.tmux", HOME / ".hive" / "design.tmux.conf", HOME / "designs", "hive-design"
     KEYS = {"enter": "Enter", "esc": "Escape", "up": "Up", "down": "Down", "tab": "Tab", "stop": "C-c"}
     LINK = re.compile(r"https://claude\.ai/(?:code/)?artifact/[\w-]+")
+    # Claude Code's own words on the screen. Standalone Claude Design, and with it this sign-in and grant, closes by this date (its message, 2026-11-03).
+    NEEDS_SIGNIN, SIGNED_IN, GRANTED, REVOKED = "run /design-login", "Design-system access authorized", "Design agent access granted", "Design agent access revoked"
+    CONNECT_UNTIL = "2026-12-14"
 
     def __init__(self):
         self.lock = threading.Lock()
+        self.connecting = threading.Lock()
+        self.who = None
 
     def tmux(self, *args, stdin=None):
         return subprocess.run(["tmux", "-u", "-S", str(self.SOCK), "-f", str(self.CONF), *args], input=stdin, capture_output=True, text=True, errors="replace", timeout=10)
@@ -2013,11 +2122,32 @@ class DesignRoom:
         run, screen = self.running(), ""
         if run:
             screen = self.tmux("capture-pane", "-p", "-J", "-S", "-5000", "-t", "design").stdout.rstrip()[-200000:]
-        return {"running": run, "screen": screen, "links": self.links(screen), "logins": [{"name": l["name"], "weekly": l.get("weekly")} for l in self.open_logins()], "dir": str(self.DIR)}
+        return {"running": run, "screen": screen, "links": self.links(screen), "logins": [{"name": l["name"], "weekly": l.get("weekly")} for l in self.open_logins()], "dir": str(self.DIR),
+                "connected": self.connected(screen), "session_login": self.session_login() if run else None, "can_connect": time.strftime("%Y-%m-%d") <= self.CONNECT_UNTIL, "agents_design": shutil.which("hive-design") is not None}
+
+    def session_login(self):
+        """The login the running session is on, from its unit's command line."""
+        if self.who: return self.who
+        r = subprocess.run(["systemctl", "--user", "show", self.UNIT + ".service", "-p", "ExecStart", "--value"], capture_output=True, text=True, timeout=10)
+        self.who = next((l["name"] for l in logins() if f"CLAUDE_CONFIG_DIR={l['path']} " in r.stdout + " "), None)
+        return self.who
+
+    def connected(self, screen=""):
+        """The logins whose Claude Design projects agents may use, as last seen on a session's screen, kept so they outlast it."""
+        path, have = self.DIR / "connected.json", []
+        try: have = json.loads(path.read_text())
+        except (OSError, ValueError): pass
+        got, gone = screen.rfind(self.GRANTED), screen.rfind(self.REVOKED)
+        who = self.session_login() if got >= 0 or gone >= 0 else None
+        if who and (got > gone) != (who in have):
+            have = sorted(set(have) | {who}) if got > gone else [x for x in have if x != who]
+            self.DIR.mkdir(exist_ok=True); path.write_text(json.dumps(have))
+        return have
 
     def start(self, name):
         with self.lock:
             if self.running(): return {"ok": True}
+            self.who = None
             hit = [l for l in self.open_logins() if l["name"] == name]
             if not hit: raise ValueError("that login isn't open: it's paused, past its weekly line, or not a login")
             self.DIR.mkdir(exist_ok=True)
@@ -2042,16 +2172,37 @@ class DesignRoom:
         return {"ok": True}
 
     def grant(self, name):
-        """The person's button: types /design consent for them, once, in the page's session, with the answer on its screen. Never called by anything else."""
+        """The person's button, and only theirs: one press types the commands for them in the page's session, with every answer on its screen. Never called by anything else."""
         if not self.running(): self.start(name)
-        def go():
-            end = time.time() + 40
-            while time.time() < end:
-                if self.running() and "\u276f" in self.tmux("capture-pane", "-p", "-t", "design").stdout:
-                    self.send("/design consent"); return
-                time.sleep(0.5)
-        threading.Thread(target=go, daemon=True).start()
+        threading.Thread(target=self.connect, daemon=True).start()
         return {"ok": True}
+
+    def count(self, words):
+        return self.tmux("capture-pane", "-p", "-J", "-S", "-5000", "-t", "design").stdout.count(words)
+
+    def until(self, test, seconds):
+        end = time.time() + seconds
+        while time.time() < end:
+            if self.running() and test(): return True
+            time.sleep(self.TICK)
+        return False
+
+    TICK = 0.5
+
+    def connect(self, ask_s=120, signin_s=330):
+        """Try the grant. If it says to sign in, start the sign-in, which the person answers on the screen, and try again once it has worked. A second press while this runs does nothing."""
+        if not self.connecting.acquire(blocking=False): return
+        try:
+            if not self.until(lambda: "\u276f" in self.tmux("capture-pane", "-p", "-t", "design").stdout, 40): return
+            asked, done = self.count(self.NEEDS_SIGNIN), self.count(self.GRANTED)
+            self.send("/design consent")
+            if not self.until(lambda: self.count(self.NEEDS_SIGNIN) > asked or self.count(self.GRANTED) > done, ask_s) or self.count(self.GRANTED) > done: return
+            signed = self.count(self.SIGNED_IN)
+            self.send("/design-login")
+            if self.until(lambda: self.count(self.SIGNED_IN) > signed, signin_s):
+                time.sleep(self.TICK); self.send("/design consent")
+        except (OSError, ValueError, subprocess.SubprocessError): pass  # the session ended under it: the page shows that, and the button is still there
+        finally: self.connecting.release()
 
     def act(self, d):
         what = d.get("do")
@@ -2431,7 +2582,7 @@ def serve(port):
             sandboxed, no sniffing, and only plain images open in the tab."""
             m = re.fullmatch(r"/files/([0-9a-f]{12})/([A-Za-z0-9_][A-Za-z0-9_.-]*)", path)
             f = HOME_FILES / m[1] / m[2] if m else None
-            if not f or f.is_symlink() or not f.is_file(): return self.send_error(404)
+            if not f or f.is_symlink() or not f.is_file() or not f.resolve().is_relative_to(HOME_FILES.resolve()): return self.send_error(404)
             ct = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif"}.get(f.suffix.lower())
             self.send_response(200)
             self.send_header("Content-Type", ct or "application/octet-stream")
@@ -2536,7 +2687,7 @@ def serve(port):
             J = "application/json"
             if u.path == "/api/app":
                 self.send(json.dumps(self.app_info(), default=str).encode(), J)
-            elif u.path in ("/api/target", "/api/inbox", "/api/config", "/api/modules", "/api/signin", "/api/plans", "/api/secrets", "/api/settings", "/api/signin-codex", "/api/design", "/api/kb/home", "/api/kb/open", "/api/kb/search", "/api/kb/raw") and self.route == "open":
+            elif u.path in ("/api/target", "/api/inbox", "/api/config", "/api/modules", "/api/signin", "/api/plans", "/api/secrets", "/api/settings", "/api/update", "/api/signin-codex", "/api/design", "/api/kb/home", "/api/kb/open", "/api/kb/search", "/api/kb/raw") and self.route == "open":
                 self.send_error(404)
             elif u.path == "/api/kb/home":
                 self.send(json.dumps(kb_home()).encode(), J)
@@ -2558,6 +2709,8 @@ def serve(port):
                 self.send(json.dumps(inbox_view()).encode(), J)
             elif u.path == "/api/config":
                 self.send(json.dumps(config_view()).encode(), J)
+            elif u.path == "/api/update":
+                self.send(json.dumps(update_view()).encode(), J)
             elif u.path == "/api/modules":
                 self.send(json.dumps(modules_view()).encode(), J)
             elif u.path == "/api/signin":
@@ -2569,7 +2722,7 @@ def serve(port):
             elif u.path == "/api/signin-codex":
                 self.send(json.dumps(CODEX.view()).encode(), J)
             elif u.path == "/api/live":
-                self.send(json.dumps({**live_c.get(), "web": web_c.get()}, default=str).encode(), J)
+                self.send(json.dumps({**agents_for(live_c.get(), self.route != "outside" or self.mode == "full"), "web": web_c.get()}, default=str).encode(), J)
             elif u.path == "/api/jobs":
                 self.send(json.dumps(jobs_for(jobs_c.get(), self.route != "outside" or self.mode == "full"), default=str).encode(), J)
             elif u.path in ("/api/board", "/api/log"):
@@ -2584,11 +2737,11 @@ def serve(port):
             elif u.path == "/api/thread-names":
                 self.send(json.dumps(thread_names()).encode(), J)
             elif u.path == "/api/agent":
-                self.send(json.dumps(agent_feed(q.get("name", [""])[0])).encode(), J)
+                self.send(json.dumps(feed_for(agent_feed(q.get("name", [""])[0]), self.route != "outside" or self.mode == "full")).encode(), J)
             elif u.path == "/api/projects":
                 self.send(json.dumps(proj_c.get(), default=str).encode(), J)
             elif u.path == "/json":
-                self.send(json.dumps(snapshot(), default=str).encode(), J)
+                self.send(json.dumps(agents_for(snapshot(), self.route != "outside" or self.mode == "full"), default=str).encode(), J)
             elif u.path.startswith("/files/"):
                 self.send_file(u.path)
             else:
@@ -2619,15 +2772,17 @@ def serve(port):
                 if not 0 < n <= MAX_FILE: return self.deny(413, "a file can be up to 100 MB")
                 try: return self.send(json.dumps(save_upload(parse_qs(u.query).get("name", ["file"])[0], n, self.rfile)).encode(), "application/json")
                 except (ValueError, OSError) as e: return self.deny(400, str(e))
-            if not 0 < n < ({"/api/post": 2**20, "/api/plan": 2**19, "/api/secret": 2**18}.get(u.path) or (4096 if self.route != "open" else 1024)): return self.send_error(403)
+            if not 0 < n < ({"/api/post": 2**20, "/api/feedback": 2**20, "/api/plan": 2**19, "/api/secret": 2**18}.get(u.path) or (4096 if self.route != "open" else 1024)): return self.send_error(403)
             try: d = json.loads(self.rfile.read(n))
             except ValueError: return self.send_error(400)
             if not isinstance(d, dict): return self.send_error(400)
             num = lambda v: v is None or (isinstance(v, (int, float)) and not isinstance(v, bool))
             J = "application/json"
-            if u.path in ("/api/post", "/api/inbox-read", "/api/config", "/api/starter", "/api/module", "/api/signin", "/api/signin/code", "/api/signin/cancel", "/api/access", "/api/plan", "/api/secret", "/api/settings", "/api/signin-codex", "/api/account-key", "/api/design"):
+            if u.path in ("/api/post", "/api/feedback", "/api/update", "/api/inbox-read", "/api/config", "/api/starter", "/api/module", "/api/signin", "/api/signin/code", "/api/signin/cancel", "/api/access", "/api/plan", "/api/secret", "/api/settings", "/api/signin-codex", "/api/account-key", "/api/design"):
                 try:
-                    if u.path == "/api/post": res = person_post(d.get("text"), d.get("thread"), d.get("reply_to"), d.get("files"), signer=self.signer)
+                    if u.path == "/api/post": res = person_post(d.get("text"), d.get("thread"), d.get("reply_to"), d.get("files"), signer=self.signer, limited="config" not in self.can)
+                    elif u.path == "/api/feedback": res = send_feedback(d)
+                    elif u.path == "/api/update": res = update_do(d.get("do"))
                     elif u.path == "/api/plan": res = save_plan(d.get("name"), d.get("text"), d.get("version"), bool(d.get("start")), self.signer)
                     elif u.path == "/api/secret": res = set_secret(d.get("name"), d.get("value"), self.signer, delete=bool(d.get("delete")))
                     elif u.path == "/api/inbox-read": res = {"marked": mark_read(None if d.get("all") else [str(i) for i in d.get("ids") or []])}

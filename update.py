@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """hive update: bring an installed Hive up to the newest release, and go back if that fails.
 
-A release is a tag v<major>.<minor>.<patch> on origin; only this major line counts. hive-update.timer runs this every
-15 minutes, and `"auto_update": false` in config.json stops that (`hive update` by hand still works).
+A release is a tag v<major>.<minor>.<patch> on origin; only this major line counts. hive-update.timer ticks every
+15 minutes, and `"update_every_s"` in config.json makes it look for a release less often. `"auto_update": false` stops
+it installing: it still looks, so the app can say a release is there, and `hive update` by hand or Update now in the app
+installs it. Both those settings and the state in update.json (tag, newest, checked, at, failed, error) are read by Settings in the app.
 What it keeps: the agents' own commits in ~/core (rebased onto the release) and uncommitted edits such as saved settings.
 A conflict with either, a failed install or services that don't come back leave the Hive as it was, skip that release
 and tell the person. Restarting the starter doesn't stop running agents.
@@ -10,7 +12,7 @@ and tell the person. Restarting the starter doesn't stop running agents.
 import argparse, fcntl, json, os, re, shutil, subprocess, sys, time, urllib.error, urllib.request
 from pathlib import Path
 
-HOME = Path.home(); CORE = Path(__file__).resolve().parent; STATE = HOME / ".hive"; STATE_F = STATE / "update.json"
+HOME = Path.home(); CORE = Path(__file__).resolve().parent; STATE = HOME / ".hive"; STATE_F = STATE / "update.json"; NOW = STATE / "update-now"  # NOW: the app's Update now, for the --auto run it starts
 MAJOR = 2
 TAG = re.compile(rf"^v{MAJOR}\.(\d+)\.(\d+)$")
 SETTLE = float(os.environ.get("HIVE_UPDATE_SETTLE", "8"))  # seconds services get to fall over before they count as up
@@ -142,38 +144,51 @@ def apply(tag, st):
 
 def main():
     p = argparse.ArgumentParser(prog="hive update", description="Update this Hive to the newest release.")
-    p.add_argument("--check", action="store_true", help="say what's installed and what's newest, change nothing")
-    p.add_argument("--auto", action="store_true", help="the timer's run: does nothing if auto_update is off")
+    p.add_argument("--check", action="store_true", help="say what's installed and what's newest, and install nothing")
+    p.add_argument("--auto", action="store_true", help="the timer's run: keeps to update_every_s, and installs nothing if auto_update is off")
     a = p.parse_args()
     if not (HOME / ".hive-installed").exists(): sys.exit("hive update: this isn't an installed Hive")
-    if a.auto and config().get("auto_update", True) is False: return print("auto_update is off")
     STATE.mkdir(exist_ok=True)
     lock = open(STATE / "update.lock", "w")
     try: fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError: sys.exit("hive update: another update is running")
     st = load()
-    if not a.check: claude_update(st)
+    asked = a.auto and NOW.exists()
+    NOW.unlink(missing_ok=True) if asked else None
+    off = a.auto and not asked and config().get("auto_update", True) is False
+    if not a.check and not off: claude_update(st)
+    every = config().get("update_every_s")
+    # A release already seen and not installed (stuck, or offline at the time) doesn't wait out the interval.
+    if a.auto and not asked and type(every) is int and every > 900 and time.time() - st.get("checked", 0) < every and (off or not st.get("newest")):
+        return print("auto_update is off" if off else f"looked for a release less than {every} seconds ago")
     try: all_tags = tags()
     except (Failed, subprocess.SubprocessError) as e: sys.exit(f"hive update: can't read releases: {e}")  # offline: the next run tries again
     skip = st.get("failed", [])
     new = [t for t in all_tags if t not in skip and (not st.get("tag") or key(t) > key(st["tag"]))]
+    # A fresh install is already on this tag: nothing to do, and nothing to tell anyone.
+    if new and not st.get("tag") and git("rev-parse", "HEAD", check=False).stdout == git("rev-parse", "-q", "--verify", f"{new[-1]}^{{commit}}", check=False).stdout:
+        st["tag"] = new[-1]; new = []
+    st["checked"] = time.time()
+    if new: st["newest"] = new[-1]
+    else: st.pop("newest", None)
+    save(st)
+    if off: return print(f"auto_update is off; {new[-1]} is available" if new else "auto_update is off; up to date")
     if a.check: return print(f"installed: {st.get('tag', 'before the first release')}; newest: {all_tags[-1] if all_tags else 'none'}" + (f"; skipped: {', '.join(skip)}" if skip else ""))
     if not new: return print(f"up to date ({st.get('tag', 'no release yet')})")
     tag = new[-1]
-    # A fresh install is already on this tag: nothing to do, and nothing to tell anyone.
-    if not st.get("tag") and git("rev-parse", "HEAD", check=False).stdout == git("rev-parse", "-q", "--verify", f"{tag}^{{commit}}", check=False).stdout:
-        st["tag"] = tag; save(st)
-        return print(f"up to date ({tag})")
     try:
         apply(tag, st)
     except Stuck as e:
+        st["error"] = str(e); save(st)
         if st.get("stuck") != str(e): st["stuck"] = str(e); save(st); say(f"Can't update, and {tag} will be tried again: {e}", person=True)
         sys.exit(f"hive update: {e}")
     except (Failed, subprocess.SubprocessError) as e:
-        st["failed"] = sorted(set(skip) | {tag}, key=key); save(st)
+        st["failed"] = sorted(set(skip) | {tag}, key=key); st["error"] = str(e); st.pop("newest", None); save(st)
         say(f"Update failed: {e}", person=True)
         sys.exit(f"hive update: {e}")
-    st.pop("stuck", None); st["tag"] = tag; st["at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()); save(st)
+    except SystemExit as e:  # offline partway: the next run tries again, and the app can say why it hasn't happened yet
+        st["error"] = str(e.code); save(st); raise
+    st.pop("stuck", None); st.pop("error", None); st.pop("newest", None); st["tag"] = tag; st["at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()); save(st)
     say(f"Updated to {tag}.")
     print(f"updated to {tag}")
 

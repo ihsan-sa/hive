@@ -21,7 +21,7 @@ Go to **Settings**, then **Extras**, and click **Add** next to one. Or ask in Ch
 
 ## Add one from elsewhere
 
-Paste a Git URL in **Add from a Git URL** under Extras. A module's code runs with your agents' full rights, so only add ones you trust.
+Paste a Git URL in **Add from a Git URL** under Extras. A module's code runs in your Hive, so only add ones you trust.
 
 ## Make your own
 

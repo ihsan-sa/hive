@@ -5,7 +5,7 @@ import { form } from "../templates.js";
 import { pageHeader, section, block, blocks, button, field, input, empty, statusLabel } from "../ui/kit.js";
 import { act, isBusy } from "../ui/activity.js";
 import { startSignin, signinBox, clearSignin } from "../ui/signin.js";
-import { plural } from "../core/format.js";
+import { ago, plural } from "../core/format.js";
 import { href } from "../core/router.js";
 import { copyButton } from "../ui/refs.js";
 import { POWER, codexPart, forget, keysPart, loadPage, pageData, powerPart, reading, rootNote, sandboxPart, sharePart } from "../ui/setup.js";
@@ -23,6 +23,58 @@ async function loadCfg(ctx) {
   F.ed ||= { max: F.cfg.max_sessions ?? "", kp: !!F.cfg.keeper_every_s, au: F.cfg.auto_update !== false };
   F.saved ||= { max: F.ed.max };
   ctx.update();
+}
+async function loadUpdate(ctx) {
+  if (!can("config")) return;
+  try { F.up = await jget("/api/update"); } catch (e) { return false; }   // an update restarts the app, so a poll can miss
+  ctx.update(); return true;
+}
+const EVERY = [[900, "Every 15 minutes"], [3600, "Every hour"], [21600, "Every 6 hours"], [86400, "Every day"], [604800, "Every week"]];
+const pause = ms => new Promise(r => setTimeout(r, ms));
+async function checkNow(ctx) {
+  say("up", "");
+  try { await act("up-check", "Looking for a release", async () => { F.up = await post("/api/update", { do: "check" }); }, ctx.update); }
+  catch (e) { say("up", e.message, "bad"); }
+  ctx.update();
+}
+/** Update now: it runs in its own service, and restarts this app on the way, so wait it out by asking until it says it's over. */
+async function updateNow(ctx) {
+  const from = F.up.tag;
+  say("up", "Updating. This can take a few minutes, and this page may reconnect.");
+  try {
+    await act("up-install", "Updating", async () => {
+      F.up = await post("/api/update", { do: "install" });
+      let began = F.up.running;
+      for (const t0 = Date.now(); Date.now() - t0 < 30 * 60e3; await pause(2000)) {
+        const read = await loadUpdate(ctx);
+        if (read && F.up.running) began = true;
+        if (read && !F.up.running && (began || Date.now() - t0 > 20e3)) break;   // not begun 20 s on: whatever it left behind says why
+      }
+    }, ctx.update);
+    if (F.up.error) say("up", "It didn't update: " + F.up.error, "bad");
+    else say("up", F.up.tag !== from ? `Updated to ${F.up.tag}.` : "It's still running in the background, or it found nothing to do.", F.up.tag !== from ? "good" : null);
+  } catch (e) { say("up", e.message, "bad"); }
+  ctx.update();
+}
+/** The installed release, Check now, Update now, and how often to look. Only a Hive installed from a release has these. */
+function versionBlocks(ctx, save) {
+  const U = F.up;
+  if (!U || !U.installed) return null;
+  const busy = isBusy("up-check") || isBusy("up-install");
+  const seen = U.checked ? `Looked for a release ${ago(U.checked * 1000)}.` : "It hasn't looked for a release yet.";
+  const news = U.running ? "Updating now." : U.newest ? `${U.newest} is available.` : U.checked && !U.failed.length ? "This is the newest." : "";
+  const every = U.update_every_s, opts = EVERY.some(o => o[0] === every) ? EVERY : [...EVERY, [every, `Every ${plural(Math.round(every / 60), "minute")}`]];
+  return [
+    block({ title: "Version", sub: `${seen} ${news}`, state: h("b", { "data-up": "tag" }, U.tag || "before the first release"),
+      actions: [button("Check now", () => checkNow(ctx), { size: "s", busy: isBusy("up-check"), disabled: busy || U.running }),
+        U.newest ? button("Update now", () => updateNow(ctx), { size: "s", kind: "primary", busy: isBusy("up-install"), disabled: busy || U.running }) : null] },
+      U.failed.length ? h("p", { class: "meta" }, `Skipped because updating to it failed: ${U.failed.join(", ")}.`) : null,
+      U.error && !F.say.up ? h("p", { class: "fmsg", "data-tone": "bad" }, "Last try: " + U.error) : null,
+      msg("up")),
+    block({ title: "Look for new releases", sub: "How often this Hive looks. It installs what it finds if Update by itself is on.",
+      actions: h("select", { class: "input", value: every, "aria-label": "Look for new releases", title: "Look for new releases", style: "width:auto", onchange: e => { const was = U.update_every_s, v = +e.target.value; U.update_every_s = v; save({ update_every_s: v }, () => { U.update_every_s = was; }); } },
+        opts.map(([v, label]) => h("option", { value: v }, label))) }),
+  ];
 }
 async function loadMods(ctx) {
   if (!can("modules")) return;
@@ -68,7 +120,8 @@ function hiveSection(ctx) {
       block({ title: "Status", sub: up ? "Stopping lets agents finish their turn." : null, state: statusLabel(up ? "working" : "ended", up ? "running" : "not running"), actions: button(up ? "Stop the hive" : "Start the hive", starter, { size: "s", busy: isBusy("starter") }) }),
       block({ title: "Keep work moving", sub: "Every 3 hours, pick up work that stopped and start work nobody asked for. It uses your limits.",
         actions: toggle("Keep work moving", E.kp, v => { E.kp = v; save({ keeper_every_s: v ? (F.cfg.keeper_every_s || 10800) : 0 }, () => { E.kp = !v; }); }) }),
-      block({ title: "Update by itself", sub: "Installs each new release. Keeps your settings and goes back if it fails.",
+      versionBlocks(ctx, save),
+      block({ title: "Update by itself", sub: F.up && F.up.installed ? "Installs each new release. Keeps your settings and goes back if it fails. When it's off, this Hive still looks and says so above, and you choose when to update." : "Installs each new release. Keeps your settings and goes back if it fails.",
         actions: toggle("Update by itself", E.au, v => { E.au = v; save({ auto_update: v }, () => { E.au = !v; }); }) }),
       block({ title: "Agents at once", sub: "Empty means no limit.",
         actions: input({ type: "number", min: 1, max: 200, placeholder: "no limit", "aria-label": "Agents at once", style: "width:7rem", value: E.max, oninput: (e, n) => { E.max = n.value; }, onchange: saveMax }) })),
@@ -122,7 +175,7 @@ function modulesSection(ctx) {
   };
   return section({ title: "Extras", level: 1, note: "optional tools your agents can use (modules)" },
     F.mods == null ? empty("Reading…", { kind: "loading" }) : F.mods.length ? h("ul", { class: "list" }, F.mods.map(x => h("li", { class: "lr", "data-key": x.name },
-      h("div", { class: "lr-in mod-row" }, h("b", { class: "mod-name" }, x.name), h("span", { class: "muted mod-about" }, x.about.replace(/`/g, ""), x.needs ? ` Needs ${x.needs}.` : ""),
+      h("div", { class: "lr-in mod-row" }, h("b", { class: "mod-name" }, x.repo ? h("a", { href: x.repo, target: "_blank", rel: "noreferrer noopener" }, x.name) : x.name), h("span", { class: "muted mod-about" }, x.about.replace(/`/g, ""), x.needs ? ` Needs ${x.needs}.` : ""),
         x.name === "dash" ? h("span", { class: "meta" }, "this app") : x.name === "slack-door" && x.state !== "installed" && built("slack-door") ? button(F.slack ? "Close" : "Set up", () => { F.slack = F.slack ? null : { step: 1, bot: "", app: "", channel: "#hive" }; ctx.update(); }, { size: "s", kind: F.slack ? "quiet" : null }) : button(x.state === "installed" ? "Remove" : "Add", () => act(x.state === "installed" ? "remove" : "add", x.name), { size: "s", busy: F.busy[x.name] }))))) : empty("No modules listed."),
     h("form", { class: "frow", onsubmit: e => { e.preventDefault(); if (F.url.trim()) act("add", F.url.trim()); } },
       h("div", { style: "flex:1;min-width:12rem" }, field("Add from a Git URL", input({ placeholder: "Git URL of a module", value: F.url, oninput: (e, n) => { F.url = n.value; } }))),
@@ -225,7 +278,7 @@ function glance(ctx) {
 
 export default {
   id: "settings", label: "Settings", about: "accounts, extras, access", tab: () => S.app.app && (can("config") || can("modules") || can("logins")),
-  enter(ctx) { F.ed = null; F.saved = null; F.access = null; F.acctOpen = null; F.accessOpen = null; F.say = {}; clearSignin(); forget(); loadCfg(ctx); loadMods(ctx); if (S.app.settings && can("config")) loadPage(ctx.update); },
+  enter(ctx) { F.ed = null; F.saved = null; F.access = null; F.acctOpen = null; F.accessOpen = null; F.say = {}; clearSignin(); forget(); F.up = null; loadCfg(ctx); loadUpdate(ctx); loadMods(ctx); if (S.app.settings && can("config")) loadPage(ctx.update); },
   leave() { forget(); forgetSecrets(); },
   render(ctx) {
     if (!S.app.app) return h("div", { class: "page" }, empty("Settings show only in the app, opened from this machine.", { kind: "page", title: "Settings" }));

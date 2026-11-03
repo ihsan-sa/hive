@@ -31,6 +31,7 @@ export function agentState(a) {
   const j = a.jobs || {}, more = unseen ? `, ${unseen} new post${unseen > 1 ? "s" : ""} when it returns` : "";
   if (j.running) return { key: "working", text: (j.running > 1 ? j.running + " jobs" : "job") + " running" + (j.queued ? `, ${j.queued} more queued` : "") + more };
   if (j.queued) return { key: "queue", text: `${j.queued > 1 ? j.queued + " jobs" : "job"} in the queue ${dur(j.waited * 1e3)}` + more };
+  if (a.shells) return { key: "quiet", text: `waiting on ${a.shells > 1 ? a.shells + " jobs" : "a job"} it started` + more };   // the starter hands it new posts itself
   if (unseen) return { key: "stuck", text: `quiet ${dur(q)}, hasn't seen ${unseen} new post${unseen > 1 ? "s" : ""} for it` };
   return { key: "quiet", text: "quiet " + dur(q) + (S.app.app ? "" : ", no job in the queue") };
 }
@@ -44,7 +45,7 @@ export function agentStatus(n) {
   else if (!s) v = { key: "none", label: "hasn't run" };
   else if (S.killed[n] >= s.start) v = { key: "killed", label: "killed" };
   else if (S.limitedNow.has(s.session)) v = { key: "limited", label: "stopped at a limit" };
-  else if (s.exit) v = { key: "failed", label: `failed (exit ${s.exit})` };
+  else if (s.exit && s.exit !== 143) v = { key: "failed", label: `failed (exit ${s.exit})` };
   else v = { key: "ended", label: "ended " + ago(sEnd(s)) };
   S.stCache.set(n, v); return v;
 }
@@ -131,8 +132,10 @@ export function fileInfo(k) {
   }
   return { name: s ? s.name : k.split("-")[0], thread: s ? s.thread : null };
 }
-/** A login's weekly share: the newest figure the session logs report, else the starter's own reading. */
-export function fresh7(l) { const w = l.limits && l.limits.seven_day; return w && w.r * 1e3 > now() ? w.u * 100 : l.weekly; }
+/** Is a session's own limit reading the newest we have? An account nobody runs on keeps its last session's figure for days, so the API's reading wins when it's newer. */
+export function sessionNewer(l) { return !l.read_at || ((l.limits && l.limits.at) || 0) >= l.read_at || l.weekly == null; }
+/** A login's weekly share: the newest of the session logs' figure and the API reading. */
+export function fresh7(l) { const w = l.limits && l.limits.seven_day; return w && sessionNewer(l) && w.r * 1e3 > now() ? w.u * 100 : l.weekly; }
 export const weeklyStop = (l, U) => { const st = l.stop || {}; return st.weekly ?? st.global ?? (U && U.stop_pct) ?? 98; };
 /** In use: an account the starter can still give new runs to (not paused, under its weekly stop line). */
 export function inUse(l, U) { if (l.paused) return false; const v = fresh7(l); return v == null || v < weeklyStop(l, U); }
@@ -186,19 +189,19 @@ export function threadTitle(th) {
 /** Only the starter, keeper or box ever posted here. */
 export const isSystemThread = d => !!d && d.posts.every(p => SYS.has(p.from));
 
-// ---- how much of the board someone wants to see: Chat's For you / Updates / Everything ----
-export const SHOW = { you: 0, updates: 1, all: 2 };
+// ---- how much of the board someone wants to see: Chat's For you, Updates and Agent comms ----
+export const SHOW = { you: 1, updates: 2, comms: 4, ALL: 7 };   // bits: any of them can be on
 const OPS = new Set(["watchdog", "memguard"]), HOUSE = new Set(["keeper", "improve", "watchdog"]);   // the hive looking after itself
-/** The narrowest level a post belongs to. 0: from or to the person. 1: an agent or outsider saying how it's going. 2: agents talking to each other, and the hive's own notices. */
-export function postLevel(p) {
+/** Which one a post is. For you: from or to the person. Updates: an agent or outsider saying how it's going. Agent comms: agents talking to each other, and the hive's own notices. */
+export function postKind(p) {
   if (p.lv !== undefined) return p.lv;
-  if (p.from === "person" || p.men.includes("person")) return p.lv = 0;
-  if (SYS.has(p.from) || OPS.has(p.from) || isWarden(p.from) || HOUSE.has(p.th)) return p.lv = 2;
-  return p.lv = p.men.some(m => m !== p.from && !OUTSIDE.has(m)) ? 2 : 1;
+  if (p.from === "person" || p.men.includes("person")) return p.lv = SHOW.you;
+  if (SYS.has(p.from) || OPS.has(p.from) || isWarden(p.from) || HOUSE.has(p.th)) return p.lv = SHOW.comms;
+  return p.lv = p.men.some(m => m !== p.from && !OUTSIDE.has(m)) ? SHOW.comms : SHOW.updates;
 }
-/** The narrowest level anything in a thread belongs to: a thread with nothing at a level isn't listed there. */
-export function threadLevel(d) {
-  if (d.lvN !== d.posts.length) { let v = d.lvN ? d.lv : 2; for (let i = d.lvN || 0; i < d.posts.length; i++) v = Math.min(v, postLevel(d.posts[i])); d.lv = v; d.lvN = d.posts.length; }
+/** Every kind of post a thread has: a thread with none of what's on isn't listed. */
+export function threadKinds(d) {
+  if (d.lvN !== d.posts.length) { let v = d.lvN ? d.lv : 0; for (let i = d.lvN || 0; i < d.posts.length; i++) v |= postKind(d.posts[i]); d.lv = v; d.lvN = d.posts.length; }
   return d.lv;
 }
 /** Each finished run's last word in a thread the person is part of. Agents report a result without naming the person, so For you needs these or it never shows the answer. */
@@ -206,10 +209,10 @@ export function closingPosts() {
   const out = new Set();
   for (const s of S.sessions) {
     const d = s.end && s.thread ? S.threads.get(s.thread) : null;
-    if (!d || threadLevel(d) > SHOW.you) continue;
+    if (!d || !(threadKinds(d) & SHOW.you)) continue;
     for (let i = d.posts.length - 1; i >= 0 && d.posts[i].t >= s.start; i--) {
       const p = d.posts[i];
-      if (p.from === s.name && p.t <= s.end + 5000) { if (postLevel(p) <= SHOW.updates) out.add(p.id); break; }
+      if (p.from === s.name && p.t <= s.end + 5000) { if (postKind(p) !== SHOW.comms) out.add(p.id); break; }
     }
   }
   return out;

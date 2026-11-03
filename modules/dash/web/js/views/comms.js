@@ -8,7 +8,7 @@
 // the messages still on their way (.cm-out), which sync() keeps apart.
 import { h, morph } from "../core/dom.js";
 import { S, can, OUTSIDE, built, post as apiPost, poll } from "../core/store.js";
-import { agentState, agentStatus, isAgent, isRunning, tierOf, threadTitle, threadState, threadPeople, isSystemThread, SHOW, postLevel, threadLevel, closingPosts, displayText, postSource, inUse, fresh7 } from "../core/model.js";
+import { agentState, agentStatus, isAgent, isRunning, tierOf, threadTitle, threadState, threadPeople, isSystemThread, SHOW, postKind, threadKinds, closingPosts, displayText, postSource, inUse, fresh7 } from "../core/model.js";
 import { ago, dayName, stamp, clock, dur, short, mdPlain, now, plural, firstSentence, DAY, MIN, HOUR } from "../core/format.js";
 import { href, threadHref, go } from "../core/router.js";
 import { tier, status } from "../core/status.js";
@@ -45,24 +45,26 @@ const words = s => s.toLowerCase().split(/\s+/).filter(Boolean);
 /** What a search looks through in a post: its text, author and attachment names. */
 const hay = p => (p.lc ??= [p.text, p.from, ...(p.files || []).map(f => f.name)].join(" ").toLowerCase());
 
-// How much to show: For you, Updates or Everything. Kept in this browser. Searching ignores it, so a hidden message can still be found.
-const SHOW_KEY = "hive.comms.show";
-function showing() {
-  if (!C.show) { try { C.show = localStorage.getItem(SHOW_KEY); } catch (e) { /* no storage: the default, for this page */ } }
-  return SHOW[C.show] !== undefined ? C.show : app() ? "updates" : "all";
+// What to show: any of For you, Updates and Agent comms, as a mask of SHOW bits. Kept in this browser. Searching ignores it, so a hidden message can still be found.
+const SHOW_KEY = "hive.comms.kinds", OLD_KEY = "hive.comms.show", OLD = { you: SHOW.you, updates: SHOW.you | SHOW.updates, all: SHOW.ALL };
+function showMask() {
+  if (C.show === null) {
+    try { const v = localStorage.getItem(SHOW_KEY); C.show = v !== null ? Number(v) & SHOW.ALL : OLD[localStorage.getItem(OLD_KEY)]; } catch (e) { /* no storage: the default, for this page */ }
+    if (C.show == null) C.show = app() ? SHOW.you | SHOW.updates : SHOW.ALL;
+  }
+  return C.show;
 }
-function setShowing(k, ctx) { C.show = k; try { localStorage.setItem(SHOW_KEY, k); } catch (e) { /* no storage: this page only */ } ctx.update(); }
-const showLevel = () => SHOW[showing()];
-/** The level this conversation's messages are cut to. By or to a name you asked for by name, and a search, show everything. */
-const levelFor = c => ((c.thread || c.all) && !words(C.q).length ? showLevel() : SHOW.all);
+function setShow(mask, ctx) { C.show = mask; try { localStorage.setItem(SHOW_KEY, mask); } catch (e) { /* no storage: this page only */ } ctx.update(); }
+/** What this conversation's messages are cut to. By or to a name you asked for by name, and a search, show everything. */
+const maskFor = c => ((c.thread || c.all) && !words(C.q).length ? showMask() : SHOW.ALL);
 const closing = { n: -1, set: null };
 const endedRuns = () => { let n = 0; for (const s of S.sessions) if (s.end) n++; return n; };
 function closers(n) { const k = n + ":" + S.posts.length; if (closing.n !== k) { closing.n = k; closing.set = closingPosts(); } return closing.set; }   // the run's end and its last post can reach us in either order
 
-function matcher(c, lv, ended) {
-  const q = words(C.q), last = lv === SHOW.you ? closers(ended) : null;
+function matcher(c, mask, ended) {
+  const q = words(C.q), last = mask & SHOW.you ? closers(ended) : null;
   return p => {
-    if (lv < SHOW.all && postLevel(p) > lv && !(last && last.has(p.id))) return false;
+    if (!(postKind(p) & mask) && !(last && last.has(p.id))) return false;
     if (c.agent && p.from !== c.agent && !p.men.includes(c.agent)) return false;
     if (c.pair && !((p.from === c.pair[0] && p.men.includes(c.pair[1])) || (p.from === c.pair[1] && p.men.includes(c.pair[0])))) return false;
     if (q.length && !q.every(w => hay(p).includes(w) || (!c.thread && (p.th + " " + threadTitle(p.th)).toLowerCase().includes(w)))) return false;
@@ -86,8 +88,8 @@ function threadEvents(th) {
 /** Bring the matches up to date, looking only at posts not yet seen unless the conversation or filter changed. */
 function refresh(c) {
   const src = c.thread ? (S.threads.get(c.thread) || { posts: NONE }).posts : c.home ? NONE : S.posts;
-  // At For you, a run ending can promote a post already in the list, so the list is redone then. That must not move someone who has scrolled up.
-  const lv = levelFor(c), ended = lv === SHOW.you ? endedRuns() : 0, base = [c.arg, C.q, lv].join("\0"), key = base + "\0" + ended, match = matcher(c, lv, ended);
+  // With For you on, a run ending can promote a post already in the list, so the list is redone then. That must not move someone who has scrolled up.
+  const mask = maskFor(c), ended = mask & SHOW.you ? endedRuns() : 0, base = [c.arg, C.q, mask].join("\0"), key = base + "\0" + ended, match = matcher(c, mask, ended);
   const evs = c.thread && !C.q ? threadEvents(c.thread) : [];
   if (key !== L.key || src !== L.src) {
     const m = src.filter(match);
@@ -129,7 +131,7 @@ function paint(box, ctx) {
   L.jump = h("button", { type: "button", class: "cm-jump", hidden: true, onclick: () => { box.scrollTop = box.scrollHeight; } });
   box.replaceChildren(
     ...(older ? [h("div", { class: "cm-older" }, button(`Show older (${older} more)`, () => { C.limit += STEP; L.rebuild = true; L.keep = true; ctx.update(); }, { size: "s" }))] : []),
-    ...(shown.length ? rows(shown) : [empty(C.q ? "No messages match." : L.src.length ? "Nothing here at this setting. Choose Everything to see all the messages." : "No messages yet.")]),
+    ...(shown.length ? rows(shown) : [empty(C.q ? "No messages match." : L.src.length ? "Nothing here with what Show has on. Turn on Agent comms to see all the messages." : "No messages yet.")]),
     L.out, L.jump);
 }
 function setJump() {
@@ -148,7 +150,7 @@ onJump(id => {
   const el = box.querySelector(`[data-key="${CSS.escape(id)}"]`);
   if (el) return flash(box, el);
   const i = L.all.indexOf(p);
-  if (i < 0) { if (showing() === "all" || !L.src.includes(p)) return; L.jumpTo = id; return setShowing("all", L.ctx); }   // a reply quoting a message this setting hides
+  if (i < 0) { if (showMask() === SHOW.ALL || !L.src.includes(p)) return; L.jumpTo = id; return setShow(SHOW.ALL, L.ctx); }   // a reply quoting a message this setting hides
   C.limit = L.all.length - i + 20; L.rebuild = true; L.jumpTo = id; L.ctx.update();
 });
 
@@ -268,8 +270,8 @@ function searchRows(c, ctx, ws) {
 function threadRows(c, ctx) {
   const ws = words(C.tq);
   if (ws.length) return searchRows(c, ctx, ws);
-  const t = now(), lv = showLevel(), ran = new Set(S.live ? S.live.agents.map(a => a.thread) : []);
-  let ds = [...S.threads.values()].filter(d => threadLevel(d) <= lv || d.name === c.thread);
+  const t = now(), mask = showMask(), ran = new Set(S.live ? S.live.agents.map(a => a.thread) : []);
+  let ds = [...S.threads.values()].filter(d => (threadKinds(d) & mask) || d.name === c.thread);
   if (C.scope === "recent") ds = ds.filter(d => d.last > t - (app() ? 7 : 1) * DAY || ran.has(d.name) || d.name === c.thread || (app() && threadState(d.name, seen).key === "asks"));
   ds.sort((a, b) => b.last - a.last);
   const rowsOut = ds.map(d => {
@@ -292,11 +294,11 @@ function threadRows(c, ctx) {
 }
 function syncThreads(c, ctx) {
   const tl = document.querySelector("#main .cm-tl"); if (!tl) return;
-  const sig = [S.ver, C.scope, C.tq, showing(), c.arg, Math.floor(now() / 3e4), S.runSig, marksSig().length].join("|");
+  const sig = [S.ver, C.scope, C.tq, showMask(), c.arg, Math.floor(now() / 3e4), S.runSig, marksSig().length].join("|");
   if (tl === L.tl && sig === L.tlSig) return;
   const fresh = tl !== L.tl || c.arg !== L.tlConv;
   L.tl = tl; L.tlSig = sig; L.tlConv = c.arg;
-  const tree = list(threadRows(c, ctx), { dense: true, empty: S.threads.size ? "Nothing here at this setting. Choose Everything to see all of them." : app() ? "No conversations yet. Start one with New." : "No threads." });
+  const tree = list(threadRows(c, ctx), { dense: true, empty: S.threads.size ? "Nothing here with what Show has on. Turn on Agent comms to see all of them." : app() ? "No conversations yet. Start one with New." : "No threads." });
   if (tl.firstChild) morph(tl.firstChild, tree); else tl.append(tree);
   if (fresh) { const cur = tl.querySelector("[aria-current]"); if (cur) { const r = cur.getBoundingClientRect(), b = tl.getBoundingClientRect(); if (r.top < b.top || r.bottom > b.bottom) tl.scrollTop += r.top - b.top - 40; } }
 }
@@ -359,7 +361,7 @@ function moreMenu(c, ctx) {
     h("div", { class: "cm-menu-find" }, input({ type: "search", class: "input", placeholder: "Search here", "aria-label": "Search these messages", value: C.q, oninput: e => { C.q = e.target.value; clearTimeout(qTimer); qTimer = setTimeout(ctx.update, 120); } })));
 }
 function head(c, ctx) {
-  const d = c.thread && S.threads.get(c.thread), n = L.matched.length, off = levelFor(c) < SHOW.all ? L.src.length - n : 0;
+  const d = c.thread && S.threads.get(c.thread), n = L.matched.length, off = maskFor(c) !== SHOW.ALL ? L.src.length - n : 0;
   const title = c.thread ? threadTitle(c.thread) : c.agent ? (c.agent === "person" ? "Everything you sent" : "Everything by or to " + c.agent) : c.pair ? `${c.pair[0]} and ${c.pair[1]}` : app() ? "All messages" : "Everything";
   const who = c.thread ? threadPeople(c.thread).filter(m => m !== "person").map(m => agentRef(m, { copy: true, state: true }))
     : c.agent ? [...new Set(S.posts.filter(p => p.from === c.agent).map(p => p.th))].slice(-14).map(t => threadRef(t)) : [];
@@ -371,7 +373,7 @@ function head(c, ctx) {
       c.thread && !app() && title !== c.thread ? h("span", { class: "cm-id" }, h("code", { class: "meta", title: "Its id on the board" }, c.thread), copyButton(c.thread)) : null,
       c.thread && !app() ? tierControl(c.thread) : null,
       h("div", { class: "cm-tools" },
-        off > 0 ? button(`Show ${off} hidden`, () => setShowing("all", ctx), { size: "s", kind: "quiet", cls: "cm-hid", title: "Show everything: messages between agents and the hive's own notices" }) : null,
+        off > 0 ? button(`Show ${off} hidden`, () => setShow(SHOW.ALL, ctx), { size: "s", kind: "quiet", cls: "cm-hid", title: "Turn everything on, messages between agents and the hive's own notices too" }) : null,
         input({ type: "search", class: "input cm-find", placeholder: c.thread ? "Search here" : "Search messages", "aria-label": "Search these messages", value: C.q, oninput: e => { C.q = e.target.value; clearTimeout(qTimer); qTimer = setTimeout(ctx.update, 120); } }),
         c.thread && app() ? button("More", () => { C.more = !C.more; ctx.update(); }, { size: "s", kind: "quiet", title: "Priority, timeline" }) : null)),
     C.more && c.thread && app() ? moreMenu(c, ctx) : null,
@@ -428,6 +430,25 @@ function homePane(ctx) {
       h("p", { class: "cm-home-all" }, button("All messages", null, { href: href("comms", "~all"), size: "s", kind: "quiet" }), app() ? button("Inbox", null, { href: href("inbox"), size: "s", kind: "quiet" }) : null)));
 }
 
+// Over the whole page, not in the list: it sets what you see of the hive's talk, both in a conversation and in which ones are listed. Each one turns on and off by itself.
+const SHOW_PARTS = [[SHOW.you, "For you", "your messages, what agents ask or tell you, and each job's result"],
+  [SHOW.updates, "Updates", "agents' progress updates"],
+  [SHOW.comms, "Agent comms", "agents talking to each other and the hive's own notices"]];
+function showSays(mask) {
+  if (words(C.tq).length || words(C.q).length) return "Search looks through everything, whatever is on here.";
+  if (!mask) return "Nothing is on, so no messages show. Turn one on.";
+  const on = SHOW_PARTS.filter(([b]) => mask & b).map(x => x[2]), last = on.pop();
+  return (on.length ? on.join(", ") + " and " + last : last).replace(/^./, c => c.toUpperCase()) + (mask === SHOW.ALL ? "." : ". The rest runs in the background.");
+}
+function showBar(ctx) {
+  const mask = showMask(), says = showSays(mask);
+  return h("div", { class: "cm-show", "data-key": "show" },
+    h("span", { class: "cm-show-l" }, "Show"),
+    h("div", { class: "cm-picks", role: "group", "aria-label": "Show" },
+      SHOW_PARTS.map(([b, l, t]) => h("button", { type: "button", "aria-pressed": String(!!(mask & b)), title: t.replace(/^./, c => c.toUpperCase()), onclick: () => setShow(showMask() ^ b, ctx) }, l))),
+    h("span", { class: "meta cm-show-says", title: says }, says));
+}
+
 export default {
   id: "comms", label: () => (app() ? "Chat" : "Comms"),
   tab: true,
@@ -454,15 +475,13 @@ export default {
         post && c.thread ? composer({ thread: c.thread, update: ctx.update }) : null,
         post && c.all ? h("p", { class: "cm-hint meta", "data-key": "hint" }, "To start something new, use New conversation.") : null];
     return h("div", { class: "cm", "data-key": "comms", "data-in": c.arg ? "" : null, "data-home": c.home ? "" : null, style: `--top-h:${top ? top.offsetHeight : 47}px` },
+      showBar(ctx),
       h("nav", { class: "cm-side", "aria-label": app() ? "Conversations" : "Threads" },
         h("div", { class: "cm-filters" },
           post ? button("New conversation", null, { href: href("comms", "~new"), kind: "primary", cls: "cm-newbtn" }) : null,
           input({ type: "search", placeholder: app() ? "Search all conversations" : "Search all threads", "aria-label": "Search all conversations by name or content", value: C.tq, oninput: e => { C.tq = e.target.value; ctx.update(); } }),
-          words(C.tq).length ? null : [
-            seg([["you", "For you", "Only what's for you: your messages, questions to you and each job's result. The rest carries on in the background"],
-              ["updates", "Updates", "Also the agents' progress updates, without what they say to each other"],
-              ["all", "Everything", "Every message, including agents talking to each other and the hive's own notices"]], showing(), k => setShowing(k, ctx), { label: "How much to show" }),
-            seg([["recent", app() ? "Recent" : "Last 24h"], ["all", "All"]], C.scope, k => { C.scope = k; ctx.update(); }, { label: "Which conversations" })]),
+          words(C.tq).length ? null : h("div", { class: "cm-scope" }, h("span", null, app() ? "Conversations" : "Threads"),
+            seg([["recent", app() ? "Recent" : "Last 24h"], ["all", "All"]], C.scope, k => { C.scope = k; ctx.update(); }, { label: "Which conversations" }))),
         h("div", { class: "cm-tl", "data-own": "", "data-sig": "own", tabindex: "-1" }),
         app() ? h("div", { class: "cm-side-f" }, button("All messages", null, { href: href("comms", "~all"), size: "s", kind: "quiet" })) : null),
       h("section", { class: "cm-convo", "aria-label": "Conversation", ...(post && c.thread ? dropZone(c.thread) : {}) },

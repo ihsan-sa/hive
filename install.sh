@@ -28,6 +28,8 @@ for a in "$@"; do case "$a" in
 esac; done
 
 [ "$CORE" = "$HOME/core" ] || die "clone it to ~/core (it is at $CORE)"
+# A Hive in a folder of someone's account: its sign-ins go in here. v2.3.0 left the folder open to other users, and every update runs this.
+[ ! -e "$HOME/.hive-account" ] || chmod 700 "$HOME"
 [ "$(uname -s)" = Linux ] || die "Linux only: the starter reads /proc and runs under systemd"
 for t in python3 git claude; do command -v "$t" >/dev/null || die "$t not found on PATH"; done
 

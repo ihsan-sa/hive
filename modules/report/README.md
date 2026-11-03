@@ -12,5 +12,8 @@ Opt-in sharing. `share` in `settings.json` is `{"failures": bool, "usage": bool}
 ## What counts as a failure
 `failures` sends only the kind and a one-line message, never fields from the log: an agent ending with a non-zero exit, a login hitting its limit, lost helpers, all logins paused, a provider held back, an agent killed, and (the doctor check) one of the Hive's own systemd user units in a failed state, by unit name, once per failure.
 
+## Feedback
+`hive-report feedback` reads `{text, page, image}` from stdin and sends it at once: the app's Send feedback calls it when the person presses Send, so it needs no opt-in in `share` and works with sharing off. It sends the scrubbed comment, the JPEG picture, the page, the version and the install id, with the same copy kept in `reports/sent/`. Refused or offline, it says so on stderr, exits 1 and keeps nothing to retry: the person still has their words on screen. Endpoint: `share_feedback_url` in settings.json, else `HIVE_SHARE_FEEDBACK_URL`, else the report endpoint with `/report` changed to `/feedback`.
+
 ## "Everything" bundle
 Only `hive-report bundle --yes` sends it, never the timer; run without `--yes` it writes the scrubbed copy to `reports/bundles/` for the user to read first. It carries the last 500 lines of the log and the board (chats included), scrubbed. The receiver is `/v1/bundle` beside `/v1/report` (override with `share_bundle_url`). Retention and access rule: stored 30 days then deleted automatically, 3 per install per day, no read endpoint, readable only by the project owner, never copied elsewhere, and deleted early on request by install id.

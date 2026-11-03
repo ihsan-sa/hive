@@ -26,12 +26,12 @@ The first sentence tells you how much is left, when it comes back and when you'd
 
 **If it's going too fast:**
 
-1. Lower **Agents at once** in Settings. 1 or 2 is fine for most people.
+1. Set **Agents at once** in Settings, or lower it. 1 or 2 is fine for most people.
 2. Look at the conversations that used the most, and tell the agent to stop if the job isn't worth it.
 3. Lower the **Usage line**, so new agents stop sooner and keep some of the week for your own use.
 4. Make sure **Keep work moving** is off in Settings, unless you want it.
 
-**If you need more room:** add another Claude subscription in Settings, under **Claude accounts**. New agents go to the one with the most left.
+**If you need more room:** add another Claude subscription in Settings, under **Accounts**. New agents go to the one with the most left.
 
 ## Go through everything that happened
 

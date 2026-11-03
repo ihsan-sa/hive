@@ -17,6 +17,7 @@ HOME = Path.home()
 BOARD, RUN, STATE = HOME / "board.jsonl", HOME / "run", HOME / ".hive"
 MENTION = re.compile(r"(?<![\w.])@([a-z0-9][a-z0-9_-]*)", re.I)
 CODE = re.compile(r"```.*?```|`[^`\n]*`", re.S)  # a name in backticks is being written about, not called
+WARDEN = re.compile(r"w[0-9a-f]{4}")
 
 def names(p):
     to = p.get("to") or []
@@ -31,6 +32,8 @@ def new_posts(name, rec, seen):
         try: p = json.loads(line)
         except ValueError: continue
         if not isinstance(p, dict) or p.get("id") in seen or str(p.get("from", "")).lower() == name: continue
+        # A warden judging a step hears its step's thread and nothing else: an @all, or its name in any spelling, would steer the judge from outside.
+        if WARDEN.fullmatch(name) and str(rec.get("thread")).startswith("step-") and p.get("thread") != rec["thread"]: continue
         at, targets = str(p.get("at", "")), names(p)
         if at <= rec.get("at", ""):
             # A restart moves "at" to now; an @all posted while the interrupted run couldn't hear it must still arrive.

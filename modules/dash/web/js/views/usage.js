@@ -1,7 +1,7 @@
 // Usage: are we about to run out, then where the work went. Template: metrics.
 import { h } from "../core/dom.js";
 import { S, SYS, can } from "../core/store.js";
-import { spendSince, fresh7, inUse, runway, weeklyStop, fileInfo, threadTitle, tierOf, agentStatus, sEnd } from "../core/model.js";
+import { spendSince, fresh7, sessionNewer, inUse, runway, weeklyStop, fileInfo, threadTitle, tierOf, agentStatus, sEnd } from "../core/model.js";
 import { now, ago, dur, clock, dayName, untilText, money, money$, toks, pct, plural, HOUR, DAY, MIN } from "../core/format.js";
 import { TIERS, tier, status } from "../core/status.js";
 import { threadHref, agentHref, href } from "../core/router.js";
@@ -28,7 +28,7 @@ export function loginRow(U, l, t) {
     : rw.before ? h("b", null, `Reaches ${wStop}% in about ${dur(rw.toStop)} at the last 6 hours' pace, before it resets.`)
     : `At the last 6 hours' pace it won't reach ${wStop}% before it resets.`;
   const rs = l.resets || {}, src = l.read_at ? "read " + ago(l.read_at * 1e3) : "from the last reading";
-  const fresh = !l.read_at || (L.at || 0) >= l.read_at || l.weekly == null;  // a session's reading only if newer than the API's
+  const fresh = sessionNewer(l);
   const weekly = L.seven_day && fresh && (L.seven_day.r * 1e3 > t || l.weekly == null) ? limitGauge("Weekly", L.seven_day, wStop, t, [pace])
     : l.weekly != null ? limitGauge("Weekly", { u: l.weekly / 100, r: rs.weekly }, wStop, t, [pace, src])
     : { label: "Weekly", value: "?", lines: ["not read yet"] };
