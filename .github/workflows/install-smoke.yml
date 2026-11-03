@@ -15,7 +15,7 @@ on:
     inputs:
       base_url:
         description: Where install.sh and install.ps1 are served
-        default: https://hive.ihsan.cc
+        default: https://hive.ihsan.cc/v1
       tag:
         description: Release the installer should bring (blank for the latest)
         default: ''
@@ -30,7 +30,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     env:
-      BASE: ${{ inputs.base_url || 'https://hive.ihsan.cc' }}
+      BASE: ${{ inputs.base_url || 'https://hive.ihsan.cc/v1' }}
       GIT_AUTHOR_NAME: smoke
       GIT_AUTHOR_EMAIL: smoke@localhost
       GIT_COMMITTER_NAME: smoke
