@@ -2,6 +2,7 @@
 $env:WSL_UTF8 = '1'
 $env:HIVE_ACCEPT = '1'
 $script:bad = 0
+$ErrorActionPreference = 'Continue'  # the runner sets Stop, and a program's stderr then ends the script under 5.1
 function Head($t) { Write-Host ""; Write-Host "=== $t" }
 function Check($name, $ok) { if ($ok) { Write-Host "ok   $name" } else { Write-Host "FAIL $name"; $script:bad++ } }
 function B64($s) { [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($s)) }
