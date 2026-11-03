@@ -97,9 +97,12 @@ table.t .n{text-align:right;font-variant-numeric:tabular-nums}
 .feed .tool b{font-weight:550;color:var(--ink3)}
 .link{background:none;border:0;padding:0;font-weight:600;cursor:pointer;text-align:left}
 .link:hover{text-decoration:underline}
-#ego{display:block;width:100%;max-width:440px;margin:auto}
-#ego g{cursor:pointer}
-#ego text{font:11.5px system-ui,sans-serif;fill:var(--ink2)}
+#ego{display:block;width:100%;max-width:640px;margin:auto}
+#ego .egon{cursor:pointer}
+#ego text{font:11.5px system-ui,sans-serif;fill:var(--ink2);paint-order:stroke;stroke:var(--surface);stroke-width:3px;stroke-linejoin:round}
+#ego .self text{font-weight:600;fill:var(--ink)}
+#ego .egopulse{fill:none;stroke:var(--good);stroke-width:1.5;transform-box:fill-box;transform-origin:center;animation:egopulse 1.6s ease-out infinite}
+@keyframes egopulse{from{transform:scale(1);opacity:.6}to{transform:scale(1.5);opacity:0}}
 
 /* mesh */
 #mesh{flex-direction:row}
@@ -235,10 +238,13 @@ textarea.cpinput{resize:vertical}.cpinput.num{width:7rem}#cpname{margin:.25rem 0
 .ltime{color:var(--ink3);font-size:12px;flex:none;width:4.8rem;text-align:right;font-variant-numeric:tabular-nums}.lbody{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
 .lname{background:none;border:0;padding:0;font:inherit;font-weight:600;color:var(--ink);cursor:pointer;display:inline;vertical-align:baseline}.lname .dot{margin-right:.28rem;vertical-align:.03rem}.lname:hover{text-decoration:underline}.lth{font-weight:500;color:var(--ink2)}.lq{color:var(--ink2)}
 @keyframes lfresh{from{background:color-mix(in srgb,var(--good) 28%,transparent)}to{background:transparent}}.lrow.fresh{animation:lfresh 2.5s ease-out}
+.jtw{overflow-x:auto;padding:.3rem .6rem}.jt{width:100%;border-collapse:collapse;font-size:13px}.jt th{text-align:left;font-size:11.5px;font-weight:550;color:var(--ink3);padding:.25rem .5rem .25rem 0;white-space:nowrap}
+.jt td{border-top:1px solid var(--line);padding:.3rem .5rem .3rem 0;vertical-align:top;white-space:nowrap;font-variant-numeric:tabular-nums}.jt td.n,.jt th.n{text-align:right}.jt td.cmd{white-space:normal;overflow-wrap:anywhere;width:100%;min-width:16rem;font:12px/1.35 ui-monospace,monospace;color:var(--ink2)}
+.jsplit{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:.1rem .6rem;align-items:center;font-size:12.5px}.jsplit .stack{margin:.2rem 0;background:var(--line);border-radius:3px}.jtile .tr{height:5px;background:var(--line);border-radius:3px;overflow:hidden;margin-top:.3rem}.jtile .tr i{display:block;height:100%;border-radius:3px}
 @media(max-width:640px){
  .desk,.brand,#theme,#status,#mlegend,#side,#sgrip,#tbar>.sm.dim,#tleg,#people .st{display:none!important}
  header{flex-wrap:nowrap;gap:.3rem;padding:.3rem .4rem}#tabs{display:flex;overflow-x:auto;white-space:nowrap;scrollbar-width:none}
- .wrap{padding:.5rem .55rem 3rem}.agents,.two,.setf{grid-template-columns:1fr}.setf .sm{grid-column:1}
+ #jtiles{grid-template-columns:1fr 1fr} .wrap{padding:.5rem .55rem 3rem}.agents,.two,.setf{grid-template-columns:1fr}.setf .sm{grid-column:1}
  .agent{padding:.45rem .6rem}.agent .h{flex-wrap:nowrap;overflow:hidden;padding:.2rem}.agent .h .state,.agent .h>.chip:last-child:not(:first-child){display:none}.agent .acard,.agent dl{display:none}
  .agent.open .h{flex-wrap:wrap}.agent.open .h .state,.agent.open .h>.chip:last-child{display:inline-flex}.agent.open dl{display:grid}.agent.open .acard{display:flex}
  #threads{width:100%;border-right:0}body.inthread #threads{display:none}body:not(.inthread) #convo{display:none}.mback{display:inline-flex}#chead .tt>div:last-child,#ctier,#cinfo{display:none!important}
@@ -249,7 +255,7 @@ textarea.cpinput{resize:vertical}.cpinput.num{width:7rem}#cpname{margin:.25rem 0
 <header>
  <b class="brand">Hive</b>
  <nav id="tabs">
-  <button data-v="start" hidden>Start</button><button data-v="now">Now</button><button data-v="inbox" hidden>Inbox <b id="ibadge"></b></button><button data-v="ledger">Ledger</button><button data-v="mesh">Mesh</button><button data-v="comms">Comms</button><button data-v="timeline">Timeline</button><button data-v="usage">Usage</button><button data-v="settings" hidden>Settings</button>
+  <button data-v="start" hidden>Start</button><button data-v="now">Now</button><button data-v="jobs">Jobs</button><button data-v="inbox" hidden>Inbox <b id="ibadge"></b></button><button data-v="ledger">Ledger</button><button data-v="mesh">Mesh</button><button data-v="comms">Comms</button><button data-v="timeline">Timeline</button><button data-v="usage">Usage</button><button data-v="settings" hidden>Settings</button>
  </nav>
  <span id="routetag" class="sm dim"></span><div id="status"></div>
  <button id="theme" title="Colour theme: Auto follows your system setting"></button>
@@ -269,6 +275,15 @@ textarea.cpinput{resize:vertical}.cpinput.num{width:7rem}#cpname{margin:.25rem 0
   <h2 class="desk">Projects</h2><details class="card desk"><summary id="psum">Show projects</summary><div id="projects"></div></details>
  </div></section>
 
+ <section class="view scroll" id="jobs"><div class="wrap">
+  <p id="jhead">Loading…</p><div class="dim" id="jsub"></div>
+  <h2>The machine</h2><div class="grid tiles" id="jtiles"></div>
+  <div class="card" style="margin-top:.6rem" id="jsplit"></div>
+  <h2>Running <small id="jrunc"></small></h2><div class="card jtw" id="jrun"></div>
+  <h2>Queued <small id="jqc"></small></h2><div class="card jtw" id="jq"></div>
+  <h2>Using the machine outside the queue <small>the queue's limits don't apply to these</small></h2><div class="card jtw" id="jout"></div>
+  <h2>Just finished <small>last 10 queue jobs</small></h2><div class="card jtw" id="jdone"></div>
+ </div></section>
  <section class="view scroll" id="usage"><div class="wrap">
   <div class="dim" id="usub"></div>
   <h2>Limits <small>one block per login, then the other providers. Pause an account to keep the starter off it, or set where it stops</small></h2><div class="grid two" id="limits" style="align-items:start"></div>
@@ -360,12 +375,12 @@ const isAgent=n=>S.agents.has(n);
 const isRunning=n=>S.running.has(n);
 function agentThread(n){for(let i=S.sessions.length-1;i>=0;i--)if(S.sessions[i].name===n)return S.sessions[i].thread;return null;}
 // An agent's colour says how it is, not what tier its thread is. A post that mentions an ended agent wakes it, so ended isn't final.
-const STATUS=[["working","--good","running, active in the last 3 minutes"],["idle","--warn","running, but quiet: on a long job or a waiter"],["stuck","--bad","running, but hasn't seen posts for it, or its process is gone"],["queued","--t1","a post is waiting to start it"],["limited","--warn","stopped at a usage limit, resumes on reset"],["failed","--bad","its last run ended with an error"],["killed","--ink2","killed from here"],["ended","--ink3","finished its turn; a post wakes it"]];
+const STATUS=[["working","--good","the agent was active in the last 3 minutes, or its job is running"],["in job queue","--warn","the agent is waiting for its job to get a turn on the machine"],["quiet","--ink2","running, active more than 3 minutes ago, no job in the queue: on a waiter, a job outside the queue, or thinking"],["stuck","--bad","running, but hasn't seen posts for it, or its process is gone"],["queued","--t1","a post is waiting to start it"],["limited","--warn","stopped at a usage limit, resumes on reset"],["failed","--bad","its last run ended with an error"],["killed","--ink2","killed from here"],["ended","--ink3","finished its turn; a post wakes it"]];
 function agentStatus(n){let v=S.stCache.get(n);if(v)return v;
  const mk=(k,label)=>{const row=STATUS.find(x=>x[0]===k);return{k,label:label||k,v:row[1]};};
  const L=S.running.get(n),s=S.lastSess[n];
  if(OUTSIDE.has(n))v={k:"outside",label:"",v:"--ink"};
- else if(L){const[txt,col]=agentState(L);v=mk(col==="var(--good)"?"working":col==="var(--bad)"?"stuck":"idle",txt);}
+ else if(L){const[txt,col]=agentState(L);v=mk(col==="var(--good)"?"working":col==="var(--bad)"?"stuck":col==="var(--warn)"?"in job queue":"quiet",txt);}
  else if(S.pending[n])v=mk("queued");
  else if(!s)v={k:"none",label:"hasn't run",v:"--ink3"};
  else if(S.killed[n]>=s.start)v=mk("killed");
@@ -415,11 +430,11 @@ setInterval(()=>{if(!document.hidden)pollUsage();},3000);pollUsage();
 document.addEventListener("visibilitychange",()=>{if(!document.hidden)poll();});
 
 // ---------- routing: the address bar holds the view, so Back works and a page can be linked ----------
-const VIEWS=["now","ledger","mesh","comms","timeline","usage","agent","inbox","start","settings"];
+const VIEWS=["now","jobs","ledger","mesh","comms","timeline","usage","agent","inbox","start","settings"];
 let view="now";
 function setView(v){view=v;for(const b of document.querySelectorAll("#tabs button"))b.classList.toggle("on",b.dataset.v===v);
  for(const s of document.querySelectorAll(".view"))s.classList.toggle("on",s.id===v);
- render(true);if(v==="mesh")Mesh.resize();if(v==="inbox")renderInbox();else if(v==="start")renderStart();else if(v==="settings")renderSettings();if(v==="comms")updateComposer();}
+ render(true);if(v==="jobs")pollJobs();if(v==="mesh")Mesh.resize();if(v==="inbox")renderInbox();else if(v==="start")renderStart();else if(v==="settings")renderSettings();if(v==="comms")updateComposer();}
 function route(){const[v,arg]=location.hash.slice(1).split("/");const a=arg?decodeURIComponent(arg):null;
  const w=VIEWS.includes(v)?v:"now";
  if(w==="comms"&&a&&C.thread!==a){Object.assign(C,{thread:a,agent:null,pair:null});C.dirty=true;}
@@ -496,8 +511,12 @@ function selecting(){const s=getSelection();return s&&!s.isCollapsed;}
 function agentState(a){const q=now()-(a.last?a.last*1e3:0);
  if(!a.alive)return["process gone","var(--bad)"];if(q<3*MIN)return["working","var(--good)"];
  const since=a.last?a.last*1e3:0,unseen=a.name?S.posts.filter(p=>p.t>since&&p.from!==a.name&&(p.men.includes(a.name)||(a.thread&&p.thread===a.thread))).length:0;
- if(unseen)return[`idle ${dur(q)}, hasn't seen ${unseen} new post${unseen>1?"s":""} for it`,"var(--bad)"];
- if(q<20*MIN)return["quiet "+dur(q),"var(--warn)"];return["quiet "+dur(q)+", ended its turn or on a long job","var(--ink3)"];}
+ // Waiting on its own job isn't stuck: it reads the posts when the job returns.
+ const j=a.jobs||{},more=unseen?`, ${unseen} new post${unseen>1?"s":""} when it returns`:"";
+ if(j.running)return[(j.running>1?j.running+" jobs":"job")+" running"+(j.queued?`, ${j.queued} more queued`:"")+more,"var(--good)"];
+ if(j.queued)return[`${j.queued>1?j.queued+" jobs":"job"} in the queue ${dur(j.waited*1e3)}`+more,"var(--warn)"];
+ if(unseen)return[`quiet ${dur(q)}, hasn't seen ${unseen} new post${unseen>1?"s":""} for it`,"var(--bad)"];
+ return["quiet "+dur(q)+", no job in the queue","var(--ink2)"];}
 function firstSentence(s){s=mdPlain(s).replace(/^(@\S+\s+)+/,"").replace(/\s+/g," ").trim();const m=s.match(/^.{20,240}?[.!?](\s|$)/);return m?m[0].trim():short(s,240);}
 function median(a){if(!a.length)return null;a=[...a].sort((x,y)=>x-y);return a[a.length>>1];}
 function hiveStats(from,to){const P=S.posts.filter(p=>p.t>=from&&p.t<=to&&!SYS.has(p.from));
@@ -519,15 +538,52 @@ function hiveStats(from,to){const P=S.posts.filter(p=>p.t>=from&&p.t<=to&&!SYS.h
 function tile(v,l,c){return el("div",{class:"card tile"},el("div",{class:"l"},l),el("b",null,v),el("div",{class:"c"},c));}
 function pct(a,b){return b?Math.round(100*a/b)+"%":"–";}
 const NOW_OPEN=new Set();// on a phone a card is one line until tapped
+// ---------- Jobs: the heavy queue and the machine, polled only while this view is open ----------
+const J={v:null,failed:false};
+const JOWN=[["jobs","Queue jobs","--t1"],["outside","Agents' work outside the queue","--held"],["agents","The agents themselves","--t2"],["other","Everything else","--other"]];
+const gb=mb=>mb>=1024?(mb/1024).toFixed(mb>=10240?0:1)+" GB":Math.round(mb)+" MB";
+async function pollJobs(){if(view!=="jobs"||document.hidden)return;try{J.v=await jget("/api/jobs");J.failed=false;}catch(e){J.failed=true;}renderJobs();}
+setInterval(pollJobs,3000);
+function jAgent(n){return n&&n!=="?"?el("button",{class:"who",onclick:()=>openAgent(n),title:n+": "+agentStatus(n).label},el("span",{class:"dot",style:`background:${agentColor(n)}`}),n):"?";}
+function jTable(heads,rows,none){if(!rows.length)return el("div",{class:"dim sm",style:"padding:.3rem 0"},none);
+ return el("table",{class:"jt"},el("thead",{},el("tr",{},heads.map(h=>el("th",{class:h[1]||null},h[0])))),el("tbody",{},rows.map(r=>el("tr",{},r))));}
+const jn=x=>el("td",{class:"n"},x),jc=x=>el("td",{class:"cmd"},x),jt=x=>el("td",{},x),secs=s=>s<60?Math.round(s)+"s":dur(s*1e3);
+function jTile(label,big,note,pct,hot){return el("div",{class:"card tile jtile"},el("div",{class:"l"},label),el("b",{},big),pct==null?null:el("div",{class:"tr"},el("i",{style:`width:${Math.min(100,pct)}%;background:var(${hot?"--bad":"--ink3"})`})),el("div",{class:"c"},note));}
+function jStack(label,field,total,unit,fmt){const s=J.v.split,used=JOWN.reduce((a,o)=>a+s[o[0]][field],0),rest=Math.max(0,total-used);
+ return[el("div",{},label),el("div",{class:"stack"},JOWN.map(o=>{const v=s[o[0]][field];return v/total<.002?null:el("i",{style:`flex:${v} 0 0;background:var(${o[2]})`,title:`${o[1]}: ${fmt(v)}`});}),rest>0?el("i",{style:`flex:${rest} 0 0;background:none;min-width:0`}):null),el("div",{class:"dim"},`${fmt(used)} of ${fmt(total)}${unit}`)];}
+function renderJobs(){if(view!=="jobs"||selecting())return;const V=J.v;if(!V){if(J.failed)$("#jhead").textContent="Couldn't read the job data.";return;}
+ const T=V.machine,M=T.mem,t=now(),P=T.psi,cgs=V.gates.filter(g=>!g.ok);
+ $("#jhead").textContent=`${V.running.length} job${V.running.length===1?"":"s"} running, ${V.queued.length} queued.`+(!V.queued.length?"":!V.running.length?" The next one can start.":cgs.length?` Held back by ${cgs.map(g=>`${g.what} (${g.now}${g.unit}, needs ${g.need})`).join("; ")}.`:" Nothing is holding the next start back; jobs start at most every 30 seconds.");
+ $("#jsub").textContent=J.failed?"Couldn't refresh: this may be out of date.":`Updated ${clock(V.at*1e3)}. CPU in threads in use, averaged since the last refresh.`;
+ const swapUsed=M.SwapTotal-M.SwapFree,cpuBusy=100-T.busy.idle-T.busy.iowait;
+ fill($("#jtiles"),
+  jTile("CPU",cpuBusy+"%",`${T.busy.user}% programs, ${T.busy.system}% system`,cpuBusy,false),
+  jTile("Waiting on disk",T.busy.iowait+"%",`${T.blocked} tasks blocked now, ${Math.round(P.io_full||0)}% fully stalled`,T.busy.iowait,T.busy.iowait>=30),
+  jTile("Load",T.load.toFixed(0),`on ${T.cpus} threads`,T.load*100/T.cpus,T.load>=T.cpus),
+  jTile("Memory available",gb(M.MemAvailable),`of ${gb(M.MemTotal)}, ${Math.round(P.memory_full||0)}% fully stalled`,(M.MemTotal-M.MemAvailable)*100/M.MemTotal,M.MemAvailable<5000),
+  jTile("Swap used",gb(swapUsed),`of ${gb(M.SwapTotal)}`,M.SwapTotal?swapUsed*100/M.SwapTotal:0,M.SwapTotal&&swapUsed/M.SwapTotal>=.9),
+  T.slice_high?jTile("Queue jobs' memory",gb(T.slice_used),`soft limit ${gb(T.slice_high)}`,T.slice_used*100/T.slice_high,T.slice_used>=T.slice_high-3000):null,
+  T.gpus.map(g=>jTile("GPU",g.util+"%",`${gb(g.mem)} of ${gb(g.total)}, ${g.name}`,g.util,false)),
+  T.disks.map(d=>jTile("Disk "+d.name,d.used+" GB",`of ${d.total} GB`,d.total?d.used*100/d.total:0,d.total&&d.used/d.total>=.9)));
+ fill($("#jsplit"),el("div",{class:"sm",style:"font-weight:550;margin-bottom:.2rem"},"Who's using it",el("span",{class:"dim",style:"font-weight:400"},"  Memory is what's in use, RAM plus swap. The unfilled part of its bar is the kernel, shared memory and tmpfs.")),
+  el("div",{class:"jsplit"},jStack("CPU","cores",T.cpus," threads",v=>v.toFixed(1)),jStack("Memory","mem",Math.max(V.held,JOWN.reduce((a,o)=>a+V.split[o[0]].mem,0))||1,"",gb)),
+  el("div",{class:"legend",style:"margin-top:.3rem"},JOWN.map(o=>{const s=V.split[o[0]];return el("span",{},el("i",{class:"lg",style:`display:inline-block;width:.7rem;height:.7rem;border-radius:2px;background:var(${o[2]})`}),`${o[1]}: ${s.cores.toFixed(1)} threads, ${gb(s.mem)}`);})));
+ $("#jrunc").textContent=`${V.running.length} of ${V.slots} slots, longest first`;
+ fill($("#jrun"),jTable([["Agent"],["Lane"],["Running"],["Threads","n"],["Memory","n"],["Command"]],V.running.map(r=>[jt(jAgent(r.agent)),jt(r.lane),jt(secs(t/1e3-r.since)),jn(r.cores.toFixed(1)),jn(gb(r.mem)),jc(r.cmd)]),"Nothing running in the queue."));
+ $("#jqc").textContent="in the order they'll start";let pos=0;
+ fill($("#jq"),jTable([["#"],["Agent"],["Waiting"],["Command"]],V.queued.map(q=>[jt(q.first?"first lane":String(++pos)),jt(jAgent(q.agent)),jt(secs(t/1e3-q.since)),jc(q.cmd)]),"The queue is empty."));
+ fill($("#jout"),jTable([["Who"],["Threads","n"],["Memory","n"],["Processes","n"],["Biggest command"]],V.outside.map(o=>[jt(o.agent?jAgent(o.who):o.who),jn(o.cores.toFixed(1)),jn(gb(o.mem)),jn(o.procs),jc(o.cmd)]),"Nothing big outside the queue."));
+ fill($("#jdone"),jTable([["Finished"],["Agent"],["Waited"],["Ran"],["Result"],["Command"]],V.done.map(d=>[jt(ago(d.end*1e3)),jt(jAgent(d.agent)),jt(secs(d.waited)),jt(secs(d.ran)),el("td",{style:d.rc?"color:var(--bad)":null},d.rc?`✕ failed (${d.rc})`:"✓ ok"),jc(d.cmd)]),"None yet."));
+}
 function renderNow(){if(selecting())return;const L=S.live,t=now();
  // Working agents keep a fixed order (longest up first), so a new turn doesn't move a card. The rest follow, least quiet first; gone processes last.
  const isWorking=a=>a.alive&&t-(a.last||0)*1e3<3*MIN,group=a=>isWorking(a)?0:a.alive?1:2;
  const run=[...L.agents].sort((a,b)=>group(a)-group(b)||(group(a)?(b.last||0)-(a.last||0):(a.since||0)-(b.since||0))||String(a.name).localeCompare(String(b.name)));
- const working=run.filter(isWorking).length;
+ const working=run.filter(isWorking).length,byState=v=>run.filter(a=>agentState(a)[1]===`var(${v})`).length;
  const ths=new Set(run.map(a=>a.thread));
  const waiting=L.pending.filter(p=>!isRunning(p.name));
  const lastHour=S.posts.filter(p=>p.t>t-HOUR&&!SYS.has(p.from)).length;
- $("#headline").textContent=run.length?`${run.length} agent${run.length>1?"s":""} on ${ths.size} thread${ths.size>1?"s":""}: ${working} active in the last 3 minutes, ${run.length-working} quiet (usually waiting on a job).`:"Nobody is running right now.";
+ $("#headline").textContent=run.length?`${run.length} agent${run.length>1?"s":""} on ${ths.size} thread${ths.size>1?"s":""}: ${working} active now, ${byState("--good")-working} on a running job, ${byState("--warn")} waiting in the job queue, ${run.length-byState("--good")-byState("--warn")} quiet or stuck.${L.jobs?` Machine: ${L.jobs.running} jobs running, ${L.jobs.queued} queued.`:""}`:"Nobody is running right now.";
  $("#subline").textContent=`${lastHour} post${lastHour===1?"":"s"} in the last hour`+(waiting.length?` · ${waiting.length} waiting to start`:"")+(L.limit_until?` · starts held for the usage limit until ${clock(L.limit_until*1e3)}`:"")+(S.usage?` · ${money(spendSince(t-DAY))} of work in 24h, at list prices`:"");
  $("#agcount").textContent="what each one was asked and what it's doing";
  fill($("#agents"),run.map(a=>{const[st,col]=agentState(a);const task=S.byId[a.post];const pend=S.pending[a.name];
@@ -1271,13 +1327,74 @@ addEventListener("keydown",e=>{if(e.key==="Escape"&&A.drawer&&!document.querySel
 document.addEventListener("pointerdown",e=>{if(A.drawer&&!e.target.closest("#drawer,button,a,input,textarea,dialog,canvas,svg"))closeDrawer();});
 async function fetchFeed(){const n=A.name;if(!n)return;try{const f=await jget("/api/agent?name="+encodeURIComponent(n));if(n===A.name){A.feed=f;if(view==="agent"||A.drawer)renderAgent();}}catch(e){}}
 setInterval(()=>{if((view==="agent"||A.drawer)&&!document.hidden&&isRunning(A.name))fetchFeed();},2000);
-function ego(n,links){const W=440,H=300,cx=W/2,cy=H/2,rx=W/2-62,ry=H/2-26;const svg=sv("svg",{id:"ego",viewBox:`0 0 ${W} ${H}`});
- const top=links.slice(0,14),mx=Math.max(1,...top.map(l=>l[1]));
- const dotFor=(id,x,y,r)=>{const g=sv("g",{});const run=isRunning(id)||OUTSIDE.has(id);g.append(sv("circle",{cx:x,cy:y,r,style:`fill:${agentColor(id)}`,stroke:cssv("--surface"),"stroke-width":2}));
-  const tx=sv("text",{x,y:y+r+12,"text-anchor":"middle"});tx.textContent=id;g.append(tx);g.addEventListener("click",()=>openAgent(id));return g;};
- const lines=[],dots=[];top.forEach(([id,c],i)=>{const a=-Math.PI/2+i/top.length*Math.PI*2,x=cx+Math.cos(a)*rx,y=cy+Math.sin(a)*ry;
-  lines.push(sv("line",{x1:cx,y1:cy,x2:x,y2:y,stroke:cssv("--ink3"),"stroke-width":1+3*c/mx,opacity:.3+.5*c/mx}));dots.push(dotFor(id,x,y,6+6*Math.sqrt(c/mx)));});
- svg.append(...lines,...dots,dotFor(n,cx,cy,15));return svg;}
+// its corner of the hive: a small mesh of who it talks with, whom it started, its threads, who else is on them, and the links among all of those
+const EGO={name:null,sig:"",topo:"",svg:null,pos:new Map()};
+const EGO_TIER={tier1:"--t1",tier2:"--t2",held:"--held",other:"--other"};
+function ego(n,links,started,threads,parent){
+ const ran=new Set(S.sessions.map(s=>s.name)),known=x=>ran.has(x)||OUTSIDE.has(x),ths=threads.slice(0,5),thSet=new Set(ths);// ran: only names that have actually run
+ const ids=new Set([n]),direct=new Map(links);const add=x=>{if(known(x)&&ids.size<18)ids.add(x);};
+ if(parent)add(parent);links.slice(0,12).forEach(l=>add(l[0]));started.slice(-6).forEach(add);
+ // who else is on its threads: running first, then most recent
+ const onTh=new Map(ths.map(t=>[t,new Map()]));const seen=(t,id,when)=>{const m=onTh.get(t);if(m&&known(id)&&id!==n)m.set(id,Math.max(m.get(id)||0,when));};
+ for(const p of S.posts)if(thSet.has(p.th)&&!SYS.has(p.from))seen(p.th,p.from,p.t);
+ for(const s of S.sessions)if(thSet.has(s.thread))seen(s.thread,s.name,sEnd(s));
+ for(const m of onTh.values())[...m].sort((x,y)=>isRunning(y[0])-isRunning(x[0])||y[1]-x[1]).slice(0,3).forEach(e=>add(e[0]));
+ const E=new Map();const edge=(a,b,kind)=>{const k=a<b?a+"|"+b:b+"|"+a;let e=E.get(k);if(!e)E.set(k,e={a,b,kind,n:0,spawn:false});return e;};
+ for(const p of S.posts){if(!ids.has(p.from))continue;for(const m of p.men)if(m!==p.from&&ids.has(m))edge(p.from,m,"msg").n++;if(thSet.has(p.th))edge(p.from,"#"+p.th,"thread").n++;}
+ for(const s of S.sessions){if(!ids.has(s.name))continue;if(thSet.has(s.thread))edge(s.name,"#"+s.thread,"thread");
+  if(!s.resumed&&s.from&&s.from!==s.name&&ids.has(s.from)){const e=edge(s.from,s.name,"msg");e.spawn=true;e.spawnFrom=s.from;}}
+ const edges=[...E.values()];if(ids.size<2&&!ths.length)return null;
+ const tid=x=>x[0]==="#"?x.slice(1):null,isTh=x=>x[0]==="#";
+ const statusOf=x=>isTh(x)?tierOf(tid(x)):OUTSIDE.has(x)?"out":agentStatus(x).v+(isRunning(x)?"+":"");
+ const nodeIds=[...ids,...ths.map(t=>"#"+t)];
+ const topo=n+"\n"+nodeIds.join(",")+"\n"+edges.map(e=>e.a+"|"+e.b).sort().join(",");
+ const sig=topo+"\n"+nodeIds.map(statusOf).join(",")+"\n"+edges.map(e=>e.n+(e.spawn?"s":"")).join(",");
+ if(EGO.svg&&EGO.name===n&&EGO.sig===sig)return EGO.svg;
+ // the layout runs once per shape of the graph, starting from where it was, so a page refresh doesn't move anything
+ const N=nodeIds.length,W=560,H=N<=4?230:N<=10?320:400;
+ const prior=EGO.name===n?EGO.pos:new Map();
+ const nodes=nodeIds.map((id,i)=>{const had=prior.get(id),a=i*2.39996,rr=isTh(id)?170:110;
+  const lab=isTh(id)?short(tid(id),16):id,c=direct.get(id)||0;
+  return{id,lab,hw:Math.max(lab.length*3.3,14)+5,x:id===n?W/2:had?had.x:W/2+Math.cos(a)*rr,y:id===n?H/2:had?had.y:H/2+Math.sin(a)*rr*.7,vx:0,vy:0,c};});
+ const by=new Map(nodes.map(o=>[o.id,o]));const mx=Math.max(1,...links.map(l=>l[1]));
+ for(const o of nodes)o.r=o.id===n?15:isTh(o.id)?8:OUTSIDE.has(o.id)?10:o.c?6+6*Math.sqrt(o.c/mx):6;
+ const self=by.get(n);
+ if(EGO.topo!==topo||EGO.name!==n){const iters=prior.size?160:420,rep=N<=6?500:N<=14?800:1100;
+  for(let it=0;it<iters;it++){const cool=1-it/iters;
+   for(let i=0;i<N;i++)for(let j=i+1;j<N;j++){const A=nodes[i],B=nodes[j];let dx=A.x-B.x,dy=A.y-B.y,d2=dx*dx+dy*dy;if(d2<1){dx=1;dy=(i-j)%2||1;d2=2;}const f=rep*cool/d2;A.vx+=dx*f;A.vy+=dy*f;B.vx-=dx*f;B.vy-=dy*f;}
+   for(const e of edges){const A=by.get(e.a),B=by.get(e.b),dx=B.x-A.x,dy=B.y-A.y,d=Math.hypot(dx,dy)||1,hub=OUTSIDE.has(e.a)||OUTSIDE.has(e.b);
+    const L=e.kind==="thread"?70:hub?130:90,f=(d-L)/d*(hub?.01:.05)*cool;A.vx+=dx*f;A.vy+=dy*f;B.vx-=dx*f;B.vy-=dy*f;}
+   for(const o of nodes){o.vx+=(W/2-o.x)*.02*cool;o.vy+=(H/2-o.y)*.035*cool;o.vx*=.7;o.vy*=.7;o.vx=Math.max(-30,Math.min(30,o.vx));o.vy=Math.max(-30,Math.min(30,o.vy));o.x+=o.vx;o.y+=o.vy;}
+   // a node and its label take up a box: push overlapping boxes apart along the shorter side
+   for(let i=0;i<N;i++)for(let j=i+1;j<N;j++){const A=nodes[i],B=nodes[j],ox=Math.max(A.hw,A.r)+Math.max(B.hw,B.r)-Math.abs(A.x-B.x),oy=A.r+B.r+22-Math.abs(A.y-B.y);if(ox<=0||oy<=0)continue;
+    const sx=A.x<B.x?-1:1,sy=A.y<B.y?-1:1;if(ox<oy){A.x+=sx*ox*.3;B.x-=sx*ox*.3;}else{A.y+=sy*oy*.3;B.y-=sy*oy*.3;}}
+   for(const o of nodes){o.x=Math.max(o.hw+4,Math.min(W-o.hw-4,o.x));o.y=Math.max(o.r+6,Math.min(H-o.r-20,o.y));}
+   self.x=W/2;self.y=H/2;self.vx=self.vy=0;}}
+ EGO.pos=new Map(nodes.map(o=>[o.id,{x:o.x,y:o.y}]));
+ const svg=sv("svg",{id:"ego",viewBox:`0 0 ${W} ${H}`});const eMax=Math.max(1,...edges.filter(e=>e.kind==="msg").map(e=>e.n));
+ const adj=new Map(nodeIds.map(id=>[id,new Set([id])]));for(const e of edges){adj.get(e.a).add(e.b);adj.get(e.b).add(e.a);}
+ const lineEls=[],gEls=[];
+ const focus=id=>{for(const g of gEls)g.style.opacity=id&&!adj.get(id).has(g.dataset.id)?.15:"";for(const l of lineEls)l.style.opacity=id?(l.dataset.a===id||l.dataset.b===id?.95:.05):"";};
+ for(const e of edges){const A=by.get(e.a),B=by.get(e.b),th=e.kind==="thread",mine=e.a===n||e.b===n;
+  const w=th?1:(mine?1+3*Math.log2(1+e.n)/Math.log2(1+eMax):1+Math.log2(1+e.n)/Math.log2(1+eMax)),op=th?(mine?.5:.16):mine?.5+.35*e.n/eMax:.18+.2*e.n/eMax;
+  const g=sv("g",{opacity:op});g.dataset.a=e.a;g.dataset.b=e.b;
+  const ln=sv("line",{x1:A.x,y1:A.y,x2:B.x,y2:B.y,"stroke-width":e.spawn&&!e.n?1.5:w,style:`stroke:var(${mine?"--ink2":"--ink3"})`});if(e.spawn&&!e.n)ln.setAttribute("stroke-dasharray","5 4");g.append(ln);
+  if(e.spawn){const from=e.spawnFrom===e.a?A:B,to=from===A?B:A,dx=to.x-from.x,dy=to.y-from.y,d=Math.hypot(dx,dy)||1,ux=dx/d,uy=dy/d,tx=to.x-ux*(to.r+3),ty=to.y-uy*(to.r+3);
+   g.append(sv("polygon",{points:`${tx},${ty} ${tx-ux*9-uy*4.5},${ty-uy*9+ux*4.5} ${tx-ux*9+uy*4.5},${ty-uy*9-ux*4.5}`,style:`fill:var(${mine?"--ink2":"--ink3"})`}));}
+  const tt=sv("title",{});tt.textContent=th?`${e.a} on thread ${tid(e.b)||tid(e.a)}`:`${e.a} and ${e.b}: ${e.n} mention${e.n===1?"":"s"}${e.spawn?`; ${e.spawnFrom} started the other`:""}`;g.append(tt);
+  lineEls.push(g);}
+ for(const o of nodes){const id=o.id,th=isTh(id),out=OUTSIDE.has(id);const g=sv("g",{class:"egon"+(id===n?" self":"")});g.dataset.id=id;
+  const fillc=th?`var(${EGO_TIER[tierOf(tid(id))]||"--other"})`:out?"var(--ink)":agentColor(id);
+  if(!th&&!out&&isRunning(id))g.append(sv("circle",{class:"egopulse",cx:o.x,cy:o.y,r:o.r+3}));
+  if(id===n)g.append(sv("circle",{cx:o.x,cy:o.y,r:o.r+4,style:"fill:none;stroke:var(--ink);stroke-width:1.5"}));
+  if(th)g.append(sv("rect",{x:o.x-o.r*1.3,y:o.y-o.r*.85,width:o.r*2.6,height:o.r*1.7,rx:3,style:`fill:color-mix(in srgb,${fillc} 30%,var(--surface));stroke:${fillc};stroke-width:1.5`}));
+  else if(out){const r=o.r*1.15;g.append(sv("polygon",{points:`${o.x},${o.y-r} ${o.x+r},${o.y} ${o.x},${o.y+r} ${o.x-r},${o.y}`,style:`fill:${fillc};stroke:var(--surface);stroke-width:2`}));}
+  else g.append(sv("circle",{cx:o.x,cy:o.y,r:o.r,style:`fill:${fillc};stroke:var(--surface);stroke-width:2`}));
+  const tx=sv("text",{x:o.x,y:o.y+o.r+(id===n?17:12),"text-anchor":"middle"});tx.textContent=o.lab;g.append(tx);
+  const tt=sv("title",{});tt.textContent=th?`thread ${tid(id)}`:out?id:`${id}: ${agentStatus(id).k}`+(o.c?`, ${o.c} exchange${o.c===1?"":"s"} with ${n}`:"");g.append(tt);
+  g.addEventListener("click",()=>th?openThread(tid(id)):id!==n&&openAgent(id));g.addEventListener("mouseenter",()=>focus(id));g.addEventListener("mouseleave",()=>focus(null));
+  gEls.push(g);}
+ svg.append(...lineEls,...gEls);Object.assign(EGO,{name:n,sig,topo,svg});return svg;}
 function renderAgent(){const n=A.name;if(!n)return;if(selecting())return;const box=A.drawer?$("#drawerbody"):$("#agentbody"),t=now();
  const ss=S.sessions.filter(s=>s.name===n);const L=S.running.get(n);
  const mine=S.posts.filter(p=>p.from===n),toMe=S.posts.filter(p=>p.men.includes(n)&&p.from!==n);
@@ -1292,6 +1409,7 @@ function renderAgent(){const n=A.name;if(!n)return;if(selecting())return;const b
  const ths={};for(const s of ss)ths[s.thread]=(ths[s.thread]||0);for(const p of mine)ths[p.th]=(ths[p.th]||0)+1;
  const task=L&&S.byId[L.post];
  const tl=Object.entries(links).sort((a,b)=>b[1]-a[1]);
+ const eg=ego(n,tl,[...new Set(started.map(s=>s.name))],Object.keys(ths).sort((a,b)=>ths[b]-ths[a]),first&&first.from);
  const tlist=Object.entries(tools).sort((a,b)=>b[1]-a[1]).slice(0,8),tmx=tlist.length?tlist[0][1]:1;
  const scrollEl=box.querySelector(".feed");const fs=scrollEl?scrollEl.scrollTop:null;
  fill(box,
@@ -1312,7 +1430,7 @@ function renderAgent(){const n=A.name;if(!n)return;if(selecting())return;const b
    tile(String(started.length),"Agents it started",started.length?`${new Set(started.map(s=>s.thread)).size} thread${started.length>1?"s":""}`:"none"),
    tile(String(tl.length),"Talks with",tl.length?`most with ${tl[0][0]}`:"nobody yet")),
   el("div",{class:"grid two"},
-   el("div",null,el("h2",null,"Its corner of the hive"),el("div",{class:"card"},tl.length?ego(n,tl):el("div",{class:"dim sm"},"No exchanges yet."),
+   el("div",null,el("h2",null,"Its corner of the hive"),el("div",{class:"card"},eg||el("div",{class:"dim sm"},"No exchanges yet."),eg?el("div",{class:"sm dim3",style:"text-align:center"},"Thicker line: more messages. Arrow: started. Box: thread. Hover to trace a node."):null,
      started.length?el("div",{style:"margin-top:.4rem"},el("div",{class:"sm dim"},"Started"),el("div",{style:"display:flex;gap:.25rem;flex-wrap:wrap;margin-top:.2rem"},[...new Set(started.map(s=>s.name))].slice(0,30).map(x=>nameChip(x)))):null,
      Object.keys(ths).length?el("div",{style:"margin-top:.5rem"},el("div",{class:"sm dim"},"Threads"),el("div",{style:"display:flex;gap:.25rem;flex-wrap:wrap;margin-top:.2rem"},Object.keys(ths).sort((a,b)=>ths[b]-ths[a]).slice(0,16).map(threadChip))):null),
     tlist.length?el("h2",null,"What it reached for"):null,tlist.length?el("div",{class:"card"},el("div",{class:"tstack"},tlist.map(([k,v])=>el("i",{title:`${k} ${v}`,style:`flex:${v};background:${toolColor(k)}`}))),tlist.map(([k,v])=>el("div",{class:"bar",style:"cursor:default"},el("span",null,k),el("span",{class:"dim"},v),el("span",{class:"tr"},el("i",{style:`width:${100*v/tmx}%;background:${toolColor(k)}`}))))):null),

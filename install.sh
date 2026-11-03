@@ -28,7 +28,8 @@ esac; done
 for t in python3 git claude; do command -v "$t" >/dev/null || die "$t not found on PATH"; done
 
 # Agents run with bypassed permissions and everything this account can reach, so insist on a spare account.
-if [ "$SHARED" = 0 ]; then
+# Once installed, the files here are the Hive's own work, and an update has to get past this.
+if [ "$SHARED" = 0 ] && [ ! -e "$HOME/.hive-installed" ]; then
   other=$(find "$HOME" -mindepth 1 -maxdepth 1 ! -name '.*' ! -name core ! -name kb ! -name projects \
           ! -name run ! -name sessions ! -name board.jsonl ! -name log.jsonl ! -name modules ! -name files | head -3)
   [ ! -e "$HOME/.ssh" ] && [ -z "$other" ] || die "this account has files or ~/.ssh, and its agents would have full rights to them.

@@ -1,0 +1,117 @@
+// The component kit. Each factory takes plain data and returns DOM; styles live in components.css under the same name.
+import { h } from "../core/dom.js";
+import { status as st } from "../core/status.js";
+
+/** Page header: the answer first. {title, lead, tone, meta:[...], actions, after} */
+export function pageHeader({ title, lead, tone, meta, actions, after }) {
+  return h("header", { class: "ph" },
+    title || actions ? h("div", { class: "ph-row" }, title ? h("h1", { class: "ph-title" }, title) : null, actions ? h("div", { class: "ph-actions" }, actions) : null) : null,
+    lead ? h("p", { class: "ph-lead", "data-tone": tone || null }, lead) : null,
+    after || null,
+    meta && meta.filter(Boolean).length ? h("p", { class: "ph-meta" }, meta.filter(Boolean).map(m => h("span", null, m))) : null);
+}
+
+/** Section: a titled block. {title, note, actions, id} + body nodes */
+export function section({ title, note, actions, id, key }, ...body) {
+  return h("section", { class: "sec", id: id || null, "data-key": key || null, "aria-label": title || null },
+    title ? h("header", { class: "sec-h" }, h("h2", { class: "sec-t" }, title), note ? h("span", { class: "sec-n" }, note) : null, actions ? h("div", { class: "sec-a" }, actions) : null) : null,
+    body);
+}
+
+/** Status dot: shape + colour from the STATUS table. */
+export function statusDot(key, { live } = {}) {
+  const S = st(key);
+  return h("span", { class: "sd", "data-tone": S.tone, "data-shape": S.shape, "data-live": live ? "" : null, "aria-hidden": "true" });
+}
+/** Status label: dot and words, coloured by tone. text overrides the table's label. */
+export function statusLabel(key, text, { live, title } = {}) {
+  const S = st(key);
+  return h("span", { class: "sl", "data-tone": S.tone, title: title || S.hint || null }, statusDot(key, { live }), h("span", null, text ?? S.label));
+}
+
+/** Tally: counts by status, e.g. 9 working · 12 in job queue. items: [{n, label, status}] */
+export function tally(items) {
+  return h("ul", { class: "tally" }, items.map(i => h("li", { "data-zero": i.n ? null : "", title: st(i.status).hint || null }, statusDot(i.status), h("b", null, i.n), h("span", null, i.label))));
+}
+
+/** Stats: figures in a strip. items: [{label, value, note, tone, meter:{value, stop, tone}}] */
+export function stats(items) {
+  return h("dl", { class: "stats" }, items.filter(Boolean).map(i => h("div", { class: "stat", "data-tone": i.tone || null, title: i.title || null },
+    h("dt", null, i.label), h("dd", { class: "stat-v" }, i.value),
+    i.meter ? h("dd", null, meter(i.meter)) : null,
+    i.note ? h("dd", { class: "stat-n" }, i.note) : null)));
+}
+
+/** Meter: value 0–100, optional stop line, tone (default by level). */
+export function meter({ value, stop, tone, label }) {
+  const v = Math.max(0, Math.min(100, value || 0));
+  const t = tone || (v >= 90 ? "bad" : v >= 75 ? "warn" : "info");
+  return h("div", { class: "meter", "data-tone": t, role: "meter", "aria-valuenow": Math.round(v), "aria-valuemin": 0, "aria-valuemax": 100, "aria-label": label || null, style: `--v:${v}%` + (stop != null ? `;--s:${stop}%` : "") },
+    h("i"), stop != null ? h("u", { title: label ? `${label}: stop line at ${stop}%` : `stop line at ${stop}%` }) : null);
+}
+
+/** Button. kind: default | primary | danger | quiet. size: s. tone colours quiet text (e.g. bad for Kill). */
+export function button(label, onClick, { kind, size, tone, title, disabled, type, cls, href } = {}) {
+  if (href) return h("a", { class: ["btn", cls], href, "data-kind": kind || null, "data-size": size || null, "data-tone": tone || null, title: title || null }, label);
+  return h("button", { type: type || "button", class: ["btn", cls], "data-kind": kind || null, "data-size": size || null, "data-tone": tone || null, title: title || null, disabled: disabled || null, onclick: onClick }, label);
+}
+
+/** Segmented choice. options: [[key, label]] */
+export function seg(options, value, onChange, { label } = {}) {
+  return h("div", { class: "seg", role: "group", "aria-label": label || null },
+    options.map(([k, l, t]) => h("button", { type: "button", "aria-pressed": String(k === value), title: t || null, onclick: () => onChange(k) }, l)));
+}
+
+/** Form field: label, control, hint. */
+export function field(label, control, hint) {
+  return h("label", { class: "field" }, h("span", { class: "field-l" }, label), control, hint ? h("span", { class: "field-h" }, hint) : null);
+}
+export const input = props => h("input", { class: "input", ...props });
+
+/** Empty, loading and error states. kind: empty | loading | error | page */
+export function empty(text, { kind = "empty", title } = {}) {
+  return h("div", { class: "empty", "data-kind": kind, role: kind === "error" ? "alert" : null }, title ? h("div", { class: "empty-t" }, title) : null, text);
+}
+
+/** List: rows separated by hairlines. rows: [{key, href, title, sub, meta, text, lead, current, onClick}]; limit + onMore add "Show N more". */
+export function list(rows, { empty: none = "Nothing here.", limit, onMore, moreText = n => `Show ${n} more`, dense } = {}) {
+  if (!rows.length) return empty(none);
+  const shown = limit ? rows.slice(0, limit) : rows;
+  return h("div", null,
+    h("ul", { class: "list", "data-dense": dense ? "" : null }, shown.map(r => h("li", { class: "lr", "data-key": r.key || null },
+      h(r.href ? "a" : r.onClick ? "button" : "div", { class: "lr-in", href: r.href || null, type: !r.href && r.onClick ? "button" : null, "aria-current": r.current ? "true" : null, onclick: r.onClick || null },
+        h("div", { class: "lr-t" }, r.lead || null, h("b", null, r.title), r.sub ? h("span", { class: "muted" }, r.sub) : null, r.meta ? h("span", { class: "meta" }, r.meta) : null),
+        r.text ? h("div", { class: "lr-x clamp-2" }, r.text) : null)))),
+    rows.length > shown.length ? h("div", { class: "lr-more" }, onMore ? button(moreText(rows.length - shown.length), onMore, { kind: "quiet", size: "s" }) : h("span", { class: "meta" }, `and ${rows.length - shown.length} more`)) : null);
+}
+
+/** Rank: ranked bars. rows: [{key, label, value, text, tone, href}] */
+export function rank(rows, { empty: none = "Nothing yet.", max } = {}) {
+  if (!rows.length) return empty(none);
+  const mx = max || Math.max(...rows.map(r => r.value)) || 1;
+  return h("ul", { class: "rank" }, rows.map(r => h("li", { "data-key": r.key },
+    h(r.href ? "a" : "div", { class: "rank-in", href: r.href || null, onclick: r.onClick || null, "data-tone": r.tone || null, style: `--v:${(100 * r.value) / mx}%` },
+      h("span", null, r.label), h("span", null, r.text), h("span", { class: "rank-tr" }, h("i"))))));
+}
+
+/** Share: one stacked bar with a legend. parts: [{key, label, value, tone, text}] */
+export function share(parts, { total, label, legend: withLegend = true } = {}) {
+  const sum = total || parts.reduce((a, p) => a + p.value, 0) || 1;
+  return h("div", null,
+    h("div", { class: "share-bar", role: "img", "aria-label": label || parts.map(p => `${p.label} ${p.text}`).join(", ") },
+      parts.filter(p => p.value > 0).map(p => h("i", { "data-tone": p.tone, style: `flex:${p.value / sum} 0 0`, title: `${p.label}: ${p.text}` })),
+      total && total > parts.reduce((a, p) => a + p.value, 0) ? h("i", { style: `flex:${(total - parts.reduce((a, p) => a + p.value, 0)) / sum} 0 0;background:var(--line)` }) : null),
+    withLegend ? legend(parts) : null);
+}
+export function legend(parts) {
+  return h("div", { class: "legend" }, parts.map(p => h("span", { "data-tone": p.tone }, h("i", { class: "sw" }), `${p.label}: ${p.text}`)));
+}
+
+/** Toolbar: a row of filters and controls above a list or a canvas. */
+export const toolbar = (...kids) => h("div", { class: "toolbar" }, kids);
+
+/** Definitions: a strip of short label/value pairs. rows: [{k, v, hint}] */
+export function defs(rows) {
+  if (!rows.length) return null;
+  return h("dl", { class: "defs" }, rows.map(r => h("div", { "data-key": r.k, title: r.hint || null }, h("dt", null, r.k), h("dd", null, r.v))));
+}

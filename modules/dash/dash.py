@@ -8,14 +8,14 @@ Reads only: ~/run/*.json, ~/sessions/*.jsonl (tails), ~/log.jsonl, ~/board.jsonl
 ~/.hive/login_limits.json (POST /api/login-limit) and the "Set from the dashboard" section of ~/kb/priorities.md
 (POST /api/tier). POST /api/kill is the only thing that signals: it kills one agent's run, writes ~/.hive/killed/<name>.json for
 the starter, and appends a line each to ~/log.jsonl and ~/board.jsonl.
-The web page is ui.html next to this file; it does all its own counting in the browser.
+The web page is web/ next to this file (ui.html, the previous page, is at /old); it does all its own counting in the browser.
 
   hive-dash                 text snapshot
   hive-dash --watch [S]     redraw every S seconds (default 5)
   hive-dash serve [--port P] web UI on http://127.0.0.1:P/ (loopback only; default 8077)
   hive-dash --json          the snapshot as JSON
 """
-import base64, fcntl, gzip, hashlib, hmac, importlib.util, json, os, pty, re, secrets, select, shutil, signal, struct, subprocess, sys, termios, threading, time
+import base64, fcntl, gzip, hashlib, hmac, importlib.util, json, os, pty, pwd, re, secrets, select, shutil, signal, struct, subprocess, sys, termios, threading, time
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -26,6 +26,9 @@ HOME_FILES = HOME / "files"
 STATE, PROJECTS = HOME / ".hive", HOME / "projects"
 PRIORITIES = HOME / "kb" / "priorities.md"
 UI = Path(__file__).resolve().parent / "ui.html"
+UI_DIR = Path(__file__).resolve().parent / "web"  # the rebuilt page: index.html, css/, js/. Only those are served, not its preview or fixtures.
+DISPLAY_PAGES = ("/single-screen", "/dual-screen", "/dual-screen/1", "/dual-screen/2")  # TV pages: web/display.html; which tiles each shows is in js/display/layouts.js
+UI_CT = {".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8"}
 THREAD_HOURS = 12
 
 
@@ -368,9 +371,28 @@ def peer_uid(addr):
     return None
 
 
+def heavy_jobs(t=None):
+    """{agent: {"running": n, "queued": n, "waited": s of its longest wait}} from the `heavy` queue's own files: what a quiet agent is waiting on."""
+    t, d, jobs = t or time.time(), STATE / "heavy", {}
+    def job(name): return jobs.setdefault(name or "?", {"running": 0, "queued": 0, "waited": 0})
+    for who in d.glob("*.who"):
+        try:
+            with open(d / who.stem, "a") as lock:  # the job holds this lock while it runs; a free lock is a leftover .who
+                try: fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except OSError: job((who.read_text().split() or ["?"])[0])["running"] += 1
+        except OSError: pass
+    for q in [*d.glob("w.*"), *d.glob("q.*"), *d.glob("f.*")]:  # a waiter's ticket ends in its pid
+        try:
+            env = Path(f"/proc/{q.name.rsplit('.', 1)[-1]}/environ").read_bytes().split(b"\0")
+            name = next((e[8:].decode() for e in env if e.startswith(b"HIVE_NAME=")), "?")
+            j = job(name); j["queued"] += 1; j["waited"] = max(j["waited"], int(t - q.stat().st_mtime))
+        except OSError: pass
+    return jobs
+
+
 def live():
     """The cheap part, polled by the web page: who is running and what the starter holds. No board parse."""
-    agents = []
+    agents, jobs = [], heavy_jobs()
     for f in sorted(RUN.glob("*.json")):
         r = jload(f, {}) or {}
         a = activity(r.get("out"))
@@ -378,6 +400,7 @@ def live():
             "name": r.get("name", f.stem), "pid": r.get("pid"), "alive": alive(r.get("pid")),
             "since": ts(r.get("at")), "thread": r.get("thread"), "from": r.get("from"), "post": r.get("post"),
             "last": a["last"], "doing": a["doing"], "said": a["said"], "out": r.get("out"), "effort": run_effort(r.get("pid")),
+            "jobs": jobs.get(r.get("name", f.stem)),
         })
     keep = {str(a["out"]) for a in agents}
     for k in [k for k in _activity if k not in keep]: del _activity[k]
@@ -387,7 +410,7 @@ def live():
     usage = {k: v for k, v in (jload(STATE / "usage.json", {}) or {}).items() if not k.startswith("_")}
     limit_until = st.get("limit_until")
     if limit_until and limit_until < time.time(): limit_until = None
-    return {"now": time.time(), "agents": agents, "pending": pending, "usage": usage, "logins": logins(),
+    return {"now": time.time(), "agents": agents, "jobs": {"running": sum(j["running"] for j in jobs.values()), "queued": sum(j["queued"] for j in jobs.values())}, "pending": pending, "usage": usage, "logins": logins(),
             "limit_until": limit_until, "priorities": priorities()}
 
 
@@ -502,7 +525,8 @@ def snapshot():
 
     ended = [e for e in jlines(LOG, 128 * 1024) if e.get("event") != "start"][-10:][::-1]
 
-    return {"now": time.time(), "agents": agents, "pending": pending, "usage": usage, "logins": logs,
+    jobs = heavy_jobs()
+    return {"now": time.time(), "agents": agents, "jobs": {"running": sum(j["running"] for j in jobs.values()), "queued": sum(j["queued"] for j in jobs.values())}, "pending": pending, "usage": usage, "logins": logs,
             "limit_until": limit_until, "threads": active, "ended": ended, "projects": projects()}
 
 
@@ -737,6 +761,198 @@ class Cached:
             return self.v
 
 
+# Defaults of ~/.local/bin/heavy's start gates; test_jobs.py checks they still match the script.
+HEAVY_MIN_MEM_MB, HEAVY_JOB_MB, HEAVY_MAX_STALL, HEAVY_LOAD_PER_CPU = 5000, 3000, 20, 3
+JOB_ROW_CORES, JOB_ROW_MB = 0.25, 200  # below both, a group outside the queue isn't worth a row
+TICK = os.sysconf("SC_CLK_TCK")
+
+
+def read_proc():
+    """{pid: fields} for every process, from /proc/<pid>/stat and status. mem is private memory, in RAM or swap, so
+    summing it over processes doesn't count shared libraries many times; ticks is CPU used since the process started."""
+    out = {}
+    for e in os.scandir("/proc"):
+        if not e.name.isdigit(): continue
+        try:
+            st = Path(e.path, "stat").read_bytes().decode(errors="replace")
+            comm, f = st[st.index("(") + 1:st.rindex(")")], st[st.rindex(")") + 2:].split()
+            mem, uid = 0, None
+            for ln in Path(e.path, "status").read_text(errors="replace").splitlines():
+                if ln.startswith("Uid:"): uid = int(ln.split()[1])
+                elif ln.startswith(("RssAnon:", "VmSwap:")): mem += int(ln.split()[1])
+            out[int(e.name)] = {"comm": comm, "ppid": int(f[1]), "ticks": int(f[11]) + int(f[12]), "start": f[19], "uid": uid, "mem": mem / 1024}
+        except (OSError, ValueError, IndexError): pass  # it ended while we read it
+    return out
+
+
+def proc_cmd(pid):
+    try: return [a.decode(errors="replace") for a in Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0") if a]
+    except OSError: return []
+
+
+def proc_agent(pid):
+    """The HIVE_NAME in a process's environment; None if it has none or isn't ours to read."""
+    try: env = Path(f"/proc/{pid}/environ").read_bytes().split(b"\0")
+    except OSError: return None
+    return next((e[8:].decode(errors="replace") for e in env if e.startswith(b"HIVE_NAME=")), None)
+
+
+def nvidia():
+    if not shutil.which("nvidia-smi"): return []
+    try:
+        r = subprocess.run(["nvidia-smi", "--query-gpu=name,utilization.gpu,memory.used,memory.total", "--format=csv,noheader,nounits"],
+                           capture_output=True, text=True, timeout=3)
+        rows = [[c.strip() for c in ln.split(",")] for ln in r.stdout.splitlines()]
+        return [{"name": a, "util": int(b), "mem": int(c), "total": int(d)} for a, b, c, d in rows]
+    except (OSError, ValueError, subprocess.SubprocessError): return []
+
+
+gpu_c = Cached(nvidia, 15)
+
+
+class Jobs:
+    """What /api/jobs serves: heavy's running and queued jobs, what each uses, and the machine's resources.
+    Reads /proc and heavy's files only; computed only while a tab has the Jobs view open."""
+    def __init__(self): self.prev_t, self.prev_cpu, self.prev_ticks, self.names = 0, None, {}, {}
+
+    def agent(self, pid, p):
+        k = (pid, p["start"])
+        if k not in self.names: self.names[k] = proc_agent(pid)
+        return self.names[k]
+
+    def view(self):
+        t, d, me = time.time(), STATE / "heavy", os.getuid()
+        procs, dt = read_proc(), t - self.prev_t
+        ticks = {(pid, p["start"]): p["ticks"] for pid, p in procs.items()}
+        for pid, p in procs.items():  # first look: 0, not its whole life's CPU
+            was = self.prev_ticks.get((pid, p["start"]))
+            p["cores"] = max(0, p["ticks"] - was) / TICK / dt if was is not None and dt > 0 else 0
+        self.prev_ticks, self.prev_t = ticks, t
+        self.names = {k: v for k, v in self.names.items() if k in ticks}
+        kids = {}
+        for pid, p in procs.items(): kids.setdefault(p["ppid"], []).append(pid)
+        def tree(pid):
+            out, todo = [], [pid]
+            while todo:
+                x = todo.pop()
+                if x in procs: out.append(x); todo += kids.get(x, [])
+            return out
+        def top_cmd(pids):
+            big = max(pids, key=lambda x: (procs[x]["cores"] + procs[x]["mem"] / 1024, x))
+            return redact(" ".join(proc_cmd(big)) or procs[big]["comm"])[:200]
+
+        # Running: the heavy shell whose fd 9 is that lane's lock file and that has no ticket left in the queue. /proc/locks
+        # can't say: the lock is taken by the flock binary, which exits at once, so it names a dead pid.
+        waiting = {q.name.rsplit(".", 1)[-1] for q in [*d.glob("w.*"), *d.glob("q.*"), *d.glob("f.*")]}
+        holders = {}
+        for pid, p in procs.items():
+            if p["uid"] != me or str(pid) in waiting or not p["comm"].startswith(("sh", "dash", "bash", "heavy")): continue
+            if not any(a.endswith("/heavy") for a in proc_cmd(pid)[:2]): continue
+            try: holders[os.readlink(f"/proc/{pid}/fd/9")] = pid
+            except OSError: pass
+        running, in_jobs = [], set()
+        for who in d.glob("*.who"):
+            holder = holders.get(str(d / who.stem))
+            if holder is None: continue  # a leftover .who
+            try: f = who.read_text(errors="replace").split(None, 2)
+            except OSError: continue
+            pids = tree(holder); in_jobs.update(pids)
+            try: since = datetime.fromisoformat(f[1]).timestamp()
+            except (ValueError, IndexError): since = who.stat().st_mtime
+            running.append({"lane": who.stem, "agent": f[0] if f else "?", "since": since, "cmd": redact(f[2].strip() if len(f) > 2 else ""),
+                            "cores": round(sum(procs[x]["cores"] for x in pids), 2), "mem": round(sum(procs[x]["mem"] for x in pids)), "procs": len(pids)})
+        running.sort(key=lambda r: r["since"])
+
+        # Queued, in the order they will start: the first lane skips the line; then the oldest ticket.
+        queued = []
+        for q in sorted(d.glob("f.*")) + sorted([*d.glob("w.*"), *d.glob("q.*")]):
+            try:
+                pid, at = int(q.name.rsplit(".", 1)[-1]), q.stat().st_mtime
+            except (OSError, ValueError): continue
+            args = proc_cmd(pid)
+            hv = next((i for i, a in enumerate(args[:3]) if a.endswith("/heavy") or a == "heavy"), None)
+            if pid not in procs or hv is None: continue  # dead waiter, or its pid was reused
+            cmd = args[hv + 1:]
+            if cmd[:1] == ["--first"]: cmd = cmd[1:]
+            queued.append({"agent": self.agent(pid, procs[pid]) or "?", "since": at, "cmd": redact(" ".join(cmd))[:200], "first": q.name.startswith("f.")})
+
+        # Everything else, by who owns it: an agent's own process, its work outside the queue, the rest.
+        own = set()
+        for f in RUN.glob("*.json"):
+            try: own.add(int(json.loads(f.read_text()).get("pid") or 0))
+            except (OSError, ValueError, AttributeError): pass
+        groups = {}
+        split = {k: {"cores": 0, "mem": 0} for k in ("jobs", "outside", "agents", "other")}
+        for pid, p in procs.items():
+            name = None
+            if pid in in_jobs: kind = "jobs"
+            elif pid in own: kind = "agents"
+            else:
+                name = self.agent(pid, p) if p["uid"] == me else None
+                kind = "outside" if name else "other"
+                if kind == "other":
+                    try: name = "user " + pwd.getpwuid(p["uid"]).pw_name
+                    except (KeyError, TypeError): name = "user ?"
+            split[kind]["cores"] += p["cores"]; split[kind]["mem"] += p["mem"]
+            if name: groups.setdefault((kind, name), []).append(pid)
+        outside = []
+        for (kind, name), pids in groups.items():
+            c, m = sum(procs[x]["cores"] for x in pids), sum(procs[x]["mem"] for x in pids)
+            if c >= JOB_ROW_CORES or m >= JOB_ROW_MB:
+                outside.append({"who": name, "agent": kind == "outside", "cores": round(c, 2), "mem": round(m), "procs": len(pids), "cmd": top_cmd(pids)})
+        outside.sort(key=lambda r: (r["agent"], r["cores"] + r["mem"] / 1024), reverse=True)
+
+        # The machine.
+        stat = {ln.split()[0]: ln.split()[1:] for ln in Path("/proc/stat").read_text().splitlines() if ln.startswith(("cpu ", "procs_"))}
+        cpu = [int(x) for x in stat["cpu"]]
+        busy = {"user": 0, "system": 0, "iowait": 0, "idle": 100}
+        if self.prev_cpu:
+            a = [x - y for x, y in zip(cpu, self.prev_cpu)]; tot = sum(a[:8]) or 1
+            busy = {"user": round((a[0] + a[1]) * 100 / tot), "system": round((a[2] + a[5] + a[6]) * 100 / tot), "iowait": round(a[4] * 100 / tot), "idle": round(a[3] * 100 / tot)}
+        self.prev_cpu = cpu
+        mem = {ln.split(":")[0]: int(ln.split()[1]) // 1024 for ln in Path("/proc/meminfo").read_text().splitlines() if ln.startswith(("MemTotal", "MemAvailable", "SwapTotal", "SwapFree"))}
+        psi = {}
+        for k in ("cpu", "io", "memory"):
+            try:
+                for ln in Path(f"/proc/pressure/{k}").read_text().splitlines():
+                    f = ln.split()
+                    psi[f"{k}_{f[0]}"] = float(f[2].split("=")[1])
+            except (OSError, IndexError, ValueError): pass
+        cpus, load = os.cpu_count() or 1, float(Path("/proc/loadavg").read_text().split()[0])
+        disks = []
+        for label, path in (("home", HOME), ("/tmp", Path("/tmp"))):
+            try: u = shutil.disk_usage(path); disks.append({"name": label, "used": u.used // 2**30, "total": u.total // 2**30})
+            except OSError: pass
+        cg, slice_used, slice_high = Path(f"/sys/fs/cgroup/user.slice/user-{me}.slice/user@{me}.service/app.slice/app-h2jobs.slice"), None, None
+        try:
+            slice_used = sum(int(ln.split()[1]) for ln in (cg / "memory.stat").read_text().splitlines() if ln.startswith(("anon ", "shmem "))) // 2**20
+            slice_high = int((cg / "memory.high").read_text()) // 2**20
+        except (OSError, ValueError): pass
+        held = mem.get("MemTotal", 0) - mem.get("MemAvailable", 0) + mem.get("SwapTotal", 0) - mem.get("SwapFree", 0)
+        for k, v in split.items(): v["cores"] = round(v["cores"], 2); v["mem"] = round(v["mem"])
+
+        # heavy's gates for the next start, in its own order. They only hold a job back while some slot is busy.
+        gates = [{"what": "memory available", "now": mem.get("MemAvailable", 0), "need": f"at least {HEAVY_MIN_MEM_MB} MB", "unit": " MB", "ok": mem.get("MemAvailable", 0) >= HEAVY_MIN_MEM_MB}]
+        if slice_used is not None and slice_high:
+            gates.append({"what": "queue jobs' memory", "now": slice_used, "need": f"at most {slice_high - HEAVY_JOB_MB} MB", "unit": " MB", "ok": slice_used + HEAVY_JOB_MB <= slice_high})
+        if "memory_full" in psi:  # avg60, the figure heavy reads
+            gates.append({"what": "memory stall", "now": int(psi["memory_full"]), "need": f"under {HEAVY_MAX_STALL}%", "unit": "%", "ok": int(psi["memory_full"]) < HEAVY_MAX_STALL})
+        gates.append({"what": "load", "now": int(load), "need": f"under {cpus * HEAVY_LOAD_PER_CPU}", "unit": "", "ok": int(load) < cpus * HEAVY_LOAD_PER_CPU})
+
+        done = []
+        try:
+            with open(d / "jobs.tsv", "rb") as f:
+                f.seek(0, 2); f.seek(max(0, f.tell() - 8192))
+                for ln in f.read().decode(errors="replace").splitlines()[-10:][::-1]:
+                    c = ln.split("\t")
+                    if len(c) >= 7: done.append({"end": datetime.fromisoformat(c[0]).timestamp(), "agent": c[1], "lane": c[2], "waited": int(c[3]), "ran": int(c[4]), "rc": int(c[5]), "cmd": redact(c[6])})
+        except (OSError, ValueError): pass
+        return {"at": t, "running": running, "queued": queued, "outside": outside, "done": done, "gates": gates, "split": split,
+                "slots": cpus, "held": held,
+                "machine": {"cpus": cpus, "load": load, "busy": busy, "blocked": int(stat.get("procs_blocked", [0])[0]), "mem": mem, "psi": psi,
+                          "disks": disks, "slice_used": slice_used, "slice_high": slice_high, "gpus": gpu_c.get()}}
+
+
 def tail_lines(path, offset):
     """Whole lines appended since byte `offset`, unparsed: the browser parses them, and the file is only ever read."""
     try:
@@ -763,7 +979,7 @@ WEB = STATE / "web.json"
 INSTALLED = HOME / ".hive-installed"
 FORWARDED = ("cf-ray", "cf-connecting-ip", "cf-access-jwt-assertion", "cf-ipcountry", "cf-visitor", "cdn-loop", "x-forwarded-for",
              "x-forwarded-host", "x-forwarded-proto", "x-real-ip", "forwarded", "via", "true-client-ip")
-GET_CAP = {"/api/live": "read", "/api/board": "read", "/api/log": "read", "/api/usage": "read", "/api/agent": "read",
+GET_CAP = {"/api/live": "read", "/api/board": "read", "/api/log": "read", "/api/usage": "read", "/api/jobs": "read", "/api/agent": "read",
            "/api/projects": "read", "/json": "read", "/api/target": "read", "/api/inbox": "read", "/api/delivered": "read",
            "/api/config": "config", "/api/modules": "modules", "/api/signin": "logins"}
 POST_CAP = {"/api/kill": "stop", "/api/tier": "tier", "/api/login-pause": "limits", "/api/login-limit": "limits", "/api/provider-limit": "limits",
@@ -997,10 +1213,12 @@ def person_post(text, thread=None, reply_to=None, uploads=()):
         author = INDEX.authors[reply_to].lower()
         who = author if AGENT_CODE.fullmatch(author) else None
         text = f"reply to message {reply_to}: {text}"
+    routed = False
     if not calls_someone(text):
         who = who or (INDEX.last.get(thread) if thread else None)
         text = f"@{who or 'new'} {text}"
-    cmd = [str(HIVE_BIN), "post", "--as", PERSON] + (["--thread", str(thread)] if thread else []) + (["--to", who] if who else [])
+        routed = bool(who)  # we picked the name, so a dead agent's heir may take it; only a typed name brings a dead agent back
+    cmd = [str(HIVE_BIN), "post", "--as", PERSON] + (["--thread", str(thread)] if thread else []) + (["--to", who] if who else []) + (["--routed"] if routed else []) + (["--reply-to", reply_to] if reply_to else [])
     for p in paths: cmd += ["--file", str(p)]
     r = subprocess.run(cmd, input=text, text=True, capture_output=True, env=child_env(), cwd=str(HOME), timeout=60)
     if r.returncode: raise ValueError(short(r.stderr, 300) or "the post failed")
@@ -1269,7 +1487,7 @@ def serve(port):
     from urllib.parse import parse_qs, urlparse
     usage = Usage()
     threading.Thread(target=usage.run, daemon=True).start()
-    live_c, proj_c, usage_c = Cached(live, 1), Cached(projects, 60), Cached(usage.view, 2)
+    live_c, proj_c, usage_c, jobs_c = Cached(live, 1), Cached(projects, 60), Cached(usage.view, 2), Cached(Jobs().view, 2)
     deliv_c = Cached(delivered_view, 2.5)
 
     class H(BaseHTTPRequestHandler):
@@ -1282,7 +1500,7 @@ def serve(port):
             if cookie: self.send_header("Set-Cookie", cookie)
             # Board text is written by agents: the page takes nothing from elsewhere and sends nothing anywhere.
             framing = "" if self.route == "open" else "; frame-ancestors 'none'"  # the page can post as the person, so it can't sit in someone's frame
-            self.send_header("Content-Security-Policy", "default-src 'none'; connect-src 'self'; img-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; base-uri 'none'; form-action 'none'" + framing)
+            self.send_header("Content-Security-Policy", "default-src 'none'; connect-src 'self'; img-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; base-uri 'none'; form-action 'none'" + framing)
             if self.route != "open": self.send_header("Referrer-Policy", "no-referrer")
             if gz: self.send_header("Content-Encoding", "gzip")
             self.end_headers(); self.wfile.write(body)
@@ -1314,7 +1532,7 @@ def serve(port):
             web = web_cfg()
             if web is None: return True  # the open dash: no web.json here, as on a site that hasn't set one up
             self.route, self.can, self.signed = "refused", (), False
-            if web.get("broken"): self.deny(500, "web.json is missing or can't be read, so nothing is served. Fix or delete it, run hive web --setup, then restart hive-dash"); return False
+            if web.get("broken"): self.deny(500, "web.json is missing or can't be read, so nothing is served. Fix or delete it, then run hive web --setup"); return False
             hd = {k.lower(): v for k, v in self.headers.items()}
             route = route_of(hd, self.client_address[0], port, web)
             if route == "refused": self.deny(403, "this address isn't one of this app's"); return False
@@ -1343,7 +1561,9 @@ def serve(port):
         def do_GET(self):
             u = urlparse(self.path)
             q = parse_qs(u.query)
-            page = u.path in ("/", "/index.html", "/login")
+            shown = re.fullmatch(r"(.+?)(/light|/dark)?/?", u.path)   # a display page takes /light or /dark on the end
+            display = bool(shown) and shown[1] in DISPLAY_PAGES
+            page = u.path in ("/", "/index.html", "/login", "/old", "/new", "/new/") or display
             if not self.admit(u.path, page=page): return
             if self.route != "open":  # the open dash never asks; its reads and switches stay as they were
                 if u.path == "/login" or (page and not self.signed):
@@ -1351,11 +1571,24 @@ def serve(port):
                 if not self.signed: return self.deny(401, "sign in: run hive web")
                 need = GET_CAP.get(u.path) or ("read" if u.path.startswith("/files/") else None)
                 if need and need not in self.can: return self.deny(403, f"this route doesn't allow {need}")
+            if display and shown[1] == "/dual-screen":
+                self.send_response(302); self.send_header("Location", "/dual-screen/1" + (shown[2] or "")); self.send_header("Content-Length", "0"); self.end_headers(); return
+            if display:
+                return self.send((UI_DIR / "display.html").read_bytes(), "text/html; charset=utf-8")
+            if u.path == "/new":  # index.html's links are relative, so it needs the slash
+                self.send_response(302); self.send_header("Location", "/new/"); self.send_header("Content-Length", "0"); self.end_headers(); return
+            if u.path in ("/", "/index.html", "/new/"):
+                return self.send((UI_DIR / "index.html").read_bytes(), "text/html; charset=utf-8")
+            if u.path == "/old":  # the previous page, kept for now
+                return self.send(UI.read_bytes(), "text/html; charset=utf-8")
+            m = re.fullmatch(r"(?:/new)?/((?:css|js)(?:/[a-zA-Z0-9_-]+)*/[a-zA-Z0-9_-]+\.(?:js|css))", u.path)
+            if m:
+                f = UI_DIR / m[1]
+                if f.is_symlink() or not f.is_file(): return self.send_error(404)
+                return self.send(f.read_bytes(), UI_CT[f.suffix])
             off = int(q["from"][0]) if q.get("from", [""])[0].isdigit() else 0
             J = "application/json"
-            if u.path in ("/", "/index.html"):
-                self.send(UI.read_bytes(), "text/html; charset=utf-8")
-            elif u.path == "/api/app":
+            if u.path == "/api/app":
                 self.send(json.dumps(self.app_info(), default=str).encode(), J)
             elif u.path in ("/api/target", "/api/inbox", "/api/config", "/api/modules", "/api/signin") and self.route == "open":
                 self.send_error(404)
@@ -1371,6 +1604,8 @@ def serve(port):
                 self.send(json.dumps(SIGNIN.view()).encode(), J)
             elif u.path == "/api/live":
                 self.send(json.dumps(live_c.get(), default=str).encode(), J)
+            elif u.path == "/api/jobs":
+                self.send(json.dumps(jobs_c.get(), default=str).encode(), J)
             elif u.path in ("/api/board", "/api/log"):
                 off, lines = tail_lines(BOARD if u.path == "/api/board" else LOG, off)
                 self.send(('{"offset":%d,"items":[%s]}' % (off, ",".join(lines))).encode(), J)

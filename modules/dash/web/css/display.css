@@ -1,0 +1,98 @@
+/* Display pages (/single-screen, /dual-screen/N): tiles filling a TV, no page scroll. Tokens only.
+   Size is one rule (js/display/app.js): the page is 1536 units wide on any screen, Ctrl + and - change that, and inside a tile
+   the items of its [data-fit] element that don't fit whole are hidden and counted in the head. Nothing here is per tile size.
+   Type is a step up from the app's, for reading across a room; the hierarchy is: the counts at the top, trouble, then tiles. */
+.dt-page{position:fixed;inset:0;display:flex;flex-direction:column;overflow:hidden;background:var(--sunken);
+  --fs-micro:12px;--fs-meta:13px;--fs-small:14.5px;--fs-body:15.5px;--fs-title:16.5px;--fs-lead:19px;--fs-figure:30px}
+:root[data-idle],:root[data-idle] *{cursor:none!important}
+
+/* the top: counts, room on the logins, the clock; trouble underneath, in words and shapes */
+.dt-top{flex:none;padding:var(--s3) var(--s4) var(--s3)}
+.dt-top-in>div{display:grid;gap:var(--s2)}
+.dt-top-row{display:flex;align-items:center;gap:var(--s6);min-width:0;white-space:nowrap}
+.dt-top-row .fs{align-self:center}
+:root[data-idle] .dt-top-row .fs:not(:hover,:focus-visible){visibility:hidden}
+.dt-brand{font-size:var(--fs-title);font-weight:var(--w-bold)}
+.dt-sum{display:flex;align-items:baseline;gap:var(--s5)}
+.dt-run{font-size:var(--fs-body);font-weight:var(--w-med)}
+.dt-n{display:inline-flex;align-items:baseline;gap:8px}
+.dt-n .sd,.dt-room .sd,.dt-trouble .sd{zoom:1.5;align-self:center}
+.dt-n b{font-size:var(--fs-figure);font-weight:var(--w-bold);line-height:1;font-variant-numeric:tabular-nums}
+.dt-n span{font-size:var(--fs-body);color:var(--ink-2)}
+.dt-n[data-zero] b{color:var(--ink-3);font-weight:500}
+.dt-n[data-tone=bad] b,.dt-n[data-tone=bad] span{color:var(--ci)}
+.dt-room{display:inline-flex;align-items:baseline;gap:8px;min-width:0;font-size:var(--fs-body);color:var(--ci,var(--ink-2))}
+.dt-room b{font-size:var(--fs-lead);font-weight:var(--w-bold);color:var(--ci,var(--ink))}
+.dt-room>span:last-child{overflow:hidden;text-overflow:ellipsis}
+.dt-size{font-size:var(--fs-body);font-weight:var(--w-med)}
+.dt-clock{margin-left:auto;font-size:var(--fs-figure);font-weight:var(--w-med);line-height:1;font-variant-numeric:tabular-nums}
+.dt-trouble{display:flex;flex-wrap:wrap;gap:var(--s1) var(--s6);padding:var(--s2) var(--s3);border:1px solid var(--bad);border-radius:var(--r-m);background:color-mix(in oklch,var(--bad) 10%,var(--surface));color:var(--bad-ink);font-size:var(--fs-lead)}
+.dt-trouble>span{display:inline-flex;align-items:baseline;gap:8px;min-width:0}
+.dt-trouble b{font-weight:var(--w-bold)}
+
+/* the grid and its tiles */
+/* the edges between tiles: a thin grab strip over the gap, a line when it's in reach */
+.dt-grip{position:relative;z-index:6;touch-action:none;outline:0}
+.dt-grip[data-axis=col]{justify-self:start;width:14px;margin-left:calc(-7px - var(--s2)/2);cursor:col-resize}
+.dt-grip[data-axis=row]{align-self:start;height:14px;margin-top:calc(-7px - var(--s2)/2);cursor:row-resize}
+.dt-grip::after{content:"";position:absolute;border-radius:2px;background:var(--ink-3);opacity:0;transition:opacity .12s}
+.dt-grip[data-axis=col]::after{left:6px;width:3px;top:0;bottom:0}
+.dt-grip[data-axis=row]::after{top:6px;height:3px;left:0;right:0}
+.dt-grip:hover::after,.dt-grip:focus-visible::after,.dt-grip[data-on]::after{opacity:.8}
+:root[data-idle] .dt-grip:not([data-on]){visibility:hidden}
+.dt{flex:1;min-height:0;display:grid;gap:var(--s2);padding:0 var(--s4) var(--s4)}
+.dt-tile{min-width:0;min-height:0;display:flex;flex-direction:column;overflow:hidden;background:var(--surface);border:1px solid var(--line);border-radius:var(--r-l)}
+.dt-head{flex:none;display:flex;align-items:baseline;justify-content:space-between;gap:var(--s3);padding:7px var(--s3) 6px;border-bottom:1px solid var(--line)}
+.dt-name{font-size:var(--fs-title);font-weight:var(--w-bold);color:var(--ink);text-decoration:none;white-space:nowrap}
+.dt-head-r{min-width:0;font-size:var(--fs-meta);color:var(--ink-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dt-head-in{display:flex;gap:var(--s3);justify-content:flex-end}
+.dt-head-in>span{overflow:hidden;text-overflow:ellipsis}
+.dt-more{flex:none;color:var(--ink);font-weight:var(--w-med)}
+.dt-body{flex:1;min-height:0;position:relative;overflow:hidden;container-type:size;padding:var(--s2) var(--s3)}
+.dt-body [data-fit]>[hidden]{display:none!important}
+.dt-broken{font-size:var(--fs-small);color:var(--bad-ink)}
+
+/* a view in a tile: fills it, without its controls */
+.dt-tile[data-tile=mesh] .dt-body,.dt-tile[data-tile=timeline] .dt-body{padding:0}
+.dt-body>.cvp{position:absolute;inset:0;height:auto;background:none}
+.dt-body .cvp-bar{position:absolute;top:var(--s1);right:var(--s2);z-index:5;max-width:calc(100% - 2*var(--s2));padding:var(--s1) var(--s2);background:var(--surface);border:1px solid var(--line-2);border-radius:var(--r-m);box-shadow:var(--e-2,0 2px 8px rgb(0 0 0/.12))}
+.dt-body .cvp-count{display:none}
+:root[data-idle] .dt-body .cvp-bar:not(:hover,:focus-within){display:none}
+.dt-body .cvp-note,.dt-body .cvp-side,.dt-body .cvp-grip,.dt-body .graph-replay{display:none}
+.dt-body .graph-legend{bottom:var(--s2);left:var(--s2)}
+@container (max-height:420px){.dt-body .graph-legend .legend+.legend{display:none}}
+@container (max-height:360px){.dt-body .graph-legend{display:none}}
+.dt-body .tl-box{overflow:hidden}
+
+/* list rows: one line each, a hairline between */
+.dt-agents,.dt-lg{list-style:none;font-size:var(--fs-small)}
+.dt-agents>li{display:grid;grid-template-columns:5.6em minmax(0,.8fr) minmax(0,1.2fr);gap:var(--s2);align-items:baseline;padding:3px 0;border-top:1px solid var(--line);white-space:nowrap}
+.dt-agents>li:first-child,.dt-lg>li:first-child{border-top:0}
+.dt-agents .ref{overflow:hidden}
+.dt-agents .ref[data-kind=thread]{font-weight:400;color:var(--ink-2)}
+.dt-agents .ref-n{overflow:hidden;text-overflow:ellipsis}
+.dt-now{min-width:0;overflow:hidden;text-overflow:ellipsis;color:var(--ink-3)}
+.dt-agents>li[data-tone=bad] .dt-now{color:var(--bad-ink);font-weight:var(--w-bold)}
+.dt-lg .lg-r{flex-wrap:nowrap;padding:4px 0;gap:var(--s2)}
+.dt-lg .lg-t{width:auto}
+.dt-lg .lg-b{white-space:nowrap;width:auto}
+
+/* usage */
+.dt-lead{margin-bottom:var(--s2);font-size:var(--fs-body);line-height:var(--lh-tight);color:var(--ci,var(--ink))}
+.dt-acct{display:grid;grid-template-columns:6.2em repeat(2,minmax(0,1fr));gap:var(--s3);align-items:start;padding:var(--s2) 0;border-top:1px solid var(--line)}
+.dt-acct[data-dim]{opacity:.62}
+.dt-acct-n{display:flex;align-items:center;gap:6px;min-width:0;font-size:var(--fs-small);font-weight:var(--w-bold);white-space:nowrap}
+.dt-acct-n>span{overflow:hidden;text-overflow:ellipsis}
+.dt-g{min-width:0}
+.dt-g-t{display:flex;justify-content:space-between;gap:var(--s2);font-size:var(--fs-meta);color:var(--ink-2)}
+.dt-g-t b{font-weight:var(--w-bold);color:var(--ink);font-variant-numeric:tabular-nums}
+.dt-g .meter{margin:4px 0}
+.dt-g-n{font-size:var(--fs-micro);color:var(--ink-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+/* charts share the height; one with no room leaves whole */
+.dt-charts{position:absolute;inset:var(--s2) var(--s3);display:flex;flex-direction:column;gap:var(--s3)}
+.dt-charts>.chart{flex:1 1 0;min-height:150px;display:flex;flex-direction:column}
+.dt-charts .plot{flex:1;min-height:0;height:auto}
+
+/* figures */
+.dt-body .stats{grid-template-columns:repeat(auto-fill,minmax(14em,1fr))}

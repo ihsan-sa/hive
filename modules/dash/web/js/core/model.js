@@ -1,0 +1,140 @@
+// What the data means: statuses, the agent card, hive stats, usage pace. Pure reads of the store.
+import { S, OUTSIDE, SYS } from "./store.js";
+import { now, ago, dur, median, MIN, HOUR, DAY } from "./format.js";
+
+export const isAgent = n => S.agents.has(n);
+export const isRunning = n => S.running.has(n);
+export const sEnd = s => s.end ?? (isRunning(s.name) ? now() : s.start);
+export function agentThread(n) { for (let i = S.sessions.length - 1; i >= 0; i--) if (S.sessions[i].name === n) return S.sessions[i].thread; return null; }
+
+export function tierOf(th) {
+  const P = (S.live && S.live.priorities) || {}; th = th || "";
+  if (P.set && P.set[th]) return P.set[th];
+  for (const k of ["tier1", "tier2", "held"]) for (const w of P[k] || []) {
+    if (w.endsWith("*") ? th.startsWith(w.slice(0, -1)) : th === w || th.startsWith(w + "-") || th.endsWith("-" + w) || th.includes("-" + w + "-")) return k;
+  }
+  return "other";
+}
+export const tierRank = th => ["tier1", "tier2", "other", "held"].indexOf(tierOf(th));
+
+/** A running agent's state: {key: working|queue|quiet|stuck, text}. Same test as before. */
+export function agentState(a) {
+  const q = now() - (a.last ? a.last * 1e3 : 0);
+  if (!a.alive) return { key: "stuck", text: "process gone" };
+  if (q < 3 * MIN) return { key: "working", text: "working" };
+  const since = a.last ? a.last * 1e3 : 0;
+  let unseen = 0;
+  for (let i = S.posts.length - 1; i >= 0; i--) { const p = S.posts[i]; if (p.t <= since) break; if (p.from !== a.name && (p.men.includes(a.name) || (a.thread && p.thread === a.thread))) unseen++; }
+  const j = a.jobs || {}, more = unseen ? `, ${unseen} new post${unseen > 1 ? "s" : ""} when it returns` : "";
+  if (j.running) return { key: "working", text: (j.running > 1 ? j.running + " jobs" : "job") + " running" + (j.queued ? `, ${j.queued} more queued` : "") + more };
+  if (j.queued) return { key: "queue", text: `${j.queued > 1 ? j.queued + " jobs" : "job"} in the queue ${dur(j.waited * 1e3)}` + more };
+  if (unseen) return { key: "stuck", text: `quiet ${dur(q)}, hasn't seen ${unseen} new post${unseen > 1 ? "s" : ""} for it` };
+  return { key: "quiet", text: "quiet " + dur(q) + ", no job in the queue" };
+}
+/** Any name's status: {key, label}. Cached per poll. */
+export function agentStatus(n) {
+  let v = S.stCache.get(n); if (v) return v;
+  const L = S.running.get(n), s = S.lastSess[n];
+  if (OUTSIDE.has(n)) v = { key: "outside", label: "" };
+  else if (L) { const st = agentState(L); v = { key: st.key, label: st.text }; }
+  else if (S.pending[n]) v = { key: "queued", label: "queued" };
+  else if (!s) v = { key: "none", label: "hasn't run" };
+  else if (S.killed[n] >= s.start) v = { key: "killed", label: "killed" };
+  else if (S.limitedSess.has(s.session)) v = { key: "limited", label: "stopped at a limit" };
+  else if (s.exit) v = { key: "failed", label: `failed (exit ${s.exit})` };
+  else v = { key: "ended", label: "ended " + ago(sEnd(s)) };
+  S.stCache.set(n, v); return v;
+}
+
+// ---- the agent card: what an agent runs on. One list of rows, so a new harness or option adds a row here. ----
+export function modelName(id) { const m = /^claude-([a-z]+)-(\d+)-(\d+)(?:-\d{8})?$/.exec(id || ""); return m ? `${m[1][0].toUpperCase() + m[1].slice(1)} ${m[2]}.${m[3]}` : id; }
+export function loginName(path) { const l = ((S.live && S.live.logins) || []).find(x => x.path === path); return l ? l.name : path ? String(path).replace(/^.*\/\.claude-?/, "") || "main" : null; }
+/** [{k, v, short, hint}] — short is the compact form used on Now cards. */
+export function agentCard(n) {
+  const ss = S.sessions.filter(s => s.name === n), s = ss[ss.length - 1]; if (!s) return [];
+  const files = (S.usage && S.usage.files) || {}, init = (s.out && files[s.out] && files[s.out].init) || {};
+  const L = S.running.get(n), asked = s.model, prov = s.provider || (asked && asked.includes(":") ? asked.split(":")[0] : null);
+  const rows = [];
+  const model = init.model ? modelName(init.model) : asked ? (prov ? asked.slice(prov.length + 1) : modelName(asked)) : "login default";
+  rows.push({ k: "Model", v: model, short: model === "login default" ? "default model" : model,
+    hint: (init.model ? `model id ${init.model}` : "") + (asked ? ` · asked for with --model ${asked}` : " · no --model given, so the login's default") });
+  const h = s.harness || "claude-code", hn = { "claude-code": "Claude Code", codex: "Codex" }[h] || h, via = h === "claude-code" && prov && prov !== "codex";
+  const harness = hn + (init.cc && h === "claude-code" ? " " + init.cc : "") + (via ? ` via ${prov}` : "");
+  rows.push({ k: "Harness", v: harness, short: harness, hint: via ? `Claude Code pointed at the ${prov} API` : "the program the agent runs in" });
+  const eff = s.effort || (L && L.effort);
+  if (eff && !s.effort && L) s.effort = eff;
+  const effText = eff || (L ? "not seen yet" : "not recorded");
+  rows.push({ k: "Effort", v: effText, short: eff ? eff + " effort" : "effort " + effText,
+    hint: eff ? "reasoning effort, as the harness reports it" : L ? "shows once it runs its first tool" : "this session's start didn't record an effort" });
+  const acct = prov || loginName(s.login);
+  if (acct) rows.push({ k: "Account", v: acct, short: acct, hint: prov ? "provider account" : "the Claude login it runs on" });
+  if (init.fast === "on") rows.push({ k: "Fast mode", v: "on", short: "fast mode", hint: "" });
+  if (init.perm && init.perm !== "bypassPermissions") rows.push({ k: "Permissions", v: init.perm, short: "permissions " + init.perm, hint: "" });
+  return rows;
+}
+
+// ---- hive stats, last window ----
+export function hiveStats(from, to) {
+  const P = S.posts.filter(p => p.t >= from && p.t <= to && !SYS.has(p.from));
+  let a2a = 0; const lat = []; let asked = 0; const byAuthor = {};
+  for (const p of S.posts) (byAuthor[p.from] ||= []).push(p.t);
+  for (const p of P) {
+    const ms = p.men.filter(m => isAgent(m) && m !== p.from);
+    if (isAgent(p.from) && ms.length) a2a++;
+    for (const m of ms) {
+      asked++; const arr = byAuthor[m] || []; let lo = 0, hi = arr.length;
+      while (lo < hi) { const x = (lo + hi) >> 1; if (arr[x] <= p.t) lo = x + 1; else hi = x; }
+      if (lo < arr.length && arr[lo] - p.t < 6 * HOUR) lat.push(arr[lo] - p.t);
+    }
+  }
+  const ss = S.sessions.filter(s => s.start >= from && s.start <= to), fresh = ss.filter(s => !s.resumed);
+  const byAgents = fresh.filter(s => isAgent(s.from)).length, byYou = fresh.filter(s => OUTSIDE.has(s.from)).length;
+  const th = {}; for (const p of P) if (isAgent(p.from)) (th[p.th] ||= new Set()).add(p.from);
+  const tl = Object.values(th);
+  const links = {}; for (const p of P) for (const m of p.men) if (isAgent(p.from) && isAgent(m) && m !== p.from) { (links[p.from] ||= new Set()).add(m); (links[m] ||= new Set()).add(p.from); }
+  let hub = null, hubN = 0; for (const k in links) if (links[k].size > hubN) { hub = k; hubN = links[k].size; }
+  const ended = S.sessions.filter(s => s.end && s.end >= from && s.end <= to);
+  return { total: P.length, a2a, asked, answered: lat.length, lat: median(lat), fresh: fresh.length, byAgents, byYou, bySys: fresh.length - byAgents - byYou,
+    threads: tl.length, multi: tl.filter(s => s.size > 1).length, hub, hubN,
+    clean: ended.filter(s => s.exit === 0 || s.exit == null).length, stopped: ended.filter(s => s.exit === 143).length,
+    failed: ended.filter(s => s.exit === 1 && !S.limitedSess.has(s.session)).length, limited: S.limited.filter(t => t >= from && t <= to).length };
+}
+/** Agent-hours per tier in a window. */
+export function tierHours(from, to) {
+  const hrs = { tier1: 0, tier2: 0, held: 0, other: 0 };
+  for (const s of S.sessions) { const a = Math.max(s.start, from), b = Math.min(sEnd(s), to); if (b > a) hrs[tierOf(s.thread)] += b - a; }
+  return hrs;
+}
+
+// ---- usage ----
+export function spendSince(from) { let c = 0; const U = S.usage; if (!U) return 0; for (const f of Object.values(U.files)) for (const h in f.h) if (+h * 1e3 >= from) c += f.h[h]; return c; }
+// A usage file is <name>-<MMDD>-<HHMMSS> in the machine's local time. Match by its out name, else by agent and start minute:second.
+const outCache = new Map();
+export function fileInfo(k) {
+  let s = S.byOut[k] || outCache.get(k);
+  if (!s) {
+    const m = /^(.+)-\d{4}-\d{2}(\d{2})(\d{2})$/.exec(k);
+    if (m) { for (let i = S.sessions.length - 1; i >= 0; i--) { const x = S.sessions[i], d = new Date(x.start); if (x.name === m[1] && d.getMinutes() === +m[2] && d.getSeconds() === +m[3]) { s = x; break; } } }
+    if (s) outCache.set(k, s);
+  }
+  return { name: s ? s.name : k.split("-")[0], thread: s ? s.thread : null };
+}
+/** A login's weekly share: the newest figure the session logs report, else the starter's own reading. */
+export function fresh7(l) { const w = l.limits && l.limits.seven_day; return w && w.r * 1e3 > now() ? w.u * 100 : l.weekly; }
+export const weeklyStop = (l, U) => { const st = l.stop || {}; return st.weekly ?? st.global ?? (U && U.stop_pct) ?? 98; };
+/** In use: an account the starter can still give new runs to (not paused, under its weekly stop line). */
+export function inUse(l, U) { if (l.paused) return false; const v = fresh7(l); return v == null || v < weeklyStop(l, U); }
+/** Pace over the last 6 hours of a login's series: {rate per second, at}. */
+export function usageProjection(series) {
+  const pts = (series || []).filter(x => x[2] != null && x[0] * 1e3 > now() - 6 * HOUR); if (pts.length < 2) return null;
+  const a = pts[0], b = pts[pts.length - 1]; if (b[0] - a[0] < 1800) return null;
+  const rate = (b[2] - a[2]) / (b[0] - a[0]); return rate > 0 ? { rate, at: b[2] } : null;
+}
+/** Hours until a login reaches its weekly stop at the recent pace, and hours until it resets. */
+export function runway(l, U) {
+  const L = l.limits || {}, stop = weeklyStop(l, U), pr = usageProjection(l.series);
+  const reset = L.seven_day ? L.seven_day.r * 1e3 : l.resets && l.resets.weekly ? l.resets.weekly * 1e3 : null;
+  const toStop = pr ? ((stop / 100 - pr.at) / pr.rate) * 1e3 : null;
+  return { stop, toStop, toReset: reset ? reset - now() : null, before: toStop != null && reset != null && toStop < reset - now() };
+}
+export { DAY, HOUR };

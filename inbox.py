@@ -31,8 +31,11 @@ def new_posts(name, rec, seen):
         try: p = json.loads(line)
         except ValueError: continue
         if not isinstance(p, dict) or p.get("id") in seen or str(p.get("from", "")).lower() == name: continue
-        if str(p.get("at", "")) <= rec.get("at", ""): continue
-        targets = names(p)
+        at, targets = str(p.get("at", "")), names(p)
+        if at <= rec.get("at", ""):
+            # A restart moves "at" to now; an @all posted while the interrupted run couldn't hear it must still arrive.
+            if "all" in targets and rec.get("thread") and at > rec.get("all_since", "~"): out.append(p)
+            continue
         if name in targets or (rec.get("thread") and ("all" in targets or p.get("thread") == rec["thread"])):
             out.append(p)
     return out
@@ -40,7 +43,7 @@ def new_posts(name, rec, seen):
 def fmt(p):
     to = " ".join("@" + n for n in sorted(names(p)))
     return (f"[{p.get('id')}] {str(p.get('at', ''))[:19]} {p.get('from')}{' -> ' + to if to else ''} "
-            f"(thread {p.get('thread')})\n  " + str(p.get("text", "")).replace("\n", "\n  ")
+            f"(thread {p.get('thread')})" + (f" replying to {p['reply_to']}" if p.get("reply_to") else "") + "\n  " + str(p.get("text", "")).replace("\n", "\n  ")
             + "".join(f"\n  file: {f.get('path')}" for f in p.get("files") or []))
 
 def main():

@@ -1,0 +1,63 @@
+// Signing in to Claude with no terminal. One sign-in at a time; its state lives here so the page can re-render freely.
+// The code the person pastes is held only until it is sent: it is never logged, stored or shown back.
+import { h } from "../core/dom.js";
+import { jget, post, loadApp } from "../core/store.js";
+import { button, input, field } from "./kit.js";
+
+const SI = { key: null, v: null, err: "", code: "", note: "", gen: 0 };
+
+/** Begin a sign-in for a place on the page (key), a login name or null, and API billing (console). */
+export function startSignin(key, name, api, update) {
+  const gen = ++SI.gen;
+  Object.assign(SI, { key, v: null, err: "", code: "", note: "", name: name || null });
+  update();
+  const tick = async () => {
+    if (SI.gen !== gen) return;
+    let v; try { v = await jget("/api/signin"); } catch (e) { return setTimeout(tick, 1500); }
+    if (SI.gen !== gen) return;
+    SI.v = v;
+    if (v.state === "waiting" && SI.note === "Checking…") {
+      const m = (v.out || "").match(/[^\r\n]*(invalid|error|failed|expired)[^\r\n]*/ig);
+      if (m) SI.err = m[m.length - 1].trim();
+    }
+    update();
+    if (v.state === "done") { loadApp(); return; }
+    if (v.state === "failed" || v.state === "cancelled") return;
+    setTimeout(tick, 1500);
+  };
+  post("/api/signin", { name: name || null, console: !!api }).then(tick).catch(e => {
+    if (SI.gen !== gen) return;
+    if (/under way/.test(e.message)) return tick();
+    SI.err = e.message; SI.v = { state: "failed", why: e.message }; update();
+  });
+}
+
+const send = async update => {
+  const code = SI.code; SI.code = ""; SI.err = ""; SI.note = "Checking…"; update();
+  try { await post("/api/signin/code", { code }); } catch (e) { SI.err = e.message; SI.note = ""; }
+  update();
+};
+const cancel = async update => { try { await post("/api/signin/cancel", {}); } catch (e) { SI.err = e.message; } update(); };
+
+/** The sign-in box for one place on the page; null when this place isn't the one signing in. */
+export function signinBox(key, update) {
+  if (SI.key !== key) return null;
+  const v = SI.v, say = (text, tone) => h("p", { class: "fmsg", "data-tone": tone || null, role: "status" }, text);
+  const fallback = v && v.command ? h("p", { class: "field-h" }, "Doesn't work here? In a terminal, as this account: ", h("code", null, v.command)) : null;
+  let body;
+  if (!v || v.state === "idle" || !v.state) body = say("Starting Claude's sign-in…");
+  else if (v.name && SI.name && v.name !== SI.name) body = say("Another sign-in is under way. Finish or cancel it first.", "warn");
+  else if (v.state === "waiting") body = [
+    h("ol", { class: "steps" },
+      h("li", null, /^https:\/\//.test(v.url) ? h("a", { href: v.url, target: "_blank", rel: "noreferrer noopener" }, "Open the sign-in page") : "The sign-in page didn't give a usable link.", " and sign in."),
+      h("li", null, "If it shows a code, paste it here.")),
+    h("form", { class: "frow", onsubmit: e => { e.preventDefault(); if (SI.code.trim()) send(update); } },
+      h("div", { style: "flex:1;min-width:12rem" }, field("Code", input({ placeholder: "Paste the code here", autocomplete: "off", spellcheck: "false", value: SI.code, oninput: (e, n) => { SI.code = n.value; } }))),
+      button("Send", null, { kind: "primary", type: "submit" }), button("Cancel", () => cancel(update), { kind: "quiet" })),
+    SI.err ? say(SI.err, "bad") : SI.note ? say(SI.note) : null, fallback];
+  else if (v.state === "done") body = say(`Signed in${v.name ? " as login " + v.name : ""}.${v.said ? " " + v.said : ""}`, "good");
+  else if (v.state === "failed") body = [say(v.why || "That didn't work.", "bad"), fallback];
+  else if (v.state === "cancelled") body = say("Cancelled.");
+  else body = say("Starting Claude's sign-in…");
+  return h("div", { class: "signin", "data-key": "signin-" + key }, body);
+}

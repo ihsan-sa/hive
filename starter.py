@@ -68,7 +68,8 @@ def callable_names(p, c):
     known = known_agents(c)
     return [n for n in found if n in to or n in c["external"] or n in known], [n for n in found if n not in to and n not in c["external"] and n not in known]
 
-FREE_AGENT = re.compile(r"f[0-9a-f]{4}")  # @free runs (OpenRouter free models): told not to start agents, enforced here
+FREE_AGENT = re.compile(r"f[0-9a-f]{4}")  # @free runs (OpenRouter free models): see free_spawns
+CODEX_AGENT = re.compile(r"c[0-9a-f]{4}")
 STOP = re.compile(r"(all |everyone )?stop( it| now| all( of)?( this| that)?| everything| everyone)?")
 
 def is_stop(p):
@@ -99,10 +100,67 @@ def provider_of(c, model):
 
 def model_ok(c, model): return model in MODELS or provider_of(c, model) is not None
 
+TYPED_MODEL = re.compile(r"(?:^|\s)(?:--|\u2014|\u2013)model[ =](\S+)")  # a phone may turn -- into a dash
+
+def asked_model(p, c):
+    """The model a post asks for: hive post --model, or the person typing --model opus in the text (Slack has no flags)."""
+    if p.get("model"): return p["model"]
+    if p.get("from") == "person" and (m := TYPED_MODEL.search(CODE.sub(" ", str(p.get("text", ""))))) and model_ok(c, m[1]): return m[1]
+    return None
+
+def is_free_now(st, name):
+    """A free agent stays free until a post moves it to another model. No record: it predates st["chosen"]."""
+    return bool(FREE_AGENT.fullmatch(name)) and (st.get("chosen", {}).get(name) or {"free": True}).get("free", False)
+
+def stays_on(st, c, n, q):
+    """A wake keeps the agent on the model it was started on (the person, 2026-11-02, thread 110216234927), unless the post
+    asks for another, which then holds from here on, for posts already queued too. Only what was asked for is kept: a
+    run that went to a fallback because Claude was at its limit goes back to Claude next time."""
+    if model_ok(c, q.get("model")):
+        st.setdefault("chosen", {})[n] = {"model": q["model"]}
+        for p in st["pending"].get(n, []):
+            p["model"] = q["model"]
+            for k in ("free", "claude", "fallback"): p.pop(k, None)
+    elif (rec := st.get("chosen", {}).get(n)): q.update(rec)
+    elif FREE_AGENT.fullmatch(n): q["free"] = True
+    elif CODEX_AGENT.fullmatch(n): q["model"] = c.get("codex_model") or CODEX_DEFAULT
+
+FREE_SPAWN_S = 600
+
+def free_spawns(st, p, called):
+    """Which fresh-agent words in a free agent's post count. It may hand work it can't do to a stronger agent (the person,
+    2026-11-02), but only on purpose and not often: `--to new` (or claude, codex) with the word not in its text, at most
+    one per FREE_SPAWN_S. A word in its prose starts nothing: on 11-01 free agents writing them while refusing a request
+    queued about ten Claude runs. It can't start more free agents. Returns (allowed, ignored)."""
+    src, said = str(p["from"]).lower(), mentions({"text": p.get("text")})
+    words = [n for n in called if n in SPAWN]
+    ok = [n for n in words if n != "free" and n not in said][:1]
+    last = st.setdefault("free_spawn_at", {}).get(src, 0)
+    if ok and time.time() - last < FREE_SPAWN_S:
+        post(f"`{src}` asked for a new agent, but a free agent may start one per {FREE_SPAWN_S // 60} min, so nothing started. Post it again later.", [], p.get("thread"))
+        ok = []
+    if ok: st["free_spawn_at"][src] = time.time()
+    return ok, [n for n in words if n not in ok]
+
 _impls = {}
+_root = (0, False)  # (checked at, answer)
+
+def has_root():
+    """Can this account use sudo without a password? Agents all share one uid, so an outside model could read whatever a
+    root agent saw. `-l` asks without running anything, so it doesn't log a sudo attempt on an account that has none. Cached 60 s."""
+    global _root
+    if time.time() - _root[0] < 60: return _root[1]
+    try: yes = os.geteuid() == 0 or subprocess.run(["sudo", "-n", "-l", "true"], capture_output=True, timeout=10).returncode == 0
+    except FileNotFoundError: yes = False
+    except Exception: yes = True  # couldn't tell: hold the outside model
+    _root = (time.time(), yes)
+    return yes
+
 def provider_room(c, name, pc, cache):
     """Why provider `name` can't take a run now, or None. The work is in the module file pc["impl"] (see
-    ~/modules/providers): it reads the key and runs the spend guard. A missing or broken module holds only provider runs."""
+    ~/modules/providers): it reads the key and runs the spend guard. A missing or broken module holds only provider runs.
+    Every non-Claude run comes through here, so this is also where root holds them."""
+    if has_root(): return "this account has passwordless sudo, and an outside model must not share an account with root"
     try:
         f = str(Path(pc["impl"]).expanduser())
         if f not in _impls:
@@ -192,7 +250,7 @@ def finished_but_alive(r, grace):
         if time.time() - out.stat().st_mtime < grace: return False
         with out.open("rb") as f:
             f.seek(max(0, out.stat().st_size - 65536)); last = f.read().strip().splitlines()[-1]
-        return json.loads(last).get("type") in ("result", "turn.completed")  # turn.completed: codex
+        return json.loads(last).get("type") in ("result", "turn.completed", "session.resume_hint")  # turn.completed: codex; session.resume_hint: kimi
     except (OSError, IndexError, ValueError): return False
 
 def cpu_of(name, skip):
@@ -212,10 +270,23 @@ def cpu_of(name, skip):
 
 work = {}  # name -> [t of last sample, cpu then, t last seen working]
 
+def queued_heavy(name):
+    """A job of this agent's is waiting in the `heavy` queue (tickets w.<ns>.<pid>, f.<pid>). A waiter uses no CPU,
+    but it isn't stuck: reaping it kills the ticket and sends the job to the back of a queue that can take an hour,
+    so a job not detached could never reach a slot. A frozen queue is the watchdog's to catch."""
+    key = f"HIVE_NAME={name}".encode()
+    for q in (STATE / "heavy").glob("[wf].*"):
+        try:
+            if key in Path(f"/proc/{q.name.rsplit('.', 1)[-1]}/environ").read_bytes().split(b"\0"): return True
+        except OSError: pass
+    return False
+
 def working(r, grace):
-    """Something the agent started (a sim, a build) used real CPU within the last `grace` s: it is waiting
-    on that, not stuck. Sampled once a minute; busy means >= 5% of a core over the minute."""
+    """Something the agent started (a sim, a build) used real CPU within the last `grace` s, or waits in the heavy
+    queue: it is waiting on that, not stuck. Sampled once a minute; busy means >= 5% of a core over the minute."""
     t, w = time.time(), work.setdefault(r["name"], [0, 0.0, 0])
+    if queued_heavy(r["name"]):
+        w[0], w[1], w[2] = t, cpu_of(r["name"], r["pid"]), t; return True
     if not w[0]:  # first look: take a sample and decide after a minute of it. Until that minute is
         # measured it counts as working (w[2] = t); with w[2] = 0 the next poll, seconds later, reaped it
         w[0], w[1], w[2] = t, cpu_of(r["name"], r["pid"]), t; return True
@@ -237,6 +308,25 @@ def bg_tasks(out):
             elif e.get("subtype") == "task_notification": open_.pop(e.get("task_id"), None)
     except OSError: pass
     return list(open_.values())
+
+def lost_subagents(out):
+    """Background subagents that ending the turn stopped before they reported. `claude -p` waits on background shells
+    but not on these: a7dcc ended its turn on "I'll pick up when the review reports", the review was stopped in the
+    same second, the run exited 0, and the board sat for 2 h with nobody on it (6 such runs in 30 h on 2026-11-02)."""
+    agents, lost, killed = {}, [], 0
+    try:
+        for line in Path(out).read_text(errors="replace").splitlines():
+            try: e = json.loads(line)
+            except ValueError: continue
+            if not isinstance(e, dict): continue  # stray stdout that happens to parse: a post id like 110217581e40 is a JSON number
+            if e.get("type") == "result": killed = ((e.get("subagent_stats") or {}).get("killed") or {}).get("system", 0)
+            if e.get("type") != "system": continue
+            if e.get("subtype") == "task_started" and e.get("task_type") == "local_agent" and not e.get("owned_by_subagent"):
+                agents[e.get("task_id")] = e.get("description", "")
+            elif e.get("subtype") == "task_notification" and e.get("status") == "stopped" and e.get("task_id") in agents:
+                lost.append(e.get("summary") or agents[e["task_id"]])
+    except OSError: pass
+    return lost if killed else []
 
 def tree_of(pid):
     """pid and every descendant, parents first."""
@@ -278,6 +368,35 @@ def kill_tree(pid):
             except OSError: pass
         time.sleep(2)
 
+def waiting_posts(st, r):
+    """Posts queued for a run that has ended its turn and sits parked on a background shell. The inbox hook fires only on a
+    tool call or a stop, so such a run is deaf until the shell ends: a5ea4 was parked on a queued `heavy` job with up to 90 min
+    left when the person asked it for a TLDR (2026-11-02). The person's post wakes it after a minute, an agent's after 10."""
+    ps = st.get("pending", {}).get(r["name"])
+    # already dead, or killed and not gone yet (a run from before a starter restart is no child of ours): the end path takes it
+    if not ps or r["name"] in st.get("resume", {}) or not Path(f"/proc/{r['pid']}").exists(): return []
+    try: seen = set((STATE / "delivered" / r["name"]).read_text().split())
+    except OSError: seen = set()
+    ps = [p for p in ps if p["id"] not in seen]
+    c = cfg()
+    grace = c.get("wake_person_s", 60) if any(p.get("from") == "person" for p in ps) else c.get("wake_agent_s", 600)
+    return ps if ps and finished_but_alive(r, grace) else []
+
+def release_shells(pid):
+    """End the agent's parked claude but leave its background shells running, with their place in the heavy queue. Only SIGKILL
+    does that: claude can't clean up, and the shells write to their task files, not to it. Anything else it started is ended."""
+    shells, rest = [], []
+    for q in tree_of(pid)[1:]:
+        try:
+            if int(Path(f"/proc/{q}/stat").read_text().rsplit(")", 1)[1].split()[1]) != pid: continue
+            out = os.readlink(f"/proc/{q}/fd/1")
+            (shells.append({"pid": q, "output": out}) if "/tasks/" in out else rest.append(q))
+        except (OSError, ValueError, IndexError): pass
+    try: os.kill(pid, signal.SIGKILL)
+    except OSError: pass
+    for q in rest: kill_tree(q)
+    return shells
+
 def runs_now(name):
     """Whether `name` has a run whose claude process is alive right now (no reaping, unlike running())."""
     try: return Path(f"/proc/{json.loads((RUN / f'{name}.json').read_text())['pid']}").exists()
@@ -298,6 +417,13 @@ def running(st=None):
             if c: c.wait(timeout=10)
             if st is not None and (bg or move):  # it may have been waiting on something: resume it so it can look
                 st.setdefault("resume", {})[r["name"]] = {**r, "session": session_in(r.get("out")) or r["session"], "reset": 0, "reaped": bg or ["(none listed)"], "move": move}
+            work.pop(r["name"], None)
+        elif st is not None and (ps := waiting_posts(st, r)):
+            shells = release_shells(r["pid"])
+            log(event="woken", name=r["name"], session=r["session"], pid=r["pid"], posts=[p["id"] for p in ps], shells=shells)
+            if c: c.wait(timeout=10)
+            st.setdefault("resume", {})[r["name"]] = {**r, "session": session_in(r.get("out")) or r["session"], "reset": 0, "reaped": ["(none: shells left running)"],
+                "shells": shells, "from": "person" if any(p.get("from") == "person" for p in ps) else ps[0].get("from")}  # the person's post isn't paced
             work.pop(r["name"], None)
         done = c.poll() is not None if c else not Path(f"/proc/{r['pid']}").exists()
         if done:
@@ -328,6 +454,15 @@ def running(st=None):
                 if fresh:
                     post(f"Login {Path(login).name} rejected its credentials (expired or signed out) when `{r['name']}` ran. Its runs move to a login "
                          "with room and it gets no new ones; it's tried again in an hour. It needs signing in again on this machine.", ["person"])
+            elif st is not None and "shells" not in st.get("resume", {}).get(r["name"], {}) and (lost := lost_subagents(r.get("out"))) and st.setdefault("lost_resumes", {}).get(f"{r['name']}:{r.get('post')}", 0) < 2:
+                # it may have been waiting on them, and nothing will ever report. Twice at most, so an agent that keeps doing it can't loop.
+                key = f"{r['name']}:{r.get('post')}"; st["lost_resumes"][key] = st["lost_resumes"].get(key, 0) + 1
+                st.setdefault("resume", {})[r["name"]] = {**r, "session": session_in(r.get("out")) or r["session"], "reset": 0, "reaped": lost, "lost": True}
+                log(event="lost_subagents", name=r["name"], session=r["session"], lost=lost)
+            elif st is not None and r.get("slept") and resume_failed(r.get("out"), c.returncode if c else None):
+                mark_done(r["name"], "its session could not be resumed")
+                st["pending"][r["name"]] = [{**p, "no_revive": True} for p in r["slept"]] + st["pending"].get(r["name"], [])
+                log(event="wake_failed", name=r["name"], session=r["session"])
         else: alive[r["name"]] = r
     return alive
 
@@ -335,7 +470,8 @@ def drop_killed(st):
     """The person killed a run from the dashboard: ~/.hive/killed/<name>.json holds its pid, written before the signal.
     Call after running(), which ends the run and may have queued a resume (a limit in its log, open background tasks).
     Once the run is gone, drop that resume and its queued wakes, so the kill stays a kill. While it is still dying it's
-    in `alive`, so nothing restarts it. A post after this is a new request and starts it as usual."""
+    in `alive`, so nothing restarts it. It also goes dead: a later plain message in its thread gets a new agent, and only
+    the person typing its name brings it back."""
     for f in (STATE / "killed").glob("*.json"):
         n = f.stem
         try: pid = json.loads(f.read_text()).get("pid")
@@ -346,6 +482,7 @@ def drop_killed(st):
         posts = [p.get("id") for p in st["pending"].pop(n, [])]
         resume = st.get("resume", {}).pop(n, None)
         log(event="kill_dropped", name=n, posts=posts, resume=bool(resume))
+        mark_done(n, "the person killed its last run")
         f.unlink(missing_ok=True)
 
 def usage(c, u):
@@ -479,7 +616,104 @@ def move_session(sid, src, dst):
         if f.with_suffix("").is_dir(): shutil.copytree(f.with_suffix(""), to.with_suffix(""), dirs_exist_ok=True)
     return bool(found)
 
-def start(c, name, posts, login, resume=None, reaped=None, extra=(), moved=False):
+# Asleep or dead (the person, 2026-11-02, thread 110216375cac; kb/hive.md): a name means one context. An agent that stopped is asleep:
+# the next post resumes its session. A dead one isn't brought back by default: the post goes to an heir, a new agent with a new name.
+def mark_done(n, why):
+    d = STATE / "done"; d.mkdir(exist_ok=True); (d / n).write_text(why + "\n")
+
+def last_run(n):
+    """The start record of n's last run, with the time it ended (`ended`), or None if it never ran."""
+    run, tag = None, f'"{n}"'
+    try:
+        with LOG.open(errors="replace") as f:
+            for line in f:
+                if tag not in line: continue
+                try: e = json.loads(line)
+                except ValueError: continue
+                if e.get("name") != n: continue
+                if e.get("event") == "start": run = e
+                elif e.get("event") == "end" and run: run["ended"] = e.get("at")
+    except OSError: pass
+    return run
+
+def context_of(out):
+    """Tokens in the context at a run's last turn: what a resume pays for on every turn. 0 if unknown: codex and kimi runs don't print it."""
+    n = 0
+    try:
+        with open(out, errors="replace") as f:
+            for line in f:
+                if '"assistant"' not in line or '"usage"' not in line: continue
+                try: e = json.loads(line)
+                except ValueError: continue
+                if e.get("type") == "assistant" and not e.get("parent_tool_use_id") and (u := (e.get("message") or {}).get("usage")):
+                    n = sum(u.get(k) or 0 for k in ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"))
+    except (OSError, TypeError): pass
+    return n
+
+def dead_why(c, n, run):
+    """Why n isn't woken by default, or None if it's only asleep."""
+    try: return (STATE / "done" / n).read_text().strip() or "it said its work was finished"
+    except OSError: pass
+    size = context_of(run.get("out"))
+    return f"it stopped with {size // 1000}k tokens of context" if size > c.get("resume_max_context", 200000) else None
+
+def resume_failed(out, code):
+    """A woken run that ended in error without one turn: bad session, say. Its post would be lost."""
+    try:
+        with open(out, errors="replace") as f:
+            if any(t in line for line in f for t in ('"type":"assistant"', '"type": "assistant"', '"turn.completed"', '"item.completed"', "session.resume_hint")): return False
+    except (OSError, TypeError): pass
+    return code != 0
+
+def ago(iso):
+    try: s = int(time.time() - epoch(iso))
+    except (TypeError, ValueError): return "some time"
+    return f"{s // 86400} d" if s >= 172800 else f"{s // 3600} h" if s >= 7200 else f"{max(s, 60) // 60} min"
+
+def wake_home(c, n, run, sid, posts, to, room, limits):
+    """The login to resume n's session on, moving its transcript there if needed; None if it can't be resumed.
+    Claude Code's sessions move between logins and APIs. A run in another harness (codex, kimi) can't read them, or they it."""
+    prov = next((pv for p in posts if (pv := provider_of(c, p.get("model")))), None)
+    harness = prov[1].get("harness", "claude-code") if prov else "claude-code"
+    if run.get("harness", "claude-code") != harness: return None
+    if harness != "claude-code": return to  # it keeps its own sessions; a failed resume goes to an heir
+    own = run.get("login") or "/nonexistent"
+    if prov:
+        if not prov[1].get("config_dir"): return None
+        where = str(Path(prov[1]["config_dir"]).expanduser())
+    else:
+        if own in room and pick_login(c, {own: room[own]}, limits): to = own  # the only login where the cache can still be warm
+        where = to
+    if own != where: return to if move_session(sid, own, where) else None
+    return to if list(Path(own).glob(f"projects/*/{sid}.jsonl")) else None
+
+def wake(c, st, n, posts, to, room):
+    """Start n for these posts: fresh if it never ran, resumed if asleep or named by the person (or itself: its own waiter), else its heir takes them.
+    Returns the name that started, or None if the posts went to an heir's queue."""
+    run = last_run(n)
+    if not run:
+        start(c, n, posts, to); return n
+    why, forced = dead_why(c, n, run), any(p.get("no_revive") for p in posts)
+    named = not forced and any((p.get("from") == "person" and not p.get("routed")) or str(p.get("from", "")).lower() == n for p in posts)
+    sid = session_in(run.get("out")) or run.get("session")
+    if not forced and (not why or named):
+        if (home := wake_home(c, n, run, sid, posts, to, room, st.get("limits"))):
+            (STATE / "done" / n).unlink(missing_ok=True); st.get("heirs", {}).pop(n, None)
+            log(event="wake_resumed", name=n, session=sid, was_dead=why, slept_from=run.get("ended"))
+            start(c, n, posts, home, resume=sid, slept=run)
+            return n
+        why = why or "its session can't be resumed on this login or model"
+    if (heir := st.get("heirs", {}).get(n)):  # it has one already, maybe still reading the thread
+        st["pending"].setdefault(heir, []).extend(posts)
+        log(event="to_heir", name=n, heir=heir, posts=[p["id"] for p in posts]); return None
+    new = (n[0] if re.fullmatch(r"[a-z][0-9a-f]{4}", n) else "a") + secrets.token_hex(2)
+    st.setdefault("heirs", {})[n] = new
+    if n in st.get("chosen", {}): st["chosen"][new] = st["chosen"][n]
+    log(event="heir", name=n, heir=new, why=why)
+    start(c, new, posts, to, heir_of={"name": n, "why": why, "out": run.get("out")})
+    return new
+
+def start(c, name, posts, login, resume=None, reaped=None, extra=(), moved=False, lost=False, woken=None, all_since=None, slept=None, heir_of=None):
     hook_inbox(c)  # a login can be added to config.json while the starter runs
     sid = resume or str(uuid.uuid4())  # the claude session id, so `claude --resume <session>` works
     first = posts[0]
@@ -491,10 +725,33 @@ def start(c, name, posts, login, resume=None, reaped=None, extra=(), moved=False
     prompt = (f"You are @{name}. You were woken by board post {', '.join(p['id'] for p in posts)} "
               f"(thread {first.get('thread', first['id'])}, from {first.get('from')}). "
               f"Start with `hive read --thread {first.get('thread', first['id'])}`.")
-    if resume and reaped:
+    if heir_of:
+        prompt += (f" You are a new agent taking over from @{heir_of['name']}, which isn't being brought back because {heir_of['why']}. You have none of its memory. "
+                   f"Its stream log, if a detail isn't in the thread or on disk, is {heir_of['out']}: search it, don't read it whole.")
+    if resume and slept:
+        prompt = (f"You are still @{name}: this is your own session, resumed after {ago(slept.get('ended'))} asleep. New board post for you: "
+                  + "; ".join(f"{p['id']} (thread {p.get('thread', p['id'])}, from {p.get('from')})" for p in posts)
+                  + f". Start with `hive read --thread {first.get('thread', first['id'])}`. Files and threads may have changed while you slept: "
+                  "check the current state before relying on what you remember.")
+    elif resume and woken:
+        new = "; ".join(f"{p['id']} in thread {p.get('thread', p['id'])}, from {p.get('from')}" for p in woken["posts"])
+        prompt = (f"You had ended your turn and were parked on a background shell, which can't receive posts, so the starter restarted you to hand you these: {new}. "
+                  f"Read them with `hive read --thread <thread>` and answer them first, in those threads. ")
+        prompt += (f"Your background shells were NOT killed and keep running, in the heavy queue too: {json.dumps(woken['shells'])}. They are no longer your children, so "
+                   "nothing tells you when they end. If you still need a result, then start a background waiter with a time limit "
+                   "(`while kill -0 PID 2>/dev/null; do sleep 30; done`, bounded by `timeout`) and read the output file when it ends. "
+                   if woken["shells"] else "You had no background shells still running. ")
+        prompt += f"You were first working in thread {first.get('thread', first['id'])}: carry that on if it isn't done."
+    elif resume and lost:
+        prompt = (f"Ending your turn stopped these background subagents before they finished, so they will never report: {json.dumps(reaped)}. "
+                  "Unlike background shells, a background subagent doesn't outlive your turn. If you still need that work, redo it and "
+                  "wait for it inside the turn (run_in_background: false), or do it yourself. "
+                  f"Check `hive read --thread {first.get('thread', first['id'])}` for anything new first. If you were done, just stop."
+                  + (f" Posts for you that came in meanwhile: {', '.join(extra)} (`hive read` them)." if extra else ""))
+    elif resume and reaped:
         prompt = (("The starter moved you to another login, because yours ran out while you were waiting. "
                    if moved else "The starter ended your run: it had printed its result, then nothing for "
-                  f"{c.get('done_grace_s', 900) // 60} min, and nothing you started was using CPU. ") + "These background shells "
+                  f"{c.get('done_grace_s', 900) // 60} min, and nothing you started was using CPU or waiting in the heavy queue. ") + "These background shells "
                   f"of yours were killed: {json.dumps(reaped)}. Jobs you started with nohup/setsid survive. If you were "
                   "waiting on something, check it now and carry on (a background wait on a job that uses CPU is fine; "
                   f"an idle wait is ended again). Check `hive read --thread {first.get('thread', first['id'])}` "
@@ -508,11 +765,16 @@ def start(c, name, posts, login, resume=None, reaped=None, extra=(), moved=False
     path = HOME / "sessions" / f"{name}-{dt.datetime.now():%m%d-%H%M%S}.jsonl"
     last_start[0] = time.time()
     tmp = HOME / ".cache" / "hive-tmp"; tmp.mkdir(parents=True, exist_ok=True)  # on disk: /tmp is tmpfs, its files hold RAM and swap
-    env, argv = {**os.environ, "HIVE_NAME": name, "CLAUDE_CONFIG_DIR": login, "TMPDIR": str(tmp)}, None
+    # ENABLE_CLAUDEAI_MCP_SERVERS: the logins' claude.ai connectors (the person's Slack, Vercel buy_domain, ...) are 12k tokens on
+    # every reply, and 12 calls in 542 transcripts, all Exa search; they also let an agent act in the person's name (kb/model-cost.md)
+    env, argv = {**os.environ, "HIVE_NAME": name, "CLAUDE_CONFIG_DIR": login, "TMPDIR": str(tmp), "ENABLE_CLAUDEAI_MCP_SERVERS": "false"}, None
+    # Opus defaults to a 1M window, so a run grows to 400k+ and pays for all of it on every turn; 36% of spend was above 200k (kb/model-cost.md).
+    # Compacting near resume_max_context also keeps a run resumable instead of leaving an heir. 0 or absent: Claude Code's default.
+    if c.get("auto_compact_window"): env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] = str(c["auto_compact_window"])
     if prov:  # main loop's provider_hold just loaded its module and found room
         impl = prov[1]["_impl"]; env.update(impl.env(prov[1], prov[2]))
         if prov[1].get("config_dir"): env["CLAUDE_CONFIG_DIR"] = str(Path(prov[1]["config_dir"]).expanduser())
-        login = env.get("CODEX_HOME") or env["CLAUDE_CONFIG_DIR"]
+        login = env.get("CODEX_HOME") or env.get("KIMI_CODE_HOME") or env["CLAUDE_CONFIG_DIR"]
         if hasattr(impl, "command") and (argv := impl.command(prov[1], prov[2], prompt, system, sid, resume)):  # another harness (codex)
             env.pop("CLAUDE_CONFIG_DIR", None)
     proc = subprocess.Popen(argv or ["claude", "-p", prompt, "--append-system-prompt", system,
@@ -520,9 +782,9 @@ def start(c, name, posts, login, resume=None, reaped=None, extra=(), moved=False
                              *(["--model", prov[2] if prov else model] if model else []), *c["claude_args"]],
                             cwd=HOME, env=env, stdout=path.open("w"), stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)
     children[name] = proc
-    (STATE / "delivered" / name).unlink(missing_ok=True)  # the inbox hook starts fresh with this run
+    if not resume: (STATE / "delivered" / name).unlink(missing_ok=True)  # the inbox hook starts fresh with this run; a resumed one keeps its list so an @all isn't handed over twice
     rec = {"name": name, "pid": proc.pid, "session": sid, "at": now(), "post": first["id"], "login": login,
-           "thread": first.get("thread"), "from": first.get("from"), "out": str(path), **({"resumed": True} if resume else {}), **({"model": model} if model else {}), **({"fallback": fb} if fb else {}),
+           "thread": first.get("thread"), "from": first.get("from"), "out": str(path), **({"resumed": True} if resume else {}), **({"slept": posts} if slept else {}), **({"heir_of": heir_of["name"]} if heir_of else {}), **({"all_since": all_since} if all_since else {}), **({"model": model} if model else {}), **({"fallback": fb} if fb else {}),
            "harness": prov[1].get("harness", "claude-code") if prov else "claude-code", **({"provider": prov[0]} if prov else {}), **({"effort": env["CLAUDE_EFFORT"]} if env.get("CLAUDE_EFFORT") else {})}
     (RUN / f"{name}.json").write_text(json.dumps(rec))
     log(event="start", **rec)
@@ -599,10 +861,12 @@ def provider_hold(c, st, n, pv, cache, thread):
 
 FALLBACK_NOTE = {
     "free": "This run is on a free model ({model}), not Claude: someone asked for a free agent. Keep it light: answer, look "
-            "things up, small edits, board and kb chores. No heavy jobs, no builds or sims, and don't start other agents "
-            "(@new, @free); if the work needs more, say so in the thread and stop. "
-            "Before stopping, send your actual answer using hive post --thread THREAD. If the request came from "
-            "person, include @person in that post so it reaches them. A local final answer alone is not delivered.",
+            "things up, small edits, board and kb chores. No heavy jobs, no builds or sims. You stay on this model when woken again. "
+            "If the work is beyond you, don't guess: either ask @person, or hand it to a stronger agent with "
+            "`hive post --to new --thread THREAD` and a clear brief (add --model sonnet if that's enough). Only --to starts one: "
+            "from a free agent, the word in the text starts nothing, so leave it out. Don't start more free agents. "
+            "Before stopping, send your actual answer using hive post --thread THREAD. A local final answer alone is "
+            "not delivered. Mention @person only if their opinion or decision is really needed.",
     "fallback": "Every Claude login is at its usage limit, so this run is on a fallback model ({model}, {tier}) because the "
                 "person's post shouldn't wait for the reset. Do only what's time-critical: answer, give an update, a small fix. "
                 "No heavy jobs, no builds or sims, and don't start other agents (they'd wait for Claude anyway). Leave the "
@@ -612,7 +876,7 @@ FALLBACK_NOTE = {
 def tier_of(model):
     m = PROVIDER_MODEL.match(model or "")
     if not m: return "claude"
-    return "codex (no extra cost)" if m[1] == "codex" else "free" if m[2].endswith(":free") else "paid, real money"
+    return "codex (no extra cost)" if m[1] == "codex" else "kimi (subscription, no extra cost)" if m[1] == "kimi" else "free" if m[2].endswith(":free") else "paid, real money"
 
 def fallback_model(c, st, chain, cache):
     """The first model in chain (provider:model strings, config.json fallback) whose provider has room now, else None.
@@ -670,9 +934,11 @@ def main():
                 called, unknown = callable_names(p, c)
                 if is_stop(p) and (gone := drop_spawns(st, p.get("thread"))):
                     log(event="stop_dropped", names=gone, post=p.get("id"), thread=p.get("thread"))
-                if FREE_AGENT.fullmatch(str(p.get("from", "")).lower()) and (skip := [n for n in called if n in SPAWN]):
-                    log(event="free_spawn_ignored", names=skip, post=p.get("id"), src=p.get("from"))
-                    called = [n for n in called if n not in SPAWN]
+                src_free = is_free_now(st, str(p.get("from", "")).lower())
+                if src_free and any(n in SPAWN for n in called):
+                    _, skip = free_spawns(st, p, called)
+                    if skip: log(event="free_spawn_ignored", names=skip, post=p.get("id"), src=p.get("from"))
+                    called = [n for n in called if n not in skip]
                 for n in unknown:
                     log(event="unknown_mention", name=n, post=p.get("id"), src=p.get("from"))
                     if p.get("from") == "person":  # he can't see hive post's warning, and asked for something
@@ -682,7 +948,11 @@ def main():
                     # a self-mention wakes its author only when the author isn't running: a waiter's
                     # "done" post from a run that has already ended; a running agent mentioning itself doesn't
                     if n == str(p.get("from", "")).lower() and runs_now(n): continue
-                    q = {k: p.get(k) for k in ("id", "thread", "from", "model")}
+                    q = {k: p.get(k) for k in ("id", "thread", "from")}
+                    if p.get("routed"): q["routed"] = True  # a door picked this name; nobody typed it
+                    q["model"] = asked_model(p, c)
+                    if src_free and tier_of(q["model"]) == "paid, real money": q["model"] = None  # a free agent's post doesn't spend money
+                    fresh = n == "warden" or n in SPAWN
                     if n == "warden": n = "w" + secrets.token_hex(2)  # each warden run gets its own code too
                     elif n in SPAWN:
                         word, n = n, SPAWN[n] + secrets.token_hex(2)
@@ -695,6 +965,12 @@ def main():
                         elif word == "codex" and ((pv := provider_of(c, q.get("model"))) is None or pv[1].get("harness") != "codex"):
                             q["model"] = c.get("codex_model") or CODEX_DEFAULT
                         elif word == "free": q["free"] = True
+                    if is_warden(n):  # the warden rules on the hard limits and may come to hold root: Claude only, like @claude
+                        q["claude"] = True
+                        if provider_of(c, q.get("model")): q["model"] = None
+                    if not fresh: stays_on(st, c, n, q)
+                    elif (keep := {k: q[k] for k in ("model", "free", "claude") if q.get(k) and (k != "model" or model_ok(c, q[k]))}):
+                        st.setdefault("chosen", {})[n] = keep
                     st["pending"].setdefault(n, []).append(q)
         alive = running(st)
         drop_killed(st)
@@ -725,7 +1001,8 @@ def main():
             st["resume"].pop(n)
             waiting = st["pending"].pop(n, []) if r.get("reaped") else []  # hand queued posts to the resumed run
             start(c, n, [{"id": r["post"], "thread": r.get("thread"), "from": r.get("from"), "model": r.get("model")}], to,
-                  resume=r["session"], reaped=r.get("reaped"), extra=[p["id"] for p in waiting], moved=r.get("move", False))
+                  resume=r["session"], reaped=r.get("reaped"), extra=[p["id"] for p in waiting], moved=r.get("move", False), lost=r.get("lost", False),
+                  woken={"shells": r["shells"], "posts": waiting} if "shells" in r else None, all_since=r.get("all_since") or r.get("at"))
             alive[n] = {"name": n, "thread": r.get("thread")}  # a dict, so keeper() sees a resumed keeper (two rounds at once, 2026-11-02)
         for n in list(st["pending"]):
             if n in alive or n in st.get("resume", {}): continue
@@ -744,8 +1021,8 @@ def main():
                 if not to and not any(p.get("claude") for p in st["pending"][n]) and fallback(c, st, n, st["pending"][n], False, pcache):
                     to = None if provider_hold(c, st, n, provider_of(c, st["pending"][n][0]["model"]), pcache, st["pending"][n][0].get("thread")) else "provider"
             if to and len(alive) < (c.get("max_sessions") or float("inf")) and not paced(c, st, n, st["pending"][n]):
-                ps = st["pending"].pop(n); start(c, n, ps, to)
-                alive[n] = {"name": n, "thread": ps[0].get("thread")}
+                ps = st["pending"].pop(n)
+                if (who := wake(c, st, n, ps, to, room)): alive[who] = {"name": who, "thread": ps[0].get("thread")}
         keeper(c, st, alive, login)
         improver(c, st, alive, login)
         save("starter.json", st)

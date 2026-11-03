@@ -1,0 +1,22 @@
+*,*::before,*::after{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;font:var(--fs-body)/var(--lh) var(--font);background:var(--bg);color:var(--ink);font-synthesis:none;text-rendering:optimizeLegibility}
+button,input,select,textarea{font:inherit;color:inherit}
+a{color:var(--link);text-underline-offset:2px}
+a:hover{color:var(--ink)}
+h1,h2,h3,h4,p,dl,dd,ul,ol{margin:0}
+ul,ol{padding:0}
+:focus{outline:none}
+:focus-visible{outline:2px solid var(--focus);outline-offset:2px;border-radius:var(--r-s)}
+::selection{background:var(--sel)}
+[hidden]{display:none!important}
+
+/* small utilities, the only ones */
+.num{font-variant-numeric:tabular-nums}
+.mono{font-family:var(--mono);font-size:.92em}
+.meta{font-size:var(--fs-meta);color:var(--ink-3)}
+.muted{color:var(--ink-2)}
+.clamp-1,.clamp-2,.clamp-3{display:-webkit-box;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere}
+.clamp-1{-webkit-line-clamp:1}.clamp-2{-webkit-line-clamp:2}.clamp-3{-webkit-line-clamp:3}
+.vh{position:absolute!important;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+@container (max-width:640px){.desk-only{display:none!important}}

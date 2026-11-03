@@ -1,0 +1,82 @@
+/* Hive design tokens. One definition per token; light-dark() picks the theme.
+   Theme: <html> follows the system; data-theme="light|dark" pins it. */
+:root{color-scheme:light dark}
+:root[data-theme=light]{color-scheme:light}
+:root[data-theme=dark]{color-scheme:dark}
+
+:root{
+  /* type */
+  --font:system-ui,-apple-system,"Segoe UI","Helvetica Neue",Helvetica,Arial,sans-serif;
+  --mono:ui-monospace,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
+  --fs-micro:11px;   /* axis ticks, badges */
+  --fs-meta:12px;    /* metadata, notes, timestamps */
+  --fs-small:13px;   /* secondary text, tables, lists */
+  --fs-body:14px;    /* body, agent "now" line */
+  --fs-title:15.5px; /* names, card titles */
+  --fs-lead:17px;    /* page answer sentence */
+  --fs-head:21px;    /* page headline */
+  --fs-figure:24px;  /* numbers in stats and gauges */
+  --lh:1.45; --lh-tight:1.2;
+  --w-med:550; --w-bold:650;
+
+  /* space: 4px grid */
+  --s1:4px; --s2:8px; --s3:12px; --s4:16px; --s5:24px; --s6:32px; --s7:48px;
+  --gutter:28px; --page-max:1360px; --rail:340px;
+
+  /* radius */
+  --r-s:4px; --r-m:6px; --r-l:10px; --r-pill:999px;
+
+  /* density: data rows and controls */
+  --row:34px; --row-tight:28px; --ctl:30px; --ctl-s:24px;
+
+  /* neutrals: warm grey, near-zero chroma */
+  --bg:       light-dark(oklch(97.4% .003 95), oklch(16.5% .004 95));
+  --surface:  light-dark(oklch(99.3% .002 95), oklch(20%   .004 95));
+  --sunken:   light-dark(oklch(94.6% .004 95), oklch(14%   .004 95));
+  --hover:    light-dark(oklch(94.4% .005 95), oklch(23.5% .005 95));
+  --line:     light-dark(oklch(91%   .004 95), oklch(27%   .005 95));
+  --line-2:   light-dark(oklch(84.5% .005 95), oklch(35%   .006 95));
+  --ink:      light-dark(oklch(21%   .006 95), oklch(94%   .004 95));
+  --ink-2:    light-dark(oklch(41%   .006 95), oklch(79%   .006 95));
+  --ink-3:    light-dark(oklch(51%   .006 95), oklch(65%   .006 95));
+  --on-ink:   light-dark(oklch(99%   .002 95), oklch(17%   .004 95));
+  --focus:    light-dark(oklch(55% .17 255),   oklch(72% .14 255));
+  --link:     light-dark(oklch(48% .15 255),   oklch(76% .12 255));
+  --sel:      light-dark(oklch(55% .15 255 / .10), oklch(70% .14 255 / .16));
+
+  /* status tones: fill (dots, bars) and ink (text on bg). Never used alone: every tone has a shape and a word. */
+  --good:     light-dark(oklch(60% .14 155), oklch(70% .15 155));
+  --good-ink: light-dark(oklch(45% .12 155), oklch(78% .14 155));
+  --warn:     light-dark(oklch(74% .15 72),  oklch(79% .14 75));
+  --warn-ink: light-dark(oklch(50% .12 62),  oklch(83% .13 78));
+  --bad:      light-dark(oklch(57% .2 27),   oklch(66% .19 25));
+  --bad-ink:  light-dark(oklch(49% .19 27),  oklch(75% .16 25));
+  --info:     light-dark(oklch(57% .15 255), oklch(68% .14 255));
+  --info-ink: light-dark(oklch(47% .15 255), oklch(77% .12 255));
+  --quiet:    light-dark(oklch(60% .006 95), oklch(62% .006 95));
+  --ended:    light-dark(oklch(77% .005 95), oklch(44% .005 95));
+
+  /* categories: priority tiers, shares */
+  --tier1: light-dark(oklch(57% .15 255), oklch(67% .14 255));
+  --tier2: light-dark(oklch(66% .16 45),  oklch(71% .15 45));
+  --held:  light-dark(oklch(62% .1 180),  oklch(69% .1 180));
+  --other: light-dark(oklch(74% .008 95), oklch(48% .008 95));
+
+  /* elevation: only things that float */
+  --e1: 0 1px 2px oklch(0% 0 0 / .06), 0 6px 18px oklch(0% 0 0 / .10);
+  --e2: 0 2px 6px oklch(0% 0 0 / .10), 0 18px 48px oklch(0% 0 0 / .24);
+}
+
+/* tone hook: any element with data-tone gets --c (fill) and --ci (text) */
+[data-tone=good]{--c:var(--good);--ci:var(--good-ink)}
+[data-tone=warn]{--c:var(--warn);--ci:var(--warn-ink)}
+[data-tone=bad]{--c:var(--bad);--ci:var(--bad-ink)}
+[data-tone=info]{--c:var(--info);--ci:var(--info-ink)}
+[data-tone=quiet]{--c:var(--quiet);--ci:var(--ink-2)}
+[data-tone=ended]{--c:var(--ended);--ci:var(--ink-3)}
+[data-tone=ink]{--c:var(--ink);--ci:var(--ink)}
+[data-tone=tier1]{--c:var(--tier1);--ci:var(--info-ink)}
+[data-tone=tier2]{--c:var(--tier2);--ci:var(--ink)}
+[data-tone=held]{--c:var(--held);--ci:var(--ink)}
+[data-tone=other]{--c:var(--other);--ci:var(--ink-2)}
+
