@@ -234,7 +234,10 @@ main() {
     || die "the VM didn't start. Its log is in $LIMA_HOME/$VM/ha.stderr.log"
 
   # The normal Linux install, as root in the VM. Run again, it updates.
-  echo "Installing the Hive in the VM..."
+  echo "Installing the Hive in the VM. This can sit quiet for several minutes, so please leave it running..."
+  # A VM made before its provisioning recovered logind, or one whose logind spun later: a rerun has to fix this itself
+  # or it fails the same way, with "Failed to connect to bus" after the linger note (lima-vm/lima#5730).
+  "$L" shell --workdir / "$VM" sudo sh -c 'timeout 5 loginctl list-sessions >/dev/null 2>&1 || { systemctl kill --signal=SIGKILL systemd-logind.service; systemctl start systemd-logind; }' </dev/null || true
   # shellcheck disable=SC2016  # these expand in the VM
   "$L" shell --workdir / "$VM" sudo env HIVE_INSIDE=1 HIVE_BRANCH="${HIVE_BRANCH:-}" SITE="$SITE" sh -c \
     '[ -n "$HIVE_BRANCH" ] || unset HIVE_BRANCH; f=$(mktemp); curl -fsSL -o "$f" "$SITE/install.sh" && sh "$f"' </dev/null \
