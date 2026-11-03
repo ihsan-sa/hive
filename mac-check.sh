@@ -26,7 +26,16 @@ vm() { "$L" shell --workdir / hive "$@"; }
 as_hive() { vm sudo -iu hive sh -c "$1"; }
 address() { hive_ web 2>/dev/null | tr -d '\r' | sed -n 's/.*\(http:[^ ]*\).*/\1/p' | head -n 1; }
 answers() { a=$(address); curl -fsS -o /dev/null -m 5 "${a%%#*}"; }
-answers_soon() { n=0; while [ "$n" -lt 30 ]; do answers 2>/dev/null && return 0; n=$((n + 1)); sleep 2; done; return 1; }
+# Up to 3 minutes: a VM that has just started may still be starting its services.
+answers_soon() { t0_=$(date +%s); while [ $(( $(date +%s) - t0_ )) -lt 180 ]; do answers 2>/dev/null && { waited=$(( $(date +%s) - t0_ )); return 0; }; sleep 2; done; waited=never; return 1; }
+# For the report when the app doesn't answer. The port and states only: the address holds a login key.
+why_no_answer() {
+  a=$(address); p=${a#http://127.0.0.1:}; p=${p%%/*}
+  say "      answered after: ${waited:-?} s. Port: ${p:-no address}"
+  say "      in the VM: $(as_hive 'systemctl --user is-active hive-dash; ss -ltn | grep -c ":'"${p:-8077}"' "; curl -s -o /dev/null -m 5 -w "%{http_code}" http://127.0.0.1:'"${p:-8077}"'/login' 2>&1 | tr -d '\r' | tr '\n' ' ' | cut -c1-120)"
+  say "      on this Mac: $(curl -s -o /dev/null -m 5 -w '%{http_code}' "http://127.0.0.1:${p:-8077}/login" 2>&1 | cut -c1-40)"
+  grep -iE 'forward|listen' "$LIMA_HOME/hive/ha.stderr.log" 2>/dev/null | grep -E "${p:-8077}|rror" | tail -n 5 | cut -c1-160 | while IFS= read -r l; do say "      lima: $l"; done
+}
 the_line() { if [ -n "$LINE" ]; then sh "$LINE"; else curl -fsSL "$SITE/install-mac.sh" | sh; fi; }
 ask() { [ -z "$AUTO" ] || return 0; printf '\n%s\nPress Return when done. ' "$1"; read -r _ </dev/tty; }
 yes_no() { [ -z "$AUTO" ] || { say "skip  $2 (no person here)"; return 0; }; printf '\n%s [y/n] ' "$1"; read -r a </dev/tty; case "$a" in y* | Y*) pass "$2" ;; *) bad "$2"; printf 'What happened? (Return to skip) '; read -r a </dev/tty; [ -z "$a" ] || say "      said: $a" ;; esac; }
@@ -102,7 +111,7 @@ main() {
   launchctl bootstrap "gui/$(id -u)" "$plist" 2>/dev/null
   n=0; while [ "$n" -lt 60 ] && [ "$("$L" list hive --format '{{.Status}}' 2>/dev/null)" != Running ]; do n=$((n + 1)); sleep 5; done
   check "the login item starts the VM" sh -c "[ \"\$('$L' list hive --format '{{.Status}}')\" = Running ]"
-  check "the app answers after that" answers_soon
+  if answers_soon; then pass "the app answers after that, after $waited s"; else bad "the app answers after that"; why_no_answer; fi
   check "the hive command works from a stopped state" sh -c "'$HOME/.hive/bin/hive' web"
 
   say; say "--- update"
