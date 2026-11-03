@@ -266,6 +266,10 @@ def cmd_module(a):
     needs = cat.get(a.name, {}).get("needs")
     if needs: print(f"needs: {needs}")
 
+def cmd_update(a):
+    """Everything is in update.py, which also runs alone from the timer."""
+    os.execv(sys.executable, [sys.executable, str(CORE / "update.py")] + (["--check"] if a.check else []) + (["--auto"] if a.auto else []))
+
 def cmd_web(a):
     """The local web app's address. The app is on only where ~/.hive/web.json exists: install makes it (--setup), with a new secret."""
     f = STATE / "web.json"
@@ -528,6 +532,8 @@ p = sp.add_parser("wait", help="hive wait [--to X] [--thread T] [--timeout 3600]
 p.add_argument("--to"); p.add_argument("--thread"); p.add_argument("--timeout", type=int, default=3600); p.set_defaults(f=cmd_wait)
 p = sp.add_parser("module", help="hive module list | add NAME|GIT-URL | remove NAME")
 p.add_argument("do", choices=["list", "add", "remove"]); p.add_argument("name", nargs="?"); p.set_defaults(f=cmd_module)
+p = sp.add_parser("update", help="hive update [--check]: an installed Hive goes to the newest release, and back if that fails")
+p.add_argument("--check", action="store_true"); p.add_argument("--auto", action="store_true"); p.set_defaults(f=cmd_update)
 p = sp.add_parser("web", help="hive web: the address of the local web app, with its secret. --new-secret replaces the secret; --setup is install's")
 p.add_argument("--setup", action="store_true"); p.add_argument("--new-secret", action="store_true"); p.set_defaults(f=cmd_web)
 p = sp.add_parser("stalled", help="hive stalled [--quiet 2h] [--within 3d]: quiet threads nobody is on")

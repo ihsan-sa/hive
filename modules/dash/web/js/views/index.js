@@ -14,6 +14,9 @@ import timeline from "./timeline.js";
 import { pending } from "./pending.js";
 import start from "./start.js";
 import settings from "./settings.js";
+import plans from "./plans.js";
+import secrets from "./secrets.js";
+import deck from "./deck.js";
 
 
 export default [
@@ -26,7 +29,10 @@ export default [
   comms,
   timeline,
   usage,
+  plans,
+  secrets,
   settings,
   agent,
   system,
+  deck,
 ];

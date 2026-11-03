@@ -5,6 +5,8 @@ import { mount, delegate, selecting } from "./core/dom.js";
 import { go, parse } from "./core/router.js";
 import { topBar } from "./ui/shell.js";
 import views from "./views/index.js";
+import { resume, setViews, watch } from "./deck/control.js";
+import { offer as offerTour } from "./deck/tour.js";
 
 const byId = new Map(views.map(v => [v.id, v]));
 const top = document.getElementById("top"), main = document.getElementById("main");
@@ -36,6 +38,7 @@ function route() {
 }
 
 delegate(document);
+setViews(views); watch(() => schedule(false)); offerTour(); resume();
 addEventListener("hashchange", route);
 addEventListener("keydown", e => { if (e.key === "Escape" && cur.escape) cur.escape(ctx); });
 subscribe(() => schedule(false));

@@ -9,12 +9,12 @@ import { startSignin, signinBox } from "../ui/signin.js";
 const F = { cfg: null, ed: null, mods: null, say: {}, newLogin: "", url: "", busy: {}, access: null };
 const say = (k, text, tone) => { F.say[k] = text ? { text, tone } : null; };
 const msg = k => F.say[k] ? h("p", { class: "fmsg", "data-tone": F.say[k].tone || null, role: "status" }, F.say[k].text) : null;
-const CAPTEXT = { read: "Read everything", post: "Post as you, which starts agents", stop: "Kill agents", tier: "Change a thread's tier", limits: "Pause logins and change stop lines", logins: "Sign in and add logins", config: "Change settings", modules: "Add and remove modules" };
+const CAPTEXT = { read: "Read everything", post: "Post as you, which starts agents", stop: "Kill agents", tier: "Change a thread's tier", limits: "Pause logins and change stop lines", logins: "Sign in and add logins", config: "Change settings", modules: "Add and remove modules", plans: "Edit project plans", secrets: "Store secrets" };
 
 async function loadCfg(ctx) {
   if (!can("config")) return;
   try { F.cfg = await jget("/api/config"); } catch (e) { F.cfg = {}; }
-  F.ed ||= { max: F.cfg.max_sessions ?? "", us: F.cfg.usage_stop_pct ?? "", kp: !!F.cfg.keeper_every_s };
+  F.ed ||= { max: F.cfg.max_sessions ?? "", us: F.cfg.usage_stop_pct ?? "", kp: !!F.cfg.keeper_every_s, au: F.cfg.auto_update !== false };
   ctx.update();
 }
 async function loadMods(ctx) {
@@ -31,7 +31,7 @@ function hiveSection(ctx) {
   const E = F.ed, up = S.app.setup && S.app.setup.starter;
   const save = async () => {
     try {
-      await post("/api/config", { max_sessions: E.max === "" ? null : +E.max, keeper_every_s: E.kp ? (F.cfg.keeper_every_s || 10800) : 0, usage_stop_pct: +E.us });
+      await post("/api/config", { max_sessions: E.max === "" ? null : +E.max, keeper_every_s: E.kp ? (F.cfg.keeper_every_s || 10800) : 0, usage_stop_pct: +E.us, auto_update: E.au });
       say("hive", "Saved. The hive uses it within seconds.", "good");
     } catch (e) { say("hive", e.message, "bad"); }
     ctx.update();
@@ -44,7 +44,8 @@ function hiveSection(ctx) {
     h("div", { class: "fgrid" },
       field("Session limit", input({ type: "number", min: 1, max: 200, value: E.max, oninput: (e, n) => { E.max = n.value; } }), "How many agents run at once. Empty means no limit."),
       field("Stop at weekly usage, %", input({ type: "number", min: 1, max: 100, value: E.us, oninput: (e, n) => { E.us = n.value; } }), "No new agents past this, except ones you ask for. Subscription logins only."),
-      check("Keeper", E.kp, v => { E.kp = v; }, "A round every 3 hours that revives stalled work and starts work nobody asked for. It spends usage.")),
+      check("Keeper", E.kp, v => { E.kp = v; }, "A round every 3 hours that revives stalled work and starts work nobody asked for. It spends usage."),
+      check("Update automatically", E.au, v => { E.au = v; }, "Installs each new release a few times a day, keeps your settings and goes back if it fails.")),
     h("div", { class: "frow" }, button("Save", save, { kind: "primary" }), msg("hive")),
     h("div", { class: "frow fsplit" }, h("span", null, "Starter: ", statusLabel(up ? "working" : "ended", up ? "running" : "not running")),
       button(up ? "Stop (running agents finish their turn)" : "Start", starter), msg("starter")));
@@ -94,7 +95,7 @@ function accessSection(ctx) {
   };
   const txt = (label, k, ph) => field(label, input({ placeholder: ph, value: A[k], oninput: (e, n) => { A[k] = n.value; } }));
   return section({ title: "Access from outside", note: "only changeable from this machine" },
-    h("p", { class: "field-h" }, "Off until set up. From this machine, the secret gets everything. Through a tunnel, each request must carry a token signed by Cloudflare Access, and it can do only what's ticked here. Opening a name also takes a Cloudflare tunnel and an Access policy, set up in Cloudflare."),
+    h("p", { class: "field-h" }, "Off until set up. If web.json lists outside.people, each listed person gets limited (read, chat, kill agents) or full (everything here, for an hour after signing in), and the ticks below don't apply. From this machine, the secret gets everything. Through a tunnel, each request must carry a token signed by Cloudflare Access, and it can do only what's ticked here. Opening a name also takes a Cloudflare tunnel and an Access policy, set up in Cloudflare."),
     h("div", { class: "checks", role: "group", "aria-label": "What outside requests may do" }, o.caps.map(c => check(CAPTEXT[c] || c, A.can.has(c), v => { v ? A.can.add(c) : A.can.delete(c); }))),
     h("div", { class: "fgrid" }, txt("Hostnames", "hosts", "hive.example.com"), txt("Access team domain", "team", "yourteam.cloudflareaccess.com"),
       txt("Application audience", "aud", "the Access application's AUD tag"), txt("Allowed emails", "emails", "optional: only these emails")),

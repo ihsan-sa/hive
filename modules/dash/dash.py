@@ -973,7 +973,10 @@ def tail_lines(path, offset):
 # With one: full rights rest only on the secret (local route); anything that looks forwarded is the outside route, which needs
 # a signed Cloudflare Access token and gets only outside.can, read-only by default. A forwarding header can only ever lower
 # what a request may do, and nobody gets the local route without the secret, so spoofing headers gains nothing.
-CAPS = ("read", "post", "stop", "tier", "limits", "logins", "config", "modules")
+CAPS = ("read", "post", "stop", "tier", "limits", "logins", "config", "modules", "plans", "secrets")
+# outside.people {email: "limited" or "full"} in web.json: what each signed-in person may do from outside. Not listed: refused.
+LIMITED_CAN = ("read", "post", "stop")
+FULL_FOR_S = 3600  # full rights need an Access token issued this recently; after that the same session is limited until they sign in again
 OPEN_CAN = ("read", "stop", "tier", "limits")
 WEB = STATE / "web.json"
 INSTALLED = HOME / ".hive-installed"
@@ -981,10 +984,10 @@ FORWARDED = ("cf-ray", "cf-connecting-ip", "cf-access-jwt-assertion", "cf-ipcoun
              "x-forwarded-host", "x-forwarded-proto", "x-real-ip", "forwarded", "via", "true-client-ip")
 GET_CAP = {"/api/live": "read", "/api/board": "read", "/api/log": "read", "/api/usage": "read", "/api/jobs": "read", "/api/agent": "read",
            "/api/projects": "read", "/json": "read", "/api/target": "read", "/api/inbox": "read", "/api/delivered": "read",
-           "/api/config": "config", "/api/modules": "modules", "/api/signin": "logins"}
+           "/api/config": "config", "/api/modules": "modules", "/api/signin": "logins", "/api/plans": "plans", "/api/secrets": "secrets"}
 POST_CAP = {"/api/kill": "stop", "/api/tier": "tier", "/api/login-pause": "limits", "/api/login-limit": "limits", "/api/provider-limit": "limits",
             "/api/post": "post", "/api/upload": "post", "/api/inbox-read": "post", "/api/config": "config", "/api/starter": "config",
-            "/api/module": "modules", "/api/signin": "logins", "/api/signin/code": "logins", "/api/signin/cancel": "logins"}
+            "/api/module": "modules", "/api/signin": "logins", "/api/signin/code": "logins", "/api/signin/cancel": "logins", "/api/plan": "plans", "/api/secret": "secrets"}
 LOCAL_ONLY = {"/api/access"}  # who may do what is never changed from outside, whatever outside.can says
 
 
@@ -1089,6 +1092,27 @@ def verify_access(token, access, keys=ACCESS_KEYS):
         return None
 
 
+def signer_of(claims, out):
+    """Who a verified token belongs to, for the label on their posts: outside.names {email: name} if listed, else the email. Only ever from the signed claims."""
+    email = str(claims.get("email") or "").strip().lower()
+    names = {str(k).lower(): str(v) for k, v in (out.get("names") or {}).items()} if isinstance(out.get("names"), dict) else {}
+    return re.sub(r"[^\w .@+-]", "", names.get(email, email))[:60] or "unknown"
+
+
+def person_can(claims, out, now=None):
+    """(can, mode, seconds of full left) for a verified token, or None if this person isn't let in. Without outside.people: outside.can, for anyone Access let through."""
+    if "people" not in out: return tuple(c for c in out.get("can", ["read"]) if c in CAPS), None, 0
+    people = out["people"] if isinstance(out["people"], dict) else {}
+    email = str(claims.get("email") or "").strip().lower()
+    mode = {str(k).strip().lower(): v for k, v in people.items()}.get(email) if email else None
+    if mode == "limited": return LIMITED_CAN, "limited", 0
+    if mode != "full": return None
+    iat = claims.get("iat")
+    left = iat + FULL_FOR_S - (now or time.time()) if isinstance(iat, (int, float)) and not isinstance(iat, bool) else 0
+    if 0 < left <= FULL_FOR_S + 60: return CAPS, "full", int(left)  # a token dated well ahead is no proof of a recent sign-in
+    return LIMITED_CAN, "expired", 0
+
+
 def set_access(d):
     """The outside profile in web.json, from the local route only. Fields not given stay. The secret is never touched."""
     web = web_cfg()
@@ -1100,6 +1124,12 @@ def set_access(d):
     if "hosts" in d:
         if not isinstance(d["hosts"], list) or not all(isinstance(h, str) and re.fullmatch(r"[A-Za-z0-9.-]+(:\d+)?", h) for h in d["hosts"]): return False
         out["hosts"] = d["hosts"]
+    if "names" in d:
+        if not isinstance(d["names"], dict) or not all(isinstance(k, str) and isinstance(v, str) for k, v in d["names"].items()): return False
+        out["names"] = d["names"]
+    if "people" in d:
+        if not isinstance(d["people"], dict) or any(not isinstance(k, str) or "@" not in k or v not in ("limited", "full") for k, v in d["people"].items()): return False
+        out["people"] = {k.strip().lower(): v for k, v in d["people"].items()}
     if "access" in d:
         a = d["access"]
         if not isinstance(a, dict) or any(not isinstance(a.get(k, ""), str) for k in ("team", "aud")): return False
@@ -1193,9 +1223,10 @@ def thread_target(thread):
     return {"who": who, "running": bool(who and alive((jload(RUN / f"{who}.json") or {}).get("pid")))}
 
 
-def person_post(text, thread=None, reply_to=None, uploads=()):
+def person_post(text, thread=None, reply_to=None, uploads=(), signer=None):
     """A post as the person. As the Slack mirror does it: a plain message wakes the agent last on the thread, a reply wakes the author
     of the post replied to, and no thread (or a thread with no agent yet) starts a new agent. Mentions in the text win.
+    signer: who signed in, from a verified Access token, when more than one person can: it heads the text, so an agent and the board can see who wrote it.
     Returns {"id", "thread", "said"}, or raises ValueError with a sentence for the page."""
     text = str(text or "").strip()
     refs = [UPLOAD_REF.fullmatch(str(u)) for u in uploads or []]
@@ -1205,6 +1236,7 @@ def person_post(text, thread=None, reply_to=None, uploads=()):
     if thread and not THREAD_NAME.fullmatch(str(thread)): raise ValueError("a thread name is letters, digits and . _ : -")
     if not text and not paths: raise ValueError("nothing to send")
     if not text: text = "Attached: " + ", ".join(p.name for p in paths)
+    if signer: text = f"(from {signer}, web app) {text}"
     INDEX.refresh()
     who = None
     if reply_to:
@@ -1247,6 +1279,82 @@ def save_upload(name, length, src):
         shutil.rmtree(INCOMING / tok, ignore_errors=True)
         raise ValueError("the upload stopped early")
     return {"ref": f"{tok}/{safe}", "name": safe, "size": length}
+
+
+# ---------- plans and secrets ----------
+SECRETS = HOME / ".config/hive/secrets"
+SECRET_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}")
+MAX_SECRET = 64 * 1024
+PROJECT_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
+MAX_PLAN = 128 * 1024
+
+
+def dash_note(text, thread):
+    """A line on the board from the dash that wakes nobody."""
+    p = {"id": datetime.now().strftime("%m%d%H%M") + secrets.token_hex(2), "at": now_iso(), "from": "dash", "to": [], "thread": thread, "text": text}
+    with open(BOARD, "a") as f: f.write(json.dumps(p) + "\n")
+
+
+def secrets_view():
+    """Names and dates only: no route ever reads a value back."""
+    try: files = [f for f in SECRETS.iterdir() if f.is_file() and not f.is_symlink() and SECRET_NAME.fullmatch(f.name)]
+    except OSError: return []
+    return sorted(({"name": f.name, "at": f.stat().st_mtime} for f in files), key=lambda r: r["name"])
+
+
+def set_secret(name, value, signer, delete=False):
+    name = str(name or "")
+    if not SECRET_NAME.fullmatch(name): raise ValueError("a secret's name is letters, digits and . _ -, starting with a letter or digit")
+    f, who = SECRETS / name, signer or "this machine"
+    if delete:
+        if not f.is_file(): raise ValueError("no secret has that name")
+        f.unlink()
+        dash_note(f"Secret `{name}` removed by {who}, in the web app.", "secrets")
+        return {"ok": True}
+    if not isinstance(value, str) or not value.strip(): raise ValueError("the value is empty")
+    if len(value.encode()) > MAX_SECRET: raise ValueError("a secret can be up to 64 KB")
+    SECRETS.mkdir(parents=True, exist_ok=True)
+    SECRETS.chmod(0o700)
+    had = f.exists()
+    write_text_private(f, value.strip() + "\n")
+    dash_note(f"Secret `{name}` {'replaced' if had else 'set'} by {who}, in the web app. It's in `~/.config/hive/secrets/{name}`, mode 600. Don't print it.", "secrets")
+    return {"ok": True}
+
+
+def write_text_private(path, text):
+    t = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}")
+    fd = os.open(t, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f: f.write(text)
+    t.replace(path)
+
+
+def plans_view():
+    out = []
+    for d in sorted(PROJECTS.glob("*/")):
+        f = d / "goals.md"
+        if d.is_symlink() or f.is_symlink() or not PROJECT_NAME.fullmatch(d.name): continue
+        try: out.append({"name": d.name, "text": f.read_text(errors="replace")[:MAX_PLAN], "version": str(f.stat().st_mtime_ns)})
+        except OSError: out.append({"name": d.name, "text": "", "version": None})
+    return out
+
+
+def save_plan(name, text, version, start, signer):
+    """Write ~/projects/<name>/goals.md, refusing if it changed since the page read it: agents edit these too."""
+    name = str(name or "")
+    if not PROJECT_NAME.fullmatch(name): raise ValueError("a project's name is letters, digits, _ and -")
+    if not isinstance(text, str) or not text.strip(): raise ValueError("the plan is empty")
+    if len(text.encode()) > MAX_PLAN: raise ValueError("a plan can be up to 128 KB")
+    d, f = PROJECTS / name, PROJECTS / name / "goals.md"
+    if d.is_symlink() or f.is_symlink(): raise ValueError("that project's plan is a link, so it can't be changed here")
+    now_v = str(f.stat().st_mtime_ns) if f.exists() else None
+    if now_v != version: raise ValueError("this plan changed since you opened it. Copy your text, reload and try again")
+    d.mkdir(parents=True, exist_ok=True)
+    t = f.with_name(f".goals.md.{os.getpid()}.{threading.get_ident()}")
+    t.write_text(text); t.replace(f)
+    res = {"version": str(f.stat().st_mtime_ns)}
+    if start: res.update(person_post(f"Plan saved in `~/projects/{name}/goals.md`. Read it and start the work.", signer=signer))
+    else: dash_note(f"Plan for `{name}` saved by {signer or 'this machine'}, in the web app. Nothing was started.", "plans")
+    return res
 
 
 def delivered_view(days=3):
@@ -1294,7 +1402,7 @@ _cfg_lock = threading.Lock()
 
 def config_view():
     c = cfg()
-    return {k: c.get(k) for k in ("max_sessions", "keeper_every_s", "keeper_idle_s", "usage_stop_pct")}
+    return {k: c.get(k) for k in ("max_sessions", "keeper_every_s", "keeper_idle_s", "usage_stop_pct", "auto_update")}
 
 
 def set_config(d):
@@ -1312,6 +1420,9 @@ def set_config(d):
         v = d["usage_stop_pct"]
         if isinstance(v, bool) or not isinstance(v, (int, float)) or not 1 <= v <= 100: raise ValueError("the usage stop is 1 to 100")
         new["usage_stop_pct"] = v
+    if "auto_update" in d:
+        if type(d["auto_update"]) is not bool: raise ValueError("auto_update is on or off")
+        new["auto_update"] = d["auto_update"]
     if not new: raise ValueError("nothing to change")
     with _cfg_lock:
         c = jload(HOME / "core" / "config.json")
@@ -1522,7 +1633,7 @@ def serve(port):
             self.end_headers()
             with f.open("rb") as src: shutil.copyfileobj(src, self.wfile)
 
-        route, can, signed = "open", OPEN_CAN, False
+        route, can, signed, signer, mode, full_left = "open", OPEN_CAN, False, None, None, 0
 
         def deny(self, code, why):
             self.send(json.dumps({"error": why}).encode(), "application/json", status=code)
@@ -1531,7 +1642,7 @@ def serve(port):
             """Sets route, can and signed for this request, or answers it and returns False. Checked on every request."""
             web = web_cfg()
             if web is None: return True  # the open dash: no web.json here, as on a site that hasn't set one up
-            self.route, self.can, self.signed = "refused", (), False
+            self.route, self.can, self.signed, self.signer = "refused", (), False, None
             if web.get("broken"): self.deny(500, "web.json is missing or can't be read, so nothing is served. Fix or delete it, then run hive web --setup"); return False
             hd = {k.lower(): v for k, v in self.headers.items()}
             route = route_of(hd, self.client_address[0], port, web)
@@ -1540,22 +1651,28 @@ def serve(port):
             self.route = route
             if route == "outside":
                 out = web.get("outside") or {}
-                if not verify_access(hd.get("cf-access-jwt-assertion"), out.get("access") or {}):
+                claims = verify_access(hd.get("cf-access-jwt-assertion"), out.get("access") or {})
+                if not claims:
                     self.deny(403, "outside access needs a valid Cloudflare Access token"); return False
-                self.can, self.signed = tuple(c for c in out.get("can", ["read"]) if c in CAPS), True
+                allowed = person_can(claims, out)
+                if not allowed: self.deny(403, "this sign-in isn't on this app's list"); return False
+                self.signer = signer_of(claims, out)
+                (self.can, self.mode, self.full_left), self.signed = allowed, True
             elif has_session(hd.get("cookie"), web, port):
                 self.can, self.signed = CAPS, True
+            if web.get("secrets_on") is not True: self.can = tuple(c for c in self.can if c != "secrets")  # off unless web.json says so; no route can set it
             return True
 
         def app_info(self):
             web = web_cfg() or {}
             info = {"route": self.route, "can": list(self.can), "app": self.route != "open"}
-            if self.route != "open": info["setup"] = SETUP.get()
+            if self.route != "open": info.update(setup=SETUP.get(), secrets_on=web.get("secrets_on") is True)
+            if self.mode: info.update(mode=self.mode, full_left=self.full_left)
             if self.route == "local":
                 out = web.get("outside") or {}
                 acc = out.get("access") or {}
                 info["outside"] = {"can": out.get("can", ["read"]), "hosts": out.get("hosts") or [], "team": acc.get("team", ""), "aud": acc.get("aud", ""),
-                                   "emails": acc.get("emails") or [], "caps": list(CAPS)}
+                                   "emails": acc.get("emails") or [], "people": out.get("people") or {}, "caps": [c for c in CAPS if c != "secrets" or web.get("secrets_on") is True]}
             return info
 
         def do_GET(self):
@@ -1590,8 +1707,12 @@ def serve(port):
             J = "application/json"
             if u.path == "/api/app":
                 self.send(json.dumps(self.app_info(), default=str).encode(), J)
-            elif u.path in ("/api/target", "/api/inbox", "/api/config", "/api/modules", "/api/signin") and self.route == "open":
+            elif u.path in ("/api/target", "/api/inbox", "/api/config", "/api/modules", "/api/signin", "/api/plans", "/api/secrets") and self.route == "open":
                 self.send_error(404)
+            elif u.path == "/api/plans":
+                self.send(json.dumps(plans_view()).encode(), J)
+            elif u.path == "/api/secrets":
+                self.send(json.dumps(secrets_view()).encode(), J)
             elif u.path == "/api/target":
                 self.send(json.dumps(thread_target(q.get("thread", [""])[0])).encode(), J)
             elif u.path == "/api/inbox":
@@ -1649,15 +1770,17 @@ def serve(port):
                 if not 0 < n <= MAX_FILE: return self.deny(413, "a file can be up to 100 MB")
                 try: return self.send(json.dumps(save_upload(parse_qs(u.query).get("name", ["file"])[0], n, self.rfile)).encode(), "application/json")
                 except (ValueError, OSError) as e: return self.deny(400, str(e))
-            if not 0 < n < (2**20 if u.path == "/api/post" else 4096 if self.route != "open" else 1024): return self.send_error(403)
+            if not 0 < n < ({"/api/post": 2**20, "/api/plan": 2**19, "/api/secret": 2**18}.get(u.path) or (4096 if self.route != "open" else 1024)): return self.send_error(403)
             try: d = json.loads(self.rfile.read(n))
             except ValueError: return self.send_error(400)
             if not isinstance(d, dict): return self.send_error(400)
             num = lambda v: v is None or (isinstance(v, (int, float)) and not isinstance(v, bool))
             J = "application/json"
-            if u.path in ("/api/post", "/api/inbox-read", "/api/config", "/api/starter", "/api/module", "/api/signin", "/api/signin/code", "/api/signin/cancel", "/api/access"):
+            if u.path in ("/api/post", "/api/inbox-read", "/api/config", "/api/starter", "/api/module", "/api/signin", "/api/signin/code", "/api/signin/cancel", "/api/access", "/api/plan", "/api/secret"):
                 try:
-                    if u.path == "/api/post": res = person_post(d.get("text"), d.get("thread"), d.get("reply_to"), d.get("files"))
+                    if u.path == "/api/post": res = person_post(d.get("text"), d.get("thread"), d.get("reply_to"), d.get("files"), signer=self.signer)
+                    elif u.path == "/api/plan": res = save_plan(d.get("name"), d.get("text"), d.get("version"), bool(d.get("start")), self.signer)
+                    elif u.path == "/api/secret": res = set_secret(d.get("name"), d.get("value"), self.signer, delete=bool(d.get("delete")))
                     elif u.path == "/api/inbox-read": res = {"marked": mark_read(None if d.get("all") else [str(i) for i in d.get("ids") or []])}
                     elif u.path == "/api/config": res = set_config(d)
                     elif u.path == "/api/starter": starter_do(d.get("do")); SETUP.t = 0; res = {"ok": True}

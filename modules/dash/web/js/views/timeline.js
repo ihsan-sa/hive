@@ -223,6 +223,13 @@ export const runningNote = () => `${T.nLive} running` + (T.below ? ` · +${T.bel
 
 export default {
   id: "timeline", label: "Timeline", tab: true,
+  deck: {
+    jog(d, n, shift) { const k = shift ? 6 : 1; if (d === 1) pan(n * k * T.win / 400); else zoom(Math.exp(-n * k / 60), centre()); return true; },
+    play() { T.fit = false; set(T.win, null); T.update(); return true; },
+    fit() { setPref("tlWin", "fit"); T.fit = true; T.end = null; T.ver = -1; draw(); T.update(); },
+    toggle() { T.active = !T.active; setPref("tlActive", T.active ? 1 : 0); T.ver = -1; draw(); T.update(); },
+    window(v) { pin(); set(TMIN * Math.pow(TMAX / TMIN, v), T.end); },
+  },
   enter(ctx) { T.update = ctx.update; T.ver = -1; },
   leave() { hideTip(); },
   render(ctx) {

@@ -6,6 +6,7 @@ import { ago, clock, now } from "../core/format.js";
 import { href } from "../core/router.js";
 import { getTheme, cycleTheme, THEMES } from "../core/theme.js";
 import { statusDot, button } from "./kit.js";
+import { D as deck, supported as deckSupported } from "../deck/control.js";
 
 export function statusBits() {
   const n = S.running.size, all = (S.usage && S.usage.logins) || (S.live && S.live.logins) || [], us = all.filter(l => inUse(l, S.usage)), hold = S.live && S.live.limit_until;
@@ -38,7 +39,7 @@ addEventListener("keydown", e => {
 
 export function topBar({ views, current, update }) {
   const shown = views.filter(v => (typeof v.tab === "function" ? v.tab() : v.tab));
-  const route = S.app.route === "outside" ? (can("post") ? "outside access" : "read-only") : null;
+  const mode = S.app.mode, route = S.app.route !== "outside" ? null : mode === "full" ? `full, ${Math.ceil(S.app.full_left / 60)} min` : mode ? "limited" : can("post") ? "outside access" : "read-only";
   const th = getTheme();
   return h("div", null,
     h("div", { class: "top-in" },
@@ -47,7 +48,9 @@ export function topBar({ views, current, update }) {
         const b = v.badge ? v.badge() : null;
         return h("a", { class: "tab", href: href(v.id), "data-key": v.id, "aria-current": v.id === current ? "page" : null }, v.label, b ? h("span", { class: "tab-badge", "aria-label": `${b} unread` }, b) : null);
       })),
-      h("div", { class: "top-status", role: "status" }, route ? h("span", { class: "top-route", title: "Allowed from outside: " + (S.app.can || []).join(", ") }, route) : null, statusBits()),
+      h("div", { class: "top-status", role: "status" }, route ? h("span", { class: "top-route", title: "Allowed from outside: " + (S.app.can || []).join(", ") }, route) : null,
+        mode === "expired" ? h("a", { class: "top-route", href: "/cdn-cgi/access/logout", title: "Full mode lasts an hour after signing in. This signs you out; open this page again and sign in with Google." }, "sign in again for full") : null, statusBits()),
+      deckSupported() ? h("a", { class: "top-deck", href: "#deck", "data-on": deck.state === "on" ? "1" : null, "data-armed": deck.armed ? "1" : null, title: deck.state === "on" ? "DDJ-FLX4 connected" : "Run this page from a DDJ-FLX4" }, deck.armed ? "FULL CONTROL" : "Deck") : null,
       button(THEMES.find(x => x[0] === th)[1], () => { cycleTheme(); update(); }, { size: "s", kind: "quiet", cls: "theme", title: "Colour theme: Auto follows your system setting" }),
       fullscreenButton()),
     h("div", { class: "top-sub", "aria-hidden": "true" }, statusBits()));

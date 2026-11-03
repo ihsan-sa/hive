@@ -579,3 +579,44 @@ textarea.cp-t{min-height:calc(2lh + 14px)}
 
 /* ---- inbox ---- */
 .inb-new{flex:none;padding:0 6px;border-radius:var(--r-s);font-size:var(--fs-micro);font-weight:var(--w-bold);color:var(--ci);background:color-mix(in oklch,var(--c) 14%,transparent)}
+
+/* Deck: the DDJ-FLX4 remote. Cursor and hud sit outside the page, so morph leaves them alone. */
+.top-deck{align-self:center;font-size:var(--fs-meta);padding:1px 8px;border-radius:var(--r-s);color:var(--ink-3);text-decoration:none;white-space:nowrap}
+.top-deck[data-on]{color:var(--good-ink);background:color-mix(in oklch,var(--good) 14%,transparent)}
+.top-deck[data-armed]{color:var(--on-ink);background:var(--bad);font-weight:var(--w-bold)}
+.deck-cursor{position:fixed;z-index:55;pointer-events:none;border:2px solid var(--info,var(--ink));border-radius:var(--r-s);transition:left .07s,top .07s,width .07s,height .07s}
+.deck-cursor[data-armed]{border-color:var(--bad)}
+.deck-hud{position:fixed;left:50%;bottom:28px;transform:translateX(-50%);z-index:61;pointer-events:none;max-width:min(40rem,90vw);padding:7px 14px;border-radius:var(--r-m);background:var(--ink);color:var(--on-ink);font-size:var(--fs-small);box-shadow:var(--e2)}
+.deck-hud[hidden]{display:none}
+.deck-hud[data-tone=bad]{background:var(--bad)}
+.deck-hud[data-tone=warn]{background:var(--warn)}
+.deck-arm{display:flex;align-items:center;justify-content:space-between;gap:var(--s3);padding:var(--s3);border:1px solid var(--line-2);border-radius:var(--r-m)}
+.deck-arm[data-armed]{border-color:var(--bad)}
+.deck-ctl{white-space:nowrap}
+.deck-ctl[data-hot]{color:var(--good-ink)}
+.deck-page-raw{max-height:16rem;overflow:auto;font-size:var(--fs-meta);white-space:pre}
+.deck-page-raw [data-miss]{color:var(--warn-ink)}
+/* Deck tour: floats above the page, and inside a modal window while one is open */
+.deck-tour{position:fixed;left:16px;bottom:16px;z-index:62;width:min(560px,calc(100vw - 32px));padding:var(--s3);background:var(--surface);color:var(--ink);border:1px solid var(--line-2);border-radius:var(--r-m);box-shadow:0 8px 28px rgba(0,0,0,.28);text-align:left}
+.deck-tour .dt-top{display:flex;align-items:center;gap:var(--s2);cursor:move;touch-action:none;user-select:none}
+.deck-tour .dt-btns{margin-left:auto;display:flex;gap:2px}
+.deck-tour .dt-btns button{background:none;border:0;color:var(--link);font:inherit;font-size:var(--fs-meta);padding:2px 6px;cursor:pointer;border-radius:var(--r-s)}
+.deck-tour .dt-btns button:hover{background:var(--hover)}
+.deck-tour .dt-t{margin:var(--s2) 0 2px;font-size:var(--fs-head)}
+.deck-tour .dt-p{margin:0}
+.deck-tour .dt-h{margin:var(--s1) 0 0;color:var(--warn-ink);font-size:var(--fs-meta)}
+.deck-tour .dt-h[hidden]{display:none}
+.dt-deck{display:block;width:100%;height:auto;margin-top:var(--s2)}
+.dt-deck text{font:600 8.5px var(--font);fill:var(--quiet);text-anchor:middle;pointer-events:none}
+.dt-deck .dt-body{fill:var(--sunken);stroke:var(--line-2)}
+.dt-deck .dt-head{font-size:8px;letter-spacing:.04em}
+.dt-c rect,.dt-c circle{fill:var(--surface);stroke:var(--line-2)}
+.dt-c .dt-in{fill:var(--sunken)}
+.dt-dim circle,.dt-dim rect{fill:none;stroke:var(--line)}
+.dt-dim text{font-size:7px;opacity:.6}
+.dt-c[data-hit] rect,.dt-c[data-hit] circle{fill:var(--line-2)}
+.dt-c[data-want] rect,.dt-c[data-want] circle{fill:var(--info);stroke:var(--info);animation:dt-pulse 1s ease-in-out infinite}
+.dt-c[data-want] .dt-in{fill:var(--surface)}
+.dt-c[data-want] text{fill:var(--on-ink)}
+@keyframes dt-pulse{50%{opacity:.45}}
+@media (prefers-reduced-motion:reduce){.dt-c[data-want] rect,.dt-c[data-want] circle{animation:none}}

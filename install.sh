@@ -86,7 +86,13 @@ if [ "$SERVICE" = 1 ]; then
     "$(dirname "$(command -v claude)")" > "$U/hive-dash.service.d/local.conf"
   systemctl --user daemon-reload
   systemctl --user enable hive-dash
+  systemctl --user reset-failed hive-dash 2>/dev/null || true  # a crash loop's start limit would refuse this restart
   systemctl --user restart hive-dash
+  # Updates from the releases; "auto_update": false in config.json stops them.
+  mkdir -p "$U/hive-update.service.d"; cp "$U/hive-dash.service.d/local.conf" "$U/hive-update.service.d/local.conf"
+  ln -sf "$CORE/hive-update.service" "$U/hive-update.service"; ln -sf "$CORE/hive-update.timer" "$U/hive-update.timer"
+  systemctl --user daemon-reload
+  systemctl --user enable --now hive-update.timer
 fi
 touch "$HOME/.hive-installed"  # only now: a failure above can be rerun
 

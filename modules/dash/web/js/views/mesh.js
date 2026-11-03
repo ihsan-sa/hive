@@ -287,7 +287,24 @@ export const meshNote = () => M.count;
 /** A display tile shows the last 2 hours: what is running now and who it just talked to. Not saved, so the Mesh tab keeps its own window. */
 export function meshForDisplay() { M.win = getPref("meshWin", 6 * HOUR); }   // a TV's own choice wins; 6 hours until it makes one, so running agents still show who they talked to
 let unsub = null;
+// The deck: BROWSE walks the nodes the way the arrow keys do. Crossfader and left jog scrub the replay; far right is live.
+const walk = () => [...G.nodes.values()].filter(n => !n.anchor).sort((a, b) => (b.labelRank || 0) - (a.labelRank || 0) || (a.id < b.id ? -1 : 1));
+const meshDeck = {
+  browse(d) { const l = walk(); if (!l.length) return true; const c = G.selected(), i = c && c.id ? l.findIndex(n => n.id === c.id) : -1, n = l[(Math.max(i, d > 0 ? -1 : 0) + d + l.length * 8) % l.length]; G.select(n.id); M.update(); return true; },
+  open() { const c = G.selected(); if (c && c.id) openWho(c.id); return true; },
+  picked() { const c = G.selected(); if (!c || !c.id) return null; return c.id.startsWith("#") ? { thread: nm(c.id) } : { agent: c.id }; },
+  jog(d, n, shift) {
+    if (d === 2) { G.zoom(Math.exp(n * (shift ? 6 : 1) / 60)); return true; }
+    const a = winStart(), b = now(), c = (M.cut ?? b) + n * (shift ? 6 : 1) * (b - a) / 1500; stopPlay(); setCut(c >= b ? null : Math.max(a, c)); return true;
+  },
+  scrub(v) { const a = winStart(), b = now(); stopPlay(); setCut(v > .995 ? null : a + v * (b - a)); },
+  play() { rplay.click(); return true; },
+  fit() { G.refit(); M.update(); },
+  toggle() { M.active = !M.active; setPref("meshActive", M.active ? 1 : 0); rebuild(); },
+  window(v) { const i = Math.min(WINS.length - 1, Math.floor(v * WINS.length)), w = WINS[i][1]; if (w !== M.win) setWin(w); },
+};
 export default {
+  deck: meshDeck,
   id: "mesh", label: "Mesh", tab: true,
   enter(ctx) {
     M.update = ctx.update;

@@ -10,5 +10,6 @@
   "done_grace_s": 900,
   "keeper_every_s": 0,
   "keeper_idle_s": 1800,
-  "improve_every_s": 0
+  "improve_every_s": 0,
+  "auto_update": true
 }

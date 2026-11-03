@@ -17,7 +17,7 @@ import { color } from "../core/theme.js";
 import { h } from "../core/dom.js";
 
 const seeded = id => { let x = 2166136261; for (let i = 0; i < id.length; i++) x = Math.imul(x ^ id.charCodeAt(i), 16777619); return ((x >>> 0) % 1e6) / 1e6; };
-const reduced = matchMedia("(prefers-reduced-motion: reduce)");
+// No prefers-reduced-motion check here: the person wants the pulses, and a browser or Windows setting had silently turned them all off (2026-11-03).
 const rootZoom = () => parseFloat(getComputedStyle(document.documentElement).zoom) || 1;
 
 /** A status shape as an SVG path, so canvas (Path2D) and SVG draw the same marks. dot is a circle; ring is drawn hollow by the caller. */
@@ -269,7 +269,7 @@ export function createGraph({ onHover, onSelect, onOpen, onViewChange, margins =
       if (n.anchor) continue;
       const p = n.p, dim = dimN(n.id); let op = n.opacity ?? 1; if (dim) op = Math.min(op, .1); else if (n.id === focus) op = 1;
       c.globalAlpha = op;
-      if (n.live && !dim && !reduced.matches) { const w = (t / 1400 + seeded(n.id)) % 1; c.globalAlpha = (1 - w) * .55; c.strokeStyle = col["--good"]; c.lineWidth = 1.5; c.beginPath(); c.arc(p.x, p.y, n.dr + (3 + w * 9) * zoomOut, 0, 6.3); c.stroke(); c.globalAlpha = op; }
+      if (n.live && !dim) { const w = (t / 1400 + seeded(n.id)) % 1; c.globalAlpha = (1 - w) * .55; c.strokeStyle = col["--good"]; c.lineWidth = 1.5; c.beginPath(); c.arc(p.x, p.y, n.dr + (3 + w * 9) * zoomOut, 0, 6.3); c.stroke(); c.globalAlpha = op; }
       const fill = tone(n.tone);
       if (n.kind === "thread") {
         const r = n.dr; c.beginPath(); c.roundRect(p.x - r, p.y - r * RECT_H, r * 2, r * 2 * RECT_H, 3); c.fillStyle = fill; c.globalAlpha = op * .28; c.fill(); c.globalAlpha = op; c.strokeStyle = fill; c.lineWidth = 1.5; c.stroke();
@@ -317,7 +317,7 @@ export function createGraph({ onHover, onSelect, onOpen, onViewChange, margins =
     last = ts;
     if (G.alpha > 0) step();
     if (G.fit) fitView(.12);
-    const animated = G.pulses.length || G.ripples.length || (!reduced.matches && [...G.nodes.values()].some(n => n.live));
+    const animated = G.pulses.length || G.ripples.length || [...G.nodes.values()].some(n => n.live);
     if (animated || G.needs) { draw(); G.needs = false; }
   }
   const wake = () => { if (!running && cv.isConnected) { running = true; requestAnimationFrame(frame); } };
@@ -333,7 +333,8 @@ export function createGraph({ onHover, onSelect, onOpen, onViewChange, margins =
       plan(); measure();
       if (first && G.nodes.size > 8) { G.alpha = 1; for (let i = 0; i < 260; i++) step(); G.alpha = .15; }   // laid out before it had a size: settle again for the real stage
     }
-    if (G.fit) fitView(1); G.needs = true; wake();
+    // setting the canvas size just cleared it, and observers run after this frame's rAF: draw now or the blank canvas gets painted
+    if (G.fit) fitView(1); draw(); G.needs = false; wake();
   }
   new ResizeObserver(resize).observe(cv);
   addEventListener("themechange", readColors);
@@ -467,8 +468,8 @@ export function createGraph({ onHover, onSelect, onOpen, onViewChange, margins =
     refit() { G.fit = true; G.alpha = Math.max(G.alpha, .05); fitView(1); G.needs = true; wake(); onViewChange && onViewChange(); },
     relayout() { pos.clear(); G.nodes = new Map(); G.selEdge = null; G.fit = true; G.terr = null; G.planned = false; },
     nudge(a = 1) { G.alpha = Math.max(G.alpha, a); wake(); },
-    pulse(a, b, dur = 1100) { if (!reduced.matches) { G.pulses.push({ a, b, t0: performance.now(), dur }); wake(); } },
-    ripple(a) { if (!reduced.matches) { G.ripples.push({ a, t0: performance.now() }); wake(); } },
+    pulse(a, b, dur = 1100) { G.pulses.push({ a, b, t0: performance.now(), dur }); wake(); },
+    ripple(a) { G.ripples.push({ a, t0: performance.now() }); wake(); },
     zoom(f) { zoomAt(G.W / 2, G.H / 2, f); },
     touch() { G.needs = true; },
     wake,

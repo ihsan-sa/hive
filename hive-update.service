@@ -1,0 +1,10 @@
+[Unit]
+Description=Hive update to the newest release
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 %h/core/update.py --auto
+WorkingDirectory=%h
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+TimeoutStartSec=1800
+KillMode=process
