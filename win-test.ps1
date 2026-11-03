@@ -34,6 +34,10 @@ Step 'cut off from Windows, as the hive user'
 InU 'ls /mnt /mnt/c 2>&1 | head; ls /init; which powershell.exe cmd.exe; /mnt/c/Windows/System32/cmd.exe /c ver 2>&1 | head -2; mount -t drvfs C: /tmp/x 2>&1 | head -2; sudo -n true 2>&1 | head -1; ls /proc/sys/fs/binfmt_misc 2>&1'
 Step 'as root, what could an escalation reach'
 InR 'mkdir -p /tmp/x; mount -t drvfs C: /tmp/x 2>&1 | head -2; ls /tmp/x 2>/dev/null | head -3; umount /tmp/x 2>/dev/null; true'
+Step 'boundary: can the hive user reach Windows at all'
+InR 'ls -l /proc/sys/fs/binfmt_misc/; for f in /proc/sys/fs/binfmt_misc/WSL*; do echo "$f:"; cat "$f"; done; ls -la /run/WSL 2>&1 | head; ls -ld /init /mnt/c /mnt/wsl /mnt/wslg; ls -l /dev/vsock /dev/hv* /dev/dxg 2>&1; mkdir -p /tmp/x /home/hive/pe; mount -t drvfs C: /tmp/x; cp /tmp/x/Windows/System32/whoami.exe /tmp/x/Windows/System32/cmd.exe /home/hive/pe/; umount /tmp/x; chown -R hive /home/hive/pe; chmod +x /home/hive/pe/*; rmdir /tmp/x'
+InU 'echo "WSL_INTEROP=$WSL_INTEROP"; env | grep -i wsl; ls -la ~/pe; ~/pe/whoami.exe; echo "whoami.exe rc=$?"; ~/pe/cmd.exe /c ver; echo "cmd.exe rc=$?"; /init /bin/true; echo "init rc=$?"; for s in /run/WSL/*; do echo "sock $s"; WSL_INTEROP=$s ~/pe/whoami.exe; echo " via rc=$?"; done; unshare -Urm sh -c "mkdir -p /tmp/y; mount -t drvfs C: /tmp/y; echo userns-drvfs rc=\$?; ls /tmp/y | head -2; mount -t 9p drvfsa /tmp/y; echo userns-9p rc=\$?"; ls /mnt/wsl /mnt/wslg 2>&1 | head; python3 -c "import socket;s=socket.socket(40,1);print(\"vsock open\");s.settimeout(3);print(s.connect_ex((2,50000)))" 2>&1 | tail -2; which wslpath wslinfo; wslinfo --networking-mode 2>&1; rm -rf ~/pe.none'
+InR 'rm -rf /home/hive/pe'
 Step 'the app from Windows'
 $a = (& wsl.exe -d Hive -u hive --cd ~ -- bash -lc 'hive web 2>/dev/null' | Select-Object -First 1)
 "address shape: " + ($a -replace '#.*', '#...')
