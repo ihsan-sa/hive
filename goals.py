@@ -49,7 +49,7 @@ def focuses(text):
 
 def project_goals():
     out = []
-    for g in sorted(PROJECTS.glob("*/goals.md")):
+    for g in sorted(PROJECTS.glob("*/goals.md")):   # lowercase only: the GOALS.md of cloned repos (ece298a-pll, resume) are their own files, not Hive goals
         if g.parent.name.startswith("_"): continue
         try: txt = g.read_text(errors="replace")
         except OSError: continue
@@ -87,6 +87,8 @@ def goals(t=None):
     except OSError: pri = ""
     rows = []
     projects = project_goals(); pmeasure = {g["project"]: g["measure"] for g in projects}
+    for g in projects:  # a focus's measure comes from the project of the same name, else from one whose goals.md names its thread
+        for th in g["threads"]: pmeasure.setdefault(th, g["measure"])
     for f in focuses(pri):
         s = st.get(f["thread"], {}); rows.append({"kind": "focus", "name": f"{f['n']}. {f['title']}", "thread": f["thread"], "measure": pmeasure.get(f["thread"]), **state_row(s, f["thread"], open_asks, t)})
     for g in projects:

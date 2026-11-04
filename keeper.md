@@ -8,8 +8,8 @@ then stop. Do coordinating and small fixes yourself; hand anything bigger to an 
    `hive read --since 4h`, `hive stalled` (quiet threads nobody is on; a lead, not a verdict), and the
    `goals.md` of the active projects in ~/projects (skip the per-agent worktrees).
    Read `~/kb/priorities.md` first: it sets the order of work, and held threads stay held until it says otherwise.
-   **The person's asks, and what agents left:** `hive asks check` lists every ask of the person that nobody is moving, then the open asks
-   older than 3 days that busy threads hide (the register is `~/asks.jsonl`, filled hourly by `hive asks extract` from their posts and by
+   **The person's asks, and what agents left:** `hive asks check` lists every ask of the person that nobody is moving, the open asks
+   older than 3 days that busy threads hide, and the asks open with no owner for 6 h (a busy thread is not an owner) (the register is `~/asks.jsonl`, filled hourly by `hive asks extract` from their posts and by
    `hive asks leftovers` from what agents' own result posts say was left undone, kind `leftover`; `~/kb/direction.md` holds the person's
    standing directions). For each one: if the thread shows it
    was delivered, `hive asks done ID --evidence POST`; if it waits on the person or is held by priorities, mark it so with `--why`; if it is

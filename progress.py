@@ -248,10 +248,10 @@ def outcomes_in(t0, t1):
     except Exception: return {"outcomes_graded": 0, "outcome_delivered_pct": None, "outcomes_silent": 0, "outcomes_nothing": 0}
     return {k: s[k] for k in ("outcomes_graded", "outcome_delivered_pct", "outcomes_silent", "outcomes_nothing")}
 
-LOWER_IS_BETTER = {"fail_pct", "runs_reaped", "person_noticed_first", "person_reply_p50_s", "person_reply_p90_s", "watchdog_trips", "stalled_threads", "improvements_overdue", "projects_unmeasured", "asks_orphaned", "leftovers_orphaned", "asks_stale", "asks_oldest_open_d", "outcomes_silent", "outcomes_nothing"}
+LOWER_IS_BETTER = {"fail_pct", "runs_reaped", "person_noticed_first", "person_reply_p50_s", "person_reply_p90_s", "watchdog_trips", "stalled_threads", "improvements_overdue", "projects_unmeasured", "asks_orphaned", "leftovers_orphaned", "asks_stale", "asks_unowned", "leftovers_unowned", "asks_oldest_open_d", "outcomes_silent", "outcomes_nothing"}
 NEUTRAL = {"runs", "person_replies", "keeper_rounds", "improve_rounds", "core_commits", "rsi_rounds", "reverted", "spend_usd", "asks_open", "leftovers_open", "outcomes_graded"}  # activity and cost: context, not a score (the person: don't ration work for pace)
 HEADLINE = ["runs", "fail_pct", "runs_reaped", "person_noticed_first", "person_reply_p50_s", "person_reply_p90_s", "watchdog_trips", "stalled_threads", "improvements_landed", "improvements_judged", "held", "reverted",
-            "improvements_overdue", "asks_open", "leftovers_open", "asks_orphaned", "leftovers_orphaned", "asks_stale", "asks_done", "asks_oldest_open_d", "outcome_delivered_pct", "outcomes_silent", "outcomes_nothing", "outcomes_graded", "rsi_rounds", "rsi_wins", "keeper_rounds", "improve_rounds", "core_commits", "projects_unmeasured", "spend_usd"]
+            "improvements_overdue", "asks_open", "leftovers_open", "asks_orphaned", "leftovers_orphaned", "asks_stale", "asks_unowned", "leftovers_unowned", "asks_done", "asks_oldest_open_d", "outcome_delivered_pct", "outcomes_silent", "outcomes_nothing", "outcomes_graded", "rsi_rounds", "rsi_wins", "keeper_rounds", "improve_rounds", "core_commits", "projects_unmeasured", "spend_usd"]
 
 def scoreboard(since):
     log, posts, items = jsonl(LOG), jsonl(BOARD), ledger()
@@ -266,12 +266,12 @@ def scoreboard(since):
                projects_unmeasured=len(projects_unmeasured()), projects_unmeasured_names=projects_unmeasured(), at=iso(t1), since=since, **asks_numbers(iso(t1)))
     snaps = jsonl(SNAPS)
     older = next((s for s in reversed(snaps) if s.get("since") == since and s.get("at", "") < iso(t0)), None)
-    for k in ("stalled_threads", "improvements_overdue", "projects_unmeasured", "asks_open", "leftovers_open", "asks_orphaned", "leftovers_orphaned", "asks_stale", "asks_oldest_open_d"):
+    for k in ("stalled_threads", "improvements_overdue", "projects_unmeasured", "asks_open", "leftovers_open", "asks_orphaned", "leftovers_orphaned", "asks_stale", "asks_unowned", "leftovers_unowned", "asks_oldest_open_d"):
         if older and k in older: prev[k] = older[k]
     return cur, prev
 
 def asks_numbers(t1):
-    """From the asks register (core/asks.py): open and owned, orphaned (nobody moving them for 6 h), oldest open in days."""
+    """From the asks register (core/asks.py): open and owned, orphaned (nobody moving them for 6 h), unowned (open with no owner for 6 h, busy thread or not), oldest open in days."""
     try:
         spec = importlib.util.spec_from_file_location("asks", CORE / "asks.py"); asks = importlib.util.module_from_spec(spec); spec.loader.exec_module(asks)
         items = asks.ledger()
@@ -281,7 +281,9 @@ def asks_numbers(t1):
     t = dt.datetime.fromisoformat(t1)
     stale = getattr(asks, "stale_items", lambda items, t=None: [])(items, t=t)
     orph = [x[0] for x in asks.orphaned(items, t=t)]
+    un = getattr(asks, "unowned_items", lambda items, t=None: [])(items, t=t)
     return {"asks_open": len(o), "asks_orphaned": sum(1 for e in orph if e.get("kind") != "leftover"), "asks_stale": len(stale),
+            "asks_unowned": sum(1 for e in un if e.get("kind") != "leftover"), "leftovers_unowned": sum(1 for e in un if e.get("kind") == "leftover"),
             "leftovers_open": sum(1 for e in o if e.get("kind") == "leftover"), "leftovers_orphaned": sum(1 for e in orph if e.get("kind") == "leftover"),
             "asks_oldest_open_d": None if not oldest else round((t - dt.datetime.fromisoformat(oldest)).total_seconds() / 86400, 1)}
 
@@ -313,6 +315,7 @@ def text(cur, prev):
     if cur.get("asks_orphaned"): lines.append(f"Asks of the person nobody is moving: {cur['asks_orphaned']} (`hive asks check`)")
     if cur.get("leftovers_orphaned"): lines.append(f"Work agents left undone that nobody is moving: {cur['leftovers_orphaned']} (`hive asks check`, kind leftover)")
     if cur.get("asks_stale"): lines.append(f"Open asks over 3 days old in busy threads: {cur['asks_stale']} (`hive asks check`, stale section)")
+    if cur.get("asks_unowned") or cur.get("leftovers_unowned"): lines.append(f"Open asks with no owner for over 6 h in busy threads: {cur.get('asks_unowned', 0)} of the person, {cur.get('leftovers_unowned', 0)} left by agents (`hive asks check`, unowned section)")
     if cur.get("outcomes_silent") or cur.get("outcomes_nothing"): lines.append(f"Runs that were asked something and delivered nothing: {cur.get('outcomes_nothing', 0)} posted but did not deliver, {cur.get('outcomes_silent', 0)} silent though named (`hive outcomes list --grade nothing`)")
     if cur.get("projects_unmeasured_names"): lines.append(f"Projects whose goals.md names no measure: {', '.join(cur['projects_unmeasured_names'])}")
     w = worst(cur, prev)

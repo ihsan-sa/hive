@@ -121,6 +121,18 @@ def stale_items(items, t=None, after_s=STALE_S):
         if when and (t - dt.datetime.fromisoformat(when)).total_seconds() >= after_s: out.append(e)
     return sorted(out, key=lambda e: e.get("when") or e.get("at") or "")
 
+UNOWNED_S = 6 * 3600      # an ask open this long with no owner is nobody's, however busy its thread: posts there are about other things
+
+def unowned_items(items, t=None, after_s=UNOWNED_S):
+    """Entries still status open (never owned, held, answered or dropped) for after_s, oldest first. The moving rule hides these
+    whenever any agent posts in the thread (2026-11-04: 32 such asks, most in keeper, improve and feedback, with `check` saying nothing orphaned)."""
+    t = t or now(); out = []
+    for e in open_items(items):
+        if e.get("status") != "open" or e.get("owner") or e.get("kind") == "direction": continue
+        when = e.get("when") or e.get("at")
+        if when and (t - dt.datetime.fromisoformat(when)).total_seconds() >= after_s: out.append(e)
+    return sorted(out, key=lambda e: e.get("when") or e.get("at") or "")
+
 def fmt(e, idle=None):
     tag = e.get("status", "open") + (f" by {e['owner']}" if e.get("owner") else "")
     s = f"{e['id']}  {e.get('when', e.get('at', ''))[:16]}  [{tag}]  {e.get('ask', '')}  (thread {e.get('thread') or e.get('post')})"
@@ -139,7 +151,7 @@ def cmd_list(a):
 
 def cmd_check(a):
     items = ledger(); orph = orphaned(items, after_s=a.after * 3600)
-    if a.json: print(json.dumps([{**e, "last_move": m, "idle_h": round(i / 3600, 1)} for e, m, i in orph], indent=1, ensure_ascii=False)); return
+    if a.json: print(json.dumps([{**e, "last_move": m, "idle_h": round(i / 3600, 1)} for e, m, i in orph] + [{**e, "unowned": True} for e in unowned_items(items, after_s=a.unowned * 3600) if e["id"] not in {x[0]["id"] for x in orph}], indent=1, ensure_ascii=False)); return
     if not orph: print("nothing orphaned: every open ask has someone moving it")
     else:
         print(f"{len(orph)} open asks nobody is moving (no agent post in the thread, owner not running), longest idle first:")
@@ -151,6 +163,13 @@ def cmd_check(a):
         for e in stale[:a.limit]: print(fmt(e))
         if len(stale) > a.limit: print(f"  ... and {len(stale) - a.limit} more (--limit N)")
         print("Read each one's thread: `done --evidence POST` if it was delivered, else own it or start an agent on it; `hold|person|drop --why` if it waits or no longer applies.")
+    shown = {x[0]["id"] for x in orph} | {e["id"] for e in stale}
+    un = [e for e in unowned_items(items, after_s=a.unowned * 3600) if e["id"] not in shown]
+    if un:
+        print(f"\n{len(un)} open asks with no owner for over {a.unowned:g} h (their threads are busy, but nobody has taken the ask), oldest first:")
+        for e in un[:a.limit]: print(fmt(e))
+        if len(un) > a.limit: print(f"  ... and {len(un) - a.limit} more (--limit N)")
+        print("Take each one or give it an agent: `own ID --owner NAME` with a brief in its thread; `done --evidence POST` if the thread shows it delivered; `hold|person|drop --why` otherwise. An ask that stays open is dropped work.")
 
 def cmd_show(a):
     e = ledger().get(a.id)
@@ -460,7 +479,7 @@ def main(argv=None):
     p = sp.add_parser("leftovers", help="file what agents' posts say is left undone (kind leftover)"); p.add_argument("--all", action="store_true"); p.add_argument("--hours", type=float, default=24, help="first run: how far back")
     p.add_argument("--model", default="sonnet"); p.add_argument("--dry", action="store_true"); p.add_argument("--limit", type=int, default=0); p.set_defaults(f=cmd_leftovers)
     p = sp.add_parser("check"); p.add_argument("--json", action="store_true"); p.add_argument("--after", type=float, default=MOVING_S / 3600, help="hours idle")
-    p.add_argument("--stale", type=float, default=STALE_S / 86400, help="days open after which an ask is listed even in a busy thread"); p.add_argument("--limit", type=int, default=15); p.set_defaults(f=cmd_check)
+    p.add_argument("--stale", type=float, default=STALE_S / 86400, help="days open after which an ask is listed even in a busy thread"); p.add_argument("--unowned", type=float, default=UNOWNED_S / 3600, help="hours open with no owner after which an ask is listed even in a busy thread"); p.add_argument("--limit", type=int, default=15); p.set_defaults(f=cmd_check)
     p = sp.add_parser("show"); p.add_argument("id"); p.set_defaults(f=cmd_show)
     p = sp.add_parser("add"); p.add_argument("--post", required=True); p.add_argument("--ask", required=True); p.add_argument("--kind", default="ask", choices=("ask", "direction")); p.add_argument("--thread"); p.set_defaults(f=cmd_add)
     p = sp.add_parser("own"); p.add_argument("id"); p.add_argument("--owner"); p.set_defaults(f=cmd_own)

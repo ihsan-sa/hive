@@ -492,6 +492,7 @@ def running(st=None):
             f.unlink(); children.pop(r["name"], None)
             log(event="end", name=r["name"], session=r["session"], pid=r["pid"], exit=c.returncode if c else None)
             hit = limit_hit(r.get("out"))
+            if not hit and auth_hit(r.get("out")) is None: relay_final(r, c.returncode if c else None)
             if st is not None and st.get("launch_hold") and r.get("harness", "claude-code") == "claude-code" and wrote_json(r.get("out")):
                 st.pop("launch_hold"); log(event="launch_ok", name=r["name"])
                 post("Claude Code starts agents again; the posts that waited are being handled.", ["person"])
@@ -648,6 +649,53 @@ def posted_since(name, at):
             if p.get("from") == name and dt.datetime.fromisoformat(p["at"]).timestamp() >= since: return True
     except Exception: return True  # can't tell: stay quiet
     return False
+
+FRESH_WORD = re.compile(r"@(new|claude|opus|sonnet|haiku|fable|astra|codex|free)\b", re.I)
+RELAY_MAX = 2500
+
+def final_answer(out):
+    """The text of a run's last clean result, or "". Its final chat message: what the model wrote as its answer."""
+    result = None
+    try:
+        for line in Path(out).read_text(errors="replace").splitlines()[-400:]:
+            try: e = json.loads(line)
+            except ValueError: continue
+            if isinstance(e, dict) and e.get("type") == "result": result = e
+    except (OSError, TypeError): return ""
+    if result is None or result.get("is_error"): return ""
+    return str(result.get("result") or "").strip()
+
+def woke_posts(r):
+    """The board posts that started this run: the first one, and any more it was restarted for."""
+    ids = list(dict.fromkeys([r.get("post")] + list(r.get("woke") or [])))
+    found = {}
+    try:
+        for line in BOARD.read_text().splitlines()[-4000:]:
+            p = json.loads(line)
+            if p.get("id") in ids: found[p["id"]] = p
+    except Exception: pass
+    return [found[i] for i in ids if i in found]
+
+def relay_final(r, returncode):
+    """A run that was named (or woken by the person) and ended cleanly without posting, with a final answer in its
+    output: post that answer to the waking post's thread in the agent's name, marked as relayed. 10 of 103 grades on
+    2026-11-04 were "silent": each time the agent had written its answer as its last chat message and never run
+    hive post (a35f3 three times to a2bf3, a8779 to a16c1, a3d35 to the rootwarden), so the asker got nothing.
+    Mentions in it go in backticks: words it wrote about must not start agents now. Returns the post, or None."""
+    if returncode not in (0, None) or r.get("thread") in ("starter",) or posted_since(r["name"], r.get("at", "")): return None
+    posts = woke_posts(r)
+    named = [p for p in posts if r["name"] in mentions(p) or FRESH_WORD.search(CODE.sub(" ", str(p.get("text", "")))) or str(p.get("from", "")).lower() == "person"]
+    if not named: return None
+    text = final_answer(r.get("out"))
+    if not text: return None
+    text = re.sub(r"(?<![\w.`])@([a-z0-9][a-z0-9_-]*)", lambda m: f"`{m.group(0)}`", text)  # a name in backticks is written about, not called
+    if len(text) > RELAY_MAX: text = text[:RELAY_MAX] + " … (cut; the whole answer is in the run's output, " + Path(r.get("out", "")).name + ")"
+    p = {"id": dt.datetime.now().strftime("%m%d%H%M") + secrets.token_hex(2), "at": now(), "from": r["name"], "to": [],
+         "thread": named[0].get("thread") or r.get("thread"), "via": "relay", "reply_to": named[0]["id"],
+         "text": "(This run ended without posting, so the starter relays its final answer; what it says was not checked by anyone.)\n\n" + text}
+    with BOARD.open("a") as f: f.write(json.dumps(p) + "\n")
+    log(event="relayed", name=r["name"], session=r.get("session"), post=p["id"], to=named[0]["id"])
+    return p
 
 def carried(login, weekly, five, resets):
     """After a failed read: (weekly pct, 5-hour pct, resets) from the last good read, each pct only until the reset that
