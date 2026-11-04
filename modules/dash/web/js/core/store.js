@@ -52,7 +52,7 @@ export async function post(path, body) {
 
 // ---- ingest ----
 const ledgerAdd = (r, words) => { r.lc = words.join(" ").toLowerCase(); S.ledger.push(r); };
-const LOGTEXT = { delivered: "had queued posts handed to it mid-run", kill_dropped: "had its queued wakes dropped after a kill", paced: "start was paced", provider_held: "waits for its provider", fallback_held: "waits: no fallback has room", unknown_mention: "was mentioned, but nobody has that name", free_spawn_ignored: "tried to start agents from a free model; ignored", reaped: "was ended by the starter after going quiet", moved: "moved to another login", login_rejected: "hit a rejected login", helper: "started as a helper: the agent asked was busy" };
+const LOGTEXT = { delivered: "had queued posts handed to it mid-run", kill_dropped: "had its queued wakes dropped after a kill", model_set: "was moved to another model from its panel", paced: "start was paced", provider_held: "waits for its provider", fallback_held: "waits: no fallback has room", unknown_mention: "was mentioned, but nobody has that name", free_spawn_ignored: "tried to start agents from a free model; ignored", reaped: "was ended by the starter after going quiet", moved: "moved to another login", login_rejected: "hit a rejected login", helper: "started as a helper: the agent asked was busy" };
 function logRow(e, t) {
   const k = e.event, n = e.name, a = { a: n };
   switch (k) {

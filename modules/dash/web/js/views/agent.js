@@ -2,7 +2,7 @@
 // its recent steps, its threads, what it changed, who it talks to, its sessions and posts.
 // agentPage(name) is the whole page; the side panel (ui/panel.js) draws the same thing in a narrower container.
 import { h } from "../core/dom.js";
-import { S, OUTSIDE, SYS, jget, loadAgentCosts } from "../core/store.js";
+import { S, OUTSIDE, SYS, jget, loadAgentCosts, post, poll, can } from "../core/store.js";
 import { agentCard, agentSpend, agentState, agentStatus, isAgent, isRunning, isWarden, modelName, WARDEN_HINT, sEnd, displayText } from "../core/model.js";
 import { DAY, HOUR, MIN, ago, dur, mdPlain, money, now, pct, plural, short, stamp, toks } from "../core/format.js";
 import { threadHref } from "../core/router.js";
@@ -151,6 +151,28 @@ function changed(n, D, host) {
   return parts.length ? h("div", { class: "stack" }, parts) : empty("Nothing it edited, committed or posted shows in its logs.");
 }
 
+// ---- the Model row as a menu: the pick holds from the agent's next run, like a post with --model (the person, 2026-11-04) ----
+const PICKS = [["opus", "Opus"], ["sonnet", "Sonnet"], ["haiku", "Haiku"], ["fable", "Fable"], ["astra", "Astra", "codex:gpt-6-astra"]];
+const MP = { busy: null, err: null };
+function modelPicker(n, row, L) {
+  const ss = S.sessions.filter(s => s.name === n), asked = (ss[ss.length - 1] || {}).model || "";
+  const next = ((S.live && S.live.chosen) || {})[n] || "", word = (PICKS.find(([w, , id]) => (id || w) === next) || [])[0] || "";
+  const moved = next && next !== asked, label = moved ? (PICKS.find(([w]) => w === word) || [, next])[1] : null;
+  const pick = async e => {
+    const m = e.target.value; if (!m) return;
+    MP.busy = n; MP.err = null;
+    try { await post("/api/agent-model", { name: n, model: m }); } catch (x) { MP.err = x.message; }
+    MP.busy = null; await poll();
+  };
+  return h("span", { class: "mpick" },
+    moved ? h("s", { class: "meta", title: "the model its current or last run used" }, row.v) : row.v,
+    h("select", { class: "cp-model", "aria-label": `Model for ${n}'s next run`, disabled: MP.busy === n,
+      title: L ? `${n} is running on ${row.v}. Pick another and it moves to it from its next run (it can't switch mid-run), and stays there.` : `${n} wakes on ${moved ? label : row.v}. Pick another and its next run starts on that one, and stays there. Nothing wakes it now.`,
+      onchange: pick },
+      [["", moved ? `→ ${label} next run` : "Change…"], ...PICKS.map(([w, l]) => [w, l])].map(([v, l]) => h("option", { value: v, selected: v === "" }, l))),
+    MP.err ? h("span", { class: "meta", role: "alert" }, " " + MP.err) : null);
+}
+
 /** The whole page for one agent. Used by the view and by the panel. */
 export function agentPage(n, host = "page") {
   if (!S.live) return empty("Reading…", { kind: "loading" });
@@ -168,7 +190,7 @@ export function agentPage(n, host = "page") {
       tone: L && agentState(L).key === "stuck" ? "bad" : null,
       actions: [button("All their posts", null, { href: threadHref("@" + n), size: "s" }), L ? threadRef(L.thread) : null, L ? killButton(n) : null],
       meta: [st.key === "outside" ? null : statusLabel(st.key, st.label || null, { live: isRunning(n) }), ...line],
-      after: [nowBlock(n, L), defs(agentCard(n))],
+      after: [nowBlock(n, L), defs(agentCard(n).map(r => r.k === "Model" && isAgent(n) && !isWarden(n) && can("post") ? { ...r, v: modelPicker(n, r, L) } : r))],
     }),
     sections: [
       section({ title: "In numbers" }, stats([

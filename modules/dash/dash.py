@@ -457,6 +457,24 @@ def has_name(pid, name):
     except OSError: return False
 
 
+def chosen_models(st):
+    """name -> the model each agent wakes on next: the starter's st["chosen"], with picks from the agent panel it hasn't read yet on top."""
+    out = {n: r["model"] for n, r in (st.get("chosen") or {}).items() if isinstance(r, dict) and isinstance(r.get("model"), str)}
+    for f in (STATE / "model-set").glob("*.json"):
+        try: out[f.stem] = json.loads(f.read_text())["model"]
+        except (OSError, ValueError, KeyError, TypeError): pass
+    return out
+
+def set_agent_model(name, model):
+    """The agent panel's Model menu: `name` wakes on `model` from its next run and stays on it, as if a post had passed --model
+    (the person, 2026-11-04, thread feedback). A drop file the starter reads on its next tick (apply_model_sets in starter.py),
+    so no post is made and nothing wakes the agent. A run under way keeps its model: a harness can't switch mid-run."""
+    if not isinstance(name, str) or not AGENT_CODE.fullmatch(name): raise ValueError("that isn't an agent's name")
+    if model not in PICK_MODELS: raise ValueError("pick one of " + ", ".join(PICK_MODELS))
+    d = STATE / "model-set"; d.mkdir(parents=True, exist_ok=True)
+    tmp = d / f".{name}.tmp"; tmp.write_text(json.dumps({"model": PICK_MODELS[model], "at": time.time()})); tmp.replace(d / f"{name}.json")
+    return {"ok": True, "model": PICK_MODELS[model]}
+
 def run_to_kill(name):
     """The record of `name`'s run if it really is a live run of that agent, else None. ~/run/<name>.json says which pid; the
     process itself has to agree, so a stale file or a reused pid can't aim this at anything else."""
@@ -594,7 +612,7 @@ def live():
     limit_until = st.get("limit_until")
     if limit_until and limit_until < time.time(): limit_until = None
     return {"now": time.time(), "agents": agents, "jobs": {"running": sum(j["running"] for j in jobs.values()), "queued": sum(j["queued"] for j in jobs.values())}, "pending": pending, "usage": usage, "logins": logins(),
-            "limit_until": limit_until, "priorities": priorities()}
+            "limit_until": limit_until, "chosen": chosen_models(st), "priorities": priorities()}
 
 
 _prio = (None, {})
@@ -1474,7 +1492,7 @@ GET_CAP = {"/api/live": "read", "/api/board": "read", "/api/log": "read", "/api/
            "/api/config": "config", "/api/modules": "modules", "/api/signin": "logins", "/api/plans": "plans", "/api/secrets": "secrets",
            "/api/settings": "config", "/api/update": "config", "/api/signin-codex": "logins", "/api/design": "logins", "/api/brand/logo": "read",
            "/api/kb/home": "files", "/api/kb/open": "files", "/api/kb/search": "files", "/api/kb/raw": "files", "/api/kb/map": "files", "/api/kb/history": "files", "/api/progress": "read"}
-POST_CAP = {"/api/kill": "stop", "/api/tier": "tier", "/api/login-pause": "limits", "/api/login-limit": "limits", "/api/provider-limit": "limits",
+POST_CAP = {"/api/kill": "stop", "/api/tier": "tier", "/api/agent-model": "post", "/api/login-pause": "limits", "/api/login-limit": "limits", "/api/provider-limit": "limits",
             "/api/post": "post", "/api/thread-meta": "post", "/api/feedback": "post", "/api/issue-link": "post", "/api/update": "config", "/api/share-copy": "config", "/api/draft": "config", "/api/upload": "post", "/api/inbox-read": "post", "/api/config": "config", "/api/starter": "config",
             "/api/module": "modules", "/api/signin": "logins", "/api/signin/code": "logins", "/api/signin/cancel": "logins", "/api/plan": "plans", "/api/secret": "secrets",
             "/api/signin-codex": "logins", "/api/account-key": "logins", "/api/design": "logins", "/api/brand": "config", "/api/brand/logo": "config"}
@@ -3732,7 +3750,7 @@ def serve(port):
             if not isinstance(d, dict): return self.send_error(400)
             num = lambda v: v is None or (isinstance(v, (int, float)) and not isinstance(v, bool))
             J = "application/json"
-            if u.path in ("/api/post", "/api/thread-meta", "/api/feedback", "/api/issue-link", "/api/update", "/api/inbox-read", "/api/config", "/api/starter", "/api/module", "/api/signin", "/api/signin/code", "/api/signin/cancel", "/api/access", "/api/plan", "/api/secret", "/api/settings", "/api/share-copy", "/api/draft", "/api/signin-codex", "/api/account-key", "/api/design", "/api/brand"):
+            if u.path in ("/api/post", "/api/thread-meta", "/api/feedback", "/api/issue-link", "/api/update", "/api/inbox-read", "/api/agent-model", "/api/config", "/api/starter", "/api/module", "/api/signin", "/api/signin/code", "/api/signin/cancel", "/api/access", "/api/plan", "/api/secret", "/api/settings", "/api/share-copy", "/api/draft", "/api/signin-codex", "/api/account-key", "/api/design", "/api/brand"):
                 try:
                     if u.path == "/api/post": res = person_post(d.get("text"), d.get("thread"), d.get("reply_to"), d.get("files"), signer=self.signer, limited="config" not in self.can, simple=d.get("simple") is True, model=d.get("model"))
                     elif u.path == "/api/thread-meta": res = set_thread_meta(d)
@@ -3741,6 +3759,7 @@ def serve(port):
                     elif u.path == "/api/update": res = update_do(d.get("do"))
                     elif u.path == "/api/plan": res = save_plan(d.get("name"), d.get("text"), d.get("version"), bool(d.get("start")), self.signer)
                     elif u.path == "/api/secret": res = set_secret(d.get("name"), d.get("value"), self.signer, delete=bool(d.get("delete")))
+                    elif u.path == "/api/agent-model": res = set_agent_model(d.get("name"), d.get("model"))
                     elif u.path == "/api/inbox-read": res = {"marked": mark_read(None if d.get("all") else [str(i) for i in d.get("ids") or []])}
                     elif u.path == "/api/config": res = set_config(d)
                     elif u.path == "/api/brand": res = set_brand(d)
