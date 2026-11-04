@@ -45,7 +45,7 @@ export function inlineMath(tex, src) {
 /** A display equation, with Copy LaTeX and Ask about this. */
 export function equation(tex) {
   const lz = h("rc-lazy", { class: "rc-eq-b", "data-kind": "tex", "data-mode": "display" }, tex); lz._tex = tex;
-  return h("div", { class: "rc-eq", "data-own": "", "data-sig": sigOf(tex) }, lz,
+  return h("div", { class: "rc-eq", "data-own": "", "data-sig": sigOf(tex), tabindex: "-1" }, lz,
     h("span", { class: "rc-eq-a" },
       h("button", { type: "button", class: "rc-t", "aria-label": "Copy this equation's LaTeX", onclick: (e, b) => {
         copyTex(b, tex); b.textContent = "Copied"; setTimeout(() => { b.textContent = "Copy LaTeX"; }, 1400);

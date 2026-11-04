@@ -115,7 +115,7 @@ export function codeBlock(lang, title, code) {
     pre.querySelector(":scope>code").replaceWith(h("code", null));
     paint(pre);
   } }, huge ? `Show all ${all.length} lines` : `Show ${all.length - shown.length} more lines`) : null;
-  return h("div", { class: "rc-block", "data-block": "code", "data-own": "", "data-sig": sig + (title || "") },
+  return h("div", { class: "rc-block", "data-block": "code", "data-own": "", "data-sig": sig + (title || ""), tabindex: "-1" },
     h("div", { class: "rc-bar" },
       lang ? h("span", { class: "rc-lang" }, lang) : null,
       title ? h("span", { class: "rc-ttl" }, title) : null,
