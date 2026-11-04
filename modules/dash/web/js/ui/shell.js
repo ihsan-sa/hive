@@ -66,7 +66,7 @@ function simpleBits() {
 /** The week used, as a small ring: two circles, the second dashed to the share used. */
 const ring = pct => s("svg", { class: "top-ring", viewBox: "0 0 16 16", "aria-hidden": "true" },
   s("circle", { cx: 8, cy: 8, r: 6, fill: "none", stroke: "var(--line)", "stroke-width": 2.5 }),
-  s("circle", { cx: 8, cy: 8, r: 6, fill: "none", stroke: pct <= 10 ? "var(--bad)" : "var(--accent)", "stroke-width": 2.5, "stroke-linecap": "round",
+  s("circle", { cx: 8, cy: 8, r: 6, fill: "none", stroke: pct <= 10 ? "var(--bad)" : pct <= 25 ? "var(--warn)" : "var(--data)", "stroke-width": 2.5, "stroke-linecap": "round",
     "stroke-dasharray": `${(Math.min(100, Math.max(0, pct)) * 0.377).toFixed(1)} 37.7`, transform: "rotate(-90 8 8)" }));
 /** A pill that opens a page: the whole pill is the link (a stretched anchor), so the pill keeps the bar's own look. */
 const goPill = (to, say, attrs, ...kids) => h("span", { ...attrs, class: "top-pill" }, ...kids, h("a", { class: "top-pill-go", href: href(to), "aria-label": say, title: attrs.title || say }));
@@ -78,7 +78,7 @@ function appBits() {
   return [
     S.failed ? h("span", { "data-tone": "bad" }, statusDot("stuck"), "Lost contact, last data " + ago(S.fresh)) : null,
     stop ? goPill(stop.why === "off" ? "settings" : "usage", stop.why === "off" ? "Settings" : "Usage", { "data-tone": "bad", title: stop.why === "off" ? "The Hive isn't running" : "Every account is past its usage line" }, statusDot("limited"), stop.why === "off" ? "Not running" : "Stopped")
-      : goPill("now", "Agents: what each is doing", { title: "agents running now: open Agents", "data-tone": n ? "good" : null }, statusDot("working", { live: n > 0 }), h("b", null, String(n)), " working"),
+      : goPill("now", "Agents: what each is doing", { title: "agents running now: open Agents", "data-tone": n ? "good" : null }, statusDot("working", { live: n > 0 }), n ? [h("b", null, String(n)), n === 1 ? " agent working" : " agents working"] : "No agents working"),
     // What's left on the accounts the hive can run on now (the person, 2026-11-04), weighted by plan; and the 5-hour window when one is open.
     act ? goPill("usage", "Usage", { title: `Left on the accounts in use now (${names}): ${left}% of this week` + (act.five ? `, ${left5}% of the 5-hour window` : "") + (out != null ? `. At ${ro.how === "week" ? "this week's average" : "the last 6 hours'"} pace it runs out in about ${dur(out)}, ${clock(now() + out)}` : ro && ro.lasts ? ". At this pace it lasts until the week resets" : "") + (tot ? `. All accounts together: ${Math.max(0, 100 - Math.round(tot.pct))}% left` : "") + ". Open Usage",
         "data-tone": left <= 10 || (left5 != null && left5 <= 10) ? "bad" : null },
@@ -125,32 +125,34 @@ export function topBar({ views, current, update, nav }) {
   const simple = simpleOn();
   const mode = S.app.mode, route = simple || S.app.route !== "outside" ? null : mode === "full" ? `full, ${Math.ceil(S.app.full_left / 60)} min` : mode ? "limited" : can("post") ? "outside access" : "read-only";
   const th = getTheme(), app = S.app.app && nav;
+  // During the walkthrough only Settings (for Accounts) and Help: no tabs to wander off to before setup is finished.
+  const setup = app && S.app.settings && S.app.settings.setup_done === false;
   NAV.update = update;
   let tabs, row = null, icons = [];
   if (!app) tabs = views.filter(on).map(v => tabLink(v, current));
   else {
     const L = layout(views, nav, on, current);
-    row = L.row;
+    row = setup ? null : L.row;
     const inMore = L.more.find(v => v.id === current);
     const tools = L.more.map(v => h("a", { class: "more-i", role: "menuitem", href: href(v.id), "data-key": v.id, "aria-current": v.id === current ? "page" : null, title: v.about ? (typeof v.about === "function" ? v.about() : v.about) : null },
       h("b", null, lab(v)), v.about ? h("span", null, typeof v.about === "function" ? v.about() : v.about) : null));
     const help = [
       h("a", { class: "more-i", role: "menuitem", href: HELP, target: "_blank", rel: "noopener", "data-key": "help" }, h("b", null, "User guide")),
-      simple ? null : h("button", { type: "button", class: "more-i", role: "menuitem", "data-key": "tour", onclick: () => { NAV.open = false; update(); startTour(); } }, h("b", null, "Take the tour")),
+      h("button", { type: "button", class: "more-i", role: "menuitem", "data-key": "tour", onclick: () => { NAV.open = false; update(); startTour(); } }, h("b", null, "Take the tour")),
       canFeedback() ? h("button", { type: "button", class: "more-i", role: "menuitem", "data-key": "feedback", onclick: () => { NAV.open = false; update(); openFeedback(); } }, h("b", null, "Send feedback"), h("span", null, FEEDBACK_KEY)) : null,
       h("button", { type: "button", class: "more-i", role: "menuitem", "data-key": "simple", onclick: () => { NAV.open = false; setSimple(!simple); update(); } },
         h("b", null, simple ? "Show everything" : "Simple view"), h("span", null, simple ? "all the tabs and what's going on behind the scenes" : "just the chat")),
     ];
-    tabs = L.main.map(v => tabLink(v, L.active));
-    icons = [...L.icons.map(v => { const b = v.badge ? v.badge() : null;
+    tabs = setup ? [] : L.main.map(v => tabLink(v, L.active));
+    icons = [...L.icons.filter(v => !setup || v.id === "settings").map(v => { const b = v.badge ? v.badge() : null;
         return h("a", { class: "btn", "data-kind": "icon", href: href(v.id), "data-key": v.id, "aria-label": lab(v), title: lab(v), "aria-current": v.id === L.active || v.id === current ? "page" : null },
           icon(v.icon || v.id), b ? h("span", { class: "more-dot", "aria-label": `${b} for you` }) : null); }),
       h("div", { class: "more", "data-key": "more" },
         h("button", { type: "button", class: "btn", "data-kind": "icon", "aria-label": "More views", title: inMore ? `More views (${lab(inMore)} is open)` : "More views", "aria-expanded": String(NAV.open), "aria-haspopup": "true", "aria-current": inMore ? "page" : null, onclick: () => { NAV.open = !NAV.open; update(); } },
           icon("more"), inMore ? h("span", { class: "more-dot", "aria-hidden": "true" }) : null),
-        NAV.open ? h("div", { class: "more-m", role: "menu" }, tools.length ? moreHead("Views") : null, tools, tools.length ? moreHead("Help") : null, help) : null)];
+        NAV.open ? h("div", { class: "more-m", role: "menu" }, tools.length && !setup ? moreHead("Views") : null, setup ? null : tools, tools.length ? moreHead("Help") : null, help) : null)];
   }
-  const bits = app ? (simple ? simpleBits : appBits) : statusBits;
+  const bits = setup ? () => null : app ? (simple ? simpleBits : appBits) : statusBits;
   return h("div", null,
     h("div", { class: "top-in" },
       h("a", { class: "brand", href: app ? "#comms" : "#now" }, brandMark()),

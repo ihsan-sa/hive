@@ -19,7 +19,7 @@ SYSTEM = ("/usr", "/bin", "/sbin", "/lib", "/lib32", "/lib64", "/libx32", "/etc"
 READ_ONLY = ("core", "modules", "board.jsonl", "log.jsonl", "run", "sessions", "files", "settings.json", ".local/bin", ".local/share/claude",
              ".hive/starter.json", ".hive/usage.json", ".hive/usage_5h.json", ".hive/usage_resets.json", ".hive/paused.json",
              ".hive/login_limits.json", ".hive/provider_limits.json", ".hive/providers.json", ".hive/done", ".hive/killed")
-WRITABLE = ("projects", "kb")
+WRITABLE = ("projects", "kb", "reports/drafts")  # reports/drafts: hive-report contribute; approvals stay in reports/, out of reach
 LOGIN_READ_ONLY = ("settings.json", "CLAUDE.md", "skills", "agents", "commands", "plugins", "hooks")  # what a Claude run outside would load
 ENV_KEEP = {"PATH", "LANG", "LANGUAGE", "LC_ALL", "LC_CTYPE", "TERM", "TZ", "USER", "LOGNAME", "COLORTERM", "HIVE_NAME", "HIVE_DOOR", "CLAUDE_CONFIG_DIR", "CODEX_HOME", "KIMI_CODE_HOME",
             "ENABLE_CLAUDEAI_MCP_SERVERS", "CLAUDE_CODE_AUTO_COMPACT_WINDOW", "CLAUDE_EFFORT", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "CLAUDE_CODE_OAUTH_TOKEN"}

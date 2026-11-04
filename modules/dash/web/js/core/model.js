@@ -224,7 +224,7 @@ export function nextBack(U, t = now()) {
 }
 // ---- conversations: what a thread is called, who is in it, what state it is in ----
 const MENTIONS = /^(?:[ \t]*@[\w.-]+[,:]?[ \t]+)+/;
-const SOURCE = /^\((?:from ([^,)\n]{1,80}), )?(web app|in Slack|via the box)(?:, replying to ".*?"|, [^)\n]*)?\)[ \t]*/;
+const SOURCE = /^\((?:from ([^,)\n]{1,80}), )?(web app|in Slack|via the box)(?:, replying to ".*?"|, (?:[^()\n]|\([^()\n]*\))*)?\)[ \t]*/;
 const SOURCE_LABEL = { "web app": "Web", "in Slack": "Slack", "via the box": "Box" };
 /** What the person typed, without the routing the server writes into the text ("@a7c31 ", "reply to message <id>: ").
  *  The board keeps the text as it is; this is for display only. */

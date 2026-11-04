@@ -222,7 +222,7 @@ old_preflight() {
   # The new Hive refuses an account with other things in it, because its agents would have full rights to them.
   if [ "$1" = "$OLD_A" ] && [ "$2" = "$OLD_HM" ]; then
     skip=""; [ -z "$OLD_RENAME" ] || skip=${OLD_ROOT##*/}
-    other=$(as_old "$OLD_A" "find $(q "$OLD_HM") -mindepth 1 -maxdepth 1 ! -name '.*' ! -name core ! -name kb ! -name projects ! -name run ! -name sessions ! -name board.jsonl ! -name log.jsonl ! -name modules ! -name files ! -name settings.json ! -name 'hive-old-*' ! -name $(q "${skip:-.}") | head -n 3")
+    other=$(as_old "$OLD_A" "find $(q "$OLD_HM") -mindepth 1 -maxdepth 1 ! -name '.*' ! -name core ! -name kb ! -name projects ! -name run ! -name sessions ! -name board.jsonl ! -name log.jsonl ! -name reports ! -name asks.jsonl ! -name outcomes.jsonl ! -name progress.jsonl ! -name improvements.jsonl ! -name modules ! -name files ! -name settings.json ! -name 'hive-old-*' ! -name $(q "${skip:-.}") | head -n 3")
     if [ -n "$other" ] || as_old "$OLD_A" "test -e $(q "$OLD_HM/.ssh")"; then
       die "the old Hive is in the account $OLD_A, which also has ~/.ssh or other files, and the new Hive's agents would have full rights to them. Nothing changed. Put the new Hive in its own user and bring the old one's things across:
   HIVE_USER=newhive HIVE_OLD_USER=$OLD_A  in front of the sh of the same line"

@@ -161,7 +161,37 @@ const SHARES = [
   ["failures", "Failure reports and a daily check-in", "What failed, when and why, and one small message a day saying this Hive is running."],
   ["usage", "Usage reports", "Counts of runs, restarts and limit hits."],
   ["everything", "Everything, when I say so", "Separate from the reports above: a scrubbed copy of recent logs and of the board, and that includes your chats. Ticking this sends nothing: it goes only when you press Send a copy now, and each one is kept in reports/bundles in your Hive folder."],
+  ["github", "Open GitHub issues about failures from my GitHub login. I'll review each fix before it's sent.", "Off by default. Failures go to the Hive project as public issues from your own GitHub account, at most 3 a day, one per kind of failure. When an agent drafts a fix it waits here: nothing of it goes until you read it and press Send."],
 ];
+/** Where GitHub issues stand here: no gh, not signed in, or ready. Null when the report module can't say. */
+function ghLine(g) {
+  if (!g) return null;
+  if (!g.gh) return sayMsg("GitHub's command line tool, gh, isn't installed, so failures go to the makers' receiver instead.", "warn");
+  if (!g.ready) return sayMsg("gh isn't signed in to GitHub, so failures go to the makers' receiver instead. Run gh auth login in a terminal to sign in.", "warn");
+  return sayMsg("gh is signed in. Issues go to " + (g.repo || "the Hive project") + ".", "good");
+}
+async function draftDo(id, act, update) {
+  if (act === "send" && !confirm("Send this fix to GitHub from your account, exactly as shown? It will be public.")) return;
+  P.draftBusy = id; P.draftSay = null; update();
+  try { P.page = await post("/api/draft", { id, do: act }); P.draftSay = { text: act === "send" ? "Approved. It goes on the next report run, within a few hours." : "Discarded. Nothing was sent.", tone: "good" }; }
+  catch (e) { P.draftSay = { text: e.message, tone: "warn" }; }
+  finally { P.draftBusy = null; update(); }
+}
+/** Every fix an agent drafted, exactly as it would go: title, text and diff. Only Send here approves one. */
+function draftsPart(g, update) {
+  const ds = (g && g.drafts) || [];
+  if (!ds.length) return null;
+  return h("div", { class: "drafts", "data-key": "drafts" },
+    h("p", null, ds.length === 1 ? "An agent drafted a fix. Read it: this is exactly what would go." : `Agents drafted ${ds.length} fixes. Read each: this is exactly what would go.`),
+    ds.map(d => h("div", { class: "card draft", "data-key": "draft-" + d.id },
+      h("p", null, h("b", null, d.title)),
+      h("p", { class: "field-h" }, (d.how === "pull request" ? "Goes as a pull request from your fork" : "Goes as an issue" + (d.patch ? " with the patch" : "")) + (d.at ? " · drafted " + d.at : "") + (d.approved ? " · approved, waiting to go" : "")),
+      h("pre", { class: "draft-text" }, d.text),
+      d.patch ? h("pre", { class: "draft-diff" }, d.patch) : null,
+      local() ? h("div", { class: "frow" },
+        d.approved ? null : button("Send", () => draftDo(d.id, "send", update), { size: "s", busy: P.draftBusy === d.id, disabled: !shown().settings.share.github }),
+        button("Discard", () => draftDo(d.id, "discard", update), { kind: "quiet", size: "s" })) : null)));
+}
 async function sendCopy(update) {
   if (!confirm("Send the makers a scrubbed copy of your recent logs and board, chats included? They keep it for 30 days.")) return;
   P.copyBusy = true; P.copySay = null; update();
@@ -179,6 +209,9 @@ export function sharePart(update) {
       h("span", null, label, h("span", { class: "field-h" }, hint))))),
     on.everything && local() ? h("div", { class: "frow", "data-key": "send-copy" }, button("Send a copy now", () => sendCopy(update), { kind: "quiet", size: "s", busy: P.copyBusy })) : null,
     P.copySay ? sayMsg(P.copySay.text, P.copySay.tone) : null,
+    on.github ? ghLine(pg.github) : null,
+    draftsPart(pg.github, update),
+    P.draftSay ? sayMsg(P.draftSay.text, P.draftSay.tone) : null,
     h("p", { class: "field-h" }, "Nothing is sent until you finish setup. You can change any of this in Settings at any time."),
     saveLine("share"), localOnly(), saveErr()];
 }
@@ -203,13 +236,13 @@ export function powerPart(update) {
   return [
     h("p", null, enforced(pg) ? "Agents run in a sandbox on this machine. This sets who decides when one needs a step outside it, like installing something or changing a file elsewhere on this computer."
       : "This sets who decides when an agent wants to do something bigger. Read the sandbox note below: without a working sandbox, this is an instruction to the agents, and nothing on this machine holds them to it."),
+    claude ? null : h("p", { class: "fmsg", "data-tone": "warn", "data-key": "no-warden" }, "Wardens run on Claude, and this Hive has no Claude login signed in. So there's no warden: every step comes to you, whichever level is set."),
     h("div", { class: "checks cards", role: "radiogroup", "aria-label": "How much power the Hive has" }, POWER.map(([n, label, hint, loose]) => h("label", { class: "check", "data-key": "power-" + n },
       h("input", { type: "radio", name: "power", checked: cur === n, disabled: !local(), onchange: () => saveSettings({ power: n }, update) }),
       h("span", null, `${n}. ${label}`, h("span", { class: "field-h" }, (!enforced(pg) && loose) || hint))))),
     saveLine("power"),
     h("p", { "data-key": "always" }, h("b", null, "At every level, these stay your call: "), ALWAYS.join(", ") + "."),
-    h("p", { class: "field-h", "data-key": "approve-word" }, "When a step comes to you, you answer in the conversation with approve step and the step's code. The code isn't a password and doesn't say what the step does, so read the step first. It ties your answer to that exact script, only you can give it, and it works once."),
-    claude ? null : h("p", { class: "fmsg", "data-tone": "warn", "data-key": "no-warden" }, "Wardens run on Claude, and this Hive has no Claude login signed in. So there's no warden: every step comes to you, whichever level is set."),
+    h("p", { "data-key": "approve-word" }, "When a step comes to you, you answer in the conversation with approve step and the step's code. The code isn't a password and doesn't say what the step does, so read the step first. It ties your answer to that exact script, only you can give it, and it works once."),
     localOnly(), saveErr()];
 }
 export function sandboxPart(update) {

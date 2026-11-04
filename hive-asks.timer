@@ -1,0 +1,9 @@
+[Unit]
+Description=Hive asks register: file the person's new asks and mark what agents delivered, hourly (a Sonnet call or two)
+
+[Timer]
+OnBootSec=30min
+OnUnitActiveSec=1h
+
+[Install]
+WantedBy=timers.target

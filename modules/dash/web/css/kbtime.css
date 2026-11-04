@@ -1,0 +1,40 @@
+/* Knowledge over time (views/kbtime.js). Builds on map.css: the toolbar, stage, slider and side pane are the Map's. */
+.kbt-back{font-size:var(--fs-small);color:var(--link);text-decoration:none}
+.kbt-stage{height:auto;min-height:420px}
+.kbt-sc{flex:1;overflow:auto;padding:var(--s3)}
+.kbt-svg{display:block;width:100%;height:auto;min-width:560px}
+.kbt-box rect{fill:var(--sunken);stroke:var(--line);stroke-width:1}
+.kbt-bl{font:var(--w-bold) 11px var(--font);fill:var(--ink-3);text-transform:uppercase;letter-spacing:.04em}
+.kbt-n{cursor:pointer}
+.kbt-n circle{fill:var(--ink-2);stroke:var(--surface);stroke-width:1.5;transition:r .4s cubic-bezier(.3,1.4,.5,1),opacity .3s}
+.kbt-n.hot circle{fill:var(--accent)}
+.kbt-n.gone circle{fill:none;stroke:var(--ink-3);stroke-dasharray:2 2}
+.kbt-n.sel circle{stroke:var(--focus);stroke-width:3}
+.kbt-n:hover circle{stroke:var(--ink);stroke-width:2}
+.kbt-l{cursor:pointer}
+.kbt-lh{fill:none;stroke:transparent;stroke-width:9}
+.kbt-lv{fill:none;stroke:var(--ink-3);stroke-width:1.2;opacity:.55;transition:opacity .3s}
+.kbt-inf .kbt-lv{stroke-dasharray:4 3}
+.kbt-sup .kbt-lv{stroke:var(--warn);opacity:.9}
+.kbt-l.on .kbt-lv{stroke:var(--accent);stroke-width:2;opacity:1}
+.kbt-l:hover .kbt-lv{opacity:1;stroke-width:2}
+.kbt-l.dim .kbt-lv{opacity:.12}
+.kbt-n.dim{opacity:.3}
+#kbt-ar path{fill:var(--warn)}
+.kbt-rp .map-rp-t{overflow:visible}
+.kbt-gap{position:absolute;top:6px;height:20px;min-width:2px;border-radius:2px;background:repeating-linear-gradient(135deg,var(--line-2) 0 3px,transparent 3px 6px);pointer-events:auto}
+.kbt-tick{position:absolute;top:22px;width:2px;height:6px;margin-left:-1px;background:var(--accent);opacity:.7;pointer-events:none}
+.kbt-row{width:100%;border:0;border-top:1px solid var(--line);background:none;text-align:left;font:inherit;color:inherit;cursor:pointer}
+.kbt-row:hover{background:var(--hover)}
+.kbt-row:first-of-type{border-top:0}
+.kbt-ev{align-items:flex-start}
+.kbt-ev small{display:block;color:var(--ink-3);font-size:var(--fs-meta)}
+.kbt-k{flex:none;width:64px;font-size:var(--fs-micro);font-weight:var(--w-bold);text-transform:uppercase;letter-spacing:.04em;color:var(--ink-3)}
+.kbt-k[data-kind=exact]{color:var(--good-ink)}
+.kbt-k[data-kind=stated]{color:var(--info-ink)}
+.kbt-how{margin:0;padding-left:1.1em;font-size:var(--fs-small);color:var(--ink-2);display:flex;flex-direction:column;gap:6px}
+.kbt-p{margin:var(--s2) 0;font-size:var(--fs-small);color:var(--ink-2)}
+.kbt-spark svg{display:block;width:100%;height:40px}
+.kbt-spark polyline{fill:none;stroke:var(--accent);stroke-width:1.5;vector-effect:non-scaling-stroke}
+@media (prefers-reduced-motion:reduce){.kbt-n circle,.kbt-lv{transition:none}}
+.kb-time{margin-left:auto}

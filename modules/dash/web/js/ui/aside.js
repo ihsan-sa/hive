@@ -32,12 +32,15 @@ export function asidePanel(main, update) {
   const d = S.threads.get(A.th), posts = d ? d.posts : [];
   if (posts.length) A.pending = "";
   const link = (t, f, title) => h("a", { href: f ? threadHref(A.th) : "#", class: "ba-l", title, onclick: f ? null : e => { e.preventDefault(); closeAside(); } }, t);
+  const who = p => p.from === "person" ? "You" : p.from;
   return h("section", { class: "ba", "data-key": "ba", "aria-label": "Side question" },
-    h("div", { class: "ba-top" }, link("Full thread", true, "Open the side thread"), link("Close", false, "Close (Esc). The side thread stays")),
+    h("header", { class: "ba-top" }, h("span", { class: "ba-h" }, "Side question"), h("span", { class: "meta" }, "answers here, not in this conversation"),
+      h("span", { class: "ba-sp" }), link("Full thread", true, "Open the side thread"), link("Close", false, "Close (Esc). The side thread stays")),
     h("div", { class: "ba-m", "data-key": "m:" + A.th, role: "log", "aria-live": "polite" },
-      posts.map(p => h("div", { class: "ba-p", "data-key": p.id }, h("b", null, p.from === "person" ? "You" : p.from), markdown(displayText(p)))),
-      !posts.length && A.pending ? h("div", { class: "ba-p" }, h("b", null, "You"), h("p", null, A.pending)) : null),
+      posts.map(p => h("div", { class: "ba-p", "data-key": p.id, "data-me": p.from === "person" ? "" : null }, h("b", null, who(p)), h("div", { class: "ba-b" }, markdown(displayText(p))))),
+      !posts.length && A.pending ? h("div", { class: "ba-p", "data-me": "" }, h("b", null, "You"), h("div", { class: "ba-b" }, h("p", null, A.pending))) : null,
+      posts.length && posts.at(-1).from === "person" ? h("p", { class: "meta ba-wait" }, "Waiting for the answer…") : null),
     A.err ? h("p", { class: "cp-err", role: "alert" }, A.err) : null,
-    h("input", { class: "input ba-in", "data-key": "in", type: "text", placeholder: "Follow up…", "aria-label": "Follow up on the side question", enterkeyhint: "send",
+    h("input", { class: "input ba-in", "data-key": "in", type: "text", placeholder: "Follow up on the side question…", "aria-label": "Follow up on the side question", enterkeyhint: "send",
       onkeydown: (e, n) => { if (e.key === "Enter" && !e.isComposing) { e.preventDefault(); follow(n); } else if (e.key === "Escape") { e.stopPropagation(); closeAside(); } } }));
 }

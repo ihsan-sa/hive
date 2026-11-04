@@ -1,0 +1,10 @@
+[Unit]
+Description=Hive asks register (hive asks extract, then reconcile): reads the person's posts since the last run into ~/asks.jsonl, marks delivered asks from the threads, refreshes ~/kb/direction.md
+
+[Service]
+# claude installs in ~/.local/bin, which the manager's default PATH lacks.
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=TMPDIR=%h/.cache/hive-tmp
+Type=oneshot
+Nice=15
+ExecStart=/bin/sh -c '/usr/bin/python3 -I %h/core/asks.py extract && /usr/bin/python3 -I %h/core/asks.py reconcile'

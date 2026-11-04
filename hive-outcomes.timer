@@ -1,0 +1,10 @@
+[Unit]
+Description=Hive outcomes: grade the last hour's runs against what their posts asked, hourly (a Sonnet call or three)
+
+[Timer]
+OnBootSec=40min
+OnUnitActiveSec=1h
+RandomizedDelaySec=10min
+
+[Install]
+WantedBy=timers.target

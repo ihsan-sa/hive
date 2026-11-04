@@ -7,6 +7,8 @@ import { mermaidFigure } from "./mermaid.js";
 import { tableFigure } from "./table.js";
 import { plotFigure, chartFigure } from "./plot.js";
 import { waveFigure } from "./wave.js";
+import { touchstoneFigure } from "./touchstone.js";
+import { spiceFigure } from "./spice.js";
 import { artifactFigure } from "./artifact.js";
 
 const KINDS = {
@@ -19,6 +21,9 @@ const KINDS = {
   chart: chartFigure,
   html: artifactFigure,
   wavedrom: waveFigure,
+  spice: spiceFigure, cir: spiceFigure, sp: spiceFigure,
+  touchstone: touchstoneFigure,
+  s1p: touchstoneFigure, s2p: touchstoneFigure, s3p: touchstoneFigure, s4p: touchstoneFigure,
 };
 
 /** Parse an info string: first word is the kind, `title=x` or `title="a b"` names the block. */

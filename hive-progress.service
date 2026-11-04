@@ -1,0 +1,7 @@
+[Unit]
+Description=Hive progress snapshot (hive progress --snapshot --post): appends ~/progress.jsonl and posts the table in thread progress
+
+[Service]
+Type=oneshot
+Nice=15
+ExecStart=/usr/bin/python3 -I %h/core/progress.py progress --since 1d --snapshot --post

@@ -97,7 +97,7 @@ const linksPart = (v, ctx) => v.links && v.links.length ? section({ title: "Your
     return h("li", { class: "dcard", "data-key": l.url },
       h("a", { class: "dcard-a", href: url, target: "_blank", rel: "noreferrer noopener" },
         h("span", { class: "dcard-t" }, designName(l)),
-        h("span", { class: "meta" }, [l.by && l.brief ? l.by : null, l.login, l.at ? ago(l.at * 1e3) : null].filter(Boolean).join(" · "))),
+        h("span", { class: "meta" }, [l.by && l.brief ? l.by : null, l.login, (() => { try { return new URL(l.url).host; } catch { return null; } })(), l.at ? ago(l.at * 1e3) : null].filter(Boolean).join(" · "))),
       h("div", { class: "dcard-f" },
         h("a", { class: "btn", "data-size": "s", href: url, target: "_blank", rel: "noreferrer noopener" }, "Open ↗"),
         button("Remove", () => act({ do: "forget", url: l.url }, ctx), { size: "s", kind: "quiet", title: "Takes it off this list. The design stays on claude.ai." }))); }))) : null;

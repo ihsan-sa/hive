@@ -31,7 +31,7 @@ function logTicks(lo, hi) {
   return out.length > 1 ? out : linTicks(lo, hi);
 }
 /** A y range that ignores a few wild points, such as a pole shooting to 1e12, unless they are all there is. */
-function yRange(vals) {
+export function yRange(vals) {
   const f = vals.filter(isFinite).sort((a, b) => a - b); if (!f.length) return null;
   let lo = f[0], hi = f[f.length - 1];
   const p = q => f[Math.floor((f.length - 1) * q)], a = p(0.02), b = p(0.98);
@@ -102,7 +102,7 @@ export function samplePlot(P, vals) {
   return { xs, ys: out };
 }
 
-function splitPanels(series) {
+export function splitPanels(series) {
   const panels = [];
   for (const sr of series) {
     let p = panels.find(q => q.unit === sr.unit && q.series.length < PER_PANEL);
@@ -206,7 +206,7 @@ function hoverable(host, c, read) {
 }
 
 /** The frame around a drawing, once the data is ready: redraws on resize and keeps the readout under it. */
-function mount(c, extras = []) {
+export function mount(c, extras = []) {
   const plot = h("div", { class: "rc-plotb" }), read = h("div", { class: "rc-plotread", "aria-live": "off" }, c.hint);
   const redraw = () => { plot.replaceChildren(drawChart(plot, c)); };
   const wrap = h("div", null, plot, read, ...extras);

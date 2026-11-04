@@ -1,0 +1,9 @@
+[Unit]
+Description=Hive progress snapshot: the hive's numbers, every 6 h, no model use
+
+[Timer]
+OnBootSec=20min
+OnUnitActiveSec=6h
+
+[Install]
+WantedBy=timers.target

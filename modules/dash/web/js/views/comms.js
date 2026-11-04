@@ -13,7 +13,7 @@ import { agentState, agentStatus, btwParent, isAgent, isRunning, tierOf, threadT
 import { ago, dayName, stamp, clock, dur, short, mdPlain, now, plural, firstSentence, DAY, MIN, HOUR } from "../core/format.js";
 import { href, threadHref, go } from "../core/router.js";
 import { tier, status } from "../core/status.js";
-import { askTier, askStop } from "../actions.js";
+import { askTier, askStop, stopButton } from "../actions.js";
 import { seen, unreadIn, markRead, onInbox } from "../core/inbox.js";
 import { button, empty, icon, input, list, seg, statusDot } from "../ui/kit.js";
 import { agentRef, avatars, copyButton, threadRef } from "../ui/refs.js";
@@ -43,6 +43,8 @@ const L = { key: null, src: null, seen: 0, matched: [], pend: [], evs: new Set()
   box: null, out: null, jump: null, unseen: 0, outSig: "", ro: null, stuck: true, heads: "", near: new Set(), io: null, tl: null, tlSig: "", tlConv: null, saved: null, ctx: null, jumpTo: null, marked: "" };
 let qTimer = 0;
 onInbox(() => L.ctx && L.ctx.update());
+// Sending clears a search, so what was just sent shows (the person, 11040214d468).
+if (typeof window !== "undefined") window.addEventListener("cp:sent", () => { if (C.q.trim() || C.find) { C.q = ""; C.find = false; L.ctx && L.ctx.update(); } });
 
 /** What the address says to show. */
 function conversation(arg) {
@@ -152,7 +154,10 @@ function paint(box, ctx) {
   L.day = ""; L.prev = null; L.names = new Set(); L.shown = shown.length; L.io.disconnect(); L.outSig = "";
   L.out = h("div", { class: "cm-out", "data-key": "out" });
   L.jump = h("button", { type: "button", class: "cm-jump", hidden: true, onclick: () => { box.scrollTop = box.scrollHeight; } });
+  const q = C.q.trim();   // a search narrows the messages: say so where they are, so a sent one never seems lost (11040214d468)
   box.replaceChildren(
+    ...(q ? [h("div", { class: "cm-qbar", role: "status" }, h("span", null, `Showing ${plural(L.all.length, "match", "matches")} for “${short(q, 40)}”`),
+      button("Clear search", () => { C.q = ""; C.find = false; ctx.update(); }, { size: "s", kind: "quiet", icon: "close" }))] : []),
     ...(older ? [h("div", { class: "cm-older" }, button(`Show older (${older} more)`, () => { C.limit += STEP; L.rebuild = true; L.keep = true; ctx.update(); }, { size: "s" }))] : []),
     ...(shown.length ? rows(shown) : [empty(C.q ? "No messages match." : L.src.length ? "Nothing here with what Show has on. Turn on Agent comms to see all the messages." : "No messages yet.")]),
     L.out, L.jump);
@@ -388,11 +393,11 @@ function strip(th) {
   for (const a of run) {
     if (st.key === "asks" && a.name === st.who) continue;
     const s = agentState(a);
-    if (simpleOn()) { if (!out.some(x => x.dataset.key === "run")) out.push(line("working", "Your Hive is working on it.", can("stop") ? button("Stop…", () => askStop(a.name), { size: "s", kind: "quiet" }) : null, { key: "run", live: true })); continue; }
+    if (simpleOn()) { if (!out.some(x => x.dataset.key === "run")) out.push(line("working", "Your Hive is working on it.", can("stop") ? stopButton(`Stop ${a.name}`, () => askStop(a.name)) : null, { key: "run", live: true })); continue; }
     // Closed it reads "a7c31 Editing fetch.py"; how long ago it was active shows only when open.
     const doing = a.doing ? a.doing.charAt(0).toUpperCase() + a.doing.slice(1) : AGENT_WORDS[s.key] || s.text;
     out.push(line(s.key, [who(a.name), " ", doing, h("span", { class: "meta cm-line-m" }, " · " + (s.key === "working" ? ago(a.last * 1e3) : s.text))],
-      can("stop") ? button("Stop…", () => askStop(a.name), { size: "s", kind: "quiet", title: `Stop ${a.name}` }) : null, { key: "run:" + a.name, live: true }));
+      can("stop") ? stopButton(`Stop ${a.name}`, () => askStop(a.name)) : null, { key: "run:" + a.name, live: true }));
   }
   // A second helper when the agent you wrote to is busy (not built): see PART1.md.
   const mine = lastMine(th), wait = mine && now() - mine.t > HELPER_AFTER && now() - mine.t < 2 * HOUR ? mine.men.map(m => delivery(mine, m)).find(x => x && x.key === "waiting") : null;
@@ -466,19 +471,29 @@ function head(c, ctx) {
       h("button", { type: "button", class: "btn", "data-kind": "icon", "aria-label": "Search here", title: "Search here", "aria-pressed": String(find),
         onclick: () => { C.find = !find; if (!C.find) C.q = ""; ctx.update(); if (C.find) queueMicrotask(() => document.querySelector(".cm-find")?.focus()); } }, icon("search")),
       off > 0 && !simpleOn() ? button(`Show ${off} hidden`, () => setShow(SHOW.ALL, ctx), { size: "s", kind: "quiet", cls: "cm-hid", title: "Turn on For you, Updates and Agent comms" }) : null,
+      c.thread ? asideBtn(c.thread, ctx) : null,
       c.thread && app() && !simpleOn() ? menuBtn("more", "More", "more", ctx) : null),
     C.menu === "title" ? titleMenu(c, n, d) : null,
     C.menu === "more" && c.thread && app() && !simpleOn() ? moreMenu(c, ctx) : null,
-    who.length ? h("div", { class: "cm-people" }, who) : null,
-    c.thread ? asides(c.thread) : null);
+    C.menu === "asides" && c.thread ? asideMenu(c.thread) : null,
+    who.length ? h("div", { class: "cm-people" }, who) : null);
 }
-// /btw side questions: from the main conversation, a link to each; from a side one, the way back.
-function asides(th) {
+// /btw side questions (the person, 11040224589b): a small button in the head's tools, like the others.
+// From the main conversation it opens a menu with a row per side question; from a side one, it goes back.
+const sideKids = th => [...S.threads.keys()].filter(t => btwParent(t) === th);
+function asideBtn(th, ctx) {
   const up = btwParent(th);
-  if (up) return h("div", { class: "cm-people cm-asides", "data-key": "asides" }, h("span", { class: "meta" }, "A side question about"), h("a", { href: threadHref(up) }, threadTitle(up)));
-  const kids = [...S.threads.keys()].filter(t => btwParent(t) === th);
-  return kids.length ? h("div", { class: "cm-people cm-asides", "data-key": "asides" },
-    h("span", { class: "meta" }, "Side questions:"), kids.map(t => h("a", { href: threadHref(t), "data-key": t }, threadTitle(t).replace(/^Aside: /, "")))) : null;
+  if (up) return button("Back to " + short(threadTitle(up), 28), null, { href: threadHref(up), size: "s", kind: "quiet", icon: "chevron-left", cls: "cm-aside-b", title: "This is a side question about " + threadTitle(up) });
+  const kids = sideKids(th);
+  return kids.length ? h("button", { type: "button", class: "btn cm-aside-b", "data-size": "s", "data-kind": "quiet", "aria-haspopup": "true", "aria-expanded": String(C.menu === "asides"), title: "Side questions you asked with /btw here",
+    onclick: e => { e.stopPropagation(); C.menu = C.menu === "asides" ? null : "asides"; ctx.update(); } }, h("span", null, "Side", h("span", { class: "cm-aside-w" }, " questions"), ` (${kids.length})`)) : null;
+}
+function asideMenu(th) {
+  return h("div", { class: "cm-menu cm-aside-m", role: "menu", "data-key": "asides" },
+    h("p", { class: "meta" }, "Side questions"),
+    sideKids(th).reverse().map(t => { const d = S.threads.get(t), last = d && d.posts.at(-1);
+      return h("a", { href: threadHref(t), class: "cm-aside-i", role: "menuitem", "data-key": t, title: threadTitle(t).replace(/^Aside: /, "") },
+        h("span", { class: "cm-aside-q" }, threadTitle(t).replace(/^Aside: /, "")), last ? h("span", { class: "meta" }, ago(last.t)) : null); }));
 }
 function tierControl(th) {
   const t = tier(tierOf(th)), sw = h("span", { class: "ref-sw", "data-tone": t.tone });
@@ -573,6 +588,7 @@ export default {
         c.thread && app() && !(post && c.thread) ? strip(c.thread) : null,
         post && c.thread ? asidePanel(c.thread, ctx.update) : null,
         c.thread && app() ? openCard(c.thread, { jump: jumpTo, answer: p => replyTo(p), update: ctx.update, atEnd: !L.box || L.box.dataset.key !== "m:" + (c.arg || "") || L.stuck }) : null,   // what's open for the person, so they needn't read back (110401090fd2)
+        c.thread && !can("post") ? readOnly(c.thread) : null,   // §5b: where this address can't post, say so in the composer's place
         post && c.thread ? composer({ thread: c.thread, update: ctx.update, top: app() ? strip(c.thread) : null }) : null,
         post && c.all ? h("p", { class: "cm-hint meta", "data-key": "hint" }, "To start something new, use New conversation.") : null];
     return h("div", { class: "cm", "data-key": "comms", "data-in": c.arg ? "" : null, "data-home": c.home ? "" : null, style: `--top-h:${top ? top.offsetHeight : 47}px;--cm-w:${sideW}px` },
@@ -592,6 +608,13 @@ export default {
         post && c.thread ? h("div", { class: "cm-drop", "aria-hidden": "true", "data-key": "drop" }, "Drop files to attach them") : null));
   },
 };
+
+/** The read-only footer: a lock, one sentence, and (in the developer look, which has no strip) the thread's live agents inline, no actions. */
+function readOnly(th) {
+  const run = app() ? [] : (S.live ? S.live.agents : []).filter(a => a.thread === th && a.alive);
+  return h("div", { class: "cm-ro", "data-key": "ro" }, icon("lock"), h("span", null, "Read-only here. This address can't post."),
+    run.length ? h("span", { class: "cm-ro-a" }, run.map(a => h("span", { class: "cm-ro-l", "data-key": a.name, title: a.doing || null }, statusDot(agentState(a).key), agentRef(a.name), a.doing ? h("span", { class: "meta" }, short(a.doing, 48)) : null))) : null);
+}
 
 // A header menu (title, More) closes on a press anywhere outside it and its button (the person, 2026-11-04, post 11040100216b).
 // So does an empty "Search here" box (11040131d9c5); with words in it, it stays, since it's what the messages are filtered by.

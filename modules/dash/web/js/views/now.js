@@ -1,10 +1,10 @@
 // Now: what each agent is doing. Template: overview.
 import { h } from "../core/dom.js";
 import { S, SYS } from "../core/store.js";
-import { threadTitle, agentState, isRunning, hiveStats, tierHours, agentThread, spendSince, sEnd, hasTiers } from "../core/model.js";
+import { threadTitle, agentState, isRunning, hiveStats, tierHours, agentThread, spendSince, sEnd, hasTiers, activeUse } from "../core/model.js";
 import { now, ago, dur, clock, money, pct, plural, firstSentence, short, HOUR, DAY, MIN } from "../core/format.js";
 import { TIERS, status } from "../core/status.js";
-import { threadHref, agentHref } from "../core/router.js";
+import { threadHref, agentHref, href } from "../core/router.js";
 import { overview, cols } from "../templates.js";
 import { pageHeader, section, tally, stats, list, share, empty, button, statusDot } from "../ui/kit.js";
 import { agentRef, threadRef } from "../ui/refs.js";
@@ -47,7 +47,7 @@ export function hiveFigures(t = now()) {
     { label: "Agents talking to agents", value: pct(hs.a2a, hs.total), note: `${hs.a2a} of ${hs.total} posts mention another agent` },
     { label: "Time to answer a mention", value: hs.lat == null ? "–" : dur(hs.lat), note: `median; ${pct(hs.answered, hs.asked)} of ${hs.asked} mentions answered within 6h` },
     { label: "New agents started by agents", value: pct(hs.byAgents, hs.fresh), note: `${hs.byAgents} by agents, ${hs.byYou} by ${S.app.app ? "you" : "you or the box"}, ${hs.bySys} by the keeper or starter` },
-    { label: "Threads with 2+ agents", value: `${hs.multi} of ${hs.threads}`, note: "threads where more than one agent posted" },
+    { label: S.app.app ? "Conversations with 2+ agents" : "Threads with 2+ agents", value: `${hs.multi} of ${hs.threads}`, note: (S.app.app ? "conversations" : "threads") + " where more than one agent posted" },
     { label: "Best connected", value: hs.hub || "–", note: hs.hub ? `talked with ${hs.hubN} other agents` + (agentThread(hs.hub) ? `, on ${agentThread(hs.hub)}` : "") : "no agent-to-agent mentions" },
     { label: "Session ends", value: hs.failed ? `${hs.failed} errored` : `${hs.clean} finished`, tone: hs.failed ? "bad" : null, note: `${hs.clean} finished, ${hs.stopped} stopped by a signal, ${hs.failed} errored; ${hs.limited} usage-limit stops` },
   ];
@@ -66,6 +66,29 @@ export function activityCharts(t = now()) {
   ];
 }
 
+const WORDS = ["No", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten"];
+const nWord = n => WORDS[n] || String(n);
+
+/** Today, for the consumer look: sessions finished, hours of agent work, and what's left of the week (links to Usage). */
+function todayCard(t) {
+  let ms = 0, done = 0;
+  for (const s of S.sessions) { const a = Math.max(s.start, t - DAY), b = Math.min(sEnd(s), t); if (b > a) ms += b - a; if (s.end && s.end >= t - DAY && s.end <= t && s.exit === 0) done++; }
+  const act = S.usage ? activeUse(S.usage, t) : null;
+  const left = act ? Math.max(0, 100 - Math.round(act.pct)) + "%" : "–";
+  return section({ title: "Today", note: "last 24 hours" }, h("div", { class: "card now-today" }, stats([
+    { label: "Finished", value: String(done), note: plural(done, "run") + " ended cleanly" },
+    { label: "Hours of work", value: (ms / HOUR).toFixed(1) + "h", note: "agent time, all agents" },
+    { label: "Week left", value: h("a", { href: href("usage") }, left), note: act ? "of your weekly use" : "not read yet" },
+  ])));
+}
+
+/** Agents at work over the last 48 hours: one small step strip. */
+function strip(t) {
+  const span = 48, q = HOUR / 4, start = Math.floor((t - span * HOUR) / q) * q, N = span * 4, conc = new Array(N).fill(0);
+  for (const s of S.sessions) { const b = sEnd(s); if (b < start) continue; const i0 = Math.max(0, Math.floor((s.start - start) / q)), i1 = Math.min(N - 1, Math.floor((b - start) / q)); for (let i = i0; i <= i1; i++) conc[i]++; }
+  return chart({ title: "Agents at work, last 48 hours", series: [conc], kind: "step", start, step: q, compact: true, height: 44, fmt: v => `${v} at work` });
+}
+
 export default {
   id: "now", label: () => (S.app.app ? "Agents" : "Now"), about: "what each agent is doing", tab: true,
   render(ctx) {
@@ -80,6 +103,27 @@ export default {
     const active = run.filter(isWorking).length, threads = new Set(run.map(a => a.thread)).size;
     const waiting = L.pending.filter(p => !isRunning(p.name));
     const lastHour = S.posts.filter(p => p.t > t - HOUR && !SYS.has(p.from)).length;
+
+    if (S.app.app) {
+      const fy = forYouRows(t), stuckN = count("stuck"), stopped = !!L.limit_until;
+      const state = stopped ? { tone: "bad", text: "Stopped" } : fy.length || stuckN ? { tone: "info", text: "Needs you" } : { tone: "good", text: "All fine" };
+      const one = threads === 1 ? threadTitle(run[0].thread) : `${nWord(threads).toLowerCase()} conversations`;
+      const title = run.length ? `${nWord(run.length)} ${run.length === 1 ? "agent is" : "agents are"} working on ${one}.` : "No agents are working right now.";
+      const lead = stopped ? `New agents wait for the usage limit until ${clock(L.limit_until * 1e3)}.`
+        : fy.length === 1 ? `${fy[0].title} is waiting for your answer.`
+        : fy.length ? `${nWord(fy.length)} conversations are waiting for your answer.`
+        : stuckN ? `${nWord(stuckN)} ${stuckN === 1 ? "has" : "have"} stopped moving.` : null;
+      const header = pageHeader({ state, title, lead });
+      const main = section({ title: "What each is doing", note: "one row each: working first, then quiet" }, run.length ? agentRows(run, states, t) : empty("None."));
+      const hrs = tierHours(t - DAY, t), tot = Object.values(hrs).reduce((a, b) => a + b, 0) || 1;
+      const more = h("details", { class: "now-more", open: V.more || null, ontoggle: (e, n) => { if (e.target === n) V.more = n.open; } }, h("summary", null, "Details"),
+        h("p", { class: "meta" }, [`${plural(lastHour, "post")} in the last hour`, waiting.length ? `${waiting.length} waiting to start` : null, S.usage ? `${money(spendSince(t - DAY))} of work in 24h, at list prices` : null].filter(Boolean).join(" · ")),
+        section({ title: "How it's working as a hive", note: "last 24 hours" }, stats(hiveFigures(t))),
+        cols(...activityCharts(t)),
+        hasTiers() ? section({ title: "Where the agent hours went", note: "against your priority list, last 24 hours" },
+          share(TIERS.map(x => ({ key: x.key, label: x.label, tone: x.tone, value: hrs[x.key], text: `${(hrs[x.key] / HOUR).toFixed(1)}h (${Math.round((100 * hrs[x.key]) / tot)}%)` })))) : null);
+      return overview({ header, main: [main], after: [todayCard(t), strip(t), more] });
+    }
 
     const header = pageHeader({
       title: run.length ? `${plural(run.length, "agent")} on ${plural(threads, S.app.app ? "conversation" : "thread")}` : S.app.app ? "No agents are working right now" : "Nobody is running right now",
