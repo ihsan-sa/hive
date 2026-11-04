@@ -206,7 +206,10 @@ export function postSource(p) {
 }
 const HEX = /^[0-9a-f]{12}$/;
 /** A thread's title: its name, the name the indexer gave a number thread, or in the app the start of its first message. */
+/** A /btw side thread's main conversation (person_post names it btw-<main>-<4 hex>), or null. */
+export const btwParent = th => ((th || "").match(/^btw-(.+)-[0-9a-f]{4}$/) || [])[1] || null;
 export function threadTitle(th) {
+  if (btwParent(th)) { const d = S.threads.get(th), p = d && d.posts[0]; return "Aside: " + (p ? short(mdPlain(displayText(p)).split("\n")[0], 60) : btwParent(th)); }
   if (!HEX.test(th || "")) return simpleOn() && th ? (t => t[0].toUpperCase() + t.slice(1))(th.replace(/[-_]+/g, " ")) : th;
   if (S.threadNames[th]) return S.threadNames[th];
   if (!S.app.app) return th;

@@ -9,9 +9,10 @@ import { h } from "../core/dom.js";
 import { S, jget, post, poll, loadApp } from "../core/store.js";
 import { simpleOn, hiveName } from "../core/simple.js";
 import { go } from "../core/router.js";
-import { isAgent, agentStatus, threadPeople, partner, displayText, typedText } from "../core/model.js";
+import { isAgent, isRunning, agentCard, agentStatus, threadPeople, partner, displayText, typedText } from "../core/model.js";
 import { short, mdPlain, now } from "../core/format.js";
 import { button, input, statusDot } from "./kit.js";
+import { openAside } from "./aside.js";
 
 const CP = { update: null, th: undefined, focus: false, ac: null, menu: false, drag: false, sig: "", hist: null };
 const refresh = () => CP.update && CP.update();
@@ -78,6 +79,7 @@ function named(text) {
 export function recipient(th) {
   if (!th) return { who: "new", why: "first" };
   const d = draft(th), s = serverWho(th), sv = s && s.who;
+  if (isBtw(d.text)) return { who: "new", why: "btw", server: sv };
   if (d.reply) return { who: isAgent(d.reply.from) ? d.reply.from : sv, why: "reply", server: sv };
   const m = named(d.text); if (m) return { who: m, why: "named", server: sv };
   if (d.to) return { who: d.to, why: "chosen", server: sv };
@@ -89,11 +91,14 @@ export function recipient(th) {
 }
 function wire(th, d, r) {
   let t = d.text.trim() ? d.text : "Attached: " + d.files.map(f => f.name).join(", ");
-  if (!th || r.why === "reply" || r.why === "named" || r.why === "first") return t;
+  if (!th || r.why === "reply" || r.why === "named" || r.why === "first" || r.why === "btw") return t;   // /btw goes to a fresh agent in a side thread (person_post)
   if (r.who === "new") return "@new " + t;
   if (r.who && r.who !== r.server) return "@" + r.who + " " + t;
   return t;
 }
+
+/** "/btw question": a side question about this conversation, answered in its own side thread so this one's agent never sees it. */
+export const isBtw = t => /^\s*\/btw(\s|$)/i.test(t || "");
 
 // ---- messages on their way ----
 export const OUT = [];
@@ -110,8 +115,9 @@ async function deliver(it) {
   try {
     if (!it.refs) { it.uploading = it.files.length > 0; refresh(); const refs = []; for (const f of it.files) refs.push(await uploadFile(f.file)); it.refs = refs; it.uploading = false; }
     const res = await post("/api/post", { text: it.wire, thread: it.th || it.name || null, reply_to: it.reply ? it.reply.id : null, files: it.refs, simple: simpleOn(), model: it.model || null });
-    it.id = res.id; it.state = "sent";
+    it.id = res.id; it.state = "sent"; const thr = it.th;
     if (!it.th && res.thread) { it.th = res.thread; go("comms", res.thread); loadApp(); }
+    else if (res.thread && res.thread !== it.th) { it.th = res.thread; it.aside = true; openAside(thr, res.thread, it.text.replace(/^\s*\/btw\s*/i, "")); loadApp(); }   // /btw: it lives in the side thread; stay here
     poll();
   } catch (e) { it.state = "failed"; it.err = simpleOn() && !/sign in/.test(e.message) ? "This didn't send. Check your connection, then try again." : e.message; it.uploading = false; }
   refresh();
@@ -169,11 +175,14 @@ export function dropZone(th) {
 // ---- model picker: shows what the message will start on (default, the picked one, or an @model typed in the text) ----
 const MODEL_LABELS = { opus: "Opus", sonnet: "Sonnet", haiku: "Haiku", fable: "Fable", astra: "Astra" };
 function typedModel(text) { const w = named(text); return MODEL_WORDS.includes(w) ? w : null; }
-function modelPick(d) {
+function modelPick(d, r) {
+  // An agent already running stays on its model for this run; a pick here is kept by the starter and holds from its next run.
+  const who = r && r.who, live = who && who !== "new" && isRunning(who);
   const def = (S.app && S.app.default_model) || "", typed = typedModel(d.text), cur = typed || d.model || "";
-  return h("select", { class: "cp-model meta", "aria-label": "Model", title: "Model for a new or sleeping agent this message starts. It holds on that agent from then on. An agent already running stays on its model. Typing @opus, @sonnet… in the message sets this too.",
+  const row = live && agentCard(who).find(x => x.k === "Model"), first = live ? `${row ? row.v : "its model"} (now)` : def ? `${MODEL_LABELS[def] || def} (default)` : "Model";
+  return h("select", { class: "cp-model meta", "aria-label": "Model", title: live ? `${who} is running on ${row ? row.v : "its model"}. Pick another and it moves to it from its next run (it can't switch mid-run), and stays there.` : "Model for a new or sleeping agent this message starts. It holds on that agent from then on. Typing @opus, @sonnet… in the message sets this too.",
     onchange: e => { d.model = e.target.value; keep(d); refresh(); } },
-    [["", def ? `${MODEL_LABELS[def] || def} (default)` : "Model"], ...Object.entries(MODEL_LABELS).filter(([v]) => v !== def)].map(([v, l]) => h("option", { value: v, selected: cur === v }, l)));
+    [["", first], ...Object.entries(MODEL_LABELS).filter(([v]) => live || v !== def)].map(([v, l]) => h("option", { value: v, selected: cur === v }, l)));
 }
 
 // ---- @ names ----
@@ -244,7 +253,7 @@ const stateWords = n => (n === "new" ? "starts a new agent" : agentStatus(n).lab
 // ---- pieces ----
 function toChip(th, r) {
   const n = r.who, label = n === "new" ? "a new agent" : n || "…";
-  const why = { reply: "you're replying to it", named: "named in your message", chosen: "you chose it" }[r.why];
+  const why = { reply: "you're replying to it", named: "named in your message", chosen: "you chose it", btw: "a side question: it answers in its own thread, and this one's agent never sees it" }[r.why];
   return h("button", { type: "button", class: "cp-to", "aria-haspopup": "listbox", "aria-expanded": String(CP.menu), title: "Who this goes to. Change it here, or type @ and a name.",
     onclick: () => { CP.menu = !CP.menu; refresh(); } },
     h("span", { class: "meta" }, "To"), n && n !== "new" ? statusDot(agentStatus(n).key, { live: S.running.has(n) }) : null, h("b", null, label),
@@ -283,8 +292,8 @@ export function composer({ thread, update, place = "thread", autofocus }) {
   if (CP.th !== th) { CP.th = th; CP.ac = null; CP.menu = false; CP.hist = null; }
   const d = draft(th), r = recipient(th), k = "cp:" + (th || "(new)"), empty = !d.text.trim() && !d.files.length;
   if (CP.focus || autofocus === true) { CP.focus = false; queueMicrotask(() => { const t = field(th); if (t && document.activeElement !== t) { t.focus(); t.setSelectionRange(t.value.length, t.value.length); } }); }
-  CP.sig = (named(d.text) || "") + "|" + empty;
-  const ph = !th ? "Say what you want done, in your own words" : simpleOn() ? "Message" : r.who === "new" ? "Message a new agent" : r.who ? `Message ${r.who}` : "Message";
+  CP.sig = (named(d.text) || "") + "|" + empty + "|" + isBtw(d.text);
+  const ph = !th ? "Say what you want done, in your own words" : simpleOn() ? "Message" : r.who === "new" ? "Message a new agent" : r.who ? `Message ${r.who} · /btw to ask aside` : "Message";
   return h("div", { class: "cp", "data-key": k, "data-place": place, ...(th ? {} : dropZone(null)) },  // a thread's composer is inside its conversation's zone
     d.reply ? replyChip(d) : null,
     d.err ? h("p", { class: "cp-err", role: "alert", "data-key": "err" }, d.err) : null,
@@ -296,7 +305,7 @@ export function composer({ thread, update, place = "thread", autofocus }) {
       h("textarea", { class: "cp-t", "data-key": "t", rows: 1, placeholder: ph, "aria-label": th ? "Message" : "What do you want done?", value: d.text, enterkeyhint: "send",
         oninput: (e, n) => {
           d.text = n.value; keep(d); CP.hist = null;
-          const moved = acCheck(n, th), sig = (named(d.text) || "") + "|" + (!d.text.trim() && !d.files.length);
+          const moved = acCheck(n, th), sig = (named(d.text) || "") + "|" + (!d.text.trim() && !d.files.length) + "|" + isBtw(d.text);
           if (moved || sig !== CP.sig) refresh();
         },
         onkeydown: (e, n) => {
@@ -315,7 +324,7 @@ export function composer({ thread, update, place = "thread", autofocus }) {
         simpleOn() ? null : th ? toChip(th, r) : d.naming ? h("span", { class: "meta cp-new" }, "A new agent starts on this") : button("Name it", () => { d.naming = true; refresh(); }, { kind: "quiet", size: "s", title: "Give this job a short name (optional). Without one it's called by its first words." }),
         h("input", { type: "file", multiple: true, hidden: true, class: "cp-pick", onchange: e => { addFiles(th, e.target.files); e.target.value = ""; } }),
         button("Attach", (e, b) => b.parentNode.querySelector(".cp-pick").click(), { kind: "quiet", size: "s", title: "Attach files. You can also paste or drop them here." }),
-        simpleOn() ? null : modelPick(d),
+        simpleOn() ? null : modelPick(d, r),
         h("span", { class: "cp-hint meta" }, "Enter to send · Shift+Enter for a new line · ↑ past messages · Tab completes"),
         button(place === "thread" ? "Send" : "Start", () => send(th), { kind: "primary", disabled: empty, cls: "cp-send" }))),
     CP.menu && th ? toMenu(th, r) : null);

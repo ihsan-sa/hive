@@ -9,7 +9,7 @@
 import { h, morph } from "../core/dom.js";
 import { S, can, OUTSIDE, built, post as apiPost, poll } from "../core/store.js";
 import { simpleOn, plainName, hiveName } from "../core/simple.js";
-import { agentState, agentStatus, isAgent, isRunning, tierOf, threadTitle, threadState, threadPeople, isSystemThread, SHOW, postKind, threadKinds, closingPosts, displayText, postSource, inUse, fresh7 } from "../core/model.js";
+import { agentState, agentStatus, btwParent, isAgent, isRunning, tierOf, threadTitle, threadState, threadPeople, isSystemThread, SHOW, postKind, threadKinds, closingPosts, displayText, postSource, inUse, fresh7 } from "../core/model.js";
 import { ago, dayName, stamp, clock, dur, short, mdPlain, now, plural, firstSentence, DAY, MIN, HOUR } from "../core/format.js";
 import { href, threadHref, go } from "../core/router.js";
 import { tier, status } from "../core/status.js";
@@ -18,6 +18,7 @@ import { seen, unreadIn, markRead, onInbox } from "../core/inbox.js";
 import { button, empty, input, list, seg, statusDot } from "../ui/kit.js";
 import { agentRef, copyButton, threadRef } from "../ui/refs.js";
 import { message, messageHead, messageReceipt, localMessage, markWords, pollDelivered, marksSig, delivery, onJump } from "../ui/message.js";
+import { asidePanel, asideOpen, closeAside } from "../ui/aside.js";
 import { composer, cancelReply, replyTo, say, outFor, outSig, actions as outActions, dropZone, recipient, draft, focusComposer } from "../ui/composer.js";
 
 const STEP = 500, FIRST = 250, NEAR = 60, GROUP = 10 * MIN, HELPER_AFTER = 3 * MIN;
@@ -383,7 +384,16 @@ function head(c, ctx) {
         input({ type: "search", class: "input cm-find", placeholder: c.thread ? "Search here" : "Search messages", "aria-label": "Search these messages", value: C.q, oninput: e => { C.q = e.target.value; clearTimeout(qTimer); qTimer = setTimeout(ctx.update, 120); } }),
         c.thread && app() && !simpleOn() ? button("More", () => { C.more = !C.more; ctx.update(); }, { size: "s", kind: "quiet", title: "Priority, timeline" }) : null)),
     C.more && c.thread && app() && !simpleOn() ? moreMenu(c, ctx) : null,
-    who.length ? h("div", { class: "cm-people" }, who) : null);
+    who.length ? h("div", { class: "cm-people" }, who) : null,
+    c.thread ? asides(c.thread) : null);
+}
+// /btw side questions: from the main conversation, a link to each; from a side one, the way back.
+function asides(th) {
+  const up = btwParent(th);
+  if (up) return h("div", { class: "cm-people cm-asides", "data-key": "asides" }, h("span", { class: "meta" }, "A side question about"), h("a", { href: threadHref(up) }, threadTitle(up)));
+  const kids = [...S.threads.keys()].filter(t => btwParent(t) === th);
+  return kids.length ? h("div", { class: "cm-people cm-asides", "data-key": "asides" },
+    h("span", { class: "meta" }, "Side questions:"), kids.map(t => h("a", { href: threadHref(t), "data-key": t }, threadTitle(t).replace(/^Aside: /, "")))) : null;
 }
 function tierControl(th) {
   const t = tier(tierOf(th)), sw = h("span", { class: "ref-sw", "data-tone": t.tone });
@@ -466,7 +476,7 @@ export default {
   tab: true,
   badge: () => { if (!app() || !S.live) return null; const g = needs(), n = g.asks.length + g.foryou.length + g.trouble.length; return n ? String(n) : null; },
   poll: { every: 3000, run: async ctx => { if (await pollDelivered()) ctx.update(); } },
-  escape: () => { if (C.more) { C.more = false; L.ctx && L.ctx.update(); return; } cancelReply(); },
+  escape: () => { if (C.more) { C.more = false; L.ctx && L.ctx.update(); return; } if (!cancelReply() && asideOpen()) closeAside(); },
   leave: () => { clearTimeout(qTimer); C.more = false; },
   render(ctx) {
     L.ctx = ctx;
@@ -484,6 +494,7 @@ export default {
         h("div", { class: "cm-mw", "data-key": "mw" },
           h("div", { class: "cm-msgs", "data-key": "m:" + (c.arg || ""), "data-own": "", "data-sig": "own", role: "log", "aria-live": "off", "aria-label": "Messages", tabindex: "0" })),
         c.thread && app() ? strip(c.thread) : null,
+        post && c.thread ? asidePanel(c.thread, ctx.update) : null,
         post && c.thread ? composer({ thread: c.thread, update: ctx.update }) : null,
         post && c.all ? h("p", { class: "cm-hint meta", "data-key": "hint" }, "To start something new, use New conversation.") : null];
     return h("div", { class: "cm", "data-key": "comms", "data-in": c.arg ? "" : null, "data-home": c.home ? "" : null, style: `--top-h:${top ? top.offsetHeight : 47}px` },

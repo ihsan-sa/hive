@@ -433,7 +433,7 @@ def waiting_posts(st, r):
     except OSError: seen = set()
     ps = [p for p in ps if p["id"] not in seen]
     c = cfg()
-    grace = c.get("wake_person_s", 60) if any(p.get("from") == "person" for p in ps) else c.get("wake_agent_s", 600)
+    grace = c.get("wake_person_s", 60) if any(p.get("from") in ("person", r["name"]) for p in ps) else c.get("wake_agent_s", 600)  # its own post: `hive model`
     return ps if ps and finished_but_alive(r, grace) else []
 
 def release_shells(pid):
@@ -799,7 +799,10 @@ def start(c, name, posts, login, resume=None, reaped=None, extra=(), moved=False
     if heir_of:
         prompt += (f" You are a new agent taking over from @{heir_of['name']}, which isn't being brought back because {heir_of['why']}. You have none of its memory. "
                    f"Its stream log, if a detail isn't in the thread or on disk, is {heir_of['out']}: search it, don't read it whole.")
-    if resume and slept:
+    if resume and slept and any(str(p.get("from", "")).lower() == name and p.get("model") in MODELS for p in posts):
+        prompt = (f"You are still @{name}: this is your own session, resumed on {model} because you asked for it with `hive model`. "
+                  f"Carry on with the work. Check `hive read --thread {first.get('thread', first['id'])}` for anything new first.")
+    elif resume and slept:
         prompt = (f"You are still @{name}: this is your own session, resumed after {ago(slept.get('ended'))} asleep. New board post for you: "
                   + "; ".join(f"{p['id']} (thread {p.get('thread', p['id'])}, from {p.get('from')})" for p in posts)
                   + f". Start with `hive read --thread {first.get('thread', first['id'])}`. Files and threads may have changed while you slept: "
@@ -1073,7 +1076,8 @@ def main():
                     if n in c["external"]: continue
                     # a self-mention wakes its author only when the author isn't running: a waiter's
                     # "done" post from a run that has already ended; a running agent mentioning itself doesn't
-                    if n == str(p.get("from", "")).lower() and runs_now(n): continue
+                    # ...unless it asks for a stronger model (`hive model`): queued, it resumes on it when this run ends
+                    if n == str(p.get("from", "")).lower() and runs_now(n) and not (called == [n] and p.get("model") in MODELS and not src_free): continue
                     q = {k: p.get(k) for k in ("id", "thread", "from")}
                     if p.get("routed"): q["routed"] = True  # a door picked this name; nobody typed it
                     q["model"] = asked_model(p, c)
@@ -1129,7 +1133,9 @@ def main():
             else: continue
             st["resume"].pop(n)
             waiting = st["pending"].pop(n, []) if r.get("reaped") else []  # hand queued posts to the resumed run
-            start(c, n, [{"id": r["post"], "thread": r.get("thread"), "from": r.get("from"), "model": r.get("model")}], to,
+            # a queued post that asked for a model holds here too: a parked agent woken for it comes back on that model
+            model = r.get("model") if pv else next((p["model"] for p in waiting if p.get("model") in MODELS), r.get("model"))
+            start(c, n, [{"id": r["post"], "thread": r.get("thread"), "from": r.get("from"), "model": model}], to,
                   resume=r["session"], reaped=r.get("reaped"), extra=[p["id"] for p in waiting], moved=r.get("move", False), lost=r.get("lost", False),
                   woken={"shells": r["shells"], "posts": waiting} if "shells" in r else None, all_since=r.get("all_since") or r.get("at"))
             alive[n] = {"name": n, "thread": r.get("thread")}  # a dict, so keeper() sees a resumed keeper (two rounds at once, 2026-11-02)

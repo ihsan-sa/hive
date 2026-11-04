@@ -158,6 +158,19 @@ def cmd_post(a):
     me = (a.as_ or os.environ.get("HIVE_NAME", "")).lower()
     receipt(list(dict.fromkeys(to)), ignored, ext, me)
 
+def cmd_model(a):
+    """Carry on with this conversation on another model (the person, 2026-11-04): a post to itself with --model, which the starter queues until this run ends."""
+    me = os.environ.get("HIVE_NAME", "").lower()
+    if not HASH_NAME.fullmatch(me): sys.exit("hive model: only a running agent can switch its own model")
+    try: rec = json.loads((RUN / f"{me}.json").read_text())
+    except (OSError, ValueError): sys.exit(f"hive model: no run record for {me}")
+    now_on = rec.get("model")
+    if rec.get("harness", "claude-code") != "claude-code" or rec.get("fallback") or me.startswith("f") or ":" in str(now_on or ""):
+        sys.exit(f"hive model: you're on {now_on or 'a provider'}, and this only moves a Claude run. Hand the work to a stronger agent: hive post --model opus, with a brief")
+    if a.to_model == now_on: sys.exit(f"hive model: you're already on {now_on}")
+    print(f"Now end your turn: you resume on {a.to_model} in this same conversation. Say what's left in the thread first if it isn't obvious. If no login has room, you wait until one does.", file=sys.stderr)
+    cmd_post(argparse.Namespace(thread=rec.get("thread"), to=me, model=a.to_model, reply_to=None, file=None, as_=None, routed=False, text=[f"Switching to {a.to_model}: " + " ".join(a.why)]))
+
 def cmd_read(a):
     sel = [p for p in posts() if (not a.thread or p.get("thread") == a.thread or p.get("id") == a.thread)
            and (not a.id or p.get("id") == a.id) and since_ok(p, a.since)
@@ -641,6 +654,8 @@ p.add_argument("--model", type=post_model, help="model for any run this post sta
 p.add_argument("--reply-to", dest="reply_to", metavar="ID", help="the post this answers; shown on the board, and a door puts the answer under that message")
 p.add_argument("--file", action="append", help="attach a file (repeatable): copied to ~/files/<post id>/, shown in hive read, Slack and the dashboard")
 p.add_argument("text", nargs="*"); p.set_defaults(f=cmd_post)
+p = sp.add_parser("model", help="hive model haiku|sonnet|opus|fable WHY...: carry on with this conversation on another model. It posts WHY in your thread; end your turn and you resume on that model with your memory")
+p.add_argument("to_model", choices=("haiku", "sonnet", "opus", "fable"), metavar="MODEL"); p.add_argument("why", nargs="+"); p.set_defaults(f=cmd_model)
 p = sp.add_parser("read", help="hive read [--thread T] [--since 2h|ISO] [--from X] [--to X] [--id ID] [-n 30, 0 for all] [--short: one line per post]")
 p.add_argument("--thread"); p.add_argument("--since"); p.add_argument("--from", dest="from_"); p.add_argument("--to")
 p.add_argument("--id"); p.add_argument("-n", type=int, default=30); p.add_argument("--short", action="store_true"); p.set_defaults(f=cmd_read)
