@@ -126,7 +126,7 @@ export default {
   enter(ctx) { if (can("read")) refresh(ctx); },
   poll: { every: 60000, run(ctx) { return refresh(ctx); } },
   render(ctx) {
-    const V = P.v;
+    const V = P.v && Array.isArray(P.v.asks) ? P.v : null;
     if (!V) return h("div", { class: "page" }, P.failed ? empty("Couldn't read the progress data.", { kind: "error" }) : empty("Reading…", { kind: "loading" }));
     const head = lead(V), update = () => ctx.update();
     return metrics({

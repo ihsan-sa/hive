@@ -563,6 +563,18 @@ def drop_killed(st):
         mark_done(n, "the person killed its last run")
         f.unlink(missing_ok=True)
 
+def apply_model_sets(st, c):
+    """The person picked a model in the agent panel: ~/.hive/model-set/<name>.json (set_agent_model in the dash). Held as if a
+    post had passed --model (stays_on): st["chosen"], and the posts already queued for it. Its next run starts on it."""
+    for f in (STATE / "model-set").glob("*.json"):
+        n = f.stem
+        try: m = json.loads(f.read_text()).get("model")
+        except (OSError, ValueError, AttributeError): m = None
+        if not re.fullmatch(r"[a-z][0-9a-f]{4,}", n): m = None
+        if model_ok(c, m): stays_on(st, c, n, {"model": m})
+        log(event="model_set" if model_ok(c, m) else "model_set_refused", name=n, model=m)
+        f.unlink(missing_ok=True)
+
 def usage(c, u):
     """Refresh usage per login every usage_check_s. Returns {login: weekly pct or None}; the 5-hour pcts from the same
     call go to ~/.hive/usage_5h.json ({login: pct or None}), and the reset times to ~/.hive/usage_resets.json ({login:
@@ -1249,6 +1261,7 @@ def main():
                     st["pending"].setdefault(n, []).append(q)
         alive = running(st)
         drop_killed(st)
+        apply_model_sets(st, c)
         for th, text in slow_replies(recent_posts(), st, alive):   # straight into the thread: post() would move it to the starter thread
             with BOARD.open("a") as f:
                 f.write(json.dumps({"id": dt.datetime.now().strftime("%m%d%H%M") + secrets.token_hex(2), "at": now(), "from": "starter", "to": [], "thread": th, "text": text}) + "\n")

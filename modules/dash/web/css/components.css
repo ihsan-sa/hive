@@ -1795,3 +1795,4 @@ dialog.rc-rail[open]{display:flex;flex-direction:column;gap:var(--s2)}
 .pg-t[data-tone=bad]{color:var(--bad-ink)}
 .pg-t[data-tone=warn]{color:var(--warn-ink)}
 .pg-t[data-tone=quiet]{color:var(--ink-3)}
+.mpick{display:inline-flex;align-items:center;gap:var(--s2)}
