@@ -1740,6 +1740,8 @@ dialog.fb::backdrop{background:rgb(0 0 0 / .38)}
 @media (max-width:700px){.panel-grip{display:none}}
 .viewer-s:has(.viewer-pdf){padding:0;overflow:hidden}
 .viewer-pdf{display:block;width:100%;height:100%;border:0;background:var(--bg)}
+.viewer-s:has(.viewer-vid){padding:0;overflow:hidden;display:grid;place-items:center;background:#000}
+.viewer-vid{max-width:100%;max-height:100%}
 
 /* Long reports and the on-demand contents rail. */
 .rc-sec{margin:var(--s3) 0 0;border-top:1px solid var(--line)}
