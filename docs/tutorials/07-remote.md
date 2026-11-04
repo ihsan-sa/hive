@@ -38,7 +38,7 @@ Good for the whole app from anywhere, including your phone. It's the most work, 
 3. On the machine itself, open **Settings**, then **Access from outside**. Enter the hostname, the Access team domain, the application's audience tag and your email. Type these yourself: an agent's tools can refuse your account's address.
 4. Tick only what you need. It's read-only until you tick more. **Post as you** lets you give agents orders from outside, and that means anyone with that sign-in can too.
 
-To let other people in, name them under **People with full access** or **People with limited access**. Limited can read, chat and stop agents. Full can do everything for an hour after signing in, and then drops to limited. Once you've named anyone, the ticks don't apply, and everyone else is refused.
+To let other people in, name them under **People with full access** or **People with limited access**. Limited can read, chat and stop agents. Full can do everything while you use the app, and drops to limited after 30 minutes with no clicks or typing (the badge at the top turns orange and says Limited). Once you've named anyone, the ticks don't apply, and everyone else is refused.
 
 A request from outside must carry a token signed by Cloudflare Access. The secret in your address stays for the machine itself. Only the machine itself can change these settings.
 

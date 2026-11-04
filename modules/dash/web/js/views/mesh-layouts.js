@@ -4,7 +4,9 @@
 //   orbit — the same forces, but tiers are rings round a centre: Tier 1 in the middle, Tier 2 round it, then held, then other.
 // No randomness: the start comes from the sort order (or from `opt.prev`, the last positions, so a new post nudges rather than reshuffles).
 //
-// input  same as layout(): data = { threads, agents, now }, opt = { width, override, prev: Map(id -> {x, y}) }
+// input  same as layout(): data = { threads, agents, now }, opt = { width, override, prev: Map(id -> {x, y}),
+//        pin: Map(id -> {x, y}) bodies dragged by hand, held where they were put; height: the panel's, for the slices;
+//        free: the page fits the picture to its panel itself, so don't shift it to the top }
 // output layout()'s shape, plus spokes carry their own path `d`, clusters carry `linked` (agents from other threads), and orbit adds `rings`.
 
 import { TIERS, TIER_NAME, DENSITY, STATUS_RANK, spokeWidth } from './mesh-layout.js';
@@ -18,7 +20,7 @@ const byStr = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
 const GAP = 10;                                    // the least space between two boxes
 
 export function graphLayout(data, opt, mode) {
-  const width = opt.width, prev = opt.prev || null;
+  const width = opt.width, prev = opt.prev || null, pin = opt.pin && opt.pin.size ? opt.pin : null;
   const compact = data.agents.length > 24;
   const density = compact ? 'compact' : 'normal';
   const D = { ...(compact ? DENSITY.compact : DENSITY.normal), ...(opt.override || {}), lines: 1 };
@@ -91,7 +93,7 @@ export function graphLayout(data, opt, mode) {
     }
   } else {
     // slices: Tier 1 on top
-    H = Math.max(360, total / inner + 2 * D.pad);
+    H = Math.max(360, opt.height || 0, total / inner + 2 * D.pad);          // a free view gets the panel's height to spread into
     let y = D.pad; const slice = new Map();
     for (const k of used) { const h = (area.get(k) / total) * (H - 2 * D.pad); slice.set(k, { y0: y, y1: y + h }); y += h; }
     rings = [];
@@ -108,11 +110,13 @@ export function graphLayout(data, opt, mode) {
   let warm = 0;
   if (prev) for (const b of B) { const p = prev.get(b.id); if (p) { b.x = p.x; b.y = p.y; warm++; } }
   const warmStart = warm > B.length * 0.6;
+  if (pin) for (const b of B) { const p = pin.get(b.id); if (p) { b.pin = p; b.x = p.x; b.y = p.y; } }   // dragged by hand: stays put, the rest settle round it
 
   // the simulation
   const N = B.length, iters = warmStart ? 90 : 360;
   for (const b of B) { b.vx = 0; b.vy = 0; }
   const clampB = b => {
+    if (b.pin) { b.x = b.pin.x; b.y = b.pin.y; return; }
     b.x = Math.max(D.pad + b.w / 2, Math.min(width - D.pad - b.w / 2, b.x));
     b.y = Math.max(D.pad + b.h / 2, b.y);
   };
@@ -153,9 +157,10 @@ export function graphLayout(data, opt, mode) {
   }
   for (let k = 0; k < 6; k++) { collide(B, 12); for (const b of B) clampB(b); }
   collide(B, 400, true);                             // whatever the width clamp squeezed back, settle downwards (there is always room below)
+  if (pin) for (const b of B) if (b.pin) { b.x = b.pin.x; b.y = b.pin.y; }
 
   // fit: top at pad
-  const top = Math.min(...B.map(b => b.y - b.h / 2), ...rings.map(r => r.cy - r.oy - 20)), dy0 = B.length ? D.pad - top : 0;
+  const top = opt.free ? D.pad : Math.min(...B.map(b => b.y - b.h / 2), ...rings.map(r => r.cy - r.oy - 20)), dy0 = B.length ? D.pad - top : 0;
   for (const b of B) b.y += dy0;
   if (rings.length) for (const r of rings) r.cy += dy0;
 

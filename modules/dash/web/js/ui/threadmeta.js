@@ -85,9 +85,10 @@ export function openFor(th, { seen = true } = {}) {
 export function openCard(th, { jump, answer, update, atEnd }) {
   const d = S.threads.get(th), newest = d && d.posts.at(-1);
   if (atEnd && newest) markSeen([newest.id]);
-  const o = openFor(th); if (!o || doneFor(th) === o.last) return null;
+  const ap = approvalCard(th, update);
+  const o = openFor(th); if (!o || doneFor(th) === o.last) return ap;
   const q = o.items.filter(asks).length;
-  return h("section", { class: "tm-card", "data-key": "open:" + th, "data-tone": "info", "aria-label": "Open for you" },
+  const card = h("section", { class: "tm-card", "data-key": "open:" + th, "data-tone": "info", "aria-label": "Open for you" },
     h("header", { class: "tm-card-h" }, icon("bell"), h("b", null, q ? (q > 1 ? `${q} questions for you` : "A question for you") : "For you, further up"),
       button("Got it", () => { setDone(th, o.last); update(); }, { kind: "quiet", size: "s", cls: "tm-done", title: "Hide this until something new is for you" })),
     h("ul", { class: "tm-items" }, o.items.slice(0, 4).map(p => h("li", { "data-key": p.id, "data-ask": asks(p) ? "" : null },
@@ -96,4 +97,26 @@ export function openCard(th, { jump, answer, update, atEnd }) {
         button("Show", () => jump(p.id), { kind: "quiet", size: "s", title: "Show this message in the conversation" }),
         can("post") && asks(p) ? button("Answer", () => answer(p), { kind: "quiet", size: "s", title: "Reply to this message" }) : null)))),
     o.items.length > 4 ? h("p", { class: "meta" }, `and ${o.items.length - 4} more above`) : null);
+  return ap ? h("div", null, ap, card) : card;
+}
+
+/** Requests an agent made for a yes no warden can give (hive approve ask). A button on text the agent wrote could be pressed without reading it,
+ * so the card shows what the server recorded, and a major change asks for a typed x. */
+function approvalCard(th, update) {
+  const open = (S.approvals || []).filter(a => a.thread === th && a.state === "pending");
+  if (!open.length || !can("stop")) return null;
+  const answer = async (a, decision, confirm) => {
+    try { await post("/api/approval", { id: a.id, decision, confirm }); } catch (e) { alert(e.message); }
+    emit({ live: true }); update();
+  };
+  return h("section", { class: "tm-card", "data-key": "approve:" + th, "data-tone": "warn", "aria-label": "Approval needed" },
+    h("header", { class: "tm-card-h" }, icon("bell"), h("b", null, open.length > 1 ? `${open.length} approvals needed` : "Your approval is needed")),
+    h("ul", { class: "tm-items" }, open.map(a => {
+      const box = a.major ? h("input", { class: "input", autocomplete: "off", spellcheck: "false", placeholder: "type x", size: 4, "aria-label": "Type x to approve this major change" }) : null;
+      return h("li", { "data-key": a.id },
+        h("span", { class: "tm-who" }, a.from), h("span", { class: "tm-say" }, (a.major ? "Major change: " : "") + a.why),
+        h("span", { class: "tm-act" }, box,
+          button("Approve", () => { if (box && box.value.trim() !== "x") { box.focus(); return; } answer(a, "approve", box ? "x" : undefined); }, { size: "s", title: a.major ? "Type x first" : "Approve this" }),
+          button("Deny", () => answer(a, "deny"), { kind: "quiet", size: "s" })));
+    })));
 }

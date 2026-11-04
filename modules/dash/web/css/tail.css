@@ -84,3 +84,6 @@
   .xp-turn[data-stage] .xp-says{color:#555}
   .xp-files{font-size:9pt;color:#666}
 }
+.rw-line,.rw-sudo{flex:1;min-width:0;overflow-wrap:anywhere}
+.rw .field{margin-top:var(--s3)}
+.msg-word{margin-top:var(--s1)}

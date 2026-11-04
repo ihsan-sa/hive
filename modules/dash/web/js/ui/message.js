@@ -13,6 +13,7 @@ import { agentRef, threadRef } from "./refs.js";
 import { agentHref } from "../core/router.js";
 import { button, icon, statusDot } from "./kit.js";
 import { replyTo } from "./composer.js";
+import { wordButton } from "./rootword.js";
 
 // ---- read marks ----
 // Has this post reached the agent it names? Read: handed to it mid-run (the inbox hook's record, /api/delivered),
@@ -367,6 +368,7 @@ export function message(p, opts = {}) {
     p.reply_to ? quote(p) : null,
     body(p, ws),
     files.length ? h("div", { class: "msg-files" }, files.map(f => attachment(p, f))) : null,
+    wordButton(p),
     messageReceipt(p),
     simpleOn() ? null : messageActions(p, ws));
 }

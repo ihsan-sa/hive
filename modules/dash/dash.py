@@ -1481,7 +1481,9 @@ CAPS = ("read", "post", "stop", "tier", "limits", "logins", "config", "modules",
 # host's team and aud, so one Cloudflare account's sign-in can't be used on another's name. Anything malformed refuses everyone.
 LIMITED_CAN = ("read", "post", "stop")
 LIMITED_FILES = STATE / "limited-files"  # this file present: limited sign-ins here may also read the Knowledge page. Off unless a Hive has decided to, since limited people differ per install.
-FULL_FOR_S = 3600  # full rights need an Access token issued this recently; after that the same session is limited until they sign in again
+FULL_FOR_S = 3600  # full rights need an Access token issued this recently; after that the same session is limited until they sign in again,
+FULL_IDLE_S = 1800  # unless it stays in use: a full session that sees the person's own input (X-Hive-Active, or a POST) at least this often stays full
+FULL_KEEP = STATE / "full-active.json"  # {sha256 of email|iat|aud: last input}, so a dash restart doesn't drop a busy person to limited
 OPEN_CAN = ("read", "stop", "tier", "limits")
 WEB = STATE / "web.json"
 INSTALLED = HOME / ".hive-installed"
@@ -1491,8 +1493,8 @@ GET_CAP = {"/api/live": "read", "/api/board": "read", "/api/log": "read", "/api/
            "/api/projects": "read", "/api/agent-costs": "read", "/api/thread-names": "read", "/api/thread-meta": "read", "/json": "read", "/api/target": "read", "/api/inbox": "read", "/api/delivered": "read",
            "/api/config": "config", "/api/modules": "modules", "/api/signin": "logins", "/api/plans": "plans", "/api/secrets": "secrets",
            "/api/settings": "config", "/api/update": "config", "/api/signin-codex": "logins", "/api/accounts": "logins", "/api/design": "logins", "/api/brand/logo": "read",
-           "/api/kb/home": "files", "/api/kb/open": "files", "/api/kb/search": "files", "/api/kb/raw": "files", "/api/kb/map": "files", "/api/kb/history": "files", "/api/progress": "read"}
-POST_CAP = {"/api/kill": "stop", "/api/tier": "tier", "/api/agent-model": "post", "/api/login-pause": "limits", "/api/login-limit": "limits", "/api/provider-limit": "limits",
+           "/api/kb/home": "files", "/api/kb/open": "files", "/api/kb/search": "files", "/api/kb/raw": "files", "/api/kb/map": "files", "/api/kb/history": "files", "/api/progress": "read", "/api/approvals": "read"}
+POST_CAP = {"/api/kill": "stop", "/api/approval": "stop", "/api/tier": "tier", "/api/agent-model": "post", "/api/login-pause": "limits", "/api/login-limit": "limits", "/api/provider-limit": "limits",
             "/api/post": "post", "/api/thread-meta": "post", "/api/feedback": "post", "/api/issue-link": "post", "/api/update": "config", "/api/share-copy": "config", "/api/draft": "config", "/api/upload": "post", "/api/inbox-read": "post", "/api/config": "config", "/api/starter": "config",
             "/api/module": "modules", "/api/signin": "logins", "/api/signin/code": "logins", "/api/signin/cancel": "logins", "/api/plan": "plans", "/api/secret": "secrets",
             "/api/signin-codex": "logins", "/api/account-key": "logins", "/api/design": "logins", "/api/brand": "config", "/api/brand/logo": "config"}
@@ -1645,18 +1647,53 @@ def limited_can():
     return LIMITED_CAN + ("files",) if LIMITED_FILES.exists() else LIMITED_CAN
 
 
-def person_can(claims, out, now=None):
-    """(can, mode, seconds of full left) for a verified token, or None if this person isn't let in. Without outside.people: outside.can, for anyone Access let through."""
+class FullKeep:
+    """When each full sign-in last saw its person's input. Keyed by a hash of the signed email, iat and aud, so one Access session
+    is one key and a new sign-in starts its own. Only a session that is full now can be kept full; one already limited needs a new sign-in."""
+    def __init__(self, path):
+        self.path, self.lock, self.at, self.saved = path, threading.Lock(), None, 0
+
+    def _load(self):
+        if self.at is None:
+            d = jload(self.path, {}) if self.path.exists() else {}
+            self.at = {k: v for k, v in d.items() if isinstance(k, str) and isinstance(v, (int, float))} if isinstance(d, dict) else {}
+
+    def last(self, key):
+        with self.lock:
+            self._load(); return self.at.get(key, 0)
+
+    def touch(self, key, now):
+        with self.lock:
+            self._load(); self.at[key] = now
+            if now - self.saved < 30: return  # written at most twice a minute; losing the last 30 s to a restart costs nothing
+            self.at = {k: v for k, v in self.at.items() if now - v <= FULL_IDLE_S}
+            self.saved = now
+            try:
+                tmp = self.path.with_suffix(".tmp"); tmp.write_text(json.dumps(self.at)); tmp.chmod(0o600); tmp.replace(self.path)
+            except OSError: pass
+
+
+FULL_ACTIVE = FullKeep(FULL_KEEP)
+
+
+def person_can(claims, out, now=None, active=False, keep=FULL_ACTIVE):
+    """(can, mode, seconds of full left) for a verified token, or None if this person isn't let in. Without outside.people: outside.can, for anyone Access let through.
+    Full lasts FULL_FOR_S after sign-in, and after that for as long as the person keeps using the app (active: this request carries their input), up to FULL_IDLE_S apart."""
     if "people" not in out: return tuple(c for c in out.get("can", ["read"]) if c in CAPS), None, 0
     people = out["people"] if isinstance(out["people"], dict) else {}
     email = str(claims.get("email") or "").strip().lower()
     mode = {str(k).strip().lower(): v for k, v in people.items()}.get(email) if email else None
     if mode == "limited": return limited_can(), "limited", 0
     if mode != "full": return None
-    iat = claims.get("iat")
-    left = iat + FULL_FOR_S - (now or time.time()) if isinstance(iat, (int, float)) and not isinstance(iat, bool) else 0
-    if 0 < left <= FULL_FOR_S + 60: return CAPS, "full", int(left)  # a token dated well ahead is no proof of a recent sign-in
-    return limited_can(), "expired", 0
+    iat, now = claims.get("iat"), now or time.time()
+    if not isinstance(iat, (int, float)) or isinstance(iat, bool): return limited_can(), "expired", 0
+    left = iat + FULL_FOR_S - now
+    if left > FULL_FOR_S + 60: return limited_can(), "expired", 0  # a token dated well ahead is no proof of a recent sign-in
+    key = hashlib.sha256(f"{email}|{iat}|{claims.get('aud')}".encode()).hexdigest()
+    idle = FULL_IDLE_S - (now - keep.last(key))
+    if left <= 0 and idle <= 0: return limited_can(), "expired", 0
+    if active: keep.touch(key, now); idle = FULL_IDLE_S
+    return CAPS, "full", int(max(left, idle))
 
 
 def site_profile(v):
@@ -1831,6 +1868,36 @@ BTW_THREAD = re.compile(r"btw-(.+)-[0-9a-f]{4}")
 BTW_NOTE = ("side question, asked with /btw about thread {p}: read it with `hive read --thread {p}` and whatever logs or files you need, then answer here, briefly, with `hive post` in this thread (an answer left only in your final message never reaches the person). "
             "It's a side question, so post nothing in {p}, don't name its agents with the at sign, change nothing and start no work. If the answer calls for action, say what you'd do and let the person decide")
 
+
+
+# ---------- approval requests (hive approve ask; the card on the thread) ----------
+APPROVALS = STATE / "approvals"
+APPROVAL_ID = re.compile(r"[0-9a-f]{8}")
+
+def approvals_list():
+    """Requests agents have made for the person's yes: pending ones first, then the last few answered."""
+    out = []
+    for f in sorted(APPROVALS.glob("*.json"), key=lambda f: f.stat().st_mtime, reverse=True)[:60] if APPROVALS.is_dir() else []:
+        try: out.append(json.loads(f.read_text()))
+        except (OSError, ValueError): pass
+    return sorted(out, key=lambda a: a.get("state") != "pending")
+
+def approval_answer(d):
+    """The person's click on a request card. A major request needs the typed x. Writes the answer and tells the agent as the person."""
+    aid = str(d.get("id") or "")
+    if not APPROVAL_ID.fullmatch(aid): raise ValueError("no such request")
+    f = APPROVALS / (aid + ".json")
+    with KILL_LOCK:
+        try: a = json.loads(f.read_text())
+        except (OSError, ValueError): raise ValueError("no such request")
+        if a.get("state") != "pending": raise ValueError("that request was already answered")
+        yes = d.get("decision") == "approve"
+        if d.get("decision") not in ("approve", "deny"): raise ValueError("approve or deny")
+        if yes and a.get("major") and d.get("confirm") != "x": raise ValueError("type x to approve a major change")
+        a.update(state="approved" if yes else "denied", answered=datetime.now(timezone.utc).isoformat(timespec="seconds"))
+        f.write_text(json.dumps(a))
+    person_post(f"@{a['from']} {'APPROVED' if yes else 'DENIED'} request {aid} (answered with the dashboard button): {a.get('why', '')[:300]}", a.get("thread"))
+    return {"ok": True, "state": a["state"]}
 
 def person_post(text, thread=None, reply_to=None, uploads=(), signer=None, limited=False, simple=False, model=None):
     """A post as the person. As the Slack mirror does it: a plain message wakes the agent on the thread (thread_agent), a reply wakes the author
@@ -3748,7 +3815,8 @@ def serve(port):
                 claims = verify_access(hd.get("cf-access-jwt-assertion"), out.get("access") or {})
                 if not claims:
                     self.deny(403, "outside access needs a valid Cloudflare Access token"); return False
-                allowed = person_can(claims, out)
+                # the person's own input keeps full going: the page says so on the requests it makes just after a click or key, and any POST is one
+                allowed = person_can(claims, out, active=self.command == "POST" or hd.get("x-hive-active") == "1")
                 if not allowed: self.deny(403, "this sign-in isn't on this app's list"); return False
                 self.signer = signer_of(claims, out)
                 if out is not (web.get("outside") or {}): self.signer = f"{self.signer} at {site_key(hd.get('host'))}"[:80]  # a site's own profile: the post says which name it came in on
@@ -3771,6 +3839,8 @@ def serve(port):
             info = {"route": self.route, "can": list(self.can), "app": self.route != "open", "brand": brand_view()}
             if self.route != "open": info.update(setup=SETUP.get(), secrets_on=self.secrets_on, settings=settings_brief())
             if self.route != "open": info["default_model"] = default_model()
+            dm = (jload(HOME / "core" / "config.json", {}) or {}).get("rootwarden_dm") if self.route != "open" else None
+            if isinstance(dm, str) and re.fullmatch(r"https://[a-z0-9-]+\.slack\.com/archives/D[A-Z0-9]+", dm): info["rootwarden_dm"] = dm
             if self.mode: info.update(mode=self.mode, full_left=self.full_left)
             if self.signer: info["signer"] = self.signer
             if self.simple: info["simple"] = True
@@ -3870,6 +3940,8 @@ def serve(port):
             elif u.path in ("/api/board", "/api/log"):
                 off, lines = tail_lines(BOARD if u.path == "/api/board" else LOG, off)
                 self.send(('{"offset":%d,"items":[%s]}' % (off, ",".join(lines))).encode(), J)
+            elif u.path == "/api/approvals":
+                self.send(json.dumps(approvals_list()).encode(), J)
             elif u.path == "/api/delivered":
                 self.send(json.dumps(deliv_c.get()).encode(), J)
             elif u.path == "/api/usage":
@@ -3967,6 +4039,12 @@ def serve(port):
                 except (ValueError, subprocess.SubprocessError) as e: return self.deny(400, str(e))
                 live_c.t = usage_c.t = 0
                 return self.send(json.dumps(res).encode(), J)
+            if u.path == "/api/approval":  # like kill: this user's own connection, same origin
+                if not may_kill(os.getuid() if self.client_address[0] == "unix" else peer_uid(self.client_address)) or self.headers.get("Sec-Fetch-Site", "same-origin") != "same-origin":
+                    return self.send_error(403)
+                try: res = approval_answer(d)
+                except ValueError as e: return self.deny(400, str(e))
+                return self.send(json.dumps(res).encode(), "application/json")
             if u.path == "/api/kill":  # the one switch that can't be undone: more checks than the others
                 if not may_kill(os.getuid() if self.client_address[0] == "unix" else peer_uid(self.client_address)) or self.headers.get("Sec-Fetch-Site", "same-origin") != "same-origin":
                     return self.send_error(403)

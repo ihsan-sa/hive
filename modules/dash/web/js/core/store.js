@@ -35,8 +35,12 @@ export const subscribe = fn => (subs.add(fn), () => subs.delete(fn));
 export const emit = what => { for (const f of subs) f(what); };
 
 // ---- API ----
+// The person's own input in the last minute: sent with reads so a full sign-in from outside stays full while they use the app (dash.py FULL_IDLE_S).
+let lastInput = Date.now();
+for (const ev of ["pointerdown", "keydown", "wheel", "touchstart"]) addEventListener(ev, () => { lastInput = Date.now(); }, { capture: true, passive: true });
+export const activeNow = () => Date.now() - lastInput < 60000 && document.visibilityState === "visible";
 export async function jget(u) {
-  const r = await fetch(u, { cache: "no-store" });
+  const r = await fetch(u, { cache: "no-store", headers: activeNow() ? { "X-Hive-Active": "1" } : {} });
   if (r.status === 401) location.replace("/");
   if (!r.ok) throw Error(r.status);
   return r.json();
@@ -117,6 +121,7 @@ export async function poll() {
   try {
     const [l, lg, b] = await Promise.all([jget("/api/live"), jget("/api/log?from=" + S.logOff), jget("/api/board?from=" + S.off)]);
     S.stCache.clear(); S.live = l;
+    try { S.approvals = await jget("/api/approvals"); } catch (e) { S.approvals = S.approvals || []; }
     S.running = new Map(l.agents.filter(a => a.alive).map(a => [a.name, a]));
     S.pending = Object.fromEntries(l.pending.map(p => [p.name, p]));
     const runSig = [...S.running.keys()].sort().join();

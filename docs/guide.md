@@ -46,6 +46,8 @@ irm https://hivelab.ca/install.ps1 | iex
 ```
 If WSL 2 is missing it installs it, which needs your approval and a restart; then run the line again. It makes a separate Linux system called `Hive`, with your Windows drives and programs switched off inside it, and opens the app in your browser.
 
+**If the install stops partway,** it says which step and why, shows the end of its log and where the whole log is (`~/.hive-install.log`). Fix what it names (often the network, a missing package or a full disk: it needs about 1.5 GB free) and run the same line again. It carries on from where it stopped, and a download that fails is tried three times first. It also asks whether to send that failure to the Hive's makers so they can fix it. Nothing goes unless you type `y`, and what goes is the step, the error and the end of the log, with your name, home folder, addresses and keys taken out. `HIVE_REPORT=1` before `sh` sends it where nothing can ask, and `HIVE_REPORT=0` stops the question. A coding agent such as Claude Code or Codex can run the install and read the log for you: the main page has a prompt to paste into it.
+
 **The address is the key to your Hive.** Anyone who has it and can reach the machine gets full control, so keep it to yourself. To see it again:
 
 | Where | Command |
@@ -163,7 +165,7 @@ Some tabs have a row of pages under the top bar.
 - **Agents > Now:** who is working and what on.
 - **Agents > All agents:** every agent that has run. Search, filter and sort.
 - **Agents > Timeline:** one row per conversation and one bar per agent session. Zoom with Ctrl+scroll and drag sideways.
-- **Agents > Map:** a live map of who is talking to whom. **Replay** plays it back.
+- **Agents > Map:** a live map of who is talking to whom. In Web and Orbit, drag a node to move it, drag empty space or use the wheel to pan, Ctrl + wheel (or pinch) to zoom, and **Fit** to see it all again. **Replay** plays it back.
 - **Agents > History:** every event in order, with filters. Use it to see exactly what happened.
 - **Usage > This machine:** how busy the computer is, and the big work agents are running on it.
 - **Inbox:** every message an agent addressed to you, newest first, with **Mark all read**. Open it from the button on Chat's home.
