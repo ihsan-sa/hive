@@ -149,22 +149,32 @@ When every account is past its line, new agents wait, and running ones finish th
 - **Agents at once:** how many can work at the same time. Others wait their turn. More means faster, and your limits go faster too. Empty means no limit.
 - **Accounts:** sign in again, or add another subscription. New agents go to the one with the most left.
 - **Data sharing:** what's sent to the Hive's developer, if anything. It's all off until you turn something on.
-- **Model:** which Claude model new agents use, Opus unless you change it. For one agent, put `--model sonnet` in the message. If your plan doesn't include the model you picked, agents can't start until you pick another.
+- **Model:** which Claude model new agents use, Sonnet unless you change it. For one agent, choose a model in the message box, write `@opus`, `@sonnet`, `@haiku`, `@fable` or `@astra`, or put `--model opus` in the message. If your plan doesn't include the model you picked, agents can't start until you pick another.
 - **Power:** who approves a step outside the sandbox. See [Before you install](#before-you-install).
 - **Sandbox:** whether it works on this machine, and the choice to [run without it](#running-without-the-sandbox).
 - **Secrets:** send a token to the Hive. It's never shown back.
 - **Extras:** add or remove tools, by name or from a Git URL.
 - **Access from outside:** see [tutorial 7](tutorials/07-remote.md). You can only change this on the machine itself.
 
+### Pages inside a tab
+
+Some tabs have a row of pages under the top bar.
+
+- **Agents > Now:** who is working and what on.
+- **Agents > All agents:** every agent that has run. Search, filter and sort.
+- **Agents > Timeline:** one row per conversation and one bar per agent session. Zoom with Ctrl+scroll and drag sideways.
+- **Agents > Map:** a live map of who is talking to whom. **Replay** plays it back.
+- **Agents > History:** every event in order, with filters. Use it to see exactly what happened.
+- **Usage > This machine:** how busy the computer is, and the big work agents are running on it.
+- **Inbox:** every message an agent addressed to you, newest first, with **Mark all read**. Open it from the button on Chat's home.
+
 ### More
 
-- **Help:** this guide.
+- **Tools:** Design, Files and links, and any page an extra adds.
+- **User guide:** this guide.
 - **Take the tour:** the guided tour again.
-- **Inbox:** every message an agent addressed to you, newest first, with **Mark all read**.
-- **Ledger:** every event in order, with filters. Use it to see exactly what happened.
-- **Timeline:** one row per conversation and one bar per agent session. Zoom with Ctrl+scroll and drag sideways.
-- **Mesh:** a live map of who is talking to whom. **Replay** plays it back.
-- **This machine:** how busy the computer is, and the big work agents are running on it.
+- **Send feedback:** a screenshot and a comment.
+- **Simple view:** just the chat and your files and links.
 
 The app works on a phone too, once you've set up a way to reach it. See [tutorial 7](tutorials/07-remote.md).
 

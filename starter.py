@@ -38,8 +38,9 @@ def mentions(p):
     return list(dict.fromkeys(found))
 
 # words that start a fresh agent: prefix of its code, and how its model is chosen (see main)
-SPAWN = {"new": "a", "claude": "a", "codex": "c", "free": "f"}
 CODEX_DEFAULT = "codex:gpt-6-astra"
+MODEL_WORDS = {"opus": "opus", "sonnet": "sonnet", "haiku": "haiku", "fable": "fable", "astra": CODEX_DEFAULT}  # @opus: a new agent on that model (the person, 2026-11-04)
+SPAWN = {"new": "a", "claude": "a", "codex": "c", "free": "f", **{w: "c" if m.startswith("codex:") else "a" for w, m in MODEL_WORDS.items()}}
 
 def known_agents(c):
     """Names a word in a post's text may call: new, the warden, anyone who has run, except past accidents.
@@ -110,6 +111,13 @@ def default_model():
     except (OSError, ValueError): v = None
     m = v.get("model") if isinstance(v, dict) else None
     return m if m in MODELS else "opus"
+
+def spawn_model(c):
+    """The model of a new agent nobody asked a model for: None if Settings has a choice (default_model reads it), else config.json's spawn_model.
+    Set at the spawn and not in default_model, so an agent that ran before keeps its model on a wake."""
+    try: v = json.loads((HOME / "settings.json").read_text())
+    except (OSError, ValueError): v = None
+    return None if isinstance(v, dict) and v.get("model") in MODELS else c.get("spawn_model")
 
 TYPED_MODEL = re.compile(r"(?:^|\s)(?:--|\u2014|\u2013)model[ =](\S+)")  # a phone may turn -- into a dash
 
@@ -980,7 +988,7 @@ FALLBACK_NOTE = {
     "free": "This run is on a free model ({model}), not Claude: someone asked for a free agent. Keep it light: answer, look "
             "things up, small edits, board and kb chores. No heavy jobs, no builds or sims. You stay on this model when woken again. "
             "If the work is beyond you, don't guess: either ask @person, or hand it to a stronger agent with "
-            "`hive post --to new --thread THREAD` and a clear brief (add --model sonnet if that's enough). Only --to starts one: "
+            "`hive post --to new --thread THREAD` and a clear brief, and choose its model with --model (sonnet if that's enough). Only --to starts one: "
             "from a free agent, the word in the text starts nothing, so leave it out. Don't start more free agents. "
             "Before stopping, send your actual answer using hive post --thread THREAD. A local final answer alone is "
             "not delivered. Mention @person only if their opinion or decision is really needed.",
@@ -1083,6 +1091,8 @@ def main():
                         elif word == "codex" and ((pv := provider_of(c, q.get("model"))) is None or pv[1].get("harness") != "codex"):
                             q["model"] = c.get("codex_model") or CODEX_DEFAULT
                         elif word == "free": q["free"] = True
+                        elif word in MODEL_WORDS: q["model"] = q.get("model") or MODEL_WORDS[word]
+                        if word in ("new", "claude") and not q.get("model"): q["model"] = spawn_model(c)  # Sonnet by the person's choice, 2026-11-04
                     if is_warden(n):  # the warden rules on the hard limits and may come to hold root: Claude only, like @claude
                         q["claude"] = True
                         if provider_of(c, q.get("model")): q["model"] = None

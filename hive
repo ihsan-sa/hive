@@ -61,11 +61,16 @@ def since_ok(p, since):
         since = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(**{unit: int(m[1])})).isoformat()
     return p.get("at", "") > since
 
+def settings_model():
+    try: v = json.loads((HOME / "settings.json").read_text())
+    except (OSError, ValueError): return None
+    return v.get("model") if isinstance(v, dict) else None
+FRESH = ("new", "claude", "codex", "free", "opus", "sonnet", "haiku", "fable", "astra")  # words that start a fresh agent (SPAWN in starter.py)
 HASH_NAME = re.compile(r"[a-z][0-9a-f]{4,}")  # what new/claude/codex/free/warden hand out (a9aba, c12cd, f12cd, w0e1f)
 
 def agents(c):
     """Same rule as known_agents in starter.py: new, claude, codex, free, the warden, anyone who has run, except past accidents."""
-    found = {"new", "claude", "codex", "free", "warden", "all", "here"}
+    found = {*FRESH, "warden", "all", "here"}
     try:
         for line in (HOME / "log.jsonl").open(errors="replace"):
             if '"start"' in line:
@@ -85,6 +90,7 @@ def receipt(to, ignored, ext, me):
         elif n == "free": start.append("a new agent on a free OpenRouter model")
         elif n == "claude": start.append("a new agent on Claude")
         elif n == "codex": start.append("a new agent on Codex")
+        elif n in FRESH: start.append(f"a new agent on {n}")
         elif n in ext or n == me: continue
         elif (RUN / f"{n}.json").exists(): reach.append(n)
         else: start.append(n)
@@ -122,12 +128,17 @@ def cmd_post(a):
     ext = set(c.get("external", []))
     said = list(dict.fromkeys(m.lower() for m in MENTION.findall(CODE.sub(" ", text))))
     asked = names(a.to)
-    if (bad := [n for n in asked if n not in ext and n not in {"new", "claude", "codex", "free", "warden"} and not HASH_NAME.fullmatch(n) and n not in agents(c)]):
+    if (bad := [n for n in asked if n not in ext and n not in {*FRESH, "warden"} and not HASH_NAME.fullmatch(n) and n not in agents(c)]):
         sys.exit(f"hive post: {', '.join(bad)}: an agent's name is a letter and 4+ hex digits (a9aba), never a word. "
                  "Use new (or claude, codex, free) for a fresh agent; --to takes a name that has run or a code like that.")
     known = agents(c) if any(n not in asked and n not in ext for n in said) else set()
     ignored = [n for n in said if n not in asked and n not in ext and n not in known]
     to = asked + [n for n in said if n not in ignored]
+    # An agent starting an agent chooses its model; there's no default for that (the person, 2026-11-04). Scripts land on spawn_model, watchdog and
+    # release-train included: they set HIVE_NAME too but read no refusal, so only an agent's own name is refused. A model chosen in Settings stands for that Hive's agents.
+    if c.get("spawn_model") and not settings_model() and HASH_NAME.fullmatch(os.environ.get("HIVE_NAME", "")) and not a.as_ and not a.model and (w := [n for n in to if n in ("new", "claude")]):
+        sys.exit(f"hive post: nothing posted. {' and '.join(w)} starts a new agent, so choose its model: add --model sonnet (or opus, haiku, fable, codex:gpt-6-astra), "
+                 "or use the words opus, sonnet, haiku, fable or astra instead. If you only meant to write about it, put it in backticks.")
     if a.reply_to and not any(p.get("id") == a.reply_to for p in posts()): sys.exit(f"hive post: --reply-to {a.reply_to}: no such post")
     pid = dt.datetime.now().strftime("%m%d%H%M") + secrets.token_hex(2)
     files = attach([attachable(f) for f in a.file or []], pid)
@@ -138,7 +149,7 @@ def cmd_post(a):
     if a.routed: p["routed"] = True
     if a.reply_to: p["reply_to"] = a.reply_to
     if os.environ.get("HIVE_POST_VIA"): p["via"] = os.environ["HIVE_POST_VIA"]
-    if re.fullmatch(r"f[0-9a-f]{4}", str(p["from"]).lower()) and (w := [n for n in said if n in ("new", "claude", "codex", "free")]):
+    if re.fullmatch(r"f[0-9a-f]{4}", str(p["from"]).lower()) and (w := [n for n in said if n in FRESH]):
         print(f"hive post: from a free agent, {', '.join(w)} in the text starts nothing: leave the word out and use --to new", file=sys.stderr)
     if files: p["files"] = files
     with BOARD.open("a") as f:
