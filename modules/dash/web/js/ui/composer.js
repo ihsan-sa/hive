@@ -69,8 +69,9 @@ function serverWho(th) {
   if (TG.key !== k) { TG.key = k; jget("/api/target?thread=" + encodeURIComponent(th)).then(t => { TG.v[th] = t; refresh(); }).catch(() => {}); }
   return TG.v[th] || null;
 }
+const MODEL_WORDS = ["opus", "sonnet", "haiku", "fable", "astra"];
 function named(text) {
-  for (const m of text.matchAll(/(?:^|\s)@([\w.-]+)/g)) if (m[1] === "new" || isAgent(m[1])) return m[1];
+  for (const m of text.matchAll(/(?:^|\s)@([\w.-]+)/g)) if (m[1] === "new" || MODEL_WORDS.includes(m[1]) || isAgent(m[1])) return m[1];
   return null;
 }
 /** {who: name | "new" | null, why: reply | named | chosen | partner | last | first, server: who the server would wake} */
@@ -108,7 +109,7 @@ async function deliver(it) {
   it.state = "sending"; it.err = ""; refresh();
   try {
     if (!it.refs) { it.uploading = it.files.length > 0; refresh(); const refs = []; for (const f of it.files) refs.push(await uploadFile(f.file)); it.refs = refs; it.uploading = false; }
-    const res = await post("/api/post", { text: it.wire, thread: it.th || it.name || null, reply_to: it.reply ? it.reply.id : null, files: it.refs, simple: simpleOn() });
+    const res = await post("/api/post", { text: it.wire, thread: it.th || it.name || null, reply_to: it.reply ? it.reply.id : null, files: it.refs, simple: simpleOn(), model: it.model || null });
     it.id = res.id; it.state = "sent";
     if (!it.th && res.thread) { it.th = res.thread; go("comms", res.thread); loadApp(); }
     poll();
@@ -116,7 +117,7 @@ async function deliver(it) {
   refresh();
 }
 function queue(th, d, r) {
-  const it = { lid: ++lid, th: th || null, text: d.text, files: d.files, reply: d.reply, to: th ? r.who : null, name: th ? null : d.name.trim() || null, wire: wire(th, d, r), state: "sending", err: "", t: now() };
+  const it = { lid: ++lid, th: th || null, text: d.text, files: d.files, reply: d.reply, to: th ? r.who : null, name: th ? null : d.name.trim() || null, wire: wire(th, d, r), model: d.model || null, state: "sending", err: "", t: now() };
   OUT.push(it); deliver(it);
   return it;
 }
@@ -124,7 +125,7 @@ function send(th) {
   const d = draft(th);
   if (!d.text.trim() && !d.files.length) return;
   queue(th, d, recipient(th));
-  Object.assign(d, { text: "", files: [], reply: null, replyId: null, to: null, name: "", naming: false, err: "" }); keep(d);
+  Object.assign(d, { text: "", files: [], reply: null, replyId: null, to: null, name: "", naming: false, err: "", model: "" }); keep(d);
   CP.ac = null; CP.menu = false; CP.hist = null;
   const el = field(th); if (el) { el.value = ""; el.focus(); }   // morph leaves a focused field alone, so clear it here
   refresh();
@@ -165,13 +166,23 @@ export function dropZone(th) {
   };
 }
 
+// ---- model picker: shows what the message will start on (default, the picked one, or an @model typed in the text) ----
+const MODEL_LABELS = { opus: "Opus", sonnet: "Sonnet", haiku: "Haiku", fable: "Fable", astra: "Astra" };
+function typedModel(text) { const w = named(text); return MODEL_WORDS.includes(w) ? w : null; }
+function modelPick(d) {
+  const def = (S.app && S.app.default_model) || "", typed = typedModel(d.text), cur = typed || d.model || "";
+  return h("select", { class: "cp-model meta", "aria-label": "Model", title: "Model for a new or sleeping agent this message starts. It holds on that agent from then on. An agent already running stays on its model. Typing @opus, @sonnet… in the message sets this too.",
+    onchange: e => { d.model = e.target.value; keep(d); refresh(); } },
+    [["", def ? `${MODEL_LABELS[def] || def} (default)` : "Model"], ...Object.entries(MODEL_LABELS).filter(([v]) => v !== def)].map(([v, l]) => h("option", { value: v, selected: cur === v }, l)));
+}
+
 // ---- @ names ----
 function acNames(th, q) {
   const seen = new Set(), out = [], add = n => { if (n && !seen.has(n) && n.startsWith(q)) { seen.add(n); out.push(n); } };
   if (th) for (const n of threadPeople(th)) if (isAgent(n)) add(n);
   for (const n of S.running.keys()) add(n);
   for (let i = S.sessions.length - 1; i >= 0 && out.length < 8; i--) add(S.sessions[i].name);
-  add("new");
+  add("new"); MODEL_WORDS.forEach(add);
   return out.slice(0, 8);
 }
 function acCheck(el, th) {
@@ -304,6 +315,7 @@ export function composer({ thread, update, place = "thread", autofocus }) {
         simpleOn() ? null : th ? toChip(th, r) : d.naming ? h("span", { class: "meta cp-new" }, "A new agent starts on this") : button("Name it", () => { d.naming = true; refresh(); }, { kind: "quiet", size: "s", title: "Give this job a short name (optional). Without one it's called by its first words." }),
         h("input", { type: "file", multiple: true, hidden: true, class: "cp-pick", onchange: e => { addFiles(th, e.target.files); e.target.value = ""; } }),
         button("Attach", (e, b) => b.parentNode.querySelector(".cp-pick").click(), { kind: "quiet", size: "s", title: "Attach files. You can also paste or drop them here." }),
+        simpleOn() ? null : modelPick(d),
         h("span", { class: "cp-hint meta" }, "Enter to send · Shift+Enter for a new line · ↑ past messages · Tab completes"),
         button(place === "thread" ? "Send" : "Start", () => send(th), { kind: "primary", disabled: empty, cls: "cp-send" }))),
     CP.menu && th ? toMenu(th, r) : null);

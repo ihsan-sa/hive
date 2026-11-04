@@ -814,6 +814,7 @@ span.msg-thumb,span.msg-file{cursor:default}
 .cp-t:focus-visible{outline:none}
 .cp-t::placeholder{color:var(--ink-3)}
 .cp-bar{display:flex;align-items:center;gap:2px;padding:2px 6px 6px}
+.cp-model{height:var(--ctl-s);margin:0 4px;padding:0 4px;border:1px solid var(--line);border-radius:var(--r-pill);background:var(--sunken);color:inherit}
 .cp-hint{margin-left:auto;padding:0 var(--s2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
 .cp-send{flex:none;min-width:64px}
 .cp-new{padding:0 6px}
@@ -901,6 +902,7 @@ span.msg-thumb,span.msg-file{cursor:default}
 .cm-line{display:flex;align-items:center;gap:8px;min-height:28px;font-size:var(--fs-small);color:var(--ink-2);min-width:0}
 .cm-line>.sd{flex:none}
 .cm-line-x{flex:1;min-width:0;text-wrap:pretty}
+.cm-line[data-key^="run:"] .cm-line-x{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .cm-line-x b{color:var(--ink);font-weight:600}
 .cm-line-x q{color:var(--ink)}
 .cm-line[data-tone=info] .cm-line-x,.cm-line[data-tone=bad] .cm-line-x{color:var(--ink)}

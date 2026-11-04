@@ -1389,7 +1389,7 @@ THREAD_NAME = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.:-]{0,100}")
 UPLOAD_REF = re.compile(r"([0-9a-f]{16})/([A-Za-z0-9_][A-Za-z0-9_.-]*)")
 MENTION = re.compile(r"(?<![\w.])@([a-z0-9][a-z0-9_-]*)", re.I)
 MENTION_CODE = re.compile(r"```.*?```|`[^`\n]*`", re.S)  # a name in backticks is being written about, not called
-SPAWNERS = {"new", "claude", "codex", "free", "warden"}
+SPAWNERS = {"new", "claude", "codex", "free", "warden", "opus", "sonnet", "haiku", "fable", "astra"}
 
 
 def child_env():
@@ -1475,7 +1475,7 @@ PAGE_CSP = "sandbox allow-scripts; default-src 'none'; style-src 'unsafe-inline'
 SIMPLE_NOTE = ("simple mode: this person isn't technical. Plain words, no agent names or jargon, speak as one assistant, one question at a time with your recommendation, "
                "show results as links or files, a draft website as one .html file holding its own styles and pictures. For anything they must approve, say what it does, what it costs and whether it can be undone")
 
-def person_post(text, thread=None, reply_to=None, uploads=(), signer=None, limited=False, simple=False):
+def person_post(text, thread=None, reply_to=None, uploads=(), signer=None, limited=False, simple=False, model=None):
     """A post as the person. As the Slack mirror does it: a plain message wakes the agent on the thread (thread_agent), a reply wakes the author
     of the post replied to, and no thread (or a thread with no agent yet) starts a new agent. Mentions in the text win.
     signer: who signed in, from a verified Access token, when more than one person can: it heads the text, so an agent and the board can see who wrote it.
@@ -1487,6 +1487,7 @@ def person_post(text, thread=None, reply_to=None, uploads=(), signer=None, limit
     if not all(p.is_file() and not p.is_symlink() for p in paths): raise ValueError("an attachment is gone; attach it again")
     if thread and not THREAD_NAME.fullmatch(str(thread)): raise ValueError("a thread name is letters, digits and . _ : -")
     if not text and not paths: raise ValueError("nothing to send")
+    if model and model not in PICK_MODELS: raise ValueError("that model isn't one of " + ", ".join(PICK_MODELS))
     if not text: text = "Attached: " + ", ".join(p.name for p in paths)
     # Approving a step goes to the broker, which takes only a whole line in this form from a plain person post. So it stays bare, with nothing added;
     # a limited sign-in's posts are marked and never count, whatever lines they hold.
@@ -1506,7 +1507,7 @@ def person_post(text, thread=None, reply_to=None, uploads=(), signer=None, limit
         who = who or (thread_agent(thread) if thread else None)
         text = f"@{who or 'new'} {text}"
         routed = bool(who)  # we picked the name, so a dead agent's heir may take it; only a typed name brings a dead agent back
-    cmd = [str(HIVE_BIN), "post", "--as", PERSON] + (["--thread", str(thread)] if thread else []) + (["--to", who] if who else []) + (["--routed"] if routed else []) + (["--reply-to", reply_to] if reply_to else [])
+    cmd = [str(HIVE_BIN), "post", "--as", PERSON] + (["--thread", str(thread)] if thread else []) + (["--to", who] if who else []) + (["--routed"] if routed else []) + (["--reply-to", reply_to] if reply_to else []) + (["--model", PICK_MODELS[model]] if model else [])
     for p in paths: cmd += ["--file", str(p)]
     r = subprocess.run(cmd, input=text, text=True, capture_output=True, env={**child_env(), **({"HIVE_POST_VIA": "limited"} if limited else {})}, cwd=str(HOME), timeout=60)
     if r.returncode: raise ValueError(short(r.stderr, 300) or "the post failed")
@@ -2441,6 +2442,7 @@ SETUP = CachedStale(setup_state, 20)  # set .t = 0 to read again. Stale, since e
 # No file (Hive itself, and every install from before it) means today's behaviour: nothing here writes, and no route can create it.
 SETTINGS = HOME / "settings.json"
 AGENT_MODELS = ("opus", "sonnet", "haiku", "fable")  # the Claude models a post may ask for too (the starter's MODELS)
+PICK_MODELS = {**{m: m for m in AGENT_MODELS}, "astra": "codex:gpt-6-astra"}  # the message box's model menu
 SHARE_KEYS = ("failures", "usage", "everything")
 _settings_lock = threading.Lock()
 
@@ -2456,13 +2458,19 @@ def settings_norm(v):
     sh = v.get("share") if isinstance(v.get("share"), dict) else {}
     p = v.get("power")
     return {"power": p if type(p) is int and 1 <= p <= 3 else 2, "sandbox": "bare" if v.get("sandbox") == "bare" else "on",
-            "model": v.get("model") if v.get("model") in AGENT_MODELS else "opus",  # the starter reads it the same way (default_model)
+            "model": v.get("model") if v.get("model") in AGENT_MODELS else cfg().get("spawn_model") or "opus",  # what a new agent starts on (the starter's spawn word handling)
             "share": {k: sh.get(k) is True for k in SHARE_KEYS}, "setup_done": v.get("setup_done") is not False}
 
 
 def settings_brief():
     v = settings_raw()
     return settings_norm(v) if v is not None else None
+
+
+def default_model():
+    """What a new agent with no model asked for starts on: Settings' choice, else config.json's spawn_model."""
+    v = (settings_raw() or {}).get("model")
+    return v if v in AGENT_MODELS else cfg().get("spawn_model") or "opus"
 
 
 def secrets_allowed(web, site=False):
@@ -2878,6 +2886,7 @@ def serve(port):
             web = web_cfg() or {}
             info = {"route": self.route, "can": list(self.can), "app": self.route != "open", "brand": brand_view()}
             if self.route != "open": info.update(setup=SETUP.get(), secrets_on=self.secrets_on, settings=settings_brief())
+            if self.route != "open": info["default_model"] = default_model()
             if self.mode: info.update(mode=self.mode, full_left=self.full_left)
             if self.signer: info["signer"] = self.signer
             if self.simple: info["simple"] = True
@@ -3025,7 +3034,7 @@ def serve(port):
             J = "application/json"
             if u.path in ("/api/post", "/api/feedback", "/api/update", "/api/inbox-read", "/api/config", "/api/starter", "/api/module", "/api/signin", "/api/signin/code", "/api/signin/cancel", "/api/access", "/api/plan", "/api/secret", "/api/settings", "/api/signin-codex", "/api/account-key", "/api/design", "/api/brand"):
                 try:
-                    if u.path == "/api/post": res = person_post(d.get("text"), d.get("thread"), d.get("reply_to"), d.get("files"), signer=self.signer, limited="config" not in self.can, simple=d.get("simple") is True)
+                    if u.path == "/api/post": res = person_post(d.get("text"), d.get("thread"), d.get("reply_to"), d.get("files"), signer=self.signer, limited="config" not in self.can, simple=d.get("simple") is True, model=d.get("model"))
                     elif u.path == "/api/feedback": res = send_feedback(d)
                     elif u.path == "/api/update": res = update_do(d.get("do"))
                     elif u.path == "/api/plan": res = save_plan(d.get("name"), d.get("text"), d.get("version"), bool(d.get("start")), self.signer)

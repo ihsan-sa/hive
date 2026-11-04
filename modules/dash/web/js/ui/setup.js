@@ -18,7 +18,7 @@ export const POWER = [
 ];
 
 export const MODELS = [
-  ["opus", "Opus", "Where it starts. For hard work. It uses up a plan's limits faster than Sonnet."],
+  ["opus", "Opus", "For hard work. It uses up a plan's limits faster than Sonnet."],
   ["sonnet", "Sonnet", "Uses a plan's limits more slowly. For everyday work."],
   ["haiku", "Haiku", "The lightest. For small chores."],
   ["fable", "Fable", "Another Claude model. Your plan may not include it."],
