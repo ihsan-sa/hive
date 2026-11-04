@@ -1,6 +1,6 @@
 #!/bin/sh
 # For someone with a Mac: does the Hive really work here? One line, about 20 minutes:
-#   curl -fsSL https://hivelab.ca/mac-check.sh -o mac-check.sh && sh mac-check.sh
+#   curl -fsSL https://hive.ihsan.cc/mac-check.sh -o mac-check.sh && sh mac-check.sh
 # It installs the Hive if it isn't there, checks it, asks you to do three things, and writes a report you send back.
 # The report has versions, memory and results. It has no address, secret, user name or file of yours.
 # HIVE_CHECK_AUTO=1 is for a Mac runner with no person: nothing is asked, and sleep is only a pause of the VM.
@@ -8,7 +8,7 @@
 # After the check, to test uninstall: run the uninstall line it prints, then: sh mac-check.sh --after-uninstall
 set -u
 
-SITE="${HIVE_SITE:-https://hivelab.ca}"
+SITE="${HIVE_SITE:-https://hive.ihsan.cc}"
 R="$HOME/hive-mac-report.txt"
 L="$HOME/.hive/lima-dist/bin/limactl"
 export LIMA_HOME="$HOME/.hive/lima"

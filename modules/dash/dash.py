@@ -1813,6 +1813,12 @@ STEP_WORD = re.compile(r"(approve|deny) step [0-9a-f]{6}-[0-9a-f]{8}", re.I)
 
 # Simple mode's word to the agents, on each post sent from it. Inside the head's parentheses, so the web app hides it (SOURCE in web/js/core/model.js):
 # no ")" and no newline, and no "@", which would call someone. The core and the agents' prompts don't change.
+VIDEO_TYPES = {".mp4": "video/mp4", ".webm": "video/webm", ".mov": "video/quicktime", ".m4v": "video/mp4"}
+class _Limit:
+    """Reads at most n bytes from a file: the slice a Range request asks for."""
+    def __init__(self, f, n): self.f, self.n = f, n
+    def read(self, k=-1):
+        k = self.n if k is None or k < 0 else min(k, self.n); b = self.f.read(k); self.n -= len(b); return b
 PAGE_CSP = "sandbox allow-scripts; default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:; font-src data:; media-src data:; form-action 'none'; base-uri 'none'"
 SIMPLE_NOTE = ("simple mode: this person isn't technical. Plain words, no agent names or jargon, speak as one assistant, one question at a time with your recommendation, "
                "show results as links or files, a draft website as one .html file holding its own styles and pictures. For anything they must approve, say what it does, what it costs and whether it can be undone")
@@ -3487,7 +3493,7 @@ def serve(port):
             if cookie: self.send_header("Set-Cookie", cookie)
             # Board text is written by agents: the page takes nothing from elsewhere and sends nothing anywhere.
             framing = "; frame-ancestors 'self'" if framed_here else "" if self.route == "open" else "; frame-ancestors 'none'"  # the page can post as the person, so it can't sit in someone's frame; a TV page may sit in this site's own (the deck's single screen)
-            self.send_header("Content-Security-Policy", "default-src 'none'; connect-src 'self'; frame-src 'self'; img-src 'self' blob: data:; font-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; base-uri 'none'; form-action 'none'" + framing)
+            self.send_header("Content-Security-Policy", "default-src 'none'; connect-src 'self'; frame-src 'self'; img-src 'self' blob: data:; media-src 'self'; font-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; base-uri 'none'; form-action 'none'" + framing)
             if self.route != "open": self.send_header("Referrer-Policy", "no-referrer")
             if gz: self.send_header("Content-Encoding", "gzip")
             self.end_headers(); self.wfile.write(body)
@@ -3505,16 +3511,30 @@ def serve(port):
             if page: ct = "text/html; charset=utf-8"
             pdf = view and f.suffix.lower() == ".pdf"   # only ?view=1: the viewer frames it; the browser's own PDF viewer needs a CSP without "sandbox"
             if pdf: ct = "application/pdf"
-            self.send_response(200)
+            vid = VIDEO_TYPES.get(f.suffix.lower()) if view else None   # only ?view=1: the viewer plays it in a <video>, with seeking (Range)
+            if vid: ct = vid
+            size = f.stat().st_size; lo, hi = 0, size - 1
+            rm = vid and re.fullmatch(r"bytes=(\d*)-(\d*)", self.headers.get("Range") or "")
+            if rm and (rm[1] or rm[2]):
+                if rm[1]: lo = int(rm[1]); hi = min(int(rm[2]), size - 1) if rm[2] else size - 1
+                else: lo = max(0, size - int(rm[2]))
+                if lo > hi or lo >= size: return self.send_error(416)
+            else: rm = None
+            self.send_response(206 if rm else 200)
+            if rm: self.send_header("Content-Range", f"bytes {lo}-{hi}/{size}")
+            if vid: self.send_header("Accept-Ranges", "bytes")
             self.send_header("Content-Type", ct or "application/octet-stream")
-            self.send_header("Content-Length", str(f.stat().st_size))
+            self.send_header("Content-Length", str(hi - lo + 1))
             self.send_header("Content-Disposition", ("inline" if ct else "attachment") + f'; filename="{f.name}"')
             self.send_header("Content-Security-Policy", PAGE_CSP if page else "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'self'" if pdf else "sandbox; default-src 'none'")
             self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header("Referrer-Policy", "no-referrer")
             self.send_header("Cache-Control", "no-store")
             self.end_headers()
-            with f.open("rb") as src: shutil.copyfileobj(src, self.wfile)
+            with f.open("rb") as src:
+                src.seek(lo)
+                if rm or vid: shutil.copyfileobj(_Limit(src, hi - lo + 1), self.wfile)
+                else: shutil.copyfileobj(src, self.wfile)
 
         def send_logo(self):
             """Sandboxed like any file from a person: an SVG opened by its address can't run in the app's origin."""

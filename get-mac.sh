@@ -1,6 +1,6 @@
 #!/bin/sh
 # Install the Hive on a Mac. One line:
-#   curl -fsSL https://hivelab.ca/install-mac.sh | sh
+#   curl -fsSL https://hive.ihsan.cc/install-mac.sh | sh
 # The Hive needs Linux with systemd, so this makes a small Linux VM (Lima, on Apple's Virtualization framework) and runs the normal
 # Linux install inside it, as the Windows line does in WSL. The VM can't see your files: no folder of the Mac is shared with it.
 # Run it again to update. Everything lives in ~/.hive. It uses only what every Mac has: no sudo, Homebrew, Python, or Apple's developer
@@ -204,15 +204,15 @@ get_lima() {
 main() {
   [ "${1:-}" != --print-yaml ] || { vm_yaml 4 4; exit 0; }
   [ $# = 0 ] || die "unknown option $1"
-  [ "$(uname -s)" = Darwin ] || die "this is the Mac installer. On Linux: curl -fsSL https://hivelab.ca/install.sh | sh"
+  [ "$(uname -s)" = Darwin ] || die "this is the Mac installer. On Linux: curl -fsSL https://hive.ihsan.cc/install.sh | sh"
   [ "$TESTED" = yes ] || [ -n "${HIVE_MAC_TEST:-}" ] || die "the Mac version is a test build that has never run on a real Mac, so it may not work. To try it anyway:
-  curl -fsSL https://hivelab.ca/install-mac.sh | HIVE_MAC_TEST=1 sh"
+  curl -fsSL https://hive.ihsan.cc/install-mac.sh | HIVE_MAC_TEST=1 sh"
   [ "$(id -u)" != 0 ] || die "run this as yourself, not with sudo. It doesn't need sudo"
   major=$(sw_vers -productVersion | cut -d. -f1)
   case "$major" in "" | *[!0-9]*) die "couldn't read this Mac's macOS version" ;; esac
   [ "$major" -ge 13 ] || die "this needs macOS 13 (Ventura) or newer, for Apple's Virtualization framework. This Mac has $(sw_vers -productVersion)"
 
-  SITE="${HIVE_SITE:-https://hivelab.ca}"
+  SITE="${HIVE_SITE:-https://hive.ihsan.cc}"
   D="$HOME/.hive"
   mkdir -p "$D/bin"
   : > "$D/.hive-mac"

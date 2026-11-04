@@ -44,6 +44,8 @@ export function delivery(p, m) {
   if ((set && set.has(p.id)) || (!queued && last && last.start >= p.t - 2000) || answered(p, m)) return { key: "seen", tone: "good", text: `Seen by ${m}`, who: m };
   if (queued) return { key: "queued", tone: "info", text: `Waiting for ${m} to start`, who: m };
   if (isRunning(m)) return { key: "waiting", tone: "warn", text: `${m} sees this after its current step`, who: m };
+  // Just posted to a sleeping agent: the starter takes a moment to wake it, so it isn't "not reached" yet.
+  if (now() - p.t < 2 * MIN) return { key: "queued", tone: "info", text: `Waking ${m}…`, who: m };
   return { key: "unseen", tone: "bad", text: `Hasn't reached ${m}`, who: m };
 }
 /** The board itself says m has it: m replied to it, or posted in its thread after it. */
@@ -80,6 +82,7 @@ export const IMG = /\.(png|jpe?g|gif|webp)$/i;
 const TXT = /\.(txt|md|log|json|jsonl|csv|tsv|py|js|mjs|ts|sh|c|h|cpp|v|sv|vh|yaml|yml|toml|ini|cfg|xml|html|css|go|rs|kicad_pcb|kicad_sch|net|sp|cir|spice|lef|def|sdc|tcl)$/i;
 export const fileUrl = (p, f) => `/files/${encodeURIComponent(p.id)}/${encodeURIComponent(f.name)}`;
 export const PDF = /\.pdf$/i;
+export const VID = /\.(mp4|webm|mov|m4v)$/i;
 export const PAGE = /\.html?$/i;
 export const pageUrl = (p, f) => fileUrl(p, f) + "?view=1";
 export const fsize = n => (n == null ? "" : n >= 1048576 ? (n / 1048576).toFixed(1) + " MB" : n >= 1024 ? Math.round(n / 1024) + " kB" : n + " B");
@@ -95,6 +98,8 @@ function attachment(p, f) {
     h("img", { src: u, alt: f.name, loading: "lazy" }), h("span", null, f.name));
   if (simpleOn() && PAGE.test(f.name)) return h("a", { class: "msg-file", title: "Open this page in a new tab", href: pageUrl(p, f), target: "_blank", rel: "noopener noreferrer" },
     h("b", null, "PAGE"), h("span", null, h("span", { class: "msg-fn" }, f.name), h("span", { class: "meta" }, "open the page")));
+  if (VID.test(f.name)) return h("button", { type: "button", class: "msg-file", title: "Click to play", onclick: () => viewFile(p, f) },
+    h("b", null, "VIDEO"), h("span", null, h("span", { class: "msg-fn" }, f.name), h("span", { class: "meta" }, fsize(f.size) + " · play")));
   if (PDF.test(f.name)) return h("button", { type: "button", class: "msg-file", title: "Click to read", onclick: () => viewFile(p, f) },
     h("b", null, "PDF"), h("span", null, h("span", { class: "msg-fn" }, f.name), h("span", { class: "meta" }, fsize(f.size) + " · read")));
   const txt = TXT.test(f.name) && (f.size == null || f.size < 2 * 1048576);
@@ -106,7 +111,7 @@ function attachment(p, f) {
 
 const MD = /\.(md|markdown)$/i;
 function viewFile(p, f) {
-  const all = (p.files || []).filter(x => IMG.test(x.name) || TXT.test(x.name) || PDF.test(x.name));
+  const all = (p.files || []).filter(x => IMG.test(x.name) || TXT.test(x.name) || PDF.test(x.name) || VID.test(x.name));
   let i = Math.max(0, all.findIndex(x => x.name === f.name));
   const stage = h("div", { class: "viewer-s" }), cap = h("div", { class: "meta viewer-c" }), open = h("a", { class: "btn", "data-size": "s", target: "_blank", rel: "noopener" }, "Open original");
   const dlg = h("dialog", { class: "viewer", "aria-label": "File viewer" },
@@ -124,6 +129,7 @@ function viewFile(p, f) {
       im.addEventListener("click", () => im.toggleAttribute("data-full"));
       stage.replaceChildren(im); return;
     }
+    if (VID.test(g.name)) { open.href = pageUrl(p, g); stage.replaceChildren(h("video", { class: "viewer-vid", src: pageUrl(p, g), controls: true, autoplay: true, playsinline: true, title: g.name })); return; }
     if (PDF.test(g.name)) { open.href = pageUrl(p, g); stage.replaceChildren(h("iframe", { class: "viewer-pdf", src: pageUrl(p, g), title: g.name })); return; }
     const pre = h("pre", null, "Loading…"); stage.replaceChildren(pre);
     try {

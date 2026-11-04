@@ -1,5 +1,5 @@
 # Install the Hive, or update it, on Windows 10 or 11. One line, in PowerShell:
-#   irm https://hivelab.ca/install.ps1 | iex
+#   irm https://hive.ihsan.cc/install.ps1 | iex
 # The Hive runs on Linux, so this makes a separate WSL 2 system called Hive. Agents work inside it as an ordinary user, so
 # its Windows drives and Windows programs are switched off for its users. Root inside could turn them back on.
 # Everything is inside one function, so a download cut short runs nothing, and "exit" would close your window: it returns instead.
@@ -8,7 +8,7 @@ function Install-Hive {
   $ProgressPreference = 'SilentlyContinue'
   $env:WSL_UTF8 = '1'
   [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-  $site = 'https://hivelab.ca'
+  $site = 'https://hive.ihsan.cc'
   $distro = 'Hive'
   $base = Join-Path $env:LOCALAPPDATA 'Hive'
   $bin = Join-Path $base 'bin'
