@@ -985,7 +985,8 @@ def start(c, name, posts, login, resume=None, reaped=None, extra=(), moved=False
             env.pop("CLAUDE_CONFIG_DIR", None)
     cmd = argv or ["claude", "-p", prompt, "--append-system-prompt", system,
                    *(["--resume", sid] if resume else ["--session-id", sid]),
-                   *(["--model", prov[2] if prov else model] if model else []), *c["claude_args"]]
+                   *(["--model", prov[2] if prov else model] if model else []),
+                   *(["--max-budget-usd", str(c["max_budget_usd"])] if c.get("max_budget_usd") and not prov else []), *c["claude_args"]]  # per-run cap; 0/absent = none
     if sb:  # the delivered file is mounted by inode, so it's emptied before the run rather than removed after
         sb.prepare(name)
         if not resume: (STATE / "delivered" / name).write_text("")
@@ -1057,8 +1058,9 @@ def backup(c, st):
     st["committed"] = time.time()
     # With a sandbox, kb is agents' to write. A repo in it has its own .git/config, and git would run what that says to check its status, out here.
     git = "GIT_NO_LAZY_FETCH=1 git -c diff.ignoreSubmodules=all -c core.fsmonitor=false" if box() else "git"
-    subprocess.run(f"{git} add -A && {git} commit -qm 'auto backup' || true", shell=True, cwd=HOME,
-                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    r = subprocess.run(f"{git} add -A && {git} commit -qm 'auto backup'", shell=True, cwd=HOME, capture_output=True, text=True)
+    if r.returncode and "nothing to commit" not in r.stdout + r.stderr:  # nothing-to-commit exits 1 too; anything else is a real failure
+        log(event="backup-failed", rc=r.returncode, err=(r.stderr or r.stdout)[-300:])
 
 def hook_inbox(c):
     """Make sure each login's settings.json runs inbox.py after every tool call and on stop (see inbox.py).
