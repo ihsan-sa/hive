@@ -1258,6 +1258,8 @@ def main():
                     if not fresh: stays_on(st, c, n, q)
                     elif (keep := {k: q[k] for k in ("model", "free", "claude") if q.get(k) and (k != "model" or model_ok(c, q[k]))}):
                         st.setdefault("chosen", {})[n] = keep
+                    if (om := c.get("only_model")) in MODELS:  # a test hive (rsi-loop bench/replay): every run on this model, whatever the post asked
+                        q["model"] = om; q.pop("free", None); st.setdefault("chosen", {})[n] = {"model": om}
                     st["pending"].setdefault(n, []).append(q)
         alive = running(st)
         drop_killed(st)

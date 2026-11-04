@@ -140,7 +140,7 @@
 .rc-tbl{font-size:var(--fs-small)}
 .rc-tbl th{background:var(--surface);box-shadow:inset 0 -1px 0 var(--line-2)}
 .md .rc-tbl th,.md .rc-tbl td{border-bottom-color:var(--line)}
-.md .rc-tbl td{padding:6px 12px}
+.md .rc-tbl td{padding:5px 12px}
 .md .rc-tbl :is(th,td):first-child{padding-left:0}
 .md .rc-tbl th:first-child button{padding-left:0}
 .rc-tbl th button:hover{background:none}
