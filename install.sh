@@ -103,7 +103,7 @@ if [ -n "${HIVE_PLAIN:-}" ]; then "$CORE/hive" web --setup >/dev/null; else "$CO
 
 # A new Hive gets the setup walkthrough and the sandbox. Only here: no file means an install from before these, which carries on as it was.
 if [ ! -e "$HOME/.hive-installed" ] && [ ! -e "$HOME/settings.json" ]; then
-  (umask 077; printf '{"power":2,"sandbox":"on","share":{"failures":false,"usage":false},"setup_done":false}\n' > "$HOME/settings.json")
+  (umask 077; printf '{"power":2,"sandbox":"on","share":{"failures":true,"usage":false},"share_defaults":1,"setup_done":false}\n' > "$HOME/settings.json")
 fi
 
 if [ -z "${HIVE_PLAIN:-}" ] && [ ! -s "$HOME/.claude/.credentials.json" ] && [ -z "${ANTHROPIC_API_KEY:-}" ]; then
@@ -145,7 +145,7 @@ if [ "$SERVICE" = 1 ]; then
   place "$CORE/hive-update.service" hive-update.service; place "$CORE/hive-update.timer" hive-update.timer
   systemctl --user daemon-reload
   systemctl --user enable --now hive-update.timer
-  # Opt-in reports: every 6h; a no-op while "share" in settings.json is off or no endpoint is set.
+  # Reports and the daily check-in: every 6h; a no-op until setup is done, while "share" in settings.json is off, or with no endpoint.
   mkdir -p "$U/hive-report.service.d"; cp "$U/hive-dash.service.d/local.conf" "$U/hive-report.service.d/local.conf"
   place "$HOME/modules/report/hive-report.service" hive-report.service; place "$HOME/modules/report/hive-report.timer" hive-report.timer
   systemctl --user daemon-reload

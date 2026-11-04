@@ -1,5 +1,5 @@
 # report
-Opt-in sharing. `share` in `settings.json` is `{"failures": bool, "usage": bool}`, both false by default; with both false nothing is read, queued or sent.
+Sharing. `share` in `settings.json` is `{"failures": bool, "usage": bool}`. `failures` is on by default and also carries the daily check-in; `usage` is off by default. Anyone can turn either off in Settings or setup. With both false nothing is read, queued or sent, and nothing goes before setup is finished.
 
 `hive-report status | send [--dry-run] | show [N] | question`
 
@@ -8,6 +8,9 @@ Opt-in sharing. `share` in `settings.json` is `{"failures": bool, "usage": bool}
 - Each report is copied to `reports/sent/` before it leaves; `show` prints the latest. A 400/411/413/415 answer drops a report for good; anything else keeps it for the next run.
 - Endpoint: `share_url` in settings.json, else `HIVE_SHARE_URL`. The default is the project's own receiver (set at export; a plain source tree has none, so sends wait in the queue and `status` says so). One report per POST, JSON, `type` failure or usage, fields as in `show`; 2xx is sent.
 - Run it on a schedule (for example every 6h) with the job runner.
+
+## Daily check-in
+With `failures` on, `send` adds one report of type `heartbeat` about once a day: the random install id, the version, the OS and the time, nothing else. It is how the makers count active Hives. A Hive from before this default gets `failures` turned on once by `send`, marked with `share_defaults` in settings.json, so turning it off later holds.
 
 ## What counts as a failure
 `failures` sends only the kind and a one-line message, never fields from the log: an agent ending with a non-zero exit, a login hitting its limit, lost helpers, all logins paused, a provider held back, an agent killed, and (the doctor check) one of the Hive's own systemd user units in a failed state, by unit name, once per failure.

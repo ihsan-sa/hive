@@ -1149,12 +1149,12 @@ FORWARDED = ("cf-ray", "cf-connecting-ip", "cf-access-jwt-assertion", "cf-ipcoun
 GET_CAP = {"/api/live": "read", "/api/board": "read", "/api/log": "read", "/api/usage": "read", "/api/jobs": "read", "/api/agent": "read",
            "/api/projects": "read", "/api/agent-costs": "read", "/api/thread-names": "read", "/json": "read", "/api/target": "read", "/api/inbox": "read", "/api/delivered": "read",
            "/api/config": "config", "/api/modules": "modules", "/api/signin": "logins", "/api/plans": "plans", "/api/secrets": "secrets",
-           "/api/settings": "config", "/api/update": "config", "/api/signin-codex": "logins", "/api/design": "logins",
+           "/api/settings": "config", "/api/update": "config", "/api/signin-codex": "logins", "/api/design": "logins", "/api/brand/logo": "read",
            "/api/kb/home": "files", "/api/kb/open": "files", "/api/kb/search": "files", "/api/kb/raw": "files"}
 POST_CAP = {"/api/kill": "stop", "/api/tier": "tier", "/api/login-pause": "limits", "/api/login-limit": "limits", "/api/provider-limit": "limits",
             "/api/post": "post", "/api/feedback": "post", "/api/update": "config", "/api/share-copy": "config", "/api/upload": "post", "/api/inbox-read": "post", "/api/config": "config", "/api/starter": "config",
             "/api/module": "modules", "/api/signin": "logins", "/api/signin/code": "logins", "/api/signin/cancel": "logins", "/api/plan": "plans", "/api/secret": "secrets",
-            "/api/signin-codex": "logins", "/api/account-key": "logins", "/api/design": "logins"}
+            "/api/signin-codex": "logins", "/api/account-key": "logins", "/api/design": "logins", "/api/brand": "config", "/api/brand/logo": "config"}
 LOCAL_ONLY = {"/api/access", "/api/settings", "/api/share-copy"}  # who may do what is never changed from outside, whatever outside.can says
 
 
@@ -1450,10 +1450,19 @@ def calls_someone(text):
     return bool(said & known_agents()) if said else False
 
 
+def thread_agent(thread):
+    """The agent a plain message in this thread reaches: the last to post if it's running, else the newest run working on the thread
+    (it may not have posted yet, and a running agent gets the thread's posts anyway, so starting another would double the work), else the last to post, else None."""
+    INDEX.refresh()
+    last = INDEX.last.get(thread)
+    if last and alive((jload(RUN / f"{last}.json") or {}).get("pid")): return last
+    runs = [r for r in (jload(f, {}) or {} for f in RUN.glob("*.json")) if r.get("thread") == thread and r.get("name") and alive(r.get("pid"))]
+    return max(runs, key=lambda r: r.get("at") or "")["name"] if runs else last
+
+
 def thread_target(thread):
     """Who a post in this thread would reach: {"who": name or None, "running": bool}."""
-    INDEX.refresh()
-    who = INDEX.last.get(thread)
+    who = thread_agent(thread)
     return {"who": who, "running": bool(who and alive((jload(RUN / f"{who}.json") or {}).get("pid")))}
 
 
@@ -1467,7 +1476,7 @@ SIMPLE_NOTE = ("simple mode: this person isn't technical. Plain words, no agent 
                "show results as links or files, a draft website as one .html file holding its own styles and pictures. For anything they must approve, say what it does, what it costs and whether it can be undone")
 
 def person_post(text, thread=None, reply_to=None, uploads=(), signer=None, limited=False, simple=False):
-    """A post as the person. As the Slack mirror does it: a plain message wakes the agent last on the thread, a reply wakes the author
+    """A post as the person. As the Slack mirror does it: a plain message wakes the agent on the thread (thread_agent), a reply wakes the author
     of the post replied to, and no thread (or a thread with no agent yet) starts a new agent. Mentions in the text win.
     signer: who signed in, from a verified Access token, when more than one person can: it heads the text, so an agent and the board can see who wrote it.
     Returns {"id", "thread", "said"}, or raises ValueError with a sentence for the page."""
@@ -1494,7 +1503,7 @@ def person_post(text, thread=None, reply_to=None, uploads=(), signer=None, limit
         text = f"reply to message {reply_to}: {text}"
     routed = False
     if not word and not calls_someone(text):
-        who = who or (INDEX.last.get(thread) if thread else None)
+        who = who or (thread_agent(thread) if thread else None)
         text = f"@{who or 'new'} {text}"
         routed = bool(who)  # we picked the name, so a dead agent's heir may take it; only a typed name brings a dead agent back
     cmd = [str(HIVE_BIN), "post", "--as", PERSON] + (["--thread", str(thread)] if thread else []) + (["--to", who] if who else []) + (["--routed"] if routed else []) + (["--reply-to", reply_to] if reply_to else [])
@@ -1897,6 +1906,56 @@ def set_config(d):
         t = HOME / "core" / f".config.json.{os.getpid()}.{threading.get_ident()}"
         t.write_text(json.dumps(c, indent=2) + "\n"); t.replace(HOME / "core" / "config.json")
     return config_view()
+
+
+# The hive's name and logo, from Settings. Only how this app looks: nothing else reads them, and agents keep their names.
+BRAND = STATE / "brand.json"
+BRAND_LOGO = STATE / "brand-logo"
+LOGO_MAX = 2 * 2**20
+NAME_MAX = 40
+
+
+def logo_type(b):
+    """The picture's type from its bytes, never from the name it came with. None if it isn't one we show."""
+    if b.startswith(b"\x89PNG\r\n\x1a\n"): return "image/png"
+    if b.startswith(b"\xff\xd8\xff"): return "image/jpeg"
+    if b[:6] in (b"GIF87a", b"GIF89a"): return "image/gif"
+    if b[:4] == b"RIFF" and b[8:12] == b"WEBP": return "image/webp"
+    if re.match(rb"(?:\xef\xbb\xbf)?\s*(?:<\?xml[^>]*>\s*|<!--.*?-->\s*|<!DOCTYPE[^>]*>\s*)*<svg[\s>]", b[:8192], re.S): return "image/svg+xml"
+    return None
+
+
+def brand_view():
+    """What /api/app carries on every route. logo is an address that changes with the file, so a new one shows at once and an old one can be cached."""
+    d = jload(BRAND)
+    name = d.get("name") if isinstance(d, dict) else None
+    try: logo = f"/api/brand/logo?v={BRAND_LOGO.stat().st_mtime_ns}"
+    except OSError: logo = None
+    return {"name": name if isinstance(name, str) and name else None, "logo": logo}
+
+
+def set_brand(d):
+    """{name}: a name, or empty for the default. {logo: null}: back to no logo."""
+    if "name" not in d and d.get("logo", 0) is not None: raise ValueError("nothing to change")
+    if "name" in d:
+        v = d["name"]
+        if v is not None and not isinstance(v, str): raise ValueError("the name is text")
+        v = " ".join((v or "").split())
+        if len(v) > NAME_MAX: raise ValueError(f"the name can be up to {NAME_MAX} characters")
+        if any(not c.isprintable() for c in v): raise ValueError("the name has characters that can't be shown")
+        STATE.mkdir(parents=True, exist_ok=True)
+        t = STATE / f".brand.json.{os.getpid()}.{threading.get_ident()}"
+        t.write_text(json.dumps({"name": v}) + "\n"); t.replace(BRAND)
+    if "logo" in d and d["logo"] is None: BRAND_LOGO.unlink(missing_ok=True)
+    return brand_view()
+
+
+def set_logo(b):
+    if not logo_type(b): raise ValueError("a logo has to be a PNG, JPEG, GIF, WebP or SVG picture")
+    STATE.mkdir(parents=True, exist_ok=True)
+    t = STATE / f".brand-logo.{os.getpid()}.{threading.get_ident()}"
+    t.write_bytes(b); t.replace(BRAND_LOGO)
+    return brand_view()
 
 
 def starter_up():
@@ -2441,6 +2500,7 @@ def set_settings(d):
         write_text_private(SETTINGS, json.dumps(cur, indent=1) + "\n")
     SETUP.t = SHARE_TEXT.t = 0
     if share and any(share.get(k) and not was.get(k) for k in ("failures", "usage")): report_now()
+    if d.get("setup_done") is True and settings_norm(cur)["share"].get("failures"): report_now()  # the first check-in: nothing goes before setup is passed
     if "setup_done" in d: sync_accounts()  # a Codex login made in a terminal counts too: nothing else would tell the starter
     return settings_page()
 
@@ -2746,6 +2806,21 @@ def serve(port):
             self.end_headers()
             with f.open("rb") as src: shutil.copyfileobj(src, self.wfile)
 
+        def send_logo(self):
+            """Sandboxed like any file from a person: an SVG opened by its address can't run in the app's origin."""
+            try: b = BRAND_LOGO.read_bytes()
+            except OSError: return self.send_error(404)
+            ct = logo_type(b)
+            if not ct: return self.send_error(404)
+            self.send_response(200)
+            self.send_header("Content-Type", ct)
+            self.send_header("Content-Length", str(len(b)))
+            self.send_header("Content-Security-Policy", "sandbox; default-src 'none'")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Cache-Control", "private, max-age=86400")
+            self.end_headers()
+            self.wfile.write(b)
+
         def send_kb_raw(self, rel):
             """An image or PDF for the Knowledge page. Text never comes this way, so it can't skip the redaction; nothing here runs in the page's origin."""
             f = kb_path(rel); ct = KB_IMAGE.get(f.suffix.lower()) if f else None
@@ -2789,6 +2864,9 @@ def serve(port):
                 names = web.get("simple")
                 self.simple = isinstance(names, list) and str(claims.get("email") or "").strip().lower() in {str(n).lower() for n in names}
                 (self.can, self.mode, self.full_left), self.signed = allowed, True
+                # web.json "add_logins": sign-ins that may also sign the Hive in to its accounts, for someone who owns the account but shouldn't have full. Only ever adds that one cap; a bad value means no.
+                names = web.get("add_logins")
+                if isinstance(names, list) and "logins" not in self.can and str(claims.get("email") or "").strip().lower() in {str(n).lower() for n in names}: self.can = (*self.can, "logins")
             elif has_session(hd.get("cookie"), web, port):
                 self.can, self.signed = CAPS, True
             sites = (web.get("outside") or {}).get("sites")
@@ -2798,7 +2876,7 @@ def serve(port):
 
         def app_info(self):
             web = web_cfg() or {}
-            info = {"route": self.route, "can": list(self.can), "app": self.route != "open"}
+            info = {"route": self.route, "can": list(self.can), "app": self.route != "open", "brand": brand_view()}
             if self.route != "open": info.update(setup=SETUP.get(), secrets_on=self.secrets_on, settings=settings_brief())
             if self.mode: info.update(mode=self.mode, full_left=self.full_left)
             if self.signer: info["signer"] = self.signer
@@ -2848,6 +2926,8 @@ def serve(port):
             J = "application/json"
             if u.path == "/api/app":
                 self.send(json.dumps(self.app_info(), default=str).encode(), J)
+            elif u.path == "/api/brand/logo":
+                self.send_logo()
             elif u.path in ("/api/target", "/api/inbox", "/api/config", "/api/modules", "/api/signin", "/api/plans", "/api/secrets", "/api/settings", "/api/update", "/api/signin-codex", "/api/design", "/api/kb/home", "/api/kb/open", "/api/kb/search", "/api/kb/raw") and self.route == "open":
                 self.send_error(404)
             elif u.path == "/api/kb/home":
@@ -2933,13 +3013,17 @@ def serve(port):
                 if not 0 < n <= MAX_FILE: return self.deny(413, "a file can be up to 100 MB")
                 try: return self.send(json.dumps(save_upload(parse_qs(u.query).get("name", ["file"])[0], n, self.rfile)).encode(), "application/json")
                 except (ValueError, OSError) as e: return self.deny(400, str(e))
+            if u.path == "/api/brand/logo":
+                if not 0 < n <= LOGO_MAX: return self.deny(413, "a logo can be up to 2 MB")
+                try: return self.send(json.dumps(set_logo(self.rfile.read(n))).encode(), "application/json")
+                except (ValueError, OSError) as e: return self.deny(400, str(e))
             if not 0 < n < ({"/api/post": 2**20, "/api/feedback": 2**20, "/api/plan": 2**19, "/api/secret": 2**18}.get(u.path) or (4096 if self.route != "open" else 1024)): return self.send_error(403)
             try: d = json.loads(self.rfile.read(n))
             except ValueError: return self.send_error(400)
             if not isinstance(d, dict): return self.send_error(400)
             num = lambda v: v is None or (isinstance(v, (int, float)) and not isinstance(v, bool))
             J = "application/json"
-            if u.path in ("/api/post", "/api/feedback", "/api/update", "/api/inbox-read", "/api/config", "/api/starter", "/api/module", "/api/signin", "/api/signin/code", "/api/signin/cancel", "/api/access", "/api/plan", "/api/secret", "/api/settings", "/api/signin-codex", "/api/account-key", "/api/design"):
+            if u.path in ("/api/post", "/api/feedback", "/api/update", "/api/inbox-read", "/api/config", "/api/starter", "/api/module", "/api/signin", "/api/signin/code", "/api/signin/cancel", "/api/access", "/api/plan", "/api/secret", "/api/settings", "/api/signin-codex", "/api/account-key", "/api/design", "/api/brand"):
                 try:
                     if u.path == "/api/post": res = person_post(d.get("text"), d.get("thread"), d.get("reply_to"), d.get("files"), signer=self.signer, limited="config" not in self.can, simple=d.get("simple") is True)
                     elif u.path == "/api/feedback": res = send_feedback(d)
@@ -2948,6 +3032,7 @@ def serve(port):
                     elif u.path == "/api/secret": res = set_secret(d.get("name"), d.get("value"), self.signer, delete=bool(d.get("delete")))
                     elif u.path == "/api/inbox-read": res = {"marked": mark_read(None if d.get("all") else [str(i) for i in d.get("ids") or []])}
                     elif u.path == "/api/config": res = set_config(d)
+                    elif u.path == "/api/brand": res = set_brand(d)
                     elif u.path == "/api/starter": starter_do(d.get("do")); SETUP.t = 0; res = {"ok": True}
                     elif u.path == "/api/module": res = {"said": module_do(d.get("do"), d.get("name"))}
                     elif u.path == "/api/signin": res = SIGNIN.start(d.get("name"), bool(d.get("console")))

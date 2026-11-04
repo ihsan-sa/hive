@@ -536,7 +536,7 @@ def login_add(name, paused=False):
     text = (f"Login {name} is added but paused, by `hive login add --paused`: the starter won't use it, and the hold in kb/priorities.md stands." if paused else
             f"Login {name} is added (weekly usage {pct(used)}, stop line {stop}%), by `hive login add`. New runs go to whichever login has the most room. "
             + "The hold in kb/priorities.md stands: a new login doesn't lift it, only the person does.")
-    cmd_post(argparse.Namespace(text=[text], to=None, thread="keeper", as_="hive-login", model=None, file=None))
+    cmd_post(argparse.Namespace(text=[text], to=None, thread="keeper", as_="hive-login", model=None, file=None, reply_to=None, routed=False))
 
 def cmd_login(a):
     if a.do == "add":

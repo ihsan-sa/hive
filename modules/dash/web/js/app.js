@@ -1,7 +1,8 @@
 // App: mounts the shell, routes, and re-renders the current view when data or the route changes.
 // Rendering is a morph of a freshly built tree onto the live one: only changed nodes are touched.
+import { brandIcon, brandName } from "./core/brand.js";
 import { dropFiles } from "./ui/dropfiles.js";
-import { S, can, setupDone, start, subscribe } from "./core/store.js";
+import { S, can, needsAccount, setupDone, start, subscribe } from "./core/store.js";
 import { mount, delegate, selecting } from "./core/dom.js";
 import { go, parse } from "./core/router.js";
 import { topBar } from "./ui/shell.js";
@@ -23,7 +24,8 @@ let cur = home(), arg = null, raf = 0, timer = 0;
 const ctx = { update: () => schedule(true), get arg() { return arg; } };
 
 function render(force) {
-  if (S.live) document.title = `Hive · ${S.live.agents.length} running`;
+  if (S.live) document.title = brandName() ? `${brandName()} · ${S.live.agents.length} running` : `Hive · ${S.live.agents.length} running`;
+  brandIcon();
   mount(top, topBar({ views, current: cur.id, update: ctx.update, nav: simpleOn() ? SIMPLE_NAV : APP_NAV }));
   if (!force && selecting()) return;          // hold still while text is selected
   mount(main, cur.render(ctx));
@@ -56,7 +58,7 @@ subscribe(() => { markRoute(); schedule(false); });
 start().then(() => {
   markRoute();
   offerTour();
-  if (S.app.app && !location.hash && !setupDone() && can("post")) return go("start");   // first run lands on setup
+  if (S.app.app && !location.hash && !setupDone() && can("post")) return go(simpleOn() && S.app.settings?.setup_done !== false && !needsAccount() ? "comms" : "start");   // first run lands on setup; simple mode's first page is the chat, with its ideas
   route(); render(true);
 });
 route();

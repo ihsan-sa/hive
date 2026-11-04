@@ -8,6 +8,7 @@
 //    don't fit whole are hidden, and the tile's head says how many. Canvases (Mesh) and the Timeline fill their box and report the same way.
 // So a bigger size shows fewer, larger rows and a smaller size shows more; nothing is ever cut in half.
 import { S, start, subscribe } from "../core/store.js";
+import { brandIcon, brandMark } from "../core/brand.js";
 import { h, mount, delegate } from "../core/dom.js";
 import { agentState, inUse, runway, threadTitle } from "../core/model.js";
 import { ago, clock, dur, now } from "../core/format.js";
@@ -143,8 +144,9 @@ let queued = false;
 const ctx = { update: () => schedule(), arg: null };
 function schedule() { if (queued) return; queued = true; queueMicrotask(() => { queued = false; render(); }); }
 function render() {
+  brandIcon();
   mount(top, h("div", null,
-    h("div", { class: "dt-top-row" }, h("b", { class: "dt-brand" }, "Hive"), counts(), room(),
+    h("div", { class: "dt-top-row" }, h("b", { class: "dt-brand" }, brandMark()), counts(), room(),
       sizeNote ? h("span", { class: "dt-size" }, `Size ${sizeNote}% · Ctrl 0 resets`) : null,
       h("time", { class: "dt-clock" }, new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })), fullscreenButton()),
     trouble()));

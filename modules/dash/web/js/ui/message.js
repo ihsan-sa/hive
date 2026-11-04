@@ -5,7 +5,7 @@
 // localMessage(item) draws a message that hasn't reached the board yet: sending, or failed with Retry.
 import { h, copyText } from "../core/dom.js";
 import { S, can, jget, SYS, OUTSIDE } from "../core/store.js";
-import { simpleOn, HIVE } from "../core/simple.js";
+import { simpleOn, hiveName } from "../core/simple.js";
 import { isAgent, isRunning, displayText, postSource } from "../core/model.js";
 import { clock, stamp, now, short, mdPlain, ago, DAY, MIN } from "../core/format.js";
 import { markdown, mdCut } from "./markdown.js";
@@ -218,7 +218,7 @@ function body(p, ws) {
 // ---- jumping to the post a reply answers. The view that lists posts says how. ----
 let jumper = null;
 export const onJump = fn => { jumper = fn; };
-const who = n => (n === "person" ? "You" : simpleOn() ? HIVE : n);
+const who = n => (n === "person" ? "You" : simpleOn() ? hiveName() : n);
 
 function quote(p) {
   const q = S.byId[p.reply_to];
@@ -236,7 +236,7 @@ export function messageHead(p, { showThread = true, mark } = {}) {
   // Someone else signed in to this Hive wrote it: their name, not "You". A name you can't tell apart goes on the badge.
   const other = src && src.how === "Web" && src.name && me && src.name !== me;
   if (simpleOn()) return h("div", { class: "msg-h" },
-    mine ? h("b", { class: "msg-me" }, other ? src.name : "You") : h("b", null, OUTSIDE.has(p.from) ? who(p.from) : HIVE),
+    mine ? h("b", { class: "msg-me" }, other ? src.name : "You") : h("b", null, OUTSIDE.has(p.from) ? who(p.from) : hiveName()),
     h("span", { class: "msg-end" }, more(p, mark), h("time", { class: "meta num", datetime: p.at, title: stamp(p.t) }, clock(p.t))));
   return h("div", { class: "msg-h" },
     mine ? h("b", { class: "msg-me", title: other ? src.said : "you (person)" }, other ? src.name : "You") : agentRef(p.from, { copy: true }),

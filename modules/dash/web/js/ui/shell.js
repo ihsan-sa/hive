@@ -1,10 +1,11 @@
 // The top bar: brand, tabs from the view registry, and the two numbers you check most (running, weekly room).
+import { brandMark } from "../core/brand.js";
 import { HELP, startTour } from "./tour.js";
 import { canFeedback, openFeedback, FEEDBACK_KEY } from "./feedback.js";
 import { h, s } from "../core/dom.js";
-import { S, can } from "../core/store.js";
+import { S, can, needsAccount } from "../core/store.js";
 import { simpleOn, setSimple } from "../core/simple.js";
-import { fresh7, inUse, runway } from "../core/model.js";
+import { accountUse, fresh7, inUse, runway } from "../core/model.js";
 import { ago, clock, now, plural, stamp } from "../core/format.js";
 import { href } from "../core/router.js";
 import { layout } from "../core/nav.js";
@@ -56,10 +57,11 @@ export function hiveStopped() {
   return null;
 }
 function simpleBits() {
-  const stop = hiveStopped();
+  const stop = hiveStopped(), use = needsAccount() ? null : accountUse();
   return [
     S.failed ? h("span", { "data-tone": "bad", style: "color:var(--ci)" }, statusDot("stuck"), "Lost contact, last news " + ago(S.fresh)) : null,
     stop ? h("span", { "data-tone": "bad", style: "color:var(--ci)" }, statusDot("limited"), "Taking a break") : S.running.size ? h("span", null, statusDot("working", { live: true }), "Working on it") : null,
+    use && use.week ? h("span", { title: "How much of your Claude account's weekly limit is used" }, use.week.used + "% of the week used") : null,
   ];
 }
 function appBits() {
@@ -74,7 +76,10 @@ function appBits() {
   ];
 }
 /** The band under the bar when the hive has stopped: says why in words, and where to look. */
-function band() {
+function band(current) {
+  if (simpleOn() && needsAccount() && current !== "start" && current !== "settings") return h("div", { class: "band", role: "status", "data-key": "band" }, statusDot("limited"),
+    h("span", null, can("logins") ? "Your Hive can't start until you add your Claude account." : "Your Hive isn't ready yet. The person setting it up still has a step to finish."),
+    can("logins") ? button("Add it", null, { href: href("settings"), size: "s", kind: "quiet" }) : null);
   const st = hiveStopped(); if (!st) return null;
   if (simpleOn()) return h("div", { class: "band", role: "status", "data-tone": "bad", "data-key": "band" }, statusDot(st.why === "off" ? "failed" : "limited"),
     h("span", null, st.why === "off" ? "Your Hive isn't running right now, so it won't answer yet." : "Your Hive has used up its allowance for now and is taking a break." + (st.until ? ` It comes back ${stamp(st.until)}. Nothing is lost.` : " Nothing is lost.")));
@@ -114,7 +119,7 @@ export function topBar({ views, current, update, nav }) {
       simple ? null : h("button", { type: "button", class: "more-i", role: "menuitem", "data-key": "tour", onclick: () => { NAV.open = false; update(); startTour(); } }, h("b", null, "Take the tour")),
       canFeedback() ? h("button", { type: "button", class: "more-i", role: "menuitem", "data-key": "feedback", onclick: () => { NAV.open = false; update(); openFeedback(); } }, h("b", null, "Send feedback"), h("span", null, FEEDBACK_KEY)) : null,
       h("button", { type: "button", class: "more-i", role: "menuitem", "data-key": "simple", onclick: () => { NAV.open = false; setSimple(!simple); update(); } },
-        h("b", null, simple ? "Show everything" : "Simple view"), h("span", null, simple ? "all the tabs and what's going on behind the scenes" : "just the chat and what it's made")),
+        h("b", null, simple ? "Show everything" : "Simple view"), h("span", null, simple ? "all the tabs and what's going on behind the scenes" : "just the chat")),
     ];
     tabs = [...L.main.map(v => tabLink(v, L.active)),
       h("div", { class: "more", "data-key": "more" },
@@ -124,7 +129,7 @@ export function topBar({ views, current, update, nav }) {
   const bits = app ? (simple ? simpleBits : appBits) : statusBits;
   return h("div", null,
     h("div", { class: "top-in" },
-      h("a", { class: "brand", href: app ? "#comms" : "#now" }, "Hive"),
+      h("a", { class: "brand", href: app ? "#comms" : "#now" }, brandMark()),
       h("nav", { class: "tabs", "aria-label": "Views" }, tabs),
       h("div", { class: "top-status", role: "status" }, route ? h("span", { class: "top-route", title: "Allowed from outside: " + (S.app.can || []).join(", ") }, route) : null,
         mode === "expired" ? h("a", { class: "top-route", href: "/cdn-cgi/access/logout", title: "Full mode lasts an hour after signing in. This signs you out; open this page again and sign in with Google." }, "sign in again for full") : null, bits()),
@@ -133,5 +138,5 @@ export function topBar({ views, current, update, nav }) {
       fullscreenButton()),
     h("div", { class: "top-sub", "aria-hidden": "true" }, bits()),
     row ? h("nav", { class: "subtabs", "aria-label": "Pages here" }, row.map(v => h("a", { class: "subtab", href: href(v.id), "data-key": v.id, "aria-current": v.id === current ? "page" : null }, (nav.names && nav.names[v.id]) || lab(v)))) : null,
-    app ? band() : null);
+    app ? band(current) : null);
 }

@@ -7,7 +7,7 @@
 import { uploadFile } from "../core/upload.js";
 import { h } from "../core/dom.js";
 import { S, jget, post, poll, loadApp } from "../core/store.js";
-import { simpleOn, HIVE } from "../core/simple.js";
+import { simpleOn, hiveName } from "../core/simple.js";
 import { go } from "../core/router.js";
 import { isAgent, agentStatus, threadPeople, partner, displayText, typedText } from "../core/model.js";
 import { short, mdPlain, now } from "../core/format.js";
@@ -82,7 +82,9 @@ export function recipient(th) {
   if (d.to) return { who: d.to, why: "chosen", server: sv };
   const p = partner(th);
   if (p) return { who: p, why: sv && sv !== p ? "partner" : "last", server: sv };
-  return { who: sv || "new", why: sv ? "last" : "first", server: sv };
+  // The target is fetched when the board changes, and a run starting doesn't change the board: an agent already running here still counts.
+  const run = !sv && S.live && S.live.agents.find(a => a.thread === th && a.alive && a.name);
+  return { who: sv || (run ? run.name : "new"), why: sv || run ? "last" : "first", server: sv };
 }
 function wire(th, d, r) {
   let t = d.text.trim() ? d.text : "Attached: " + d.files.map(f => f.name).join(", ");
@@ -252,7 +254,7 @@ function toMenu(th, r) {
 function replyChip(d) {
   const p = d.reply;
   return h("div", { class: "cp-reply", "data-key": "reply" },
-    h("span", { class: "meta" }, "Replying to"), h("b", null, p.from === "person" ? "yourself" : simpleOn() ? HIVE : p.from),
+    h("span", { class: "meta" }, "Replying to"), h("b", null, p.from === "person" ? "yourself" : simpleOn() ? hiveName() : p.from),
     h("span", { class: "cp-reply-x" }, short(mdPlain(displayText(p)), 120)),
     h("button", { type: "button", class: "cp-x", title: "Cancel the reply (Esc)", "aria-label": "Cancel the reply", onclick: () => { d.reply = null; d.replyId = null; keep(d); refresh(); } }, "×"));
 }

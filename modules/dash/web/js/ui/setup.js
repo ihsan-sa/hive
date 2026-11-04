@@ -158,7 +158,7 @@ export const rootNote = () => P.page.accounts.root ? h("p", { class: "fmsg", "da
 
 // ---- data sharing ----
 const SHARES = [
-  ["failures", "Failure reports", "What failed, when and why."],
+  ["failures", "Failure reports and a daily check-in", "What failed, when and why, and one small message a day saying this Hive is running."],
   ["usage", "Usage reports", "Counts of runs, restarts and limit hits."],
   ["everything", "Everything, when I say so", "Separate from the reports above: a scrubbed copy of recent logs and of the board, and that includes your chats. Ticking this sends nothing: it goes only when you press Send a copy now, and each one is kept in reports/bundles in your Hive folder."],
 ];

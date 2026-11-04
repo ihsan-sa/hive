@@ -25,6 +25,8 @@ export const can = c => !S.app.can || S.app.can.includes(c);
 // What the server says it has of the features designed ahead of it (/api/app "features"): stop, helper, knowledge, slack-door.
 // A feature it doesn't list stays out of the app, so nobody meets a button that can't work. The preview shim lists them all.
 export const built = f => (S.app.features || []).includes(f);
+/** Setup is finished but no account is signed in, so nothing can start yet. */
+export const needsAccount = () => { const s = S.app.setup; return !!s && !(S.app.settings && S.app.settings.setup_done === false) && !(s.signed_in || s.api_key || s.other); };
 export const setupDone = () => { const s = S.app.setup; if (S.app.settings && S.app.settings.setup_done === false) return false; return !s || ((s.signed_in || s.api_key || s.other) && s.has_posts); };
 
 // ---- change notification ----
