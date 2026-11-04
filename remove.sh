@@ -1,6 +1,6 @@
 #!/bin/sh
 # Uninstall the Hive on Linux. One line:
-#   curl -fsSL https://hive.ihsan.cc/uninstall.sh | sh
+#   curl -fsSL https://hivelab.ca/uninstall.sh | sh
 # Deletes the hive user (or HIVE_USER=name) and everything in its home, after you type delete.
 # Claude Code stays signed in only inside that home, so its sign-in goes too.
 # A Hive inside your own account (sh -s -- --this-account) removes only its folder, services and command. It never deletes your account.
@@ -52,7 +52,7 @@ this_account() {
 }
 
 main() {
-  if [ "$(uname -s)" = Darwin ]; then die "on a Mac, the test build has its own line: curl -fsSL https://hive.ihsan.cc/uninstall-mac.sh | sh"; fi
+  if [ "$(uname -s)" = Darwin ]; then die "on a Mac, the test build has its own line: curl -fsSL https://hivelab.ca/uninstall-mac.sh | sh"; fi
   for a in "$@"; do case "$a" in --this-account) this_account; return 0 ;; *) die "unknown option $a" ;; esac; done
   U="${HIVE_USER:-hive}"
   case "$U" in "" | -* | root | *[!a-z0-9_-]*) die "HIVE_USER must be a plain user name other than root, not $U" ;; esac
