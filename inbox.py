@@ -7,7 +7,9 @@ It delivers posts made since the session started that mention $HIVE_NAME, or tha
 thread it was started on, not written by itself. Delivered ids go to ~/.hive/delivered/<name>; the
 starter drops those from its queue so the agent isn't restarted for a post it already saw.
 PostToolUse: the posts come back as additionalContext. Stop: if anything is new, the stop is
-blocked with the posts as the reason, so the agent answers instead of ending unaware.
+blocked with the posts as the reason, so the agent answers instead of ending unaware. Stop also
+blocks once per run when the person started it and the agent is ending with no post since: its
+plain-text answer reaches nobody (the person, 2026-11-04: a24ba answered twice into nothing).
 Outside an Hive session (no HIVE_NAME or no run record) it does nothing.
 """
 import json, os, re, sys
@@ -24,11 +26,28 @@ def names(p):
     if isinstance(to, str): to = to.replace(",", " ").split()
     return {t.lstrip("@").lower() for t in to} | {m.lower() for m in MENTION.findall(CODE.sub(" ", str(p.get("text", ""))))}
 
-def new_posts(name, rec, seen):
+def read_new(name, rec):
+    """The board lines this agent hasn't been through yet. For one run record the filter below is fixed, so a line it passed over
+    once never matches later: keep a byte cursor per agent and read only past it. A new record (a restart, a new session) or a
+    shorter board (rotation) reads it all again. The cursor stops at the last whole line, so a post half-written is read next time."""
+    cur = STATE / "cursor" / name
+    key = json.dumps([rec.get("at"), rec.get("session"), rec.get("thread"), rec.get("all_since")])
+    try: k, off = cur.read_text().split("\n")[:2]; off = int(off) if k == key else 0
+    except (OSError, ValueError): off = 0
+    try:
+        with BOARD.open("rb") as fh:
+            if off > os.fstat(fh.fileno()).st_size: off = 0
+            fh.seek(off); data = fh.read()
+    except OSError: return [], lambda: None
+    end = data.rfind(b"\n") + 1
+    def done():  # called once what was read is delivered, so a crash in between reads it again rather than losing it
+        try: cur.parent.mkdir(parents=True, exist_ok=True); cur.write_text(f"{key}\n{off + end}\n")
+        except OSError: pass
+    return data[:end].decode(errors="replace").splitlines(), done
+
+def new_posts(name, rec, seen, lines=None):
     out = []
-    try: lines = BOARD.read_text(errors="replace").splitlines()
-    except OSError: return out
-    for line in lines:
+    for line in lines if lines is not None else BOARD.read_text(errors="replace").splitlines():
         try: p = json.loads(line)
         except ValueError: continue
         if not isinstance(p, dict) or p.get("id") in seen or str(p.get("from", "")).lower() == name: continue
@@ -43,7 +62,13 @@ def new_posts(name, rec, seen):
             out.append(p)
     return out
 
-STRENGTH = ("haiku", "sonnet", "opus", "fable")
+def _claude_models():
+    """The Claude model words, weakest first: config.json "models". A new model is one line there, not an edit in each file."""
+    try: m = json.loads((Path(__file__).resolve().parent / "config.json").read_text()).get("models")
+    except (OSError, ValueError): m = None
+    return tuple(m) if isinstance(m, list) and m and all(isinstance(x, str) and re.fullmatch(r"[a-z][a-z0-9.-]*", x) for x in m) else ("haiku", "sonnet", "opus", "fable")
+CLAUDE_MODELS = _claude_models()
+STRENGTH = CLAUDE_MODELS  # weakest first
 
 def model_note(name, rec, ps):
     """A post naming this running agent that picks a stronger model (the menu, or --model): it should be answered on that model, so say how. A weaker one just holds from the next run."""
@@ -59,6 +84,24 @@ def fmt(p):
             f"(thread {p.get('thread')})" + (f" replying to {p['reply_to']}" if p.get("reply_to") else "") + "\n  " + str(p.get("text", "")).replace("\n", "\n  ")
             + "".join(f"\n  file: {f.get('path')}" for f in p.get("files") or []))
 
+def unanswered(name, rec):
+    """Why this stop should wait, if the person started the run and the agent hasn't posted since. Once per run."""
+    if os.environ.get("HIVE_DOOR") or rec.get("from") != "person" or not rec.get("at"): return None
+    mark = STATE / "nudged" / name
+    try:
+        if mark.read_text() == rec["at"]: return None
+    except OSError: pass
+    try:
+        for line in BOARD.read_text().splitlines()[-3000:]:
+            if f'"from": "{name}"' in line or f'"from":"{name}"' in line:
+                p = json.loads(line)
+                if p.get("from") == name and p.get("at", "") >= rec["at"]: return None
+    except (OSError, ValueError): return None  # can't tell: let it stop
+    mark.parent.mkdir(parents=True, exist_ok=True); mark.write_text(rec["at"])
+    return (f"You are ending this run without posting anything to the board, so the person sees no answer: text outside hive post "
+            f"reaches nobody. Post your answer now in thread {rec.get('thread') or 'the thread you were started in'} with "
+            "hive post --thread T and a quoted heredoc, then stop. If you truly have nothing to say, just stop again.")
+
 def main():
     name = os.environ.get("HIVE_NAME", "").lower()
     if not name: return
@@ -71,9 +114,15 @@ def main():
     d = STATE / "delivered"; d.mkdir(parents=True, exist_ok=True)
     f = d / name
     seen = set(f.read_text().split()) if f.exists() else set()
-    ps = new_posts(name, rec, seen)
-    if not ps: return
-    with f.open("a") as fh: fh.write("".join(p["id"] + "\n" for p in ps))
+    lines, done = read_new(name, rec)
+    ps = new_posts(name, rec, seen, lines)
+    if ps:
+        with f.open("a") as fh: fh.write("".join(p["id"] + "\n" for p in ps))
+    done()
+    if not ps:
+        if event == "Stop" and (why := unanswered(name, rec)):
+            print(json.dumps({"decision": "block", "reason": why}))
+        return
     msg = ("New on the board for you while you work (you'll get these automatically; answer with "
            "hive post where it matters):\n\n" + "\n\n".join(fmt(p) for p in ps) + model_note(name, rec, ps))
     if event == "Stop":

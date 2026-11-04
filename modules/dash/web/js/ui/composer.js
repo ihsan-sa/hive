@@ -11,7 +11,7 @@ import { simpleOn, hiveName } from "../core/simple.js";
 import { go } from "../core/router.js";
 import { isAgent, isRunning, agentCard, agentStatus, threadPeople, partner, displayText, typedText } from "../core/model.js";
 import { short, mdPlain, now } from "../core/format.js";
-import { button, input, statusDot } from "./kit.js";
+import { button, icon, input, statusDot } from "./kit.js";
 import { openAside } from "./aside.js";
 
 const CP = { update: null, th: undefined, focus: false, ac: null, menu: false, drag: false, sig: "", hist: null };
@@ -179,10 +179,12 @@ function modelPick(d, r) {
   // An agent already running stays on its model for this run; a pick here is kept by the starter and holds from its next run.
   const who = r && r.who, live = who && who !== "new" && isRunning(who);
   const def = (S.app && S.app.default_model) || "", typed = typedModel(d.text), cur = typed || d.model || "";
-  const row = live && agentCard(who).find(x => x.k === "Model"), first = live ? `${row ? row.v : "its model"} (now)` : def ? `${MODEL_LABELS[def] || def} (default)` : "Model";
-  return h("select", { class: "cp-model meta", "aria-label": "Model", title: live ? `${who} is running on ${row ? row.v : "its model"}. Pick another and it moves to it from its next run (it can't switch mid-run), and stays there.` : "Model for a new or sleeping agent this message starts. It holds on that agent from then on. Typing @opus, @sonnet… in the message sets this too.",
+  // A sleeping agent wakes on the model it last ran on, not the default for new agents.
+  const known = who && who !== "new" && !MODEL_WORDS.includes(who), row = known && agentCard(who).find(x => x.k === "Model");
+  const first = live ? `${row ? row.v : "its model"} (now)` : row ? `${row.v} (its model)` : def ? `${MODEL_LABELS[def] || def} (default)` : "Model";
+  return h("select", { class: "cp-model meta", "aria-label": "Model", title: live ? `${who} is running on ${row ? row.v : "its model"}. Pick another and it moves to it from its next run (it can't switch mid-run), and stays there.` : row ? `${who} last ran on ${row.v} and wakes on it. Pick another and it moves to that one and stays there.` : "Model for a new or sleeping agent this message starts. It holds on that agent from then on. Typing @opus, @sonnet… in the message sets this too.",
     onchange: e => { d.model = e.target.value; keep(d); refresh(); } },
-    [["", first], ...Object.entries(MODEL_LABELS).filter(([v]) => live || v !== def)].map(([v, l]) => h("option", { value: v, selected: cur === v }, l)));
+    [["", first], ...Object.entries(MODEL_LABELS).filter(([v]) => live || row || v !== def)].map(([v, l]) => h("option", { value: v, selected: cur === v }, l)));
 }
 
 // ---- @ names ----
@@ -286,18 +288,19 @@ function filesRow(th, d) {
 }
 
 /** composer({thread, update, place}): thread null is new work. place: thread | home | start (only changes the wording). */
-export function composer({ thread, update, place = "thread", autofocus }) {
+export function composer({ thread, update, place = "thread", autofocus, top }) {
   CP.update = update;
   const th = thread || null;
   if (CP.th !== th) { CP.th = th; CP.ac = null; CP.menu = false; CP.hist = null; }
   const d = draft(th), r = recipient(th), k = "cp:" + (th || "(new)"), empty = !d.text.trim() && !d.files.length;
   if (CP.focus || autofocus === true) { CP.focus = false; queueMicrotask(() => { const t = field(th); if (t && document.activeElement !== t) { t.focus(); t.setSelectionRange(t.value.length, t.value.length); } }); }
   CP.sig = (named(d.text) || "") + "|" + empty + "|" + isBtw(d.text);
-  const ph = !th ? "Say what you want done, in your own words" : simpleOn() ? "Message" : r.who === "new" ? "Message a new agent" : r.who ? `Message ${r.who} · /btw to ask aside` : "Message";
+  const ph = !th ? "Say what you want done" : simpleOn() ? "Message" : r.who === "new" ? "Message a new agent" : r.who ? `Reply to ${r.who}…` : "Message";
   return h("div", { class: "cp", "data-key": k, "data-place": place, ...(th ? {} : dropZone(null)) },  // a thread's composer is inside its conversation's zone
-    d.reply ? replyChip(d) : null,
     d.err ? h("p", { class: "cp-err", role: "alert", "data-key": "err" }, d.err) : null,
+    top || null,  // the conversation's status strip: a tab on the box's top edge
     h("div", { class: "cp-box", "data-key": "box" },
+      d.reply ? replyChip(d) : null,  // inside the box, its first row
       CP.ac ? h("div", { class: "cp-ac", role: "listbox", "aria-label": "Names", "data-key": "ac" }, CP.ac.items.map((n, i) => h("button", { type: "button", role: "option", class: "cp-opt", "data-key": n, "aria-selected": String(i === CP.ac.i), onclick: () => acPick(th, n) },
         n === "new" ? statusDot("none") : statusDot(agentStatus(n).key, { live: S.running.has(n) }), h("b", null, "@" + n), h("span", { class: "meta" }, stateWords(n))))) : null,
       d.files.length ? filesRow(th, d) : null,
@@ -321,11 +324,11 @@ export function composer({ thread, update, place = "thread", autofocus }) {
         },
         onpaste: e => { const fs = e.clipboardData && [...e.clipboardData.files]; if (fs && fs.length) { e.preventDefault(); addFiles(th, fs); } } }),
       h("div", { class: "cp-bar", "data-key": "bar" },
-        simpleOn() ? null : th ? toChip(th, r) : d.naming ? h("span", { class: "meta cp-new" }, "A new agent starts on this") : button("Name it", () => { d.naming = true; refresh(); }, { kind: "quiet", size: "s", title: "Give this job a short name (optional). Without one it's called by its first words." }),
         h("input", { type: "file", multiple: true, hidden: true, class: "cp-pick", onchange: e => { addFiles(th, e.target.files); e.target.value = ""; } }),
-        button("Attach", (e, b) => b.parentNode.querySelector(".cp-pick").click(), { kind: "quiet", size: "s", title: "Attach files. You can also paste or drop them here." }),
+        button("Attach files", (e, b) => b.parentNode.querySelector(".cp-pick").click(), { kind: "icon", size: "s", icon: "plus", cls: "cp-attach", title: "Attach files. You can also paste or drop them here." }),
+        simpleOn() ? null : th ? toChip(th, r) : d.naming ? h("span", { class: "meta cp-new" }, "A new agent starts on this") : button("Name it", () => { d.naming = true; refresh(); }, { kind: "quiet", size: "s", title: "Give this job a short name (optional). Without one it's called by its first words." }),
         simpleOn() ? null : modelPick(d, r),
-        h("span", { class: "cp-hint meta" }, "Enter to send · Shift+Enter for a new line · ↑ past messages · Tab completes"),
-        button(place === "thread" ? "Send" : "Start", () => send(th), { kind: "primary", disabled: empty, cls: "cp-send" }))),
+        h("span", { class: "cp-sp" }),
+        button(place === "thread" ? "Send" : "Start", () => send(th), { kind: "primary", icon: "arrow-up", disabled: empty, cls: "cp-send", title: (place === "thread" ? "Send" : "Start") + " (Enter) · Shift+Enter for a new line · ↑ past messages · Tab completes" }))),
     CP.menu && th ? toMenu(th, r) : null);
 }

@@ -1,16 +1,37 @@
 // Now: what each agent is doing. Template: overview.
 import { h } from "../core/dom.js";
-import { S, SYS, loadProjects } from "../core/store.js";
-import { threadTitle, agentState, isRunning, hiveStats, tierHours, agentThread, spendSince, sEnd } from "../core/model.js";
+import { S, SYS } from "../core/store.js";
+import { threadTitle, agentState, isRunning, hiveStats, tierHours, agentThread, spendSince, sEnd, hasTiers } from "../core/model.js";
 import { now, ago, dur, clock, money, pct, plural, firstSentence, short, HOUR, DAY, MIN } from "../core/format.js";
 import { TIERS, status } from "../core/status.js";
 import { threadHref, agentHref } from "../core/router.js";
 import { overview, cols } from "../templates.js";
 import { pageHeader, section, tally, stats, list, share, empty, button, statusDot } from "../ui/kit.js";
-import { agentCard } from "../ui/agentCard.js";
+import { agentRef, threadRef } from "../ui/refs.js";
+import { agentCard as cardRows, displayText } from "../core/model.js";
+import { killButton } from "../actions.js";
 import { chart } from "../ui/chart.js";
 
-const V = { open: new Set() };
+const V = {};
+
+// Running agents as rows, not cards: one line to scan, the same columns all the way down, however many there are.
+function agentRows(run, states, t) {
+  return h("div", { class: "tbl-w" }, h("table", { class: "tbl nowtbl" },
+    h("caption", { class: "vh" }, "Running agents"),
+    h("thead", null, h("tr", null, ["Agent", "Conversation", "State", "Doing now", "Model", "Up"].map(x => h("th", { scope: "col", class: x === "Up" ? "num" : null }, x)), h("th", null, h("span", { class: "vh" }, "Actions")))),
+    h("tbody", null, run.map(a => {
+      const st = states.get(a.name), S_ = status(st.key), task = S.byId[a.post], model = (cardRows(a.name)[0] || {}).short;
+      const asked = task ? (a.from ? (a.from === "person" && S.app.app ? "you" : a.from) + ": " : "") + firstSentence(displayText(task)) : null;
+      return h("tr", { "data-key": a.name, "data-tone": S_.tone, "data-attn": st.key === "stuck" ? "" : null },
+        h("td", { "data-label": "Agent", class: "nt-a" }, agentRef(a.name)),
+        h("td", { "data-label": "Conversation", class: "nt-th" }, threadRef(a.thread)),
+        h("td", { "data-label": "State", class: "nt-st", title: S_.hint }, st.text),
+        h("td", { "data-label": "Doing now", class: "nt-do" }, a.doing ? h("div", { class: "nt-now", title: a.doing }, a.doing) : null, asked ? h("div", { class: a.doing ? "nt-ask meta" : "nt-now", title: task.text }, "Asked by " + asked) : a.doing ? null : h("span", { class: "muted" }, "–")),
+        h("td", { "data-label": "Model", class: "nt-m meta" }, model || "–"),
+        h("td", { "data-label": "Up", class: "num meta" }, dur(t - a.since * 1e3)),
+        h("td", { "data-label": "", class: "nt-x" }, a.alive ? killButton(a.name) : null));
+    }))));
+}
 
 /** Addressed to the person, no reply yet, last 3 days: one row per thread. For the TV tile; the page itself leaves this to Chat. */
 export function forYouRows(t = now()) {
@@ -78,9 +99,8 @@ export default {
       ],
     });
 
-    const main = section({ title: S.app.app ? "What each is doing" : "Agents at work", note: "what each was asked and what it's doing" },
-      run.length ? h("div", { class: "agents" }, run.map(a => agentCard(a, { open: V.open.has(a.name), onToggle: n => { V.open.has(n) ? V.open.delete(n) : V.open.add(n); ctx.update(); } })))
-        : empty("None."));
+    const main = section({ title: S.app.app ? "What each is doing" : "Agents at work", note: "one row each: working first, then quiet" },
+      run.length ? agentRows(run, states, t) : empty("None."));
 
     const stuck = run.filter(a => states.get(a.name).key === "stuck");
 
@@ -94,18 +114,6 @@ export default {
     const tiers = section({ title: "Where the agent hours went", note: "against your priority list, last 24 hours" },
       share(TIERS.map(x => ({ key: x.key, label: x.label, tone: x.tone, value: hrs[x.key], text: `${(hrs[x.key] / HOUR).toFixed(1)}h (${Math.round((100 * hrs[x.key]) / tot)}%)` }))));
 
-    const ended = S.sessions.filter(s => s.end).sort((a, b) => b.end - a.end).slice(0, 8);
-    const finished = section({ title: "Just finished" },
-      list(ended.map(s => ({ key: s.name + s.session, href: threadHref(s.thread), lead: statusDot(s.exit && s.exit !== 143 ? "failed" : "ended"), title: s.name, sub: `on ${threadTitle(s.thread)}`,
-        meta: ago(s.end), text: `ran ${dur(s.end - s.start)}` + (s.exit === 0 || s.exit == null ? "" : s.exit === 143 ? " · stopped by a signal" : ` · exit ${s.exit}`) })), { empty: "None yet.", dense: true }));
-
-    const P = S.projects;
-    const projects = section({ title: "Projects", note: Array.isArray(P) ? `${P.length}, latest commit first` : null,
-      actions: V.projects ? button("Hide", () => { V.projects = false; ctx.update(); }, { kind: "quiet", size: "s" }) : null },
-      !V.projects ? button("Show projects", () => { V.projects = true; loadProjects(); ctx.update(); }, { size: "s" })
-        : P === "loading" ? empty("Reading projects…", { kind: "loading" }) : !P ? empty("Couldn't read the projects.", { kind: "error" })
-        : list(P.map(p => ({ key: p.name, title: p.name, sub: short(p.head, 80), text: p.t ? `${ago(p.t * 1e3)}: ${short(p.commit, 110)}` : null })), { dense: true }));
-
-    return overview({ header, main: [stuckList, main], after: [hive, charts, tiers, cols(finished, projects)] });
+    return overview({ header, main: [stuckList, main], after: [hive, charts, hasTiers() ? tiers : null] });
   },
 };

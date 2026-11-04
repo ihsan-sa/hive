@@ -1,0 +1,41 @@
+/* Tail pages, dialogs and empty states (thread ui-tail). Loaded after components.css; tokens only, no new colours. */
+
+/* page head: the lead is a quiet sentence, not a second title */
+.ph{gap:4px}
+.ph-lead{font-size:var(--fs-body);line-height:1.5;color:var(--ink-3)}
+.ph-lead[data-tone]{color:var(--ink-2)}
+.ph-meta{color:var(--ink-3);font-size:var(--fs-meta)}
+.sec-t{font-size:var(--fs-small);font-weight:var(--w-med);color:var(--ink-2);letter-spacing:0}
+.sec[data-level="1"]>.sec-h .sec-t{color:var(--ink);font-weight:var(--w-bold)}
+.sec-n{color:var(--ink-3)}
+
+/* empty states: plain, centred in a page, a soft box inside a list */
+.empty{padding:var(--s4) 0;font-size:var(--fs-small);line-height:1.5;color:var(--ink-3)}
+.empty-t{color:var(--ink);font-weight:var(--w-bold);font-size:var(--fs-title);margin-bottom:4px}
+.list>.empty,.sec>.empty,.blks>.empty{padding:var(--s5) var(--s4);border:1px dashed var(--line-2);border-radius:var(--r-l);text-align:center}
+.empty[data-kind=page]{max-width:42ch;margin:0 auto;padding:18vh var(--s4) var(--s7);border:0}
+.empty[data-kind=page]::before{content:"";display:block;width:40px;height:40px;margin:0 auto var(--s4);border:1.5px solid var(--line-2);border-radius:50%}
+.empty[data-kind=loading]{padding:var(--s5) 0}
+
+/* inbox: a dot instead of a "New" chip */
+.inb-new{width:8px;height:8px;padding:0;border-radius:50%;background:var(--accent,var(--info));font-size:0;color:transparent}
+
+/* tables and stat tiles: quieter rules and heads */
+.tbl th{font-weight:var(--w-med);color:var(--ink-3);border-bottom:1px solid var(--line)}
+.tbl td{border-top:1px solid var(--line)}
+.tbl tr:last-child td{border-bottom:0}
+.stat dt{color:var(--ink-3);font-size:var(--fs-meta)}
+
+/* dialogs and floating notes */
+.dlg{padding:24px 24px 20px;border:1px solid var(--line);border-radius:var(--r-xl);box-shadow:var(--e2)}
+.dlg h2{font-size:var(--fs-title);margin-bottom:var(--s1)}
+.dlg p{color:var(--ink-3);line-height:1.5}
+.dlg-a{margin-top:var(--s4)}
+.dlg::backdrop{background:oklch(0% 0 0 / .32)}
+.fb-sent,.new-ver,.fb-card{border-color:var(--line);border-radius:var(--r-xl);font-size:var(--fs-small)}
+.new-ver{padding:10px 12px 10px 16px}
+.tip{border-radius:var(--r-m);padding:5px 8px;font-size:var(--fs-meta)}
+
+/* timeline: the how-to text is small print */
+.cvp-note{padding:6px var(--s4);border-bottom:0;font-size:var(--fs-micro);line-height:1.4}
+.cvp-bar{border-bottom:1px solid var(--line)}

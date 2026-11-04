@@ -1,85 +1,101 @@
-/* Hive design tokens. One definition per token; light-dark() picks the theme.
-   Theme: <html> follows the system; data-theme="light|dark" pins it. */
+/* Hive design tokens, redesign 2026-11-04. Drop-in replacement for css/tokens.css (and the copy in site/css/).
+   Every variable name from the old file is kept, so JS and the other CSS files keep working.
+   New names: --fs-read, --fs-hero, --lh-read, --s8, --s9, --r-xl, --ctl-l, --accent, --accent-ink, --accent-bg.
+   One definition per token; light-dark() picks the theme. <html> follows the system; data-theme="light|dark" pins it. */
 :root{color-scheme:light dark}
 :root[data-theme=light]{color-scheme:light}
 :root[data-theme=dark]{color-scheme:dark}
 
+/* Inter, variable, SIL Open Font Licence 1.1. Bundled in vendor/inter/ (subset to Latin, 96 KB); the site build copies it.
+   https://rsms.me/inter/ ; 345 KB for the full file, ~110 KB subset to Latin + Latin-1 + punctuation (pyftsubset). */
+@font-face{font-family:"Inter";font-style:normal;font-weight:100 900;font-display:swap;src:url("../vendor/inter/InterVariable.woff2") format("woff2")}
+
 :root{
-  /* type */
-  --font:system-ui,-apple-system,"Segoe UI","Helvetica Neue",Helvetica,Arial,sans-serif;
-  --mono:ui-monospace,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
-  --fs-micro:11px;   /* axis ticks, badges */
-  --fs-meta:12px;    /* metadata, notes, timestamps */
-  --fs-small:13px;   /* secondary text, tables, lists */
-  --fs-body:14px;    /* body, agent "now" line */
-  --fs-title:15.5px; /* names, card titles */
-  --fs-lead:17px;    /* page answer sentence */
-  --fs-head:21px;    /* page headline */
-  --fs-figure:24px;  /* numbers in stats and gauges */
-  --fs-display:30px; /* the website's and the guide's page title, nowhere in the app */
-  --measure:70ch;    /* longest line of prose */
-  --lh:1.45; --lh-tight:1.2;
-  --w-med:550; --w-bold:650;
+  /* type: one family, one scale */
+  --font:"Inter",system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+  --mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,"Liberation Mono",monospace;
+  --fs-micro:11px;    /* table heads, axis ticks, badges */
+  --fs-meta:12px;     /* times, metadata, hints */
+  --fs-small:13px;    /* buttons, descriptions, table cells */
+  --fs-body:14px;     /* body, rows, labels */
+  --fs-read:15px;     /* chat prose (chat.css used to define this) */
+  --fs-title:15px;    /* names, card titles */
+  --fs-lead:17px;     /* section titles, page lead */
+  --fs-head:22px;     /* page headline */
+  --fs-figure:28px;   /* numbers in stats and gauges */
+  --fs-display:40px;  /* website section and guide title */
+  --fs-hero:56px;     /* website hero only */
+  --measure:66ch;
+  --lh:1.5; --lh-tight:1.2; --lh-read:1.65;
+  --w-med:500; --w-bold:600;
 
   /* space: 4px grid */
-  --s1:4px; --s2:8px; --s3:12px; --s4:16px; --s5:24px; --s6:32px; --s7:48px;
-  --gutter:28px; --page-max:1360px;
+  --s1:4px; --s2:8px; --s3:12px; --s4:16px; --s5:24px; --s6:32px; --s7:48px; --s8:64px; --s9:96px;
+  --gutter:32px; --page-max:1360px; --page-narrow:1040px; /* Settings, Agents, Usage use .page[data-width=narrow] */
 
-  /* radius */
-  --r-s:4px; --r-m:6px; --r-l:10px; --r-pill:999px;
+  /* radius: grows with size */
+  --r-s:6px; --r-m:8px; --r-l:12px; --r-xl:20px; --r-pill:999px;
 
-  /* density: data rows and controls */
-  --row:34px; --row-tight:28px; --ctl:30px; --ctl-s:24px;
+  /* density: three control heights only */
+  --row:40px; --row-tight:32px; --ctl:32px; --ctl-s:28px; --ctl-l:40px;
 
-  /* neutrals: warm grey, near-zero chroma */
-  --bg:       light-dark(oklch(97.4% .003 95), oklch(16.5% .004 95));
-  --surface:  light-dark(oklch(99.3% .002 95), oklch(20%   .004 95));
-  --sunken:   light-dark(oklch(94.6% .004 95), oklch(14%   .004 95));
-  --hover:    light-dark(oklch(94.4% .005 95), oklch(23.5% .005 95));
-  --line:     light-dark(oklch(91%   .004 95), oklch(27%   .005 95));
-  --line-2:   light-dark(oklch(84.5% .005 95), oklch(35%   .006 95));
-  --ink:      light-dark(oklch(21%   .006 95), oklch(94%   .004 95));
-  --ink-2:    light-dark(oklch(41%   .006 95), oklch(79%   .006 95));
-  --ink-3:    light-dark(oklch(51%   .006 95), oklch(65%   .006 95));
-  --on-ink:   light-dark(oklch(99%   .002 95), oklch(17%   .004 95));
-  --focus:    light-dark(oklch(55% .17 255),   oklch(72% .14 255));
-  --link:     light-dark(oklch(48% .15 255),   oklch(76% .12 255));
-  --sel:      light-dark(oklch(55% .15 255 / .10), oklch(70% .14 255 / .16));
+  /* neutrals: cool grey, near-zero chroma */
+  --bg:       light-dark(oklch(98.6% .002 265), oklch(17%   .004 265));
+  --surface:  light-dark(oklch(100%  0 0),      oklch(19.5% .004 265));
+  --sunken:   light-dark(oklch(96.7% .003 265), oklch(15%   .004 265));
+  --hover:    light-dark(oklch(95.4% .004 265), oklch(24%   .005 265));
+  --line:     light-dark(oklch(92.6% .004 265), oklch(26.5% .005 265));
+  --line-2:   light-dark(oklch(87.5% .005 265), oklch(33%   .006 265));
+  --ink:      light-dark(oklch(20%   .006 265), oklch(95%   .003 265));
+  --ink-2:    light-dark(oklch(42%   .008 265), oklch(78%   .005 265));
+  --ink-3:    light-dark(oklch(53%   .008 265), oklch(65%   .006 265)); /* 4.6:1 on --surface, light and dark */
+  --on-ink:   light-dark(oklch(99%   0 0),      oklch(17%   .004 265));
 
-  /* status tones: fill (dots, bars) and ink (text on bg). Never used alone: every tone has a shape and a word. */
-  --good:     light-dark(oklch(60% .14 155), oklch(70% .15 155));
-  --good-ink: light-dark(oklch(45% .12 155), oklch(78% .14 155));
-  --warn:     light-dark(oklch(74% .15 72),  oklch(79% .14 75));
-  --warn-ink: light-dark(oklch(50% .12 62),  oklch(83% .13 78));
-  --bad:      light-dark(oklch(57% .2 27),   oklch(66% .19 25));
-  --bad-ink:  light-dark(oklch(49% .19 27),  oklch(75% .16 25));
-  --info:     light-dark(oklch(57% .15 255), oklch(68% .14 255));
-  --info-ink: light-dark(oklch(47% .15 255), oklch(77% .12 255));
-  --quiet:    light-dark(oklch(60% .006 95), oklch(62% .006 95));
-  --ended:    light-dark(oklch(77% .005 95), oklch(44% .005 95));
+  /* the one accent: links, focus, selection, the tab badge, "needs your answer" */
+  --accent:     light-dark(oklch(53% .17 266), oklch(73% .13 266));
+  --accent-ink: light-dark(oklch(47% .17 266), oklch(80% .11 266));
+  --accent-bg:  light-dark(oklch(53% .17 266 / .09), oklch(73% .13 266 / .14));
+  --focus:var(--accent); --link:var(--accent-ink); --sel:var(--accent-bg);
 
-  /* categories: priority tiers, shares */
-  --tier1: light-dark(oklch(57% .15 255), oklch(67% .14 255));
-  --tier2: light-dark(oklch(66% .16 45),  oklch(71% .15 45));
-  --held:  light-dark(oklch(62% .1 180),  oklch(69% .1 180));
-  --other: light-dark(oklch(74% .008 95), oklch(48% .008 95));
-  --warden: light-dark(oklch(50% .17 305), oklch(72% .15 305));
+  /* status: fill + ink. Only on status, always with a shape and a word. */
+  --good:     light-dark(oklch(62% .15 152), oklch(72% .15 152));
+  --good-ink: light-dark(oklch(45% .12 152), oklch(80% .13 152));
+  --warn:     light-dark(oklch(76% .15 75),  oklch(80% .14 75));
+  --warn-ink: light-dark(oklch(50% .12 62),  oklch(84% .12 78));
+  --bad:      light-dark(oklch(58% .2 27),   oklch(67% .18 25));
+  --bad-ink:  light-dark(oklch(50% .19 27),  oklch(77% .14 25));
+  --info:var(--accent); --info-ink:var(--accent-ink);   /* "waiting for you" is the accent: it's yours to act on */
+  --quiet:    light-dark(oklch(66% .006 265), oklch(58% .006 265));
+  --ended:    light-dark(oklch(80% .004 265), oklch(42% .004 265));
 
-  /* elevation: only things that float */
-  --e1: 0 1px 2px oklch(0% 0 0 / .06), 0 6px 18px oklch(0% 0 0 / .10);
-  --e2: 0 2px 6px oklch(0% 0 0 / .10), 0 18px 48px oklch(0% 0 0 / .24);
+  /* categories (charts, priority tiers): kept, desaturated so they don't compete with status */
+  --tier1: light-dark(oklch(53% .13 266), oklch(70% .11 266));
+  --tier2: light-dark(oklch(64% .12 45),  oklch(72% .11 45));
+  --held:  light-dark(oklch(60% .08 190), oklch(70% .08 190));
+  --other: light-dark(oklch(80% .004 265), oklch(42% .004 265));
+  --warden: light-dark(oklch(50% .14 305), oklch(72% .12 305));
+
+  /* elevation: only things that float, plus the composer */
+  --e1: 0 1px 2px oklch(0% 0 0 / .05), 0 4px 16px oklch(0% 0 0 / .07);
+  --e2: 0 2px 6px oklch(0% 0 0 / .08), 0 16px 40px oklch(0% 0 0 / .16);
+}
+
+/* developer look: same system, denser */
+:root[data-dev]{
+  --row:32px; --row-tight:28px; --ctl:28px; --ctl-s:24px;
+  --fs-head:20px; --fs-figure:24px;
+  --gutter:28px;
 }
 
 /* tone hook: any element with data-tone gets --c (fill) and --ci (text) */
 [data-tone=good]{--c:var(--good);--ci:var(--good-ink)}
 [data-tone=warn]{--c:var(--warn);--ci:var(--warn-ink)}
 [data-tone=bad]{--c:var(--bad);--ci:var(--bad-ink)}
-[data-tone=info]{--c:var(--info);--ci:var(--info-ink)}
+[data-tone=info]{--c:var(--accent);--ci:var(--accent-ink)}
 [data-tone=quiet]{--c:var(--quiet);--ci:var(--ink-2)}
 [data-tone=ended]{--c:var(--ended);--ci:var(--ink-3)}
 [data-tone=ink]{--c:var(--ink);--ci:var(--ink)}
-[data-tone=tier1]{--c:var(--tier1);--ci:var(--info-ink)}
+[data-tone=tier1]{--c:var(--tier1);--ci:var(--accent-ink)}
 [data-tone=tier2]{--c:var(--tier2);--ci:var(--ink)}
 [data-tone=held]{--c:var(--held);--ci:var(--ink)}
 [data-tone=other]{--c:var(--other);--ci:var(--ink-2)}
-

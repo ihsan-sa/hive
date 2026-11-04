@@ -1,6 +1,8 @@
 // The component kit. Each factory takes plain data and returns DOM; styles live in components.css under the same name.
 import { h } from "../core/dom.js";
 import { status as st } from "../core/status.js";
+import { icon } from "./icons.js";
+export { icon };
 
 /** Page header: the answer first. {title, lead, tone, meta:[...], actions, after} */
 export function pageHeader({ title, lead, tone, meta, actions, after, size }) {
@@ -55,9 +57,14 @@ export function meter({ value, stop, tone, label }) {
 }
 
 /** Button. kind: default | primary | danger | quiet. size: s. tone colours quiet text (e.g. bad for Kill). */
-export function button(label, onClick, { kind, size, tone, title, disabled, type, cls, href, busy } = {}) {
-  if (href) return h("a", { class: ["btn", cls], href, "data-kind": kind || null, "data-size": size || null, "data-tone": tone || null, title: title || null }, label);
-  return h("button", { type: type || "button", class: ["btn", cls], "data-kind": kind || null, "data-size": size || null, "data-tone": tone || null, title: title || null, disabled: disabled || busy || null, "data-busy": busy ? "" : null, "aria-busy": busy ? "true" : null, onclick: onClick }, label);
+export function button(label, onClick, { kind, size, tone, title, disabled, type, cls, href, busy, icon: ic } = {}) {
+  // icon: name from icons.js, shown before the label; kind "icon" shows the icon alone, the label becomes aria-label and title.
+  const only = kind === "icon";
+  const body = ic ? (only ? [icon(ic)] : [icon(ic), h("span", {}, label)]) : [label];
+  const a = { class: ["btn", cls], "data-kind": kind || null, "data-size": size || null, "data-tone": tone || null,
+    title: title || (only && typeof label === "string" ? label : null), "aria-label": only && typeof label === "string" ? label : null };
+  if (href) return h("a", { ...a, href }, ...body);
+  return h("button", { ...a, type: type || "button", disabled: disabled || busy || null, "data-busy": busy ? "" : null, "aria-busy": busy ? "true" : null, onclick: onClick }, ...body);
 }
 
 /** Segmented choice. options: [[key, label]] */

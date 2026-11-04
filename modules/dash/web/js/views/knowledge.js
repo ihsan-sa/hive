@@ -2,7 +2,7 @@
 // #knowledge/<home-relative path> opens a folder or a file, and <path>::<line> jumps to a line. The server decides what can be seen and
 // redacts all text; this view only reads, except a project's goals.md, saved through /api/plan with the plans right. On a phone the list and a file take turns.
 import { h } from "../core/dom.js";
-import { S, can, jget, post } from "../core/store.js";
+import { S, can, getPref, jget, post, setPref } from "../core/store.js";
 import { ago, plural, stamp } from "../core/format.js";
 import { href, threadHref } from "../core/router.js";
 import { threadTitle } from "../core/model.js";
@@ -10,7 +10,7 @@ import { button, empty, field, input, list } from "../ui/kit.js";
 import { markdown } from "../ui/markdown.js";
 import { markWords } from "../ui/message.js";
 
-const K = { home: null, seen: new Map(), failed: new Map(), q: "", res: null, timer: 0, worktrees: false, limit: 300, source: false, edit: null, shown: null, memo: {}, mentions: { key: "", v: [] } };
+const K = { map: null, mapAt: 0, topics: new Set(), home: null, seen: new Map(), failed: new Map(), q: "", res: null, timer: 0, worktrees: false, limit: 300, source: false, edit: null, shown: null, memo: {}, mentions: { key: "", v: [] } };
 const open = (path, line) => href("knowledge", line ? `${path}::${line}` : path);
 const parse = arg => { const m = /^(.*)::(\d+)$/.exec(arg || ""); return m ? { path: m[1], line: +m[2] } : { path: arg || "", line: 0 }; };
 const parent = p => (p.includes("/") ? p.slice(0, p.lastIndexOf("/")) : "");
@@ -22,12 +22,46 @@ async function fetchPath(path, ctx) {
   ctx.update();
 }
 async function loadHome(ctx) { try { K.home = await jget("/api/kb/home"); } catch (e) { K.home = K.home || {}; } ctx.update(); }
+// The notes map: every note under ~/kb with its topic, size, age and links. The server keeps it a minute; so does this page.
+async function loadMap(ctx) {
+  if (Date.now() - K.mapAt < 60000) return;
+  K.mapAt = Date.now();
+  try { const m = await jget("/api/kb/map"); K.map = { ...m, notes: m.notes || [], by: new Map((m.notes || []).map(n => [n.path, n])) }; } catch (e) { K.mapAt = 0; K.map = K.map || { notes: [], sources: [], by: new Map(), failed: e.message }; }
+  ctx.update();
+}
+// Recently opened, on this device only.
+const RECENT = "kb.recent";
+function remember(d) {
+  const was = getPref(RECENT, []).filter(r => r.path !== d.path);
+  const title = d.type === "md" ? (K.map && K.map.by.get(d.path)?.title) || d.name : d.name;
+  try { setPref(RECENT, [{ path: d.path, title, at: Date.now() }, ...was].slice(0, 8)); } catch (e) { /* storage full or off: nothing to keep */ }
+}
 function refresh(ctx) {
   const { path } = parse(ctx.arg);
+  if (!path || path.startsWith("kb/")) loadMap(ctx);
   if (!path) return loadHome(ctx);
   fetchPath(path, ctx);
   const up = parent(path), cur = K.seen.get(path);
   if (up && !K.seen.has(up) && (!cur || cur.type !== "dir")) fetchPath(up, ctx);
+}
+// The sidebar box finds files by name only; the main box is the search engine (ranked passages and lines).
+function searchFiles(ctx) {
+  clearTimeout(K.ftimer);
+  const q = (K.fq || "").trim();
+  if (q.length < 2) { K.fres = null; return; }
+  K.ftimer = setTimeout(async () => {
+    try { const r = await jget("/api/kb/search?q=" + encodeURIComponent(q)); if ((K.fq || "").trim() === q) K.fres = r; }
+    catch (e) { K.fres = { q, names: [], hits: [], failed: e.message }; }
+    ctx.update();
+  }, 250);
+}
+function fileRows() {
+  const r = K.fres;
+  if (!r) return empty("Searching…", { kind: "loading" });
+  const ws = (K.fq || "").toLowerCase().split(/\s+/).filter(Boolean);
+  if (r.failed) return empty(r.failed, { kind: "error" });
+  if (!r.names.length) return empty("No file with that name.");
+  return list(r.names.map(n => ({ key: "f:" + n.path, href: open(n.path), title: markWords(n.path.split("/").pop(), ws), text: parent(n.path), meta: ago(n.t * 1e3).replace(" ago", "") })), { dense: true, limit: 60 });
 }
 function search(ctx) {
   clearTimeout(K.timer);
@@ -110,10 +144,14 @@ function mentions(path) {
   }
   return K.mentions.v;
 }
+const noteLink = p => { const n = K.map && K.map.by.get(p); return h("a", { class: "kb-link", href: open(p), "data-key": p }, h("b", null, (n && n.title) || p.split("/").pop()), h("span", { class: "meta" }, p)); };
 function related(d) {
-  const posts = mentions(d.path), linked = d.linked || [];
-  if (!posts.length && !linked.length) return null;
+  const posts = mentions(d.path), note = K.map && K.map.by.get(d.path), out = note ? note.links : [], back = note ? note.back : [];
+  const linked = (d.linked || []).filter(p => !back.includes(p));
+  if (!posts.length && !linked.length && !out.length && !back.length) return null;
   return h("div", { class: "kb-rel" },
+    out.length ? h("section", { class: "sec", "data-key": "out" }, h("header", { class: "sec-h" }, h("h2", { class: "sec-t" }, "Links to"), h("span", { class: "sec-n" }, plural(out.length, "note"))), h("div", { class: "kb-links" }, out.map(noteLink))) : null,
+    back.length ? h("section", { class: "sec", "data-key": "back" }, h("header", { class: "sec-h" }, h("h2", { class: "sec-t" }, "Linked from"), h("span", { class: "sec-n" }, plural(back.length, "note"))), h("div", { class: "kb-links" }, back.map(noteLink))) : null,
     linked.length ? h("section", { class: "sec", "data-key": "linked" }, h("header", { class: "sec-h" }, h("h2", { class: "sec-t" }, "Named in"), h("span", { class: "sec-n" }, plural(linked.length, "note"))),
       h("div", { class: "kb-links" }, linked.map(p => h("a", { class: "kb-link", href: open(p), "data-key": p }, h("b", null, p.split("/").pop()), h("span", { class: "meta" }, p))))) : null,
     posts.length ? h("section", { class: "sec", "data-key": "threads" }, h("header", { class: "sec-h" }, h("h2", { class: "sec-t" }, "Threads"), h("span", { class: "sec-n" }, "latest")),
@@ -154,22 +192,50 @@ function editor(ctx) {
 
 function crumbs(path) {
   const parts = path ? path.split("/") : [];
+  if (!parts.length) return null;   // at the top the page's own title says where you are (the person, 2026-11-04, post 110401017e29)
   return h("nav", { class: "kb-crumbs", "aria-label": "Where you are" },
     h("a", { href: href("knowledge"), "data-key": "home" }, "Knowledge"),
     parts.flatMap((p, i) => [h("span", { "aria-hidden": "true", "data-key": "s" + i }, "/"),
       i === parts.length - 1 ? h("span", { "aria-current": "page", "data-key": "c" + i }, p) : h("a", { href: open(parts.slice(0, i + 1).join("/")), "data-key": "c" + i }, p)]));
 }
 
-function searchRows() {
-  const r = K.res, ws = K.q.toLowerCase().split(/\s+/).filter(Boolean);
+const words = () => (K.res && K.res.ranked && K.res.ranked.words) || K.q.toLowerCase().split(/\s+/).filter(Boolean);
+const passageHref = x => (x.thread ? threadHref(x.thread) : open(x.path, x.line));
+const passageTitle = x => (x.thread ? threadTitle(x.thread) : x.title || x.path.split("/").pop());
+const passagePlace = x => (x.thread ? "board" : x.source === "kb" ? parent(x.path).replace(/^kb\/?/, "notes/").replace(/\/$/, "") || "notes" : parent(x.path));
+const passages = () => (K.res && K.res.ranked && K.res.ranked.passages) || [];
+// Ranked matches as full cards for the main pane: the snippet shows why each one came up.
+function resultsView() {
+  const r = K.res, ws = words(), best = passages();
+  if (!r) return h("div", { class: "kb-note", "data-key": "results" }, empty("Searching…", { kind: "loading" }));
+  return h("div", { class: "kb-note", "data-key": "results" },
+    h("header", { class: "kb-h" }, h("h1", { class: "kb-t" }, `Results for “${K.q.trim()}”`),
+      h("p", { class: "meta" }, r.ranked ? `${plural(best.length, "best match", "best matches")} of ${plural(r.ranked.total, "passage")}, ranked the way agents' kb find ranks them` : "Plain matches: the ranked index isn't ready here.",
+        r.ranked && r.ranked.spelling ? ` · also tried ${r.ranked.spelling}` : "")),
+    best.length ? h("section", { class: "sec", "data-key": "best" }, h("header", { class: "sec-h" }, h("h2", { class: "sec-t" }, "Best matches")),
+      h("ol", { class: "kb-hits" }, best.map(x => h("li", { "data-key": `${x.path}:${x.line}` }, h("a", { class: "kb-hit", href: passageHref(x) },
+        h("span", { class: "kb-hit-t" }, h("b", null, markWords(passageTitle(x), ws)), h("span", { class: "kb-src-tag", "data-src": x.source }, x.source)),
+        h("span", { class: "kb-hit-x" }, markWords(x.text, ws)),
+        h("span", { class: "meta" }, x.thread ? `post ${x.post}` : `~/${x.path}${x.line ? ":" + x.line : ""}`, x.date ? ` · ${x.date}` : "")))))) : null,
+    r.names.length || r.hits.length ? h("section", { class: "sec", "data-key": "plain" }, h("header", { class: "sec-h" }, h("h2", { class: "sec-t" }, "Exact names and lines")),
+      h("div", { class: "kb-plain" }, plainRows(r, ws))) : null,
+    !best.length && !r.names.length && !r.hits.length && !r.failed ? empty("Nothing found. Fewer or other words often help.") : null);
+}
+function plainRows(r, ws) {
   const names = list(r.names.map(n => ({ key: "n:" + n.path, href: open(n.path), title: markWords(n.path.split("/").pop(), ws), text: parent(n.path), meta: ago(n.t * 1e3).replace(" ago", "") })), { dense: true, limit: 30 });
   const hits = list(r.hits.map(x => ({ key: `h:${x.path}:${x.line}`, href: open(x.path, x.line), title: x.path, text: markWords(x.text.trim(), ws), meta: String(x.line) })), { dense: true, limit: 100 });
+  return [r.names.length ? h("h2", { class: "kb-sub", "data-key": "nh" }, "File names") : null, r.names.length ? names : null,
+    r.hits.length ? h("h2", { class: "kb-sub", "data-key": "hh" }, r.more ? "Inside files, first matches" : "Inside files") : null, r.hits.length ? hits : null];
+}
+function searchRows() {
+  const r = K.res, ws = words(), best = passages();
+  const top = list(best.map(x => ({ key: `r:${x.path}:${x.line}`, href: passageHref(x), title: markWords(passageTitle(x), ws), text: markWords(x.text, ws), meta: passagePlace(x) })), { dense: true, limit: 12 });
   return [
     r.failed ? empty(r.failed, { kind: "error" }) : null,
     r.busy ? h("p", { class: "kb-sub", "data-key": "busy" }, "Other searches are running. These are names only.") : null,
-    r.names.length ? h("h2", { class: "kb-sub", "data-key": "nh" }, "File names") : null, r.names.length ? names : null,
-    r.hits.length ? h("h2", { class: "kb-sub", "data-key": "hh" }, r.more ? "Inside files, first matches" : "Inside files") : null, r.hits.length ? hits : null,
-    !r.names.length && !r.hits.length && !r.failed ? empty("Nothing found.") : null,
+    best.length ? h("h2", { class: "kb-sub", "data-key": "bh" }, "Best matches") : null, best.length ? top : null,
+    ...plainRows(r, ws),
+    !best.length && !r.names.length && !r.hits.length && !r.failed ? empty("Nothing found.") : null,
   ];
 }
 function folderRows(dir, cur, ctx) {
@@ -181,15 +247,61 @@ function folderRows(dir, cur, ctx) {
     dir.more ? h("p", { class: "kb-sub", "data-key": "cut" }, `Showing the first ${all.length}.`) : null,
   ];
 }
+const age = t => ago(t * 1e3).replace(" ago", "");
+function recentRows() {
+  const rows = getPref(RECENT, []);
+  return rows.length ? list(rows.map(r => ({ key: "o:" + r.path, href: open(r.path), title: r.title, text: parent(r.path), meta: ago(r.at).replace(" ago", "") })), { dense: true }) : null;
+}
+const TOPIC = { general: "Other notes", history: "History of the Hives", _dropped: "Dropped" };
+const topicName = (t, folder) => TOPIC[t] || (folder ? t + "/" : t.replace(/-+$/, "") + " notes");
+// Notes grouped by topic (their folder, or a name prefix two or more share). Each row: a bar for its size, shaded for how recent it is.
+function mapView(ctx) {
+  const m = K.map;
+  if (!m) return empty("Reading…", { kind: "loading" });
+  if (!m.notes.length) return empty(m.failed || "No notes yet.");
+  const groups = new Map(), now = Date.now() / 1e3, big = Math.log(Math.max(...m.notes.map(n => n.size), 2));
+  for (const n of m.notes) { if (!groups.has(n.topic)) groups.set(n.topic, []); groups.get(n.topic).push(n); }
+  const order = [...groups].sort((a, b) => (a[0] === "general") - (b[0] === "general") || b[1].length - a[1].length || a[0].localeCompare(b[0]));
+  return h("div", { class: "kb-map" }, order.map(([t, ns]) => {
+    ns.sort((a, b) => b.t - a.t);
+    const all = K.topics.has(t), shown = all ? ns : ns.slice(0, 6), folder = ns[0].path.split("/").length > 2;
+    return h("section", { class: "kb-topic", "data-key": "t:" + t },
+      h("header", { class: "kb-topic-h" }, folder ? h("a", { href: open("kb/" + t) }, topicName(t, true)) : h("span", null, topicName(t)), h("span", { class: "meta" }, `${plural(ns.length, "note")} · latest ${age(ns[0].t)} ago`)),
+      h("ul", { class: "kb-notes" }, shown.map(n => {
+        const days = (now - n.t) / 86400, fresh = days < 2 ? 3 : days < 7 ? 2 : days < 30 ? 1 : 0;
+        return h("li", { "data-key": n.path }, h("a", { class: "kb-nr", href: open(n.path), title: `~/${n.path} · ${bytes(n.size)} · changed ${age(n.t)} ago` + (n.back.length ? ` · linked from ${n.back.length}` : "") },
+          h("span", { class: "kb-nr-t" }, n.title || n.path.split("/").pop()),
+          h("span", { class: "meta" }, age(n.t))));
+      })),
+      ns.length > 6 ? button(all ? "Show fewer" : `Show all ${ns.length}`, () => { all ? K.topics.delete(t) : K.topics.add(t); ctx.update(); }, { kind: "quiet", size: "s", cls: "kb-more" }) : null);
+  }));
+}
+function hubRows() {
+  const hubs = (K.map ? K.map.notes : []).filter(n => n.back.length + n.links.length >= 2).sort((a, b) => b.back.length - a.back.length || b.links.length - a.links.length).slice(0, 8);
+  return hubs.length ? list(hubs.map(n => ({ key: "hub:" + n.path, href: open(n.path), title: n.title || n.path, text: parent(n.path), meta: `${n.back.length} link here · ${n.links.length} out` })), { dense: true }) : null;
+}
+const SOURCE = { kb: "Notes in ~/kb", board: "Board posts", projects: "Projects", modules: "Module notes", core: "Core", docs: "Old docs", dispatch: "Dispatch", slack: "Slack", journals: "Journals", boards: "Old boards", mail: "Mail", box: "Box" };
+function sourcesView() {
+  const ss = (K.map && K.map.sources) || [];
+  if (!ss.length) return null;
+  return h("ul", { class: "kb-cover" }, ss.map(s => h("li", { "data-key": s.source }, h("b", null, s.files.toLocaleString()), h("span", null, SOURCE[s.source] || s.source))));
+}
+// The home page below its title: what you opened, the map, the hubs, what changed, what search covers. On a phone it sits under the shelves.
+const homeSections = ctx => [
+  recentRows() ? h("section", { class: "sec", "data-key": "opened" }, h("header", { class: "sec-h" }, h("h2", { class: "sec-t" }, "Recently opened"), h("span", { class: "sec-n" }, "on this device")), recentRows()) : null,
+  h("section", { class: "sec", "data-key": "map" }, h("header", { class: "sec-h" }, h("h2", { class: "sec-t" }, "Notes by topic"), h("span", { class: "sec-n" }, K.map ? `${plural(K.map.notes.length, "note")} in ~/kb, grouped by topic, newest first` : "")), mapView(ctx)),
+  hubRows() ? h("section", { class: "sec", "data-key": "hubs" }, h("header", { class: "sec-h" }, h("h2", { class: "sec-t" }, "Most connected notes"), h("span", { class: "sec-n" }, "how many notes link to each, and it to others")), hubRows()) : null,
+  h("section", { class: "sec", "data-key": "changed" }, h("header", { class: "sec-h" }, h("h2", { class: "sec-t" }, "Changed lately")), K.home ? changedRows() : empty("Reading…", { kind: "loading" })),
+  sourcesView() ? h("section", { class: "sec", "data-key": "cover" }, h("header", { class: "sec-h" }, h("h2", { class: "sec-t" }, "What search covers"), h("span", { class: "sec-n" }, "files and posts in the index")), sourcesView()) : null];
 function changedRows() {
   return list((K.home.recent || []).map(f => ({ key: f.path, href: open(f.path), title: f.title || f.name, text: parent(f.path), meta: ago(f.t * 1e3).replace(" ago", "") })), { empty: "Nothing yet." });
 }
 function sideBody(path, ctx) {
-  if (K.q.trim().length >= 2) return K.res ? searchRows() : empty("Searching…", { kind: "loading" });
+  if ((K.fq || "").trim().length >= 2) return fileRows();
   if (!path) {
     if (!K.home) return empty("Reading…", { kind: "loading" });
     return [list((K.home.shelves || []).map(s => ({ key: s.path, href: open(s.path), title: s.label, text: s.about, meta: String(s.n) })), { empty: "Nothing here yet." }),
-      h("div", { class: "kb-phone", "data-key": "recent" }, h("h2", { class: "kb-sub" }, "Changed lately"), changedRows())];
+      h("div", { class: "kb-phone kb-home", "data-key": "recent" }, homeSections(ctx))];
   }
   const cur = K.seen.get(path), dir = cur && cur.type === "dir" ? cur : K.seen.get(parent(path));
   if (dir) return folderRows(dir, path, ctx);
@@ -201,6 +313,7 @@ function fileHead(d, ctx) {
   const name = projectOf(d.path), isMd = d.type === "md";
   return h("header", { class: "kb-h" },
     h("a", { class: "btn kb-back", href: open(parent(d.path)), "data-kind": "quiet", "data-size": "s" }, "‹ ", parent(d.path).split("/").pop() || "Knowledge"),
+    h("div", { class: "kb-hcrumbs" }, crumbs(d.path)),
     h("h1", { class: "kb-t" }, d.name),
     h("p", { class: "meta" }, h("code", null, "~/" + d.path), d.size != null ? ` · ${bytes(d.size)}` : "", " · changed ", h("span", { title: stamp(d.t * 1e3) }, ago(d.t * 1e3))),
     isMd || (name && can("plans")) ? h("div", { class: "frow" },
@@ -235,15 +348,21 @@ export default {
   render(ctx) {
     if (!can("files")) return h("div", { class: "page" }, empty("Reading files needs full mode here. Sign in again if your hour is up.", { kind: "page", title: "Knowledge" }));
     const { path, line } = parse(ctx.arg), d = path ? K.seen.get(path) : null, isFile = !!d && d.type !== "dir", editing = K.edit && K.edit.at === path;
+    const find = () => input({ type: "search", value: K.q, placeholder: "Search everything: notes, files, posts", "aria-label": "Search the knowledge base", autocomplete: "off", oninput: (e, n) => { K.q = n.value; K.qPath = path; search(ctx); ctx.update(); } });
+    const searching = K.q.trim().length >= 2 && K.qPath === path;
     const side = h("nav", { class: "kb-side", "aria-label": "Files" },
       h("div", { class: "kb-top" },
         crumbs(path),
-        input({ type: "search", value: K.q, placeholder: "Search names and text", "aria-label": "Search the knowledge base", autocomplete: "off", oninput: (e, n) => { K.q = n.value; search(ctx); ctx.update(); } })),
-      h("div", { class: "kb-list" }, sideBody(path, ctx)));
-    const main = h("div", { class: "kb-main", "data-key": "main" },
+        input({ type: "search", value: K.fq || "", placeholder: "Find a file by name", "aria-label": "Find a file by name", autocomplete: "off", oninput: (e, n) => { K.fq = n.value; searchFiles(ctx); ctx.update(); } })),
+      h("div", { class: "kb-phone kb-find", "data-key": "pfind" }, find()),
+      searching ? h("div", { class: "kb-phone kb-phone-results", "data-key": "pres" }, resultsView()) : null,
+      h("div", { class: "kb-list", "data-hide-phone": searching ? "" : null }, sideBody(path, ctx)));
+    const box = h("div", { class: "kb-find kb-wide", "data-key": "find" }, find());
+    const main = h("div", { class: "kb-main", "data-key": "main" }, editing ? null : box,
       editing ? h("div", { class: "kb-note" }, editor(ctx))
+        : K.q.trim().length >= 2 && K.qPath === path ? resultsView()
         : !path ? h("div", { class: "kb-note", "data-key": "home" }, h("header", { class: "kb-h" }, h("h1", { class: "kb-t" }, "Knowledge"), h("p", { class: "meta" }, "What the Hive has written down and built. Secrets are hidden, and nothing here can be changed except project plans.")),
-          h("section", { class: "sec" }, h("header", { class: "sec-h" }, h("h2", { class: "sec-t" }, "Changed lately")), K.home ? changedRows() : empty("Reading…", { kind: "loading" })))
+          homeSections(ctx))
         : K.failed.has(path) ? h("div", { class: "kb-note", "data-key": "gone" }, h("a", { class: "btn kb-back", href: open(parent(path)), "data-kind": "quiet", "data-size": "s" }, "‹ Back"), empty(K.failed.get(path) === "404" ? `~/${path} isn't here, or isn't shown here. Dotfiles and anything named like a key stay hidden.` : `Couldn't read ~/${path}.`))
         : !d ? h("div", { class: "kb-none", "data-key": "wait" }, empty("Reading…", { kind: "loading" }))
         : isFile ? fileView(d, line, ctx) : folderView(d, ctx));
@@ -251,6 +370,7 @@ export default {
     const want = `${path}::${line}`;
     if (d && K.shown !== want) {
       K.shown = want;
+      if (isFile) remember(d);
       requestAnimationFrame(() => {
         const box = document.querySelector(".kb-main"), mark = box && box.querySelector(".kb-code-at");
         if (box) { box.scrollTop = 0; if (mark) mark.scrollIntoView({ block: "center" }); }

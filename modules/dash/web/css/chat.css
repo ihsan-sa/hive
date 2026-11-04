@@ -5,15 +5,12 @@
 
 /* ==== 1. Tokens: extended, never replaced ==== */
 :root{
-  --fs-read:15px;                                    /* chat prose: a reading size, one step up from --fs-body */
-  --lh-read:1.6;
-  --chat-col:calc(var(--fs-read) * 46);              /* 690px: the reply column, and the measure. Text, code, tables and figures all fill it */
-  --chat-fig:calc(var(--fs-read) * 64);              /* 960px: how far a drawing may widen on a wide window */
-  --chat-pad:10px;                                   /* .msg's side padding, named so the column sums can use it */
-  --flow:1.1em;                                      /* space between prose and a figure, code block, table or equation */
-  --code-bg:light-dark(oklch(96.4% .004 95), oklch(17.6% .004 95)); /* a quiet surface: between --surface and --sunken */
-  --r-xl:16px;                                       /* your own bubble */
-  --tool-in:.12s;                                    /* tools fading in */
+  --chat-col:720px;                                  /* was calc(15px*46)=690: Inter sets a little narrower, 720 keeps ~72 characters */
+  --chat-fig:calc(var(--fs-read) * 64);
+  --chat-pad:0px;                                    /* messages no longer carry side padding: no hover box, so no inset */
+  --flow:1.1em;
+  --code-bg:light-dark(oklch(97.2% .003 265), oklch(16.2% .004 265));
+  --tool-in:.12s;
 }
 
 /* ==== 2. One width logic ==== */
@@ -189,5 +186,40 @@
 .msg[data-who=me]>.msg-b{padding:8px 14px;border-radius:var(--r-xl);box-shadow:none}
 .msg[data-who=me][data-cont]>.msg-b{border-top-right-radius:var(--r-xl)}
 .msg[data-who=me][data-state=failed]>.msg-b{box-shadow:inset 0 0 0 1px var(--bad)}
+
+/* ==== redesign 2026-11-04 (thread ui-redesign): changed rules, later wins ==== */
+/* ==== 2. One width logic ==== */
+.cm-msgs .msg,:root[data-dev] .cm-msgs .msg{max-width:var(--chat-col)}
+/* your messages: a soft grey bubble, no tint, no outline */
+.cm-msgs .msg[data-who=me]>.msg-b,.cm-msgs .msg[data-who=me]>.msg-q,.cm-msgs .msg[data-who=me]>.msg-files{max-width:min(78%,560px)}
+.msg[data-who=me]>.msg-b{padding:10px 16px;border-radius:var(--r-xl);background:var(--sunken);box-shadow:none}
+.msg[data-who=me][data-cont]>.msg-b{border-top-right-radius:var(--r-xl)}
+.msg[data-who=me][data-state=failed]>.msg-b{box-shadow:inset 0 0 0 1px var(--bad)}
+
+/* ==== 3. Reading ==== */
+.cm-msgs .msg-b{font-size:var(--fs-read);line-height:var(--lh-read);letter-spacing:-.003em}
+.cm-msgs .msg+.msg{margin-top:var(--s5)}            /* more air between speakers */
+.cm-msgs .msg[data-cont]{margin-top:var(--s2)}
+.cm-msgs .md code{padding:1px 5px;border-radius:5px;background:var(--code-bg);font-size:.86em}
+
+/* ==== 4. Blocks: quieter chrome on code and figures ==== */
+.rc-block{border-color:var(--line);border-radius:var(--r-l)}
+.rc-bar{color:var(--ink-3)}
+.rc-tools{opacity:0;transition:opacity var(--tool-in)}
+.rc-block:hover .rc-tools,.rc-block:focus-within .rc-tools{opacity:1}
+@media (hover:none){.rc-tools{opacity:1}}
+
+/* ==== 9. Developer look: same column logic, denser rhythm, keeps every header ==== */
+:root[data-dev] .cm-msgs .msg+.msg{margin-top:var(--s3)}
+:root[data-dev] .cm-msgs .msg-b{font-size:var(--fs-body);line-height:1.55}
+:root[data-dev] .msg[data-who=me]>.msg-h{display:flex}  /* dev keeps "person to a7c31" on own posts: routing matters there */
+:root[data-dev] .msg:hover{background:none}             /* replaces the old hover fill: actions show instead */
+:root[data-dev] .msg[data-who=person]>.msg-b{padding:8px 12px;border-radius:var(--r-l);background:var(--sunken)}
+
+/* ==== new: agent-to-agent run, folded ==== */
+/* comms.js already hides agent comms behind the filter; when it groups consecutive agent-only posts it renders: */
+.cm-fold{display:flex;align-items:center;gap:10px;width:100%;max-width:var(--chat-col);margin:var(--s3) auto 0;padding:8px 0;border:0;border-block:1px solid var(--line);background:none;color:var(--ink-3);font-size:var(--fs-meta);text-align:left;cursor:pointer}
+.cm-fold:hover{color:var(--ink)}
+.cm-fold>.ic{margin-left:auto}
 
 @media print{.rc-block:not(.rc-fig){background:none;border:1px solid var(--line)}.rc-stage{background:none}}

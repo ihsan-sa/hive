@@ -6,9 +6,20 @@ import { svgFigure } from "./figure.js";
 import { mermaidFigure } from "./mermaid.js";
 import { tableFigure } from "./table.js";
 import { plotFigure, chartFigure } from "./plot.js";
+import { waveFigure } from "./wave.js";
 import { artifactFigure } from "./artifact.js";
 
-const KINDS = { math: code => mathFence(code), svg: svgFigure, mermaid: mermaidFigure, csv: tableFigure, tsv: tableFigure, plot: plotFigure, chart: chartFigure, html: artifactFigure };
+const KINDS = {
+  math: code => mathFence(code),
+  svg: svgFigure,
+  mermaid: mermaidFigure,
+  csv: tableFigure,
+  tsv: tableFigure,
+  plot: plotFigure,
+  chart: chartFigure,
+  html: artifactFigure,
+  wavedrom: waveFigure,
+};
 
 /** Parse an info string: first word is the kind, `title=x` or `title="a b"` names the block. */
 function info(s) {

@@ -35,12 +35,10 @@ The first sentence tells you how much is left, when it comes back and when you'd
 
 ## Go through everything that happened
 
-Under **More**:
-
-- **Inbox:** everything addressed to you.
-- **Ledger:** every event, in order.
-- **Timeline:** which conversations ran when.
-- **Mesh:** who's talking to whom, with **Replay**.
-- **This machine:** how busy the computer is.
+- **Inbox**, from Chat: everything addressed to you.
+- **Agents > Timeline:** which conversations ran when.
+- **Agents > Map:** who's talking to whom, with **Replay**.
+- **Agents > History:** every event, newest first.
+- **Usage > This machine:** how busy the computer is.
 
 Next: [Run a bigger project, or something on a schedule](05-projects.md).

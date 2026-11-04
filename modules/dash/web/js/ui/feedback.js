@@ -69,8 +69,9 @@ export async function openFeedback() {
   const view = h("canvas", { class: "fb-c", "aria-label": "The screen, frozen. Drag to draw a box." });
   const stage = h("div", { class: "fb-s" });
   const say = h("p", { class: "meta", role: "alert", "data-tone": "bad", style: "color:var(--ci)", hidden: true });
-  const text = h("textarea", { class: "input fb-t", "aria-label": "Your comment", placeholder: "What's wrong, or what would you change?" });
+  const text = h("textarea", { class: "input fb-t", "aria-label": "Your comment", placeholder: "What's wrong, or what would you change? Ctrl+Enter sends." });
   text.value = FB.comment; text.addEventListener("input", () => { FB.comment = text.value; });
+  text.addEventListener("keydown", e => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && !e.isComposing && !send.disabled) { e.preventDefault(); go(); } });   // Ctrl+Enter (Cmd+Enter on a Mac) sends
   const pick = h("input", { type: "file", accept: "image/*", hidden: true });
   const undo = button("Undo box", () => { boxes.pop(); paint(); sync(); }, { size: "s", kind: "quiet" });
   const onlyBox = h("input", { type: "checkbox" }); onlyBox.addEventListener("change", () => { only = onlyBox.checked; });
@@ -79,12 +80,14 @@ export async function openFeedback() {
   const noPicL = h("label", { class: "meta" }, noPicBox, " Leave the picture out");
   noPicL.hidden = !toMakers();
   const send = button("Send", () => go(), { kind: "primary", cls: "fb-send" });
+  const gh = button("Open as a GitHub issue", () => ghIssue(), { size: "s", kind: "quiet", title: "Opens a prefilled issue on the Hive's GitHub page, which you check and post from your own GitHub account. The picture isn't included." });
+  gh.hidden = !toMakers();
   const again = button("Browser capture", () => take(), { size: "s", kind: "quiet", title: "If the picture looks wrong: take it with the browser's own screen capture, which asks first" });
   const hint = h("div", { class: "fb-hint", hidden: true }, "Drag on the screen to draw a box");
   const card = h("div", { class: "fb-card" },
     h("div", { class: "fb-r" }, h("b", { class: "fb-title" }, "Send feedback"), undo, button("Close", () => dlg.close(), { size: "s" })),
     text, say, h("div", { class: "fb-r" }, onlyL, noPicL),
-    h("div", { class: "fb-r" }, again, h("span", { class: "fb-gap" }), send),
+    h("div", { class: "fb-r" }, again, h("span", { class: "fb-gap" }), gh, send),
     h("p", { class: "meta" }, toMakers()
       ? "This goes to the makers of Hive: your comment, the picture, the page you're on, this Hive's version and a random install id. The picture holds whatever is on the screen, so box only the part that matters or leave it out. A copy stays on this machine, in reports/sent."
       : "This goes to your own Hive, in the conversation called feedback, where an agent reads it. It isn't sent to the makers of Hive."));
@@ -106,8 +109,10 @@ export async function openFeedback() {
   function dodge(b) {   // the card moves to the other corner rather than sit on what's being boxed
     if (!b) return;
     const k = view.getBoundingClientRect().width / pic.width, v = view.getBoundingClientRect(), r = card.getBoundingClientRect();
-    const hit = v.left + b.x * k < r.right && v.left + (b.x + b.w) * k > r.left && v.top + b.y * k < r.bottom && v.top + (b.y + b.h) * k > r.top;
-    if (hit) card.toggleAttribute("data-left");
+    const x0 = v.left + b.x * k, x1 = v.left + (b.x + b.w) * k, y = v.top + b.y * k < r.bottom && v.top + (b.y + b.h) * k > r.top;
+    const on = (l, rt) => y && x0 < rt && x1 > l, side = card.parentElement.getBoundingClientRect(), ml = side.left + side.right - r.right;
+    // Move only if the other corner is clear: a box across both corners would make the card jump back and forth on every drag step.
+    if (on(r.left, r.right) && !on(ml, ml + r.width)) card.toggleAttribute("data-left");
   }
   function sync() {
     undo.hidden = !boxes.length; onlyL.hidden = !boxes.length; again.hidden = !pic; hint.hidden = !pic || !!boxes.length;
@@ -179,6 +184,16 @@ export async function openFeedback() {
     } catch (e) {   // the comment and picture stay, so it can be sent again
       say.textContent = "It wasn't sent: " + e.message; say.hidden = false; send.disabled = false; send.textContent = "Send";
     }
+  }
+  async function ghIssue() {   // a prefilled link, scrubbed on this machine; the person reviews it and posts it as themselves, so no token is needed
+    const said = text.value.trim();
+    if (!said) { say.textContent = "Write what went wrong first."; say.hidden = false; return; }
+    const tab = window.open("about:blank", "_blank");   // opened in the click, so the browser doesn't block it
+    try {
+      const r = await post("/api/issue-link", { text: said, page: location.hash.slice(1).split(/[/?]/)[0] || "home" });
+      if (tab) { tab.opener = null; tab.location = r.url; } else location.assign(r.url);
+      say.hidden = true;
+    } catch (e) { if (tab) tab.close(); say.textContent = "No link: " + e.message; say.hidden = false; }
   }
   dlg.addEventListener("keydown", e => e.stopPropagation());   // what's open under the picture stays as it is: Escape closes this overlay only, and no shortcut acts on the page under it
   dlg.addEventListener("close", () => { if (!away) { dlg.remove(); FB.open = false; } });

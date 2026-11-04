@@ -9,10 +9,11 @@ import { button, empty, input, pageHeader, stats, toolbar } from "../ui/kit.js";
 import { agentRef, threadRef } from "../ui/refs.js";
 
 const STATUS = [["all", "Any status"], ["running", "Running"], ["queued", "Waiting to start"], ["ended", "Ended"], ["killed", "Killed"], ["limited", "Stopped at a limit"], ["failed", "Failed"]];
-const BY = [["all", "Started by anyone"], ["person", "Started by a person"], ["agent", "Started by an agent"], ["system", "Started by the hive"]];
+const BY = [["all", "Started by anyone"], ["person", "Started by a person"], ["agent", "Started by an agent"], ["system", "Started by the Hive"]];
 const SINCE = [["all", "Any time"], ["1", "Last 24 hours"], ["7", "Last 7 days"], ["30", "Last 30 days"]];
 const PAGE = 200, DAY = 864e5;
 const L = { q: "", status: "all", by: "all", since: "all", model: "all", account: "all", limit: PAGE, sig: "", dataKey: "", all: [], shown: [] };
+const pctOf = (a, b) => b ? Math.round(100 * a / b) + "%" : "0%";
 const sort = () => getPref("agents.sort", { k: "spawned", d: -1 });
 
 const statusOf = n => { const k = agentStatus(n).key; return isRunning(n) ? "running" : k; };
@@ -107,8 +108,8 @@ export default {
         stats([
           { label: narrowed ? "Agents shown" : "Agents", value: found.length.toLocaleString(), note: `${found.filter(a => a.status === "running").length} running` },
           { label: "Total cost", value: money(sum(a => a.usd)), note: found.length ? `${money(sum(a => a.usd) / found.length)} per agent` : null },
-          { label: "Tokens", value: toks(sum(a => a.tok)), note: `${toks(sum(a => a.spend.t[1]))} written` },
-          { label: "Time running", value: dur(sum(a => a.ran)), note: plural(sum(a => a.runs), "run") },
+          { label: "Tokens", value: toks(sum(a => a.tok)), note: `${pctOf(sum(a => a.spend.t[2]), sum(a => a.tok))} re-read from cache; ${toks(sum(a => a.spend.t[1]))} written` },
+          { label: "Agent time", value: dur(sum(a => a.ran)), note: found.length ? `added up over ${plural(sum(a => a.runs), "run")}, in ${dur(Date.now() - Math.min(...found.map(a => a.when || Date.now())))}` : null },
         ]),
         found.length ? h("div", { class: "tbl-w ag-w" }, h("table", { class: "tbl ag" },
           h("caption", { class: "vh" }, "Agents"),

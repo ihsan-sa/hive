@@ -14,8 +14,9 @@ const q = s => { const e = document.querySelector(s); return e && e.getClientRec
 const heading = text => [...document.querySelectorAll("#main .sec-t")].find(e => e.textContent.trim() === text) || null;
 const HOME = '.cp[data-place="home"] .cp-box';   // on a phone it's behind New conversation
 const inThread = () => { const r = parse(); return r.id === "comms" && !!r.arg && r.arg[0] !== "~"; };
-const tab = id => () => q(`.tabs a[data-key="${id}"]`);
-const hasTab = id => !!q(`.tabs a[data-key="${id}"]`);
+const tabSel = id => `.tabs a[data-key="${id}"], .top-icons a[data-key="${id}"]`;   // Settings is an icon at the right of the bar
+const tab = id => () => q(tabSel(id));
+const hasTab = id => !!q(tabSel(id));
 const mine = () => (S.posts || []).filter(p => p.from === "person").length;
 const threads = () => (S.threads ? S.threads.size : 0);
 let sentFrom = 0, outFrom = 0;
@@ -23,21 +24,21 @@ let sentFrom = 0, outFrom = 0;
 /** A step: title, text, ring() what to mark, done() the page shows they did it (no done: a Next button), skip() not on this install or page. */
 const STEPS = [
   { title: "A quick look around", text: "A few minutes, one step at a time. This window says what to click and waits for you. You can drag it, and leave whenever you like." },
-  { title: "This is where you talk to the hive", text: "Click Chat at the top.", ring: tab("comms"), done: () => here() === "comms", skip: () => here() === "comms" },
+  { title: "This is where you talk to the Hive", text: "Click Chat at the top.", ring: tab("comms"), done: () => here() === "comms", skip: () => here() === "comms" },
   { title: "Start a job", text: () => `${q(HOME) ? "Type" : "Click New conversation, then type"} what you want done, the way you'd tell a person, and press Start. An agent starts on it and answers here. This is a real job and uses your Claude limits, so skip it if you're not ready.`, ring: () => q(HOME) || q(".cm-newbtn"), done: () => mine() > sentFrom || OUT.length > outFrom || inThread(), enter: () => { sentFrom = mine(); outFrom = OUT.length; if (parse().arg) go("comms"); }, skip: () => !can("post") },
   { title: "Open a conversation", text: "Each job is one conversation, and they're all listed here. Click one.", ring: () => q(".cm-tl a.lr-in"), done: inThread, enter: () => { if (here() === "comms" && parse().arg) go("comms"); }, skip: () => inThread() || !threads() },
   { title: "Answers land here", text: "Agents write back in this conversation as they go. You can close the app: the work carries on, and it's all here when you come back.", ring: () => q(".cm-msgs"), skip: () => !inThread() },
   { title: "Who's on it", text: "This line says who is working and what they're doing. If an agent is running, Stop… is here too. It asks you to type the agent's name before anything ends, so you don't need to try it now.", ring: () => q(".cm-strip"), skip: () => !inThread() },
   { title: "When an agent asks you something", text: () => (q('.cm-line[data-key="asks"] button') ? "An agent here is waiting for you. Click Answer to reply to its question." : "A line appears here with an Answer button, and the Chat tab shows a number. The Chat page lists everything waiting for you."), ring: () => q('.cm-line[data-key="asks"] button') || q(".cm-strip"), done: () => (q('.cm-line[data-key="asks"] button') ? !!q(".cp-reply") : false), hasNext: true, skip: () => !inThread() },
   { title: "Reply any time", text: "Write here to carry on the conversation, even while the agent works. The To button shows who gets it, and you can change that. Nothing is sent until you press Send.", ring: () => q('.cp[data-place="thread"] .cp-t'), skip: () => !inThread() },
-  { title: "Attach files", text: "Attach adds files to your message. You can also paste them or drop them on the conversation.", ring: () => [...document.querySelectorAll('.cp[data-place="thread"] .cp-bar button')].find(b => b.textContent === "Attach") || null, skip: () => !inThread() },
+  { title: "Attach files", text: "Attach adds files to your message. You can also paste them or drop them on the conversation.", ring: () => q('.cp[data-place="thread"] .cp-attach'), skip: () => !inThread() },
   { title: "See every agent", text: "Click Agents at the top.", ring: tab("now"), done: () => here() === "now", skip: () => !hasTab("now") },
   { title: "Agents", text: "Everyone working right now and what they're doing. Click a name to see its whole session. The row under the top bar has the rest: every agent, the timeline, the map and the history.", ring: () => heading("What each is doing"), skip: () => here() !== "now" },
   { title: "Check your limits", text: "Click Usage at the top.", ring: tab("usage"), done: () => here() === "usage", skip: () => !hasTab("usage") },
   { title: "Usage", text: "How much of your Claude limits is left and when it comes back. New agents stop at a usage line so they don't use it all. You can change that line, or pause an account, under Claude accounts.", ring: () => heading("Claude accounts"), skip: () => here() !== "usage" },
-  { title: "Settings", text: "Click Settings at the top.", ring: tab("settings"), done: () => here() === "settings", skip: () => !hasTab("settings") },
-  { title: "How the hive runs", text: "Add a second Claude account here, and turn on extras: optional tools your agents can use.", ring: () => heading("Accounts"), skip: () => here() !== "settings" },
-  { title: "One more", text: "Click More at the top.", ring: () => q(".more > button"), done: () => !!q(".more > button[aria-expanded=true]"), skip: () => !q(".more > button") },
+  { title: "Settings", text: "Click Settings at the top right (the sliders).", ring: tab("settings"), done: () => here() === "settings", skip: () => !hasTab("settings") },
+  { title: "How the Hive runs", text: "Add a second Claude account here, and turn on modules: optional tools your agents can use.", ring: () => heading("Accounts"), skip: () => here() !== "settings" },
+  { title: "One more", text: "Click More at the top right (the three dots).", ring: () => q(".more > button"), done: () => !!q(".more > button[aria-expanded=true]"), skip: () => !q(".more > button") },
   { title: "Help is under More", text: "The user guide is here, and Take the tour brings this window back. That's it: say what you want done in Chat.", ring: () => q('.more-i[data-key="help"]'), last: true },
 ];
 

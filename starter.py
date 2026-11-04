@@ -37,9 +37,15 @@ def mentions(p):
     found = [t.lstrip("@").lower() for t in to] + [m.lower() for m in MENTION.findall(CODE.sub(" ", str(p.get("text", ""))))]
     return list(dict.fromkeys(found))
 
+def _claude_models():
+    """The Claude model words, weakest first: config.json "models". A new model is one line there, not an edit in each file."""
+    try: m = json.loads((CORE / "config.json").read_text()).get("models")
+    except (OSError, ValueError): m = None
+    return tuple(m) if isinstance(m, list) and m and all(isinstance(x, str) and re.fullmatch(r"[a-z][a-z0-9.-]*", x) for x in m) else ("haiku", "sonnet", "opus", "fable")
+CLAUDE_MODELS = _claude_models()
 # words that start a fresh agent: prefix of its code, and how its model is chosen (see main)
 CODEX_DEFAULT = "codex:gpt-6-astra"
-MODEL_WORDS = {"opus": "opus", "sonnet": "sonnet", "haiku": "haiku", "fable": "fable", "astra": CODEX_DEFAULT}  # @opus: a new agent on that model (the person, 2026-11-04)
+MODEL_WORDS = {**{m: m for m in CLAUDE_MODELS}, "astra": CODEX_DEFAULT}  # @opus: a new agent on that model (the person, 2026-11-04)
 SPAWN = {"new": "a", "claude": "a", "codex": "c", "free": "f", **{w: "c" if m.startswith("codex:") else "a" for w, m in MODEL_WORDS.items()}}
 
 def known_agents(c):
@@ -91,7 +97,7 @@ def drop_spawns(st, thread):
         else: st["pending"].pop(n)
     return gone
 
-MODELS = ("opus", "sonnet", "haiku", "fable")  # what a post may ask for with `hive post --model`
+MODELS = CLAUDE_MODELS  # what a post may ask for with `hive post --model`
 PROVIDER_MODEL = re.compile(r"^([a-z0-9-]+):([A-Za-z0-9][A-Za-z0-9._/:@-]*)$")  # openrouter:openai/gpt-5
 
 def provider_of(c, model):
@@ -220,6 +226,7 @@ def limit_hit(out):
     return (float(reset), sid) if reset else None
 
 AUTH_TEXT = re.compile(r"not logged in|please run /login|failed to authenticate|authentication_failed|invalid api key|oauth token (has|is|was)", re.I)
+LAUNCH_HOLD_S = 600  # claude wouldn't start at all: tried again after this
 AUTH_HOLD_S = 3600  # a rejected login is tried again after this, in case someone signed it back in
 
 def auth_hit(out):
@@ -425,7 +432,7 @@ def kill_tree(pid):
 def waiting_posts(st, r):
     """Posts queued for a run that has ended its turn and sits parked on a background shell. The inbox hook fires only on a
     tool call or a stop, so such a run is deaf until the shell ends: a5ea4 was parked on a queued `heavy` job with up to 90 min
-    left when the person asked it for a TLDR (2026-11-02). The person's post wakes it after a minute, an agent's after 10."""
+    left when the person asked it for a TLDR (2026-11-02). The person's or another Hive's post wakes it after a minute, an agent's after 10."""
     ps = st.get("pending", {}).get(r["name"])
     # already dead, or killed and not gone yet (a run from before a starter restart is no child of ours): the end path takes it
     if not ps or r["name"] in st.get("resume", {}) or not Path(f"/proc/{r['pid']}").exists(): return []
@@ -433,7 +440,7 @@ def waiting_posts(st, r):
     except OSError: seen = set()
     ps = [p for p in ps if p["id"] not in seen]
     c = cfg()
-    grace = c.get("wake_person_s", 60) if any(p.get("from") in ("person", r["name"]) for p in ps) else c.get("wake_agent_s", 600)  # its own post: `hive model`
+    grace = c.get("wake_person_s", 60) if any(p.get("from") in ("person", "hives", r["name"]) for p in ps) else c.get("wake_agent_s", 600)  # its own post: `hive model`; hives: another Hive waiting on a reply, paced like the person (line 644)
     return ps if ps and finished_but_alive(r, grace) else []
 
 def release_shells(pid):
@@ -485,6 +492,9 @@ def running(st=None):
             f.unlink(); children.pop(r["name"], None)
             log(event="end", name=r["name"], session=r["session"], pid=r["pid"], exit=c.returncode if c else None)
             hit = limit_hit(r.get("out"))
+            if st is not None and st.get("launch_hold") and r.get("harness", "claude-code") == "claude-code" and wrote_json(r.get("out")):
+                st.pop("launch_hold"); log(event="launch_ok", name=r["name"])
+                post("Claude Code starts agents again; the posts that waited are being handled.", ["person"])
             if c and c.returncode and not hit and r.get("from") == "person" and r.get("fallback") and not posted_since(r["name"], r.get("at", "")):
                 # a0f70 died on an API 503 at 15:52 on 2026-11-02 and the person's request just vanished
                 post(f"`{r['name']}` on the fallback model died (exit {c.returncode}) without posting, so post {r.get('post')} wasn't done. Post again, or wait for a Claude login.", ["person"], r.get("thread"))
@@ -514,6 +524,18 @@ def running(st=None):
                 key = f"{r['name']}:{r.get('post')}"; st["lost_resumes"][key] = st["lost_resumes"].get(key, 0) + 1
                 st.setdefault("resume", {})[r["name"]] = {**r, "session": session_in(r.get("out")) or r["session"], "reset": 0, "reaped": lost, "lost": True}
                 log(event="lost_subagents", name=r["name"], session=r["session"], lost=lost)
+            elif st is not None and r.get("harness", "claude-code") == "claude-code" and (why := launch_failed(r.get("out"), c.returncode if c else None)):
+                # claude refused to start at all (a flag an update dropped, a broken install): not this agent's fault, so it keeps
+                # its session and its posts, and nothing starts until it's tried again (tested 2026-11-04: a rejected flag made every woken agent dead)
+                ps = r.get("slept") or [{"id": r["post"], "thread": r.get("thread"), "from": r.get("from"), **({"model": r["model"]} if r.get("model") else {})}]
+                st["pending"][r["name"]] = ps + [p for p in st["pending"].get(r["name"], []) if p["id"] not in {q["id"] for q in ps}]
+                fresh = not st.get("launch_hold")
+                st["launch_hold"] = {"until": time.time() + LAUNCH_HOLD_S, "why": why}
+                log(event="launch_failed", name=r["name"], session=r["session"], why=why)
+                if fresh:
+                    post(f"Claude Code won't start agents: `{why}` (exit {c.returncode if c else '?'}, `{r['name']}`). Most likely a Claude Code "
+                         f"update changed what it accepts. No agent loses anything: their posts wait, and starting is tried again every "
+                         f"{LAUNCH_HOLD_S // 60} min. Running `claude --version` and `hive update` may fix it.", ["person"])
             elif st is not None and r.get("slept") and resume_failed(r.get("out"), c.returncode if c else None):
                 mark_done(r["name"], "its session could not be resumed")
                 st["pending"][r["name"]] = [{**p, "no_revive": True} for p in r["slept"]] + st["pending"].get(r["name"], [])
@@ -718,6 +740,27 @@ def dead_why(c, n, run):
     except OSError: pass
     size = context_of(run.get("out"))
     return f"it stopped with {size // 1000}k tokens of context" if size > c.get("resume_max_context", 200000) else None
+
+def launch_failed(out, code):
+    """Its first line, if a claude run exited with an error before it wrote a single stream-json line (it never got as far as the
+    session: `error: unknown option`, a crash on start). A signal (negative code) is a kill, not this. Else None."""
+    if not code or code < 0: return None
+    try:
+        with open(out, errors="replace") as f: lines = [l.strip() for l in f if l.strip()]
+    except (OSError, TypeError): return None
+    if any(l.startswith("{") for l in lines): return None
+    return (lines[0] if lines else "no output")[:200].replace("`", "'")
+
+def wrote_json(out):
+    """Whether a run's output has a stream-json line: claude started and read its arguments."""
+    try:
+        with open(out, errors="replace") as f: return any(l.lstrip().startswith("{") for l in f)
+    except (OSError, TypeError): return False
+
+def launch_held(st):
+    """Holding new starts after a launch failure; the hold lapses after LAUNCH_HOLD_S and the next start tries again."""
+    h = st.get("launch_hold")
+    return bool(h) and time.time() < h.get("until", 0)
 
 def resume_failed(out, code):
     """A woken run that ended in error without one turn: bad session, say. Its post would be lost."""
@@ -1044,6 +1087,14 @@ def fallback(c, st, n, posts, claude_ok, cache):
 
 def main():
     for d in (RUN, STATE, HOME / "sessions"): d.mkdir(exist_ok=True)
+    # One starter per home: two would both read the board and start every agent twice. A second one waits here and takes over
+    # when the first ends (a restart that overlaps, a hand-run copy beside the service). The fd isn't inherited by agents.
+    import fcntl
+    lock = open(STATE / "starter.lock", "w")
+    try: fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        print("another starter runs in this home; waiting for it to end", flush=True); fcntl.flock(lock, fcntl.LOCK_EX)
+    lock.write(str(os.getpid())); lock.flush()
     hook_inbox(cfg())
     wire_deny(cfg())
     st = load("starter.json", {"offset": 0, "pending": {}})
@@ -1115,11 +1166,14 @@ def main():
             st["paused_logins"] = off; log(event="logins_paused", logins=off)
         if (pick_login(c, room) is None) != paused:
             paused = not paused
-            post("Every login is paused or past its stop line; starting only runs the person asks for, on a login that isn't paused."
+            signed_in = any((Path(l).expanduser() / ".credentials.json").exists() for l in c["logins"])
+            post(("Every login is paused or past its stop line; starting only runs the person asks for, on a login that isn't paused."
+                  if signed_in else "No Claude account is signed in yet, so only your own asks start, on another provider if one is set up."
+                  " Sign in under Settings > Accounts.")
                  if paused else "Usage has room again; starting sessions.", ["person"])
             log(event="paused" if paused else "resumed", usage=u)
         login = pick_login(c, room, st.get("limits"))  # None: every login is paused, past the stop line or held on a limit
-        hold = box_holds()
+        hold = box_holds() or launch_held(st)
         for n, r in ([] if hold else list(st.get("resume", {}).items())):  # resume limit-stopped sessions first, same name and session
             if (not login and not provider_of(c, r.get("model"))) or n in alive or len(alive) >= (c.get("max_sessions") or float("inf")): continue
             if paced(c, st, n, [{"from": r.get("from")}]): continue

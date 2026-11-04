@@ -1,0 +1,116 @@
+/* Agents › Map: a graph of threads (rectangles) and the agents in them, no time axis (Timeline has that). a2ea0's file; tokens from tokens.css only. */
+.map{container-type:inline-size}
+.map-tb{display:flex;flex-wrap:wrap;align-items:center;gap:var(--s3);padding:var(--s3) var(--s5);border-bottom:1px solid var(--line)}
+.map-tb .map-search{width:240px}
+.map-sum{margin-left:auto;font-size:var(--fs-small);color:var(--ink-2)}
+.map-sum b{color:var(--ink);font-weight:var(--w-bold)}
+.map-bd{display:flex;flex-wrap:wrap;align-items:flex-start}
+.map-chart{flex:999 1 640px;min-width:0;padding:var(--s4) var(--s5) var(--s5);display:flex;flex-direction:column;gap:var(--s3)}
+.map-side{flex:0 1 352px;min-width:0;align-self:stretch;padding:var(--s5) var(--s5);background:var(--surface);border-left:1px solid var(--line);display:flex;flex-direction:column;gap:22px}
+
+
+.lane-sw{width:8px;height:8px;border-radius:2px;background:var(--c);flex:none}
+
+
+.map-rp{display:flex;align-items:center;gap:var(--s3);padding:var(--s2) var(--s3) var(--s2) var(--s2);border:1px solid var(--line);border-radius:var(--r-l);background:var(--surface)}
+.map-rp-t{position:relative;flex:1;height:32px}
+.map-rp-t::before{content:"";position:absolute;inset:15px 0 auto;height:3px;border-radius:2px;background:var(--sunken)}
+.map-rp-f{position:absolute;left:0;top:15px;height:3px;border-radius:2px;background:var(--ink-3)}
+.map-rp-h{position:absolute;top:8px;width:16px;height:16px;margin-left:-8px;border-radius:50%;background:var(--surface);border:2px solid var(--ink);cursor:grab}
+.map-rp-h[data-cut]{border-color:var(--accent)}
+.map-key{display:flex;flex-wrap:wrap;align-items:center;gap:6px 18px;font-size:var(--fs-meta);color:var(--ink-3)}
+
+.figs{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1px;border:1px solid var(--line);border-radius:var(--r-l);background:var(--line);overflow:hidden}
+.fig{padding:var(--s3) 14px;background:var(--surface);display:flex;flex-direction:column;gap:2px}
+.fig>span{font-size:var(--fs-meta);color:var(--ink-3)}
+.fig>b{font-size:24px;font-weight:var(--w-bold);line-height:var(--lh-tight)}
+.fig>small{font-size:var(--fs-meta);color:var(--ink-2)}
+.map-row{display:flex;align-items:center;gap:10px;min-height:36px;padding:6px 0;border-top:1px solid var(--line);font-size:var(--fs-small);color:var(--ink-2)}
+.map-row:first-child{border-top:0}
+.map-row>.r{margin-left:auto;color:var(--ink-3);font-size:var(--fs-meta)}
+.map-bar{display:grid;grid-template-columns:120px minmax(0,1fr) 52px;align-items:center;gap:10px;height:28px;font-size:var(--fs-small)}
+.map-bar>em{height:6px;border-radius:3px;background:var(--sunken);overflow:hidden}
+.map-bar>em>i{display:block;height:100%;background:var(--ink-3)}
+.map-bar>span{text-align:right;font-weight:var(--w-med)}
+.map-now{padding:10px var(--s3);border-radius:var(--r-m);background:var(--sunken);font-size:var(--fs-small)}
+.map-empty{display:flex;flex-direction:column;align-items:center;gap:10px;padding:var(--s9) var(--s5);text-align:center;border:1px solid var(--line);border-radius:var(--r-l);background:var(--surface)}
+
+@container (max-width:760px){
+  .map-tb{padding:var(--s3);gap:var(--s2)}
+  .map-tb .seg{flex:1 1 100%}.map-tb .seg button{flex:1;height:32px}
+  .map-tb .map-search{flex:1;width:auto}.map-sum{display:none}
+  .map-side{order:-1;flex:1 1 100%;padding:var(--s4) var(--s3);border-left:0;border-bottom:1px solid var(--line);gap:14px}
+  .map-side [data-more]{display:none}
+  .map-chart{padding:var(--s3)}
+}
+
+/* ---- beyond the handoff block ---- */
+.map-search{position:relative;display:grid}
+.map-search>.ic{position:absolute;left:10px;top:50%;width:16px;height:16px;margin-top:-8px;color:var(--ink-3);pointer-events:none}
+.map-search>.input{padding-left:32px}
+.map-sw{display:inline-flex;align-items:center;gap:var(--s2);font-size:var(--fs-small);color:var(--ink-2);cursor:pointer}
+.lane-sw[data-tone=other]{background:var(--ink-3)}
+.map-rp-t{cursor:pointer;touch-action:none}
+.map-rp-h:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+.map-rp-c{min-width:64px;font-size:var(--fs-meta);color:var(--ink-3);text-align:right;white-space:nowrap}
+.map-rp-c[data-cut]{color:var(--accent-ink);font-weight:var(--w-bold)}
+.map-key>span{display:inline-flex;align-items:center;gap:6px}
+.map-sh{display:flex;align-items:flex-start;justify-content:space-between;gap:var(--s3)}
+.map-sh h2{margin:0;font-size:var(--fs-body);font-weight:var(--w-bold)}
+.map-sh small{font-size:var(--fs-meta);color:var(--ink-3)}
+.map-sec{display:flex;flex-direction:column}
+.map-sec>h3{margin:0 0 var(--s2);font-size:var(--fs-meta);font-weight:var(--w-bold);color:var(--ink-3);text-transform:uppercase;letter-spacing:.04em}
+.map-sec>.btn{align-self:flex-start;margin-top:var(--s2)}
+.map-rt{display:flex;flex-direction:column;min-width:0}
+.map-rt small{font-size:var(--fs-meta);color:var(--ink-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.map-id{font-family:var(--mono);font-weight:var(--w-bold);color:var(--ink);text-decoration:none}
+.map-id:hover{text-decoration:underline}
+.map-bar>.map-id,.map-bar>.map-dim{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:var(--fs-small)}
+.map-dim{color:var(--ink-3)}
+.map-idh{display:flex;align-items:center;gap:var(--s3)}
+.map-idh-t{display:flex;flex-direction:column;min-width:0;flex:1}
+.map-idh-t b{font:var(--w-bold) var(--fs-body) var(--mono)}
+.map-idh-t small{font-size:var(--fs-meta);color:var(--ink-2)}
+.map-idh .lane-sw{width:12px;height:12px}
+.map-av{position:relative;flex:none;display:grid;place-items:center;width:40px;height:40px;border-radius:50%;background:var(--sunken);font:var(--w-bold) var(--fs-meta) var(--mono);color:var(--ink-2)}
+.map-av>.sd{position:absolute;right:-1px;bottom:-1px;box-shadow:0 0 0 2px var(--surface)}
+.map-now small{display:block;margin-top:2px;font-size:var(--fs-meta);color:var(--ink-3)}
+.map-post{padding:6px 0;border-top:1px solid var(--line);font-size:var(--fs-small)}
+.map-post:first-of-type{border-top:0}
+.map-post>div{font-size:var(--fs-meta);color:var(--ink-3)}
+.map-post>div b{font-family:var(--mono);color:var(--ink-2)}
+.map-post p{margin:2px 0 0;color:var(--ink-2)}
+.map-acts{display:flex;flex-wrap:wrap;gap:var(--s2)}
+.map-empty h2{margin:0;font-size:var(--fs-body)}
+.map-empty p{margin:0;max-width:52ch;font-size:var(--fs-small);color:var(--ink-2)}
+.map-empty-ic{color:var(--ink-3)}
+.map-empty-ic .ic{width:28px;height:28px}
+.map-more-btn{display:none}
+/* a display tile shows the areas only */
+.map[data-tile] .map-chart{padding:var(--s2)}
+@container (max-width:760px){
+  .map-more-btn{display:inline-flex;align-self:flex-start}
+  .map-side[data-open] [data-more]{display:flex}
+  .map-sw{order:2}
+  .map-tb .map-search{order:3;flex:1 1 100%}
+}
+/* With many areas the replay bar would sit below the fold: keep it pinned to the bottom of the view while the map scrolls. */
+.map-rp{position:sticky;bottom:var(--s3);z-index:3}
+.map[data-tile] .map-rp{position:static}
+
+/* ---- the graph (the person, 2026-11-04: "I still want it to be a graph view") ---- */
+.map-stage{position:relative;height:clamp(420px,calc(100vh - 260px),820px);border:1px solid var(--line);border-radius:var(--r-l);background:var(--surface);overflow:hidden}
+.map-stage>.graph{border-radius:inherit}
+.map-cap{position:absolute;left:var(--s3);top:var(--s2);font-size:var(--fs-small);font-weight:var(--w-bold);color:var(--ink);pointer-events:none}
+.map-cap small{font-size:var(--fs-small);font-weight:400;color:var(--ink-3)}
+.map-cap[data-cut]{color:var(--accent-ink)}
+.map[data-tile] .map-stage{height:100%;min-height:200px;border:0;border-radius:0}
+.map[data-tile] .map-chart{height:100%}
+.tok-dm{display:inline-block;width:7px;height:7px;border-radius:1px;transform:rotate(45deg);background:var(--ink)}
+.map-k-ag{display:inline-block;width:10px;height:10px;border-radius:50%;background:var(--quiet);opacity:.5}
+.map-k-th{display:inline-block;width:18px;height:12px;border-radius:3px;border:1.5px solid var(--ink-3);background:var(--sunken)}
+.map-k-ln{display:inline-block;width:22px;height:0;border-top:2px solid var(--ink-3)}
+.map-k-ln[data-also]{border-top:1.5px dashed var(--line-2)}
+@container (max-width:760px){
+  .map-stage{height:clamp(360px,64vh,560px)}
+}

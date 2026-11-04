@@ -7,7 +7,7 @@ export const SYS = new Set(["starter", "dash", "anon", "all", "400", "mention", 
 
 export const S = {
   app: { route: "open", can: null, app: false, setup: null },
-  live: null, usage: null, projects: null, agentCosts: null, threadNames: {},
+  live: null, usage: null, projects: null, agentCosts: null, threadNames: {}, threadMeta: {},
   posts: [], byId: {}, threads: new Map(), off: 0,
   sessions: [], lastSess: {}, open: {}, byOut: {}, woke: {}, logOff: 0,
   agents: new Set(), killed: {}, limited: [], limitedSess: new Set(), limitedNow: new Set(),
@@ -32,7 +32,7 @@ export const setupDone = () => { const s = S.app.setup; if (S.app.settings && S.
 // ---- change notification ----
 const subs = new Set();
 export const subscribe = fn => (subs.add(fn), () => subs.delete(fn));
-const emit = what => { for (const f of subs) f(what); };
+export const emit = what => { for (const f of subs) f(what); };
 
 // ---- API ----
 export async function jget(u) {
@@ -148,6 +148,10 @@ export async function loadApp() {
 export async function loadThreadNames() {
   try { const v = await jget("/api/thread-names"); if (JSON.stringify(v) !== JSON.stringify(S.threadNames)) { S.threadNames = v; S.ver++; emit({ names: true }); } } catch (e) {}
 }
+/** The person's pins, archive and titles for threads (/api/thread-meta), kept beside the board. */
+export async function loadThreadMeta() {
+  try { const v = await jget("/api/thread-meta"); if (JSON.stringify(v) !== JSON.stringify(S.threadMeta)) { S.threadMeta = v; S.ver++; emit({ names: true }); } } catch (e) {}
+}
 export async function loadProjects() {
   if (S.projects) return; S.projects = "loading"; emit({ projects: true });
   try { const p = await jget("/api/projects"); p.sort((a, b) => (b.t || 0) - (a.t || 0)); S.projects = p; } catch (e) { S.projects = null; }
@@ -155,7 +159,7 @@ export async function loadProjects() {
 }
 export function start() {
   const every = (ms, f) => setInterval(() => { if (!document.hidden) f(); }, ms);
-  every(1500, poll); every(3000, pollUsage); every(15000, loadApp); every(60000, loadThreadNames);
+  every(1500, poll); every(3000, pollUsage); every(15000, loadApp); every(60000, loadThreadNames); every(15000, loadThreadMeta);
   document.addEventListener("visibilitychange", () => { if (!document.hidden) { poll(); pollUsage(); } });
-  return Promise.all([loadApp(), pollUsage(), poll(), loadThreadNames()]);
+  return Promise.all([loadApp(), pollUsage(), poll(), loadThreadNames(), loadThreadMeta()]);
 }

@@ -19,6 +19,8 @@ export function tierOf(th) {
   }
   return "other";
 }
+/** A priority list exists (kb/priorities.md): a fresh consumer Hive has none, and then tiers mean nothing to show. */
+export const hasTiers = () => !!(S.live && S.live.priorities && S.live.priorities.tier1);
 export const tierRank = th => ["tier1", "tier2", "other", "held"].indexOf(tierOf(th));
 
 /** A running agent's state: {key: working|queue|quiet|stuck, text}. Same test as before. */
@@ -82,7 +84,7 @@ export function agentCard(n) {
  *  turns since the last read, or a harness with no transcripts to read. stream: {c, t:[in, out, cache read, cache write]}.
  *  -> {usd, t, calls (null if unknown), m (model id -> usd), sub (usd of subagents), src} */
 export function agentSpend(n, stream) {
-  const A = S.agentCosts && S.agentCosts.by[n];
+  const A = S.agentCosts && S.agentCosts.by && S.agentCosts.by[n];
   if (A && A.usd >= stream.c) return { usd: A.usd, t: A.t, calls: A.calls, m: A.m, sub: A.sub, src: "transcripts" };
   return { usd: stream.c, t: stream.t, calls: A ? A.calls : null, m: stream.m || (A ? A.m : {}), sub: A ? A.sub : 0, src: "session logs" };
 }
@@ -140,6 +142,40 @@ export function fresh7(l) { const w = l.limits && l.limits.seven_day; return w &
 export const weeklyStop = (l, U) => { const st = l.stop || {}; return st.weekly ?? st.global ?? (U && U.stop_pct) ?? 98; };
 /** In use: an account the starter can still give new runs to (not paused, under its weekly stop line). */
 export function inUse(l, U) { if (l.paused) return false; const v = fresh7(l); return v == null || v < weeklyStop(l, U); }
+/** A login's share of all the Claude capacity: what its plan gives a week, with Pro as 1. The person's ratio (2026-11-04): Ultra (Max 20x) is 10 Pros.
+ * Max 5x is a guess at 5 until the person says. An unknown plan counts as 1. */
+export const PLAN_WEIGHT = { Pro: 1, "Max 5x": 5, "Max 20x": 10, Ultra: 10 };
+export const planWeight = l => PLAN_WEIGHT[l.plan] ?? 1;
+/** Weekly use in percent as of t: 0 once the weekly reset has passed with no newer reading. null if never read. */
+export function weekNow(l, t = now()) {
+  const v = fresh7(l); if (v == null) return null;
+  const w = l.limits && l.limits.seven_day; if (w && sessionNewer(l) && w.r * 1e3 > t) return v;
+  const r = l.resets && l.resets.weekly; return r && r * 1e3 < t ? 0 : v;
+}
+/** All the Claude logins as one: capacity-weighted weekly use, sum(used × weight) / sum(weight). Paused logins and ones past their
+ * stop line count at what they've used, since the person asked for used against available over every plan. A login never read is left out.
+ * {pct, cap, parts:[{l, v, w}], unread:[names]} or null with no reading at all. */
+export function totalUse(all, t = now()) {
+  const parts = [], unread = [];
+  for (const l of all || []) { const v = weekNow(l, t); if (v == null) unread.push(l.name); else parts.push({ l, v, w: planWeight(l) }); }
+  const cap = parts.reduce((a, x) => a + x.w, 0); if (!cap) return null;
+  return { pct: parts.reduce((a, x) => a + x.v * x.w, 0) / cap, cap, parts, unread };
+}
+/** The accounts in use now (not paused, under their weekly line) as one, weighted by plan like totalUse: what the hive can still run on.
+ * five: the same over the in-use accounts that have a 5-hour window open, {pct, r (ms, soonest refill)}. null when none is in use. */
+export function activeUse(U, t = now()) {
+  const ls = ((U && U.logins) || []).filter(l => inUse(l, U)); if (!ls.length) return null;
+  const tot = totalUse(ls, t), f5 = [];
+  for (const l of ls) {
+    if (l.no_five_hour) continue;
+    const L = l.limits || {}, w = L.five_hour, r5 = l.resets && l.resets.five_hour;
+    if (w && sessionNewer(l) && w.r * 1e3 > t) f5.push({ v: w.u * 100, r: w.r * 1e3, w: planWeight(l) });
+    else if (l.five != null && r5 && r5 * 1e3 > t) f5.push({ v: l.five, r: r5 * 1e3, w: planWeight(l) });
+  }
+  const c5 = f5.reduce((a, x) => a + x.w, 0);
+  return { ls, pct: tot ? tot.pct : 0, cap: tot ? tot.cap : ls.reduce((a, l) => a + planWeight(l), 0), parts: tot ? tot.parts : [],
+    five: c5 ? { pct: f5.reduce((a, x) => a + x.v * x.w, 0) / c5, r: Math.min(...f5.map(x => x.r)) } : null };
+}
 /** Simple mode's figures: how much of the account with the most room is used, this week and in this 5 hours. {week, five}, each {used, back} or null; null with no reading at all. */
 export function accountUse(t = now()) {
   const all = (S.usage && S.usage.logins) || (S.live && S.live.logins) || [], rank = l => fresh7(l) ?? 101;
@@ -162,6 +198,23 @@ export function runway(l, U) {
   const reset = L.seven_day ? L.seven_day.r * 1e3 : l.resets && l.resets.weekly ? l.resets.weekly * 1e3 : null;
   const toStop = pr ? ((stop / 100 - pr.at) / pr.rate) * 1e3 : null;
   return { stop, toStop, toReset: reset ? reset - now() : null, before: toStop != null && reset != null && toStop < reset - now() };
+}
+/** When the hive runs out: the accounts in use now each reach their weekly line, at the last 6 hours' pace, or failing that the week's
+ * average since it began (the line the who command draws). {at (ms from t, the last in-use account to stop), how: "6h"|"week", per: [{l, toStop, how}]}
+ * when every in-use account stops before it resets; {at: null, lasts: true} when one lasts to its reset; null with no account in use or no pace. */
+export function runOut(U, t = now()) {
+  const ls = ((U && U.logins) || []).filter(l => inUse(l, U)); if (!ls.length) return null;
+  const per = ls.map(l => {
+    const r = runway(l, U), v = fresh7(l);
+    if (r.toStop != null) return { l, toStop: Math.max(0, r.toStop), toReset: r.toReset, how: "6h" };
+    const start = r.toReset != null ? t + r.toReset - 7 * 864e5 : null;
+    if (start == null || v == null || !(v > 0) || t - start < 18e5 || v >= r.stop) return { l, toStop: null, toReset: r.toReset, how: null };
+    return { l, toStop: ((r.stop - v) * (t - start)) / v, toReset: r.toReset, how: "week" };
+  });
+  if (per.every(x => x.toStop == null)) return null;
+  if (per.some(x => x.toStop == null || (x.toReset != null && x.toStop >= x.toReset))) return { at: null, lasts: true, per };
+  const last = per.reduce((a, x) => (x.toStop > a.toStop ? x : a));
+  return { at: last.toStop, how: per.some(x => x.how === "week") ? "week" : "6h", per };
 }
 /** The next account to come in: the soonest weekly reset among the accounts that can use it. Not a paused one, a signed-out one, one whose line never lets it run, or a reset that has already passed with no new reading. {l, at, in}, or null. */
 export function nextBack(U, t = now()) {
@@ -209,6 +262,7 @@ const HEX = /^[0-9a-f]{12}$/;
 /** A /btw side thread's main conversation (person_post names it btw-<main>-<4 hex>), or null. */
 export const btwParent = th => ((th || "").match(/^btw-(.+)-[0-9a-f]{4}$/) || [])[1] || null;
 export function threadTitle(th) {
+  const own = S.threadMeta && S.threadMeta[th] && S.threadMeta[th].title; if (own) return own;   // the person renamed it
   if (btwParent(th)) { const d = S.threads.get(th), p = d && d.posts[0]; return "Aside: " + (p ? short(mdPlain(displayText(p)).split("\n")[0], 60) : btwParent(th)); }
   if (!HEX.test(th || "")) return simpleOn() && th ? (t => t[0].toUpperCase() + t.slice(1))(th.replace(/[-_]+/g, " ")) : th;
   if (S.threadNames[th]) return S.threadNames[th];
