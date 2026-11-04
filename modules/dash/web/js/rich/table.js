@@ -30,7 +30,7 @@ export function numOf(t) {
   return m ? +m[1] * (m[2] ? SI[m[2]] : 1) : NaN;
 }
 
-function drawTable(rows, title, api, st) {
+export function drawTable(rows, title, api, st) {
   const head = rows[0], body = rows.slice(1).map((r, i) => ({ r, i, low: r.join("\t").toLowerCase() }));
   const numeric = head.map((_, c) => body.some(x => x.r[c]) && body.every(x => !x.r[c] || !isNaN(numOf(x.r[c]))));
   const tb = h("tbody"), more = h("button", { type: "button", class: "rc-foldb", hidden: true });

@@ -85,8 +85,14 @@ def named(run, post):
     text = str((post or {}).get("text", ""))
     return (post or {}).get("to") == run["name"] or f"@{run['name']}" in text or bool(FRESH.search(text)) or str((post or {}).get("from", "")).lower() == "person"
 
+CONTENTLESS = re.compile(r"[A-Za-z0-9]")
+
+def contentless(post):
+    """The waking post said nothing beyond names and punctuation ("???", "!!", a bare mention): there is no ask to grade against."""
+    return bool(post) and not CONTENTLESS.search(re.sub(r"@\w+", "", str(post.get("text") or "")))
+
 def mechanical(run, post, mine):
-    if mine: return None
+    if mine: return "not_asked" if contentless(post) else None   # "???" answered with where things stand was graded nothing on 2026-11-04
     return "silent" if named(run, post) else "quiet"
 
 def clip(s, n): s = str(s or "").strip(); return s if len(s) <= n else s[:n] + " …"
@@ -107,7 +113,7 @@ Grades:
   nothing    it posted, but no delivery and no handover: status only, questions back, or the wrong thing
   not_asked  the post asked this agent nothing concrete (a thread update, an acknowledgement, a hand-off to someone else)
 
-Judge only against what the post asked, not whether the work was good. A post that says "stop" or "thanks" and a short reply is not_asked. Reply with JSON only:
+Judge only against what the post asked, not whether the work was good. A post that says "stop" or "thanks" and a short reply is not_asked; so is a chase ("???", "hello?", "status?", "did you do it") answered with where things stand. Reply with JSON only:
 {"grades":[{"run":"<RUN key>","grade":"delivered|partial|nothing|not_asked","why":"<at most 20 words>"}]}
 
 {blocks}"""
@@ -134,7 +140,8 @@ def cmd_grade(a):
         post, mine, after = posts_of(r, posts, by_id)
         g = mechanical(r, post, mine)
         if g:
-            if not a.dry: append(LEDGER, {**r, "at": iso(), "grade": g, "why": "posted nothing" + (" though named" if g == "silent" else ""), "by": "rule"})
+            why = "the post asked nothing" if g == "not_asked" else "posted nothing" + (" though named" if g == "silent" else "")
+            if not a.dry: append(LEDGER, {**r, "at": iso(), "grade": g, "why": why, "posts": len(mine), "by": "rule"})
             graded += 1
         else: model_runs.append((r, post, mine, after))
     chosen = pick(model_runs, a.sample) if not a.all else model_runs

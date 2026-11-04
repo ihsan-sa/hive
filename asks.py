@@ -13,6 +13,7 @@ direction: never done, listed by `hive asks directions`, and written to ~/kb/dir
   hive asks own ID [--owner NAME]           you (or NAME) are on it
   hive asks done ID --evidence POSTID [--why ...]   finished, and the thread says so
   hive asks hold|person|drop ID --why ...   held by kb/priorities.md | waits on the person | withdrawn or merged
+  hive asks reopen ID --why ...             the hold or wait is over: open again, for someone to own (check lists set-aside asks whose reason may have lapsed)
   hive asks show ID
   hive asks directions [--write]            standing guidance; --write refreshes ~/kb/direction.md
   hive asks reconcile [IDS] [--all]         a model reads the thread of each open ask that agents have posted in since the last run and
@@ -149,9 +150,34 @@ def cmd_list(a):
     print(f"-- {len(rows)} shown; {sum(1 for e in o if e.get('status') in ('open', 'owned'))} open or owned, {sum(1 for e in o if e.get('status') in WAITING)} held or waiting on the person, "
           f"{sum(1 for e in items.values() if e.get('status') == 'done')} done, {sum(1 for e in items.values() if e.get('kind') == 'direction')} directions")
 
+PRIORITIES = HOME / "kb" / "priorities.md"
+
+def waiting_items(items, posts=None, t=None, priorities=None):
+    """Held or person-waiting entries whose reason may have lapsed, oldest first, with why: the person posted in the ask's
+    thread after it was set aside, or it is held under priorities (its why says so) and kb/priorities.md changed since.
+    On 2026-11-04, 29 of 38 held asks said "reopen when the pause lifts" and nothing looked at them again when it did."""
+    posts = board() if posts is None else posts; t = t or now(); priorities = PRIORITIES if priorities is None else priorities
+    try: pri = dt.datetime.fromtimestamp(Path(priorities).stat().st_mtime, dt.timezone.utc).isoformat(timespec="seconds")
+    except OSError: pri = ""
+    person = {}
+    for p in posts:
+        if str(p.get("from", "")).lower() != "person": continue
+        th = p.get("thread") or p.get("id")
+        if p.get("at", "") > person.get(th, ""): person[th] = p["at"]
+    out = []
+    for e in open_items(items):
+        if e.get("status") not in WAITING or e.get("kind") == "direction": continue
+        since = e.get("updated") or e.get("at") or ""
+        th = e.get("thread") or e.get("post")
+        if person.get(th, "") > since: out.append((e, f"the person posted in its thread at {person[th][:16]}, after it was set aside"))
+        elif e.get("status") == "held" and re.search(r"priorit|pause|hold|held", str(e.get("why") or ""), re.I) and pri > since:
+            out.append((e, f"held under priorities, and kb/priorities.md changed at {pri[11:16]} UTC, after the hold"))
+    return sorted(out, key=lambda x: x[0].get("updated") or x[0].get("at") or "")
+
 def cmd_check(a):
     items = ledger(); orph = orphaned(items, after_s=a.after * 3600)
-    if a.json: print(json.dumps([{**e, "last_move": m, "idle_h": round(i / 3600, 1)} for e, m, i in orph] + [{**e, "unowned": True} for e in unowned_items(items, after_s=a.unowned * 3600) if e["id"] not in {x[0]["id"] for x in orph}], indent=1, ensure_ascii=False)); return
+    if a.json: print(json.dumps([{**e, "last_move": m, "idle_h": round(i / 3600, 1)} for e, m, i in orph] + [{**e, "unowned": True} for e in unowned_items(items, after_s=a.unowned * 3600) if e["id"] not in {x[0]["id"] for x in orph}]
+                                + [{**e, "lapsed": w} for e, w in waiting_items(items)], indent=1, ensure_ascii=False)); return
     if not orph: print("nothing orphaned: every open ask has someone moving it")
     else:
         print(f"{len(orph)} open asks nobody is moving (no agent post in the thread, owner not running), longest idle first:")
@@ -170,6 +196,15 @@ def cmd_check(a):
         for e in un[:a.limit]: print(fmt(e))
         if len(un) > a.limit: print(f"  ... and {len(un) - a.limit} more (--limit N)")
         print("Take each one or give it an agent: `own ID --owner NAME` with a brief in its thread; `done --evidence POST` if the thread shows it delivered; `hold|person|drop --why` otherwise. An ask that stays open is dropped work.")
+    lapsed = waiting_items(items)
+    if lapsed:
+        groups = {}
+        for e, w in lapsed: groups.setdefault(w, []).append(e)
+        print(f"\n{len(lapsed)} set-aside asks whose reason may have lapsed (read `kb/priorities.md` and the thread; `reopen ID --why` if the hold is over, `hold|person ID --why` again to refresh it):")
+        for w, es in groups.items():
+            print(f"  {w}:")
+            for e in es[:a.limit]: print("  " + fmt(e))
+            if len(es) > a.limit: print(f"    ... and {len(es) - a.limit} more (--limit N)")
 
 def cmd_show(a):
     e = ledger().get(a.id)
@@ -200,6 +235,11 @@ def cmd_done(a):
 def cmd_hold(a): need_why(a); set_status(a.id, "held", why=a.why); print(f"{a.id}: held ({a.why})")
 def cmd_person(a): need_why(a); set_status(a.id, "person", why=a.why); print(f"{a.id}: waits on the person ({a.why})")
 def cmd_drop(a): need_why(a); set_status(a.id, "dropped", why=a.why); print(f"{a.id}: dropped ({a.why})")
+def cmd_reopen(a):
+    need_why(a)
+    if ledger().get(a.id, {}).get("status") not in WAITING: sys.exit(f"{a.id} is not held or waiting on the person: `own` it or `done` it")
+    append(LEDGER, {"id": a.id, "at": iso(), "by": me(), "status": "open", "why": a.why, "owner": None})  # the old owner released it when it was set aside
+    print(f"{a.id}: open again ({a.why}), nobody's until someone owns it")
 def need_why(a):
     if not a.why: sys.exit("Say why: --why ...")
 
@@ -484,7 +524,7 @@ def main(argv=None):
     p = sp.add_parser("add"); p.add_argument("--post", required=True); p.add_argument("--ask", required=True); p.add_argument("--kind", default="ask", choices=("ask", "direction")); p.add_argument("--thread"); p.set_defaults(f=cmd_add)
     p = sp.add_parser("own"); p.add_argument("id"); p.add_argument("--owner"); p.set_defaults(f=cmd_own)
     p = sp.add_parser("done"); p.add_argument("id"); p.add_argument("--evidence"); p.add_argument("--why", default=""); p.set_defaults(f=cmd_done)
-    for name, f in (("hold", cmd_hold), ("person", cmd_person), ("drop", cmd_drop)):
+    for name, f in (("hold", cmd_hold), ("person", cmd_person), ("drop", cmd_drop), ("reopen", cmd_reopen)):
         p = sp.add_parser(name); p.add_argument("id"); p.add_argument("--why", default=""); p.set_defaults(f=f)
     p = sp.add_parser("directions"); p.add_argument("--write", action="store_true"); p.set_defaults(f=cmd_directions)
     p = sp.add_parser("extract"); p.add_argument("--all", action="store_true"); p.add_argument("--model", default="sonnet"); p.add_argument("--dry", action="store_true"); p.add_argument("--limit", type=int, default=0, help="batches to run, 0 = all"); p.set_defaults(f=cmd_extract)

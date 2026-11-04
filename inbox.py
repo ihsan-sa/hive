@@ -10,9 +10,11 @@ PostToolUse: the posts come back as additionalContext. Stop: if anything is new,
 blocked with the posts as the reason, so the agent answers instead of ending unaware. Stop also
 blocks once per run when the person started it and the agent is ending with no post since: its
 plain-text answer reaches nobody (the person, 2026-11-04: a24ba answered twice into nothing).
+PostToolUse also asks, once per run, for a first line when the person started the run FIRST_S ago and
+nothing has been posted since: the person chases after 1 to 3 min of silence ("hello?", 5 times on 2026-11-04).
 Outside an Hive session (no HIVE_NAME or no run record) it does nothing.
 """
-import json, os, re, sys
+import datetime as dt, json, os, re, sys, time
 from pathlib import Path
 
 HOME = Path.home()
@@ -110,18 +112,58 @@ def unanswered(name, rec):
     try:
         if mark.read_text() == rec["at"]: return None
     except OSError: pass
-    try:
-        for line in BOARD.read_text().splitlines()[-3000:]:
-            if f'"from": "{name}"' in line or f'"from":"{name}"' in line:
-                p = json.loads(line)
-                if p.get("from") == name and p.get("at", "") >= rec["at"]: return None
-    except (OSError, ValueError): return None  # can't tell: let it stop
+    # the person and the other Hives read the thread they asked in (its Slack channel), so a post elsewhere is silence to them;
+    # an agent that named you gets your posts anywhere through its own inbox hook. af9cc answered a screenshot in another
+    # thread on 2026-11-04 and the person's thread tripped the watchdog.
+    thread = rec.get("thread") if src in ("person", "hives") else None
+    if posted_since(name, rec["at"], thread): return None
     mark.parent.mkdir(parents=True, exist_ok=True); mark.write_text(rec["at"])
     who = ("the person sees" if src == "person" else "the other Hive sees" if src == "hives" else "whoever waits on the task sees"
            if src == name else f"{src}, who named you, sees")
+    where = f"thread {rec.get('thread') or 'the thread you were started in'}"
+    if thread and posted_since(name, rec["at"]):
+        return (f"You posted in another thread, but nothing in {where}, where the ask was made: {who} no answer there (they read "
+                f"that thread's channel). Post one or two lines in {where} now (the answer, or where it is), then stop.")
     return (f"You are ending this run without posting anything to the board, so {who} no answer: text outside hive post "
-            f"reaches nobody. Post your answer now in thread {rec.get('thread') or 'the thread you were started in'} with "
+            f"reaches nobody. Post your answer now in {where} with "
             "hive post --thread T and a quoted heredoc, then stop. If you truly have nothing to say, just stop again.")
+
+FIRST_S = 120   # a run the person started and that has said nothing for this long is asked for one line
+
+def posted_since(name, at, thread=None, tail=300_000):
+    """Has this agent posted at or after `at` (in `thread`, if given)? Reads only the board's tail (the board is 5 MB; a run's own recent post is there)."""
+    try:
+        with BOARD.open("rb") as fh:
+            fh.seek(max(0, os.fstat(fh.fileno()).st_size - tail)); data = fh.read()
+    except OSError: return True  # can't tell: stay quiet
+    for line in data.decode(errors="replace").splitlines():
+        if f'"from": "{name}"' not in line and f'"from":"{name}"' not in line: continue
+        try: p = json.loads(line)
+        except ValueError: continue
+        if p.get("from") == name and p.get("at", "") >= at and (not thread or p.get("thread") == thread): return True
+    return False
+
+def first_line(name, rec, t=None):
+    """Why a run the person started, FIRST_S ago or more, with no post from it since, should post a line now. Once per run,
+    checked at the first tool call past FIRST_S. The person posts "hello?" after 1 to 3 min of silence (5 times on
+    2026-11-04) and the watchdog starts an agent at 10 min: a line from the agent itself (what it took, when to expect the
+    result) is cheaper than either and the only one that knows."""
+    if os.environ.get("HIVE_DOOR") or waker(rec, name) != "person" or not rec.get("at"): return None
+    try:
+        at = dt.datetime.fromisoformat(rec["at"])
+        age = (t or time.time()) - (at if at.tzinfo else at.replace(tzinfo=dt.timezone.utc)).timestamp()
+    except ValueError: return None
+    if age < FIRST_S: return None
+    mark = STATE / "first" / name
+    try:
+        if mark.read_text() == rec["at"]: return None
+    except OSError: pass
+    mark.parent.mkdir(parents=True, exist_ok=True); mark.write_text(rec["at"])
+    if posted_since(name, rec["at"], rec.get("thread")): return None
+    return (f"The person's post started this run {age / 60:.0f} min ago and you have not posted since: they are waiting and see "
+            f"nothing (text outside hive post reaches nobody). Make your next tool call an hive post in thread "
+            f"{rec.get('thread') or 'you were started in'}: one or two lines, the answer if you have it, else what you are doing "
+            "and when to expect the result. Then carry on.")
 
 def main():
     name = os.environ.get("HIVE_NAME", "").lower()
@@ -140,15 +182,20 @@ def main():
     if ps:
         with f.open("a") as fh: fh.write("".join(p["id"] + "\n" for p in ps))
     done()
+    first = first_line(name, rec) if event != "Stop" else None
     if not ps:
         if event == "Stop" and (why := unanswered(name, rec)):
             print(json.dumps({"decision": "block", "reason": why}))
+        elif first:
+            print(json.dumps({"hookSpecificOutput": {"hookEventName": event or "PostToolUse", "additionalContext": first}}))
         return
+    note = person_note(ps)
     msg = ("New on the board for you while you work (you'll get these automatically; answer with "
-           "hive post where it matters):\n\n" + "\n\n".join(fmt(p) for p in ps) + person_note(ps) + model_note(name, rec, ps))
+           "hive post where it matters):\n\n" + "\n\n".join(fmt(p) for p in ps) + note + model_note(name, rec, ps))
     if event == "Stop":
         print(json.dumps({"decision": "block", "reason": msg}))
     else:
+        if first and not note: msg += "\n\n" + first   # the person note already asks for a post
         print(json.dumps({"hookSpecificOutput": {"hookEventName": event or "PostToolUse", "additionalContext": msg}}))
 
 if __name__ == "__main__":

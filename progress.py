@@ -153,10 +153,14 @@ def runs_in(log, t0, t1):
     reaped = sum(1 for r in log if r.get("event") == "reaped" and t0 <= r.get("at", "") <= t1)
     return len(starts), failed, reaped
 
+# the person finding a problem before the hive did: a chase ("hello?", "status?"), a thing not working or not showing, a "why is X not".
+# Plain "still" and "why is" matched ordinary feedback and design questions (13 of 29 matches on 2026-11-04), so they need a negative with them.
+NOTICED = re.compile(r"\b(?:hello\?|status\?|not seeing|noticed|isn.t working|broken|nothing happen|why am i not|still (?:not|no|isn|doesn|waiting|nothing|broken|missing)\b|why (?:is|are|does|do)\b[^?.!\n]{0,60}?\b(?:not|no|isn.t|doesn.t|don.t|only|gap|wrong|missing)\b)", re.I)
+
 def board_in(posts, t0, t1):
     ps = [p for p in posts if t0 <= p.get("at", "") <= t1]
     person = [p for p in ps if p.get("from") == "person"]
-    noticed = sum(1 for p in person if re.search(r"\b(why is|still|hello\?|not seeing|noticed|isn.t working|broken|nothing happen)", str(p.get("text", "")), re.I))
+    noticed = sum(1 for p in person if NOTICED.search(str(p.get("text", ""))))
     return len(ps), len(person), noticed
 
 AGENT = re.compile(r"[a-z][0-9a-f]{4}")

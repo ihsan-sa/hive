@@ -3377,7 +3377,7 @@ def sync_accounts():
     for l in logins():
         signed = login_ok(l["path"])
         if owned and not signed and l["path"] not in paused_logins():
-            set_paused(l["name"], True); held.append(l["path"])
+            set_paused(l["name"], True); held.append(l["path"]) if l["path"] not in held else None
         elif l["path"] in held and (signed or not owned):
             set_paused(l["name"], False); held.remove(l["path"])
     write_text_private(held_f, json.dumps(held))

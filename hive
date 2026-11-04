@@ -446,9 +446,40 @@ def jobs_of(name):
         except OSError: pass
     return n
 
+NAMED = re.compile(r"(?<![\w.`])@([a-z][0-9a-f]{4})\b")
+QUESTION = re.compile(r"\?\s*$")
+
+def open_in(t, ps, asks, ext):
+    """Why a quiet thread is still open, or None if it is only resting (an agent's result with nothing waiting on anyone).
+    Open: an open ask or leftover filed for it; the person or the other Hives spoke last; the last agent post asks the person
+    or the other Hives; it names an agent that never posted after it; or it ends with a question. The old count (187 on
+    2026-11-04) was mostly resting threads, so the keeper's lead and the progress number said nothing."""
+    last = ps[-1]; frm = str(last.get("from", "")).lower(); text = str(last.get("text", ""))
+    if asks.get(t): return f"open ask {' '.join(sorted(asks[t]))}"
+    if frm in ("person", "hives"): return f"{frm} spoke last"
+    if frm in ext: return None
+    plain = CODE.sub(" ", text)
+    if re.search(r"(?<![\w.`])@(person|hives)\b", plain): return "asked the person" if "@person" in plain else "asked the hives"
+    named = [n for n in NAMED.findall(plain) if n != frm]
+    if named: return f"named {' '.join(dict.fromkeys(named))}, no reply"  # the thread is quiet, so nobody posted after it
+    if QUESTION.search(plain.strip()): return "ends with a question"
+    return None
+
+def open_asks_by_thread():
+    """Open asks and leftovers from ~/asks.jsonl, by thread: {thread: {id, ...}}."""
+    out = {}
+    try:
+        sys.path.insert(0, str(CORE)); import asks as A
+        for e in A.open_items(A.ledger()):
+            th = e.get("thread") or e.get("post")
+            if th: out.setdefault(th, set()).add(e["id"])
+    except Exception: pass
+    return out
+
 def cmd_stalled(a):
-    """Threads gone quiet: last post older than --quiet, newer than --within, nobody in it running or queued,
-    and the last post doesn't read as finished. A lead for the keeper, not a verdict."""
+    """Threads gone quiet with something still open in them (see open_in): last post older than --quiet, newer than --within,
+    nobody in it running or queued, and the last post doesn't read as finished. --all lists resting threads too, as before
+    2026-11-04. A lead for the keeper, not a verdict."""
     def ago(s):
         m = re.fullmatch(r"(\d+)([mhd])", s); return dt.timedelta(**{{"m": "minutes", "h": "hours", "d": "days"}[m[2]]: int(m[1])})
     t_now = dt.datetime.now(dt.timezone.utc)
@@ -463,14 +494,17 @@ def cmd_stalled(a):
         try: r = json.loads(f.read_text()); os.kill(r["pid"], 0); live.add(r["name"])
         except (OSError, ValueError, KeyError): pass
     ext = {"person", "starter", "watchdog", "anon", "all"}
+    asks = {} if a.all else open_asks_by_thread()
     for t, ps in sorted(threads.items(), key=lambda kv: kv[1][-1].get("at", "")):
         last = ps[-1]
         if not (within < last.get("at", "") < quiet) or t in ("keeper",): continue
         who = list(dict.fromkeys(str(p.get("from", "")).lower() for p in ps if str(p.get("from", "")).lower() not in ext))
         if not who or any(w in live or w in queued for w in who): continue
         if DONE.search(str(last.get("text", ""))[:300]) and last.get("from") not in ("person", "hives"): continue
+        why = open_in(t, ps, asks, ext)
+        if not why and not a.all: continue
         jobs = {w: jobs_of(w) for w in who}
-        print(f"{t}  last {last.get('at','')[:16]} by {last.get('from')}  agents {' '.join(who[-4:])}"
+        print(f"{t}  last {last.get('at','')[:16]} by {last.get('from')}  agents {' '.join(who[-4:])}" + (f"  open: {why}" if why else "  resting")
               + (f"  jobs alive: {', '.join(f'{w}:{n}' for w, n in jobs.items() if n)}" if any(jobs.values()) else "")
               + "\n  " + str(last.get("text", ""))[:240].replace("\n", " "))
 
@@ -720,8 +754,8 @@ p = sp.add_parser("update", help="hive update [--check]: an installed Hive goes 
 p.add_argument("--check", action="store_true"); p.add_argument("--auto", action="store_true"); p.set_defaults(f=cmd_update)
 p = sp.add_parser("web", help="hive web: the address of the local web app, with its secret. --new-secret replaces the secret; --setup is install's")
 p.add_argument("--setup", action="store_true"); p.add_argument("--new-secret", action="store_true"); p.set_defaults(f=cmd_web)
-p = sp.add_parser("stalled", help="hive stalled [--quiet 2h] [--within 3d]: quiet threads nobody is on")
-p.add_argument("--quiet", default="2h"); p.add_argument("--within", default="3d"); p.set_defaults(f=cmd_stalled)
+p = sp.add_parser("stalled", help="hive stalled [--quiet 2h] [--within 3d] [--all]: quiet threads nobody is on with something still open (an ask, a question, a name that got no reply); --all adds resting ones")
+p.add_argument("--quiet", default="2h"); p.add_argument("--within", default="3d"); p.add_argument("--all", action="store_true"); p.set_defaults(f=cmd_stalled)
 p = sp.add_parser("login", help="hive login list | add NAME [--paused] | rename OLD NEW | pause NAME | resume NAME | limit NAME --weekly N --five-hour N: the Claude logins Hive runs on (add signs in and puts it to use; a paused login is still read for usage but gets no runs)")
 p.add_argument("do", choices=["list", "add", "rename", "pause", "resume", "limit"]); p.add_argument("name", nargs="?"); p.add_argument("new", nargs="?"); p.add_argument("--paused", action="store_true", help="with add: add it paused")
 p.add_argument("--weekly", help="with limit: stop at N%% weekly, or off"); p.add_argument("--five-hour", dest="five_hour", help="with limit: stop at N%% of the 5-hour limit, or off"); p.set_defaults(f=cmd_login)

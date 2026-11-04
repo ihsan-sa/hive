@@ -88,6 +88,7 @@ def install():
     """Run the checked-out release's own install.sh, then refresh bundled modules the way it refreshes the app."""
     env = {**os.environ, "XDG_RUNTIME_DIR": os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")}
     r = subprocess.run([str(CORE / "install.sh")] + ([] if SYSTEMD else ["--no-service"]), capture_output=True, text=True, timeout=900, env=env)
+    if r.returncode == 75: raise Stuck("install.sh: " + (r.stderr or r.stdout).strip()[-400:])  # a tool missing on this machine, not a bad release
     if r.returncode: raise Failed("install.sh: " + (r.stderr or r.stdout).strip()[-400:])
     for src in sorted((CORE / "modules").glob("*/")) if (CORE / "modules").is_dir() else []:
         d = HOME / "modules" / src.name
