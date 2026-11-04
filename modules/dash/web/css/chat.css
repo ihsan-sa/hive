@@ -1,0 +1,193 @@
+/* Chat look (Claude Design, 2026-11-03): rich replies read as one piece of writing. Overrides components.css, so load it after; notes in ~/designs/chat-refine/notes.md */
+/* Chat: rich messages, refined. Load after components.css. Overrides only; nothing here renames or removes a class.
+   Direction: one reply reads as one piece of writing. Figures sit in the text flow, code keeps a quiet surface,
+   controls appear when wanted. Every change is explained, by number, in notes.md. */
+
+/* ==== 1. Tokens: extended, never replaced ==== */
+:root{
+  --fs-read:15px;                                    /* chat prose: a reading size, one step up from --fs-body */
+  --lh-read:1.6;
+  --chat-col:calc(var(--fs-read) * 46);              /* 690px: the reply column, and the measure. Text, code, tables and figures all fill it */
+  --chat-fig:calc(var(--fs-read) * 64);              /* 960px: how far a drawing may widen on a wide window */
+  --chat-pad:10px;                                   /* .msg's side padding, named so the column sums can use it */
+  --flow:1.1em;                                      /* space between prose and a figure, code block, table or equation */
+  --code-bg:light-dark(oklch(96.4% .004 95), oklch(17.6% .004 95)); /* a quiet surface: between --surface and --sunken */
+  --r-xl:16px;                                       /* your own bubble */
+  --tool-in:.12s;                                    /* tools fading in */
+}
+
+/* ==== 2. One width logic ==== */
+.cm-msgs{container:chat / inline-size}
+.cm-msgs .msg,
+:root[data-dev] .cm-msgs .msg{max-width:calc(var(--chat-col) + 2 * var(--chat-pad))}
+.cm-msgs .cm-day,.cm-msgs .cm-ev{max-width:var(--chat-col)}
+/* the column is the measure, so prose inside it fills it: no second, shorter line length */
+.cm-msgs .md[data-rich]>p,.cm-msgs .md[data-rich] section>p,.cm-msgs .md[data-rich] li,.cm-msgs .md[data-rich] blockquote{max-width:none}
+/* your own messages: same column, right edge on the reply's text edge */
+.cm-msgs .msg[data-who=me]{padding-inline:var(--chat-pad)}
+.cm-msgs .msg[data-who=me]>.msg-b,.cm-msgs .msg[data-who=me]>.msg-q,.cm-msgs .msg[data-who=me]>.msg-files{max-width:85%}
+/* wide pane (about a 1600px window and up): diagrams widen around the column's centre line, up to 960px.
+   Text, code, tables, charts, plots and pages stay in the column. */
+@container chat (min-width:1240px){
+  .msg:not([data-who=me]) .md>.rc-fig:is([data-block=mermaid],[data-block=svg],[data-block=dot],[data-block=graphviz],[data-block=wavedrom]):not([data-full]){
+    --fig:min(100cqi - 2 * var(--s5), var(--chat-fig));
+    width:var(--fig);max-width:none;margin-inline:calc((100% - var(--fig)) / 2);
+  }
+}
+/* phone: a little more width for words, and drawings run edge to edge */
+@container chat (max-width:640px){
+  .msg{--chat-pad:6px;padding-inline:var(--chat-pad)}
+  .msg[data-who=me]>.msg-b,.msg[data-who=me]>.msg-q,.msg[data-who=me]>.msg-files{max-width:88%}
+  .msg:not([data-who=me]) .md>.rc-fig:not([data-full]) .rc-stage{margin-inline:calc(-8px - var(--chat-pad))}
+}
+
+/* ==== 3. Type and rhythm ==== */
+.cm-msgs .msg-b{font-size:var(--fs-read);line-height:var(--lh-read)}
+.cm-msgs .md[data-rich]{line-height:var(--lh-read)}
+.cm-msgs .md[data-rich] p{margin:.7em 0}
+.cm-msgs .md[data-rich] h1{font-size:1.2em;margin:1.4em 0 .45em}
+.cm-msgs .md[data-rich] h2{font-size:1.067em;margin:1.5em 0 .4em}
+.cm-msgs .md[data-rich] h3,.cm-msgs .md[data-rich] h4{font-size:1em;margin:1.3em 0 .3em}
+.cm-msgs .md[data-rich]>:first-child{margin-top:0}
+.cm-msgs .md[data-rich] ul,.cm-msgs .md[data-rich] ol{margin:.6em 0;padding-left:1.4em}
+.cm-msgs .md[data-rich] li{margin:.3em 0}
+.cm-msgs .md code{font-size:.87em;padding:.1em .35em;background:var(--code-bg)}
+.cm-msgs .msg+.msg{margin-top:var(--s4)}
+.cm-msgs .msg[data-cont]{margin-top:var(--s1)}
+
+/* figures, code, tables and equations: the same space either side, tighter under a heading */
+.md .rc-block{margin:var(--flow) 0}
+.md .rc-eq{margin:calc(var(--flow) * .8) 0;padding:0}
+.md .md-tw{margin:var(--flow) 0}
+.md :is(h1,h2,h3,h4)+:is(.rc-block,.rc-eq,.md-tw){margin-top:.5em}
+
+/* ==== 4. Blocks lose their frame ==== */
+.rc-block{border:0;border-radius:0;background:none}
+.rc-bar{border:0;background:none;flex-wrap:nowrap;gap:var(--s2);min-height:28px;padding:0;color:var(--ink-3)}
+.rc-tools{flex-wrap:nowrap;gap:2px;min-width:0}
+.rc-t{color:var(--ink-3)}
+.rc-t:hover{color:var(--ink)}
+.rc-ttl{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:var(--fs-small);font-weight:var(--w-med);color:var(--ink-2)}
+.rc-byline{color:var(--ink-3)}
+
+/* code: a quiet surface, no border, no header bar. The language is a small word in its corner, not a mono tag. */
+.rc-block:not(.rc-fig){background:var(--code-bg);border-radius:var(--r-l)}
+.rc-block:not(.rc-fig)>.rc-bar{min-height:30px;padding:2px 6px 0 14px}
+.rc-block:not(.rc-fig) .rc-lang{font-family:var(--font);font-size:var(--fs-meta);color:var(--ink-3)}
+.rc-block:not(.rc-fig) .rc-ttl{order:-1;font-size:var(--fs-meta)}
+.rc-code,.md pre.rc-code{padding:2px 0 12px;background:none;font:var(--fs-small)/1.55 var(--mono)}
+.md pre.rc-code code{font-size:var(--fs-small);line-height:1.55}
+.rc-lc{padding:0 16px 0 10px}
+.rc-l>.rc-lc:first-child,.md .rc-code .rc-pl{padding-left:14px}
+.rc-ln{padding:0 4px 0 14px;color:var(--quiet)}
+.rc-ln:hover{background:none;color:var(--ink)}
+/* a block with no language and no title has nothing to caption: its tools float in the corner */
+.rc-block:not(.rc-fig)>.rc-bar:not(:has(.rc-lang,.rc-ttl)){position:absolute;top:4px;right:4px;z-index:2;min-height:0;padding:0}
+.rc-block:not(.rc-fig):has(>.rc-bar:not(:has(.rc-lang,.rc-ttl)))>rc-lazy .rc-code{padding-top:12px}
+
+/* figures: no frame at all. A title becomes a caption over the drawing; the kind (mermaid, csv, plot) is kept for screen readers only. */
+.rc-fig .rc-lang{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+.rc-fig>.rc-bar{margin-bottom:var(--s1)}
+.rc-fig>.rc-bar:not(:has(.rc-ttl)){position:absolute;top:0;right:0;z-index:3;min-height:0;margin:0}
+.rc-stage{padding:0;background:none;cursor:default;display:grid;justify-content:safe center}
+.rc-stage[data-drag]{cursor:grabbing}
+.rc-fig-note{min-height:0;padding:var(--s1) 0 0;border:0}
+.rc-params{padding:var(--s2) 0 0;border:0}
+.rc-plotread{padding:2px 0 0}
+.rc-paramsn>.rc-t:first-child{margin-left:-6px}
+.rc-fig-src,.rc-failsrc{border-radius:var(--r-l);background:var(--code-bg);font-size:var(--fs-meta)}
+.rc-failnote{padding:var(--s1) 0;border:0}
+.rc-svgimg{padding:0;margin-inline:auto}
+/* a scroll hint, not a frame: a soft shadow at an edge only while there is more drawing past it */
+.rc-stage{background:
+  linear-gradient(to right,var(--surface) 40%,transparent) left / 32px 100% no-repeat local,
+  linear-gradient(to left,var(--surface) 40%,transparent) right / 32px 100% no-repeat local,
+  radial-gradient(farthest-side at 0 50%,color-mix(in oklch,var(--ink) 16%,transparent),transparent) left / 10px 100% no-repeat scroll,
+  radial-gradient(farthest-side at 100% 50%,color-mix(in oklch,var(--ink) 16%,transparent),transparent) right / 10px 100% no-repeat scroll}
+
+/* an untitled figure's floating tools get a backing only once they show, so they read over the drawing */
+.rc-fig:not([data-full])>.rc-bar:not(:has(.rc-ttl)) .rc-tools{border-radius:var(--r-m);padding:1px}
+.rc-fig:is(:hover,:focus-within):not([data-full])>.rc-bar:not(:has(.rc-ttl)) .rc-tools,
+.rc-fig:not([data-full])>.rc-bar:not(:has(.rc-ttl)) .rc-tools:has([aria-pressed=true],[data-artclose]:not([hidden]),[data-ok]){background:var(--surface);box-shadow:0 0 0 1px var(--line),var(--e1)}
+/* touch: Full screen always shows there, so a card over the drawing would hide a corner of it. The bar sits in its own short row instead, as plain text. */
+@media (hover:none){.rc-fig:not([data-full])>.rc-bar:not(:has(.rc-ttl)){position:static;justify-content:flex-end;margin-bottom:2px}
+  .rc-fig:not([data-full])>.rc-bar:not(:has(.rc-ttl)) .rc-tools{background:none!important;box-shadow:none!important}}
+
+/* the folded page is an object you open, so it alone keeps a hairline: a card, not a header bar */
+.rc-fig[data-block=html]:not([data-full]){border:1px solid var(--line);border-radius:var(--r-l);background:var(--surface)}
+.rc-fig[data-block=html]>.rc-bar{position:static;min-height:30px;margin:0;padding:8px 6px 0 16px}
+.rc-fig[data-block=html] .rc-ttl{font-size:var(--fs-body);color:var(--ink)}
+.rc-artc{padding:var(--s1) var(--s4) var(--s4);gap:var(--s2) var(--s4)}
+.rc-artc>span{flex:1 1 24ch;color:var(--ink-3);font-size:var(--fs-small)}
+.rc-artgo{border-radius:var(--r-m)}
+.rc-art .rc-paramsn{padding:var(--s2) var(--s4);border-top:1px solid var(--line);font-size:var(--fs-meta)}
+
+/* full screen is a viewer, so it does get a plain bar, with every tool showing */
+.rc-fig[data-full]>.rc-bar{position:static;min-height:48px;margin:0;padding:4px 8px 4px 16px;border-bottom:1px solid var(--line);background:var(--surface)}
+.rc-fig[data-full] .rc-lang{position:static;width:auto;height:auto;clip-path:none;font-size:var(--fs-meta);color:var(--ink-3)}
+.rc-fig[data-full] .rc-stage{padding:var(--s4)}
+
+/* fold buttons: a line of quiet text, not a grey strip */
+.rc-foldb{height:auto;padding:2px 14px 12px;border:0;background:none;color:var(--ink-2);text-align:left}
+.rc-foldb:hover{background:none;color:var(--ink);text-decoration:underline;text-underline-offset:2px}
+.rc-fig .rc-foldb{padding-inline:0}
+
+/* ==== 5. Tables: rules, not boxes ==== */
+/* Markdown tables (maths in cells included) */
+.md[data-rich] .md-tw table{font-size:.933em;line-height:1.5}
+.md[data-rich] .md-tw :is(th,td){padding:7px 16px 7px 0;border:0;border-bottom:1px solid var(--line);vertical-align:baseline}
+.md[data-rich] .md-tw :is(th,td):last-child{padding-right:0}
+.md[data-rich] .md-tw th{background:none;border-bottom-color:var(--line-2);font-weight:var(--w-bold);color:var(--ink);vertical-align:bottom}
+.md[data-rich] .md-tw tr:last-child>td{border-bottom:0}
+/* csv tables */
+.rc-tbl{font-size:var(--fs-small)}
+.rc-tbl th{background:var(--surface);box-shadow:inset 0 -1px 0 var(--line-2)}
+.md .rc-tbl th,.md .rc-tbl td{border-bottom-color:var(--line)}
+.md .rc-tbl td{padding:6px 12px}
+.md .rc-tbl :is(th,td):first-child{padding-left:0}
+.md .rc-tbl th:first-child button{padding-left:0}
+.rc-tbl th button:hover{background:none}
+.rc-tbl tbody tr:hover{background:none}
+.rc-tbl tbody tr:last-child>td{border-bottom:0}
+.rc-filter{border-color:var(--line);border-radius:var(--r-m);background:none}
+@media (pointer:coarse){.msg .rc-tbl td .rc-t{height:36px;line-height:36px}}
+
+/* ==== 6. Controls: out of the way until wanted ==== */
+/* Kept showing whatever the pointer does: a pressed toggle (Source, Wrap), Close page while a page is open,
+   the moment of "Copied", a filter with words in it, an open menu. */
+.rc-tools>*{transition:opacity var(--tool-in) ease-out}
+@media (hover:hover){
+  .rc-block:not(:hover,:focus-within,[data-full]) .rc-tools>:not([aria-pressed=true],[data-artclose],[data-ok],[aria-expanded=true],.rc-filter:not(:placeholder-shown)){opacity:0}
+  .rc-tbl tbody tr:not(:hover,:focus-within) .rc-ask{opacity:0}
+  .rc-im:hover{background:none;text-decoration:underline dotted var(--ink-3);text-underline-offset:3px}
+}
+/* Touch has no hover. A tap on a block focuses it (tabindex=-1, see notes 6) and shows its tools in the same row:
+   no row appears, so nothing below moves. At rest only the one tool a thumb wants most stays: Full screen on a drawing,
+   Copy on code. A block without the tabindex keeps every tool showing, so nothing becomes unreachable before the JS lands. */
+@media (hover:none){
+  .rc-block[tabindex]:not(:focus-within,[data-full]) .rc-tools>:not([aria-pressed=true],[data-artclose],[data-ok],[aria-expanded=true],.rc-filter:not(:placeholder-shown),[data-fs],[aria-label="Copy this code"]){display:none}
+  .rc-fig:not(:focus-within) .rc-tbl .rc-ask{visibility:hidden}
+  .rc-eq[tabindex]:not(:focus-within) .rc-eq-a{display:none}
+  .rc-eq-a .rc-t{color:var(--ink-3)}
+  .rc-tools{overflow-x:auto;scrollbar-width:none}
+  .rc-tools::-webkit-scrollbar{display:none}
+}
+.rc-block[tabindex]:focus,.rc-eq[tabindex]:focus{outline:none}
+/* phone: one row of tools. Zoom steps wait for full screen, where there is room and a reason for them. */
+@container (max-width:640px){
+  .rc-block:not([data-full]) .rc-t[data-zoom]:not([data-fs]),.rc-block:not([data-full]) .rc-byline{display:none}
+  .rc-filter{width:88px}
+}
+
+/* ==== 7. No hover highlight on messages or blocks ==== */
+/* The default route's message highlight is already gone. The developer route still had one: it goes too.
+   A person's post there keeps its quiet ground, which says who wrote it, not where the pointer is. */
+:root[data-dev] .msg:hover{background:none}
+:root[data-dev] .msg[data-who=person]{background:var(--sunken)}
+
+/* ==== 8. Your own messages: a softer bubble ==== */
+.msg[data-who=me]>.msg-b{padding:8px 14px;border-radius:var(--r-xl);box-shadow:none}
+.msg[data-who=me][data-cont]>.msg-b{border-top-right-radius:var(--r-xl)}
+.msg[data-who=me][data-state=failed]>.msg-b{box-shadow:inset 0 0 0 1px var(--bad)}
+
+@media print{.rc-block:not(.rc-fig){background:none;border:1px solid var(--line)}.rc-stage{background:none}}

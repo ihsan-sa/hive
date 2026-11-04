@@ -30,10 +30,14 @@ function setZoom(c, z) {
   c.node.setAttribute("width", Math.round(c.w * z)); c.node.setAttribute("height", Math.round(c.h * z));
   if (c.pct) c.pct.textContent = Math.round(z * 100) + "%";
 }
-const fitZoom = (c, stage) => {
+// On a narrow screen a drawing never starts below READABLE, so its labels stay legible: a wider one scrolls sideways.
+// Fit (the % button) still shrinks it to the frame on request.
+const READABLE = 0.75, NARROW = 560;
+const fitZoom = (c, stage, force) => {
   const full = stage.closest(".rc-fig")?.hasAttribute("data-full");
   const zw = (stage.clientWidth - 26) / c.w, zh = (stage.clientHeight - 26) / c.h;
-  return Math.max(0.1, full ? Math.min(zw, zh, 4) : Math.min(zw, 1));
+  const fit = Math.max(0.1, full ? Math.min(zw, zh, 4) : Math.min(zw, 1));
+  return !force && stage.clientWidth < NARROW ? Math.max(fit, Math.min(READABLE, 1)) : fit;
 };
 function pannable(stage) {
   let at = null;
@@ -103,13 +107,13 @@ export function figure(spec) {
   const zb = (txt, label, f) => h("button", { type: "button", class: "rc-t", "data-zoom": "", hidden: true, "aria-label": label, onclick: f }, txt);
   const stageOf = () => lz.querySelector(":scope>.rc-stage");
   const step = k => () => { if (lz._c) setZoom(lz._c, Math.max(0.1, Math.min(8, lz._c.zoom * k))); };
-  return h("div", { class: "rc-block rc-fig", "data-block": spec.kind, "data-own": "", "data-sig": sig },
+  return h("div", { class: "rc-block rc-fig", "data-block": spec.kind, "data-own": "", "data-sig": sig, tabindex: "-1" },  // a tap focuses it, which shows its tools on touch
     h("div", { class: "rc-bar" },
       h("span", { class: "rc-lang" }, spec.label || spec.kind),
       spec.title ? h("span", { class: "rc-ttl" }, spec.title) : null,
       h("span", { class: "rc-tools" },
         zb("−", "Zoom out", step(1 / 1.25)),
-        h("button", { type: "button", class: "rc-t", "data-zoom": "", "data-pct": "", hidden: true, title: "Fit", "aria-label": "Fit to the frame", onclick: () => { if (lz._c && stageOf()) setZoom(lz._c, fitZoom(lz._c, stageOf())); } }, "Fit"),
+        h("button", { type: "button", class: "rc-t", "data-zoom": "", "data-pct": "", hidden: true, title: "Fit", "aria-label": "Fit to the frame", onclick: () => { if (lz._c && stageOf()) setZoom(lz._c, fitZoom(lz._c, stageOf(), true)); } }, "Fit"),
         zb("+", "Zoom in", step(1.25)),
         h("button", { type: "button", class: "rc-t", "data-zoom": "", "data-fs": "", hidden: true, onclick: (e, b) => {
           const f = b.closest(".rc-fig"), on = !f.hasAttribute("data-full");
