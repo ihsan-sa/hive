@@ -19,6 +19,7 @@ import { button, empty, icon, input, list, seg, statusDot } from "../ui/kit.js";
 import { agentRef, avatars, copyButton, threadRef } from "../ui/refs.js";
 import { message, messageHead, messageReceipt, localMessage, markWords, pollDelivered, marksSig, delivery, onJump } from "../ui/message.js";
 import { asidePanel, asideOpen, closeAside } from "../ui/aside.js";
+import { downloadMarkdown, printScript } from "../ui/export.js";
 import { pinned, archived, setMeta, renameDialog, openCard, markSeen } from "../ui/threadmeta.js";
 import { composer, cancelReply, replyTo, say, outFor, outSig, actions as outActions, dropZone, recipient, draft, focusComposer } from "../ui/composer.js";
 
@@ -432,7 +433,9 @@ function moreMenu(c, ctx) {
     mine ? act(arch ? "Unarchive" : "Archive", "archive", () => { setMeta(th, { archived: !arch }); if (!arch) go("comms"); }, arch ? "Back in the list" : "Out of the list until something new is for you") : null,
     can("tier") ? button([h("span", { class: "ref-sw", "data-tone": t.tone }), "Priority: " + t.label], () => { C.menu = null; askTier(th); }, { size: "s", kind: "quiet", title: "Where this sits in the hive's priority list" }) : null,
     button("On the timeline", null, { href: href("timeline"), size: "s", kind: "quiet", icon: "clock" }),
-    th !== threadTitle(th) ? h("p", { class: "meta" }, "Its id on the board: ", h("code", null, th)) : null);
+    act("Export as Markdown", "copy", () => downloadMarkdown(th), "Download the conversation as a .md file, with simple formatting"),
+    act("Export as PDF", "board", () => printScript(th), "Lay it out like a script and save it as a PDF from the print dialog"),
+    th !== threadTitle(th) ? h("p", { class: "meta cm-menu-id" }, "Its id on the board: ", h("code", { title: "Click to select it" }, th), copyButton(th)) : null);   // copy it (the person, 11041333ab1a)
 }
 // The title's menu: how many messages and since when, and the way to every message.
 function titleMenu(c, n, d) {

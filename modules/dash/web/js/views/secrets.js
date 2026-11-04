@@ -14,7 +14,7 @@ async function load(ctx) {
 }
 
 /** The box and the list, on this page and in Settings. */
-export function secretParts(ctx) {
+export function secretParts(ctx, level) {
     if (!F.items) { if (!F.asked) { F.asked = true; load(ctx); } return [empty("Reading…", { kind: "loading" })]; }
     const save = async () => {
       try { await post("/api/secret", { name: F.name.trim(), value: F.value }); say(`Saved ${F.name.trim()}. It can't be shown again.`, "good"); F.name = F.value = ""; await load(ctx); }
@@ -28,14 +28,14 @@ export function secretParts(ctx) {
     };
     const reach = S.app.settings ? secretsReach() : "Every agent on this account can read the file, so use tokens you can rotate.";
     return [
-      section({ title: "Add or replace" },
-        h("p", { class: "field-h" }, "Then tell an agent the name in chat and what it's for. ", reach, S.app.route === "outside" ? " Cloudflare carries it on the way here." : ""),
+      section({ title: "Add or replace", level },
+        h("p", { class: "field-h sec-lead" }, "Then tell an agent the name in chat and what it's for. ", reach, S.app.route === "outside" ? " Cloudflare carries it on the way here." : ""),
         h("div", { class: "fgrid" },
           field("Name", input({ value: F.name, autocomplete: "off", placeholder: "github-token", oninput: (e, n) => { F.name = n.value; } })),
           field("Value", input({ type: "password", value: F.value, autocomplete: "new-password", oninput: (e, n) => { F.value = n.value; } }))),
         h("div", { class: "frow" }, button("Save", save, { kind: "primary" }),
           F.say ? h("p", { class: "fmsg", "data-tone": F.tone, role: "status" }, F.say) : null)),
-      section({ title: "Stored" }, list(F.items.map(r => ({
+      section({ title: "Stored", level }, list(F.items.map(r => ({
         key: r.name, title: r.name, meta: ago(r.at * 1000),
         text: button("Remove", () => remove(r.name), { size: "s", kind: "quiet" }),
       })), { empty: "Nothing stored yet." }))];
@@ -47,8 +47,8 @@ export default {
   leave: forgetSecrets,
   render(ctx) {
     if (!S.app.app || !can("secrets")) return h("div", { class: "page" }, empty(S.app.secrets_on === false ? "Secrets are off on this Hive. Whoever runs it can turn them on with secrets_on in web.json, on the machine." : "Secrets need full mode. Sign in again if your hour is up.", { kind: "page", title: "Secrets" }));
-    return h("div", { class: "page" },
+    return h("div", { class: "page", "data-width": "narrow", "data-key": "secrets" },
       pageHeader({ title: "Secrets", lead: "For giving the hive a token without putting it in chat. Nothing here shows a value again, and it never goes on the board." }),
-      secretParts(ctx));
+      h("div", { class: "stack secrets" }, secretParts(ctx, 1)));
   },
 };

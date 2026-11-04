@@ -20,7 +20,19 @@ function keepScroll(from, to) {
     const box = document.createElement("div"); box.append(...to.childNodes); to.append(box);
     box.style.translate = `${-x}px ${-y}px`; return;
   }
-  for (const c of to.children) c.style.translate = `${-x}px ${-y}px`;
+  // Children out of view are hidden, so the picture holds one screen of a long thread, not all of it shifted far off: a tall moved layer is what some
+  // browsers (Chrome on Windows) left blank. The rest move by a plain offset where they can, which paints without a layer of its own.
+  const box = from.getBoundingClientRect(), kids = [...from.children], twins = [...to.children];
+  kids.forEach((c, i) => {
+    const t = twins[i]; if (!t) return;
+    const r = c.getBoundingClientRect();
+    if (r.bottom < box.top || r.top > box.bottom || r.right < box.left || r.left > box.right) { t.style.visibility = "hidden"; return; }
+    const pos = getComputedStyle(c).position;
+    if (pos === "static" || pos === "relative") {
+      const cs = getComputedStyle(c), top = parseFloat(cs.top) || 0, left = parseFloat(cs.left) || 0;
+      t.style.position = "relative"; t.style.top = (pos === "relative" ? top : 0) - y + "px"; t.style.left = (pos === "relative" ? left : 0) - x + "px"; t.style.bottom = t.style.right = "auto";
+    } else t.style.translate = `${-x}px ${-y}px`;
+  });
 }
 /** A sticky element in a copy that can't scroll would sit where it started: put it where it's stuck now. It keeps its place in the flow and its stacking.
  *  All measured in one layout (a table can have hundreds of sticky cells), parents first, so a sticky inside a sticky moves only by its own part. */

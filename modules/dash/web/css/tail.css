@@ -39,3 +39,48 @@
 /* timeline: the how-to text is small print */
 .cvp-note{padding:6px var(--s4);border-bottom:0;font-size:var(--fs-micro);line-height:1.4}
 .cvp-bar{border-bottom:1px solid var(--line)}
+/* secrets: room between the header and the parts, and a readable hint */
+.page>.ph+.stack.secrets{margin-top:var(--s5)}
+.secrets .sec-lead{font-size:var(--fs-small);color:var(--ink-2);margin-bottom:var(--s3);max-width:68ch}
+.secrets .frow .fmsg{margin:0}
+
+/* side question (/btw): drawn like the chat it sits in, a composer-style card with the person's words in a bubble */
+.ba{background:var(--surface);box-shadow:var(--e1);border:1px solid var(--line-2);border-radius:var(--r-xl);padding:10px 14px 12px;gap:10px;font-size:inherit}
+.ba-top{font-size:var(--fs-small)}
+.ba-h{color:var(--ink-2)}
+.ba-top>.meta{color:var(--ink-3)}
+.ba-p{gap:4px}
+.ba-p b{font-size:var(--fs-small);color:var(--ink)}
+.ba-p[data-me]{justify-items:end}
+.ba-p[data-me] b{display:none}
+.ba-p[data-me] .ba-b{max-width:min(78%,560px);padding:8px 14px;border-radius:var(--r-xl);background:var(--sunken);box-shadow:none}
+.ba-wait{font-size:var(--fs-small);color:var(--ink-3)}
+.ba-in{height:auto;padding:8px 2px 0;border:0;border-top:1px solid var(--line);border-radius:0;background:none;font-size:inherit}
+.ba-in:focus,.ba-in:focus-visible{outline:none;box-shadow:none;border-color:var(--line)}
+.ba:focus-within{border-color:color-mix(in oklch,var(--ink-3) 70%,var(--line-2));box-shadow:var(--e1),0 0 0 3px var(--accent-bg)}
+
+/* ---- a conversation exported as a transcript (js/ui/export.js): only print shows it ---- */
+.xp{display:none}
+@media print{
+  html.xp-on body>*:not(.xp){display:none!important}
+  html.xp-on,html.xp-on body{background:#fff!important;color:#111;height:auto!important;overflow:visible!important}
+  html.xp-on .xp{display:block;font-family:var(--font);font-size:10pt;line-height:1.5;color:#111;max-width:none}
+  @page{size:auto;margin:18mm 18mm 18mm}
+  .xp-head{margin:0 0 14pt;padding:0 0 8pt;border-bottom:1px solid #ddd}
+  .xp-head h1{font-size:16pt;line-height:1.25;font-weight:600;margin:0 0 4pt}
+  .xp-meta{font-size:9pt;color:#666;margin:0}
+  .xp-day{font-size:9pt;font-weight:600;color:#666;margin:14pt 0 8pt;break-after:avoid}
+  .xp-turn{display:grid;grid-template-columns:3cm minmax(0,1fr);column-gap:.5cm;margin:0 0 9pt;orphans:3;widows:3}
+  .xp-who{text-align:right}
+  .xp-who b{display:block;font-weight:600;overflow-wrap:anywhere}
+  .xp-who time{display:block;font-size:8pt;color:#888}
+  .xp-says>*:first-child,.xp-says .md>*:first-child{margin-top:0}
+  .xp-says>*:last-child,.xp-says .md>*:last-child{margin-bottom:0}
+  .xp-says p{margin:0 0 5pt}
+  .xp-says pre,.xp-says code{font-size:8.5pt;white-space:pre-wrap;overflow-wrap:anywhere}
+  .xp-says pre{border-left:2px solid #ccc;padding:2pt 0 2pt 8pt;background:none}
+  .xp-says img{max-width:100%}
+  .xp-turn[data-stage] .xp-who b{font-weight:400;color:#777}
+  .xp-turn[data-stage] .xp-says{color:#555}
+  .xp-files{font-size:9pt;color:#666}
+}

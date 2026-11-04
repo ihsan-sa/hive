@@ -6,7 +6,7 @@
 //   its text and offers Retry, Edit and Discard. The board is append-only, so nothing here suggests unsending a posted one.
 import { uploadFile } from "../core/upload.js";
 import { h } from "../core/dom.js";
-import { S, jget, post, poll, loadApp } from "../core/store.js";
+import { S, can, jget, post, poll, loadApp } from "../core/store.js";
 import { simpleOn, hiveName } from "../core/simple.js";
 import { go } from "../core/router.js";
 import { isAgent, isRunning, agentCard, agentStatus, threadPeople, partner, displayText, typedText } from "../core/model.js";
@@ -15,6 +15,8 @@ import { button, icon, input, statusDot } from "./kit.js";
 import { openAside } from "./aside.js";
 
 const CP = { update: null, th: undefined, focus: false, ac: null, menu: false, drag: false, sig: "", hist: null };
+// The secret box (the person, 11041306e4d2): a name and a hidden value saved straight to /api/secret. The value never enters the draft, the board or localStorage.
+const SB = { open: false, rows: [{ name: "", value: "" }], say: "", tone: null, busy: false };
 const refresh = () => CP.update && CP.update();
 const IMGNAME = /\.(png|jpe?g|gif|webp)$/i;
 const size = n => (n >= 1048576 ? (n / 1048576).toFixed(1) + " MB" : n >= 1024 ? Math.round(n / 1024) + " kB" : n + " B");
@@ -268,6 +270,61 @@ function histTab(th, n) {
 }
 const stateWords = n => (n === "new" ? "starts a new agent" : agentStatus(n).label || "");
 
+// ---- secret box ----
+const SECRET_NAME = /^[A-Za-z0-9][A-Za-z0-9_.-]{1,63}$/, NOT_NAME = /\.(md|py|js|mjs|json|jsonl|sh|txt|png|toml|ya?ml|html|css)$/i;
+/** The secret names agents asked for in this thread, newest ask first, without the ones already saved: backticked names
+ * in an agent's post that talks about the lock, a secret or a token (the person, 11041441b379). */
+export function wantedSecrets(th, have = []) {
+  const d = th && S.threads.get(th); if (!d) return [];
+  const saved = new Set(have.map(r => r.name)), out = [];   // by name: board times carry no zone, so "saved since the ask" can't be told reliably
+  for (const p of d.posts.slice(-12).reverse()) {
+    if (p.from === "person" || !(isAgent(p.from) || /^[a-z][0-9a-f]{4,}$/.test(p.from)) || !/\b(secrets?|tokens?|lock|api keys?)\b/i.test(p.text || "")) continue;
+    let named = false;
+    for (const m of String(p.text).matchAll(/`([^`\s]+)`/g)) {
+      const n = m[1]; if (!SECRET_NAME.test(n) || NOT_NAME.test(n) || /^[0-9a-f]{5,12}$/.test(n)) continue;
+      named = true; if (!saved.has(n) && !out.includes(n)) out.push(n);
+    }
+    if (named) break;   // the newest ask only, even if it's all saved: an older one may name secrets the agent has since dropped
+  }
+  return out.slice(0, 8);
+}
+async function openSecrets(th) {
+  SB.open = true; SB.say = ""; SB.rows = [{ name: "", value: "" }]; refresh();
+  let have = []; try { have = await jget("/api/secrets"); } catch (e) {}
+  const want = wantedSecrets(th, Array.isArray(have) ? have : []);
+  if (want.length && SB.open && !SB.rows.some(r => r.name || r.value)) { SB.rows = want.map(name => ({ name, value: "", asked: true })); refresh(); }
+  queueMicrotask(() => document.querySelector(SB.rows[0].asked ? ".cp-sval" : ".cp-sname")?.focus());
+}
+const closeSecrets = () => { SB.open = false; SB.rows = [{ name: "", value: "" }]; refresh(); };
+async function saveSecret() {
+  const rows = SB.rows.filter(r => r.name.trim() || r.value);
+  if (!rows.length || rows.some(r => !r.name.trim())) { SB.say = "Give it a name and a value."; SB.tone = "bad"; return refresh(); }
+  const todo = rows.filter(r => r.value);
+  if (!todo.length) { SB.say = "Paste a value first."; SB.tone = "bad"; return refresh(); }
+  SB.busy = true; SB.say = ""; refresh();
+  const done = [];
+  try { for (const r of todo) { await post("/api/secret", { name: r.name.trim(), value: r.value }); done.push(r.name.trim()); r.value = ""; } }
+  catch (e) { SB.say = (done.length ? `Saved ${done.join(", ")}. ` : "") + e.message; SB.tone = "bad"; }
+  SB.rows = SB.rows.filter(r => !done.includes(r.name.trim()));
+  if (!SB.say) {
+    SB.say = `Saved ${done.join(", ")}. ${done.length > 1 ? "They" : "It"} can't be shown again; tell the agent ${done.length > 1 ? "their names" : "its name"}.`; SB.tone = "good";
+    if (!SB.rows.length) closeSecrets(); else SB.open = true;
+  }
+  SB.busy = false; refresh();
+}
+function secretRow() {
+  const one = SB.rows.length === 1, asked = SB.rows.some(r => r.asked);
+  return h("div", { class: "cp-secret", "data-key": "secret" },
+    h("div", { class: "cp-shead", "data-key": "head" },   // the buttons on top, clear of the rows (the person, 11041445a01e)
+      h("p", { class: "meta cp-sask" }, asked ? (one ? "The agent asked for this one. Paste its value:" : "The agent asked for these. Paste each value; empty ones are skipped:") : "Saved on the machine, never posted in chat."),
+      button(one ? "Save secret" : "Save secrets", saveSecret, { kind: "primary", size: "s", busy: SB.busy, title: "Saved to ~/.config/h2/secrets/<name>, mode 600. Never posted; the board only gets its name." }),
+      h("button", { type: "button", class: "cp-x", title: "Close", "aria-label": "Close the secret box", onclick: closeSecrets }, "×")),
+    SB.rows.map((r, i) => h("div", { class: "cp-srow", "data-key": "r" + i },
+      input({ class: "input cp-sname", placeholder: "Name, like github-token", "aria-label": "Secret name", autocomplete: "off", value: r.name, oninput: (e, n) => { r.name = n.value; } }),
+      input({ class: "input cp-sval", type: "password", placeholder: r.asked ? "Value for " + r.name : "Value", "aria-label": "Secret value" + (r.name ? " for " + r.name : ""), autocomplete: "new-password", value: r.value, oninput: (e, n) => { r.value = n.value; },
+        onkeydown: e => { if (e.key === "Enter") { e.preventDefault(); saveSecret(); } else if (e.key === "Escape") closeSecrets(); } }))));
+}
+
 // ---- pieces ----
 function toChip(th, r) {
   const n = r.who, label = n === "new" ? "a new agent" : n || "…";
@@ -320,6 +377,8 @@ export function composer({ thread, update, place = "thread", autofocus, top }) {
       CP.ac ? h("div", { class: "cp-ac", role: "listbox", "aria-label": "Names", "data-key": "ac" }, CP.ac.items.map((n, i) => h("button", { type: "button", role: "option", class: "cp-opt", "data-key": n, "aria-selected": String(i === CP.ac.i), onclick: () => acPick(th, n) },
         n === "new" ? statusDot("none") : statusDot(agentStatus(n).key, { live: S.running.has(n) }), h("b", null, "@" + n), h("span", { class: "meta" }, stateWords(n))))) : null,
       d.files.length ? filesRow(th, d) : null,
+      SB.open && can("secrets") ? secretRow() : null,
+      !SB.open && SB.say ? h("p", { class: "meta cp-ssay", "data-tone": SB.tone, role: "status", "data-key": "ssay" }, SB.say) : null,
       !th && d.naming ? h("div", { class: "cp-name-row", "data-key": "name" }, input({ class: "input cp-name", placeholder: "A short name, like fix-contact-form", "aria-label": "Name for this job", value: d.name, oninput: (e, n) => { d.name = n.value; keep(d); } })) : null,
       h("textarea", { class: "cp-t", "data-key": "t", rows: 1, placeholder: ph, "aria-label": th ? "Message" : "What do you want done?", value: d.text, enterkeyhint: "send",
         oninput: (e, n) => {
@@ -342,6 +401,9 @@ export function composer({ thread, update, place = "thread", autofocus, top }) {
       h("div", { class: "cp-bar", "data-key": "bar" },
         h("input", { type: "file", multiple: true, hidden: true, class: "cp-pick", onchange: e => { addFiles(th, e.target.files); e.target.value = ""; } }),
         button("Attach files", (e, b) => b.parentNode.querySelector(".cp-pick").click(), { kind: "icon", size: "s", icon: "plus", cls: "cp-attach", title: "Attach files. You can also paste or drop them here." }),
+        can("secrets") || (S.app && S.app.secrets_on && S.app.mode === "expired") ? button("Send a secret", () => {
+          if (!can("secrets")) { SB.open = false; SB.tone = "bad"; SB.say = "Saving a secret needs full mode, which lasts an hour after you sign in. Press \"sign in again for full\" at the top, then press the lock again."; refresh(); return; }
+          if (SB.open) closeSecrets(); else openSecrets(th); }, { kind: "icon", size: "s", icon: "lock", cls: "cp-lock", title: "Send a secret (a token or key): saved on the machine, never posted in chat." }) : null,
         simpleOn() ? null : th ? toChip(th, r) : d.naming ? h("span", { class: "meta cp-new" }, "A new agent starts on this") : button("Name it", () => { d.naming = true; refresh(); }, { kind: "quiet", size: "s", title: "Give this job a short name (optional). Without one it's called by its first words." }),
         simpleOn() ? null : modelPick(d, r),
         h("span", { class: "cp-sp" }),

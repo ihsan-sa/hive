@@ -107,6 +107,28 @@ def provider_of(c, model):
     if not m or m[1] not in c.get("providers", {}): return None
     return m[1], c["providers"][m[1]], m[2]
 
+def family(name, pc):
+    """Providers that are the same kind of account: codex, codex-2, codex-3 are three Codex logins (Settings > Accounts adds them)."""
+    return pc.get("family") or re.sub(r"-[0-9]+$", "", name)
+
+def home_of(pc):
+    """Where a harness provider keeps its login and sessions: its CODEX_HOME or KIMI_CODE_HOME."""
+    h = pc.get("codex_home") or pc.get("kimi_home") or {"codex": "~/.codex", "kimi": "~/.kimi-code"}.get(pc.get("harness"))
+    return str(Path(h).expanduser()) if h else None
+
+def with_room(c, pv, cache):
+    """pv, or else another provider of its family that has room now (a second Codex login when the first is at its limit).
+    The model id is kept; the caller rewrites the posts to the new provider name, so a resume finds the same login."""
+    if provider_room(c, pv[0], pv[1], cache) is None: return pv
+    for name, pc in c.get("providers", {}).items():
+        if name != pv[0] and family(name, pc) == family(pv[0], pv[1]) and provider_room(c, name, pc, cache) is None: return name, pc, pv[2]
+    return pv
+
+def retarget(c, posts, src, dst):
+    """Move posts asking for provider src onto provider dst, same model id."""
+    for p in posts:
+        if (q := provider_of(c, p.get("model"))) and q[0] == src: p["model"] = f"{dst}:{q[2]}"
+
 def model_ok(c, model): return model in MODELS or provider_of(c, model) is not None
 
 def default_model():
@@ -882,7 +904,12 @@ def wake_home(c, n, run, sid, posts, to, room, limits):
     prov = next((pv for p in posts if (pv := provider_of(c, p.get("model")))), None)
     harness = prov[1].get("harness", "claude-code") if prov else "claude-code"
     if run.get("harness", "claude-code") != harness: return None
-    if harness != "claude-code": return to  # it keeps its own sessions; a failed resume goes to an heir
+    if harness != "claude-code":  # it keeps its own sessions, in the login it ran on; a failed resume goes to an heir
+        own = next((name for name, pc in c.get("providers", {}).items() if pc.get("harness") == harness and run.get("login") and home_of(pc) == run["login"]), None)
+        if own and own != prov[0]:  # it ran on another login of this kind (codex-2): only that one has its session
+            if provider_room(c, own, c["providers"][own], {}) is not None: return None
+            retarget(c, posts, prov[0], own)
+        return to
     own = run.get("login") or "/nonexistent"
     if prov:
         if not prov[1].get("config_dir"): return None
@@ -1114,7 +1141,7 @@ def wire_deny(c):
     seen = lst.stat().st_mtime_ns
     if seen == DENY_SEEN: return
     (HOME / ".local/bin").mkdir(parents=True, exist_ok=True)
-    for name in ("cc-github-deny", "git-remote-cc-github-deny", "gh"):
+    for name in ("cc-github-deny", "git-remote-cc-github-deny", "gh", "curl", "wget"):
         link = HOME / ".local/bin" / name
         if link.exists() and not link.is_symlink():  # a real gh lives here: never overwrite it. Git and the hook still hold.
             log(event="github_deny", problem=f"{link} is a real file, so the {name} layer isn't wired"); continue
@@ -1157,13 +1184,15 @@ def fallback_model(c, st, chain, cache):
     A provider module may also say no for one model (model_room: OpenRouter free models' daily request count)."""
     for model in chain:
         pv = provider_of(c, model)
-        if not pv or provider_room(c, pv[0], pv[1], cache) is not None: continue
+        if not pv: continue
+        pv = with_room(c, pv, cache)
+        if provider_room(c, pv[0], pv[1], cache) is not None: continue
         impl = pv[1].get("_impl")
         if impl and hasattr(impl, "model_room"):
             try:
                 if impl.model_room(c, pv[1], pv[2], cache) is not None: continue
             except Exception: continue
-        return model
+        return f"{pv[0]}:{pv[2]}"
     return None
 
 def fallback(c, st, n, posts, claude_ok, cache):
@@ -1315,6 +1344,8 @@ def main():
             if any(p.get("free") for p in st["pending"][n]) and not any(p.get("fallback") for p in st["pending"][n]):
                 if not fallback(c, st, n, st["pending"][n], True, pcache): continue
             pv = next((pv for p in st["pending"][n] if (pv := provider_of(c, p.get("model")))), None)
+            if pv and (alt := with_room(c, pv, pcache))[0] != pv[0]:  # its login is at its limit: another login of the same kind
+                retarget(c, st["pending"][n], pv[0], alt[0]); log(event="provider_moved", name=n, src=pv[0], dst=alt[0]); pv = alt
             if pv: to = None if provider_hold(c, st, n, pv, pcache, st["pending"][n][0].get("thread")) else "provider"
             else:
                 to = login_for(c, room, st.get("limits"), st["pending"][n], login)

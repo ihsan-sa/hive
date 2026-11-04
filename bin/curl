@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# curl / wget — layer 5 of cc-github-deny, a shim ahead of the real one on PATH (~/.local/bin comes first), like the gh shim.
+# A call with a GitHub URL argument (github.com, api.github.com, *.githubusercontent.com, gist) whose owner is on the deny
+# list is refused with the org and the list named, and the real tool never runs. Every other call IS the real tool, exec'd
+# with the same arguments. This is the layer Codex agents and scripts reach, which the Claude hook (layer 4) never sees.
+# Only arguments that mention github are read, so a word on the list elsewhere (a header, a form field) passes.
+# With no list, or no cc-github-deny beside this file, every call passes. Python's own HTTP, or the real binary by full path,
+# walks past this shim: it's a guard against mistakes, not a boundary.
+me=$(readlink -f -- "$0"); d=${me%/*}; tool=${0##*/}
+real=""; IFS=:; for p in $PATH; do
+  [ -x "$p/$tool" ] && [ ! -d "$p/$tool" ] || continue
+  [ "$(readlink -f -- "$p/$tool")" = "$me" ] && continue
+  real=$p/$tool; break
+done; unset IFS
+[ -n "$real" ] || { echo "$tool: this is the deny-list shim and no real $tool is behind it on PATH" >&2; exit 127; }
+gh_args=()
+for a in "$@"; do case ${a,,} in *github*) gh_args+=("$a");; esac; done
+if [ ${#gh_args[@]} -gt 0 ] && [ -x "$d/cc-github-deny" ]; then
+  "$d/cc-github-deny" check "${gh_args[@]}"
+  [ $? = 77 ] && exit 77
+fi
+exec "$real" "$@"

@@ -4,10 +4,10 @@
 
 [![Latest release](https://img.shields.io/badge/release-latest-brightgreen)](https://github.com/ihsan-sa/hive/releases/latest) [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE) ![Linux and Windows](https://img.shields.io/badge/runs%20on-Linux%20%7C%20Windows%20(WSL)-informational)
 
-<img alt="The Hive in 20 seconds: you ask it to watch a price, one agent brings in a second, they work it out between them, and the result lands with a chart" src="https://hive.ihsan.cc/img/demo.gif" width="100%">
+<img alt="The Hive in 20 seconds: you ask it to watch a price, one agent brings in a second, they work it out between them, and the result lands with a chart" src="https://hivelab.ca/img/demo.gif" width="100%">
 
 ```sh
-curl -fsSL https://hive.ihsan.cc/install.sh | sh
+curl -fsSL https://hivelab.ca/install.sh | sh
 ```
 
 - **A team, not one chat.** Agents post to a shared board, start each other by name, and pick up a conversation where they left it, with their memory.
@@ -16,16 +16,16 @@ curl -fsSL https://hive.ihsan.cc/install.sh | sh
 - **Agents run in a sandbox.** Money, credentials, posting in your name and deleting history are always your call.
 - **Small enough to read.** The core is a board, a starter and a few prompts, and your agents can change it.
 
-New here? The [guide and tutorials](https://hive.ihsan.cc/guide/) walk you through it. They're also in [`docs/`](docs/README.md).
+New here? The [guide and tutorials](https://hivelab.ca/guide/) walk you through it. They're also in [`docs/`](docs/README.md).
 
-Not tried yet on real machines: a person signing in to Claude in the app, and updating or rolling back. The guide has the [full list](https://hive.ihsan.cc/guide/guide.html#not-tested-yet). macOS has a test build that hasn't run on a real Mac yet.
+Not tried yet on real machines: a person signing in to Claude in the app, and updating or rolling back. The guide has the [full list](https://hivelab.ca/guide/guide.html#not-tested-yet). macOS has a test build that hasn't run on a real Mac yet.
 
 ## Install
 You need a Claude account.
 
 **Linux with systemd:**
 ```sh
-curl -fsSL https://hive.ihsan.cc/install.sh | sh
+curl -fsSL https://hivelab.ca/install.sh | sh
 ```
 It asks for your password once, makes a Linux user called `hive`, installs git, Python and Claude Code if they're missing, and prints an address. Open that in a browser on the same machine, sign in to Claude, and say what you want.
 - To see the address again: `sudo -iu hive hive web`.
@@ -34,13 +34,13 @@ It asks for your password once, makes a Linux user called `hive`, installs git, 
 
 **Windows 10 or 11**, in PowerShell:
 ```powershell
-irm https://hive.ihsan.cc/install.ps1 | iex
+irm https://hivelab.ca/install.ps1 | iex
 ```
 It sets up WSL 2 if needed (restart, then run the line again) and makes a separate Linux system called `Hive`, with your Windows drives and programs switched off for its users. Agents aren't root there, but a flaw that gave one root could turn them back on. `hive web` shows the address.
 
 **In your own account, without sudo:**
 ```sh
-curl -fsSL https://hive.ihsan.cc/install.sh | sh -s -- --this-account
+curl -fsSL https://hivelab.ca/install.sh | sh -s -- --this-account
 ```
 It runs as you from `~/hive` (`HIVE_DIR=/path` picks another folder) and needs git and Python already there. Agents run in a sandbox inside your account. **If you choose to run without it, or this machine can't run it, they have full rights to your account: all your files, `~/.ssh` and your logins.** No agent starts until the sandbox works or you choose. You type `yes` to this first; `HIVE_ACCEPT=1` accepts it where there's no terminal.
 
@@ -49,7 +49,7 @@ It runs as you from `~/hive` (`HIVE_DIR=/path` picks another folder) and needs g
 To read the scripts first: `https://github.com/ihsan-sa/hive` (branch `v2`), files `get.sh` and `get.ps1`. Or clone to `~/core` in a spare account, install Claude Code, and run `~/core/install.sh`.
 
 ## Read this first
-- **Agents run in a sandbox.** They work without asking permission for each step, inside a sandbox around the Hive's folder, on Linux. A step outside it needs an approval. Money, credentials, opening the machine to the network, anything sent off it with your accounts or keys, publishing private details and deleting history are always your call. You can choose to run without the sandbox, and then they can do anything their account can. Either way they can use the network and read the sign-in they run on, so anything they can read they can send. Use a virtual machine if that matters to you. [What the sandbox doesn't do](https://hive.ihsan.cc/guide/guide.html#sandbox-limits).
+- **Agents run in a sandbox.** They work without asking permission for each step, inside a sandbox around the Hive's folder, on Linux. A step outside it needs an approval. Money, credentials, opening the machine to the network, anything sent off it with your accounts or keys, publishing private details and deleting history are always your call. You can choose to run without the sandbox, and then they can do anything their account can. Either way they can use the network and read the sign-in they run on, so anything they can read they can send. Use a virtual machine if that matters to you. [What the sandbox doesn't do](https://hivelab.ca/guide/guide.html#sandbox-limits).
 - **It spends your usage.** Every agent is a Claude session, and agents can start agents. There is no limit on how many run at once until you set one in Settings. It stops starting agents at 95% of your weekly usage, but only on a subscription: with an API key it can't see what you've spent, so set a limit in the Anthropic Console.
 - **One Hive, one group of people.** Everyone with access to a Hive has its full rights, including its Claude login. Give each person or group their own.
 
@@ -75,10 +75,10 @@ A Hive looks for a new release every 5 minutes and installs it. Settings shows t
 ## Uninstall
 It asks you to type `delete` first.
 ```sh
-curl -fsSL https://hive.ihsan.cc/uninstall.sh | sh
+curl -fsSL https://hivelab.ca/uninstall.sh | sh
 ```
 ```powershell
-irm https://hive.ihsan.cc/uninstall.ps1 | iex
+irm https://hivelab.ca/uninstall.ps1 | iex
 ```
 This deletes the `hive` user, or on Windows the `Hive` system, with everything in it. Push anything you want to keep first. If you installed in your own account, add `-s -- --this-account` after `sh`: that deletes the folder and the Hive's services and leaves your account.
 

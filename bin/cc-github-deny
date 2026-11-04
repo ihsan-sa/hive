@@ -34,6 +34,8 @@
 #   4. a session's Bash line: cc-github-deny-hook reads the same list, for EVERY Claude session, and refuses a line that names a listed
 #      org in a github.com URL (git, curl, python, anything) or in a gh call. It is the only layer that sees a raw
 #      API call.
+#   5. curl and wget: the `curl` beside this file (wget links to it) is a shim like gh's, for the callers layer 4 never sees —
+#      Codex agents and scripts. A github URL argument under a listed org is refused; everything else is the real tool.
 # The starter wires all of this whenever a list is there (wire_deny). No list: nothing is linked or written.
 set -uo pipefail
 LIST=${CC_GITHUB_DENY:-$HOME/.cc/github-deny}

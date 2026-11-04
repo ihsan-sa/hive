@@ -15,11 +15,14 @@ function set(e, props) {
     else e.setAttribute(k, v === true ? "" : v);
   }
 }
+let textMap = null;
+/** Optional display rewrite for every text node (the names easter egg). */
+export const setTextMap = f => { textMap = f; };
 function add(e, kids) {
   for (const c of kids) {
     if (c == null || c === false || c === true) continue;
     if (Array.isArray(c)) add(e, c);
-    else e.append(c.nodeType ? c : document.createTextNode(String(c)));
+    else e.append(c.nodeType ? c : document.createTextNode(textMap ? textMap(String(c)) : String(c)));
   }
 }
 

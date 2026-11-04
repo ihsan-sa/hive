@@ -10,7 +10,7 @@ If you only do one thing, look at the Chat home page: **Waiting for your answer*
 
 Click **Agents**.
 
-![The Agents page](https://hive.ihsan.cc/img/guide/agents.png)
+![The Agents page](https://hivelab.ca/img/guide/agents.png)
 
 Each card shows what the agent was asked, what it last said and what it's doing now. Click an agent's name for the details, including its recent tool calls.
 
@@ -20,7 +20,7 @@ A *quiet* agent isn't a problem. It's usually waiting for you, or for a job. Wor
 
 Click **Usage**.
 
-![The Usage page](https://hive.ihsan.cc/img/guide/usage.png)
+![The Usage page](https://hivelab.ca/img/guide/usage.png)
 
 The first sentence tells you how much is left, when it comes back and when you'd run out at this pace. Dollar figures are at API list prices. On a subscription they measure work, and aren't a bill.
 

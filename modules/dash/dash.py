@@ -18,7 +18,7 @@ The web page is web/ next to this file (ui.html, the previous page, is at /old);
 import base64, fcntl, gzip, hashlib, hmac, importlib.util, json, os, pty, pwd, re, secrets, select, shutil, signal, sqlite3, stat, struct, subprocess, sys, tempfile, termios, threading, time
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit
 
 HOME = Path(os.environ.get("HIVE_HOME", Path.home()))
 RUN, LOG, BOARD = HOME / "run", HOME / "log.jsonl", HOME / "board.jsonl"
@@ -1490,7 +1490,7 @@ FORWARDED = ("cf-ray", "cf-connecting-ip", "cf-access-jwt-assertion", "cf-ipcoun
 GET_CAP = {"/api/live": "read", "/api/board": "read", "/api/log": "read", "/api/usage": "read", "/api/jobs": "read", "/api/agent": "read", "/api/agent-work": "read", "/api/ledger": "read",
            "/api/projects": "read", "/api/agent-costs": "read", "/api/thread-names": "read", "/api/thread-meta": "read", "/json": "read", "/api/target": "read", "/api/inbox": "read", "/api/delivered": "read",
            "/api/config": "config", "/api/modules": "modules", "/api/signin": "logins", "/api/plans": "plans", "/api/secrets": "secrets",
-           "/api/settings": "config", "/api/update": "config", "/api/signin-codex": "logins", "/api/design": "logins", "/api/brand/logo": "read",
+           "/api/settings": "config", "/api/update": "config", "/api/signin-codex": "logins", "/api/accounts": "logins", "/api/design": "logins", "/api/brand/logo": "read",
            "/api/kb/home": "files", "/api/kb/open": "files", "/api/kb/search": "files", "/api/kb/raw": "files", "/api/kb/map": "files", "/api/kb/history": "files", "/api/progress": "read"}
 POST_CAP = {"/api/kill": "stop", "/api/tier": "tier", "/api/agent-model": "post", "/api/login-pause": "limits", "/api/login-limit": "limits", "/api/provider-limit": "limits",
             "/api/post": "post", "/api/thread-meta": "post", "/api/feedback": "post", "/api/issue-link": "post", "/api/update": "config", "/api/share-copy": "config", "/api/draft": "config", "/api/upload": "post", "/api/inbox-read": "post", "/api/config": "config", "/api/starter": "config",
@@ -3256,35 +3256,78 @@ CODEX_CODE = re.compile(r"\b[A-Z0-9]{4}-[A-Z0-9]{4,}\b")
 CODEX_LINK = re.compile(r"https://auth\.openai\.com/\S+")
 
 
-def codex_env(): return {**child_env(), "CODEX_HOME": str(HOME / ".codex"), "BROWSER": "true"}
+def codex_env(home=None): return {**child_env(), "CODEX_HOME": str(home or HOME / ".codex"), "BROWSER": "true"}
 
 
-def codex_signed_in():
-    if not shutil.which("codex"): return False
-    try: return subprocess.run(["codex", "login", "status"], env=codex_env(), capture_output=True, timeout=10, stdin=subprocess.DEVNULL).returncode == 0
+def codex_homes():
+    """Every Codex login of this account, as (provider name, folder): ~/.codex, then ~/.codex-2, ~/.codex-3 that Settings added.
+    The starter treats codex, codex-2, ... as one family and moves a run to the next one with room."""
+    more = sorted((int(p.name[7:]), p) for p in HOME.glob(".codex-*") if p.name[7:].isdigit() and int(p.name[7:]) >= 2 and p.is_dir())
+    return [("codex", HOME / ".codex")] + [(f"codex-{n}", p) for n, p in more]
+
+
+def codex_signed_in(home=None):
+    home = Path(home or HOME / ".codex")
+    if not shutil.which("codex") or not home.is_dir(): return False
+    try: return subprocess.run(["codex", "login", "status"], env=codex_env(home), capture_output=True, timeout=10, stdin=subprocess.DEVNULL).returncode == 0
     except (OSError, subprocess.SubprocessError): return False
 
 
-CODEX_IN = Cached(codex_signed_in, 20)
+class CodexIn:
+    """Whether each Codex folder is signed in, asked at most every 20 s per folder. clear() is how a change asks for the truth."""
+    def __init__(self): self.lock, self.seen = threading.Lock(), {}
+
+    def get(self, home=None):
+        home = str(home or HOME / ".codex")
+        with self.lock: v = self.seen.get(home)
+        if v and time.time() - v[0] < 20: return v[1]
+        r = codex_signed_in(home)
+        with self.lock: self.seen[home] = (time.time(), r)
+        return r
+
+    def clear(self):
+        with self.lock: self.seen.clear()
+
+
+CODEX_IN = CodexIn()
+
+
+def codex_logins():
+    return [{"name": n, "signed_in": CODEX_IN.get(p), "extra": n != "codex"} for n, p in codex_homes()]
+
+
+def config_providers():
+    c = jload(HOME / "core" / "config.json", {})
+    p = c.get("providers") if isinstance(c, dict) else None
+    return p if isinstance(p, dict) else {}
 
 
 class CodexSignIn:
-    """`codex login --device-auth`: Codex prints a link and a one-time code, the person enters it in their own browser. One at a time."""
+    """`codex login --device-auth`: Codex prints a link and a one-time code, the person enters it in their own browser. One at a time,
+    into one folder: ~/.codex, or a new ~/.codex-N for "Add another Codex login"."""
     def __init__(self): self.lock, self.proc, self.st = threading.Lock(), None, {"state": "idle"}
 
     def view(self):
         with self.lock: st = dict(self.st)
-        return {**st, "installed": bool(shutil.which("codex")), "signed_in": CODEX_IN.get()}
+        return {**st, "installed": bool(shutil.which("codex")), "signed_in": CODEX_IN.get(), "logins": codex_logins()}
 
-    def start(self):
-        if not SETTINGS.is_file(): raise ValueError("this Hive has no settings file, so it adds accounts another way")
+    def start(self, login=None, add=False):
         if not shutil.which("codex"): raise ValueError("Codex isn't installed for this account")
         with self.lock:
             if self.proc and self.proc.poll() is None: raise ValueError("a Codex sign-in is already running")
-            (HOME / ".codex").mkdir(mode=0o700, exist_ok=True)
-            self.proc = subprocess.Popen(["codex", "login", "--device-auth"], env=codex_env(), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+            homes = dict(codex_homes())
+            if add:
+                taken = {n for n, v in config_providers().items() if hand_made(n, v)}
+                n = next(n for n in range(2, 100) if f"codex-{n}" not in taken and not (HOME / f".codex-{n}").exists())
+                login, home = f"codex-{n}", HOME / f".codex-{n}"
+            else:
+                login = login or "codex"
+                if login not in homes: raise ValueError("there's no such Codex login")
+                home = homes[login]
+            home.mkdir(mode=0o700, exist_ok=True)
+            self.proc = subprocess.Popen(["codex", "login", "--device-auth"], env=codex_env(home), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                          stderr=subprocess.STDOUT, text=True, errors="replace", start_new_session=True)
-            self.st = {"state": "starting"}
+            self.st = {"state": "starting", "login": login}
             threading.Thread(target=self.watch, args=(self.proc,), daemon=True).start()
             t = threading.Timer(960, self.stop, args=(self.proc,)); t.daemon = True; t.start()  # the code lasts 15 minutes
         return self.view()
@@ -3299,11 +3342,12 @@ class CodexSignIn:
                 if code and "code" not in self.st: self.st["code"] = code[0]
                 if self.st.get("url") and self.st.get("code"): self.st["state"] = "waiting"
         rc = proc.wait()
-        CODEX_IN.t = 0
+        CODEX_IN.clear()
         with self.lock:
             if self.proc is not proc: return
             if self.st.get("state") == "cancelled": return
-            self.st = {"state": "done"} if rc == 0 else {"state": "failed", "error": "Codex's sign-in ended before it finished. Try again."}
+            login = self.st.get("login")
+            self.st = {"state": "done", "login": login} if rc == 0 else {"state": "failed", "login": login, "error": "Codex's sign-in ended before it finished. Try again."}
         if rc == 0: sync_accounts()
 
     def stop(self, proc):
@@ -3314,87 +3358,200 @@ class CodexSignIn:
     def cancel(self):
         with self.lock:
             proc = self.proc
-            if proc and proc.poll() is None: self.st = {"state": "cancelled"}
+            if proc and proc.poll() is None: self.st = {**self.st, "state": "cancelled"}
         if proc: self.stop(proc)
+        return self.view()
+
+    def remove(self, login):
+        """Sign an added Codex login out and put its folder aside (its sessions with it), never ~/.codex. Runs on it start again elsewhere."""
+        homes = dict(codex_homes())
+        if login == "codex" or login not in homes: raise ValueError("only a Codex login added here can be removed")
+        with self.lock:
+            if self.proc and self.proc.poll() is None and self.st.get("login") == login: raise ValueError("cancel its sign-in first")
+        home = homes[login]
+        if shutil.which("codex"):
+            try: subprocess.run(["codex", "logout"], env=codex_env(home), capture_output=True, timeout=15, stdin=subprocess.DEVNULL)
+            except (OSError, subprocess.SubprocessError): pass
+        aside = STATE / "removed"; aside.mkdir(parents=True, exist_ok=True); aside.chmod(0o700)
+        home.rename(aside / f"{login}-{int(time.time())}")
+        CODEX_IN.clear()
+        with self.lock:
+            if self.st.get("login") == login: self.st = {"state": "idle"}
+        sync_accounts()
         return self.view()
 
 
 CODEX = CodexSignIn()
 KEY_DIR = STATE / "keys"
-KEY_KINDS = {"anthropic": "Anthropic API key", "openrouter": "OpenRouter API key"}
-KEY_WRONG = {"anthropic": "sk-or-", "openrouter": "sk-ant-"}
+# The kinds of API key Settings takes. Each saved key is its own provider, named by kind (anthropic, openrouter-2, ...), so `--model NAME:MODEL` reaches it.
+ACCOUNT_KINDS = {
+    "anthropic": {"label": "Anthropic API key", "wrong": "sk-or-", "base_url": "https://api.anthropic.com", "key_env": "api"},
+    "openrouter": {"label": "OpenRouter API key", "wrong": "sk-ant-", "base_url": "https://openrouter.ai/api", "key_check": "https://openrouter.ai/api/v1/key", "min_credit": 1},
+    "api": {"label": "API key", "own_url": True},  # any other Anthropic-compatible API (z.ai, DeepSeek, a LiteLLM proxy): the person gives its address
+}
+KEY_KINDS = {k: v["label"] for k, v in ACCOUNT_KINDS.items()}
+NAME_RE = re.compile(r"[a-z][a-z0-9]{1,23}(-[0-9]{1,2})?")
+RESERVED = {"claude", "codex", "kimi", "free", "new", "all", "opus", "sonnet", "haiku", "fable", "astra", "default", "person", "hives", "warden", "rootwarden", "api"}
 MAX_KEY = 2048
+
+
+def key_meta(name):
+    """What a saved key is. A key file with no note beside it was put there by hand (Hive's own), and is the hand-made provider's, not Settings'.
+    The two first keys of the old Settings had no note: on a Hive with settings.json, anthropic and openrouter are still those."""
+    m = jload(KEY_DIR / (name + ".json"), None)
+    if isinstance(m, dict) and m.get("kind") in ACCOUNT_KINDS: return m
+    if SETTINGS.is_file() and name in ("anthropic", "openrouter"): return {"kind": name}
+    return None
+
+
+def key_label(name, m):
+    k = m["kind"]
+    if k == "api": return f"API key for {urlsplit(m.get('base_url', '')).hostname or 'an API'}"
+    n = re.fullmatch(r"[a-z0-9]+-([0-9]+)", name)
+    return ACCOUNT_KINDS[k]["label"] + (f" {n[1]}" if n else "")
 
 
 def key_list():
     out = []
-    for kind, label in KEY_KINDS.items():
-        f = KEY_DIR / kind
-        try:
-            v, at = f.read_text().strip(), f.stat().st_mtime
+    try: files = sorted(KEY_DIR.iterdir())
+    except OSError: return out
+    for f in files:
+        if not NAME_RE.fullmatch(f.name) or not (m := key_meta(f.name)): continue
+        try: v, at = f.read_text().strip(), f.stat().st_mtime
         except OSError: continue
-        out.append({"kind": kind, "label": label, "ends": v[-4:] if len(v) >= 24 else "", "at": at})  # the last four, and only of a long key
+        out.append({"name": f.name, "kind": m["kind"], "label": key_label(f.name, m), "base_url": m.get("base_url"),
+                    "ends": v[-4:] if len(v) >= 24 else "", "at": at})  # the last four, and only of a long key
     return out
 
 
-def set_account_key(kind, value, delete=False):
-    """A provider's API key, in a file of mode 600. Written here, read by providers.py, never sent back or put on the board. Errors never hold the value."""
-    if not SETTINGS.is_file(): raise ValueError("this Hive has no settings file, so it adds accounts another way")
-    if kind not in KEY_KINDS: raise ValueError("that isn't a kind of key this app knows")
-    f = KEY_DIR / kind
-    if delete:
-        if not f.is_file(): raise ValueError("there's no such key")
-        f.unlink()
+def api_url(u):
+    """An Anthropic-compatible API's address: https, or http only on this machine. No user, query or fragment."""
+    if not isinstance(u, str) or len(u) > 300: raise ValueError("give the API's address, like https://api.example.com/anthropic")
+    s = urlsplit(u.strip().rstrip("/"))
+    local = s.hostname in ("127.0.0.1", "localhost", "::1")
+    if not s.hostname or s.username or s.password or s.query or s.fragment or not (s.scheme == "https" or (s.scheme == "http" and local)):
+        raise ValueError("the address must start with https:// (or http:// on this machine) and have no password or ? part")
+    return urlunsplit(s)
+
+
+def hand_made(n, v):
+    """A provider entry the person made by hand, which Settings never changes. On a Hive with settings.json, codex, anthropic and openrouter are Settings' own from before entries were marked."""
+    return not (isinstance(v, dict) and (v.get("added") == "settings" or (SETTINGS.is_file() and n in ("codex", "anthropic", "openrouter"))))
+
+
+def free_name(base):
+    taken = {n for n, v in config_providers().items() if hand_made(n, v)} | {n for n, _ in codex_homes()} | RESERVED
+    if not NAME_RE.fullmatch(base) or base in RESERVED: base = "api"
+    for n in range(1, 100):
+        cand = base if n == 1 else f"{base}-{n}"
+        if cand not in taken and not (KEY_DIR / cand).exists() and not (KEY_DIR / (cand + ".json")).exists(): return cand
+    raise ValueError("too many keys of that kind")
+
+
+def accounts_answer():
+    """What a change to the accounts sends back: the whole Settings page where there is one, else just the accounts."""
+    return settings_page() if SETTINGS.is_file() else {"settings": None, "accounts": accounts_view()}
+
+
+def set_account_key(d):
+    """Add, replace or remove an API key. Each key is a file of mode 600 with a note of its kind beside it. Written here, read by
+    providers.py, never sent back or put on the board. Errors never hold the value."""
+    if not isinstance(d, dict): raise ValueError("send an object")
+    have = {k["name"]: k for k in key_list()}
+    if d.get("delete") is True:
+        name = d.get("name") or d.get("kind")
+        if name not in have: raise ValueError("there's no such key")
+        (KEY_DIR / name).unlink(); (KEY_DIR / (name + ".json")).unlink(missing_ok=True)
     else:
+        value = d.get("value")
         if not isinstance(value, str) or not value.strip(): raise ValueError("the key is empty")
         value = value.strip()
         if not 8 <= len(value) <= MAX_KEY or re.search(r"\s", value): raise ValueError("that doesn't look like an API key: wrong length, or it has spaces in it")
-        if value.startswith(KEY_WRONG[kind]): raise ValueError(f"that looks like a key from the other provider, not an {KEY_KINDS[kind]}")
+        if d.get("name") is not None:  # Replace: a new value for a key already here, same kind and address
+            name = d["name"]
+            if name not in have: raise ValueError("there's no such key")
+            meta = {"kind": have[name]["kind"], **({"base_url": have[name]["base_url"]} if have[name]["base_url"] else {})}
+        else:
+            kind = d.get("kind")
+            if kind not in ACCOUNT_KINDS: raise ValueError("that isn't a kind of key this app knows")
+            meta = {"kind": kind}
+            if kind == "api":
+                meta["base_url"] = api_url(d.get("base_url"))
+                parts = (urlsplit(meta["base_url"]).hostname or "").split(".")
+                base = re.sub(r"[^a-z0-9]", "", parts[-2])[:24] if len(parts) > 1 else "api"  # api.deepseek.com is deepseek
+                name = free_name(d.get("label") if isinstance(d.get("label"), str) and NAME_RE.fullmatch(d["label"]) else base)
+            else: name = free_name(kind)
+        wrong = ACCOUNT_KINDS[meta["kind"]].get("wrong")
+        if wrong and value.startswith(wrong): raise ValueError(f"that looks like a key from another provider, not an {ACCOUNT_KINDS[meta['kind']]['label']}")
         KEY_DIR.mkdir(parents=True, exist_ok=True); KEY_DIR.chmod(0o700)
-        write_text_private(f, value + "\n")
+        write_text_private(KEY_DIR / name, value + "\n")
+        if SETTINGS.is_file() and name in ("anthropic", "openrouter") and meta == {"kind": name}: pass  # the old form, read the same
+        else: write_text_private(KEY_DIR / (name + ".json"), json.dumps(meta) + "\n")
     sync_accounts()
     SETUP.t = 0
-    return settings_page()
+    return accounts_answer()
 
 
 def other_account():
     """An account that isn't a Claude login. False on every Hive without settings.json, without asking Codex."""
-    return SETTINGS.is_file() and (bool(key_list()) or CODEX_IN.get())
+    return SETTINGS.is_file() and (bool(key_list()) or any(CODEX_IN.get(p) for _, p in codex_homes()))
 
 
 PROVIDER_IMPL = "~/modules/providers/providers.py"
-FALLBACK_MODELS = (("codex", "codex:default"), ("anthropic", "anthropic:claude-sonnet-5-5"), ("openrouter", "openrouter:anthropic/claude-haiku-5.5"))
+FALLBACK_MODELS = (("codex", "default"), ("anthropic", "claude-sonnet-5-5"), ("openrouter", "anthropic/claude-haiku-5.5"))  # free before paid; an "api" key has no model we could guess
+
+
+def home_rel(p): return "~/" + str(Path(p).relative_to(HOME))
+
+
+def owned_entries():
+    """The provider entries the accounts in Settings stand for, by name, in the order they're tried."""
+    owned = {}
+    for name, home in codex_homes():
+        if CODEX_IN.get(home): owned[name] = {"impl": PROVIDER_IMPL, "harness": "codex", "codex_home": home_rel(home), "stop_pct": 95, "kind": "codex"}
+    for k in key_list():
+        kd = ACCOUNT_KINDS[k["kind"]]
+        e = {"impl": PROVIDER_IMPL, "base_url": k["base_url"] or kd["base_url"], "config_dir": f"~/.claude-{k['name']}" if k["name"] in ("anthropic", "openrouter") else f"~/.claude-key-{k['name']}", "key_file": home_rel(KEY_DIR / k["name"]), "kind": k["kind"]}
+        e.update({x: kd[x] for x in ("key_env", "key_check", "min_credit") if x in kd})
+        owned[k["name"]] = e
+    return owned
 
 
 def sync_accounts():
-    """Make core/config.json match the accounts: one provider per account, tried in order when no Claude login can take a run, for
-    every post (agents' too, or a Codex-only Hive would never start a helper). Free before paid. A Claude login nobody has signed in
-    to is paused while another account exists, or the starter would pick it. Only with settings.json; only the entries it owns."""
-    if not SETTINGS.is_file(): return
-    CODEX_IN.t = 0
-    codex, keys = CODEX_IN.get(), {k["kind"] for k in key_list()}
-    owned = {}
-    if codex: owned["codex"] = {"impl": PROVIDER_IMPL, "harness": "codex", "codex_home": "~/.codex", "stop_pct": 95}
-    if "anthropic" in keys:
-        owned["anthropic"] = {"impl": PROVIDER_IMPL, "base_url": "https://api.anthropic.com", "config_dir": "~/.claude-anthropic",
-                              "key_file": "~/" + str((KEY_DIR / "anthropic").relative_to(HOME)), "key_env": "api"}
-    if "openrouter" in keys:
-        owned["openrouter"] = {"impl": PROVIDER_IMPL, "base_url": "https://openrouter.ai/api", "config_dir": "~/.claude-openrouter",
-                               "key_check": "https://openrouter.ai/api/v1/key", "min_credit": 1,
-                               "key_file": "~/" + str((KEY_DIR / "openrouter").relative_to(HOME))}
+    """Make core/config.json match the accounts: one provider per account, each marked "added": "settings". With settings.json, they are
+    also the fallback, tried in order when no Claude login can take a run, for every post (agents' too, or a Codex-only Hive would never
+    start a helper), free before paid, and a Claude login nobody has signed in to is paused while another account exists, or the starter
+    would pick it. Without settings.json (Hive, a Hive set up by hand) only the added entries change: hand-made ones and the fallback are
+    the person's, and a paid key starts nothing until a post names it."""
+    CODEX_IN.clear()
+    settings = SETTINGS.is_file()
+    owned = owned_entries()
     with _cfg_lock:
         path = HOME / "core" / "config.json"
         c = jload(path, {})
         if not isinstance(c, dict): return
-        prov = {k: v for k, v in (c.get("providers") or {}).items() if k not in ("codex", "anthropic", "openrouter")}
-        prov.update(owned)
-        if prov: c["providers"] = prov
-        else: c.pop("providers", None)
-        chain = [m for n, m in FALLBACK_MODELS if n in owned]
-        if chain: c["fallback"] = {"for": ["*"], "chain": chain, "free": []}
-        else: c.pop("fallback", None)
-        t = path.parent / f".config.json.{os.getpid()}.{threading.get_ident()}"
-        t.write_text(json.dumps(c, indent=2) + "\n"); t.replace(path)
+        old = c.get("providers") if isinstance(c.get("providers"), dict) else {}
+        prov = {k: v for k, v in old.items() if hand_made(k, v)}
+        added = {}
+        for n, e in owned.items():
+            if n in prov: continue  # a hand-made entry of that name: left as it is
+            was = old.get(n) if isinstance(old.get(n), dict) else {}
+            added[n] = {**e, "added": "settings", **{x: was[x] for x in ("paused", "stop_pct") if x in was}}
+        prov.update(added)
+        new = dict(c)
+        if prov: new["providers"] = prov
+        else: new.pop("providers", None)
+        if settings:
+            chain = []
+            for kind, model in FALLBACK_MODELS:
+                n = next((n for n, e in added.items() if e["kind"] == kind), None)
+                if n: chain.append(f"{n}:{model}")
+            if chain: new["fallback"] = {"for": ["*"], "chain": chain, "free": []}
+            else: new.pop("fallback", None)
+        if new != c:
+            t = path.parent / f".config.json.{os.getpid()}.{threading.get_ident()}"
+            t.write_text(json.dumps(new, indent=2) + "\n"); t.replace(path)
+    if not settings: return
     held_f = STATE / "setup_paused.json"
     held = jload(held_f, [])
     held = held if isinstance(held, list) else []
@@ -3409,7 +3566,11 @@ def sync_accounts():
 
 
 def accounts_view():
-    return {"claude": [{"name": l["name"], "signed_in": login_ok(l["path"])} for l in logins()], "codex": CODEX.view(), "keys": key_list(), "root": ROOT.get()}
+    shown = {n for n, _ in codex_homes()} | {k["name"] for k in key_list()}
+    by_hand = [{"name": n, "paused": bool(v.get("paused"))} for n, v in config_providers().items() if n not in shown and hand_made(n, v)]
+    return {"claude": [{"name": l["name"], "signed_in": login_ok(l["path"])} for l in logins()], "codex": CODEX.view(), "keys": key_list(),
+            "kinds": [{"kind": k, "label": v["label"], "own_url": bool(v.get("own_url"))} for k, v in ACCOUNT_KINDS.items()],
+            "by_hand": by_hand, "root": ROOT.get(), "settings_file": SETTINGS.is_file()}
 
 
 def settings_page():
@@ -3660,7 +3821,7 @@ def serve(port):
                 self.send(json.dumps(self.app_info(), default=str).encode(), J)
             elif u.path == "/api/brand/logo":
                 self.send_logo()
-            elif u.path in ("/api/target", "/api/inbox", "/api/config", "/api/modules", "/api/signin", "/api/plans", "/api/secrets", "/api/settings", "/api/update", "/api/signin-codex", "/api/design", "/api/kb/home", "/api/kb/open", "/api/kb/search", "/api/kb/raw", "/api/kb/map", "/api/kb/history") and self.route == "open":
+            elif u.path in ("/api/target", "/api/inbox", "/api/config", "/api/modules", "/api/signin", "/api/plans", "/api/secrets", "/api/settings", "/api/update", "/api/signin-codex", "/api/accounts", "/api/design", "/api/kb/home", "/api/kb/open", "/api/kb/search", "/api/kb/raw", "/api/kb/map", "/api/kb/history") and self.route == "open":
                 self.send_error(404)
             elif u.path == "/api/kb/home":
                 self.send(json.dumps(kb_home()).encode(), J)
@@ -3700,6 +3861,8 @@ def serve(port):
                 self.send(json.dumps(DESIGN.view()).encode(), J)
             elif u.path == "/api/signin-codex":
                 self.send(json.dumps(CODEX.view()).encode(), J)
+            elif u.path == "/api/accounts":
+                self.send(json.dumps(accounts_view()).encode(), J)
             elif u.path == "/api/live":
                 self.send(json.dumps({**agents_for(live_c.get(), self.route != "outside" or self.mode == "full"), "web": web_c.get()}, default=str).encode(), J)
             elif u.path == "/api/jobs":
@@ -3792,9 +3955,12 @@ def serve(port):
                     elif u.path == "/api/share-copy": res = share_copy()
                     elif u.path == "/api/draft": res = draft_do(d)
                     elif u.path == "/api/design": res = DESIGN.act(d)
-                    elif u.path == "/api/signin-codex": res = CODEX.cancel() if d.get("cancel") else CODEX.start()
+                    elif u.path == "/api/signin-codex":
+                        if d.get("cancel"): res = CODEX.cancel()
+                        elif isinstance(d.get("remove"), str): res = CODEX.remove(d["remove"])
+                        else: res = CODEX.start(login=d.get("login") if isinstance(d.get("login"), str) else None, add=d.get("add") is True)
                     elif u.path == "/api/account-key" and not self.secrets_on: return self.deny(403, "secrets are off on this name")
-                    elif u.path == "/api/account-key": res = set_account_key(d.get("kind"), d.get("value"), delete=d.get("delete") is True)
+                    elif u.path == "/api/account-key": res = set_account_key(d)
                     else:
                         if not set_access(d): raise ValueError("that isn't a valid access setting")
                         res = {"ok": True}

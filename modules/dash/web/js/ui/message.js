@@ -6,7 +6,7 @@
 import { h, copyText } from "../core/dom.js";
 import { S, can, jget, SYS, OUTSIDE } from "../core/store.js";
 import { simpleOn, hiveName } from "../core/simple.js";
-import { isAgent, isRunning, displayText, postSource } from "../core/model.js";
+import { isAgent, isWarden, isRunning, displayText, postSource, btwParent, btwText } from "../core/model.js";
 import { clock, stamp, now, short, mdPlain, ago, DAY, MIN } from "../core/format.js";
 import { markdown, mdCut } from "./markdown.js";
 import { agentRef, threadRef } from "./refs.js";
@@ -39,11 +39,15 @@ export function delivery(p, m) {
     return now() - p.t < 3 * MIN ? { key: "queued", tone: "info", text: "Starting an agent…" } : { key: "unseen", tone: "bad", text: "No agent has started on this" };
   }
   if (!isAgent(m) || now() - p.t > 3 * DAY || p.from === m) return null;
+  // A post to the warden starts a fresh warden run (w + 4 hex), and one to a dead agent starts its heir: that run has it.
+  const took = (S.woke[p.id] || []).find(s => s.name !== m && !p.men.includes(s.name) && (s.heirOf === m || m === "warden" && isWarden(s.name) && s.name !== "rootwarden"));
+  if (took) return { key: "seen", tone: "good", text: `${took.name} took it for ${m}`, who: took.name };
   const q = S.pending[m], queued = q && (q.ids || []).includes(p.id);
   const set = DELIV.sets[m], last = S.lastSess[m];
   if ((set && set.has(p.id)) || (!queued && last && last.start >= p.t - 2000) || answered(p, m)) return { key: "seen", tone: "good", text: `Seen by ${m}`, who: m };
-  if (queued) return { key: "queued", tone: "info", text: `Waiting for ${m} to start`, who: m };
+  // A running agent gets the post from its hook after its current step, even while the starter also holds it for the next start.
   if (isRunning(m)) return { key: "waiting", tone: "warn", text: `${m} sees this after its current step`, who: m };
+  if (queued) return { key: "queued", tone: "info", text: `Waiting for ${m} to start`, who: m };
   // Just posted to a sleeping agent: the starter takes a moment to wake it, so it isn't "not reached" yet.
   if (now() - p.t < 2 * MIN) return { key: "queued", tone: "info", text: `Waking ${m}…`, who: m };
   return { key: "unseen", tone: "bad", text: `Hasn't reached ${m}`, who: m };
@@ -296,9 +300,16 @@ function copyBtn(p) {
   return button("Copy", (e, b) => copyText(displayText(p)).then(() => { b.dataset.done = ""; b.title = "Copied"; setTimeout(() => { delete b.dataset.done; b.title = "Copy"; }, 1400); }), { kind: "icon", size: "s", icon: "copy", cls: "msg-copy" });
 }
 
+// Between agents only trouble is worth a word (a running one sees its posts after its current step anyway), and it says who (the person, 11041326b458).
+function unseenNote(ms) {
+  if (!ms.length) return null;
+  const names = ms.length === 1 ? ms[0] : ms.slice(0, -1).join(", ") + " and " + ms.at(-1);
+  return h("span", { class: "msg-r", "data-tone": "bad", title: ms.map(m => `Hasn't reached ${m}`).join("\n") }, `${names} ${ms.length === 1 ? "hasn't" : "haven't"} seen this`);
+}
 /** The line above a message: author, who it went to, thread (outside a thread), who it woke, Reply, time. */
 export function messageHead(p, { showThread = true, mark } = {}) {
   if (!S.app.app) return devHead(p, showThread);
+  if (btwOpener(p)) return btwHead(p);
   const mine = OUTSIDE.has(p.from) && p.from === "person";
   const woke = (S.woke[p.id] || []).filter(s => !p.men.includes(s.name) || !s.resumed), tos = p.men.filter(m => m !== "new" && m !== p.from);
   const toYou = tos.length === 1 && tos[0] === "person";
@@ -312,11 +323,8 @@ export function messageHead(p, { showThread = true, mark } = {}) {
     mine ? h("b", { class: "msg-me", title: other ? src.said : "you (person)" }, other ? src.name : "You") : agentRef(p.from),
     src ? h("span", { class: "msg-src", title: src.said }, (src.name && src.name !== me && !other ? src.name + " · " : "") + src.how) : null,
     tos.length ? h("span", { class: "msg-to" }, toYou ? "to you" : "to") : null,
-    toYou ? null : tos.flatMap(m => {
-      const d = mine ? null : delivery(p, m);
-      // Between agents only trouble is worth a word: a running one sees its posts after its current step anyway.
-      return [m === "person" ? h("b", { class: "msg-me" }, "you") : agentRef(m), d && d.key === "unseen" ? h("span", { class: "msg-r", "data-tone": d.tone, title: d.text }, "hasn't seen this") : null];
-    }),
+    toYou ? null : tos.map(m => m === "person" ? h("b", { class: "msg-me" }, "you") : agentRef(m)),
+    toYou ? null : unseenNote(mine ? [] : tos.filter(m => delivery(p, m)?.key === "unseen")),
     showThread ? threadRef(p.th) : null,
     woke.length && !mine ? h("span", { class: "meta" }, woke.map(s => (s.resumed ? "woke " : "started ") + s.name).join(", ")) : null,
     h("time", { class: "meta num msg-time", datetime: p.at, title: stamp(p.t) }, clock(p.t)));
@@ -332,6 +340,18 @@ function messageActions(p, mark) {
     h("time", { class: "meta num", datetime: p.at, title: stamp(p.t) }, (mine && tos.length ? `to ${tos.join(", ")} · ` : "") + clock(p.t)));
 }
 
+// A side thread's first post: the hive opened it from a /btw, so it reads as the hive asking, not as a message the person typed here (11041319bbd0).
+const btwOpener = p => { if (p.from !== "person" || !btwParent(p.th)) return false; const d = S.threads.get(p.th); return !!d && !!d.posts[0] && d.posts[0].id === p.id; };
+function btwMessage(p, ws) {
+  const q = { ...p, disp: btwText(displayText(p)) };
+  return h("article", { class: "msg msg-btw", "data-key": p.id, "data-who": "agent", "aria-label": `${hiveName()}, side question, ${stamp(p.t)}` },
+    btwHead(p), body(q, ws));
+}
+function btwHead(p) {
+  return h("div", { class: "msg-h" }, h("b", null, hiveName()), h("span", { class: "meta" }, "side question from"), threadRef(btwParent(p.th)),
+    h("time", { class: "meta num msg-time", datetime: p.at, title: stamp(p.t) }, clock(p.t)));
+}
+
 /** opts: {showThread, mark: words to highlight, cont: same author as the post above, so the head folds away} */
 export function message(p, opts = {}) {
   if (!S.app.app) return devMessage(p, opts);
@@ -340,6 +360,7 @@ export function message(p, opts = {}) {
     const lc = displayText(p).toLowerCase(), f = fold(displayText(p));
     if (f && ws.some(w => lc.includes(w)) && !ws.some(w => (f.head + f.tail).toLowerCase().includes(w))) OPEN.add(p.id);
   }
+  if (btwOpener(p)) return btwMessage(p, ws);
   const kind = SYS.has(p.from) ? "sys" : p.from === "person" ? "me" : OUTSIDE.has(p.from) ? "out" : "agent";
   return h("article", { class: "msg", "data-key": p.id, "data-who": kind, "data-cont": opts.cont ? "" : null, "data-report": displayText(p).length > LONG ? "" : null, "aria-label": `${who(p.from)}, ${stamp(p.t)}` },
     messageHead(p, opts),

@@ -77,7 +77,7 @@ function ingestLog(items) {
     if (e.event === "start") {
       S.limitedNow.delete(e.session); // resumed: limitedSess keeps the history, limitedNow means still stopped
       const s = { out: e.out ? String(e.out).split("/").pop().replace(/\.jsonl$/, "") : null, name: e.name, session: e.session, start: t, end: null, exit: null,
-        thread: e.thread, from: e.from, post: e.post, resumed: !!e.resumed, model: e.model || null, effort: e.effort || null, harness: e.harness || null, provider: e.provider || null, login: e.login || null };
+        thread: e.thread, from: e.from, post: e.post, resumed: !!e.resumed, heirOf: e.heir_of || null, model: e.model || null, effort: e.effort || null, harness: e.harness || null, provider: e.provider || null, login: e.login || null };
       S.sessions.push(s); S.lastSess[e.name] = s; S.open[e.name + e.session] = s; S.agents.add(e.name);
       const by = e.from, re = !!e.resumed, known = by && by !== "anon";
       ledgerAdd({ t, kind: "agent", parts: [known ? { a: by } : "", known ? (re ? " woke " : " started ") : (re ? "Woke " : "Started "), { a: e.name }, e.thread ? " in " : "", e.thread ? { th: e.thread } : ""] }, ["started woke", e.name, by || "", e.thread || ""]);
