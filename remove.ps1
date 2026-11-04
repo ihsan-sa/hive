@@ -1,5 +1,5 @@
 # Uninstall the Hive on Windows. One line, in PowerShell:
-#   irm https://hivelab.ca/uninstall.ps1 | iex
+#   irm https://hive.ihsan.cc/uninstall.ps1 | iex
 # Deletes the Hive WSL system and everything in it, after you type delete. WSL itself and your other Linux systems stay.
 function Uninstall-Hive {
   $ErrorActionPreference = 'Stop'

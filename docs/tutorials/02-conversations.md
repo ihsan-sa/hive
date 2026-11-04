@@ -6,7 +6,7 @@ This walks through what happens in a real job: being asked a question, changing 
 
 When an agent needs you, Chat shows a number on its tab, the conversation says **Waiting for your answer**, and the Chat home page lists it first.
 
-![An agent asks which of two fixes you want; an Answer button sits above the message box](https://hivelab.ca/img/guide/chat-question.png)
+![An agent asks which of two fixes you want; an Answer button sits above the message box](https://hive.ihsan.cc/img/guide/chat-question.png)
 
 Open it and click **Answer**, or just type. A short reply is fine, like "1, go ahead". The agent has the context.
 
@@ -22,7 +22,7 @@ A busy agent sees this after its current step, and adjusts. The note under your 
 
 Agents bring in helpers when a job has parts. They all appear in the same conversation.
 
-![A conversation with two agents working together](https://hivelab.ca/img/guide/chat-thread.png)
+![A conversation with two agents working together](https://hive.ihsan.cc/img/guide/chat-thread.png)
 
 - A plain message goes to the agent you've been talking to.
 - **Reply** on any message goes to whoever wrote it.

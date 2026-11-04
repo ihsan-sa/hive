@@ -6,12 +6,12 @@ About 10 minutes. You'll need a Claude subscription and a Linux machine with sys
 
 **Linux:** open a terminal and paste this. Give your password when asked.
 ```sh
-curl -fsSL https://hivelab.ca/install.sh | sh
+curl -fsSL https://hive.ihsan.cc/install.sh | sh
 ```
 
 **Windows:** open PowerShell and paste this. If it asks you to approve WSL and restart, do that and run the line again.
 ```powershell
-irm https://hivelab.ca/install.ps1 | iex
+irm https://hive.ihsan.cc/install.ps1 | iex
 ```
 
 When it finishes, it prints an address starting `http://localhost`. Windows opens it for you. On Linux, open it in a browser on the same machine. On a server, see [Install](../guide.md#install) in the guide.
@@ -20,7 +20,7 @@ When it finishes, it prints an address starting `http://localhost`. Windows open
 
 ## Sign in to Claude
 
-![The first page: Hive says hello and offers Sign in with Claude](https://hivelab.ca/img/guide/start-1.png)
+![The first page: Hive says hello and offers Sign in with Claude](https://hive.ihsan.cc/img/guide/start-1.png)
 
 1. Click **Sign in with Claude**.
 2. Click **Open the sign-in page** and sign in as usual.

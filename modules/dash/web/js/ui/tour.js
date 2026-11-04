@@ -6,7 +6,7 @@ import { simpleOn } from "../core/simple.js";
 import { go, parse } from "../core/router.js";
 import { OUT } from "./composer.js";
 
-export const HELP = "https://hivelab.ca/guide/";   // export.sh swaps the site name for its placeholder, then fills that in
+export const HELP = "https://hive.ihsan.cc/guide/";   // export.sh swaps the site name for its placeholder, then fills that in
 const SEEN = "hive.tour.seen", SEEN_SIMPLE = "hive.tour.seen.simple";
 
 const here = () => parse().id;

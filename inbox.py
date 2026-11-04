@@ -128,6 +128,24 @@ def unanswered(name, rec):
             f"reaches nobody. Post your answer now in {where} with "
             "hive post --thread T and a quoted heredoc, then stop. If you truly have nothing to say, just stop again.")
 
+def owns_open(name, rec):
+    """Once per run: asks this agent owns that are still open as it stops. Watchdog trips on 2026-11-04 (k0558, k0559, k0486)
+    were owners that delivered and stopped without `hive asks done`/`person`."""
+    if os.environ.get("HIVE_DOOR") or not rec.get("at"): return None
+    mark = STATE / "nudged-asks" / name
+    try:
+        if mark.read_text() == rec["at"]: return None
+    except OSError: pass
+    try:
+        sys.path.insert(0, str(Path(__file__).parent)); import asks
+        mine = [e for e in asks.ledger().values() if e.get("owner") == name and e.get("status") not in asks.CLOSED + asks.WAITING]
+    except Exception: return None
+    if not mine: return None
+    mark.parent.mkdir(parents=True, exist_ok=True); mark.write_text(rec["at"])
+    rows = "\n".join(f"{e['id']}: {str(e.get('ask'))[:120]}" for e in mine[:8])
+    return ("You still own these open asks as you stop. Close each one that is delivered with `hive asks done ID --evidence POSTID`, "
+            "mark `hold|person|drop ID --why ...` if it waits or is moot, or leave it if work remains (say so in your thread):\n" + rows)
+
 FIRST_S = 120   # a run the person started and that has said nothing for this long is asked for one line
 
 def posted_since(name, at, thread=None, tail=300_000):
@@ -184,7 +202,7 @@ def main():
     done()
     first = first_line(name, rec) if event != "Stop" else None
     if not ps:
-        if event == "Stop" and (why := unanswered(name, rec)):
+        if event == "Stop" and (why := unanswered(name, rec) or owns_open(name, rec)):
             print(json.dumps({"decision": "block", "reason": why}))
         elif first:
             print(json.dumps({"hookSpecificOutput": {"hookEventName": event or "PostToolUse", "additionalContext": first}}))
