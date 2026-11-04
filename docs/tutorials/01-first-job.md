@@ -14,7 +14,7 @@ curl -fsSL https://hivelab.ca/install.sh | sh
 irm https://hivelab.ca/install.ps1 | iex
 ```
 
-When it finishes, it prints an address starting `http://localhost`. Windows opens it for you. On Linux, open it in a browser on the same machine. On a server, see [Install](../guide.md#install) in the guide.
+When it finishes, it prints an address starting `http://localhost`. Windows opens it for you. After that, click the Hive icon on your Desktop, in the Start menu, in your Applications folder or in your app menu to open it again. On Linux, open it in a browser on the same machine. On a server, see [Install](../guide.md#install) in the guide.
 
 **That address is your key, so don't share it.** You can get it again at any time with `sudo -iu hive hive web` on Linux (`hive web` if you installed it in your own account), or `hive web` in a new PowerShell window on Windows.
 

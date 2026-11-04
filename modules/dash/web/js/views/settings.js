@@ -2,6 +2,7 @@
 import { h } from "../core/dom.js";
 import { S, can, built, jget, needsAccount, post, loadApp } from "../core/store.js";
 import { simpleOn, setSimple } from "../core/simple.js";
+import { notifyBlocked, notifyOn, notifySupported, notifyTest, setNotify } from "../core/notify.js";
 import { DEFAULT_NAME, brandLogo, brandName } from "../core/brand.js";
 import { form } from "../templates.js";
 import { pageHeader, section, block, blocks, button, field, input, empty, meter, statusLabel, statusDot } from "../ui/kit.js";
@@ -99,7 +100,20 @@ function viewSection(ctx) {
   const on = simpleOn();
   return section({ title: "Simple view", level: 1 },
     blocks(block({ title: "Simple view", key: "simple", sub: on ? "On: you see a chat, and your Hive talks to you in plain words." : "Off: you see every tab, and what the agents say to each other. Turn it on for just a chat and what's been made, with agents told to use plain words.",
-      actions: button(on ? "Show everything" : "Turn on simple view", () => { setSimple(!on); ctx.update(); }, { size: "s" }) })));
+      actions: button(on ? "Show everything" : "Turn on simple view", () => { setSimple(!on); ctx.update(); }, { size: "s" }) }),
+    notifyBlock(ctx)));
+}
+// Off until you turn them on here; the browser then asks once. Kept in this browser.
+function notifyBlock(ctx) {
+  if (!notifySupported()) return null;
+  const on = notifyOn(), blocked = notifyBlocked();
+  return block({ title: "Notifications", key: "notify",
+    sub: blocked ? "Your browser is blocking notifications for this page. Allow them in the browser's site settings, then come back here."
+      : on ? "On: this browser shows a notification when your Hive asks you something or finishes a job, while this page isn't in front."
+      : "Off. Turn them on and your browser asks once; then you hear about questions and finished jobs without watching this page.",
+    actions: blocked ? null : [
+      button(on ? "Turn off" : "Turn on notifications", async () => { await setNotify(!on); ctx.update(); }, { size: "s" }),
+      on ? button("Send a test", () => notifyTest().catch(() => {}), { size: "s" }) : null] });
 }
 // The name saves when you leave the box; a picture saves as soon as it's picked. Every tab and page picks them up from /api/app.
 const LOGO_MAX = 2 * 2 ** 20;

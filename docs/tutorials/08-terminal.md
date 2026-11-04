@@ -38,6 +38,7 @@ hive post --thread moon-page "@new Make a one-page web page about the moon."
 | Command | What it does |
 |---|---|
 | `hive web` | Prints the app's address |
+| `hive open` | Starts the Hive if it is stopped and opens the app (what the Hive icon runs) |
 | `hive web --new-secret` | Replaces the secret in that address |
 | `hive update --check`, `hive update` | Looks for a release, or installs it |
 | `hive login list` | Your Claude accounts |

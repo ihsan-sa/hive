@@ -20,6 +20,12 @@ bwrap_note() {
   fi
 }
 
+# The app-menu icon get.sh made, in the account that ran it (yours). Only the one it made.
+launcher_gone() {
+  D="${XDG_DATA_HOME:-$HOME/.local/share}"
+  if grep -qs '^# made by the Hive install' "$D/applications/hive.desktop"; then rm -f "$D/applications/hive.desktop" "$D/icons/hicolor/512x512/apps/hive.png"; fi
+}
+
 this_account() {
   [ "$(id -u)" != 0 ] || die "--this-account is for your own account, and this is root"
   H="${HIVE_DIR:-$HOME/hive}"; H="${H%/}"
@@ -47,6 +53,7 @@ this_account() {
   W="$HOME/.local/bin/hive"
   if grep -qs '^# made by the Hive install' "$W"; then rm -f "$W"; fi
   rm -rf "${H:?}"
+  launcher_gone
   echo "Removed."
   bwrap_note
 }
@@ -75,6 +82,7 @@ main() {
   $ROOT pkill -KILL -u "$U" 2>/dev/null || true
   sleep 1
   $ROOT userdel -r "$U" 2>/dev/null || die "couldn't delete $U; check for its processes and run: sudo userdel -r $U"
+  launcher_gone
   echo "Removed."
   bwrap_note
 }
