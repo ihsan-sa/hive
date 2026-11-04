@@ -131,7 +131,8 @@ def codex_limits(pc, timeout=20):
     finally: p.kill(); p.wait()
     acct = (got.get(2) or {}).get("result") or {}
     lim = got.get(3) or {}
-    return {"account": acct.get("account"), "limits": lim.get("result"), "error": (lim.get("error") or {}).get("message")}
+    return {"account": acct.get("account"), "limits": lim.get("result"), "error": (lim.get("error") or {}).get("message"),
+            "answered": 2 in got}   # no account/read reply (slow app-server, busy box) is not "logged out"
 
 def windows(limits):
     """[(used percent, resets_at epoch or None, minutes)] for each window Codex reports (5-hour, weekly), however it nests them."""
@@ -152,7 +153,8 @@ def codex_room(pc, cache):
     if not hit or time.time() - hit[0] >= pc.get("check_s", 120):
         try:
             s = codex_limits(pc)
-            if not s["account"]: why = f"Codex isn't logged in (as this account: CODEX_HOME={codex_home(pc)} codex login --device-auth)"
+            if not s.get("answered", True): why = "Codex check failed (no reply from codex app-server)"
+            elif not s["account"]: why = f"Codex isn't logged in (as this account: CODEX_HOME={codex_home(pc)} codex login --device-auth)"
             else:
                 full = [w for w in windows(s["limits"]) if w[0] >= pc.get("stop_pct", 95)]
                 why = f"Codex limit at {full[0][0]:.0f}% (stop at {pc.get('stop_pct', 95)}%)" if full else None
@@ -217,7 +219,7 @@ def status(c, max_age=300):
                 s = codex_limits(pc)
                 out[name] = {"kind": "codex", "logged_in": bool(s["account"]), "plan": (s["account"] or {}).get("planType"),
                              "stop_pct": pc.get("stop_pct", 95), "windows": [{"used": u, "resets": r, "minutes": m} for u, r, m in windows(s["limits"])],
-                             "error": None if s["account"] else "not logged in"}
+                             "error": None if s["account"] else "not logged in" if s.get("answered", True) else "no reply from codex app-server"}
             elif pc.get("harness") == "kimi":
                 out[name] = {"kind": "kimi", "logged_in": kimi_logged_in(pc), "runs": kimi_live_runs(name), "max_runs": pc.get("max_runs", 3),
                              "error": None if kimi_logged_in(pc) else "not logged in"}

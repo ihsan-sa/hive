@@ -1,124 +1,211 @@
-// The Agent page: one agent's numbers, what it runs on, its corner of the hive, activity, sessions and posts.
+// The Agent page: one agent. What it is doing now and whether it is stuck, its numbers, its cost over its life,
+// its recent steps, its threads, what it changed, who it talks to, its sessions and posts.
 // agentPage(name) is the whole page; the side panel (ui/panel.js) draws the same thing in a narrower container.
 import { h } from "../core/dom.js";
 import { S, OUTSIDE, SYS, jget, loadAgentCosts } from "../core/store.js";
 import { agentCard, agentSpend, agentState, agentStatus, isAgent, isRunning, isWarden, modelName, WARDEN_HINT, sEnd, displayText } from "../core/model.js";
-import { dur, mdPlain, money, pct, plural, short, stamp, toks } from "../core/format.js";
+import { DAY, HOUR, MIN, ago, dur, mdPlain, money, now, pct, plural, short, stamp, toks } from "../core/format.js";
 import { threadHref } from "../core/router.js";
 import { metrics, cols } from "../templates.js";
-import { button, defs, empty, pageHeader, rank, section, share, statusLabel, stats, wardenBadge } from "../ui/kit.js";
+import { button, defs, empty, legend, list, note, pageHeader, rank, section, share, statusLabel, stats, wardenBadge } from "../ui/kit.js";
 import { table } from "../ui/table.js";
 import { agentRef, copyButton, threadRef } from "../ui/refs.js";
-import { message, pollDelivered } from "../ui/message.js";
-import { ego } from "../ui/ego.js";
+import { message, pollDelivered, fileUrl } from "../ui/message.js";
+import { contacts, lifeChart, priceBuckets, stepFor, tokenLine } from "../ui/agentviz.js";
 import { feed, toolTone } from "../ui/feed.js";
 import { killButton } from "../actions.js";
 
-// ---- the feed: /api/agent, for one agent at a time (the panel closes when the full page opens) ----
-const F = { name: null, items: null, sig: "" };
+// ---- what the server reads for one agent at a time (the panel closes when the full page opens) ----
+// F: /api/agent, its latest tool calls and words. W: /api/agent-work, files it changed, commits, PRs and tokens per 5 min.
+const F = { name: null, items: null, sig: "" }, W = { name: null, data: null, sig: "", at: 0 };
+async function loadWork(n, onChange) {
+  W.at = now();
+  try {
+    const r = await jget("/api/agent-work?name=" + encodeURIComponent(n)) || {};
+    // fill what's missing: the preview fixtures and older servers send nothing or only part of it
+    const d = { files: [], commits: [], prs: [], b: [], nfiles: 0, ncommits: 0, ...r }, sig = JSON.stringify(d);
+    for (const k of ["files", "commits", "prs", "b"]) if (!Array.isArray(d[k])) d[k] = [];
+    d.nfiles = d.nfiles || d.files.length; d.ncommits = d.ncommits || d.commits.length;
+    if (W.name === n && sig !== W.sig) { W.data = d; W.sig = sig; onChange(); }
+  } catch (e) {}
+}
 export async function loadFeed(n, onChange) {
   if (F.name !== n) { Object.assign(F, { name: n, items: null, sig: "" }); loadAgentCosts().then(onChange); }
+  if (W.name !== n) { Object.assign(W, { name: n, data: null, sig: "", at: 0 }); loadWork(n, onChange); }
   try {
     const items = await jget("/api/agent?name=" + encodeURIComponent(n)), sig = JSON.stringify(items);
     if (F.name === n && sig !== F.sig) { F.items = items; F.sig = sig; onChange(); }
   } catch (e) {}
 }
 
-/** What the page and the panel poll: the feed while it's running, and the read marks on its posts. */
+/** What the page and the panel poll: the feed while it's running (its work every 20 s), and the read marks on its posts. */
 export async function pollAgent(n, onChange) {
-  if (isRunning(n)) loadFeed(n, onChange);
+  if (isRunning(n)) { loadFeed(n, onChange); if (now() - W.at > 20e3) loadWork(n, onChange); }
   if (await pollDelivered()) onChange();
 }
 
 // ---- what the page reads: scans the board and sessions, so once per data change, not once per poll ----
 let memo = { key: null };
 function gather(n) {
-  const key = `${n}|${S.ver}|${S.uver}`;
+  const key = `${n}|${S.ver}|${S.uver}|${W.sig.length}|${W.name}`;
   if (memo.key === key) return memo;
   const ss = S.sessions.filter(x => x.name === n), mine = S.posts.filter(p => p.from === n), toMe = S.posts.filter(p => p.men.includes(n) && p.from !== n);
   const first = ss.find(x => !x.resumed) || ss[0], active = ss.reduce((a, x) => a + Math.max(0, sEnd(x) - x.start), 0);
-  let cost = 0; const tk = [0, 0, 0, 0], tools = {}, byOut = {}, models = {};
+  let cost = 0; const tk = [0, 0, 0, 0], tools = {}, byOut = {}, models = {}, hours = {};
   if (S.usage) for (const x of ss) {
     const f = x.out && S.usage.files[x.out]; if (!f) continue;
     cost += f.c; byOut[x.out] = f.c;
     for (let i = 0; i < 4; i++) tk[i] += f.t[i];
     for (const k in f.m) models[k] = (models[k] || 0) + f.m[k];
     for (const k in f.tools) tools[k] = (tools[k] || 0) + f.tools[k];
+    for (const k in f.h || {}) hours[k] = (hours[k] || 0) + f.h[k];
   }
-  const counts = {};
-  for (const p of mine) for (const m of p.men) if (m !== n && (isAgent(m) || OUTSIDE.has(m))) counts[m] = (counts[m] || 0) + 1;
-  for (const p of toMe) if (!SYS.has(p.from)) counts[p.from] = (counts[p.from] || 0) + 1;
-  const links = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+  // who it talks to: posts it wrote naming them, posts they wrote naming it
+  const C = {}, at = m => (C[m] ||= { name: m, sent: 0, got: 0, tags: [], last: 0 });
+  for (const p of mine) for (const m of new Set(p.men)) if (m !== n && (isAgent(m) || OUTSIDE.has(m))) { const c = at(m); c.sent++; c.last = Math.max(c.last, p.t); }
+  for (const p of toMe) if (!SYS.has(p.from)) { const c = at(p.from); c.got++; c.last = Math.max(c.last, p.t); }
   const started = S.sessions.filter(x => !x.resumed && x.from === n), startedNames = [...new Set(started.map(x => x.name))];
   const chain = []; let cur = first;
   for (let i = 0; cur && cur.from && i < 8; i++) {
     chain.unshift(cur.from); if (!isAgent(cur.from)) break;
     cur = S.sessions.find(x => x.name === cur.from && !x.resumed) || S.sessions.find(x => x.name === cur.from);
   }
-  const ths = {};
-  for (const x of ss) ths[x.thread] = ths[x.thread] || 0;
-  for (const p of mine) ths[p.th] = (ths[p.th] || 0) + 1;
-  const threads = Object.keys(ths).sort((a, b) => ths[b] - ths[a]);
+  const parent = first && first.from && first.from !== "anon" ? first.from : null;
+  if (parent && !SYS.has(parent)) at(parent).tags.push("started it");
+  for (const m of startedNames) at(m).tags.push("it started");
+  const contactRows = Object.values(C).sort((a, b) => b.sent + b.got - (a.sent + a.got) || b.last - a.last || (a.name < b.name ? -1 : 1));
+  // its threads: sessions there, posts there, when it was last there
+  const T = {}, th = t => (T[t] ||= { name: t, posts: 0, runs: 0, last: 0 });
+  for (const x of ss) { const r = th(x.thread); r.runs++; r.last = Math.max(r.last, sEnd(x)); }
+  for (const p of mine) { const r = th(p.th); r.posts++; r.last = Math.max(r.last, p.t); }
+  const threads = Object.values(T).filter(r => r.name).sort((a, b) => b.last - a.last);
   const toolList = Object.entries(tools).sort((a, b) => b[1] - a[1]).slice(0, 8);
   const spend = agentSpend(n, { c: cost, t: tk, m: models }), turns = ss.reduce((a, x) => a + ((S.usage && x.out && S.usage.files[x.out] && S.usage.files[x.out].turns) || 0), 0);
   const toolCalls = Object.values(tools).reduce((a, b) => a + b, 0);
-  return memo = { key, ss, mine, toMe, first, active, spend, turns, toolCalls, byOut, links, started, startedNames, chain, threads, toolList };
+  const attached = mine.flatMap(p => (p.files || []).map(f => ({ p, f })));
+  return memo = { key, ss, mine, toMe, first, active, spend, turns, toolCalls, byOut, contactRows, started, startedNames, chain, threads, toolList, hours, attached, life: null };
 }
 
 const ended = x => (!x.end ? (isRunning(x.name) ? "running" : "unknown") : x.exit === 0 ? "finished" : x.exit === 143 ? "stopped by a signal" : x.exit == null ? "ended, no exit code" : S.limitedSess.has(x.session) ? "usage limit" : `exit ${x.exit}`);
+const endTone = x => (!x.end ? (isRunning(x.name) ? "good" : "quiet") : x.exit === 0 || x.exit === 143 || x.exit == null ? "ended" : S.limitedSess.has(x.session) ? "warn" : "bad");
+
+// ---- its life on one time axis: cost per step, sessions, posts ----
+const SPAN_MAX = 14 * DAY;
+function life(n, D) {
+  const { ss, mine, toMe, spend } = D, L = isRunning(n);
+  const times = [...ss.map(x => x.start), ...mine.map(p => p.t)];
+  if (!times.length) return null;
+  const end = Math.max(L ? now() : 0, ...ss.map(sEnd), ...mine.map(p => p.t));
+  let t0 = Math.min(...times); const clipped = end - t0 > SPAN_MAX; if (clipped) t0 = end - SPAN_MAX;
+  const work = W.name === n && W.data && W.data.b && W.data.b.length ? W.data.b : null;
+  let step = stepFor(Math.max(end - t0, 30 * MIN), 48); if (!work) step = Math.max(step, HOUR);
+  t0 = Math.floor(t0 / step) * step;
+  const N = Math.max(1, Math.ceil((end - t0) / step)), t1 = t0 + N * step;
+  let bars;
+  if (work) {
+    bars = priceBuckets(work, t0, step, N, spend.usd || 0).map(b => ({ v: b.v, tip: b.calls ? [`about ${money(b.v)}, ${plural(b.calls, "model call")}`, tokenLine(b.t)] : ["no model calls"] }));
+  } else {
+    bars = Array.from({ length: N }, () => ({ v: 0 }));
+    for (const k in D.hours) { const i = Math.floor((k * 1e3 - t0) / step); if (i >= 0 && i < N) bars[i].v += D.hours[k]; }
+    bars.forEach(b => (b.tip = [b.v ? money(b.v) : "no cost counted"]));
+  }
+  const lanes = ss.filter(x => sEnd(x) >= t0).map(x => ({ a: Math.max(x.start, t0), b: sEnd(x), tone: endTone(x), tip: `${x.resumed ? "resumed" : "started"} in ${x.thread} by ${x.from || "?"}, ${ended(x)}` }));
+  const ticks = [...mine.filter(p => p.t >= t0).map(p => ({ t: p.t, kind: "out" })), ...toMe.filter(p => p.t >= t0 && !SYS.has(p.from)).map(p => ({ t: p.t, kind: "in" }))];
+  const total = bars.reduce((a, b) => a + b.v, 0);
+  return { chart: lifeChart({
+    t0, t1, step, bars, lanes, ticks, top: m => money(m),
+    label: `${n}'s cost per ${dur(step)} from ${stamp(t0)} to ${stamp(t1)}: ${money(total)} in all`,
+    legend: legend([
+      { label: "Cost", text: `per ${dur(step)}${work ? ", split by tokens" : ""}`, tone: "info" },
+      { label: "Sessions", text: "grey ended, green running, red failed, amber at a limit", tone: "ended" },
+      { label: "Ticks", text: "dark: it wrote, light: it was named", tone: "ink" },
+    ]),
+  }), note: (clipped ? "Last 14 days. " : "") + (work ? "Each bar is its share of the total by tokens used then, so it's an estimate." : "By hour, from the cost of each finished turn.") };
+}
+
+// ---- the parts ----
+function nowBlock(n, L) {
+  if (!L) return null;
+  const st = agentState(L), task = S.byId[L.post], quiet = L.last ? now() - L.last * 1e3 : null;
+  const rows = h("dl", { class: "ac-dl" },
+    task ? [h("dt", null, "Asked"), h("dd", null, `${task.from === "person" && S.app.app ? "you" : task.from}: `, short(mdPlain(displayText(task)), 600))] : null,
+    L.said ? [h("dt", null, "Said"), h("dd", null, L.said)] : null,
+    [h("dt", null, "Last step"), h("dd", null, quiet == null ? "none yet" : quiet < MIN ? "just now" : ago(L.last * 1e3))]);
+  return st.key === "stuck" ? note({ tone: "bad", title: `Looks stuck: ${st.text}`, actions: killButton(n), key: "stuck" }, rows) : rows;
+}
+
+function changed(n, D, host) {
+  const w = W.name === n ? W.data : null, panel = host === "panel";
+  if (!w) return empty("Reading…", { kind: "loading" });
+  const limited = w.nfiles && !w.files.length;
+  const parts = [];
+  if (w.prs.length) parts.push(section({ title: "Pull requests", level: null }, list(w.prs.map((x, i) => ({ key: "pr" + i, title: x.x, meta: ago(x.t * 1e3) })), { dense: true })));
+  if (w.commits.length) parts.push(section({ title: "Commits", note: w.ncommits > w.commits.length ? `newest ${w.commits.length} of ${w.ncommits}` : null }, list(w.commits.map((x, i) => ({ key: "c" + i + x.t, title: x.x, meta: ago(x.t * 1e3) })), { dense: true, limit: panel ? 4 : 10 })));
+  if (w.files.length) parts.push(section({ title: "Files", note: `${plural(w.nfiles, "file")}, newest first` },
+    h("ul", { class: "wf" }, w.files.slice(0, panel ? 8 : 30).map(f => h("li", { "data-key": f.p, title: `${f.p}: ${plural(f.n, "change")}${f.k === "shell" ? " from the shell" : ""}, last ${stamp(f.t * 1e3)}` },
+      h("code", null, "\u200e" + f.p + "\u200e"), h("span", { class: "meta" }, `${f.n > 1 ? f.n + "× · " : ""}${ago(f.t * 1e3)}`)))),
+    w.files.length > (panel ? 8 : 30) ? h("p", { class: "meta" }, `and ${w.files.length - (panel ? 8 : 30)} more`) : null));
+  if (D.attached.length) parts.push(section({ title: "Files it posted" }, h("ul", { class: "wf" }, D.attached.slice(-8).reverse().map(({ p, f }) => h("li", { "data-key": p.id + f.name },
+    h("a", { href: fileUrl(p, f), target: "_blank", rel: "noopener" }, f.name), h("span", { class: "meta" }, ago(p.t)))))));
+  if (limited) parts.push(h("p", { class: "meta" }, `${plural(w.nfiles, "file")} changed, ${plural(w.ncommits, "commit")}; your sign-in sees counts only.`));
+  return parts.length ? h("div", { class: "stack" }, parts) : empty("Nothing it edited, committed or posted shows in its logs.");
+}
 
 /** The whole page for one agent. Used by the view and by the panel. */
 export function agentPage(n, host = "page") {
   if (!S.live) return empty("Reading…", { kind: "loading" });
-  const D = gather(n), L = S.running.get(n), st = agentStatus(n), task = L && S.byId[L.post];
-  const state = L ? agentState(L).text : null;
-  const { ss, mine, toMe, first, spend, links, started, startedNames, threads, toolList } = D;
-  const tk = spend.t, read = tk[0] + tk[2] + tk[3], byModel = Object.entries(spend.m || {}).filter(x => x[1] > 0).sort((a, b) => b[1] - a[1]), corner = ego({ name: n, links, started: startedNames, threads, parent: first && first.from, version: D.key, host });
-  const line = [D.chain.length ? `Started by ${D.chain.join(" → ")} → ${n}` : null, first ? `first seen ${stamp(first.start)}` : null];
-  return h("div", { "data-key": n }, metrics({
+  const D = gather(n), L = S.running.get(n), st = agentStatus(n), panel = host === "panel";
+  const { ss, mine, toMe, spend, contactRows, started, threads, toolList } = D;
+  if (!D.life) D.life = life(n, D) || {};
+  const tk = spend.t, read = tk[0] + tk[2] + tk[3], byModel = Object.entries(spend.m || {}).filter(x => x[1] > 0).sort((a, b) => b[1] - a[1]);
+  const line = [D.chain.length ? `Started by ${D.chain.join(" → ")}` : null, D.first ? `first seen ${stamp(D.first.start)}` : null];
+  const w = W.name === n ? W.data : null;
+  const last = mine[mine.length - 1];
+  return h("div", { class: "agp", "data-key": n, "data-host": host }, metrics({
     header: pageHeader({
       title: h("span", { class: "ref-wrap" }, n, isAgent(n) ? copyButton("@" + n) : null, isWarden(n) ? wardenBadge(WARDEN_HINT) : null),
-      lead: L ? L.doing || "Starting" : isWarden(n) ? WARDEN_HINT : null,
+      lead: L ? L.doing || "Starting" : isWarden(n) ? WARDEN_HINT : last ? `Last said: ${short(mdPlain(displayText(last)), 220)}` : null,
+      tone: L && agentState(L).key === "stuck" ? "bad" : null,
       actions: [button("All their posts", null, { href: threadHref("@" + n), size: "s" }), L ? threadRef(L.thread) : null, L ? killButton(n) : null],
-      meta: [st.key === "outside" ? null : statusLabel(st.key, state || st.label || null, { live: isRunning(n) }), ...line],
-      after: L && (task || L.said) ? h("dl", { class: "ac-dl" },
-        task ? [h("dt", null, "Asked"), h("dd", null, `${task.from === "person" && S.app.app ? "you" : task.from}: `, short(mdPlain(displayText(task)), 600))] : null,
-        L.said ? [h("dt", null, "Said"), h("dd", null, L.said)] : null) : null,
+      meta: [st.key === "outside" ? null : statusLabel(st.key, st.label || null, { live: isRunning(n) }), ...line],
+      after: [nowBlock(n, L), defs(agentCard(n))],
     }),
     sections: [
-      defs(agentCard(n)),
       section({ title: "In numbers" }, stats([
-        { label: "Cost", value: S.usage ? money(spend.usd) : "…", note: (spend.sub ? `${money(spend.sub)} of it in subagents; ` : "") + "at API list prices", title: `From the ${spend.src}.` + (L ? " A turn under way may not be counted yet." : "") },
-        { label: "Tokens", value: toks(tk[0] + tk[1] + tk[2] + tk[3]), note: `${toks(tk[1])} written, ${toks(read)} read, ${pct(tk[2], read)} from cache` },
-        spend.calls != null ? { label: "Model calls", value: spend.calls.toLocaleString(), note: D.turns ? plural(D.turns, "finished turn") : null } : null,
-        D.toolCalls ? { label: "Tool calls", value: D.toolCalls.toLocaleString(), note: toolList[0] ? `most: ${toolList[0][0]}` : null } : null,
-        { label: "Time running", value: ss.length ? dur(D.active) : "none", note: plural(ss.length, "session") },
-        { label: "Posts written", value: mine.length, note: `${plural(toMe.length, "mention")} of it by others` },
-        { label: "Agents it started", value: started.length, note: started.length ? plural(new Set(started.map(x => x.thread)).size, "thread") : "none" },
-        { label: "Talks with", value: links.length, note: links.length ? `most with ${links[0][0]}` : "nobody yet" },
+        { label: "Cost", value: S.usage ? money(spend.usd) : "…", note: `${toks(tk[0] + tk[1] + tk[2] + tk[3])} tokens, ${pct(tk[2], read)} of reads from cache` + (spend.sub ? `; ${money(spend.sub)} in subagents` : ""), title: `At API list prices, from the ${spend.src}.` + (byModel.length > 1 ? " " + byModel.map(([k, v]) => `${modelName(k)} ${money(v)}`).join(", ") + "." : "") + (L ? " A turn under way may not be counted yet." : "") },
+        { label: "Time running", value: ss.length ? dur(D.active) : "none", note: plural(ss.length, "session") + (spend.calls != null ? `, ${spend.calls.toLocaleString()} model calls` : "") },
+        { label: "Posts", value: mine.length, note: `named in ${plural(toMe.length, "post")}; ${plural(threads.length, "thread")}` },
+        { label: "Changed", value: w ? plural(w.nfiles, "file") : "…", note: w ? [plural(w.ncommits, "commit"), w.prs.length ? plural(w.prs.length, "PR") : null, started.length ? `started ${plural(D.startedNames.length, "agent")}` : null].filter(Boolean).join(", ") : null },
       ])),
+      D.life.chart ? section({ title: "Over its life", note: D.life.note }, D.life.chart) : null,
       cols(
+        section({ title: "Recent steps", note: "tool calls and what it said, newest first" },
+          toolList.length ? share(toolList.map(([k, v]) => ({ key: k, label: k, value: v, tone: toolTone(k), text: String(v) })), { label: "Tool calls by tool" }) : null,
+          feed(F.name === n ? F.items : null)),
         h("div", { class: "stack" },
-          section({ title: "Its corner of the hive", note: corner ? "Thicker line: more messages. Arrow: started. Box: thread. Drag a node; ctrl+scroll or pinch zooms." : null }, corner || empty("No exchanges yet.")),
-          startedNames.length ? section({ title: "Started" }, h("div", { class: "ref-row" }, startedNames.slice(0, 30).map(x => h("span", { "data-key": x }, agentRef(x, { copy: true }))))) : null,
-          threads.length ? section({ title: "Threads" }, h("div", { class: "ref-row" }, threads.slice(0, 16).map(x => h("span", { "data-key": x }, threadRef(x))))) : null,
-          byModel.length > 1 ? section({ title: "Cost by model" }, rank(byModel.map(([k, v]) => ({ key: k, label: modelName(k), value: v, text: money(v) })))) : null,
-          toolList.length ? section({ title: "What it reached for" },
-            share(toolList.map(([k, v]) => ({ key: k, label: k, value: v, tone: toolTone(k), text: String(v) })), { label: "Tool calls by tool" }),
-            rank(toolList.map(([k, v]) => ({ key: k, label: k, value: v, text: String(v), tone: toolTone(k) })))) : null),
-        section({ title: "Latest activity", note: "tool calls and what it said, newest first" }, feed(F.name === n ? F.items : null))),
+          section({ title: "Threads", note: threads.length > 1 ? "latest first" : null }, table({
+            rows: threads.slice(0, panel ? 6 : 20), key: r => r.name, empty: "No threads.", caption: `${n}'s threads`,
+            columns: [
+              { label: "Thread", render: r => [threadRef(r.name), L && L.thread === r.name ? h("span", { class: "meta" }, " · on it now") : null] },
+              { label: "Posts", num: true, render: r => r.posts },
+              { label: "Runs", num: true, render: r => r.runs },
+              { label: "Last", num: true, render: r => ago(r.last) },
+            ],
+          })),
+          section({ title: "Who it talks to", note: "posts naming each other" }, contacts(contactRows, { limit: panel ? 8 : 16 })))),
+      section({ title: "What it changed", note: w && w.nfiles ? "from its tool calls; edits made from the shell are found where they can be" : null }, changed(n, D, host)),
       section({ title: "Sessions", note: "Cost per session is from its session log, so these can add up to less than the total above." }, table({
-        rows: [...ss].reverse().slice(0, 40), key: x => String(x.start), empty: "No sessions.", caption: `${n}'s sessions`,
+        rows: [...ss].reverse().slice(0, panel ? 8 : 40), key: x => String(x.start), empty: "No sessions.", caption: `${n}'s sessions`,
         columns: [
           { label: "Started", render: x => stamp(x.start) },
           { label: "Thread", render: x => threadRef(x.thread) },
           { label: "Woken by", render: x => [x.from && isAgent(x.from) ? agentRef(x.from) : x.from || "?", x.resumed ? " (resumed)" : ""] },
           { label: "Ran", num: true, render: x => dur(sEnd(x) - x.start) },
           { label: "Cost", num: true, render: x => (x.out && D.byOut[x.out] != null ? money(D.byOut[x.out]) : "–") },
-          { label: "How it ended", render: ended },
+          { label: "How it ended", render: x => h("span", { class: "sess-end", "data-tone": endTone(x) }, ended(x)) },
         ],
       })),
-      section({ title: "Latest posts" }, mine.length ? h("div", { class: "msg-col" }, mine.slice(-12).reverse().map(p => message(p))) : empty("No posts yet.")),
+      section({ title: "Latest posts" }, mine.length ? h("div", { class: "msg-col" }, mine.slice(panel ? -5 : -12).reverse().map(p => message(p))) : empty("No posts yet.")),
     ],
   }));
 }

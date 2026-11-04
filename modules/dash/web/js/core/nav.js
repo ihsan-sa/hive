@@ -18,6 +18,7 @@ export const APP_NAV = {
   noRow: ["comms", "settings", "agent"],         // Full-height or already has its own side list: these pages show no row. The tab stays lit.
   belongs: { agent: "now" },                     // Lights a tab without being a page in its row.
   more: ["design", "made"],
+  icons: ["settings"],                           // Main places drawn as an icon at the right of the bar, not as a word tab (redesign 2026-11-04).
 };
 // Simple mode: only these. The rest stays reachable by "Show everything" under More.
 export const SIMPLE_NAV = { main: ["comms", "settings"], more: [], only: true };
@@ -44,5 +45,6 @@ export function layout(views, nav, on, current) {
   const active = tab && shown.has(tab) ? tab : null;
   const members = active && groups[active] ? groups[active].map(id => by.get(id)).filter(v => v && on(v)) : [];
   const row = members.length > 1 && !(nav.noRow || []).includes(current) && members.some(v => v.id === current) ? members : null;
-  return { main, more, active, row };
+  const icons = new Set(nav.icons || []);
+  return { main: main.filter(v => !icons.has(v.id)), icons: main.filter(v => icons.has(v.id)), more, active, row };
 }

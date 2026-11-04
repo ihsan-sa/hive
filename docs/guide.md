@@ -18,7 +18,7 @@ Three things are worth knowing first.
 
 ## What you need
 
-- Linux with systemd (a laptop or a server, with or without sudo), or Windows 10 or 11. macOS isn't supported yet, though you can run it on a Linux server or virtual machine and open it from your Mac.
+- Linux with systemd (a laptop or a server, with or without sudo), or Windows 10 or 11. macOS has a test build that hasn't run on a real Mac yet. You can also run the Hive on a Linux server or virtual machine and open it from your Mac.
 - A Claude subscription, or an Anthropic API key.
 - Enough disk for your projects. The Hive itself is small, but some extras need gigabytes of tools.
 
@@ -148,7 +148,7 @@ When every account is past its line, new agents wait, and running ones finish th
 - **Version, Look for new releases, Update by itself:** see [Updates](#updates).
 - **Agents at once:** how many can work at the same time. Others wait their turn. More means faster, and your limits go faster too. Empty means no limit.
 - **Accounts:** sign in again, or add another subscription. New agents go to the one with the most left.
-- **Data sharing:** what's sent to the Hive's developer, if anything. It's all off until you turn something on.
+- **Data sharing:** what's sent to the Hive's developer, if anything. Failure reports and a daily check-in are on unless you turn them off; usage reports are off unless you turn them on. Nothing is sent before setup finishes.
 - **Model:** which Claude model new agents use, Sonnet unless you change it. For one agent, choose a model in the message box, write `@opus`, `@sonnet`, `@haiku`, `@fable` or `@astra`, or put `--model opus` in the message. If your plan doesn't include the model you picked, agents can't start until you pick another.
 - **Power:** who approves a step outside the sandbox. See [Before you install](#before-you-install).
 - **Sandbox:** whether it works on this machine, and the choice to [run without it](#running-without-the-sandbox).
@@ -257,7 +257,7 @@ Installs have run on clean Ubuntu 22.04, 24.04 and 26.04 and Debian 12, and over
 
 Your Hive looks for a new release every 5 minutes, or as often as **Look for new releases** says in Settings, and installs it. Your settings and your agents' committed changes stay. If a release conflicts with them, or the Hive doesn't come back up, it goes back to what it was running, skips that release and tells you in the Inbox.
 
-Updates are code that runs as the Hive's account. Updates aren't signed, so whoever controls the GitHub repo can run code on every Hive that updates by itself. If you'd rather read each release first, turn off **Update by itself**. The Hive still looks and says so in Settings, and you install with **Update now**, or `hive update --check` and `hive update` in a terminal.
+Updates are code that runs as the Hive's account. Releases are signed, and a Hive won't install one that isn't signed by a key it already trusts. Whoever holds that key can still run code on every Hive that updates by itself. A Hive on 2.3.8 or older takes the first signed release on trust. If you'd rather read each release first, turn off **Update by itself**. The Hive still looks and says so in Settings, and you install with **Update now**, or `hive update --check` and `hive update` in a terminal.
 
 ## Backups
 

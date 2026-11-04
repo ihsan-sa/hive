@@ -50,7 +50,7 @@ function walkthrough(ctx, s) {
       foot(false, anyAccount() ? button("Next: what to share", () => go(2), { kind: "primary" }) : h("span", { class: "meta" }, "Add one account to go on."))
     );
   }
-  if (F.step === 2) return page(card("data", "What to share with the Hive's developer", p("Here's what each one holds, and where it goes. It's your choice, and all of it starts off."), sharePart(up)),
+  if (F.step === 2) return page(card("data", "What to share with the Hive's developer", p("Here's what each one holds, and where it goes. It's your choice: failure reports start on, the other two start off, and nothing is sent until you finish setup."), sharePart(up)),
     foot(true, button("Next: how much power", () => go(3), { kind: "primary" })));
   return page(card("power", "How much power the Hive has", p("The middle one is where it starts."), powerPart(up)),
     card("sandbox-step", "The sandbox on this machine", sandboxPart(up)),

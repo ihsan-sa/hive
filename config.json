@@ -24,5 +24,11 @@
   "keeper_idle_s": 1800,
   "improve_every_s": 0,
   "auto_update": true,
-  "spawn_model": "sonnet"
+  "spawn_model": "sonnet",
+  "models": [
+    "haiku",
+    "sonnet",
+    "opus",
+    "fable"
+  ]
 }

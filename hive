@@ -65,7 +65,13 @@ def settings_model():
     try: v = json.loads((HOME / "settings.json").read_text())
     except (OSError, ValueError): return None
     return v.get("model") if isinstance(v, dict) else None
-FRESH = ("new", "claude", "codex", "free", "opus", "sonnet", "haiku", "fable", "astra")  # words that start a fresh agent (SPAWN in starter.py)
+def _claude_models():
+    """The Claude model words, weakest first: config.json "models". A new model is one line there, not an edit in each file."""
+    try: m = json.loads((CORE / "config.json").read_text()).get("models")
+    except (OSError, ValueError): m = None
+    return tuple(m) if isinstance(m, list) and m and all(isinstance(x, str) and re.fullmatch(r"[a-z][a-z0-9.-]*", x) for x in m) else ("haiku", "sonnet", "opus", "fable")
+CLAUDE_MODELS = _claude_models()
+FRESH = ("new", "claude", "codex", "free", *CLAUDE_MODELS, "astra")  # words that start a fresh agent (SPAWN in starter.py)
 HASH_NAME = re.compile(r"[a-z][0-9a-f]{4,}")  # what new/claude/codex/free/warden hand out (a9aba, c12cd, f12cd, w0e1f)
 
 def agents(c):
@@ -239,11 +245,30 @@ def cmd_wait(a):
         time.sleep(3)
     print("no post before the timeout"); sys.exit(1)
 
+def starter_proc():
+    """A process is running this install's starter.py. starter.json is saved only after each loop, so a door
+    opened right after the starter (not under systemd, or just after boot) would otherwise call it stopped."""
+    want = str((CORE / "starter.py").resolve())
+    for d in Path("/proc").iterdir():
+        if not d.name.isdigit(): continue
+        try: a = (d / "cmdline").read_bytes().split(b"\0")
+        except OSError: continue
+        if len(a) > 1 and b"python" in Path(a[0].decode(errors="replace")).name.encode() and a[1]:
+            try: arg = Path(a[1].decode(errors="replace"))
+            except ValueError: continue
+            if not arg.is_absolute():
+                try: arg = Path(os.readlink(d / "cwd")) / arg
+                except OSError: continue
+            try:
+                if str(arg.resolve()) == want: return True
+            except OSError: pass
+    return False
+
 def door(extra):
     """The person's way in: an ordinary Claude Code session in ~, told it is the door (door.md), signed as person.
     `hive` resumes the same conversation, `hive --new` starts another; other args go to claude."""
     st = STATE / "starter.json"
-    if not st.exists() or time.time() - st.stat().st_mtime > 60:
+    if (not st.exists() or time.time() - st.stat().st_mtime > 60) and not starter_proc():
         print("Note: the starter isn't running, so posts won't start agents. Try: systemctl --user start hive-starter", file=sys.stderr)
     try: login = str(Path(json.loads((CORE / "config.json").read_text())["logins"][0]).expanduser())
     except (OSError, ValueError, KeyError, IndexError): login = str(HOME / ".claude")
@@ -443,11 +468,11 @@ def read_cfg(): return json.loads((CORE / "config.json").read_text())
 
 def post_model(m):
     """--model: a Claude alias, or provider:model where provider is in config.json's providers (see starter.provider_of)."""
-    if m in ("opus", "sonnet", "haiku", "fable"): return m
+    if m in CLAUDE_MODELS: return m
     try: provs = read_cfg().get("providers", {})
     except (OSError, ValueError): provs = {}
     if re.match(r"^([a-z0-9-]+):([A-Za-z0-9][A-Za-z0-9._/:@-]*)$", m) and m.split(":", 1)[0] in provs: return m
-    raise argparse.ArgumentTypeError(f"{m!r}: use opus, sonnet, haiku, fable or provider:model with a provider from {sorted(provs) or 'config.json providers (none set)'}")
+    raise argparse.ArgumentTypeError(f"{m!r}: use {', '.join(CLAUDE_MODELS)} or provider:model with a provider from {sorted(provs) or 'config.json providers (none set)'}")
 
 def write_cfg(c):
     t = CORE / f".config.json.{os.getpid()}"
@@ -655,7 +680,7 @@ p.add_argument("--reply-to", dest="reply_to", metavar="ID", help="the post this 
 p.add_argument("--file", action="append", help="attach a file (repeatable): copied to ~/files/<post id>/, shown in hive read, Slack and the dashboard")
 p.add_argument("text", nargs="*"); p.set_defaults(f=cmd_post)
 p = sp.add_parser("model", help="hive model haiku|sonnet|opus|fable WHY...: carry on with this conversation on another model. It posts WHY in your thread; end your turn and you resume on that model with your memory")
-p.add_argument("to_model", choices=("haiku", "sonnet", "opus", "fable"), metavar="MODEL"); p.add_argument("why", nargs="+"); p.set_defaults(f=cmd_model)
+p.add_argument("to_model", choices=CLAUDE_MODELS, metavar="MODEL"); p.add_argument("why", nargs="+"); p.set_defaults(f=cmd_model)
 p = sp.add_parser("read", help="hive read [--thread T] [--since 2h|ISO] [--from X] [--to X] [--id ID] [-n 30, 0 for all] [--short: one line per post]")
 p.add_argument("--thread"); p.add_argument("--since"); p.add_argument("--from", dest="from_"); p.add_argument("--to")
 p.add_argument("--id"); p.add_argument("-n", type=int, default=30); p.add_argument("--short", action="store_true"); p.set_defaults(f=cmd_read)

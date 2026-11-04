@@ -10,7 +10,8 @@ import { isAgent, isRunning, displayText, postSource } from "../core/model.js";
 import { clock, stamp, now, short, mdPlain, ago, DAY, MIN } from "../core/format.js";
 import { markdown, mdCut } from "./markdown.js";
 import { agentRef, threadRef } from "./refs.js";
-import { button, statusDot } from "./kit.js";
+import { agentHref } from "../core/router.js";
+import { button, icon, statusDot } from "./kit.js";
 import { replyTo } from "./composer.js";
 
 // ---- read marks ----
@@ -78,6 +79,7 @@ export function messageReceipt(p) {
 export const IMG = /\.(png|jpe?g|gif|webp)$/i;
 const TXT = /\.(txt|md|log|json|jsonl|csv|tsv|py|js|mjs|ts|sh|c|h|cpp|v|sv|vh|yaml|yml|toml|ini|cfg|xml|html|css|go|rs|kicad_pcb|kicad_sch|net|sp|cir|spice|lef|def|sdc|tcl)$/i;
 export const fileUrl = (p, f) => `/files/${encodeURIComponent(p.id)}/${encodeURIComponent(f.name)}`;
+export const PDF = /\.pdf$/i;
 export const PAGE = /\.html?$/i;
 export const pageUrl = (p, f) => fileUrl(p, f) + "?view=1";
 export const fsize = n => (n == null ? "" : n >= 1048576 ? (n / 1048576).toFixed(1) + " MB" : n >= 1024 ? Math.round(n / 1024) + " kB" : n + " B");
@@ -89,6 +91,8 @@ function attachment(p, f) {
     h("img", { src: u, alt: f.name, loading: "lazy" }), h("span", null, f.name));
   if (simpleOn() && PAGE.test(f.name)) return h("a", { class: "msg-file", title: "Open this page in a new tab", href: pageUrl(p, f), target: "_blank", rel: "noopener noreferrer" },
     h("b", null, "PAGE"), h("span", null, h("span", { class: "msg-fn" }, f.name), h("span", { class: "meta" }, "open the page")));
+  if (PDF.test(f.name)) return h("button", { type: "button", class: "msg-file", title: "Click to read", onclick: () => viewFile(p, f) },
+    h("b", null, "PDF"), h("span", null, h("span", { class: "msg-fn" }, f.name), h("span", { class: "meta" }, fsize(f.size) + " · read")));
   const txt = TXT.test(f.name) && (f.size == null || f.size < 2 * 1048576);
   const props = txt ? { type: "button", onclick: () => viewFile(p, f) } : { href: u, download: f.name };
   return h(txt ? "button" : "a", { class: "msg-file", title: txt ? "Click to read" : "Download", ...props },
@@ -96,8 +100,9 @@ function attachment(p, f) {
     h("span", null, h("span", { class: "msg-fn" }, f.name), h("span", { class: "meta" }, fsize(f.size) + (txt ? " · read" : " · download"))));
 }
 
+const MD = /\.(md|markdown)$/i;
 function viewFile(p, f) {
-  const all = (p.files || []).filter(x => IMG.test(x.name) || TXT.test(x.name));
+  const all = (p.files || []).filter(x => IMG.test(x.name) || TXT.test(x.name) || PDF.test(x.name));
   let i = Math.max(0, all.findIndex(x => x.name === f.name));
   const stage = h("div", { class: "viewer-s" }), cap = h("div", { class: "meta viewer-c" }), open = h("a", { class: "btn", "data-size": "s", target: "_blank", rel: "noopener" }, "Open original");
   const dlg = h("dialog", { class: "viewer", "aria-label": "File viewer" },
@@ -115,11 +120,17 @@ function viewFile(p, f) {
       im.addEventListener("click", () => im.toggleAttribute("data-full"));
       stage.replaceChildren(im); return;
     }
+    if (PDF.test(g.name)) { open.href = pageUrl(p, g); stage.replaceChildren(h("iframe", { class: "viewer-pdf", src: pageUrl(p, g), title: g.name })); return; }
     const pre = h("pre", null, "Loading…"); stage.replaceChildren(pre);
     try {
       const r = await fetch(u, { cache: "no-store" }); if (!r.ok) throw Error(r.status);
       let t = await r.text(); const cut = t.length > 400000; if (cut) t = t.slice(0, 400000);
       pre.textContent = t + (cut ? "\n\n… (cut here; open the original for the rest)" : "");
+      if (MD.test(g.name)) {   // Markdown shows formatted, with the plain text one press away
+        const md = markdown(t + (cut ? "\n\n… (cut here; open the original for the rest)" : ""));
+        let plain = false; const flip = button("Plain text", () => { plain = !plain; stage.replaceChildren(plain ? pre : md, flip); flip.textContent = plain ? "Formatted" : "Plain text"; }, { size: "s", cls: "viewer-t" });
+        stage.replaceChildren(md, flip);
+      }
     } catch (e) { pre.textContent = "Couldn't load it: " + e.message; }
   }
   dlg.addEventListener("keydown", e => { if (all.length > 1 && e.key === "ArrowRight") show(i + 1); if (all.length > 1 && e.key === "ArrowLeft") show(i - 1); });
@@ -150,6 +161,27 @@ function fold(t) {
   return { head: b.slice(0, i).join("\n\n"), tail: b.slice(j).join("\n\n"), lines: mid.split("\n").filter(l => l.trim()).length, chars: mid.length };
 }
 
+// Fold parsed blocks, so fences, footnotes and inline formatting remain intact.
+// Native details keep their children (and selection); the owned body survives morphs.
+const SECTIONS = new Map();
+function report(t, id, ws) {
+  const md = markdown(t), nodes = [...md.children];
+  const heads = nodes.filter(n => /^H[1-6]$/.test(n.tagName));
+  if (heads.length < 3) return null;
+  const level = [1, 2, 3, 4, 5, 6].find(l => heads.filter(n => n.tagName === "H" + l).length >= 3);
+  if (!level) return null;
+  const starts = nodes.map((n, i) => n.tagName === "H" + level ? i : -1).filter(i => i >= 0);
+  if (starts.length < 3) return null;
+  for (let k = 1; k < starts.length - 1; k++) {
+    const first = nodes[starts[k]], content = nodes.slice(starts[k] + 1, starts[k + 1]);
+    const key = id + ":" + k, match = ws?.some(w => content.some(n => n.textContent.toLowerCase().includes(w.toLowerCase())));
+    const section = h("details", { class: "rc-sec", open: match || SECTIONS.get(key) || false,
+      ontoggle: (e, d) => { if (e.target === d) SECTIONS.set(key, d.open); } }, h("summary", null, first.cloneNode(true)), content);
+    first.replaceWith(section);
+  }
+  return h("div", { class: "msg-b", "data-own": "", "data-sig": t + ":" + (ws || []).join() }, markBody(md, ws));
+}
+
 // ---- the whole post: copy it, or see it as written ----
 const SOURCE = new Set(); let menuFor = null;
 function sourceView(p, ws) {
@@ -162,7 +194,7 @@ function sourceView(p, ws) {
 const flash = (b, text) => copyText(text).then(() => { const was = b.textContent; b.dataset.ok = ""; b.textContent = "Copied"; setTimeout(() => { delete b.dataset.ok; b.textContent = was; }, 1400); }, () => {});
 function closeMenu() {
   document.querySelector(".rc-menu")?.remove();
-  document.querySelector('.rc-moreb[aria-expanded="true"]')?.setAttribute("aria-expanded", "false");
+  document.querySelector('.rc-moreb[aria-expanded="true"], .msg-moreb[aria-expanded="true"]')?.setAttribute("aria-expanded", "false");
   menuFor = null;
 }
 addEventListener("click", e => { if (menuFor && !e.target.closest?.(".rc-more,dialog.fb")) closeMenu(); }, true);
@@ -207,7 +239,9 @@ export function markBody(el, ws) {
 
 function body(p, ws) {
   if (SOURCE.has(p.id)) return sourceView(p, ws);
-  const t = displayText(p), f = t.length > LONG && !OPEN.has(p.id) ? fold(t) : null;
+  const t = displayText(p);
+  if (t.length > LONG) { const r = report(t, p.id, ws); if (r) return r; }
+  const f = t.length > LONG && !OPEN.has(p.id) ? fold(t) : null;
   if (!f) return h("div", { class: "msg-b" }, markBody(markdown(t), ws));
   return h("div", { class: "msg-b", "data-folded": "" },
     markBody(markdown(f.head), ws),
@@ -223,7 +257,12 @@ const who = n => (n === "person" ? "You" : simpleOn() ? hiveName() : n);
 function quote(p) {
   const q = S.byId[p.reply_to];
   return h("button", { type: "button", class: "msg-q", title: q ? "Go to the message this answers" : `Answers post ${p.reply_to}, not loaded here`, onclick: () => jumper && jumper(p.reply_to) },
-    h("b", null, q ? who(q.from) : "An earlier message"), h("span", null, q ? short(mdPlain(displayText(q)), 140) : p.reply_to));
+    icon("reply"), h("b", null, q ? who(q.from) : "An earlier message"), h("span", null, q ? short(mdPlain(displayText(q)), 140) : p.reply_to));
+}
+
+// Copy the message's text. The tick shows for a moment, then the icon comes back.
+function copyBtn(p) {
+  return button("Copy", (e, b) => copyText(displayText(p)).then(() => { b.dataset.done = ""; b.title = "Copied"; setTimeout(() => { delete b.dataset.done; b.title = "Copy"; }, 1400); }), { kind: "icon", size: "s", icon: "copy", cls: "msg-copy" });
 }
 
 /** The line above a message: author, who it went to, thread (outside a thread), who it woke, Reply, time. */
@@ -239,20 +278,27 @@ export function messageHead(p, { showThread = true, mark } = {}) {
     mine ? h("b", { class: "msg-me" }, other ? src.name : "You") : h("b", null, OUTSIDE.has(p.from) ? who(p.from) : hiveName()),
     h("span", { class: "msg-end" }, more(p, mark), h("time", { class: "meta num", datetime: p.at, title: stamp(p.t) }, clock(p.t))));
   return h("div", { class: "msg-h" },
-    mine ? h("b", { class: "msg-me", title: other ? src.said : "you (person)" }, other ? src.name : "You") : agentRef(p.from, { copy: true }),
+    mine ? h("b", { class: "msg-me", title: other ? src.said : "you (person)" }, other ? src.name : "You") : agentRef(p.from),
     src ? h("span", { class: "msg-src", title: src.said }, (src.name && src.name !== me && !other ? src.name + " · " : "") + src.how) : null,
     tos.length ? h("span", { class: "msg-to" }, toYou ? "to you" : "to") : null,
     toYou ? null : tos.flatMap(m => {
       const d = mine ? null : delivery(p, m);
       // Between agents only trouble is worth a word: a running one sees its posts after its current step anyway.
-      return [m === "person" ? h("b", { class: "msg-me" }, "you") : agentRef(m, { copy: !mine }), d && d.key === "unseen" ? h("span", { class: "msg-r", "data-tone": d.tone, title: d.text }, "hasn't seen this") : null];
+      return [m === "person" ? h("b", { class: "msg-me" }, "you") : agentRef(m), d && d.key === "unseen" ? h("span", { class: "msg-r", "data-tone": d.tone, title: d.text }, "hasn't seen this") : null];
     }),
     showThread ? threadRef(p.th) : null,
     woke.length && !mine ? h("span", { class: "meta" }, woke.map(s => (s.resumed ? "woke " : "started ") + s.name).join(", ")) : null,
-    h("span", { class: "msg-end" },
-      S.app.app && can("post") ? button("Reply", () => replyTo(p), { kind: "quiet", size: "s", cls: "msg-reply", title: "Reply to this message; it goes to its author" }) : null,
-      more(p, mark),
-      h("time", { class: "meta num", datetime: p.at, title: stamp(p.t) }, clock(p.t))));
+    h("time", { class: "meta num msg-time", datetime: p.at, title: stamp(p.t) }, clock(p.t)));
+}
+
+/** Under the message, shown on hover or focus: Reply, Copy, ⋯ and the time. Own messages carry the To in Reply's title. */
+function messageActions(p, mark) {
+  const mine = p.from === "person", tos = p.men.filter(m => m !== "new" && m !== p.from);
+  return h("div", { class: "msg-end" },
+    can("post") ? button("Reply", () => replyTo(p), { kind: "icon", size: "s", icon: "reply", cls: "msg-reply", title: mine && tos.length ? `Reply · this went to ${tos.join(", ")}` : "Reply to this message; it goes to its author" }) : null,
+    copyBtn(p),
+    more(p, mark),
+    h("time", { class: "meta num", datetime: p.at, title: stamp(p.t) }, (mine && tos.length ? `to ${tos.join(", ")} · ` : "") + clock(p.t)));
 }
 
 /** opts: {showThread, mark: words to highlight, cont: same author as the post above, so the head folds away} */
@@ -264,17 +310,57 @@ export function message(p, opts = {}) {
     if (f && ws.some(w => lc.includes(w)) && !ws.some(w => (f.head + f.tail).toLowerCase().includes(w))) OPEN.add(p.id);
   }
   const kind = SYS.has(p.from) ? "sys" : p.from === "person" ? "me" : OUTSIDE.has(p.from) ? "out" : "agent";
-  return h("article", { class: "msg", "data-key": p.id, "data-who": kind, "data-cont": opts.cont ? "" : null, "aria-label": `${who(p.from)}, ${stamp(p.t)}` },
+  return h("article", { class: "msg", "data-key": p.id, "data-who": kind, "data-cont": opts.cont ? "" : null, "data-report": displayText(p).length > LONG ? "" : null, "aria-label": `${who(p.from)}, ${stamp(p.t)}` },
     messageHead(p, opts),
     p.reply_to ? quote(p) : null,
     body(p, ws),
     files.length ? h("div", { class: "msg-files" }, files.map(f => attachment(p, f))) : null,
-    messageReceipt(p));
+    messageReceipt(p),
+    simpleOn() ? null : messageActions(p, ws));
 }
 
 // ---- the developer route: a dense log, as it was. Arrows and marks in the head, long posts cut short. ----
-const DEV_LONG = 700, DEV_CUT = 600;
-const devText = p => (p.text.length > DEV_LONG && !OPEN.has(p.id) ? mdCut(p.text, DEV_CUT) : p.text);
+const DEV_LONG = 700, DEV_CUT = 600, RAW = new Set();
+// The leading run of @names, when every one is a recipient the head already shows, and the "reply to message <id>:" line when the post answers one. Mentions inside the sentence stay; ⋯ › Raw post shows it all.
+function devBody(p) {
+  if (p.dev != null) return p.dev;
+  let t = String(p.text || ""); const m = t.match(/^(?:@[a-z][\w-]*[\s,:]*)+/i);
+  if (m && [...m[0].matchAll(/@([a-z][\w-]*)/gi)].every(x => p.men.includes(x[1]))) t = t.slice(m[0].length);
+  if (p.reply_to) t = t.replace(/^reply to message [0-9a-f]+:\s*/i, "");
+  return (p.dev = t);
+}
+const devText = p => (devBody(p).length > DEV_LONG && !OPEN.has(p.id) ? mdCut(devBody(p), DEV_CUT) : devBody(p));
+function devBodyEl(p, ws) {
+  if (RAW.has(p.id)) return h("pre", { class: "md msg-raw" }, p.text);
+  const t = devText(p);
+  if (OPEN.has(p.id) && t.length > LONG) {
+    const r = report(t, p.id, ws);
+    if (r) { const md = r.firstElementChild; md.dataset.own = ""; md.dataset.sig = r.dataset.sig; return md; }
+  }
+  return markBody(markdown(t), ws);
+}
+const moreLabel = p => OPEN.has(p.id) ? "Show less" : `Show all · ${devBody(p).length.toLocaleString("en-US")} characters`;
+// On hover, top right: Copy text, Copy link, and ⋯ for the raw post, its id and the author's page. Reply only where this address can post.
+function devTools(p, ws) {
+  const flash = b => { b.dataset.done = ""; setTimeout(() => delete b.dataset.done, 1400); };
+  const open = menuFor === p.id, menu = () => h("div", { class: "rc-menu", role: "menu" },
+    h("button", { type: "button", role: "menuitem", onclick: (e, b) => {
+      const m = b.closest(".msg"); closeMenu();
+      if (RAW.has(p.id)) RAW.delete(p.id); else RAW.add(p.id);
+      m?.querySelector(".md")?.replaceWith(devBodyEl(p, ws));
+    } }, RAW.has(p.id) ? "Back to the post" : "Raw post"),
+    h("button", { type: "button", role: "menuitem", onclick: () => { copyText(p.id); closeMenu(); } }, `Copy post id · ${p.id}`),
+    SYS.has(p.from) || OUTSIDE.has(p.from) ? null : h("a", { role: "menuitem", href: agentHref(p.from), onclick: closeMenu }, `${p.from}'s page`));
+  return h("div", { class: "msg-tools" },
+    can("post") ? button("Reply", () => replyTo(p), { kind: "icon", size: "s", icon: "reply", title: "Reply" }) : null,
+    button("Copy text", (e, b) => copyText(devBody(p)).then(() => flash(b)), { kind: "icon", size: "s", icon: "copy", title: "Copy text" }),
+    button("Copy link", (e, b) => copyText(`${location.origin}${location.pathname}${location.search}#comms/${encodeURIComponent(p.th)}/${p.id}`).then(() => flash(b)), { kind: "icon", size: "s", icon: "link", title: "Copy link" }),
+    h("span", { class: "rc-more" },
+      h("button", { type: "button", class: "btn msg-moreb", "data-kind": "icon", "data-size": "s", "aria-haspopup": "menu", "aria-expanded": String(open), "aria-label": "More for this post", title: "More", onclick: (e, b) => {
+        const was = menuFor === p.id; closeMenu();
+        if (!was) { menuFor = p.id; b.setAttribute("aria-expanded", "true"); b.parentNode.append(menu()); }
+      } }, icon("more")), open ? menu() : null));
+}
 function devReceipt(p, m) {
   const d = delivery(p, m); if (!d || m === "new") return null;
   return h("span", { class: "msg-r", "data-tone": d.tone, title: d.text, "aria-label": d.text }, RMARK[d.key]);
@@ -286,26 +372,29 @@ function devHead(p, showThread) {
     tos.length ? h("span", { class: "msg-to", "aria-label": "to" }, "→") : null,
     tos.flatMap(m => [agentRef(m, { copy: true }), devReceipt(p, m)]),
     showThread ? threadRef(p.th) : null,
-    p.reply_to ? h("span", { class: "meta", title: `This answers post ${p.reply_to}` }, `↩ ${p.reply_to}`) : null,
-    woke.length ? h("span", { class: "meta" }, woke.map(s => (s.resumed ? "woke " : "started ") + s.name).join(", ")) : null,
+    p.reply_to ? h("span", { class: "msg-chip meta", title: `This answers post ${p.reply_to}` }, `↩ ${p.reply_to}`) : null,
+    woke.length ? h("span", { class: "msg-chip meta" }, woke.map(s => (s.resumed ? "woke " : "started ") + s.name).join(", ")) : null,
     h("span", { class: "msg-end" }, h("time", { class: "meta num", datetime: p.at, title: p.at }, clock(p.t))));
 }
 function devMessage(p, opts) {
-  const long = p.text.length > DEV_LONG, files = p.files || [], ws = opts.mark;
+  const long = devBody(p).length > DEV_LONG, files = p.files || [], ws = opts.mark;
   // A word found past the cut would look like a false match: open the post so it shows.
   if (long && ws && ws.length && !OPEN.has(p.id)) {
     const lc = p.text.toLowerCase(), cut = mdCut(p.text, DEV_CUT).toLowerCase();
     if (ws.some(w => lc.includes(w)) && !ws.some(w => cut.includes(w))) OPEN.add(p.id);
   }
-  return h("article", { class: "msg", "data-key": p.id, "data-who": SYS.has(p.from) ? "sys" : p.from === "person" || p.from === "box" ? "person" : null },
+  const cut = el => { if (long && !OPEN.has(p.id) && !RAW.has(p.id)) el.dataset.cut = ""; return el; };
+  return h("article", { class: "msg", "data-key": p.id, "data-who": SYS.has(p.from) ? "sys" : p.from === "person" || p.from === "box" ? "person" : null, "data-cont": opts.cont ? "" : null, "data-report": long ? "" : null },
     devHead(p, opts.showThread !== false),
-    markBody(markdown(devText(p)), ws),
+    devTools(p, ws),
+    cut(devBodyEl(p, ws)),
     files.length ? h("div", { class: "msg-files" }, files.map(f => attachment(p, f))) : null,
-    long ? button(OPEN.has(p.id) ? "Show less" : `Show all ${p.text.length} characters`, (e, b) => {
+    long ? button(moreLabel(p), (e, b) => {
       if (OPEN.has(p.id)) OPEN.delete(p.id); else OPEN.add(p.id);
-      b.closest(".msg").querySelector(".md").replaceWith(markBody(markdown(devText(p)), ws));
-      b.textContent = OPEN.has(p.id) ? "Show less" : `Show all ${p.text.length} characters`;
-    }, { kind: "quiet", size: "s", cls: "msg-more" }) : null);
+      b.closest(".msg").querySelector(".md").replaceWith(cut(devBodyEl(p, ws)));
+      b.querySelector("span").textContent = moreLabel(p);
+      b.setAttribute("aria-expanded", String(OPEN.has(p.id)));
+    }, { kind: "quiet", size: "s", cls: "msg-more", icon: "chevron" }) : null);
 }
 
 /** A message on its way: {lid, text, files:[File], url per image, state: sending|sent|failed, err}. actions: {retry, edit, discard} */
@@ -315,7 +404,7 @@ export function localMessage(it, { retry, edit, discard }) {
     h("div", { class: "msg-h" }, h("b", { class: "msg-me" }, "You"),
       it.to && !simpleOn() ? [h("span", { class: "msg-to" }, "to"), it.to === "new" ? h("span", { class: "muted" }, "a new agent") : agentRef(it.to)] : null,
       h("span", { class: "msg-end" }, h("time", { class: "meta num" }, clock(it.t)))),
-    it.reply ? h("div", { class: "msg-q", "data-static": "" }, h("b", null, who(it.reply.from)), h("span", null, short(mdPlain(displayText(it.reply)), 140))) : null,
+    it.reply ? h("div", { class: "msg-q", "data-static": "" }, icon("reply"), h("b", null, who(it.reply.from)), h("span", null, short(mdPlain(displayText(it.reply)), 140))) : null,
     it.text.trim() ? h("div", { class: "msg-b" }, markdown(it.text)) : null,
     it.files.length ? h("div", { class: "msg-files" }, it.files.map(f => f.url
       ? h("span", { class: "msg-thumb" }, h("img", { src: f.url, alt: f.name }), h("span", null, f.name))

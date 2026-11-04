@@ -154,7 +154,7 @@ export function keysPart(update) {
         button("Save key", null, { type: "submit", busy: isBusy("key") }))] : null,
     P.keySay ? sayMsg(P.keySay.text, P.keySay.tone) : null);
 }
-export const rootNote = () => P.page.accounts.root ? h("p", { class: "fmsg", "data-tone": "warn" }, "This computer account can use sudo without a password, so Hive won't run Codex or API-key models on it: an outside model must not share an account with root. Claude logins still work. Give Hive an account without sudo to use the others.") : null;
+export const rootNote = () => P.page.accounts.root ? h("p", { class: "fmsg", "data-tone": "warn" }, "This computer account can use sudo without a password, so the Hive won't run Codex or API-key models on it: an outside model must not share an account with root. Claude logins still work. Give the Hive an account without sudo to use the others.") : null;
 
 // ---- data sharing ----
 const SHARES = [
@@ -179,7 +179,7 @@ export function sharePart(update) {
       h("span", null, label, h("span", { class: "field-h" }, hint))))),
     on.everything && local() ? h("div", { class: "frow", "data-key": "send-copy" }, button("Send a copy now", () => sendCopy(update), { kind: "quiet", size: "s", busy: P.copyBusy })) : null,
     P.copySay ? sayMsg(P.copySay.text, P.copySay.tone) : null,
-    h("p", { class: "field-h" }, "All off until you turn one on. You can change this in Settings at any time."),
+    h("p", { class: "field-h" }, "Nothing is sent until you finish setup. You can change any of this in Settings at any time."),
     saveLine("share"), localOnly(), saveErr()];
 }
 

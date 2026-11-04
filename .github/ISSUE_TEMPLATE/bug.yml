@@ -1,0 +1,31 @@
+name: Something broke
+description: The install, the app or an agent did something wrong.
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what you expected
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Settings shows it, or run `hive update --check`.
+  - type: dropdown
+    id: os
+    attributes:
+      label: Where it runs
+      options: [Linux, Windows (WSL), macOS (test build), Other]
+  - type: dropdown
+    id: install
+    attributes:
+      label: How you installed it
+      options: [Its own user (default), In my own account (--this-account), Windows]
+  - type: textarea
+    id: log
+    attributes:
+      label: Output or log, if you have it
+      description: Take out names, addresses and anything private first.
+      render: text

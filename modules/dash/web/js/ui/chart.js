@@ -7,11 +7,12 @@ import { showTip, hideTip } from "./tip.js";
 /**
  * chart({title, note, series:[vals, vals2?], kind:"bar"|"step", start, step, fmt, max, top, mark, height, compact, area, key:[labels]})
  * series[0] is drawn as kind; further series as dashed lines. null values leave a gap.
+ * colors:[css color per series] draws every series as its own solid line in that color, with no area: one line per entity.
  */
 export function chart(o) {
   const series = o.series, N = series[0].length, max = o.max || Math.max(1, ...series.flat().map(v => v || 0));
   const W = 1000, H = 100, x = i => (i / N) * W, y = v => H * (1 - Math.min(v, max) / max);
-  const sig = JSON.stringify([series, o.mark, max, o.start, o.step, o.kind]);
+  const sig = JSON.stringify([series, o.mark, max, o.start, o.step, o.kind, o.colors]);
   const svg = s("svg", { viewBox: `0 0 ${W} ${H}`, preserveAspectRatio: "none", "aria-hidden": "true" });
   if (o.kind === "bar") {
     const w = W / N;
@@ -23,6 +24,7 @@ export function chart(o) {
     vals.forEach((v, i) => { if (v == null) { pen = false; return; } d += `${pen ? "L" : "M"}${x(i)} ${y(v)}L${x(i + 1)} ${y(v)}`; pen = true; });
     if (!d) return;
     const i0 = vals.findIndex(v => v != null);
+    if (o.colors) { svg.append(s("path", { class: "p-line", style: `--c:${o.colors[k]}`, d })); return; }
     if (k === 0 && o.area !== false) svg.append(s("path", { class: "p-area", d: d + `L${x(vals.length - 1 - [...vals].reverse().findIndex(v => v != null)) + W / N} ${H}L${x(i0)} ${H}Z` }));
     svg.append(s("path", { class: "p-line", "data-k": k, d }));
   });
@@ -40,8 +42,10 @@ export function chart(o) {
   });
   plot.addEventListener("pointerleave", () => { cross.style.display = "none"; hideTip(); });
 
-  const span = N * o.step, tick = span > 24 * HOUR ? 12 * HOUR : 6 * HOUR, ticks = [];
-  for (let t = Math.ceil(o.start / tick) * tick; t < o.start + span; t += tick) ticks.push(h("span", { style: `left:${((t - o.start) / span) * 100}%` }, hourLabel(t)));
+  const span = N * o.step, days = span > 3 * 24 * HOUR, tick = days ? 24 * HOUR : span > 24 * HOUR ? 12 * HOUR : span > 8 * HOUR ? 6 * HOUR : span > 2 * HOUR ? HOUR : HOUR / 4, ticks = [];
+  // Over a few days: one tick a day, at local midnight, named by its weekday.
+  const first = days ? new Date(o.start).setHours(24, 0, 0, 0) : Math.ceil(o.start / tick) * tick;
+  for (let t = first; t < o.start + span; t = days ? new Date(t).setHours(24, 0, 0, 0) : t + tick) ticks.push(h("span", { style: `left:${((t - o.start) / span) * 100}%` }, days ? new Date(t).toLocaleDateString([], { weekday: "short" }) : hourLabel(t)));
   return h("figure", { class: "chart", style: "margin:0", "data-compact": o.compact ? "" : null, "data-own": "", "data-sig": sig, "data-tone": o.tone || null },
     o.title ? h("figcaption", { class: "chart-h" }, h("b", null, o.title), o.note ? h("span", null, o.note) : null) : null,
     plot,

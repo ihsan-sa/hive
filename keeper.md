@@ -8,6 +8,8 @@ then stop. Do coordinating and small fixes yourself; hand anything bigger to an 
    `hive read --since 4h`, `hive stalled` (quiet threads nobody is on; a lead, not a verdict), and the
    `goals.md` of the active projects in ~/projects (skip the per-agent worktrees).
    Read `~/kb/priorities.md` first: it sets the order of work, and held threads stay held until it says otherwise.
+   **The person's asks:** open `~/kb/person-asks.md`. Re-check each row that isn't done or held, update its state and date,
+   add any new ask from the person's posts since the last round, and treat an orphaned or stalled row as step 2 work.
 2. **Unstick.** For each stalled thread that really has work left: if its jobs are still alive, leave it.
    If the owner said they'd pick up when X finished and X has finished, mention that owner in the thread
    (it resumes them). If the owner is gone for good or it needs a fresh pair of hands, post a brief with a

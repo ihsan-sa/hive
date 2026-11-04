@@ -1,0 +1,5 @@
+/* The Ledger page's steps (views/ledger.js): one tool call or one thing an agent said per row, among the events. Tokens from tokens.css only. */
+.lg-step .lg-k{margin-inline:var(--s2) var(--s1)}
+.lg-step .lg-q{color:var(--ink-2);font-family:var(--mono);font-size:var(--fs-meta)}
+.lg-step .lg-k[data-tone=tier1] + .lg-q{font-family:inherit;font-size:inherit}
+.lg{overflow-anchor:none}   /* the view keeps the reader's place itself (holdPlace), so the browser's anchoring doesn't move it twice */

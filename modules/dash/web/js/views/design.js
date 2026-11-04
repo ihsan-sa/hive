@@ -39,7 +39,7 @@ function accountsPart(v, ctx) {
   const row = a => {
     const here = session === a.name, other = !!session && !here;
     const why = other ? `The session is on ${session}. End it first.` : a.open ? null : `This account is ${a.closed_why}.`;
-    return h("tr", { "data-key": a.name },
+    return h("tr", { "data-key": a.name, "data-closed": a.open || here ? null : "" },
       h("td", { "data-label": "Account" }, h("strong", null, a.name), here ? h("span", { class: "meta dhere" }, "in session") : null),
       h("td", { "data-label": "Plan" }, a.plan || h("span", { class: "muted" }, "Not known")),
       h("td", { "data-label": "Claude Design" }, designCell(a)),
@@ -54,7 +54,7 @@ function accountsPart(v, ctx) {
   return section({ title: "Your Claude accounts", key: "accounts", note: session ? `one session at a time: this one is on ${session}` : "start a session on any of them; it ends by itself after 6 hours" },
     h("div", { class: "tbl-w" }, h("table", { class: "tbl dacct" },
       h("thead", null, h("tr", null, h("th", null, "Account"), h("th", null, "Plan"), h("th", null, "Claude Design"), cc ? h("th", null, "Agents' access") : null, h("th", null, "This week"), h("th", null, h("span", { class: "vh" }, "Actions")))),
-      h("tbody", null, v.accounts.map(row)))),
+      h("tbody", null, sorted(v.accounts, session).map(row)))),
     h("p", { class: "field-h dfoot" }, "You can make new designs without approving anything. ",
       cc ? `Approving lets agents open and change the projects you already have at claude.ai/design. It asks you to sign in only if it needs to, and goes away when standalone Claude Design closes on ${designDate(v.connect_until)}. ` : null,
       h("a", { href: GUIDE, target: "_blank", rel: "noreferrer noopener" }, "Which plans include it")));
@@ -90,11 +90,19 @@ function sessionPart(v, ctx) {
       h("span", { class: "frow dright" }, button(D.full ? "Show less" : "Show whole session", () => { D.full = !D.full; stuck = true; redraw(ctx); }, { size: "s", kind: "quiet" }), button("Save it for the hive", () => setText(SAVE, true), { size: "s", title: `Fills in the message; Send sends it. Saved designs go under ${v.dir}, where agents can read them.` }))));
 }
 
+// Designs as cards, newest first: a name worth reading (its brief, else the thread it was made for), where it came from, and Open.
+const designName = l => l.brief || (l.by ? `Design for ${l.by}` : "Untitled design");
 const linksPart = (v, ctx) => v.links && v.links.length ? section({ title: "Your designs", note: "only you can open them until you share them; export to PNG or PDF from a design's page", key: "links" },
-  h("ul", { class: "list" }, v.links.map(l => h("li", { class: "lr", "data-key": l.url },
-    h("div", { class: "lr-in frow fsplit" },
-      h("span", { class: "dname" }, h("a", { href: /^https:\/\//.test(l.url) ? l.url : "#", target: "_blank", rel: "noreferrer noopener" }, l.brief || "Untitled design"), h("span", { class: "meta" }, [l.by, l.login, ago(l.at * 1e3)].filter(Boolean).join(" · "))),
-      button("Remove", () => act({ do: "forget", url: l.url }, ctx), { size: "s", kind: "quiet", title: "Takes it off this list. The design stays on claude.ai." })))))) : null;
+  h("ul", { class: "list dcards" }, [...v.links].sort((a, b) => (b.at || 0) - (a.at || 0)).map(l => { const url = /^https:\/\//.test(l.url) ? l.url : "#";
+    return h("li", { class: "dcard", "data-key": l.url },
+      h("a", { class: "dcard-a", href: url, target: "_blank", rel: "noreferrer noopener" },
+        h("span", { class: "dcard-t" }, designName(l)),
+        h("span", { class: "meta" }, [l.by && l.brief ? l.by : null, l.login, l.at ? ago(l.at * 1e3) : null].filter(Boolean).join(" · "))),
+      h("div", { class: "dcard-f" },
+        h("a", { class: "btn", "data-size": "s", href: url, target: "_blank", rel: "noreferrer noopener" }, "Open ↗"),
+        button("Remove", () => act({ do: "forget", url: l.url }, ctx), { size: "s", kind: "quiet", title: "Takes it off this list. The design stays on claude.ai." }))); }))) : null;
+// The account in session first, then the ones you can start on (least used first), then the rest.
+const sorted = (accts, session) => [...accts].sort((a, b) => (b.name === session) - (a.name === session) || (b.open - a.open) || ((a.weekly ?? 101) - (b.weekly ?? 101)));
 
 export default {
   id: "design", label: "Design", about: "make designs with Claude Design", tab: () => !!S.app.app && can("logins"),

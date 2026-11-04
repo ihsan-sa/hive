@@ -6,6 +6,7 @@ import { S, can, needsAccount, setupDone, start, subscribe } from "./core/store.
 import { mount, delegate, selecting } from "./core/dom.js";
 import { go, parse } from "./core/router.js";
 import { topBar } from "./ui/shell.js";
+import { mobileNav } from "./ui/mobilenav.js";
 import views, { APP_NAV, SIMPLE_NAV } from "./views/index.js";
 import { simpleOn } from "./core/simple.js";
 import { resume, setViews, watch } from "./deck/control.js";
@@ -15,6 +16,7 @@ import { watchVersion } from "./ui/newversion.js";
 
 const byId = new Map(views.map(v => [v.id, v]));
 const top = document.getElementById("top"), main = document.getElementById("main");
+const mnav = document.body.appendChild(Object.assign(document.createElement("div"), { id: "mnav" }));   // phone tab bar (css/mobile.css hides it on wider screens)
 new ResizeObserver(() => { if (top.offsetHeight) document.documentElement.style.setProperty("--bar-h", top.offsetHeight + "px"); }).observe(top);   // phones wrap the bar and a tab's row adds to it; sticky headers and full-height pages follow
 const scrolls = {};
 // Where an empty address lands: the chat in the app, Now on the developer route.
@@ -27,6 +29,7 @@ function render(force) {
   if (S.live) document.title = brandName() ? `${brandName()} · ${S.live.agents.length} running` : `Hive · ${S.live.agents.length} running`;
   brandIcon();
   mount(top, topBar({ views, current: cur.id, update: ctx.update, nav: simpleOn() ? SIMPLE_NAV : APP_NAV }));
+  mount(mnav, mobileNav({ views, current: cur.id, update: ctx.update, nav: simpleOn() ? SIMPLE_NAV : APP_NAV }));
   if (!force && selecting()) return;          // hold still while text is selected
   mount(main, cur.render(ctx));
 }

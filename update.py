@@ -9,7 +9,7 @@ What it keeps: the agents' own commits in ~/core (rebased onto the release) and 
 A conflict with either, a failed install or services that don't come back leave the Hive as it was, skip that release
 and tell the person. Restarting the starter doesn't stop running agents.
 """
-import argparse, fcntl, json, os, re, shutil, subprocess, sys, time, urllib.error, urllib.request
+import argparse, fcntl, json, os, re, shutil, subprocess, sys, tempfile, time, urllib.error, urllib.request
 from pathlib import Path
 
 HOME = Path.home(); CORE = Path(__file__).resolve().parent; STATE = HOME / ".hive"; STATE_F = STATE / "update.json"; NOW = STATE / "update-now"  # NOW: the app's Update now, for the --auto run it starts
@@ -17,6 +17,9 @@ MAJOR = 2
 TAG = re.compile(rf"^v{MAJOR}\.(\d+)\.(\d+)$")
 SETTLE = float(os.environ.get("HIVE_UPDATE_SETTLE", "8"))  # seconds services get to fall over before they count as up
 SYSTEMD = (HOME / ".config/systemd/user/hive-starter.service").exists() and bool(shutil.which("systemctl"))
+
+SIGNERS = CORE / "release_signers"  # who may sign a release tag (ssh allowed-signers format); a Hive installed before it existed takes the first one on trust
+SIG = "-----BEGIN SSH SIGNATURE-----"
 
 class Failed(Exception): pass
 class Stuck(Exception): """Something on this machine, not the release, stopped the update: try again next run, and don't skip the release."""
@@ -54,6 +57,22 @@ def claude_update(st):
 def tags():
     out = git("ls-remote", "--tags", "--refs", "origin", f"v{MAJOR}.*", timeout=60)
     return sorted((t for t in (l.rsplit("/", 1)[-1] for l in out.splitlines()) if TAG.match(t)), key=key)
+
+def verify(tag, signers, repo=CORE):
+    """None if the tag object is signed by a key in signers (the text of the installed release_signers), else why not.
+    Checked by hand rather than with git verify-tag, so any git works; ssh-keygen -Y needs OpenSSH 8.1 (2019)."""
+    r = subprocess.run(["git", "-C", str(repo), "cat-file", "tag", f"refs/tags/{tag}"], capture_output=True, text=True, timeout=60)
+    if r.returncode: return f"{tag} isn't a signed tag"
+    body = r.stdout; i = body.find(SIG)
+    if i < 0: return f"{tag} isn't signed"
+    payload, sig = body[:i], body[i:]
+    if f"\ntag {tag}\n" not in payload: return f"{tag}'s signature is for another tag"  # an old signed tag pushed under a new name
+    if not shutil.which("ssh-keygen"): raise Stuck("can't check the release's signature: ssh-keygen (package openssh-client) isn't installed")
+    with tempfile.TemporaryDirectory() as d:
+        sf, kf = Path(d) / "sig", Path(d) / "signers"; sf.write_text(sig); kf.write_text(signers)
+        v = subprocess.run(["ssh-keygen", "-Y", "verify", "-f", str(kf), "-I", "hive-release", "-n", "git", "-s", str(sf)],
+                           input=payload, capture_output=True, text=True, timeout=60)
+    return None if v.returncode == 0 else f"{tag} isn't signed by the Hive's release key ({(v.stderr or v.stdout).strip()[-200:]})"
 
 def say(text, person=False):
     """A note on the board in thread updates. Only a failure goes to the person, and neither starts an agent."""
@@ -134,9 +153,11 @@ def apply(tag, st):
     try:
         git("status", "--porcelain")  # refreshes the index: with a stale one and a clean tree, stash create exits 1
         old = git("rev-parse", "HEAD"); dirty = git("stash", "create"); before = stashes()
-    except Failed as e: raise Stuck(e)
+        signers = SIGNERS.read_text() if SIGNERS.exists() else None  # the installed release's, read before anything of the new one is checked out
+    except (Failed, OSError) as e: raise Stuck(e)
     try: git("fetch", "-q", "--no-tags", "origin", f"+refs/tags/{tag}:refs/tags/{tag}", timeout=600)
     except (Failed, subprocess.SubprocessError) as e: raise Later(f"hive update: can't fetch {tag}: {e}")
+    if signers is not None and (why := verify(tag, signers)): raise Failed(f"{why}, so it wasn't installed and this Hive stays on what it runs")
     if git("merge-base", "--is-ancestor", st["tag"], tag, check=False).returncode if st.get("tag") else not git("merge-base", "HEAD", tag, check=False).stdout.strip():
         raise Failed(f"{tag} doesn't follow from what's installed, so it was left alone")
     mine = my_settings(st.get("tag"))
@@ -158,8 +179,11 @@ def apply(tag, st):
 def main():
     p = argparse.ArgumentParser(prog="hive update", description="Update this Hive to the newest release.")
     p.add_argument("--check", action="store_true", help="say what's installed and what's newest, and install nothing")
+    p.add_argument("--verify", nargs=2, metavar=("REPO", "TAG"), help=argparse.SUPPRESS)  # release.sh publish checks its own tag with this before pushing it
     p.add_argument("--auto", action="store_true", help="the timer's run: keeps to update_every_s, and installs nothing if auto_update is off")
     a = p.parse_args()
+    if a.verify:
+        why = verify(a.verify[1], SIGNERS.read_text(), Path(a.verify[0])); sys.exit(f"hive update: {why}" if why else 0)
     if not (HOME / ".hive-installed").exists():  # the timer can tick during an install, or after one that stopped partway and will be rerun
         msg = "hive update: this isn't an installed Hive"
         later(msg) if a.auto else sys.exit(msg)

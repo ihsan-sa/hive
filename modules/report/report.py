@@ -153,7 +153,7 @@ def unit_failures(st):
     reps = []
     for u in now:
         if u in seen: continue
-        r = base(st, "failure"); r.update(kind="unit-failed", at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), message=clip(scrub(("systemd unit %s is in a failed state" % u) + update_why(u)), MAX_TEXT)); reps.append(r)
+        r = base(st, "failure"); r.update(kind="unit-failed", at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), message=clip(("systemd unit %s is in a failed state" % u) + scrub(update_why(u)), MAX_TEXT)); reps.append(r)   # the unit name is checked above; scrubbing it would turn hive-* into [name]-* for a user named hive
     return reps
 
 def build(st, want_fail, want_use):
@@ -329,7 +329,8 @@ def issue(title, text, submit=False):
         if not shutil.which("gh") or subprocess.run(["gh", "auth", "status"], capture_output=True).returncode: return "gh isn't logged in; use the link instead (run without --submit)"
         r = subprocess.run(["gh", "issue", "create", "-R", repo, "-t", t, "-b", b], capture_output=True, text=True)
         return r.stdout.strip() or r.stderr.strip()
-    return "draft: %s\nopen this to review and post it as yourself:\nhttps://github.com/%s/issues/new?%s" % (draft, repo, urllib.parse.urlencode({"title": t, "body": b[:4000]}))
+    q = {"template": "bug.yml", "title": t, "what": b[:2500], "version": installed_version(), "body": b[:2500]}   # the bug form's fields; body is for a repo without the form
+    return "draft: %s\nopen this to review and post it as yourself:\nhttps://github.com/%s/issues/new?%s" % (draft, repo, urllib.parse.urlencode(q))
 
 def main(a):
     cmd = a[0] if a else "status"

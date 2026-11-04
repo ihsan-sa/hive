@@ -1,0 +1,46 @@
+/* The agent page (views/agent.js) and its charts (ui/agentviz.js). Tokens from tokens.css only. */
+
+/* life chart: cost bars, a lane of sessions, a row of post ticks, a time axis */
+.lc{margin:0;min-width:0;cursor:crosshair}
+.lc-plot{position:relative;height:92px;border-bottom:1px solid var(--line-2)}
+.lc-plot svg{position:absolute;inset:0;width:100%;height:100%;overflow:visible}
+.lc-bar{fill:var(--accent)}
+.lc-y{position:absolute;top:-2px;left:0;font-size:var(--fs-micro);color:var(--ink-3);font-variant-numeric:tabular-nums;background:var(--surface);padding-right:4px;line-height:1}
+.lc-cross{position:absolute;top:0;bottom:-26px;width:1px;background:var(--ink-3);display:none;pointer-events:none}
+.lc-lane{position:relative;height:8px;margin-top:4px}
+.lc-lane i{position:absolute;top:0;height:100%;border-radius:2px;background:var(--c,var(--ended));opacity:.85}
+.lc-ticks{position:relative;height:10px;margin-top:3px}
+.lc-ticks i{position:absolute;top:0;width:1.5px;height:10px;background:var(--ink-2);transform:translateX(-50%)}
+.lc-ticks i[data-kind=in]{background:var(--line-2);height:6px;top:4px}
+.lc-x{position:relative;height:16px;margin-top:2px;font-size:var(--fs-micro);color:var(--ink-3);white-space:nowrap}
+.lc-x span{position:absolute;transform:translateX(-50%)}
+.lc-x{overflow:hidden}
+.lc-x span[data-edge=start]{transform:none}
+.lc-x span[data-edge=end]{transform:translateX(-100%)}
+.lc-key{margin-top:var(--s1)}
+.lc-key .legend{margin-top:0}
+
+/* who it talks to: name, then sent and received bars back to back */
+.ct-head,.ct-list li{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,1fr) minmax(0,1fr);align-items:center;column-gap:var(--s2)}
+.ct-head{font-size:var(--fs-micro);color:var(--ink-3);padding-bottom:2px;border-bottom:1px solid var(--line)}
+.ct-head span:nth-child(2){text-align:right}
+.ct-list{list-style:none;margin:0;padding:0}
+.ct-list li{padding:3px 0;border-bottom:1px solid var(--line);min-height:26px}
+.ct-who{display:flex;align-items:center;gap:6px;min-width:0;flex-wrap:wrap}
+.ct-tag{font-size:var(--fs-micro);color:var(--ink-2);border:1px solid var(--line-2);border-radius:var(--r-s);padding:0 4px;line-height:1.5;white-space:nowrap}
+.ct-bar{display:flex;align-items:center;gap:4px;min-width:0;font-size:var(--fs-meta);font-variant-numeric:tabular-nums}
+.ct-bar i{display:block;height:8px;border-radius:2px;min-width:0}
+.ct-bar[data-side=out]{justify-content:flex-end}
+.ct-bar[data-side=out] i{background:var(--ink-2)}
+.ct-bar[data-side=in] i{background:var(--line-2)}
+.ct-bar b{font-weight:var(--w-med);color:var(--ink-2)}
+
+/* what it changed */
+.wf{list-style:none;margin:0;padding:0}
+.wf li{display:flex;justify-content:space-between;gap:var(--s3);padding:3px 0;border-bottom:1px solid var(--line);min-width:0;font-size:var(--fs-small)}
+.wf code{font-family:var(--mono);font-size:var(--fs-meta);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;direction:rtl;text-align:left;min-width:0}
+.wf .meta{flex:none}
+.sess-end[data-tone=bad]{color:var(--bad-ink)}
+.sess-end[data-tone=warn]{color:var(--warn-ink)}
+.agp .note .ac-dl{margin:0}
+.agp .ph .defs{margin-top:var(--s2)}

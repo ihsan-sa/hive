@@ -15,10 +15,11 @@ import { href, threadHref, go } from "../core/router.js";
 import { tier, status } from "../core/status.js";
 import { askTier, askStop } from "../actions.js";
 import { seen, unreadIn, markRead, onInbox } from "../core/inbox.js";
-import { button, empty, input, list, seg, statusDot } from "../ui/kit.js";
-import { agentRef, copyButton, threadRef } from "../ui/refs.js";
+import { button, empty, icon, input, list, seg, statusDot } from "../ui/kit.js";
+import { agentRef, avatars, copyButton, threadRef } from "../ui/refs.js";
 import { message, messageHead, messageReceipt, localMessage, markWords, pollDelivered, marksSig, delivery, onJump } from "../ui/message.js";
 import { asidePanel, asideOpen, closeAside } from "../ui/aside.js";
+import { pinned, archived, setMeta, renameDialog, openCard, markSeen } from "../ui/threadmeta.js";
 import { composer, cancelReply, replyTo, say, outFor, outSig, actions as outActions, dropZone, recipient, draft, focusComposer } from "../ui/composer.js";
 
 const STEP = 500, FIRST = 250, NEAR = 60, GROUP = 10 * MIN, HELPER_AFTER = 3 * MIN;
@@ -26,7 +27,17 @@ const NONE = [];
 const app = () => S.app.app;
 
 // What the person chose. C.next: the message search a thread opened from the search box starts with.
-const C = { conv: undefined, q: "", show: null, limit: FIRST, tq: "", scope: "recent", next: null, more: false };
+// The conversation list's width: drag its edge, or use the arrow keys on it. Kept on this device.
+const SIDE_MIN = 220, SIDE_MAX = 640;
+let sideW = (() => { try { return Math.min(SIDE_MAX, Math.max(SIDE_MIN, +localStorage.getItem("cm.side") || 272)); } catch (e) { return 272; } })();
+const setSide = (box, w) => { sideW = Math.round(Math.min(SIDE_MAX, Math.max(SIDE_MIN, w))); box.style.setProperty("--cm-w", sideW + "px"); try { localStorage.setItem("cm.side", sideW); } catch (e) {} };
+const grip = () => h("div", { class: "cm-grip", role: "separator", "aria-orientation": "vertical", "aria-label": "Resize the conversation list", tabindex: "0", "data-key": "grip", title: "Drag to resize",
+  onpointerdown: e => { const box = e.target.closest(".cm"), x0 = e.clientX, w0 = sideW; e.target.setPointerCapture(e.pointerId); e.target.dataset.on = "1";
+    e.target.onpointermove = m => setSide(box, w0 + m.clientX - x0);
+    e.target.onpointerup = e.target.onpointercancel = () => { delete e.target.dataset.on; e.target.onpointermove = e.target.onpointerup = e.target.onpointercancel = null; }; },
+  ondblclick: e => setSide(e.target.closest(".cm"), 272),
+  onkeydown: e => { const d = e.key === "ArrowLeft" ? -24 : e.key === "ArrowRight" ? 24 : 0; if (d) { e.preventDefault(); setSide(e.target.closest(".cm"), sideW + d); } } });
+const C = { arch: false, conv: undefined, q: "", show: null, limit: FIRST, tq: "", scope: "recent", next: null, menu: null, find: false, strip: false };
 // What the message list holds. matched grows as posts arrive; pend is what sync() still has to append.
 const L = { key: null, src: null, seen: 0, matched: [], pend: [], evs: new Set(), rebuild: true, keep: false, shown: 0, day: "", prev: null, names: new Set(), opts: null,
   box: null, out: null, jump: null, unseen: 0, outSig: "", ro: null, stuck: true, heads: "", near: new Set(), io: null, tl: null, tlSig: "", tlConv: null, saved: null, ctx: null, jumpTo: null, marked: "" };
@@ -108,6 +119,12 @@ function refresh(c) {
 }
 
 // ---- the message list ----
+/** A card item whose message has been on screen is seen: it leaves the card (110401502e1a). */
+function cardSeen(box) {
+  const ids = [...document.querySelectorAll(".tm-items li[data-key]")].map(li => li.dataset.key), b = box.getBoundingClientRect();
+  const on = ids.filter(id => { const el = box.querySelector(`[data-key="${CSS.escape(id)}"]`); if (!el) return false; const r = el.getBoundingClientRect(); return r.top >= b.top - 4 && r.top < b.bottom - 40; });
+  if (on.length && markSeen(on)) L.ctx && L.ctx.update();
+}
 const atEnd = b => b.scrollTop + b.clientHeight > b.scrollHeight - NEAR;
 const sameTo = (a, b) => a.men.join() === b.men.join();
 const sameSource = (a, b) => { const x = postSource(a), y = postSource(b); return (x && x.name + x.how) === (y && y.name + y.how); };
@@ -115,6 +132,7 @@ const sameSource = (a, b) => { const x = postSource(a), y = postSource(b); retur
 function evRow(e) {
   return h("div", { class: "cm-ev", "data-key": e.key, "data-tone": status(e.tone).tone, role: "note" }, statusDot(e.tone), h("b", null, e.text), h("span", { class: "meta" }, clock(e.t) + " · " + e.sub));
 }
+const KIND_NAME = { [SHOW.you]: "you", [SHOW.updates]: "updates", [SHOW.comms]: "comms" };
 function rows(items) {
   const out = [];
   for (const p of items) {
@@ -122,8 +140,8 @@ function rows(items) {
     if (d !== L.day) { L.day = d; L.prev = null; out.push(h("div", { class: "cm-day", "data-key": "d:" + d }, h("span", null, d))); }
     if (p.ev) { out.push(evRow(p)); L.prev = null; continue; }
     L.names.add(p.from); for (const m of p.men) L.names.add(m);
-    const q = L.prev, cont = app() && !!q && q.from === p.from && q.th === p.th && !p.reply_to && p.t - q.t < GROUP && sameTo(q, p) && sameSource(q, p);
-    const a = message(p, { ...L.opts, cont });
+    const q = L.prev, cont = !!q && q.from === p.from && q.th === p.th && !p.reply_to && p.t - q.t < GROUP && sameTo(q, p) && sameSource(q, p);
+    const a = message(p, { ...L.opts, cont }); a.dataset.show = KIND_NAME[postKind(p)] || "";   // For you, Updates or Agent comms, marked in the list (11040113eacf)
     L.prev = p; a._head = L.heads; L.io.observe(a); out.push(a);
   }
   return out;
@@ -149,7 +167,7 @@ function flash(box, el) {
   L.stuck = atEnd(box);
   el.setAttribute("data-flash", ""); setTimeout(() => el.removeAttribute("data-flash"), 1800);
 }
-onJump(id => {
+const jumpTo = id => {
   const p = S.byId[id], box = L.box; if (!p || !box) return;
   if (L.opts && conversation(L.ctx && L.ctx.arg).thread && p.th !== conversation(L.ctx.arg).thread) { L.jumpTo = id; return go("comms", p.th); }
   const el = box.querySelector(`[data-key="${CSS.escape(id)}"]`);
@@ -157,7 +175,8 @@ onJump(id => {
   const i = L.all.indexOf(p);
   if (i < 0) { if (showMask() === SHOW.ALL || !L.src.includes(p)) return; L.jumpTo = id; return setShow(SHOW.ALL, L.ctx); }   // a reply quoting a message this setting hides
   C.limit = L.all.length - i + 20; L.rebuild = true; L.jumpTo = id; L.ctx.update();
-});
+};
+onJump(jumpTo);
 
 function syncOut(c, box) {
   const th = c.thread; if (!th || !L.out) return;
@@ -178,6 +197,7 @@ function sync(c, ctx) {
         if (L.box !== box) return;
         L.stuck = atEnd(box);
         if (L.stuck && L.unseen) { L.unseen = 0; setJump(); }
+        cardSeen(box);
         L.saved = L.stuck ? null : { key: L.key, fromEnd: box.scrollHeight - box.scrollTop };
       }, { passive: true });
       // The box changes size when the composer grows, the keyboard opens or the window moves: stay at the end if that's where it was.
@@ -273,12 +293,15 @@ function searchRows(c, ctx, ws) {
   ];
 }
 
+const NEED = new Set(["asks", "foryou", "stuck", "failed", "limited"]);
+const secOf = (th, st) => (pinned(th) ? "pin" : archived(th) ? "arch" : st && NEED.has(st.key) ? "need" : "rest");
 function threadRows(c, ctx) {
   const ws = words(C.tq);
   if (ws.length) return searchRows(c, ctx, ws);
   const t = now(), mask = showMask(), ran = new Set(S.live ? S.live.agents.map(a => a.thread) : []);
-  let ds = [...S.threads.values()].filter(d => ((threadKinds(d) & mask) && theirs(d)) || d.name === c.thread);
-  if (C.scope === "recent" && !simpleOn()) ds = ds.filter(d => d.last > t - (app() ? 7 : 1) * DAY || ran.has(d.name) || d.name === c.thread || (app() && threadState(d.name, seen).key === "asks"));
+  // Pinned ones are always listed; archived ones go to their own fold at the end, unless something new is for the person (threads: a3100).
+  let ds = [...S.threads.values()].filter(d => pinned(d.name) || ((threadKinds(d) & mask) && theirs(d)) || d.name === c.thread);
+  if (C.scope === "recent" && !simpleOn()) ds = ds.filter(d => pinned(d.name) || archived(d.name) || d.last > t - (app() ? 7 : 1) * DAY || ran.has(d.name) || d.name === c.thread || (app() && threadState(d.name, seen).key === "asks"));
   ds.sort((a, b) => b.last - a.last);
   const rowsOut = ds.map(d => {
     const lp = d.posts[d.posts.length - 1], live = ran.has(d.name);
@@ -287,24 +310,50 @@ function threadRows(c, ctx) {
       const who = lp.from.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
       return { key: d.name, href: threadHref(d.name), current: c.thread === d.name, title: threadTitle(d.name), meta: ago(d.last).replace(" ago", ""),
         lead: [tierLead(d.name), live ? h("span", { title: "an agent is on this thread now" }, statusDot("working", { live: true })) : null],
-        text: `${d.posts.length} · ${lp.from}: ${short(mdPlain(lp.text).replace(new RegExp("^(@\\S+\\s+)*" + who + ":\\s*"), ""), 60)}` };
+        text: `${d.posts.length} · ${lp.from}: ${short(mdPlain(lp.text).replace(new RegExp("^(@\\S+\\s+)*" + who + ":\\s*"), ""), 60)}`, sec: secOf(d.name, null) };
     }
     const st = threadState(d.name, seen);
     const say = short(mdPlain(displayText(lp)).replace(/\s+/g, " "), 70);
     return { key: d.name, href: threadHref(d.name), current: c.thread === d.name, title: threadTitle(d.name), meta: ago(d.last).replace(" ago", ""),
       lead: [tierLead(d.name), h("span", { title: status(st.key).label || "" }, statusDot(st.key === "done" ? "ended" : st.key, { live }))],
-      text: [stateTag(st), stateTag(st) ? " · " : null, `${authorName(lp.from)}: ${say}`] };
+      text: [stateTag(st), stateTag(st) ? " · " : null, `${authorName(lp.from)}: ${say}`], sec: secOf(d.name, st) };
   });
   if (!app()) rowsOut.unshift({ key: "(everything)", href: href("comms", "~all"), title: "Everything", text: `${S.posts.length} posts, newest last`, current: c.all });
   return rowsOut;
 }
+// Folded sections (the person, 11040202d77c): kept in this browser.
+const FOLD_KEY = "hive.comms.folded";
+const FOLD = new Set((() => { try { return JSON.parse(localStorage.getItem(FOLD_KEY) || "[]"); } catch (e) { return []; } })());
+function saveFold() { try { localStorage.setItem(FOLD_KEY, JSON.stringify([...FOLD])); } catch (e) { /* this page only */ } }
+// The list in parts: Pinned, Needs you, the rest, and Archived folded at the end. A search is one list.
+const SECS = [["pin", "Pinned"], ["need", "Needs you"], ["rest", null]];
+function sections(rs, ctx, opts) {
+  if (words(C.tq).length) return list(rs, opts);
+  const by = { pin: [], need: [], rest: [], arch: [] }; for (const r of rs) (by[r.sec || "rest"] || by.rest).push(r);
+  const parts = SECS.filter(([k]) => by[k].length), heads = parts.length > 1 || by.pin.length;
+  const sec = (k, label, rows) => {
+    if (!heads) return h("div", { class: "tm-sec", "data-key": "sec:" + k, "data-sec": k }, list(rows, { ...opts, empty: "" }));
+    const shut = FOLD.has(k);
+    return h("div", { class: "tm-sec", "data-key": "sec:" + k, "data-sec": k, "data-folded": shut ? "" : null },
+      h("button", { type: "button", class: "tm-sec-h tm-fold", "aria-expanded": String(!shut), title: shut ? "Show this section" : "Fold this section",
+        onclick: () => { FOLD.has(k) ? FOLD.delete(k) : FOLD.add(k); saveFold(); ctx.update(); } },
+        icon(shut ? "chevron-right" : "chevron-down"), shut ? `${label} (${rows.length})` : label),
+      shut ? null : list(rows, { ...opts, empty: "" }));
+  };
+  return h("div", { class: "tm-secs" },
+    parts.length ? parts.map(([k, l]) => sec(k, l || (app() ? "Recent" : "Threads"), by[k])) : by.arch.length ? null : list([], opts),
+    by.arch.length ? h("div", { class: "tm-sec", "data-key": "sec:arch", "data-sec": "arch" },
+      h("button", { type: "button", class: "tm-sec-h tm-arch-b", "aria-expanded": String(!!C.arch), onclick: () => { C.arch = !C.arch; ctx.update(); } },
+        icon(C.arch ? "chevron-down" : "chevron-right"), `Archived (${by.arch.length})`),
+      C.arch ? list(by.arch, { ...opts, empty: "" }) : null) : null);
+}
 function syncThreads(c, ctx) {
   const tl = document.querySelector("#main .cm-tl"); if (!tl) return;
-  const sig = [S.ver, C.scope, C.tq, showMask(), c.arg, Math.floor(now() / 3e4), S.runSig, marksSig().length].join("|");
+  const sig = [S.ver, C.scope, C.arch, [...FOLD].join(), C.tq, showMask(), c.arg, Math.floor(now() / 3e4), S.runSig, marksSig().length].join("|");
   if (tl === L.tl && sig === L.tlSig) return;
   const fresh = tl !== L.tl || c.arg !== L.tlConv;
   L.tl = tl; L.tlSig = sig; L.tlConv = c.arg;
-  const tree = list(threadRows(c, ctx), { dense: true, empty: simpleOn() ? "No conversations yet. Start one with New conversation." : S.threads.size ? "Nothing here with what Show has on. Turn on Agent comms to see all of them." : app() ? "No conversations yet. Start one with New." : "No threads." });
+  const tree = sections(threadRows(c, ctx), ctx, { dense: true, empty: simpleOn() ? "No conversations yet. Start one with New conversation." : S.threads.size ? "Nothing here with what Show has on. Turn on Agent comms to see all of them." : app() ? "No conversations yet. Start one with New." : "No threads." });
   if (tl.firstChild) morph(tl.firstChild, tree); else tl.append(tree);
   if (fresh) { const cur = tl.querySelector("[aria-current]"); if (cur) { const r = cur.getBoundingClientRect(), b = tl.getBoundingClientRect(); if (r.top < b.top || r.bottom > b.bottom) tl.scrollTop += r.top - b.top - 40; } }
 }
@@ -340,7 +389,9 @@ function strip(th) {
     if (st.key === "asks" && a.name === st.who) continue;
     const s = agentState(a);
     if (simpleOn()) { if (!out.some(x => x.dataset.key === "run")) out.push(line("working", "Your Hive is working on it.", can("stop") ? button("Stop…", () => askStop(a.name), { size: "s", kind: "quiet" }) : null, { key: "run", live: true })); continue; }
-    out.push(line(s.key, [who(a.name), " ", AGENT_WORDS[s.key] || s.text, a.doing ? ": " + a.doing : "", h("span", { class: "meta" }, " · " + (s.key === "working" ? "active " + ago(a.last * 1e3) : s.text))],
+    // Closed it reads "a7c31 Editing fetch.py"; how long ago it was active shows only when open.
+    const doing = a.doing ? a.doing.charAt(0).toUpperCase() + a.doing.slice(1) : AGENT_WORDS[s.key] || s.text;
+    out.push(line(s.key, [who(a.name), " ", doing, h("span", { class: "meta cm-line-m" }, " · " + (s.key === "working" ? ago(a.last * 1e3) : s.text))],
       can("stop") ? button("Stop…", () => askStop(a.name), { size: "s", kind: "quiet", title: `Stop ${a.name}` }) : null, { key: "run:" + a.name, live: true }));
   }
   // A second helper when the agent you wrote to is busy (not built): see PART1.md.
@@ -351,7 +402,14 @@ function strip(th) {
     const r = recipient(th);
     out.push(line("done", simpleOn() ? "Your Hive has stopped for now. Send a message when you want more." : r.who && r.who !== "new" ? `Nobody is on this right now. A message wakes ${r.who}.` : "Nobody is on this right now. A message starts an agent on it.", null, { key: "idle" }));
   }
-  return h("div", { class: "cm-strip", "data-key": "strip", role: "status", "aria-live": "polite" }, out);
+  const more = out.length - 2, open = !!C.strip;
+  return h("div", { class: "cm-strip", "data-key": "strip", "data-open": open ? "" : null, role: "status", "aria-live": "polite" }, out,
+    more > 0 && !open ? h("span", { class: "meta num cm-strip-n", "data-key": "n" }, "+" + more) : null,
+    out.length > 1 || out.some(x => x.querySelector(".cm-line-a")) ? stripToggle(open) : null);
+}
+function stripToggle(open) {
+  const b = button(open ? "Show less" : "Show all", () => { C.strip = !open; L.ctx && L.ctx.update(); }, { kind: "icon", size: "s", icon: open ? "chevron-down" : "chevron-up", cls: "cm-strip-t", title: open ? "Show less" : "Show everyone and what you can do" });
+  b.setAttribute("aria-expanded", String(open)); return b;
 }
 function lastQuestion(p) {
   const lines = mdPlain(displayText(p)).split(/\n|(?<=[.!])\s+/).map(s => s.trim()).filter(Boolean);
@@ -361,29 +419,56 @@ function lastQuestion(p) {
 // ---- the head of a conversation ----
 function moreMenu(c, ctx) {
   const th = c.thread, t = tier(tierOf(th));
+  const act = (label, ic, fn, title) => button(label, () => { C.menu = null; fn(); ctx.update(); }, { size: "s", kind: "quiet", icon: ic, title });
+  const pin = pinned(th), arch = archived(th), mine = can("post");
   return h("div", { class: "cm-menu", role: "menu", "data-key": "more" },
-    can("tier") ? button([h("span", { class: "ref-sw", "data-tone": t.tone }), "Priority: " + t.label], () => { C.more = false; askTier(th); }, { size: "s", kind: "quiet", title: "Where this sits in the hive's priority list" }) : null,
-    button("On the timeline", null, { href: href("timeline"), size: "s", kind: "quiet" }),
-    th !== threadTitle(th) ? h("p", { class: "meta" }, "Its id on the board: ", h("code", null, th)) : null,
-    h("div", { class: "cm-menu-find" }, input({ type: "search", class: "input", placeholder: "Search here", "aria-label": "Search these messages", value: C.q, oninput: e => { C.q = e.target.value; clearTimeout(qTimer); qTimer = setTimeout(ctx.update, 120); } })));
+    mine ? act(pin ? "Unpin" : "Pin to the top", "pin", () => setMeta(th, { pin: !pin }), pin ? "Back among the others" : "Keep it at the top of the list, whatever is on") : null,
+    mine ? act("Rename", "edit", () => renameDialog(th), "Give it a name of your own. Only the dash shows it.") : null,
+    mine ? act(arch ? "Unarchive" : "Archive", "archive", () => { setMeta(th, { archived: !arch }); if (!arch) go("comms"); }, arch ? "Back in the list" : "Out of the list until something new is for you") : null,
+    can("tier") ? button([h("span", { class: "ref-sw", "data-tone": t.tone }), "Priority: " + t.label], () => { C.menu = null; askTier(th); }, { size: "s", kind: "quiet", title: "Where this sits in the hive's priority list" }) : null,
+    button("On the timeline", null, { href: href("timeline"), size: "s", kind: "quiet", icon: "clock" }),
+    th !== threadTitle(th) ? h("p", { class: "meta" }, "Its id on the board: ", h("code", null, th)) : null);
 }
+// The title's menu: how many messages and since when, and the way to every message.
+function titleMenu(c, n, d) {
+  return h("div", { class: "cm-menu", role: "menu", "data-key": "title" },
+    h("p", { class: "meta" }, (C.q.trim() ? plural(n, "match", "matches") : plural(n, app() ? "message" : "post")) + (d ? ` · since ${stamp(d.first)}` : "")),
+    button("All messages", null, { href: href("comms", "~all"), size: "s", kind: "quiet", icon: "chat" }));
+}
+// What shows: For you, Updates, Agent comms, each on or off: three toggles in the side, over the list (the person, 11040113eacf).
+function showChips(ctx) {
+  const mask = showMask();
+  return h("div", { class: "tm-show", role: "group", "aria-label": "Show", title: showSays(mask) },
+    SHOW_PARTS.map(([b, l, t]) => h("button", { type: "button", class: "tm-chip", "data-show": KIND_NAME[b], "aria-pressed": String(!!(mask & b)), title: (mask & b ? "Hide " : "Show ") + t,
+      onclick: () => setShow(showMask() ^ b, ctx) }, h("i", { "aria-hidden": "true" }), l)),
+    mask ? null : h("p", { class: "meta tm-show-says" }, showSays(mask)));
+}
+const menuBtn = (key, label, ic, ctx, extra) => h("button", { type: "button", class: "btn", "data-kind": "icon", "aria-label": label, title: label, "aria-haspopup": "true", "aria-expanded": String(C.menu === key),
+  onclick: e => { e.stopPropagation(); C.menu = C.menu === key ? null : key; ctx.update(); } }, icon(ic), extra || null);
 function head(c, ctx) {
   const d = c.thread && S.threads.get(c.thread), n = L.matched.length, off = maskFor(c) !== SHOW.ALL && !C.q.trim() ? L.src.length - n : 0;
   const title = c.thread ? threadTitle(c.thread) : c.agent ? (c.agent === "person" ? "Everything you sent" : "Everything by or to " + c.agent) : c.pair ? `${c.pair[0]} and ${c.pair[1]}` : app() ? "All messages" : "Everything";
-  const who = simpleOn() ? [] : c.thread ? threadPeople(c.thread).filter(m => m !== "person").map(m => agentRef(m, { copy: true, state: true }))
-    : c.agent ? [...new Set(S.posts.filter(p => p.from === c.agent).map(p => p.th))].slice(-14).map(t => threadRef(t)) : [];
-  return h("header", { class: "cm-head", "data-key": "head" },
+  const people = simpleOn() || !c.thread ? [] : threadPeople(c.thread).filter(m => m !== "person");
+  const who = simpleOn() || c.thread ? [] : c.agent ? [...new Set(S.posts.filter(p => p.from === c.agent).map(p => p.th))].slice(-14).map(t => threadRef(t)) : [];
+  const find = C.find || !!C.q.trim();
+  return h("header", { class: "cm-head", "data-key": "head", "data-find": find ? "" : null },
     h("div", { class: "cm-tt", "data-dev": app() ? null : "" },
-      h("a", { class: "btn cm-back", href: href("comms"), "data-kind": "quiet", "data-size": "s" }, app() ? "‹ Chats" : "‹ Threads"),
-      h("h1", { class: "cm-title" }, title),
+      h("a", { class: "btn cm-back", href: href("comms"), "data-kind": "icon", "aria-label": app() ? "Chats" : "Threads", title: app() ? "Chats" : "Threads" }, icon("chevron-left")),
+      h("button", { type: "button", class: "cm-title-b", "aria-haspopup": "true", "aria-expanded": String(C.menu === "title"), onclick: e => { e.stopPropagation(); C.menu = C.menu === "title" ? null : "title"; ctx.update(); } },
+        h("h1", { class: "cm-title" }, title), icon("chevron-down")),
       h("span", { class: "meta cm-count" }, (C.q.trim() ? plural(n, "match", "matches") : plural(n, app() ? "message" : "post")) + (d ? ` · since ${stamp(d.first)}` : "")),
       c.thread && !app() && title !== c.thread ? h("span", { class: "cm-id" }, h("code", { class: "meta", title: "Its id on the board" }, c.thread), copyButton(c.thread)) : null,
-      c.thread && !app() ? tierControl(c.thread) : null,
-      h("div", { class: "cm-tools" },
-        off > 0 && !simpleOn() ? button(`Show ${off} hidden`, () => setShow(SHOW.ALL, ctx), { size: "s", kind: "quiet", cls: "cm-hid", title: "Turn everything on, messages between agents and the hive's own notices too" }) : null,
-        input({ type: "search", class: "input cm-find", placeholder: c.thread ? "Search here" : "Search messages", "aria-label": "Search these messages", value: C.q, oninput: e => { C.q = e.target.value; clearTimeout(qTimer); qTimer = setTimeout(ctx.update, 120); } }),
-        c.thread && app() && !simpleOn() ? button("More", () => { C.more = !C.more; ctx.update(); }, { size: "s", kind: "quiet", title: "Priority, timeline" }) : null)),
-    C.more && c.thread && app() && !simpleOn() ? moreMenu(c, ctx) : null,
+      c.thread && !app() ? tierControl(c.thread) : null),
+    h("div", { class: "cm-tools" },
+      people.length ? avatars(people) : null,
+      d?.posts.some(p => p.text.length > 2400) ? button("Contents", () => import("../rich/rail.js").then(m => m.openRail()), { size: "s", kind: "quiet", cls: "rc-railbtn", title: "What's in this thread" }) : null,
+      input({ type: "search", class: "input cm-find", placeholder: c.thread ? "Search here" : "Search messages", "aria-label": "Search these messages", value: C.q, oninput: e => { C.q = e.target.value; clearTimeout(qTimer); qTimer = setTimeout(ctx.update, 120); }, onkeydown: e => { if (e.key === "Escape") { e.stopPropagation(); C.q = ""; C.find = false; e.target.blur(); ctx.update(); } } }),
+      h("button", { type: "button", class: "btn", "data-kind": "icon", "aria-label": "Search here", title: "Search here", "aria-pressed": String(find),
+        onclick: () => { C.find = !find; if (!C.find) C.q = ""; ctx.update(); if (C.find) queueMicrotask(() => document.querySelector(".cm-find")?.focus()); } }, icon("search")),
+      off > 0 && !simpleOn() ? button(`Show ${off} hidden`, () => setShow(SHOW.ALL, ctx), { size: "s", kind: "quiet", cls: "cm-hid", title: "Turn on For you, Updates and Agent comms" }) : null,
+      c.thread && app() && !simpleOn() ? menuBtn("more", "More", "more", ctx) : null),
+    C.menu === "title" ? titleMenu(c, n, d) : null,
+    C.menu === "more" && c.thread && app() && !simpleOn() ? moreMenu(c, ctx) : null,
     who.length ? h("div", { class: "cm-people" }, who) : null,
     c.thread ? asides(c.thread) : null);
 }
@@ -437,7 +522,7 @@ function homePane(ctx) {
     w ? h("div", { class: "cm-new", "data-key": "new" },
       h("h1", { class: "cm-home-t" }, "What do you want done?"),
       h("p", { class: "cm-home-l" }, simpleOn() ? "Say it the way you'd tell a person. Your Hive starts on it and answers here." : "Say it the way you'd tell a person. An agent starts on it and answers here; it may bring in helpers if the job has parts."),
-      !room ? h("p", { class: "cm-home-warn", "data-tone": "limited", role: "status" }, statusDot("limited"), simpleOn() ? "Your Hive has used up its allowance for now, so new work waits until it comes back." : "Every Claude account is past its usage line, so new work waits until there's room. See Usage.") : null,
+      !room ? h("p", { class: "cm-home-warn", "data-tone": "limited", role: "status" }, statusDot("limited"), simpleOn() ? "Your Hive has used up its allowance for now, so new work waits until it comes back." : (((S.app && S.app.setup && S.app.setup.logins) || []).some(l => l.signed_in) ? "Every Claude account is past its usage line, so new work waits until there's room. See Usage." : "No Claude account is signed in yet. Sign in under Settings > Accounts so new work can start.")) : null,
       composer({ thread: null, update: ctx.update, place: "home", autofocus: conversation(ctx.arg).open }),
       simpleOn() && !n && !local.length && ![...S.threads.values()].some(d => d.posts.some(p => p.from === "person")) ? h("div", { class: "frow", "data-key": "starters", "aria-label": "Ideas to start with" }, STARTERS.map(t =>
         button(t, () => { draft(null).text = t; focusComposer(); }, { size: "s" }))) : null,
@@ -462,27 +547,19 @@ function showSays(mask) {
   const on = SHOW_PARTS.filter(([b]) => mask & b).map(x => x[2]), last = on.pop();
   return (on.length ? on.join(", ") + " and " + last : last).replace(/^./, c => c.toUpperCase()) + (mask === SHOW.ALL ? "." : ". The rest runs in the background.");
 }
-function showBar(ctx) {
-  const mask = showMask(), says = showSays(mask);
-  return h("div", { class: "cm-show", "data-key": "show" },
-    h("span", { class: "cm-show-l" }, "Show"),
-    h("div", { class: "cm-picks", role: "group", "aria-label": "Show" },
-      SHOW_PARTS.map(([b, l, t]) => h("button", { type: "button", "aria-pressed": String(!!(mask & b)), title: t.replace(/^./, c => c.toUpperCase()), onclick: () => setShow(showMask() ^ b, ctx) }, l))),
-    h("span", { class: "meta cm-show-says", title: says }, says));
-}
 
 export default {
   id: "comms", label: () => (app() ? "Chat" : "Comms"),
   tab: true,
   badge: () => { if (!app() || !S.live) return null; const g = needs(), n = g.asks.length + g.foryou.length + g.trouble.length; return n ? String(n) : null; },
   poll: { every: 3000, run: async ctx => { if (await pollDelivered()) ctx.update(); } },
-  escape: () => { if (C.more) { C.more = false; L.ctx && L.ctx.update(); return; } if (!cancelReply() && asideOpen()) closeAside(); },
-  leave: () => { clearTimeout(qTimer); C.more = false; },
+  escape: () => { if (C.menu || C.find) { C.menu = null; if (!C.q.trim()) C.find = false; L.ctx && L.ctx.update(); return; } if (!cancelReply() && asideOpen()) closeAside(); },
+  leave: () => { clearTimeout(qTimer); C.menu = null; C.find = false; },
   render(ctx) {
     L.ctx = ctx;
     if (!S.live) return h("div", { class: "page" }, empty("Reading…", { kind: "loading" }));
     const c = conversation(ctx.arg);
-    if (C.conv !== c.arg) { Object.assign(C, { conv: c.arg, q: C.next || "", next: null, limit: FIRST, more: false }); }
+    if (C.conv !== c.arg) { Object.assign(C, { conv: c.arg, q: C.next || "", next: null, limit: FIRST, menu: null, find: false }); }
     L.opts = { showThread: !c.thread, mark: words(C.q) };
     refresh(c);
     queueMicrotask(() => sync(c, ctx));
@@ -493,18 +570,21 @@ export default {
         // Keyed by conversation: another one is a new element, so it opens at its end. Wrapped so that swap doesn't move the composer, which would drop focus.
         h("div", { class: "cm-mw", "data-key": "mw" },
           h("div", { class: "cm-msgs", "data-key": "m:" + (c.arg || ""), "data-own": "", "data-sig": "own", role: "log", "aria-live": "off", "aria-label": "Messages", tabindex: "0" })),
-        c.thread && app() ? strip(c.thread) : null,
+        c.thread && app() && !(post && c.thread) ? strip(c.thread) : null,
         post && c.thread ? asidePanel(c.thread, ctx.update) : null,
-        post && c.thread ? composer({ thread: c.thread, update: ctx.update }) : null,
+        c.thread && app() ? openCard(c.thread, { jump: jumpTo, answer: p => replyTo(p), update: ctx.update, atEnd: !L.box || L.box.dataset.key !== "m:" + (c.arg || "") || L.stuck }) : null,   // what's open for the person, so they needn't read back (110401090fd2)
+        post && c.thread ? composer({ thread: c.thread, update: ctx.update, top: app() ? strip(c.thread) : null }) : null,
         post && c.all ? h("p", { class: "cm-hint meta", "data-key": "hint" }, "To start something new, use New conversation.") : null];
-    return h("div", { class: "cm", "data-key": "comms", "data-in": c.arg ? "" : null, "data-home": c.home ? "" : null, style: `--top-h:${top ? top.offsetHeight : 47}px` },
-      simpleOn() ? null : showBar(ctx),
-      h("nav", { class: "cm-side", "aria-label": app() ? "Conversations" : "Threads" },
+    return h("div", { class: "cm", "data-key": "comms", "data-in": c.arg ? "" : null, "data-home": c.home ? "" : null, style: `--top-h:${top ? top.offsetHeight : 47}px;--cm-w:${sideW}px` },
+      h("nav", { class: "cm-side", "aria-label": app() ? "Conversations" : "Threads" }, grip(),
         h("div", { class: "cm-filters" },
-          post ? button("New conversation", null, { href: href("comms", "~new"), kind: "primary", cls: "cm-newbtn" }) : null,
-          input({ type: "search", placeholder: app() ? "Search all conversations" : "Search all threads", "aria-label": "Search all conversations by name or content", value: C.tq, oninput: e => { C.tq = e.target.value; ctx.update(); } }),
+          post ? button("New conversation", null, { href: href("comms", "~new"), kind: "quiet", icon: "new", cls: "cm-newbtn" }) : null,
+          h("div", { class: "cm-search" }, icon("search"),
+            input({ type: "search", placeholder: app() ? "Search" : "Search threads", "aria-label": "Search all conversations by name or content", value: C.tq, oninput: e => { C.tq = e.target.value; ctx.update(); }, onkeydown: e => { if (e.key === "Escape") { e.stopPropagation(); C.tq = ""; e.target.value = ""; e.target.blur(); ctx.update(); } } })),
+          simpleOn() ? null : showChips(ctx),
           words(C.tq).length || simpleOn() ? null : h("div", { class: "cm-scope" }, h("span", null, app() ? "Conversations" : "Threads"),
-            seg([["recent", app() ? "Recent" : "Last 24h"], ["all", "All"]], C.scope, k => { C.scope = k; ctx.update(); }, { label: "Which conversations" }))),
+            h("button", { type: "button", class: "cm-scope-b", title: C.scope === "recent" ? (app() ? "Only the last 7 days are listed. Show every conversation." : "Only the last 24 hours are listed. Show every thread.") : "List only the recent ones",
+              onclick: () => { C.scope = C.scope === "recent" ? "all" : "recent"; ctx.update(); } }, C.scope === "recent" ? "Show all" : "Recent only"))),
         h("div", { class: "cm-tl", "data-own": "", "data-sig": "own", tabindex: "-1" }),
         app() && !simpleOn() ? h("div", { class: "cm-side-f" }, button("All messages", null, { href: href("comms", "~all"), size: "s", kind: "quiet" })) : null),
       h("section", { class: "cm-convo", "aria-label": "Conversation", ...(post && c.thread ? dropZone(c.thread) : {}) },
@@ -512,3 +592,13 @@ export default {
         post && c.thread ? h("div", { class: "cm-drop", "aria-hidden": "true", "data-key": "drop" }, "Drop files to attach them") : null));
   },
 };
+
+// A header menu (title, More) closes on a press anywhere outside it and its button (the person, 2026-11-04, post 11040100216b).
+// So does an empty "Search here" box (11040131d9c5); with words in it, it stays, since it's what the messages are filtered by.
+if (typeof document !== "undefined") document.addEventListener("pointerdown", e => {
+  const menu = C.menu && !e.target.closest?.(".cm-menu, .cm-head [aria-haspopup]");
+  const find = C.find && !C.q.trim() && !e.target.closest?.(".cm-find, .cm-tools [aria-label=\"Search here\"]");
+  if (!menu && !find) return;
+  if (menu) C.menu = null; if (find) C.find = false;
+  L.ctx && L.ctx.update();
+}, true);

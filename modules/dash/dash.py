@@ -229,6 +229,45 @@ def live_usage(base=30, most=900):
         time.sleep(1)
 
 
+USAGE_HISTORY = STATE / "usage_history.jsonl"  # one line every 10 minutes: each login's weekly and 5-hour use, for the Usage page's history
+
+
+def week_now(l, t=None):
+    """A login's weekly use in percent as of now: 0 once its weekly reset has passed with no newer reading. None if never read."""
+    w, r = l.get("weekly"), (l.get("resets") or {}).get("weekly")
+    if w is None: return None
+    return 0.0 if r and r < (t or time.time()) else w
+
+
+def record_usage(every=600):
+    """Append each login's use to USAGE_HISTORY every `every` seconds, so the history holds for logins no session has
+    used lately (the session logs only report the login they ran on). Runs in its own thread; a failed write skips that tick."""
+    while True:
+        t = time.time()
+        try:
+            row = {}
+            for l in logins():
+                w = week_now(l, t)
+                if w is None: continue
+                r5 = (l.get("resets") or {}).get("five_hour")
+                row[l["path"]] = {"w": w, "f": 0.0 if r5 and r5 < t else l.get("five")}
+            if row:
+                with open(USAGE_HISTORY, "a") as fh: fh.write(json.dumps({"t": round(t), "l": row}) + "\n")
+        except (OSError, ValueError): pass
+        time.sleep(every)
+
+
+_hist = {"key": None, "rows": []}
+
+
+def usage_history():
+    """USAGE_HISTORY's rows, re-read only when the file changes."""
+    try: st = USAGE_HISTORY.stat(); key = (st.st_mtime, st.st_size)
+    except OSError: return []
+    if _hist["key"] != key: _hist.update(key=key, rows=jlines(USAGE_HISTORY))
+    return _hist["rows"]
+
+
 def plan_of(p):
     """A login's plan as a short label ("Pro", "Max 20x"), from the non-secret fields of its credentials file; None if unknown.
     Reads only subscriptionType and rateLimitTier, never the tokens."""
@@ -300,6 +339,42 @@ def thread_names():
             if db: db.close()
         _names.update(mtime=mtime, names=names)
     return _names["names"]
+
+
+# ---------- the person's own view of threads (GET/POST /api/thread-meta) ----------
+# Pins, archive and new titles the person gives threads on Chat. Kept beside the board, never in it: the board and every link keep
+# the thread's id. {thread: {"title": str, "pin": ms, "archived": ms}}; a key that's off is left out, a thread with none is dropped.
+THREAD_META = STATE / "thread-meta.json"
+META_LOCK = threading.Lock()
+
+def thread_meta():
+    try: v = json.loads(THREAD_META.read_text())
+    except (OSError, ValueError): return {}
+    return v if isinstance(v, dict) else {}
+
+def set_thread_meta(d):
+    """d: {thread, and any of title (str, "" takes it off), pin (bool), archived (bool)}. Returns the new entry."""
+    th = str(d.get("thread") or "")
+    if not THREAD_NAME.fullmatch(th): raise ValueError("a thread name is letters, digits and . _ : -")
+    with META_LOCK:
+        all_ = thread_meta(); m = dict(all_.get(th) or {}); now_ms = int(time.time() * 1000)
+        if "title" in d:
+            t = " ".join(str(d["title"] or "").split())[:80]
+            if t and t != th: m["title"] = t
+            else: m.pop("title", None)
+        for k in ("pin", "archived"):
+            if k in d:
+                if not isinstance(d[k], bool): raise ValueError(k + " is true or false")
+                if d[k]: m[k] = now_ms
+                else: m.pop(k, None)
+        if d.get("pin") is True: m.pop("archived", None)        # pinning brings it back
+        if d.get("archived") is True: m.pop("pin", None)
+        if m: all_[th] = m
+        else: all_.pop(th, None)
+        STATE.mkdir(parents=True, exist_ok=True)
+        t = STATE / f".thread-meta.json.{os.getpid()}.{threading.get_ident()}"
+        t.write_text(json.dumps(all_, indent=1)); t.replace(THREAD_META)
+    return m
 
 
 # ---------- killing an agent's run (POST /api/kill) ----------
@@ -715,7 +790,9 @@ class Usage:
             now = [u.get("inputTokens", 0), u.get("outputTokens", 0), u.get("cacheReadInputTokens", 0), u.get("cacheCreationInputTokens", 0)]
             old = was.get("t", [0, 0, 0, 0])
             for i in range(4): f["t"][i] += max(0, now[i] - old[i])
-            f["m"][m] = f["m"].get(m, 0) + max(0.0, (u.get("costUSD") or 0) - was.get("c", 0))
+            dm = max(0.0, (u.get("costUSD") or 0) - was.get("c", 0))
+            f["m"][m] = f["m"].get(m, 0) + dm
+            if dm: b = f.setdefault("mh", {}).setdefault(hour, {}); b[m] = b.get(m, 0) + dm  # per model per hour, so the page can range it
             s["mu"][m] = {"t": now, "c": u.get("costUSD") or 0}
 
     def read_owners(self):
@@ -763,10 +840,18 @@ class Usage:
 
     def view(self):
         with self.lock:
-            files = {k: {x: v.get(x) for x in ("c", "t", "m", "h", "tools", "turns", "init")} for k, v in self.files.items() if v["turns"] or v["tools"] or v.get("init")}
+            files = {k: {x: v.get(x) for x in ("c", "t", "m", "mh", "h", "tools", "turns", "init")} for k, v in self.files.items() if v["turns"] or v["tools"] or v.get("init")}
             cfg = jload(HOME / "core" / "config.json", {}) or {}
+            hist = {}  # the recorded history fills the 10-minute slots the session logs left empty
+            since = time.time() - 8 * 86400  # a week's chart and a day to spare; the file keeps all of it
+            for r in usage_history():
+                if not isinstance(r, dict) or (r.get("t") or 0) < since: continue
+                for path, v in (r.get("l") or {}).items():
+                    if isinstance(v, dict) and v.get("w") is not None:
+                        f = v.get("f")
+                        hist.setdefault(path, {})[int(r["t"] // 600)] = [r["t"], None if f is None else f / 100, v["w"] / 100]
             by_login = [{**l, "limits": self.limits.get(l["path"], {}),
-                         "series": [v for _, v in sorted(self.series.get(l["path"], {}).items())]} for l in logins()]
+                         "series": [v for _, v in sorted({**hist.get(l["path"], {}), **self.series.get(l["path"], {})}.items())]} for l in logins()]
             return {"files": files, "logins": by_login,
                     "scanning": self.scanning, "stop_pct": cfg.get("usage_stop_pct"), "providers": dict(PROVIDERS)}
 
@@ -817,6 +902,181 @@ def agent_feed(name, limit=70):
                 elif c.get("type") == "text" and c.get("text", "").strip():
                     out.append({"t": t, "k": "said", "x": redact(c["text"][:1500])})
     return out[-limit:]
+
+
+
+_work = {}  # session log path -> {"off", "files": {path: [n, last, kind]}, "commits": [...], "prs": [...]}: read on from where it stopped
+WORK_BUCKET = 300  # tokens over time, in 5-minute steps: [start, input, output, cache read, cache write, model calls]
+EDIT_TOOLS = {"Edit": "edit", "MultiEdit": "edit", "Write": "write", "NotebookEdit": "edit"}
+SHELL_WRITE = re.compile(r"(?:\bcat\s*>{1,2}\s*|\btee\s+(?:-a\s+)?)([~/\w.\-]+)[^\n]*<<|\bsed\s+-i(?:\s+-E)?\s+(?:'[^'\n]*'|\"[^\"\n]*\")\s+([~/\w.\-]+)\s*(?:$|[;&|\n])")
+COMMIT_MSG = re.compile(r"""\bcommit\b[^\n]*?(?:-m\s*(?:"([^"\n]+)|'([^'\n]+)')|<<'?(\w+)'?\s*\n([^\n]+))""")
+PR_TITLE = re.compile(r"""\bgh\s+pr\s+create\b[^\n]*?--title\s+(?:"([^"\n]+)"|'([^'\n]+)')""")
+
+
+def _work_scan(q):
+    k = str(q)
+    w = _work.get(k) or {"off": 0, "files": {}, "commits": [], "prs": [], "b": {}, "mid": None}
+    home = str(HOME)
+    def path(x):
+        x = str(x or "").strip()
+        if not x: return None
+        if x.startswith(home + "/"): x = "~" + x[len(home):]
+        return x if len(x) < 300 else None
+    try:
+        with open(q, "rb") as fh:
+            fh.seek(w["off"])
+            for ln in fh:
+                if not ln.endswith(b"\n"): break
+                w["off"] += len(ln)
+                if not ln.startswith(b'{"type":"assistant"'): continue
+                try: e = json.loads(ln)
+                except ValueError: continue
+                t, msg = ts(e.get("timestamp")), e.get("message") or {}
+                u = msg.get("usage")
+                if t and u and msg.get("id") != w["mid"]:  # one model call can span several lines, each with the same usage
+                    w["mid"] = msg.get("id")
+                    tk = [u.get("input_tokens") or 0, u.get("output_tokens") or 0, u.get("cache_read_input_tokens") or 0, u.get("cache_creation_input_tokens") or 0]
+                    b = w["b"].setdefault(int(t // WORK_BUCKET * WORK_BUCKET), [0, 0, 0, 0, 0])
+                    for i in range(4): b[i] += tk[i]
+                    b[4] += 1
+                if b'"tool_use"' not in ln: continue
+                for c in e.get("message", {}).get("content") or []:
+                    if c.get("type") != "tool_use": continue
+                    nm, inp = c.get("name"), c.get("input") or {}
+                    hits = []
+                    if nm in EDIT_TOOLS: hits.append((inp.get("file_path") or inp.get("notebook_path"), EDIT_TOOLS[nm]))
+                    elif nm == "Bash":
+                        cmd = str(inp.get("command") or "")
+                        for m in SHELL_WRITE.finditer(cmd): hits.append((m.group(1) or m.group(2), "shell"))
+                        if re.search(r"\bgit\b[^\n|;&]*\bcommit\b", cmd) and "--dry-run" not in cmd:
+                            m = COMMIT_MSG.search(cmd)
+                            msg = m and (m.group(1) or m.group(2) or m.group(4))
+                            if msg and not msg.startswith("$("): w["commits"].append({"t": t, "x": redact(short(msg, 140))})
+                        m = PR_TITLE.search(cmd)
+                        if m: w["prs"].append({"t": t, "x": redact(short(m.group(1) or m.group(2), 140))})
+                    for f, kind in hits:
+                        f = path(f)
+                        if not f or f.startswith("/tmp/") or "/.claude" in f: continue
+                        r = w["files"].setdefault(f, [0, t, kind])
+                        r[0] += 1; r[1] = t or r[1]
+                        if kind == "write" and r[2] == "shell": r[2] = kind
+    except OSError:
+        return w
+    _work[k] = w
+    return w
+
+
+def agent_work(name, full=True):
+    """What an agent made or changed, from all its session logs: files it edited or wrote (by tool, or a shell heredoc or sed -i),
+    commits it made and PRs it opened, with when. Best effort: a file written by a script it ran isn't seen.
+    A limited sign-in gets the counts only, since paths and messages can say what a private job is."""
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,40}", name or ""): return {}
+    try: ps = sorted((HOME / "sessions").glob(name + "-*.jsonl"), key=lambda q: q.stat().st_mtime)
+    except OSError: return {}
+    files, commits, prs, buckets = {}, [], [], {}
+    for q in ps:
+        w = _work_scan(q)
+        for t0, b in w["b"].items():
+            r = buckets.setdefault(t0, [0, 0, 0, 0, 0])
+            for i in range(5): r[i] += b[i]
+        for f, (n, t, kind) in w["files"].items():
+            r = files.setdefault(f, [0, 0, kind]); r[0] += n; r[1] = max(r[1], t or 0)
+            if kind == "write": r[2] = kind
+        commits += w["commits"]; prs += w["prs"]
+    rows = sorted(({"p": f, "n": n, "t": t, "k": k} for f, (n, t, k) in files.items()), key=lambda r: -(r["t"] or 0))
+    out = {"files": rows[:60], "nfiles": len(rows), "commits": commits[-30:][::-1], "ncommits": len(commits), "prs": prs[-20:][::-1],
+           "step": WORK_BUCKET, "b": [[t0, *b] for t0, b in sorted(buckets.items())]}
+    if not full: out = {**out, "files": [], "commits": [], "prs": []}
+    return out
+
+
+class Steps:
+    """Every agent's tool calls and words, from all the session logs, for the Ledger page (/api/ledger). Each log is read on
+    from where the last look stopped, so after the first pass a look costs only what was written since. Kept in memory as short
+    rows (a few tens of MB for tens of thousands of steps); filtered and paged here, so the page only ever gets one page.
+    Codex logs carry no times, so they're left out. Each log's agent and thread come from its start event in ~/log.jsonl."""
+    EVERY = 5
+
+    def __init__(self):
+        self.rows, self.off, self.owner, self.log_off, self.at, self.sorted = [], {}, {}, 0, 0, True
+        self.lock, self.busy, self.ready = threading.Lock(), False, False
+
+    def scan(self):
+        try:
+            with open(LOG, "rb") as fh:
+                fh.seek(self.log_off)
+                for ln in fh:
+                    if not ln.endswith(b"\n"): break
+                    self.log_off += len(ln)
+                    if b'"start"' not in ln: continue
+                    try: e = json.loads(ln)
+                    except ValueError: continue
+                    if e.get("event") == "start" and e.get("out"): self.owner[Path(e["out"]).name] = (e.get("name") or "", e.get("thread") or "")
+        except OSError: pass
+        new = []
+        try: files = list((HOME / "sessions").glob("*.jsonl"))
+        except OSError: files = []
+        for q in files:
+            k = q.name
+            try: size = q.stat().st_size
+            except OSError: continue
+            if size <= self.off.get(k, 0): continue
+            name, thread = self.owner.get(k) or (k.split("-")[0], "")
+            off = self.off.get(k, 0)
+            try:
+                with open(q, "rb") as fh:
+                    fh.seek(off)
+                    for ln in fh:
+                        if not ln.endswith(b"\n"): break
+                        off += len(ln)
+                        if not ln.startswith(b'{"type":"assistant"'): continue
+                        try: e = json.loads(ln)
+                        except ValueError: continue
+                        t = ts(e.get("timestamp"))
+                        if not t: continue
+                        for c in (e.get("message") or {}).get("content") or []:
+                            if c.get("type") == "tool_use":
+                                inp = c.get("input") or {}
+                                tool = str(c.get("name") or "")
+                                d = inp.get("command") or inp.get("file_path") or inp.get("notebook_path") or inp.get("pattern") or inp.get("url") or inp.get("query") or inp.get("prompt") or ""
+                                x, d = redact(short(describe_tool(tool, inp), 220)), redact(short(d, 400))
+                                new.append((t, name, thread, "tool", tool, x, d, " ".join((name, thread, tool, x, d)).lower()))
+                            elif c.get("type") == "text" and str(c.get("text") or "").strip():
+                                x = redact(short(c["text"], 400))
+                                new.append((t, name, thread, "said", "", x, "", " ".join((name, thread, x)).lower()))
+            except OSError: pass
+            self.off[k] = off
+        return new
+
+    def refresh(self):
+        try:
+            new = self.scan()
+            with self.lock:
+                if new: self.rows.extend(new); self.sorted = False
+                self.at, self.ready = time.time(), True
+        finally: self.busy = False
+
+    def query(self, agent="", thread="", kind="", q="", before=None, since=None, limit=300, full=True):
+        with self.lock:
+            if time.time() - self.at > self.EVERY and not self.busy:
+                self.busy = True
+                threading.Thread(target=self.refresh, daemon=True).start()
+            if not self.sorted: self.rows.sort(key=lambda r: r[0]); self.sorted = True
+            rows = self.rows
+        words = [w for w in str(q or "").lower().split() if w][:8]
+        limit = max(1, min(int(limit or 300), 3000))
+        out, total = [], 0
+        for r in reversed(rows):
+            if before and r[0] >= before: continue
+            if since and r[0] < since: break
+            if agent and r[1] != agent: continue
+            if thread and r[2] != thread: continue
+            if kind in ("tool", "said") and r[3] != kind: continue
+            if not full and r[3] != "tool": continue
+            if words and not all(w in r[7] for w in words): continue
+            total += 1
+            if len(out) < limit: out.append(list(r[:7]) if full else [*r[:5], "", ""])
+        return {"rows": out, "total": total, "ready": self.ready}
 
 
 # ---------- web ----------
@@ -1146,13 +1406,13 @@ WEB = STATE / "web.json"
 INSTALLED = HOME / ".hive-installed"
 FORWARDED = ("cf-ray", "cf-connecting-ip", "cf-access-jwt-assertion", "cf-ipcountry", "cf-visitor", "cdn-loop", "x-forwarded-for",
              "x-forwarded-host", "x-forwarded-proto", "x-real-ip", "forwarded", "via", "true-client-ip")
-GET_CAP = {"/api/live": "read", "/api/board": "read", "/api/log": "read", "/api/usage": "read", "/api/jobs": "read", "/api/agent": "read",
-           "/api/projects": "read", "/api/agent-costs": "read", "/api/thread-names": "read", "/json": "read", "/api/target": "read", "/api/inbox": "read", "/api/delivered": "read",
+GET_CAP = {"/api/live": "read", "/api/board": "read", "/api/log": "read", "/api/usage": "read", "/api/jobs": "read", "/api/agent": "read", "/api/agent-work": "read", "/api/ledger": "read",
+           "/api/projects": "read", "/api/agent-costs": "read", "/api/thread-names": "read", "/api/thread-meta": "read", "/json": "read", "/api/target": "read", "/api/inbox": "read", "/api/delivered": "read",
            "/api/config": "config", "/api/modules": "modules", "/api/signin": "logins", "/api/plans": "plans", "/api/secrets": "secrets",
            "/api/settings": "config", "/api/update": "config", "/api/signin-codex": "logins", "/api/design": "logins", "/api/brand/logo": "read",
-           "/api/kb/home": "files", "/api/kb/open": "files", "/api/kb/search": "files", "/api/kb/raw": "files"}
+           "/api/kb/home": "files", "/api/kb/open": "files", "/api/kb/search": "files", "/api/kb/raw": "files", "/api/kb/map": "files"}
 POST_CAP = {"/api/kill": "stop", "/api/tier": "tier", "/api/login-pause": "limits", "/api/login-limit": "limits", "/api/provider-limit": "limits",
-            "/api/post": "post", "/api/feedback": "post", "/api/update": "config", "/api/share-copy": "config", "/api/upload": "post", "/api/inbox-read": "post", "/api/config": "config", "/api/starter": "config",
+            "/api/post": "post", "/api/thread-meta": "post", "/api/feedback": "post", "/api/issue-link": "post", "/api/update": "config", "/api/share-copy": "config", "/api/upload": "post", "/api/inbox-read": "post", "/api/config": "config", "/api/starter": "config",
             "/api/module": "modules", "/api/signin": "logins", "/api/signin/code": "logins", "/api/signin/cancel": "logins", "/api/plan": "plans", "/api/secret": "secrets",
             "/api/signin-codex": "logins", "/api/account-key": "logins", "/api/design": "logins", "/api/brand": "config", "/api/brand/logo": "config"}
 LOCAL_ONLY = {"/api/access", "/api/settings", "/api/share-copy"}  # who may do what is never changed from outside, whatever outside.can says
@@ -1812,13 +2072,14 @@ def kb_search(q):
     """Names first, then lines inside files. A plain string, any case; a hard time limit, and never in worktrees or toolchains."""
     q = str(q or "").strip()[:200]
     if len(q) < 2: return {"q": q, "names": [], "hits": [], "more": False}
+    ranked = kb_ranked(q)
     ws = q.lower().split(); names = []
     for path, t in kb_index()["items"]:
         low = path.lower()  # the index only holds names kb_walk let through, and no links
         if all(w in low for w in ws): names.append({"path": path, "t": int(t)})
         if len(names) >= 60: break
     names.sort(key=lambda x: (not x["path"].startswith("kb/"), x["path"].count("/"), -x["t"]))
-    if not KB_SEARCH.acquire(timeout=4): return {"q": q, "names": names, "hits": [], "more": True, "busy": True}
+    if not KB_SEARCH.acquire(timeout=4): return {"q": q, "names": names, "hits": [], "more": True, "busy": True, "ranked": ranked}
     hits, more, deadline = [], False, time.time() + 6
     try:
         dirs = [d for d in ("kb", "core", "modules", "investigations", "archive", "files") if (HOME / d).is_dir() and not (HOME / d).is_symlink()]
@@ -1827,7 +2088,7 @@ def kb_search(q):
         skip = sorted(KB_SKIP)
         cmd = (["rg", "--no-config", "--no-ignore-parent", "-FinH", "--no-heading", "--color=never", "--max-count=3", "--max-filesize=1M", "--max-columns=400", *[f"--glob=!{d}" for d in skip], "-e", q, "--", *dirs]
                if shutil.which("rg") else ["grep", "-rFinIH", "-m3", *[f"--exclude-dir={d}" for d in skip], "--exclude-dir=.*", "-e", q, "--", *dirs])
-        if not dirs: return {"q": q, "names": names, "hits": [], "more": False}
+        if not dirs: return {"q": q, "names": names, "hits": [], "more": False, "ranked": ranked}
         pr = subprocess.Popen(cmd, cwd=HOME, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, errors="replace")
         timer = threading.Timer(6, pr.kill); timer.start()
         try:
@@ -1841,7 +2102,143 @@ def kb_search(q):
             timer.cancel(); pr.kill(); pr.wait(); pr.stdout.close()
     except OSError: pass
     finally: KB_SEARCH.release()
-    return {"q": q, "names": names, "hits": hits, "more": more}
+    return {"q": q, "names": names, "hits": hits, "more": more, "ranked": ranked}
+
+
+# Ranked search and the notes map. Ranked search reuses kb's own index (~/core/kb.py, SQLite FTS5 under ~/.cache/hive-kb): the same
+# passages agents get from `kb find`, with snippets. No kb.py or no index yet: the page falls back to kb_search's plain matches.
+kb_tool_memo = {"mod": None, "tried": 0.0, "fresh": 0.0, "busy": False}
+kb_map_memo = {"t": 0, "v": None}
+
+
+def kb_tool():
+    """kb.py loaded as a module, or None. Tried again at most once a minute."""
+    m = kb_tool_memo
+    if m["mod"] or time.time() - m["tried"] < 60: return m["mod"]
+    m["tried"] = time.time(); f = HOME / "core" / "kb.py"
+    if not f.is_file(): return None
+    try:
+        spec = importlib.util.spec_from_file_location("h2_kb_tool", f); mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
+        m["mod"] = mod
+    except Exception: m["mod"] = None
+    return m["mod"]
+
+
+def kb_freshen(mod):
+    """Bring kb's index up to date in the background, at most once a minute; a search reads what is there."""
+    m = kb_tool_memo
+    if m["busy"] or time.time() - m["fresh"] < 60: return
+    m["busy"], m["fresh"] = True, time.time()
+    def run():
+        try:
+            c = mod.connect()
+            try: mod.refresh(c)
+            finally: c.close()
+        except Exception: pass
+        finally: m["busy"] = False
+    threading.Thread(target=run, daemon=True).start()
+
+
+def kb_searchable(path):
+    """A file plain search would look in: kb_path's guards, under the same roots, never in a worktree or a skipped folder."""
+    parts = path.split("/")
+    if not kb_path(path) or parts[0] not in ("kb", "core", "modules", "investigations", "archive", "files", "projects") or KB_SKIP & set(parts[:-1]): return False
+    d = HOME
+    for x in parts[:-1]:
+        d = d / x
+        if kb_is_worktree(d): return False
+    return True
+
+
+def kb_ranked(q, n=40):
+    """kb's best passages for q: [{path, line, title, text, source, date, thread, post}], or None when there is no index to ask."""
+    mod = kb_tool()
+    if not mod or not os.path.isfile(mod.DB):
+        if mod: kb_freshen(mod)
+        return None
+    kb_freshen(mod)
+    try:
+        c = mod.connect()
+        try:
+            if not c.execute("SELECT 1 FROM doc LIMIT 1").fetchone(): return None
+            hits, tried, words, total = mod.search(c, q)
+            out = []
+            for x in mod.diversify(hits, n * 2):
+                if len(out) >= n: break
+                path = x["path"]; thread = post = None
+                if path.startswith("board:"):
+                    r = c.execute("SELECT title FROM doc WHERE path=?", (path,)).fetchone()
+                    thread, post = (r[0] if r else "")[7:], path[6:]
+                elif not kb_searchable(path): continue
+                text, line = mod.snippet(c, x, words, 240)
+                title = "" if thread else kb_title(HOME / path) if path.endswith(".md") else ""
+                out.append({"path": path, "line": line, "text": KB_BLOB.sub("[hidden]", redact(text)), "title": title, "source": x["source"],
+                            "date": x["date"], "thread": thread, "post": post})
+            return {"passages": out, "words": words, "total": total, "spelling": next((t[10:] for t in tried if t.startswith("spelling: ")), None)}
+        finally: c.close()
+    except Exception: return None
+
+
+def kb_sources():
+    """What ranked search covers: files and passages per source in kb's index."""
+    mod = kb_tool()
+    if not mod or not os.path.isfile(mod.DB): return []
+    try:
+        c = mod.connect()
+        try: return [{"source": s, "files": n, "t": int(t or 0)} for s, n, t in c.execute("SELECT source, count(*), max(mtime) FROM doc GROUP BY source ORDER BY count(*) DESC")]
+        finally: c.close()
+    except Exception: return []
+
+
+KB_LINK = re.compile(r"\]\(([^)\s#]+\.md)(?:#[^)]*)?\)|~/kb/([\w./-]+\.md)|\[\[([\w.-]+)\]\]|`([\w./-]+\.md)`")
+
+
+def kb_topic(rel, prefixes):
+    parts = rel.split("/")
+    if len(parts) > 2: return parts[1]
+    first = re.split(r"[-_.]", parts[-1])[0].lower()
+    return first if prefixes.get(first, 0) >= 2 else "general"
+
+
+def kb_map():
+    """Every note under ~/kb: title, size, time, topic, and the notes it links to. At most a minute old."""
+    if time.time() - kb_map_memo["t"] < 60 and kb_map_memo["v"]: return kb_map_memo["v"]
+    notes = {}
+    for rel, t in kb_walk("kb", 6, 4000):
+        if rel.endswith(".md") and "/boards-site-pdfs/" not in rel: notes[rel] = t
+    by_name, by_stem, prefixes = {}, {}, {}
+    for rel in notes:
+        name = rel.rsplit("/", 1)[-1]; by_name.setdefault(name, rel); by_stem.setdefault(name[:-3].lower(), rel)
+        if rel.count("/") == 1: k = re.split(r"[-_.]", name)[0].lower(); prefixes[k] = prefixes.get(k, 0) + 1
+    out = []
+    for rel, t in notes.items():
+        f = HOME / rel
+        try:
+            with f.open(errors="replace") as src: text = src.read(KB_TEXT_MAX)
+        except OSError: continue
+        links = set()
+        for m in KB_LINK.finditer(text):
+            if m[1]:
+                target = m[1][2:] if m[1].startswith("~/") else None
+                if target is None:
+                    parts = []
+                    for part in (rel.rsplit("/", 1)[0] + "/" + m[1]).split("/"):
+                        if part == "..": parts and parts.pop()
+                        elif part not in ("", "."): parts.append(part)
+                    target = "/".join(parts)
+            elif m[2]: target = "kb/" + m[2]
+            elif m[3]: target = by_stem.get(m[3].lower())
+            else: target = by_name.get(m[4].rsplit("/", 1)[-1]) if "/" not in m[4] or m[4].startswith(("kb/", "~/kb/", "history/")) else None
+            if target in notes and target != rel: links.add(target)
+        out.append({"path": rel, "title": kb_title(f, text), "size": len(text), "t": int(t), "topic": kb_topic(rel, prefixes), "links": sorted(links)})
+    back = {}
+    for x in out:
+        for l in x["links"]: back.setdefault(l, []).append(x["path"])
+    for x in out: x["back"] = sorted(back.get(x["path"], []))
+    out.sort(key=lambda x: x["path"])
+    v = {"notes": out, "sources": kb_sources()}
+    kb_map_memo.update(t=time.time(), v=v)
+    return v
 
 
 def delivered_view(days=3):
@@ -2039,6 +2436,23 @@ def send_feedback(d):
     except OSError as e: raise ValueError(f"couldn't send it: {e}")
     if r.returncode: raise ValueError(short(r.stderr, 300).removeprefix("not sent: ") or "couldn't send it")
     return {"ok": True}
+
+
+
+def issue_link(d):
+    """A consumer Hive's "Open as a GitHub issue": a scrubbed, prefilled new-issue link on the project's repo, which the person
+    reviews and posts from their own GitHub account. Nothing is sent from here and no token is used."""
+    f = HOME / "modules" / "report" / "report.py"
+    if not SETTINGS.is_file() or not f.is_file(): raise ValueError("this Hive has no repository to open issues on")
+    text, page = d.get("text"), d.get("page")
+    if not isinstance(text, str) or not text.strip() or len(text) > 8000: raise ValueError("write what went wrong first (up to 8,000 characters)")
+    page = page if isinstance(page, str) and re.fullmatch(r"[A-Za-z0-9_-]{1,40}", page) else "app"
+    title = " ".join(text.split())[:80] or "Problem on the %s page" % page
+    try: r = subprocess.run([sys.executable, "-I", str(f), "issue", title], input="%s\n\n(from the %s page)" % (text, page), env=child_env(), capture_output=True, text=True, timeout=20)
+    except OSError as e: raise ValueError(f"couldn't make the link: {e}")
+    m = re.search(r"https://github\.com/\S+/issues/new\?\S+", r.stdout)
+    if not m: raise ValueError(short(r.stdout or r.stderr, 300) or "couldn't make the link")
+    return {"ok": True, "url": m.group(0)}
 
 
 def report_now():
@@ -2456,7 +2870,11 @@ SETUP = CachedStale(setup_state, 20)  # set .t = 0 to read again. Stale, since e
 # ---------- consumer setup: settings.json, the walkthrough's and Settings' file. The starter and the report module read it. ----------
 # No file (Hive itself, and every install from before it) means today's behaviour: nothing here writes, and no route can create it.
 SETTINGS = HOME / "settings.json"
-AGENT_MODELS = ("opus", "sonnet", "haiku", "fable")  # the Claude models a post may ask for too (the starter's MODELS)
+def _agent_models():
+    try: m = cfg().get("models")
+    except Exception: m = None
+    return tuple(m) if isinstance(m, list) and m and all(isinstance(x, str) for x in m) else ("haiku", "sonnet", "opus", "fable")
+AGENT_MODELS = _agent_models()  # the Claude models a post may ask for too (config.json "models", the starter's MODELS)
 PICK_MODELS = {**{m: m for m in AGENT_MODELS}, "astra": "codex:gpt-6-astra"}  # the message box's model menu
 SHARE_KEYS = ("failures", "usage", "everything")
 _settings_lock = threading.Lock()
@@ -2791,6 +3209,7 @@ def serve(port):
     deliv_c = Cached(delivered_view, 2.5)
     web_c = Cached(web_stamp, 10)
     agent_costs = AgentCosts()
+    steps = Steps()  # the Ledger page's tool calls and words; the first look starts reading the session logs
 
     class H(BaseHTTPRequestHandler):
         def send(self, body, ct, status=200, cookie=None, framed_here=False, cache="no-store"):
@@ -2818,11 +3237,13 @@ def serve(port):
             ct = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif"}.get(f.suffix.lower())
             page = view and f.suffix.lower() in (".html", ".htm")
             if page: ct = "text/html; charset=utf-8"
+            pdf = view and f.suffix.lower() == ".pdf"   # only ?view=1: the viewer frames it; the browser's own PDF viewer needs a CSP without "sandbox"
+            if pdf: ct = "application/pdf"
             self.send_response(200)
             self.send_header("Content-Type", ct or "application/octet-stream")
             self.send_header("Content-Length", str(f.stat().st_size))
             self.send_header("Content-Disposition", ("inline" if ct else "attachment") + f'; filename="{f.name}"')
-            self.send_header("Content-Security-Policy", PAGE_CSP if page else "sandbox; default-src 'none'")
+            self.send_header("Content-Security-Policy", PAGE_CSP if page else "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'self'" if pdf else "sandbox; default-src 'none'")
             self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header("Referrer-Policy", "no-referrer")
             self.send_header("Cache-Control", "no-store")
@@ -2952,10 +3373,12 @@ def serve(port):
                 self.send(json.dumps(self.app_info(), default=str).encode(), J)
             elif u.path == "/api/brand/logo":
                 self.send_logo()
-            elif u.path in ("/api/target", "/api/inbox", "/api/config", "/api/modules", "/api/signin", "/api/plans", "/api/secrets", "/api/settings", "/api/update", "/api/signin-codex", "/api/design", "/api/kb/home", "/api/kb/open", "/api/kb/search", "/api/kb/raw") and self.route == "open":
+            elif u.path in ("/api/target", "/api/inbox", "/api/config", "/api/modules", "/api/signin", "/api/plans", "/api/secrets", "/api/settings", "/api/update", "/api/signin-codex", "/api/design", "/api/kb/home", "/api/kb/open", "/api/kb/search", "/api/kb/raw", "/api/kb/map") and self.route == "open":
                 self.send_error(404)
             elif u.path == "/api/kb/home":
                 self.send(json.dumps(kb_home()).encode(), J)
+            elif u.path == "/api/kb/map":
+                self.send(json.dumps(kb_map()).encode(), J)
             elif u.path == "/api/kb/search":
                 self.send(json.dumps(kb_search(q.get("q", [""])[0])).encode(), J)
             elif u.path == "/api/kb/open":
@@ -3001,6 +3424,15 @@ def serve(port):
                 self.send(json.dumps(agent_costs.view()).encode(), J)
             elif u.path == "/api/thread-names":
                 self.send(json.dumps(thread_names()).encode(), J)
+            elif u.path == "/api/thread-meta":
+                self.send(json.dumps(thread_meta()).encode(), J)
+            elif u.path == "/api/agent-work":
+                self.send(json.dumps(agent_work(q.get("name", [""])[0], self.route != "outside" or self.mode == "full")).encode(), J)
+            elif u.path == "/api/ledger":
+                g = lambda k, d="": q.get(k, [d])[0]
+                num = lambda k: float(g(k)) if re.fullmatch(r"\d+(\.\d+)?", g(k)) else None
+                self.send(json.dumps(steps.query(g("agent"), g("thread"), g("kind"), g("q")[:200], num("before"), num("since"),
+                                                 int(num("limit") or 300), self.route != "outside" or self.mode == "full")).encode(), J)
             elif u.path == "/api/agent":
                 self.send(json.dumps(feed_for(agent_feed(q.get("name", [""])[0]), self.route != "outside" or self.mode == "full")).encode(), J)
             elif u.path == "/api/projects":
@@ -3041,16 +3473,18 @@ def serve(port):
                 if not 0 < n <= LOGO_MAX: return self.deny(413, "a logo can be up to 2 MB")
                 try: return self.send(json.dumps(set_logo(self.rfile.read(n))).encode(), "application/json")
                 except (ValueError, OSError) as e: return self.deny(400, str(e))
-            if not 0 < n < ({"/api/post": 2**20, "/api/feedback": 2**20, "/api/plan": 2**19, "/api/secret": 2**18}.get(u.path) or (4096 if self.route != "open" else 1024)): return self.send_error(403)
+            if not 0 < n < ({"/api/post": 2**20, "/api/feedback": 2**20, "/api/issue-link": 2**16, "/api/plan": 2**19, "/api/secret": 2**18}.get(u.path) or (4096 if self.route != "open" else 1024)): return self.send_error(403)
             try: d = json.loads(self.rfile.read(n))
             except ValueError: return self.send_error(400)
             if not isinstance(d, dict): return self.send_error(400)
             num = lambda v: v is None or (isinstance(v, (int, float)) and not isinstance(v, bool))
             J = "application/json"
-            if u.path in ("/api/post", "/api/feedback", "/api/update", "/api/inbox-read", "/api/config", "/api/starter", "/api/module", "/api/signin", "/api/signin/code", "/api/signin/cancel", "/api/access", "/api/plan", "/api/secret", "/api/settings", "/api/signin-codex", "/api/account-key", "/api/design", "/api/brand"):
+            if u.path in ("/api/post", "/api/thread-meta", "/api/feedback", "/api/issue-link", "/api/update", "/api/inbox-read", "/api/config", "/api/starter", "/api/module", "/api/signin", "/api/signin/code", "/api/signin/cancel", "/api/access", "/api/plan", "/api/secret", "/api/settings", "/api/signin-codex", "/api/account-key", "/api/design", "/api/brand"):
                 try:
                     if u.path == "/api/post": res = person_post(d.get("text"), d.get("thread"), d.get("reply_to"), d.get("files"), signer=self.signer, limited="config" not in self.can, simple=d.get("simple") is True, model=d.get("model"))
+                    elif u.path == "/api/thread-meta": res = set_thread_meta(d)
                     elif u.path == "/api/feedback": res = send_feedback(d)
+                    elif u.path == "/api/issue-link": res = issue_link(d)
                     elif u.path == "/api/update": res = update_do(d.get("do"))
                     elif u.path == "/api/plan": res = save_plan(d.get("name"), d.get("text"), d.get("version"), bool(d.get("start")), self.signer)
                     elif u.path == "/api/secret": res = set_secret(d.get("name"), d.get("value"), self.signer, delete=bool(d.get("delete")))
@@ -3102,6 +3536,7 @@ def serve(port):
         def log_message(self, *a): pass
 
     threading.Thread(target=live_usage, daemon=True).start()
+    threading.Thread(target=record_usage, daemon=True).start()
     threading.Thread(target=provider_status, daemon=True).start()
     threading.Thread(target=SETUP.get, daemon=True).start()  # so the first page after a restart doesn't pay for it
     srv = ThreadingHTTPServer(("127.0.0.1", port), H)  # loopback only: never opens the machine

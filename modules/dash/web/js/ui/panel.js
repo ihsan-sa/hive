@@ -9,7 +9,21 @@ import { agentPage, loadFeed, pollAgent } from "../views/agent.js";
 import { isAgent } from "../core/model.js";
 import { button } from "./kit.js";
 
-const P = { name: null, root: null, body: null, bar: null, unsub: null, timer: 0, back: null };
+const PMIN = 380, key = "panel.w";
+const maxW = () => Math.max(PMIN, innerWidth - 240);
+const clampW = (w) => Math.max(PMIN, Math.min(maxW(), Math.round(w)));
+function setW(w, save) { w = clampW(w); document.documentElement.style.setProperty("--panel-w", w + "px"); if (save) try { localStorage.setItem(key, String(w)); } catch (e) {} return w; }
+function curW() { return P.root ? P.root.getBoundingClientRect().width : 640; }
+function grip() {
+  const g = h("div", { class: "panel-grip", role: "separator", "aria-orientation": "vertical", "aria-label": "Resize panel", tabindex: 0, title: "Drag to resize, double-click to reset" });
+  const move = (e) => setW(innerWidth - e.clientX, false);
+  const up = () => { g.classList.remove("on"); removeEventListener("pointermove", move); removeEventListener("pointerup", up); removeEventListener("pointercancel", up); setW(curW(), true); };
+  g.onpointerdown = (e) => { e.preventDefault(); g.classList.add("on"); addEventListener("pointermove", move); addEventListener("pointerup", up); addEventListener("pointercancel", up); };
+  g.ondblclick = () => { try { localStorage.removeItem(key); } catch (e) {} document.documentElement.style.removeProperty("--panel-w"); };
+  g.onkeydown = (e) => { const d = e.key === "ArrowLeft" ? 24 : e.key === "ArrowRight" ? -24 : 0; if (d) { e.preventDefault(); setW(curW() + d, true); } };
+  return g;
+}
+const P = { name: null, root: null, body: null, bar: null, grip: null, unsub: null, timer: 0, back: null };
 
 function render(force) {
   if (!P.name || (!force && selecting())) return;
@@ -35,6 +49,8 @@ export function openPanel(kind, name) {
     P.bar = h("div", { class: "panel-b" }); P.body = h("div");
     P.root = h("aside", { class: "panel", tabindex: -1, onclick: leaving }, P.bar, P.body);
     document.body.append(P.root);
+    try { const w = +localStorage.getItem(key); if (w) setW(w, false); } catch (e) {}
+    P.grip = grip(); document.body.append(P.grip);
     P.back = document.activeElement;
     P.unsub = subscribe(() => render(false));
     P.timer = setInterval(() => { if (!document.hidden && P.name) pollAgent(P.name, refresh); }, 2000);
@@ -50,7 +66,7 @@ export function openPanel(kind, name) {
 
 export function closePanel() {
   if (!P.root) return;
-  clearInterval(P.timer); P.unsub && P.unsub(); P.root.remove();
+  clearInterval(P.timer); P.unsub && P.unsub(); P.root.remove(); P.grip && P.grip.remove();
   const back = P.back;
   Object.assign(P, { name: null, root: null, body: null, bar: null, unsub: null, timer: 0, back: null });
   if (back && back.isConnected && back.focus) back.focus({ preventScroll: true });
@@ -59,5 +75,5 @@ export function closePanel() {
 
 // Capture, so Escape closes the panel and doesn't also reach the view under it. A window open on top gets Escape first.
 addEventListener("keydown", e => { if (e.key === "Escape" && P.root && !document.querySelector("dialog[open]")) { e.stopPropagation(); closePanel(); } }, true);
-document.addEventListener("pointerdown", e => { if (P.root && e.target.closest && !e.target.closest(".panel,button,a,input,textarea,select,label,dialog,canvas,svg,summary")) closePanel(); });
+document.addEventListener("pointerdown", e => { if (P.root && e.target.closest && !e.target.closest(".panel,.panel-grip,button,a,input,textarea,select,label,dialog,canvas,svg,summary")) closePanel(); });
 addEventListener("hashchange", () => { if (parse().id === "agent") closePanel(); });
