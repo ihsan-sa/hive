@@ -213,10 +213,16 @@ const SHARES = [
   ["everything", "Everything, when I say so", "Separate from the reports above: a scrubbed copy of recent logs and of the board, and that includes your chats. Ticking this sends nothing: it goes only when you press Send a copy now, and each one is kept in reports/bundles in your Hive folder."],
   ["github", "Open GitHub issues about failures from my GitHub login. I'll review each fix before it's sent.", "Off by default. Failures go to the Hive project as public issues from your own GitHub account, at most 3 a day, one per kind of failure. When an agent drafts a fix it waits here: nothing of it goes until you read it and press Send."],
 ];
+const GH_INSTALL = [["Linux (Debian, Ubuntu)", "sudo apt install gh"], ["Mac", "brew install gh"], ["Windows", "winget install --id GitHub.cli"]];
+/** How to install gh on the machine the Hive runs on, then sign in. The Hive can't install it itself: it needs the machine's admin. */
+const ghInstall = () => h("div", { class: "field-h", "data-key": "gh-install" },
+  h("p", null, "To install it, run one of these in a terminal on the computer the Hive runs on, then run gh auth login there and reload this page. Other systems: ",
+    h("a", { href: "https://cli.github.com", target: "_blank", rel: "noopener" }, "cli.github.com"), "."),
+  h("ul", { class: "list" }, GH_INSTALL.map(([os, cmd]) => h("li", null, os + ": ", h("code", null, cmd), " ", copyButton(cmd)))));
 /** Where GitHub issues stand here: no gh, not signed in, or ready. Null when the report module can't say. */
 function ghLine(g) {
   if (!g) return null;
-  if (!g.gh) return sayMsg("GitHub's command line tool, gh, isn't installed, so failures go to the makers' receiver instead.", "warn");
+  if (!g.gh) return [sayMsg("GitHub's command line tool, gh, isn't installed, so failures go to the makers' receiver instead.", "warn"), ghInstall()];
   if (!g.ready) return sayMsg("gh isn't signed in to GitHub, so failures go to the makers' receiver instead. Run gh auth login in a terminal to sign in.", "warn");
   return sayMsg("gh is signed in. Issues go to " + (g.repo || "the Hive project") + ".", "good");
 }

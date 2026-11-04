@@ -204,6 +204,36 @@ def cmd_search(a):
         blob = json.dumps(p).lower()
         if all(w in blob for w in words): show(p)
 
+def cmd_approve(a):
+    """An agent asks the person for a yes that no warden can give; the dashboard shows Approve/Deny (a major one asks for a typed x)."""
+    me = os.environ.get("HIVE_NAME", "").lower()
+    d = STATE / "approvals"
+    if a.do == "status":
+        f = d / f"{a.id}.json"
+        try: print(json.loads(f.read_text())["state"])
+        except (OSError, ValueError, KeyError): sys.exit(f"hive approve status: no request {a.id}")
+        return
+    if not me: sys.exit("hive approve ask: only an agent asks")
+    if not a.why.strip() or not a.thread: sys.exit('hive approve ask --thread T [--major] --why "what you want to do, in a plain sentence"')
+    aid = os.urandom(4).hex(); d.mkdir(parents=True, exist_ok=True)
+    (d / f"{aid}.json").write_text(json.dumps({"id": aid, "from": me, "thread": a.thread, "why": a.why.strip(), "major": bool(a.major), "state": "pending", "at": now()}))
+    how = "type x in the box on the dashboard card, then Approve" if a.major else "press Approve on the dashboard card"
+    text = f"For you: approve or deny request {aid}: {' '.join(a.why.split())[:180]}\n\nApproval request {aid} from {me}: {a.why.strip()}\n\nTo answer: {how} (or reply here in words if you are not at the dashboard; a typed reply is not the button)."
+    r = subprocess.run([sys.executable, str(CORE / "hive"), "post", "--thread", a.thread], input=text, text=True)
+    if r.returncode: sys.exit(r.returncode)
+    print(aid)
+    print(f"Request {aid} is waiting. Check with: hive approve status {aid} (pending|approved|denied). Only the dashboard button sets approved; the person's answer also arrives as a post.", file=sys.stderr)
+
+def cmd_feedback_draft(a):
+    """An agent drafts feedback about Hive; the dashboard opens the Send feedback window with it filled in, and the person presses Send (or closes it)."""
+    me = os.environ.get("HIVE_NAME", "").lower()
+    text = (a.text or sys.stdin.read()).strip()
+    if not me or not text: sys.exit("hive feedback-draft: an agent gives the text as an argument or on stdin (quoted heredoc)")
+    d = STATE / "feedback-drafts"; d.mkdir(parents=True, exist_ok=True)
+    aid = os.urandom(4).hex()
+    (d / f"{aid}.json").write_text(json.dumps({"id": aid, "from": me, "text": text[:8000], "at": now()}))
+    print(f"Draft {aid} is waiting: the dashboard opens Send feedback with it filled in. Nothing is sent until the person presses Send.")
+
 def cmd_done(a):
     if os.environ.get("HIVE_BROKER"): forward({"verb": "done"})
     me = os.environ.get("HIVE_NAME", "").lower()
@@ -763,6 +793,10 @@ p.add_argument("--quiet", default="2h"); p.add_argument("--within", default="3d"
 p = sp.add_parser("login", help="hive login list | add NAME [--paused] | rename OLD NEW | pause NAME | resume NAME | limit NAME --weekly N --five-hour N: the Claude logins Hive runs on (add signs in and puts it to use; a paused login is still read for usage but gets no runs)")
 p.add_argument("do", choices=["list", "add", "rename", "pause", "resume", "limit"]); p.add_argument("name", nargs="?"); p.add_argument("new", nargs="?"); p.add_argument("--paused", action="store_true", help="with add: add it paused")
 p.add_argument("--weekly", help="with limit: stop at N%% weekly, or off"); p.add_argument("--five-hour", dest="five_hour", help="with limit: stop at N%% of the 5-hour limit, or off"); p.set_defaults(f=cmd_login)
+p = sp.add_parser("feedback-draft", help="hive feedback-draft [TEXT] (or text on stdin): draft feedback about Hive for the makers; the dashboard opens the Send feedback window prefilled and the person presses Send. Not for board posts")
+p.add_argument("text", nargs="?"); p.set_defaults(f=cmd_feedback_draft)
+p = sp.add_parser("approve", help="hive approve ask --thread T [--major] --why \"...\" | status ID: ask the person for a yes no warden can give; the dashboard shows an Approve/Deny card (--major also asks for a typed x)")
+p.add_argument("do", choices=["ask", "status"]); p.add_argument("id", nargs="?"); p.add_argument("--thread"); p.add_argument("--why", default=""); p.add_argument("--major", action="store_true"); p.set_defaults(f=cmd_approve)
 p = sp.add_parser("sandbox", help="hive sandbox check [--json]: does the sandbox work on this machine, by trying it")
 p.add_argument("do", choices=["check"]); p.add_argument("--json", action="store_true"); p.set_defaults(f=cmd_sandbox)
 p = sp.add_parser("step", help="hive step ask --why \"...\" --script PATH | status | list | approve ID | deny ID: run something once outside the sandbox")

@@ -70,6 +70,13 @@ function sentNote() {   // Sending ends the overlay: the person is back on the p
   document.body.append(note); setTimeout(() => note.remove(), 10000);
 }
 
+/** An agent drafted feedback (hive feedback-draft): open the window with its words in, once. The person edits and presses Send, or closes it; either clears the draft. */
+export function offerDraft(d) {
+  if (FB.open || FB.offered === d.id || !canFeedback()) return;
+  FB.offered = d.id; FB.comment = String(d.text || "").slice(0, 8000); FB.draftId = d.id;
+  openFeedback();
+}
+
 /** Open the overlay: the grey comes up at once, then the frozen picture under it. The overlay itself is left out of the picture. */
 export async function openFeedback() {
   if (FB.open) return; FB.open = true;
@@ -204,7 +211,8 @@ export async function openFeedback() {
     } catch (e) { if (tab) tab.close(); say.textContent = "No link: " + e.message; say.hidden = false; }
   }
   dlg.addEventListener("keydown", e => e.stopPropagation());   // what's open under the picture stays as it is: Escape closes this overlay only, and no shortcut acts on the page under it
-  dlg.addEventListener("close", () => { if (!away) { dlg.remove(); FB.open = false; back(); requestAnimationFrame(back); } });
+  dlg.addEventListener("close", () => { if (FB.draftId && !away) { post("/api/feedback-draft-done", { id: FB.draftId }).catch(() => {}); FB.draftId = null; }
+    if (!away) { dlg.remove(); FB.open = false; back(); requestAnimationFrame(back); } });
   const back = holdScroll();
   document.body.append(dlg); dlg.showModal(); text.focus({ preventScroll: true }); back();
   await new Promise(r => { requestAnimationFrame(() => setTimeout(r)); setTimeout(r, 100); });   // let the grey show first: copying a big page takes a moment (the timeout is for a tab with no frames)

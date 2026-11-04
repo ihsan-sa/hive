@@ -2,6 +2,8 @@
 // Toggle: click the logo 5 times quickly, or run hiveNames() in the console. Kept in this browser.
 import { S } from "./store.js";
 import { setTextMap } from "./dom.js";
+import { beeAround } from "./bee.js";
+import { logoClicks } from "./easter.js";
 
 const KEY = "hive.names";
 // 0 = real names, 1 = ihsan-N, 2 = short human names
@@ -36,6 +38,7 @@ export function initAlias() {
 /** Logo click handler: five quick clicks flip it. */
 let clicks = [];
 export function logoClick(e) {
+  if (e.currentTarget) { beeAround(e.currentTarget); logoClicks(); }
   const t = Date.now(); clicks = clicks.filter(x => t - x < 1500); clicks.push(t);
   if (clicks.length >= 5) { clicks = []; e.preventDefault(); toggleNames(); }
 }
