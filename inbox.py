@@ -43,6 +43,16 @@ def new_posts(name, rec, seen):
             out.append(p)
     return out
 
+STRENGTH = ("haiku", "sonnet", "opus", "fable")
+
+def model_note(name, rec, ps):
+    """A post naming this running agent that picks a stronger model (the menu, or --model): it should be answered on that model, so say how. A weaker one just holds from the next run."""
+    now_on = rec.get("model")
+    if now_on not in STRENGTH and now_on is not None: return ""
+    up = [m for p in ps if name in names(p) and (m := p.get("model")) in STRENGTH and (now_on is None or STRENGTH.index(m) > STRENGTH.index(now_on))]
+    return (f"\n\nThat post picks {up[-1]}, and this run is on {now_on or 'another model'}. Finish the step you're on and don't answer it here: "
+            f'run `hive model {up[-1]} "picked for the post above"` and end your turn. You resume on {up[-1]} with your memory, and answer it there.') if up else ""
+
 def fmt(p):
     to = " ".join("@" + n for n in sorted(names(p)))
     return (f"[{p.get('id')}] {str(p.get('at', ''))[:19]} {p.get('from')}{' -> ' + to if to else ''} "
@@ -65,7 +75,7 @@ def main():
     if not ps: return
     with f.open("a") as fh: fh.write("".join(p["id"] + "\n" for p in ps))
     msg = ("New on the board for you while you work (you'll get these automatically; answer with "
-           "hive post where it matters):\n\n" + "\n\n".join(fmt(p) for p in ps))
+           "hive post where it matters):\n\n" + "\n\n".join(fmt(p) for p in ps) + model_note(name, rec, ps))
     if event == "Stop":
         print(json.dumps({"decision": "block", "reason": msg}))
     else:

@@ -1475,6 +1475,15 @@ PAGE_CSP = "sandbox allow-scripts; default-src 'none'; style-src 'unsafe-inline'
 SIMPLE_NOTE = ("simple mode: this person isn't technical. Plain words, no agent names or jargon, speak as one assistant, one question at a time with your recommendation, "
                "show results as links or files, a draft website as one .html file holding its own styles and pictures. For anything they must approve, say what it does, what it costs and whether it can be undone")
 
+# /btw QUESTION in a conversation: a side question. It goes to a new thread btw-<parent>-<4 hex>, so the parent's agent never gets it
+# (its inbox hook hands over only its own thread and its name), and starts a fresh agent there with the brief below in the head.
+# No ")", newline or "@" in the brief (see SIMPLE_NOTE). Follow-ups in the side thread wake that same agent, as in any thread.
+BTW = re.compile(r"/btw(?:\s+(.*))?", re.S | re.I)
+BTW_THREAD = re.compile(r"btw-(.+)-[0-9a-f]{4}")
+BTW_NOTE = ("side question, asked with /btw about thread {p}: read it with `hive read --thread {p}` and whatever logs or files you need, then answer here, briefly, with `hive post` in this thread (an answer left only in your final message never reaches the person). "
+            "It's a side question, so post nothing in {p}, don't name its agents with the at sign, change nothing and start no work. If the answer calls for action, say what you'd do and let the person decide")
+
+
 def person_post(text, thread=None, reply_to=None, uploads=(), signer=None, limited=False, simple=False, model=None):
     """A post as the person. As the Slack mirror does it: a plain message wakes the agent on the thread (thread_agent), a reply wakes the author
     of the post replied to, and no thread (or a thread with no agent yet) starts a new agent. Mentions in the text win.
@@ -1489,11 +1498,17 @@ def person_post(text, thread=None, reply_to=None, uploads=(), signer=None, limit
     if not text and not paths: raise ValueError("nothing to send")
     if model and model not in PICK_MODELS: raise ValueError("that model isn't one of " + ", ".join(PICK_MODELS))
     if not text: text = "Attached: " + ", ".join(p.name for p in paths)
+    btw = BTW.fullmatch(text)
+    if btw:
+        if not thread: raise ValueError("/btw asks aside about a conversation, so send it from one")
+        if not (btw[1] or "").strip(): raise ValueError("write the side question after /btw")
+        parent = BTW_THREAD.fullmatch(str(thread)); parent = parent[1] if parent else str(thread)   # asked from a side thread: still about the main one
+        thread, text, reply_to = f"btw-{parent[:90]}-{secrets.token_hex(2)}", btw[1].strip(), None
     # Approving a step goes to the broker, which takes only a whole line in this form from a plain person post. So it stays bare, with nothing added;
     # a limited sign-in's posts are marked and never count, whatever lines they hold.
     word = not limited and not paths and bool(STEP_WORD.fullmatch(text.strip()))
     if word: text, reply_to, signer, simple = text.strip(), None, None, False
-    if signer or simple: text = "(" + (f"from {signer}, " if signer else "") + "web app" + (f", {SIMPLE_NOTE}" if simple else "") + f") {text}"
+    if signer or simple or btw: text = "(" + (f"from {signer}, " if signer else "") + "web app" + (f", {SIMPLE_NOTE}" if simple else "") + (", " + BTW_NOTE.format(p=parent) if btw else "") + f") {text}"
     INDEX.refresh()
     who = None
     if reply_to:

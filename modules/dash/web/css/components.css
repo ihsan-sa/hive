@@ -1297,3 +1297,12 @@ dialog.fb::backdrop{background:rgb(0 0 0 / .38)}
 .brand-name{max-width:16rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .brand-logo{height:22px;width:auto;max-width:88px;margin-right:var(--s2);object-fit:contain;flex:none}
 .set-logo{height:32px;max-width:120px;margin-right:0}
+/* /btw aside: a plain transcript above the composer, no boxes */
+.ba{position:relative;display:grid;gap:4px;margin:0 var(--s4);padding:8px 0 4px;border-top:1px solid var(--line)}
+.ba-top{position:absolute;top:6px;right:0;display:flex;gap:12px;font-size:var(--t-s,.8em)}
+.ba-l{color:var(--ink-3);text-decoration:none}.ba-l:hover{color:var(--ink);text-decoration:underline}
+.ba-m{max-height:min(32vh,280px);overflow:auto;overscroll-behavior:contain;display:grid;gap:8px}
+.ba-p b{display:block}
+.ba-p .md>:first-child,.ba-p p{margin-top:0}.ba-p .md>:last-child,.ba-p p{margin-bottom:0}
+.ba-in{width:100%;border:0;border-bottom:1px solid var(--line);border-radius:0;background:none;padding:6px 0}
+.ba-in:focus-visible{outline:none;border-bottom-color:var(--focus)}
