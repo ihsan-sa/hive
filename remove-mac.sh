@@ -1,6 +1,6 @@
 #!/bin/sh
 # Uninstall the Hive from a Mac. One line:
-#   curl -fsSL https://hive.ihsan.cc/uninstall-mac.sh | sh
+#   curl -fsSL https://hivelab.ca/uninstall-mac.sh | sh
 # Deletes its VM and ~/.hive after you type delete. Its own Lima only: a Lima of yours, in ~/.lima, isn't touched.
 set -eu
 
@@ -10,7 +10,7 @@ MARK='# added by the Hive installer'
 die() { echo "hive: $*" >&2; exit 1; }
 
 main() {
-  [ "$(uname -s)" = Darwin ] || die "this is the Mac uninstaller. On Linux: curl -fsSL https://hive.ihsan.cc/uninstall.sh | sh"
+  [ "$(uname -s)" = Darwin ] || die "this is the Mac uninstaller. On Linux: curl -fsSL https://hivelab.ca/uninstall.sh | sh"
   [ "$(id -u)" != 0 ] || die "run this as yourself, not with sudo"
   D="$HOME/.hive"
   [ -e "$D/.hive-mac" ] || die "there's no Hive from the Mac installer here, so nothing changed"
