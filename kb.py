@@ -23,8 +23,9 @@ ROOTS = [("kb", "kb", 1.25), ("core", "core", 1.1), ("projects", "projects", 1.1
          ("docs", "archive/knowledge/docs", 1.0), ("boards", "archive/knowledge/boards", 1.0),
          ("journals", "archive/knowledge/journals", 1.0), ("journals", "archive/knowledge/journals-lines", 1.0),
          ("dispatch", "archive/knowledge/dispatch", 1.0), ("h0", "archive/knowledge/h0", 1.0), ("h1", "archive/knowledge/h1", 1.0),
-         ("box", "archive/knowledge/box", 1.0), ("box", "archive/knowledge/failures", 1.0), ("box", "archive/knowledge/memory", 1.0),
+         ("slack", "archive/knowledge/slack", 1.0), ("goals", "archive/knowledge/goals", 1.0), ("box", "archive/knowledge/memory-raw", 1.0),
          ("old", "archive/knowledge/old", 1.0), ("box", "archive/knowledge/where", 1.0)]
+ABSENT = "Answering that something didn't happen? This shows only the top hits, so first `rg -il WORD ~/archive/knowledge` and read the hits under slack/ and journals/. Then say what you searched and that it wasn't found, never \"no record\": see kb/history/looking-up.md for what is left out."
 TEXT = re.compile(r"\.(md|txt|rst|jsonl?)$")
 SKIP_DIR = {".git", "node_modules", "__pycache__", "dist", "boards-site-pdfs", "build", "runs", ".venv", "venv", "target"}
 # Kept out on purpose: the graded tests hold the answers (they'd rank above the sources), the query log is ours.
@@ -327,8 +328,10 @@ def render(c, q, n=12, frm=None, to=None, src=None):
         out.append(f"{fmt_path(h['path'])}:{line}" + (f" {h['date']}" if h['date'] else "") + f"  {t}")
     if not hits:
         out.append("Nothing. Not proof it isn't there: try other words, a shorter form, or `rg -il WORD ~/kb ~/archive/knowledge`. If you give up: kb miss \"QUESTION\"")
+        out.append(ABSENT)
     else:
         out.append("A/ = ~/archive/knowledge. kb open PATH:LINE for the passage. Imported pages are dated reports, not rules.")
+        out.append(ABSENT)
     return "\n".join(out), top, hits, tried
 
 def cmd_find(a):
