@@ -33,6 +33,8 @@ main() {
       cat "$t" > "$f"; rm -f "$t"
     fi
   done
+  # The app the install made in ~/Applications; one that isn't ours stays.
+  if grep -qs 'made by the Hive install' "$HOME/Applications/Hive.app/Contents/MacOS/Hive"; then rm -rf "$HOME/Applications/Hive.app"; fi
   rm -rf "$D"
   echo "The Hive is gone from this Mac."
   echo "Lima's download cache stays in ~/Library/Caches/lima (about 600 MB), as a Lima of yours may use it. If you don't use Lima, you can delete that folder."

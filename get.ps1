@@ -244,6 +244,31 @@ ln -sf /etc/systemd/system/hive-no-windows.service /etc/systemd/system/multi-use
     Start-Process $conhost -ArgumentList $keep
   } catch { Note "Couldn't set the Hive to start when you sign in: $_. It runs while a hive window is open." }
 
+  # 6b. A Hive icon in the Start menu and on the Desktop: it wakes the Hive if stopped, waits, then opens the app.
+  try {
+    $ico = Join-Path $bin 'Hive.ico'
+    try { & wsl.exe -d $distro -u hive --cd ~ -- bash -lc 'cp ~/modules/dash/web/icons/hive.ico "$(wslpath "$0")"' $ico 2>$null | Out-Null } catch { }
+    $launch = Join-Path $bin 'hive-open.ps1'
+    $body = @(
+      "`$ErrorActionPreference = 'SilentlyContinue'",
+      "Start-Process '$conhost' -ArgumentList '$keep' -WindowStyle Hidden",
+      "`$u = (& wsl.exe -d $distro -u hive --cd ~ -- bash -lc 'hive open --print' | Select-Object -First 1)",
+      "if (`$u -like 'http*') { Start-Process `$u } else { Write-Host 'The Hive did not start. Open a window and run: hive open'; Start-Sleep 8 }"
+    )
+    Set-Content -Encoding ASCII $launch $body
+    $ps = Join-Path $env:windir 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    $shell = New-Object -ComObject WScript.Shell
+    foreach ($dir in @([Environment]::GetFolderPath('Programs'), [Environment]::GetFolderPath('DesktopDirectory'))) {
+      $s = $shell.CreateShortcut((Join-Path $dir 'Hive.lnk'))
+      $s.TargetPath = $ps
+      $s.Arguments = "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$launch`""
+      $s.WindowStyle = 7
+      if (Test-Path $ico) { $s.IconLocation = $ico }
+      $s.Description = 'Open the Hive'
+      $s.Save()
+    }
+  } catch { Note "Couldn't add the Hive icon: $_. Run hive open in a window instead." }
+
   # 7. Open the app.
   $address = (& wsl.exe -d $distro -u hive --cd ~ -- bash -lc 'hive web 2>/dev/null' | Select-Object -First 1)
   End-Line
@@ -254,7 +279,7 @@ ln -sf /etc/systemd/system/hive-no-windows.service /etc/systemd/system/multi-use
   }
   Write-Host 'The Hive is installed. This address is the key to it, so keep it to yourself:'
   if ($address) { Write-Host "  $address" } else { Write-Host "  (it didn't print just now: wait a minute, then run: hive web)" }
-  Write-Host 'To see it again, open a new window and run: hive web'
+  Write-Host 'To open it again, click the Hive icon on your Desktop or in the Start menu.'
   if ($address -like 'http://localhost*' -or $address -like 'http://127.0.0.1*') { try { Start-Process $address } catch { } }
 }
 

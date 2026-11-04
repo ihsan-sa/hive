@@ -48,6 +48,8 @@ If WSL 2 is missing it installs it, which needs your approval and a restart; the
 
 **If the install stops partway,** it says which step and why, shows the end of its log and where the whole log is (`~/.hive-install.log`). Fix what it names (often the network, a missing package or a full disk: it needs about 1.5 GB free) and run the same line again. It carries on from where it stopped, and a download that fails is tried three times first. It also asks whether to send that failure to the Hive's makers so they can fix it. Nothing goes unless you type `y`, and what goes is the step, the error and the end of the log, with your name, home folder, addresses and keys taken out. `HIVE_REPORT=1` before `sh` sends it where nothing can ask, and `HIVE_REPORT=0` stops the question. A coding agent such as Claude Code or Codex can run the install and read the log for you: the main page has a prompt to paste into it.
 
+**To open it again, click the Hive icon.** The install puts one in the Windows Start menu and on the Desktop, in `~/Applications` on a Mac, and in the app menu on Linux. It starts the Hive if it was stopped, waits for it, then opens the app. In the browser you can install the page as an app (Chrome and Edge: the install button in the address bar; Safari: Share, then Add to Dock; iPhone: Share, then Add to Home Screen). Uninstalling removes the icon.
+
 **The address is the key to your Hive.** Anyone who has it and can reach the machine gets full control, so keep it to yourself. To see it again:
 
 | Where | Command |
@@ -145,6 +147,7 @@ When every account is past its line, new agents wait, and running ones finish th
 
 ![The Settings page](https://hivelab.ca/img/guide/settings.png)
 
+- **Notifications:** off to begin with. Turn it on and the browser asks once; after that it tells you when an agent asks you something or finishes a run, even while the tab is in the background. Each browser keeps its own choice. The Hive must be open in a tab or installed app for this to work, and your browser can block it in its site settings.
 - **Stop the hive:** no new agents start, and running ones finish their turn.
 - **Keep work moving:** every 3 hours an agent picks up stalled work and starts work nobody asked for. It uses your limits, so it's off to begin with.
 - **Version, Look for new releases, Update by itself:** see [Updates](#updates).

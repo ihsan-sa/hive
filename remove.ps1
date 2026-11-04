@@ -16,6 +16,7 @@ function Uninstall-Hive {
   & wsl.exe --unregister $distro
   if ($LASTEXITCODE -ne 0) { Write-Host "WSL couldn't delete it (code $LASTEXITCODE)."; return }
   Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path ([Environment]::GetFolderPath('Startup')) 'Hive.lnk')
+  foreach ($d in 'Programs', 'DesktopDirectory') { Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path ([Environment]::GetFolderPath($d)) 'Hive.lnk') }
   try {
     $k = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('Environment')
     $raw = [string]$k.GetValue('Path', '', 'DoNotExpandEnvironmentNames')

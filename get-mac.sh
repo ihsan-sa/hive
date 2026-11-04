@@ -142,11 +142,47 @@ case "${1:-}" in
     ;;
   open)
     up; a=$(address)
-    case "$a" in http://localhost*|http://127.0.0.1*) open "$a" ;; *) echo "hive: no address yet. Try: hive web" >&2; exit 1 ;; esac
+    case "$a" in http://localhost*|http://127.0.0.1*) ;; *) echo "hive: no address yet. Try: hive web" >&2; exit 1 ;; esac
+    # The VM can be up a while before the app answers, so wait for it rather than open a page that says it can't connect.
+    base=$(printf '%s' "$a" | sed 's|^\(http://[^/]*\)/.*|\1/|'); n=0
+    until curl -s -o /dev/null --max-time 2 "$base" || [ "$n" -ge 45 ]; do n=$((n + 1)); sleep 2; done
+    open "$a"
     ;;
   *) up; in_vm hive "$@" ;;
 esac
 W
+}
+
+# A Hive icon in ~/Applications that runs hive open, so nobody needs Terminal to come back. Made here, on this Mac, so Gatekeeper has nothing to quarantine.
+# The icon is taken from the VM and made into an .icns with the Mac's own sips and iconutil; if either fails, the app just has the plain icon.
+make_app() {
+  A="$HOME/Applications/Hive.app"
+  [ ! -e "$A" ] || grep -qs 'made by the Hive install' "$A/Contents/MacOS/Hive" || { echo "$A is something else, so I left it."; return 0; }
+  rm -rf "$A"; mkdir -p "$A/Contents/MacOS" "$A/Contents/Resources" || return 0
+  printf '#!/bin/sh\n# made by the Hive install\nexec "%s/bin/hive" open\n' "$D" > "$A/Contents/MacOS/Hive"; chmod +x "$A/Contents/MacOS/Hive"
+  cat > "$A/Contents/Info.plist" <<'PL'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleName</key><string>Hive</string>
+  <key>CFBundleDisplayName</key><string>Hive</string>
+  <key>CFBundleIdentifier</key><string>local.hive.launcher</string>
+  <key>CFBundleExecutable</key><string>Hive</string>
+  <key>CFBundleIconFile</key><string>Hive</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleVersion</key><string>1</string>
+  <key>NSHighResolutionCapable</key><true/>
+</dict>
+</plist>
+PL
+  t=$(mktemp -d) && "$L" shell --workdir / "$VM" sudo -u hive -H bash -lc 'cat ~/modules/dash/web/icons/hive-1024.png' </dev/null > "$t/h.png" 2>/dev/null \
+    && mkdir "$t/Hive.iconset" && for z in 16 32 64 128 256 512; do
+      sips -z "$z" "$z" "$t/h.png" --out "$t/Hive.iconset/icon_${z}x${z}.png" >/dev/null 2>&1 || break
+      sips -z $((z * 2)) $((z * 2)) "$t/h.png" --out "$t/Hive.iconset/icon_${z}x${z}@2x.png" >/dev/null 2>&1 || break
+    done && iconutil -c icns "$t/Hive.iconset" -o "$A/Contents/Resources/Hive.icns" >/dev/null 2>&1 || true
+  rm -rf "${t:-}"
+  echo "There's now a Hive app in your Applications folder (in your home folder). Open it, or drag it to the Dock."
 }
 
 # Starts the VM when you log in, as the Startup link does on Windows. launchd reads it at the next login. Not "Background": that would slow the agents.
@@ -247,6 +283,7 @@ main() {
   add_to_path
   mkdir -p "$HOME/Library/LaunchAgents"
   agent_plist > "$HOME/Library/LaunchAgents/$AGENT.plist"
+  make_app
 
   address=$("$D/bin/hive" web 2>/dev/null | tr -d '\r' | sed -n 's/.*\(http:[^ ]*\).*/\1/p' | head -n 1)
   [ -n "$address" ] || die "the Hive installed, but it gave no address. Try, in a new Terminal window: hive web"
@@ -254,7 +291,7 @@ main() {
   echo "The Hive is running in its own Linux VM, which can't see your files."
   echo "It starts when you log in. It pauses while this Mac sleeps, and carries on when it wakes."
   echo "Open it at: $address"
-  echo "To open it again, in a new Terminal window: hive open"
+  echo "To open it again, click Hive in your Applications folder, or in a new Terminal window: hive open"
   case "$address" in
     http://localhost*|http://127.0.0.1*)
       # Lima forwards the port a moment after the app listens. If it never does, something on the Mac holds that port.

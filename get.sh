@@ -129,6 +129,19 @@ in_hive() {
   if [ "$OWN" = 1 ]; then env -u XDG_CONFIG_HOME -u XDG_DATA_HOME -u XDG_CACHE_HOME -u XDG_STATE_HOME -u CLAUDE_CONFIG_DIR HOME="$H" PATH="$H/.local/bin:$PATH" XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}" sh -c "$1"
   else $ROOT su - "$U" -c "$1"; fi
 }
+# A clickable "Hive" in the person's app menu, so nobody needs a terminal to come back. Not fatal: a desktop-less machine just has none.
+# In your own account the icon runs hive open (it wakes the app first). With a separate hive user the app keeps running, and the icon opens its address: the browser still holds the sign-in from the first visit.
+launcher() {
+  [ "${HIVE_NO_LAUNCHER:-}" != 1 ] || return 0
+  D="${XDG_DATA_HOME:-$HOME/.local/share}"
+  mkdir -p "$D/applications" "$D/icons/hicolor/512x512/apps" 2>/dev/null || return 0
+  in_hive 'cat ~/modules/dash/web/icons/icon-512.png' </dev/null > "$D/icons/hicolor/512x512/apps/hive.png" 2>/dev/null || return 0
+  if [ "$OWN" = 1 ]; then x="$HOME/.local/bin/hive open"
+  else p=$(printf '%s' "$addr" | sed -n 's|^http://localhost:\([0-9]*\)/.*|\1|p'); [ -n "$p" ] || return 0; x="xdg-open http://localhost:$p/"; fi
+  printf '[Desktop Entry]\nType=Application\nName=Hive\nComment=Open your Hive\nExec=%s\nIcon=hive\nTerminal=false\nCategories=Utility;\n# made by the Hive install\n' "$x" > "$D/applications/hive.desktop" 2>/dev/null || return 0
+  command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "$D/applications" >/dev/null 2>&1 || true
+  echo "There's now a Hive icon in your app menu. Click it to open the Hive again."
+}
 # The one ending. The address is the key to the hive, so it goes on the screen and never in the log. $2 is set on a new install.
 ending() {
   tick_stop; line_end
@@ -148,6 +161,7 @@ Your old folder is still at $OLD_ROOT. Delete it when you're happy."; fi
   echo; echo "$1 Open this address in a browser on this machine, and it takes you from there:"
   [ -n "$addr" ] || addr="(it didn't print just now: wait a minute, then run: $web)"
   echo "  $addr"
+  launcher
   echo "It's the key to this hive, so keep it to yourself. To see it again: $web"
   echo "On another machine: ssh -L PORT:127.0.0.1:PORT this-machine, with the port from that address, then open it there."
   echo "If you'd rather stay in a terminal: $term"

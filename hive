@@ -460,6 +460,24 @@ def cmd_web(a):
     if port_free(port): print(f"The app isn't running. Start it: systemctl --user start hive-dash  (or: python3 ~/modules/dash/dash.py serve)", file=sys.stderr)
     print(f"That address is the key to this hive, so keep it to yourself. On another machine: ssh -L {port}:127.0.0.1:{port} <this-machine>, then open it there.", file=sys.stderr)
 
+def cmd_open(a):
+    """Open the app in the browser, starting it first if it's stopped. What the launcher icon runs, so nobody needs a terminal to come back."""
+    try: web = json.loads((STATE / "web.json").read_text())
+    except (OSError, ValueError): sys.exit("The web app isn't set up on this account (hive web --setup does that).")
+    port = web.get("port", 8077)
+    if port_free(port) and shutil.which("systemctl"):
+        subprocess.run(["systemctl", "--user", "start", "hive-dash"], capture_output=True, timeout=30)
+    for _ in range(150):  # up to 30 s: the service manager returns before the app has bound its port
+        if not port_free(port): break
+        time.sleep(0.2)
+    else: sys.exit(f"The app didn't start. Look at: systemctl --user status hive-dash")
+    # The sign-in address when this account can read it (it sets the browser's cookie); the plain address otherwise, which a browser that has signed in before still accepts.
+    url = f"http://localhost:{port}/login#{web['secret']}" if web.get("secret") else f"http://localhost:{port}/"
+    if a.print: return print(url)
+    for b in (["xdg-open"], ["open"], ["wslview"]):
+        if shutil.which(b[0]): subprocess.Popen(b + [url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True); return
+    print(f"No browser to open. Open this yourself: {url}")
+
 def port_free(p):
     with socket.socket() as s:
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -788,6 +806,8 @@ p = sp.add_parser("update", help="hive update [--check]: an installed Hive goes 
 p.add_argument("--check", action="store_true"); p.add_argument("--auto", action="store_true"); p.set_defaults(f=cmd_update)
 p = sp.add_parser("web", help="hive web: the address of the local web app, with its secret. --new-secret replaces the secret; --setup is install's")
 p.add_argument("--setup", action="store_true"); p.add_argument("--new-secret", action="store_true"); p.set_defaults(f=cmd_web)
+p = sp.add_parser("open", help="hive open: start the web app if it's stopped, then open it in the browser (the launcher icon runs this). --print shows the address instead")
+p.add_argument("--print", action="store_true"); p.set_defaults(f=cmd_open)
 p = sp.add_parser("stalled", help="hive stalled [--quiet 2h] [--within 3d] [--all]: quiet threads nobody is on with something still open (an ask, a question, a name that got no reply); --all adds resting ones")
 p.add_argument("--quiet", default="2h"); p.add_argument("--within", default="3d"); p.add_argument("--all", action="store_true"); p.set_defaults(f=cmd_stalled)
 p = sp.add_parser("login", help="hive login list | add NAME [--paused] | rename OLD NEW | pause NAME | resume NAME | limit NAME --weekly N --five-hour N: the Claude logins Hive runs on (add signs in and puts it to use; a paused login is still read for usage but gets no runs)")

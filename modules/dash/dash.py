@@ -28,7 +28,9 @@ PRIORITIES = HOME / "kb" / "priorities.md"
 UI = Path(__file__).resolve().parent / "ui.html"
 UI_DIR = Path(__file__).resolve().parent / "web"  # the rebuilt page: index.html, css/, js/, vendor/ (local copies of the libraries the chat draws with). Only those are served, not its preview or fixtures.
 DISPLAY_PAGES = ("/single-screen", "/dual-screen", "/dual-screen/1", "/dual-screen/2")  # TV pages: web/display.html; which tiles each shows is in js/display/layouts.js
-UI_CT = {".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".woff2": "font/woff2"}
+UI_CT = {".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".woff2": "font/woff2",
+         ".webmanifest": "application/manifest+json; charset=utf-8", ".png": "image/png", ".ico": "image/x-icon"}
+APP_FILES = re.compile(r"(?:/new)?/(manifest\.webmanifest|sw\.js|icons/[a-z0-9-]+\.(?:png|ico))")  # what lets a browser install the page as an app; plain files, served with no sign-in because the browser fetches them before it has one
 THREAD_HOURS = 12
 
 
@@ -3737,7 +3739,7 @@ def serve(port):
             if cookie: self.send_header("Set-Cookie", cookie)
             # Board text is written by agents: the page takes nothing from elsewhere and sends nothing anywhere.
             framing = "; frame-ancestors 'self'" if framed_here else "" if self.route == "open" else "; frame-ancestors 'none'"  # the page can post as the person, so it can't sit in someone's frame; a TV page may sit in this site's own (the deck's single screen)
-            self.send_header("Content-Security-Policy", "default-src 'none'; connect-src 'self'; frame-src 'self'; img-src 'self' blob: data:; media-src 'self'; font-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; base-uri 'none'; form-action 'none'" + framing)
+            self.send_header("Content-Security-Policy", "default-src 'none'; connect-src 'self'; frame-src 'self'; manifest-src 'self'; worker-src 'self'; img-src 'self' blob: data:; media-src 'self'; font-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; base-uri 'none'; form-action 'none'" + framing)
             if self.route != "open": self.send_header("Referrer-Policy", "no-referrer")
             if gz: self.send_header("Content-Encoding", "gzip")
             self.end_headers(); self.wfile.write(body)
@@ -3875,6 +3877,11 @@ def serve(port):
             display = bool(shown) and shown[1] in DISPLAY_PAGES
             page = u.path in ("/", "/index.html", "/login", "/old", "/new", "/new/") or display
             if not self.admit(u.path, page=page): return
+            m = APP_FILES.fullmatch(u.path)
+            if m:
+                f = UI_DIR / m[1]
+                if not f.is_file() or f.is_symlink(): return self.send_error(404)
+                return self.send(f.read_bytes(), UI_CT.get(f.suffix, "text/javascript; charset=utf-8"), cache="no-cache")
             if self.route != "open":  # the open dash never asks; its reads and switches stay as they were
                 if u.path == "/login" or (page and not self.signed):
                     return self.send(LOGIN_PAGE.encode(), "text/html; charset=utf-8")
