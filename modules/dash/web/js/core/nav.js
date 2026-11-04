@@ -20,7 +20,7 @@ export const APP_NAV = {
   more: ["design", "made"],
 };
 // Simple mode: only these. The rest stays reachable by "Show everything" under More.
-export const SIMPLE_NAV = { main: ["comms", "made", "settings"], more: [], only: true };
+export const SIMPLE_NAV = { main: ["comms", "settings"], more: [], only: true };
 
 /** The tab a view counts as, or null. */
 export function tabOf(id, nav) {

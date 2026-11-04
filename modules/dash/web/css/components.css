@@ -740,7 +740,6 @@ rc-lazy[data-mode=inline]{display:inline}
 .msg{position:relative;max-width:820px;margin:0 auto;padding:6px 10px 6px;border-radius:var(--r-l);min-width:0}
 .msg+.msg{margin-top:6px}
 .msg[data-cont]{margin-top:0;padding-top:1px}
-.msg[data-who=agent]:hover,.msg[data-who=out]:hover,.msg[data-who=sys]:hover{background:var(--hover)}
 .msg[data-who=sys]{color:var(--ink-3);font-size:var(--fs-small)}
 .msg[data-who=me]{--mine:color-mix(in oklch,var(--info) 9%,var(--surface));display:flex;flex-direction:column;align-items:flex-end;padding:4px 0}
 .msg[data-who=me]>.msg-b,.msg[data-who=me]>.msg-q,.msg[data-who=me]>.msg-files{max-width:min(78%,620px)}
@@ -1290,3 +1289,9 @@ dialog.fb::backdrop{background:rgb(0 0 0 / .38)}
   .dacct .dacts .frow { flex-wrap: wrap; }
   .dright { margin-left: 0; }
 }
+/* The hive's own name and logo, from Settings */
+.brand,.dt-brand{min-width:0}
+.dt-brand{display:inline-flex;align-items:center}
+.brand-name{max-width:16rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.brand-logo{height:22px;width:auto;max-width:88px;margin-right:var(--s2);object-fit:contain;flex:none}
+.set-logo{height:32px;max-width:120px;margin-right:0}

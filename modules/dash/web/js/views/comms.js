@@ -8,7 +8,7 @@
 // the messages still on their way (.cm-out), which sync() keeps apart.
 import { h, morph } from "../core/dom.js";
 import { S, can, OUTSIDE, built, post as apiPost, poll } from "../core/store.js";
-import { simpleOn, plainName, HIVE } from "../core/simple.js";
+import { simpleOn, plainName, hiveName } from "../core/simple.js";
 import { agentState, agentStatus, isAgent, isRunning, tierOf, threadTitle, threadState, threadPeople, isSystemThread, SHOW, postKind, threadKinds, closingPosts, displayText, postSource, inUse, fresh7 } from "../core/model.js";
 import { ago, dayName, stamp, clock, dur, short, mdPlain, now, plural, firstSentence, DAY, MIN, HOUR } from "../core/format.js";
 import { href, threadHref, go } from "../core/router.js";
@@ -321,7 +321,7 @@ function line(key, text, act, opts = {}) {
   return h("div", { class: "cm-line", "data-key": opts.key || key, "data-tone": status(key).tone }, statusDot(key, { live: opts.live }), h("span", { class: "cm-line-x" }, text), act ? h("span", { class: "cm-line-a" }, act) : null);
 }
 /** An agent's name in a strip line: a link to it, without a second dot (the line has its own). */
-const who = n => (simpleOn() ? HIVE : agentRef(n, { dot: false }));
+const who = n => (simpleOn() ? hiveName() : agentRef(n, { dot: false }));
 function lastMine(th) { const d = S.threads.get(th); if (!d) return null; for (let i = d.posts.length - 1; i >= 0; i--) if (d.posts[i].from === "person") return d.posts[i]; return null; }
 const notBuilt = () => h("span", { class: "nb", title: "Designed, not built yet: the server needs to do this" }, "not built yet");
 

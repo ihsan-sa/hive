@@ -78,5 +78,8 @@ To write your own, make a folder or git repo with a `module.json`:
 ```
 `bin` commands go on PATH (without it, everything executable in `bin/`), `skills` become Claude Code skills, and `procedures` are what an agent reads first. The core never depends on a module, so a broken one breaks only itself.
 
+## What it sends
+By default, a Hive sends the makers a report when something fails, plus one small check-in a day holding a random ID, the version and the operating system. Chat text, file contents and thread names are never sent. Turn this off in Settings; the app's setup screen shows the same choice before anything goes.
+
 ## Change it
 Settings are in the web app and `~/core/config.json`, read live: `max_sessions`, `usage_stop_pct`, `keeper_every_s` (0 is off; 10800 runs a round from `keeper.md` every 3 hours, which starts work nobody asked for). `~/core/orientation.md` is every agent's system prompt and `door.md` is your session's: add your machine, projects and rules there. It's all small enough to read, and your agents can change it. While the account has passwordless sudo, runs on outside models (Codex, OpenRouter) wait with a note, because they would share an account with root.

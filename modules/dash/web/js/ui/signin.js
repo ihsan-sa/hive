@@ -2,6 +2,7 @@
 // The code the person pastes is held only until it is sent: it is never logged, stored or shown back.
 import { h } from "../core/dom.js";
 import { jget, post, loadApp } from "../core/store.js";
+import { simpleOn } from "../core/simple.js";
 import { button, input, field } from "./kit.js";
 import { act, begin, finish, isBusy, note } from "./activity.js";
 
@@ -64,7 +65,7 @@ export function clearSignin() {
 export function signinBox(key, update) {
   if (SI.key !== key) return null;
   const v = SI.v, say = (text, tone) => h("p", { class: "fmsg", "data-tone": tone || null, role: "status" }, text);
-  const fallback = v && v.command ? h("p", { class: "field-h" }, "Doesn't work here? In a terminal, as this account: ", h("code", null, v.command)) : null;
+  const fallback = v && v.command && !simpleOn() ? h("p", { class: "field-h" }, "Doesn't work here? In a terminal, as this account: ", h("code", null, v.command)) : null;
   let body;
   if (!v || v.state === "idle" || !v.state) body = say("Starting Claude's sign-in…");
   else if (v.name && SI.name && v.name !== SI.name) body = say("Another sign-in is under way. Finish or cancel it first.", "warn");
@@ -76,7 +77,7 @@ export function signinBox(key, update) {
       h("div", { style: "flex:1;min-width:12rem" }, field("Code", input({ placeholder: "Paste the code here", autocomplete: "off", spellcheck: "false", value: SI.code, oninput: (e, n) => { SI.code = n.value; } }))),
       button("Send", null, { kind: "primary", type: "submit", busy: isBusy("signin-code") }), button("Cancel", () => cancel(update), { kind: "quiet", busy: isBusy("signin-cancel") })),
     SI.err ? say(SI.err, "bad") : SI.note ? say(SI.note) : null, fallback];
-  else if (v.state === "done") body = say(`Signed in${v.name ? " as login " + v.name : ""}.${v.said ? " " + v.said : ""}`, "good");
+  else if (v.state === "done") body = say(simpleOn() ? "Signed in. Your Hive is ready." : `Signed in${v.name ? " as login " + v.name : ""}.${v.said ? " " + v.said : ""}`, "good");
   else if (v.state === "failed") body = [say(v.why || "That didn't work.", "bad"), fallback];
   else if (v.state === "cancelled") body = say("Cancelled.");
   else body = say("Starting Claude's sign-in…");

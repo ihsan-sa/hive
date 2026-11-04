@@ -1,12 +1,14 @@
 // Settings: the hive, logins, modules, access from outside. Shown only where can() allows each part.
 import { h } from "../core/dom.js";
-import { S, can, built, jget, post, loadApp } from "../core/store.js";
+import { S, can, built, jget, needsAccount, post, loadApp } from "../core/store.js";
 import { simpleOn, setSimple } from "../core/simple.js";
+import { DEFAULT_NAME, brandLogo, brandName } from "../core/brand.js";
 import { form } from "../templates.js";
-import { pageHeader, section, block, blocks, button, field, input, empty, statusLabel } from "../ui/kit.js";
+import { pageHeader, section, block, blocks, button, field, input, empty, meter, statusLabel } from "../ui/kit.js";
 import { act, isBusy } from "../ui/activity.js";
 import { startSignin, signinBox, clearSignin } from "../ui/signin.js";
-import { ago, plural } from "../core/format.js";
+import { ago, dur, now, plural } from "../core/format.js";
+import { accountUse } from "../core/model.js";
 import { href } from "../core/router.js";
 import { copyButton } from "../ui/refs.js";
 import { MODELS, POWER, codexPart, forget, keysPart, loadPage, modelPart, pageData, powerPart, reading, rootNote, sandboxPart, sharePart } from "../ui/setup.js";
@@ -89,9 +91,44 @@ const check = (label, on, onChange, hint) => h("label", { class: "check" }, h("i
 function viewSection(ctx) {
   const on = simpleOn();
   return section({ title: "Simple view", level: 1 },
-    h("p", null, on ? "On: you see a chat and what your Hive has made, and it talks to you in plain words." : "Off: you see every tab, and what the agents say to each other. Turn it on for just a chat and what's been made, with agents told to use plain words."),
+    h("p", null, on ? "On: you see a chat, and your Hive talks to you in plain words." : "Off: you see every tab, and what the agents say to each other. Turn it on for just a chat and what's been made, with agents told to use plain words."),
     button(on ? "Show everything" : "Turn on simple view", () => { setSimple(!on); ctx.update(); }, { size: "s" }));
 }
+// The name saves when you leave the box; a picture saves as soon as it's picked. Every tab and page picks them up from /api/app.
+const LOGO_MAX = 2 * 2 ** 20;
+function brandBlocks(ctx) {
+  F.name ??= brandName() || "";
+  const done = async (work, ok) => {
+    try { await work(); await loadApp(); say("brand", ok, "good"); }
+    catch (e) { say("brand", e.message, "bad"); }
+    F.name = brandName() || "";
+    ctx.update();
+  };
+  const saveName = () => {
+    const v = F.name.trim();
+    if (v !== (brandName() || "")) done(() => post("/api/brand", { name: v }), v ? "Name saved." : "Back to the default name.");
+  };
+  const pick = async file => {
+    if (!file) return;
+    if (file.size > LOGO_MAX) { say("brand", "A logo can be up to 2 MB.", "bad"); ctx.update(); return; }
+    done(async () => {
+      const r = await fetch("/api/brand/logo", { method: "POST", headers: { "X-Hive-Dash": "1", "Content-Type": "application/octet-stream" }, body: file });
+      if (r.redirected) throw Error("sign in again and reload the page");
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw Error(j.error || "the server said " + r.status);
+    }, "Logo saved.");
+  };
+  const logo = brandLogo();
+  const file = h("input", { type: "file", accept: "image/png,image/jpeg,image/gif,image/webp,image/svg+xml", hidden: true, class: "brand-pick", onchange: (e, n) => { pick(n.files[0]); n.value = ""; } });
+  return [
+    block({ title: "Name", sub: "Shown in the top bar and the browser tab. Empty uses the default.",
+      actions: input({ type: "text", maxlength: 40, placeholder: DEFAULT_NAME, "aria-label": "Hive name", style: "width:14rem", value: F.name, oninput: (e, n) => { F.name = n.value; }, onchange: saveName }) }),
+    block({ title: "Logo", sub: "Shown next to the name and as the tab's icon. PNG, JPEG, GIF, WebP or SVG, up to 2 MB. A square picture works best.",
+      actions: [logo ? h("img", { class: "brand-logo set-logo", src: logo, alt: "Current logo", "data-key": "preview" }) : null, file,
+        button(logo ? "Replace" : "Upload", (e, n) => n.parentNode.querySelector(".brand-pick").click(), { size: "s" }),
+        logo ? button("Remove", () => done(() => post("/api/brand", { logo: null }), "Logo removed."), { size: "s", kind: "quiet" }) : null] })];
+}
+
 function hiveSection(ctx) {
   if (!can("config")) return null;
   if (!F.ed) return section({ title: "The hive", level: 1 }, empty("Reading…", { kind: "loading" }));
@@ -125,6 +162,7 @@ function hiveSection(ctx) {
   };
   return section({ title: "The hive", level: 1 },
     blocks(
+      brandBlocks(ctx),
       block({ title: "Status", sub: up ? "Stopping lets agents finish their turn." : null, state: statusLabel(up ? "working" : "ended", up ? "running" : "not running"), actions: button(up ? "Stop the hive" : "Start the hive", starter, { size: "s", busy: isBusy("starter") }) }),
       block({ title: "Keep work moving", sub: "Every 3 hours, pick up work that stopped and start work nobody asked for. It uses your limits.",
         actions: toggle("Keep work moving", E.kp, v => { E.kp = v; save({ keeper_every_s: v ? (F.cfg.keeper_every_s || 10800) : 0 }, () => { E.kp = !v; }); }) }),
@@ -133,20 +171,36 @@ function hiveSection(ctx) {
         actions: toggle("Update by itself", E.au, v => { E.au = v; save({ auto_update: v }, () => { E.au = !v; }); }) }),
       block({ title: "Agents at once", sub: "Empty means no limit.",
         actions: input({ type: "number", min: 1, max: 200, placeholder: "no limit", "aria-label": "Agents at once", style: "width:7rem", value: E.max, oninput: (e, n) => { E.max = n.value; }, onchange: saveMax }) })),
-    msg("starter"), msg("hive"));
+    msg("brand"), msg("starter"), msg("hive"));
 }
 
 // Codex and API keys, with settings.json only: same section as Claude, because to the person they're all accounts.
 function otherAccounts(ctx) {
-  if (!S.app.settings) return null;
+  if (!S.app.settings || !can("config")) return null;  // /api/settings is config's: someone who may only add logins would wait on it for ever
   const pg = pageData(ctx.update);
   return pg ? [rootNote(), codexPart(ctx.update), keysPart(ctx.update)] : reading();
+}
+
+// Simple mode's whole Usage page: how full the Claude account's two limits are, and what happens when one fills.
+function useSection() {
+  const use = simpleOn() && !needsAccount() ? accountUse() : null; if (!use) return null;
+  const row = (title, x, word) => x && block({ title, sub: x.back ? `${word} in ${dur(x.back - now())}` : null, state: h("b", null, x.used + "% used"), key: title }, meter({ value: x.used, label: title }));
+  return section({ title: "Usage limit", level: 1 },
+    h("p", null, "Your Claude account has a limit for the week and a shorter one for every 5 hours. If one fills up, your Hive takes a break until it refills."),
+    blocks(row("This week", use.week, "Refills"), row("These 5 hours", use.five, "Refills")));
 }
 
 function loginsSection(ctx) {
   if (!can("logins")) return null;
   const logins = (S.app.setup && S.app.setup.logins) || [], yes = logins.filter(l => l.signed_in).length, out = logins.length - yes;
   const state = !logins.length ? statusLabel("off", "none yet") : out ? statusLabel("out", `${out} not signed in`) : statusLabel("working", "signed in");
+  if (simpleOn()) {  // one account, no names for it, and nothing about the machinery
+    const on = yes > 0, name = (logins.find(l => !l.signed_in) || logins[0] || {}).name || null;
+    return section({ title: "Accounts", level: 1 }, blocks(block({ title: "Claude", sub: on ? "Your Hive works through this account." : "Your Hive works through a paid Claude account. Sign in to yours, and it can start.",
+      state: statusLabel(on ? "working" : "out", on ? "signed in" : "not signed in"), key: "claude",
+      actions: button(on ? "Sign in again" : "Sign in to Claude", () => startSignin("login-first", name, false, ctx.update), { size: "s", kind: on ? "quiet" : "primary" }) },
+      signinBox("login-first", ctx.update))));
+  }
   return section({ title: "Accounts", level: 1 },
     blocks(block({ title: "Claude", sub: logins.length ? (out ? `${yes} of ${plural(logins.length, "account")}` : plural(logins.length, "account")) : "a subscription runs the agents", state, key: "claude", fold: true, open: F.acctOpen ?? (out > 0 || !logins.length), onToggle: o => { F.acctOpen = o; } },
       h("p", { class: "field-h" }, "What each has left, pausing it and where it stops are under ", h("a", { href: href("usage") }, "Usage"), "."),
@@ -304,6 +358,7 @@ function accessSection(ctx) {
 const jump = title => document.querySelector(`.set .sec[aria-label="${title}"]`)?.scrollIntoView({ behavior: "smooth", block: "start" });
 function glance(ctx) {
   const s = S.app.setup || {}, logins = s.logins || [], pg = S.app.settings && can("config") ? pageData(ctx.update) : null, o = S.app.route === "local" && S.app.outside;
+  if (simpleOn()) return null;
   const rows = [];
   const row = (title, label, tone, value) => rows.push(h("button", { type: "button", class: "set-g", "data-key": label, onclick: () => jump(title) }, h("span", { class: "set-gl" }, label), statusLabel(tone, value)));
   if (can("config")) row("The hive", "Hive", s.starter ? "working" : "ended", s.starter ? "running" : "not running");
@@ -320,11 +375,11 @@ function glance(ctx) {
 
 export default {
   id: "settings", label: "Settings", about: "accounts, extras, access", tab: () => S.app.app && (can("config") || can("modules") || can("logins")),
-  enter(ctx) { F.ed = null; F.saved = null; F.access = null; F.acctOpen = null; F.accessOpen = null; F.say = {}; clearSignin(); forget(); F.up = null; loadCfg(ctx); loadUpdate(ctx); loadMods(ctx); if (S.app.settings && can("config")) loadPage(ctx.update); },
+  enter(ctx) { F.ed = null; F.name = null; F.saved = null; F.access = null; F.acctOpen = null; F.accessOpen = null; F.say = {}; clearSignin(); forget(); F.up = null; loadCfg(ctx); loadUpdate(ctx); loadMods(ctx); if (S.app.settings && can("config")) loadPage(ctx.update); },
   leave() { forget(); forgetSecrets(); },
   render(ctx) {
     if (!S.app.app) return h("div", { class: "page" }, empty("Settings show only in the app, opened from this machine.", { kind: "page", title: "Settings" }));
-    const secs = [viewSection(ctx), hiveSection(ctx), loginsSection(ctx), ...setupSections(ctx), secretsSection(ctx), modulesSection(ctx), accessSection(ctx)].filter(Boolean);
+    const secs = [viewSection(ctx), useSection(), hiveSection(ctx), loginsSection(ctx), ...setupSections(ctx), secretsSection(ctx), modulesSection(ctx), accessSection(ctx)].filter(Boolean);
     const header = pageHeader({ title: "Settings", lead: simpleOn() ? "Choices for your Hive." : "How the hive runs, which accounts it uses, and what extras it has." });
     if (!secs.length) return form({ header, sections: [empty("This connection can't change any settings.")] });
     const nav = secs.map(n => n.getAttribute("aria-label"));

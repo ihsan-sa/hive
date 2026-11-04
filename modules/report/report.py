@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""hive-report: opt-in failure and usage reports, scrubbed on this machine first.
+"""hive-report: failure reports, a daily check-in and opt-in usage reports, scrubbed on this machine first.
 
-Reads `share` ({"failures": bool, "usage": bool}) from settings.json. Both false
-(or no settings.json) means nothing is read, queued or sent. Every report that
+Reads `share` ({"failures": bool, "usage": bool}) from settings.json. failures, which also carries the check-in, is on by
+default and can be turned off. Both false (or no settings.json) means nothing is read, queued or sent. Every report that
 leaves is first written byte-for-byte to reports/sent/, and `hive-report show`
 prints it. Commands: status | send [--dry-run] | show [N] | question | bundle [--yes] | issue TITLE [--submit] <body on stdin> | feedback <JSON on stdin>
 
@@ -15,8 +15,10 @@ DEFAULT_URL = "https://hive-reports.ihsan.cc/v1/report"   # filled in at export;
                                  # (override with share_url in settings.json; schema: v1 report contract in README)
 MAX_PER_RUN, MAX_TEXT, MAX_LOG = 25, 2000, 4000
 
-QUESTION = ("Send failure and usage reports to the Hive developer so problems get fixed? "
+QUESTION = ("Failure reports and a daily check-in are on unless you turn them off, so the Hive developer can fix problems and count active Hives. "
+    "Usage reports are off unless you turn them on. "
     "A failure report holds what failed, when and why (up to 2,000 characters). "
+    "The check-in is one small message a day that says this Hive is running. "
     "A usage report counts agent runs, restarts, limit hits and fallbacks, with the time span it covers. "
     "Every report has the Hive version, the OS and a random install id. "
     "Secrets, emails, your user name and your home folder are scrubbed on this machine first. "
@@ -43,6 +45,26 @@ def load_share():
     except (OSError, ValueError):
         s = {}
     return bool(s.get("failures") is True), bool(s.get("usage") is True)
+
+DEFAULTS_VERSION, BEAT_EVERY = 1, 23 * 3600   # 23h on a 6h timer comes out at one check-in a day
+
+def apply_defaults():
+    """Once only: a Hive from before failures and the check-in were on by default gets them on (the person's call, post 11031858ae74).
+    The mark stays in the file, so turning them off afterwards holds. No settings.json, as in a source tree: nothing happens."""
+    p = settings_path()
+    try: c = json.load(open(p))
+    except (OSError, ValueError): return
+    if not isinstance(c, dict) or c.get("share_defaults"): return
+    sh = c.get("share") if isinstance(c.get("share"), dict) else {}
+    c["share"] = {**sh, "failures": True}; c["share_defaults"] = DEFAULTS_VERSION
+    fd = os.open(p + ".tmp", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f: f.write(json.dumps(c, indent=1) + "\n")
+    os.replace(p + ".tmp", p)
+
+def setup_pending():
+    """Nothing leaves before the setup screen, which shows these choices, has been passed."""
+    try: return json.load(open(settings_path())).get("setup_done") is False
+    except (OSError, ValueError, AttributeError): return False
 
 def rdir():
     d = os.path.join(os.path.dirname(settings_path()), "reports"); os.makedirs(d, exist_ok=True); return d
@@ -195,6 +217,8 @@ def installed_state():
     return st
 
 def send(dry=False):
+    if not dry: apply_defaults()
+    if setup_pending(): return "setup isn't finished; nothing read or sent"
     wf, wu = load_share()
     if not (wf or wu): return "sharing is off; nothing read or sent"
     st = installed_state()
@@ -202,7 +226,10 @@ def send(dry=False):
     if wf: new += unit_failures(st)
     if wu and not st.get("hello"):                    # the first send after opting in says so, with counts of nothing, so a quiet Hive can be told from a broken route
         r = base(st, "usage"); r.update(at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), message="sharing is on", usage={"runs": 0}); new.insert(0, r); st["hello"] = True
-    q = [r for r in pending() if (r["type"] == "failure" and wf) or (r["type"] == "usage" and wu)] + new
+    q = [r for r in pending() if r["type"] in ("failure", "heartbeat") and wf or (r["type"] == "usage" and wu)] + new
+    if wf and time.time() - st.get("beat", 0) >= BEAT_EVERY:
+        r = base(st, "heartbeat"); r["at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        q = [x for x in q if x["type"] != "heartbeat"] + [r]; st["beat"] = time.time()   # a check-in that waited offline is replaced, and goes last so the cap can't drop it
     if len(q) > MAX_PER_RUN: q = q[-MAX_PER_RUN:]
     if dry: return "would send %d report(s):\n" % len(q) + "\n".join(json.dumps(r) for r in q)
     st["offset"] = off; save_state(st); keep(q)
@@ -317,7 +344,7 @@ def main(a):
         for f in fs[-n:]: print(f + "\n" + open(f).read())
     elif cmd == "status":
         wf, wu = load_share()
-        print("failure reports: %s, usage reports: %s" % ("on" if wf else "off", "on" if wu else "off"))
+        print("failure reports and daily check-in: %s, usage reports: %s" % ("on" if wf else "off", "on" if wu else "off"))
         print("endpoint:", url() or "none set")
         if not url(): print(NOT_SENT)
         print("sent so far:", len(sent_files()), "| waiting:", len(pending()))

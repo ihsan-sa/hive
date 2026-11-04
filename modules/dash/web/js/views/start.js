@@ -3,6 +3,7 @@
 import { h } from "../core/dom.js";
 import { S, can, post, loadApp, setupDone } from "../core/store.js";
 import { simpleOn } from "../core/simple.js";
+import { brandName } from "../core/brand.js";
 import { button, statusLabel } from "../ui/kit.js";
 import { startSignin, signinBox, signingIn } from "../ui/signin.js";
 import { act, activityLog, isBusy } from "../ui/activity.js";
@@ -13,7 +14,7 @@ import { anyAccount, codexPart, finishing, keysPart, local, pageData, powerPart,
 const F = { starterErr: "", chose: null, know: false, step: 1 };
 
 const hive = (key, ...body) => h("article", { class: "msg st-msg", "data-who": "agent", "data-key": key },
-  h("div", { class: "msg-h" }, h("b", { class: "st-hive" }, "Hive")), h("div", { class: "msg-b" }, body));
+  h("div", { class: "msg-h" }, h("b", { class: "st-hive" }, brandName() || "Hive")), h("div", { class: "msg-b" }, body));
 const you = (key, text) => h("article", { class: "msg", "data-who": "me", "data-key": key }, h("div", { class: "msg-b" }, text));
 const p = (...t) => h("p", null, ...t);
 
@@ -56,12 +57,22 @@ function walkthrough(ctx, s) {
     foot(true, button("Finish", async () => { if (await saveSettings({ setup_done: true }, up)) { F.step = 1; up(); } }, { kind: "primary", busy: finishing() })));
 }
 
+// Simple mode once setup is finished: at most one thing left to do, signing in to Claude.
+function simpleStart(ctx, signed) {
+  const card = (key, title, ...body) => h("div", { class: "page wt", "data-key": "start" }, h("section", { class: "wt-card", "data-key": key }, h("h2", { class: "wt-t" }, title), body));
+  if (signed) return card("ready", "Your Hive is ready", p("Tell it what you want done, in your own words."), button("Start chatting", null, { href: href("comms"), kind: "primary" }));
+  if (!can("logins")) return card("away", "Your Hive isn't ready yet", p("The person setting it up still has a step to finish. There's nothing for you to do here. Check back soon."));
+  return card("account", "One step left: add your Claude account", p("Your Hive works through a paid Claude account. Sign in to yours, and it can start."),
+    signinBox("start", ctx.update) || button("Sign in to Claude", () => startSignin("start", null, false, ctx.update), { kind: "primary", busy: signingIn() }));
+}
+
 export default {
   id: "start", label: "Start", tab: () => S.app.app && can("post") && !setupDone(),
   render(ctx) {
     if (!S.app.app) return h("div", { class: "page" }, h("p", null, "Setup shows only in the app, opened from this machine."));
     const s = S.app.setup || {}, signed = s.signed_in || s.api_key || s.other, cfgd = S.app.settings;
     if (cfgd && cfgd.setup_done === false) return walkthrough(ctx, s);
+    if (simpleOn()) return simpleStart(ctx, signed);
     const signIn = api => { F.chose = api ? "Use API billing instead" : "Sign in with my Claude subscription"; startSignin("start", null, api, ctx.update); };
     const rows = [
       hive("hi", p(cfgd ? "You're set up." : "Hi.", " Hive runs ", cfgd ? "" : "Claude ", "agents on this computer. Tell it what you want done, in your own words, and an agent works on it in the background and answers you here.")),

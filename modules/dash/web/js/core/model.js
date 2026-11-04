@@ -140,6 +140,16 @@ export function fresh7(l) { const w = l.limits && l.limits.seven_day; return w &
 export const weeklyStop = (l, U) => { const st = l.stop || {}; return st.weekly ?? st.global ?? (U && U.stop_pct) ?? 98; };
 /** In use: an account the starter can still give new runs to (not paused, under its weekly stop line). */
 export function inUse(l, U) { if (l.paused) return false; const v = fresh7(l); return v == null || v < weeklyStop(l, U); }
+/** Simple mode's figures: how much of the account with the most room is used, this week and in this 5 hours. {week, five}, each {used, back} or null; null with no reading at all. */
+export function accountUse(t = now()) {
+  const all = (S.usage && S.usage.logins) || (S.live && S.live.logins) || [], rank = l => fresh7(l) ?? 101;
+  const l = [...all.filter(x => inUse(x, S.usage))].sort((a, b) => rank(a) - rank(b))[0] || all[0]; if (!l) return null;
+  const L = l.limits || {}, rs = l.resets || {}, v = fresh7(l), w5 = L.five_hour && L.five_hour.r * 1e3 > t ? L.five_hour : null;
+  const wr = (L.seven_day && L.seven_day.r) || rs.weekly, fr = w5 ? w5.r : rs.five_hour;
+  const week = v == null ? null : { used: Math.round(v), back: wr && wr * 1e3 > t ? wr * 1e3 : null };
+  const five = w5 ? { used: Math.round(w5.u * 100), back: fr * 1e3 } : l.five != null && fr && fr * 1e3 > t ? { used: Math.round(l.five), back: fr * 1e3 } : null;
+  return week || five ? { week, five } : null;
+}
 /** Pace over the last 6 hours of a login's series: {rate per second, at}. */
 export function usageProjection(series) {
   const pts = (series || []).filter(x => x[2] != null && x[0] * 1e3 > now() - 6 * HOUR); if (pts.length < 2) return null;
