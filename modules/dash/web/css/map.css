@@ -111,6 +111,16 @@
 .map-fx{z-index:2}
 .map-cv>button,.map-cv>div:not(.map-hc){position:absolute;left:0;top:0;transition:transform .2s ease,opacity .12s ease,background-color .12s ease}
 .map-cv>.map-in{opacity:0}
+.map-sp{transition:d .2s ease}
+/* the free view (Web, Orbit): the picture is fitted to the panel; wheel zooms, drag pans, a node can be dragged */
+.map-scroll[data-free]{overflow:hidden;touch-action:none;cursor:grab;user-select:none;-webkit-user-select:none}
+.map-scroll[data-free]>.map-cv{transform-origin:0 0;transition:transform .35s ease}
+.map-scroll[data-free] [data-body]{touch-action:none}
+.map-scroll[data-drag]{cursor:grabbing}
+.map-scroll[data-drag]>.map-cv,.map-scroll[data-drag]>.map-cv>*,.map-scroll[data-drag] .map-sp{transition:none}
+.map-zoom{position:absolute;right:var(--s3);top:calc(var(--s2) * 2 + 20px);z-index:3;display:flex;gap:4px}
+.map-zoom[hidden]{display:none}
+.map-zoom>.btn{min-width:30px;justify-content:center;background:var(--surface)}
 .map-cv[data-dim]>:is(.map-ag,.map-more,.map-old,.map-band):not([data-lit]){opacity:.25}
 .map-cv[data-dim]>.map-card:not([data-lit]){opacity:.3}
 .map-cv[data-dim] .map-sp:not([data-lit]){opacity:.25}

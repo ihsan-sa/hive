@@ -180,9 +180,11 @@ ln -sf /etc/systemd/system/hive-no-windows.service /etc/systemd/system/multi-use
 
   # 4. The Linux installer does the rest. It updates a Hive that's already there.
   $halfway = if ($oldDirs.Count -or $oldRoot) { " The old Hive is stopped$(if ($oldRoot) { ", and its folder is whole at $oldRoot" }). Running this again carries on." } else { '' }
-  Step 'Setting up the Hive and Claude Code'
+  Step 'Setting up the Hive, Claude Code and Codex'
   # To a file first, because a failed curl piped into sh looks like success. HIVE_INSIDE keeps the Linux installer from printing an ending of its own.
-  $getIt = 'f=$(mktemp) && curl -fsSL ' + $site + '/install.sh -o "$f" && HIVE_INSIDE=1 sh "$f"; c=$?; rm -f "$f"; exit $c'
+  # HIVE_REPORT=1 (or 0) set in PowerShell says yes (or no) to sending a failure to the Hive's makers, as on Linux.
+  $report = if ($env:HIVE_REPORT -in '0', '1') { "HIVE_REPORT=$($env:HIVE_REPORT) " } else { '' }
+  $getIt = 'f=$(mktemp) && curl -fsSL ' + $site + '/install.sh -o "$f" && ' + $report + 'HIVE_INSIDE=1 sh "$f"; c=$?; rm -f "$f"; exit $c'
   if ((Invoke-InHive $getIt) -ne 0) { Fail "The install inside the Hive system failed; the lines below say why. Fix that and run this again.$halfway"; return }
 
   # Bring its things across: to a file first, because the Hive system can't see Windows drives, and a pipe through PowerShell would corrupt it.

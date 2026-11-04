@@ -15,7 +15,7 @@
   .top-in{padding-left:max(12px,env(safe-area-inset-left,0px));padding-right:max(6px,env(safe-area-inset-right,0px))}
   .top-in .brand{margin-right:auto}
   .top-in .top-status{display:flex;margin-left:0;gap:4px}
-  .top-in .top-status>span:not(:first-child),.top-in .top-status>.top-route{display:none}
+  .top-in .top-status>span:not(:first-child),.top-in .top-status>.top-route:not([data-mode=limited]){display:none}
   .top-in .top-icons .more{display:none}                       /* More lives in the bottom bar */
   .top-in .btn[data-kind=icon]{min-width:44px;height:44px}
   .top-in .top-status>span{height:32px}

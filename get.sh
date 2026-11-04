@@ -8,11 +8,11 @@
 # Everything is inside main, so a download cut short runs nothing, and nothing below reads the rest of this script from stdin.
 set -eu
 
-die() { tick_stop; line_end; echo "hive: $*" >&2; exit 1; }
+die() { tick_stop; line_end; DIED="$*"; echo "hive: $*" >&2; exit 1; }
 
 # What you see: one numbered line per step, a dot every few seconds while it works. What the commands print goes to fd 3, a log, and it's shown when something fails.
 # HIVE_INSIDE=1: another installer is around this one (Windows, Mac) and has its own steps and ending, so this prints plain lines, and NOTE: on what it should show.
-OPEN=0; HELD=""; TICK=""; STEP=0; STEPS=0; LOG=""; INSIDE=${HIVE_INSIDE:-}; OLD_SAID=""
+OPEN=0; HELD=""; TICK=""; STEP=0; STEPS=0; LOG=""; INSIDE=${HIVE_INSIDE:-}; OLD_SAID=""; NOW=""; DIED=""; TAG=""
 tick_stop() { [ -z "$TICK" ] || { kill "$TICK" 2>/dev/null; wait "$TICK" 2>/dev/null || true; TICK=""; }; }
 line_end() {
   [ "$OPEN" = 0 ] || { echo; OPEN=0; }
@@ -27,10 +27,10 @@ begin() {
     (umask 077; : >"$LOG") 2>/dev/null || LOG=$(mktemp)
     exec 3>>"$LOG"
   fi
-  trap on_exit EXIT; trap 'exit 130' INT TERM
+  trap on_exit EXIT; trap 'exit 130' INT TERM HUP
 }
 step() {
-  tick_stop; line_end; STEP=$((STEP + 1))
+  tick_stop; line_end; STEP=$((STEP + 1)); NOW=$1
   if [ -n "$INSIDE" ]; then echo "$1"; return 0; fi
   printf '[%s/%s] %s ' "$STEP" "$STEPS" "$1"; OPEN=1
   ( while sleep 5 >/dev/null 2>&1; do kill -0 $$ 2>/dev/null || exit; printf .; done ) </dev/null 3>&- &
@@ -57,10 +57,73 @@ on_exit() {
   if [ "$rc" != 0 ] && [ -s "$LOG" ]; then
     { echo "The last lines of what it printed:"; tail -n 15 "$LOG"; echo "All of it: $LOG"; } >&2
   fi
+  [ "$rc" = 0 ] || [ "$rc" = 130 ] || report_failure >&2
   old_exit_note
   [ -z "${T:-}" ] || rm -rf "$T"
   exit "$rc"
 }
+# A network step tries three times, 10 and 40 s apart: a dropped connection is the commonest reason an install stops. The steps it wraps start clean each time.
+retry() {
+  n=1
+  until "$@"; do
+    [ "$n" -lt "${HIVE_TRIES:-3}" ] || return 1
+    w=${HIVE_RETRY_WAIT:-$((n * n * 10))}
+    echo "That didn't work (try $n of ${HIVE_TRIES:-3}). Trying again in ${w}s." >&3
+    sleep "$w"; n=$((n + 1))
+  done
+}
+# Room for the Hive, Claude Code, Codex and a while of its work, checked before anything changes.
+room() {
+  d=$1; while [ ! -d "$d" ]; do d=$(dirname "$d"); done
+  free=$(df -Pk "$d" 2>/dev/null | awk 'NR==2 {print int($4 / 1024)}') || return 0
+  [ -z "$free" ] || [ "$free" -ge "${HIVE_MIN_MB:-1536}" ] || die "there's only ${free} MB free on $d, and the Hive needs about ${HIVE_MIN_MB:-1536} MB. Free some space, then run the same line again"
+}
+
+# A failed install can be sent to the Hive's makers so they can fix it, only with a yes: asked on the terminal, or HIVE_REPORT=1 where there's none (HIVE_REPORT=0 never asks).
+# It holds the step that failed, the error, the version, the OS and the last 40 lines of the log, with user names, the machine's name, home folders, emails, addresses and keys taken out here first.
+REPORT_URL="${HIVE_SHARE_URL:-https://hive-reports.ihsan.cc/v1/report}"
+REPORT_PY='
+import json, os, re, socket, getpass, platform, uuid, urllib.request
+e = os.environ.get
+try: log = open(e("R_LOG", ""), errors="replace").read().splitlines()[-40:]
+except OSError: log = []
+def clean(text):
+  for w in sorted({x for x in (e("HOME"), e("R_H"), e("R_UH")) if x and len(x) > 1}, key=len, reverse=True): text = text.replace(w, "~")
+  for w in {getpass.getuser(), e("SUDO_USER"), e("R_U") if e("R_U") != "hive" else "", socket.gethostname()}:
+    if w and len(w) > 2: text = re.sub(r"\b%s\b" % re.escape(w), "<name>", text)
+  text = re.sub(r"[\w.+-]+@[\w-]+(\.[\w-]+)+", "<email>", text)
+  text = re.sub(r"\b(\d{1,3}\.){3}\d{1,3}\b", "<ip>", text)
+  return re.sub(r"(sk-[\w-]{8,}|gh[pousr]_\w{8,}|[A-Za-z0-9+/_=-]{32,})", "<key>", text)
+text = clean("\n".join(log))
+step = re.sub(r"[^\x20-\x7e]", "", e("R_STEP", ""))
+m = "install failed at step %s/%s (%s): %s" % (e("R_N"), e("R_OF"), step or "before the steps", clean(e("R_WHY") or "a command failed"))
+ver = re.sub(r"[^A-Za-z0-9._+-]", "", e("R_VER", ""))[:32] or "0"
+osn = re.sub(r"[^a-z0-9_]", "", platform.system().lower())[:16] + "/" + re.sub(r"[^a-z0-9_]", "", platform.machine().lower())[:16]
+dist = ""
+try: dist = [l.split("=", 1)[1].strip().strip(chr(34)) for l in open("/etc/os-release") if l.startswith("PRETTY_NAME=")][0]
+except (OSError, IndexError): pass
+ref = "i" + uuid.uuid4().hex[:15]
+r = {"install": ref, "version": ver, "type": "failure", "kind": "install", "os": osn,
+     "message": (m + (" on " + dist if dist else ""))[:2000], "log": text[-4000:]}
+req = urllib.request.Request(e("R_URL"), json.dumps(r).encode(), {"Content-Type": "application/json"})
+try:
+    with urllib.request.urlopen(req, timeout=20) as a: ok = 200 <= a.status < 300
+except Exception: ok = False
+print(("Sent, thank you. If you open an issue, this is its reference: " + ref) if ok else "Could not send it just now. The log is on this machine, at the path above.")
+'
+report_failure() {
+  case "$REPORT_URL" in http*) ;; *) return 0 ;; esac
+  [ "${HIVE_REPORT:-}" != 0 ] && command -v python3 >/dev/null 2>&1 || return 0
+  if [ "${HIVE_REPORT:-}" != 1 ]; then
+    if ! ( : </dev/tty ) 2>/dev/null; then if [ -n "$INSIDE" ]; then echo "To send this failure to the Hive's makers so they can fix it, set HIVE_REPORT=1 and run the installer again: it goes if it fails again."; else echo "To send this failure to the Hive's makers so they can fix it, run the line again with HIVE_REPORT=1 just before sh (... | HIVE_REPORT=1 sh), and it goes if it fails again."; fi; return 0; fi
+    printf "Send this failure to the Hive's makers so they can fix it? It holds the step that failed, the error, the OS and the last 40 lines of the log, with names, folders, emails and keys taken out. Type y to send: " >/dev/tty
+    read -r a </dev/tty || a=""
+    case "$a" in y | Y | yes | Yes) ;; *) return 0 ;; esac
+  fi
+  R_LOG="$LOG" R_STEP="$NOW" R_N="$STEP" R_OF="$STEPS" R_WHY="$DIED" R_VER="${TAG:-0}" R_URL="$REPORT_URL" R_H="${H:-}" R_UH="${UH:-}" R_U="${U:-}" \
+    python3 -I -c "$REPORT_PY" </dev/null 2>/dev/null || true
+}
+
 # A command as the new Hive's account, in its own home.
 in_hive() {
   if [ "$OWN" = 1 ]; then env -u XDG_CONFIG_HOME -u XDG_DATA_HOME -u XDG_CACHE_HOME -u XDG_STATE_HOME -u CLAUDE_CONFIG_DIR HOME="$H" PATH="$H/.local/bin:$PATH" XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}" sh -c "$1"
@@ -94,8 +157,11 @@ deps() {
   missing=""
   for t in git python3 curl; do command -v "$t" >/dev/null 2>&1 || missing="$missing $t"; done
   [ -z "$missing" ] && return 0
+  retry deps_get || die "couldn't install$missing. Install them with this machine's package manager, then run the same line again"
+}
+deps_get() {
   if command -v apt-get >/dev/null 2>&1; then
-    $ROOT env DEBIAN_FRONTEND=noninteractive apt-get update -qq </dev/null >&3 2>&3 && $ROOT env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq $missing </dev/null >&3 2>&3
+    $ROOT env DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=120 update -qq </dev/null >&3 2>&3 && $ROOT env DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=120 install -y -qq $missing </dev/null >&3 2>&3
   elif command -v dnf >/dev/null 2>&1; then $ROOT dnf install -y -q $missing </dev/null >&3 2>&3
   elif command -v pacman >/dev/null 2>&1; then $ROOT pacman -S --noconfirm --needed $(echo "$missing" | sed 's/python3/python/') </dev/null >&3 2>&3
   elif command -v zypper >/dev/null 2>&1; then $ROOT zypper -n install $missing </dev/null >&3 2>&3
@@ -131,11 +197,12 @@ bwrap_profile() {
     || note "Couldn't load the bubblewrap profile, so the sandbox may not work until it's there. The app will say so."
 }
 
+fetch() { rm -rf "$T/hive"; git clone -q --single-branch -b "$BRANCH" "$REPO" "$T/hive" </dev/null >&3 2>&3; }
 clone() {
   [ -z "${T:-}" ] || return 0
   T=$(mktemp -d)
   step "Getting the Hive"
-  git clone -q --single-branch -b "$BRANCH" "$REPO" "$T/hive" </dev/null >&3 2>&3
+  retry fetch || die "couldn't download the Hive from $REPO. Check this machine's internet connection, then run the same line again"
   # A release is a tag, and only a tag has been through the tests. HIVE_BRANCH asks for that branch as it stands.
   if [ -z "${HIVE_BRANCH:-}" ]; then
     TAG=$(git -C "$T/hive" tag -l 'v2.*' | grep -E '^v2\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1 || true)
@@ -387,6 +454,7 @@ WARN
 
   need=""; if [ -n "$OLD_A" ] || [ ! -e "$H/core" ]; then need=1; fi
   cl=""; [ -x "$H/.local/bin/claude" ] || cl=1
+  [ -e "$H/core" ] || room "$H"
   begin "$need" "$OLD_A" "$cl" 1 "$OLD_ROOT"
   [ -z "$need" ] || clone
   old_remove
@@ -397,15 +465,16 @@ WARN
   # Its own Claude Code in its own home: yours, its sign-in and its updates aren't touched. The Hive signs in separately, in the web app.
   if [ ! -x "$H/.local/bin/claude" ]; then
     step "Installing Claude Code in $H"
-    curl -fsSL https://claude.ai/install.sh 2>&3 | env HOME="$H" bash >&3 2>&3 || true
-    [ -x "$H/.local/bin/claude" ] || die "Claude Code didn't install in $H. Run this again to carry on"
+    retry claude_get || die "Claude Code didn't install in $H. Check this machine's internet connection, then run the same line again: it carries on from here"
   fi
-  step "Setting up the Hive"
+  step "Setting up the Hive and Codex"
   quietly env -u XDG_CONFIG_HOME -u XDG_DATA_HOME -u XDG_CACHE_HOME -u XDG_STATE_HOME -u CLAUDE_CONFIG_DIR \
     HIVE_PLAIN=1 HOME="$H" PATH="$H/.local/bin:$PATH" XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}" "$H/core/install.sh"
   old_import "$(id -un)" "$H"
   ending "The Hive is installed." new
 }
+
+claude_get() { curl -fsSL https://claude.ai/install.sh 2>&3 | env HOME="$H" bash >&3 2>&3; [ -x "$H/.local/bin/claude" ]; }
 
 # Not fatal: the Hive that's there still works.
 update_it() {
@@ -463,14 +532,15 @@ Or in a spare account: git clone -b $BRANCH $REPO ~/core, install Claude Code, a
     return 0
   fi
 
+  room "${UH:-/home/$U}"
   begin 1 1 "$OLD_A" 1 "$OLD_ROOT"
   step "Getting what it needs"
   deps
   sandbox_dep; bwrap_profile
   clone
   old_remove
-  step "Setting up the Hive and Claude Code"
-  quietly $ROOT env HIVE_PLAIN=1 "$T/hive/install.sh" "$U"
+  step "Setting up the Hive, Claude Code and Codex (a few minutes)"
+  quietly $ROOT env HIVE_PLAIN=1 "$T/hive/install.sh" "$U" || die "setting up the Hive didn't finish. Run the same line again: it carries on from where it stopped"
   old_import "$U" "$(getent passwd "$U" | cut -d: -f6)"
   ending "The Hive is installed." new
 }

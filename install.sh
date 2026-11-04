@@ -14,8 +14,16 @@ if [ "$(id -u)" = 0 ]; then
   # Some systems make homes readable by a group. The Hive's sign-ins are in this one.
   [ -z "$new" ] || chmod 700 "$H"
   loginctl enable-linger "$U" 2>/dev/null || echo "NOTE: couldn't enable linger; the hive stops when $U logs out"
-  [ -e "$H/core" ] || { cp -a "$CORE" "$H/core"; chown -R "$U:" "$H/core"; }
-  su - "$U" -c 'command -v claude >/dev/null || [ -x ~/.local/bin/claude ] || curl -fsSL https://claude.ai/install.sh | bash'
+  # Copied beside it and then moved, so a copy cut short (a full disk, a closed window) isn't taken for a whole one on the rerun.
+  [ -e "$H/core" ] || { rm -rf "$H/core.part"; cp -a "$CORE" "$H/core.part" && chown -R "$U:" "$H/core.part" && mv "$H/core.part" "$H/core"; } || die "couldn't copy the Hive into $H (is the disk full?); rerun this"
+  # Three tries, because a dropped connection is the usual reason it fails. A failed download pipes nothing into bash, which counts as success, so it's checked by looking.
+  has='command -v claude >/dev/null || [ -x ~/.local/bin/claude ]'
+  for i in 1 2 3; do
+    su - "$U" -c "$has || curl -fsSL https://claude.ai/install.sh | bash" || true
+    su - "$U" -c "$has" && break
+    [ "$i" != 3 ] || die "Claude Code didn't install for $U, after three tries. Check this machine's internet connection, then rerun this"
+    echo "Claude Code didn't install (try $i of 3). Trying again in $((i * i * 10))s."; sleep "${HIVE_RETRY_WAIT:-$((i * i * 10))}"
+  done
   echo "Claude Code is in place. The Hive's install isn't finished yet, so keep this window open..."
   P=""; [ -z "${HIVE_PLAIN:-}" ] || P="HIVE_PLAIN=1 "
   su - "$U" -c "$P"'PATH="$HOME/.local/bin:$PATH" XDG_RUNTIME_DIR=/run/user/$(id -u) ~/core/install.sh' \
@@ -94,6 +102,26 @@ git -C "$HOME" config user.name >/dev/null  || git -C "$HOME" config user.name h
 git -C "$HOME" config user.email >/dev/null || git -C "$HOME" config user.email hive@localhost
 git config --global user.name >/dev/null  || git config --global user.name hive
 git config --global user.email >/dev/null || git config --global user.email hive@localhost
+
+# Codex, so the app can sign in to either Claude or Codex (or both). OpenAI's single-file build: no Node. Every update puts it back if
+# it's gone. Not fatal: without it the Hive runs on Claude, and the app says how to add it.
+codex_get() {
+  case "$(uname -m)" in x86_64 | amd64) a=x86_64 ;; aarch64 | arm64) a=aarch64 ;; *) return 1 ;; esac
+  u="${HIVE_CODEX_URL:-https://github.com/openai/codex/releases/latest/download/codex-$a-unknown-linux-musl.tar.gz}"
+  d="$HOME/.local/bin/.codex.part"; rm -rf "$d"; mkdir -p "$d"
+  curl -fsSL --retry 2 -o "$d/c.tgz" "$u" && tar -xzf "$d/c.tgz" -C "$d" && [ -f "$d/codex-$a-unknown-linux-musl" ] \
+    && chmod 755 "$d/codex-$a-unknown-linux-musl" && "$d/codex-$a-unknown-linux-musl" --version >/dev/null 2>&1 \
+    && mv -f "$d/codex-$a-unknown-linux-musl" "$HOME/.local/bin/codex"; r=$?
+  rm -rf "$d"; return $r
+}
+if [ "${HIVE_CODEX:-1}" != 0 ] && ! command -v codex >/dev/null && [ ! -x "$HOME/.local/bin/codex" ]; then
+  echo "Installing Codex..."
+  ok=""; for i in 1 2 3; do
+    codex_get && { ok=1; break; }
+    [ "$i" = 3 ] || { echo "Codex didn't install (try $i of 3). Trying again in $((i * 10))s."; sleep "${HIVE_RETRY_WAIT:-$((i * 10))}"; }
+  done
+  [ -n "$ok" ] || echo "NOTE: Codex didn't install, so for now the Hive runs on Claude. The next update tries again, or the app shows how to add it."
+fi
 
 # The web app is the bundled dash. It's copied fresh, so rerunning this after a pull updates it; the secret stays.
 rm -rf "$HOME/modules/dash" "$HOME/modules/report" "$HOME/modules/providers"

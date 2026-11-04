@@ -6,8 +6,9 @@ A release is a tag v<major>.<minor>.<patch> on origin; only this major line coun
 it installing: it still looks, so the app can say a release is there, and `hive update` by hand or Update now in the app
 installs it. Both those settings and the state in update.json (tag, newest, checked, at, failed, error) are read by Settings in the app.
 What it keeps: the agents' own commits in ~/core (rebased onto the release) and uncommitted edits such as saved settings.
-A conflict with either, a failed install or services that don't come back leave the Hive as it was, skip that release
-and tell the person. Restarting the starter doesn't stop running agents.
+When either conflicts with the release, the release wins so the Hive still updates: the old state goes to a git branch kept/<tag>-<time>
+in ~/core, and an agent of this Hive is started to see whether any of it still matters (the person, post 110415432d10).
+A failed install or services that don't come back leave the Hive as it was, skip that release and tell the person. Restarting the starter doesn't stop running agents.
 """
 import argparse, fcntl, json, os, re, shutil, subprocess, sys, tempfile, time, urllib.error, urllib.request
 from pathlib import Path
@@ -74,9 +75,9 @@ def verify(tag, signers, repo=CORE):
                            input=payload, capture_output=True, text=True, timeout=60)
     return None if v.returncode == 0 else f"{tag} isn't signed by the Hive's release key ({(v.stderr or v.stdout).strip()[-200:]})"
 
-def say(text, person=False):
-    """A note on the board in thread updates. Only a failure goes to the person, and neither starts an agent."""
-    cmd = [str(CORE / "hive"), "post", "--thread", "updates"] + (["--to", "person"] if person else [])
+def say(text, person=False, to=None):
+    """A note on the board in thread updates. Only a failure goes to the person; to="new" starts an agent, only for a conflict set aside."""
+    cmd = [str(CORE / "hive"), "post", "--thread", "updates"] + (["--to", "person"] if person else ["--to", to] if to else [])
     try: subprocess.run(cmd, input=text, text=True, capture_output=True, timeout=60, env={**os.environ, "HIVE_NAME": "updater"})
     except (OSError, subprocess.TimeoutExpired): pass
 
@@ -150,7 +151,25 @@ def keep_release():
     f = STATE / "update.gitattributes"; f.write_text("/config.json merge=keeprelease\n")
     return "-c", f"core.attributesFile={f}", "-c", "merge.keeprelease.driver=true"
 
+def overlap(tag, old, dirty):
+    """Files both this Hive (its commits since the release it came from, and uncommitted edits) and the release changed: where a conflict can be."""
+    base = git("merge-base", old, tag, check=False).stdout.strip()
+    if not base: return []
+    names = lambda *a: set(git("diff", "--name-only", *a, check=False).stdout.split())
+    mine = names(base, old) | (names(old, dirty) if dirty else set())
+    return sorted((mine & names(base, tag)) - {"config.json"})
+
+def unfinished():
+    """A rebase onto a release that a kill or power cut left halfway: undo it, which puts back what the Hive ran before. One an agent started onto anything else is theirs."""
+    d = next((d for d in (CORE / ".git" / "rebase-merge", CORE / ".git" / "rebase-apply") if d.is_dir()), None)
+    if not d: return
+    try: onto = (d / "onto").read_text().strip()
+    except OSError: return
+    if any(git("rev-parse", "-q", "--verify", f"{t}^{{commit}}", check=False).stdout.strip() == onto for t in git("tag", "--list", "v*").split()):
+        git("rebase", "--abort", check=False)
+
 def apply(tag, st):
+    unfinished()
     try:
         git("status", "--porcelain")  # refreshes the index: with a stale one and a clean tree, stash create exits 1
         old = git("rev-parse", "HEAD"); dirty = git("stash", "create"); before = stashes()
@@ -168,14 +187,18 @@ def apply(tag, st):
         if not (r.returncode or stashes() > before): return True  # a failed autostash still exits 0, and leaves its stash behind
         if stashes() > before: git("stash", "drop", check=False)
         restore(old, dirty); return False
-    dropped = []
+    dropped, kept, files = [], None, []
     if not rebase():
         # A "local fix:" commit is a Hive's own patch to its core (orientation, "Fixing the Hive itself"). When the release changed the same lines,
         # the release wins: it goes in without the fix, and the person hears which one went, since the release may or may not fix the same thing.
         fixes = [l.split("\t", 1) for l in git("log", "--format=%H%x09%s", f"{tag}..{old}").splitlines() if l.split("\t", 1)[-1].startswith("local fix:")]
         if not fixes or not rebase("-c", "sequence.editor=sed -i -E '/^(pick|p) (%s)[0-9a-f]* /d'" % "|".join(h[:7] for h, _ in fixes)):
-            raise Failed(f"{tag} conflicts with local changes in ~/core; nothing changed")
-        dropped = [t for _, t in fixes]
+            # The release wins, so a Hive never stays stuck on an old one: everything local goes to a branch, and an agent looks at it after.
+            kept = f"kept/{tag}-{time.strftime('%Y%m%d%H%M%S', time.gmtime())}"
+            git("branch", "-f", kept, dirty or old)
+            files = overlap(tag, old, dirty)
+            git("reset", "-q", "--hard", tag)
+        else: dropped = [t for _, t in fixes]
     try:
         if mine: put_settings(mine)
         install(); restart(); healthy()
@@ -184,7 +207,7 @@ def apply(tag, st):
         try: clear_failed(); install(); restart(); healthy()
         except (Failed, OSError, subprocess.SubprocessError, AttributeError) as e2: raise Failed(f"{tag} failed ({e}), and so did going back: {e2}. Look at ~/core and rerun ~/core/install.sh")
         raise Failed(f"{tag} failed and the Hive went back to what it was running: {e}")
-    return dropped
+    return dropped, kept, files
 
 def main():
     p = argparse.ArgumentParser(prog="hive update", description="Update this Hive to the newest release.")
@@ -213,6 +236,7 @@ def main():
     try: all_tags = tags()
     except (Failed, subprocess.SubprocessError) as e: later(f"hive update: can't read releases: {e}")
     skip = st.get("failed", [])
+    if not a.auto and not a.check: skip = []  # someone ran it by hand, after fixing what failed, say: try the skipped releases again
     new = [t for t in all_tags if t not in skip and (not st.get("tag") or key(t) > key(st["tag"]))]
     # A fresh install is already on this tag: nothing to do, and nothing to tell anyone.
     if new and not st.get("tag") and git("rev-parse", "HEAD", check=False).stdout == git("rev-parse", "-q", "--verify", f"{new[-1]}^{{commit}}", check=False).stdout:
@@ -226,7 +250,7 @@ def main():
     if not new: return print(f"up to date ({st.get('tag', 'no release yet')})")
     tag = new[-1]
     try:
-        dropped = apply(tag, st)
+        dropped, kept, files = apply(tag, st)
     except Stuck as e:
         st["error"] = str(e); save(st)
         if st.get("stuck") != str(e): st["stuck"] = str(e); save(st); say(f"Can't update, and {tag} will be tried again: {e}", person=True)
@@ -241,7 +265,15 @@ def main():
     if dropped:
         say(f"Updated to {tag}. It changed the same lines as {'this fix' if len(dropped) == 1 else 'these fixes'} your Hive made to itself, so {'it was' if len(dropped) == 1 else 'they were'} dropped: "
             + "; ".join(d.removeprefix("local fix:").strip() for d in dropped) + ". If the problem comes back, ask an agent to look at it again.", person=True)
-    else: say(f"Updated to {tag}.")
+    elif not kept: say(f"Updated to {tag}.")
+    if kept:
+        where = f" to {', '.join(files[:8])}" + (" and more" if len(files) > 8 else "") if files else ""
+        say(f"Updated to {tag}. This Hive's own changes in ~/core{where} clashed with it, so the release went in and they were set aside, not lost. An agent is checking whether any still matter.", person=True)
+        say(f"`hive update` put in {tag}, but this Hive's own changes in ~/core{where} clashed with it. The release won so the update could happen. "
+            f"The old state, its commits and any uncommitted edits, is kept in the git branch `{kept}` in ~/core: `git -C ~/core diff {tag} {kept}` shows it, and `git -C ~/core log {tag}..{kept}` its commits.\n\n"
+            "Work out what was set aside and whether any of it still matters on top of the release (the release may already do the same thing). "
+            "If something does: in bare mode, apply it again as a commit in ~/core whose subject starts `local fix:`; in the sandbox ~/core is read-only, so write the diff to a file and draft it with `hive-report contribute`. "
+            "Then say here, in a line or two the person can follow, what was set aside and whether anything was lost. Don't delete the branch.", to="new")
     print(f"updated to {tag}")
 
 if __name__ == "__main__": main()

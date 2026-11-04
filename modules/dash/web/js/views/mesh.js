@@ -125,7 +125,7 @@ const SVGNS = "http://www.w3.org/2000/svg";
 const OUT_NAME = { person: "you", box: "box", autobox: "box", hives: "hives", h0: "hives", h1: "hives" };
 const reduced = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
 const since = t => (t ? dur(Math.max(0, now() - t)).replace("under a minute", "now") : "");
-const GS = { L: null, nodes: new Map(), sig: "", w: 0, q: "", hits: [], posted: new Map(), busy: new Set(), queued: new Set(), capT: 0, hoverT: 0 };
+const GS = { L: null, nodes: new Map(), sig: "", w: 0, q: "", hits: [], posted: new Map(), busy: new Set(), queued: new Set(), capT: 0, hoverT: 0, h: 0, pin: new Map(), view: { k: 1, x: 0, y: 0, user: false } };
 
 function graphInput(D) {
   const per = new Map(), total = new Map();
@@ -184,9 +184,71 @@ const hcEl = h("div", { class: "map-hc", role: "tooltip", hidden: true });
 cv.append(svg, fx, hcEl);
 const scroller = h("div", { class: "map-scroll" }, cv);
 const legendEl = h("div", { class: "map-legend" });
-const stage = h("div", { class: "map-stage", "data-key": "stage", "data-own": "", "data-sig": "mesh" }, capEl, scroller, legendEl);
-const EL = new Map();
-new ResizeObserver(() => { const w = scroller.clientWidth; if (w && Math.abs(w - GS.w) > 2 && M.D) { syncGraph(M.D); } }).observe(scroller);
+const zoomBy = f => { const V = GS.view; zoomAt(V.k * f, scroller.clientWidth / 2, scroller.clientHeight / 2, true); };
+const zoomEl = h("div", { class: "map-zoom", role: "group", "aria-label": "Zoom" },
+  h("button", { type: "button", class: "btn", "data-size": "s", title: "Zoom in (or Ctrl + wheel, or pinch)", "aria-label": "Zoom in", onclick: () => zoomBy(1.25) }, "+"),
+  h("button", { type: "button", class: "btn", "data-size": "s", title: "Zoom out", "aria-label": "Zoom out", onclick: () => zoomBy(0.8) }, "−"),
+  h("button", { type: "button", class: "btn", "data-size": "s", title: "Fit the graph to the panel and let dragged nodes go", onclick: () => refit() }, "Fit"));
+const stage = h("div", { class: "map-stage", "data-key": "stage", "data-own": "", "data-sig": "mesh" }, capEl, scroller, zoomEl, legendEl);
+const EL = new Map(), SPK = new Map();
+const spG = document.createElementNS(SVGNS, "g"), topG = document.createElementNS(SVGNS, "g"), ringG = document.createElementNS(SVGNS, "g");
+svg.append(ringG, spG, topG);
+new ResizeObserver(() => { const w = scroller.clientWidth, hh = scroller.clientHeight; if (w && (Math.abs(w - GS.w) > 2 || (M.lay !== "bands" && Math.abs(hh - GS.h) > 2)) && M.D) { syncGraph(M.D); } }).observe(scroller);
+
+// ---- the free view (Web, Orbit): fitted to the panel, wheel zooms, drag the background to pan, drag a node to move it ----
+const free = () => scroller.hasAttribute("data-free");
+function applyView() { const V = GS.view; cv.style.transform = `translate(${V.x.toFixed(1)}px,${V.y.toFixed(1)}px) scale(${V.k.toFixed(4)})`; }
+function fitView(L) {
+  let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
+  const add = (a, b, c, d) => { x0 = Math.min(x0, a); y0 = Math.min(y0, b); x1 = Math.max(x1, c); y1 = Math.max(y1, d); };
+  for (const cl of L.clusters) add(cl.card.x, cl.card.y, cl.card.x + cl.card.w, cl.card.y + cl.card.h);
+  for (const n of L.nodes) add(n.x - 12, n.y - 12, n.labelX + Math.max(40, n.labelW) + 8, n.y + 14);
+  for (const r of L.rings || []) if (r.ox) add(r.cx - r.ox, r.cy - r.oy - 20, r.cx + r.ox, r.cy + r.oy);
+  for (const c of (L.olderCount && L.older.chips) || []) add(c.x, c.y - 30, c.x + c.w, c.y + c.h);
+  if (x0 > x1) { GS.view = { k: 1, x: 0, y: 0, user: false }; return; }
+  const W = scroller.clientWidth, H = scroller.clientHeight, m = 32;
+  // a small graph grows to fill the panel; a big one shrinks only while its labels stay readable, then starts at the top and pans
+  const k = Math.max(0.7, Math.min(1.25, (W - 2 * m) / (x1 - x0), (H - 2 * m) / (y1 - y0))), bw = (x1 - x0) * k, bh = (y1 - y0) * k;
+  GS.view = { k, x: bw <= W - 2 * m ? (W - bw) / 2 - x0 * k : m - x0 * k, y: bh <= H - 2 * m ? (H - bh) / 2 - y0 * k : m - y0 * k, user: false };
+}
+function zoomAt(k, px, py, smooth) {
+  const V = GS.view, k2 = Math.max(0.2, Math.min(3, k));
+  GS.view = { k: k2, x: px - (px - V.x) * k2 / V.k, y: py - (py - V.y) * k2 / V.k, user: true };
+  if (!smooth) scroller.setAttribute("data-drag", ""); applyView();
+  if (!smooth) { clearTimeout(GS.wheelT); GS.wheelT = setTimeout(() => scroller.removeAttribute("data-drag"), 120); }
+}
+function refit() { GS.pin = new Map(); GS.pos = null; GS.view.user = false; GS.sig = ""; if (M.D) syncGraph(M.D); }
+scroller.addEventListener("wheel", e => {
+  if (!free()) return; e.preventDefault();
+  const r = scroller.getBoundingClientRect(), u = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? scroller.clientHeight : 1;
+  if (e.ctrlKey || e.metaKey) return zoomAt(GS.view.k * Math.exp(-e.deltaY * u * 0.01), e.clientX - r.left, e.clientY - r.top, false);   // pinch, or ctrl + wheel
+  const dx = (e.shiftKey && !e.deltaX ? e.deltaY : e.deltaX) * u, dy = (e.shiftKey && !e.deltaX ? 0 : e.deltaY) * u;    // the wheel scrolls, as it did
+  GS.view.x -= dx; GS.view.y -= dy; GS.view.user = true; scroller.setAttribute("data-drag", ""); applyView();
+  clearTimeout(GS.wheelT); GS.wheelT = setTimeout(() => scroller.removeAttribute("data-drag"), 120);
+}, { passive: false });
+scroller.addEventListener("pointerdown", e => {
+  if (!free() || e.button !== 0 || e.target.closest(".map-hc")) return;
+  const b = e.target.closest("[data-body]"), id = b && b.dataset.body, p0 = id && GS.pos && GS.pos.get(id);
+  if (b && !p0) return;
+  const st = { x: e.clientX, y: e.clientY, v0: { ...GS.view }, on: false };
+  const mv = ev => {
+    const dx = ev.clientX - st.x, dy = ev.clientY - st.y;
+    if (!st.on) {
+      if (Math.hypot(dx, dy) < 4) return;
+      st.on = true; scroller.setPointerCapture(ev.pointerId); scroller.setAttribute("data-drag", ""); hideCard(); hideTip(); GS.view.user = true;
+    }
+    if (id) {
+      GS.pin.set(id, { x: p0.x + dx / GS.view.k, y: p0.y + dy / GS.view.k });
+      if (!GS.raf) GS.raf = requestAnimationFrame(() => { GS.raf = 0; GS.sig = ""; syncGraph(M.D); });
+    } else { GS.view.x = st.v0.x + dx; GS.view.y = st.v0.y + dy; applyView(); }
+  };
+  const up = () => {
+    scroller.removeEventListener("pointermove", mv); scroller.removeEventListener("pointerup", up); scroller.removeEventListener("pointercancel", up);
+    if (st.on) { GS.dragged = true; setTimeout(() => { GS.dragged = false; }, 0); scroller.removeAttribute("data-drag"); }
+  };
+  scroller.addEventListener("pointermove", mv); scroller.addEventListener("pointerup", up); scroller.addEventListener("pointercancel", up);
+});
+scroller.addEventListener("click", e => { if (GS.dragged) { e.stopPropagation(); e.preventDefault(); GS.dragged = false; } }, true);
 
 function put(seen, key, tag, cls, x, y, attrs, kids) {
   let el = EL.get(key); const fresh = !el;
@@ -209,13 +271,13 @@ function nowLine(a) {
 function agentMeta(a) { return [a.model, a.cost >= 0.005 ? money(a.cost) : null, a.from ? "from " + a.from : null].filter(Boolean).join(" · "); }
 
 function syncGraph(D) {
-  const w = scroller.clientWidth || GS.w || 960, phone = w < 760;
-  const sig = [M.lastBuild, M.q, M.sel && M.sel.kind + M.sel.id, w, M.active, M.lay].join("|");
+  const w = scroller.clientWidth || GS.w || 960, phone = w < 760, isFree = M.lay !== "bands", hh = isFree ? scroller.clientHeight : 0;
+  const sig = [M.lastBuild, M.q, M.sel && M.sel.kind + M.sel.id, w, hh, M.active, M.lay].join("|");
   if (sig === GS.sig) return; GS.sig = sig;
-  if (GS.lay !== M.lay || Math.abs(w - GS.w) > 40) GS.pos = null;      // a new layout or a new width starts the graph afresh; else it settles from where it was
-  GS.w = w; GS.lay = M.lay;
+  if (GS.lay !== M.lay || Math.abs(w - GS.w) > 40 || Math.abs(hh - GS.h) > 40) { GS.pos = null; GS.pin = new Map(); GS.view.user = false; }  // a new layout or panel size starts the graph afresh; else it settles from where it was
+  GS.w = w; GS.h = hh; GS.lay = M.lay;
   const override = phone ? { pad: 12, run: 28, minColW: 300 } : null;
-  const L = M.lay === "bands" ? layout(graphInput(D), { width: w, override }) : graphLayout(graphInput(D), { width: w, override, prev: GS.pos }, M.lay);
+  const L = !isFree ? layout(graphInput(D), { width: w, override }) : graphLayout(graphInput(D), { width: w, height: hh, override, prev: GS.pos, pin: GS.pin, free: true }, M.lay);
   GS.pos = L.pos || null;
   GS.L = L; GS.nodes = new Map(L.nodes.map(n => [n.id, n]));
   const S2 = litOf(L, D), seen = new Set(), lines = L.D.lines, compact = L.density === "compact";
@@ -233,7 +295,7 @@ function syncGraph(D) {
     const outs = Object.entries(t.outside).sort((x, y) => y[1] - x[1] || (x[0] < y[0] ? -1 : 1));
     const chips = L.cols === 1 && outs.length > 1 ? [h("span", { class: "map-chip" }, "+ " + outs.length)] : outs.slice(0, 2).map(([k, n]) => h("span", { class: "map-chip" }, k + " ", h("b", null, String(n))));
     put(seen, "c:" + t.id, "button", "map-card", cl.card.x, cl.card.y,
-      { "data-kind": "thread", "data-id": t.id, "data-tier": t.tier, "data-sel": sel || null, "data-lit": lit("c:" + t.id), style: `width:${cl.card.w}px;height:${cl.card.h}px`, "aria-label": `Thread ${t.id}, ${tier(t.tier).label}, ${plural(t.posts, "post")}, ${money(t.cost)}`, "aria-pressed": sel ? "true" : "false" },
+      { "data-kind": "thread", "data-id": t.id, "data-body": "c:" + t.id, "data-tier": t.tier, "data-sel": sel || null, "data-lit": lit("c:" + t.id), style: `width:${cl.card.w}px;height:${cl.card.h}px`, "aria-label": `Thread ${t.id}, ${tier(t.tier).label}, ${plural(t.posts, "post")}, ${money(t.cost)}`, "aria-pressed": sel ? "true" : "false" },
       [h("span", { class: "map-cr1" }, h("i", { class: "map-tsw", "data-tier": t.tier }), h("b", { class: "map-cn" }, t.id), h("span", { class: "map-cc" }, money(t.cost))),
        compact ? null : h("span", { class: "map-cr2" }, t.stuck ? h("em", null, `▲ ${t.stuck} stuck`) : null, h("span", { class: "map-cm" }, `${plural(t.posts, "post")} · ${since(t.last) || "–"}`), ...chips),
        h("i", { class: "map-cb" }, h("i", { style: `width:${Math.max(2, cl.costShare * 100).toFixed(1)}%` }))]);
@@ -242,7 +304,7 @@ function syncGraph(D) {
   for (const n of L.nodes) {
     const x = n.x - 10, y = n.y - 9, wd = n.labelX - x + Math.max(40, n.labelW);
     if (n.more) {
-      put(seen, "n:" + n.id, "button", "map-more", x, y, { "data-kind": "thread", "data-id": n.thread, "data-lit": lit("c:" + n.thread), style: `--lx:${n.labelX - x}px` },
+      put(seen, "n:" + n.id, "button", "map-more", x, y, { "data-kind": "thread", "data-id": n.thread, "data-body": n.id, "data-lit": lit("c:" + n.thread), style: `--lx:${n.labelX - x}px` },
         [h("i", { class: "map-g", "data-st": "more", style: `--r:${n.r}px` }), h("span", { class: "map-pill" }, `+ ${n.more} more`)]);
       continue;
     }
@@ -252,7 +314,7 @@ function syncGraph(D) {
       : [glyph(n, sel), h("span", { class: "map-l1" }, h("b", { class: "map-aid" }, a.id), h("span", { class: "map-am" }, compact ? (a.cost >= 0.005 ? " " + money(a.cost) : "") : agentMeta(a) ? " " + agentMeta(a) : "")),
          lines >= 2 ? h("span", { class: "map-l2" }, nowLine(a)) : null];
     put(seen, "n:" + n.id, "button", "map-ag", x, y,
-      { "data-kind": "agent", "data-id": a.id, "data-node": n.id, "data-ghost": n.ghost || null, "data-ended": !a.running || null, "data-sel": sel || null, "data-lit": lit("n:" + n.id),
+      { "data-kind": "agent", "data-id": a.id, "data-node": n.id, "data-body": n.ghost ? null : n.id, "data-ghost": n.ghost || null, "data-ended": !a.running || null, "data-sel": sel || null, "data-lit": lit("n:" + n.id),
         style: `width:${wd}px;--lx:${n.labelX - x}px`, "aria-label": n.ghost ? `${a.id} also posted in ${n.thread}` : `${a.id}, ${status(a.status).label}, main thread ${a.main}`, "aria-pressed": sel ? "true" : "false" }, kids);
   }
   // older threads, compact view only
@@ -263,18 +325,25 @@ function syncGraph(D) {
   for (const [k, el] of EL) if (!seen.has(k)) { el.remove(); EL.delete(k); }
   requestAnimationFrame(() => { for (const el of EL.values()) el.classList.remove("map-in"); });
   // the lines: spokes, then the selection's links on top
-  const t = now(), path = [];
-  for (const r of L.rings || []) if (r.ox) path.push(`<ellipse class="map-ring" cx="${r.cx}" cy="${r.cy}" rx="${r.ox.toFixed(1)}" ry="${r.oy.toFixed(1)}"/><text class="map-rt" x="${r.cx}" y="${(r.cy - r.oy + 14).toFixed(1)}">${r.name}</text>`);
+  const t = now(), rg = [], path = [], spSeen = new Set();
+  for (const r of L.rings || []) if (r.ox) rg.push(`<ellipse class="map-ring" cx="${r.cx}" cy="${r.cy}" rx="${r.ox.toFixed(1)}" ry="${r.oy.toFixed(1)}"/><text class="map-rt" x="${r.cx}" y="${(r.cy - r.oy + 14).toFixed(1)}">${r.name}</text>`);
+  // spokes are kept by key, so a moved node's line eases to its new place with it (CSS `d`)
   for (const sp of L.spokes) {
-    const acc = S2.acc.has(sp.node) || (GS.posted.get(sp.node) || 0) > t;
-    path.push(`<path class="map-sp" data-k="${sp.node}" d="${sp.d || spokePath(sp)}" stroke-width="${sp.width}"${sp.dashed ? " data-dash" : ""}${sp.ended ? " data-ended" : ""}${acc ? " data-acc" : ""}${S2.on && S2.lit.has("n:" + sp.node) ? " data-lit" : ""}/>`);
+    const acc = S2.acc.has(sp.node) || (GS.posted.get(sp.node) || 0) > t, key = sp.node + ">" + sp.thread, d = sp.d || spokePath(sp);
+    let el = SPK.get(key); if (!el) { el = document.createElementNS(SVGNS, "path"); SPK.set(key, el); spG.append(el); }
+    spSeen.add(key);
+    el.setAttribute("class", "map-sp"); el.setAttribute("data-k", sp.node); el.setAttribute("d", d); el.style.d = `path("${d}")`; el.setAttribute("stroke-width", sp.width);
+    for (const [k, on] of [["data-dash", sp.dashed], ["data-ended", sp.ended], ["data-acc", acc], ["data-lit", S2.on && S2.lit.has("n:" + sp.node)]]) el.toggleAttribute(k, !!on);
   }
+  for (const [k, el] of SPK) if (!spSeen.has(k)) { el.remove(); SPK.delete(k); }
   path.push(`<defs><marker id="map-ah" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L8 4L0 8z" class="map-ahd"/></marker></defs>`);
   for (const k of S2.links) path.push(`<path class="map-ln"${k.ghost ? " data-ghost" : ` marker-end="url(#map-ah)"`} d="${linkPath(k.p, k.q)}"/>`);
-  svg.innerHTML = path.join("");
+  ringG.innerHTML = rg.join(""); topG.innerHTML = path.join("");
+  scroller.toggleAttribute("data-free", isFree); zoomEl.hidden = !isFree;
+  if (isFree) { if (!GS.view.user) fitView(L); applyView(); } else cv.style.transform = "";
   syncCap(D);
   stage.setAttribute("aria-label", `Graph of the hive: ${M.count}. Tab walks threads and agents; Enter selects, Escape clears.`);
-  if (M.q !== GS.q) { GS.q = M.q; if (S2.hits[0]) scroller.scrollTo({ top: Math.max(0, S2.hits[0].y - 60), behavior: reduced() ? "auto" : "smooth" }); }
+  if (M.q !== GS.q) { GS.q = M.q; if (S2.hits[0] && !isFree) scroller.scrollTo({ top: Math.max(0, S2.hits[0].y - 60), behavior: reduced() ? "auto" : "smooth" }); }
   legend(L);
 }
 function syncCap(D) {
@@ -587,7 +656,7 @@ const meshDeck = {
   jog(d, n, shift) { const a = winStart(), b = now(), c = (M.cut ?? b) + n * (shift ? 6 : 1) * (b - a) / 1500; M.playing = false; setCut(c >= b ? null : Math.max(a, c)); return true; },
   scrub(v) { const a = winStart(), b = now(); M.playing = false; setCut(v > .995 ? null : a + v * (b - a)); },
   play() { if (M.playing) stopPlay(); else startPlay(); return true; },
-  fit() { scroller.scrollTop = 0; },
+  fit() { if (free()) refit(); else scroller.scrollTop = 0; },
   toggle() { setActive(!M.active); },
   window(v) { const i = Math.min(WINS.length - 1, Math.floor(v * WINS.length)), w = WINS[i][1]; if (w !== M.win) setWin(w); },
 };

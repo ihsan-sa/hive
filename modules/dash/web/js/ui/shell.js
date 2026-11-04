@@ -121,10 +121,24 @@ addEventListener("hashchange", () => { NAV.open = false; });
 document.addEventListener("click", e => { if (NAV.open && !e.target.closest(".more,dialog.fb")) { NAV.open = false; NAV.update && NAV.update(); } });
 addEventListener("keydown", e => { if (e.key === "Escape" && NAV.open) { NAV.open = false; NAV.update && NAV.update(); } });
 
+/** Full or limited, for a sign-in from outside. Limited is loud, since things quietly go missing from the page in it. */
+function modeBadge(mode) {
+  const caps = "Allowed: " + (S.app.can || []).join(", ");
+  if (mode === "full") {
+    const m = Math.ceil((S.app.full_left || 0) / 60);
+    return h("span", { class: "top-route", "data-mode": "full", title: `Full mode. It stays on while you use the app, and drops to limited after 30 minutes with no clicks or typing. ${caps}` },
+      m <= 10 ? `full, ${m} min left` : "full");
+  }
+  if (mode === "expired") return h("a", { class: "top-route", "data-mode": "limited", href: "/cdn-cgi/access/logout",
+    title: `Limited: full mode ended after 30 minutes without use, so commands, settings and logins are hidden. This signs you out; open this page again and sign in with Google to get full back. ${caps}` }, "Limited · sign in for full");
+  if (mode) return h("span", { class: "top-route", "data-mode": "limited", title: `Your sign-in is limited: you can read, post and stop agents. ${caps}` }, "Limited");
+  return h("span", { class: "top-route", title: caps }, can("post") ? "outside access" : "read-only");
+}
+
 export function topBar({ views, current, update, nav }) {
   const on = v => (typeof v.tab === "function" ? v.tab() : v.tab);
   const simple = simpleOn();
-  const mode = S.app.mode, route = simple || S.app.route !== "outside" ? null : mode === "full" ? `full, ${Math.ceil(S.app.full_left / 60)} min` : mode ? "limited" : can("post") ? "outside access" : "read-only";
+  const mode = S.app.mode, route = simple || S.app.route !== "outside" ? null : modeBadge(mode);
   const th = getTheme(), app = S.app.app && nav;
   // During the walkthrough only Settings (for Accounts) and Help: no tabs to wander off to before setup is finished.
   const setup = app && S.app.settings && S.app.settings.setup_done === false;
@@ -158,8 +172,7 @@ export function topBar({ views, current, update, nav }) {
     h("div", { class: "top-in" },
       h("a", { class: "brand", href: app ? "#comms" : "#now", onclick: logoClick }, brandMark()),
       h("nav", { class: "tabs", "aria-label": "Views" }, tabs),
-      h("div", { class: "top-status", role: "status" }, route ? h("span", { class: "top-route", title: "Allowed from outside: " + (S.app.can || []).join(", ") }, route) : null,
-        mode === "expired" ? h("a", { class: "top-route", href: "/cdn-cgi/access/logout", title: "Full mode lasts an hour after signing in. This signs you out; open this page again and sign in with Google." }, "sign in again for full") : null, bits()),
+      h("div", { class: "top-status", role: "status" }, route, bits()),
       h("div", { class: "top-icons" }, icons,
         deckSupported() && !app ? h("a", { class: "btn top-deck", "data-kind": "icon", href: "#deck", "data-on": deck.state === "on" ? "1" : null, "data-armed": deck.armed ? "1" : null, "aria-label": deck.armed ? "Deck: full control" : "Deck", title: deck.state === "on" ? "DDJ-FLX4 connected" : "Run this page from a DDJ-FLX4" }, icon("dial")) : null,
         button(`Colour theme: ${THEMES.find(x => x[0] === th)[1]}`, () => { cycleTheme(); update(); }, { kind: "icon", icon: th === "light" ? "sun" : th === "dark" ? "moon" : "auto", cls: "theme", title: `Colour theme: ${THEMES.find(x => x[0] === th)[1]}. Auto follows your system setting` }),

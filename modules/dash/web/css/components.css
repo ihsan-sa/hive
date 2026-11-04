@@ -37,6 +37,9 @@
 .top-logins>i{width:4px;border-radius:1px;background:var(--ink-2)}
 .top-logins>i[data-tone]{background:var(--c)}
 .top-route{font-size:var(--fs-meta);color:var(--ink-3)}
+.top-route[data-mode]{padding:2px var(--s2);border-radius:999px;border:1px solid var(--line);white-space:nowrap}
+.top-route[data-mode=limited]{color:var(--warn-ink);background:color-mix(in oklch,var(--warn) 22%,transparent);border-color:var(--warn);font-weight:var(--w-bold);text-decoration:none}
+a.top-route[data-mode=limited]:hover{background:color-mix(in oklch,var(--warn) 35%,transparent)}
 .top-sub{display:none}
 .top-icons{display:flex;align-items:center;gap:2px;margin-left:4px}        /* NEW: settings, more, theme, full screen */
 .top-in .fs,.theme{align-self:center}
