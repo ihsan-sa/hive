@@ -1493,9 +1493,9 @@ GET_CAP = {"/api/live": "read", "/api/board": "read", "/api/log": "read", "/api/
            "/api/projects": "read", "/api/agent-costs": "read", "/api/thread-names": "read", "/api/thread-meta": "read", "/json": "read", "/api/target": "read", "/api/inbox": "read", "/api/delivered": "read",
            "/api/config": "config", "/api/modules": "modules", "/api/signin": "logins", "/api/plans": "plans", "/api/secrets": "secrets",
            "/api/settings": "config", "/api/update": "config", "/api/signin-codex": "logins", "/api/accounts": "logins", "/api/design": "logins", "/api/brand/logo": "read",
-           "/api/kb/home": "files", "/api/kb/open": "files", "/api/kb/search": "files", "/api/kb/raw": "files", "/api/kb/map": "files", "/api/kb/history": "files", "/api/progress": "read", "/api/approvals": "read"}
+           "/api/kb/home": "files", "/api/kb/open": "files", "/api/kb/search": "files", "/api/kb/raw": "files", "/api/kb/map": "files", "/api/kb/history": "files", "/api/progress": "read", "/api/approvals": "read", "/api/feedback-drafts": "read"}
 POST_CAP = {"/api/kill": "stop", "/api/approval": "stop", "/api/tier": "tier", "/api/agent-model": "post", "/api/login-pause": "limits", "/api/login-limit": "limits", "/api/provider-limit": "limits",
-            "/api/post": "post", "/api/thread-meta": "post", "/api/feedback": "post", "/api/issue-link": "post", "/api/update": "config", "/api/share-copy": "config", "/api/draft": "config", "/api/upload": "post", "/api/inbox-read": "post", "/api/config": "config", "/api/starter": "config",
+            "/api/post": "post", "/api/thread-meta": "post", "/api/feedback": "post", "/api/feedback-draft-done": "post", "/api/issue-link": "post", "/api/update": "config", "/api/share-copy": "config", "/api/draft": "config", "/api/upload": "post", "/api/inbox-read": "post", "/api/config": "config", "/api/starter": "config",
             "/api/module": "modules", "/api/signin": "logins", "/api/signin/code": "logins", "/api/signin/cancel": "logins", "/api/plan": "plans", "/api/secret": "secrets",
             "/api/signin-codex": "logins", "/api/account-key": "logins", "/api/design": "logins", "/api/brand": "config", "/api/brand/logo": "config"}
 LOCAL_ONLY = {"/api/access", "/api/settings", "/api/share-copy", "/api/draft"}  # who may do what is never changed from outside, whatever outside.can says
@@ -1898,6 +1898,22 @@ def approval_answer(d):
         f.write_text(json.dumps(a))
     person_post(f"@{a['from']} {'APPROVED' if yes else 'DENIED'} request {aid} (answered with the dashboard button): {a.get('why', '')[:300]}", a.get("thread"))
     return {"ok": True, "state": a["state"]}
+
+# ---------- feedback drafts (hive feedback-draft; the Send feedback window opens prefilled, the person presses Send) ----------
+FB_DRAFTS = STATE / "feedback-drafts"
+
+def feedback_drafts_list():
+    out = []
+    for f in sorted(FB_DRAFTS.glob("*.json"), key=lambda f: f.stat().st_mtime)[-10:] if FB_DRAFTS.is_dir() else []:
+        try: out.append(json.loads(f.read_text()))
+        except (OSError, ValueError): pass
+    return out
+
+def feedback_draft_done(d):
+    aid = str(d.get("id") or "")
+    if not APPROVAL_ID.fullmatch(aid): raise ValueError("no such draft")
+    (FB_DRAFTS / (aid + ".json")).unlink(missing_ok=True)
+    return {"ok": True}
 
 def person_post(text, thread=None, reply_to=None, uploads=(), signer=None, limited=False, simple=False, model=None):
     """A post as the person. As the Slack mirror does it: a plain message wakes the agent on the thread (thread_agent), a reply wakes the author
@@ -3942,6 +3958,8 @@ def serve(port):
                 self.send(('{"offset":%d,"items":[%s]}' % (off, ",".join(lines))).encode(), J)
             elif u.path == "/api/approvals":
                 self.send(json.dumps(approvals_list()).encode(), J)
+            elif u.path == "/api/feedback-drafts":
+                self.send(json.dumps(feedback_drafts_list()).encode(), J)
             elif u.path == "/api/delivered":
                 self.send(json.dumps(deliv_c.get()).encode(), J)
             elif u.path == "/api/usage":
@@ -4005,11 +4023,12 @@ def serve(port):
             if not isinstance(d, dict): return self.send_error(400)
             num = lambda v: v is None or (isinstance(v, (int, float)) and not isinstance(v, bool))
             J = "application/json"
-            if u.path in ("/api/post", "/api/thread-meta", "/api/feedback", "/api/issue-link", "/api/update", "/api/inbox-read", "/api/agent-model", "/api/config", "/api/starter", "/api/module", "/api/signin", "/api/signin/code", "/api/signin/cancel", "/api/access", "/api/plan", "/api/secret", "/api/settings", "/api/share-copy", "/api/draft", "/api/signin-codex", "/api/account-key", "/api/design", "/api/brand"):
+            if u.path in ("/api/post", "/api/thread-meta", "/api/feedback", "/api/feedback-draft-done", "/api/issue-link", "/api/update", "/api/inbox-read", "/api/agent-model", "/api/config", "/api/starter", "/api/module", "/api/signin", "/api/signin/code", "/api/signin/cancel", "/api/access", "/api/plan", "/api/secret", "/api/settings", "/api/share-copy", "/api/draft", "/api/signin-codex", "/api/account-key", "/api/design", "/api/brand"):
                 try:
                     if u.path == "/api/post": res = person_post(d.get("text"), d.get("thread"), d.get("reply_to"), d.get("files"), signer=self.signer, limited="config" not in self.can, simple=d.get("simple") is True, model=d.get("model"))
                     elif u.path == "/api/thread-meta": res = set_thread_meta(d)
                     elif u.path == "/api/feedback": res = send_feedback(d)
+                    elif u.path == "/api/feedback-draft-done": res = feedback_draft_done(d)
                     elif u.path == "/api/issue-link": res = issue_link(d)
                     elif u.path == "/api/update": res = update_do(d.get("do"))
                     elif u.path == "/api/plan": res = save_plan(d.get("name"), d.get("text"), d.get("version"), bool(d.get("start")), self.signer)

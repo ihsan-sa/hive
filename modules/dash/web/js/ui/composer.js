@@ -13,6 +13,8 @@ import { isAgent, isRunning, agentCard, agentStatus, threadPeople, partner, disp
 import { short, mdPlain, now } from "../core/format.js";
 import { button, icon, input, statusDot } from "./kit.js";
 import { openAside } from "./aside.js";
+import { sixSeven } from "../core/sixseven.js";
+import { run as eggRun } from "../core/easter.js";
 
 const CP = { update: null, th: undefined, focus: false, ac: null, menu: false, drag: false, sig: "", hist: null };
 // The secret box (the person, 11041306e4d2): a name and a hidden value saved straight to /api/secret. The value never enters the draft, the board or localStorage.
@@ -132,6 +134,8 @@ function queue(th, d, r) {
 function send(th) {
   const d = draft(th);
   if (!d.text.trim() && !d.files.length) return;
+  if (d.text.trim() === "/67" && !d.files.length) { d.text = ""; keep(d); const el = field(th); if (el) el.value = ""; refresh(); sixSeven(); return; }
+  if (!d.files.length && /^\/(party|bees|matrix)$/.test(d.text.trim())) { const t = d.text.trim(); d.text = ""; keep(d); const el = field(th); if (el) el.value = ""; refresh(); eggRun(t); return; }   // easter egg, not sent
   queue(th, d, recipient(th));
   Object.assign(d, { text: "", files: [], reply: null, replyId: null, to: null, name: "", naming: false, err: "", model: "" }); keep(d);
   CP.ac = null; CP.menu = false; CP.hist = null;
