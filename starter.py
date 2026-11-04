@@ -598,6 +598,47 @@ def newest_seen(login):
         if (seen := seen_usage(r.get("out"))): return seen
     return None
 
+SLOW_S, SLOW_MAX_S = 240, 900   # a person's mention with no reply after 4 min gets one line saying who is on it; nothing after 15 min (the watchdog's)
+NOT_REPLY = {"person", "hives", "box", "starter", "watchdog"}
+ACK = re.compile(r"(?:@\S+\s+)*((?:perf|perfect|excellent|great|nice|cool|good|awesome|amazing|thanks|thank you|thx|ty|ok|okay|got it|sounds good)[\s.!,]*)+", re.I)
+
+def slow_replies(posts, st, alive, t=None):
+    """One notice per person post that named an agent and has had no reply in its thread after SLOW_S: who is on it (a live run,
+    a queued start, or nobody), so the person doesn't have to ask "hello?" (17 such posts a day, 1-4 min after a mention, 2026-11-04).
+    Returns (thread, text) pairs and marks them in st["slow_noted"]; the watchdog's own alarm at 10 min ignores starter posts, so this never silences it."""
+    t = t or time.time(); noted = set(st.get("slow_noted", [])); out = []
+    for p in posts:
+        if str(p.get("from", "")).lower() != "person" or p.get("id") in noted: continue
+        try: age = t - dt.datetime.fromisoformat(p["at"]).timestamp()
+        except (KeyError, ValueError): continue
+        if not SLOW_S <= age <= SLOW_MAX_S: continue
+        names = [n for n in mentions(p) if n not in ("all", "here", "person", "hives")]
+        if not names or ACK.fullmatch(str(p.get("text", "")).strip()): continue
+        th = p.get("thread") or p.get("id")
+        noted.add(p["id"])
+        if any((q.get("thread") or q.get("id")) == th and q.get("at", "") > p["at"] and str(q.get("from", "")).lower() not in NOT_REPLY for q in posts): continue
+        run = next((r for r in alive.values() if r.get("post") == p["id"]), None) \
+            or next((r for r in alive.values() if str(r.get("name", "")).lower() in names), None)
+        if run:
+            try: since = (t - dt.datetime.fromisoformat(run["at"]).timestamp()) / 60
+            except (KeyError, ValueError): since = age / 60
+            out.append((th, f"`{run['name']}` is on this ({run.get('model') or 'claude'}, running {since:.0f} min, no reply yet); a first reply usually follows within a few minutes."))
+        elif any(any(q.get("id") == p["id"] for q in ps) or n in names for n, ps in st.get("pending", {}).items()):
+            out.append((th, "This is queued: no agent has started on it yet (every login is paused or at its stop line, or the start is waiting its turn). It starts as soon as there is room."))
+        else:
+            out.append((th, "No agent is running on this post yet; the watchdog looks again at 10 min."))
+    st["slow_noted"] = sorted(noted)[-300:]
+    return out
+
+def recent_posts(n=400):
+    out = []
+    try:
+        for line in BOARD.read_text().splitlines()[-n:]:
+            try: out.append(json.loads(line))
+            except ValueError: pass
+    except OSError: pass
+    return out
+
 def posted_since(name, at):
     """Did agent `name` post to the board at or after `at`?"""
     try:
@@ -907,7 +948,7 @@ def start(c, name, posts, login, resume=None, reaped=None, extra=(), moved=False
     children[name] = proc
     if not resume and not sb: (STATE / "delivered" / name).unlink(missing_ok=True)  # the inbox hook starts fresh with this run; a resumed one keeps its list so an @all isn't handed over twice
     rec = {"name": name, "pid": proc.pid, "session": sid, "at": now(), "post": first["id"], "login": login,
-           "thread": first.get("thread"), "from": first.get("from"), "out": str(path), **({"resumed": True} if resume else {}), **({"slept": posts} if slept else {}), **({"heir_of": heir_of["name"]} if heir_of else {}), **({"all_since": all_since} if all_since else {}), **({"model": model} if model else {}), **({"fallback": fb} if fb else {}),
+           "thread": first.get("thread"), "from": first.get("from"), "out": str(path), **({"resumed": True} if resume else {}), **({"woke": list(extra)} if extra else {}), **({"slept": posts} if slept else {}), **({"heir_of": heir_of["name"]} if heir_of else {}), **({"all_since": all_since} if all_since else {}), **({"model": model} if model else {}), **({"fallback": fb} if fb else {}),
            "harness": prov[1].get("harness", "claude-code") if prov else "claude-code", **({"provider": prov[0]} if prov else {}), **({"effort": env["CLAUDE_EFFORT"]} if env.get("CLAUDE_EFFORT") else {})}
     (RUN / f"{name}.json").write_text(json.dumps(rec))
     log(event="start", **rec)
@@ -930,7 +971,7 @@ def keeper(c, st, alive, login):
     post(f"@new keeper round ({'idle' if idle else 'periodic'}): read ~/core/keeper.md and follow it.", ["new"], "keeper")
     log(event="keeper", why="idle" if idle else "periodic")
 
-IMPROVE = """@new Figure out how to improve everything in the hive, across all of it: the projects, the quality of the work, failures, how agents work, Hive itself. Judge it yourself: read what you need (the board, ~/sessions, the code, results), then do things yourself or start other agents. `hive read --thread improve` shows what earlier rounds did. Say what you did in this thread."""
+IMPROVE = """@new Figure out how to improve everything in the hive, across all of it: the projects, the quality of the work, failures, how agents work, Hive itself. Judge it yourself: read what you need (the board, ~/sessions, the code, results), then do things yourself or start other agents. `hive read --thread improve` shows what earlier rounds did; `hive progress` shows the hive's numbers and what got worse; `hive improve list` shows which earlier changes were judged held or reverted, so you build on what held. Log each change you land with `hive improve log --what ... --measure ... --revisit 7d`. Say what you did in this thread."""
 
 def improver(c, st, alive, login):
     """Every improve_every_s, one fresh agent on a deliberately open brief (the person, 2026-11-02: "just a spawn with one line").
@@ -1102,7 +1143,8 @@ def main():
     while True:
         c = cfg()
         size = BOARD.stat().st_size if BOARD.exists() else 0
-        if size < st["offset"]: st["offset"] = size  # board was rewritten; don't replay it
+        if size < st["offset"]:  # board was rewritten (a git stash under ~ did it twice on 2026-11-04): don't replay it, but say so in the log
+            log(event="board_shrunk", was=st["offset"], size=size); st["offset"] = size
         if size > st["offset"]:
             with BOARD.open("rb") as f:
                 f.seek(st["offset"]); chunk = f.read()
@@ -1157,6 +1199,10 @@ def main():
                     st["pending"].setdefault(n, []).append(q)
         alive = running(st)
         drop_killed(st)
+        for th, text in slow_replies(recent_posts(), st, alive):   # straight into the thread: post() would move it to the starter thread
+            with BOARD.open("a") as f:
+                f.write(json.dumps({"id": dt.datetime.now().strftime("%m%d%H%M") + secrets.token_hex(2), "at": now(), "from": "starter", "to": [], "thread": th, "text": text}) + "\n")
+            log(event="slow_reply_noted", thread=th)
         # the person's post is about to fall back: read again first (17:02 on 2026-11-02 went to a free model 4 s before the read that showed a reset login)
         if pick_login(c, unpaused(u), st.get("limits")) is None and time.time() - u.get("_checked", 0) > 30 \
                 and any(p.get("from") == "person" for ps in st["pending"].values() for p in ps):

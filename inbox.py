@@ -84,9 +84,28 @@ def fmt(p):
             f"(thread {p.get('thread')})" + (f" replying to {p['reply_to']}" if p.get("reply_to") else "") + "\n  " + str(p.get("text", "")).replace("\n", "\n  ")
             + "".join(f"\n  file: {f.get('path')}" for f in p.get("files") or []))
 
+def person_note(ps):
+    """A post from the person among those handed over: ask for a reply with the next tool call, not after the current job. A
+    running agent answers the person in a median 104 s and a p90 of 13 min against 46 s and 4 min for one woken for the post
+    (48 h to 2026-11-04), and the person posts "hello?" after about a minute of silence."""
+    if not any(str(p.get("from", "")).lower() == "person" for p in ps): return ""
+    return ("\n\nOne of these is from the person. Make your next tool call an hive post in its thread: one or two lines, the answer "
+            "if you have it, else what you heard and what you'll do about it. Then carry on. They expect a reply within a minute, "
+            "and until you post, the dash shows that thread waiting on you.")
+
+NAMED = re.compile(r"[a-z][0-9a-f]{4}|hives")
+
+def waker(rec, name):
+    """Who this run answers to: "person", "hives", or an agent's name (its own after hive model or its waiter's post: the task is still
+    owed a result); None for a scheduled run (keeper, watchdog, improver), which has its own brief."""
+    src = str(rec.get("from") or "").lower()
+    return src if src == "person" or NAMED.fullmatch(src) else None
+
 def unanswered(name, rec):
-    """Why this stop should wait, if the person started the run and the agent hasn't posted since. Once per run."""
-    if os.environ.get("HIVE_DOOR") or rec.get("from") != "person" or not rec.get("at"): return None
+    """Why this stop should wait, if a post from the person, another Hive or a named agent started the run and the agent hasn't
+    posted since. Once per run. 10 of 2026-11-04's graded runs ended with the answer in plain text only (hive outcomes: silent)."""
+    src = waker(rec, name)
+    if os.environ.get("HIVE_DOOR") or not src or not rec.get("at"): return None
     mark = STATE / "nudged" / name
     try:
         if mark.read_text() == rec["at"]: return None
@@ -98,7 +117,9 @@ def unanswered(name, rec):
                 if p.get("from") == name and p.get("at", "") >= rec["at"]: return None
     except (OSError, ValueError): return None  # can't tell: let it stop
     mark.parent.mkdir(parents=True, exist_ok=True); mark.write_text(rec["at"])
-    return (f"You are ending this run without posting anything to the board, so the person sees no answer: text outside hive post "
+    who = ("the person sees" if src == "person" else "the other Hive sees" if src == "hives" else "whoever waits on the task sees"
+           if src == name else f"{src}, who named you, sees")
+    return (f"You are ending this run without posting anything to the board, so {who} no answer: text outside hive post "
             f"reaches nobody. Post your answer now in thread {rec.get('thread') or 'the thread you were started in'} with "
             "hive post --thread T and a quoted heredoc, then stop. If you truly have nothing to say, just stop again.")
 
@@ -124,7 +145,7 @@ def main():
             print(json.dumps({"decision": "block", "reason": why}))
         return
     msg = ("New on the board for you while you work (you'll get these automatically; answer with "
-           "hive post where it matters):\n\n" + "\n\n".join(fmt(p) for p in ps) + model_note(name, rec, ps))
+           "hive post where it matters):\n\n" + "\n\n".join(fmt(p) for p in ps) + person_note(ps) + model_note(name, rec, ps))
     if event == "Stop":
         print(json.dumps({"decision": "block", "reason": msg}))
     else:

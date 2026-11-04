@@ -5,8 +5,9 @@ import { icon } from "./icons.js";
 export { icon };
 
 /** Page header: the answer first. {title, lead, tone, meta:[...], actions, after} */
-export function pageHeader({ title, lead, tone, meta, actions, after, size }) {
+export function pageHeader({ title, lead, tone, meta, actions, after, size, state }) {
   return h("header", { class: "ph", "data-size": size || null },
+    state ? h("p", { class: "ph-state", "data-tone": state.tone || null }, h("span", { class: "sd", "data-tone": state.tone || null, "aria-hidden": "true" }), state.text) : null,
     title || actions ? h("div", { class: "ph-row" }, title ? h("h1", { class: "ph-title" }, title) : null, actions ? h("div", { class: "ph-actions" }, actions) : null) : null,
     lead ? h("p", { class: "ph-lead", "data-tone": tone || null }, lead) : null,
     after || null,
@@ -51,7 +52,7 @@ export function stats(items) {
 /** Meter: value 0–100, optional stop line, tone (default by level). */
 export function meter({ value, stop, tone, label }) {
   const v = Math.max(0, Math.min(100, value || 0));
-  const t = tone || (v >= 90 ? "bad" : v >= 75 ? "warn" : "info");
+  const t = tone || (v >= 90 ? "bad" : v >= 75 ? "warn" : "data");
   return h("div", { class: "meter", "data-tone": t, role: "meter", "aria-valuenow": Math.round(v), "aria-valuemin": 0, "aria-valuemax": 100, "aria-label": label || null, style: `--v:${v}%` + (stop != null ? `;--s:${stop}%` : "") },
     h("i"), stop != null ? h("u", { title: label ? `${label}: stop line at ${stop}%` : `stop line at ${stop}%` }) : null);
 }

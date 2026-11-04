@@ -1,0 +1,244 @@
+// Agents › Map: the graph layouts beside the band layout (mesh-layout.js). Same output shape, so mesh.js draws all of them the same way.
+//   web   — a force graph with stiff links: each agent is held close to its main thread, a weaker link pulls it toward the other threads it posted in,
+//           so threads that share agents end up next to each other. Tiers sit in horizontal slices, Tier 1 at the top.
+//   orbit — the same forces, but tiers are rings round a centre: Tier 1 in the middle, Tier 2 round it, then held, then other.
+// No randomness: the start comes from the sort order (or from `opt.prev`, the last positions, so a new post nudges rather than reshuffles).
+//
+// input  same as layout(): data = { threads, agents, now }, opt = { width, override, prev: Map(id -> {x, y}) }
+// output layout()'s shape, plus spokes carry their own path `d`, clusters carry `linked` (agents from other threads), and orbit adds `rings`.
+
+import { TIERS, TIER_NAME, DENSITY, STATUS_RANK, spokeWidth } from './mesh-layout.js';
+
+export const LAYOUTS = [['bands', 'Bands', 'Threads in rows by tier, agents fanned out to the right'],
+                        ['web', 'Web', 'A force graph: agents held close to their threads, threads that share agents pulled together'],
+                        ['orbit', 'Orbit', 'Tier 1 in the middle, the other tiers in rings round it']];
+
+const DAY = 864e5;
+const byStr = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+const GAP = 10;                                    // the least space between two boxes
+
+export function graphLayout(data, opt, mode) {
+  const width = opt.width, prev = opt.prev || null;
+  const compact = data.agents.length > 24;
+  const density = compact ? 'compact' : 'normal';
+  const D = { ...(compact ? DENSITY.compact : DENSITY.normal), ...(opt.override || {}), lines: 1 };
+  const cardW = Math.min(compact ? 150 : 176, Math.round((width - 2 * D.pad) * 0.45)), cardH = D.cardH;
+  const labelW = compact ? 92 : 128, maxMain = compact ? 6 : 8;
+
+  // members and the older row, as in layout()
+  const members = new Map(data.threads.map(t => [t.id, { main: [], ghost: [] }]));
+  for (const a of data.agents) {
+    if (members.has(a.main)) members.get(a.main).main.push(a);
+    for (const [tid, n] of Object.entries(a.threads || {})) if (tid !== a.main && n > 0 && members.has(tid)) members.get(tid).ghost.push({ a, posts: n });
+  }
+  const agentOrder = (x, y) => (y.running - x.running) || (STATUS_RANK[x.status] - STATUS_RANK[y.status]) ||
+    ((y.threads[y.main] || 0) - (x.threads[x.main] || 0)) || byStr(x.id, y.id);
+  for (const m of members.values()) m.main.sort(agentOrder);
+  const older = [], shown = [];
+  for (const t of data.threads) {
+    const m = members.get(t.id);
+    if (compact && !m.main.some(a => a.running) && data.now - t.last > 3 * DAY) older.push(t);
+    else if (m.main.length || m.ghost.length) shown.push(t);
+  }
+  older.sort((a, b) => (b.posts - a.posts) || byStr(a.id, b.id));
+  const bucket = n => Math.floor(n / 10);
+  shown.sort((a, b) => (TIERS.indexOf(a.tier) - TIERS.indexOf(b.tier)) || (bucket(b.posts) - bucket(a.posts)) || byStr(a.id, b.id));
+
+  // bodies: a box per thread card, per agent (glyph + label), per "+N more"
+  const B = [], tB = new Map(), aB = new Map(), links = [];
+  const glyphOff = r => (r + 8 + labelW - 10) / 2;          // box centre minus glyph centre, x
+  for (const t of shown) { const b = { kind: 't', id: 'c:' + t.id, t, w: cardW, h: cardH, m: 4 }; B.push(b); tB.set(t.id, b); }
+  for (const t of shown) {
+    const m = members.get(t.id), vis = m.main.slice(0, m.main.length > maxMain ? maxMain - 1 : maxMain), more = m.main.length - vis.length;
+    for (const a of vis) {
+      const r = a.running ? D.r : D.r - 2;
+      const b = { kind: 'a', id: a.id, a, t, r, w: r + 18 + labelW, h: 18, m: 1 };
+      B.push(b); aB.set(a.id, b);
+      links.push({ p: b, q: tB.get(t.id), k: 0.5, len: cardW / 2 + 54, main: true, posts: a.threads[t.id] || 0 });
+    }
+    if (more) {
+      const b = { kind: 'm', id: 'more@' + t.id, t, more, r: D.r, w: D.r + 18 + 64, h: 18, m: 1 };
+      B.push(b); links.push({ p: b, q: tB.get(t.id), k: 0.5, len: cardW / 2 + 54, main: true, more: true });
+    }
+  }
+  for (const [id, b] of aB) for (const [tid, n] of Object.entries(b.a.threads || {})) {
+    if (tid === b.t.id || !(n > 0) || !tB.has(tid)) continue;
+    links.push({ p: b, q: tB.get(tid), k: 0.03 + 0.03 * Math.min(3, Math.log2(1 + n)), len: cardW / 2 + 90, posts: n });
+  }
+
+  // the room: tiers get space by how much they hold
+  const area = new Map(TIERS.map(k => [k, 0]));
+  for (const b of B) area.set(b.t.tier, area.get(b.t.tier) + (b.w + 2 * GAP) * (b.h + 3 * GAP) * 1.6);
+  const total = [...area.values()].reduce((s, v) => s + v, 0) || 1;
+  const inner = Math.max(200, width - 2 * D.pad);
+  const used = TIERS.filter(k => area.get(k) > 0);
+  let target, rings = [], H;
+  if (mode === 'orbit') {
+    // rings: annulus area by load; squash into an ellipse when wider than the page
+    let cum = 0; const R = [];
+    for (const k of used) { const r0 = Math.sqrt(cum / Math.PI); cum += area.get(k) * 1.25; R.push({ k, r0, r1: Math.sqrt(cum / Math.PI) }); }
+    const rmax = R.length ? R[R.length - 1].r1 : 100, sx = Math.min(1, (inner / 2 - 40) / rmax);
+    const ry = rmax * Math.max(1, (sx < 1 ? 1 / sx : 1) * 0.55);      // keep the area when squashed in x
+    const sy = ry / rmax, cx = width / 2, cy = D.pad + ry + 20;
+    H = 2 * ry + 40 + 2 * D.pad;
+    rings = R.map(({ k, r0, r1 }, i) => ({ tier: k, name: TIER_NAME[k], cx, cy, rx: (i ? (r0 + r1) / 2 : 0) * sx, ry: (i ? (r0 + r1) / 2 : 0) * sy, ox: r1 * sx, oy: r1 * sy }));
+    const ringOf = new Map(rings.map(r => [r.tier, r]));
+    target = (b, i, n) => { const g = ringOf.get(b.t.tier); return { g, cx, cy }; };
+    for (const [i, b] of B.filter(b => b.kind === 't').entries()) {                // start: evenly round its ring
+      const g = ringOf.get(b.t.tier), same = B.filter(c => c.kind === 't' && c.t.tier === b.t.tier), j = same.indexOf(b);
+      const ang = -Math.PI / 2 + (j + (TIERS.indexOf(b.t.tier) * 0.37)) * 2 * Math.PI / same.length;
+      b.x = cx + Math.cos(ang) * Math.max(g.rx, 1); b.y = cy + Math.sin(ang) * Math.max(g.ry, 1) * (same.length === 1 && !g.rx ? 0 : 1);
+    }
+  } else {
+    // slices: Tier 1 on top
+    H = Math.max(360, total / inner + 2 * D.pad);
+    let y = D.pad; const slice = new Map();
+    for (const k of used) { const h = (area.get(k) / total) * (H - 2 * D.pad); slice.set(k, { y0: y, y1: y + h }); y += h; }
+    rings = [];
+    target = b => ({ s: slice.get(b.t.tier) });
+    for (const k of used) {
+      const list = B.filter(b => b.kind === 't' && b.t.tier === k), s = slice.get(k);
+      const cols = Math.max(1, Math.min(list.length, Math.floor(inner / (cardW + 170)))), rows = Math.ceil(list.length / cols);
+      list.forEach((b, j) => { b.x = D.pad + (j % cols + 0.5) * inner / cols; b.y = s.y0 + (Math.floor(j / cols) + 0.5) * (s.y1 - s.y0) / rows; });
+    }
+  }
+  // agents start round their main thread (golden angle), or where they were
+  const kids = new Map();
+  for (const l of links) if (l.main) { const n = kids.get(l.q) || 0; kids.set(l.q, n + 1); const ang = n * 2.39996 + 0.3; l.p.x = l.q.x + Math.cos(ang) * l.len; l.p.y = l.q.y + Math.sin(ang) * l.len * 0.6; }
+  let warm = 0;
+  if (prev) for (const b of B) { const p = prev.get(b.id); if (p) { b.x = p.x; b.y = p.y; warm++; } }
+  const warmStart = warm > B.length * 0.6;
+
+  // the simulation
+  const N = B.length, iters = warmStart ? 90 : 360;
+  for (const b of B) { b.vx = 0; b.vy = 0; }
+  const clampB = b => {
+    b.x = Math.max(D.pad + b.w / 2, Math.min(width - D.pad - b.w / 2, b.x));
+    b.y = Math.max(D.pad + b.h / 2, b.y);
+  };
+  for (let it = 0; it < iters; it++) {
+    const temp = (warmStart ? 8 : 40) * (1 - it / iters) + 1;
+    for (const b of B) { b.fx = 0; b.fy = 0; }
+    // repulsion
+    for (let i = 0; i < N; i++) for (let j = i + 1; j < N; j++) {
+      const p = B[i], q = B[j];
+      let dx = q.x - p.x, dy = q.y - p.y; if (!dx && !dy) { dx = (i - j) * 0.1; dy = 0.1; }
+      const d2 = dx * dx + dy * dy; if (d2 > 160000) continue;
+      const c = (p.kind === 't' && q.kind === 't' ? 9000 : p.kind === 't' || q.kind === 't' ? 2600 : 900) / Math.max(d2, 100);
+      const d = Math.sqrt(d2), fx = dx / d * c, fy = dy / d * c;
+      p.fx -= fx / p.m; p.fy -= fy / p.m; q.fx += fx / q.m; q.fy += fy / q.m;
+    }
+    // springs: stiff to the main thread, soft to the others
+    for (const l of links) {
+      const dx = l.q.x - l.p.x, dy = l.q.y - l.p.y, d = Math.hypot(dx, dy) || 1, f = l.k * (d - l.len);
+      l.p.fx += dx / d * f / l.p.m; l.p.fy += dy / d * f / l.p.m;
+      l.q.fx -= dx / d * f / l.q.m * (l.main ? 0.2 : 1); l.q.fy -= dy / d * f / l.q.m * (l.main ? 0.2 : 1);
+    }
+    // where each tier lives
+    for (const b of B) if (b.kind === 't') {
+      const g = target(b);
+      if (g.s) { const mid = (g.s.y0 + g.s.y1) / 2, half = (g.s.y1 - g.s.y0) / 2; const off = b.y - mid; if (Math.abs(off) > half * 0.5) b.fy -= 0.06 * (off - Math.sign(off) * half * 0.5); b.fx += 0.002 * (width / 2 - b.x); }
+      else {
+        const dx = b.x - g.cx, dy = b.y - g.cy, e = Math.hypot(dx / Math.max(g.g.ox, 1), dy / Math.max(g.g.oy, 1)) || 1e-6;
+        const want = g.g.rx ? Math.hypot(g.g.rx, g.g.ry) / Math.hypot(g.g.ox, g.g.oy) : 0;
+        const k = 0.05 * (e - want); b.fx -= dx / e * k / Math.max(g.g.ox, 1) * 60; b.fy -= dy / e * k / Math.max(g.g.oy, 1) * 60;
+      }
+    }
+    for (const b of B) {
+      b.vx = (b.vx + b.fx) * 0.55; b.vy = (b.vy + b.fy) * 0.55;
+      const v = Math.hypot(b.vx, b.vy); if (v > temp) { b.vx *= temp / v; b.vy *= temp / v; }
+      b.x += b.vx; b.y += b.vy; clampB(b);
+    }
+    if (it > iters * 0.4) collide(B, 1);
+  }
+  for (let k = 0; k < 6; k++) { collide(B, 12); for (const b of B) clampB(b); }
+  collide(B, 400, true);                             // whatever the width clamp squeezed back, settle downwards (there is always room below)
+
+  // fit: top at pad
+  const top = Math.min(...B.map(b => b.y - b.h / 2), ...rings.map(r => r.cy - r.oy - 20)), dy0 = B.length ? D.pad - top : 0;
+  for (const b of B) b.y += dy0;
+  if (rings.length) for (const r of rings) r.cy += dy0;
+
+  // output
+  const maxCost = Math.max(0.01, ...shown.map(t => t.cost));
+  const clusters = [], nodes = [], spokes = [], byAgent = new Map(), byThread = new Map(), pos = new Map();
+  for (const b of B) pos.set(b.id, { x: b.x, y: b.y });
+  for (const b of B) if (b.kind === 't') {
+    const card = { x: Math.round(b.x - b.w / 2), y: Math.round(b.y - b.h / 2), w: b.w, h: b.h };
+    const cl = { thread: b.t, card, port: { x: card.x + card.w, y: Math.round(b.y) }, labelW, costShare: b.t.cost / maxCost, more: 0, nodeIds: [], linked: [] };
+    clusters.push(cl); byThread.set(b.t.id, cl);
+  }
+  const nodeOf = new Map();
+  for (const b of B) if (b.kind !== 't') {
+    const x = Math.round(b.x - glyphOff(b.r)), y = Math.round(b.y), labelX = x + b.r + 8, cl = byThread.get(b.t.id);
+    const node = b.kind === 'a'
+      ? { id: b.a.id, agent: b.a, thread: b.t.id, ghost: false, x, y, r: b.r, labelX, labelW, posts: b.a.threads[b.t.id] || 0 }
+      : { id: b.id, more: b.more, thread: b.t.id, x, y, r: b.r, labelX, labelW: 64 };
+    nodes.push(node); nodeOf.set(b, node); cl.nodeIds.push(node.id); if (b.more) cl.more = b.more;
+    if (b.kind === 'a') byAgent.set(b.a.id, node);
+  }
+  for (const l of links) {
+    const n = nodeOf.get(l.p), cl = byThread.get(l.q.t.id), c = cl.card;
+    const from = edgePoint(c, n.x, n.y), dx = n.x - from.x, dy = n.y - from.y, d = Math.hypot(dx, dy) || 1;
+    const to = { x: n.x - dx / d * (n.r + 1), y: n.y - dy / d * (n.r + 1) };
+    if (!l.main && n.agent) cl.linked.push(n.id);
+    spokes.push({ from, to, node: n.id, thread: l.q.t.id, d: `M${from.x.toFixed(1)} ${from.y.toFixed(1)}L${to.x.toFixed(1)} ${to.y.toFixed(1)}`,
+                  width: l.more ? 1 : l.main ? spokeWidth(l.posts) : 1, dashed: !l.main || !!l.more, ended: n.agent ? !n.agent.running : false });
+  }
+
+  // older threads under everything
+  let y = Math.max(...B.map(b => b.y + b.h / 2), D.pad) + D.pad;
+  if (mode === 'orbit' && rings.length) y = Math.max(y, ...rings.map(r => r.cy + r.oy + D.pad));
+  const olderRow = { x: D.pad, y, chips: [] };
+  if (older.length) {
+    y += D.bandH; let cx = D.pad;
+    for (const t of older) {
+      const w = Math.round(t.id.length * 7.2 + String(t.posts).length * 7 + 34);
+      if (cx + w > width - D.pad) { cx = D.pad; y += 32; }
+      olderRow.chips.push({ thread: t, x: cx, y, w, h: 24 }); cx += w + 8;
+    }
+    y += 24 + D.pad;
+  }
+  return { mode, density, D, cols: 2, colW: inner, cardW, width, height: Math.max(y, 360), bands: [], rings, clusters, nodes, spokes,
+           older: olderRow, olderCount: older.length, byAgent, byThread, threadById: new Map(data.threads.map(t => [t.id, t])), pos };
+}
+
+// push overlapping boxes apart along the shallower axis; agents give way to cards
+function collide(B, passes) {
+  for (let p = 0; p < passes; p++) {
+    let moved = 0;
+    for (let i = 0; i < B.length; i++) for (let j = i + 1; j < B.length; j++) {
+      const a = B[i], b = B[j];
+      const ox = (a.w + b.w) / 2 + GAP - Math.abs(a.x - b.x); if (ox <= 0) continue;
+      const oy = (a.h + b.h) / 2 + GAP - Math.abs(a.y - b.y); if (oy <= 0) continue;
+      const wa = b.m / (a.m + b.m), wb = a.m / (a.m + b.m);
+      if (ox < oy * 1.6) { const s = a.x < b.x || (a.x === b.x && i < j) ? -1 : 1; a.x += s * ox * wa; b.x -= s * ox * wb; }
+      else { const s = a.y < b.y || (a.y === b.y && i < j) ? -1 : 1; a.y += s * oy * wa; b.y -= s * oy * wb; }
+      moved++;
+    }
+    if (!moved) break;
+  }
+}
+
+// top to bottom, put each box just below any box already placed that it overlaps: no overlaps left, in one sweep
+function settle(B) {
+  const placed = [];
+  for (const b of [...B].sort((p, q) => p.y - q.y)) {
+    for (let hit = true; hit;) {
+      hit = false;
+      for (const p of placed) {
+        if ((p.w + b.w) / 2 + GAP <= Math.abs(p.x - b.x) || (p.h + b.h) / 2 + GAP <= Math.abs(p.y - b.y)) continue;
+        b.y = p.y + (p.h + b.h) / 2 + GAP; hit = true;
+      }
+    }
+    placed.push(b);
+  }
+}
+
+// where the line from the card's centre to (x, y) leaves the card
+function edgePoint(c, x, y) {
+  const cx = c.x + c.w / 2, cy = c.y + c.h / 2, dx = x - cx, dy = y - cy;
+  if (!dx && !dy) return { x: cx, y: cy };
+  const s = Math.min(Math.abs(dx) > 0 ? (c.w / 2) / Math.abs(dx) : Infinity, Math.abs(dy) > 0 ? (c.h / 2) / Math.abs(dy) : Infinity);
+  return { x: cx + dx * s, y: cy + dy * s };
+}

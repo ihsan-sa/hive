@@ -10,10 +10,21 @@ import { confirm } from "./dialog.js";
 
 export const meta = th => (S.threadMeta && S.threadMeta[th]) || {};
 export const pinned = th => !!meta(th).pin;
-/** Archived and nothing new for the person since: a post for them brings it back to the list by itself. */
+/** Archived by hand or by age, and nothing new for the person since: a post for them brings it back to the list by itself.
+ *  By age, as Slack's channels do: quiet for 1 day when it was a short one-off, 7 when it ran longer (4+ posts). Pinned ones stay,
+ *  and so does one the person took back out (counted from then). */
+export const QUIET_DAYS = d => (d.posts.length > 3 ? 7 : 1);
 export function archived(th) {
-  const a = meta(th).archived; if (!a) return false;
-  const d = S.threads.get(th); if (!d) return true;
+  const m = meta(th), d = S.threads.get(th); if (m.pin) return false;
+  let a = m.archived;
+  if (!a) {
+    if (!d || !d.posts.length) return false;
+    const last = Math.max(d.posts.at(-1).t, m.back || 0);
+    if (Date.now() - last < QUIET_DAYS(d) * 864e5) return false;
+    a = last;
+    for (let i = d.posts.length - 1; i >= 0 && !OUTSIDE.has(d.posts[i].from); i--) if (isAgent(d.posts[i].from) && d.posts[i].men.includes("person")) return false;   // still waiting on the person
+  }
+  if (!d) return true;
   for (let i = d.posts.length - 1; i >= 0 && d.posts[i].t > a; i--) { const p = d.posts[i]; if (isAgent(p.from) && p.men.includes("person")) return false; }
   return true;
 }
@@ -23,8 +34,8 @@ export async function setMeta(th, patch) {
   const was = S.threadMeta[th], next = { ...(was || {}) };
   for (const [k, v] of Object.entries(patch)) {
     if (k === "title") { if (v && v.trim() && v.trim() !== th) next.title = v.trim(); else delete next.title; }
-    else if (v) { next[k] = Date.now(); delete next[k === "pin" ? "archived" : "pin"]; }
-    else delete next[k];
+    else if (v) { next[k] = Date.now(); delete next[k === "pin" ? "archived" : "pin"]; if (k === "archived") delete next.back; }
+    else { delete next[k]; if (k === "archived") next.back = Date.now(); }
   }
   S.threadMeta = { ...S.threadMeta }; if (Object.keys(next).length) S.threadMeta[th] = next; else delete S.threadMeta[th];
   S.ver++; emit({ names: true });

@@ -1,7 +1,7 @@
-// Map: where the hive's agents are, as a graph with no time axis (Timeline is the view for "when"). Threads are tier-toned
-// rectangles; each agent is a status-shaped circle beside its main thread, with faint dashed lines to other threads it posted in;
-// the person, the box and other Hives are diamonds. Live agents ring and pulse, ended ones fade. The window picks who appears;
-// replay shows the graph as it was at the cut. No lines between agents: mentions and hand-offs live in the side pane.
+// Map: where the hive's agents are, as a graph with no time axis (Timeline is the view for "when"). Threads are cards in tier
+// bands; each agent is drawn once, fanned out right of its main thread with a spoke whose width says how much it posted, and a
+// faint "ghost" beside any other thread it posted in. The layout is fixed by the data (mesh-layout.js), never random. Hand-off
+// lines appear only for the selection. The window picks who appears; replay shows the graph as it was at the cut.
 import { h } from "../core/dom.js";
 import { S, OUTSIDE, SYS, subscribe, getPref, setPref, onTV } from "../core/store.js";
 import { agentStatus, isAgent, isRunning, isWarden, modelName, sEnd, threadTitle, tierOf, fileInfo, spendSince } from "../core/model.js";
@@ -12,14 +12,15 @@ import { button, icon, seg, statusDot } from "../ui/kit.js";
 import { killButton } from "../actions.js";
 import { openPanel } from "../ui/panel.js";
 import { showTip, hideTip } from "../ui/tip.js";
-import { createGraph, keep } from "../ui/graph.js";
+import { TIERS, layout, spokePath, linkPath } from "./mesh-layout.js";
+import { LAYOUTS, graphLayout } from "./mesh-layouts.js";
 
 const WINS = [["1h", HOUR], ["6h", 6 * HOUR], ["24h", DAY], ["3d", 3 * DAY], ["All", 0]];
 const WIN_NAME = { [HOUR]: "hour", [6 * HOUR]: "6 hours", [DAY]: "24 hours", [3 * DAY]: "3 days" };
 const TIER_ORDER = { tier1: 0, tier2: 1, held: 2, other: 3 };
 const PLAY_MS = 12000;
 const M = {
-  win: getPref("meshWin", 6 * HOUR), active: !!getPref("meshActive", onTV() ? 1 : 0), cut: null, playing: false, q: "",
+  win: getPref("meshWin", 6 * HOUR), lay: LAYOUTS.some(l => l[0] === getPref("meshLayout")) ? getPref("meshLayout") : "bands", active: !!getPref("meshActive", onTV() ? 1 : 0), cut: null, playing: false, q: "",
   sel: null, lanes: [], more: [], D: null, count: "", seenVer: -1, lastBuild: 0, update: () => {},
   showMore: false, allHand: false, timer: 0, root: null,
 };
@@ -115,79 +116,245 @@ const pickThread = th => (e => stop(e, () => select("thread", th)));
 const idLink = a => h("a", { class: "map-id", href: isAgent(a) ? agentHref(a) : threadHref("@" + a), onclick: pickAgent(a) }, a);
 const thLink = th => h("a", { class: "map-id", href: threadHref(th), onclick: pickThread(th) }, th);
 
-// ---- the graph: threads are tier-toned rectangles, agents are status-shaped circles joined to them ----
-// An agent sits beside its main thread (a solid line); other threads it posted in get a faint dashed line. The person, the box and
-// other Hives are diamonds with faint lines to the threads they posted in. No lines between agents: hand-offs and mentions are in
-// the side pane. Live agents ring and pulse; ended ones fade with age.
-const MAX_THREADS = 40;
-const fade = (last, t1, thread) => Math.max(thread ? .45 : .4, Math.exp(-(t1 - last) / (thread ? 12 : 6) / HOUR));
-function graphData(D) {
-  const q = M.q, nodes = new Map(), edges = [], t1 = D.t1;
-  let lanes = M.lanes; if (q) lanes = lanes.filter(l => l.th.includes(q) || l.tracks.some(t => t.a.includes(q)));
-  lanes = lanes.slice(0, MAX_THREADS);
-  const hit = id => !q || id.includes(q);
-  for (const l of lanes) {
-    const t = tier(l.tier), id = "#" + l.th;
-    nodes.set(id, { id, kind: "thread", name: l.th, tier: l.tier, tone: t.tone, shape: "dot", cluster: l.th, posts: l.posts, last: l.last, cost: l.cost, liveN: l.live,
-      r: Math.min(26, 11 + 2 * Math.sqrt(l.posts)), label: short(l.th, 24), big: true, labelStrong: l.live > 0, opacity: q && !hit(l.th) ? .35 : l.live ? 1 : fade(l.last, t1, true),
-      labelRank: 1e5 + (l.live ? 2e5 : 0) + l.posts, ring: !!(q && l.th.includes(q)) });
-  }
-  const tether = (a, th, kind, share, n) => edges.push({ a, b: "#" + th, tether: true, to: "#" + th, share, n, kind, weight: n || 1, faint: kind !== "main", dashed: kind === "also" });
-  for (const l of lanes) for (const t of l.tracks) {
-    if (t.kind === "run") {
-      const st = status(t.st), n = D.aposts.get(t.a + "\n" + l.th)?.length || 0, all = D.posts.filter(p => p.from === t.a).length;
-      nodes.set(t.a, { id: t.a, kind: "agent", tone: t.live ? st.tone : "quiet", shape: t.live ? st.shape : "dot", cluster: l.th, live: t.live, st: t.st, last: t.end, posts: all, model: t.model,
-        r: Math.min(15, 6 + 1.2 * Math.sqrt(all)), warden: isWarden(t.a), label: t.a, big: t.live || all >= 6 || isWarden(t.a), labelStrong: t.live,
-        opacity: q && !hit(t.a) ? .25 : t.live ? 1 : fade(t.end, t1), labelRank: (t.live ? 3e5 : 0) + all * 10, ring: !!(q && t.a.includes(q)) });
-      tether(t.a, l.th, "main", 1, n);
+// ---- the graph: Claude Design's hub-and-fan layout (~/designs/mesh-graph/GRAPH-HANDOFF.md) ----
+// Threads are cards in tier bands. Each agent is drawn once, fanned out right of its main thread with a spoke to the card; a thread
+// it also posted in gets a faint "ghost" of it. Nothing moves at random: the same data gives the same picture. Lines between agents
+// (hand-offs, agent to its ghosts) are drawn only for what is selected. SVG for the lines, HTML buttons for everything you click.
+const keep = el => (el.isConnected ? el.cloneNode(false) : el);
+const SVGNS = "http://www.w3.org/2000/svg";
+const OUT_NAME = { person: "you", box: "box", autobox: "box", hives: "hives", h0: "hives", h1: "hives" };
+const reduced = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
+const since = t => (t ? dur(Math.max(0, now() - t)).replace("under a minute", "now") : "");
+const GS = { L: null, nodes: new Map(), sig: "", w: 0, q: "", hits: [], posted: new Map(), busy: new Set(), queued: new Set(), capT: 0, hoverT: 0 };
+
+function graphInput(D) {
+  const per = new Map(), total = new Map();
+  for (const [k, ps] of D.aposts) { const [a, th] = k.split("\n"); let m = per.get(a); if (!m) per.set(a, (m = {})); m[th] = ps.length; total.set(a, (total.get(a) || 0) + ps.length); }
+  const threads = [], agents = [];
+  for (const l of M.lanes) {
+    const outside = {}, tr = TIERS.includes(l.tier) ? l.tier : "other";
+    for (const t of l.tracks) if (t.kind === "person") { const k = OUT_NAME[t.a] || t.a; outside[k] = (outside[k] || 0) + t.n; }
+    threads.push({ id: l.th, tier: tr, posts: l.posts, cost: l.cost, last: l.last, outside, stuck: l.tracks.filter(t => t.kind === "run" && t.st === "stuck").length });
+    for (const t of l.tracks) if (t.kind === "run") {
+      const L = S.running.get(t.a), th = { ...(per.get(t.a) || {}) }; th[l.th] = th[l.th] || 0;
+      agents.push({ id: t.a, status: status(t.st) === status("none") && t.st !== "none" ? "ended" : t.st, running: t.live ? 1 : 0, main: l.th, threads: th, posts: total.get(t.a) || 0,
+        cost: D.C.byAg.get(t.a) || 0, model: t.model, now: !D.replay && t.live && L && L.doing ? L.doing : "", last: L && L.last ? L.last * 1e3 : 0, from: t.from, warden: isWarden(t.a), track: t });
     }
   }
-  // "also" lines only to an agent that is drawn; the person and the others outside are one diamond each
-  for (const l of lanes) for (const t of l.tracks) {
-    if (t.kind === "also" && nodes.has(t.a)) tether(t.a, l.th, "also", .3, t.n);
-    if (t.kind === "person") {
-      if (!nodes.has("@" + t.a)) nodes.set("@" + t.a, { id: "@" + t.a, who: t.a, kind: "outside", tone: "ink", shape: "diamond", cluster: null, posts: 0, last: 0, r: 10, label: t.a, big: true, labelStrong: true, opacity: 1, labelRank: 4e5 });
-      const o = nodes.get("@" + t.a); o.posts += t.n; o.last = Math.max(o.last, t.posts[t.posts.length - 1].t);
-      tether("@" + t.a, l.th, "person", .5, t.n);
-    }
-  }
-  return { nodes: [...nodes.values()], edges };
+  return { threads, agents, now: D.t1 };
 }
-const gid = sel => (sel ? (sel.kind === "thread" ? "#" + sel.id : sel.kind === "outside" ? "@" + sel.id : sel.id) : null);
-const nodeTip = n => n.kind === "thread"
-  ? [threadTitle(n.name) !== n.name ? `${n.name} · ${threadTitle(n.name)}` : n.name, [tier(n.tier).label, n.liveN ? `${n.liveN} running` : null, plural(n.posts, "post"), n.cost ? money(n.cost) : null, n.last ? "last " + (M.D.replay ? clock(n.last) : ago(n.last)) : null].filter(Boolean).join(" · ")]
-  : n.kind === "outside" ? [n.who, `${plural(n.posts, "post")} in this window`] : runTip(n.id);
-const edgeTip = e => { const th = (e.to || "").slice(1), who = e.a.startsWith("@") ? e.a.slice(1) : e.a;
-  return [`${who} → ${th}`, e.kind === "main" ? `its main thread · ${plural(e.n || 0, "post")}` : `${plural(e.n || 0, "post")} here too`]; };
-let stage = null;
-const GR = createGraph({
-  // nothing lands under the caption at the top
-  margins: W => ({ top: 34, side: W < 640 ? 14 : 28, bottom: 16 }),
-  onHover: (it, e) => { if (!it || matchMedia("(hover: none)").matches) hideTip(); else showTip(e.clientX, e.clientY, ...(it.id ? nodeTip(it) : edgeTip(it))); },
-  onSelect: (it, e) => {
-    if (!it) { if (M.sel) select(null); return; }
-    if (!it.id) { if (it.to) select("thread", it.to.slice(1)); return; }   // a line picks its thread
-    const kind = it.kind === "thread" ? "thread" : it.kind === "outside" ? "outside" : "agent", id = it.kind === "thread" ? it.name : it.kind === "outside" ? it.who : it.id;
-    if (e && e.type === "keydown") { M.sel = { kind, id }; M.update(); return; }   // walking with the arrows never toggles off
-    select(kind, id);
-  },
-  onOpen: n => (n.kind === "outside" ? (location.hash = threadHref("@" + n.who)) : isAgent(n.id) ? openPanel("agent", n.id) : null),
-});
-const capEl = h("div", { class: "map-cap" });
-stage = h("div", { class: "map-stage", "data-own": "", "data-sig": "mesh" }, GR.el, capEl);
-let gsig = "";
-function syncGraph(D) {
-  const sig = M.lastBuild + "\n" + M.q;
-  if (sig !== gsig) {
-    gsig = sig; const g = graphData(D);
-    GR.discs(false); GR.clusterLabels({}); GR.set(g.nodes, g.edges);
-    GR.el.setAttribute("aria-label", `Graph of the hive: ${M.count}. Arrow keys walk it, Enter opens an agent, plus and minus zoom, 0 refits.`);
+
+// what is lit: the selection and what it touches, or the search hits
+function litOf(L, D) {
+  const s = M.sel, lit = new Set(), acc = new Set(), links = [];
+  const node = id => GS.nodes.get(id);
+  if (s && s.kind === "agent") {
+    const mine = L.nodes.filter(n => n.agent && n.agent.id === s.id), real = L.byAgent.get(s.id);
+    for (const n of mine) { lit.add("n:" + n.id); acc.add(n.id); lit.add("c:" + n.thread); if (real && n.ghost) links.push({ p: real, q: n, ghost: true }); }
+    if (real && L.mode) for (const sp of L.spokes) if (sp.node === real.id) lit.add("c:" + sp.thread);   // graph layouts: the other threads it posted in
+    const seen = new Set();
+    for (const sp of D.spawns) {
+      const o = sp.from === s.id ? sp.to : sp.to === s.id ? sp.from : null, on = o && L.byAgent.get(o);
+      if (!on || !real || seen.has(sp.from + ">" + sp.to)) continue; seen.add(sp.from + ">" + sp.to);
+      lit.add("n:" + on.id); lit.add("c:" + on.thread);
+      links.push(sp.from === s.id ? { p: real, q: on } : { p: on, q: real });
+    }
+  } else if (s && s.kind === "thread") {
+    const cl = L.byThread.get(s.id); lit.add("c:" + s.id);
+    if (cl) for (const id of cl.linked || []) lit.add("n:" + id);
+    if (cl) for (const id of cl.nodeIds) { const n = node(id); lit.add("n:" + id); acc.add(id); const r = n && n.ghost && L.byAgent.get(n.agent.id); if (r) { lit.add("n:" + r.id); lit.add("c:" + r.thread); links.push({ p: r, q: n, ghost: true }); } }
+  } else if (s && s.kind === "outside") {
+    const k = OUT_NAME[s.id] || s.id; for (const cl of L.clusters) if (cl.thread.outside[k]) lit.add("c:" + cl.thread.id);
   }
-  const want = gid(M.sel), have = GR.selected();
-  if (want && GR.nodes.has(want)) { if (!have || have.id !== want) GR.select(want); } else if (have) GR.clear();
-  const n = M.lanes.length, shown = Math.min(n, MAX_THREADS);
-  capEl.replaceChildren(D.replay ? "As it was at " + clock(D.t1) : "Right now", h("small", null, ` · ${winName().toLowerCase()}${n > shown ? ` · busiest ${shown} of ${n} threads` : ""}`));
-  capEl.toggleAttribute("data-cut", D.replay);
+  const hits = [];
+  if (!s && M.q) {
+    const q = M.q;
+    for (const cl of L.clusters) if (cl.thread.id.toLowerCase().includes(q)) { lit.add("c:" + cl.thread.id); hits.push({ kind: "thread", id: cl.thread.id, y: cl.card.y }); }
+    for (const n of L.nodes) if (n.agent && !n.ghost && (n.agent.id.includes(q) || n.agent.now.toLowerCase().includes(q))) { lit.add("n:" + n.id); hits.push({ kind: "agent", id: n.agent.id, y: n.y }); }
+    hits.sort((a, b) => a.y - b.y);
+  }
+  return { on: !!s || !!M.q, lit, acc, links, hits };
+}
+
+const capEl = h("div", { class: "map-cap", role: "status" });
+const cv = h("div", { class: "map-cv" });
+const svg = document.createElementNS(SVGNS, "svg"), fx = document.createElementNS(SVGNS, "svg");
+svg.setAttribute("class", "map-svg"); svg.setAttribute("aria-hidden", "true"); fx.setAttribute("class", "map-fx"); fx.setAttribute("aria-hidden", "true");
+const hcEl = h("div", { class: "map-hc", role: "tooltip", hidden: true });
+cv.append(svg, fx, hcEl);
+const scroller = h("div", { class: "map-scroll" }, cv);
+const legendEl = h("div", { class: "map-legend" });
+const stage = h("div", { class: "map-stage", "data-key": "stage", "data-own": "", "data-sig": "mesh" }, capEl, scroller, legendEl);
+const EL = new Map();
+new ResizeObserver(() => { const w = scroller.clientWidth; if (w && Math.abs(w - GS.w) > 2 && M.D) { syncGraph(M.D); } }).observe(scroller);
+
+function put(seen, key, tag, cls, x, y, attrs, kids) {
+  let el = EL.get(key); const fresh = !el;
+  if (fresh) { el = document.createElement(tag); if (tag === "button") el.type = "button"; EL.set(key, el); }
+  el.className = cls + (fresh ? " map-in" : "");
+  for (const [k, v] of Object.entries(attrs)) { if (v == null || v === false) el.removeAttribute(k); else el.setAttribute(k, v === true ? "" : v); }
+  el.style.transform = `translate(${x}px,${y}px)`;
+  el.replaceChildren(...kids.flat().filter(k => k != null && k !== false).map(k => (typeof k === "string" ? document.createTextNode(k) : k)));
+  if (fresh) cv.append(el);
+  seen.add(key); return el;
+}
+const glyph = (n, sel) => h("i", { class: "map-g", "data-st": n.ghost ? "ghost" : n.agent.status, "data-w": n.agent.warden && !n.ghost ? "" : null, "data-sel": sel ? "" : null, style: `--r:${n.r}px` });
+function nowLine(a) {
+  const q = a.last ? since(a.last) : "", txt = a.now ? short(a.now, 160) : "";
+  if (a.status === "stuck") return h("span", { class: "map-nl", "data-tone": "bad" }, `stuck${q ? " " + q : ""}${txt ? " · " + txt : ""}`);
+  if (a.status === "quiet") return h("span", { class: "map-nl", "data-tone": "quiet" }, `quiet${q ? " " + q : ""}${txt ? " · " + txt : ""}`);
+  if (!a.running) return h("span", { class: "map-nl", "data-tone": "quiet" }, `${status(a.status).label} ${M.D.replay ? "" : ago(a.track.end)}`.trim());
+  return h("span", { class: "map-nl" }, txt || status(a.status).label);
+}
+function agentMeta(a) { return [a.model, a.cost >= 0.005 ? money(a.cost) : null, a.from ? "from " + a.from : null].filter(Boolean).join(" · "); }
+
+function syncGraph(D) {
+  const w = scroller.clientWidth || GS.w || 960, phone = w < 760;
+  const sig = [M.lastBuild, M.q, M.sel && M.sel.kind + M.sel.id, w, M.active, M.lay].join("|");
+  if (sig === GS.sig) return; GS.sig = sig;
+  if (GS.lay !== M.lay || Math.abs(w - GS.w) > 40) GS.pos = null;      // a new layout or a new width starts the graph afresh; else it settles from where it was
+  GS.w = w; GS.lay = M.lay;
+  const override = phone ? { pad: 12, run: 28, minColW: 300 } : null;
+  const L = M.lay === "bands" ? layout(graphInput(D), { width: w, override }) : graphLayout(graphInput(D), { width: w, override, prev: GS.pos }, M.lay);
+  GS.pos = L.pos || null;
+  GS.L = L; GS.nodes = new Map(L.nodes.map(n => [n.id, n]));
+  const S2 = litOf(L, D), seen = new Set(), lines = L.D.lines, compact = L.density === "compact";
+  GS.hits = S2.hits;
+  cv.style.height = L.height + "px"; svg.setAttribute("viewBox", `0 0 ${w} ${L.height}`); svg.setAttribute("width", w); svg.setAttribute("height", L.height);
+  fx.setAttribute("viewBox", `0 0 ${w} ${L.height}`); fx.setAttribute("width", w); fx.setAttribute("height", L.height);
+  cv.toggleAttribute("data-dim", S2.on); cv.toggleAttribute("data-compact", compact);
+  const lit = k => (S2.on && S2.lit.has(k) ? true : null);
+  // the bands
+  for (const b of L.bands) put(seen, "b:" + b.tier, "div", "map-band", b.x, b.y, { "data-tier": b.tier, style: `width:${w - 2 * L.D.pad}px` },
+    [h("i", { class: "map-tsw", "data-tier": b.tier }), `${b.name} · ${plural(b.count, "thread")}`]);
+  // the cards
+  for (const cl of L.clusters) {
+    const t = cl.thread, sel = M.sel && M.sel.kind === "thread" && M.sel.id === t.id;
+    const outs = Object.entries(t.outside).sort((x, y) => y[1] - x[1] || (x[0] < y[0] ? -1 : 1));
+    const chips = L.cols === 1 && outs.length > 1 ? [h("span", { class: "map-chip" }, "+ " + outs.length)] : outs.slice(0, 2).map(([k, n]) => h("span", { class: "map-chip" }, k + " ", h("b", null, String(n))));
+    put(seen, "c:" + t.id, "button", "map-card", cl.card.x, cl.card.y,
+      { "data-kind": "thread", "data-id": t.id, "data-tier": t.tier, "data-sel": sel || null, "data-lit": lit("c:" + t.id), style: `width:${cl.card.w}px;height:${cl.card.h}px`, "aria-label": `Thread ${t.id}, ${tier(t.tier).label}, ${plural(t.posts, "post")}, ${money(t.cost)}`, "aria-pressed": sel ? "true" : "false" },
+      [h("span", { class: "map-cr1" }, h("i", { class: "map-tsw", "data-tier": t.tier }), h("b", { class: "map-cn" }, t.id), h("span", { class: "map-cc" }, money(t.cost))),
+       compact ? null : h("span", { class: "map-cr2" }, t.stuck ? h("em", null, `▲ ${t.stuck} stuck`) : null, h("span", { class: "map-cm" }, `${plural(t.posts, "post")} · ${since(t.last) || "–"}`), ...chips),
+       h("i", { class: "map-cb" }, h("i", { style: `width:${Math.max(2, cl.costShare * 100).toFixed(1)}%` }))]);
+  }
+  // the agents, their ghosts, and "+N more"
+  for (const n of L.nodes) {
+    const x = n.x - 10, y = n.y - 9, wd = n.labelX - x + Math.max(40, n.labelW);
+    if (n.more) {
+      put(seen, "n:" + n.id, "button", "map-more", x, y, { "data-kind": "thread", "data-id": n.thread, "data-lit": lit("c:" + n.thread), style: `--lx:${n.labelX - x}px` },
+        [h("i", { class: "map-g", "data-st": "more", style: `--r:${n.r}px` }), h("span", { class: "map-pill" }, `+ ${n.more} more`)]);
+      continue;
+    }
+    const a = n.agent, sel = M.sel && M.sel.kind === "agent" && M.sel.id === a.id;
+    const kids = n.ghost
+      ? [glyph(n), h("span", { class: "map-l1" }, h("span", { class: "map-gl" }, compact ? a.id : `${a.id} also here · ${plural(n.posts, "post")}`))]
+      : [glyph(n, sel), h("span", { class: "map-l1" }, h("b", { class: "map-aid" }, a.id), h("span", { class: "map-am" }, compact ? (a.cost >= 0.005 ? " " + money(a.cost) : "") : agentMeta(a) ? " " + agentMeta(a) : "")),
+         lines >= 2 ? h("span", { class: "map-l2" }, nowLine(a)) : null];
+    put(seen, "n:" + n.id, "button", "map-ag", x, y,
+      { "data-kind": "agent", "data-id": a.id, "data-node": n.id, "data-ghost": n.ghost || null, "data-ended": !a.running || null, "data-sel": sel || null, "data-lit": lit("n:" + n.id),
+        style: `width:${wd}px;--lx:${n.labelX - x}px`, "aria-label": n.ghost ? `${a.id} also posted in ${n.thread}` : `${a.id}, ${status(a.status).label}, main thread ${a.main}`, "aria-pressed": sel ? "true" : "false" }, kids);
+  }
+  // older threads, compact view only
+  if (L.olderCount) {
+    put(seen, "b:older", "div", "map-band", L.D.pad, L.older.y, { style: `width:${w - 2 * L.D.pad}px` }, [`Older · ${plural(L.olderCount, "thread")}`]);
+    for (const c of L.older.chips) put(seen, "o:" + c.thread.id, "button", "map-old", c.x, c.y, { "data-kind": "thread", "data-id": c.thread.id, "data-lit": lit("c:" + c.thread.id) }, [c.thread.id + " ", h("b", null, String(c.thread.posts))]);
+  }
+  for (const [k, el] of EL) if (!seen.has(k)) { el.remove(); EL.delete(k); }
+  requestAnimationFrame(() => { for (const el of EL.values()) el.classList.remove("map-in"); });
+  // the lines: spokes, then the selection's links on top
+  const t = now(), path = [];
+  for (const r of L.rings || []) if (r.ox) path.push(`<ellipse class="map-ring" cx="${r.cx}" cy="${r.cy}" rx="${r.ox.toFixed(1)}" ry="${r.oy.toFixed(1)}"/><text class="map-rt" x="${r.cx}" y="${(r.cy - r.oy + 14).toFixed(1)}">${r.name}</text>`);
+  for (const sp of L.spokes) {
+    const acc = S2.acc.has(sp.node) || (GS.posted.get(sp.node) || 0) > t;
+    path.push(`<path class="map-sp" data-k="${sp.node}" d="${sp.d || spokePath(sp)}" stroke-width="${sp.width}"${sp.dashed ? " data-dash" : ""}${sp.ended ? " data-ended" : ""}${acc ? " data-acc" : ""}${S2.on && S2.lit.has("n:" + sp.node) ? " data-lit" : ""}/>`);
+  }
+  path.push(`<defs><marker id="map-ah" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L8 4L0 8z" class="map-ahd"/></marker></defs>`);
+  for (const k of S2.links) path.push(`<path class="map-ln"${k.ghost ? " data-ghost" : ` marker-end="url(#map-ah)"`} d="${linkPath(k.p, k.q)}"/>`);
+  svg.innerHTML = path.join("");
+  syncCap(D);
+  stage.setAttribute("aria-label", `Graph of the hive: ${M.count}. Tab walks threads and agents; Enter selects, Escape clears.`);
+  if (M.q !== GS.q) { GS.q = M.q; if (S2.hits[0]) scroller.scrollTo({ top: Math.max(0, S2.hits[0].y - 60), behavior: reduced() ? "auto" : "smooth" }); }
+  legend(L);
+}
+function syncCap(D) {
+  if (GS.capT > now()) return;
+  const n = M.lanes.length, drawn = GS.L ? GS.L.clusters.length : 0;
+  capEl.replaceChildren(D.replay ? "As it was at " + clock(D.t1) : "Right now", h("small", null, ` · ${winName().toLowerCase()}${n > drawn ? ` · ${plural(n - drawn, "thread")} with no agent drawn` : ""}`));
+  capEl.toggleAttribute("data-cut", D.replay); capEl.removeAttribute("data-post");
+}
+function legend(L) {
+  const outs = {}; for (const cl of L.clusters) for (const [k, n] of Object.entries(cl.thread.outside)) outs[k] = (outs[k] || 0) + n;
+  const g = st => h("i", { class: "map-g", "data-st": st, style: "--r:6px" });
+  const sig = JSON.stringify(outs) + L.nodes.some(n => n.agent && n.agent.warden);
+  if (legendEl.dataset.sig === sig) return; legendEl.dataset.sig = sig;
+  legendEl.replaceChildren(...[...[["working", "working"], ["queue", "in queue"], ["quiet", "quiet"], ["stuck", "stuck"], ["failed", "failed"], ["ended", "ended"]].map(([s, l]) => h("span", null, g(s), l)),
+    L.nodes.some(n => n.agent && n.agent.warden) ? h("span", null, h("i", { class: "map-g", "data-st": "working", "data-w": "", style: "--r:6px" }), "warden") : null,
+    h("span", null, g("ghost"), "also posts here"), h("span", null, h("i", { class: "map-k-w" }), "thicker = more posts"), h("span", null, h("i", { class: "map-k-bar" }), "card bar = share of spend"),
+    ...Object.entries(outs).sort((x, y) => y[1] - x[1]).map(([k, n]) => h("span", null, h("span", { class: "map-chip" }, k + " ", h("b", null, String(n)))), ) , Object.keys(outs).length ? h("span", null, "outside posts") : null].filter(Boolean));
+}
+
+// ---- pointer and keys on the graph ----
+cv.addEventListener("click", e => {
+  const b = e.target.closest("[data-kind]");
+  if (!b) { if (M.sel) select(null); return; }
+  const { kind, id } = b.dataset; hideCard();
+  if (e.detail >= 2) { if (!M.sel || M.sel.id !== id) { M.sel = { kind, id }; M.update(); } openPanel(kind === "agent" ? "agent" : "thread", id); return; }
+  select(kind, id);
+});
+cv.addEventListener("pointerover", e => {
+  const b = e.target.closest("[data-kind]"); if (!b || e.pointerType === "touch") return;
+  if (b.dataset.node) { for (const p of svg.querySelectorAll(`[data-k="${CSS.escape(b.dataset.node)}"]`)) p.setAttribute("data-hot", ""); clearTimeout(GS.hoverT); GS.hoverT = setTimeout(() => showCard(b.dataset.node), 300); }
+  else if (b.classList.contains("map-card")) { const t = GS.L && GS.L.threadById.get(b.dataset.id), r = b.getBoundingClientRect(); if (t) showTip(r.left + r.width / 2, r.bottom, threadTitle(t.id) !== t.id ? `${t.id} · ${threadTitle(t.id)}` : t.id, t.last ? "last activity " + (M.D.replay ? clock(t.last) : ago(t.last)) : "no posts yet"); }
+});
+cv.addEventListener("pointerout", e => {
+  const b = e.target.closest("[data-kind]"); if (!b || (e.relatedTarget && b.contains(e.relatedTarget))) return;
+  for (const p of svg.querySelectorAll("[data-hot]")) p.removeAttribute("data-hot");
+  hideCard(); hideTip();
+});
+function hideCard() { clearTimeout(GS.hoverT); hcEl.hidden = true; }
+function showCard(id) {
+  const n = GS.nodes.get(id); if (!n || !n.agent) return; const a = n.agent, st = status(a.status), D = M.D;
+  hcEl.replaceChildren(
+    h("div", { class: "map-hc-h" }, glyph({ ...n, ghost: false }), h("b", null, a.id), h("span", null, [a.running ? st.label + (a.last ? " · " + ago(a.last) : "") : "ended " + clock(a.track.end), a.model, a.warden ? "warden" : null].filter(Boolean).join(" · "))),
+    a.now ? h("div", { class: "map-hc-now" }, short(a.now, 220)) : null,
+    h("div", { class: "map-hc-f" }, `Main thread ${a.main} · ${plural(a.posts, "post")}${a.cost >= 0.005 ? " · " + money(a.cost) : ""}`),
+    a.from ? h("div", { class: "map-hc-f" }, "Started by " + a.from) : null,
+    h("small", null, "Click to select, double-click to open"));
+  hcEl.hidden = false;
+  const W = GS.w, H = GS.L.height, cw = Math.min(280, W - 16), x = Math.max(8, Math.min(n.labelX + 4, W - cw - 8));
+  hcEl.style.width = cw + "px";
+  const ch = hcEl.offsetHeight, y = n.y + 18 + ch > H - 8 ? n.y - 14 - ch : n.y + 18;
+  hcEl.style.transform = `translate(${x}px,${Math.max(4, y)}px)`;
+  if (D.replay) hcEl.querySelector(".map-hc-now")?.remove();
+}
+
+// ---- a live post: a dot runs from the agent to its thread's card ----
+function emit(p) {
+  const L = GS.L; if (!L || !isAgent(p.from)) return;
+  const real = L.byAgent.get(p.from); if (!real) return;
+  const id = real.thread === p.th ? real.id : p.from + "@" + p.th, n = GS.nodes.get(id); if (!n) return;
+  GS.posted.set(id, now() + 1200);
+  const sp = () => svg.querySelector(`[data-k="${CSS.escape(id)}"]`);
+  const el = sp(); if (el) { el.setAttribute("data-acc", ""); el.setAttribute("data-post", ""); }
+  setTimeout(() => { const e2 = sp(); if (!e2) return; e2.removeAttribute("data-post"); if (!litOfSel(id)) e2.removeAttribute("data-acc"); }, 1200);
+  if (!M.D.replay) { GS.capT = now() + 4000; capEl.replaceChildren(h("b", null, p.from), " just posted in ", h("b", null, p.th)); capEl.setAttribute("data-post", ""); setTimeout(() => { if (GS.capT <= now() + 50) { GS.capT = 0; syncCap(M.D); } }, 4000); }
+  if (!reduced()) runDot(id);
+}
+const litOfSel = id => { const s = M.sel, n = GS.nodes.get(id); if (!s || !n) return false; return s.kind === "agent" ? n.agent && n.agent.id === s.id : s.kind === "thread" && n.thread === s.id; };
+function runDot(id) {
+  if (GS.busy.has(id)) { GS.queued.add(id); return; }
+  const p = svg.querySelector(`[data-k="${CSS.escape(id)}"]`); if (!p) return;
+  GS.busy.add(id);
+  const len = p.getTotalLength(), dot = document.createElementNS(SVGNS, "circle"); dot.setAttribute("r", "3.5"); dot.setAttribute("class", "map-dot"); fx.append(dot);
+  const t0 = performance.now();
+  const step = ts => {
+    const k = Math.min(1, (ts - t0) / 600), e = 1 - Math.pow(1 - k, 3), pt = p.getPointAtLength(len * (1 - e));
+    dot.setAttribute("cx", pt.x); dot.setAttribute("cy", pt.y);
+    if (k < 1 && p.isConnected) return requestAnimationFrame(step);
+    dot.remove(); GS.busy.delete(id); if (GS.queued.delete(id)) runDot(id);
+  };
+  requestAnimationFrame(step);
 }
 
 // ---- empty states ----
@@ -214,7 +381,7 @@ const rpHandle = h("span", { class: "map-rp-h", role: "slider", tabindex: "0", "
 const rpTrack = h("div", { class: "map-rp-t" }, rpFill, rpHandle);
 const rpChip = h("span", { class: "map-rp-c" });
 const rpBack = button("Back to live", () => { stopPlay(); setCut(null); }, { size: "s" });
-const replayEl = h("div", { class: "map-rp", "data-own": "", "data-sig": "rp" }, rpPlay, rpTrack, rpChip, rpBack);
+const replayEl = h("div", { class: "map-rp", "data-key": "rp", "data-own": "", "data-sig": "rp" }, rpPlay, rpTrack, rpChip, rpBack);
 const cutAt = x => { const r = rpTrack.getBoundingClientRect(), v = Math.max(0, Math.min(1, (x - r.left) / r.width)), a = winStart(), b = now(); return v > .995 ? null : a + v * (b - a); };
 rpTrack.addEventListener("pointerdown", e => {
   e.preventDefault(); rpTrack.setPointerCapture(e.pointerId); stopPlay(); setCut(cutAt(e.clientX)); rpHandle.focus({ preventScroll: true });
@@ -240,10 +407,6 @@ function setCut(c) {
   const was = M.cut; M.cut = c; build(); syncReplay(); M.update();
   // replay: the posts the cut just passed light up their lines, as live posts do
   if (M.playing && was != null && c != null && c > was) for (const p of M.D.posts) if (p.t > was && p.t <= c) emit(p);
-}
-function emit(p) {
-  const id = OUTSIDE.has(p.from) ? "@" + p.from : p.from; if (!GR.nodes.has(id)) return;
-  GR.ripple(id); if (GR.nodes.has("#" + p.th)) GR.pulse(id, "#" + p.th, 800);
 }
 function advance(ts) {
   if (!M.playing) return;
@@ -376,20 +539,21 @@ function sidePane(D) {
 // ---- toolbar ----
 function setWin(w) { M.win = w; setPref("meshWin", w); M.cut = null; M.playing = false; build(); syncReplay(); M.update(); }
 function setActive(on) { M.active = on; setPref("meshActive", on ? 1 : 0); build(); M.update(); }
+function setLay(k) {
+  M.lay = k; setPref("meshLayout", k);
+  cv.setAttribute("data-move", ""); clearTimeout(GS.moveT); GS.moveT = setTimeout(() => cv.removeAttribute("data-move"), 700);
+  M.update();
+}
 function toolbar() {
   return h("div", { class: "map-tb" },
     seg(WINS.map(([l, w]) => [w, l]), M.win, setWin, { label: "Window" }),
+    seg(LAYOUTS, M.lay, setLay, { label: "Layout" }),
     h("label", { class: "map-sw" }, h("input", { type: "checkbox", role: "switch", class: "switch", checked: M.active, "aria-label": "Running only", onchange: (e, n) => setActive(n.checked) }), "Running only"),
     h("label", { class: "map-search" }, icon("search"), h("input", { class: "input", type: "search", placeholder: "Find an agent or thread", "aria-label": "Find an agent or thread", value: M.q,
-      oninput: (e, n) => { M.q = n.value.trim().toLowerCase(); M.update(); } })),
+      oninput: (e, n) => { M.q = n.value.trim().toLowerCase(); M.update(); },
+      onkeydown: (e, n) => { if (e.key === "Enter" && GS.hits[0]) { e.preventDefault(); const f = GS.hits[0]; M.q = ""; n.value = ""; select(f.kind, f.id); } } })),
     h("span", { class: "map-sum", role: "status" }, M.count));
 }
-const key = () => h("div", { class: "map-key" },
-  h("span", null, statusDot("working", { live: true }), "working"), h("span", null, statusDot("quiet"), "quiet"), h("span", null, statusDot("stuck"), "stuck"),
-  h("span", null, h("i", { class: "map-k-ag", "data-ended": "" }), "ended (paler is longer ago)"), h("span", null, h("i", { class: "map-k-th" }), "thread, coloured by tier"),
-  h("span", null, h("i", { class: "map-k-ln" }), "its main thread"), h("span", null, h("i", { class: "map-k-ln", "data-also": "" }), "posted there too"),
-  h("span", null, h("i", { class: "tok-dm" }), "you, box, Hives"));
-
 // ---- hover tips ----
 function runTip(a) {
   const D = M.D, t = D.allRuns.find(x => x.a === a), L = S.running.get(a), st = t ? status(t.st) : status(agentStatus(a).key);
@@ -404,7 +568,9 @@ const G = {
   selected: () => (M.sel ? { ...M.sel, id: M.sel.kind === "thread" ? "#" + M.sel.id : M.sel.id } : null),
   select(id) { if (id.startsWith("#")) select("thread", id.slice(1)); else select("agent", id); return true; },
   clear() { M.sel = null; M.update(); },
-  get lanes() { return M.lanes; }, get data() { return M.D; }, get el() { return M.root; }, get state() { return M; }, get graph() { return GR; },
+  emit(p) { emit(p); },
+  get lanes() { return M.lanes; }, get data() { return M.D; }, get el() { return M.root; }, get state() { return M; }, get layout() { return GS.L; },
+  get nodes() { return new Map(GS.L ? GS.L.nodes.filter(n => n.agent && !n.ghost).map(n => [n.agent.id, { id: n.agent.id, warden: n.agent.warden, thread: n.thread, status: n.agent.status }]) : []); },
 };
 export { G as graph };
 /** What a display tile says in its head. */
@@ -421,7 +587,7 @@ const meshDeck = {
   jog(d, n, shift) { const a = winStart(), b = now(), c = (M.cut ?? b) + n * (shift ? 6 : 1) * (b - a) / 1500; M.playing = false; setCut(c >= b ? null : Math.max(a, c)); return true; },
   scrub(v) { const a = winStart(), b = now(); M.playing = false; setCut(v > .995 ? null : a + v * (b - a)); },
   play() { if (M.playing) stopPlay(); else startPlay(); return true; },
-  fit() { GR.refit(); },
+  fit() { scroller.scrollTop = 0; },
   toggle() { setActive(!M.active); },
   window(v) { const i = Math.min(WINS.length - 1, Math.floor(v * WINS.length)), w = WINS[i][1]; if (w !== M.win) setWin(w); },
 };
@@ -444,11 +610,16 @@ export default {
     syncReplay();
     const showEmpty = !M.lanes.length && (M.active || !M.more.length);
     if (!showEmpty) syncGraph(D);
-    const chart = h("main", { class: "map-chart" }, showEmpty ? emptyEl(D) : keep(stage), M.tile ? null : replayEl, M.tile || showEmpty ? null : key());
+    const chart = h("main", { class: "map-chart" }, showEmpty ? emptyEl(D) : keep(stage), M.tile ? null : replayEl);
     const root = h("div", { class: "map", "data-key": "mesh", "data-tile": M.tile ? "" : null, "aria-label": "Map: " + M.count },
       M.tile ? null : toolbar(), h("div", { class: "map-bd" }, chart, M.tile ? null : sidePane(D)));
     // the live element is found after the page puts it in place
-    requestAnimationFrame(() => { M.root = document.querySelector(".map[data-key=mesh]"); });
+    requestAnimationFrame(() => {
+      M.root = document.querySelector(".map[data-key=mesh]");
+      // the morph can put the empty stand-in from keep() in place of the stage (a view switch mid-render): swap the real one back
+      const live = M.root && M.root.querySelector(".map-stage");
+      if (live && live !== stage) { live.replaceWith(stage); GS.sig = ""; syncGraph(M.D); }
+    });
     return root;
   },
 };

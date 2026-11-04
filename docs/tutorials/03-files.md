@@ -28,6 +28,10 @@ If it's private, the Hive needs access of its own. Ask an agent to walk you thro
 
 > I want you to work on a private GitHub repo. Tell me exactly what to set up, and use the narrowest access that works.
 
+Agents can't see your own SSH keys or GitHub login, and the installer doesn't add the `gh` tool (the Hive's account has no sudo, so installing it takes an administrator on the machine). Cloning a public repo works with no setup. For a private repo, either install `gh` as an administrator and sign in as the Hive's account from a terminal, or give git a token limited to that one repo, again from a terminal.
+
+A push that uses your GitHub login is always your call, at every Power level. The warden can refuse one or pass it to you, but it can't approve it. Ask the agent to prepare the change, then you review and approve the push.
+
 Don't paste tokens into Chat, because every agent can read them and they stay there. Send a token through **Secrets** in Settings, or sign in from a terminal as the Hive's account (see [Use it from a terminal](08-terminal.md)).
 
 ## Look at what's there
@@ -41,6 +45,8 @@ Agents usually keep each project under `~/projects/<name>` (their `~` is the Hiv
 
 Everything here sits on one disk, and uninstalling deletes it all. For anything you care about, ask:
 
-> Push this project to my repo and tell me how to check it arrived.
+> Get this project ready to push to my repo and tell me how to check it arrived.
+
+The push itself comes to you for approval.
 
 Next: [Keep an eye on the work and your usage](04-watching.md).

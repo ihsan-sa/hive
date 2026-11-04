@@ -5,6 +5,12 @@ Reads `share` ({"failures": bool, "usage": bool}) from settings.json. failures, 
 default and can be turned off. Both false (or no settings.json) means nothing is read, queued or sent. Every report that
 leaves is first written byte-for-byte to reports/sent/, and `hive-report show`
 prints it. Commands: status | send [--dry-run] | show [N] | question | bundle [--yes] | issue TITLE [--submit] <body on stdin> | feedback <JSON on stdin>
+| contribute TITLE [--commit SHA | --diff FILE] <what and why on stdin> | drafts | github | approve ID | discard ID
+
+`share.github` (off unless the person ticks it, at setup or in Settings) lets this Hive use the person's own logged-in `gh`:
+failures that fit the public templates below become issues on the Hive's repo (one per kind, found again by a marker,
+at most GH_PER_DAY actions a day), and `contribute` drafts a fix an agent made in ~/core. A draft goes only after the person presses Send on it in
+Settings (warden's ruling, post 11040224d273), as a pull request from their fork or, failing that, an issue with the patch. Without it, or with no gh login, failures go to the receiver only.
 
 `feedback` is apart from all of that: it runs only when a person presses Send in the app's feedback dialog, which
 says what goes and to whom, so it doesn't depend on `share`. A copy lands in reports/sent/ first, like every report.
@@ -45,6 +51,10 @@ def load_share():
     except (OSError, ValueError):
         s = {}
     return bool(s.get("failures") is True), bool(s.get("usage") is True)
+
+def want_github():
+    try: return (json.load(open(settings_path())).get("share") or {}).get("github") is True
+    except (OSError, ValueError, AttributeError): return False
 
 DEFAULTS_VERSION, BEAT_EVERY = 1, 23 * 3600   # 23h on a 6h timer comes out at one check-in a day
 
@@ -130,6 +140,58 @@ def logpath():
 EVENT_FAILS = {"lost_subagents": "lost-subagents", "logins_paused": "logins-paused", "provider_held": "provider-held", "killed": "killed"}
 EVENT_MSG = {"lost_subagents": "background helpers were lost when an agent ended", "logins_paused": "all logins were paused",
              "provider_held": "a model provider was held back", "killed": "an agent was killed"}
+
+# ---- the public templates: the only wording a failure issue can have, here and in the makers' triage (which imports these) ----
+KINDS = {
+    "agent-exit": ("An agent ended with exit code {code}", "An agent's process exited with a non-zero code."),
+    "lost-subagents": ("Background helpers were lost when an agent ended", "An agent ended while helpers it started were still running, so their work was lost."),
+    "provider-held": ("A model provider was held back", "The starter held back a model provider."),
+    "unit-failed": ("Service {unit} is in a failed state", "One of the Hive's own systemd user units was found failed by the doctor check."),
+}
+EXPECTED = {"limited", "logins-paused", "killed"}   # normal operation: a login at its limit, all logins paused, an agent stopped on purpose
+EXPECTED_EXIT = {"-15", "143"}                       # SIGTERM: a stop or restart
+MSG = {
+    "agent-exit": re.compile(r"^an agent ended with exit code (?P<code>-?\d{1,4})$"),
+    "lost-subagents": re.compile(r"^background helpers were lost when an agent ended$"),
+    "provider-held": re.compile(r"^a model provider was held back$"),
+    "unit-failed": re.compile(r"^systemd unit (?P<unit>(?:hive|hive|\[name\])-[a-z0-9@_.-]{1,60}\.(?:service|timer)) is in a failed state(?P<why>:.*)?$"),
+}
+MARK = re.compile(r"<!-- hive-auto-report sig=(\S+) -->")
+
+def classify(r):
+    """(signature, public fields) for a failure report that may go public, (None, why not) for one that stays private."""
+    kind, msg = r.get("kind") or "", " ".join(str(r.get("message") or "").split())
+    if kind in EXPECTED: return None, "expected"
+    if kind not in KINDS: return None, "unknown kind"
+    m = MSG[kind].match(msg)
+    if not m: return None, "unknown message"
+    f = {k: v for k, v in m.groupdict().items() if v and k != "why"}
+    if "unit" in f: f["unit"] = f["unit"].replace("[name]-", "hive-")   # older clients scrubbed a user named hive out of unit names
+    if f.get("code") in EXPECTED_EXIT: return None, "expected"
+    return kind + "".join(":" + f[k] for k in sorted(f)), f
+
+def osname(o):
+    return {"linux": "Linux", "darwin": "macOS", "windows": "Windows"}.get((o or "").split("/")[0], "Other")
+
+def vkey(v):
+    return [(0, int(x), "") if x.isdigit() else (1, 0, x) for x in re.split(r"[.+-]", str(v).lstrip("v"))]
+
+def issue_text(sig, fields, count, hives, versions, oses, first, last, by="a Hive's failure reporting"):
+    """(title, body) of a failure issue, laid out like the repo's bug form. Only the template, counts, versions and OS go in."""
+    import collections
+    kind = sig.split(":")[0]
+    title = KINDS[kind][0].format(**fields)
+    vs = sorted(versions, key=vkey) or ["unknown"]
+    c = collections.Counter(osname(o) for o in oses)
+    b = ("### What happened, and what you expected\n\n%s Reported automatically by Hives that share failure reports. "
+         "Expected: this doesn't happen.\n\n### Version\n\n%s\n\n### Where it runs\n\n%s\n\n### How you installed it\n\n_No response_\n\n"
+         "### Output or log, if you have it\n\n```text\nkind: %s\n%s\n```\n\n"
+         "| | |\n|---|---|\n| Reports | %d |\n| Hives | %d |\n| Versions | %s |\n| OS | %s |\n| First seen | %s |\n| Last seen | %s |\n\n"
+         "_Opened by %s: only the failure kind, its message, versions and counts are shown; nothing from anyone's chats or files._\n\n"
+         "<!-- hive-auto-report sig=%s -->\n") % (
+        KINDS[kind][1], vs[-1], ", ".join(sorted(c)), kind, title.lower(), count, hives, ", ".join(vs),
+        ", ".join("%s (%d)" % x for x in c.most_common()), first, last, by, sig)
+    return title, b
 
 def update_why(unit):
     """Why the updater failed: its own last lines, which are git's and install.sh's errors, and never the starter's or the app's, which can quote chat."""
@@ -219,11 +281,14 @@ def installed_state():
 def send(dry=False):
     if not dry: apply_defaults()
     if setup_pending(): return "setup isn't finished; nothing read or sent"
-    wf, wu = load_share()
-    if not (wf or wu): return "sharing is off; nothing read or sent"
+    wf, wu = load_share(); wg = want_github()
+    if not (wf or wu or wg): return "sharing is off; nothing read or sent"
     st = installed_state()
-    new, off = build(st, wf, wu)
-    if wf: new += unit_failures(st)
+    new, off = build(st, wf or wg, wu)
+    if wf or wg: new += unit_failures(st)
+    gh_note, fails = "", [r for r in new if r["type"] == "failure"]
+    if wg and not dry: gh_note = "; github: " + github(st, fails)
+    if not wf: new = [r for r in new if r["type"] != "failure"]
     if wu and not st.get("hello"):                    # the first send after opting in says so, with counts of nothing, so a quiet Hive can be told from a broken route
         r = base(st, "usage"); r.update(at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), message="sharing is on", usage={"runs": 0}); new.insert(0, r); st["hello"] = True
     q = [r for r in pending() if r["type"] in ("failure", "heartbeat") and wf or (r["type"] == "usage" and wu)] + new
@@ -231,7 +296,7 @@ def send(dry=False):
         r = base(st, "heartbeat"); r["at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         q = [x for x in q if x["type"] != "heartbeat"] + [r]; st["beat"] = time.time()   # a check-in that waited offline is replaced, and goes last so the cap can't drop it
     if len(q) > MAX_PER_RUN: q = q[-MAX_PER_RUN:]
-    if dry: return "would send %d report(s):\n" % len(q) + "\n".join(json.dumps(r) for r in q)
+    if dry: return "would send %d report(s):\n" % len(q) + "\n".join(json.dumps(r) for r in q) + ("\n" + github(st, fails, dry=True) if wg else "")
     st["offset"] = off; save_state(st); keep(q)
     sent = refused = 0; run = time.strftime("%y%m%d-%H%M%S"); os.makedirs(os.path.join(rdir(), "sent"), exist_ok=True)
     for i, r in enumerate(q):
@@ -243,9 +308,9 @@ def send(dry=False):
         elif code in (400, 411, 413, 415): refused += 1  # never taken; the copy stays
         else:
             os.remove(name); keep(q[i:])
-            return "sent %d, refused %d; %s; %d wait for the next run" % (sent, refused, ("%s answered %d" % (url(), code)) if code else ("no endpoint set (share_url)" if not url() else "couldn't reach " + url()), len(q) - i)
+            return "sent %d, refused %d; %s; %d wait for the next run" % (sent, refused, ("%s answered %d" % (url(), code)) if code else ("no endpoint set (share_url)" if not url() else "couldn't reach " + url()), len(q) - i) + gh_note
     keep([])
-    return "sent %d, refused %d" % (sent, refused)
+    return "sent %d, refused %d" % (sent, refused) + gh_note
 
 def sent_files():
     d = os.path.join(rdir(), "sent")
@@ -332,12 +397,254 @@ def issue(title, text, submit=False):
     q = {"template": "bug.yml", "title": t, "what": b[:2500], "version": installed_version(), "body": b[:2500]}   # the bug form's fields; body is for a repo without the form
     return "draft: %s\nopen this to review and post it as yourself:\nhttps://github.com/%s/issues/new?%s" % (draft, repo, urllib.parse.urlencode(q))
 
+# ---- GitHub from the person's own login: only with share.github ticked and gh logged in; run by the timer, never by an agent ----
+GH_PER_DAY, GH_QUEUE, MAX_DIFF, DRAFT_DAYS = 3, 20, 50000, 30
+
+def gh_run(*a, cwd=None, timeout=60):
+    import subprocess
+    try: return subprocess.run(list(a) if a[0] == "git" else ["gh", *a], capture_output=True, text=True, timeout=timeout, cwd=cwd)
+    except Exception as e: return subprocess.CompletedProcess(a, 1, "", str(e))
+
+def gh_ready():
+    import shutil
+    return bool(shutil.which("gh")) and gh_run("auth", "status", timeout=20).returncode == 0
+
+def issues_repo():
+    repo = share_cfg().get("issues_repo") or "https://github.com/ihsan-sa/hive"
+    return "" if "<" in repo else repo.replace("https://github.com/", "").strip("/")
+
+def gh_left(st):
+    day = time.strftime("%Y-%m-%d", time.gmtime())
+    if st.get("gh_day") != day: st["gh_day"], st["gh_n"] = day, 0
+    return GH_PER_DAY - st["gh_n"]
+
+def find_issue(repo, sig, title):
+    """The open issue with this signature's marker: its number, 0 for none, None if GitHub couldn't be asked.
+    Found by its fixed title, then checked by the marker; labels aren't relied on, since only collaborators can set them."""
+    r = gh_run("issue", "list", "-R", repo, "--state", "open", "--search", '"%s" in:title' % title, "--json", "number,body", "-L", "30")
+    if r.returncode: return None
+    try: found = json.loads(r.stdout or "[]")
+    except ValueError: return None
+    for i in found:
+        m = MARK.search(i.get("body") or "")
+        if m and m.group(1) == sig: return i["number"]
+    return 0
+
+def issue_number(out):
+    m = re.search(r"/(?:issues|pull)/(\d+)", out or ""); return int(m.group(1)) if m else 0
+
+def file_one(repo, it):
+    """One failure, one GitHub action: a comment on its open issue, or a new issue from the template. Its URL or number, or None."""
+    sig, f, v, o, at = it["sig"], it["fields"], it["version"], it["os"], it["at"]
+    title, body = issue_text(sig, f, 1, 1, [v], [o], at, at)
+    n = find_issue(repo, sig, title)
+    if n is None: return None
+    if n:
+        r = gh_run("issue", "comment", str(n), "-R", repo, "-b", "Seen again by a Hive: version %s, %s, %s." % (v, osname(o), at[:10]))
+        return n if r.returncode == 0 else None
+    r = gh_run("issue", "create", "-R", repo, "-t", title, "-b", body, "-l", "auto-report")
+    if r.returncode: r = gh_run("issue", "create", "-R", repo, "-t", title, "-b", body)   # the label is only for those who may set it
+    return (issue_number(r.stdout) or "new") if r.returncode == 0 else None
+
+def github(st, fails, dry=False):
+    """Failures that fit a public template, plus fixes queued by `contribute`, sent with the person's gh, GH_PER_DAY at most."""
+    repo = issues_repo()
+    if not repo: return "no repository set (issues_repo)"
+    q, seen = list(st.get("gh_queue", [])), st.setdefault("gh_seen", {})
+    for r in fails:
+        sig, f = classify(r)
+        v = r.get("version") or "unknown"
+        if not sig or v in seen.get(sig, {}).get("v", []) or any(x["sig"] == sig and x["version"] == v for x in q): continue
+        q.append({"sig": sig, "fields": f, "version": v, "os": r.get("os") or "", "at": r.get("at") or ""})
+    q = q[-GH_QUEUE:]; ready = [x["id"] for x in drafts() if x["approved"]]
+    if dry: return "github: would file or comment on %d issue(s)%s and send %d approved fix(es), at most %d a day" % (len(q), (" (" + ", ".join(x["sig"] for x in q) + ")") if q else "", len(ready), GH_PER_DAY)
+    st["gh_queue"] = q
+    if not (q or outbox()): return "nothing to file"
+    if not (q or ready):
+        for p in outbox(): send_draft(repo, p, st)   # only expires old ones
+        return "%d fix(es) wait for the person's Send" % len(outbox())
+    if not gh_ready(): return "gh isn't logged in; %d waiting" % (len(q) + len(ready))
+    done = []
+    while q and gh_left(st) > 0:
+        it = q[0]; n = file_one(repo, it)
+        if n is None: break                       # GitHub didn't answer: try again next run
+        st["gh_n"] += 1; q.pop(0)
+        e = seen.setdefault(it["sig"], {"v": []}); e["n"] = n; e["v"] = (e["v"] + [it["version"]])[-20:]
+        done.append("#%s" % n)
+    st["gh_queue"] = q
+    for p in outbox():
+        if gh_left(st) <= 0: break
+        u = send_draft(repo, p, st)
+        if u: done.append(u)
+    left = len(q) + len(outbox())
+    return ("filed " + ", ".join(done) if done else "nothing filed") + ("; %d waiting" % left if left else "")
+
+# ---- fixes an agent made in this Hive's own core, sent back as a pull request or an issue ----
+def root(): return os.path.dirname(settings_path())
+def core_dir(): return os.path.join(root(), "core")
+def obox(*p):
+    """Where drafts end up once they leave the waiting list: sent, failed, expired, discarded. The sandbox can't see it."""
+    d = os.path.join(rdir(), "outbox", *p); os.makedirs(d, exist_ok=True); return d
+def ddir():
+    """The waiting drafts. The sandbox mounts this one folder writable, so an agent inside can draft; it can't approve."""
+    d = os.path.join(rdir(), "drafts"); os.makedirs(d, exist_ok=True); return d
+DRAFT_ID = re.compile(r"^[0-9]{6}-[0-9]{6}-[0-9a-f]{6}$")
+DRAFT_MAX = 20
+def outbox(): return sorted(os.path.join(ddir(), f) for f in os.listdir(ddir()) if f.endswith(".json") and DRAFT_ID.match(f[:-5]))
+
+def contribute(title, text, commit=None, diff=None):
+    """Draft a fix (or a bug found while working) for the Hive's repo. It goes only after the person reads it and presses Send
+    in Settings, and then the reporter's timer sends it with their gh, outside the sandbox. An agent never pushes or approves."""
+    if not want_github():
+        return ("not drafted: sending to GitHub is off (Settings > Data sharing, 'Open GitHub issues about failures from my GitHub login'). "
+                "A fix committed in ~/core with a subject starting 'local fix:' is still kept across updates.")
+    if not title.strip() or not text.strip(): return "not drafted: give a title and, on stdin, what was wrong and how the fix works"
+    if len(outbox()) >= DRAFT_MAX: return "not drafted: %d drafts already wait for the person; ask them to send or discard some" % DRAFT_MAX
+    sha, raw = None, diff or ""
+    if commit:
+        r = gh_run("git", "-C", core_dir(), "rev-parse", "--verify", "-q", commit + "^{commit}")
+        if r.returncode: return "not drafted: %s isn't a commit in %s" % (commit, core_dir())
+        sha = r.stdout.strip()
+        raw = gh_run("git", "-C", core_dir(), "show", "--format=", sha).stdout
+        if not raw.strip(): return "not drafted: %s changes nothing" % commit
+    patch = scrub(raw) if raw.strip() else ""
+    if len(patch) > MAX_DIFF: return "not drafted: the patch is over %d characters; send a smaller fix" % MAX_DIFF
+    clean = bool(sha) and patch == raw
+    d = {"title": clip(scrub(title), 200), "text": scrub(text)[:6000], "commit": sha, "patch": patch, "pr": clean,
+         "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+    p = os.path.join(ddir(), time.strftime("%y%m%d-%H%M%S-") + uuid.uuid4().hex[:6] + ".json")
+    with open(p, "w") as f: f.write(json.dumps(d, indent=1))
+    return ("drafted %s. Nothing is sent until the person reads it and presses Send in Settings > Data sharing; then it goes %s. "
+            "Tell the person it's waiting there. Unsent drafts are dropped after %d days.") % (
+        os.path.basename(p)[:-5], "as a pull request from their fork (or an issue with the patch, if it doesn't apply)" if clean else ("as an issue with the patch" if patch else "as an issue"), DRAFT_DAYS)
+
+def load_draft(p):
+    """A draft as it would go: scrubbed again on reading, since the folder is writable from inside the sandbox."""
+    try: d = json.load(open(p))
+    except (OSError, ValueError): return None
+    if not isinstance(d, dict): return None
+    t = lambda k, n: scrub(d.get(k) if isinstance(d.get(k), str) else "")[:n]
+    c = d.get("commit") if isinstance(d.get("commit"), str) and re.fullmatch(r"[0-9a-f]{40}", d.get("commit") or "") else None
+    return {"title": clip(t("title", 400), 200), "text": t("text", 6000), "commit": c, "patch": t("patch", MAX_DIFF),
+            "pr": d.get("pr") is True and bool(c), "at": d.get("at") if isinstance(d.get("at"), str) else ""}
+
+def seal(d):
+    """What the person approved: exactly this title, text and patch. Any change after the press voids it."""
+    import hashlib
+    return hashlib.sha256(json.dumps([d.get("title"), d.get("text"), d.get("commit"), d.get("patch"), d.get("pr")]).encode()).hexdigest()
+
+def approvals():
+    """{draft id: seal}, kept in reports/, which the sandbox doesn't mount: a press in Settings is the only way in."""
+    try: v = json.load(open(os.path.join(rdir(), "approved.json")))
+    except (OSError, ValueError): v = {}
+    return v if isinstance(v, dict) else {}
+
+def set_approval(did, sl):
+    a = approvals()
+    if sl: a[did] = sl
+    else: a.pop(did, None)
+    with open(os.path.join(rdir(), "approved.json"), "w") as f: f.write(json.dumps(a, indent=1))
+
+def approved(did, d): return d is not None and approvals().get(did) == seal(d)
+
+def drafts():
+    """The drafts waiting, for Settings: exactly what would go out."""
+    out = []
+    for p in outbox():
+        d, did = load_draft(p), os.path.basename(p)[:-5]
+        if d is None: continue
+        out.append({"id": did, "title": d["title"], "text": d["text"], "patch": d["patch"],
+                    "how": "pull request" if d["pr"] else "issue", "at": d["at"], "approved": approved(did, d)})
+    return out
+
+def decide(did, yes):
+    """The person's press in Settings: Send (approve this exact draft) or Discard."""
+    if not DRAFT_ID.match(did or ""): return "no such draft"
+    p = os.path.join(ddir(), did + ".json")
+    d = load_draft(p)
+    if d is None: return "no such draft"
+    if not yes:
+        os.replace(p, os.path.join(obox("discarded"), did + ".json")); set_approval(did, None); return "discarded"
+    set_approval(did, seal(d))
+    return "approved; it goes on the reporter's next run" if gh_ready() else "approved; it goes once gh is logged in"
+
+def open_pr(repo, d):
+    """(url, None) or (None, why not). The commit is replayed on the installed release in a scratch worktree,
+    committed under the person's GitHub noreply address, pushed to their fork and offered to the repo."""
+    import tempfile
+    sha, core = d["commit"], core_dir()
+    try: tag = json.load(open(os.path.join(home(), ".hive", "update.json"))).get("tag")
+    except (OSError, ValueError, AttributeError): tag = None
+    if not tag: return None, "no release is installed to base it on"
+    diff = gh_run("git", "-C", core, "show", "--format=", sha).stdout
+    if not diff.strip(): return None, "the commit is gone from this Hive"
+    if diff != d.get("patch"): return None, "the commit no longer matches what was approved"
+    who = gh_run("api", "user", "--jq", '.login + " " + (.id|tostring)').stdout.split()
+    if len(who) != 2: return None, "couldn't read the GitHub login"
+    login, uid = who
+    gh_run("repo", "fork", repo, "--clone=false", timeout=120)
+    fork = "%s/%s" % (login, repo.split("/")[-1])
+    base = gh_run("repo", "view", repo, "--json", "defaultBranchRef", "--jq", ".defaultBranchRef.name").stdout.strip()
+    if not base or gh_run("repo", "view", fork, "--json", "name").returncode: return None, "couldn't make or find the fork " + fork
+    wt = tempfile.mkdtemp(prefix="hive-fix-"); os.rmdir(wt)
+    br = "hive-fix-" + sha[:10]
+    g = ["git", "-C", wt, "-c", "core.hooksPath=/dev/null"]
+    try:
+        if gh_run("git", "-C", core, "worktree", "add", "-q", "--detach", wt, tag + "^{commit}").returncode: return None, "couldn't check out " + tag
+        if gh_run(*g, "cherry-pick", "--no-commit", sha).returncode: return None, "it doesn't apply to " + tag
+        if gh_run(*g, "-c", "user.name=" + login, "-c", "user.email=%s+%s@users.noreply.github.com" % (uid, login),
+                  "commit", "-q", "--no-verify", "-m", d["title"], "-m", d["text"]).returncode: return None, "couldn't commit it"
+        if gh_run(*g, "-c", "credential.helper=", "-c", "credential.helper=!gh auth git-credential",
+                  "push", "-q", "-f", "https://github.com/%s.git" % fork, "HEAD:refs/heads/" + br, timeout=180).returncode: return None, "couldn't push to " + fork
+        body = d["text"] + "\n\n_Sent by a Hive's agent through its user's own GitHub login, with their opt-in. Based on %s._\n" % tag
+        r = gh_run("pr", "create", "-R", repo, "--base", base, "--head", "%s:%s" % (login, br), "--title", d["title"], "--body", body)
+        if r.returncode and "already exists" not in r.stderr: return None, "GitHub refused the pull request"
+        return (r.stdout.strip() or r.stderr.strip()).split()[-1], None
+    finally:
+        gh_run("git", "-C", core, "worktree", "remove", "--force", wt); gh_run("git", "-C", core, "worktree", "prune")
+
+def send_draft(repo, p, st):
+    """Only a draft the person approved as it stands. One never approved is dropped after DRAFT_DAYS; none sends by itself."""
+    did, d = os.path.basename(p)[:-5], load_draft(p)
+    if d is None: os.replace(p, os.path.join(obox("failed"), os.path.basename(p))); return None
+    if not approved(did, d):
+        if time.time() - os.path.getmtime(p) > DRAFT_DAYS * 86400: os.replace(p, os.path.join(obox("expired"), os.path.basename(p)))
+        return None
+    url_, why = open_pr(repo, d) if d["pr"] else (None, "the patch had text the scrubber hides, so only the scrubbed copy goes")
+    if not url_:
+        body = d["text"]
+        if d["patch"]:
+            body += "\n\nA fix made in a Hive's own core%s:\n\n```diff\n%s\n```\n" % (" (no pull request: %s)" % why if d["commit"] else "", d["patch"])
+        body += "\n_Sent by a Hive's agent through its user's own GitHub login, with their opt-in._\n"
+        r = gh_run("issue", "create", "-R", repo, "-t", d["title"], "-b", body)
+        url_ = r.stdout.strip().split()[-1] if r.returncode == 0 and r.stdout.strip() else None
+    st["gh_n"] = st.get("gh_n", 0) + 1     # an approved draft that was tried counts against the day
+    tries = st.setdefault("gh_tries", {})
+    if url_:
+        d["sent"] = url_; dest = obox("sent"); tries.pop(did, None)
+    else:
+        tries[did] = tries.get(did, 0) + 1; dest = obox("failed") if tries[did] >= 5 else None
+    if dest:
+        with open(os.path.join(dest, os.path.basename(p)), "w") as f: f.write(json.dumps(d, indent=1))
+        os.remove(p); set_approval(did, None); tries.pop(did, None)
+    return url_
+
 def main(a):
     cmd = a[0] if a else "status"
     if cmd == "question": print(question())
     elif cmd == "send": print(send("--dry-run" in a))
     elif cmd == "bundle": print(bundle("--yes" in a))
     elif cmd == "feedback": print(feedback(sys.stdin.read()))
+    elif cmd == "contribute":
+        opt = lambda k: a[a.index(k) + 1] if k in a and a.index(k) + 1 < len(a) else None
+        t = next((x for i, x in enumerate(a[1:], 1) if not x.startswith("--") and a[i - 1] not in ("--commit", "--diff")), "")
+        df = opt("--diff")
+        try: df = open(df).read() if df else None
+        except OSError as e: print("not drafted: can't read %s: %s" % (df, e)); return
+        print(contribute(t, sys.stdin.read() if not sys.stdin.isatty() else "", opt("--commit"), df))
+    elif cmd == "drafts": print(json.dumps(drafts(), indent=1))
+    elif cmd == "github": print(json.dumps({"on": want_github(), "gh": bool(__import__("shutil").which("gh")), "ready": gh_ready(), "repo": issues_repo() or "", "drafts": drafts()}))   # Settings' view
+    elif cmd in ("approve", "discard"): print(decide(a[1] if len(a) > 1 else "", cmd == "approve"))   # Settings' Send and Discard buttons; agents never run these
     elif cmd == "issue": print(issue(a[1] if len(a) > 1 else "", sys.stdin.read() if not sys.stdin.isatty() else "", "--submit" in a))
     elif cmd == "show":
         fs = sent_files(); n = int(a[1]) if len(a) > 1 else 1
@@ -349,7 +656,9 @@ def main(a):
         print("endpoint:", url() or "none set")
         if not url(): print(NOT_SENT)
         print("sent so far:", len(sent_files()), "| waiting:", len(pending()))
-        if not (wf or wu): print("Nothing is read or sent while both are off.")
+        print("GitHub issues and fixes from your own login: %s%s" % ("on" if want_github() else "off", (", " + ("gh logged in" if gh_ready() else "but gh isn't logged in, so nothing goes")) if want_github() else ""))
+        if want_github(): print("waiting for GitHub: %d failure(s), %d fix(es)" % (len(state().get("gh_queue", [])), len(outbox())))
+        if not (wf or wu or want_github()): print("Nothing is read or sent while all are off.")
     else: print(__doc__); return 2
     return 0
 

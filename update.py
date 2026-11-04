@@ -162,11 +162,19 @@ def apply(tag, st):
         raise Failed(f"{tag} doesn't follow from what's installed, so it was left alone")
     mine = my_settings(st.get("tag"))
     if mine: git("checkout", "HEAD", "--", "config.json")
-    r = git(*keep_release(), "rebase", "--autostash", tag, check=False)
-    if r.returncode or stashes() > before:  # a failed autostash still exits 0, and leaves its stash behind
+    def rebase(*a):
+        r = git(*keep_release(), *a, "rebase", "--autostash", *(["-i"] if a else []), tag, check=False)
+        if not (r.returncode or stashes() > before): return True  # a failed autostash still exits 0, and leaves its stash behind
         if stashes() > before: git("stash", "drop", check=False)
-        restore(old, dirty)
-        raise Failed(f"{tag} conflicts with local changes in ~/core; nothing changed")
+        restore(old, dirty); return False
+    dropped = []
+    if not rebase():
+        # A "local fix:" commit is a Hive's own patch to its core (orientation, "Fixing the Hive itself"). When the release changed the same lines,
+        # the release wins: it goes in without the fix, and the person hears which one went, since the release may or may not fix the same thing.
+        fixes = [l.split("\t", 1) for l in git("log", "--format=%H%x09%s", f"{tag}..{old}").splitlines() if l.split("\t", 1)[-1].startswith("local fix:")]
+        if not fixes or not rebase("-c", "sequence.editor=sed -i -E '/^(pick|p) (%s)[0-9a-f]* /d'" % "|".join(h[:7] for h, _ in fixes)):
+            raise Failed(f"{tag} conflicts with local changes in ~/core; nothing changed")
+        dropped = [t for _, t in fixes]
     try:
         if mine: put_settings(mine)
         install(); restart(); healthy()
@@ -175,6 +183,7 @@ def apply(tag, st):
         try: clear_failed(); install(); restart(); healthy()
         except (Failed, OSError, subprocess.SubprocessError, AttributeError) as e2: raise Failed(f"{tag} failed ({e}), and so did going back: {e2}. Look at ~/core and rerun ~/core/install.sh")
         raise Failed(f"{tag} failed and the Hive went back to what it was running: {e}")
+    return dropped
 
 def main():
     p = argparse.ArgumentParser(prog="hive update", description="Update this Hive to the newest release.")
@@ -216,7 +225,7 @@ def main():
     if not new: return print(f"up to date ({st.get('tag', 'no release yet')})")
     tag = new[-1]
     try:
-        apply(tag, st)
+        dropped = apply(tag, st)
     except Stuck as e:
         st["error"] = str(e); save(st)
         if st.get("stuck") != str(e): st["stuck"] = str(e); save(st); say(f"Can't update, and {tag} will be tried again: {e}", person=True)
@@ -228,7 +237,10 @@ def main():
     except Later as e:  # the app can say why it hasn't happened yet
         st["error"] = str(e); save(st); later(str(e))
     st.pop("stuck", None); st.pop("error", None); st.pop("newest", None); st["tag"] = tag; st["at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()); save(st)
-    say(f"Updated to {tag}.")
+    if dropped:
+        say(f"Updated to {tag}. It changed the same lines as {'this fix' if len(dropped) == 1 else 'these fixes'} your Hive made to itself, so {'it was' if len(dropped) == 1 else 'they were'} dropped: "
+            + "; ".join(d.removeprefix("local fix:").strip() for d in dropped) + ". If the problem comes back, ask an agent to look at it again.", person=True)
+    else: say(f"Updated to {tag}.")
     print(f"updated to {tag}")
 
 if __name__ == "__main__": main()

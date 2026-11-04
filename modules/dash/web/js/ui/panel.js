@@ -27,7 +27,7 @@ const P = { name: null, root: null, body: null, bar: null, grip: null, unsub: nu
 
 function render(force) {
   if (!P.name || (!force && selecting())) return;
-  mount(P.bar, h("div", { class: "panel-a" }, button("Full page", null, { href: agentHref(P.name), size: "s", kind: "quiet", title: "Open as a full page" }), button("Close", closePanel, { size: "s", kind: "quiet", title: "Close (Esc)" })));
+  mount(P.bar, h("div", { class: "panel-a" }, button("Open as a full page", null, { href: agentHref(P.name), kind: "icon", icon: "expand" }), button("Close (Esc)", closePanel, { kind: "icon", icon: "close" })));
   mount(P.body, agentPage(P.name, "panel"));
 }
 const refresh = () => render(true);

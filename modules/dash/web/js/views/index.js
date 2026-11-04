@@ -18,8 +18,10 @@ import settings from "./settings.js";
 import secrets from "./secrets.js";
 import deck from "./deck.js";
 import knowledge from "./knowledge.js";
+import kbtime from "./kbtime.js";
 import design from "./design.js";
 import made from "./made.js";
+import progress from "./progress.js";
 
 export default [
   start,
@@ -28,6 +30,7 @@ export default [
   inbox,
   agents,
   ledger,
+  progress,
   mesh,
   comms,
   timeline,
@@ -35,6 +38,7 @@ export default [
   secrets,
   settings,
   knowledge,
+  kbtime,
   design,
   made,
   agent,

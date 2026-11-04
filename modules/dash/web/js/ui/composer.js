@@ -134,7 +134,23 @@ function send(th) {
   Object.assign(d, { text: "", files: [], reply: null, replyId: null, to: null, name: "", naming: false, err: "", model: "" }); keep(d);
   CP.ac = null; CP.menu = false; CP.hist = null;
   const el = field(th); if (el) { el.value = ""; el.focus(); }   // morph leaves a focused field alone, so clear it here
-  refresh();
+  refresh(); window.dispatchEvent(new CustomEvent("cp:sent", { detail: { th } }));
+}
+// Lists carry on (the person, 11040216f6f2): Enter at the end of "1. x" or "- x" starts the next item,
+// Enter on an empty item ends the list, and Enter anywhere else sends as before.
+const ITEM = /^([ \t]*)(?:([-*•])|(\d{1,3})([.)]))[ \t]+(.*)$/;
+function listEnter(th, n) {
+  const v = n.value, at = n.selectionStart;
+  if (at !== n.selectionEnd || (v[at] && v[at] !== "\n")) return false;
+  const start = v.lastIndexOf("\n", at - 1) + 1, m = ITEM.exec(v.slice(start, at));
+  if (!m) return false;
+  const [, ind, bul, num, sep, rest] = m;
+  let nv, caret;
+  if (!rest.trim()) { nv = v.slice(0, start) + v.slice(at); caret = start; }
+  else { const mark = ind + (bul || (+num + 1) + sep) + " "; nv = v.slice(0, at) + "\n" + mark + v.slice(at); caret = at + 1 + mark.length; }
+  n.value = nv; n.setSelectionRange(caret, caret);
+  const d = draft(th); d.text = nv; keep(d); refresh();
+  return true;
 }
 /** Send a short message for the person from a button (Carry on, Answer). Shows like any other. */
 export function say(th, text, to) {
@@ -255,11 +271,11 @@ const stateWords = n => (n === "new" ? "starts a new agent" : agentStatus(n).lab
 // ---- pieces ----
 function toChip(th, r) {
   const n = r.who, label = n === "new" ? "a new agent" : n || "…";
-  const why = { reply: "you're replying to it", named: "named in your message", chosen: "you chose it", btw: "a side question: it answers in its own thread, and this one's agent never sees it" }[r.why];
-  return h("button", { type: "button", class: "cp-to", "aria-haspopup": "listbox", "aria-expanded": String(CP.menu), title: "Who this goes to. Change it here, or type @ and a name.",
+  const why = { reply: "you're replying to it", named: "named in your message", chosen: "you chose it", btw: "side question" }[r.why];
+  return h("button", { type: "button", class: "cp-to", "aria-haspopup": "listbox", "aria-expanded": String(CP.menu), title: r.why === "btw" ? "A side question: it answers in its own thread, and this one's agent never sees it." : "Who this goes to. Change it here, or type @ and a name.",
     onclick: () => { CP.menu = !CP.menu; refresh(); } },
     h("span", { class: "meta" }, "To"), n && n !== "new" ? statusDot(agentStatus(n).key, { live: S.running.has(n) }) : null, h("b", null, label),
-    why ? h("span", { class: "meta" }, why) : null, h("span", { "aria-hidden": "true", class: "meta" }, "▾"));
+    why ? h("span", { class: "meta cp-why" }, why) : null, h("span", { "aria-hidden": "true", class: "meta" }, "▾"));
 }
 function toMenu(th, r) {
   const d = draft(th), names = threadPeople(th).filter(isAgent), pick = n => { d.to = n; keep(d); CP.menu = false; refresh(); field(th)?.focus(); };
@@ -320,7 +336,7 @@ export function composer({ thread, update, place = "thread", autofocus, top }) {
             if (e.key === "Tab" && histTab(th, n)) { e.preventDefault(); return; }
           }
           if (e.key === "Escape") { if (cancelReply()) { e.stopPropagation(); e.preventDefault(); } return; }
-          if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(th); }
+          if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); if (e.ctrlKey || e.metaKey || !listEnter(th, n)) send(th); }
         },
         onpaste: e => { const fs = e.clipboardData && [...e.clipboardData.files]; if (fs && fs.length) { e.preventDefault(); addFiles(th, fs); } } }),
       h("div", { class: "cp-bar", "data-key": "bar" },

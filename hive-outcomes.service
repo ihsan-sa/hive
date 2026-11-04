@@ -1,0 +1,10 @@
+[Unit]
+Description=Hive outcomes (hive outcomes grade): grades each run ended in the last hour on whether it did what its waking post asked; every person-woken run plus a sample by Sonnet, the silent ones by rule
+
+[Service]
+# claude installs in ~/.local/bin, which the manager's default PATH lacks.
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=TMPDIR=%h/.cache/hive-tmp
+Type=oneshot
+Nice=15
+ExecStart=/usr/bin/python3 -I %h/core/outcomes.py grade

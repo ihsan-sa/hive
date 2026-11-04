@@ -54,7 +54,7 @@ fi
 # Once installed, the files here are the Hive's own work, and an update has to get past this.
 if [ ! -e "$HOME/.hive-installed" ]; then
   other=$(find "$HOME" -mindepth 1 -maxdepth 1 ! -name '.*' ! -name core ! -name kb ! -name projects \
-          ! -name run ! -name sessions ! -name board.jsonl ! -name log.jsonl ! -name modules ! -name files ! -name settings.json ! -name 'hive-old-*' | head -3)
+          ! -name run ! -name sessions ! -name board.jsonl ! -name log.jsonl ! -name reports ! -name asks.jsonl ! -name outcomes.jsonl ! -name progress.jsonl ! -name improvements.jsonl ! -name modules ! -name files ! -name settings.json ! -name 'hive-old-*' | head -3)
   [ ! -e "$HOME/.ssh" ] && [ -z "$other" ] || die "this account has files or ~/.ssh, and its agents would have full rights to them.
 Use a new user (sudo ./install.sh), or install in a folder of this account with the --this-account line on the Hive's site."
 fi
@@ -145,6 +145,18 @@ if [ "$SERVICE" = 1 ]; then
   place "$CORE/hive-update.service" hive-update.service; place "$CORE/hive-update.timer" hive-update.timer
   systemctl --user daemon-reload
   systemctl --user enable --now hive-update.timer
+  # The scoreboard: every 6 h, the hive's numbers against the day before, no model use (hive progress).
+  place "$CORE/hive-progress.service" hive-progress.service; place "$CORE/hive-progress.timer" hive-progress.timer
+  systemctl --user daemon-reload
+  systemctl --user enable --now hive-progress.timer
+  # The asks register: hourly, the person's new posts become asks in ~/asks.jsonl and delivered ones get marked (hive asks; one or two Sonnet calls).
+  place "$CORE/hive-asks.service" hive-asks.service; place "$CORE/hive-asks.timer" hive-asks.timer
+  systemctl --user daemon-reload
+  systemctl --user enable --now hive-asks.timer
+  # Outcomes: hourly, each run that ended gets a grade on whether it did what its waking post asked (hive outcomes; a Sonnet call or three).
+  place "$CORE/hive-outcomes.service" hive-outcomes.service; place "$CORE/hive-outcomes.timer" hive-outcomes.timer
+  systemctl --user daemon-reload
+  systemctl --user enable --now hive-outcomes.timer
   # Reports and the daily check-in: every 6h; a no-op until setup is done, while "share" in settings.json is off, or with no endpoint.
   mkdir -p "$U/hive-report.service.d"; cp "$U/hive-dash.service.d/local.conf" "$U/hive-report.service.d/local.conf"
   place "$HOME/modules/report/hive-report.service" hive-report.service; place "$HOME/modules/report/hive-report.timer" hive-report.timer

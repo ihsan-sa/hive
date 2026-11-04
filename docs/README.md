@@ -10,3 +10,4 @@
   6. [Add tools with extras](tutorials/06-extras.md)
   7. [Reach your Hive from elsewhere](tutorials/07-remote.md)
   8. [Use it from a terminal](tutorials/08-terminal.md)
+  9. [How it works, and how to ask it about itself](tutorials/09-how-it-works.md)

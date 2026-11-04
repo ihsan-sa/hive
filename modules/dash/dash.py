@@ -318,6 +318,65 @@ def set_paused(name, on):
     return True
 
 
+# ---------- progress: the scoreboard, the asks register, runs' outcomes and the improvements ledger (GET /api/progress) ----------
+def last_per_id(path, limit=None):
+    """An append-only ledger where the last record per id wins, as a dict in first-seen order."""
+    out = {}
+    try:
+        for line in path.read_text(errors="replace").splitlines():
+            try: r = json.loads(line)
+            except ValueError: continue
+            if isinstance(r, dict) and r.get("id"): out[r["id"]] = {**out.get(r["id"], {}), **r}
+    except OSError: pass
+    return out
+
+def core_json(script, *args, timeout=90):
+    """One core script's --json output, at low priority so the dash never slows an agent. None when it can't answer."""
+    f = HOME / "core" / script
+    if not f.exists(): return None
+    try:
+        r = subprocess.run(["nice", "-n", "15", sys.executable, "-I", str(f), *args], capture_output=True, text=True, timeout=timeout, cwd=str(HOME), env={**os.environ, "HOME": str(HOME)})
+        return json.loads(r.stdout) if r.returncode == 0 and r.stdout.strip() else None
+    except (OSError, ValueError, subprocess.TimeoutExpired): return None
+
+def progress_state():
+    """What /api/progress serves. The scoreboard comes from core/progress.py (a few seconds: cached stale, so a page never waits
+    past the first read), with the last snapshots in ~/progress.jsonl as its trend; the rest is read straight from the ledgers."""
+    now = time.time(); day = datetime.now(timezone.utc).date().isoformat()
+    board = core_json("progress.py", "progress", "--json")
+    snaps = []
+    try: snaps = [json.loads(l) for l in (HOME / "progress.jsonl").read_text(errors="replace").splitlines()[-48:] if l.strip()]
+    except (OSError, ValueError): snaps = []
+    if not board and snaps: board = {"now": snaps[-1], "before": snaps[-2] if len(snaps) > 1 else {}, "worse": [], "stale": True}
+    asks = []
+    for r in last_per_id(HOME / "asks.jsonl").values():
+        if r.get("kind") == "direction" or r.get("status") == "dropped": continue
+        if r.get("status") == "done" and (r.get("done_at") or r.get("updated") or "") < (datetime.fromtimestamp(now - 2 * 86400, timezone.utc).isoformat()): continue
+        asks.append({k: r.get(k) for k in ("id", "when", "thread", "post", "ask", "status", "owner", "evidence", "why", "done_at", "updated")})
+    orphaned = core_json("asks.py", "check", "--json", timeout=20) or []
+    orphan_ids = {x.get("id") for x in orphaned if isinstance(x, dict)}
+    for a in asks: a["orphaned"] = a["id"] in orphan_ids
+    imps = []
+    for r in last_per_id(HOME / "improvements.jsonl").values():
+        imps.append({**{k: r.get(k) for k in ("id", "at", "by", "what", "measure", "baseline", "revisit", "status", "why", "judged_by", "commit", "thread")},
+                     "due": r.get("status") == "landed" and (r.get("revisit") or "9999") <= day})
+    outs, counts = [], {}
+    try:
+        for line in (HOME / "outcomes.jsonl").read_text(errors="replace").splitlines()[-600:]:
+            try: r = json.loads(line)
+            except ValueError: continue
+            ended = r.get("ended") or r.get("at") or ""
+            try: age = now - datetime.fromisoformat(ended).timestamp()
+            except ValueError: continue
+            if age > 86400: continue
+            counts[r.get("grade", "?")] = counts.get(r.get("grade", "?"), 0) + 1
+            outs.append({k: r.get(k) for k in ("key", "name", "thread", "post", "from", "grade", "why", "ended", "by")})
+    except OSError: pass
+    outs.sort(key=lambda r: r.get("ended") or "", reverse=True)
+    return {"at": now, "scoreboard": board, "snapshots": snaps, "asks": asks, "improvements": imps, "outcomes": {"counts": counts, "recent": outs[:80]}}
+
+
+
 # ---------- readable thread names (GET /api/thread-names) ----------
 # The Slack mirror's indexer names each number thread (modules/slack-mirror/threads.py). The board keeps its ids; the page shows these
 # in their place. No mirror, or a database it can't read, means no names, and the page shows ids as it always did.
@@ -343,7 +402,7 @@ def thread_names():
 
 # ---------- the person's own view of threads (GET/POST /api/thread-meta) ----------
 # Pins, archive and new titles the person gives threads on Chat. Kept beside the board, never in it: the board and every link keep
-# the thread's id. {thread: {"title": str, "pin": ms, "archived": ms}}; a key that's off is left out, a thread with none is dropped.
+# the thread's id. {thread: {"title": str, "pin": ms, "archived": ms, "back": ms}}; a key that's off is left out, a thread with none is dropped.
 THREAD_META = STATE / "thread-meta.json"
 META_LOCK = threading.Lock()
 
@@ -367,6 +426,8 @@ def set_thread_meta(d):
                 if not isinstance(d[k], bool): raise ValueError(k + " is true or false")
                 if d[k]: m[k] = now_ms
                 else: m.pop(k, None)
+        if d.get("archived") is False: m["back"] = now_ms       # taken out of the archive by hand: the automatic one waits a full quiet spell again
+        if d.get("archived") is True: m.pop("back", None)
         if d.get("pin") is True: m.pop("archived", None)        # pinning brings it back
         if d.get("archived") is True: m.pop("pin", None)
         if m: all_[th] = m
@@ -1155,6 +1216,8 @@ class CachedStale(Cached):
                 if self.t: self.v, self.t = v, time.time()  # .t = 0 meanwhile: what was just read may predate the change
         finally: self.busy = False
 
+PROGRESS = CachedStale(progress_state, 300)  # the Progress page's data (progress_state above)
+
 
 # Defaults of ~/.local/bin/heavy's start gates; test_jobs.py checks they still match the script.
 HEAVY_MIN_MEM_MB, HEAVY_JOB_MB, HEAVY_MAX_STALL, HEAVY_LOAD_PER_CPU = 5000, 3000, 20, 3
@@ -1410,12 +1473,12 @@ GET_CAP = {"/api/live": "read", "/api/board": "read", "/api/log": "read", "/api/
            "/api/projects": "read", "/api/agent-costs": "read", "/api/thread-names": "read", "/api/thread-meta": "read", "/json": "read", "/api/target": "read", "/api/inbox": "read", "/api/delivered": "read",
            "/api/config": "config", "/api/modules": "modules", "/api/signin": "logins", "/api/plans": "plans", "/api/secrets": "secrets",
            "/api/settings": "config", "/api/update": "config", "/api/signin-codex": "logins", "/api/design": "logins", "/api/brand/logo": "read",
-           "/api/kb/home": "files", "/api/kb/open": "files", "/api/kb/search": "files", "/api/kb/raw": "files", "/api/kb/map": "files"}
+           "/api/kb/home": "files", "/api/kb/open": "files", "/api/kb/search": "files", "/api/kb/raw": "files", "/api/kb/map": "files", "/api/kb/history": "files", "/api/progress": "read"}
 POST_CAP = {"/api/kill": "stop", "/api/tier": "tier", "/api/login-pause": "limits", "/api/login-limit": "limits", "/api/provider-limit": "limits",
-            "/api/post": "post", "/api/thread-meta": "post", "/api/feedback": "post", "/api/issue-link": "post", "/api/update": "config", "/api/share-copy": "config", "/api/upload": "post", "/api/inbox-read": "post", "/api/config": "config", "/api/starter": "config",
+            "/api/post": "post", "/api/thread-meta": "post", "/api/feedback": "post", "/api/issue-link": "post", "/api/update": "config", "/api/share-copy": "config", "/api/draft": "config", "/api/upload": "post", "/api/inbox-read": "post", "/api/config": "config", "/api/starter": "config",
             "/api/module": "modules", "/api/signin": "logins", "/api/signin/code": "logins", "/api/signin/cancel": "logins", "/api/plan": "plans", "/api/secret": "secrets",
             "/api/signin-codex": "logins", "/api/account-key": "logins", "/api/design": "logins", "/api/brand": "config", "/api/brand/logo": "config"}
-LOCAL_ONLY = {"/api/access", "/api/settings", "/api/share-copy"}  # who may do what is never changed from outside, whatever outside.can says
+LOCAL_ONLY = {"/api/access", "/api/settings", "/api/share-copy", "/api/draft"}  # who may do what is never changed from outside, whatever outside.can says
 
 
 def web_cfg():
@@ -1510,11 +1573,12 @@ class AccessKeys:
     """Cloudflare Access's public keys, from https://<team>/cdn-cgi/access/certs, kept per URL, since each outside host can have
     its own team. Each is read hourly, or when a token names an unknown key, at most once a minute. If they can't be read,
     tokens signed with an unknown key are refused. One team's keys never answer for another's URL."""
-    def __init__(self): self.sets, self.lock = {}, threading.Lock()  # url -> (keys, read at)
+    def __init__(self): self.sets, self.locks, self.lock = {}, {}, threading.Lock()  # url -> (keys, read at); url -> its own lock
 
     def get(self, url, kid):
         import urllib.request
-        with self.lock:
+        with self.lock: ulock = self.locks.setdefault(url, threading.Lock())  # held only to find the URL's lock, never during a fetch
+        with ulock:  # one team's slow fetch holds up only requests for that team
             keys, t = self.sets.get(url, ({}, 0))
             age = time.time() - t
             if url not in self.sets or age > 3600 or (kid not in keys and age > 60):
@@ -2241,6 +2305,155 @@ def kb_map():
     return v
 
 
+kb_hist_memo, kb_blob_memo, kb_hist_lock = {"t": 0, "head": "", "v": None}, {}, threading.Lock()
+KB_STATED = re.compile(r"^Filed (\d{4}-\d\d-\d\d) by ([\w-]+)\.|^## (.+?) \((\d{4}-\d\d-\d\d), ([\w-]+)\)\s*$", re.M)
+KB_SUPER = re.compile(r"supersed|replaced by|replaces\b", re.I)
+KB_GAP = 1800  # a stretch this long with no backup commit at all is shown as unrecorded
+
+
+def kb_git(*args, data=None):
+    try: r = subprocess.run(["git", "-C", str(HOME), *args], input=data, capture_output=True, timeout=30)
+    except (OSError, subprocess.SubprocessError): return b""
+    return r.stdout if r.returncode == 0 else b""
+
+
+def kb_blobs(shas):
+    """{sha: (title, lines, [(group, text, superseding line)], [stated])} for note versions, read once each and kept."""
+    want = [s for s in dict.fromkeys(shas) if s not in kb_blob_memo]
+    if want:
+        out, i = kb_git("cat-file", "--batch", data=("\n".join(want) + "\n").encode()), 0
+        while i < len(out):
+            nl = out.find(b"\n", i)
+            if nl < 0: break
+            head = out[i:nl].split(); i = nl + 1
+            if len(head) < 3: continue
+            n = int(head[2]); text = out[i:i + min(n, KB_TEXT_MAX)].decode(errors="replace"); i += n + 1
+            raw = []
+            for line in text.splitlines():
+                sup = bool(KB_SUPER.search(line))
+                for m in KB_LINK.finditer(line): raw.append((m.lastindex, m[m.lastindex], sup))
+            stated = []
+            for m in KB_STATED.finditer(text):
+                stated.append({"day": m[1], "who": m[2], "what": "filed"} if m[1] else {"day": m[4], "who": m[5], "what": redact(m[3])[:120]})
+            kb_blob_memo[head[0].decode()] = (kb_title(None, text), text.count("\n") + 1, raw, stated)
+    return kb_blob_memo
+
+
+def kb_resolve(rel, g, v, notes, by_name, by_stem):
+    """A link's target note and whether the note wrote its path (documented) or only a name we matched (inferred)."""
+    if g == 1:
+        if v.startswith("~/"): return v[2:], "doc"
+        parts = []
+        for part in (rel.rsplit("/", 1)[0] + "/" + v).split("/"):
+            if part == "..": parts and parts.pop()
+            elif part not in ("", "."): parts.append(part)
+        return "/".join(parts), "doc"
+    if g == 2: return "kb/" + v, "doc"
+    if g == 3: return by_stem.get(v.lower()), "inf"
+    if "/" in v and not v.startswith(("kb/", "~/kb/", "history/")): return None, "inf"
+    if v.startswith(("kb/", "~/kb/")): return "kb/" + v.split("kb/", 1)[1], "doc"
+    return by_name.get(v.rsplit("/", 1)[-1]), "inf"
+
+
+def kb_note_ok(rel): return rel.startswith("kb/") and rel.endswith(".md") and "/boards-site-pdfs/" not in rel and not rel.startswith("kb/_dropped/")
+
+
+def kb_history():
+    """How ~/kb changed, from what was recorded: backup commits (recorded time, minutes apart), `kb file` records
+    (exact), dates the notes state themselves (event time, a day), links written in them, and stretches with no record."""
+    with kb_hist_lock:
+        if time.time() - kb_hist_memo["t"] < 60 and kb_hist_memo["v"]: return kb_hist_memo["v"]
+        head = kb_git("rev-parse", "HEAD").strip().decode()
+        if head and head == kb_hist_memo["head"] and kb_hist_memo["v"]:
+            kb_hist_memo["t"] = time.time(); return kb_hist_memo["v"]
+        commits, cur = [], None
+        for line in kb_git("log", "--reverse", "--format=C %h %ct", "--raw", "-M", "--no-abbrev", "--", "kb").decode(errors="replace").splitlines():
+            if line.startswith("C "):
+                _, h, t = line.split(); cur = {"c": h[:10], "t": int(t), "ch": []}; commits.append(cur)
+            elif line.startswith(":") and cur:
+                meta, _, paths = line.partition("\t"); m = meta.split(); paths = paths.split("\t")
+                if m[1] == "120000": continue
+                cur["ch"].append((m[4][0], m[3], paths))
+        if not commits:
+            v = {"start": None, "now": int(time.time()), "notes": [], "links": [], "gaps": [], "commits": 0}
+            kb_hist_memo.update(t=time.time(), head=head, v=v); return v
+        start, ever = commits[0]["t"], set()
+        for c in commits:
+            for k, sha, paths in c["ch"]:
+                for p in paths:
+                    if kb_note_ok(p): ever.add(p)
+        by_name, by_stem, prefixes = {}, {}, {}
+        for rel in sorted(ever):
+            name = rel.rsplit("/", 1)[-1]; by_name.setdefault(name, rel); by_stem.setdefault(name[:-3].lower(), rel)
+            if rel.count("/") == 1: k = re.split(r"[-_.]", name)[0].lower(); prefixes[k] = prefixes.get(k, 0) + 1
+        blobs = kb_blobs(sha for c in commits for k, sha, paths in c["ch"] if k != "D" and set(sha) != {"0"})
+        notes, live, links, open_ = {}, {}, [], {}
+
+        def note(p):
+            return notes.setdefault(p, {"path": p, "topic": kb_topic(p, prefixes), "title": "", "spans": [], "v": [], "moves": [], "filed": [], "stated": [], "pre": False})
+
+        def close(p, t):
+            if p in live: note(p)["spans"][-1][1] = t; del live[p]
+            for key in [k for k in open_ if k[0] == p]: links[open_.pop(key)]["spans"][-1][1] = t
+
+        def version(p, sha, c):
+            n = note(p); b = blobs.get(sha)
+            if p not in live: n["spans"].append([c["t"], None]); live[p] = 1
+            if not b: n["v"].append([c["t"], None, c["c"]]); return
+            n["title"] = b[0] or n["title"]; n["v"].append([c["t"], b[1], c["c"]])
+            for s in b[3]:
+                if s not in n["stated"]: n["stated"].append(s)
+            now = {}
+            for g, val, sup in b[2]:
+                to, kind = kb_resolve(p, g, val, ever, by_name, by_stem)
+                if to in ever and to != p:
+                    key = (p, to, kind); now[key] = now.get(key, False) or sup
+            for key in [k for k in open_ if k[0] == p and k not in now]: links[open_.pop(key)]["spans"][-1][1] = c["t"]
+            for key, sup in now.items():
+                if key not in open_:
+                    old = next((i for i, x in enumerate(links) if (x["a"], x["b"], x["kind"]) == key), None)
+                    if old is None: links.append({"a": key[0], "b": key[1], "kind": key[2], "sup": False, "spans": [], "first": c["c"]}); old = len(links) - 1
+                    links[old]["spans"].append([c["t"], None]); open_[key] = old
+                links[open_[key]]["sup"] = links[open_[key]]["sup"] or sup
+
+        for i, c in enumerate(commits):
+            for k, sha, paths in c["ch"]:
+                if k == "R":
+                    a, b = paths[0], paths[-1]
+                    if kb_note_ok(a):
+                        close(a, c["t"]); note(a)["moves"].append({"t": c["t"], "to": b, "c": c["c"], "dropped": b.startswith("kb/_dropped/")})
+                    if kb_note_ok(b):
+                        version(b, sha, c); note(b)["moves"].append({"t": c["t"], "from": a, "c": c["c"]})
+                    continue
+                p = paths[-1]
+                if not kb_note_ok(p): continue
+                if k == "D": close(p, c["t"]); continue
+                version(p, sha, c)
+                if i == 0: note(p)["pre"] = True
+        try:
+            for line in (Path(os.environ.get("KB_HOME", HOME)) / ".cache/hive-kb/queries.jsonl").open(errors="replace"):
+                try: r = json.loads(line)
+                except ValueError: continue
+                p = r.get("filed")
+                if not isinstance(p, str) or p not in notes: continue
+                try: t = int(datetime.fromisoformat(str(r.get("at"))).timestamp())
+                except ValueError: continue
+                notes[p]["filed"].append({"t": t, "who": redact(str(r.get("who", "")))[:40], "added": bool(r.get("to"))})
+        except OSError: pass
+        times = [int(x) for x in kb_git("log", "--format=%ct", f"--since={start}").split()]
+        times.sort(); now = int(time.time())
+        gaps = []
+        for a, b in zip(times, times[1:] + [now]):
+            if b - a <= KB_GAP: continue
+            if gaps and gaps[-1][1] == a: gaps[-1][1] = b
+            else: gaps.append([a, b])
+        for n in notes.values(): n["title"] = redact(n["title"]) or n["path"].rsplit("/", 1)[-1]
+        v = {"start": start, "now": now, "commits": len(commits), "gap": KB_GAP, "gaps": gaps,
+             "notes": sorted(notes.values(), key=lambda n: n["path"]), "links": links}
+        kb_hist_memo.update(t=time.time(), head=head, v=v)
+        return v
+
+
 def delivered_view(days=3):
     """{agent: post ids the inbox hook handed it mid-run}, for read marks on messages. Only files touched lately, and only their ends."""
     out, cut, d = {}, time.time() - days * 86400, STATE / "delivered"
@@ -2640,6 +2853,7 @@ class DesignRoom:
             m = cls.SIGNIN_LINK.search(line)
             if not m: continue
             url = m.group(0)
+            if re.match(r"https://[^/]+/(?:code/)?artifact/", url): url = None; continue  # a design link on the screen is not a sign-in page
             for more in lines[i + 1:]:
                 if len(line.rstrip()) < 90 or not re.fullmatch(r"\s*[\w\-.~:/?#\[\]@!$&()*+,;=%]+\s*", more): break
                 url += more.strip(); line = more
@@ -2876,7 +3090,7 @@ def _agent_models():
     return tuple(m) if isinstance(m, list) and m and all(isinstance(x, str) for x in m) else ("haiku", "sonnet", "opus", "fable")
 AGENT_MODELS = _agent_models()  # the Claude models a post may ask for too (config.json "models", the starter's MODELS)
 PICK_MODELS = {**{m: m for m in AGENT_MODELS}, "astra": "codex:gpt-6-astra"}  # the message box's model menu
-SHARE_KEYS = ("failures", "usage", "everything")
+SHARE_KEYS = ("failures", "usage", "everything", "github")
 _settings_lock = threading.Lock()
 
 
@@ -2930,7 +3144,7 @@ def set_settings(d):
         new["setup_done"] = d["setup_done"]
     share = d.get("share")
     if "share" in d and (not isinstance(share, dict) or not share or any(k not in SHARE_KEYS or type(v) is not bool for k, v in share.items())):
-        raise ValueError("share is failures, usage and everything, each on or off")
+        raise ValueError("share is failures, usage, everything and github, each on or off")
     if not new and not share: raise ValueError("nothing to change")
     with _settings_lock:
         cur = settings_raw()
@@ -2939,8 +3153,8 @@ def set_settings(d):
         if share: new["share"] = {**was, **share}
         cur.update(new)
         write_text_private(SETTINGS, json.dumps(cur, indent=1) + "\n")
-    SETUP.t = SHARE_TEXT.t = 0
-    if share and any(share.get(k) and not was.get(k) for k in ("failures", "usage")): report_now()
+    SETUP.t = SHARE_TEXT.t = GITHUB.t = 0
+    if share and any(share.get(k) and not was.get(k) for k in ("failures", "usage", "github")): report_now()
     if d.get("setup_done") is True and settings_norm(cur)["share"].get("failures"): report_now()  # the first check-in: nothing goes before setup is passed
     if "setup_done" in d: sync_accounts()  # a Codex login made in a terminal counts too: nothing else would tell the starter
     return settings_page()
@@ -2971,6 +3185,39 @@ def share_text():
 
 
 SHARE_TEXT = Cached(share_text, 30)
+
+
+def report_cmd(*args, timeout=30):
+    """report.py's answer to a Settings question or press, as (returncode, stdout). None: the module isn't installed."""
+    f = HOME / "modules" / "report" / "report.py"
+    if not f.is_file(): return None
+    try: r = subprocess.run([sys.executable, "-I", str(f), *args], env=child_env(), capture_output=True, text=True, timeout=timeout)
+    except (OSError, subprocess.SubprocessError): return None
+    return r.returncode, r.stdout.strip()
+
+
+def github_view():
+    """Settings' GitHub part: whether gh is there and signed in, and every fix an agent drafted, exactly as it would go. None: the report module can't say."""
+    r = report_cmd("github")
+    try: v = json.loads(r[1]) if r and r[0] == 0 else None
+    except ValueError: v = None
+    return v if isinstance(v, dict) else None
+
+
+GITHUB = Cached(github_view, 30)
+
+
+def draft_do(d):
+    """Settings' Send or Discard on one drafted fix. Only this press approves a draft; the reporter's timer sends it later, outside the sandbox."""
+    did, do = d.get("id"), d.get("do")
+    if not isinstance(did, str) or not re.fullmatch(r"[0-9]{6}-[0-9]{6}-[0-9a-f]{6}", did): raise ValueError("no such draft")
+    if do not in ("send", "discard"): raise ValueError("do is send or discard")
+    if do == "send" and not (settings_brief() or {}).get("share", {}).get("github"): raise ValueError("turn on GitHub issues first")
+    r = report_cmd("approve" if do == "send" else "discard", did)
+    if not r or r[0] or not r[1].startswith("approved" if do == "send" else "discarded"): raise ValueError((r and short(r[1], 300)) or "couldn't do that")
+    GITHUB.t = 0
+    if do == "send": report_now()
+    return {"said": r[1], **settings_page()}
 
 
 def has_root():
@@ -3145,7 +3392,7 @@ def settings_page():
     """GET /api/settings: the settings, and the facts the page must state truthfully. Null on a Hive with no file."""
     v = settings_brief()
     if v is None: return {"settings": None}
-    return {"settings": v, "sandbox_check": SANDBOX.get(), "share_text": SHARE_TEXT.get(), "accounts": accounts_view()}
+    return {"settings": v, "sandbox_check": SANDBOX.get(), "share_text": SHARE_TEXT.get(), "accounts": accounts_view(), "github": GITHUB.get()}
 
 
 
@@ -3204,6 +3451,7 @@ def serve(port):
     from urllib.parse import parse_qs, urlparse
     usage = Usage()
     threading.Thread(target=usage.run, daemon=True).start()
+    threading.Thread(target=PROGRESS.get, daemon=True).start()  # warm the Progress page's cache; the first read runs progress.py (tens of seconds on a busy machine)
     threading.Thread(target=sync_accounts, daemon=True).start()  # an account already signed in before the app first ran; does nothing without settings.json
     live_c, proj_c, usage_c, jobs_c = Cached(live, 1), Cached(projects, 60), Cached(usage.view, 2), Cached(Jobs().view, 2)
     deliv_c = Cached(delivered_view, 2.5)
@@ -3304,6 +3552,7 @@ def serve(port):
                 allowed = person_can(claims, out)
                 if not allowed: self.deny(403, "this sign-in isn't on this app's list"); return False
                 self.signer = signer_of(claims, out)
+                if out is not (web.get("outside") or {}): self.signer = f"{self.signer} at {site_key(hd.get('host'))}"[:80]  # a site's own profile: the post says which name it came in on
                 # web.json "simple": sign-ins that open in simple mode until their browser says otherwise. Presentation only, so a bad value just means no.
                 names = web.get("simple")
                 self.simple = isinstance(names, list) and str(claims.get("email") or "").strip().lower() in {str(n).lower() for n in names}
@@ -3373,12 +3622,16 @@ def serve(port):
                 self.send(json.dumps(self.app_info(), default=str).encode(), J)
             elif u.path == "/api/brand/logo":
                 self.send_logo()
-            elif u.path in ("/api/target", "/api/inbox", "/api/config", "/api/modules", "/api/signin", "/api/plans", "/api/secrets", "/api/settings", "/api/update", "/api/signin-codex", "/api/design", "/api/kb/home", "/api/kb/open", "/api/kb/search", "/api/kb/raw", "/api/kb/map") and self.route == "open":
+            elif u.path in ("/api/target", "/api/inbox", "/api/config", "/api/modules", "/api/signin", "/api/plans", "/api/secrets", "/api/settings", "/api/update", "/api/signin-codex", "/api/design", "/api/kb/home", "/api/kb/open", "/api/kb/search", "/api/kb/raw", "/api/kb/map", "/api/kb/history") and self.route == "open":
                 self.send_error(404)
             elif u.path == "/api/kb/home":
                 self.send(json.dumps(kb_home()).encode(), J)
             elif u.path == "/api/kb/map":
                 self.send(json.dumps(kb_map()).encode(), J)
+            elif u.path == "/api/kb/history":
+                self.send(json.dumps(kb_history()).encode(), J)
+            elif u.path == "/api/progress":
+                self.send(json.dumps(PROGRESS.get(), default=str).encode(), J)
             elif u.path == "/api/kb/search":
                 self.send(json.dumps(kb_search(q.get("q", [""])[0])).encode(), J)
             elif u.path == "/api/kb/open":
@@ -3479,7 +3732,7 @@ def serve(port):
             if not isinstance(d, dict): return self.send_error(400)
             num = lambda v: v is None or (isinstance(v, (int, float)) and not isinstance(v, bool))
             J = "application/json"
-            if u.path in ("/api/post", "/api/thread-meta", "/api/feedback", "/api/issue-link", "/api/update", "/api/inbox-read", "/api/config", "/api/starter", "/api/module", "/api/signin", "/api/signin/code", "/api/signin/cancel", "/api/access", "/api/plan", "/api/secret", "/api/settings", "/api/signin-codex", "/api/account-key", "/api/design", "/api/brand"):
+            if u.path in ("/api/post", "/api/thread-meta", "/api/feedback", "/api/issue-link", "/api/update", "/api/inbox-read", "/api/config", "/api/starter", "/api/module", "/api/signin", "/api/signin/code", "/api/signin/cancel", "/api/access", "/api/plan", "/api/secret", "/api/settings", "/api/share-copy", "/api/draft", "/api/signin-codex", "/api/account-key", "/api/design", "/api/brand"):
                 try:
                     if u.path == "/api/post": res = person_post(d.get("text"), d.get("thread"), d.get("reply_to"), d.get("files"), signer=self.signer, limited="config" not in self.can, simple=d.get("simple") is True, model=d.get("model"))
                     elif u.path == "/api/thread-meta": res = set_thread_meta(d)
@@ -3498,6 +3751,7 @@ def serve(port):
                     elif u.path == "/api/signin/cancel": SIGNIN.cancel(); res = {"ok": True}
                     elif u.path == "/api/settings": res = set_settings(d)
                     elif u.path == "/api/share-copy": res = share_copy()
+                    elif u.path == "/api/draft": res = draft_do(d)
                     elif u.path == "/api/design": res = DESIGN.act(d)
                     elif u.path == "/api/signin-codex": res = CODEX.cancel() if d.get("cancel") else CODEX.start()
                     elif u.path == "/api/account-key" and not self.secrets_on: return self.deny(403, "secrets are off on this name")

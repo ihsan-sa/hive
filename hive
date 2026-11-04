@@ -73,6 +73,8 @@ def _claude_models():
 CLAUDE_MODELS = _claude_models()
 FRESH = ("new", "claude", "codex", "free", *CLAUDE_MODELS, "astra")  # words that start a fresh agent (SPAWN in starter.py)
 HASH_NAME = re.compile(r"[a-z][0-9a-f]{4,}")  # what new/claude/codex/free/warden hand out (a9aba, c12cd, f12cd, w0e1f)
+FOR_YOU = re.compile(r"^[\s>*_#-]*for you[\s*_]*:", re.I | re.M)  # the line that puts a post on the person's card
+PING_MAX = 700  # chars in a post that pings the person
 
 def agents(c):
     """Same rule as known_agents in starter.py: new, claude, codex, free, the warden, anyone who has run, except past accidents."""
@@ -145,6 +147,16 @@ def cmd_post(a):
     if c.get("spawn_model") and not settings_model() and HASH_NAME.fullmatch(os.environ.get("HIVE_NAME", "")) and not a.as_ and not a.model and (w := [n for n in to if n in ("new", "claude")]):
         sys.exit(f"hive post: nothing posted. {' and '.join(w)} starts a new agent, so choose its model: add --model sonnet (or opus, haiku, fable, codex:gpt-6-astra), "
                  "or use the words opus, sonnet, haiku, fable or astra instead. If you only meant to write about it, put it in backticks.")
+    # A post naming the person pings their phone: orientation asks for it short, plain, with one `For you:` line. Checked before
+    # anything is written, so a slip costs a re-post, not a second ping. Agents' own names only, like the model check above.
+    if "person" in to and HASH_NAME.fullmatch(os.environ.get("HIVE_NAME", "")) and not a.as_:
+        if not FOR_YOU.search(CODE.sub(" ", text)):
+            sys.exit("hive post: nothing posted. This post names the person, which pings them, so it needs one line starting `For you:` that says "
+                     "in a plain sentence what they should decide, do or answer (for example: For you: OK to buy the $12 domain? Reply yes or no here). "
+                     "Keep the rest short and non-technical. If you didn't mean to ping them, drop the mention or put it in backticks.")
+        if len(text) > PING_MAX:
+            sys.exit(f"hive post: nothing posted. A post that pings the person should be short ({len(text)} chars; keep it under {PING_MAX}): "
+                     "put the details in the thread in a post without the mention, then send a few plain lines with the `For you:` line.")
     if a.reply_to and not any(p.get("id") == a.reply_to for p in posts()): sys.exit(f"hive post: --reply-to {a.reply_to}: no such post")
     pid = dt.datetime.now().strftime("%m%d%H%M") + secrets.token_hex(2)
     files = attach([attachable(f) for f in a.file or []], pid)
@@ -670,6 +682,18 @@ def cmd_step(a):
                        input=f"{a.do} step {s['id']}-{s['sha'][:8]}", text=True)
     sys.exit(r.returncode)
 
+def cmd_progress(a):
+    """hive improve ... and hive progress ...: core/progress.py (the improvements ledger and the scoreboard)."""
+    os.execv(sys.executable, [sys.executable, "-I", str(CORE / "progress.py")] + a.rest)
+
+def cmd_goals(a):
+    """hive goals: core/goals.py (every goal with who is moving it: focuses, project goals.md, asks)."""
+    os.execv(sys.executable, [sys.executable, "-I", str(CORE / "goals.py")] + a.rest)
+
+def cmd_asks(a):
+    """hive asks ...: core/asks.py (the register of the person's asks, so none is dropped)."""
+    os.execv(sys.executable, [sys.executable, "-I", str(CORE / "asks.py")] + a.rest)
+
 ap = argparse.ArgumentParser(prog="hive", description="With no command: open the door, a Claude Code session that talks to the hive for you. Commands: the board itself.")
 sp = ap.add_subparsers(required=True)
 p = sp.add_parser("post", help="hive post [--to @a,@b] [--thread T] [--model sonnet] [--file PATH ...] text   (@mentions of known agents in text wake them, --to starts a name that has run or a new code like a1b2c; --model picks the model of any run this post starts, and the agent stays on it when woken later)")
@@ -706,4 +730,18 @@ p.add_argument("do", choices=["check"]); p.add_argument("--json", action="store_
 p = sp.add_parser("step", help="hive step ask --why \"...\" --script PATH | status | list | approve ID | deny ID: run something once outside the sandbox")
 p.add_argument("do", choices=["ask", "status", "list", "approve", "deny", "verdict"]); p.add_argument("id_or_script", nargs="?"); p.add_argument("verdict", nargs="?")
 p.add_argument("--why", default=""); p.add_argument("--script"); p.set_defaults(f=cmd_step)
+sp.add_parser("improve", help="hive improve log --what ... --measure ... --revisit 7d | judge ID held|reverted|inconclusive --why ... | list [--due] | show ID: the ledger of changes meant to make the hive better, each judged later by someone else (core/progress.py)")
+sp.add_parser("progress", help="hive progress [--since 1d] [--snapshot] [--post] [--json]: the hive's numbers for the window against the window before, with what got worse (core/progress.py)")
+def cmd_outcomes(a):
+    """hive outcomes ...: core/outcomes.py (did each run do what its post asked: the per-run outcome grade)."""
+    os.execv(sys.executable, [sys.executable, "-I", str(CORE / "outcomes.py")] + a.rest)
+
+sp.add_parser("outcomes", help="hive outcomes list [--since 24h] [--grade G] | stats | grade: per-run grades (delivered, partial, nothing, silent...) of whether a run did what its waking post asked (core/outcomes.py)")
+if sys.argv[1:2] == ["outcomes"]: cmd_outcomes(argparse.Namespace(rest=sys.argv[2:]))
+sp.add_parser("goals", help="hive goals [--idle] [--json]: every goal (the person's focuses in kb/priorities.md, each project's goals.md, the asks) with its thread, last agent post, who is running and open asks; idle goals named (core/goals.py)")
+sp.add_parser("asks", help="hive asks list | check | own ID | done ID --evidence POST | hold|person|drop ID --why | add --post ID --ask ... | directions | extract: the register of what the person asked for, so nothing is dropped (core/asks.py)")
+if sys.argv[1:2] == ["asks"]: cmd_asks(argparse.Namespace(rest=sys.argv[2:]))
+if sys.argv[1:2] == ["goals"]: cmd_goals(argparse.Namespace(rest=sys.argv[2:]))
+if sys.argv[1:2] == ["improve"]: cmd_progress(argparse.Namespace(rest=sys.argv[2:]))  # their own flags: handed over whole
+if sys.argv[1:2] == ["progress"]: cmd_progress(argparse.Namespace(rest=["progress"] + sys.argv[2:]))
 a = ap.parse_args(); a.f(a)

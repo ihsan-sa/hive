@@ -246,7 +246,7 @@ export default {
     const who = cols(
       section({ title: "Costliest threads", note: R.name }, rank(top(byT).map(([k, v]) => ({ key: k, label: threadTitle(k), value: v, text: money(v), tone: tier(tierOf(k)).tone, href: threadHref(k) })))),
       section({ title: "Costliest agents", note: R.name }, rank(top(byA).map(([k, v]) => ({ key: k, label: k, value: v, text: money(v), tone: status(agentStatus(k).key).tone, href: agentHref(k), onClick: e => openRef(e, "agent", k) })))));
-    const models = section({ title: "By model", note: R.name }, !Object.keys(byM).length ? empty("No model spend in this range.") : rank(top(byM).map(([k, v]) => ({ key: k, label: k, value: v, text: money(v), tone: "info" }))));
+    const models = section({ title: "By model", note: R.name }, !Object.keys(byM).length ? empty("No model spend in this range.") : rank(top(byM).map(([k, v]) => ({ key: k, label: k, value: v, text: money(v), tone: "data" }))));
 
     return metrics({ header, sections: [totalSection(U, t, R), limits, others, spend, charts, hasTiers() ? tiers : null, who, models] });
   },

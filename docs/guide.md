@@ -70,7 +70,7 @@ When setup is finished, the app offers a short guided tour. It says what to clic
 
 ![The first step of the tour, in a small window over the Chat page](https://hive.ihsan.cc/img/guide/tour.png)
 
-The top bar has **Chat, Knowledge, Agents, Usage, Settings** and a **More** menu. On the right it shows how many agents are working and how much of the week is used, and it has the colour theme and full-screen buttons.
+The top bar has **Chat, Knowledge, Agents** (called **Now** on the page) and **Usage**, with **Settings** as the sliders icon at the right and a **More** menu. On a phone the tabs are in a bar at the bottom. On the right it shows how many agents are working and how much of the week is used, and it has the colour theme and full-screen buttons.
 
 If the Hive has stopped starting agents, a band under the bar says why and where to look.
 
@@ -154,7 +154,7 @@ When every account is past its line, new agents wait, and running ones finish th
 - **Sandbox:** whether it works on this machine, and the choice to [run without it](#running-without-the-sandbox).
 - **Secrets:** send a token to the Hive. It's never shown back.
 - **Extras:** add or remove tools, by name or from a Git URL.
-- **Access from outside:** see [tutorial 7](tutorials/07-remote.md). You can only change this on the machine itself.
+- **Access from outside:** see [tutorial 7](tutorials/07-remote.md). You can only change this on the machine itself. A name can have its own Access team and people under "Names with their own sign-in".
 
 ### Pages inside a tab
 
@@ -174,9 +174,9 @@ Some tabs have a row of pages under the top bar.
 - **User guide:** this guide.
 - **Take the tour:** the guided tour again.
 - **Send feedback:** a screenshot and a comment.
-- **Simple view:** just the chat and your files and links.
+- **Simple view:** just the chat and Settings, in plain words, for someone who doesn't want to know how a Hive works. It shows how much of the week is used and keeps its own short tour. **Show everything** under More brings the rest back. Each browser keeps its own choice, and the Hive's owner can make it the default for a sign-in.
 
-The app works on a phone too, once you've set up a way to reach it. See [tutorial 7](tutorials/07-remote.md).
+The tour has its own shorter version in simple view. The app works on a phone too, once you've set up a way to reach it. See [tutorial 7](tutorials/07-remote.md).
 
 ## Asking well
 
@@ -288,7 +288,7 @@ After you type `delete`, this removes the `hive` user or the `Hive` system with 
 
 To look underneath, as the Hive's account: `journalctl --user -u hive-starter -u hive-dash` for the services, `~/sessions/` for each agent's full output, `~/log.jsonl` for starts and ends.
 
-You can also ask the Hive about itself. It's all in `~/core`, small enough to read, and your agents can change it, including this guide's copy in `~/core/docs`. If they change something, updates merge around it.
+You can also ask the Hive about itself ([tutorial 9](tutorials/09-how-it-works.md) shows how). It's all in `~/core`, small enough to read, and your agents can change it, including this guide's copy in `~/core/docs`. If they change something, updates merge around it.
 
 ## For the curious
 

@@ -11,8 +11,12 @@ import { button, input, field } from "./ui/kit.js";
 // ---- Kill: the window is the first step, typing the exact code the second. The server checks the code again. ----
 export function killButton(n) {
   if (!can("stop")) return null;
-  if (S.app.app) return button("Stop…", e => { e.stopPropagation(); askStop(n); }, { kind: "quiet", size: "s", title: `Stop ${n}`, cls: "ac-kill" });
-  return button("Kill", e => { e.stopPropagation(); askKill(n); }, { kind: "quiet", size: "s", tone: "bad", title: `Stop ${n}'s run now`, cls: "ac-kill" });
+  // A round stop icon everywhere (the person, 2026-11-04 thread feedback); the confirm that follows still asks for the name.
+  if (S.app.app) return stopButton(`Stop ${n}`, e => { e.stopPropagation(); askStop(n); }, "ac-kill");
+  return stopButton(`Stop ${n}'s run now`, e => { e.stopPropagation(); askKill(n); }, "ac-kill");
+}
+export function stopButton(label, onClick, cls) {
+  return button(label, onClick, { kind: "icon", size: "s", icon: "stop", cls: ["btn-stop", cls].filter(Boolean).join(" ") });
 }
 export function askKill(n) {
   const L = S.running.get(n), say = { 400: "the code didn't match", 403: "this connection isn't allowed to kill", 409: `${n} isn't running any more` };

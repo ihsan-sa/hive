@@ -85,6 +85,10 @@ export const pageUrl = (p, f) => fileUrl(p, f) + "?view=1";
 export const fsize = n => (n == null ? "" : n >= 1048576 ? (n / 1048576).toFixed(1) + " MB" : n >= 1024 ? Math.round(n / 1024) + " kB" : n + " B");
 const ext = name => (name.split(".").pop() || "file").slice(0, 5).toUpperCase();
 
+// An image that won't load (gone, or not copied here) shows as a tile that says so, not the browser's broken icon. error doesn't bubble.
+if (typeof document !== "undefined") document.addEventListener("error", e => {
+  const t = e.target && e.target.tagName === "IMG" && e.target.closest(".msg-thumb"); if (t) t.dataset.broken = "";
+}, true);
 function attachment(p, f) {
   const u = fileUrl(p, f);
   if (IMG.test(f.name)) return h("button", { type: "button", class: "msg-thumb", title: f.name + ", click to view", onclick: () => viewFile(p, f) },
@@ -156,9 +160,29 @@ function fold(t) {
   const b = blocks(t); let i = 0, j = b.length, a = 0, z = 0;
   while (i < j && a < HEAD) a += b[i++].length;
   while (j > i && z + b[j - 1].length < TAIL) z += b[--j].length;
-  if (j - i < 1 || j >= b.length) return null;   // nothing to fold, or the last block alone is too long to keep: show it whole
+  if (j - i < 1 || j >= b.length) return cut(t);   // nothing to fold by blocks, or the last block alone is too long to keep: cut inside it
   const mid = b.slice(i, j).join("\n\n");
   return { head: b.slice(0, i).join("\n\n"), tail: b.slice(j).join("\n\n"), lines: mid.split("\n").filter(l => l.trim()).length, chars: mid.length };
+}
+
+// One block too long to keep whole (a wall of text, or hundreds of lines with no blank one between): cut it at a line end near
+// HEAD and TAIL, else at a space. A text with a fence isn't cut, since the code block folds itself.
+function cut(t) {
+  if (/^\s*(```|~~~)/m.test(t)) return null;
+  const at = (i, back) => {
+    const nl = back ? t.lastIndexOf("\n", i) : t.indexOf("\n", i);
+    if (nl > 0 && Math.abs(nl - i) < 300) return nl;
+    const sp = back ? t.lastIndexOf(" ", i) : t.indexOf(" ", i);
+    return sp > 0 && Math.abs(sp - i) < 200 ? sp : i;
+  };
+  const nth = (n, back) => { let k = back ? t.length : -1; for (let c = 0; c < n; c++) { k = back ? t.lastIndexOf("\n", k - 1) : t.indexOf("\n", k + 1); if (k < 0) break; } return k; };
+  let a = at(HEAD, true), z = at(t.length - TAIL, false);
+  const a2 = nth(20, false), z2 = nth(12, true);   // short lines: keep about 20 at the top and 12 at the end, not 900 characters of them
+  if (a2 > 0 && a2 < a) a = a2;
+  if (z2 > z) z = z2;
+  if (z - a < LONG / 4) return null;
+  const mid = t.slice(a, z);
+  return { head: t.slice(0, a), tail: t.slice(z).replace(/^\s+/, ""), lines: mid.split("\n").filter(l => l.trim()).length, words: mid.split(/\s+/).filter(Boolean).length, chars: mid.length };
 }
 
 // Fold parsed blocks, so fences, footnotes and inline formatting remain intact.
@@ -241,11 +265,12 @@ function body(p, ws) {
   if (SOURCE.has(p.id)) return sourceView(p, ws);
   const t = displayText(p);
   if (t.length > LONG) { const r = report(t, p.id, ws); if (r) return r; }
+  if (!t.trim()) return (p.files || []).length ? null : h("div", { class: "msg-b" }, h("p", { class: "meta" }, "No text"));
   const f = t.length > LONG && !OPEN.has(p.id) ? fold(t) : null;
   if (!f) return h("div", { class: "msg-b" }, markBody(markdown(t), ws));
   return h("div", { class: "msg-b", "data-folded": "" },
     markBody(markdown(f.head), ws),
-    button(`Show the middle: ${f.lines} more lines`, (e, b) => { OPEN.add(p.id); b.closest(".msg-b").replaceWith(body(p, ws)); }, { kind: "quiet", size: "s", cls: "msg-more" }),
+    button(`Show the middle: ${f.lines > 2 || f.words == null ? f.lines + " more lines" : f.words.toLocaleString() + " more words"}`, (e, b) => { OPEN.add(p.id); b.closest(".msg-b").replaceWith(body(p, ws)); }, { kind: "quiet", size: "s", cls: "msg-more" }),
     markBody(markdown(f.tail), ws));
 }
 

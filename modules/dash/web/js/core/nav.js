@@ -10,7 +10,7 @@ export const APP_NAV = {
   main: ["start", "comms", "knowledge", "now", "usage", "settings"],
   groups: {
     comms: ["comms", "inbox"],
-    now: ["now", "agents", "timeline", "mesh", "ledger"],
+    now: ["now", "agents", "timeline", "mesh", "ledger", "progress"],
     usage: ["usage", "jobs"],
     settings: ["settings", "secrets"],
   },

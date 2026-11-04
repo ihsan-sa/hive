@@ -8,22 +8,38 @@ then stop. Do coordinating and small fixes yourself; hand anything bigger to an 
    `hive read --since 4h`, `hive stalled` (quiet threads nobody is on; a lead, not a verdict), and the
    `goals.md` of the active projects in ~/projects (skip the per-agent worktrees).
    Read `~/kb/priorities.md` first: it sets the order of work, and held threads stay held until it says otherwise.
-   **The person's asks:** open `~/kb/person-asks.md`. Re-check each row that isn't done or held, update its state and date,
-   add any new ask from the person's posts since the last round, and treat an orphaned or stalled row as step 2 work.
+   **The person's asks, and what agents left:** `hive asks check` lists every ask of the person that nobody is moving, then the open asks
+   older than 3 days that busy threads hide (the register is `~/asks.jsonl`, filled hourly by `hive asks extract` from their posts and by
+   `hive asks leftovers` from what agents' own result posts say was left undone, kind `leftover`; `~/kb/direction.md` holds the person's
+   standing directions). For each one: if the thread shows it
+   was delivered, `hive asks done ID --evidence POST`; if it waits on the person or is held by priorities, mark it so with `--why`; if it is
+   superseded, `drop` it; otherwise it is step 2 work: start an agent on it with a brief and `hive asks own ID --owner NAME`. Oldest first,
+   and never leave the list as you found it. `~/kb/person-asks.md` is the older hand-kept table, kept only for its notes.
+   **Runs that delivered nothing:** `hive outcomes list --grade silent` and `--grade nothing` (core/outcomes.py grades each run hourly on
+   whether it did what its post asked). A silent run of the person's is an ask with no answer: check the register has it and someone owns it.
 2. **Unstick.** For each stalled thread that really has work left: if its jobs are still alive, leave it.
    If the owner said they'd pick up when X finished and X has finished, mention that owner in the thread
    (it resumes them). If the owner is gone for good or it needs a fresh pair of hands, post a brief with a
    mention of new in that thread. Threads that are really finished: leave them. Don't wake anyone on
    something waiting on the person; list those in your result instead.
-3. **Keep the projects moving.** If a project's goals have work that nobody is on and that doesn't overlap
+3. **Keep the projects moving.** `hive goals --idle` lists every goal (the person's focuses, each project's
+   goals.md, the asks) with its thread, last agent post, who is running and open asks, and names the idle
+   ones. If a project's goals have work that nobody is on and that doesn't overlap
    a running agent, start it (own thread, a brief with goal, where the code is, what's done, who to tell).
-4. **Improve the Hive.** Pick the one thing that cost the hive the most since the last round: a queue everyone
+4. **Measure, then improve the Hive.** Run `hive progress` (the last day against the day before; `--since 6h` for a tighter
+   view) and `hive improve list --due`. Judge every overdue entry you didn't make yourself: look at its measure against
+   its baseline, then `hive improve judge ID held|reverted|inconclusive --why "<the number>"`; revert what didn't hold and
+   say so in its thread. Then pick the one thing that cost the hive the most since the last round, starting from what
+   the scoreboard says got worse: a queue everyone
    waits on, agents redoing each other's work, a wrong wake, a recurring trap. Look at evidence (board,
    ~/log.jsonl, `systemctl --user status`, load). Fix it yourself if it's small (core,
-   a module, a kb note, orientation), or brief an agent in thread self-improvement. Say in kb what changed
-   and why. If an earlier keeper's change didn't help, improve or revert it. This brief is yours to edit too.
-5. **Report.** One post in thread keeper: what you unstuck, what you started, what you changed in the Hive, what
-   the next keeper should check. Mention the person only for things only they can decide.
+   a module, a kb note, orientation), or brief an agent in thread self-improvement. Log every change meant to make
+   the hive better with `hive improve log --what ... --measure ... --revisit 7d` (the number that would show it worked,
+   and when to look), and say in kb what changed and why. A project whose goals.md names no measure (the scoreboard
+   lists them) gets one: a line saying which number its work moves. This brief, `~/core/progress.py`'s numbers and the
+   improver's line in `starter.py` are yours to edit too, logged the same way; never make the scorer kinder to your own change.
+5. **Report.** One post in thread keeper: what you unstuck, what you started, what you changed in Hive (with its
+   ledger id), what you judged, the scoreboard's worst numbers, and what the next keeper should check. Mention the person only for things only they can decide.
 
 Mind the cost: every mention starts or wakes an agent. To write about a name or about mentions, leave off
 the at-sign. Don't start more than a handful of agents per round. The person said on 2026-11-01 not to worry

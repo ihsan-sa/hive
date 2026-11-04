@@ -344,11 +344,42 @@ function accessSection(ctx) {
     catch (e) { say("access", e.message, "bad"); }
     ctx.update();
   };
+  const toRows = () => Object.entries(o.sites || {}).map(([host, v]) => {
+    const pe = v.people || {}, ks = m => Object.keys(pe).filter(k => pe[k] === m).join(" ");
+    return { host, team: v.access?.team || "", aud: v.access?.aud || "", emails: (v.access?.emails || []).join(" "), full: ks("full"), limited: ks("limited"), names: v.names };
+  });
+  const R = A.rows ||= toRows();
+  const saveSites = async () => {
+    try {
+      const sites = {};
+      for (const r of R) {
+        const host = r.host.trim().toLowerCase();
+        if (!host) throw new Error("Every name needs a hostname.");
+        const people = {};
+        for (const a of words(r.limited)) people[a] = "limited";
+        for (const a of words(r.full)) { if (people[a]) throw new Error(`${a} is on both lists for ${host}. Keep it on one.`); people[a] = "full"; }
+        if (!Object.keys(people).length) throw new Error(`${host} needs at least one person, or it would let nobody in.`);
+        if (!r.team.trim() || !r.aud.trim()) throw new Error(`${host} needs an Access team and audience.`);
+        sites[host] = { access: { team: r.team.trim(), aud: r.aud.trim(), ...(words(r.emails).length ? { emails: words(r.emails) } : {}) }, people, ...(r.names ? { names: r.names } : {}) };
+      }
+      say("sites", "");
+      await act("sites", "Saving the names with their own sign-in", () => post("/api/access", { sites }), ctx.update);
+      say("sites", "Saved.", "good");
+    }
+    catch (e) { say("sites", e.message, "bad"); }
+    ctx.update();
+  };
+  const rowTxt = (r, label, k, ph) => field(label, input({ placeholder: ph, value: r[k], oninput: (e, n) => { r[k] = n.value; } }));
+  const siteRows = R.map((r, i) => h("div", { class: "fgrid", "data-key": "site-" + i },
+    rowTxt(r, "Hostname", "host", "h3.example.com"), rowTxt(r, "Access team domain", "team", "yourteam.cloudflareaccess.com"),
+    rowTxt(r, "Application audience", "aud", "the Access application's AUD tag"), rowTxt(r, "Allowed emails", "emails", "optional: only these emails"),
+    rowTxt(r, "People with full access", "full", "you@example.com"), rowTxt(r, "People with limited access", "limited", "friend@example.com"),
+    button("Remove", () => { R.splice(i, 1); ctx.update(); }, { kind: "quiet" })));
   const txt = (label, k, ph) => field(label, input({ placeholder: ph, value: A[k], oninput: (e, n) => { A[k] = n.value; } }));
   const sites = Object.keys(o.sites || {}), names = [...sites, ...o.hosts.filter(x => !sites.includes(x))];
   return section({ title: "Access from outside", level: 1, note: "only changeable from this machine" },
     h("p", null, statusLabel(names.length ? "working" : "off", names.length ? "Set up" : "Off"), " ", names.length ? "These names can reach this Hive from the internet, through Cloudflare, once their tunnel is up:" : "Only this computer can open this Hive. You need this only to reach it from a phone or another machine."),
-    names.length ? h("ul", { class: "plain", "data-key": "access-names" }, names.map(n => h("li", { "data-key": n }, h("b", { class: "mono" }, n), sites.includes(n) ? h("span", { class: "muted" }, " has its own sign-in rules, kept in ~/.hive/web.json. The form below doesn't change them.") : null))) : null,
+    names.length ? h("ul", { class: "plain", "data-key": "access-names" }, names.map(n => h("li", { "data-key": n }, h("b", { class: "mono" }, n), sites.includes(n) ? h("span", { class: "muted" }, " has its own sign-in rules. Change them under Names with their own sign-in, below.") : null))) : null,
     blocks(block({ title: "How access works", key: "access-how", fold: true, open: F.accessHow, onToggle: o => { F.accessHow = o; } },
       h("p", { class: "field-h" }, "Opening a name takes a Cloudflare tunnel and an Access policy, set up in Cloudflare. If you name people below, each gets limited (read, chat, kill agents) or full (everything here, for an hour after signing in), and the ticks don't apply. Anyone else is refused, and emptying both lists afterwards refuses everyone. Type addresses here yourself: an agent's tools can refuse your account's address. From this machine, the secret gets everything. Through a tunnel, each request must carry a token signed by Cloudflare Access, and it can do only what's ticked here.")),
       block({ title: o.hosts.length || o.team ? "Change the settings" : "Set it up", key: "access-edit", fold: true, open: F.accessOpen ?? !!(o.hosts.length || o.team || Object.keys(o.people || {}).length), onToggle: v => { F.accessOpen = v; } },
@@ -356,7 +387,12 @@ function accessSection(ctx) {
         h("div", { class: "fgrid" }, txt("Hostnames", "hosts", "hive.example.com"), txt("Access team domain", "team", "yourteam.cloudflareaccess.com"),
           txt("Application audience", "aud", "the Access application's AUD tag"), txt("Allowed emails", "emails", "optional: only these emails"),
           txt("People with full access", "full", "you@example.com"), txt("People with limited access", "limited", "friend@example.com")),
-        h("div", { class: "frow" }, button("Save", save, { kind: "primary", busy: isBusy("access") }), msg("access")))));
+        h("div", { class: "frow" }, button("Save", save, { kind: "primary", busy: isBusy("access") }), msg("access"))),
+      block({ title: "Names with their own sign-in", key: "access-sites", fold: true, open: F.sitesOpen ?? R.length > 0, onToggle: v => { F.sitesOpen = v; } },
+        h("p", { class: "field-h" }, "A name here has its own Access team, audience and people, apart from the settings above. A sign-in for one name never works on another. Each needs a team, an audience and at least one person, and its tunnel must pass the public name on as the Host. Those above don't change when you save here."),
+        ...siteRows,
+        h("div", { class: "frow" }, button("Add a name", () => { R.push({ host: "", team: "", aud: "", emails: "", full: "", limited: "" }); F.sitesOpen = true; ctx.update(); }, { kind: "quiet" }),
+          button("Save names", saveSites, { kind: "primary", busy: isBusy("sites") }), msg("sites")))));
 }
 
 // The state of the whole page, up top, so you needn't scroll to learn it. Each one jumps to its section.
@@ -378,7 +414,7 @@ function navDots(ctx) {
 
 export default {
   id: "settings", label: "Settings", about: "accounts, modules, access", tab: () => S.app.app && (can("config") || can("modules") || can("logins")),
-  enter(ctx) { F.keysOpen = null; F.flash = {}; F.ed = null; F.name = null; F.saved = null; F.access = null; F.acctOpen = null; F.accessOpen = null; F.say = {}; clearSignin(); forget(); F.up = null; loadCfg(ctx); loadUpdate(ctx); loadMods(ctx); if (S.app.settings && can("config")) loadPage(ctx.update); },
+  enter(ctx) { F.keysOpen = null; F.flash = {}; F.ed = null; F.name = null; F.saved = null; F.access = null; F.acctOpen = null; F.accessOpen = null; F.sitesOpen = null; F.say = {}; clearSignin(); forget(); F.up = null; loadCfg(ctx); loadUpdate(ctx); loadMods(ctx); if (S.app.settings && can("config")) loadPage(ctx.update); },
   leave() { forget(); forgetSecrets(); },
   render(ctx) {
     if (!S.app.app) return h("div", { class: "page" }, empty("Settings show only in the app, opened from this machine.", { kind: "page", title: "Settings" }));
