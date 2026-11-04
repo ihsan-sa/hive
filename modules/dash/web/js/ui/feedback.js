@@ -22,6 +22,14 @@ addEventListener("keydown", e => {
   e.preventDefault(); openFeedback();
 });
 
+// Opening feedback must leave the page where it is (the person, 11041326d0c5: Alt+Shift+S scrolled it). The snapshot briefly un-sticks headers and closing
+// the window hands focus back to whatever had it, either of which can move a scroller in some browsers: note every scroll position and put them back.
+function holdScroll() {
+  const at = [document.scrollingElement || document.documentElement, ...document.body.querySelectorAll("*")]
+    .filter(el => el.scrollTop || el.scrollLeft || /auto|scroll/.test(getComputedStyle(el).overflowY)).map(el => [el, el.scrollLeft, el.scrollTop, el.scrollTop && el.scrollTop + el.clientHeight >= el.scrollHeight - 2]);
+  return () => { for (const [el, x, y0, end] of at) { const y = end ? el.scrollHeight : y0; if (el.isConnected && (el.scrollLeft !== x || Math.abs(el.scrollTop - y) > 2 && !(end && el.scrollTop + el.clientHeight >= el.scrollHeight - 2))) { el.scrollLeft = x; el.scrollTop = y; } } };   // at the end stays at the end, as new messages come
+}
+
 const pause = ms => new Promise(r => setTimeout(r, ms));
 function toCanvas(src, w, hh) { const c = document.createElement("canvas"); c.width = w; c.height = hh; c.getContext("2d").drawImage(src, 0, 0, w, hh); return c; }
 
@@ -129,7 +137,7 @@ export async function openFeedback() {
     away = true; dlg.close();
     const r = await grab();
     if (r.pic) { pic = r.pic; boxes = []; frozen = false; }
-    dlg.showModal(); away = false; show(r.why); text.focus();
+    dlg.showModal(); away = false; show(r.why); text.focus({ preventScroll: true });
   }
   async function load(f) {
     try { const b = await createImageBitmap(f); pic = toCanvas(b, b.width, b.height); boxes = []; frozen = false; b.close(); say.hidden = true; show(); }
@@ -196,10 +204,11 @@ export async function openFeedback() {
     } catch (e) { if (tab) tab.close(); say.textContent = "No link: " + e.message; say.hidden = false; }
   }
   dlg.addEventListener("keydown", e => e.stopPropagation());   // what's open under the picture stays as it is: Escape closes this overlay only, and no shortcut acts on the page under it
-  dlg.addEventListener("close", () => { if (!away) { dlg.remove(); FB.open = false; } });
-  document.body.append(dlg); dlg.showModal(); text.focus();
+  dlg.addEventListener("close", () => { if (!away) { dlg.remove(); FB.open = false; back(); requestAnimationFrame(back); } });
+  const back = holdScroll();
+  document.body.append(dlg); dlg.showModal(); text.focus({ preventScroll: true }); back();
   await new Promise(r => { requestAnimationFrame(() => setTimeout(r)); setTimeout(r, 100); });   // let the grey show first: copying a big page takes a moment (the timeout is for a tab with no frames)
   let why = "";
-  try { pic = await snapshot(); frozen = true; } catch (e) { why = "The screen couldn't be frozen here."; console.warn("feedback: snapshot failed:", e); }
+  try { pic = await snapshot(); frozen = true; back(); } catch (e) { why = "The screen couldn't be frozen here."; console.warn("feedback: snapshot failed:", e); }
   if (dlg.open) show(why);
 }

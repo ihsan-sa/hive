@@ -11,7 +11,7 @@ import { ago, dur, now, plural } from "../core/format.js";
 import { accountUse } from "../core/model.js";
 import { href } from "../core/router.js";
 import { copyButton } from "../ui/refs.js";
-import { MODELS, POWER, codexPart, forget, keysPart, loadPage, modelPart, pageData, powerPart, reading, rootNote, sandboxPart, sharePart } from "../ui/setup.js";
+import { MODELS, POWER, accountsData, codexPart, forget, keysPart, loadPage, modelPart, pageData, powerPart, reading, rootNote, sandboxPart, sharePart } from "../ui/setup.js";
 import { forgetSecrets, secretParts } from "./secrets.js";
 
 // Everything the person is typing lives here, so a poll never loses it.
@@ -26,7 +26,7 @@ const CAPTEXT = { read: "Read everything", files: "Read files: notes, modules, s
 async function loadCfg(ctx) {
   if (!can("config")) return;
   try { F.cfg = await jget("/api/config"); } catch (e) { F.cfg = {}; }
-  F.ed ||= { max: F.cfg.max_sessions ?? "", kp: !!F.cfg.keeper_every_s, au: F.cfg.auto_update !== false };
+  F.ed ||= { max: F.cfg.max_sessions ?? "", kp: !!F.cfg.keeper_every_s, kpe: F.cfg.keeper_every_s || 10800, au: F.cfg.auto_update !== false };
   F.saved ||= { max: F.ed.max };
   ctx.update();
 }
@@ -35,6 +35,10 @@ async function loadUpdate(ctx) {
   try { F.up = await jget("/api/update"); } catch (e) { return false; }   // an update restarts the app, so a poll can miss
   ctx.update(); return true;
 }
+/** How often the keeper round runs (keeper_every_s): the person asked to set it, 2026-11-04. */
+const PACE = [[3600, "Every hour"], [7200, "Every 2 hours"], [10800, "Every 3 hours"], [21600, "Every 6 hours"], [43200, "Every 12 hours"], [86400, "Once a day"]];
+const paceOpts = v => PACE.some(o => o[0] === v) ? PACE : [...PACE, [v, `Every ${dur(v * 1000)}`]].sort((a, b) => a[0] - b[0]);
+const paceSay = v => (paceOpts(v).find(o => o[0] === v) || [, "Every 3 hours"])[1];
 const EVERY = [[300, "Every 5 minutes"], [900, "Every 15 minutes"], [3600, "Every hour"], [21600, "Every 6 hours"], [86400, "Every day"], [604800, "Every week"]];
 const pause = ms => new Promise(r => setTimeout(r, ms));
 async function checkNow(ctx) {
@@ -169,22 +173,27 @@ function hiveSection(ctx) {
         actions: input({ type: "number", min: 1, max: 200, placeholder: "no limit", "aria-label": "Agents at once", style: "width:7rem", value: E.max, oninput: (e, n) => { E.max = n.value; }, onchange: saveMax }) })),
     blocks(brand[1],
       block({ title: "Status", sub: up ? "Stopping lets agents finish their turn." : null, state: statusLabel(up ? "working" : "ended", up ? "running" : "not running"), actions: button(up ? "Stop the Hive" : "Start the Hive", starter, { size: "s", kind: up ? "danger" : "primary", busy: isBusy("starter") }) }),
-      block({ title: "Keep work moving", sub: "Every 3 hours, pick up work that stopped and start work nobody asked for. It uses your limits.",
-        actions: toggle("Keep work moving", E.kp, v => { E.kp = v; save({ keeper_every_s: v ? (F.cfg.keeper_every_s || 10800) : 0 }, () => { E.kp = !v; }, "Keep work moving"); }) }),
+      block({ title: "Keep work moving", sub: E.kp ? `${paceSay(E.kpe)}, pick up work that stopped and start work nobody asked for, and sooner once nothing has run for half an hour. It uses your limits.` : "Off: work that stops waits until someone asks. Turn it on to pick it up by itself.",
+        actions: [E.kp ? h("select", { class: "input", value: E.kpe, "aria-label": "How often to keep work moving", title: "How often to keep work moving", style: "width:auto",
+            onchange: e => { const was = E.kpe, v = +e.target.value; E.kpe = v; save({ keeper_every_s: v }, () => { E.kpe = was; }, "Keep work moving"); } },
+            paceOpts(E.kpe).map(([v, label]) => h("option", { value: v }, label))) : null,
+          toggle("Keep work moving", E.kp, v => { E.kp = v; save({ keeper_every_s: v ? E.kpe : 0 }, () => { E.kp = !v; }, "Keep work moving"); })] }),
       versionBlocks(ctx, save),
       block({ title: "Update by itself", sub: F.up && F.up.installed ? "Installs each new release. Keeps your settings and goes back if it fails. When it's off, this Hive still looks and says so above, and you choose when to update." : "Installs each new release. Keeps your settings and goes back if it fails.",
         actions: toggle("Update by itself", E.au, v => { E.au = v; save({ auto_update: v }, () => { E.au = !v; }, "Update by itself"); }) })),
     msg("brand"), msg("starter"), msg("hive"));
 }
 
-// Codex and API keys, with settings.json only: same section as Claude, because to the person they're all accounts.
+// Codex and API keys: same section as Claude, because to the person they're all accounts. With settings.json and config rights they come with the
+// settings page; otherwise from /api/accounts, which needs only logins.
 function otherAccounts(ctx) {
-  if (!S.app.settings || !can("config")) return null;  // /api/settings is config's: someone who may only add logins would wait on it for ever
-  const pg = pageData(ctx.update);
-  if (!pg) return { rows: [h("div", { class: "blk" }, reading())] };
-  const keys = (pg.accounts.keys || []).length;
+  const whole = S.app.settings && can("config");
+  const acc = whole ? (pageData(ctx.update) || {}).accounts : accountsData(ctx.update);
+  if (!acc) return can("logins") ? { rows: [h("div", { class: "blk" }, reading())] } : null;
+  const keys = (acc.keys || []).length, codex = (acc.codex.logins || []).length;
   return { note: rootNote(), rows: [h("div", { class: "blk", "data-key": "codex-row" }, codexPart(ctx.update)),
-    block({ title: "API keys", sub: keys ? `${plural(keys, "key")} saved, charged per use` : "Charged per use. Used only when no Claude or Codex login has room.", key: "api-keys", fold: true, open: F.keysOpen ?? keys > 0, onToggle: o => { F.keysOpen = o; } }, keysPart(ctx.update))] };
+    block({ title: "API keys", sub: keys ? `${plural(keys, "key")} saved, charged per use` : acc.settings_file === false ? "Anthropic, OpenRouter or any Anthropic-compatible API. Charged per use." : "Charged per use. Used only when no Claude or Codex login has room.",
+      key: "api-keys", fold: true, open: F.keysOpen ?? keys > 0, onToggle: o => { F.keysOpen = o; } }, keysPart(ctx.update))], codex };
 }
 
 // Simple mode's whole Usage page: how full the Claude account's two limits are, and what happens when one fills.
@@ -232,7 +241,7 @@ function setupSections(ctx) {
     section({ title: "Power and sandbox", level: 1, note: "who decides what agents may do, and what holds them to it" }, pg ? [powerPart(ctx.update), h("h3", { class: "set-sub", "data-key": "sandbox" }, "Sandbox"), sandboxPart(ctx.update)] : reading()),
     section({ title: "Data sharing", level: 1, note: "what's sent, and whether it is" }, pg ? sharePart(ctx.update) : reading())];
 }
-const secretsSection = ctx => S.app.settings && can("secrets") ? section({ title: "Secrets", level: 1, note: "send a token to the Hive; it's never shown back" }, secretParts(ctx)) : null;
+const secretsSection = ctx => can("secrets") ? section({ title: "Secrets", level: 1, note: "send a token to the Hive; it's never shown back" }, h("div", { class: "stack secrets" }, secretParts(ctx))) : null;
 
 function modulesSection(ctx) {
   if (!can("modules")) return null;

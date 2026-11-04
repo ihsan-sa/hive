@@ -260,10 +260,12 @@ export function postSource(p) {
 const HEX = /^[0-9a-f]{12}$/;
 /** A thread's title: its name, the name the indexer gave a number thread, or in the app the start of its first message. */
 /** A /btw side thread's main conversation (person_post names it btw-<main>-<4 hex>), or null. */
+/** A side question's words without the @model the composer added at the end. */
+export const btwText = t => String(t || "").replace(/(\s*@[a-z][\w-]*)+\s*$/i, "");
 export const btwParent = th => ((th || "").match(/^btw-(.+)-[0-9a-f]{4}$/) || [])[1] || null;
 export function threadTitle(th) {
   const own = S.threadMeta && S.threadMeta[th] && S.threadMeta[th].title; if (own) return own;   // the person renamed it
-  if (btwParent(th)) { const d = S.threads.get(th), p = d && d.posts[0]; return "Aside: " + (p ? short(mdPlain(displayText(p)).split("\n")[0], 60) : btwParent(th)); }
+  if (btwParent(th)) { const d = S.threads.get(th), p = d && d.posts[0]; return "Aside: " + (p ? short(btwText(mdPlain(displayText(p))).split("\n")[0], 60) : btwParent(th)); }
   if (!HEX.test(th || "")) return simpleOn() && th ? (t => t[0].toUpperCase() + t.slice(1))(th.replace(/[-_]+/g, " ")) : th;
   if (S.threadNames[th]) return S.threadNames[th];
   if (!S.app.app) return th;
@@ -285,6 +287,7 @@ export function postKind(p) {
 }
 /** Every kind of post a thread has: a thread with none of what's on isn't listed. */
 export function threadKinds(d) {
+  if (btwParent(d.name)) return SHOW.updates;   // a side question is a process the hive runs, not the conversation: listed under Updates only (11041319bbd0)
   if (d.lvN !== d.posts.length) { let v = d.lvN ? d.lv : 0; for (let i = d.lvN || 0; i < d.posts.length; i++) v |= postKind(d.posts[i]); d.lv = v; d.lvN = d.posts.length; }
   return d.lv;
 }

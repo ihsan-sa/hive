@@ -1,9 +1,9 @@
 #!/bin/sh
 # Install the Hive, or update it, on Linux. One line:
-#   curl -fsSL https://hive.ihsan.cc/install.sh | sh
+#   curl -fsSL https://hivelab.ca/install.sh | sh
 # Makes a Linux user (hive, or HIVE_USER=name) so agents get their own account, and runs install.sh as root.
 # With no root, or by choice, in a folder of your own account, as you:
-#   curl -fsSL https://hive.ihsan.cc/install.sh | sh -s -- --this-account
+#   curl -fsSL https://hivelab.ca/install.sh | sh -s -- --this-account
 # HIVE_DIR=/path picks the folder (default ~/hive). HIVE_ACCEPT=1 accepts the warning when there's no terminal to ask on.
 # Everything is inside main, so a download cut short runs nothing, and nothing below reads the rest of this script from stdin.
 set -eu
@@ -424,12 +424,12 @@ main() {
   case "$(uname -s)" in
     Linux) ;;
     Darwin) die "macOS isn't supported yet. A test build exists that has never run on a real Mac, so it may not work. To try it anyway:
-  curl -fsSL https://hive.ihsan.cc/install-mac.sh | HIVE_MAC_TEST=1 sh" ;;
-    *) die "this is the Linux installer. On Windows, in PowerShell: irm https://hive.ihsan.cc/install.ps1 | iex" ;;
+  curl -fsSL https://hivelab.ca/install-mac.sh | HIVE_MAC_TEST=1 sh" ;;
+    *) die "this is the Linux installer. On Windows, in PowerShell: irm https://hivelab.ca/install.ps1 | iex" ;;
   esac
   # A hive user under plain WSL can read the Windows drives through /mnt/c, so its own account would protect nothing.
   if [ -d /mnt/c/Windows ] && [ -z "${HIVE_SHARE_WINDOWS:-}" ]; then
-    die "this WSL system can see your Windows files, and so could the agents. In PowerShell, run: irm https://hive.ihsan.cc/install.ps1 | iex
+    die "this WSL system can see your Windows files, and so could the agents. In PowerShell, run: irm https://hivelab.ca/install.ps1 | iex
 It makes a separate Linux system with the Windows drives switched off. To install here anyway, set HIVE_SHARE_WINDOWS=1."
   fi
   [ -d "${HIVE_SYSTEMD_DIR:-/run/systemd/system}" ] || die "the Hive runs its agents under systemd, and this system isn't running it"
@@ -440,7 +440,7 @@ It makes a separate Linux system with the Windows drives switched off. To instal
   elif command -v sudo >/dev/null 2>&1; then ROOT="sudo"; echo "The Hive gets its own Linux user, which takes sudo once."
   else
     die "this needs root to make a user called $U, and there's no sudo here.
-Without root, in a folder of your own account (agents then run in a sandbox around that folder, if this machine allows it; the app says): curl -fsSL https://hive.ihsan.cc/install.sh | sh -s -- --this-account
+Without root, in a folder of your own account (agents then run in a sandbox around that folder, if this machine allows it; the app says): curl -fsSL https://hivelab.ca/install.sh | sh -s -- --this-account
 Or in a spare account: git clone -b $BRANCH $REPO ~/core, install Claude Code, and run ~/core/install.sh"
   fi
 

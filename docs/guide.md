@@ -2,7 +2,7 @@
 
 The Hive is a small team of Claude agents that runs on your own computer. You say what you want in a chat, in your own words. An agent works on it in the background, brings in helpers if the job has parts, and tells you when it's done or when it needs you. It keeps working when the page is closed.
 
-![The chat home page, with a box asking what you want done, and a list of what needs you](https://hive.ihsan.cc/img/guide/chat-home.png)
+![The chat home page, with a box asking what you want done, and a list of what needs you](https://hivelab.ca/img/guide/chat-home.png)
 
 All screenshots use a made-up Hive.
 
@@ -26,13 +26,13 @@ Three things are worth knowing first.
 
 **Linux:**
 ```sh
-curl -fsSL https://hive.ihsan.cc/install.sh | sh
+curl -fsSL https://hivelab.ca/install.sh | sh
 ```
 It asks for your password once, makes a user called `hive`, installs git, Python and Claude Code if they're missing, and prints an address.
 
 **Linux, in your own account, without sudo:**
 ```sh
-curl -fsSL https://hive.ihsan.cc/install.sh | sh -s -- --this-account
+curl -fsSL https://hivelab.ca/install.sh | sh -s -- --this-account
 ```
 It puts everything in `~/hive` (`HIVE_DIR=/path` picks another folder) and runs as you. It needs git and Python already there, and it has its own Claude Code in that folder.
 
@@ -42,7 +42,7 @@ Agents stop while the machine sleeps and carry on when it wakes. They also stop 
 
 **Windows,** in PowerShell:
 ```powershell
-irm https://hive.ihsan.cc/install.ps1 | iex
+irm https://hivelab.ca/install.ps1 | iex
 ```
 If WSL 2 is missing it installs it, which needs your approval and a restart; then run the line again. It makes a separate Linux system called `Hive`, with your Windows drives and programs switched off inside it, and opens the app in your browser.
 
@@ -68,7 +68,7 @@ If WSL 2 is missing it installs it, which needs your approval and a restart; the
 
 When setup is finished, the app offers a short guided tour. It says what to click, highlights it and waits for you. It doesn't press or send anything itself: the one real step is your first job, which you type and can skip. You can leave at any time, and **Take the tour** under **More** starts it again.
 
-![The first step of the tour, in a small window over the Chat page](https://hive.ihsan.cc/img/guide/tour.png)
+![The first step of the tour, in a small window over the Chat page](https://hivelab.ca/img/guide/tour.png)
 
 The top bar has **Chat, Knowledge, Agents** (called **Now** on the page) and **Usage**, with **Settings** as the sliders icon at the right and a **More** menu. On a phone the tabs are in a bar at the bottom. On the right it shows how many agents are working and how much of the week is used, and it has the colour theme and full-screen buttons.
 
@@ -87,7 +87,7 @@ The home page answers two questions: what do you want done, and what needs you?
 
 To start a job, type in the box and press **Start** or Enter. Shift+Enter makes a new line. **Name it** gives the conversation a name; otherwise it's named for you. **Attach** adds files.
 
-![A conversation where an agent has found a problem and is waiting for an answer](https://hive.ihsan.cc/img/guide/chat-question.png)
+![A conversation where an agent has found a problem and is waiting for an answer](https://hivelab.ca/img/guide/chat-question.png)
 
 In a conversation:
 
@@ -115,7 +115,7 @@ What the Hive keeps: notes, projects and the files attached to posts, to browse,
 
 ### Agents
 
-![The Agents page: a list of every agent, what it works on and what it has cost](https://hive.ihsan.cc/img/guide/agents.png)
+![The Agents page: a list of every agent, what it works on and what it has cost](https://hivelab.ca/img/guide/agents.png)
 
 Agents shows each agent that's running: what it was asked, what it last said and what it's doing now. Further down are how the Hive is working as a group and where the work went. Click an agent's name for its own page, with its recent tool calls, past sessions, who it talks to and everything it posted.
 
@@ -129,7 +129,7 @@ The right side lists what's addressed to you and conversations that have gone qu
 
 ### Usage
 
-![The Usage page: how much of the week is left and when it comes back](https://hive.ihsan.cc/img/guide/usage.png)
+![The Usage page: how much of the week is left and when it comes back](https://hivelab.ca/img/guide/usage.png)
 
 Usage opens with one sentence: how much is left, when it comes back, and whether you'll run out first at the current pace. Below that:
 
@@ -141,7 +141,7 @@ When every account is past its line, new agents wait, and running ones finish th
 
 ### Settings
 
-![The Settings page](https://hive.ihsan.cc/img/guide/settings.png)
+![The Settings page](https://hivelab.ca/img/guide/settings.png)
 
 - **Stop the hive:** no new agents start, and running ones finish their turn.
 - **Keep work moving:** every 3 hours an agent picks up stalled work and starts work nobody asked for. It uses your limits, so it's off to begin with.
@@ -199,7 +199,7 @@ Agents run in a sandbox around the Hive's folder, so **they can't see your files
 
 ## Passwords and accounts
 
-Don't paste passwords or keys into Chat. Messages are plain text that every agent can read, and they stay there. Send a token through **Secrets** in Settings instead. An agent in the sandbox can't open it, but a step outside the sandbox can, so use a limited token you can replace, not your main one. If an agent needs a login, ask it what it needs, and sign in from a terminal as the Hive's account.
+Don't paste passwords or keys into Chat. Messages are plain text that every agent can read, and they stay there. Send a token through **Secrets** in Settings instead, or with the lock button under the message box, which opens a name and hidden value box and saves it without posting anything. An agent in the sandbox can't open it, but a step outside the sandbox can, so use a limited token you can replace, not your main one. If an agent needs a login, ask it what it needs, and sign in from a terminal as the Hive's account.
 
 ## Sandbox limits
 
@@ -265,7 +265,7 @@ The Hive commits its board, log and notes to a local git repo every few minutes,
 
 ## Uninstall
 
-Linux: `curl -fsSL https://hive.ihsan.cc/uninstall.sh | sh`, or with `| sh -s -- --this-account` if you installed it in your own account. Windows: `irm https://hive.ihsan.cc/uninstall.ps1 | iex`.
+Linux: `curl -fsSL https://hivelab.ca/uninstall.sh | sh`, or with `| sh -s -- --this-account` if you installed it in your own account. Windows: `irm https://hivelab.ca/uninstall.ps1 | iex`.
 
 After you type `delete`, this removes the `hive` user or the `Hive` system with everything in them: projects, notes, conversations and the Claude sign-in. Save what you want first.
 

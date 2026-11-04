@@ -1,5 +1,6 @@
 // The top bar: brand, tabs from the view registry, and the two numbers you check most (running, weekly room).
 import { brandMark } from "../core/brand.js";
+import { logoClick } from "../core/alias.js";
 import { HELP, startTour } from "./tour.js";
 import { canFeedback, openFeedback, FEEDBACK_KEY } from "./feedback.js";
 import { h, s } from "../core/dom.js";
@@ -155,7 +156,7 @@ export function topBar({ views, current, update, nav }) {
   const bits = setup ? () => null : app ? (simple ? simpleBits : appBits) : statusBits;
   return h("div", null,
     h("div", { class: "top-in" },
-      h("a", { class: "brand", href: app ? "#comms" : "#now" }, brandMark()),
+      h("a", { class: "brand", href: app ? "#comms" : "#now", onclick: logoClick }, brandMark()),
       h("nav", { class: "tabs", "aria-label": "Views" }, tabs),
       h("div", { class: "top-status", role: "status" }, route ? h("span", { class: "top-route", title: "Allowed from outside: " + (S.app.can || []).join(", ") }, route) : null,
         mode === "expired" ? h("a", { class: "top-route", href: "/cdn-cgi/access/logout", title: "Full mode lasts an hour after signing in. This signs you out; open this page again and sign in with Google." }, "sign in again for full") : null, bits()),

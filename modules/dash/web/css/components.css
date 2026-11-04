@@ -900,6 +900,13 @@ span.msg-thumb,span.msg-file{cursor:default}
 .cp-fn>span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .cp-name-row{padding:8px 8px 0}
 .cp-name{height:var(--ctl-s);font-size:var(--fs-small)}
+.cp-secret{display:flex;flex-direction:column;gap:6px;padding:8px 8px 0}
+.cp-srow{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.cp-shead{display:flex;gap:6px;align-items:center}
+.cp-sask{margin:0 2px;flex:1;min-width:0}
+.cp-srow .input{height:var(--ctl-s);font-size:var(--fs-small);flex:1 1 9em;min-width:0}
+.cp-ssay{padding:6px 10px 0;margin:0}
+.cp-ssay[data-tone=bad]{color:var(--bad-ink)}
 @container (max-width:640px){.cp-hint{display:none}.cp-bar{justify-content:flex-start}.cp-send{margin-left:auto}.cp-t{font-size:16px}}
 
 /* ---- comms: conversations beside one conversation. On a phone they take turns (data-in: a conversation is open). ---- */
@@ -1289,7 +1296,11 @@ details.blk>summary .blk-t::after{border-color:var(--ink-3)}
 .cm-strip-t{margin-left:auto;flex:none}                    /* the open/close chevron */
 .cm-strip[data-open] .cm-strip-t{position:absolute;top:4px;right:6px}
 .cm-strip{position:relative}
-.cm-strip:not([data-open]) .cm-line{flex:0 1 auto}
+/* closed: the agents stack, one per row; +N and the chevron sit at the right of the first row */
+.cm-strip:not([data-open]){display:grid;grid-template-columns:minmax(0,1fr) auto auto;column-gap:var(--s3);row-gap:0;padding:2px 6px 2px 14px}
+.cm-strip:not([data-open]) .cm-line{grid-column:1;min-width:0}
+.cm-strip:not([data-open]) .cm-strip-n{grid-column:2;grid-row:1;align-self:center}
+.cm-strip:not([data-open]) .cm-strip-t{grid-column:3;grid-row:1;align-self:center}
 .cm-strip:not([data-open]) .cm-line-m{display:none}
 .cm-strip-n{flex:none;color:var(--ink-3)}
 .cp>.cm-strip{width:calc(100% - 28px);max-width:calc(var(--chat-col) - 28px);margin:0 auto;box-sizing:border-box}
@@ -1798,3 +1809,5 @@ dialog.rc-rail[open]{display:flex;flex-direction:column;gap:var(--s2)}
 .pg-t[data-tone=warn]{color:var(--warn-ink)}
 .pg-t[data-tone=quiet]{color:var(--ink-3)}
 .mpick{display:inline-flex;align-items:center;gap:var(--s2)}
+.cm-menu-id{display:flex;align-items:center;gap:6px;margin:4px 10px}
+.cm-menu-id code{user-select:all;-webkit-user-select:all;cursor:text}

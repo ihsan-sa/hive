@@ -50,6 +50,7 @@ function route() {
   }
 }
 
+import { initAlias } from "./core/alias.js"; initAlias();
 delegate(document); dropFiles(document);
 setViews(views); watch(() => schedule(false)); offerDeckTour(); resume();
 addEventListener("hashchange", route);

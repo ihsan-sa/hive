@@ -43,8 +43,21 @@ export function pageData(update) {
   if (!P.asked && can("config")) loadPage(update);
   return P.page && P.page.settings ? shown() : null;
 }
+/** Just the accounts, on a Hive with no settings file (or for someone without config rights): from /api/accounts, which needs only logins and works from outside, where /api/settings is refused. */
+export function accountsData(update) {
+  if (!P.asked && can("logins")) { P.asked = true; loadAccounts(update); }
+  return P.page && P.page.accounts ? P.page.accounts : null;
+}
+async function loadAccounts(update) {
+  try { const accounts = await jget("/api/accounts"); P.page = { ...(P.page || { settings: null }), accounts }; P.err = ""; } catch (e) { P.err = e.message; }
+  update();
+}
+/** After an account changes: the whole page where there is one, else just the accounts. */
+const reloadAccounts = update => P.page && P.page.settings && can("config") ? loadPage(update) : loadAccounts(update);
+/** A key or remove answer: the settings page, or {settings: null, accounts}. */
+const takeAnswer = v => { if (v && v.settings) P.page = v; else if (v && v.accounts) P.page = { ...(P.page || { settings: null }), accounts: v.accounts }; };
 export const reading = () => P.err ? sayMsg(P.err, "bad") : empty("Reading…", { kind: "loading" });
-export const forget = () => { P.asked = false; P.key = ""; P.keySay = null; P.codexSay = ""; P.saved = null; };
+export const forget = () => { P.asked = false; P.key = ""; P.keyUrl = ""; P.keySay = null; P.codexSay = ""; P.saved = null; P.replacing = null; P.repKey = ""; };
 
 // Which part of the page a save belongs to, and how the log words it.
 function saying(d) {
@@ -74,7 +87,7 @@ const saveLine = part => P.saving[part] ? sayMsg("Saving…") : P.saved === part
 export const finishing = () => isBusy("finish");
 
 /** Whether an account other than a Claude login can run agents, as this page knows it. */
-export const anyAccount = () => { const a = P.page && P.page.accounts, s = S.app.setup || {}; return !!(s.signed_in || s.api_key || s.other || (a && (a.keys.length || a.codex.signed_in))); };
+export const anyAccount = () => { const a = P.page && P.page.accounts, s = S.app.setup || {}; return !!(s.signed_in || s.api_key || s.other || (a && ((a.keys || []).length || a.codex.signed_in || (a.codex.logins || []).some(l => l.signed_in)))); };
 
 // ---- accounts ----
 function tellCodex(v, update) {
@@ -97,61 +110,98 @@ function tickCodex(update) {
     update();
     if (v.state === "starting" || v.state === "waiting") return setTimeout(tick, 1500);
     P.ticking = false;
-    await loadApp(); await loadPage(update);
+    await loadApp(); await reloadAccounts(update);
   };
   tick();
 }
+const codexName = n => n === "codex" ? "Codex" : "Codex " + n.slice(6);
 export function codexPart(update) {
   const a = P.page.accounts, c = a.codex;
-  const go = async () => {
-    P.codexSay = ""; P.codexSeen = "starting"; begin("codex", "Starting Codex's sign-in", update);
-    try { const v = await post("/api/signin-codex", {}); a.codex = v; tellCodex(v, update); tickCodex(update); }
+  const busy = c.state === "starting" || c.state === "waiting", here = c.login || "codex";
+  const go = async body => {
+    P.codexSay = ""; P.codexSeen = "starting"; begin("codex", body.add ? "Adding a Codex login" : "Starting Codex's sign-in", update);
+    try { const v = await post("/api/signin-codex", body); a.codex = v; tellCodex(v, update); tickCodex(update); }
     catch (e) { P.codexSay = e.message; P.codexSeen = null; finish("codex", "bad", "Codex's sign-in didn't start: " + e.message, update); }
     update();
   };
   const stop = async () => { try { a.codex = await act("codex-stop", "Cancelling Codex's sign-in", () => post("/api/signin-codex", { cancel: true }), update, "Asked Codex's sign-in to stop"); tellCodex(a.codex, update); } catch (e) { P.codexSay = e.message; } update(); };
-  const busy = c.state === "starting" || c.state === "waiting";
+  const remove = async n => {
+    if (!confirm(`Remove the login ${n}? It signs out of that ChatGPT account here; runs move to the other Codex logins.`)) return;
+    try { const v = await act("codex-rm-" + n, "Removing " + n, () => post("/api/signin-codex", { remove: n }), update, "Removed " + n); a.codex = v; await reloadAccounts(update); }
+    catch (e) { P.codexSay = e.message; }
+    update();
+  };
   if (busy) tickCodex(update);
-  return h("div", { class: "signin", "data-key": "codex" },
-    h("div", { class: "frow fsplit" }, h("b", null, "Codex"), h("span", { class: "muted" }, "with a ChatGPT login"),
-      c.installed ? statusLabel(c.signed_in ? "working" : "ended", c.signed_in ? "signed in" : "not signed in") : statusLabel("ended", "not installed"),
-      c.installed && can("logins") && !busy ? h("span", { style: "margin-left:auto" }, button(c.signed_in ? "Sign in again" : "Sign in", go, { size: "s", busy: isBusy("codex") })) : null),
+  const logins = c.logins && c.logins.length ? c.logins : [{ name: "codex", signed_in: c.signed_in }];
+  if (busy && !logins.some(l => l.name === here)) logins.push({ name: here, signed_in: false, extra: true });
+  const row = l => {
+    const mine = l.name === here, on = l.signed_in;
+    return h("div", { class: "signin", "data-key": l.name },
+      h("div", { class: "frow fsplit" }, h("b", null, codexName(l.name)), l.name === "codex" ? h("span", { class: "muted" }, "with a ChatGPT login") : h("span", { class: "muted mono" }, l.name),
+        c.installed ? statusLabel(on ? "working" : "ended", on ? "signed in" : "not signed in") : statusLabel("ended", "not installed"),
+        c.installed && can("logins") && !busy ? h("span", { style: "margin-left:auto;display:flex;gap:var(--s2)" },
+          button(on ? "Sign in again" : "Sign in", () => go({ login: l.name }), { size: "s", busy: isBusy("codex") && mine }),
+          l.name !== "codex" ? button("Remove", () => remove(l.name), { size: "s", kind: "quiet", busy: isBusy("codex-rm-" + l.name) }) : null) : null),
+      !mine ? null : [
+        c.state === "starting" ? sayMsg("Starting Codex's sign-in…") : null,
+        c.state === "waiting" ? [
+          h("ol", { class: "steps" },
+            h("li", null, /^https:\/\//.test(c.url) ? h("a", { href: c.url, target: "_blank", rel: "noreferrer noopener" }, "Open the sign-in page") : "Codex didn't give a usable link.", " in any browser, and sign in", l.name === "codex" ? "." : " with the ChatGPT account for this login."),
+            h("li", null, "Enter this code: ", h("b", { class: "mono", "data-key": "code" }, c.code), " ", copyButton(c.code), h("span", { class: "field-h" }, "It lasts 15 minutes."))),
+          h("div", { class: "frow" }, button("Cancel", stop, { kind: "quiet", size: "s", busy: isBusy("codex-stop") }), h("span", { class: "meta" }, "Waiting for you to finish…"))] : null,
+        c.state === "failed" ? sayMsg(c.error || "That didn't work.", "bad") : null,
+        c.state === "done" ? sayMsg("Signed in to Codex.", "good") : null]);
+  };
+  const first = logins.find(l => l.name === "codex");
+  return h("div", { class: "codex-logins" },
+    logins.map(row),
     c.installed ? null : h("p", { class: "field-h" }, "To use it, install it in a terminal as this account: ", h("code", null, "npm install -g @openai/codex"), ". Then come back here."),
-    c.state === "starting" ? sayMsg("Starting Codex's sign-in…") : null,
-    c.state === "waiting" ? [
-      h("ol", { class: "steps" },
-        h("li", null, /^https:\/\//.test(c.url) ? h("a", { href: c.url, target: "_blank", rel: "noreferrer noopener" }, "Open the sign-in page") : "Codex didn't give a usable link.", " in any browser, and sign in."),
-        h("li", null, "Enter this code: ", h("b", { class: "mono", "data-key": "code" }, c.code), " ", copyButton(c.code), h("span", { class: "field-h" }, "It lasts 15 minutes."))),
-      h("div", { class: "frow" }, button("Cancel", stop, { kind: "quiet", size: "s", busy: isBusy("codex-stop") }), h("span", { class: "meta" }, "Waiting for you to finish…"))] : null,
-    c.state === "failed" ? sayMsg(c.error || "That didn't work.", "bad") : null,
-    c.state === "done" ? sayMsg("Signed in to Codex.", "good") : null,
+    c.installed && can("logins") && !busy && first && first.signed_in ? h("div", { class: "frow" },
+      button("Add another Codex login", () => go({ add: true }), { size: "s", kind: "quiet" }),
+      h("span", { class: "field-h" }, "Another ChatGPT account. When one runs out, runs move to the next with room.")) : null,
     sayMsg(P.codexSay, "bad"));
 }
 export function keysPart(update) {
-  const a = P.page.accounts;
+  const a = P.page.accounts, kinds = a.kinds && a.kinds.length ? a.kinds : [{ kind: "anthropic", label: "Anthropic API key" }, { kind: "openrouter", label: "OpenRouter API key" }];
+  if (!kinds.some(k => k.kind === P.keyKind)) P.keyKind = kinds[0].kind;
+  const kind = kinds.find(k => k.kind === P.keyKind);
+  const send = async (body, doing, done, say) => {
+    P.keySay = null;
+    try { await act("key", doing, async () => { takeAnswer(await post("/api/account-key", body)); await loadApp(); }, update, done); P.keySay = { text: say, tone: "good" }; return true; }
+    catch (e) { P.keySay = { text: e.message, tone: "bad" }; return false; }
+    finally { update(); }
+  };
   const save = async () => {
-    const value = P.key; P.key = ""; P.keySay = null;  // gone from the page before the answer, whatever it is
-    try { await act("key", "Saving the API key", async () => { P.page = await post("/api/account-key", { kind: P.keyKind, value }); await loadApp(); }, update, "API key saved"); P.keySay = { text: "Saved. It can't be shown again, and it isn't checked until an agent uses it.", tone: "good" }; }
-    catch (e) { P.keySay = { text: e.message, tone: "bad" }; }
-    update();
+    const value = P.key; P.key = "";  // gone from the page before the answer, whatever it is
+    const body = { kind: P.keyKind, value }; if (kind.own_url) body.base_url = (P.keyUrl || "").trim();
+    if (await send(body, "Saving the API key", "API key saved", "Saved. It can't be shown again, and it isn't checked until an agent uses it.")) P.keyUrl = "";
   };
-  const remove = async k => {
-    if (!confirm(`Remove the ${k.label}?`)) return;
-    try { await act("key-" + k.kind, "Removing the " + k.label, async () => { P.page = await post("/api/account-key", { kind: k.kind, delete: true }); await loadApp(); }, update, "Removed the " + k.label); P.keySay = { text: "Removed.", tone: "good" }; }
-    catch (e) { P.keySay = { text: e.message, tone: "bad" }; }
-    update();
-  };
+  const replace = async k => { const value = P.repKey; P.repKey = ""; if (await send({ name: k.name, value }, "Replacing " + k.name, "Replaced " + k.name, "Replaced. The old key is gone.")) P.replacing = null; };
+  const remove = async k => { if (confirm(`Remove ${k.name} (${k.label})?`)) await send({ name: k.name, delete: true }, "Removing " + k.name, "Removed " + k.name, "Removed."); };
+  const keys = a.keys || [];
+  const hint = a.settings_file
+    ? "Used only when no Claude or Codex login has room. Every run costs money on that key, so set a spending limit with the provider. An OpenRouter key must have a limit on it, or Hive won't use it."
+    : "A key starts nothing on its own: an agent uses it when a post names it, as --model NAME:MODEL. Every run costs money on that key, so set a spending limit with the provider.";
   return h("div", { class: "signin", "data-key": "keys" },
     h("div", { class: "frow fsplit" }, h("b", null, "API keys"), h("span", { class: "muted" }, "charged per use")),
-    a.keys.length ? h("ul", { class: "list" }, a.keys.map(k => h("li", { class: "lr", "data-key": k.kind },
-      h("div", { class: "lr-in frow fsplit" }, h("b", null, k.label), h("span", { class: "meta" }, (k.ends ? "ends " + k.ends + ", " : "") + "saved " + ago(k.at * 1000)),
-        can("logins") ? h("span", { style: "margin-left:auto" }, button("Remove", () => remove(k), { size: "s", kind: "quiet", busy: isBusy("key-" + k.kind) })) : null)))) : null,
+    keys.length ? h("ul", { class: "list" }, keys.map(k => h("li", { class: "lr", "data-key": k.name },
+      h("div", { class: "lr-in frow fsplit" }, h("b", { class: "mono" }, k.name), h("span", { class: "muted" }, k.label),
+        h("span", { class: "meta" }, (k.ends ? "ends " + k.ends + ", " : "") + "saved " + ago(k.at * 1000)),
+        can("logins") ? h("span", { style: "margin-left:auto;display:flex;gap:var(--s2)" },
+          button("Replace", () => { P.replacing = P.replacing === k.name ? null : k.name; P.repKey = ""; update(); }, { size: "s", kind: "quiet" }),
+          button("Remove", () => remove(k), { size: "s", kind: "quiet" })) : null),
+      P.replacing === k.name ? h("form", { class: "frow", onsubmit: e => { e.preventDefault(); if (P.repKey.trim()) replace(k); } },
+        h("div", { style: "flex:1;min-width:12rem" }, field("New key for " + k.name, input({ type: "password", autocomplete: "new-password", spellcheck: "false", "data-key": "replace-key", value: P.repKey, oninput: (e, n) => { P.repKey = n.value; } }))),
+        button("Save", null, { type: "submit", size: "s", busy: isBusy("key") })) : null))) : null,
+    a.by_hand && a.by_hand.length ? h("p", { class: "field-h" }, "Also set up by hand in config.json: ", a.by_hand.map(b => b.name + (b.paused ? " (paused)" : "")).join(", "), ".") : null,
+    can("logins") && S.app.secrets_on === false ? h("p", { class: "field-h" }, "Saving API keys is off on this name, as secrets are. Whoever runs the Hive can turn it on with secrets_on in web.json, on the machine.") :
     can("logins") ? [
-      h("p", { class: "field-h" }, "Used only when no Claude or Codex login has room. Every run costs money on that key, so set a spending limit with the provider. An OpenRouter key must have a limit on it, or Hive won't use it."),
-      seg([["anthropic", "Anthropic"], ["openrouter", "OpenRouter"]], P.keyKind, v => { P.keyKind = v; update(); }, { label: "Which provider" }),
+      h("p", { class: "field-h" }, hint),
+      seg(kinds.map(k => [k.kind, k.own_url ? "Other API" : k.label.replace(/ API key$/, "")]), P.keyKind, v => { P.keyKind = v; update(); }, { label: "Which provider" }),
+      kind.own_url ? field("API address", input({ type: "url", placeholder: "https://api.example.com", spellcheck: "false", "data-key": "account-url", value: P.keyUrl || "", oninput: (e, n) => { P.keyUrl = n.value; } }), "An Anthropic-compatible address, such as https://api.deepseek.com/anthropic. The key is named after its site.") : null,
       h("form", { class: "frow", onsubmit: e => { e.preventDefault(); if (P.key.trim()) save(); } },
         h("div", { style: "flex:1;min-width:12rem" }, field("Key", input({ type: "password", autocomplete: "new-password", spellcheck: "false", "data-key": "account-key", value: P.key, oninput: (e, n) => { P.key = n.value; } }))),
-        button("Save key", null, { type: "submit", busy: isBusy("key") }))] : null,
+        button(keys.length ? "Add key" : "Save key", null, { type: "submit", busy: isBusy("key") }))] : null,
     P.keySay ? sayMsg(P.keySay.text, P.keySay.tone) : null);
 }
 export const rootNote = () => P.page.accounts.root ? h("p", { class: "fmsg", "data-tone": "warn" }, "This computer account can use sudo without a password, so the Hive won't run Codex or API-key models on it: an outside model must not share an account with root. Claude logins still work. Give the Hive an account without sudo to use the others.") : null;
