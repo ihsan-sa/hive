@@ -246,3 +246,10 @@ text.map-ring-t{font-size:10.5px;font-weight:var(--w-bold);letter-spacing:.05em;
 .map-ho{fill:none;stroke:var(--ink-3);stroke-width:1.25}
 .map-cv[data-dim] .map-ho{opacity:.25}
 .map-ahg{fill:var(--ink-3)}
+/* level of detail for the free views: as the whole graph is fitted smaller, drop the fine print so it ends as just icons */
+.map-cv[data-lod=small] :is(.map-cc,.map-cr2,.map-am,.map-l2,.map-cb,.map-gl){display:none}
+.map-cv[data-lod=min] :is(.map-l1,.map-l2,.map-pill,.map-gen,.map-card>*){display:none}
+.map-cv[data-lod=min] .map-card{padding:0;min-height:0;border:0;border-radius:5px;background:var(--ink-3);opacity:.5;box-shadow:none}
+.map-cv[data-lod=min] .map-card:hover,.map-cv[data-lod=min] .map-card[data-lit],.map-cv[data-lod=min] .map-card[data-sel]{opacity:1}
+.map-cv[data-lod=min] .map-old{width:12px;height:12px;padding:0;border-radius:4px;background:var(--ink-3);opacity:.35;font-size:0}
+.map-cv[data-lod=min] .map-old b{display:none}

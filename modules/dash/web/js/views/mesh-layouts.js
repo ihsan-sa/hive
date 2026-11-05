@@ -6,7 +6,8 @@
 //
 // input  same as layout(): data = { threads, agents, now }, opt = { width, override, prev: Map(id -> {x, y}),
 //        pin: Map(id -> {x, y}) bodies dragged by hand, held where they were put; height: the panel's, for the slices;
-//        free: the page fits the picture to its panel itself, so don't shift it to the top }
+//        free: the page fits the picture to its panel itself, so don't shift it to the top;
+//        tile: a mesh too big to read: threads are small rounded tiles, agents bare dots, and the spacing closes up round them so the picture can be scaled up to fill the panel }
 // output layout()'s shape, plus spokes carry their own path `d`, clusters carry `linked` (agents from other threads), and orbit adds `rings`.
 
 import { TIERS, TIER_NAME, DENSITY, STATUS_RANK, spokeWidth } from './mesh-layout.js';
@@ -19,15 +20,22 @@ export const LAYOUTS = [['bands', 'Bands', 'Threads in rows by tier, agents fann
 const DAY = 864e5;
 const byStr = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
 const GAP = 10;                                    // the least space between two boxes
+const TILE = 15;                                   // a thread's side in the `tile` layouts: a little more than an agent's dot
 
 export function graphLayout(data, opt, mode) {
   if (mode === 'lineage') return lineageLayout(data, opt);
+  const tile = !!opt.tile;
+  if (tile && opt.height) {                        // room for what's there, in the panel's shape: the page scales it up to fill
+    const n = data.threads.length + data.agents.length, aspect = opt.width / opt.height, w = Math.round(Math.sqrt(n * 3000 * aspect) * (mode === 'orbit' ? 2 : 1));
+    opt = { ...opt, width: Math.max(240, w), height: Math.max(240, w) / aspect };
+  }
   const width = opt.width, prev = opt.prev || null, pin = opt.pin && opt.pin.size ? opt.pin : null;
   const compact = data.agents.length > 24;
   const density = compact ? 'compact' : 'normal';
   const D = { ...(compact ? DENSITY.compact : DENSITY.normal), ...(opt.override || {}), lines: 1 };
-  const cardW = Math.min(compact ? 150 : 176, Math.round((width - 2 * D.pad) * 0.45)), cardH = D.cardH;
-  const labelW = compact ? 92 : 128, maxMain = compact ? 6 : 8;
+  const cardW = tile ? TILE : Math.min(compact ? 150 : 176, Math.round((width - 2 * D.pad) * 0.45)), cardH = tile ? TILE : D.cardH;
+  const labelW = tile ? 0 : compact ? 92 : 128, maxMain = tile ? 40 : compact ? 6 : 8;
+  const spokeLen = tile ? 22 : 54, otherLen = tile ? 44 : 90;
 
   // members and the older row, as in layout()
   const members = new Map(data.threads.map(t => [t.id, { main: [], ghost: [] }]));
@@ -58,16 +66,16 @@ export function graphLayout(data, opt, mode) {
       const r = a.running ? D.r : D.r - 2;
       const b = { kind: 'a', id: a.id, a, t, r, w: r + 18 + labelW, h: 18, m: 1 };
       B.push(b); aB.set(a.id, b);
-      links.push({ p: b, q: tB.get(t.id), k: 0.5, len: cardW / 2 + 54, main: true, posts: a.threads[t.id] || 0 });
+      links.push({ p: b, q: tB.get(t.id), k: 0.5, len: cardW / 2 + spokeLen, main: true, posts: a.threads[t.id] || 0 });
     }
     if (more) {
-      const b = { kind: 'm', id: 'more@' + t.id, t, more, r: D.r, w: D.r + 18 + 64, h: 18, m: 1 };
-      B.push(b); links.push({ p: b, q: tB.get(t.id), k: 0.5, len: cardW / 2 + 54, main: true, more: true });
+      const b = { kind: 'm', id: 'more@' + t.id, t, more, r: D.r, w: D.r + 18 + (tile ? 0 : 64), h: 18, m: 1 };
+      B.push(b); links.push({ p: b, q: tB.get(t.id), k: 0.5, len: cardW / 2 + spokeLen, main: true, more: true });
     }
   }
   for (const [id, b] of aB) for (const [tid, n] of Object.entries(b.a.threads || {})) {
     if (tid === b.t.id || !(n > 0) || !tB.has(tid)) continue;
-    links.push({ p: b, q: tB.get(tid), k: 0.03 + 0.03 * Math.min(3, Math.log2(1 + n)), len: cardW / 2 + 90, posts: n });
+    links.push({ p: b, q: tB.get(tid), k: 0.03 + 0.03 * Math.min(3, Math.log2(1 + n)), len: cardW / 2 + otherLen, posts: n });
   }
 
   // the room: tiers get space by how much they hold
@@ -81,8 +89,8 @@ export function graphLayout(data, opt, mode) {
     // rings: annulus area by load; squash into an ellipse when wider than the page
     let cum = 0; const R = [];
     for (const k of used) { const r0 = Math.sqrt(cum / Math.PI); cum += area.get(k) * 1.25; R.push({ k, r0, r1: Math.sqrt(cum / Math.PI) }); }
-    const rmax = R.length ? R[R.length - 1].r1 : 100, sx = Math.min(1, (inner / 2 - 40) / rmax);
-    const ry = rmax * Math.max(1, (sx < 1 ? 1 / sx : 1) * 0.55);      // keep the area when squashed in x
+    const rmax = R.length ? R[R.length - 1].r1 : 100, sx = Math.min(tile ? 1.4 : 1, (inner / 2 - 40) / rmax);
+    const ry = sx > 1 ? rmax / sx : rmax * Math.max(1, (sx < 1 ? 1 / sx : 1) * 0.55);      // keep the area when squashed in x
     const sy = ry / rmax, cx = width / 2, cy = D.pad + ry + 20;
     H = 2 * ry + 40 + 2 * D.pad;
     rings = R.map(({ k, r0, r1 }, i) => ({ tier: k, name: TIER_NAME[k], cx, cy, rx: (i ? (r0 + r1) / 2 : 0) * sx, ry: (i ? (r0 + r1) / 2 : 0) * sy, ox: r1 * sx, oy: r1 * sy }));
@@ -102,7 +110,7 @@ export function graphLayout(data, opt, mode) {
     target = b => ({ s: slice.get(b.t.tier) });
     for (const k of used) {
       const list = B.filter(b => b.kind === 't' && b.t.tier === k), s = slice.get(k);
-      const cols = Math.max(1, Math.min(list.length, Math.floor(inner / (cardW + 170)))), rows = Math.ceil(list.length / cols);
+      const cols = Math.max(1, Math.min(list.length, Math.floor(inner / (cardW + (tile ? 60 : 170))))), rows = Math.ceil(list.length / cols);
       list.forEach((b, j) => { b.x = D.pad + (j % cols + 0.5) * inner / cols; b.y = s.y0 + (Math.floor(j / cols) + 0.5) * (s.y1 - s.y0) / rows; });
     }
   }
@@ -130,7 +138,7 @@ export function graphLayout(data, opt, mode) {
       const p = B[i], q = B[j];
       let dx = q.x - p.x, dy = q.y - p.y; if (!dx && !dy) { dx = (i - j) * 0.1; dy = 0.1; }
       const d2 = dx * dx + dy * dy; if (d2 > 160000) continue;
-      const c = (p.kind === 't' && q.kind === 't' ? 9000 : p.kind === 't' || q.kind === 't' ? 2600 : 900) / Math.max(d2, 100);
+      const c = (p.kind === 't' && q.kind === 't' ? 9000 : p.kind === 't' || q.kind === 't' ? 2600 : 900) * (tile ? 0.3 : 1) / Math.max(d2, 100);
       const d = Math.sqrt(d2), fx = dx / d * c, fy = dy / d * c;
       p.fx -= fx / p.m; p.fy -= fy / p.m; q.fx += fx / q.m; q.fy += fy / q.m;
     }
@@ -200,13 +208,13 @@ export function graphLayout(data, opt, mode) {
   if (older.length) {
     y += D.bandH; let cx = D.pad;
     for (const t of older) {
-      const w = Math.round(t.id.length * 7.2 + String(t.posts).length * 7 + 34);
-      if (cx + w > width - D.pad) { cx = D.pad; y += 32; }
-      olderRow.chips.push({ thread: t, x: cx, y, w, h: 24 }); cx += w + 8;
+      const w = tile ? 12 : Math.round(t.id.length * 7.2 + String(t.posts).length * 7 + 34);
+      if (cx + w > width - D.pad) { cx = D.pad; y += tile ? 18 : 32; }
+      olderRow.chips.push({ thread: t, x: cx, y, w, h: tile ? 12 : 24 }); cx += w + 8;
     }
-    y += 24 + D.pad;
+    y += (tile ? 12 : 24) + D.pad;
   }
-  return { mode, density, D, cols: 2, colW: inner, cardW, width, height: Math.max(y, 360), bands: [], rings, clusters, nodes, spokes,
+  return { mode, tile, density, D, cols: 2, colW: inner, cardW, width, height: Math.max(y, 360), bands: [], rings, clusters, nodes, spokes,
            older: olderRow, olderCount: older.length, byAgent, byThread, threadById: new Map(data.threads.map(t => [t.id, t])), pos };
 }
 
@@ -256,10 +264,10 @@ function edgePoint(c, x, y) {
 // Extra output: handoffs [{from, to, d, chain}] - the arrows between a running parent and its running child; `chain` = same main thread, so
 // the child's own spoke is left out (the arrow already says it).
 function lineageLayout(data, opt) {
-  const width = opt.width, pin = opt.pin && opt.pin.size ? opt.pin : null;
+  const tile = !!opt.tile, width = opt.width, pin = opt.pin && opt.pin.size ? opt.pin : null;
   const compact = data.agents.length > 28;
   const D = { ...(compact ? DENSITY.compact : DENSITY.normal), ...(opt.override || {}), lines: 1 };
-  const pad = D.pad, byId = new Map(data.agents.map(a => [a.id, a]));
+  const pad = tile ? 10 : D.pad, byId = new Map(data.agents.map(a => [a.id, a]));
   const gen = a => { let g = 0, x = a; while (x && x.from && x.from !== 'person' && g < 8) { x = byId.get(x.from); if (!x) break; g++; } return g; };
   const G = new Map(data.agents.map(a => [a.id, gen(a)]));
   const maxG = Math.max(0, ...G.values());
@@ -268,24 +276,27 @@ function lineageLayout(data, opt) {
   const used = new Set(); for (const a of data.agents) for (const k of Object.keys(a.threads || {})) used.add(k);
   const ck = t => Math.floor(Math.log2(t.cost + 1) * 2);
   const shown = data.threads.filter(t => used.has(t.id) || mine.get(t.id).length).sort((a, b) => (ck(b) - ck(a)) || byStr(a.id, b.id));
-  const cardW = Math.min(compact ? 150 : 176, Math.round((width - 2 * pad) * 0.4)), cardH = D.cardH, labelW = compact ? 92 : 128;
+  const cardW = tile ? TILE : Math.min(compact ? 150 : 176, Math.round((width - 2 * pad) * 0.4)), cardH = tile ? TILE : D.cardH, labelW = tile ? 0 : compact ? 92 : 128;
+  const run = tile ? 36 : 110, tail = tile ? 22 : 70, genW = tile ? 40 : 150, step = tile ? 22 : 56, rowMin = tile ? 26 : 64;
   // lineages side by side: the threads are split into B blocks left to right (each block is the card column plus its generation columns), B chosen
   // so the whole picture fits the panel's shape; at B = 1 it is the old single column
-  const rowOf = t => { const cnt = new Map(); for (const a of mine.get(t.id)) cnt.set(G.get(a.id), (cnt.get(G.get(a.id)) || 0) + 1); return Math.max(64, Math.max(1, ...cnt.values()) * 56); };
+  const rowOf = t => { const cnt = new Map(); for (const a of mine.get(t.id)) cnt.set(G.get(a.id), (cnt.get(G.get(a.id)) || 0) + 1); return Math.max(rowMin, Math.max(1, ...cnt.values()) * step); };
   const rows = shown.map(rowOf), total = rows.reduce((p, q) => p + q, 0), H = opt.height || 0;
-  const natW = cardW + 110 + maxG * 150 + labelW + 70;
-  let B = 1;
+  const natW = cardW + run + maxG * genW + labelW + tail;
+  let B = 1, fitK = 1;
   if (H && shown.length > 1) {
     let best = 0;
-    for (let b = 1; b <= Math.min(6, shown.length); b++) {
-      if (b > 1 && ((width - 2 * pad) / b - cardW - 110 - labelW - 70) / Math.max(1, maxG) < 90) break;   // a block too narrow for its generation columns would spill into the next block's cards
-      const k = Math.min(1.25, (width - 2 * pad) / (b * natW), (H - 64) / (total / b + 2 * pad));
-      if (k > best * 1.05) { best = k; B = b; }
+    for (let b = 1; b <= Math.min(tile ? 16 : 6, shown.length); b++) {
+      if (!tile && b > 1 && ((width - 2 * pad) / b - cardW - run - labelW - tail) / Math.max(1, maxG) < 90) break;   // a block too narrow for its generation columns would spill into the next block's cards
+      const k = Math.min(tile ? 1.4 : 1.25, (width - 2 * pad) / (b * natW), (H - 64) / (total / b + 2 * pad));
+      if (k > best * 1.05) { best = k; B = b; fitK = k; }
     }
   }
-  const blockW = (width - 2 * pad) / B, cw = Math.max(90, Math.min(220, (blockW - cardW - 110 - labelW - 70) / Math.max(1, maxG)));
+  // tiles take no more room than they need (what's left of the panel's width at the scale that fits goes to the generation columns, within reason); cards take the panel's width
+  const blockW = tile ? Math.max(natW, (width - 2 * pad) / (fitK * B)) : (width - 2 * pad) / B;
+  const cw = tile ? Math.min(90, (blockW - cardW - run - tail) / Math.max(1, maxG)) : Math.max(90, Math.min(220, (blockW - cardW - 110 - labelW - 70) / Math.max(1, maxG)));
   const blockOf = new Map(), target = total / B; { let acc = 0, bi = 0; shown.forEach((t, i) => { if (bi < B - 1 && acc >= target * (bi + 1) - rows[i] / 2) bi++; blockOf.set(t.id, bi); acc += rows[i]; }); }
-  const colX = (g, bi) => pad + bi * blockW + cardW + 110 + g * cw;
+  const colX = (g, bi) => pad + bi * blockW + cardW + run + g * cw;
   const clusters = [], nodes = [], spokes = [], byAgent = new Map(), byThread = new Map(), pos = new Map(), yOf = new Map();
   let y = pad, yEnd = pad, curB = 0;
   shown.forEach((t, i) => {
@@ -305,7 +316,7 @@ function lineageLayout(data, opt) {
     for (const [g, l] of lists) l.forEach((a, i) => {
       let wy = yOf.get(t.id), ws = 1;
       for (const [k, n] of Object.entries(a.threads || {})) if (k !== t.id && yOf.has(k)) { const w = 0.15 * Math.min(1, n / 8); wy += yOf.get(k) * w; ws += w; }
-      slots.set(a.id, { x: colX(g, blockOf.get(t.id)), y: wy / ws + (i - (l.length - 1) / 2) * 56 });
+      slots.set(a.id, { x: colX(g, blockOf.get(t.id)), y: wy / ws + (i - (l.length - 1) / 2) * step });
     });
   }
   const rOf = a => (a.running ? D.r : D.r - 2);
@@ -329,7 +340,11 @@ function lineageLayout(data, opt) {
     if (!main) cl.linked.push(n.id);
     spokes.push({ node: n.id, thread: tid, d: bez(cl.card.x + cl.card.w, cl.port.y, n.x - n.r - 3, n.y), width: main ? spokeWidth(c) : 1, dashed: !main, ended: !n.agent.running });
   }
+  // column heads: what each generation column means (the layout's title says it only on hover)
+  const GEN = ['Started by you', 'Started by an agent', 'Started by those'];
+  const heads = [];
+  if (!tile) for (let bi = 0; bi < B; bi++) for (let g = 0; g <= maxG; g++) heads.push({ x: Math.round(colX(g, bi)), y: Math.max(12, pad - 8), text: GEN[g] || 'Generation ' + (g + 1) });
   const height = Math.max(yEnd + pad, 360);
-  return { mode: 'lineage', density: compact ? 'compact' : 'normal', D, cols: 2, colW: width - 2 * pad, cardW, width, height, bands: [], rings: [], clusters, nodes, spokes, handoffs,
+  return { mode: 'lineage', tile, heads, density: compact ? 'compact' : 'normal', D, cols: 2, colW: width - 2 * pad, cardW, width, height, bands: [], rings: [], clusters, nodes, spokes, handoffs,
            older: { x: pad, y: height, chips: [] }, olderCount: 0, byAgent, byThread, threadById: new Map(data.threads.map(t => [t.id, t])), pos };
 }

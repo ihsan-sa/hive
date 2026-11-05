@@ -3,7 +3,7 @@
 // faint "ghost" beside any other thread it posted in. The layout is fixed by the data (mesh-layout.js), never random. Hand-off
 // lines appear only for the selection. The window picks who appears; replay shows the graph as it was at the cut.
 import { h } from "../core/dom.js";
-import { S, OUTSIDE, SYS, subscribe, getPref, setPref, onTV } from "../core/store.js";
+import { S, OUTSIDE, SYS, subscribe, getPref, setPref } from "../core/store.js";
 import { agentStatus, isAgent, isRunning, isWarden, modelName, sEnd, threadTitle, tierOf, fileInfo, spendSince } from "../core/model.js";
 import { ago, clock, dur, firstSentence, money, now, short, toks, plural, DAY, HOUR, MIN } from "../core/format.js";
 import { agentHref, threadHref } from "../core/router.js";
@@ -197,27 +197,53 @@ new ResizeObserver(() => { const w = scroller.clientWidth, hh = scroller.clientH
 
 // ---- the free view (Web, Orbit, Lineage): fitted to the panel, wheel zooms, drag the background to pan, drag a node to move it ----
 const free = () => scroller.hasAttribute("data-free");
-function applyView() { const V = GS.view; cv.style.transform = `translate(${V.x.toFixed(1)}px,${V.y.toFixed(1)}px) scale(${V.k.toFixed(4)})`; }
-function fitView(L) {
+// Level of detail. Past TILE_K a mesh isn't drawn smaller: it's laid out again as tiles (opt.tile in mesh-layouts.js), small grey thread boxes and bare agent dots packed
+// close together and scaled up to fill the panel. Zooming out past TILE_K goes there, zooming far enough in comes back.
+const TILE_K = 0.4, FIT_TILE_K = 0.55;                       // a card under about half size can't be read, so a fit goes to tiles sooner than a hand zoom does
+function applyView() { const V = GS.view; if (free()) cv.setAttribute("data-lod", GS.tile ? "min" : V.k < 0.62 ? "small" : "full"); cv.style.transform = `translate(${V.x.toFixed(1)}px,${V.y.toFixed(1)}px) scale(${V.k.toFixed(4)})`; }
+function viewBox(L) {
   let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
   const add = (a, b, c, d) => { x0 = Math.min(x0, a); y0 = Math.min(y0, b); x1 = Math.max(x1, c); y1 = Math.max(y1, d); };
   for (const cl of L.clusters) add(cl.card.x, cl.card.y, cl.card.x + cl.card.w, cl.card.y + cl.card.h);
-  for (const n of L.nodes) add(n.x - 12, n.y - 12, n.labelX + Math.max(40, n.labelW) + 8, n.y + 14);
+  for (const n of L.nodes) L.tile ? add(n.x - n.r - 2, n.y - n.r - 2, n.x + n.r + 2, n.y + n.r + 2) : add(n.x - 12, n.y - 12, n.labelX + Math.max(40, n.labelW) + 8, n.y + 14);
   for (const r of L.rings || []) if (r.ox) add(r.cx - r.ox, r.cy - r.oy - 20, r.cx + r.ox, r.cy + r.oy);
   for (const c of (L.olderCount && L.older.chips) || []) add(c.x, c.y - 30, c.x + c.w, c.y + c.h);
+  return { x0, y0, x1, y1 };
+}
+// a small graph grows to fill the panel; a big one shrinks to fit whole
+const fitK = (L, b) => Math.max(0.1, Math.min(L.tile ? 1.4 : 1.25, (scroller.clientWidth - 64) / (b.x1 - b.x0), (scroller.clientHeight - 64) / (b.y1 - b.y0)));
+function fitView(L) {
+  const B = viewBox(L), { x0, y0, x1, y1 } = B;
   if (x0 > x1) { GS.view = { k: 1, x: 0, y: 0, user: false }; return; }
-  const W = scroller.clientWidth, H = scroller.clientHeight, m = 32;
-  // a small graph grows to fill the panel; a big one shrinks only while its labels stay readable, then starts at the top and pans
-  const k = Math.max(M.lay === "lineage" ? 0.4 : 0.7, Math.min(1.25, (W - 2 * m) / (x1 - x0), (H - 2 * m) / (y1 - y0))), bw = (x1 - x0) * k, bh = (y1 - y0) * k;
+  const W = scroller.clientWidth, H = scroller.clientHeight, m = 32, k = fitK(L, B), bw = (x1 - x0) * k, bh = (y1 - y0) * k;
+  if (L.tile) GS.tileFit = k;
   GS.view = { k, x: bw <= W - 2 * m ? (W - bw) / 2 - x0 * k : m - x0 * k, y: bh <= H - 2 * m ? (H - bh) / 2 - y0 * k : m - y0 * k, user: false };
 }
+// Between cards and tiles by hand. To tiles: the whole mesh, fitted. Back to cards: the thing under the pointer stays under it.
+function setTile(on, px, py) {
+  const V = GS.view, L = GS.L; let near = null, best = 1e18;
+  if (!on && L) {
+    const gx = (px - V.x) / V.k, gy = (py - V.y) / V.k, see = (id, x, y) => { const d = (x - gx) ** 2 + (y - gy) ** 2; if (d < best) { best = d; near = id; } };
+    for (const n of L.nodes) see(n.id, n.x, n.y);
+    for (const cl of L.clusters) see("c:" + cl.thread.id, cl.port.x, cl.port.y);
+  }
+  GS.tile = on; GS.pos = null; GS.pin = new Map(); GS.sig = ""; GS.view = { ...V, user: true };   // by hand, so a new post doesn't flip it back
+  syncGraph(M.D);
+  if (on) { fitView(GS.L); GS.view.user = true; applyView(); return; }
+  const k = 0.7, n = GS.nodes.get(near), c = GS.L.byThread.get(near && near.slice(2)), x = n ? n.x : c ? c.port.x : 0, y = n ? n.y : c ? c.port.y : 0;
+  GS.view = { k, x: px - x * k, y: py - y * k, user: true }; applyView();
+}
 function zoomAt(k, px, py, smooth) {
-  const V = GS.view, k2 = Math.max(0.2, Math.min(3, k));
+  const V = GS.view, k2 = Math.max(GS.tile ? (GS.tileFit || 0.2) * 0.9 : 0.2, Math.min(3, k));
+  if (free() && M.D && k2 !== V.k) {
+    if (!GS.tile && k2 < TILE_K && k2 < V.k) return setTile(true);
+    if (GS.tile && k2 > V.k && k2 > Math.min(2.8, (GS.tileFit || 1) * 1.6)) return setTile(false, px, py);
+  }
   GS.view = { k: k2, x: px - (px - V.x) * k2 / V.k, y: py - (py - V.y) * k2 / V.k, user: true };
   if (!smooth) scroller.setAttribute("data-drag", ""); applyView();
   if (!smooth) { clearTimeout(GS.wheelT); GS.wheelT = setTimeout(() => scroller.removeAttribute("data-drag"), 120); }
 }
-function refit() { GS.pin = new Map(); GS.pos = null; GS.view.user = false; GS.sig = ""; if (M.D) syncGraph(M.D); }
+function refit() { GS.pin = new Map(); GS.pos = null; GS.view.user = false; GS.sig = ""; GS.tileKey = ""; if (M.D) syncGraph(M.D); }
 scroller.addEventListener("wheel", e => {
   if (!free()) return; e.preventDefault();
   const r = scroller.getBoundingClientRect(), u = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? scroller.clientHeight : 1;
@@ -277,7 +303,17 @@ function syncGraph(D) {
   if (GS.lay !== M.lay || Math.abs(w - GS.w) > 40 || Math.abs(hh - GS.h) > 40) { GS.pos = null; GS.pin = new Map(); GS.view.user = false; }  // a new layout or panel size starts the graph afresh; else it settles from where it was
   GS.w = w; GS.h = hh; GS.lay = M.lay;
   const override = phone ? { pad: 12, run: 28, minColW: 300 } : null;
-  const L = !isFree ? layout(graphInput(D), { width: w, override }) : graphLayout(graphInput(D), { width: w, height: hh, override, prev: GS.pos, pin: GS.pin, free: true }, M.lay);
+  const input = graphInput(D);
+  if (!isFree) GS.tile = false;
+  else if (w && hh && !GS.view.user) {                        // does this mesh need tiles? Asked of the card layout, so the answer doesn't depend on the answer
+    const key = [M.lay, w, hh, input.threads.length, input.agents.length].join("|");
+    if (key !== GS.tileKey) {
+      GS.tileKey = key;
+      const probe = graphLayout(input, { width: w, height: hh, override, free: true }, M.lay), b = viewBox(probe), on = b.x0 <= b.x1 && fitK(probe, b) < FIT_TILE_K;
+      if (on !== !!GS.tile) { GS.tile = on; GS.pos = null; GS.pin = new Map(); }
+    }
+  }
+  const L = !isFree ? layout(input, { width: w, override }) : graphLayout(input, { width: w, height: hh, override, prev: GS.pos, pin: GS.pin, free: true, tile: !!GS.tile }, M.lay);
   GS.pos = L.pos || null;
   GS.L = L; GS.nodes = new Map(L.nodes.map(n => [n.id, n]));
   const S2 = litOf(L, D), seen = new Set(), lines = L.D.lines, compact = L.density === "compact";
@@ -295,7 +331,7 @@ function syncGraph(D) {
     const outs = Object.entries(t.outside).sort((x, y) => y[1] - x[1] || (x[0] < y[0] ? -1 : 1));
     const chips = L.cols === 1 && outs.length > 1 ? [h("span", { class: "map-chip" }, "+ " + outs.length)] : outs.slice(0, 2).map(([k, n]) => h("span", { class: "map-chip" }, k + " ", h("b", null, String(n))));
     put(seen, "c:" + t.id, "button", "map-card", cl.card.x, cl.card.y,
-      { "data-kind": "thread", "data-id": t.id, "data-body": "c:" + t.id, "data-tier": t.tier, "data-sel": sel || null, "data-lit": lit("c:" + t.id), style: `width:${cl.card.w}px;height:${cl.card.h}px`, "aria-label": `Thread ${t.id}, ${tier(t.tier).label}, ${plural(t.posts, "post")}, ${money(t.cost)}`, "aria-pressed": sel ? "true" : "false" },
+      { "data-kind": "thread", "data-id": t.id, "data-body": "c:" + t.id, "data-tier": t.tier, "data-sel": sel || null, "data-lit": lit("c:" + t.id), style: `width:${cl.card.w}px;height:${cl.card.h}px`, title: L.tile ? t.id : null, "aria-label": `Thread ${t.id}, ${tier(t.tier).label}, ${plural(t.posts, "post")}, ${money(t.cost)}`, "aria-pressed": sel ? "true" : "false" },
       [h("span", { class: "map-cr1" }, h("i", { class: "map-tsw", "data-tier": t.tier }), h("b", { class: "map-cn" }, t.id), h("span", { class: "map-cc" }, money(t.cost))),
        compact ? null : h("span", { class: "map-cr2" }, t.stuck ? h("em", null, `▲ ${t.stuck} stuck`) : null, h("span", { class: "map-cm" }, `${plural(t.posts, "post")} · ${since(t.last) || "–"}`), ...chips),
        h("i", { class: "map-cb" }, h("i", { style: `width:${Math.max(2, cl.costShare * 100).toFixed(1)}%` }))]);
@@ -327,6 +363,7 @@ function syncGraph(D) {
   // the lines: spokes, then the selection's links on top
   const t = now(), rg = [], path = [], spSeen = new Set();
   for (const r of L.rings || []) if (r.ox) rg.push(`<ellipse class="map-ring" cx="${r.cx}" cy="${r.cy}" rx="${r.ox.toFixed(1)}" ry="${r.oy.toFixed(1)}"/><text class="map-ring-t" x="${r.cx}" y="${(r.cy - r.oy + 14).toFixed(1)}">${r.name}</text>`);
+  for (const hd of L.heads || []) rg.push(`<text class="map-gen" x="${hd.x - 6}" y="${hd.y}">${hd.text}</text>`);
   // spokes are kept by key, so a moved node's line eases to its new place with it (CSS `d`)
   for (const sp of L.spokes) {
     const acc = S2.acc.has(sp.node) || (GS.posted.get(sp.node) || 0) > t, key = sp.node + ">" + sp.thread, d = sp.d || spokePath(sp);
@@ -341,7 +378,7 @@ function syncGraph(D) {
   for (const k of S2.links) path.push(`<path class="map-ln"${k.ghost ? " data-ghost" : ` marker-end="url(#map-ah)"`} d="${linkPath(k.p, k.q)}"/>`);
   ringG.innerHTML = rg.join(""); topG.innerHTML = path.join("");
   scroller.toggleAttribute("data-free", isFree); zoomEl.hidden = !isFree;
-  if (isFree) { if (!GS.view.user) fitView(L); applyView(); } else cv.style.transform = "";
+  if (isFree) { if (!GS.view.user) fitView(L); applyView(); } else { cv.style.transform = ""; cv.removeAttribute("data-lod"); }
   syncCap(D);
   stage.setAttribute("aria-label", `Graph of the hive: ${M.count}. Tab walks threads and agents; Enter selects, Escape clears.`);
   if (M.q !== GS.q) { GS.q = M.q; if (S2.hits[0] && !isFree) scroller.scrollTo({ top: Math.max(0, S2.hits[0].y - 60), behavior: reduced() ? "auto" : "smooth" }); }
@@ -372,6 +409,7 @@ cv.addEventListener("click", e => {
   if (e.detail >= 2) { if (!M.sel || M.sel.id !== id) { M.sel = { kind, id }; M.update(); } openPanel(kind === "agent" ? "agent" : "thread", id); return; }
   select(kind, id);
 });
+scroller.addEventListener("click", e => { if (e.target === scroller && M.sel) select(null); });   // a fitted graph's box doesn't cover the panel
 cv.addEventListener("pointerover", e => {
   const b = e.target.closest("[data-kind]"); if (!b || e.pointerType === "touch") return;
   if (b.dataset.node) { for (const p of svg.querySelectorAll(`[data-k="${CSS.escape(b.dataset.node)}"]`)) p.setAttribute("data-hot", ""); clearTimeout(GS.hoverT); GS.hoverT = setTimeout(() => showCard(b.dataset.node), 300); }
