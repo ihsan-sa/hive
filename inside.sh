@@ -41,6 +41,14 @@ command -v aa-status >/dev/null && aa-status 2>/dev/null | grep -E 'bwrap' | sed
 c=$(as 'hive sandbox check --json' 2>&1); note "sandbox check: $(printf '%s' "$c" | cut -c1-300)"
 printf '%s' "$c" | grep -q '"works": true' && ok "sandbox works" || bad "sandbox works"
 
+# A clean machine with no desktop is a server: it gets the server module, which holds no root and opens nothing.
+grep -q 'server module is in' /tmp/install.out && ok "installer says the server module is in" || bad "installer says the server module is in"
+[ -L "$HH/.local/bin/server" ] && [ -L "$HH/.local/bin/heavy" ] && ok "server and heavy commands" || bad "server and heavy commands"
+as 'server check' > /tmp/server-check.out 2>&1; c=$?; cut -c1-160 /tmp/server-check.out | sed 's/^/--   server check: /'
+[ "$c" -le 1 ] && grep -qi 'no way to root' /tmp/server-check.out && ok "server check runs, and sees no way to root" || bad "server check: exit $c"
+as 'heavy --quick true' >/dev/null 2>&1 && ok "heavy runs a job" || bad "heavy runs a job"
+as 'heavy --status' >/dev/null 2>&1 && ok "heavy --status" || bad "heavy --status"
+
 # Another local user, after the install: what the profile added for them.
 useradd -m zz-other 2>/dev/null
 su - zz-other -c 'unshare -Urm true' >/dev/null 2>&1 && note "other user: unshare -Urm succeeded" || note "other user: unshare -Urm refused"
