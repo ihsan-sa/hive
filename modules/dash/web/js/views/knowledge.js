@@ -45,6 +45,7 @@ function refresh(ctx) {
   fetchPath(path, ctx);
   const up = parent(path), cur = K.seen.get(path);
   if (up && !K.seen.has(up) && (!cur || cur.type !== "dir")) fetchPath(up, ctx);
+  for (let a = up; a; a = parent(a)) if (a !== up && !K.seen.has(a)) fetchPath(a, ctx);   // the sidebar tree shows every folder above the open one
 }
 // The sidebar box finds files by name only; the main box is the search engine (ranked passages and lines).
 function searchFiles(ctx) {
@@ -241,10 +242,19 @@ function searchRows() {
   ];
 }
 function folderRows(dir, cur, ctx) {
-  const all = dir.entries || [], tree = K.worktrees ? all : all.filter(e => !e.worktree), hidden = all.length - all.filter(e => !e.worktree).length;
+  const all = dir.entries || [], hidden = all.length - all.filter(e => !e.worktree).length;
+  // Nested tree: from the top folder above the open page, each folder on the way down opens in place.
+  const here = dir.path || parent(cur), top = here.split("/")[0], root = K.seen.get(top);
+  const rows = [];
+  const walk = (d, depth) => (d.entries || []).filter(e => K.worktrees || !e.worktree).forEach(e => {
+    const onPath = e.dir && (cur === e.path || cur.startsWith(e.path + "/")) || e.dir && here === e.path;
+    rows.push({ key: e.path, href: open(e.path), current: cur === e.path, depth, lead: icon(e.dir ? "folder" : "file"), title: e.name + (e.dir ? "/" : ""), text: e.title || (e.worktree ? "worktree" : ""), meta: e.dir ? age(e.t) : bytes(e.size) });
+    const kids = onPath && K.seen.get(e.path);
+    if (kids && kids.type === "dir") walk(kids, depth + 1);
+  });
+  walk(root && root.type === "dir" && top !== here ? root : dir, 0);
   return [
-    list(tree.map(e => ({ key: e.path, href: open(e.path), current: cur === e.path, lead: icon(e.dir ? "folder" : "file"), title: e.name + (e.dir ? "/" : ""), text: e.title || (e.worktree ? "worktree" : ""), meta: e.dir ? ago(e.t * 1e3).replace(" ago", "") : bytes(e.size) })),
-      { empty: "Nothing to show here.", dense: true, limit: K.limit, onMore: () => { K.limit += 500; ctx.update(); } }),
+    list(rows, { empty: "Nothing to show here.", dense: true, limit: K.limit, onMore: () => { K.limit += 500; ctx.update(); } }),
     hidden ? button(K.worktrees ? "Hide worktrees" : `Show ${plural(hidden, "worktree")}`, () => { K.worktrees = !K.worktrees; ctx.update(); }, { kind: "quiet", size: "s", cls: "kb-more" }) : null,
     dir.more ? h("p", { class: "kb-sub", "data-key": "cut" }, `Showing the first ${all.length}.`) : null,
   ];
@@ -318,9 +328,10 @@ function fileHead(d, ctx) {
     h("div", { class: "kb-hcrumbs" }, crumbs(d.path)),
     h("h1", { class: "kb-t" }, d.name),
     h("p", { class: "meta" }, h("code", null, "~/" + d.path), d.size != null ? ` · ${bytes(d.size)}` : "", " · changed ", h("span", { title: stamp(d.t * 1e3) }, ago(d.t * 1e3))),
-    isMd || (name && can("plans")) ? h("div", { class: "frow" },
+    h("div", { class: "frow" },
+      button("Copy path", (e, b) => { navigator.clipboard.writeText("~/" + d.path).then(() => { const l = b.lastChild; l.textContent = "Copied"; setTimeout(() => { if (b.isConnected) l.textContent = "Copy path"; }, 1400); }, () => {}); }, { kind: "quiet", size: "s" }),
       isMd ? button(K.source ? "Formatted" : "Source", () => { K.source = !K.source; ctx.update(); }, { kind: "quiet", size: "s" }) : null,
-      name && can("plans") ? button("Edit plan", () => startEdit(name, ctx), { size: "s" }) : null) : null);
+      name && can("plans") ? button("Edit plan", () => startEdit(name, ctx), { size: "s" }) : null));
 }
 function fileView(d, line, ctx) {
   const box = h("article", { class: "kb-note kb-file", "data-key": "file:" + d.path }, fileHead(d, ctx),
@@ -343,6 +354,17 @@ function folderView(d, ctx) {
       : empty("This folder has no README. Pick a file from the list."));
 }
 
+// "/" finds a file by name, ⌘K / Ctrl+K searches everything. Only while the Knowledge page is up and nothing is being typed into.
+addEventListener("keydown", e => {
+  if (!document.querySelector(".kb") || e.altKey) return;
+  const k = (e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k", slash = e.key === "/" && !e.metaKey && !e.ctrlKey;
+  if (!k && !slash) return;
+  const t = e.target, typing = t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName));
+  if (slash && typing) return;
+  const vis = [...document.querySelectorAll(k ? "input[data-kb-all]" : "input[data-kb-files]")].find(i => i.offsetParent);
+  const box = vis || (slash ? [...document.querySelectorAll("input[data-kb-all]")].find(i => i.offsetParent) : null);
+  if (box) { e.preventDefault(); box.focus(); box.select(); }
+});
 export default {
   id: "knowledge", label: "Knowledge", about: "notes, modules, scripts and files", tab: () => !!S.app.app && can("files"),
   enter(ctx) { if (can("files")) refresh(ctx); },
@@ -350,12 +372,12 @@ export default {
   render(ctx) {
     if (!can("files")) return h("div", { class: "page" }, empty("Reading files needs full mode here. Sign in again if your hour is up.", { kind: "page", title: "Knowledge" }));
     const { path, line } = parse(ctx.arg), d = path ? K.seen.get(path) : null, isFile = !!d && d.type !== "dir", editing = K.edit && K.edit.at === path;
-    const find = (kbd = "⌘K") => h("label", { class: "kb-q" }, icon("search"), input({ type: "search", value: K.q, placeholder: "Search everything: notes, files, posts", "aria-label": "Search the knowledge base", autocomplete: "off", oninput: (e, n) => { K.q = n.value; K.qPath = path; search(ctx); ctx.update(); } }), h("kbd", null, kbd));
+    const find = (kbd = "⌘K") => h("label", { class: "kb-q" }, icon("search"), input({ type: "search", value: K.q, placeholder: "Search everything: notes, files, posts", "aria-label": "Search the knowledge base", "data-kb-all": "", autocomplete: "off", oninput: (e, n) => { K.q = n.value; K.qPath = path; search(ctx); ctx.update(); } }), h("kbd", null, kbd));
     const searching = K.q.trim().length >= 2 && K.qPath === path;
     const side = h("nav", { class: "kb-side", "aria-label": "Files" },
       h("div", { class: "kb-top" },
         crumbs(path),
-        h("label", { class: "kb-q" }, icon("search"), input({ type: "search", value: K.fq || "", placeholder: "Find a file by name", "aria-label": "Find a file by name", autocomplete: "off", oninput: (e, n) => { K.fq = n.value; searchFiles(ctx); ctx.update(); } }), h("kbd", null, "/"))),
+        h("label", { class: "kb-q" }, icon("search"), input({ type: "search", value: K.fq || "", placeholder: "Find a file by name", "aria-label": "Find a file by name", "data-kb-files": "", autocomplete: "off", oninput: (e, n) => { K.fq = n.value; searchFiles(ctx); ctx.update(); } }), h("kbd", null, "/"))),
       h("div", { class: "kb-phone kb-find", "data-key": "pfind" }, find("")),
       !path && !searching && matchMedia("(max-width: 640px)").matches ? h("div", { class: "kb-phone kb-ask-p", "data-key": "pask" }, kbChat(ctx)) : null,
       searching ? h("div", { class: "kb-phone kb-phone-results", "data-key": "pres" }, resultsView()) : null,

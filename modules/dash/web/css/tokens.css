@@ -1,4 +1,6 @@
-/* Hive design tokens, redesign 2026-11-04. Drop-in replacement for css/tokens.css (and the copy in site/css/).
+/* Hive design tokens, 2026-11-05 (ui-regen-1105-0932). Replaces css/tokens.css and site/css/tokens.css (and the demo copy, which the site build makes).
+   Changes from the shipped file: --data-bg and --on-accent, both NEW and both drawn last pass but not yet landed. Everything else is unchanged:
+   Inter, cool greys, amber as the one accent, blue --data for charts.
    Every variable name from the old file is kept, so JS and the other CSS files keep working.
    New names: --fs-read, --fs-hero, --lh-read, --s8, --s9, --r-xl, --ctl-l, --accent, --accent-ink, --accent-bg.
    One definition per token; light-dark() picks the theme. <html> follows the system; data-theme="light|dark" pins it. */
@@ -68,6 +70,8 @@
   /* data: the plain colour of bars, meters and chart lines. Blue, so a full bar never reads as a warning;
      orange (--warn) and red (--bad) are kept for the bars that are (the person, 2026-11-04) */
   --data:     light-dark(oklch(58% .14 250), oklch(72% .12 250));
+  --data-bg:  light-dark(oklch(58% .14 250 / .12), oklch(72% .12 250 / .16));   /* NEW: the fill under a chart line (charts used a hard-coded 15% mix) */
+  --on-accent:oklch(20% .02 70);   /* NEW: text on an amber fill (badge, pressed chip check). White on amber is 2.3:1; this is 8:1 */
   --info:var(--accent); --info-ink:var(--accent-ink);   /* "waiting for you" is the accent: it's yours to act on */
   --quiet:    light-dark(oklch(66% .006 265), oklch(58% .006 265));
   --ended:    light-dark(oklch(80% .004 265), oklch(42% .004 265));

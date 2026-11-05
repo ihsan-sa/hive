@@ -326,7 +326,7 @@ function syncGraph(D) {
   requestAnimationFrame(() => { for (const el of EL.values()) el.classList.remove("map-in"); });
   // the lines: spokes, then the selection's links on top
   const t = now(), rg = [], path = [], spSeen = new Set();
-  for (const r of L.rings || []) if (r.ox) rg.push(`<ellipse class="map-ring" cx="${r.cx}" cy="${r.cy}" rx="${r.ox.toFixed(1)}" ry="${r.oy.toFixed(1)}"/><text class="map-rt" x="${r.cx}" y="${(r.cy - r.oy + 14).toFixed(1)}">${r.name}</text>`);
+  for (const r of L.rings || []) if (r.ox) rg.push(`<ellipse class="map-ring" cx="${r.cx}" cy="${r.cy}" rx="${r.ox.toFixed(1)}" ry="${r.oy.toFixed(1)}"/><text class="map-ring-t" x="${r.cx}" y="${(r.cy - r.oy + 14).toFixed(1)}">${r.name}</text>`);
   // spokes are kept by key, so a moved node's line eases to its new place with it (CSS `d`)
   for (const sp of L.spokes) {
     const acc = S2.acc.has(sp.node) || (GS.posted.get(sp.node) || 0) > t, key = sp.node + ">" + sp.thread, d = sp.d || spokePath(sp);

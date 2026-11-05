@@ -1975,3 +1975,166 @@ dialog.rc-rail[open]{display:flex;flex-direction:column;gap:var(--s2)}
 .sh-who{display:flex;justify-content:space-between;align-items:center;gap:var(--s2);font-size:var(--fs-meta);color:var(--ink-3)}
 .sh-text{white-space:pre-wrap;overflow-wrap:anywhere;font-size:var(--fs-small);color:var(--ink-2);max-height:7.5em;overflow:hidden}
 .sh-row[data-gone]{opacity:.45}.sh-row[data-gone] .sh-text{text-decoration:line-through}
+
+/* components.css: changes for 2026-11-05 (ui-regen-1105-0932). Canvas: "Hive UI redesign". Sections 1-9 are last pass's rules: they did not land, and they still apply. Sections 10-15 are new.
+   Append these after the "redesign 2026-11-04" block, at the end of the file: later wins. Same class names, so the JS doesn't change,
+   except where HANDOFF.md names a new class.
+   First, housekeeping: components.css now holds two copies of many rules (the original block, then the redesign block from line ~1170
+   that overrides it). Once this lands, delete the overridden originals (.sec-h, .sec-t, .sec-n, .ph-*, .stat*, .tbl th/td, .subtabs,
+   .subtab, .cm-filters, .cm-st, .msg-q, .cp-reply). That's about 9 KB less CSS on first paint, and it ends the "which one wins" guessing. */
+
+/* ===== 1. text on amber: badge, pressed chip check. White on amber is 2.3:1. ===== */
+.tab-badge,.mn-b{color:var(--on-accent)}
+.tm-chip[aria-pressed=true] i::after{border-color:var(--on-accent)}
+
+/* ===== 2. status tag: shape + word. Replaces .pg-t (Progress) and is the one pattern for a status word in a table cell.
+   The colour sits on the shape; the word stays readable ink. "info" (yours to act on) is the only tinted one. ===== */
+.pg-t,.tag{display:inline-flex;align-items:center;gap:6px;height:22px;padding:0 8px;border-radius:var(--r-pill);background:var(--sunken);font-size:var(--fs-meta);font-weight:var(--w-med);color:var(--ink-2);white-space:nowrap}
+.pg-t::before,.tag::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--c,var(--quiet));flex:none}
+.pg-t[data-tone=warn]::before,.tag[data-tone=warn]::before{border-radius:2px}
+.pg-t[data-tone=bad]::before,.tag[data-tone=bad]::before{border-radius:0;width:9px;clip-path:polygon(50% 0,100% 100%,0 100%)}
+.pg-t[data-tone=quiet]::before,.tag[data-tone=quiet]::before,.pg-t:not([data-tone])::before{background:none;box-shadow:inset 0 0 0 1.5px var(--quiet)}
+.pg-t[data-tone=bad],.tag[data-tone=bad]{color:var(--bad-ink)}
+.pg-t[data-tone=info],.tag[data-tone=info]{background:var(--accent-bg);color:var(--accent-ink)}
+/* drop the old per-tone text colours: */
+.pg-t[data-tone=good],.pg-t[data-tone=warn]{color:var(--ink-2)}
+
+/* ===== 3. section head: the note moves into an info icon's title; segments carry counts ===== */
+.sec-info{width:24px;height:24px;color:var(--ink-3)}                         /* NEW: button(kind:"icon", icon:"info") after .sec-t */
+.sec-info .ic{width:16px;height:16px}
+.sec-h>.sec-a,.sec-h>.seg:last-child{margin-left:auto}                       /* actions sit right */
+.seg button i{font-style:normal;margin-left:4px;color:var(--ink-3);font-variant-numeric:tabular-nums}  /* NEW: a count inside a segment: seg([["owed", "Owed", null, 3]]) */
+.seg button[aria-pressed=true] i{color:var(--ink-2)}
+
+/* ===== 4. figures with a "worse" mark (Progress tiles; any stats() with tone bad) =====
+   The figure keeps ink. A small triangle + "worse than the day before" goes under it, instead of turning the number red. */
+.stat[data-tone=bad] .stat-v{color:var(--ink)}
+.stat-w{display:flex;align-items:center;gap:5px;margin-top:2px;font-size:var(--fs-meta);font-weight:var(--w-med);color:var(--bad-ink)}   /* NEW */
+.stat-w::before{content:"";width:9px;height:8px;background:var(--bad);clip-path:polygon(50% 0,100% 100%,0 100%)}
+.stats.card{margin:0;overflow:hidden}                                        /* NEW use: stats({ card: true }) puts the row in one card, as on Now's Today */
+.stats.card>.stat{padding:16px 20px;box-shadow:-1px 0 0 var(--line)}
+.stats.card>.stat:first-child{box-shadow:none}
+
+/* ===== 5. folded row: something that moved a level down (Scoreboard, Usage's detail sections, Now's Details) ===== */
+details.fold-row{border-top:1px solid var(--line)}                            /* NEW: section({ fold: true, summary }) */
+details.fold-row:last-of-type{border-bottom:1px solid var(--line)}
+details.fold-row>summary{display:flex;align-items:center;gap:8px;height:44px;padding:0 4px;list-style:none;cursor:pointer;font-size:var(--fs-small);font-weight:var(--w-med);color:var(--ink-2)}
+details.fold-row>summary::-webkit-details-marker{display:none}
+details.fold-row>summary .ic{width:16px;height:16px;transition:transform .15s}
+details.fold-row[open]>summary .ic{transform:rotate(90deg)}
+details.fold-row>summary:hover{color:var(--ink)}
+details.fold-row>summary>small{margin-left:auto;font-size:var(--fs-meta);font-weight:400;color:var(--ink-3)}
+details.fold-row>.fold-in{padding:4px 0 24px}
+
+/* ===== 6. table: a row action that shows on hover/focus ===== */
+.tbl .row-a{opacity:0;text-align:right;width:1%}
+.tbl tbody tr:hover .row-a,.tbl tbody tr:focus-within .row-a{opacity:1}
+@media (hover:none){.tbl .row-a{opacity:1}}
+.tbl td.t{color:var(--ink-3)}                                                 /* NEW: the age column ("4d", "12m") */
+
+/* ===== 7. sub row: a tab's own pages. One rule set (delete the two older ones). Aligns with the page gutter. ===== */
+.subtabs{display:flex;align-items:center;gap:2px;height:44px;padding:0 var(--gutter);background:var(--surface);border-top:0;border-bottom:1px solid var(--line);overflow-x:auto;scrollbar-width:none;font-size:var(--fs-small)}
+.top:has(+.subtabs),.top:has(.subtabs){border-bottom:0}
+.subtab{flex:none;height:28px;display:inline-flex;align-items:center;padding:0 10px;border-radius:var(--r-s);color:var(--ink-2);text-decoration:none;white-space:nowrap}
+.subtab:hover{background:var(--hover);color:var(--ink)}
+.subtab[aria-current=page]{background:var(--hover);color:var(--ink);font-weight:var(--w-med)}
+:root[data-dev] .subtabs{height:40px}
+
+/* ===== 8. settings: grouped rows inside one card (Modules: Installed / Available) ===== */
+.blk-h{padding:10px 20px;border-top:1px solid var(--line);background:var(--bg);font-size:var(--fs-meta);font-weight:var(--w-med);color:var(--ink-3)}   /* NEW */
+.blks>.blk-h:first-child{border-top:0;border-radius:var(--r-l) var(--r-l) 0 0}
+.blk-ic{display:grid;place-items:center;width:36px;height:36px;flex:none;border-radius:var(--r-m);background:var(--sunken);color:var(--ink-2)}   /* NEW: a module's icon */
+.blk-need{color:var(--ink-3)}                                                 /* NEW: "· needs a Slack app of your own" after .blk-s text */
+.lr-more{padding:10px 12px;border-top:1px solid var(--line)}
+
+/* ===== 9. Map toolbar: the layout segment gets icons; the summary stays right ===== */
+.map-tb .seg .ic{width:16px;height:16px}
+.map-tb{padding:var(--s3) var(--gutter)}
+/* BUG (this pass): map.css line ~230 styles the Orbit ring label as .map-rt (uppercase, bold, letter-spaced), and .map-rt is also the
+   text column of every side-pane row (mesh.js, kbtime.js). That is why "Needs a look", "Hand-offs" and "Talk most" render in caps.
+   Fix: in map.css rename that rule to text.map-ring-t, and in mesh.js:267 write class="map-ring-t". The ring labels then read: */
+text.map-ring-t{font-size:11px;font-weight:var(--w-med);fill:var(--ink-3);text-anchor:middle}
+/* Section heads in the side pane and the band labels: sentence case, like every other section head. */
+.map-sec>h3{text-transform:none;letter-spacing:0;font-weight:var(--w-med)}
+.map-band{text-transform:none;letter-spacing:0;font-weight:var(--w-med)}
+
+/* ===== 10. status tag: an info shape, and it wins over the old .pg-t colours. "Yours to act on" gets a diamond so it never depends on hue. ===== */
+.pg-t[data-tone=info]::before,.tag[data-tone=info]::before{width:7px;height:7px;border-radius:1px;background:var(--accent);transform:rotate(45deg)}
+
+/* ===== 11. the top bar: the usage pill says one thing in the app look. 5-hour and run-out are already in its title. ===== */
+.top-pill-5{display:none}
+:root[data-dev] .top-pill-5{display:inline}
+
+/* ===== 12. chat home: section notes go; rows match the list ===== */
+.cm-home .sec-n{display:none}
+.frow[data-key=starters]{justify-content:center}
+.away{padding:var(--s4) var(--s5)}
+.away-g+.away-g{margin-top:var(--s3)}
+.away-h{font-size:var(--fs-meta);font-weight:var(--w-med);color:var(--ink-3)}
+.away-l{display:grid;gap:4px;margin-top:4px;font-size:var(--fs-small);color:var(--ink-2)}
+.away .btn{margin-top:var(--s3)}
+
+/* ===== 13. consumer Now: table cells carry the tag; the "one row each" note goes (Now's overview passes no note in the app look) ===== */
+.nt-ask{max-width:62ch}
+
+/* ===== 14. Map: Lineage and the legend ===== */
+.map-legend{gap:4px 14px;font-size:var(--fs-meta);color:var(--ink-3)}          /* one line at 1440: "outside posts" no longer orphans */
+.map-ho{stroke:var(--ink-3);stroke-width:1.25;fill:none}                        /* the hand-off arrow: ink, not status */
+.map-gen{font-size:var(--fs-meta);font-weight:var(--w-med);fill:var(--ink-3)}   /* NEW: column heads, SVG text, HANDOFF §8 */
+
+/* ===== 15. touch: a message's actions no longer show on every message. A tap focuses the message and shows them.
+   Replaces @media (hover:none){.msg-end{opacity:1}} (components.css ~1483). Needs tabindex="-1" on .msg. About 34 px back per message on a phone. ===== */
+@media (hover:none){.msg-end{display:none;opacity:1}.msg:focus-within .msg-end,.msg:focus .msg-end{display:flex}}
+
+/* Chat: changes for 2026-11-05 (ui-regen-1105-0932). Sections 1-5 are from last pass and did not land; section 6 on is new. These rules live in components.css today (the .cm-* and .tm-* blocks), not chat.css;
+   append them to the end of components.css with components.changes.css. Re-check against the brief (screenshots/consumer/chat-thread-*). */
+
+/* ===== 1. the show filters in the side (For you / Updates / Agent comms): stay where the person put them (11040113eacf), lose the amber.
+   A pressed filter isn't something to act on, so it gets the neutral pressed look of .seg, with an ink check. ===== */
+.tm-chip[aria-pressed=true]{background:var(--surface);border-color:var(--line-2);color:var(--ink);box-shadow:0 1px 2px oklch(0% 0 0 / .05)}
+.tm-chip[aria-pressed=true]:hover{background:var(--hover)}
+.tm-chip[aria-pressed=true] i{background:var(--ink);border-color:var(--ink)}
+.tm-chip[aria-pressed=true] i::after{border-color:var(--on-ink)}
+
+/* ===== 2. list rows: the status word is ink, the dot carries the colour. Only "Needs your answer" keeps the accent ink. ===== */
+.cm-st{font-weight:var(--w-med);color:var(--ink-2)}
+.cm-st[data-tone=info]{color:var(--accent-ink)}
+.cm-st[data-tone=ended]{color:var(--ink-3)}
+
+/* ===== 3. "Show 4 hidden" in the thread head becomes an icon (see HANDOFF.md §5): the filter icon with a dot while anything is hidden. ===== */
+.cm-hid{position:relative}
+.cm-hid::after{content:"";position:absolute;top:5px;right:5px;width:6px;height:6px;border-radius:50%;background:var(--accent)}
+
+/* ===== 4. the For-you bar on agent messages: kept as is. If you agree to the open question in HANDOFF.md §8, replace the rule
+   at components.css ~1708 with this: a small amber dot before the author, no full-height bar (the brief rules out left-border marks). =====
+.msg[data-who=agent][data-show=you]::before{content:none}
+.msg[data-who=agent][data-show=you]>.msg-h::before{content:"";width:6px;height:6px;margin-right:2px;border-radius:50%;background:var(--accent);flex:none;align-self:center}
+*/
+
+/* ===== 5. a chart image in a message: blue is data. The bars in price-history.png come from the agent's own plot, not from us; nothing to change.
+   The inline chart blocks (rich/plot.js) already read --data. ===== */
+
+/* ===== 6. three filters on one row at 272 px: the third label is "Agents" here (the title keeps "Agent comms") ===== */
+.tm-chip{white-space:nowrap}
+
+/* ===== 7. the phone: touch targets for the actions a tap reveals (components.changes.css §15). The strip starts folded: HANDOFF §4. ===== */
+@media (max-width:640px){.msg-end .btn[data-kind=icon]{width:44px;height:44px}}
+
+/* Deck preview: slides drawn from their shapes at the slide's own pixel size, scaled to fit (office.js pptx). */
+.pv-slide{aspect-ratio:auto;padding:0;display:block;overflow:hidden}
+.pv-sl-clip{position:relative;width:100%;overflow:hidden}
+.pv-sl{position:absolute;left:0;top:0;transform-origin:0 0;background:#fff;color:#1d1d1f;overflow:hidden;font-size:18pt;line-height:1.2}
+.pv-sl-shape{position:absolute;overflow:hidden;box-sizing:border-box;padding:.1in .15in}
+.pv-sl-shape>.pv-sl-text{width:100%}
+.pv-sl-img{width:100%;height:100%;object-fit:contain;display:block}
+.pv-sl-shape:has(>.pv-sl-img){padding:0}
+.pv-sl-text h3{margin:0;font-size:32pt;line-height:1.1;font-weight:600}
+.pv-sl-text p{margin:0 0 .3em}
+.pv-sl-text ul{margin:0;padding-left:1.2em}
+.pv-sl-title{display:flex;align-items:center}
+.pv-sl-strip,.pv-sl-strip *{box-sizing:border-box}
+.pv-sl-strip{display:flex;gap:var(--s2);overflow-x:auto;padding:0 0 var(--s2);margin:0 0 var(--s3);position:sticky;top:0;z-index:1;background:var(--surface,var(--bg))}
+.pv-thumb{flex:none;width:112px;position:relative;padding:0;border:2px solid var(--line);border-radius:var(--r-s);background:#fff;cursor:pointer;overflow:hidden}
+.pv-thumb[data-on]{border-color:var(--info,var(--ink))}
+.pv-thumb-n{position:absolute;left:3px;bottom:2px;font-size:10px;padding:0 4px;border-radius:3px;background:rgba(0,0,0,.6);color:#fff}
+.pv-slide-n{z-index:1}

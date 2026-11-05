@@ -55,3 +55,39 @@
   .kbt-sc{padding:var(--s2)}
   .kbt-rp{position:sticky;bottom:var(--s2)}
 }
+
+/* kbtime.css: changes for Knowledge › Over time (views/kbtime.js), regen pass 2026-11-04. Canvas artboards "Knowledge › Over time" and
+   "Over time · a note picked, scrubbed back (dark)". Replace the matching rules; the rest of kbtime.css stays. */
+
+/* toolbar: a breadcrumb, not a bare link */
+.kbt-back{display:inline-flex;align-items:center;gap:6px;font-size:var(--fs-small);font-weight:var(--w-med);color:var(--ink-2);text-decoration:none}
+.kbt-back:hover{color:var(--ink)}
+.kbt-back .ic{width:16px;height:16px}
+.kbt-here{font-size:var(--fs-small);font-weight:var(--w-bold);color:var(--ink)}           /* NEW: "Over time" after the chevron */
+
+/* topic boxes: sentence case, lighter, so 130 dots read first */
+.kbt-box rect{fill:var(--bg);stroke:var(--line);stroke-width:1}
+.kbt-bl{font:var(--w-med) 11px var(--font);fill:var(--ink-3);text-transform:none;letter-spacing:0}
+.kbt-n circle{fill:var(--ink-3)}
+.kbt-n.sel circle{fill:var(--accent);stroke:var(--ink);stroke-width:2.5}
+.kbt-n.dim{opacity:.25}
+.kbt-l.dim .kbt-lv{opacity:.08}
+
+/* legend under the stage: replaces the "How to read this" list in the side pane (that list moves into a closed details.fold-row) */
+.kbt-legend{display:flex;flex-wrap:wrap;gap:6px 18px;padding:10px var(--s4);border-top:1px solid var(--line);font-size:var(--fs-meta);color:var(--ink-2)}   /* NEW */
+.kbt-legend>span{display:inline-flex;align-items:center;gap:6px}
+.kbt-legend .d{width:10px;height:10px;border-radius:50%;background:var(--ink-3)}
+.kbt-legend .d[data-s]{width:6px;height:6px}
+.kbt-legend .d[data-hot]{background:var(--accent)}
+.kbt-legend .d[data-gone]{background:none;box-shadow:inset 0 0 0 1.5px var(--ink-3)}
+.kbt-legend .ln{width:22px;border-top:1.5px solid var(--ink-3)}
+.kbt-legend .ln[data-inf]{border-top-style:dashed}
+.kbt-legend .ln[data-sup]{border-top-color:var(--warn)}
+.kbt-legend .gp{width:18px;height:12px;border-radius:2px;background:repeating-linear-gradient(135deg,var(--line-2) 0 2px,transparent 2px 5px)}
+
+/* the record's kinds: sentence case words, colour only for "exact" and "stated" */
+.kbt-k{width:68px;font-size:var(--fs-micro);font-weight:var(--w-bold);text-transform:none;letter-spacing:0;color:var(--ink-3)}
+
+/* slider: hatched gaps a touch taller so they read as "not recorded", ticks for filed notes */
+.kbt-gap{top:8px;height:16px}
+.kbt-tick{top:24px;opacity:1;border-radius:1px}
