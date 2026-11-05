@@ -6,7 +6,8 @@ import { now, ago, dur, clock, dayName, untilText, money, money$, toks, pct, plu
 import { TIERS, tier, status } from "../core/status.js";
 import { threadHref, agentHref, href } from "../core/router.js";
 import { metrics, cols } from "../templates.js";
-import { pageHeader, section, tally, stats, share, rank, empty, button, seg } from "../ui/kit.js";
+import { table } from "../ui/table.js";
+import { pageHeader, section, tally, stats, share, rank, empty, button, seg, meter } from "../ui/kit.js";
 import { gaugeRows } from "../ui/gauge.js";
 import { openRef } from "../ui/refs.js";
 import { chart, carry } from "../ui/chart.js";
@@ -183,6 +184,51 @@ function range(U, t) {
   return { key: r[0], span, since: r[2] ? t - span : 0, name: r[3], step: Math.max(MIN, Math.round(span / 288 / MIN) * MIN) };
 }
 
+
+const tag = (tone, text) => h("span", { class: "pg-t", "data-tone": tone || null }, text);
+
+/** The app look: a state, one answer, three cards, one chart, a short accounts table, the detail behind closed rows. */
+function appHead(U, t, R, pick, d1) {
+  const us = U.logins || [], ans = leftAnswer(U, t), wk = activeUse(U, t) || totalUse(us, t);
+  const used = wk ? Math.round(wk.pct) : null, stopAt = U.stop_pct || 100;
+  const state = used == null ? { tone: "quiet", text: "Not read yet" } : used >= stopAt ? { tone: "bad", text: "At the stop line" } : used >= 80 ? { tone: "warn", text: "Getting close" } : { tone: "good", text: "Plenty left" };
+  const title = used == null ? "Usage isn't read yet." : `${Math.max(0, 100 - used)}% of the week is left.`;
+  const fig = l => (ans.figures.find(f => f.label === l) || null);
+  const wkF = fig("Left now"), f5 = fig("5-hour left"), tt = fig("Left overall");
+  const cards = [wkF && { ...wkF, label: "This week" }, f5 && { ...f5, label: "This 5 hours" },
+    { label: "Last 24 hours", value: money(spendSince(t - DAY)), note: "of work, at list prices" },
+    us.length > 1 ? tt && { ...tt, label: "Left overall", note: "all accounts together" } : null].filter(Boolean);
+  const lastAt = Math.max(0, ...us.map(l => (l.limits && l.limits.at) || 0));
+  return pageHeader({ state, title, lead: ans.lead, tone: ans.tone, after: h("div", { style: "margin-top:var(--s3)" }, stats(cards, { card: true })),
+    meta: [U.scanning ? "still reading the older logs" : null, lastAt ? `limits as last reported ${ago(lastAt * 1e3)}` : null] });
+}
+
+function appAccounts(U, t, R) {
+  const us = U.logins || [];
+  const cell = (g, stop) => g ? h("div", { class: "gauge-c" }, meter({ value: g.pct || 0, stop, label: g.label }), h("span", { class: "meta" }, g.value)) : h("span", { class: "meta" }, "–");
+  const rows = us.map(l => loginRow(U, l, t, Math.min(R.span, 7 * DAY)));
+  const st = r => r.state.key === "inuse" ? tag("good", "in use") : r.state.key === "paused" ? tag("quiet", "paused") : r.state.key === "out" ? tag("bad", "signed out") : tag("warn", "at its stop line");
+  const wStop = l => (l.stop && l.stop.weekly) ?? U.stop_pct;
+  return section({ title: "Claude accounts", note: `stop line ${U.stop_pct}%`, actions: can("config") ? button("Change", () => askStopLine(U), { size: "s", kind: "quiet" }) : null },
+    table({ key: r => r.key, rows, columns: [
+      { label: "Login", render: r => h("span", null, r.name, r.tag ? h("span", { class: "meta" }, " · " + r.tag) : null) },
+      { label: "Weekly", render: r => cell(r.gauges.find(g => g.label === "Weekly"), r.gauges.find(g => g.label === "Weekly")?.stop) },
+      { label: "5-hour", render: r => cell(r.gauges.find(g => g.label === "5-hour"), r.gauges.find(g => g.label === "5-hour")?.stop) },
+      { label: "State", render: st },
+      { label: "", cls: "row-a", render: r => h("span", { class: "row-a-in" }, ...(r.actions || [])) },
+    ] }));
+}
+
+function appChart(U, t, R, pick) {
+  const us = U.logins || [], T = totalSeries(us, t, R.span, R.step), color = new Map(us.map((l, i) => [l.name, slot(i)]));
+  if (!T.per.length) return null;
+  const many = T.per.length > 1;
+  const series = many ? [T.total, ...T.per.map(x => x.vals)] : [T.total.some(v => v != null) ? T.total : T.per[0].vals];
+  const key = many ? h("span", { class: "chart-key" }, T.per.map(x => h("span", null, h("i", { style: `border-top-color:${color.get(x.l.name)}` }), x.l.name))) : null;
+  return section({ title: "Week used", actions: pick },
+    chart({ title: "% of the week used", note: `${R.name}; dashed: stop line ${U.stop_pct}%`, series, colors: many ? ["var(--data)", ...T.per.map(x => color.get(x.l.name))] : null, kind: "step", start: T.start, step: T.step, max: 100, mark: U.stop_pct, markLabel: "stop line", fmt: v => Math.round(v) + "%", top: "100%" }), key);
+}
+
 export default {
   id: "usage", label: "Usage", about: "how much is left, and when it comes back", tab: true,
   render(ctx) {
@@ -248,6 +294,12 @@ export default {
       section({ title: "Costliest agents", note: R.name }, rank(top(byA).map(([k, v]) => ({ key: k, label: k, value: v, text: money(v), tone: status(agentStatus(k).key).tone, href: agentHref(k), onClick: e => openRef(e, "agent", k) })))));
     const models = section({ title: "By model", note: R.name }, !Object.keys(byM).length ? empty("No model spend in this range.") : rank(top(byM).map(([k, v]) => ({ key: k, label: k, value: v, text: money(v), tone: "data" }))));
 
+    if (app) {
+      const fold = (title, summary, ...b) => section({ fold: true, title, summary }, ...b);
+      return metrics({ header: appHead(U, t, R, pick, d1), sections: [appChart(U, t, R, pick), appAccounts(U, t, R), others,
+        fold("How much work was done", `${money(d1)}, ${R.name}`, spend, charts), hasTiers() ? fold("Spend against your priority list", R.name, tiers) : null,
+        fold("Costliest conversations and agents", R.name, who), fold("By model", R.name, models)] });
+    }
     return metrics({ header, sections: [totalSection(U, t, R), limits, others, spend, charts, hasTiers() ? tiers : null, who, models] });
   },
 };

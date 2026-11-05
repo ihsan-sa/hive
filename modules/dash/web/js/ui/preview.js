@@ -6,7 +6,7 @@
 // origin (sandbox="allow-scripts", plus the server's sandbox CSP), so it never touches this page, its cookie or the API.
 // openPreview(items, i): items are { id, name, size, from, t }; id is the post's 12-hex id, name the file name.
 import { h } from "../core/dom.js";
-import { stamp } from "../core/format.js";
+import { stamp, ago } from "../core/format.js";
 import { button, icon } from "./kit.js";
 
 /** A file's kind, from its name: picks the renderer and the badge. */
@@ -99,7 +99,7 @@ export function openPreview(items, i = 0) {
 /** The Files list in the panel: this conversation's files and a project's folders. */
 export function openFiles() {
   shell();
-  P.list = true; P.seq++; P.ctl && P.ctl.abort(); P.ctl = null;
+  P.list = true; P.seq++; clearTimeout(P.live); P.ctl && P.ctl.abort(); P.ctl = null;
   P.root.setAttribute("aria-label", "Files"); P.root.dataset.kind = "files";
   mark();
   import("../preview/files.js").then(m => { if (P.root && P.list) m.drawFiles(P.head, P.body, { open: openPreview, close: closePreview }); });
@@ -127,7 +127,7 @@ function shell() {
 
 export function closePreview() {
   if (!P.root) return;
-  P.ctl && P.ctl.abort();
+  P.ctl && P.ctl.abort(); clearTimeout(P.live);
   P.root.remove(); P.grip.remove(); document.body.removeAttribute("data-pv"); document.body.removeAttribute("data-pv-full");
   if (P.blob) { URL.revokeObjectURL(P.blob); P.blob = null; }
   const back = P.back;
@@ -166,10 +166,53 @@ function header(it, r) {
       }, { kind: "icon", icon: "link", size: "s", cls: "pv-link" }),
       fullBtn(),
       button("Close (Esc)", closePreview, { kind: "icon", icon: "close", size: "s", cls: "pv-x" })),
-    h("div", { class: "pv-a" }, tabs, h("span", { class: "pv-sp" }), copy,
+    h("div", { class: "pv-a" }, tabs, it.kb ? h("span", { class: "meta pv-live", title: "This panel shows the file's newest version and updates itself" }, "") : null, h("span", { class: "pv-sp" }), copy, saveAs(it, r),
       dl ? h("a", { class: "btn", "data-size": "s", "data-kind": "quiet", href: dl, download: it.name, title: "Download " + it.name }, "Download") : null,
       it.kb ? h("a", { class: "btn", "data-size": "s", "data-kind": "quiet", href: "#knowledge/" + encodeURIComponent(it.kb), title: "Open in Knowledge" }, "Open")
         : h("a", { class: "btn", "data-size": "s", "data-kind": "quiet", href: viewHref(it), target: "_blank", rel: "noopener noreferrer", title: "Open in a new tab" }, "Open")));
+}
+
+// Save as: Markdown (the text as shown), Word and PDF (the rendered document). Only for a shown Markdown or text file.
+function saveAs(it, r) {
+  if (!r || r.text == null || !["md", "text"].includes(kindOf(it.name)) && !/\.(md|markdown|txt)$/i.test(it.name)) return null;
+  const doc = () => P.body.querySelector(".pv-md") || P.body.querySelector(".pv-doc") || P.body;
+  const go = f => e => { e.currentTarget.closest("details").open = false; import("../preview/docexport.js").then(m => f(m)); };
+  const item = (label, f) => h("button", { type: "button", class: "pv-mi", role: "button", onclick: go(f) }, label);
+  return h("details", { class: "pv-save" },
+    h("summary", { class: "btn", "data-size": "s", "data-kind": "quiet", title: "Save this document" }, icon("download"), h("span", null, "Save as")),
+    h("div", { class: "pv-menu pv-sv", role: "group" },
+      item("PDF", m => m.savePdf(it.name, doc())), item("Word (.doc)", m => m.saveWord(it.name, doc())), item("Markdown (.md)", () => import("../preview/docexport.js").then(m => m.saveMarkdown(it.name, r.text)))));
+}
+
+// A project file stays live: while it is open the panel asks for it again every few seconds and redraws when it changed,
+// keeping your place. The head says when it last changed.
+const LIVE_MS = 3000;
+function live(it, my, known) {
+  clearTimeout(P.live);
+  if (!it.kb) return;
+  const tick = async () => {
+    if (my !== P.seq || !P.root || P.list) return;
+    const w = P.head && P.head.querySelector(".pv-live");
+    if (w && known.t) w.textContent = "changed " + ago(known.t * 1000);
+    if (document.hidden) { P.live = setTimeout(tick, LIVE_MS); return; }
+    try {
+      const r = await fetch("/api/kb/open?path=" + encodeURIComponent(it.kb), { cache: "no-store" });
+      if (my !== P.seq) return;
+      if (r.ok) {
+        const d = await r.json();
+        if (known.t && (d.t !== known.t || d.size !== known.size)) {
+          Object.assign(known, { t: d.t, size: d.size });
+          const top = P.body.scrollTop, m = await import("../preview/render.js");
+          const x = await m.render(it, { source: MODE.get(keyOf(it)) === "src" });
+          if (my !== P.seq || !P.root || P.list) return;
+          header(it, x); P.body.replaceChildren(x.node); P.body.scrollTop = top;
+          const w2 = P.head.querySelector(".pv-live"); if (w2) { w2.textContent = "changed just now"; w2.dataset.fresh = ""; setTimeout(() => w2.isConnected && delete w2.dataset.fresh, 4000); }
+        } else if (!known.t) { Object.assign(known, { t: d.t, size: d.size }); const w3 = P.head.querySelector(".pv-live"); if (w3) w3.textContent = "changed " + ago(d.t * 1000); }
+      }
+    } catch (e) {}
+    P.live = setTimeout(tick, LIVE_MS);
+  };
+  tick();
 }
 
 // Expand gives the file the whole width, like Claude's expanded artifact; pressed again it goes back beside the chat.
@@ -213,7 +256,7 @@ function switcher(it) {
 async function show(k) {
   const n = P.items.length; P.i = ((k % n) + n) % n;
   const it = P.items[P.i], my = ++P.seq;
-  P.ctl && P.ctl.abort(); P.ctl = new AbortController();
+  P.ctl && P.ctl.abort(); P.ctl = new AbortController(); clearTimeout(P.live);
   P.root.setAttribute("aria-label", "Preview of " + it.name);
   P.root.dataset.kind = kindOf(it.name);
   header(it, null);
@@ -232,6 +275,7 @@ async function show(k) {
   if (my !== P.seq || !P.root || P.list) return;
   header(it, r);
   P.body.replaceChildren(r.node);
+  live(it, my, { t: 0, size: 0 });
 }
 
 // Capture, so Escape closes the preview and doesn't reach the view under it. A window open on top gets it first; so does
@@ -240,10 +284,18 @@ addEventListener("keydown", e => {
   if (e.key !== "Escape" || !P.root || document.querySelector("dialog[open]") || document.querySelector("aside.panel")) return;
   if (document.fullscreenElement) return;
   e.stopPropagation();
-  const m = P.root.querySelector(".pv-menu:not([hidden])");
+  const m = P.root.querySelector(".pv-menu:not([hidden]):not(.pv-sv)");
   if (m) m._shut(); else closePreview();
 }, true);
 addEventListener("hashchange", () => { if (P.root) mark(); });
+
+// A project path in a message (markdown.js: data-kind=kbfile) opens the live panel on that file.
+document.addEventListener("click", e => {
+  const a = e.target.closest && e.target.closest("a.ref[data-kind=kbfile]");
+  if (!a || e.defaultPrevented || e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;
+  e.preventDefault();
+  const kb = a.dataset.pvKb; openPreview([{ kb, name: kb.split("/").pop() }], 0);
+});
 
 // A file link in a message (markdown.js draws them with data-pv-key) opens here, with the message's other file links as Prev/Next.
 document.addEventListener("click", e => {

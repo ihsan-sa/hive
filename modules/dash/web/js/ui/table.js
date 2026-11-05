@@ -4,7 +4,7 @@ import { empty } from "./kit.js";
 
 export function table({ columns, rows, key, empty: none = "Nothing here.", caption }) {
   if (!rows.length) return empty(none);
-  const cls = c => [c.num && "num", c.mono && "mono", c.wrap && "wrap", c.clip && "clip"].filter(Boolean).join(" ") || null;
+  const cls = c => [c.num && "num", c.mono && "mono", c.wrap && "wrap", c.clip && "clip", c.cls].filter(Boolean).join(" ") || null;
   return h("div", { class: "tbl-w" },
     h("table", { class: "tbl" },
       caption ? h("caption", { class: "vh" }, caption) : null,

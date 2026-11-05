@@ -37,7 +37,17 @@ Wait about five minutes, then `ssh root@SERVER-ADDRESS` (the login your provider
 
 Nothing is open to the internet but SSH, and the app answers only on the server itself. Leave your provider's firewall as it is.
 
-## 4. And from your phone
+## 4. Check it and back it up
+
+Ask your Hive, or run these as its user (`sudo -iu hive`):
+
+1. `server check` says what to fix. Anything with `sudo` in it is yours to run; read it first.
+2. `server backup setup WHERE` makes a daily encrypted backup somewhere off this server. It needs restic: `sudo apt install restic`. Copy the key it names somewhere safe.
+3. `server limits on` keeps a runaway job from taking the machine down.
+
+[The server module](../guide.md#the-server-module) says what each one does.
+
+## 5. And from your phone
 
 - **Slack** sends jobs and brings answers back from anywhere: [Option B](07-remote.md#option-b-slack).
 - **The whole app** on a phone needs a tunnel you set up with your own Cloudflare account: [Option C](07-remote.md#option-c-the-full-app-through-cloudflare).

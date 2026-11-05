@@ -26,6 +26,11 @@ export function secretParts(ctx, level) {
       try { await post("/api/secret", { name, delete: true }); say(`Removed ${name}.`, "good"); await load(ctx); }
       catch (e) { say(e.message, "bad"); ctx.update(); }
     };
+    // Replace: the row's name goes in the box and the cursor to the value, so only the new value is typed. The old value is never read.
+    const replace = name => {
+      F.name = name; F.value = ""; say(`Type the new value for ${name}, then Save. It overwrites the old one.`);
+      ctx.update(); setTimeout(() => { const i = document.querySelector(".secrets input[type=password]"); if (i) { i.focus(); i.scrollIntoView({ block: "center" }); } }, 0);
+    };
     const reach = S.app.settings ? secretsReach() : "Every agent on this account can read the file, so use tokens you can rotate.";
     return [
       section({ title: "Add or replace", level },
@@ -36,8 +41,8 @@ export function secretParts(ctx, level) {
         h("div", { class: "frow" }, button("Save", save, { kind: "primary" }),
           F.say ? h("p", { class: "fmsg", "data-tone": F.tone, role: "status" }, F.say) : null)),
       section({ title: "Stored", level }, list(F.items.map(r => ({
-        key: r.name, title: r.name, meta: ago(r.at * 1000),
-        text: button("Remove", () => remove(r.name), { size: "s", kind: "quiet" }),
+        key: r.name, title: r.name, meta: "set " + ago(r.at * 1000),
+        text: h("span", { class: "frow" }, button("Replace", () => replace(r.name), { size: "s", kind: "quiet", title: `Type a new value for ${r.name}` }), button("Remove", () => remove(r.name), { size: "s", kind: "quiet" })),
       })), { empty: "Nothing stored yet." }))];
 }
 

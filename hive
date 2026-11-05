@@ -186,8 +186,15 @@ def cmd_model(a):
     if rec.get("harness", "claude-code") != "claude-code" or rec.get("fallback") or me.startswith("f") or ":" in str(now_on or ""):
         sys.exit(f"hive model: you're on {now_on or 'a provider'}, and this only moves a Claude run. Hand the work to a stronger agent: hive post --model opus, with a brief")
     if a.to_model == now_on: sys.exit(f"hive model: you're already on {now_on}")
+    way = f"{'up' if now_on in CLAUDE_MODELS and CLAUDE_MODELS.index(a.to_model) > CLAUDE_MODELS.index(now_on) else 'down'} from {now_on}" if now_on in CLAUDE_MODELS else f"from {now_on or 'another model'}"
+    if a.next:  # no resume: the agent panel's own route (starter.apply_model_sets), so stepping down at a stopping point costs nothing now
+        try:
+            (STATE / "model-set").mkdir(parents=True, exist_ok=True); (STATE / "model-set" / f"{me}.json").write_text(json.dumps({"model": a.to_model}))
+        except OSError as x: sys.exit(f"hive model --next: can't from here ({x.strerror}). Use hive model {a.to_model} and end your turn")
+        cmd_post(argparse.Namespace(thread=rec.get("thread"), to=None, model=None, reply_to=None, file=None, as_=None, routed=False, text=[f"Next wake on {a.to_model} ({way}): " + " ".join(a.why)]))
+        return
     print(f"Now end your turn: you resume on {a.to_model} in this same conversation. Say what's left in the thread first if it isn't obvious. If no login has room, you wait until one does.", file=sys.stderr)
-    cmd_post(argparse.Namespace(thread=rec.get("thread"), to=me, model=a.to_model, reply_to=None, file=None, as_=None, routed=False, text=[f"Switching to {a.to_model}: " + " ".join(a.why)]))
+    cmd_post(argparse.Namespace(thread=rec.get("thread"), to=me, model=a.to_model, reply_to=None, file=None, as_=None, routed=False, text=[f"Switching to {a.to_model} ({way}): " + " ".join(a.why)]))
 
 def cmd_read(a):
     sel = [p for p in posts() if (not a.thread or p.get("thread") == a.thread or p.get("id") == a.thread)
@@ -781,6 +788,22 @@ def cmd_step(a):
                        input=f"{a.do} step {s['id']}-{s['sha'][:8]}", text=True)
     sys.exit(r.returncode)
 
+def cmd_bringup(a):
+    """hive show THREAD --why "..." [--for 10m]: put a thread in the dashboard's "Brought up for you" strip so the person can click straight in."""
+    th = (a.thread or "").lstrip("#")
+    if not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.:-]{0,100}", th): sys.exit("hive show: give a thread name (letters, digits and . _ : -)")
+    m = re.fullmatch(r"(\d+)([mh]?)", a.for_ or "10m")
+    if not m: sys.exit("hive show: --for is minutes or hours, like 10m or 1h")
+    secs = int(m.group(1)) * (3600 if m.group(2) == "h" else 60)
+    if not 60 <= secs <= 86400: sys.exit("hive show: --for between 1m and 24h")
+    if not any(p.get("thread") == th for p in posts()): sys.exit(f"hive show: no thread named {th} on the board (hive search words to find it)")
+    t = time.time(); why = " ".join((a.why or "").split())[:200]
+    rec = {"thread": th, "from": os.environ.get("HIVE_NAME", "anon"), "why": why, "at": t, "until": t + secs}
+    STATE.mkdir(parents=True, exist_ok=True)
+    with open(STATE / "shown.jsonl", "a") as f:
+        fcntl.flock(f, fcntl.LOCK_EX); f.write(json.dumps(rec) + "\n")
+    print(f"brought up {th} for {secs // 60} min")
+
 def cmd_progress(a):
     """hive improve ... and hive progress ...: core/progress.py (the improvements ledger and the scoreboard)."""
     os.execv(sys.executable, [sys.executable, "-I", str(CORE / "progress.py")] + a.rest)
@@ -806,8 +829,10 @@ p.add_argument("--model", type=post_model, help="model for any run this post sta
 p.add_argument("--reply-to", dest="reply_to", metavar="ID", help="the post this answers; shown on the board, and a door puts the answer under that message")
 p.add_argument("--file", action="append", help="attach a file (repeatable): copied to ~/files/<post id>/, shown in hive read, Slack and the dashboard")
 p.add_argument("text", nargs="*"); p.set_defaults(f=cmd_post)
-p = sp.add_parser("model", help="hive model haiku|sonnet|opus|fable WHY...: carry on with this conversation on another model. It posts WHY in your thread; end your turn and you resume on that model with your memory")
-p.add_argument("to_model", choices=CLAUDE_MODELS, metavar="MODEL"); p.add_argument("why", nargs="+"); p.set_defaults(f=cmd_model)
+p = sp.add_parser("show", help="hive show THREAD --why \"...\" [--for 10m]: bring a thread up: the dashboard shows it in a pinned \"Brought up for you\" strip at the top for 10 min (or --for), with who raised it and why, so the person can click straight in. Use it when the person asks you to bring something up")
+p.add_argument("thread"); p.add_argument("--why", default=""); p.add_argument("--for", dest="for_", metavar="10m", help="how long it stays: 5m, 1h (default 10m, up to 24h)"); p.set_defaults(f=cmd_bringup)
+p = sp.add_parser("model", help="hive model haiku|sonnet|opus|fable WHY...: carry on with this conversation on another model. It posts WHY in your thread; end your turn and you resume on that model with your memory. --next: no resume, your next wake starts on it")
+p.add_argument("to_model", choices=CLAUDE_MODELS, metavar="MODEL"); p.add_argument("--next", action="store_true"); p.add_argument("why", nargs="+"); p.set_defaults(f=cmd_model)
 p = sp.add_parser("read", help="hive read [--thread T] [--since 2h|ISO] [--from X] [--to X] [--id ID] [-n 30, 0 for all] [--short: one line per post]")
 p.add_argument("--thread"); p.add_argument("--since"); p.add_argument("--from", dest="from_"); p.add_argument("--to")
 p.add_argument("--id"); p.add_argument("-n", type=int, default=30); p.add_argument("--short", action="store_true"); p.set_defaults(f=cmd_read)

@@ -1,0 +1,13 @@
+[Unit]
+Description=Hive voice memos: transcribe audio attached to the person's posts on the GPU or CPU, summarize, reply in thread
+
+[Service]
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=%h/modules/voice/.venv/bin/python %h/modules/voice/voice.py watch
+Restart=always
+RestartSec=20
+Nice=10
+MemoryMax=6G
+
+[Install]
+WantedBy=default.target

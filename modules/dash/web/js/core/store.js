@@ -7,7 +7,7 @@ export const SYS = new Set(["starter", "dash", "anon", "all", "400", "mention", 
 
 export const S = {
   app: { route: "open", can: null, app: false, setup: null },
-  live: null, usage: null, projects: null, agentCosts: null, threadNames: {}, threadMeta: {},
+  live: null, usage: null, projects: null, agentCosts: null, threadNames: {}, threadMeta: {}, shown: [],
   posts: [], byId: {}, threads: new Map(), off: 0,
   sessions: [], lastSess: {}, open: {}, byOut: {}, woke: {}, logOff: 0,
   agents: new Set(), killed: {}, limited: [], limitedSess: new Set(), limitedNow: new Set(),
@@ -163,6 +163,10 @@ export async function loadThreadNames() {
 export async function loadThreadMeta() {
   try { const v = await jget("/api/thread-meta"); if (JSON.stringify(v) !== JSON.stringify(S.threadMeta)) { S.threadMeta = v; S.ver++; emit({ names: true }); } } catch (e) {}
 }
+/** Threads an agent brought up for the person (/api/shown): `hive show THREAD --why ...`. The strip drops each at its end time. */
+export async function loadShown() {
+  try { const v = await jget("/api/shown"); if (JSON.stringify(v) !== JSON.stringify(S.shown)) { S.shown = Array.isArray(v) ? v : []; S.ver++; emit({ names: true }); } } catch (e) {}
+}
 export async function loadProjects() {
   if (S.projects) return; S.projects = "loading"; emit({ projects: true });
   try { const p = await jget("/api/projects"); p.sort((a, b) => (b.t || 0) - (a.t || 0)); S.projects = p; } catch (e) { S.projects = null; }
@@ -170,7 +174,7 @@ export async function loadProjects() {
 }
 export function start() {
   const every = (ms, f) => setInterval(() => { if (!document.hidden) f(); }, ms);
-  every(1500, poll); every(3000, pollUsage); every(15000, loadApp); every(60000, loadThreadNames); every(15000, loadThreadMeta);
+  every(1500, poll); every(3000, pollUsage); every(15000, loadApp); every(60000, loadThreadNames); every(15000, loadThreadMeta); every(5000, loadShown);
   document.addEventListener("visibilitychange", () => { if (!document.hidden) { poll(); pollUsage(); } });
-  return Promise.all([loadApp(), pollUsage(), poll(), loadThreadNames(), loadThreadMeta()]);
+  return Promise.all([loadApp(), pollUsage(), poll(), loadThreadNames(), loadThreadMeta(), loadShown()]);
 }

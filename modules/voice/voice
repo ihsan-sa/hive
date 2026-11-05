@@ -1,0 +1,4 @@
+#!/bin/sh
+# The module's own Python once `voice setup` has built it; the system's before (setup needs only the standard library).
+d=$(dirname "$(readlink -f "$0")"); py="$d/.venv/bin/python"; [ -x "$py" ] || py=python3
+exec "$py" "$d/voice.py" "$@"

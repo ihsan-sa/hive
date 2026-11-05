@@ -241,7 +241,7 @@ function draftsPart(g, update) {
     h("p", null, ds.length === 1 ? "An agent drafted a fix. Read it: this is exactly what would go." : `Agents drafted ${ds.length} fixes. Read each: this is exactly what would go.`),
     ds.map(d => h("div", { class: "card draft", "data-key": "draft-" + d.id },
       h("p", null, h("b", null, d.title)),
-      h("p", { class: "field-h" }, (d.how === "pull request" ? "Goes as a pull request from your fork" : "Goes as an issue" + (d.patch ? " with the patch" : "")) + (d.at ? " · drafted " + d.at : "") + (d.approved ? " · approved, waiting to go" : "")),
+      h("p", { class: "field-h" }, (d.how === "pull request" ? "Goes as a pull request from your fork" : "Goes as an issue" + (d.patch ? " with the patch" : "")) + (d.repo ? " on " + d.repo : "") + (d.at ? " · drafted " + d.at : "") + (d.approved ? " · approved, waiting to go" : "")),
       h("pre", { class: "draft-text" }, d.text),
       d.patch ? h("pre", { class: "draft-diff" }, d.patch) : null,
       local() ? h("div", { class: "frow" },

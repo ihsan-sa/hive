@@ -1606,17 +1606,10 @@ button.more-i{background:none;border:0;font:inherit;text-align:left;cursor:point
 @media (min-width:1340px){.ag-w{position:static;max-height:none;overflow:visible}.ag th{top:var(--bar-h)}}
 .ag tbody tr:hover td:first-child{background:var(--hover)}
 
-/* ---- consumer first run: three steps down the left, the log of what's happening beside them ---- */
+/* ---- consumer first run: the one screen, the log of what is happening beside it ---- */
 .wt{max-width:1120px}
 .wt-h{font-size:var(--fs-head);font-weight:var(--w-bold);margin:var(--s2) 0 var(--s1)}
 .wt-lead{max-width:var(--measure);color:var(--ink-2);margin:0 0 var(--s4);text-wrap:pretty}
-.wt-steps{list-style:none;display:flex;flex-wrap:wrap;gap:var(--s2) var(--s5);margin:0 0 var(--s5);padding:0;font-size:var(--fs-small);color:var(--ink-3)}
-.wt-steps li{display:flex;align-items:center;gap:var(--s2)}
-.wt-n{display:inline-grid;place-items:center;width:22px;height:22px;border:1px solid var(--line-2);border-radius:50%;font-size:var(--fs-meta);font-variant-numeric:tabular-nums}
-.wt-steps [aria-current]{color:var(--ink);font-weight:var(--w-bold)}
-.wt-steps [aria-current] .wt-n{background:var(--ink);border-color:var(--ink);color:var(--on-ink)}
-.wt-steps [data-done]{color:var(--ink-2)}
-.wt-steps [data-done] .wt-n{border-color:var(--good-ink);color:var(--good-ink)}
 .wt-g{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:var(--s5);align-items:start}
 .wt-m{display:grid;gap:var(--s4);min-width:0}
 .wt-card{display:grid;gap:var(--s3);min-width:0;padding:var(--s4) var(--s5) var(--s5);border:1px solid var(--line);border-radius:var(--r-l);background:var(--surface)}
@@ -1625,7 +1618,6 @@ button.more-i{background:none;border:0;font:inherit;text-align:left;cursor:point
 .wt-card .signin{margin:0}
 .wt-card .signin .signin{margin-top:var(--s2);padding:0;border:0;background:none}
 .wt-foot{position:sticky;bottom:0;z-index:1;display:flex;align-items:center;gap:var(--s2);padding:var(--s3) 0;background:var(--bg);border-top:1px solid var(--line)}
-.wt-next{margin-left:auto}
 .wt>.wt-g>.alog{position:sticky;top:calc(var(--bar-h) + 17px)}
 @media (max-width:900px){.wt-g{grid-template-columns:minmax(0,1fr)}.wt>.wt-g>.alog{position:static}.wt-card{padding:var(--s3) var(--s4) var(--s4)}}
 .checks.cards{gap:var(--s2)}
@@ -2138,3 +2130,43 @@ text.map-ring-t{font-size:11px;font-weight:var(--w-med);fill:var(--ink-3);text-a
 .pv-thumb[data-on]{border-color:var(--info,var(--ink))}
 .pv-thumb-n{position:absolute;left:3px;bottom:2px;font-size:10px;padding:0 4px;border-radius:3px;background:rgba(0,0,0,.6);color:#fff}
 .pv-slide-n{z-index:1}
+
+/* ---- the document panel: live note, save menu, and a calmer reading type for files (library-style) ---- */
+.pv-live{margin-left:6px}.pv-live[data-fresh]{color:var(--good,currentColor);font-weight:600}
+.pv-save{position:relative}.pv-save>summary{list-style:none;display:inline-flex;gap:4px;align-items:center;cursor:pointer}.pv-save>summary::-webkit-details-marker{display:none}
+.pv-save .pv-menu{left:auto;right:0;top:calc(100% + 4px);min-width:11em}
+.pv-save:not([open]) .pv-menu{display:none}
+.pv-md>.md{max-width:72ch;font-size:15px;line-height:1.65}
+.pv-md>.md h1{font-size:1.7em;margin:.2em 0 .5em;letter-spacing:-.01em}
+.pv-md>.md h2{font-size:1.3em;margin:1.5em 0 .4em;padding-bottom:.2em;border-bottom:1px solid var(--line)}
+.pv-md>.md h3{font-size:1.08em;margin:1.2em 0 .3em}
+.pv-md>.md p,.pv-md>.md li{margin:.6em 0}
+.pv-md>.md table{display:block;overflow-x:auto;margin:1em 0;font-size:.92em}
+.pv-md>.md th,.pv-md>.md td{border:0;border-bottom:1px solid var(--line);padding:6px 12px}
+.pv-md>.md th{background:var(--sunken);border-bottom:2px solid var(--line-2)}
+.pv-md>.md tr:nth-child(even) td{background:color-mix(in srgb,var(--sunken) 45%,transparent)}
+@media print{.pv,.pv-grip,#top{display:none}}
+/* ---- brought up for you: threads an agent raised with `hive show`, in the Chat side list over Conversations ---- */
+.brought{display:grid;gap:4px;min-width:0;margin-top:8px;padding:8px;border-radius:var(--r2,8px);background:color-mix(in oklch,var(--accent,var(--ink)) 8%,var(--surface));font-size:var(--fs-small)}
+.brought-h{padding:0 2px;font-size:var(--fs-meta);font-weight:var(--w-med);color:var(--ink-2)}
+.brought-r{position:relative;display:grid;min-width:0}
+.brought-x{position:absolute;top:2px;right:2px}
+.brought-i{display:grid;min-width:0;padding:4px 28px 4px 8px;border:1px solid var(--line);border-radius:var(--r-s);background:var(--surface);color:var(--ink);text-decoration:none}
+.brought-i:hover{border-color:var(--ink)}
+.brought-t{font-weight:var(--w-med);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.brought-w{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* Chat messages read like a document (the person, 5 Nov: the library's markdown looks better): the reading look the preview panel uses (.pv-md), at chat size. */
+.msg-b>.md[data-rich]{line-height:1.65}
+.msg-b>.md[data-rich] h1{font-size:1.45em;margin:.2em 0 .5em;letter-spacing:-.01em}
+.msg-b>.md[data-rich] h2{font-size:1.2em;margin:1.3em 0 .4em;padding-bottom:.2em;border-bottom:1px solid var(--line)}
+.msg-b>.md[data-rich] h3{font-size:1.05em;margin:1.1em 0 .3em}
+.msg-b>.md[data-rich] :is(h1,h2,h3):first-child{margin-top:0}
+.msg-b>.md[data-rich] .md-tw table{margin:.4em 0}
+.msg-b>.md[data-rich] .md-tw :is(th,td){border:0;border-bottom:1px solid var(--line);padding:6px 12px}
+.msg-b>.md[data-rich] .md-tw th{background:var(--sunken);border-bottom:2px solid var(--line-2)}
+.msg-b>.md[data-rich] .md-tw tr:nth-child(even) td{background:color-mix(in srgb,var(--sunken) 45%,transparent)}
+
+/* Usage accounts table: a meter and its figure in one cell */
+.gauge-c{display:flex;align-items:center;gap:var(--s2);min-width:140px}
+.gauge-c .meter{flex:1;min-width:80px}
+.row-a-in{display:inline-flex;gap:var(--s2)}

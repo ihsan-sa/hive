@@ -8,7 +8,7 @@ curl -fsSL https://hivelab.ca/install.sh | sh
 ```
 It asks for your password once, makes a Linux user called `hive`, installs git, Python and Claude Code if they're missing, and prints an address. Open that in a browser on the same machine, sign in to Claude, and say what you want.
 - To open it again, click the Hive icon in your app menu (it opens the address your browser already knows). To see the address: `sudo -iu hive hive web`.
-- On a server, forward the port: `ssh -L PORT:127.0.0.1:PORT server`, then open the address on your own machine.
+- On a server, forward the port: `ssh -L PORT:127.0.0.1:PORT server`, then open the address on your own machine. The install adds the [server module](guide.md#the-server-module), which checks the setup and gives you backups and memory limits.
 - On Ubuntu 24.04 it adds an AppArmor profile so that bubblewrap can make the sandbox. It applies to every user of the machine and widens the kernel's attack surface for them. Uninstalling doesn't remove it, but prints the command that does.
 
 **Windows 10 or 11**, in PowerShell:

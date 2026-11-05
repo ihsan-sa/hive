@@ -27,6 +27,10 @@ const INLINE = new RegExp([
 const FILE = /^(?:~|\/home\/[\w.-]+)?\/files\/([0-9a-f]{12})\/([A-Za-z0-9_][A-Za-z0-9_.-]*)$/;
 const fileRef = (id, name, ...kids) => h("a", { class: "ref", "data-kind": "file", "data-pv-key": id + "/" + name, href: `/files/${id}/${encodeURIComponent(name)}`, title: "Preview " + name }, ...kids);
 
+// A file in a project or the kb, written as projects/x/plan.md: opens in the preview panel, which keeps showing its newest revision.
+const KBREF = /^(?:~\/)?((?:projects|kb|modules|core|tools|investigations)\/[\w.-]+(?:\/[\w.-]+)*\.(?:md|markdown|txt|csv|json|ya?ml|py|sh|html))$/;
+const kbRef = (path, ...kids) => h("a", { class: "ref", "data-kind": "kbfile", "data-pv-kb": path, "data-pv-key": "kb:" + path, href: "#knowledge/" + encodeURIComponent(path), title: "Open " + path + " (live)" }, ...kids);
+
 const link = (href, ...kids) => h("a", { href, target: "_blank", rel: "noopener noreferrer" }, ...kids);
 
 // While inline text runs, maths sits behind a placeholder (a private-use character and its index), so the emphasis and link
@@ -47,13 +51,14 @@ function run(s, ms) {
     if (m.index < at) continue;
     let end = m.index + m[0].length, node;
     if (m[1] != null) node = m[1];
-    else if (m[3] != null) { let c = raw(m[3], ms); c = /^ .*[^ ].* $|^ [^ ] $/.test(c) ? c.slice(1, -1) : c; const f = FILE.exec(c); node = f ? fileRef(f[1], f[2], h("code", null, c)) : h("code", null, c); }
+    else if (m[3] != null) { let c = raw(m[3], ms); c = /^ .*[^ ].* $|^ [^ ] $/.test(c) ? c.slice(1, -1) : c; const f = FILE.exec(c), k = !f && KBREF.exec(c); node = f ? fileRef(f[1], f[2], h("code", null, c)) : k ? kbRef(k[1], h("code", null, c)) : h("code", null, c); }
     else if (m[5] != null) node = link(raw(m[5], ms), run(m[4], ms));
     else if (m[6] != null || m[7] != null) node = h("strong", null, run(m[6] ?? m[7], ms));
     else if (m[8] != null || m[9] != null) node = h("em", null, run(m[8] ?? m[9], ms));
     else if (m[10] != null) node = h("del", null, run(m[10], ms));
     else if (m[11] != null) node = footRef(m[11]) || m[0];
     else if (m[13] != null) node = fileRef(m[13], m[14], m[0]);
+    else if (m[15] != null) node = kbRef(m[15], m[0]);
     else if (m[12] != null) node = S.threads && S.threads.has(m[12]) ? h("a", { class: "ref", "data-kind": "thread", href: threadHref(m[12]), title: "Thread " + m[12] }, "#" + m[12]) : m[0];
     else {
       // A bare link: leave sentence punctuation and an unmatched ) outside it.

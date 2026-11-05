@@ -5,7 +5,7 @@
 // synthesised here, so it needs no file. Agents ring with `phone ring`: rings show as a banner on every page.
 // While the person talks, the speech so far goes to /partial every ~1.2 s so their words show as they say them.
 // Every page polls /calls, so a call placed on one device shows live on the others: in its thread's strip (callFor, used by
-// the comms view), as "On a call" on the agent, and as a read-only card here.
+// the comms view), as "On a call" on the agent, and as a card here, where any of them can hang it up.
 import { S, jget, post, emit } from "../core/store.js";
 
 const API = "/api/phone";
@@ -201,6 +201,7 @@ function draw() {
 function onClick(e) {
   const a = e.target.closest("[data-a]"); if (!a) return;
   if (a.dataset.a === "end") end();
+  else if (a.dataset.a === "hangup") hangUp(a.dataset.call);
   else if (a.dataset.a === "mute") { C.muted = !C.muted; draw(); }
   else if (a.dataset.a === "hide") { LIVE.hidden.add(a.dataset.call); draw(); }
   else if (a.dataset.a === "answer") { const id = a.dataset.ring; RINGS.seen.add(id); RINGS.list = []; drawRings(); startCall({ ring: id }); }
@@ -233,24 +234,30 @@ export const phoneReady = () => !!(S.app && S.app.phone && navigator.mediaDevice
 export const inCall = () => !C.ended;
 
 // ---- calls in progress anywhere (another device, another tab) ----
-const LIVE = { calls: [], sig: "", hidden: new Set(), iv: null };
+const LIVE = { calls: [], sig: "", hidden: new Set(), ending: new Set(), failed: null, iv: null };
 /** Live calls, each {id, agent, thread, state, started, partial, lines: [[speaker, text]]}. */
 export const liveCalls = () => LIVE.calls;
 export const callFor = th => (th ? LIVE.calls.find(c => c.thread === th) : null);
 export const onCallWith = name => LIVE.calls.find(c => c.agent === name);
+/** End a call from this window, wherever it was placed. The device on the call hears "end" in its event stream and stops its mic. */
+export function hangUp(id) {
+  if (id === C.id && !C.ended) return end();
+  LIVE.ending.add(id); LIVE.failed = null; LIVE.calls = LIVE.calls.filter(c => c.id !== id); draw(); emit({ calls: true });
+  post(`${API}/call/${id}/end`, {}).catch(() => { LIVE.ending.delete(id); LIVE.hidden.delete(id); LIVE.failed = id; LIVE.sig = ""; pollCalls(); });
+}
 function drawOther(c) {
   let prev = null;
   const lines = c.lines.filter(([w]) => w !== "system").slice(c.partial ? -3 : -4).map(([w, t]) => { const same = w === prev; prev = w; return `<div class="ph-line${w === "person" ? " ph-you" : ""}">${same ? "" : `<b>${esc(w === "person" ? "You" : w)}</b> `}${esc(t)}</div>`; }).join("")
     + (c.partial ? `<div class="ph-line ph-you ph-partial">${prev === "person" ? "" : "<b>You</b> "}<i>${esc(c.partial)}…</i></div>` : "");
-  const st = c.state === "hold" ? "On hold" : `On a call, ${Math.max(1, Math.round((Date.now() / 1000 - c.started) / 60))} min · on another device`;
+  const st = LIVE.failed === c.id ? "Couldn't hang up. Try again." : c.state === "hold" ? "On hold" : `On a call, ${Math.max(1, Math.round((Date.now() / 1000 - c.started) / 60))} min · on another device`;
   fill(`<div class="ph-top"><span class="ph-dot ${esc(c.state)}"></span><div><div class="ph-who">${esc(c.agent)}</div><div class="ph-st">${st}</div></div></div>
     <div class="ph-lines" aria-live="polite">${lines}</div>
-    <div class="ph-btns"><button class="btn" data-a="hide" data-call="${esc(c.id)}">Hide</button></div>`);
+    <div class="ph-btns"><button class="btn" data-a="hide" data-call="${esc(c.id)}">Hide</button><button class="btn ph-end" data-a="hangup" data-call="${esc(c.id)}">Hang up</button></div>`);
 }
 async function pollCalls() {
   if (!(S.app && S.app.phone) || document.hidden) return;
   try {
-    const r = await jget(`${API}/calls${window.H2_PHONE_ALL ? "?all=1" : ""}`), calls = r.calls || [];
+    const r = await jget(`${API}/calls${window.H2_PHONE_ALL ? "?all=1" : ""}`), calls = (r.calls || []).filter(c => !LIVE.ending.has(c.id));
     const sig = JSON.stringify(calls.map(c => [c.id, c.agent, c.thread, c.state, c.partial, c.lines.length]));
     LIVE.calls = calls;
     if (sig !== LIVE.sig) { LIVE.sig = sig; draw(); emit({ calls: true }); }

@@ -106,6 +106,8 @@ In a conversation:
 - **More** at the top right has the conversation's priority, search and a link to its place on the Timeline.
 - **Share this result** (in **More**) turns the conversation into one web page you can post: your ask, who worked on it and how long it took, the result with its pictures, and a replay. First you see every message with a **Remove** button on each, and a plain line that everything on the page becomes public if you post it. Paths, links, emails, addresses and long tool output are already taken out, so read it anyway. The page is saved to your downloads as one file that works offline; nothing is uploaded. In a terminal, `hive share CONVERSATION` does the same, and `--show` prints the text first.
 
+**Brought up for you.** When you ask an agent to bring a conversation up ("can you bring that up?"), it appears in the Chat side list, above Conversations, with who raised it and why. One click opens it, and it drops off by itself after about ten minutes, or sooner if you dismiss it with its ×. Agents do it with `hive show THREAD --why "..."`.
+
 Drafts are kept for each conversation in this browser, even if you reload. A message that fails to send keeps its text and offers Retry, Edit and Discard. Sent messages can't be unsent.
 
 **Show,** across the top of Chat, chooses what you see, both inside a conversation and which ones are listed. Each choice turns on and off by itself, so you can have any mix. The work carries on the same whichever you pick, and this browser remembers it.
@@ -163,7 +165,7 @@ When every account is past its line, new agents wait, and running ones finish th
 - **Model:** which Claude model new agents use, Sonnet unless you change it. For one agent, choose a model in the message box, write `@opus`, `@sonnet`, `@haiku`, `@fable` or `@astra`, or put `--model opus` in the message. If your plan doesn't include the model you picked, agents can't start until you pick another.
 - **Power:** who approves a step outside the sandbox. See [Before you install](#before-you-install).
 - **Sandbox:** whether it works on this machine, and the choice to [run without it](#running-without-the-sandbox).
-- **Secrets:** send a token to the Hive. It's never shown back.
+- **Secrets:** send a token to the Hive. It's never shown back. Saved ones are listed by name with when each was set; **Replace** puts the name in the box so you type only the new value, and **Remove** deletes it after a confirm.
 - **Extras:** add or remove tools, by name or from a Git URL.
 - **Access from outside:** see [tutorial 7](tutorials/07-remote.md). You can only change this on the machine itself. A name can have its own Access team and people under "Names with their own sign-in".
 
@@ -207,7 +209,7 @@ Ten jobs with messages you can paste are in [What to ask it](tutorials/10-what-t
 Agents run in a sandbox around the Hive's folder, so **they can't see your files until you give them some.** On Windows your drives are switched off inside the Hive as well.
 
 - **In:** Attach or paste, or drag onto an open conversation, up to 100 MB per file. For more, give it a link, a Git repo or a folder it can reach.
-- **Out:** ask the agent to attach the result. It appears in the message, and a click opens it in a preview beside the conversation: documents, PDFs, pictures, audio and video (a voice memo or audio file plays right in the message, with a waveform you can click to jump around), code, tables (CSV and spreadsheets), JSON, notebooks, LaTeX files (shown as a formatted document with equations, plus any figures attached to the same message), Word files with their pictures, PowerPoint files, and web pages (shown in a locked-down frame, never run as the dashboard). Each file shows as a card with an **Open** button. Click the file name at the top of the preview to switch to another file from the conversation, **Expand** to fill the window, and the link button to copy a link to the file. Drag the panel's edge to resize it, and press Esc or × to close it. **Download** saves the file, and on a phone the preview opens as a sheet.
+- **Out:** ask the agent to attach the result. It appears in the message, and a click opens it in a preview beside the conversation: documents, PDFs, pictures, audio and video (a voice memo or audio file plays right in the message, with a waveform you can click to jump around), code, tables (CSV and spreadsheets), JSON, notebooks, LaTeX files (shown as a formatted document with equations, plus any figures attached to the same message), Word files with their pictures, PowerPoint files, and web pages (shown in a locked-down frame, never run as the dashboard). Each file shows as a card with an **Open** button. Click the file name at the top of the preview to switch to another file from the conversation, **Expand** to fill the window, and the link button to copy a link to the file. Drag the panel's edge to resize it, and press Esc or × to close it. **Download** saves the file, and on a phone the preview opens as a sheet. When a message names a project file (for example `projects/hive-gtm/plan.md`), clicking it opens that file in the same panel and keeps it live: when an agent edits the file the newest version appears on its own, with a note of when it last changed. On a document, **Save as** offers PDF (through the browser's print dialog), Word and Markdown.
 - **The Files button** at the top of a conversation lists every file in it (Outputs, what agents made, then Sources, what you sent), and below that the project folders to browse. Any of them opens in the same preview, and **All files** in the preview takes you back to the list.
 - **Looking around yourself:** on Windows, open `\\wsl$\Hive` in Explorer. On Linux, `sudo -iu hive` and then `~/projects`, or `~/hive/projects` in your own account.
 
@@ -277,6 +279,33 @@ Pro and Max 5x are taken as one twentieth and a quarter of Max 20x, as Anthropic
 
 **A container instead of a server?** Not yet. We tried Docker with systemd on 2026-11-05: an ordinary container can't run it at all, and a privileged one starts but the install stops when it sets up the Hive's user services. Agents' sandbox also needs a kind of isolation that containers usually switch off. A server or a virtual machine works today, so we ship no Dockerfile.
 
+### The server module
+
+When the install finds no desktop on a Linux machine, it adds the `server` module and says so. Elsewhere, add it with `hive module add server`, and take it off with `hive module remove server`. Installing with `HIVE_SERVER=0` leaves it out. It holds no root, opens no port and starts nothing until you ask. Anything needing root it prints for you to run.
+
+**`server check`** looks over the setup and says what to fix. It fails if the app's port faces a network, if the Hive's user has sudo without a password or sits in a group equal to root, if the Hive stops at logout, or if the Hive is in your own account. Run it after you set up a server, and ask an agent to run it whenever you like.
+
+**`server reach`** prints the ways in above. It only prints: it starts no tunnel.
+
+**`server backup setup WHERE`** turns on a daily encrypted backup with [restic](https://restic.net), to a folder or a restic address such as `sftp:you@other-machine:hive`. `server backup now`, `server backup status` and `server backup restore EMPTY-FOLDER` do the rest.
+- It backs up projects, knowledge, attached files, the board, the log and your settings. It leaves out logins, tokens and anything that looks like a key, so you sign in again after a restore. That goes by file name, so a secret pasted into a post or kept under an ordinary name in a project still goes in.
+- The key is at `~/.hive/server/backup.key`. Copy it somewhere off the server, because without it the backup can't be read.
+- Agents can reach the destination, so one that goes wrong could delete backups too. For a copy they can't touch, make the destination append-only: an append-only restic server, or a storage key that can't delete.
+- A backup sends your Hive's data to wherever you point it, so choose the destination yourself. Agents are told not to set one up unasked.
+
+**`server limits on`** caps what the Hive can use, so a runaway job can't take the machine down. The sizes come from the machine's memory. `server limits off` undoes it. Then **`heavy CMD`** runs a big job in turn, and it's the first to be killed if memory runs out. `heavy --quick CMD` is for a job under 5 minutes: it skips the queue, and stops at 5 minutes or 1500 MB. Agents use these by themselves. In the sandbox, a job still takes its turn and is still killed first, but has no memory limit of its own: the Hive-wide cap is what holds it.
+
+**`server updates`** says how the Hive is updating and how to update the system.
+
+**Lines for you to run.** These are all the sudo lines the module prints, except that `check` names the real group. Agents can edit the module, so read a line before you paste it, and compare it with this list:
+
+```sh
+sudo loginctl enable-linger hive            # keep the Hive running after you log out
+sudo gpasswd -d hive GROUP                  # take the Hive's user out of a group equal to root
+sudo apt install restic                     # for backups
+sudo apt install unattended-upgrades && sudo dpkg-reconfigure -plow unattended-upgrades   # security updates
+```
+
 ## Not tested yet
 
 An independent review tried to break out of the sandbox and found no way out, but it was one model, one pass of about 15 minutes. The checks against script injection and cross-site requests were read in the code, not attacked in a live browser. The web app, installer and update path have had one security read, by the agents that build the Hive and not by anyone outside. It read the code and ran none of it.
@@ -316,7 +345,7 @@ Updates are code that runs as the Hive's account. Releases are signed, and a Hiv
 
 ## Backups
 
-The Hive commits its board, log and notes to a local git repo every few minutes, so you can look back. That's on the same disk, so it isn't a real backup. Push projects you care about to a remote, or ask an agent to set that up. Keep anything important somewhere else as well.
+The Hive commits its board, log and notes to a local git repo every few minutes, so you can look back. That's on the same disk, so it isn't a real backup. On a server, `server backup setup` makes one: see [the server module](#the-server-module). Push projects you care about to a remote, or ask an agent to set that up. Keep anything important somewhere else as well.
 
 ## Uninstall
 
@@ -330,8 +359,8 @@ Agents keep working while you're away, and when one has to stop it comes back by
 
 | When | It carries on | You're told |
 |---|---|---|
-| You hit the 5-hour or weekly limit | After the reset. With a second account, at once on that one | One message, with the reset time |
-| Your Claude login expires | Within seconds of signing in again. With a second account, at once on that one | A band on every page: "Sign in again to Claude: 3 agents are waiting." |
+| You hit the 5-hour or weekly limit | After the reset | One message, with the reset time |
+| Your Claude login expires | Within seconds of signing in again | A band on every page: "Sign in again to Claude: 3 agents are waiting." |
 | The Hive's background service crashes | The agents never stopped. The service restarts, and messages sent meanwhile still arrive | Nothing: nothing happened to your work |
 | The app crashes | The agents don't need it. It restarts | Nothing |
 | The machine restarts | When it's back, in the same conversation | One message for all of them |

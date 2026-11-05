@@ -146,6 +146,7 @@ def owns_open(name, rec):
     return ("You still own these open asks as you stop. Close each one that is delivered with `hive asks done ID --evidence POSTID`, "
             "mark `hold|person|drop ID --why ...` if it waits or is moot, or leave it if work remains (say so in your thread):\n" + rows)
 
+MODEL_CHECK_AT = 40   # tool calls into a run: past Sonnet's median run (10 replies) and Opus's (25), where a wrong model costs most
 FIRST_S = 120   # a run the person started and that has said nothing for this long is asked for one line
 
 def posted_since(name, at, thread=None, tail=300_000):
@@ -183,6 +184,23 @@ def first_line(name, rec, t=None):
             f"{rec.get('thread') or 'you were started in'}: one or two lines, the answer if you have it, else what you are doing "
             "and when to expect the result. Then carry on.")
 
+def model_check(name, rec):
+    """Once per run, at the MODEL_CHECK_AT-th tool call: is this still the right model? Context only, no reply forced, and it
+    asks both ways. Self-judged switches were 0 of 12 to 2026-11-05 (kb/model-cost.md): nothing asked at the moment work shifts."""
+    now_on = rec.get("model")
+    if os.environ.get("HIVE_DOOR") or not rec.get("at") or now_on not in STRENGTH or rec.get("fallback") or rec.get("harness", "claude-code") != "claude-code" or name.startswith("f"): return None
+    f = STATE / "model-check" / name
+    try: at, n = f.read_text().split(); n = int(n) if at == rec["at"] else 0
+    except (OSError, ValueError): n = 0
+    if n > MODEL_CHECK_AT: return None
+    n += 1
+    try: f.parent.mkdir(parents=True, exist_ok=True); f.write_text(f"{rec['at']} {n}")
+    except OSError: return None
+    if n != MODEL_CHECK_AT: return None
+    move = (f'if what\'s left is routine with a good stretch to go, `hive model sonnet "why"` and end your turn, or add `--next` if you\'re nearly done' if now_on in ("opus", "fable")
+            else 'if this has become design or debugging you\'re stuck on, `hive model opus "why"` and end your turn')
+    return f"You're {MODEL_CHECK_AT} tool calls into this run on {now_on}. Still the right model? {move[0].upper() + move[1:]}. Otherwise carry on; no need to reply to this."
+
 def main():
     name = os.environ.get("HIVE_NAME", "").lower()
     if not name: return
@@ -201,11 +219,12 @@ def main():
         with f.open("a") as fh: fh.write("".join(p["id"] + "\n" for p in ps))
     done()
     first = first_line(name, rec) if event != "Stop" else None
+    check = model_check(name, rec) if event != "Stop" else None
     if not ps:
         if event == "Stop" and (why := unanswered(name, rec) or owns_open(name, rec)):
             print(json.dumps({"decision": "block", "reason": why}))
-        elif first:
-            print(json.dumps({"hookSpecificOutput": {"hookEventName": event or "PostToolUse", "additionalContext": first}}))
+        elif first or check:
+            print(json.dumps({"hookSpecificOutput": {"hookEventName": event or "PostToolUse", "additionalContext": "\n\n".join(x for x in (first, check) if x)}}))
         return
     note = person_note(ps)
     msg = ("New on the board for you while you work (you'll get these automatically; answer with "
@@ -214,6 +233,7 @@ def main():
         print(json.dumps({"decision": "block", "reason": msg}))
     else:
         if first and not note: msg += "\n\n" + first   # the person note already asks for a post
+        if check: msg += "\n\n" + check
         print(json.dumps({"hookSpecificOutput": {"hookEventName": event or "PostToolUse", "additionalContext": msg}}))
 
 if __name__ == "__main__":

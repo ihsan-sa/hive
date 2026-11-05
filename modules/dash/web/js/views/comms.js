@@ -22,7 +22,8 @@ import { asidePanel, asideOpen, closeAside } from "../ui/aside.js";
 import { downloadMarkdown, printScript } from "../ui/export.js";
 import { shareDialog } from "../ui/share.js";
 import { pinned, archived, setMeta, renameDialog, openCard, markSeen } from "../ui/threadmeta.js";
-import { callFor } from "../ui/phone.js";
+import { callFor, hangUp } from "../ui/phone.js";
+import { brought } from "../ui/brought.js";
 import { firstJobs, closeLine } from "../ui/firstjobs.js";
 import { awayCard } from "../ui/away.js";
 import { composer, cancelReply, replyTo, say, outFor, outSig, actions as outActions, dropZone, recipient, draft, focusComposer } from "../ui/composer.js";
@@ -389,7 +390,7 @@ const notBuilt = () => h("span", { class: "nb", title: "Designed, not built yet:
 function strip(th) {
   const st = threadState(th, seen), out = [], run = (S.live ? S.live.agents : []).filter(a => a.thread === th), post = can("post") && app();
   const call = callFor(th);
-  if (call) out.push(line("working", [who(call.agent), call.state === "hold" ? " is putting you through on your call" : " is on a call with you", h("span", { class: "meta cm-line-m" }, " · " + dur(now() - call.started * 1e3))], null, { key: "call", live: true }));
+  if (call) out.push(line("working", [who(call.agent), call.state === "hold" ? " is putting you through on your call" : " is on a call with you", h("span", { class: "meta cm-line-m" }, " · " + dur(now() - call.started * 1e3))], post ? button("Hang up", () => hangUp(call.id), { size: "s" }) : null, { key: "call", live: true }));
   if (st.key === "asks") out.push(line("asks", [who(st.who), " is waiting for your answer: ", h("q", null, short(lastQuestion(st.post), 110))],
     post ? button("Answer", () => replyTo(st.post), { size: "s" }) : null, { key: "asks" }));
   if (st.key === "limited") {
@@ -610,6 +611,7 @@ export default {
           h("div", { class: "cm-search" }, icon("search"),
             input({ type: "search", placeholder: app() ? "Search" : "Search threads", "aria-label": "Search all conversations by name or content", value: C.tq, oninput: e => { C.tq = e.target.value; ctx.update(); }, onkeydown: e => { if (e.key === "Escape") { e.stopPropagation(); C.tq = ""; e.target.value = ""; e.target.blur(); ctx.update(); } } })),
           simpleOn() ? null : showChips(ctx),
+          app() ? brought() : null,
           words(C.tq).length || simpleOn() ? null : h("div", { class: "cm-scope" }, h("span", null, app() ? "Conversations" : "Threads"),
             h("button", { type: "button", class: "cm-scope-b", title: C.scope === "recent" ? (app() ? "Only the last 7 days are listed. Show every conversation." : "Only the last 24 hours are listed. Show every thread.") : "List only the recent ones",
               onclick: () => { C.scope = C.scope === "recent" ? "all" : "recent"; ctx.update(); } }, C.scope === "recent" ? "Show all" : "Recent only"))),

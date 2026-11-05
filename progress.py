@@ -233,6 +233,10 @@ def focus_quiet():
 
 def events_in(log, t0, t1, ev): return sum(1 for r in log if r.get("event") == ev and t0 <= r.get("at", "") <= t1)
 
+def model_steps(posts, t0, t1, way):
+    """Agents' own moves between models (hive model posts), leaving out the ones another post told them to make."""
+    return sum(1 for p in posts if t0 <= p.get("at", "") <= t1 and re.match(rf"(Switching to|Next wake on) \S+ \({way} from ", str(p.get("text", ""))) and "picked for the post above" not in p["text"])
+
 def window(t0, t1, log, posts, items):
     runs, failed, reaped = runs_in(log, t0, t1)
     nposts, nperson, noticed = board_in(posts, t0, t1)
@@ -248,7 +252,8 @@ def window(t0, t1, log, posts, items):
          "improvements_landed": len(landed), "improvements_judged": len(judged),
          "held": sum(1 for e in judged if e.get("status") == "held"), "reverted": sum(1 for e in judged if e.get("status") == "reverted"),
          "asks_done": asks_done_in(t0, t1), "rsi_rounds": len(rsi), "rsi_wins": sum(1 for r in rsi if r.get("verdict") == "win"),
-         "core_commits": commits_in(t0, t1), **outcomes_in(t0, t1)}
+         "core_commits": commits_in(t0, t1), **outcomes_in(t0, t1),
+         "model_steps_up": model_steps(posts, t0, t1, "up"), "model_steps_down": model_steps(posts, t0, t1, "down")}
     return w
 
 def outcomes_in(t0, t1):
@@ -261,8 +266,8 @@ def outcomes_in(t0, t1):
     return {k: s[k] for k in ("outcomes_graded", "outcome_delivered_pct", "outcomes_silent", "outcomes_nothing")}
 
 LOWER_IS_BETTER = {"fail_pct", "runs_reaped", "person_noticed_first", "person_reply_p50_s", "person_reply_p90_s", "watchdog_trips", "stalled_threads", "improvements_overdue", "projects_unmeasured", "asks_orphaned", "leftovers_orphaned", "asks_stale", "asks_unowned", "leftovers_unowned", "asks_oldest_open_d", "outcomes_silent", "outcomes_nothing", "focus_quiet"}
-NEUTRAL = {"runs", "person_replies", "keeper_rounds", "improve_rounds", "core_commits", "rsi_rounds", "reverted", "spend_usd", "asks_open", "leftovers_open", "outcomes_graded"}  # activity and cost: context, not a score (the person: don't ration work for pace)
-HEADLINE = ["runs", "fail_pct", "runs_reaped", "person_noticed_first", "person_reply_p50_s", "person_reply_p90_s", "watchdog_trips", "stalled_threads", "improvements_landed", "improvements_judged", "held", "reverted",
+NEUTRAL = {"model_steps_up", "model_steps_down", "runs", "person_replies", "keeper_rounds", "improve_rounds", "core_commits", "rsi_rounds", "reverted", "spend_usd", "asks_open", "leftovers_open", "outcomes_graded"}  # activity and cost: context, not a score (the person: don't ration work for pace)
+HEADLINE = ["runs", "model_steps_up", "model_steps_down", "fail_pct", "runs_reaped", "person_noticed_first", "person_reply_p50_s", "person_reply_p90_s", "watchdog_trips", "stalled_threads", "improvements_landed", "improvements_judged", "held", "reverted",
             "improvements_overdue", "focus_quiet", "asks_open", "leftovers_open", "asks_orphaned", "leftovers_orphaned", "asks_stale", "asks_unowned", "leftovers_unowned", "asks_done", "asks_oldest_open_d", "outcome_delivered_pct", "outcomes_silent", "outcomes_nothing", "outcomes_graded", "rsi_rounds", "rsi_wins", "keeper_rounds", "improve_rounds", "core_commits", "projects_unmeasured", "spend_usd"]
 
 def scoreboard(since):

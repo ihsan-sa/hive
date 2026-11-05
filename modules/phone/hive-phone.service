@@ -1,0 +1,13 @@
+[Unit]
+Description=Hive phone: voice calls with the Hive (local speech, GPU or CPU), on a private socket (~/.hive/phone.sock) behind the dashboard
+
+[Service]
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=TMPDIR=%h/.cache/hive-tmp
+ExecStart=%h/modules/phone/.venv/bin/python %h/modules/phone/phone.py serve
+Restart=always
+RestartSec=10
+MemoryMax=6G
+
+[Install]
+WantedBy=default.target
