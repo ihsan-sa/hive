@@ -593,6 +593,24 @@ def heavy_jobs(t=None):
     return jobs
 
 
+def signin_waiting(st):
+    """Claude accounts whose login has expired, with what waits on each (the starter's own count, auth_watch)."""
+    c, out = jload(HOME / "core" / "config.json", {}) or {}, []
+    held = st.get("limits") or {}
+    every = [str(Path(l).expanduser()) for l in c.get("logins") or []]
+    names = {str(Path(k).expanduser()): v for k, v in (c.get("login_names") or {}).items()}
+    for login in st.get("auth_told") or {}:
+        other = any(l != login and time.time() >= held.get(l, 0) for l in every)
+        n = sum(r.get("login") == login for r in (st.get("resume") or {}).values()) + (0 if other else len(st.get("pending") or {}))
+        out.append({"name": names.get(login) or Path(login).name.removeprefix(".claude-").lstrip("."), "agents": n, "other": other})
+    return out
+
+def limit_hold(st):
+    """When the starter's holds end, with every Claude account held by a limit a run hit (an expired login is told apart: signin_waiting)."""
+    every = [str(Path(l).expanduser()) for l in (jload(HOME / "core" / "config.json", {}) or {}).get("logins") or []]
+    held = [(st.get("limits") or {}).get(l, 0) for l in every]
+    return min(held) if held and min(held) > time.time() and not st.get("auth_told") else None
+
 def live():
     """The cheap part, polled by the web page: who is running and what the starter holds. No board parse."""
     agents, jobs = [], heavy_jobs()
@@ -611,10 +629,8 @@ def live():
     pending = [{"name": n, "posts": len(v), "threads": sorted({x.get("thread") or "" for x in v}), "ids": [x.get("id") for x in v][-50:]}
                for n, v in (st.get("pending") or {}).items()]
     usage = {k: v for k, v in (jload(STATE / "usage.json", {}) or {}).items() if not k.startswith("_")}
-    limit_until = st.get("limit_until")
-    if limit_until and limit_until < time.time(): limit_until = None
-    return {"now": time.time(), "agents": agents, "jobs": {"running": sum(j["running"] for j in jobs.values()), "queued": sum(j["queued"] for j in jobs.values())}, "pending": pending, "usage": usage, "logins": logins(),
-            "limit_until": limit_until, "chosen": chosen_models(st), "priorities": priorities()}
+    return {"signin": signin_waiting(st), "now": time.time(), "agents": agents, "jobs": {"running": sum(j["running"] for j in jobs.values()), "queued": sum(j["queued"] for j in jobs.values())}, "pending": pending, "usage": usage, "logins": logins(),
+            "limit_until": limit_hold(st), "chosen": chosen_models(st), "priorities": priorities()}
 
 
 _prio = (None, {})
@@ -1290,7 +1306,7 @@ gpu_c = Cached(nvidia, 15)
 
 def jobs_for(view, full):
     """/api/jobs as a caller may see it: command lines only with full rights. A limited or expired sign-in from outside sees who runs what
-    and what it uses, not the commands, which can carry paths and arguments. (From H3, b52266fe.)"""
+    and what it uses, not the commands, which can carry paths and arguments."""
     if full or not isinstance(view, dict): return view
     return {k: [{f: v for f, v in r.items() if f != "cmd"} if isinstance(r, dict) else r for r in rows] if isinstance(rows, list) else rows
             for k, rows in view.items()}
@@ -1457,6 +1473,24 @@ class Jobs:
                           "disks": disks, "slice_used": slice_used, "slice_high": slice_high, "gpus": gpu_c.get()}}
 
 
+# ---------- share this result (GET /api/share-preview, POST /api/share-build) ----------
+# share.py reads the board and log and writes nothing; the page is built here and handed to the browser to save. Nothing leaves the machine.
+def _share():
+    spec = importlib.util.spec_from_file_location("share", Path(__file__).resolve().with_name("share.py")); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+    m.HOME = HOME
+    return m
+
+def share_preview(thread):
+    m = _share(); return m.preview(thread, HOME, (thread_names() or {}).get(thread))
+
+def share_build(d):
+    th = d.get("thread")
+    if not isinstance(th, str) or not th: raise ValueError("which conversation?")
+    rm = [x for x in d.get("remove") or [] if isinstance(x, str)]
+    m = _share(); page, pv = m.build(th, rm, d.get("files") is not False, HOME, (thread_names() or {}).get(th))
+    return {"html": page, "name": (re.sub(r"[^a-z0-9]+", "-", pv["title"].lower()).strip("-")[:40] or "result") + ".html"}
+
+
 def tail_lines(path, offset):
     """Whole lines appended since byte `offset`, unparsed: the browser parses them, and the file is only ever read."""
     try:
@@ -1491,13 +1525,13 @@ WEB = STATE / "web.json"
 INSTALLED = HOME / ".hive-installed"
 FORWARDED = ("cf-ray", "cf-connecting-ip", "cf-access-jwt-assertion", "cf-ipcountry", "cf-visitor", "cdn-loop", "x-forwarded-for",
              "x-forwarded-host", "x-forwarded-proto", "x-real-ip", "forwarded", "via", "true-client-ip")
-GET_CAP = {"/api/live": "read", "/api/board": "read", "/api/log": "read", "/api/usage": "read", "/api/jobs": "read", "/api/agent": "read", "/api/agent-work": "read", "/api/ledger": "read",
+GET_CAP = {"/api/live": "read", "/api/away": "read", "/api/board": "read", "/api/log": "read", "/api/usage": "read", "/api/jobs": "read", "/api/agent": "read", "/api/agent-work": "read", "/api/ledger": "read",
            "/api/projects": "read", "/api/agent-costs": "read", "/api/thread-names": "read", "/api/thread-meta": "read", "/json": "read", "/api/target": "read", "/api/inbox": "read", "/api/delivered": "read",
            "/api/config": "config", "/api/modules": "modules", "/api/signin": "logins", "/api/plans": "plans", "/api/secrets": "secrets",
-           "/api/settings": "config", "/api/update": "config", "/api/signin-codex": "logins", "/api/accounts": "logins", "/api/design": "logins", "/api/brand/logo": "read",
-           "/api/kb/home": "files", "/api/kb/open": "files", "/api/kb/search": "files", "/api/kb/raw": "files", "/api/kb/map": "files", "/api/kb/history": "files", "/api/progress": "read", "/api/approvals": "read", "/api/feedback-drafts": "read"}
-POST_CAP = {"/api/kill": "stop", "/api/approval": "stop", "/api/tier": "tier", "/api/agent-model": "post", "/api/login-pause": "limits", "/api/login-limit": "limits", "/api/provider-limit": "limits",
-            "/api/post": "post", "/api/thread-meta": "post", "/api/feedback": "post", "/api/feedback-draft-done": "post", "/api/issue-link": "post", "/api/update": "config", "/api/share-copy": "config", "/api/draft": "config", "/api/upload": "post", "/api/inbox-read": "post", "/api/config": "config", "/api/starter": "config",
+           "/api/settings": "config", "/api/ntfy": "config", "/api/webpush": "config", "/api/update": "config", "/api/signin-codex": "logins", "/api/accounts": "logins", "/api/design": "logins", "/api/brand/logo": "read",
+           "/api/kb/home": "files", "/api/kb/open": "files", "/api/kb/search": "files", "/api/kb/raw": "files", "/api/kb/map": "files", "/api/kb/history": "files", "/api/progress": "read", "/api/share-preview": "read", "/api/approvals": "read", "/api/feedback-drafts": "read"}
+POST_CAP = {"/api/webpush": "config", "/api/share-build": "read", "/api/kill": "stop", "/api/approval": "stop", "/api/tier": "tier", "/api/agent-model": "post", "/api/login-pause": "limits", "/api/login-limit": "limits", "/api/provider-limit": "limits",
+            "/api/post": "post", "/api/thread-meta": "post", "/api/feedback": "post", "/api/feedback-draft-done": "post", "/api/issue-link": "post", "/api/update": "config", "/api/share-copy": "config", "/api/draft": "config", "/api/upload": "post", "/api/inbox-read": "post", "/api/ntfy": "config", "/api/config": "config", "/api/starter": "config",
             "/api/module": "modules", "/api/signin": "logins", "/api/signin/code": "logins", "/api/signin/cancel": "logins", "/api/plan": "plans", "/api/secret": "secrets",
             "/api/signin-codex": "logins", "/api/account-key": "logins", "/api/design": "logins", "/api/brand": "config", "/api/brand/logo": "config"}
 LOCAL_ONLY = {"/api/access", "/api/settings", "/api/share-copy", "/api/draft"}  # who may do what is never changed from outside, whatever outside.can says
@@ -1848,6 +1882,7 @@ def thread_target(thread):
 
 
 STEP_WORD = re.compile(r"(approve|deny) step [0-9a-f]{6}-[0-9a-f]{8}", re.I)
+PAIR_WORD = re.compile(r"(?:conn )?pair [a-z0-9-]+ [A-Za-z0-9]{4,16}", re.I)  # approves a connector's pairing: bare too, and marked as typed here, the only place one counts
 
 
 # Simple mode's word to the agents, on each post sent from it. Inside the head's parentheses, so the web app hides it (SOURCE in web/js/core/model.js):
@@ -1958,7 +1993,8 @@ def person_post(text, thread=None, reply_to=None, uploads=(), signer=None, limit
         thread, text, reply_to = f"btw-{parent[:90]}-{secrets.token_hex(2)}", btw[1].strip(), None
     # Approving a step goes to the broker, which takes only a whole line in this form from a plain person post. So it stays bare, with nothing added;
     # a limited sign-in's posts are marked and never count, whatever lines they hold.
-    word = not limited and not paths and bool(STEP_WORD.fullmatch(text.strip()))
+    pairing = not limited and not paths and bool(PAIR_WORD.fullmatch(text.strip()))
+    word = pairing or (not limited and not paths and bool(STEP_WORD.fullmatch(text.strip())))
     if word: text, reply_to, signer, simple = text.strip(), None, None, False
     if signer or simple or btw: text = "(" + (f"from {signer}, " if signer else "") + "web app" + (f", {SIMPLE_NOTE}" if simple else "") + (", " + BTW_NOTE.format(p=parent) if btw else "") + f") {text}"
     INDEX.refresh()
@@ -1976,7 +2012,7 @@ def person_post(text, thread=None, reply_to=None, uploads=(), signer=None, limit
         routed = bool(who)  # we picked the name, so a dead agent's heir may take it; only a typed name brings a dead agent back
     cmd = [str(HIVE_BIN), "post", "--as", PERSON] + (["--thread", str(thread)] if thread else []) + (["--to", who] if who else []) + (["--routed"] if routed else []) + (["--reply-to", reply_to] if reply_to else []) + (["--model", PICK_MODELS[model]] if model else [])
     for p in paths: cmd += ["--file", str(p)]
-    r = subprocess.run(cmd, input=text, text=True, capture_output=True, env={**child_env(), **({"HIVE_POST_VIA": "limited"} if limited else {})}, cwd=str(HOME), timeout=60)
+    r = subprocess.run(cmd, input=text, text=True, capture_output=True, env={**child_env(), **({"HIVE_POST_VIA": "limited"} if limited else {}), **({"HIVE_POST_VIA": "web-pair"} if pairing else {})}, cwd=str(HOME), timeout=60)
     if r.returncode: raise ValueError(short(r.stderr, 300) or "the post failed")
     for p in paths: shutil.rmtree(p.parent, ignore_errors=True)
     pid = r.stdout.strip()
@@ -2621,13 +2657,67 @@ def mark_read(ids=None):
     return len(new)
 
 
+# ---------- phone alerts (phone.py): a contentless ntfy line when a post for the person goes unread ----------
+def _phone():
+    spec = importlib.util.spec_from_file_location("hive_phone", Path(__file__).resolve().with_name("phone.py")); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+    return m
+
+PHONE = _phone().PhoneAlert(STATE / "phone-alert.json")
+
+
+def phone_link(headers):
+    """The address the person is using right now, if a phone could open it: not loopback or a bare LAN name. Sent as the tap-through link."""
+    host = (headers.get("host") or "").strip().lower()
+    if not host or host.split(":")[0] in ("localhost", "127.0.0.1", "[::1]", "::1") or "." not in host.split(":")[0]: return ""
+    proto = "http" if headers.get("x-forwarded-proto") == "http" else "https"
+    return f"{proto}://{host}/"
+
+
+def phone_do(what, headers):
+    INDEX.refresh()
+    latest = max((str(p.get("at") or "") for p in INDEX.mine), default="")
+    if what == "on": return PHONE.set_on(True, link=phone_link(headers), latest=latest)
+    if what == "off": return PHONE.set_on(False)
+    if what == "topic": return PHONE.new_topic(latest)
+    if what == "test": PHONE.test(); return {**PHONE.view(), "tested": True}
+    raise ValueError("on, off, test or topic")
+
+
+# ---------- Web Push (module conn-webpush): the browser list and its checks live there. An install without that module has no such switch ----------
+def _webpush():
+    f = Path(__file__).resolve().parent.parent / "conn-webpush" / "webpush_subs.py"
+    if not f.exists(): return None
+    spec = importlib.util.spec_from_file_location("hive_webpush_subs", f); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+    return m
+
+
+def webpush_view():
+    m = _webpush()
+    return m.view(HOME) if m else {"available": False}
+
+
+def webpush_do(d, headers):
+    m = _webpush()
+    if not m: raise ValueError("push isn't set up here")
+    return m.act(HOME, d, phone_link(headers))
+
+
+def phone_watch():
+    while True:
+        time.sleep(5)
+        try:
+            if PHONE.view()["on"]:
+                INDEX.refresh(); PHONE.tick(list(INDEX.mine[-50:]), delivered())
+        except Exception: pass
+
+
 # ---------- config: settings, modules, signing in ----------
 _cfg_lock = threading.Lock()
 
 
 def config_view():
     c = cfg()
-    return {k: c.get(k) for k in ("max_sessions", "keeper_every_s", "keeper_idle_s", "usage_stop_pct", "auto_update", "update_every_s")}
+    return {k: c.get(k) for k in ("max_sessions", "keeper_every_s", "keeper_idle_s", "usage_stop_pct", "auto_update", "update_every_s", "update_pace")}
 
 
 def set_config(d):
@@ -2652,6 +2742,9 @@ def set_config(d):
         v = d["update_every_s"]
         if type(v) is not int or not 300 <= v <= 7 * 86400: raise ValueError("how often to look for a release is 5 minutes to 7 days")
         new["update_every_s"] = v
+    if "update_pace" in d:
+        if d["update_pace"] not in ("every", "daily"): raise ValueError("how often to update is every release or about once a day")
+        new["update_pace"] = d["update_pace"]
     if not new: raise ValueError("nothing to change")
     with _cfg_lock:
         c = jload(HOME / "core" / "config.json")
@@ -2741,7 +2834,7 @@ def update_view():
         except (OSError, subprocess.SubprocessError): pass
     c = cfg()
     return {"installed": INSTALLED.exists(), "tag": tag, "newest": st.get("newest"), "checked": st.get("checked"), "at": st.get("at"), "failed": st.get("failed") or [],
-            "error": st.get("error") or st.get("stuck"), "running": running, "auto_update": c.get("auto_update", True), "update_every_s": c.get("update_every_s") or 300}
+            "error": st.get("error") or st.get("stuck"), "running": running, "auto_update": c.get("auto_update", True), "update_every_s": c.get("update_every_s") or 300, "update_pace": c.get("update_pace") or "every"}
 
 
 def update_do(what):
@@ -3233,7 +3326,7 @@ def settings_norm(v):
     sh = v.get("share") if isinstance(v.get("share"), dict) else {}
     p = v.get("power")
     return {"power": p if type(p) is int and 1 <= p <= 3 else 2, "sandbox": "bare" if v.get("sandbox") == "bare" else "on",
-            "model": v.get("model") if v.get("model") in AGENT_MODELS else cfg().get("spawn_model") or "opus",  # what a new agent starts on (the starter's spawn word handling)
+            "model": v.get("model") if v.get("model") in AGENT_MODELS else cfg().get("spawn_model") or "sonnet",  # what a new agent starts on (the starter's spawn word handling)
             "share": {k: sh.get(k) is True for k in SHARE_KEYS}, "setup_done": v.get("setup_done") is not False}
 
 
@@ -3245,7 +3338,7 @@ def settings_brief():
 def default_model():
     """What a new agent with no model asked for starts on: Settings' choice, else config.json's spawn_model."""
     v = (settings_raw() or {}).get("model")
-    return v if v in AGENT_MODELS else cfg().get("spawn_model") or "opus"
+    return v if v in AGENT_MODELS else cfg().get("spawn_model") or "sonnet"
 
 
 def secrets_allowed(web, site=False):
@@ -3741,6 +3834,7 @@ def serve(port):
     usage = Usage()
     threading.Thread(target=usage.run, daemon=True).start()
     threading.Thread(target=PROGRESS.get, daemon=True).start()  # warm the Progress page's cache; the first read runs progress.py (tens of seconds on a busy machine)
+    threading.Thread(target=phone_watch, daemon=True).start()
     threading.Thread(target=sync_accounts, daemon=True).start()  # an account already signed in before the app first ran; does nothing without settings.json
     live_c, proj_c, usage_c, jobs_c = Cached(live, 1), Cached(projects, 60), Cached(usage.view, 2), Cached(Jobs().view, 2)
     deliv_c = Cached(delivered_view, 2.5)
@@ -3949,7 +4043,7 @@ def serve(port):
                 self.send(json.dumps(self.app_info(), default=str).encode(), J)
             elif u.path == "/api/brand/logo":
                 self.send_logo()
-            elif u.path in ("/api/target", "/api/inbox", "/api/config", "/api/modules", "/api/signin", "/api/plans", "/api/secrets", "/api/settings", "/api/update", "/api/signin-codex", "/api/accounts", "/api/design", "/api/kb/home", "/api/kb/open", "/api/kb/search", "/api/kb/raw", "/api/kb/map", "/api/kb/history") and self.route == "open":
+            elif u.path in ("/api/target", "/api/inbox", "/api/away", "/api/config", "/api/modules", "/api/signin", "/api/plans", "/api/secrets", "/api/settings", "/api/ntfy", "/api/webpush", "/api/update", "/api/signin-codex", "/api/accounts", "/api/design", "/api/kb/home", "/api/kb/open", "/api/kb/search", "/api/kb/raw", "/api/kb/map", "/api/kb/history") and self.route == "open":
                 self.send_error(404)
             elif u.path == "/api/kb/home":
                 self.send(json.dumps(kb_home()).encode(), J)
@@ -3957,6 +4051,9 @@ def serve(port):
                 self.send(json.dumps(kb_map()).encode(), J)
             elif u.path == "/api/kb/history":
                 self.send(json.dumps(kb_history()).encode(), J)
+            elif u.path == "/api/away":
+                since = q.get("since", ["12h"])[0]
+                self.send(json.dumps(core_json("away.py", "--json", "--since", since if re.fullmatch(r"\d{1,4}[hd]", since) else "12h") or {}).encode(), J)
             elif u.path == "/api/progress":
                 self.send(json.dumps(PROGRESS.get(), default=str).encode(), J)
             elif u.path == "/api/kb/search":
@@ -3975,6 +4072,11 @@ def serve(port):
                 self.send(json.dumps(thread_target(q.get("thread", [""])[0])).encode(), J)
             elif u.path == "/api/inbox":
                 self.send(json.dumps(inbox_view()).encode(), J)
+            elif u.path == "/api/ntfy":
+                self.send(json.dumps(PHONE.view()).encode(), J)
+            elif u.path == "/api/webpush":
+                if self.route == "outside" and self.mode != "full": return self.deny(403, "push is for a full sign-in")
+                self.send(json.dumps(webpush_view()).encode(), J)
             elif u.path == "/api/config":
                 self.send(json.dumps(config_view()).encode(), J)
             elif u.path == "/api/update":
@@ -4008,6 +4110,9 @@ def serve(port):
                 self.send(json.dumps(usage_c.get()).encode(), J)
             elif u.path == "/api/agent-costs":
                 self.send(json.dumps(agent_costs.view()).encode(), J)
+            elif u.path == "/api/share-preview":
+                try: self.send(json.dumps(share_preview((q.get("thread") or [""])[0])).encode(), J)
+                except KeyError: self.send_error(404)
             elif u.path == "/api/thread-names":
                 self.send(json.dumps(thread_names()).encode(), J)
             elif u.path == "/api/thread-meta":
@@ -4066,7 +4171,11 @@ def serve(port):
             if not isinstance(d, dict): return self.send_error(400)
             num = lambda v: v is None or (isinstance(v, (int, float)) and not isinstance(v, bool))
             J = "application/json"
-            if u.path in ("/api/post", "/api/thread-meta", "/api/feedback", "/api/feedback-draft-done", "/api/issue-link", "/api/update", "/api/inbox-read", "/api/agent-model", "/api/config", "/api/starter", "/api/module", "/api/signin", "/api/signin/code", "/api/signin/cancel", "/api/access", "/api/plan", "/api/secret", "/api/settings", "/api/share-copy", "/api/draft", "/api/signin-codex", "/api/account-key", "/api/design", "/api/brand"):
+            if u.path == "/api/share-build":
+                try: return self.send(json.dumps(share_build(d)).encode(), J)
+                except KeyError: return self.send_error(404)
+                except ValueError as e: return self.deny(400, str(e))
+            if u.path in ("/api/post", "/api/thread-meta", "/api/feedback", "/api/feedback-draft-done", "/api/issue-link", "/api/update", "/api/inbox-read", "/api/ntfy", "/api/webpush", "/api/agent-model", "/api/config", "/api/starter", "/api/module", "/api/signin", "/api/signin/code", "/api/signin/cancel", "/api/access", "/api/plan", "/api/secret", "/api/settings", "/api/share-copy", "/api/draft", "/api/signin-codex", "/api/account-key", "/api/design", "/api/brand"):
                 try:
                     if u.path == "/api/post": res = person_post(d.get("text"), d.get("thread"), d.get("reply_to"), d.get("files"), signer=self.signer, limited="config" not in self.can, simple=d.get("simple") is True, model=d.get("model"))
                     elif u.path == "/api/thread-meta": res = set_thread_meta(d)
@@ -4078,6 +4187,10 @@ def serve(port):
                     elif u.path == "/api/secret": res = set_secret(d.get("name"), d.get("value"), self.signer, delete=bool(d.get("delete")))
                     elif u.path == "/api/agent-model": res = set_agent_model(d.get("name"), d.get("model"))
                     elif u.path == "/api/inbox-read": res = {"marked": mark_read(None if d.get("all") else [str(i) for i in d.get("ids") or []])}
+                    elif u.path == "/api/ntfy": res = phone_do(d.get("do"), self.headers)
+                    elif u.path == "/api/webpush":
+                        if self.route == "outside" and self.mode != "full": return self.deny(403, "push is for a full sign-in")
+                        res = webpush_do(d, self.headers)
                     elif u.path == "/api/config": res = set_config(d)
                     elif u.path == "/api/brand": res = set_brand(d)
                     elif u.path == "/api/starter": starter_do(d.get("do")); SETUP.t = 0; res = {"ok": True}

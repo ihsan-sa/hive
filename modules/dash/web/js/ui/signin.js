@@ -84,3 +84,10 @@ export function signinBox(key, update) {
   const over = v && ["done", "failed", "cancelled"].includes(v.state);
   return h("div", { class: "signin", "data-key": "signin-" + key }, body, over ? h("div", { class: "frow" }, button("Close", () => { clearSignin(); update(); }, { size: "s", kind: "quiet" })) : null);
 }
+
+/** The same sign-in by hand: Claude Code's own `claude auth login`, in the Hive's account (its own login folder when it has one). */
+export function terminalRoute(logins) {
+  if (simpleOn()) return null;   // simple view has no terminal
+  const path = ((logins || [])[0] || {}).path, home = /^\/home\/[^/]+\/\.claude$/.test(path || "") || !path;
+  return h("p", { class: "field-h", "data-key": "terminal-route" }, "Or in a terminal, as this account: ", h("code", null, (home ? "" : "CLAUDE_CONFIG_DIR=" + path + " ") + "claude auth login"));
+}

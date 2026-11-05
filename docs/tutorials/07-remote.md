@@ -44,4 +44,6 @@ A request from outside must carry a token signed by Cloudflare Access. The secre
 
 The module's documentation is in `~/modules/dash/README.md`.
 
+Setting up a server for it? [Put a Hive on a small server in 10 minutes](11-small-server.md).
+
 Next: [Use it from a terminal](08-terminal.md).

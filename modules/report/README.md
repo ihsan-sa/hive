@@ -10,7 +10,7 @@ Sharing. `share` in `settings.json` is `{"failures": bool, "usage": bool}`. `fai
 - Run it on a schedule (for example every 6h) with the job runner.
 
 ## Daily check-in
-With `failures` on, `send` adds one report of type `heartbeat` about once a day: the random install id, the version, the OS and the time, nothing else. It is how the makers count active Hives. A Hive from before this default gets `failures` turned on once by `send`, marked with `share_defaults` in settings.json, so turning it off later holds.
+With `failures` on, `send` adds one report of type `heartbeat` about once a day: the random install id, the version, the OS (`linux`, `windows` or `mac`, then the chip type: a Windows or Mac Hive knows its family from a `~/.hive-host` marker its installer writes, WSL is told apart by the kernel, and a Hive installed before that release says `linux`), the time and `agent_started` (a yes/no: true once this Hive's own log shows an agent session was launched; it is looked up only when `failures` is on, and kept once it is yes), nothing else. It is how the makers count active Hives. A Hive from before this default gets `failures` turned on once by `send`, marked with `share_defaults` in settings.json, so turning it off later holds.
 
 ## What counts as a failure
 `failures` sends only the kind and a one-line message, never fields from the log: an agent ending with a non-zero exit, a login hitting its limit, lost helpers, all logins paused, a provider held back, an agent killed, and (the doctor check) one of the Hive's own systemd user units in a failed state, by unit name, once per failure.

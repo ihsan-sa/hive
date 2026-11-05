@@ -19,6 +19,35 @@ TESTED=no
 
 die() { echo "hive: $*" >&2; exit 1; }
 
+# An install that stops before Linux starts in the VM can be told to the Hive's makers, only with a yes: asked on the terminal, or HIVE_REPORT=1 where there's none (HIVE_REPORT=0 never asks). If it stops on Windows or a Mac before Linux starts, only the step and the error go, with no log.
+# It holds only the stage that stopped, a fixed label for it, the exit code, the version and the OS family and chip, and no log, names, folders or printed text: this script keeps no log and has no scrub, so it sends nothing it didn't write itself.
+# A stop inside the VM's own install is asked about by that install when it has a terminal, which the VM has not; then this asks, and sends the same fixed words. Wrong OS, an unknown option, sudo and the test-build gate are refusals, not failures: they offer nothing.
+REPORT_URL="${HIVE_SHARE_URL:-https://hive-reports.ihsan.cc/v1/report}"
+STOP=""; WHY=""
+stage() { STOP=$1; WHY=$2; }
+stop_report() {
+  rc=$1
+  case "$REPORT_URL" in http*) ;; *) return 0 ;; esac
+  [ "${HIVE_REPORT:-}" != 0 ] || return 0
+  # The VM's install was told to send (HIVE_REPORT=1) and sends its own.
+  [ "$STOP" != vm-install ] || [ "${HIVE_REPORT:-}" != 1 ] || return 0
+  if [ "${HIVE_REPORT:-}" != 1 ]; then
+    ( : </dev/tty ) 2>/dev/null || return 0
+    printf "Send this failure to the Hive's makers so they can fix it? It holds the installer version, the step that failed, a short error label, and the OS and chip type. No log, names or folders. Type y to send: " >/dev/tty
+    read -r a </dev/tty || a=""
+    case "$a" in y | Y | yes | Yes) ;; *) return 0 ;; esac
+  fi
+  case "$rc" in "" | *[!0-9]*) rc=1 ;; esac
+  chip=$(uname -m 2>/dev/null | tr -cd 'a-z0-9_' | cut -c1-16); [ -n "$chip" ] || chip=unknown
+  ref="i$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')"
+  if curl -fsS -m 20 -H 'Content-Type: application/json' -d "{\"install\":\"$ref\",\"version\":\"0\",\"type\":\"failure\",\"kind\":\"install\",\"os\":\"mac/$chip\",\"message\":\"install stopped at $STOP: $WHY (exit $rc)\"}" "$REPORT_URL" >/dev/null 2>&1
+  then echo "Sent, thank you. If you open an issue, this is its reference: $ref"
+  else echo "Could not send it just now."; fi
+}
+on_exit() { rc=$?; trap - EXIT INT TERM HUP; [ -z "$STOP" ] || [ "$rc" = 0 ] || [ "$rc" -ge 128 ] || stop_report "$rc" || true; exit "$rc"; }
+trap on_exit EXIT
+trap 'exit 130' INT TERM HUP
+
 # The VM. No mounts and no SSH keys from the Mac. Only the app's own ports reach the Mac, and only on its loopback.
 # Provision runs at every boot. It stops ordinary users inside reaching Lima's addresses, since 192.168.5.2 is the Mac's own localhost.
 # Replies stay open, because Lima's own connection comes in through that address; DNS stays open too, and root is left alone for Lima's agent.
@@ -229,8 +258,8 @@ get_lima() {
   echo "Getting Lima $LIMA_VERSION, which runs the VM..."
   t=$(mktemp -d "$D/get.XXXXXX")
   curl -fsSL -o "$t/lima.tgz" "https://github.com/lima-vm/lima/releases/download/v$LIMA_VERSION/lima-$LIMA_VERSION-Darwin-$arch.tar.gz" \
-    || { rm -rf "$t"; die "couldn't download Lima. Check your connection and run this again"; }
-  [ "$(shasum -a 256 "$t/lima.tgz" | cut -d' ' -f1)" = "$sha" ] || { rm -rf "$t"; die "the Lima download doesn't match its checksum, so I won't use it"; }
+    || { rm -rf "$t"; stage lima-download "Lima download failed"; die "couldn't download Lima. Check your connection and run this again"; }
+  [ "$(shasum -a 256 "$t/lima.tgz" | cut -d' ' -f1)" = "$sha" ] || { rm -rf "$t"; stage lima-checksum "Lima checksum mismatch"; die "the Lima download doesn't match its checksum, so I won't use it"; }
   mkdir "$t/x"; tar -xzf "$t/lima.tgz" -C "$t/x"
   echo "$LIMA_VERSION-$arch" > "$t/x/.version"
   # A running VM keeps its own copy in memory; the new one takes over at its next start.
@@ -246,7 +275,7 @@ main() {
   [ "$(id -u)" != 0 ] || die "run this as yourself, not with sudo. It doesn't need sudo"
   major=$(sw_vers -productVersion | cut -d. -f1)
   case "$major" in "" | *[!0-9]*) die "couldn't read this Mac's macOS version" ;; esac
-  [ "$major" -ge 13 ] || die "this needs macOS 13 (Ventura) or newer, for Apple's Virtualization framework. This Mac has $(sw_vers -productVersion)"
+  [ "$major" -ge 13 ] || { stage macos-old "macOS older than 13"; die "this needs macOS 13 (Ventura) or newer, for Apple's Virtualization framework. This Mac has $(sw_vers -productVersion)"; }
 
   SITE="${HIVE_SITE:-https://hivelab.ca}"
   D="$HOME/.hive"
@@ -254,31 +283,36 @@ main() {
   : > "$D/.hive-mac"
   export LIMA_HOME="$D/lima"
   L="$D/lima-dist/bin/limactl"
+  stage lima "getting Lima failed"
   get_lima
 
   if [ ! -d "$LIMA_HOME/$VM" ]; then
     free_gb=$(( $(df -k "$HOME" | awk 'NR==2 {print $4}') / 1048576 ))
-    [ "$free_gb" -ge 15 ] || die "this needs about 15 GB free on your disk, and there's $free_gb GB"
+    [ "$free_gb" -ge 15 ] || { stage disk "not enough free disk"; die "this needs about 15 GB free on your disk, and there's $free_gb GB"; }
     # Half the Mac, within limits: 4 to 8 GB, 2 to 8 CPUs.
     mem=$(( $(sysctl -n hw.memsize) / 2147483648 )); [ "$mem" -ge 4 ] || mem=4; [ "$mem" -le 8 ] || mem=8
     cpus=$(( $(sysctl -n hw.ncpu) / 2 )); [ "$cpus" -ge 2 ] || cpus=2; [ "$cpus" -le 8 ] || cpus=8
     vm_yaml "$cpus" "$mem" > "$D/vm.yaml"
     echo "Making the Linux VM: $cpus CPUs, up to $mem GB of memory. The first time downloads about 600 MB..."
+    stage vm-create "creating the VM failed"
     "$L" create --tty=false --name="$VM" "$D/vm.yaml"
   fi
+  stage vm-start "starting the VM failed"
   [ "$("$L" list "$VM" --format '{{.Status}}' 2>/dev/null)" = Running ] || "$L" start --tty=false "$VM" \
     || die "the VM didn't start. Its log is in $LIMA_HOME/$VM/ha.stderr.log"
 
   # The normal Linux install, as root in the VM. Run again, it updates.
+  stage vm-install "the install in the VM failed"
   echo "Installing the Hive in the VM. This can sit quiet for several minutes, so please leave it running..."
   # A VM made before its provisioning recovered logind, or one whose logind spun later: a rerun has to fix this itself
   # or it fails the same way, with "Failed to connect to bus" after the linger note (lima-vm/lima#5730).
   "$L" shell --workdir / "$VM" sudo sh -c 'timeout 5 loginctl list-sessions >/dev/null 2>&1 || { systemctl kill --signal=SIGKILL systemd-logind.service; systemctl start systemd-logind; }' </dev/null || true
   # shellcheck disable=SC2016  # these expand in the VM
-  "$L" shell --workdir / "$VM" sudo env HIVE_INSIDE=1 HIVE_REPORT="${HIVE_REPORT:-}" HIVE_BRANCH="${HIVE_BRANCH:-}" SITE="$SITE" sh -c \
+  "$L" shell --workdir / "$VM" sudo env HIVE_INSIDE=1 HIVE_HOST=mac HIVE_REPORT="${HIVE_REPORT:-}" HIVE_BRANCH="${HIVE_BRANCH:-}" SITE="$SITE" sh -c \
     '[ -n "$HIVE_BRANCH" ] || unset HIVE_BRANCH; f=$(mktemp); curl -fsSL -o "$f" "$SITE/install.sh" && sh "$f"' </dev/null \
     || die "the install in the VM failed. Run this line again to retry"
 
+  STOP=""
   wrapper > "$D/bin/hive"; chmod +x "$D/bin/hive"
   add_to_path
   mkdir -p "$HOME/Library/LaunchAgents"

@@ -122,7 +122,7 @@ const thLink = th => h("a", { class: "map-id", href: threadHref(th), onclick: pi
 // (hand-offs, agent to its ghosts) are drawn only for what is selected. SVG for the lines, HTML buttons for everything you click.
 const keep = el => (el.isConnected ? el.cloneNode(false) : el);
 const SVGNS = "http://www.w3.org/2000/svg";
-const OUT_NAME = { person: "you", box: "box", autobox: "box", hives: "hives", h0: "hives", h1: "hives" };
+const OUT_NAME = { person: "you", box: "box", hives: "hives" };
 const reduced = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
 const since = t => (t ? dur(Math.max(0, now() - t)).replace("under a minute", "now") : "");
 const GS = { L: null, nodes: new Map(), sig: "", w: 0, q: "", hits: [], posted: new Map(), busy: new Set(), queued: new Set(), capT: 0, hoverT: 0, h: 0, pin: new Map(), view: { k: 1, x: 0, y: 0, user: false } };
@@ -195,7 +195,7 @@ const spG = document.createElementNS(SVGNS, "g"), topG = document.createElementN
 svg.append(ringG, spG, topG);
 new ResizeObserver(() => { const w = scroller.clientWidth, hh = scroller.clientHeight; if (w && (Math.abs(w - GS.w) > 2 || (M.lay !== "bands" && Math.abs(hh - GS.h) > 2)) && M.D) { syncGraph(M.D); } }).observe(scroller);
 
-// ---- the free view (Web, Orbit): fitted to the panel, wheel zooms, drag the background to pan, drag a node to move it ----
+// ---- the free view (Web, Orbit, Lineage): fitted to the panel, wheel zooms, drag the background to pan, drag a node to move it ----
 const free = () => scroller.hasAttribute("data-free");
 function applyView() { const V = GS.view; cv.style.transform = `translate(${V.x.toFixed(1)}px,${V.y.toFixed(1)}px) scale(${V.k.toFixed(4)})`; }
 function fitView(L) {
@@ -208,7 +208,7 @@ function fitView(L) {
   if (x0 > x1) { GS.view = { k: 1, x: 0, y: 0, user: false }; return; }
   const W = scroller.clientWidth, H = scroller.clientHeight, m = 32;
   // a small graph grows to fill the panel; a big one shrinks only while its labels stay readable, then starts at the top and pans
-  const k = Math.max(0.7, Math.min(1.25, (W - 2 * m) / (x1 - x0), (H - 2 * m) / (y1 - y0))), bw = (x1 - x0) * k, bh = (y1 - y0) * k;
+  const k = Math.max(M.lay === "lineage" ? 0.4 : 0.7, Math.min(1.25, (W - 2 * m) / (x1 - x0), (H - 2 * m) / (y1 - y0))), bw = (x1 - x0) * k, bh = (y1 - y0) * k;
   GS.view = { k, x: bw <= W - 2 * m ? (W - bw) / 2 - x0 * k : m - x0 * k, y: bh <= H - 2 * m ? (H - bh) / 2 - y0 * k : m - y0 * k, user: false };
 }
 function zoomAt(k, px, py, smooth) {
@@ -336,7 +336,8 @@ function syncGraph(D) {
     for (const [k, on] of [["data-dash", sp.dashed], ["data-ended", sp.ended], ["data-acc", acc], ["data-lit", S2.on && S2.lit.has("n:" + sp.node)]]) el.toggleAttribute(k, !!on);
   }
   for (const [k, el] of SPK) if (!spSeen.has(k)) { el.remove(); SPK.delete(k); }
-  path.push(`<defs><marker id="map-ah" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L8 4L0 8z" class="map-ahd"/></marker></defs>`);
+  path.push(`<defs><marker id="map-ah" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L8 4L0 8z" class="map-ahd"/></marker><marker id="map-ah2" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L8 4L0 8z" class="map-ahg"/></marker></defs>`);
+  for (const k of L.handoffs || []) path.push(`<path class="map-ho" marker-end="url(#map-ah2)" data-k="${k.to}" d="${k.d}"/>`);
   for (const k of S2.links) path.push(`<path class="map-ln"${k.ghost ? " data-ghost" : ` marker-end="url(#map-ah)"`} d="${linkPath(k.p, k.q)}"/>`);
   ringG.innerHTML = rg.join(""); topG.innerHTML = path.join("");
   scroller.toggleAttribute("data-free", isFree); zoomEl.hidden = !isFree;

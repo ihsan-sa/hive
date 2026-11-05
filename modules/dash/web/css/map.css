@@ -242,3 +242,7 @@
 .map-cv[data-move]>.map-svg{animation:map-redraw .7s ease}
 @keyframes map-redraw{0%,60%{opacity:0}100%{opacity:1}}
 @media (prefers-reduced-motion:reduce){.map-cv[data-move]>*{transition:none;animation:none}}
+
+.map-ho{fill:none;stroke:var(--ink-3);stroke-width:1.25}
+.map-cv[data-dim] .map-ho{opacity:.25}
+.map-ahg{fill:var(--ink-3)}

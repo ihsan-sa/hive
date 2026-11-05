@@ -13,6 +13,8 @@ if [ "$(id -u)" = 0 ]; then
   H="$(eval echo "~$U")"
   # Some systems make homes readable by a group. The Hive's sign-ins are in this one.
   [ -z "$new" ] || chmod 700 "$H"
+  # The Windows and Mac installers say so (HIVE_HOST), because inside their Linux this Hive can't tell. Only those two words are kept; the check-in reads it for the OS family.
+  case "${HIVE_HOST:-}" in windows | mac) (umask 077; printf '%s\n' "$HIVE_HOST" > "$H/.hive-host"; chown "$U:" "$H/.hive-host" 2>/dev/null || true) ;; esac
   loginctl enable-linger "$U" 2>/dev/null || echo "NOTE: couldn't enable linger; the hive stops when $U logs out"
   # Copied beside it and then moved, so a copy cut short (a full disk, a closed window) isn't taken for a whole one on the rerun.
   [ -e "$H/core" ] || { rm -rf "$H/core.part"; cp -a "$CORE" "$H/core.part" && chown -R "$U:" "$H/core.part" && mv "$H/core.part" "$H/core"; } || die "couldn't copy the Hive into $H (is the disk full?); rerun this"
@@ -132,6 +134,12 @@ if [ -n "${HIVE_PLAIN:-}" ]; then "$CORE/hive" web --setup >/dev/null; else "$CO
 # A new Hive gets the setup walkthrough and the sandbox. Only here: no file means an install from before these, which carries on as it was.
 if [ ! -e "$HOME/.hive-installed" ] && [ ! -e "$HOME/settings.json" ]; then
   (umask 077; printf '{"power":2,"sandbox":"on","share":{"failures":true,"usage":false},"share_defaults":1,"setup_done":false}\n' > "$HOME/settings.json")
+fi
+# A new Hive updates at the calm pace, kept on top of each release as a saved setting. Not in the shipped config.json: that would move every Hive already running, and our own must follow every release (Settings changes it).
+if [ ! -e "$HOME/.hive-installed" ]; then
+  python3 -c 'import json, sys
+c = json.load(open(sys.argv[1]))
+if "update_pace" not in c: c["update_pace"] = "daily"; open(sys.argv[1], "w").write(json.dumps(c, indent=2) + "\n")' "$CORE/config.json"
 fi
 
 if [ -z "${HIVE_PLAIN:-}" ] && [ ! -s "$HOME/.claude/.credentials.json" ] && [ -z "${ANTHROPIC_API_KEY:-}" ]; then

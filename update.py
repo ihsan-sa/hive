@@ -4,19 +4,21 @@
 A release is a tag v<major>.<minor>.<patch> on origin; only this major line counts. hive-update.timer ticks every
 5 minutes, and `"update_every_s"` in config.json makes it look for a release less often. `"auto_update": false` stops
 it installing: it still looks, so the app can say a release is there, and `hive update` by hand or Update now in the app
-installs it. Both those settings and the state in update.json (tag, newest, checked, at, failed, error) are read by Settings in the app.
+installs it. `"update_pace": "daily"` makes the timer's run calmer: at most one release a day, and only one out for CALM_AGE (a new install starts on it; no key means every release).
+`hive update` by hand and Update now always take the newest. Those settings and the state in update.json (tag, newest, checked, at, failed, error) are read by Settings in the app.
 What it keeps: the agents' own commits in ~/core (rebased onto the release) and uncommitted edits such as saved settings.
 When either conflicts with the release, the release wins so the Hive still updates: the old state goes to a git branch kept/<tag>-<time>
 in ~/core, and an agent of this Hive is started to see whether any of it still matters (the person, post 110415432d10).
 A failed install or services that don't come back leave the Hive as it was, skip that release and tell the person. Restarting the starter doesn't stop running agents.
 """
-import argparse, fcntl, json, os, re, shutil, subprocess, sys, tempfile, time, urllib.error, urllib.request
+import argparse, calendar, fcntl, json, os, re, shutil, subprocess, sys, tempfile, time, urllib.error, urllib.request
 from pathlib import Path
 
 HOME = Path.home(); CORE = Path(__file__).resolve().parent; STATE = HOME / ".hive"; STATE_F = STATE / "update.json"; NOW = STATE / "update-now"  # NOW: the app's Update now, for the --auto run it starts
 MAJOR = 2
 TAG = re.compile(rf"^v{MAJOR}\.(\d+)\.(\d+)$")
 SETTLE = float(os.environ.get("HIVE_UPDATE_SETTLE", "8"))  # seconds services get to fall over before they count as up
+CALM_AGE = 12 * 3600; CALM_GAP = 23 * 3600  # update_pace "daily": how long a release is out first, and the wait after an install (under a day, so the hour it happens doesn't drift)
 SYSTEMD = (HOME / ".config/systemd/user/hive-starter.service").exists() and bool(shutil.which("systemctl"))
 
 SIGNERS = CORE / "release_signers"  # who may sign a release tag (ssh allowed-signers format); a Hive installed before it existed takes the first one on trust
@@ -81,14 +83,15 @@ def say(text, person=False, to=None):
     try: subprocess.run(cmd, input=text, text=True, capture_output=True, timeout=60, env={**os.environ, "HIVE_NAME": "updater"})
     except (OSError, subprocess.TimeoutExpired): pass
 
+def run_dir(): return {**os.environ, "XDG_RUNTIME_DIR": os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")}  # a shell or an agent's step may not have it, and without it systemctl --user answers "not running" about a service that is
+
 def systemctl(*a):
-    try: return subprocess.run(["systemctl", "--user", *a], capture_output=True, text=True, timeout=60).returncode
+    try: return subprocess.run(["systemctl", "--user", *a], capture_output=True, text=True, timeout=60, env=run_dir()).returncode
     except (OSError, subprocess.TimeoutExpired): return 1
 
 def install():
     """Run the checked-out release's own install.sh, then refresh bundled modules the way it refreshes the app."""
-    env = {**os.environ, "XDG_RUNTIME_DIR": os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")}
-    r = subprocess.run([str(CORE / "install.sh")] + ([] if SYSTEMD else ["--no-service"]), capture_output=True, text=True, timeout=900, env=env)
+    r = subprocess.run([str(CORE / "install.sh")] + ([] if SYSTEMD else ["--no-service"]), capture_output=True, text=True, timeout=900, env=run_dir())
     if r.returncode == 75: raise Stuck("install.sh: " + (r.stderr or r.stdout).strip()[-400:])  # a tool missing on this machine, not a bad release
     if r.returncode: raise Failed("install.sh: " + (r.stderr or r.stdout).strip()[-400:])
     for src in sorted((CORE / "modules").glob("*/")) if (CORE / "modules").is_dir() else []:
@@ -169,6 +172,7 @@ def unfinished():
         git("rebase", "--abort", check=False)
 
 def apply(tag, st):
+    if SYSTEMD and systemctl("show-environment"): raise Stuck("can't reach this user's systemd, so the services couldn't be restarted or checked")  # before anything changes: this isn't the release's fault
     unfinished()
     try:
         git("status", "--porcelain")  # refreshes the index: with a stale one and a clean tree, stash create exits 1
@@ -209,6 +213,23 @@ def apply(tag, st):
         raise Failed(f"{tag} failed and the Hive went back to what it was running: {e}")
     return dropped, kept, files
 
+def settled(new, st):
+    """update_pace "daily": the newest of the releases in new that may go in now, or None to wait.
+    A release's age is the date in its signed tag, read only once the signature has passed. One that fails is returned as it is: apply checks it again and refuses it, as on every other pace."""
+    try:
+        if time.time() - calendar.timegm(time.strptime(st["at"], "%Y-%m-%dT%H:%M:%SZ")) < CALM_GAP: return None
+    except (KeyError, TypeError, ValueError): pass  # no install recorded yet
+    signers = SIGNERS.read_text() if SIGNERS.exists() else None
+    for t in reversed(new):
+        try:
+            if git("rev-parse", "-q", "--verify", f"refs/tags/{t}^{{tag}}", check=False).returncode:  # a copy from an earlier look does: apply fetches it again before it goes in
+                git("fetch", "-q", "--no-tags", "origin", f"+refs/tags/{t}:refs/tags/{t}", timeout=600)
+            if signers is not None and verify(t, signers): return t
+            date = git("for-each-ref", "--format=%(taggerdate:unix)", f"refs/tags/{t}").strip()
+        except (Failed, OSError, subprocess.SubprocessError) as e: raise Later(f"hive update: can't read {t}: {e}")
+        if date.isdigit() and time.time() - int(date) >= CALM_AGE: return t
+    return None
+
 def main():
     p = argparse.ArgumentParser(prog="hive update", description="Update this Hive to the newest release.")
     p.add_argument("--check", action="store_true", help="say what's installed and what's newest, and install nothing")
@@ -230,8 +251,8 @@ def main():
     off = a.auto and not asked and config().get("auto_update", True) is False
     if not a.check and not off: claude_update(st)
     every = config().get("update_every_s")
-    # A release already seen and not installed (stuck, or offline at the time) doesn't wait out the interval.
-    if a.auto and not asked and type(every) is int and every > 300 and time.time() - st.get("checked", 0) < every and (off or not st.get("newest")):
+    # A release already seen and not installed (stuck, or offline at the time) doesn't wait out the interval. At the daily pace one is nearly always waiting, on purpose, so it does.
+    if a.auto and not asked and type(every) is int and every > 300 and time.time() - st.get("checked", 0) < every and (off or not st.get("newest") or config().get("update_pace") == "daily"):
         return print("auto_update is off" if off else f"looked for a release less than {every} seconds ago")
     try: all_tags = tags()
     except (Failed, subprocess.SubprocessError) as e: later(f"hive update: can't read releases: {e}")
@@ -250,6 +271,8 @@ def main():
     if not new: return print(f"up to date ({st.get('tag', 'no release yet')})")
     tag = new[-1]
     try:
+        if a.auto and not asked and config().get("update_pace") == "daily" and not (tag := settled(new, st) or ""):
+            return print(f"{new[-1]} is available; update_pace is daily, so it waits")
         dropped, kept, files = apply(tag, st)
     except Stuck as e:
         st["error"] = str(e); save(st)

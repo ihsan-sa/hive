@@ -30,11 +30,13 @@ function Install-Hive {
   $wsl = $false
   try { $ErrorActionPreference = 'Continue'; & wsl.exe --status *> $null; $wsl = ($LASTEXITCODE -eq 0) } catch { } finally { $ErrorActionPreference = 'Stop' }
   if (-not $wsl) {
+    Stage 'wsl-install' 'WSL did not install'
     Write-Host 'The Hive needs WSL 2, which Windows is about to install. Say yes to the prompt.'
     $manual = 'In an administrator PowerShell, run: wsl --install --no-distribution'
     try { $p = Start-Process wsl.exe -ArgumentList '--install', '--no-distribution' -Verb RunAs -Wait -PassThru }
     catch { Write-Host "WSL didn't install: $_"; Write-Host $manual; return }
-    if ($p.ExitCode -ne 0) { Write-Host "WSL didn't install (code $($p.ExitCode))."; Write-Host $manual; return }
+    if ($p.ExitCode -ne 0) { $ui.code = $p.ExitCode; Write-Host "WSL didn't install (code $($p.ExitCode))."; Write-Host $manual; return }
+    Stage $null
     Write-Host 'WSL is installed. Restart Windows, then run the same line again.'
     return
   }
@@ -77,7 +79,7 @@ function Install-Hive {
       Write-Host ''
       if ($env:HIVE_ACCEPT -ne '1') {
         $answer = try { Read-Host 'Type yes to remove the old Hive and install the new one' } catch { '' }
-        if ($answer -ne 'yes') { Write-Host 'Nothing changed. To accept with no question, set HIVE_ACCEPT=1'; return }
+        if ($answer -ne 'yes') { Stage $null; Write-Host 'Nothing changed. To accept with no question, set HIVE_ACCEPT=1'; return }
       }
     }
   }
@@ -91,16 +93,18 @@ function Install-Hive {
     $url = "https://cloud-images.ubuntu.com/wsl/releases/24.04/current"
     $image = Join-Path $base $name
     Step 'Getting Ubuntu (about 350 MB)' -NoTick  # curl draws its own bar
+    Stage 'ubuntu-download' 'the Ubuntu download failed'
     & curl.exe -fL --progress-bar -o $image "$url/$name"
-    if ($LASTEXITCODE -ne 0) { Say "The download failed. Check your connection and run this again."; return }
+    if ($LASTEXITCODE -ne 0) { $ui.code = $LASTEXITCODE; Say "The download failed. Check your connection and run this again."; return }
     $sums = @(& curl.exe -fsSL "$url/SHA256SUMS")
     $want = ($sums | Where-Object { $_ -match [regex]::Escape($name) + '$' } | Select-Object -First 1) -replace '\s.*', ''
     $got = (Get-FileHash -Algorithm SHA256 $image).Hash.ToLower()
-    if (-not $want -or $want.ToLower() -ne $got) { Remove-Item $image; Say "The download doesn't match Ubuntu's checksum, so it was deleted. Run this again."; return }
+    if (-not $want -or $want.ToLower() -ne $got) { Stage 'ubuntu-checksum' 'the Ubuntu checksum did not match'; Remove-Item $image; Say "The download doesn't match Ubuntu's checksum, so it was deleted. Run this again."; return }
     Show-Line '  Unpacking it'
+    Stage 'wsl-import' 'WSL could not create the system'
     $code = Quietly { & wsl.exe --import $distro (Join-Path $base 'system') $image --version 2 }
     Remove-Item -ErrorAction SilentlyContinue $image
-    if ($code -ne 0) { Fail "WSL couldn't create the system (code $code). If you've just installed WSL, restart Windows and run this again. If the message below mentions virtualization, turn it on in your PC's BIOS or UEFI settings. Otherwise try: wsl --update"; return }
+    if ($code -ne 0) { $ui.code = $code; Fail "WSL couldn't create the system (code $code). If you've just installed WSL, restart Windows and run this again. If the message below mentions virtualization, turn it on in your PC's BIOS or UEFI settings. Otherwise try: wsl --update"; return }
   }
 
   # 3. Cut it off from Windows and turn systemd on. wsl.conf is read when the system starts, so restart it.
@@ -135,6 +139,7 @@ CONF
 ln -sf /etc/systemd/system/hive-no-windows.service /etc/systemd/system/multi-user.target.wants/hive-no-windows.service
 '@
   Step 'Preparing the Hive system'
+  Stage 'configure' 'configuring the Hive system failed'
   # A rerun that finds this already in place leaves the system up, so agents at work aren't killed.
   $set = (Invoke-InHive "grep -qx 'enabled=false' /etc/wsl.conf && grep -q '^\[interop\]' /etc/wsl.conf && test -d /run/systemd/system") -eq 0
   if (-not $set) {
@@ -181,11 +186,14 @@ ln -sf /etc/systemd/system/hive-no-windows.service /etc/systemd/system/multi-use
   # 4. The Linux installer does the rest. It updates a Hive that's already there.
   $halfway = if ($oldDirs.Count -or $oldRoot) { " The old Hive is stopped$(if ($oldRoot) { ", and its folder is whole at $oldRoot" }). Running this again carries on." } else { '' }
   Step 'Setting up the Hive, Claude Code and Codex'
+  Stage 'vm-install' 'the install inside the Hive system failed'
   # To a file first, because a failed curl piped into sh looks like success. HIVE_INSIDE keeps the Linux installer from printing an ending of its own.
-  # HIVE_REPORT=1 (or 0) set in PowerShell says yes (or no) to sending a failure to the Hive's makers, as on Linux.
+  # HIVE_REPORT=1 (or 0) set in PowerShell says yes (or no) to sending a failure to the Hive's makers, as on Linux. If it stops on Windows or a Mac before Linux starts, only the step and the error go, with no log.
   $report = if ($env:HIVE_REPORT -in '0', '1') { "HIVE_REPORT=$($env:HIVE_REPORT) " } else { '' }
-  $getIt = 'f=$(mktemp) && curl -fsSL ' + $site + '/install.sh -o "$f" && ' + $report + 'HIVE_INSIDE=1 sh "$f"; c=$?; rm -f "$f"; exit $c'
-  if ((Invoke-InHive $getIt) -ne 0) { Fail "The install inside the Hive system failed; the lines below say why. Fix that and run this again.$halfway"; return }
+  $getIt = 'f=$(mktemp) && curl -fsSL ' + $site + '/install.sh -o "$f" && ' + $report + 'HIVE_HOST=windows HIVE_INSIDE=1 sh "$f"; c=$?; rm -f "$f"; exit $c'
+  $c = Invoke-InHive $getIt
+  if ($c -eq 0) { Stage $null }
+  if ($c -ne 0) { $ui.code = $c; Fail "The install inside the Hive system failed; the lines below say why. Fix that and run this again.$halfway"; return }
 
   # Bring its things across: to a file first, because the Hive system can't see Windows drives, and a pipe through PowerShell would corrupt it.
   if ($oldRoot) {
@@ -285,7 +293,7 @@ ln -sf /etc/systemd/system/hive-no-windows.service /etc/systemd/system/multi-use
 
 # How it talks: numbered steps, a dot every 5 seconds while one runs, and the commands' own output in the log.
 & {
-  $ui = @{ n = 0; total = 0; open = $false; tick = $null; show = $false; held = @() }
+  $ui = @{ n = 0; total = 0; open = $false; tick = $null; show = $false; held = @(); stage = $null; why = ''; code = 1; ended = $false }
   function Stop-Tick { if ($ui.tick) { try { $ui.tick.Stop(); $ui.tick.Dispose() } catch { }; $ui.tick = $null } }
   # In a runspace of its own, so it ticks while a program runs here. If Windows' policy refuses one, there are just no dots.
   function Start-Tick {
@@ -307,6 +315,28 @@ ln -sf /etc/systemd/system/hive-no-windows.service /etc/systemd/system/multi-use
     $ui.n++
     $t = "[$($ui.n)/$($ui.total)] $Text"
     if ($NoTick) { End-Line; Write-Host $t } else { Show-Line $t }
+  }
+  # Where an install that stops before Linux starts in the Hive system can be told to the Hive's makers, only with a yes: asked here, or HIVE_REPORT=1 where there's none (HIVE_REPORT=0 never asks). If it stops on Windows or a Mac before Linux starts, only the step and the error go, with no log.
+  # It holds only the stage that stopped, a fixed label for it, the exit code, the version and the OS family and chip, and no log, names, folders or printed text: this script has no scrub, so it sends nothing it didn't write itself.
+  # Ctrl-C, a refusal or an answer other than yes sends nothing. A stop inside the Hive system's own install is asked about by that install when it has a terminal, which this has not; so this asks, and sends the same fixed words.
+  function Stage([string]$Name, [string]$Why) { $ui.stage = $Name; $ui.why = $Why; $ui.code = 1 }
+  function Send-Stop {
+    if (-not $ui.stage) { return }
+    $url = if ($env:HIVE_SHARE_URL) { $env:HIVE_SHARE_URL } else { 'https://hive-reports.ihsan.cc/v1/report' }
+    if ($url -notlike 'http*') { return }
+    if ($env:HIVE_REPORT -eq '0') { return }
+    if ($ui.stage -eq 'vm-install' -and $env:HIVE_REPORT -eq '1') { return }
+    if ($env:HIVE_REPORT -ne '1') {
+      if ([Console]::IsInputRedirected) { return }
+      $a = try { Read-Host "Send this failure to the Hive's makers so they can fix it? It holds the installer version, the step that failed, a short error label, and the OS and chip type. No log, names or folders. Type y to send" } catch { '' }
+      if ($a -notin 'y', 'yes') { return }
+    }
+    $code = if ("$($ui.code)" -match '^-?\d{1,10}$') { [int]$ui.code } else { 1 }
+    $chip = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'aarch64' } else { 'x86_64' }
+    $ref = 'i' + [guid]::NewGuid().ToString('N').Substring(0, 15)
+    $body = @{ install = $ref; version = '0'; type = 'failure'; kind = 'install'; os = "windows/$chip"; message = "install stopped at $($ui.stage): $($ui.why) (exit $code)" } | ConvertTo-Json -Compress
+    try { Invoke-RestMethod -Method Post -Uri $url -ContentType 'application/json' -Body $body -TimeoutSec 20 | Out-Null; Say "Sent, thank you. If you open an issue, this is its reference: $ref" }
+    catch { Say 'Could not send it just now.' }
   }
   function Say([string]$Text) { End-Line; Write-Host $Text }
   # Something to read in the middle of a step waits under that step's line, so the dots stay on one line.
@@ -336,9 +366,11 @@ ln -sf /etc/systemd/system/hive-no-windows.service /etc/systemd/system/multi-use
   # Windows' console reads programs' output in the old code page unless told otherwise, and programs inside Linux write UTF-8. Your window gets its own setting back after.
   $enc = $null
   try { $enc = [Console]::OutputEncoding; [Console]::OutputEncoding = New-Object Text.UTF8Encoding $false } catch { }
-  try { Install-Hive }
+  try { Install-Hive; $ui.ended = $true }
+  catch { if ($_.Exception -isnot [Management.Automation.PipelineStoppedException]) { $ui.ended = $true }; throw }
   finally {
     End-Line
+    if ($ui.ended) { try { Send-Stop } catch { } }
     if ($enc) { try { [Console]::OutputEncoding = $enc } catch { } }
   }
 }

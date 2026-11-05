@@ -39,4 +39,28 @@ export function notifyNew(items) {
   return fresh;
 }
 
+// Web Push: reaches this browser with the page closed. The browser's subscription is the on/off state; the server keeps a copy to send to.
+export const pushSupported = () => notifySupported() && typeof PushManager !== "undefined";
+export async function pushOn() {
+  if (!pushSupported() || Notification.permission !== "granted") return false;
+  const reg = await navigator.serviceWorker.getRegistration();
+  return !!(reg && await reg.pushManager.getSubscription());
+}
+const keyBytes = k => Uint8Array.from(atob(k.replace(/-/g, "+").replace(/_/g, "/")), c => c.charCodeAt(0));
+/** Must come from a click. `send` is the app's post(), and a browser the server refused doesn't stay subscribed. */
+export async function setPush(on, publicKey, send) {
+  const reg = await navigator.serviceWorker.ready;
+  const old = await reg.pushManager.getSubscription();
+  if (!on) {
+    if (!old) return;
+    try { await send("/api/webpush", { do: "unsubscribe", endpoint: old.endpoint }); } finally { await old.unsubscribe(); }
+    return;
+  }
+  if (await Notification.requestPermission() !== "granted") throw new Error("Your browser is blocking notifications for this page. Allow them in the browser's site settings, then come back here.");
+  if (old) await old.unsubscribe();  // it may belong to an older key, and a browser won't swap keys in place
+  const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: keyBytes(publicKey) });
+  try { await send("/api/webpush", { do: "subscribe", subscription: sub.toJSON() }); }
+  catch (e) { await sub.unsubscribe(); throw e; }
+}
+
 if (notifySupported()) navigator.serviceWorker.register("sw.js").catch(() => {});

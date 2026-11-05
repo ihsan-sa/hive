@@ -11,6 +11,8 @@ import { agentRef, threadRef } from "../ui/refs.js";
 import { agentCard as cardRows, displayText } from "../core/model.js";
 import { killButton } from "../actions.js";
 import { chart } from "../ui/chart.js";
+import { signInWords } from "../ui/shell.js";
+import { awayCard } from "../ui/away.js";
 
 const V = {};
 
@@ -105,11 +107,11 @@ export default {
     const lastHour = S.posts.filter(p => p.t > t - HOUR && !SYS.has(p.from)).length;
 
     if (S.app.app) {
-      const fy = forYouRows(t), stuckN = count("stuck"), stopped = !!L.limit_until;
-      const state = stopped ? { tone: "bad", text: "Stopped" } : fy.length || stuckN ? { tone: "info", text: "Needs you" } : { tone: "good", text: "All fine" };
+      const fy = forYouRows(t), stuckN = count("stuck"), sign = signInWords(), stopped = !!L.limit_until && !(S.app.setup && S.app.setup.other);
+      const state = stopped || sign ? { tone: "bad", text: "Stopped" } : fy.length || stuckN ? { tone: "info", text: "Needs you" } : { tone: "good", text: "All fine" };
       const one = threads === 1 ? threadTitle(run[0].thread) : `${nWord(threads).toLowerCase()} conversations`;
       const title = run.length ? `${nWord(run.length)} ${run.length === 1 ? "agent is" : "agents are"} working on ${one}.` : "No agents are working right now.";
-      const lead = stopped ? `New agents wait for the usage limit until ${clock(L.limit_until * 1e3)}.`
+      const lead = sign ? sign : stopped ? `New agents wait for the usage limit until ${clock(L.limit_until * 1e3)}.`
         : fy.length === 1 ? `${fy[0].title} is waiting for your answer.`
         : fy.length ? `${nWord(fy.length)} conversations are waiting for your answer.`
         : stuckN ? `${nWord(stuckN)} ${stuckN === 1 ? "has" : "have"} stopped moving.` : null;
@@ -122,7 +124,7 @@ export default {
         cols(...activityCharts(t)),
         hasTiers() ? section({ title: "Where the agent hours went", note: "against your priority list, last 24 hours" },
           share(TIERS.map(x => ({ key: x.key, label: x.label, tone: x.tone, value: hrs[x.key], text: `${(hrs[x.key] / HOUR).toFixed(1)}h (${Math.round((100 * hrs[x.key]) / tot)}%)` })))) : null);
-      return overview({ header, main: [main], after: [todayCard(t), strip(t), more] });
+      return overview({ header, main: [awayCard(ctx), main].filter(Boolean), after: [todayCard(t), strip(t), more] });
     }
 
     const header = pageHeader({

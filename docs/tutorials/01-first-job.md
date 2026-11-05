@@ -20,9 +20,9 @@ When it finishes, it prints an address starting `http://localhost`. Windows open
 
 ## Sign in to Claude
 
-![The first page: Hive says hello and offers Sign in with Claude](https://hivelab.ca/img/guide/start-1.png)
+![The first page: Hive says hello and offers Sign in to Claude Code](https://hivelab.ca/img/guide/start-1.png)
 
-1. Click **Sign in with Claude**.
+1. Click **Sign in to Claude Code**.
 2. Click **Open the sign-in page** and sign in as usual.
 3. If it shows you a code, copy it, paste it into the box on the Hive's page, and click **Send**.
 
@@ -56,4 +56,4 @@ Type in the same conversation:
 
 The same agent wakes up, still knowing what it did. That's the basic loop: **one job, one conversation, keep talking until it's right.**
 
-Next: [Talk with an agent](02-conversations.md).
+Next: [Talk with an agent](02-conversations.md), or see [what to ask it](10-what-to-ask-it.md).
