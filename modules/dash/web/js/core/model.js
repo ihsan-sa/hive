@@ -113,7 +113,7 @@ export function hiveStats(from, to) {
   return { total: P.length, a2a, asked, answered: lat.length, lat: median(lat), fresh: fresh.length, byAgents, byYou, bySys: fresh.length - byAgents - byYou,
     threads: tl.length, multi: tl.filter(s => s.size > 1).length, hub, hubN,
     clean: ended.filter(s => s.exit === 0 || s.exit == null).length, stopped: ended.filter(s => s.exit === 143).length,
-    failed: ended.filter(s => s.exit === 1 && !S.limitedSess.has(s.session)).length, limited: S.limited.filter(t => t >= from && t <= to).length };
+    failed: ended.filter(s => s.exit === 1 && !s.limited).length, limited: S.limited.filter(t => t >= from && t <= to).length };
 }
 /** Agent-hours per tier in a window. */
 export function tierHours(from, to) {
@@ -337,8 +337,8 @@ export function threadState(th, read) {
   if (busy) { const st = agentState(busy); return { key: st.key, label: st.key === "working" ? "working" : st.text, who: busy.name, doing: busy.doing }; }
   const q = (S.live ? S.live.pending : []).find(p => (p.threads || []).includes(th));
   if (q) return { key: "queued", label: "waiting to start", who: q.name };
-  if (last && last.end && S.limitedNow.has(last.session)) return { key: "limited", label: "stopped at a usage limit", who: last.name, t: last.end };
-  if (last && last.end && last.exit && last.exit !== 143 && !S.limitedSess.has(last.session)) return { key: "failed", label: "stopped with an error", who: last.name, t: last.end };
+  if (last && last.end && last.limited && S.limitedNow.has(last.session)) return { key: "limited", label: "stopped at a usage limit", who: last.name, t: last.end };
+  if (last && last.end && last.exit && last.exit !== 143 && !last.limited) return { key: "failed", label: "stopped with an error", who: last.name, t: last.end };
   if (ask && !(read && read(ask))) return { key: "foryou", label: "new reply for you", who: ask.from, post: ask };
   return { key: "done", label: last ? "done" : "", who: last ? last.name : null };
 }

@@ -1,5 +1,5 @@
 // More easter eggs (the person, 11041609428b). Display only, nothing is sent.
-// Konami code: hex rain. /party, /bees, /matrix (see run() below, called by the composer). Double-click an avatar: spin.
+// Konami code: hex rain. /party, /bees, /matrix, /rave (see run() below, called by the composer). Double-click an avatar: spin.
 // Typing "hive" three times in a row in the composer: honeycomb behind the page. Logo clicked 3 times quickly: a swarm of bees chases the cursor for 5 s.
 const $ = (t, css, txt) => { const e = document.createElement(t); if (css) e.style.cssText = css; if (txt) e.textContent = txt; return e; };
 const FX = "position:fixed;pointer-events:none;z-index:99999;";
@@ -35,9 +35,82 @@ function matrix() {
   }, 50);
   later(() => { clearInterval(t); c.remove(); }, 5000);
 }
-const CMDS = { party, bees, matrix };
+// /rave (the person, 110423406aef): dark theme, the page spins and pulses, neon lasers and strobes, and the Axel F hook
+// (Crazy Frog style) synthesised with Web Audio: the recording can't be shipped and the CSP loads nothing from elsewhere.
+// 15 s; click or Esc stops it. Opt-in by typing it, so it ignores reduced motion (the first cut honoured it and didn't spin).
+let raving = null;
+const AXEL = (() => {   // [midi, sixteenths]; 0 = rest. F minor, 117 bpm-ish.
+  const r = [[65,4],[68,3],[65,2],[65,1],[70,2],[65,2],[63,2],[65,4],[72,3],[65,2],[65,1],[73,2],[72,2],[68,2],
+    [65,2],[72,2],[77,2],[65,1],[63,2],[63,1],[60,2],[67,2],[65,6],[0,4]];
+  return r;
+})();
+function axelF(ac, out) {
+  const s16 = 60 / 132 / 4; let t = ac.currentTime + .05, stop = false;
+  const note = (m, d, at) => {
+    const f = 440 * 2 ** ((m - 69) / 12), o = ac.createOscillator(), o2 = ac.createOscillator(), g = ac.createGain();
+    o.type = "square"; o2.type = "sawtooth"; o.frequency.value = f; o2.frequency.value = f * 1.005;
+    o.frequency.setValueAtTime(f * 1.06, at); o.frequency.exponentialRampToValueAtTime(f, at + .03);   // the "ring-ding" chirp
+    g.gain.setValueAtTime(0, at); g.gain.linearRampToValueAtTime(.16, at + .01); g.gain.exponentialRampToValueAtTime(.001, at + d * .95);
+    o.connect(g); o2.connect(g); g.connect(out); o.start(at); o2.start(at); o.stop(at + d); o2.stop(at + d);
+  };
+  const kick = at => { const o = ac.createOscillator(), g = ac.createGain(); o.frequency.setValueAtTime(140, at); o.frequency.exponentialRampToValueAtTime(40, at + .12);
+    g.gain.setValueAtTime(.5, at); g.gain.exponentialRampToValueAtTime(.001, at + .15); o.connect(g); g.connect(out); o.start(at); o.stop(at + .16); };
+  const bar = () => { const len = AXEL.reduce((n, x) => n + x[1], 0);
+    for (let i = 0; i < len; i += 4) kick(t + i * s16);
+    for (const [m, d] of AXEL) { if (m) note(m, d * s16, t); t += d * s16; } };
+  const loop = () => { if (stop) return; while (t < ac.currentTime + 2) bar(); setTimeout(loop, 500); };
+  loop(); return () => { stop = true; };
+}
+function rave() {
+  if (raving) return;
+  const root = document.documentElement, oldTheme = root.dataset.theme;
+  root.dataset.theme = "dark";
+  style(`@keyframes ez-rspin{0%{transform:rotate(0) scale(1)}25%{transform:rotate(90deg) scale(.75)}50%{transform:rotate(180deg) scale(1.05)}75%{transform:rotate(270deg) scale(.75)}100%{transform:rotate(360deg) scale(1)}}
+@keyframes ez-rhue{0%{filter:hue-rotate(0) saturate(3) contrast(1.3)}100%{filter:hue-rotate(360deg) saturate(3) contrast(1.3)}}
+html.ez-rave{overflow:hidden;background:#000}html.ez-rave body{overflow:hidden;transform-origin:50vw 50vh;animation:ez-rspin 3s linear infinite,ez-rhue .6s linear infinite!important}`);
+  root.classList.add("ez-rave");
+  // overlays sit on <html>, outside the spinning body, so the lasers stay put while the page turns under them
+  const strobe = $("div", FX + "inset:0;background:#fff;opacity:0"), c = $("canvas", FX + "inset:0;width:100vw;height:100vh;mix-blend-mode:screen");
+  c.width = innerWidth; c.height = innerHeight; root.append(c, strobe);
+  const g = c.getContext("2d"), cols = ["#ff00ff", "#00ffff", "#39ff14", "#ff073a", "#fff01f", "#bc13fe", "#00f0ff"];
+  let ac = null, mute = () => {};
+  try { ac = new (window.AudioContext || window.webkitAudioContext)(); const m = ac.createGain(); m.gain.value = .7; m.connect(ac.destination); ac.resume(); mute = axelF(ac, m); } catch (e) { /* no audio: still rave */ }
+  const t0 = performance.now(); let raf = 0, last = 0;
+  const frame = now => {
+    const t = (now - t0) / 1000, W = c.width, H = c.height;
+    g.globalCompositeOperation = "source-over"; g.fillStyle = "rgba(0,0,0,.25)"; g.fillRect(0, 0, W, H);   // trails
+    g.globalCompositeOperation = "lighter"; g.lineCap = "round";
+    const origins = [[0, 0], [W, 0], [0, H], [W, H], [W / 2, H], [W / 2, 0]];
+    origins.forEach(([ox, oy], k) => {
+      for (let i = 0; i < 6; i++) {
+        const base = Math.atan2(H / 2 - oy, W / 2 - ox), a = base + Math.sin(t * (1.5 + k * .4) + i * .9) * .9;
+        const col = cols[(i + k + Math.floor(t * 4)) % cols.length], x2 = ox + Math.cos(a) * (W + H), y2 = oy + Math.sin(a) * (W + H);
+        g.strokeStyle = col; g.shadowColor = col; g.shadowBlur = 30; g.lineWidth = 6;
+        g.beginPath(); g.moveTo(ox, oy); g.lineTo(x2, y2); g.stroke();
+        g.strokeStyle = "#fff"; g.shadowBlur = 0; g.lineWidth = 1.5; g.beginPath(); g.moveTo(ox, oy); g.lineTo(x2, y2); g.stroke();   // hot core
+      }
+    });
+    const pulse = .5 + .5 * Math.sin(t * 2 * Math.PI * 2.2);   // glow pool in the middle on the beat
+    const rg = g.createRadialGradient(W / 2, H / 2, 0, W / 2, H / 2, Math.max(W, H) * .6);
+    rg.addColorStop(0, cols[Math.floor(t * 2) % cols.length] + Math.round(pulse * 120).toString(16).padStart(2, "0")); rg.addColorStop(1, "#0000");
+    g.fillStyle = rg; g.fillRect(0, 0, W, H);
+    if (now - last > 70) { last = now; const on = strobe.style.opacity === "0";
+      strobe.style.background = Math.random() < .45 ? "#fff" : cols[(Math.random() * cols.length) | 0]; strobe.style.opacity = on ? (.55 + Math.random() * .4) : "0"; }
+    raf = requestAnimationFrame(frame);
+  };
+  raf = requestAnimationFrame(frame);
+  const stop = () => {
+    cancelAnimationFrame(raf); root.classList.remove("ez-rave"); strobe.remove(); c.remove(); mute(); if (ac) ac.close();
+    if (oldTheme) root.dataset.theme = oldTheme; else delete root.dataset.theme;
+    removeEventListener("keydown", onKey, true); removeEventListener("click", stop, true); clearTimeout(tm); raving = null;
+  };
+  const onKey = e => { if (e.key === "Escape") stop(); };
+  addEventListener("keydown", onKey, true); later(() => addEventListener("click", stop, true), 300);
+  const tm = setTimeout(stop, 15000); raving = stop;
+}
+const CMDS = { party, bees, matrix, rave };
 /** The composer calls this with the trimmed text; true if it was an egg (and so must not be sent). */
-export function run(text) { const m = /^\/(party|bees|matrix)$/.exec(text); if (!m) return false; CMDS[m[1]](); return true; }
+export function run(text) { const m = /^\/(party|bees|matrix|rave)$/.exec(text); if (!m) return false; CMDS[m[1]](); return true; }
 
 function honeycomb() {
   const cell = "<svg xmlns='http://www.w3.org/2000/svg' width='56' height='97'><path d='M28 2l26 15v30L28 62 2 47V17zM0 64l28 16v17M56 64L28 80' fill='none' stroke='%23f5b025' stroke-width='2'/></svg>";
@@ -67,6 +140,7 @@ let logoN = [];
 export function logoClicks() { const t = Date.now(); logoN = logoN.filter(x => t - x < 1500); logoN.push(t); if (logoN.length >= 3) { logoN = []; angryBee(); } }
 
 export function initEaster() {
+  const hr = () => { if (location.hash === "#rave") { history.replaceState(null, "", location.pathname + location.search); rave(); } }; addEventListener("hashchange", hr); later(hr, 500);
   const K = "ArrowUp ArrowUp ArrowDown ArrowDown ArrowLeft ArrowRight ArrowLeft ArrowRight b a".split(" "); let ki = 0, typed = "";
   addEventListener("keydown", e => {
     ki = e.key.toLowerCase() === K[ki].toLowerCase() ? ki + 1 : (e.key === "ArrowUp" ? 1 : 0);

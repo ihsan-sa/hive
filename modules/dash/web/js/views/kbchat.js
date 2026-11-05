@@ -62,7 +62,7 @@ export function kbChat(ctx, { compact = false, cur = "" } = {}) {
   if (!can("post")) return null;
   if (compact && !Q.th) return null;
   const d = Q.th && S.threads.get(Q.th);
-  const posts = d ? d.posts.filter(p => !p.text.startsWith("@new " + BRIEF.slice(0, 20))) : [];
+  const posts = d ? d.posts : [];
   const running = !!(d && S.live && S.live.agents.some(a => a.thread === Q.th && a.alive));
   const last = posts[posts.length - 1], pending = Q.th && (!last || last.from === "person");
   const state = Q.err ? "error" : Q.busy ? "sending" : !Q.th ? "idle" : pending ? "working" : "answered";
@@ -70,7 +70,7 @@ export function kbChat(ctx, { compact = false, cur = "" } = {}) {
   const log = Q.th ? h("div", { class: "kb-ask-log", "data-key": "log", "aria-live": "polite" },
     posts.map(p => {
       if (p.from === "person") return h("div", { class: "kb-ask-m", "data-who": "me", "data-key": p.id },
-        h("p", null, String(p.text).replace(/^@new Knowledge-page question[^]*?Question: /, "")));
+        h("p", null, String(p.text).replace(/^[^]*?Knowledge-page question from the person[^]*?Question: /, "")));
       const { node, found } = linked(markdown(p.text), cur); found.forEach((_, k) => nfiles.add(k));
       node.classList.add("kb-ask-body");
       return h("div", { class: "kb-ask-m", "data-who": "agent", "data-key": p.id },

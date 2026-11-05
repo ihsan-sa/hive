@@ -67,8 +67,8 @@ def ledger():
         except ValueError: rev = ""
         kind = r.get("kind", "orientation")
         files = r.get("files") or ["orientation.md"]
-        items[i] = {"id": i, "at": at, "by": "rsi-loop", "what": f"{kind}: {r.get('arm')} won the benchmark", "where": ", ".join("core/" + f for f in files),
-                    "measure": "rsi-loop bench passes and cost (results/)", "baseline": r.get("why", ""), "revisit": rev, "status": "landed",
+        items[i] = {"id": i, "at": at, "by": "rsi-loop", "what": f"{kind}: {r.get('arm')} won " + ("the replay gate" if r.get("gate") == "replay" else "the benchmark"), "where": ", ".join("core/" + f for f in files),
+                    "measure": "rsi-loop replay delivered score and cost (results/replay-*)" if r.get("gate") == "replay" else "rsi-loop bench passes and cost (results/)", "baseline": r.get("why", ""), "revisit": rev, "status": "landed",
                     "commit": r.get("landed") or r.get("commit", ""), "thread": "rsi-loop"}
         for r2 in jsonl(LEDGER):  # a judge record for an rsi id
             if r2.get("judge") == i: items[i].update(status=r2["verdict"], judged_at=r2["at"], judged_by=r2.get("by"), judged_why=r2.get("why", ""))

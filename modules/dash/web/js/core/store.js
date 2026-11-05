@@ -96,7 +96,12 @@ function ingestLog(items) {
       ledgerAdd({ t, kind: bad ? "trouble" : "agent", parts: [{ a: e.name }, bad ? ` failed (exit ${exit})` : " ended", th ? " in " : "", th ? { th } : ""] }, [bad ? "failed" : "ended", e.name, th || ""]);
     } else if (e.event === "woken" || e.event === "reaped") { const s = S.open[e.name + e.session]; if (s) s.byStarter = true; }
     else if (e.event === "killed") S.killed[e.name] = t;
-    else if (e.event === "limited") { S.limited.push(t); S.limitedSess.add(e.session); S.limitedNow.add(e.session); }
+    else if (e.event === "limited") {
+      // Mark the run that just ended, not the session: a resumed agent keeps its session id, so a session-wide mark
+      // would call every later normal end of that agent a usage limit.
+      const s = S.lastSess[e.name]; if (s && s.session === e.session && s.end) s.limited = true;
+      S.limited.push(t); S.limitedSess.add(e.session); S.limitedNow.add(e.session);
+    }
   }
 }
 function ingestBoard(items) {

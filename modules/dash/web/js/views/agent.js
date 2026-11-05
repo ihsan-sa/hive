@@ -87,8 +87,8 @@ function gather(n) {
   return memo = { key, ss, mine, toMe, first, active, spend, turns, toolCalls, byOut, contactRows, started, startedNames, chain, threads, toolList, hours, attached, life: null };
 }
 
-const ended = x => (!x.end ? (isRunning(x.name) ? "running" : "unknown") : x.exit === 0 ? "finished" : x.exit === 143 ? "stopped by a signal" : x.exit == null ? "ended, no exit code" : S.limitedSess.has(x.session) ? "usage limit" : `exit ${x.exit}`);
-const endTone = x => (!x.end ? (isRunning(x.name) ? "good" : "quiet") : x.exit === 0 || x.exit === 143 || x.exit == null ? "ended" : S.limitedSess.has(x.session) ? "warn" : "bad");
+const ended = x => (!x.end ? (isRunning(x.name) ? "running" : "unknown") : x.exit === 0 ? "finished" : x.exit === 143 ? "stopped by a signal" : x.exit == null ? "ended, no exit code" : x.limited ? "usage limit" : `exit ${x.exit}`);
+const endTone = x => (!x.end ? (isRunning(x.name) ? "good" : "quiet") : x.exit === 0 || x.exit === 143 || x.exit == null ? "ended" : x.limited ? "warn" : "bad");
 
 // ---- its life on one time axis: cost per step, sessions, posts ----
 const SPAN_MAX = 14 * DAY;

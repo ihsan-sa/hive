@@ -99,8 +99,8 @@ function threadEvents(th) {
   if (!app()) return out;
   for (const s of S.sessions) {
     if (s.thread !== th || !s.end) continue;
-    if (S.limitedSess.has(s.session)) out.push({ ev: true, key: "ev:" + s.session, t: s.end, tone: "limited", text: simpleOn() ? "Your Hive took a break" : `${s.name} stopped at a usage limit`, sub: "It carries on by itself once there's room." });
-    else if (s.exit && s.exit !== 143) out.push({ ev: true, key: "ev:" + s.session, t: s.end, tone: "failed", text: simpleOn() ? "Your Hive ran into a problem" : `${s.name} stopped with an error (exit ${s.exit})`, sub: simpleOn() ? "Send a message and it tries again." : "Its last message above is where it got to." });
+    if (s.limited) out.push({ ev: true, key: "ev:" + s.session + ":" + s.start, t: s.end, tone: "limited", text: simpleOn() ? "Your Hive took a break" : `${s.name} stopped at a usage limit`, sub: "It carries on by itself once there's room." });
+    else if (s.exit && s.exit !== 143) out.push({ ev: true, key: "ev:" + s.session + ":" + s.start, t: s.end, tone: "failed", text: simpleOn() ? "Your Hive ran into a problem" : `${s.name} stopped with an error (exit ${s.exit})`, sub: simpleOn() ? "Send a message and it tries again." : "Its last message above is where it got to." });
   }
   return out;
 }
@@ -170,7 +170,8 @@ function setJump() {
   L.jump.textContent = L.unseen ? `${plural(L.unseen, "new message")} ↓` : "";
 }
 function flash(box, el) {
-  box.scrollTop = Math.max(0, el.offsetTop - box.clientHeight / 3);
+  // a short message sits a third down; a tall one starts near the top so it reads from its first line
+  box.scrollTop = Math.max(0, el.offsetTop - (el.offsetHeight > box.clientHeight * 0.6 ? 24 : box.clientHeight / 3));
   L.stuck = atEnd(box);
   el.setAttribute("data-flash", ""); setTimeout(() => el.removeAttribute("data-flash"), 1800);
 }

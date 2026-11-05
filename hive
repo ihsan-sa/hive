@@ -603,6 +603,13 @@ def login_weekly(d):
         return w.get("used_percentage", w.get("utilization"))
     except Exception: return None
 
+def login_weekly_known(d):
+    """login_weekly, or the starter's last good reading if the live read fails (a 429 here read as "unknown" while the starter had the figure)."""
+    v = login_weekly(d)
+    if v is not None: return v
+    try: return json.loads((STATE / "usage.json").read_text()).get(str(Path(d).expanduser()))
+    except (OSError, ValueError, AttributeError): return None
+
 def pct(v): return "unknown" if v is None else f"{v:.0f}%"
 
 def paused_logins():
@@ -721,7 +728,7 @@ def cmd_login(a):
         return
     for l in c["logins"]:
         d = Path(l).expanduser(); st = login_status(d)
-        print(f"{login_name(c, l):<12} {l:<20} weekly {pct(login_weekly(d)):<8} {st.get('subscriptionType') or '':<8} {st.get('email') or 'NOT SIGNED IN'}{'  PAUSED' if str(d) in paused_logins() else ''}  ({lines_text(c, str(d))})")
+        print(f"{login_name(c, l):<12} {l:<20} weekly {pct(login_weekly_known(d)):<8} {st.get('subscriptionType') or '':<8} {st.get('email') or 'NOT SIGNED IN'}{'  PAUSED' if str(d) in paused_logins() else ''}  ({lines_text(c, str(d))})")
 
 if len(sys.argv) == 1 or (sys.argv[1].startswith("-") and sys.argv[1] not in ("-h", "--help")):
     door(sys.argv[1:])  # flags pass through to claude; a mistyped command must not open a session in an agent's shell
