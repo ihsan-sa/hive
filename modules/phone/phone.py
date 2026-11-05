@@ -12,6 +12,7 @@ when it has one with CUDA, else on the CPU with a smaller recognition model.
   phone transfer AGENT [--why W]   from inside a call: hold music, then AGENT is summoned
   phone ring [--why W]             from any agent: ring the person; when they answer, you're summoned to pick up
   phone calls                      what's live
+  phone enroll [FILE...]           learn the person's voice from saved call turns and memos, so a nearby talker gets muted
   phone say TEXT [-o FILE]         speak TEXT to a wav file, as a test of the voice
 
 Calling Hive starts a new agent in a new thread for the call, like any other agent (it shows in the agent view and the
@@ -85,6 +86,7 @@ def _preload_cuda():
 
 
 STT_GPU, STT_CPU = "faster-distil-whisper-medium.en", "faster-distil-whisper-small.en"   # Systran's builds on Hugging Face
+SPK_URL = "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/3dspeaker_speech_campplus_sv_en_voxceleb_16k.onnx"
 KOKORO = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/"
 
 
@@ -117,6 +119,8 @@ def setup():
     m = MOD / "models"; m.mkdir(exist_ok=True)
     for f in ("kokoro-v1.0.onnx", "voices-v1.0.bin"):
         if not (m / f).exists(): run(["curl", "-fsSL", "--retry", "3", "-o", str(m / f) + ".part", KOKORO + f]); (m / (f + ".part")).rename(m / f)
+    if not (m / "speaker-campplus.onnx").exists():
+        run(["curl", "-fsSL", "--retry", "3", "-o", str(m / "speaker-campplus.onnx.part"), SPK_URL]); (m / "speaker-campplus.onnx.part").rename(m / "speaker-campplus.onnx")
     for n in ([STT_GPU] if gpu else [STT_CPU]):
         if not (m / n).is_dir(): run([str(py), "-c", f"from huggingface_hub import snapshot_download as d; d('Systran/{n}', local_dir={str(m / (n + '.part'))!r})"]); (m / (n + ".part")).rename(m / n)
     print(f"phone: speech ready for the {'GPU' if gpu else 'CPU'}", flush=True)
@@ -128,6 +132,33 @@ def setup():
     if dash.exists(): (u / f"{unit.name}.d").mkdir(exist_ok=True); shutil.copy(dash, u / f"{unit.name}.d/local.conf")
     run(["systemctl", "--user", "daemon-reload"]); run(["systemctl", "--user", "enable", "--now", unit.name]); run(["systemctl", "--user", "restart", unit.name])
     print("The Call button shows in the dashboard once the models have loaded (under a minute; reload the page).")
+
+
+def enroll(paths=None):
+    """Learn the person's voice from their own audio, one saved call turn or voice memo at a time; a clip that doesn't match the
+    rest is left out. Writes speaker.ENROL with one voice per channel (a phone line changes how a voice scores). Stops with no
+    file written if there's too little to go on."""
+    import numpy as np, speaker, telnyx
+    _preload_cuda()
+    if not paths:
+        paths = sorted(Path(os.environ.get("TMPDIR", "/tmp"), "phone-turns").glob("*.pcm")) + sorted((HOME / "files").glob("*/voice-*"))
+    raw = {"browser": [], "line": []}; names = []
+    for p in map(Path, paths):
+        if p.suffix == ".pcm": a = np.fromfile(p, dtype="<i2").astype("float32") / 32768
+        else:
+            r = subprocess.run(["ffmpeg", "-v", "error", "-i", str(p), "-f", "f32le", "-ac", "1", "-ar", "16000", "-"], capture_output=True)
+            a = np.frombuffer(r.stdout, dtype="float32")
+        if len(a) < 16000 * 3 or np.sqrt((a ** 2).mean()) < 0.01: continue
+        a = a[:16000 * 60]
+        raw["browser"].append(speaker.embed(a)); raw["line"].append(speaker.embed(telnyx.over_line(a))); names.append(p.name)
+    if len(names) < 8: raise SystemExit(f"phone: only {len(names)} usable clips of 3 s or more; talk on a few more calls, or name the files")
+    out = {}
+    for ch, e in raw.items():
+        out[ch], kept = speaker.centroid(e)
+        print(f"{ch}: {len(kept)} of {len(e)} clips agree, median score {np.median(np.stack(e)[kept] @ out[ch]):.2f}; left out: {[names[i] for i in range(len(e)) if i not in kept]}")
+    speaker.ENROL.parent.mkdir(parents=True, exist_ok=True)
+    with open(speaker.ENROL, "wb") as f: np.savez(f, **out)
+    print(f"wrote {speaker.ENROL}. To pick it up: systemctl --user restart hive-phone hive-voice, once `phone calls` shows nothing live.")
 
 
 def models():
@@ -201,14 +232,46 @@ def isolate(a, mode):
     return a.astype("float32")
 
 
-def stt(pcm16k, partial=False):
+def keep_turn(cid, pcm, tag=""):
+    """Empty, long and partly muted turns stay on this machine to look at and to enrol from, the newest 300."""
+    d = Path(os.environ.get("TMPDIR", "/tmp"), "phone-turns"); d.mkdir(parents=True, exist_ok=True)
+    (d / f"{tag}{cid}-{int(time.time())}.pcm").write_bytes(pcm)
+    for f in sorted(d.glob("*.pcm"), key=lambda f: f.stat().st_mtime)[:-300]: f.unlink(missing_ok=True)
+
+
+_rejects = {}   # channel: turns in a row that sounded like nobody enrolled
+
+
+def voice_gain(a, channel, info):
+    """The mute mask for a final turn (see speaker.py), or None to keep all of it. This fails open: any error, no enrolment, or
+    two whole turns in a row rejected (a voice that has stopped matching, say a cold or a bad line) keeps the audio."""
+    try:
+        import speaker
+        ref = speaker.refs().get(channel)
+        if ref is None: return None
+        g, kept = speaker.mask(a, ref)
+        info["kept"] = round(kept, 2)
+        if g is None or kept > 0: _rejects[channel] = 0; return g
+        _rejects[channel] = _rejects.get(channel, 0) + 1
+        if _rejects[channel] <= 2: info["not_person"] = True
+        return None
+    except Exception as e:
+        print(f"phone: speaker check failed, keeping the audio: {e}", flush=True); return None
+
+
+def stt(pcm16k, partial=False, channel="browser", info=None):
     """16 kHz mono int16 little-endian bytes to text. Drops what's most likely noise, not speech.
-    partial: a look at speech still going on, for showing it live; gives None rather than wait behind another transcription."""
+    partial: a look at speech still going on, for showing it live; gives None rather than wait behind another transcription.
+    channel: browser or line, which enrolled voice to compare a final with. info, a dict, gets kept (fraction of the turn that
+    was the enrolled voice) and not_person (none of it was: the text is "" and what was heard goes to the log)."""
     import numpy as np
+    info = {} if info is None else info
     a = np.frombuffer(pcm16k, dtype="<i2").astype("float32") / 32768
     if len(a) < 16000 * 0.25: return ""
-    if PRE != "base": a = isolate(a, PRE)
     st, _ = models()
+    g = None if partial else voice_gain(a, channel, info)
+    if PRE != "base": a = isolate(a, PRE)   # the mask comes after: isolate learns the room from the quietest frames, and muted ones would fool it
+    if g is not None: a = a * g
     if not _mlock.acquire(blocking=not partial): return None
     try:
         # No initial_prompt: with one, distil-whisper gave no segments at all for 22 of 51 chunks of real speech
@@ -219,6 +282,9 @@ def stt(pcm16k, partial=False):
     # Whisper's own rule: a segment is silence only when it is both likely no-speech and decoded with low confidence.
     text = " ".join(s.text.strip() for s in segs if not (s.no_speech_prob > 0.6 and s.avg_logprob < -1.0)).strip()
     if re.fullmatch(r"(?i)\W*(thank you|thanks for watching|you|bye)\W*", text) and len(a) < 16000 * 1.2: return ""  # whisper's usual noise words
+    if info.get("not_person"):
+        print(f"phone: {channel} turn {len(a) / 16000:.1f}s is not the enrolled voice, dropped {text!r}", flush=True); return ""
+    if info.get("kept", 1) < 1: print(f"phone: {channel} turn {len(a) / 16000:.1f}s kept {info['kept']:.0%} as the enrolled voice", flush=True)
     return text
 
 # --------------------------------------------------------------------------------------------------- agents
@@ -691,12 +757,10 @@ class H(BaseHTTPRequestHandler):
         if c.ended: return self.out({"error": "call ended"}, 410)
         if m[2] == "turn":
             pcm = self.body()
-            text = stt(pcm)
-            if not text and len(pcm) > 32000 * 1.5 and len((c.partial or "").split()) >= 2: text = c.partial  # shown live, so don't lose it
+            info = {}; text = stt(pcm, info=info)
+            if not text and not info.get("not_person") and len(pcm) > 32000 * 1.5 and len((c.partial or "").split()) >= 2: text = c.partial  # shown live, so don't lose it
             print(f"phone: call {c.id} turn {len(pcm) / 32000:.1f}s heard {text!r}", flush=True)
-            if os.environ.get("PHONE_DEBUG") or (not text and len(pcm) > 32000 * 1.5) or len(pcm) > 32000 * 20:  # keep empty and long turns, to look at
-                d = Path(os.environ.get("TMPDIR", "/tmp"), "phone-turns"); d.mkdir(parents=True, exist_ok=True)
-                (d / f"{c.id}-{int(time.time())}.pcm").write_bytes(pcm)
+            if os.environ.get("PHONE_DEBUG") or (not text and len(pcm) > 32000 * 1.5) or len(pcm) > 32000 * 20 or info.get("kept", 1) < 1: keep_turn(c.id, pcm)
             if text: threading.Thread(target=c.heard, args=(text,), daemon=True).start()
             return self.out({"text": text})
         if m[2] == "partial":
@@ -779,6 +843,34 @@ def listen(cid, name):
     print(f'(The person said nothing for 90 seconds. Run phone listen {cid} to keep waiting, or phone talk {cid} "..." to say something.)')
 
 
+SMS_DAILY_CAP = 10
+
+
+def send_sms(text):
+    """Text the person (the first allowed caller in telnyx.json) from the Hive's Telnyx number. Outbound only; replies are not read."""
+    import urllib.request, urllib.error
+    cfgd = Path.home() / ".config/hive"
+    cfg = json.loads((cfgd / "telnyx.json").read_text())
+    key = (cfgd / "secrets/telnyx-api-key").read_text().strip()
+    text = text.strip()
+    if not text: sys.exit("empty text")
+    if len(text) > 600: sys.exit("too long for a text (600 characters max); post the rest on the board and send a link")
+    count = cfgd / "sms-count.json"
+    today = time.strftime("%Y-%m-%d", time.gmtime())
+    try: c = json.loads(count.read_text())
+    except (OSError, ValueError): c = {}
+    if c.get("day") != today: c = {"day": today, "n": 0}
+    if c["n"] >= SMS_DAILY_CAP: sys.exit(f"daily text cap ({SMS_DAILY_CAP}) reached; use the board or a ring instead")
+    body = json.dumps({"from": cfg["number"], "to": cfg["allowed_callers"][0], "text": text, "type": "SMS"}).encode()
+    rq = urllib.request.Request("https://api.telnyx.com/v2/messages", data=body, headers={"Authorization": "Bearer " + key, "Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(rq, timeout=30) as r: d = json.load(r)
+    except urllib.error.HTTPError as e: sys.exit(f"Telnyx refused the text (HTTP {e.code}): {e.read().decode()[:600]}")
+    except OSError as e: sys.exit(f"could not reach Telnyx: {e}")
+    c["n"] += 1; count.write_text(json.dumps(c))
+    return f"sent (id {d.get('data', {}).get('id')}); {c['n']}/{SMS_DAILY_CAP} today"
+
+
 def main(argv):
     import argparse
     ap = argparse.ArgumentParser(prog="phone", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -790,10 +882,13 @@ def main(argv):
     for k in ("talk", "hangup"): x = sp.add_parser(k); x.add_argument("call"); x.add_argument("text", nargs="?" if k == "hangup" else None, default="")
     r = sp.add_parser("ring"); r.add_argument("--why", default=""); r.add_argument("--thread"); r.add_argument("--phone", action="store_true", help="also ring the person's own phone")
     sp.add_parser("calls")
+    x = sp.add_parser("enroll"); x.add_argument("files", nargs="*")
+    sm = sp.add_parser("sms", help="text the person's own number (a link or a short note); capped per day"); sm.add_argument("text")
     s = sp.add_parser("say"); s.add_argument("text"); s.add_argument("-o", default="say.wav")
     a = ap.parse_args(argv)
     if a.cmd == "serve": return serve()
     if a.cmd == "setup": return setup()
+    if a.cmd == "enroll": return enroll(a.files)
     if a.cmd == "say":
         Path(a.o).write_bytes(tts_wav(a.text)); print(a.o); return
     if a.cmd == "calls": print(json.dumps(api("GET", "/calls"), indent=1)); return
@@ -820,6 +915,7 @@ def main(argv):
         print(json.dumps(api("POST", f"/call/{cid}/transfer", {"to": a.agent, "why": a.why})))
         print("Done: the person is on hold and the agent is picking up. Don't say anything more.")
         return
+    if a.cmd == "sms": print(send_sms(a.text)); return
     if a.cmd == "ring":
         name = os.environ.get("HIVE_NAME", "")
         thread = a.thread or os.environ.get("HIVE_THREAD") or thread_of(name)

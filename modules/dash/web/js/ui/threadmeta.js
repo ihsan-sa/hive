@@ -100,18 +100,9 @@ export function openCard(th, { jump, answer, update, atEnd }) {
   return ap ? h("div", null, ap, card) : card;
 }
 
-/** The machine's approval page (the person's word, 11050958dfac; rootwarden, 1105123191d8). The dash only links to it: the page shows the text and takes the passphrase, and only
- * the person's iPhone can reach it, so nothing here counts as approving. A request lasts an hour, and rootwarden's latest post in the thread is the one still in play. */
-const PAGE_LIFE_MS = 36e5;
-function pageRequest(th) {
-  const base = S.app.word_page, d = S.threads.get(th), p = d && d.posts.findLast(x => x.from === "rootwarden");
-  if (!base || !p || Date.now() - p.t > PAGE_LIFE_MS) return null;
-  const m = String(p.text || "").split(base + "/?id=");
-  const id = m.length > 1 && /^[A-Za-z0-9_-]{4,64}(?![^\s`.,;:)])/.exec(m.at(-1));
-  return id ? { id: id[0], url: `${base}/?id=${id[0]}`, post: p } : null;
-}
+function pageRequest() { return null; }
 
-/** Requests an agent made for a yes no warden can give (hive approve ask). A button on text the agent wrote could be pressed without reading it,
+/** Requests an agent made for a yes no warden can give (the approve ask command). A button on text the agent wrote could be pressed without reading it,
  * so the card shows what the server recorded, and a major change asks for a typed x. */
 function approvalCard(th, update) {
   const open = (S.approvals || []).filter(a => a.thread === th && a.state === "pending"), page = pageRequest(th);
@@ -122,9 +113,7 @@ function approvalCard(th, update) {
   };
   return h("section", { class: "tm-card", "data-key": "approve:" + th, "data-tone": "warn", "aria-label": "Approval needed" },
     h("header", { class: "tm-card-h" }, icon("bell"), h("b", null, open.length + !!page > 1 ? `${open.length + !!page} approvals needed` : "Your approval is needed")),
-    h("ul", { class: "tm-items" }, page ? h("li", { "data-key": "page:" + page.id, "data-page": "" },
-      h("span", { class: "tm-who" }, "rootwarden"), h("span", { class: "tm-say" }, forYouLine(page.post) || "Rootwarden asks for your yes on one action."),
-      h("span", { class: "tm-act" }, h("a", { class: "btn", "data-size": "s", href: page.url, target: "_blank", rel: "noopener noreferrer", title: "Opens the approval page, which only your iPhone can reach. Read the request and type your passphrase there." }, "Approve on your iPhone"))) : null,
+    h("ul", { class: "tm-items" }, null,
       open.map(a => {
       const box = a.major ? h("input", { class: "input", autocomplete: "off", spellcheck: "false", placeholder: "type x", size: 4, "aria-label": "Type x to approve this major change" }) : null;
       return h("li", { "data-key": a.id },

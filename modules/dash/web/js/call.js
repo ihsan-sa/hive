@@ -54,3 +54,13 @@ async function chat() {
   } catch {}
 }
 boot();
+
+// Keep the screen on while the call page is open (a locked phone freezes the page and drops the call).
+let wakeLock = null;
+const keepAwake = async () => {
+  try { if (navigator.wakeLock && !document.hidden && !wakeLock) { wakeLock = await navigator.wakeLock.request("screen"); wakeLock.addEventListener("release", () => { wakeLock = null; }); } } catch (e) { wakeLock = null; }
+};
+document.addEventListener("visibilitychange", keepAwake);
+document.addEventListener("click", keepAwake);
+document.addEventListener("touchend", keepAwake);
+keepAwake();
