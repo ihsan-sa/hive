@@ -15,9 +15,12 @@ export function pageHeader({ title, lead, tone, meta, actions, after, size, stat
 }
 
 /** Section: a titled block. {title, note, actions, id, level} + body nodes. level 1: a part of a long page, with a rule under its title. */
-export function section({ title, note, actions, id, key, level }, ...body) {
+export function section({ title, note, info, actions, id, key, level, fold, summary }, ...body) {
+  // fold: a closed row that opens (summary is its quiet one-line count); info: the long sentence, behind an icon's title.
+  if (fold) return h("details", { class: "fold-row", id: id || null, "data-key": key || null },
+    h("summary", null, icon("chevron-right"), title, summary ? h("small", null, summary) : null), h("div", { class: "fold-in" }, body));
   return h("section", { class: "sec", id: id || null, "data-key": key || null, "data-level": level || null, "aria-label": title || null },
-    title ? h("header", { class: "sec-h" }, h("h2", { class: "sec-t" }, title), note ? h("span", { class: "sec-n" }, note) : null, actions ? h("div", { class: "sec-a" }, actions) : null) : null,
+    title ? h("header", { class: "sec-h" }, h("h2", { class: "sec-t" }, title), info ? (b => (b.setAttribute("aria-label", "About " + title), b))(button(info, null, { kind: "icon", icon: "info", cls: "sec-info", title: info })) : null, note ? h("span", { class: "sec-n" }, note) : null, actions ? h("div", { class: "sec-a" }, actions) : null) : null,
     body);
 }
 
@@ -42,10 +45,11 @@ export function tally(items) {
 }
 
 /** Stats: figures in a strip. items: [{label, value, note, tone, meter:{value, stop, tone}}] */
-export function stats(items) {
-  return h("dl", { class: "stats" }, items.filter(Boolean).map(i => h("div", { class: "stat", "data-tone": i.tone || null, title: i.title || null },
+export function stats(items, { card } = {}) {
+  return h("dl", { class: ["stats", card ? "card" : null] }, items.filter(Boolean).map(i => h("div", { class: "stat", "data-tone": i.tone || null, title: i.title || null },
     h("dt", null, i.label), h("dd", { class: "stat-v" }, i.value),
     i.meter ? h("dd", null, meter(i.meter)) : null,
+    i.worse ? h("dd", { class: "stat-w" }, i.worse) : null,
     i.note ? h("dd", { class: "stat-n" }, i.note) : null)));
 }
 
@@ -71,7 +75,7 @@ export function button(label, onClick, { kind, size, tone, title, disabled, type
 /** Segmented choice. options: [[key, label]] */
 export function seg(options, value, onChange, { label } = {}) {
   return h("div", { class: "seg", role: "group", "aria-label": label || null },
-    options.map(([k, l, t]) => h("button", { type: "button", "aria-pressed": String(k === value), title: t || null, onclick: () => onChange(k) }, l)));
+    options.map(([k, l, t, n]) => h("button", { type: "button", "aria-pressed": String(k === value), title: t || null, onclick: () => onChange(k) }, l, n != null ? h("i", null, String(n)) : null)));
 }
 
 /** Form field: label, control, hint. */
@@ -91,7 +95,7 @@ export function list(rows, { empty: none = "Nothing here.", limit, onMore, moreT
   const shown = limit ? rows.slice(0, limit) : rows;
   return h("div", null,
     h("ul", { class: "list", "data-dense": dense ? "" : null }, shown.map(r => h("li", { class: "lr", "data-key": r.key || null },
-      h(r.href ? "a" : r.onClick ? "button" : "div", { class: "lr-in", href: r.href || null, type: !r.href && r.onClick ? "button" : null, "aria-current": r.current ? "true" : null, onclick: r.onClick || null },
+      h(r.href ? "a" : r.onClick ? "button" : "div", { class: "lr-in", style: r.depth ? `--d:${r.depth}` : null, href: r.href || null, type: !r.href && r.onClick ? "button" : null, "aria-current": r.current ? "true" : null, onclick: r.onClick || null },
         h("div", { class: "lr-t" }, r.lead || null, h("b", null, r.title), r.sub ? h("span", { class: "muted" }, r.sub) : null, r.meta ? h("span", { class: "meta" }, r.meta) : null),
         r.text ? h("div", { class: "lr-x clamp-2" }, r.text) : null)))),
     rows.length > shown.length ? h("div", { class: "lr-more" }, onMore ? button(moreText(rows.length - shown.length), onMore, { kind: "quiet", size: "s" }) : h("span", { class: "meta" }, `and ${rows.length - shown.length} more`)) : null);

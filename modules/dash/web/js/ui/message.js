@@ -334,7 +334,7 @@ export function message(p, opts = {}) {
   if (btwOpener(p)) return btwMessage(p, ws);
   const call = phoneCall(p); if (call) return call;
   const kind = SYS.has(p.from) ? "sys" : p.from === "person" ? "me" : OUTSIDE.has(p.from) ? "out" : "agent";
-  return h("article", { class: "msg", "data-key": p.id, "data-who": kind, "data-cont": opts.cont ? "" : null, "data-report": displayText(p).length > LONG ? "" : null, "aria-label": `${who(p.from)}, ${stamp(p.t)}` },
+  return h("article", { class: "msg", tabindex: "-1", "data-key": p.id, "data-who": kind, "data-cont": opts.cont ? "" : null, "data-report": displayText(p).length > LONG ? "" : null, "aria-label": `${who(p.from)}, ${stamp(p.t)}` },
     messageHead(p, opts),
     p.reply_to ? quote(p) : null,
     body(p, ws),
@@ -409,7 +409,7 @@ function devMessage(p, opts) {
     if (ws.some(w => lc.includes(w)) && !ws.some(w => cut.includes(w))) OPEN.add(p.id);
   }
   const cut = el => { if (long && !OPEN.has(p.id) && !RAW.has(p.id)) el.dataset.cut = ""; return el; };
-  return h("article", { class: "msg", "data-key": p.id, "data-who": SYS.has(p.from) ? "sys" : p.from === "person" || p.from === "box" ? "person" : null, "data-cont": opts.cont ? "" : null, "data-report": long ? "" : null },
+  return h("article", { class: "msg", tabindex: "-1", "data-key": p.id, "data-who": SYS.has(p.from) ? "sys" : p.from === "person" || p.from === "box" ? "person" : null, "data-cont": opts.cont ? "" : null, "data-report": long ? "" : null },
     devHead(p, opts.showThread !== false),
     devTools(p, ws),
     cut(devBodyEl(p, ws)),

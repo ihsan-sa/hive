@@ -237,7 +237,7 @@
 
 /* Layout toggle (Bands / Web / Orbit). The graph layouts draw their tiers as rings (orbit) and move everything over on a switch. */
 .map-ring{fill:none;stroke:var(--line);stroke-dasharray:2 5}
-.map-rt{font-size:10.5px;font-weight:var(--w-bold);letter-spacing:.05em;text-transform:uppercase;fill:var(--ink-3);text-anchor:middle}
+text.map-ring-t{font-size:10.5px;font-weight:var(--w-bold);letter-spacing:.05em;text-transform:uppercase;fill:var(--ink-3);text-anchor:middle}
 .map-cv[data-move]>button,.map-cv[data-move]>div:not(.map-hc){transition:transform .55s cubic-bezier(.2,.8,.2,1),opacity .2s ease}
 .map-cv[data-move]>.map-svg{animation:map-redraw .7s ease}
 @keyframes map-redraw{0%,60%{opacity:0}100%{opacity:1}}
