@@ -1945,17 +1945,8 @@ dialog.rc-rail[open]{display:flex;flex-direction:column;gap:var(--s2)}
 .ph-end,.ph-answer{background:var(--bad);color:var(--on-ink,#fff);border-color:transparent}
 .ph-answer{background:var(--good)}
 @media (prefers-reduced-motion:reduce){.ph-dot{animation:none!important}}
-/* a voice call going on: its words in the thread as they're said (views/comms.js callLive), and on the agent's card */
+/* a voice call going on: the live words show in the small call card only (the person, 2026-11-05: the wide one in the thread was too much) */
 .ph-partial i{color:var(--ink-3)}
-.cm-call{margin:0 var(--s3) var(--s2);padding:var(--s2) var(--s3);border:1px solid var(--line);border-left:3px solid var(--good);border-radius:var(--r-m,10px);background:var(--surface);font-size:var(--fs-small)}
-.cm-call-h{display:flex;align-items:center;gap:var(--s2);font-weight:600}
-.cm-call-h .meta{font-weight:400}
-.cm-call-ls{display:grid;gap:4px;margin-top:var(--s1,4px);max-height:220px;overflow:auto;line-height:1.45}
-.cm-call-l,.cm-call-sys{margin:0}
-.cm-call-l b{color:var(--ink-2);margin-right:4px}
-.cm-call-l[data-you]{color:var(--ink-2)}
-.cm-call-l[data-partial] i{color:var(--ink-3)}
-.cm-call-sys{font-style:italic}
 .ac-call{margin-left:auto;padding:1px 8px;border-radius:999px;font-size:var(--fs-small);font-weight:600;color:var(--good);background:color-mix(in srgb,var(--good) 14%,transparent);white-space:nowrap}
 .ac-call+.ac-st{margin-left:0}
 /* agent hover card (ui/agentHover.js) */
@@ -1963,3 +1954,12 @@ dialog.rc-rail[open]{display:flex;flex-direction:column;gap:var(--s2)}
 .ahc-h{display:flex;align-items:center;gap:7px}
 .ahc-h .meta{margin-left:auto;padding-left:10px}
 .ahc-b{display:flex;gap:6px}
+.pf-more{display:block;width:100%;margin:6px 0;padding:8px;border:1px dashed var(--line,#ccc);border-radius:8px;background:none;color:inherit;cursor:pointer}
+.ac-call-i{margin-right:4px;display:inline-block;animation:ac-ring 1.6s ease-in-out infinite}
+@keyframes ac-ring{0%,60%,100%{transform:rotate(0)}10%,30%{transform:rotate(-14deg)}20%,40%{transform:rotate(14deg)}}
+@media (prefers-reduced-motion:reduce){.ac-call-i{animation:none}}
+.msg-call-d>summary{display:flex;align-items:center;gap:var(--s2);cursor:pointer;padding:6px 0;list-style:none}
+.msg-call-d>summary::-webkit-details-marker{display:none}
+.msg-call-d>summary svg{width:16px;height:16px}
+.msg-call-t{display:grid;gap:4px;margin:4px 0 8px;font-size:var(--fs-small);line-height:1.45}
+.msg-call-t p{margin:0}

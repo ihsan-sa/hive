@@ -382,17 +382,6 @@ const who = n => (simpleOn() ? hiveName() : agentRef(n, { dot: false }));
 function lastMine(th) { const d = S.threads.get(th); if (!d) return null; for (let i = d.posts.length - 1; i >= 0; i--) if (d.posts[i].from === "person") return d.posts[i]; return null; }
 const notBuilt = () => h("span", { class: "nb", title: "Designed, not built yet: the server needs to do this" }, "not built yet");
 
-/** A voice call going on in this thread, its words as they're said (ui/phone.js polls them). The board gets the whole transcript at hang-up. */
-function callLive(th) {
-  const c = callFor(th); if (!c) return null;
-  const rows = c.lines.slice(-8).map(([w, t], i) => w === "system" ? h("p", { class: "cm-call-sys meta", "data-key": "l" + i }, t)
-    : h("p", { class: "cm-call-l", "data-key": "l" + i, "data-you": w === "person" ? "" : null }, h("b", null, w === "person" ? "You" : w), " ", t));
-  return h("section", { class: "cm-call", "data-key": "call", "aria-label": "Live call" },
-    h("div", { class: "cm-call-h" }, statusDot("working", { live: true }), h("span", null, `On a call with ${c.agent}`), h("span", { class: "meta" }, " · live, the transcript is posted here at hang-up")),
-    h("div", { class: "cm-call-ls", role: "log", "aria-live": "polite" }, rows,
-      c.partial ? h("p", { class: "cm-call-l", "data-key": "partial", "data-you": "", "data-partial": "" }, h("b", null, "You"), " ", h("i", null, c.partial + "…")) : null));
-}
-
 function strip(th) {
   const st = threadState(th, seen), out = [], run = (S.live ? S.live.agents : []).filter(a => a.thread === th), post = can("post") && app();
   const call = callFor(th);
@@ -488,7 +477,7 @@ function head(c, ctx) {
       h("button", { type: "button", class: "btn", "data-kind": "icon", "aria-label": "Search here", title: "Search here", "aria-pressed": String(find),
         onclick: () => { C.find = !find; if (!C.find) C.q = ""; ctx.update(); if (C.find) queueMicrotask(() => document.querySelector(".cm-find")?.focus()); } }, icon("search")),
       off > 0 && !simpleOn() ? button(`Show ${off} hidden`, () => setShow(SHOW.ALL, ctx), { size: "s", kind: "quiet", cls: "cm-hid", title: "Turn on For you, Updates and Agent comms" }) : null,
-      c.thread ? button("Files", () => import("../ui/preview.js").then(m => m.openFiles()), { kind: "icon", icon: "archive", cls: "cm-files", title: "Files: this conversation's and the projects'" }) : null,
+      c.thread ? button("Files", () => import("../ui/preview.js").then(m => m.openFiles()), { kind: "icon", icon: "folder", cls: "cm-files", title: "Files: this conversation's and the projects'" }) : null,
       c.thread ? asideBtn(c.thread, ctx) : null,
       c.thread && app() && !simpleOn() ? menuBtn("more", "More", "more", ctx) : null),
     C.menu === "title" ? titleMenu(c, n, d) : null,
@@ -603,7 +592,6 @@ export default {
         // Keyed by conversation: another one is a new element, so it opens at its end. Wrapped so that swap doesn't move the composer, which would drop focus.
         h("div", { class: "cm-mw", "data-key": "mw" },
           h("div", { class: "cm-msgs", "data-key": "m:" + (c.arg || ""), "data-own": "", "data-sig": "own", role: "log", "aria-live": "off", "aria-label": "Messages", tabindex: "0" })),
-        c.thread ? callLive(c.thread) : null,
         c.thread && app() && !(post && c.thread) ? strip(c.thread) : null,
         post && c.thread ? asidePanel(c.thread, ctx.update) : null,
         c.thread && app() ? openCard(c.thread, { jump: jumpTo, answer: p => replyTo(p), update: ctx.update, atEnd: !L.box || L.box.dataset.key !== "m:" + (c.arg || "") || L.stuck }) : null,   // what's open for the person, so they needn't read back (110401090fd2)

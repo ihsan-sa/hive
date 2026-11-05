@@ -4,7 +4,7 @@
 // back as wav in the event stream and play in order. Talking over it stops playback (barge-in). Hold music is
 // synthesised here, so it needs no file. Agents ring with `phone ring`: rings show as a banner on every page.
 // While the person talks, the speech so far goes to /partial every ~1.2 s so their words show as they say them.
-// Every page polls /calls, so a call placed on one device shows live on the others: in its thread (callFor, used by
+// Every page polls /calls, so a call placed on one device shows live on the others: in its thread's strip (callFor, used by
 // the comms view), as "On a call" on the agent, and as a read-only card here.
 import { S, jget, post, emit } from "../core/store.js";
 
@@ -94,10 +94,11 @@ async function micStart() {
     C.seg.push(x);
     C.quiet = loud ? 0 : C.quiet + frameS;
     const len = C.seg.length * frameS;
-    // End of turn: a short pause after a finished sentence (the live transcript ends in . ? !) or a short reply,
-    // a longer one mid-sentence, so a breath or a pause to think doesn't cut the person off.
-    const done = len < 1.6 || /[.?!]["')]?$/.test(C.partial || "");
-    if (C.quiet >= (done ? 0.8 : 1.5) || len > 60) { const seg = C.seg; C.seg = null; C.voiced = 0; if (len - C.quiet > 0.25) sendTurn(seg, a.sampleRate); else C.partial = ""; draw(); return; }
+    // End of turn: a shorter pause after a finished sentence (the live transcript ends in . ? !, not "..." or a filler like
+    // "uh" or "so") or a short reply, a longer one mid-thought, so a pause to think doesn't cut the person off. Whisper
+    // puts a full stop on most fragments, so even "finished" waits over a second (the person: "please stretch that").
+    const p = (C.partial || "").trim(), done = len < 1.6 || (/[^.][.?!]["')]?$/.test(p) && !/\b(uh|um|so|and|but|like|or|the|a|to)\W*$/i.test(p));
+    if (C.quiet >= (done ? 1.1 : 2.2) || len > 120) { const seg = C.seg; C.seg = null; C.voiced = 0; if (len - C.quiet > 0.25) sendTurn(seg, a.sampleRate); else C.partial = ""; draw(); return; }
     if (!C.inflight && a.currentTime - C.segAt >= 1.2 && len > 0.6) { C.segAt = a.currentTime; sendPartial(C.seg, a.sampleRate); }
   };
 }
@@ -184,8 +185,9 @@ function draw() {
   const who = C.agent === "the Hive" ? "the Hive" : C.agent;
   const st = C.err ? C.err : C.state === "connecting" ? "Connecting…" : C.state === "hold" ? `On hold: putting you through to ${esc(C.holdFor || "")}` :
     C.state === "ended" ? "Call ended" : C.muted ? "Muted" : C.seg ? "Listening…" : C.thinking ? "Thinking…" : isPlaying() ? "Speaking" : "Go ahead, I'm listening";
-  const lines = C.lines.slice(C.partial ? -3 : -4).map(l => `<div class="ph-line${l.who === "you" ? " ph-you" : ""}"><b>${esc(l.who === "you" ? "You" : l.who || "")}</b> ${esc(l.text)}</div>`).join("")
-    + (C.partial ? `<div class="ph-line ph-you ph-partial"><b>You</b> <i>${esc(C.partial)}…</i></div>` : "");
+  let prev = null;   // a name shows once per run of lines by the same speaker
+  const lines = C.lines.slice(C.partial ? -3 : -4).map(l => { const same = l.who === prev; prev = l.who; return `<div class="ph-line${l.who === "you" ? " ph-you" : ""}">${same ? "" : `<b>${esc(l.who === "you" ? "You" : l.who || "")}</b> `}${esc(l.text)}</div>`; }).join("")
+    + (C.partial ? `<div class="ph-line ph-you ph-partial">${prev === "you" ? "" : "<b>You</b> "}<i>${esc(C.partial)}…</i></div>` : "");
   C.el.innerHTML = `<div class="ph-top"><span class="ph-dot ${C.state}${C.seg ? " live" : ""}"></span><div><div class="ph-who">${esc(who)}</div><div class="ph-st" aria-live="polite">${st}</div></div></div>
     <div class="ph-lines">${lines}</div>
     <div class="ph-btns">${C.ended ? "" : `<button class="btn ph-mute" data-a="mute" aria-pressed="${C.muted}">${C.muted ? "Unmute" : "Mute"}</button><button class="btn ph-end" data-a="end">Hang up</button>`}</div>`;
@@ -231,8 +233,9 @@ export const liveCalls = () => LIVE.calls;
 export const callFor = th => (th ? LIVE.calls.find(c => c.thread === th) : null);
 export const onCallWith = name => LIVE.calls.find(c => c.agent === name);
 function drawOther(c) {
-  const lines = c.lines.filter(([w]) => w !== "system").slice(c.partial ? -3 : -4).map(([w, t]) => `<div class="ph-line${w === "person" ? " ph-you" : ""}"><b>${esc(w === "person" ? "You" : w)}</b> ${esc(t)}</div>`).join("")
-    + (c.partial ? `<div class="ph-line ph-you ph-partial"><b>You</b> <i>${esc(c.partial)}…</i></div>` : "");
+  let prev = null;
+  const lines = c.lines.filter(([w]) => w !== "system").slice(c.partial ? -3 : -4).map(([w, t]) => { const same = w === prev; prev = w; return `<div class="ph-line${w === "person" ? " ph-you" : ""}">${same ? "" : `<b>${esc(w === "person" ? "You" : w)}</b> `}${esc(t)}</div>`; }).join("")
+    + (c.partial ? `<div class="ph-line ph-you ph-partial">${prev === "person" ? "" : "<b>You</b> "}<i>${esc(c.partial)}…</i></div>` : "");
   const st = c.state === "hold" ? "On hold" : `On a call, ${Math.max(1, Math.round((Date.now() / 1000 - c.started) / 60))} min · on another device`;
   C.el.innerHTML = `<div class="ph-top"><span class="ph-dot ${esc(c.state)}"></span><div><div class="ph-who">${esc(c.agent)}</div><div class="ph-st">${st}</div></div></div>
     <div class="ph-lines" aria-live="polite">${lines}</div>

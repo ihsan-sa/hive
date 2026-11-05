@@ -314,6 +314,16 @@ function btwHead(p) {
 }
 
 /** opts: {showThread, mark: words to highlight, cont: same author as the post above, so the head folds away} */
+// The transcript the phone module posts at hang-up: one closed row, phone icon and "Phone call", the whole transcript when opened.
+function phoneCall(p) {
+  const m = p.from === "phone" && String(p.text || "").match(/^Phone call, (about \d+ min)[^\n]*\. Transcript:\n+([\s\S]*)$/);
+  if (!m) return null;
+  const lines = m[2].split("\n").filter(Boolean);
+  return h("article", { class: "msg msg-call", "data-key": p.id, "data-who": "sys", "aria-label": `Phone call, ${stamp(p.t)}` },
+    h("details", { class: "msg-call-d", open: OPEN.has(p.id) ? "" : null, ontoggle: (e, d) => { if (d.open) OPEN.add(p.id); else OPEN.delete(p.id); } },
+      h("summary", null, icon("phone"), h("b", null, "Phone call"), h("span", { class: "meta" }, ` · ${m[1]} · ${lines.length} lines · ${clock(p.t)}`)),
+      h("div", { class: "msg-call-t" }, lines.map(l => h("p", { class: l.startsWith("(") ? "meta" : null }, l)))));
+}
 export function message(p, opts = {}) {
   if (!S.app.app) return devMessage(p, opts);
   const files = p.files || [], ws = opts.mark;
@@ -322,6 +332,7 @@ export function message(p, opts = {}) {
     if (f && ws.some(w => lc.includes(w)) && !ws.some(w => (f.head + f.tail).toLowerCase().includes(w))) OPEN.add(p.id);
   }
   if (btwOpener(p)) return btwMessage(p, ws);
+  const call = phoneCall(p); if (call) return call;
   const kind = SYS.has(p.from) ? "sys" : p.from === "person" ? "me" : OUTSIDE.has(p.from) ? "out" : "agent";
   return h("article", { class: "msg", "data-key": p.id, "data-who": kind, "data-cont": opts.cont ? "" : null, "data-report": displayText(p).length > LONG ? "" : null, "aria-label": `${who(p.from)}, ${stamp(p.t)}` },
     messageHead(p, opts),

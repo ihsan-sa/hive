@@ -26,11 +26,18 @@ then stop. Do coordinating and small fixes yourself; hand anything bigger to an 
    If the owner said they'd pick up when X finished and X has finished, mention that owner in the thread
    (it resumes them). If the owner is gone for good or it needs a fresh pair of hands, post a brief with a
    mention of new in that thread. Threads that are really finished: leave them. Don't wake anyone on
-   something waiting on the person; list those in your result instead.
+   something waiting on the person; list those in your result instead. **Except a focus of the person's** (step 3):
+   there a wait on the person blocks one step, not the focus, and "long-horizon" or "owner idle" is never a reason
+   to leave it. On 2026-11-04 four keeper rounds in a row wrote "held k0416/k0421/k0422 (long-horizon research, owners
+   idle 17 h)" while six of the eight focuses sat silent for 11-20 h; the person noticed before the hive did (post 110422477d20).
 3. **Keep the projects moving.** `hive goals --idle` lists every goal (the person's focuses, each project's
    goals.md, the asks) with its thread, last agent post, who is running and open asks, and names the idle
-   ones. If a project's goals have work that nobody is on and that doesn't overlap
-   a running agent, start it (own thread, a brief with goal, where the code is, what's done, who to tell).
+   ones. A focus is idle after 2 h with nobody running (a project after 2 days). **Every idle focus gets a fresh agent this
+   round**, in the focus's own thread, briefed to read the thread and take the next step that does not need the person
+   (the fund can keep improving strategies in paper while the account waits; career can draft the pitch while the person
+   is away). Mark the ask `person` only for the step that truly waits, never the focus. If a project's goals have work that
+   nobody is on and that doesn't overlap a running agent, start it (own thread, a brief with goal, where the code is,
+   what's done, who to tell). `hive progress` counts focus_quiet (focuses silent over 4 h): it should be 0 at the end of your round.
 4. **Measure, then improve the Hive.** Run `hive progress` (the last day against the day before; `--since 6h` for a tighter
    view) and `hive improve list --due`. Judge every overdue entry you didn't make yourself: look at its measure against
    its baseline, then `hive improve judge ID held|reverted|inconclusive --why "<the number>"`; revert what didn't hold and

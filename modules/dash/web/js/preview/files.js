@@ -23,7 +23,7 @@ function row(name, sub, badge, kind, onclick, cls) {
 
 export function drawFiles(head, body, { open, close }) {
   head.replaceChildren(h("div", { class: "pv-t" },
-    icon("archive", { cls: "pf-ic" }),
+    icon("folder", { cls: "pf-ic" }),
     h("div", { class: "pv-n" }, h("span", { class: "pv-fn" }, "Files"), h("span", { class: "meta" }, "This conversation and project folders")),
     button("Close (Esc)", close, { kind: "icon", icon: "close", size: "s", cls: "pv-x" })));
   const mine = threadFiles();
@@ -67,6 +67,10 @@ async function browse(box, path, open) {
   const rows = ents.map(e => e.dir
     ? row(e.name, e.title || "", "dir", "dir", go(e.path), "pf-d")
     : row(e.name, [fsize(e.size), e.title].filter(Boolean).join(" · "), badgeOf(e.name), kindOf(e.name), () => open(files, files.findIndex(f => f.kb === e.path))));
-  box.replaceChildren(crumbs, rows.length ? h("div", { class: "pf-list" }, rows) : h("p", { class: "meta pf-none" }, "This folder is empty."),
+  // At the top there can be dozens of projects: show a few, the rest on request.
+  const cap = path === ROOT && rows.length > 6 && !box.dataset.all;
+  const list = h("div", { class: "pf-list" }, cap ? rows.slice(0, 6) : rows);
+  if (cap) list.append(h("button", { type: "button", class: "pf-more", onclick: () => { box.dataset.all = "1"; browse(box, path, open); } }, "Show all " + rows.length + " projects"));
+  box.replaceChildren(crumbs, rows.length ? list : h("p", { class: "meta pf-none" }, "This folder is empty."),
     ...(d.more ? [h("p", { class: "meta pf-none" }, "More files are here than the list shows; Knowledge has them all.")] : []));
 }

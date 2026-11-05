@@ -19,7 +19,7 @@ export function agentCard(a, { open, onToggle } = {}) {
     h("header", { class: "ac-h" },
       agentRef(a.name, { copy: true }),
       threadRef(a.thread),
-      onCallWith(a.name) ? h("span", { class: "ac-call", title: "Talking with you on a voice call now" }, "On a call") : null,
+      onCallWith(a.name) ? h("span", { class: "ac-call", title: "Talking with you on a voice call now" }, h("span", { class: "ac-call-i", "aria-hidden": "true" }, "\u260E"), "On a call") : null,
       h("span", { class: "ac-st", title: S_.hint }, st.text)),
     h("p", { class: "ac-now clamp-2" }, a.doing || "Starting"),
     h("dl", { class: "ac-dl" },

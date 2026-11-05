@@ -433,6 +433,10 @@ function secretRow() {
 }
 
 // ---- pieces ----
+// The To menu closes on a click anywhere outside it (and on Esc, above).
+document.addEventListener("pointerdown", e => {
+  if (CP.menu && !e.target.closest?.(".cp-menu, .cp-to")) { CP.menu = false; refresh(); }
+}, true);
 function toChip(th, r) {
   const n = r.who, label = n === "new" ? "a new agent" : n || "…";
   const why = { reply: "you're replying to it", named: "named in your message", chosen: "you chose it", btw: "side question" }[r.why];

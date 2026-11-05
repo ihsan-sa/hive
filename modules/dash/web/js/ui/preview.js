@@ -153,7 +153,7 @@ function header(it, r) {
   }, { size: "s", kind: "quiet", icon: "copy", title: "Copy the text" }) : null;
   P.head.replaceChildren(
     h("div", { class: "pv-t" },
-      button("All files", openFiles, { kind: "icon", icon: "archive", size: "s", cls: "pv-files" }),
+      button("All files", openFiles, { kind: "icon", icon: "folder", size: "s", cls: "pv-files" }),
       h("b", { class: "pv-badge", "data-kind": kindOf(it.name) }, badgeOf(it.name)),
       h("div", { class: "pv-n" }, switcher(it), meta ? h("span", { class: "meta" }, meta) : null),
       n > 1 ? h("span", { class: "pv-nav" },
