@@ -64,7 +64,7 @@ ss -ltnH 2>/dev/null | grep -q "0.0.0.0:$WP" && bad "app open on all addresses" 
 
 # Removal, typing delete as a person would
 curl -fsSL "$SITE/uninstall.sh" > /tmp/remove.sh
-printf 'delete\n' | script -qec 'sh /tmp/remove.sh' /dev/null > /tmp/remove.out 2>&1; tail -n 6 /tmp/remove.out | cut -c1-220
+printf 'delete\n' | HIVE_KEEP=none timeout 120 script -qec 'sh /tmp/remove.sh' /dev/null > /tmp/remove.out 2>&1; tail -n 6 /tmp/remove.out | cut -c1-220
 id hive >/dev/null 2>&1 && bad "hive user gone" || ok "hive user gone"
 [ -e "$HH" ] && bad "home gone" || ok "home gone"
 pgrep -u "$U" >/dev/null 2>&1 && bad "nothing left running" || ok "nothing left running"
