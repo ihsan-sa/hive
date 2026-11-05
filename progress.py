@@ -245,7 +245,7 @@ def window(t0, t1, log, posts, items):
     judged = [e for e in items.values() if t0 <= e.get("judged_at", "") <= t1]
     rsi = [r for r in jsonl(RSI_LEDGER) if t0 <= r.get("at", "") <= t1]
     w = {"from": t0, "to": t1, "runs": runs, "runs_failed": failed, "runs_reaped": reaped,
-         "fail_pct": round(100.0 * (failed + reaped) / runs, 1) if runs else 0.0,
+         "fail_pct": round(100.0 * failed / runs, 1) if runs else 0.0,
          "posts": nposts, "person_posts": nperson, "person_noticed_first": noticed, "watchdog_trips": watchdog_in(t0, t1),
          "person_reply_p50_s": pct(rs, 0.5), "person_reply_p90_s": pct(rs, 0.9), "person_replies": len(rs),
          "keeper_rounds": events_in(log, t0, t1, "keeper"), "improve_rounds": events_in(log, t0, t1, "improve"),
