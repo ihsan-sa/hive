@@ -16,7 +16,7 @@ BOARD = HOME / "board.jsonl"
 FOCUS = re.compile(r"^\s*(\d+)\.\s+\*\*(.+?)\*\*\s*\((?:thread\s+)?`([^`]+)`", re.M)
 MEASURE = re.compile(r"^.*\b(measure|metric|score|yardstick|benchmark|pass rate|p&l|sharpe)\b.*$", re.I | re.M)   # the same words progress.py counts as a measure
 THREAD = re.compile(r"\bthreads?\s+`?([0-9a-f]{12}|[a-z][a-z0-9-]{2,})`?", re.I)
-NOT_AGENTS = {"person", "hives", "box", "starter", "watchdog", "progress", "asks", "keeper-timer", "postland"}
+NOT_AGENTS = {"person", "hives", "box", "starter", "watchdog", "progress", "asks", "keeper-timer", "postland", "leftover-router"}
 IDLE_D = 2.0   # a project goal with no agent post in its thread for this long and nobody running in it is idle
 FOCUS_IDLE_H = 2.0   # a focus of the person's goes idle much sooner: it is their current work, and a focus is never held for an idle owner (2026-11-05, post 1104224972e6)
 

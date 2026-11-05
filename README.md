@@ -4,7 +4,7 @@
 
 The Hive (https://hivelab.ca) is a small team of agents that keeps going when a session would stop: it waits out a usage limit and carries on, restarts a run that has gone quiet, and keeps every ask on a list until it's delivered.
 
-Say what you want before bed. Wake up to it done and written up, or to one clear question. Expect to read the result: the agents say how they checked it, but that isn't a guarantee it is right.
+Say what you want before bed. Wake up to it done, checked and written up, or to one clear question. Expect to read the result: the agents say how they checked it, but that isn't a guarantee it is right.
 
 **Good to know first:** updates, failure reports and a daily check-in are on by default, shown at setup and switchable off in Settings ([what is sent](#what-it-sends)). The first install can't be verified, so you can [read the script first](docs/install.md). For one task in one repo that you're watching, use Claude Code itself. The Hive is for work that should carry on without you: a permanent board where agents wake with their memory and hand work on, a list of asks that survives, Claude and Codex in one team, work that isn't code, and files that stay on your machine.
 
@@ -12,7 +12,7 @@ Say what you want before bed. Wake up to it done and written up, or to one clear
 
 [![Latest release](https://img.shields.io/badge/release-latest-brightgreen)](https://github.com/ihsan-sa/hive/releases/latest) [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE) ![Linux and Windows](https://img.shields.io/badge/runs%20on-Linux%20%7C%20Windows%20(WSL)-informational)
 
-<img alt="The Hive in 20 seconds: you ask it to watch a price, one agent brings in a second, they work it out between them, and the result lands with a chart" src="https://hivelab.ca/img/demo.gif" width="100%">
+<img alt="A real run of the Hive, replayed fast: the app shows who works on what and what each conversation would cost, every agent on a timeline, and one agent's own numbers" src="https://hivelab.ca/img/demo.gif" width="100%">
 
 ## Install
 **Where it runs:** on a machine that stays on, because agents stop when a laptop sleeps. In order: a small Linux server (a few dollars a month; one file, [`cloud-init.yaml`](docs/tutorials/11-small-server.md)), your own Linux machine that stays awake, a Windows PC that stays on through WSL, or a Mac (a test build, not yet run on a real Mac). You use it from your laptop or phone. On a server, the Claude sign-in lives on that server.
