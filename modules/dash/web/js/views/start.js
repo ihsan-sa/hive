@@ -1,4 +1,4 @@
-// Start: first run. On an install with settings.json, a three-step setup with a log of what each click did. Otherwise, or once that's done,
+// Start: first run. On an install with settings.json, a one-screen setup with a log of what each click did. Otherwise, or once that's done,
 // the start of the conversation: Hive says what it is, you sign in, (start the hive if it's down), and say what you want done in the composer Chat uses.
 import { h } from "../core/dom.js";
 import { S, can, post, loadApp, setupDone } from "../core/store.js";
@@ -11,54 +11,48 @@ import { act, activityLog, isBusy } from "../ui/activity.js";
 import { firstJobs, closeLine } from "../ui/firstjobs.js";
 import { composer, outFor, actions as outActions } from "../ui/composer.js";
 import { localMessage } from "../ui/message.js";
-import { anyAccount, codexPart, finishing, keysPart, local, pageData, powerPart, reading, rootNote, sandboxPart, saveSettings, sharePart } from "../ui/setup.js";
+import { anyAccount, finishing, local, pageData, reading, rootNote, sandboxPart, saveSettings } from "../ui/setup.js";
 
 const hasSent = () => [...S.threads.values()].some(d => d.posts.some(p => p.from === "person"));
-const F = { starterErr: "", chose: null, know: false, step: 1 };
+const F = { starterErr: "", chose: null, know: false };
 
 const hive = (key, ...body) => h("article", { class: "msg st-msg", "data-who": "agent", "data-key": key },
   h("div", { class: "msg-h" }, h("b", { class: "st-hive" }, brandName() || "Hive")), h("div", { class: "msg-b" }, body));
 const you = (key, text) => h("article", { class: "msg", "data-who": "me", "data-key": key }, h("div", { class: "msg-b" }, text));
 const p = (...t) => h("p", null, ...t);
 
-// ---- the walkthrough, on an install with settings.json and setup_done false: an account, what to share, how much power ----
-const STEPS = ["An account", "What to share", "How much power"];
+// ---- the walkthrough, on an install with settings.json and setup_done false: one screen, an account. Sharing, power and the sandbox keep their defaults and live in Settings ----
 function walkthrough(ctx, s) {
   const pg = pageData(ctx.update), up = ctx.update;
-  const go = n => { F.step = n; up(); };
-  const head = h("ol", { class: "wt-steps", "aria-label": "Setup steps" }, STEPS.map((t, i) => h("li", { "aria-current": F.step === i + 1 ? "step" : null, "data-done": F.step > i + 1 ? "" : null },
-    h("span", { class: "wt-n", "aria-hidden": "true" }, F.step > i + 1 ? "\u2713" : String(i + 1)), h("span", null, t))));
   const page = (...rows) => h("div", { class: "page wt", "data-key": "start" },
     h("h1", { class: "wt-h" }, "Set up your Hive"),
-    h("p", { class: "wt-lead" }, simpleOn() ? "Your Hive is a helper you talk to. Three things first, and you can change them later." : "Hive runs agents on this computer: you say what you want done, and they work on it in the background. Three things first. You can change all of them later in Settings."),
-    head, h("div", { class: "wt-g" }, h("div", { class: "wt-m" }, rows), activityLog()));
+    h("p", { class: "wt-lead" }, simpleOn() ? "Your Hive is a helper you talk to. Add your account, and you can start." : "Hive runs agents on this computer: you say what you want done, and they work on it in the background. Add an account, and you can start."),
+    h("div", { class: "wt-g" }, h("div", { class: "wt-m" }, rows), activityLog()));
   const card = (key, title, ...body) => h("section", { class: "wt-card", "data-key": key }, h("h2", { class: "wt-t" }, title), body);
-  const foot = (back, next) => h("div", { class: "wt-foot" }, back ? button("Back", () => go(F.step - 1), { kind: "quiet" }) : null, h("span", { class: "wt-next" }, next));
+  const foot = next => h("div", { class: "wt-foot" }, h("span", { class: "wt-next" }, next));
   if (!local() && simpleOn()) return h("div", { class: "page wt", "data-key": "start" }, card("away", "Your Hive isn't ready yet", p("The person setting it up still has a step to finish. There's nothing for you to do here. Check back soon.")));
   if (!local()) return page(card("away", "Finish this on the Hive's computer", p("Setup is only done on this computer, because it decides what the Hive may do. Open the app there to finish it.")));
   if (!pg) return page(card("reading", "Getting ready", reading()));
-  if (F.step === 1) {
-    const signIn = api => { F.chose = api ? "api" : "claude"; startSignin("start", null, api, up); };
-    const logins = s.logins || [];
-    return page(
-      card("account", "Add an account", p(simpleOn() ? "Your Hive works through your Claude account. Sign in to it here." : "Agents need one to run on. A Claude or ChatGPT subscription uses its own limits. An API key charges per use. Add one now, and more whenever you like."),
-        rootNote(),
-        h("div", { class: "signin", "data-key": "claude" },
-          h("div", { class: "frow fsplit" }, h("b", null, "Claude"), s.claude === false ? statusLabel("ended", "not installed") : statusLabel(s.signed_in ? "working" : "ended", s.signed_in ? "signed in" : "not signed in"),
-            s.claude !== false && !s.signed_in && can("logins") ? h("span", { style: "margin-left:auto" }, button("Sign in to Claude Code", () => signIn(false), { size: "s", kind: "primary", busy: signingIn() })) : null),
-          s.claude === false ? p("To use it, in a terminal as this account: ", h("code", null, "curl -fsSL https://claude.ai/install.sh | bash"), " Then restart this app.") : null,
-          logins.length > 1 ? h("p", { class: "field-h" }, logins.filter(l => l.signed_in).length + " of " + logins.length + " logins signed in.") : null,
-          s.claude !== false && !s.signed_in && can("logins") ? terminalRoute(logins) : null,
-          signinBox("start", up)),
-        simpleOn() ? null : codexPart(up), simpleOn() ? null : keysPart(up)),
-      foot(false, anyAccount() ? button("Next: what to share", () => go(2), { kind: "primary" }) : h("span", { class: "meta" }, "Add one account to go on."))
-    );
-  }
-  if (F.step === 2) return page(card("data", "What to share with the Hive's developer", p("Here's what each one holds, and where it goes. It's your choice: failure reports start on, the other two start off, and nothing is sent until you finish setup."), sharePart(up)),
-    foot(true, button("Next: how much power", () => go(3), { kind: "primary" })));
-  return page(card("power", "How much power the Hive has", p("The middle one is where it starts."), powerPart(up)),
-    card("sandbox-step", "The sandbox on this machine", sandboxPart(up)),
-    foot(true, button("Finish", async () => { if (await saveSettings({ setup_done: true }, up)) { F.step = 1; up(); } }, { kind: "primary", busy: finishing() })));
+  const signIn = api => { F.chose = api ? "api" : "claude"; startSignin("start", null, api, up); };
+  const logins = s.logins || [], sb = pg.sandbox_check && pg.sandbox_check.state, sbOk = pg.settings.sandbox === "on" && sb === "works";
+  const share = pg.settings.share || {}, sharing = [share.failures ? "failure reports and a daily check-in" : null, share.usage ? "usage reports" : null].filter(Boolean);
+  return page(
+    card("account", "Add an account", p(simpleOn() ? "Your Hive works through your Claude account. Sign in to it here." : "Sign in with your Claude plan. Agents run on it and use its limits."),
+      rootNote(),
+      h("div", { class: "signin", "data-key": "claude" },
+        h("div", { class: "frow fsplit" }, h("b", null, "Claude"), s.claude === false ? statusLabel("ended", "not installed") : statusLabel(s.signed_in ? "working" : "ended", s.signed_in ? "signed in" : "not signed in"),
+          s.claude !== false && !s.signed_in && can("logins") ? h("span", { style: "margin-left:auto" }, button("Sign in to Claude Code", () => signIn(false), { size: "s", kind: "primary", busy: signingIn() })) : null),
+        s.claude === false ? p("To use it, in a terminal as this account: ", h("code", null, "curl -fsSL https://claude.ai/install.sh | bash"), " Then restart this app.") : null,
+        logins.length > 1 ? h("p", { class: "field-h" }, logins.filter(l => l.signed_in).length + " of " + logins.length + " logins signed in.") : null,
+        s.claude !== false && !s.signed_in && can("logins") ? terminalRoute(logins) : null,
+        signinBox("start", up))),
+    // A sandbox that doesn't work stops agents from starting, so that one is said in full here. When it works, it's a line.
+    sbOk ? null : card("sandbox-step", "The sandbox on this machine", sandboxPart(up)),
+    h("p", { class: "field-h", "data-key": "defaults" },
+      sbOk ? "Agents run in a sandbox, and anything bigger asks first. " : "",
+      pg.share_text ? (sharing.length ? "Sent to the Hive's developer once you press Finish: " + sharing.join(" and ") + ". " : "Nothing is sent to the Hive's developer. ") : "",
+      "Sharing, power, the sandbox and the model are in ", h("a", { href: href("settings") }, "Settings"), ", where you can change them any time."),
+    foot(anyAccount() ? button("Finish", async () => { if (await saveSettings({ setup_done: true }, up)) up(); }, { kind: "primary", busy: finishing() }) : h("span", { class: "meta" }, "Add your account to go on.")));
 }
 
 // Simple mode once setup is finished: at most one thing left to do, signing in to Claude.

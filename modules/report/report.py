@@ -5,7 +5,7 @@ Reads `share` ({"failures": bool, "usage": bool}) from settings.json. failures, 
 default and can be turned off. Both false (or no settings.json) means nothing is read, queued or sent. Every report that
 leaves is first written byte-for-byte to reports/sent/, and `hive-report show`
 prints it. Commands: status | send [--dry-run] | show [N] | question | bundle [--yes] | issue TITLE [--submit] <body on stdin> | feedback <JSON on stdin>
-| contribute TITLE [--commit SHA | --diff FILE] <what and why on stdin> | drafts | github | approve ID | discard ID
+| upstream draft --repo OWNER/NAME TITLE <gap on stdin> | contribute TITLE [--commit SHA | --diff FILE] <what and why on stdin> | drafts | github | approve ID | discard ID
 
 `share.github` (off unless the person ticks it, at setup or in Settings) lets this Hive use the person's own logged-in `gh`:
 failures that fit the public templates below become issues on the Hive's repo (one per kind, found again by a marker,
@@ -542,6 +542,76 @@ def contribute(title, text, commit=None, diff=None):
             "Tell the person it's waiting there. Unsent drafts are dropped after %d days.") % (
         os.path.basename(p)[:-5], "as a pull request from their fork (or an issue with the patch, if it doesn't apply)" if clean else ("as an issue with the patch" if patch else "as an issue"), DRAFT_DAYS)
 
+# ---- gaps in the tools the Hive installs: an issue on the tool's own repo, offered to the person ----
+def upstream_repos():
+    """{owner/name: label}: this Hive's repo and the repos of the tools it installs (modules.json), nothing the agent names."""
+    out = {}
+    r = issues_repo()
+    if r: out[r.lower()] = "hive"
+    for p in (os.path.join(core_dir(), "modules.json"), os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "modules.json")):
+        try: mods = json.load(open(p))
+        except (OSError, ValueError): continue
+        for name, m in (mods.items() if isinstance(mods, dict) else []):
+            u = m.get("repo") if isinstance(m, dict) else None
+            mt = re.match(r"https://github\.com/([\w.-]+/[\w.-]+?)(?:\.git)?/?$", u or "")
+            if mt: out[mt.group(1).lower()] = name
+        break
+    return out
+
+def denied(repo):
+    try: orgs = [l.strip().lower() for l in open(os.path.join(home(), ".cc", "github-deny")) if l.strip() and not l.startswith("#")]
+    except OSError: return False
+    return repo.split("/")[0].lower() in orgs
+
+def find_dups(repo, title):
+    """Open and closed issues on repo that look like this one: [(url, title)], or None if GitHub couldn't be asked."""
+    import urllib.parse
+    words = re.findall(r"[A-Za-z0-9_.+-]{3,}", title)[:8]
+    if not words: return []
+    q = urllib.parse.quote("repo:%s is:issue %s" % (repo, " ".join(words)))
+    try:
+        req = urllib.request.Request("https://api.github.com/search/issues?per_page=10&q=" + q, headers={"Accept": "application/vnd.github+json", "User-Agent": "hive-report"})
+        items = json.load(urllib.request.urlopen(req, timeout=15)).get("items", [])
+    except Exception: return None
+    return [(i["html_url"], i["title"]) for i in items if isinstance(i, dict) and "html_url" in i][:5]
+
+def similar(a, b):
+    w = lambda t: set(x.lower() for x in re.findall(r"[A-Za-z0-9]{3,}", t))
+    x, y = w(a), w(b)
+    return bool(x and y) and len(x & y) / min(len(x), len(y)) >= 0.7
+
+AI_NOTE = ("_Drafted by an AI agent (Claude) working in a user's Hive while using this tool. The user read this text before it was filed "
+           "and filed it from their own GitHub account._")
+
+def upstream_draft(repo, title, text):
+    """An issue for a tool's own repo, held for the person's Send like any draft. Returns what to say; the exact text is printed for them."""
+    if not want_github():
+        return ("not drafted: sending to GitHub is off (Settings > Data sharing, 'Open GitHub issues about failures from my GitHub login'). "
+                "Tell the person about the gap in your own words and let them decide.")
+    repo = (repo or "").replace("https://github.com/", "").strip("/").lower()
+    ok = upstream_repos()
+    if repo not in ok or denied(repo):
+        return "not drafted: %s isn't a project this Hive names as its upstream. Allowed: %s" % (repo or "(no --repo)", ", ".join(sorted(ok)) or "none")
+    if not title.strip() or not text.strip(): return "not drafted: give --repo, a title and, on stdin, what is missing and what you saw"
+    if len(outbox()) >= DRAFT_MAX: return "not drafted: %d drafts already wait for the person; ask them to send or discard some" % DRAFT_MAX
+    t, body = clip(scrub(title), 200), scrub(text)[:5500]
+    dups = find_dups(repo, t)
+    near = [(u, x) for u, x in (dups or []) if similar(t, x)]
+    if near:
+        return "not drafted: this looks like an existing issue, so point the person to it instead of filing another: " + "; ".join("%s (%s)" % (u, x) for u, x in near)
+    note = "" if dups is not None else "\n\n_The search for an existing issue could not run when this was drafted._"
+    d = {"title": t, "text": body + note + "\n\n" + AI_NOTE, "commit": None, "patch": "", "pr": False, "repo": repo,
+         "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+    p = os.path.join(ddir(), time.strftime("%y%m%d-%H%M%S-") + uuid.uuid4().hex[:6] + ".json")
+    with open(p, "w") as f: f.write(json.dumps(d, indent=1))
+    return ("drafted %s for %s. Nothing is sent until the person reads it and presses Send in Settings > Data sharing. Show them this, exactly as it would be filed, and say it waits there:\n\n"
+            "Repository: %s\nTitle: %s\n\n%s\n") % (os.path.basename(p)[:-5], repo, repo, d["title"], d["text"])
+
+def rp(v):
+    """The repo a draft is for: only one this Hive names as upstream (the folder is writable from the sandbox); else none, meaning the Hive's own."""
+    v = v.lower() if isinstance(v, str) else ""
+    return v if v in upstream_repos() and not denied(v) else None
+
 def load_draft(p):
     """A draft as it would go: scrubbed again on reading, since the folder is writable from inside the sandbox."""
     try: d = json.load(open(p))
@@ -550,12 +620,12 @@ def load_draft(p):
     t = lambda k, n: scrub(d.get(k) if isinstance(d.get(k), str) else "")[:n]
     c = d.get("commit") if isinstance(d.get("commit"), str) and re.fullmatch(r"[0-9a-f]{40}", d.get("commit") or "") else None
     return {"title": clip(t("title", 400), 200), "text": t("text", 6000), "commit": c, "patch": t("patch", MAX_DIFF),
-            "pr": d.get("pr") is True and bool(c), "at": d.get("at") if isinstance(d.get("at"), str) else ""}
+            "pr": d.get("pr") is True and bool(c), "repo": rp(d.get("repo")), "at": d.get("at") if isinstance(d.get("at"), str) else ""}
 
 def seal(d):
     """What the person approved: exactly this title, text and patch. Any change after the press voids it."""
     import hashlib
-    return hashlib.sha256(json.dumps([d.get("title"), d.get("text"), d.get("commit"), d.get("patch"), d.get("pr")]).encode()).hexdigest()
+    return hashlib.sha256(json.dumps([d.get("title"), d.get("text"), d.get("commit"), d.get("patch"), d.get("pr")] + ([d["repo"]] if d.get("repo") else [])).encode()).hexdigest()
 
 def approvals():
     """{draft id: seal}, kept in reports/, which the sandbox doesn't mount: a press in Settings is the only way in."""
@@ -578,7 +648,7 @@ def drafts():
         d, did = load_draft(p), os.path.basename(p)[:-5]
         if d is None: continue
         out.append({"id": did, "title": d["title"], "text": d["text"], "patch": d["patch"],
-                    "how": "pull request" if d["pr"] else "issue", "at": d["at"], "approved": approved(did, d)})
+                    "how": "pull request" if d["pr"] else "issue", "repo": d["repo"] or issues_repo(), "at": d["at"], "approved": approved(did, d)})
     return out
 
 def decide(did, yes):
@@ -634,12 +704,13 @@ def send_draft(repo, p, st):
     if not approved(did, d):
         if time.time() - os.path.getmtime(p) > DRAFT_DAYS * 86400: os.replace(p, os.path.join(obox("expired"), os.path.basename(p)))
         return None
+    repo = d.get("repo") or repo
     url_, why = open_pr(repo, d) if d["pr"] else (None, "the patch had text the scrubber hides, so only the scrubbed copy goes")
     if not url_:
         body = d["text"]
         if d["patch"]:
             body += "\n\nA fix made in a Hive's own core%s:\n\n```diff\n%s\n```\n" % (" (no pull request: %s)" % why if d["commit"] else "", d["patch"])
-        body += "\n_Sent by a Hive's agent through its user's own GitHub login, with their opt-in._\n"
+        if not d.get("repo"): body += "\n_Sent by a Hive's agent through its user's own GitHub login, with their opt-in._\n"
         r = gh_run("issue", "create", "-R", repo, "-t", d["title"], "-b", body)
         url_ = r.stdout.strip().split()[-1] if r.returncode == 0 and r.stdout.strip() else None
     st["gh_n"] = st.get("gh_n", 0) + 1     # an approved draft that was tried counts against the day
@@ -666,6 +737,11 @@ def main(a):
         try: df = open(df).read() if df else None
         except OSError as e: print("not drafted: can't read %s: %s" % (df, e)); return
         print(contribute(t, sys.stdin.read() if not sys.stdin.isatty() else "", opt("--commit"), df))
+    elif cmd == "upstream":
+        opt = lambda k: a[a.index(k) + 1] if k in a and a.index(k) + 1 < len(a) else None
+        t = next((x for i, x in enumerate(a[2:], 2) if not x.startswith("--") and a[i - 1] != "--repo"), "")
+        if a[1:2] != ["draft"]: print("usage: hive-report upstream draft --repo OWNER/NAME TITLE <what is missing and what you saw on stdin>"); return
+        print(upstream_draft(opt("--repo"), t, sys.stdin.read() if not sys.stdin.isatty() else ""))
     elif cmd == "drafts": print(json.dumps(drafts(), indent=1))
     elif cmd == "github": print(json.dumps({"on": want_github(), "gh": bool(__import__("shutil").which("gh")), "ready": gh_ready(), "repo": issues_repo() or "", "drafts": drafts()}))   # Settings' view
     elif cmd in ("approve", "discard"): print(decide(a[1] if len(a) > 1 else "", cmd == "approve"))   # Settings' Send and Discard buttons; agents never run these

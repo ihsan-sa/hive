@@ -30,7 +30,7 @@ then stop. Do coordinating and small fixes yourself; hand anything bigger to an 
    goals.md, the asks) with its thread, last agent post, who is running and open asks, and names the idle
    ones. A focus is idle after 2 h with nobody running (a project after 2 days). **Every idle focus gets a fresh agent this
    round**, in the focus's own thread, briefed to read the thread and take the next step that does not need the person
-   (the fund can keep improving strategies in paper while the account waits; career can draft the pitch while the person
+   (a project can keep testing in simulation while an account waits; another can draft its document while the person
    is away). Mark the ask `person` only for the step that truly waits, never the focus. If a project's goals have work that
    nobody is on and that doesn't overlap a running agent, start it (own thread, a brief with goal, where the code is,
    what's done, who to tell). `hive progress` counts focus_quiet (focuses silent over 4 h): it should be 0 at the end of your round.

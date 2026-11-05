@@ -22,7 +22,7 @@ Say what you want before bed. Wake up to it done, checked and written up, or to 
 ```sh
 curl -fsSL https://hivelab.ca/install.sh | sh
 ```
-Linux with systemd. It takes a few minutes, asks for your password once, and prints an address. Open it in a browser, sign in to Claude, and say what you want. You need a Claude account. [Windows, a macOS test build, installing in your own account, and what to do if it stops partway](docs/install.md).
+Linux with systemd. It takes a few minutes, asks for your password once, and prints an address. Open it in a browser, sign in to Claude, and say what you want. You sign in with your Claude plan. [Windows, a macOS test build, installing in your own account, and what to do if it stops partway](docs/install.md).
 
 ## What it has made
 - **Circuit boards.** [60 board designs](https://boards.ihsan.cc) with fabrication files, renders and documentation. Most have not been built yet, and they are shared as they are, with no warranty.

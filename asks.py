@@ -429,8 +429,12 @@ def cmd_extract(a):
         for n in j.get("new", []):
             if not n.get("ask") or n.get("kind") not in ("ask", "direction"): continue
             p = by_id.get(n.get("post")) or b[-1]
+            ask = n["ask"].strip()
+            if len(ask) < 8:  # the model once answered "x" for a text-plus-file post (k0905, 2026-11-05): keep the person's words and note the attachment
+                body = re.sub(r"\n?file: \S+ \(\d+ bytes\)", "", p.get("clean") or str(p.get("text", ""))).strip()
+                ask = (body.split("\n\n", 1)[-1] if body else ask).strip() + (" (with an attached file)" if "file: " in str(p.get("text", "")) else "")
             rec = {"id": next_id(items), "at": iso(), "by": "extract", "post": p["id"], "when": p.get("at"), "thread": p.get("thread") or p["id"],
-                   "ask": n["ask"].strip()[:300], "kind": n["kind"], "status": "standing" if n["kind"] == "direction" else "open"}
+                   "ask": ask[:300], "kind": n["kind"], "status": "standing" if n["kind"] == "direction" else "open"}
             append(LEDGER, rec); items[rec["id"]] = rec; added += 1; print("+ " + fmt(rec))
         for key in ("done", "dropped"):
             for d in j.get(key, []):

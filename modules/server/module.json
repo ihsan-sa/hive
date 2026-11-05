@@ -1,0 +1,7 @@
+{
+  "name": "server",
+  "description": "For a Hive on a server that stays on: `server check` reports what is safe and what isn't, `server reach` shows how to get to the app without opening a port, `server backup` keeps encrypted copies somewhere else, `server limits` stops a big job taking the agents down. Holds no root, opens nothing, and runs nothing until you ask.",
+  "bin": {"server": "server", "heavy": "heavy"},
+  "provides": {"skills": ["skills/server/SKILL.md"]},
+  "projects": []
+}

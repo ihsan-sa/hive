@@ -155,6 +155,12 @@ def asked_model(p, c):
     if p.get("from") == "person" and (m := TYPED_MODEL.search(CODE.sub(" ", str(p.get("text", ""))))) and model_ok(c, m[1]): return m[1]
     return None
 
+def step_clause(model):
+    """Said at each start and wake, the natural point to weigh the model (the person, 2026-11-05, thread model-stepping). Self-judged switches were 0 of 12."""
+    if model in ("haiku", "sonnet"): return f' You\'re on {model}: if this turns into design or debugging you\'re stuck on, run `hive model opus "why"` and end your turn.'
+    if model in ("opus", "fable"): return f' You\'re on {model}: if this is routine with a good stretch to do, run `hive model sonnet "why"` and end your turn. A short job, just do it.'
+    return ""
+
 def is_free_now(st, name):
     """A free agent stays free until a post moves it to another model. No record: it predates st["chosen"]."""
     return bool(FREE_AGENT.fullmatch(name)) and (st.get("chosen", {}).get(name) or {"free": True}).get("free", False)
@@ -361,6 +367,10 @@ def queued_heavy(name):
     for q in (STATE / "heavy").glob("[wf].*"):
         try:
             if key in Path(f"/proc/{q.name.rsplit('.', 1)[-1]}/environ").read_bytes().split(b"\0"): return True
+        except OSError: pass
+    for q in (HOME / "projects" / ".heavy").glob("w.*"):  # the server module's queue: a waiter rewrites its ticket every 2 s with its agent's name, since a sandbox has its own pids
+        try:
+            if time.time() - q.stat().st_mtime < 30 and q.read_text() == name: return True
         except OSError: pass
     return False
 
@@ -1116,7 +1126,8 @@ def start(c, name, posts, login, resume=None, reaped=None, extra=(), moved=False
     if heir_of:
         prompt += (f" You are a new agent taking over from @{heir_of['name']}, which isn't being brought back because {heir_of['why']}. You have none of its memory. "
                    f"Its stream log, if a detail isn't in the thread or on disk, is {heir_of['out']}: search it, don't read it whole.")
-    if resume and slept and any(str(p.get("from", "")).lower() == name and p.get("model") in MODELS for p in posts):
+    asked = resume and slept and any(str(p.get("from", "")).lower() == name and p.get("model") in MODELS for p in posts)
+    if asked:
         prompt = (f"You are still @{name}: this is your own session, resumed on {model} because you asked for it with `hive model`. "
                   f"Carry on with the work. Check `hive read --thread {first.get('thread', first['id'])}` for anything new first.")
     elif resume and slept:
@@ -1153,6 +1164,7 @@ def start(c, name, posts, login, resume=None, reaped=None, extra=(), moved=False
                   f"(check `hive read --thread {first.get('thread', first['id'])}` for anything new first).")
     fb = next((p["fallback"] for p in posts if p.get("fallback")), None)
     if fb: prompt += "\n\n" + FALLBACK_NOTE[fb].format(model=model, tier=tier_of(model))
+    elif kind != "warden" and not prov and not asked and (not resume or slept): prompt += step_clause(model)
     path = HOME / "sessions" / f"{name}-{dt.datetime.now():%m%d-%H%M%S}.jsonl"
     last_start[0] = time.time(); recent_starts.append(last_start[0])
     tmp = HOME / ".cache" / "hive-tmp"; tmp.mkdir(parents=True, exist_ok=True)  # on disk: /tmp is tmpfs, its files hold RAM and swap

@@ -25,3 +25,7 @@ Turning failures or usage on in Settings sends at once rather than at the next 6
 
 ## Opening a GitHub issue yourself
 `hive-report issue TITLE < TEXT` writes a scrubbed draft to `reports/issue-draft.md` and prints a prefilled new-issue link on the project's repo (`issues_repo` in settings.json, set at export), filled into the bug form. The person reviews it and posts it from their own GitHub account: no token is used or shipped. `--submit` posts it with an already-logged-in `gh`, only on that explicit command. In the app, Send feedback has "Open as a GitHub issue", which makes the same link from the comment (the picture isn't included) and sends nothing to the makers.
+
+## Gaps in installed tools: `hive-report upstream draft`
+
+`hive-report upstream draft --repo OWNER/NAME TITLE` (what is missing and what was seen on stdin) drafts an issue for the repo of a tool the Hive installed (from modules.json) or the Hive's own. It needs the same GitHub opt-in as `contribute`. The text is scrubbed, ends with a note that an AI agent drafted it, and the command prints it exactly as it would be filed. If an existing issue on that repo looks the same, it prints the link and drafts nothing. The draft waits in Settings > Data sharing (which shows the repo); only the person's Send files it, from their own login. A repo that isn't in modules.json, or whose owner is in `~/.cc/github-deny`, is refused again when sending.

@@ -30,7 +30,7 @@ UI_DIR = Path(__file__).resolve().parent / "web"  # the rebuilt page: index.html
 DISPLAY_PAGES = ("/single-screen", "/dual-screen", "/dual-screen/1", "/dual-screen/2")  # TV pages: web/display.html; which tiles each shows is in js/display/layouts.js
 UI_CT = {".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".woff2": "font/woff2",
          ".webmanifest": "application/manifest+json; charset=utf-8", ".png": "image/png", ".ico": "image/x-icon"}
-APP_FILES = re.compile(r"(?:/new)?/(manifest\.webmanifest|sw\.js|icons/[a-z0-9-]+\.(?:png|ico))")  # what lets a browser install the page as an app; plain files, served with no sign-in because the browser fetches them before it has one
+APP_FILES = re.compile(r"(?:/new)?/(manifest\.webmanifest|call\.webmanifest|sw\.js|icons/[a-z0-9-]+\.(?:png|ico))")  # what lets a browser install the page as an app; plain files, served with no sign-in because the browser fetches them before it has one
 THREAD_HOURS = 12
 
 
@@ -401,6 +401,32 @@ def thread_names():
         _names.update(mtime=mtime, names=names)
     return _names["names"]
 
+
+# ---------- threads an agent brought up for the person (GET /api/shown) ----------
+# `hive show THREAD --why ...` appends to ~/.hive/shown.jsonl; the page shows the ones whose time isn't up as "Brought up for you".
+SHOWN = STATE / "shown.jsonl"
+
+def shown_now():
+    """Newest entry per thread that is still in time, newest first. Only the thread name, who, why and the end time leave."""
+    t = time.time(); best = {}
+    try: lines = SHOWN.read_text().splitlines()[-500:]
+    except OSError: return []
+    for ln in lines:
+        try: r = json.loads(ln)
+        except ValueError: continue
+        if not isinstance(r, dict) or not THREAD_NAME.fullmatch(str(r.get("thread") or "")): continue
+        if r.get("dismissed"): best.pop(r["thread"], None); continue   # the person closed it; a later `hive show` brings it back
+        try: until, at = float(r["until"]), float(r["at"])
+        except (KeyError, TypeError, ValueError): continue
+        if until > t: best[r["thread"]] = {"thread": r["thread"], "from": str(r.get("from") or "")[:40], "why": str(r.get("why") or "")[:200], "at": at, "until": until}
+    return sorted(best.values(), key=lambda r: -r["at"])
+
+def dismiss_shown(d):
+    """The person closed one brought-up thread (POST /api/shown): noted in the same file, so every page drops it."""
+    th = str(d.get("thread") or "")
+    if not THREAD_NAME.fullmatch(th): raise ValueError("a thread name is letters, digits and . _ : -")
+    with open(SHOWN, "a") as f: f.write(json.dumps({"thread": th, "dismissed": True, "at": time.time()}) + "\n")
+    return {"ok": True}
 
 # ---------- the person's own view of threads (GET/POST /api/thread-meta) ----------
 # Pins, archive and new titles the person gives threads on Chat. Kept beside the board, never in it: the board and every link keep
@@ -1256,7 +1282,7 @@ PROGRESS = CachedStale(progress_state, 300)  # the Progress page's data (progres
 
 
 # Defaults of ~/.local/bin/heavy's start gates; test_jobs.py checks they still match the script.
-HEAVY_MIN_MEM_MB, HEAVY_JOB_MB, HEAVY_MAX_STALL, HEAVY_LOAD_PER_CPU = 5000, 3000, 20, 3
+HEAVY_MIN_MEM_MB, HEAVY_JOB_MB, HEAVY_MAX_STALL, HEAVY_LOAD_PER_CPU = 5000, 4500, 20, 3
 JOB_ROW_CORES, JOB_ROW_MB = 0.25, 200  # below both, a group outside the queue isn't worth a row
 TICK = os.sysconf("SC_CLK_TCK")
 
@@ -1491,6 +1517,21 @@ def share_build(d):
     return {"html": page, "name": (re.sub(r"[^a-z0-9]+", "-", pv["title"].lower()).strip("-")[:40] or "result") + ".html"}
 
 
+CALL_CHAT = "phone-chat"  # the board thread behind the call page's chat pane: agents post there with `hive post --thread phone-chat`
+def call_chat(limit=60, window=3_000_000):
+    """The newest posts in the call page's chat thread, read from the end of the board."""
+    try:
+        with open(BOARD, "rb") as f:
+            size = f.seek(0, 2); f.seek(max(0, size - window)); data = f.read()
+    except OSError: return {"posts": []}
+    out = []
+    for ln in data.splitlines():
+        if CALL_CHAT.encode() not in ln: continue
+        try: d = json.loads(ln)
+        except ValueError: continue
+        if d.get("thread") == CALL_CHAT: out.append({k: d.get(k) for k in ("id", "at", "from", "text", "files")})
+    return {"posts": out[-limit:]}
+
 def tail_lines(path, offset):
     """Whole lines appended since byte `offset`, unparsed: the browser parses them, and the file is only ever read."""
     try:
@@ -1525,13 +1566,13 @@ WEB = STATE / "web.json"
 INSTALLED = HOME / ".hive-installed"
 FORWARDED = ("cf-ray", "cf-connecting-ip", "cf-access-jwt-assertion", "cf-ipcountry", "cf-visitor", "cdn-loop", "x-forwarded-for",
              "x-forwarded-host", "x-forwarded-proto", "x-real-ip", "forwarded", "via", "true-client-ip")
-GET_CAP = {"/api/live": "read", "/api/away": "read", "/api/board": "read", "/api/log": "read", "/api/usage": "read", "/api/jobs": "read", "/api/agent": "read", "/api/agent-work": "read", "/api/ledger": "read",
-           "/api/projects": "read", "/api/agent-costs": "read", "/api/thread-names": "read", "/api/thread-meta": "read", "/json": "read", "/api/target": "read", "/api/inbox": "read", "/api/delivered": "read",
+GET_CAP = {"/api/call-chat": "post", "/api/live": "read", "/api/away": "read", "/api/board": "read", "/api/log": "read", "/api/usage": "read", "/api/jobs": "read", "/api/agent": "read", "/api/agent-work": "read", "/api/ledger": "read",
+           "/api/projects": "read", "/api/agent-costs": "read", "/api/thread-names": "read", "/api/thread-meta": "read", "/api/shown": "read", "/json": "read", "/api/target": "read", "/api/inbox": "read", "/api/delivered": "read",
            "/api/config": "config", "/api/modules": "modules", "/api/signin": "logins", "/api/plans": "plans", "/api/secrets": "secrets",
            "/api/settings": "config", "/api/ntfy": "config", "/api/webpush": "config", "/api/update": "config", "/api/signin-codex": "logins", "/api/accounts": "logins", "/api/design": "logins", "/api/brand/logo": "read",
            "/api/kb/home": "files", "/api/kb/open": "files", "/api/kb/search": "files", "/api/kb/raw": "files", "/api/kb/map": "files", "/api/kb/history": "files", "/api/progress": "read", "/api/share-preview": "read", "/api/approvals": "read", "/api/feedback-drafts": "read"}
 POST_CAP = {"/api/webpush": "config", "/api/share-build": "read", "/api/kill": "stop", "/api/approval": "stop", "/api/tier": "tier", "/api/agent-model": "post", "/api/login-pause": "limits", "/api/login-limit": "limits", "/api/provider-limit": "limits",
-            "/api/post": "post", "/api/thread-meta": "post", "/api/feedback": "post", "/api/feedback-draft-done": "post", "/api/issue-link": "post", "/api/update": "config", "/api/share-copy": "config", "/api/draft": "config", "/api/upload": "post", "/api/inbox-read": "post", "/api/ntfy": "config", "/api/config": "config", "/api/starter": "config",
+            "/api/post": "post", "/api/thread-meta": "post", "/api/shown": "post", "/api/feedback": "post", "/api/feedback-draft-done": "post", "/api/issue-link": "post", "/api/update": "config", "/api/share-copy": "config", "/api/draft": "config", "/api/upload": "post", "/api/inbox-read": "post", "/api/ntfy": "config", "/api/config": "config", "/api/starter": "config",
             "/api/module": "modules", "/api/signin": "logins", "/api/signin/code": "logins", "/api/signin/cancel": "logins", "/api/plan": "plans", "/api/secret": "secrets",
             "/api/signin-codex": "logins", "/api/account-key": "logins", "/api/design": "logins", "/api/brand": "config", "/api/brand/logo": "config"}
 LOCAL_ONLY = {"/api/access", "/api/settings", "/api/share-copy", "/api/draft"}  # who may do what is never changed from outside, whatever outside.can says
@@ -1956,14 +1997,26 @@ def feedback_draft_done(d):
 
 _PHONE = [0.0, False]
 def phone_ready():
-    """True when the phone module's call service answers on 127.0.0.1:8792 with its models loaded. Checked at most every 20 s."""
+    """True when the phone module's call service answers on its socket with its models loaded. Checked at most every 20 s."""
     if time.time() - _PHONE[0] > 20:
-        from urllib.request import urlopen
-        try:
-            with urlopen("http://127.0.0.1:8792/health", timeout=0.4) as r: ok = json.loads(r.read()).get("models") is True
+        try: st, b = phone_http("GET", "/health", timeout=0.4); ok = st == 200 and json.loads(b).get("models") is True
         except (OSError, ValueError): ok = False
         _PHONE[:] = [time.time(), ok]
     return _PHONE[1]
+
+
+PHONE_SOCK = STATE / "phone.sock"
+def phone_http(method, path, body=None, ctype="application/json", timeout=60):
+    """One request to the phone module's call service. It listens on a Unix socket in this account's state dir, not on
+    loopback, so no other account on the machine can reach it. Returns (status, body)."""
+    import http.client, socket
+    c = http.client.HTTPConnection("localhost", timeout=timeout)
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM); s.settimeout(timeout)
+    try:
+        s.connect(str(PHONE_SOCK)); c.sock = s
+        c.request(method, path, body=body, headers={"Content-Type": ctype})
+        r = c.getresponse(); return r.status, r.read()
+    finally: c.close()
 
 
 def voice_ready():
@@ -3971,26 +4024,19 @@ def serve(port):
             return True
 
         def phone(self, u, n=None):
-            """The phone module's call service (modules/phone, 127.0.0.1:8792), passed through: calls, rings, the person's speech."""
-            from urllib.request import Request, urlopen
-            from urllib.error import HTTPError, URLError
+            """The phone module's call service (modules/phone, on its socket; phone_http), passed through: calls, rings, the person's speech."""
             if n is not None and not 0 <= n <= 20_000_000: return self.deny(413, "too big")
             body = self.rfile.read(n) if n else b""
             path = u.path[len("/api/phone"):] + (f"?{u.query}" if u.query else "")
-            try:
-                with urlopen(Request(f"http://127.0.0.1:8792{path}", data=body if n is not None else None, method="POST" if n is not None else "GET",
-                                     headers={"Content-Type": self.headers.get("Content-Type") or "application/octet-stream"}), timeout=60) as r:
-                    return self.send(r.read(), "application/json")
-            except HTTPError as e: return self.send(e.read(), "application/json", status=e.code)
-            except (URLError, OSError): return self.deny(503, "the phone service isn't running (systemctl --user start hive-phone)")
+            try: st, b = phone_http("POST" if n is not None else "GET", path, body if n is not None else None, self.headers.get("Content-Type") or "application/octet-stream")
+            except OSError: return self.deny(503, "the phone service isn't running (systemctl --user start hive-phone)")
+            return self.send(b, "application/json", status=st)
 
         def app_info(self):
             web = web_cfg() or {}
             info = {"route": self.route, "can": list(self.can), "app": self.route != "open", "brand": brand_view()}
             if self.route != "open": info.update(setup=SETUP.get(), secrets_on=self.secrets_on, settings=settings_brief())
             if self.route != "open": info["default_model"] = default_model(); info["voice"] = voice_ready(); info["phone"] = phone_ready() and "post" in self.can
-            dm = (jload(HOME / "core" / "config.json", {}) or {}).get("rootwarden_dm") if self.route != "open" else None
-            if isinstance(dm, str) and re.fullmatch(r"https://[a-z0-9-]+\.slack\.com/archives/D[A-Z0-9]+", dm): info["rootwarden_dm"] = dm
             if self.mode: info.update(mode=self.mode, full_left=self.full_left)
             if self.signer: info["signer"] = self.signer
             if self.simple: info["simple"] = True
@@ -4007,7 +4053,7 @@ def serve(port):
             q = parse_qs(u.query)
             shown = re.fullmatch(r"(.+?)(/light|/dark)?/?", u.path)   # a display page takes /light or /dark on the end
             display = bool(shown) and shown[1] in DISPLAY_PAGES
-            page = u.path in ("/", "/index.html", "/login", "/old", "/new", "/new/") or display
+            page = u.path in ("/", "/index.html", "/login", "/old", "/new", "/new/", "/call", "/call/") or display
             if not self.admit(u.path, page=page): return
             m = APP_FILES.fullmatch(u.path)
             if m:
@@ -4027,6 +4073,10 @@ def serve(port):
                 return self.send((UI_DIR / "display.html").read_bytes(), "text/html; charset=utf-8", framed_here=True)
             if u.path == "/new":  # index.html's links are relative, so it needs the slash
                 self.send_response(302); self.send_header("Location", "/new/"); self.send_header("Content-Length", "0"); self.end_headers(); return
+            if u.path == "/call":
+                self.send_response(302); self.send_header("Location", "/call/"); self.send_header("Content-Length", "0"); self.end_headers(); return
+            if u.path == "/call/":  # the one-tap call page for a phone's home screen (web/call.html)
+                return self.send((UI_DIR / "call.html").read_bytes(), "text/html; charset=utf-8")
             if u.path in ("/", "/index.html", "/new/"):
                 return self.send((UI_DIR / "index.html").read_bytes(), "text/html; charset=utf-8")
             if u.path == "/old":  # the previous page, kept for now
@@ -4055,6 +4105,8 @@ def serve(port):
                 self.send(json.dumps(kb_map()).encode(), J)
             elif u.path == "/api/kb/history":
                 self.send(json.dumps(kb_history()).encode(), J)
+            elif u.path == "/api/call-chat":
+                self.send(json.dumps(call_chat()).encode(), J)
             elif u.path == "/api/away":
                 since = q.get("since", ["12h"])[0]
                 self.send(json.dumps(core_json("away.py", "--json", "--since", since if re.fullmatch(r"\d{1,4}[hd]", since) else "12h") or {}).encode(), J)
@@ -4121,6 +4173,8 @@ def serve(port):
                 self.send(json.dumps(thread_names()).encode(), J)
             elif u.path == "/api/thread-meta":
                 self.send(json.dumps(thread_meta()).encode(), J)
+            elif u.path == "/api/shown":
+                self.send(json.dumps(shown_now()).encode(), J)
             elif u.path == "/api/agent-work":
                 self.send(json.dumps(agent_work(q.get("name", [""])[0], self.route != "outside" or self.mode == "full")).encode(), J)
             elif u.path == "/api/ledger":
@@ -4179,10 +4233,11 @@ def serve(port):
                 try: return self.send(json.dumps(share_build(d)).encode(), J)
                 except KeyError: return self.send_error(404)
                 except ValueError as e: return self.deny(400, str(e))
-            if u.path in ("/api/post", "/api/thread-meta", "/api/feedback", "/api/feedback-draft-done", "/api/issue-link", "/api/update", "/api/inbox-read", "/api/ntfy", "/api/webpush", "/api/agent-model", "/api/config", "/api/starter", "/api/module", "/api/signin", "/api/signin/code", "/api/signin/cancel", "/api/access", "/api/plan", "/api/secret", "/api/settings", "/api/share-copy", "/api/draft", "/api/signin-codex", "/api/account-key", "/api/design", "/api/brand"):
+            if u.path in ("/api/post", "/api/thread-meta", "/api/shown", "/api/feedback", "/api/feedback-draft-done", "/api/issue-link", "/api/update", "/api/inbox-read", "/api/ntfy", "/api/webpush", "/api/agent-model", "/api/config", "/api/starter", "/api/module", "/api/signin", "/api/signin/code", "/api/signin/cancel", "/api/access", "/api/plan", "/api/secret", "/api/settings", "/api/share-copy", "/api/draft", "/api/signin-codex", "/api/account-key", "/api/design", "/api/brand"):
                 try:
                     if u.path == "/api/post": res = person_post(d.get("text"), d.get("thread"), d.get("reply_to"), d.get("files"), signer=self.signer, limited="config" not in self.can, simple=d.get("simple") is True, model=d.get("model"))
                     elif u.path == "/api/thread-meta": res = set_thread_meta(d)
+                    elif u.path == "/api/shown": res = dismiss_shown(d)
                     elif u.path == "/api/feedback": res = send_feedback(d)
                     elif u.path == "/api/feedback-draft-done": res = feedback_draft_done(d)
                     elif u.path == "/api/issue-link": res = issue_link(d)
