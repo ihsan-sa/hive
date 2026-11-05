@@ -218,17 +218,24 @@ function acNames(th, q) {
   add("new"); MODEL_WORDS.forEach(add);
   return out.slice(0, 8);
 }
+/** Threads that start with q, most recently active first. */
+function acThreads(q) {
+  const out = [];
+  for (let i = S.posts.length - 1; i >= 0 && out.length < 8; i--) { const t = S.posts[i].th; if (t && !out.includes(t) && t.toLowerCase().startsWith(q)) out.push(t); }
+  return out;
+}
 function acCheck(el, th) {
-  const before = el.value.slice(0, el.selectionStart), m = simpleOn() ? null : before.match(/(?:^|\s)@([\w.-]*)$/);
-  const items = m ? acNames(th, m[1].toLowerCase()) : [];
-  const next = items.length && !(items.length === 1 && items[0] === m[1]) ? { q: m[1], at: el.selectionStart - m[1].length - 1, items, i: 0 } : null;
+  const before = el.value.slice(0, el.selectionStart), m = simpleOn() ? null : before.match(/(?:^|\s)([@#])([\w.-]*)$/);
+  const mark = m ? m[1] : "@", q = m ? m[2] : "";
+  const items = m ? (mark === "#" ? acThreads(q.toLowerCase()) : acNames(th, q.toLowerCase())) : [];
+  const next = items.length && !(items.length === 1 && items[0] === q) ? { q, mark, at: el.selectionStart - q.length - 1, items, i: 0 } : null;
   if (JSON.stringify(next && next.items) !== JSON.stringify(CP.ac && CP.ac.items)) { CP.ac = next; return true; }
   if (next) CP.ac.at = next.at, CP.ac.q = next.q;
   return false;
 }
 function acPick(th, n) {
   const el = field(th), a = CP.ac; if (!el || !a) return;
-  const d = draft(th), v = el.value.slice(0, a.at) + "@" + n + " " + el.value.slice(a.at + 1 + a.q.length);
+  const d = draft(th), v = el.value.slice(0, a.at) + (a.mark || "@") + n + " " + el.value.slice(a.at + 1 + a.q.length);
   el.value = v; d.text = v; keep(d);
   const c = a.at + n.length + 2; el.focus(); el.setSelectionRange(c, c);
   CP.ac = null; refresh();
@@ -379,7 +386,7 @@ export function composer({ thread, update, place = "thread", autofocus, top }) {
     h("div", { class: "cp-box", "data-key": "box" },
       d.reply ? replyChip(d) : null,  // inside the box, its first row
       CP.ac ? h("div", { class: "cp-ac", role: "listbox", "aria-label": "Names", "data-key": "ac" }, CP.ac.items.map((n, i) => h("button", { type: "button", role: "option", class: "cp-opt", "data-key": n, "aria-selected": String(i === CP.ac.i), onclick: () => acPick(th, n) },
-        n === "new" ? statusDot("none") : statusDot(agentStatus(n).key, { live: S.running.has(n) }), h("b", null, "@" + n), h("span", { class: "meta" }, stateWords(n))))) : null,
+        CP.ac.mark === "#" ? null : n === "new" ? statusDot("none") : statusDot(agentStatus(n).key, { live: S.running.has(n) }), h("b", null, (CP.ac.mark || "@") + n), CP.ac.mark === "#" ? null : h("span", { class: "meta" }, stateWords(n))))) : null,
       d.files.length ? filesRow(th, d) : null,
       SB.open && can("secrets") ? secretRow() : null,
       !SB.open && SB.say ? h("p", { class: "meta cp-ssay", "data-tone": SB.tone, role: "status", "data-key": "ssay" }, SB.say) : null,
