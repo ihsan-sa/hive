@@ -3,14 +3,17 @@
 import { h } from "../core/dom.js";
 import { S, can, post, loadApp, setupDone } from "../core/store.js";
 import { simpleOn } from "../core/simple.js";
+import { href } from "../core/router.js";
 import { brandName } from "../core/brand.js";
 import { button, statusLabel } from "../ui/kit.js";
-import { startSignin, signinBox, signingIn } from "../ui/signin.js";
+import { startSignin, signinBox, signingIn, terminalRoute } from "../ui/signin.js";
 import { act, activityLog, isBusy } from "../ui/activity.js";
+import { firstJobs, closeLine } from "../ui/firstjobs.js";
 import { composer, outFor, actions as outActions } from "../ui/composer.js";
 import { localMessage } from "../ui/message.js";
 import { anyAccount, codexPart, finishing, keysPart, local, pageData, powerPart, reading, rootNote, sandboxPart, saveSettings, sharePart } from "../ui/setup.js";
 
+const hasSent = () => [...S.threads.values()].some(d => d.posts.some(p => p.from === "person"));
 const F = { starterErr: "", chose: null, know: false, step: 1 };
 
 const hive = (key, ...body) => h("article", { class: "msg st-msg", "data-who": "agent", "data-key": key },
@@ -42,9 +45,10 @@ function walkthrough(ctx, s) {
         rootNote(),
         h("div", { class: "signin", "data-key": "claude" },
           h("div", { class: "frow fsplit" }, h("b", null, "Claude"), s.claude === false ? statusLabel("ended", "not installed") : statusLabel(s.signed_in ? "working" : "ended", s.signed_in ? "signed in" : "not signed in"),
-            s.claude !== false && !s.signed_in && can("logins") ? h("span", { style: "margin-left:auto" }, button("Sign in", () => signIn(false), { size: "s", kind: "primary", busy: signingIn() })) : null),
+            s.claude !== false && !s.signed_in && can("logins") ? h("span", { style: "margin-left:auto" }, button("Sign in to Claude Code", () => signIn(false), { size: "s", kind: "primary", busy: signingIn() })) : null),
           s.claude === false ? p("To use it, in a terminal as this account: ", h("code", null, "curl -fsSL https://claude.ai/install.sh | bash"), " Then restart this app.") : null,
           logins.length > 1 ? h("p", { class: "field-h" }, logins.filter(l => l.signed_in).length + " of " + logins.length + " logins signed in.") : null,
+          s.claude !== false && !s.signed_in && can("logins") ? terminalRoute(logins) : null,
           signinBox("start", up)),
         simpleOn() ? null : codexPart(up), simpleOn() ? null : keysPart(up)),
       foot(false, anyAccount() ? button("Next: what to share", () => go(2), { kind: "primary" }) : h("span", { class: "meta" }, "Add one account to go on."))
@@ -63,7 +67,7 @@ function simpleStart(ctx, signed) {
   if (signed) return card("ready", "Your Hive is ready", p("Tell it what you want done, in your own words."), button("Start chatting", null, { href: href("comms"), kind: "primary" }));
   if (!can("logins")) return card("away", "Your Hive isn't ready yet", p("The person setting it up still has a step to finish. There's nothing for you to do here. Check back soon."));
   return card("account", "One step left: add your Claude account", p("Your Hive works through a paid Claude account. Sign in to yours, and it can start."),
-    signinBox("start", ctx.update) || button("Sign in to Claude", () => startSignin("start", null, false, ctx.update), { kind: "primary", busy: signingIn() }));
+    signinBox("start", ctx.update) || button("Sign in to Claude Code", () => startSignin("start", null, false, ctx.update), { kind: "primary", busy: signingIn() }), terminalRoute(S.app.setup && S.app.setup.logins));
 }
 
 export default {
@@ -81,11 +85,12 @@ export default {
       h("pre", null, h("code", null, "curl -fsSL https://claude.ai/install.sh | bash")), p("Then restart this app: ", h("code", null, "systemctl --user restart hive-dash"))));
     if (!signed) {
       rows.push(hive("signin", p("First, sign in to Claude. Agents run on your Claude subscription and use its limits. You can use API billing instead, which charges per use."),
-        can("logins") && !F.chose ? h("div", { class: "frow" }, button("Sign in with Claude", () => signIn(false), { kind: "primary" }), button("Use API billing instead", () => signIn(true))) : null,
+        can("logins") && !F.chose ? h("div", { class: "frow" }, button("Sign in to Claude Code", () => signIn(false), { kind: "primary" }), button("Use API billing instead", () => signIn(true))) : null,
+        can("logins") && !F.chose ? terminalRoute(s.logins) : null,
         can("logins") ? null : p(h("span", { class: "muted" }, "This connection can't sign in. Open the app on this computer."))));
       if (F.chose) { rows.push(you("chose", F.chose)); rows.push(hive("box", signinBox("start", ctx.update) || p("Starting Claude's sign-in…"),
         button("Start over", () => { F.chose = null; ctx.update(); }, { kind: "quiet", size: "s" }))); }
-    } else rows.push(hive("signed", p(statusLabel("working", s.signed_in || s.api_key ? "Signed in to Claude." : "Your account is ready."), " You can add another account later, in Settings.")));
+    } else rows.push(hive("signed", p(statusLabel("working", s.signed_in || s.api_key ? "Signed in to Claude." : "Your account is ready."))));
     if (s.starter === false) rows.push(hive("starter", p("The part of Hive that starts agents isn't running, so nothing you say would start one."),
       can("config") ? h("div", { class: "frow" }, button("Start it", async () => {
         F.starterErr = "";
@@ -104,6 +109,7 @@ export default {
     return h("div", { class: "page st", "data-width": "narrow", "data-key": "start" },
       h("div", { class: "st-log", role: "log", "aria-label": "Setting up" }, rows, out.map(it => localMessage(it, outActions))),
       signed && can("post") ? composer({ thread: null, update: ctx.update, place: "start", autofocus: !out.length }) : h("p", { class: "meta st-wait" }, "Once you're signed in, you can say what you want done."),
+      signed && can("post") ? (out.some(it => it.state !== "failed") ? closeLine() : !out.length && !hasSent() ? firstJobs() : null) : null,
       activityLog({ hideEmpty: true }),
       h("div", { class: "st-know" },
         button(F.know ? "Hide what's good to know" : "Good to know before you start", () => { F.know = !F.know; ctx.update(); }, { kind: "quiet", size: "s" }),

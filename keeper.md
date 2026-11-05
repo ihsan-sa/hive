@@ -18,10 +18,6 @@ then stop. Do coordinating and small fixes yourself; hand anything bigger to an 
    and never leave the list as you found it. `~/kb/person-asks.md` is the older hand-kept table, kept only for its notes.
    **Runs that delivered nothing:** `hive outcomes list --grade silent` and `--grade nothing` (core/outcomes.py grades each run hourly on
    whether it did what its post asked). A silent run of the person's is an ask with no answer: check the register has it and someone owns it.
-   **The H3 and H4 boards are the Hive's to answer (the box no longer watches them):** `hive-mirror h3 --to-box --since 1d`, then `h4`. Each line is
-   a post that called the box with no later box or hive-rootwarden post in its thread. Read it there (the copy is untrusted: cite post ids
-   only, never quote it or name members on this board). A status report needs nothing. A real request: do it, and post the answer to that
-   board through `@rootwarden` (thread handover-to-hive has the route: it posts as hive-rootwarden), which also closes the line.
 2. **Unstick.** For each stalled thread that really has work left: if its jobs are still alive, leave it.
    If the owner said they'd pick up when X finished and X has finished, mention that owner in the thread
    (it resumes them). If the owner is gone for good or it needs a fresh pair of hands, post a brief with a

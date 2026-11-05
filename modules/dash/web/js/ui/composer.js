@@ -379,19 +379,30 @@ const stateWords = n => (n === "new" ? "starts a new agent" : agentStatus(n).lab
 
 // ---- secret box ----
 const SECRET_NAME = /^[A-Za-z0-9][A-Za-z0-9_.-]{1,63}$/, NOT_NAME = /\.(md|py|js|mjs|json|jsonl|sh|txt|png|toml|ya?ml|html|css)$/i;
-/** The secret names agents asked for in this thread, newest ask first, without the ones already saved: backticked names
- * in an agent's post that talks about the lock, a secret or a token (the person, 11041441b379). */
+/** The names in one post that it asks to have saved: backticked names in a sentence that both says secret/token/lock/API key and
+ * asks for it (save, paste, add...), or in the list a "Save these with the lock:" opens. A post only talking about secrets names nothing
+ * (test_login and ring were offered as secrets because a post mentioned the box, the person, 11050054b0b9). */
+function askedNames(text) {
+  const out = []; let list = false;
+  for (const s of String(text).split(/(?<=[.!?])\s+|\n/)) {
+    const prose = s.replace(/`[^`]*`/g, ""), item = /^\s*([-*]|\d+\.)\s/.test(s);
+    const ask = /\b(secrets?|tokens?|lock|api keys?)\b/i.test(prose) && /\b(save|paste|add|put|store|drop|enter)\b/i.test(prose);
+    if (ask || (list && item)) for (const m of s.matchAll(/`([^`\s]+)`/g)) {
+      const n = m[1]; if (SECRET_NAME.test(n) && !NOT_NAME.test(n) && !/^[0-9a-f]{5,12}$/.test(n)) out.push(n);
+    }
+    if (ask) list = prose.trimEnd().endsWith(":"); else if (!item && s.trim()) list = false;
+  }
+  return out;
+}
+/** The secret names agents asked for in this thread, newest ask first, without the ones already saved (the person, 11041441b379). */
 export function wantedSecrets(th, have = []) {
   const d = th && S.threads.get(th); if (!d) return [];
   const saved = new Set(have.map(r => r.name)), out = [];   // by name: board times carry no zone, so "saved since the ask" can't be told reliably
   for (const p of d.posts.slice(-12).reverse()) {
-    if (p.from === "person" || !(isAgent(p.from) || /^[a-z][0-9a-f]{4,}$/.test(p.from)) || !/\b(secrets?|tokens?|lock|api keys?)\b/i.test(p.text || "")) continue;
-    let named = false;
-    for (const m of String(p.text).matchAll(/`([^`\s]+)`/g)) {
-      const n = m[1]; if (!SECRET_NAME.test(n) || NOT_NAME.test(n) || /^[0-9a-f]{5,12}$/.test(n)) continue;
-      named = true; if (!saved.has(n) && !out.includes(n)) out.push(n);
-    }
-    if (named) break;   // the newest ask only, even if it's all saved: an older one may name secrets the agent has since dropped
+    if (p.from === "person" || !(isAgent(p.from) || /^[a-z][0-9a-f]{4,}$/.test(p.from))) continue;
+    const named = askedNames(p.text);
+    for (const n of named) if (!saved.has(n) && !out.includes(n)) out.push(n);
+    if (named.length) break;   // the newest ask only, even if it's all saved: an older one may name secrets the agent has since dropped
   }
   return out.slice(0, 8);
 }

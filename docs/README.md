@@ -11,3 +11,5 @@
   7. [Reach your Hive from elsewhere](tutorials/07-remote.md)
   8. [Use it from a terminal](tutorials/08-terminal.md)
   9. [How it works, and how to ask it about itself](tutorials/09-how-it-works.md)
+  10. [What to ask it: ten jobs to hand over](tutorials/10-what-to-ask-it.md)
+  11. [Put a Hive on a small server in 10 minutes](tutorials/11-small-server.md)

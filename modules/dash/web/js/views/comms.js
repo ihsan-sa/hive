@@ -20,8 +20,11 @@ import { agentRef, avatars, copyButton, threadRef } from "../ui/refs.js";
 import { message, messageHead, messageReceipt, localMessage, markWords, pollDelivered, marksSig, delivery, onJump } from "../ui/message.js";
 import { asidePanel, asideOpen, closeAside } from "../ui/aside.js";
 import { downloadMarkdown, printScript } from "../ui/export.js";
+import { shareDialog } from "../ui/share.js";
 import { pinned, archived, setMeta, renameDialog, openCard, markSeen } from "../ui/threadmeta.js";
 import { callFor } from "../ui/phone.js";
+import { firstJobs, closeLine } from "../ui/firstjobs.js";
+import { awayCard } from "../ui/away.js";
 import { composer, cancelReply, replyTo, say, outFor, outSig, actions as outActions, dropZone, recipient, draft, focusComposer } from "../ui/composer.js";
 
 const STEP = 500, FIRST = 250, NEAR = 60, GROUP = 10 * MIN, HELPER_AFTER = 3 * MIN;
@@ -437,6 +440,7 @@ function moreMenu(c, ctx) {
     mine ? act(arch ? "Unarchive" : "Archive", "archive", () => { setMeta(th, { archived: !arch }); if (!arch) go("comms"); }, arch ? "Back in the list" : "Out of the list until something new is for you") : null,
     can("tier") ? button([h("span", { class: "ref-sw", "data-tone": t.tone }), "Priority: " + t.label], () => { C.menu = null; askTier(th); }, { size: "s", kind: "quiet", title: "Where this sits in the hive's priority list" }) : null,
     button("On the timeline", null, { href: href("timeline"), size: "s", kind: "quiet", icon: "clock" }),
+    act("Share this result", "board", () => shareDialog(th), "Save the conversation as one page you can post: the ask, the agents at work, the result. You see it first and can remove anything."),
     act("Export as Markdown", "copy", () => downloadMarkdown(th), "Download the conversation as a .md file, with simple formatting"),
     act("Export as PDF", "board", () => printScript(th), "Lay it out like a script and save it as a PDF from the print dialog"),
     th !== threadTitle(th) ? h("p", { class: "meta cm-menu-id" }, "Its id on the board: ", h("code", { title: "Click to select it" }, th), copyButton(th)) : null);   // copy it (the person, 11041333ab1a)
@@ -535,28 +539,28 @@ function needRow({ d, st }) {
     : [h("b", null, st.who + ": "), (S.running.get(st.who) || {}).doing || st.label];
   return { key: d.name, href: threadHref(d.name), title: threadTitle(d.name), meta: ago(st.post ? st.post.t : d.last), lead: statusDot(st.key, { live: isRunning(st.who) }), text };
 }
-const STARTERS = ["Help me plan my small business", "Make me a simple website", "Help me pick a name"];
 function homePane(ctx) {
   const g = needs(), w = can("post"), n = g.asks.length + g.foryou.length + g.trouble.length;
   const local = outFor(null);
   const room = hasRoom();
   const sec = (title, note, items) => items.length ? h("section", { class: "sec", "data-key": "s:" + title }, h("header", { class: "sec-h" }, h("h2", { class: "sec-t" }, title), note ? h("span", { class: "sec-n" }, note) : null), list(items.map(needRow))) : null;
   return h("div", { class: "cm-home", "data-key": "home" },
+    awayCard(ctx),
     w ? h("div", { class: "cm-new", "data-key": "new" },
       h("h1", { class: "cm-home-t" }, "What do you want done?"),
       h("p", { class: "cm-home-l" }, simpleOn() ? "Say it the way you'd tell a person. Your Hive starts on it and answers here." : "Say it the way you'd tell a person. An agent starts on it and answers here; it may bring in helpers if the job has parts."),
       !room ? h("p", { class: "cm-home-warn", "data-tone": "limited", role: "status" }, statusDot("limited"), simpleOn() ? "Your Hive has used up its allowance for now, so new work waits until it comes back." : (((S.app && S.app.setup && S.app.setup.logins) || []).some(l => l.signed_in) ? "Every Claude account is past its usage line, so new work waits until there's room. See Usage." : "No Claude account is signed in yet. Sign in under Settings > Accounts so new work can start.")) : null,
       composer({ thread: null, update: ctx.update, place: "home", autofocus: conversation(ctx.arg).open }),
-      simpleOn() && !n && !local.length && ![...S.threads.values()].some(d => d.posts.some(p => p.from === "person")) ? h("div", { class: "frow", "data-key": "starters", "aria-label": "Ideas to start with" }, STARTERS.map(t =>
-        button(t, () => { draft(null).text = t; focusComposer(); }, { size: "s" }))) : null,
+      !n && !local.length && ![...S.threads.values()].some(d => d.posts.some(p => p.from === "person")) ? firstJobs() : null,
+      local.some(it => it.state !== "failed") ? closeLine() : null,
       local.length ? h("div", { class: "cm-out", "data-key": "out" }, local.map(it => localMessage(it, outActions))) : null) : null,
     h("div", { class: "cm-needs", "data-key": "needs" },
-      n || !simpleOn() ? h("h2", { class: "cm-needs-t" }, n ? `${plural(n, "thing")} for you` : "Nothing needs you") : null,
+      n || (!simpleOn() && !S.live.signin?.length) ? h("h2", { class: "cm-needs-t" }, n ? `${plural(n, "thing")} for you` : "Nothing needs you") : null,
       sec("Waiting for your answer", simpleOn() ? null : "an agent asked you something", g.asks),
       sec("New for you", "answers you haven't opened", g.foryou),
       sec(simpleOn() ? "On hold" : "Stopped", simpleOn() ? null : "one stopped by a usage limit carries on by itself; others need a message", g.trouble),
       sec("Working now", null, g.working),
-      !n && !g.working.length ? h("p", { class: "meta" }, simpleOn() ? "When your Hive asks you something or finishes, it shows here." : "When an agent asks you something, finishes, or stops, it shows here.") : null,
+      !n && !g.working.length && !S.live.signin?.length ? h("p", { class: "meta" }, simpleOn() ? "When your Hive asks you something or finishes, it shows here." : "When an agent asks you something, finishes, or stops, it shows here.") : null,
       simpleOn() ? null : h("p", { class: "cm-home-all" }, button("All messages", null, { href: href("comms", "~all"), size: "s", kind: "quiet" }), app() ? button("Inbox", null, { href: href("inbox"), size: "s", kind: "quiet" }) : null)));
 }
 

@@ -18,7 +18,7 @@ const PATH = /^~?\/?((?:[\w.@+-]+\/)*[\w.@+-]+\.[A-Za-z0-9]{1,8}|(?:[\w.@+-]+\/)
 function chip(path, line, cur) {
   const p = path.replace(/\/$/, ""), dir = p.includes("/") ? p.slice(0, p.lastIndexOf("/")) : "", isDir = path.endsWith("/") || !/\.[A-Za-z0-9]{1,8}$/.test(p);
   const to = line ? `${p}::${line}` : p;
-  return h("a", { class: "kb-ask-link", href: href("knowledge", to), title: "~/" + p + (line ? ":" + line : ""), "aria-current": cur === p ? "true" : null },
+  return h("a", { class: "kb-ask-link", onclick: () => { Q.open = false; }, href: href("knowledge", to), title: "~/" + p + (line ? ":" + line : ""), "aria-current": cur === p ? "true" : null },
     icon(isDir ? "folder" : "file"),
     h("span", { class: "kb-ask-n" }, p.split("/").pop() + (line ? ":" + line : "")),
     dir ? h("span", { class: "kb-ask-d" }, "‎" + dir) : null);   // LRM keeps the rtl ellipsis from flipping slashes
@@ -38,7 +38,7 @@ function filesList(found) {
   if (found.size < 2) return null;   // one file: the chip in the text is enough
   return h("nav", { class: "kb-ask-files", "aria-label": "Files in this answer" },
     h("h3", null, `${found.size} files in this answer`),
-    [...found].map(([p, line]) => h("a", { class: "kb-ask-file", href: href("knowledge", line ? `${p}::${line}` : p), "data-key": "f:" + p },
+    [...found].map(([p, line]) => h("a", { class: "kb-ask-file", onclick: () => { Q.open = false; }, href: href("knowledge", line ? `${p}::${line}` : p), "data-key": "f:" + p },
       icon(/\.[A-Za-z0-9]{1,8}$/.test(p) ? "file" : "folder"),
       h("b", null, p.split("/").pop(), h("small", null, p.includes("/") ? p.slice(0, p.lastIndexOf("/")) : "")),
       h("span", null, "Open"))));

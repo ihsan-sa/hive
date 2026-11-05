@@ -24,7 +24,7 @@ MAX_PER_RUN, MAX_TEXT, MAX_LOG = 25, 2000, 4000
 QUESTION = ("Failure reports and a daily check-in are on unless you turn them off, so the Hive developer can fix problems and count active Hives. "
     "Usage reports are off unless you turn them on. "
     "A failure report holds what failed, when and why (up to 2,000 characters). "
-    "The check-in is one small message a day that says this Hive is running. "
+    "The check-in is one small message a day that says this Hive is running, and whether an agent has been started in it yet (yes or no). "
     "A usage report counts agent runs, restarts, limit hits and fallbacks, with the time span it covers. "
     "Every report has the Hive version, the OS and a random install id. "
     "Secrets, emails, your user name and your home folder are scrubbed on this machine first. "
@@ -123,8 +123,20 @@ def version():
     except OSError: v = "0"
     return re.sub(r"[^A-Za-z0-9._+-]+", "-", v)[:32] or "0"
 
+def host_family():
+    """linux, windows or mac: what this Hive runs on top of. The installer leaves ~/.hive-host (windows or mac) when it sets up
+    inside WSL or a Mac's VM; a Hive from before that is told apart as Windows by the kernel's own name. Nothing else is read or sent."""
+    try:
+        m = open(os.path.join(home(), ".hive-host")).read(16).strip()
+        if m in ("windows", "mac"): return m
+    except OSError: pass
+    try:
+        if "microsoft" in open("/proc/sys/kernel/osrelease").read(200).lower(): return "windows"
+    except OSError: pass
+    return platform.system().lower()
+
 def base(st, typ):
-    return {"install": st["install"], "version": installed_version(), "type": typ, "os": platform.system().lower() + "/" + platform.machine().lower()}
+    return {"install": st["install"], "version": installed_version(), "type": typ, "os": host_family() + "/" + platform.machine().lower()}
 
 def url():
     try: u = json.load(open(settings_path())).get("share_url")
@@ -268,6 +280,18 @@ def post(body):
     except urllib.error.HTTPError as e: return e.code
     except Exception: return 0
 
+def agent_started(st):
+    """True once this Hive's own log has a start event (an agent session was launched). Only a yes/no leaves the machine.
+    The answer is kept in state once it is yes, so the log is read at most until then; call it only after the share check."""
+    if st.get("agent_started"): return True
+    try:
+        with open(logpath(), "rb") as f:
+            for line in f:
+                if b'"event": "start"' in line or b'"event":"start"' in line:
+                    st["agent_started"] = True; return True
+    except OSError: pass
+    return False
+
 def installed_state():
     """The state, with an install id made on first use. Any first use counts: a bundle can come before the first send."""
     st = state()
@@ -293,7 +317,7 @@ def send(dry=False):
         r = base(st, "usage"); r.update(at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), message="sharing is on", usage={"runs": 0}); new.insert(0, r); st["hello"] = True
     q = [r for r in pending() if r["type"] in ("failure", "heartbeat") and wf or (r["type"] == "usage" and wu)] + new
     if wf and time.time() - st.get("beat", 0) >= BEAT_EVERY:
-        r = base(st, "heartbeat"); r["at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        r = base(st, "heartbeat"); r["agent_started"] = agent_started(st); r["at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         q = [x for x in q if x["type"] != "heartbeat"] + [r]; st["beat"] = time.time()   # a check-in that waited offline is replaced, and goes last so the cap can't drop it
     if len(q) > MAX_PER_RUN: q = q[-MAX_PER_RUN:]
     if dry: return "would send %d report(s):\n" % len(q) + "\n".join(json.dumps(r) for r in q) + ("\n" + github(st, fails, dry=True) if wg else "")

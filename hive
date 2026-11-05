@@ -249,7 +249,7 @@ def cmd_who(a):
         r = json.loads(f.read_text())
         try: os.kill(r["pid"], 0); alive = "running"
         except OSError: alive = "gone"
-        print(f"@{r['name']:<16} {alive:<8} since {r['at'][:19]}  woken by {r['post']}  login {login_name(c, r['login'])}")
+        print(f"@{r['name']:<16} {alive:<8} since {r['at'][:19]}  woken by {r['post']}  login {login_name(c, r['login'])}  model {r.get('model', 'default')}")
     u = STATE / "usage.json"
     try: five = json.loads((STATE / "usage_5h.json").read_text())
     except (OSError, ValueError): five = {}
@@ -427,6 +427,12 @@ def cmd_module(a):
 def cmd_update(a):
     """Everything is in update.py, which also runs alone from the timer."""
     os.execv(sys.executable, [sys.executable, str(CORE / "update.py")] + (["--check"] if a.check else []) + (["--auto"] if a.auto else []))
+
+def cmd_share(a):
+    """One conversation as one page to post (the app's Share this result). The page-maker is the dash's share.py; nothing is uploaded."""
+    f = MODULES / "dash" / "share.py"
+    if not f.exists(): sys.exit("hive share: the app (module dash) isn't installed here")
+    os.execv(sys.executable, [sys.executable, str(f)] + a.rest)
 
 def cmd_web(a):
     """The local web app's address. The app is on only where ~/.hive/web.json exists: install makes it (--setup), with a new secret."""
@@ -779,6 +785,10 @@ def cmd_progress(a):
     """hive improve ... and hive progress ...: core/progress.py (the improvements ledger and the scoreboard)."""
     os.execv(sys.executable, [sys.executable, "-I", str(CORE / "progress.py")] + a.rest)
 
+def cmd_away(a):
+    """hive away: core/away.py (while you were away: delivered, stopped and why, waiting on you)."""
+    os.execv(sys.executable, [sys.executable, "-I", str(CORE / "away.py")] + a.rest)
+
 def cmd_goals(a):
     """hive goals: core/goals.py (every goal with who is moving it: focuses, project goals.md, asks)."""
     os.execv(sys.executable, [sys.executable, "-I", str(CORE / "goals.py")] + a.rest)
@@ -811,6 +821,8 @@ p = sp.add_parser("module", help="hive module list [--json] | add NAME|GIT-URL |
 p.add_argument("do", choices=["list", "add", "remove"]); p.add_argument("name", nargs="?"); p.add_argument("--json", action="store_true"); p.set_defaults(f=cmd_module)
 p = sp.add_parser("update", help="hive update [--check]: an installed Hive goes to the newest release, and back if that fails")
 p.add_argument("--check", action="store_true"); p.add_argument("--auto", action="store_true"); p.set_defaults(f=cmd_update)
+p = sp.add_parser("share", help="hive share CONVERSATION [-o FILE] [--show] [--remove ID,ID] [--no-files]: write one conversation as a single page you can post (the ask, the agents at work, the result). Private details are taken out; nothing is uploaded. --show prints the text to read first")
+p.add_argument("rest", nargs=argparse.REMAINDER); p.set_defaults(f=cmd_share)
 p = sp.add_parser("web", help="hive web: the address of the local web app, with its secret. --new-secret replaces the secret; --setup is install's")
 p.add_argument("--setup", action="store_true"); p.add_argument("--new-secret", action="store_true"); p.set_defaults(f=cmd_web)
 p = sp.add_parser("open", help="hive open: start the web app if it's stopped, then open it in the browser (the launcher icon runs this). --print shows the address instead")
@@ -840,6 +852,8 @@ if sys.argv[1:2] == ["outcomes"]: cmd_outcomes(argparse.Namespace(rest=sys.argv[
 sp.add_parser("goals", help="hive goals [--idle] [--json]: every goal (the person's focuses in kb/priorities.md, each project's goals.md, the asks) with its thread, last agent post, who is running and open asks; idle goals named (core/goals.py)")
 sp.add_parser("asks", help="hive asks list | check | own ID | done ID --evidence POST | hold|person|drop ID --why | add --post ID --ask ... | directions | extract: the register of what the person asked for, so nothing is dropped (core/asks.py)")
 if sys.argv[1:2] == ["asks"]: cmd_asks(argparse.Namespace(rest=sys.argv[2:]))
+sp.add_parser("away", help="hive away [--since 12h] [--json]: while you were away: what was delivered, what stopped and why, what waits on you")
+if sys.argv[1:2] == ["away"]: cmd_away(argparse.Namespace(rest=sys.argv[2:]))
 if sys.argv[1:2] == ["goals"]: cmd_goals(argparse.Namespace(rest=sys.argv[2:]))
 if sys.argv[1:2] == ["improve"]: cmd_progress(argparse.Namespace(rest=sys.argv[2:]))  # their own flags: handed over whole
 if sys.argv[1:2] == ["progress"]: cmd_progress(argparse.Namespace(rest=["progress"] + sys.argv[2:]))

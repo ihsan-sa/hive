@@ -38,7 +38,7 @@ MOVING_S = 6 * 3600       # an agent post in the ask's thread this recently mean
 OWN_GRACE_S = 3600        # a fresh `own` counts as moving even before the owner has posted
 CLOSED = ("done", "dropped", "standing")
 WAITING = ("held", "person")
-NOT_AGENTS = ("person", "hives", "box", "starter", "watchdog", "progress", "asks", "keeper-timer")
+NOT_AGENTS = ("person", "hives", "box", "starter", "watchdog", "progress", "asks", "keeper-timer", "postland")
 ACK = re.compile(r"^(?:@\S+\s+)*(?:\(from [^)\n]*\)\s+)?((?:perf|perfect|excellent|great|nice|cool|good|awesome|amazing|thanks|thank you|thx|ty|ok|okay|got it|sounds good|yes|no|yep|nope)[\s.!,]*)+$", re.I)
 FROM = re.compile(r"^\s*(?:@\S+\s+)*\(from [^)\n]*\)\s*")
 
@@ -293,7 +293,7 @@ Agents' posts:
 """
 
 LEFT = re.compile(r"\b(left( to| over|:)|what is left|remaining|remains|not (yet )?(done|finished)|still (needs?|open|to do|missing|broken|fails)|todo|to-do|next steps?|nobody (is|has|took)|no one (is|has)|someone (should|needs|has to)|waits? on|waiting on|unfinished|follow-?ups?|open questions?|outstanding|not implemented|deferred|punted|out of scope|didn.t get to|ran out of)\b", re.I)
-NOT_AGENTS = ("person", "hives", "box", "starter", "watchdog", "progress", "asks", "keeper-timer")
+NOT_AGENTS = ("person", "hives", "box", "starter", "watchdog", "progress", "asks", "keeper-timer", "postland")
 
 def agent_posts(posts, since=""):
     """Agents' posts after `since` that talk of something left, one per agent and thread (the last), clipped: the cheap pass before the model."""
@@ -358,9 +358,9 @@ def login_dir():
     if ok: return min(ok)[2]
     return os.environ.get("CLAUDE_CONFIG_DIR") or str(HOME / ".claude")
 
-LIMITED = re.compile(r"hit your .*limit|usage limit|rate.?limit|resets \d", re.I)
+LIMITED = re.compile(r"hit your .*limit|usage limit|rate.?limit|resets \d|not logged in|run /login", re.I)
 class Limited(RuntimeError):
-    """The login is at its limit: nothing was read, the cursor stays, the next timer run retries. Not a failure of the unit."""
+    """The login is at its limit or missing: nothing was read, the cursor stays, the next timer run retries. Not a failure of the unit."""
 
 def ask_model(prompt, model, timeout=900):
     tmp = HOME / ".cache" / "hive-tmp"; tmp.mkdir(parents=True, exist_ok=True)
@@ -533,6 +533,6 @@ def main(argv=None):
     p.add_argument("--model", default="sonnet"); p.add_argument("--dry", action="store_true"); p.add_argument("--chars", type=int, default=9000); p.set_defaults(f=cmd_reconcile)
     a = ap.parse_args(argv)
     try: a.f(a)
-    except Limited as e: print(f"login at its limit, nothing changed; the next run retries: {e}")   # exit 0: a wait, not a failed unit
+    except Limited as e: print(f"login at its limit or missing, nothing changed; the next run retries: {e}")   # exit 0: a wait, not a failed unit
 
 if __name__ == "__main__": main()

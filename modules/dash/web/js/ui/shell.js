@@ -47,9 +47,17 @@ addEventListener("keydown", e => {
 // ---- the app's short version: how many are working, how much of the week is used, and a word when it has stopped ----
 const logins = () => (S.usage && S.usage.logins) || (S.live && S.live.logins) || [];
 /** Has the hive stopped starting agents, and until when? {why, until} or null. */
+/** An expired Claude login, in the words of the starter's post. Null when none. */
+export function signInWords() {
+  const all = (S.live && S.live.signin) || []; if (!all.length) return null;
+  const stuck = all.filter(a => !a.other);
+  if (!stuck.length) return `Claude account ${all[0].name} has expired. Its agents moved to your other account. Sign in again to bring it back.`;
+  const n = stuck.reduce((sum, a) => sum + a.agents, 0);
+  return n ? `Sign in again to Claude: ${n === 1 ? "1 agent is" : n + " agents are"} waiting.` : "Sign in again to Claude. New agents wait until you do.";
+}
 export function hiveStopped() {
   const all = logins(), hold = S.live && S.live.limit_until;
-  if (hold) return { why: "limit", until: hold * 1e3 };
+  if (hold && !(S.app.setup && S.app.setup.other)) return { why: "limit", until: hold * 1e3 };
   if (all.length && !all.some(l => inUse(l, S.usage)) && !(S.app.setup && S.app.setup.other)) {  // with a Codex login or a key, agents still start
     const r = all.filter(l => !l.paused).map(l => runway(l, S.usage).toReset).filter(x => x != null).sort((a, b) => a - b)[0];
     return { why: all.every(l => l.paused) ? "paused" : "limit", until: r != null ? now() + r : null };
@@ -103,6 +111,8 @@ function loginMarks() {
 }
 /** The band under the bar when the hive has stopped: says why in words, and where to look. */
 function band(current) {
+  const sign = signInWords(); if (sign) return h("div", { class: "band", role: "status", "data-tone": "bad", "data-key": "band" }, statusDot("limited"), h("span", null, sign),
+    can("logins") ? button("Sign in", null, { href: href("settings"), size: "s", kind: "quiet" }) : null);
   if (simpleOn() && needsAccount() && current !== "start" && current !== "settings") return h("div", { class: "band", role: "status", "data-key": "band" }, statusDot("limited"),
     h("span", null, can("logins") ? "Your Hive can't start until you add your Claude account." : "Your Hive isn't ready yet. The person setting it up still has a step to finish."),
     can("logins") ? button("Add it", null, { href: href("settings"), size: "s", kind: "quiet" }) : null);

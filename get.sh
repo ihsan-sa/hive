@@ -79,7 +79,7 @@ room() {
   [ -z "$free" ] || [ "$free" -ge "${HIVE_MIN_MB:-1536}" ] || die "there's only ${free} MB free on $d, and the Hive needs about ${HIVE_MIN_MB:-1536} MB. Free some space, then run the same line again"
 }
 
-# A failed install can be sent to the Hive's makers so they can fix it, only with a yes: asked on the terminal, or HIVE_REPORT=1 where there's none (HIVE_REPORT=0 never asks).
+# A failed install can be sent to the Hive's makers so they can fix it, only with a yes: asked on the terminal, or HIVE_REPORT=1 where there's none (HIVE_REPORT=0 never asks). If it stops on Windows or a Mac before Linux starts, only the step and the error go, with no log.
 # It holds the step that failed, the error, the version, the OS and the last 40 lines of the log, with user names, the machine's name, home folders, emails, addresses and keys taken out here first.
 REPORT_URL="${HIVE_SHARE_URL:-https://hive-reports.ihsan.cc/v1/report}"
 REPORT_PY='
@@ -98,7 +98,8 @@ text = clean("\n".join(log))
 step = re.sub(r"[^\x20-\x7e]", "", e("R_STEP", ""))
 m = "install failed at step %s/%s (%s): %s" % (e("R_N"), e("R_OF"), step or "before the steps", clean(e("R_WHY") or "a command failed"))
 ver = re.sub(r"[^A-Za-z0-9._+-]", "", e("R_VER", ""))[:32] or "0"
-osn = re.sub(r"[^a-z0-9_]", "", platform.system().lower())[:16] + "/" + re.sub(r"[^a-z0-9_]", "", platform.machine().lower())[:16]
+fam = e("HIVE_HOST") if e("HIVE_HOST") in ("windows", "mac") else platform.system().lower()
+osn = re.sub(r"[^a-z0-9_]", "", fam)[:16] + "/" + re.sub(r"[^a-z0-9_]", "", platform.machine().lower())[:16]
 dist = ""
 try: dist = [l.split("=", 1)[1].strip().strip(chr(34)) for l in open("/etc/os-release") if l.startswith("PRETTY_NAME=")][0]
 except (OSError, IndexError): pass
@@ -554,7 +555,7 @@ Or in a spare account: git clone -b $BRANCH $REPO ~/core, install Claude Code, a
   clone
   old_remove
   step "Setting up the Hive, Claude Code and Codex (a few minutes)"
-  quietly $ROOT env HIVE_PLAIN=1 "$T/hive/install.sh" "$U" || die "setting up the Hive didn't finish. Run the same line again: it carries on from where it stopped"
+  quietly $ROOT env HIVE_PLAIN=1 HIVE_HOST="${HIVE_HOST:-}" "$T/hive/install.sh" "$U" || die "setting up the Hive didn't finish. Run the same line again: it carries on from where it stopped"
   old_import "$U" "$(getent passwd "$U" | cut -d: -f6)"
   ending "The Hive is installed." new
 }

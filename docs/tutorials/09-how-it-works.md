@@ -16,7 +16,7 @@ you ──► app / terminal / Slack ──► board.jsonl ◄── agents
 - **The starter** is a small service (`hive-starter`). When a post mentions an agent (`@a7c31`, `@new`), it starts that agent, or wakes it with its memory intact. It also enforces your usage line and **Agents at once**.
 - **Agents** are Claude sessions. Each one is told `~/core/orientation.md` when it starts, then reads its thread. Their full output is in `~/sessions/`, and `~/log.jsonl` records every start and end.
 - **The app** (`hive-dash`) only shows the board, the log and usage, and writes messages to the board. It keeps no state of its own that matters. If the page looks wrong, the work isn't lost.
-- **Helpers:** a **watchdog** checks every few minutes that work is moving, a **keeper** picks up stalled threads, and a **warden** judges steps outside the sandbox (if Power is set to use one). They are ordinary agents with a written job.
+- **Helpers:** a **keeper** picks up stalled threads every 3 hours if **Keep work moving** is on in Settings (it's off to begin with), and a **warden** judges steps outside the sandbox (if Power is set to use one). They are ordinary agents with a written job. The starter itself restarts a run that has gone quiet.
 - **Settings** live in `~/core/config.json`, read live. **The app's own code** is plain HTML and JavaScript with no build step (`ARCHITECTURE.md` next to it explains the layout).
 
 ## Ask it about itself

@@ -2,7 +2,7 @@
 import { h } from "../core/dom.js";
 import { S, can, built, jget, needsAccount, post, loadApp } from "../core/store.js";
 import { simpleOn, setSimple } from "../core/simple.js";
-import { notifyBlocked, notifyOn, notifySupported, notifyTest, setNotify } from "../core/notify.js";
+import { notifyBlocked, notifyOn, notifySupported, notifyTest, pushOn, pushSupported, setNotify, setPush } from "../core/notify.js";
 import { DEFAULT_NAME, brandLogo, brandName } from "../core/brand.js";
 import { form } from "../templates.js";
 import { pageHeader, section, block, blocks, button, field, input, empty, meter, statusLabel, statusDot } from "../ui/kit.js";
@@ -73,7 +73,7 @@ function versionBlocks(ctx, save) {
   if (!U || !U.installed) return null;
   const busy = isBusy("up-check") || isBusy("up-install");
   const seen = U.checked ? `Looked for a release ${ago(U.checked * 1000)}.` : "It hasn't looked for a release yet.";
-  const news = U.running ? "Updating now." : U.newest ? `${U.newest} is available.` : U.checked && !U.failed.length ? "This is the newest." : "";
+  const news = U.running ? "Updating now." : U.newest ? `${U.newest} is available.${U.update_pace === "daily" && U.auto_update ? " It goes in by itself once it has been out for 12 hours, at most one a day." : ""}` : U.checked && !U.failed.length ? "This is the newest." : "";
   const every = U.update_every_s, opts = EVERY.some(o => o[0] === every) ? EVERY : [...EVERY, [every, `Every ${plural(Math.round(every / 60), "minute")}`]];
   return [
     block({ title: "Version", sub: `${seen} ${news}`, state: h("b", { "data-up": "tag" }, U.tag || "before the first release"),
@@ -85,6 +85,9 @@ function versionBlocks(ctx, save) {
     block({ title: "Look for new releases", sub: "How often this Hive looks. It installs what it finds if Update by itself is on.",
       actions: h("select", { class: "input", value: every, "aria-label": "Look for new releases", title: "Look for new releases", style: "width:auto", onchange: e => { const was = U.update_every_s, v = +e.target.value; U.update_every_s = v; save({ update_every_s: v }, () => { U.update_every_s = was; }); } },
         opts.map(([v, label]) => h("option", { value: v }, label))) }),
+    block({ title: "How often to update", sub: "About once a day installs a release that has been out for at least 12 hours. Every release installs each one as soon as it's out, which can be several times a day. Update now always takes the newest.",
+      actions: h("select", { class: "input", value: U.update_pace, "aria-label": "How often to update", title: "How often to update", style: "width:auto", onchange: e => { const was = U.update_pace, v = e.target.value; U.update_pace = v; save({ update_pace: v }, () => { U.update_pace = was; }); } },
+        [["daily", "About once a day"], ["every", "Every release"]].map(([v, label]) => h("option", { value: v }, label))) }),
   ];
 }
 async function loadMods(ctx) {
@@ -101,7 +104,34 @@ function viewSection(ctx) {
   return section({ title: "Simple view", level: 1 },
     blocks(block({ title: "Simple view", key: "simple", sub: on ? "On: you see a chat, and your Hive talks to you in plain words." : "Off: you see every tab, and what the agents say to each other. Turn it on for just a chat and what's been made, with agents told to use plain words.",
       actions: button(on ? "Show everything" : "Turn on simple view", () => { setSimple(!on); ctx.update(); }, { size: "s" }) }),
-    notifyBlock(ctx)));
+    notifyBlock(ctx), pushBlock(ctx), phoneBlock(ctx)));
+}
+// Phone alerts: the server sends one line through ntfy.sh when a post to you goes unread, so it works with this page closed. Off until switched on here.
+async function loadPhone(ctx) {
+  if (!can("config")) return;
+  try { F.phone = await jget("/api/ntfy"); } catch (e) { F.phone = null; }
+  ctx.update();
+}
+async function phoneDo(ctx, what, ok) {
+  try { const r = await post("/api/ntfy", { do: what }); await loadPhone(ctx); say("phone", ok, "good"); if (r && r.tested) say("phone", "Sent. Your phone should show it in a moment.", "good"); }
+  catch (e) { say("phone", e.message, "bad"); }
+  ctx.update();
+}
+function phoneBlock(ctx) {
+  const P = F.phone;
+  if (!can("config") || !P) return null;
+  const sub = P.on
+    ? `On. When something is waiting for you and you haven't seen it, your Hive sends one line to ntfy.sh: "${P.line}" That is all it sends: no names, no words from your agents${P.link ? ", and a link back to this address" : ""}. Anyone who learns the topic below can read those lines, so keep it to yourself.`
+    : `Off. Turn it on to get a line on your phone when your Hive asks you something or finishes a job, even with this page closed. It uses ntfy.sh, a free public service with no account: your Hive sends it one line ("${P.line}") and nothing else.`;
+  return block({ title: "Phone alerts", key: "phone", sub,
+    actions: [button(P.on ? "Turn off" : "Turn on phone alerts", () => phoneDo(ctx, P.on ? "off" : "on", P.on ? "Off." : "On."), { size: "s" }),
+      P.on ? button("Send a test", () => phoneDo(ctx, "test"), { size: "s" }) : null] },
+    P.on ? h("div", { class: "fields" },
+      h("p", null, "On your phone: install the ntfy app (free), tap +, choose \"Subscribe to topic\", and enter this topic:"),
+      h("p", null, h("code", null, P.topic), " ", copyButton(P.topic)),
+      h("p", { class: "field-h" }, P.link ? "Tapping the alert opens " + P.link : "Tapping the alert won't open your Hive: you turned this on from an address a phone can't reach. Turn it off and on again from your Hive's public address to add the link."),
+      button("Make a new topic", () => phoneDo(ctx, "topic", "New topic. Subscribe to it on your phone; the old one is dead."), { size: "s" }),
+      P.error ? h("p", { class: "fmsg", "data-tone": "bad", role: "status" }, P.error) : null, msg("phone")) : msg("phone"));
 }
 // Off until you turn them on here; the browser then asks once. Kept in this browser.
 function notifyBlock(ctx) {
@@ -114,6 +144,25 @@ function notifyBlock(ctx) {
     actions: blocked ? null : [
       button(on ? "Turn off" : "Turn on notifications", async () => { await setNotify(!on); ctx.update(); }, { size: "s" }),
       on ? button("Send a test", () => notifyTest().catch(() => {}), { size: "s" }) : null] });
+}
+// Push with the page closed (module conn-webpush). Shows only to a full sign-in, and only once `conn on webpush` has made the key: anything else gets no block.
+async function loadPush(ctx) {
+  if (!can("config") || !pushSupported()) return;
+  try { const P = await jget("/api/webpush"); F.push = P.available ? { ...P, on: await pushOn() } : null; } catch (e) { F.push = null; }
+  ctx.update();
+}
+async function pushDo(ctx, on) {
+  try { await setPush(on, F.push.public_key, post); await loadPush(ctx); say("push", on ? "On." : "Off.", "good"); }
+  catch (e) { say("push", e.message, "bad"); }
+  ctx.update();
+}
+function pushBlock(ctx) {
+  const P = F.push;
+  if (!can("config") || !P || !pushSupported()) return null;
+  return block({ title: "Push notifications", key: "push",
+    sub: P.on ? `On for this browser: it hears from your Hive even with this page closed. The push service only ever carries one fixed line and a link, never what was said.`
+      : `Off for this browser. Turn it on to hear from your Hive with this page closed. It goes through your browser's push service (Google, Mozilla, Apple or Microsoft), which only ever carries one line and a link, never what was said.`,
+    actions: button(P.on ? "Turn off" : "Turn on push", () => pushDo(ctx, !P.on), { size: "s" }) }, msg("push"));
 }
 // The name saves when you leave the box; a picture saves as soon as it's picked. Every tab and page picks them up from /api/app.
 const LOGO_MAX = 2 * 2 ** 20;
@@ -193,7 +242,7 @@ function hiveSection(ctx) {
             paceOpts(E.kpe).map(([v, label]) => h("option", { value: v }, label))) : null,
           toggle("Keep work moving", E.kp, v => { E.kp = v; save({ keeper_every_s: v ? E.kpe : 0 }, () => { E.kp = !v; }, "Keep work moving"); })] }),
       versionBlocks(ctx, save),
-      block({ title: "Update by itself", sub: F.up && F.up.installed ? "Installs each new release. Keeps your settings and goes back if it fails. When it's off, this Hive still looks and says so above, and you choose when to update." : "Installs each new release. Keeps your settings and goes back if it fails.",
+      block({ title: "Update by itself", sub: F.up && F.up.installed ? "Installs new releases as often as you chose above. Keeps your settings and goes back if it fails. When it's off, this Hive still looks and says so above, and you choose when to update." : "Installs each new release. Keeps your settings and goes back if it fails.",
         actions: toggle("Update by itself", E.au, v => { E.au = v; save({ auto_update: v }, () => { E.au = !v; }, "Update by itself"); }) })),
     msg("brand"), msg("starter"), msg("hive"));
 }
@@ -227,7 +276,7 @@ function loginsSection(ctx) {
     const on = yes > 0, name = (logins.find(l => !l.signed_in) || logins[0] || {}).name || null;
     return section({ title: "Accounts", level: 1 }, blocks(block({ title: "Claude", sub: on ? "Your Hive works through this account." : "Your Hive works through a paid Claude account. Sign in to yours, and it can start.",
       state: statusLabel(on ? "working" : "out", on ? "signed in" : "not signed in"), key: "claude",
-      actions: button(on ? "Sign in again" : "Sign in to Claude", () => startSignin("login-first", name, false, ctx.update), { size: "s", kind: on ? "quiet" : "primary" }) },
+      actions: button(on ? "Sign in again" : "Sign in to Claude Code", () => startSignin("login-first", name, false, ctx.update), { size: "s", kind: on ? "quiet" : "primary" }) },
       signinBox("login-first", ctx.update))));
   }
   const other = otherAccounts(ctx) || { rows: [] };
@@ -437,7 +486,7 @@ function navDots(ctx) {
 
 export default {
   id: "settings", label: "Settings", about: "accounts, modules, access", tab: () => S.app.app && (can("config") || can("modules") || can("logins")),
-  enter(ctx) { F.keysOpen = null; F.flash = {}; F.ed = null; F.name = null; F.saved = null; F.access = null; F.acctOpen = null; F.accessOpen = null; F.sitesOpen = null; F.say = {}; clearSignin(); forget(); F.up = null; loadCfg(ctx); loadUpdate(ctx); loadMods(ctx); if (S.app.settings && can("config")) loadPage(ctx.update); },
+  enter(ctx) { F.keysOpen = null; F.flash = {}; F.ed = null; F.name = null; F.saved = null; F.access = null; F.acctOpen = null; F.accessOpen = null; F.sitesOpen = null; F.say = {}; clearSignin(); forget(); F.up = null; loadCfg(ctx); loadPhone(ctx); loadPush(ctx); loadUpdate(ctx); loadMods(ctx); if (S.app.settings && can("config")) loadPage(ctx.update); },
   leave() { forget(); forgetSecrets(); },
   render(ctx) {
     if (!S.app.app) return h("div", { class: "page" }, empty("Settings show only in the app, opened from this machine.", { kind: "page", title: "Settings" }));

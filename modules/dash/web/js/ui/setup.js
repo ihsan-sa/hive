@@ -208,7 +208,7 @@ export const rootNote = () => P.page.accounts.root ? h("p", { class: "fmsg", "da
 
 // ---- data sharing ----
 const SHARES = [
-  ["failures", "Failure reports and a daily check-in", "What failed, when and why, and one small message a day saying this Hive is running."],
+  ["failures", "Failure reports and a daily check-in", "What failed, when and why, and one small message a day saying this Hive is running and whether an agent has been started yet (yes or no)."],
   ["usage", "Usage reports", "Counts of runs, restarts and limit hits."],
   ["everything", "Everything, when I say so", "Separate from the reports above: a scrubbed copy of recent logs and of the board, and that includes your chats. Ticking this sends nothing: it goes only when you press Send a copy now, and each one is kept in reports/bundles in your Hive folder."],
   ["github", "Open GitHub issues about failures from my GitHub login. I'll review each fix before it's sent.", "Off by default. Failures go to the Hive project as public issues from your own GitHub account, at most 3 a day, one per kind of failure. When an agent drafts a fix it waits here: nothing of it goes until you read it and press Send."],

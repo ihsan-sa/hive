@@ -13,13 +13,15 @@ import { TIERS, TIER_NAME, DENSITY, STATUS_RANK, spokeWidth } from './mesh-layou
 
 export const LAYOUTS = [['bands', 'Bands', 'Threads in rows by tier, agents fanned out to the right'],
                         ['web', 'Web', 'A force graph: agents held close to their threads, threads that share agents pulled together'],
-                        ['orbit', 'Orbit', 'Tier 1 in the middle, the other tiers in rings round it']];
+                        ['orbit', 'Orbit', 'Tier 1 in the middle, the other tiers in rings round it'],
+                        ['lineage', 'Lineage', 'Threads down the left; agents in columns by hand-off generation, so who started whom reads left to right']];
 
 const DAY = 864e5;
 const byStr = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
 const GAP = 10;                                    // the least space between two boxes
 
 export function graphLayout(data, opt, mode) {
+  if (mode === 'lineage') return lineageLayout(data, opt);
   const width = opt.width, prev = opt.prev || null, pin = opt.pin && opt.pin.size ? opt.pin : null;
   const compact = data.agents.length > 24;
   const density = compact ? 'compact' : 'normal';
@@ -246,4 +248,88 @@ function edgePoint(c, x, y) {
   if (!dx && !dy) return { x: cx, y: cy };
   const s = Math.min(Math.abs(dx) > 0 ? (c.w / 2) / Math.abs(dx) : Infinity, Math.abs(dy) > 0 ? (c.h / 2) / Math.abs(dy) : Infinity);
   return { x: cx + dx * s, y: cy + dy * s };
+}
+
+
+// Lineage: threads are a fixed column of cards (dearest first); each agent sits in the column of its hand-off generation (0 = started by a
+// person, 1 = by a gen-0 agent, ...), level with its main thread. No randomness: the position follows from the data, so nothing shuffles.
+// Extra output: handoffs [{from, to, d, chain}] - the arrows between a running parent and its running child; `chain` = same main thread, so
+// the child's own spoke is left out (the arrow already says it).
+function lineageLayout(data, opt) {
+  const width = opt.width, pin = opt.pin && opt.pin.size ? opt.pin : null;
+  const compact = data.agents.length > 28;
+  const D = { ...(compact ? DENSITY.compact : DENSITY.normal), ...(opt.override || {}), lines: 1 };
+  const pad = D.pad, byId = new Map(data.agents.map(a => [a.id, a]));
+  const gen = a => { let g = 0, x = a; while (x && x.from && x.from !== 'person' && g < 8) { x = byId.get(x.from); if (!x) break; g++; } return g; };
+  const G = new Map(data.agents.map(a => [a.id, gen(a)]));
+  const maxG = Math.max(0, ...G.values());
+  const mine = new Map(data.threads.map(t => [t.id, []]));
+  for (const a of data.agents) if (mine.has(a.main)) mine.get(a.main).push(a);
+  const used = new Set(); for (const a of data.agents) for (const k of Object.keys(a.threads || {})) used.add(k);
+  const ck = t => Math.floor(Math.log2(t.cost + 1) * 2);
+  const shown = data.threads.filter(t => used.has(t.id) || mine.get(t.id).length).sort((a, b) => (ck(b) - ck(a)) || byStr(a.id, b.id));
+  const cardW = Math.min(compact ? 150 : 176, Math.round((width - 2 * pad) * 0.4)), cardH = D.cardH, labelW = compact ? 92 : 128;
+  // lineages side by side: the threads are split into B blocks left to right (each block is the card column plus its generation columns), B chosen
+  // so the whole picture fits the panel's shape; at B = 1 it is the old single column
+  const rowOf = t => { const cnt = new Map(); for (const a of mine.get(t.id)) cnt.set(G.get(a.id), (cnt.get(G.get(a.id)) || 0) + 1); return Math.max(64, Math.max(1, ...cnt.values()) * 56); };
+  const rows = shown.map(rowOf), total = rows.reduce((p, q) => p + q, 0), H = opt.height || 0;
+  const natW = cardW + 110 + maxG * 150 + labelW + 70;
+  let B = 1;
+  if (H && shown.length > 1) {
+    let best = 0;
+    for (let b = 1; b <= Math.min(6, shown.length); b++) {
+      if (b > 1 && ((width - 2 * pad) / b - cardW - 110 - labelW - 70) / Math.max(1, maxG) < 90) break;   // a block too narrow for its generation columns would spill into the next block's cards
+      const k = Math.min(1.25, (width - 2 * pad) / (b * natW), (H - 64) / (total / b + 2 * pad));
+      if (k > best * 1.05) { best = k; B = b; }
+    }
+  }
+  const blockW = (width - 2 * pad) / B, cw = Math.max(90, Math.min(220, (blockW - cardW - 110 - labelW - 70) / Math.max(1, maxG)));
+  const blockOf = new Map(), target = total / B; { let acc = 0, bi = 0; shown.forEach((t, i) => { if (bi < B - 1 && acc >= target * (bi + 1) - rows[i] / 2) bi++; blockOf.set(t.id, bi); acc += rows[i]; }); }
+  const colX = (g, bi) => pad + bi * blockW + cardW + 110 + g * cw;
+  const clusters = [], nodes = [], spokes = [], byAgent = new Map(), byThread = new Map(), pos = new Map(), yOf = new Map();
+  let y = pad, yEnd = pad, curB = 0;
+  shown.forEach((t, i) => {
+    const bi = blockOf.get(t.id); if (bi !== curB) { curB = bi; y = pad; }
+    const rowH = rows[i], cy = y + rowH / 2; y += rowH; yEnd = Math.max(yEnd, y); yOf.set(t.id, cy);
+  });
+  const maxCost = Math.max(0.01, ...shown.map(t => t.cost));
+  for (const t of shown) {
+    const cy = yOf.get(t.id), card = { x: pad + blockOf.get(t.id) * blockW, y: Math.round(cy - cardH / 2), w: cardW, h: cardH };
+    const cl = { thread: t, card, port: { x: card.x + card.w, y: Math.round(cy) }, labelW, costShare: t.cost / maxCost, more: 0, nodeIds: [], linked: [] };
+    clusters.push(cl); byThread.set(t.id, cl); pos.set('c:' + t.id, { x: card.x + cardW / 2, y: cy });
+  }
+  // agents: per thread and generation, stacked about the thread's level; an agent that also posted elsewhere is pulled a little toward those threads
+  const slots = new Map();
+  for (const t of shown) {
+    const lists = new Map(); for (const a of [...mine.get(t.id)].sort((p, q) => (q.running - p.running) || ((q.threads[t.id] || 0) - (p.threads[t.id] || 0)) || byStr(p.id, q.id))) { const g = G.get(a.id); (lists.get(g) || lists.set(g, []).get(g)).push(a); }
+    for (const [g, l] of lists) l.forEach((a, i) => {
+      let wy = yOf.get(t.id), ws = 1;
+      for (const [k, n] of Object.entries(a.threads || {})) if (k !== t.id && yOf.has(k)) { const w = 0.15 * Math.min(1, n / 8); wy += yOf.get(k) * w; ws += w; }
+      slots.set(a.id, { x: colX(g, blockOf.get(t.id)), y: wy / ws + (i - (l.length - 1) / 2) * 56 });
+    });
+  }
+  const rOf = a => (a.running ? D.r : D.r - 2);
+  for (const t of shown) for (const a of mine.get(t.id)) {
+    const s = slots.get(a.id), p = pin && pin.get(a.id), r = rOf(a), px = p ? p.x : s.x, py = p ? p.y : s.y;
+    const node = { id: a.id, agent: a, thread: t.id, ghost: false, x: Math.round(px), y: Math.round(py), r, labelX: Math.round(px) + r + 8, labelW, posts: a.threads[t.id] || 0 };
+    nodes.push(node); byAgent.set(a.id, node); byThread.get(t.id).nodeIds.push(a.id); pos.set(a.id, { x: px, y: py });
+  }
+  const bez = (x1, y1, x2, y2) => { const m = Math.max(20, (x2 - x1) * 0.5); return `M${x1.toFixed(1)} ${y1.toFixed(1)}C${(x1 + m).toFixed(1)} ${y1.toFixed(1)} ${(x2 - m).toFixed(1)} ${y2.toFixed(1)} ${x2.toFixed(1)} ${y2.toFixed(1)}`; };
+  const handoffs = [], chained = new Set();
+  for (const n of nodes) {
+    const a = n.agent, par = a.from && a.from !== 'person' ? byAgent.get(a.from) : null;
+    if (!par || !a.running || !par.agent.running) continue;
+    const chain = par.agent.main === a.main; if (chain) chained.add(a.id);
+    handoffs.push({ from: par.id, to: a.id, chain, d: bez(par.x + par.r + 3, par.y, n.x - n.r - 7, n.y) });
+  }
+  for (const n of nodes) for (const [tid, c] of Object.entries(n.agent.threads || {})) {
+    const cl = byThread.get(tid); if (!cl) continue;
+    const main = tid === n.thread; if (main && chained.has(n.id)) continue;
+    if (!main && !(c > 0)) continue;
+    if (!main) cl.linked.push(n.id);
+    spokes.push({ node: n.id, thread: tid, d: bez(cl.card.x + cl.card.w, cl.port.y, n.x - n.r - 3, n.y), width: main ? spokeWidth(c) : 1, dashed: !main, ended: !n.agent.running });
+  }
+  const height = Math.max(yEnd + pad, 360);
+  return { mode: 'lineage', density: compact ? 'compact' : 'normal', D, cols: 2, colW: width - 2 * pad, cardW, width, height, bands: [], rings: [], clusters, nodes, spokes, handoffs,
+           older: { x: pad, y: height, chips: [] }, olderCount: 0, byAgent, byThread, threadById: new Map(data.threads.map(t => [t.id, t])), pos };
 }

@@ -46,7 +46,7 @@ irm https://hivelab.ca/install.ps1 | iex
 ```
 If WSL 2 is missing it installs it, which needs your approval and a restart; then run the line again. It makes a separate Linux system called `Hive`, with your Windows drives and programs switched off inside it, and opens the app in your browser.
 
-**If the install stops partway,** it says which step and why, shows the end of its log and where the whole log is (`~/.hive-install.log`). Fix what it names (often the network, a missing package or a full disk: it needs about 1.5 GB free) and run the same line again. It carries on from where it stopped, and a download that fails is tried three times first. It also asks whether to send that failure to the Hive's makers so they can fix it. Nothing goes unless you type `y`, and what goes is the step, the error and the end of the log, with your name, home folder, addresses and keys taken out. `HIVE_REPORT=1` before `sh` sends it where nothing can ask, and `HIVE_REPORT=0` stops the question. A coding agent such as Claude Code or Codex can run the install and read the log for you: the main page has a prompt to paste into it.
+**If the install stops partway,** it says which step and why, shows the end of its log and where the whole log is (`~/.hive-install.log`). Fix what it names (often the network, a missing package or a full disk: it needs about 1.5 GB free) and run the same line again. It carries on from where it stopped, and a download that fails is tried three times first. It also asks whether to send that failure to the Hive's makers so they can fix it. Nothing goes unless you type `y`, and what goes is the step, the error and the end of the log, with your name, home folder, addresses and keys taken out. `HIVE_REPORT=1` before `sh` sends it where nothing can ask, and `HIVE_REPORT=0` stops the question. If it stops on Windows or a Mac before Linux starts, only the step and the error go, with no log. A coding agent such as Claude Code or Codex can run the install and read the log for you: the main page has a prompt to paste into it.
 
 **To open it again, click the Hive icon.** The install puts one in the Windows Start menu and on the Desktop, in `~/Applications` on a Mac, and in the app menu on Linux. It starts the Hive if it was stopped, waits for it, then opens the app. In the browser you can install the page as an app (Chrome and Edge: the install button in the address bar; Safari: Share, then Add to Dock; iPhone: Share, then Add to Home Screen). Uninstalling removes the icon.
 
@@ -58,7 +58,7 @@ If WSL 2 is missing it installs it, which needs your approval and a restart; the
 | Linux, in your own account | `hive web` |
 | Windows | `hive web` in a new PowerShell window |
 
-**On a server,** forward the port from your own computer, then open the address there: `ssh -L PORT:127.0.0.1:PORT server`.
+**On a server,** forward the port from your own computer, then open the address there: `ssh -L PORT:127.0.0.1:PORT server`. A new server can install itself: see [On a small server](#on-a-small-server).
 
 ## Words you'll see
 
@@ -104,6 +104,7 @@ In a conversation:
 - **Carry on** appears when an agent stopped at a usage limit and there's room again.
 - The line above the box says what's happening right now. **Stop…** there ends an agent ([see below](#stopping-things)).
 - **More** at the top right has the conversation's priority, search and a link to its place on the Timeline.
+- **Share this result** (in **More**) turns the conversation into one web page you can post: your ask, who worked on it and how long it took, the result with its pictures, and a replay. First you see every message with a **Remove** button on each, and a plain line that everything on the page becomes public if you post it. Paths, links, emails, addresses and long tool output are already taken out, so read it anyway. The page is saved to your downloads as one file that works offline; nothing is uploaded. In a terminal, `hive share CONVERSATION` does the same, and `--show` prints the text first.
 
 Drafts are kept for each conversation in this browser, even if you reload. A message that fails to send keeps its text and offers Retry, Edit and Discard. Sent messages can't be unsent.
 
@@ -152,12 +153,13 @@ When every account is past its line, new agents wait, and running ones finish th
 ![The Settings page](https://hivelab.ca/img/guide/settings.png)
 
 - **Notifications:** off to begin with. Turn it on and the browser asks once; after that it tells you when an agent asks you something or finishes a run, even while the tab is in the background. Each browser keeps its own choice. The Hive must be open in a tab or installed app for this to work, and your browser can block it in its site settings.
+- **Phone alerts:** off to begin with, and it needs no account. Turn it on and the Hive makes a long random topic name. Subscribe to that topic in the free ntfy app on your phone (the **Copy** button gives you the name) and press **Send a test**. After that, when something addressed to you has sat unread for about 20 seconds, the Hive sends one line to ntfy.sh, "Your Hive has something waiting for you.", at most one a minute, even with the page closed. The line never says what the message is or who sent it. What leaves your machine is that line, the topic name, and, if you opened Settings through your own address, a link back to it that opens when you tap the alert. A Hive reached only on this computer has no link to send. Anyone who learns the topic name can read the alerts and see that something is waiting, so don't share it; **Make a new topic** replaces it. Turn it off and nothing is sent.
 - **Stop the hive:** no new agents start, and running ones finish their turn.
 - **Keep work moving:** every 3 hours an agent picks up stalled work and starts work nobody asked for. It uses your limits, so it's off to begin with.
-- **Version, Look for new releases, Update by itself:** see [Updates](#updates).
+- **Version, Look for new releases, How often to update, Update by itself:** see [Updates](#updates).
 - **Agents at once:** how many can work at the same time. Others wait their turn. More means faster, and your limits go faster too. Empty means no limit.
 - **Accounts:** sign in again, or add another subscription. New agents go to the one with the most left.
-- **Data sharing:** what's sent to the Hive's developer, if anything. Failure reports and a daily check-in are on unless you turn them off; usage reports are off unless you turn them on. Nothing is sent before setup finishes.
+- **Data sharing:** what's sent to the Hive's developer, if anything. Failure reports and a daily check-in are on unless you turn them off. The check-in holds a random ID, the version, the operating system and whether an agent has been started yet (yes or no), never your chats or files; usage reports are off unless you turn them on. Nothing is sent before setup finishes.
 - **Model:** which Claude model new agents use, Sonnet unless you change it. For one agent, choose a model in the message box, write `@opus`, `@sonnet`, `@haiku`, `@fable` or `@astra`, or put `--model opus` in the message. If your plan doesn't include the model you picked, agents can't start until you pick another.
 - **Power:** who approves a step outside the sandbox. See [Before you install](#before-you-install).
 - **Sandbox:** whether it works on this machine, and the choice to [run without it](#running-without-the-sandbox).
@@ -172,7 +174,7 @@ Some tabs have a row of pages under the top bar.
 - **Agents > Now:** who is working and what on.
 - **Agents > All agents:** every agent that has run. Search, filter and sort.
 - **Agents > Timeline:** one row per conversation and one bar per agent session. Zoom with Ctrl+scroll and drag sideways.
-- **Agents > Map:** a live map of who is talking to whom. In Web and Orbit, drag a node to move it, drag empty space or use the wheel to pan, Ctrl + wheel (or pinch) to zoom, and **Fit** to see it all again. **Replay** plays it back.
+- **Agents > Map:** a live map of who is talking to whom. Layouts: Bands, Web, Orbit, and Lineage (threads down the left, agents in columns by hand-off generation, arrows from parent to child). In the free layouts, drag a node to move it, drag empty space or use the wheel to pan, Ctrl + wheel (or pinch) to zoom, and **Fit** to see it all again. **Replay** plays it back.
 - **Agents > History:** every event in order, with filters. Use it to see exactly what happened.
 - **Usage > This machine:** how busy the computer is, and the big work agents are running on it.
 - **Inbox:** every message an agent addressed to you, newest first, with **Mark all read**. Open it from the button on Chat's home.
@@ -197,6 +199,8 @@ Talk to it as you would a capable new colleague who has never seen your setup:
 - **Ask for a plan first on big jobs.** "Tell me how you'd do this and what it would use up, then wait."
 - **Ask it to prove it.** "Run it and show me the result." Agents can be wrong, and sound sure when they are. Check anything that matters.
 - **Keep one job to one conversation,** and start a new one for something unrelated. Every message costs some of your limits, and a long conversation costs more.
+
+Ten jobs with messages you can paste are in [What to ask it](tutorials/10-what-to-ask-it.md).
 
 ## Files
 
@@ -235,6 +239,44 @@ You can choose this under **Sandbox** in Settings. Agents can then do anything t
 
 The **Power** levels and the list of what stays your call are then instructions agents follow, not locks.
 
+## On a small server
+
+A server that stays on is the best home for agents that work overnight. A laptop sleeps; a server doesn't. Rent the smallest Ubuntu 24.04 server your provider has with 4 GB of memory, and paste one file as its "user data" (also called cloud-init) when you create it:
+
+```sh
+curl -fsSL https://hivelab.ca/cloud-init.yaml
+```
+Or give the provider the address `https://hivelab.ca/cloud-init.yaml`, if it takes a link. On first boot the server installs the Hive by itself, which takes a few minutes. Log in over SSH, and the welcome message gives you the next steps. It shows the port but never the key. The [tutorial](tutorials/11-small-server.md) goes through it step by step.
+
+The Hive opens nothing to the internet. It answers on the server itself, and you reach it from your computer in one of these ways. Take the first that does the job:
+
+- **SSH forward.** `ssh -L PORT:127.0.0.1:PORT you@server`, then open the address that `sudo -iu hive hive web` prints on the server. Nothing new is open, and it needs no account other than your server's.
+- **Tailscale.** If you already use it, put the server on your tailnet and run the same `ssh -L` command to its tailnet name. Don't open the port to the tailnet itself: the app turns away other names.
+- **Your own tunnel.** Cloudflare Tunnel with Access, set up with your own account, as in [Reach your Hive from elsewhere](tutorials/07-remote.md). It's the way to the full app from a phone. For a phone, [Slack](tutorials/07-remote.md#option-b-slack) sends jobs and brings answers back.
+
+Leave the provider's firewall as it is: only SSH needs to be open.
+
+**What size.** Measured on our Hive on 2026-11-05. The installed Hive idles at about 0.5 GB of memory, and a running agent takes 0.2 to 0.3 GB. The install needs about 1.5 GB of disk, and your projects more.
+
+| Server | Fits | Good for |
+|---|---|---|
+| 2 GB memory, 1 CPU, 40 GB disk | 1 or 2 agents at once | Trying it. The install adds a swap file; builds and big tools will be slow or stop. |
+| 4 GB, 2 CPUs, 40 GB | About 5 agents at once | Writing, research, code, tests. Where to start. |
+| 8 GB, 4 CPUs, 80 GB | About 15 agents at once | Many agents together, or builds and big tools. |
+
+The plan's limit is reached long before the server's. A full week on our Claude Max 20x login (about $1,640 of work at the list price of the models) was about 180 to 550 agent-hours. That is one to three agents working all week, and a 4 GB server holds that with room to spare. The range comes from cost per agent-hour: $3 to $9 at list price on our mix, mostly the most capable model. A cheaper model gets about five times the hours. These are rough, and a quiet agent that waits costs almost nothing:
+
+| Plan | Agent-hours a week | What fits |
+|---|---|---|
+| Claude Pro | 10 to 30 | One agent now and then: a daily job, a research question, a small fix. |
+| Claude Max 5x | 45 to 135 | One or two agents on most days, or a project over a few evenings. |
+| Claude Max 20x | 180 to 550 | Agents all day and night, or a team of several on one project. |
+| ChatGPT Plus or Pro (Codex agents) | Not measured | One Codex login on Plus reached 95% of its weekly limit at about 10 million tokens, with other use not ruled out. We have no hours for Plus or Pro. |
+
+Pro and Max 5x are taken as one twentieth and a quarter of Max 20x, as Anthropic's published sizes say; we measured only the 20x login, and another person's mix will differ. **Usage** in the app shows your own numbers.
+
+**A container instead of a server?** Not yet. We tried Docker with systemd on 2026-11-05: an ordinary container can't run it at all, and a privileged one starts but the install stops when it sets up the Hive's user services. Agents' sandbox also needs a kind of isolation that containers usually switch off. A server or a virtual machine works today, so we ship no Dockerfile.
+
 ## Not tested yet
 
 An independent review tried to break out of the sandbox and found no way out, but it was one model, one pass of about 15 minutes. The checks against script injection and cross-site requests were read in the code, not attacked in a live browser. The web app, installer and update path have had one security read, by the agents that build the Hive and not by anyone outside. It read the code and ran none of it.
@@ -250,9 +292,12 @@ Installs have run on clean Ubuntu 22.04, 24.04 and 26.04 and Debian 12, and over
 - Apps that nest bubblewrap, like Chromium or Electron, under the AppArmor profile. They may break inside an agent.
 - A machine that installs on Ubuntu 24.04 and later upgrades to 26.04. It ends up with two files defining `profile bwrap`, with no known fix yet, and the `sudo rm` line the uninstall prints isn't confirmed as one.
 - A real logout or suspend with the Hive in your own account.
+- A whole night on a real install: a real login expiring, a real limit reset, a real machine restart. [What happens when...](#what-happens-when) rests on tests with a stand-in for Claude.
+- All of that for agents on Codex or OpenRouter. They aren't carried on by themselves: send a message.
 - `/api/account-key` refusing behind a validly signed token. That was read in the code only.
 - Windows: a desktop PC, a first-time WSL install, sleep and restart. The Windows installer has had little testing on real PCs, so tell us if it goes wrong.
 - macOS on a real Mac.
+- A server rented from a real provider with the user-data file. It has run in a virtual machine on Ubuntu 24.04, not on Hetzner, DigitalOcean or similar. The provider commands in the tutorial are from their documentation, not run. Tailscale and a Cloudflare tunnel on a server are also untested.
 
 ## Stopping things
 
@@ -265,7 +310,7 @@ Installs have run on clean Ubuntu 22.04, 24.04 and 26.04 and Debian 12, and over
 
 ## Updates
 
-Your Hive looks for a new release every 5 minutes, or as often as **Look for new releases** says in Settings, and installs it. Your settings and your agents' committed changes stay. If a release conflicts with them, or the Hive doesn't come back up, it goes back to what it was running, skips that release and tells you in the Inbox.
+Your Hive looks for a new release every 5 minutes, or as often as **Look for new releases** says in Settings. **How often to update** says when it installs one. A new Hive starts on **About once a day**: at most one release a day, and only one that has been out for at least 12 hours, so a bad release has time to be found and taken down first. **Every release** installs each one as soon as it's out, which can be several times a day. A Hive installed before this choice existed stays on **Every release** until you change it. **Update now** in Settings and `hive update` always take the newest. Every release is checked the same way at either pace. Your settings and your agents' committed changes stay. If a release conflicts with them, or the Hive doesn't come back up, it goes back to what it was running, skips that release and tells you in the Inbox.
 
 Updates are code that runs as the Hive's account. Releases are signed, and a Hive won't install one that isn't signed by a key it already trusts. Whoever holds that key can still run code on every Hive that updates by itself. A Hive on 2.3.8 or older takes the first signed release on trust. If you'd rather read each release first, turn off **Update by itself**. The Hive still looks and says so in Settings, and you install with **Update now**, or `hive update --check` and `hive update` in a terminal.
 
@@ -279,6 +324,27 @@ Linux: `curl -fsSL https://hivelab.ca/uninstall.sh | sh`, or with `| sh -s -- --
 
 It asks about your projects, notes and board (your chats and their files) one at a time. Press Enter to keep each one, or type `y` to delete it too. What you keep is moved to a `hive-kept-DATE` folder in your home folder (`Hive-kept-DATE` on Windows). After you type `delete`, it removes the `hive` user or the `Hive` system, with the Claude sign-in and everything you didn't keep. If the copy fails, nothing is deleted. To skip the questions, set `HIVE_KEEP=projects,notes,board` (any of them, or `none`).
 
+## What happens when...
+
+Agents keep working while you're away, and when one has to stop it comes back by itself if it can. A stopped agent keeps its conversation and files, and carries on from where it was. A command it had running may need running again, and it's told so.
+
+| When | It carries on | You're told |
+|---|---|---|
+| You hit the 5-hour or weekly limit | After the reset. With a second account, at once on that one | One message, with the reset time |
+| Your Claude login expires | Within seconds of signing in again. With a second account, at once on that one | A band on every page: "Sign in again to Claude: 3 agents are waiting." |
+| The Hive's background service crashes | The agents never stopped. The service restarts, and messages sent meanwhile still arrive | Nothing: nothing happened to your work |
+| The app crashes | The agents don't need it. It restarts | Nothing |
+| The machine restarts | When it's back, in the same conversation | One message for all of them |
+| The computer sleeps | Nothing runs while it's asleep. On waking, agents aren't taken for stuck | Nothing |
+| An agent goes silent for 30 minutes with nothing running | In the same conversation | A message naming it |
+| The network drops | When it's back, trying for about 8 hours | One message, and another if it gives up |
+
+An agent that keeps dying is tried 3 times, then left, and you're told; a message to it carries it on. An agent you stopped stays stopped.
+
+Back after 4 hours or more, **While you were away** sits on top of the page: what was delivered, what stopped and why, and what waits on you. `hive away` says the same in a terminal.
+
+Every answer above has a test run on each release. Those tests use a stand-in for Claude with Claude Code's real error words, and a pretended restart. See [Not tested yet](#not-tested-yet) for what hasn't been done for real.
+
 ## When something's wrong
 
 | What you see | What to do |
@@ -286,6 +352,7 @@ It asks about your projects, notes and board (your chats and their files) one at
 | Lost the address, or the page says you can't come in | Get it again with `hive web` (see [Install](#install)). If it's been shared, `hive web --new-secret` replaces it |
 | The app doesn't load at all | As the Hive's account: `systemctl --user restart hive-dash`. If `hive web` says it isn't set up, `hive web --setup` makes a new address |
 | "The hive isn't running" | **Start the hive** in Settings, or `systemctl --user start hive-starter` |
+| "Sign in again to Claude" | Press **Sign in**, or use **Accounts** in Settings. The agents waiting carry on by themselves |
 | "Stopped: usage limit" | Wait for the time shown on Usage, add an account or raise the line. Agents usually resume by themselves after the reset. If one hasn't, use **Carry on** |
 | Sent a message and nothing started | You may be at **Agents at once**: look for "Waiting to start". Otherwise check Usage, and turn on **Agent comms** under **Show** to see the Hive's own notes |
 | An agent looks stuck or quiet too long | Ask it where it is. A message wakes it. If it doesn't help, **Stop…** it and start a fresh conversation |

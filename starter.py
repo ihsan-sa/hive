@@ -132,13 +132,13 @@ def retarget(c, posts, src, dst):
 def model_ok(c, model): return model in MODELS or provider_of(c, model) is not None
 
 def default_model():
-    """The model of a run nobody asked a model for. An installed Hive: the Model choice in Settings, Opus until one is made, so it
-    doesn't hang on what the account's plan defaults to (the person, 2026-11-03). No settings.json (Hive itself): the login's default."""
+    """The model of a run nobody asked a model for. An installed Hive: the Model choice in Settings, Sonnet until one is made (the person, 2026-11-04;
+    Opus before), so it doesn't hang on what the account's plan defaults to. No settings.json (Hive itself): the login's default."""
     try: v = json.loads((HOME / "settings.json").read_text())
     except FileNotFoundError: return None
     except (OSError, ValueError): v = None
     m = v.get("model") if isinstance(v, dict) else None
-    return m if m in MODELS else "opus"
+    return m if m in MODELS else "sonnet"
 
 def spawn_model(c):
     """The model of a new agent nobody asked a model for: None if Settings has a choice (default_model reads it), else config.json's spawn_model.
@@ -219,7 +219,7 @@ def provider_room(c, name, pc, cache):
         return pc["_impl"].room(c, pc, cache)
     except Exception as e: return f"provider module {pc.get('impl')} failed ({type(e).__name__}: {e})"[:300]
 
-LIMIT_TEXT = re.compile(r"usage limit|rate limit|hit your limit|limit reached|out of (extra )?usage", re.I)
+LIMIT_TEXT = re.compile(r"usage limit|rate limit|hit your (\S+ )?limit|limit reached|out of (extra )?usage", re.I)  # the CLI: You've hit your 5-hour limit
 
 def limit_hit(out):
     """If a session stopped on a rejected usage limit, return (reset epoch, last session id), else None.
@@ -247,7 +247,7 @@ def limit_hit(out):
             reset = time.time() + 1800  # limit text without a reset time: try again in 30 min
     return (float(reset), sid) if reset else None
 
-AUTH_TEXT = re.compile(r"not logged in|please run /login|failed to authenticate|authentication_failed|invalid api key|oauth token (has|is|was)", re.I)
+AUTH_TEXT = re.compile(r"not logged in|login expired|please run /login|failed to authenticate|authentication_failed|invalid api key|oauth token (has|is|was)", re.I)
 LAUNCH_HOLD_S = 600  # claude wouldn't start at all: tried again after this
 AUTH_HOLD_S = 3600  # a rejected login is tried again after this, in case someone signed it back in
 
@@ -483,19 +483,100 @@ def release_shells(pid):
 
 def runs_now(name):
     """Whether `name` has a run whose claude process is alive right now (no reaping, unlike running())."""
-    try: return Path(f"/proc/{json.loads((RUN / f'{name}.json').read_text())['pid']}").exists()
+    try: return not run_gone(json.loads((RUN / f'{name}.json').read_text()))
     except (OSError, ValueError, KeyError): return False
 
-def running(st=None):
-    alive = {}
+def boot_id():
+    try: return Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+    except OSError: return ""
+
+def proc_start(pid):
+    """When a process started (/proc/PID/stat field 22), so a reused pid isn't taken for our run. The command name can hold spaces, hence the rsplit."""
+    try: return Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[19]
+    except (OSError, IndexError): return None
+
+def run_gone(r):
+    """A run record's process is gone: no such pid, or the pid is now something else's (after a machine restart a pid can come back
+    as anything, and the reaper would kill it). Records from before these fields go by the pid alone."""
+    if not Path(f"/proc/{r['pid']}").exists(): return True
+    if r.get("boot") and r["boot"] != boot_id(): return True
+    return bool(r.get("proc")) and proc_start(r["pid"]) not in (None, r["proc"])
+
+TRANSIENT = re.compile(r"connection|network|ECONN|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|fetch failed|socket|overloaded|API Error: 5\d\d", re.I)
+WHY_WORDS = {"connection": "no connection to Claude", "restart": "the machine restarted", "stalled": "went silent with nothing running", "other": "ended before it finished", "budget": "reached its budget or turn limit"}
+DIED_RETRY_S = [60, 300, 900, 1800, 3600]  # how long before it's tried again; the last repeats
+went_silent = set()  # stalled runs killed but not yet seen gone
+
+def died_unfinished(out):
+    """Why a run ended without finishing its turn, or None if it finished. A Claude Code run prints one clean result at the end of a turn;
+    with none, it was killed or gave up. Recorded from the real CLI on 2026-11-05: after 10 retries with connections refused it prints
+    `API Error: Connection refused ...` as an error result and exits 1, and limit_hit and auth_hit don't apply, so the agent used to vanish."""
+    result, last, said = None, None, []
+    try: lines = Path(out).read_text(errors="replace").splitlines()[-200:]
+    except (OSError, TypeError): return None
+    for line in lines:
+        try: e = json.loads(line)
+        except ValueError:
+            said.append(line); continue
+        if not isinstance(e, dict): continue
+        last = e.get("type")
+        if last == "result": result = e
+        elif last == "assistant" and e.get("error"): said.append(str(e["error"]) + " " + json.dumps(e.get("message", ""))[:300])
+    if result is not None and not result.get("is_error"): return None
+    if last in ("turn.completed", "session.resume_hint"): return None
+    if result is not None and str(result.get("subtype", "")).startswith("error_max"): return "budget"
+    if result is not None: said.append(str(result.get("result", "")))
+    return "connection" if any(TRANSIENT.search(t) for t in said[-6:]) else "other"
+
+def no_session(out):
+    """The CLI couldn't find the session it was asked to resume."""
+    try: return "No conversation found" in Path(out).read_text(errors="replace")[-4000:]
+    except (OSError, TypeError): return False
+
+def carries_on(r):
+    """Runs the starter brings back by itself: on a Claude login, not on a fallback or provider, whose sessions don't move and which the person is told about already."""
+    return r.get("harness", "claude-code") == "claude-code" and not r.get("fallback") and not r.get("provider") and not (STATE / "done" / r["name"]).exists() and not (STATE / "killed" / f"{r['name']}.json").exists()
+
+def stalled(r, quiet):
+    """Mid-turn, no output for `quiet` s, and nothing it started uses CPU or waits in the heavy queue: nothing will ever end it, and -p has no timeout of its own."""
+    out = Path(r.get("out", ""))
+    try:
+        if time.time() - max(out.stat().st_mtime, woke, epoch(r.get("at", "")) or 0) < quiet: return False
+    except OSError: return False
+    return not finished_but_alive(r, quiet) and not working(r, quiet)
+
+def carry_on(st, r, why, told):
+    """Queue a run that stopped early to resume in its own session after a wait. Bounded: a run that keeps dying is tried 3 times and the person is told
+    (12 tries for lost connections, about 8 h, and a run that got 10 min of work done between drops starts counting again)."""
+    key, tries = f"{r['name']}:{r.get('post')}", st.setdefault("died_tries", {})
+    lasted = time.time() - (epoch(r.get("at", "")) or 0)
+    n = 1 if why == "connection" and lasted >= 600 else tries.get(key, 0) + 1
+    tries[key] = n
+    log(event="died", name=r["name"], session=r["session"], why=why, tries=n)
+    if n >= {"connection": 12, "budget": 1}.get(why, 3):
+        tries.pop(key)
+        log(event="given_up", name=r["name"], session=r["session"], why=why, tries=n)
+        post(f"`{r['name']}` stopped and won't restart by itself ({WHY_WORDS[why]}{f', {n} times' if n > 1 else ''}). What it did so far is kept. "
+             "A message to it carries it on.", ["person"])
+        return
+    delays = cfg().get("died_retry_s") or DIED_RETRY_S
+    st.setdefault("resume", {})[r["name"]] = {**r, "session": session_in(r.get("out")) or r["session"], "wait": True, "why": why,
+                                              "reset": 0 if why == "restart" else time.time() + delays[min(n - 1, len(delays) - 1)]}
+    if n == 1: told.setdefault(why, []).append(r["name"])
+
+def running(st=None, by_hand=False):
+    """by_hand: the first pass after a deliberate stop in this boot (see stop_stamp): a run that's gone was stopped, not lost."""
+    alive, told, stopped = {}, {}, []
     note_sleep()
-    grace = cfg().get("done_grace_s", 900)
+    grace, quiet = cfg().get("done_grace_s", 900), cfg().get("stall_s", 1800)
     for f in RUN.glob("*.json"):
         r = json.loads(f.read_text())
         c = children.get(r["name"])
+        gone = not c and run_gone(r)  # checked first: nothing below may signal a pid that isn't this run's
         # parked on a waiter on a login that has run out: it would only find out when the waiter ends, up to hours later
-        move = st is not None and out_of_room(cfg(), r.get("login"), st.get("limits")) and finished_but_alive(r, min(60, grace)) and only_waiters(r["pid"])
-        if move or (finished_but_alive(r, grace) and not working(r, grace)):
+        move = not gone and st is not None and out_of_room(cfg(), r.get("login"), st.get("limits")) and finished_but_alive(r, min(60, grace)) and only_waiters(r["pid"])
+        if gone: pass
+        elif move or (finished_but_alive(r, grace) and not working(r, grace)):
             bg = bg_tasks(r.get("out", ""))
             log(event="reaped", name=r["name"], session=r["session"], pid=r["pid"], bg=bg, move=move)
             kill_tree(r["pid"])
@@ -510,12 +591,26 @@ def running(st=None):
             st.setdefault("resume", {})[r["name"]] = {**r, "session": session_in(r.get("out")) or r["session"], "reset": 0, "reaped": ["(none: shells left running)"],
                 "shells": shells, "from": "person" if any(p.get("from") == "person" for p in ps) else ps[0].get("from")}  # the person's post isn't paced
             work.pop(r["name"], None)
-        done = c.poll() is not None if c else not Path(f"/proc/{r['pid']}").exists()
+        elif st is not None and quiet and carries_on(r) and stalled(r, quiet):
+            log(event="stalled", name=r["name"], session=r["session"], pid=r["pid"], quiet=quiet)
+            went_silent.add(r["name"])
+            kill_tree(r["pid"])
+            if c: c.wait(timeout=10)
+            work.pop(r["name"], None)
+        done = c.poll() is not None if c else gone or not Path(f"/proc/{r['pid']}").exists()
         if done:
             f.unlink(); children.pop(r["name"], None)
             log(event="end", name=r["name"], session=r["session"], pid=r["pid"], exit=c.returncode if c else None)
             hit = limit_hit(r.get("out"))
-            if not hit and auth_hit(r.get("out")) is None: relay_final(r, c.returncode if c else None)
+            authed = auth_hit(r.get("out")) is not None
+            died = None if hit or authed else died_unfinished(r.get("out"))
+            if r["name"] in went_silent: died = "stalled"; went_silent.discard(r["name"])
+            elif died and r.get("boot") and r["boot"] != boot_id(): died = "restart"
+            if st is not None and not hit and not authed and not died:
+                st.get("died_tries", {}).pop(f"{r['name']}:{r.get('post')}", None)
+                if (epoch(r.get("at", "")) or 0) >= st.get("auth_told", {}).get(r.get("login"), {}).get("since", float("inf")):
+                    auth_back(st, r["login"])  # no credentials file to watch (a Mac's keychain): a run that got through shows it's signed in
+            if not hit and not authed and not (died and st is not None and carries_on(r)): relay_final(r, c.returncode if c else None)
             if st is not None and st.get("launch_hold") and r.get("harness", "claude-code") == "claude-code" and wrote_json(r.get("out")):
                 st.pop("launch_hold"); log(event="launch_ok", name=r["name"])
                 post("Claude Code starts agents again; the posts that waited are being handled.", ["person"])
@@ -530,19 +625,17 @@ def running(st=None):
                 log(event="limited", name=r["name"], session=hit[1] or r["session"],
                     resets=dt.datetime.fromtimestamp(hit[0], dt.timezone.utc).isoformat(timespec="seconds"))
                 if fresh:  # one post per episode, not one per stopped agent
-                    post(f"Usage limit hit ({r['name']} first); holding new starts until "
-                         f"{dt.datetime.fromtimestamp(limits[login], dt.timezone.utc):%H:%M} UTC on {login}, then resuming "
-                         "every limit-stopped run (see ~/log.jsonl event=limited). Other logins with room carry on.", ["person"])
+                    more = len(cfg().get("logins", [])) > 1
+                    post(f"Usage limit reached (`{r['name']}` first). Agents{f' on account {account_name(login)}' if more else ''} wait and carry on by themselves at "
+                         f"{dt.datetime.fromtimestamp(limits[login]).astimezone():%H:%M %Z}.{' Other accounts with room keep working.' if more else ''}", ["person"])
             elif st is not None and r.get("login") in {str(Path(l).expanduser()) for l in cfg().get("logins", [])} \
                     and (sid := auth_hit(r.get("out"))) is not None:  # same treatment as a limit, or the run just vanishes
                 login, limits = r["login"], st.setdefault("limits", {})
-                fresh, until = time.time() >= limits.get(login, 0), time.time() + AUTH_HOLD_S
+                until = time.time() + AUTH_HOLD_S
                 limits[login] = max(limits.get(login, 0), until)
-                st.setdefault("resume", {})[r["name"]] = {**r, "session": sid or r["session"], "reset": until}
+                st.setdefault("resume", {})[r["name"]] = {**r, "session": sid or r["session"], "reset": until, "why": "login"}
                 log(event="login_rejected", name=r["name"], login=login)
-                if fresh:
-                    post(f"Login {Path(login).name} rejected its credentials (expired or signed out) when `{r['name']}` ran. Its runs move to a login "
-                         "with room and it gets no new ones; it's tried again in an hour. It needs signing in again on this machine.", ["person"])
+                st.setdefault("auth_told", {}).setdefault(login, {"since": time.time(), "creds": creds_stamp(login), "told": False})  # auth_watch says it, once, with the count
             elif st is not None and "shells" not in st.get("resume", {}).get(r["name"], {}) and (lost := lost_subagents(r.get("out"))) and st.setdefault("lost_resumes", {}).get(f"{r['name']}:{r.get('post')}", 0) < 2:
                 # it may have been waiting on them, and nothing will ever report. Twice at most, so an agent that keeps doing it can't loop.
                 key = f"{r['name']}:{r.get('post')}"; st["lost_resumes"][key] = st["lost_resumes"].get(key, 0) + 1
@@ -564,8 +657,54 @@ def running(st=None):
                 mark_done(r["name"], "its session could not be resumed")
                 st["pending"][r["name"]] = [{**p, "no_revive": True} for p in r["slept"]] + st["pending"].get(r["name"], [])
                 log(event="wake_failed", name=r["name"], session=r["session"])
+            elif st is not None and r.get("resumed") and no_session(r.get("out")):  # its session is gone: an heir reads the thread
+                mark_done(r["name"], "its session could not be resumed")
+                st["pending"][r["name"]] = [{"id": r["post"], "thread": r.get("thread"), "from": r.get("from"), "no_revive": True}] + st["pending"].get(r["name"], [])
+                log(event="wake_failed", name=r["name"], session=r["session"])
+            elif st is not None and died and carries_on(r) and r["name"] not in st.get("resume", {}):
+                if by_hand and died != "stalled": stopped.append(r["name"]); log(event="stopped_by_hand", name=r["name"], session=r["session"])
+                else: carry_on(st, r, died, told)
         else: alive[r["name"]] = r
+    for why, names in told.items():  # one post per stop, not one per agent
+        post(f"{', '.join(f'`{n}`' for n in names)} stopped ({WHY_WORDS[why]}) and will carry on by themselves.", [])
+    if stopped:
+        post(f"{', '.join(f'`{n}`' for n in stopped)} ended when the Hive was stopped by hand, so they stay stopped. A message to one starts it again.", [])
     return alive
+
+def account_name(login):
+    """A login by the name the person gave it in the config, else its folder."""
+    names = {str(Path(k).expanduser()): v for k, v in (cfg().get("login_names") or {}).items()}
+    return names.get(str(login)) or Path(login).name.removeprefix(".claude-").lstrip(".")
+
+def creds_stamp(login):
+    """When a login's credentials last changed, so signing in again is seen at once. None with no file (a Mac keeps them in the keychain)."""
+    try: return (Path(login) / ".credentials.json").stat().st_mtime
+    except OSError: return None
+
+def auth_back(st, login):
+    """A rejected login works again: lift its hold, and the runs that waited on it carry on now."""
+    a = st.get("auth_told", {}).pop(login, None)
+    st.get("limits", {}).pop(login, None)
+    back = [r for r in st.get("resume", {}).values() if r.get("why") == "login" and r.get("login") == login]
+    for r in back: r["reset"] = 0
+    log(event="login_back", login=login, agents=[r["name"] for r in back])
+    if a and a.get("told"):
+        post(f"Signed in again. {f'{len(back)} agents carry on.' if len(back) > 1 else '1 agent carries on.'}" if back else "Signed in again.", [])
+
+def auth_watch(c, st):
+    """The person's view of a rejected login: one plain post a few seconds after the first rejection, so its count takes in every agent
+    stopped by it; and the moment its credentials change (signed in again), everything waiting on it goes, not at the next hourly try."""
+    for login, a in list(st.get("auth_told", {}).items()):
+        if creds_stamp(login) != a.get("creds"):
+            auth_back(st, login); continue
+        if a.get("told") or time.time() - a.get("since", 0) < c.get("auth_tell_s", 15): continue
+        a["told"] = True
+        logins = [str(Path(l).expanduser()) for l in c.get("logins", [])]
+        if any(l != login and time.time() >= st.get("limits", {}).get(l, 0) for l in logins):
+            post(f"Sign in again to Claude: account {account_name(login)} has expired. Its agents moved to your other account. Settings > Accounts.", ["person"])
+        else:
+            n = sum(r.get("login") == login for r in st.get("resume", {}).values()) + len(st.get("pending", {}))
+            post(f"Sign in again to Claude: {n} agent{' is' if n == 1 else 's are'} waiting. Settings > Accounts.", ["person"])
 
 def drop_killed(st):
     """The person killed a run from the dashboard: ~/.hive/killed/<name>.json holds its pid, written before the signal.
@@ -953,7 +1092,13 @@ def wake(c, st, n, posts, to, room):
     start(c, new, posts, to, heir_of={"name": n, "why": why, "out": run.get("out")})
     return new
 
-def start(c, name, posts, login, resume=None, reaped=None, extra=(), moved=False, lost=False, woken=None, all_since=None, slept=None, heir_of=None):
+RESUME_WHY = {"login": "Your run stopped because its Claude login had expired or was signed out. It works again now.",
+              "restart": "Your run stopped because the machine restarted. Jobs you had running may have stopped too.",
+              "connection": "Your run stopped because the connection to Claude was lost. It may be back now.",
+              "stalled": "Your run went silent mid-turn with nothing running, so the starter ended it and resumed it.",
+              "other": "Your run ended before it finished, and the starter resumed it."}
+
+def start(c, name, posts, login, resume=None, reaped=None, extra=(), moved=False, lost=False, woken=None, all_since=None, slept=None, heir_of=None, why=None):
     hook_inbox(c)  # a login can be added to config.json while the starter runs
     wire_deny(c)
     sid = resume or str(uuid.uuid4())  # the claude session id, so `claude --resume <session>` works
@@ -1004,7 +1149,7 @@ def start(c, name, posts, login, resume=None, reaped=None, extra=(), moved=False
                   "for anything new first. If you were done, just stop."
                   + (f" Posts for you that came in meanwhile: {', '.join(extra)} (`hive read` them)." if extra else ""))
     elif resume:
-        prompt = ("Your run stopped on a usage limit and the limit has now reset. Continue where you left off "
+        prompt = (RESUME_WHY.get(why, "Your run stopped on a usage limit and the limit has now reset.") + " Continue where you left off "
                   f"(check `hive read --thread {first.get('thread', first['id'])}` for anything new first).")
     fb = next((p["fallback"] for p in posts if p.get("fallback")), None)
     if fb: prompt += "\n\n" + FALLBACK_NOTE[fb].format(model=model, tier=tier_of(model))
@@ -1037,7 +1182,7 @@ def start(c, name, posts, login, resume=None, reaped=None, extra=(), moved=False
     children[name] = proc
     if not resume and not sb: (STATE / "delivered" / name).unlink(missing_ok=True)  # the inbox hook starts fresh with this run; a resumed one keeps its list so an @all isn't handed over twice
     rec = {"name": name, "pid": proc.pid, "session": sid, "at": now(), "post": first["id"], "login": login,
-           "thread": first.get("thread"), "from": first.get("from"), "out": str(path), **({"resumed": True} if resume else {}), **({"woke": list(extra)} if extra else {}), **({"slept": posts} if slept else {}), **({"heir_of": heir_of["name"]} if heir_of else {}), **({"all_since": all_since} if all_since else {}), **({"model": model} if model else {}), **({"fallback": fb} if fb else {}),
+           "thread": first.get("thread"), "from": first.get("from"), "out": str(path), "proc": proc_start(proc.pid), "boot": boot_id(), **({"resumed": True} if resume else {}), **({"woke": list(extra)} if extra else {}), **({"slept": posts} if slept else {}), **({"heir_of": heir_of["name"]} if heir_of else {}), **({"all_since": all_since} if all_since else {}), **({"model": model} if model else {}), **({"fallback": fb} if fb else {}),
            "harness": prov[1].get("harness", "claude-code") if prov else "claude-code", **({"provider": prov[0]} if prov else {}), **({"effort": env["CLAUDE_EFFORT"]} if env.get("CLAUDE_EFFORT") else {})}
     (RUN / f"{name}.json").write_text(json.dumps(rec))
     log(event="start", **rec)
@@ -1218,6 +1363,13 @@ def fallback(c, st, n, posts, claude_ok, cache):
     log(event="fallback", name=n, model=model, why="free" if free else "claude limits")
     return True
 
+def load_stamp():
+    """Whether the last starter was told to stop in this boot. Read once: a machine restart has another boot id, so its runs carry on."""
+    f = STATE / "stopped"
+    try: was = f.read_text(); f.unlink()
+    except OSError: return False
+    return was == boot_id()
+
 def main():
     for d in (RUN, STATE, HOME / "sessions"): d.mkdir(exist_ok=True)
     # One starter per home: two would both read the board and start every agent twice. A second one waits here and takes over
@@ -1228,6 +1380,12 @@ def main():
     except OSError:
         print("another starter runs in this home; waiting for it to end", flush=True); fcntl.flock(lock, fcntl.LOCK_EX)
     lock.write(str(os.getpid())); lock.flush()
+    def stop_stamp(*_):  # told to stop (`systemctl stop`, the guide's Stop everything): runs found dead at the next start, in this boot, were stopped on purpose
+        try: (STATE / "stopped").write_text(boot_id())
+        except OSError: pass
+        signal.signal(signal.SIGTERM, signal.SIG_DFL); os.kill(os.getpid(), signal.SIGTERM)
+    by_hand = load_stamp()
+    signal.signal(signal.SIGTERM, stop_stamp)
     hook_inbox(cfg())
     wire_deny(cfg())
     st = load("starter.json", {"offset": 0, "pending": {}})
@@ -1291,8 +1449,10 @@ def main():
                     if (om := c.get("only_model")) in MODELS:  # a test hive (rsi-loop bench/replay): every run on this model, whatever the post asked
                         q["model"] = om; q.pop("free", None); st.setdefault("chosen", {})[n] = {"model": om}
                     st["pending"].setdefault(n, []).append(q)
-        alive = running(st)
+        alive = running(st, by_hand)
+        by_hand = False
         drop_killed(st)
+        auth_watch(c, st)
         apply_model_sets(st, c)
         for th, text in slow_replies(recent_posts(), st, alive):   # straight into the thread: post() would move it to the starter thread
             with BOARD.open("a") as f:
@@ -1323,6 +1483,7 @@ def main():
                 if time.time() < r["reset"] or provider_hold(c, st, n, pv, pcache, r.get("thread")): continue
                 to = own
             elif own in room and time.time() >= r["reset"] and pick_login(c, {own: room[own]}, limits): to = own  # its login has room again
+            elif r.get("wait") and time.time() < r["reset"]: continue  # stopped on something other than its login: moving wouldn't help
             elif own != login and move_session(r["session"], own, login):  # or it moves to one that does
                 to = login; log(event="moved", name=n, session=r["session"], src=own, dst=to)
             else: continue
@@ -1332,7 +1493,7 @@ def main():
             model = r.get("model") if pv else next((p["model"] for p in waiting if p.get("model") in MODELS), r.get("model"))
             start(c, n, [{"id": r["post"], "thread": r.get("thread"), "from": r.get("from"), "model": model}], to,
                   resume=r["session"], reaped=r.get("reaped"), extra=[p["id"] for p in waiting], moved=r.get("move", False), lost=r.get("lost", False),
-                  woken={"shells": r["shells"], "posts": waiting} if "shells" in r else None, all_since=r.get("all_since") or r.get("at"))
+                  woken={"shells": r["shells"], "posts": waiting} if "shells" in r else None, all_since=r.get("all_since") or r.get("at"), why=r.get("why"))
             alive[n] = {"name": n, "thread": r.get("thread")}  # a dict, so keeper() sees a resumed keeper (two rounds at once, 2026-11-02)
         for n in ([] if hold else list(st["pending"])):
             if n in alive or n in st.get("resume", {}): continue
