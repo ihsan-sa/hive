@@ -1882,6 +1882,7 @@ def thread_target(thread):
 
 
 STEP_WORD = re.compile(r"(approve|deny) step [0-9a-f]{6}-[0-9a-f]{8}", re.I)
+PAIR_ACCEPTED = HOME / ".local/state/conn/pair-accepted.jsonl"  # what this dashboard took as a pairing: connectors refuse a post marked web-pair that isn't here
 PAIR_WORD = re.compile(r"(?:conn )?pair [a-z0-9-]+ [A-Za-z0-9]{4,16}", re.I)  # approves a connector's pairing: bare too, and marked as typed here, the only place one counts
 
 
@@ -2010,6 +2011,9 @@ def person_post(text, thread=None, reply_to=None, uploads=(), signer=None, limit
         who = who or (thread_agent(thread) if thread else None)
         text = f"@{who or 'new'} {text}"
         routed = bool(who)  # we picked the name, so a dead agent's heir may take it; only a typed name brings a dead agent back
+    if pairing:  # before the post, so a connector reading the board always finds it
+        PAIR_ACCEPTED.parent.mkdir(parents=True, exist_ok=True)
+        with PAIR_ACCEPTED.open("a") as f: f.write(json.dumps({"at": time.time(), "text": text}) + "\n")
     cmd = [str(HIVE_BIN), "post", "--as", PERSON] + (["--thread", str(thread)] if thread else []) + (["--to", who] if who else []) + (["--routed"] if routed else []) + (["--reply-to", reply_to] if reply_to else []) + (["--model", PICK_MODELS[model]] if model else [])
     for p in paths: cmd += ["--file", str(p)]
     r = subprocess.run(cmd, input=text, text=True, capture_output=True, env={**child_env(), **({"HIVE_POST_VIA": "limited"} if limited else {}), **({"HIVE_POST_VIA": "web-pair"} if pairing else {})}, cwd=str(HOME), timeout=60)
