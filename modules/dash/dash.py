@@ -2025,12 +2025,14 @@ def voice_ready():
     return isinstance(st, dict) and st.get("ok") is True and isinstance(st.get("at"), (int, float)) and time.time() - st["at"] < 120
 
 
-def person_post(text, thread=None, reply_to=None, uploads=(), signer=None, limited=False, simple=False, model=None):
+def person_post(text, thread=None, reply_to=None, uploads=(), signer=None, limited=False, simple=False, model=None, sig=None):
     """A post as the person. As the Slack mirror does it: a plain message wakes the agent on the thread (thread_agent), a reply wakes the author
     of the post replied to, and no thread (or a thread with no agent yet) starts a new agent. Mentions in the text win.
     signer: who signed in, from a verified Access token, when more than one person can: it heads the text, so an agent and the board can see who wrote it.
+    sig: what the browser signed over the text as typed (core/signed.py checks it, in hive post). A /btw is rewritten, so it goes unsigned, as does a post of only attachments.
     Returns {"id", "thread", "said"}, or raises ValueError with a sentence for the page."""
     text = str(text or "").strip()
+    sig = {**sig, "n": len(text)} if isinstance(sig, dict) and text and not BTW.fullmatch(text) else None
     refs = [UPLOAD_REF.fullmatch(str(u)) for u in uploads or []]
     if not all(refs): raise ValueError("an attachment wasn't recognised")
     paths = [INCOMING / m[1] / m[2] for m in refs]
@@ -2069,7 +2071,7 @@ def person_post(text, thread=None, reply_to=None, uploads=(), signer=None, limit
         with PAIR_ACCEPTED.open("a") as f: f.write(json.dumps({"at": time.time(), "text": text}) + "\n")
     cmd = [str(HIVE_BIN), "post", "--as", PERSON] + (["--thread", str(thread)] if thread else []) + (["--to", who] if who else []) + (["--routed"] if routed else []) + (["--reply-to", reply_to] if reply_to else []) + (["--model", PICK_MODELS[model]] if model else [])
     for p in paths: cmd += ["--file", str(p)]
-    r = subprocess.run(cmd, input=text, text=True, capture_output=True, env={**child_env(), **({"HIVE_POST_VIA": "limited"} if limited else {}), **({"HIVE_POST_VIA": "web-pair"} if pairing else {})}, cwd=str(HOME), timeout=60)
+    r = subprocess.run(cmd, input=text, text=True, capture_output=True, env={**child_env(), **({"HIVE_POST_VIA": "limited"} if limited else {}), **({"HIVE_POST_VIA": "web-pair"} if pairing else {}), **({"HIVE_POST_SIG": json.dumps(sig)} if sig else {})}, cwd=str(HOME), timeout=60)
     if r.returncode: raise ValueError(short(r.stderr, 300) or "the post failed")
     for p in paths: shutil.rmtree(p.parent, ignore_errors=True)
     pid = r.stdout.strip()
@@ -4235,7 +4237,7 @@ def serve(port):
                 except ValueError as e: return self.deny(400, str(e))
             if u.path in ("/api/post", "/api/thread-meta", "/api/shown", "/api/feedback", "/api/feedback-draft-done", "/api/issue-link", "/api/update", "/api/inbox-read", "/api/ntfy", "/api/webpush", "/api/agent-model", "/api/config", "/api/starter", "/api/module", "/api/signin", "/api/signin/code", "/api/signin/cancel", "/api/access", "/api/plan", "/api/secret", "/api/settings", "/api/share-copy", "/api/draft", "/api/signin-codex", "/api/account-key", "/api/design", "/api/brand"):
                 try:
-                    if u.path == "/api/post": res = person_post(d.get("text"), d.get("thread"), d.get("reply_to"), d.get("files"), signer=self.signer, limited="config" not in self.can, simple=d.get("simple") is True, model=d.get("model"))
+                    if u.path == "/api/post": res = person_post(d.get("text"), d.get("thread"), d.get("reply_to"), d.get("files"), signer=self.signer, limited="config" not in self.can, simple=d.get("simple") is True, model=d.get("model"), sig=d.get("sig"))
                     elif u.path == "/api/thread-meta": res = set_thread_meta(d)
                     elif u.path == "/api/shown": res = dismiss_shown(d)
                     elif u.path == "/api/feedback": res = send_feedback(d)

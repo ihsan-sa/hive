@@ -178,21 +178,15 @@ def stays_on(st, c, n, q):
     elif FREE_AGENT.fullmatch(n): q["free"] = True
     elif CODEX_AGENT.fullmatch(n): q["model"] = c.get("codex_model") or CODEX_DEFAULT
 
-FREE_SPAWN_S = 600
 
-def free_spawns(st, p, called):
+def free_spawns(p, called):
     """Which fresh-agent words in a free agent's post count. It may hand work it can't do to a stronger agent (the person,
-    2026-11-02), but only on purpose and not often: `--to new` (or claude, codex) with the word not in its text, at most
-    one per FREE_SPAWN_S. A word in its prose starts nothing: on 11-01 free agents writing them while refusing a request
-    queued about ten Claude runs. It can't start more free agents. Returns (allowed, ignored)."""
-    src, said = str(p["from"]).lower(), mentions({"text": p.get("text")})
+    2026-11-02), but only on purpose: `--to new` (or claude, codex) with the word not in its text. A word in its prose starts
+    nothing: on 11-01 free agents writing them while refusing a request queued about ten Claude runs. It can't start more
+    free agents. No rate limit (the person, 2026-11-05): login stop lines bound the usage. Returns (allowed, ignored)."""
+    said = mentions({"text": p.get("text")})
     words = [n for n in called if n in SPAWN]
     ok = [n for n in words if n != "free" and n not in said][:1]
-    last = st.setdefault("free_spawn_at", {}).get(src, 0)
-    if ok and time.time() - last < FREE_SPAWN_S:
-        post(f"`{src}` asked for a new agent, but a free agent may start one per {FREE_SPAWN_S // 60} min, so nothing started. Post it again later.", [], p.get("thread"))
-        ok = []
-    if ok: st["free_spawn_at"][src] = time.time()
     return ok, [n for n in words if n not in ok]
 
 _impls = {}
@@ -1420,7 +1414,7 @@ def main():
                     log(event="stop_dropped", names=gone, post=p.get("id"), thread=p.get("thread"))
                 src_free = is_free_now(st, str(p.get("from", "")).lower())
                 if src_free and any(n in SPAWN for n in called):
-                    _, skip = free_spawns(st, p, called)
+                    _, skip = free_spawns(p, called)
                     if skip: log(event="free_spawn_ignored", names=skip, post=p.get("id"), src=p.get("from"))
                     called = [n for n in called if n not in skip]
                 for n in unknown:
