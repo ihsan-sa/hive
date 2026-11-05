@@ -21,6 +21,7 @@ import { message, messageHead, messageReceipt, localMessage, markWords, pollDeli
 import { asidePanel, asideOpen, closeAside } from "../ui/aside.js";
 import { downloadMarkdown, printScript } from "../ui/export.js";
 import { pinned, archived, setMeta, renameDialog, openCard, markSeen } from "../ui/threadmeta.js";
+import { callFor } from "../ui/phone.js";
 import { composer, cancelReply, replyTo, say, outFor, outSig, actions as outActions, dropZone, recipient, draft, focusComposer } from "../ui/composer.js";
 
 const STEP = 500, FIRST = 250, NEAR = 60, GROUP = 10 * MIN, HELPER_AFTER = 3 * MIN;
@@ -98,8 +99,8 @@ function threadEvents(th) {
   if (!app()) return out;
   for (const s of S.sessions) {
     if (s.thread !== th || !s.end) continue;
-    if (S.limitedSess.has(s.session)) out.push({ ev: true, key: "ev:" + s.session, t: s.end, tone: "limited", text: simpleOn() ? "Your Hive took a break" : `${s.name} stopped at a usage limit`, sub: "It carries on by itself once there's room." });
-    else if (s.exit && s.exit !== 143) out.push({ ev: true, key: "ev:" + s.session, t: s.end, tone: "failed", text: simpleOn() ? "Your Hive ran into a problem" : `${s.name} stopped with an error (exit ${s.exit})`, sub: simpleOn() ? "Send a message and it tries again." : "Its last message above is where it got to." });
+    if (s.limited) out.push({ ev: true, key: "ev:" + s.session + ":" + s.start, t: s.end, tone: "limited", text: simpleOn() ? "Your Hive took a break" : `${s.name} stopped at a usage limit`, sub: "It carries on by itself once there's room." });
+    else if (s.exit && s.exit !== 143) out.push({ ev: true, key: "ev:" + s.session + ":" + s.start, t: s.end, tone: "failed", text: simpleOn() ? "Your Hive ran into a problem" : `${s.name} stopped with an error (exit ${s.exit})`, sub: simpleOn() ? "Send a message and it tries again." : "Its last message above is where it got to." });
   }
   return out;
 }
@@ -169,7 +170,8 @@ function setJump() {
   L.jump.textContent = L.unseen ? `${plural(L.unseen, "new message")} ↓` : "";
 }
 function flash(box, el) {
-  box.scrollTop = Math.max(0, el.offsetTop - box.clientHeight / 3);
+  // a short message sits a third down; a tall one starts near the top so it reads from its first line
+  box.scrollTop = Math.max(0, el.offsetTop - (el.offsetHeight > box.clientHeight * 0.6 ? 24 : box.clientHeight / 3));
   L.stuck = atEnd(box);
   el.setAttribute("data-flash", ""); setTimeout(() => el.removeAttribute("data-flash"), 1800);
 }
@@ -383,6 +385,8 @@ const notBuilt = () => h("span", { class: "nb", title: "Designed, not built yet:
 
 function strip(th) {
   const st = threadState(th, seen), out = [], run = (S.live ? S.live.agents : []).filter(a => a.thread === th), post = can("post") && app();
+  const call = callFor(th);
+  if (call) out.push(line("working", [who(call.agent), call.state === "hold" ? " is putting you through on your call" : " is on a call with you", h("span", { class: "meta cm-line-m" }, " · " + dur(now() - call.started * 1e3))], null, { key: "call", live: true }));
   if (st.key === "asks") out.push(line("asks", [who(st.who), " is waiting for your answer: ", h("q", null, short(lastQuestion(st.post), 110))],
     post ? button("Answer", () => replyTo(st.post), { size: "s" }) : null, { key: "asks" }));
   if (st.key === "limited") {
@@ -411,7 +415,7 @@ function strip(th) {
   const more = out.length - 2, open = !!C.strip;
   return h("div", { class: "cm-strip", "data-key": "strip", "data-open": open ? "" : null, role: "status", "aria-live": "polite" }, out,
     more > 0 && !open ? h("span", { class: "meta num cm-strip-n", "data-key": "n" }, "+" + more) : null,
-    out.length > 1 || out.some(x => x.querySelector(".cm-line-a")) ? stripToggle(open) : null);
+    out.length > 1 || out.some(x => x.querySelector(".cm-line-a") || /^run:/.test(x.dataset.key)) ? stripToggle(open) : null);
 }
 function stripToggle(open) {
   const b = button(open ? "Show less" : "Show all", () => { C.strip = !open; L.ctx && L.ctx.update(); }, { kind: "icon", size: "s", icon: open ? "chevron-down" : "chevron-up", cls: "cm-strip-t", title: open ? "Show less" : "Show everyone and what you can do" });
@@ -474,6 +478,7 @@ function head(c, ctx) {
       h("button", { type: "button", class: "btn", "data-kind": "icon", "aria-label": "Search here", title: "Search here", "aria-pressed": String(find),
         onclick: () => { C.find = !find; if (!C.find) C.q = ""; ctx.update(); if (C.find) queueMicrotask(() => document.querySelector(".cm-find")?.focus()); } }, icon("search")),
       off > 0 && !simpleOn() ? button(`Show ${off} hidden`, () => setShow(SHOW.ALL, ctx), { size: "s", kind: "quiet", cls: "cm-hid", title: "Turn on For you, Updates and Agent comms" }) : null,
+      c.thread ? button("Files", () => import("../ui/preview.js").then(m => m.openFiles()), { kind: "icon", icon: "folder", cls: "cm-files", title: "Files: this conversation's and the projects'" }) : null,
       c.thread ? asideBtn(c.thread, ctx) : null,
       c.thread && app() && !simpleOn() ? menuBtn("more", "More", "more", ctx) : null),
     C.menu === "title" ? titleMenu(c, n, d) : null,

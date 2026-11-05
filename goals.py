@@ -17,7 +17,8 @@ FOCUS = re.compile(r"^\s*(\d+)\.\s+\*\*(.+?)\*\*\s*\((?:thread\s+)?`([^`]+)`", r
 MEASURE = re.compile(r"^.*\b(measure|metric|score|yardstick|benchmark|pass rate|p&l|sharpe)\b.*$", re.I | re.M)   # the same words progress.py counts as a measure
 THREAD = re.compile(r"\bthreads?\s+`?([0-9a-f]{12}|[a-z][a-z0-9-]{2,})`?", re.I)
 NOT_AGENTS = {"person", "hives", "box", "starter", "watchdog", "progress", "asks", "keeper-timer"}
-IDLE_D = 2.0   # a goal with no agent post in its thread for this long and nobody running in it is idle
+IDLE_D = 2.0   # a project goal with no agent post in its thread for this long and nobody running in it is idle
+FOCUS_IDLE_H = 2.0   # a focus of the person's goes idle much sooner: it is their current work, and a focus is never held for an idle owner (2026-11-05, post 1104224972e6)
 
 def now(): return dt.datetime.now(dt.timezone.utc)
 
@@ -90,7 +91,7 @@ def goals(t=None):
     for g in projects:  # a focus's measure comes from the project of the same name, else from one whose goals.md names its thread
         for th in g["threads"]: pmeasure.setdefault(th, g["measure"])
     for f in focuses(pri):
-        s = st.get(f["thread"], {}); rows.append({"kind": "focus", "name": f"{f['n']}. {f['title']}", "thread": f["thread"], "measure": pmeasure.get(f["thread"]), **state_row(s, f["thread"], open_asks, t)})
+        s = st.get(f["thread"], {}); rows.append({"kind": "focus", "name": f"{f['n']}. {f['title']}", "thread": f["thread"], "measure": pmeasure.get(f["thread"]), **state_row(s, f["thread"], open_asks, t, idle_d=FOCUS_IDLE_H / 24)})
     for g in projects:
         th = g["project"]; cands = [th] + [k for k in g["threads"] if k != th] + [k for k in st if k != th and k not in g["threads"] and (k.startswith(th + "-") or k.startswith(th + "_"))]
         best = max(cands, key=lambda k: st.get(k, {}).get("agent_at", ""))
@@ -101,14 +102,25 @@ def goals(t=None):
     return {"at": t.isoformat(timespec="seconds"), "rows": rows, "directions": len(directions), "open_asks": len(open_asks), "loose_asks": len(loose),
             "loose_threads": sorted({e.get("thread") for e in loose}, key=lambda x: str(x))}
 
-def state_row(s, threads, open_asks, t):
+def state_row(s, threads, open_asks, t, idle_d=IDLE_D):
     threads = [threads] if isinstance(threads, str) else list(threads)
     mine = [e for e in open_asks if e.get("thread") in threads]
-    idle_d = days(s.get("agent_at"), t)
+    limit, idle_d = idle_d, days(s.get("agent_at"), t)
     running = sorted(s.get("running", set()))
-    idle = not running and (idle_d is None or idle_d >= IDLE_D)
+    idle = not running and (idle_d is None or idle_d >= limit)
     return {"threads": threads, "last_agent": s.get("agent"), "last_agent_d": idle_d, "person_d": days(s.get("person_at"), t), "running": running,
             "open_asks": len(mine), "owned_asks": sum(1 for e in mine if e.get("status") == "owned"), "idle": idle}
+
+def focus_quiet(t=None, hours=4.0):
+    """Focuses of the person's with no agent post for `hours` and nobody running: the number progress.py reports as focus_quiet (lower is better)."""
+    t = t or now(); st = thread_state(jsonl(BOARD), live_runs(), t)
+    try: pri = (KB / "priorities.md").read_text(errors="replace")
+    except OSError: return []
+    out = []
+    for f in focuses(pri):
+        s = st.get(f["thread"], {}); d = days(s.get("agent_at"), t)
+        if not s.get("running") and (d is None or d >= hours / 24): out.append(f["thread"])
+    return out
 
 def render(g):
     lines = [f"Goals at {g['at'][:16]}: {g['directions']} standing directions (`hive asks directions`), {g['open_asks']} open asks, {g['loose_asks']} of them in threads no focus or project covers."]
@@ -118,7 +130,7 @@ def render(g):
         name = r["name"] if r["kind"] == "focus" else f"{r['name']}: {r.get('goal', '')[:60]}"
         lines.append(f"| {name} | {r['thread']} | {last}{' **idle**' if r['idle'] else ''} | {', '.join(r['running']) or '-'} | {r['open_asks']} ({r['owned_asks']}) | {(r['measure'] or 'none')[:70]} |")
     idle = [r for r in g["rows"] if r["idle"]]
-    if idle: lines.append(f"\nIdle (no agent post in {IDLE_D:g} days, nobody running): " + ", ".join(r["name"].split(":")[0] for r in idle) + ". Start someone on each, or say in its thread why it waits.")
+    if idle: lines.append(f"\nIdle (nobody running, no agent post in {FOCUS_IDLE_H:g} h for a focus or {IDLE_D:g} days for a project): " + ", ".join(r["name"].split(":")[0] for r in idle) + ". Start someone on each, or say in its thread why it waits. A focus is never left idle because its owner is: start a fresh agent that reads the thread and takes the next step that does not need the person.")
     nomeasure = [r["name"] for r in g["rows"] if r["kind"] == "project" and not r["measure"]]
     if nomeasure: lines.append("Projects whose goals.md names no measure: " + ", ".join(nomeasure))
     if g["loose_threads"]: lines.append(f"Open asks outside every focus and project: {g['loose_asks']} in {len(g['loose_threads'])} threads (`hive asks list`, `hive asks check`); these are the person's one-off asks and agents' leftovers, moved by the keeper, not by a goal.")

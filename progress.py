@@ -67,8 +67,8 @@ def ledger():
         except ValueError: rev = ""
         kind = r.get("kind", "orientation")
         files = r.get("files") or ["orientation.md"]
-        items[i] = {"id": i, "at": at, "by": "rsi-loop", "what": f"{kind}: {r.get('arm')} won the benchmark", "where": ", ".join("core/" + f for f in files),
-                    "measure": "rsi-loop bench passes and cost (results/)", "baseline": r.get("why", ""), "revisit": rev, "status": "landed",
+        items[i] = {"id": i, "at": at, "by": "rsi-loop", "what": f"{kind}: {r.get('arm')} won " + ("the replay gate" if r.get("gate") == "replay" else "the benchmark"), "where": ", ".join("core/" + f for f in files),
+                    "measure": "rsi-loop replay delivered score and cost (results/replay-*)" if r.get("gate") == "replay" else "rsi-loop bench passes and cost (results/)", "baseline": r.get("why", ""), "revisit": rev, "status": "landed",
                     "commit": r.get("landed") or r.get("commit", ""), "thread": "rsi-loop"}
         for r2 in jsonl(LEDGER):  # a judge record for an rsi id
             if r2.get("judge") == i: items[i].update(status=r2["verdict"], judged_at=r2["at"], judged_by=r2.get("by"), judged_why=r2.get("why", ""))
@@ -224,6 +224,13 @@ def projects_unmeasured():
         if not MEASURE.search(txt): bad.append(g.parent.name)
     return bad
 
+def focus_quiet():
+    """From core/goals.py: the person's focuses (priorities.md) with no agent post for 4 h and nobody running. The long-horizon work is what goes quiet first (2026-11-05: 6 of 8 focuses silent 11-20 h while 35 short runs an hour cleared asks)."""
+    try:
+        spec = importlib.util.spec_from_file_location("goals", CORE / "goals.py"); gl = importlib.util.module_from_spec(spec); spec.loader.exec_module(gl)
+        return gl.focus_quiet()
+    except Exception: return None
+
 def events_in(log, t0, t1, ev): return sum(1 for r in log if r.get("event") == ev and t0 <= r.get("at", "") <= t1)
 
 def window(t0, t1, log, posts, items):
@@ -253,10 +260,10 @@ def outcomes_in(t0, t1):
     if not s["outcomes_graded"]: return {"outcomes_graded": 0, "outcome_delivered_pct": None, "outcomes_silent": None, "outcomes_nothing": None}  # no grades, so no count: "0 -> 11, worse" on the grader's first day was a false verdict
     return {k: s[k] for k in ("outcomes_graded", "outcome_delivered_pct", "outcomes_silent", "outcomes_nothing")}
 
-LOWER_IS_BETTER = {"fail_pct", "runs_reaped", "person_noticed_first", "person_reply_p50_s", "person_reply_p90_s", "watchdog_trips", "stalled_threads", "improvements_overdue", "projects_unmeasured", "asks_orphaned", "leftovers_orphaned", "asks_stale", "asks_unowned", "leftovers_unowned", "asks_oldest_open_d", "outcomes_silent", "outcomes_nothing"}
+LOWER_IS_BETTER = {"fail_pct", "runs_reaped", "person_noticed_first", "person_reply_p50_s", "person_reply_p90_s", "watchdog_trips", "stalled_threads", "improvements_overdue", "projects_unmeasured", "asks_orphaned", "leftovers_orphaned", "asks_stale", "asks_unowned", "leftovers_unowned", "asks_oldest_open_d", "outcomes_silent", "outcomes_nothing", "focus_quiet"}
 NEUTRAL = {"runs", "person_replies", "keeper_rounds", "improve_rounds", "core_commits", "rsi_rounds", "reverted", "spend_usd", "asks_open", "leftovers_open", "outcomes_graded"}  # activity and cost: context, not a score (the person: don't ration work for pace)
 HEADLINE = ["runs", "fail_pct", "runs_reaped", "person_noticed_first", "person_reply_p50_s", "person_reply_p90_s", "watchdog_trips", "stalled_threads", "improvements_landed", "improvements_judged", "held", "reverted",
-            "improvements_overdue", "asks_open", "leftovers_open", "asks_orphaned", "leftovers_orphaned", "asks_stale", "asks_unowned", "leftovers_unowned", "asks_done", "asks_oldest_open_d", "outcome_delivered_pct", "outcomes_silent", "outcomes_nothing", "outcomes_graded", "rsi_rounds", "rsi_wins", "keeper_rounds", "improve_rounds", "core_commits", "projects_unmeasured", "spend_usd"]
+            "improvements_overdue", "focus_quiet", "asks_open", "leftovers_open", "asks_orphaned", "leftovers_orphaned", "asks_stale", "asks_unowned", "leftovers_unowned", "asks_done", "asks_oldest_open_d", "outcome_delivered_pct", "outcomes_silent", "outcomes_nothing", "outcomes_graded", "rsi_rounds", "rsi_wins", "keeper_rounds", "improve_rounds", "core_commits", "projects_unmeasured", "spend_usd"]
 
 def scoreboard(since):
     log, posts, items = jsonl(LOG), jsonl(BOARD), ledger()
@@ -267,11 +274,13 @@ def scoreboard(since):
     cur["spend_usd"] = None if cur_cost is None else round(cur_cost, 2)
     prev["spend_usd"] = None if both is None or cur_cost is None else round(both - cur_cost, 2)
     od = overdue(items)
+    fq = focus_quiet()
     cur.update(stalled_threads=stalled_now(), improvements_overdue=len(od), overdue_ids=[e["id"] for e in od],
+               focus_quiet=None if fq is None else len(fq), focus_quiet_threads=fq or [],
                projects_unmeasured=len(projects_unmeasured()), projects_unmeasured_names=projects_unmeasured(), at=iso(t1), since=since, **asks_numbers(iso(t1)))
     snaps = jsonl(SNAPS)
     older = next((s for s in reversed(snaps) if s.get("since") == since and s.get("at", "") < iso(t0)), None)
-    for k in ("stalled_threads", "improvements_overdue", "projects_unmeasured", "asks_open", "leftovers_open", "asks_orphaned", "leftovers_orphaned", "asks_stale", "asks_unowned", "leftovers_unowned", "asks_oldest_open_d"):
+    for k in ("stalled_threads", "improvements_overdue", "focus_quiet", "projects_unmeasured", "asks_open", "leftovers_open", "asks_orphaned", "leftovers_orphaned", "asks_stale", "asks_unowned", "leftovers_unowned", "asks_oldest_open_d"):
         if older and k in older: prev[k] = older[k]
     return cur, prev
 
@@ -322,6 +331,7 @@ def text(cur, prev):
     if cur.get("asks_stale"): lines.append(f"Open asks over 3 days old in busy threads: {cur['asks_stale']} (`hive asks check`, stale section)")
     if cur.get("asks_unowned") or cur.get("leftovers_unowned"): lines.append(f"Open asks with no owner for over 6 h in busy threads: {cur.get('asks_unowned', 0)} of the person, {cur.get('leftovers_unowned', 0)} left by agents (`hive asks check`, unowned section)")
     if cur.get("outcomes_silent") or cur.get("outcomes_nothing"): lines.append(f"Runs that were asked something and delivered nothing: {cur.get('outcomes_nothing', 0)} posted but did not deliver, {cur.get('outcomes_silent', 0)} silent though named (`hive outcomes list --grade nothing`)")
+    if cur.get("focus_quiet"): lines.append(f"Focuses of the person with nobody on them for over 4 h: {cur['focus_quiet']} ({', '.join(cur.get('focus_quiet_threads', []))}; `hive goals --idle`, start a fresh agent on each)")
     if cur.get("projects_unmeasured_names"): lines.append(f"Projects whose goals.md names no measure: {', '.join(cur['projects_unmeasured_names'])}")
     w = worst(cur, prev)
     if w: lines.append("Got worse, worst first: " + ", ".join(f"{k} {b}->{a}" for _, k, b, a in w[:4]))

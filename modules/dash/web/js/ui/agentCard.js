@@ -9,6 +9,7 @@ import { status } from "../core/status.js";
 import { killButton } from "../actions.js";
 import { statusDot } from "./kit.js";
 import { agentRef, threadRef } from "./refs.js";
+import { onCallWith } from "./phone.js";
 
 export function agentCard(a, { open, onToggle } = {}) {
   const st = agentState(a), S_ = status(st.key), task = S.byId[a.post], pend = S.pending[a.name];
@@ -18,6 +19,7 @@ export function agentCard(a, { open, onToggle } = {}) {
     h("header", { class: "ac-h" },
       agentRef(a.name, { copy: true }),
       threadRef(a.thread),
+      onCallWith(a.name) ? h("span", { class: "ac-call", title: "Talking with you on a voice call now" }, h("span", { class: "ac-call-i", "aria-hidden": "true" }, "\u260E"), "On a call") : null,
       h("span", { class: "ac-st", title: S_.hint }, st.text)),
     h("p", { class: "ac-now clamp-2" }, a.doing || "Starting"),
     h("dl", { class: "ac-dl" },

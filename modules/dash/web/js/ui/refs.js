@@ -18,7 +18,7 @@ export function openRef(e, kind, name) {
 export function agentRef(n, { copy, state, href, dot = true } = {}) {
   if (!n) return "?";
   const s = agentStatus(n), agent = isAgent(n), warden = isWarden(n);
-  const a = h("a", { class: "ref", "data-kind": "agent", href: href || (agent ? agentHref(n) : threadHref("@" + n)), title: `${n}${warden ? ", a warden" : ""}${s.label ? `: ${s.label}` : ""}`, onclick: !href && agent ? e => openRef(e, "agent", n) : null },
+  const a = h("a", { class: "ref", "data-kind": "agent", "data-name": n, href: href || (agent ? agentHref(n) : threadHref("@" + n)), title: `${n}${warden ? ", a warden" : ""}${s.label ? `: ${s.label}` : ""}`, onclick: !href && agent ? e => openRef(e, "agent", n) : null },
     dot ? statusDot(s.key, { live: isRunning(n) }) : null, h("span", { class: "ref-n" }, n), warden ? wardenMark() : null,
     state && s.label && s.key !== "none" ? h("span", { class: "sl", "data-tone": null, style: "font-weight:400" }, status(s.key).label) : null);
   if (!copy || !agent) return a;
@@ -41,7 +41,7 @@ export function copyButton(text) {
 /** agentAvatar(name) — a round mark with the name's first two characters and a status dot; a link to the agent. For stacks (.avs). */
 export function agentAvatar(n, { size } = {}) {
   const s = agentStatus(n), agent = isAgent(n), label = `${n}${s.label ? ", " + status(s.key).label.toLowerCase() : ""}`;
-  return h("a", { class: "av", "data-hue": hue(n), "data-size": size || null, href: agent ? agentHref(n) : threadHref("@" + n), title: label, "aria-label": label, onclick: agent ? e => openRef(e, "agent", n) : null },
+  return h("a", { class: "av", "data-name": n, "data-hue": hue(n), "data-size": size || null, href: agent ? agentHref(n) : threadHref("@" + n), title: label, "aria-label": label, onclick: agent ? e => openRef(e, "agent", n) : null },
     h("span", null, mono(n)), s.key !== "none" ? statusDot(s.key, { live: isRunning(n) }) : null);
 }
 // An agent's two marks: a8779 → 87 (every agent starts with a letter), other names their first two letters. The hue comes from the name, so one agent keeps one colour.

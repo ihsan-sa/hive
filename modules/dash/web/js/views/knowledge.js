@@ -7,8 +7,10 @@ import { ago, plural, stamp } from "../core/format.js";
 import { href, threadHref } from "../core/router.js";
 import { threadTitle } from "../core/model.js";
 import { button, empty, field, input, list } from "../ui/kit.js";
+import { icon } from "../ui/icons.js";
 import { markdown } from "../ui/markdown.js";
 import { markWords } from "../ui/message.js";
+import { kbChat } from "./kbchat.js";
 
 const K = { map: null, mapAt: 0, topics: new Set(), home: null, seen: new Map(), failed: new Map(), q: "", res: null, timer: 0, worktrees: false, limit: 300, source: false, edit: null, shown: null, memo: {}, mentions: { key: "", v: [] } };
 const open = (path, line) => href("knowledge", line ? `${path}::${line}` : path);
@@ -241,7 +243,7 @@ function searchRows() {
 function folderRows(dir, cur, ctx) {
   const all = dir.entries || [], tree = K.worktrees ? all : all.filter(e => !e.worktree), hidden = all.length - all.filter(e => !e.worktree).length;
   return [
-    list(tree.map(e => ({ key: e.path, href: open(e.path), current: cur === e.path, title: e.name + (e.dir ? "/" : ""), text: e.title || (e.worktree ? "worktree" : ""), meta: e.dir ? ago(e.t * 1e3).replace(" ago", "") : bytes(e.size) })),
+    list(tree.map(e => ({ key: e.path, href: open(e.path), current: cur === e.path, lead: icon(e.dir ? "folder" : "file"), title: e.name + (e.dir ? "/" : ""), text: e.title || (e.worktree ? "worktree" : ""), meta: e.dir ? ago(e.t * 1e3).replace(" ago", "") : bytes(e.size) })),
       { empty: "Nothing to show here.", dense: true, limit: K.limit, onMore: () => { K.limit += 500; ctx.update(); } }),
     hidden ? button(K.worktrees ? "Hide worktrees" : `Show ${plural(hidden, "worktree")}`, () => { K.worktrees = !K.worktrees; ctx.update(); }, { kind: "quiet", size: "s", cls: "kb-more" }) : null,
     dir.more ? h("p", { class: "kb-sub", "data-key": "cut" }, `Showing the first ${all.length}.`) : null,
@@ -250,7 +252,7 @@ function folderRows(dir, cur, ctx) {
 const age = t => ago(t * 1e3).replace(" ago", "");
 function recentRows() {
   const rows = getPref(RECENT, []);
-  return rows.length ? list(rows.map(r => ({ key: "o:" + r.path, href: open(r.path), title: r.title, text: parent(r.path), meta: ago(r.at).replace(" ago", "") })), { dense: true }) : null;
+  return rows.length ? list(rows.map(r => ({ key: "o:" + r.path, href: open(r.path), lead: icon("file"), title: r.title, text: parent(r.path), meta: ago(r.at).replace(" ago", "") })), { dense: true }) : null;
 }
 const TOPIC = { general: "Other notes", history: "History of the Hives", _dropped: "Dropped" };
 const topicName = (t, folder) => TOPIC[t] || (folder ? t + "/" : t.replace(/-+$/, "") + " notes");
@@ -266,10 +268,10 @@ function mapView(ctx) {
     ns.sort((a, b) => b.t - a.t);
     const all = K.topics.has(t), shown = all ? ns : ns.slice(0, 6), folder = ns[0].path.split("/").length > 2;
     return h("section", { class: "kb-topic", "data-key": "t:" + t },
-      h("header", { class: "kb-topic-h" }, folder ? h("a", { href: open("kb/" + t) }, topicName(t, true)) : h("span", null, topicName(t)), h("span", { class: "meta" }, `${plural(ns.length, "note")} · latest ${age(ns[0].t)} ago`)),
+      h("header", { class: "kb-topic-h" }, folder ? h("a", { href: open("kb/" + t) }, topicName(t, true)) : h("span", null, topicName(t)), h("span", { class: "meta" }, `${ns.length} · ${age(ns[0].t)}`)),
       h("ul", { class: "kb-notes" }, shown.map(n => {
         const days = (now - n.t) / 86400, fresh = days < 2 ? 3 : days < 7 ? 2 : days < 30 ? 1 : 0;
-        return h("li", { "data-key": n.path }, h("a", { class: "kb-nr", href: open(n.path), title: `~/${n.path} · ${bytes(n.size)} · changed ${age(n.t)} ago` + (n.back.length ? ` · linked from ${n.back.length}` : "") },
+        return h("li", { "data-key": n.path }, h("a", { class: "kb-nr", "data-fresh": days < 2 ? "" : null, href: open(n.path), title: `~/${n.path} · ${bytes(n.size)} · changed ${age(n.t)} ago` + (n.back.length ? ` · linked from ${n.back.length}` : "") },
           h("span", { class: "kb-nr-t" }, n.title || n.path.split("/").pop()),
           h("span", { class: "meta" }, age(n.t))));
       })),
@@ -289,7 +291,7 @@ function sourcesView() {
 // The home page below its title: what you opened, the map, the hubs, what changed, what search covers. On a phone it sits under the shelves.
 const homeSections = ctx => [
   recentRows() ? h("section", { class: "sec", "data-key": "opened" }, h("header", { class: "sec-h" }, h("h2", { class: "sec-t" }, "Recently opened"), h("span", { class: "sec-n" }, "on this device")), recentRows()) : null,
-  h("section", { class: "sec", "data-key": "map" }, h("header", { class: "sec-h" }, h("h2", { class: "sec-t" }, "Notes by topic"), h("span", { class: "sec-n" }, K.map ? `${plural(K.map.notes.length, "note")} in ~/kb, grouped by topic, newest first` : ""), button("Over time", null, { size: "s", href: href("kbtime"), cls: "kb-time", title: "How the notes grew, linked and changed, from the backup history" })), mapView(ctx)),
+  h("section", { class: "sec", "data-key": "map" }, h("header", { class: "sec-h" }, h("h2", { class: "sec-t" }, "Notes by topic"), h("span", { class: "sec-n" }, K.map ? `${plural(K.map.notes.length, "note")} in ~/kb` : ""), button("Over time", null, { kind: "quiet", size: "s", icon: "clock", href: href("kbtime"), cls: "kb-time", title: "How the notes grew, linked and changed, from the backup history" })), mapView(ctx)),
   hubRows() ? h("section", { class: "sec", "data-key": "hubs" }, h("header", { class: "sec-h" }, h("h2", { class: "sec-t" }, "Most connected notes"), h("span", { class: "sec-n" }, "how many notes link to each, and it to others")), hubRows()) : null,
   h("section", { class: "sec", "data-key": "changed" }, h("header", { class: "sec-h" }, h("h2", { class: "sec-t" }, "Changed lately")), K.home ? changedRows() : empty("Reading…", { kind: "loading" })),
   sourcesView() ? h("section", { class: "sec", "data-key": "cover" }, h("header", { class: "sec-h" }, h("h2", { class: "sec-t" }, "What search covers"), h("span", { class: "sec-n" }, "files and posts in the index")), sourcesView()) : null];
@@ -300,7 +302,7 @@ function sideBody(path, ctx) {
   if ((K.fq || "").trim().length >= 2) return fileRows();
   if (!path) {
     if (!K.home) return empty("Reading…", { kind: "loading" });
-    return [list((K.home.shelves || []).map(s => ({ key: s.path, href: open(s.path), title: s.label, text: s.about, meta: String(s.n) })), { empty: "Nothing here yet." }),
+    return [list((K.home.shelves || []).map(s => ({ key: s.path, href: open(s.path), lead: icon("folder"), title: s.label, text: s.about, meta: String(s.n) })), { empty: "Nothing here yet." }),
       h("div", { class: "kb-phone kb-home", "data-key": "recent" }, homeSections(ctx))];
   }
   const cur = K.seen.get(path), dir = cur && cur.type === "dir" ? cur : K.seen.get(parent(path));
@@ -312,12 +314,12 @@ function sideBody(path, ctx) {
 function fileHead(d, ctx) {
   const name = projectOf(d.path), isMd = d.type === "md";
   return h("header", { class: "kb-h" },
-    h("a", { class: "btn kb-back", href: open(parent(d.path)), "data-kind": "quiet", "data-size": "s" }, "‹ ", parent(d.path).split("/").pop() || "Knowledge"),
+    h("a", { class: "btn kb-back", href: open(parent(d.path)), "data-kind": "quiet", "data-size": "s" }, icon("chevron-left"), parent(d.path).split("/").pop() || "Knowledge"),
     h("div", { class: "kb-hcrumbs" }, crumbs(d.path)),
     h("h1", { class: "kb-t" }, d.name),
     h("p", { class: "meta" }, h("code", null, "~/" + d.path), d.size != null ? ` · ${bytes(d.size)}` : "", " · changed ", h("span", { title: stamp(d.t * 1e3) }, ago(d.t * 1e3))),
     isMd || (name && can("plans")) ? h("div", { class: "frow" },
-      isMd ? button(K.source ? "Show formatted" : "Show source", () => { K.source = !K.source; ctx.update(); }, { kind: "quiet", size: "s" }) : null,
+      isMd ? button(K.source ? "Formatted" : "Source", () => { K.source = !K.source; ctx.update(); }, { kind: "quiet", size: "s" }) : null,
       name && can("plans") ? button("Edit plan", () => startEdit(name, ctx), { size: "s" }) : null) : null);
 }
 function fileView(d, line, ctx) {
@@ -348,24 +350,25 @@ export default {
   render(ctx) {
     if (!can("files")) return h("div", { class: "page" }, empty("Reading files needs full mode here. Sign in again if your hour is up.", { kind: "page", title: "Knowledge" }));
     const { path, line } = parse(ctx.arg), d = path ? K.seen.get(path) : null, isFile = !!d && d.type !== "dir", editing = K.edit && K.edit.at === path;
-    const find = () => input({ type: "search", value: K.q, placeholder: "Search everything: notes, files, posts", "aria-label": "Search the knowledge base", autocomplete: "off", oninput: (e, n) => { K.q = n.value; K.qPath = path; search(ctx); ctx.update(); } });
+    const find = (kbd = "⌘K") => h("label", { class: "kb-q" }, icon("search"), input({ type: "search", value: K.q, placeholder: "Search everything: notes, files, posts", "aria-label": "Search the knowledge base", autocomplete: "off", oninput: (e, n) => { K.q = n.value; K.qPath = path; search(ctx); ctx.update(); } }), h("kbd", null, kbd));
     const searching = K.q.trim().length >= 2 && K.qPath === path;
     const side = h("nav", { class: "kb-side", "aria-label": "Files" },
       h("div", { class: "kb-top" },
         crumbs(path),
-        input({ type: "search", value: K.fq || "", placeholder: "Find a file by name", "aria-label": "Find a file by name", autocomplete: "off", oninput: (e, n) => { K.fq = n.value; searchFiles(ctx); ctx.update(); } })),
-      h("div", { class: "kb-phone kb-find", "data-key": "pfind" }, find()),
+        h("label", { class: "kb-q" }, icon("search"), input({ type: "search", value: K.fq || "", placeholder: "Find a file by name", "aria-label": "Find a file by name", autocomplete: "off", oninput: (e, n) => { K.fq = n.value; searchFiles(ctx); ctx.update(); } }), h("kbd", null, "/"))),
+      h("div", { class: "kb-phone kb-find", "data-key": "pfind" }, find("")),
+      !path && !searching && matchMedia("(max-width: 640px)").matches ? h("div", { class: "kb-phone kb-ask-p", "data-key": "pask" }, kbChat(ctx)) : null,
       searching ? h("div", { class: "kb-phone kb-phone-results", "data-key": "pres" }, resultsView()) : null,
       h("div", { class: "kb-list", "data-hide-phone": searching ? "" : null }, sideBody(path, ctx)));
     const box = h("div", { class: "kb-find kb-wide", "data-key": "find" }, find());
     const main = h("div", { class: "kb-main", "data-key": "main" }, editing ? null : box,
       editing ? h("div", { class: "kb-note" }, editor(ctx))
         : K.q.trim().length >= 2 && K.qPath === path ? resultsView()
-        : !path ? h("div", { class: "kb-note", "data-key": "home" }, h("header", { class: "kb-h" }, h("h1", { class: "kb-t" }, "Knowledge"), h("p", { class: "meta" }, "What the Hive has written down and built. Secrets are hidden, and nothing here can be changed except project plans.")),
-          homeSections(ctx))
+        : !path ? h("div", { class: "kb-note", "data-key": "home" }, h("header", { class: "kb-h kb-home-h" }, h("h1", { class: "kb-t" }, "Knowledge"), h("p", { class: "meta" }, "What the Hive has written down and built. Read-only, except project plans.")),
+          kbChat(ctx), homeSections(ctx))
         : K.failed.has(path) ? h("div", { class: "kb-note", "data-key": "gone" }, h("a", { class: "btn kb-back", href: open(parent(path)), "data-kind": "quiet", "data-size": "s" }, "‹ Back"), empty(K.failed.get(path) === "404" ? `~/${path} isn't here, or isn't shown here. Dotfiles and anything named like a key stay hidden.` : `Couldn't read ~/${path}.`))
         : !d ? h("div", { class: "kb-none", "data-key": "wait" }, empty("Reading…", { kind: "loading" }))
-        : isFile ? fileView(d, line, ctx) : folderView(d, ctx));
+        : [kbChat(ctx, { compact: true, cur: path }), isFile ? fileView(d, line, ctx) : folderView(d, ctx)]);
     const top = document.getElementById("top");
     const want = `${path}::${line}`;
     if (d && K.shown !== want) {

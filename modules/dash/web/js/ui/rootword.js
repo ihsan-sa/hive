@@ -11,10 +11,11 @@ import { say } from "./composer.js";
 export const PERMALINK = /https:\/\/[a-z0-9][a-z0-9-]{0,62}\.slack\.com\/archives\/[CGD][A-Z0-9]{6,20}\/p\d{16}(?:\?[A-Za-z0-9_=.&%-]{0,200})?/;
 const ASKED = /`yes:\s*([^`\n]{3,300})`/gi;
 
-/** The action an agent's post asks the person to say yes to, from its last `yes: ...` in backticks, or null. */
+/** The action an agent's post asks the person to say yes to, from its last whole `yes: ...` in backticks, or null.
+ *  A line cut short ("yes: rootwarden may ring …") only refers to one: prefilling it sent the person's word as "…" (11042335ee5a). */
 export function wordAsked(p) {
   if (!p || p.from === "person" || !can("post")) return null;
-  let a = null; for (const m of String(p.text || "").matchAll(ASKED)) a = m[1].trim();
+  let a = null; for (const m of String(p.text || "").matchAll(ASKED)) if (!/(…|\.\.\.)$/.test(m[1].trim())) a = m[1].trim();
   return a;
 }
 const line = a => "yes: " + a.trim().replace(/^yes:\s*/i, "");

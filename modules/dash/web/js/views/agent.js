@@ -14,6 +14,7 @@ import { message, pollDelivered, fileUrl } from "../ui/message.js";
 import { contacts, lifeChart, priceBuckets, stepFor, tokenLine } from "../ui/agentviz.js";
 import { feed, toolTone } from "../ui/feed.js";
 import { killButton } from "../actions.js";
+import { agentActions } from "../ui/agentHover.js";
 
 // ---- what the server reads for one agent at a time (the panel closes when the full page opens) ----
 // F: /api/agent, its latest tool calls and words. W: /api/agent-work, files it changed, commits, PRs and tokens per 5 min.
@@ -86,8 +87,8 @@ function gather(n) {
   return memo = { key, ss, mine, toMe, first, active, spend, turns, toolCalls, byOut, contactRows, started, startedNames, chain, threads, toolList, hours, attached, life: null };
 }
 
-const ended = x => (!x.end ? (isRunning(x.name) ? "running" : "unknown") : x.exit === 0 ? "finished" : x.exit === 143 ? "stopped by a signal" : x.exit == null ? "ended, no exit code" : S.limitedSess.has(x.session) ? "usage limit" : `exit ${x.exit}`);
-const endTone = x => (!x.end ? (isRunning(x.name) ? "good" : "quiet") : x.exit === 0 || x.exit === 143 || x.exit == null ? "ended" : S.limitedSess.has(x.session) ? "warn" : "bad");
+const ended = x => (!x.end ? (isRunning(x.name) ? "running" : "unknown") : x.exit === 0 ? "finished" : x.exit === 143 ? "stopped by a signal" : x.exit == null ? "ended, no exit code" : x.limited ? "usage limit" : `exit ${x.exit}`);
+const endTone = x => (!x.end ? (isRunning(x.name) ? "good" : "quiet") : x.exit === 0 || x.exit === 143 || x.exit == null ? "ended" : x.limited ? "warn" : "bad");
 
 // ---- its life on one time axis: cost per step, sessions, posts ----
 const SPAN_MAX = 14 * DAY;
@@ -188,7 +189,7 @@ export function agentPage(n, host = "page") {
       title: h("span", { class: "ref-wrap" }, n, isAgent(n) ? copyButton("@" + n) : null, isWarden(n) ? wardenBadge(WARDEN_HINT) : null),
       lead: L ? L.doing || "Starting" : isWarden(n) ? WARDEN_HINT : last ? `Last said: ${short(mdPlain(displayText(last)), 220)}` : null,
       tone: L && agentState(L).key === "stuck" ? "bad" : null,
-      actions: [button("All their posts", null, { href: threadHref("@" + n), size: "s" }), L ? threadRef(L.thread) : null, L ? killButton(n) : null],
+      actions: [...agentActions(n), button("All their posts", null, { href: threadHref("@" + n), size: "s" }), L ? threadRef(L.thread) : null, L ? killButton(n) : null],
       meta: [st.key === "outside" ? null : statusLabel(st.key, st.label || null, { live: isRunning(n) }), ...line],
       after: [nowBlock(n, L), defs(agentCard(n).map(r => r.k === "Model" && isAgent(n) && !isWarden(n) && can("post") ? { ...r, v: modelPicker(n, r, L) } : r))],
     }),
