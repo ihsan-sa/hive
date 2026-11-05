@@ -1917,6 +1917,12 @@ def feedback_draft_done(d):
     (FB_DRAFTS / (aid + ".json")).unlink(missing_ok=True)
     return {"ok": True}
 
+def voice_ready():
+    """True when the voice module's service has proved itself working: its self-test passed and its heartbeat is under 2 minutes old."""
+    st = jload(HOME / ".hive" / "voice-status.json", {})
+    return isinstance(st, dict) and st.get("ok") is True and isinstance(st.get("at"), (int, float)) and time.time() - st["at"] < 120
+
+
 def person_post(text, thread=None, reply_to=None, uploads=(), signer=None, limited=False, simple=False, model=None):
     """A post as the person. As the Slack mirror does it: a plain message wakes the agent on the thread (thread_agent), a reply wakes the author
     of the post replied to, and no thread (or a thread with no agent yet) starts a new agent. Mentions in the text win.
@@ -3856,7 +3862,7 @@ def serve(port):
             web = web_cfg() or {}
             info = {"route": self.route, "can": list(self.can), "app": self.route != "open", "brand": brand_view()}
             if self.route != "open": info.update(setup=SETUP.get(), secrets_on=self.secrets_on, settings=settings_brief())
-            if self.route != "open": info["default_model"] = default_model()
+            if self.route != "open": info["default_model"] = default_model(); info["voice"] = voice_ready()
             dm = (jload(HOME / "core" / "config.json", {}) or {}).get("rootwarden_dm") if self.route != "open" else None
             if isinstance(dm, str) and re.fullmatch(r"https://[a-z0-9-]+\.slack\.com/archives/D[A-Z0-9]+", dm): info["rootwarden_dm"] = dm
             if self.mode: info.update(mode=self.mode, full_left=self.full_left)

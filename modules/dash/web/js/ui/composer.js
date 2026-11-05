@@ -173,6 +173,30 @@ export const actions = {
   discard: it => { OUT.splice(OUT.indexOf(it), 1); for (const f of it.files) if (f.url) URL.revokeObjectURL(f.url); refresh(); },
 };
 
+// ---- voice memo: a record button, shown only while the voice module's service is proven working (S.app.voice) ----
+const REC = { rec: null, chunks: [], t0: 0, th: undefined, tick: null };
+async function recToggle(th) {
+  const d = draft(th);
+  if (REC.rec) { REC.rec.stop(); return; }
+  if (!navigator.mediaDevices || !window.MediaRecorder) { d.err = "This browser can't record audio."; refresh(); return; }
+  let stream;
+  try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
+  catch (e) { d.err = "The microphone isn't available: allow it for this page and try again."; refresh(); return; }
+  const rec = new MediaRecorder(stream);
+  REC.rec = rec; REC.chunks = []; REC.t0 = Date.now(); REC.th = th;
+  rec.ondataavailable = e => { if (e.data.size) REC.chunks.push(e.data); };
+  rec.onstop = () => {
+    clearInterval(REC.tick); stream.getTracks().forEach(t => t.stop());
+    const type = rec.mimeType || "audio/webm", ext = /mp4/.test(type) ? "m4a" : /ogg/.test(type) ? "ogg" : "webm", t = new Date(), p = n => String(n).padStart(2, "0");
+    const f = new File(REC.chunks, `voice-${p(t.getHours())}${p(t.getMinutes())}${p(t.getSeconds())}.${ext}`, { type });
+    REC.rec = null; REC.chunks = [];
+    if (f.size) addFiles(REC.th, [f]); else refresh();
+  };
+  rec.start();
+  REC.tick = setInterval(refresh, 1000); refresh();
+}
+const recLabel = () => { const s = Math.round((Date.now() - REC.t0) / 1000); return `Stop · ${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; };
+
 // ---- files ----
 function addFiles(th, list) {
   const d = draft(th); d.err = "";
@@ -412,6 +436,9 @@ export function composer({ thread, update, place = "thread", autofocus, top }) {
       h("div", { class: "cp-bar", "data-key": "bar" },
         h("input", { type: "file", multiple: true, hidden: true, class: "cp-pick", onchange: e => { addFiles(th, e.target.files); e.target.value = ""; } }),
         button("Attach files", (e, b) => b.parentNode.querySelector(".cp-pick").click(), { kind: "icon", size: "s", icon: "plus", cls: "cp-attach", title: "Attach files. You can also paste or drop them here." }),
+        S.app && S.app.voice ? (REC.rec && REC.th === th
+          ? button(recLabel(), () => recToggle(th), { kind: "quiet", size: "s", icon: "mic", cls: "cp-rec", title: "Stop recording and attach the voice memo." })
+          : button("Record a voice memo", () => recToggle(th), { kind: "icon", size: "s", icon: "mic", cls: "cp-mic", title: "Record a voice memo. It is transcribed and summarized on the machine's GPU." })) : null,
         can("secrets") || (S.app && S.app.secrets_on && S.app.mode === "expired") ? button("Send a secret", () => {
           if (!can("secrets")) { SB.open = false; SB.tone = "bad"; SB.say = "Saving a secret needs full mode, which ends after 30 minutes without using the app. Press \"Limited · sign in for full\" at the top, then press the lock again."; refresh(); return; }
           if (SB.open) closeSecrets(); else openSecrets(th); }, { kind: "icon", size: "s", icon: "lock", cls: "cp-lock", title: "Send a secret (a token or key): saved on the machine, never posted in chat." }) : null,

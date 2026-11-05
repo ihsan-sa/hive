@@ -1692,7 +1692,8 @@ dialog.fb::backdrop{background:rgb(0 0 0 / .38)}
   .nowtbl,.nowtbl tbody,.nowtbl tr{display:block}
   .nowtbl tr{padding:8px;border-top:1px solid var(--line);display:grid;grid-template-columns:1fr auto;gap:2px 12px}
   .nowtbl td,.nowtbl tr:last-child td{padding:0;border:0;white-space:normal}
-  .nowtbl .nt-do{grid-column:1/-1;max-width:none;width:auto}
+  .nowtbl .nt-do{grid-column:1;max-width:none;width:auto;min-width:0}
+  .nowtbl td.num{grid-column:2;align-self:end;text-align:right}
   .nowtbl .nt-th,.nowtbl .nt-m{display:none}
 }
 
