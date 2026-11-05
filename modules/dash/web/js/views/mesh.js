@@ -20,7 +20,7 @@ const WIN_NAME = { [HOUR]: "hour", [6 * HOUR]: "6 hours", [DAY]: "24 hours", [3 
 const TIER_ORDER = { tier1: 0, tier2: 1, held: 2, other: 3 };
 const PLAY_MS = 12000;
 const M = {
-  win: getPref("meshWin", 6 * HOUR), lay: LAYOUTS.some(l => l[0] === getPref("meshLayout")) ? getPref("meshLayout") : "bands", active: !!getPref("meshActive", onTV() ? 1 : 0), cut: null, playing: false, q: "",
+  win: getPref("meshWin", 6 * HOUR), lay: LAYOUTS.some(l => l[0] === getPref("meshLayout")) ? getPref("meshLayout") : "lineage", active: !!getPref("meshActive", 1), cut: null, playing: false, q: "",
   sel: null, lanes: [], more: [], D: null, count: "", seenVer: -1, lastBuild: 0, update: () => {},
   showMore: false, allHand: false, timer: 0, root: null,
 };
