@@ -177,6 +177,12 @@ export function end(tell = true) {
 
 // ---- the screen ----
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+// Every draw rebuilds the card, which would put the transcript back at its top: it stays on the newest words unless the person has scrolled up to reread.
+function fill(html) {
+  const was = C.el.querySelector(".ph-lines"), back = was && was.scrollTop + was.clientHeight < was.scrollHeight - 24 ? was.scrollTop : null;
+  C.el.innerHTML = html;
+  const box = C.el.querySelector(".ph-lines"); box.scrollTop = back == null ? box.scrollHeight : back;
+}
 function draw() {
   if (!C.el) { C.el = document.createElement("div"); C.el.className = "ph-call"; C.el.setAttribute("role", "dialog"); C.el.setAttribute("aria-label", "Voice call"); document.body.append(C.el); C.el.addEventListener("click", onClick); }
   const show = !C.ended || C.id || C.err;
@@ -188,9 +194,9 @@ function draw() {
   let prev = null;   // a name shows once per run of lines by the same speaker
   const lines = C.lines.slice(C.partial ? -3 : -4).map(l => { const same = l.who === prev; prev = l.who; return `<div class="ph-line${l.who === "you" ? " ph-you" : ""}">${same ? "" : `<b>${esc(l.who === "you" ? "You" : l.who || "")}</b> `}${esc(l.text)}</div>`; }).join("")
     + (C.partial ? `<div class="ph-line ph-you ph-partial">${prev === "you" ? "" : "<b>You</b> "}<i>${esc(C.partial)}…</i></div>` : "");
-  C.el.innerHTML = `<div class="ph-top"><span class="ph-dot ${C.state}${C.seg ? " live" : ""}"></span><div><div class="ph-who">${esc(who)}</div><div class="ph-st" aria-live="polite">${st}</div></div></div>
+  fill(`<div class="ph-top"><span class="ph-dot ${C.state}${C.seg ? " live" : ""}"></span><div><div class="ph-who">${esc(who)}</div><div class="ph-st" aria-live="polite">${st}</div></div></div>
     <div class="ph-lines">${lines}</div>
-    <div class="ph-btns">${C.ended ? "" : `<button class="btn ph-mute" data-a="mute" aria-pressed="${C.muted}">${C.muted ? "Unmute" : "Mute"}</button><button class="btn ph-end" data-a="end">Hang up</button>`}</div>`;
+    <div class="ph-btns">${C.ended ? "" : `<button class="btn ph-mute" data-a="mute" aria-pressed="${C.muted}">${C.muted ? "Unmute" : "Mute"}</button><button class="btn ph-end" data-a="end">Hang up</button>`}</div>`);
 }
 function onClick(e) {
   const a = e.target.closest("[data-a]"); if (!a) return;
@@ -237,9 +243,9 @@ function drawOther(c) {
   const lines = c.lines.filter(([w]) => w !== "system").slice(c.partial ? -3 : -4).map(([w, t]) => { const same = w === prev; prev = w; return `<div class="ph-line${w === "person" ? " ph-you" : ""}">${same ? "" : `<b>${esc(w === "person" ? "You" : w)}</b> `}${esc(t)}</div>`; }).join("")
     + (c.partial ? `<div class="ph-line ph-you ph-partial">${prev === "person" ? "" : "<b>You</b> "}<i>${esc(c.partial)}…</i></div>` : "");
   const st = c.state === "hold" ? "On hold" : `On a call, ${Math.max(1, Math.round((Date.now() / 1000 - c.started) / 60))} min · on another device`;
-  C.el.innerHTML = `<div class="ph-top"><span class="ph-dot ${esc(c.state)}"></span><div><div class="ph-who">${esc(c.agent)}</div><div class="ph-st">${st}</div></div></div>
+  fill(`<div class="ph-top"><span class="ph-dot ${esc(c.state)}"></span><div><div class="ph-who">${esc(c.agent)}</div><div class="ph-st">${st}</div></div></div>
     <div class="ph-lines" aria-live="polite">${lines}</div>
-    <div class="ph-btns"><button class="btn" data-a="hide" data-call="${esc(c.id)}">Hide</button></div>`;
+    <div class="ph-btns"><button class="btn" data-a="hide" data-call="${esc(c.id)}">Hide</button></div>`);
 }
 async function pollCalls() {
   if (!(S.app && S.app.phone) || document.hidden) return;
