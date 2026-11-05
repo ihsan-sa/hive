@@ -3,6 +3,8 @@
 // Emphasis is stricter than GFM on purpose: `*` has to open after a space or bracket, so globs and products stay as written.
 // A plain post costs what it always did: maths, footnotes and fences build only light placeholders; js/rich/ draws them near the screen.
 import { h } from "../core/dom.js";
+import { S } from "../core/store.js";
+import { threadHref } from "../core/router.js";
 import { fenceBlock } from "../rich/blocks.js";
 import { equation, inlineMath } from "../rich/math.js";
 import { mathScan, opensDisplay, displayMath } from "../rich/mathscan.js";
@@ -18,6 +20,7 @@ const INLINE = new RegExp([
   "~~(?=\\S)(.+?)(?<=\\S)~~",                                              // 10 struck out
   "https?:\\/\\/[^\\s<>]+",                                                // bare link
   "\\[\\^([^\\]\\s]+)\\]",                                                  // 11 footnote reference
+  "(?<![\\w&#/])#([A-Za-z0-9][\\w.-]*[A-Za-z0-9_]|[A-Za-z0-9])",                // 12 #thread
 ].join("|"), "g");
 
 const link = (href, ...kids) => h("a", { href, target: "_blank", rel: "noopener noreferrer" }, ...kids);
@@ -46,6 +49,7 @@ function run(s, ms) {
     else if (m[8] != null || m[9] != null) node = h("em", null, run(m[8] ?? m[9], ms));
     else if (m[10] != null) node = h("del", null, run(m[10], ms));
     else if (m[11] != null) node = footRef(m[11]) || m[0];
+    else if (m[12] != null) node = S.threads && S.threads.has(m[12]) ? h("a", { class: "ref", "data-kind": "thread", href: threadHref(m[12]), title: "Thread " + m[12] }, "#" + m[12]) : m[0];
     else {
       // A bare link: leave sentence punctuation and an unmatched ) outside it.
       let u = m[0].replace(/[.,;:!?'"*_`\]]+$/, "");
