@@ -12,6 +12,8 @@ write_files:
       #!/bin/sh
       # Runs once. Installs the Hive the same way the one-line install does, then writes what the welcome message shows.
       # The address of the app is the key to it, so it is never written here: `sudo -iu hive hive web` prints it.
+      # cloud-init runs this with no HOME and a bare PATH; the installers need both.
+      export HOME=/root PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
       SITE="${HIVE_SITE:-<THIS-SITE>}"
       LOG=/var/log/hive-install.log; READY=/etc/hive-ready
       umask 077; : > "$LOG"
