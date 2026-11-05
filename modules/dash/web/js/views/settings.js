@@ -3,6 +3,7 @@ import { status as st } from "../core/status.js";
 import { h } from "../core/dom.js";
 import { S, can, built, jget, needsAccount, post, loadApp } from "../core/store.js";
 import { simpleOn, setSimple } from "../core/simple.js";
+import { deviceFingerprint } from "../core/sign.js";
 import { notifyBlocked, notifyOn, notifySupported, notifyTest, pushOn, pushSupported, setNotify, setPush } from "../core/notify.js";
 import { DEFAULT_NAME, brandLogo, brandName } from "../core/brand.js";
 import { form } from "../templates.js";
@@ -105,7 +106,15 @@ function viewSection(ctx) {
   return section({ title: "Simple view", level: 1 },
     blocks(block({ title: "Simple view", key: "simple", sub: on ? "On: you see a chat, and your Hive talks to you in plain words." : "Off: you see every tab, and what the agents say to each other. Turn it on for just a chat and what's been made, with agents told to use plain words.",
       actions: button(on ? "Show everything" : "Turn on simple view", () => { setSimple(!on); ctx.update(); }, { size: "s" }) }),
-    notifyBlock(ctx), pushBlock(ctx), phoneBlock(ctx)));
+    notifyBlock(ctx), pushBlock(ctx), phoneBlock(ctx), signBlock(ctx)));
+}
+// This browser's signature on posts (core/sign.js). The fingerprint is what root pins, so it has to be readable here; nothing can be done with it but compare it.
+function signBlock(ctx) {
+  if (F.signFp === undefined) { F.signFp = null; deviceFingerprint().then(fp => { F.signFp = fp || ""; ctx.update(); }); }
+  if (F.signFp === null) return null;
+  return block({ title: "Signing your messages", key: "signing",
+    sub: F.signFp ? `This browser signs what you send with a key only it holds, so an agent can't simply write a message in your name. Its fingerprint is ${F.signFp}. It counts once root has pinned it.` : "This browser can't sign messages, so what you send from it goes unsigned.",
+    actions: F.signFp ? copyButton(F.signFp) : null });
 }
 // Phone alerts: the server sends one line through ntfy.sh when a post to you goes unread, so it works with this page closed. Off until switched on here.
 async function loadPhone(ctx) {

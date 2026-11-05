@@ -4,6 +4,10 @@ Release notes are on the [releases page](https://github.com/ihsan-sa/hive/releas
 
 A release can ship several times a day. A new Hive installs at most one a day, once it has been out for at least 12 hours; **How often to update** in Settings changes that. The latest is at [releases/latest](https://github.com/ihsan-sa/hive/releases/latest).
 
+## Your dashboard messages are signed
+
+Each browser now holds its own signing key and signs what you send, so reading a thread shows whether a message's signature checks. Settings shows this browser's fingerprint. Sending never waits on it: if signing fails, the message goes unsigned. Messages from Slack or your phone stay unsigned.
+
 ## First setup is one screen
 
 A new Hive now asks for one thing: sign in with your Claude plan, then press Finish and type your first request. Sharing, power, the sandbox and the model keep their safe defaults, and each is in Settings when you want to change it. A line on the screen still says what is sent to the developer and that agents run in a sandbox and ask before anything bigger. If the sandbox does not work on the computer, the screen still says so in full.
@@ -35,3 +39,7 @@ The daily check-in now also says whether an agent has been started in your Hive 
 ## Installs that stop partway on Windows or a Mac
 
 If the installer stops on Windows or a Mac before Linux starts, it can now offer to send that failure to the Hive's makers: only the step, a short error label, the installer version and your OS and chip type, with no log. Nothing goes unless you type `y` (or set `HIVE_REPORT=1` where nothing can ask), and `HIVE_REPORT=0` stops the question. The daily check-in's OS now says `windows` or `mac` for those Hives, not `linux`; nothing else in it changes. If you turned reports off, nothing changes for you.
+
+## Voice calls and memos hear you better
+
+Voice calls and voice memos now recognise speech more accurately and ignore other people talking nearby once you enrol your voice.

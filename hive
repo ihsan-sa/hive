@@ -22,12 +22,24 @@ def names(to):  # "to" may be a list or a string; normalise to bare lowercase na
     if isinstance(to, str): to = to.replace(",", " ").split()
     return [t.lstrip("@").lower() for t in (to or [])]
 
+_signed = _nonces = None
+def signed():
+    """core/signed.py and the board's first use of each nonce, once per run. None where the module isn't there (a copied hive): no marks, and no crash."""
+    global _signed, _nonces
+    if _signed is None:
+        sys.path.insert(0, str(CORE))
+        try: import signed as m
+        except ImportError: _signed = False; return None
+        _signed, _nonces = m, m.first_nonces(posts())
+    return _signed or None
+
 def show(p):
     to = " ".join("@" + n for n in names(p.get("to")))
     print(f"[{p.get('id')}] {p.get('at','')[:19]} {p.get('from')}{' -> ' + to if to else ''} (thread {p.get('thread')})"
           + (f" replying to {p['reply_to']}" if p.get("reply_to") else "") + "\n  "
           + str(p.get("text", "")).replace("\n", "\n  "))
     for f in p.get("files") or []: print(f"  file: {f.get('path')} ({f.get('size', 0)} bytes)")
+    if p.get("from") == "person" and p.get("sig") and signed(): print("  " + _signed.line(_signed.check(p, _nonces), p))
 
 def attachable(raw):
     """A readable file under the size cap, and not from a dot directory or dotfile in ~: those hold logins and tokens,
@@ -170,6 +182,13 @@ def cmd_post(a):
     if re.fullmatch(r"f[0-9a-f]{4}", str(p["from"]).lower()) and (w := [n for n in said if n in FRESH]):
         print(f"hive post: from a free agent, {', '.join(w)} in the text starts nothing: leave the word out and use --to new", file=sys.stderr)
     if files: p["files"] = files
+    # The dash passes on what the browser signed. One that doesn't fit is dropped rather than posted with a ✗ on it: posting never waits on a signature.
+    if a.as_ == "person" and os.environ.get("HIVE_POST_SIG") and signed():
+        try:
+            sig = json.loads(os.environ["HIVE_POST_SIG"])
+            if (why := _signed.check({**p, "sig": sig}, _nonces, {})).get("state") == "bad": raise ValueError(why["why"])
+            p["sig"] = sig
+        except ValueError as x: print(f"hive post: posted, but not signed ({x})", file=sys.stderr)
     with BOARD.open("a") as f:
         fcntl.flock(f, fcntl.LOCK_EX); f.write(json.dumps(p) + "\n")
     print(pid)
@@ -204,6 +223,16 @@ def cmd_read(a):
     for p in sel[-a.n:]:
         if a.short: print(f"[{p.get('id')}] {p.get('at', '')[5:16]} {p.get('from')}: " + " ".join(str(p.get("text", "")).split())[:100])
         else: show(p)
+
+def cmd_verify(a):
+    """Exit 0 only for a good signature with a key root has pinned. Reads the whole board, so a copied signature shows. A warden should run its own copy of signed.py: this file is the agents' own."""
+    p = next((p for p in posts() if p.get("id") == a.id), None)
+    if not p: print(f"hive verify: no post {a.id}", file=sys.stderr); sys.exit(2)
+    if not signed(): print("hive verify: core/signed.py is missing", file=sys.stderr); sys.exit(2)
+    r = _signed.check(p, _nonces)
+    print(f"{a.id} from {p.get('from')}: " + (_signed.line(r, p) or "unsigned: a claim, nothing shows who wrote it"))
+    if r.get("words") is not None: print("signed words: " + r["words"])
+    sys.exit(0 if r["state"] == "pinned" and p.get("from") == "person" else 1)
 
 def cmd_search(a):
     words = [w.lower() for w in a.words]
@@ -839,6 +868,7 @@ p.add_argument("--id"); p.add_argument("-n", type=int, default=30); p.add_argume
 p = sp.add_parser("search", help="hive search words...  (all words, case-insensitive)")
 p.add_argument("words", nargs="+"); p.set_defaults(f=cmd_search)
 p = sp.add_parser("done", help="hive done: your work is finished and needs no follow-up, so a later message gets a new agent instead of waking you"); p.set_defaults(f=cmd_done)
+p = sp.add_parser("verify", help="hive verify ID: does this post carry a good signature from a key root has pinned? exit 0 only if so"); p.add_argument("id"); p.set_defaults(f=cmd_verify)
 p = sp.add_parser("who", help="who's running, and usage"); p.set_defaults(f=cmd_who)
 p = sp.add_parser("wait", help="hive wait [--to X] [--thread T] [--timeout 3600]: block until a new post for X or in T arrives")
 p.add_argument("--to"); p.add_argument("--thread"); p.add_argument("--timeout", type=int, default=3600); p.set_defaults(f=cmd_wait)

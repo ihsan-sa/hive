@@ -492,8 +492,10 @@ class Call:
         with self.saying:
             if brain is not self.brain or brain is self.leaving or self.ended: return
             self.lines.append((self.agent, text))
+            t0 = time.time()
             try: audio = base64.b64encode(tts_wav(text)).decode()
             except Exception as e: self.note(f"tts: {e}"); audio = None
+            if time.time() - t0 > 3: print(f"phone: call {self.id} slow tts {time.time() - t0:.1f}s for {len(text)} chars", flush=True)
             if isinstance(brain, AgentLine): brain.spoke = time.time()
             if self.state == "hold":
                 self.state = "talking"; self.emit("pickup", agent=self.agent)
@@ -912,7 +914,7 @@ def main(argv):
                   "Carry on with your work; the transcript gets posted in the thread.")
         return
     if a.cmd in ("talk", "hangup"):
-        r = api("POST", f"/call/{a.call}/{'say' if a.cmd == 'talk' else 'hangup'}", {"name": me, "text": a.text})
+        r = api("POST", f"/call/{a.call}/{'say' if a.cmd == 'talk' else 'hangup'}", {"name": me, "text": a.text}, timeout=120)   # it returns once every sentence is synthesised
         if r.get("error"): print(f"{r['error']}. Carry on with your work."); return
         if a.cmd == "hangup": print("Hung up. Carry on with your work where you left off."); return
         return listen(a.call, me)

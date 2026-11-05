@@ -1,6 +1,7 @@
 // The store: one object of state, filled by polling. Board and log arrive as appended items only
 // (from an offset), so each poll does work in proportion to what is new.
 import { now } from "./format.js";
+import { signPost } from "./sign.js";
 
 export const OUTSIDE = new Set(["person", "hives"]);
 export const SYS = new Set(["starter", "dash", "anon", "all", "400", "mention", "name"]);
@@ -47,6 +48,7 @@ export async function jget(u) {
 }
 /** POST with the header the server requires; throws an Error with a plain reason. */
 export async function post(path, body) {
+  if (path === "/api/post") body = await signPost(body);
   const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json", "X-Hive-Dash": "1" }, body: JSON.stringify(body) });
   if (r.redirected) throw Error("sign in again and reload the page");
   const j = await r.json().catch(() => ({}));
