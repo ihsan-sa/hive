@@ -91,6 +91,8 @@ The home page answers two questions: what do you want done, and what needs you?
 
 To start a job, type in the box and press **Start** or Enter. Shift+Enter makes a new line. **Name it** gives the conversation a name; otherwise it's named for you. **Attach** adds files. If the voice module is installed and working, a microphone button records a voice memo: press it to start and press again to send (or hold it while you talk and let go), × or Esc throws the recording away. It is transcribed and summarized on the machine and answered in the conversation.
 
+If the phone module is running, a **phone button** next to it starts a voice call: with the Hive on a new conversation, or with a new agent that reads the conversation you're in. To call a particular agent, rest the pointer on its name or round icon: a small card offers **Call** (that agent pauses its work and picks up; if it hasn't in a minute, a copy that knows its work answers) and **DM** (opens its conversation with your message addressed to it). On a phone, the same two buttons are at the top of the agent's page. Just talk; it answers out loud, and you can cut in while it speaks. Ask "put me through to whoever's working on X" and you go on hold (with music) while that agent picks up. When an agent needs you it can ring: a banner with **Answer** and **Decline** shows on the page. **Mute** and **Hang up** are on the call card, and the transcript is posted to the conversation afterwards.
+
 ![A conversation where an agent has found a problem and is waiting for an answer](https://hivelab.ca/img/guide/chat-question.png)
 
 In a conversation:
@@ -199,7 +201,8 @@ Talk to it as you would a capable new colleague who has never seen your setup:
 Agents run in a sandbox around the Hive's folder, so **they can't see your files until you give them some.** On Windows your drives are switched off inside the Hive as well.
 
 - **In:** Attach or paste, or drag onto an open conversation, up to 100 MB per file. For more, give it a link, a Git repo or a folder it can reach.
-- **Out:** ask the agent to attach the result. It appears in the message and you click it to download.
+- **Out:** ask the agent to attach the result. It appears in the message, and a click opens it in a preview beside the conversation: documents, PDFs, pictures, audio and video, code, tables (CSV and spreadsheets), JSON, notebooks, Word and PowerPoint files, and web pages (shown in a locked-down frame, never run as the dashboard). Each file shows as a card with an **Open** button. Click the file name at the top of the preview to switch to another file from the conversation, **Expand** to fill the window, and the link button to copy a link to the file. Drag the panel's edge to resize it, and press Esc or × to close it. **Download** saves the file, and on a phone the preview opens as a sheet.
+- **The Files button** at the top of a conversation lists every file in it (Outputs, what agents made, then Sources, what you sent), and below that the project folders to browse. Any of them opens in the same preview, and **All files** in the preview takes you back to the list.
 - **Looking around yourself:** on Windows, open `\\wsl$\Hive` in Explorer. On Linux, `sudo -iu hive` and then `~/projects`, or `~/hive/projects` in your own account.
 
 ## Passwords and accounts
@@ -272,7 +275,7 @@ The Hive commits its board, log and notes to a local git repo every few minutes,
 
 Linux: `curl -fsSL https://hivelab.ca/uninstall.sh | sh`, or with `| sh -s -- --this-account` if you installed it in your own account. Windows: `irm https://hivelab.ca/uninstall.ps1 | iex`.
 
-After you type `delete`, this removes the `hive` user or the `Hive` system with everything in them: projects, notes, conversations and the Claude sign-in. Save what you want first.
+It asks about your projects, notes and board (your chats and their files) one at a time. Press Enter to keep each one, or type `y` to delete it too. What you keep is moved to a `hive-kept-DATE` folder in your home folder (`Hive-kept-DATE` on Windows). After you type `delete`, it removes the `hive` user or the `Hive` system, with the Claude sign-in and everything you didn't keep. If the copy fails, nothing is deleted. To skip the questions, set `HIVE_KEEP=projects,notes,board` (any of them, or `none`).
 
 ## When something's wrong
 

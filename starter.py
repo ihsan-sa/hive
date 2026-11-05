@@ -462,7 +462,8 @@ def waiting_posts(st, r):
     except OSError: seen = set()
     ps = [p for p in ps if p["id"] not in seen]
     c = cfg()
-    grace = c.get("wake_person_s", 60) if any(p.get("from") in ("person", "hives", r["name"]) for p in ps) else c.get("wake_agent_s", 600)  # its own post: `hive model`; hives: another Hive waiting on a reply, paced like the person (line 644)
+    grace = (c.get("wake_phone_s", 10) if any(p.get("from") == "phone" for p in ps)  # the person is on hold for it (modules/phone: phone answer)
+             else c.get("wake_person_s", 60) if any(p.get("from") in ("person", "hives", r["name"]) for p in ps) else c.get("wake_agent_s", 600))  # its own post: `hive model`; hives: another Hive waiting on a reply, paced like the person (line 644)
     return ps if ps and finished_but_alive(r, grace) else []
 
 def release_shells(pid):
@@ -933,7 +934,7 @@ def wake(c, st, n, posts, to, room):
     if not run:
         start(c, n, posts, to); return n
     why, forced = dead_why(c, n, run), any(p.get("no_revive") for p in posts)
-    named = not forced and any((p.get("from") == "person" and not p.get("routed")) or str(p.get("from", "")).lower() == n for p in posts)
+    named = not forced and any((p.get("from") in ("person", "phone") and not p.get("routed")) or str(p.get("from", "")).lower() == n for p in posts)  # phone: the person called it
     sid = session_in(run.get("out")) or run.get("session")
     if not forced and (not why or named):
         if (home := wake_home(c, n, run, sid, posts, to, room, st.get("limits"))):
