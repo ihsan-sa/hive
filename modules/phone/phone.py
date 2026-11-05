@@ -50,7 +50,9 @@ text-to-speech voice, sentence by sentence, as you write it. So:
 - No markdown, lists, code, file paths, ids, URLs or symbols. Say numbers and names the way you'd say them aloud.
 - Never read out command output. Sum it up in a sentence.
 - Don't announce tool use or add filler ("let me check", "one sec", "sure thing"): run the tool silently, then say what you found.
-- What you hear comes from speech recognition and may have small errors; guess sensibly, ask only if it matters.
+- What you hear comes from speech recognition and may have small errors. Read a word that sounds alike by what fits the
+  conversation and the Hive's own terms (a queue, not a cue; Claude, not clawed). Someone nearby may get transcribed too: if part of a
+  turn doesn't fit, don't act on it. Guess sensibly, ask only if it matters.
 - You have your full tools (Bash, hive, kb, files). Small things you can do during the call; for real work, post a
   brief on the board (hive post, quoted heredoc) to the agent who owns it or to a new one, and tell the person you did.
 - Keep turns quick: anything you do mid-call (a post, asking another agent on the board and waiting for its answer,
@@ -69,7 +71,7 @@ through to whoever is working on something. Start by greeting them in a few word
 
 # --------------------------------------------------------------------------------------------------- speech models
 
-_stt = _tts = None
+_stt = _tts = _hint = None
 _beam = 5   # finals get beam search on a GPU; on the CPU greedy decoding, three times faster
 _mlock = threading.Lock()
 
@@ -85,7 +87,12 @@ def _preload_cuda():
         except OSError: pass
 
 
-STT_GPU, STT_CPU = "faster-distil-whisper-medium.en", "faster-distil-whisper-small.en"   # Systran's builds on Hugging Face
+STT_GPU, STT_CPU = "faster-whisper-large-v3-turbo", "faster-distil-whisper-small.en"
+STT_OLD = "faster-distil-whisper-medium.en"   # the GPU model before turbo; still used if it's what is here
+STT_REPO = {STT_GPU: "mobiuslabsgmbh/faster-whisper-large-v3-turbo", STT_CPU: f"Systran/{STT_CPU}"}
+# Words recognition gets wrong without a hint. Passed as hotwords, which apply to every 30 s window; initial_prompt with
+# condition_on_previous_text=False reaches only the first. Distil models can't take either: they return nothing.
+STT_HINT = os.environ.get("PHONE_STT_HINT", "Hive, Hive, the board, warden, rootwarden, keeper, Claude, Claude Code, Codex, Fable, Sonnet, Opus, Haiku, Whisper, Kokoro, GPU, PCB, FPGA, SPICE, Verilog, PLL, BOM, DRC, LVS, KiCad, Gerbers, JLCPCB, Bambu, Tiny Tapeout, Digi-Key, Telnyx, OpenRouter, GitHub, kb.")
 SPK_URL = "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/3dspeaker_speech_campplus_sv_en_voxceleb_16k.onnx"
 KOKORO = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/"
 
@@ -100,8 +107,8 @@ def cuda():
 
 
 def stt_dir(gpu):
-    """The recognition model to load: PHONE_STT_MODEL, else medium on a GPU and small on the CPU, else whichever is here."""
-    names = [os.environ.get("PHONE_STT_MODEL")] + ([STT_GPU, STT_CPU] if gpu else [STT_CPU, STT_GPU])
+    """The recognition model to load: PHONE_STT_MODEL, else turbo on a GPU and small distil on the CPU, else whichever is here."""
+    names = [os.environ.get("PHONE_STT_MODEL")] + ([STT_GPU, STT_OLD, STT_CPU] if gpu else [STT_CPU, STT_OLD, STT_GPU])
     for n in filter(None, names):
         if (MOD / "models" / n).is_dir(): return MOD / "models" / n
     raise SystemExit(f"phone: no speech model in {MOD / 'models'}; run: phone setup")
@@ -122,7 +129,7 @@ def setup():
     if not (m / "speaker-campplus.onnx").exists():
         run(["curl", "-fsSL", "--retry", "3", "-o", str(m / "speaker-campplus.onnx.part"), SPK_URL]); (m / "speaker-campplus.onnx.part").rename(m / "speaker-campplus.onnx")
     for n in ([STT_GPU] if gpu else [STT_CPU]):
-        if not (m / n).is_dir(): run([str(py), "-c", f"from huggingface_hub import snapshot_download as d; d('Systran/{n}', local_dir={str(m / (n + '.part'))!r})"]); (m / (n + ".part")).rename(m / n)
+        if not (m / n).is_dir(): run([str(py), "-c", f"from huggingface_hub import snapshot_download as d; d('{STT_REPO[n]}', local_dir={str(m / (n + '.part'))!r})"]); (m / (n + ".part")).rename(m / n)
     print(f"phone: speech ready for the {'GPU' if gpu else 'CPU'}", flush=True)
     unit = MOD / "hive-phone.service"
     if not shutil.which("systemctl"): print(f"No systemd here: run {py} {MOD / 'phone.py'} serve yourself, and keep it running."); return
@@ -162,7 +169,7 @@ def enroll(paths=None):
 
 
 def models():
-    global _stt, _tts, _beam
+    global _stt, _tts, _beam, _hint
     with _mlock:
         if _tts is None:
             _preload_cuda()
@@ -174,7 +181,8 @@ def models():
             s = ort.InferenceSession(str(MOD / "models/kokoro-v1.0.onnx"), providers=["CUDAExecutionProvider", "CPUExecutionProvider"])
             _tts = Kokoro.from_session(s, str(MOD / "models/voices-v1.0.bin"))
             gpu = cuda(); _beam = 5 if gpu else 1
-            _stt = WhisperModel(str(stt_dir(gpu)), device="cuda" if gpu else "cpu", compute_type="float16" if gpu else "int8")
+            d = stt_dir(gpu); _hint = None if "distil" in d.name else STT_HINT
+            _stt = WhisperModel(str(d), device="cuda" if gpu else "cpu", compute_type="float16" if gpu else "int8")
             _tts.create("Ready.", voice=VOICE, speed=1.0, lang="en-us")  # the first run on the GPU is slow; do it now, not on the call
     return _stt, _tts
 
@@ -274,9 +282,9 @@ def stt(pcm16k, partial=False, channel="browser", info=None):
     if g is not None: a = a * g
     if not _mlock.acquire(blocking=not partial): return None
     try:
-        # No initial_prompt: with one, distil-whisper gave no segments at all for 22 of 51 chunks of real speech
+        # _hint is None on distil-whisper: with a prompt it gave no segments at all for 22 of 51 chunks of real speech
         # (the "long turns come back empty" bug); without it, 0 of 136, clean or choppy. Finals get beam search.
-        segs, _ = st.transcribe(a, language="en", beam_size=1 if partial else _beam, vad_filter=True, condition_on_previous_text=False)
+        segs, _ = st.transcribe(a, language="en", beam_size=1 if partial else _beam, vad_filter=True, condition_on_previous_text=False, hotwords=_hint)
         segs = list(segs)
     finally: _mlock.release()
     # Whisper's own rule: a segment is silence only when it is both likely no-speech and decoded with low confidence.

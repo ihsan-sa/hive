@@ -1511,7 +1511,9 @@ def main():
             if n in alive or n in st.get("resume", {}): continue
             got = STATE / "delivered" / n  # posts the inbox hook already handed this agent mid-run
             if got.exists():
-                seen = set(got.read_text().split()); got.unlink()
+                # Read it, don't remove it: the dash's read marks come from this file, and with it gone a post the agent had used
+                # showed "hasn't seen this" until its next start (the person asked, 110515296d61). A fresh start empties it.
+                seen = set(got.read_text().split())
                 st["pending"][n] = [p for p in st["pending"][n] if p["id"] not in seen]
                 if not st["pending"][n]:
                     st["pending"].pop(n); log(event="delivered", name=n); continue

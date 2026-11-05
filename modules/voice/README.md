@@ -3,7 +3,7 @@
 Send a voice memo to the Hive: attach any audio file to a post in the dashboard (the phone's recorder, a WhatsApp/Telegram voice note,
 a browser recording). `voice.service` watches the board for audio files on the person's posts, then:
 
-1. decodes with ffmpeg, transcribes with faster-whisper `large-v3-turbo` on the GPU (fp16, VAD on, domain words as prompt; falls back to CPU int8);
+1. decodes with ffmpeg, transcribes with faster-whisper `large-v3-turbo` on the GPU (fp16, VAD on, domain words as hotwords, which reach the whole memo; falls back to CPU int8);
 2. summarizes with `claude -p --model sonnet` into Gist / Points / Asks / Unclear, adding nothing the speaker didn't say;
 3. posts that in the post's thread with the full timestamped transcript attached.
 

@@ -132,7 +132,7 @@ for m in dash report providers; do "$CORE/hive" module add "$m" >/dev/null; done
 # A first install on a server gets the server module. It holds no root, opens nothing and starts nothing until someone asks. HIVE_SERVER=0 or 1 overrides the guess.
 if [ ! -e "$HOME/.hive-installed" ] && [ ! -e "$HOME/.hive-account" ] && [ ! -d "$HOME/modules/server" ] && [ "$(uname -s)" = Linux ] && ! grep -qi microsoft /proc/version 2>/dev/null \
   && { [ "${HIVE_SERVER:-}" = 1 ] || { [ "${HIVE_SERVER:-}" != 0 ] && [ ! -e /etc/systemd/system/display-manager.service ]; }; }; then
-  if "$CORE/hive" module add server >/dev/null; then echo "This looks like a server, so the server module is in. Run: server check. To remove it: hive module remove server."
+  if "$CORE/hive" module add server >/dev/null; then echo "NOTE: This looks like a server, so the server module is in. Run: server check. To remove it: hive module remove server."
   else echo "NOTE: the server module didn't install. Try again with: hive module add server."; fi
 fi
 # It can print the address, which is the key, and with HIVE_PLAIN what this prints goes to a log.
