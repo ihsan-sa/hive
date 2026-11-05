@@ -1,0 +1,52 @@
+#cloud-config
+# Puts a Hive on a new Ubuntu 24.04 server, with nothing opened to the internet.
+# Paste this into the "user data" or "cloud-init" box when you create the server, or give it to your provider's command line.
+# When the server has booted (about 5 minutes), log in over SSH and the welcome message tells you what to do next.
+# Guide: <THIS-SITE>/guide/#on-a-small-server
+package_update: true
+packages: [curl, ca-certificates]
+write_files:
+  - path: /usr/local/sbin/hive-first-boot
+    permissions: "0755"
+    content: |
+      #!/bin/sh
+      # Runs once. Installs the Hive the same way the one-line install does, then writes what the welcome message shows.
+      # The address of the app is the key to it, so it is never written here: `sudo -iu hive hive web` prints it.
+      SITE="${HIVE_SITE:-<THIS-SITE>}"
+      LOG=/var/log/hive-install.log; READY=/etc/hive-ready
+      umask 077; : > "$LOG"
+      # A small server runs out of memory while it installs, and later when several agents work. Swap is a safety net, not a cure.
+      if [ -z "$(swapon --show --noheadings)" ] && [ "$(awk '/MemTotal/ {print int($2/1024)}' /proc/meminfo)" -lt 6000 ]; then
+        fallocate -l 2G /swapfile && chmod 600 /swapfile && mkswap /swapfile >/dev/null && swapon /swapfile && echo '/swapfile none swap sw 0 0' >> /etc/fstab
+      fi
+      if curl -fsSL "$SITE/install.sh" | HIVE_ACCEPT=1 sh >> "$LOG" 2>&1; then
+        sleep 5
+        PORT=$(python3 -c "import json;print(json.load(open('$(getent passwd hive | cut -d: -f6)/.hive/web.json'))['port'])" 2>/dev/null)
+        if [ -n "$PORT" ]; then printf 'ok %s\n' "$PORT" > "$READY"; else echo "failed the app has no port" > "$READY"; fi
+      else
+        echo "failed the install stopped" > "$READY"
+      fi
+      chmod 644 "$READY"
+  - path: /etc/update-motd.d/99-hive
+    permissions: "0755"
+    content: |
+      #!/bin/sh
+      # The welcome message at login. It shows the command to run on your own computer, never the key.
+      R=/etc/hive-ready
+      echo
+      if [ ! -s "$R" ]; then
+        echo "The Hive is still being installed (about 5 minutes). Watch it with: sudo tail -f /var/log/hive-install.log"
+      elif [ "$(cut -d' ' -f1 "$R")" = ok ]; then
+        P=$(cut -d' ' -f2 "$R")
+        echo "The Hive is installed. Nothing is open to the internet except SSH."
+        echo "  1. On your own computer, run:   ssh -L $P:127.0.0.1:$P <the login you just used>@<this server's address>"
+        echo "  2. Here, as the one who sets up the server, get the address:   sudo -iu hive hive web"
+        echo "  3. Open that address in your computer's browser. It is the key to the Hive, so keep it to yourself."
+        echo "  Other ways in (Slack, Tailscale, a tunnel on your own account): <THIS-SITE>/guide/#on-a-small-server"
+      else
+        echo "The Hive did not install: $(cut -d' ' -f2- "$R"). The log is /var/log/hive-install.log (sudo needed)."
+        echo "Run the same line again as root:  curl -fsSL <THIS-SITE>/install.sh | HIVE_ACCEPT=1 sh"
+      fi
+      echo
+runcmd:
+  - [ /usr/local/sbin/hive-first-boot ]
