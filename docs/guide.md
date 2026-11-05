@@ -89,7 +89,7 @@ The home page answers two questions: what do you want done, and what needs you?
 - **Stopped:** an agent hit a usage limit or an error, or looks stuck. One stopped by a limit usually resumes by itself after the reset. Otherwise a message gets it going.
 - **Working now:** what's under way.
 
-To start a job, type in the box and press **Start** or Enter. Shift+Enter makes a new line. **Name it** gives the conversation a name; otherwise it's named for you. **Attach** adds files.
+To start a job, type in the box and press **Start** or Enter. Shift+Enter makes a new line. **Name it** gives the conversation a name; otherwise it's named for you. **Attach** adds files. If the voice module is installed and working, a microphone button records a voice memo: press it to start and press again to send (or hold it while you talk and let go), × or Esc throws the recording away. It is transcribed and summarized on the machine and answered in the conversation.
 
 ![A conversation where an agent has found a problem and is waiting for an answer](https://hivelab.ca/img/guide/chat-question.png)
 
