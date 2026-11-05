@@ -1853,6 +1853,7 @@ STEP_WORD = re.compile(r"(approve|deny) step [0-9a-f]{6}-[0-9a-f]{8}", re.I)
 # Simple mode's word to the agents, on each post sent from it. Inside the head's parentheses, so the web app hides it (SOURCE in web/js/core/model.js):
 # no ")" and no newline, and no "@", which would call someone. The core and the agents' prompts don't change.
 VIDEO_TYPES = {".mp4": "video/mp4", ".webm": "video/webm", ".mov": "video/quicktime", ".m4v": "video/mp4"}
+AUDIO_TYPES = {".mp3": "audio/mpeg", ".wav": "audio/wav", ".ogg": "audio/ogg", ".oga": "audio/ogg", ".opus": "audio/ogg", ".m4a": "audio/mp4", ".aac": "audio/aac", ".flac": "audio/flac", ".weba": "audio/webm"}
 class _Limit:
     """Reads at most n bytes from a file: the slice a Range request asks for."""
     def __init__(self, f, n): self.f, self.n = f, n
@@ -1916,6 +1917,18 @@ def feedback_draft_done(d):
     if not APPROVAL_ID.fullmatch(aid): raise ValueError("no such draft")
     (FB_DRAFTS / (aid + ".json")).unlink(missing_ok=True)
     return {"ok": True}
+
+_PHONE = [0.0, False]
+def phone_ready():
+    """True when the phone module's call service answers on 127.0.0.1:8792 with its models loaded. Checked at most every 20 s."""
+    if time.time() - _PHONE[0] > 20:
+        from urllib.request import urlopen
+        try:
+            with urlopen("http://127.0.0.1:8792/health", timeout=0.4) as r: ok = json.loads(r.read()).get("models") is True
+        except (OSError, ValueError): ok = False
+        _PHONE[:] = [time.time(), ok]
+    return _PHONE[1]
+
 
 def voice_ready():
     """True when the voice module's service has proved itself working: its self-test passed and its heartbeat is under 2 minutes old."""
@@ -3758,12 +3771,13 @@ def serve(port):
             m = re.fullmatch(r"/files/([0-9a-f]{12})/([A-Za-z0-9_][A-Za-z0-9_.-]*)", path)
             f = HOME_FILES / m[1] / m[2] if m else None
             if not f or f.is_symlink() or not f.is_file() or not f.resolve().is_relative_to(HOME_FILES.resolve()): return self.send_error(404)
-            ct = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif"}.get(f.suffix.lower())
+            ct = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp"}.get(f.suffix.lower())
+            if view and f.suffix.lower() == ".svg": ct = "image/svg+xml"   # only ?view=1, for the preview's <img>; the sandbox CSP below stops its scripts if opened in a tab
             page = view and f.suffix.lower() in (".html", ".htm")
             if page: ct = "text/html; charset=utf-8"
             pdf = view and f.suffix.lower() == ".pdf"   # only ?view=1: the viewer frames it; the browser's own PDF viewer needs a CSP without "sandbox"
             if pdf: ct = "application/pdf"
-            vid = VIDEO_TYPES.get(f.suffix.lower()) if view else None   # only ?view=1: the viewer plays it in a <video>, with seeking (Range)
+            vid = (VIDEO_TYPES.get(f.suffix.lower()) or AUDIO_TYPES.get(f.suffix.lower())) if view else None   # only ?view=1: the preview plays it in a <video>/<audio>, with seeking (Range)
             if vid: ct = vid
             size = f.stat().st_size; lo, hi = 0, size - 1
             rm = vid and re.fullmatch(r"bytes=(\d*)-(\d*)", self.headers.get("Range") or "")
@@ -3778,7 +3792,7 @@ def serve(port):
             self.send_header("Content-Type", ct or "application/octet-stream")
             self.send_header("Content-Length", str(hi - lo + 1))
             self.send_header("Content-Disposition", ("inline" if ct else "attachment") + f'; filename="{f.name}"')
-            self.send_header("Content-Security-Policy", PAGE_CSP if page else "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'self'" if pdf else "sandbox; default-src 'none'")
+            self.send_header("Content-Security-Policy", PAGE_CSP if page else "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'self'" if pdf else "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:" if ct == "image/svg+xml" else "sandbox; default-src 'none'")
             self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header("Referrer-Policy", "no-referrer")
             self.send_header("Cache-Control", "no-store")
@@ -3858,11 +3872,25 @@ def serve(port):
             if not self.secrets_on: self.can = tuple(c for c in self.can if c != "secrets")  # off unless web.json says so, or this is a consumer install; no route can set it
             return True
 
+        def phone(self, u, n=None):
+            """The phone module's call service (modules/phone, 127.0.0.1:8792), passed through: calls, rings, the person's speech."""
+            from urllib.request import Request, urlopen
+            from urllib.error import HTTPError, URLError
+            if n is not None and not 0 <= n <= 20_000_000: return self.deny(413, "too big")
+            body = self.rfile.read(n) if n else b""
+            path = u.path[len("/api/phone"):] + (f"?{u.query}" if u.query else "")
+            try:
+                with urlopen(Request(f"http://127.0.0.1:8792{path}", data=body if n is not None else None, method="POST" if n is not None else "GET",
+                                     headers={"Content-Type": self.headers.get("Content-Type") or "application/octet-stream"}), timeout=60) as r:
+                    return self.send(r.read(), "application/json")
+            except HTTPError as e: return self.send(e.read(), "application/json", status=e.code)
+            except (URLError, OSError): return self.deny(503, "the phone service isn't running (systemctl --user start hive-phone)")
+
         def app_info(self):
             web = web_cfg() or {}
             info = {"route": self.route, "can": list(self.can), "app": self.route != "open", "brand": brand_view()}
             if self.route != "open": info.update(setup=SETUP.get(), secrets_on=self.secrets_on, settings=settings_brief())
-            if self.route != "open": info["default_model"] = default_model(); info["voice"] = voice_ready()
+            if self.route != "open": info["default_model"] = default_model(); info["voice"] = voice_ready(); info["phone"] = phone_ready() and "post" in self.can
             dm = (jload(HOME / "core" / "config.json", {}) or {}).get("rootwarden_dm") if self.route != "open" else None
             if isinstance(dm, str) and re.fullmatch(r"https://[a-z0-9-]+\.slack\.com/archives/D[A-Z0-9]+", dm): info["rootwarden_dm"] = dm
             if self.mode: info.update(mode=self.mode, full_left=self.full_left)
@@ -3892,8 +3920,9 @@ def serve(port):
                 if u.path == "/login" or (page and not self.signed):
                     return self.send(LOGIN_PAGE.encode(), "text/html; charset=utf-8")
                 if not self.signed: return self.deny(401, "sign in: run hive web")
-                need = GET_CAP.get(u.path) or ("read" if u.path.startswith("/files/") else None)
+                need = GET_CAP.get(u.path) or ("read" if u.path.startswith("/files/") else "post" if u.path.startswith("/api/phone/") else None)
                 if need and need not in self.can: return self.deny(403, f"this route doesn't allow {need}")
+            if u.path.startswith("/api/phone/"): return self.phone(u)
             if display and shown[1] == "/dual-screen":
                 self.send_response(302); self.send_header("Location", "/dual-screen/1" + (shown[2] or "")); self.send_header("Content-Length", "0"); self.end_headers(); return
             if display:
@@ -4020,8 +4049,9 @@ def serve(port):
             if u.path in LOCAL_ONLY:
                 if self.route != "local": return self.send_error(403)
             else:
-                need = POST_CAP.get(u.path)
+                need = POST_CAP.get(u.path) or ("post" if u.path.startswith("/api/phone/") else None)
                 if not need or need not in self.can: return self.send_error(403)
+            if u.path.startswith("/api/phone/"): return self.phone(u, n)
             if u.path == "/api/upload":
                 if not 0 < n <= MAX_FILE: return self.deny(413, "a file can be up to 100 MB")
                 try: return self.send(json.dumps(save_upload(parse_qs(u.query).get("name", ["file"])[0], n, self.rfile)).encode(), "application/json")

@@ -12,6 +12,7 @@ import { href } from "../core/router.js";
 import { layout } from "../core/nav.js";
 import { getTheme, cycleTheme, THEMES } from "../core/theme.js";
 import { statusDot, button, icon } from "./kit.js";
+import { startCall, phoneReady, inCall } from "./phone.js";
 import { D as deck, supported as deckSupported } from "../deck/control.js";
 
 export function statusBits() {
@@ -71,12 +72,16 @@ const ring = pct => s("svg", { class: "top-ring", viewBox: "0 0 16 16", "aria-hi
     "stroke-dasharray": `${(Math.min(100, Math.max(0, pct)) * 0.377).toFixed(1)} 37.7`, transform: "rotate(-90 8 8)" }));
 /** A pill that opens a page: the whole pill is the link (a stretched anchor), so the pill keeps the bar's own look. */
 const goPill = (to, say, attrs, ...kids) => h("span", { ...attrs, class: "top-pill" }, ...kids, h("a", { class: "top-pill-go", href: href(to), "aria-label": say, title: attrs.title || say }));
+/** Voice call with the Hive from any page: the same call as the composer's phone button, with nobody picked, so the Hive answers and can put you through. */
+const callBtn = () => phoneReady() && can("post") ? button("Call the Hive", () => { if (!inCall()) startCall({ to: null }); },
+  { kind: "icon", size: "s", icon: "phone", cls: "top-call", title: "Voice call with the Hive. Ask it anything, or ask to be put through to whoever is working on something." }) : null;
 function appBits() {
   const n = S.running.size, all = logins(), stop = hiveStopped(), tot = totalUse(all), act = activeUse(S.usage || { logins: all });
   const left = act && Math.max(0, 100 - Math.round(act.pct)), left5 = act && act.five && Math.max(0, 100 - Math.round(act.five.pct));
   const names = act && act.ls.map(l => l.name + (l.plan ? " " + l.plan : "")).join(", ");
   const ro = act && runOut(S.usage || { logins: all }), out = ro && ro.at != null ? ro.at : null;
   return [
+    callBtn(),
     S.failed ? h("span", { "data-tone": "bad" }, statusDot("stuck"), "Lost contact, last data " + ago(S.fresh)) : null,
     stop ? goPill(stop.why === "off" ? "settings" : "usage", stop.why === "off" ? "Settings" : "Usage", { "data-tone": "bad", title: stop.why === "off" ? "The Hive isn't running" : "Every account is past its usage line" }, statusDot("limited"), stop.why === "off" ? "Not running" : "Stopped")
       : goPill("now", "Agents: what each is doing", { title: "agents running now: open Agents", "data-tone": n ? "good" : null }, statusDot("working", { live: n > 0 }), n ? [h("b", null, String(n)), n === 1 ? " agent working" : " agents working"] : "No agents working"),

@@ -14,6 +14,8 @@ import { agentHref } from "../core/router.js";
 import { button, icon, statusDot } from "./kit.js";
 import { replyTo } from "./composer.js";
 import { wordButton } from "./rootword.js";
+import { voiceMemo, VOICE } from "./voicememo.js";
+import { openPreview, previewKey, kindOf, badgeOf, remember } from "./preview.js";
 
 // ---- read marks ----
 // Has this post reached the agent it names? Read: handed to it mid-run (the inbox hook's record, /api/delivered),
@@ -81,77 +83,35 @@ export function messageReceipt(p) {
   return el;
 }
 
-// ---- attachments: images as thumbnails, text files open in place, anything else downloads ----
-// All open in one viewer window. Text is shown through textContent only, and svg is never rendered.
+// ---- attachments: images as thumbnails, everything else as a chip; a click opens the file in the preview panel (preview.js) ----
 export const IMG = /\.(png|jpe?g|gif|webp)$/i;
-const TXT = /\.(txt|md|log|json|jsonl|csv|tsv|py|js|mjs|ts|sh|c|h|cpp|v|sv|vh|yaml|yml|toml|ini|cfg|xml|html|css|go|rs|kicad_pcb|kicad_sch|net|sp|cir|spice|lef|def|sdc|tcl)$/i;
 export const fileUrl = (p, f) => `/files/${encodeURIComponent(p.id)}/${encodeURIComponent(f.name)}`;
 export const PDF = /\.pdf$/i;
 export const VID = /\.(mp4|webm|mov|m4v)$/i;
 export const PAGE = /\.html?$/i;
 export const pageUrl = (p, f) => fileUrl(p, f) + "?view=1";
 export const fsize = n => (n == null ? "" : n >= 1048576 ? (n / 1048576).toFixed(1) + " MB" : n >= 1024 ? Math.round(n / 1024) + " kB" : n + " B");
-const ext = name => (name.split(".").pop() || "file").slice(0, 5).toUpperCase();
+const TYPE = { svg: "Picture", video: "Video", audio: "Audio", pdf: "PDF", html: "Web page", md: "Document", table: "Table", notebook: "Notebook", json: "Data", xlsx: "Spreadsheet", docx: "Document", pptx: "Slides", diff: "Changes", mermaid: "Diagram", code: "Code", text: "Text" };
+const OPEN_VERB = { video: "Play", audio: "Play" };
 
 // An image that won't load (gone, or not copied here) shows as a tile that says so, not the browser's broken icon. error doesn't bubble.
 if (typeof document !== "undefined") document.addEventListener("error", e => {
   const t = e.target && e.target.tagName === "IMG" && e.target.closest(".msg-thumb"); if (t) t.dataset.broken = "";
 }, true);
+const items = p => (p.files || []).map(f => remember({ id: p.id, name: f.name, size: f.size, from: p.from, t: p.t }));
+const viewFile = (p, f) => openPreview(items(p), Math.max(0, (p.files || []).findIndex(x => x.name === f.name)));
 function attachment(p, f) {
-  const u = fileUrl(p, f);
-  if (IMG.test(f.name)) return h("button", { type: "button", class: "msg-thumb", title: f.name + ", click to view", onclick: () => viewFile(p, f) },
-    h("img", { src: u, alt: f.name, loading: "lazy" }), h("span", null, f.name));
-  if (simpleOn() && PAGE.test(f.name)) return h("a", { class: "msg-file", title: "Open this page in a new tab", href: pageUrl(p, f), target: "_blank", rel: "noopener noreferrer" },
-    h("b", null, "PAGE"), h("span", null, h("span", { class: "msg-fn" }, f.name), h("span", { class: "meta" }, "open the page")));
-  if (VID.test(f.name)) return h("button", { type: "button", class: "msg-file", title: "Click to play", onclick: () => viewFile(p, f) },
-    h("b", null, "VIDEO"), h("span", null, h("span", { class: "msg-fn" }, f.name), h("span", { class: "meta" }, fsize(f.size) + " · play")));
-  if (PDF.test(f.name)) return h("button", { type: "button", class: "msg-file", title: "Click to read", onclick: () => viewFile(p, f) },
-    h("b", null, "PDF"), h("span", null, h("span", { class: "msg-fn" }, f.name), h("span", { class: "meta" }, fsize(f.size) + " · read")));
-  const txt = TXT.test(f.name) && (f.size == null || f.size < 2 * 1048576);
-  const props = txt ? { type: "button", onclick: () => viewFile(p, f) } : { href: u, download: f.name };
-  return h(txt ? "button" : "a", { class: "msg-file", title: txt ? "Click to read" : "Download", ...props },
-    h("b", null, ext(f.name)),
-    h("span", null, h("span", { class: "msg-fn" }, f.name), h("span", { class: "meta" }, fsize(f.size) + (txt ? " · read" : " · download"))));
-}
-
-const MD = /\.(md|markdown)$/i;
-function viewFile(p, f) {
-  const all = (p.files || []).filter(x => IMG.test(x.name) || TXT.test(x.name) || PDF.test(x.name) || VID.test(x.name));
-  let i = Math.max(0, all.findIndex(x => x.name === f.name));
-  const stage = h("div", { class: "viewer-s" }), cap = h("div", { class: "meta viewer-c" }), open = h("a", { class: "btn", "data-size": "s", target: "_blank", rel: "noopener" }, "Open original");
-  const dlg = h("dialog", { class: "viewer", "aria-label": "File viewer" },
-    h("div", { class: "viewer-b" }, cap,
-      all.length > 1 ? button("‹ Prev", () => show(i - 1), { size: "s" }) : null,
-      all.length > 1 ? button("Next ›", () => show(i + 1), { size: "s" }) : null,
-      open, button("Close", () => dlg.close(), { size: "s" })),
-    stage);
-  async function show(k) {
-    i = (k + all.length) % all.length;
-    const g = all[i], u = fileUrl(p, g);
-    open.href = u; cap.textContent = `${g.name} · ${fsize(g.size)} · from ${p.from === "person" ? "you" : p.from}, ${stamp(p.t)}`;
-    if (IMG.test(g.name)) {
-      const im = h("img", { src: u, alt: g.name, title: "Click to zoom" });
-      im.addEventListener("click", () => im.toggleAttribute("data-full"));
-      stage.replaceChildren(im); return;
-    }
-    if (VID.test(g.name)) { open.href = pageUrl(p, g); stage.replaceChildren(h("video", { class: "viewer-vid", src: pageUrl(p, g), controls: true, autoplay: true, playsinline: true, title: g.name })); return; }
-    if (PDF.test(g.name)) { open.href = pageUrl(p, g); stage.replaceChildren(h("iframe", { class: "viewer-pdf", src: pageUrl(p, g), title: g.name })); return; }
-    const pre = h("pre", null, "Loading…"); stage.replaceChildren(pre);
-    try {
-      const r = await fetch(u, { cache: "no-store" }); if (!r.ok) throw Error(r.status);
-      let t = await r.text(); const cut = t.length > 400000; if (cut) t = t.slice(0, 400000);
-      pre.textContent = t + (cut ? "\n\n… (cut here; open the original for the rest)" : "");
-      if (MD.test(g.name)) {   // Markdown shows formatted, with the plain text one press away
-        const md = markdown(t + (cut ? "\n\n… (cut here; open the original for the rest)" : ""));
-        let plain = false; const flip = button("Plain text", () => { plain = !plain; stage.replaceChildren(plain ? pre : md, flip); flip.textContent = plain ? "Formatted" : "Plain text"; }, { size: "s", cls: "viewer-t" });
-        stage.replaceChildren(md, flip);
-      }
-    } catch (e) { pre.textContent = "Couldn't load it: " + e.message; }
-  }
-  dlg.addEventListener("keydown", e => { if (all.length > 1 && e.key === "ArrowRight") show(i + 1); if (all.length > 1 && e.key === "ArrowLeft") show(i - 1); });
-  dlg.addEventListener("click", e => { if (e.target === dlg) dlg.close(); });
-  dlg.addEventListener("close", () => dlg.remove());
-  document.body.append(dlg); dlg.showModal(); show(i);
+  const key = p.id + "/" + f.name, on = previewKey() === key ? "" : null;
+  if (IMG.test(f.name)) return h("button", { type: "button", class: "msg-thumb", title: f.name + ", click to view", "data-pv-key": key, "data-pv-on": on, onclick: () => viewFile(p, f) },
+    h("img", { src: fileUrl(p, f), alt: f.name, loading: "lazy" }), h("span", null, f.name));
+  const k = kindOf(f.name);
+  // A voice memo or audio file plays in place: a waveform card, with the file's own panel one click away on its name.
+  if (VOICE.test(f.name)) return voiceMemo(fileUrl(p, f) + "?view=1", f.name, fsize(f.size), f.size, { key, on, open: () => viewFile(p, f) });
+  // A card, the way Claude shows a file it made: a page with the type on it, the name, type and size, and Open.
+  return h("button", { type: "button", class: "msg-file", title: "Open " + f.name + " beside the conversation", "data-pv-key": key, "data-pv-on": on, "data-kind": k, onclick: () => viewFile(p, f) },
+    h("b", { "aria-hidden": "true" }, badgeOf(f.name)),
+    h("span", null, h("span", { class: "msg-fn" }, f.name), h("span", { class: "meta" }, [TYPE[k] || badgeOf(f.name) + " file", fsize(f.size)].filter(Boolean).join(" · "))),
+    h("span", { class: "msg-open" }, OPEN_VERB[k] || "Open"));
 }
 
 // ---- long posts: the start and the end show, the middle folds, so a report's conclusion is never the hidden part ----

@@ -1,40 +1,57 @@
-/* Knowledge over time (views/kbtime.js). Builds on map.css: the toolbar, stage, slider and side pane are the Map's. */
-.kbt-back{font-size:var(--fs-small);color:var(--link);text-decoration:none}
-.kbt-stage{height:auto;min-height:420px}
-.kbt-sc{flex:1;overflow:auto;padding:var(--s3)}
+/* Knowledge over time (views/kbtime.js), redesign 2026-11-04 (kb-ui). Builds on map.css: the toolbar, stage, slider and side pane are the Map's.
+   Changes from the old file are marked "new". Same class names; one DOM change (the back link gets a chevron icon). */
+.kbt .map-tb{gap:var(--s2) var(--s3);padding:var(--s2) var(--s5);min-height:52px}                                     /* new: slimmer toolbar */
+.kbt-back{display:inline-flex;align-items:center;gap:2px;height:var(--ctl);padding:0 10px 0 4px;margin-left:-8px;border-radius:var(--r-m);font-size:var(--fs-small);font-weight:var(--w-med);color:var(--ink-2);text-decoration:none}  /* new: a crumb, not a link */
+.kbt-back:hover{background:var(--hover);color:var(--ink)}
+.kbt-back .ic{width:16px;height:16px}
+.kbt-back+*{margin-left:var(--s2)}
+.kbt .map-sum{margin-left:auto;font-size:var(--fs-meta);color:var(--ink-3)}                                                   /* new: summary to the right, muted */
+.kbt-stage{height:auto;min-height:440px;border-radius:var(--r-l)}
+.kbt .map-cap{font-weight:var(--w-med);color:var(--ink-2);background:var(--bg)}                                                /* new */
+.kbt .map-cap[data-cut]{color:var(--accent-ink);font-weight:var(--w-bold)}
+.kbt-sc{flex:1;overflow:auto;padding:var(--s4)}
 .kbt-svg{display:block;width:100%;height:auto;min-width:560px}
-.kbt-box rect{fill:var(--sunken);stroke:var(--line);stroke-width:1}
-.kbt-bl{font:var(--w-bold) 11px var(--font);fill:var(--ink-3);text-transform:uppercase;letter-spacing:.04em}
+.kbt-box rect{fill:var(--bg);stroke:var(--line);stroke-width:1;rx:10}                                                         /* new: --bg not --sunken, rounder */
+.kbt-bl{font:var(--w-med) 12px var(--font);fill:var(--ink-2);letter-spacing:0}                                                 /* new: sentence case, not caps */
 .kbt-n{cursor:pointer}
-.kbt-n circle{fill:var(--ink-2);stroke:var(--surface);stroke-width:1.5;transition:r .4s cubic-bezier(.3,1.4,.5,1),opacity .3s}
+.kbt-n circle{fill:var(--ink-3);stroke:var(--surface);stroke-width:1.5;transition:r .4s cubic-bezier(.3,1.4,.5,1),opacity .3s}
 .kbt-n.hot circle{fill:var(--accent)}
 .kbt-n.gone circle{fill:none;stroke:var(--ink-3);stroke-dasharray:2 2}
-.kbt-n.sel circle{stroke:var(--focus);stroke-width:3}
+.kbt-n.sel circle{stroke:var(--ink);stroke-width:2.5}                                                                          /* new: ink ring; amber stays "lately changed" */
 .kbt-n:hover circle{stroke:var(--ink);stroke-width:2}
 .kbt-l{cursor:pointer}
 .kbt-lh{fill:none;stroke:transparent;stroke-width:9}
-.kbt-lv{fill:none;stroke:var(--ink-3);stroke-width:1.2;opacity:.55;transition:opacity .3s}
+.kbt-lv{fill:none;stroke:var(--ink-3);stroke-width:1.1;opacity:.45;transition:opacity .3s}
 .kbt-inf .kbt-lv{stroke-dasharray:4 3}
 .kbt-sup .kbt-lv{stroke:var(--warn);opacity:.9}
-.kbt-l.on .kbt-lv{stroke:var(--accent);stroke-width:2;opacity:1}
-.kbt-l:hover .kbt-lv{opacity:1;stroke-width:2}
-.kbt-l.dim .kbt-lv{opacity:.12}
-.kbt-n.dim{opacity:.3}
+.kbt-l.on .kbt-lv{stroke:var(--ink);stroke-width:1.8;opacity:1}                                                                 /* new: ink, so amber means one thing */
+.kbt-l:hover .kbt-lv{opacity:1;stroke-width:1.8}
+.kbt-l.dim .kbt-lv{opacity:.1}
+.kbt-n.dim{opacity:.25}
 #kbt-ar path{fill:var(--warn)}
+.kbt-rp{margin-top:var(--s3);border-radius:var(--r-pill);padding:var(--s1) var(--s4) var(--s1) var(--s1);box-shadow:var(--e1)}   /* new: a floating pill */
+.kbt-rp>.btn:first-child{border-radius:var(--r-pill)}
 .kbt-rp .map-rp-t{overflow:visible}
-.kbt-gap{position:absolute;top:6px;height:20px;min-width:2px;border-radius:2px;background:repeating-linear-gradient(135deg,var(--line-2) 0 3px,transparent 3px 6px);pointer-events:auto}
-.kbt-tick{position:absolute;top:22px;width:2px;height:6px;margin-left:-1px;background:var(--accent);opacity:.7;pointer-events:none}
-.kbt-row{width:100%;border:0;border-top:1px solid var(--line);background:none;text-align:left;font:inherit;color:inherit;cursor:pointer}
+.kbt-gap{position:absolute;top:9px;height:14px;min-width:2px;border-radius:2px;background:repeating-linear-gradient(135deg,var(--line-2) 0 2px,transparent 2px 5px);pointer-events:auto}
+.kbt-tick{position:absolute;top:22px;width:2px;height:5px;margin-left:-1px;border-radius:1px;background:var(--accent);opacity:.7;pointer-events:none}
+.kbt .map-side{background:var(--bg)}                                                                                             /* new: side pane reads as chrome */
+.kbt .figs .fig b{font-variant-numeric:tabular-nums}
+.kbt-row{width:100%;border:0;border-top:0;border-radius:var(--r-s);background:none;text-align:left;font:inherit;color:inherit;cursor:pointer}   /* new: no hairlines, hover pill */
 .kbt-row:hover{background:var(--hover)}
-.kbt-row:first-of-type{border-top:0}
-.kbt-ev{align-items:flex-start}
+.kbt-ev{align-items:flex-start;padding-block:6px}
 .kbt-ev small{display:block;color:var(--ink-3);font-size:var(--fs-meta)}
-.kbt-k{flex:none;width:64px;font-size:var(--fs-micro);font-weight:var(--w-bold);text-transform:uppercase;letter-spacing:.04em;color:var(--ink-3)}
-.kbt-k[data-kind=exact]{color:var(--good-ink)}
-.kbt-k[data-kind=stated]{color:var(--info-ink)}
-.kbt-how{margin:0;padding-left:1.1em;font-size:var(--fs-small);color:var(--ink-2);display:flex;flex-direction:column;gap:6px}
+.kbt-k{flex:none;width:auto;min-width:56px;margin-top:1px;padding:1px 6px;border-radius:var(--r-pill);background:var(--sunken);font-size:var(--fs-micro);font-weight:var(--w-med);text-align:center;color:var(--ink-3);text-transform:none;letter-spacing:0}  /* new: pill */
+.kbt-k[data-kind=exact]{color:var(--good-ink);background:color-mix(in oklab,var(--good) 12%,transparent)}
+.kbt-k[data-kind=stated]{color:var(--accent-ink);background:var(--accent-bg)}
+.kbt-how{margin:0;padding-left:1.1em;font-size:var(--fs-small);line-height:1.55;color:var(--ink-2);display:flex;flex-direction:column;gap:var(--s2)}
 .kbt-p{margin:var(--s2) 0;font-size:var(--fs-small);color:var(--ink-2)}
 .kbt-spark svg{display:block;width:100%;height:40px}
-.kbt-spark polyline{fill:none;stroke:var(--accent);stroke-width:1.5;vector-effect:non-scaling-stroke}
+.kbt-spark polyline{fill:none;stroke:var(--data);stroke-width:1.5;vector-effect:non-scaling-stroke}                            /* new: --data, it is a chart line */
 @media (prefers-reduced-motion:reduce){.kbt-n circle,.kbt-lv{transition:none}}
 .kb-time{margin-left:auto}
+@container (max-width:640px){
+  .kbt .map-tb{padding:var(--s2) var(--s3)}
+  .kbt .map-sum{flex-basis:100%;margin-left:0;order:3}
+  .kbt-sc{padding:var(--s2)}
+  .kbt-rp{position:sticky;bottom:var(--s2)}
+}

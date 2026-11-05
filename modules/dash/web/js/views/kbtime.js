@@ -8,7 +8,7 @@ import { h, s } from "../core/dom.js";
 import { can, jget } from "../core/store.js";
 import { plural, stamp } from "../core/format.js";
 import { href } from "../core/router.js";
-import { button, empty, seg } from "../ui/kit.js";
+import { button, empty, icon, seg } from "../ui/kit.js";
 
 const PLAY_MS = 12000, PITCH = 30, WIDTH = 1000;
 const K = { D: null, L: null, failed: "", at: 0, cut: null, playing: false, sel: null, show: "all", update: () => {} };
@@ -224,7 +224,7 @@ export default {
     const t = cutT(), sn = selNote(), sl = selLink();
     return h("div", { class: "map kbt", "data-key": "kbtime" },
       h("div", { class: "map-tb" },
-        h("a", { href: href("knowledge"), class: "kbt-back" }, "Knowledge"),
+        h("a", { href: href("knowledge"), class: "kbt-back" }, icon("chevron-left"), "Knowledge"),
         seg(LINKS, K.show, v => { K.show = v; K.update(); }, { label: "Links" }),
         h("span", { class: "map-sum", role: "status" }, `${plural(D.notes.length, "note")} ever · ${plural(D.commits, "backup commit")} touched ~/kb`)),
       h("div", { class: "map-bd" },

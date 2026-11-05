@@ -21,7 +21,11 @@ const INLINE = new RegExp([
   "https?:\\/\\/[^\\s<>]+",                                                // bare link
   "\\[\\^([^\\]\\s]+)\\]",                                                  // 11 footnote reference
   "(?<![\\w&#/])#([A-Za-z0-9][\\w.-]*[A-Za-z0-9_]|[A-Za-z0-9])",                // 12 #thread
+  "(?<![\\w/.-])(?:~|\\/home\\/[\\w.-]+)?\\/files\\/([0-9a-f]{12})\\/([A-Za-z0-9_][A-Za-z0-9_.-]*[A-Za-z0-9_])",  // 13,14 a post's file
 ].join("|"), "g");
+// A post's file, written as ~/files/<post id>/<name>: a link that opens it in the preview panel (preview.js handles the click).
+const FILE = /^(?:~|\/home\/[\w.-]+)?\/files\/([0-9a-f]{12})\/([A-Za-z0-9_][A-Za-z0-9_.-]*)$/;
+const fileRef = (id, name, ...kids) => h("a", { class: "ref", "data-kind": "file", "data-pv-key": id + "/" + name, href: `/files/${id}/${encodeURIComponent(name)}`, title: "Preview " + name }, ...kids);
 
 const link = (href, ...kids) => h("a", { href, target: "_blank", rel: "noopener noreferrer" }, ...kids);
 
@@ -43,12 +47,13 @@ function run(s, ms) {
     if (m.index < at) continue;
     let end = m.index + m[0].length, node;
     if (m[1] != null) node = m[1];
-    else if (m[3] != null) { const c = raw(m[3], ms); node = h("code", null, /^ .*[^ ].* $|^ [^ ] $/.test(c) ? c.slice(1, -1) : c); }
+    else if (m[3] != null) { let c = raw(m[3], ms); c = /^ .*[^ ].* $|^ [^ ] $/.test(c) ? c.slice(1, -1) : c; const f = FILE.exec(c); node = f ? fileRef(f[1], f[2], h("code", null, c)) : h("code", null, c); }
     else if (m[5] != null) node = link(raw(m[5], ms), run(m[4], ms));
     else if (m[6] != null || m[7] != null) node = h("strong", null, run(m[6] ?? m[7], ms));
     else if (m[8] != null || m[9] != null) node = h("em", null, run(m[8] ?? m[9], ms));
     else if (m[10] != null) node = h("del", null, run(m[10], ms));
     else if (m[11] != null) node = footRef(m[11]) || m[0];
+    else if (m[13] != null) node = fileRef(m[13], m[14], m[0]);
     else if (m[12] != null) node = S.threads && S.threads.has(m[12]) ? h("a", { class: "ref", "data-kind": "thread", href: threadHref(m[12]), title: "Thread " + m[12] }, "#" + m[12]) : m[0];
     else {
       // A bare link: leave sentence punctuation and an unmatched ) outside it.

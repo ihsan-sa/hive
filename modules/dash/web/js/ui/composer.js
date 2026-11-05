@@ -14,6 +14,7 @@ import { short, mdPlain, now } from "../core/format.js";
 import { button, icon, input, statusDot } from "./kit.js";
 import { openAside } from "./aside.js";
 import { sixSeven } from "../core/sixseven.js";
+import { startCall, phoneReady, inCall } from "./phone.js";
 import { run as eggRun } from "../core/easter.js";
 
 const CP = { update: null, th: undefined, focus: false, ac: null, menu: false, drag: false, sig: "", hist: null };
@@ -174,28 +175,99 @@ export const actions = {
 };
 
 // ---- voice memo: a record button, shown only while the voice module's service is proven working (S.app.voice) ----
-const REC = { rec: null, chunks: [], t0: 0, th: undefined, tick: null };
-async function recToggle(th) {
+// Seamless (the person, 11042046fbe8): the bar switches to recording on pointerdown, before the mic opens; pressing the
+// mic again (or letting go after holding it) sends the memo with whatever is typed; × throws it away; Esc too.
+// The waveform canvas sits in a data-own span so re-renders never reset it, and the timer is written straight to the DOM.
+const REC = { gen: 0, state: null, rec: null, stream: null, chunks: [], t0: 0, th: undefined, sendOnStop: true, down: 0, ctx: null };
+function recStart(th) {
+  if (REC.state) return;
   const d = draft(th);
-  if (REC.rec) { REC.rec.stop(); return; }
   if (!navigator.mediaDevices || !window.MediaRecorder) { d.err = "This browser can't record audio."; refresh(); return; }
-  let stream;
-  try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
-  catch (e) { d.err = "The microphone isn't available: allow it for this page and try again."; refresh(); return; }
-  const rec = new MediaRecorder(stream);
-  REC.rec = rec; REC.chunks = []; REC.t0 = Date.now(); REC.th = th;
-  rec.ondataavailable = e => { if (e.data.size) REC.chunks.push(e.data); };
-  rec.onstop = () => {
-    clearInterval(REC.tick); stream.getTracks().forEach(t => t.stop());
-    const type = rec.mimeType || "audio/webm", ext = /mp4/.test(type) ? "m4a" : /ogg/.test(type) ? "ogg" : "webm", t = new Date(), p = n => String(n).padStart(2, "0");
-    const f = new File(REC.chunks, `voice-${p(t.getHours())}${p(t.getMinutes())}${p(t.getSeconds())}.${ext}`, { type });
-    REC.rec = null; REC.chunks = [];
-    if (f.size) addFiles(REC.th, [f]); else refresh();
-  };
-  rec.start();
-  REC.tick = setInterval(refresh, 1000); refresh();
+  Object.assign(REC, { state: "starting", th, chunks: [], t0: 0, sendOnStop: true });
+  const AC = window.AudioContext || window.webkitAudioContext;
+  try { REC.ctx = AC ? new AC() : null; } catch (e) { REC.ctx = null; }   // made inside the gesture, so it isn't born suspended
+  refresh(); startWave();
+  navigator.mediaDevices.getUserMedia({ audio: true }).then(stream => {
+    if (REC.state !== "starting") { stream.getTracks().forEach(t => t.stop()); return; }   // stopped before the mic opened
+    const rec = new MediaRecorder(stream);
+    Object.assign(REC, { rec, stream });
+    rec.ondataavailable = e => { if (e.data.size) REC.chunks.push(e.data); };
+    rec.onstop = () => {
+      stream.getTracks().forEach(t => t.stop());
+      const type = rec.mimeType || "audio/webm", ext = /mp4/.test(type) ? "m4a" : /ogg/.test(type) ? "ogg" : "webm", t = new Date(), p = n => String(n).padStart(2, "0");
+      const f = new File(REC.chunks, `voice-${p(t.getHours())}${p(t.getMinutes())}${p(t.getSeconds())}.${ext}`, { type });
+      const th = REC.th, go = REC.sendOnStop && f.size > 0;
+      recReset();
+      if (go) { addFiles(th, [f]); if (draft(th).files.some(x => x.file === f)) send(th); } else refresh();
+    };
+    if (REC.ctx) { try { REC.ctx.createMediaStreamSource(stream).connect(REC.an); } catch (e) {} }
+    rec.start(); REC.t0 = Date.now(); REC.state = "rec"; refresh();
+  }).catch(() => { recReset(); d.err = "The microphone isn't available: allow it for this page and try again."; refresh(); });
 }
-const recLabel = () => { const s = Math.round((Date.now() - REC.t0) / 1000); return `Stop · ${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; };
+function recStop(sendIt) {
+  if (!REC.state) return;
+  REC.sendOnStop = sendIt;
+  if (REC.rec && REC.rec.state !== "inactive") REC.rec.stop();
+  else { recReset(); refresh(); }
+}
+function recReset() {
+  if (REC.ctx) REC.ctx.close().catch(() => {});
+  Object.assign(REC, { state: null, rec: null, stream: null, chunks: [], ctx: null, an: null, down: 0 });
+}
+// Press on the mic: start at once. Held past 450 ms and let go: that was push-to-talk, so send.
+function micDown(th, e) {
+  if (e.button !== 0 || REC.state) return;
+  REC.down = Date.now(); recStart(th);
+  window.addEventListener("pointerup", () => { REC.upAt = Date.now(); if (REC.down && Date.now() - REC.down > 450 && REC.th === th) recStop(true); }, { once: true });
+}
+// Live waveform, drawn every frame: the mic level (fast attack, slower fall) adds a bar every 45 ms and the bars glide left between.
+function startWave() {
+  const ctx = REC.ctx, gen = ++REC.gen; let an = null;
+  if (ctx) { an = ctx.createAnalyser(); an.fftSize = 512; an.smoothingTimeConstant = 0; REC.an = an; if (ctx.state === "suspended") ctx.resume().catch(() => {}); }
+  const buf = new Uint8Array(512), lv = [], STEP = 45, BW = 3;
+  let lvl = 0, last = performance.now();
+  const frame = now => {
+    if (!REC.state || REC.gen !== gen) return;
+    if (an && REC.state === "rec") {
+      an.getByteTimeDomainData(buf);
+      let sq = 0; for (const v of buf) sq += (v - 128) * (v - 128);
+      const x = Math.min(1, Math.sqrt(sq / buf.length) / 40);
+      lvl = x > lvl ? x : lvl * 0.85 + x * 0.15;
+    }
+    while (now - last > STEP) { last += STEP; lv.push(lvl); if (lv.length > 300) lv.shift(); }
+    const c = document.querySelector(".cp-wave"), tm = document.querySelector(".cp-rtime");
+    if (tm) tm.textContent = recTime();
+    if (c) {
+      const w = c.clientWidth, hgt = c.clientHeight, dpr = window.devicePixelRatio || 1, cw = Math.round(w * dpr), chh = Math.round(hgt * dpr);
+      if (c.width !== cw || c.height !== chh) { c.width = cw; c.height = chh; }
+      const g = c.getContext("2d"); g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, w, hgt);
+      g.fillStyle = c._col || (c._col = getComputedStyle(c).color || "#888");
+      const off = ((now - last) / STEP) * BW, n = Math.ceil(w / BW) + 1;
+      for (let i = 0; i < n; i++) {
+        const v = i < lv.length ? lv[lv.length - 1 - i] : 0, bh = Math.max(2, v * hgt), xx = w - (i + 1) * BW - off;
+        if (xx < -BW) break;
+        g.globalAlpha = i < lv.length ? 1 : 0.35; g.fillRect(xx, (hgt - bh) / 2, 2, bh);
+      }
+      g.globalAlpha = 1;
+    }
+    requestAnimationFrame(frame);
+  };
+  requestAnimationFrame(frame);
+}
+const recTime = () => { const s = REC.t0 ? Math.floor((Date.now() - REC.t0) / 1000) : 0; return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; };
+function recBar(th) {
+  if (!(S.app && S.app.voice)) return null;
+  // Keyed, so the mic's node isn't morphed into × under the pointer; and the click that ends a press is ignored.
+  const keyed = (k, b) => { b.setAttribute("data-key", k); return b; }, guard = f => () => { if (Date.now() - (REC.upAt || 0) >= 500) f(); };
+  if (REC.state && REC.th === th) return [
+    keyed("rx", button("Discard the voice memo", guard(() => recStop(false)), { kind: "icon", size: "s", icon: "close", cls: "cp-rx", title: "Throw this recording away (Esc)." })),
+    h("span", { class: "cp-wavebox", "data-key": "wave", "data-own": "", "data-sig": "w", "data-state": REC.state }, h("canvas", { class: "cp-wave", "aria-label": "Live recording level" })),
+    h("span", { class: "meta cp-rtime", "data-key": "rtime", "aria-live": "off" }, recTime()),
+    keyed("rec", button("Send the voice memo", guard(() => recStop(true)), { kind: "icon", size: "s", icon: "stop", cls: "cp-rec", title: "Stop and send the voice memo with what you've typed." }))];
+  const b = keyed("mic", button("Record a voice memo", guard(() => recStart(th)), { kind: "icon", size: "s", icon: "mic", cls: "cp-mic", title: "Record a voice memo: press to start, press again to send, or hold to talk and let go. It is transcribed and summarized on the machine's GPU." }));
+  b._on = { ...b._on, pointerdown: e => micDown(th, e) };
+  return b;
+}
 
 // ---- files ----
 function addFiles(th, list) {
@@ -429,16 +501,16 @@ export function composer({ thread, update, place = "thread", autofocus, top }) {
             if ((e.key === "ArrowUp" || e.key === "ArrowDown") && histStep(th, n, e.key === "ArrowUp")) { e.preventDefault(); return; }
             if (e.key === "Tab" && histTab(th, n)) { e.preventDefault(); return; }
           }
-          if (e.key === "Escape") { if (cancelReply()) { e.stopPropagation(); e.preventDefault(); } return; }
+          if (e.key === "Escape") { if (REC.state && REC.th === th) { e.preventDefault(); recStop(false); return; } if (cancelReply()) { e.stopPropagation(); e.preventDefault(); } return; }
           if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); if (e.ctrlKey || e.metaKey || !listEnter(th, n)) send(th); }
         },
         onpaste: e => { const fs = e.clipboardData && [...e.clipboardData.files]; if (fs && fs.length) { e.preventDefault(); addFiles(th, fs); } } }),
       h("div", { class: "cp-bar", "data-key": "bar" },
         h("input", { type: "file", multiple: true, hidden: true, class: "cp-pick", onchange: e => { addFiles(th, e.target.files); e.target.value = ""; } }),
         button("Attach files", (e, b) => b.parentNode.querySelector(".cp-pick").click(), { kind: "icon", size: "s", icon: "plus", cls: "cp-attach", title: "Attach files. You can also paste or drop them here." }),
-        S.app && S.app.voice ? (REC.rec && REC.th === th
-          ? button(recLabel(), () => recToggle(th), { kind: "quiet", size: "s", icon: "mic", cls: "cp-rec", title: "Stop recording and attach the voice memo." })
-          : button("Record a voice memo", () => recToggle(th), { kind: "icon", size: "s", icon: "mic", cls: "cp-mic", title: "Record a voice memo. It is transcribed and summarized on the machine's GPU." })) : null,
+        recBar(th),
+        phoneReady() && !(REC.state && REC.th === th) ? button("Call", () => { if (!inCall()) startCall(th ? { thread: th } : {}); },
+          { kind: "icon", size: "s", icon: "phone", cls: "cp-call", title: th ? "Voice call about this thread: a new agent picks up, reads the thread and talks with you. To talk with an agent itself, hover its name and press Call." : "Voice call with the Hive. Ask it anything, or ask to be put through to whoever is working on something." }) : null,
         can("secrets") || (S.app && S.app.secrets_on && S.app.mode === "expired") ? button("Send a secret", () => {
           if (!can("secrets")) { SB.open = false; SB.tone = "bad"; SB.say = "Saving a secret needs full mode, which ends after 30 minutes without using the app. Press \"Limited · sign in for full\" at the top, then press the lock again."; refresh(); return; }
           if (SB.open) closeSecrets(); else openSecrets(th); }, { kind: "icon", size: "s", icon: "lock", cls: "cp-lock", title: "Send a secret (a token or key): saved on the machine, never posted in chat." }) : null,

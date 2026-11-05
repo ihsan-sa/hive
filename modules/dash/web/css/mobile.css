@@ -60,11 +60,5 @@
   .tbl,.table-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
 
   /* knowledge: both search boxes one width, section heads stack so the note and its button don't squeeze */
-  .kb-top{padding:var(--s3) var(--s3) var(--s2)}
-  .kb-top input,.kb-phone.kb-find input{width:100%;box-sizing:border-box}
-  .kb-phone.kb-find{padding:var(--s2) var(--s3)}
-  .kb-note .sec-h{flex-wrap:wrap;row-gap:2px}
-  .kb-note .sec-h .sec-n{flex-basis:100%;order:2}
-  .kb-note .sec>.btn,.kb-note .sec-h .btn{align-self:flex-start}
 }
 @supports not (selector(:has(*))){@media (max-width:640px){.cm,.kb{height:calc(100dvh - var(--bar-h))}}}

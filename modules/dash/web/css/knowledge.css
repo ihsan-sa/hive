@@ -1,42 +1,319 @@
-/* Knowledge page: search results, the notes map, links between notes. Its own file so components.css stays a61c7's; tokens only. */
-.kb-hits{list-style:none;display:grid;gap:var(--s2)}
-.kb-hit{display:grid;gap:4px;padding:var(--s3);border:1px solid var(--line);border-radius:var(--r-m);color:var(--ink);text-decoration:none;min-width:0}
-.kb-hit:hover{border-color:var(--ink-3);color:var(--ink);background:var(--hover)}
-.kb-hit-t{display:flex;align-items:baseline;gap:var(--s2);min-width:0}
-.kb-hit-t b{font-weight:600;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.kb-hit-x{font-size:var(--fs-small);color:var(--ink-2);line-height:1.5;overflow-wrap:anywhere}
-.kb-hit .meta{overflow-wrap:anywhere}
-.kb-hit mark,.kb-list mark,.kb-plain mark{background:var(--accent-bg);color:var(--accent-ink);border-radius:2px;padding:0 1px}
-.kb-src-tag{margin-left:auto;flex:none;font-size:var(--fs-meta);color:var(--ink-3);border:1px solid var(--line);border-radius:var(--r-s);padding:0 5px}
-.kb-src-tag[data-src="kb"]{color:var(--accent-ink);border-color:var(--accent-bg);background:var(--accent-bg)}
+/* Knowledge page, redesign 2026-11-04 (kb-ui). Tokens only.
+   Replaces css/knowledge.css whole, and takes over the Knowledge rules that lived in components.css
+   (the .kb … .kb-tl block, ~lines 1078-1126, and the .vm / .kb-ask block, ~lines 2028-2051): delete those there.
+   Layout: a quiet sidebar on --bg (file tree), a white reading pane on --surface with one centred column.
+   States are data attributes: .kb-ask[data-state=idle|sending|working|answered|error], .vm[data-playing]. */
 
-.kb-map{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,240px),1fr));gap:var(--s3)}
-.kb-topic{display:grid;align-content:start;gap:4px;padding:var(--s2) var(--s3) var(--s3);border:1px solid var(--line);border-radius:var(--r-m);min-width:0}
-.kb-topic-h{display:flex;align-items:baseline;justify-content:space-between;gap:var(--s2);font-size:var(--fs-small);font-weight:var(--w-bold)}
-.kb-topic-h a{color:var(--ink);text-decoration:none}
-.kb-topic-h a:hover{text-decoration:underline;text-underline-offset:2px}
-.kb-topic .kb-more{margin:2px 0 0;justify-self:start}
-.kb-notes{list-style:none;display:grid}
-.kb-nr{display:grid;grid-template-columns:minmax(0,1fr) auto;column-gap:var(--s2);padding:5px 0 4px;color:var(--ink);text-decoration:none;font-size:var(--fs-small)}
-.kb-nr:hover .kb-nr-t{text-decoration:underline;text-underline-offset:2px}
-.kb-nr-t{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.kb-nr .meta{display:flex;gap:6px}
-.kb-nr-in{color:var(--ink-2)}
-.kb-nr-bar{grid-column:1/-1;height:3px;margin-top:3px;width:var(--w);border-radius:2px;background:var(--line-2)}
-.kb-nr-bar[data-fresh="1"]{background:var(--accent-bg)}
-.kb-nr-bar[data-fresh="2"]{background:color-mix(in srgb,var(--accent) 45%,var(--accent-bg))}
-.kb-nr-bar[data-fresh="3"]{background:var(--accent)}
+.kb{--kb-col:880px;--kb-side:272px;
+  display:grid;grid-template-columns:var(--kb-side) minmax(0,1fr);height:calc(100dvh - var(--top-h,var(--bar-h)));min-height:0;background:var(--bg)}
+#main:has(>.kb){min-height:0}
 
-.kb-cover{list-style:none;display:flex;flex-wrap:wrap;gap:var(--s2)}
-.kb-cover li{display:flex;align-items:baseline;gap:6px;padding:4px 10px;border:1px solid var(--line);border-radius:var(--r-m);font-size:var(--fs-small);color:var(--ink-2)}
-.kb-cover b{color:var(--ink);font-weight:600;font-variant-numeric:tabular-nums}
+/* ---------- sidebar: the file tree ---------- */
+.kb-side{display:flex;flex-direction:column;min-height:0;border-right:1px solid var(--line);background:var(--bg)}
+.kb-top{display:grid;gap:var(--s2);padding:var(--s3) var(--s3) var(--s2)}
+.kb-top .kb-crumbs{padding:0 var(--s1)}
+.kb-list{flex:1;min-height:0;overflow:auto;padding:0 var(--s2) var(--s4)}
+.kb-list .list{border-bottom:0}
+.kb-list .lr{border-top:0}
+.kb-list .lr-in{display:block;margin:0;padding:0 var(--s2);border-radius:var(--r-s);color:var(--ink-2)}
+.kb-list .lr-in:hover{background:var(--hover);color:var(--ink)}
+.kb-list .lr-t{height:var(--row-tight);gap:var(--s2);font-size:var(--fs-small)}
+.kb-list .lr-t b{font-weight:var(--w-med)}
+.kb-list .lr-t .ic{flex:none;width:15px;height:15px;color:var(--ink-3)}
+.kb-list .lr-t .meta{font-size:var(--fs-meta);color:var(--ink-3);font-variant-numeric:tabular-nums}
+.kb-list .lr-x{display:none}                          /* one line per row; the description is the row's title tooltip */
+.kb-list .lr-in[aria-current]{background:var(--sel);color:var(--ink);box-shadow:none}
+.kb-list .lr-in[aria-current] b{font-weight:var(--w-bold)}
+.kb-list .lr-in[aria-current] .ic{color:var(--accent-ink)}
+.kb-list .lr-more{padding:var(--s1) var(--s2)}
+.kb-list .empty{padding:var(--s3) var(--s2);font-size:var(--fs-small);color:var(--ink-3)}
+.kb-sub{padding:var(--s4) var(--s2) var(--s1);font-size:var(--fs-meta);font-weight:var(--w-med);color:var(--ink-3)}
+.kb-more{margin:var(--s1) 0 0}
 
+/* the search field (sidebar "find a file" and the main "search everything"): one shape, icon inside */
+.kb-q{position:relative;display:block;min-width:0}
+.kb-q>.ic{position:absolute;left:10px;top:50%;width:15px;height:15px;margin-top:-7.5px;color:var(--ink-3);pointer-events:none}
+.kb-q input{width:100%;height:var(--ctl);padding:0 var(--s3) 0 32px;border:1px solid var(--line);border-radius:var(--r-m);background:var(--surface);font:inherit;font-size:var(--fs-small);color:var(--ink)}
+.kb-q input::placeholder{color:var(--ink-3)}
+.kb-q input:hover{border-color:var(--line-2)}
+.kb-q input:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-bg)}
+.kb-q kbd{position:absolute;right:8px;top:50%;transform:translateY(-50%);padding:0 5px;border:1px solid var(--line);border-radius:4px;font:var(--fs-micro)/18px var(--font);color:var(--ink-3);background:var(--bg)}
+.kb-q input:focus~kbd,.kb-q input:not(:placeholder-shown)~kbd{display:none}
+
+/* ---------- main pane ---------- */
+.kb-main{min-width:0;min-height:0;overflow:auto;background:var(--surface);scroll-padding-top:64px}
+.kb-find{position:sticky;top:0;z-index:4;padding:var(--s3) var(--gutter);background:color-mix(in oklab,var(--surface) 90%,transparent);backdrop-filter:blur(10px)}
+.kb-find .kb-q{max-width:calc(var(--kb-col) - 2*var(--gutter));margin-inline:auto}
+.kb-find .kb-q input{height:var(--ctl-l);border-radius:var(--r-l);background:var(--bg);border-color:transparent;font-size:var(--fs-body)}
+.kb-find .kb-q input:hover{border-color:var(--line)}
+.kb-find .kb-q input:focus{background:var(--surface);border-color:var(--accent)}
+.kb-find .kb-q>.ic{left:13px}
+.kb-find .kb-q input{padding-left:36px}
+
+.kb-note,.kb-none{width:100%;max-width:var(--kb-col);margin-inline:auto;padding:var(--s5) var(--gutter) var(--s8);display:grid;gap:var(--s6);align-content:start}
+.kb-file{max-width:var(--kb-col)}
+.kb-note>*,.kb-note article>*{min-width:0}
+.kb-h{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:start;gap:var(--s1) var(--s3)}
+.kb-h>*{grid-column:1}
+.kb-h>.frow{grid-column:2;grid-row:1/span 3;display:flex;gap:var(--s1);align-self:start}
+.kb-t{font-size:var(--fs-head);font-weight:var(--w-bold);letter-spacing:-.015em;line-height:var(--lh-tight);overflow-wrap:anywhere}
+.kb-h>p.meta{display:flex;flex-wrap:wrap;align-items:center;gap:var(--s1) 6px;font-size:var(--fs-meta);color:var(--ink-3)}
+.kb-h>p.meta code{font:var(--fs-meta)/1.6 var(--mono);color:var(--ink-2);background:var(--sunken);border-radius:4px;padding:0 6px}
+.kb-back{display:none;justify-self:start;margin-left:-8px}
 .kb-hcrumbs{display:none}
+
+/* home head: the page title, one quiet line, then Ask */
+.kb-home-h{display:grid;gap:var(--s1);padding-top:var(--s5)}
+.kb-home-h .kb-t{font-size:var(--fs-figure);letter-spacing:-.02em}
+.kb-home-h .meta{font-size:var(--fs-small);color:var(--ink-3)}
+
+/* sections on the home page */
+.kb-note>.sec>.sec-h{display:flex;align-items:center;gap:var(--s2);margin-bottom:var(--s3)}
+.kb-note>.sec>.sec-h .sec-t{font-size:var(--fs-title);font-weight:var(--w-bold);color:var(--ink);letter-spacing:-.005em}
+.kb-note>.sec>.sec-h .sec-n{font-size:var(--fs-meta);color:var(--ink-3)}
+.kb-time{margin-left:auto}
+.kb-time .ic{width:15px;height:15px}
+
+/* breadcrumbs */
+.kb-crumbs{display:flex;flex-wrap:wrap;align-items:baseline;gap:2px 5px;font-size:var(--fs-meta);min-width:0;overflow-wrap:anywhere;color:var(--ink-3)}
+.kb-crumbs [aria-current]{color:var(--ink);font-weight:var(--w-med)}
+.kb-crumbs span[aria-hidden]{color:var(--line-2)}
+.kb-crumbs a{color:var(--ink-3);text-decoration:none}
+.kb-crumbs a:hover{color:var(--ink)}
+
+/* ---------- notes by topic (cards) ---------- */
+.kb-map{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,256px),1fr));gap:var(--s3)}
+.kb-topic{display:grid;align-content:start;gap:var(--s1);padding:var(--s3) var(--s2) var(--s2);border:1px solid var(--line);border-radius:var(--r-l);background:var(--surface);min-width:0;transition:border-color .15s}
+.kb-topic:hover{border-color:var(--line-2)}
+.kb-topic-h{display:flex;align-items:baseline;justify-content:space-between;gap:var(--s2);padding:0 var(--s2) var(--s1);font-size:var(--fs-body);font-weight:var(--w-bold);min-width:0}
+.kb-topic-h>:first-child{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.kb-topic-h a{color:var(--ink);text-decoration:none}
+.kb-topic-h a:hover{color:var(--accent-ink)}
+.kb-topic-h .meta{flex:none;font-size:var(--fs-meta);font-weight:400;color:var(--ink-3);font-variant-numeric:tabular-nums}
+.kb-notes{list-style:none;display:grid}
+.kb-nr{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;column-gap:var(--s3);height:var(--row-tight);padding:0 var(--s2);border-radius:var(--r-s);color:var(--ink-2);text-decoration:none;font-size:var(--fs-small)}
+.kb-nr:hover{background:var(--hover);color:var(--ink)}
+.kb-nr-t{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.kb-nr .meta{display:flex;gap:6px;font-size:var(--fs-meta);color:var(--ink-3);font-variant-numeric:tabular-nums}
+.kb-nr[data-fresh] .kb-nr-t::before{content:"";display:inline-block;width:6px;height:6px;margin:0 7px 1px 0;border-radius:50%;background:var(--accent)}   /* changed in the last 2 days */
+.kb-nr-in{color:var(--ink-2)}
+.kb-nr-bar{display:none}                              /* retired: the dot says "fresh", the time says the rest */
+.kb-topic .kb-more{justify-self:start;margin:2px 0 0;color:var(--ink-3)}
+.kb-topic .kb-more:hover{color:var(--ink)}
+
+/* ---------- search results ---------- */
+.kb-hits{list-style:none;display:grid;gap:2px;margin:0 calc(-1*var(--s3))}
+.kb-hit{display:grid;gap:3px;padding:var(--s3);border-radius:var(--r-m);color:var(--ink);text-decoration:none;min-width:0}
+.kb-hit:hover{background:var(--hover);color:var(--ink)}
+.kb-hit-t{display:flex;align-items:baseline;gap:var(--s2);min-width:0;font-size:var(--fs-body)}
+.kb-hit-t b{font-weight:var(--w-bold);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.kb-hit-x{font-size:var(--fs-small);color:var(--ink-2);line-height:1.55;overflow-wrap:anywhere;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.kb-hit .meta{font:var(--fs-meta)/1.5 var(--mono);color:var(--ink-3);overflow-wrap:anywhere}
+.kb-hit mark,.kb-list mark,.kb-plain mark{background:var(--accent-bg);color:var(--accent-ink);border-radius:2px;padding:0 1px}
+.kb-src-tag{margin-left:auto;flex:none;font-size:var(--fs-micro);font-weight:var(--w-med);color:var(--ink-3);background:var(--sunken);border-radius:var(--r-pill);padding:1px 8px}
+.kb-src-tag[data-src="kb"]{color:var(--accent-ink);background:var(--accent-bg)}
+
+/* ---------- reading a note ---------- */
+.kb-body{font-size:var(--fs-read);line-height:var(--lh-read);color:var(--ink);max-width:68ch}
+.kb-body .md{white-space:normal}
+.kb-body h1,.kb-body h2{font-size:var(--fs-lead);font-weight:var(--w-bold);letter-spacing:-.01em;margin:1.6em 0 .5em}
+.kb-body h3{font-size:var(--fs-title);font-weight:var(--w-bold);margin:1.4em 0 .4em}
+.kb-body p,.kb-body ul,.kb-body ol{margin:0 0 .9em}
+.kb-body ul,.kb-body ol{padding-left:1.4em}
+.kb-body li+li{margin-top:.25em}
+.kb-body a{color:var(--link);text-decoration:underline;text-decoration-color:color-mix(in oklab,var(--link) 35%,transparent);text-underline-offset:3px}
+.kb-body a:hover{text-decoration-color:currentColor}
+.kb-body :not(pre)>code{font:.88em/1 var(--mono);background:var(--sunken);border-radius:4px;padding:2px 5px}
+.kb-body pre{background:var(--sunken);border-radius:var(--r-m);padding:var(--s3) var(--s4);font:var(--fs-small)/1.55 var(--mono);overflow:auto}
+.kb-file .kb-codewrap,.kb-file .kb-code{max-width:none}
+.kb-doc{display:grid;gap:var(--s2)}
+.kb-doc>a.meta{font-size:var(--fs-meta);color:var(--ink-3)}
+.kb-edit{display:grid;gap:var(--s3)}
+.kb-edit textarea{width:100%}
+.kb-img{max-width:100%;height:auto;border:1px solid var(--line);border-radius:var(--r-m)}
+.kb-codewrap{min-width:0}
+.kb-code{position:relative;display:grid;grid-template-columns:auto minmax(0,1fr);border:1px solid var(--line);border-radius:var(--r-m);background:var(--surface);font-size:var(--fs-small);line-height:1.55;overflow:hidden}
+.kb-code pre{margin:0;padding:var(--s3) var(--s4);font:inherit;font-family:var(--mono);line-height:1.55;white-space:pre;tab-size:4}
+.kb-gutter{text-align:right;color:var(--ink-3);background:var(--bg);border-right:1px solid var(--line);user-select:none}
+.kb-src{overflow-x:auto}
+.kb-code-at{position:absolute;left:0;right:0;height:1.55em;background:var(--accent-bg);box-shadow:inset 2px 0 0 var(--accent);pointer-events:none}
+
+/* links in and out, under the note */
+.kb-rel{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,300px),1fr));gap:var(--s4) var(--s5);padding-top:var(--s5);border-top:1px solid var(--line)}
+.kb-rel .sec-t{font-size:var(--fs-meta);font-weight:var(--w-med);color:var(--ink-3)}
+.kb-links{display:grid;gap:0;margin:0 calc(-1*var(--s2))}
+.kb-link{display:grid;gap:1px;padding:6px var(--s2);border-radius:var(--r-s);color:var(--ink);text-decoration:none;min-width:0}
+.kb-link:hover{background:var(--hover);color:var(--ink)}
+.kb-link b{font-weight:var(--w-med);font-size:var(--fs-small);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.kb-link .meta{font:var(--fs-micro)/1.5 var(--mono);color:var(--ink-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.kb-tl{list-style:none;display:grid}
+.kb-tl li{display:grid;grid-template-columns:5.5rem minmax(0,1fr);gap:2px var(--s3);padding:7px 0;border-top:1px solid var(--line);font-size:var(--fs-small)}
+
+/* what search covers */
+.kb-cover{list-style:none;display:flex;flex-wrap:wrap;gap:var(--s2)}
+.kb-cover li{display:flex;align-items:baseline;gap:6px;padding:4px 10px;background:var(--sunken);border-radius:var(--r-pill);font-size:var(--fs-meta);color:var(--ink-2)}
+.kb-cover b{color:var(--ink);font-weight:var(--w-bold);font-variant-numeric:tabular-nums}
+.kb-phone{display:none}
+
+/* ================= Ask the Hive ================= */
+/* One card: the thread (when there is one) on top, the composer at the bottom. Home page: full; a file page with an
+   answer open: [data-collapsed] one line that expands. */
+.kb-ask{display:grid;gap:0;border:1px solid var(--line-2);border-radius:var(--r-xl);background:var(--surface);box-shadow:var(--e1);overflow:hidden;transition:border-color .15s,box-shadow .15s}
+.kb-ask:focus-within{border-color:color-mix(in oklab,var(--accent) 55%,var(--line-2))}
+.kb-ask-h{display:flex;align-items:center;gap:var(--s2);margin:0;padding:var(--s3) var(--s4) 0;font-size:var(--fs-small);font-weight:var(--w-bold);color:var(--ink)}
+.kb-ask-h>.ic{flex:none;width:16px;height:16px;color:var(--accent)}
+.kb-ask-h{white-space:nowrap;min-width:0}
+.kb-ask-h .meta{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;font-weight:400;color:var(--ink-3);font-size:var(--fs-meta)}
+.kb-ask-h .kb-ask-x{margin-left:auto;flex:none}
+.kb-ask[data-state=idle] .kb-ask-h{display:none}     /* idle: the composer alone, like a new chat */
+
+/* thread */
+.kb-ask-log{display:flex;flex-direction:column;gap:var(--s5);max-height:min(60vh,640px);overflow:auto;padding:var(--s4) var(--s5) var(--s3);overscroll-behavior:contain}
+.kb-ask-m{display:grid;gap:var(--s2);min-width:0}
+.kb-ask-m[data-who=me]{justify-self:end;max-width:min(80%,560px);padding:var(--s2) var(--s4);border-radius:var(--r-l) var(--r-l) var(--r-s) var(--r-l);background:var(--sunken);font-size:var(--fs-read);line-height:1.5;color:var(--ink)}
+.kb-ask-m[data-who=me] p{margin:0;overflow-wrap:anywhere}
+.kb-ask-m[data-who=me]>.meta{display:none}
+.kb-ask-by{display:flex;align-items:center;gap:var(--s2);font-size:var(--fs-meta);color:var(--ink-3)}
+.kb-ask-av{display:grid;place-items:center;flex:none;width:22px;height:22px;border-radius:6px;background:var(--accent-bg);color:var(--accent-ink)}
+.kb-ask-av .ic{width:13px;height:13px}
+.kb-ask-by b{color:var(--ink);font-weight:var(--w-bold);font-size:var(--fs-small)}
+.kb-ask-by time{opacity:0;transition:opacity .15s}
+.kb-ask-m:hover .kb-ask-by time,.kb-ask-m:focus-within .kb-ask-by time{opacity:1}
+.kb-ask-body{font-size:var(--fs-read);line-height:var(--lh-read);color:var(--ink);overflow-wrap:anywhere}
+.kb-ask-body p,.kb-ask-body ul,.kb-ask-body ol{margin:0 0 .7em}
+.kb-ask-body>:last-child{margin-bottom:0}
+.kb-ask-body :not(pre)>code{font:.88em/1 var(--mono);background:var(--sunken);border-radius:4px;padding:2px 5px}
+
+/* file-link chip: every backticked path in a reply */
+.kb-ask-link{display:inline-flex;align-items:center;gap:5px;max-width:100%;height:24px;padding:0 8px 0 6px;margin:0 1px;vertical-align:-6px;border:1px solid var(--line);border-radius:var(--r-s);background:var(--bg);color:var(--ink);font-size:var(--fs-small);line-height:1;text-decoration:none;white-space:nowrap;transition:border-color .12s,background .12s}
+.kb-ask-link:hover{border-color:var(--accent);background:var(--accent-bg);color:var(--ink)}
+.kb-ask-link:focus-visible{outline:2px solid var(--focus);outline-offset:1px}
+.kb-ask-link .ic{flex:none;width:14px;height:14px;color:var(--ink-3)}
+.kb-ask-link:hover .ic{color:var(--accent-ink)}
+.kb-ask-n{font-weight:var(--w-med);overflow:hidden;text-overflow:ellipsis}
+.kb-ask-d{color:var(--ink-3);font-size:var(--fs-meta);overflow:hidden;text-overflow:ellipsis;direction:rtl;text-align:left;min-width:0;max-width:22ch}  /* rtl: a long folder keeps its end */
+.kb-ask-link[aria-current]{border-color:var(--accent);background:var(--accent-bg)}            /* the file you have open now */
+
+/* the answer's files, listed once under it */
+.kb-ask-files{display:grid;gap:2px;margin-top:var(--s1);padding:var(--s2);border:1px solid var(--line);border-radius:var(--r-l);background:var(--bg)}
+.kb-ask-files>h3{padding:2px var(--s2) var(--s1);font-size:var(--fs-meta);font-weight:var(--w-med);color:var(--ink-3)}
+.kb-ask-file{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:var(--s2);height:var(--row-tight);padding:0 var(--s2);border-radius:var(--r-s);color:var(--ink);text-decoration:none;font-size:var(--fs-small)}
+.kb-ask-file:hover{background:var(--surface);box-shadow:0 0 0 1px var(--line)}
+.kb-ask-file .ic{width:15px;height:15px;color:var(--ink-3)}
+.kb-ask-file b{font-weight:var(--w-med);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.kb-ask-file b small{margin-left:var(--s2);font:var(--fs-micro) var(--mono);color:var(--ink-3)}
+.kb-ask-file>span{font-size:var(--fs-meta);color:var(--ink-3);opacity:0}
+.kb-ask-file:hover>span,.kb-ask-file:focus-visible>span{opacity:1}
+
+/* working: one line, a soft pulse, never a stack */
+.kb-ask-wait{display:flex;align-items:center;gap:var(--s2);font-size:var(--fs-small);color:var(--ink-2)}
+.kb-ask-wait .kb-ask-av{animation:kb-pulse 1.6s ease-in-out infinite}
+.kb-ask-wait .meta{color:var(--ink-3);font-variant-numeric:tabular-nums}
+.kb-ask-shim{background:linear-gradient(90deg,var(--ink-3) 0%,var(--ink) 40%,var(--ink-3) 80%) 0 0/200% 100%;-webkit-background-clip:text;background-clip:text;color:transparent;animation:kb-shim 2.2s linear infinite}
+@keyframes kb-pulse{50%{opacity:.45;transform:scale(.92)}}
+@keyframes kb-shim{to{background-position:-200% 0}}
+
+/* after an answer: small quiet actions */
+.kb-ask-acts{display:flex;gap:var(--s1);margin-top:calc(-1*var(--s2))}
+.kb-ask-acts .btn{color:var(--ink-3)}
+.kb-ask-acts .btn:hover{color:var(--ink)}
+
+/* composer */
+.kb-ask-f{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:end;gap:var(--s2);padding:var(--s3) var(--s3) var(--s3) var(--s5)}
+.kb-ask-log+.kb-ask-f,.kb-ask-acts+.kb-ask-f{border-top:1px solid var(--line)}
+.kb-ask-in{width:100%;min-height:28px;max-height:200px;padding:6px 0;border:0;outline:0;resize:none;background:none;font:inherit;font-size:var(--fs-read);line-height:1.5;color:var(--ink);field-sizing:content}
+.kb-ask-in::placeholder{color:var(--ink-3)}
+.kb-ask[data-state=idle] .kb-ask-f{padding:var(--s4) var(--s3) var(--s3) var(--s5);min-height:96px;grid-template-rows:1fr auto}
+.kb-ask[data-state=idle] .kb-ask-in{align-self:start;grid-column:1/-1}
+.kb-ask-tip{align-self:center;font-size:var(--fs-meta);color:var(--ink-3)}
+.kb-ask-tip .ic{width:13px;height:13px;vertical-align:-2px;color:var(--accent)}
+.kb-ask:not([data-state=idle]) .kb-ask-tip{display:none}
+.kb-ask-send{grid-column:2;display:grid;place-items:center;width:32px;height:32px;border:0;border-radius:var(--r-m);background:var(--ink);color:var(--on-ink);cursor:pointer;transition:opacity .15s,background .15s}
+.kb-ask-send .ic{width:17px;height:17px;stroke-width:2.2}
+.kb-ask-send:hover{opacity:.85}
+.kb-ask-send:disabled{background:var(--line-2);color:var(--surface);cursor:default;opacity:1}
+.kb-ask-send:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+.kb-ask[data-state=sending] .kb-ask-send .ic{animation:kb-pulse 1s ease-in-out infinite}
+.kb-ask-err{margin:0;padding:0 var(--s5) var(--s3);font-size:var(--fs-small);color:var(--bad-ink)}
+
+/* collapsed: on a file page, while an answer is open */
+.kb-ask[data-collapsed]{border-radius:var(--r-l);box-shadow:none;background:var(--bg)}
+.kb-ask[data-collapsed] .kb-ask-h{padding:0 var(--s2) 0 var(--s4);height:var(--ctl-l);cursor:pointer}
+.kb-ask[data-collapsed] .kb-ask-h .meta{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.kb-ask[data-collapsed]>:not(.kb-ask-h){display:none}
+
+/* ================= voice memo card ================= */
+.vm{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:var(--s3);width:min(100%,360px);padding:var(--s2) var(--s3) var(--s2) var(--s2);border:1px solid var(--line);border-radius:var(--r-l);background:var(--surface);font-size:var(--fs-meta);transition:border-color .15s}
+.vm:hover,.vm[data-playing="1"]{border-color:var(--line-2)}
+.vm-play{display:grid;place-items:center;width:36px;height:36px;border-radius:50%;border:0;background:var(--ink);color:var(--on-ink);cursor:pointer;transition:transform .1s,opacity .15s}
+.vm-play:hover{opacity:.88}
+.vm-play:active{transform:scale(.94)}
+.vm-play:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+.vm-play .ic{width:16px;height:16px}
+.vm-play .ic path{fill:currentColor}
+.vm-play .ic path[d^="M8 5.5"]{transform:translateX(1px)}      /* optical centre for the play triangle */
+.vm-mid{min-width:0;display:grid;gap:3px}
+.vm-wave{position:relative;display:flex;align-items:center;gap:2px;height:28px;cursor:pointer;border-radius:4px}
+.vm-wave:focus-visible{outline:2px solid var(--focus);outline-offset:3px}
+.vm-wave i{flex:1;min-width:2px;max-width:4px;border-radius:2px;background:var(--line-2);transition:background .12s,height .3s}
+.vm-wave i.on{background:var(--ink)}
+.vm-wave:hover i:not(.on){background:color-mix(in oklab,var(--ink-3) 55%,var(--line-2))}
+.vm[data-playing="1"] .vm-wave i.on:last-of-type{background:var(--accent)}
+.vm-wave[data-flat] i{height:20%!important;background:var(--line)}      /* peaks not read (file too big / undecodable) */
+.vm-meta{display:flex;justify-content:space-between;gap:var(--s2);color:var(--ink-3);min-width:0}
+.vm-meta .meta{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.vm-t{font-variant-numeric:tabular-nums;color:var(--ink-2);flex:none}
+.vm[data-playing="1"] .vm-t{color:var(--ink)}
+.vm-open{align-self:center;height:var(--ctl-s);padding:0 10px;border:1px solid var(--line);border-radius:var(--r-pill);background:none;color:var(--ink-2);font:inherit;font-size:var(--fs-meta);font-weight:var(--w-med);cursor:pointer}
+.vm-open:hover{border-color:var(--line-2);color:var(--ink);background:var(--hover)}
+.vm-open:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+.vm-open[data-pv-on]{border-color:var(--accent);background:var(--accent-bg);color:var(--accent-ink)}
+
+@media (prefers-reduced-motion:reduce){.kb-ask-wait .kb-ask-av,.kb-ask-shim,.kb-ask[data-state=sending] .kb-ask-send .ic{animation:none}.kb-ask-shim{color:var(--ink-2);background:none}}
+
+/* ================= phone (#main is the container) ================= */
 @container (max-width:640px){
+  .kb{grid-template-columns:minmax(0,1fr);background:var(--surface)}
+  .kb[data-in]>.kb-side{display:none}
+  .kb:not([data-in])>.kb-main{display:none}
+  .kb-side{border-right:0;background:var(--surface)}
+  .kb-top{padding:var(--s3) var(--s4) var(--s1)}
+  .kb-top .kb-q input,.kb-phone.kb-find .kb-q input{height:var(--ctl-l);font-size:16px;border-radius:var(--r-l);background:var(--bg);border-color:transparent}   /* 16px: no zoom on iOS */
+  .kb-top>.kb-q{display:none}                         /* one search box on the phone: "search everything" also matches names */
+  .kb-phone{display:block}
+  .kb-phone.kb-find{padding:0 var(--s4) var(--s3)}
+  .kb-phone.kb-ask-p{padding:0 var(--s4) var(--s4)}
+  .kb-list{padding:0 var(--s2) var(--s6)}
+  .kb-list .lr-t{height:var(--row)}
+  .kb-list .lr-t b{font-size:var(--fs-body)}
+  .kb-list .lr-x{display:none}
+  .kb-list[data-hide-phone]{display:none}
+  .kb-wide{display:none}
+  .kb-sub{padding:var(--s5) var(--s2) var(--s2);font-size:var(--fs-meta)}
+  .kb-phone.kb-home{display:grid;gap:var(--s6);padding:var(--s5) var(--s2) var(--s6)}
+  .kb-map{grid-template-columns:minmax(0,1fr)}
+  .kb-topic{border-radius:var(--r-l)}
+  .kb-nr{height:var(--row);font-size:var(--fs-body)}
+  .kb-note{padding:var(--s3) var(--s4) var(--s7);gap:var(--s5)}
+  .kb-back{display:inline-flex}
   .kb-hcrumbs{display:block}
   .kb-hcrumbs:not(:empty)~.kb-t{margin-top:2px}
-  .kb-map{grid-template-columns:minmax(0,1fr)}
-  .kb-phone.kb-home{display:grid;gap:var(--s5);padding:var(--s4) var(--s1,4px) var(--s6)}
+  .kb-h>.frow{grid-column:1;grid-row:auto;margin-top:var(--s2)}
+  .kb-body{font-size:16px}
+  .kb-ask{border-radius:var(--r-l)}
+  .kb-ask-log{padding:var(--s4) var(--s4) var(--s3);max-height:none}
+  .kb-ask-m[data-who=me]{max-width:88%}
+  .kb-ask-f{padding:var(--s2) var(--s2) var(--s2) var(--s4)}
+  .kb-ask-in{font-size:16px}
+  .kb-ask-tip{display:none}
+  .kb-ask[data-state=idle] .kb-ask-f{min-height:0;padding:var(--s3) var(--s2) var(--s2) var(--s4);grid-template-rows:none}
+  .kb-ask[data-state=idle] .kb-ask-in{grid-column:1;align-self:center}
+  .kb-ask-send{width:36px;height:36px}
+  .kb-ask-link{height:28px}
+  .kb-ask-d{display:none}                            /* the name is enough on a phone; the list below gives paths */
+  .kb-ask-file{height:var(--row)}
+  .kb-ask-file>span{opacity:1}
+  .vm{width:100%}
+  .vm-play{width:40px;height:40px}
+  .vm-open{height:32px}
 }
-.kb-find{padding:var(--s3) var(--s4) 0}.kb-find input{width:100%}
-@container (max-width:640px){.kb-wide{display:none}.kb-list[data-hide-phone]{display:none}}
