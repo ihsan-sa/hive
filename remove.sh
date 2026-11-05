@@ -1,7 +1,8 @@
 #!/bin/sh
 # Uninstall the Hive on Linux. One line:
 #   curl -fsSL https://hivelab.ca/uninstall.sh | sh
-# Deletes the hive user (or HIVE_USER=name) and everything in its home, after you type delete.
+# Deletes the hive user (or HIVE_USER=name) and its home, after you type delete.
+# Your projects, notes and board stay unless you say to delete them: they're moved to ~/hive-kept-DATE first. HIVE_KEEP=projects,notes,board (any of them, or none) answers without asking.
 # Claude Code stays signed in only inside that home, so its sign-in goes too.
 # A Hive inside your own account (sh -s -- --this-account) removes only its folder, services and command. It never deletes your account.
 set -eu
@@ -26,14 +27,39 @@ launcher_gone() {
   if grep -qs '^# made by the Hive install' "$D/applications/hive.desktop"; then rm -f "$D/applications/hive.desktop" "$D/icons/hicolor/512x512/apps/hive.png"; fi
 }
 
+# What can stay: your projects, notes (the knowledge base) and board (your chats, with their files). Each stays unless you say to delete it.
+ask_del() {
+  printf "Delete %s too? [y/N] " "$2" >/dev/tty
+  read -r a </dev/tty || a=""
+  case "$a" in y | Y | yes | Yes | YES) ;; *) KEEP="$KEEP $1" ;; esac
+}
+choose_keep() {
+  KEEP=""
+  if [ -n "${HIVE_KEEP+set}" ]; then
+    for k in $(echo "$HIVE_KEEP" | tr ',' ' '); do
+      case "$k" in projects | notes | board) KEEP="$KEEP $k" ;; none) ;; *) die "HIVE_KEEP takes projects, notes, board or none, not $k" ;; esac
+    done
+    return 0
+  fi
+  echo "Your projects, notes and board can stay, moved to a folder of their own. Press Enter to keep each one, or type y to delete it too."
+  ask_del projects "your projects (projects)"
+  ask_del notes "the Hive's notes (kb)"
+  ask_del board "the board: your chats and their files (board.jsonl, files)"
+}
+keep_paths() { for k in $KEEP; do case "$k" in projects) echo projects ;; notes) echo kb ;; board) echo board.jsonl; echo files ;; esac; done; }
+keep_words() { w=$(echo $KEEP | sed 's/ /, /g; s/\(.*\), /\1 and /'); echo "${w:-nothing}"; }
+kept_dir() { b="$1/hive-kept-$(date +%Y%m%d)"; k="$b"; n=2; while [ -e "$k" ]; do k="$b-$n"; n=$((n + 1)); done; echo "$k"; }
+
 this_account() {
   [ "$(id -u)" != 0 ] || die "--this-account is for your own account, and this is root"
   H="${HIVE_DIR:-$HOME/hive}"; H="${H%/}"
   [ "$H" != "${HOME%/}" ] || die "that's your home folder, so I won't touch it"
   [ -e "$H/.hive-account" ] && [ "$(cat "$H/.hive-account")" = "$HOME" ] || die "$H isn't a Hive installed in this account, so I won't touch it"
 
-  echo "This deletes $H: the Hive's projects, notes, board and Claude sign-in. It also ends its agents. The rest of your account stays."
   ( : </dev/tty ) 2>/dev/null || die "this needs a terminal to ask you"
+  choose_keep
+  K=""; [ -z "$KEEP" ] || K=$(kept_dir "$(dirname "$H")")
+  echo "This deletes $H and its Claude sign-in, and ends its agents. Kept: $(keep_words)${K:+, moved to $K}. The rest of your account stays."
   printf "Type delete to go ahead: " >/dev/tty
   read -r answer </dev/tty
   [ "$answer" = delete ] || die "nothing changed"
@@ -52,9 +78,14 @@ this_account() {
   systemctl --user daemon-reload 2>/dev/null || true
   W="$HOME/.local/bin/hive"
   if grep -qs '^# made by the Hive install' "$W"; then rm -f "$W"; fi
+  if [ -n "$K" ]; then
+    mkdir -p "$K"
+    for p in $(keep_paths); do [ ! -e "$H/$p" ] || mv "$H/$p" "$K/" || die "couldn't move $H/$p to $K. The Hive is stopped; nothing more was deleted"; done
+  fi
   rm -rf "${H:?}"
   launcher_gone
   echo "Removed."
+  [ -z "$K" ] || echo "Kept in $K: $(keep_words)."
   bwrap_note
 }
 
@@ -71,8 +102,11 @@ main() {
   H=$(getent passwd "$U" | cut -d: -f6)
   $ROOT test -e "$H/.hive-installed" || die "$U doesn't have a Hive installed by this package, so I won't touch it"
 
-  echo "This deletes the user $U and all of $H: its projects, notes, board and Claude sign-in."
+  case "${HOME%/}/" in "${H%/}"/*) die "run this from your own account, not from $U's" ;; esac
   [ -r /dev/tty ] || die "this needs a terminal to ask you"
+  choose_keep
+  K=""; [ -z "$KEEP" ] || K=$(kept_dir "$HOME")
+  echo "This deletes the user $U and $H, with its Claude sign-in. Kept: $(keep_words)${K:+, moved to $K}."
   printf "Type delete to go ahead: " >/dev/tty
   read -r answer </dev/tty
   [ "$answer" = delete ] || die "nothing changed"
@@ -81,9 +115,15 @@ main() {
   $ROOT loginctl terminate-user "$U" 2>/dev/null || true
   $ROOT pkill -KILL -u "$U" 2>/dev/null || true
   sleep 1
+  if [ -n "$K" ]; then
+    mkdir -p "$K"
+    for p in $(keep_paths); do ! $ROOT test -e "$H/$p" || $ROOT mv "$H/$p" "$K/" || die "couldn't move $H/$p to $K. The Hive is stopped; nothing more was deleted"; done
+    $ROOT chown -R "$(id -u):$(id -g)" "$K"
+  fi
   $ROOT userdel -r "$U" 2>/dev/null || die "couldn't delete $U; check for its processes and run: sudo userdel -r $U"
   launcher_gone
   echo "Removed."
+  [ -z "$K" ] || echo "Kept in $K: $(keep_words)."
   bwrap_note
 }
 

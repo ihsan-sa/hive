@@ -80,7 +80,7 @@ curl -fsSL https://hivelab.ca/uninstall.sh | sh
 ```powershell
 irm https://hivelab.ca/uninstall.ps1 | iex
 ```
-This deletes the `hive` user, or on Windows the `Hive` system, with everything in it. Push anything you want to keep first. If you installed in your own account, add `-s -- --this-account` after `sh`: that deletes the folder and the Hive's services and leaves your account.
+This deletes the `hive` user, or on Windows the `Hive` system. First it asks about your projects, notes (`kb`) and board (`board.jsonl`, `files`): each one stays unless you type `y`, and what stays is moved to `hive-kept-DATE` in your home folder (`Hive-kept-DATE` on Windows). If that copy fails, nothing is deleted. `HIVE_KEEP=projects,notes,board` (any of them, or `none`) answers without asking. If you installed in your own account, add `-s -- --this-account` after `sh`: that deletes the folder and the Hive's services and leaves your account.
 
 ## Extras
 The core is only the board and the starter. Everything else is an optional module in `~/modules`: `hive module list`, `hive module add <name or git URL>`, `hive module remove <name>`. Agents add one when a job needs it. `dash`, `cost`, `extras` and `slack-door` (so far run only against a fake Slack) ship here. The rest are cloned on demand, and `list` says which need big tools of their own.
