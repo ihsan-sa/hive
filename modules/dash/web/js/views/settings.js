@@ -1,4 +1,5 @@
 // Settings: the hive, logins, modules, access from outside. Shown only where can() allows each part.
+import { status as st } from "../core/status.js";
 import { h } from "../core/dom.js";
 import { S, can, built, jget, needsAccount, post, loadApp } from "../core/store.js";
 import { simpleOn, setSimple } from "../core/simple.js";
@@ -230,12 +231,11 @@ function hiveSection(ctx) {
     } catch (e) { say("starter", e.message, "bad"); }
     ctx.update();
   };
-  return section({ title: "The hive", level: 1 },
+  return section({ title: "The hive", level: 1, actions: statusLabel(up ? "working" : "ended", up ? "running" : "not running") },
     blocks(brand[0],
       block({ title: "Agents at once", sub: "Empty means no limit. Each saves when you leave the box.",
         actions: input({ type: "number", min: 1, max: 200, placeholder: "no limit", "aria-label": "Agents at once", style: "width:7rem", value: E.max, oninput: (e, n) => { E.max = n.value; }, onchange: saveMax }) })),
     blocks(brand[1],
-      block({ title: "Status", sub: up ? "Stopping lets agents finish their turn." : null, state: statusLabel(up ? "working" : "ended", up ? "running" : "not running"), actions: button(up ? "Stop the Hive" : "Start the Hive", starter, { size: "s", kind: up ? "danger" : "primary", busy: isBusy("starter") }) }),
       block({ title: "Keep work moving", sub: E.kp ? `${paceSay(E.kpe)}, pick up work that stopped and start work nobody asked for, and sooner once nothing has run for half an hour. It uses your limits.` : "Off: work that stops waits until someone asks. Turn it on to pick it up by itself.",
         actions: [E.kp ? h("select", { class: "input", value: E.kpe, "aria-label": "How often to keep work moving", title: "How often to keep work moving", style: "width:auto",
             onchange: e => { const was = E.kpe, v = +e.target.value; E.kpe = v; save({ keeper_every_s: v }, () => { E.kpe = was; }, "Keep work moving"); } },
@@ -243,7 +243,8 @@ function hiveSection(ctx) {
           toggle("Keep work moving", E.kp, v => { E.kp = v; save({ keeper_every_s: v ? E.kpe : 0 }, () => { E.kp = !v; }, "Keep work moving"); })] }),
       versionBlocks(ctx, save),
       block({ title: "Update by itself", sub: F.up && F.up.installed ? "Installs new releases as often as you chose above. Keeps your settings and goes back if it fails. When it's off, this Hive still looks and says so above, and you choose when to update." : "Installs each new release. Keeps your settings and goes back if it fails.",
-        actions: toggle("Update by itself", E.au, v => { E.au = v; save({ auto_update: v }, () => { E.au = !v; }, "Update by itself"); }) })),
+        actions: toggle("Update by itself", E.au, v => { E.au = v; save({ auto_update: v }, () => { E.au = !v; }, "Update by itself"); }) }),
+      block({ title: up ? "Stop the Hive" : "Start the Hive", sub: up ? "Stopping lets agents finish their turn." : "The Hive isn't running.", key: "starter", actions: button(up ? "Stop" : "Start", starter, { size: "s", kind: up ? "danger" : "primary", busy: isBusy("starter"), title: up ? "Stop the Hive" : "Start the Hive" }) })),
     msg("brand"), msg("starter"), msg("hive"));
 }
 
@@ -473,7 +474,8 @@ const jump = title => document.querySelector(`.set .sec[aria-label="${title}"]`)
 function navDots(ctx) {
   const s = S.app.setup || {}, logins = s.logins || [], pg = S.app.settings && can("config") ? pageData(ctx.update) : null, o = S.app.route === "local" && S.app.outside, d = {};
   if (simpleOn()) return d;
-  const dot = (title, tone, value) => { d[title] = [tone, value]; };
+  // Only what is off or needs action gets a dot; "fine" repeats the section's own state.
+  const dot = (title, tone, value) => { if (st(tone).tone !== "good") d[title] = [tone, value]; };
   if (can("config")) dot("The hive", s.starter ? "working" : "ended", s.starter ? "running" : "not running");
   if (can("logins") && logins.length) dot("Accounts", logins.some(l => !l.signed_in) ? "out" : "working", `${logins.filter(l => l.signed_in).length} of ${logins.length} signed in`);
   if (pg) {
