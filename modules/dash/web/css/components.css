@@ -1176,6 +1176,8 @@ a.ref[data-kind=file][data-pv-on]{background:color-mix(in oklch,var(--accent) 16
 .cm-stand-ch{display:inline-flex;flex:none;color:var(--ink-3)}.cm-stand-ch:not([data-open]) svg{transform:rotate(-90deg)}
 .cm-stand .lr-in[style]{padding-left:calc(8px + var(--s5))}   /* a thread under its top-level thing */
 .cm-stand .lr-acts{display:flex;top:auto;bottom:4px}.cm-stand .lr-x{padding-right:var(--s6)}   /* its reply button is always there, clear of the words */
+.cm-tick{width:22px;height:22px;margin:0 4px;cursor:pointer;accent-color:var(--accent,currentColor)}
+@media (hover:none){.cm-tick{width:26px;height:26px}}
 .cm-home-all{display:flex;gap:var(--s2);margin-left:-8px}
 @container (max-width:640px){
   .cm{grid-template-columns:minmax(0,1fr)}
@@ -1925,6 +1927,21 @@ dialog.rc-rail[open]{display:flex;flex-direction:column;gap:var(--s2)}
 .pg-t[data-tone=bad]{color:var(--bad-ink)}
 .pg-t[data-tone=warn]{color:var(--warn-ink)}
 .pg-t[data-tone=quiet]{color:var(--ink-3)}
+.pg-t[data-tone=info]{color:var(--info-ink,var(--ink))}
+/* The shape comes before the word, so colour is never the only signal: dot good, square warn, triangle bad, ring quiet, diamond info. */
+.pg-t::before{content:"";display:inline-block;width:.55em;height:.55em;margin-right:.45em;vertical-align:.02em;background:currentColor;border-radius:50%}
+.pg-t[data-tone=warn]::before{border-radius:1px}
+.pg-t[data-tone=bad]::before{border-radius:0;clip-path:polygon(50% 0,100% 100%,0 100%);width:.65em;height:.6em}
+.pg-t[data-tone=quiet]::before{background:none;border:1.5px solid currentColor;box-sizing:border-box}
+.pg-t[data-tone=info]::before{border-radius:1px;transform:rotate(45deg) scale(.85)}
+.pg-t:empty::before{margin-right:0}
+/* Developer Now: Needs you, one row each. */
+.nd-list{list-style:none;margin:0;padding:0}
+.nd-list li{display:flex;align-items:baseline;gap:var(--s3);padding:var(--s2) 0;border-top:1px solid var(--line)}
+.nd-list li:first-child{border-top:0}
+.nd-list .meta{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.nd-act{font-size:var(--fs-small);white-space:nowrap}
+.nowtbl .nt-long{color:var(--warn-ink)}
 .mpick{display:inline-flex;align-items:center;gap:var(--s2)}
 .cm-menu-id{display:flex;align-items:center;gap:6px;margin:4px 10px}
 .cm-menu-id code{user-select:all;-webkit-user-select:all;cursor:text}

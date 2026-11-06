@@ -87,7 +87,7 @@ The home page answers two questions: what do you want done, and what needs you?
 - **Waiting for your answer:** an agent asked you something.
 - **New for you:** answers you haven't opened.
 - **Stopped:** an agent hit a usage limit or an error, or looks stuck. One stopped by a limit usually resumes by itself after the reset. Otherwise a message gets it going.
-- **Where things stand:** the picture without having to ask. **Needs you** is what only you can do, **Done lately** is what finished in the last two days, **Still going** is what you asked for that isn't finished, and **Your projects** is one line on each focus and project. Press a row to open its conversation, or its reply arrow to add it to your new message so you can ask about it or tell an agent what to do next. It shows what agents and the status helper have already written, so it costs nothing to look at. It isn't in Simple view.
+- **Where things stand:** the picture without having to ask. **Needs you** is what only you can do, **Done lately** is what finished in the last two days, **Still going** is what you asked for that isn't finished, and **Your projects** is one line on each focus and project. Each Needs-you row opens to a to-do checklist you can tick off (it works on a phone); ticks are saved, and an agent removes an item once it has checked it. Press a thread row to open its conversation, or its reply arrow to add it to your new message so you can ask about it or tell an agent what to do next. It shows what agents and the status helper have already written, so it costs nothing to look at. It isn't in Simple view.
 - **Working now:** what's under way.
 
 Long lists show the first few, with **Show more** under them.
@@ -121,6 +121,8 @@ Drafts are kept for each conversation in this browser, even if you reload. A mes
 - **Agent comms:** agents talking to each other and the Hive's own notes.
 
 **Show N hidden** at the top of a conversation turns all three on. Search always looks through everything. **All messages,** at the bottom left, is every conversation in one list.
+
+**Mail** (a page under Chat, full sign-in only, and only on an install with the hive-mail module): your mail to the Hive's address, copied read-only. Plain text; links aren't opened and attachments show as name and size. Mail never goes on the board.
 
 ### Knowledge
 

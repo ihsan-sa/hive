@@ -378,12 +378,12 @@ function threadRows(c, ctx) {
       h("button", { type: "button", class: "lr-act", "aria-pressed": String(pn), "aria-label": pn ? "Unpin" : "Pin to the top", title: pn ? "Unpin" : "Pin to the top", onclick: () => setMeta(th, { pin: !pn }) }, icon("pin"))];
     return r;
   };
-  const rowsOut = ds.map(mk);
-  if (app()) {
-    for (const r of rowsOut) dress(r);
-    // Important ones also stay in Recent: a second row built fresh, since a row's icons are DOM nodes and one node can sit in one place only.
-    if (!C.imp) for (const d of ds) if (secOf(d.name, null) === "imp") rowsOut.push(dress({ ...mk(d), key: d.name + "~recent", sec: "rest" }));
-  }
+  // Recent holds every conversation by last activity, so a pinned, important or needs-you one also keeps its place there (the person, 11060006f821):
+  // a second row built fresh, since a row's icons are DOM nodes and one node can sit in one place only. Archived ones stay in their fold.
+  const rowsOut = !app() ? ds.map(mk) : ds.flatMap(d => {
+    const r = dress(mk(d));
+    return C.imp || r.sec === "rest" || r.sec === "arch" ? [r] : [r, dress({ ...mk(d), key: d.name + "~recent", sec: "rest" })];
+  });
   if (!app()) rowsOut.unshift({ key: "(everything)", href: href("comms", "~all"), title: "Everything", text: `${S.posts.length} posts, newest last`, current: c.all });
   return rowsOut;
 }
@@ -448,7 +448,7 @@ function statusBar(th) {
   const [a, ...rest] = r.text.split("\n");
   return h("div", { class: "cm-status", "data-key": "status", role: "note", "aria-label": "Thread status" },
     h("b", null, a), rest.length ? h("span", null, rest.join(" ")) : null,
-    h("span", { class: "meta cm-status-m" }, `${r.from} · updated ${ago(r.at * 1e3)}${lastAt(th) ? " · last active " + ago(lastAt(th)) : ""}`,
+    h("span", { class: "meta cm-status-m" }, `${r.from} · updated ${ago(r.at * 1e3)}${lastAt(th) ? " · last post " + ago(lastAt(th)) : ""}`,
       can("post") ? h("button", { type: "button", class: "cm-status-r", title: "Reply about this summary", onclick: () => { const d = draft(th); if (!d.text) d.text = "> " + r.text.split("\n").join("\n> ") + "\n\n"; focusComposer(); } }, "Reply") : null));
 }
 
@@ -615,16 +615,33 @@ function needRow({ d, st }) {
 // hourly top-down view: the few top-level things, each opening onto its threads. No brief (an installed Hive), just the threads.
 // The agent only groups and words the top level: a status line written after it wins at once, here and in which group the thread sits.
 const BRIEF_FOR = 6 * HOUR, STAND_LIMIT = 4, TOP_LIMIT = { needs: 12, done: 4, going: 4 }, HOME_LIMIT = 5, STAND_EVERY = 5 * MIN, DONE_FOR = 2 * DAY, GOING_FOR = 3 * DAY, NEEDS_FOR = 7 * DAY;
-const STAND = { needs: null, at: 0, more: {}, open: {} };
+const STAND = { needs: null, at: 0, more: {}, open: {}, checks: [] };   // checks: the checklist under each Needs you entry (server: /api/checklist)
+/** Tick or untick one checklist item. It stays ticked until an agent has checked it was done and removes it. */
+function tick(it, ticked, ctx, from) {
+  const at = scrollersOf(from), upd = () => { ctx.update(); keepScroll(at); };
+  it.ticked = ticked; upd();
+  apiPost("/api/checklist", { id: it.id, ticked }).then(r => { if (r && r.items) { STAND.checks = r.items; upd(); } }, () => { it.ticked = !ticked; upd(); });
+}
+/** The checklist items that belong under one Needs you entry: those on one of its threads, or naming it. */
+const checksFor = r => { const ths = new Set((r.kids || []).map(k => k.th).concat(r.th ? [r.th] : [])); return STAND.checks.filter(c => (c.cat && c.cat === r.title) || (!c.cat && ths.has(c.thread)) || (c.cat && !r.title && ths.has(c.thread))); };
 /** Run a re-render without the page moving: every scroller around the row (and the window) goes back to where it was. */
 function holdScroll(from, fn) {
+  const at = scrollersOf(from);
+  fn(); keepScroll(at);
+}
+/** Every scroller around a node (and the window) with where it is now, to put back after a re-render. */
+function scrollersOf(from) {
   const at = [document.scrollingElement]; for (let n = from && from.parentElement; n; n = n.parentElement) if (n.scrollTop) at.push(n);
-  const was = at.map(el => el.scrollTop), put = () => at.forEach((el, i) => { if (el.isConnected && el.scrollTop !== was[i]) el.scrollTop = was[i]; });
-  fn(); put(); queueMicrotask(put); requestAnimationFrame(put);
+  return at.map(el => [el, el.scrollTop]);
+}
+function keepScroll(at) {
+  const put = () => at.forEach(([el, y]) => { if (el.isConnected && el.scrollTop !== y) el.scrollTop = y; });
+  put(); queueMicrotask(put); requestAnimationFrame(put);
 }
 function loadStanding(ctx) {
   if (now() - STAND.at < STAND_EVERY) return;
   STAND.at = now();
+  jget("/api/checklist").then(v => { const n = (v && v.items) || []; if (JSON.stringify(n) !== JSON.stringify(STAND.checks)) { STAND.checks = n; ctx.update(); } }, () => {});
   jget("/api/needs-you").then(v => { const sig = n => JSON.stringify(n && [n.waiting, n.states, n.brief]); if (v && sig(v) !== sig(STAND.needs)) { STAND.needs = v; ctx.update(); } }, () => {});
 }
 /** A status bar's last line, split into its state word and the words after it, without the agent's name tag. */
@@ -695,17 +712,23 @@ function standRow(r, more) {
     acts: can("post") ? h("button", { type: "button", class: "lr-act", title: "Add to your new message", "aria-label": "Add this to your new message", onclick: () => standReply(r) }, icon("reply")) : null };
 }
 // A top-level thing opens onto its threads; with only one, the row just goes there.
-function standRows(r, ctx) {
-  if (!r.kids) return [standRow(r)];
-  if (r.kids.length === 1) return [standRow({ ...r, key: r.top, th: r.kids[0].th, text: r.kids[0].fresh ? r.kids[0].text : r.text }, { whole: true, meta: r.kids[0].t ? ago(r.kids[0].t) : null })];
-  const open = !!STAND.open[r.top], fresh = r.kids.filter(k => k.fresh).length;
-  return [standRow({ ...r, key: r.top }, { href: null, meta: plural(r.kids.length, "thread") + (fresh ? `, ${fresh} updated` : ""), whole: true, expanded: open, lead: h("span", { class: "cm-stand-ch", "data-open": open ? "" : null }, icon("chevron-down")), onClick: (e, n) => holdScroll(n, () => { STAND.open[r.top] = !open; ctx.update(); }) }),
-    ...(open ? r.kids.map(k => standRow({ ...k, key: r.top + "/" + k.th }, { depth: 1 })) : [])];
+function checkRow(c, ctx) {
+  const box = h("input", { type: "checkbox", class: "cm-tick", checked: c.ticked || null, disabled: can("post") ? null : true, "aria-label": c.text, onchange: e => tick(c, e.target.checked, ctx, e.target) });
+  return { key: "ck:" + c.id, href: null, lead: box, title: c.text, whole: true, dim: c.ticked, depth: 1 };
+}
+function standRows(r, ctx, group) {
+  const cks = group === "needs" ? checksFor(r) : [];
+  if (!r.kids && !cks.length) return [standRow(r)];
+  if (r.kids && r.kids.length === 1 && !cks.length) return [standRow({ ...r, key: r.top, th: r.kids[0].th, text: r.kids[0].fresh ? r.kids[0].text : r.text }, { whole: true, meta: r.kids[0].t ? ago(r.kids[0].t) : null })];
+  const kids = r.kids || [], open = !!STAND.open[r.top], fresh = kids.filter(k => k.fresh).length, done = cks.filter(c => c.ticked).length;
+  const meta = [cks.length ? `${done}/${cks.length} ticked` : null, kids.length ? plural(kids.length, "thread") + (fresh ? `, ${fresh} updated` : "") : null].filter(Boolean).join(" · ");
+  return [standRow({ ...r, key: r.top }, { href: null, meta, whole: true, expanded: open, lead: h("span", { class: "cm-stand-ch", "data-open": open ? "" : null }, icon("chevron-down")), onClick: (e, n) => holdScroll(n, () => { STAND.open[r.top] = !open; ctx.update(); }) }),
+    ...(open ? [...cks.map(c => checkRow(c, ctx)), ...kids.map(k => standRow({ ...k, key: r.top + "/" + k.th }, { depth: 1 }))] : [])];
 }
 function standSec(id, title, rows, ctx) {
   if (!rows.length) return null;
   // The limit counts what the section lists, so opening one doesn't push the next behind Show more.
-  const most = STAND.more[id] ? 0 : TOP_LIMIT[id] && rows[0].kids ? TOP_LIMIT[id] : STAND_LIMIT, flat = rows.map(r => standRows(r, ctx));
+  const most = STAND.more[id] ? 0 : TOP_LIMIT[id] && rows[0].kids ? TOP_LIMIT[id] : STAND_LIMIT, flat = rows.map(r => standRows(r, ctx, id));
   return h("section", { class: "sec", "data-key": "st:" + id, "data-stand": id }, h("header", { class: "sec-h" }, h("h3", { class: "sec-t" }, title)),
     list(flat.flat(), { limit: most && rows.length > most ? flat.slice(0, most).flat().length : 0, moreText: () => `Show ${rows.length - most} more`, onMore: () => { STAND.more[id] = true; ctx.update(); } }));
 }
