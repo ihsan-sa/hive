@@ -40,16 +40,18 @@ export const emit = what => { for (const f of subs) f(what); };
 let lastInput = Date.now();
 for (const ev of ["pointerdown", "keydown", "wheel", "touchstart"]) addEventListener(ev, () => { lastInput = Date.now(); }, { capture: true, passive: true });
 export const activeNow = () => Date.now() - lastInput < 60000 && document.visibilityState === "visible";
+/** fetch, with the browser's "Failed to fetch" said in plain words: it reaches the person through the pages' error lines. */
+const ask = (u, o) => fetch(u, o).catch(() => { throw Error("can't reach the server"); });
 export async function jget(u) {
-  const r = await fetch(u, { cache: "no-store", headers: activeNow() ? { "X-Hive-Active": "1" } : {} });
+  const r = await ask(u, { cache: "no-store", headers: activeNow() ? { "X-Hive-Active": "1" } : {} });
   if (r.status === 401) location.replace("/");
-  if (!r.ok) throw Error(r.status);
+  if (!r.ok) { const e = Error("the server said " + r.status); e.status = r.status; throw e; }
   return r.json();
 }
 /** POST with the header the server requires; throws an Error with a plain reason. */
 export async function post(path, body) {
   if (path === "/api/post") body = await signPost(body);
-  const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json", "X-Hive-Dash": "1" }, body: JSON.stringify(body) });
+  const r = await ask(path, { method: "POST", headers: { "Content-Type": "application/json", "X-Hive-Dash": "1" }, body: JSON.stringify(body) });
   if (r.redirected) throw Error("sign in again and reload the page");
   const j = await r.json().catch(() => ({}));
   if (!r.ok) { const e = Error(j.error || "the server said " + r.status); e.status = r.status; throw e; }
@@ -126,10 +128,11 @@ let polling = false;
 export async function poll() {
   if (polling) return; polling = true;
   try {
-    const [l, lg, b] = await Promise.all([jget("/api/live"), jget("/api/log?from=" + S.logOff), jget("/api/board?from=" + S.off)]);
+    // All read together, then applied in one go: S.live set with a wait before the board is ingested let a page draw "No conversations yet" while they were still on their way.
+    const [l, lg, b, a, d] = await Promise.all([jget("/api/live"), jget("/api/log?from=" + S.logOff), jget("/api/board?from=" + S.off), jget("/api/approvals").catch(() => null), jget("/api/feedback-drafts").catch(() => null)]);
     S.stCache.clear(); S.live = l;
-    try { const a = await jget("/api/approvals"); S.approvals = Array.isArray(a) ? a : []; } catch (e) { S.approvals = S.approvals || []; }
-    try { const d = await jget("/api/feedback-drafts"); if (d.length) import("../ui/feedback.js").then(m => m.offerDraft(d[0])); } catch (e) {}   // an agent's drafted feedback: open the window prefilled
+    S.approvals = a === null ? S.approvals || [] : Array.isArray(a) ? a : [];
+    if (d && d.length) import("../ui/feedback.js").then(m => m.offerDraft(d[0]));   // an agent's drafted feedback: open the window prefilled
     S.running = new Map(l.agents.filter(a => a.alive).map(a => [a.name, a]));
     S.pending = Object.fromEntries(l.pending.map(p => [p.name, p]));
     const runSig = [...S.running.keys()].sort().join();
@@ -143,7 +146,8 @@ export async function poll() {
   finally { polling = false; }
 }
 export async function pollUsage() {
-  try { S.usage = await jget("/api/usage"); S.uver++; emit({ usage: true }); } catch (e) {}
+  try { S.usage = await jget("/api/usage"); S.usageFailed = false; S.uver++; emit({ usage: true }); }
+  catch (e) { if (!S.usageFailed) { S.usageFailed = true; emit({ usage: true }); } }
 }
 /** Cost and tokens per agent from the transcripts. Asked for only while a page that shows them is open; the server refreshes at most every 5 minutes. */
 export async function loadAgentCosts() {

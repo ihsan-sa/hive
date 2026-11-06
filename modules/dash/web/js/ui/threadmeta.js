@@ -5,7 +5,7 @@ import { h } from "../core/dom.js";
 import { S, can, OUTSIDE, post, loadThreadMeta, emit } from "../core/store.js";
 import { isAgent, threadTitle } from "../core/model.js";
 import { ago, short, mdPlain } from "../core/format.js";
-import { button, icon } from "./kit.js";
+import { button, empty, icon } from "./kit.js";
 import { confirm } from "./dialog.js";
 
 export const meta = th => (S.threadMeta && S.threadMeta[th]) || {};
@@ -115,15 +115,18 @@ function pageRequest() { return null; }
 
 /** Requests an agent made for a yes no warden can give (the approve ask command). A button on text the agent wrote could be pressed without reading it,
  * so the card shows what the server recorded, and a major change asks for a typed x. */
+const APPROVE_ERR = new Map();
 function approvalCard(th, update) {
   const open = (S.approvals || []).filter(a => a.thread === th && a.state === "pending"), page = pageRequest(th);
   if ((!open.length && !page) || !can("stop")) return null;
   const answer = async (a, decision, confirm) => {
-    try { await post("/api/approval", { id: a.id, decision, confirm }); } catch (e) { alert(e.message); }
+    APPROVE_ERR.delete(th);
+    try { await post("/api/approval", { id: a.id, decision, confirm }); } catch (e) { APPROVE_ERR.set(th, `Couldn't send that: ${e.message}. Nothing changed.`); }
     emit({ live: true }); update();
   };
   return h("section", { class: "tm-card", "data-key": "approve:" + th, "data-tone": "warn", "aria-label": "Approval needed" },
     h("header", { class: "tm-card-h" }, icon("bell"), h("b", null, open.length + !!page > 1 ? `${open.length + !!page} approvals needed` : "Your approval is needed")),
+    APPROVE_ERR.has(th) ? empty(APPROVE_ERR.get(th), { kind: "error" }) : null,
     h("ul", { class: "tm-items" }, null,
       open.map(a => {
       const box = a.major ? h("input", { class: "input", autocomplete: "off", spellcheck: "false", placeholder: "type x", size: 4, "aria-label": "Type x to approve this major change" }) : null;

@@ -6,7 +6,7 @@ import { now, ago, dur, clock, money, pct, plural, firstSentence, short, HOUR, D
 import { TIERS, status } from "../core/status.js";
 import { threadHref, agentHref, href } from "../core/router.js";
 import { overview, cols } from "../templates.js";
-import { pageHeader, section, tally, stats, list, share, empty, button, statusDot } from "../ui/kit.js";
+import { pageHeader, section, tally, stats, list, share, empty, waiting, button, statusDot } from "../ui/kit.js";
 import { agentRef, threadRef } from "../ui/refs.js";
 import { agentCard as cardRows, displayText } from "../core/model.js";
 import { killButton } from "../actions.js";
@@ -49,13 +49,13 @@ function needsYou(run, states, waiting, L) {
   rows.sort((a, b) => a.sev - b.sev);
   if (!rows.length) return null;
   return section({ title: "Needs you", key: "needs" }, h("ul", { class: "nd-list" }, rows.map((r, i) => h("li", { "data-tone": r.tone, "data-key": r.head + i },
-    tag(r.tone, ""), h("b", null, r.head), h("span", { class: "meta" }, r.text), h("a", { href: r.href, class: "nd-act" }, r.act)))));
+    statusDot(r.tone === "bad" ? "stuck" : "limited"), h("b", null, r.head), h("span", { class: "meta", title: r.text }, r.text), h("a", { href: r.href, class: "nd-act" }, r.act)))));
 }
 
 /** Developer Now, the two tables: running (newest first) and waiting for the job queue (longest first). */
 function devTables(run, states, t) {
   const doing = a => { const task = S.byId[a.post]; return a.doing || (task ? "Asked by " + firstSentence(displayText(task)) : "–"); };
-  const title = a => { const task = S.byId[a.post]; return task ? "Asked by " + (a.from || "") + ": " + firstSentence(displayText(task)) : null; };
+  const title = a => { const task = S.byId[a.post]; return [a.doing, task ? "Asked by " + (a.from || "") + ": " + firstSentence(displayText(task)) : null].filter(Boolean).join("\n") || null; };
   const working = run.filter(a => states.get(a.name).key !== "queue").sort((a, b) => (b.since || 0) - (a.since || 0) || String(a.name).localeCompare(String(b.name)));
   const queued = run.filter(a => states.get(a.name).key === "queue").sort((a, b) => ((b.jobs || {}).waited || 0) - ((a.jobs || {}).waited || 0) || String(a.name).localeCompare(String(b.name)));
   const w = h("div", { class: "tbl-w" }, h("table", { class: "tbl nowtbl" }, h("caption", { class: "vh" }, "Working"),
@@ -130,7 +130,7 @@ export default {
   id: "now", label: () => (S.app.app ? "Agents" : "Now"), about: "what each agent is doing", tab: true,
   render(ctx) {
     const L = S.live, t = now();
-    if (!L) return h("div", { class: "page" }, empty("Reading the board…", { kind: "loading" }));
+    if (!L) return h("div", { class: "page" }, waiting(S.failed, "Reading the board…", "the board"));
 
     // Working agents keep a fixed order (longest up first), so a new turn doesn't move a card. The rest follow, least quiet first; gone processes last.
     const isWorking = a => a.alive && t - (a.last || 0) * 1e3 < 3 * MIN, group = a => (isWorking(a) ? 0 : a.alive ? 1 : 2);
@@ -139,7 +139,7 @@ export default {
     const states = new Map(run.map(a => [a.name, agentState(a)]));
     const count = k => run.filter(a => states.get(a.name).key === k).length;
     const active = run.filter(isWorking).length, threads = new Set(run.map(a => a.thread)).size;
-    const waiting = L.pending.filter(p => !isRunning(p.name));
+    const queuedPosts = L.pending.filter(p => !isRunning(p.name));
     const lastHour = S.posts.filter(p => p.t > t - HOUR && !SYS.has(p.from)).length;
 
     if (S.app.app) {
@@ -152,12 +152,12 @@ export default {
         : waitN ? `${nWord(waitN)} ${waitN === 1 ? "agent is" : "agents are"} waiting for your answer.`
         : fy.length === 1 ? `${fy[0].title} is waiting for your answer.`
         : fy.length ? `${nWord(fy.length)} conversations are waiting for your answer.`
-        : stuckN ? `${nWord(stuckN)} ${stuckN === 1 ? "has" : "have"} stopped moving.` : null;
+        : stuckN ? `${nWord(stuckN)} ${stuckN === 1 ? "agent has" : "agents have"} stopped moving.` : null;
       const header = pageHeader({ state, title, lead });
       const main = section({}, run.length ? agentRows(run, states, t, waits) : empty("None."));
       const hrs = tierHours(t - DAY, t), tot = Object.values(hrs).reduce((a, b) => a + b, 0) || 1;
       const more = h("details", { class: "now-more", open: V.more || null, ontoggle: (e, n) => { if (e.target === n) V.more = n.open; } }, h("summary", null, "Details"),
-        h("p", { class: "meta" }, [`${plural(lastHour, "post")} in the last hour`, waiting.length ? `${waiting.length} waiting to start` : null, S.usage ? `${money(spendSince(t - DAY))} of work in 24h, at list prices` : null].filter(Boolean).join(" · ")),
+        h("p", { class: "meta" }, [`${plural(lastHour, "post")} in the last hour`, queuedPosts.length ? `${queuedPosts.length} waiting to start` : null, S.usage ? `${money(spendSince(t - DAY))} of work in 24h, at list prices` : null].filter(Boolean).join(" · ")),
         section({ title: "How it's working as a hive", note: "last 24 hours" }, stats(hiveFigures(t))),
         cols(...activityCharts(t)),   // "Agents at work" would draw the same line as "running at once": one chart, not two
         hasTiers() ? section({ title: "Where the agent hours went", note: "against your priority list, last 24 hours" },
@@ -177,7 +177,7 @@ export default {
       meta: [
         L.jobs && (!S.app.app || L.jobs.running || L.jobs.queued) ? `Machine: ${L.jobs.running} jobs running, ${L.jobs.queued} queued` : null,
         `${plural(lastHour, "post")} in the last hour`,
-        waiting.length ? `${waiting.length} waiting to start` : null,
+        queuedPosts.length ? `${queuedPosts.length} waiting to start` : null,
         L.limit_until ? `starts held for the usage limit until ${clock(L.limit_until * 1e3)}` : null,
         S.usage ? `${money(spendSince(t - DAY))} of work in 24h, at list prices` : null,
       ],
@@ -190,6 +190,6 @@ export default {
     const tiers = section({ title: "Where the agent hours went", note: "against your priority list, last 24 hours" },
       share(TIERS.map(x => ({ key: x.key, label: S.app.app ? APP_TIER[x.key] || x.label : x.label, tone: x.tone, value: hrs[x.key], text: `${(hrs[x.key] / HOUR).toFixed(1)}h (${Math.round((100 * hrs[x.key]) / tot)}%)` }))));
 
-    return overview({ header, main: [needsYou(run, states, waiting, L), run.length ? devTables(run, states, t) : empty("None.")], after: [hive, charts, hasTiers() ? tiers : null] });
+    return overview({ header, main: [needsYou(run, states, queuedPosts, L), run.length ? devTables(run, states, t) : empty("None.")], after: [hive, charts, hasTiers() ? tiers : null] });
   },
 };

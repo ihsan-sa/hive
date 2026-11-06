@@ -227,7 +227,7 @@ function ghLine(g) {
   return sayMsg("gh is signed in. Issues go to " + (g.repo || "the Hive project") + ".", "good");
 }
 function draftDo(id, act, update) {
-  if (act !== "send") return draftRun(id, act, update);
+  if (act !== "send") return confirm({ title: "Discard this fix?", body: ["It's deleted and nothing is sent."], ok: "Discard", kind: "danger", onOk: () => draftRun(id, act, update) });
   confirm({ title: "Send this fix to GitHub?", body: ["It goes from your account, exactly as shown, and it will be public."], ok: "Send", onOk: () => draftRun(id, act, update) });
 }
 async function draftRun(id, act, update) {

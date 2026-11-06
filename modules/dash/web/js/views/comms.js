@@ -171,7 +171,7 @@ function paint(box, ctx) {
     ...(q ? [h("div", { class: "cm-qbar", role: "status" }, h("span", null, `Showing ${plural(L.all.length, "match", "matches")} for “${short(q, 40)}”`),
       button("Clear search", () => { C.q = ""; C.find = false; ctx.update(); }, { size: "s", kind: "quiet", icon: "close" }))] : []),
     ...(older ? [h("div", { class: "cm-older" }, button(`Show older (${older} more)`, () => { C.limit += STEP; L.rebuild = true; L.keep = true; ctx.update(); }, { size: "s" }))] : []),
-    ...(shown.length ? rows(shown) : [empty(C.q ? "No messages match." : L.src.length ? "Nothing here with what Show has on. Turn on Agent comms to see all the messages." : "No messages yet.")]),
+    ...(shown.length ? rows(shown) : [empty(C.q ? "No messages match." : L.src.length ? "Nothing here with what Show has on. Turn on Agents to see all the messages." : "No messages yet.")]),
     L.out, L.jump);
 }
 function setJump() {
@@ -381,7 +381,7 @@ function threadRows(c, ctx) {
     const say = short(mdPlain(displayText(lp)).replace(/\s+/g, " "), 70);
     return { key: d.name, href: threadHref(d.name), current: c.thread === d.name, title: threadTitle(d.name), meta: ago(d.last).replace(" ago", ""),
       lead: [tierLead(d.name), h("span", { title: status(st.key).label || "" }, statusDot(st.key === "done" ? "ended" : st.key, { live }))],
-      text: [d.name !== c.thread && hasDraft(d.name) ? [h("span", { class: "cm-draft", title: "You left unsent text in this conversation" }, "Draft"), " · "] : null, fadeTag(d.name) || stateTag(st), fadeTag(d.name) || stateTag(st) ? " · " : null, `${authorName(lp.from)}: ${say}`], sec: secOf(d.name, st), dim: faded(d.name) };
+      text: [d.name !== c.thread && hasDraft(d.name) ? [h("span", { class: "cm-draft", title: "You left unsent text in this conversation" }, "Draft"), " · "] : null, fadeTag(d.name) || stateTag(st), fadeTag(d.name) || stateTag(st) ? " · " : null, st.who && st.who === lp.from && ["working", "quiet"].includes(st.key) && !simpleOn() ? say : `${authorName(lp.from)}: ${say}`], sec: secOf(d.name, st), dim: faded(d.name) };
   };
   const dress = (r, th = r.key.replace(/~recent$/, "")) => {
     const im = important(th), pn = pinned(th), m = tmeta(th);
@@ -446,7 +446,7 @@ function syncThreads(c, ctx) {
   if (tl === L.tl && sig === L.tlSig) return;
   const fresh = tl !== L.tl || c.arg !== L.tlConv;
   L.tl = tl; L.tlSig = sig; L.tlConv = c.arg;
-  const tree = sections(threadRows(c, ctx), ctx, { dense: true, empty: simpleOn() ? "No conversations yet. Start one with New conversation." : S.threads.size ? "Nothing here with what Show has on. Turn on Agent comms to see all of them." : app() ? "No conversations yet. Start one with New." : "No threads." });
+  const tree = sections(threadRows(c, ctx), ctx, { dense: true, empty: simpleOn() ? "No conversations yet. Start one with New conversation." : S.threads.size ? "Nothing here with what Show has on. Turn on Agents to see all of them." : app() ? "No conversations yet. Start one with New." : "No threads." });
   if (tl.firstChild) morph(tl.firstChild, tree); else tl.append(tree);
   if (fresh) { const cur = tl.querySelector("[aria-current]"); if (cur) { const r = cur.getBoundingClientRect(), b = tl.getBoundingClientRect(); if (r.top < b.top || r.bottom > b.bottom) tl.scrollTop += r.top - b.top - 40; } }
 }
@@ -556,7 +556,7 @@ function titleMenu(c, n, d, off, ctx) {
   const prio = th && can("tier") ? button([h("span", { class: "ref-sw", "data-tone": t.tone }), "Priority", h("small", null, t.label)], () => { C.menu = null; askTier(th); }, { size: "s", kind: "quiet", title: "Where this sits in the hive's priority list" })
     : th ? h("p", { class: "meta cm-tier", title: "This thread's priority" }, h("span", { class: "ref-sw", "data-tone": t.tone }), "Priority: " + t.label) : null;
   const where = part(
-    off > 0 && !simpleOn() ? act(`Show ${off} hidden`, "chat", () => setShow(SHOW.ALL, ctx), "Turn on For you, Updates and Agents") : null,
+    off > 0 && !simpleOn() ? act(`Show ${off} hidden`, "filter", () => setShow(SHOW.ALL, ctx), "Turn on For you, Updates and Agents") : null,
     link("All messages", "chat", href("comms", "~all")),
     full ? link("On the timeline", "clock", href("timeline")) : null,
     prio);
@@ -575,7 +575,7 @@ function places() {
   return h("nav", { class: "cm-places", "aria-label": "Also in Chat", "data-key": "places" },
     can("read") ? link("Needs you", "needs", 0, "What waits on you, and what got done") : null,
     can("read") ? link("Inbox", "inbox", IB.unread || 0, "Every message agents sent you") : null,
-    can("files") ? link("Mail", "mail", MN.n, MN.n ? "Mail since you last opened it" : "Your mail to h2@") : null,
+    can("files") ? link("Mail", "mail", MN.n, MN.n ? "Mail since you last opened it" : "Your mail") : null,
     link("Files", "made", 0, "Files and links from your conversations"));
 }
 // What shows: For you, Updates, Agent comms, each on or off: three toggles in the side, over the list (the person, 11040113eacf).
@@ -814,7 +814,7 @@ function homePane(ctx) {
       local.some(it => it.state !== "failed") ? closeLine() : null,
       local.length ? h("div", { class: "cm-out", "data-key": "out" }, local.map(it => localMessage(it, outActions))) : null) : null,
     h("div", { class: "cm-needs", "data-key": "needs" },
-      n || (!simpleOn() && !S.live.signin?.length && !(stand && stand.needs.length)) ? h("h2", { class: "cm-needs-t" }, n ? `${plural(n, "thing")} for you` : "Nothing needs you") : null,
+      n || (!simpleOn() && !S.live.signin?.length && !(stand && stand.needs.length)) ? h("h2", { class: "cm-needs-t" }, n ? `${plural(n, "thing")} for you` : IB.unread ? "No agent is waiting on you" : "Nothing needs you") : null,
       sec(null, null, [...g.asks, ...g.foryou, ...g.trouble]),   // one head above ("N things for you"); each row's shape and first words say which kind
       stand ? standingPart(stand, ctx) : null,
       sec("Working now", null, g.working),
@@ -842,7 +842,7 @@ export default {
   leave: () => { clearTimeout(qTimer); C.menu = null; C.find = false; },
   render(ctx) {
     L.ctx = ctx;
-    if (!S.live) return h("div", { class: "page" }, S.failed ? empty("Couldn't read the data. It tries again in a few minutes.", { kind: "error" }) : empty("Reading…", { kind: "loading" }));
+    if (!S.live) return h("div", { class: "page" }, S.failed ? empty("Couldn't read the conversations. It keeps trying.", { kind: "error" }) : empty("Reading…", { kind: "loading" }));
     const c = conversation(ctx.arg);
     if (C.conv !== c.arg) { Object.assign(C, { conv: c.arg, q: C.next || "", next: null, limit: FIRST, menu: null, find: false }); }
     L.opts = { showThread: !c.thread, mark: words(C.q) };

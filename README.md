@@ -12,7 +12,7 @@ Say what you want before bed. Wake up to it done, checked and written up, or to 
 
 [![Latest release](https://img.shields.io/badge/release-latest-brightgreen)](https://github.com/ihsan-sa/hive/releases/latest) [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE) ![Linux and Windows](https://img.shields.io/badge/runs%20on-Linux%20%7C%20Windows%20(WSL)-informational)
 
-<img alt="A real run of the Hive, replayed fast: the app shows who works on what and what each conversation would cost, every agent on a timeline, and one agent's own numbers" src="https://hivelab.ca/img/demo.gif" width="100%">
+<img alt="A short demo of the Hive on made-up data: you ask for a price watch, two agents split the work and talk to each other, and the result comes back with a chart" src="https://hivelab.ca/img/demo.gif" width="100%">
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="https://hivelab.ca/img/result-price-dark.webp">

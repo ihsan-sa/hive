@@ -7,8 +7,9 @@ import { deviceFingerprint } from "../core/sign.js";
 import { notifyBlocked, notifyOn, notifySupported, notifyTest, pushOn, pushSupported, setNotify, setPush } from "../core/notify.js";
 import { DEFAULT_NAME, brandLogo, brandName } from "../core/brand.js";
 import { form } from "../templates.js";
-import { pageHeader, section, block, blocks, button, field, input, empty, meter, statusLabel, statusDot } from "../ui/kit.js";
+import { pageHeader, section, block, blocks, button, field, infoButton, input, empty, meter, statusLabel, statusDot } from "../ui/kit.js";
 import { act, isBusy } from "../ui/activity.js";
+import { confirm } from "../ui/dialog.js";
 import { startSignin, signinBox, clearSignin } from "../ui/signin.js";
 import { ago, dur, now, plural } from "../core/format.js";
 import { accountUse } from "../core/model.js";
@@ -28,7 +29,7 @@ const CAPTEXT = { read: "Read everything", files: "Read files: notes, modules, s
 
 async function loadCfg(ctx) {
   if (!can("config")) return;
-  try { F.cfg = await jget("/api/config"); } catch (e) { F.cfg = {}; }
+  try { F.cfg = await jget("/api/config"); F.cfgErr = null; } catch (e) { F.cfg = F.cfg || {}; F.cfgErr = e.message; ctx.update(); return; }   // no defaults on a failed read: a toggle would save them over the real values
   F.ed ||= { max: F.cfg.max_sessions ?? "", kp: !!F.cfg.keeper_every_s, kpe: F.cfg.keeper_every_s || 10800, au: F.cfg.auto_update !== false, bud: F.cfg.max_budget_usd ?? "" };
   F.saved ||= { max: F.ed.max, bud: F.ed.bud };
   ctx.update();
@@ -94,7 +95,7 @@ function versionBlocks(ctx, save) {
 }
 async function loadMods(ctx) {
   if (!can("modules")) return;
-  try { F.mods = await jget("/api/modules"); } catch (e) { F.mods = F.mods || []; }
+  try { F.mods = await jget("/api/modules"); F.modsErr = null; } catch (e) { F.modsErr = e.message; }
   ctx.update();
 }
 
@@ -144,7 +145,7 @@ function phoneBlock(ctx) {
       h("p", null, h("code", null, P.topic), " ", copyButton(P.topic)),
       h("p", { class: "field-h" }, P.link ? "Tapping the alert opens " + P.link : "Tapping the alert won't open your Hive: you turned this on from an address a phone can't reach. Turn it off and on again from your Hive's public address to add the link."),
       button(P.runs ? "Stop run-finished alerts" : "Also tell me when a run I started ends", () => phoneDo(ctx, P.runs ? "runs-off" : "runs-on", P.runs ? "Run-finished alerts off." : "You will get a line when a run you started ends."), { size: "s" }),
-      button("Make a new topic", () => phoneDo(ctx, "topic", "New topic. Subscribe to it on your phone; the old one is dead."), { size: "s" }),
+      button("Make a new topic", () => confirm({ title: "Make a new topic?", body: ["The topic your phone follows stops working. You'd subscribe to the new one on your phone."], ok: "Make a new topic", onOk: () => phoneDo(ctx, "topic", "New topic. Subscribe to it on your phone; the old one is dead.") }), { size: "s" }),
       P.error ? h("p", { class: "fmsg", "data-tone": "bad", role: "status" }, P.error) : null, msg("phone")) : msg("phone"));
 }
 // Off until you turn them on here; the browser then asks once. Kept in this browser.
@@ -215,7 +216,7 @@ function brandBlocks(ctx) {
 
 function hiveSection(ctx) {
   if (!can("config")) return null;
-  if (!F.ed) return section({ title: "The hive", level: 1 }, empty("Reading…", { kind: "loading" }));
+  if (!F.ed) return section({ title: "The hive", level: 1 }, F.cfgErr ? [empty(`Couldn't read the settings: ${F.cfgErr}`, { kind: "error" }), button("Try again", () => { F.cfgErr = null; ctx.update(); return loadCfg(ctx); }, { size: "s" })] : empty("Reading…", { kind: "loading" }));
   const E = F.ed, up = S.app.setup && S.app.setup.starter, brand = brandBlocks(ctx);
   // Each control saves on its own and sends only its own field; a refusal puts the old value back.
   const save = async (fields, undo, mark) => {
@@ -266,7 +267,7 @@ function hiveSection(ctx) {
       versionBlocks(ctx, save),
       block({ title: "Update by itself", sub: F.up && F.up.installed ? "Installs new releases as often as you chose above. Keeps your settings and goes back if it fails. When it's off, this Hive still looks and says so above, and you choose when to update." : "Installs each new release. Keeps your settings and goes back if it fails.",
         actions: toggle("Update by itself", E.au, v => { E.au = v; save({ auto_update: v }, () => { E.au = !v; }, "Update by itself"); }) }),
-      block({ title: up ? "Stop the Hive" : "Start the Hive", sub: up ? "Stopping lets agents finish their turn." : "The Hive isn't running.", key: "starter", actions: button(up ? "Stop" : "Start", starter, { size: "s", kind: up ? "danger" : "primary", busy: isBusy("starter"), title: up ? "Stop the Hive" : "Start the Hive" }) })),
+      block({ title: up ? "Stop the Hive" : "Start the Hive", sub: up ? "Stopping lets agents finish their turn." : "The Hive isn't running.", key: "starter", actions: button(up ? "Stop" : "Start", () => up ? confirm({ title: "Stop the Hive?", body: ["Agents finish their turn, and nothing new starts until you start it again here."], ok: "Stop the Hive", kind: "danger", onOk: starter }) : starter(), { size: "s", kind: up ? "danger" : "primary", busy: isBusy("starter"), title: up ? "Stop the Hive" : "Start the Hive" }) })),
     msg("brand"), msg("starter"), msg("hive"), foot(AUTO));
 }
 
@@ -310,9 +311,10 @@ function loginsSection(ctx) {
         h("div", { class: "lr-in frow fsplit" }, h("b", null, l.name), l.signed_in ? null : statusLabel("out"),
           h("span", { style: "margin-left:auto" }, button(l.signed_in ? "Sign in again" : "Sign in", () => startSignin("login-" + l.name, l.name, false, ctx.update), { size: "s", kind: l.signed_in ? "quiet" : null }))),
         signinBox("login-" + l.name, ctx.update)))) : null,
-      h("form", { class: "frow", onsubmit: e => { e.preventDefault(); if (F.newLogin.trim()) startSignin("login-new", F.newLogin.trim(), false, ctx.update); } },
+      h("form", { class: "frow", onsubmit: e => { e.preventDefault(); if (F.newLogin.trim()) { say("newlogin", null); startSignin("login-new", F.newLogin.trim(), false, ctx.update); } else { say("newlogin", "Give it a name first.", "bad"); ctx.update(); } } },
         h("div", { style: "flex:1;min-width:12rem;max-width:20rem" }, field("Add another account", input({ placeholder: "a name for it, like work", value: F.newLogin, oninput: (e, n) => { F.newLogin = n.value; } }))),
         button("Sign in to it", null, { type: "submit" })),
+      msg("newlogin"),
       h("p", { class: "field-h" }, "A second subscription gives the Hive more room: new agents go to whichever has the most left. Adding one signs in, checks it isn't one you already have, and makes one short test run."),
       signinBox("login-new", ctx.update)), other.rows));
 }
@@ -344,13 +346,15 @@ function modulesSection(ctx) {
     if (x.name === "slack-door" && x.state !== "installed" && built("slack-door")) return slackBtn();
     if (x.state === "installed" && x.default) return h("span", { class: "meta" }, "comes with the Hive");
     if (x.state === "installed" && inBrowse) return h("span", { class: "meta" }, "installed");
-    return button(x.state === "installed" ? "Remove" : "Add", () => act(x.state === "installed" ? "remove" : "add", x.name), { size: "s", busy: F.busy[x.name] });
+    return x.state === "installed"
+      ? button("Remove", () => confirm({ title: `Remove ${x.name}?`, body: ["It comes off this Hive. You can add it back from this page."], ok: "Remove", kind: "danger", onOk: () => act("remove", x.name) }), { size: "s", busy: F.busy[x.name] })
+      : button("Add", () => act("add", x.name), { size: "s", busy: F.busy[x.name] });
   };
   const row = (x, inBrowse) => h("li", { class: "lr", "data-key": x.name },
     h("div", { class: "lr-in mod-row" },
       h("b", { class: "mod-name" }, x.repo ? h("a", { href: x.repo, target: "_blank", rel: "noreferrer noopener" }, x.name) : x.name),
       h("span", { class: "muted mod-about" },
-        h("span", { class: "mod-line" }, h("span", { class: "mod-one" }, about(x)), (b => (b.setAttribute("aria-label", "About " + x.name), b))(button(about(x), null, { kind: "icon", icon: "info", cls: "sec-info", title: about(x) }))),
+        h("span", { class: "mod-line" }, h("span", { class: "mod-one" }, about(x)), infoButton("About " + x.name, about(x))),
         x.source === "own" ? h("span", { class: "mod-where" }, WHERE[x.where] || WHERE.local) : null),
       end(x, inBrowse)));
   const list = (rows, inBrowse) => h("ul", { class: "list" }, rows.map(x => row(x, inBrowse)));
@@ -367,14 +371,14 @@ function modulesSection(ctx) {
         F.browse ? h("div", { class: "mod-browse" },
           field("Filter", input({ placeholder: "Name or what it does", value: F.modQ || "", oninput: (e, n) => { F.modQ = n.value; ctx.update(); } })),
           shown.length ? list(shown, true) : empty("No module matches that.")) : null,
-        h("form", { class: "frow", onsubmit: e => { e.preventDefault(); if (F.url.trim()) act("add", F.url.trim()); } },
+        h("form", { class: "frow", onsubmit: e => { e.preventDefault(); if (F.url.trim()) act("add", F.url.trim()); else { say("mods", "Paste the module's Git URL first.", "bad"); ctx.update(); } } },
           h("div", { style: "flex:1;min-width:12rem" }, field("Add from a Git URL", input({ placeholder: "Git URL of a module", value: F.url, oninput: (e, n) => { F.url = n.value; } }))),
           button("Add", null, { type: "submit", busy: F.busy[F.url.trim()] })),
         h("p", { class: "muted mod-none" }, "A module's code runs with the same rights as your agents, so only add ones you trust.")),
     ];
   };
   return section({ title: "Modules", level: 1, note: "optional tools your agents can use" },
-    F.mods == null ? empty("Reading…", { kind: "loading" }) : F.mods.length ? shelves() : empty("No modules listed."),
+    F.mods == null ? (F.modsErr ? [empty(`Couldn't read the modules: ${F.modsErr}`, { kind: "error" }), button("Try again", () => { F.modsErr = null; ctx.update(); return loadMods(ctx); }, { size: "s" })] : empty("Reading…", { kind: "loading" })) : F.mods.length ? shelves() : empty("No modules listed."),
     F.slack ? slackSetup(ctx) : null,
     msg("mods"));
 }

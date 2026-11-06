@@ -6,7 +6,7 @@ import { h } from "../core/dom.js";
 import { S, jget } from "../core/store.js";
 import { clock, dayName, mdPlain, plural, short } from "../core/format.js";
 import { metrics } from "../templates.js";
-import { button, empty, input, pageHeader, seg, toolbar } from "../ui/kit.js";
+import { button, empty, waiting, input, pageHeader, seg, toolbar } from "../ui/kit.js";
 import { agentRef, threadRef } from "../ui/refs.js";
 
 const KINDS = [["all", "Everything"], ["step", "Steps"], ["post", "Messages"], ["agent", "Agents"], ["thread", "Threads"], ["trouble", "Trouble"], ["hive", "Hive"]];
@@ -92,10 +92,10 @@ export default {
     return metrics({
       header: pageHeader({ title: S.app.app ? "History" : "Ledger", lead: S.app.app ? "Everything that happened, newest first: messages, every step agents took, agents starting and ending, and trouble." : null, after: toolbar(
         seg(S.app.app ? KINDS.map(([k, l]) => [k, k === "thread" ? "Conversations" : l]) : KINDS, L.kind, k => set("kind", k), { label: "Kind of event" }),
-        input({ type: "search", placeholder: "Filter by agent, thread or words", "aria-label": "Filter", value: L.q, oninput: e => set("q", e.target.value) }),
-        h("span", { class: "meta" }, plural(L.count, "event"))) }),
+        input({ type: "search", placeholder: `Filter by agent, ${S.app.app ? "conversation" : "thread"} or words`, "aria-label": "Filter", value: L.q, oninput: e => set("q", e.target.value) }),
+        S.live ? h("span", { class: "meta" }, plural(L.count, "event")) : null) }),
       sections: [
-        L.count ? null : empty("No events match."),
+        L.count ? null : S.live ? empty("No events match.") : waiting(S.failed, "Reading…", "the history"),
         h("ol", { class: "lg", "data-own": "morph", "data-sig": sig }, built),
         L.count > L.limit ? h("div", { class: "lr-more" }, button(`Show older (${L.count - L.limit} more)`, () => set("limit", L.limit + 500), { kind: "quiet", size: "s" })) : null,
       ],

@@ -48,13 +48,15 @@ function lead(V) {
 function tiles(V) {
   const B = V.scoreboard && V.scoreboard.now; if (!B) return null;
   const worse = new Set((V.scoreboard.worse || []).map(w => w[1]));
+  // The register is live and the scoreboard hourly, so this counts what the lead and the table below count.
+  const owed = V.asks.filter(a => OWED.has(a.status)), lone = owed.filter(a => a.orphaned || a.status === "open").length;
   const t = (k, label, value, note) => ({ label, value, note, worse: worse.has(k) ? "worse than the day before" : null });
   return stats([
-    t("asks_open", "Asks open", num(B.asks_open), `oldest ${num(B.asks_oldest_open_d)} days; ${plural(B.asks_orphaned || 0, "orphan")}`),
-    t("outcome_delivered_pct", "Runs that delivered", B.outcome_delivered_pct != null ? num(B.outcome_delivered_pct) + "%" : "–", `${plural(B.outcomes_graded || 0, "run")} graded; ${B.outcomes_silent || 0} silent, ${B.outcomes_nothing || 0} did nothing`),
-    t("person_noticed_first", "Person saw it first", num(B.person_noticed_first), "problems the hive should have caught"),
+    t("asks_open", "Asks open", owed.length, `oldest ${num(B.asks_oldest_open_d)} days; ${lone} with nobody on them`),
+    t("outcome_delivered_pct", "Runs that delivered", B.outcome_delivered_pct != null ? Math.round(B.outcome_delivered_pct) + "%" : "–", `${plural(B.outcomes_graded || 0, "run")} graded; ${B.outcomes_silent || 0} silent, ${B.outcomes_nothing || 0} did nothing`),
+    t("person_noticed_first", app() ? "You saw it first" : "Person saw it first", num(B.person_noticed_first), "problems the hive should have caught"),
     t("improvements_landed", "Improvements landed", num(B.improvements_landed), `${B.improvements_judged || 0} judged, ${B.improvements_overdue || 0} overdue`),
-    t("fail_pct", "Runs that failed", B.fail_pct != null ? num(B.fail_pct) + "%" : "–", `of ${plural(B.runs || 0, "run")}; ${B.stalled_threads || 0} stalled threads`),
+    t("fail_pct", "Runs that failed", B.fail_pct != null ? num(B.fail_pct) + "%" : "–", `of ${plural(B.runs || 0, "run")}; ${plural(B.stalled_threads || 0, app() ? "stalled conversation" : "stalled thread")}`),
   ], { card: true });
 }
 
@@ -70,7 +72,7 @@ function asksSection(V, update) {
           : h("span", { title: r.ask || "" }, r.ask || "", h("div", { class: "meta", title: r.evidence }, "Evidence: " + short(r.evidence, 80)))) },
         { label: "Status", render: r => tone(r.orphaned ? "bad" : ASK_TONE[r.status], r.orphaned ? (app() ? ASK_TEXT_APP.orphaned : "orphaned") : (app() ? ASK_TEXT_APP : ASK_TEXT)[r.status] || r.status, r.orphaned ? "owned, but its owner is gone and nobody posted" : r.why || null) },
         { label: "Agent", render: r => (r.owner ? agentRef(r.owner) : "–") },
-        { label: "Conversation", render: r => threadRef(r.thread) },
+        { label: app() ? "Conversation" : "Thread", render: r => threadRef(r.thread) },
       ].filter(Boolean), rows }));
 }
 
@@ -83,7 +85,7 @@ function outcomesSection(V, update) {
       columns: [
         { label: "Ended", render: r => when(r.ended) },
         { label: "Agent", render: r => agentRef(r.name) },
-        { label: "Thread", render: r => threadRef(r.thread) },
+        { label: app() ? "Conversation" : "Thread", render: r => threadRef(r.thread) },
         { label: "Grade", render: r => tone(GRADE_TONE[r.grade], GRADE_TEXT[r.grade] || r.grade) },
         { label: "Why", clip: true, render: r => h("span", { title: r.why || "" }, r.why || "") },
       ], rows }));
@@ -132,7 +134,7 @@ export default {
   poll: { every: 60000, run(ctx) { return refresh(ctx); } },
   render(ctx) {
     const V = P.v && Array.isArray(P.v.asks) ? P.v : null;
-    if (!V) return h("div", { class: "page" }, P.failed ? empty("Couldn't read the progress data.", { kind: "error" }) : empty("Reading…", { kind: "loading" }));
+    if (!V) return h("div", { class: "page" }, P.failed ? empty("Couldn't read the progress data. It keeps trying.", { kind: "error" }) : empty("Reading…", { kind: "loading" }));
     const head = lead(V), update = () => ctx.update();
     return metrics({
       header: pageHeader({ state: head.state, title: head.title, lead: head.text, tone: head.tone, meta: [S.app.app ? null : "hive progress, hive asks, hive outcomes, hive improve"].filter(Boolean) }),

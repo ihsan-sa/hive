@@ -14,7 +14,6 @@
 .empty-t{color:var(--ink);font-weight:var(--w-bold);font-size:var(--fs-title);margin-bottom:4px}
 .list>.empty,.sec>.empty,.blks>.empty{padding:var(--s5) var(--s4);border:1px dashed var(--line-2);border-radius:var(--r-l);text-align:center}
 .empty[data-kind=page]{max-width:42ch;margin:0 auto;padding:18vh var(--s4) var(--s7);border:0}
-.empty[data-kind=page]::before{content:"";display:block;width:40px;height:40px;margin:0 auto var(--s4);border:1.5px solid var(--line-2);border-radius:50%}
 .empty[data-kind=loading]{padding:var(--s5) 0}
 
 /* inbox: a dot instead of a "New" chip */

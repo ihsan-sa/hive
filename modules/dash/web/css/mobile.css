@@ -3,6 +3,7 @@
 #mnav{display:none}
 @media (max-width:640px){
   :root{--nav-h:calc(58px + env(safe-area-inset-bottom,0px))}
+  .cm-tl .lr .lr-acts,.cm-tl .lr:hover .lr-acts,.cm-tl .lr:focus-within .lr-acts{display:none}   /* star and pin are in the conversation's More menu; 24 px beside every row is too small to aim at */
   :root:has(.cm[data-in],.kb[data-in]){--nav-h:0px}            /* inside a conversation or a file the bar steps aside; the page head has Back */
   :root:has(.cm[data-in],.kb[data-in]) #mnav{display:none}
   body{padding-bottom:var(--nav-h);overscroll-behavior-y:none}
@@ -26,7 +27,7 @@
   .mn-t{position:relative;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;min-width:0;border:0;background:none;color:var(--ink-2);font:inherit;font-size:11px;font-weight:var(--w-med);text-decoration:none;cursor:pointer;touch-action:manipulation}
   .mn-t .ic{width:23px;height:23px}
   .mn-t span{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .mn-t[aria-current=page]{color:var(--accent)}
+  .mn-t[aria-current=page]{color:var(--accent-ink)}
   .mn-t[aria-current=page]::before{content:"";position:absolute;top:0;left:30%;right:30%;height:2px;border-radius:0 0 2px 2px;background:var(--accent)}
   .mn-t:active{background:var(--hover)}
   .mn-b{position:absolute;top:6px;left:calc(50% + 6px);min-width:16px;padding:0 4px;border-radius:var(--r-pill);background:var(--accent);color:var(--on-accent);font-style:normal;font-size:var(--fs-micro);font-weight:var(--w-bold);line-height:16px;text-align:center}

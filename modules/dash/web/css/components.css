@@ -553,6 +553,7 @@ button.lr-in{width:calc(100% + 16px);border:0;background:none;text-align:left;fo
 .tl-lane{cursor:pointer}
 .tl-lane:hover .tl-bg{fill:var(--hover)}
 .tl-box .tl-name{font-size:var(--fs-meta);fill:var(--ink-2)}
+.tl-box .tl-name-hit{fill:transparent}   /* the whole lane label is the link, not just the letters */
 .tl-box .tl-name[data-live]{fill:var(--ink);font-weight:var(--w-bold)}
 .tl-lane a:focus-visible{outline:2px solid var(--focus);outline-offset:1px}
 .tl-bar{fill:color-mix(in oklch,var(--c) 30%,transparent);stroke:var(--c);stroke-width:1}
@@ -1281,7 +1282,7 @@ details.blk[open]>summary .blk-t::after{margin-bottom:-1px;transform:rotate(225d
 .st .cp-t{min-height:88px}
 .st-wait{padding:var(--s3) 0}
 .st-know{margin-top:var(--s5);display:grid;gap:var(--s2);justify-items:start;font-size:var(--fs-small);color:var(--ink-2)}
-.st-know .btn{margin-left:-8px}
+.st-know .btn{margin-left:-11px}
 
 /* ---- slack door setup: guided steps ---- */
 .slk{display:grid;gap:var(--s2);margin-top:var(--s3)}
@@ -1325,6 +1326,7 @@ details.blk[open]>summary .blk-t::after{margin-bottom:-1px;transform:rotate(225d
 .checks{display:grid;gap:var(--s2);margin:var(--s3) 0}
 /* NEW: a switch is a checkbox with class="switch" role="switch"; it saves itself */
 .switch{appearance:none;margin:0;flex:none;position:relative;width:34px;height:20px;border-radius:var(--r-pill);background:var(--line-2);cursor:pointer;transition:background-color .15s}
+.switch::before{content:"";position:absolute;inset:-8px -5px}   /* a 44x36 target round the 34x20 switch */
 .switch::after{content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:light-dark(#fff,oklch(96% 0 0));box-shadow:0 1px 2px oklch(0% 0 0 / .25);transition:transform .15s}
 .switch:checked{background:var(--ink)}
 .switch:checked::after{transform:translateX(14px);background:var(--on-ink)}
@@ -1840,10 +1842,11 @@ dialog.fb::backdrop{background:rgb(0 0 0 / .38)}
   .nowtbl thead{display:none}
   .nowtbl,.nowtbl tbody,.nowtbl tr{display:block}
   .nowtbl tr{padding:8px;border-top:1px solid var(--line);display:grid;grid-template-columns:1fr auto;gap:2px 12px}
-  .nowtbl td,.nowtbl tr:last-child td{padding:0;border:0;white-space:normal}
+  .nowtbl tr td,.nowtbl tr:last-child td{padding:0;border:0;height:auto;white-space:normal}   /* tr td: tail.css and the row height set .tbl td later on */
   .nowtbl .nt-do{grid-column:1;max-width:none;width:auto;min-width:0}
   .nowtbl td.num{grid-column:2;align-self:end;text-align:right}
-  .nowtbl .nt-th,.nowtbl .nt-m{display:none}
+  .nowtbl .nt-th,.nowtbl .nt-m,.nowtbl .nt-x:empty{display:none}
+  .nowtbl .nt-x{grid-column:2;grid-row:1;width:auto}
 }
 
 .brand-hex{width:34px;height:34px;margin-right:var(--s2)}
@@ -1867,6 +1870,7 @@ dialog.fb::backdrop{background:rgb(0 0 0 / .38)}
 .tm-arch-b:hover,.tm-fold:hover{background:var(--hover);color:var(--ink)}
 .tm-arch-b .ic,.tm-fold .ic{width:14px;height:14px}
 .tm-secs .empty:empty{display:none}
+.cm-tl .empty{padding-inline:10px}
 
 /* each message says what kind it is: For you has the accent bar, Agent comms is quieter and says so */
 .msg[data-who=agent][data-show=you][data-ask]::before{content:"";position:absolute;left:-12px;top:6px;bottom:6px;width:3px;border-radius:2px;background:var(--accent)}
@@ -1976,7 +1980,7 @@ dialog.rc-rail[open]{display:flex;flex-direction:column;gap:var(--s2)}
 .nd-list li{display:flex;align-items:baseline;gap:var(--s3);padding:var(--s2) 0;border-top:1px solid var(--line)}
 .nd-list li:first-child{border-top:0}
 .nd-list .meta{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.nd-act{font-size:var(--fs-small);white-space:nowrap}
+.nd-act{display:inline-block;padding:4px 0;font-size:var(--fs-small);white-space:nowrap}
 .nowtbl .nt-long{color:var(--warn-ink)}
 .mpick{display:inline-flex;align-items:center;gap:var(--s2)}
 .cm-menu-id{display:flex;align-items:center;gap:6px;margin:4px 10px}
@@ -2085,7 +2089,7 @@ details.fold-row>summary>small{margin-left:auto;font-size:var(--fs-meta);font-we
 details.fold-row>.fold-in{padding:4px 0 24px}
 
 /* ===== 6. table: a row action that shows on hover/focus ===== */
-.tbl .row-a{opacity:0;text-align:right;width:1%}
+.tbl .row-a{opacity:0;text-align:left;width:1%}
 .tbl tbody tr:hover .row-a,.tbl tbody tr:focus-within .row-a{opacity:1}
 @media (hover:none){.tbl .row-a{opacity:1}}
 .tbl td.t{color:var(--ink-3)}                                                 /* NEW: the age column ("4d", "12m") */
@@ -2104,6 +2108,8 @@ details.fold-row>.fold-in{padding:4px 0 24px}
 .blk-ic{display:grid;place-items:center;width:36px;height:36px;flex:none;border-radius:var(--r-m);background:var(--sunken);color:var(--ink-2)}   /* NEW: a module's icon */
 .blk-need{color:var(--ink-3)}                                                 /* NEW: "· needs a Slack app of your own" after .blk-s text */
 .lr-more{padding:10px 12px;border-top:1px solid var(--line)}
+.lr-more .btn{margin-left:-11px}   /* the words, not the button's edge, line up with the rows above */
+.cm-home .lr-more,.tbl-w + .lr-more{padding-left:0}
 .set .check span,.set ul.plain li,.set ul.plain .mono{min-width:0;overflow-wrap:anywhere}   /* long hostnames and names wrap instead of widening the page */
 .set .check{max-width:100%}
 
@@ -2354,3 +2360,6 @@ input[type=radio],input[type=checkbox]:not(.switch){accent-color:var(--ink)}
 .set-n a[aria-current=page]{background:var(--sunken);color:var(--ink);font-weight:var(--w-med)}
 
 .cp-model[data-picked]{color:var(--accent);font-weight:var(--w-med)}
+
+/* Rootwarden: its published log, a capped pane that wraps */
+.rw-log{max-height:32rem;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere}

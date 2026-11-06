@@ -5,7 +5,7 @@ import { S, OUTSIDE, getPref, loadAgentCosts, setPref } from "../core/store.js";
 import { agentSpend, agentStatus, isRunning, loginName, modelName, sEnd, threadTitle } from "../core/model.js";
 import { ago, dur, money, plural, short, stamp, toks } from "../core/format.js";
 import { metrics } from "../templates.js";
-import { button, empty, input, pageHeader, seg, stats, toolbar } from "../ui/kit.js";
+import { button, empty, waiting, input, pageHeader, seg, stats, toolbar } from "../ui/kit.js";
 import { agentRef, threadRef } from "../ui/refs.js";
 
 const STATUS = [["all", "Any status"], ["running", "Running"], ["queued", "Waiting to start"], ["ended", "Ended"], ["killed", "Killed"], ["limited", "Stopped at a limit"], ["failed", "Failed"]];
@@ -56,8 +56,8 @@ let COST_DATA = true;
 const COLS = [
   { k: "name", label: "Agent", get: a => a.name, render: a => agentRef(a.name) },
   { k: "status", label: "Status", get: a => a.status, render: a => h("span", { title: agentStatus(a.name).label }, (STATUS.find(x => x[0] === a.status) || [0, a.status])[1]) },
-  { k: "spawned", label: "Spawned", get: a => a.when, render: a => h("span", { title: new Date(a.when).toISOString() }, stamp(a.when)) },
-  { k: "thread", label: "Thread", cls: "clip ag-tm", get: a => threadTitle(a.thread) || "", render: a => threadRef(a.thread) },
+  { k: "spawned", get label() { return S.app.app ? "Started" : "Spawned"; }, get: a => a.when, render: a => h("span", { title: new Date(a.when).toISOString() }, stamp(a.when)) },
+  { k: "thread", get label() { return S.app.app ? "Conversation" : "Thread"; }, cls: "clip ag-tm", get: a => threadTitle(a.thread) || "", render: a => threadRef(a.thread) },
   { k: "from", label: "Started by", get: a => a.from || "", render: a => (a.from && S.agents.has(a.from) ? agentRef(a.from) : a.from === "person" && app() ? "you" : a.from || "–") },
   { k: "model", label: "Model", cls: "ag-m", get: a => a.model, render: a => h("span", { title: a.model }, a.model) },
   { k: "account", label: "Account", get: a => a.account, render: a => a.account },
@@ -90,7 +90,7 @@ export default {
   leave() { L.sig = ""; },   // the table is built afresh on the way back, so its rows must be too
   poll: { every: 30000, run() { loadAgentCosts(); } },
   render(ctx) {
-    if (!S.live) return empty("Reading…", { kind: "loading" });
+    if (!S.live) return h("div", { class: "page" }, waiting(S.failed, "Reading…", "the agents"));
     const all = gather(), s = sort(), set = (k, v) => { L[k] = v; L.limit = PAGE; ctx.update(); };
     const sig = [[...colsOn()].join(), L.dataKey.split("|")[0], S.agentCosts && S.agentCosts.at, L.q, L.status, L.by, L.since, L.model, L.account, L.limit, s.k, s.d].join("|"), changed = sig !== L.sig; L.sig = sig;
     if (changed || !L.found) L.found = select();
@@ -100,14 +100,14 @@ export default {
     const costs = S.agentCosts; COST_DATA = all.some(a => a.usd > 0 || a.tok > 0);   // no cost data is "–", not a real zero (handoff 33)
     return metrics({
       header: pageHeader({ title: "Agents", lead: `Every agent that has run, ${s.k === "spawned" && s.d < 0 ? "newest first" : s.k === "spawned" ? "oldest first" : "sorted by the column you chose"}.`, after: toolbar(
-        input({ type: "search", placeholder: "Search name, thread, model, who started it", "aria-label": "Search agents", value: L.q, oninput: e => set("q", e.target.value) }),
+        input({ type: "search", placeholder: `Search name, ${S.app.app ? "conversation" : "thread"}, model, who started it`, "aria-label": "Search agents", value: L.q, oninput: e => set("q", e.target.value) }),
         seg(STATUS.filter(x => ["all", "running", "ended", "failed"].includes(x[0]) || x[0] === L.status).map(([k, l]) => [k, k === "all" ? "All" : l]), L.status, v => set("status", v), { label: "Status" }),
         h("details", { class: "now-more ag-f", open: L.fOpen || null, ontoggle: (e, n) => { if (e.target === n) L.fOpen = n.open; } }, h("summary", null, "Filters" + (nf ? ` (${nf})` : "")),
           h("div", { class: "toolbar" },
             picker("Model", L.model, [["all", "Any model"], ...options(all, "model")], v => set("model", v)),
             picker("Account", L.account, [["all", "Any account"], ...options(all, "account")], v => set("account", v)),
             picker("Started by", L.by, BY, v => set("by", v)),
-            picker("Spawned", L.since, SINCE, v => set("since", v)))),
+            picker(S.app.app ? "Started" : "Spawned", L.since, SINCE, v => set("since", v)))),
         h("details", { class: "now-more ag-f", open: L.cOpen || null, ontoggle: (e, n) => { if (e.target === n) L.cOpen = n.open; } }, h("summary", null, "Columns"),
           h("div", { class: "toolbar" }, COLS.map(c => h("label", { class: "meta" }, h("input", { type: "checkbox", checked: on.has(c.k) ? "" : null, disabled: c.k === "name" ? "" : null,
             onchange: e => { const n = new Set(on); e.target.checked ? n.add(c.k) : n.delete(c.k); setPref("agents.cols", [...n]); L.sig = ""; ctx.update(); } }), " " + c.label)))),
@@ -129,7 +129,7 @@ export default {
             cols.map(c => h("td", { class: [c.num ? "num" : null, c.cls || null].filter(Boolean).join(" ") || null }, c.render(a))))) : null)))
           : empty("No agents match."),
         found.length > L.limit ? h("div", { class: "lr-more" },
-          button(`Show ${Math.min(PAGE * 5, found.length - L.limit)} more (${found.length - L.limit} left)`, () => { L.limit += PAGE * 5; ctx.update(); }, { kind: "quiet", size: "s" })) : null,
+          button(found.length - L.limit > PAGE * 5 ? `Show ${PAGE * 5} more (${found.length - L.limit} left)` : `Show ${found.length - L.limit} more`, () => { L.limit += PAGE * 5; ctx.update(); }, { kind: "quiet", size: "s" })) : null,
       ],
     });
   },

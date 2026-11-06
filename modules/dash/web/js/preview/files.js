@@ -24,7 +24,7 @@ function row(name, sub, badge, kind, onclick, cls) {
 export function drawFiles(head, body, { open, close }) {
   head.replaceChildren(h("div", { class: "pv-t" },
     icon("folder", { cls: "pf-ic" }),
-    h("div", { class: "pv-n" }, h("span", { class: "pv-fn" }, "Files"), h("span", { class: "meta" }, "This conversation and project folders")),
+    h("div", { class: "pv-n" }, h("span", { class: "pv-fn" }, "Files")),
     button("Close (Esc)", () => { filesClosedByHand(); close(); }, { kind: "icon", icon: "close", size: "s", cls: "pv-x" })));
   const mine = threadFiles();
   // Like ChatGPT's Outputs and Sources: what agents made, then what you sent. Prev/Next still walks them all in page order.

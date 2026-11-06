@@ -10,7 +10,7 @@
 .dt-top{flex:none;padding:var(--s3) var(--s4) var(--s3)}
 .dt-top-in>div{display:grid;gap:var(--s2)}
 .dt-top-row{display:flex;align-items:center;gap:var(--s6);min-width:0;white-space:nowrap}
-.dt-top-row .fs{align-self:center}
+.dt-top-row .fs{align-self:center;margin-left:auto}.dt-top-row .fs+.dt-clock{margin-left:0}
 :root[data-idle] .dt-top-row .fs:not(:hover,:focus-visible){visibility:hidden}
 .dt-brand{flex:none;font-size:var(--fs-lead);font-weight:var(--w-bold);letter-spacing:-.01em}
 .dt-sum{display:flex;align-items:baseline;gap:var(--s5)}
@@ -55,6 +55,9 @@
 
 /* a view in a tile: fills it, without its controls */
 .dt-tile[data-tile=mesh] .dt-body,.dt-tile[data-tile=timeline] .dt-body{padding:0}
+.dt-body>.map>.empty,.dt-body>.page>.empty{padding:var(--s2) var(--s4)}
+.dt-body>.page{padding:0}
+.dt-body .map-scroll{mask-image:linear-gradient(#000 calc(100% - 40px),transparent)}
 .dt-body>.cvp{position:absolute;inset:0;height:auto;background:none}
 .dt-body .cvp-bar{position:absolute;top:var(--s1);right:var(--s2);z-index:5;max-width:calc(100% - 2*var(--s2));padding:var(--s1) var(--s2);background:var(--surface);border:1px solid var(--line-2);border-radius:var(--r-m);box-shadow:var(--e2)}
 .dt-body .cvp-count{display:none}
@@ -81,7 +84,7 @@
 /* usage */
 .dt-lead{margin-bottom:var(--s2);font-size:var(--fs-body);line-height:1.4;color:var(--ink)}
 .dt-lead[data-tone=bad]{color:var(--bad-ink)}
-.dt-acct{display:grid;grid-template-columns:4.6em repeat(2,minmax(0,1fr));gap:var(--s3);align-items:start;padding:var(--s2) 0;border-top:1px solid var(--line)}
+.dt-acct{display:grid;grid-template-columns:7em repeat(2,minmax(0,1fr));gap:var(--s3);align-items:start;padding:var(--s2) 0;border-top:1px solid var(--line)}
 .dt-acct[data-dim]{opacity:.62}
 .dt-acct-n{display:flex;align-items:center;gap:6px;min-width:0;font-size:var(--fs-small);font-weight:var(--w-bold);white-space:nowrap}
 .dt-acct-n>span{overflow:hidden;text-overflow:ellipsis}
@@ -105,7 +108,7 @@
 @container (max-width:420px){.dt-agents>li{grid-template-columns:5.2em minmax(0,1fr)}.dt-agents>li>.ref[data-kind=thread]{display:none}}
 
 /* No data: a band readable across a room, and the old numbers plainly set back. */
-.dt-lost{display:flex;align-items:center;gap:16px;min-height:72px;margin:0 16px;padding:12px 24px;border-radius:var(--r-l);background:color-mix(in oklch,var(--bad) 12%,var(--surface))}
+.dt-lost{display:flex;align-items:center;gap:16px;min-height:72px;padding:12px 24px;border-radius:var(--r-l);background:color-mix(in oklch,var(--bad) 12%,var(--surface))}
 .dt-lost b{font-size:26px;letter-spacing:-.01em}.dt-lost span{font-size:20px;color:var(--ink-2)}
 .dt-lost .sd{zoom:1.5;align-self:center}
 body[data-lost] .dt-sum,body[data-lost] .dt-tile{opacity:.55}

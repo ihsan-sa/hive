@@ -7,7 +7,8 @@ import { layout } from "../core/nav.js";
 import { simpleOn, setSimple } from "../core/simple.js";
 import { getTheme, cycleTheme, THEMES } from "../core/theme.js";
 import { icon } from "./kit.js";
-import { HELP } from "./tour.js";
+import { HELP, startTour } from "./tour.js";
+import { canFeedback, openFeedback } from "./feedback.js";
 
 const ST = { open: false, update: null };
 const lab = v => (typeof v.label === "function" ? v.label() : v.label);
@@ -42,12 +43,14 @@ export function mobileNav({ views, current, nav, update }) {
       icon(GLYPH[v.id] || "agents"), h("span", null, SHORT[v.id] || lab(v)), b ? h("i", { class: "mn-b", "aria-label": `${b} for you` }, b) : null); };
   return h("div", { class: "mn", "data-open": ST.open ? "" : null },
     ST.open ? h("div", { class: "mn-scrim", onclick: close }) : null,
-    ST.open ? h("div", { class: "mn-sheet", role: "menu" },
+    ST.open ? h("div", { class: "mn-sheet" },
       h("div", { class: "mn-grab", "aria-hidden": "true" }),
       more.length ? h("div", { class: "mn-h" }, "Pages") : null,
       more.map(link),
       h("div", { class: "mn-h" }, "Help and display"),
-      h("a", { class: "mn-i", href: HELP, target: "_blank", rel: "noopener" }, h("b", null, "User guide")),
+      h("a", { class: "mn-i", href: HELP, target: "_blank", rel: "noopener", "data-key": "help" }, h("b", null, "User guide")),
+      app ? h("button", { type: "button", class: "mn-i", "data-key": "tour", onclick: () => { ST.open = false; update(); startTour(); } }, h("b", null, "Take the tour")) : null,
+      app && canFeedback() ? h("button", { type: "button", class: "mn-i", "data-key": "feedback", onclick: () => { ST.open = false; update(); openFeedback(); } }, h("b", null, "Send feedback")) : null,
       h("button", { type: "button", class: "mn-i", onclick: () => { cycleTheme(); update(); } }, h("b", null, `Colour theme: ${THEMES.find(x => x[0] === th)[1]}`), h("span", null, "tap to change")),
       app ? h("button", { type: "button", class: "mn-i", onclick: () => { ST.open = false; setSimple(!simpleOn()); update(); } }, h("b", null, simpleOn() ? "Show everything" : "Simple view"), h("span", null, simpleOn() ? "all the tabs" : "just the chat")) : null) : null,
     h("nav", { class: "mn-bar", "aria-label": "Main" }, main.map(tab),

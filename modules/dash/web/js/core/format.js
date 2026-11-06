@@ -21,7 +21,7 @@ export function dur(ms) {
 }
 export const secs = s => (s < 60 ? Math.round(s) + "s" : dur(s * 1e3));
 export const untilText = ms => (ms <= 0 ? "now" : dur(ms));
-export const clock = t => new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+export const clock = t => new Date(t).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 export const dayName = t => new Date(t).toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" });
 export const stamp = t => dayName(t) + " " + clock(t);
 export const hourLabel = t => new Date(t).toLocaleTimeString([], { hour: "numeric" });
@@ -34,6 +34,8 @@ export const gb = mb => (mb >= 1024 ? (mb / 1024).toFixed(mb >= 10240 ? 0 : 1) +
 export const plural = (n, one, many = one + "s") => `${n} ${n === 1 ? one : many}`;
 export function median(a) { if (!a.length) return null; a = [...a].sort((x, y) => x - y); return a[a.length >> 1]; }
 
+/** A bare link in a one-line title reads as its site: "https://www.x.org/a/b?c" becomes "x.org". */
+export const bareLinks = s => String(s || "").replace(/https?:\/\/(?:www\.)?([^\s/?#)]+)\S*/g, "$1");
 // Markdown to plain text, for one-line previews.
 export const mdPlain = s => String(s || "").replace(/\[([^\]\n]+)\]\(https?:[^\s)]+\)/g, "$1").replace(/\*\*|~~|`/g, "").replace(/^ {0,3}#{1,6}[ \t]+/gm, "").replace(/^\s*\|(.*)\|\s*$/gm, (m, c) => (/^[\s|:-]+$/.test(c) ? "" : c.split("|").map(x => x.trim()).join(", ")));
 export function firstSentence(s) {

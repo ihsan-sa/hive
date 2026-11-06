@@ -7,7 +7,7 @@ import { TIERS, tier, status } from "../core/status.js";
 import { threadHref, agentHref, href } from "../core/router.js";
 import { metrics, cols } from "../templates.js";
 import { table } from "../ui/table.js";
-import { pageHeader, section, tally, stats, share, rank, empty, button, seg, meter } from "../ui/kit.js";
+import { pageHeader, section, tally, stats, share, rank, empty, waiting, button, seg, meter } from "../ui/kit.js";
 import { gaugeRows } from "../ui/gauge.js";
 import { openRef } from "../ui/refs.js";
 import { chart, carry } from "../ui/chart.js";
@@ -55,7 +55,7 @@ export function loginRow(U, l, t, span = 48 * HOUR) {
     gauges: [weekly, five].filter(Boolean),
     history: any(a7) || any(a5) ? chart({ series, kind: "step", start, step, max: 100, mark: wStop, compact: true, height: 44, area: false, names: ["weekly", "5-hour"], fmt: v => Math.round(v) + "%" }) : h("span", { class: "meta" }, "no history yet"),
     actions: [out && can("logins") ? button("Sign in", null, { size: "s", href: href("settings", "accounts") }) : null,
-      ...(can("limits") ? [button(S.app.app ? "Usage line" : "Stop lines", () => askLimits(U, l), { size: "s" }), button(l.paused ? "Resume" : "Pause", () => askPause(U, l), { size: "s", kind: "quiet" })] : [])],
+      ...(can("limits") ? [button(S.app.app ? "Stop line" : "Stop lines", () => askLimits(U, l), { size: "s" }), button(l.paused ? "Resume" : "Pause", () => askPause(U, l), { size: "s", kind: "quiet" })] : [])],
   };
 }
 
@@ -197,7 +197,7 @@ const tag = (tone, text) => h("span", { class: "pg-t", "data-tone": tone || null
 function appHead(U, t, R, pick, d1) {
   const us = U.logins || [], ans = leftAnswer(U, t), wk = activeUse(U, t) || totalUse(us, t);
   const used = wk ? Math.round(wk.pct) : null, stopAt = U.stop_pct ?? 98, atStop = us.some(l => !l.paused) ? !us.some(l => inUse(l, U)) : used != null && used >= stopAt;
-  const state = used == null ? { tone: "quiet", text: "Not read yet" } : atStop ? { tone: "bad", text: "At the stop line" } : used >= 80 ? { tone: "warn", text: "Getting close" } : { tone: "good", text: "Plenty left" };
+  const state = used == null ? { tone: "quiet", text: "Not read yet" } : atStop ? { tone: "bad", text: "At the stop line" } : used >= 80 ? { tone: "warn", text: "Getting close" } : ans.tone === "warn" ? { tone: "warn", text: "Going fast" } : { tone: "good", text: "Plenty left" };
   const who = wk && wk.ls && us.length > 1 && wk.ls.length ? wk.ls.map(x => x.name) : null;
   const title = used == null ? "Usage isn't read yet." : who ? `${who.join(", ")} ${who.length > 1 ? "have" : "has"} ${Math.max(0, 100 - used)}% left.` : `${Math.max(0, 100 - used)}% of the week is left.`;
   const fig = l => (ans.figures.find(f => f.label === l) || null);
@@ -218,7 +218,7 @@ function appAccounts(U, t, R) {
   const wStop = l => (l.stop && l.stop.weekly) ?? U.stop_pct;
   return section({ title: "Claude accounts", note: `stop line ${U.stop_pct}%`, actions: can("config") ? button("Change stop line", () => askStopLine(U), { size: "s", kind: "quiet" }) : null },
     table({ key: r => r.key, rows, columns: [
-      { label: "Login", render: r => h("span", null, r.name, r.tag ? h("span", { class: "meta" }, " · " + r.tag) : null) },
+      { label: "Account", render: r => h("span", null, r.name, r.tag ? h("span", { class: "meta" }, " · " + r.tag) : null) },
       { label: "Weekly", render: r => cell(r.gauges.find(g => g.label === "Weekly"), r.gauges.find(g => g.label === "Weekly")?.stop) },
       { label: "5-hour", render: r => cell(r.gauges.find(g => g.label === "5-hour"), r.gauges.find(g => g.label === "5-hour")?.stop) },
       { label: "State", render: st },
@@ -240,7 +240,7 @@ export default {
   id: "usage", label: "Usage", about: "how much is left, and when it comes back", tab: true,
   render(ctx) {
     const U = S.usage;
-    if (!U) return h("div", { class: "page" }, empty("Reading usage…", { kind: "loading" }));
+    if (!U) return h("div", { class: "page" }, waiting(S.usageFailed, "Reading usage…", "usage"));
     const t = now(), us = U.logins || [], P = U.providers || {}, R = range(U, t);
     const pick = seg(RANGES.map(x => [x[0], x[1], x[3]]), R.key, k => { setPref("usage.range", k); ctx && ctx.update ? ctx.update() : null; }, { label: "Time range" });
     const live = us.filter(l => inUse(l, U)), paused = us.filter(l => l.paused), full = us.filter(l => !l.paused && !inUse(l, U));
@@ -258,7 +258,7 @@ export default {
     const key = h("span", { class: "chart-key" }, h("span", null, h("i"), "weekly"), h("span", null, h("i", { "data-k": "1" }), "5-hour"), h("span", null, h("i", { "data-k": "mark" }), "stop"), h("span", null, "· " + (R.span > 7 * DAY ? "last 7 days" : R.name)));
     const limits = section({ title: app ? "Claude accounts" : "Logins", note: app ? `stop line ${U.stop_pct}%` : "pause one to keep the starter off it, or set where it stops",
         actions: app && can("config") ? button("Change stop line", () => askStopLine(U), { size: "s", kind: "quiet" }) : null },
-      gaugeRows({ head: ["Login", "Limits", key, ""], histKey: key, rows: us.map(l => loginRow(U, l, t, Math.min(R.span, 7 * DAY))) }));
+      gaugeRows({ head: ["Account", "Limits", key, ""], histKey: key, rows: us.map(l => loginRow(U, l, t, Math.min(R.span, 7 * DAY))) }));
     const provs = Object.keys(P).filter(k => !k.startsWith("_"));
     const others = provs.length ? section({ title: "Other providers" }, gaugeRows({ rows: provs.map(k => providerRow(k, P[k], P._checked)) })) : null;
 
@@ -281,12 +281,12 @@ export default {
       byT[th] = (byT[th] || 0) + c; byA[i.name] = (byA[i.name] || 0) + c; byTier[tierOf(th)] += c;
     }
     const top = (o, n = 12) => Object.entries(o).sort((a, b) => b[1] - a[1]).slice(0, n);
-    const spend = section({ title: app ? "How much work was done" : "Spend", note: LIST },
+    const spend = section({ title: app ? "The figures" : "Spend", note: LIST },
       stats([
         { label: R.key === "all" ? "In range" : "Last " + R.key, value: money(d1), note: `${money(h1)} an hour lately` },
         { label: "All of it", value: money(all), note: `since ${S.posts[0] ? dayName(S.posts[0].t) : "?"}` },
         { label: "Per agent-hour", value: hours ? money(d1 / hours) : "–", note: `${hours.toFixed(0)} agent-hours, ${R.name}` },
-        { label: "Per board post", value: posts ? money(d1 / posts) : "–", note: `${posts} posts, ${R.name}` },
+        { label: app ? "Per message" : "Per board post", value: posts ? money(d1 / posts) : "–", note: `${posts} posts, ${R.name}` },
         { label: "Tokens written", value: toks(tk[1]), note: `output, all of it; ${toks(tk[0])} plain input` },
         { label: "Input served from cache", value: pct(tk[2], tk[0] + tk[2] + tk[3]), note: `${toks(tk[2])} read from cache, ${toks(tk[3])} written to it` },
       ]));
@@ -297,7 +297,7 @@ export default {
     const tiers = section({ title: "Spend against your priority list", note: R.name },
       share(TIERS.map(x => ({ key: x.key, label: x.label, tone: x.tone, value: byTier[x.key], text: `${money(byTier[x.key])} (${Math.round((100 * byTier[x.key]) / tot)}%)` }))));
     const who = cols(
-      section({ title: "Costliest threads", note: R.name }, rank(top(byT).map(([k, v]) => ({ key: k, label: threadTitle(k) || k || "No thread", value: v, text: money(v), tone: tier(tierOf(k)).tone, href: threadHref(k) })))),
+      section({ title: app ? "Costliest conversations" : "Costliest threads", note: R.name }, rank(top(byT).map(([k, v]) => ({ key: k, label: threadTitle(k) || k || (app ? "No conversation" : "No thread"), value: v, text: money(v), tone: tier(tierOf(k)).tone, href: threadHref(k) })))),
       section({ title: "Costliest agents", note: R.name }, rank(top(byA).map(([k, v]) => ({ key: k, label: k || "No agent", value: v, text: money(v), tone: status(agentStatus(k).key).tone, href: agentHref(k), onClick: e => openRef(e, "agent", k) })))));
     const models = section({ title: "By model", note: R.name }, !Object.keys(byM).length ? empty("No model spend in this range.") : rank(top(byM).map(([k, v]) => ({ key: k, label: k, value: v, text: money(v), tone: "data" }))));
 
