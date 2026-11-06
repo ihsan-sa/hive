@@ -190,8 +190,8 @@ const tag = (tone, text) => h("span", { class: "pg-t", "data-tone": tone || null
 /** The app look: a state, one answer, three cards, one chart, a short accounts table, the detail behind closed rows. */
 function appHead(U, t, R, pick, d1) {
   const us = U.logins || [], ans = leftAnswer(U, t), wk = activeUse(U, t) || totalUse(us, t);
-  const used = wk ? Math.round(wk.pct) : null, stopAt = U.stop_pct || 100;
-  const state = used == null ? { tone: "quiet", text: "Not read yet" } : used >= stopAt ? { tone: "bad", text: "At the stop line" } : used >= 80 ? { tone: "warn", text: "Getting close" } : { tone: "good", text: "Plenty left" };
+  const used = wk ? Math.round(wk.pct) : null, stopAt = U.stop_pct ?? 98, atStop = us.some(l => !l.paused) ? !us.some(l => inUse(l, U)) : used != null && used >= stopAt;
+  const state = used == null ? { tone: "quiet", text: "Not read yet" } : atStop ? { tone: "bad", text: "At the stop line" } : used >= 80 ? { tone: "warn", text: "Getting close" } : { tone: "good", text: "Plenty left" };
   const title = used == null ? "Usage isn't read yet." : `${Math.max(0, 100 - used)}% of the week is left.`;
   const fig = l => (ans.figures.find(f => f.label === l) || null);
   const wkF = fig("Left now"), f5 = fig("5-hour left"), tt = fig("Left overall");

@@ -6,6 +6,11 @@ directions in the asks register (kind direction), the goals.md of each project, 
 "is anyone working toward X" was a search. Built 2026-11-04 for the ask that goals be extracted from every interaction, filed,
 and worked toward (post 11040210d8cf). A goal with no thread post for days and nobody running in it is listed as idle, oldest
 first, for the keeper to start someone on, or to say in the thread why it waits.
+
+Ladders (2026-11-06, thread focus-ladders): a `## Ladder` section in a goals.md lists next steps that need nobody's sign-off, each with a
+`check:` that says when it is done. HW projects keep moving because their gates define the next step; focuses stopped because a fresh agent
+with a thin brief re-read "nothing left" and repeated it. `hive goals --brief THREAD` hands a round its rung, and `hive goals --rounds` counts how
+many rounds did work rather than report a wait.
 """
 import argparse, datetime as dt, importlib.util, json, re, sys
 from pathlib import Path
@@ -20,7 +25,44 @@ NOT_AGENTS = {"person", "hives", "box", "starter", "watchdog", "progress", "asks
 IDLE_D = 2.0   # a project goal with no agent post in its thread for this long and nobody running in it is idle
 FOCUS_IDLE_H = 2.0   # a focus of the person's goes idle much sooner: it is their current work, and a focus is never held for an idle owner (2026-11-05, post 1104224972e6)
 
+LADDER = re.compile(r"^##\s+Ladder\b(.*)$", re.M)
+RUNG = re.compile(r"^\s*-\s+\[([ x!])\]\s+(.+)$", re.M)
+AFTER = re.compile(r"\bafter:(\d{4}-\d{2}-\d{2})\b")
+PARKED = re.compile(r"^Parked until (\d{4}-\d{2}-\d{2}):\s*(.+)$", re.M)
+PARK_MAX_D = 3   # a parked ladder comes back within this many days; a date further out doesn't count, so nobody parks a focus for good
+WAIT = re.compile(r"no step left|changed nothing|nothing (has )?changed|nothing left|all with the person|no new person posts|started no round|(?<!nothing )\bwaits? (only )?on (the person|a sign-in)", re.I)   # how a round says it did no work
+ROUND = re.compile(r"\bkeeper round\b", re.I)
+
 def now(): return dt.datetime.now(dt.timezone.utc)
+
+def ladder(txt, t=None):
+    """The `## Ladder` section of a goals.md, or None. Rungs are `- [ ] what. check: how to tell`; `[x]` done, `[!]` blocked, `after:YYYY-MM-DD` not before that day."""
+    t = t or now(); m = LADDER.search(txt)
+    if not m: return None
+    body = txt[m.end():]; end = re.search(r"^#{1,2}\s", body, re.M); body = body[:end.start()] if end else body
+    th = re.search(r"`([^`]+)`", m.group(1)); rungs = []; today = t.date().isoformat()
+    for state, text in RUNG.findall(body):
+        a = AFTER.search(text)
+        rungs.append({"state": state, "text": text.strip(), "after": a.group(1) if a else None, "checked": "check:" in text})
+    nxt = next((r for r in rungs if r["state"] == " " and r["checked"] and (not r["after"] or r["after"] <= today)), None)
+    p = PARKED.search(body); parked = None
+    if p and today < p.group(1) <= (t.date() + dt.timedelta(days=PARK_MAX_D)).isoformat(): parked = {"until": p.group(1), "why": p.group(2).strip()}
+    return {"thread": th.group(1) if th else None, "rungs": rungs, "next": nxt, "parked": parked, "done": sum(r["state"] == "x" for r in rungs),
+            "left": sum(r["state"] == " " for r in rungs), "no_check": sum(r["state"] == " " and not r["checked"] for r in rungs)}
+
+def rounds(board, threads, since):
+    """Keeper rounds in these threads since `since` (ISO): one per brief, graded on the last post of the agent that took it. {thread: [work, wait, silent]}"""
+    out = {th: [0, 0, 0] for th in threads}; by = {}
+    for p in board:
+        if p.get("thread") in out: by.setdefault(p["thread"], []).append(p)
+    for th, posts in by.items():
+        for i, p in enumerate(posts):
+            if p.get("at", "") < since or "new" not in str(p.get("to", "")) or not ROUND.search(p.get("text", "")): continue
+            later = [q for q in posts[i + 1:] if str(q.get("from", "")).lower() not in NOT_AGENTS and q.get("from") != p.get("from")]
+            if not later or (i + 2 < len(posts) and ROUND.search(later[0].get("text", "")) and "new" in str(later[0].get("to", ""))): out[th][2] += 1; continue
+            who = later[0].get("from"); last = [q for q in later if q.get("from") == who][-1]
+            out[th][1 if WAIT.search(last.get("text", "")) else 0] += 1
+    return out
 
 def jsonl(path):
     out = []
@@ -58,7 +100,7 @@ def project_goals():
         m = MEASURE.search(txt)
         measure = re.sub(r"^\W*(measure|metric)\W*", "", m.group(0).strip(), flags=re.I)[:160] if m else None
         out.append({"project": g.parent.name, "goal": head[:120], "measure": measure, "threads": [t.lower() for t in THREAD.findall(txt) if t.lower() != "thread"][:8],
-                    "edited": dt.datetime.fromtimestamp(g.stat().st_mtime, dt.timezone.utc).isoformat(timespec="seconds")})
+                    "edited": dt.datetime.fromtimestamp(g.stat().st_mtime, dt.timezone.utc).isoformat(timespec="seconds"), "ladder": ladder(txt), "path": str(g)})
     return out
 
 def thread_state(board, runs, t):
@@ -90,9 +132,20 @@ def goals(t=None):
     projects = project_goals(); pmeasure = {g["project"]: g["measure"] for g in projects}
     for g in projects:  # a focus's measure comes from the project of the same name, else from one whose goals.md names its thread
         for th in g["threads"]: pmeasure.setdefault(th, g["measure"])
-    for f in focuses(pri):
-        s = st.get(f["thread"], {}); rows.append({"kind": "focus", "name": f"{f['n']}. {f['title']}", "thread": f["thread"], "measure": pmeasure.get(f["thread"]), **state_row(s, f["thread"], open_asks, t, idle_d=FOCUS_IDLE_H / 24)})
+    claimed = {}   # focus thread -> the project whose ladder it takes: same name, or the ladder heading names the thread
+    fs = focuses(pri); fth = {f["thread"] for f in fs}
     for g in projects:
+        if g["ladder"]:
+            for th in (g["ladder"]["thread"], g["project"]):
+                if th in fth: claimed.setdefault(th, g); break
+    for f in fs:
+        s = st.get(f["thread"], {}); g = claimed.get(f["thread"]); row = {"kind": "focus", "name": f"{f['n']}. {f['title']}", "thread": f["thread"], "measure": pmeasure.get(f["thread"]), **state_row(s, f["thread"], open_asks, t, idle_d=FOCUS_IDLE_H / 24)}
+        rows.append(with_ladder(row, g))
+    taken = {g["project"] for g in claimed.values()}
+    for g in projects:
+        lad = g["ladder"] if g["project"] not in taken else None   # a project with a ladder no focus takes moves at a focus's pace, in the thread its heading names
+        if lad and lad["thread"]:
+            s = dict(st.get(lad["thread"], {})); rows.append(with_ladder({"kind": "project", "name": g["project"], "goal": g["goal"], "thread": lad["thread"], "measure": g["measure"], "edited_d": days(g["edited"], t), **state_row(s, lad["thread"], open_asks, t, idle_d=FOCUS_IDLE_H / 24)}, g)); continue
         th = g["project"]; cands = [th] + [k for k in g["threads"] if k != th] + [k for k in st if k != th and k not in g["threads"] and (k.startswith(th + "-") or k.startswith(th + "_"))]
         best = max(cands, key=lambda k: st.get(k, {}).get("agent_at", ""))
         s = dict(st.get(best, {})); s["running"] = set().union(*(st.get(k, {}).get("running", set()) for k in cands))
@@ -101,6 +154,29 @@ def goals(t=None):
     loose = [e for e in open_asks if e.get("thread") not in covered]
     return {"at": t.isoformat(timespec="seconds"), "rows": rows, "directions": len(directions), "open_asks": len(open_asks), "loose_asks": len(loose),
             "loose_threads": sorted({e.get("thread") for e in loose}, key=lambda x: str(x))}
+
+def with_ladder(row, g):
+    lad = g["ladder"] if g else None
+    row["ladder"] = bool(lad); row["goals_path"] = g["path"] if g else None
+    if lad:
+        row.update(rung=lad["next"]["text"] if lad["next"] else None, rungs_left=lad["left"], rungs_done=lad["done"], rungs_no_check=lad["no_check"], parked=lad["parked"])
+        if lad["parked"]: row["idle"] = False
+    return row
+
+def brief(row):
+    """The brief a keeper round posts for one focus. Every clause is here because a thin hand-written brief produced the 'nothing changed' rounds."""
+    head = f"@new Keeper round on {row['name']}. The ladder is the `## Ladder` section of {row.get('goals_path') or 'this focus project goals.md (create it, one line a rung)'}: read that whole file, and obey any notes in the section.\n\n"
+    rung = f"**Your rung:** {row['rung']}\n\nDo this rung. Land real work, then run its check." if row.get("rung") else "**The ladder has no rung you can take.** Your work this round is to write the next 3 to 5 rungs from the measure in that file, then do the first one."
+    return head + rung + """
+
+Rules for the round:
+- Read the last 5 posts of this thread for context, not for a conclusion. Earlier posts here may say nothing is left: that was a check-in, not a finding. "Nothing changed" is not a result, and you are not here to re-check the state.
+- A rung is work that needs nobody's sign-off and moves the measure in goals.md, with a `check:` someone else could run. Hard limits hold (no money, no acting in the person's name, no credentials handed out). Drafting, building, simulating and testing are all open while an account or a go waits.
+- Check passes: in goals.md change `- [ ]` to `- [x]` and append your result post's id. Too big for one run: split it into rungs, land the first, tick that.
+- Rung truly needs the person or is blocked: change it to `- [!]` with why (add a `For you:` line in your post if they must act), then take the next rung in this same run. A `[!]` costs you nothing and is not your result.
+- Before you stop, leave at least 2 open rungs, each with a `check:`. Add new ones from the measure; no busywork: each must be something a person who cares about that number would want done.
+- Only if you honestly cannot name one rung of real work: add a line `Parked until YYYY-MM-DD: why` to the section (at most 3 days out, later dates are ignored) and say so. The keeper skips it until then.
+- Your last post says: the rung, the check's output, the measure now, the next rung. If the work turns hard, `hive model opus "why"`."""
 
 def state_row(s, threads, open_asks, t, idle_d=IDLE_D):
     threads = [threads] if isinstance(threads, str) else list(threads)
@@ -129,6 +205,12 @@ def render(g):
         last = "never" if r["last_agent_d"] is None else f"{r['last_agent']} {r['last_agent_d']:g} d ago"
         name = r["name"] if r["kind"] == "focus" else f"{r['name']}: {r.get('goal', '')[:60]}"
         lines.append(f"| {name} | {r['thread']} | {last}{' **idle**' if r['idle'] else ''} | {', '.join(r['running']) or '-'} | {r['open_asks']} ({r['owned_asks']}) | {(r['measure'] or 'none')[:70]} |")
+    rungs = [r for r in g["rows"] if r.get("ladder") or r["kind"] == "focus"]
+    if rungs: lines.append("\nNext rung (`hive goals --brief THREAD` writes the round's brief):")
+    for r in rungs:
+        state = "NO LADDER" if not r.get("ladder") else f"parked until {r['parked']['until']}: {r['parked']['why'][:90]}" if r.get("parked") else (r.get("rung") or "LADDER EMPTY: the round writes new rungs")[:130]
+        warn = f" ({r['rungs_no_check']} open rungs have no check)" if r.get("rungs_no_check") else ""
+        lines.append(f"- {r['thread']} ({r.get('rungs_done', 0)} done, {r.get('rungs_left', 0)} left): {state}{warn}")
     idle = [r for r in g["rows"] if r["idle"]]
     if idle: lines.append(f"\nIdle (nobody running, no agent post in {FOCUS_IDLE_H:g} h for a focus or {IDLE_D:g} days for a project): " + ", ".join(r["name"].split(":")[0] for r in idle) + ". Start someone on each, or say in its thread why it waits. A focus is never left idle because its owner is: start a fresh agent that reads the thread and takes the next step that does not need the person.")
     nomeasure = [r["name"] for r in g["rows"] if r["kind"] == "project" and not r["measure"]]
@@ -139,8 +221,23 @@ def render(g):
 def main():
     ap = argparse.ArgumentParser(prog="hive goals", description=__doc__.split("\n")[0])
     ap.add_argument("--json", action="store_true"); ap.add_argument("--idle", action="store_true", help="only the idle goals")
+    ap.add_argument("--brief", metavar="THREAD", help="print the keeper round's brief for this focus or ladder thread, with its next rung"); ap.add_argument("--ladder-threads", action="store_true", help="idle focus and ladder threads, one a line: each gets a round")
+    ap.add_argument("--rounds", metavar="DAYS", type=float, help="keeper rounds on focuses over the last DAYS: work, wait, silent")
     a = ap.parse_args()
     g = goals()
+    if a.rounds is not None:
+        ths = [r["thread"] for r in g["rows"] if r["kind"] == "focus" or r.get("ladder")]; res = rounds(jsonl(BOARD), ths, (now() - dt.timedelta(days=a.rounds)).isoformat(timespec="seconds"))
+        tot = [sum(v[i] for v in res.values()) for i in range(3)]; n = sum(tot)
+        for th, v in res.items(): print(f"{th}: {v[0]} work, {v[1]} wait, {v[2]} silent")
+        print(f"all: {tot[0]} of {n} rounds did work ({100 * tot[0] // n if n else 0}%), {tot[1]} wait, {tot[2]} silent, over {a.rounds:g} days"); return
+    if a.ladder_threads:
+        for r in g["rows"]:
+            if r["idle"] and (r["kind"] == "focus" or r.get("ladder")): print(r["thread"])
+        return
+    if a.brief:
+        r = next((r for r in g["rows"] if r["thread"] == a.brief and (r["kind"] == "focus" or r.get("ladder"))), None)
+        if not r: sys.exit(f"no focus or ladder in thread {a.brief}")
+        print(brief(r)); return
     if a.idle: g["rows"] = [r for r in g["rows"] if r["idle"]]
     print(json.dumps(g, indent=1, default=str) if a.json else render(g))
 

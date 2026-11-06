@@ -833,6 +833,29 @@ def cmd_bringup(a):
         fcntl.flock(f, fcntl.LOCK_EX); f.write(json.dumps(rec) + "\n")
     print(f"brought up {th} for {secs // 60} min")
 
+def cmd_status(a):
+    """hive status THREAD [text on stdin]: set or read the two-line status bar the dashboard shows at the top of a thread."""
+    th = (a.thread or "").lstrip("#")
+    if not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.:-]{0,100}", th): sys.exit("hive status: give a thread name (letters, digits and . _ : -)")
+    f_ = STATE / "thread-status.jsonl"
+    if a.read or sys.stdin.isatty():
+        best = None
+        try:
+            for ln in f_.read_text().splitlines():
+                try: r = json.loads(ln)
+                except ValueError: continue
+                if r.get("thread") == th: best = r
+        except OSError: pass
+        print(best["text"] if best else "(no status yet)"); return
+    text = "\n".join(l.strip() for l in sys.stdin.read().strip().splitlines() if l.strip())[:400]
+    if not text: sys.exit("hive status: empty text; give two short lines on stdin: what the thread is about, then where it stands now")
+    if not any(p.get("thread") == th for p in posts()): sys.exit(f"hive status: no thread named {th} on the board")
+    rec = {"thread": th, "from": os.environ.get("HIVE_NAME", "anon"), "text": text, "at": time.time()}
+    STATE.mkdir(parents=True, exist_ok=True)
+    with open(f_, "a") as f:
+        fcntl.flock(f, fcntl.LOCK_EX); f.write(json.dumps(rec) + "\n")
+    print(f"status set on {th}")
+
 def cmd_progress(a):
     """hive improve ... and hive progress ...: core/progress.py (the improvements ledger and the scoreboard)."""
     os.execv(sys.executable, [sys.executable, "-I", str(CORE / "progress.py")] + a.rest)
@@ -860,6 +883,8 @@ p.add_argument("--file", action="append", help="attach a file (repeatable): copi
 p.add_argument("text", nargs="*"); p.set_defaults(f=cmd_post)
 p = sp.add_parser("show", help="hive show THREAD --why \"...\" [--for 10m]: bring a thread up: the dashboard shows it in a pinned \"Brought up for you\" strip at the top for 10 min (or --for), with who raised it and why, so the person can click straight in. Use it when the person asks you to bring something up")
 p.add_argument("thread"); p.add_argument("--why", default=""); p.add_argument("--for", dest="for_", metavar="10m", help="how long it stays: 5m, 1h (default 10m, up to 24h)"); p.set_defaults(f=cmd_bringup)
+p = sp.add_parser("status", help="hive status THREAD <<'X' ...: set the two-line status bar the dashboard shows at the top of a thread (line 1: what it is about; line 2: where it stands now, what it waits on). --read prints it. Update it when you change a thread's state")
+p.add_argument("thread"); p.add_argument("--read", action="store_true"); p.set_defaults(f=cmd_status)
 p = sp.add_parser("model", help="hive model haiku|sonnet|opus|fable WHY...: carry on with this conversation on another model. It posts WHY in your thread; end your turn and you resume on that model with your memory. --next: no resume, your next wake starts on it")
 p.add_argument("to_model", choices=CLAUDE_MODELS, metavar="MODEL"); p.add_argument("--next", action="store_true"); p.add_argument("why", nargs="+"); p.set_defaults(f=cmd_model)
 p = sp.add_parser("read", help="hive read [--thread T] [--since 2h|ISO] [--from X] [--to X] [--id ID] [-n 30, 0 for all] [--short: one line per post]")
