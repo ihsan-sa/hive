@@ -133,18 +133,24 @@ def unanswered(name, rec):
 
 def owns_open(name, rec):
     """Once per run: asks this agent owns that are still open as it stops. Watchdog trips on 2026-11-04 (k0558, k0559, k0486)
-    were owners that delivered and stopped without `hive asks done`/`person`."""
+    were owners that delivered and stopped without `hive asks done`/`person`. An ask already shown in an earlier run comes again
+    only if this run posted in its thread (it may have just been delivered): over 2026-11-03..06, 147 of 244 of these blocks
+    were the same list again and led to no tool call at all (~/projects/agent-weight)."""
     if os.environ.get("HIVE_DOOR") or not rec.get("at"): return None
     mark = STATE / "nudged-asks" / name
-    try:
-        if mark.read_text() == rec["at"]: return None
-    except OSError: pass
+    try: lines = mark.read_text().splitlines()
+    except OSError: lines = []
+    if lines and lines[0] == rec["at"]: return None
+    shown = set(lines[1].split()) if len(lines) > 1 else set()
     try:
         sys.path.insert(0, str(Path(__file__).parent)); import asks
         mine = [e for e in asks.ledger().values() if e.get("owner") == name and e.get("status") not in asks.CLOSED + asks.WAITING]
     except Exception: return None
+    threads = {p.get("thread") for p in own_posts(name, rec["at"]) or []}
+    new = [e for e in mine if e["id"] not in shown or e.get("thread") in threads]
+    mark.parent.mkdir(parents=True, exist_ok=True); mark.write_text(rec["at"] + "\n" + " ".join(sorted(shown | {e["id"] for e in mine})))
+    mine = new
     if not mine: return None
-    mark.parent.mkdir(parents=True, exist_ok=True); mark.write_text(rec["at"])
     rows = "\n".join(f"{e['id']}: {str(e.get('ask'))[:120]}" for e in mine[:8])
     return ("You still own these open asks as you stop. Close each one that is delivered with `hive asks done ID --evidence POSTID`, "
             "mark `hold|person|drop ID --why ...` if it waits or is moot, or leave it if work remains (say so in your thread):\n" + rows)
@@ -173,6 +179,25 @@ def stop_reason(name, st, since):
     word = next((w for w in STOP_WORDS if line.lower().startswith(w.lower() + ":") and len(line) - len(w) > 12), None)
     return (word, line) if word else None
 
+def reason_from_post(name, rec, thread, st, since):
+    """A stop reason given as the last line of this agent's newest post in the thread in this run (fresh, as for the bar), copied
+    into the status bar so the person reads it there. Saves the turn an `hive status` call costs: 44 of 51 gate asks over
+    2026-11-03..06 led to nothing but that call (~/projects/agent-weight). (word, line), or None."""
+    ps = [p for p in own_posts(name, rec["at"]) or [] if p.get("thread") == thread]
+    if not ps: return None
+    p = ps[-1]
+    try: pat = dt.datetime.fromisoformat(p["at"]); pat = (pat if pat.tzinfo else pat.replace(tzinfo=dt.timezone.utc)).timestamp()
+    except (KeyError, ValueError): return None
+    lines = [l.strip().strip("*_ ").strip() for l in str(p.get("text", "")).strip().splitlines() if l.strip()]
+    got = stop_reason(name, {"from": name, "at": pat, "text": lines[-1] if lines else ""}, since)
+    if not got: return None
+    line1 = (str(st.get("text", "")).strip().splitlines() or [""])[0].strip() or (lines[0][:120] if len(lines) > 1 else thread)
+    try:
+        with (STATE / "thread-status.jsonl").open("a") as fh:
+            fh.write(json.dumps({"thread": thread, "from": name, "text": f"{line1}\n{got[1]}"[:400], "at": time.time(), "via": "post " + str(p.get("id", ""))}) + "\n")
+    except OSError: pass
+    return got
+
 def stop_gate(name, rec, t=None):
     """Why this stop should wait: the run has given no reason for stopping. The person, 2026-11-06 (post 11052128aa48): before
     ending work an agent justifies the stop in the thread's status bar, against the goal of moving forward and stopping only
@@ -190,7 +215,8 @@ def stop_gate(name, rec, t=None):
     try: k, n = f.read_text().split(); n = int(n) if k == rec["at"] else 0
     except (OSError, ValueError): n = 0
     st = last_status(thread)
-    got = stop_reason(name, st, max((at if at.tzinfo else at.replace(tzinfo=dt.timezone.utc)).timestamp(), t - STOP_FRESH_S))
+    since = max((at if at.tzinfo else at.replace(tzinfo=dt.timezone.utc)).timestamp(), t - STOP_FRESH_S)
+    got = stop_reason(name, st, since) or reason_from_post(name, rec, thread, st, since)
     def log(event):
         try:
             with (STATE / STOP_LOG).open("a") as fh:
@@ -209,7 +235,8 @@ def stop_gate(name, rec, t=None):
             "- Needs the person: a critical decision only they can make, asked in a post with a `For you:` line, and nothing else is left meanwhile.\n"
             "- Waiting: on a job or an agent's answer that wakes you (say which, and about when).\n"
             "- Told to stop: say by whom.\n"
-            "If one of them honestly holds, set it and stop again:\n"
+            "If one of them honestly holds, end your last post in the thread with it as a line of its own (e.g. `Blocked: on what, "
+            "and who has it`; it is copied to the bar), or set it and stop again:\n"
             f"hive status {thread} <<'X'\n{line1}\nBlocked: on what, and who has it\nX\n"
             "If none holds (a step is finished but the goal has a next one you can take, or the work got hard or long), don't stop: "
             "take the next step, and give the reason when one is true.")

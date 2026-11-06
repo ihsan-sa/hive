@@ -263,6 +263,24 @@ const HEX = /^[0-9a-f]{12}$/;
 /** A side question's words without the @model the composer added at the end. */
 export const btwText = t => String(t || "").replace(/(\s*@[a-z][\w-]*)+\s*$/i, "");
 export const btwParent = th => ((th || "").match(/^btw-(.+)-[0-9a-f]{4}$/) || [])[1] || null;
+/** The conversation a thread was started from, or null. The first post carries `parent` (hive post stamps the thread its agent
+ * was woken in); older boards have none, so it falls back to the author's session at that moment: an agent that opens a thread
+ * while running in another was sent from there (the person, 110601450d55: helpers' threads swamped the Chat list). */
+export function threadParent(th) {
+  const d = S.threads.get(th); if (!d || !d.posts.length) return null;
+  if (d.parentN === d.posts.length && d.parentAt === S.sessions.length) return d.parent;
+  d.parentN = d.posts.length; d.parentAt = S.sessions.length;
+  const p = d.posts[0]; let par = p.parent || btwParent(th);
+  if (!par && isAgent(p.from) && p.from !== "person") {
+    let best = null;
+    for (const s of S.sessions) if (s.name === p.from && s.thread && s.thread !== th && s.start <= p.t && p.t <= (s.end == null ? Infinity : s.end + 5000) && (!best || s.start > best.start)) best = s;
+    par = best ? best.thread : null;
+    if (best && best.end == null) d.parentN = -1;   // the session is still open: look again once it has ended
+  }
+  return d.parent = par && par !== th && S.threads.has(par) ? par : null;
+}
+/** Threads started from this one, oldest first. */
+export function threadChildren(th) { const out = []; for (const d of S.threads.values()) if (d.name !== th && threadParent(d.name) === th) out.push(d.name); return out; }
 export function threadTitle(th) {
   const own = S.threadMeta && S.threadMeta[th] && S.threadMeta[th].title; if (own) return own;   // the person renamed it
   if (btwParent(th)) { const d = S.threads.get(th), p = d && d.posts[0]; return "Aside: " + (p ? short(btwText(mdPlain(displayText(p))).split("\n")[0], 60) : btwParent(th)); }

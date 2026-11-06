@@ -9,7 +9,7 @@
 import { h, morph } from "../core/dom.js";
 import { S, SYS, can, OUTSIDE, built, post as apiPost, poll, jget } from "../core/store.js";
 import { simpleOn, plainName, hiveName } from "../core/simple.js";
-import { SIDE_THREAD, agentState, agentStatus, btwParent, isAgent, isRunning, tierOf, threadTitle, threadState, threadPeople, isSystemThread, SHOW, postKind, threadKinds, closingPosts, displayText, postSource, inUse, fresh7 } from "../core/model.js";
+import { SIDE_THREAD, agentState, agentStatus, btwParent, threadParent, threadChildren, isAgent, isRunning, tierOf, threadTitle, threadState, threadPeople, isSystemThread, SHOW, postKind, threadKinds, closingPosts, displayText, postSource, inUse, fresh7 } from "../core/model.js";
 import { ago, dayName, stamp, clock, dur, short, mdPlain, now, plural, firstSentence, DAY, MIN, HOUR } from "../core/format.js";
 import { href, threadHref, go } from "../core/router.js";
 import { tier, status } from "../core/status.js";
@@ -354,7 +354,14 @@ function threadRows(c, ctx) {
   let ds = [...S.threads.values()].filter(d => pinned(d.name) || important(d.name) || ((threadKinds(d) & mask) && theirs(d)) || d.name === c.thread);
   if (C.scope === "recent" && !simpleOn()) ds = ds.filter(d => pinned(d.name) || important(d.name) || archived(d.name) || d.last > t - (app() ? 7 : 1) * DAY || ran.has(d.name) || d.name === c.thread || (app() && threadState(d.name, seen).key === "asks"));
   if (C.imp) ds = ds.filter(d => important(d.name));
-  ds.sort((a, b) => b.last - a.last);
+  // A thread an agent started from a listed conversation folds under it (the person, 110601450d55: one chat made eight side entries
+  // and the original got lost). A root is the top of its chain among the listed ones; its row sorts by the latest activity in the family.
+  const listed = new Map(ds.map(d => [d.name, d]));
+  const rootOf = d => { let x = d; for (let i = 0; i < 8; i++) { const p = listed.get(threadParent(x.name) || ""); if (!p || p === d) break; x = p; } return x; };
+  const kidsOf = new Map(), act = new Map();
+  if (app() && !C.imp) for (const d of ds) { const r = rootOf(d); if (r !== d) { (kidsOf.get(r.name) || kidsOf.set(r.name, []).get(r.name)).push(d); act.set(r.name, Math.max(act.get(r.name) || r.last, d.last)); } }
+  const roots = ds.filter(d => !app() || C.imp || rootOf(d) === d);
+  roots.sort((a, b) => (act.get(b.name) || b.last) - (act.get(a.name) || a.last));
   const mk = d => {
     const lp = d.posts[d.posts.length - 1], live = ran.has(d.name);
     // The developer route keeps its one-line log row: 100+ threads have to fit.
@@ -370,8 +377,8 @@ function threadRows(c, ctx) {
       lead: [tierLead(d.name), h("span", { title: status(st.key).label || "" }, statusDot(st.key === "done" ? "ended" : st.key, { live }))],
       text: [fadeTag(d.name) || stateTag(st), fadeTag(d.name) || stateTag(st) ? " · " : null, `${authorName(lp.from)}: ${say}`], sec: secOf(d.name, st), dim: faded(d.name) };
   };
-  const dress = r => {
-    const th = r.key.replace(/~recent$/, ""), im = important(th), pn = pinned(th), m = tmeta(th);
+  const dress = (r, th = r.key.replace(/~recent$/, "")) => {
+    const im = important(th), pn = pinned(th), m = tmeta(th);
     if (im) r.lead = [h("span", { class: "tm-imp", title: m.impWhy ? `Important, from ${m.impBy || "an agent"}: ${m.impWhy}` : m.impBy ? `Important, marked by ${m.impBy}` : "Important" }, icon("star")), r.lead];
     if (can("post")) r.acts = [
       h("button", { type: "button", class: "lr-act", "aria-pressed": String(im), "aria-label": im ? "Not important" : "Mark important", title: im ? "Take the important mark off" : "Mark important", onclick: () => setMeta(th, { important: !im }) }, icon("star")),
@@ -380,13 +387,27 @@ function threadRows(c, ctx) {
   };
   // Recent holds every conversation by last activity, so a pinned, important or needs-you one also keeps its place there (the person, 11060006f821):
   // a second row built fresh, since a row's icons are DOM nodes and one node can sit in one place only. Archived ones stay in their fold.
-  const rowsOut = !app() ? ds.map(mk) : ds.flatMap(d => {
-    const r = dress(mk(d));
-    return C.imp || r.sec === "rest" || r.sec === "arch" ? [r] : [r, dress({ ...mk(d), key: d.name + "~recent", sec: "rest" })];
+  // Helpers sit in a fold under the conversation they came from, in its Recent row; one that needs the person also keeps its own
+  // row in Needs you (or Pinned, Important), so nothing waiting on them hides in a fold. The current conversation's fold is open.
+  const kidRows = (d, sec) => {
+    const kids = kidsOf.get(d.name) || []; if (!kids.length) return [];
+    const open = KIDS.has(d.name) || kids.some(k => k.name === c.thread), sts = kids.map(k => threadState(k.name, seen).key);
+    const n = k => sts.filter(x => k.includes(x)).length, parts = [[["working", "queued", "quiet"], "working"], [[...NEED], "needs you"], [["done"], "done"]].map(([ks, w]) => (n(ks) ? `${n(ks)} ${w}` : null)).filter(Boolean);
+    return [{ key: d.name + "~kids", sec, href: null, depth: 1, whole: true, expanded: open, title: plural(kids.length, "helper conversation"), meta: parts.join(" · "),
+      lead: h("span", { class: "cm-stand-ch", "data-open": open ? "" : null }, icon("chevron-down")),
+      onClick: e => holdScroll(e.currentTarget, () => { KIDS.has(d.name) ? KIDS.delete(d.name) : KIDS.add(d.name); ctx.update(); }) },
+      ...(open ? kids.sort((a, b) => b.last - a.last).map(k => dress({ ...mk(k), key: d.name + "/" + k.name, sec, depth: 2 }, k.name)) : [])];
+  };
+  const rowsOut = !app() ? ds.map(mk) : roots.flatMap(d => {
+    const r = dress(mk(d)), kids = kidsOf.get(d.name) || [];
+    const own = kids.filter(k => !["rest", "arch"].includes(secOf(k.name, threadState(k.name, seen)))).map(k => dress(mk(k)));   // a helper's own row where it needs the person
+    if (C.imp || r.sec === "rest" || r.sec === "arch") return [r, ...kidRows(d, r.sec), ...own];
+    return [r, dress({ ...mk(d), key: d.name + "~recent", sec: "rest" }), ...kidRows(d, "rest"), ...own];
   });
   if (!app()) rowsOut.unshift({ key: "(everything)", href: href("comms", "~all"), title: "Everything", text: `${S.posts.length} posts, newest last`, current: c.all });
   return rowsOut;
 }
+const KIDS = new Set();   // conversations whose helper fold is open, this page only
 // Folded sections (the person, 11040202d77c): kept in this browser.
 const FOLD_KEY = "hive.comms.folded";
 const FOLD = new Set((() => { try { return JSON.parse(localStorage.getItem(FOLD_KEY) || "[]"); } catch (e) { return []; } })());
@@ -415,7 +436,7 @@ function sections(rs, ctx, opts) {
 }
 function syncThreads(c, ctx) {
   const tl = document.querySelector("#main .cm-tl"); if (!tl) return;
-  const sig = [S.ver, C.scope, C.arch, C.imp, tmetaSig(), [...FOLD].join(), C.tq, AI.st + AI.res.length, AI.tag, S.shown && S.shown.length, showMask(), c.arg, Math.floor(now() / 3e4), S.runSig, marksSig().length].join("|");
+  const sig = [S.ver, C.scope, C.arch, C.imp, tmetaSig(), [...FOLD].join(), [...KIDS].join(), C.tq, AI.st + AI.res.length, AI.tag, S.shown && S.shown.length, showMask(), c.arg, Math.floor(now() / 3e4), S.runSig, marksSig().length].join("|");
   if (tl === L.tl && sig === L.tlSig) return;
   const fresh = tl !== L.tl || c.arg !== L.tlConv;
   L.tl = tl; L.tlSig = sig; L.tlConv = c.arg;
@@ -438,6 +459,7 @@ function line(key, text, act, opts = {}) {
 }
 /** An agent's name in a strip line: a link to it, without a second dot (the line has its own). */
 const who = n => (simpleOn() ? hiveName() : agentRef(n, { dot: false }));
+const d0 = th => { const d = S.threads.get(th); return d && d.posts[0] ? d.posts[0].from : "an agent"; };
 function lastMine(th) { const d = S.threads.get(th); if (!d) return null; for (let i = d.posts.length - 1; i >= 0; i--) if (d.posts[i].from === "person") return d.posts[i]; return null; }
 const notBuilt = () => h("span", { class: "nb", title: "Designed, not built yet: the server needs to do this" }, "not built yet");
 
@@ -464,6 +486,15 @@ function strip(th) {
       room && post ? button("Carry on", () => say(th, "Please carry on where you stopped.", st.who), { size: "s" }) : null, { key: "limited" }));
   }
   if (st.key === "failed") out.push(line("failed", [who(st.who), simpleOn() ? " ran into a problem. Send a message and it tries again." : ` stopped with an error ${ago(st.t)}. A message wakes it to try again.`], null, { key: "failed" }));
+  // Where it sits (the person, 110601450d55): a helper's conversation names the one it came from, and that one lists its helpers.
+  const par = app() && threadParent(th), kids = app() ? threadChildren(th) : [];
+  if (par) out.push(line("ended", ["Part of ", h("a", { href: threadHref(par) }, short(threadTitle(par), 60)), simpleOn() ? "" : `: ${who(d0(th))} started it from there`], null, { key: "parent" }));
+  if (kids.length) {
+    const ks = kids.map(k => ({ k, st: threadState(k, seen) })).sort((a, b) => S.threads.get(b.k).last - S.threads.get(a.k).last), on = ks.filter(x => ["working", "queued", "quiet"].includes(x.st.key)).length, ask = ks.filter(x => NEED.has(x.st.key)).length;
+    const links = ks.slice(0, 5).flatMap((x, i) => [i ? ", " : "", h("a", { href: threadHref(x.k), title: status(x.st.key).label || "" }, short(threadTitle(x.k), 40))]);
+    out.push(line(on ? "working" : ask ? "asks" : "ended", [plural(kids.length, "helper conversation"), on ? ` (${on} working${ask ? `, ${ask} waiting on you` : ""})` : ask ? ` (${ask} waiting on you)` : "", ": ", ...links, ks.length > 5 ? ` and ${ks.length - 5} more` : ""],
+      post ? button(KIDS.has(th) ? "Hide in list" : "Show in list", () => { KIDS.has(th) ? KIDS.delete(th) : KIDS.add(th); L.ctx && L.ctx.update(); }, { size: "s" }) : null, { key: "kids", live: !!on }));
+  }
   for (const a of run) {
     if (st.key === "asks" && a.name === st.who) continue;
     const s = agentState(a);

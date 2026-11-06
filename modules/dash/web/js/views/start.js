@@ -11,7 +11,7 @@ import { act, activityLog, isBusy } from "../ui/activity.js";
 import { firstJobs, closeLine } from "../ui/firstjobs.js";
 import { composer, outFor, actions as outActions } from "../ui/composer.js";
 import { localMessage } from "../ui/message.js";
-import { anyAccount, finishing, local, pageData, reading, rootNote, sandboxPart, saveSettings } from "../ui/setup.js";
+import { anyAccount, codexPart, finishing, local, pageData, reading, rootNote, sandboxPart, saveSettings } from "../ui/setup.js";
 
 const hasSent = () => [...S.threads.values()].some(d => d.posts.some(p => p.from === "person"));
 const F = { starterErr: "", chose: null, know: false };
@@ -37,7 +37,7 @@ function walkthrough(ctx, s) {
   const logins = s.logins || [], sb = pg.sandbox_check && pg.sandbox_check.state, sbOk = pg.settings.sandbox === "on" && sb === "works";
   const share = pg.settings.share || {}, sharing = [share.failures ? "failure reports and a daily check-in" : null, share.usage ? "usage reports" : null].filter(Boolean);
   return page(
-    card("account", "Add an account", p(simpleOn() ? "Your Hive works through your Claude account. Sign in to it here." : "Sign in with your Claude plan. Agents run on it and use its limits."),
+    card("account", "Add an account", p(simpleOn() ? "Your Hive works through your Claude account. Sign in to it here." : "Sign in with your Claude plan (or a ChatGPT plan, below). Agents run on it and use its limits."),
       rootNote(),
       h("div", { class: "signin", "data-key": "claude" },
         h("div", { class: "frow fsplit" }, h("b", null, "Claude"), s.claude === false ? statusLabel("ended", "not installed") : statusLabel(s.signed_in ? "working" : "ended", s.signed_in ? "signed in" : "not signed in"),
@@ -45,7 +45,8 @@ function walkthrough(ctx, s) {
         s.claude === false ? p("To use it, in a terminal as this account: ", h("code", null, "curl -fsSL https://claude.ai/install.sh | bash"), " Then restart this app.") : null,
         logins.length > 1 ? h("p", { class: "field-h" }, logins.filter(l => l.signed_in).length + " of " + logins.length + " logins signed in.") : null,
         s.claude !== false && !s.signed_in && can("logins") ? terminalRoute(logins) : null,
-        signinBox("start", up))),
+        signinBox("start", up)),
+      pg.accounts && pg.accounts.codex ? [h("p", { class: "field-h" }, "Or sign in with a ChatGPT plan, through Codex."), codexPart(up)] : null),
     // A sandbox that doesn't work stops agents from starting, so that one is said in full here. When it works, it's a line.
     sbOk ? null : card("sandbox-step", "The sandbox on this machine", sandboxPart(up)),
     h("p", { class: "field-h", "data-key": "defaults" },

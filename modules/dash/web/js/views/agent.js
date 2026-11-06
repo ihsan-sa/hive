@@ -30,7 +30,16 @@ async function loadWork(n, onChange) {
     if (W.name === n && sig !== W.sig) { W.data = d; W.sig = sig; onChange(); }
   } catch (e) {}
 }
+// DF: the one file whose diff is open under "What it changed" (click a file again to close it)
+const DF = { name: null, p: null, data: null }; let again = () => {};
+async function openDiff(n, p) {
+  if (DF.name === n && DF.p === p) { Object.assign(DF, { p: null, data: null }); again(); return; }
+  Object.assign(DF, { name: n, p, data: null }); again();
+  let d; try { d = await jget(`/api/agent-diff?name=${encodeURIComponent(n)}&path=${encodeURIComponent(p)}`) || {}; } catch (e) { d = { error: e.message }; }
+  if (DF.name === n && DF.p === p) { DF.data = d; again(); }
+}
 export async function loadFeed(n, onChange) {
+  again = onChange;
   if (F.name !== n) { Object.assign(F, { name: n, items: null, sig: "" }); loadAgentCosts().then(onChange); }
   if (W.name !== n) { Object.assign(W, { name: n, data: null, sig: "", at: 0 }); loadWork(n, onChange); }
   try {
@@ -135,6 +144,14 @@ function nowBlock(n, L) {
   return st.key === "stuck" ? note({ tone: "bad", title: `Looks stuck: ${st.text}`, actions: killButton(n), key: "stuck" }, rows) : rows;
 }
 
+function diffView(d) {
+  if (!d) return h("p", { class: "meta" }, "Reading…");
+  if (d.error) return h("p", { class: "meta", role: "alert" }, d.error);
+  if (!d.diff.trim()) return h("p", { class: "meta" }, `No difference to show (${d.what}).`);
+  const lines = d.diff.split("\n").map(l => h("span", { class: "dl " + (/^(\+\+\+|---|diff |index )/.test(l) ? "dh" : l[0] === "+" ? "da" : l[0] === "-" ? "dd" : l[0] === "@" ? "dk" : "") }, l + "\n"));
+  return [h("p", { class: "meta" }, d.what + (d.cut ? "; cut at 60 KB" : "")), h("pre", { class: "diff", "data-diff": "1" }, lines)];
+}
+
 function changed(n, D, host) {
   const w = W.name === n ? W.data : null, panel = host === "panel";
   if (!w) return empty("Reading…", { kind: "loading" });
@@ -143,8 +160,11 @@ function changed(n, D, host) {
   if (w.prs.length) parts.push(section({ title: "Pull requests", level: null }, list(w.prs.map((x, i) => ({ key: "pr" + i, title: x.x, meta: ago(x.t * 1e3) })), { dense: true })));
   if (w.commits.length) parts.push(section({ title: "Commits", note: w.ncommits > w.commits.length ? `newest ${w.commits.length} of ${w.ncommits}` : null }, list(w.commits.map((x, i) => ({ key: "c" + i + x.t, title: x.x, meta: ago(x.t * 1e3) })), { dense: true, limit: panel ? 4 : 10 })));
   if (w.files.length) parts.push(section({ title: "Files", note: `${plural(w.nfiles, "file")}, newest first` },
-    h("ul", { class: "wf" }, w.files.slice(0, panel ? 8 : 30).map(f => h("li", { "data-key": f.p, title: `${f.p}: ${plural(f.n, "change")}${f.k === "shell" ? " from the shell" : ""}, last ${stamp(f.t * 1e3)}` },
-      h("code", null, "\u200e" + f.p + "\u200e"), h("span", { class: "meta" }, `${f.n > 1 ? f.n + "× · " : ""}${ago(f.t * 1e3)}`)))),
+    h("ul", { class: "wf" }, w.files.slice(0, panel ? 8 : 30).map(f => [h("li", { "data-key": f.p, class: "wf-f", role: "button", tabindex: 0, "aria-expanded": String(DF.name === n && DF.p === f.p),
+      title: `${f.p}: ${plural(f.n, "change")}${f.k === "shell" ? " from the shell" : ""}, last ${stamp(f.t * 1e3)}. Click to see the diff.`,
+      onclick: () => openDiff(n, f.p), onkeydown: e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openDiff(n, f.p); } } },
+      h("code", null, "\u200e" + f.p + "\u200e"), h("span", { class: "meta" }, `${f.n > 1 ? f.n + "× · " : ""}${ago(f.t * 1e3)}`)),
+      DF.name === n && DF.p === f.p ? h("li", { class: "wf-diff" }, diffView(DF.data)) : null])),
     w.files.length > (panel ? 8 : 30) ? h("p", { class: "meta" }, `and ${w.files.length - (panel ? 8 : 30)} more`) : null));
   if (D.attached.length) parts.push(section({ title: "Files it posted" }, h("ul", { class: "wf" }, D.attached.slice(-8).reverse().map(({ p, f }) => h("li", { "data-key": p.id + f.name },
     h("a", { href: fileUrl(p, f), target: "_blank", rel: "noopener" }, f.name), h("span", { class: "meta" }, ago(p.t)))))));
