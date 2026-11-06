@@ -191,7 +191,9 @@ def cmd_post(a):
         except ValueError as x: print(f"hive post: posted, but not signed ({x})", file=sys.stderr)
     with BOARD.open("a") as f:
         fcntl.flock(f, fcntl.LOCK_EX); f.write(json.dumps(p) + "\n")
-    print(pid)
+    print(pid, flush=True)
+    for k in getattr(a, "done", None) or []:  # the result post closes the ask it delivers: no separate `hive asks done` turn
+        subprocess.run([sys.executable, "-I", str(CORE / "asks.py"), "done", k, "--evidence", pid])
     me = (a.as_ or os.environ.get("HIVE_NAME", "")).lower()
     receipt(list(dict.fromkeys(to)), ignored, ext, me)
 
@@ -922,6 +924,7 @@ p.add_argument("--routed", action="store_true", help="for the doors: the name wa
 p.add_argument("--model", type=post_model, help="model for any run this post starts: opus, sonnet, haiku, fable, or provider:model for a provider in config.json (openrouter:openai/gpt-5); default: the login's")
 p.add_argument("--reply-to", dest="reply_to", metavar="ID", help="the post this answers; shown on the board, and a door puts the answer under that message")
 p.add_argument("--file", action="append", help="attach a file (repeatable): copied to ~/files/<post id>/, shown in hive read, Slack and the dashboard")
+p.add_argument("--done", action="append", metavar="ASK", help="mark this ask (k0123) done with this post as its evidence (repeatable)")
 p.add_argument("text", nargs="*"); p.set_defaults(f=cmd_post)
 p = sp.add_parser("show", help="hive show THREAD --why \"...\" [--for 10m]: bring a thread up: the dashboard shows it in a pinned \"Brought up for you\" strip at the top for 10 min (or --for), with who raised it and why, so the person can click straight in. Use it when the person asks you to bring something up")
 p.add_argument("thread"); p.add_argument("--why", default=""); p.add_argument("--for", dest="for_", metavar="10m", help="how long it stays: 5m, 1h (default 10m, up to 24h)"); p.set_defaults(f=cmd_bringup)
@@ -987,4 +990,17 @@ if sys.argv[1:2] == ["away"]: cmd_away(argparse.Namespace(rest=sys.argv[2:]))
 if sys.argv[1:2] == ["goals"]: cmd_goals(argparse.Namespace(rest=sys.argv[2:]))
 if sys.argv[1:2] == ["improve"]: cmd_progress(argparse.Namespace(rest=sys.argv[2:]))  # their own flags: handed over whole
 if sys.argv[1:2] == ["progress"]: cmd_progress(argparse.Namespace(rest=["progress"] + sys.argv[2:]))
+def cmd_help(a):
+    """hive help [TOPIC]: the parts of the orientation an agent needs only now and then, from core/help/TOPIC.md."""
+    d = CORE / "help"
+    topics = sorted(f.stem for f in d.glob("*.md"))
+    if not a.topic:
+        for t in topics: print(f"  {t:8} {(d / (t + '.md')).read_text().split(chr(10), 1)[0].split(':', 1)[-1].strip()}")
+        print("hive help TOPIC prints one; hive COMMAND --help shows a command's flags"); return
+    t = a.topic.lower()
+    hits = [x for x in topics if x.startswith(t)]
+    if len(hits) != 1: sys.exit(f"hive help: no single topic {a.topic!r}; topics: {', '.join(topics)}")
+    print((d / (hits[0] + ".md")).read_text().split("\n", 1)[1].strip())
+p = sp.add_parser("help", help="hive help [TOPIC]: the on-demand parts of the orientation (board, agents, hive, core, h4, find): run with no topic for the list")
+p.add_argument("topic", nargs="?"); p.set_defaults(f=cmd_help)
 a = ap.parse_args(); a.f(a)

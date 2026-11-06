@@ -1111,6 +1111,8 @@ a.ref[data-kind=file][data-pv-on]{background:color-mix(in oklch,var(--accent) 16
 .cm-tl .list{border-bottom:0}
 .cm-tl .lr:first-child{border-top:0}
 .cm-tl .lr-in{margin:0;padding:11px var(--s2)}
+.cm-tl .lr-in[style]{padding-left:calc(var(--s2) + var(--d,0)*14px)}   /* a helper conversation under the one it came from */
+.cm-tl .lr[data-key$="~kids"] .lr-t b{font-weight:500;color:var(--ink-2)}
 .cm-tl .lr-in[aria-current]{background:var(--hover);box-shadow:inset 2px 0 0 var(--ink)}
 .cm-tl .lr-t{font-size:var(--fs-body)}
 .cm-tl .lr-t b{flex:1 1 auto;font-weight:600}
@@ -2212,12 +2214,15 @@ text.map-ring-t{font-size:11px;font-weight:var(--w-med);fill:var(--ink-3);text-a
 
 /* live Markdown layer behind the composer text box: same characters, styled, never wider */
 .cp-tw{position:relative}
-.cp-bd{display:none;position:absolute;inset:0;overflow:hidden;white-space:pre-wrap;overflow-wrap:break-word;pointer-events:none;color:var(--ink);box-sizing:border-box;border:0}
-.cp-tw .cp-t{position:relative;background:transparent;caret-color:var(--ink)}   /* live-markdown layer switched off (the person, 11052118): it made the box jump; text stays the box's own */
+.cp-bd{display:none;position:absolute;top:0;left:0;bottom:0;overflow:hidden;white-space:pre-wrap;overflow-wrap:break-word;pointer-events:none;color:var(--ink);box-sizing:border-box;border:0;margin:0}
+.cp-tw[data-md] .cp-bd{display:block}
+.cp-tw[data-md] .cp-t{position:relative;background:transparent;color:transparent;caret-color:var(--ink)}
+.cp-tw[data-md] .cp-t::selection{background:color-mix(in srgb,var(--accent,#58f) 30%,transparent)}
 .cp-tw .cp-t::placeholder{color:var(--ink-3)}
 .md-mk,.md-h{color:var(--accent,#58f);font-weight:600}
+.md-x{opacity:.4}   /* the ** ` marks around styled text: kept (they keep the cursor aligned) but faint */
 .md-b{-webkit-text-stroke:.55px currentColor}
-.md-i{font-style:italic}
+.md-i{text-decoration:underline dotted;text-underline-offset:3px}   /* not font-style:italic: an italic face can be wider, which would drift the cursor */
 .md-code{background:color-mix(in srgb,currentColor 13%,transparent);box-shadow:0 0 0 1px color-mix(in srgb,currentColor 13%,transparent);border-radius:3px;color:var(--accent,#58f)}
 .md-a{color:var(--accent,#58f);text-decoration:underline}
 

@@ -1185,6 +1185,29 @@ def agent_work(name, full=True):
     return out
 
 
+def agent_diff(name, path, full=True):
+    """One file an agent changed, as a git diff: what differs from the last commit now, or else the last commit that touched it.
+    Only a file in the agent's own work list (agent_work) is read, so this is no way to read other files. Full sign-in only."""
+    if not full: return {"error": "your sign-in sees counts only"}
+    ok = {r["p"] for r in agent_work(name, True).get("files", [])}
+    if path not in ok: return {"error": "not a file this agent changed"}
+    f = Path(HOME / path[2:] if path.startswith("~/") else path)
+    if not f.is_absolute() or ".." in f.parts: return {"error": "not a plain path"}
+    run = lambda *a: subprocess.run(["git", "-C", str(f.parent), *a], capture_output=True, text=True, timeout=10, errors="replace")
+    try:
+        if not f.parent.is_dir(): return {"error": "folder is gone"}
+        if run("rev-parse", "--show-toplevel").returncode: return {"error": "not in a git folder, so no diff to show"}
+        if not f.exists(): what, r = "deleted", run("diff", "HEAD", "--", f.name)
+        elif run("ls-files", "--error-unmatch", "--", f.name).returncode:
+            what, r = "new, not yet committed", run("diff", "--no-index", "--", "/dev/null", f.name)
+        else:
+            what, r = "not yet committed", run("diff", "HEAD", "--", f.name)
+            if not r.stdout.strip(): what, r = "last commit that touched it", run("log", "-1", "-p", "--format=commit %h %s", "--", f.name)
+    except (OSError, subprocess.SubprocessError) as e: return {"error": str(e)[:200]}
+    d = redact(r.stdout)
+    return {"p": path, "what": what, "diff": d[:60000], "cut": len(d) > 60000}
+
+
 class Steps:
     """Every agent's tool calls and words, from all the session logs, for the Ledger page (/api/ledger). Each log is read on
     from where the last look stopped, so after the first pass a look costs only what was written since. Kept in memory as short
@@ -1638,7 +1661,7 @@ WEB = STATE / "web.json"
 INSTALLED = HOME / ".hive-installed"
 FORWARDED = ("cf-ray", "cf-connecting-ip", "cf-access-jwt-assertion", "cf-ipcountry", "cf-visitor", "cdn-loop", "x-forwarded-for",
              "x-forwarded-host", "x-forwarded-proto", "x-real-ip", "forwarded", "via", "true-client-ip")
-GET_CAP = {"/api/call-chat": "post", "/api/live": "read", "/api/away": "read", "/api/board": "read", "/api/log": "read", "/api/usage": "read", "/api/jobs": "read", "/api/agent": "read", "/api/agent-work": "read", "/api/ledger": "read",
+GET_CAP = {"/api/call-chat": "post", "/api/live": "read", "/api/away": "read", "/api/board": "read", "/api/log": "read", "/api/usage": "read", "/api/jobs": "read", "/api/agent": "read", "/api/agent-work": "read", "/api/agent-diff": "read", "/api/ledger": "read",
            "/api/projects": "read", "/api/agent-costs": "read", "/api/thread-names": "read", "/api/thread-meta": "read", "/api/shown": "read", "/api/thread-status": "read", "/api/thread-find": "read", "/json": "read", "/api/target": "read", "/api/inbox": "read", "/api/delivered": "read",
            "/api/config": "config", "/api/modules": "modules", "/api/signin": "logins", "/api/plans": "plans", "/api/secrets": "secrets",
            "/api/settings": "config", "/api/ntfy": "config", "/api/webpush": "config", "/api/update": "config", "/api/signin-codex": "logins", "/api/accounts": "logins", "/api/design": "logins", "/api/brand/logo": "read",
@@ -4320,6 +4343,8 @@ def serve(port):
                 self.send(json.dumps(thread_status()).encode(), J)
             elif u.path == "/api/agent-work":
                 self.send(json.dumps(agent_work(q.get("name", [""])[0], self.route != "outside" or self.mode == "full")).encode(), J)
+            elif u.path == "/api/agent-diff":
+                self.send(json.dumps(agent_diff(q.get("name", [""])[0], q.get("path", [""])[0], self.route != "outside" or self.mode == "full")).encode(), J)
             elif u.path == "/api/ledger":
                 g = lambda k, d="": q.get(k, [d])[0]
                 num = lambda k: float(g(k)) if re.fullmatch(r"\d+(\.\d+)?", g(k)) else None

@@ -189,7 +189,8 @@ function mdInline(line, out) {
   for (const m of line.matchAll(INLINE)) {
     if (m.index > last) out.push(line.slice(last, m.index));
     const cls = m[1] ? "md-code" : m[2] ? "md-b" : m[3] ? "md-i" : "md-a";
-    out.push(h("span", { class: cls }, m[0]));
+    const k = m[4] ? 0 : m[1] || m[3] ? 1 : 2, t = m[0];   // mark width: ` and * and _ are 1, ** and __ are 2
+    out.push(k ? h("span", { class: cls }, h("span", { class: "md-x" }, t.slice(0, k)), t.slice(k, -k), h("span", { class: "md-x" }, t.slice(-k))) : h("span", { class: cls }, t));
     last = m.index + m[0].length;
   }
   if (last < line.length) out.push(line.slice(last));
@@ -207,14 +208,20 @@ function mdLayer(text) {
   out.push("\n");   // keeps the last empty line's height, as a textarea does
   return out;
 }
-/** Redraw the layer behind a text box and match its font, padding and scroll. */
+/** Redraw the layer behind a text box. The box's own text turns transparent only while the layer provably lines up
+ *  (same wrapped height as the box); otherwise the layer is dropped and the box shows its plain text, so it can never glitch. */
 function mdSync(n) {
-  return;   // off: the live layer glitched while typing (the person, 11052116, 11052118)
-  const bd = n.parentNode && n.parentNode.querySelector(".cp-bd"); if (!bd) return;
-  bd.replaceChildren(...mdLayer(n.value)); bd.setAttribute("data-sig", n.value);
+  const tw = n.parentNode, bd = tw && tw.querySelector(".cp-bd"); if (!bd) return;
+  if (bd.getAttribute("data-sig") !== n.value) { bd.replaceChildren(...mdLayer(n.value)); bd.setAttribute("data-sig", n.value); }
+  CP.md = false;
+  if (!n.value) { tw.removeAttribute("data-md"); return; }
+  tw.setAttribute("data-md", "");   // shown so it can be measured; dropped below if it doesn't line up
   const c = getComputedStyle(n);
   for (const k of ["font", "padding", "lineHeight", "letterSpacing", "wordSpacing", "tabSize", "textIndent"]) bd.style[k] = c[k];
-  bd.scrollTop = n.scrollTop;
+  bd.style.width = n.clientWidth + "px";   // the box's wrapping width, scrollbar excluded
+  const ok = Math.abs(bd.scrollHeight - n.scrollHeight) <= 1;
+  if (ok) bd.scrollTop = n.scrollTop;
+  if (!ok) tw.removeAttribute("data-md"); else CP.md = true;   // CP.md: a redraw keeps the attribute, so the text never flashes plain
 }
 /** Send a short message for the person from a button (Carry on, Answer). Shows like any other. */
 export function say(th, text, to) {
@@ -561,7 +568,8 @@ export function composer({ thread, update, place = "thread", autofocus, top }) {
       SB.open && can("secrets") ? secretRow() : null,
       !SB.open && SB.say ? h("p", { class: "meta cp-ssay", "data-tone": SB.tone, role: "status", "data-key": "ssay" }, SB.say) : null,
       !th && d.naming ? h("div", { class: "cp-name-row", "data-key": "name" }, input({ class: "input cp-name", placeholder: "A short name, like fix-contact-form", "aria-label": "Name for this job", value: d.name, oninput: (e, n) => { d.name = n.value; keep(d); } })) : null,
-      h("div", { class: "cp-tw", "data-key": "tw" }, 
+      h("div", { class: "cp-tw", "data-key": "tw", ...(CP.md ? { "data-md": "" } : {}) },
+      h("div", { class: "cp-bd", "data-own": "", "data-sig": "", "aria-hidden": "true" }),
       h("textarea", { class: "cp-t", "data-key": "t", rows: 1, placeholder: ph, "aria-label": th ? "Message" : "What do you want done?", value: d.text, enterkeyhint: "send",
         oninput: (e, n) => {
           d.text = n.value; keep(d); CP.hist = null; mdSync(n);

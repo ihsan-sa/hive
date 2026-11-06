@@ -386,6 +386,15 @@ def working(r, grace):
         w[0], w[1] = t, c
     return t - max(w[2], woke) < grace
 
+reap_hist = {}  # name -> (reaps in a row, t of the last)
+
+def grace_for(name, grace):
+    """Each reap of an agent within 3 h of its last doubles its quiet time before the next (x2, then x4): an agent
+    re-parked on an idle wait (CI, a poll loop) was reaped and resumed every 15 min, 8 times a day for one (2026-11-06:
+    reaps 15 -> 55 a day, nearly all agents re-waiting on CI or a job). A stuck loop still dies, just later."""
+    n, t = reap_hist.get(name, (0, 0))
+    return grace * 2 ** min(n, 2) if time.time() - t < 10800 else grace
+
 def bg_tasks(out):
     """Descriptions of background tasks the run started and that had not ended when it went quiet."""
     open_ = {}
@@ -579,15 +588,17 @@ def running(st=None, by_hand=False):
     for f in RUN.glob("*.json"):
         r = json.loads(f.read_text())
         c = children.get(r["name"])
+        g = grace_for(r["name"], grace)
         gone = not c and run_gone(r)  # checked first: nothing below may signal a pid that isn't this run's
         # parked on a waiter on a login that has run out: it would only find out when the waiter ends, up to hours later
         move = not gone and st is not None and out_of_room(cfg(), r.get("login"), st.get("limits")) and finished_but_alive(r, min(60, grace)) and only_waiters(r["pid"])
         if gone: pass
-        elif move or (finished_but_alive(r, grace) and not working(r, grace)):
+        elif move or (finished_but_alive(r, g) and not working(r, g)):
             bg = bg_tasks(r.get("out", ""))
             log(event="reaped", name=r["name"], session=r["session"], pid=r["pid"], bg=bg, move=move)
             kill_tree(r["pid"])
             if c: c.wait(timeout=10)
+            if not move: reap_hist[r["name"]] = ((reap_hist.get(r["name"], (0, 0))[0] + 1) if g > grace or time.time() - reap_hist.get(r["name"], (0, 0))[1] < 10800 else 1, time.time())
             if st is not None and (bg or move):  # it may have been waiting on something: resume it so it can look
                 st.setdefault("resume", {})[r["name"]] = {**r, "session": session_in(r.get("out")) or r["session"], "reset": 0, "reaped": bg or ["(none listed)"], "move": move}
             work.pop(r["name"], None)
@@ -1105,6 +1116,27 @@ RESUME_WHY = {"login": "Your run stopped because its Claude login had expired or
               "stalled": "Your run went silent mid-turn with nothing running, so the starter ended it and resumed it.",
               "other": "Your run ended before it finished, and the starter resumed it."}
 
+HARD = re.compile(r"\*\*Hard limits\.\*\*.*?\n\nRoot on the [a-z]+ is held only by[^\n]*\n", re.S)
+
+def trial_orientation(name, live, path=None):
+    """A live A/B trial of an orientation change (rsi-loop's trial.py writes ~/.hive/trial.json): half the agents, chosen by a
+    stable hash of their name so a resumed run keeps its arm, get the candidate's edit 3-way merged onto today's orientation.
+    Returns (text, arm), arm None when no trial runs. A merge that conflicts or touches the hard-limit block gives the live
+    text, arm "skip", so it is left out of the count. Never fails a start."""
+    try: t = json.loads((path or STATE / "trial.json").read_text())
+    except (OSError, ValueError): return live, None
+    try:
+        if t.get("until") and now() > t["until"]: return live, None
+        h = int(__import__("hashlib").sha1(f"{t['name']}:{name}".encode()).hexdigest()[:8], 16) / 2**32
+        if h >= t.get("share", .5): return live, "base"
+        d = Path(t["dir"]); tmp = Path(os.environ.get("TMPDIR") or "/tmp") / f"trial-{name}.md"; tmp.write_text(live)
+        r = subprocess.run(["git", "merge-file", "-p", str(tmp), str(d / "base.md"), str(d / "cand.md")], capture_output=True, text=True, timeout=5)
+        tmp.unlink(missing_ok=True)
+        if r.returncode != 0 or (m := HARD.search(r.stdout)) is None or m.group(0) != (HARD.search(live) or [None])[0]:
+            return live, "skip"
+        return r.stdout, "cand"
+    except Exception: return live, "skip"
+
 def recall_note(name, posts):
     """Pointers to our own notes that share words with the posts being handed over (`kb recall`), so related notes turn up
     without the agent searching: a few lines, or nothing when kb isn't sure. The starter's own posts (keeper, improver,
@@ -1127,7 +1159,8 @@ def start(c, name, posts, login, resume=None, reaped=None, extra=(), moved=False
              or default_model())
     prov = provider_of(c, model)
     kind = "warden" if is_warden(name) else "agent"
-    system = (CORE / "orientation.md").read_text() + ("\n\n" + (CORE / "warden.md").read_text() if kind == "warden" else "")
+    orient, trial = trial_orientation(name, (CORE / "orientation.md").read_text()) if kind != "warden" else ((CORE / "orientation.md").read_text(), None)
+    system = orient + ("\n\n" + (CORE / "warden.md").read_text() if kind == "warden" else "")
     if (sb := box()): system += sb.NOTE + ("\n" + (CORE / "warden-step.md").read_text() if kind == "warden" else "")
     prompt = (f"You are @{name}. You were woken by board post {', '.join(p['id'] for p in posts)} "
               f"(thread {first.get('thread', first['id'])}, from {first.get('from')}). "
@@ -1205,7 +1238,7 @@ def start(c, name, posts, login, resume=None, reaped=None, extra=(), moved=False
     children[name] = proc
     if not resume and not sb: (STATE / "delivered" / name).unlink(missing_ok=True)  # the inbox hook starts fresh with this run; a resumed one keeps its list so an @all isn't handed over twice
     rec = {"name": name, "pid": proc.pid, "session": sid, "at": now(), "post": first["id"], "login": login,
-           "thread": first.get("thread"), "from": first.get("from"), "out": str(path), "proc": proc_start(proc.pid), "boot": boot_id(), **({"resumed": True} if resume else {}), **({"woke": list(extra)} if extra else {}), **({"slept": posts} if slept else {}), **({"heir_of": heir_of["name"]} if heir_of else {}), **({"all_since": all_since} if all_since else {}), **({"model": model} if model else {}), **({"fallback": fb} if fb else {}),
+           "thread": first.get("thread"), "from": first.get("from"), "out": str(path), "proc": proc_start(proc.pid), "boot": boot_id(), **({"resumed": True} if resume else {}), **({"woke": list(extra)} if extra else {}), **({"slept": posts} if slept else {}), **({"heir_of": heir_of["name"]} if heir_of else {}), **({"all_since": all_since} if all_since else {}), **({"model": model} if model else {}), **({"fallback": fb} if fb else {}), **({"trial": trial} if trial else {}),
            "harness": prov[1].get("harness", "claude-code") if prov else "claude-code", **({"provider": prov[0]} if prov else {}), **({"effort": env["CLAUDE_EFFORT"]} if env.get("CLAUDE_EFFORT") else {})}
     (RUN / f"{name}.json").write_text(json.dumps(rec))
     log(event="start", **rec)
