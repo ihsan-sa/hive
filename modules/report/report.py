@@ -4,7 +4,7 @@
 Reads `share` ({"failures": bool, "usage": bool}) from settings.json. failures, which also carries the check-in, is on by
 default and can be turned off. Both false (or no settings.json) means nothing is read, queued or sent. Every report that
 leaves is first written byte-for-byte to reports/sent/, and `hive-report show`
-prints it. Commands: status | send [--dry-run] | show [N] | question | bundle [--yes] | issue TITLE [--submit] <body on stdin> | feedback <JSON on stdin>
+prints it. Commands: status | send [--dry-run] | show [N] | question | bundle [--yes] | pack [--yes] | issue TITLE [--submit] <body on stdin> | feedback <JSON on stdin>
 | upstream draft --repo OWNER/NAME TITLE <gap on stdin> | contribute TITLE [--commit SHA | --diff FILE] <what and why on stdin> | drafts | github | approve ID | discard ID
 
 `share.github` (off unless the person ticks it, at setup or in Settings) lets this Hive use the person's own logged-in `gh`:
@@ -403,6 +403,79 @@ def bundle(yes=False):
         with urllib.request.urlopen(req, timeout=60) as r: return "bundle sent (%d)" % r.status
     except Exception as e: return "bundle not sent: %s" % e
 
+PACK_DIRS = ("projects", "files", "kb")
+PACK_SKIP_DIRS = {".git", "node_modules", "__pycache__", ".venv", "venv", ".cache", ".pytest_cache", ".mypy_cache", "target", ".next"}
+PACK_SECRET = re.compile(r"(?i)^(\.env(\..*)?|.*\.(pem|key|p12|pfx|keystore)|id_(rsa|ed25519|ecdsa|dsa).*|credentials.*|.*token.*|.*secret.*|\.netrc|\.npmrc|\.pypirc)$")
+PACK_FILE_MAX, PACK_MAX, PACK_PART = 50 << 20, 100 << 20, 8 << 20
+PACK_REFUSED = {413: "it's too large", 429: "this Hive has already sent everything once today", 507: "the makers' inbox is full for today"}
+
+def pack_url():
+    u = share_cfg().get("share_pack_url") or os.environ.get("HIVE_SHARE_PACK_URL")
+    d = url()
+    return u or (d.rsplit("/", 1)[0] + "/pack" if d.endswith("/report") else "")
+
+def _pack_text(b):
+    """Scrubbed text for a file that reads as UTF-8 and is under 4 MB, else None (sent as it is)."""
+    if len(b) > 4 << 20 or b"\0" in b[:8192]: return None
+    try: t = b.decode("utf-8")
+    except UnicodeDecodeError: return None
+    return scrub(t).encode("utf-8")
+
+def pack(yes=False):
+    """Everything as one zip: the whole board and log, every project folder, post attachments and the kb, text files
+    scrubbed. Left out: .git and build caches, key and .env files, any file over 50 MB, anything past 100 MB in all.
+    Kept in reports/bundles; sent (in 8 MB pieces) only with --yes and share.everything on."""
+    import zipfile
+    if yes and (share_cfg().get("share") or {}).get("everything") is not True: return "share everything is off; nothing collected"
+    root, hm = os.path.dirname(settings_path()), home()
+    bd = os.path.join(rdir(), "bundles"); os.makedirs(bd, exist_ok=True)
+    name = os.path.join(bd, "everything-" + time.strftime("%y%m%d-%H%M%S") + ".zip")
+    total, n, skipped, seen = 0, 0, [], set()
+    def add(z, path, arc):
+        nonlocal total, n
+        try: size = os.path.getsize(path)
+        except OSError: return
+        if size > PACK_FILE_MAX or total + size > PACK_MAX: skipped.append(arc); return
+        try: b = open(path, "rb").read()
+        except OSError: return
+        t = _pack_text(b)
+        z.writestr(arc, t if t is not None else b); total += size; n += 1
+    with zipfile.ZipFile(name, "w", zipfile.ZIP_DEFLATED) as z:
+        for f in ("board.jsonl", "log.jsonl"):
+            if os.path.isfile(os.path.join(root, f)): add(z, os.path.join(root, f), f)
+        for base in dict.fromkeys((root, hm)):
+            for d in PACK_DIRS:
+                top = os.path.realpath(os.path.join(base, d))
+                if top in seen or not os.path.isdir(top): continue
+                seen.add(top)
+                for dp, dns, fns in os.walk(top):
+                    dns[:] = sorted(x for x in dns if x not in PACK_SKIP_DIRS and not os.path.islink(os.path.join(dp, x)))
+                    for fn in sorted(fns):
+                        p = os.path.join(dp, fn)
+                        if os.path.islink(p) or not os.path.isfile(p): continue
+                        arc = os.path.join(d, os.path.relpath(p, top))
+                        if PACK_SECRET.match(fn): skipped.append(arc); continue
+                        add(z, p, arc)
+        z.writestr("PACK.txt", "Hive %s, %d files, %d bytes before zipping.\nLeft out (too big, past the 100 MB total, or looked like a key):\n%s\n"
+                   % (installed_version(), n, total, "\n".join(skipped) or "nothing"))
+    size = os.path.getsize(name)
+    said = "%d files (%.1f MB zipped)%s" % (n, size / 1e6, ", %d left out (listed in PACK.txt)" % len(skipped) if skipped else "")
+    u = pack_url()
+    if not yes: return "everything kept at %s: %s. %s" % (name, said, "Send with --yes." if u else "No receiver is set, so it is not sent.")
+    if not u: return "no receiver is set; kept at %s" % name
+    data = open(name, "rb").read(); parts = max(1, -(-len(data) // PACK_PART)); pid = uuid.uuid4().hex[:16]
+    st = installed_state()
+    for i in range(parts):
+        h = {"Content-Type": "application/zip", "User-Agent": "hive-report/1", "X-Install": st["install"], "X-Version": installed_version(),
+             "X-Pack": pid, "X-Part": str(i), "X-Parts": str(parts)}
+        req = urllib.request.Request(u, data[i * PACK_PART:(i + 1) * PACK_PART], h)
+        try:
+            with urllib.request.urlopen(req, timeout=120) as r: pass
+        except urllib.error.HTTPError as e:
+            return "everything not sent (piece %d of %d): %s; kept at %s" % (i + 1, parts, PACK_REFUSED.get(e.code, "the makers' server refused it (%d)" % e.code), name)
+        except Exception as e: return "everything not sent: %s; kept at %s" % (e, name)
+    return "everything sent: %s" % said
+
 def issue(title, text, submit=False):
     """A scrubbed issue draft for the Hive's open-source repo. Default: a prefilled link the person opens and
     submits as themselves, so no login or token is needed. --submit uses an already-logged-in `gh`, and only
@@ -729,6 +802,7 @@ def main(a):
     if cmd == "question": print(question())
     elif cmd == "send": print(send("--dry-run" in a))
     elif cmd == "bundle": print(bundle("--yes" in a))
+    elif cmd == "pack": print(pack("--yes" in a))
     elif cmd == "feedback": print(feedback(sys.stdin.read()))
     elif cmd == "contribute":
         opt = lambda k: a[a.index(k) + 1] if k in a and a.index(k) + 1 < len(a) else None

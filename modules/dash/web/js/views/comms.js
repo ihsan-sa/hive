@@ -45,7 +45,14 @@ const grip = () => h("div", { class: "cm-grip", role: "separator", "aria-orienta
     e.target.onpointerup = e.target.onpointercancel = () => { delete e.target.dataset.on; e.target.onpointermove = e.target.onpointerup = e.target.onpointercancel = null; }; },
   ondblclick: e => setSide(e.target.closest(".cm"), 272),
   onkeydown: e => { const d = e.key === "ArrowLeft" ? -24 : e.key === "ArrowRight" ? 24 : 0; if (d) { e.preventDefault(); setSide(e.target.closest(".cm"), sideW + d); } } });
-const C = { err: "", imp: false, arch: false, conv: undefined, q: "", show: null, limit: FIRST, tq: "", scope: "recent", next: null, menu: null, find: false, strip: false };
+// The side list's two views (the person, 11061410615e and 11061116958d): "topics" puts conversations under the topics of the
+// Where things stand summary with helpers folded under the one they came from; "recent" is every conversation in one flat list,
+// newest activity first, helpers included. hideFaded leaves out the ones marked Likely not needed. Both kept in this browser.
+const VIEW_KEY = "hive.comms.view", HIDE_KEY = "hive.comms.hidefaded";
+const store = (k, v) => { try { localStorage.setItem(k, v); } catch (e) { /* this page only */ } };
+const C = { view: (() => { try { return localStorage.getItem(VIEW_KEY) === "recent" ? "recent" : "topics"; } catch (e) { return "topics"; } })(),
+  hideFaded: (() => { try { return localStorage.getItem(HIDE_KEY) === "1"; } catch (e) { return false; } })(),
+  err: "", imp: false, arch: false, conv: undefined, q: "", show: null, limit: FIRST, tq: "", scope: "recent", next: null, menu: null, find: false, strip: false };
 let errTimer = 0;
 /** A change to a conversation (pin, star, archive) is shown at once; when the server refuses it the list goes back, and this says why for a few seconds. */
 const tryMeta = (th, patch, ctx) => setMeta(th, patch).catch(e => { C.err = "Couldn't save that: " + (e && e.message || "the server didn't answer") + "."; clearTimeout(errTimer); errTimer = setTimeout(() => { C.err = ""; ctx.update(); }, 8000); ctx.update(); });
@@ -352,6 +359,23 @@ function aiRows(c) {
   const also = (S.shown || []).filter(r => r.from === a.from && r.at * 1000 >= AI.at - 5000 && S.threads.has(r.thread));   // the app's box above the list holds these; the developer look has no box
   return [...note(q, a.text, { whole: true }), ...(app() ? [] : also.map(r => ({ key: r.thread, href: threadHref(r.thread), current: c.thread === r.thread, title: threadTitle(r.thread), text: r.why || "" })))];
 }
+// The topics come from the Where things stand summary (needs_you.py, every 30 min): each of its top-level entries lists its
+// threads, and a focus or project names its own thread. A conversation not in either takes its parent's topic, else Other.
+const TOPICS = { at: null, map: new Map() };
+function briefTopics() {
+  const n = STAND.needs, b = n && n.brief, at = (b && b.at) + "|" + ((n && n.states) || []).length;
+  if (TOPICS.at === at) return TOPICS.map;
+  const map = new Map();
+  if (b) for (const g of ["needs", "going", "done"]) for (const top of b[g] || []) for (const it of top.items || []) if (it.thread && !map.has(it.thread)) map.set(it.thread, top.title);
+  for (const st of (n && n.states) || []) if (st.thread && st.name && !map.has(st.thread)) map.set(st.thread, st.name);
+  TOPICS.at = at; TOPICS.map = map; return map;
+}
+const topicsOn = () => app() && !simpleOn() && !C.imp && C.view === "topics" && briefTopics().size > 0;
+const OTHER = "Other";
+function topicOf(listed) {
+  const map = briefTopics();
+  return th => { let x = th; for (let i = 0; i < 8 && x; i++) { if (map.has(x)) return map.get(x); x = threadParent(x); } return OTHER; };
+}
 function threadRows(c, ctx) {
   if (C.tq.trim().startsWith("@")) return aiRows(c);
   const ws = words(C.tq);
@@ -361,13 +385,15 @@ function threadRows(c, ctx) {
   let ds = [...S.threads.values()].filter(d => pinned(d.name) || important(d.name) || ((threadKinds(d) & mask) && theirs(d)) || d.name === c.thread);
   if (C.scope === "recent" && !simpleOn()) ds = ds.filter(d => pinned(d.name) || important(d.name) || archived(d.name) || d.last > t - (app() ? 7 : 1) * DAY || ran.has(d.name) || d.name === c.thread || (app() && threadState(d.name, seen).key === "asks"));
   if (C.imp) ds = ds.filter(d => important(d.name));
+  if (C.hideFaded && app()) ds = ds.filter(d => !faded(d.name) || d.name === c.thread);
+  const flat = !app() || C.imp || C.view === "recent";
   // A thread an agent started from a listed conversation folds under it (the person, 110601450d55: one chat made eight side entries
   // and the original got lost). A root is the top of its chain among the listed ones; its row sorts by the latest activity in the family.
   const listed = new Map(ds.map(d => [d.name, d]));
   const rootOf = d => { let x = d; for (let i = 0; i < 8; i++) { const p = listed.get(threadParent(x.name) || ""); if (!p || p === d) break; x = p; } return x; };
   const kidsOf = new Map(), act = new Map();
-  if (app() && !C.imp) for (const d of ds) { const r = rootOf(d); if (r !== d) { (kidsOf.get(r.name) || kidsOf.set(r.name, []).get(r.name)).push(d); act.set(r.name, Math.max(act.get(r.name) || r.last, d.last)); } }
-  const roots = ds.filter(d => !app() || C.imp || rootOf(d) === d);
+  if (!flat) for (const d of ds) { const r = rootOf(d); if (r !== d) { (kidsOf.get(r.name) || kidsOf.set(r.name, []).get(r.name)).push(d); act.set(r.name, Math.max(act.get(r.name) || r.last, d.last)); } }
+  const roots = ds.filter(d => flat || rootOf(d) === d);
   roots.sort((a, b) => (act.get(b.name) || b.last) - (act.get(a.name) || a.last));
   const mk = d => {
     const lp = d.posts[d.posts.length - 1], live = ran.has(d.name);
@@ -378,11 +404,12 @@ function threadRows(c, ctx) {
         lead: [tierLead(d.name), live ? h("span", { title: "an agent is on this thread now" }, statusDot("working", { live: true })) : null],
         text: `${d.posts.length} · ${lp.from}: ${short(mdPlain(lp.text).replace(new RegExp("^(@\\S+\\s+)*" + who + ":\\s*"), ""), 60)}`, sec: secOf(d.name, null), dim: faded(d.name) };
     }
-    const st = threadState(d.name, seen);
+    const st = threadState(d.name, seen), par = flat && threadParent(d.name);
     const say = short(mdPlain(displayText(lp)).replace(/\s+/g, " "), 70);
+    const from = par ? [h("span", { class: "tm-from", title: "A helper conversation, started from " + threadTitle(par) }, "from " + short(threadTitle(par), 28)), " · "] : null;
     return { key: d.name, href: threadHref(d.name), current: c.thread === d.name, title: threadTitle(d.name), meta: ago(d.last).replace(" ago", ""),
       lead: [tierLead(d.name), h("span", { title: status(st.key).label || "" }, statusDot(st.key === "done" ? "ended" : st.key, { live }))],
-      text: [d.name !== c.thread && hasDraft(d.name) ? [h("span", { class: "cm-draft", title: "You left unsent text in this conversation" }, "Draft"), " · "] : null, fadeTag(d.name) || stateTag(st), fadeTag(d.name) || stateTag(st) ? " · " : null, st.who && st.who === lp.from && ["working", "quiet"].includes(st.key) && !simpleOn() ? say : `${authorName(lp.from)}: ${say}`], sec: secOf(d.name, st), dim: faded(d.name) };
+      text: [from, d.name !== c.thread && hasDraft(d.name) ? [h("span", { class: "cm-draft", title: "You left unsent text in this conversation" }, "Draft"), " · "] : null, fadeTag(d.name) || stateTag(st), fadeTag(d.name) || stateTag(st) ? " · " : null, st.who && st.who === lp.from && ["working", "quiet"].includes(st.key) && !simpleOn() ? say : `${authorName(lp.from)}: ${say}`], sec: secOf(d.name, st), dim: faded(d.name) };
   };
   const dress = (r, th = r.key.replace(/~recent$/, "")) => {
     const im = important(th), pn = pinned(th), m = tmeta(th);
@@ -405,11 +432,13 @@ function threadRows(c, ctx) {
       onClick: e => holdScroll(e.currentTarget, () => { KIDS.has(d.name) ? KIDS.delete(d.name) : KIDS.add(d.name); ctx.update(); }) },
       ...(open ? kids.sort((a, b) => b.last - a.last).map(k => dress({ ...mk(k), key: d.name + "/" + k.name, sec, depth: 2 }, k.name)) : [])];
   };
+  const topic = topicsOn() ? topicOf(listed) : null;
   const rowsOut = !app() ? ds.map(mk) : roots.flatMap(d => {
-    const r = dress(mk(d)), kids = kidsOf.get(d.name) || [];
+    const r = dress(mk(d)), kids = kidsOf.get(d.name) || [], rest = topic ? "t:" + topic(d.name) : "rest";   // in the topics view, "the rest" is the conversation's topic
+    if (r.sec === "rest") r.sec = rest;
     const own = kids.filter(k => !["rest", "arch"].includes(secOf(k.name, threadState(k.name, seen)))).map(k => dress(mk(k)));   // a helper's own row where it needs the person
-    if (C.imp || r.sec === "rest" || r.sec === "arch") return [r, ...kidRows(d, r.sec), ...own];
-    return [r, dress({ ...mk(d), key: d.name + "~recent", sec: "rest" }), ...kidRows(d, "rest"), ...own];
+    if (C.imp || r.sec === rest || r.sec === "arch") return [r, ...kidRows(d, r.sec), ...own];
+    return [r, dress({ ...mk(d), key: d.name + "~recent", sec: rest }), ...kidRows(d, rest), ...own];
   });
   if (!app()) rowsOut.unshift({ key: "(everything)", href: href("comms", "~all"), title: "Everything", text: `${S.posts.length} posts, newest last`, current: c.all });
   return rowsOut;
@@ -419,12 +448,27 @@ const KIDS = new Set();   // conversations whose helper fold is open, this page 
 const FOLD_KEY = "hive.comms.folded";
 const FOLD = new Set((() => { try { return JSON.parse(localStorage.getItem(FOLD_KEY) || "[]"); } catch (e) { return []; } })());
 function saveFold() { try { localStorage.setItem(FOLD_KEY, JSON.stringify([...FOLD])); } catch (e) { /* this page only */ } }
+// Collapse or expand all (the person, 11061437ab67): the section heads and the helper folds in the list now. syncThreads fills L.foldSecs and L.foldKids.
+// Which way it goes follows the sections, so a list with most of them open offers Collapse all; a list with no heads goes by its helper folds.
+const foldShut = () => { const ss = L.foldSecs || [], ks = L.foldKids || []; return ss.length ? ss.every(k => FOLD.has(k)) : !ks.some(n => KIDS.has(n)); };
+const foldWord = () => foldShut() ? "Expand all" : "Collapse all";
+const foldNone = () => !(L.foldSecs || []).length && !(L.foldKids || []).length;
+function foldAll(ctx) {
+  const open = foldShut(), ss = L.foldSecs || [], ks = L.foldKids || [];
+  if (open) { ss.forEach(k => FOLD.delete(k)); ks.forEach(n => KIDS.add(n)); }
+  else { ss.forEach(k => FOLD.add(k)); KIDS.clear(); C.arch = false; }   // Expand all leaves Archived shut: it is out of the way on purpose
+  saveFold(); ctx.update();
+}
 // The list in parts: Pinned, Needs you, the rest, and Archived folded at the end. A search is one list.
+// In the topics view the rest is one section per topic ("t:<title>"), in order of their latest activity, with Other last.
 const SECS = [["pin", "Pinned"], ["imp", "Important"], ["need", "Needs you"], ["rest", null]];
 function sections(rs, ctx, opts) {
   if (words(C.tq).length) return list(rs, opts);
-  const by = { pin: [], imp: [], need: [], rest: [], arch: [] }; for (const r of rs) { (by[r.sec || "rest"] || by.rest).push(r);  }
-  const parts = SECS.filter(([k]) => by[k].length), heads = parts.length > 1 || by.pin.length;
+  const by = { pin: [], imp: [], need: [], rest: [], arch: [] }, tops = [];
+  for (const r of rs) { const k = r.sec || "rest"; if (k.startsWith("t:") && !by[k]) { by[k] = []; tops.push(k); } (by[k] || by.rest).push(r); }
+  tops.sort((a, b) => (a === "t:" + OTHER) - (b === "t:" + OTHER));
+  const parts = [...SECS.slice(0, 3), ...tops.map(k => [k, k.slice(2)]), SECS[3]].filter(([k]) => by[k].length), heads = parts.length > 1 || by.pin.length;
+  L.foldSecs = heads ? parts.map(([k]) => k) : [];
   const sec = (k, label, rows) => {
     if (!heads) return h("div", { class: "tm-sec", "data-key": "sec:" + k, "data-sec": k }, list(rows, { ...opts, empty: "" }));
     const shut = FOLD.has(k);
@@ -443,12 +487,17 @@ function sections(rs, ctx, opts) {
 }
 function syncThreads(c, ctx) {
   const tl = document.querySelector("#main .cm-tl"); if (!tl) return;
-  const sig = [S.ver, C.scope, C.arch, C.imp, tmetaSig(), [...FOLD].join(), [...KIDS].join(), C.tq, AI.st + AI.res.length, AI.tag, S.shown && S.shown.length, showMask(), c.arg, Math.floor(now() / 3e4), S.runSig, marksSig().length].join("|");
+  if (app() && !simpleOn() && C.view === "topics") loadStanding(ctx);
+  const sig = [S.ver, C.view, C.hideFaded, C.view === "topics" && STAND.needs && STAND.needs.brief && STAND.needs.brief.at, C.scope, C.arch, C.imp, tmetaSig(), [...FOLD].join(), [...KIDS].join(), C.tq, AI.st + AI.res.length, AI.tag, S.shown && S.shown.length, showMask(), c.arg, Math.floor(now() / 3e4), S.runSig, marksSig().length].join("|");
   if (tl === L.tl && sig === L.tlSig) return;
   const fresh = tl !== L.tl || c.arg !== L.tlConv;
   L.tl = tl; L.tlSig = sig; L.tlConv = c.arg;
-  const tree = sections(threadRows(c, ctx), ctx, { dense: true, empty: simpleOn() ? "No conversations yet. Start one with New conversation." : S.threads.size ? "Nothing here with what Show has on. Turn on Agent comms to see all of them." : app() ? "No conversations yet. Start one with New." : "No threads." });
+  const rows = threadRows(c, ctx);
+  L.foldKids = rows.filter(r => r.key.endsWith("~kids")).map(r => r.key.slice(0, -5));
+  const tree = sections(rows, ctx, { dense: true, empty: simpleOn() ? "No conversations yet. Start one with New conversation." : S.threads.size ? "Nothing here with what Show has on. Turn on Agent comms to see all of them." : app() ? "No conversations yet. Start one with New." : "No threads." });
   if (tl.firstChild) morph(tl.firstChild, tree); else tl.append(tree);
+  const fb = document.querySelector("#main .cm-foldall");   // the list is built after the bar, so the bar's word catches up here
+  if (fb) { fb.hidden = foldNone(); if (fb.textContent !== foldWord()) fb.textContent = foldWord(); }
   if (fresh) { const cur = tl.querySelector("[aria-current]"); if (cur) { const r = cur.getBoundingClientRect(), b = tl.getBoundingClientRect(); if (r.top < b.top || r.bottom > b.bottom) tl.scrollTop += r.top - b.top - 40; } }
 }
 
@@ -570,14 +619,12 @@ function titleMenu(c, n, d, off, ctx) {
     own, own.length ? sep() : null, where, out.length ? sep() : null, out,
     full && th !== threadTitle(th) ? h("p", { class: "meta cm-menu-id" }, "Its id on the board: ", h("code", { title: "Click to select it" }, th), copyButton(th)) : null);   // copy it (the person, 11041333ab1a)
 }
-/** The rail's links to the pages Chat brings together: each only where this connection may open it, with a count where there is one. */
 function places() {
-  const link = (label, to, n, tip) => h("a", { class: "cm-place", href: href(to), title: tip }, label, n ? h("b", { class: "cm-place-n", "aria-label": n + " new" }, String(n)) : null);
+  const link = (label, to, n, tip) => h("a", { class: "cm-place", href: to, title: tip }, label, n ? h("b", { class: "cm-place-n", "aria-label": n + " new" }, String(n)) : null);
   return h("nav", { class: "cm-places", "aria-label": "Also in Chat", "data-key": "places" },
-    can("read") ? link("Needs you", "needs", 0, "What waits on you, and what got done") : null,
-    can("read") ? link("Inbox", "inbox", IB.unread || 0, "Every message agents sent you") : null,
-    can("files") ? link("Mail", "mail", MN.n, MN.n ? "Mail since you last opened it" : "Your mail") : null,
-    link("Files", "made", 0, "Files and links from your conversations"));
+    can("read") ? link("Inbox", href("inbox"), IB.unread || 0, "Every message agents sent you") : null,
+    can("files") ? link("Mail", href("mail"), MN.n, MN.n ? "Mail since you last opened it" : "Your mail") : null,
+    link("Files", href("made"), 0, "Files and links from your conversations"));
 }
 // What shows: For you, Updates, Agent comms, each on or off: three toggles in the side, over the list (the person, 11040113eacf).
 const tmetaSig = () => Object.entries(S.threadMeta || {}).map(([k, v]) => k + (v.important || 0) + (v.pin || 0) + (v.faded || 0)).join();
@@ -589,6 +636,17 @@ function showChips(ctx) {
     mask ? null : h("p", { class: "meta tm-show-says" }, showSays(mask)));
   return app() ? h("div", { class: "tm-showwrap" }, group, app() ? h("button", { type: "button", class: "tm-chip tm-chip-imp", "aria-pressed": String(!!C.imp), title: C.imp ? "Show every conversation again" : "Only conversations marked important", "aria-label": "Important only",
       onclick: () => { C.imp = !C.imp; ctx.update(); } }, icon("star")) : null) : group;
+}
+// Over the list: Topics or Recent, and whether the conversations marked Likely not needed are listed at all.
+function viewBar(ctx) {
+  const nFaded = [...S.threads.keys()].filter(th => faded(th) && !archived(th)).length;
+  return h("div", { class: "cm-views", "data-key": "views" },
+    seg([["topics", "Topics", "Under the topics of the Where things stand summary, helper conversations folded under the one they came from"],
+      ["recent", "Recent", "Every conversation in one list, newest activity first, helper conversations included"]], C.view,
+      v => { C.view = v; store(VIEW_KEY, v); ctx.update(); }, { label: "How the list is arranged" }),
+    h("button", { type: "button", class: "tm-chip cm-hidefaded", "aria-pressed": String(C.hideFaded),
+      title: C.hideFaded ? `Show the ${nFaded} marked Likely not needed again` : `Hide the ${nFaded} conversations marked Likely not needed`,
+      onclick: () => { C.hideFaded = !C.hideFaded; store(HIDE_KEY, C.hideFaded ? "1" : "0"); ctx.update(); } }, h("i", { "aria-hidden": "true" }), "Hide not needed"));
 }
 function head(c, ctx) {
   if (c.thread && app()) import("../ui/preview.js").then(m => m.autoFiles(c.thread));
@@ -872,7 +930,9 @@ export default {
           simpleOn() ? null : showChips(ctx),
           app() ? brought() : null,
           C.err ? h("p", { class: "fmsg", "data-tone": "bad", role: "alert" }, C.err) : null,
+          words(C.tq).length || simpleOn() || !app() ? null : viewBar(ctx),
           words(C.tq).length || simpleOn() ? null : h("div", { class: "cm-scope" }, h("span", null, app() ? "Conversations" : "Threads"),
+            h("button", { type: "button", class: "cm-foldall", hidden: foldNone(), title: "Fold or open every section and helper list here", onclick: () => foldAll(ctx) }, foldWord()),
             h("button", { type: "button", class: "cm-scope-b", title: C.scope === "recent" ? (app() ? "Only the last 7 days are listed. Show every conversation." : "Only the last 24 hours are listed. Show every thread.") : "List only the recent ones",
               onclick: () => { C.scope = C.scope === "recent" ? "all" : "recent"; ctx.update(); } }, C.scope === "recent" ? "Show all" : "Recent only"))),
         h("div", { class: "cm-tl", "data-own": "", "data-sig": "own", tabindex: "-1" }),

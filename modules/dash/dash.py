@@ -1723,10 +1723,10 @@ GET_CAP = {"/api/call-chat": "post", "/api/live": "read", "/api/away": "read", "
            "/api/settings": "config", "/api/ntfy": "config", "/api/webpush": "config", "/api/update": "config", "/api/signin-codex": "logins", "/api/accounts": "logins", "/api/design": "logins", "/api/brand/logo": "read",
            "/api/kb/home": "files", "/api/kb/open": "files", "/api/kb/search": "files", "/api/kb/raw": "files", "/api/kb/map": "files", "/api/kb/history": "files", "/api/progress": "read", "/api/checklist": "read", "/api/share-preview": "read", "/api/approvals": "read", "/api/feedback-drafts": "read", "/api/mail": "files"}
 POST_CAP = {"/api/webpush": "config", "/api/share-build": "read", "/api/kill": "stop", "/api/approval": "stop", "/api/tier": "tier", "/api/agent-model": "post", "/api/login-pause": "limits", "/api/login-limit": "limits", "/api/provider-limit": "limits",
-            "/api/post": "post", "/api/side-ask": "post", "/api/thread-meta": "post", "/api/shown": "post", "/api/checklist": "post", "/api/feedback": "post", "/api/feedback-draft-done": "post", "/api/issue-link": "post", "/api/update": "config", "/api/share-copy": "config", "/api/draft": "config", "/api/import": "config", "/api/upload": "post", "/api/inbox-read": "post", "/api/ntfy": "config", "/api/config": "config", "/api/starter": "config",
+            "/api/post": "post", "/api/side-ask": "post", "/api/thread-meta": "post", "/api/shown": "post", "/api/checklist": "post", "/api/feedback": "post", "/api/feedback-draft-done": "post", "/api/issue-link": "post", "/api/update": "config", "/api/share-copy": "config", "/api/share-pack": "config", "/api/draft": "config", "/api/import": "config", "/api/upload": "post", "/api/inbox-read": "post", "/api/ntfy": "config", "/api/config": "config", "/api/starter": "config",
             "/api/module": "modules", "/api/signin": "logins", "/api/signin/code": "logins", "/api/signin/cancel": "logins", "/api/plan": "plans", "/api/secret": "secrets",
             "/api/signin-codex": "logins", "/api/account-key": "logins", "/api/design": "logins", "/api/brand": "config", "/api/brand/logo": "config"}
-LOCAL_ONLY = {"/api/access", "/api/settings", "/api/import", "/api/share-copy", "/api/draft"}  # who may do what is never changed from outside, whatever outside.can says
+LOCAL_ONLY = {"/api/access", "/api/settings", "/api/import", "/api/share-copy", "/api/share-pack", "/api/draft"}  # who may do what is never changed from outside, whatever outside.can says
 
 
 
@@ -3182,6 +3182,17 @@ def share_copy():
     return {"ok": True}
 
 
+def share_pack():
+    """Settings' Send everything: `hive-report pack --yes`, one zip of the board, log, projects and post files. The report module refuses unless share.everything is on."""
+    f = HOME / "modules" / "report" / "report.py"
+    if not SETTINGS.is_file() or not f.is_file(): raise ValueError("this Hive has no way to send a copy to the makers")
+    try: r = subprocess.run([sys.executable, "-I", str(f), "pack", "--yes"], env=child_env(), capture_output=True, text=True, timeout=900)
+    except (OSError, subprocess.SubprocessError) as e: raise ValueError(f"couldn't send it: {e}")
+    said = r.stdout.strip()
+    if r.returncode or not said.startswith("everything sent"): raise ValueError(short(said or r.stderr, 300) or "couldn't send it")
+    return {"ok": True, "said": said.removeprefix("everything sent: ")}
+
+
 def module_repo(name):
     """The GitHub page of a module that is its own clone, or None. Built from owner/repo alone, so a token in the remote's URL can't reach the page."""
     d = HOME / "modules" / name
@@ -4498,7 +4509,7 @@ def serve(port):
                 try: return self.send(json.dumps(share_build(d)).encode(), J)
                 except KeyError: return self.send_error(404)
                 except ValueError as e: return self.deny(400, str(e))
-            if u.path in ("/api/post", "/api/side-ask", "/api/thread-meta", "/api/shown", "/api/checklist", "/api/feedback", "/api/feedback-draft-done", "/api/issue-link", "/api/update", "/api/inbox-read", "/api/ntfy", "/api/webpush", "/api/agent-model", "/api/config", "/api/starter", "/api/module", "/api/signin", "/api/signin/code", "/api/signin/cancel", "/api/access", "/api/plan", "/api/secret", "/api/settings", "/api/share-copy", "/api/draft", "/api/import", "/api/signin-codex", "/api/account-key", "/api/design", "/api/brand"):
+            if u.path in ("/api/post", "/api/side-ask", "/api/thread-meta", "/api/shown", "/api/checklist", "/api/feedback", "/api/feedback-draft-done", "/api/issue-link", "/api/update", "/api/inbox-read", "/api/ntfy", "/api/webpush", "/api/agent-model", "/api/config", "/api/starter", "/api/module", "/api/signin", "/api/signin/code", "/api/signin/cancel", "/api/access", "/api/plan", "/api/secret", "/api/settings", "/api/share-copy", "/api/share-pack", "/api/draft", "/api/import", "/api/signin-codex", "/api/account-key", "/api/design", "/api/brand"):
                 try:
                     if u.path == "/api/post": res = person_post(d.get("text"), d.get("thread"), d.get("reply_to"), d.get("files"), signer=self.signer, limited="config" not in self.can, simple=d.get("simple") is True, model=d.get("model"), sig=d.get("sig"))
                     elif u.path == "/api/side-ask": res = side_ask(d.get("q"), signer=self.signer, limited="config" not in self.can)
@@ -4527,6 +4538,7 @@ def serve(port):
                     elif u.path == "/api/settings": res = set_settings(d)
                     elif u.path == "/api/import": res = do_import(d)
                     elif u.path == "/api/share-copy": res = share_copy()
+                    elif u.path == "/api/share-pack": res = share_pack()
                     elif u.path == "/api/draft": res = draft_do(d)
                     elif u.path == "/api/design": res = DESIGN.act(d)
                     elif u.path == "/api/signin-codex":

@@ -4,6 +4,18 @@ Release notes are on the [releases page](https://github.com/ihsan-sa/hive/releas
 
 A release can ship several times a day. A new Hive installs at most one a day, once it has been out for at least 12 hours; **How often to update** in Settings changes that. The latest is at [releases/latest](https://github.com/ihsan-sa/hive/releases/latest).
 
+## Send everything to the makers in one go
+
+**Settings › Data sharing** has a new **Send everything** button next to **Send a copy now**. It sends your whole board and log, along with your projects, files and notes, as one zip. Version-control folders, caches, secret-looking files and anything over 50 MB are left out, and the zip says what was skipped. It only works with **Everything** turned on, you can send it once a day, and the makers delete it after 3 days.
+
+## The dashboard got a full tidy, and a few new shortcuts
+
+Press **Ctrl+K** to jump to any conversation, agent or page, and **?** to see the keyboard shortcuts. A conversation with unsent text now says **Draft** in the list, its menu shows what it has cost so far, and a band tells you when the page has lost touch with your Hive. **Settings** now shows one section at a time, each with its own address. **Agents** keeps its filters under one **Filters** button, and a conversation has one menu, opened from its title. Pages have moved: **Usage** now holds the job tables, and **Secrets** is under **Settings**; old links still work. Dozens of small faults are also fixed across every page, on phones as well as on large screens, including messages sent in the same second as marking a conversation **Not needed**, which now bring it back.
+
+## Collapse or expand the whole Chat list at once
+
+**Collapse all** in the row above the Chat side list folds every section and helper list, so a long list comes down to its headings. Press **Expand all** to open them all again.
+
 ## The page stays put when you click on the Chat home
 
 On **New conversation**, clicking an arrow or ticking a box no longer jumps the page back up to the message box, or moves your cursor there. The same goes for the buttons on the **Start** page. The cursor still starts in the box when you arrive.

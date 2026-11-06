@@ -17,7 +17,8 @@ export const important = th => !!meta(th).important;
 export function faded(th) {
   const m = meta(th), f = m.faded; if (!f || m.pin || m.important) return false;
   const d = S.threads.get(th); if (!d) return true;
-  for (let i = d.posts.length - 1; i >= 0 && d.posts[i].t > f; i--) { const p = d.posts[i]; if (OUTSIDE.has(p.from) || (isAgent(p.from) && (p.men.includes("person") || forYouLine(p)))) return false; }
+  const from = Math.floor(f / 1000) * 1000;   // posts are stamped to the second and a person's mark to the ms: a message in the same second still counts as after it
+  for (let i = d.posts.length - 1; i >= 0 && d.posts[i].t >= from; i--) { const p = d.posts[i]; if (OUTSIDE.has(p.from) || (isAgent(p.from) && (p.men.includes("person") || forYouLine(p)))) return false; }
   return true;
 }
 /** Archived by hand or by age, and nothing new for the person since: a post for them brings it back to the list by itself.
