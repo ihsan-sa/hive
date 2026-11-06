@@ -11,7 +11,7 @@ import { confirm } from "../ui/dialog.js";
 
 const V = { seg: "6h", fold: false };
 const sw = (name, token) => h("div", { class: "swatch", "data-key": token }, h("i", { style: `--c:var(${token})` }), h("span", null, h("b", null, name), " ", h("span", { class: "mono" }, token)));
-const spec = (token, size, weight, text) => [h("span", null, `${token} ${size}`), h("div", { style: `font-size:var(${token});font-weight:${weight};line-height:1.3` }, text)];
+const spec = (token, size, weight, text) => [h("span", null, `${token} ${size}`), h("div", { class: "sys-spec", style: `--fs:var(${token});--fw:${weight}` }, text)];
 
 export default {
   id: "system", label: "System", tab: false,
@@ -48,7 +48,7 @@ export default {
             button("Kill", () => {}, { kind: "quiet", size: "s", tone: "bad" }), button("Danger", () => {}, { kind: "danger" }), button("Disabled", () => {}, { disabled: true }),
             seg([["1h", "1h"], ["6h", "6h"], ["24h", "24h"], ["all", "All"]], V.seg, k => { V.seg = k; ctx.update(); }, { label: "Window" }),
             button("Open a confirm window", () => confirm({ title: "Kill a6a89?", kind: "danger", ok: "Kill a6a89", typed: "a6a89", body: ["This ends the run right away. Type the code to enable the button."], onOk: async () => { throw Error("this is the system page"); } }))),
-          h("div", { class: "cols", style: "margin-top:var(--s4)" }, field("Session limit", input({ type: "number", value: "40" }), "How many agents run at once. Empty means no limit."), field("Find", input({ type: "search", placeholder: "Filter by agent, thread or words" })))),
+          h("div", { class: "cols sys-gap" }, field("Session limit", input({ type: "number", value: "40" }), "How many agents run at once. Empty means no limit."), field("Find", input({ type: "search", placeholder: "Filter by agent, thread or words" })))),
         section({ title: "Section heads", note: "two levels, one component: section() in kit.js" },
           h("div", { class: "stack" },
             section({ title: "Level 1: a part of a long page", note: "Settings groups, website parts, guide h2", level: 1 }, h("p", { class: "muted" }, "The larger title, no rule. Use it where a page has parts someone scans for.")),
@@ -64,14 +64,14 @@ export default {
             block({ title: "Codex", sub: "with a ChatGPT login", state: statusLabel("off"), actions: button("Sign in", () => {}, { size: "s" }) }),
             block({ title: "API keys", sub: "charged per use, for when no login has room", fold: true, open: V.fold, onToggle: o => { V.fold = o; } },
               h("p", null, "Every run costs money on that key, so set a spending limit with the provider."),
-              h("div", { class: "frow" }, h("div", { style: "flex:1;min-width:12rem" }, field("Key", input({ placeholder: "sk-…" }))), button("Save key", () => {}))),
+              h("div", { class: "frow" }, h("div", { class: "sys-grow" }, field("Key", input({ placeholder: "sk-…" }))), button("Save key", () => {}))),
             block({ title: "Reach the hive from Slack", state: h("span", { class: "nb" }, "not built yet") }, h("p", null, "One channel is one conversation.")))),
         section({ title: "Command, not built yet" },
           cmd("curl -fsSL https://<THIS-SITE>/install.sh | sh -s -- --this-account"),
-          h("p", { class: "muted", style: "margin-top:var(--s3)" }, "Stop from the conversation ", h("span", { class: "nb" }, "not built yet"), " Neutral and dashed: amber is the job queue, and this isn't a state.")),
+          h("p", { class: "muted sys-gap-s" }, "Stop from the conversation ", h("span", { class: "nb" }, "not built yet"), " Neutral and dashed: amber is the job queue, and this isn't a state.")),
         section({ title: "Tally, stats, meter" },
           tally([{ n: 9, label: "active now", status: "working" }, { n: 12, label: "in the job queue", status: "queue" }, { n: 0, label: "quiet", status: "quiet" }, { n: 1, label: "stuck", status: "stuck" }]),
-          h("div", { style: "margin-top:var(--s4)" }, stats([{ label: "CPU", value: "97%", meter: { value: 97 }, note: "89% programs, 8% system" }, { label: "Load", value: "33", tone: "bad", meter: { value: 100, tone: "bad" }, note: "on 20 threads" }, { label: "Last 24 hours", value: "$369", note: "$15 an hour lately" }, { label: "Weekly", value: "16%", meter: { value: 16, stop: 98 }, note: "stop line at 98%" }]))),
+          h("div", { class: "sys-gap" }, stats([{ label: "CPU", value: "97%", meter: { value: 97 }, note: "89% programs, 8% system" }, { label: "Load", value: "33", tone: "bad", meter: { value: 100, tone: "bad" }, note: "on 20 threads" }, { label: "Last 24 hours", value: "$369", note: "$15 an hour lately" }, { label: "Weekly", value: "16%", meter: { value: 16, stop: 98 }, note: "stop line at 98%" }]))),
         section({ title: "Gauge row", note: "one account; logins and providers share it" },
           gaugeRows({ rows: [{ key: "x", name: "acct-3", tag: "plan: corner", state: { key: "inuse" }, note: "Stops at 98% weekly (global).", gauges: [{ label: "Weekly", value: "16%", pct: 16, stop: 98, lines: ["resets Mon 12:00, in 7d"] }, { label: "5-hour", value: "4%", pct: 4, stop: 90, lines: ["resets 17:19, in 1.2h"] }],
             history: chart({ series: [demo.map(v => v * 3)], kind: "step", start: t - 48 * HOUR, step: HOUR, max: 100, mark: 98, compact: true, height: 44, area: false, fmt: v => v + "%" }), actions: [button("Stop lines", () => {}, { size: "s" }), button("Pause", () => {}, { size: "s", kind: "quiet" })] }] })),

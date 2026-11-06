@@ -149,20 +149,22 @@ async function startEdit(name, ctx) {
   try {
     const all = await jget("/api/plans"), p = all.find(x => x.name === name) || {};
     K.edit = { at: parse(ctx.arg).path, name, isNew: false, text: p.text || "", version: p.version || null, say: null };
-  } catch (e) { K.edit = { at: parse(ctx.arg).path, name, text: "", failed: e.message }; }
+  } catch (e) { K.edit = { at: parse(ctx.arg).path, name, text: "", failed: `Couldn't open this to edit: ${e.message}` }; }
   ctx.update();
 }
 async function saveEdit(start, ctx) {
   const e = K.edit, name = e.isNew ? e.name.trim() : e.name;
   const wasNew = e.isNew;
+  if (e.saving) return;   // a double click would post twice, and with "Save and start" start a second agent
   if (!name) { e.say = "Give the project a name first."; e.tone = "bad"; ctx.update(); return; }
+  e.saving = true; e.say = ""; ctx.update();
   try {
     const r = await post("/api/plan", { name, text: e.text, version: e.version, start });
     Object.assign(e, { name, version: r.version, isNew: false, say: start ? "Saved, and an agent is starting on it." : "Saved. Nothing was started.", tone: "good" });
     K.seen.delete(`projects/${name}`); K.seen.delete(`projects/${name}/goals.md`); K.seen.delete("projects");
     if (wasNew) { e.at = `projects/${name}`; location.hash = open(e.at); return; }   // the new project's own page, with the editor still open
     refresh(ctx);
-  } catch (err) { e.say = err.message; e.tone = "bad"; ctx.update(); }
+  } catch (err) { e.say = err.message; e.tone = "bad"; ctx.update(); } finally { e.saving = false; }
 }
 function editor(ctx) {
   const e = K.edit;
@@ -171,7 +173,7 @@ function editor(ctx) {
     h("h2", { class: "kb-t" }, e.isNew ? "New project" : `Plan for ${e.name}`),
     e.isNew ? field("Name", input({ value: e.name, autocomplete: "off", oninput: (ev, n) => { e.name = n.value; } })) : null,
     h("textarea", { class: "input", rows: 20, "aria-label": "Plan", value: e.text, oninput: (ev, n) => { e.text = n.value; } }),
-    h("div", { class: "frow" }, button("Save", () => saveEdit(false, ctx), { kind: "primary" }), button("Save and start an agent", () => saveEdit(true, ctx)),
+    h("div", { class: "frow" }, button("Save", () => saveEdit(false, ctx), { kind: "primary", busy: e.saving }), button("Save and start an agent", () => saveEdit(true, ctx), { disabled: e.saving }),
       button("Close", () => { K.edit = null; ctx.update(); }, { kind: "quiet" }),
       e.say ? h("p", { class: "fmsg", "data-tone": e.tone, role: "status" }, e.say) : null));
 }
@@ -248,7 +250,7 @@ function recentRows() {
   return rows.length ? list(rows.map(r => ({ key: "o:" + r.path, href: open(r.path), lead: icon("file"), title: r.title, text: parent(r.path), meta: ago(r.at).replace(" ago", "") })), { dense: true }) : null;
 }
 const TOPIC = { general: "Other notes", history: "History of the hives", _dropped: "Dropped" };
-const topicName = (t, folder) => TOPIC[t] || (folder ? t + "/" : t.replace(/-+$/, "") + " notes");
+const topicName = (t, folder) => TOPIC[t] || (folder ? t + "/" : (t[0].toUpperCase() + t.slice(1)).replace(/-+$/, "") + " notes");
 // Notes grouped by topic (their folder, or a name prefix two or more share). Each row: a bar for its size, shaded for how recent it is.
 function mapView(ctx) {
   const m = K.map;
@@ -273,7 +275,7 @@ function mapView(ctx) {
 }
 function hubRows() {
   const hubs = (K.map ? K.map.notes : []).filter(n => n.back.length + n.links.length >= 2).sort((a, b) => b.back.length - a.back.length || b.links.length - a.links.length).slice(0, 8);
-  return hubs.length ? list(hubs.map(n => ({ key: "hub:" + n.path, href: open(n.path), title: n.title || n.path, text: parent(n.path), meta: `${n.back.length} link here · ${n.links.length} out` })), { dense: true }) : null;
+  return hubs.length ? list(hubs.map(n => ({ key: "hub:" + n.path, href: open(n.path), title: n.title || n.path, text: parent(n.path), meta: `${plural(n.back.length, "note")} link here · links to ${n.links.length}` })), { dense: true }) : null;
 }
 const SOURCE = { kb: "Notes in ~/kb", board: "Board posts", projects: "Projects", modules: "Module notes", core: "Core", docs: "Old docs", dispatch: "Dispatch", slack: "Slack", journals: "Journals", boards: "Old boards", mail: "Mail", box: "Box" };
 function sourcesView() {
@@ -289,6 +291,7 @@ const homeSections = ctx => [
   h("section", { class: "sec", "data-key": "changed" }, h("header", { class: "sec-h" }, h("h2", { class: "sec-t" }, "Changed lately")), K.home ? changedRows() : empty("Reading…", { kind: "loading" })),
   sourcesView() ? h("section", { class: "sec", "data-key": "cover" }, h("header", { class: "sec-h" }, h("h2", { class: "sec-t" }, "What search covers"), h("span", { class: "sec-n" }, "files and posts in the index")), sourcesView()) : null];
 function changedRows() {
+  if (K.home.failed) return empty("Couldn't read what changed lately. It keeps trying.", { kind: "error" });
   return list((K.home.recent || []).map(f => ({ key: f.path, href: open(f.path), title: f.title || f.name, text: parent(f.path), meta: ago(f.t * 1e3).replace(" ago", "") })), { empty: "Nothing yet." });
 }
 function sideBody(path, ctx) {

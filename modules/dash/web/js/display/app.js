@@ -123,7 +123,7 @@ function room() {
   const soon = live.map(l => ({ l, r: runway(l, U) })).filter(x => x.r.before && x.r.toStop > 0).sort((a, b) => a.r.toStop - b.r.toStop)[0];
   return h("div", { class: "dt-room", "data-tone": !live.length ? "bad" : soon || live.length === 1 ? "warn" : null },
     statusDot(live.length ? "inuse" : "atstop"), h("b", null, `${live.length} of ${us.length}`),
-    h("span", null, (live.length === 1 ? "account has room" : "accounts have room") + (soon ? `; ${soon.l.name} stops at ${soon.r.stop}% in ${dur(soon.r.toStop)}` : "")));
+    h("span", null, (live.length === 1 && us.length > 1 ? "accounts has room" : live.length === 1 ? "account has room" : "accounts have room") + (soon ? `; ${soon.l.name} stops at ${soon.r.stop}% in ${dur(soon.r.toStop)}` : "")));
 }
 /** No data coming in: one band readable across a room, and the old numbers set back (body[data-lost]) rather than shown as if they were current. */
 function lost() {

@@ -55,7 +55,7 @@ export function morph(a, b) {
   if (a.nodeType === 3) { if (a.nodeValue !== b.nodeValue) a.nodeValue = b.nodeValue; return a; }
   if (a.nodeType !== 1) return a;
   const own = b.hasAttribute("data-own"), sigChanged = own && a.getAttribute("data-sig") !== b.getAttribute("data-sig");
-  for (const { name } of [...a.attributes]) if (!b.hasAttribute(name)) a.removeAttribute(name);
+  for (const { name } of [...a.attributes]) if (!b.hasAttribute(name) && name !== "data-ok" && name !== "data-fail") a.removeAttribute(name);   // those two are a copy button's moment of feedback, set by hand: a poll's re-render mustn't wipe them
   for (const { name, value } of b.attributes) if (a.getAttribute(name) !== value) a.setAttribute(name, value);
   a._on = b._on;
   if (b._v !== undefined && document.activeElement !== a && a.value !== b._v) a.value = b._v;

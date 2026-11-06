@@ -54,6 +54,7 @@
   input,select,textarea,.input{font-size:16px!important}
   .btn{min-height:40px}
   .btn[data-size=s]{min-height:36px}
+  .btn[data-kind=icon][data-size=s]{width:36px}
   .page{padding-left:max(var(--gutter),env(safe-area-inset-left,0px));padding-right:max(var(--gutter),env(safe-area-inset-right,0px));padding-bottom:calc(var(--s6,32px) + 8px)}
   a,button{touch-action:manipulation}
   .panel{width:100%;padding-bottom:env(safe-area-inset-bottom,0px)}

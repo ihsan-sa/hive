@@ -42,8 +42,8 @@ export function mobileNav({ views, current, nav, update }) {
     return h("a", { class: "mn-t", href: href(v.id), "data-key": v.id, "aria-current": v.id === active ? "page" : null, onclick: () => { ST.open = false; } },
       icon(GLYPH[v.id] || "agents"), h("span", null, SHORT[v.id] || lab(v)), b ? h("i", { class: "mn-b", "aria-label": `${b} for you` }, b) : null); };
   return h("div", { class: "mn", "data-open": ST.open ? "" : null },
-    ST.open ? h("div", { class: "mn-scrim", onclick: close }) : null,
-    ST.open ? h("div", { class: "mn-sheet" },
+    ST.open ? h("div", { class: "mn-scrim", "data-key": "scrim", onclick: close }) : null,
+    ST.open ? h("div", { class: "mn-sheet", "data-key": "sheet", role: "menu" },
       h("div", { class: "mn-grab", "aria-hidden": "true" }),
       more.length ? h("div", { class: "mn-h" }, "Pages") : null,
       more.map(link),
@@ -53,8 +53,8 @@ export function mobileNav({ views, current, nav, update }) {
       app && canFeedback() ? h("button", { type: "button", class: "mn-i", "data-key": "feedback", onclick: () => { ST.open = false; update(); openFeedback(); } }, h("b", null, "Send feedback")) : null,
       h("button", { type: "button", class: "mn-i", onclick: () => { cycleTheme(); update(); } }, h("b", null, `Colour theme: ${THEMES.find(x => x[0] === th)[1]}`), h("span", null, "tap to change")),
       app ? h("button", { type: "button", class: "mn-i", onclick: () => { ST.open = false; setSimple(!simpleOn()); update(); } }, h("b", null, simpleOn() ? "Show everything" : "Simple view"), h("span", null, simpleOn() ? "all the tabs" : "just the chat")) : null) : null,
-    h("nav", { class: "mn-bar", "aria-label": "Main" }, main.map(tab),
-      h("button", { type: "button", class: "mn-t", "aria-expanded": String(ST.open), "aria-current": inMore && !ST.open ? "page" : null, onclick: () => { ST.open = !ST.open; update(); } },
+    h("nav", { class: "mn-bar", "data-key": "bar", "aria-label": "Main" }, main.map(tab),
+      h("button", { type: "button", class: "mn-t", "aria-haspopup": "menu", "aria-expanded": String(ST.open), "aria-current": inMore && !ST.open ? "page" : null, onclick: () => { ST.open = !ST.open; update(); } },
         icon("more"), h("span", null, "More"))));
 }
 addEventListener("hashchange", () => { ST.open = false; });

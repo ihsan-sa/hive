@@ -108,10 +108,11 @@ a.top-route[data-mode=limited]:hover{background:color-mix(in oklch,var(--warn) 3
 .ph-lead[data-tone=warn]::before{border-radius:1.5px}
 .ph-meta{font-size:var(--fs-small);color:var(--ink-2);text-wrap:pretty}
 .ph-meta>span+span::before{content:"·";margin:0 8px;color:var(--ink-3)}
-.ph-actions{margin-left:auto;display:flex;gap:var(--s2)}
+.ph-actions{margin-left:auto;display:flex;flex-wrap:wrap;align-items:center;gap:var(--s2)}
 .ph>.stats,.ph>.stats.card{margin-top:var(--s3)}   /* figures under the answer (Usage); .card would zero it */
 .ph[data-size=display] .ph-title{font-size:var(--fs-display);letter-spacing:-.02em;line-height:1.15}
 @container (max-width:640px){.ph[data-size=display] .ph-title{font-size:26px}}
+@container (max-width:520px){.ph:has(>.ph-row>.ph-actions) .ph-row{display:contents}.ph:has(>.ph-row>.ph-actions) .ph-actions{order:1;margin-left:0}.ph:has(>.ph-row>.ph-actions)>:not(.ph-row,.ph-state,.ph-lead){order:2}}   /* a phone: the title, its answer, then the controls, not the controls between them */
 
 /* ---- tally: counts by status ---- */
 .tally{display:flex;flex-wrap:wrap;gap:var(--s2) var(--s5);list-style:none;margin-top:var(--s2)}
@@ -432,6 +433,7 @@ a.rank-in:hover{background:var(--hover);color:inherit}
 /* ---- forms: rows, grids, checks, sign-in (Settings, Start) ---- */
 .frow{display:flex;flex-wrap:wrap;gap:var(--s3);align-items:end;margin-top:var(--s3)}
 .frow.fsplit{align-items:center;margin-top:0}
+.frow.fsplit>.fsplit-end{margin-left:auto}
 .frow>.frow-grow{flex:1;min-width:12rem}   /* the field that takes the row; data-size=s stops it at a name's width */
 .frow>.frow-grow[data-size=s]{max-width:20rem}
 .frow>.frow-end{margin-left:auto;display:flex;gap:var(--s2)}   /* the row's buttons, at its end */
@@ -518,7 +520,6 @@ button.lr-in{width:calc(100% + 16px);border:0;background:none;text-align:left;fo
 
   .cvp-ctl>*{flex:none}
   .cvp-count{padding:0 var(--s3);font-size:var(--fs-meta)}
-  .cvp-count+.cvp-count{padding-left:0}
   .cvp-bar .seg button{height:40px;min-width:40px}
   .cvp-bar .btn{height:44px;min-width:44px}
   .cvp-note{display:none}
@@ -1136,7 +1137,7 @@ a.ref[data-kind=file][data-pv-on]{background:color-mix(in oklch,var(--accent) 16
 .cm-tl{overflow-x:hidden}
 .cm-tl .lr-in[style]{padding-left:calc(var(--s2) + var(--d,0)*14px)}   /* a helper conversation under the one it came from */
 .cm-tl .lr[data-key$="~kids"] .lr-t b{font-weight:500;color:var(--ink-2)}
-.cm-tl .lr[data-key$="~kids"] .lr-t b{flex:none}.cm-tl .lr[data-key$="~kids"] .lr-t .meta{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis}   /* the title stays whole, the counts give way */
+.cm-tl .lr[data-key$="~kids"] .lr-t b{flex:none}.cm-tl .lr[data-key$="~kids"] .lr-t{flex-wrap:wrap}.cm-tl .lr[data-key$="~kids"] .lr-t .meta{flex:0 0 auto;margin-left:auto}   /* the title stays whole, the counts drop to a line of their own when they do not fit beside it */
 .cm-tl .lr-x{padding-right:52px}   /* clear of the star and pin */
 .cm-tl .lr-in[aria-current]{background:var(--hover);box-shadow:inset 2px 0 0 var(--ink)}
 .cm-tl .lr-t{font-size:var(--fs-body)}
@@ -1545,6 +1546,7 @@ details.blk>summary .blk-t::after{border-color:var(--ink-3)}
 .ac-dl,.ac-f{display:none}            /* consumer: Asked / Said / model line fold behind the card's link to the agent page */
 :root[data-dev] .ac{padding:var(--s3) var(--s4)}
 :root[data-dev] .ac-dl,:root[data-dev] .ac-f{display:revert}
+:root[data-dev] .ac-dl dd+dt{margin-top:var(--s2)}
 
 /* ===== table — tighter heads, hover row ===== */
 .tbl th{height:30px;font-size:var(--fs-micro);font-weight:var(--w-med);color:var(--ink-3)}
@@ -1716,8 +1718,8 @@ button.more-i{background:none;border:0;font:inherit;text-align:left;cursor:point
 .blk[data-key=codex-row] .signin>.frow.fsplit{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:var(--s1) var(--s3);align-items:center}
 .blk[data-key=codex-row] .signin>.frow.fsplit>b{grid-column:1;grid-row:1}
 .blk[data-key=codex-row] .signin>.frow.fsplit>.muted{grid-column:1;grid-row:2;font-size:var(--fs-small)}
-.blk[data-key=codex-row] .signin>.frow.fsplit>span[style]{margin-left:0!important;grid-column:2;grid-row:2;justify-self:end}
-@media (max-width:600px){.blk[data-key=codex-row] .signin>.frow.fsplit>span[style]{grid-column:1/-1;grid-row:3;justify-self:start}}
+.blk[data-key=codex-row] .signin>.frow.fsplit>.fsplit-end{margin-left:0;grid-column:2;grid-row:2;justify-self:end}
+@media (max-width:600px){.blk[data-key=codex-row] .signin>.frow.fsplit>.fsplit-end{grid-column:1/-1;grid-row:3;justify-self:start}}
 @media (max-width:760px){
   .set-b{grid-template-columns:minmax(0,1fr)}
   .set-n{position:static;display:flex;flex-wrap:wrap;gap:var(--s1)}
@@ -1745,7 +1747,7 @@ dialog.fb::backdrop{background:rgb(0 0 0 / .38)}
 .fb-more[hidden]{display:none}
 .fb-more>summary{list-style:none;cursor:pointer}
 .fb-more>summary::-webkit-details-marker{display:none}
-.fb-more-b{position:absolute;bottom:calc(100% + 4px);left:0;z-index:2;display:flex;flex-direction:column;align-items:stretch;gap:2px;padding:4px;background:var(--surface);border:1px solid var(--line-2);border-radius:var(--r-m);box-shadow:var(--shadow-2,0 4px 16px rgb(0 0 0 / .18));white-space:nowrap}
+.fb-more-b{position:absolute;top:calc(100% + 4px);left:0;z-index:2;display:flex;flex-direction:column;align-items:stretch;gap:2px;padding:4px;background:var(--surface);border:1px solid var(--line-2);border-radius:var(--r-m);box-shadow:var(--shadow-2,0 4px 16px rgb(0 0 0 / .18));white-space:nowrap}
 .fb-r:empty,.fb-r:has(>label[hidden]:only-child){display:none}
 .fb-r>.meta{flex:1 1 240px;min-width:0}
 .fb-card>.meta{margin:0}
@@ -1840,6 +1842,7 @@ dialog.fb::backdrop{background:rgb(0 0 0 / .38)}
 .nowtbl tbody tr:hover td{background:var(--hover)}
 .nowtbl .nt-a{font-weight:var(--w-med)}
 .nowtbl .nt-th{max-width:12rem;overflow:hidden;text-overflow:ellipsis}
+.nowtbl .nt-th .ref{display:flex;max-width:100%}
 .nowtbl .nt-st{color:var(--ink-2)}
 .nowtbl tr[data-tone=good] .nt-st{color:var(--good)}
 .nowtbl tr[data-attn] .nt-st{color:var(--bad)}
@@ -2339,7 +2342,7 @@ input[type=radio],input[type=checkbox]:not(.switch){accent-color:var(--ink)}
 .cm-menu-h{padding:8px 8px 2px;font-size:var(--fs-meta);font-weight:var(--w-med);color:var(--ink-3)}
 .cm-menu .btn small,.more-i span{margin-left:auto;font-size:var(--fs-meta);color:var(--ink-3)}
 .plot-y{background:var(--surface);padding:0 2px}
-.page>.list{margin-top:var(--s4)}
+.page>.list,.page>.ph+div>.list:first-child{margin-top:var(--s4)}   /* list() wraps its ul in a div */
 
 /* Quick switcher (Ctrl+K) and shortcuts sheet (?) */
 .qs{padding:0;overflow:hidden}
@@ -2377,3 +2380,10 @@ input[type=radio],input[type=checkbox]:not(.switch){accent-color:var(--ink)}
 
 /* Rootwarden: its published log, a capped pane that wraps */
 .rw-log{max-height:32rem;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere}
+
+/* #system and the Timeline legend: spacing and a spec line, no inline style (the two custom properties are the sample's own size and weight) */
+.sys-gap{margin-top:var(--s4)}
+.sys-gap-s{margin-top:var(--s3)}
+.sys-grow{flex:1;min-width:12rem}
+.sys-spec{font-size:var(--fs);font-weight:var(--fw);line-height:1.3}
+.tl-lg{display:inline-flex;align-items:center;gap:5px}

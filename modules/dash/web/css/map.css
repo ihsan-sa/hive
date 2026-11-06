@@ -62,7 +62,7 @@
 .map-sec>.btn{align-self:flex-start;margin-top:var(--s2)}
 .map-rt{display:flex;flex-direction:column;min-width:0;overflow-wrap:anywhere}
 .map-rt small{font-size:var(--fs-meta);color:var(--ink-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.map-id{font-family:var(--mono);font-weight:var(--w-bold);color:var(--ink);text-decoration:none}
+.map-id{font-family:var(--mono);font-weight:var(--w-bold);color:var(--ink);text-decoration:none;padding:10px 6px;margin:-10px -6px}   /* an inline link: the padding grows the hit area (39x15 to 51x35) and not the line */
 .map-id:hover,.map-th:hover{text-decoration:underline}
 .map-th{font-weight:var(--w-bold);color:var(--ink);text-decoration:none}   /* thread names in the body face; agent ids stay mono */
 .map-bar>.map-id,.map-bar>.map-th,.map-bar>.map-dim{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:var(--fs-small)}

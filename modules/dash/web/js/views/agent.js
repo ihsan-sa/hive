@@ -38,8 +38,18 @@ async function openDiff(n, p) {
   let d; try { d = await jget(`/api/agent-diff?name=${encodeURIComponent(n)}&path=${encodeURIComponent(p)}`) || {}; } catch (e) { d = { error: e.message }; }
   if (DF.name === n && DF.p === p) { DF.data = d; again(); }
 }
+// IN: /api/agent-input, what went into each model call by source; `open` is the turn (its time) whose raw pieces are shown
+const IN = { name: null, data: null, sig: "", at: 0, open: null };
+async function loadInput(n, onChange) {
+  IN.at = now();
+  try {
+    const d = await jget("/api/agent-input?name=" + encodeURIComponent(n)) || {}, sig = JSON.stringify(d);
+    if (IN.name === n && sig !== IN.sig) { IN.data = d; IN.sig = sig; onChange(); }
+  } catch (e) {}
+}
 export async function loadFeed(n, onChange) {
   again = onChange;
+  if (IN.name !== n) { Object.assign(IN, { name: n, data: null, sig: "", at: 0, open: null }); loadInput(n, onChange); }
   if (F.name !== n) { Object.assign(F, { name: n, items: null, sig: "" }); loadAgentCosts().then(onChange); }
   if (W.name !== n) { Object.assign(W, { name: n, data: null, sig: "", at: 0 }); loadWork(n, onChange); }
   try {
@@ -50,7 +60,7 @@ export async function loadFeed(n, onChange) {
 
 /** What the page and the panel poll: the feed while it's running (its work every 20 s), and the read marks on its posts. */
 export async function pollAgent(n, onChange) {
-  if (isRunning(n)) { loadFeed(n, onChange); if (now() - W.at > 20e3) loadWork(n, onChange); }
+  if (isRunning(n)) { loadFeed(n, onChange); if (now() - W.at > 20e3) loadWork(n, onChange); if (now() - IN.at > 10e3) loadInput(n, onChange); }
   if (await pollDelivered()) onChange();
 }
 
@@ -142,6 +152,31 @@ function nowBlock(n, L) {
     L.said ? [h("dt", null, "Said"), h("dd", null, L.said)] : null,
     [h("dt", null, "Last step"), h("dd", null, quiet == null ? "none yet" : quiet < MIN ? "just now" : ago(L.last * 1e3))]);
   return st.key === "stuck" ? note({ tone: "bad", title: `Looks stuck: ${st.text}`, actions: killButton(n), key: "stuck" }, rows) : rows;
+}
+
+// ---- what went into each model call: exact token counts from the log, the new content sized by an estimate and split by where it came from ----
+const SRC = { self: "its own earlier output", tool: "tool result", hive: "sent to it" };
+function inputs(n, panel) {
+  const d = IN.name === n ? IN.data : null;
+  if (!d) return empty("Reading…", { kind: "loading" });
+  const turns = (d.turns || []).slice().reverse();
+  if (!turns.length) return empty("No model calls in its latest session log.");
+  const limited = turns.every(t => t.parts.every(p => !(p.items || []).some(Boolean)));
+  const rows = turns.slice(0, panel ? 8 : 40), open = IN.open;
+  const sum = t => t.parts.slice().sort((a, b) => b.n - a.n).map(p => `${p.label} ${toks(p.n)}`).join(", ") || "nothing new";
+  return h("div", { class: "stack" },
+    h("p", { class: "meta" }, "One row per model call, newest first. The totals are exact, from the session log. The pieces are what arrived since the call before, sized at about 4 characters a token, so they're an estimate; \"carried\" is everything already in the context. On a session's first call that is the system prompt, tool list, memory and the first message, which the log doesn't keep."),
+    h("ul", { class: "wf" }, rows.map(t => {
+      const on = open === t.t, bits = t.parts.slice().sort((a, b) => b.n - a.n);
+      return [h("li", { "data-key": "in" + t.t, class: "wf-f", role: "button", tabindex: 0, "aria-expanded": String(on),
+        onclick: () => { IN.open = on ? null : t.t; again(); }, onkeydown: e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); IN.open = on ? null : t.t; again(); } } },
+        h("code", null, `${stamp(t.t * 1e3)} · ${toks(t.total)} in`), h("span", { class: "meta" }, `carried ${toks(t.carried)}${bits.length ? "; new: " + sum(t) : ""}`)),
+        on ? h("li", { "data-key": "ind" + t.t, class: "wf-diff" },
+          h("p", { class: "meta" }, `${toks(t.fresh)} uncached, ${toks(t.cw)} written to the cache, ${toks(t.cr)} read from it; ${toks(t.out)} output.`),
+          bits.length ? bits.map(p => h("div", { class: "stack", "data-key": p.src + p.label }, h("p", null, h("b", null, p.label), h("span", { class: "meta" }, ` · ${SRC[p.src]} · about ${toks(p.n)} tokens${p.items.length > 1 ? `, ${p.items.length} pieces` : ""}`)),
+            limited ? null : h("pre", { class: "diff" }, p.items.filter(Boolean).slice(0, 5).join("\n———\n")))) : h("p", { class: "meta" }, "Nothing new since the call before: it all came from the carried context.")) : null];
+    })),
+    limited ? h("p", { class: "meta" }, "Your sign-in sees the sizes, not the text.") : null);
 }
 
 function diffView(d) {
@@ -236,6 +271,7 @@ export function agentPage(n, host = "page") {
             ],
           })),
           section({ title: "Who it talks to", note: "posts naming each other" }, contacts(contactRows, { limit: panel ? 8 : 16 })))),
+      section({ title: "What goes into each turn", note: "its input to each model call, by source" }, inputs(n, panel)),
       section({ title: "What it changed", note: w && w.nfiles ? "from its tool calls; edits made from the shell are found where they can be" : null }, changed(n, D, host)),
       section({ title: "Sessions", note: "Cost per session is from its session log, so these can add up to less than the total above." }, table({
         rows: [...ss].reverse().slice(0, panel ? 8 : 40), key: x => String(x.start), empty: "No sessions.", caption: `${n}'s sessions`,

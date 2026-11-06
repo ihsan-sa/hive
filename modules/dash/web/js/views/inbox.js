@@ -6,7 +6,7 @@ import { IB, pollInbox, markRead, onInbox } from "../core/inbox.js";
 import { displayText, threadTitle } from "../core/model.js";
 import { ago, firstSentence, plural } from "../core/format.js";
 import { threadHref } from "../core/router.js";
-import { metrics } from "../templates.js";
+import { form } from "../templates.js";
 import { button, empty, list, pageHeader, section } from "../ui/kit.js";
 
 let update = null;
@@ -24,7 +24,7 @@ export default {
     if (!S.app.app || !can("read")) return h("div", { class: "page" }, empty("The inbox isn't available on this connection.", { kind: "page", title: "Inbox" }));
     if (!IB.items) { pollInbox(); return h("div", { class: "page" }, empty("Reading…", { kind: "loading" })); }
     const w = can("post");
-    return metrics({
+    return form({
       header: pageHeader({ title: "Inbox", lead: "Every message an agent sent you, newest first. Chat's home shows the ones that need you now.",
         actions: w && IB.unread ? button("Mark all read", () => mark({ all: true }), { size: "s" }) : null,
         after: IB.err ? h("p", { class: "fmsg", role: "alert", "data-tone": "bad" }, IB.err) : null }),
