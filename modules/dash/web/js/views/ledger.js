@@ -95,7 +95,7 @@ export default {
         input({ type: "search", placeholder: `Filter by agent, ${S.app.app ? "conversation" : "thread"} or words`, "aria-label": "Filter", value: L.q, oninput: e => set("q", e.target.value) }),
         S.live ? h("span", { class: "meta" }, plural(L.count, "event")) : null) }),
       sections: [
-        L.count ? null : S.live ? empty("No events match.") : waiting(S.failed, "Reading…", "the history"),
+        L.count ? null : S.live ? empty(L.kind === "all" && !L.q.trim() ? "Nothing has happened yet." : "No events match.") : waiting(S.failed, "Reading…", "the history"),
         h("ol", { class: "lg", "data-own": "morph", "data-sig": sig }, built),
         L.count > L.limit ? h("div", { class: "lr-more" }, button(`Show older (${L.count - L.limit} more)`, () => set("limit", L.limit + 500), { kind: "quiet", size: "s" })) : null,
       ],

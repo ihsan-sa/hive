@@ -13,15 +13,16 @@ export function killButton(n) {
   if (!can("stop")) return null;
   // A round stop icon everywhere (the person, 2026-11-04 thread feedback); the confirm that follows still asks for the name.
   if (S.app.app) return stopButton(`Stop ${n}`, e => { e.stopPropagation(); askStop(n); }, "ac-kill");
-  return stopButton(`Stop ${n}'s run now`, e => { e.stopPropagation(); askKill(n); }, "ac-kill");
+  return stopButton(`Stop ${n}'s run now`, e => { e.stopPropagation(); askKill(n, `Stop ${n}'s run now`); }, "ac-kill");
 }
 export function stopButton(label, onClick, cls) {
   return button(label, onClick, { kind: "icon", size: "s", icon: "stop", cls: ["btn-stop", cls].filter(Boolean).join(" ") });
 }
-export function askKill(n) {
-  const L = S.running.get(n), say = { 400: "the code didn't match", 403: "this connection isn't allowed to kill", 409: `${n} isn't running any more` };
+// said: the words on the button that opened it ("Stop a1's run now"), so the window asks the same thing the button said. The action is the same.
+export function askKill(n, said) {
+  const L = S.running.get(n), done = said ? "stopped" : "killed", say = { 400: "the code didn't match", 403: "this connection isn't allowed to kill", 409: `${n} isn't running any more` };
   confirm({
-    title: `Kill ${n}?`, ok: `Kill ${n}`, kind: "danger", typed: n, failText: "Nothing was killed",
+    title: said ? said + "?" : `Kill ${n}?`, ok: said || `Kill ${n}`, kind: "danger", typed: n, failText: `Nothing was ${done}`,
     body: [
       L && L.doing ? h("p", { class: "meta" }, "Doing now: " + short(L.doing, 160)) : null,
       "This ends the run and the shells it started, right away, without letting it save its work.",
@@ -34,7 +35,7 @@ export function askKill(n) {
       await poll();
       const stuck = d.stuck || [], det = d.detached || [];
       const left = [stuck.length ? `These didn't die: ${stuck.join(", ")}.` : "", det.length ? `Detached jobs still running: ${det.join(", ")}.` : ""].filter(Boolean).join(" ");
-      return left ? `${n} was killed. ${left}` : "";
+      return left ? `${n} was ${done}. ${left}` : "";
     },
   });
 }
@@ -49,7 +50,7 @@ export function askStop(n) {
     body: ["This stops it right away. Anything it hasn't saved yet may be lost. Send a message here when you want it to carry on."],
     onOk: async () => { await post("/api/kill", { name: n, confirm: n }); await poll(); },
   });
-  if (!built("stop")) return askKill(n);
+  if (!built("stop")) return askKill(n, `Stop ${n} now`);
   const L = S.running.get(n);
   const dlg = confirm({
     title: `Stop ${n}?`, ok: "Stop after this step", failText: "It wasn't stopped",

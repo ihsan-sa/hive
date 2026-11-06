@@ -154,7 +154,7 @@ export default {
         : fy.length ? `${nWord(fy.length)} conversations are waiting for your answer.`
         : stuckN ? `${nWord(stuckN)} ${stuckN === 1 ? "agent has" : "agents have"} stopped moving.` : null;
       const header = pageHeader({ state, title, lead });
-      const main = section({}, run.length ? agentRows(run, states, t, waits) : empty("None."));
+      const main = run.length ? section({}, agentRows(run, states, t, waits)) : null;   // the header already says nobody is working: no "None." box under it
       const hrs = tierHours(t - DAY, t), tot = Object.values(hrs).reduce((a, b) => a + b, 0) || 1;
       const more = h("details", { class: "now-more", open: V.more || null, ontoggle: (e, n) => { if (e.target === n) V.more = n.open; } }, h("summary", null, "Details"),
         h("p", { class: "meta" }, [`${plural(lastHour, "post")} in the last hour`, queuedPosts.length ? `${queuedPosts.length} waiting to start` : null, S.usage ? `${money(spendSince(t - DAY))} of work in 24h, at list prices` : null].filter(Boolean).join(" · ")),
@@ -190,6 +190,6 @@ export default {
     const tiers = section({ title: "Where the agent hours went", note: "against your priority list, last 24 hours" },
       share(TIERS.map(x => ({ key: x.key, label: S.app.app ? APP_TIER[x.key] || x.label : x.label, tone: x.tone, value: hrs[x.key], text: `${(hrs[x.key] / HOUR).toFixed(1)}h (${Math.round((100 * hrs[x.key]) / tot)}%)` }))));
 
-    return overview({ header, main: [needsYou(run, states, queuedPosts, L), run.length ? devTables(run, states, t) : empty("None.")], after: [hive, charts, hasTiers() ? tiers : null] });
+    return overview({ header, main: [needsYou(run, states, queuedPosts, L), run.length ? devTables(run, states, t) : null].filter(Boolean), after: [hive, charts, hasTiers() ? tiers : null] });
   },
 };

@@ -10,13 +10,14 @@ export const HELP = "https://hivelab.ca/guide/";   // export.sh swaps the site n
 const SEEN = "hive.tour.seen", SEEN_SIMPLE = "hive.tour.seen.simple";
 
 const here = () => parse().id;
-const q = s => { const e = document.querySelector(s); return e && e.getClientRects().length ? e : null; };
+const q = s => [...document.querySelectorAll(s)].find(e => e.getClientRects().length) || null;   // the first one on screen: on a phone the top tabs are hidden and the bottom bar's are the ones to ring
 const heading = text => [...document.querySelectorAll("#main .sec-t")].find(e => e.textContent.trim() === text) || null;
 const HOME = '.cp[data-place="home"] .cp-box';   // on a phone it's behind New conversation
 const inThread = () => { const r = parse(); return r.id === "comms" && !!r.arg && r.arg[0] !== "~"; };
 const tabSel = id => `.tabs a[data-key="${id}"], .top-icons a[data-key="${id}"], .mn-bar a[data-key="${id}"]`;   // Settings is an icon at the right of the bar; on a phone the tabs are in the bottom bar
 const tab = id => () => q(tabSel(id));
-const hasTab = id => !!q(tabSel(id));
+const hasTab = id => !!document.querySelector(tabSel(id));   // there, if not on screen: inside a conversation a phone hides its bottom bar
+const toBar = id => () => { if (inThread() && !q(tabSel(id))) go("comms"); };   // a step that says to click a tab: a phone hides its bottom bar inside a conversation, so step back out to the list
 const tabWhere = () => (q(".mn-bar") ? "at the bottom" : "at the top");   // on a phone the tabs are in the bottom bar
 const moreBtn = () => q(".more > button") || q(".mn-bar button.mn-t");   // on a phone More is in the bottom bar
 const mine = () => (S.posts || []).filter(p => p.from === "person").length;
@@ -34,11 +35,11 @@ const FULL_STEPS = [
   { title: "When an agent asks you something", text: () => (q('.cm-line[data-key="asks"] button') ? "An agent here is waiting for you. Click Answer to reply to its question." : "A line appears here with an Answer button, and the Chat tab shows a number. The Chat page lists everything waiting for you."), ring: () => q('.cm-line[data-key="asks"] button') || q(".cm-strip"), done: () => (q('.cm-line[data-key="asks"] button') ? !!q(".cp-reply") : false), hasNext: true, skip: () => !inThread() },
   { title: "Reply any time", text: "Write here to carry on the conversation, even while the agent works. The To button shows who gets it, and you can change that. Nothing is sent until you press Send.", ring: () => q('.cp[data-place="thread"] .cp-t'), skip: () => !inThread() },
   { title: "Attach files", text: "Attach adds files to your message. You can also paste them or drop them on the conversation.", ring: () => q('.cp[data-place="thread"] .cp-attach'), skip: () => !inThread() },
-  { title: "Look at what it keeps", text: () => `Click Knowledge ${tabWhere()}.`, ring: tab("knowledge"), done: () => here() === "knowledge", skip: () => !hasTab("knowledge") },
+  { title: "Look at what it keeps", text: () => `Click Knowledge ${tabWhere()}.`, ring: tab("knowledge"), done: () => here() === "knowledge", enter: toBar("knowledge"), skip: () => !hasTab("knowledge") },
   { title: "Knowledge", text: "Notes, projects and the files agents attach, to browse and search. It only reads. Keys and passwords are blanked out.", ring: () => q(".kb-side") || q('input[type="search"]'), skip: () => here() !== "knowledge" },
-  { title: "See every agent", text: () => `Click Agents ${tabWhere()}.`, ring: tab("now"), done: () => here() === "now", skip: () => !hasTab("now") },
+  { title: "See every agent", text: () => `Click Agents ${tabWhere()}.`, ring: tab("now"), done: () => here() === "now", enter: toBar("now"), skip: () => !hasTab("now") },
   { title: "Agents", text: "Everyone working right now and what they're doing. Click a name to see its whole session. The row under the top bar has the rest: every agent, the timeline, the map and the history.", ring: () => q("#main table.nowtbl"), skip: () => here() !== "now" },
-  { title: "Check your limits", text: () => `Click Usage ${tabWhere()}.`, ring: tab("usage"), done: () => here() === "usage", skip: () => !hasTab("usage") },
+  { title: "Check your limits", text: () => `Click Usage ${tabWhere()}.`, ring: tab("usage"), done: () => here() === "usage", enter: toBar("usage"), skip: () => !hasTab("usage") },
   { title: "Usage", text: "How much of your Claude limits is left and when it comes back. New agents stop at a usage line so they don't use it all. You can change that line, or pause an account, under Claude accounts.", ring: () => heading("Claude accounts"), skip: () => here() !== "usage" },
   { title: "Settings", text: "Click Settings at the top right (the sliders).", ring: tab("settings"), done: () => here() === "settings", skip: () => !hasTab("settings") },
   { title: "How the Hive runs", text: "Add a second Claude account here, and turn on modules: optional tools your agents can use.", ring: () => heading("Accounts"), enter: () => { if (here() === "settings") go("settings", "accounts"); }, skip: () => here() !== "settings" },

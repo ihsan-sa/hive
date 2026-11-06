@@ -11,7 +11,7 @@ import { clock, stamp, now, short, mdPlain, ago, DAY, MIN } from "../core/format
 import { markdown, mdCut } from "./markdown.js";
 import { agentRef, threadRef } from "./refs.js";
 import { agentHref } from "../core/router.js";
-import { button, icon, statusDot } from "./kit.js";
+import { button, icon, statusDot, copyPress } from "./kit.js";
 import { replyTo } from "./composer.js";
 import { wordButton } from "./rootword.js";
 import { voiceMemo, VOICE } from "./voicememo.js";
@@ -193,6 +193,8 @@ function closeMenu() {
   menuFor = null;
 }
 addEventListener("click", e => { if (menuFor && !e.target.closest?.(".rc-more,dialog.fb")) closeMenu(); }, true);
+// Capture, so Escape closes only this menu and doesn't also cancel a reply or close the conversation's side panel.
+addEventListener("keydown", e => { if (e.key === "Escape" && menuFor && !document.querySelector("dialog[open]")) { e.stopPropagation(); closeMenu(); } }, true);
 const moreMenu = (p, ws) => h("div", { class: "rc-menu", role: "menu" },
   h("button", { type: "button", role: "menuitem", onclick: () => { copyText(displayText(p)); closeMenu(); } }, "Copy as Markdown"),
   h("button", { type: "button", role: "menuitem", onclick: () => { copyText(mdPlain(displayText(p))); closeMenu(); } }, "Copy as plain text"),
@@ -258,7 +260,7 @@ function quote(p) {
 
 // Copy the message's text. The tick shows for a moment, then the icon comes back.
 function copyBtn(p) {
-  return button("Copy", (e, b) => copyText(displayText(p)).then(() => { b.dataset.done = ""; b.title = "Copied"; setTimeout(() => { delete b.dataset.done; b.title = "Copy"; }, 1400); }), { kind: "icon", size: "s", icon: "copy", cls: "msg-copy" });
+  return button("Copy", (e, b) => copyPress(b, displayText(p)), { kind: "icon", size: "s", icon: "copy", cls: "msg-copy" });
 }
 
 // Between agents only trouble is worth a word (a running one sees its posts after its current step anyway), and it says who (the person, 11041326b458).
@@ -367,7 +369,6 @@ function devBodyEl(p, ws) {
 const moreLabel = p => OPEN.has(p.id) ? "Show less" : `Show all · ${devBody(p).length.toLocaleString("en-US")} characters`;
 // On hover, top right: Copy text, Copy link, and ⋯ for the raw post, its id and the author's page. Reply only where this address can post.
 function devTools(p, ws) {
-  const flash = b => { b.dataset.done = ""; setTimeout(() => delete b.dataset.done, 1400); };
   const open = menuFor === p.id, menu = () => h("div", { class: "rc-menu", role: "menu" },
     h("button", { type: "button", role: "menuitem", onclick: (e, b) => {
       const m = b.closest(".msg"); closeMenu();
@@ -378,8 +379,8 @@ function devTools(p, ws) {
     SYS.has(p.from) || OUTSIDE.has(p.from) ? null : h("a", { role: "menuitem", href: agentHref(p.from), onclick: closeMenu }, `${p.from}'s page`));
   return h("div", { class: "msg-tools" },
     can("post") ? button("Reply", () => replyTo(p), { kind: "icon", size: "s", icon: "reply", title: "Reply" }) : null,
-    button("Copy text", (e, b) => copyText(devBody(p)).then(() => flash(b)), { kind: "icon", size: "s", icon: "copy", title: "Copy text" }),
-    button("Copy link", (e, b) => copyText(`${location.origin}${location.pathname}${location.search}#comms/${encodeURIComponent(p.th)}/${p.id}`).then(() => flash(b)), { kind: "icon", size: "s", icon: "link", title: "Copy link" }),
+    button("Copy text", (e, b) => copyPress(b, devBody(p)), { kind: "icon", size: "s", icon: "copy", title: "Copy text" }),
+    button("Copy link", (e, b) => copyPress(b, `${location.origin}${location.pathname}${location.search}#comms/${encodeURIComponent(p.th)}/${p.id}`), { kind: "icon", size: "s", icon: "link", title: "Copy link" }),
     h("span", { class: "rc-more" },
       h("button", { type: "button", class: "btn msg-moreb", "data-kind": "icon", "data-size": "s", "aria-haspopup": "menu", "aria-expanded": String(open), "aria-label": "More for this post", title: "More", onclick: (e, b) => {
         const was = menuFor === p.id; closeMenu();

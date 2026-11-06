@@ -312,7 +312,10 @@ def cmd_leftovers(a):
     except (OSError, ValueError): cur = {}
     since = "" if a.all else cur.get("left_at") or (now() - dt.timedelta(hours=a.hours)).isoformat()
     todo = agent_posts(posts, since)
-    if not todo: print("no new agent posts that speak of something left"); return
+    if not todo:
+        print("no new agent posts that speak of something left")
+        if not a.dry and not a.no_close: close_leftovers(a)
+        return
     by_id = {p["id"]: p for p in posts if p.get("id")}
     added = 0; cost = 0.0
     for k, b in enumerate(batches(todo)):
@@ -329,10 +332,20 @@ def cmd_leftovers(a):
             if not n.get("ask"): continue
             p = by_id.get(n.get("post")) or b[-1]
             rec = {"id": next_id(items), "at": iso(), "by": "leftovers", "post": p["id"], "when": p.get("at"), "thread": p.get("thread") or p["id"],
-                   "ask": n["ask"].strip()[:300], "kind": "leftover", "status": "open", "said_by": p.get("from")}
+                   "ask": n["ask"].strip()[:300], "kind": "leftover", "status": "owned", "owner": p.get("from"), "said_by": p.get("from")}  # the agent that said it is left owns it, so it isn't an orphan the keeper must find
             append(LEDGER, rec); items[rec["id"]] = rec; added += 1; print("+ " + fmt(rec))
         cur = {**cur, "left_at": b[-1]["at"], "left_post": b[-1]["id"], "left_run": iso()}; CURSOR.write_text(json.dumps(cur))
     if not a.dry: print(f"{added} leftovers filed from {len(todo)} posts, ${cost:.2f}")
+    if not a.dry and not a.no_close: close_leftovers(a)
+
+def close_leftovers(a):
+    """Open leftovers whose thread has had an agent post since they were filed: reconcile reads those threads and closes what they show done."""
+    by = thread_posts(board())
+    ids = [e["id"] for e in open_items(ledger()) if e.get("kind") == "leftover" and e.get("status") in ("open", "owned")
+           and any(p.get("at", "") > (e.get("when") or "") and p.get("id") != e.get("post") and str(p.get("from", "")).lower() not in NOT_AGENTS for p in by.get(e.get("thread") or e.get("post"), []))]
+    if not ids: return
+    print(f"reconciling {len(ids)} open leftovers against later posts")
+    cmd_reconcile(argparse.Namespace(ids=ids, all=False, model=a.model, dry=False, chars=9000))
 
 def login_dir():
     """The Claude login with the most weekly room, judged the way the starter does (pick_login): ~/.hive/usage.json and usage_5h.json
@@ -523,7 +536,7 @@ def main(argv=None):
     sp = ap.add_subparsers(required=True)
     p = sp.add_parser("list"); p.add_argument("--open", action="store_true"); p.add_argument("--all", action="store_true"); p.add_argument("--json", action="store_true"); p.set_defaults(f=cmd_list)
     p = sp.add_parser("leftovers", help="file what agents' posts say is left undone (kind leftover)"); p.add_argument("--all", action="store_true"); p.add_argument("--hours", type=float, default=24, help="first run: how far back")
-    p.add_argument("--model", default="sonnet"); p.add_argument("--dry", action="store_true"); p.add_argument("--limit", type=int, default=0); p.set_defaults(f=cmd_leftovers)
+    p.add_argument("--model", default="sonnet"); p.add_argument("--dry", action="store_true"); p.add_argument("--limit", type=int, default=0); p.add_argument("--no-close", action="store_true", help="skip reconciling open leftovers"); p.set_defaults(f=cmd_leftovers)
     p = sp.add_parser("check"); p.add_argument("--json", action="store_true"); p.add_argument("--after", type=float, default=MOVING_S / 3600, help="hours idle")
     p.add_argument("--stale", type=float, default=STALE_S / 86400, help="days open after which an ask is listed even in a busy thread"); p.add_argument("--unowned", type=float, default=UNOWNED_S / 3600, help="hours open with no owner after which an ask is listed even in a busy thread"); p.add_argument("--limit", type=int, default=15); p.set_defaults(f=cmd_check)
     p = sp.add_parser("show"); p.add_argument("id"); p.set_defaults(f=cmd_show)

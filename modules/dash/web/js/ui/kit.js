@@ -1,5 +1,5 @@
 // The component kit. Each factory takes plain data and returns DOM; styles live in components.css under the same name.
-import { h } from "../core/dom.js";
+import { h, copyText } from "../core/dom.js";
 import { status as st } from "../core/status.js";
 import { icon } from "./icons.js";
 import { showTip, hideTip } from "./tip.js";
@@ -31,10 +31,13 @@ export function infoButton(name, text, { size } = {}) {
   return b;
 }
 
+const FOLDS = new Map();
 /** Section: a titled block. {title, note, actions, id, level} + body nodes. level 1: a part of a long page, with a rule under its title. */
 export function section({ title, note, info, actions, id, key, level, fold, summary }, ...body) {
   // fold: a closed row that opens (summary is its quiet one-line count); info: the long sentence, behind an "i" button.
-  if (fold) return h("details", { class: "fold-row", id: id || null, "data-key": key || null },
+  // A fold remembers being opened (by key, else title): a refresh re-renders it, and morph drops an open the new tree lacks.
+  const fk = fold && (key || id || title);
+  if (fold) return h("details", { class: "fold-row", id: id || null, "data-key": key || null, open: FOLDS.get(fk) ? "" : null, ontoggle: e => { FOLDS.set(fk, e.target.open); } },
     h("summary", null, icon("chevron-right"), title, summary ? h("small", null, summary) : null), h("div", { class: "fold-in" }, body));
   return h("section", { class: "sec", id: id || null, "data-key": key || null, "data-level": level || null, "aria-label": title || null },
     title ? h("header", { class: "sec-h" }, h("h2", { class: "sec-t" }, title), info ? infoButton("About " + title, info) : null, note ? h("span", { class: "sec-n" }, note) : null, actions ? h("div", { class: "sec-a" }, actions) : null) : null,
@@ -117,6 +120,19 @@ export function waiting(failed, text = "Reading…", what = "the data") {
   return failed ? empty(`Couldn't read ${what}. It keeps trying.`, { kind: "error" }) : empty(text, { kind: "loading" });
 }
 
+/** A copy button's press: copy t, then say on the button, for a moment, how it went. It worked: data-ok, and "Copied" on a worded button.
+ *  It didn't (no clipboard, the browser refused): data-fail, "Couldn't copy" on a worded button and the reason in its title; an icon
+ *  button has only its title and colour to say it with. Before this every copy button kept still when the copy failed. */
+export function copyPress(b, t) {
+  const word = b.dataset.kind === "icon" ? null : b.querySelector(":scope>span") || (b.childElementCount ? null : b);
+  b._was ??= { word: word?.textContent, title: b.title };
+  const mark = (k, say, why) => {
+    delete b.dataset.ok; delete b.dataset.fail; b.dataset[k] = ""; if (word) word.textContent = say; b.title = why; clearTimeout(b._cpT);
+    b._cpT = setTimeout(() => { if (!b.isConnected) return; delete b.dataset[k]; if (word) word.textContent = b._was.word; b.title = b._was.title; }, k === "ok" ? 1400 : 3000);
+  };
+  return copyText(t).then(() => mark("ok", "Copied", "Copied"), e => mark("fail", "Couldn't copy", e.message));
+}
+
 /** List: rows separated by hairlines. rows: [{key, href, title, sub, meta, text, lead, current, onClick, dim}] (dim greys the row); limit + onMore add "Show N more". */
 export function list(rows, { empty: none = "Nothing here.", limit, onMore, moreText = n => `Show ${n} more`, dense } = {}) {
   if (!rows.length) return empty(none);
@@ -124,7 +140,7 @@ export function list(rows, { empty: none = "Nothing here.", limit, onMore, moreT
   return h("div", null,
     h("ul", { class: "list", "data-dense": dense ? "" : null }, shown.map(r => h("li", { class: "lr", "data-key": r.key || null, "data-dim": r.dim ? "" : null },
       h(r.href ? "a" : r.onClick ? "button" : "div", { class: "lr-in", style: r.depth ? `--d:${r.depth}` : null, href: r.href || null, type: !r.href && r.onClick ? "button" : null, "aria-current": r.current ? "true" : null, "aria-expanded": r.expanded == null ? null : String(r.expanded), onclick: r.onClick || null },
-        h("div", { class: "lr-t" }, r.lead || null, h("b", null, r.title), r.sub ? h("span", { class: "muted" }, r.sub) : null, r.meta ? h("span", { class: "meta" }, r.meta) : null),
+        h("div", { class: "lr-t" }, r.lead || null, h("b", { title: typeof r.title === "string" ? r.title : null }, r.title), r.sub ? h("span", { class: "muted" }, r.sub) : null, r.meta ? h("span", { class: "meta" }, r.meta) : null),
         r.text ? h("div", { class: r.whole ? "lr-x" : "lr-x clamp-2" }, r.text) : null),
       r.acts ? h("span", { class: "lr-acts" }, r.acts) : null))),
     rows.length > shown.length ? h("div", { class: "lr-more" }, onMore ? button(moreText(rows.length - shown.length), onMore, { kind: "quiet", size: "s" }) : h("span", { class: "meta" }, `and ${rows.length - shown.length} more`)) : null);

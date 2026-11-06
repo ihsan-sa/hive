@@ -7,7 +7,7 @@
 // openPreview(items, i): items are { id, name, size, from, t }; id is the post's 12-hex id, name the file name.
 import { h } from "../core/dom.js";
 import { stamp, ago } from "../core/format.js";
-import { button, icon } from "./kit.js";
+import { button, icon, copyPress } from "./kit.js";
 
 /** A file's kind, from its name: picks the renderer and the badge. */
 export const KINDS = [
@@ -164,9 +164,7 @@ function header(it, r) {
       if ((j === 1) === (MODE.get(k) === "src")) return;
       if (j) MODE.set(k, "src"); else MODE.delete(k); show(P.i);
     } }, t))) : null;
-  const copy = r && r.text != null ? button("Copy", (e, b) => {
-    navigator.clipboard.writeText(r.text).then(() => { b.dataset.ok = ""; b.lastChild.textContent = "Copied"; setTimeout(() => { if (b.isConnected) { delete b.dataset.ok; b.lastChild.textContent = "Copy"; } }, 1400); }, () => {});
-  }, { size: "s", kind: "quiet", icon: "copy", title: "Copy the text" }) : null;
+  const copy = r && r.text != null ? button("Copy", (e, b) => copyPress(b, r.text), { size: "s", kind: "quiet", icon: "copy", title: "Copy the text" }) : null;
   P.head.replaceChildren(
     h("div", { class: "pv-t" },
       button("All files", openFiles, { kind: "icon", icon: "folder", size: "s", cls: "pv-files" }),
@@ -178,7 +176,7 @@ function header(it, r) {
         button("Next file", () => show(P.i + 1), { kind: "icon", icon: "chevron", size: "s", cls: "pv-next" })) : null,
       button("Copy link", (e, b) => {
         const url = it.kb ? location.origin + location.pathname + "#knowledge/" + encodeURIComponent(it.kb) : new URL(viewHref(it), location.href).href;
-        navigator.clipboard.writeText(url).then(() => { b.dataset.ok = ""; setTimeout(() => b.isConnected && delete b.dataset.ok, 1400); }, () => {});
+        copyPress(b, url);
       }, { kind: "icon", icon: "link", size: "s", cls: "pv-link" }),
       fullBtn(),
       button("Close (Esc)", closePreview, { kind: "icon", icon: "close", size: "s", cls: "pv-x" })),

@@ -7,7 +7,7 @@
   :root:has(.cm[data-in],.kb[data-in]){--nav-h:0px}            /* inside a conversation or a file the bar steps aside; the page head has Back */
   :root:has(.cm[data-in],.kb[data-in]) #mnav{display:none}
   body{padding-bottom:var(--nav-h);overscroll-behavior-y:none}
-  html{-webkit-text-size-adjust:100%;-webkit-tap-highlight-color:transparent}
+  html{-webkit-text-size-adjust:100%;-webkit-tap-highlight-color:transparent;scroll-padding-bottom:calc(var(--nav-h) + 16px)}   /* a thing scrolled into view (the tour's target, a found line) clears the bottom bar */
   #main{min-height:calc(100dvh - var(--bar-h) - var(--nav-h))}
   .cm,.kb,.cvp{height:calc(100dvh - var(--top-h,var(--bar-h)) - var(--nav-h))}
 

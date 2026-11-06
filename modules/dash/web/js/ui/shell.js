@@ -184,7 +184,7 @@ export function topBar({ views, current, update, nav }) {
         return h("a", { class: "btn", "data-kind": "icon", href: href(v.id), "data-key": v.id, "aria-label": lab(v), title: lab(v), "aria-current": v.id === L.active || v.id === current ? "page" : null },
           icon(v.icon || v.id), b ? h("span", { class: "more-dot", "aria-label": `${b} for you` }) : null); }),
       h("div", { class: "more", "data-key": "more" },
-        h("button", { type: "button", class: "btn", "data-kind": "icon", "aria-label": "More views", title: inMore ? `More views (${lab(inMore)} is open)` : "More views", "aria-expanded": String(NAV.open), "aria-haspopup": "true", "aria-current": inMore ? "page" : null, onclick: () => { NAV.open = !NAV.open; update(); } },
+        h("button", { type: "button", class: "btn", "data-kind": "icon", "aria-label": "More views", title: inMore ? `More views (${lab(inMore)} is open)` : "More views", "aria-expanded": String(NAV.open), "aria-haspopup": "menu", "aria-current": inMore ? "page" : null, onclick: () => { NAV.open = !NAV.open; update(); } },
           icon("more"), inMore ? h("span", { class: "more-dot", "aria-hidden": "true" }) : null),
         NAV.open ? h("div", { class: "more-m", role: "menu" }, tools.length && !setup ? moreHead("Views") : null, setup ? null : tools, tools.length ? moreHead("Help") : null, help) : null)];
   }
