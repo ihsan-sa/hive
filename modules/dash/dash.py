@@ -428,6 +428,21 @@ def dismiss_shown(d):
     with open(SHOWN, "a") as f: f.write(json.dumps({"thread": th, "dismissed": True, "at": time.time()}) + "\n")
     return {"ok": True}
 
+# ---------- the checklist: threads the person ticked off on the Where things stand list (POST /api/checklist) ----------
+CHECKLIST = STATE / "checklist.json"   # needs_you.CHECKS: {"items": [...]}; agents write it with `hive summary check`
+
+def checklist_do(d):
+    """The person ticks (or unticks) one checklist item. Only the tick is theirs to change: agents add and remove items (hive summary check)."""
+    iid = str(d.get("id") or "")
+    nd = importlib.util.spec_from_file_location("needs_you_cl", Path(__file__).with_name("needs_you.py")); m = importlib.util.module_from_spec(nd); nd.loader.exec_module(m)
+    c = m.checks_load(); hit = [i for i in c["items"] if i["id"] == iid]
+    if not hit: raise ValueError("no such item")
+    hit[0]["ticked"] = d.get("ticked") is not False
+    if hit[0]["ticked"]: hit[0]["ticked_at"] = time.time()
+    else: hit[0].pop("ticked_at", None)
+    m.checks_save(c)
+    return c
+
 # ---------- the status bar at the top of a thread (GET /api/thread-status) ----------
 # `hive status THREAD` appends to ~/.hive/thread-status.jsonl; newest entry per thread: {thread: {text, from, at}}.
 THREAD_STATUS = STATE / "thread-status.jsonl"
@@ -1627,9 +1642,9 @@ GET_CAP = {"/api/call-chat": "post", "/api/live": "read", "/api/away": "read", "
            "/api/projects": "read", "/api/agent-costs": "read", "/api/thread-names": "read", "/api/thread-meta": "read", "/api/shown": "read", "/api/thread-status": "read", "/api/thread-find": "read", "/json": "read", "/api/target": "read", "/api/inbox": "read", "/api/delivered": "read",
            "/api/config": "config", "/api/modules": "modules", "/api/signin": "logins", "/api/plans": "plans", "/api/secrets": "secrets",
            "/api/settings": "config", "/api/ntfy": "config", "/api/webpush": "config", "/api/update": "config", "/api/signin-codex": "logins", "/api/accounts": "logins", "/api/design": "logins", "/api/brand/logo": "read",
-           "/api/kb/home": "files", "/api/kb/open": "files", "/api/kb/search": "files", "/api/kb/raw": "files", "/api/kb/map": "files", "/api/kb/history": "files", "/api/progress": "read", "/api/share-preview": "read", "/api/approvals": "read", "/api/feedback-drafts": "read"}
+           "/api/kb/home": "files", "/api/kb/open": "files", "/api/kb/search": "files", "/api/kb/raw": "files", "/api/kb/map": "files", "/api/kb/history": "files", "/api/progress": "read", "/api/checklist": "read", "/api/share-preview": "read", "/api/approvals": "read", "/api/feedback-drafts": "read", "/api/mail": "files"}
 POST_CAP = {"/api/webpush": "config", "/api/share-build": "read", "/api/kill": "stop", "/api/approval": "stop", "/api/tier": "tier", "/api/agent-model": "post", "/api/login-pause": "limits", "/api/login-limit": "limits", "/api/provider-limit": "limits",
-            "/api/post": "post", "/api/side-ask": "post", "/api/thread-meta": "post", "/api/shown": "post", "/api/feedback": "post", "/api/feedback-draft-done": "post", "/api/issue-link": "post", "/api/update": "config", "/api/share-copy": "config", "/api/draft": "config", "/api/upload": "post", "/api/inbox-read": "post", "/api/ntfy": "config", "/api/config": "config", "/api/starter": "config",
+            "/api/post": "post", "/api/side-ask": "post", "/api/thread-meta": "post", "/api/shown": "post", "/api/checklist": "post", "/api/feedback": "post", "/api/feedback-draft-done": "post", "/api/issue-link": "post", "/api/update": "config", "/api/share-copy": "config", "/api/draft": "config", "/api/upload": "post", "/api/inbox-read": "post", "/api/ntfy": "config", "/api/config": "config", "/api/starter": "config",
             "/api/module": "modules", "/api/signin": "logins", "/api/signin/code": "logins", "/api/signin/cancel": "logins", "/api/plan": "plans", "/api/secret": "secrets",
             "/api/signin-codex": "logins", "/api/account-key": "logins", "/api/design": "logins", "/api/brand": "config", "/api/brand/logo": "config"}
 LOCAL_ONLY = {"/api/access", "/api/settings", "/api/share-copy", "/api/draft"}  # who may do what is never changed from outside, whatever outside.can says
@@ -2196,6 +2211,33 @@ def dash_note(text, thread):
     """A line on the board from the dash that wakes nobody."""
     p = {"id": datetime.now().strftime("%m%d%H%M") + secrets.token_hex(2), "at": now_iso(), "from": "dash", "to": [], "thread": thread, "text": text}
     with open(BOARD, "a") as f: f.write(json.dumps(p) + "\n")
+
+
+MAIL_DIR = Path(os.environ.get("HIVE_MAIL_ROOT", "/var/lib/hive-mail")) / "hive"
+MAIL_ID = re.compile(r"[0-9A-Za-z._-]{1,80}")
+
+
+def _ctl(s): return "".join(c for c in str(s) if c in "\n\t" or (c >= " " and c != "\x7f" and not 0x200e <= ord(c) <= 0x200f and not 0x202a <= ord(c) <= 0x202e and not 0x2066 <= ord(c) <= 0x2069))
+
+
+def mail_view(limit=200):
+    """The owner's mail copy (hive-mail inbox, read-only). Plain text only; control and bidi characters stripped; attachments by name and size.
+    Held mail (marks stay in the store) shows as a stub. Gated by the `files` capability in GET_CAP; never goes on the board."""
+    out, err = [], None
+    try: names = sorted((f for f in (MAIL_DIR / "inbox").iterdir() if f.suffix == ".json" and MAIL_ID.fullmatch(f.stem)), key=lambda f: f.name, reverse=True)[:limit]
+    except OSError: names, err = [], "The mail folder can't be read from here."
+    for f in names:
+        try:
+            if f.is_symlink() or f.stat().st_size > 3_000_000: continue
+            d = json.loads(f.read_text("utf-8", "replace"))
+        except (OSError, ValueError): continue
+        if not isinstance(d, dict): continue
+        if d.get("held"): out.append({"id": f.stem, "held": True}); continue
+        att = [{"name": _ctl(a.get("name", ""))[:200], "size": a.get("size") if isinstance(a.get("size"), int) else None} for a in (d.get("attachments") or [])[:20] if isinstance(a, dict)]
+        out.append({"id": f.stem, "subject": _ctl(d.get("subject", ""))[:300], "date": _ctl(d.get("date", ""))[:80], "received_at": _ctl(d.get("received_at", ""))[:40],
+                    "text": _ctl(d.get("text", ""))[:100_000], "truncated": bool(d.get("truncated")), "attachments": att})
+    status = jload(MAIL_DIR / "status.json", {}) or {}
+    return {"items": out, "error": err, "checked": status.get("at") if isinstance(status, dict) else None}
 
 
 def secrets_view():
@@ -4185,7 +4227,7 @@ def serve(port):
                 self.send(json.dumps(self.app_info(), default=str).encode(), J)
             elif u.path == "/api/brand/logo":
                 self.send_logo()
-            elif u.path in ("/api/target", "/api/inbox", "/api/away", "/api/config", "/api/modules", "/api/signin", "/api/plans", "/api/secrets", "/api/settings", "/api/ntfy", "/api/webpush", "/api/update", "/api/signin-codex", "/api/accounts", "/api/design", "/api/kb/home", "/api/kb/open", "/api/kb/search", "/api/kb/raw", "/api/kb/map", "/api/kb/history") and self.route == "open":
+            elif u.path in ("/api/target", "/api/inbox", "/api/away", "/api/config", "/api/modules", "/api/signin", "/api/plans", "/api/secrets", "/api/settings", "/api/ntfy", "/api/webpush", "/api/update", "/api/signin-codex", "/api/accounts", "/api/design", "/api/kb/home", "/api/kb/open", "/api/kb/search", "/api/kb/raw", "/api/kb/map", "/api/kb/history", "/api/mail") and self.route == "open":
                 self.send_error(404)
             elif u.path == "/api/kb/home":
                 self.send(json.dumps(kb_home()).encode(), J)
@@ -4208,6 +4250,8 @@ def serve(port):
                 self.send(json.dumps(v).encode(), J)
             elif u.path == "/api/kb/raw":
                 self.send_kb_raw(q.get("path", [""])[0])
+            elif u.path == "/api/mail":
+                self.send(json.dumps(mail_view()).encode(), J)
             elif u.path == "/api/plans":
                 self.send(json.dumps(plans_view()).encode(), J)
             elif u.path == "/api/secrets":
@@ -4216,6 +4260,8 @@ def serve(port):
                 self.send(json.dumps(thread_target(q.get("thread", [""])[0])).encode(), J)
             elif u.path == "/api/inbox":
                 self.send(json.dumps(inbox_view()).encode(), J)
+            elif u.path == "/api/checklist":
+                self.send(CHECKLIST.read_bytes() if CHECKLIST.exists() else b'{"items": []}', J)
             elif u.path == "/api/ntfy":
                 self.send(json.dumps(PHONE.view()).encode(), J)
             elif u.path == "/api/webpush":
@@ -4330,12 +4376,13 @@ def serve(port):
                 try: return self.send(json.dumps(share_build(d)).encode(), J)
                 except KeyError: return self.send_error(404)
                 except ValueError as e: return self.deny(400, str(e))
-            if u.path in ("/api/post", "/api/side-ask", "/api/thread-meta", "/api/shown", "/api/feedback", "/api/feedback-draft-done", "/api/issue-link", "/api/update", "/api/inbox-read", "/api/ntfy", "/api/webpush", "/api/agent-model", "/api/config", "/api/starter", "/api/module", "/api/signin", "/api/signin/code", "/api/signin/cancel", "/api/access", "/api/plan", "/api/secret", "/api/settings", "/api/share-copy", "/api/draft", "/api/signin-codex", "/api/account-key", "/api/design", "/api/brand"):
+            if u.path in ("/api/post", "/api/side-ask", "/api/thread-meta", "/api/shown", "/api/checklist", "/api/feedback", "/api/feedback-draft-done", "/api/issue-link", "/api/update", "/api/inbox-read", "/api/ntfy", "/api/webpush", "/api/agent-model", "/api/config", "/api/starter", "/api/module", "/api/signin", "/api/signin/code", "/api/signin/cancel", "/api/access", "/api/plan", "/api/secret", "/api/settings", "/api/share-copy", "/api/draft", "/api/signin-codex", "/api/account-key", "/api/design", "/api/brand"):
                 try:
                     if u.path == "/api/post": res = person_post(d.get("text"), d.get("thread"), d.get("reply_to"), d.get("files"), signer=self.signer, limited="config" not in self.can, simple=d.get("simple") is True, model=d.get("model"), sig=d.get("sig"))
                     elif u.path == "/api/side-ask": res = side_ask(d.get("q"), signer=self.signer, limited="config" not in self.can)
                     elif u.path == "/api/thread-meta": res = set_thread_meta(d)
                     elif u.path == "/api/shown": res = dismiss_shown(d)
+                    elif u.path == "/api/checklist": res = checklist_do(d)
                     elif u.path == "/api/feedback": res = send_feedback(d)
                     elif u.path == "/api/feedback-draft-done": res = feedback_draft_done(d)
                     elif u.path == "/api/issue-link": res = issue_link(d)

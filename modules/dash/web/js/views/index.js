@@ -10,6 +10,7 @@ import jobs from "./jobs.js";
 import ledger from "./ledger.js";
 import agents from "./agents.js";
 import comms from "./comms.js";
+import mail from "./mail.js";
 import inbox from "./inbox.js";
 import mesh from "./mesh.js";
 import timeline from "./timeline.js";
@@ -28,6 +29,7 @@ export default [
   now,
   jobs,
   inbox,
+  mail,
   agents,
   ledger,
   progress,

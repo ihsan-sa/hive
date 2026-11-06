@@ -480,15 +480,20 @@ def recall(c, text, n=5, ctx="", knn=True, thread=""):
         if w not in wt and len(wt) < RECALL_WORDS: wt[w] = RECALL_CTX
     words = list(wt)
     q = ",".join("?" * len(RECALL_SRC))
-    try: own = c.execute(f"SELECT count(*) FROM chunk JOIN doc ON doc.id=chunk.doc WHERE doc.source IN ({q})", RECALL_SRC).fetchone()[0]
+    # our own passages are about 1 in 100 of the index: put their ids in a small table once, and let each word lookup keep
+    # only those (joining every matching row to its passage and file took 4x the time)
+    try:
+        c.execute("CREATE TEMP TABLE IF NOT EXISTS recall_own(id INTEGER PRIMARY KEY)"); c.execute("DELETE FROM temp.recall_own")
+        own = c.execute(f"INSERT INTO temp.recall_own SELECT chunk.id FROM chunk JOIN doc ON doc.id=chunk.doc WHERE doc.source IN ({q})", RECALL_SRC).rowcount
+        c.commit()   # the fill opened a transaction: close it, so a recall holds none while it reads, as before
     except sqlite3.OperationalError: return []
     if not words or not own: return []
-    sel = f"SELECT fts.rowid FROM fts JOIN chunk ON chunk.id=fts.rowid JOIN doc ON doc.id=chunk.doc WHERE fts MATCH ? AND doc.source IN ({q})"
+    sel = "SELECT fts.rowid FROM fts CROSS JOIN temp.recall_own o ON o.id=fts.rowid WHERE fts MATCH ?"
     idf, seen, score = {}, {}, {}
     for w in words:
         try:
-            body = {r[0] for r in c.execute(sel, ('body : "%s"' % w, *RECALL_SRC))}
-            head = {r[0] for r in c.execute(sel, ('{title head} : "%s"' % w, *RECALL_SRC))}
+            body = {r[0] for r in c.execute(sel, ('body : "%s"' % w,))}
+            head = {r[0] for r in c.execute(sel, ('{title head} : "%s"' % w,))}
         except sqlite3.OperationalError: continue
         both = frozenset(body | head)
         if not both or len(both) > own * 0.12 or any(w[:4] == x[:4] for x in seen.get(both, ())): continue  # in no note, in too many, or locked after lock

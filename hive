@@ -893,7 +893,7 @@ def cmd_rename(a):
     print(f"renamed {th}: {title}")
 
 def cmd_summary(a):
-    """hive summary show | set | drop THREAD...: edit the dashboard's "Where things stand" summary (modules/dash/needs_you.py)."""
+    """hive summary show | set | drop THREAD... | check add|list|done|untick: edit the dashboard's "Where things stand" summary (modules/dash/needs_you.py)."""
     f = HOME / "modules" / "dash" / "needs_you.py"
     if not f.exists(): sys.exit("hive summary: this Hive has no dash module")
     os.execv(sys.executable, [sys.executable, "-I", str(f), "summary"] + a.rest)
@@ -929,7 +929,7 @@ p = sp.add_parser("important", help="hive important THREAD --why \"...\" [--off]
 p.add_argument("thread"); p.add_argument("--why", default=""); p.add_argument("--off", action="store_true"); p.set_defaults(f=cmd_important)
 p = sp.add_parser("rename", help="hive rename THREAD \"new title\": retitle a thread in the dashboard when its title no longer fits (the person's own rename wins)")
 p.add_argument("thread"); p.add_argument("title"); p.set_defaults(f=cmd_rename)
-p = sp.add_parser("summary", help="hive summary show | set (JSON on stdin) | drop THREAD...: edit the dashboard's Where things stand summary: drop obsolete entries, regroup, reword. hive summary set --help-ish: run `hive summary` for the shape")
+p = sp.add_parser("summary", help="hive summary show | set (JSON on stdin) | drop THREAD... | check add THREAD TEXT --cat TITLE|list|done ID...|untick ID... (per-section to-do list): edit the dashboard's Where things stand summary: drop obsolete entries, regroup, reword. hive summary set --help-ish: run `hive summary` for the shape")
 p.add_argument("rest", nargs=argparse.REMAINDER); p.set_defaults(f=cmd_summary)
 p = sp.add_parser("fade", help="hive fade THREAD --why \"...\" [--off]: mark a thread as likely not needed by the person any more (finished and read, replaced by another thread, nothing in it for them): the dashboard side list greys it, and they can still open it and write in it. A post for the person, or one from them, brings it back by itself. --off takes your mark off")
 p.add_argument("thread"); p.add_argument("--why", default=""); p.add_argument("--off", action="store_true"); p.set_defaults(f=cmd_fade)

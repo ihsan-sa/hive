@@ -16,23 +16,64 @@ import { awayCard } from "../ui/away.js";
 
 const V = {};
 
+const tag = (tone, text, title) => h("span", { class: "pg-t", "data-tone": tone || null, title: title || null }, text);
+const TONE = { working: "good", queue: "warn", stuck: "bad", quiet: "quiet" };
+
 // Running agents as rows, not cards: one line to scan, the same columns all the way down, however many there are.
-function agentRows(run, states, t) {
+// An agent whose conversation waits on the person says so, and sorts first.
+function agentRows(run, states, t, waits) {
   return h("div", { class: "tbl-w" }, h("table", { class: "tbl nowtbl" },
     h("caption", { class: "vh" }, "Running agents"),
-    h("thead", null, h("tr", null, ["Agent", "Conversation", "State", "Doing now", "Model", "Up"].map(x => h("th", { scope: "col", class: x === "Up" ? "num" : null }, x)), h("th", null, h("span", { class: "vh" }, "Actions")))),
+    h("thead", null, h("tr", null, ["Agent", "Conversation", "State", "Doing now"].map(x => h("th", { scope: "col" }, x)), h("th", { class: "num", scope: "col" }, "Up"), h("th", null, h("span", { class: "vh" }, "Actions")))),
     h("tbody", null, run.map(a => {
-      const st = states.get(a.name), S_ = status(st.key), task = S.byId[a.post], model = (cardRows(a.name)[0] || {}).short;
+      const st = states.get(a.name), S_ = status(st.key), task = S.byId[a.post], model = (cardRows(a.name)[0] || {}).short, wait = waits.has(a.thread);
       const asked = task ? (a.from ? (a.from === "person" && S.app.app ? "you" : a.from) + ": " : "") + firstSentence(displayText(task)) : null;
-      return h("tr", { "data-key": a.name, "data-tone": S_.tone, "data-attn": st.key === "stuck" ? "" : null },
+      return h("tr", { "data-key": a.name, "data-tone": S_.tone, "data-attn": st.key === "stuck" ? "" : null, title: model ? "Runs on " + model : null },
         h("td", { "data-label": "Agent", class: "nt-a" }, agentRef(a.name)),
         h("td", { "data-label": "Conversation", class: "nt-th" }, threadRef(a.thread)),
-        h("td", { "data-label": "State", class: "nt-st", title: S_.hint }, st.text),
+        h("td", { "data-label": "State", class: "nt-st", title: S_.hint }, wait ? tag("info", "waits on you") : tag(TONE[st.key], st.text)),
         h("td", { "data-label": "Doing now", class: "nt-do" }, a.doing ? h("div", { class: "nt-now", title: a.doing }, a.doing) : null, asked ? h("div", { class: a.doing ? "nt-ask meta" : "nt-now", title: task.text }, "Asked by " + asked) : a.doing ? null : h("span", { class: "muted" }, "–")),
-        h("td", { "data-label": "Model", class: "nt-m meta" }, model || "–"),
         h("td", { "data-label": "Up", class: "num meta" }, dur(t - a.since * 1e3)),
         h("td", { "data-label": "", class: "nt-x" }, a.alive ? killButton(a.name) : null));
     }))));
+}
+
+/** Developer Now: what needs the owner first. Stuck or dead agents, logins at their limit, queue waits over an hour, posts waiting. One row each. */
+function needsYou(run, states, waiting, L) {
+  const rows = [];
+  for (const a of run) if (states.get(a.name).key === "stuck") rows.push({ sev: 0, tone: "bad", head: a.name, text: states.get(a.name).text, href: agentHref(a.name), act: "Open" });
+  for (const l of (S.usage && S.usage.logins) || []) if (l.paused) rows.push({ sev: 1, tone: "warn", head: (l.name || "A login") + " is paused", text: "new agents won't start on it", href: href("usage"), act: "Usage" });
+  if (L.limit_until) rows.push({ sev: 1, tone: "warn", head: "Starts held for the usage limit", text: "until " + clock(L.limit_until * 1e3), href: href("usage"), act: "Usage" });
+  for (const a of run) { const j = a.jobs || {}; if (j.queued && !j.running && j.waited > 3600) rows.push({ sev: 2, tone: "warn", head: a.name, text: `waiting ${dur(j.waited * 1e3)} for a job slot`, href: agentHref(a.name), act: "Open" }); }
+  if (waiting.length) rows.push({ sev: 3, tone: "quiet", head: plural(waiting.length, "post") + " waiting", text: "for an agent to start: " + waiting.slice(0, 4).map(p => p.name).join(", ") + (waiting.length > 4 ? "…" : ""), href: href("comms"), act: "Chat" });
+  rows.sort((a, b) => a.sev - b.sev);
+  if (!rows.length) return null;
+  return section({ title: "Needs you", key: "needs" }, h("ul", { class: "nd-list" }, rows.map((r, i) => h("li", { "data-tone": r.tone, "data-key": r.head + i },
+    tag(r.tone, ""), h("b", null, r.head), h("span", { class: "meta" }, r.text), h("a", { href: r.href, class: "nd-act" }, r.act)))));
+}
+
+/** Developer Now, the two tables: running (newest first) and waiting for the job queue (longest first). */
+function devTables(run, states, t) {
+  const doing = a => { const task = S.byId[a.post]; return a.doing || (task ? "Asked by " + firstSentence(displayText(task)) : "–"); };
+  const title = a => { const task = S.byId[a.post]; return task ? "Asked by " + (a.from || "") + ": " + firstSentence(displayText(task)) : null; };
+  const working = run.filter(a => states.get(a.name).key !== "queue").sort((a, b) => (b.since || 0) - (a.since || 0) || String(a.name).localeCompare(String(b.name)));
+  const queued = run.filter(a => states.get(a.name).key === "queue").sort((a, b) => ((b.jobs || {}).waited || 0) - ((a.jobs || {}).waited || 0) || String(a.name).localeCompare(String(b.name)));
+  const w = h("div", { class: "tbl-w" }, h("table", { class: "tbl nowtbl" }, h("caption", { class: "vh" }, "Working"),
+    h("thead", null, h("tr", null, ["Agent", "Thread", "Doing now"].map(x => h("th", { scope: "col" }, x)), h("th", { class: "num", scope: "col" }, "Up"), h("th", null, h("span", { class: "vh" }, "Actions")))),
+    h("tbody", null, working.map(a => h("tr", { "data-key": a.name },
+      h("td", { class: "nt-a", "data-label": "Agent" }, agentRef(a.name)), h("td", { class: "nt-th", "data-label": "Thread" }, threadRef(a.thread)),
+      h("td", { class: "nt-do", "data-label": "Doing now", title: title(a) }, h("div", { class: "nt-now" }, doing(a))),
+      h("td", { class: "num meta", "data-label": "Up" }, dur(t - a.since * 1e3)),
+      h("td", { class: "nt-x", "data-label": "" }, a.alive ? killButton(a.name) : null))))));
+  const q = h("div", { class: "tbl-w" }, h("table", { class: "tbl nowtbl" }, h("caption", { class: "vh" }, "In the job queue"),
+    h("thead", null, h("tr", null, ["Agent", "Thread", "Jobs"].map(x => h("th", { scope: "col" }, x)), h("th", { class: "num", scope: "col" }, "Waited"))),
+    h("tbody", null, queued.map(a => { const j = a.jobs || {}; return h("tr", { "data-key": a.name },
+      h("td", { class: "nt-a", "data-label": "Agent" }, agentRef(a.name)), h("td", { class: "nt-th", "data-label": "Thread" }, threadRef(a.thread)),
+      h("td", { class: "meta", "data-label": "Jobs" }, String(j.queued || 0)),
+      h("td", { class: ["num", j.waited > 3600 ? "nt-long" : "meta"], "data-label": "Waited" }, dur((j.waited || 0) * 1e3))); }))));
+  return cols(
+    section({ title: "Working", note: String(working.length) }, working.length ? w : empty("None.")),
+    section({ title: "In the job queue", note: String(queued.length) }, queued.length ? q : empty("None.")));
 }
 
 /** Addressed to the person, no reply yet, last 3 days: one row per thread. For the TV tile; the page itself leaves this to Chat. */
@@ -99,7 +140,8 @@ export default {
 
     // Working agents keep a fixed order (longest up first), so a new turn doesn't move a card. The rest follow, least quiet first; gone processes last.
     const isWorking = a => a.alive && t - (a.last || 0) * 1e3 < 3 * MIN, group = a => (isWorking(a) ? 0 : a.alive ? 1 : 2);
-    const run = [...L.agents].sort((a, b) => group(a) - group(b) || (group(a) ? (b.last || 0) - (a.last || 0) : (a.since || 0) - (b.since || 0)) || String(a.name).localeCompare(String(b.name)));
+    const waits = S.app.app ? new Set(forYouRows(t).map(r => r.key)) : new Set();
+    const run = [...L.agents].sort((a, b) => (waits.has(b.thread) - waits.has(a.thread)) || group(a) - group(b) || (group(a) ? (b.last || 0) - (a.last || 0) : (a.since || 0) - (b.since || 0)) || String(a.name).localeCompare(String(b.name)));
     const states = new Map(run.map(a => [a.name, agentState(a)]));
     const count = k => run.filter(a => states.get(a.name).key === k).length;
     const active = run.filter(isWorking).length, threads = new Set(run.map(a => a.thread)).size;
@@ -111,20 +153,23 @@ export default {
       const state = stopped || sign ? { tone: "bad", text: "Stopped" } : fy.length || stuckN ? { tone: "info", text: "Needs you" } : { tone: "good", text: "All fine" };
       const one = threads === 1 ? threadTitle(run[0].thread) : `${nWord(threads).toLowerCase()} conversations`;
       const title = run.length ? `${nWord(run.length)} ${run.length === 1 ? "agent is" : "agents are"} working on ${one}.` : "No agents are working right now.";
+      const waitN = run.filter(a => waits.has(a.thread)).length;
       const lead = sign ? sign : stopped ? `New agents wait for the usage limit until ${clock(L.limit_until * 1e3)}.`
+        : waitN ? `${nWord(waitN)} ${waitN === 1 ? "agent is" : "agents are"} waiting for your answer.`
         : fy.length === 1 ? `${fy[0].title} is waiting for your answer.`
         : fy.length ? `${nWord(fy.length)} conversations are waiting for your answer.`
         : stuckN ? `${nWord(stuckN)} ${stuckN === 1 ? "has" : "have"} stopped moving.` : null;
       const header = pageHeader({ state, title, lead });
-      const main = section({ title: "What each is doing", note: "one row each: working first, then quiet" }, run.length ? agentRows(run, states, t) : empty("None."));
+      const main = section({}, run.length ? agentRows(run, states, t, waits) : empty("None."));
       const hrs = tierHours(t - DAY, t), tot = Object.values(hrs).reduce((a, b) => a + b, 0) || 1;
       const more = h("details", { class: "now-more", open: V.more || null, ontoggle: (e, n) => { if (e.target === n) V.more = n.open; } }, h("summary", null, "Details"),
         h("p", { class: "meta" }, [`${plural(lastHour, "post")} in the last hour`, waiting.length ? `${waiting.length} waiting to start` : null, S.usage ? `${money(spendSince(t - DAY))} of work in 24h, at list prices` : null].filter(Boolean).join(" · ")),
         section({ title: "How it's working as a hive", note: "last 24 hours" }, stats(hiveFigures(t))),
+        strip(t),
         cols(...activityCharts(t)),
         hasTiers() ? section({ title: "Where the agent hours went", note: "against your priority list, last 24 hours" },
           share(TIERS.map(x => ({ key: x.key, label: x.label, tone: x.tone, value: hrs[x.key], text: `${(hrs[x.key] / HOUR).toFixed(1)}h (${Math.round((100 * hrs[x.key]) / tot)}%)` })))) : null);
-      return overview({ header, main: [awayCard(ctx), main].filter(Boolean), after: [todayCard(t), strip(t), more] });
+      return overview({ header, main: [awayCard(ctx), main].filter(Boolean), after: [todayCard(t), more] });
     }
 
     const header = pageHeader({
@@ -145,14 +190,6 @@ export default {
       ],
     });
 
-    const main = section({ title: S.app.app ? "What each is doing" : "Agents at work", note: "one row each: working first, then quiet" },
-      run.length ? agentRows(run, states, t) : empty("None."));
-
-    const stuck = run.filter(a => states.get(a.name).key === "stuck");
-
-    const stuckList = stuck.length ? section({ title: "Stuck", note: "running but not moving" },
-      list(stuck.map(a => ({ key: a.name, href: agentHref(a.name), lead: statusDot("stuck"), title: a.name, sub: threadTitle(a.thread), text: states.get(a.name).text })))) : null;
-
     const hive = section({ title: "How it's working as a hive", note: "last 24 hours" }, stats(hiveFigures(t)));
     const charts = cols(...activityCharts(t));
 
@@ -160,6 +197,6 @@ export default {
     const tiers = section({ title: "Where the agent hours went", note: "against your priority list, last 24 hours" },
       share(TIERS.map(x => ({ key: x.key, label: x.label, tone: x.tone, value: hrs[x.key], text: `${(hrs[x.key] / HOUR).toFixed(1)}h (${Math.round((100 * hrs[x.key]) / tot)}%)` }))));
 
-    return overview({ header, main: [stuckList, main], after: [hive, charts, hasTiers() ? tiers : null] });
+    return overview({ header, main: [needsYou(run, states, waiting, L), run.length ? devTables(run, states, t) : empty("None.")], after: [hive, charts, hasTiers() ? tiers : null] });
   },
 };

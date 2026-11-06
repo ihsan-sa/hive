@@ -35,7 +35,7 @@ const FULL_STEPS = [
   { title: "Look at what it keeps", text: "Click Knowledge at the top.", ring: tab("knowledge"), done: () => here() === "knowledge", skip: () => !hasTab("knowledge") },
   { title: "Knowledge", text: "Notes, projects and the files agents attach, to browse and search. It only reads. Keys and passwords are blanked out.", ring: () => q(".kb-side") || q('input[type="search"]'), skip: () => here() !== "knowledge" },
   { title: "See every agent", text: "Click Agents at the top.", ring: tab("now"), done: () => here() === "now", skip: () => !hasTab("now") },
-  { title: "Agents", text: "Everyone working right now and what they're doing. Click a name to see its whole session. The row under the top bar has the rest: every agent, the timeline, the map and the history.", ring: () => heading("What each is doing"), skip: () => here() !== "now" },
+  { title: "Agents", text: "Everyone working right now and what they're doing. Click a name to see its whole session. The row under the top bar has the rest: every agent, the timeline, the map and the history.", ring: () => q("#main table.nowtbl"), skip: () => here() !== "now" },
   { title: "Check your limits", text: "Click Usage at the top.", ring: tab("usage"), done: () => here() === "usage", skip: () => !hasTab("usage") },
   { title: "Usage", text: "How much of your Claude limits is left and when it comes back. New agents stop at a usage line so they don't use it all. You can change that line, or pause an account, under Claude accounts.", ring: () => heading("Claude accounts"), skip: () => here() !== "usage" },
   { title: "Settings", text: "Click Settings at the top right (the sliders).", ring: tab("settings"), done: () => here() === "settings", skip: () => !hasTab("settings") },
