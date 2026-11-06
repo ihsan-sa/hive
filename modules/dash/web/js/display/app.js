@@ -108,7 +108,8 @@ function fitItems(body) {
 
 // ---- the top: the counts you look for from across the room, then trouble in words ----
 function counts() {
-  const A = S.live ? S.live.agents : [], st = A.map(a => agentState(a).key), n = k => st.filter(x => x === k).length;
+  if (!S.live) return null;   // nothing read yet: rows of zeros would say nobody is running
+  const A = S.live.agents, st = A.map(a => agentState(a).key), n = k => st.filter(x => x === k).length;
   return h("div", { class: "dt-sum", role: "status" },
     h("span", { class: "dt-run" }, A.length + " running"),
     [["working", "working"], ["queue", "in job queue"], ["quiet", "quiet"], ["stuck", "stuck"]].map(([k, label]) => {
@@ -122,7 +123,7 @@ function room() {
   const soon = live.map(l => ({ l, r: runway(l, U) })).filter(x => x.r.before && x.r.toStop > 0).sort((a, b) => a.r.toStop - b.r.toStop)[0];
   return h("div", { class: "dt-room", "data-tone": !live.length ? "bad" : soon || live.length === 1 ? "warn" : null },
     statusDot(live.length ? "inuse" : "atstop"), h("b", null, `${live.length} of ${us.length}`),
-    h("span", null, "logins have room" + (soon ? `; ${soon.l.name} stops at ${soon.r.stop}% in ${dur(soon.r.toStop)}` : "")));
+    h("span", null, (live.length === 1 ? "account has room" : "accounts have room") + (soon ? `; ${soon.l.name} stops at ${soon.r.stop}% in ${dur(soon.r.toStop)}` : "")));
 }
 /** No data coming in: one band readable across a room, and the old numbers set back (body[data-lost]) rather than shown as if they were current. */
 function lost() {
@@ -130,8 +131,8 @@ function lost() {
   if (!on) return null;
   const has = S.fresh > 1e12;   // a real time in ms; anything else means nothing has ever arrived
   return h("div", { class: "dt-lost", role: "alert", "data-key": "lost" }, statusDot("stuck"),
-    h("b", null, has ? "No new data for " + dur(now() - S.fresh) + "." : "Waiting for the first data."),
-    has ? h("span", null, "Everything below is from " + new Date(S.fresh).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) + ".") : null);
+    h("b", null, has ? "No new data for " + dur(now() - S.fresh) + "." : "Can't reach the data."),
+    h("span", null, has ? "Everything below is from " + new Date(S.fresh).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) + "." : "It keeps trying."));
 }
 function trouble() {
   const out = [], Lv = S.live, U = S.usage, t = now();
@@ -142,7 +143,7 @@ function trouble() {
   }
   if (U && (U.logins || []).length) {
     const live = U.logins.filter(l => inUse(l, U));
-    if (!live.length) out.push(["No login has room", "nothing new starts"]);
+    if (!live.length) out.push(["No account has room", "nothing new starts"]);
     for (const l of live) { const w = l.limits && l.limits.five_hour; if (w && w.r * 1e3 > t && w.u >= .9) out.push([`${l.name} at ${Math.round(w.u * 100)}%`, "of its 5-hour limit"]); }
   }
   return out.length ? h("div", { class: "dt-trouble", role: "alert" }, out.map(([a, b]) => h("span", { "data-key": a }, statusDot("stuck"), h("b", null, a), b ? h("span", null, b) : null))) : null;
@@ -156,7 +157,7 @@ function render() {
   mount(top, h("div", null,
     h("div", { class: "dt-top-row" }, h("b", { class: "dt-brand" }, brandMark()), counts(), room(),
       sizeNote ? h("span", { class: "dt-size" }, `Size ${sizeNote}% · Ctrl 0 resets`) : null,
-      h("time", { class: "dt-clock" }, new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })), fullscreenButton()),
+      fullscreenButton(), h("time", { class: "dt-clock" }, new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }))),
     lost(), trouble()));
   for (const p of parts) {
     try {       // one tile's bug must not blank a screen nobody is watching closely

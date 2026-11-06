@@ -92,7 +92,16 @@ export function delegate(root = document) {
   for (const type of TYPES) root.addEventListener(type, ev => {
     for (let n = ev.target; n && n !== root; n = n.parentNode) {
       const f = n._on && n._on[type];
-      if (f) { f(ev, n); if (ev.cancelBubble) break; }
+      if (f) {
+        if (type === "click" && n.tagName === "BUTTON" && n._going) { ev.preventDefault(); break; }   // its last click is still working: a double click can't send it twice
+        const r = f(ev, n);
+        if (type === "click" && n.tagName === "BUTTON" && r && typeof r.then === "function") {
+          n._going = true;
+          const done = () => { n._going = false; clearTimeout(cap); }, cap = setTimeout(done, 20000);   // a handler that never settles can't lock its button for good
+          r.then(done, done);
+        }
+        if (ev.cancelBubble) break;
+      }
     }
   }, type === "toggle"); // toggle doesn't bubble, so catch it on the way down
 }

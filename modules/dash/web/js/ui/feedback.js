@@ -142,8 +142,10 @@ export async function openFeedback() {
     sync();
   }
   async function take() {   // the browser's own capture; the overlay steps aside so it isn't in the picture
-    away = true; dlg.close();
-    const r = await grab();
+    away = true;
+    const closed = new Promise(ok => dlg.addEventListener("close", ok, { once: true }));   // close fires a moment later: where grab() answers at once it mustn't arrive after we reopen, or it ends the overlay
+    dlg.close();
+    const r = await grab(); await closed;
     if (r.pic) { pic = r.pic; boxes = []; frozen = false; }
     dlg.showModal(); away = false; show(r.why); text.focus({ preventScroll: true });
   }

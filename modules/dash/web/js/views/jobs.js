@@ -31,7 +31,7 @@ function tiles(T) {
   return [
     tile("CPU", cpu + "%", `${T.busy.user}% programs, ${T.busy.system}% system`, cpu),
     tile("Waiting on disk", T.busy.iowait + "%", `${T.blocked} tasks blocked now, ${Math.round(P.io_full || 0)}% fully stalled`, T.busy.iowait, T.busy.iowait >= 30),
-    tile("Load", T.load.toFixed(0), `on ${T.cpus} threads`, (T.load * 100) / T.cpus, T.load >= T.cpus),
+    tile("Load", T.load.toFixed(0), `on ${T.cpus} ${S.app.app ? "cores" : "threads"}`, (T.load * 100) / T.cpus, T.load >= T.cpus),
     tile("Memory available", gb(M.MemAvailable), `of ${gb(M.MemTotal)}, ${Math.round(P.memory_full || 0)}% fully stalled`, ((M.MemTotal - M.MemAvailable) * 100) / M.MemTotal, M.MemAvailable < 5000),
     tile("Swap used", gb(swap), `of ${gb(M.SwapTotal)}`, M.SwapTotal ? (swap * 100) / M.SwapTotal : 0, M.SwapTotal && swap / M.SwapTotal >= 0.9),
     T.slice_high ? tile("Queue jobs' memory", gb(T.slice_used), `soft limit ${gb(T.slice_high)}`, (T.slice_used * 100) / T.slice_high, T.slice_used >= T.slice_high - 3000) : null,
@@ -49,8 +49,8 @@ function split(V) {
   };
   const memTotal = Math.max(V.machine.mem.MemTotal || 0, V.held, OWNERS.reduce((a, [k]) => a + V.split[k].mem, 0)) || 1;
   const own = OWNERS.filter(([k]) => !(S.app.app && k === "jobs" && !hasQueue(V))).map(([k, l, tone]) => [k, S.app.app ? APP_OWNERS[k] : l, tone]);
-  return [bar("CPU", "cores", V.machine.cpus, " threads", v => v.toFixed(1)), bar("Memory in use", "mem", memTotal, "", gb),
-    h("div", { class: "legend" }, own.map(([k, l, tone]) => h("span", { "data-tone": tone }, h("i", { class: "sw" }), `${l}: ${V.split[k].cores.toFixed(1)} threads, ${gb(V.split[k].mem)}`)))];
+  return [bar("CPU", "cores", V.machine.cpus, S.app.app ? " cores" : " threads", v => v.toFixed(1)), bar("Memory in use", "mem", memTotal, "", gb),
+    h("div", { class: "legend" }, own.map(([k, l, tone]) => h("span", { "data-tone": tone }, h("i", { class: "sw" }), `${l}: ${V.split[k].cores.toFixed(1)} ${S.app.app ? "cores" : "threads"}, ${gb(V.split[k].mem)}`)))];
 }
 
 /** The queue tool is installed: it has slots, or something has used it. The app's install doesn't include it. */
@@ -73,19 +73,19 @@ export default {
   },
   render() {
     const V = J.v;
-    if (!V) return h("div", { class: "page" }, J.failed ? empty("Couldn't read the job data.", { kind: "error" }) : empty("Reading…", { kind: "loading" }));
+    if (!V) return h("div", { class: "page" }, J.failed ? empty("Couldn't read the job data. It keeps trying.", { kind: "error" }) : empty("Reading…", { kind: "loading" }));
     const t = now() / 1e3, app = S.app.app, q = hasQueue(V), head = app ? machineAnswer(V.machine) : headline(V);
     let pos = 0;
     return metrics({
       header: pageHeader({ title: app ? "This machine" : "Jobs", lead: head.text, tone: head.tone,
         after: app && !q ? h("p", { class: "ph-meta" }, "The queue for big jobs isn't installed here, so agents run their work directly. Its sections show once it is.") : null,
-        meta: [J.failed ? "Couldn't refresh: this may be out of date" : `Updated ${clock(V.at * 1e3)}`, "CPU in threads in use, averaged since the last refresh"] }),
+        meta: [J.failed ? "Couldn't refresh: this may be out of date" : `Updated ${clock(V.at * 1e3)}`, app ? null : "CPU in threads in use, averaged since the last refresh"] }),
       sections: [
-        section({ title: "The machine" }, stats(tiles(V.machine))),
-        section({ title: "Who's using it", note: "Memory is what's in use, RAM plus swap. The unfilled part of its bar is the kernel, shared memory and tmpfs." }, split(V)),
+        section({ title: app ? "The computer" : "The machine" }, stats(tiles(V.machine))),
+        section({ title: "Who's using it", note: app ? "Memory counts what's in use, including swap." : "Memory is what's in use, RAM plus swap. The unfilled part of its bar is the kernel, shared memory and tmpfs." }, split(V)),
         ...(app && !q ? [] : [section({ title: "Running", note: `${V.running.length} of ${V.slots} slots, longest first` }, table({
           rows: V.running, key: r => r.lane + r.since, empty: "Nothing running in the queue.",
-          columns: [col("Agent", r => who(r.agent)), col("Lane", r => r.lane), col("Running", r => secs(t - r.since)), num("Threads", r => r.cores.toFixed(1)), num("Memory", r => gb(r.mem)), cmd],
+          columns: [col("Agent", r => who(r.agent)), col("Lane", r => r.lane), col("Running", r => secs(t - r.since)), num(app ? "Cores" : "Threads", r => r.cores.toFixed(1)), num("Memory", r => gb(r.mem)), cmd],
         })),
         section({ title: "Queued", note: "in the order they'll start" }, table({
           rows: V.queued, key: q => q.agent + q.since + q.cmd, empty: "The queue is empty.",
@@ -93,7 +93,7 @@ export default {
         }))]),
         section({ title: app ? "Big work the agents are running" : "Outside the queue", note: app ? null : "the queue's limits don't apply to these" }, table({
           rows: V.outside, key: o => o.who, empty: "Nothing big outside the queue.",
-          columns: [col("Who", o => (o.agent ? who(o.who) : o.who)), num("Threads", o => o.cores.toFixed(1)), num("Memory", o => gb(o.mem)), num("Processes", o => o.procs), { ...cmd, label: "Biggest command" }],
+          columns: [col("Who", o => (o.agent ? who(o.who) : o.who)), num(app ? "Cores" : "Threads", o => o.cores.toFixed(1)), num("Memory", o => gb(o.mem)), num("Processes", o => o.procs), { ...cmd, label: "Biggest command" }],
         })),
         ...(app && !q ? [] : [section({ title: "Just finished", note: "last 10 queue jobs" }, table({
           rows: V.done, key: d => d.end + d.cmd, empty: "None yet.",

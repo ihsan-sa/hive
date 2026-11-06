@@ -1,4 +1,4 @@
-// Mail: the owner's copy of h2@ mail (hive-mail), read-only. Owner-only (`files` right). Bodies are untrusted: plain text nodes, nothing is linked or loaded.
+// Mail: the owner's copy of the Hive's mail (hive-mail), read-only. Owner-only (`files` right). Bodies are untrusted: plain text nodes, nothing is linked or loaded.
 import { h } from "../core/dom.js";
 import { S, can, jget } from "../core/store.js";
 import { ago } from "../core/format.js";
@@ -9,7 +9,7 @@ import { markMailSeen } from "../core/mailnew.js";
 const M = { data: null, open: null };
 const kb = n => n == null ? "" : n < 1024 ? n + " B" : Math.round(n / 1024) + " KB";
 
-const load = async ctx => { try { M.data = await jget("/api/mail"); markMailSeen(M.data.items); } catch (e) { M.data = { items: [], error: e.message }; } ctx.update(); };
+const load = async ctx => { try { M.data = await jget("/api/mail"); markMailSeen(M.data.items); } catch (e) { M.data = { items: [], ...M.data, error: true }; } ctx.update(); };   // a failed refresh keeps what was already read
 
 export default {
   id: "mail", label: "Mail", tab: () => can("files"),
@@ -32,8 +32,8 @@ export default {
       };
     });
     return h("div", { class: "page", "data-width": "narrow", "data-key": "mail" },
-      pageHeader({ title: "Mail", lead: "Your mail to h2@, copied read-only. Plain text only; links aren't opened and attachments aren't brought across." + (d.checked ? " Checked " + ago(Date.parse(d.checked)) + "." : "") }),
-      d.error ? h("p", { class: "fmsg", "data-tone": "bad", role: "status" }, d.error) : null,
-      list(rows, { empty: "No mail yet." }));
+      pageHeader({ title: "Mail", lead: "Your mail, copied read-only. Plain text only; links aren't opened and attachments aren't brought across." + (d.checked ? " Checked " + ago(Date.parse(d.checked)) + "." : "") }),
+      d.error ? h("p", { class: "fmsg", "data-tone": "bad", role: "status" }, rows.length ? "Couldn't check for new mail. This is what was there before; it tries again in 30 seconds." : "Couldn't read your mail. It tries again in 30 seconds.") : null,
+      d.error && !rows.length ? null : list(rows, { empty: "No mail yet." }));
   },
 };

@@ -2,6 +2,7 @@
 import { h } from "../core/dom.js";
 import { status as st } from "../core/status.js";
 import { icon } from "./icons.js";
+import { showTip, hideTip } from "./tip.js";
 export { icon };
 
 /** Page header: the answer first. {title, lead, tone, meta:[...], actions, after} */
@@ -14,13 +15,29 @@ export function pageHeader({ title, lead, tone, meta, actions, after, size, stat
     meta && meta.filter(Boolean).length ? h("p", { class: "ph-meta" }, meta.filter(Boolean).map(m => h("span", null, m))) : null);
 }
 
+// An "i" that says its sentence on hover, and on a click or a tap too (a title alone never shows on a phone or from the keyboard).
+let saying = null;
+const stopSaying = () => { saying = null; hideTip(); removeEventListener("pointerdown", onAway, true); removeEventListener("keydown", onEsc, true); removeEventListener("scroll", stopSaying, true); };
+const onAway = e => { if (!e.target.closest || !e.target.closest(".sec-info")) stopSaying(); };
+const onEsc = e => { if (e.key === "Escape") stopSaying(); };
+export function infoButton(name, text, { size } = {}) {
+  const b = button(name, (e, n) => {
+    const was = saying === text; stopSaying();
+    if (was) return;
+    const r = n.getBoundingClientRect(); saying = text; showTip(r.left, r.bottom - 8, text);
+    addEventListener("pointerdown", onAway, true); addEventListener("keydown", onEsc, true); addEventListener("scroll", stopSaying, true);
+  }, { kind: "icon", icon: "info", cls: "sec-info", title: text, size });
+  b.setAttribute("aria-label", name);
+  return b;
+}
+
 /** Section: a titled block. {title, note, actions, id, level} + body nodes. level 1: a part of a long page, with a rule under its title. */
 export function section({ title, note, info, actions, id, key, level, fold, summary }, ...body) {
-  // fold: a closed row that opens (summary is its quiet one-line count); info: the long sentence, behind an icon's title.
+  // fold: a closed row that opens (summary is its quiet one-line count); info: the long sentence, behind an "i" button.
   if (fold) return h("details", { class: "fold-row", id: id || null, "data-key": key || null },
     h("summary", null, icon("chevron-right"), title, summary ? h("small", null, summary) : null), h("div", { class: "fold-in" }, body));
   return h("section", { class: "sec", id: id || null, "data-key": key || null, "data-level": level || null, "aria-label": title || null },
-    title ? h("header", { class: "sec-h" }, h("h2", { class: "sec-t" }, title), info ? (b => (b.setAttribute("aria-label", "About " + title), b))(button(info, null, { kind: "icon", icon: "info", cls: "sec-info", title: info })) : null, note ? h("span", { class: "sec-n" }, note) : null, actions ? h("div", { class: "sec-a" }, actions) : null) : null,
+    title ? h("header", { class: "sec-h" }, h("h2", { class: "sec-t" }, title), info ? infoButton("About " + title, info) : null, note ? h("span", { class: "sec-n" }, note) : null, actions ? h("div", { class: "sec-a" }, actions) : null) : null,
     body);
 }
 
@@ -93,6 +110,11 @@ export function needFull(what, title) {
 
 export function empty(text, { kind = "empty", title } = {}) {
   return h("div", { class: "empty", "data-kind": kind, role: kind === "error" ? "alert" : null }, title ? h("div", { class: "empty-t" }, title) : null, text);
+}
+
+/** A page's data hasn't come yet: "Reading…" while it may still come, the plain failure once a read has failed. Pages keep polling, so it clears itself. */
+export function waiting(failed, text = "Reading…", what = "the data") {
+  return failed ? empty(`Couldn't read ${what}. It keeps trying.`, { kind: "error" }) : empty(text, { kind: "loading" });
 }
 
 /** List: rows separated by hairlines. rows: [{key, href, title, sub, meta, text, lead, current, onClick, dim}] (dim greys the row); limit + onMore add "Show N more". */

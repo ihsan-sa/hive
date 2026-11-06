@@ -32,7 +32,7 @@ export function draft(th) {
   const k = dkey(th); let d = D.get(k);
   if (!d) {
     let v = {}; try { v = JSON.parse(localStorage.getItem(k) || "{}"); } catch (e) {}
-    d = { th: th || null, text: v.text || "", replyId: v.reply || null, reply: null, to: v.to || null, name: v.name || "", naming: !!v.name, files: [], err: "" };
+    d = { th: th || null, text: v.text || "", replyId: v.reply || null, reply: null, to: v.to || null, name: v.name || "", naming: !!v.name, model: v.model || "", files: [], err: "" };
     D.set(k, d);
   }
   if (!d.reply && d.replyId && S.byId[d.replyId]) d.reply = S.byId[d.replyId];
@@ -45,7 +45,7 @@ export function hasDraft(th) {
 }
 function keep(d) {
   const k = dkey(d.th), rid = d.reply ? d.reply.id : d.replyId;
-  try { if (d.text || rid || d.to || d.name) localStorage.setItem(k, JSON.stringify({ text: d.text, reply: rid, to: d.to, name: d.name })); else localStorage.removeItem(k); } catch (e) {}
+  try { if (d.text || rid || d.to || d.name || d.model) localStorage.setItem(k, JSON.stringify({ text: d.text, reply: rid, to: d.to, name: d.name, model: d.model })); else localStorage.removeItem(k); } catch (e) {}
 }
 const field = th => document.querySelector(`.cp[data-key="${CSS.escape("cp:" + (th || "(new)"))}"] .cp-t`);
 
@@ -145,7 +145,7 @@ function send(th) {
   if (!d.files.length && /^\/(party|bees|matrix|rave)$/.test(d.text.trim())) { const t = d.text.trim(); d.text = ""; keep(d); const el = field(th); if (el) el.value = ""; refresh(); eggRun(t); return; }   // easter egg, not sent
   queue(th, d, recipient(th));
   Object.assign(d, { text: "", files: [], reply: null, replyId: null, to: null, name: "", naming: false, err: "", model: "" }); keep(d);
-  CP.ac = null; CP.menu = false; CP.hist = null;
+  CP.ac = null; CP.menu = false; CP.hist = null; if (!SB.open) SB.say = "";
   const el = field(th); if (el) { el.value = ""; el.focus(); }   // morph leaves a focused field alone, so clear it here
   refresh(); window.dispatchEvent(new CustomEvent("cp:sent", { detail: { th } }));
 }
@@ -373,7 +373,7 @@ function modelPick(d, r) {
   const known = who && who !== "new" && !MODEL_WORDS.includes(who), row = known && agentCard(who).find(x => x.k === "Model");
   const nm = row && (row.v === "login default" ? "Default model" : row.v);   // the name alone; the title says whether it is running now or the default
   const first = live ? nm || "Its model" : row ? nm : def ? MODEL_LABELS[def] || def : "Model";
-  return h("select", { class: "cp-model meta", "data-picked": d.model ? "" : null, "aria-label": "Model", title: (d.model ? `Picked: ${MODEL_LABELS[d.model] || d.model}, used when you send this message (the agent card shows it after that). ` : "") + live ? `${who} is running on ${row ? row.v : "its model"}. Pick another and it moves to it from its next run (it can't switch mid-run), and stays there.` : row ? `${who} last ran on ${row.v} and wakes on it. Pick another and it moves to that one and stays there.` : (def ? `New agents start on ${MODEL_LABELS[def] || def} unless you pick another. ` : "") + "Model for a new or sleeping agent this message starts. It holds on that agent from then on. Typing @opus, @sonnet… in the message sets this too.",
+  return h("select", { class: "cp-model meta", "data-picked": d.model ? "" : null, "aria-label": "Model", title: (d.model ? `Picked: ${MODEL_LABELS[d.model] || d.model}, used when you send this message (the agent card shows it after that). ` : "") + (live ? `${who} is running on ${row ? row.v : "its model"}. Pick another and it moves to it from its next run (it can't switch mid-run), and stays there.` : row ? `${who} last ran on ${row.v} and wakes on it. Pick another and it moves to that one and stays there.` : (def ? `New agents start on ${MODEL_LABELS[def] || def} unless you pick another. ` : "") + "Model for a new or sleeping agent this message starts. It holds on that agent from then on. Typing @opus, @sonnet… in the message sets this too."),
     onchange: e => { d.model = e.target.value; keep(d); refresh(); } },
     [["", first], ...Object.entries(MODEL_LABELS).filter(([v]) => live || row || v !== def)].map(([v, l]) => h("option", { value: v, selected: cur === v }, l)));
 }
@@ -487,6 +487,7 @@ async function openSecrets(th) {
   queueMicrotask(() => document.querySelector(SB.rows[0].asked ? ".cp-sval" : ".cp-sname")?.focus());
 }
 const closeSecrets = () => { SB.open = false; SB.rows = [{ name: "", value: "" }]; refresh(); };
+const dropSecrets = () => { SB.say = ""; closeSecrets(); };   // the person closed it: an old complaint goes with it, unlike the "Saved" line a save leaves
 async function saveSecret() {
   const rows = SB.rows.filter(r => r.name.trim() || r.value);
   if (!rows.length || rows.some(r => !r.name.trim())) { SB.say = "Give it a name and a value."; SB.tone = "bad"; return refresh(); }
@@ -509,11 +510,11 @@ function secretRow() {
     h("div", { class: "cp-shead", "data-key": "head" },   // the buttons on top, clear of the rows (the person, 11041445a01e)
       h("p", { class: "meta cp-sask" }, asked ? (one ? "The agent asked for this one. Paste its value:" : "The agent asked for these. Paste each value; empty ones are skipped:") : "Saved on the machine, never posted in chat."),
       button(one ? "Save secret" : "Save secrets", saveSecret, { kind: "primary", size: "s", busy: SB.busy, title: "Saved to ~/.config/h2/secrets/<name>, mode 600. Never posted; the board only gets its name." }),
-      h("button", { type: "button", class: "cp-x", title: "Close", "aria-label": "Close the secret box", onclick: closeSecrets }, "×")),
+      h("button", { type: "button", class: "cp-x", title: "Close", "aria-label": "Close the secret box", onclick: dropSecrets }, "×")),
     SB.rows.map((r, i) => h("div", { class: "cp-srow", "data-key": "r" + i },
       input({ class: "input cp-sname", placeholder: "Name, like github-token", "aria-label": "Secret name", autocomplete: "off", value: r.name, oninput: (e, n) => { r.name = n.value; } }),
       input({ class: "input cp-sval", type: "password", placeholder: r.asked ? "Value for " + r.name : "Value", "aria-label": "Secret value" + (r.name ? " for " + r.name : ""), autocomplete: "new-password", value: r.value, oninput: (e, n) => { r.value = n.value; },
-        onkeydown: e => { if (e.key === "Enter") { e.preventDefault(); saveSecret(); } else if (e.key === "Escape") closeSecrets(); } }))));
+        onkeydown: e => { if (e.key === "Enter") { e.preventDefault(); saveSecret(); } else if (e.key === "Escape") dropSecrets(); } }))));
 }
 
 // ---- pieces ----
@@ -575,7 +576,7 @@ export function composer({ thread, update, place = "thread", autofocus, top }) {
         CP.ac.mark === "#" ? null : n === "new" ? statusDot("none") : statusDot(agentStatus(n).key, { live: S.running.has(n) }), h("b", null, (CP.ac.mark || "@") + n), CP.ac.mark === "#" ? null : h("span", { class: "meta" }, stateWords(n))))) : null,
       d.files.length ? filesRow(th, d) : null,
       SB.open && can("secrets") ? secretRow() : null,
-      !SB.open && SB.say ? h("p", { class: "meta cp-ssay", "data-tone": SB.tone, role: "status", "data-key": "ssay" }, SB.say) : null,
+      SB.say ? h("p", { class: "meta cp-ssay", "data-tone": SB.tone, role: "status", "data-key": "ssay" }, SB.say) : null,
       !th && d.naming ? h("div", { class: "cp-name-row", "data-key": "name" }, input({ class: "input cp-name", placeholder: "A short name, like fix-contact-form", "aria-label": "Name for this job", value: d.name, oninput: (e, n) => { d.name = n.value; keep(d); } })) : null,
       h("div", { class: "cp-tw", "data-key": "tw", ...(CP.md ? { "data-md": "" } : {}) },
       h("div", { class: "cp-bd", "data-own": "", "data-sig": "", "aria-hidden": "true" }),
@@ -611,9 +612,9 @@ export function composer({ thread, update, place = "thread", autofocus, top }) {
           { kind: "icon", size: "s", icon: "phone", cls: "cp-call", title: th ? "Voice call about this thread: a new agent picks up, reads the thread and talks with you. To talk with an agent itself, hover its name and press Call." : "Voice call with the Hive. Ask it anything, or ask to be put through to whoever is working on something." }) : null,
         can("secrets") || (S.app && S.app.secrets_on && S.app.mode === "expired") ? button("Send a secret", () => {
           if (!can("secrets")) { SB.open = false; SB.tone = "bad"; SB.say = "Saving a secret needs full mode, which ends after 30 minutes without using the app. Press \"Limited · sign in for full\" at the top, then press the lock again."; refresh(); return; }
-          if (SB.open) closeSecrets(); else openSecrets(th); }, { kind: "icon", size: "s", icon: "lock", cls: "cp-lock", title: "Send a secret" }) : null,
+          if (SB.open) dropSecrets(); else openSecrets(th); }, { kind: "icon", size: "s", icon: "lock", cls: "cp-lock", title: "Send a secret" }) : null,
         h("span", { class: "cp-sp" }),
-        simpleOn() ? null : th ? toChip(th, r) : d.naming ? h("span", { class: "meta cp-new" }, "A new agent starts on this") : button("Name it", () => { d.naming = true; refresh(); }, { kind: "quiet", size: "s", title: "Give this job a short name (optional). Without one it's called by its first words." }),
+        simpleOn() ? null : th ? toChip(th, r) : d.naming ? h("span", { class: "meta cp-new" }, "A new agent starts on this") : button("Name it", () => { d.naming = true; refresh(); queueMicrotask(() => document.querySelector(".cp-name")?.focus()); }, { kind: "quiet", size: "s", title: "Give this job a short name (optional). Without one it's called by its first words." }),
         simpleOn() ? null : modelPick(d, r),
         button(place === "thread" ? "Send" : "Start", () => send(th), { kind: "primary", icon: "arrow-up", disabled: empty, cls: "cp-send", title: (place === "thread" ? "Send" : "Start") + " (Enter) · Shift+Enter for a new line · ↑ past messages · Tab completes" }))),
     CP.menu && th ? toMenu(th, r) : null);

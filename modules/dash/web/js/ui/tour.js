@@ -17,6 +17,8 @@ const inThread = () => { const r = parse(); return r.id === "comms" && !!r.arg &
 const tabSel = id => `.tabs a[data-key="${id}"], .top-icons a[data-key="${id}"], .mn-bar a[data-key="${id}"]`;   // Settings is an icon at the right of the bar; on a phone the tabs are in the bottom bar
 const tab = id => () => q(tabSel(id));
 const hasTab = id => !!q(tabSel(id));
+const tabWhere = () => (q(".mn-bar") ? "at the bottom" : "at the top");   // on a phone the tabs are in the bottom bar
+const moreBtn = () => q(".more > button") || q(".mn-bar button.mn-t");   // on a phone More is in the bottom bar
 const mine = () => (S.posts || []).filter(p => p.from === "person").length;
 const threads = () => (S.threads ? S.threads.size : 0);
 let sentFrom = 0, outFrom = 0;
@@ -24,7 +26,7 @@ let sentFrom = 0, outFrom = 0;
 /** A step: title, text, ring() what to mark, done() the page shows they did it (no done: a Next button), skip() not on this install or page. */
 const FULL_STEPS = [
   { title: "A quick look around", text: "A few minutes, one step at a time. This window says what to click and waits for you. You can drag it, and leave whenever you like." },
-  { title: "This is where you talk to the Hive", text: "Click Chat at the top.", ring: tab("comms"), done: () => here() === "comms", skip: () => here() === "comms" },
+  { title: "This is where you talk to the Hive", text: () => `Click Chat ${tabWhere()}.`, ring: tab("comms"), done: () => here() === "comms", skip: () => here() === "comms" },
   { title: "Start a job", text: () => `${q(HOME) ? "Type" : "Click New conversation, then type"} what you want done, the way you'd tell a person, and press Start. An agent starts on it and answers here. This is a real job and uses your Claude limits, so skip it if you're not ready.`, ring: () => q(HOME) || q(".cm-newbtn"), done: () => mine() > sentFrom || OUT.length > outFrom || inThread(), enter: () => { sentFrom = mine(); outFrom = OUT.length; if (parse().arg) go("comms"); }, skip: () => !can("post") },
   { title: "Open a conversation", text: "Each job is one conversation, and they're all listed here. Click one.", ring: () => q(".cm-tl a.lr-in"), done: inThread, enter: () => { if (here() === "comms" && parse().arg) go("comms"); }, skip: () => inThread() || !threads() },
   { title: "Answers land here", text: "Agents write back in this conversation as they go. You can close the app: the work carries on, and it's all here when you come back.", ring: () => q(".cm-msgs"), skip: () => !inThread() },
@@ -32,16 +34,16 @@ const FULL_STEPS = [
   { title: "When an agent asks you something", text: () => (q('.cm-line[data-key="asks"] button') ? "An agent here is waiting for you. Click Answer to reply to its question." : "A line appears here with an Answer button, and the Chat tab shows a number. The Chat page lists everything waiting for you."), ring: () => q('.cm-line[data-key="asks"] button') || q(".cm-strip"), done: () => (q('.cm-line[data-key="asks"] button') ? !!q(".cp-reply") : false), hasNext: true, skip: () => !inThread() },
   { title: "Reply any time", text: "Write here to carry on the conversation, even while the agent works. The To button shows who gets it, and you can change that. Nothing is sent until you press Send.", ring: () => q('.cp[data-place="thread"] .cp-t'), skip: () => !inThread() },
   { title: "Attach files", text: "Attach adds files to your message. You can also paste them or drop them on the conversation.", ring: () => q('.cp[data-place="thread"] .cp-attach'), skip: () => !inThread() },
-  { title: "Look at what it keeps", text: "Click Knowledge at the top.", ring: tab("knowledge"), done: () => here() === "knowledge", skip: () => !hasTab("knowledge") },
+  { title: "Look at what it keeps", text: () => `Click Knowledge ${tabWhere()}.`, ring: tab("knowledge"), done: () => here() === "knowledge", skip: () => !hasTab("knowledge") },
   { title: "Knowledge", text: "Notes, projects and the files agents attach, to browse and search. It only reads. Keys and passwords are blanked out.", ring: () => q(".kb-side") || q('input[type="search"]'), skip: () => here() !== "knowledge" },
-  { title: "See every agent", text: "Click Agents at the top.", ring: tab("now"), done: () => here() === "now", skip: () => !hasTab("now") },
+  { title: "See every agent", text: () => `Click Agents ${tabWhere()}.`, ring: tab("now"), done: () => here() === "now", skip: () => !hasTab("now") },
   { title: "Agents", text: "Everyone working right now and what they're doing. Click a name to see its whole session. The row under the top bar has the rest: every agent, the timeline, the map and the history.", ring: () => q("#main table.nowtbl"), skip: () => here() !== "now" },
-  { title: "Check your limits", text: "Click Usage at the top.", ring: tab("usage"), done: () => here() === "usage", skip: () => !hasTab("usage") },
+  { title: "Check your limits", text: () => `Click Usage ${tabWhere()}.`, ring: tab("usage"), done: () => here() === "usage", skip: () => !hasTab("usage") },
   { title: "Usage", text: "How much of your Claude limits is left and when it comes back. New agents stop at a usage line so they don't use it all. You can change that line, or pause an account, under Claude accounts.", ring: () => heading("Claude accounts"), skip: () => here() !== "usage" },
   { title: "Settings", text: "Click Settings at the top right (the sliders).", ring: tab("settings"), done: () => here() === "settings", skip: () => !hasTab("settings") },
   { title: "How the Hive runs", text: "Add a second Claude account here, and turn on modules: optional tools your agents can use.", ring: () => heading("Accounts"), enter: () => { if (here() === "settings") go("settings", "accounts"); }, skip: () => here() !== "settings" },
-  { title: "One more", text: "Click More at the top right (the three dots).", ring: () => q(".more > button"), done: () => !!q(".more > button[aria-expanded=true]"), skip: () => !q(".more > button") },
-  { title: "Help is under More", text: "The user guide is here, and Take the tour brings this window back. The guide's last tutorial, How it works, shows how to ask the Hive about itself: how it runs, what's wrong, how to improve it. That's it: say what you want done in Chat.", ring: () => q('.more-i[data-key="help"]'), last: true },
+  { title: "One more", text: () => (q(".more > button") ? "Click More at the top right (the three dots)." : "Tap More at the bottom."), ring: moreBtn, done: () => !!moreBtn() && moreBtn().getAttribute("aria-expanded") === "true", skip: () => !moreBtn() },
+  { title: "Help is under More", text: "The user guide is here, and Take the tour brings this window back. The guide's last tutorial, How it works, shows how to ask the Hive about itself: how it runs, what's wrong, how to improve it. That's it: say what you want done in Chat.", ring: () => q('.more-i[data-key="help"], .mn-i[data-key="help"]'), last: true },
 ];
 
 /** The short walk for simple view: chat and Settings only, in the words that view uses. */
@@ -70,7 +72,7 @@ function paint() {
   next.textContent = first ? "Show me around" : s.last ? "Finish" : waits ? "Skip" : "Next";
   next.dataset.kind = waits ? "quiet" : "primary";
   win.querySelector(".tw-back").hidden = first;
-  win.querySelector(".tw-end").textContent = first ? "Not now" : "End tour";
+  const stop = win.querySelector(".tw-end"); stop.textContent = first ? "Not now" : "End tour"; stop.hidden = !!s.last;   // Finish already ends it
 }
 function show(i, dir = 1) {
   clearTimeout(moving); moving = 0;
@@ -146,10 +148,17 @@ export function startTour() {
   drag(win.querySelector(".tw-top"));
   dragged = false; dodged = ""; setSpot(0); at = 0; show(0);
   timer = setInterval(tick, 200); raf = requestAnimationFrame(follow);
+  addEventListener("keydown", onEsc, true);
+}
+/** Esc leaves the tour, unless it belongs to something else: a dialog, an open menu or a field being typed in. Capture, to see the menu before its own Esc closes it. */
+function onEsc(e) {
+  if (e.key !== "Escape" || e.target.closest?.("input, textarea, select") || document.querySelector("dialog[open], .more-m, .mn-sheet, .cp-menu")) return;
+  end();
 }
 function end() {
   if (!win) return;
   clearInterval(timer); cancelAnimationFrame(raf); clearTimeout(moving); moving = 0;
+  removeEventListener("keydown", onEsc, true);
   win.remove(); ringEl.remove(); win = ringEl = null;
 }
 /** Offer it once in this browser, once someone is signed in and the install's setup is finished: not over the walkthrough. */

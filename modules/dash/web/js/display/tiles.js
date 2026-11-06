@@ -6,7 +6,7 @@ import { h } from "../core/dom.js";
 import { S } from "../core/store.js";
 import { agentState, inUse, spendSince } from "../core/model.js";
 import { DAY, HOUR, MIN, money, now, plural } from "../core/format.js";
-import { empty, list, meter, stats, statusDot } from "../ui/kit.js";
+import { empty, list, meter, stats, statusDot, waiting } from "../ui/kit.js";
 import { agentRef, threadRef } from "../ui/refs.js";
 import mesh, { meshForDisplay, meshNote } from "../views/mesh.js";
 import timeline, { fitRunning, runningNote } from "../views/timeline.js";
@@ -14,7 +14,7 @@ import { row as ledgerRow } from "../views/ledger.js";
 import { activityCharts, forYouRows, hiveFigures } from "../views/now.js";
 import { loginRow, providerRow, usageAnswer } from "../views/usage.js";
 
-const reading = () => empty("Reading…", { kind: "loading" });
+const reading = () => waiting(S.failed);
 const fitting = el => { if (el && el.setAttribute) el.setAttribute("data-fit", ""); return el; };
 
 // ---- agents: one line each, trouble first, then who's working; order otherwise holds still ----
@@ -39,8 +39,9 @@ let seen = 0;
 const ledger = {
   id: "ledger", label: "Ledger",
   more: () => null,     // older events leaving the bottom of a feed is expected; the head gives the hour's count
-  head() { const t = now(); return plural(S.ledger.filter(r => r.t > t - HOUR).length, "event") + " in the last hour"; },
+  head() { if (!S.live) return null; const t = now(); return plural(S.ledger.filter(r => r.t > t - HOUR).length, "event") + " in the last hour"; },
   render() {
+    if (!S.ledger.length) { ledger.sig = null; return S.live ? empty("No events yet.") : reading(); }
     const sig = String(S.ver);
     if (ledger.sig === sig) return h("ol", { class: "lg dt-lg", "data-fit": "", "data-own": "morph", "data-sig": sig });
     ledger.sig = sig;
@@ -67,7 +68,7 @@ const usage = {
     return h("div", { class: "dt-usage" },
       h("p", { class: "dt-lead", "data-tone": tone }, lead),
       h("div", { "data-fit": "" }, rows.map(r => h("div", { class: "dt-acct", "data-key": r.key, "data-dim": r.dim ? "" : null },
-        h("div", { class: "dt-acct-n", title: r.state ? r.state.text : null }, r.state ? statusDot(r.state.key) : null, h("span", null, r.name)),
+        h("div", { class: "dt-acct-n", title: r.state && r.state.text ? `${r.name}: ${r.state.text}` : r.name }, r.state ? statusDot(r.state.key) : null, h("span", null, r.name)),
         r.gauges.slice(0, 2).map(limitBar)))));
   },
 };
@@ -83,6 +84,6 @@ const foryou = {
 
 export const TILES = Object.fromEntries([
   { ...mesh, label: "Mesh", head: meshNote, enter(ctx) { meshForDisplay(); mesh.enter(ctx); } },
-  { ...timeline, label: "Timeline", head: runningNote, enter(ctx) { fitRunning(); timeline.enter(ctx); } },
+  { ...timeline, label: "Timeline", head: () => (S.live ? runningNote() : null), enter(ctx) { fitRunning(); timeline.enter(ctx); } },
   agents, ledger, usage, activity, hive, foryou,
 ].map(t => [t.id, t]));

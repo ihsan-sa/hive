@@ -2,7 +2,8 @@
 import { h, selecting } from "../core/dom.js";
 import { S, can, jget, post } from "../core/store.js";
 import { ago } from "../core/format.js";
-import { pageHeader, section, button, input, empty, meter, note } from "../ui/kit.js";
+import { confirm } from "../ui/dialog.js";
+import { pageHeader, section, button, input, empty, waiting, meter, note } from "../ui/kit.js";
 
 const D = { v: null, text: "", code: "", err: "", busy: false, full: false };
 const SAVE = "Save the full source of the design you just made into a new folder here, named after it, and tell me the path.";
@@ -81,7 +82,7 @@ function stepPart(v, ctx) {
 function sessionPart(v, ctx) {
   const send = () => { const text = D.text; if (!text.trim()) return; setText(""); stuck = true; act({ do: "send", text }, ctx); };
   const key = (label, k) => button(label, () => act({ do: "key", key: k }, ctx), { size: "s", kind: "quiet" });
-  return section({ title: v.session_login ? `Session on ${v.session_login}` : "Session", key: "session", actions: [working(v.screen) ? state("info", "Claude is working") : state("good", "Waiting for you"), button("End session", () => act({ do: "stop" }, ctx), { size: "s" })] },
+  return section({ title: v.session_login ? `Session on ${v.session_login}` : "Session", key: "session", actions: [working(v.screen) ? state("info", "Claude is working") : state("good", "Waiting for you"), button("End session", () => confirm({ title: "End this session?", body: ["Claude stops working here. You can start a new session afterwards."], ok: "End session", kind: "danger", onOk: () => act({ do: "stop" }, ctx) }), { size: "s" })] },
     h("pre", { class: "dscreen", tabindex: "0", "aria-label": "The session's screen" }, D.full ? v.screen : tailOf(v.screen)),
     h("form", { class: "frow dtype", onsubmit: e => { e.preventDefault(); send(); } },
       h("div", { style: "flex:1;min-width:14rem" }, input({ "aria-label": "Type to Claude", placeholder: "/design a landing page for…", autocomplete: "off", spellcheck: "false", value: D.text, oninput: (e, n) => { const was = !D.text.trim(); D.text = n.value; if (was !== !D.text.trim()) ctx.update(); } })),
@@ -106,14 +107,14 @@ const sorted = (accts, session) => [...(accts || [])].sort((a, b) => (b.name ===
 
 export default {
   id: "design", label: "Design", about: "make designs with Claude Design", tab: () => !!S.app.app && can("logins"),
-  poll: { every: 1500, async run(ctx) { try { const v = await jget("/api/design"); if (selecting()) return; D.v = v; redraw(ctx); } catch (e) { D.err = e.message; ctx.update(); } } },
+  poll: { every: 1500, async run(ctx) { try { const v = await jget("/api/design"); D.readErr = ""; if (selecting()) return; D.v = v; redraw(ctx); } catch (e) { D.readErr = e.message; ctx.update(); } } },
   render(ctx) {
     if (!can("logins")) return h("div", { class: "page" }, empty("This page isn't open from here.", { kind: "page", title: "Design" }));
     const v = D.v;
-    if (!v) return h("div", { class: "page" }, empty("Reading…", { kind: "loading" }));
+    if (!v) return h("div", { class: "page" }, waiting(D.readErr, "Reading…", "the design page"));
     return h("div", { class: "page dpage", "data-key": "design" },
       pageHeader({ title: "Design", lead: "Tell Claude what to design and get a link to it." }),
-      D.err ? h("p", { class: "fmsg", "data-tone": "bad", role: "status" }, D.err) : null,
+      D.err || D.readErr ? h("p", { class: "fmsg", "data-tone": "bad", role: "status" }, D.err || `Lost contact: ${D.readErr}`) : null,
       stepPart(v, ctx),
       v.running ? sessionPart(v, ctx) : null,
       accountsPart(v, ctx),

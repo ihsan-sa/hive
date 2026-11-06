@@ -10,14 +10,19 @@ const F = { items: null, name: "", value: "", say: null, tone: null, asked: fals
 const say = (text, tone) => { F.say = text; F.tone = tone || null; };
 
 async function load(ctx) {
-  try { F.items = await jget("/api/secrets"); } catch (e) { F.items = F.items || []; say(e.message, "bad"); }
+  try { F.items = await jget("/api/secrets"); F.readErr = null; } catch (e) { F.readErr = e.message; }
   ctx.update();
 }
 
 /** The box and the list, on this page and in Settings. */
 export function secretParts(ctx, level) {
-    if (!F.items) { if (!F.asked) { F.asked = true; load(ctx); } return [empty("Reading…", { kind: "loading" })]; }
+    if (!F.items) {
+      if (!F.asked) { F.asked = true; load(ctx); }
+      if (!F.readErr) return [empty("Reading…", { kind: "loading" })];
+      return [empty(`Couldn't read what's stored: ${F.readErr}`, { kind: "error" }), button("Try again", () => { F.readErr = null; F.asked = false; ctx.update(); }, { size: "s" })];
+    }
     const save = async () => {
+      if (!F.name.trim() || !F.value) { say(F.name.trim() ? "Type the value too." : "Give it a name first.", "bad"); ctx.update(); return; }
       try { await post("/api/secret", { name: F.name.trim(), value: F.value }); say(`Saved ${F.name.trim()}. It can't be shown again.`, "good"); F.name = F.value = ""; await load(ctx); }
       catch (e) { say(e.message, "bad"); }
       ctx.update();

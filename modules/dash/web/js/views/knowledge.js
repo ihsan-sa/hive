@@ -6,7 +6,7 @@ import { S, can, getPref, jget, post, setPref } from "../core/store.js";
 import { ago, plural, stamp } from "../core/format.js";
 import { href, threadHref } from "../core/router.js";
 import { threadTitle } from "../core/model.js";
-import { button, empty, field, input, list, needFull } from "../ui/kit.js";
+import { button, empty, waiting, field, input, list, needFull } from "../ui/kit.js";
 import { icon } from "../ui/icons.js";
 import { markdown } from "../ui/markdown.js";
 import { markWords } from "../ui/message.js";
@@ -20,10 +20,10 @@ const bytes = n => (n == null ? "" : n < 1024 ? n + " B" : n < 1048576 ? Math.ro
 
 async function fetchPath(path, ctx) {
   try { const r = await jget("/api/kb/open?path=" + encodeURIComponent(path)); if (!r.path) throw Error("404"); K.seen.set(path, r); K.failed.delete(path); }
-  catch (e) { if (e.message === "404" || !K.seen.has(path)) { K.seen.delete(path); K.failed.set(path, e.message); } }   // a blip while reading leaves the page as it was
+  catch (e) { if (e.status === 404 || e.message === "404" || !K.seen.has(path)) { K.seen.delete(path); K.failed.set(path, e.message); } }   // a blip while reading leaves the page as it was
   ctx.update();
 }
-async function loadHome(ctx) { try { K.home = await jget("/api/kb/home"); } catch (e) { K.home = K.home || {}; } ctx.update(); }
+async function loadHome(ctx) { try { K.home = await jget("/api/kb/home"); } catch (e) { K.home = K.home || { failed: true }; } ctx.update(); }
 // The notes map: every note under ~/kb with its topic, size, age and links. The server keeps it a minute; so does this page.
 async function loadMap(ctx) {
   if (Date.now() - K.mapAt < 60000) return;
@@ -139,7 +139,7 @@ function related(d) {
     back.length ? h("section", { class: "sec", "data-key": "back" }, h("header", { class: "sec-h" }, h("h2", { class: "sec-t" }, "Linked from"), h("span", { class: "sec-n" }, plural(back.length, "note"))), h("div", { class: "kb-links" }, back.map(noteLink))) : null,
     linked.length ? h("section", { class: "sec", "data-key": "linked" }, h("header", { class: "sec-h" }, h("h2", { class: "sec-t" }, "Named in"), h("span", { class: "sec-n" }, plural(linked.length, "note"))),
       h("div", { class: "kb-links" }, linked.map(p => h("a", { class: "kb-link", href: open(p), "data-key": p }, h("b", null, p.split("/").pop()), h("span", { class: "meta" }, p))))) : null,
-    posts.length ? h("section", { class: "sec", "data-key": "threads" }, h("header", { class: "sec-h" }, h("h2", { class: "sec-t" }, "Threads"), h("span", { class: "sec-n" }, "latest")),
+    posts.length ? h("section", { class: "sec", "data-key": "threads" }, h("header", { class: "sec-h" }, h("h2", { class: "sec-t" }, S.app.app ? "Conversations" : "Threads"), h("span", { class: "sec-n" }, "latest")),
       h("div", { class: "kb-links" }, posts.map(p => h("a", { class: "kb-link", href: threadHref(p.thread), "data-key": p.id }, h("b", null, threadTitle(p.thread)), h("span", { class: "meta" }, p.from))))) : null);
 }
 
@@ -155,6 +155,7 @@ async function startEdit(name, ctx) {
 async function saveEdit(start, ctx) {
   const e = K.edit, name = e.isNew ? e.name.trim() : e.name;
   const wasNew = e.isNew;
+  if (!name) { e.say = "Give the project a name first."; e.tone = "bad"; ctx.update(); return; }
   try {
     const r = await post("/api/plan", { name, text: e.text, version: e.version, start });
     Object.assign(e, { name, version: r.version, isNew: false, say: start ? "Saved, and an agent is starting on it." : "Saved. Nothing was started.", tone: "good" });
@@ -195,7 +196,7 @@ function resultsView() {
   if (!r) return h("div", { class: "kb-note", "data-key": "results" }, empty("Searching…", { kind: "loading" }));
   return h("div", { class: "kb-note", "data-key": "results" },
     h("header", { class: "kb-h" }, h("h1", { class: "kb-t" }, `Results for “${K.q.trim()}”`),
-      h("p", { class: "meta" }, r.ranked ? `${plural(best.length, "best match", "best matches")} of ${plural(r.ranked.total, "passage")}, ranked the way agents' kb find ranks them` : "Plain matches: the ranked index isn't ready here.",
+      h("p", { class: "meta" }, r.ranked ? `${plural(best.length, "best match", "best matches")} of ${plural(r.ranked.total, "passage")}${S.app.app ? "" : ", ranked the way agents' kb find ranks them"}` : "Plain matches: the ranked index isn't ready here.",
         r.ranked && r.ranked.spelling ? ` · also tried ${r.ranked.spelling}` : "")),
     best.length ? h("section", { class: "sec", "data-key": "best" }, h("header", { class: "sec-h" }, h("h2", { class: "sec-t" }, "Best matches")),
       h("ol", { class: "kb-hits" }, best.map(x => h("li", { "data-key": `${x.path}:${x.line}` }, h("a", { class: "kb-hit", href: passageHref(x) },
@@ -252,7 +253,7 @@ const topicName = (t, folder) => TOPIC[t] || (folder ? t + "/" : t.replace(/-+$/
 function mapView(ctx) {
   const m = K.map;
   if (!m) return empty("Reading…", { kind: "loading" });
-  if (!m.notes.length) return empty(m.failed || "No notes yet.");
+  if (!m.notes.length) return m.failed ? empty(`Couldn't read the notes: ${m.failed}`, { kind: "error" }) : empty("No notes yet.");
   const groups = new Map(), now = Date.now() / 1e3, big = Math.log(Math.max(...m.notes.map(n => n.size), 2));
   for (const n of m.notes) { if (!groups.has(n.topic)) groups.set(n.topic, []); groups.get(n.topic).push(n); }
   const order = [...groups].sort((a, b) => (a[0] === "general") - (b[0] === "general") || b[1].length - a[1].length || a[0].localeCompare(b[0]));
@@ -283,7 +284,7 @@ function sourcesView() {
 // The home page below its title: what you opened, the map, the hubs, what changed, what search covers. On a phone it sits under the shelves.
 const homeSections = ctx => [
   recentRows() ? h("section", { class: "sec", "data-key": "opened" }, h("header", { class: "sec-h" }, h("h2", { class: "sec-t" }, "Recently opened"), h("span", { class: "sec-n" }, "on this device")), recentRows()) : null,
-  h("section", { class: "sec", "data-key": "map" }, h("header", { class: "sec-h" }, h("h2", { class: "sec-t" }, "Notes by topic"), h("span", { class: "sec-n" }, K.map ? `${plural(K.map.notes.length, "note")} in ~/kb` : ""), button("Over time", null, { kind: "quiet", size: "s", icon: "clock", href: href("kbtime"), cls: "kb-time", title: "How the notes grew, linked and changed, from the backup history" })), mapView(ctx)),
+  h("section", { class: "sec", "data-key": "map" }, h("header", { class: "sec-h" }, h("h2", { class: "sec-t" }, "Notes by topic"), h("span", { class: "sec-n" }, K.map && !K.map.failed ? `${plural(K.map.notes.length, "note")} in ~/kb` : ""), button("Over time", null, { kind: "quiet", size: "s", icon: "clock", href: href("kbtime"), cls: "kb-time", title: "How the notes grew, linked and changed, from the backup history" })), mapView(ctx)),
   hubRows() ? h("section", { class: "sec", "data-key": "hubs" }, h("header", { class: "sec-h" }, h("h2", { class: "sec-t" }, "Most connected notes"), h("span", { class: "sec-n" }, "how many notes link to each, and it to others")), hubRows()) : null,
   h("section", { class: "sec", "data-key": "changed" }, h("header", { class: "sec-h" }, h("h2", { class: "sec-t" }, "Changed lately")), K.home ? changedRows() : empty("Reading…", { kind: "loading" })),
   sourcesView() ? h("section", { class: "sec", "data-key": "cover" }, h("header", { class: "sec-h" }, h("h2", { class: "sec-t" }, "What search covers"), h("span", { class: "sec-n" }, "files and posts in the index")), sourcesView()) : null];
@@ -292,7 +293,7 @@ function changedRows() {
 }
 function sideBody(path, ctx) {
   if (!path) {
-    if (!K.home) return empty("Reading…", { kind: "loading" });
+    if (!K.home || K.home.failed) return waiting(K.home && K.home.failed, "Reading…", "your notes");
     return [list((K.home.shelves || []).map(s => ({ key: s.path, href: open(s.path), lead: icon("folder"), title: s.label, text: s.about, meta: String(s.n) })), { empty: "Nothing here yet." }),
       h("div", { class: "kb-phone kb-home", "data-key": "recent" }, homeSections(ctx))];
   }

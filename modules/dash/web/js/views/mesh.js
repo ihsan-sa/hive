@@ -8,7 +8,7 @@ import { agentStatus, isAgent, isRunning, isWarden, modelName, sEnd, threadTitle
 import { ago, clock, dur, firstSentence, money, now, short, toks, plural, DAY, HOUR, MIN } from "../core/format.js";
 import { agentHref, threadHref } from "../core/router.js";
 import { status, tier } from "../core/status.js";
-import { button, empty, icon, seg, statusDot } from "../ui/kit.js";
+import { button, waiting, icon, seg, statusDot } from "../ui/kit.js";
 import { killButton } from "../actions.js";
 import { openPanel } from "../ui/panel.js";
 import { showTip, hideTip } from "../ui/tip.js";
@@ -98,7 +98,7 @@ function build() {
   M.D = { t0, t1, replay, homes, main, runs, aposts, spawns: spawns.sort((x, y) => y.t - x.t), pairs, rel, posts, C, withWork, allRuns, byId: new Map(posts.map(p => [p.id, p])) };
   M.lanes = lanes; M.more = more;
   const live = replay ? allRuns.filter(t => t.live).length : S.running.size;   // the top bar's count, not the drawn runs
-  M.count = M.active && !live ? (replay ? "Nobody was running then" : "Nobody is running right now") : `${live} running · ${plural(lanes.length, "thread")} · ${money(C.total)}`;
+  M.count = M.active && !live ? (replay ? "Nobody was running then" : "Nobody is running right now") : `${live} running · ${plural(lanes.length, S.app.app ? "conversation" : "thread")} · ${money(C.total)}`;
   M.lastBuild = now();
 }
 
@@ -295,7 +295,7 @@ function nowLine(a) {
   if (!a.running) return h("span", { class: "map-nl", "data-tone": "quiet" }, `${status(a.status).label} ${M.D.replay ? "" : ago(a.track.end)}`.trim());
   return h("span", { class: "map-nl" }, txt || status(a.status).label);
 }
-function agentMeta(a) { return [a.model, a.cost >= 0.005 ? money(a.cost) : null, a.from ? "from " + a.from : null].filter(Boolean).join(" · "); }
+function agentMeta(a) { return [[a.model, a.cost >= 0.005 ? money(a.cost) : null].filter(Boolean).join(" · "), a.from ? "from " + a.from : null].filter(Boolean).join(" "); }   // no "·" before "from": this line wraps there, and a dot would dangle
 
 function syncGraph(D) {
   const w = scroller.clientWidth || GS.w || 960, phone = w < 760, isFree = M.lay !== "bands", hh = isFree ? scroller.clientHeight : 0;
@@ -333,8 +333,8 @@ function syncGraph(D) {
     const chips = L.cols === 1 && outs.length > 1 ? [h("span", { class: "map-chip" }, "+ " + outs.length)] : outs.slice(0, 2).map(([k, n]) => h("span", { class: "map-chip" }, k + " ", h("b", null, String(n))));
     put(seen, "c:" + t.id, "button", "map-card", cl.card.x, cl.card.y,
       { "data-kind": "thread", "data-id": t.id, "data-body": "c:" + t.id, "data-tier": t.tier, "data-sel": sel || null, "data-lit": lit("c:" + t.id), style: `width:${cl.card.w}px;height:${cl.card.h}px`, title: t.id, "aria-label": `Thread ${t.id}, ${tier(t.tier).label}, ${plural(t.posts, "post")}, ${money(t.cost)}`, "aria-pressed": sel ? "true" : "false" },
-      [h("span", { class: "map-cr1" }, h("i", { class: "map-tsw", "data-tier": t.tier }), h("b", { class: "map-cn" }, t.id), h("span", { class: "map-cc" }, money(t.cost))),
-       compact ? null : h("span", { class: "map-cr2" }, t.stuck ? h("em", null, `▲ ${t.stuck} stuck`) : null, h("span", { class: "map-cm" }, `${plural(t.posts, "post")} · ${since(t.last) || "–"}`), ...chips),
+      [h("span", { class: "map-cr1" }, h("i", { class: "map-tsw", "data-tier": t.tier }), h("b", { class: "map-cn", title: t.id }, t.id), h("span", { class: "map-cc" }, money(t.cost))),
+       compact ? null : h("span", { class: "map-cr2" }, t.stuck ? h("em", null, `▲ ${t.stuck} stuck`) : null, (m => h("span", { class: "map-cm", title: m }, m))(`${plural(t.posts, "post")} · ${since(t.last) || "–"}`), ...chips),
        h("i", { class: "map-cb" }, h("i", { style: `width:${Math.max(2, cl.costShare * 100).toFixed(1)}%` }))]);
   }
   // the agents, their ghosts, and "+N more"
@@ -356,7 +356,7 @@ function syncGraph(D) {
   }
   // older threads, compact view only
   if (L.olderCount) {
-    put(seen, "b:older", "div", "map-band", L.D.pad, L.older.y, { style: `width:${w - 2 * L.D.pad}px` }, [`Older · ${plural(L.olderCount, "thread")}`]);
+    put(seen, "b:older", "div", "map-band", L.D.pad, L.older.y, { style: `width:${w - 2 * L.D.pad}px` }, [`Older · ${plural(L.olderCount, S.app.app ? "conversation" : "thread")}`]);
     for (const c of L.older.chips) put(seen, "o:" + c.thread.id, "button", "map-old", c.x, c.y, { "data-kind": "thread", "data-id": c.thread.id, "data-lit": lit("c:" + c.thread.id) }, [c.thread.id + " ", h("b", null, String(c.thread.posts))]);
   }
   for (const [k, el] of EL) if (!seen.has(k)) { el.remove(); EL.delete(k); }
@@ -381,14 +381,14 @@ function syncGraph(D) {
   scroller.toggleAttribute("data-free", isFree); zoomEl.hidden = !isFree;
   if (isFree) { if (!GS.view.user) fitView(L); applyView(); } else { cv.style.transform = ""; cv.removeAttribute("data-lod"); }
   syncCap(D);
-  stage.setAttribute("aria-label", `Graph of the hive: ${M.count}. Tab walks threads and agents; Enter selects, Escape clears.`);
+  stage.setAttribute("aria-label", `Graph of the hive: ${M.count}. Tab walks ${S.app.app ? "conversations" : "threads"} and agents; Enter selects, Escape clears.`);
   if (M.q !== GS.q) { GS.q = M.q; if (S2.hits[0] && !isFree) scroller.scrollTo({ top: Math.max(0, S2.hits[0].y - 60), behavior: reduced() ? "auto" : "smooth" }); }
   legend(L);
 }
 function syncCap(D) {
   if (GS.capT > now()) return;
   const n = M.lanes.length, drawn = GS.L ? GS.L.clusters.length : 0;
-  capEl.replaceChildren(D.replay ? "As it was at " + clock(D.t1) : "Right now", h("small", null, ` · ${winName().toLowerCase()}${n > drawn ? ` · ${plural(n - drawn, "thread")} with no agent drawn` : ""}`));
+  capEl.replaceChildren(D.replay ? "As it was at " + clock(D.t1) : "Right now", h("small", null, ` · ${winName().toLowerCase()}${n > drawn ? ` · ${plural(n - drawn, S.app.app ? "conversation" : "thread")} with no agent drawn` : ""}`));
   capEl.toggleAttribute("data-cut", D.replay); capEl.removeAttribute("data-post");
 }
 function legend(L) {
@@ -428,7 +428,7 @@ function showCard(id) {
   hcEl.replaceChildren(
     h("div", { class: "map-hc-h" }, glyph({ ...n, ghost: false }), h("b", null, a.id), h("span", null, [a.running ? st.label + (a.last ? " · " + ago(a.last) : "") : "ended " + clock(a.track.end), a.model, a.warden ? "warden" : null].filter(Boolean).join(" · "))),
     a.now ? h("div", { class: "map-hc-now" }, short(a.now, 220)) : null,
-    h("div", { class: "map-hc-f" }, `Main thread ${a.main} · ${plural(a.posts, "post")}${a.cost >= 0.005 ? " · " + money(a.cost) : ""}`),
+    h("div", { class: "map-hc-f" }, `${S.app.app ? "Main conversation" : "Main thread"} ${a.main} · ${plural(a.posts, "post")}${a.cost >= 0.005 ? " · " + money(a.cost) : ""}`),
     a.from ? h("div", { class: "map-hc-f" }, "Started by " + a.from) : null,
     h("small", null, "Click to select, double-click to open"));
   hcEl.hidden = false;
@@ -714,7 +714,7 @@ export default {
   render(ctx) {
     M.update = ctx.update;
     // before the live feed has answered, "nobody is running" would be a guess: say it's loading, and build nothing yet
-    if (!S.live) return h("div", { class: "map", "data-key": "mesh", "aria-label": "Map: loading" }, empty("Loading the map…", { kind: "loading" }));
+    if (!S.live) return h("div", { class: "map", "data-key": "mesh", "aria-label": "Map: loading" }, waiting(S.failed, "Loading the map…", "the map"));
     if (!M.D || (M.cut == null && M.seenVer !== S.ver && now() - M.lastBuild >= 2000) || (M.cut == null && now() - M.lastBuild > 30000)) { M.seenVer = S.ver; build(); }
     else if (M.cut == null && M.seenVer !== S.ver) { clearTimeout(M.timer); M.timer = setTimeout(() => M.update(), 2000 - (now() - M.lastBuild)); }
     const D = M.D;

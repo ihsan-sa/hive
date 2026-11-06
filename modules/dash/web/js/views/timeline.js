@@ -7,7 +7,7 @@ import { clock, dayName, dur, mdPlain, now, short, stamp, DAY, HOUR, MIN } from 
 import { agentHref, threadHref } from "../core/router.js";
 import { status, tier } from "../core/status.js";
 import { canvas } from "../templates.js";
-import { button, seg, statusDot } from "../ui/kit.js";
+import { button, infoButton, seg, statusDot, waiting } from "../ui/kit.js";
 import { keep, shapePath, hollow } from "../ui/graph.js";
 import { openPanel } from "../ui/panel.js";
 import { showTip, hideTip } from "../ui/tip.js";
@@ -108,7 +108,8 @@ function drawLane(l, y, W, x, follows, nextLive) {
   const kids = [
     s("rect", { class: "tl-bg", x: 0, y, width: W, height: h_ }),
     s("line", { class: "tl-rule", "data-live": l.live && !nextLive ? "" : null, x1: 0, x2: W, y1: y + h_, y2: y + h_ }),
-    s("a", { href: threadHref(l.th), "aria-label": `Thread ${l.th}, ${tier(tierOf(l.th)).label}`, "data-lane": "", ontip: () => [l.th, tier(tierOf(l.th)).label], onclick: e => { e.preventDefault(); } },
+    s("a", { href: threadHref(l.th), "aria-label": `${S.app.app ? "Conversation" : "Thread"} ${threadTitle(l.th)}, ${tier(tierOf(l.th)).label}`, "data-lane": "", ontip: () => [l.th, tier(tierOf(l.th)).label], onclick: e => { e.preventDefault(); } },
+      s("rect", { class: "tl-name-hit", x: 0, y, width: L, height: h_ }),
       s("text", { class: "tl-name", "data-live": l.live ? "" : null, x: 16, y: y + h_ / 2 + 4 }, label)),
     l.live ? s("path", { class: "tl-cap", "data-tone": "good", d: shapePath("dot", 8, y + h_ / 2, 3.5) }) : null,
   ];
@@ -205,25 +206,27 @@ function toolbar() {
   const r = range(now());
   return [h("div", { class: "cvp-ctl" },
     seg(PRE, presetValue(), k => { setPref("tlWin", k); if (k === "fit") { T.fit = true; T.end = null; T.ver = -1; draw(); T.update(); } else { T.fit = false; set(WIN[k], null); } }, { label: "Window" }),
-    small("−", "Zoom out", () => zoom(1.6, centre())), small("+", "Zoom in", () => zoom(1 / 1.6, centre())),
-    small("←", "Earlier", () => pan(-T.win / 4)), small("→", "Later", () => pan(T.win / 4)),
+    h("span", { class: "row-a-in" },
+      small("−", "Zoom out", () => zoom(1.6, centre())), small("+", "Zoom in", () => zoom(1 / 1.6, centre())),
+      small("←", "Earlier", () => pan(-T.win / 4)), small("→", "Later", () => pan(T.win / 4))),
     !T.fit && T.end != null ? button("Now", () => set(T.win, null), { size: "s", title: "Back to the latest, following now" }) : null,
     seg([["on", "Active only", "Show only the agents running now, and the rows they're on"]], T.active ? "on" : null, () => { T.active = !T.active; setPref("tlActive", T.active ? 1 : 0); T.ver = -1; draw(); T.update(); }, { label: "Filter" })),
-    button("About this chart", null, { kind: "icon", icon: "info", size: "s", title: HELP }),
+    infoButton("About this chart", say(HELP), { size: "s" }),
     h("span", { class: "cvp-count" }, `${stamp(r.t0)} – ${r.follows ? "now" : stamp(r.t1)} (${dur(r.t1 - r.t0)})`),
     h("span", { class: "cvp-count", role: "status" }, `${T.nLive} running, ${T.nDone} ended in this range`),
   ];
 }
 const HELP = "Each row is a thread, each bar an agent's session (filled with a status mark at its end while running; pale and dashed once ended; rows with someone running come first), each tick along the top of a row a post. Stacked bars mean agents worked in parallel. A bar's name shows when it fits: hover for any. Click a bar for the agent, a row to read the thread. To zoom: Ctrl+scroll or pinch, or the − and + buttons. Drag sideways to move through time.";
 const NOTE = "A row is a thread, a bar is an agent's session, a tick is a post. Click a bar for the agent, a row for the thread.";
-const note = () => [NOTE, h("div", { class: "legend" },
+const say = t => (S.app.app ? t.replace(/\bthread\b/g, "conversation").replace(/\bpost\b/g, "message") : t);
+const note = () => [say(NOTE), h("div", { class: "legend" },
   h("span", null, h("i", { class: "tl-sw" }), "running"), h("span", null, h("i", { class: "tl-sw", "data-ended": "" }), "ended"), h("span", { "data-tone": "bad" }, h("i", { class: "tl-sw", "data-tone": "bad" }), "failed"),
   ["working", "queue", "quiet", "stuck"].map(k => h("span", { style: "display:inline-flex;align-items:center;gap:5px" }, statusDot(k), status(k).label)))];
 
 /** For a display page's tile: who's running first, in whole rows, then ended work if there's room. Its settings are saved apart from the Timeline tab's. */
 export function fitRunning() { T.fitRows = true; T.ver = -1; }
 /** What the tile says in its head. */
-export const runningNote = () => `${T.nLive} running` + (T.below ? ` · +${T.below} running ${T.below > 1 ? "threads" : "thread"} below` : "") + (T.deadAll ? ` · ${T.deadShown} of ${T.deadAll} ended threads` : "");
+export const runningNote = () => `${T.nLive} running` + (T.below ? ` · ${T.below} more below` : "") + (T.deadShown ? ` · ${T.deadShown} of ${T.deadAll} that ended` : "");
 
 export default {
   id: "timeline", label: "Timeline", about: "when each agent ran", tab: true,
@@ -238,6 +241,7 @@ export default {
   leave() { hideTip(); },
   render(ctx) {
     T.update = ctx.update;
+    if (!S.live) return h("div", { class: "page" }, waiting(S.failed, "Reading…", "the timeline"));   // no board yet: an empty chart would say nothing ran
     const t = now(), r = range(t);
     if (box.isConnected && (T.ver !== S.ver || box.clientWidth !== T.w || t - T.last >= Math.min(3e4, (r.t1 - r.t0) / 60))) draw();
     else if (!box.isConnected) queueMicrotask(() => { if (box.isConnected) { draw(); T.update(); } });

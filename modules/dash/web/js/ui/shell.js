@@ -92,7 +92,8 @@ function appBits() {
   return [
     callBtn(),
     stop ? goPill(stop.why === "off" ? "settings" : "usage", stop.why === "off" ? "Settings" : "Usage", { "data-tone": "bad", title: stop.why === "off" ? "The Hive isn't running" : "Every account is past its usage line" }, statusDot("limited"), stop.why === "off" ? "Not running" : "Stopped")
-      : goPill("now", "Agents: what each is doing", { title: "agents running now: open Agents", "data-tone": n ? "good" : null }, statusDot("working", { live: n > 0 }), n ? [h("b", null, String(n)), n === 1 ? " agent working" : " agents working"] : "No agents working"),
+      : S.failed && !S.fresh ? goPill("now", "Agents: what each is doing", { title: "Can't reach the Hive, so this can't say what agents are doing: open Agents" }, statusDot("quiet"), "Not connected")
+      : goPill("now", "Agents: what each is doing", { title: "agents running now: open Agents", "data-tone": n ? "good" : null }, statusDot("working", { live: n > 0 }), n ? h("span", null, h("b", null, String(n)), n === 1 ? " agent working" : " agents working") : "No agents working"),
     // What's left on the accounts the hive can run on now (the person, 2026-11-04), weighted by plan; and the 5-hour window when one is open.
     act ? goPill("usage", "Usage", { title: `Left on the accounts in use now (${names}): ${left}% of this week` + (act.five ? `, ${left5}% of the 5-hour window` : "") + (out != null ? `. At ${ro.how === "week" ? "this week's average" : "the last 6 hours'"} pace it runs out in about ${dur(out)}, ${clock(now() + out)}` : ro && ro.lasts ? ". At this pace it lasts until the week resets" : "") + (tot ? `. All accounts together: ${Math.max(0, 100 - Math.round(tot.pct))}% left` : "") + ". Open Usage",
         "data-tone": left <= 10 || (left5 != null && left5 <= 10) ? "bad" : null },
@@ -112,7 +113,7 @@ function loginMarks() {
 /** The band under the bar when the hive has stopped: says why in words, and where to look. */
 function band(current) {
   if (S.failed) return h("div", { class: "lost", role: "status", "data-key": "band" }, statusDot("stuck"),
-    h("b", null, S.fresh ? "Lost contact" : "Can't reach the server yet"), S.fresh ? h("span", null, "last data " + ago(S.fresh) + ". What you see is old.") : null,
+    h("b", null, S.fresh ? "Lost contact" : "Can't reach the Hive yet"), S.fresh ? h("span", null, "last data " + ago(S.fresh) + ". What you see is old.") : null,
     button("Try now", () => poll(), { size: "s", kind: "quiet" }));
   const sign = signInWords(); if (sign) return h("div", { class: "band", role: "status", "data-tone": "bad", "data-key": "band" }, statusDot("limited"), h("span", null, sign),
     can("logins") ? button("Sign in", null, { href: href("settings"), size: "s", kind: "quiet" }) : null);
@@ -120,6 +121,7 @@ function band(current) {
     h("span", null, can("logins") ? "Your Hive can't start until you add your Claude account." : "Your Hive isn't ready yet. The person setting it up still has a step to finish."),
     can("logins") ? button("Add it", null, { href: href("settings"), size: "s", kind: "quiet" }) : null);
   const st = hiveStopped(); if (!st) return null;
+  if (st.why === "off" && current === "start" && S.app.setup && S.app.setup.starter === false) return null;   // Start says this itself, with the button that fixes it
   if (simpleOn()) return h("div", { class: "band", role: "status", "data-tone": "bad", "data-key": "band" }, statusDot(st.why === "off" ? "failed" : "limited"),
     h("span", null, st.why === "off" ? "Your Hive isn't running right now, so it won't answer yet." : "Your Hive has used up its allowance for now and is taking a break." + (st.until ? ` It comes back ${stamp(st.until)}. Nothing is lost.` : " Nothing is lost.")));
   const text = st.why === "off" ? "The Hive isn't running, so nothing you send starts an agent."

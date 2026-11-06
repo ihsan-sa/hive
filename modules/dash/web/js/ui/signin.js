@@ -6,6 +6,7 @@ import { simpleOn } from "../core/simple.js";
 import { button, input, field } from "./kit.js";
 import { act, begin, finish, isBusy, note } from "./activity.js";
 
+const LOST = "Can't reach the Hive to follow the sign-in. It keeps trying.";
 const SI = { key: null, v: null, err: "", code: "", note: "", gen: 0 };
 
 /** Begin a sign-in for a place on the page (key), a login name or null, and API billing (console). */
@@ -13,10 +14,15 @@ export function startSignin(key, name, api, update) {
   const gen = ++SI.gen;
   Object.assign(SI, { key, v: null, err: "", code: "", note: "", name: name || null, seen: null, got: false });
   begin("signin", "Starting the sign-in" + (name ? " for " + name : ""), update);
+  let misses = 0;
   const tick = async () => {
     if (SI.gen !== gen) return;
-    let v; try { v = await jget("/api/signin"); } catch (e) { return setTimeout(tick, 1500); }
+    let v; try { v = await jget("/api/signin"); } catch (e) {
+      if (++misses === 4 && !SI.err) { SI.err = LOST; update(); }   // about 6 s without an answer: say so instead of "Starting..." for ever
+      return setTimeout(tick, 1500);
+    }
     if (SI.gen !== gen) return;
+    misses = 0; if (SI.err === LOST) SI.err = "";
     SI.v = v;
     if (v.state === "waiting" && SI.note === "Checking…") {
       const m = (v.out || "").match(/[^\r\n]*(invalid|error|failed|expired)[^\r\n]*/ig);

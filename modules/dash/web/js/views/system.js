@@ -87,8 +87,8 @@ export default {
           h("ul", { class: "rules" },
             h("li", null, h("b", null, "overview"), ": header, main sections, then full-width sections. Now."),
             h("li", null, h("b", null, "metrics"), ": header with the answer, then sections. Usage, Jobs, Agent page."),
-            h("li", null, h("b", null, "listDetail"), ": list beside a reading pane, one pane at a time on a phone. Comms, Inbox, Ledger. (next pass)"),
-            h("li", null, h("b", null, "canvas"), ": toolbar, full-bleed stage, side panel. Mesh, Timeline. (next pass)"),
+            h("li", null, h("b", null, "listDetail"), ": list beside a reading pane, one pane at a time on a phone. Comms, Inbox, Ledger."),
+            h("li", null, h("b", null, "canvas"), ": toolbar, full-bleed stage, side panel. Mesh, Timeline."),
             h("li", null, h("b", null, "form"), ": narrow column of field sections. Settings, Start."))),
       ],
     });

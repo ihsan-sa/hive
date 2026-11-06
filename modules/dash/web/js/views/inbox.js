@@ -20,7 +20,7 @@ export default {
   enter(ctx) { update = ctx.update; if (S.app.app) pollInbox(); },
   leave() { update = null; },
   render() {
-    if (!S.live) return h("div", { class: "page" }, S.failed ? empty("Couldn't read the data. It tries again in a few minutes.", { kind: "error" }) : empty("Reading…", { kind: "loading" }));
+    if (!S.live) return h("div", { class: "page" }, S.failed ? empty("Couldn't read your messages. It keeps trying.", { kind: "error" }) : empty("Reading…", { kind: "loading" }));
     if (!S.app.app || !can("read")) return h("div", { class: "page" }, empty("The inbox isn't available on this connection.", { kind: "page", title: "Inbox" }));
     if (!IB.items) { pollInbox(); return h("div", { class: "page" }, empty("Reading…", { kind: "loading" })); }
     const w = can("post");

@@ -1,7 +1,7 @@
 // What the data means: statuses, the agent card, hive stats, usage pace. Pure reads of the store.
 import { S, OUTSIDE, SYS } from "./store.js";
 import { simpleOn } from "./simple.js";
-import { now, ago, dur, median, short, mdPlain, MIN, HOUR, DAY } from "./format.js";
+import { now, ago, dur, median, short, mdPlain, bareLinks, MIN, HOUR, DAY } from "./format.js";
 
 export const isAgent = n => S.agents.has(n);
 /** A warden judges whether work crosses the hard limits. The starter names them w + 4 hex (core/starter.py is_warden); `warden` and `rootwarden` are the fixed names. */
@@ -285,12 +285,12 @@ export function threadParent(th) {
 export function threadChildren(th) { const out = []; for (const d of S.threads.values()) if (d.name !== th && threadParent(d.name) === th) out.push(d.name); return out; }
 export function threadTitle(th) {
   const own = S.threadMeta && S.threadMeta[th] && S.threadMeta[th].title; if (own) return own;   // the person renamed it
-  if (btwParent(th)) { const d = S.threads.get(th), p = d && d.posts[0]; return "Aside: " + (p ? short(btwText(mdPlain(displayText(p))).split("\n")[0], 60) : btwParent(th)); }
+  if (btwParent(th)) { const d = S.threads.get(th), p = d && d.posts[0]; return "Aside: " + (p ? short(bareLinks(btwText(mdPlain(displayText(p))).split("\n")[0]), 60) : btwParent(th)); }
   if (!HEX.test(th || "")) return (simpleOn() || S.app.app) && th ? (t => t[0].toUpperCase() + t.slice(1))(th.replace(/[-_]+/g, " ")) : th;
   if (S.threadNames[th]) return S.threadNames[th];
   if (!S.app.app) return th;
   const d = S.threads.get(th), p = d && d.posts[0];
-  return p ? short(mdPlain(displayText(p)).split("\n")[0], 64) : th;
+  return p ? short(bareLinks(mdPlain(displayText(p)).split("\n")[0]), 64) : th;
 }
 /** The agent behind "@question" in the side search works here (dash.py, side_ask): an agent like any other in Agents, but its thread is no conversation, so no chat list holds it. */
 export const SIDE_THREAD = "side";
