@@ -4,7 +4,7 @@ Extras (modules) give agents tools and know-how for a kind of work. The Hive wor
 
 ## Add one
 
-**Settings**, then **Extras**, shows three groups:
+**Settings**, then **Modules**, shows three groups:
 
 - **Public, installed:** what's on this Hive from the public list. The ones marked "comes with the Hive" are there from the start.
 - **Recommended:** a few worth having, with **Add**. **Browse all** shows the whole public list, with a filter.

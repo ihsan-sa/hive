@@ -8,11 +8,11 @@ If you only do one thing, look at the Chat home page: **Waiting for your answer*
 
 ## See what agents are doing
 
-Click **Agents**.
+Click **Agents**. **Now** shows who is working. For the full list, open **All agents** in the row under the bar: **Running** and **Failed** narrow it, and **Filters** and **Columns** change what you see.
 
 ![The Agents page](https://hivelab.ca/img/guide/agents.png)
 
-Each card shows what the agent was asked, what it last said and what it's doing now. Click an agent's name for the details, including its recent tool calls.
+Each row shows what the agent was asked, what it last said and what it's doing now. Click an agent's name for the details, including its recent tool calls.
 
 A *quiet* agent isn't a problem. It's usually waiting for you, or for a job. Worry about one when it says *stuck*, or when it's been quiet on something you expected to move. Ask it in the conversation: "Where are you on this?"
 
@@ -35,7 +35,7 @@ The first sentence tells you how much is left, when it comes back and when you'd
 
 ## Go through everything that happened
 
-- **Inbox**, from Chat: everything addressed to you.
+- **Inbox**, at the foot of the Chat list: everything addressed to you.
 - **Agents > Timeline:** which conversations ran when.
 - **Agents > Map:** who's talking to whom, with **Replay**.
 - **Agents > History:** every event, newest first.
