@@ -42,7 +42,10 @@ function walkthrough(ctx, s) {
       h("pre", { class: "wt-pre" }, im.claude_md.preview + (im.claude_md.chars > 400 ? "…" : "")),
       h("label", { class: "frow" }, h("input", { type: "checkbox", "data-key": "import-claude-md", checked: im.claude_md.copied,
         onchange: (e, n) => act("import", n.checked ? "Copying your CLAUDE.md" : "Removing the copy", async () => { pg.import = (await post("/api/import", { claude_md: n.checked })); }, up, n.checked ? "Copied your CLAUDE.md" : "Removed the copy") }), " Copy my CLAUDE.md")] : null,
-    im.mcp.length ? p("Your MCP servers (" + im.mcp.join(", ") + ") stay with your own Claude Code. Agents here don't use them yet.") : null);
+    im.mcp.length ? p("Your MCP servers: tick the ones agents here may use. Unticked ones stay with your own Claude Code.") : null,
+    ...im.mcp.map(n => h("label", { class: "frow" }, h("input", { type: "checkbox", "data-key": "import-mcp-" + n, checked: (im.mcp_copied || []).includes(n),
+      onchange: (e, node) => { const on = new Set(im.mcp_copied || []); node.checked ? on.add(n) : on.delete(n);
+        act("import", "Saving your MCP choice", async () => { pg.import = (await post("/api/import", { mcp: [...on] })); }, up, "Saved your MCP choice"); } }), " " + n)));
   return page(
     card("account", "Add an account", p(simpleOn() ? "Your Hive works through your Claude account. Sign in to it here." : "Sign in with your Claude plan (or a ChatGPT plan, below). Agents run on it and use its limits."),
       rootNote(),

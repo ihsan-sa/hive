@@ -3668,6 +3668,7 @@ def set_settings(d):
 
 # ---------- the person's own CLAUDE.md and MCP servers: shown at setup, copied only on a tick ----------
 USER_INSTR = HOME / "user-instructions.md"  # the starter adds its text to every agent's instructions
+MCP_COPY = HOME / "mcp.json"  # the ticked MCP servers; the starter passes it to claude with --mcp-config
 def _person_home():
     try: return Path((HOME / ".hive-account").read_text().strip())  # --this-account installs: the Hive's home is a folder, the person's is this
     except (OSError, ValueError): return HOME
@@ -3678,13 +3679,29 @@ def import_view():
     ph = _person_home()
     try: txt = (ph / ".claude" / "CLAUDE.md").read_text(errors="replace")
     except OSError: txt = ""
-    try: mcp = sorted((json.loads((ph / ".claude.json").read_text()).get("mcpServers") or {}))
-    except (OSError, ValueError, AttributeError): mcp = []
-    return {"claude_md": {"found": bool(txt.strip()), "chars": len(txt), "preview": txt.strip()[:400], "copied": USER_INSTR.is_file()}, "mcp": mcp}
+    mcp = sorted(_person_mcp(ph))
+    try: got = sorted(json.loads(MCP_COPY.read_text()).get("mcpServers") or {})
+    except (OSError, ValueError, AttributeError): got = []
+    return {"claude_md": {"found": bool(txt.strip()), "chars": len(txt), "preview": txt.strip()[:400], "copied": USER_INSTR.is_file()}, "mcp": mcp, "mcp_copied": got}
+
+
+def _person_mcp(ph):
+    try: m = json.loads((ph / ".claude.json").read_text()).get("mcpServers") or {}
+    except (OSError, ValueError, AttributeError): return {}
+    return m if isinstance(m, dict) else {}
 
 
 def do_import(d):
-    """POST /api/import {"claude_md": true}: copies the person's CLAUDE.md into the Hive's agents' instructions. {"claude_md": false} removes the copy. Nothing without that key."""
+    """POST /api/import {"claude_md": true} and/or {"mcp": [names]}: copies the person's CLAUDE.md into the Hive's agents' instructions. {"claude_md": false} removes the copy. Nothing without that key."""
+    if "mcp" in d:  # {"mcp": ["name", ...]}: exactly these servers are copied to the Hive's mcp.json; [] removes it
+        names = d["mcp"]
+        if not isinstance(names, list) or not all(isinstance(n, str) for n in names): raise ValueError("mcp is a list of server names")
+        have = _person_mcp(_person_home())
+        bad = [n for n in names if n not in have]
+        if bad: raise ValueError("no such MCP server: " + ", ".join(bad))
+        if names: write_text_private(MCP_COPY, json.dumps({"mcpServers": {n: have[n] for n in names}}, indent=1))
+        else: MCP_COPY.unlink(missing_ok=True)
+        if "claude_md" not in d: return import_view()
     if type(d.get("claude_md")) is not bool: raise ValueError("claude_md is true or false")
     if d["claude_md"]:
         try: txt = (_person_home() / ".claude" / "CLAUDE.md").read_text(errors="replace")
