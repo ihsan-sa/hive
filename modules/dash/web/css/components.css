@@ -2397,3 +2397,5 @@ input[type=radio],input[type=checkbox]:not(.switch){accent-color:var(--ink)}
 .cm-views .seg{padding:2px}
 .cm-views .seg button{height:24px;padding:0 10px;font-size:var(--fs-meta)}
 .tm-from{color:var(--ink-3);font-style:italic}
+.away-what,.away-sum{margin:0}
+.card.away-one{padding:10px 20px}

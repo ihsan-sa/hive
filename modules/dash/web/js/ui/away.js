@@ -37,7 +37,14 @@ export function awayCard(ctx) {
   const needsHead = n => `${a.needs_head || "Needs you"} (${plural(n, "line")}${n < a.needs.length ? " shown" : ""})`;
   const count = (title, rows, f = line) => group(`${title} (${rows.length})`, rows.map(f));
   const wait = a.agents_wait, back = a.stopped.filter(x => x.carried_on).length;
-  return section({ title: "While you were away", note: "since " + clock(a.since * 1e3) }, h("div", { class: "card away", "data-key": "away" },
+  // Folded to one line (kept in the browser): the title, what needs you, and the button to open it again.
+  const folded = !!getPref("awayFolded", 0), nNeed = a.needs.length;
+  const toggle = () => { setPref("awayFolded", folded ? 0 : 1); ctx.update(); };
+  const when = "since " + clock(a.since * 1e3);
+  if (folded) return section({ title: "While you were away", note: when, actions: button("Show", toggle, { size: "s", kind: "quiet" }) },
+    h("div", { class: "card away away-one", "data-key": "away" }, h("p", { class: "meta away-sum" }, nNeed ? `${plural(nNeed, "line")} need you. Everything else is under Show.` : "Nothing needs you. The rest is under Show.")));
+  return section({ title: "While you were away", note: when, actions: button("Fold to one line", toggle, { size: "s", kind: "quiet" }) }, h("div", { class: "card away", "data-key": "away" },
+    h("p", { class: "meta away-what" }, "What the hive did while you were not looking: what it made, what it decided for you, what needs you, and what broke."),
     brief("Made", "made"), brief("Decided for you", "decided"), group(needsHead(a.show.needs), a.needs.slice(0, a.show.needs).map(line), "away-brief"),
     wait.length ? h("p", { class: "away-wait meta" }, `Agents wait on: ${wait[0].text}${wait.length > 1 ? `; and ${wait.length - 1} more` : ""}.`) : null,
     brief("Broke", "broke"),
