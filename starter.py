@@ -1272,7 +1272,7 @@ def start(c, name, posts, login, resume=None, reaped=None, extra=(), moved=False
     cmd = argv or ["claude", "-p", prompt, "--append-system-prompt", system,
                    *(["--resume", sid] if resume else ["--session-id", sid]),
                    *(["--model", prov[2] if prov else model] if model else []),
-                   *(["--max-budget-usd", str(c["max_budget_usd"])] if c.get("max_budget_usd") and not prov else []), *c["claude_args"]]  # per-run cap; 0/absent = none
+                   *(["--max-budget-usd", str(c["max_budget_usd"])] if c.get("max_budget_usd") and not prov else []), *(["--mcp-config", str(HOME / "mcp.json")] if (HOME / "mcp.json").is_file() and not prov else []), *c["claude_args"]]  # per-run cap; 0/absent = none; mcp.json: the servers the person ticked at setup
     if sb:  # the delivered file is mounted by inode, so it's emptied before the run rather than removed after
         sb.prepare(name)
         if not resume: (STATE / "delivered" / name).write_text("")
