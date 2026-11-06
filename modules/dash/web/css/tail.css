@@ -84,6 +84,10 @@
   .xp-turn[data-stage] .xp-says{color:#555}
   .xp-files{font-size:9pt;color:#666}
 }
+.wb{margin:0 0 8px;border:1px solid var(--line-2);border-radius:8px;overflow:hidden}
+.wb-h{display:flex;gap:8px;align-items:flex-start;padding:8px 10px}
+.wb-say{flex:1;min-width:0;margin:0}
+.wb-f{display:block;width:100%;height:22rem;border:0;background:#fff}
 .rw-line,.rw-sudo{flex:1;min-width:0;overflow-wrap:anywhere}
 .rw .field{margin-top:var(--s3)}
 .msg-word{margin-top:var(--s1)}

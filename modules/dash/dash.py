@@ -1578,6 +1578,8 @@ POST_CAP = {"/api/webpush": "config", "/api/share-build": "read", "/api/kill": "
 LOCAL_ONLY = {"/api/access", "/api/settings", "/api/share-copy", "/api/draft"}  # who may do what is never changed from outside, whatever outside.can says
 
 
+
+
 def web_cfg():
     """~/.hive/web.json, or None if there isn't one and this isn't an installed Hive (Hive's open dash). A file that can't be read,
     or one missing where install has run (it writes the marker last, after making the file), is {"broken": True}, which
@@ -2693,6 +2695,7 @@ def delivered_view(days=3):
 def delivered():
     try: return set((STATE / "delivered" / PERSON).read_text().split())
     except OSError: return set()
+
 
 
 def inbox_view(limit=200):
@@ -3911,7 +3914,8 @@ def serve(port):
             if cookie: self.send_header("Set-Cookie", cookie)
             # Board text is written by agents: the page takes nothing from elsewhere and sends nothing anywhere.
             framing = "; frame-ancestors 'self'" if framed_here else "" if self.route == "open" else "; frame-ancestors 'none'"  # the page can post as the person, so it can't sit in someone's frame; a TV page may sit in this site's own (the deck's single screen)
-            self.send_header("Content-Security-Policy", "default-src 'none'; connect-src 'self'; frame-src 'self'; manifest-src 'self'; worker-src 'self'; img-src 'self' blob: data:; media-src 'self'; font-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; base-uri 'none'; form-action 'none'" + framing)
+            frames = ""
+            self.send_header("Content-Security-Policy", "default-src 'none'; connect-src 'self'; frame-src 'self'; manifest-src 'self'; worker-src 'self'; img-src 'self' blob: data:; media-src 'self'; font-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; base-uri 'none'; form-action 'none'".replace("frame-src 'self'", "frame-src 'self'" + frames) + framing)
             if self.route != "open": self.send_header("Referrer-Policy", "no-referrer")
             if gz: self.send_header("Content-Encoding", "gzip")
             self.end_headers(); self.wfile.write(body)

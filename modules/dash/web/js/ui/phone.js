@@ -202,7 +202,7 @@ function onClick(e) {
   const a = e.target.closest("[data-a]"); if (!a) return;
   if (a.dataset.a === "end") end();
   else if (a.dataset.a === "hangup") hangUp(a.dataset.call);
-  else if (a.dataset.a === "mute") { C.muted = !C.muted; draw(); }
+  else if (a.dataset.a === "mute") { C.muted = !C.muted; post(`${API}/call/${C.id}/mute`, { muted: C.muted }).catch(() => {}); draw(); }
   else if (a.dataset.a === "hide") { LIVE.hidden.add(a.dataset.call); draw(); }
   else if (a.dataset.a === "answer") { const id = a.dataset.ring; RINGS.seen.add(id); RINGS.list = []; drawRings(); startCall({ ring: id }); }
   else if (a.dataset.a === "decline") { const id = a.dataset.ring; RINGS.seen.add(id); post(`${API}/ring/${id}/decline`, {}).catch(() => {}); RINGS.list = RINGS.list.filter(r => r.id !== id); drawRings(); }

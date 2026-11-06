@@ -452,7 +452,7 @@ RECONCILE = """You judge, from the board, which of the person's asks below have 
  "owned": [{{"id": "k0012", "owner": "<agent name>"}}],
  "person": [{{"id": "k0012", "why": "<what it waits on from the person>"}}],
  "held": [{{"id": "k0012", "why": "<why it was deliberately set aside>"}}]}}
-Rules. done only when an agent post reports the thing itself finished and checked (a fix landed, an answer given, a file delivered): a plan, a partial, "working on it", or a claim with nothing shown is not done. owned when an agent says it is on it and nothing reports it finished. person when the work waits for the person's answer, decision, money or credentials. held when an agent says it was deliberately put aside (priorities, the person's hold). Say nothing about an ask the posts don't settle: it stays open. Prefer the person's own words over an agent's where they conflict.
+Rules. done only when an agent post reports the thing itself finished and checked (a fix landed, an answer given, a file delivered): a plan, a partial, "working on it", or a claim with nothing shown is not done. owned when an agent says it is on it and nothing reports it finished. person when the work waits for the person's answer, decision, money or credentials. An agent post that ends with a `For you:` line asking the person to act (approve, enter a word, create an account, send a file) means person, even when the rest of the work landed: the agent's own part is delivered, and nothing is left for an agent to do until the person acts. held when an agent says it was deliberately put aside (priorities, the person's hold). Say nothing about an ask the posts don't settle: it stays open. Prefer the person's own words over an agent's where they conflict.
 
 {body}
 """

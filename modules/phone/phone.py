@@ -248,20 +248,28 @@ def keep_turn(cid, pcm, tag=""):
 
 
 _rejects = {}   # channel: turns in a row that sounded like nobody enrolled
+_matched = {}   # channel: when a turn last had some of the enrolled voice in it
+STALE = 180     # seconds without one match before rejects start failing open
 
 
-def voice_gain(a, channel, info):
+def voice_gain(a, channel, info, now=None):
     """The mute mask for a final turn (see speaker.py), or None to keep all of it. This fails open: any error, no enrolment, or
-    two whole turns in a row rejected (a voice that has stopped matching, say a cold or a bad line) keeps the audio."""
+    a voice that has stopped matching (say a cold or a new mic) keeps the audio. Stopped matching means two whole turns in a row
+    rejected and no turn with the person in it for STALE seconds: while their voice still matches now and then, rejected turns
+    are someone else, and a room with other people talking gives runs of those (the 2026-11-05 calls let them through)."""
+    now = time.time() if now is None else now
     try:
         import speaker
         ref = speaker.refs().get(channel)
         if ref is None: return None
         g, kept = speaker.mask(a, ref)
         info["kept"] = round(kept, 2)
-        if g is None or kept > 0: _rejects[channel] = 0; return g
+        if g is None or kept > 0:
+            _rejects[channel] = 0
+            if g is not None: _matched[channel] = now
+            return g
         _rejects[channel] = _rejects.get(channel, 0) + 1
-        if _rejects[channel] <= 2: info["not_person"] = True
+        if _rejects[channel] <= 2 or now - _matched.get(channel, 0) < STALE: info["not_person"] = True
         return None
     except Exception as e:
         print(f"phone: speaker check failed, keeping the audio: {e}", flush=True); return None
@@ -277,7 +285,13 @@ def stt(pcm16k, partial=False, channel="browser", info=None):
     a = np.frombuffer(pcm16k, dtype="<i2").astype("float32") / 32768
     if len(a) < 16000 * 0.25: return ""
     st, _ = models()
-    g = None if partial else voice_gain(a, channel, info)
+    if partial:   # the live look is masked too, so a nearby talker doesn't flash up as the person's words
+        try:
+            import speaker
+            ref = speaker.refs().get(channel)
+            g = speaker.mask(a, ref)[0] if ref is not None else None
+        except Exception: g = None
+    else: g = voice_gain(a, channel, info)
     if PRE != "base": a = isolate(a, PRE)   # the mask comes after: isolate learns the room from the quietest frames, and muted ones would fool it
     if g is not None: a = a * g
     if not _mlock.acquire(blocking=not partial): return None
@@ -288,8 +302,16 @@ def stt(pcm16k, partial=False, channel="browser", info=None):
         segs = list(segs)
     finally: _mlock.release()
     # Whisper's own rule: a segment is silence only when it is both likely no-speech and decoded with low confidence.
-    text = " ".join(s.text.strip() for s in segs if not (s.no_speech_prob > 0.6 and s.avg_logprob < -1.0)).strip()
-    if re.fullmatch(r"(?i)\W*(thank you|thanks for watching|you|bye)\W*", text) and len(a) < 16000 * 1.2: return ""  # whisper's usual noise words
+    # Stricter than that on the usual hallucination signs: a segment decoded with very low confidence, one that is repetitive
+    # (compression ratio), or one the model half-thinks is silence and is not confident about.
+    def _ok(s):
+        if s.no_speech_prob > 0.6 and s.avg_logprob < -1.0: return False
+        if s.avg_logprob < -1.4 or getattr(s, "compression_ratio", 0) > 2.4: return False
+        if s.no_speech_prob > 0.4 and s.avg_logprob < -0.8: return False
+        return True
+    text = " ".join(s.text.strip() for s in segs if _ok(s)).strip()
+    if re.search(r"(?i)\b(\w+(?:\W+\w+){0,3}?)(?:\W+\1\b){3,}", text): return ""   # the same few words over and over: a loop, not speech
+    if re.fullmatch(r"(?i)\W*(thank you|thanks for watching|thanks for listening|please subscribe|subtitles by.*|you|bye|bye-bye|okay|ok|yeah|oh|uh|um|hmm|mm|\.+)\W*", text) and len(a) < 16000 * 1.5: return ""  # whisper's usual noise words
     if info.get("not_person"):
         print(f"phone: {channel} turn {len(a) / 16000:.1f}s is not the enrolled voice, dropped {text!r}", flush=True); return ""
     if info.get("kept", 1) < 1: print(f"phone: {channel} turn {len(a) / 16000:.1f}s kept {info['kept']:.0%} as the enrolled voice", flush=True)
@@ -440,7 +462,7 @@ class AgentLine:
         """What the person said since the last take: waits up to TIMEOUT for something, the end of the call, or a transfer away."""
         end = time.time() + timeout
         with self.call.cv:
-            while not self.heard and not self.dead and not self.call.ended and self.call.brain is self and time.time() < end:
+            while not self.heard and not self.dead and not self.call.ended and not self.call.muted and self.call.brain is self and time.time() < end:
                 self.call.cv.wait(max(0.1, end - time.time()))
             out, self.heard = self.heard, []
             return out
@@ -460,6 +482,7 @@ class Call:
         self.thread = None       # the thread the call belongs to, for showing it live there
         self.partial = ""        # what the person is saying right now, before their turn ends
         self.state = "connecting"
+        self.muted = False       # the person muted their mic: agents keep working instead of waiting for words
         self.started, self.last = time.time(), time.time()
         self.busy_since = None   # a turn is out to the brain since then
         self.pending = None      # a transfer waiting for the current turn to finish
@@ -734,7 +757,7 @@ class H(BaseHTTPRequestHandler):
             line = c.brain if isinstance(c.brain, AgentLine) and c.brain.name == q.get("name", [""])[0] else None
             if not line: return self.out({"heard": [], "ended": c.ended, "gone": True, "agent": c.agent})
             heard = line.take(min(110, float(q.get("timeout", ["90"])[0] or 90)))
-            return self.out({"heard": heard, "ended": c.ended, "gone": line.dead or c.brain is not line, "agent": c.agent})
+            return self.out({"heard": heard, "ended": c.ended, "gone": line.dead or c.brain is not line, "agent": c.agent, "muted": c.muted})
         m = re.fullmatch(r"/call/(\w+)/events", p)
         if m and (c := self.call(m[1])):
             return self.out({"events": c.wait(int(q.get("after", ["0"])[0] or 0)), "state": c.state, "agent": c.agent})
@@ -760,7 +783,7 @@ class H(BaseHTTPRequestHandler):
             return self.out(r)
         m = re.fullmatch(r"/ring/(\w+)/decline", p)
         if m: RINGS.pop(m[1], None); return self.out({"ok": True})
-        m = re.fullmatch(r"/call/(\w+)/(turn|partial|text|transfer|end|interrupt|answer|say|hangup)", p)
+        m = re.fullmatch(r"/call/(\w+)/(turn|partial|text|transfer|end|interrupt|answer|say|hangup|mute)", p)
         if not m: return self.out({"error": "not found"}, 404)
         c = self.call(m[1])
         if not c: return
@@ -781,6 +804,10 @@ class H(BaseHTTPRequestHandler):
             text = str(self.jbody().get("text") or "").strip()[:2000]
             if text: threading.Thread(target=c.heard, args=(text,), daemon=True).start()
             return self.out({"text": text})
+        if m[2] == "mute":
+            c.muted = bool(self.jbody().get("muted"))
+            with c.cv: c.cv.notify_all()   # an agent waiting on the person's words gets back to its work
+            return self.out({"ok": True, "muted": c.muted})
         if m[2] == "interrupt":
             c.lines.append(("system", "the person cut in")); return self.out({"ok": True})
         if m[2] == "transfer":
@@ -849,6 +876,7 @@ def listen(cid, name):
     r = api("GET", f"/call/{cid}/listen?name={name}&timeout=90", timeout=120)
     if r.get("error") == "no such call" or r.get("ended"): print("The call ended. Carry on with your work where you left off."); return
     if r.get("gone"): print(f"You're off the call now ({r.get('agent')} has the line). Carry on with your work where you left off."); return
+    if r.get("muted") and not r.get("heard"): print(f"(The person muted their mic; the call is still on. Carry on with your work and post progress; run phone listen {cid} later, or phone talk {cid} \"...\" to say something.)"); return
     if r.get("heard"): print("The person: " + " ".join(r["heard"]) + f'\n\n(Answer with phone talk {cid} "...")'); return
     print(f'(The person said nothing for 90 seconds. Run phone listen {cid} to keep waiting, or phone talk {cid} "..." to say something.)')
 
