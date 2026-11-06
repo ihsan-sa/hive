@@ -168,7 +168,7 @@ function inputs(n, panel) {
     h("p", { class: "meta" }, "One row per model call, newest first. The totals are exact, from the session log. The pieces are what arrived since the call before, sized at about 4 characters a token, so they're an estimate; \"carried\" is everything already in the context. On a session's first call that is the system prompt, tool list, memory and the first message, which the log doesn't keep."),
     h("ul", { class: "wf" }, rows.map(t => {
       const on = open === t.t, bits = t.parts.slice().sort((a, b) => b.n - a.n);
-      return [h("li", { "data-key": "in" + t.t, class: "wf-f", role: "button", tabindex: 0, "aria-expanded": String(on),
+      return [h("li", { "data-key": "in" + t.t, class: "wf-f wf-in", role: "button", tabindex: 0, "aria-expanded": String(on),
         onclick: () => { IN.open = on ? null : t.t; again(); }, onkeydown: e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); IN.open = on ? null : t.t; again(); } } },
         h("code", null, `${stamp(t.t * 1e3)} · ${toks(t.total)} in`), h("span", { class: "meta" }, `carried ${toks(t.carried)}${bits.length ? "; new: " + sum(t) : ""}`)),
         on ? h("li", { "data-key": "ind" + t.t, class: "wf-diff" },

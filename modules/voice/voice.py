@@ -93,9 +93,24 @@ def other_voice(a, segs):
         print(f"voice: speaker check failed, marking nothing: {e}", file=sys.stderr); return plain
 
 
+_yielded = 0.0
+def _yield_gpu(secs=120):
+    """Ask the kb reranker (if running) to leave the GPU before we use it. Every error ignored; at most one ask per 10 s."""
+    global _yielded
+    try:
+        if time.time() - _yielded < 10: return
+        import socket, json
+        p = os.path.expanduser("~/.cache/kb-rerank/sock")
+        if not os.path.exists(p): return
+        _yielded = time.time()
+        s = socket.socket(socket.AF_UNIX); s.settimeout(0.2)
+        s.connect(p); s.sendall((json.dumps({"yield": secs}) + "\n").encode()); s.recv(100); s.close()
+    except Exception: pass
+
+
 def transcribe(path):
     """(text, info) with timestamps in segments; VAD drops silence, which stops Whisper's hallucinated filler."""
-    m = load(); a = decode(path)
+    _yield_gpu(); m = load(); a = decode(path)
     segs, info = m.transcribe(a, vad_filter=True, beam_size=5, hotwords=PROMPT_HINT, condition_on_previous_text=False, word_timestamps=True)
     parts = other_voice(a, list(segs))
     lines = [(OTHER + " " if o else "") + t for _, _, t, o in parts]

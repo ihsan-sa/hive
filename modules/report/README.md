@@ -21,6 +21,8 @@ With `failures` on, `send` adds one report of type `heartbeat` about once a day:
 ## "Everything" bundle
 Only Send a copy now in Settings or `hive-report bundle --yes` sends it, never the timer; run without `--yes` it writes the scrubbed copy to `reports/bundles/` for the user to read first. It carries the last 500 lines of the log and the board (chats included), scrubbed. The receiver is `/v1/bundle` beside `/v1/report` (override with `share_bundle_url`). Retention and access rule: stored 30 days then deleted automatically, 3 per install per day, no read endpoint, readable only by the project owner, never copied elsewhere, and deleted early on request by install id.
 
+**Send everything** (Settings, next to Send a copy now, or `hive-report pack --yes`) sends the whole board and log, plus the `projects/`, `files/` and `kb/` folders, as one zip. It needs Everything on. Run without `--yes`, it only writes the zip to `reports/bundles/`. Left out: `.git`, `node_modules`, caches and virtualenvs, symlinks, secret-looking files (`.env*`, keys, `*token*`, `*secret*`, credentials), and any file over 50 MB; `PACK.txt` inside the zip lists what was skipped. Text files are scrubbed; binaries go as they are. The zip is capped at 100 MB and goes to `/v1/pack` in 8 MB pieces (override with `share_pack_url`). It is stored 3 days, then deleted. Each install can send one a day, with a global daily cap, and the same access rule as bundles applies.
+
 Turning failures or usage on in Settings sends at once rather than at the next 6-hour timer. With usage on, the first send carries one report with the message `sharing is on` and zero counts, so the makers can tell an idle Hive from a broken route.
 
 ## Opening a GitHub issue yourself

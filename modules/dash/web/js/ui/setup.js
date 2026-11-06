@@ -210,7 +210,7 @@ export const rootNote = () => P.page.accounts.root ? h("p", { class: "fmsg", "da
 const SHARES = [
   ["failures", "Failure reports and a daily check-in", "What failed, when and why, and one small message a day saying this Hive is running and whether an agent has been started yet (yes or no)."],
   ["usage", "Usage reports", "Counts of runs, restarts and limit hits."],
-  ["everything", "Everything, when I say so", "Separate from the reports above: a scrubbed copy of recent logs and of the board, and that includes your chats. Ticking this sends nothing: it goes only when you press Send a copy now, and each one is kept in reports/bundles in your Hive folder."],
+  ["everything", "Everything, when I say so", "Separate from the reports above: a scrubbed copy of recent logs and of the board, and that includes your chats. Send everything adds every project folder and the files attached to posts. Ticking this sends nothing: it goes only when you press Send a copy now or Send everything, and each one is kept in reports/bundles in your Hive folder."],
   ["github", "Open GitHub issues about failures from my GitHub login. I'll review each fix before it's sent.", "Off by default. Failures go to the Hive project as public issues from your own GitHub account, at most 3 a day, one per kind of failure. When an agent drafts a fix it waits here: nothing of it goes until you read it and press Send."],
 ];
 const GH_INSTALL = [["Linux (Debian, Ubuntu)", "sudo apt install gh"], ["Mac", "brew install gh"], ["Windows", "winget install --id GitHub.cli"]];
@@ -260,6 +260,15 @@ async function sendCopyRun(update) {
   catch (e) { P.copySay = { text: e.message, tone: "warn" }; }
   finally { P.copyBusy = false; update(); }
 }
+function sendAll(update) {
+  confirm({ title: "Send the makers everything?", body: ["One zip of your whole board and log (chats included), every project folder, the files attached to posts and your notes. Text is scrubbed of keys, emails and your names; pictures and other files go as they are. Left out: .git folders, build caches, key files, any file over 50 MB and anything past 100 MB in all. They keep it for 3 days. One a day."], ok: "Send everything", onOk: () => sendAllRun(update) });
+}
+async function sendAllRun(update) {
+  P.allBusy = true; P.copySay = null; update();
+  try { const r = await post("/api/share-pack", {}); P.copySay = { text: "Sent" + (r.said ? ": " + r.said : "") + ". The zip that went is in reports/bundles in your Hive folder.", tone: "good" }; }
+  catch (e) { P.copySay = { text: e.message, tone: "warn" }; }
+  finally { P.allBusy = false; update(); }
+}
 export function sharePart(update, inSettings = false) {
   const pg = shown(), on = pg.settings.share;
   return [
@@ -268,7 +277,8 @@ export function sharePart(update, inSettings = false) {
     h("div", { class: "checks cards", role: "group", "aria-label": "What to share" }, SHARES.map(([k, label, hint]) => h("label", { class: "check", "data-key": k },
       h("input", { type: "checkbox", checked: on[k], disabled: !local(), onchange: (e, n) => saveSettings({ share: { [k]: n.checked } }, update) }),
       h("span", null, label, h("span", { class: "field-h" }, hint))))),
-    on.everything && local() ? h("div", { class: "frow", "data-key": "send-copy" }, button("Send a copy now", () => sendCopy(update), { kind: "quiet", size: "s", busy: P.copyBusy })) : null,
+    on.everything && local() ? h("div", { class: "frow", "data-key": "send-copy" }, button("Send a copy now", () => sendCopy(update), { kind: "quiet", size: "s", busy: P.copyBusy }),
+      button("Send everything", () => sendAll(update), { kind: "quiet", size: "s", busy: P.allBusy, disabled: P.copyBusy })) : null,
     P.copySay ? sayMsg(P.copySay.text, P.copySay.tone) : null,
     on.github ? ghLine(pg.github) : null,
     draftsPart(pg.github, update),

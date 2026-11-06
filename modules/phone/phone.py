@@ -275,6 +275,21 @@ def voice_gain(a, channel, info, now=None):
         print(f"phone: speaker check failed, keeping the audio: {e}", flush=True); return None
 
 
+_yielded = 0.0
+def _yield_gpu(secs=120):
+    """Ask the kb reranker (if running) to leave the GPU before we use it. Every error ignored; at most one ask per 10 s."""
+    global _yielded
+    try:
+        if time.time() - _yielded < 10: return
+        import socket, json
+        p = os.path.expanduser("~/.cache/kb-rerank/sock")
+        if not os.path.exists(p): return
+        _yielded = time.time()
+        s = socket.socket(socket.AF_UNIX); s.settimeout(0.2)
+        s.connect(p); s.sendall((json.dumps({"yield": secs}) + "\n").encode()); s.recv(100); s.close()
+    except Exception: pass
+
+
 def stt(pcm16k, partial=False, channel="browser", info=None):
     """16 kHz mono int16 little-endian bytes to text. Drops what's most likely noise, not speech.
     partial: a look at speech still going on, for showing it live; gives None rather than wait behind another transcription.
@@ -284,6 +299,7 @@ def stt(pcm16k, partial=False, channel="browser", info=None):
     info = {} if info is None else info
     a = np.frombuffer(pcm16k, dtype="<i2").astype("float32") / 32768
     if len(a) < 16000 * 0.25: return ""
+    _yield_gpu()
     st, _ = models()
     if partial:   # the live look is masked too, so a nearby talker doesn't flash up as the person's words
         try:
