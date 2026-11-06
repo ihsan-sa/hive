@@ -4,7 +4,7 @@ This walks through what happens in a real job: being asked a question, changing 
 
 ## Answer a question
 
-When an agent needs you, Chat shows a number on its tab, the conversation says **Waiting for your answer**, and the Chat home page lists it first.
+When an agent needs you, Chat shows a number on its tab, the conversation says **Waiting for your answer**, and the Chat home page lists it first (**Needs you** at the foot of the list has the longer version).
 
 ![An agent asks which of two fixes you want; an Answer button sits above the message box](https://hivelab.ca/img/guide/chat-question.png)
 

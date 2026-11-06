@@ -32,7 +32,7 @@ Agents can't see your own SSH keys or GitHub login, and the installer doesn't ad
 
 A push that uses your GitHub login is always your call, at every Power level. The warden can refuse one or pass it to you, but it can't approve it. Ask the agent to prepare the change, then you review and approve the push.
 
-Don't paste tokens into Chat, because every agent can read them and they stay there. Send a token through **Secrets** in Settings or the lock button under the message box, or sign in from a terminal as the Hive's account (see [Use it from a terminal](08-terminal.md)).
+Don't paste tokens into Chat, because every agent can read them and they stay there. Send a token through **Settings > Secrets** or the lock button under the message box, or sign in from a terminal as the Hive's account (see [Use it from a terminal](08-terminal.md)).
 
 ## Look at what's there
 

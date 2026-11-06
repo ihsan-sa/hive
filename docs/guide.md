@@ -74,13 +74,13 @@ When setup is finished, the app offers a short guided tour. It says what to clic
 
 ![The first step of the tour, in a small window over the Chat page](https://hivelab.ca/img/guide/tour.png)
 
-The top bar has **Chat, Knowledge, Agents** (called **Now** on the page) and **Usage**, with **Settings** as the sliders icon at the right and a **More** menu. On a phone the tabs are in a bar at the bottom. On the right it shows how many agents are working and how much of the week is used, and it has the colour theme and full-screen buttons.
+The top bar has **Chat, Knowledge, Agents** and **Usage**, with **Settings** as the sliders icon at the right and a **More** menu. A **Start** tab comes first until setup is finished. Some tabs have a row of pages under the bar (see [Pages inside a tab](#pages-inside-a-tab)). Press **Ctrl+K** anywhere for the quick switcher, a box that finds a conversation, an agent or a page and goes there, and press **?** for the list of keyboard shortcuts. On a phone the tabs are in a bar at the bottom. On the right it shows how many agents are working and how much of the week is used, and it has the colour theme and full-screen buttons.
 
 If the Hive has stopped starting agents, a band under the bar says why and where to look.
 
 ### Chat
 
-Chat is where you'll spend your time. The left side lists your conversations. **Recent** and **All** change how far back it goes, and the search box looks through every conversation by name or content. Start with `@` to ask a question instead, such as `@where did we get to on the launch?`, and press Enter: an agent answers in one line right there and brings up the conversations that fit.
+Chat is where you'll spend your time. The left side lists your conversations. **Show all** and **Recent only** at the foot of the list change how far back it goes, and the search box looks through every conversation by name or content. Start with `@` to ask a question instead, such as `@where did we get to on the launch?`, and press Enter: an agent answers in one line right there and brings up the conversations that fit.
 
 The home page answers two questions: what do you want done, and what needs you?
 
@@ -92,7 +92,7 @@ The home page answers two questions: what do you want done, and what needs you?
 
 Long lists show the first few, with **Show more** under them.
 
-To start a job, type in the box and press **Start** or Enter. Shift+Enter makes a new line. **Name it** gives the conversation a name; otherwise it's named for you. **Attach** adds files. If the voice module is installed and working, a microphone button records a voice memo: press it to start and press again to send (or hold it while you talk and let go), × or Esc throws the recording away. It is transcribed and summarized on the machine and answered in the conversation.
+To start a job, type in the box and press **Start** or Enter. Shift+Enter makes a new line. **Name it** gives the conversation a name; otherwise it's named for you. **Attach** adds files. **Aa** folds the formatting row (bold, italic, code, link) in and out. If the voice module is installed and working, a microphone button records a voice memo: press it to start and press again to send (or hold it while you talk and let go), × or Esc throws the recording away. It is transcribed and summarized on the machine and answered in the conversation.
 
 If the phone module is running, a **phone button** next to it, and another in the top bar on every page, starts a voice call: with the Hive on a new conversation, or with a new agent that reads the conversation you're in. To call a particular agent, rest the pointer on its name or round icon: a small card offers **Call** (that agent pauses its work and picks up; if it hasn't in a minute, a copy that knows its work answers) and **DM** (opens its conversation with your message addressed to it). On a phone, the same two buttons are at the top of the agent's page. Just talk; it answers out loud, and you can cut in while it speaks. Ask "put me through to whoever's working on X" and you go on hold (with music) while that agent picks up. When an agent needs you it can ring: a banner with **Answer** and **Decline** shows on the page. **Mute** and **Hang up** are on the call card, and the transcript is posted to the conversation afterwards.
 
@@ -106,9 +106,9 @@ In a conversation:
 - **Answer** appears above the box when an agent is waiting for you.
 - **Carry on** appears when an agent stopped at a usage limit and there's room again.
 - The line above the box says what's happening right now. **Stop…** there ends an agent ([see below](#stopping-things)).
-- **More** at the top right has the conversation's priority, search and a link to its place on the Timeline.
-- **A greyed conversation** in the list is one the Hive thinks you no longer need to look at: it's finished and answered, or another one replaced it. Hover the words **Likely not needed** to see who marked it and why. It's still there to open and write in, and it comes back by itself when you write in it or something new in it is for you. **Needed again** in **More** takes the grey off for good, and **Not needed** greys one yourself.
-- **Share this result** (in **More**) turns the conversation into one web page you can post: your ask, who worked on it and how long it took, the result with its pictures, and a replay. First you see every message with a **Remove** button on each, and a plain line that everything on the page becomes public if you post it. Paths, links, emails, addresses and long tool output are already taken out, so read it anyway. The page is saved to your downloads as one file that works offline; nothing is uploaded. In a terminal, `hive share CONVERSATION` does the same, and `--show` prints the text first.
+- **The conversation's title** is a button that opens its one menu: what it has cost, **Mark important**, **Pin to the top**, **Rename**, **Archive**, **Not needed**, **Show N hidden**, **All messages**, **On the timeline**, **Priority**, **Share this result**, the two **Export** choices (Markdown and PDF), and the conversation's id on the board with a copy button.
+- **A greyed conversation** in the list is one the Hive thinks you no longer need to look at: it's finished and answered, or another one replaced it. Hover the words **Likely not needed** to see who marked it and why. It's still there to open and write in, and it comes back by itself when you write in it or something new in it is for you. **Needed again** in the title menu takes the grey off for good, and **Not needed** greys one yourself.
+- **Share this result** (in the title menu) turns the conversation into one web page you can post: your ask, who worked on it and how long it took, the result with its pictures, and a replay. First you see every message with a **Remove** button on each, and a plain line that everything on the page becomes public if you post it. Paths, links, emails, addresses and long tool output are already taken out, so read it anyway. The page is saved to your downloads as one file that works offline; nothing is uploaded. In a terminal, `hive share CONVERSATION` does the same, and `--show` prints the text first.
 
 **Helper conversations.** When an agent starts helpers for your request, each helper gets a conversation of its own, but the list doesn't fill with them: they fold under the conversation they came from, as one row, "3 helper conversations", with how many are working, done or waiting on you. Click the row to see them indented under it, and click again to fold them away. Opening a helper's conversation unfolds its family and shows "Part of ..." above the message box, with a link back to the one you were in. A helper that needs you keeps its own row under For you, so nothing hides behind the fold.
 
@@ -116,15 +116,17 @@ In a conversation:
 
 Drafts are kept for each conversation in this browser, even if you reload. A message that fails to send keeps its text and offers Retry, Edit and Discard. Sent messages can't be unsent.
 
-**Show,** across the top of Chat, chooses what you see, both inside a conversation and which ones are listed. Each choice turns on and off by itself, so you can have any mix. The work carries on the same whichever you pick, and this browser remembers it.
+**For you, Updates** and **Agent comms,** the chips above the conversation list, choose what you see, both inside a conversation and which ones are listed. Each choice turns on and off by itself, so you can have any mix. The work carries on the same whichever you pick, and this browser remembers it.
 
 - **For you:** your messages, what agents ask or tell you, and the result of each job. The rest runs in the background.
 - **Updates:** the agents' progress reports.
 - **Agent comms:** agents talking to each other and the Hive's own notes.
 
-**Show N hidden** at the top of a conversation turns all three on. Search always looks through everything. **All messages,** at the bottom left, is every conversation in one list.
+**Show N hidden** in the title menu turns all three on. The star chip, **Important only**, keeps just the conversations you marked. Search always looks through everything.
 
-**Mail** (a page under Chat, full sign-in only, and only on an install with the hive-mail module): your mail to the Hive's address, copied read-only. Plain text; links aren't opened and attachments show as name and size. Mail never goes on the board.
+At the foot of the list, **Needs you**, **Inbox**, **Mail** and **Files** are links to the other pages under Chat. **All messages** in the title menu is every conversation in one list.
+
+**Mail** (the link at the foot of the Chat list, full sign-in only, and only on an install with the hive-mail module): your mail to the Hive's address, copied read-only. Plain text; links aren't opened and attachments show as name and size. Mail never goes on the board.
 
 ### Knowledge
 
@@ -136,7 +138,7 @@ What the Hive keeps: notes, projects and the files attached to posts, to browse,
 
 ![The Agents page: a list of every agent, what it works on and what it has cost](https://hivelab.ca/img/guide/agents.png)
 
-Agents shows each agent that's running: what it was asked, what it last said and what it's doing now. Further down are how the Hive is working as a group and where the work went. Click an agent's name for its own page, with its recent tool calls, past sessions, who it talks to and everything it posted.
+The Agents tab opens on **Now**: who is working, what they were asked and what they're doing. The row of pages under the bar has the rest (see below). **All agents** is a table of every agent that has run. **All, Running, Ended** and **Failed** narrow it by status; **Filters** opens model, account, who started it and time choices; **Columns** picks which columns show; click a column's name to sort. Click an agent's name for its own page, with its recent tool calls, past sessions, who it talks to and everything it posted.
 
 | Mark | Meaning |
 |---|---|
@@ -144,7 +146,7 @@ Agents shows each agent that's running: what it was asked, what it last said and
 | Ring, *quiet* | Nothing happening; it may be waiting on something |
 | Red triangle, *stuck* | It looks like it has stopped making progress. Look at its conversation, or send it a message |
 
-The right side lists what's addressed to you and conversations that have gone quiet. "Gone quiet" is a hint, not a verdict: many of them are just finished.
+Conversations that have gone quiet are a hint, not a verdict: many of them are just finished.
 
 ### Usage
 
@@ -155,6 +157,7 @@ Usage opens with one sentence: how much is left, when it comes back, and whether
 - **Claude accounts:** one row for each, with weekly and 5-hour use. **Usage line** changes where new agents stop. **Pause** keeps new agents off that account.
 - **How much work was done:** dollar figures at API list prices. On a subscription they measure work, and aren't what you're charged.
 - Which conversations and agents used the most.
+- The row under the bar also has **This machine** (how busy the computer is) and **Rootwarden** (what the machine's admin helper was asked and answered).
 
 When every account is past its line, new agents wait, and running ones finish their turn. Your own messages can still start one until Claude itself says no. Agents stopped by a limit show under **Stopped** in Chat. They usually resume by themselves after the reset, and **Carry on** gets one going if it hasn't.
 
@@ -162,26 +165,29 @@ When every account is past its line, new agents wait, and running ones finish th
 
 ![The Settings page](https://hivelab.ca/img/guide/settings.png)
 
-- **Notifications:** off to begin with. Turn it on and the browser asks once; after that it tells you when an agent asks you something or finishes a run, even while the tab is in the background. Each browser keeps its own choice. The Hive must be open in a tab or installed app for this to work, and your browser can block it in its site settings.
-- **Phone alerts:** off to begin with, and it needs no account. Turn it on and the Hive makes a long random topic name. Subscribe to that topic in the free ntfy app on your phone (the **Copy** button gives you the name) and press **Send a test**. After that, when something addressed to you has sat unread for about 20 seconds, the Hive sends one line to ntfy.sh, "Your Hive has something waiting for you.", at most one a minute, even with the page closed. The line never says what the message is or who sent it. What leaves your machine is that line, the topic name, and, if you opened Settings through your own address, a link back to it that opens when you tap the alert. A Hive reached only on this computer has no link to send. Anyone who learns the topic name can read the alerts and see that something is waiting, so don't share it; **Make a new topic** replaces it. Turn it off and nothing is sent.
+Settings shows one section at a time. The list on the left has **The hive, Accounts, Usage limit, Model, Power and sandbox, Data sharing, Secrets, Modules, Access from outside** and **This device**; which of these you see depends on your sign-in. Each has its own address, such as `#settings/accounts`.
+
+- **Notifications** (in **This device**): off to begin with. Turn it on and the browser asks once; after that it tells you when an agent asks you something or finishes a run, even while the tab is in the background. Each browser keeps its own choice. The Hive must be open in a tab or installed app for this to work, and your browser can block it in its site settings.
+- **Phone alerts** (in **This device**): off to begin with, and it needs no account. Turn it on and the Hive makes a long random topic name. Subscribe to that topic in the free ntfy app on your phone (the **Copy** button gives you the name) and press **Send a test**. After that, when something addressed to you has sat unread for about 20 seconds, the Hive sends one line to ntfy.sh, "Your Hive has something waiting for you.", at most one a minute, even with the page closed. The line never says what the message is or who sent it. What leaves your machine is that line, the topic name, and, if you opened Settings through your own address, a link back to it that opens when you tap the alert. A Hive reached only on this computer has no link to send. Anyone who learns the topic name can read the alerts and see that something is waiting, so don't share it; **Make a new topic** replaces it. Turn it off and nothing is sent.
 - **Run-finished alerts:** with Phone alerts on, press **Also tell me when a run I started ends** and the Hive also sends one line, "A run you started has finished.", when a run that your own message started has ended (one line per burst, nothing for runs that ended before you turned it on).
-- **Budget per run:** in the Hive section. A dollar cap for each run, counted at API prices; a run that reaches it stops and says so in its thread. Empty means no cap. The terminal does the same with `hive budget 5` and `hive budget off`.
-- **Stop the hive:** no new agents start, and running ones finish their turn.
+- **Budget per run:** in **The hive**. A dollar cap for each run, counted at API prices; a run that reaches it stops and says so in its thread. Empty means no cap. The terminal does the same with `hive budget 5` and `hive budget off`.
+- **Stop the hive:** (in **The hive**) no new agents start, and running ones finish their turn.
 - **Keep work moving:** every 3 hours an agent picks up stalled work and starts work nobody asked for. It uses your limits, so it's off to begin with.
 - **Version, Look for new releases, How often to update, Update by itself:** see [Updates](#updates).
 - **Agents at once:** how many can work at the same time. Others wait their turn. More means faster, and your limits go faster too. Empty means no limit.
 - **Accounts:** sign in again, or add another subscription. New agents go to the one with the most left.
 - **Data sharing:** what's sent to the Hive's developer, if anything. Failure reports and a daily check-in are on unless you turn them off. The check-in holds a random ID, the version, the operating system and whether an agent has been started yet (yes or no), never your chats or files; usage reports are off unless you turn them on. Nothing is sent before setup finishes.
 - **Model:** which Claude model new agents use, Sonnet unless you change it. For one agent, choose a model in the message box, write `@opus`, `@sonnet`, `@haiku`, `@fable` or `@astra`, or put `--model opus` in the message. If your plan doesn't include the model you picked, agents can't start until you pick another.
-- **Power:** who approves a step outside the sandbox. See [Before you install](#before-you-install).
-- **Sandbox:** whether it works on this machine, and the choice to [run without it](#running-without-the-sandbox).
+- **Power and sandbox:** who approves a step outside the sandbox. See [Before you install](#before-you-install).
+  It also shows whether the sandbox works on this machine, and the choice to [run without it](#running-without-the-sandbox).
 - **Secrets:** send a token to the Hive. It's never shown back. Saved ones are listed by name with when each was set; **Replace** puts the name in the box so you type only the new value, and **Remove** deletes it after a confirm.
-- **Extras:** add or remove tools, by name or from a Git URL.
+- **Modules:** add or remove extras, by name or from a Git URL.
+- **Simple view** (in **This device**): **Turn on simple view** shows only the chat and Settings, in plain words. **Show everything** undoes it.
 - **Access from outside:** see [tutorial 7](tutorials/07-remote.md). You can only change this on the machine itself. A name can have its own Access team and people under "Names with their own sign-in".
 
 ### Pages inside a tab
 
-Some tabs have a row of pages under the top bar.
+Some tabs have a row of pages under the top bar. Chat has none: its pages are the links at the foot of its list.
 
 - **Agents > Now:** who is working and what on.
 - **Agents > All agents:** every agent that has run. Search, filter and sort.
@@ -189,15 +195,18 @@ Some tabs have a row of pages under the top bar.
 - **Agents > Map:** a live map of who is talking to whom. Layouts: Bands, Web, Orbit, and Lineage (threads down the left, agents in columns by hand-off generation, arrows from parent to child). In the free layouts, drag a node to move it, drag empty space or use the wheel to pan, Ctrl + wheel (or pinch) to zoom, and **Fit** to see it all again. **Replay** plays it back.
 - **Agents > History:** every event in order, with filters. Use it to see exactly what happened.
 - **Usage > This machine:** how busy the computer is, and the big work agents are running on it.
-- **Inbox:** every message an agent addressed to you, newest first, with **Mark all read**. Open it from the button on Chat's home.
+- **Usage > Rootwarden:** what the machine's admin helper was asked, and what it answered.
+- **Inbox:** every message an agent addressed to you, newest first, with **Mark all read**. Open it from **Inbox** at the foot of the Chat list.
+- **Files:** the files and links from your conversations, at the foot of the Chat list.
 
 ### More
 
-- **Tools:** Design, Files and links, and any page an extra adds.
+- **Design** and any page an extra adds.
 - **User guide:** this guide.
 - **Take the tour:** the guided tour again.
+- **Keyboard shortcuts:** the `?` sheet.
 - **Send feedback:** a screenshot and a comment.
-- **Simple view:** just the chat and Settings, in plain words, for someone who doesn't want to know how a Hive works. It shows how much of the week is used and keeps its own short tour. **Show everything** under More brings the rest back. Each browser keeps its own choice, and the Hive's owner can make it the default for a sign-in.
+- **Simple view:** just the chat and Settings, in plain words, for someone who doesn't want to know how a Hive works. It shows how much of the week is used and keeps its own short tour. **Show everything** under More (or in Settings > This device) brings the rest back. Each browser keeps its own choice, and the Hive's owner can make it the default for a sign-in.
 
 The tour has its own shorter version in simple view. The app works on a phone too, once you've set up a way to reach it. See [tutorial 7](tutorials/07-remote.md).
 
