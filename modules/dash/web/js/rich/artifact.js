@@ -1,3 +1,5 @@
+// Navigation: the frame can't send itself to an outside URL because the app page's own CSP has frame-src 'self' (no navigate-to exists);
+// drive_rich checks it, and fails if the page is served without that CSP (use test/serve_csp.py).
 // An html fence as a live page the person opens: a sandboxed frame with an opaque origin and no network. It can't see this page,
 // its cookie or the board. All it can do is send the two small messages below, and those only ever become numbers and short text.
 import { h } from "../core/dom.js";

@@ -469,7 +469,9 @@ def cmd_reconcile(a):
     since = "" if (a.all or a.ids) else cur.get("reconciled", "")
     started = iso()
     todo = [e for e in open_items(items) if e.get("kind") != "direction" and e.get("status") in ("open", "owned") and (not a.ids or e["id"] in a.ids)
-            and any(p.get("at", "") > since and str(p.get("from", "")).lower() not in NOT_AGENTS for p in by.get(e.get("thread") or e.get("post"), []))]
+            and (any(p.get("at", "") > since and str(p.get("from", "")).lower() not in NOT_AGENTS for p in by.get(e.get("thread") or e.get("post"), []))
+                 # an ask filed after its thread's agent work (k1120-k1130, 2026-11-06): read it once, since the cursor has passed that work
+                 or (e.get("by") == "extract" and any(p.get("at", "") > (e.get("when") or "") and str(p.get("from", "")).lower() not in NOT_AGENTS for p in by.get(e.get("thread") or e.get("post"), []))))]
     todo.sort(key=lambda e: e.get("when", ""))
     if not todo: print("nothing open to reconcile" + ("" if since == "" else f" (no agent posts since {since[:16]} in a thread with an open ask; --all looks at every open ask)")); return
     groups = {}

@@ -67,7 +67,8 @@ function build() {
     if (!s.resumed && s.start >= t0 && s.from && s.from !== s.name && !SYS.has(s.from)) spawns.push({ from: s.from, to: s.name, th: s.thread, t: s.start });
   }
   // an agent's main thread is its heaviest home; the full bar is drawn there only, other threads get an "also" track
-  const main = new Map(); for (const [a, m] of homes) main.set(a, [...m].sort((x, y) => y[1] - x[1] || (x[0] < y[0] ? -1 : 1))[0][0]);
+  // (only a thread it has a run in can hold its drawn run: an agent that posted more elsewhere than it ran, like a fan-out parent, would otherwise be drawn nowhere)
+  const main = new Map(); for (const [a, m] of homes) { const own = [...m].filter(([th]) => runs.has(a + "\n" + th)), cand = own.length ? own : [...m]; main.set(a, cand.sort((x, y) => y[1] - x[1] || (x[0] < y[0] ? -1 : 1))[0][0]); }
   const C = costs(t0, t1), L = new Map();
   const lane = th => { let l = L.get(th); if (!l) L.set(th, (l = { th, tier: tierOf(th), tracks: [], last: 0, live: 0, posts: (tposts.get(th) || []).length, cost: C.byTh.get(th) || 0 })); return l; };
   for (const [a, m] of homes) for (const [th] of m) {

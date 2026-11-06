@@ -881,6 +881,23 @@ def cmd_status(a):
         fcntl.flock(f, fcntl.LOCK_EX); f.write(json.dumps(rec) + "\n")
     print(f"status set on {th}")
 
+def cmd_rename(a):
+    """hive rename THREAD "new title": give a thread a clearer title in the dashboard; the person's own rename wins over it."""
+    th = (a.thread or "").lstrip("#"); title = " ".join(a.title.split())[:80]
+    if not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.:-]{0,100}", th): sys.exit("hive rename: give a thread name (letters, digits and . _ : -)")
+    if not any(p.get("thread") == th for p in posts()): sys.exit(f"hive rename: no thread named {th} on the board")
+    if not title: sys.exit('hive rename: give the new title, hive rename THREAD "title"')
+    STATE.mkdir(parents=True, exist_ok=True)
+    with open(STATE / "renamed.jsonl", "a") as f:
+        fcntl.flock(f, fcntl.LOCK_EX); f.write(json.dumps({"thread": th, "from": os.environ.get("HIVE_NAME", "anon"), "title": title, "at": time.time()}) + "\n")
+    print(f"renamed {th}: {title}")
+
+def cmd_summary(a):
+    """hive summary show | set | drop THREAD...: edit the dashboard's "Where things stand" summary (modules/dash/needs_you.py)."""
+    f = HOME / "modules" / "dash" / "needs_you.py"
+    if not f.exists(): sys.exit("hive summary: this Hive has no dash module")
+    os.execv(sys.executable, [sys.executable, "-I", str(f), "summary"] + a.rest)
+
 def cmd_progress(a):
     """hive improve ... and hive progress ...: core/progress.py (the improvements ledger and the scoreboard)."""
     os.execv(sys.executable, [sys.executable, "-I", str(CORE / "progress.py")] + a.rest)
@@ -910,6 +927,10 @@ p = sp.add_parser("show", help="hive show THREAD --why \"...\" [--for 10m]: brin
 p.add_argument("thread"); p.add_argument("--why", default=""); p.add_argument("--for", dest="for_", metavar="10m", help="how long it stays: 5m, 1h (default 10m, up to 24h)"); p.set_defaults(f=cmd_bringup)
 p = sp.add_parser("important", help="hive important THREAD --why \"...\" [--off]: mark a thread important for the person (something they would want to know): the dashboard side list shows it with an important icon, under an Important filter. --off takes your mark off when it is settled")
 p.add_argument("thread"); p.add_argument("--why", default=""); p.add_argument("--off", action="store_true"); p.set_defaults(f=cmd_important)
+p = sp.add_parser("rename", help="hive rename THREAD \"new title\": retitle a thread in the dashboard when its title no longer fits (the person's own rename wins)")
+p.add_argument("thread"); p.add_argument("title"); p.set_defaults(f=cmd_rename)
+p = sp.add_parser("summary", help="hive summary show | set (JSON on stdin) | drop THREAD...: edit the dashboard's Where things stand summary: drop obsolete entries, regroup, reword. hive summary set --help-ish: run `hive summary` for the shape")
+p.add_argument("rest", nargs=argparse.REMAINDER); p.set_defaults(f=cmd_summary)
 p = sp.add_parser("fade", help="hive fade THREAD --why \"...\" [--off]: mark a thread as likely not needed by the person any more (finished and read, replaced by another thread, nothing in it for them): the dashboard side list greys it, and they can still open it and write in it. A post for the person, or one from them, brings it back by itself. --off takes your mark off")
 p.add_argument("thread"); p.add_argument("--why", default=""); p.add_argument("--off", action="store_true"); p.set_defaults(f=cmd_fade)
 p = sp.add_parser("status", help="hive status THREAD <<'X' ...: set the two-line status bar the dashboard shows at the top of a thread (line 1: what it is about; line 2: where it stands now, what it waits on). --read prints it. Update it when you change a thread's state; before you stop, line 2 is why, starting Done:, Blocked:, Needs the person:, Waiting: or Told to stop:")

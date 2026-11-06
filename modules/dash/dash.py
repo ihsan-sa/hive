@@ -452,6 +452,7 @@ THREAD_META = STATE / "thread-meta.json"
 META_LOCK = threading.Lock()
 
 IMPORTANT = STATE / "important.jsonl"   # `hive important THREAD --why ...` appends {thread, from, why, at, off?}; the person's own mark is "important" in thread-meta
+RENAMED = STATE / "renamed.jsonl"       # `hive rename THREAD "title"`: {thread, from, title, at}; the person's own title wins
 FADED = STATE / "faded.jsonl"           # `hive fade THREAD --why ...`, same records: an agent's word that the person likely needn't look at the thread any more
 
 def agent_marks(path):
@@ -476,6 +477,15 @@ def thread_meta():
             m = dict(v.get(th) or {})
             if a["at"] > m.get(off, 0) and not m.get(key):
                 m[key] = a["at"]; m[by] = a["by"]; m[why] = a["why"]; v[th] = m
+    best = {}
+    try: lines = RENAMED.read_text().splitlines()[-1000:]
+    except OSError: lines = []
+    for ln in lines:
+        try: r = json.loads(ln); best[str(r["thread"])] = " ".join(str(r["title"]).split())[:80]
+        except (ValueError, KeyError, TypeError): continue
+    for th, t in best.items():
+        m = dict(v.get(th) or {})
+        if t and not m.get("title") and THREAD_NAME.fullmatch(th): m["title"] = t; m["titleBy"] = "agent"; v[th] = m
     return v
 
 def set_thread_meta(d):
