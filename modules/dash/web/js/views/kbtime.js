@@ -11,7 +11,7 @@ import { href } from "../core/router.js";
 import { button, empty, icon, seg } from "../ui/kit.js";
 
 const PLAY_MS = 12000, PITCH = 30, WIDTH = 1000;
-const K = { D: null, L: null, failed: "", at: 0, cut: null, playing: false, sel: null, show: "all", update: () => {} };
+const K = { D: null, L: null, failed: "", at: 0, cut: null, playing: false, sel: null, how: false, show: "all", update: () => {} };
 const LINKS = [["all", "All links"], ["doc", "Documented", "The note writes the other note's path"], ["inf", "Inferred", "The note only names the other note; the name was matched"], ["none", "No links"]];
 
 async function load(ctx) {
@@ -158,7 +158,8 @@ function overview(t) {
     h("div", { class: "figs" }, fig("Notes", String(alive.length)), fig("Documented links", String(ls.filter(l => l.kind === "doc").length)),
       fig("Inferred links", String(ls.filter(l => l.kind === "inf").length)), fig("Not recorded", plural(gaps.length, "stretch", "stretches"), "before this time")),
     sec("Changed last", recent.map(([n, v]) => row("r:" + n.path, n.title, stamp(v[0]), () => select({ kind: "note", id: n.path })))),
-    sec("How to read this", h("ul", { class: "kbt-how" },
+    h("section", { class: "map-sec" }, button("How to read this", () => { K.how = !K.how; K.update(); }, { kind: "quiet", size: "s", icon: K.how ? "chevron-down" : "chevron-right", cls: "kbt-how-t" })),
+    !K.how ? null : h("section", { class: "map-sec" }, h("ul", { class: "kbt-how" },
       h("li", null, "Each dot is a note, in its topic's box, oldest first. Its size is its length. Dots that changed lately are lit; a hollow dot was deleted or dropped."),
       h("li", null, "A solid line is documented: the note writes the other note's path. A dashed line is inferred: it only names the other note, and the name was matched. An arrow means the line says it supersedes or replaces."),
       h("li", null, `Times on the slider are recorded times: backup commits, a few minutes apart, from ${stamp(D.start)}. Notes that were already there then show as existing before records began.`),

@@ -4,6 +4,24 @@ Release notes are on the [releases page](https://github.com/ihsan-sa/hive/releas
 
 A release can ship several times a day. A new Hive installs at most one a day, once it has been out for at least 12 hours; **How often to update** in Settings changes that. The latest is at [releases/latest](https://github.com/ihsan-sa/hive/releases/latest).
 
+## The places that count what waits on you now agree
+
+The **While you were away** brief, the **Needs you** page and `hive summary lint` now agree on how much waits on you, from one count. The lint also lists conversations waiting on you that **Where things stand** leaves out, and `hive progress` tracks how many.
+
+## Agents hear when a For you line is too much to ask
+
+When an agent posts a **For you** line that is long, holds several asks, a command, a chain of steps, or asks you to check its work, the post still goes out and the agent is told on the spot what a plain ask looks like. `hive progress` now counts those lines and how many came back flagged, so you can see them falling.
+
+`hive summary lint` lists items in **Where things stand** that look finished, say the same thing twice, or are really an agent's job, plus how many things each Needs-you count is counting. It only flags and never removes anything. Where the dashboard has no summary, those numbers show as blank.
+
+## While you were away is a short brief
+
+The **While you were away** card and `hive away` now fit in 15 lines, in order: what was made, what was decided for you, up to five things that need you, what broke, and a count of the rest. Made says how it knows ("posted a file", "closed ask k0123", "status Done") and never calls an agent's last word delivered. A For you stays under Needs you until its ask moves on or you answer it, and the same request reported twice counts once. Waits the agents will get past themselves, such as a usage limit, get one line of their own. **All of it** on the card, or `hive away --full`, holds every row.
+
+## Helpers' conversations fold under the one they came from
+
+When an agent starts helpers for your request, their conversations no longer pile up in the Chat list beside the one you were in. They fold under it as one row, "3 helper conversations", with how many are working, done or waiting on you; click it to see them indented, and again to fold them away. Opening a helper's conversation unfolds its family and shows "Part of ..." above the message box, with a link back. A helper that needs you keeps its own row under For you. Conversations started from another one now record where they came from, so a Hive updated to this release links new ones exactly, and older ones by which agent started them and where it was working.
+
 ## Finished conversations fade in the list
 
 The Hive now marks a conversation as **Likely not needed** when nothing in it is left for you: it's finished and you answered, or another one replaced it. The list shows it greyed, with who marked it and why when you hover. It stays there to open and write in, and comes back by itself when you write in it or something new in it is for you. **Needed again** under **More** takes the grey off, and **Not needed** greys one yourself. Agents mark one with `hive fade`.

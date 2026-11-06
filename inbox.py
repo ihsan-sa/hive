@@ -152,10 +152,12 @@ def owns_open(name, rec):
     mine = new
     if not mine: return None
     rows = "\n".join(f"{e['id']}: {str(e.get('ask'))[:120]}" for e in mine[:8])
+    try: (STATE / STOP_LOG).open("a").write(json.dumps({"at": time.time(), "name": name, "run": rec["at"], "thread": rec.get("thread"), "event": "owns_open"}) + "\n")
+    except OSError: pass
     return ("You still own these open asks as you stop. Close each one that is delivered with `hive asks done ID --evidence POSTID`, "
             "mark `hold|person|drop ID --why ...` if it waits or is moot, or leave it if work remains (say so in your thread):\n" + rows)
 
-STOP_WORDS = ("Done", "Blocked", "Needs the person", "Waiting", "Told to stop")  # how a stop reason starts, as the last line of the status bar
+STOP_WORDS = ("Done", "Blocked", "Needs the person", "Waiting", "Told to stop", "Next")  # how a stop reason starts, as the last line of the status bar
 STOP_FRESH_S = 900  # a reason older than this was written before the work that came after it
 STOP_ASKS = 3       # asked this often with no reason given, a run is let go: a hook that never lets go is a loop
 STOP_LOG = "stop-gate.jsonl"
@@ -247,7 +249,7 @@ def stops(since_h=24.0):
     try: rows = [json.loads(l) for l in (STATE / STOP_LOG).read_text().splitlines() if l.strip()]
     except (OSError, ValueError): rows = []
     for r in rows:
-        if r.get("at", 0) < time.time() - since_h * 3600: continue
+        if r.get("at", 0) < time.time() - since_h * 3600 or r.get("event") == "owns_open": continue  # that one is measure_asks.py's, not the gate's
         x = runs.setdefault((r.get("name"), r.get("run")), {"asked": None, "last": None, "why": "", "event": ""})
         if r.get("event") == "asked" and x["asked"] is None: x["asked"] = r["at"]
         x["last"], x["event"] = r["at"], r.get("event")
@@ -341,8 +343,14 @@ def main():
     else:
         try: rec = json.loads((RUN / f"{name}.json").read_text())
         except (OSError, ValueError): return
-    try: event = json.load(sys.stdin).get("hook_event_name", "")
-    except ValueError: event = ""
+    try: payload = json.load(sys.stdin)
+    except ValueError: payload = {}
+    event = payload.get("hook_event_name", "")
+    if not os.environ.get("HIVE_DOOR"):  # what this agent read, for `kb stats`. Must never stop a post being delivered
+        try:
+            import kbuse
+            kbuse.observe(name, payload)
+        except Exception: pass
     d = STATE / "delivered"; d.mkdir(parents=True, exist_ok=True)
     f = d / name
     seen = set(f.read_text().split()) if f.exists() else set()

@@ -28,6 +28,10 @@ TAIL_S = 90                # posts this long after the end still count as the ru
 BAD = ("silent", "nothing")
 GOOD = ("delivered",)
 GRADED = ("delivered", "partial", "nothing", "silent")   # the denominator of outcome_delivered_pct; quiet and not_asked are neither
+SHORT = ("partial", "nothing")   # graded runs that fell short of what was asked
+CHEAP = (None, "", "sonnet", "haiku")   # models the step-up moves off
+STEP_UP_AFTER = 2          # this many short runs in a row by one agent in one thread, on a cheap model, and its next wake is on opus
+STEP_UP_TO = "opus"
 
 def now(): return dt.datetime.now(dt.timezone.utc)
 def iso(t=None): return (t or now()).isoformat(timespec="seconds")
@@ -158,7 +162,36 @@ def cmd_grade(a):
             if not r or g.get("grade") not in ("delivered", "partial", "nothing", "not_asked"): continue
             append(LEDGER, {**r, "at": iso(), "grade": g["grade"], "why": clip(g.get("why"), 200), "posts": len(mine), "by": a.model, "cost": round(cost / len(batch), 4)}); graded += 1
     if not a.dry and todo: CURSOR.write_text(json.dumps({"at": max(r["ended"] for r in todo), "run": iso()}))
+    if not a.dry and graded: step_up(graded)
     print(f"{graded} runs graded ({len(chosen)} by the model, {len(model_runs) - len(chosen)} left unsampled), ${cost:.2f}")
+
+def step_up(new, post=None):
+    """An agent graded short STEP_UP_AFTER times in a row in one thread while on a cheap model gets its next wake on STEP_UP_TO:
+    a model-set file for the starter (the same thing `hive model opus --next` writes) and one line in the thread. Self-judged step-ups
+    were 0 of 12 in the first week (kb/model-cost.md), so the grader does it. Returns the names stepped up."""
+    rows = jsonl(LEDGER); fresh, earlier = rows[-new:] if new else [], rows[:-new] if new else rows
+    stepped, seen = [], set()
+    for r in reversed(fresh):
+        name, thread = r.get("name"), r.get("thread")
+        if not name or not thread or (name, thread) in seen: continue
+        seen.add((name, thread))
+        if r.get("grade") not in SHORT or r.get("model") not in CHEAP: continue
+        prev = [x for x in earlier if x.get("name") == name and x.get("thread") == thread and x.get("grade") in GRADED]
+        run = [r] + [x for x in reversed(prev)][:STEP_UP_AFTER - 1]
+        if len(run) < STEP_UP_AFTER or any(x.get("grade") not in SHORT or x.get("model") not in CHEAP for x in run): continue
+        f = STATE / "model-set" / f"{name}.json"
+        if f.exists(): continue
+        was = r.get("model") or "sonnet"
+        why = f"outcomes: {STEP_UP_AFTER} runs in a row graded short on {was} in thread {thread}"
+        f.parent.mkdir(parents=True, exist_ok=True); f.write_text(json.dumps({"model": STEP_UP_TO, "why": why}))
+        text = (f"Next wake on {STEP_UP_TO} (up from {was}): the grader marked {name}'s last {STEP_UP_AFTER} runs here as not delivering what was asked "
+                f"({', '.join(x.get('grade', '') for x in run)}). Step back down with `hive model sonnet --next \"why\"` once the hard part is done.")
+        (post or post_board)(thread, text); stepped.append(name)
+    return stepped
+
+def post_board(thread, text):
+    import subprocess
+    subprocess.run([str(CORE / "hive"), "post", "--thread", thread], input=text, text=True, env=dict(os.environ, HIVE_NAME="outcomes"), check=False, timeout=60)
 
 def parse_grades(out):
     try: return asks_mod().parse_json(out).get("grades", [])

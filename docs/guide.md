@@ -110,6 +110,8 @@ In a conversation:
 - **A greyed conversation** in the list is one the Hive thinks you no longer need to look at: it's finished and answered, or another one replaced it. Hover the words **Likely not needed** to see who marked it and why. It's still there to open and write in, and it comes back by itself when you write in it or something new in it is for you. **Needed again** in **More** takes the grey off for good, and **Not needed** greys one yourself.
 - **Share this result** (in **More**) turns the conversation into one web page you can post: your ask, who worked on it and how long it took, the result with its pictures, and a replay. First you see every message with a **Remove** button on each, and a plain line that everything on the page becomes public if you post it. Paths, links, emails, addresses and long tool output are already taken out, so read it anyway. The page is saved to your downloads as one file that works offline; nothing is uploaded. In a terminal, `hive share CONVERSATION` does the same, and `--show` prints the text first.
 
+**Helper conversations.** When an agent starts helpers for your request, each helper gets a conversation of its own, but the list doesn't fill with them: they fold under the conversation they came from, as one row, "3 helper conversations", with how many are working, done or waiting on you. Click the row to see them indented under it, and click again to fold them away. Opening a helper's conversation unfolds its family and shows "Part of ..." above the message box, with a link back to the one you were in. A helper that needs you keeps its own row under For you, so nothing hides behind the fold.
+
 **Brought up for you.** When you ask an agent to bring a conversation up ("can you bring that up?"), it appears in the Chat side list, above Conversations, with who raised it and why. One click opens it, and it drops off by itself after about ten minutes, or sooner if you dismiss it with its ×. Agents do it with `hive show THREAD --why "..."`.
 
 Drafts are kept for each conversation in this browser, even if you reload. A message that fails to send keeps its text and offers Retry, Edit and Discard. Sent messages can't be unsent.
@@ -376,7 +378,7 @@ Agents keep working while you're away, and when one has to stop it comes back by
 
 An agent that keeps dying is tried 3 times, then left, and you're told; a message to it carries it on. An agent you stopped stays stopped.
 
-Back after 4 hours or more, **While you were away** sits on top of the page: what was delivered, what stopped and why, and what waits on you. `hive away` says the same in a terminal.
+Back after 4 hours or more, **While you were away** sits on top of the page, in at most 15 lines: what was made, with the evidence for each (a file, a closed ask, a status of Done), what was decided for you, up to 5 things that need you, what broke, and a count of the rest. **All of it** opens the whole list. `hive away` says the same in a terminal, and `hive away --full` lists everything.
 
 Every answer above has a test run on each release. Those tests use a stand-in for Claude with Claude Code's real error words, and a pretended restart. See [Not tested yet](#not-tested-yet) for what hasn't been done for real.
 

@@ -14,6 +14,13 @@ Say what you want before bed. Wake up to it done, checked and written up, or to 
 
 <img alt="A real run of the Hive, replayed fast: the app shows who works on what and what each conversation would cost, every agent on a timeline, and one agent's own numbers" src="https://hivelab.ca/img/demo.gif" width="100%">
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://hivelab.ca/img/result-price-dark.webp">
+  <img alt="What comes back: a message from one agent saying Kettle & Co has the grinder at $169.99, the lowest in 90 days, with a chart of both shops' prices attached" src="https://hivelab.ca/img/result-price-light.webp" width="70%">
+</picture>
+
+*What you get back: the answer in plain words, and the chart it made.*
+
 ## Install
 **Where it runs:** on a machine that stays on, because agents stop when a laptop sleeps. In order: a small Linux server (rented by the month, a 4 GB plan is a good start; one file, [`cloud-init.yaml`](docs/tutorials/11-small-server.md)), your own Linux machine that stays awake, a Windows PC that stays on through WSL, or a Mac (a test build, not yet run on a real Mac). You use it from your laptop or phone. On a server, the Claude sign-in lives on that server.
 

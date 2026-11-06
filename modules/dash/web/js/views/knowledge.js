@@ -47,25 +47,7 @@ function refresh(ctx) {
   if (up && !K.seen.has(up) && (!cur || cur.type !== "dir")) fetchPath(up, ctx);
   for (let a = up; a; a = parent(a)) if (a !== up && !K.seen.has(a)) fetchPath(a, ctx);   // the sidebar tree shows every folder above the open one
 }
-// The sidebar box finds files by name only; the main box is the search engine (ranked passages and lines).
-function searchFiles(ctx) {
-  clearTimeout(K.ftimer);
-  const q = (K.fq || "").trim();
-  if (q.length < 2) { K.fres = null; return; }
-  K.ftimer = setTimeout(async () => {
-    try { const r = await jget("/api/kb/search?q=" + encodeURIComponent(q)); if ((K.fq || "").trim() === q) K.fres = r; }
-    catch (e) { K.fres = { q, names: [], hits: [], failed: e.message }; }
-    ctx.update();
-  }, 250);
-}
-function fileRows() {
-  const r = K.fres;
-  if (!r) return empty("Searching…", { kind: "loading" });
-  const ws = (K.fq || "").toLowerCase().split(/\s+/).filter(Boolean);
-  if (r.failed) return empty(r.failed, { kind: "error" });
-  if (!r.names.length) return empty("No file with that name.");
-  return list(r.names.map(n => ({ key: "f:" + n.path, href: open(n.path), title: markWords(n.path.split("/").pop(), ws), text: parent(n.path), meta: ago(n.t * 1e3).replace(" ago", "") })), { dense: true, limit: 60 });
-}
+// One search box: it finds file names and searches inside them (ranked passages and lines).
 function search(ctx) {
   clearTimeout(K.timer);
   const q = K.q.trim();
@@ -309,7 +291,6 @@ function changedRows() {
   return list((K.home.recent || []).map(f => ({ key: f.path, href: open(f.path), title: f.title || f.name, text: parent(f.path), meta: ago(f.t * 1e3).replace(" ago", "") })), { empty: "Nothing yet." });
 }
 function sideBody(path, ctx) {
-  if ((K.fq || "").trim().length >= 2) return fileRows();
   if (!path) {
     if (!K.home) return empty("Reading…", { kind: "loading" });
     return [list((K.home.shelves || []).map(s => ({ key: s.path, href: open(s.path), lead: icon("folder"), title: s.label, text: s.about, meta: String(s.n) })), { empty: "Nothing here yet." }),
@@ -354,15 +335,14 @@ function folderView(d, ctx) {
       : empty("This folder has no README. Pick a file from the list."));
 }
 
-// "/" finds a file by name, ⌘K / Ctrl+K searches everything. Only while the Knowledge page is up and nothing is being typed into.
+// "/" or ⌘K / Ctrl+K goes to the search box. Only while the Knowledge page is up and nothing is being typed into.
 addEventListener("keydown", e => {
   if (!document.querySelector(".kb") || e.altKey) return;
   const k = (e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k", slash = e.key === "/" && !e.metaKey && !e.ctrlKey;
   if (!k && !slash) return;
   const t = e.target, typing = t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName));
   if (slash && typing) return;
-  const vis = [...document.querySelectorAll(k ? "input[data-kb-all]" : "input[data-kb-files]")].find(i => i.offsetParent);
-  const box = vis || (slash ? [...document.querySelectorAll("input[data-kb-all]")].find(i => i.offsetParent) : null);
+  const box = [...document.querySelectorAll("input[data-kb-all]")].find(i => i.offsetParent);
   if (box) { e.preventDefault(); box.focus(); box.select(); }
 });
 export default {
@@ -372,12 +352,11 @@ export default {
   render(ctx) {
     if (!can("files")) return h("div", { class: "page" }, empty("Reading files needs full mode here. Sign in again if your hour is up.", { kind: "page", title: "Knowledge" }));
     const { path, line } = parse(ctx.arg), d = path ? K.seen.get(path) : null, isFile = !!d && d.type !== "dir", editing = K.edit && K.edit.at === path;
-    const find = (kbd = "⌘K") => h("label", { class: "kb-q" }, icon("search"), input({ type: "search", value: K.q, placeholder: "Search everything: notes, files, posts", "aria-label": "Search the knowledge base", "data-kb-all": "", autocomplete: "off", oninput: (e, n) => { K.q = n.value; K.qPath = path; search(ctx); ctx.update(); } }), h("kbd", null, kbd));
+    const find = (kbd = "/") => h("label", { class: "kb-q" }, icon("search"), input({ type: "search", value: K.q, placeholder: "Search everything: notes, files, posts", "aria-label": "Search the knowledge base", "data-kb-all": "", autocomplete: "off", oninput: (e, n) => { K.q = n.value; K.qPath = path; search(ctx); ctx.update(); } }), h("kbd", null, kbd));
     const searching = K.q.trim().length >= 2 && K.qPath === path;
     const side = h("nav", { class: "kb-side", "aria-label": "Files" },
       h("div", { class: "kb-top" },
-        crumbs(path),
-        h("label", { class: "kb-q" }, icon("search"), input({ type: "search", value: K.fq || "", placeholder: "Find a file by name", "aria-label": "Find a file by name", "data-kb-files": "", autocomplete: "off", oninput: (e, n) => { K.fq = n.value; searchFiles(ctx); ctx.update(); } }), h("kbd", null, "/"))),
+        crumbs(path)),
       h("div", { class: "kb-phone kb-find", "data-key": "pfind" }, find("")),
       !path && !searching && matchMedia("(max-width: 640px)").matches ? h("div", { class: "kb-phone kb-ask-p", "data-key": "pask" }, kbChat(ctx)) : null,
       searching ? h("div", { class: "kb-phone kb-phone-results", "data-key": "pres" }, resultsView()) : null,

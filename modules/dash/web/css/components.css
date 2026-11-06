@@ -2242,3 +2242,11 @@ text.map-ring-t{font-size:11px;font-weight:var(--w-med);fill:var(--ink-3);text-a
 .tm-showwrap>.tm-chip-imp{margin:2px 10px 4px}
 .cm-status-r{margin-left:10px;border:0;background:none;color:var(--accent,var(--ink));font:inherit;font-size:12px;font-weight:600;cursor:pointer;padding:0 2px}
 .cm-status-r:hover{text-decoration:underline}
+/* While you were away: a brief row holds one line (all of it is in the fold), so the card stays at 15 */
+.card.away>*{width:100%;min-width:0}
+.away-brief{grid-template-columns:minmax(0,1fr)}
+.away-brief li{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.away-wait{margin:0}
+.away-foot{display:flex;align-items:flex-start;gap:var(--s2,8px)}
+.away-foot>.fold-row{flex:1;min-width:0}
+.away-foot .btn{margin-top:0}
