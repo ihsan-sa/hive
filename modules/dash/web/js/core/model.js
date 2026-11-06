@@ -286,7 +286,7 @@ export function threadChildren(th) { const out = []; for (const d of S.threads.v
 export function threadTitle(th) {
   const own = S.threadMeta && S.threadMeta[th] && S.threadMeta[th].title; if (own) return own;   // the person renamed it
   if (btwParent(th)) { const d = S.threads.get(th), p = d && d.posts[0]; return "Aside: " + (p ? short(btwText(mdPlain(displayText(p))).split("\n")[0], 60) : btwParent(th)); }
-  if (!HEX.test(th || "")) return simpleOn() && th ? (t => t[0].toUpperCase() + t.slice(1))(th.replace(/[-_]+/g, " ")) : th;
+  if (!HEX.test(th || "")) return (simpleOn() || S.app.app) && th ? (t => t[0].toUpperCase() + t.slice(1))(th.replace(/[-_]+/g, " ")) : th;
   if (S.threadNames[th]) return S.threadNames[th];
   if (!S.app.app) return th;
   const d = S.threads.get(th), p = d && d.posts[0];
@@ -336,7 +336,7 @@ export function threadPeople(th) {
   const rank = n => (OUTSIDE.has(n) ? 0 : isRunning(n) ? 1 : S.pending[n] ? 2 : 3);
   return [...m].sort((a, b) => rank(a) - rank(b));
 }
-const asksQuestion = p => { const lines = mdPlain(displayText(p)).trim().split("\n").filter(l => l.trim()); return /\?["')]*\s*$/.test(lines[lines.length - 1] || ""); };
+export const asksQuestion = p => { const lines = mdPlain(displayText(p)).trim().split("\n").filter(l => l.trim()); return /\?["')]*\s*$/.test(lines[lines.length - 1] || ""); };
 /** Who the person has been talking to in a thread: the last agent that wrote to them, or that they named. */
 export function partner(th) {
   const d = S.threads.get(th); if (!d) return null;

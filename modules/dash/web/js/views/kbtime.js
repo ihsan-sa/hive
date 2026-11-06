@@ -8,7 +8,7 @@ import { h, s } from "../core/dom.js";
 import { can, jget } from "../core/store.js";
 import { plural, stamp } from "../core/format.js";
 import { href } from "../core/router.js";
-import { button, empty, icon, seg } from "../ui/kit.js";
+import { button, empty, icon, seg, needFull } from "../ui/kit.js";
 
 const PLAY_MS = 12000, PITCH = 30, WIDTH = 1000;
 const K = { D: null, L: null, failed: "", at: 0, cut: null, playing: false, sel: null, how: false, show: "all", update: () => {} };
@@ -33,7 +33,8 @@ async function load(ctx) {
 }
 
 // ---- the layout: fixed by the data, never by time or chance ----
-function layout(D) {
+addEventListener("resize", () => { if (K.update && document.querySelector(".kbt-sc")) K.update(); });
+function layout(D, W = WIDTH) {
   const topics = new Map();
   for (const n of D.notes) (topics.get(n.topic) || topics.set(n.topic, []).get(n.topic)).push(n);
   const order = [...topics].sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]));
@@ -43,12 +44,13 @@ function layout(D) {
     ns.sort((a, b) => (a.spans[0]?.[0] ?? 0) - (b.spans[0]?.[0] ?? 0) || a.path.localeCompare(b.path));
     const cols = Math.min(ns.length, Math.max(2, Math.ceil(Math.sqrt(ns.length * 1.8)))), rows = Math.ceil(ns.length / cols);
     const w = cols * PITCH + 16, bh = rows * PITCH + 30;
-    if (x && x + w > WIDTH) { x = 0; y += rowH + 14; rowH = 0; }
+    if (x && x + w > W) { x = 0; y += rowH + 14; rowH = 0; }
     boxes.push({ topic, x, y, w, h: bh, ns });
     ns.forEach((n, i) => pos.set(n.path, [x + 8 + PITCH / 2 + (i % cols) * PITCH, y + 26 + PITCH / 2 + Math.floor(i / cols) * PITCH]));
     x += w + 14; rowH = Math.max(rowH, bh);
   }
-  return { pos, boxes, h: y + rowH + 2 };
+  const used = Math.max(...boxes.map(b => b.x + b.w));
+  return { pos, boxes, h: y + rowH + 2, w: Math.max(used, W / 1.5), box: W };   // w: the drawing's width, grown at most 1.5x to fill a box it doesn't need
 }
 
 // ---- what was true at the cut ----
@@ -72,7 +74,10 @@ function curve(a, b) {
   return `M${x1},${y1} Q${mx - dy * k},${my + dx * k} ${x2},${y2}`;
 }
 function graph(t) {
-  const D = K.D, L = K.L, sn = selNote(), sl = selLink(), win = (D.now - D.start) / 50;
+  const D = K.D, sn = selNote(), sc = document.querySelector(".kbt-sc"), box = sc ? Math.max(560, Math.round(sc.clientWidth - 32)) : WIDTH;   // lay out to the box's real width, so the drawing fills it
+  if (Math.abs(box - K.L.box) > 24) K.L = layout(D, box);
+  if (!sc && K.update) queueMicrotask(K.update);   // first draw: the box isn't there to measure yet
+  const L = K.L, sl = selLink(), win = (D.now - D.start) / 50;
   const near = sn ? new Set([sn.path]) : sl ? new Set([sl.a, sl.b]) : null;
   const shown = linksAt(t).filter(l => K.show === "all" || K.show === l.kind || (sn && (l.a === sn.path || l.b === sn.path)));
   if (sn) for (const l of shown) if (l.a === sn.path || l.b === sn.path) near.add(l.a).add(l.b);
@@ -97,7 +102,7 @@ function graph(t) {
       s("circle", { cx: x, cy: y, r: off ? 4 : r }),
       s("title", null, `${n.title}\n${n.path}${off ? " · gone by then" : ln ? " · " + plural(ln, "line") : ""}`)));
   }
-  return s("svg", { class: "kbt-svg", viewBox: `-4 -4 ${WIDTH + 8} ${L.h + 8}`, role: "img", "aria-label": "Notes by topic at the chosen time" },
+  return s("svg", { class: "kbt-svg", viewBox: `-4 -4 ${L.w + 8} ${L.h + 8}`, role: "img", "aria-label": "Notes by topic at the chosen time" },
     s("defs", null, s("marker", { id: "kbt-ar", viewBox: "0 0 8 8", refX: 7, refY: 4, markerWidth: 7, markerHeight: 7, orient: "auto-start-reverse" }, s("path", { d: "M0,0 L8,4 L0,8 z" }))), g);
 }
 
@@ -217,7 +222,7 @@ export default {
   poll: { every: 60000, run(ctx) { load(ctx); } },   // the server memoizes 60 s, so this is cheap
   render(ctx) {
     K.update = ctx.update;
-    if (!can("files")) return empty("Seeing the knowledge base needs the files right.", { kind: "page" });
+    if (!can("files")) return needFull("Seeing the knowledge base over time");
     if (!K.D) return K.failed ? empty("Couldn't load the history: " + K.failed, { kind: "error" }) : empty("Reading the backup history…", { kind: "loading" });
     const D = K.D;
     if (!D.notes.length) return empty("No backup history of ~/kb yet.", { kind: "page" });

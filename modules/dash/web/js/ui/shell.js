@@ -1,13 +1,14 @@
 // The top bar: brand, tabs from the view registry, and the two numbers you check most (running, weekly room).
-import { brandMark } from "../core/brand.js";
+import { brandMark, brandName } from "../core/brand.js";
 import { logoClick } from "../core/alias.js";
 import { HELP, startTour } from "./tour.js";
+import { openShortcuts } from "./switcher.js";
 import { canFeedback, openFeedback, FEEDBACK_KEY } from "./feedback.js";
 import { h, s } from "../core/dom.js";
-import { S, can, needsAccount } from "../core/store.js";
+import { S, can, needsAccount, poll } from "../core/store.js";
 import { simpleOn, setSimple } from "../core/simple.js";
 import { accountUse, activeUse, fresh7, inUse, runOut, runway, totalUse } from "../core/model.js";
-import { ago, clock, dur, now, plural, stamp } from "../core/format.js";
+import { ago, clock, dur, lostText, now, plural, stamp } from "../core/format.js";
 import { href } from "../core/router.js";
 import { layout } from "../core/nav.js";
 import { getTheme, cycleTheme, THEMES } from "../core/theme.js";
@@ -18,7 +19,7 @@ import { D as deck, supported as deckSupported } from "../deck/control.js";
 export function statusBits() {
   const n = S.running.size, all = (S.usage && S.usage.logins) || (S.live && S.live.logins) || [], us = all.filter(l => inUse(l, S.usage)), hold = S.live && S.live.limit_until;
   return [
-    S.failed ? h("span", { "data-tone": "bad", style: "color:var(--ci)" }, statusDot("stuck"), "Lost contact, last data " + ago(S.fresh)) : null,
+    S.failed ? h("span", { "data-tone": "bad", style: "color:var(--ci)" }, statusDot("stuck"), lostText(S.fresh)) : null,
     h("span", { title: "agents running now", "data-tone": n ? "good" : null }, statusDot("working", { live: n > 0 }), h("b", null, String(n)), " running"),
     us.length ? loginMarks()
       : all.length ? h("span", { "data-tone": "bad", style: "color:var(--ci)" }, "no account has room") : null,
@@ -68,9 +69,9 @@ export function hiveStopped() {
 function simpleBits() {
   const stop = hiveStopped(), use = needsAccount() ? null : accountUse();
   return [
-    S.failed ? h("span", { "data-tone": "bad", style: "color:var(--ci)" }, statusDot("stuck"), "Lost contact, last news " + ago(S.fresh)) : null,
+    S.failed ? h("span", { "data-tone": "bad", style: "color:var(--ci)" }, statusDot("stuck"), lostText(S.fresh, "news")) : null,
     stop ? h("span", { "data-tone": "bad", style: "color:var(--ci)" }, statusDot("limited"), "Taking a break") : S.running.size ? h("span", null, statusDot("working", { live: true }), "Working on it") : null,
-    use && use.week ? h("span", { title: "How much of your Claude account's weekly limit is used" }, use.week.used + "% of the week used") : null,
+    use && use.week ? h("span", { title: "How much of your Claude account's weekly limit is left" }, Math.max(0, 100 - use.week.used) + "% left") : null,
   ];
 }
 /** The week used, as a small ring: two circles, the second dashed to the share used. */
@@ -90,7 +91,6 @@ function appBits() {
   const ro = act && runOut(S.usage || { logins: all }), out = ro && ro.at != null ? ro.at : null;
   return [
     callBtn(),
-    S.failed ? h("span", { "data-tone": "bad" }, statusDot("stuck"), "Lost contact, last data " + ago(S.fresh)) : null,
     stop ? goPill(stop.why === "off" ? "settings" : "usage", stop.why === "off" ? "Settings" : "Usage", { "data-tone": "bad", title: stop.why === "off" ? "The Hive isn't running" : "Every account is past its usage line" }, statusDot("limited"), stop.why === "off" ? "Not running" : "Stopped")
       : goPill("now", "Agents: what each is doing", { title: "agents running now: open Agents", "data-tone": n ? "good" : null }, statusDot("working", { live: n > 0 }), n ? [h("b", null, String(n)), n === 1 ? " agent working" : " agents working"] : "No agents working"),
     // What's left on the accounts the hive can run on now (the person, 2026-11-04), weighted by plan; and the 5-hour window when one is open.
@@ -111,6 +111,9 @@ function loginMarks() {
 }
 /** The band under the bar when the hive has stopped: says why in words, and where to look. */
 function band(current) {
+  if (S.failed) return h("div", { class: "lost", role: "status", "data-key": "band" }, statusDot("stuck"),
+    h("b", null, S.fresh ? "Lost contact" : "Can't reach the server yet"), S.fresh ? h("span", null, "last data " + ago(S.fresh) + ". What you see is old.") : null,
+    button("Try now", () => poll(), { size: "s", kind: "quiet" }));
   const sign = signInWords(); if (sign) return h("div", { class: "band", role: "status", "data-tone": "bad", "data-key": "band" }, statusDot("limited"), h("span", null, sign),
     can("logins") ? button("Sign in", null, { href: href("settings"), size: "s", kind: "quiet" }) : null);
   if (simpleOn() && needsAccount() && current !== "start" && current !== "settings") return h("div", { class: "band", role: "status", "data-key": "band" }, statusDot("limited"),
@@ -123,7 +126,7 @@ function band(current) {
     : st.why === "paused" ? "Every Claude account is paused, so no new agents start. Running ones finish their turn."
     : "The Hive has stopped starting agents: every Claude account is past its usage line. Running ones finish their turn." + (st.until ? ` It starts again ${stamp(st.until)}.` : "");
   return h("div", { class: "band", role: "status", "data-tone": "bad", "data-key": "band" }, statusDot(st.why === "off" ? "failed" : "limited"), h("span", null, text),
-    button(st.why === "off" ? "Settings" : "Usage", null, { href: href(st.why === "off" ? "settings" : "usage"), size: "s", kind: "quiet" }));
+    (to => current === to ? null : button(to === "settings" ? "Settings" : "Usage", null, { href: href(to), size: "s", kind: "quiet" }))(st.why === "off" ? "settings" : "usage"));   // no link to the page you're on
 }
 
 // ---- tabs: on the developer route every view in registry order; in the app core/nav.js says where each one sits ----
@@ -169,6 +172,7 @@ export function topBar({ views, current, update, nav }) {
     const help = [
       h("a", { class: "more-i", role: "menuitem", href: HELP, target: "_blank", rel: "noopener", "data-key": "help" }, h("b", null, "User guide")),
       h("button", { type: "button", class: "more-i", role: "menuitem", "data-key": "tour", onclick: () => { NAV.open = false; update(); startTour(); } }, h("b", null, "Take the tour")),
+      h("button", { type: "button", class: "more-i", role: "menuitem", "data-key": "shortcuts", onclick: () => { NAV.open = false; update(); openShortcuts(); } }, h("b", null, "Keyboard shortcuts"), h("span", null, "?")),
       canFeedback() ? h("button", { type: "button", class: "more-i", role: "menuitem", "data-key": "feedback", onclick: () => { NAV.open = false; update(); openFeedback(); } }, h("b", null, "Send feedback"), h("span", null, FEEDBACK_KEY)) : null,
       h("button", { type: "button", class: "more-i", role: "menuitem", "data-key": "simple", onclick: () => { NAV.open = false; setSimple(!simple); update(); } },
         h("b", null, simple ? "Show everything" : "Simple view"), h("span", null, simple ? "all the tabs and what's going on behind the scenes" : "just the chat")),
@@ -185,7 +189,7 @@ export function topBar({ views, current, update, nav }) {
   const bits = setup ? () => null : app ? (simple ? simpleBits : appBits) : statusBits;
   return h("div", null,
     h("div", { class: "top-in" },
-      h("a", { class: "brand", href: app ? "#comms" : "#now", onclick: logoClick }, brandMark()),
+      h("a", { class: "brand", href: app ? "#comms" : "#now", "aria-label": (app ? "Home: " : "Now: ") + (brandName() || "Hive"), onclick: logoClick }, brandMark()),
       h("nav", { class: "tabs", "aria-label": "Views" }, tabs),
       h("div", { class: "top-status", role: "status" }, route, bits()),
       h("div", { class: "top-icons" }, icons,

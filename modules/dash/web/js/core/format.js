@@ -41,3 +41,6 @@ export function firstSentence(s) {
   const m = s.match(/^.{20,240}?[.!?](\s|$)/);
   return m ? m[0].trim() : short(s, 240);
 }
+
+/** "Lost contact" line: no age when nothing has ever loaded (fresh is 0), so it never says "20760d ago". */
+export const lostText = (fresh, what = "data") => fresh ? `Lost contact, last ${what} ${ago(fresh)}` : "Can't reach the server yet";

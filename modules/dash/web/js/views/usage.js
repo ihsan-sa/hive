@@ -54,7 +54,7 @@ export function loginRow(U, l, t, span = 48 * HOUR) {
       : `Stops at ${wStop}% weekly${st.weekly == null ? " (global)" : ""}` + (no5 ? ". No 5-hour limit on this plan." : hStop != null ? `, ${hStop}% 5-hour.` : ", no 5-hour stop."),
     gauges: [weekly, five].filter(Boolean),
     history: any(a7) || any(a5) ? chart({ series, kind: "step", start, step, max: 100, mark: wStop, compact: true, height: 44, area: false, names: ["weekly", "5-hour"], fmt: v => Math.round(v) + "%" }) : h("span", { class: "meta" }, "no history yet"),
-    actions: [out && can("logins") ? button("Sign in", null, { size: "s", href: href("settings") }) : null,
+    actions: [out && can("logins") ? button("Sign in", null, { size: "s", href: href("settings", "accounts") }) : null,
       ...(can("limits") ? [button(S.app.app ? "Usage line" : "Stop lines", () => askLimits(U, l), { size: "s" }), button(l.paused ? "Resume" : "Pause", () => askPause(U, l), { size: "s", kind: "quiet" })] : [])],
   };
 }
@@ -117,7 +117,7 @@ function totalSection(U, t, R) {
   const key = h("span", { class: "chart-key" }, T.per.map(x => h("span", null, h("i", { style: `border-top-color:${color.get(x.l.name)}` }), `${x.l.name}${x.l.plan ? " (" + x.l.plan + ")" : ""}`)));
   return section({ title: "All accounts together", note: `this week's use over every Claude account, each counted by its plan: Ultra 10, Pro 1${tot.unread.length ? `; not read yet, left out: ${tot.unread.join(", ")}` : ""}` },
     stats([
-      { label: "Used this week, all accounts", value: Math.round(tot.pct) + "%", meter: { value: tot.pct, label: "weekly use, all accounts" }, note: `paused and full accounts count at what they've used` },
+      { label: "Used this week, all accounts", value: Math.round(tot.pct) + "%", meter: { value: 100 - tot.pct, tone: tUsed(tot.pct), label: "weekly left, all accounts" }, note: `paused and full accounts count at what they've used` },
       { label: "Capacity", value: `${tot.cap} Pro-weeks`, note: mix },
       big ? { label: "Most of it used by", value: big.l.name, note: `${Math.round(big.v)}% of its ${big.l.plan || ""} week: ${Math.round((big.v * big.w) / tot.cap)} points of the total` } : null,
     ].filter(Boolean)),
@@ -127,32 +127,38 @@ function totalSection(U, t, R) {
 }
 
 /** The app's answer: how much is left, and when more comes in. One account usually; with several, what's left is the one with most room, and when it comes back is the next one due that isn't paused. */
+const tUsed = p => (p >= 90 ? "bad" : p >= 75 ? "warn" : "data");
 export function leftAnswer(U, t = now()) {
   const us = U.logins || [], live = us.filter(l => inUse(l, U)), awake = us.filter(l => !l.paused), pick = (live.length ? live : awake.length ? awake : us).map(l => ({ l, v: fresh7(l), r: runway(l, U) })).sort((a, b) => (a.v ?? 0) - (b.v ?? 0))[0];
   if (!pick) return { lead: "No Claude account yet. Sign in under Settings.", tone: "quiet", figures: [] };
   const { l, v, r } = pick, L = l.limits || {}, w5 = !l.no_five_hour && L.five_hour && L.five_hour.r * 1e3 > t ? L.five_hour : null;
   const next = nextBack(U, t), back = next && next.at, several = us.length > 1, whose = next && several && next.l.name, left = v == null ? null : Math.max(0, 100 - Math.round(v)), room = v == null ? null : Math.max(0, Math.round(r.stop - v));
-  let lead, tone = null;
+  let lead, tone = null, tail = null;
   const when = back ? `${dayName(back)} ${clock(back)}, in ${dur(next.in)}` : "";
   if (!live.length) { lead = `The Hive has stopped starting agents: ${!awake.length ? (several ? "every account is paused" : "your account is paused") : several ? "every account is paused or past its line" : `your account is past its ${r.stop}% line`}.` + (back ? ` ${whose || "It"} comes back ${when}.` : ""); tone = "bad"; }
   else {
-    lead = (left == null ? "Claude hasn't said yet how much of this week is left" : `${left}% of this week is left`) + (!back ? "." : whose ? `, and ${whose} is the next to come back, ${when}.` : `, and it comes back in full ${when}.`);
-    if (r.before) { lead += ` At the last 6 hours' pace, new agents stop in about ${dur(r.toStop)}, at the ${r.stop}% line.`; tone = "warn"; }
-    else if (back && left != null) lead += " At the current pace it lasts until then.";
+    const first = left == null ? "Claude hasn't said yet how much of this week is left" : `${left}% of this week is left`;
+    const comes = back ? (whose ? `${whose} is the next to come back, ${when}.` : `It comes back in full ${when}.`) : "";
+    let pace = "";
+    if (r.before) { pace = ` At the last 6 hours' pace, new agents stop in about ${dur(r.toStop)}, at the ${r.stop}% line.`; tone = "warn"; }
+    else if (back && left != null) pace = " At the current pace it lasts until then.";
+    lead = first + (comes ? ", and " + comes[0].toLowerCase() + comes.slice(1) : ".") + pace;
+    // The app look has the figure in its headline already: its lead starts at the coming-back part.
+    tail = (comes + pace).trim();
   }
   // Short labels, one fact each (the person, 2026-11-04). "Left now" is the accounts the hive can run on now, weighted by plan.
   const act = activeUse(U, t), tot = totalUse(us, t), nowLeft = act ? Math.max(0, 100 - Math.round(act.pct)) : 0;
   const ro = runOut(U, t), out = ro && ro.at != null ? ro.at : null, anyPace = !!ro;
   const figures = [
-    { label: "Left now", value: nowLeft + "%", meter: act ? { value: act.pct, stop: live.length === 1 ? r.stop : null, label: "weekly use, accounts in use" } : null,
+    { label: "Left now", value: (act || left == null ? nowLeft : left) + "%", meter: act ? { value: nowLeft, tone: tUsed(act.pct), stop: live.length === 1 ? 100 - r.stop : null, label: "weekly left, accounts in use" } : null,
       note: act ? act.ls.map(x => x.name).join(", ") + (live.length === 1 && room != null ? ` · ${room} points to its line` : "") : "no account in use", tone: !live.length ? "bad" : null },
     { label: "Next to come back", value: back ? `${dayName(back).split(",")[0]} ${clock(back)}` : "?", note: back ? "in " + dur(next.in) + (whose ? `, when ${whose} resets` : ", all of it") : !awake.length ? "every account is paused" : null },
-    act && act.five ? { label: "5-hour left", value: Math.max(0, 100 - Math.round(act.five.pct)) + "%", meter: { value: act.five.pct, label: "5-hour use" }, note: `refills ${clock(act.five.r)}`, tone: act.five.pct >= 90 ? "bad" : null } : null,
+    act && act.five ? { label: "5-hour left", value: Math.max(0, 100 - Math.round(act.five.pct)) + "%", meter: { value: 100 - act.five.pct, tone: tUsed(act.five.pct), label: "5-hour left" }, note: `refills ${clock(act.five.r)}`, tone: act.five.pct >= 90 ? "bad" : null } : null,
     live.length ? { label: "Projected run out", value: out != null ? (out ? "in " + dur(out) : "now") : anyPace ? "Not this week" : "?",
       note: out != null ? (out ? `${dayName(t + out).split(",")[0]} ${clock(t + out)}, ` : "") + (ro.how === "week" ? "at this week's average pace" : "at the last 6 hours' pace") : anyPace ? "lasts until it resets" : "no recent pace", tone: out != null ? "warn" : null } : null,
-    tot ? { label: "Left overall", value: Math.max(0, 100 - Math.round(tot.pct)) + "%", meter: { value: tot.pct, label: "weekly use, all accounts" }, note: `of ${tot.cap} Pro-weeks, all accounts` } : null,
+    tot ? { label: "Left overall", value: Math.max(0, 100 - Math.round(tot.pct)) + "%", meter: { value: 100 - tot.pct, tone: tUsed(tot.pct), label: "weekly left, all accounts" }, note: `of ${tot.cap} Pro-weeks, all accounts` } : null,
   ].filter(Boolean);
-  return { lead, tone, figures, account: us.length > 1 ? l.name : null };
+  return { lead, tail: tail ?? lead, tone, figures, account: us.length > 1 ? l.name : null };
 }
 
 /** The answer: can new runs start, and for how long at this pace? */
@@ -192,14 +198,15 @@ function appHead(U, t, R, pick, d1) {
   const us = U.logins || [], ans = leftAnswer(U, t), wk = activeUse(U, t) || totalUse(us, t);
   const used = wk ? Math.round(wk.pct) : null, stopAt = U.stop_pct ?? 98, atStop = us.some(l => !l.paused) ? !us.some(l => inUse(l, U)) : used != null && used >= stopAt;
   const state = used == null ? { tone: "quiet", text: "Not read yet" } : atStop ? { tone: "bad", text: "At the stop line" } : used >= 80 ? { tone: "warn", text: "Getting close" } : { tone: "good", text: "Plenty left" };
-  const title = used == null ? "Usage isn't read yet." : `${Math.max(0, 100 - used)}% of the week is left.`;
+  const who = wk && wk.ls && us.length > 1 && wk.ls.length ? wk.ls.map(x => x.name) : null;
+  const title = used == null ? "Usage isn't read yet." : who ? `${who.join(", ")} ${who.length > 1 ? "have" : "has"} ${Math.max(0, 100 - used)}% left.` : `${Math.max(0, 100 - used)}% of the week is left.`;
   const fig = l => (ans.figures.find(f => f.label === l) || null);
   const wkF = fig("Left now"), f5 = fig("5-hour left"), tt = fig("Left overall");
   const cards = [wkF && { ...wkF, label: "This week" }, f5 && { ...f5, label: "This 5 hours" },
     { label: "Last 24 hours", value: money(spendSince(t - DAY)), note: "of work, at list prices" },
     us.length > 1 ? tt && { ...tt, label: "Left overall", note: "all accounts together" } : null].filter(Boolean);
   const lastAt = Math.max(0, ...us.map(l => (l.limits && l.limits.at) || 0));
-  return pageHeader({ state, title, lead: ans.lead, tone: ans.tone, after: h("div", { style: "margin-top:var(--s3)" }, stats(cards, { card: true })),
+  return pageHeader({ state, title, lead: (tt && who ? `${tt.value} left across all accounts. ` : "") + ans.tail, tone: ans.tone, actions: pick, after: h("div", { style: "margin-top:var(--s3)" }, stats(cards, { card: true })),
     meta: [U.scanning ? "still reading the older logs" : null, lastAt ? `limits as last reported ${ago(lastAt * 1e3)}` : null] });
 }
 
@@ -209,7 +216,7 @@ function appAccounts(U, t, R) {
   const rows = us.map(l => loginRow(U, l, t, Math.min(R.span, 7 * DAY)));
   const st = r => r.state.key === "inuse" ? tag("good", "in use") : r.state.key === "paused" ? tag("quiet", "paused") : r.state.key === "out" ? tag("bad", "signed out") : tag("warn", "at its stop line");
   const wStop = l => (l.stop && l.stop.weekly) ?? U.stop_pct;
-  return section({ title: "Claude accounts", note: `stop line ${U.stop_pct}%`, actions: can("config") ? button("Change", () => askStopLine(U), { size: "s", kind: "quiet" }) : null },
+  return section({ title: "Claude accounts", note: `stop line ${U.stop_pct}%`, actions: can("config") ? button("Change stop line", () => askStopLine(U), { size: "s", kind: "quiet" }) : null },
     table({ key: r => r.key, rows, columns: [
       { label: "Login", render: r => h("span", null, r.name, r.tag ? h("span", { class: "meta" }, " · " + r.tag) : null) },
       { label: "Weekly", render: r => cell(r.gauges.find(g => g.label === "Weekly"), r.gauges.find(g => g.label === "Weekly")?.stop) },
@@ -225,8 +232,8 @@ function appChart(U, t, R, pick) {
   const many = T.per.length > 1;
   const series = many ? [T.total, ...T.per.map(x => x.vals)] : [T.total.some(v => v != null) ? T.total : T.per[0].vals];
   const key = many ? h("span", { class: "chart-key" }, T.per.map(x => h("span", null, h("i", { style: `border-top-color:${color.get(x.l.name)}` }), x.l.name))) : null;
-  return section({ title: "Week used", actions: pick },
-    chart({ title: "% of the week used", note: `${R.name}; dashed: stop line ${U.stop_pct}%`, series, colors: many ? ["var(--data)", ...T.per.map(x => color.get(x.l.name))] : null, kind: "step", start: T.start, step: T.step, max: 100, mark: U.stop_pct, markLabel: "stop line", fmt: v => Math.round(v) + "%", top: "100%" }), key);
+  return section({},
+    chart({ title: "Used, " + R.name, note: `% of the week; dashed: stop line ${U.stop_pct}%`, series, colors: many ? ["var(--data)", ...T.per.map(x => color.get(x.l.name))] : null, kind: "step", start: T.start, step: T.step, max: 100, mark: U.stop_pct, markLabel: "stop line", fmt: v => Math.round(v) + "%", top: "100%" }), key);
 }
 
 export default {
@@ -250,7 +257,7 @@ export default {
 
     const key = h("span", { class: "chart-key" }, h("span", null, h("i"), "weekly"), h("span", null, h("i", { "data-k": "1" }), "5-hour"), h("span", null, h("i", { "data-k": "mark" }), "stop"), h("span", null, "· " + (R.span > 7 * DAY ? "last 7 days" : R.name)));
     const limits = section({ title: app ? "Claude accounts" : "Logins", note: app ? `stop line ${U.stop_pct}%` : "pause one to keep the starter off it, or set where it stops",
-        actions: app && can("config") ? button("Change", () => askStopLine(U), { size: "s", kind: "quiet" }) : null },
+        actions: app && can("config") ? button("Change stop line", () => askStopLine(U), { size: "s", kind: "quiet" }) : null },
       gaugeRows({ head: ["Login", "Limits", key, ""], histKey: key, rows: us.map(l => loginRow(U, l, t, Math.min(R.span, 7 * DAY))) }));
     const provs = Object.keys(P).filter(k => !k.startsWith("_"));
     const others = provs.length ? section({ title: "Other providers" }, gaugeRows({ rows: provs.map(k => providerRow(k, P[k], P._checked)) })) : null;
@@ -290,8 +297,8 @@ export default {
     const tiers = section({ title: "Spend against your priority list", note: R.name },
       share(TIERS.map(x => ({ key: x.key, label: x.label, tone: x.tone, value: byTier[x.key], text: `${money(byTier[x.key])} (${Math.round((100 * byTier[x.key]) / tot)}%)` }))));
     const who = cols(
-      section({ title: "Costliest threads", note: R.name }, rank(top(byT).map(([k, v]) => ({ key: k, label: threadTitle(k), value: v, text: money(v), tone: tier(tierOf(k)).tone, href: threadHref(k) })))),
-      section({ title: "Costliest agents", note: R.name }, rank(top(byA).map(([k, v]) => ({ key: k, label: k, value: v, text: money(v), tone: status(agentStatus(k).key).tone, href: agentHref(k), onClick: e => openRef(e, "agent", k) })))));
+      section({ title: "Costliest threads", note: R.name }, rank(top(byT).map(([k, v]) => ({ key: k, label: threadTitle(k) || k || "No thread", value: v, text: money(v), tone: tier(tierOf(k)).tone, href: threadHref(k) })))),
+      section({ title: "Costliest agents", note: R.name }, rank(top(byA).map(([k, v]) => ({ key: k, label: k || "No agent", value: v, text: money(v), tone: status(agentStatus(k).key).tone, href: agentHref(k), onClick: e => openRef(e, "agent", k) })))));
     const models = section({ title: "By model", note: R.name }, !Object.keys(byM).length ? empty("No model spend in this range.") : rank(top(byM).map(([k, v]) => ({ key: k, label: k, value: v, text: money(v), tone: "data" }))));
 
     if (app) {

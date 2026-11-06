@@ -36,7 +36,7 @@ export default {
   render() {
     if (!S.live) return h("div", { class: "page" }, empty("Reading…", { kind: "loading" }));
     const things = madeThings();
-    return h("div", { class: "page", "data-key": "made" },
+    return h("div", { class: "page", "data-width": "narrow", "data-key": "made" },
       pageHeader({ title: "Files and links", lead: "Files and links from your conversations, newest first." }),
       things.length ? h("ul", { class: "list" }, things.map(t => h("li", { class: "lr", "data-key": t.key },
         h("a", { class: "lr-in", href: t.url, target: "_blank", rel: "noopener noreferrer" },

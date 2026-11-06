@@ -50,7 +50,7 @@ function walkthrough(ctx, s) {
     // A sandbox that doesn't work stops agents from starting, so that one is said in full here. When it works, it's a line.
     sbOk ? null : card("sandbox-step", "The sandbox on this machine", sandboxPart(up)),
     h("p", { class: "field-h", "data-key": "defaults" },
-      sbOk ? "Agents run in a sandbox, and anything bigger asks first. " : "",
+      sbOk ? (simpleOn() ? "Your Hive works in a protected space, and anything bigger asks first. " : "Agents run in a sandbox, and anything bigger asks first. ") : "",
       pg.share_text ? (sharing.length ? "Sent to the Hive's developer once you press Finish: " + sharing.join(" and ") + ". " : "Nothing is sent to the Hive's developer. ") : "",
       "Sharing, power, the sandbox and the model are in ", h("a", { href: href("settings") }, "Settings"), ", where you can change them any time."),
     foot(anyAccount() ? button("Finish", async () => { if (await saveSettings({ setup_done: true }, up)) up(); }, { kind: "primary", busy: finishing() }) : h("span", { class: "meta" }, "Add your account to go on.")));

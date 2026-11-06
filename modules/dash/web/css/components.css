@@ -13,7 +13,7 @@
 @media (max-width:640px){:root{--bar-h:49px}}
 .top{position:sticky;top:0;z-index:30;background:var(--surface);border-bottom:1px solid var(--line)}
 .top-in{display:flex;align-items:center;gap:var(--s4);height:52px;padding:0 var(--s3) 0 var(--s4)}
-.brand{display:flex;align-items:center;gap:8px;font-weight:var(--w-bold);font-size:15px;letter-spacing:-.01em;color:var(--ink);text-decoration:none;white-space:nowrap}
+.brand{display:flex;align-items:center;gap:8px;font-weight:var(--w-bold);font-size:var(--fs-title);letter-spacing:-.01em;color:var(--ink);text-decoration:none;white-space:nowrap}
 /* consumer: tabs are a segmented control */
 .tabs{display:flex;gap:2px;padding:3px;border-radius:var(--r-m);background:var(--sunken);overflow-x:auto;scrollbar-width:none;min-width:0}
 .tabs::-webkit-scrollbar{display:none}
@@ -21,7 +21,7 @@
 .tab:hover{color:var(--ink)}
 .tab[aria-current=page]{background:var(--surface);color:var(--ink);box-shadow:0 0 0 1px var(--line),0 1px 2px oklch(0% 0 0 / .05)}
 .tab:focus-visible{outline-offset:-2px}
-.tab-badge{min-width:16px;padding:0 5px;border-radius:var(--r-pill);background:var(--accent);color:var(--on-ink);font-size:10.5px;font-weight:var(--w-bold);line-height:16px;text-align:center}
+.tab-badge{min-width:16px;padding:0 5px;border-radius:var(--r-pill);background:var(--accent);color:var(--on-ink);font-size:var(--fs-micro);font-weight:var(--w-bold);line-height:16px;text-align:center}
 /* developer: plain tabs with an underline, many of them */
 :root[data-dev] .tabs{background:none;padding:0;gap:0;align-self:stretch}
 :root[data-dev] .tab{height:auto;border-radius:0;padding:0 10px}
@@ -66,7 +66,7 @@ a.top-route[data-mode=limited]:hover{background:color-mix(in oklch,var(--warn) 3
 .more-i:hover,.more-i[aria-current]{background:var(--hover);color:var(--ink)}
 .more-i b{font-weight:var(--w-med)}
 .more-i span{display:none}             /* the one-line descriptions go: the names say it */
-.more-h{padding:8px 10px 4px;font-size:var(--fs-meta);font-weight:var(--w-med);color:var(--ink-3)}
+.more-h{padding:8px 10px 4px;font-size:var(--fs-meta);font-weight:var(--w-med);color:var(--ink-2)}
 .more-m>.more-h:not(:first-child){margin-top:6px;border-top:1px solid var(--line);padding-top:10px}
 /* ---- a tab's own pages, a row under the bar (core/nav.js) ---- */
 .subtabs{display:flex;align-items:center;gap:2px;height:38px;padding:0 var(--s4);border-top:1px solid var(--line);overflow-x:auto;scrollbar-width:none;font-size:var(--fs-small)}
@@ -126,7 +126,7 @@ a.top-route[data-mode=limited]:hover{background:color-mix(in oklch,var(--warn) 3
 .sec-h{display:flex;align-items:baseline;gap:var(--s2) var(--s3);flex-wrap:wrap;margin-bottom:var(--s2)}
 .sec-t{font-size:var(--fs-small);font-weight:var(--w-bold);letter-spacing:.005em}
 .sec-n{font-size:var(--fs-meta);color:var(--ink-3)}
-.sec-a{margin-left:auto;display:flex;gap:var(--s2);align-items:center}
+.sec-a{margin-left:auto;display:flex;min-width:0;max-width:100%;gap:var(--s2);align-items:center}
 .sec-more{margin-top:var(--s2)}
 /* level 1: a part of a long page (Settings groups, the website, the guide). Level 2, the default, is a group inside a part. */
 .sec[data-level="1"]>.sec-h{margin-bottom:var(--s3);padding-bottom:var(--s2);border-bottom:1px solid var(--line)}
@@ -157,10 +157,12 @@ a.top-route[data-mode=limited]:hover{background:color-mix(in oklch,var(--warn) 3
 .ref>.sd,.ref-sw{align-self:center}
 .ref-sw{flex:none;width:6px;height:6px;border-radius:1px;background:var(--c)}
 .ref-wrap{display:inline-flex;align-items:center;gap:2px;min-width:0}
-.copy{flex:none;border:0;background:none;padding:0 3px;border-radius:var(--r-s);color:var(--ink-3);font-size:11px;line-height:18px;cursor:pointer;opacity:0}
+.copy{flex:none;border:0;background:none;padding:0 3px;min-width:24px;min-height:24px;border-radius:var(--r-s);color:var(--ink-3);font-size:var(--fs-micro);line-height:18px;cursor:pointer;opacity:0}
 .ref-wrap:hover .copy,.copy:focus-visible{opacity:1}
 .copy:hover{color:var(--ink);background:var(--hover)}
 @media (hover:none){.copy{opacity:1}}
+@media (max-width:600px){.ref{min-height:24px;align-items:center}}   /* a phone tap target: refs in tables and lists are links too */
+@media (max-width:600px){.ag-f input[type=checkbox]{width:24px;height:24px;margin:0;flex:none}.ag-f label{display:inline-flex;align-items:center;gap:6px}}   /* the Columns checkboxes are phone tap targets */
 
 /* ---- button, seg, field (redesign 2026-11-04) ---- */
 .btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:var(--ctl);padding:0 12px;border:1px solid var(--line-2);border-radius:var(--r-m);background:var(--surface);color:var(--ink);font-size:var(--fs-small);font-weight:var(--w-med);line-height:1;white-space:nowrap;cursor:pointer;text-decoration:none;transition:background-color .12s,border-color .12s,color .12s}
@@ -258,6 +260,9 @@ a.lr-in:hover{background:var(--hover);color:inherit}
 /* Extras: the names, the words and the buttons each keep their own column */
 .mod-row{display:grid;grid-template-columns:9rem minmax(0,1fr) auto;column-gap:var(--s3);align-items:center}
 .mod-name{overflow-wrap:anywhere}
+.mod-line{display:flex;align-items:center;gap:var(--s1);min-width:0}
+.mod-one{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mod-line .sec-info{flex:none}
 .mod-where{display:block;font-size:var(--fs-small);margin-top:2px}
 .mod-group+.mod-group{margin-top:var(--s4)}
 .mod-gt{font-size:var(--fs-small);font-weight:600;margin:0 0 var(--s2);display:flex;flex-wrap:wrap;gap:var(--s2);align-items:baseline}
@@ -297,7 +302,7 @@ a.rank-in:hover{background:var(--hover);color:inherit}
 .tbl tr:last-child td{border-bottom:1px solid var(--line)}
 .tbl .num{text-align:right}
 .tbl .wrap{white-space:normal;overflow-wrap:anywhere;width:100%;min-width:14rem}
-.tbl td.mono{font-family:var(--mono);font-size:12px;color:var(--ink-2)}
+.tbl td.mono{font-family:var(--mono);font-size:var(--fs-meta);color:var(--ink-2)}
 .tbl .clip{width:100%;max-width:0;overflow:hidden;text-overflow:ellipsis}
 @container (max-width:640px){.tbl .clip{max-width:none;width:auto;overflow:visible}}
 .tbl tbody tr:hover td{background:var(--hover)}
@@ -307,7 +312,7 @@ a.rank-in:hover{background:var(--hover);color:inherit}
 .chart-h{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;margin-bottom:var(--s2);font-size:var(--fs-small)}
 .chart-h b{font-weight:600}
 .chart-h span{font-size:var(--fs-meta);color:var(--ink-3)}
-.plot{position:relative;height:var(--h,96px);margin-right:38px;border-bottom:1px solid var(--line-2);cursor:crosshair}
+.plot{position:relative;height:var(--h,96px);margin-right:46px;border-bottom:1px solid var(--line-2);cursor:crosshair}
 .plot>svg{position:absolute;inset:0;width:100%;height:100%;overflow:visible}
 .plot .p-area{fill:var(--c,var(--data));opacity:.14}
 .plot .p-line{fill:none;stroke:var(--c,var(--data));stroke-width:1.6;stroke-linejoin:round;vector-effect:non-scaling-stroke}
@@ -395,6 +400,8 @@ a.rank-in:hover{background:var(--hover);color:inherit}
 .toolbar .input{width:260px;max-width:100%}
 .toolbar .seg{max-width:100%;overflow-x:auto;scrollbar-width:none}
 .toolbar .seg button{flex:none}
+.sec-h .seg{max-width:100%;overflow-x:auto;scrollbar-width:none}
+.sec-h .seg button{flex:none}
 @container (max-width:640px){.toolbar .input{width:100%}}
 
 /* ---- jobs-split: one usage bar with its label ---- */
@@ -406,7 +413,7 @@ a.rank-in:hover{background:var(--hover);color:inherit}
 .lg{list-style:none;font-size:var(--fs-small)}
 .lg-day{padding:var(--s3) 0 var(--s1);font-size:var(--fs-meta);font-weight:var(--w-med);color:var(--ink-2)}
 .lg-r{display:flex;gap:var(--s3);align-items:baseline;padding:3px 0;border-top:1px solid var(--line)}
-.lg-t{flex:none;width:4.6rem;white-space:nowrap;color:var(--ink-3);font-size:var(--fs-meta);font-variant-numeric:tabular-nums}
+.lg-t{flex:none;width:4.6rem;white-space:nowrap;color:var(--ink-2);font-size:var(--fs-meta);font-variant-numeric:tabular-nums}
 .lg-b{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
 .lg-b .ref{margin-inline:2px}
 .lg-b .ref:first-child{margin-left:0}
@@ -451,7 +458,8 @@ ul.plain{margin:0;padding-left:1.2em;display:grid;gap:var(--s2)}
 .feed-r{display:flex;gap:var(--s2);align-items:baseline;padding:5px 0;border-top:1px solid var(--line);font-size:var(--fs-meta);line-height:1.4;overflow-wrap:anywhere}
 .feed-r:first-child{border-top:0}
 .feed-r>time{flex:none;color:var(--ink-3);font-variant-numeric:tabular-nums}
-.feed-k{flex:none;padding:0 6px;border-radius:var(--r-s);font-size:var(--fs-micro);font-weight:var(--w-bold);line-height:1.5;color:var(--ci);background:color-mix(in oklch,var(--c) 14%,transparent);white-space:nowrap}
+.feed-k{flex:none;padding:0 6px;border-radius:var(--r-s);font-size:var(--fs-micro);font-weight:var(--w-bold);line-height:1.5;color:var(--ink-2);background:var(--sunken);white-space:nowrap}
+.feed-k[data-said]{background:none;color:var(--ink-3)}   /* tool chips are categories, not statuses (handoff CSS 5) */
 .feed-x{min-width:0;font-family:var(--mono);color:var(--ink-2)}
 .feed-r[data-said] .feed-x{font-family:var(--font);font-size:var(--fs-small);color:var(--ink);white-space:pre-wrap;border-left:2px solid var(--info);padding-left:var(--s2)}
 
@@ -499,8 +507,8 @@ button.lr-in{width:calc(100% + 16px);border:0;background:none;text-align:left;fo
 @container (max-width:640px){
   .cvp[data-key=mesh]{height:auto}
   .cvp-bar{padding:var(--s2) 0 6px;gap:4px var(--s3)}
-  .cvp-ctl{display:flex;flex:none;width:100%;align-items:center;gap:var(--s2);padding:0 var(--s3);overflow-x:auto;scrollbar-width:none}
-  .cvp-ctl::-webkit-scrollbar{display:none}
+  .cvp-ctl{display:flex;flex:none;width:100%;align-items:center;gap:var(--s2);padding:0 var(--s3);flex-wrap:wrap;row-gap:var(--s2)}   /* wraps: the zoom and pan buttons take a second row instead of running off at 390 */
+
   .cvp-ctl>*{flex:none}
   .cvp-count{padding:0 var(--s3);font-size:var(--fs-meta)}
   .cvp-count+.cvp-count{padding-left:0}
@@ -854,7 +862,7 @@ span.msg-thumb,span.msg-file{cursor:default}
 /* a file card: a small page with the type on it, the name and what it is, and Open (the way Claude shows a file it made) */
 .msg-file{display:inline-flex;align-items:center;gap:12px;width:min(100%,330px);padding:8px 10px 8px 8px;min-width:0;border-radius:var(--r-l);transition:border-color .12s,box-shadow .12s}
 .msg-file:hover{box-shadow:var(--e1)}
-.msg-file>b{flex:none;position:relative;display:flex;align-items:flex-end;justify-content:center;width:38px;height:46px;padding:0 0 6px;border:1px solid var(--line-2);border-radius:4px 10px 4px 4px;background:var(--bg);font-size:9px;font-weight:var(--w-bold);letter-spacing:.03em;color:var(--ink-2);line-height:1;transform:rotate(-3deg)}
+.msg-file>b{flex:none;position:relative;display:flex;align-items:flex-end;justify-content:center;width:38px;height:46px;padding:0 0 6px;border:1px solid var(--line-2);border-radius:4px 10px 4px 4px;background:var(--bg);font-size:var(--fs-micro);font-weight:var(--w-bold);letter-spacing:.03em;color:var(--ink-2);line-height:1;transform:rotate(-3deg)}
 .msg-file>b::before{content:"";position:absolute;top:9px;left:7px;right:7px;height:12px;background:repeating-linear-gradient(var(--line-2) 0 1.5px,transparent 1.5px 4.5px)}
 .msg-file:hover>b{transform:rotate(0)}
 @media (prefers-reduced-motion:no-preference){.msg-file>b{transition:transform .15s}}
@@ -872,7 +880,7 @@ span.msg-thumb,span.msg-file{cursor:default}
 @media (min-width:1000px){body[data-pv] :is(#top,#main){margin-right:calc(min(var(--pv-w,560px),100% - 16px) + 16px)}}
 /* the Files list: a small card floating at the right under the header; the page doesn't move over for it */
 @media (min-width:701px){
-.pv[data-kind=files]{top:72px;bottom:auto;right:16px;width:min(340px,calc(100% - 32px));max-height:min(460px,calc(100vh - 160px));box-shadow:var(--e3,var(--e2))}
+.pv[data-kind=files]{top:72px;bottom:auto;right:16px;width:min(340px,calc(100% - 32px));max-height:min(460px,calc(100vh - 160px));box-shadow:var(--e2)}
 .pv[data-kind=files]~.pv-grip,body:has(.pv[data-kind=files]) .pv-grip{display:none}
 body[data-pv]:has(.pv[data-kind=files]) :is(#top,#main){margin-right:0}
 }
@@ -896,7 +904,7 @@ body[data-pv-full] :is(#top,#main){margin-right:0}
 .pv-link[data-ok]{color:var(--accent)}
 /* The file name is a switcher between this conversation's files, like the title menu in Claude's artifact view. */
 .pv-swb{position:relative;min-width:0;display:flex}
-.pv-sw{all:unset;box-sizing:border-box;display:inline-flex;align-items:center;gap:4px;min-width:0;max-width:100%;margin:-2px -6px;padding:2px 6px;border-radius:var(--r-s);cursor:pointer}
+.pv-sw{all:unset;box-sizing:border-box;display:inline-flex;align-items:center;gap:4px;min-width:0;max-width:100%;min-height:var(--ctl-s);margin:-4px -6px;padding:2px 6px;border-radius:var(--r-s);cursor:pointer}
 .pv-sw:hover,.pv-sw[aria-expanded=true]{background:var(--sunken)}
 .pv-sw:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 .pv-sw>svg{flex:none;width:14px;height:14px;color:var(--ink-3)}
@@ -915,9 +923,10 @@ body[data-pv-full] :is(#top,#main){margin-right:0}
 .pv-a{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
 .pv-sp{flex:1}
 .pv-tabs{display:inline-flex;gap:2px;padding:2px;border-radius:var(--r-m);background:var(--sunken)}
-.pv-tab{padding:2px 10px;border:0;border-radius:calc(var(--r-m) - 2px);background:transparent;color:var(--ink-2);font:inherit;font-size:var(--fs-meta);cursor:pointer;white-space:nowrap}
+.pv-tab{display:inline-flex;align-items:center;min-height:calc(var(--ctl-s) - 4px);padding:2px 10px;border:0;border-radius:calc(var(--r-m) - 2px);background:transparent;color:var(--ink-2);font:inherit;font-size:var(--fs-meta);cursor:pointer;white-space:nowrap}
 .pv-tab:hover{color:var(--ink)}
 .pv-tab:is([aria-pressed=true],[aria-selected=true]){background:var(--surface);color:var(--ink);box-shadow:var(--e1)}
+@media (max-width:700px){.pv-tab{min-height:var(--ctl)}.pv-sw{min-height:var(--ctl)}.pv .pv-zb{min-width:var(--ctl);height:var(--ctl)}.pv .pv-files,.pv .pv-prev,.pv .pv-next,.pv .pv-link,.pv .pv-x,.pv .pv-full{min-width:var(--ctl)}}
 .pv-s{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;position:relative}
 .pv-s:has(>.pv-frame,>.pv-page,>.pv-av,>.pv-media){overflow:hidden;display:flex;flex-direction:column}
 .pv-wait{padding:var(--s4);text-align:center}
@@ -970,7 +979,8 @@ body[data-pv-full] :is(#top,#main){margin-right:0}
 .pv-av>audio{width:min(100%,520px)}
 /* JSON tree */
 .jt-root{font-family:var(--mono);font-size:var(--fs-meta);line-height:1.55}
-.jt>summary{cursor:pointer;list-style-position:outside;margin-left:1em}
+.jt>summary{cursor:pointer;list-style-position:outside;margin-left:1em;min-height:var(--ctl-s);display:list-item}
+@media (max-width:700px){.jt>summary,.pv-s th>button{min-height:var(--ctl)}}
 .jt-in{margin-left:1em;padding-left:10px;border-left:1px solid var(--line)}
 .jt-row{margin-left:1em;overflow-wrap:anywhere}
 .jt-k{color:var(--ink-2);font-weight:600}
@@ -1068,7 +1078,7 @@ a.ref[data-kind=file][data-pv-on]{background:color-mix(in oklch,var(--accent) 16
 .cp-menu-n{margin:4px 8px 4px;font-size:var(--fs-meta);color:var(--ink-3);line-height:1.4;text-wrap:pretty}
 .cp-reply{display:flex;align-items:center;gap:6px;min-width:0;padding:4px 6px 4px 10px;border-left:2px solid var(--info);font-size:var(--fs-small)}
 .cp-reply-x{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink-2)}
-.cp-x{flex:none;width:24px;height:24px;border:0;border-radius:var(--r-s);background:none;color:var(--ink-3);font-size:15px;line-height:1;cursor:pointer}
+.cp-x{flex:none;width:24px;height:24px;border:0;border-radius:var(--r-s);background:none;color:var(--ink-3);font-size:var(--fs-title);line-height:1;cursor:pointer}
 .cp-x:hover{background:var(--hover);color:var(--ink)}
 .cp-err{font-size:var(--fs-small);color:var(--bad-ink)}
 .cp-files{display:flex;flex-wrap:wrap;gap:6px;padding:8px 8px 0}
@@ -1111,8 +1121,12 @@ a.ref[data-kind=file][data-pv-on]{background:color-mix(in oklch,var(--accent) 16
 .cm-tl .list{border-bottom:0}
 .cm-tl .lr:first-child{border-top:0}
 .cm-tl .lr-in{margin:0;padding:11px var(--s2)}
+.cm-tl button.lr-in{width:100%}   /* the shared 100% + 16px is for rows with a -8px margin; here it made the list scroll sideways */
+.cm-tl{overflow-x:hidden}
 .cm-tl .lr-in[style]{padding-left:calc(var(--s2) + var(--d,0)*14px)}   /* a helper conversation under the one it came from */
 .cm-tl .lr[data-key$="~kids"] .lr-t b{font-weight:500;color:var(--ink-2)}
+.cm-tl .lr[data-key$="~kids"] .lr-t b{flex:none}.cm-tl .lr[data-key$="~kids"] .lr-t .meta{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis}   /* the title stays whole, the counts give way */
+.cm-tl .lr-x{padding-right:52px}   /* clear of the star and pin */
 .cm-tl .lr-in[aria-current]{background:var(--hover);box-shadow:inset 2px 0 0 var(--ink)}
 .cm-tl .lr-t{font-size:var(--fs-body)}
 .cm-tl .lr-t b{flex:1 1 auto;font-weight:600}
@@ -1196,8 +1210,7 @@ a.ref[data-kind=file][data-pv-on]{background:color-mix(in oklch,var(--accent) 16
   .cm-tt{flex-wrap:nowrap;gap:var(--s2)}
   .cm-title{flex:1 1 auto;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .cm-count,.cm-id{display:none}
-  .cm-tt[data-dev]{flex-wrap:wrap}
-  .cm-tt[data-dev] .cm-title{order:9;flex:1 0 100%}
+  .cm-tt[data-dev]>.btn[data-size=s]{flex:0 1 auto;min-width:0;max-width:112px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .cm-tools{margin-left:auto;flex:none}
   .cm-tools .cm-find{display:none}
   .cm-head:not(:has(.cm-menu)) .cm-tools:not(:has(.btn)) .cm-find{display:block;width:140px}
@@ -1322,7 +1335,7 @@ details.blk[open]>summary .blk-t::after{margin-bottom:-1px;transform:rotate(225d
 .chip{display:inline-flex;align-items:center;gap:6px;height:24px;padding:0 9px;border-radius:var(--r-pill);background:var(--sunken);color:var(--ink-2);font-size:var(--fs-meta);font-weight:var(--w-med);white-space:nowrap} /* NEW */
 .chip[data-tone]{color:var(--ci);background:color-mix(in oklch,var(--c) 11%,transparent)}
 .chip[data-out]{background:none;box-shadow:inset 0 0 0 1px var(--line-2)}
-.nb{display:inline-flex;align-items:center;height:18px;padding:0 7px;border:1px dashed var(--line-2);border-radius:var(--r-pill);color:var(--ink-3);font-size:10.5px;font-weight:var(--w-med);line-height:1;white-space:nowrap;vertical-align:.08em}
+.nb{display:inline-flex;align-items:center;height:18px;padding:0 7px;border:1px dashed var(--line-2);border-radius:var(--r-pill);color:var(--ink-3);font-size:var(--fs-micro);font-weight:var(--w-med);line-height:1;white-space:nowrap;vertical-align:.08em}
 .sec-h{display:flex;align-items:baseline;gap:var(--s2) var(--s3);flex-wrap:wrap;margin-bottom:var(--s3)}
 .sec-t{font-size:var(--fs-small);font-weight:var(--w-bold);letter-spacing:0}
 .sec-n{font-size:var(--fs-meta);color:var(--ink-3)}
@@ -1349,6 +1362,7 @@ details.blk[open]>summary .blk-t::after{margin-bottom:-1px;transform:rotate(225d
 .blk-s{grid-column:1;font-size:var(--fs-meta);color:var(--ink-3);line-height:1.45}
 .blk-a{grid-column:2;grid-row:1 / span 2;display:flex;gap:var(--s2);align-items:center}
 .blk-a .input{width:240px}
+@media (max-width:640px){.blk-h{grid-template-columns:minmax(0,1fr)}.blk-a{grid-column:1;grid-row:auto;flex-wrap:wrap;margin-top:var(--s2)}.blk-a .input{width:100%!important}}   /* phone: the control goes under the words, not beside a 90 px column of them */
 .blk-b{display:grid;gap:var(--s3);margin-top:var(--s3);font-size:var(--fs-small)}
 .blk-save{display:flex;align-items:center;gap:var(--s2);padding:12px 20px;border-top:1px solid var(--line);background:var(--bg);font-size:var(--fs-meta);color:var(--ink-3)} /* NEW use: the footer of a group of text fields */
 .blk-save .btn{margin-left:auto}
@@ -1377,7 +1391,12 @@ details.blk>summary .blk-t::after{border-color:var(--ink-3)}
 .cm-tl .lr-t .meta{font-size:var(--fs-micro)}
 .cm-tl .lr-x{-webkit-line-clamp:1;margin-top:1px;font-size:var(--fs-meta);color:var(--ink-3)}
 .cm-st{font-weight:var(--w-med);color:var(--ci)}
+.cm-draft{font-weight:var(--w-med);color:var(--accent)}
 .cm-side-f{display:none}                                  /* "All messages" moves into the search menu */
+.cm-places{display:flex;flex-wrap:wrap;gap:2px 0;padding:var(--s2) var(--s2);border-top:1px solid var(--line)}
+.cm-place{display:inline-flex;align-items:center;gap:var(--s1);height:var(--ctl-s);padding:0 6px;border-radius:var(--r-s);color:var(--ink-3);font-size:var(--fs-meta);font-weight:var(--w-med);text-decoration:none}
+.cm-place:hover{background:var(--hover);color:var(--ink)}
+.cm-place-n{min-width:16px;height:16px;padding:0 4px;border-radius:var(--r-pill);background:var(--accent);color:var(--on-accent,#fff);font-size:var(--fs-micro);font-weight:var(--w-med);line-height:16px;text-align:center}
 .cm-head{display:flex;align-items:center;gap:var(--s3);min-height:52px;padding:0 var(--s3) 0 var(--s5);border-bottom:0}
 .cm-tt{flex:1;flex-wrap:nowrap;gap:var(--s2)}
 .cm-title{font-size:var(--fs-body);font-weight:var(--w-bold);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -1404,6 +1423,7 @@ details.blk>summary .blk-t::after{border-color:var(--ink-3)}
 .cm-search>.input:focus-visible{background:var(--surface);border-color:var(--focus)}
 .cm-scope-b{height:22px;padding:0 6px;border:0;border-radius:var(--r-s);background:none;color:var(--ink-3);font:inherit;cursor:pointer}
 .cm-scope-b:hover{background:var(--hover);color:var(--ink)}
+@media (pointer:coarse),(max-width:640px){.cm-scope-b{min-height:44px;padding:0 10px}}
 .cm-newbtn{justify-content:flex-start}
 .cm-msgs{padding:var(--s2) var(--s5) var(--s4)}
 .cm-day{margin:var(--s5) auto var(--s3);justify-content:center}
@@ -1417,7 +1437,7 @@ details.blk>summary .blk-t::after{border-color:var(--ink-3)}
 .cm-strip:not([data-open]) .cm-line:not([data-key=asks]) .cm-line-a,.cm-strip:not([data-open]) .cm-line[data-key=helper]{display:none}
 .cm-line[data-key=asks] .cm-line-a{opacity:1}   /* a question's Answer is always there */
 .cm-line-x{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.cm-line-x b{font-family:var(--mono);font-size:11.5px}
+.cm-line-x b{font-family:var(--mono);font-size:var(--fs-meta)}
 .cm-line-a{margin-left:auto;opacity:0}
 .cm-line:hover .cm-line-a,.cm-line:focus-within .cm-line-a{opacity:1}
 @media (hover:none){.cm-line-a{opacity:1}}
@@ -1461,7 +1481,7 @@ details.blk>summary .blk-t::after{border-color:var(--ink-3)}
 .cp-send:disabled{background:var(--line-2);border-color:var(--line-2);color:var(--surface);opacity:1}
 .cp-to{height:28px;padding:0 8px 0 4px;border:0;border-radius:var(--r-pill);background:var(--sunken);font-size:var(--fs-meta);color:var(--ink-2)}
 .cp-to:hover{background:var(--hover);color:var(--ink)}
-.cp-to b{font-family:var(--mono);font-size:11.5px;color:var(--ink)}
+.cp-to b{font-family:var(--mono);font-size:var(--fs-meta);color:var(--ink)}
 .cp-reply{border-left:0;padding:8px 12px 0 16px;color:var(--ink-3);font-size:var(--fs-meta)}
 .cp-file{border-radius:var(--r-m);background:var(--sunken);border:0}
 @container (max-width:640px){.cp{padding:0 10px 12px}.cp-box{border-radius:22px}.cp-t{font-size:16px}}  /* 16px stops iOS zooming on focus */
@@ -1472,7 +1492,7 @@ details.blk>summary .blk-t::after{border-color:var(--ink-3)}
 .msg+.msg{margin-top:var(--s4)}
 .msg[data-cont]{margin-top:var(--s2);padding-top:0}
 .msg-h{display:flex;flex-wrap:wrap;align-items:center;gap:2px 8px;margin-bottom:6px;font-size:var(--fs-small);min-height:20px}
-.msg-h .ref[data-kind=agent]{font-family:var(--mono);font-size:12.5px}
+.msg-h .ref[data-kind=agent]{font-family:var(--mono);font-size:var(--fs-meta)}
 .msg-src{border:0;padding:0;color:var(--ink-3);font-size:var(--fs-meta)}
 .msg-to{color:var(--ink-3);font-size:var(--fs-meta)}
 /* time and actions leave the head: they sit under the message and show on hover/focus */
@@ -1522,11 +1542,11 @@ details.blk>summary .blk-t::after{border-color:var(--ink-3)}
 
 /* ===== icon: NEW, used by kit.js icon() ===== */
 .ic{width:16px;height:16px;flex:none;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
-.av{position:relative;display:inline-grid;place-items:center;flex:none;width:24px;height:24px;border-radius:50%;background:var(--sunken);box-shadow:inset 0 0 0 1px var(--line);color:var(--ink-2);font-family:var(--mono);font-size:9.5px;font-weight:600} /* NEW: agent monogram */
+.av{position:relative;display:inline-grid;place-items:center;flex:none;width:24px;height:24px;border-radius:50%;background:var(--sunken);box-shadow:inset 0 0 0 1px var(--line);color:var(--ink-2);font-family:var(--mono);font-size:var(--fs-micro);font-weight:600} /* NEW: agent monogram */
 .av>.sd{position:absolute;right:-1px;bottom:-1px;width:9px;height:9px;box-shadow:0 0 0 2px var(--surface)}
-.av[data-size=s]{width:20px;height:20px;font-size:8.5px}
+.av[data-size=s]{width:20px;height:20px;font-size:var(--fs-micro)}
 .avs{display:flex}
-.av{text-decoration:none;font-family:var(--font);font-size:10px;letter-spacing:0}
+.av{text-decoration:none;font-family:var(--font);font-size:var(--fs-micro);letter-spacing:0}
 .av>span{line-height:1}
 .av>.sd{border-radius:50%;padding:0;margin:0}
 .av>.sd::before,.av>.sd::after{display:none}
@@ -1547,8 +1567,8 @@ details.blk>summary .blk-t::after{border-color:var(--ink-3)}
 .avs-w:hover>.avs-pop,.avs-w:focus-within>.avs-pop{display:block}
 .avs-pop-l{display:flex;flex-direction:column;align-items:flex-end;gap:4px;max-height:min(60vh,420px);overflow-y:auto;padding:2px 4px 8px 12px;font-size:var(--fs-small)}
 .avs-pop-h,.avs-pop-r{animation:avs-drop .18s cubic-bezier(.2,.8,.3,1) both;animation-delay:calc(var(--i) * 22ms)}
-.avs-pop-h{padding:2px 10px;border-radius:var(--r-full,999px);background:var(--surface);border:1px solid var(--line);color:var(--ink-3);white-space:nowrap}
-.avs-pop-r>.ref{display:flex;align-items:center;gap:6px;height:28px;padding:0 12px 0 10px;border:1px solid var(--line);border-radius:var(--r-full,999px);background:var(--surface);box-shadow:var(--e1,0 1px 2px rgb(0 0 0/.08));color:var(--ink);text-decoration:none;white-space:nowrap}
+.avs-pop-h{padding:2px 10px;border-radius:var(--r-pill);background:var(--surface);border:1px solid var(--line);color:var(--ink-3);white-space:nowrap}
+.avs-pop-r>.ref{display:flex;align-items:center;gap:6px;height:28px;padding:0 12px 0 10px;border:1px solid var(--line);border-radius:var(--r-pill);background:var(--surface);box-shadow:var(--e1,0 1px 2px rgb(0 0 0/.08));color:var(--ink);text-decoration:none;white-space:nowrap}
 .avs-pop-r>.ref:hover,.avs-pop-r>.ref:focus-visible{background:var(--hover);border-color:var(--line-2,var(--line))}
 .avs-pop-r .sl{margin-left:6px;color:var(--ink-3);font-size:var(--fs-meta)}
 @keyframes avs-drop{from{opacity:0;transform:translateY(calc(var(--i) * -8px - 6px)) scale(.9)}to{opacity:1;transform:none}}
@@ -1607,7 +1627,7 @@ button.more-i{background:none;border:0;font:inherit;text-align:left;cursor:point
 /* Agents: every agent, one row; the headers sort */
 .toolbar select.input{width:auto;min-width:0;max-width:100%}
 .ag-w{margin-top:var(--s3)}
-.ag .ag-s{all:unset;cursor:pointer;display:inline-flex;gap:4px;align-items:baseline;border-radius:2px}
+.ag .ag-s{all:unset;cursor:pointer;display:inline-flex;gap:4px;align-items:center;min-height:24px;border-radius:2px}
 .ag .ag-s:hover{color:var(--ink)}
 .ag .ag-s:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
 .ag th[aria-sort] .ag-s{color:var(--ink);font-weight:600}
@@ -1619,6 +1639,7 @@ button.more-i{background:none;border:0;font:inherit;text-align:left;cursor:point
 .ag-w{--bar:var(--bar-h);position:sticky;top:var(--bar);max-height:calc(100dvh - var(--bar) - 56px);overflow:auto}
 .ag th{position:sticky;top:0;z-index:2;background:var(--bg);padding-top:6px;box-shadow:inset 0 -1px 0 var(--line)}
 .ag th:first-child{z-index:3}
+@media (max-width:640px){.ag-w{max-height:calc(100dvh - var(--bar) - 100px)}} /* the page ends 98px below the table: a taller one is pushed up under the bar at the bottom */
 @media (min-width:1340px){.ag-w{position:static;max-height:none;overflow:visible}.ag th{top:var(--bar-h)}}
 .ag tbody tr:hover td:first-child{background:var(--hover)}
 
@@ -1669,17 +1690,23 @@ button.more-i{background:none;border:0;font:inherit;text-align:left;cursor:point
 /* ---- Settings: a list of sections to jump to, each a heading over its cards ---- */
 .set-b{display:grid;grid-template-columns:180px minmax(0,1fr);gap:var(--s6,32px);align-items:start;margin-top:var(--s5)}
 .set-n{position:sticky;top:calc(var(--bar-h) + 17px);display:grid;gap:2px}
-.set-n button{display:flex;align-items:center;gap:var(--s2);padding:6px var(--s2);border:0;border-radius:var(--r-s);background:none;color:var(--ink-2);font:inherit;font-size:var(--fs-small);text-align:left;cursor:pointer}
-.set-n button>span:first-child{flex:1;min-width:0}
-.set-n button:hover{background:var(--hover);color:var(--ink)}
+.set-n a{text-decoration:none;display:flex;align-items:center;gap:var(--s2);padding:6px var(--s2);border:0;border-radius:var(--r-s);background:none;color:var(--ink-2);font:inherit;font-size:var(--fs-small);text-align:left;cursor:pointer}
+.set-n a>span:first-child{flex:1;min-width:0}
+.set-n a:hover{background:var(--hover);color:var(--ink)}
 .set-rule{width:100%;margin:var(--s2) 0;border:0;border-top:1px solid var(--line)}
 .set-s{display:grid;grid-template-columns:minmax(0,1fr);gap:var(--s6,32px);min-width:0}
 .set-s>.sec{scroll-margin-top:64px}
 .set-s .blks+.blks{margin-top:var(--s3)}
-.set-sub{margin:var(--s5) 0 var(--s2);font-size:var(--fs-body);font-weight:var(--w-semi,600);color:var(--ink)}
+.set-sub{margin:var(--s5) 0 var(--s2);font-size:var(--fs-body);font-weight:var(--w-bold);color:var(--ink)}
 .set-logo-none{display:inline-block;width:40px;height:40px;border:1px dashed var(--line-2);border-radius:var(--r-m)}
 .blk[data-key=api-keys] .signin>.frow:first-child{display:none}
 .blk[data-key=codex-row] .signin{padding:0;border:0;background:none}
+.blk[data-key=codex-row] .signin+.signin{margin-top:var(--s3);padding-top:var(--s3);border-top:1px solid var(--line)}
+.blk[data-key=codex-row] .signin>.frow.fsplit{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:var(--s1) var(--s3);align-items:center}
+.blk[data-key=codex-row] .signin>.frow.fsplit>b{grid-column:1;grid-row:1}
+.blk[data-key=codex-row] .signin>.frow.fsplit>.muted{grid-column:1;grid-row:2;font-size:var(--fs-small)}
+.blk[data-key=codex-row] .signin>.frow.fsplit>span[style]{margin-left:0!important;grid-column:2;grid-row:2;justify-self:end}
+@media (max-width:600px){.blk[data-key=codex-row] .signin>.frow.fsplit>span[style]{grid-column:1/-1;grid-row:3;justify-self:start}}
 @media (max-width:760px){
   .set-b{grid-template-columns:minmax(0,1fr)}
   .set-n{position:static;display:flex;flex-wrap:wrap;gap:var(--s1)}
@@ -1703,6 +1730,11 @@ dialog.fb::backdrop{background:rgb(0 0 0 / .38)}
 .fb-gap{flex:1}
 .fb-t{width:100%;min-height:72px;resize:vertical}
 .fb-r{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
+.fb-more{position:relative}
+.fb-more[hidden]{display:none}
+.fb-more>summary{list-style:none;cursor:pointer}
+.fb-more>summary::-webkit-details-marker{display:none}
+.fb-more-b{position:absolute;bottom:calc(100% + 4px);left:0;z-index:2;display:flex;flex-direction:column;align-items:stretch;gap:2px;padding:4px;background:var(--surface);border:1px solid var(--line-2);border-radius:var(--r-m);box-shadow:var(--shadow-2,0 4px 16px rgb(0 0 0 / .18));white-space:nowrap}
 .fb-r:empty,.fb-r:has(>label[hidden]:only-child){display:none}
 .fb-r>.meta{flex:1 1 240px;min-width:0}
 .fb-card>.meta{margin:0}
@@ -1837,7 +1869,9 @@ dialog.fb::backdrop{background:rgb(0 0 0 / .38)}
 .tm-secs .empty:empty{display:none}
 
 /* each message says what kind it is: For you has the accent bar, Agent comms is quieter and says so */
-.msg[data-who=agent][data-show=you]::before{content:"";position:absolute;left:-12px;top:6px;bottom:6px;width:3px;border-radius:2px;background:var(--accent)}
+.msg[data-who=agent][data-show=you][data-ask]::before{content:"";position:absolute;left:-12px;top:6px;bottom:6px;width:3px;border-radius:2px;background:var(--accent)}
+/* design item 26: only a message that asks you something has the rail; any other For-you message has a small amber dot before its author */
+.msg[data-who=agent][data-show=you]:not([data-ask])>.msg-h::before{content:"";width:6px;height:6px;margin-right:2px;border-radius:50%;background:var(--accent);flex:none;align-self:center}
 .msg[data-show=comms]>.msg-b{color:var(--ink-2)}
 .msg[data-show=comms]>.msg-h::after{content:"agent comms";margin-left:6px;padding:0 6px;border:1px dashed var(--line-2);border-radius:var(--r-pill);font-size:11px;line-height:16px;color:var(--ink-3);white-space:nowrap}
 :root[data-dev] .msg[data-show=comms]>.msg-h::after{content:none}
@@ -1909,7 +1943,7 @@ dialog.rc-rail[open]{display:flex;flex-direction:column;gap:var(--s2)}
 .now-today .stat-v a{color:inherit;text-decoration:none;border-bottom:1px dotted var(--line-2)}
 .now-today .stat-v a:hover{color:var(--accent-ink)}
 .now-more{border-top:1px solid var(--line);padding-top:12px}
-.now-more>summary{cursor:pointer;font-size:var(--fs-small);font-weight:var(--w-med);color:var(--ink-2);list-style:none;display:inline-flex;align-items:center;gap:8px}
+.now-more>summary{cursor:pointer;min-height:24px;font-size:var(--fs-small);font-weight:var(--w-med);color:var(--ink-2);list-style:none;display:inline-flex;align-items:center;gap:8px}
 .now-more>summary::-webkit-details-marker{display:none}
 .now-more>summary::after{content:"";width:5px;height:5px;border-right:1.5px solid currentColor;border-bottom:1.5px solid currentColor;transform:rotate(-45deg);transition:transform .15s}
 .now-more[open]>summary::after{transform:rotate(45deg)}
@@ -1921,7 +1955,7 @@ dialog.rc-rail[open]{display:flex;flex-direction:column;gap:var(--s2)}
 .cm-ro-a{display:flex;gap:14px;margin-left:auto;min-width:0;overflow:hidden}
 .cm-ro-l{display:inline-flex;align-items:center;gap:6px;white-space:nowrap;min-width:0}
 .cm-ro-l>.meta{overflow:hidden;text-overflow:ellipsis}
-@media (max-width:700px){.cm-ro{padding:0 12px}.cm-ro-l>.meta{display:none}}
+@media (max-width:700px){.cm-ro{flex-wrap:wrap;padding:6px 12px;row-gap:4px}.cm-ro-l>.meta{display:none}.cm-ro-a{flex:1 1 100%;margin-left:0;flex-wrap:wrap;gap:4px 14px}}
 
 /* Progress page: a toned word in a table cell (ask status, run grade, improvement status). */
 .pg-t{font-size:var(--fs-small);font-weight:var(--w-med);white-space:nowrap}
@@ -2028,6 +2062,7 @@ dialog.rc-rail[open]{display:flex;flex-direction:column;gap:var(--s2)}
 .sec-h>.sec-a,.sec-h>.seg:last-child{margin-left:auto}                       /* actions sit right */
 .seg button i{font-style:normal;margin-left:4px;color:var(--ink-3);font-variant-numeric:tabular-nums}  /* NEW: a count inside a segment: seg([["owed", "Owed", null, 3]]) */
 .seg button[aria-pressed=true] i{color:var(--ink-2)}
+.seg button>svg{width:14px;height:14px;margin-right:6px;vertical-align:-2px}   /* an icon before the label: seg([[k, label, title, null, iconName]]) */
 
 /* ===== 4. figures with a "worse" mark (Progress tiles; any stats() with tone bad) =====
    The figure keeps ink. A small triangle + "worse than the day before" goes under it, instead of turning the number red. */
@@ -2064,11 +2099,13 @@ details.fold-row>.fold-in{padding:4px 0 24px}
 :root[data-dev] .subtabs{height:40px}
 
 /* ===== 8. settings: grouped rows inside one card (Modules: Installed / Available) ===== */
-.blk-h{padding:10px 20px;border-top:1px solid var(--line);background:var(--bg);font-size:var(--fs-meta);font-weight:var(--w-med);color:var(--ink-3)}   /* NEW */
-.blks>.blk-h:first-child{border-top:0;border-radius:var(--r-l) var(--r-l) 0 0}
+.blk-gh{padding:10px 20px;border-top:1px solid var(--line);background:var(--bg);font-size:var(--fs-meta);font-weight:var(--w-med);color:var(--ink-3)}   /* a group head inside the card; was .blk-h, which is also every row's head */
+.blks>.blk-gh:first-child{border-top:0;border-radius:var(--r-l) var(--r-l) 0 0}
 .blk-ic{display:grid;place-items:center;width:36px;height:36px;flex:none;border-radius:var(--r-m);background:var(--sunken);color:var(--ink-2)}   /* NEW: a module's icon */
 .blk-need{color:var(--ink-3)}                                                 /* NEW: "· needs a Slack app of your own" after .blk-s text */
 .lr-more{padding:10px 12px;border-top:1px solid var(--line)}
+.set .check span,.set ul.plain li,.set ul.plain .mono{min-width:0;overflow-wrap:anywhere}   /* long hostnames and names wrap instead of widening the page */
+.set .check{max-width:100%}
 
 /* ===== 9. Map toolbar: the layout segment gets icons; the summary stays right ===== */
 .map-tb .seg .ic{width:16px;height:16px}
@@ -2076,7 +2113,7 @@ details.fold-row>.fold-in{padding:4px 0 24px}
 /* BUG (this pass): map.css line ~230 styles the Orbit ring label as .map-rt (uppercase, bold, letter-spaced), and .map-rt is also the
    text column of every side-pane row (mesh.js, kbtime.js). That is why "Needs a look", "Hand-offs" and "Talk most" render in caps.
    Fix: in map.css rename that rule to text.map-ring-t, and in mesh.js:267 write class="map-ring-t". The ring labels then read: */
-text.map-ring-t{font-size:11px;font-weight:var(--w-med);fill:var(--ink-3);text-anchor:middle}
+text.map-ring-t{font-size:var(--fs-micro);font-weight:var(--w-med);fill:var(--ink-3);text-anchor:middle}
 /* Section heads in the side pane and the band labels: sentence case, like every other section head. */
 .map-sec>h3{text-transform:none;letter-spacing:0;font-weight:var(--w-med)}
 .map-band{text-transform:none;letter-spacing:0;font-weight:var(--w-med)}
@@ -2125,8 +2162,8 @@ text.map-ring-t{font-size:11px;font-weight:var(--w-med);fill:var(--ink-3);text-a
 .cm-st[data-tone=ended]{color:var(--ink-3)}
 
 /* ===== 3. "Show 4 hidden" in the thread head becomes an icon (see HANDOFF.md §5): the filter icon with a dot while anything is hidden. ===== */
-.cm-hid{position:relative}
-.cm-hid::after{content:"";position:absolute;top:5px;right:5px;width:6px;height:6px;border-radius:50%;background:var(--accent)}
+.cm-hid,.cm-title-b{position:relative}
+.cm-hid::after,.cm-title-b[data-hid]::after{content:"";position:absolute;top:5px;right:5px;width:6px;height:6px;border-radius:50%;background:var(--accent)}
 
 /* ===== 4. the For-you bar on agent messages: kept as is. If you agree to the open question in HANDOFF.md §8, replace the rule
    at components.css ~1708 with this: a small amber dot before the author, no full-height bar (the brief rules out left-border marks). =====
@@ -2159,7 +2196,7 @@ text.map-ring-t{font-size:11px;font-weight:var(--w-med);fill:var(--ink-3);text-a
 .pv-sl-strip{display:flex;gap:var(--s2);overflow-x:auto;padding:0 0 var(--s2);margin:0 0 var(--s3);position:sticky;top:0;z-index:1;background:var(--surface,var(--bg))}
 .pv-thumb{flex:none;width:112px;position:relative;padding:0;border:2px solid var(--line);border-radius:var(--r-s);background:#fff;cursor:pointer;overflow:hidden}
 .pv-thumb[data-on]{border-color:var(--info,var(--ink))}
-.pv-thumb-n{position:absolute;left:3px;bottom:2px;font-size:10px;padding:0 4px;border-radius:3px;background:rgba(0,0,0,.6);color:#fff}
+.pv-thumb-n{position:absolute;left:3px;bottom:2px;font-size:var(--fs-micro);padding:0 4px;border-radius:3px;background:rgba(0,0,0,.6);color:#fff}
 .pv-slide-n{z-index:1}
 
 /* ---- the document panel: live note, save menu, and a calmer reading type for files (library-style) ---- */
@@ -2167,7 +2204,7 @@ text.map-ring-t{font-size:11px;font-weight:var(--w-med);fill:var(--ink-3);text-a
 .pv-save{position:relative}.pv-save>summary{list-style:none;display:inline-flex;gap:4px;align-items:center;cursor:pointer}.pv-save>summary::-webkit-details-marker{display:none}
 .pv-save .pv-menu{left:auto;right:0;top:calc(100% + 4px);min-width:11em}
 .pv-save:not([open]) .pv-menu{display:none}
-.pv-md>.md{max-width:72ch;font-size:15px;line-height:1.65}
+.pv-md>.md{max-width:72ch;font-size:var(--fs-read);line-height:1.65}
 .pv-md>.md h1{font-size:1.7em;margin:.2em 0 .5em;letter-spacing:-.01em}
 .pv-md>.md h2{font-size:1.3em;margin:1.5em 0 .4em;padding-bottom:.2em;border-bottom:1px solid var(--line)}
 .pv-md>.md h3{font-size:1.08em;margin:1.2em 0 .3em}
@@ -2178,7 +2215,7 @@ text.map-ring-t{font-size:11px;font-weight:var(--w-med);fill:var(--ink-3);text-a
 .pv-md>.md tr:nth-child(even) td{background:color-mix(in srgb,var(--sunken) 45%,transparent)}
 @media print{.pv,.pv-grip,#top{display:none}}
 /* ---- brought up for you: threads an agent raised with `hive show`, in the Chat side list over Conversations ---- */
-.brought{display:grid;gap:4px;min-width:0;margin-top:8px;padding:8px;border-radius:var(--r2,8px);background:color-mix(in oklch,var(--accent,var(--ink)) 8%,var(--surface));font-size:var(--fs-small)}
+.brought{display:grid;gap:4px;min-width:0;margin-top:8px;padding:8px;border-radius:var(--r-m);background:color-mix(in oklch,var(--accent,var(--ink)) 8%,var(--surface));font-size:var(--fs-small)}
 .brought-h{padding:0 2px;font-size:var(--fs-meta);font-weight:var(--w-med);color:var(--ink-2)}
 .brought-r{position:relative;display:grid;min-width:0}
 .brought-x{position:absolute;top:2px;right:2px}
@@ -2202,13 +2239,16 @@ text.map-ring-t{font-size:11px;font-weight:var(--w-med);fill:var(--ink-3);text-a
 .gauge-c .meter{flex:1;min-width:80px}
 .row-a-in{display:inline-flex;gap:var(--s2)}
 
-.cm-status{display:grid;gap:2px;padding:6px var(--s4);border-bottom:1px solid var(--line);font-size:13px}
+.cm-status{display:grid;gap:2px;padding:6px var(--s4);border-bottom:1px solid var(--line);font-size:var(--fs-small)}
 .cm-status b{font-weight:600}
-.cm-status-m{font-size:11px}
+.cm-status-m{font-size:var(--fs-micro)}
 
 /* composer Markdown buttons */
-.cp-fmt { display: inline-flex; gap: 2px; align-items: center; }
-.cp-fb { font: inherit; font-size: 12px; min-width: 24px; height: 24px; padding: 0 5px; border: 0; border-radius: 6px; background: transparent; color: var(--muted, inherit); cursor: pointer; }
+.cp-fmt { display: none; gap: 2px; align-items: center; }
+.cp[data-fmt] .cp-fmt { display: inline-flex; }
+.cp-aa { font-size: var(--fs-small); font-weight: var(--w-med); }
+.cp[data-fmt] .cp-aa { background: var(--hover); color: var(--ink); }
+.cp-fb { font: inherit; font-size: 12px; min-width: 24px; height: 24px; padding: 0 5px; border: 0; border-radius: 6px; background: transparent; color: var(--ink-3); cursor: pointer; }
 .cp-fb:hover { background: color-mix(in srgb, currentColor 12%, transparent); color: inherit; }
 .cp-fb-bold { font-weight: 700; } .cp-fb-italic { font-style: italic; } .cp-fb-code { font-family: monospace; }
 
@@ -2239,8 +2279,19 @@ text.map-ring-t{font-size:11px;font-weight:var(--w-med);fill:var(--ink-3);text-a
 .lr-act[aria-pressed=true]{color:var(--accent-ink)}.lr-act[aria-pressed=true] .ic{fill:currentColor}
 .lr-act .ic{width:14px;height:14px}
 @media (hover:none){.lr-acts{display:flex;top:auto;bottom:4px}}
-.tm-showwrap>.tm-chip-imp{margin:2px 10px 4px}
-.cm-status-r{margin-left:10px;border:0;background:none;color:var(--accent,var(--ink));font:inherit;font-size:12px;font-weight:600;cursor:pointer;padding:0 2px}
+.tm-showwrap>.tm-chip-imp{margin:6px 8px 0 0;flex:none}
+/* design item 6: the three filters and the star fit one row at the rail's width */
+.tm-showwrap{display:flex;flex-wrap:nowrap;align-items:flex-start;gap:4px}
+.tm-showwrap>.tm-show{flex:1 1 auto;min-width:0;padding-right:0}
+.tm-showwrap .tm-chip{gap:4px;padding:0 7px 0 5px;font-size:var(--fs-meta)}
+.tm-showwrap .tm-chip i{display:none}
+.tm-showwrap .tm-chip{padding:0 9px}
+.tm-showwrap>.tm-show{gap:3px;padding-left:8px}
+.tm-showwrap .tm-chip-imp{padding:0 6px}
+/* design item 7: the small Files panel opens below the thread head, in the margin beside the column */
+.pv[data-kind=files]{top:calc(var(--top-h,52px) + 52px);width:208px}
+.pv[data-kind=files] .pv-h small{display:none}
+.cm-status-r{margin-left:10px;border:0;background:none;color:var(--accent,var(--ink));font:inherit;font-size:var(--fs-meta);font-weight:600;cursor:pointer;padding:0 2px}
 .cm-status-r:hover{text-decoration:underline}
 /* While you were away: a brief row holds one line (all of it is in the fold), so the card stays at 15 */
 .card.away>*{width:100%;min-width:0}
@@ -2250,3 +2301,56 @@ text.map-ring-t{font-size:11px;font-weight:var(--w-med);fill:var(--ink-3);text-a
 .away-foot{display:flex;align-items:flex-start;gap:var(--s2,8px)}
 .away-foot>.fold-row{flex:1;min-width:0}
 .away-foot .btn{margin-top:0}
+
+/* A view that threw: shown in place of the page (js/app.js crashPage). */
+.view-crash{max-width:44ch;margin:var(--s7) auto;text-align:center;display:grid;gap:var(--s2);justify-items:center;font-size:var(--fs-small);color:var(--ink-2)}
+.view-crash h2{margin:0;font-size:var(--fs-body);font-weight:var(--w-bold);color:var(--ink)}
+.view-crash p{margin:0}
+.view-crash .row{display:flex;gap:var(--s2)}
+
+/* Design pass 1106 §1, §2, §3, §4, §9, §11, §12 (shell). */
+input[type=radio],input[type=checkbox]:not(.switch){accent-color:var(--ink)}
+.cm-line-x b,.cp-to b,.msg-h .ref[data-kind=agent]{font-size:var(--fs-meta)}
+.more-i,.cm-newbtn,.cm-menu .check,.rc-menu button,.rc-menu a,.rc-artgo,.rc-foldb,.cm-jump{height:var(--ctl)}
+.cm-filters>.input,.cm-search>.input{height:var(--ctl)}
+.seg button{height:calc(var(--ctl) - 6px)}
+.pv-zb,.cm-picks button,.tm-chip{height:var(--ctl-s)}
+@media (hover:none){.more-i,.seg button{min-height:44px}}
+.map-sec>h3,.pf-h{text-transform:none;letter-spacing:0;font-size:var(--fs-meta);font-weight:var(--w-med);color:var(--ink-3)}
+.cm-sep,.more-sep{height:1px;margin:4px 0;background:var(--line)}
+.cm-menu-h{padding:8px 8px 2px;font-size:var(--fs-meta);font-weight:var(--w-med);color:var(--ink-3)}
+.cm-menu .btn small,.more-i span{margin-left:auto;font-size:var(--fs-meta);color:var(--ink-3)}
+.plot-y{background:var(--surface);padding:0 2px}
+.page>.list{margin-top:var(--s4)}
+
+/* Quick switcher (Ctrl+K) and shortcuts sheet (?) */
+.qs{padding:0;overflow:hidden}
+.qs-in{padding:var(--s3);border-bottom:1px solid var(--line)}
+.qs-in .input{width:100%}
+.qs-list{display:grid;max-height:min(24rem,60vh);overflow-y:auto;padding:var(--s1)}
+.qs-i{display:flex;align-items:center;gap:var(--s3);height:var(--ctl);padding:0 var(--s3);border:0;border-radius:var(--r-m);background:none;color:var(--ink);font:inherit;font-size:var(--fs-small);text-align:left;cursor:pointer}
+.qs-i b{font-weight:var(--w-med);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.qs-i span{margin-left:auto;font-size:var(--fs-meta);color:var(--ink-3)}
+.qs-i:hover,.qs-i[aria-selected=true]{background:var(--hover)}
+.qs-none{padding:var(--s3);color:var(--ink-2)}
+.qs h2,.qs .qs-keys,.qs .dlg-a{margin-left:22px;margin-right:22px}
+.qs h2{margin-top:20px}
+.qs .dlg-a{margin-bottom:18px}
+.qs-keys{display:grid;grid-template-columns:auto 1fr;gap:var(--s2) var(--s4);align-items:baseline;font-size:var(--fs-small)}
+.qs-keys dd{margin:0;color:var(--ink-2)}
+.qs-keys kbd{font:inherit;font-size:var(--fs-meta);padding:2px 6px;border:1px solid var(--line-2);border-radius:var(--r-s);background:var(--sunken);white-space:nowrap}
+
+/* Lost contact: a band under the bar, with Try now (design pass 1106 §15) */
+.lost{display:flex;align-items:center;gap:var(--s2);min-height:40px;padding:6px var(--gutter);background:var(--surface);border-bottom:1px solid var(--line);font-size:var(--fs-small)}
+.lost b{font-weight:var(--w-med)}
+.lost span{color:var(--ink-2)}
+.lost .btn{margin-left:auto}
+@media (max-width:600px){.mod-name a{display:inline-flex;align-items:center;min-height:24px}}   /* a phone tap target: a module's name is a link to its repo */
+/* CSS 10, phone: nothing is cut. A range picker wider than the page scrolls, and fades to say so. */
+.sec-a{flex-wrap:wrap}
+.seg{max-width:100%;overflow-x:auto;scrollbar-width:none}
+.seg::-webkit-scrollbar{display:none}
+@media (max-width:640px){.page .seg{mask-image:linear-gradient(90deg,#000 calc(100% - 24px),transparent)}}
+.set-n a[aria-current=page]{background:var(--sunken);color:var(--ink);font-weight:var(--w-med)}
+
+.cp-model[data-picked]{color:var(--accent);font-weight:var(--w-med)}

@@ -33,15 +33,17 @@ export function awayCard(ctx) {
   const group = (title, rows, cls) => rows.length ? h("div", { class: "away-g" }, h("h3", { class: "away-h" }, title), h("ul", { class: "away-l" + (cls ? " " + cls : "") }, rows.map(r => h("li", null, r)))) : null;
   // The brief: the server says how many rows of each section fit in 15 lines, so the card and the terminal brief show the same rows.
   const brief = (title, key) => { const rows = a[key], n = a.show[key]; return group(`${title} (${n === rows.length ? n : `${n} of ${rows.length}`})`, rows.slice(0, n).map(line), "away-brief"); };
+  // Needs you heads with the one count (open_on_person in core/away.py); the rows are lines of it, and several can share a thread.
+  const needsHead = n => `${a.needs_head || "Needs you"} (${plural(n, "line")}${n < a.needs.length ? " shown" : ""})`;
   const count = (title, rows, f = line) => group(`${title} (${rows.length})`, rows.map(f));
   const wait = a.agents_wait, back = a.stopped.filter(x => x.carried_on).length;
   return section({ title: "While you were away", note: "since " + clock(a.since * 1e3) }, h("div", { class: "card away", "data-key": "away" },
-    brief("Made", "made"), brief("Decided for you", "decided"), brief("Needs you", "needs"),
+    brief("Made", "made"), brief("Decided for you", "decided"), group(needsHead(a.show.needs), a.needs.slice(0, a.show.needs).map(line), "away-brief"),
     wait.length ? h("p", { class: "away-wait meta" }, `Agents wait on: ${wait[0].text}${wait.length > 1 ? `; and ${wait.length - 1} more` : ""}.`) : null,
     brief("Broke", "broke"),
     h("div", { class: "away-foot" },
       section({ fold: true, key: "away-all", title: "All of it", summary: `${plural(a.updates.length, "other thread")} with updates, ${plural(a.stopped.length, "agent")} stopped (${back} carried on)` },
-        count("Made", a.made), count("Decided for you", a.decided), count("Needs you", a.needs), count("Agents wait on", wait), count("Broke", a.broke),
+        count("Made", a.made), count("Decided for you", a.decided), group(needsHead(a.needs.length), a.needs.map(line)), count("Agents wait on", wait), count("Broke", a.broke),
         count("Other updates", a.updates), count("Stopped", a.stopped, x => `${x.name}: ${x.why}; ${x.then}.`)),
       button("Got it", () => awayDone(ctx), { size: "s", kind: "quiet" }))));
 }

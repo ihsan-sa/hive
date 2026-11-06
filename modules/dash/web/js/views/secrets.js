@@ -4,6 +4,7 @@ import { S, can, jget, post } from "../core/store.js";
 import { ago } from "../core/format.js";
 import { button, empty, field, input, list, pageHeader, section } from "../ui/kit.js";
 import { secretsReach } from "../ui/setup.js";
+import { confirm } from "../ui/dialog.js";
 
 const F = { items: null, name: "", value: "", say: null, tone: null, asked: false };
 const say = (text, tone) => { F.say = text; F.tone = tone || null; };
@@ -21,11 +22,10 @@ export function secretParts(ctx, level) {
       catch (e) { say(e.message, "bad"); }
       ctx.update();
     };
-    const remove = async name => {
-      if (!confirm(`Remove ${name}? This can't be undone.`)) return;
+    const remove = name => confirm({ title: `Remove ${name}?`, body: ["This can't be undone."], ok: "Remove", kind: "danger", onOk: async () => {
       try { await post("/api/secret", { name, delete: true }); say(`Removed ${name}.`, "good"); await load(ctx); }
       catch (e) { say(e.message, "bad"); ctx.update(); }
-    };
+    } });
     // Replace: the row's name goes in the box and the cursor to the value, so only the new value is typed. The old value is never read.
     const replace = name => {
       F.name = name; F.value = ""; say(`Type the new value for ${name}, then Save. It overwrites the old one.`);
@@ -48,7 +48,8 @@ export function secretParts(ctx, level) {
 
 export const forgetSecrets = () => { F.value = ""; F.say = null; };
 export default {
-  id: "secrets", label: "Secrets", tab: () => S.app.app && can("secrets"),
+  id: "secrets", label: "Secrets", tab: false,   // One place: the Secrets section in Settings. This page is the address #secrets, which goes there.
+  enter() { location.hash = "#settings/secrets"; },
   leave: forgetSecrets,
   render(ctx) {
     if (!S.app.app || !can("secrets")) return h("div", { class: "page" }, empty(S.app.secrets_on === false ? "Secrets are off on this Hive. Whoever runs it can turn them on with secrets_on in web.json, on the machine." : "Secrets need full mode. Sign in again if your hour is up.", { kind: "page", title: "Secrets" }));

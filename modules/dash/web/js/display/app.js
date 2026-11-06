@@ -11,7 +11,7 @@ import { S, start, subscribe } from "../core/store.js";
 import { brandIcon, brandMark } from "../core/brand.js";
 import { h, mount, delegate } from "../core/dom.js";
 import { agentState, inUse, runway, threadTitle } from "../core/model.js";
-import { ago, clock, dur, now } from "../core/format.js";
+import { clock, dur, now } from "../core/format.js";
 import { statusDot } from "../ui/kit.js";
 import { fullscreenButton } from "../ui/shell.js";
 import { LAYOUTS, evenLayout } from "./layouts.js";
@@ -122,11 +122,19 @@ function room() {
   const soon = live.map(l => ({ l, r: runway(l, U) })).filter(x => x.r.before && x.r.toStop > 0).sort((a, b) => a.r.toStop - b.r.toStop)[0];
   return h("div", { class: "dt-room", "data-tone": !live.length ? "bad" : soon || live.length === 1 ? "warn" : null },
     statusDot(live.length ? "inuse" : "atstop"), h("b", null, `${live.length} of ${us.length}`),
-    h("span", null, "logins have room" + (soon ? `; ${soon.l.name} reaches its ${soon.r.stop}% stop in about ${dur(soon.r.toStop)}` : "")));
+    h("span", null, "logins have room" + (soon ? `; ${soon.l.name} stops at ${soon.r.stop}% in ${dur(soon.r.toStop)}` : "")));
+}
+/** No data coming in: one band readable across a room, and the old numbers set back (body[data-lost]) rather than shown as if they were current. */
+function lost() {
+  const on = !!S.failed; document.body.toggleAttribute("data-lost", on);
+  if (!on) return null;
+  const has = S.fresh > 1e12;   // a real time in ms; anything else means nothing has ever arrived
+  return h("div", { class: "dt-lost", role: "alert", "data-key": "lost" }, statusDot("stuck"),
+    h("b", null, has ? "No new data for " + dur(now() - S.fresh) + "." : "Waiting for the first data."),
+    has ? h("span", null, "Everything below is from " + new Date(S.fresh).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) + ".") : null);
 }
 function trouble() {
   const out = [], Lv = S.live, U = S.usage, t = now();
-  if (S.failed) out.push(["Lost contact", "last data " + ago(S.fresh)]);
   if (Lv) {
     const stuck = Lv.agents.map(a => [a, agentState(a)]).filter(([, s]) => s.key === "stuck");
     if (stuck.length) out.push([`${stuck.length} stuck`, stuck.map(([a, s]) => `${a.name} on ${threadTitle(a.thread)}, ${s.text}`).join(" · ")]);
@@ -149,7 +157,7 @@ function render() {
     h("div", { class: "dt-top-row" }, h("b", { class: "dt-brand" }, brandMark()), counts(), room(),
       sizeNote ? h("span", { class: "dt-size" }, `Size ${sizeNote}% · Ctrl 0 resets`) : null,
       h("time", { class: "dt-clock" }, new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })), fullscreenButton()),
-    trouble()));
+    lost(), trouble()));
   for (const p of parts) {
     try {       // one tile's bug must not blank a screen nobody is watching closely
       mount(p.body, p.t.render(ctx, p.body));
@@ -180,7 +188,7 @@ stayOn(); document.addEventListener("visibilitychange", stayOn);
 // Hide the cursor when it isn't moving.
 let idle = 0;
 const moved = () => { delete root.dataset.idle; clearTimeout(idle); idle = setTimeout(() => { root.dataset.idle = ""; }, 4000); };
-addEventListener("pointermove", moved); addEventListener("pointerdown", moved); addEventListener("keydown", moved); moved();
+addEventListener("pointermove", moved); addEventListener("pointerdown", moved); addEventListener("keydown", moved); root.dataset.idle = "";   // starts hidden: the controls show once the pointer moves, not over the first rows of a wall screen
 // The clock: once a minute is enough.
 setInterval(schedule, 15e3);
 // Reload for new code, but only if the page would come back.

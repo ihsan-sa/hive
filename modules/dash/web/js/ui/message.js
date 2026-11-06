@@ -433,7 +433,7 @@ export function localMessage(it, { retry, edit, discard }) {
     it.text.trim() ? h("div", { class: "msg-b" }, markdown(it.text)) : null,
     it.files.length ? h("div", { class: "msg-files" }, it.files.map(f => f.url
       ? h("span", { class: "msg-thumb" }, h("img", { src: f.url, alt: f.name }), h("span", null, f.name))
-      : h("span", { class: "msg-file" }, h("b", null, ext(f.name)), h("span", null, h("span", { class: "msg-fn" }, f.name), h("span", { class: "meta" }, fsize(f.size)))))) : null,
+      : h("span", { class: "msg-file" }, h("b", null, badgeOf(f.name)), h("span", null, h("span", { class: "msg-fn" }, f.name), h("span", { class: "meta" }, fsize(f.size)))))) : null,
     h("div", { class: "msg-rc", role: failed ? "alert" : "status" },
       failed ? [h("span", { "data-tone": "bad" }, h("b", { "aria-hidden": "true" }, "!"), `Not sent: ${it.err}.`),
         button("Retry", () => retry(it), { size: "s" }), button("Edit", () => edit(it), { size: "s", kind: "quiet" }), button("Discard", () => discard(it), { size: "s", kind: "quiet" })]

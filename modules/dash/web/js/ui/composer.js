@@ -38,6 +38,11 @@ export function draft(th) {
   if (!d.reply && d.replyId && S.byId[d.replyId]) d.reply = S.byId[d.replyId];
   return d;
 }
+/** Is there unsent text left in this thread's composer (this browser only)? */
+export function hasDraft(th) {
+  const d = D.get(dkey(th)); if (d && (d.text.trim() || d.files.length)) return true;
+  try { return !!(JSON.parse(localStorage.getItem(dkey(th)) || "{}").text || "").trim(); } catch (e) { return false; }
+}
 function keep(d) {
   const k = dkey(d.th), rid = d.reply ? d.reply.id : d.replyId;
   try { if (d.text || rid || d.to || d.name) localStorage.setItem(k, JSON.stringify({ text: d.text, reply: rid, to: d.to, name: d.name })); else localStorage.removeItem(k); } catch (e) {}
@@ -179,6 +184,9 @@ function fmt(th, kind) {
   const d = draft(th); d.text = nv; keep(d); n.dispatchEvent(new Event("input", { bubbles: true }));
 }
 const FMT = [["bold", "B", "Bold (Ctrl+B)"], ["italic", "I", "Italic (Ctrl+I)"], ["code", "</>", "Code (Ctrl+E)"], ["link", "Link", "Link (Ctrl+K)"], ["ul", "•", "Bulleted list"], ["ol", "1.", "Numbered list"], ["quote", "❝", "Quote"]];
+// The format row folds behind "Aa" (design item 17): open or shut is kept in this browser. Shortcuts work either way; simple view has no Aa.
+const fmtOpen = () => { try { return !simpleOn() && localStorage.getItem("hive.cp.fmt") === "1"; } catch (e) { return false; } };
+const fmtToggle = () => { try { localStorage.setItem("hive.cp.fmt", fmtOpen() ? "0" : "1"); } catch (e) {} };
 const fmtBar = th => h("span", { class: "cp-fmt", "data-key": "fmt", role: "group", "aria-label": "Formatting" }, FMT.map(([k, t, ti]) =>
   h("button", { type: "button", class: "cp-fb cp-fb-" + k, title: ti, "aria-label": ti, onmousedown: e => e.preventDefault(), onclick: () => fmt(th, k) }, t)));
 // Live rendering (the person, 11052110): the text box stays a plain textarea (its text made transparent); a layer behind it
@@ -363,8 +371,9 @@ function modelPick(d, r) {
   const def = (S.app && S.app.default_model) || "", typed = typedModel(d.text), cur = typed || d.model || "";
   // A sleeping agent wakes on the model it last ran on, not the default for new agents.
   const known = who && who !== "new" && !MODEL_WORDS.includes(who), row = known && agentCard(who).find(x => x.k === "Model");
-  const first = live ? `${row ? row.v : "its model"} (now)` : row ? `${row.v} (its model)` : def ? `${MODEL_LABELS[def] || def} (default)` : "Model";
-  return h("select", { class: "cp-model meta", "aria-label": "Model", title: live ? `${who} is running on ${row ? row.v : "its model"}. Pick another and it moves to it from its next run (it can't switch mid-run), and stays there.` : row ? `${who} last ran on ${row.v} and wakes on it. Pick another and it moves to that one and stays there.` : "Model for a new or sleeping agent this message starts. It holds on that agent from then on. Typing @opus, @sonnet… in the message sets this too.",
+  const nm = row && (row.v === "login default" ? "Default model" : row.v);   // the name alone; the title says whether it is running now or the default
+  const first = live ? nm || "Its model" : row ? nm : def ? MODEL_LABELS[def] || def : "Model";
+  return h("select", { class: "cp-model meta", "data-picked": d.model ? "" : null, "aria-label": "Model", title: (d.model ? `Picked: ${MODEL_LABELS[d.model] || d.model}, used when you send this message (the agent card shows it after that). ` : "") + live ? `${who} is running on ${row ? row.v : "its model"}. Pick another and it moves to it from its next run (it can't switch mid-run), and stays there.` : row ? `${who} last ran on ${row.v} and wakes on it. Pick another and it moves to that one and stays there.` : (def ? `New agents start on ${MODEL_LABELS[def] || def} unless you pick another. ` : "") + "Model for a new or sleeping agent this message starts. It holds on that agent from then on. Typing @opus, @sonnet… in the message sets this too.",
     onchange: e => { d.model = e.target.value; keep(d); refresh(); } },
     [["", first], ...Object.entries(MODEL_LABELS).filter(([v]) => live || row || v !== def)].map(([v, l]) => h("option", { value: v, selected: cur === v }, l)));
 }
@@ -556,7 +565,7 @@ export function composer({ thread, update, place = "thread", autofocus, top }) {
   setTimeout(() => { const t = field(th); if (t) mdSync(t); }, 0);   // after the render lands, so the layer copies the box's font and padding
   CP.sig = (named(d.text) || "") + "|" + empty + "|" + isBtw(d.text);
   const ph = !th ? "Say what you want done" : simpleOn() ? "Message" : r.who === "new" ? "Message a new agent" : r.who ? `Reply to ${r.who}…` : "Message";
-  return h("div", { class: "cp", "data-key": k, "data-place": place, ...(th ? {} : dropZone(null)) },  // a thread's composer is inside its conversation's zone
+  return h("div", { class: "cp", "data-key": k, "data-place": place, "data-fmt": fmtOpen() ? "" : null, ...(th ? {} : dropZone(null)) },  // a thread's composer is inside its conversation's zone
     d.err ? h("p", { class: "cp-err", role: "alert", "data-key": "err" }, d.err) : null,
     wordBoxPanel(th, update),
     top || null,  // the conversation's status strip: a tab on the box's top edge
@@ -594,6 +603,7 @@ export function composer({ thread, update, place = "thread", autofocus, top }) {
       h("div", { class: "cp-bar", "data-key": "bar" },
         h("input", { type: "file", multiple: true, hidden: true, class: "cp-pick", onchange: e => { addFiles(th, e.target.files); e.target.value = ""; } }),
         button("Attach files", (e, b) => b.parentNode.querySelector(".cp-pick").click(), { kind: "icon", size: "s", icon: "plus", cls: "cp-attach", title: "Attach files. You can also paste or drop them here." }),
+        simpleOn() ? null : h("button", { type: "button", class: "btn cp-aa", "data-kind": "icon", "data-size": "s", title: "Formatting", "aria-label": "Formatting", "aria-pressed": fmtOpen() ? "true" : "false", onmousedown: e => e.preventDefault(), onclick: () => { fmtToggle(); refresh(); } }, "Aa"),
         recBar(th),
         simpleOn() ? null : fmtBar(th),
         wordBoxButton(update),
@@ -601,10 +611,10 @@ export function composer({ thread, update, place = "thread", autofocus, top }) {
           { kind: "icon", size: "s", icon: "phone", cls: "cp-call", title: th ? "Voice call about this thread: a new agent picks up, reads the thread and talks with you. To talk with an agent itself, hover its name and press Call." : "Voice call with the Hive. Ask it anything, or ask to be put through to whoever is working on something." }) : null,
         can("secrets") || (S.app && S.app.secrets_on && S.app.mode === "expired") ? button("Send a secret", () => {
           if (!can("secrets")) { SB.open = false; SB.tone = "bad"; SB.say = "Saving a secret needs full mode, which ends after 30 minutes without using the app. Press \"Limited · sign in for full\" at the top, then press the lock again."; refresh(); return; }
-          if (SB.open) closeSecrets(); else openSecrets(th); }, { kind: "icon", size: "s", icon: "lock", cls: "cp-lock", title: "Send a secret (a token or key): saved on the machine, never posted in chat." }) : null,
+          if (SB.open) closeSecrets(); else openSecrets(th); }, { kind: "icon", size: "s", icon: "lock", cls: "cp-lock", title: "Send a secret" }) : null,
+        h("span", { class: "cp-sp" }),
         simpleOn() ? null : th ? toChip(th, r) : d.naming ? h("span", { class: "meta cp-new" }, "A new agent starts on this") : button("Name it", () => { d.naming = true; refresh(); }, { kind: "quiet", size: "s", title: "Give this job a short name (optional). Without one it's called by its first words." }),
         simpleOn() ? null : modelPick(d, r),
-        h("span", { class: "cp-sp" }),
         button(place === "thread" ? "Send" : "Start", () => send(th), { kind: "primary", icon: "arrow-up", disabled: empty, cls: "cp-send", title: (place === "thread" ? "Send" : "Start") + " (Enter) · Shift+Enter for a new line · ↑ past messages · Tab completes" }))),
     CP.menu && th ? toMenu(th, r) : null);
 }

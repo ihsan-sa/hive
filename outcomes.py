@@ -9,7 +9,11 @@ Every run the starter logs (~/log.jsonl start/end) gets a grade in ~/outcomes.js
   nothing    it posted, but no delivery and no handover: status only, questions back, the wrong thing
   not_asked  the post asked this agent nothing concrete
 Every run woken by the person is graded; of the rest, a sample per hour (SAMPLE), so the model cost stays near a dollar a day.
+A completion wake (an agent's result post named this agent, asked it nothing, and it ticked no rung) and a self-wake (the agent's own post named it) are
+only counted, every one of them, and marked on a ledger row that gets graded anyway: hive-meta moving.md P4, measuring before anyone suppresses them. The
+signal is in the waking post, and it fires on about a quarter of runs that did deliver, so it must not set a grade. `stats` shows both shares of agent-code wakes.
 `hive progress` shows outcome_delivered_pct and outcomes_silent; the rsi loop and the keeper read them.
+The same model call also picks reusable facts out of result posts: at most one draft a day per thread in ~/kb/_drafts, which the dream merges or drops (hive-meta knowledge.md P6, `kb drafts`).
 
   hive outcomes grade [--limit N] [--sample N] [--model sonnet] [--dry]   grade runs ended since the last run (hive-outcomes.timer, hourly)
   hive outcomes list [--since 24h] [--grade G] [--name NAME]
@@ -32,6 +36,16 @@ SHORT = ("partial", "nothing")   # graded runs that fell short of what was asked
 CHEAP = (None, "", "sonnet", "haiku")   # models the step-up moves off
 STEP_UP_AFTER = 2          # this many short runs in a row by one agent in one thread, on a cheap model, and its next wake is on opus
 STEP_UP_TO = "opus"
+NOT_AGENTS = {"person", "hives", "box", "starter", "watchdog", "progress", "asks", "keeper-timer", "postland", "leftover-router"}   # as goals.py
+LONG_POST = 300   # chars: a waking post this long is result-shaped
+ORDERS = set("add answer apply ask build change check commit continue do find fix go implement land look make merge please post read remove rerun review run "
+             "see set start stop take tell test try update use write".split())   # a waking post that opens with one of these is an order, however long
+RESULT_LAST = re.compile(r"(done:|landed|committed)", re.I)
+DRAFTS, DRAFT_LOG = HOME / "kb" / "_drafts", STATE / "drafts.jsonl"   # kbuse.py reads the log: the measure is the share of these read in 14 days
+DRAFT_LINES = (3, 10)      # a draft's body, in lines
+OWN_WORDS = 0.7            # share of a draft's words that must be in its source post: it quotes, it doesn't summarise
+GRADE_RE = re.compile(r'"run"\s*:\s*"([^"]+)"\s*,\s*"grade"\s*:\s*"(\w+)"\s*,\s*"why"\s*:\s*"((?:[^"\\]|\\.)*)"')
+POST_CLIP, RESULT_CLIP = 900, 2500   # chars of a post shown to the model; the last one is usually the result and holds the fact
 
 def now(): return dt.datetime.now(dt.timezone.utc)
 def iso(t=None): return (t or now()).isoformat(timespec="seconds")
@@ -65,7 +79,7 @@ def runs(log, since="", until=""):
         if not s or not s.get("post"): continue
         # a parked run restarted for new posts keeps the post it was first started on; "woke" lists the ones that actually woke it
         out.append({"key": f"{s.get('session', '')[:8]}-{s.get('pid')}", "name": s.get("name"), "session": s.get("session"), "post": (s.get("woke") or [s.get("post")])[0],
-                    "also": (s.get("woke") or [])[1:],
+                    "also": (s.get("woke") or [])[1:], **({"heir_of": s["heir_of"]} if s.get("heir_of") else {}),
                     "thread": s.get("thread"), "from": s.get("from"), "model": s.get("model"), "started": s.get("at"), "ended": r.get("at"), "exit": r.get("exit")})
     return out
 
@@ -99,13 +113,66 @@ def mechanical(run, post, mine):
     if mine: return "not_asked" if contentless(post) else None   # "???" answered with where things stand was graded nothing on 2026-11-04
     return "silent" if named(run, post) else "quiet"
 
+def names_run(run, post):
+    """An agent's post that names this run's agent code, or the code of the dead agent it inherited. Not a fresh-agent word, not the person."""
+    if str(post.get("from", "")).lower() in NOT_AGENTS: return False
+    codes = {c for c in (run.get("name"), run.get("heir_of")) if c}
+    to = post.get("to") if isinstance(post.get("to"), list) else [post.get("to")]
+    return any(str(x).lstrip("@") in codes for x in to) or any(re.search(rf"@{re.escape(c)}\b", str(post.get("text") or "")) for c in codes)
+
+def result_shaped(text):
+    """Over LONG_POST chars, or its last line (past any line of bare mentions) starts Done:, landed or committed."""
+    text = str(text or "")
+    lines = [l.strip() for l in text.splitlines() if CONTENTLESS.search(re.sub(r"@\w+", "", l))]
+    return len(text) > LONG_POST or bool(lines and RESULT_LAST.match(lines[-1]))
+
+def ticked_rungs():
+    """Every ticked rung of every project: a tick carries the id of its result post (goals.py brief)."""
+    out = []
+    for f in (HOME / "projects").glob("*/goals.md"):
+        try: out += [l for l in f.read_text(errors="replace").splitlines() if re.match(r"\s*- \[x\]", l, re.I)]
+        except OSError: pass
+    return "\n".join(out)
+
+def asks_nothing(text):
+    """No question outside backticks, and it doesn't open (past any @names) with an order."""
+    bare = re.sub(r"```.*?```|`[^`]*`", "", str(text or ""), flags=re.S)
+    first = re.search(r"[A-Za-z][\w-]*", re.sub(r"@\w+", "", bare))
+    return "?" not in bare and not (first and first.group(0).lower() in ORDERS)
+
+def self_wake(run, post):
+    """Its own post named it: a model-switch, run-ended or flood-finished notice, a class of its own. Keeper-style runs resume on these on purpose."""
+    return str(post.get("from", "")) in {c for c in (run.get("name"), run.get("heir_of")) if c} and names_run(run, post)
+
+def completion_wake(run, by_id, mine, ticks):
+    """Woken by another agent's result, naming it, asking it nothing, and it ticked no rung. Judged on the waking post, not the reply: woken agents answer
+    with a 200-1500 char status post, so reply length caught 1 of 21 wasted wakes (af3c9, post 1106035341df). `run` may have been woken by several posts;
+    each has to qualify, so an ask that arrived alongside keeps it out. A count, not a grade (see the top of this file)."""
+    first, *rest = [by_id.get(i) or {} for i in [run["post"], *run.get("also", [])]]
+    if not first or not names_run(run, first) or self_wake(run, first): return False
+    if not all(str(p.get("from", "")).lower() not in NOT_AGENTS and result_shaped(p.get("text")) and asks_nothing(p.get("text")) for p in [first, *rest]): return False
+    return not any(p.get("id") and p["id"] in ticks for p in mine)
+
+def completion_share(since, log=None, posts=None):
+    """(completion wakes, self-wakes, agent-code wakes) among runs ended in the span, worked out from the log and the board, since the ledger holds a sample of the rest."""
+    log, posts = jsonl(LOG) if log is None else log, jsonl(BOARD) if posts is None else posts
+    by_id, ticks, wakes, done, own = {p.get("id"): p for p in posts}, ticked_rungs(), 0, 0, 0
+    t0 = now() - span(since); near = iso(t0 - dt.timedelta(days=1)); nearby = [p for p in posts if p.get("at", "") >= near]
+    for r in runs(log, iso(t0)):
+        post = by_id.get(r["post"]) or {"from": "person"}
+        if not names_run(r, post): continue
+        wakes += 1; own += self_wake(r, post); done += completion_wake(r, by_id, posts_of(r, nearby, by_id)[1], ticks)
+    return done, own, wakes
+
 def clip(s, n): s = str(s or "").strip(); return s if len(s) <= n else s[:n] + " …"
 
 def block(run, post, mine, after):
     lines = [f"RUN {run['key']}: agent {run['name']}, woken by {run['from']} in thread {run['thread']}, ran {run['started'][11:16]} to {run['ended'][11:16]} UTC, exit {run['exit']}",
              f"  WAKING POST ({post.get('from') if post else '?'}): {clip((post or {}).get('text'), 1500)}"]
-    for p in mine[:6]: lines.append(f"  AGENT POSTED (thread {p.get('thread')}): {clip(p.get('text'), 900)}")
-    if len(mine) > 6: lines.append(f"  ... and {len(mine) - 6} more posts")
+    shown = mine if len(mine) <= 6 else mine[:5] + mine[-1:]   # the first few, and the last: the result comes at the end
+    for i, p in enumerate(shown):
+        if i == 5 and len(mine) > 6: lines.append(f"  ... and {len(mine) - 6} more posts")
+        lines.append(f"  AGENT POSTED (thread {p.get('thread')}, post {p.get('id')}): {clip(p.get('text'), RESULT_CLIP if p is shown[-1] else POST_CLIP)}")
     for p in after: lines.append(f"  AFTER, {p.get('from')} said: {clip(p.get('text'), 400)}")
     return "\n".join(lines)
 
@@ -120,6 +187,10 @@ Grades:
 Judge only against what the post asked, not whether the work was good. A post that says "stop" or "thanks" and a short reply is not_asked; so is a chase ("???", "hello?", "status?", "did you do it") answered with where things stand. Reply with JSON only:
 {"grades":[{"run":"<RUN key>","grade":"delivered|partial|nothing|not_asked","why":"<at most 20 words>"}]}
 
+One more job, on delivered and partial runs only. If a post by the agent holds a fact another agent could use months from now in other work, add to that run's grade:
+"note":{"post":"<the post id>","title":"<what the note answers, at most 12 words>","lines":["3 to 10 lines, copied from that post in its own words, each understandable without the thread"]}
+Worth a note: how something was made to work, a number with how it was measured, a gotcha with its cause. Not a note: status, thanks, a plan, what was changed in this one job with nothing to learn from it, a number that goes stale within days, one person's private or one-off matter such as a purchase. Most runs have no note: leave the field out.
+
 {blocks}"""
 
 def pick(todo, sample, rng=random):
@@ -130,6 +201,29 @@ def pick(todo, sample, rng=random):
     rng.shuffle(rest)
     return person + rest[:sample]
 
+def write_draft(g, run, mine):
+    """A grade's note as ~/kb/_drafts/<thread>-<date>.md, at most one a day per thread, or None. The model proposes; these rules decide. Never ~/kb proper."""
+    n = g.get("note")
+    if not isinstance(n, dict) or g.get("grade") not in ("delivered", "partial"): return None
+    src = next((p for p in mine if p.get("id") and p.get("id") == n.get("post")), None)
+    lines = [str(l).strip() for l in n.get("lines") or [] if str(l).strip()] if isinstance(n.get("lines"), list) else []
+    title = re.sub(r"\s+", " ", str(n.get("title") or "")).strip()[:120]
+    if not src or not title or not DRAFT_LINES[0] <= len(lines) <= DRAFT_LINES[1]: return None
+    text, have = "\n".join(lines), set(re.findall(r"\w+", str(src.get("text")).lower()))
+    said = re.findall(r"\w+", text.lower())
+    if not said or sum(w in have for w in said) < OWN_WORDS * len(said): return None
+    spec = importlib.util.spec_from_file_location("kb", CORE / "kb.py"); kb = importlib.util.module_from_spec(spec); spec.loader.exec_module(kb)
+    if kb.SECRET.search(title + " " + text): return None   # the rule `kb file` holds notes to
+    thread, day = str(src.get("thread") or run.get("thread") or "none"), iso()[:10]
+    path = DRAFTS / f"{re.sub(r'[^A-Za-z0-9_.-]+', '-', thread)[:80]}-{day}.md"
+    if any(r.get("path") == str(path) for r in jsonl(DRAFT_LOG)): return None   # counted from the log too: a draft the dream already moved still used the day
+    DRAFTS.mkdir(parents=True, exist_ok=True)
+    try:
+        with open(path, "x") as f: f.write(f"# {title}\n\n{text}\n\nDraft by the hourly grader, not checked. Source: post {src.get('id')} by {src.get('from')}, thread {thread}, {day}. `hive read --id {src.get('id')}` for all of it.\n")
+    except FileExistsError: return None
+    append(DRAFT_LOG, {"at": iso(), "path": str(path), "post": src.get("id"), "thread": thread, "run": run.get("key")})
+    return path
+
 def cmd_grade(a):
     asks = asks_mod()
     try: cur = json.loads(CURSOR.read_text())
@@ -139,9 +233,10 @@ def cmd_grade(a):
     done = {r.get("key") for r in jsonl(LEDGER)}
     todo = [r for r in runs(log, since, until) if r["key"] not in done]
     if a.limit: todo = todo[:a.limit]
-    graded, model_runs, cost = 0, [], 0.0
+    graded, model_runs, cost, ticks, drafts = 0, [], 0.0, ticked_rungs(), 0
     for r in todo:
         post, mine, after = posts_of(r, posts, by_id)
+        r = {**r, **({"completion_wake": True} if completion_wake(r, by_id, mine, ticks) else {}), **({"self_wake": True} if post and self_wake(r, post) else {})}   # marks for the spot-check; the grade doesn't look at them
         g = mechanical(r, post, mine)
         if g:
             why = "the post asked nothing" if g == "not_asked" else "posted nothing" + (" though named" if g == "silent" else "")
@@ -161,9 +256,11 @@ def cmd_grade(a):
             r, post, mine = byk.get(g.get("run"), (None, None, None))
             if not r or g.get("grade") not in ("delivered", "partial", "nothing", "not_asked"): continue
             append(LEDGER, {**r, "at": iso(), "grade": g["grade"], "why": clip(g.get("why"), 200), "posts": len(mine), "by": a.model, "cost": round(cost / len(batch), 4)}); graded += 1
+            try: drafts += bool(write_draft(g, r, mine))
+            except OSError as e: print(f"outcomes: draft not written: {e}", file=sys.stderr)
     if not a.dry and todo: CURSOR.write_text(json.dumps({"at": max(r["ended"] for r in todo), "run": iso()}))
     if not a.dry and graded: step_up(graded)
-    print(f"{graded} runs graded ({len(chosen)} by the model, {len(model_runs) - len(chosen)} left unsampled), ${cost:.2f}")
+    print(f"{graded} runs graded ({len(chosen)} by the model, {len(model_runs) - len(chosen)} left unsampled), {drafts} drafts, ${cost:.2f}")
 
 def step_up(new, post=None):
     """An agent graded short STEP_UP_AFTER times in a row in one thread while on a cheap model gets its next wake on STEP_UP_TO:
@@ -195,7 +292,8 @@ def post_board(thread, text):
 
 def parse_grades(out):
     try: return asks_mod().parse_json(out).get("grades", [])
-    except Exception: return []
+    except Exception:   # copied post text can break the JSON (an unescaped quote): keep the grades, a run's ledger row is only written once, and lose the notes
+        return [{"run": r, "grade": g, "why": w} for r, g, w in GRADE_RE.findall(out or "")]
 
 def recent(since):
     t0 = iso(now() - span(since))
@@ -213,10 +311,12 @@ def cmd_list(a):
     print(f"-- {len(rows)} runs; " + ", ".join(f"{k[9:]} {v}" for k, v in stats(rows).items() if k.startswith("outcomes_") and k != "outcomes_graded"))
 
 def cmd_stats(a):
-    s = stats(recent(a.since))
-    if a.json: print(json.dumps(s)); return
+    s = stats(recent(a.since)); done, own, wakes = completion_share(a.since)
+    share, own_share = (round(100.0 * done / wakes, 1), round(100.0 * own / wakes, 1)) if wakes else (None, None)
+    if a.json: print(json.dumps({**s, "completion_wakes": done, "self_wakes": own, "agent_code_wakes": wakes, "completion_wake_pct": share, "self_wake_pct": own_share})); return
     print(f"{s['outcomes_graded']} runs graded in the last {a.since}: delivered {s['outcome_delivered_pct']}% of the {sum(s['outcomes_' + g] for g in GRADED)} that were asked something "
           f"(delivered {s['outcomes_delivered']}, partial {s['outcomes_partial']}, nothing {s['outcomes_nothing']}, silent {s['outcomes_silent']}); quiet {s['outcomes_quiet']}, not asked {s['outcomes_not_asked']}")
+    print(f"completion wakes: {done} of {wakes} agent-code wakes ended in the span ({share}%); self-wakes: {own} ({own_share}%). Counts only, no grade follows from them")
 
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="hive outcomes", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)

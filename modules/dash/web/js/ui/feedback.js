@@ -98,11 +98,12 @@ export async function openFeedback() {
   const gh = button("Open as a GitHub issue", () => ghIssue(), { size: "s", kind: "quiet", title: "Opens a prefilled issue on the Hive's GitHub page, which you check and post from your own GitHub account. The picture isn't included." });
   gh.hidden = !toMakers();
   const again = button("Browser capture", () => take(), { size: "s", kind: "quiet", title: "If the picture looks wrong: take it with the browser's own screen capture, which asks first" });
+  const more = h("details", { class: "fb-more" }, h("summary", { class: "btn", "data-kind": "quiet", "data-size": "s" }, "More ways"), h("div", { class: "fb-more-b" }, again, gh));   // Send is the one primary; the rest wait here
   const hint = h("div", { class: "fb-hint", hidden: true }, "Drag on the screen to draw a box");
   const card = h("div", { class: "fb-card" },
     h("div", { class: "fb-r" }, h("b", { class: "fb-title" }, "Send feedback"), undo, button("Close", () => dlg.close(), { size: "s" })),
     text, say, h("div", { class: "fb-r" }, onlyL, noPicL),
-    h("div", { class: "fb-r" }, again, h("span", { class: "fb-gap" }), gh, send),
+    h("div", { class: "fb-r" }, more, h("span", { class: "fb-gap" }), send),
     h("p", { class: "meta" }, toMakers()
       ? "This goes to the makers of Hive: your comment, the picture, the page you're on, this Hive's version and a random install id. The picture holds whatever is on the screen, so box only the part that matters or leave it out. A copy stays on this machine, in reports/sent."
       : "This goes to your own Hive, in the conversation called feedback, where an agent reads it. It isn't sent to the makers of Hive."));
@@ -130,7 +131,7 @@ export async function openFeedback() {
     if (on(r.left, r.right) && !on(ml, ml + r.width)) card.toggleAttribute("data-left");
   }
   function sync() {
-    undo.hidden = !boxes.length; onlyL.hidden = !boxes.length; again.hidden = !pic; hint.hidden = !pic || !!boxes.length;
+    undo.hidden = !boxes.length; onlyL.hidden = !boxes.length; again.hidden = !pic; more.hidden = again.hidden && gh.hidden; hint.hidden = !pic || !!boxes.length;
     if (!boxes.length) { only = false; onlyBox.checked = false; }
   }
   function show(why) {

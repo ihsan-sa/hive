@@ -32,7 +32,7 @@ export function chart(o) {
 
   const cross = h("div", { class: "plot-cross" });
   const plot = h("div", { class: "plot", style: `--h:${o.height || 96}px` }, svg, cross,
-    o.compact ? null : h("span", { class: "plot-y", style: "top:0" }, o.top || String(Math.round(max * 100) / 100)),
+    o.compact || (o.mark != null && max && Math.abs(o.mark - max) / max <= 0.1) ? null : h("span", { class: "plot-y", style: "top:0" }, o.top || String(Math.round(max * 100) / 100)),
     o.compact ? null : h("span", { class: "plot-y", style: "top:100%" }, "0"),
     o.mark != null && !o.compact ? h("span", { class: "plot-y", style: `top:${y(o.mark)}%` }, o.markLabel || "") : null);
   plot.addEventListener("pointermove", e => {

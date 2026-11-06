@@ -18,7 +18,7 @@ function look() { const n = document.querySelector(".dscreen"); if (n) stuck = n
 function follow() { const n = document.querySelector(".dscreen"); if (n && stuck) n.scrollTop = n.scrollHeight; }
 function redraw(ctx) { look(); ctx.update(); queueMicrotask(follow); }   // update draws in a microtask: follow goes after it
 // morph leaves a focused field alone, so set it here as well
-function setText(v, focus) { D.text = v; const n = document.querySelector(".dtype input"); if (n) { n.value = v; if (focus) n.focus(); } }
+function setText(v, focus, ctx) { D.text = v; if (ctx) ctx.update(); const n = document.querySelector(".dtype input"); if (n) { n.value = v; if (focus) n.focus(); } }
 
 // One screen of the session, not its whole history: old banners and old answers read as if they were happening now.
 const SCREEN_LINES = 40;
@@ -84,10 +84,10 @@ function sessionPart(v, ctx) {
   return section({ title: v.session_login ? `Session on ${v.session_login}` : "Session", key: "session", actions: [working(v.screen) ? state("info", "Claude is working") : state("good", "Waiting for you"), button("End session", () => act({ do: "stop" }, ctx), { size: "s" })] },
     h("pre", { class: "dscreen", tabindex: "0", "aria-label": "The session's screen" }, D.full ? v.screen : tailOf(v.screen)),
     h("form", { class: "frow dtype", onsubmit: e => { e.preventDefault(); send(); } },
-      h("div", { style: "flex:1;min-width:14rem" }, input({ "aria-label": "Type to Claude", placeholder: "/design a landing page for…", autocomplete: "off", spellcheck: "false", value: D.text, oninput: (e, n) => { D.text = n.value; } })),
-      button("Send", null, { kind: "primary", type: "submit" })),
+      h("div", { style: "flex:1;min-width:14rem" }, input({ "aria-label": "Type to Claude", placeholder: "/design a landing page for…", autocomplete: "off", spellcheck: "false", value: D.text, oninput: (e, n) => { const was = !D.text.trim(); D.text = n.value; if (was !== !D.text.trim()) ctx.update(); } })),
+      button("Send", null, { kind: "primary", type: "submit", disabled: !D.text.trim(), title: D.text.trim() ? null : "Type something first" })),
     h("div", { class: "frow dkeys" }, h("span", { class: "meta" }, "If it asks something:"), key("Up", "up"), key("Down", "down"), key("Enter", "enter"), key("Esc", "esc"), key("Tab", "tab"), key("Interrupt", "stop"),
-      h("span", { class: "frow dright" }, button(D.full ? "Show less" : "Show whole session", () => { D.full = !D.full; stuck = true; redraw(ctx); }, { size: "s", kind: "quiet" }), button("Save it for the hive", () => setText(SAVE, true), { size: "s", title: `Fills in the message; Send sends it. Saved designs go under ${v.dir}, where agents can read them.` }))));
+      h("span", { class: "frow dright" }, button(D.full ? "Show less" : "Show whole session", () => { D.full = !D.full; stuck = true; redraw(ctx); }, { size: "s", kind: "quiet" }), button("Save it for the hive", () => setText(SAVE, true, ctx), { size: "s", title: `Fills in the message; Send sends it. Saved designs go under ${v.dir}, where agents can read them.` }))));
 }
 
 // Designs as cards, newest first: a name worth reading (its brief, else the thread it was made for), where it came from, and Open.
@@ -102,7 +102,7 @@ const linksPart = (v, ctx) => v.links && v.links.length ? section({ title: "Your
         h("a", { class: "btn", "data-size": "s", href: url, target: "_blank", rel: "noreferrer noopener" }, "Open ↗"),
         button("Remove", () => act({ do: "forget", url: l.url }, ctx), { size: "s", kind: "quiet", title: "Takes it off this list. The design stays on claude.ai." }))); }))) : null;
 // The account in session first, then the ones you can start on (least used first), then the rest.
-const sorted = (accts, session) => [...accts].sort((a, b) => (b.name === session) - (a.name === session) || (b.open - a.open) || ((a.weekly ?? 101) - (b.weekly ?? 101)));
+const sorted = (accts, session) => [...(accts || [])].sort((a, b) => (b.name === session) - (a.name === session) || (b.open - a.open) || ((a.weekly ?? 101) - (b.weekly ?? 101)));
 
 export default {
   id: "design", label: "Design", about: "make designs with Claude Design", tab: () => !!S.app.app && can("logins"),

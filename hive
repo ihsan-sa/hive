@@ -587,13 +587,14 @@ def open_in(t, ps, asks, ext, last_post=None):
     return None
 
 def open_asks_by_thread():
-    """Open asks and leftovers from ~/asks.jsonl, by thread: {thread: {id, ...}}."""
+    """Open asks and leftovers from ~/asks.jsonl, by thread: {thread: {id, ...}}. Only those someone should be moving (open, owned): a held or
+    person ask waits on a stated reason and has its own list (hive asks list), so it doesn't make its thread stalled (44 held + 54 person of 127 open on 2026-11-06)."""
     out = {}
     try:
         sys.path.insert(0, str(CORE)); import asks as A
         for e in A.open_items(A.ledger()):
             th = e.get("thread") or e.get("post")
-            if th: out.setdefault(th, set()).add(e["id"])
+            if th and e.get("status") not in ("held", "person"): out.setdefault(th, set()).add(e["id"])
     except Exception: pass
     return out
 
@@ -634,6 +635,18 @@ def cmd_stalled(a):
 # ---------- logins ----------
 
 def read_cfg(): return json.loads((CORE / "config.json").read_text())
+
+def cmd_budget(a):
+    """A cap on what one run may spend (config.json max_budget_usd, passed to claude as --max-budget-usd): a run that reaches it stops and says so."""
+    c = read_cfg()
+    if a.usd is None:
+        v = c.get("max_budget_usd"); print(f"Each run is capped at ${v} (about what it would cost at API prices)." if v else "No cap on a run. Set one: hive budget 5   (dollars per run; hive budget off removes it)"); return
+    if a.usd == "off": c.pop("max_budget_usd", None); write_cfg(c); print("No cap on a run."); return
+    try: v = float(a.usd)
+    except ValueError: sys.exit("hive budget: give dollars per run, like 5, or off")
+    if not 0 < v < 10000: sys.exit("hive budget: dollars per run must be above 0")
+    c["max_budget_usd"] = int(v) if v == int(v) else v; write_cfg(c)
+    print(f"Each run is capped at ${c['max_budget_usd']} from its next start. A run that reaches the cap stops and says so in its thread.")
 
 def post_model(m):
     """--model: a Claude alias, or provider:model where provider is in config.json's providers (see starter.provider_of)."""
@@ -971,6 +984,8 @@ p = sp.add_parser("status", help="hive status THREAD <<'X' ...: set the two-line
 p.add_argument("thread"); p.add_argument("--read", action="store_true"); p.set_defaults(f=cmd_status)
 p = sp.add_parser("model", help="hive model haiku|sonnet|opus|fable WHY...: carry on with this conversation on another model. It posts WHY in your thread; end your turn and you resume on that model with your memory. --next: no resume, your next wake starts on it")
 p.add_argument("to_model", choices=CLAUDE_MODELS, metavar="MODEL"); p.add_argument("--next", action="store_true"); p.add_argument("why", nargs="+"); p.set_defaults(f=cmd_model)
+p = sp.add_parser("budget", help="hive budget [USD|off]: show or set the most one run may spend (dollars); applies from each run's next start")
+p.add_argument("usd", nargs="?"); p.set_defaults(f=cmd_budget)
 p = sp.add_parser("read", help="hive read [--thread T] [--since 2h|ISO] [--from X] [--to X] [--id ID] [-n 30, 0 for all] [--short: one line per post]")
 p.add_argument("--thread"); p.add_argument("--since"); p.add_argument("--from", dest="from_"); p.add_argument("--to")
 p.add_argument("--id"); p.add_argument("-n", type=int, default=30); p.add_argument("--short", action="store_true"); p.set_defaults(f=cmd_read)

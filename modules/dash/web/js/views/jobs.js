@@ -36,7 +36,8 @@ function tiles(T) {
     tile("Swap used", gb(swap), `of ${gb(M.SwapTotal)}`, M.SwapTotal ? (swap * 100) / M.SwapTotal : 0, M.SwapTotal && swap / M.SwapTotal >= 0.9),
     T.slice_high ? tile("Queue jobs' memory", gb(T.slice_used), `soft limit ${gb(T.slice_high)}`, (T.slice_used * 100) / T.slice_high, T.slice_used >= T.slice_high - 3000) : null,
     ...T.gpus.map(g => tile("GPU", g.util + "%", `${gb(g.mem)} of ${gb(g.total)}, ${g.name}`, g.util)),
-    ...T.disks.map(d => tile("Disk " + d.name, d.used + " GB", `of ${d.total} GB`, d.total ? (d.used * 100) / d.total : 0, d.total && d.used / d.total >= 0.9)),
+    // One Disk tile: further disks fold into its note, so the grid doesn't end on a lone tile labelled with a raw path.
+    ...T.disks.slice(0, 1).map(d => tile("Disk", d.used + " GB", [`of ${d.total} GB`, ...T.disks.slice(1).map(x => `${x.name}: ${x.used} of ${x.total} GB`)].join(", "), d.total ? (d.used * 100) / d.total : 0, T.disks.some(x => x.total && x.used / x.total >= 0.9))),
   ];
 }
 
@@ -46,9 +47,9 @@ function split(V) {
     return h("div", { class: "jobs-split" }, h("div", { class: "jobs-split-h" }, h("b", null, label), h("span", { class: "meta" }, `${fmt(used)} of ${fmt(total)}${unit}`)),
       share(OWNERS.map(([k, l, tone]) => ({ key: k, label: l, tone, value: V.split[k][field], text: fmt(V.split[k][field]) })), { total, label: `${label}: ${fmt(used)} of ${fmt(total)}${unit}`, legend: false }));
   };
-  const memTotal = Math.max(V.held, OWNERS.reduce((a, [k]) => a + V.split[k].mem, 0)) || 1;
+  const memTotal = Math.max(V.machine.mem.MemTotal || 0, V.held, OWNERS.reduce((a, [k]) => a + V.split[k].mem, 0)) || 1;
   const own = OWNERS.filter(([k]) => !(S.app.app && k === "jobs" && !hasQueue(V))).map(([k, l, tone]) => [k, S.app.app ? APP_OWNERS[k] : l, tone]);
-  return [bar("CPU", "cores", V.machine.cpus, " threads", v => v.toFixed(1)), bar("Memory", "mem", memTotal, "", gb),
+  return [bar("CPU", "cores", V.machine.cpus, " threads", v => v.toFixed(1)), bar("Memory in use", "mem", memTotal, "", gb),
     h("div", { class: "legend" }, own.map(([k, l, tone]) => h("span", { "data-tone": tone }, h("i", { class: "sw" }), `${l}: ${V.split[k].cores.toFixed(1)} threads, ${gb(V.split[k].mem)}`)))];
 }
 

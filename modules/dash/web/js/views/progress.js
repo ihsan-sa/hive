@@ -66,11 +66,11 @@ function asksSection(V, update) {
     table({ key: r => r.id, empty: P.asks === "owed" ? "Nothing is owed." : "No asks here.", caption: "Asks",
       columns: [
         { label: "Asked", render: r => when(r.when) },
-        { label: "Ask", clip: true, render: r => h("span", { title: r.ask || "" }, r.ask || "") },
+        { label: "Ask", clip: true, render: r => (app() || !r.evidence ? h("span", { title: r.ask || "" }, r.ask || "")
+          : h("span", { title: r.ask || "" }, r.ask || "", h("div", { class: "meta", title: r.evidence }, "Evidence: " + short(r.evidence, 80)))) },
         { label: "Status", render: r => tone(r.orphaned ? "bad" : ASK_TONE[r.status], r.orphaned ? (app() ? ASK_TEXT_APP.orphaned : "orphaned") : (app() ? ASK_TEXT_APP : ASK_TEXT)[r.status] || r.status, r.orphaned ? "owned, but its owner is gone and nobody posted" : r.why || null) },
         { label: "Agent", render: r => (r.owner ? agentRef(r.owner) : "–") },
         { label: "Conversation", render: r => threadRef(r.thread) },
-        app() ? null : { label: "Evidence", clip: true, render: r => h("span", { title: r.evidence || "" }, short(r.evidence || "", 80)) },
       ].filter(Boolean), rows }));
 }
 

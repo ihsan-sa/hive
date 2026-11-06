@@ -5,7 +5,7 @@ import { S, OUTSIDE, getPref, loadAgentCosts, setPref } from "../core/store.js";
 import { agentSpend, agentStatus, isRunning, loginName, modelName, sEnd, threadTitle } from "../core/model.js";
 import { ago, dur, money, plural, short, stamp, toks } from "../core/format.js";
 import { metrics } from "../templates.js";
-import { button, empty, input, pageHeader, stats, toolbar } from "../ui/kit.js";
+import { button, empty, input, pageHeader, seg, stats, toolbar } from "../ui/kit.js";
 import { agentRef, threadRef } from "../ui/refs.js";
 
 const STATUS = [["all", "Any status"], ["running", "Running"], ["queued", "Waiting to start"], ["ended", "Ended"], ["killed", "Killed"], ["limited", "Stopped at a limit"], ["failed", "Failed"]];
@@ -14,6 +14,9 @@ const SINCE = [["all", "Any time"], ["1", "Last 24 hours"], ["7", "Last 7 days"]
 const PAGE = 200, DAY = 864e5;
 const L = { q: "", status: "all", by: "all", since: "all", model: "all", account: "all", limit: PAGE, sig: "", dataKey: "", all: [], shown: [] };
 const pctOf = (a, b) => b ? Math.round(100 * a / b) + "%" : "0%";
+const app = () => !!S.app.app;
+const APP_COLS = ["name", "status", "spawned", "thread", "model", "lastSeen", "usd"];   // the app look starts with these; the developer look has every column on
+const colsOn = () => { const c = getPref("agents.cols", null); return new Set(Array.isArray(c) && c.length ? c : app() ? APP_COLS : COLS.map(x => x.k)); };
 const sort = () => getPref("agents.sort", { k: "spawned", d: -1 });
 
 const statusOf = n => { const k = agentStatus(n).key; return isRunning(n) ? "running" : k; };
@@ -49,19 +52,20 @@ function gather() {
   return L.all;
 }
 
+let COST_DATA = true;
 const COLS = [
   { k: "name", label: "Agent", get: a => a.name, render: a => agentRef(a.name) },
   { k: "status", label: "Status", get: a => a.status, render: a => h("span", { title: agentStatus(a.name).label }, (STATUS.find(x => x[0] === a.status) || [0, a.status])[1]) },
   { k: "spawned", label: "Spawned", get: a => a.when, render: a => h("span", { title: new Date(a.when).toISOString() }, stamp(a.when)) },
   { k: "thread", label: "Thread", cls: "clip ag-tm", get: a => threadTitle(a.thread) || "", render: a => threadRef(a.thread) },
-  { k: "from", label: "Started by", get: a => a.from || "", render: a => (a.from && S.agents.has(a.from) ? agentRef(a.from) : a.from || "–") },
+  { k: "from", label: "Started by", get: a => a.from || "", render: a => (a.from && S.agents.has(a.from) ? agentRef(a.from) : a.from === "person" && app() ? "you" : a.from || "–") },
   { k: "model", label: "Model", cls: "ag-m", get: a => a.model, render: a => h("span", { title: a.model }, a.model) },
   { k: "account", label: "Account", get: a => a.account, render: a => a.account },
   { k: "runs", label: "Runs", num: 1, title: "How many times it has been started or woken", get: a => a.runs, render: a => a.runs },
   { k: "ran", label: "Ran for", num: 1, title: "Time running, over all its runs", get: a => a.ran, render: a => (a.ran < 6e4 ? "<1m" : dur(a.ran)) },
   { k: "lastSeen", label: "Last active", num: 1, get: a => a.lastSeen, render: a => (isRunning(a.name) ? "now" : ago(a.lastSeen)) },
-  { k: "usd", label: "Cost", num: 1, title: "At API list prices; nobody is billed this", get: a => a.usd, render: a => h("span", { title: `From the ${a.spend.src}` + (a.spend.sub ? `; ${money(a.spend.sub)} in subagents` : "") }, money(a.usd)) },
-  { k: "tok", label: "Tokens", num: 1, title: "Input, output and cache together", get: a => a.tok, render: a => h("span", { title: `${toks(a.spend.t[0])} input, ${toks(a.spend.t[1])} output, ${toks(a.spend.t[2])} cache read, ${toks(a.spend.t[3])} cache write` }, toks(a.tok)) },
+  { k: "usd", label: "Cost", num: 1, title: "At API list prices; nobody is billed this", get: a => a.usd, render: a => !COST_DATA ? "–" : h("span", { title: `From the ${a.spend.src}` + (a.spend.sub ? `; ${money(a.spend.sub)} in subagents` : "") }, money(a.usd)) },
+  { k: "tok", label: "Tokens", num: 1, title: "Input, output and cache together", get: a => a.tok, render: a => !COST_DATA ? "–" : h("span", { title: `${toks(a.spend.t[0])} input, ${toks(a.spend.t[1])} output, ${toks(a.spend.t[2])} cache read, ${toks(a.spend.t[3])} cache write` }, toks(a.tok)) },
   { k: "calls", label: "Calls", num: 1, title: "Model calls, subagents included", get: a => a.calls ?? -1, render: a => (a.calls == null ? "–" : a.calls.toLocaleString()) },
   { k: "tools", label: "Tools", num: 1, title: "Tool calls in its session logs", get: a => a.tools, render: a => a.tools.toLocaleString() },
   { k: "posts", label: "Posts", num: 1, get: a => a.posts, render: a => a.posts },
@@ -88,35 +92,41 @@ export default {
   render(ctx) {
     if (!S.live) return empty("Reading…", { kind: "loading" });
     const all = gather(), s = sort(), set = (k, v) => { L[k] = v; L.limit = PAGE; ctx.update(); };
-    const sig = [L.dataKey.split("|")[0], S.agentCosts && S.agentCosts.at, L.q, L.status, L.by, L.since, L.model, L.account, L.limit, s.k, s.d].join("|"), changed = sig !== L.sig; L.sig = sig;
+    const sig = [[...colsOn()].join(), L.dataKey.split("|")[0], S.agentCosts && S.agentCosts.at, L.q, L.status, L.by, L.since, L.model, L.account, L.limit, s.k, s.d].join("|"), changed = sig !== L.sig; L.sig = sig;
     if (changed || !L.found) L.found = select();
     const found = L.found, narrowed = found.length < all.length, sum = f => found.reduce((a, x) => a + f(x), 0);
     const by = k => () => { const c = sort(), d = c.k === k ? -c.d : COLS.find(x => x.k === k).num || k === "spawned" ? -1 : 1; setPref("agents.sort", { k, d }); L.limit = PAGE; ctx.update(); };
-    const costs = S.agentCosts;
+    const on = colsOn(), cols = COLS.filter(c => on.has(c.k)), nf = ["status", "model", "account", "by", "since"].filter(k => L[k] !== "all").length;
+    const costs = S.agentCosts; COST_DATA = all.some(a => a.usd > 0 || a.tok > 0);   // no cost data is "–", not a real zero (handoff 33)
     return metrics({
-      header: pageHeader({ title: "Agents", lead: `Every agent that has run, ${s.k === "spawned" && s.d < 0 ? "newest spawned first" : s.k === "spawned" ? "oldest spawned first" : "sorted by the column you chose"}. Click a name for its numbers.`, after: toolbar(
+      header: pageHeader({ title: "Agents", lead: `Every agent that has run, ${s.k === "spawned" && s.d < 0 ? "newest first" : s.k === "spawned" ? "oldest first" : "sorted by the column you chose"}.`, after: toolbar(
         input({ type: "search", placeholder: "Search name, thread, model, who started it", "aria-label": "Search agents", value: L.q, oninput: e => set("q", e.target.value) }),
-        picker("Status", L.status, STATUS, v => set("status", v)),
-        picker("Model", L.model, [["all", "Any model"], ...options(all, "model")], v => set("model", v)),
-        picker("Account", L.account, [["all", "Any account"], ...options(all, "account")], v => set("account", v)),
-        picker("Started by", L.by, BY, v => set("by", v)),
-        picker("Spawned", L.since, SINCE, v => set("since", v)),
+        seg(STATUS.filter(x => ["all", "running", "ended", "failed"].includes(x[0]) || x[0] === L.status).map(([k, l]) => [k, k === "all" ? "All" : l]), L.status, v => set("status", v), { label: "Status" }),
+        h("details", { class: "now-more ag-f", open: L.fOpen || null, ontoggle: (e, n) => { if (e.target === n) L.fOpen = n.open; } }, h("summary", null, "Filters" + (nf ? ` (${nf})` : "")),
+          h("div", { class: "toolbar" },
+            picker("Model", L.model, [["all", "Any model"], ...options(all, "model")], v => set("model", v)),
+            picker("Account", L.account, [["all", "Any account"], ...options(all, "account")], v => set("account", v)),
+            picker("Started by", L.by, BY, v => set("by", v)),
+            picker("Spawned", L.since, SINCE, v => set("since", v)))),
+        h("details", { class: "now-more ag-f", open: L.cOpen || null, ontoggle: (e, n) => { if (e.target === n) L.cOpen = n.open; } }, h("summary", null, "Columns"),
+          h("div", { class: "toolbar" }, COLS.map(c => h("label", { class: "meta" }, h("input", { type: "checkbox", checked: on.has(c.k) ? "" : null, disabled: c.k === "name" ? "" : null,
+            onchange: e => { const n = new Set(on); e.target.checked ? n.add(c.k) : n.delete(c.k); setPref("agents.cols", [...n]); L.sig = ""; ctx.update(); } }), " " + c.label)))),
         narrowed ? button("Clear", () => { Object.assign(L, { q: "", status: "all", by: "all", since: "all", model: "all", account: "all", limit: PAGE }); ctx.update(); }, { kind: "quiet", size: "s" }) : null,
         h("span", { class: "meta" }, narrowed ? `${found.length} of ${plural(all.length, "agent")}` : plural(all.length, "agent"))),
         meta: [costs && costs.at ? `Cost and tokens from the transcripts, read ${ago(costs.at * 1e3)}${costs.refreshing ? ", reading again" : ""}. API list prices; nobody is billed this. Tokens add up every model call's input, output and cache, so context read again on each call counts each time.` : costs && costs.refreshing ? "Reading the transcripts for exact costs; until then these come from the session logs." : "Cost and tokens from the session logs."] }),
       sections: [
         stats([
           { label: narrowed ? "Agents shown" : "Agents", value: found.length.toLocaleString(), note: `${found.filter(a => a.status === "running").length} running` },
-          { label: "Total cost", value: money(sum(a => a.usd)), note: found.length ? `${money(sum(a => a.usd) / found.length)} per agent` : null },
-          { label: "Tokens", value: toks(sum(a => a.tok)), note: `${pctOf(sum(a => a.spend.t[2]), sum(a => a.tok))} re-read from cache; ${toks(sum(a => a.spend.t[1]))} written` },
+          { label: "Total cost", value: COST_DATA ? money(sum(a => a.usd)) : "–", note: found.length && COST_DATA ? `${money(sum(a => a.usd) / found.length)} per agent` : null },
+          { label: "Tokens", value: COST_DATA ? toks(sum(a => a.tok)) : "–", note: !COST_DATA ? null : `${pctOf(sum(a => a.spend.t[2]), sum(a => a.tok))} re-read from cache; ${toks(sum(a => a.spend.t[1]))} written` },
           { label: "Agent time", value: dur(sum(a => a.ran)), note: found.length ? `added up over ${plural(sum(a => a.runs), "run")}, in ${dur(Date.now() - Math.min(...found.map(a => a.when || Date.now())))}` : null },
         ]),
         found.length ? h("div", { class: "tbl-w ag-w" }, h("table", { class: "tbl ag" },
           h("caption", { class: "vh" }, "Agents"),
-          h("thead", null, h("tr", null, COLS.map(c => h("th", { scope: "col", class: c.num ? "num" : null, title: c.title || null, "aria-sort": s.k === c.k ? (s.d > 0 ? "ascending" : "descending") : null, "data-key": c.k },
+          h("thead", null, h("tr", null, cols.map(c => h("th", { scope: "col", class: c.num ? "num" : null, title: c.title || null, "aria-sort": s.k === c.k ? (s.d > 0 ? "ascending" : "descending") : null, "data-key": c.k },
             h("button", { type: "button", class: "ag-s", onclick: by(c.k) }, c.label, s.k === c.k ? h("span", { "aria-hidden": "true" }, s.d > 0 ? "▲" : "▼") : null))))),
           h("tbody", { "data-own": "morph", "data-sig": sig }, changed ? found.slice(0, L.limit).map(a => h("tr", { "data-key": a.name },
-            COLS.map(c => h("td", { class: [c.num ? "num" : null, c.cls || null].filter(Boolean).join(" ") || null }, c.render(a))))) : null)))
+            cols.map(c => h("td", { class: [c.num ? "num" : null, c.cls || null].filter(Boolean).join(" ") || null }, c.render(a))))) : null)))
           : empty("No agents match."),
         found.length > L.limit ? h("div", { class: "lr-more" },
           button(`Show ${Math.min(PAGE * 5, found.length - L.limit)} more (${found.length - L.limit} left)`, () => { L.limit += PAGE * 5; ctx.update(); }, { kind: "quiet", size: "s" })) : null,

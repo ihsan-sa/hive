@@ -35,7 +35,7 @@ export function threadRef(th, { strong } = {}) {
 
 export function copyButton(text) {
   return h("button", { type: "button", class: "copy", title: `Copy ${text}`, "aria-label": `Copy ${text}`,
-    onclick: (e, b) => { e.preventDefault(); e.stopPropagation(); copyText(text).then(() => { b.textContent = "✓"; setTimeout(() => (b.textContent = "⧉"), 900); }); } }, "⧉");
+    onclick: (e, b) => { e.preventDefault(); e.stopPropagation(); copyText(text).then(() => { b.textContent = "✓"; setTimeout(() => (b.textContent = "⧉"), 900); }, (er) => { b.title = er.message; b.textContent = "!"; setTimeout(() => (b.textContent = "⧉"), 1800); }); } }, "⧉");
 }
 
 /** agentAvatar(name) — a round mark with the name's first two characters and a status dot; a link to the agent. For stacks (.avs). */

@@ -91,7 +91,7 @@ export function hiveFigures(t = now()) {
     { label: "Time to answer a mention", value: hs.lat == null ? "–" : dur(hs.lat), note: `median; ${pct(hs.answered, hs.asked)} of ${hs.asked} mentions answered within 6h` },
     { label: "New agents started by agents", value: pct(hs.byAgents, hs.fresh), note: `${hs.byAgents} by agents, ${hs.byYou} by ${S.app.app ? "you" : "you or the box"}, ${hs.bySys} by the keeper or starter` },
     { label: S.app.app ? "Conversations with 2+ agents" : "Threads with 2+ agents", value: `${hs.multi} of ${hs.threads}`, note: (S.app.app ? "conversations" : "threads") + " where more than one agent posted" },
-    { label: "Best connected", value: hs.hub || "–", note: hs.hub ? `talked with ${hs.hubN} other agents` + (agentThread(hs.hub) ? `, on ${agentThread(hs.hub)}` : "") : "no agent-to-agent mentions" },
+    { label: S.app.app ? "Talks with most agents" : "Best connected", value: hs.hub || "–", note: hs.hub ? `talked with ${hs.hubN} other agents` + (agentThread(hs.hub) ? `, on ${agentThread(hs.hub)}` : "") : "no agent-to-agent mentions" },
     { label: "Session ends", value: hs.failed ? `${hs.failed} errored` : `${hs.clean} finished`, tone: hs.failed ? "bad" : null, note: `${hs.clean} finished, ${hs.stopped} stopped by a signal, ${hs.failed} errored; ${hs.limited} usage-limit stops` },
   ];
 }
@@ -109,6 +109,7 @@ export function activityCharts(t = now()) {
   ];
 }
 
+const APP_TIER = { tier1: "Top priority", tier2: "Next", held: "Kept going", other: "Everything else" };   // the app look says it in plain words
 const WORDS = ["No", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten"];
 const nWord = n => WORDS[n] || String(n);
 
@@ -123,13 +124,6 @@ function todayCard(t) {
     { label: "Hours of work", value: (ms / HOUR).toFixed(1) + "h", note: "agent time, all agents" },
     { label: "Week left", value: h("a", { href: href("usage") }, left), note: act ? "of your weekly use" : "not read yet" },
   ])));
-}
-
-/** Agents at work over the last 48 hours: one small step strip. */
-function strip(t) {
-  const span = 48, q = HOUR / 4, start = Math.floor((t - span * HOUR) / q) * q, N = span * 4, conc = new Array(N).fill(0);
-  for (const s of S.sessions) { const b = sEnd(s); if (b < start) continue; const i0 = Math.max(0, Math.floor((s.start - start) / q)), i1 = Math.min(N - 1, Math.floor((b - start) / q)); for (let i = i0; i <= i1; i++) conc[i]++; }
-  return chart({ title: "Agents at work, last 48 hours", series: [conc], kind: "step", start, step: q, compact: true, height: 44, fmt: v => `${v} at work` });
 }
 
 export default {
@@ -165,10 +159,9 @@ export default {
       const more = h("details", { class: "now-more", open: V.more || null, ontoggle: (e, n) => { if (e.target === n) V.more = n.open; } }, h("summary", null, "Details"),
         h("p", { class: "meta" }, [`${plural(lastHour, "post")} in the last hour`, waiting.length ? `${waiting.length} waiting to start` : null, S.usage ? `${money(spendSince(t - DAY))} of work in 24h, at list prices` : null].filter(Boolean).join(" · ")),
         section({ title: "How it's working as a hive", note: "last 24 hours" }, stats(hiveFigures(t))),
-        strip(t),
-        cols(...activityCharts(t)),
+        cols(...activityCharts(t)),   // "Agents at work" would draw the same line as "running at once": one chart, not two
         hasTiers() ? section({ title: "Where the agent hours went", note: "against your priority list, last 24 hours" },
-          share(TIERS.map(x => ({ key: x.key, label: x.label, tone: x.tone, value: hrs[x.key], text: `${(hrs[x.key] / HOUR).toFixed(1)}h (${Math.round((100 * hrs[x.key]) / tot)}%)` })))) : null);
+          share(TIERS.map(x => ({ key: x.key, label: S.app.app ? APP_TIER[x.key] || x.label : x.label, tone: x.tone, value: hrs[x.key], text: `${(hrs[x.key] / HOUR).toFixed(1)}h (${Math.round((100 * hrs[x.key]) / tot)}%)` })))) : null);
       return overview({ header, main: [awayCard(ctx), main].filter(Boolean), after: [todayCard(t), more] });
     }
 
@@ -195,7 +188,7 @@ export default {
 
     const hrs = tierHours(t - DAY, t), tot = Object.values(hrs).reduce((a, b) => a + b, 0) || 1;
     const tiers = section({ title: "Where the agent hours went", note: "against your priority list, last 24 hours" },
-      share(TIERS.map(x => ({ key: x.key, label: x.label, tone: x.tone, value: hrs[x.key], text: `${(hrs[x.key] / HOUR).toFixed(1)}h (${Math.round((100 * hrs[x.key]) / tot)}%)` }))));
+      share(TIERS.map(x => ({ key: x.key, label: S.app.app ? APP_TIER[x.key] || x.label : x.label, tone: x.tone, value: hrs[x.key], text: `${(hrs[x.key] / HOUR).toFixed(1)}h (${Math.round((100 * hrs[x.key]) / tot)}%)` }))));
 
     return overview({ header, main: [needsYou(run, states, waiting, L), run.length ? devTables(run, states, t) : empty("None.")], after: [hive, charts, hasTiers() ? tiers : null] });
   },

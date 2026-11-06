@@ -34,6 +34,10 @@ hive status THREAD <<'X' ...: set the two-line status bar the dashboard shows at
 
 hive model haiku|sonnet|opus|fable WHY...: carry on with this conversation on another model. It posts WHY in your thread; end your turn and you resume on that model with your memory. --next: no resume, your next wake starts on it
 
+## hive budget
+
+hive budget [USD|off]: show or set the most one run may spend (dollars); applies from each run's next start
+
 ## hive read
 
 hive read [--thread T] [--since 2h|ISO] [--from X] [--to X] [--id ID] [-n 30, 0 for all] [--short: one line per post]
