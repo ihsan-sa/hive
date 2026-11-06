@@ -45,12 +45,12 @@ const grip = () => h("div", { class: "cm-grip", role: "separator", "aria-orienta
     e.target.onpointerup = e.target.onpointercancel = () => { delete e.target.dataset.on; e.target.onpointermove = e.target.onpointerup = e.target.onpointercancel = null; }; },
   ondblclick: e => setSide(e.target.closest(".cm"), 272),
   onkeydown: e => { const d = e.key === "ArrowLeft" ? -24 : e.key === "ArrowRight" ? 24 : 0; if (d) { e.preventDefault(); setSide(e.target.closest(".cm"), sideW + d); } } });
-// The side list's two views (the person, 11061410615e and 11061116958d): "topics" puts conversations under the topics of the
+// The side list's three views (ideas is the default) (the person, 11061410615e and 11061116958d): "topics" puts conversations under the topics of the
 // Where things stand summary with helpers folded under the one they came from; "recent" is every conversation in one flat list,
 // newest activity first, helpers included. hideFaded leaves out the ones marked Likely not needed. Both kept in this browser.
 const VIEW_KEY = "hive.comms.view", HIDE_KEY = "hive.comms.hidefaded";
 const store = (k, v) => { try { localStorage.setItem(k, v); } catch (e) { /* this page only */ } };
-const C = { view: (() => { try { return localStorage.getItem(VIEW_KEY) === "recent" ? "recent" : "topics"; } catch (e) { return "topics"; } })(),
+const C = { view: (() => { try { const v = localStorage.getItem(VIEW_KEY); return v === "recent" || v === "topics" ? v : "ideas"; } catch (e) { return "ideas"; } })(),
   hideFaded: (() => { try { return localStorage.getItem(HIDE_KEY) === "1"; } catch (e) { return false; } })(),
   err: "", imp: false, arch: false, conv: undefined, q: "", show: null, limit: FIRST, tq: "", scope: "recent", next: null, menu: null, find: false, strip: false };
 let errTimer = 0;
@@ -641,8 +641,9 @@ function showChips(ctx) {
 function viewBar(ctx) {
   const nFaded = [...S.threads.keys()].filter(th => faded(th) && !archived(th)).length;
   return h("div", { class: "cm-views", "data-key": "views" },
-    seg([["topics", "Topics", "Under the topics of the Where things stand summary, helper conversations folded under the one they came from"],
-      ["recent", "Recent", "Every conversation in one list, newest activity first, helper conversations included"]], C.view,
+    seg([["ideas", "Ideas", "The main conversations, newest activity first, helper conversations folded under the one they came from"],
+      ["recent", "All threads", "Every conversation in one list, newest activity first, helper conversations included, each naming the one it came from"],
+      ["topics", "Groups", "Under the sections of the Needs-you overview, the rest under Other, helper conversations folded under the one they came from"]], C.view,
       v => { C.view = v; store(VIEW_KEY, v); ctx.update(); }, { label: "How the list is arranged" }),
     h("button", { type: "button", class: "tm-chip cm-hidefaded", "aria-pressed": String(C.hideFaded),
       title: C.hideFaded ? `Show the ${nFaded} marked Likely not needed again` : `Hide the ${nFaded} conversations marked Likely not needed`,

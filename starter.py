@@ -567,6 +567,14 @@ def stalled(r, quiet):
     except OSError: return False
     return not finished_but_alive(r, quiet) and not working(r, quiet)
 
+def gave_up_text(name, why, n, c):
+    """The post to the person when a run stops for good. A budget stop says which limit it hit and where to change it."""
+    t = f"`{name}` stopped and won't restart by itself ({WHY_WORDS[why]}{f', {n} times' if n > 1 else ''}). What it did so far is kept. "
+    if why == "budget":
+        b = c.get("max_budget_usd")
+        t += (f"The limit for one run is ${b:g}; " if b else "") + "raise it in Settings (Budget per run) or run `hive budget N`, then "
+    return t + ("a message to it carries it on." if why == "budget" else "A message to it carries it on.")
+
 def carry_on(st, r, why, told):
     """Queue a run that stopped early to resume in its own session after a wait. Bounded: a run that keeps dying is tried 3 times and the person is told
     (12 tries for lost connections, about 8 h, and a run that got 10 min of work done between drops starts counting again)."""
@@ -578,8 +586,7 @@ def carry_on(st, r, why, told):
     if n >= {"connection": 12, "budget": 1}.get(why, 3):
         tries.pop(key)
         log(event="given_up", name=r["name"], session=r["session"], why=why, tries=n)
-        post(f"`{r['name']}` stopped and won't restart by itself ({WHY_WORDS[why]}{f', {n} times' if n > 1 else ''}). What it did so far is kept. "
-             "A message to it carries it on.", ["person"])
+        post(gave_up_text(r["name"], why, n, cfg()), ["person"])
         return
     delays = cfg().get("died_retry_s") or DIED_RETRY_S
     st.setdefault("resume", {})[r["name"]] = {**r, "session": session_in(r.get("out")) or r["session"], "wait": True, "why": why,
