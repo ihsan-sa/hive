@@ -27,7 +27,7 @@ export default {
     return metrics({
       header: pageHeader({ title: "Inbox", lead: "Every message an agent sent you, newest first. Chat's home shows the ones that need you now.",
         actions: w && IB.unread ? button("Mark all read", () => mark({ all: true }), { size: "s" }) : null,
-        after: IB.err ? h("p", { class: "meta", role: "alert", "data-tone": "bad", style: "color:var(--ci)" }, IB.err) : null }),
+        after: IB.err ? h("p", { class: "fmsg", role: "alert", "data-tone": "bad" }, IB.err) : null }),
       sections: [section({}, list(IB.items.map(p => ({
         key: p.id, href: threadHref(p.thread),
         onClick: w && !p.read ? () => mark({ ids: [p.id] }) : null,

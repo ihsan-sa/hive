@@ -6,7 +6,7 @@ A release can ship several times a day. A new Hive installs at most one a day, o
 
 ## The page stays put when you click on the Chat home
 
-On **New conversation**, clicking an arrow or ticking a box no longer jumps the page back up to the message box, or moves your cursor there. The cursor still starts in the box when you arrive.
+On **New conversation**, clicking an arrow or ticking a box no longer jumps the page back up to the message box, or moves your cursor there. The same goes for the buttons on the **Start** page. The cursor still starts in the box when you arrive.
 
 ## Agents keep Where things stand, to-do lists and titles up to date
 

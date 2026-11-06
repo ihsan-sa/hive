@@ -1,13 +1,13 @@
 // Settings: the hive, logins, modules, access from outside. Shown only where can() allows each part.
 import { status as st } from "../core/status.js";
 import { h } from "../core/dom.js";
-import { S, can, built, jget, needsAccount, post, loadApp } from "../core/store.js";
+import { S, can, built, jget, needsAccount, post, loadApp, said } from "../core/store.js";
 import { simpleOn, setSimple } from "../core/simple.js";
 import { deviceFingerprint } from "../core/sign.js";
 import { notifyBlocked, notifyOn, notifySupported, notifyTest, pushOn, pushSupported, setNotify, setPush } from "../core/notify.js";
 import { DEFAULT_NAME, brandLogo, brandName } from "../core/brand.js";
 import { form } from "../templates.js";
-import { pageHeader, section, block, blocks, button, field, infoButton, input, empty, meter, statusLabel, statusDot } from "../ui/kit.js";
+import { pageHeader, section, block, blocks, button, field, infoButton, input, empty, meter, statusLabel, statusDot, waiting } from "../ui/kit.js";
 import { act, isBusy } from "../ui/activity.js";
 import { confirm } from "../ui/dialog.js";
 import { startSignin, signinBox, clearSignin } from "../ui/signin.js";
@@ -86,10 +86,10 @@ function versionBlocks(ctx, save) {
       U.error && !F.say.up ? h("p", { class: "fmsg", "data-tone": "bad" }, "Last try: " + U.error) : null,
       msg("up")),
     block({ title: "Look for new releases", sub: "How often this Hive looks. It installs what it finds if Update by itself is on.",
-      actions: h("select", { class: "input", value: every, "aria-label": "Look for new releases", title: "Look for new releases", style: "width:auto", onchange: e => { const was = U.update_every_s, v = +e.target.value; U.update_every_s = v; save({ update_every_s: v }, () => { U.update_every_s = was; }); } },
+      actions: h("select", { class: "input", value: every, "aria-label": "Look for new releases", title: "Look for new releases", onchange: e => { const was = U.update_every_s, v = +e.target.value; U.update_every_s = v; save({ update_every_s: v }, () => { U.update_every_s = was; }); } },
         opts.map(([v, label]) => h("option", { value: v }, label))) }),
     block({ title: "How often to update", sub: "About once a day installs a release that has been out for at least 12 hours. Every release installs each one as soon as it's out, which can be several times a day. Update now always takes the newest.",
-      actions: h("select", { class: "input", value: U.update_pace, "aria-label": "How often to update", title: "How often to update", style: "width:auto", onchange: e => { const was = U.update_pace, v = e.target.value; U.update_pace = v; save({ update_pace: v }, () => { U.update_pace = was; }); } },
+      actions: h("select", { class: "input", value: U.update_pace, "aria-label": "How often to update", title: "How often to update", onchange: e => { const was = U.update_pace, v = e.target.value; U.update_pace = v; save({ update_pace: v }, () => { U.update_pace = was; }); } },
         [["daily", "About once a day"], ["every", "Every release"]].map(([v, label]) => h("option", { value: v }, label))) }),
   ];
 }
@@ -123,7 +123,7 @@ function signBlock(ctx) {
 // Phone alerts: the server sends one line through ntfy.sh when a post to you goes unread, so it works with this page closed. Off until switched on here.
 async function loadPhone(ctx) {
   if (!can("config")) return;
-  try { F.phone = await jget("/api/ntfy"); } catch (e) { F.phone = null; }
+  try { F.phone = await jget("/api/ntfy"); } catch (e) { F.phone = { failed: e.message }; }
   ctx.update();
 }
 async function phoneDo(ctx, what, ok) {
@@ -134,6 +134,7 @@ async function phoneDo(ctx, what, ok) {
 function phoneBlock(ctx) {
   const P = F.phone;
   if (!can("config") || !P) return null;
+  if (P.failed) return block({ title: "Phone alerts", key: "phone", sub: `Couldn't read whether phone alerts are on: ${P.failed}.`, actions: button("Try again", () => loadPhone(ctx), { size: "s" }) });
   const sub = P.on
     ? `On. When something is waiting for you and you haven't seen it, your Hive sends one line to ntfy.sh${P.line ? `: "${P.line}"` : ""}. That is all it sends: no names, no words from your agents${P.link ? ", and a link back to this address" : ""}. Anyone who learns the topic below can read those lines, so keep it to yourself.`
     : `Off. Turn it on to get a line on your phone when your Hive asks you something or finishes a job, even with this page closed. It uses ntfy.sh, a free public service with no account: your Hive sends it one line${P.line ? ` ("${P.line}")` : ""} and nothing else.`;
@@ -163,7 +164,7 @@ function notifyBlock(ctx) {
 // Push with the page closed (module conn-webpush). Shows only to a full sign-in, and only once `conn on webpush` has made the key: anything else gets no block.
 async function loadPush(ctx) {
   if (!can("config") || !pushSupported()) return;
-  try { const P = await jget("/api/webpush"); F.push = P.available ? { ...P, on: await pushOn() } : null; } catch (e) { F.push = null; }
+  try { const P = await jget("/api/webpush"); F.push = P.available ? { ...P, on: await pushOn() } : null; } catch (e) { F.push = { failed: e.message }; }
   ctx.update();
 }
 async function pushDo(ctx, on) {
@@ -174,6 +175,7 @@ async function pushDo(ctx, on) {
 function pushBlock(ctx) {
   const P = F.push;
   if (!can("config") || !P || !pushSupported()) return null;
+  if (P.failed) return block({ title: "Push notifications", key: "push", sub: `Couldn't read whether push is on for this browser: ${P.failed}.`, actions: button("Try again", () => loadPush(ctx), { size: "s" }) });
   return block({ title: "Push notifications", key: "push",
     sub: P.on ? `On for this browser: it hears from your Hive even with this page closed. The push service only ever carries one fixed line and a link, never what was said.`
       : `Off for this browser. Turn it on to hear from your Hive with this page closed. It goes through your browser's push service (Google, Mozilla, Apple or Microsoft), which only ever carries one line and a link, never what was said.`,
@@ -200,7 +202,7 @@ function brandBlocks(ctx) {
       const r = await fetch("/api/brand/logo", { method: "POST", headers: { "X-Hive-Dash": "1", "Content-Type": "application/octet-stream" }, body: file });
       if (r.redirected) throw Error("sign in again and reload the page");
       const j = await r.json().catch(() => ({}));
-      if (!r.ok) throw Error(j.error || "the server said " + r.status);
+      if (!r.ok) throw Error(j.error || said(r.status));
     }, "Logo saved.");
   };
   const logo = brandLogo();
@@ -260,7 +262,7 @@ function hiveSection(ctx) {
         actions: [savedMark("Budget per run"), input({ type: "number", min: 0, step: "any", placeholder: "no cap", "aria-label": "Budget per run in dollars", value: E.bud, oninput: (e, n) => { E.bud = n.value; }, onchange: saveBud })] })),
     blocks(brand[1],
       block({ title: "Keep work moving", sub: E.kp ? `${paceSay(E.kpe)}, pick up work that stopped and start work nobody asked for, and sooner once nothing has run for half an hour. It uses your limits.` : "Off: work that stops waits until someone asks. Turn it on to pick it up by itself.",
-        actions: [E.kp ? h("select", { class: "input", value: E.kpe, "aria-label": "How often to keep work moving", title: "How often to keep work moving", style: "width:auto",
+        actions: [E.kp ? h("select", { class: "input", value: E.kpe, "aria-label": "How often to keep work moving", title: "How often to keep work moving" ,
             onchange: e => { const was = E.kpe, v = +e.target.value; E.kpe = v; save({ keeper_every_s: v }, () => { E.kpe = was; }, "Keep work moving"); } },
             paceOpts(E.kpe).map(([v, label]) => h("option", { value: v }, label))) : null,
           toggle("Keep work moving", E.kp, v => { E.kp = v; save({ keeper_every_s: v ? E.kpe : 0 }, () => { E.kp = !v; }, "Keep work moving"); })] }),
@@ -309,10 +311,10 @@ function loginsSection(ctx) {
       h("p", { class: "field-h" }, "What each has left, pausing it and where it stops are under ", h("a", { href: href("usage") }, "Usage"), "."),
       logins.length ? h("ul", { class: "list" }, logins.map(l => h("li", { class: "lr", "data-key": l.name },
         h("div", { class: "lr-in frow fsplit" }, h("b", null, l.name), l.signed_in ? null : statusLabel("out"),
-          h("span", { style: "margin-left:auto" }, button(l.signed_in ? "Sign in again" : "Sign in", () => startSignin("login-" + l.name, l.name, false, ctx.update), { size: "s", kind: l.signed_in ? "quiet" : null }))),
+          h("span", { class: "frow-end" }, button(l.signed_in ? "Sign in again" : "Sign in", () => startSignin("login-" + l.name, l.name, false, ctx.update), { size: "s", kind: l.signed_in ? "quiet" : null }))),
         signinBox("login-" + l.name, ctx.update)))) : null,
       h("form", { class: "frow", onsubmit: e => { e.preventDefault(); if (F.newLogin.trim()) { say("newlogin", null); startSignin("login-new", F.newLogin.trim(), false, ctx.update); } else { say("newlogin", "Give it a name first.", "bad"); ctx.update(); } } },
-        h("div", { style: "flex:1;min-width:12rem;max-width:20rem" }, field("Add another account", input({ placeholder: "a name for it, like work", value: F.newLogin, oninput: (e, n) => { F.newLogin = n.value; } }))),
+        h("div", { class: "frow-grow", "data-size": "s" }, field("Add another account", input({ placeholder: "a name for it, like work", value: F.newLogin, oninput: (e, n) => { F.newLogin = n.value; } }))),
         button("Sign in to it", null, { type: "submit" })),
       msg("newlogin"),
       h("p", { class: "field-h" }, "A second subscription gives the Hive more room: new agents go to whichever has the most left. Adding one signs in, checks it isn't one you already have, and makes one short test run."),
@@ -372,7 +374,7 @@ function modulesSection(ctx) {
           field("Filter", input({ placeholder: "Name or what it does", value: F.modQ || "", oninput: (e, n) => { F.modQ = n.value; ctx.update(); } })),
           shown.length ? list(shown, true) : empty("No module matches that.")) : null,
         h("form", { class: "frow", onsubmit: e => { e.preventDefault(); if (F.url.trim()) act("add", F.url.trim()); else { say("mods", "Paste the module's Git URL first.", "bad"); ctx.update(); } } },
-          h("div", { style: "flex:1;min-width:12rem" }, field("Add from a Git URL", input({ placeholder: "Git URL of a module", value: F.url, oninput: (e, n) => { F.url = n.value; } }))),
+          h("div", { class: "frow-grow" }, field("Add from a Git URL", input({ placeholder: "Git URL of a module", value: F.url, oninput: (e, n) => { F.url = n.value; } }))),
           button("Add", null, { type: "submit", busy: F.busy[F.url.trim()] })),
         h("p", { class: "muted mod-none" }, "A module's code runs with the same rights as your agents, so only add ones you trust.")),
     ];
@@ -517,6 +519,7 @@ export default {
   },
   leave() { forget(); forgetSecrets(); },
   render(ctx) {
+    if (S.app.can == null) return h("div", { class: "page" }, waiting(S.failed));   // /api/app hasn't answered: don't say "only in the app" yet
     if (!S.app.app) return h("div", { class: "page" }, empty("Settings show only in the app, opened from this machine.", { kind: "page", title: "Settings" }));
     const secs = [hiveSection(ctx), loginsSection(ctx), useSection(), ...setupSections(ctx), secretsSection(ctx), modulesSection(ctx), accessSection(ctx), viewSection(ctx)].filter(Boolean);
     const header = pageHeader({ title: "Settings" });

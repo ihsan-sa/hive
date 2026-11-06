@@ -24,7 +24,7 @@ new ResizeObserver(() => { if (top.offsetHeight) document.documentElement.style.
 const scrolls = {};
 // Where an empty address lands: the chat in the app, Now on the developer route.
 const home = () => byId.get(S.app.app ? "comms" : "now");
-let cur = home(), arg = null, raf = 0, timer = 0;
+let cur = home(), arg = null, raf = 0, timer = 0, entered = false;   // entered: the first route() enters the page even when it is home, so a fresh load draws it before the data comes
 
 const ctx = { update: () => schedule(true), get arg() { return arg; } };
 
@@ -55,7 +55,8 @@ function schedule(force) { if (raf) { raf.force ||= force; return; } raf = { for
 function route() {
   if (parse().id === "plans") { location.replace("#knowledge/projects"); return; }   // the old Plans page lives in Knowledge now
   const r = parse(), next = (r.id && byId.get(r.id)) || home();
-  if (next !== cur || r.arg !== arg) {
+  if (!entered || next !== cur || r.arg !== arg) {
+    entered = true;
     scrolls[cur.id + (arg || "")] = scrollY;
     if (cur.leave) cur.leave();
     clearInterval(timer);

@@ -54,7 +54,7 @@ export function threadFiles() {
   for (const el of document.querySelectorAll("#main [data-pv-key]")) {
     const k = el.dataset.pvKey; if (seen.has(k)) continue; seen.add(k);
     const [id, ...rest] = k.split("/");
-    out.push(KNOWN.get(k) || { id, name: rest.join("/") });
+    out.push(KNOWN.get(k) || (k.startsWith("kb:") ? { kb: k.slice(3), name: rest[rest.length - 1] } : { id, name: rest.join("/") }));
   }
   return out;
 }
@@ -114,11 +114,18 @@ export function autoFiles(key) {
   if (key === autoFor) return; autoFor = key;
   if (P.root && P.list) { openFiles(true); return; }   // another conversation: its files
   let off = false; try { off = !!localStorage.getItem(AUTO); } catch (e) {}
-  if (off || innerWidth < 1400 || P.root) return;   // below 1400 the panel would cover the thread's own tools
-  setTimeout(() => {   // the messages draw first: open only when this conversation has files
-    if (key !== autoFor || P.root || !threadFiles().length) return;
+  if (off || innerWidth < 1100 || P.root) return;   // narrower, there is never room beside the messages
+  setTimeout(() => {   // the messages draw first: open only when this conversation has files and room beside them
+    if (key !== autoFor || P.root || !threadFiles().length || !filesRoom()) return;
     import("./panel.js").then(m => { if (!m.panelOpen()) openFiles(true); }, () => openFiles(true));
   }, 500);
+}
+// Room for the small Files list (208px wide, 16px in from the right: components.css) clear of the message column, with a gap.
+const FILES_W = 208 + 16 + 16;
+export function filesRoom() {
+  let right = 0;
+  for (const m of document.querySelectorAll("#main .cm-msgs .msg")) right = Math.max(right, m.getBoundingClientRect().right);
+  return right > 0 && innerWidth - right >= FILES_W;
 }
 export function filesClosedByHand() { try { localStorage.setItem(AUTO, "1"); } catch (e) {} }
 

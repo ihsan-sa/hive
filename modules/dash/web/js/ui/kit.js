@@ -15,6 +15,9 @@ export function pageHeader({ title, lead, tone, meta, actions, after, size, stat
     meta && meta.filter(Boolean).length ? h("p", { class: "ph-meta" }, meta.filter(Boolean).map(m => h("span", null, m))) : null);
 }
 
+/** A line that says a refresh failed and the page shows what it read last (or leaves a part out). Goes in pageHeader's after. */
+export const staleNote = text => h("p", { class: "fmsg", "data-tone": "warn", role: "status" }, text);
+
 // An "i" that says its sentence on hover, and on a click or a tap too (a title alone never shows on a phone or from the keyboard).
 let saying = null;
 const stopSaying = () => { saying = null; hideTip(); removeEventListener("pointerdown", onAway, true); removeEventListener("keydown", onEsc, true); removeEventListener("scroll", stopSaying, true); };

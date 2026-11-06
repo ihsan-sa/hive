@@ -20,7 +20,7 @@ const bytes = n => (n == null ? "" : n < 1024 ? n + " B" : n < 1048576 ? Math.ro
 
 async function fetchPath(path, ctx) {
   try { const r = await jget("/api/kb/open?path=" + encodeURIComponent(path)); if (!r.path) throw Error("404"); K.seen.set(path, r); K.failed.delete(path); }
-  catch (e) { if (e.status === 404 || e.message === "404" || !K.seen.has(path)) { K.seen.delete(path); K.failed.set(path, e.message); } }   // a blip while reading leaves the page as it was
+  catch (e) { if (e.status === 404 || e.message === "404" || !K.seen.has(path)) { K.seen.delete(path); K.failed.set(path, e.status === 404 || e.message === "404" ? "404" : e.message); } }   // a blip while reading leaves the page as it was
   ctx.update();
 }
 async function loadHome(ctx) { try { K.home = await jget("/api/kb/home"); } catch (e) { K.home = K.home || { failed: true }; } ctx.update(); }

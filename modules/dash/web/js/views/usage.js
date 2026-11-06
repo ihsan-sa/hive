@@ -71,7 +71,7 @@ export function providerRow(name, p, checked) {
     const credit = b && b.remaining_usd != null ? `${money$(b.remaining_usd)} credit left` + (b.limit_usd != null ? ` of ${money$(b.limit_usd)}` : "") + (b.scope === "workspace" ? " on the account" : b.scope === "api_key" || b.scope === "key_limit" ? " on the key" : "")
       : p.remaining != null ? `${money$(p.remaining)} credit left on the key` + (p.limit != null ? ` (of ${money$(p.limit)})` : "") : null;
     return { ...base, tag: "API · pays per token", state: cap && m >= cap ? { key: "atstop" } : { key: "inuse" },
-      note: [cap ? `Holds runs once this month's spend reaches $${cap}.` : "No monthly limit set in config.json.", read].filter(Boolean).join(" "),
+      note: [cap ? `Holds runs once this month's cost reaches $${cap}.` : "No monthly limit set in config.json.", read].filter(Boolean).join(" "),
       gauges: [
         { label: "This month (UTC)", value: money$(m), unit: cap ? `of $${cap}` : null, pct: cap ? Math.max((m / cap) * 100, m > 0 ? 1 : 0) : null, lines: [`${money$(p.daily)} today`, credit] },
         f ? { label: "Free models today (UTC)", value: String(f.used), unit: `of ${f.limit} requests`, pct: Math.max((f.used / f.limit) * 100, f.used > 0 ? 1 : 0), lines: [`${f.remaining} left, resets at 00:00 UTC`, "also capped at 20 a minute"] } : null,
@@ -206,7 +206,7 @@ function appHead(U, t, R, pick, d1) {
     { label: "Last 24 hours", value: money(spendSince(t - DAY)), note: "of work, at list prices" },
     us.length > 1 ? tt && { ...tt, label: "Left overall", note: "all accounts together" } : null].filter(Boolean);
   const lastAt = Math.max(0, ...us.map(l => (l.limits && l.limits.at) || 0));
-  return pageHeader({ state, title, lead: (tt && who ? `${tt.value} left across all accounts. ` : "") + ans.tail, tone: ans.tone, actions: pick, after: h("div", { style: "margin-top:var(--s3)" }, stats(cards, { card: true })),
+  return pageHeader({ state, title, lead: (tt && who ? `${tt.value} left across all accounts. ` : "") + ans.tail, tone: ans.tone, actions: pick, after: stats(cards, { card: true }),
     meta: [U.scanning ? "still reading the older logs" : null, lastAt ? `limits as last reported ${ago(lastAt * 1e3)}` : null] });
 }
 
@@ -252,7 +252,7 @@ export default {
     // The app shows its answer as short figures; a sentence only when nothing can start.
     const header = pageHeader({
       title: app ? "How much is left" : "Usage", lead: app && tone !== "bad" ? null : lead, tone, actions: pick,
-      after: app ? (ans.figures.length ? h("div", { style: "margin-top:var(--s3)" }, stats(ans.figures)) : null) : us.length ? tally([{ n: live.length, label: "in use", status: "inuse" }, { n: full.length, label: "at the stop line", status: "atstop" }, { n: paused.length, label: "paused", status: "paused" }]) : null,
+      after: app ? (ans.figures.length ? stats(ans.figures) : null) : us.length ? tally([{ n: live.length, label: "in use", status: "inuse" }, { n: full.length, label: "at the stop line", status: "atstop" }, { n: paused.length, label: "paused", status: "paused" }]) : null,
       meta: [`${money(d1)} of work, ${R.name}`, U.scanning ? "still reading the older logs" : null, lastAt ? `limits as last reported ${ago(lastAt * 1e3)}` : null],
     });
 
@@ -282,7 +282,7 @@ export default {
       byT[th] = (byT[th] || 0) + c; byA[i.name] = (byA[i.name] || 0) + c; byTier[tierOf(th)] += c;
     }
     const top = (o, n = 12) => Object.entries(o).sort((a, b) => b[1] - a[1]).slice(0, n);
-    const spend = section({ title: app ? "The figures" : "Spend", note: LIST },
+    const spend = section({ title: app ? "The figures" : "Cost", note: LIST },
       stats([
         { label: R.key === "all" ? "In range" : "Last " + R.key, value: money(d1), note: `${money(h1)} an hour lately` },
         { label: "All of it", value: money(all), note: `since ${S.posts[0] ? dayName(S.posts[0].t) : "?"}` },
@@ -292,20 +292,20 @@ export default {
         { label: "Input served from cache", value: pct(tk[2], tk[0] + tk[2] + tk[3]), note: `${toks(tk[2])} read from cache, ${toks(tk[3])} written to it` },
       ]));
     const charts = cols(
-      chart({ title: bStep === DAY ? "Spend per day" : bStep === HOUR ? "Spend per hour" : "Spend per 6 hours", note: R.span < bSpan ? "last 6 hours" : R.name, series: [bars], kind: "bar", start: hStart, step: bStep, fmt: money, top: money(Math.max(...bars)) }),
-      chart({ title: "Spend so far", note: R.span < bSpan ? "last 6 hours" : R.name, series: [cum], kind: "step", start: hStart, step: bStep, fmt: money, top: money(run) }));
+      chart({ title: bStep === DAY ? "Cost per day" : bStep === HOUR ? "Cost per hour" : "Cost per 6 hours", note: R.span < bSpan ? "last 6 hours" : R.name, series: [bars], kind: "bar", start: hStart, step: bStep, fmt: money, top: money(Math.max(...bars)) }),
+      chart({ title: "Cost so far", note: R.span < bSpan ? "last 6 hours" : R.name, series: [cum], kind: "step", start: hStart, step: bStep, fmt: money, top: money(run) }));
     const tot = d1 || 1;
-    const tiers = section({ title: "Spend against your priority list", note: R.name },
+    const tiers = section({ title: "Cost by your priority list", note: R.name },
       share(TIERS.map(x => ({ key: x.key, label: x.label, tone: x.tone, value: byTier[x.key], text: `${money(byTier[x.key])} (${Math.round((100 * byTier[x.key]) / tot)}%)` }))));
     const who = cols(
       section({ title: app ? "Costliest conversations" : "Costliest threads", note: R.name }, rank(top(byT).map(([k, v]) => ({ key: k, label: threadTitle(k) || k || (app ? "No conversation" : "No thread"), value: v, text: money(v), tone: tier(tierOf(k)).tone, href: threadHref(k) })))),
       section({ title: "Costliest agents", note: R.name }, rank(top(byA).map(([k, v]) => ({ key: k, label: k || "No agent", value: v, text: money(v), tone: status(agentStatus(k).key).tone, href: agentHref(k), onClick: e => openRef(e, "agent", k) })))));
-    const models = section({ title: "By model", note: R.name }, !Object.keys(byM).length ? empty("No model spend in this range.") : rank(top(byM).map(([k, v]) => ({ key: k, label: k, value: v, text: money(v), tone: "data" }))));
+    const models = section({ title: "By model", note: R.name }, !Object.keys(byM).length ? empty("No model cost in this range.") : rank(top(byM).map(([k, v]) => ({ key: k, label: k, value: v, text: money(v), tone: "data" }))));
 
     if (app) {
       const fold = (title, summary, ...b) => section({ fold: true, title, summary }, ...b);
       return metrics({ header: appHead(U, t, R, pick, d1), sections: [appChart(U, t, R, pick), appAccounts(U, t, R), others,
-        fold("How much work was done", `${money(d1)}, ${R.name}`, spend, charts), hasTiers() ? fold("Spend against your priority list", R.name, tiers) : null,
+        fold("How much work was done", `${money(d1)}, ${R.name}`, spend, charts), hasTiers() ? fold("Cost by your priority list", R.name, tiers) : null,
         fold("Costliest conversations and agents", R.name, who), fold("By model", R.name, models)] });
     }
     return metrics({ header, sections: [totalSection(U, t, R), limits, others, spend, charts, hasTiers() ? tiers : null, who, models] });

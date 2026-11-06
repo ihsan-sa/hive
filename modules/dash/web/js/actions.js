@@ -111,7 +111,7 @@ export function askProviderLine(name, p) {
   confirm({
     title: (cx ? "Stop line for " : "Monthly limit for ") + name, ok: "Save",
     body: [cx ? `The starter sends no new runs to ${name} once any of its windows (5-hour, weekly) passes this line. Runs already on it finish.`
-      : `The starter sends no new runs to ${name} once this month's spend (UTC) reaches this many dollars. It is real money: raising it lets the hive spend more.`,
+      : `The starter sends no new runs to ${name} once this month's cost (UTC) reaches this many dollars. It is real money: raising it lets the hive spend more.`,
       field(cx ? "Stop at, %" : "Limit, $", i, "Empty: back to the value in config.json.")],
     onOk: async () => { await post("/api/provider-limit", { name, key: cx ? "stop_pct" : "monthly_usd", value: val(i, cx ? 100 : 1000) }); setTimeout(pollUsage, 2500); },
   });

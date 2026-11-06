@@ -6,7 +6,7 @@ import { h } from "../core/dom.js";
 import { S, jget } from "../core/store.js";
 import { clock, dayName, mdPlain, plural, short } from "../core/format.js";
 import { metrics } from "../templates.js";
-import { button, empty, waiting, input, pageHeader, seg, toolbar } from "../ui/kit.js";
+import { button, empty, waiting, input, pageHeader, seg, staleNote, toolbar } from "../ui/kit.js";
 import { agentRef, threadRef } from "../ui/refs.js";
 
 const KINDS = [["all", "Everything"], ["step", "Steps"], ["post", "Messages"], ["agent", "Agents"], ["thread", "Threads"], ["trouble", "Trouble"], ["hive", "Hive"]];
@@ -28,7 +28,8 @@ async function loadSteps(onChange) {
       Object.assign(ST, { key, total: r.total || 0, sig }); onChange();
     }
     ST.reading = r.ready === false;
-  } catch (e) { Object.assign(ST, { key, rows: [], total: 0, sig: "" }); }   // the preview and older servers have no /api/ledger
+    if (ST.failed) { ST.failed = false; onChange(); }
+  } catch (e) { const was = ST.failed; if (ST.key !== key) Object.assign(ST, { key, rows: [], total: 0, sig: "" }); ST.failed = true; if (!was) onChange(); }   // keeps the steps it read last, and says so
   ST.busy = false;
   if (stepKey() !== ST.key) loadSteps(onChange);
   else if (ST.reading) setTimeout(() => loadSteps(onChange), 1000);   // the server's first read of the logs takes a few seconds
@@ -90,12 +91,12 @@ export default {
     const built = changed ? rows() : null;     // on an unchanged poll the list below is an empty node with the same sig: morph leaves the page's list alone
     const set = (k, v) => { L[k] = v; ctx.update(); };
     return metrics({
-      header: pageHeader({ title: S.app.app ? "History" : "Ledger", lead: S.app.app ? "Everything that happened, newest first: messages, every step agents took, agents starting and ending, and trouble." : null, after: toolbar(
+      header: pageHeader({ title: S.app.app ? "History" : "Ledger", lead: S.app.app ? "Everything that happened, newest first: messages, every step agents took, agents starting and ending, and trouble." : null, after: [toolbar(
         seg(S.app.app ? KINDS.map(([k, l]) => [k, k === "thread" ? "Conversations" : l]) : KINDS, L.kind, k => set("kind", k), { label: "Kind of event" }),
         input({ type: "search", placeholder: `Filter by agent, ${S.app.app ? "conversation" : "thread"} or words`, "aria-label": "Filter", value: L.q, oninput: e => set("q", e.target.value) }),
-        S.live ? h("span", { class: "meta" }, plural(L.count, "event")) : null) }),
+        S.live ? h("span", { class: "meta" }, plural(L.count, "event")) : null), S.live && wantSteps() && ST.failed ? staleNote(ST.rows.length ? "Couldn't refresh the agents' steps, so they're the ones read last. It keeps trying." : "Couldn't read the agents' steps, so they're left out. It keeps trying.") : null] }),
       sections: [
-        L.count ? null : S.live ? empty(L.kind === "all" && !L.q.trim() ? "Nothing has happened yet." : "No events match.") : waiting(S.failed, "Reading…", "the history"),
+        L.count ? null : S.live && L.kind === "step" && ST.failed ? null : S.live ? empty(L.kind === "all" && !L.q.trim() ? "Nothing has happened yet." : "No events match.") : waiting(S.failed, "Reading…", "the history"),
         h("ol", { class: "lg", "data-own": "morph", "data-sig": sig }, built),
         L.count > L.limit ? h("div", { class: "lr-more" }, button(`Show older (${L.count - L.limit} more)`, () => set("limit", L.limit + 500), { kind: "quiet", size: "s" })) : null,
       ],

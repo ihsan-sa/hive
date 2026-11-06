@@ -41,11 +41,14 @@ let lastInput = Date.now();
 for (const ev of ["pointerdown", "keydown", "wheel", "touchstart"]) addEventListener(ev, () => { lastInput = Date.now(); }, { capture: true, passive: true });
 export const activeNow = () => Date.now() - lastInput < 60000 && document.visibilityState === "visible";
 /** fetch, with the browser's "Failed to fetch" said in plain words: it reaches the person through the pages' error lines. */
+/** An HTTP status in plain words, for the pages' error lines ("Couldn't read the settings: <this>"). */
+export const said = n => n === 403 ? "this sign-in isn't allowed to do that" : n === 404 ? "the Hive doesn't have that" : n === 408 || n === 504 ? "the Hive took too long to answer"
+  : n === 413 ? "it's too big" : n === 429 ? "the Hive is busy, so try again in a moment" : n === 502 || n === 503 ? "the Hive isn't answering" : n >= 500 ? "the Hive hit a problem" : "the Hive turned it down";
 const ask = (u, o) => fetch(u, o).catch(() => { throw Error("can't reach the server"); });
 export async function jget(u) {
   const r = await ask(u, { cache: "no-store", headers: activeNow() ? { "X-Hive-Active": "1" } : {} });
   if (r.status === 401) location.replace("/");
-  if (!r.ok) { const e = Error("the server said " + r.status); e.status = r.status; throw e; }
+  if (!r.ok) { const e = Error(said(r.status)); e.status = r.status; throw e; }
   return r.json();
 }
 /** POST with the header the server requires; throws an Error with a plain reason. */
@@ -54,7 +57,7 @@ export async function post(path, body) {
   const r = await ask(path, { method: "POST", headers: { "Content-Type": "application/json", "X-Hive-Dash": "1" }, body: JSON.stringify(body) });
   if (r.redirected) throw Error("sign in again and reload the page");
   const j = await r.json().catch(() => ({}));
-  if (!r.ok) { const e = Error(j.error || "the server said " + r.status); e.status = r.status; throw e; }
+  if (!r.ok) { const e = Error(j.error || said(r.status)); e.status = r.status; throw e; }
   return j;
 }
 

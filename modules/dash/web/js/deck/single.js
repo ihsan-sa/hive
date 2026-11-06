@@ -25,14 +25,14 @@ function enter(say) {
   document.body.append(frame);
   const r = document.documentElement;
   zoom = r.style.zoom; r.style.zoom = "";   // TEMPO right's zoom on the dashboard would scale the frame too
-  overflow = r.style.overflow; r.style.overflow = "hidden";   // and a fixed frame can't cover the dashboard's scrollbar
+  overflow = r.style.overflow; r.style.overflow = "hidden"; r.style.scrollbarGutter = "auto";   // (the stable gutter would still leave a strip)  and a fixed frame can't cover the dashboard's scrollbar
   wasFull = !!document.fullscreenElement;
   if (fillsScreen()) return;
   full().catch(() => { if (frame) { askClick(); if (say) say("Single screen. Press EXIT to leave"); } });
 }
 export function leaveSingle() {
   dropAsk();
-  if (frame) { frame.remove(); const r = document.documentElement; r.style.zoom = zoom; r.style.overflow = overflow; }
+  if (frame) { frame.remove(); const r = document.documentElement; r.style.zoom = zoom; r.style.overflow = overflow; r.style.scrollbarGutter = ""; }
   frame = null; wasFull = false;
   if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
 }

@@ -109,6 +109,7 @@ a.top-route[data-mode=limited]:hover{background:color-mix(in oklch,var(--warn) 3
 .ph-meta{font-size:var(--fs-small);color:var(--ink-2);text-wrap:pretty}
 .ph-meta>span+span::before{content:"·";margin:0 8px;color:var(--ink-3)}
 .ph-actions{margin-left:auto;display:flex;gap:var(--s2)}
+.ph>.stats,.ph>.stats.card{margin-top:var(--s3)}   /* figures under the answer (Usage); .card would zero it */
 .ph[data-size=display] .ph-title{font-size:var(--fs-display);letter-spacing:-.02em;line-height:1.15}
 @container (max-width:640px){.ph[data-size=display] .ph-title{font-size:26px}}
 
@@ -431,6 +432,9 @@ a.rank-in:hover{background:var(--hover);color:inherit}
 /* ---- forms: rows, grids, checks, sign-in (Settings, Start) ---- */
 .frow{display:flex;flex-wrap:wrap;gap:var(--s3);align-items:end;margin-top:var(--s3)}
 .frow.fsplit{align-items:center;margin-top:0}
+.frow>.frow-grow{flex:1;min-width:12rem}   /* the field that takes the row; data-size=s stops it at a name's width */
+.frow>.frow-grow[data-size=s]{max-width:20rem}
+.frow>.frow-end{margin-left:auto;display:flex;gap:var(--s2)}   /* the row's buttons, at its end */
 .fgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(16rem,1fr));gap:var(--s4);align-items:start}
 .fgrid>.check{grid-column:1/-1}
 .sec>.field{margin-top:var(--s3)}
@@ -1370,6 +1374,7 @@ details.blk[open]>summary .blk-t::after{margin-bottom:-1px;transform:rotate(225d
 .blk-s{grid-column:1;font-size:var(--fs-meta);color:var(--ink-3);line-height:1.45}
 .blk-a{grid-column:2;grid-row:1 / span 2;display:flex;gap:var(--s2);align-items:center}
 .blk-a .input{width:240px}
+.blk-a select.input{width:auto}   /* a choice is as wide as its words */
 @media (max-width:640px){.blk-h{grid-template-columns:minmax(0,1fr)}.blk-a{grid-column:1;grid-row:auto;flex-wrap:wrap;margin-top:var(--s2);margin-left:0}.blk-a .input{width:100%!important}}   /* phone: the control goes under the words, not beside a 90 px column of them */
 .blk-b{display:grid;gap:var(--s3);margin-top:var(--s3);font-size:var(--fs-small)}
 .blk-save{display:flex;align-items:center;gap:var(--s2);padding:12px 20px;border-top:1px solid var(--line);background:var(--bg);font-size:var(--fs-meta);color:var(--ink-3)} /* NEW use: the footer of a group of text fields */
@@ -1851,6 +1856,8 @@ dialog.fb::backdrop{background:rgb(0 0 0 / .38)}
   .nowtbl td.num{grid-column:2;align-self:end;text-align:right}
   .nowtbl .nt-th,.nowtbl .nt-m,.nowtbl .nt-x:empty{display:none}
   .nowtbl .nt-x{grid-column:2;grid-row:1 / span 2;width:auto;align-self:start}
+  .nowtbl tr:has(> .nt-x:not(:empty)){grid-template-columns:1fr auto auto}
+  .nowtbl tr:has(> .nt-x:not(:empty)) .nt-x{grid-column:3}   /* Stop takes its own column, so the time stays beside the state line instead of a third line under it */
   .nowtbl .nt-x .btn{width:auto;aspect-ratio:1}   /* the phone's taller tap target stays round */   /* spans the name and state lines, so a row with Stop is as tight as one without */
 }
 
