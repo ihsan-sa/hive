@@ -89,15 +89,16 @@ export function empty(text, { kind = "empty", title } = {}) {
   return h("div", { class: "empty", "data-kind": kind, role: kind === "error" ? "alert" : null }, title ? h("div", { class: "empty-t" }, title) : null, text);
 }
 
-/** List: rows separated by hairlines. rows: [{key, href, title, sub, meta, text, lead, current, onClick}]; limit + onMore add "Show N more". */
+/** List: rows separated by hairlines. rows: [{key, href, title, sub, meta, text, lead, current, onClick, dim}] (dim greys the row); limit + onMore add "Show N more". */
 export function list(rows, { empty: none = "Nothing here.", limit, onMore, moreText = n => `Show ${n} more`, dense } = {}) {
   if (!rows.length) return empty(none);
   const shown = limit ? rows.slice(0, limit) : rows;
   return h("div", null,
-    h("ul", { class: "list", "data-dense": dense ? "" : null }, shown.map(r => h("li", { class: "lr", "data-key": r.key || null },
-      h(r.href ? "a" : r.onClick ? "button" : "div", { class: "lr-in", style: r.depth ? `--d:${r.depth}` : null, href: r.href || null, type: !r.href && r.onClick ? "button" : null, "aria-current": r.current ? "true" : null, onclick: r.onClick || null },
+    h("ul", { class: "list", "data-dense": dense ? "" : null }, shown.map(r => h("li", { class: "lr", "data-key": r.key || null, "data-dim": r.dim ? "" : null },
+      h(r.href ? "a" : r.onClick ? "button" : "div", { class: "lr-in", style: r.depth ? `--d:${r.depth}` : null, href: r.href || null, type: !r.href && r.onClick ? "button" : null, "aria-current": r.current ? "true" : null, "aria-expanded": r.expanded == null ? null : String(r.expanded), onclick: r.onClick || null },
         h("div", { class: "lr-t" }, r.lead || null, h("b", null, r.title), r.sub ? h("span", { class: "muted" }, r.sub) : null, r.meta ? h("span", { class: "meta" }, r.meta) : null),
-        r.text ? h("div", { class: r.whole ? "lr-x" : "lr-x clamp-2" }, r.text) : null)))),
+        r.text ? h("div", { class: r.whole ? "lr-x" : "lr-x clamp-2" }, r.text) : null),
+      r.acts ? h("span", { class: "lr-acts" }, r.acts) : null))),
     rows.length > shown.length ? h("div", { class: "lr-more" }, onMore ? button(moreText(rows.length - shown.length), onMore, { kind: "quiet", size: "s" }) : h("span", { class: "meta" }, `and ${rows.length - shown.length} more`)) : null);
 }
 

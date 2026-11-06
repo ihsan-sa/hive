@@ -10,11 +10,13 @@ PostToolUse: the posts come back as additionalContext. Stop: if anything is new,
 blocked with the posts as the reason, so the agent answers instead of ending unaware. Stop also
 blocks once per run when the person started it and the agent is ending with no post since: its
 plain-text answer reaches nobody (the person, 2026-11-04: a24ba answered twice into nothing).
+Stop also holds a run that gives no reason for stopping (stop_gate): the hive keeps moving, so a run says in its thread's
+status bar why it stops (done, blocked, needs the person, waiting, told to stop) or carries on (the person, 2026-11-06).
 PostToolUse also asks, once per run, for a first line when the person started the run FIRST_S ago and
 nothing has been posted since: the person chases after 1 to 3 min of silence ("hello?", 5 times on 2026-11-04).
 Outside an Hive session (no HIVE_NAME or no run record) it does nothing.
 """
-import datetime as dt, json, os, re, sys, time
+import datetime as dt, json, os, re, subprocess, sys, time
 from pathlib import Path
 
 HOME = Path.home()
@@ -22,6 +24,7 @@ BOARD, RUN, STATE = HOME / "board.jsonl", HOME / "run", HOME / ".hive"
 MENTION = re.compile(r"(?<![\w.])@([a-z0-9][a-z0-9_-]*)", re.I)
 CODE = re.compile(r"```.*?```|`[^`\n]*`", re.S)  # a name in backticks is being written about, not called
 WARDEN = re.compile(r"w[0-9a-f]{4}")
+KB = Path(__file__).resolve().parent / "kb.py"
 
 def names(p):
     to = p.get("to") or []
@@ -146,21 +149,113 @@ def owns_open(name, rec):
     return ("You still own these open asks as you stop. Close each one that is delivered with `hive asks done ID --evidence POSTID`, "
             "mark `hold|person|drop ID --why ...` if it waits or is moot, or leave it if work remains (say so in your thread):\n" + rows)
 
+STOP_WORDS = ("Done", "Blocked", "Needs the person", "Waiting", "Told to stop")  # how a stop reason starts, as the last line of the status bar
+STOP_FRESH_S = 900  # a reason older than this was written before the work that came after it
+STOP_ASKS = 3       # asked this often with no reason given, a run is let go: a hook that never lets go is a loop
+STOP_LOG = "stop-gate.jsonl"
+
+def last_status(thread):
+    """The newest status bar record for a thread (`hive status` appends to ~/.hive/thread-status.jsonl), or {}."""
+    best = {}
+    try:
+        for ln in (STATE / "thread-status.jsonl").read_text().splitlines():
+            try: r = json.loads(ln)
+            except ValueError: continue
+            if isinstance(r, dict) and r.get("thread") == thread: best = r
+    except OSError: pass
+    return best
+
+def stop_reason(name, st, since):
+    """The reason this agent gave for stopping: the last line of the thread's status bar `st`, if this agent set it at or after
+    `since` and the line starts with one of STOP_WORDS and says something after it. (word, line), or None."""
+    if str(st.get("from", "")).lower() != name or not isinstance(st.get("at"), (int, float)) or st["at"] < since: return None
+    line = (str(st.get("text", "")).strip().splitlines() or [""])[-1].strip()
+    word = next((w for w in STOP_WORDS if line.lower().startswith(w.lower() + ":") and len(line) - len(w) > 12), None)
+    return (word, line) if word else None
+
+def stop_gate(name, rec, t=None):
+    """Why this stop should wait: the run has given no reason for stopping. The person, 2026-11-06 (post 11052128aa48): before
+    ending work an agent justifies the stop in the thread's status bar, against the goal of moving forward and stopping only
+    when truly blocked or when it needs them on something critical; one that can't keeps going. The hook checks that a reason
+    was given and is fresh, and the agent judges whether it holds. Runs woken by the person, another Hive or a named agent;
+    not scheduled runs (keeper, watchdog, improver, status: their brief bounds them), wardens, free agents (kept light), or
+    a stop that is a model switch (`hive model X`, which resumes at once). Every ask and pass goes to ~/.hive/stop-gate.jsonl."""
+    thread = rec.get("thread")
+    if os.environ.get("HIVE_DOOR") or not rec.get("at") or not thread or not waker(rec, name) or WARDEN.fullmatch(name) or name.startswith("f"): return None
+    try: at = dt.datetime.fromisoformat(rec["at"])
+    except ValueError: return None
+    t = t or time.time()
+    if any(p.get("model") and name in names(p) for p in own_posts(name, rec["at"]) or []): return None  # hive model: resumes on the other model
+    f = STATE / "stop-asked" / name
+    try: k, n = f.read_text().split(); n = int(n) if k == rec["at"] else 0
+    except (OSError, ValueError): n = 0
+    st = last_status(thread)
+    got = stop_reason(name, st, max((at if at.tzinfo else at.replace(tzinfo=dt.timezone.utc)).timestamp(), t - STOP_FRESH_S))
+    def log(event):
+        try:
+            with (STATE / STOP_LOG).open("a") as fh:
+                fh.write(json.dumps({"at": t, "name": name, "run": rec["at"], "thread": thread, "event": event, "asked": n, "why": got[1] if got else ""}) + "\n")
+        except OSError: pass
+    if got or n >= STOP_ASKS:
+        log("passed" if got else "let go"); return None
+    try: f.parent.mkdir(parents=True, exist_ok=True); f.write_text(f"{rec['at']} {n + 1}")
+    except OSError: return None  # can't count the asks: don't risk a loop
+    log("asked")
+    line1 = (str(st.get("text", "")).strip().splitlines() or [""])[0].strip() or "what this thread is about, in one line"
+    return ("Before you stop, give the reason in this thread's status bar, where the person reads it. The hive keeps moving forward, "
+            "so a run stops only for one of these:\n"
+            "- Done: what was asked is delivered, checked and posted, and no next step toward the goal behind it is yours to take now.\n"
+            "- Blocked: the next step needs something only someone else can give (say what and who), and nothing else toward the goal is left that you can do meanwhile.\n"
+            "- Needs the person: a critical decision only they can make, asked in a post with a `For you:` line, and nothing else is left meanwhile.\n"
+            "- Waiting: on a job or an agent's answer that wakes you (say which, and about when).\n"
+            "- Told to stop: say by whom.\n"
+            "If one of them honestly holds, set it and stop again:\n"
+            f"hive status {thread} <<'X'\n{line1}\nBlocked: on what, and who has it\nX\n"
+            "If none holds (a step is finished but the goal has a next one you can take, or the work got hard or long), don't stop: "
+            "take the next step, and give the reason when one is true.")
+
+def stops(since_h=24.0):
+    """`inbox.py stops [HOURS]`: what the stop gate saw. Per run: asked or not, the reason it stopped on, and whether it kept working after being asked (5 min or more to its last pass)."""
+    runs = {}
+    try: rows = [json.loads(l) for l in (STATE / STOP_LOG).read_text().splitlines() if l.strip()]
+    except (OSError, ValueError): rows = []
+    for r in rows:
+        if r.get("at", 0) < time.time() - since_h * 3600: continue
+        x = runs.setdefault((r.get("name"), r.get("run")), {"asked": None, "last": None, "why": "", "event": ""})
+        if r.get("event") == "asked" and x["asked"] is None: x["asked"] = r["at"]
+        x["last"], x["event"] = r["at"], r.get("event")
+        if r.get("event") == "passed": x["why"] = r.get("why", "")
+    asked = [x for x in runs.values() if x["asked"] is not None]
+    kept = [x for x in asked if x["last"] - x["asked"] >= 300]
+    by = {}
+    for x in runs.values():
+        w = next((w for w in STOP_WORDS if x["why"].lower().startswith(w.lower() + ":")), "let go" if x["event"] == "let go" else "still running or ended without a reason")
+        by[w] = by.get(w, 0) + 1
+    print(f"stop gate, last {since_h:g} h: {len(runs)} runs, {len(asked)} asked for a reason, {len(kept)} of those kept working 5 min or more after the ask")
+    for w, c in sorted(by.items(), key=lambda kv: -kv[1]): print(f"  {c:4d}  {w}")
+
 MODEL_CHECK_AT = 40   # tool calls into a run: past Sonnet's median run (10 replies) and Opus's (25), where a wrong model costs most
 FIRST_S = 120   # a run the person started and that has said nothing for this long is asked for one line
 
-def posted_since(name, at, thread=None, tail=300_000):
-    """Has this agent posted at or after `at` (in `thread`, if given)? Reads only the board's tail (the board is 5 MB; a run's own recent post is there)."""
+def own_posts(name, at, tail=300_000):
+    """This agent's posts at or after `at`. Reads only the board's tail (the board is 5 MB; a run's own recent post is there). None if the board can't be read."""
     try:
         with BOARD.open("rb") as fh:
             fh.seek(max(0, os.fstat(fh.fileno()).st_size - tail)); data = fh.read()
-    except OSError: return True  # can't tell: stay quiet
+    except OSError: return None
+    out = []
     for line in data.decode(errors="replace").splitlines():
         if f'"from": "{name}"' not in line and f'"from":"{name}"' not in line: continue
         try: p = json.loads(line)
         except ValueError: continue
-        if p.get("from") == name and p.get("at", "") >= at and (not thread or p.get("thread") == thread): return True
-    return False
+        if p.get("from") == name and p.get("at", "") >= at: out.append(p)
+    return out
+
+def posted_since(name, at, thread=None, tail=300_000):
+    """Has this agent posted at or after `at` (in `thread`, if given)?"""
+    ps = own_posts(name, at, tail)
+    if ps is None: return True  # can't tell: stay quiet
+    return any(not thread or p.get("thread") == thread for p in ps)
 
 def first_line(name, rec, t=None):
     """Why a run the person started, FIRST_S ago or more, with no post from it since, should post a line now. Once per run,
@@ -201,6 +296,17 @@ def model_check(name, rec):
             else 'if this has become design or debugging you\'re stuck on, `hive model opus "why"` and end your turn')
     return f"You're {MODEL_CHECK_AT} tool calls into this run on {now_on}. Still the right model? {move[0].upper() + move[1:]}. Otherwise carry on; no need to reply to this."
 
+def recall_note(name, ps):
+    """Pointers to our own notes that share words with these posts (`kb recall`), so related notes turn up without a search:
+    a few lines, or nothing when kb isn't sure. Not for wardens, the person's door or the starter's own posts. Never holds up a delivery."""
+    ids = [p["id"] for p in ps if str(p.get("from", "")).lower() not in ("starter", "watchdog")][:5]
+    if not ids or WARDEN.fullmatch(name) or os.environ.get("HIVE_DOOR"): return ""
+    try:
+        r = subprocess.run([sys.executable, "-I", str(KB), "recall", "--for", name, *(x for i in ids for x in ("--post", i))],
+                           capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError): return ""
+    return "\n\n" + r.stdout.strip() if r.returncode == 0 and r.stdout.strip() else ""
+
 def main():
     name = os.environ.get("HIVE_NAME", "").lower()
     if not name: return
@@ -221,14 +327,14 @@ def main():
     first = first_line(name, rec) if event != "Stop" else None
     check = model_check(name, rec) if event != "Stop" else None
     if not ps:
-        if event == "Stop" and (why := unanswered(name, rec) or owns_open(name, rec)):
+        if event == "Stop" and (why := "\n\n".join(x for x in (unanswered(name, rec) or owns_open(name, rec), stop_gate(name, rec)) if x)):
             print(json.dumps({"decision": "block", "reason": why}))
         elif first or check:
             print(json.dumps({"hookSpecificOutput": {"hookEventName": event or "PostToolUse", "additionalContext": "\n\n".join(x for x in (first, check) if x)}}))
         return
     note = person_note(ps)
     msg = ("New on the board for you while you work (you'll get these automatically; answer with "
-           "hive post where it matters):\n\n" + "\n\n".join(fmt(p) for p in ps) + note + model_note(name, rec, ps))
+           "hive post where it matters):\n\n" + "\n\n".join(fmt(p) for p in ps) + recall_note(name, ps) + note + model_note(name, rec, ps))
     if event == "Stop":
         print(json.dumps({"decision": "block", "reason": msg}))
     else:
@@ -237,4 +343,4 @@ def main():
         print(json.dumps({"hookSpecificOutput": {"hookEventName": event or "PostToolUse", "additionalContext": msg}}))
 
 if __name__ == "__main__":
-    main()
+    stops(float(sys.argv[2]) if sys.argv[2:] else 24.0) if sys.argv[1:2] == ["stops"] else main()

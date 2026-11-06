@@ -7,9 +7,9 @@
 // render has been mounted. A poll with nothing new touches nothing in them; a new post is appended, not redrawn, before
 // the messages still on their way (.cm-out), which sync() keeps apart.
 import { h, morph } from "../core/dom.js";
-import { S, can, OUTSIDE, built, post as apiPost, poll } from "../core/store.js";
+import { S, SYS, can, OUTSIDE, built, post as apiPost, poll, jget } from "../core/store.js";
 import { simpleOn, plainName, hiveName } from "../core/simple.js";
-import { agentState, agentStatus, btwParent, isAgent, isRunning, tierOf, threadTitle, threadState, threadPeople, isSystemThread, SHOW, postKind, threadKinds, closingPosts, displayText, postSource, inUse, fresh7 } from "../core/model.js";
+import { SIDE_THREAD, agentState, agentStatus, btwParent, isAgent, isRunning, tierOf, threadTitle, threadState, threadPeople, isSystemThread, SHOW, postKind, threadKinds, closingPosts, displayText, postSource, inUse, fresh7 } from "../core/model.js";
 import { ago, dayName, stamp, clock, dur, short, mdPlain, now, plural, firstSentence, DAY, MIN, HOUR } from "../core/format.js";
 import { href, threadHref, go } from "../core/router.js";
 import { tier, status } from "../core/status.js";
@@ -21,12 +21,12 @@ import { message, messageHead, messageReceipt, localMessage, markWords, pollDeli
 import { asidePanel, asideOpen, closeAside } from "../ui/aside.js";
 import { downloadMarkdown, printScript } from "../ui/export.js";
 import { shareDialog } from "../ui/share.js";
-import { pinned, archived, setMeta, renameDialog, openCard, markSeen } from "../ui/threadmeta.js";
+import { pinned, important, faded, meta as tmeta, archived, setMeta, renameDialog, openCard, markSeen } from "../ui/threadmeta.js";
 import { callFor, hangUp } from "../ui/phone.js";
 import { brought } from "../ui/brought.js";
 import { firstJobs, closeLine } from "../ui/firstjobs.js";
 import { awayCard } from "../ui/away.js";
-import { composer, cancelReply, replyTo, say, outFor, outSig, actions as outActions, dropZone, recipient, draft, focusComposer } from "../ui/composer.js";
+import { composer, cancelReply, replyTo, say, outFor, outSig, actions as outActions, dropZone, recipient, draft, focusComposer, quoteInto } from "../ui/composer.js";
 
 const STEP = 500, FIRST = 250, NEAR = 60, GROUP = 10 * MIN, HELPER_AFTER = 3 * MIN;
 const NONE = [];
@@ -43,7 +43,7 @@ const grip = () => h("div", { class: "cm-grip", role: "separator", "aria-orienta
     e.target.onpointerup = e.target.onpointercancel = () => { delete e.target.dataset.on; e.target.onpointermove = e.target.onpointerup = e.target.onpointercancel = null; }; },
   ondblclick: e => setSide(e.target.closest(".cm"), 272),
   onkeydown: e => { const d = e.key === "ArrowLeft" ? -24 : e.key === "ArrowRight" ? 24 : 0; if (d) { e.preventDefault(); setSide(e.target.closest(".cm"), sideW + d); } } });
-const C = { arch: false, conv: undefined, q: "", show: null, limit: FIRST, tq: "", scope: "recent", next: null, menu: null, find: false, strip: false };
+const C = { imp: false, arch: false, conv: undefined, q: "", show: null, limit: FIRST, tq: "", scope: "recent", next: null, menu: null, find: false, strip: false };
 // What the message list holds. matched grows as posts arrive; pend is what sync() still has to append.
 const L = { key: null, src: null, seen: 0, matched: [], pend: [], evs: new Set(), rebuild: true, keep: false, shown: 0, day: "", prev: null, names: new Set(), opts: null,
   box: null, out: null, jump: null, unseen: 0, outSig: "", ro: null, stuck: true, heads: "", near: new Set(), io: null, tl: null, tlSig: "", tlConv: null, saved: null, ctx: null, jumpTo: null, marked: "" };
@@ -88,7 +88,7 @@ function closers(n) { const k = n + ":" + S.posts.length; if (closing.n !== k) {
 function matcher(c, mask, ended) {
   const q = words(C.q), last = mask & SHOW.you ? closers(ended) : null;
   return p => {
-    if (!(postKind(p) & mask) && !(last && last.has(p.id))) return false;
+    if (!(postKind(p) & mask) && !(last && last.has(p.id)) && c.thread !== SIDE_THREAD) return false;   // the sidebar agent's posts are in no list, but its own thread opens from Agents
     if (c.agent && p.from !== c.agent && !p.men.includes(c.agent)) return false;
     if (c.pair && !((p.from === c.pair[0] && p.men.includes(c.pair[1])) || (p.from === c.pair[1] && p.men.includes(c.pair[0])))) return false;
     if (q.length && !q.every(w => hay(p).includes(w) || (!c.thread && (p.th + " " + threadTitle(p.th)).toLowerCase().includes(w)))) return false;
@@ -289,7 +289,7 @@ function searchRows(c, ctx, ws) {
   const open = (name, q) => () => { if (name === (c.thread ?? null)) C.q = q; else C.next = q; ctx.update(); };
   let total = 0; const found = [];
   for (const d of S.threads.values()) {
-    if (!theirs(d)) continue;
+    if (!theirs(d) || d.name === SIDE_THREAD) continue;
     const lc = (d.name + " " + threadTitle(d.name)).toLowerCase(), rest = ws.filter(w => !lc.includes(w));
     if (!rest.length) { total += d.posts.length; found.push({ d, hits: d.posts, rest }); continue; }
     const hits = d.posts.filter(p => rest.every(w => hay(p).includes(w)));
@@ -306,14 +306,54 @@ function searchRows(c, ctx, ws) {
 }
 
 const NEED = new Set(["asks", "foryou", "stuck", "failed", "limited"]);
-const secOf = (th, st) => (pinned(th) ? "pin" : archived(th) ? "arch" : st && NEED.has(st.key) ? "need" : "rest");
+// A greyed row says so in words, and why on hover: the agents' guess that the person needn't look at it any more.
+const fadeWhy = th => { const m = tmeta(th); return m.fadedBy ? `Marked by ${m.fadedBy === "auto" ? "the hive" : m.fadedBy}${m.fadedWhy ? ": " + m.fadedWhy : ""}. Write in it, or choose Needed again under More, and it comes back.` : "You marked this as not needed. Write in it, or choose Needed again under More, and it comes back."; };
+const fadeTag = th => (faded(th) ? h("span", { class: "tm-faded", title: fadeWhy(th) }, "Likely not needed") : null);
+const secOf = (th, st) => (pinned(th) ? "pin" : important(th) && !archived(th) ? "imp" : archived(th) ? "arch" : st && NEED.has(st.key) && !faded(th) ? "need" : "rest");
+// "@question" in the side search asks the sidebar agent (dash.py, side_ask): a normal agent in the hidden thread `side` that answers in one line, shown here, and brings threads up with `hive show` into the box above the list.
+// Enter sends it; plain words search as before. A sign-in that can't post can't wake an agent, so it asks Haiku which threads fit (thread_find.py).
+const AI = { q: "", st: "", res: [], tag: "", at: 0 };
+const AI_WAIT = 2 * MIN;
+const aiQ = () => (C.tq.trim().startsWith("@") ? C.tq.trim().slice(1).trim() : "");
+async function aiAsk(ctx) {
+  const q = aiQ(); if (!q || (AI.q === q && AI.st && AI.st !== "error")) return;
+  Object.assign(AI, { q, st: "loading", res: [], tag: "", at: now() }); ctx.update();
+  try {
+    if (can("post")) { const r = await apiPost("/api/side-ask", { q }); if (AI.q === q) Object.assign(AI, { st: "asked", tag: r.tag }); }
+    else { const r = await jget("/api/thread-find?q=" + encodeURIComponent(q)); if (AI.q === q) Object.assign(AI, r.error ? { st: "error" } : { st: "done", res: r.threads || [] }); }
+  } catch (e) { if (AI.q === q) AI.st = "error"; }
+  ctx.update();
+}
+/** The agent's post that answers the question asked: it starts with the question's tag. Its text without the tag, and who wrote it. */
+function aiAnswer() {
+  const d = AI.tag && S.threads.get(SIDE_THREAD), head = `[${AI.tag}]`;
+  const p = d && d.posts.find(p => !SYS.has(p.from) && String(p.text).trim().startsWith(head));
+  return p ? { from: p.from, at: p.t, text: mdPlain(String(p.text).trim().slice(head.length)).trim() } : null;
+}
+function aiRows(c) {
+  const q = aiQ(), note = (title, text, extra) => [{ key: "(ai)", title, text, href: null, ...extra }];
+  if (!q) return note("Ask anything", "Type your question, then press Enter");
+  if (AI.q !== q || !AI.st) return note("Press Enter to ask", can("post") ? "An agent looks it up and answers here" : "Haiku reads the conversations and picks the ones that fit");
+  if (AI.st === "error") return note("Couldn't ask", "Try again: press Enter");
+  if (AI.st === "done") {
+    const rows = AI.res.filter(r => S.threads.has(r.thread)).map(r => { const d = S.threads.get(r.thread);
+      return { key: r.thread, href: threadHref(r.thread), current: c.thread === r.thread, title: threadTitle(r.thread), meta: ago(d.last).replace(" ago", ""), lead: tierLead(r.thread), text: r.why || "fits" }; });
+    return rows.length ? rows : note("Nothing fits", "Try other words");
+  }
+  const a = aiAnswer();
+  if (!a) return now() - AI.at < AI_WAIT ? note("Looking…", "An agent is looking it up") : note("No answer yet", "It shows here if it comes. Claude may be at its limit");
+  const also = (S.shown || []).filter(r => r.from === a.from && r.at * 1000 >= AI.at - 5000 && S.threads.has(r.thread));   // the app's box above the list holds these; the developer look has no box
+  return [...note(q, a.text, { whole: true }), ...(app() ? [] : also.map(r => ({ key: r.thread, href: threadHref(r.thread), current: c.thread === r.thread, title: threadTitle(r.thread), text: r.why || "" })))];
+}
 function threadRows(c, ctx) {
+  if (C.tq.trim().startsWith("@")) return aiRows(c);
   const ws = words(C.tq);
   if (ws.length) return searchRows(c, ctx, ws);
   const t = now(), mask = showMask(), ran = new Set(S.live ? S.live.agents.map(a => a.thread) : []);
   // Pinned ones are always listed; archived ones go to their own fold at the end, unless something new is for the person (threads: a3100).
-  let ds = [...S.threads.values()].filter(d => pinned(d.name) || ((threadKinds(d) & mask) && theirs(d)) || d.name === c.thread);
-  if (C.scope === "recent" && !simpleOn()) ds = ds.filter(d => pinned(d.name) || archived(d.name) || d.last > t - (app() ? 7 : 1) * DAY || ran.has(d.name) || d.name === c.thread || (app() && threadState(d.name, seen).key === "asks"));
+  let ds = [...S.threads.values()].filter(d => pinned(d.name) || important(d.name) || ((threadKinds(d) & mask) && theirs(d)) || d.name === c.thread);
+  if (C.scope === "recent" && !simpleOn()) ds = ds.filter(d => pinned(d.name) || important(d.name) || archived(d.name) || d.last > t - (app() ? 7 : 1) * DAY || ran.has(d.name) || d.name === c.thread || (app() && threadState(d.name, seen).key === "asks"));
+  if (C.imp) ds = ds.filter(d => important(d.name));
   ds.sort((a, b) => b.last - a.last);
   const rowsOut = ds.map(d => {
     const lp = d.posts[d.posts.length - 1], live = ran.has(d.name);
@@ -322,14 +362,21 @@ function threadRows(c, ctx) {
       const who = lp.from.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
       return { key: d.name, href: threadHref(d.name), current: c.thread === d.name, title: threadTitle(d.name), meta: ago(d.last).replace(" ago", ""),
         lead: [tierLead(d.name), live ? h("span", { title: "an agent is on this thread now" }, statusDot("working", { live: true })) : null],
-        text: `${d.posts.length} · ${lp.from}: ${short(mdPlain(lp.text).replace(new RegExp("^(@\\S+\\s+)*" + who + ":\\s*"), ""), 60)}`, sec: secOf(d.name, null) };
+        text: `${d.posts.length} · ${lp.from}: ${short(mdPlain(lp.text).replace(new RegExp("^(@\\S+\\s+)*" + who + ":\\s*"), ""), 60)}`, sec: secOf(d.name, null), dim: faded(d.name) };
     }
     const st = threadState(d.name, seen);
     const say = short(mdPlain(displayText(lp)).replace(/\s+/g, " "), 70);
     return { key: d.name, href: threadHref(d.name), current: c.thread === d.name, title: threadTitle(d.name), meta: ago(d.last).replace(" ago", ""),
       lead: [tierLead(d.name), h("span", { title: status(st.key).label || "" }, statusDot(st.key === "done" ? "ended" : st.key, { live }))],
-      text: [stateTag(st), stateTag(st) ? " · " : null, `${authorName(lp.from)}: ${say}`], sec: secOf(d.name, st) };
+      text: [fadeTag(d.name) || stateTag(st), fadeTag(d.name) || stateTag(st) ? " · " : null, `${authorName(lp.from)}: ${say}`], sec: secOf(d.name, st), dim: faded(d.name) };
   });
+  if (app()) for (const r of rowsOut) {
+    const th = r.key, im = important(th), pn = pinned(th), m = tmeta(th);
+    if (im) r.lead = [h("span", { class: "tm-imp", title: m.impWhy ? `Important, from ${m.impBy || "an agent"}: ${m.impWhy}` : m.impBy ? `Important, marked by ${m.impBy}` : "Important" }, icon("star")), r.lead];
+    if (can("post")) r.acts = [
+      h("button", { type: "button", class: "lr-act", "aria-pressed": String(im), "aria-label": im ? "Not important" : "Mark important", title: im ? "Take the important mark off" : "Mark important", onclick: () => setMeta(th, { important: !im }) }, icon("star")),
+      h("button", { type: "button", class: "lr-act", "aria-pressed": String(pn), "aria-label": pn ? "Unpin" : "Pin to the top", title: pn ? "Unpin" : "Pin to the top", onclick: () => setMeta(th, { pin: !pn }) }, icon("pin"))];
+  }
   if (!app()) rowsOut.unshift({ key: "(everything)", href: href("comms", "~all"), title: "Everything", text: `${S.posts.length} posts, newest last`, current: c.all });
   return rowsOut;
 }
@@ -338,10 +385,10 @@ const FOLD_KEY = "hive.comms.folded";
 const FOLD = new Set((() => { try { return JSON.parse(localStorage.getItem(FOLD_KEY) || "[]"); } catch (e) { return []; } })());
 function saveFold() { try { localStorage.setItem(FOLD_KEY, JSON.stringify([...FOLD])); } catch (e) { /* this page only */ } }
 // The list in parts: Pinned, Needs you, the rest, and Archived folded at the end. A search is one list.
-const SECS = [["pin", "Pinned"], ["need", "Needs you"], ["rest", null]];
+const SECS = [["pin", "Pinned"], ["imp", "Important"], ["need", "Needs you"], ["rest", null]];
 function sections(rs, ctx, opts) {
   if (words(C.tq).length) return list(rs, opts);
-  const by = { pin: [], need: [], rest: [], arch: [] }; for (const r of rs) (by[r.sec || "rest"] || by.rest).push(r);
+  const by = { pin: [], imp: [], need: [], rest: [], arch: [] }; for (const r of rs) { (by[r.sec || "rest"] || by.rest).push(r); if (r.sec === "imp" && !C.imp) by.rest.push({ ...r, key: r.key + "~recent" }); } // important ones also stay in Recent
   const parts = SECS.filter(([k]) => by[k].length), heads = parts.length > 1 || by.pin.length;
   const sec = (k, label, rows) => {
     if (!heads) return h("div", { class: "tm-sec", "data-key": "sec:" + k, "data-sec": k }, list(rows, { ...opts, empty: "" }));
@@ -361,7 +408,7 @@ function sections(rs, ctx, opts) {
 }
 function syncThreads(c, ctx) {
   const tl = document.querySelector("#main .cm-tl"); if (!tl) return;
-  const sig = [S.ver, C.scope, C.arch, [...FOLD].join(), C.tq, showMask(), c.arg, Math.floor(now() / 3e4), S.runSig, marksSig().length].join("|");
+  const sig = [S.ver, C.scope, C.arch, C.imp, tmetaSig(), [...FOLD].join(), C.tq, AI.st + AI.res.length, AI.tag, S.shown && S.shown.length, showMask(), c.arg, Math.floor(now() / 3e4), S.runSig, marksSig().length].join("|");
   if (tl === L.tl && sig === L.tlSig) return;
   const fresh = tl !== L.tl || c.arg !== L.tlConv;
   L.tl = tl; L.tlSig = sig; L.tlConv = c.arg;
@@ -386,6 +433,17 @@ function line(key, text, act, opts = {}) {
 const who = n => (simpleOn() ? hiveName() : agentRef(n, { dot: false }));
 function lastMine(th) { const d = S.threads.get(th); if (!d) return null; for (let i = d.posts.length - 1; i >= 0; i--) if (d.posts[i].from === "person") return d.posts[i]; return null; }
 const notBuilt = () => h("span", { class: "nb", title: "Designed, not built yet: the server needs to do this" }, "not built yet");
+
+/** The two lines an agent (or the status refresher) wrote with `hive status`: what the thread is about, where it stands. */
+const lastAt = th => { const d = S.threads.get(th), p = d && d.posts.at(-1); return p ? p.t : 0; };
+function statusBar(th) {
+  const r = th && S.threadStatus && S.threadStatus[th]; if (!r) return null;
+  const [a, ...rest] = r.text.split("\n");
+  return h("div", { class: "cm-status", "data-key": "status", role: "note", "aria-label": "Thread status" },
+    h("b", null, a), rest.length ? h("span", null, rest.join(" ")) : null,
+    h("span", { class: "meta cm-status-m" }, `${r.from} · updated ${ago(r.at * 1e3)}${lastAt(th) ? " · last active " + ago(lastAt(th)) : ""}`,
+      can("post") ? h("button", { type: "button", class: "cm-status-r", title: "Reply about this summary", onclick: () => { const d = draft(th); if (!d.text) d.text = "> " + r.text.split("\n").join("\n> ") + "\n\n"; focusComposer(); } }, "Reply") : null));
+}
 
 function strip(th) {
   const st = threadState(th, seen), out = [], run = (S.live ? S.live.agents : []).filter(a => a.thread === th), post = can("post") && app();
@@ -434,11 +492,12 @@ function lastQuestion(p) {
 function moreMenu(c, ctx) {
   const th = c.thread, t = tier(tierOf(th));
   const act = (label, ic, fn, title) => button(label, () => { C.menu = null; fn(); ctx.update(); }, { size: "s", kind: "quiet", icon: ic, title });
-  const pin = pinned(th), arch = archived(th), mine = can("post");
+  const pin = pinned(th), arch = archived(th), fd = faded(th), mine = can("post");
   return h("div", { class: "cm-menu", role: "menu", "data-key": "more" },
     mine ? act(pin ? "Unpin" : "Pin to the top", "pin", () => setMeta(th, { pin: !pin }), pin ? "Back among the others" : "Keep it at the top of the list, whatever is on") : null,
     mine ? act("Rename", "edit", () => renameDialog(th), "Give it a name of your own. Only the dash shows it.") : null,
     mine ? act(arch ? "Unarchive" : "Archive", "archive", () => { setMeta(th, { archived: !arch }); if (!arch) go("comms"); }, arch ? "Back in the list" : "Out of the list until something new is for you") : null,
+    mine ? act(fd ? "Needed again" : "Not needed", "check", () => setMeta(th, { faded: !fd }), fd ? fadeWhy(th) : "Grey it in the list: still there to open and write in, and back by itself when something new is for you") : null,
     can("tier") ? button([h("span", { class: "ref-sw", "data-tone": t.tone }), "Priority: " + t.label], () => { C.menu = null; askTier(th); }, { size: "s", kind: "quiet", title: "Where this sits in the hive's priority list" }) : null,
     button("On the timeline", null, { href: href("timeline"), size: "s", kind: "quiet", icon: "clock" }),
     act("Share this result", "board", () => shareDialog(th), "Save the conversation as one page you can post: the ask, the agents at work, the result. You see it first and can remove anything."),
@@ -453,16 +512,20 @@ function titleMenu(c, n, d) {
     button("All messages", null, { href: href("comms", "~all"), size: "s", kind: "quiet", icon: "chat" }));
 }
 // What shows: For you, Updates, Agent comms, each on or off: three toggles in the side, over the list (the person, 11040113eacf).
+const tmetaSig = () => Object.entries(S.threadMeta || {}).map(([k, v]) => k + (v.important || 0) + (v.pin || 0) + (v.faded || 0)).join();
 function showChips(ctx) {
   const mask = showMask();
-  return h("div", { class: "tm-show", role: "group", "aria-label": "Show", title: showSays(mask) },
+  const group = h("div", { class: "tm-show", role: "group", "aria-label": "Show", title: showSays(mask) },
     SHOW_PARTS.map(([b, l, t]) => h("button", { type: "button", class: "tm-chip", "data-show": KIND_NAME[b], "aria-pressed": String(!!(mask & b)), title: (mask & b ? "Hide " : "Show ") + t,
       onclick: () => setShow(showMask() ^ b, ctx) }, h("i", { "aria-hidden": "true" }), l)),
     mask ? null : h("p", { class: "meta tm-show-says" }, showSays(mask)));
+  return app() ? h("div", { class: "tm-showwrap" }, group, app() ? h("button", { type: "button", class: "tm-chip tm-chip-imp", "aria-pressed": String(!!C.imp), title: C.imp ? "Show every conversation again" : "Only conversations marked important",
+      onclick: () => { C.imp = !C.imp; ctx.update(); } }, icon("star"), "Important") : null) : group;
 }
 const menuBtn = (key, label, ic, ctx, extra) => h("button", { type: "button", class: "btn", "data-kind": "icon", "aria-label": label, title: label, "aria-haspopup": "true", "aria-expanded": String(C.menu === key),
   onclick: e => { e.stopPropagation(); C.menu = C.menu === key ? null : key; ctx.update(); } }, icon(ic), extra || null);
 function head(c, ctx) {
+  if (c.thread && app()) import("../ui/preview.js").then(m => m.autoFiles(c.thread));
   const d = c.thread && S.threads.get(c.thread), n = L.matched.length, off = maskFor(c) !== SHOW.ALL && !C.q.trim() ? L.src.length - n : 0;
   const title = c.thread ? threadTitle(c.thread) : c.agent ? (c.agent === "person" ? "Everything you sent" : "Everything by or to " + c.agent) : c.pair ? `${c.pair[0]} and ${c.pair[1]}` : app() ? "All messages" : "Everything";
   const people = simpleOn() || !c.thread ? [] : threadPeople(c.thread).filter(m => m !== "person");
@@ -540,11 +603,111 @@ function needRow({ d, st }) {
     : [h("b", null, st.who + ": "), (S.running.get(st.who) || {}).doing || st.label];
   return { key: d.name, href: threadHref(d.name), title: threadTitle(d.name), meta: ago(st.post ? st.post.t : d.last), lead: statusDot(st.key, { live: isRunning(st.who) }), text };
 }
+// "Where things stand": the answer to "what was done, what needs me" without asking in a new chat and losing the answer.
+// Read from agents' status bars (S.threadStatus) and the 30-minute file behind the Needs you page, whose brief is an agent's
+// hourly top-down view: the few top-level things, each opening onto its threads. No brief (an installed Hive), just the threads.
+const BRIEF_FOR = 6 * HOUR, STAND_LIMIT = 4, TOP_LIMIT = { needs: 12, done: 4, going: 4 }, HOME_LIMIT = 5, STAND_EVERY = 5 * MIN, DONE_FOR = 2 * DAY, GOING_FOR = 3 * DAY, NEEDS_FOR = 7 * DAY;
+const STAND = { needs: null, at: 0, more: {}, open: {} };
+/** Run a re-render without the page moving: every scroller around the row (and the window) goes back to where it was. */
+function holdScroll(from, fn) {
+  const at = [document.scrollingElement]; for (let n = from && from.parentElement; n; n = n.parentElement) if (n.scrollTop) at.push(n);
+  const was = at.map(el => el.scrollTop), put = () => at.forEach((el, i) => { if (el.isConnected && el.scrollTop !== was[i]) el.scrollTop = was[i]; });
+  fn(); put(); queueMicrotask(put); requestAnimationFrame(put);
+}
+function loadStanding(ctx) {
+  if (now() - STAND.at < STAND_EVERY) return;
+  STAND.at = now();
+  jget("/api/needs-you").then(v => { const sig = n => JSON.stringify(n && [n.waiting, n.states, n.brief]); if (v && sig(v) !== sig(STAND.needs)) { STAND.needs = v; ctx.update(); } }, () => {});
+}
+/** A status bar's last line, split into its state word and the words after it, without the agent's name tag. */
+function standLine(text) {
+  const l = text.split("\n").filter(Boolean), last = (l[l.length - 1] || "").replace(/\s*\(a[0-9a-f]{4,5}\)/g, "").trim();
+  const m = last.match(/^(Done|Blocked|Needs the person|Waiting|Told to stop):\s*/i);
+  return { word: m ? m[1].toLowerCase() : "", line: m ? last.slice(m[0].length) : last, full: last };
+}
+// A thread that went quiet is archived by age, but what it waits on still counts here; one archived by hand doesn't.
+const shownHere = th => { const d = S.threads.get(th); return !(btwParent(th) || faded(th) || (tmeta(th).archived && archived(th)) || (d && isSystemThread(d))); };
+const askedByThem = th => { const d = S.threads.get(th); return important(th) || pinned(th) || (!!d && d.posts.some(p => p.from === "person")); };
+function standing(g) {
+  const seenAbove = new Set([...g.asks, ...g.foryou, ...g.trouble, ...g.working].map(x => x.d.name)), used = new Set();
+  const rows = { needs: [], done: [], going: [], projects: [] };
+  const take = (group, th, text, t) => { if (used.has(th)) return; used.add(th); rows[group].push({ th, text, t }); };
+  const open = th => !seenAbove.has(th) && shownHere(th);
+  const st = S.threadStatus || {}, bars = Object.keys(st).map(th => ({ th, r: st[th], s: standLine(st[th].text), t: st[th].at * 1e3 })).sort((a, b) => b.t - a.t);
+  const b0 = STAND.needs && STAND.needs.brief, bt = b0 ? Date.parse(b0.at) : 0, brief = b0 && now() - bt < BRIEF_FOR ? b0 : null;
+  const waits = ((STAND.needs && STAND.needs.waiting) || []).filter(w => !w.stale && w.thread && open(w.thread)).map(w => ({ th: w.thread, text: w.action, t: w.at ? Date.parse(w.at) : 0 }));
+  for (const b of bars) if (b.s.word === "needs the person" && now() - b.t < NEEDS_FOR && open(b.th)) waits.push({ th: b.th, text: b.s.line, t: b.t });
+  waits.sort((a, b) => b.t - a.t);
+  const waiting = waits.filter(w => { const mine = lastMine(w.th); return !mine || mine.t < w.t; });   // once they've answered since, it's not waiting on them
+  if (brief) {   // threads first, so a thread stays under its top-level thing; live state decides what's still in each
+    const stillWaits = new Set(waiting.map(w => w.th)), when = th => st[th] ? st[th].at * 1e3 : bt;
+    for (const group of ["needs", "done", "going"]) for (const top of brief[group] || []) {
+      const kids = (top.items || []).filter(r => group === "needs" ? stillWaits.has(r.thread) : open(r.thread) && !used.has(r.thread));
+      if (!kids.length) continue;
+      rows[group].push({ top: group + ":" + top.title, title: top.title, text: top.text, t: bt, kids: kids.map(r => { used.add(r.thread); return { th: r.thread, text: r.text, t: when(r.thread) }; }) });
+    }
+    if (brief.headline) { rows.headline = brief.headline; rows.at = bt; }
+  }
+  for (const w of waiting) take("needs", w.th, w.text, w.t);
+  for (const b of bars) {
+    if (!open(b.th) || !askedByThem(b.th)) continue;
+    if (b.s.word === "done" && now() - b.t < DONE_FOR) take("done", b.th, b.s.line, b.t);
+    else if (b.s.word !== "done" && b.s.word !== "told to stop" && b.s.word !== "needs the person" && now() - b.t < GOING_FOR) take("going", b.th, b.s.full, b.t);
+  }
+  if (brief) for (const [group, title] of [["needs", "New since this summary"], ["done", "Also done"], ["going", "Also going"]]) {   // nothing that isn't in the brief vanishes; it just doesn't take over the view
+    const loose = rows[group].filter(r => !r.kids);
+    if (loose.length > 1) rows[group] = [...rows[group].filter(r => r.kids), { top: group + ":" + title, title, text: plural(loose.length, "thread") + " not in the summary.", t: Math.max(...loose.map(r => r.t)), kids: loose }];
+  }
+  rows.projects = ((STAND.needs && STAND.needs.states) || []).filter(s => s.state).map(s => ({ th: s.thread, name: s.name, key: s.key, text: s.state, t: s.at ? Date.parse(s.at) : 0 }));
+  return rows;
+}
+/** Adds the row to the new chat's prompt, with the thread's id so the agent that gets it can read that thread. */
+// A status bar's first line says what the thread is about, which beats its first post ("@fable") unless the person named it.
+const standTitle = r => { if (r.name) return r.name; if (r.title) return r.title; const own = tmeta(r.th).title, bar = S.threadStatus && S.threadStatus[r.th], l = bar && bar.text.split("\n"); return own || (l && l.length > 1 && l[0].replace(/\s*\(a[0-9a-f]{4,5}\)/g, "")) || threadTitle(r.th); };
+const standReply = r => {
+  const ids = r.kids ? "\n> Threads: " + r.kids.map(k => k.th).join(", ") : "";
+  const q = "> " + standTitle(r) + "\n> " + r.text.split("\n").join("\n> ") + ids + "\n\n";
+  const d = draft(null);
+  if (!d.text.includes(q.trim())) quoteInto(null, q); else focusComposer();
+};
+function standRow(r, more) {
+  return { key: r.key || r.th, href: r.th ? threadHref(r.th) : "#needs", title: standTitle(r), meta: r.t ? ago(r.t) : null, text: mdPlain(r.text).replace(/^[a-z]/, c => c.toUpperCase()), ...more,
+    acts: can("post") ? h("button", { type: "button", class: "lr-act", title: "Add to your new message", "aria-label": "Add this to your new message", onclick: () => standReply(r) }, icon("reply")) : null };
+}
+// A top-level thing opens onto its threads; with only one, the row just goes there.
+function standRows(r, ctx) {
+  if (!r.kids) return [standRow(r)];
+  if (r.kids.length === 1) return [standRow({ ...r, key: r.top, th: r.kids[0].th }, { whole: true, meta: r.kids[0].t ? ago(r.kids[0].t) : null })];
+  const open = !!STAND.open[r.top];
+  return [standRow({ ...r, key: r.top }, { href: null, meta: plural(r.kids.length, "thread"), whole: true, expanded: open, lead: h("span", { class: "cm-stand-ch", "data-open": open ? "" : null }, icon("chevron-down")), onClick: (e, n) => holdScroll(n, () => { STAND.open[r.top] = !open; ctx.update(); }) }),
+    ...(open ? r.kids.map(k => standRow({ ...k, key: r.top + "/" + k.th }, { depth: 1 })) : [])];
+}
+function standSec(id, title, rows, ctx) {
+  if (!rows.length) return null;
+  // The limit counts what the section lists, so opening one doesn't push the next behind Show more.
+  const most = STAND.more[id] ? 0 : TOP_LIMIT[id] && rows[0].kids ? TOP_LIMIT[id] : STAND_LIMIT, flat = rows.map(r => standRows(r, ctx));
+  return h("section", { class: "sec", "data-key": "st:" + id, "data-stand": id }, h("header", { class: "sec-h" }, h("h3", { class: "sec-t" }, title)),
+    list(flat.flat(), { limit: most && rows.length > most ? flat.slice(0, most).flat().length : 0, moreText: () => `Show ${rows.length - most} more`, onMore: () => { STAND.more[id] = true; ctx.update(); } }));
+}
+function standingPart(r, ctx) {
+  if (!r.needs.length && !r.done.length && !r.going.length && !r.projects.length) return null;
+  return h("div", { class: "cm-stand", "data-key": "stand" },
+    h("h2", { class: "cm-needs-t" }, "Where things stand"),
+    r.headline ? h("p", { class: "cm-stand-brief" }, mdPlain(r.headline), " ", h("span", { class: "cm-stand-at" }, ago(r.at))) : null,
+    standSec("needs", "Needs you", r.needs, ctx),
+    standSec("done", "Done lately", r.done, ctx),
+    standSec("going", "Still going", r.going, ctx),
+    standSec("projects", "Your projects", r.projects, ctx));
+}
 function homePane(ctx) {
   const g = needs(), w = can("post"), n = g.asks.length + g.foryou.length + g.trouble.length;
   const local = outFor(null);
-  const room = hasRoom();
-  const sec = (title, note, items) => items.length ? h("section", { class: "sec", "data-key": "s:" + title }, h("header", { class: "sec-h" }, h("h2", { class: "sec-t" }, title), note ? h("span", { class: "sec-n" }, note) : null), list(items.map(needRow))) : null;
+  const room = hasRoom(), digest = app() && !simpleOn();
+  if (digest) loadStanding(ctx);
+  const stand = digest ? standing(g) : null;
+  // Long lists fold here, so what's under them stays in reach (the side list always has them all).
+  const sec = (title, note, items) => items.length ? h("section", { class: "sec", "data-key": "s:" + title }, h("header", { class: "sec-h" }, h("h2", { class: "sec-t" }, title), note ? h("span", { class: "sec-n" }, note) : null),
+    list(items.map(needRow), { limit: digest && !STAND.more[title] ? HOME_LIMIT : 0, onMore: () => { STAND.more[title] = true; ctx.update(); } })) : null;
   return h("div", { class: "cm-home", "data-key": "home" },
     awayCard(ctx),
     w ? h("div", { class: "cm-new", "data-key": "new" },
@@ -556,10 +719,11 @@ function homePane(ctx) {
       local.some(it => it.state !== "failed") ? closeLine() : null,
       local.length ? h("div", { class: "cm-out", "data-key": "out" }, local.map(it => localMessage(it, outActions))) : null) : null,
     h("div", { class: "cm-needs", "data-key": "needs" },
-      n || (!simpleOn() && !S.live.signin?.length) ? h("h2", { class: "cm-needs-t" }, n ? `${plural(n, "thing")} for you` : "Nothing needs you") : null,
+      n || (!simpleOn() && !S.live.signin?.length && !(stand && stand.needs.length)) ? h("h2", { class: "cm-needs-t" }, n ? `${plural(n, "thing")} for you` : "Nothing needs you") : null,
       sec("Waiting for your answer", simpleOn() ? null : "an agent asked you something", g.asks),
       sec("New for you", "answers you haven't opened", g.foryou),
       sec(simpleOn() ? "On hold" : "Stopped", simpleOn() ? null : "one stopped by a usage limit carries on by itself; others need a message", g.trouble),
+      stand ? standingPart(stand, ctx) : null,
       sec("Working now", null, g.working),
       !n && !g.working.length && !S.live.signin?.length ? h("p", { class: "meta" }, simpleOn() ? "When your Hive asks you something or finishes, it shows here." : "When an agent asks you something, finishes, or stops, it shows here.") : null,
       simpleOn() ? null : h("p", { class: "cm-home-all" }, button("All messages", null, { href: href("comms", "~all"), size: "s", kind: "quiet" }), app() ? button("Inbox", null, { href: href("inbox"), size: "s", kind: "quiet" }) : null)));
@@ -595,6 +759,7 @@ export default {
     const top = document.getElementById("top"), post = S.app.app && can("post");
     const convo = c.home ? homePane(ctx)
       : [head(c, ctx),
+        statusBar(c.thread),
         // Keyed by conversation: another one is a new element, so it opens at its end. Wrapped so that swap doesn't move the composer, which would drop focus.
         h("div", { class: "cm-mw", "data-key": "mw" },
           h("div", { class: "cm-msgs", "data-key": "m:" + (c.arg || ""), "data-own": "", "data-sig": "own", role: "log", "aria-live": "off", "aria-label": "Messages", tabindex: "0" })),
@@ -609,7 +774,7 @@ export default {
         h("div", { class: "cm-filters" },
           post ? button("New conversation", null, { href: href("comms", "~new"), kind: "quiet", icon: "new", cls: "cm-newbtn" }) : null,
           h("div", { class: "cm-search" }, icon("search"),
-            input({ type: "search", placeholder: app() ? "Search" : "Search threads", "aria-label": "Search all conversations by name or content", value: C.tq, oninput: e => { C.tq = e.target.value; ctx.update(); }, onkeydown: e => { if (e.key === "Escape") { e.stopPropagation(); C.tq = ""; e.target.value = ""; e.target.blur(); ctx.update(); } } })),
+            input({ type: "search", placeholder: app() ? "Search, or @ to ask" : "Search threads", "aria-label": "Search all conversations by name or content. Start with @ to ask an agent, which answers here and brings up the conversations that help", value: C.tq, oninput: e => { C.tq = e.target.value; ctx.update(); }, onkeydown: e => { if (e.key === "Enter" && aiQ()) { e.preventDefault(); aiAsk(ctx); return; } if (e.key === "Escape") { e.stopPropagation(); C.tq = ""; e.target.value = ""; e.target.blur(); ctx.update(); } } })),
           simpleOn() ? null : showChips(ctx),
           app() ? brought() : null,
           words(C.tq).length || simpleOn() ? null : h("div", { class: "cm-scope" }, h("span", null, app() ? "Conversations" : "Threads"),

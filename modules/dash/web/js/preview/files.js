@@ -5,7 +5,7 @@
 import { h } from "../core/dom.js";
 import { can } from "../core/store.js";
 import { button, icon } from "../ui/kit.js";
-import { threadFiles, kindOf, badgeOf } from "../ui/preview.js";
+import { threadFiles, kindOf, badgeOf, filesClosedByHand } from "../ui/preview.js";
 
 const KEY = "pv.dir", ROOT = "projects";
 let dir = null;   // the folder shown, kept between openings
@@ -25,7 +25,7 @@ export function drawFiles(head, body, { open, close }) {
   head.replaceChildren(h("div", { class: "pv-t" },
     icon("folder", { cls: "pf-ic" }),
     h("div", { class: "pv-n" }, h("span", { class: "pv-fn" }, "Files"), h("span", { class: "meta" }, "This conversation and project folders")),
-    button("Close (Esc)", close, { kind: "icon", icon: "close", size: "s", cls: "pv-x" })));
+    button("Close (Esc)", () => { filesClosedByHand(); close(); }, { kind: "icon", icon: "close", size: "s", cls: "pv-x" })));
   const mine = threadFiles();
   // Like ChatGPT's Outputs and Sources: what agents made, then what you sent. Prev/Next still walks them all in page order.
   const one = (f, i) => row(f.name, [fsize(f.size), who(f) && "from " + who(f)].filter(Boolean).join(" · "), badgeOf(f.name), kindOf(f.name), () => open(mine, i));

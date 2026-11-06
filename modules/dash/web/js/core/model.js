@@ -272,8 +272,10 @@ export function threadTitle(th) {
   const d = S.threads.get(th), p = d && d.posts[0];
   return p ? short(mdPlain(displayText(p)).split("\n")[0], 64) : th;
 }
-/** Only the starter, keeper or box ever posted here. */
-export const isSystemThread = d => !!d && d.posts.every(p => SYS.has(p.from));
+/** The agent behind "@question" in the side search works here (dash.py, side_ask): an agent like any other in Agents, but its thread is no conversation, so no chat list holds it. */
+export const SIDE_THREAD = "side";
+/** Only the starter, keeper or box ever posted here, or it's the sidebar agent's. */
+export const isSystemThread = d => !!d && (d.name === SIDE_THREAD || d.posts.every(p => SYS.has(p.from)));
 
 // ---- how much of the board someone wants to see: Chat's For you, Updates and Agent comms ----
 export const SHOW = { you: 1, updates: 2, comms: 4, ALL: 7 };   // bits: any of them can be on
@@ -281,6 +283,7 @@ const OPS = new Set(["watchdog", "memguard"]), HOUSE = new Set(["keeper", "impro
 /** Which one a post is. For you: from or to the person. Updates: an agent or outsider saying how it's going. Agent comms: agents talking to each other, and the hive's own notices. */
 export function postKind(p) {
   if (p.lv !== undefined) return p.lv;
+  if (p.th === SIDE_THREAD) return p.lv = 0;
   if (p.from === "person" || p.men.includes("person")) return p.lv = SHOW.you;
   if (SYS.has(p.from) || OPS.has(p.from) || isWarden(p.from) || HOUSE.has(p.th)) return p.lv = SHOW.comms;
   return p.lv = p.men.some(m => m !== p.from && !OUTSIDE.has(m)) ? SHOW.comms : SHOW.updates;

@@ -1,5 +1,5 @@
 // What the person keeps about a thread, and what's open for them in one (the person, 2026-11-04, posts 110401090fd2 and 11040112fc7b).
-// Pin, rename, archive: stored by the dash in ~/.hive/thread-meta.json via /api/thread-meta, not on the board. S.threadMeta mirrors it.
+// Pin, rename, archive, important, likely not needed: stored by the dash in ~/.hive/thread-meta.json via /api/thread-meta, not on the board. S.threadMeta mirrors it.
 // The "Open for you" card: at the end of a thread, what agents asked or told the person since they last wrote, so they needn't read back.
 import { h } from "../core/dom.js";
 import { S, can, OUTSIDE, post, loadThreadMeta, emit } from "../core/store.js";
@@ -10,6 +10,16 @@ import { confirm } from "./dialog.js";
 
 export const meta = th => (S.threadMeta && S.threadMeta[th]) || {};
 export const pinned = th => !!meta(th).pin;
+/** Marked important by an agent (`hive important`) or by the person. */
+export const important = th => !!meta(th).important;
+/** Marked likely not needed by the person any more, by an agent (`hive fade`, or the importance pass) or by them: greyed in the list, still there to
+ *  open and write in (the person, 11052134bd83). It holds until something after the mark is from the person or for them. Pinned and important ones are never greyed. */
+export function faded(th) {
+  const m = meta(th), f = m.faded; if (!f || m.pin || m.important) return false;
+  const d = S.threads.get(th); if (!d) return true;
+  for (let i = d.posts.length - 1; i >= 0 && d.posts[i].t > f; i--) { const p = d.posts[i]; if (OUTSIDE.has(p.from) || (isAgent(p.from) && (p.men.includes("person") || forYouLine(p)))) return false; }
+  return true;
+}
 /** Archived by hand or by age, and nothing new for the person since: a post for them brings it back to the list by itself.
  *  By age, as Slack's channels do: quiet for 1 day when it was a short one-off, 7 when it ran longer (4+ posts). Pinned ones stay,
  *  and so does one the person took back out (counted from then). */
@@ -34,6 +44,7 @@ export async function setMeta(th, patch) {
   const was = S.threadMeta[th], next = { ...(was || {}) };
   for (const [k, v] of Object.entries(patch)) {
     if (k === "title") { if (v && v.trim() && v.trim() !== th) next.title = v.trim(); else delete next.title; }
+    else if (k === "important" || k === "faded") { const off = k === "faded" ? "fadeOff" : "impOff"; if (v) { next[k] = Date.now(); delete next[off]; } else { delete next[k]; next[off] = Date.now(); } }
     else if (v) { next[k] = Date.now(); delete next[k === "pin" ? "archived" : "pin"]; if (k === "archived") delete next.back; }
     else { delete next[k]; if (k === "archived") next.back = Date.now(); }
   }
@@ -95,7 +106,7 @@ export function openCard(th, { jump, answer, update, atEnd }) {
       h("span", { class: "tm-who" }, p.from), h("span", { class: "tm-say" }, forYouLine(p)), h("span", { class: "meta" }, ago(p.t)),
       h("span", { class: "tm-act" },
         button("Show", () => jump(p.id), { kind: "quiet", size: "s", title: "Show this message in the conversation" }),
-        can("post") && asks(p) ? button("Answer", () => answer(p), { kind: "quiet", size: "s", title: "Reply to this message" }) : null)))),
+        can("post") ? button(asks(p) ? "Answer" : "Reply", () => answer(p), { kind: "quiet", size: "s", title: "Reply to this message" }) : null)))),
     o.items.length > 4 ? h("p", { class: "meta" }, `and ${o.items.length - 4} more above`) : null);
   return ap ? h("div", null, ap, card) : card;
 }

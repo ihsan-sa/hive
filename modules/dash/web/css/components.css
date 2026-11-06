@@ -870,6 +870,12 @@ span.msg-thumb,span.msg-file{cursor:default}
 .pv{position:fixed;top:0;right:0;bottom:0;z-index:40;width:min(var(--pv-w,560px),100%);display:flex;flex-direction:column;container-type:inline-size;background:var(--surface);color:var(--ink);border-left:1px solid var(--line-2);box-shadow:var(--e2);outline:none}
 @media (min-width:701px){.pv{top:8px;right:8px;bottom:8px;width:min(var(--pv-w,560px),calc(100% - 16px));border:1px solid var(--line);border-radius:var(--r-l);overflow:hidden}}
 @media (min-width:1000px){body[data-pv] :is(#top,#main){margin-right:calc(min(var(--pv-w,560px),100% - 16px) + 16px)}}
+/* the Files list: a small card floating at the right under the header; the page doesn't move over for it */
+@media (min-width:701px){
+.pv[data-kind=files]{top:72px;bottom:auto;right:16px;width:min(340px,calc(100% - 32px));max-height:min(460px,calc(100vh - 160px));box-shadow:var(--e3,var(--e2))}
+.pv[data-kind=files]~.pv-grip,body:has(.pv[data-kind=files]) .pv-grip{display:none}
+body[data-pv]:has(.pv[data-kind=files]) :is(#top,#main){margin-right:0}
+}
 body[data-pv-drag]{cursor:col-resize;user-select:none}
 body[data-pv-drag] .pv-frame{pointer-events:none}
 .pv-grip{position:fixed;top:8px;bottom:8px;right:calc(min(var(--pv-w,560px),100% - 16px) + 8px);width:8px;margin-right:-4px;z-index:41;cursor:col-resize;touch-action:none;outline:none}
@@ -1109,6 +1115,7 @@ a.ref[data-kind=file][data-pv-on]{background:color-mix(in oklch,var(--accent) 16
 .cm-tl .lr-t{font-size:var(--fs-body)}
 .cm-tl .lr-t b{flex:1 1 auto;font-weight:600}
 .cm-tl .lr-x{-webkit-line-clamp:2;margin-top:3px;font-size:var(--fs-meta);color:var(--ink-3);line-height:1.4}
+.cm-tl .lr[data-key="(ai)"] .lr-x{font-size:var(--fs-small);color:var(--ink-2)}   /* the sidebar agent's one-line answer is the row, so it reads as text */
 .cm-st{font-weight:var(--w-med);color:var(--ci)}
 .cm-st[data-tone=ended]{color:var(--ink-3)}
 .cm-side-f{display:flex;align-items:center;justify-content:space-between;gap:var(--s2);padding:6px var(--s3);border-top:1px solid var(--line)}
@@ -1164,6 +1171,11 @@ a.ref[data-kind=file][data-pv-on]{background:color-mix(in oklch,var(--accent) 16
 .cm-needs{display:grid;gap:var(--s5);margin-top:var(--s7)}
 .cm-needs-t{font-size:var(--fs-title);font-weight:var(--w-bold)}
 .cm-needs .lr-x{-webkit-line-clamp:2}
+.cm-stand{display:grid;gap:var(--s4)}.cm-stand>.cm-needs-t{font-size:var(--fs-title);font-weight:var(--w-bold);color:var(--ink)}
+.cm-stand-brief{margin:0;color:var(--ink)}.cm-stand-at{font-size:var(--fs-meta);color:var(--ink-3);white-space:nowrap}
+.cm-stand-ch{display:inline-flex;flex:none;color:var(--ink-3)}.cm-stand-ch:not([data-open]) svg{transform:rotate(-90deg)}
+.cm-stand .lr-in[style]{padding-left:calc(8px + var(--s5))}   /* a thread under its top-level thing */
+.cm-stand .lr-acts{display:flex;top:auto;bottom:4px}.cm-stand .lr-x{padding-right:var(--s6)}   /* its reply button is always there, clear of the words */
 .cm-home-all{display:flex;gap:var(--s2);margin-left:-8px}
 @container (max-width:640px){
   .cm{grid-template-columns:minmax(0,1fr)}
@@ -2170,3 +2182,41 @@ text.map-ring-t{font-size:11px;font-weight:var(--w-med);fill:var(--ink-3);text-a
 .gauge-c{display:flex;align-items:center;gap:var(--s2);min-width:140px}
 .gauge-c .meter{flex:1;min-width:80px}
 .row-a-in{display:inline-flex;gap:var(--s2)}
+
+.cm-status{display:grid;gap:2px;padding:6px var(--s4);border-bottom:1px solid var(--line);font-size:13px}
+.cm-status b{font-weight:600}
+.cm-status-m{font-size:11px}
+
+/* composer Markdown buttons */
+.cp-fmt { display: inline-flex; gap: 2px; align-items: center; }
+.cp-fb { font: inherit; font-size: 12px; min-width: 24px; height: 24px; padding: 0 5px; border: 0; border-radius: 6px; background: transparent; color: var(--muted, inherit); cursor: pointer; }
+.cp-fb:hover { background: color-mix(in srgb, currentColor 12%, transparent); color: inherit; }
+.cp-fb-bold { font-weight: 700; } .cp-fb-italic { font-style: italic; } .cp-fb-code { font-family: monospace; }
+
+/* live Markdown layer behind the composer text box: same characters, styled, never wider */
+.cp-tw{position:relative}
+.cp-bd{display:none;position:absolute;inset:0;overflow:hidden;white-space:pre-wrap;overflow-wrap:break-word;pointer-events:none;color:var(--ink);box-sizing:border-box;border:0}
+.cp-tw .cp-t{position:relative;background:transparent;caret-color:var(--ink)}   /* live-markdown layer switched off (the person, 11052118): it made the box jump; text stays the box's own */
+.cp-tw .cp-t::placeholder{color:var(--ink-3)}
+.md-mk,.md-h{color:var(--accent,#58f);font-weight:600}
+.md-b{-webkit-text-stroke:.55px currentColor}
+.md-i{font-style:italic}
+.md-code{background:color-mix(in srgb,currentColor 13%,transparent);box-shadow:0 0 0 1px color-mix(in srgb,currentColor 13%,transparent);border-radius:3px;color:var(--accent,#58f)}
+.md-a{color:var(--accent,#58f);text-decoration:underline}
+
+/* Important threads and the row buttons in the side list */
+.cm-tl .lr[data-dim]>.lr-in{opacity:.45}.cm-tl .lr[data-dim]>.lr-in:hover,.cm-tl .lr[data-dim]>.lr-in:focus-visible,.cm-tl .lr[data-dim]>.lr-in[aria-current]{opacity:.8}   /* likely not needed any more (faded() in ui/threadmeta.js) */
+.tm-imp{display:inline-flex;color:var(--accent-ink)}.tm-imp .ic{width:14px;height:14px;fill:currentColor}
+.tm-chip-imp .ic{width:12px;height:12px}.tm-chip-imp[aria-pressed=true] .ic{fill:currentColor}
+.tm-sec[data-sec=imp]>.tm-sec-h{color:var(--accent-ink)}
+.lr{position:relative}
+.lr-acts{position:absolute;right:6px;top:4px;display:none;gap:2px;background:var(--surface,var(--bg));border-radius:var(--r-s)}
+.lr:hover .lr-acts,.lr:focus-within .lr-acts{display:flex}
+.lr-act{display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;border:0;border-radius:var(--r-s);background:none;color:var(--ink-3);cursor:pointer}
+.lr-act:hover{background:var(--hover);color:var(--ink)}
+.lr-act[aria-pressed=true]{color:var(--accent-ink)}.lr-act[aria-pressed=true] .ic{fill:currentColor}
+.lr-act .ic{width:14px;height:14px}
+@media (hover:none){.lr-acts{display:flex;top:auto;bottom:4px}}
+.tm-showwrap>.tm-chip-imp{margin:2px 10px 4px}
+.cm-status-r{margin-left:10px;border:0;background:none;color:var(--accent,var(--ink));font:inherit;font-size:12px;font-weight:600;cursor:pointer;padding:0 2px}
+.cm-status-r:hover{text-decoration:underline}

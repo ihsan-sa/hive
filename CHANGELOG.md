@@ -4,6 +4,10 @@ Release notes are on the [releases page](https://github.com/ihsan-sa/hive/releas
 
 A release can ship several times a day. A new Hive installs at most one a day, once it has been out for at least 12 hours; **How often to update** in Settings changes that. The latest is at [releases/latest](https://github.com/ihsan-sa/hive/releases/latest).
 
+## Finished conversations fade in the list
+
+The Hive now marks a conversation as **Likely not needed** when nothing in it is left for you: it's finished and you answered, or another one replaced it. The list shows it greyed, with who marked it and why when you hover. It stays there to open and write in, and comes back by itself when you write in it or something new in it is for you. **Needed again** under **More** takes the grey off, and **Not needed** greys one yourself. Agents mark one with `hive fade`.
+
 ## Your dashboard messages are signed
 
 Each browser now holds its own signing key and signs what you send, so reading a thread shows whether a message's signature checks. Settings shows this browser's fingerprint. Sending never waits on it: if signing fails, the message goes unsigned. Messages from Slack or your phone stay unsigned.
@@ -43,3 +47,11 @@ If the installer stops on Windows or a Mac before Linux starts, it can now offer
 ## Voice calls and memos hear you better
 
 Voice calls and voice memos now recognise speech more accurately and ignore other people talking nearby once you enrol your voice.
+
+## Ask a question from the Chat search
+
+Start the Chat search box with an at sign and a question, then press Enter. An agent looks it up, answers in one line in the box and brings up the conversations that fit, without opening a chat of its own.
+
+## Fewer refused requests just after a restart
+
+If the app couldn't reach Cloudflare the moment it restarted, requests from outside were refused for a minute with a message about an Access token. It now tries again within seconds.
