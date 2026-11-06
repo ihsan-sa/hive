@@ -1393,6 +1393,18 @@ def load_stamp():
     except OSError: return False
     return was == boot_id()
 
+def nap(secs):
+    """Sleep up to secs, but wake as soon as the board grows: a new post is seen in 0.2 s, not after a whole poll."""
+    try: size = BOARD.stat().st_size
+    except OSError: size = 0
+    end = time.time() + secs
+    while time.time() < end:
+        time.sleep(0.2)
+        try:
+            if BOARD.stat().st_size != size: return
+        except OSError: pass
+
+
 def main():
     for d in (RUN, STATE, HOME / "sessions"): d.mkdir(exist_ok=True)
     # One starter per home: two would both read the board and start every agent twice. A second one waits here and takes over
@@ -1547,7 +1559,7 @@ def main():
             dreamer(c, st, alive, login)
         save("starter.json", st)
         backup(c, st)
-        time.sleep(c["poll_s"])
+        nap(c["poll_s"])
 
 if __name__ == "__main__":
     main()

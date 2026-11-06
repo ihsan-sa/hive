@@ -1171,7 +1171,7 @@ a.ref[data-kind=file][data-pv-on]{background:color-mix(in oklch,var(--accent) 16
 .cm-needs{display:grid;gap:var(--s5);margin-top:var(--s7)}
 .cm-needs-t{font-size:var(--fs-title);font-weight:var(--w-bold)}
 .cm-needs .lr-x{-webkit-line-clamp:2}
-.cm-stand{display:grid;gap:var(--s4)}.cm-stand>.cm-needs-t{font-size:var(--fs-title);font-weight:var(--w-bold);color:var(--ink)}
+.cm-stand{display:grid;gap:var(--s4)}.cm-stand-hd{display:flex;align-items:baseline;justify-content:space-between;gap:var(--s3);flex-wrap:wrap}.cm-stand-hd>.cm-needs-t{font-size:var(--fs-title);font-weight:var(--w-bold);color:var(--ink)}
 .cm-stand-brief{margin:0;color:var(--ink)}.cm-stand-at{font-size:var(--fs-meta);color:var(--ink-3);white-space:nowrap}
 .cm-stand-ch{display:inline-flex;flex:none;color:var(--ink-3)}.cm-stand-ch:not([data-open]) svg{transform:rotate(-90deg)}
 .cm-stand .lr-in[style]{padding-left:calc(8px + var(--s5))}   /* a thread under its top-level thing */

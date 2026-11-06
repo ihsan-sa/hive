@@ -355,7 +355,7 @@ function threadRows(c, ctx) {
   if (C.scope === "recent" && !simpleOn()) ds = ds.filter(d => pinned(d.name) || important(d.name) || archived(d.name) || d.last > t - (app() ? 7 : 1) * DAY || ran.has(d.name) || d.name === c.thread || (app() && threadState(d.name, seen).key === "asks"));
   if (C.imp) ds = ds.filter(d => important(d.name));
   ds.sort((a, b) => b.last - a.last);
-  const rowsOut = ds.map(d => {
+  const mk = d => {
     const lp = d.posts[d.posts.length - 1], live = ran.has(d.name);
     // The developer route keeps its one-line log row: 100+ threads have to fit.
     if (!app()) {
@@ -369,13 +369,20 @@ function threadRows(c, ctx) {
     return { key: d.name, href: threadHref(d.name), current: c.thread === d.name, title: threadTitle(d.name), meta: ago(d.last).replace(" ago", ""),
       lead: [tierLead(d.name), h("span", { title: status(st.key).label || "" }, statusDot(st.key === "done" ? "ended" : st.key, { live }))],
       text: [fadeTag(d.name) || stateTag(st), fadeTag(d.name) || stateTag(st) ? " · " : null, `${authorName(lp.from)}: ${say}`], sec: secOf(d.name, st), dim: faded(d.name) };
-  });
-  if (app()) for (const r of rowsOut) {
-    const th = r.key, im = important(th), pn = pinned(th), m = tmeta(th);
+  };
+  const dress = r => {
+    const th = r.key.replace(/~recent$/, ""), im = important(th), pn = pinned(th), m = tmeta(th);
     if (im) r.lead = [h("span", { class: "tm-imp", title: m.impWhy ? `Important, from ${m.impBy || "an agent"}: ${m.impWhy}` : m.impBy ? `Important, marked by ${m.impBy}` : "Important" }, icon("star")), r.lead];
     if (can("post")) r.acts = [
       h("button", { type: "button", class: "lr-act", "aria-pressed": String(im), "aria-label": im ? "Not important" : "Mark important", title: im ? "Take the important mark off" : "Mark important", onclick: () => setMeta(th, { important: !im }) }, icon("star")),
       h("button", { type: "button", class: "lr-act", "aria-pressed": String(pn), "aria-label": pn ? "Unpin" : "Pin to the top", title: pn ? "Unpin" : "Pin to the top", onclick: () => setMeta(th, { pin: !pn }) }, icon("pin"))];
+    return r;
+  };
+  const rowsOut = ds.map(mk);
+  if (app()) {
+    for (const r of rowsOut) dress(r);
+    // Important ones also stay in Recent: a second row built fresh, since a row's icons are DOM nodes and one node can sit in one place only.
+    if (!C.imp) for (const d of ds) if (secOf(d.name, null) === "imp") rowsOut.push(dress({ ...mk(d), key: d.name + "~recent", sec: "rest" }));
   }
   if (!app()) rowsOut.unshift({ key: "(everything)", href: href("comms", "~all"), title: "Everything", text: `${S.posts.length} posts, newest last`, current: c.all });
   return rowsOut;
@@ -388,7 +395,7 @@ function saveFold() { try { localStorage.setItem(FOLD_KEY, JSON.stringify([...FO
 const SECS = [["pin", "Pinned"], ["imp", "Important"], ["need", "Needs you"], ["rest", null]];
 function sections(rs, ctx, opts) {
   if (words(C.tq).length) return list(rs, opts);
-  const by = { pin: [], imp: [], need: [], rest: [], arch: [] }; for (const r of rs) { (by[r.sec || "rest"] || by.rest).push(r); if (r.sec === "imp" && !C.imp) by.rest.push({ ...r, key: r.key + "~recent" }); } // important ones also stay in Recent
+  const by = { pin: [], imp: [], need: [], rest: [], arch: [] }; for (const r of rs) { (by[r.sec || "rest"] || by.rest).push(r);  }
   const parts = SECS.filter(([k]) => by[k].length), heads = parts.length > 1 || by.pin.length;
   const sec = (k, label, rows) => {
     if (!heads) return h("div", { class: "tm-sec", "data-key": "sec:" + k, "data-sec": k }, list(rows, { ...opts, empty: "" }));
@@ -606,6 +613,7 @@ function needRow({ d, st }) {
 // "Where things stand": the answer to "what was done, what needs me" without asking in a new chat and losing the answer.
 // Read from agents' status bars (S.threadStatus) and the 30-minute file behind the Needs you page, whose brief is an agent's
 // hourly top-down view: the few top-level things, each opening onto its threads. No brief (an installed Hive), just the threads.
+// The agent only groups and words the top level: a status line written after it wins at once, here and in which group the thread sits.
 const BRIEF_FOR = 6 * HOUR, STAND_LIMIT = 4, TOP_LIMIT = { needs: 12, done: 4, going: 4 }, HOME_LIMIT = 5, STAND_EVERY = 5 * MIN, DONE_FOR = 2 * DAY, GOING_FOR = 3 * DAY, NEEDS_FOR = 7 * DAY;
 const STAND = { needs: null, at: 0, more: {}, open: {} };
 /** Run a re-render without the page moving: every scroller around the row (and the window) goes back to where it was. */
@@ -632,19 +640,31 @@ function standing(g) {
   const seenAbove = new Set([...g.asks, ...g.foryou, ...g.trouble, ...g.working].map(x => x.d.name)), used = new Set();
   const rows = { needs: [], done: [], going: [], projects: [] };
   const take = (group, th, text, t) => { if (used.has(th)) return; used.add(th); rows[group].push({ th, text, t }); };
-  const open = th => !seenAbove.has(th) && shownHere(th);
-  const st = S.threadStatus || {}, bars = Object.keys(st).map(th => ({ th, r: st[th], s: standLine(st[th].text), t: st[th].at * 1e3 })).sort((a, b) => b.t - a.t);
+  const st = S.threadStatus || {};
+  const drop = (STAND.needs && STAND.needs.brief && STAND.needs.brief.dropped) || {};   // an agent took it out of the summary as obsolete, until the thread says something newer
+  const open = th => !seenAbove.has(th) && shownHere(th) && !(drop[th] && drop[th] >= ((st[th] && st[th].at) || 0));
+  const bars = Object.keys(st).map(th => ({ th, r: st[th], s: standLine(st[th].text), t: st[th].at * 1e3 })).sort((a, b) => b.t - a.t);
   const b0 = STAND.needs && STAND.needs.brief, bt = b0 ? Date.parse(b0.at) : 0, brief = b0 && now() - bt < BRIEF_FOR ? b0 : null;
   const waits = ((STAND.needs && STAND.needs.waiting) || []).filter(w => !w.stale && w.thread && open(w.thread)).map(w => ({ th: w.thread, text: w.action, t: w.at ? Date.parse(w.at) : 0 }));
   for (const b of bars) if (b.s.word === "needs the person" && now() - b.t < NEEDS_FOR && open(b.th)) waits.push({ th: b.th, text: b.s.line, t: b.t });
   waits.sort((a, b) => b.t - a.t);
   const waiting = waits.filter(w => { const mine = lastMine(w.th); return !mine || mine.t < w.t; });   // once they've answered since, it's not waiting on them
   if (brief) {   // threads first, so a thread stays under its top-level thing; live state decides what's still in each
-    const stillWaits = new Set(waiting.map(w => w.th)), when = th => st[th] ? st[th].at * 1e3 : bt;
+    const when = th => st[th] ? st[th].at * 1e3 : bt, latest = new Map(); for (const w of waiting) if (!latest.has(w.th)) latest.set(w.th, w);   // newest first
+    // What a thread says since the brief, or null. A newer Done doesn't take it out of Needs you: a For you line still waits until they answer it.
+    const since = (group, th) => {
+      if (group === "needs") { const w = latest.get(th); return w && w.t > bt ? { text: w.text, t: w.t } : null; }
+      const s = st[th] && st[th].at * 1e3 > bt ? standLine(st[th].text) : null;
+      return s && { group: s.word === "done" ? "done" : s.word === "told to stop" || s.word === "needs the person" ? "" : "going", text: s.word === "done" ? s.line : s.full, t: st[th].at * 1e3 };
+    };
     for (const group of ["needs", "done", "going"]) for (const top of brief[group] || []) {
-      const kids = (top.items || []).filter(r => group === "needs" ? stillWaits.has(r.thread) : open(r.thread) && !used.has(r.thread));
+      const kids = (top.items || []).filter(r => {
+        if (group === "needs") return latest.has(r.thread);
+        const s = since(group, r.thread);   // moved to another group: the bars below place it there
+        return open(r.thread) && !used.has(r.thread) && (!s || s.group === group);
+      });
       if (!kids.length) continue;
-      rows[group].push({ top: group + ":" + top.title, title: top.title, text: top.text, t: bt, kids: kids.map(r => { used.add(r.thread); return { th: r.thread, text: r.text, t: when(r.thread) }; }) });
+      rows[group].push({ top: group + ":" + top.title, title: top.title, text: top.text, t: bt, kids: kids.map(r => { used.add(r.thread); const s = since(group, r.thread); return { th: r.thread, text: s ? s.text : r.text, t: s ? s.t : when(r.thread), fresh: !!s }; }) });
     }
     if (brief.headline) { rows.headline = brief.headline; rows.at = bt; }
   }
@@ -656,7 +676,7 @@ function standing(g) {
   }
   if (brief) for (const [group, title] of [["needs", "New since this summary"], ["done", "Also done"], ["going", "Also going"]]) {   // nothing that isn't in the brief vanishes; it just doesn't take over the view
     const loose = rows[group].filter(r => !r.kids);
-    if (loose.length > 1) rows[group] = [...rows[group].filter(r => r.kids), { top: group + ":" + title, title, text: plural(loose.length, "thread") + " not in the summary.", t: Math.max(...loose.map(r => r.t)), kids: loose }];
+    if (loose.length > 1) { const last = loose.reduce((a, b) => b.t > a.t ? b : a); rows[group] = [...rows[group].filter(r => r.kids), { top: group + ":" + title, title, text: plural(loose.length, "thread") + " not in the summary. Latest: " + last.text, t: last.t, kids: loose }]; }
   }
   rows.projects = ((STAND.needs && STAND.needs.states) || []).filter(s => s.state).map(s => ({ th: s.thread, name: s.name, key: s.key, text: s.state, t: s.at ? Date.parse(s.at) : 0 }));
   return rows;
@@ -677,9 +697,9 @@ function standRow(r, more) {
 // A top-level thing opens onto its threads; with only one, the row just goes there.
 function standRows(r, ctx) {
   if (!r.kids) return [standRow(r)];
-  if (r.kids.length === 1) return [standRow({ ...r, key: r.top, th: r.kids[0].th }, { whole: true, meta: r.kids[0].t ? ago(r.kids[0].t) : null })];
-  const open = !!STAND.open[r.top];
-  return [standRow({ ...r, key: r.top }, { href: null, meta: plural(r.kids.length, "thread"), whole: true, expanded: open, lead: h("span", { class: "cm-stand-ch", "data-open": open ? "" : null }, icon("chevron-down")), onClick: (e, n) => holdScroll(n, () => { STAND.open[r.top] = !open; ctx.update(); }) }),
+  if (r.kids.length === 1) return [standRow({ ...r, key: r.top, th: r.kids[0].th, text: r.kids[0].fresh ? r.kids[0].text : r.text }, { whole: true, meta: r.kids[0].t ? ago(r.kids[0].t) : null })];
+  const open = !!STAND.open[r.top], fresh = r.kids.filter(k => k.fresh).length;
+  return [standRow({ ...r, key: r.top }, { href: null, meta: plural(r.kids.length, "thread") + (fresh ? `, ${fresh} updated` : ""), whole: true, expanded: open, lead: h("span", { class: "cm-stand-ch", "data-open": open ? "" : null }, icon("chevron-down")), onClick: (e, n) => holdScroll(n, () => { STAND.open[r.top] = !open; ctx.update(); }) }),
     ...(open ? r.kids.map(k => standRow({ ...k, key: r.top + "/" + k.th }, { depth: 1 })) : [])];
 }
 function standSec(id, title, rows, ctx) {
@@ -692,8 +712,9 @@ function standSec(id, title, rows, ctx) {
 function standingPart(r, ctx) {
   if (!r.needs.length && !r.done.length && !r.going.length && !r.projects.length) return null;
   return h("div", { class: "cm-stand", "data-key": "stand" },
-    h("h2", { class: "cm-needs-t" }, "Where things stand"),
-    r.headline ? h("p", { class: "cm-stand-brief" }, mdPlain(r.headline), " ", h("span", { class: "cm-stand-at" }, ago(r.at))) : null,
+    h("div", { class: "cm-stand-hd" }, h("h2", { class: "cm-needs-t" }, "Where things stand"),
+      r.at ? h("span", { class: "cm-stand-at", title: "When the headline and group wording were last written. The lists and agents' status lines under them are live." }, "Summary updated " + ago(r.at)) : null),
+    r.headline ? h("p", { class: "cm-stand-brief" }, mdPlain(r.headline)) : null,
     standSec("needs", "Needs you", r.needs, ctx),
     standSec("done", "Done lately", r.done, ctx),
     standSec("going", "Still going", r.going, ctx),
