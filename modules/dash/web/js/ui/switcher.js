@@ -51,7 +51,7 @@ export function openSwitcher() {
   box.addEventListener("input", () => { sel = 0; draw(); });
   box.addEventListener("keydown", e => {
     if (e.key === "ArrowDown" || e.key === "ArrowUp") { e.preventDefault(); sel = (sel + (e.key === "ArrowDown" ? 1 : -1) + shown.length) % (shown.length || 1); draw(); list.children[sel]?.scrollIntoView({ block: "nearest" }); }
-    else if (e.key === "Enter") { e.preventDefault(); go(shown[sel]); }
+    else if (e.key === "Enter") { e.preventDefault(); if (shown[sel]) go(shown[sel]); }
   });
   draw(); box.focus();
 }
@@ -59,7 +59,7 @@ export function openSwitcher() {
 export function openShortcuts() {
   const rows = [
     [MOD + "K", WHAT()], ["?", "This list"], [FEEDBACK_KEY, "Send feedback"],
-    ["F", "Full screen"], ["Tab, ↑", "Complete an @name in the box; ↑ edits your last message"],
+    ["F", "Full screen"], simpleOn() ? ["↑", "Edit your last message, from the empty box"] : ["Tab, ↑", "Complete an @name in the box; ↑ edits your last message"],
     [MOD + "B / I / E / K", "In the message box: bold, italic, code, link"], ["Esc", "Close what is open"],
   ];
   const dlg = dialog("Keyboard shortcuts", h("h2", null, "Keyboard shortcuts"),

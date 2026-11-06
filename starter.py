@@ -1192,6 +1192,9 @@ def start(c, name, posts, login, resume=None, reaped=None, extra=(), moved=False
     kind = "warden" if is_warden(name) else "agent"
     orient, trial = trial_orientation(name, (CORE / "orientation.md").read_text()) if kind != "warden" else ((CORE / "orientation.md").read_text(), None)
     system = orient + ("\n\n" + (CORE / "warden.md").read_text() if kind == "warden" else "")
+    try: mine = (HOME / "user-instructions.md").read_text().strip()  # the person's own CLAUDE.md, copied at setup on their tick
+    except OSError: mine = ""
+    if mine and kind != "warden": system += "\n\n# The person's own instructions (from their CLAUDE.md)\n" + mine
     if (sb := box()): system += sb.NOTE + ("\n" + (CORE / "warden-step.md").read_text() if kind == "warden" else "")
     prompt = (f"You are @{name}. You were woken by board post {', '.join(p['id'] for p in posts)} "
               f"(thread {first.get('thread', first['id'])}, from {first.get('from')}). "

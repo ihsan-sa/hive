@@ -445,7 +445,7 @@ export function localMessage(it, { retry, edit, discard }) {
       ? h("span", { class: "msg-thumb" }, h("img", { src: f.url, alt: f.name }), h("span", null, f.name))
       : h("span", { class: "msg-file" }, h("b", null, badgeOf(f.name)), h("span", null, h("span", { class: "msg-fn" }, f.name), h("span", { class: "meta" }, fsize(f.size)))))) : null,
     h("div", { class: "msg-rc", role: failed ? "alert" : "status" },
-      failed ? [h("span", { "data-tone": "bad" }, h("b", { "aria-hidden": "true" }, "!"), `Not sent: ${it.err}.`),
+      failed ? [h("span", { "data-tone": "bad" }, h("b", { "aria-hidden": "true" }, "!"), `Not sent: ${String(it.err || "the Hive gave no reason").replace(/\.+$/, "")}.`),
         button("Retry", () => retry(it), { size: "s" }), button("Edit", () => edit(it), { size: "s", kind: "quiet" }), button("Discard", () => discard(it), { size: "s", kind: "quiet" })]
         : h("span", { "data-tone": "quiet" }, statusDot("sending"), it.state === "sent" ? "Sent" : it.files.length && it.uploading ? "Uploading…" : "Sending…")));
 }

@@ -566,7 +566,7 @@ function overviewPane(D) {
       fig("Threads with work", String(D.withWork), M.more.length ? `+${M.more.length} with posts only` : null),
       fig("Spent", money(D.C.total), D.replay ? asOf(D) : money(spendSince(now() - HOUR)) + " an hour now"),
       fig("Posts", String(D.posts.length), `${hour} in the last hour`)),
-    empty ? sec("Last to end", lastEnded(D, 3).map(s => row(s.name, statusDot(agentStatus(s.name).key), h("div", { class: "map-rt" }, h("div", null, idLink(s.name), " on ", thLink(s.thread)), h("small", null, agentStatus(s.name).label)), h("span", { class: "r" }, clock(s.end)))))
+    empty && lastEnded(D, 1).length ? sec("Last to end", lastEnded(D, 3).map(s => row(s.name, statusDot(agentStatus(s.name).key), h("div", { class: "map-rt" }, h("div", null, idLink(s.name), " on ", thLink(s.thread)), h("small", null, agentStatus(s.name).label)), h("span", { class: "r" }, clock(s.end)))))
       : look.length ? sec("Needs a look", lookRows(look)) : null,
     h("button", { type: "button", class: "btn map-more-btn", "data-size": "s", "aria-expanded": String(M.showMore), onclick: () => { M.showMore = !M.showMore; M.update(); } }, M.showMore ? "Hide spend, hand-offs and links" : "Spend, hand-offs and links"),
     top.length ? sec("Where the money went", [...top.map(l => h("div", { class: "map-bar", "data-key": l.th }, thLink(l.th), h("em", null, h("i", { style: `width:${(l.cost / maxC * 100).toFixed(1)}%` })), h("span", null, money(l.cost)))),

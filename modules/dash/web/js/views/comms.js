@@ -171,7 +171,7 @@ function paint(box, ctx) {
     ...(q ? [h("div", { class: "cm-qbar", role: "status" }, h("span", null, `Showing ${plural(L.all.length, "match", "matches")} for “${short(q, 40)}”`),
       button("Clear search", () => { C.q = ""; C.find = false; ctx.update(); }, { size: "s", kind: "quiet", icon: "close" }))] : []),
     ...(older ? [h("div", { class: "cm-older" }, button(`Show older (${older} more)`, () => { C.limit += STEP; L.rebuild = true; L.keep = true; ctx.update(); }, { size: "s" }))] : []),
-    ...(shown.length ? rows(shown) : [empty(C.q ? "No messages match." : L.src.length ? "Nothing here with what Show has on. Turn on Agents to see all the messages." : "No messages yet.")]),
+    ...(shown.length ? rows(shown) : [empty(C.q ? "No messages match." : L.src.length && !simpleOn() ? "Nothing here with what Show has on. Turn on Agent comms to see all the messages." : "No messages yet.")]),
     L.out, L.jump);
 }
 function setJump() {
@@ -447,7 +447,7 @@ function syncThreads(c, ctx) {
   if (tl === L.tl && sig === L.tlSig) return;
   const fresh = tl !== L.tl || c.arg !== L.tlConv;
   L.tl = tl; L.tlSig = sig; L.tlConv = c.arg;
-  const tree = sections(threadRows(c, ctx), ctx, { dense: true, empty: simpleOn() ? "No conversations yet. Start one with New conversation." : S.threads.size ? "Nothing here with what Show has on. Turn on Agents to see all of them." : app() ? "No conversations yet. Start one with New." : "No threads." });
+  const tree = sections(threadRows(c, ctx), ctx, { dense: true, empty: simpleOn() ? "No conversations yet. Start one with New conversation." : S.threads.size ? "Nothing here with what Show has on. Turn on Agent comms to see all of them." : app() ? "No conversations yet. Start one with New." : "No threads." });
   if (tl.firstChild) morph(tl.firstChild, tree); else tl.append(tree);
   if (fresh) { const cur = tl.querySelector("[aria-current]"); if (cur) { const r = cur.getBoundingClientRect(), b = tl.getBoundingClientRect(); if (r.top < b.top || r.bottom > b.bottom) tl.scrollTop += r.top - b.top - 40; } }
 }
@@ -505,7 +505,7 @@ function strip(th) {
   for (const a of run) {
     if (st.key === "asks" && a.name === st.who) continue;
     const s = agentState(a);
-    if (simpleOn()) { if (!out.some(x => x.dataset.key === "run")) out.push(line("working", "Your Hive is working on it.", can("stop") ? stopButton(`Stop ${a.name}`, () => askStop(a.name)) : null, { key: "run", live: true })); continue; }
+    if (simpleOn()) { if (!out.some(x => x.dataset.key === "run")) out.push(line("working", "Your Hive is working on it.", can("stop") ? stopButton("Stop this work", () => askStop(a.name)) : null, { key: "run", live: true })); continue; }
     // Closed it reads "a7c31 Editing fetch.py"; how long ago it was active shows only when open.
     const doing = a.doing ? a.doing.charAt(0).toUpperCase() + a.doing.slice(1) : AGENT_WORDS[s.key] || s.text;
     out.push(line(s.key, [who(a.name), " ", doing, h("span", { class: "meta cm-line-m" }, " · " + (s.key === "working" ? ago(a.last * 1e3) : s.text))],
@@ -554,10 +554,10 @@ function titleMenu(c, n, d, off, ctx) {
     mine ? act("Rename", "edit", () => renameDialog(th), "Give it a name of your own. Only the dash shows it.") : null,
     mine ? act(arch ? "Unarchive" : "Archive", "archive", () => { tryMeta(th, { archived: !arch }, ctx); if (!arch) go("comms"); }, arch ? "Back in the list" : "Out of the list until something new is for you") : null,
     mine ? act(fd ? "Needed again" : "Not needed", "check", () => tryMeta(th, { faded: !fd }, ctx), fd ? fadeWhy(th) : "Grey it in the list: still there to open and write in, and back by itself when something new is for you") : null) : [];
-  const prio = th && can("tier") ? button([h("span", { class: "ref-sw", "data-tone": t.tone }), "Priority", h("small", null, t.label)], () => { C.menu = null; askTier(th); }, { size: "s", kind: "quiet", title: "Where this sits in the hive's priority list" })
+  const prio = th && simpleOn() ? null : th && can("tier") ? button([h("span", { class: "ref-sw", "data-tone": t.tone }), "Priority", h("small", null, t.label)], () => { C.menu = null; askTier(th); }, { size: "s", kind: "quiet", title: "Where this sits in the hive's priority list" })
     : th ? h("p", { class: "meta cm-tier", title: "This thread's priority" }, h("span", { class: "ref-sw", "data-tone": t.tone }), "Priority: " + t.label) : null;
   const where = part(
-    off > 0 && !simpleOn() ? act(`Show ${off} hidden`, "filter", () => setShow(SHOW.ALL, ctx), "Turn on For you, Updates and Agents") : null,
+    off > 0 && !simpleOn() ? act(`Show ${off} hidden`, "filter", () => setShow(SHOW.ALL, ctx), "Turn on For you, Updates and Agent comms") : null,
     link("All messages", "chat", href("comms", "~all")),
     full ? link("On the timeline", "clock", href("timeline")) : null,
     prio);
@@ -825,7 +825,7 @@ function homePane(ctx) {
 // Over the whole page, not in the list: it sets what you see of the hive's talk, both in a conversation and in which ones are listed. Each one turns on and off by itself.
 const SHOW_PARTS = [[SHOW.you, "For you", "your messages, what agents ask or tell you, and each job's result"],
   [SHOW.updates, "Updates", "agents' progress updates"],
-  [SHOW.comms, "Agents", "agent comms: agents talking to each other and the hive's own notices"]];
+  [SHOW.comms, "Agent comms", "agent comms: agents talking to each other and the hive's own notices"]];
 function showSays(mask) {
   if (words(C.tq).length || words(C.q).length) return "Search looks through everything, whatever is on here.";
   if (!mask) return "Nothing is on, so no messages show. Turn one on.";

@@ -145,8 +145,9 @@ export default {
     if (S.app.app) {
       const fy = forYouRows(t), stuckN = count("stuck"), sign = signInWords(), stopped = !!L.limit_until && !(S.app.setup && S.app.setup.other);
       const state = stopped || sign ? { tone: "bad", text: "Stopped" } : fy.length || stuckN ? { tone: "info", text: "Needs you" } : { tone: "good", text: "All fine" };
-      const one = threads === 1 ? threadTitle(run[0].thread) : `${nWord(threads).toLowerCase()} conversations`;
-      const title = run.length ? `${nWord(run.length)} ${run.length === 1 ? "agent is" : "agents are"} working on ${one}.` : "No agents are working right now.";
+      const up = run.filter(a => a.alive), upThreads = new Set(up.map(a => a.thread)).size;   // a gone process isn't working: the same count as the top bar's
+      const one = upThreads === 1 ? threadTitle(up[0].thread) : `${nWord(upThreads).toLowerCase()} conversations`;
+      const title = up.length ? `${nWord(up.length)} ${up.length === 1 ? "agent is" : "agents are"} working on ${one}.` : "No agents are working right now.";
       const waitN = run.filter(a => waits.has(a.thread)).length;
       const lead = sign ? sign : stopped ? `New agents wait for the usage limit until ${clock(L.limit_until * 1e3)}.`
         : waitN ? `${nWord(waitN)} ${waitN === 1 ? "agent is" : "agents are"} waiting for your answer.`

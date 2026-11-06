@@ -345,7 +345,8 @@ function lineageLayout(data, opt) {
   // column heads: what each generation column means (the layout's title says it only on hover)
   const GEN = ['Started by you', 'Started by an agent', 'Started by those'];
   const heads = [];
-  if (!tile) for (let bi = 0; bi < B; bi++) for (let g = 0; g <= maxG; g++) heads.push({ x: Math.round(colX(g, bi)), y: Math.max(12, pad - 8), text: GEN[g] || 'Generation ' + (g + 1) });
+  const colUsed = new Set([...slots.values()].map(p => p.x));   // a column nobody is in gets no heading
+  if (!tile) for (let bi = 0; bi < B; bi++) for (let g = 0; g <= maxG; g++) if (colUsed.has(colX(g, bi))) heads.push({ x: Math.round(colX(g, bi)), y: Math.max(12, pad - 8), text: GEN[g] || 'Generation ' + (g + 1) });
   const height = Math.max(yEnd + pad, 360);
   return { mode: 'lineage', tile, heads, density: compact ? 'compact' : 'normal', D, cols: 2, colW: width - 2 * pad, cardW, width, height, bands: [], rings: [], clusters, nodes, spokes, handoffs,
            older: { x: pad, y: height, chips: [] }, olderCount: 0, byAgent, byThread, threadById: new Map(data.threads.map(t => [t.id, t])), pos };

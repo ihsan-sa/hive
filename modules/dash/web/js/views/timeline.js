@@ -221,7 +221,7 @@ const NOTE = "A row is a thread, a bar is an agent's session, a tick is a post. 
 const say = t => (S.app.app ? t.replace(/\bthread\b/g, "conversation").replace(/\bpost\b/g, "message") : t);
 const note = () => [say(NOTE), h("div", { class: "legend" },
   h("span", null, h("i", { class: "tl-sw" }), "running"), h("span", null, h("i", { class: "tl-sw", "data-ended": "" }), "ended"), h("span", { "data-tone": "bad" }, h("i", { class: "tl-sw", "data-tone": "bad" }), "failed"),
-  ["working", "queue", "quiet", "stuck"].map(k => h("span", { style: "display:inline-flex;align-items:center;gap:5px" }, statusDot(k), status(k).label)))];
+  ["working", "queue", "quiet", "stuck"].map(k => h("span", { class: "tl-lg" }, statusDot(k), status(k).label)))];
 
 /** For a display page's tile: who's running first, in whole rows, then ended work if there's room. Its settings are saved apart from the Timeline tab's. */
 export function fitRunning() { T.fitRows = true; T.ver = -1; }

@@ -85,9 +85,9 @@
 .kb-map{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,256px),1fr));gap:var(--s3)}
 .kb-topic{display:grid;align-content:start;gap:var(--s1);padding:var(--s3) var(--s2) var(--s2);border:1px solid var(--line);border-radius:var(--r-l);background:var(--surface);min-width:0;transition:border-color .15s}
 .kb-topic:hover{border-color:var(--line-2)}
-.kb-topic-h{display:flex;align-items:baseline;justify-content:space-between;gap:var(--s2);padding:0 var(--s2) var(--s1);font-size:var(--fs-body);font-weight:var(--w-bold);min-width:0}
-.kb-topic-h>:first-child{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.kb-topic-h a{display:inline-flex;align-items:center;min-height:var(--ctl);color:var(--ink);text-decoration:none}
+.kb-topic-h{display:flex;align-items:center;justify-content:space-between;gap:var(--s2);padding:0 var(--s2) var(--s1);font-size:var(--fs-body);font-weight:var(--w-bold);min-width:0}
+.kb-topic-h>:first-child{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;line-height:var(--ctl)}
+.kb-topic-h a{color:var(--ink);text-decoration:none}
 .kb-topic-h a:hover{color:var(--accent-ink)}
 .kb-topic-h .meta{flex:none;font-size:var(--fs-meta);font-weight:400;color:var(--ink-3);font-variant-numeric:tabular-nums}
 .kb-notes{list-style:none;display:grid}

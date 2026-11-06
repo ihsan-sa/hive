@@ -130,7 +130,7 @@ async function deliver(it) {
     if (!it.th && res.thread) { it.th = res.thread; go("comms", res.thread); loadApp(); }
     else if (res.thread && res.thread !== it.th) { it.th = res.thread; it.aside = true; openAside(thr, res.thread, it.text.replace(/^\s*\/btw\s*/i, "")); loadApp(); }   // /btw: it lives in the side thread; stay here
     poll();
-  } catch (e) { it.state = "failed"; it.err = simpleOn() && !/sign in/.test(e.message) ? "This didn't send. Check your connection, then try again." : e.message; it.uploading = false; }
+  } catch (e) { it.state = "failed"; it.err = simpleOn() && !/sign in/.test(e.message) ? "Check your connection, then try again." : e.message; it.uploading = false; }
   refresh();
 }
 function queue(th, d, r) {

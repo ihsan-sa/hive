@@ -125,6 +125,7 @@ function band(current) {
   if (st.why === "off" && current === "start" && S.app.setup && S.app.setup.starter === false) return null;   // Start says this itself, with the button that fixes it
   if (simpleOn()) return h("div", { class: "band", role: "status", "data-tone": "bad", "data-key": "band" }, statusDot(st.why === "off" ? "failed" : "limited"),
     h("span", null, st.why === "off" ? "Your Hive isn't running right now, so it won't answer yet." : "Your Hive has used up its allowance for now and is taking a break." + (st.until ? ` It comes back ${stamp(st.until)}. Nothing is lost.` : " Nothing is lost.")));
+  if (st.why !== "off" && current === "usage") return null;   // Usage opens with this same answer: no second line saying it
   const text = st.why === "off" ? "The Hive isn't running, so nothing you send starts an agent."
     : st.why === "paused" ? "Every Claude account is paused, so no new agents start. Running ones finish their turn."
     : "The Hive has stopped starting agents: every Claude account is past its usage line. Running ones finish their turn." + (st.until ? ` It starts again ${stamp(st.until)}.` : "");

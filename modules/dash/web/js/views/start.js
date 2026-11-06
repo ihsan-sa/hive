@@ -36,17 +36,25 @@ function walkthrough(ctx, s) {
   const signIn = api => { F.chose = api ? "api" : "claude"; startSignin("start", null, api, up); };
   const logins = s.logins || [], sb = pg.sandbox_check && pg.sandbox_check.state, sbOk = pg.settings.sandbox === "on" && sb === "works";
   const share = pg.settings.share || {}, sharing = [share.failures ? "failure reports and a daily check-in" : null, share.usage ? "usage reports" : null].filter(Boolean);
+  // Their own CLAUDE.md: offered, never copied without the tick. MCP servers are listed only.
+  const im = pg.import, importCard = !im || !(im.claude_md.found || im.mcp.length) ? null : card("import", "Bring your own instructions",
+    im.claude_md.found ? [p("You have a CLAUDE.md of your own. Tick to copy it into the instructions every agent in this Hive gets. Nothing is copied until you tick."),
+      h("pre", { class: "wt-pre" }, im.claude_md.preview + (im.claude_md.chars > 400 ? "…" : "")),
+      h("label", { class: "frow" }, h("input", { type: "checkbox", "data-key": "import-claude-md", checked: im.claude_md.copied,
+        onchange: (e, n) => act("import", n.checked ? "Copying your CLAUDE.md" : "Removing the copy", async () => { pg.import = (await post("/api/import", { claude_md: n.checked })); }, up, n.checked ? "Copied your CLAUDE.md" : "Removed the copy") }), " Copy my CLAUDE.md")] : null,
+    im.mcp.length ? p("Your MCP servers (" + im.mcp.join(", ") + ") stay with your own Claude Code. Agents here don't use them yet.") : null);
   return page(
     card("account", "Add an account", p(simpleOn() ? "Your Hive works through your Claude account. Sign in to it here." : "Sign in with your Claude plan (or a ChatGPT plan, below). Agents run on it and use its limits."),
       rootNote(),
       h("div", { class: "signin", "data-key": "claude" },
         h("div", { class: "frow fsplit" }, h("b", null, "Claude"), s.claude === false ? statusLabel("ended", "not installed") : statusLabel(s.signed_in ? "working" : "ended", s.signed_in ? "signed in" : "not signed in"),
-          s.claude !== false && !s.signed_in && can("logins") ? h("span", { style: "margin-left:auto" }, button("Sign in to Claude Code", () => signIn(false), { size: "s", kind: "primary", busy: signingIn() })) : null),
+          s.claude !== false && !s.signed_in && can("logins") ? h("span", { class: "fsplit-end" }, button("Sign in to Claude Code", () => signIn(false), { size: "s", kind: "primary", busy: signingIn() })) : null),
         s.claude === false ? p("To use it, in a terminal as this account: ", h("code", null, "curl -fsSL https://claude.ai/install.sh | bash"), " Then restart this app.") : null,
         logins.length > 1 ? h("p", { class: "field-h" }, logins.filter(l => l.signed_in).length + " of " + logins.length + " logins signed in.") : null,
         s.claude !== false && !s.signed_in && can("logins") ? terminalRoute(logins) : null,
         signinBox("start", up)),
       pg.accounts && pg.accounts.codex ? [h("p", { class: "field-h" }, "Or sign in with a ChatGPT plan, through Codex."), codexPart(up)] : null),
+    importCard,
     // A sandbox that doesn't work stops agents from starting, so that one is said in full here. When it works, it's a line.
     sbOk ? null : card("sandbox-step", "The sandbox on this machine", sandboxPart(up)),
     h("p", { class: "field-h", "data-key": "defaults" },

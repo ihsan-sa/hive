@@ -1100,6 +1100,62 @@ def agent_feed(name, limit=70):
 
 
 
+def _blocks(c):
+    """A message's content as a list of blocks: a bare string is one text block."""
+    return [{"type": "text", "text": c}] if isinstance(c, str) else [b for b in c or [] if isinstance(b, dict)]
+
+
+def _part_text(b):
+    c = b.get("content") if b.get("type") == "tool_result" else b.get("text") or b.get("thinking") or b.get("input") or ""
+    if isinstance(c, list): c = " ".join(str(x.get("text", "")) for x in c if isinstance(x, dict))
+    return c if isinstance(c, str) else json.dumps(c, default=str)
+
+
+def agent_input(name, full=True, limit=40):
+    """What went into each model call of an agent's newest session: the call's exact input tokens (fresh, cache write, cache read)
+    from the log, and the content that arrived since the previous call, by source, sized by an estimate (4 characters a token).
+    What was already there is 'carried'; on the first call it is the system prompt, tool list, memory and first message, which the log doesn't keep."""
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,40}", name or ""): return {"turns": []}
+    try: q = sorted((HOME / "sessions").glob(name + "-*.jsonl"), key=lambda x: x.stat().st_mtime)[-1]
+    except (OSError, IndexError): return {"turns": []}
+    names, turns, pend, seen = {}, [], [], None
+    def add(src, label, b):
+        x = _part_text(b)
+        pend.append({"src": src, "label": label, "n": max(1, len(x) // 4), "x": redact(short(x, 500)) if full else ""})
+    for e in jlines(q, 3 * 1024 * 1024):
+        k, m = e.get("type"), e.get("message") or {}
+        if k == "assistant":
+            u = m.get("usage")
+            if u and m.get("id") != seen:
+                seen = m.get("id")
+                fresh, cw, cr = u.get("input_tokens") or 0, u.get("cache_creation_input_tokens") or 0, u.get("cache_read_input_tokens") or 0
+                parts = []
+                for r in pend:  # same source and label merge into one row
+                    o = next((y for y in parts if y["src"] == r["src"] and y["label"] == r["label"]), None)
+                    if o: o["n"] += r["n"]; o["items"].append(r["x"])
+                    else: parts.append({**r, "items": [r["x"]]})
+                for r in parts: r.pop("x", None)
+                turns.append({"t": ts(e.get("timestamp")), "fresh": fresh, "cw": cw, "cr": cr, "out": u.get("output_tokens") or 0, "parts": parts})
+                pend = []
+            for b in _blocks(m.get("content")):
+                t = b.get("type")
+                if t == "tool_use":
+                    names[b.get("id")] = b.get("name"); add("self", "its tool calls", {"input": json.dumps(b.get("input"), default=str)})
+                elif t == "text": add("self", "its own words", b)
+                elif t == "thinking": add("self", "its thinking", b)
+        elif k == "user":
+            for b in _blocks(m.get("content")):
+                if b.get("type") == "tool_result": add("tool", names.get(b.get("tool_use_id")) or "tool", b)
+                elif b.get("type") == "text":
+                    x = b.get("text") or ""
+                    add("hive", "system reminder" if "<system-reminder>" in x[:200] else "message to it", b)
+    turns = turns[-limit:]
+    for i, r in enumerate(turns):
+        r["total"] = r["fresh"] + r["cw"] + r["cr"]
+        r["carried"] = max(0, r["total"] - sum(y["n"] for y in r["parts"]))
+    return {"turns": turns, "file": q.name}
+
+
 _work = {}  # session log path -> {"off", "files": {path: [n, last, kind]}, "commits": [...], "prs": [...]}: read on from where it stopped
 WORK_BUCKET = 300  # tokens over time, in 5-minute steps: [start, input, output, cache read, cache write, model calls]
 EDIT_TOOLS = {"Edit": "edit", "MultiEdit": "edit", "Write": "write", "NotebookEdit": "edit"}
@@ -1661,16 +1717,16 @@ WEB = STATE / "web.json"
 INSTALLED = HOME / ".hive-installed"
 FORWARDED = ("cf-ray", "cf-connecting-ip", "cf-access-jwt-assertion", "cf-ipcountry", "cf-visitor", "cdn-loop", "x-forwarded-for",
              "x-forwarded-host", "x-forwarded-proto", "x-real-ip", "forwarded", "via", "true-client-ip")
-GET_CAP = {"/api/call-chat": "post", "/api/live": "read", "/api/away": "read", "/api/board": "read", "/api/log": "read", "/api/usage": "read", "/api/jobs": "read", "/api/agent": "read", "/api/agent-work": "read", "/api/agent-diff": "read", "/api/ledger": "read",
+GET_CAP = {"/api/call-chat": "post", "/api/live": "read", "/api/away": "read", "/api/board": "read", "/api/log": "read", "/api/usage": "read", "/api/jobs": "read", "/api/agent": "read", "/api/agent-work": "read", "/api/agent-input": "read", "/api/agent-diff": "read", "/api/ledger": "read",
            "/api/projects": "read", "/api/agent-costs": "read", "/api/thread-names": "read", "/api/thread-meta": "read", "/api/shown": "read", "/api/thread-status": "read", "/api/thread-find": "read", "/json": "read", "/api/target": "read", "/api/inbox": "read", "/api/delivered": "read",
            "/api/config": "config", "/api/modules": "modules", "/api/signin": "logins", "/api/plans": "plans", "/api/secrets": "secrets",
            "/api/settings": "config", "/api/ntfy": "config", "/api/webpush": "config", "/api/update": "config", "/api/signin-codex": "logins", "/api/accounts": "logins", "/api/design": "logins", "/api/brand/logo": "read",
            "/api/kb/home": "files", "/api/kb/open": "files", "/api/kb/search": "files", "/api/kb/raw": "files", "/api/kb/map": "files", "/api/kb/history": "files", "/api/progress": "read", "/api/checklist": "read", "/api/share-preview": "read", "/api/approvals": "read", "/api/feedback-drafts": "read", "/api/mail": "files"}
 POST_CAP = {"/api/webpush": "config", "/api/share-build": "read", "/api/kill": "stop", "/api/approval": "stop", "/api/tier": "tier", "/api/agent-model": "post", "/api/login-pause": "limits", "/api/login-limit": "limits", "/api/provider-limit": "limits",
-            "/api/post": "post", "/api/side-ask": "post", "/api/thread-meta": "post", "/api/shown": "post", "/api/checklist": "post", "/api/feedback": "post", "/api/feedback-draft-done": "post", "/api/issue-link": "post", "/api/update": "config", "/api/share-copy": "config", "/api/draft": "config", "/api/upload": "post", "/api/inbox-read": "post", "/api/ntfy": "config", "/api/config": "config", "/api/starter": "config",
+            "/api/post": "post", "/api/side-ask": "post", "/api/thread-meta": "post", "/api/shown": "post", "/api/checklist": "post", "/api/feedback": "post", "/api/feedback-draft-done": "post", "/api/issue-link": "post", "/api/update": "config", "/api/share-copy": "config", "/api/draft": "config", "/api/import": "config", "/api/upload": "post", "/api/inbox-read": "post", "/api/ntfy": "config", "/api/config": "config", "/api/starter": "config",
             "/api/module": "modules", "/api/signin": "logins", "/api/signin/code": "logins", "/api/signin/cancel": "logins", "/api/plan": "plans", "/api/secret": "secrets",
             "/api/signin-codex": "logins", "/api/account-key": "logins", "/api/design": "logins", "/api/brand": "config", "/api/brand/logo": "config"}
-LOCAL_ONLY = {"/api/access", "/api/settings", "/api/share-copy", "/api/draft"}  # who may do what is never changed from outside, whatever outside.can says
+LOCAL_ONLY = {"/api/access", "/api/settings", "/api/import", "/api/share-copy", "/api/draft"}  # who may do what is never changed from outside, whatever outside.can says
 
 
 
@@ -3599,6 +3655,36 @@ def set_settings(d):
     return settings_page()
 
 
+# ---------- the person's own CLAUDE.md and MCP servers: shown at setup, copied only on a tick ----------
+USER_INSTR = HOME / "user-instructions.md"  # the starter adds its text to every agent's instructions
+def _person_home():
+    try: return Path((HOME / ".hive-account").read_text().strip())  # --this-account installs: the Hive's home is a folder, the person's is this
+    except (OSError, ValueError): return HOME
+
+
+def import_view():
+    """What the person has that agents don't: their ~/.claude/CLAUDE.md (offered) and the names of their MCP servers (shown; copying them isn't built)."""
+    ph = _person_home()
+    try: txt = (ph / ".claude" / "CLAUDE.md").read_text(errors="replace")
+    except OSError: txt = ""
+    try: mcp = sorted((json.loads((ph / ".claude.json").read_text()).get("mcpServers") or {}))
+    except (OSError, ValueError, AttributeError): mcp = []
+    return {"claude_md": {"found": bool(txt.strip()), "chars": len(txt), "preview": txt.strip()[:400], "copied": USER_INSTR.is_file()}, "mcp": mcp}
+
+
+def do_import(d):
+    """POST /api/import {"claude_md": true}: copies the person's CLAUDE.md into the Hive's agents' instructions. {"claude_md": false} removes the copy. Nothing without that key."""
+    if type(d.get("claude_md")) is not bool: raise ValueError("claude_md is true or false")
+    if d["claude_md"]:
+        try: txt = (_person_home() / ".claude" / "CLAUDE.md").read_text(errors="replace")
+        except OSError: raise ValueError("there's no CLAUDE.md to copy")
+        if not txt.strip(): raise ValueError("there's no CLAUDE.md to copy")
+        write_text_private(USER_INSTR, txt)
+    else:
+        USER_INSTR.unlink(missing_ok=True)
+    return import_view()
+
+
 def sandbox_state():
     """The sandbox's own answer, from its check. Anything but a clear answer is `unknown`: the app then claims no limit."""
     try:
@@ -3992,7 +4078,7 @@ def settings_page():
     """GET /api/settings: the settings, and the facts the page must state truthfully. Null on a Hive with no file."""
     v = settings_brief()
     if v is None: return {"settings": None}
-    return {"settings": v, "sandbox_check": SANDBOX.get(), "share_text": SHARE_TEXT.get(), "accounts": accounts_view(), "github": GITHUB.get()}
+    return {"settings": v, "sandbox_check": SANDBOX.get(), "share_text": SHARE_TEXT.get(), "accounts": accounts_view(), "github": GITHUB.get(), "import": import_view()}
 
 
 
@@ -4352,6 +4438,8 @@ def serve(port):
                 self.send(json.dumps(thread_status()).encode(), J)
             elif u.path == "/api/agent-work":
                 self.send(json.dumps(agent_work(q.get("name", [""])[0], self.route != "outside" or self.mode == "full")).encode(), J)
+            elif u.path == "/api/agent-input":
+                self.send(json.dumps(agent_input(q.get("name", [""])[0], self.route != "outside" or self.mode == "full")).encode(), J)
             elif u.path == "/api/agent-diff":
                 self.send(json.dumps(agent_diff(q.get("name", [""])[0], q.get("path", [""])[0], self.route != "outside" or self.mode == "full")).encode(), J)
             elif u.path == "/api/ledger":
@@ -4410,7 +4498,7 @@ def serve(port):
                 try: return self.send(json.dumps(share_build(d)).encode(), J)
                 except KeyError: return self.send_error(404)
                 except ValueError as e: return self.deny(400, str(e))
-            if u.path in ("/api/post", "/api/side-ask", "/api/thread-meta", "/api/shown", "/api/checklist", "/api/feedback", "/api/feedback-draft-done", "/api/issue-link", "/api/update", "/api/inbox-read", "/api/ntfy", "/api/webpush", "/api/agent-model", "/api/config", "/api/starter", "/api/module", "/api/signin", "/api/signin/code", "/api/signin/cancel", "/api/access", "/api/plan", "/api/secret", "/api/settings", "/api/share-copy", "/api/draft", "/api/signin-codex", "/api/account-key", "/api/design", "/api/brand"):
+            if u.path in ("/api/post", "/api/side-ask", "/api/thread-meta", "/api/shown", "/api/checklist", "/api/feedback", "/api/feedback-draft-done", "/api/issue-link", "/api/update", "/api/inbox-read", "/api/ntfy", "/api/webpush", "/api/agent-model", "/api/config", "/api/starter", "/api/module", "/api/signin", "/api/signin/code", "/api/signin/cancel", "/api/access", "/api/plan", "/api/secret", "/api/settings", "/api/share-copy", "/api/draft", "/api/import", "/api/signin-codex", "/api/account-key", "/api/design", "/api/brand"):
                 try:
                     if u.path == "/api/post": res = person_post(d.get("text"), d.get("thread"), d.get("reply_to"), d.get("files"), signer=self.signer, limited="config" not in self.can, simple=d.get("simple") is True, model=d.get("model"), sig=d.get("sig"))
                     elif u.path == "/api/side-ask": res = side_ask(d.get("q"), signer=self.signer, limited="config" not in self.can)
@@ -4437,6 +4525,7 @@ def serve(port):
                     elif u.path == "/api/signin/code": SIGNIN.code(d.get("code")); res = {"ok": True}
                     elif u.path == "/api/signin/cancel": SIGNIN.cancel(); res = {"ok": True}
                     elif u.path == "/api/settings": res = set_settings(d)
+                    elif u.path == "/api/import": res = do_import(d)
                     elif u.path == "/api/share-copy": res = share_copy()
                     elif u.path == "/api/draft": res = draft_do(d)
                     elif u.path == "/api/design": res = DESIGN.act(d)
