@@ -331,7 +331,9 @@ function lineageLayout(data, opt) {
     const a = n.agent, par = a.from && a.from !== 'person' ? byAgent.get(a.from) : null;
     if (!par || !a.running || !par.agent.running) continue;
     const chain = par.agent.main === a.main; if (chain) chained.add(a.id);
-    handoffs.push({ from: par.id, to: a.id, chain, d: bez(par.x + par.r + 3, par.y, n.x - n.r - 7, n.y) });
+    // leave from the end of the parent's label, so the arrows don't run through its name (from the dot only when the columns are too close)
+    const x2 = n.x - n.r - 7, past = par.labelX + par.labelW + 4, x1 = !tile && x2 - past >= 24 ? past : par.x + par.r + 3;
+    handoffs.push({ from: par.id, to: a.id, chain, d: bez(x1, par.y, x2, n.y) });
   }
   for (const n of nodes) for (const [tid, c] of Object.entries(n.agent.threads || {})) {
     const cl = byThread.get(tid); if (!cl) continue;

@@ -2,6 +2,9 @@
 """Hive starter: watch ~/board.jsonl, start a session per @mention, pace on weekly usage, log, back up ~ to git."""
 import datetime as dt, json, os, re, secrets, shutil, signal, subprocess, sys, time, urllib.request, uuid
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # tests load this file by path, under -I
+try: import continuation as cont
+except ImportError: cont = None  # a pilot: the starter runs without it
 
 HOME = Path.home()
 CORE, BOARD, LOG, RUN, STATE = HOME / "core", HOME / "board.jsonl", HOME / "log.jsonl", HOME / "run", HOME / ".hive"
@@ -10,6 +13,7 @@ CODE = re.compile(r"```.*?```|`[^`\n]*`", re.S)  # a name in backticks is being 
 MEMINFO, PSI_MEM = "/proc/meminfo", "/proc/pressure/memory"
 last_start = [0.0]  # when this process last started a run, for under_pressure
 recent_starts = []  # when, for under_pressure: runs too young to show in MemAvailable
+ended_clean = []  # runs that just ended with nothing owed by the starter: the continuation pilot looks at them once `alive` is complete
 children = {}  # name -> Popen, for sessions this process started (others are tracked by pid file only)
 
 def now(): return dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
@@ -89,6 +93,8 @@ def is_stop(p):
     if p.get("from") != "person": return False
     text = re.sub(r"[^\w ]", " ", MENTION.sub(" ", str(p.get("text", "")))).lower()
     return bool(STOP.fullmatch(" ".join(text.split())))
+
+if cont: cont.is_stop = is_stop
 
 def drop_spawns(st, thread):
     """Forget queued fresh-agent starts (new/claude/codex/free) from this thread; named agents' wakes stay."""
@@ -682,6 +688,8 @@ def running(st=None, by_hand=False):
             elif st is not None and died and carries_on(r) and r["name"] not in st.get("resume", {}):
                 if by_hand and died != "stalled": stopped.append(r["name"]); log(event="stopped_by_hand", name=r["name"], session=r["session"])
                 else: carry_on(st, r, died, told)
+            elif st is not None and not hit and not authed and not died and r["name"] not in st.get("resume", {}) and not (STATE / "killed" / f"{r['name']}.json").exists():
+                ended_clean.append(r)
         else: alive[r["name"]] = r
     for why, names in told.items():  # one post per stop, not one per agent
         post(f"{', '.join(f'`{n}`' for n in names)} stopped ({WHY_WORDS[why]}) and will carry on by themselves.", [])
@@ -724,6 +732,18 @@ def auth_watch(c, st):
             n = sum(r.get("login") == login for r in st.get("resume", {}).values()) + len(st.get("pending", {}))
             post(f"Sign in again to Claude: {n} agent{' is' if n == 1 else 's are'} waiting. Settings > Accounts.", ["person"])
 
+def guarded(fn, *a):
+    """Call continuation.fn. The pilot may not take the starter down with it: an error is logged, and the post goes on without it. Returns None on an error."""
+    if not cont: return None
+    try: return getattr(cont, fn)(*a)
+    except Exception as e:
+        log(event="continue_error", fn=fn, why=f"{type(e).__name__}: {e}"[:300]); return None
+
+def continuations(st, c, alive):
+    """Runs that ended clean can write an intent (a run that ended on `Next:` in a thread with `Continue: on`), and intents become one wake each."""
+    while ended_clean: guarded("on_run_end", ended_clean.pop(0), c, st, alive)
+    guarded("enqueue", st, c, alive, stays_on)
+
 def drop_killed(st):
     """The person killed a run from the dashboard: ~/.hive/killed/<name>.json holds its pid, written before the signal.
     Call after running(), which ends the run and may have queued a resume (a limit in its log, open background tasks).
@@ -744,15 +764,15 @@ def drop_killed(st):
         f.unlink(missing_ok=True)
 
 def apply_model_sets(st, c):
-    """The person picked a model in the agent panel: ~/.hive/model-set/<name>.json (set_agent_model in the dash). Held as if a
-    post had passed --model (stays_on): st["chosen"], and the posts already queued for it. Its next run starts on it."""
+    """The person picked a model in the agent panel: ~/.hive/model-set/<name>.json (set_agent_model in the dash), or the outcomes
+    grader stepped an agent up (outcomes.step_up, the file carries a "why"). Held as if a post had passed --model (stays_on): st["chosen"], and the posts already queued for it. Its next run starts on it."""
     for f in (STATE / "model-set").glob("*.json"):
         n = f.stem
-        try: m = json.loads(f.read_text()).get("model")
-        except (OSError, ValueError, AttributeError): m = None
+        try: d = json.loads(f.read_text()); m, why = d.get("model"), d.get("why")
+        except (OSError, ValueError, AttributeError): m, why = None, None
         if not re.fullmatch(r"[a-z][0-9a-f]{4,}", n): m = None
         if model_ok(c, m): stays_on(st, c, n, {"model": m})
-        log(event="model_set" if model_ok(c, m) else "model_set_refused", name=n, model=m)
+        log(event="model_set" if model_ok(c, m) else "model_set_refused", name=n, model=m, **({"why": str(why)[:200]} if why else {}))
         f.unlink(missing_ok=True)
 
 def usage(c, u):
@@ -1204,8 +1224,12 @@ def start(c, name, posts, login, resume=None, reaped=None, extra=(), moved=False
     elif resume:
         prompt = (RESUME_WHY.get(why, "Your run stopped on a usage limit and the limit has now reset.") + " Continue where you left off "
                   f"(check `hive read --thread {first.get('thread', first['id'])}` for anything new first).")
-    if kind != "warden" and not asked and (not resume or slept or woken):  # a start that hands over posts, not a limit or reap resume
-        prompt += recall_note(name, woken["posts"] if resume and woken else posts)
+    # Fresh starts only: over 3 days (to 2026-11-06) pointers in a first prompt got a strict follow-up (kb open or a read of the note) 50% of the time,
+    # on a resume wake 11% (5 of 44), by hook 21% (hive-meta recall-measure.md). The hook (inbox.recall_note) still delivers them mid-run.
+    if kind != "warden" and not asked and not resume:
+        prompt += recall_note(name, posts)
+    if (k := next((p["continue"] for p in posts if p.get("continue")), None)):
+        prompt += guarded("wake_note", k, first.get("thread"), bool(heir_of)) or ""
     fb = next((p["fallback"] for p in posts if p.get("fallback")), None)
     if fb: prompt += "\n\n" + FALLBACK_NOTE[fb].format(model=model, tier=tier_of(model))
     elif kind != "warden" and not prov and not asked and (not resume or slept): prompt += step_clause(model)
@@ -1214,7 +1238,7 @@ def start(c, name, posts, login, resume=None, reaped=None, extra=(), moved=False
     tmp = HOME / ".cache" / "hive-tmp"; tmp.mkdir(parents=True, exist_ok=True)  # on disk: /tmp is tmpfs, its files hold RAM and swap
     # ENABLE_CLAUDEAI_MCP_SERVERS: the logins' claude.ai connectors (the person's Slack, Vercel buy_domain, ...) are 12k tokens on
     # every reply, and 12 calls in 542 transcripts, all Exa search; they also let an agent act in the person's name (kb/model-cost.md)
-    env, argv = {**os.environ, "HIVE_NAME": name, "CLAUDE_CONFIG_DIR": login, "TMPDIR": str(tmp), "ENABLE_CLAUDEAI_MCP_SERVERS": "false"}, None
+    env, argv = {**os.environ, "HIVE_NAME": name, "HIVE_THREAD": first.get("thread", first["id"]), "CLAUDE_CONFIG_DIR": login, "TMPDIR": str(tmp), "ENABLE_CLAUDEAI_MCP_SERVERS": "false"}, None
     # Opus defaults to a 1M window, so a run grows to 400k+ and pays for all of it on every turn; 36% of spend was above 200k (kb/model-cost.md).
     # Compacting near resume_max_context also keeps a run resumable instead of leaving an heir. 0 or absent: Claude Code's default.
     if c.get("auto_compact_window"): env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] = str(c["auto_compact_window"])
@@ -1472,6 +1496,7 @@ def main():
                 try: p = json.loads(line)
                 except ValueError: continue
                 called, unknown = callable_names(p, c)
+                guarded("note_post", p, is_stop(p))
                 if is_stop(p) and (gone := drop_spawns(st, p.get("thread"))):
                     log(event="stop_dropped", names=gone, post=p.get("id"), thread=p.get("thread"))
                 src_free = is_free_now(st, str(p.get("from", "")).lower())
@@ -1522,6 +1547,7 @@ def main():
         drop_killed(st)
         auth_watch(c, st)
         apply_model_sets(st, c)
+        continuations(st, c, alive)
         for th, text in slow_replies(recent_posts(), st, alive):   # straight into the thread: post() would move it to the starter thread
             with BOARD.open("a") as f:
                 f.write(json.dumps({"id": dt.datetime.now().strftime("%m%d%H%M") + secrets.token_hex(2), "at": now(), "from": "starter", "to": [], "thread": th, "text": text}) + "\n")
@@ -1570,7 +1596,7 @@ def main():
                 # Read it, don't remove it: the dash's read marks come from this file, and with it gone a post the agent had used
                 # showed "hasn't seen this" until its next start (the person asked, 110515296d61). A fresh start empties it.
                 seen = set(got.read_text().split())
-                st["pending"][n] = [p for p in st["pending"][n] if p["id"] not in seen]
+                st["pending"][n] = [p for p in st["pending"][n] if p["id"] not in seen or p.get("continue")]  # a continuation's id is the post it follows, not a post for this agent
                 if not st["pending"][n]:
                     st["pending"].pop(n); log(event="delivered", name=n); continue
             if any(p.get("free") for p in st["pending"][n]) and not any(p.get("fallback") for p in st["pending"][n]):
@@ -1585,7 +1611,13 @@ def main():
                     to = None if provider_hold(c, st, n, provider_of(c, st["pending"][n][0]["model"]), pcache, st["pending"][n][0].get("thread")) else "provider"
             if to and len(alive) < (c.get("max_sessions") or float("inf")) and not paced(c, st, n, st["pending"][n]):
                 ps = st["pending"].pop(n)
-                if (who := wake(c, st, n, ps, to, room)): alive[who] = {"name": who, "thread": ps[0].get("thread")}
+                if any(p.get("continue") for p in ps):
+                    ps = guarded("before_launch", n, ps, st, c, alive) or [p for p in ps if not p.get("continue")]  # on an error, a continuation is what goes
+                    if not ps: continue
+                    save("starter.json", st)  # a crash from here loses this step rather than launching it twice
+                if (who := wake(c, st, n, ps, to, room)):
+                    alive[who] = {"name": who, "thread": ps[0].get("thread")}
+                    if any(p.get("continue") for p in ps): guarded("launched", who, ps)
         if not hold:
             keeper(c, st, alive, login)
             improver(c, st, alive, login)

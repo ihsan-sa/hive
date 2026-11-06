@@ -248,6 +248,9 @@ def post(name, req, blobs):
     cmd = [sys.executable, "-I", str(CORE / "hive"), "post"]
     for k in ("thread", "to", "model", "reply_to"):
         if req.get(k): cmd.append(f"--{k.replace('_', '-')}={req[k]}")
+    for k in req.get("done") or []:  # --done ASK: the post inside closes the ask, as outside the sandbox
+        if not re.fullmatch(r"k[0-9a-f]{3,8}", str(k)): return {"err": f"--done {k}: not an ask id (k0123)"}
+        cmd.append(f"--done={k}")
     d = None
     try:
         if blobs:  # the bytes came over the socket: the broker never opens a path an agent names

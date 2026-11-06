@@ -9,13 +9,16 @@
   kb miss "QUESTION"        record a lookup that failed; the dream works from these
   kb recall --post ID       up to 5 pointers to our own notes for a post (or text on stdin): what the starter and the
                             inbox hook add to a message, so related notes turn up with no search. An agent (--for NAME) gets each note once
-  kb stats                  index size, queries, misses
+  kb stats                  index size, queries, misses, and how search results get used (kbuse.py)
   kb due [--mark]           is there anything for a dream to do (the starter asks this)
   kb eval [FILE]            score the engine on questions with known answers
 
 The index refreshes itself at each call from file times; there is no daemon.
 """
 import argparse, fcntl, hashlib, json, math, os, re, sqlite3, subprocess, sys, time
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+try: import kbuse
+except ImportError: kbuse = None  # a lone copy of this file: kb-search's gate tests one
 H = os.path.expanduser(os.environ.get("KB_HOME", "~"))
 CACHE = os.path.join(os.path.expanduser("~/.cache/hive-kb") if "KB_HOME" not in os.environ else H + "/.cache/hive-kb")
 DB, LOCK, QLOG, DREAMT = CACHE + "/index.db", CACHE + "/lock", CACHE + "/queries.jsonl", CACHE + "/dream_at"
@@ -37,7 +40,7 @@ SKIP_DIR = {".git", "node_modules", "__pycache__", "dist", "boards-site-pdfs", "
 # Kept out on purpose: the graded tests hold the answers (they'd rank above the sources), the query log is ours.
 # Agent worktrees are copies of the main checkouts: 25,000 files that repeat the same few. Keep the main ones.
 SKIP_PROJECT = re.compile(r"^projects/(_wt|[^/]*-a[0-9a-f]{4,5}(-[^/]*)?|[^/]*-zc-[^/]*|[^/]*-wt|[^/]*-land)(/|$)|/(tests/fixtures|pinned|skills|reference/remediations)/")
-SKIP_FILE = re.compile(r"(^|/)(question-test-[^/]*|\.queries\.jsonl|MANIFEST)$")
+SKIP_FILE = re.compile(r"(^|/)(question-test-[^/]*|\.queries\.jsonl|miss-candidates\.jsonl|MANIFEST)$")
 PROJECT_ONLY = re.compile(r"\.md$")  # in projects/ and core/, prose only, not every data file
 MAXFILE = 4_000_000
 STOP = set("a an and are as at be been but by can could did do does for from had has have he her him his how i if in into is it its me my no not of on or our she should so than that the their them then there these they this to too us was we were what when where which who whom why will with would you your about after again all also any before being both each few more most other out over own same some such under until very while".split())
@@ -57,6 +60,8 @@ def connect():
     CREATE INDEX IF NOT EXISTS chunk_doc ON chunk(doc);
     CREATE VIRTUAL TABLE IF NOT EXISTS fts USING fts5(title, head, body, tokenize='porter unicode61');
     CREATE VIRTUAL TABLE IF NOT EXISTS vocab USING fts5vocab(fts, 'row');
+    CREATE TABLE IF NOT EXISTS supers(by TEXT, old TEXT);
+    CREATE INDEX IF NOT EXISTS supers_old ON supers(old);
     CREATE TABLE IF NOT EXISTS meta(k TEXT PRIMARY KEY, v TEXT);
     CREATE TABLE IF NOT EXISTS past(post TEXT PRIMARY KEY, thread TEXT, text TEXT, ctx TEXT, read TEXT, vec TEXT, k1 TEXT, k2 TEXT);
     """)
@@ -100,12 +105,20 @@ def chunks(text):
     flush(i if text else 0)
     return out
 
+def norm_path(p):
+    p = p.strip("`<>,.;").replace(H + "/", "", 1)
+    return p[2:] if p.startswith("~/") else p
+
+SUPERSEDES = re.compile(r"^Supersedes:\s*(\S+)", re.M)
+
 def add_doc(c, src, path, rel, st, text):
     title = rel.rsplit("/", 1)[-1].rsplit(".", 2)[0].replace("-", " ").replace("_", " ")
     m = re.search(r"^#\s+(.+)", text[:2000], re.M)
     if m: title += " " + m.group(1)[:120]
     cur = c.execute("INSERT OR REPLACE INTO doc(path,source,mtime,size,title) VALUES(?,?,?,?,?)", (rel, src, st.st_mtime, st.st_size, title))
     did = cur.lastrowid
+    for m in SUPERSEDES.finditer(text[:2000]):
+        c.execute("INSERT INTO supers(by,old) VALUES(?,?)", (rel, norm_path(m.group(1))))
     pathdate = FULLDATE.search(rel); pd = pathdate.group(1) if pathdate else ""
     for line, end, head, date, body in chunks(text):
         h = hashlib.md5(re.sub(r"\s+", " ", body).encode()).hexdigest()[:12]
@@ -113,6 +126,8 @@ def add_doc(c, src, path, rel, st, text):
         c.execute("INSERT INTO fts(rowid,title,head,body) VALUES(?,?,?,?)", (cid, title, head, body))
 
 def drop_doc(c, did):
+    r = c.execute("SELECT path FROM doc WHERE id=?", (did,)).fetchone()
+    if r: c.execute("DELETE FROM supers WHERE by=?", (r[0],))
     for (cid,) in c.execute("SELECT id FROM chunk WHERE doc=?", (did,)).fetchall():
         c.execute("DELETE FROM fts WHERE rowid=?", (cid,))
     c.execute("DELETE FROM chunk WHERE doc=?", (did,)); c.execute("DELETE FROM doc WHERE id=?", (did,))
@@ -281,7 +296,11 @@ def hydrate(c, rows):
     out = []
     for cid, s in rows:
         r = c.execute("SELECT doc.path, doc.source, chunk.line, chunk.end, chunk.date, chunk.hash FROM chunk JOIN doc ON doc.id=chunk.doc WHERE chunk.id=?", (cid,)).fetchone()
-        if r: out.append({"id": cid, "score": -s * WEIGHT.get(r[1], 1.0), "path": r[0], "source": r[1], "line": r[2], "end": r[3], "date": r[4], "hash": r[5]})
+        sup = None
+        if r:
+            try: sup = c.execute("SELECT by FROM supers WHERE old=? LIMIT 1", (r[0],)).fetchone()
+            except sqlite3.OperationalError: pass  # an index made before Supersedes has no such table: no flags
+        if r: out.append({"id": cid, "sup": sup[0] if sup else "", "score": -s * WEIGHT.get(r[1], 1.0), "path": r[0], "source": r[1], "line": r[2], "end": r[3], "date": r[4], "hash": r[5]})
     out.sort(key=lambda x: -x["score"])
     return out
 
@@ -358,7 +377,20 @@ def rerank(c, hits, words):
         h["score"] = (best + HEADW * inhead) / full + BMW * h["score"] / top
         h["score"] *= WEIGHT.get(h["source"], 1.0)
     hits.sort(key=lambda x: -x["score"])
-    return hits
+    return sink_superseded(hits)
+
+TIE = 0.95  # a superseded passage within 5% of a newer one ranks below it
+
+def sink_superseded(hits):
+    """Freshness: a passage whose file a newer note supersedes goes below any unflagged passage
+    scoring within 5% of it. Only the Supersedes flag counts, never the path date."""
+    if not any(h.get("sup") for h in hits): return hits
+    out = list(hits)
+    for f in [h for h in hits if h.get("sup")]:
+        i = out.index(f); j = i
+        while j + 1 < len(out) and out[j + 1]["score"] >= TIE * f["score"] and not out[j + 1].get("sup"): j += 1
+        out.insert(j, out.pop(i))
+    return out
 
 def diversify(hits, n, perdoc=None):
     perdoc = perdoc or PERDOC
@@ -398,8 +430,8 @@ def render(c, q, n=12, frm=None, to=None, src=None):
     cap = "+" if total >= 400 else ""
     out = [f"{total}{cap} passages in {len(files)}{cap} files  " + " ".join(f"{s}:{k}" for s, k in by.most_common()) + (f"  [{'; '.join(tried[1:])}]" if tried[1:] else "")]
     for h in top:
-        t, line = snippet(c, h, words)
-        out.append(f"{fmt_path(h['path'])}:{line}" + (f" {h['date']}" if h['date'] else "") + f"  {t}")
+        t, line = snippet(c, h, words); h["shown_line"] = line
+        out.append(f"{fmt_path(h['path'])}:{line}" + (f" {h['date']}" if h['date'] else "") + f"  {t}" + (f"  [superseded by {fmt_path(h['sup'])}]" if h.get("sup") else ""))
     if not hits:
         out.append("Nothing. Not proof it isn't there: try other words, a shorter form, or `rg -il WORD ~/kb ~/archive/knowledge`. If you give up: kb miss \"QUESTION\"")
         out.append(ABSENT)
@@ -409,22 +441,89 @@ def render(c, q, n=12, frm=None, to=None, src=None):
         out.append(ABSENT)
     return "\n".join(out), top, hits, tried
 
+BOARD_CAP, BOARD_POOL = 40, 1_000_000  # posts printed; the pool is every matching post, not the 400 of a plain find
+
+def render_board(c, q, frm=None, to=None):
+    """kb find --board: posts in board order, newest last, as `hive search` lists them. Rank only picks which posts survive the
+    cut. A word that is a post's exact id always shows that post, even one the index leaves out (the starter's, the watchdog's)."""
+    board = {}
+    try:
+        with open(H + "/board.jsonl", errors="replace") as f:
+            for l in f:
+                m = re.match(r'\{"id":\s*"([^"]+)"', l)
+                if m: board[m.group(1)] = l
+    except OSError: pass
+    exact = {w.removeprefix("board:") for w in re.findall(r'[^\s"]+', q)} & set(board)
+    hits, tried, words, total = search(c, q, frm, to, "board", BOARD_POOL)
+    if exact and tried[-1:] and tried[-1].startswith("spelling"): hits, total = [], 0  # the id was what it meant: no near-spellings of it
+    hits = [h for h in hits if h["path"][6:] in board]
+    rest = [h for h in hits if h["path"][6:] not in exact]
+    top = rest[:max(0, BOARD_CAP - len(exact))]; want = exact | {h["path"][6:] for h in top}; lines = []
+    for i, l in board.items():
+        if i not in want: continue
+        try: p = json.loads(l)
+        except ValueError: continue
+        first = next((x.strip() for x in str(p.get("text") or "").split("\n") if x.strip()), "")
+        lines.append(f"[{i}] {str(p.get('at') or '')[:19]} {p.get('from')} (thread {p.get('thread')})  {first[:160]}")
+    found = len(exact | {h["path"][6:] for h in hits})
+    head = f"{len(lines)} posts, board order, newest last" + (f"; the {len(lines)} best of {found} matches" if found > len(lines) else "") + (f"  [{'; '.join(tried[1:])}]" if tried[1:] else "")
+    tail = ("Any one word can match, and a long list is cut by rank: for every post with all the words, `hive search`. Read one: kb open board:ID" if lines
+            else "Nothing. `hive search WORDS` matches inside every field, ids and names too. If you give up: kb miss \"QUESTION\"")
+    for h in top: h["shown_line"] = 1
+    return "\n".join([head, *lines, tail]), top, hits, tried
+
 def cmd_find(a):
     c = connect(); refresh(c)
     q = " ".join(a.words); t0 = time.time()
-    text, top, hits, tried = render(c, q, 40 if a.all else a.n, a.frm, a.to, a.src)
+    if a.board: text, top, hits, tried = render_board(c, q, a.frm, a.to)
+    else: text, top, hits, tried = render(c, q, 40 if a.all else a.n, a.frm, a.to, a.src)
     print(text)
-    log({"q": q, "n": len(hits), "top": [h["path"] for h in top[:5]], "tried": tried, "ms": int((time.time() - t0) * 1000)})
+    rec = {"q": q, "n": len(hits), "top": [h["path"] for h in top[:5]], "tried": tried, "ms": int((time.time() - t0) * 1000)}
+    if kbuse:
+        shown = [[fmt_path(h["path"]), h["shown_line"]] for h in top]
+        rec.update(id=kbuse.new_id(), shown=shown)
+        if a.frm or a.to or a.src or a.board: rec["filtered"] = True
+        who = kbuse.agent(); st = kbuse.load(who) if who else {"live": []}
+        if st.get("tester"): rec["tester"] = True
+    log(rec)
+    if kbuse and who:
+        chained = False
+        prev = kbuse.worded_again(st, q, rec.get("filtered"))
+        if prev and rare_shared(c, prev["q"], q):
+            chained = True
+            if not prev.get("chained"): kbuse.file_candidate(prev, q, rec["id"], shown)  # one a chain: a third wording adds no second miss
+        kbuse.remember(who, st, rec["id"], "find", shown, q=q, chained=chained, filtered=bool(rec.get("filtered")))
+
+RARE = 0.02  # a shared word in more of the passages than this says little: on the log to 2026-11-06, 37 of 68 reworded pairs pass it, about 12 a day
+
+def rare_shared(c, q1, q2):
+    """Words both searches use that few passages hold."""
+    def words(q):
+        w, ph = terms(q)
+        return {x.lower() for x in [*w, *(y for p in ph for y in p.split())]} - FILLER
+    total = c.execute("SELECT count(*) FROM chunk").fetchone()[0] or 1
+    out = []
+    for w in words(q1) & words(q2):
+        if len(w) < 3: continue
+        try:
+            if c.execute("SELECT count(*) FROM fts WHERE fts MATCH ?", ('"%s"*' % w.replace('"', ""),)).fetchone()[0] <= total * RARE: out.append(w)
+        except sqlite3.Error: pass
+    return out
 
 def log(rec):
+    if kbuse: return kbuse.log(rec)
     rec.update(at=time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime()), who=os.environ.get("HIVE_NAME", ""))
     try:
         with open(QLOG, "a") as f: f.write(json.dumps(rec) + "\n")
     except OSError: pass
 
+def log_open(target, line, span):
+    log({"open": target, **(kbuse.opened(kbuse.agent(), target, line, span) if kbuse else {})})
+
 def cmd_open(a):
     m = re.match(r"(.+?)(?::(\d+))?$", a.target); path, line = m.group(1), int(m.group(2) or 1)
     if path.startswith("board:"):
+        log_open(a.target, None, 0)  # before the exec, or a read of a post is never seen
         os.execvp("hive", ["hive", "read", "--id", path[6:]])
     path = path.replace("A/", H + "/archive/knowledge/", 1) if path.startswith("A/") else path
     path = path.replace("H4/", H4_COPY, 1) if path.startswith("H4/") else path
@@ -439,7 +538,7 @@ def cmd_open(a):
     print(f"{full}:{s+1}-{e} of {len(ls)} lines")
     for k in range(s, e): print(ls[k][:600])
     if e < len(ls): print(f"(more: kb open {a.target.split(':')[0]}:{e+1})")
-    log({"open": a.target})
+    log_open(a.target, int(m.group(2)) if m.group(2) else None, a.lines)
 
 # --- recall: pointers to our own notes for a message, found with no search by the agent -------------------------
 # Scored on 577 past runs that went on to read a note (2026-11-05): the first pointer was a note the run read for 55% of
@@ -596,6 +695,9 @@ def cmd_recall(a):
         for h in hits: print("- %s:%d  %s" % (fmt_path(h["path"]), h["line"], re.sub(r"\s+", " ", h["head"])[:90]))
     rec = {"recall": a.post or "stdin", "top": [h["path"] for h in hits], "ms": int((time.time() - t0) * 1000)}
     if a.who: os.environ["HIVE_NAME"] = a.who
+    if kbuse and hits:
+        rec.update(id=kbuse.new_id(), shown=[[fmt_path(h["path"]), h["line"]] for h in hits])
+        if a.who: kbuse.remember(a.who, kbuse.load(a.who), rec["id"], "recall", rec["shown"], calls=0)  # no tool call of its own to wait for
     log(rec)
     # never make a message wait for the index: search what's there, and bring it up to date behind the reply
     try: stale = time.time() - os.path.getmtime(LOCK) > RECALL_STALE
@@ -609,15 +711,20 @@ def cmd_file(a):
     s = SECRET.search(text + " " + a.title)
     if s and not a.force: sys.exit(f"kb file: refused, this looks like a credential or private address: {s.group(0)[:6]}... ~/kb is read by outside models. Take it out; --force if it's a false alarm.")
     who, day = os.environ.get("HIVE_NAME", "?"), time.strftime("%Y-%m-%d", time.gmtime())
+    sup = ""
+    if a.supersedes:
+        old = norm_path(a.supersedes)
+        if not os.path.exists(os.path.join(H, old)): sys.exit(f"kb file: --supersedes {a.supersedes} doesn't exist (give the path under ~, like kb/NAME.md)")
+        sup = f"Supersedes: {old}\n\n"
     if a.to:
         full = os.path.expanduser(a.to) if a.to.startswith(("/", "~")) else os.path.join(NOTES, a.to)
         if not os.path.exists(full): sys.exit(f"kb file: {full} doesn't exist; leave off --to to start a note")
-        with open(full, "a") as f: f.write(f"\n## {a.title} ({day}, {who})\n{text}\n")
+        with open(full, "a") as f: f.write(f"\n## {a.title} ({day}, {who})\n{sup}{text}\n")
     else:
         slug = re.sub(r"[^a-z0-9]+", "-", a.title.lower()).strip("-")[:60] or "note"
         full = os.path.join(NOTES, slug + ".md"); i = 2
         while os.path.exists(full): full = os.path.join(NOTES, f"{slug}-{i}.md"); i += 1
-        with open(full, "w") as f: f.write(f"# {a.title}\n\nFiled {day} by {who}.\n\n{text}\n")
+        with open(full, "w") as f: f.write(f"# {a.title}\n\n{sup}Filed {day} by {who}.\n\n{text}\n")
     c = connect()
     # similar notes, before this one enters the index, from the title and the note's rarest words
     words, _ = terms(a.title + " " + text[:600])
@@ -654,7 +761,7 @@ def dream_work():
         rs = [json.loads(l) for l in data.decode(errors="replace").splitlines() if l.strip()]
     except (OSError, ValueError): pass
     return {"misses": [r["miss"] for r in rs if "miss" in r], "empty": sorted({r["q"] for r in rs if "q" in r and not r["n"]}),
-            "filed": sorted({r["filed"] for r in rs if "filed" in r})}, end
+            "filed": sorted({r["filed"] for r in rs if "filed" in r}), "candidates": [" => ".join(r["candidate"]) for r in rs if "candidate" in r]}, end
 
 def cmd_due(a):
     """Exit 0 and print the work if a dream is worth starting; --mark starts the next period."""
@@ -674,6 +781,7 @@ def cmd_stats(a):
     print(f"{len(fs)} searches, {sum(1 for r in rs if 'open' in r)} opens, {sum(1 for r in rs if 'filed' in r)} filed, {sum(1 for r in rs if 'miss' in r)} misses")
     if fs: print(f"median {sorted(r['ms'] for r in fs)[len(fs)//2]} ms")
     for q in zero[-10:]: print("  nothing for: " + q)
+    if kbuse: print("\n".join(kbuse.report()))
 
 def gold_match(g, path, line, end, slack=12):
     if not path.endswith(g["path"]) and g["path"] not in path: return None
@@ -713,9 +821,9 @@ def cmd_eval(a):
 def main():
     ap = argparse.ArgumentParser(prog="kb", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter); sp = ap.add_subparsers(dest="cmd", required=True)
     p = sp.add_parser("find", aliases=["search"]); p.add_argument("words", nargs="+"); p.add_argument("-n", type=int, default=12); p.add_argument("--all", action="store_true")
-    p.add_argument("--from", dest="frm"); p.add_argument("--to"); p.add_argument("--in", dest="src"); p.set_defaults(f=cmd_find)
+    p.add_argument("--from", dest="frm"); p.add_argument("--to"); p.add_argument("--in", dest="src"); p.add_argument("--board", action="store_true", help="board posts only, in board order, at most 40"); p.set_defaults(f=cmd_find)
     p = sp.add_parser("open"); p.add_argument("target"); p.add_argument("--lines", type=int, default=40); p.set_defaults(f=cmd_open)
-    p = sp.add_parser("file"); p.add_argument("title"); p.add_argument("--to"); p.add_argument("--force", action="store_true"); p.set_defaults(f=cmd_file)
+    p = sp.add_parser("file"); p.add_argument("title"); p.add_argument("--to"); p.add_argument("--supersedes", metavar="PATH"); p.add_argument("--force", action="store_true"); p.set_defaults(f=cmd_file)
     p = sp.add_parser("alias"); p.add_argument("words", nargs="+"); p.set_defaults(f=cmd_alias)
     p = sp.add_parser("miss"); p.add_argument("question", nargs="+"); p.set_defaults(f=cmd_miss)
     p = sp.add_parser("recall"); p.add_argument("--post", action="append"); p.add_argument("-n", type=int, default=5); p.add_argument("--for", dest="who"); p.set_defaults(f=cmd_recall)

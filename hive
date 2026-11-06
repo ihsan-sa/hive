@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""hive: the board CLI. Board = ~/board.jsonl, one JSON post per line: {id, at, from, to, thread, text}."""
+"""hive: the board CLI. Board = ~/board.jsonl, one JSON post per line: {id, at, from, to, thread, text}; a thread opened by an agent working in another one has parent: that thread."""
 import argparse, datetime as dt, fcntl, json, os, re, secrets, shutil, socket, subprocess, sys, tempfile, time, urllib.request, uuid
 from pathlib import Path
 
@@ -85,7 +85,9 @@ def _claude_models():
 CLAUDE_MODELS = _claude_models()
 FRESH = ("new", "claude", "codex", "free", *CLAUDE_MODELS, "astra")  # words that start a fresh agent (SPAWN in starter.py)
 HASH_NAME = re.compile(r"[a-z][0-9a-f]{4,}")  # what new/claude/codex/free/warden hand out (a9aba, c12cd, f12cd, w0e1f)
-FOR_YOU = re.compile(r"^[\s>*_#-]*for you[\s*_]*:", re.I | re.M)  # the line that puts a post on the person's card
+sys.path.insert(0, str(CORE))
+try: import foryou; FOR_YOU = foryou.FOR_YOU  # the line that puts a post on the person's card
+except Exception: foryou, FOR_YOU = None, re.compile(r"^[\s>*_#-]*for you[\s*_]*:", re.I | re.M)  # a copied hive, or a broken foryou.py: posting still works
 PING_MAX = 700  # chars in a post that pings the person
 
 def agents(c):
@@ -139,10 +141,22 @@ def forward(req, files=()):
     if out.get("err"): sys.exit(f"hive: {out['err']}")
     sys.exit(out.get("rc", 0))
 
+def remind_asks(pid, thread):
+    """The asks this agent owns in the thread it just posted in, up to 3, at the moment it can act on them (hive-meta P1: the Stop block comes after it has delivered). Runs after --done, so an ask just closed is gone. Never holds up a post."""
+    me = os.environ.get("HIVE_NAME", "")
+    if os.environ.get("HIVE_DOOR") or not HASH_NAME.fullmatch(me) or me.startswith("f"): return  # free agents are kept light
+    try:
+        sys.path.insert(0, str(CORE)); import asks as A
+        mine = [e for e in A.ledger().values() if e.get("owner") == me and e.get("thread") == thread and e.get("status") not in A.CLOSED + A.WAITING][:3]
+        if not mine: return
+        for e in mine: print(f"You own open asks here: {e['id']}: " + " ".join(str(e.get("ask")).split())[:100])
+        print(f"If this post delivers one: hive asks done ID --evidence {pid}; next time hive post --done ID; or hive asks hold|person|drop ID --why ...", flush=True)
+    except Exception: pass
+
 def cmd_post(a):
     text = " ".join(a.text) if a.text else sys.stdin.read()
     if os.environ.get("HIVE_BROKER"):
-        forward({"verb": "post", "thread": a.thread, "to": a.to, "model": a.model, "reply_to": a.reply_to, "text": text}, a.file or [])
+        forward({"verb": "post", "thread": a.thread, "to": a.to, "model": a.model, "reply_to": a.reply_to, "done": a.done or [], "text": text}, a.file or [])
     try: c = read_cfg()
     except (OSError, ValueError): c = {}
     ext = set(c.get("external", []))
@@ -178,6 +192,9 @@ def cmd_post(a):
     if a.model: p["model"] = a.model
     if a.routed: p["routed"] = True
     if a.reply_to: p["reply_to"] = a.reply_to
+    # A thread an agent opens while working in another one (its helper's brief, a side thread) remembers where it came from,
+    # so the dash can fold it under that conversation (110601450d55). The starter sets HIVE_THREAD to the thread that woke the agent.
+    if (par := os.environ.get("HIVE_THREAD")) and p["thread"] == pid and par != pid: p["parent"] = par
     if os.environ.get("HIVE_POST_VIA"): p["via"] = os.environ["HIVE_POST_VIA"]
     if re.fullmatch(r"f[0-9a-f]{4}", str(p["from"]).lower()) and (w := [n for n in said if n in FRESH]):
         print(f"hive post: from a free agent, {', '.join(w)} in the text starts nothing: leave the word out and use --to new", file=sys.stderr)
@@ -192,8 +209,11 @@ def cmd_post(a):
     with BOARD.open("a") as f:
         fcntl.flock(f, fcntl.LOCK_EX); f.write(json.dumps(p) + "\n")
     print(pid, flush=True)
+    # Agents only, and only a warning: the post is on the board already (hive-meta P3).
+    if HASH_NAME.fullmatch(os.environ.get("HIVE_NAME", "")) and not a.as_ and foryou and (w := foryou.warning(text)): print(w, file=sys.stderr, flush=True)
     for k in getattr(a, "done", None) or []:  # the result post closes the ask it delivers: no separate `hive asks done` turn
         subprocess.run([sys.executable, "-I", str(CORE / "asks.py"), "done", k, "--evidence", pid])
+    if not a.as_: remind_asks(pid, p["thread"])
     me = (a.as_ or os.environ.get("HIVE_NAME", "")).lower()
     receipt(list(dict.fromkeys(to)), ignored, ext, me)
 
@@ -236,11 +256,18 @@ def cmd_verify(a):
     if r.get("words") is not None: print("signed words: " + r["words"])
     sys.exit(0 if r["state"] == "pinned" and p.get("from") == "person" else 1)
 
+def brief_line(p):
+    """One line for hive search --brief: id, time, from, thread, the start of the text's first line with anything in it."""
+    first = next((l.strip() for l in str(p.get("text", "")).splitlines() if l.strip()), "")
+    return f"[{p.get('id')}] {p.get('at','')[:19]} {p.get('from')} (thread {p.get('thread')})  {first[:120]}"
+
 def cmd_search(a):
     words = [w.lower() for w in a.words]
     for p in posts():
         blob = json.dumps(p).lower()
-        if all(w in blob for w in words): show(p)
+        if all(w in blob for w in words):
+            if a.brief: print(brief_line(p))
+            else: show(p)
 
 def cmd_approve(a):
     """An agent asks the person for a yes that no warden can give; the dashboard shows Approve/Deny (a major one asks for a typed x)."""
@@ -895,7 +922,7 @@ def cmd_rename(a):
     print(f"renamed {th}: {title}")
 
 def cmd_summary(a):
-    """hive summary show | set | drop THREAD... | check add|list|done|untick: edit the dashboard's "Where things stand" summary (modules/dash/needs_you.py)."""
+    """hive summary show | set | drop THREAD... | lint [--json] | check add|list|done|untick: edit the dashboard's "Where things stand" summary (modules/dash/needs_you.py); lint flags stale, duplicate and wrong-owner items and threads open on the person it lacks and never refuses."""
     f = HOME / "modules" / "dash" / "needs_you.py"
     if not f.exists(): sys.exit("hive summary: this Hive has no dash module")
     os.execv(sys.executable, [sys.executable, "-I", str(f), "summary"] + a.rest)
@@ -905,8 +932,12 @@ def cmd_progress(a):
     os.execv(sys.executable, [sys.executable, "-I", str(CORE / "progress.py")] + a.rest)
 
 def cmd_away(a):
-    """hive away: core/away.py (while you were away: delivered, stopped and why, waiting on you)."""
+    """hive away: core/away.py (while you were away: a 15-line brief of what was made, decided, needs you, broke; --full for all of it)."""
     os.execv(sys.executable, [sys.executable, "-I", str(CORE / "away.py")] + a.rest)
+
+def cmd_continue(a):
+    """hive continue: core/continuation.py (the continuation pilot: chains, hops, drops, and the numbers it is judged on)."""
+    os.execv(sys.executable, [sys.executable, "-I", str(CORE / "continuation.py")] + a.rest)
 
 def cmd_goals(a):
     """hive goals: core/goals.py (every goal with who is moving it: focuses, project goals.md, asks)."""
@@ -932,7 +963,7 @@ p = sp.add_parser("important", help="hive important THREAD --why \"...\" [--off]
 p.add_argument("thread"); p.add_argument("--why", default=""); p.add_argument("--off", action="store_true"); p.set_defaults(f=cmd_important)
 p = sp.add_parser("rename", help="hive rename THREAD \"new title\": retitle a thread in the dashboard when its title no longer fits (the person's own rename wins)")
 p.add_argument("thread"); p.add_argument("title"); p.set_defaults(f=cmd_rename)
-p = sp.add_parser("summary", help="hive summary show | set (JSON on stdin) | drop THREAD... | check add THREAD TEXT --cat TITLE|list|done ID...|untick ID... (per-section to-do list): edit the dashboard's Where things stand summary: drop obsolete entries, regroup, reword. hive summary set --help-ish: run `hive summary` for the shape")
+p = sp.add_parser("summary", help="hive summary show | set (JSON on stdin) | drop THREAD... | lint [--json] (flags stale, duplicate and wrong-owner items and threads open on the person it lacks, never refuses) | check add THREAD TEXT --cat TITLE|list|done ID...|untick ID... (per-section to-do list): edit the dashboard's Where things stand summary: drop obsolete entries, regroup, reword. hive summary set --help-ish: run `hive summary` for the shape")
 p.add_argument("rest", nargs=argparse.REMAINDER); p.set_defaults(f=cmd_summary)
 p = sp.add_parser("fade", help="hive fade THREAD --why \"...\" [--off]: mark a thread as likely not needed by the person any more (finished and read, replaced by another thread, nothing in it for them): the dashboard side list greys it, and they can still open it and write in it. A post for the person, or one from them, brings it back by itself. --off takes your mark off")
 p.add_argument("thread"); p.add_argument("--why", default=""); p.add_argument("--off", action="store_true"); p.set_defaults(f=cmd_fade)
@@ -943,7 +974,8 @@ p.add_argument("to_model", choices=CLAUDE_MODELS, metavar="MODEL"); p.add_argume
 p = sp.add_parser("read", help="hive read [--thread T] [--since 2h|ISO] [--from X] [--to X] [--id ID] [-n 30, 0 for all] [--short: one line per post]")
 p.add_argument("--thread"); p.add_argument("--since"); p.add_argument("--from", dest="from_"); p.add_argument("--to")
 p.add_argument("--id"); p.add_argument("-n", type=int, default=30); p.add_argument("--short", action="store_true"); p.set_defaults(f=cmd_read)
-p = sp.add_parser("search", help="hive search words...  (all words, case-insensitive)")
+p = sp.add_parser("search", help="hive search [--brief] words...  (all words, case-insensitive; --brief: one line per post)")
+p.add_argument("--brief", action="store_true", help="one line per post: id, time, from, thread, start of the text")
 p.add_argument("words", nargs="+"); p.set_defaults(f=cmd_search)
 p = sp.add_parser("done", help="hive done: your work is finished and needs no follow-up, so a later message gets a new agent instead of waking you"); p.set_defaults(f=cmd_done)
 p = sp.add_parser("verify", help="hive verify ID: does this post carry a good signature from a key root has pinned? exit 0 only if so"); p.add_argument("id"); p.set_defaults(f=cmd_verify)
@@ -982,11 +1014,13 @@ def cmd_outcomes(a):
 
 sp.add_parser("outcomes", help="hive outcomes list [--since 24h] [--grade G] | stats | grade: per-run grades (delivered, partial, nothing, silent...) of whether a run did what its waking post asked (core/outcomes.py)")
 if sys.argv[1:2] == ["outcomes"]: cmd_outcomes(argparse.Namespace(rest=sys.argv[2:]))
+sp.add_parser("continue", help="hive continue list [--json] | stats [--baseline] [--since D] [--until D]: the continuation pilot, where a run ending on `Next:` in a thread whose goals.md has `Continue: on` is carried on (core/continuation.py)")
 sp.add_parser("goals", help="hive goals [--idle] [--json]: every goal (the person's focuses in kb/priorities.md, each project's goals.md, the asks) with its thread, last agent post, who is running and open asks; idle goals named (core/goals.py)")
 sp.add_parser("asks", help="hive asks list | check | own ID | done ID --evidence POST | hold|person|drop ID --why | add --post ID --ask ... | directions | extract: the register of what the person asked for, so nothing is dropped (core/asks.py)")
 if sys.argv[1:2] == ["asks"]: cmd_asks(argparse.Namespace(rest=sys.argv[2:]))
-sp.add_parser("away", help="hive away [--since 12h] [--json]: while you were away: what was delivered, what stopped and why, what waits on you")
+sp.add_parser("away", help="hive away [--since 12h] [--full] [--json]: while you were away: a 15-line brief of what was made, decided, needs you and broke; --full for all of it")
 if sys.argv[1:2] == ["away"]: cmd_away(argparse.Namespace(rest=sys.argv[2:]))
+if sys.argv[1:2] == ["continue"]: cmd_continue(argparse.Namespace(rest=sys.argv[2:]))
 if sys.argv[1:2] == ["goals"]: cmd_goals(argparse.Namespace(rest=sys.argv[2:]))
 if sys.argv[1:2] == ["improve"]: cmd_progress(argparse.Namespace(rest=sys.argv[2:]))  # their own flags: handed over whole
 if sys.argv[1:2] == ["progress"]: cmd_progress(argparse.Namespace(rest=["progress"] + sys.argv[2:]))
