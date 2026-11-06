@@ -71,6 +71,9 @@ def callable_names(p, c):
     to = p.get("to") or []
     if isinstance(to, str): to = to.replace(",", " ").split()
     to = {t.lstrip("@").lower() for t in to}
+    # The rootwarden's gate fills `to` with every @word in its reply, so its `to` asks for nothing beyond the text.
+    # Its "@base 21000274", quoted from a test case, started an agent called base (2026-11-06).
+    if str(p.get("from", "")).lower() == "rootwarden": to = set()
     # Broadcasts are delivered only by live sessions' inbox hooks, never queued to wake agents.
     found = [n for n in mentions(p) if n not in {"all", "here"}]
     if all(n in to or n in c["external"] for n in found): return found, []
@@ -1102,6 +1105,18 @@ RESUME_WHY = {"login": "Your run stopped because its Claude login had expired or
               "stalled": "Your run went silent mid-turn with nothing running, so the starter ended it and resumed it.",
               "other": "Your run ended before it finished, and the starter resumed it."}
 
+def recall_note(name, posts):
+    """Pointers to our own notes that share words with the posts being handed over (`kb recall`), so related notes turn up
+    without the agent searching: a few lines, or nothing when kb isn't sure. The starter's own posts (keeper, improver,
+    notes) get none. Never holds up or fails a start."""
+    ids = [p["id"] for p in posts if p.get("id") and str(p.get("from", "")).lower() not in ("starter", "watchdog")][:5]
+    if not ids: return ""
+    try:
+        r = subprocess.run([sys.executable, "-I", str(CORE / "kb.py"), "recall", "--for", name, *(x for i in ids for x in ("--post", i))],
+                           capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError): return ""
+    return "\n\n" + r.stdout.strip() if r.returncode == 0 and r.stdout.strip() else ""
+
 def start(c, name, posts, login, resume=None, reaped=None, extra=(), moved=False, lost=False, woken=None, all_since=None, slept=None, heir_of=None, why=None):
     hook_inbox(c)  # a login can be added to config.json while the starter runs
     wire_deny(c)
@@ -1156,6 +1171,8 @@ def start(c, name, posts, login, resume=None, reaped=None, extra=(), moved=False
     elif resume:
         prompt = (RESUME_WHY.get(why, "Your run stopped on a usage limit and the limit has now reset.") + " Continue where you left off "
                   f"(check `hive read --thread {first.get('thread', first['id'])}` for anything new first).")
+    if kind != "warden" and not asked and (not resume or slept or woken):  # a start that hands over posts, not a limit or reap resume
+        prompt += recall_note(name, woken["posts"] if resume and woken else posts)
     fb = next((p["fallback"] for p in posts if p.get("fallback")), None)
     if fb: prompt += "\n\n" + FALLBACK_NOTE[fb].format(model=model, tier=tier_of(model))
     elif kind != "warden" and not prov and not asked and (not resume or slept): prompt += step_clause(model)

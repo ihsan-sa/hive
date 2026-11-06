@@ -5,7 +5,7 @@ single Haiku agent in thread `thread-status` to read them and set the statuses. 
 import json, os, subprocess, sys, time
 from datetime import datetime, timezone
 HOME = os.path.expanduser("~")
-SKIP = {"thread-status", "watchdog", "keeper", "improve"}
+SKIP = {"thread-status", "watchdog", "keeper", "improve", "side"}
 MAX = 20
 
 def ts(s):
@@ -36,7 +36,7 @@ if __name__ == "__main__":
     if not ts_: sys.exit(0)
     brief = ("Refresh thread status bars. For each thread below: `hive read --thread T -n 12` (and the existing bar with `hive status T --read`), then set it with "
              "`hive status T <<'X'` and exactly two short lines: line 1 what the thread is about; line 2 the current state (done / in progress and who / blocked on what or whom, "
-             "and any thread it depends on). Plain words, under 160 chars a line. Keep the old wording if nothing changed. Don't post in those threads. "
+             "and any thread it depends on). Plain words, under 160 chars a line. Keep the old wording if nothing changed. A line 2 starting Done:, Blocked:, Needs the person:, Waiting: or Told to stop: is an agent's own reason for stopping: keep it word for word unless a later post shows the work has moved on. Don't post in those threads. "
              "Finish by posting one line in this thread saying how many you set.\nThreads: " + " ".join(ts_))
     subprocess.run(["hive", "post", "--thread", "thread-status", "--to", "new", "--model", "haiku"], input=brief, text=True,
                    env={**os.environ, "HIVE_NAME": "status-timer"})

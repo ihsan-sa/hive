@@ -7,4 +7,4 @@ Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
 Environment=TMPDIR=%h/.cache/hive-tmp
 Type=oneshot
 Nice=15
-ExecStart=/bin/sh -c '/usr/bin/python3 -I %h/core/asks.py extract && /usr/bin/python3 -I %h/core/asks.py reconcile'
+ExecStart=/bin/sh -c '/usr/bin/python3 -I %h/core/asks.py extract; /usr/bin/python3 -I %h/core/asks.py leftovers; /usr/bin/python3 -I %h/core/asks.py reconcile'

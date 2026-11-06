@@ -156,9 +156,65 @@ function listEnter(th, n) {
   let nv, caret;
   if (!rest.trim()) { nv = v.slice(0, start) + v.slice(at); caret = start; }
   else { const mark = ind + (bul || (+num + 1) + sep) + " "; nv = v.slice(0, at) + "\n" + mark + v.slice(at); caret = at + 1 + mark.length; }
-  n.value = nv; n.setSelectionRange(caret, caret);
+  n.value = nv; n.setSelectionRange(caret, caret); mdSync(n);
   const d = draft(th); d.text = nv; keep(d); refresh();
   return true;
+}
+// Markdown formatting (the person, 11052100): wrap the selection in marks, or prefix its lines. Ctrl/Cmd+B bold, I italic, E code, K link.
+function fmt(th, kind) {
+  const n = field(th); if (!n) return;
+  const v = n.value, a = n.selectionStart, b = n.selectionEnd, sel = v.slice(a, b);
+  let nv, s0, s1;
+  const wrap = (l, r, ph) => { const t = sel || ph; nv = v.slice(0, a) + l + t + r + v.slice(b); s0 = a + l.length; s1 = s0 + t.length; };
+  if (kind === "bold") wrap("**", "**", "bold");
+  else if (kind === "italic") wrap("*", "*", "italic");
+  else if (kind === "code") { if (sel.includes("\n")) { nv = v.slice(0, a) + "```\n" + sel + "\n```" + v.slice(b); s0 = a + 4; s1 = s0 + sel.length; } else wrap("`", "`", "code"); }
+  else if (kind === "link") { wrap("[", "](url)", "text"); s0 = a + 1 + (sel || "text").length + 2; s1 = s0 + 3; }
+  else {
+    const ls = v.lastIndexOf("\n", a - 1) + 1, block = v.slice(ls, b);
+    const out = block.split("\n").map((x, k) => kind === "ol" ? (k + 1) + ". " + x : kind === "quote" ? "> " + x : "- " + x).join("\n");
+    nv = v.slice(0, ls) + out + v.slice(b); s0 = ls; s1 = ls + out.length;
+  }
+  n.value = nv; n.focus(); n.setSelectionRange(s0, s1);
+  const d = draft(th); d.text = nv; keep(d); n.dispatchEvent(new Event("input", { bubbles: true }));
+}
+const FMT = [["bold", "B", "Bold (Ctrl+B)"], ["italic", "I", "Italic (Ctrl+I)"], ["code", "</>", "Code (Ctrl+E)"], ["link", "Link", "Link (Ctrl+K)"], ["ul", "•", "Bulleted list"], ["ol", "1.", "Numbered list"], ["quote", "❝", "Quote"]];
+const fmtBar = th => h("span", { class: "cp-fmt", "data-key": "fmt", role: "group", "aria-label": "Formatting" }, FMT.map(([k, t, ti]) =>
+  h("button", { type: "button", class: "cp-fb cp-fb-" + k, title: ti, "aria-label": ti, onmousedown: e => e.preventDefault(), onclick: () => fmt(th, k) }, t)));
+// Live rendering (the person, 11052110): the text box stays a plain textarea (its text made transparent); a layer behind it
+// draws the same characters styled. Nothing changes width, so the two stay aligned: the marks stay, dimmed, around styled text.
+const INLINE = /(`[^`\n]+`)|(\*\*[^*\n]+\*\*|__[^_\n]+__)|(\*[^*\s][^*\n]*\*|(?<![\w])_[^_\n]+_(?![\w]))|(\[[^\]\n]+\]\([^)\n]*\))/g;
+function mdInline(line, out) {
+  let last = 0;
+  for (const m of line.matchAll(INLINE)) {
+    if (m.index > last) out.push(line.slice(last, m.index));
+    const cls = m[1] ? "md-code" : m[2] ? "md-b" : m[3] ? "md-i" : "md-a";
+    out.push(h("span", { class: cls }, m[0]));
+    last = m.index + m[0].length;
+  }
+  if (last < line.length) out.push(line.slice(last));
+}
+function mdLayer(text) {
+  const out = []; let fence = false;
+  text.split("\n").forEach((line, i, all) => {
+    if (i) out.push("\n");
+    if (/^\s*```/.test(line)) { fence = !fence; out.push(h("span", { class: "md-code md-fence" }, line)); return; }
+    if (fence) { out.push(h("span", { class: "md-code" }, line)); return; }
+    const m = /^(\s*)(?:(#{1,6}[ \t]+)|(>[ \t]?)|([-*•][ \t]+)|(\d{1,3}[.)][ \t]+))/.exec(line);
+    if (m) { if (m[1]) out.push(m[1]); out.push(h("span", { class: m[2] ? "md-h" : "md-mk" }, m[0].slice(m[1].length))); line = line.slice(m[0].length); if (m[2]) { out.push(h("span", { class: "md-h" }, line)); return; } }
+    mdInline(line, out);
+  });
+  out.push("\n");   // keeps the last empty line's height, as a textarea does
+  return out;
+}
+/** Redraw the layer behind a text box and match its font, padding and scroll. */
+function mdSync(n) {
+  return;   // off: the live layer glitched while typing (the person, 11052116, 11052118)
+  const bd = n.parentNode && n.parentNode.querySelector(".cp-bd"); if (!bd) return;
+  bd.replaceChildren(...mdLayer(n.value)); bd.setAttribute("data-sig", n.value);
+  const c = getComputedStyle(n);
+  for (const k of ["font", "padding", "lineHeight", "letterSpacing", "wordSpacing", "tabSize", "textIndent"]) bd.style[k] = c[k];
+  bd.scrollTop = n.scrollTop;
 }
 /** Send a short message for the person from a button (Carry on, Answer). Shows like any other. */
 export function say(th, text, to) {
@@ -490,6 +546,7 @@ export function composer({ thread, update, place = "thread", autofocus, top }) {
   if (CP.th !== th) { CP.th = th; CP.ac = null; CP.menu = false; CP.hist = null; }
   const d = draft(th), r = recipient(th), k = "cp:" + (th || "(new)"), empty = !d.text.trim() && !d.files.length;
   if (CP.focus || autofocus === true) { CP.focus = false; queueMicrotask(() => { const t = field(th); if (t && document.activeElement !== t) { t.focus(); t.setSelectionRange(t.value.length, t.value.length); } }); }
+  setTimeout(() => { const t = field(th); if (t) mdSync(t); }, 0);   // after the render lands, so the layer copies the box's font and padding
   CP.sig = (named(d.text) || "") + "|" + empty + "|" + isBtw(d.text);
   const ph = !th ? "Say what you want done" : simpleOn() ? "Message" : r.who === "new" ? "Message a new agent" : r.who ? `Reply to ${r.who}…` : "Message";
   return h("div", { class: "cp", "data-key": k, "data-place": place, ...(th ? {} : dropZone(null)) },  // a thread's composer is inside its conversation's zone
@@ -504,9 +561,10 @@ export function composer({ thread, update, place = "thread", autofocus, top }) {
       SB.open && can("secrets") ? secretRow() : null,
       !SB.open && SB.say ? h("p", { class: "meta cp-ssay", "data-tone": SB.tone, role: "status", "data-key": "ssay" }, SB.say) : null,
       !th && d.naming ? h("div", { class: "cp-name-row", "data-key": "name" }, input({ class: "input cp-name", placeholder: "A short name, like fix-contact-form", "aria-label": "Name for this job", value: d.name, oninput: (e, n) => { d.name = n.value; keep(d); } })) : null,
+      h("div", { class: "cp-tw", "data-key": "tw" }, 
       h("textarea", { class: "cp-t", "data-key": "t", rows: 1, placeholder: ph, "aria-label": th ? "Message" : "What do you want done?", value: d.text, enterkeyhint: "send",
         oninput: (e, n) => {
-          d.text = n.value; keep(d); CP.hist = null;
+          d.text = n.value; keep(d); CP.hist = null; mdSync(n);
           const moved = acCheck(n, th), sig = (named(d.text) || "") + "|" + (!d.text.trim() && !d.files.length) + "|" + isBtw(d.text);
           if (moved || sig !== CP.sig) refresh();
         },
@@ -518,14 +576,18 @@ export function composer({ thread, update, place = "thread", autofocus, top }) {
             if ((e.key === "ArrowUp" || e.key === "ArrowDown") && histStep(th, n, e.key === "ArrowUp")) { e.preventDefault(); return; }
             if (e.key === "Tab" && histTab(th, n)) { e.preventDefault(); return; }
           }
+          if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey) { const k = { b: "bold", i: "italic", e: "code", k: "link" }[e.key.toLowerCase()]; if (k) { e.preventDefault(); fmt(th, k); return; } }
           if (e.key === "Escape") { if (REC.state && REC.th === th) { e.preventDefault(); recStop(false); return; } if (cancelReply()) { e.stopPropagation(); e.preventDefault(); } return; }
+          if (e.key === "Enter" && e.shiftKey && !e.isComposing && listEnter(th, n)) { e.preventDefault(); return; }
           if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); if (e.ctrlKey || e.metaKey || !listEnter(th, n)) send(th); }
         },
-        onpaste: e => { const fs = e.clipboardData && [...e.clipboardData.files]; if (fs && fs.length) { e.preventDefault(); addFiles(th, fs); } } }),
+        onscroll: (e, n) => { const bd = n.parentNode.querySelector(".cp-bd"); if (bd) bd.scrollTop = n.scrollTop; },
+        onpaste: e => { const fs = e.clipboardData && [...e.clipboardData.files]; if (fs && fs.length) { e.preventDefault(); addFiles(th, fs); } } })),
       h("div", { class: "cp-bar", "data-key": "bar" },
         h("input", { type: "file", multiple: true, hidden: true, class: "cp-pick", onchange: e => { addFiles(th, e.target.files); e.target.value = ""; } }),
         button("Attach files", (e, b) => b.parentNode.querySelector(".cp-pick").click(), { kind: "icon", size: "s", icon: "plus", cls: "cp-attach", title: "Attach files. You can also paste or drop them here." }),
         recBar(th),
+        simpleOn() ? null : fmtBar(th),
         wordBoxButton(update),
         phoneReady() && !(REC.state && REC.th === th) ? button("Call", () => { if (!inCall()) startCall(th ? { thread: th } : {}); },
           { kind: "icon", size: "s", icon: "phone", cls: "cp-call", title: th ? "Voice call about this thread: a new agent picks up, reads the thread and talks with you. To talk with an agent itself, hover its name and press Call." : "Voice call with the Hive. Ask it anything, or ask to be put through to whoever is working on something." }) : null,

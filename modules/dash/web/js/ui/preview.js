@@ -97,14 +97,27 @@ export function openPreview(items, i = 0) {
 }
 
 /** The Files list in the panel: this conversation's files and a project's folders. */
-export function openFiles() {
+export function openFiles(auto) {
+  if (auto !== true) { try { localStorage.removeItem(AUTO); } catch (e) {} }   // opened by hand: it opens by itself again
   shell();
   P.list = true; P.seq++; clearTimeout(P.live); P.ctl && P.ctl.abort(); P.ctl = null;
   P.root.setAttribute("aria-label", "Files"); P.root.dataset.kind = "files";
   mark();
   import("../preview/files.js").then(m => { if (P.root && P.list) m.drawFiles(P.head, P.body, { open: openPreview, close: closePreview }); });
-  P.root.focus({ preventScroll: true });
+  if (auto !== true) P.root.focus({ preventScroll: true });
 }
+
+// The Files list opens by itself, small and floating, when a conversation is shown on a wide window; closing it by hand turns that off.
+const AUTO = "pv.autoFiles.off";
+let autoFor = null;
+export function autoFiles(key) {
+  if (key === autoFor) return; autoFor = key;
+  if (P.root && P.list) { openFiles(true); return; }   // another conversation: its files
+  let off = false; try { off = !!localStorage.getItem(AUTO); } catch (e) {}
+  if (off || innerWidth < 1000 || P.root) return;
+  import("./panel.js").then(m => { if (!m.panelOpen()) openFiles(true); }, () => openFiles(true));
+}
+export function filesClosedByHand() { try { localStorage.setItem(AUTO, "1"); } catch (e) {} }
 
 function shell() {
   import("./panel.js").then(m => { if (m.panelOpen()) m.closePanel(); }, () => {});   // one side panel at a time

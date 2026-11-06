@@ -80,14 +80,17 @@ If the Hive has stopped starting agents, a band under the bar says why and where
 
 ### Chat
 
-Chat is where you'll spend your time. The left side lists your conversations. **Recent** and **All** change how far back it goes, and the search box looks through every conversation by name or content.
+Chat is where you'll spend your time. The left side lists your conversations. **Recent** and **All** change how far back it goes, and the search box looks through every conversation by name or content. Start with `@` to ask a question instead, such as `@where did we get to on the launch?`, and press Enter: an agent answers in one line right there and brings up the conversations that fit.
 
 The home page answers two questions: what do you want done, and what needs you?
 
 - **Waiting for your answer:** an agent asked you something.
 - **New for you:** answers you haven't opened.
 - **Stopped:** an agent hit a usage limit or an error, or looks stuck. One stopped by a limit usually resumes by itself after the reset. Otherwise a message gets it going.
+- **Where things stand:** the picture without having to ask. **Needs you** is what only you can do, **Done lately** is what finished in the last two days, **Still going** is what you asked for that isn't finished, and **Your projects** is one line on each focus and project. Press a row to open its conversation, or its reply arrow to add it to your new message so you can ask about it or tell an agent what to do next. It shows what agents and the status helper have already written, so it costs nothing to look at. It isn't in Simple view.
 - **Working now:** what's under way.
+
+Long lists show the first few, with **Show more** under them.
 
 To start a job, type in the box and press **Start** or Enter. Shift+Enter makes a new line. **Name it** gives the conversation a name; otherwise it's named for you. **Attach** adds files. If the voice module is installed and working, a microphone button records a voice memo: press it to start and press again to send (or hold it while you talk and let go), × or Esc throws the recording away. It is transcribed and summarized on the machine and answered in the conversation.
 
@@ -104,6 +107,7 @@ In a conversation:
 - **Carry on** appears when an agent stopped at a usage limit and there's room again.
 - The line above the box says what's happening right now. **Stop…** there ends an agent ([see below](#stopping-things)).
 - **More** at the top right has the conversation's priority, search and a link to its place on the Timeline.
+- **A greyed conversation** in the list is one the Hive thinks you no longer need to look at: it's finished and answered, or another one replaced it. Hover the words **Likely not needed** to see who marked it and why. It's still there to open and write in, and it comes back by itself when you write in it or something new in it is for you. **Needed again** in **More** takes the grey off for good, and **Not needed** greys one yourself.
 - **Share this result** (in **More**) turns the conversation into one web page you can post: your ask, who worked on it and how long it took, the result with its pictures, and a replay. First you see every message with a **Remove** button on each, and a plain line that everything on the page becomes public if you post it. Paths, links, emails, addresses and long tool output are already taken out, so read it anyway. The page is saved to your downloads as one file that works offline; nothing is uploaded. In a terminal, `hive share CONVERSATION` does the same, and `--show` prints the text first.
 
 **Brought up for you.** When you ask an agent to bring a conversation up ("can you bring that up?"), it appears in the Chat side list, above Conversations, with who raised it and why. One click opens it, and it drops off by itself after about ten minutes, or sooner if you dismiss it with its ×. Agents do it with `hive show THREAD --why "..."`.

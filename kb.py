@@ -7,13 +7,15 @@
   kb file "TITLE" <<'X'     write a note, index it now, show similar notes  [--to PATH appends]
   kb alias WORD SAME...     teach it that these words mean the same (kb/aliases.txt)
   kb miss "QUESTION"        record a lookup that failed; the dream works from these
+  kb recall --post ID       up to 5 pointers to our own notes for a post (or text on stdin): what the starter and the
+                            inbox hook add to a message, so related notes turn up with no search. An agent (--for NAME) gets each note once
   kb stats                  index size, queries, misses
   kb due [--mark]           is there anything for a dream to do (the starter asks this)
   kb eval [FILE]            score the engine on questions with known answers
 
 The index refreshes itself at each call from file times; there is no daemon.
 """
-import argparse, fcntl, hashlib, json, math, os, re, sqlite3, sys, time
+import argparse, fcntl, hashlib, json, math, os, re, sqlite3, subprocess, sys, time
 H = os.path.expanduser(os.environ.get("KB_HOME", "~"))
 CACHE = os.path.join(os.path.expanduser("~/.cache/hive-kb") if "KB_HOME" not in os.environ else H + "/.cache/hive-kb")
 DB, LOCK, QLOG, DREAMT = CACHE + "/index.db", CACHE + "/lock", CACHE + "/queries.jsonl", CACHE + "/dream_at"
@@ -56,6 +58,7 @@ def connect():
     CREATE VIRTUAL TABLE IF NOT EXISTS fts USING fts5(title, head, body, tokenize='porter unicode61');
     CREATE VIRTUAL TABLE IF NOT EXISTS vocab USING fts5vocab(fts, 'row');
     CREATE TABLE IF NOT EXISTS meta(k TEXT PRIMARY KEY, v TEXT);
+    CREATE TABLE IF NOT EXISTS past(post TEXT PRIMARY KEY, thread TEXT, text TEXT, ctx TEXT, read TEXT, vec TEXT, k1 TEXT, k2 TEXT);
     """)
     return c
 
@@ -141,6 +144,71 @@ def index_board(c):
             c.execute("INSERT INTO fts(rowid,title,head,body) VALUES(?,?,?,?)", (cid, "thread " + t, str(p.get("from")), body))
     c.execute("INSERT OR REPLACE INTO meta VALUES('board_off',?)", (str(off),))
 
+HIST_AGE, HIST_CTX = 3600, 1500
+def index_history(c):
+    """Each past message handed to an agent, with the notes (of ours) its run then read: what `recall` learns from.
+    Reads log.jsonl's starts once their run is an hour old, and the run's transcript for the notes it opened."""
+    try: size = os.path.getsize(H + "/log.jsonl")
+    except OSError: return
+    r = c.execute("SELECT v FROM meta WHERE k='past_off'").fetchone(); off = int(r[0]) if r else 0
+    if off > size: off = 0
+    if off == size: return
+    posts = {}; named = set()
+    try:
+        with open(H + "/board.jsonl", errors="replace") as f:
+            for l in f:
+                try: p = json.loads(l)
+                except ValueError: continue
+                posts[p.get("id")] = p
+        orient = "".join(open(H + "/core/" + x).read() for x in ("orientation.md", "keeper.md"))
+        named = {"kb/" + x for x in re.findall(r"~/kb/([\w./-]+\.md)", orient)} | {"core/orientation.md", "core/keeper.md"}
+    except OSError: pass
+    byth = {}
+    for p in posts.values(): byth.setdefault(p.get("thread"), []).append(p)
+    for v in byth.values(): v.sort(key=lambda p: str(p.get("at") or ""))
+    def rel(p):
+        p = p.replace("~/", H + "/")
+        if p.startswith("A/"): p = H + "/archive/knowledge/" + p[2:]
+        if not p.startswith("/"): p = H + "/" + p
+        return os.path.relpath(p, H)
+    cutoff = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(time.time() - HIST_AGE))
+    with open(H + "/log.jsonl", errors="replace") as f:
+        f.seek(off)
+        while True:
+            l = f.readline()
+            if not l or not l.endswith("\n"): break
+            try: e = json.loads(l)
+            except ValueError: off = f.tell(); continue
+            if e.get("event") == "start" and str(e.get("at") or "")[:19] > cutoff: break  # may still be running: next time
+            off = f.tell()
+            if e.get("event") != "start" or not e.get("out") or not os.path.exists(e["out"]): continue
+            p = posts.get(e.get("post"))
+            if not p or p.get("from") in ("starter", "watchdog") or str(e.get("name") or "").startswith("w") or not str(p.get("text") or "").strip(): continue
+            read, wrote = set(), set()
+            try:
+                for sl in open(e["out"], errors="replace"):
+                    if '"tool_use"' not in sl: continue
+                    try: j = json.loads(sl)
+                    except ValueError: continue
+                    for b in ((j.get("message") or {}).get("content") or []):
+                        if not isinstance(b, dict) or b.get("type") != "tool_use": continue
+                        i = b.get("input") or {}; fp = str(i.get("file_path") or "")
+                        if b.get("name") == "Read" and fp.endswith(".md"): read.add(rel(fp))
+                        elif b.get("name") in ("Write", "Edit") and fp: wrote.add(rel(fp))
+                        elif b.get("name") == "Bash":
+                            cmd = str(i.get("command") or "")
+                            read.update(rel(m) for m in re.findall(r"kb open ([\w~./-]+\.md)", cmd))
+                            read.update(rel(m) for m in re.findall(r"(?:cat|head|tail|sed -n \S+|less) ((?:~|" + re.escape(H) + r")/[\w./-]+\.md)", cmd))
+                            wrote.update(rel(m if m.startswith(("/", "~")) else "kb/" + m) for m in re.findall(r"kb file .*--to (\S+\.md)", cmd))
+            except OSError: continue
+            read = sorted(x for x in read if x.startswith(RECALL_PREFIX) and x not in named and x not in wrote and os.path.exists(H + "/" + x))
+            if not read: continue
+            th = [q for q in byth.get(p.get("thread"), []) if q.get("id") != p.get("id") and str(q.get("at") or "") <= str(p.get("at") or "")]
+            ctx = " ".join(str(q.get("text") or "")[:HIST_CTX] for q in th[:1] + th[1:][-3:])
+            text = str(p.get("text") or "")[:12000]
+            c.execute("INSERT OR REPLACE INTO past VALUES(?,?,?,?,?,?,?,?)", (p["id"], str(p.get("thread") or ""), text, ctx, json.dumps(read), json.dumps(recall_vec(text, ctx)), recall_key(text), recall_key(ctx)))
+    c.execute("INSERT OR REPLACE INTO meta VALUES('past_off',?)", (str(off),))
+
 def refresh(c, force=False):
     """Bring the index up to date. If another process holds the lock, search what's there rather than wait."""
     os.makedirs(CACHE, exist_ok=True)
@@ -166,6 +234,7 @@ def refresh(c, force=False):
         for rel, k in known.items():
             if rel not in seen: drop_doc(c, k[0])
         index_board(c)
+        index_history(c)
     return n
 
 def aliases():
@@ -372,6 +441,163 @@ def cmd_open(a):
     if e < len(ls): print(f"(more: kb open {a.target.split(':')[0]}:{e+1})")
     log({"open": a.target})
 
+# --- recall: pointers to our own notes for a message, found with no search by the agent -------------------------
+# Scored on 577 past runs that went on to read a note (2026-11-05): the first pointer was a note the run read for 55% of
+# agents' briefs. A short message from the person has few words to go on, so its thread's earlier posts are searched too.
+RECALL_SRC = ("kb", "core", "modules"); RECALL_PREFIX = tuple(x + "/" for x in RECALL_SRC)  # notes we wrote: never the h4 mirror, the archive or project data
+RECALL_WORDS, RECALL_STALE, RECALL_ONCE, RECALL_CTX = 40, 600, 6 * 3600, 0.5
+RECALL_KNN, RECALL_KCTX, RECALL_FILES = 8, 0.3, 40  # neighbours that vote, weight of a thread word in matching messages, files weighed
+FILLER = set("""ive idk like just really thing things stuff something anything everything want wants wanted need needs needed make makes made making
+get gets got getting going goes went know think thought see seen look looks looking way ways lot lots bit kind kinda sort maybe also still even much many please thanks
+thank hey hello yes yeah okay sure now today tomorrow yesterday soon later already always never ever one two three four five first second third new old good better best
+bad great nice well right wrong use uses used using work works working worked start starts started starting run runs running ran add adds added adding put take takes taken
+tell say says said ask asks asked give gives given let lets try tried trying check checked find found read post posts posted thread threads agent agents message messages
+don dont doesn doesnt isn isnt cant won wont didn didnt ill youre thats whats theres here back up down off through because since though
+big small large little long short high low full fully whole entire main major minor real actual actually basically simply simple easy hard super quite rather
+instead possibly probably likely seems seem seemed able possible different similar another others else next last current currently previous
+done doing keep keeps kept stop stops stopped end ends ended show shows showed shown tells told call calls called named name names
+time times day days week weeks hour hours minute minutes month months year years people person someone anyone everyone nobody
+list lists item items part parts point points case cases example examples reason reasons idea ideas question questions answer answers
+available following based within without across between around along against per via etc note notes file files line lines page pages
+set sets move moved change changes changed update updates updated fix fixes fixed build builds built create created write wrote written
+bring brings brought come comes came happen happens happened mean means meant feel feels felt help helps helped must might shall
+whenever whatever wherever however therefore otherwise anyway almost enough exactly especially generally usually often sometimes""".split())
+
+def recall_words(text):
+    """The words of a message worth matching: no sender line, links, code, names, post ids, paths or small talk."""
+    text = re.sub(r"\(from [^)]{0,120}\)", " ", text[:12000])
+    text = re.sub(r"https?://\S+|`[^`\n]*`|@[\w-]+|\b[0-9a-f]{12}\b|~?/[\w./-]+", " ", text)
+    ws = [w.lower() for w in re.findall(r"[A-Za-z][A-Za-z0-9_]{2,}", text)]
+    return [w for w in dict.fromkeys(ws) if w not in STOP and w not in FILLER][:RECALL_WORDS]
+
+def recall(c, text, n=5, ctx="", knn=True, thread=""):
+    """Up to n notes of ours that share uncommon words with the message in one passage, best first. The message's own words
+    count in full, its thread's earlier words (ctx) at half; one shared word is enough. A word counts for more in a heading
+    or title, and for less the more of our passages hold it. Reads the index as it is."""
+    wq = recall_words(text)
+    wt = {w: 1.0 for w in wq}
+    for w in recall_words(ctx):
+        if w not in wt and len(wt) < RECALL_WORDS: wt[w] = RECALL_CTX
+    words = list(wt)
+    q = ",".join("?" * len(RECALL_SRC))
+    try: own = c.execute(f"SELECT count(*) FROM chunk JOIN doc ON doc.id=chunk.doc WHERE doc.source IN ({q})", RECALL_SRC).fetchone()[0]
+    except sqlite3.OperationalError: return []
+    if not words or not own: return []
+    sel = f"SELECT fts.rowid FROM fts JOIN chunk ON chunk.id=fts.rowid JOIN doc ON doc.id=chunk.doc WHERE fts MATCH ? AND doc.source IN ({q})"
+    idf, seen, score = {}, {}, {}
+    for w in words:
+        try:
+            body = {r[0] for r in c.execute(sel, ('body : "%s"' % w, *RECALL_SRC))}
+            head = {r[0] for r in c.execute(sel, ('{title head} : "%s"' % w, *RECALL_SRC))}
+        except sqlite3.OperationalError: continue
+        both = frozenset(body | head)
+        if not both or len(both) > own * 0.12 or any(w[:4] == x[:4] for x in seen.get(both, ())): continue  # in no note, in too many, or locked after lock
+        seen.setdefault(both, []).append(w); idf[w] = math.log(1 + own / (1 + len(both))) * wt[w]
+        for cid in body: score.setdefault(cid, [set(), set()])[0].add(w)
+        for cid in head: score.setdefault(cid, [set(), set()])[1].add(w)
+    ranked = sorted(((sum(idf[w] for w in body) + 1.5 * sum(idf[w] for w in head), cid, body, head) for cid, (body, head) in score.items()), key=lambda x: (-x[0], x[1]))
+    found, got = [], {}
+    for s, cid, body, head in ranked:  # best first, so a note's first passage here is its best
+        r = c.execute("SELECT doc.path, chunk.line, fts.head, fts.title FROM fts JOIN chunk ON chunk.id=fts.rowid JOIN doc ON doc.id=chunk.doc WHERE fts.rowid=?", (cid,)).fetchone()
+        if not r or r[0] in got: continue
+        got[r[0]] = {"path": r[0], "line": r[1], "head": r[2] or r[3] or "", "s": s, "words": sorted(body | head)}
+        if len(got) >= (RECALL_FILES if knn else n): break
+    if knn:
+        votes = recall_votes(c, text, ctx, thread)
+        top = max([h["s"] for h in got.values()], default=0) or 1; vm = max(votes.values(), default=0) or 1
+        for pth, v in votes.items():
+            if pth not in got:
+                r = c.execute("SELECT doc.path, chunk.line, fts.head, fts.title FROM fts JOIN chunk ON chunk.id=fts.rowid JOIN doc ON doc.id=chunk.doc WHERE doc.path=? ORDER BY chunk.line LIMIT 1", (pth,)).fetchone()
+                if r: got[pth] = {"path": r[0], "line": r[1], "head": r[2] or r[3] or "", "s": 0, "words": []}
+        for h in got.values(): h["s"] = h["s"] / top + votes.get(h["path"], 0) / vm
+    out = sorted(got.values(), key=lambda d: (-d["s"], d["path"]))[:n]
+    for h in out: h["s"] = round(h["s"], 1)
+    return out
+
+def recall_vec(t, x):
+    v = {w: 1.0 for w in recall_words(t)[:60]}
+    for w in recall_words(x)[:60]: v.setdefault(w, RECALL_KCTX)
+    return v
+
+def recall_key(t): return re.sub(r"\W+", "", t)[:150].lower()
+
+def recall_votes(c, text, ctx, thread=""):
+    """Notes that the runs for the most alike past messages went on to read, by how alike. Never a message from the same
+    thread or with the same text as this one, so a question cannot find its own answer."""
+    try: rows = c.execute("SELECT thread, read, vec, k1, k2 FROM past").fetchall()
+    except sqlite3.OperationalError: return {}
+    mine, mctx = recall_key(text), recall_key(ctx)
+    past = []
+    for th, rd, vc, k1, k2 in rows:
+        # same text; same thread (its context opens with the same post); or the thread's first post this one is a reply to
+        if k1 == mine or (mctx and k2 == mctx) or k2 == mine or (thread and th == thread): continue
+        past.append((json.loads(vc), json.loads(rd)))
+    if not past: return {}
+    df = {}
+    for v, _ in past:
+        for w in v: df[w] = df.get(w, 0) + 1
+    N = len(past); wt = lambda w, x: x * math.log(1 + N / (1 + df.get(w, 0)))
+    q = {w: wt(w, x) for w, x in recall_vec(text, ctx).items()}; qn = math.sqrt(sum(x * x for x in q.values())) or 1
+    sims = []
+    for v, rd in past:
+        dot = sum(x * wt(w, v[w]) for w, x in q.items() if w in v)
+        if dot: sims.append((dot / (qn * (math.sqrt(sum(wt(w, x) ** 2 for w, x in v.items())) or 1)), rd))
+    sims.sort(key=lambda t: -t[0]); votes = {}
+    for sim, rd in sims[:RECALL_KNN]:
+        for pth in rd: votes[pth] = votes.get(pth, 0) + sim ** 2
+    return votes
+
+def recall_shown(who):
+    """The notes already pointed out to this agent in the last hours: a pointer is given once, so a thread's later posts bring only what is new."""
+    since, seen = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(time.time() - RECALL_ONCE)), set()
+    try:
+        with open(QLOG, "rb") as f:
+            f.seek(max(0, os.path.getsize(QLOG) - 400000)); lines = f.read().decode(errors="replace").splitlines()
+    except OSError: return seen
+    for l in lines:
+        try: r = json.loads(l)
+        except ValueError: continue
+        if "recall" in r and r.get("who") == who and r.get("at", "") >= since: seen.update(r.get("top") or ())
+    return seen
+
+def recall_posts(ids, before=3, cap=1500):
+    """The text of these posts, then their thread's first post and the few before them: a short message leans on its thread."""
+    posts = []
+    try:
+        with open(H + "/board.jsonl", errors="replace") as f:
+            for l in f:
+                try: posts.append(json.loads(l))
+                except ValueError: pass
+    except OSError: return "", ""
+    mine = [p for p in posts if p.get("id") in ids]
+    ctx = []
+    for t in dict.fromkeys(p.get("thread") for p in mine):
+        th = [p for p in posts if p.get("thread") == t and p.get("id") not in ids and str(p.get("at") or "") <= max(str(m.get("at") or "") for m in mine)]
+        ctx += th[:1] + th[1:][-before:]
+    return " ".join(str(p.get("text") or "") for p in mine), " ".join(str(p.get("text") or "")[:cap] for p in ctx)
+
+def cmd_recall(a):
+    text, ctx = recall_posts(set(a.post)) if a.post else (sys.stdin.read(), "")
+    thread = ""
+    if a.post:  # the thread of the post, so its own earlier messages are never taken as like-minded neighbours
+        try: thread = next((str(p.get("thread") or "") for l in open(H + "/board.jsonl", errors="replace") for p in [json.loads(l)] if p.get("id") in set(a.post)), "")
+        except (OSError, ValueError): pass
+    if not text.strip(): return  # no such post, or nothing on stdin
+    c = connect(); t0 = time.time()
+    hits = recall(c, text, a.n, ctx, thread=thread)
+    if a.who: seen = recall_shown(a.who); hits = [h for h in hits if h["path"] not in seen]
+    if hits:
+        print("Notes that may bear on this (matched on its words, not checked; `kb open PATH:LINE` reads one):")
+        for h in hits: print("- %s:%d  %s" % (fmt_path(h["path"]), h["line"], re.sub(r"\s+", " ", h["head"])[:90]))
+    rec = {"recall": a.post or "stdin", "top": [h["path"] for h in hits], "ms": int((time.time() - t0) * 1000)}
+    if a.who: os.environ["HIVE_NAME"] = a.who
+    log(rec)
+    # never make a message wait for the index: search what's there, and bring it up to date behind the reply
+    try: stale = time.time() - os.path.getmtime(LOCK) > RECALL_STALE
+    except OSError: stale = True
+    if stale:
+        subprocess.Popen([sys.executable, "-I", os.path.abspath(__file__), "stats"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+
 def cmd_file(a):
     text = sys.stdin.read().strip() if not sys.stdin.isatty() else ""
     if not text: sys.exit("kb file: put the note on stdin, with a quoted heredoc")
@@ -487,6 +713,7 @@ def main():
     p = sp.add_parser("file"); p.add_argument("title"); p.add_argument("--to"); p.add_argument("--force", action="store_true"); p.set_defaults(f=cmd_file)
     p = sp.add_parser("alias"); p.add_argument("words", nargs="+"); p.set_defaults(f=cmd_alias)
     p = sp.add_parser("miss"); p.add_argument("question", nargs="+"); p.set_defaults(f=cmd_miss)
+    p = sp.add_parser("recall"); p.add_argument("--post", action="append"); p.add_argument("-n", type=int, default=5); p.add_argument("--for", dest="who"); p.set_defaults(f=cmd_recall)
     p = sp.add_parser("due"); p.add_argument("--mark", action="store_true"); p.set_defaults(f=cmd_due)
     p = sp.add_parser("stats"); p.set_defaults(f=cmd_stats)
     p = sp.add_parser("eval"); p.add_argument("file", nargs="?", default=H + "/core/kbtool/questions.jsonl"); p.add_argument("-v", action="store_true"); p.add_argument("-n", type=int, default=12); p.add_argument("--sets", default="ab"); p.set_defaults(f=cmd_eval)

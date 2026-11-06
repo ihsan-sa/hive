@@ -591,7 +591,7 @@ def cmd_stalled(a):
     for p in posts(): last_post[str(p.get("from", "")).lower()] = max(last_post.get(str(p.get("from", "")).lower(), ""), str(p.get("at", "")))
     for t, ps in sorted(threads.items(), key=lambda kv: kv[1][-1].get("at", "")):
         last = ps[-1]
-        if not (within < last.get("at", "") < quiet) or t in ("keeper",): continue
+        if not (within < last.get("at", "") < quiet) or t in ("keeper", "side"): continue
         who = list(dict.fromkeys(str(p.get("from", "")).lower() for p in ps if str(p.get("from", "")).lower() not in ext))
         if not who or any(w in live or w in queued for w in who): continue
         if DONE.search(str(last.get("text", ""))[:300]) and last.get("from") not in ("person", "hives"): continue
@@ -833,6 +833,31 @@ def cmd_bringup(a):
         fcntl.flock(f, fcntl.LOCK_EX); f.write(json.dumps(rec) + "\n")
     print(f"brought up {th} for {secs // 60} min")
 
+def cmd_important(a):
+    """hive important THREAD --why "..." [--off]: mark a thread important for the person; the dashboard lists it with an icon and under the Important filter."""
+    th = (a.thread or "").lstrip("#")
+    if not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.:-]{0,100}", th): sys.exit("hive important: give a thread name (letters, digits and . _ : -)")
+    if not any(p.get("thread") == th for p in posts()): sys.exit(f"hive important: no thread named {th} on the board (hive search words to find it)")
+    rec = {"thread": th, "from": os.environ.get("HIVE_NAME", "anon"), "why": " ".join((a.why or "").split())[:200], "at": time.time()}
+    if a.off: rec["off"] = True
+    STATE.mkdir(parents=True, exist_ok=True)
+    with open(STATE / "important.jsonl", "a") as f:
+        fcntl.flock(f, fcntl.LOCK_EX); f.write(json.dumps(rec) + "\n")
+    print(("took the important mark off " if a.off else "marked important: ") + th)
+
+def cmd_fade(a):
+    """hive fade THREAD --why "..." [--off]: mark a thread as likely not needed by the person any more; the dashboard greys it in the list, still there to open and write in."""
+    th = (a.thread or "").lstrip("#"); why = " ".join((a.why or "").split())[:200]
+    if not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.:-]{0,100}", th): sys.exit("hive fade: give a thread name (letters, digits and . _ : -)")
+    if not any(p.get("thread") == th for p in posts()): sys.exit(f"hive fade: no thread named {th} on the board (hive search words to find it)")
+    if not a.off and not why: sys.exit('hive fade: say why the person no longer needs it, --why "..." (they read it on the greyed row)')
+    rec = {"thread": th, "from": os.environ.get("HIVE_NAME", "anon"), "why": why, "at": time.time()}
+    if a.off: rec["off"] = True
+    STATE.mkdir(parents=True, exist_ok=True)
+    with open(STATE / "faded.jsonl", "a") as f:
+        fcntl.flock(f, fcntl.LOCK_EX); f.write(json.dumps(rec) + "\n")
+    print(("took the not-needed mark off " if a.off else "greyed as likely not needed: ") + th)
+
 def cmd_status(a):
     """hive status THREAD [text on stdin]: set or read the two-line status bar the dashboard shows at the top of a thread."""
     th = (a.thread or "").lstrip("#")
@@ -883,7 +908,11 @@ p.add_argument("--file", action="append", help="attach a file (repeatable): copi
 p.add_argument("text", nargs="*"); p.set_defaults(f=cmd_post)
 p = sp.add_parser("show", help="hive show THREAD --why \"...\" [--for 10m]: bring a thread up: the dashboard shows it in a pinned \"Brought up for you\" strip at the top for 10 min (or --for), with who raised it and why, so the person can click straight in. Use it when the person asks you to bring something up")
 p.add_argument("thread"); p.add_argument("--why", default=""); p.add_argument("--for", dest="for_", metavar="10m", help="how long it stays: 5m, 1h (default 10m, up to 24h)"); p.set_defaults(f=cmd_bringup)
-p = sp.add_parser("status", help="hive status THREAD <<'X' ...: set the two-line status bar the dashboard shows at the top of a thread (line 1: what it is about; line 2: where it stands now, what it waits on). --read prints it. Update it when you change a thread's state")
+p = sp.add_parser("important", help="hive important THREAD --why \"...\" [--off]: mark a thread important for the person (something they would want to know): the dashboard side list shows it with an important icon, under an Important filter. --off takes your mark off when it is settled")
+p.add_argument("thread"); p.add_argument("--why", default=""); p.add_argument("--off", action="store_true"); p.set_defaults(f=cmd_important)
+p = sp.add_parser("fade", help="hive fade THREAD --why \"...\" [--off]: mark a thread as likely not needed by the person any more (finished and read, replaced by another thread, nothing in it for them): the dashboard side list greys it, and they can still open it and write in it. A post for the person, or one from them, brings it back by itself. --off takes your mark off")
+p.add_argument("thread"); p.add_argument("--why", default=""); p.add_argument("--off", action="store_true"); p.set_defaults(f=cmd_fade)
+p = sp.add_parser("status", help="hive status THREAD <<'X' ...: set the two-line status bar the dashboard shows at the top of a thread (line 1: what it is about; line 2: where it stands now, what it waits on). --read prints it. Update it when you change a thread's state; before you stop, line 2 is why, starting Done:, Blocked:, Needs the person:, Waiting: or Told to stop:")
 p.add_argument("thread"); p.add_argument("--read", action="store_true"); p.set_defaults(f=cmd_status)
 p = sp.add_parser("model", help="hive model haiku|sonnet|opus|fable WHY...: carry on with this conversation on another model. It posts WHY in your thread; end your turn and you resume on that model with your memory. --next: no resume, your next wake starts on it")
 p.add_argument("to_model", choices=CLAUDE_MODELS, metavar="MODEL"); p.add_argument("--next", action="store_true"); p.add_argument("why", nargs="+"); p.set_defaults(f=cmd_model)

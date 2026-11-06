@@ -1,8 +1,42 @@
 {
-  "mech": {"repo": "https://github.com/Hive-RSI-Lab/hive-mech.git", "about": "3D-printable enclosures fitted to KiCad boards, modelled in code.", "needs": "uv"},
-  "hwde": {"repo": "https://github.com/Hive-RSI-Lab/hive-hwde.git", "about": "KiCad PCB design from a written brief to a fab package.", "needs": "KiCad 10, freerouting, Java, xvfb, uv; see its docs (HIVE_TOOLS)"},
-  "chip-flow": {"repo": "https://github.com/Hive-RSI-Lab/hive-chip-flow.git", "about": "Chip design with open tools: /vde, /ade and /msde skills down to a GF180 tile.", "needs": "the IIC-OSIC-TOOLS image for simulation and hardening"},
-  "fw": {"repo": "https://github.com/Hive-RSI-Lab/hive-fw.git", "about": "ESP32 firmware: host tests, builds, QEMU boots.", "needs": "ESP-IDF, about 2 GB, via fw setup"},
-  "video": {"repo": "https://github.com/Hive-RSI-Lab/hive-video.git", "about": "Demo videos and highlight reels in code: frame-exact web films, Blender 3D shots, smooth MP4 and GIF.", "needs": "node, ffmpeg; Blender only for 3D shots"},
-  "autoresearch": {"repo": "https://github.com/Hive-RSI-Lab/hive-autoresearch.git", "about": "A loop that optimises one metric.", "recommended": true}
+ "mech": {
+  "repo": "https://github.com/Hive-RSI-Lab/hive-mech.git",
+  "about": "3D-printable enclosures fitted to KiCad boards, modelled in code.",
+  "needs": "uv"
+ },
+ "hwde": {
+  "repo": "https://github.com/Hive-RSI-Lab/hive-hwde.git",
+  "about": "KiCad PCB design from a written brief to a fab package.",
+  "needs": "KiCad 10, freerouting, Java, xvfb, uv; see its docs (HIVE_TOOLS)"
+ },
+ "chip-flow": {
+  "repo": "https://github.com/Hive-RSI-Lab/hive-chip-flow.git",
+  "about": "Chip design with open tools: /vde, /ade and /msde skills down to a GF180 tile.",
+  "needs": "the IIC-OSIC-TOOLS image for simulation and hardening"
+ },
+ "fw": {
+  "repo": "https://github.com/Hive-RSI-Lab/hive-fw.git",
+  "about": "ESP32 firmware: host tests, builds, QEMU boots.",
+  "needs": "ESP-IDF, about 2 GB, via fw setup"
+ },
+ "video": {
+  "repo": "https://github.com/Hive-RSI-Lab/hive-video.git",
+  "about": "Demo videos and highlight reels in code: frame-exact web films, Blender 3D shots, smooth MP4 and GIF.",
+  "needs": "node, ffmpeg; Blender only for 3D shots"
+ },
+ "autoresearch": {
+  "repo": "https://github.com/Hive-RSI-Lab/hive-autoresearch.git",
+  "about": "A loop that optimises one metric.",
+  "recommended": true
+ },
+ "reach": {
+  "repo": "https://github.com/Hive-RSI-Lab/hive-reach.git",
+  "about": "Connectors to reach the person in other apps (20 of them) and guarded arms out: browser, calendar, Home Assistant, webhooks, reminders, feed watch.",
+  "needs": "each connector's own account or app; all off until set up"
+ },
+ "link": {
+  "repo": "https://github.com/Hive-RSI-Lab/hive-link.git",
+  "about": "Signed messages between Hives: ed25519 keys, pinned peers, replay and rate limits.",
+  "needs": "python3 cryptography"
+ }
 }

@@ -8,7 +8,7 @@ export const SYS = new Set(["starter", "dash", "anon", "all", "400", "mention", 
 
 export const S = {
   app: { route: "open", can: null, app: false, setup: null },
-  live: null, usage: null, projects: null, agentCosts: null, threadNames: {}, threadMeta: {}, shown: [],
+  live: null, usage: null, projects: null, agentCosts: null, threadNames: {}, threadMeta: {}, shown: [], threadStatus: {},
   posts: [], byId: {}, threads: new Map(), off: 0,
   sessions: [], lastSess: {}, open: {}, byOut: {}, woke: {}, logOff: 0,
   agents: new Set(), killed: {}, limited: [], limitedSess: new Set(), limitedNow: new Set(),
@@ -169,6 +169,10 @@ export async function loadThreadMeta() {
 export async function loadShown() {
   try { const v = await jget("/api/shown"); if (JSON.stringify(v) !== JSON.stringify(S.shown)) { S.shown = Array.isArray(v) ? v : []; S.ver++; emit({ names: true }); } } catch (e) {}
 }
+/** The two-line status bar of each thread (/api/thread-status): `hive status THREAD`. */
+export async function loadThreadStatus() {
+  try { const v = await jget("/api/thread-status"); if (JSON.stringify(v) !== JSON.stringify(S.threadStatus)) { S.threadStatus = v && typeof v === "object" ? v : {}; S.ver++; emit({ names: true }); } } catch (e) {}
+}
 export async function loadProjects() {
   if (S.projects) return; S.projects = "loading"; emit({ projects: true });
   try { const p = await jget("/api/projects"); p.sort((a, b) => (b.t || 0) - (a.t || 0)); S.projects = p; } catch (e) { S.projects = null; }
@@ -176,7 +180,7 @@ export async function loadProjects() {
 }
 export function start() {
   const every = (ms, f) => setInterval(() => { if (!document.hidden) f(); }, ms);
-  every(1500, poll); every(3000, pollUsage); every(15000, loadApp); every(60000, loadThreadNames); every(15000, loadThreadMeta); every(5000, loadShown);
+  every(1500, poll); every(3000, pollUsage); every(15000, loadApp); every(60000, loadThreadNames); every(15000, loadThreadMeta); every(5000, loadShown); every(20000, loadThreadStatus);
   document.addEventListener("visibilitychange", () => { if (!document.hidden) { poll(); pollUsage(); } });
-  return Promise.all([loadApp(), pollUsage(), poll(), loadThreadNames(), loadThreadMeta(), loadShown()]);
+  return Promise.all([loadApp(), pollUsage(), poll(), loadThreadNames(), loadThreadMeta(), loadShown(), loadThreadStatus()]);
 }

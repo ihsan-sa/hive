@@ -19,6 +19,10 @@ Say what you want before bed. Wake up to it done, checked and written up, or to 
 
 **Plans:** Pro is enough to try one job at a time. Max 5x is the honest start for overnight work. It can use a week's limit quickly, and by default nothing caps how many agents run at once.
 
+**On a laptop, start with a server:** paste [`cloud-init.yaml`](https://hivelab.ca/cloud-init.yaml) when you create a small Linux server and it installs the Hive by itself ([ten-minute tutorial](docs/tutorials/11-small-server.md)).
+
+**On a Linux machine that stays awake, run:**
+
 ```sh
 curl -fsSL https://hivelab.ca/install.sh | sh
 ```

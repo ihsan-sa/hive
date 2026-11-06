@@ -428,27 +428,74 @@ def dismiss_shown(d):
     with open(SHOWN, "a") as f: f.write(json.dumps({"thread": th, "dismissed": True, "at": time.time()}) + "\n")
     return {"ok": True}
 
+# ---------- the status bar at the top of a thread (GET /api/thread-status) ----------
+# `hive status THREAD` appends to ~/.hive/thread-status.jsonl; newest entry per thread: {thread: {text, from, at}}.
+THREAD_STATUS = STATE / "thread-status.jsonl"
+
+def thread_status():
+    out = {}
+    try: lines = THREAD_STATUS.read_text().splitlines()[-3000:]
+    except OSError: return out
+    for ln in lines:
+        try: r = json.loads(ln)
+        except ValueError: continue
+        if isinstance(r, dict) and THREAD_NAME.fullmatch(str(r.get("thread") or "")) and r.get("text"):
+            try: out[r["thread"]] = {"text": str(r["text"])[:400], "from": str(r.get("from") or "")[:40], "at": float(r.get("at") or 0)}
+            except (TypeError, ValueError): pass
+    return out
+
 # ---------- the person's own view of threads (GET/POST /api/thread-meta) ----------
 # Pins, archive and new titles the person gives threads on Chat. Kept beside the board, never in it: the board and every link keep
 # the thread's id. {thread: {"title": str, "pin": ms, "archived": ms, "back": ms}}; a key that's off is left out, a thread with none is dropped.
+# "important" and "faded" (likely not needed any more, greyed in the list) can also come from agents; the person's own word on either wins.
 THREAD_META = STATE / "thread-meta.json"
 META_LOCK = threading.Lock()
 
+IMPORTANT = STATE / "important.jsonl"   # `hive important THREAD --why ...` appends {thread, from, why, at, off?}; the person's own mark is "important" in thread-meta
+FADED = STATE / "faded.jsonl"           # `hive fade THREAD --why ...`, same records: an agent's word that the person likely needn't look at the thread any more
+
+def agent_marks(path):
+    """Newest agent mark per thread that is still on: {thread: {by, why, at}}."""
+    best = {}
+    try: lines = path.read_text().splitlines()[-1000:]
+    except OSError: return best
+    for ln in lines:
+        try: r = json.loads(ln); th = str(r["thread"]); at = float(r["at"])
+        except (ValueError, KeyError, TypeError): continue
+        if not THREAD_NAME.fullmatch(th): continue
+        if r.get("off"): best.pop(th, None)
+        else: best[th] = {"by": str(r.get("from") or "")[:40], "why": str(r.get("why") or "")[:200], "at": int(at * 1000)}
+    return best
+
 def thread_meta():
     try: v = json.loads(THREAD_META.read_text())
-    except (OSError, ValueError): return {}
-    return v if isinstance(v, dict) else {}
+    except (OSError, ValueError): v = {}
+    if not isinstance(v, dict): v = {}
+    for path, key, off, by, why in ((IMPORTANT, "important", "impOff", "impBy", "impWhy"), (FADED, "faded", "fadeOff", "fadedBy", "fadedWhy")):
+        for th, a in agent_marks(path).items():      # an agent's mark counts unless the person took the mark off after it
+            m = dict(v.get(th) or {})
+            if a["at"] > m.get(off, 0) and not m.get(key):
+                m[key] = a["at"]; m[by] = a["by"]; m[why] = a["why"]; v[th] = m
+    return v
 
 def set_thread_meta(d):
-    """d: {thread, and any of title (str, "" takes it off), pin (bool), archived (bool)}. Returns the new entry."""
+    """d: {thread, and any of title (str, "" takes it off), pin, archived, important, faded (bool)}. Returns the new entry."""
     th = str(d.get("thread") or "")
     if not THREAD_NAME.fullmatch(th): raise ValueError("a thread name is letters, digits and . _ : -")
     with META_LOCK:
-        all_ = thread_meta(); m = dict(all_.get(th) or {}); now_ms = int(time.time() * 1000)
+        try: all_ = json.loads(THREAD_META.read_text())
+        except (OSError, ValueError): all_ = {}
+        if not isinstance(all_, dict): all_ = {}
+        m = dict(all_.get(th) or {}); now_ms = int(time.time() * 1000)
         if "title" in d:
             t = " ".join(str(d["title"] or "").split())[:80]
             if t and t != th: m["title"] = t
             else: m.pop("title", None)
+        for k, off in (("important", "impOff"), ("faded", "fadeOff")):
+            if k in d:
+                if not isinstance(d[k], bool): raise ValueError(k + " is true or false")
+                if d[k]: m[k] = now_ms; m.pop(off, None)
+                else: m.pop(k, None); m[off] = now_ms
         for k in ("pin", "archived"):
             if k in d:
                 if not isinstance(d[k], bool): raise ValueError(k + " is true or false")
@@ -1567,12 +1614,12 @@ INSTALLED = HOME / ".hive-installed"
 FORWARDED = ("cf-ray", "cf-connecting-ip", "cf-access-jwt-assertion", "cf-ipcountry", "cf-visitor", "cdn-loop", "x-forwarded-for",
              "x-forwarded-host", "x-forwarded-proto", "x-real-ip", "forwarded", "via", "true-client-ip")
 GET_CAP = {"/api/call-chat": "post", "/api/live": "read", "/api/away": "read", "/api/board": "read", "/api/log": "read", "/api/usage": "read", "/api/jobs": "read", "/api/agent": "read", "/api/agent-work": "read", "/api/ledger": "read",
-           "/api/projects": "read", "/api/agent-costs": "read", "/api/thread-names": "read", "/api/thread-meta": "read", "/api/shown": "read", "/json": "read", "/api/target": "read", "/api/inbox": "read", "/api/delivered": "read",
+           "/api/projects": "read", "/api/agent-costs": "read", "/api/thread-names": "read", "/api/thread-meta": "read", "/api/shown": "read", "/api/thread-status": "read", "/api/thread-find": "read", "/json": "read", "/api/target": "read", "/api/inbox": "read", "/api/delivered": "read",
            "/api/config": "config", "/api/modules": "modules", "/api/signin": "logins", "/api/plans": "plans", "/api/secrets": "secrets",
            "/api/settings": "config", "/api/ntfy": "config", "/api/webpush": "config", "/api/update": "config", "/api/signin-codex": "logins", "/api/accounts": "logins", "/api/design": "logins", "/api/brand/logo": "read",
            "/api/kb/home": "files", "/api/kb/open": "files", "/api/kb/search": "files", "/api/kb/raw": "files", "/api/kb/map": "files", "/api/kb/history": "files", "/api/progress": "read", "/api/share-preview": "read", "/api/approvals": "read", "/api/feedback-drafts": "read"}
 POST_CAP = {"/api/webpush": "config", "/api/share-build": "read", "/api/kill": "stop", "/api/approval": "stop", "/api/tier": "tier", "/api/agent-model": "post", "/api/login-pause": "limits", "/api/login-limit": "limits", "/api/provider-limit": "limits",
-            "/api/post": "post", "/api/thread-meta": "post", "/api/shown": "post", "/api/feedback": "post", "/api/feedback-draft-done": "post", "/api/issue-link": "post", "/api/update": "config", "/api/share-copy": "config", "/api/draft": "config", "/api/upload": "post", "/api/inbox-read": "post", "/api/ntfy": "config", "/api/config": "config", "/api/starter": "config",
+            "/api/post": "post", "/api/side-ask": "post", "/api/thread-meta": "post", "/api/shown": "post", "/api/feedback": "post", "/api/feedback-draft-done": "post", "/api/issue-link": "post", "/api/update": "config", "/api/share-copy": "config", "/api/draft": "config", "/api/upload": "post", "/api/inbox-read": "post", "/api/ntfy": "config", "/api/config": "config", "/api/starter": "config",
             "/api/module": "modules", "/api/signin": "logins", "/api/signin/code": "logins", "/api/signin/cancel": "logins", "/api/plan": "plans", "/api/secret": "secrets",
             "/api/signin-codex": "logins", "/api/account-key": "logins", "/api/design": "logins", "/api/brand": "config", "/api/brand/logo": "config"}
 LOCAL_ONLY = {"/api/access", "/api/settings", "/api/share-copy", "/api/draft"}  # who may do what is never changed from outside, whatever outside.can says
@@ -1670,9 +1717,10 @@ def rs256_ok(n, e, signed, sig):
 
 class AccessKeys:
     """Cloudflare Access's public keys, from https://<team>/cdn-cgi/access/certs, kept per URL, since each outside host can have
-    its own team. Each is read hourly, or when a token names an unknown key, at most once a minute. If they can't be read,
-    tokens signed with an unknown key are refused. One team's keys never answer for another's URL."""
-    def __init__(self): self.sets, self.locks, self.lock = {}, {}, threading.Lock()  # url -> (keys, read at); url -> its own lock
+    its own team. Each is read hourly, or when a token names an unknown key, at most once a minute, or every 5 s while the last read
+    failed: a dash restart starts with no keys, so one failed read would otherwise refuse every outside request for a minute. If they
+    can't be read, tokens signed with an unknown key are refused. One team's keys never answer for another's URL."""
+    def __init__(self): self.sets, self.locks, self.lock, self.failed = {}, {}, threading.Lock(), set()  # url -> (keys, read at); url -> its own lock; urls whose last read failed
 
     def get(self, url, kid):
         import urllib.request
@@ -1680,13 +1728,17 @@ class AccessKeys:
         with ulock:  # one team's slow fetch holds up only requests for that team
             keys, t = self.sets.get(url, ({}, 0))
             age = time.time() - t
-            if url not in self.sets or age > 3600 or (kid not in keys and age > 60):
-                try:
-                    with urllib.request.urlopen(url, timeout=10) as r: got = json.load(r)["keys"]
-                    keys = {k["kid"]: (int.from_bytes(b64u(k["n"]), "big"), int.from_bytes(b64u(k["e"]), "big"))
-                            for k in got if k.get("kty") == "RSA" and k.get("kid")}
-                except Exception as e:
-                    print(f"can't read the Access keys: {type(e).__name__}", file=sys.stderr, flush=True)
+            if url not in self.sets or age > 3600 or (kid not in keys and age > (5 if url in self.failed else 60)):
+                for last in (False, True):
+                    try:
+                        with urllib.request.urlopen(url, timeout=5) as r: got = json.load(r)["keys"]
+                        keys = {k["kid"]: (int.from_bytes(b64u(k["n"]), "big"), int.from_bytes(b64u(k["e"]), "big"))
+                                for k in got if k.get("kty") == "RSA" and k.get("kid")}
+                        self.failed.discard(url); break
+                    except Exception as e:
+                        print(f"can't read the Access keys: {type(e).__name__}", file=sys.stderr, flush=True)
+                        self.failed.add(url)
+                        if not last: time.sleep(1)
                 self.sets[url] = (keys, time.time())
             return keys.get(kid)
 
@@ -2078,6 +2130,26 @@ def person_post(text, thread=None, reply_to=None, uploads=(), signer=None, limit
     for p in paths: shutil.rmtree(p.parent, ignore_errors=True)
     pid = r.stdout.strip()
     return {"id": pid, "thread": thread or pid, "said": short(r.stderr.replace("hive post: ", "", 1), 300)}
+
+
+# @question in the Chat side search: a normal agent in the hidden thread `side`, answering in one line and bringing threads up with `hive show`.
+# Posted as dash, not person: it's not an ask to register or a post the agent owes the person a chat reply on (asks.py, inbox.waker). The same agent
+# wakes for each question, keeping what it read, until its context is full; then --routed hands over to its heir. No "@" in the note (see SIMPLE_NOTE).
+SIDE_THREAD, SIDE_MODEL = "side", "haiku"
+SIDE_NOTE = ("(question typed in the dash's side search, {who}) The answer shows there, not in a chat. Look it up, a few searches at most, with `hive search WORDS`, `hive read --thread T`, `kb find WORDS`. "
+             "For each thread that helps, at most 5, run `hive show THREAD --why \"why it fits, under 10 words\"`. Last, post once with `hive post --thread side`: the text is [{tag}] and then one plain line under 25 words that answers it, "
+             "saying so if you found nothing. Change nothing, start no work, name nobody with the at sign, set no status bar, then stop.\nQuestion: {q}")
+
+def side_ask(q, signer=None, limited=False):
+    """POST /api/side-ask: wakes the sidebar agent. Returns the tag its answer starts with, which the page waits for."""
+    q = " ".join(str(q or "").replace("@", " ").split())[:500]
+    if not q: raise ValueError("write the question")
+    who, tag = thread_agent(SIDE_THREAD), secrets.token_hex(2)
+    text = SIDE_NOTE.format(who=f"from {signer}" if signer else "web app", tag=tag, q=q)
+    cmd = [str(HIVE_BIN), "post", "--as", "dash", "--thread", SIDE_THREAD, "--to", who or "new", "--model", SIDE_MODEL] + (["--routed"] if who else [])
+    r = subprocess.run(cmd, input=text, text=True, capture_output=True, env={**child_env(), **({"HIVE_POST_VIA": "limited"} if limited else {})}, cwd=str(HOME), timeout=60)
+    if r.returncode: raise ValueError(short(r.stderr, 300) or "the post failed")
+    return {"id": r.stdout.strip(), "tag": tag}
 
 
 def save_upload(name, length, src):
@@ -4181,6 +4253,15 @@ def serve(port):
                 self.send(json.dumps(thread_meta()).encode(), J)
             elif u.path == "/api/shown":
                 self.send(json.dumps(shown_now()).encode(), J)
+            elif u.path == "/api/thread-find":
+                try:
+                    tf = sys.modules.get("h2_thread_find")
+                    if not tf:
+                        spec = importlib.util.spec_from_file_location("h2_thread_find", Path(__file__).with_name("thread_find.py")); tf = importlib.util.module_from_spec(spec); spec.loader.exec_module(tf); sys.modules["h2_thread_find"] = tf
+                    self.send(json.dumps(tf.find((q.get("q") or [""])[0])).encode(), J)
+                except Exception as e: self.send(json.dumps({"error": str(e)[:200]}).encode(), J)
+            elif u.path == "/api/thread-status":
+                self.send(json.dumps(thread_status()).encode(), J)
             elif u.path == "/api/agent-work":
                 self.send(json.dumps(agent_work(q.get("name", [""])[0], self.route != "outside" or self.mode == "full")).encode(), J)
             elif u.path == "/api/ledger":
@@ -4239,9 +4320,10 @@ def serve(port):
                 try: return self.send(json.dumps(share_build(d)).encode(), J)
                 except KeyError: return self.send_error(404)
                 except ValueError as e: return self.deny(400, str(e))
-            if u.path in ("/api/post", "/api/thread-meta", "/api/shown", "/api/feedback", "/api/feedback-draft-done", "/api/issue-link", "/api/update", "/api/inbox-read", "/api/ntfy", "/api/webpush", "/api/agent-model", "/api/config", "/api/starter", "/api/module", "/api/signin", "/api/signin/code", "/api/signin/cancel", "/api/access", "/api/plan", "/api/secret", "/api/settings", "/api/share-copy", "/api/draft", "/api/signin-codex", "/api/account-key", "/api/design", "/api/brand"):
+            if u.path in ("/api/post", "/api/side-ask", "/api/thread-meta", "/api/shown", "/api/feedback", "/api/feedback-draft-done", "/api/issue-link", "/api/update", "/api/inbox-read", "/api/ntfy", "/api/webpush", "/api/agent-model", "/api/config", "/api/starter", "/api/module", "/api/signin", "/api/signin/code", "/api/signin/cancel", "/api/access", "/api/plan", "/api/secret", "/api/settings", "/api/share-copy", "/api/draft", "/api/signin-codex", "/api/account-key", "/api/design", "/api/brand"):
                 try:
                     if u.path == "/api/post": res = person_post(d.get("text"), d.get("thread"), d.get("reply_to"), d.get("files"), signer=self.signer, limited="config" not in self.can, simple=d.get("simple") is True, model=d.get("model"), sig=d.get("sig"))
+                    elif u.path == "/api/side-ask": res = side_ask(d.get("q"), signer=self.signer, limited="config" not in self.can)
                     elif u.path == "/api/thread-meta": res = set_thread_meta(d)
                     elif u.path == "/api/shown": res = dismiss_shown(d)
                     elif u.path == "/api/feedback": res = send_feedback(d)
