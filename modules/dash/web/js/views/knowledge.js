@@ -6,7 +6,7 @@ import { S, can, getPref, jget, post, setPref } from "../core/store.js";
 import { ago, plural, stamp } from "../core/format.js";
 import { href, threadHref } from "../core/router.js";
 import { threadTitle } from "../core/model.js";
-import { button, empty, waiting, field, input, list, needFull } from "../ui/kit.js";
+import { button, empty, waiting, field, input, list, needFull, copyPress } from "../ui/kit.js";
 import { icon } from "../ui/icons.js";
 import { markdown } from "../ui/markdown.js";
 import { markWords } from "../ui/message.js";
@@ -311,7 +311,7 @@ function fileHead(d, ctx) {
     h("h1", { class: "kb-t" }, d.name),
     h("p", { class: "meta" }, h("code", null, "~/" + d.path), d.size != null ? ` · ${bytes(d.size)}` : "", " · changed ", h("span", { title: stamp(d.t * 1e3) }, ago(d.t * 1e3))),
     h("div", { class: "frow" },
-      button("Copy path", (e, b) => { navigator.clipboard.writeText("~/" + d.path).then(() => { const l = b.lastChild; l.textContent = "Copied"; setTimeout(() => { if (b.isConnected) l.textContent = "Copy path"; }, 1400); }, () => {}); }, { kind: "quiet", size: "s" }),
+      button("Copy path", (e, b) => copyPress(b, "~/" + d.path), { kind: "quiet", size: "s" }),
       isMd ? button(K.source ? "Formatted" : "Source", () => { K.source = !K.source; ctx.update(); }, { kind: "quiet", size: "s" }) : null,
       name && can("plans") ? button("Edit plan", () => startEdit(name, ctx), { size: "s" }) : null));
 }
@@ -353,7 +353,7 @@ export default {
   render(ctx) {
     if (!can("files")) return needFull("Reading your files", "Knowledge");
     const { path, line } = parse(ctx.arg), d = path ? K.seen.get(path) : null, isFile = !!d && d.type !== "dir", editing = K.edit && K.edit.at === path;
-    const find = (kbd = "/") => h("label", { class: "kb-q" }, icon("search"), input({ type: "search", value: K.q, placeholder: "Search everything: notes, files, posts", "aria-label": "Search the knowledge base", "data-kb-all": "", autocomplete: "off", oninput: (e, n) => { K.q = n.value; K.qPath = path; search(ctx); ctx.update(); } }), h("kbd", null, kbd));
+    const find = (kbd = "/") => h("label", { class: "kb-q" }, icon("search"), input({ type: "search", value: K.q, placeholder: "Search everything: notes, files, posts", "aria-label": "Search the knowledge base", "data-kb-all": "", autocomplete: "off", oninput: (e, n) => { K.q = n.value; K.qPath = path; search(ctx); ctx.update(); } }), kbd ? h("kbd", null, kbd) : null);   // the phone has no "/" key to show
     const searching = K.q.trim().length >= 2 && K.qPath === path;
     const side = h("nav", { class: "kb-side", "aria-label": "Files" },
       h("div", { class: "kb-top" },
@@ -368,7 +368,7 @@ export default {
         : K.q.trim().length >= 2 && K.qPath === path ? resultsView()
         : !path ? h("div", { class: "kb-note", "data-key": "home" }, h("header", { class: "kb-h kb-home-h" }, h("h1", { class: "kb-t" }, "Knowledge"), h("p", { class: "meta" }, "What the Hive has written down and built. Read-only, except project plans.")),
           kbChat(ctx), homeSections(ctx))
-        : K.failed.has(path) ? h("div", { class: "kb-note", "data-key": "gone" }, h("a", { class: "btn kb-back", href: open(parent(path)), "data-kind": "quiet", "data-size": "s" }, "‹ Back"), empty(K.failed.get(path) === "404" ? `~/${path} isn't here, or isn't shown here. Dotfiles and anything named like a key stay hidden.` : `Couldn't read ~/${path}.`))
+        : K.failed.has(path) ? h("div", { class: "kb-note", "data-key": "gone" }, h("a", { class: "btn kb-back", href: open(parent(path)), "data-kind": "quiet", "data-size": "s" }, icon("chevron-left"), parent(path).split("/").pop() || "Knowledge"), empty(K.failed.get(path) === "404" ? `~/${path} isn't here, or isn't shown here. Dotfiles and anything named like a key stay hidden.` : `Couldn't read ~/${path}.`))
         : !d ? h("div", { class: "kb-none", "data-key": "wait" }, empty("Reading…", { kind: "loading" }))
         : [kbChat(ctx, { compact: true, cur: path }), isFile ? fileView(d, line, ctx) : folderView(d, ctx)]);
     const top = document.getElementById("top");

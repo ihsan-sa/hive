@@ -235,10 +235,11 @@ function sync(c, ctx) {
       if (fromEnd != null) { box.scrollTop = box.scrollHeight - fromEnd; L.stuck = atEnd(box); }
       else { box.scrollTop = box.scrollHeight; L.stuck = true; }
       if (L.jumpTo) { const el = box.querySelector(`[data-key="${CSS.escape(L.jumpTo)}"]`); L.jumpTo = null; if (el) flash(box, el); }
+      for (const el of box.children) L.ro.observe(el);   // a message that grows after it lands (a table or code drawn late) keeps the list at its end
     } else if (L.pend.length) {
       const stick = atEnd(box) || L.stuck;
       box.querySelector(":scope > .empty")?.remove();
-      L.out.before(...rows(L.pend));
+      const fresh = rows(L.pend); L.out.before(...fresh); fresh.forEach(el => el instanceof Element && L.ro.observe(el));
       L.shown += L.pend.length;
       if (stick) box.scrollTop = box.scrollHeight;
       else { L.unseen += L.pend.filter(p => !p.ev && !OUTSIDE.has(p.from)).length; setJump(); }

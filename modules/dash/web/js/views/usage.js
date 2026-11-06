@@ -121,7 +121,7 @@ function totalSection(U, t, R) {
       { label: "Capacity", value: `${tot.cap} Pro-weeks`, note: mix },
       big ? { label: "Most of it used by", value: big.l.name, note: `${Math.round(big.v)}% of its ${big.l.plan || ""} week: ${Math.round((big.v * big.w) / tot.cap)} points of the total` } : null,
     ].filter(Boolean)),
-    cols(
+    T.per.every(x => x.vals.filter(v => v != null).length < 2) ? empty("No history yet: the charts fill in as the accounts are read.") : cols(
       chart({ title: "All accounts, % of the week used", note: R.name + ", weighted by plan", series: [T.total], kind: "step", start: T.start, step: T.step, max: 100, fmt: v => Math.round(v) + "%", top: "100%" }),
       h("div", null, chart({ title: "Each account, % of its week used", note: R.name, series: T.per.map(x => x.vals), colors: T.per.map(x => color.get(x.l.name)), names: T.per.map(x => x.l.name), kind: "step", start: T.start, step: T.step, max: 100, fmt: v => Math.round(v) + "%", top: "100%" }), key)));
 }
@@ -229,6 +229,7 @@ function appAccounts(U, t, R) {
 function appChart(U, t, R, pick) {
   const us = U.logins || [], T = totalSeries(us, t, R.span, R.step), color = new Map(us.map((l, i) => [l.name, slot(i)]));
   if (!T.per.length) return null;
+  if (T.per.every(x => x.vals.filter(v => v != null).length < 2)) return section({ title: "Used, " + R.name }, empty("No history yet: the chart fills in as the accounts are read."));   // one reading draws stray dots, not a line
   const many = T.per.length > 1;
   const series = many ? [T.total, ...T.per.map(x => x.vals)] : [T.total.some(v => v != null) ? T.total : T.per[0].vals];
   const key = many ? h("span", { class: "chart-key" }, T.per.map(x => h("span", null, h("i", { style: `border-top-color:${color.get(x.l.name)}` }), x.l.name))) : null;

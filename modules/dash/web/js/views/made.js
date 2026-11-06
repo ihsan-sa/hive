@@ -40,7 +40,7 @@ export default {
       pageHeader({ title: "Files and links", lead: "Files and links from your conversations, newest first." }),
       things.length ? h("ul", { class: "list" }, things.map(t => h("li", { class: "lr", "data-key": t.key },
         h("a", { class: "lr-in", href: t.url, target: "_blank", rel: "noopener noreferrer" },
-          h("div", { class: "lr-t" }, h("b", null, t.name), h("span", { class: "muted" }, t.kind), h("span", { class: "meta" }, ago(t.t))),
+          h("div", { class: "lr-t" }, h("b", { title: t.name }, t.name), h("span", { class: "muted" }, t.kind), h("span", { class: "meta" }, ago(t.t))),
           h("div", { class: "lr-x clamp-2" }, "From ", threadTitle(t.th))))))
         : empty("Nothing yet. When your Hive gives you a file or a link, you'll find it here too.", { title: "Nothing made yet" }),
       things.length ? h("p", { class: "meta" }, "To change something, say so in ", h("a", { href: threadHref(things[0].th) }, "the conversation"), ".") : null);

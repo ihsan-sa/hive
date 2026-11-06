@@ -71,6 +71,7 @@ import { initAlias } from "./core/alias.js"; initAlias();
 import { initEaster } from "./core/easter.js"; initEaster();
 import { phoneInit } from "./ui/phone.js"; phoneInit();
 import { agentHoverInit } from "./ui/agentHover.js"; agentHoverInit();
+import { popupKeys } from "./ui/popup.js"; popupKeys();
 delegate(document); dropFiles(document);
 setViews(views); initSwitcher(views); watch(() => schedule(false)); offerDeckTour(); resume();
 addEventListener("hashchange", route);

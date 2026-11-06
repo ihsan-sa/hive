@@ -472,18 +472,87 @@ def dense_merge(c, hits, dense, n):
         if len(out) >= n: break
     return out
 
+RERANK = {}  # what the last render asked of kb-rerank: {"used": bool, "ms": int, "cut": bool}, for the search log
+RERANK_MS = float(os.environ.get("KB_RERANK_MS", 1000))  # from the start of the find: after this the passages not yet scored stay as they are
+RERANK_NW, RERANK_ND, RERANK_BIG, RERANK_CH = 80, 60, 30, 10   # candidates: 80 word hits and up to 60 more; the big ranker takes the best 30 by the small one, in chunks of 10
+RERANK_LAM, RERANK_KEEP = float(os.environ.get("KB_RERANK_LAM", 3)), int(os.environ.get("KB_RERANK_KEEP", 2))  # weight of the live place; how many of the live order's first places stay
+
+def rerank_sock():
+    if os.environ.get("KB_RERANK") == "0": return None
+    s = os.environ.get("KB_RERANK_SOCK") or os.path.expanduser("~/.cache/kb-rerank/sock")
+    return s if os.path.exists(s) else None
+
+def rerank_order(c, q, live, hits, dense, n, sock, deadline):
+    """The passages of a find reordered by the kb-rerank service (modules/kb-rerank). The candidates are the live order (`live`: the word and dense lists
+    merged, as a find without the service prints it) followed by the word hits 31 to 80 and the further dense hits, 140 at most. A small and a big
+    cross-encoder on the GPU score them; the z-scores are summed, less LAM x log(1 + place in the live order); the first KEEP of the live order stay.
+    Returns n hit dicts, or None on any trouble (no answer by the deadline, busy, a bad reply)."""
+    import socket, statistics
+    cand = list(live); have = {(h["path"], h["line"]) for h in cand}
+    for h in diversify(hits, 100)[:RERANK_NW]:
+        if (h["path"], h["line"]) not in have: cand.append(h); have.add((h["path"], h["line"]))
+    for p, l, _ in (dense or [])[DENSE_DEEP:]:
+        if len(cand) >= RERANK_NW + RERANK_ND: break
+        if (p, l) in have: continue
+        r = c.execute("SELECT chunk.id FROM chunk JOIN doc ON doc.id=chunk.doc WHERE doc.path=? AND chunk.line=?", (p, l)).fetchone()
+        got = hydrate(c, [(r[0], 0)]) if r else []
+        if got: cand.append(got[0]); have.add((p, l))
+    cand = cand[:RERANK_NW + RERANK_ND]
+    if len(cand) <= n: return None
+    tx = []
+    for h in cand:
+        t = c.execute("SELECT title, head, body FROM fts WHERE rowid=?", (h["id"],)).fetchone()
+        tx.append(f"{t[0]} > {t[1]}\n{t[2]}"[:1500] if t else "")
+    s = socket.socket(socket.AF_UNIX)
+    try:
+        left = deadline + 0.15 - time.time()
+        if left <= 0.05: return None
+        s.settimeout(left); s.connect(sock)
+        s.sendall((json.dumps({"q": q, "tx": tx, "big": RERANK_BIG, "ch": RERANK_CH, "deadline": deadline}) + "\n").encode()); buf = b""
+        while not buf.endswith(b"\n"):
+            left = deadline + 0.15 - time.time()
+            if left <= 0 or len(buf) > 1 << 22: return None
+            s.settimeout(left); x = s.recv(1 << 16)
+            if not x: break
+            buf += x
+        r = json.loads(buf)
+        if not r.get("ok"): return None
+        mini = [float(v) for v in r["mini"]]; big = {int(k): float(v) for k, v in r["big"].items()}
+        if len(mini) != len(cand) or any(not 0 <= k < len(cand) for k in big): return None
+        cut = bool(r.get("cut"))
+    except Exception: return None
+    finally: s.close()
+    def z(x):
+        m = statistics.mean(x); sd = statistics.pstdev(x) or 1
+        return [(v - m) / sd for v in x]
+    z1 = z(mini)
+    if len(big) >= 2:
+        zb = dict(zip(big, z(list(big.values())))); lo = min(zb.values()); tot = [z1[a] + zb.get(a, lo) for a in range(len(cand))]
+    else: tot = z1
+    sc = [tot[a] - RERANK_LAM * math.log(1 + a) for a in range(len(cand))]
+    keep = min(RERANK_KEEP, len(cand)); order = list(range(keep)) + sorted(range(keep, len(cand)), key=lambda a: -sc[a])
+    RERANK["cut"] = cut
+    return [cand[a] for a in order[:n]]
+
 def render(c, q, n=12, frm=None, to=None, src=None):
     """What an agent sees: a count per source, then one line per passage, then where to go next. Returns text, shown hits."""
     from collections import Counter
-    hits, tried, words, total = search(c, q, frm, to, src)
-    top = diversify(hits, n); DENSE.clear()
+    t0 = time.time(); hits, tried, words, total = search(c, q, frm, to, src)
+    top = diversify(hits, n); DENSE.clear(); RERANK.clear()
     if not (frm or to or src):
-        t1 = time.time(); d = dense_ask(c, q)
+        rsock = rerank_sock(); t1 = time.time(); d = dense_ask(c, q, 120 if rsock else DENSE_DEEP)   # the first 30 of 120 are the 30
+        dl = d[:DENSE_DEEP] if d is not None else None; live = None
         if d is not None:
-            m = dense_merge(c, hits, d, n)
+            live = dense_merge(c, hits, dl, 200 if rsock else n); m = live[:n]
             if m: top = m
             DENSE.update(used=bool(m), ms=int((time.time() - t1) * 1000))
         elif os.environ.get("KB_DENSE") != "0": DENSE.update(used=False, ms=int((time.time() - t1) * 1000))
+        if rsock:
+            RERANK.update(used=False, cut=False)
+            try: r = rerank_order(c, q, live if d is not None and live else diversify(hits, 100)[:RERANK_NW], hits, d, n, rsock, t0 + RERANK_MS / 1000)
+            except Exception: r = None   # whatever goes wrong in there, the find prints the live order
+            if r: top = r; RERANK["used"] = True
+            RERANK["ms"] = int((time.time() - t1) * 1000)
     by, files = Counter(), Counter()
     for h in hits: by[h["source"]] += 1; files[h["path"]] += 1
     cap = "+" if total >= 400 else ""
@@ -539,6 +608,7 @@ def cmd_find(a):
     print(text)
     rec = {"q": q, "n": len(hits), "top": [h["path"] for h in top[:5]], "tried": tried, "ms": int((time.time() - t0) * 1000)}
     if DENSE: rec["dense"] = dict(DENSE)
+    if RERANK: rec["rerank"] = dict(RERANK)
     if kbuse:
         shown = [[fmt_path(h["path"]), h["shown_line"]] for h in top]
         rec.update(id=kbuse.new_id(), shown=shown)

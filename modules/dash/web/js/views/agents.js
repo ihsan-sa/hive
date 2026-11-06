@@ -104,6 +104,7 @@ export default {
         seg(STATUS.filter(x => ["all", "running", "ended", "failed"].includes(x[0]) || x[0] === L.status).map(([k, l]) => [k, k === "all" ? "All" : l]), L.status, v => set("status", v), { label: "Status" }),
         h("details", { class: "now-more ag-f", open: L.fOpen || null, ontoggle: (e, n) => { if (e.target === n) L.fOpen = n.open; } }, h("summary", null, "Filters" + (nf ? ` (${nf})` : "")),
           h("div", { class: "toolbar" },
+            picker("Status", L.status, STATUS, v => set("status", v)),   // the row above shows the common four; the rest (waiting, killed, at a limit) are here
             picker("Model", L.model, [["all", "Any model"], ...options(all, "model")], v => set("model", v)),
             picker("Account", L.account, [["all", "Any account"], ...options(all, "account")], v => set("account", v)),
             picker("Started by", L.by, BY, v => set("by", v)),
@@ -119,7 +120,7 @@ export default {
           { label: narrowed ? "Agents shown" : "Agents", value: found.length.toLocaleString(), note: `${found.filter(a => a.status === "running").length} running` },
           { label: "Total cost", value: COST_DATA ? money(sum(a => a.usd)) : "–", note: found.length && COST_DATA ? `${money(sum(a => a.usd) / found.length)} per agent` : null },
           { label: "Tokens", value: COST_DATA ? toks(sum(a => a.tok)) : "–", note: !COST_DATA ? null : `${pctOf(sum(a => a.spend.t[2]), sum(a => a.tok))} re-read from cache; ${toks(sum(a => a.spend.t[1]))} written` },
-          { label: "Agent time", value: dur(sum(a => a.ran)), note: found.length ? `added up over ${plural(sum(a => a.runs), "run")}, in ${dur(Date.now() - Math.min(...found.map(a => a.when || Date.now())))}` : null },
+          { label: "Agent time", value: found.length ? dur(sum(a => a.ran)) : "–", note: found.length ? `added up over ${plural(sum(a => a.runs), "run")}, in ${dur(Date.now() - Math.min(...found.map(a => a.when || Date.now())))}` : null },
         ]),
         found.length ? h("div", { class: "tbl-w ag-w" }, h("table", { class: "tbl ag" },
           h("caption", { class: "vh" }, "Agents"),
@@ -127,7 +128,7 @@ export default {
             h("button", { type: "button", class: "ag-s", onclick: by(c.k) }, c.label, s.k === c.k ? h("span", { "aria-hidden": "true" }, s.d > 0 ? "▲" : "▼") : null))))),
           h("tbody", { "data-own": "morph", "data-sig": sig }, changed ? found.slice(0, L.limit).map(a => h("tr", { "data-key": a.name },
             cols.map(c => h("td", { class: [c.num ? "num" : null, c.cls || null].filter(Boolean).join(" ") || null }, c.render(a))))) : null)))
-          : empty("No agents match."),
+          : empty(all.length ? "No agents match." : "No agents have run yet. When one starts, it shows here."),
         found.length > L.limit ? h("div", { class: "lr-more" },
           button(found.length - L.limit > PAGE * 5 ? `Show ${PAGE * 5} more (${found.length - L.limit} left)` : `Show ${found.length - L.limit} more`, () => { L.limit += PAGE * 5; ctx.update(); }, { kind: "quiet", size: "s" })) : null,
       ],

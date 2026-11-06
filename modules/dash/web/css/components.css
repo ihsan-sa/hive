@@ -178,6 +178,7 @@ a.top-route[data-mode=limited]:hover{background:color-mix(in oklch,var(--warn) 3
 .btn[data-kind=icon][data-size=s]{width:var(--ctl-s)}
 .btn[data-kind=icon]:hover{background:var(--hover);color:var(--ink)}
 .btn[data-kind=icon] svg{width:18px;height:18px}
+.btn[data-fail]{color:var(--bad-ink)}   /* copyPress: the copy didn't go through */
 .btn[data-kind=icon][data-size=s] svg{width:16px;height:16px}
 /* Stop: a round button with a filled square, like a media stop (thread feedback 2026-11-04). Red only on hover. */
 .btn.btn-stop{border:1px solid var(--line-2);border-radius:var(--r-pill);color:var(--ink-2)}
@@ -363,7 +364,7 @@ a.rank-in:hover{background:var(--hover);color:inherit}
 .ac-f>span+span::before{content:"·";margin:0 6px}
 .ac-f>span[data-tone]{color:var(--ci)}
 .ac-kill{margin-left:auto;opacity:0}
-.ac:hover .ac-kill,.ac:focus-within .ac-kill{opacity:1}
+.ac:hover .ac-kill,.ac:focus-within .ac-kill,tr:hover .ac-kill,tr:focus-within .ac-kill{opacity:1}   /* a card or a table row (Now) */
 .ac-tap{display:none}
 .ph-actions .ac-kill{opacity:1}
 @media (hover:none){.ac-kill{opacity:1}}
@@ -399,7 +400,9 @@ a.rank-in:hover{background:var(--hover);color:inherit}
 .toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:var(--s2) var(--s3);margin-top:var(--s2)}
 .toolbar .input{width:260px;max-width:100%}
 .toolbar .seg{max-width:100%;overflow-x:auto;scrollbar-width:none}
+.toolbar .seg{flex:none}   /* wraps to its own row rather than hide an option behind a scroll */
 .toolbar .seg button{flex:none}
+.toolbar>.now-more{border-top:0;padding-top:0}   /* a disclosure among the controls, not a section break */
 .sec-h .seg{max-width:100%;overflow-x:auto;scrollbar-width:none}
 .sec-h .seg button{flex:none}
 @container (max-width:640px){.toolbar .input{width:100%}}
@@ -829,7 +832,7 @@ rc-lazy[data-mode=inline]{display:inline}
 .msg:hover>.msg-tools,.msg:focus-within>.msg-tools,.msg-tools:has([aria-expanded=true]){opacity:1;pointer-events:auto}
 .msg-tools>.rc-more{display:flex}
 
-.msg-tools .btn[data-done]{color:var(--good)}
+.msg-tools .btn[data-ok]{color:var(--good)}
 .rc-menu a{display:flex;align-items:center;height:30px;padding:0 8px;border-radius:var(--r-m);color:var(--ink);font-size:var(--fs-small);text-decoration:none;white-space:nowrap}
 .rc-menu a:hover{background:var(--hover)}
 @media (hover:none) and (pointer:coarse){.msg-tools{display:none}}
@@ -941,6 +944,7 @@ body[data-pv-full] :is(#top,#main){margin-right:0}
 .pf-row{display:flex;align-items:center;gap:8px;width:100%;padding:6px;border:0;border-radius:var(--r-m);background:transparent;color:var(--ink);font:inherit;text-align:left;cursor:pointer}
 .pf-row:hover,.pf-row:focus-visible{background:var(--sunken)}
 .pf-row .pv-badge{min-width:3.2em;text-align:center}
+@media (pointer:coarse),(max-width:640px){.pf-row{min-height:44px}}
 .pf-d .pv-badge{background:color-mix(in oklch,var(--accent) 14%,var(--sunken));color:var(--ink)}
 .pf-n{flex:1;min-width:0;display:flex;flex-direction:column;line-height:1.3}
 .pf-fn{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -1041,6 +1045,7 @@ a.ref[data-kind=file][data-pv-on]{background:color-mix(in oklch,var(--accent) 16
   .pv-full{display:none}
   body[data-pv-full] .pv{left:0}
   .pv-h{padding-top:6px}
+  .pv[data-kind=files]{top:auto;bottom:0;right:0;width:100%;height:auto;max-height:85dvh}   /* the Files list: as tall as its list, full width */
 }
 @media (prefers-reduced-motion:reduce){.pv{animation:none}}
 
@@ -1074,6 +1079,7 @@ a.ref[data-kind=file][data-pv-on]{background:color-mix(in oklch,var(--accent) 16
 .cp-ac{bottom:calc(100% + 4px);left:6px}
 .cp-opt{display:flex;align-items:center;gap:7px;width:100%;padding:6px 8px;border:0;border-radius:var(--r-m);background:none;color:var(--ink);font-size:var(--fs-small);text-align:left;cursor:pointer}
 .cp-opt:hover,.cp-opt[aria-selected=true]{background:var(--hover)}
+@media (pointer:coarse),(max-width:640px){.cp-opt{min-height:44px}}   /* a finger-sized row in the To list and the @ list */
 .cm-id{display:inline-flex;align-items:center;gap:4px;flex:none}
 .cp-opt .meta{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
 .cp-menu-n{margin:4px 8px 4px;font-size:var(--fs-meta);color:var(--ink-3);line-height:1.4;text-wrap:pretty}
@@ -1364,7 +1370,7 @@ details.blk[open]>summary .blk-t::after{margin-bottom:-1px;transform:rotate(225d
 .blk-s{grid-column:1;font-size:var(--fs-meta);color:var(--ink-3);line-height:1.45}
 .blk-a{grid-column:2;grid-row:1 / span 2;display:flex;gap:var(--s2);align-items:center}
 .blk-a .input{width:240px}
-@media (max-width:640px){.blk-h{grid-template-columns:minmax(0,1fr)}.blk-a{grid-column:1;grid-row:auto;flex-wrap:wrap;margin-top:var(--s2)}.blk-a .input{width:100%!important}}   /* phone: the control goes under the words, not beside a 90 px column of them */
+@media (max-width:640px){.blk-h{grid-template-columns:minmax(0,1fr)}.blk-a{grid-column:1;grid-row:auto;flex-wrap:wrap;margin-top:var(--s2);margin-left:0}.blk-a .input{width:100%!important}}   /* phone: the control goes under the words, not beside a 90 px column of them */
 .blk-b{display:grid;gap:var(--s3);margin-top:var(--s3);font-size:var(--fs-small)}
 .blk-save{display:flex;align-items:center;gap:var(--s2);padding:12px 20px;border-top:1px solid var(--line);background:var(--bg);font-size:var(--fs-meta);color:var(--ink-3)} /* NEW use: the footer of a group of text fields */
 .blk-save .btn{margin-left:auto}
@@ -1501,7 +1507,7 @@ details.blk>summary .blk-t::after{border-color:var(--ink-3)}
 .msg-end{display:flex;align-items:center;gap:0;height:28px;margin:2px 0 -6px -6px;opacity:0;transition:opacity .12s}
 .msg-end .btn[data-kind=icon]{width:28px;height:28px;color:var(--ink-3)}
 .msg-end .btn[data-kind=icon]:hover{color:var(--ink)}
-.msg-end .btn[data-done]{color:var(--good)}
+.msg-end .btn[data-ok]{color:var(--good)}
 .msg-time{margin-left:auto}
 .msg-h .msg-time{margin-left:4px;color:var(--ink-3);opacity:0;transition:opacity .12s}
 .msg:hover .msg-h .msg-time{opacity:1}
@@ -1534,8 +1540,6 @@ details.blk>summary .blk-t::after{border-color:var(--ink-3)}
 .ac-dl,.ac-f{display:none}            /* consumer: Asked / Said / model line fold behind the card's link to the agent page */
 :root[data-dev] .ac{padding:var(--s3) var(--s4)}
 :root[data-dev] .ac-dl,:root[data-dev] .ac-f{display:revert}
-.ac-kill{opacity:0}
-.ac:hover .ac-kill,.ac:focus-within .ac-kill{opacity:1}
 
 /* ===== table — tighter heads, hover row ===== */
 .tbl th{height:30px;font-size:var(--fs-micro);font-weight:var(--w-med);color:var(--ink-3)}
@@ -1613,7 +1617,7 @@ details.blk>summary .blk-t::after{border-color:var(--ink-3)}
 @media (prefers-reduced-motion:reduce){.dt-c[data-want] rect,.dt-c[data-want] circle{animation:none}}
 .dt-c[data-k=browse][data-want] text{fill:var(--info-ink)}
 /* The app's tour: floats above the page, moves out of the way of what it marks */
-.tour-w{position:fixed;z-index:62;width:min(360px,calc(100vw - 32px));padding:var(--s3) var(--s4);background:var(--surface);color:var(--ink);border:1px solid var(--line-2);border-radius:var(--r-l);box-shadow:0 8px 28px rgba(0,0,0,.28);text-align:left}
+.tour-w{position:fixed;z-index:62;width:min(360px,calc(100% - 32px));padding:var(--s3) var(--s4);background:var(--surface);color:var(--ink);border:1px solid var(--line-2);border-radius:var(--r-l);box-shadow:0 8px 28px rgba(0,0,0,.28);text-align:left}
 .tour-w .tw-top{cursor:move;touch-action:none;user-select:none}
 .tour-w .tw-t{margin:2px 0 var(--s1);font-size:var(--fs-head)}
 .tour-w .tw-p{margin:0 0 var(--s3)}
@@ -1846,7 +1850,8 @@ dialog.fb::backdrop{background:rgb(0 0 0 / .38)}
   .nowtbl .nt-do{grid-column:1;max-width:none;width:auto;min-width:0}
   .nowtbl td.num{grid-column:2;align-self:end;text-align:right}
   .nowtbl .nt-th,.nowtbl .nt-m,.nowtbl .nt-x:empty{display:none}
-  .nowtbl .nt-x{grid-column:2;grid-row:1;width:auto}
+  .nowtbl .nt-x{grid-column:2;grid-row:1 / span 2;width:auto;align-self:start}
+  .nowtbl .nt-x .btn{width:auto;aspect-ratio:1}   /* the phone's taller tap target stays round */   /* spans the name and state lines, so a row with Stop is as tight as one without */
 }
 
 .brand-hex{width:34px;height:34px;margin-right:var(--s2)}
@@ -2295,7 +2300,7 @@ text.map-ring-t{font-size:var(--fs-micro);font-weight:var(--w-med);fill:var(--in
 .tm-showwrap>.tm-show{gap:3px;padding-left:8px}
 .tm-showwrap .tm-chip-imp{padding:0 6px}
 /* design item 7: the small Files panel opens below the thread head, in the margin beside the column */
-.pv[data-kind=files]{top:calc(var(--top-h,52px) + 52px);width:208px}
+@media (min-width:701px){.pv[data-kind=files]{top:calc(var(--top-h,52px) + 52px);width:208px}}   /* wide only: on a phone Files is the bottom sheet */
 .pv[data-kind=files] .pv-h small{display:none}
 .cm-status-r{margin-left:10px;border:0;background:none;color:var(--accent,var(--ink));font:inherit;font-size:var(--fs-meta);font-weight:600;cursor:pointer;padding:0 2px}
 .cm-status-r:hover{text-decoration:underline}
@@ -2356,7 +2361,9 @@ input[type=radio],input[type=checkbox]:not(.switch){accent-color:var(--ink)}
 .sec-a{flex-wrap:wrap}
 .seg{max-width:100%;overflow-x:auto;scrollbar-width:none}
 .seg::-webkit-scrollbar{display:none}
-@media (max-width:640px){.page .seg{mask-image:linear-gradient(90deg,#000 calc(100% - 24px),transparent)}}
+@property --seg-fade{syntax:"<length>";inherits:false;initial-value:0px}
+@keyframes seg-fade{from{--seg-fade:24px}to{--seg-fade:0px}}
+@media (max-width:640px){.page .seg{mask-image:linear-gradient(90deg,#000 calc(100% - var(--seg-fade)),transparent);animation:seg-fade linear both;animation-timeline:scroll(self inline)}}   /* fades only while there is more to scroll: a picker that fits is shown whole */
 .set-n a[aria-current=page]{background:var(--sunken);color:var(--ink);font-weight:var(--w-med)}
 
 .cp-model[data-picked]{color:var(--accent);font-weight:var(--w-med)}
