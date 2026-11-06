@@ -1,0 +1,9 @@
+[Unit]
+Description=Hive thread status bars: start one Haiku agent to refresh the status of threads with new posts (only when some changed)
+
+[Service]
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=TMPDIR=%h/.cache/hive-tmp
+Type=oneshot
+Nice=15
+ExecStart=/usr/bin/python3 -I %h/core/thread_status.py

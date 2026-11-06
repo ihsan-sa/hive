@@ -29,9 +29,10 @@ then stop. Do coordinating and small fixes yourself; hand anything bigger to an 
 3. **Keep the projects moving.** `hive goals --idle` lists every goal (the person's focuses, each project's
    goals.md, the asks) with its thread, last agent post, who is running and open asks, and names the idle
    ones. A focus is idle after 2 h with nobody running (a project after 2 days). **Every idle focus gets a fresh agent this
-   round**, in the focus's own thread, briefed to read the thread and take the next step that does not need the person
-   (a project can keep testing in simulation while an account waits; another can draft its document while the person
-   is away). Mark the ask `person` only for the step that truly waits, never the focus. If a project's goals have work that
+   round, on its next rung, not on a check-in.** Each focus has a `## Ladder` in its project's goals.md: steps that need nobody's sign-off, each with a `check:`. Start the round with
+   `hive goals --brief T | hive post --thread T --model sonnet` (hardware-grade judgement: `--model opus`), for each line of `hive goals --ladder-threads` (a project with a ladder of its own, like hive-gtm, is on that list too). Don't hand-write these briefs: a line in one saying
+   "if nothing is left, say so" produced 31 of 57 rounds that ended in a wait (21 h to 2026-11-06 02:00 UTC, all the rounds on the board then). An empty ladder means the round writes new rungs from the measure; a focus that truly has none takes a `Parked until` line, at most 3 days out, which skips it until then.
+   Mark the ask `person` only for the step that truly waits, never the focus. Look at `hive goals --rounds 1` in your report: rounds that end in a wait are the number to push down. If a project's goals have work that
    nobody is on and that doesn't overlap a running agent, start it (own thread, a brief with goal, where the code is,
    what's done, who to tell). `hive progress` counts focus_quiet (focuses silent over 4 h): it should be 0 at the end of your round.
 4. **Measure, then improve the Hive.** Run `hive progress` (the last day against the day before; `--since 6h` for a tighter

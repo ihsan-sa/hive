@@ -1,0 +1,9 @@
+[Unit]
+Description=Hive thread status bars, every 20 min
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=20min
+
+[Install]
+WantedBy=timers.target
