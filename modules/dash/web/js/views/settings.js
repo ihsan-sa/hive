@@ -29,8 +29,8 @@ const CAPTEXT = { read: "Read everything", files: "Read files: notes, modules, s
 async function loadCfg(ctx) {
   if (!can("config")) return;
   try { F.cfg = await jget("/api/config"); } catch (e) { F.cfg = {}; }
-  F.ed ||= { max: F.cfg.max_sessions ?? "", kp: !!F.cfg.keeper_every_s, kpe: F.cfg.keeper_every_s || 10800, au: F.cfg.auto_update !== false };
-  F.saved ||= { max: F.ed.max };
+  F.ed ||= { max: F.cfg.max_sessions ?? "", kp: !!F.cfg.keeper_every_s, kpe: F.cfg.keeper_every_s || 10800, au: F.cfg.auto_update !== false, bud: F.cfg.max_budget_usd ?? "" };
+  F.saved ||= { max: F.ed.max, bud: F.ed.bud };
   ctx.update();
 }
 async function loadUpdate(ctx) {
@@ -98,12 +98,15 @@ async function loadMods(ctx) {
   ctx.update();
 }
 
+/** Once, at a section's foot: whether its changes need a Save. */
+const foot = text => h("p", { class: "field-h set-foot", "data-key": "saves" }, text);
+const AUTO = "Changes here save as you make them.";
 const check = (label, on, onChange, hint) => h("label", { class: "check" }, h("input", { type: "checkbox", checked: on, onchange: (e, n) => onChange(n.checked) }), h("span", null, label, hint ? h("span", { class: "field-h" }, hint) : null));
 
 // Kept in this browser, like the theme: another person signed in elsewhere keeps theirs.
 function viewSection(ctx) {
   const on = simpleOn();
-  return section({ title: "Simple view", level: 1 },
+  return section({ title: "This device", level: 1 },
     blocks(block({ title: "Simple view", key: "simple", sub: on ? "On: you see a chat, and your Hive talks to you in plain words." : "Off: you see every tab, and what the agents say to each other. Turn it on for just a chat and what's been made, with agents told to use plain words.",
       actions: button(on ? "Show everything" : "Turn on simple view", () => { setSimple(!on); ctx.update(); }, { size: "s" }) }),
     notifyBlock(ctx), pushBlock(ctx), phoneBlock(ctx), signBlock(ctx)));
@@ -131,8 +134,8 @@ function phoneBlock(ctx) {
   const P = F.phone;
   if (!can("config") || !P) return null;
   const sub = P.on
-    ? `On. When something is waiting for you and you haven't seen it, your Hive sends one line to ntfy.sh: "${P.line}" That is all it sends: no names, no words from your agents${P.link ? ", and a link back to this address" : ""}. Anyone who learns the topic below can read those lines, so keep it to yourself.`
-    : `Off. Turn it on to get a line on your phone when your Hive asks you something or finishes a job, even with this page closed. It uses ntfy.sh, a free public service with no account: your Hive sends it one line ("${P.line}") and nothing else.`;
+    ? `On. When something is waiting for you and you haven't seen it, your Hive sends one line to ntfy.sh${P.line ? `: "${P.line}"` : ""}. That is all it sends: no names, no words from your agents${P.link ? ", and a link back to this address" : ""}. Anyone who learns the topic below can read those lines, so keep it to yourself.`
+    : `Off. Turn it on to get a line on your phone when your Hive asks you something or finishes a job, even with this page closed. It uses ntfy.sh, a free public service with no account: your Hive sends it one line${P.line ? ` ("${P.line}")` : ""} and nothing else.`;
   return block({ title: "Phone alerts", key: "phone", sub,
     actions: [button(P.on ? "Turn off" : "Turn on phone alerts", () => phoneDo(ctx, P.on ? "off" : "on", P.on ? "Off." : "On."), { size: "s" }),
       P.on ? button("Send a test", () => phoneDo(ctx, "test"), { size: "s" }) : null] },
@@ -140,6 +143,7 @@ function phoneBlock(ctx) {
       h("p", null, "On your phone: install the ntfy app (free), tap +, choose \"Subscribe to topic\", and enter this topic:"),
       h("p", null, h("code", null, P.topic), " ", copyButton(P.topic)),
       h("p", { class: "field-h" }, P.link ? "Tapping the alert opens " + P.link : "Tapping the alert won't open your Hive: you turned this on from an address a phone can't reach. Turn it off and on again from your Hive's public address to add the link."),
+      button(P.runs ? "Stop run-finished alerts" : "Also tell me when a run I started ends", () => phoneDo(ctx, P.runs ? "runs-off" : "runs-on", P.runs ? "Run-finished alerts off." : "You will get a line when a run you started ends."), { size: "s" }),
       button("Make a new topic", () => phoneDo(ctx, "topic", "New topic. Subscribe to it on your phone; the old one is dead."), { size: "s" }),
       P.error ? h("p", { class: "fmsg", "data-tone": "bad", role: "status" }, P.error) : null, msg("phone")) : msg("phone"));
 }
@@ -202,7 +206,7 @@ function brandBlocks(ctx) {
   const file = h("input", { type: "file", accept: "image/png,image/jpeg,image/gif,image/webp,image/svg+xml", hidden: true, class: "brand-pick", onchange: (e, n) => { pick(n.files[0]); n.value = ""; } });
   return [
     block({ title: "Name", key: "name", sub: "Shown in the top bar and the browser tab. Empty uses the default.",
-      actions: input({ type: "text", maxlength: 40, placeholder: DEFAULT_NAME, "aria-label": "Hive name", style: "width:220px", value: F.name, oninput: (e, n) => { F.name = n.value; }, onchange: saveName }) }),
+      actions: input({ type: "text", maxlength: 40, placeholder: DEFAULT_NAME, "aria-label": "Hive name", value: F.name, oninput: (e, n) => { F.name = n.value; }, onchange: saveName }) }),
     block({ title: "Logo", sub: "Shown next to the name and as the tab's icon. PNG, JPEG, GIF, WebP or SVG, up to 2 MB. A square picture works best.",
       actions: [logo ? h("img", { class: "brand-logo set-logo", src: logo, alt: "Current logo", "data-key": "preview" }) : h("span", { class: "set-logo set-logo-none", "aria-hidden": "true" }), file,
         button(logo ? "Replace" : "Upload", (e, n) => n.parentNode.querySelector(".brand-pick").click(), { size: "s" }),
@@ -227,6 +231,13 @@ function hiveSection(ctx) {
     F.saved.max = v;
     save({ max_sessions: v === "" ? null : +v }, () => { E.max = F.saved.max = was; });
   };
+  const saveBud = () => {
+    const was = F.saved.bud, v = String(E.bud).trim();
+    if (v === String(was)) return;
+    if (v !== "" && !(+v > 0 && +v < 10000)) { E.bud = was; say("hive", "The most one run may spend is a number of dollars above 0, or empty for no cap.", "bad"); ctx.update(); return; }
+    F.saved.bud = v;
+    save({ max_budget_usd: v === "" ? null : +v }, () => { E.bud = F.saved.bud = was; }, "Budget per run");
+  };
   const starter = async () => {
     say("starter", up ? "Stopping…" : "Starting…");
     try {
@@ -243,7 +254,9 @@ function hiveSection(ctx) {
   return section({ title: "The hive", level: 1, actions: statusLabel(up ? "working" : "ended", up ? "running" : "not running") },
     blocks(brand[0],
       block({ title: "Agents at once", sub: "Empty means no limit. Each saves when you leave the box.",
-        actions: input({ type: "number", min: 1, max: 200, placeholder: "no limit", "aria-label": "Agents at once", style: "width:220px", value: E.max, oninput: (e, n) => { E.max = n.value; }, onchange: saveMax }) })),
+        actions: input({ type: "number", min: 1, max: 200, placeholder: "no limit", "aria-label": "Agents at once", value: E.max, oninput: (e, n) => { E.max = n.value; }, onchange: saveMax }) }),
+      block({ title: "Budget per run", sub: E.bud === "" ? "Empty means no cap. A cap stops a run that reaches it (counted at API prices) and says so in its thread. Applies from each run's next start." : `Each run stops at $${E.bud}, counted at API prices, and says so in its thread. Applies from each run's next start. Empty removes the cap.`,
+        actions: [savedMark("Budget per run"), input({ type: "number", min: 0, step: "any", placeholder: "no cap", "aria-label": "Budget per run in dollars", value: E.bud, oninput: (e, n) => { E.bud = n.value; }, onchange: saveBud })] })),
     blocks(brand[1],
       block({ title: "Keep work moving", sub: E.kp ? `${paceSay(E.kpe)}, pick up work that stopped and start work nobody asked for, and sooner once nothing has run for half an hour. It uses your limits.` : "Off: work that stops waits until someone asks. Turn it on to pick it up by itself.",
         actions: [E.kp ? h("select", { class: "input", value: E.kpe, "aria-label": "How often to keep work moving", title: "How often to keep work moving", style: "width:auto",
@@ -254,7 +267,7 @@ function hiveSection(ctx) {
       block({ title: "Update by itself", sub: F.up && F.up.installed ? "Installs new releases as often as you chose above. Keeps your settings and goes back if it fails. When it's off, this Hive still looks and says so above, and you choose when to update." : "Installs each new release. Keeps your settings and goes back if it fails.",
         actions: toggle("Update by itself", E.au, v => { E.au = v; save({ auto_update: v }, () => { E.au = !v; }, "Update by itself"); }) }),
       block({ title: up ? "Stop the Hive" : "Start the Hive", sub: up ? "Stopping lets agents finish their turn." : "The Hive isn't running.", key: "starter", actions: button(up ? "Stop" : "Start", starter, { size: "s", kind: up ? "danger" : "primary", busy: isBusy("starter"), title: up ? "Stop the Hive" : "Start the Hive" }) })),
-    msg("brand"), msg("starter"), msg("hive"));
+    msg("brand"), msg("starter"), msg("hive"), foot(AUTO));
 }
 
 // Codex and API keys: same section as Claude, because to the person they're all accounts. With settings.json and config rights they come with the
@@ -310,9 +323,9 @@ function setupSections(ctx) {
   const pg = pageData(ctx.update);
   if (!can("config")) return [];
   return [
-    section({ title: "Model", level: 1, note: "what agents run on" }, pg ? modelPart(ctx.update) : reading()),
-    section({ title: "Power and sandbox", level: 1, note: "who decides what agents may do, and what holds them to it" }, pg ? [powerPart(ctx.update), h("h3", { class: "set-sub", "data-key": "sandbox" }, "Sandbox"), sandboxPart(ctx.update)] : reading()),
-    section({ title: "Data sharing", level: 1, note: "what's sent, and whether it is" }, pg ? sharePart(ctx.update) : reading())];
+    section({ title: "Model", level: 1, note: "what agents run on" }, pg ? [modelPart(ctx.update), foot(AUTO)] : reading()),
+    section({ title: "Power and sandbox", level: 1, note: "who decides what agents may do, and what holds them to it" }, pg ? [powerPart(ctx.update), h("h3", { class: "set-sub", "data-key": "sandbox" }, "Sandbox"), sandboxPart(ctx.update), foot(AUTO)] : reading()),
+    section({ title: "Data sharing", level: 1, note: "what's sent, and whether it is" }, pg ? [sharePart(ctx.update, true), foot(AUTO)] : reading())];
 }
 const secretsSection = ctx => can("secrets") ? section({ title: "Secrets", level: 1, note: "send a token to the Hive; it's never shown back" }, h("div", { class: "stack secrets" }, secretParts(ctx))) : null;
 
@@ -336,7 +349,9 @@ function modulesSection(ctx) {
   const row = (x, inBrowse) => h("li", { class: "lr", "data-key": x.name },
     h("div", { class: "lr-in mod-row" },
       h("b", { class: "mod-name" }, x.repo ? h("a", { href: x.repo, target: "_blank", rel: "noreferrer noopener" }, x.name) : x.name),
-      h("span", { class: "muted mod-about" }, about(x), x.source === "own" ? h("span", { class: "mod-where" }, WHERE[x.where] || WHERE.local) : null),
+      h("span", { class: "muted mod-about" },
+        h("span", { class: "mod-line" }, h("span", { class: "mod-one" }, about(x)), (b => (b.setAttribute("aria-label", "About " + x.name), b))(button(about(x), null, { kind: "icon", icon: "info", cls: "sec-info", title: about(x) }))),
+        x.source === "own" ? h("span", { class: "mod-where" }, WHERE[x.where] || WHERE.local) : null),
       end(x, inBrowse)));
   const list = (rows, inBrowse) => h("ul", { class: "list" }, rows.map(x => row(x, inBrowse)));
   const group = (key, title, note, ...body) => h("div", { class: "mod-group", "data-group": key }, h("h3", { class: "mod-gt" }, title, note ? h("span", { class: "mod-gn" }, note) : null), body);
@@ -345,15 +360,13 @@ function modulesSection(ctx) {
     const have = pub.filter(x => x.state === "installed"), rec = pub.filter(x => x.recommended && x.state !== "installed");
     const q = (F.modQ || "").trim().toLowerCase(), shown = pub.filter(x => !q || (x.name + " " + x.about).toLowerCase().includes(q));
     return [
-      group("public", "Public, installed", null, have.length ? list(have) : empty("None installed yet.")),
-      group("recommended", "Recommended", null,
+      group("installed", "Installed", null, have.length || own.length ? [have.length ? list(have) : null, own.length ? list(own) : null] : empty("None installed yet.")),
+      group("available", "Available", null,
         rec.length ? list(rec) : h("p", { class: "muted mod-none" }, "You have everything we recommend."),
         h("div", { class: "lr-more" }, button(F.browse ? "Hide the full list" : `Browse all ${pub.length} public modules`, () => { F.browse = !F.browse; ctx.update(); }, { size: "s", kind: "quiet" })),
         F.browse ? h("div", { class: "mod-browse" },
           field("Filter", input({ placeholder: "Name or what it does", value: F.modQ || "", oninput: (e, n) => { F.modQ = n.value; ctx.update(); } })),
-          shown.length ? list(shown, true) : empty("No module matches that.")) : null),
-      group("own", "This Hive's own", "made here, or added from a Git URL",
-        own.length ? list(own) : h("p", { class: "muted mod-none" }, "Nothing yet. Ask an agent to make something into a module and it shows up here."),
+          shown.length ? list(shown, true) : empty("No module matches that.")) : null,
         h("form", { class: "frow", onsubmit: e => { e.preventDefault(); if (F.url.trim()) act("add", F.url.trim()); } },
           h("div", { style: "flex:1;min-width:12rem" }, field("Add from a Git URL", input({ placeholder: "Git URL of a module", value: F.url, oninput: (e, n) => { F.url = n.value; } }))),
           button("Add", null, { type: "submit", busy: F.busy[F.url.trim()] })),
@@ -474,11 +487,10 @@ function accessSection(ctx) {
         h("p", { class: "field-h" }, "A name here has its own Access team, audience and people, apart from the settings above. A sign-in for one name never works on another. Each needs a team, an audience and at least one person, and its tunnel must pass the public name on as the Host. Those above don't change when you save here."),
         ...siteRows,
         h("div", { class: "frow" }, button("Add a name", () => { R.push({ host: "", team: "", aud: "", emails: "", full: "", limited: "" }); F.sitesOpen = true; ctx.update(); }, { kind: "quiet" }),
-          button("Save names", saveSites, { kind: "primary", busy: isBusy("sites") }), msg("sites")))));
+          button("Save names", saveSites, { kind: "primary", busy: isBusy("sites") }), msg("sites")))),
+    foot("Nothing here changes until you press its Save."));
 }
 
-// The state of the whole page, up top, so you needn't scroll to learn it. Each one jumps to its section.
-const jump = title => document.querySelector(`.set .sec[aria-label="${title}"]`)?.scrollIntoView({ behavior: "smooth", block: "start" });
 // Each section's state, as a dot after its name in the side nav: what the six chips up top used to say.
 function navDots(ctx) {
   const s = S.app.setup || {}, logins = s.logins || [], pg = S.app.settings && can("config") ? pageData(ctx.update) : null, o = S.app.route === "local" && S.app.outside, d = {};
@@ -497,7 +509,8 @@ function navDots(ctx) {
 
 export default {
   id: "settings", label: "Settings", about: "accounts, modules, access", tab: () => S.app.app && (can("config") || can("modules") || can("logins")),
-  enter(ctx) { F.keysOpen = null; F.flash = {}; F.ed = null; F.name = null; F.saved = null; F.access = null; F.acctOpen = null; F.accessOpen = null; F.sitesOpen = null; F.say = {}; clearSignin(); forget(); F.up = null; loadCfg(ctx); loadPhone(ctx); loadPush(ctx); loadUpdate(ctx); loadMods(ctx); if (S.app.settings && can("config")) loadPage(ctx.update); },
+  enter(ctx) { F.keysOpen = null; F.flash = {}; F.ed = null; F.name = null; F.saved = null; F.access = null; F.acctOpen = null; F.accessOpen = null; F.sitesOpen = null; F.say = {}; clearSignin(); forget(); F.up = null; loadCfg(ctx); loadPhone(ctx); loadPush(ctx); loadUpdate(ctx); loadMods(ctx); if (S.app.settings && can("config")) loadPage(ctx.update);
+  },
   leave() { forget(); forgetSecrets(); },
   render(ctx) {
     if (!S.app.app) return h("div", { class: "page" }, empty("Settings show only in the app, opened from this machine.", { kind: "page", title: "Settings" }));
@@ -505,10 +518,13 @@ export default {
     const header = pageHeader({ title: "Settings" });
     if (!secs.length) return form({ header, sections: [empty("This connection can't change any settings.")] });
     const nav = secs.map(n => n.getAttribute("aria-label")), dots = navDots(ctx);
-    const item = t => h("button", { type: "button", "data-key": t, title: dots[t] ? dots[t][1] : null, onclick: () => jump(t) }, h("span", null, t), dots[t] ? statusDot(dots[t][0]) : null, dots[t] ? h("span", { class: "vh" }, dots[t][1]) : null);
+    // One section at a time (#settings/<slug>); #settings, or a slug nobody can see, shows the first. The nav is real links, so Back works.
+    const slugOf = t => t.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+    const now = nav.find(t => slugOf(t) === ctx.arg) || nav[0];
+    const item = t => h("a", { href: href("settings", slugOf(t)), "data-key": t, "aria-current": t === now ? "page" : null, title: dots[t] ? dots[t][1] : null }, h("span", null, t), dots[t] ? statusDot(dots[t][0]) : null, dots[t] ? h("span", { class: "vh" }, dots[t][1]) : null);
     return h("div", { class: "page set", "data-width": "narrow", "data-key": "settings" }, header,
       h("div", { class: "set-b" },
-        h("nav", { class: "set-n", "aria-label": "Settings sections", "data-key": "nav" }, nav.map(t => t === "Simple view" ? [h("hr", { class: "set-rule" }), item(t)] : item(t))),
-        h("div", { class: "set-s" }, secs)));
+        h("nav", { class: "set-n", "aria-label": "Settings sections", "data-key": "nav" }, nav.map(t => t === "This device" ? [h("hr", { class: "set-rule" }), item(t)] : item(t))),
+        h("div", { class: "set-s" }, secs.filter(n => n.getAttribute("aria-label") === now))));
   },
 };

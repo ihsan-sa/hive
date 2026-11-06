@@ -38,10 +38,12 @@ function fitRange(t) {
   const liveOnly = T.active || T.fitRows;   // a display tile's window follows who's running, even with ended work showing
   for (const x of S.sessions) { if (liveOnly && !sLive(x)) continue; iv.push([x.start, sLive(x) ? t : sEnd(x)]); }
   if (!liveOnly) for (const p of S.posts) if (!SYS.has(p.from)) iv.push([p.t, p.t]);
-  if (!iv.length) return [t - DAY, t, true];
-  iv.sort((a, b) => b[1] - a[1]);
-  const hi = iv[0][1], cap = hi - DAY; let lo = hi;
-  for (const [a, b] of iv) { if (b < lo - GAP) break; lo = Math.min(lo, a); }
+  // Nothing can be newer than now: one post stamped ahead (a machine's clock, a bad import) must not push the window past it and blank the chart.
+  const seen = iv.filter(x => x[0] <= t);
+  if (!seen.length) return [t - DAY, t, true];
+  seen.sort((a, b) => b[1] - a[1]);
+  const hi = Math.min(seen[0][1], t), cap = hi - DAY; let lo = hi;
+  for (const [a, b] of seen) { if (b < lo - GAP) break; lo = Math.min(lo, a); }
   lo = Math.max(lo, cap);
   if (T.fitRows) lo = Math.min(lo, hi - TILE_MIN);
   const span = Math.max(TMIN, hi - lo), pad = Math.min(30 * MIN, span * .03);
@@ -207,11 +209,13 @@ function toolbar() {
     small("←", "Earlier", () => pan(-T.win / 4)), small("→", "Later", () => pan(T.win / 4)),
     !T.fit && T.end != null ? button("Now", () => set(T.win, null), { size: "s", title: "Back to the latest, following now" }) : null,
     seg([["on", "Active only", "Show only the agents running now, and the rows they're on"]], T.active ? "on" : null, () => { T.active = !T.active; setPref("tlActive", T.active ? 1 : 0); T.ver = -1; draw(); T.update(); }, { label: "Filter" })),
+    button("About this chart", null, { kind: "icon", icon: "info", size: "s", title: HELP }),
     h("span", { class: "cvp-count" }, `${stamp(r.t0)} – ${r.follows ? "now" : stamp(r.t1)} (${dur(r.t1 - r.t0)})`),
     h("span", { class: "cvp-count", role: "status" }, `${T.nLive} running, ${T.nDone} ended in this range`),
   ];
 }
-const NOTE = "Each row is a thread, each bar an agent's session (filled with a status mark at its end while running; pale and dashed once ended; rows with someone running come first), each tick along the top of a row a post. Stacked bars mean agents worked in parallel. A bar's name shows when it fits: hover for any. Click a bar for the agent, a row to read the thread. To zoom: Ctrl+scroll or pinch, or the − and + buttons. Drag sideways to move through time.";
+const HELP = "Each row is a thread, each bar an agent's session (filled with a status mark at its end while running; pale and dashed once ended; rows with someone running come first), each tick along the top of a row a post. Stacked bars mean agents worked in parallel. A bar's name shows when it fits: hover for any. Click a bar for the agent, a row to read the thread. To zoom: Ctrl+scroll or pinch, or the − and + buttons. Drag sideways to move through time.";
+const NOTE = "A row is a thread, a bar is an agent's session, a tick is a post. Click a bar for the agent, a row for the thread.";
 const note = () => [NOTE, h("div", { class: "legend" },
   h("span", null, h("i", { class: "tl-sw" }), "running"), h("span", null, h("i", { class: "tl-sw", "data-ended": "" }), "ended"), h("span", { "data-tone": "bad" }, h("i", { class: "tl-sw", "data-tone": "bad" }), "failed"),
   ["working", "queue", "quiet", "stuck"].map(k => h("span", { style: "display:inline-flex;align-items:center;gap:5px" }, statusDot(k), status(k).label)))];

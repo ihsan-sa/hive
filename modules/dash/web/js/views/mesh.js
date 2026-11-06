@@ -8,7 +8,7 @@ import { agentStatus, isAgent, isRunning, isWarden, modelName, sEnd, threadTitle
 import { ago, clock, dur, firstSentence, money, now, short, toks, plural, DAY, HOUR, MIN } from "../core/format.js";
 import { agentHref, threadHref } from "../core/router.js";
 import { status, tier } from "../core/status.js";
-import { button, icon, seg, statusDot } from "../ui/kit.js";
+import { button, empty, icon, seg, statusDot } from "../ui/kit.js";
 import { killButton } from "../actions.js";
 import { openPanel } from "../ui/panel.js";
 import { showTip, hideTip } from "../ui/tip.js";
@@ -97,7 +97,7 @@ function build() {
   const allRuns = lanes.flatMap(l => l.tracks.filter(t => t.kind === "run"));
   M.D = { t0, t1, replay, homes, main, runs, aposts, spawns: spawns.sort((x, y) => y.t - x.t), pairs, rel, posts, C, withWork, allRuns, byId: new Map(posts.map(p => [p.id, p])) };
   M.lanes = lanes; M.more = more;
-  const live = allRuns.filter(t => t.live).length;
+  const live = replay ? allRuns.filter(t => t.live).length : S.running.size;   // the top bar's count, not the drawn runs
   M.count = M.active && !live ? (replay ? "Nobody was running then" : "Nobody is running right now") : `${live} running · ${plural(lanes.length, "thread")} · ${money(C.total)}`;
   M.lastBuild = now();
 }
@@ -115,7 +115,7 @@ const stop = (e, f) => { e.preventDefault(); e.stopPropagation(); f(); };
 const pickAgent = a => (e => stop(e, () => (e.detail >= 2 && isAgent(a) ? openPanel("agent", a) : select("agent", a))));
 const pickThread = th => (e => stop(e, () => select("thread", th)));
 const idLink = a => h("a", { class: "map-id", href: isAgent(a) ? agentHref(a) : threadHref("@" + a), onclick: pickAgent(a) }, a);
-const thLink = th => h("a", { class: "map-id", href: threadHref(th), onclick: pickThread(th) }, th);
+const thLink = th => h("a", { class: "map-th", href: threadHref(th), title: threadTitle(th) !== th ? th : null, onclick: pickThread(th) }, threadTitle(th));
 
 // ---- the graph: Claude Design's hub-and-fan layout (~/designs/mesh-graph/GRAPH-HANDOFF.md) ----
 // Threads are cards in tier bands. Each agent is drawn once, fanned out right of its main thread with a spoke to the card; a thread
@@ -332,7 +332,7 @@ function syncGraph(D) {
     const outs = Object.entries(t.outside).sort((x, y) => y[1] - x[1] || (x[0] < y[0] ? -1 : 1));
     const chips = L.cols === 1 && outs.length > 1 ? [h("span", { class: "map-chip" }, "+ " + outs.length)] : outs.slice(0, 2).map(([k, n]) => h("span", { class: "map-chip" }, k + " ", h("b", null, String(n))));
     put(seen, "c:" + t.id, "button", "map-card", cl.card.x, cl.card.y,
-      { "data-kind": "thread", "data-id": t.id, "data-body": "c:" + t.id, "data-tier": t.tier, "data-sel": sel || null, "data-lit": lit("c:" + t.id), style: `width:${cl.card.w}px;height:${cl.card.h}px`, title: L.tile ? t.id : null, "aria-label": `Thread ${t.id}, ${tier(t.tier).label}, ${plural(t.posts, "post")}, ${money(t.cost)}`, "aria-pressed": sel ? "true" : "false" },
+      { "data-kind": "thread", "data-id": t.id, "data-body": "c:" + t.id, "data-tier": t.tier, "data-sel": sel || null, "data-lit": lit("c:" + t.id), style: `width:${cl.card.w}px;height:${cl.card.h}px`, title: t.id, "aria-label": `Thread ${t.id}, ${tier(t.tier).label}, ${plural(t.posts, "post")}, ${money(t.cost)}`, "aria-pressed": sel ? "true" : "false" },
       [h("span", { class: "map-cr1" }, h("i", { class: "map-tsw", "data-tier": t.tier }), h("b", { class: "map-cn" }, t.id), h("span", { class: "map-cc" }, money(t.cost))),
        compact ? null : h("span", { class: "map-cr2" }, t.stuck ? h("em", null, `▲ ${t.stuck} stuck`) : null, h("span", { class: "map-cm" }, `${plural(t.posts, "post")} · ${since(t.last) || "–"}`), ...chips),
        h("i", { class: "map-cb" }, h("i", { style: `width:${Math.max(2, cl.costShare * 100).toFixed(1)}%` }))]);
@@ -394,12 +394,13 @@ function syncCap(D) {
 function legend(L) {
   const outs = {}; for (const cl of L.clusters) for (const [k, n] of Object.entries(cl.thread.outside)) outs[k] = (outs[k] || 0) + n;
   const g = st => h("i", { class: "map-g", "data-st": st, style: "--r:6px" });
-  const sig = JSON.stringify(outs) + L.nodes.some(n => n.agent && n.agent.warden);
+  const sig = JSON.stringify(outs) + L.nodes.some(n => n.agent && n.agent.warden) + L.mode;
   if (legendEl.dataset.sig === sig) return; legendEl.dataset.sig = sig;
   legendEl.replaceChildren(...[...[["working", "working"], ["queue", "in queue"], ["quiet", "quiet"], ["stuck", "stuck"], ["failed", "failed"], ["ended", "ended"]].map(([s, l]) => h("span", null, g(s), l)),
     L.nodes.some(n => n.agent && n.agent.warden) ? h("span", null, h("i", { class: "map-g", "data-st": "working", "data-w": "", style: "--r:6px" }), "warden") : null,
-    h("span", null, g("ghost"), "also posts here"), h("span", null, h("i", { class: "map-k-w" }), "thicker = more posts"), h("span", null, h("i", { class: "map-k-bar" }), "card bar = share of spend"),
-    ...Object.entries(outs).sort((x, y) => y[1] - x[1]).map(([k, n]) => h("span", null, h("span", { class: "map-chip" }, k + " ", h("b", null, String(n)))), ) , Object.keys(outs).length ? h("span", null, "outside posts") : null].filter(Boolean));
+    h("span", null, g("ghost"), "also posts here"),
+    ...Object.entries(outs).sort((x, y) => y[1] - x[1]).map(([k, n]) => h("span", null, h("span", { class: "map-chip" }, k + " ", h("b", null, String(n)))), ) , Object.keys(outs).length ? h("span", null, "outside posts") : null,
+    h("span", { class: "map-lnote" }, L.mode === "lineage" ? "Arrow: who started whom. Bar: share of spend." : "Thicker: more posts. Bar: share of spend.")].filter(Boolean));
 }
 
 // ---- pointer and keys on the graph ----
@@ -471,11 +472,11 @@ function emptyEl(D) {
   const nothing = !M.lanes.length && !M.more.length && !M.active;
   if (nothing || !M.active) return h("div", { class: "map-empty" }, h("span", { class: "map-empty-ic" }, icon("clock")),
     h("h2", null, M.win ? `Nothing happened in the ${winName().toLowerCase()}.` : "Nothing has happened yet."),
-    M.win !== DAY ? h("div", { class: "map-acts" }, button("Last 24 hours", () => setWin(DAY), { size: "s" })) : null);
+    M.win !== DAY && !M.tile ? h("div", { class: "map-acts" }, button("Last 24 hours", () => setWin(DAY), { size: "s" })) : null);
   const last = lastEnded(D, 1)[0], ran = new Set(S.sessions.filter(s => s.start <= D.t1 && sEnd(s) >= D.t0).map(s => s.name)).size;
   return h("div", { class: "map-empty" }, h("span", { class: "map-empty-ic" }, icon("agents")), h("h2", null, "Nobody is running"),
     h("p", null, (last ? `The last agent, ${last.name}, ended ${ago(sEnd(last))} on ${last.thread}. ` : "") + `${plural(ran, "agent")} ran in the ${winName().toLowerCase().replace(/^last /, "last ")}.`),
-    h("div", { class: "map-acts" }, button("Show agents that ended", () => setActive(false), { size: "s", kind: "primary" }), M.win !== DAY ? button("Last 24 hours", () => { setActive(false); setWin(DAY); }, { size: "s" }) : null));
+    M.tile ? null : h("div", { class: "map-acts" }, button("Show agents that ended", () => setActive(false), { size: "s", kind: "primary" }), M.win !== DAY ? button("Last 24 hours", () => { setActive(false); setWin(DAY); }, { size: "s" }) : null));
 }
 function lastEnded(D, n) {
   const seen = new Set(), out = [];
@@ -656,7 +657,7 @@ function setLay(k) {
 function toolbar() {
   return h("div", { class: "map-tb" },
     seg(WINS.map(([l, w]) => [w, l]), M.win, setWin, { label: "Window" }),
-    seg(LAYOUTS, M.lay, setLay, { label: "Layout" }),
+    seg(LAYOUTS.map(([k, l, t]) => [k, l, t, null, k]), M.lay, setLay, { label: "Layout" }),
     h("label", { class: "map-sw" }, h("input", { type: "checkbox", role: "switch", class: "switch", checked: M.active, "aria-label": "Running only", onchange: (e, n) => setActive(n.checked) }), "Running only"),
     h("label", { class: "map-search" }, icon("search"), h("input", { class: "input", type: "search", placeholder: "Find an agent or thread", "aria-label": "Find an agent or thread", value: M.q,
       oninput: (e, n) => { M.q = n.value.trim().toLowerCase(); M.update(); },
@@ -712,6 +713,8 @@ export default {
   escape() { if (M.sel) { M.sel = null; M.update(); return true; } },
   render(ctx) {
     M.update = ctx.update;
+    // before the live feed has answered, "nobody is running" would be a guess: say it's loading, and build nothing yet
+    if (!S.live) return h("div", { class: "map", "data-key": "mesh", "aria-label": "Map: loading" }, empty("Loading the map…", { kind: "loading" }));
     if (!M.D || (M.cut == null && M.seenVer !== S.ver && now() - M.lastBuild >= 2000) || (M.cut == null && now() - M.lastBuild > 30000)) { M.seenVer = S.ver; build(); }
     else if (M.cut == null && M.seenVer !== S.ver) { clearTimeout(M.timer); M.timer = setTimeout(() => M.update(), 2000 - (now() - M.lastBuild)); }
     const D = M.D;

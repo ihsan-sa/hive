@@ -100,10 +100,14 @@ export function delegate(root = document) {
 /** True while the person has text selected on the page: views hold still so the selection isn't lost. */
 export function selecting() { const s = getSelection(); return !!(s && !s.isCollapsed && s.toString().trim()); }
 
-/** Copy text; returns a promise. */
+/** Copy text; returns a promise. Falls back to a hidden textarea when the clipboard is refused; rejects with a plain message if both fail. */
 export function copyText(t) {
-  if (navigator.clipboard) return navigator.clipboard.writeText(t);
-  const x = h("textarea", { style: "position:fixed;opacity:0" }); x.value = t; document.body.append(x); x.select();
-  try { document.execCommand("copy"); } finally { x.remove(); }
-  return Promise.resolve();
+  const old = () => {
+    const x = h("textarea", { style: "position:fixed;opacity:0" }); x.value = t; document.body.append(x); x.select();
+    let ok = false;
+    try { ok = document.execCommand("copy"); } catch { ok = false; } finally { x.remove(); }
+    return ok ? Promise.resolve() : Promise.reject(new Error("Couldn't copy. Select the text and copy it by hand."));
+  };
+  if (!navigator.clipboard) return old();
+  return navigator.clipboard.writeText(t).catch(old);
 }

@@ -12,7 +12,7 @@ import { table } from "../ui/table.js";
 import { agentRef, copyButton, threadRef } from "../ui/refs.js";
 import { message, pollDelivered, fileUrl } from "../ui/message.js";
 import { contacts, lifeChart, priceBuckets, stepFor, tokenLine } from "../ui/agentviz.js";
-import { feed, toolTone } from "../ui/feed.js";
+import { feed } from "../ui/feed.js";
 import { killButton } from "../actions.js";
 import { agentActions } from "../ui/agentHover.js";
 
@@ -209,7 +209,7 @@ export function agentPage(n, host = "page") {
       title: h("span", { class: "ref-wrap" }, n, isAgent(n) ? copyButton("@" + n) : null, isWarden(n) ? wardenBadge(WARDEN_HINT) : null),
       lead: L ? L.doing || "Starting" : isWarden(n) ? WARDEN_HINT : last ? `Last said: ${short(mdPlain(displayText(last)), 220)}` : null,
       tone: L && agentState(L).key === "stuck" ? "bad" : null,
-      actions: [...agentActions(n), button("All their posts", null, { href: threadHref("@" + n), size: "s" }), L ? threadRef(L.thread) : null, L ? killButton(n) : null],
+      actions: [L ? button("Open conversation", null, { href: threadHref(L.thread), size: "s", title: "Open " + L.thread }) : null, ...agentActions(n), button("All their posts", null, { href: threadHref("@" + n), size: "s" }), L ? killButton(n) : null],
       meta: [st.key === "outside" ? null : statusLabel(st.key, st.label || null, { live: isRunning(n) }), ...line],
       after: [nowBlock(n, L), defs(agentCard(n).map(r => r.k === "Model" && isAgent(n) && !isWarden(n) && can("post") ? { ...r, v: modelPicker(n, r, L) } : r))],
     }),
@@ -223,7 +223,7 @@ export function agentPage(n, host = "page") {
       D.life.chart ? section({ title: "Over its life", note: D.life.note }, D.life.chart) : null,
       cols(
         section({ title: "Recent steps", note: "tool calls and what it said, newest first" },
-          toolList.length ? share(toolList.map(([k, v]) => ({ key: k, label: k, value: v, tone: toolTone(k), text: String(v) })), { label: "Tool calls by tool" }) : null,
+          toolList.length ? share(toolList.map(([k, v]) => ({ key: k, label: k, value: v, tone: "data", text: String(v) })), { label: "Tool calls by tool" }) : null,
           feed(F.name === n ? F.items : null)),
         h("div", { class: "stack" },
           section({ title: "Threads", note: threads.length > 1 ? "latest first" : null }, table({
@@ -242,7 +242,7 @@ export function agentPage(n, host = "page") {
         columns: [
           { label: "Started", render: x => stamp(x.start) },
           { label: "Thread", render: x => threadRef(x.thread) },
-          { label: "Woken by", render: x => [x.from && isAgent(x.from) ? agentRef(x.from) : x.from || "?", x.resumed ? " (resumed)" : ""] },
+          { label: "Woken by", render: x => [x.from && isAgent(x.from) ? agentRef(x.from) : x.from === "person" && S.app.app ? "you" : x.from || "?", x.resumed ? " (resumed)" : ""] },
           { label: "Ran", num: true, render: x => dur(sEnd(x) - x.start) },
           { label: "Cost", num: true, render: x => (x.out && D.byOut[x.out] != null ? money(D.byOut[x.out]) : "–") },
           { label: "How it ended", render: x => h("span", { class: "sess-end", "data-tone": endTone(x) }, ended(x)) },

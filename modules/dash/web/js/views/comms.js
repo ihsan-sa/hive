@@ -9,12 +9,13 @@
 import { h, morph } from "../core/dom.js";
 import { S, SYS, can, OUTSIDE, built, post as apiPost, poll, jget } from "../core/store.js";
 import { simpleOn, plainName, hiveName } from "../core/simple.js";
-import { SIDE_THREAD, agentState, agentStatus, btwParent, threadParent, threadChildren, isAgent, isRunning, tierOf, threadTitle, threadState, threadPeople, isSystemThread, SHOW, postKind, threadKinds, closingPosts, displayText, postSource, inUse, fresh7 } from "../core/model.js";
-import { ago, dayName, stamp, clock, dur, short, mdPlain, now, plural, firstSentence, DAY, MIN, HOUR } from "../core/format.js";
+import { SIDE_THREAD, agentState, agentStatus, btwParent, threadParent, threadChildren, isAgent, isRunning, tierOf, threadTitle, threadState, threadPeople, isSystemThread, SHOW, postKind, threadKinds, closingPosts, displayText, postSource, inUse, fresh7, asksQuestion, fileInfo } from "../core/model.js";
+import { ago, dayName, stamp, clock, dur, short, mdPlain, now, plural, firstSentence, DAY, MIN, HOUR, money } from "../core/format.js";
 import { href, threadHref, go } from "../core/router.js";
 import { tier, status } from "../core/status.js";
 import { askTier, askStop, stopButton } from "../actions.js";
-import { seen, unreadIn, markRead, onInbox } from "../core/inbox.js";
+import { seen, unreadIn, markRead, onInbox, IB } from "../core/inbox.js";
+import { MN, onMail } from "../core/mailnew.js";
 import { button, empty, icon, input, list, seg, statusDot } from "../ui/kit.js";
 import { agentRef, avatars, copyButton, threadRef } from "../ui/refs.js";
 import { message, messageHead, messageReceipt, localMessage, markWords, pollDelivered, marksSig, delivery, onJump } from "../ui/message.js";
@@ -26,7 +27,8 @@ import { callFor, hangUp } from "../ui/phone.js";
 import { brought } from "../ui/brought.js";
 import { firstJobs, closeLine } from "../ui/firstjobs.js";
 import { awayCard } from "../ui/away.js";
-import { composer, cancelReply, replyTo, say, outFor, outSig, actions as outActions, dropZone, recipient, draft, focusComposer, quoteInto } from "../ui/composer.js";
+import { hiveStopped } from "../ui/shell.js";
+import { composer, cancelReply, replyTo, say, outFor, outSig, actions as outActions, dropZone, recipient, draft, hasDraft, focusComposer, quoteInto } from "../ui/composer.js";
 
 const STEP = 500, FIRST = 250, NEAR = 60, GROUP = 10 * MIN, HELPER_AFTER = 3 * MIN;
 const NONE = [];
@@ -43,12 +45,16 @@ const grip = () => h("div", { class: "cm-grip", role: "separator", "aria-orienta
     e.target.onpointerup = e.target.onpointercancel = () => { delete e.target.dataset.on; e.target.onpointermove = e.target.onpointerup = e.target.onpointercancel = null; }; },
   ondblclick: e => setSide(e.target.closest(".cm"), 272),
   onkeydown: e => { const d = e.key === "ArrowLeft" ? -24 : e.key === "ArrowRight" ? 24 : 0; if (d) { e.preventDefault(); setSide(e.target.closest(".cm"), sideW + d); } } });
-const C = { imp: false, arch: false, conv: undefined, q: "", show: null, limit: FIRST, tq: "", scope: "recent", next: null, menu: null, find: false, strip: false };
+const C = { err: "", imp: false, arch: false, conv: undefined, q: "", show: null, limit: FIRST, tq: "", scope: "recent", next: null, menu: null, find: false, strip: false };
+let errTimer = 0;
+/** A change to a conversation (pin, star, archive) is shown at once; when the server refuses it the list goes back, and this says why for a few seconds. */
+const tryMeta = (th, patch, ctx) => setMeta(th, patch).catch(e => { C.err = "Couldn't save that: " + (e && e.message || "the server didn't answer") + "."; clearTimeout(errTimer); errTimer = setTimeout(() => { C.err = ""; ctx.update(); }, 8000); ctx.update(); });
 // What the message list holds. matched grows as posts arrive; pend is what sync() still has to append.
 const L = { key: null, src: null, seen: 0, matched: [], pend: [], evs: new Set(), rebuild: true, keep: false, shown: 0, day: "", prev: null, names: new Set(), opts: null,
   box: null, out: null, jump: null, unseen: 0, outSig: "", ro: null, stuck: true, heads: "", near: new Set(), io: null, tl: null, tlSig: "", tlConv: null, saved: null, ctx: null, jumpTo: null, marked: "" };
 let qTimer = 0;
 onInbox(() => L.ctx && L.ctx.update());
+onMail(() => L.ctx && L.ctx.update());
 // Sending clears a search, so what was just sent shows (the person, 11040214d468).
 if (typeof window !== "undefined") window.addEventListener("cp:sent", () => { if (C.q.trim() || C.find) { C.q = ""; C.find = false; L.ctx && L.ctx.update(); } });
 
@@ -149,7 +155,7 @@ function rows(items) {
     if (p.ev) { out.push(evRow(p)); L.prev = null; continue; }
     L.names.add(p.from); for (const m of p.men) L.names.add(m);
     const q = L.prev, cont = !!q && q.from === p.from && q.th === p.th && !p.reply_to && p.t - q.t < GROUP && sameTo(q, p) && sameSource(q, p);
-    const a = message(p, { ...L.opts, cont }); a.dataset.show = KIND_NAME[postKind(p)] || "";   // For you, Updates or Agent comms, marked in the list (11040113eacf)
+    const a = message(p, { ...L.opts, cont }); a.dataset.show = KIND_NAME[postKind(p)] || ""; if (a.dataset.show === "you" && asksQuestion(p)) a.dataset.ask = "";   // For you, Updates or Agent comms, marked in the list (11040113eacf)
     L.prev = p; a._head = L.heads; L.io.observe(a); out.push(a);
   }
   return out;
@@ -375,14 +381,14 @@ function threadRows(c, ctx) {
     const say = short(mdPlain(displayText(lp)).replace(/\s+/g, " "), 70);
     return { key: d.name, href: threadHref(d.name), current: c.thread === d.name, title: threadTitle(d.name), meta: ago(d.last).replace(" ago", ""),
       lead: [tierLead(d.name), h("span", { title: status(st.key).label || "" }, statusDot(st.key === "done" ? "ended" : st.key, { live }))],
-      text: [fadeTag(d.name) || stateTag(st), fadeTag(d.name) || stateTag(st) ? " · " : null, `${authorName(lp.from)}: ${say}`], sec: secOf(d.name, st), dim: faded(d.name) };
+      text: [d.name !== c.thread && hasDraft(d.name) ? [h("span", { class: "cm-draft", title: "You left unsent text in this conversation" }, "Draft"), " · "] : null, fadeTag(d.name) || stateTag(st), fadeTag(d.name) || stateTag(st) ? " · " : null, `${authorName(lp.from)}: ${say}`], sec: secOf(d.name, st), dim: faded(d.name) };
   };
   const dress = (r, th = r.key.replace(/~recent$/, "")) => {
     const im = important(th), pn = pinned(th), m = tmeta(th);
     if (im) r.lead = [h("span", { class: "tm-imp", title: m.impWhy ? `Important, from ${m.impBy || "an agent"}: ${m.impWhy}` : m.impBy ? `Important, marked by ${m.impBy}` : "Important" }, icon("star")), r.lead];
     if (can("post")) r.acts = [
-      h("button", { type: "button", class: "lr-act", "aria-pressed": String(im), "aria-label": im ? "Not important" : "Mark important", title: im ? "Take the important mark off" : "Mark important", onclick: () => setMeta(th, { important: !im }) }, icon("star")),
-      h("button", { type: "button", class: "lr-act", "aria-pressed": String(pn), "aria-label": pn ? "Unpin" : "Pin to the top", title: pn ? "Unpin" : "Pin to the top", onclick: () => setMeta(th, { pin: !pn }) }, icon("pin"))];
+      h("button", { type: "button", class: "lr-act", "aria-pressed": String(im), "aria-label": im ? "Not important" : "Mark important", title: im ? "Take the important mark off" : "Mark important", onclick: () => tryMeta(th, { important: !im }, ctx) }, icon("star")),
+      h("button", { type: "button", class: "lr-act", "aria-pressed": String(pn), "aria-label": pn ? "Unpin" : "Pin to the top", title: pn ? "Unpin" : "Pin to the top", onclick: () => tryMeta(th, { pin: !pn }, ctx) }, icon("pin"))];
     return r;
   };
   // Recent holds every conversation by last activity, so a pinned, important or needs-you one also keeps its place there (the person, 11060006f821):
@@ -393,7 +399,7 @@ function threadRows(c, ctx) {
     const kids = kidsOf.get(d.name) || []; if (!kids.length) return [];
     const open = KIDS.has(d.name) || kids.some(k => k.name === c.thread), sts = kids.map(k => threadState(k.name, seen).key);
     const n = k => sts.filter(x => k.includes(x)).length, parts = [[["working", "queued", "quiet"], "working"], [[...NEED], "needs you"], [["done"], "done"]].map(([ks, w]) => (n(ks) ? `${n(ks)} ${w}` : null)).filter(Boolean);
-    return [{ key: d.name + "~kids", sec, href: null, depth: 1, whole: true, expanded: open, title: plural(kids.length, "helper conversation"), meta: parts.join(" · "),
+    return [{ key: d.name + "~kids", sec, href: null, depth: 1, whole: true, expanded: open, title: plural(kids.length, "helper conversation"), meta: parts.length > 1 ? h("span", { title: parts.join(" · ") }, parts[0]) : parts[0] || null,   // first part only, the rest in the tooltip
       lead: h("span", { class: "cm-stand-ch", "data-open": open ? "" : null }, icon("chevron-down")),
       onClick: e => holdScroll(e.currentTarget, () => { KIDS.has(d.name) ? KIDS.delete(d.name) : KIDS.add(d.name); ctx.update(); }) },
       ...(open ? kids.sort((a, b) => b.last - a.last).map(k => dress({ ...mk(k), key: d.name + "/" + k.name, sec, depth: 2 }, k.name)) : [])];
@@ -527,27 +533,50 @@ function lastQuestion(p) {
 }
 
 // ---- the head of a conversation ----
-function moreMenu(c, ctx) {
-  const th = c.thread, t = tier(tierOf(th));
-  const act = (label, ic, fn, title) => button(label, () => { C.menu = null; fn(); ctx.update(); }, { size: "s", kind: "quiet", icon: ic, title });
-  const pin = pinned(th), arch = archived(th), fd = faded(th), mine = can("post");
-  return h("div", { class: "cm-menu", role: "menu", "data-key": "more" },
-    mine ? act(pin ? "Unpin" : "Pin to the top", "pin", () => setMeta(th, { pin: !pin }), pin ? "Back among the others" : "Keep it at the top of the list, whatever is on") : null,
+// One menu, opened by the title: the count, what you can do to the conversation, what shows, and the way out (export, share).
+const sep = () => h("div", { class: "cm-sep", role: "separator" });
+/** What this conversation's agent runs have cost: its usage files' totals, those that belong to this thread. null while usage hasn't come back. */
+function threadCost(th) {
+  const U = S.usage; if (!U || !U.files) return null; let t = 0;
+  for (const [k, f] of Object.entries(U.files)) if (fileInfo(k).thread === th) t += f.c || 0;
+  return t;
+}
+function titleMenu(c, n, d, off, ctx) {
+  const th = c.thread, full = th && app() && !simpleOn(), mine = can("post");
+  const act = (label, ic, fn, title, val) => button(val ? [label, h("small", null, val)] : label, () => { C.menu = null; fn(); ctx.update(); }, { size: "s", kind: "quiet", icon: ic, title });
+  const link = (label, ic, to) => button(label, null, { href: to, size: "s", kind: "quiet", icon: ic });
+  const t = th && tier(tierOf(th)), im = full && important(th), pin = full && pinned(th), arch = full && archived(th), fd = full && faded(th);
+  const part = (...xs) => xs.filter(Boolean);
+  const own = full ? part(
+    mine ? act(im ? "Not important" : "Mark important", "star", () => tryMeta(th, { important: !im }, ctx), im ? "Take the important mark off" : "Keep it above the others in the list") : null,
+    mine ? act(pin ? "Unpin" : "Pin to the top", "pin", () => tryMeta(th, { pin: !pin }, ctx), pin ? "Back among the others" : "Keep it at the top of the list, whatever is on") : null,
     mine ? act("Rename", "edit", () => renameDialog(th), "Give it a name of your own. Only the dash shows it.") : null,
-    mine ? act(arch ? "Unarchive" : "Archive", "archive", () => { setMeta(th, { archived: !arch }); if (!arch) go("comms"); }, arch ? "Back in the list" : "Out of the list until something new is for you") : null,
-    mine ? act(fd ? "Needed again" : "Not needed", "check", () => setMeta(th, { faded: !fd }), fd ? fadeWhy(th) : "Grey it in the list: still there to open and write in, and back by itself when something new is for you") : null,
-    can("tier") ? button([h("span", { class: "ref-sw", "data-tone": t.tone }), "Priority: " + t.label], () => { C.menu = null; askTier(th); }, { size: "s", kind: "quiet", title: "Where this sits in the hive's priority list" }) : null,
-    button("On the timeline", null, { href: href("timeline"), size: "s", kind: "quiet", icon: "clock" }),
+    mine ? act(arch ? "Unarchive" : "Archive", "archive", () => { tryMeta(th, { archived: !arch }, ctx); if (!arch) go("comms"); }, arch ? "Back in the list" : "Out of the list until something new is for you") : null,
+    mine ? act(fd ? "Needed again" : "Not needed", "check", () => tryMeta(th, { faded: !fd }, ctx), fd ? fadeWhy(th) : "Grey it in the list: still there to open and write in, and back by itself when something new is for you") : null) : [];
+  const prio = th && can("tier") ? button([h("span", { class: "ref-sw", "data-tone": t.tone }), "Priority", h("small", null, t.label)], () => { C.menu = null; askTier(th); }, { size: "s", kind: "quiet", title: "Where this sits in the hive's priority list" })
+    : th ? h("p", { class: "meta cm-tier", title: "This thread's priority" }, h("span", { class: "ref-sw", "data-tone": t.tone }), "Priority: " + t.label) : null;
+  const where = part(
+    off > 0 && !simpleOn() ? act(`Show ${off} hidden`, "chat", () => setShow(SHOW.ALL, ctx), "Turn on For you, Updates and Agents") : null,
+    link("All messages", "chat", href("comms", "~all")),
+    full ? link("On the timeline", "clock", href("timeline")) : null,
+    prio);
+  const out = full ? part(
     act("Share this result", "board", () => shareDialog(th), "Save the conversation as one page you can post: the ask, the agents at work, the result. You see it first and can remove anything."),
     act("Export as Markdown", "copy", () => downloadMarkdown(th), "Download the conversation as a .md file, with simple formatting"),
-    act("Export as PDF", "board", () => printScript(th), "Lay it out like a script and save it as a PDF from the print dialog"),
-    th !== threadTitle(th) ? h("p", { class: "meta cm-menu-id" }, "Its id on the board: ", h("code", { title: "Click to select it" }, th), copyButton(th)) : null);   // copy it (the person, 11041333ab1a)
-}
-// The title's menu: how many messages and since when, and the way to every message.
-function titleMenu(c, n, d) {
+    act("Export as PDF", "board", () => printScript(th), "Lay it out like a script and save it as a PDF from the print dialog")) : [];
   return h("div", { class: "cm-menu", role: "menu", "data-key": "title" },
-    h("p", { class: "meta" }, (C.q.trim() ? plural(n, "match", "matches") : plural(n, app() ? "message" : "post")) + (d ? ` · since ${stamp(d.first)}` : "")),
-    button("All messages", null, { href: href("comms", "~all"), size: "s", kind: "quiet", icon: "chat" }));
+    h("p", { class: "meta cm-cost" }, (C.q.trim() ? plural(n, "match", "matches") : plural(n, app() ? "message" : "post")) + (d ? ` \u00b7 since ${stamp(d.first)}` : "") + (full && threadCost(th) != null ? ` \u00b7 ${money(threadCost(th))}` : "")),
+    own, own.length ? sep() : null, where, out.length ? sep() : null, out,
+    full && th !== threadTitle(th) ? h("p", { class: "meta cm-menu-id" }, "Its id on the board: ", h("code", { title: "Click to select it" }, th), copyButton(th)) : null);   // copy it (the person, 11041333ab1a)
+}
+/** The rail's links to the pages Chat brings together: each only where this connection may open it, with a count where there is one. */
+function places() {
+  const link = (label, to, n, tip) => h("a", { class: "cm-place", href: href(to), title: tip }, label, n ? h("b", { class: "cm-place-n", "aria-label": n + " new" }, String(n)) : null);
+  return h("nav", { class: "cm-places", "aria-label": "Also in Chat", "data-key": "places" },
+    can("read") ? link("Needs you", "needs", 0, "What waits on you, and what got done") : null,
+    can("read") ? link("Inbox", "inbox", IB.unread || 0, "Every message agents sent you") : null,
+    can("files") ? link("Mail", "mail", MN.n, MN.n ? "Mail since you last opened it" : "Your mail to h2@") : null,
+    link("Files", "made", 0, "Files and links from your conversations"));
 }
 // What shows: For you, Updates, Agent comms, each on or off: three toggles in the side, over the list (the person, 11040113eacf).
 const tmetaSig = () => Object.entries(S.threadMeta || {}).map(([k, v]) => k + (v.important || 0) + (v.pin || 0) + (v.faded || 0)).join();
@@ -557,11 +586,9 @@ function showChips(ctx) {
     SHOW_PARTS.map(([b, l, t]) => h("button", { type: "button", class: "tm-chip", "data-show": KIND_NAME[b], "aria-pressed": String(!!(mask & b)), title: (mask & b ? "Hide " : "Show ") + t,
       onclick: () => setShow(showMask() ^ b, ctx) }, h("i", { "aria-hidden": "true" }), l)),
     mask ? null : h("p", { class: "meta tm-show-says" }, showSays(mask)));
-  return app() ? h("div", { class: "tm-showwrap" }, group, app() ? h("button", { type: "button", class: "tm-chip tm-chip-imp", "aria-pressed": String(!!C.imp), title: C.imp ? "Show every conversation again" : "Only conversations marked important",
-      onclick: () => { C.imp = !C.imp; ctx.update(); } }, icon("star"), "Important") : null) : group;
+  return app() ? h("div", { class: "tm-showwrap" }, group, app() ? h("button", { type: "button", class: "tm-chip tm-chip-imp", "aria-pressed": String(!!C.imp), title: C.imp ? "Show every conversation again" : "Only conversations marked important", "aria-label": "Important only",
+      onclick: () => { C.imp = !C.imp; ctx.update(); } }, icon("star")) : null) : group;
 }
-const menuBtn = (key, label, ic, ctx, extra) => h("button", { type: "button", class: "btn", "data-kind": "icon", "aria-label": label, title: label, "aria-haspopup": "true", "aria-expanded": String(C.menu === key),
-  onclick: e => { e.stopPropagation(); C.menu = C.menu === key ? null : key; ctx.update(); } }, icon(ic), extra || null);
 function head(c, ctx) {
   if (c.thread && app()) import("../ui/preview.js").then(m => m.autoFiles(c.thread));
   const d = c.thread && S.threads.get(c.thread), n = L.matched.length, off = maskFor(c) !== SHOW.ALL && !C.q.trim() ? L.src.length - n : 0;
@@ -572,23 +599,19 @@ function head(c, ctx) {
   return h("header", { class: "cm-head", "data-key": "head", "data-find": find ? "" : null },
     h("div", { class: "cm-tt", "data-dev": app() ? null : "" },
       h("a", { class: "btn cm-back", href: href("comms"), "data-kind": "icon", "aria-label": app() ? "Chats" : "Threads", title: app() ? "Chats" : "Threads" }, icon("chevron-left")),
-      h("button", { type: "button", class: "cm-title-b", "aria-haspopup": "true", "aria-expanded": String(C.menu === "title"), onclick: e => { e.stopPropagation(); C.menu = C.menu === "title" ? null : "title"; ctx.update(); } },
+      h("button", { type: "button", class: "cm-title-b", "data-hid": off > 0 && !simpleOn() ? "" : null, title: off > 0 && !simpleOn() ? `${off} hidden: open for the way to show them` : null, "aria-haspopup": "true", "aria-expanded": String(C.menu === "title"), onclick: e => { e.stopPropagation(); C.menu = C.menu === "title" ? null : "title"; ctx.update(); } },
         h("h1", { class: "cm-title" }, title), icon("chevron-down")),
       h("span", { class: "meta cm-count" }, (C.q.trim() ? plural(n, "match", "matches") : plural(n, app() ? "message" : "post")) + (d ? ` · since ${stamp(d.first)}` : "")),
-      c.thread && !app() && title !== c.thread ? h("span", { class: "cm-id" }, h("code", { class: "meta", title: "Its id on the board" }, c.thread), copyButton(c.thread)) : null,
-      c.thread && !app() ? tierControl(c.thread) : null),
+      c.thread && !app() && title !== c.thread ? h("span", { class: "cm-id" }, h("code", { class: "meta", title: "Its id on the board" }, c.thread), copyButton(c.thread)) : null),
     h("div", { class: "cm-tools" },
       people.length ? avatars(people) : null,
-      d?.posts.some(p => p.text.length > 2400) ? button("Contents", () => import("../rich/rail.js").then(m => m.openRail()), { size: "s", kind: "quiet", cls: "rc-railbtn", title: "What's in this thread" }) : null,
+      d?.posts.some(p => p.text.length > 2400) ? button("Contents", () => import("../rich/rail.js").then(m => m.openRail()), { kind: "icon", icon: "bands", cls: "rc-railbtn", title: "Contents: what's in this thread" }) : null,
       input({ type: "search", class: "input cm-find", placeholder: c.thread ? "Search here" : "Search messages", "aria-label": "Search these messages", value: C.q, oninput: e => { C.q = e.target.value; clearTimeout(qTimer); qTimer = setTimeout(ctx.update, 120); }, onkeydown: e => { if (e.key === "Escape") { e.stopPropagation(); C.q = ""; C.find = false; e.target.blur(); ctx.update(); } } }),
       h("button", { type: "button", class: "btn", "data-kind": "icon", "aria-label": "Search here", title: "Search here", "aria-pressed": String(find),
         onclick: () => { C.find = !find; if (!C.find) C.q = ""; ctx.update(); if (C.find) queueMicrotask(() => document.querySelector(".cm-find")?.focus()); } }, icon("search")),
-      off > 0 && !simpleOn() ? button(`Show ${off} hidden`, () => setShow(SHOW.ALL, ctx), { size: "s", kind: "quiet", cls: "cm-hid", title: "Turn on For you, Updates and Agent comms" }) : null,
       c.thread ? button("Files", () => import("../ui/preview.js").then(m => m.openFiles()), { kind: "icon", icon: "folder", cls: "cm-files", title: "Files: this conversation's and the projects'" }) : null,
-      c.thread ? asideBtn(c.thread, ctx) : null,
-      c.thread && app() && !simpleOn() ? menuBtn("more", "More", "more", ctx) : null),
-    C.menu === "title" ? titleMenu(c, n, d) : null,
-    C.menu === "more" && c.thread && app() && !simpleOn() ? moreMenu(c, ctx) : null,
+      c.thread ? asideBtn(c.thread, ctx) : null),
+    C.menu === "title" ? titleMenu(c, n, d, off, ctx) : null,
     C.menu === "asides" && c.thread ? asideMenu(c.thread) : null,
     who.length ? h("div", { class: "cm-people" }, who) : null);
 }
@@ -608,11 +631,6 @@ function asideMenu(th) {
     sideKids(th).reverse().map(t => { const d = S.threads.get(t), last = d && d.posts.at(-1);
       return h("a", { href: threadHref(t), class: "cm-aside-i", role: "menuitem", "data-key": t, title: threadTitle(t).replace(/^Aside: /, "") },
         h("span", { class: "cm-aside-q" }, threadTitle(t).replace(/^Aside: /, "")), last ? h("span", { class: "meta" }, ago(last.t)) : null); }));
-}
-function tierControl(th) {
-  const t = tier(tierOf(th)), sw = h("span", { class: "ref-sw", "data-tone": t.tone });
-  return can("tier") ? button([sw, t.label + " ▾"], () => askTier(th), { size: "s", title: "Change this thread's tier" })
-    : h("span", { class: "meta cm-tier", title: "This thread's tier" }, sw, t.label);
 }
 
 // ---- home: start something, and what needs you ----
@@ -780,34 +798,33 @@ function homePane(ctx) {
   const room = hasRoom(), digest = app() && !simpleOn();
   if (digest) loadStanding(ctx);
   const stand = digest ? standing(g) : null;
+  // Only on arriving: taking focus on every render pulled the page back to the box after any real click elsewhere on it.
+  const arrived = C.arrived; C.arrived = false;
   // Long lists fold here, so what's under them stays in reach (the side list always has them all).
-  const sec = (title, note, items) => items.length ? h("section", { class: "sec", "data-key": "s:" + title }, h("header", { class: "sec-h" }, h("h2", { class: "sec-t" }, title), note ? h("span", { class: "sec-n" }, note) : null),
+  const sec = (title, note, items) => items.length ? h("section", { class: "sec", "data-key": "s:" + title }, title ? h("header", { class: "sec-h" }, h("h2", { class: "sec-t" }, title), note ? h("span", { class: "sec-n" }, note) : null) : null,
     list(items.map(needRow), { limit: digest && !STAND.more[title] ? HOME_LIMIT : 0, onMore: () => { STAND.more[title] = true; ctx.update(); } })) : null;
   return h("div", { class: "cm-home", "data-key": "home" },
     awayCard(ctx),
     w ? h("div", { class: "cm-new", "data-key": "new" },
       h("h1", { class: "cm-home-t" }, "What do you want done?"),
       h("p", { class: "cm-home-l" }, simpleOn() ? "Say it the way you'd tell a person. Your Hive starts on it and answers here." : "Say it the way you'd tell a person. An agent starts on it and answers here; it may bring in helpers if the job has parts."),
-      !room ? h("p", { class: "cm-home-warn", "data-tone": "limited", role: "status" }, statusDot("limited"), simpleOn() ? "Your Hive has used up its allowance for now, so new work waits until it comes back." : (((S.app && S.app.setup && S.app.setup.logins) || []).some(l => l.signed_in) ? "Every Claude account is past its usage line, so new work waits until there's room. See Usage." : "No Claude account is signed in yet. Sign in under Settings > Accounts so new work can start.")) : null,
-      composer({ thread: null, update: ctx.update, place: "home", autofocus: conversation(ctx.arg).open }),
+      !room && !hiveStopped() ? h("p", { class: "cm-home-warn", "data-tone": "limited", role: "status" }, statusDot("limited"), simpleOn() ? "Your Hive has used up its allowance for now, so new work waits until it comes back." : (((S.app && S.app.setup && S.app.setup.logins) || []).some(l => l.signed_in) ? "Every Claude account is past its usage line, so new work waits until there's room. See Usage." : "No Claude account is signed in yet. Sign in under Settings > Accounts so new work can start.")) : null,
+      composer({ thread: null, update: ctx.update, place: "home", autofocus: arrived && conversation(ctx.arg).open }),
       !n && !local.length && ![...S.threads.values()].some(d => d.posts.some(p => p.from === "person")) ? firstJobs() : null,
       local.some(it => it.state !== "failed") ? closeLine() : null,
       local.length ? h("div", { class: "cm-out", "data-key": "out" }, local.map(it => localMessage(it, outActions))) : null) : null,
     h("div", { class: "cm-needs", "data-key": "needs" },
       n || (!simpleOn() && !S.live.signin?.length && !(stand && stand.needs.length)) ? h("h2", { class: "cm-needs-t" }, n ? `${plural(n, "thing")} for you` : "Nothing needs you") : null,
-      sec("Waiting for your answer", simpleOn() ? null : "an agent asked you something", g.asks),
-      sec("New for you", "answers you haven't opened", g.foryou),
-      sec(simpleOn() ? "On hold" : "Stopped", simpleOn() ? null : "one stopped by a usage limit carries on by itself; others need a message", g.trouble),
+      sec(null, null, [...g.asks, ...g.foryou, ...g.trouble]),   // one head above ("N things for you"); each row's shape and first words say which kind
       stand ? standingPart(stand, ctx) : null,
       sec("Working now", null, g.working),
-      !n && !g.working.length && !S.live.signin?.length ? h("p", { class: "meta" }, simpleOn() ? "When your Hive asks you something or finishes, it shows here." : "When an agent asks you something, finishes, or stops, it shows here.") : null,
-      simpleOn() ? null : h("p", { class: "cm-home-all" }, button("All messages", null, { href: href("comms", "~all"), size: "s", kind: "quiet" }), app() ? button("Inbox", null, { href: href("inbox"), size: "s", kind: "quiet" }) : null)));
+      !n && !g.working.length && !S.live.signin?.length ? h("p", { class: "meta" }, simpleOn() ? "When your Hive asks you something or finishes, it shows here." : "When an agent asks you something, finishes, or stops, it shows here.") : null));
 }
 
 // Over the whole page, not in the list: it sets what you see of the hive's talk, both in a conversation and in which ones are listed. Each one turns on and off by itself.
 const SHOW_PARTS = [[SHOW.you, "For you", "your messages, what agents ask or tell you, and each job's result"],
   [SHOW.updates, "Updates", "agents' progress updates"],
-  [SHOW.comms, "Agent comms", "agents talking to each other and the hive's own notices"]];
+  [SHOW.comms, "Agents", "agent comms: agents talking to each other and the hive's own notices"]];
 function showSays(mask) {
   if (words(C.tq).length || words(C.q).length) return "Search looks through everything, whatever is on here.";
   if (!mask) return "Nothing is on, so no messages show. Turn one on.";
@@ -821,10 +838,11 @@ export default {
   badge: () => { if (!app() || !S.live) return null; const g = needs(), n = g.asks.length + g.foryou.length + g.trouble.length; return n ? String(n) : null; },
   poll: { every: 3000, run: async ctx => { if (await pollDelivered()) ctx.update(); } },
   escape: () => { if (C.menu || C.find) { C.menu = null; if (!C.q.trim()) C.find = false; L.ctx && L.ctx.update(); return; } if (!cancelReply() && asideOpen()) closeAside(); },
+  enter: () => { C.arrived = true; },
   leave: () => { clearTimeout(qTimer); C.menu = null; C.find = false; },
   render(ctx) {
     L.ctx = ctx;
-    if (!S.live) return h("div", { class: "page" }, empty("Reading…", { kind: "loading" }));
+    if (!S.live) return h("div", { class: "page" }, S.failed ? empty("Couldn't read the data. It tries again in a few minutes.", { kind: "error" }) : empty("Reading…", { kind: "loading" }));
     const c = conversation(ctx.arg);
     if (C.conv !== c.arg) { Object.assign(C, { conv: c.arg, q: C.next || "", next: null, limit: FIRST, menu: null, find: false }); }
     L.opts = { showThread: !c.thread, mark: words(C.q) };
@@ -852,11 +870,12 @@ export default {
             input({ type: "search", placeholder: app() ? "Search, or @ to ask" : "Search threads", "aria-label": "Search all conversations by name or content. Start with @ to ask an agent, which answers here and brings up the conversations that help", value: C.tq, oninput: e => { C.tq = e.target.value; ctx.update(); }, onkeydown: e => { if (e.key === "Enter" && aiQ()) { e.preventDefault(); aiAsk(ctx); return; } if (e.key === "Escape") { e.stopPropagation(); C.tq = ""; e.target.value = ""; e.target.blur(); ctx.update(); } } })),
           simpleOn() ? null : showChips(ctx),
           app() ? brought() : null,
+          C.err ? h("p", { class: "fmsg", "data-tone": "bad", role: "alert" }, C.err) : null,
           words(C.tq).length || simpleOn() ? null : h("div", { class: "cm-scope" }, h("span", null, app() ? "Conversations" : "Threads"),
             h("button", { type: "button", class: "cm-scope-b", title: C.scope === "recent" ? (app() ? "Only the last 7 days are listed. Show every conversation." : "Only the last 24 hours are listed. Show every thread.") : "List only the recent ones",
               onclick: () => { C.scope = C.scope === "recent" ? "all" : "recent"; ctx.update(); } }, C.scope === "recent" ? "Show all" : "Recent only"))),
         h("div", { class: "cm-tl", "data-own": "", "data-sig": "own", tabindex: "-1" }),
-        app() && !simpleOn() ? h("div", { class: "cm-side-f" }, button("All messages", null, { href: href("comms", "~all"), size: "s", kind: "quiet" })) : null),
+        app() && !simpleOn() ? places() : null),
       h("section", { class: "cm-convo", "aria-label": "Conversation", ...(post && c.thread ? dropZone(c.thread) : {}) },
         convo,
         post && c.thread ? h("div", { class: "cm-drop", "aria-hidden": "true", "data-key": "drop" }, "Drop files to attach them") : null));

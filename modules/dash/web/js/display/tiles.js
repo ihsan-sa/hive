@@ -30,7 +30,7 @@ const agents = {
     const active = a => a.last && now() - a.last * 1e3 < 3 * MIN;
     return h("ul", { class: "dt-agents", "data-fit": "" }, rows.map(({ a, st }) => h("li", { "data-key": a.name, "data-tone": st.key === "stuck" ? "bad" : null },
       agentRef(a.name), threadRef(a.thread),
-      h("span", { class: "dt-now" }, st.key === "stuck" ? "Stuck: " + st.text : active(a) ? a.doing || "Starting" : st.text))));
+      (txt => h("span", { class: "dt-now", title: txt }, txt))(st.key === "stuck" ? "Stuck: " + st.text : active(a) ? a.doing || "Starting" : st.text))));
   },
 };
 
@@ -54,7 +54,7 @@ const ledger = {
 const limitBar = g => h("div", { class: "dt-g" },
   h("div", { class: "dt-g-t" }, h("span", null, g.label), h("b", null, g.value, g.unit ? " " + g.unit : "")),
   g.pct != null ? meter({ value: g.pct, stop: g.stop, label: g.label }) : null,
-  g.lines && g.lines[0] && typeof g.lines[0] === "string" ? h("div", { class: "dt-g-n" }, g.lines[0]) : null);
+  g.lines && g.lines[0] && typeof g.lines[0] === "string" ? h("div", { class: "dt-g-n", title: g.lines[0] }, g.lines[0]) : null);
 const usage = {
   id: "usage", label: "Usage",
   more: n => `+${n} not shown`,

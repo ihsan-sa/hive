@@ -1157,6 +1157,17 @@ def trial_orientation(name, live, path=None):
         return r.stdout, "cand"
     except Exception: return live, "skip"
 
+def neighbours_note(name, posts):
+    """Live threads that share uncommon words with the posts being handed over (neighbours.py, hive-meta moving.md P3): up to 3 lines, or
+    nothing. Only on a fresh start: a mid-run delivery and a resume already have their work. Never holds up or fails a start."""
+    ids = [p["id"] for p in posts if p.get("id") and str(p.get("from", "")).lower() not in ("starter", "watchdog")][:5]
+    if not ids: return ""
+    try:
+        r = subprocess.run([sys.executable, "-I", str(CORE / "neighbours.py"), "--for", name, *(x for i in ids for x in ("--post", i))],
+                           capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError): return ""
+    return "\n\n" + r.stdout.strip() if r.returncode == 0 and r.stdout.strip() else ""
+
 def recall_note(name, posts):
     """Pointers to our own notes that share words with the posts being handed over (`kb recall`), so related notes turn up
     without the agent searching: a few lines, or nothing when kb isn't sure. The starter's own posts (keeper, improver,
@@ -1227,7 +1238,7 @@ def start(c, name, posts, login, resume=None, reaped=None, extra=(), moved=False
     # Fresh starts only: over 3 days (to 2026-11-06) pointers in a first prompt got a strict follow-up (kb open or a read of the note) 50% of the time,
     # on a resume wake 11% (5 of 44), by hook 21% (hive-meta recall-measure.md). The hook (inbox.recall_note) still delivers them mid-run.
     if kind != "warden" and not asked and not resume:
-        prompt += recall_note(name, posts)
+        prompt += recall_note(name, posts) + neighbours_note(name, posts)
     if (k := next((p["continue"] for p in posts if p.get("continue")), None)):
         prompt += guarded("wake_note", k, first.get("thread"), bool(heir_of)) or ""
     fb = next((p["fallback"] for p in posts if p.get("fallback")), None)

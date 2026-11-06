@@ -56,7 +56,6 @@ export function askStop(n) {
     body: [
       L && L.doing ? h("p", { class: "meta" }, "Doing now: " + short(L.doing, 160)) : null,
       `${n} finishes the step it's on, saves what it has, and stops. Nothing is lost, and a message in its conversation wakes it again.`,
-      h("p", { class: "meta" }, h("span", { class: "nb" }, "not built yet"), " The server needs POST /api/stop; see PART1.md."),
       h("p", { class: "meta" }, "Need it to stop this second? ", h("button", { type: "button", class: "linkbtn", onclick: () => { dlg.close(); askKill(n); } }, "Kill it instead"), ", which ends it at once without saving."),
     ],
     onOk: async () => { await post("/api/stop", { name: n, when: "after-step" }); await poll(); },

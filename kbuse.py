@@ -8,10 +8,11 @@ tool call must hold, and a `touch` record is its "read within 8 tool calls", so 
 
 Only Claude Read and Bash calls are seen. Codex runs and other routes aren't, so nothing here can say a note went unread,
 only that no read was observed. Stdlib only and cheap: the hook runs after every tool call, and never touches the index."""
-import json, os, re, shlex, time
+import calendar, json, os, re, shlex, time
 H = os.path.expanduser(os.environ.get("KB_HOME", "~"))
 CACHE = os.path.join(os.path.expanduser("~/.cache/hive-kb") if "KB_HOME" not in os.environ else H + "/.cache/hive-kb")
 QLOG, LIVE, CANDIDATES = CACHE + "/queries.jsonl", CACHE + "/live", H + "/kb/history/miss-candidates.jsonl"
+DRAFT_S = 14 * 86400   # a draft's time to be read (kb-dream.md)
 WINDOW, READS, CHAIN, SLACK = 600, 8, 180, 12   # seconds a read can follow a search; tool calls (logruler's READS); seconds between two wordings; lines a passage may have moved (gold_match)
 SCOPE = ("kb/", "core/", "projects/", "modules/")
 READERS = re.compile(r"\b(cat|head|tail|sed)\b|\bh2\s+read\b|\bcd\b")
@@ -91,6 +92,7 @@ def reads_of(tool, inp, cwd):
     out = []; here = cwd or H
     for seg in re.split(r"&&|\|\||[;|\n]", cmd):
         if m := re.search(r"\bh2\s+read\b.*?--id\s+(\S+)", seg): out.append(("board:" + m.group(1), None, None)); continue
+        if m := re.search(r"\bh2\s+read\b.*?--thread[=\s]+(\S+)", seg): out.append(("thread:" + m.group(1), None, None)); continue   # a neighbours.py pointer
         try: toks = shlex.split(seg)
         except ValueError: toks = seg.split()
         if not toks: continue
@@ -200,17 +202,50 @@ def numbers(t0, t1, rs=None):
             for i in [r["from"], *r.get("also", [])]: followed.setdefault(i, set()).add(path)
     finds = [r for r in win if "q" in r]
     logged = [r for r in finds if r.get("id") and r.get("shown") and not r.get("filtered") and not r.get("tester")]
-    recalls = [r for r in win if r.get("recall") and r.get("id") and r.get("agent")]
+    recalls = [r for r in win if r.get("recall") and r.get("id") and r.get("agent") and not r.get("neighbours")]
     pointers = [(r["id"], p) for r in recalls for p, _ in r.get("shown", [])]
     opened = sum(1 for i, p in pointers if any(x == p or x == needle(p) or x.endswith("/" + needle(p)) for x in followed.get(i, ())))
+    live = [(r["id"], p) for r in win if r.get("neighbours") and r.get("id") and r.get("agent") for p, _ in r.get("shown", [])]   # neighbours.py: counted apart, so the note pointers' baseline stays comparable
+    live_read = sum(1 for i, p in live if p in followed.get(i, ()))
     fr = sum(1 for r in logged if r["id"] in followed)
     return {"finds": len(finds), "finds_logged": len(logged), "finds_read": fr, "find_read_pct": pct(fr, len(logged)),
             "finds_read_8": sum(1 for r in logged if r["id"] in near), "find_read_8_pct": pct(sum(1 for r in logged if r["id"] in near), len(logged)),
             "recalls": len(recalls), "recalls_opened": sum(1 for r in recalls if r["id"] in followed), "recall_opened_pct": pct(sum(1 for r in recalls if r["id"] in followed), len(recalls)),
             "pointers": len(pointers), "pointers_opened": opened, "pointer_opened_pct": pct(opened, len(pointers)),
+            "neighbour_pointers": len(live), "neighbour_pointers_read": live_read, "neighbour_read_pct": pct(live_read, len(live)),
             "misses": sum(1 for r in win if "miss" in r), "candidates": sum(1 for r in win if "candidate" in r), "runs_observable_pct": runs_observable(t0, t1)}
 
 def iso(t): return time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(t))
+
+def drafts(rs=None, now=None):
+    """The grader's drafts in kb/_drafts: ([{path, age, read, action}], the measure as one line). A read after the 14 days doesn't count as read in them;
+    a draft nobody read is only "no observed read", as everywhere here. Testers' reads and searches aren't in it: `read` and `open` records only."""
+    rs = records() if rs is None else rs; now = time.time() if now is None else now; base = H + "/kb/_drafts"
+    written = []
+    try:
+        with open(H + "/.hive/drafts.jsonl", errors="replace") as f:
+            for l in f:
+                try: written.append(json.loads(l))
+                except ValueError: pass
+    except OSError: pass
+    def t(at): return calendar.timegm(time.strptime(at[:19], "%Y-%m-%dT%H:%M:%S"))
+    reads = {}
+    for r in rs:
+        p = r.get("read") or re.sub(r":\d+$", "", r.get("open") or "")
+        i = p.find("kb/_drafts/") if ("read" in r or "open" in r) and not r.get("tester") else -1
+        if i >= 0 and "at" in r: reads.setdefault(p[i:], []).append(r["at"])
+    at = {rel(w.get("path", "")): t(w["at"]) for w in written if w.get("at")}
+    def read_in_time(path, born): return next((x for x in reads.get(path, []) if t(x) - born <= DRAFT_S), "")
+    rows = []
+    for d, _, fs in os.walk(base):
+        for f in sorted(fs):
+            path = rel(os.path.join(d, f)); born = at.get(path) or os.path.getmtime(os.path.join(d, f))
+            got = read_in_time(path, born); age = now - born
+            rows.append({"path": path, "age": int(age // 86400), "read": got, "action": "merge" if got else "drop" if age >= DRAFT_S else "wait"})
+    old = [p for p, b in at.items() if now - b >= DRAFT_S]; hit = sum(1 for p in old if read_in_time(p, at[p]))
+    days = max(1, (now - min(at.values())) / 86400) if at else 1
+    return rows, (f"drafts: {len(at)} written, {len(at) / days:.1f} a day; {hit} of {len(old)} old enough read within 14 d ({'n/a' if pct(hit, len(old)) is None else str(pct(hit, len(old))) + '%'}); "
+                  f"{len(rows)} waiting in kb/_drafts, {sum(1 for r in rows if r['read'])} read so far")
 
 def report():
     """the lines `kb stats` prints"""
@@ -222,10 +257,12 @@ def report():
         x = numbers(iso(now - secs), end, rs)
         out += [f"{name}: {x['finds']} finds; of {x['finds_logged']} logged with results, {x['finds_read']} ({p(x['find_read_pct'])}) with an observed read of a shown result in 10 min, {x['finds_read_8']} ({p(x['find_read_8_pct'])}) in 8 tool calls",
                 f"  {x['recalls']} recall injections, {x['recalls_opened']} ({p(x['recall_opened_pct'])}) with a pointer read or opened; {x['pointers_opened']} of {x['pointers']} pointers ({p(x['pointer_opened_pct'])})",
+                f"  {x['neighbour_pointers']} live-neighbour pointers, {x['neighbour_pointers_read']} ({p(x['neighbour_read_pct'])}) with the thread read",
                 f"  {x['misses']} misses filed, {x['candidates']} miss candidates; {p(x['runs_observable_pct'])} of runs observable"]
     seen = set(); since = iso(now - 14 * 86400)
     for r in rs:
         if r.get("at", "") >= since and ("read" in r or "open" in r): seen.add(r.get("read") or re.sub(r":\d+$", "", r["open"]))
-    notes = [os.path.relpath(os.path.join(d, f), H) for d, _, fs in os.walk(H + "/kb") for f in fs if f.endswith(".md")]
+    notes = [n for n in (os.path.relpath(os.path.join(d, f), H) for d, _, fs in os.walk(H + "/kb") for f in fs if f.endswith(".md")) if not n.startswith(("kb/_drafts/", "kb/_dropped/drafts/"))]
     out.append(f"{sum(1 for n in notes if n not in seen)} of {len(notes)} notes in kb/ with no observed read in 14 d (the log only goes back to {began})")
+    out.append(drafts(rs, now)[1])
     return out

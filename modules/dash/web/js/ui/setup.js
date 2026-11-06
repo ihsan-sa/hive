@@ -1,6 +1,7 @@
 // The consumer app's setup parts: accounts, data sharing, power and the sandbox. The first-run walkthrough and Settings show the
 // same parts, so they can't say different things. Only on a Hive with settings.json (S.app.settings); facts come from /api/settings.
 import { h } from "../core/dom.js";
+import { confirm } from "./dialog.js";
 import { S, can, jget, post, loadApp } from "../core/store.js";
 import { ago } from "../core/format.js";
 import { button, empty, field, input, seg, statusLabel } from "./kit.js";
@@ -125,12 +126,11 @@ export function codexPart(update) {
     update();
   };
   const stop = async () => { try { a.codex = await act("codex-stop", "Cancelling Codex's sign-in", () => post("/api/signin-codex", { cancel: true }), update, "Asked Codex's sign-in to stop"); tellCodex(a.codex, update); } catch (e) { P.codexSay = e.message; } update(); };
-  const remove = async n => {
-    if (!confirm(`Remove the login ${n}? It signs out of that ChatGPT account here; runs move to the other Codex logins.`)) return;
+  const remove = n => confirm({ title: `Remove the login ${n}?`, body: ["It signs out of that ChatGPT account here; runs move to the other Codex logins."], ok: "Remove", kind: "danger", onOk: async () => {
     try { const v = await act("codex-rm-" + n, "Removing " + n, () => post("/api/signin-codex", { remove: n }), update, "Removed " + n); a.codex = v; await reloadAccounts(update); }
     catch (e) { P.codexSay = e.message; }
     update();
-  };
+  } });
   if (busy) tickCodex(update);
   const logins = c.logins && c.logins.length ? c.logins : [{ name: "codex", signed_in: c.signed_in }];
   if (busy && !logins.some(l => l.name === here)) logins.push({ name: here, signed_in: false, extra: true });
@@ -177,7 +177,7 @@ export function keysPart(update) {
     if (await send(body, "Saving the API key", "API key saved", "Saved. It can't be shown again, and it isn't checked until an agent uses it.")) P.keyUrl = "";
   };
   const replace = async k => { const value = P.repKey; P.repKey = ""; if (await send({ name: k.name, value }, "Replacing " + k.name, "Replaced " + k.name, "Replaced. The old key is gone.")) P.replacing = null; };
-  const remove = async k => { if (confirm(`Remove ${k.name} (${k.label})?`)) await send({ name: k.name, delete: true }, "Removing " + k.name, "Removed " + k.name, "Removed."); };
+  const remove = k => confirm({ title: `Remove ${k.name} (${k.label})?`, ok: "Remove", kind: "danger", onOk: () => send({ name: k.name, delete: true }, "Removing " + k.name, "Removed " + k.name, "Removed.") });
   const keys = a.keys || [];
   const hint = a.settings_file
     ? "Used only when no Claude or Codex login has room. Every run costs money on that key, so set a spending limit with the provider. An OpenRouter key must have a limit on it, or Hive won't use it."
@@ -226,8 +226,11 @@ function ghLine(g) {
   if (!g.ready) return sayMsg("gh isn't signed in to GitHub, so failures go to the makers' receiver instead. Run gh auth login in a terminal to sign in.", "warn");
   return sayMsg("gh is signed in. Issues go to " + (g.repo || "the Hive project") + ".", "good");
 }
-async function draftDo(id, act, update) {
-  if (act === "send" && !confirm("Send this fix to GitHub from your account, exactly as shown? It will be public.")) return;
+function draftDo(id, act, update) {
+  if (act !== "send") return draftRun(id, act, update);
+  confirm({ title: "Send this fix to GitHub?", body: ["It goes from your account, exactly as shown, and it will be public."], ok: "Send", onOk: () => draftRun(id, act, update) });
+}
+async function draftRun(id, act, update) {
   P.draftBusy = id; P.draftSay = null; update();
   try { P.page = await post("/api/draft", { id, do: act }); P.draftSay = { text: act === "send" ? "Approved. It goes on the next report run, within a few hours." : "Discarded. Nothing was sent.", tone: "good" }; }
   catch (e) { P.draftSay = { text: e.message, tone: "warn" }; }
@@ -248,14 +251,16 @@ function draftsPart(g, update) {
         d.approved ? null : button("Send", () => draftDo(d.id, "send", update), { size: "s", busy: P.draftBusy === d.id, disabled: !shown().settings.share.github }),
         button("Discard", () => draftDo(d.id, "discard", update), { kind: "quiet", size: "s" })) : null)));
 }
-async function sendCopy(update) {
-  if (!confirm("Send the makers a scrubbed copy of your recent logs and board, chats included? They keep it for 30 days.")) return;
+function sendCopy(update) {
+  confirm({ title: "Send the makers a copy?", body: ["A scrubbed copy of your recent logs and board, chats included. They keep it for 30 days."], ok: "Send", onOk: () => sendCopyRun(update) });
+}
+async function sendCopyRun(update) {
   P.copyBusy = true; P.copySay = null; update();
   try { await post("/api/share-copy", {}); P.copySay = { text: "Sent. A copy of what went is in reports/bundles in your Hive folder.", tone: "good" }; }
   catch (e) { P.copySay = { text: e.message, tone: "warn" }; }
   finally { P.copyBusy = false; update(); }
 }
-export function sharePart(update) {
+export function sharePart(update, inSettings = false) {
   const pg = shown(), on = pg.settings.share;
   return [
     pg.share_text ? h("div", { class: "share-text", "data-key": "share-text" }, pg.share_text.split(/\n+/).map(t => h("p", null, t)))
@@ -268,7 +273,7 @@ export function sharePart(update) {
     on.github ? ghLine(pg.github) : null,
     draftsPart(pg.github, update),
     P.draftSay ? sayMsg(P.draftSay.text, P.draftSay.tone) : null,
-    h("p", { class: "field-h" }, "Nothing is sent until you finish setup. You can change any of this in Settings at any time."),
+    inSettings ? null : h("p", { class: "field-h" }, "Nothing is sent until you finish setup. You can change any of this in Settings at any time."),
     saveLine("share"), localOnly(), saveErr()];
 }
 
@@ -303,7 +308,7 @@ export function powerPart(update) {
 }
 export function sandboxPart(update) {
   const pg = shown(), c = pg.sandbox_check, bare = pg.settings.sandbox === "bare";
-  const leave = () => { if (confirm(BARE + "\n\nRun without the sandbox anyway?")) saveSettings({ sandbox: "bare" }, update); };
+  const leave = () => confirm({ title: "Run without the sandbox?", body: [BARE], ok: "Run without it", kind: "danger", onOk: () => saveSettings({ sandbox: "bare" }, update) });
   const back = () => saveSettings({ sandbox: "on" }, update);
   const leaveBtn = () => local() ? h("div", { class: "frow" }, button("Run without the sandbox", leave, { kind: "quiet", size: "s", busy: P.saving.sandbox > 0 })) : null;
   let body;

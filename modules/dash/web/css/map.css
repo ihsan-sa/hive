@@ -18,6 +18,7 @@
 .map-rp-f{position:absolute;left:0;top:15px;height:3px;border-radius:2px;background:var(--ink-3)}
 .map-rp-h{position:absolute;top:8px;width:16px;height:16px;margin-left:-8px;border-radius:50%;background:var(--surface);border:2px solid var(--ink);cursor:grab}
 .map-rp-h[data-cut]{border-color:var(--accent)}
+.map-rp-h::after{content:"";position:absolute;inset:-8px}   /* a 32px target round the 16px dot */
 
 .figs{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1px;border:1px solid var(--line);border-radius:var(--r-l);background:var(--line);overflow:hidden}
 .fig{padding:var(--s3) 14px;background:var(--surface);display:flex;flex-direction:column;gap:2px}
@@ -57,13 +58,14 @@
 .map-sh h2{margin:0;font-size:var(--fs-body);font-weight:var(--w-bold)}
 .map-sh small{font-size:var(--fs-meta);color:var(--ink-3)}
 .map-sec{display:flex;flex-direction:column}
-.map-sec>h3{margin:0 0 var(--s2);font-size:var(--fs-meta);font-weight:var(--w-bold);color:var(--ink-3);text-transform:uppercase;letter-spacing:.04em}
+.map-sec>h3{margin:0 0 var(--s2);font-size:var(--fs-meta);font-weight:var(--w-med);color:var(--ink-3);text-transform:none;letter-spacing:0}
 .map-sec>.btn{align-self:flex-start;margin-top:var(--s2)}
 .map-rt{display:flex;flex-direction:column;min-width:0}
 .map-rt small{font-size:var(--fs-meta);color:var(--ink-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .map-id{font-family:var(--mono);font-weight:var(--w-bold);color:var(--ink);text-decoration:none}
-.map-id:hover{text-decoration:underline}
-.map-bar>.map-id,.map-bar>.map-dim{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:var(--fs-small)}
+.map-id:hover,.map-th:hover{text-decoration:underline}
+.map-th{font-weight:var(--w-bold);color:var(--ink);text-decoration:none}   /* thread names in the body face; agent ids stay mono */
+.map-bar>.map-id,.map-bar>.map-th,.map-bar>.map-dim{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:var(--fs-small)}
 .map-dim{color:var(--ink-3)}
 .map-idh{display:flex;align-items:center;gap:var(--s3)}
 .map-idh-t{display:flex;flex-direction:column;min-width:0;flex:1}
@@ -93,7 +95,7 @@
   .map-tb .map-search{order:3;flex:1 1 100%}
 }
 /* With many areas the replay bar would sit below the fold: keep it pinned to the bottom of the view while the map scrolls. */
-.map-rp{position:sticky;bottom:var(--s3);z-index:3}
+.map-rp{position:sticky;bottom:calc(var(--nav-h,0px) + var(--s3));z-index:3}
 .map[data-tile] .map-rp{position:static}
 
 /* ---- the graph: Claude Design's hub-and-fan (~/designs/mesh-graph/GRAPH-HANDOFF.md). The person, 2026-11-04: "make it look good,
@@ -173,7 +175,7 @@
 
 /* the glyph: shape and colour from the status (status.js) */
 .map-g{--r:6px;display:inline-block;flex:none;width:calc(var(--r)*2);height:calc(var(--r)*2);margin:calc(var(--r)*-1) 0 0 calc(var(--r)*-1);border-radius:50%;background:var(--good);box-sizing:border-box;vertical-align:middle}
-.map-legend .map-g,.map-hc .map-g{position:relative;margin:0}
+.map-legend .map-g,.map-hc .map-g,.map-legend .map-g[data-st],.map-hc .map-g[data-st]{position:relative;margin:0}   /* [data-st] beats the stuck/failed/ended offsets, which sit those shapes 4px high here */
 .map-g[data-st=queue]{border-radius:2px;background:var(--warn)}
 .map-g:is([data-st=quiet],[data-st=limited],[data-st=queued],[data-st=ghost],[data-st=more]){background:var(--surface);border:2px solid var(--quiet)}
 .map-g[data-st=limited]{border-color:var(--warn)}
@@ -221,8 +223,7 @@
 /* the legend */
 .map-legend{flex:none;display:flex;flex-wrap:wrap;align-items:center;gap:4px 16px;padding:var(--s2) var(--s4);border-top:1px solid var(--line);font-size:12px;color:var(--ink-3)}
 .map-legend>span{display:inline-flex;align-items:center;gap:6px}
-.map-k-w{display:inline-block;width:22px;height:0;border-top:3px solid var(--spoke)}
-.map-k-bar{display:inline-block;width:22px;height:3px;border-radius:2px;background:linear-gradient(90deg,var(--ink-3) 55%,var(--sunken) 55%)}
+.map-legend>.map-lnote{margin-left:auto;text-align:right}
 
 /* a display tile: the graph only */
 .map[data-tile] .map-stage{height:100%;min-height:200px;border:0;border-radius:0}
@@ -253,3 +254,9 @@ text.map-ring-t{font-size:10.5px;font-weight:var(--w-bold);letter-spacing:.05em;
 .map-cv[data-lod=min] .map-card:hover,.map-cv[data-lod=min] .map-card[data-lit],.map-cv[data-lod=min] .map-card[data-sel]{opacity:1}
 .map-cv[data-lod=min] .map-old{width:12px;height:12px;padding:0;border-radius:4px;background:var(--ink-3);opacity:.35;font-size:0}
 .map-cv[data-lod=min] .map-old b{display:none}
+
+/* small targets: the drawn shape stays small, the hit area reaches 24px (WCAG 2.2 target size) */
+.map-card::after,.map-ag::after,.map-more::after{content:"";position:absolute;inset:-4px}
+.map-cv[data-lod=min] .map-card{overflow:visible}
+.map-cv[data-lod=min] .map-card::after{inset:-5px}
+.map-ag::after,.map-more::after{inset:-3px 0}

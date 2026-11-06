@@ -87,7 +87,7 @@
 .kb-topic:hover{border-color:var(--line-2)}
 .kb-topic-h{display:flex;align-items:baseline;justify-content:space-between;gap:var(--s2);padding:0 var(--s2) var(--s1);font-size:var(--fs-body);font-weight:var(--w-bold);min-width:0}
 .kb-topic-h>:first-child{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.kb-topic-h a{color:var(--ink);text-decoration:none}
+.kb-topic-h a{display:inline-flex;align-items:center;min-height:var(--ctl);color:var(--ink);text-decoration:none}
 .kb-topic-h a:hover{color:var(--accent-ink)}
 .kb-topic-h .meta{flex:none;font-size:var(--fs-meta);font-weight:400;color:var(--ink-3);font-variant-numeric:tabular-nums}
 .kb-notes{list-style:none;display:grid}
@@ -160,6 +160,7 @@
    answer open: [data-collapsed] one line that expands. */
 .kb-ask{display:grid;gap:0;border:1px solid var(--line-2);border-radius:var(--r-xl);background:var(--surface);box-shadow:var(--e1);overflow:hidden;transition:border-color .15s,box-shadow .15s}
 .kb-ask:focus-within{border-color:color-mix(in oklab,var(--accent) 55%,var(--line-2))}
+.kb-ask-in:focus-visible{outline:2px solid var(--focus);outline-offset:2px;border-radius:var(--r-s)}
 .kb-ask-h{display:flex;align-items:center;gap:var(--s2);margin:0;padding:var(--s3) var(--s4) 0;font-size:var(--fs-small);font-weight:var(--w-bold);color:var(--ink)}
 .kb-ask-h>.ic{flex:none;width:16px;height:16px;color:var(--accent)}
 .kb-ask-h{white-space:nowrap;min-width:0}
@@ -348,3 +349,6 @@
 .kb-cover li{background:var(--sunken)}
 /* TODO(§6): .kb-find.kb-wide{display:none} only after the one-search JS change */
 .kb-list .lr-in{padding-left:calc(var(--s2) + var(--d,0)*14px)}
+
+/* a mail message's text (views/mail.js) */
+.mail-body{margin:0;font:inherit;white-space:pre-wrap;overflow-wrap:anywhere}

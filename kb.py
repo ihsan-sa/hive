@@ -4,7 +4,7 @@
   kb find WORDS...          ranked lines, about 500 tokens. Quote a phrase: kb find '"power cut"' ups
     -n 12  --all (more)  --from MM-DD --to MM-DD  --in SOURCE
   kb open PATH[:LINE]       the passage around a hit (one passage, not the file)
-  kb file "TITLE" <<'X'     write a note, index it now, show similar notes  [--to PATH appends]
+  kb file "TITLE" <<'X'     write a note, index it now, show similar notes  [--to PATH appends; on a page with a `Split:` line, to its month's sub-note]
   kb alias WORD SAME...     teach it that these words mean the same (kb/aliases.txt)
   kb miss "QUESTION"        record a lookup that failed; the dream works from these
   kb recall --post ID       up to 5 pointers to our own notes for a post (or text on stdin): what the starter and the
@@ -24,7 +24,7 @@ CACHE = os.path.join(os.path.expanduser("~/.cache/hive-kb") if "KB_HOME" not in 
 DB, LOCK, QLOG, DREAMT = CACHE + "/index.db", CACHE + "/lock", CACHE + "/queries.jsonl", CACHE + "/dream_at"
 NOTES, ALIASES, MISSES = H + "/kb", H + "/kb/aliases.txt", H + "/kb/history/failed-lookups.md"
 # (source name, root, weight). Own notes outrank imported reports when text scores tie.
-ROOTS = [("kb", "kb", 1.25), ("core", "core", 1.1), ("projects", "projects", 1.1), ("modules", "modules/_notes", 1.0),
+ROOTS = [("kb", "kb", 1.25), ("draft", "kb/_drafts", 0.5), ("core", "core", 1.1), ("projects", "projects", 1.1), ("modules", "modules/_notes", 1.0),
          ("docs", "archive/knowledge/docs", 1.0), ("boards", "archive/knowledge/boards", 1.0),
          ("journals", "archive/knowledge/journals", 1.0), ("journals", "archive/knowledge/journals-lines", 1.0),
          ("dispatch", "archive/knowledge/dispatch", 1.0), ("h0", "archive/knowledge/h0", 1.0), ("h1", "archive/knowledge/h1", 1.0),
@@ -40,6 +40,8 @@ SKIP_DIR = {".git", "node_modules", "__pycache__", "dist", "boards-site-pdfs", "
 # Kept out on purpose: the graded tests hold the answers (they'd rank above the sources), the query log is ours.
 # Agent worktrees are copies of the main checkouts: 25,000 files that repeat the same few. Keep the main ones.
 SKIP_PROJECT = re.compile(r"^projects/(_wt|[^/]*-a[0-9a-f]{4,5}(-[^/]*)?|[^/]*-zc-[^/]*|[^/]*-wt|[^/]*-land)(/|$)|/(tests/fixtures|pinned|skills|reference/remediations)/")
+# The grader's unchecked drafts are their own source, ranked low and marked [draft] (outcomes.py); ones the dream dropped aren't searched at all.
+SKIP_DRAFTS = re.compile(r"^kb/(_drafts|_dropped/drafts)(/|$)")
 SKIP_FILE = re.compile(r"(^|/)(question-test-[^/]*|\.queries\.jsonl|miss-candidates\.jsonl|MANIFEST)$")
 PROJECT_ONLY = re.compile(r"\.md$")  # in projects/ and core/, prose only, not every data file
 MAXFILE = 4_000_000
@@ -71,7 +73,8 @@ def walk():
     for src, root, _ in ROOTS:
         base = os.path.join(H, root)
         for d, sub, files in os.walk(base):
-            sub[:] = [s for s in sub if s not in SKIP_DIR and not s.startswith(".") and not SKIP_PROJECT.search(os.path.relpath(os.path.join(d, s), H) + "/")]
+            sub[:] = [s for s in sub if s not in SKIP_DIR and not s.startswith(".") and not SKIP_PROJECT.search(os.path.relpath(os.path.join(d, s), H) + "/")
+                      and not (src == "kb" and SKIP_DRAFTS.search(os.path.relpath(os.path.join(d, s), H)))]
             for f in files:
                 p = os.path.join(d, f); rel = os.path.relpath(p, H)
                 if not TEXT.search(f) or SKIP_FILE.search(rel) or SKIP_PROJECT.search(rel): continue
@@ -216,7 +219,7 @@ def index_history(c):
                             read.update(rel(m) for m in re.findall(r"(?:cat|head|tail|sed -n \S+|less) ((?:~|" + re.escape(H) + r")/[\w./-]+\.md)", cmd))
                             wrote.update(rel(m if m.startswith(("/", "~")) else "kb/" + m) for m in re.findall(r"kb file .*--to (\S+\.md)", cmd))
             except OSError: continue
-            read = sorted(x for x in read if x.startswith(RECALL_PREFIX) and x not in named and x not in wrote and os.path.exists(H + "/" + x))
+            read = sorted(x for x in read if x.startswith(RECALL_PREFIX) and x not in named and x not in wrote and not SKIP_DRAFTS.search(x) and os.path.exists(H + "/" + x))
             if not read: continue
             th = [q for q in byth.get(p.get("thread"), []) if q.get("id") != p.get("id") and str(q.get("at") or "") <= str(p.get("at") or "")]
             ctx = " ".join(str(q.get("text") or "")[:HIST_CTX] for q in th[:1] + th[1:][-3:])
@@ -420,19 +423,75 @@ def snippet(c, h, words, width=130):
 H4_COPY = ".cache/hive-mirror-kb/h4/"
 def fmt_path(p): return p.replace("archive/knowledge/", "A/").replace(H4_COPY, "H4/")
 
+DENSE = {}  # what the last render asked of kb-dense: {"used": bool, "ms": int}, for the search log
+DENSE_MS = float(os.environ.get("KB_DENSE_MS", 450))  # how long a find waits for the service before it answers with the word search alone
+DENSE_DEEP, DENSE_K, DENSE_WW, DENSE_WD, DENSE_BON = 30, 20, 1.0, 0.5, 0.02  # the merge measured as `hybrid` in projects/kb-search
+
+def dense_ask(c, q, n=DENSE_DEEP):
+    """Nearest passages by meaning from the kb-dense service (modules/kb-dense) as [path, line, end]; None on any trouble: no service, too slow, a bad reply."""
+    import socket
+    if os.environ.get("KB_DENSE") == "0": return None
+    sock = os.environ.get("KB_DENSE_SOCK") or os.path.expanduser("~/.cache/kb-dense/sock")
+    if not os.path.exists(sock): return None
+    end = time.time() + DENSE_MS / 1000; s = socket.socket(socket.AF_UNIX)
+    try:
+        db = next(r[2] for r in c.execute("PRAGMA database_list") if r[1] == "main")
+        s.settimeout(DENSE_MS / 1000); s.connect(sock)
+        s.sendall((json.dumps({"db": db, "q": q, "n": n}) + "\n").encode()); buf = b""
+        while not buf.endswith(b"\n"):
+            left = end - time.time()
+            if left <= 0 or len(buf) > 1 << 20: return None
+            s.settimeout(left); x = s.recv(65536)
+            if not x: break
+            buf += x
+        r = json.loads(buf)
+        if not r.get("ok"): return None
+        out = [(str(p), int(l), int(e)) for p, l, e in r["hits"]]
+        return out
+    except Exception: return None
+    finally: s.close()
+
+def dense_merge(c, hits, dense, n):
+    """The word list and the dense list merged by reciprocal rank, as in projects/kb-search engines/hybrid. Returns hit dicts, best first."""
+    wl = diversify(hits, DENSE_DEEP); by = {(h["path"], h["line"]): h for h in wl}
+    sc, order = {}, []
+    for lst, w in (([(h["path"], h["line"]) for h in wl], DENSE_WW), ([(p, l) for p, l, _ in dense], DENSE_WD)):
+        for i, key in enumerate(lst):
+            if key not in sc: sc[key] = 0.0; order.append(key)
+            sc[key] += w / (DENSE_K + i) + (DENSE_BON / (i + 1) if w == DENSE_WW else 0)
+    order.sort(key=lambda k: -sc[k])  # stable: ties keep the first-seen order
+    out = []
+    for key in order:
+        h = by.get(key)
+        if h is None:
+            r = c.execute("SELECT chunk.id FROM chunk JOIN doc ON doc.id=chunk.doc WHERE doc.path=? AND chunk.line=?", key).fetchone()
+            got = hydrate(c, [(r[0], 0)]) if r else []
+            if not got: continue
+            h = got[0]
+        out.append(h)
+        if len(out) >= n: break
+    return out
+
 def render(c, q, n=12, frm=None, to=None, src=None):
     """What an agent sees: a count per source, then one line per passage, then where to go next. Returns text, shown hits."""
     from collections import Counter
     hits, tried, words, total = search(c, q, frm, to, src)
-    top = diversify(hits, n)
+    top = diversify(hits, n); DENSE.clear()
+    if not (frm or to or src):
+        t1 = time.time(); d = dense_ask(c, q)
+        if d is not None:
+            m = dense_merge(c, hits, d, n)
+            if m: top = m
+            DENSE.update(used=bool(m), ms=int((time.time() - t1) * 1000))
+        elif os.environ.get("KB_DENSE") != "0": DENSE.update(used=False, ms=int((time.time() - t1) * 1000))
     by, files = Counter(), Counter()
     for h in hits: by[h["source"]] += 1; files[h["path"]] += 1
     cap = "+" if total >= 400 else ""
     out = [f"{total}{cap} passages in {len(files)}{cap} files  " + " ".join(f"{s}:{k}" for s, k in by.most_common()) + (f"  [{'; '.join(tried[1:])}]" if tried[1:] else "")]
     for h in top:
         t, line = snippet(c, h, words); h["shown_line"] = line
-        out.append(f"{fmt_path(h['path'])}:{line}" + (f" {h['date']}" if h['date'] else "") + f"  {t}" + (f"  [superseded by {fmt_path(h['sup'])}]" if h.get("sup") else ""))
-    if not hits:
+        out.append(f"{fmt_path(h['path'])}:{line}" + (f" {h['date']}" if h['date'] else "") + f"  {t}" + (f"  [superseded by {fmt_path(h['sup'])}]" if h.get("sup") else "") + ("  [draft]" if h["source"] == "draft" else ""))
+    if not hits and not top:
         out.append("Nothing. Not proof it isn't there: try other words, a shorter form, or `rg -il WORD ~/kb ~/archive/knowledge`. If you give up: kb miss \"QUESTION\"")
         out.append(ABSENT)
     else:
@@ -479,6 +538,7 @@ def cmd_find(a):
     else: text, top, hits, tried = render(c, q, 40 if a.all else a.n, a.frm, a.to, a.src)
     print(text)
     rec = {"q": q, "n": len(hits), "top": [h["path"] for h in top[:5]], "tried": tried, "ms": int((time.time() - t0) * 1000)}
+    if DENSE: rec["dense"] = dict(DENSE)
     if kbuse:
         shown = [[fmt_path(h["path"]), h["shown_line"]] for h in top]
         rec.update(id=kbuse.new_id(), shown=shown)
@@ -626,8 +686,10 @@ def recall_vec(t, x):
 def recall_key(t): return re.sub(r"\W+", "", t)[:150].lower()
 
 def recall_votes(c, text, ctx, thread=""):
-    """Notes that the runs for the most alike past messages went on to read, by how alike. Never a message from the same
-    thread or with the same text as this one, so a question cannot find its own answer."""
+    """Notes that the runs for the most alike past messages went on to read, by how alike, and by how few runs read the note
+    at all: a note most runs open says little when a neighbour opened it too (squared: tried against the plain and cubed
+    weights on real pointers in projects/hive-meta/recall-measure.md). Never a message from the same thread or with the same
+    text as this one, so a question cannot find its own answer."""
     try: rows = c.execute("SELECT thread, read, vec, k1, k2 FROM past").fetchall()
     except sqlite3.OperationalError: return {}
     mine, mctx = recall_key(text), recall_key(ctx)
@@ -641,6 +703,9 @@ def recall_votes(c, text, ctx, thread=""):
     for v, _ in past:
         for w in v: df[w] = df.get(w, 0) + 1
     N = len(past); wt = lambda w, x: x * math.log(1 + N / (1 + df.get(w, 0)))
+    readers = {}
+    for _, rd in past:
+        for pth in set(rd): readers[pth] = readers.get(pth, 0) + 1
     q = {w: wt(w, x) for w, x in recall_vec(text, ctx).items()}; qn = math.sqrt(sum(x * x for x in q.values())) or 1
     sims = []
     for v, rd in past:
@@ -648,7 +713,7 @@ def recall_votes(c, text, ctx, thread=""):
         if dot: sims.append((dot / (qn * (math.sqrt(sum(wt(w, x) ** 2 for w, x in v.items())) or 1)), rd))
     sims.sort(key=lambda t: -t[0]); votes = {}
     for sim, rd in sims[:RECALL_KNN]:
-        for pth in rd: votes[pth] = votes.get(pth, 0) + sim ** 2
+        for pth in rd: votes[pth] = votes.get(pth, 0) + sim ** 2 * math.log(1 + N / (1 + readers[pth])) ** 2
     return votes
 
 def recall_shown(who):
@@ -705,6 +770,19 @@ def cmd_recall(a):
     if stale:
         subprocess.Popen([sys.executable, "-I", os.path.abspath(__file__), "stats"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
 
+SPLIT = re.compile(r"^Split:\s*(kb/[\w./-]+?)/?(?:\s|$)", re.M)
+
+def split_target(full, day):
+    """An index page (a `Split: kb/NAME/` line in its head) doesn't grow: what is filed to it goes to this month's sub-note."""
+    with open(full) as f: m = SPLIT.search(f.read(4000))
+    if not m: return full
+    month = os.path.join(H, m.group(1), day[:7] + ".md")
+    if not os.path.exists(month):
+        os.makedirs(os.path.dirname(month), exist_ok=True)
+        with open(month, "w") as f: f.write(f"# {os.path.basename(m.group(1))}: filed {day[:7]}\n\nSub-note of {os.path.relpath(full, H)}, the index page with the standing rules and the map.\n")
+    print(f"{os.path.relpath(full, H)} is an index page, so this goes to {os.path.relpath(month, H)}")
+    return month
+
 def cmd_file(a):
     text = sys.stdin.read().strip() if not sys.stdin.isatty() else ""
     if not text: sys.exit("kb file: put the note on stdin, with a quoted heredoc")
@@ -718,7 +796,9 @@ def cmd_file(a):
         sup = f"Supersedes: {old}\n\n"
     if a.to:
         full = os.path.expanduser(a.to) if a.to.startswith(("/", "~")) else os.path.join(NOTES, a.to)
+        if not os.path.exists(full) and os.path.exists(os.path.join(H, a.to)): full = os.path.join(H, a.to)  # kb/NAME.md as well as NAME.md
         if not os.path.exists(full): sys.exit(f"kb file: {full} doesn't exist; leave off --to to start a note")
+        full = split_target(full, day)
         with open(full, "a") as f: f.write(f"\n## {a.title} ({day}, {who})\n{sup}{text}\n")
     else:
         slug = re.sub(r"[^a-z0-9]+", "-", a.title.lower()).strip("-")[:60] or "note"
@@ -761,7 +841,8 @@ def dream_work():
         rs = [json.loads(l) for l in data.decode(errors="replace").splitlines() if l.strip()]
     except (OSError, ValueError): pass
     return {"misses": [r["miss"] for r in rs if "miss" in r], "empty": sorted({r["q"] for r in rs if "q" in r and not r["n"]}),
-            "filed": sorted({r["filed"] for r in rs if "filed" in r}), "candidates": [" => ".join(r["candidate"]) for r in rs if "candidate" in r]}, end
+            "filed": sorted({r["filed"] for r in rs if "filed" in r}), "candidates": [" => ".join(r["candidate"]) for r in rs if "candidate" in r],
+            "drafts_due": sum(1 for d in kbuse.drafts()[0] if d["action"] != "wait") if kbuse else 0}, end
 
 def cmd_due(a):
     """Exit 0 and print the work if a dream is worth starting; --mark starts the next period."""
@@ -769,6 +850,12 @@ def cmd_due(a):
     if a.mark:
         os.makedirs(CACHE, exist_ok=True); open(DREAMT, "w").write(str(end))
     sys.exit(0 if any(w.values()) else 1)
+
+def cmd_drafts(a):
+    """The grader's drafts and what the dream does with each: merge one that was read, drop one 14 days unread, wait on the rest."""
+    rows, line = kbuse.drafts()
+    for d in rows: print(f"{d['action']:<5}  {d['age']:>2} d  {d['path']}" + (f"  read {d['read'][:10]}" if d["read"] else ""))
+    print(line)
 
 def cmd_stats(a):
     c = connect(); refresh(c)
@@ -829,6 +916,7 @@ def main():
     p = sp.add_parser("recall"); p.add_argument("--post", action="append"); p.add_argument("-n", type=int, default=5); p.add_argument("--for", dest="who"); p.set_defaults(f=cmd_recall)
     p = sp.add_parser("due"); p.add_argument("--mark", action="store_true"); p.set_defaults(f=cmd_due)
     p = sp.add_parser("stats"); p.set_defaults(f=cmd_stats)
+    p = sp.add_parser("drafts"); p.set_defaults(f=cmd_drafts)
     p = sp.add_parser("eval"); p.add_argument("file", nargs="?", default=H + "/core/kbtool/questions.jsonl"); p.add_argument("-v", action="store_true"); p.add_argument("-n", type=int, default=12); p.add_argument("--sets", default="ab"); p.set_defaults(f=cmd_eval)
     a = ap.parse_args(); a.f(a)
 if __name__ == "__main__": main()

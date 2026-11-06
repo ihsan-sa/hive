@@ -4,6 +4,18 @@ Release notes are on the [releases page](https://github.com/ihsan-sa/hive/releas
 
 A release can ship several times a day. A new Hive installs at most one a day, once it has been out for at least 12 hours; **How often to update** in Settings changes that. The latest is at [releases/latest](https://github.com/ihsan-sa/hive/releases/latest).
 
+## The page stays put when you click on the Chat home
+
+On **New conversation**, clicking an arrow or ticking a box no longer jumps the page back up to the message box, or moves your cursor there. The cursor still starts in the box when you arrive.
+
+## Agents keep Where things stand, to-do lists and titles up to date
+
+Agents can now edit the **Where things stand** summary themselves with `hive summary`, and give each **Needs you** section a tickable to-do list (`hive summary check`); an item stays until an agent has checked it is done. `hive rename` retitles a conversation whose title no longer fits (your own rename wins), and `hive important` marks one so it stands out in the Chat list.
+
+## A stop means stop, and free helpers can't start more
+
+When you say just "stop" in a conversation, helpers still waiting to start from it are dropped. Agents on a free model can no longer start other agents; they hand work on through a post to a stronger one.
+
 ## The places that count what waits on you now agree
 
 The **While you were away** brief, the **Needs you** page and `hive summary lint` now agree on how much waits on you, from one count. The lint also lists conversations waiting on you that **Where things stand** leaves out, and `hive progress` tracks how many.

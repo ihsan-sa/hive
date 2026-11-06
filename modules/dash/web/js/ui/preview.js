@@ -114,8 +114,11 @@ export function autoFiles(key) {
   if (key === autoFor) return; autoFor = key;
   if (P.root && P.list) { openFiles(true); return; }   // another conversation: its files
   let off = false; try { off = !!localStorage.getItem(AUTO); } catch (e) {}
-  if (off || innerWidth < 1000 || P.root) return;
-  import("./panel.js").then(m => { if (!m.panelOpen()) openFiles(true); }, () => openFiles(true));
+  if (off || innerWidth < 1400 || P.root) return;   // below 1400 the panel would cover the thread's own tools
+  setTimeout(() => {   // the messages draw first: open only when this conversation has files
+    if (key !== autoFor || P.root || !threadFiles().length) return;
+    import("./panel.js").then(m => { if (!m.panelOpen()) openFiles(true); }, () => openFiles(true));
+  }, 500);
 }
 export function filesClosedByHand() { try { localStorage.setItem(AUTO, "1"); } catch (e) {} }
 
@@ -292,15 +295,15 @@ async function show(k) {
 }
 
 // Capture, so Escape closes the preview and doesn't reach the view under it. A window open on top gets it first; so does
-// the agent panel when it's open (it closes first, then a second Escape closes this).
+// the agent panel and a full-screen figure when they're open (they close first, then a second Escape closes this).
 addEventListener("keydown", e => {
-  if (e.key !== "Escape" || !P.root || document.querySelector("dialog[open]") || document.querySelector("aside.panel")) return;
+  if (e.key !== "Escape" || !P.root || document.querySelector("dialog[open]") || document.querySelector("aside.panel") || document.querySelector(".rc-fig[data-full]")) return;   // a full-screen figure is on top: its own Escape handler closes it first
   if (document.fullscreenElement) return;
   e.stopPropagation();
   const m = P.root.querySelector(".pv-menu:not([hidden]):not(.pv-sv)");
   if (m) m._shut(); else closePreview();
 }, true);
-addEventListener("hashchange", () => { if (P.root) mark(); });
+addEventListener("hashchange", () => { if (P.root && P.list && !/^#comms\/./.test(location.hash)) { closePreview(); return; } if (P.root) mark(); });   // the Files list belongs to a conversation: leaving it closes it
 
 // A project path in a message (markdown.js: data-kind=kbfile) opens the live panel on that file.
 document.addEventListener("click", e => {

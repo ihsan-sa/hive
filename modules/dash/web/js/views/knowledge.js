@@ -6,7 +6,7 @@ import { S, can, getPref, jget, post, setPref } from "../core/store.js";
 import { ago, plural, stamp } from "../core/format.js";
 import { href, threadHref } from "../core/router.js";
 import { threadTitle } from "../core/model.js";
-import { button, empty, field, input, list } from "../ui/kit.js";
+import { button, empty, field, input, list, needFull } from "../ui/kit.js";
 import { icon } from "../ui/icons.js";
 import { markdown } from "../ui/markdown.js";
 import { markWords } from "../ui/message.js";
@@ -246,7 +246,7 @@ function recentRows() {
   const rows = getPref(RECENT, []);
   return rows.length ? list(rows.map(r => ({ key: "o:" + r.path, href: open(r.path), lead: icon("file"), title: r.title, text: parent(r.path), meta: ago(r.at).replace(" ago", "") })), { dense: true }) : null;
 }
-const TOPIC = { general: "Other notes", history: "History of the Hives", _dropped: "Dropped" };
+const TOPIC = { general: "Other notes", history: "History of the hives", _dropped: "Dropped" };
 const topicName = (t, folder) => TOPIC[t] || (folder ? t + "/" : t.replace(/-+$/, "") + " notes");
 // Notes grouped by topic (their folder, or a name prefix two or more share). Each row: a bar for its size, shaded for how recent it is.
 function mapView(ctx) {
@@ -350,7 +350,7 @@ export default {
   enter(ctx) { if (can("files")) refresh(ctx); },
   poll: { every: 30000, run(ctx) { if (can("files")) refresh(ctx); } },
   render(ctx) {
-    if (!can("files")) return h("div", { class: "page" }, empty("Reading files needs full mode here. Sign in again if your hour is up.", { kind: "page", title: "Knowledge" }));
+    if (!can("files")) return needFull("Reading your files", "Knowledge");
     const { path, line } = parse(ctx.arg), d = path ? K.seen.get(path) : null, isFile = !!d && d.type !== "dir", editing = K.edit && K.edit.at === path;
     const find = (kbd = "/") => h("label", { class: "kb-q" }, icon("search"), input({ type: "search", value: K.q, placeholder: "Search everything: notes, files, posts", "aria-label": "Search the knowledge base", "data-kb-all": "", autocomplete: "off", oninput: (e, n) => { K.q = n.value; K.qPath = path; search(ctx); ctx.update(); } }), h("kbd", null, kbd));
     const searching = K.q.trim().length >= 2 && K.qPath === path;

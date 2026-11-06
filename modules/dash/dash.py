@@ -2888,8 +2888,11 @@ def phone_do(what, headers):
     if what == "on": return PHONE.set_on(True, link=phone_link(headers), latest=latest)
     if what == "off": return PHONE.set_on(False)
     if what == "topic": return PHONE.new_topic(latest)
+    if what in ("runs-on", "runs-off"):
+        ends = _phone().person_run_ends(jlines(LOG, 512 * 1024))
+        return PHONE.set_runs(what == "runs-on", latest=max((str(e.get("at") or "") for e in ends), default=""))
     if what == "test": PHONE.test(); return {**PHONE.view(), "tested": True}
-    raise ValueError("on, off, test or topic")
+    raise ValueError("on, off, test, topic, runs-on or runs-off")
 
 
 # ---------- Web Push (module conn-webpush): the browser list and its checks live there. An install without that module has no such switch ----------
@@ -2917,6 +2920,7 @@ def phone_watch():
         try:
             if PHONE.view()["on"]:
                 INDEX.refresh(); PHONE.tick(list(INDEX.mine[-50:]), delivered())
+                PHONE.tick_runs(_phone().person_run_ends(jlines(LOG, 512 * 1024)))
         except Exception: pass
 
 
@@ -2926,7 +2930,7 @@ _cfg_lock = threading.Lock()
 
 def config_view():
     c = cfg()
-    return {k: c.get(k) for k in ("max_sessions", "keeper_every_s", "keeper_idle_s", "usage_stop_pct", "auto_update", "update_every_s", "update_pace")}
+    return {k: c.get(k) for k in ("max_sessions", "keeper_every_s", "keeper_idle_s", "usage_stop_pct", "auto_update", "update_every_s", "update_pace", "max_budget_usd")}
 
 
 def set_config(d):
@@ -2944,6 +2948,10 @@ def set_config(d):
         v = d["usage_stop_pct"]
         if isinstance(v, bool) or not isinstance(v, (int, float)) or not 1 <= v <= 100: raise ValueError("the usage stop is 1 to 100")
         new["usage_stop_pct"] = v
+    if "max_budget_usd" in d:
+        v = d["max_budget_usd"]
+        if v is not None and (isinstance(v, bool) or not isinstance(v, (int, float)) or not 0 < v < 10000): raise ValueError("the most one run may spend is a number of dollars above 0, or none")
+        new["max_budget_usd"] = v
     if "auto_update" in d:
         if type(d["auto_update"]) is not bool: raise ValueError("auto_update is on or off")
         new["auto_update"] = d["auto_update"]
@@ -2959,6 +2967,7 @@ def set_config(d):
         c = jload(HOME / "core" / "config.json")
         if not isinstance(c, dict): raise ValueError("core/config.json can't be read")
         c.update(new)
+        if c.get("max_budget_usd") is None: c.pop("max_budget_usd", None)
         t = HOME / "core" / f".config.json.{os.getpid()}.{threading.get_ident()}"
         t.write_text(json.dumps(c, indent=2) + "\n"); t.replace(HOME / "core" / "config.json")
     return config_view()

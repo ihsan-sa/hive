@@ -75,7 +75,7 @@ export function button(label, onClick, { kind, size, tone, title, disabled, type
 /** Segmented choice. options: [[key, label]] */
 export function seg(options, value, onChange, { label } = {}) {
   return h("div", { class: "seg", role: "group", "aria-label": label || null },
-    options.map(([k, l, t, n]) => h("button", { type: "button", "aria-pressed": String(k === value), title: t || null, onclick: () => onChange(k) }, l, n != null ? h("i", null, String(n)) : null)));
+    options.map(([k, l, t, n, ic]) => h("button", { type: "button", "aria-pressed": String(k === value), title: t || null, onclick: () => onChange(k) }, ic ? icon(ic) : null, l, n != null ? h("i", null, String(n)) : null)));
 }
 
 /** Form field: label, control, hint. */
@@ -85,6 +85,12 @@ export function field(label, control, hint) {
 export const input = props => h("input", { class: "input", ...props });
 
 /** Empty, loading and error states. kind: empty | loading | error | page */
+/** A page that needs the files right: one wording, one way back. */
+export function needFull(what, title) {
+  return h("div", { class: "page" }, h("div", { class: "empty", "data-kind": "page" }, title ? h("div", { class: "empty-t" }, title) : null, `${what} needs a full sign-in here.`,
+    h("p", null, h("a", { class: "btn", "data-kind": "primary", href: "#settings" }, "Sign in again"))));
+}
+
 export function empty(text, { kind = "empty", title } = {}) {
   return h("div", { class: "empty", "data-kind": kind, role: kind === "error" ? "alert" : null }, title ? h("div", { class: "empty-t" }, title) : null, text);
 }

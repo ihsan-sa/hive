@@ -39,7 +39,7 @@ const FULL_STEPS = [
   { title: "Check your limits", text: "Click Usage at the top.", ring: tab("usage"), done: () => here() === "usage", skip: () => !hasTab("usage") },
   { title: "Usage", text: "How much of your Claude limits is left and when it comes back. New agents stop at a usage line so they don't use it all. You can change that line, or pause an account, under Claude accounts.", ring: () => heading("Claude accounts"), skip: () => here() !== "usage" },
   { title: "Settings", text: "Click Settings at the top right (the sliders).", ring: tab("settings"), done: () => here() === "settings", skip: () => !hasTab("settings") },
-  { title: "How the Hive runs", text: "Add a second Claude account here, and turn on modules: optional tools your agents can use.", ring: () => heading("Accounts"), skip: () => here() !== "settings" },
+  { title: "How the Hive runs", text: "Add a second Claude account here, and turn on modules: optional tools your agents can use.", ring: () => heading("Accounts"), enter: () => { if (here() === "settings") go("settings", "accounts"); }, skip: () => here() !== "settings" },
   { title: "One more", text: "Click More at the top right (the three dots).", ring: () => q(".more > button"), done: () => !!q(".more > button[aria-expanded=true]"), skip: () => !q(".more > button") },
   { title: "Help is under More", text: "The user guide is here, and Take the tour brings this window back. The guide's last tutorial, How it works, shows how to ask the Hive about itself: how it runs, what's wrong, how to improve it. That's it: say what you want done in Chat.", ring: () => q('.more-i[data-key="help"]'), last: true },
 ];
@@ -52,7 +52,7 @@ const SIMPLE_STEPS = [
   { title: "Answers appear here", text: "Your Hive writes back as it goes. You can close this page: the work carries on, and it's all here when you come back.", ring: () => q(".cm-msgs"), skip: () => !inThread() },
   { title: "Reply any time", text: "Write here to carry on, even while it works. Nothing is sent until you press Send. You can also attach files.", ring: () => q('.cp[data-place="thread"] .cp-t'), skip: () => !inThread() },
   { title: "Settings", text: "Click Settings at the top right.", ring: tab("settings"), done: () => here() === "settings", skip: () => !hasTab("settings") },
-  { title: "Settings", text: "How much of your week is used is here, and how to sign in again. That's all: say what you want done in Chat.", ring: () => heading("Usage limit") || q("#main .sec-t"), last: true, skip: () => here() !== "settings" },
+  { title: "Settings", text: "How much of your week is used is here, and how to sign in again. That's all: say what you want done in Chat.", ring: () => heading("Usage limit") || q("#main .sec-t"), enter: () => { if (here() === "settings") go("settings", "usage-limit"); }, last: true, skip: () => here() !== "settings" },
 ];
 let STEPS = FULL_STEPS;
 

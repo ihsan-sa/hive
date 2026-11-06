@@ -128,7 +128,7 @@ export async function poll() {
   try {
     const [l, lg, b] = await Promise.all([jget("/api/live"), jget("/api/log?from=" + S.logOff), jget("/api/board?from=" + S.off)]);
     S.stCache.clear(); S.live = l;
-    try { S.approvals = await jget("/api/approvals"); } catch (e) { S.approvals = S.approvals || []; }
+    try { const a = await jget("/api/approvals"); S.approvals = Array.isArray(a) ? a : []; } catch (e) { S.approvals = S.approvals || []; }
     try { const d = await jget("/api/feedback-drafts"); if (d.length) import("../ui/feedback.js").then(m => m.offerDraft(d[0])); } catch (e) {}   // an agent's drafted feedback: open the window prefilled
     S.running = new Map(l.agents.filter(a => a.alive).map(a => [a.name, a]));
     S.pending = Object.fromEntries(l.pending.map(p => [p.name, p]));

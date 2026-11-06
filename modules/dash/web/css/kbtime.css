@@ -53,7 +53,7 @@
   .kbt .map-tb{padding:var(--s2) var(--s3)}
   .kbt .map-sum{flex-basis:100%;margin-left:0;order:3}
   .kbt-sc{padding:var(--s2)}
-  .kbt-rp{position:sticky;bottom:var(--s2)}
+  .kbt-rp{position:sticky;bottom:calc(var(--nav-h,0px) + var(--s2))}
 }
 
 /* kbtime.css: changes for Knowledge › Over time (views/kbtime.js), regen pass 2026-11-04. Canvas artboards "Knowledge › Over time" and
@@ -91,3 +91,6 @@
 /* slider: hatched gaps a touch taller so they read as "not recorded", ticks for filed notes */
 .kbt-gap{top:8px;height:16px}
 .kbt-tick{top:24px;opacity:1;border-radius:1px}
+
+/* path links in a note's or link's header: a full-size target on a phone, not a 15px line of text */
+.kbt .map-sh small a,.kbt-p a{display:inline-flex;align-items:center;min-height:var(--ctl);overflow-wrap:anywhere}

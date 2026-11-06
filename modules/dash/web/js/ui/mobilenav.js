@@ -12,7 +12,7 @@ import { HELP } from "./tour.js";
 const ST = { open: false, update: null };
 const lab = v => (typeof v.label === "function" ? v.label() : v.label);
 const GLYPH = { start: "plus", comms: "chat", now: "agents", usage: "usage", settings: "settings", knowledge: "board" };
-const SHORT = { now: "Agents", comms: "Chat" };
+const SHORT = { comms: "Chat" };
 const DEV_MAIN = ["comms", "now", "agents", "usage"];
 
 export function mobileNav({ views, current, nav, update }) {
