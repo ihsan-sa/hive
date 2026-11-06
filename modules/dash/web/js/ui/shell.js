@@ -20,7 +20,8 @@ export function statusBits() {
   const n = S.running.size, all = (S.usage && S.usage.logins) || (S.live && S.live.logins) || [], us = all.filter(l => inUse(l, S.usage)), hold = S.live && S.live.limit_until;
   return [
     S.failed ? h("span", { "data-tone": "bad", style: "color:var(--ci)" }, statusDot("stuck"), lostText(S.fresh)) : null,
-    h("span", { title: "agents running now", "data-tone": n ? "good" : null }, statusDot("working", { live: n > 0 }), h("b", null, String(n)), " running"),
+    // before the first answer the count is not known: no chip, rather than "0 running"
+    !S.live ? null : h("span", { title: "agents running now", "data-tone": n ? "good" : null }, statusDot("working", { live: n > 0 }), h("b", null, String(n)), " running"),
     us.length ? loginMarks()
       : all.length ? h("span", { "data-tone": "bad", style: "color:var(--ci)" }, "no account has room") : null,
     hold ? h("span", { "data-tone": "bad", style: "color:var(--ci)" }, "starts held until " + clock(hold * 1e3)) : null,

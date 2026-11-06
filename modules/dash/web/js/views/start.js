@@ -5,7 +5,7 @@ import { S, can, post, loadApp, setupDone } from "../core/store.js";
 import { simpleOn } from "../core/simple.js";
 import { href } from "../core/router.js";
 import { brandName } from "../core/brand.js";
-import { button, statusLabel } from "../ui/kit.js";
+import { button, statusLabel, waiting } from "../ui/kit.js";
 import { startSignin, signinBox, signingIn, terminalRoute } from "../ui/signin.js";
 import { act, activityLog, isBusy } from "../ui/activity.js";
 import { firstJobs, closeLine } from "../ui/firstjobs.js";
@@ -67,7 +67,9 @@ function simpleStart(ctx, signed) {
 
 export default {
   id: "start", label: "Start", tab: () => S.app.app && can("post") && !setupDone(),
+  enter: () => { F.arrived = true; },
   render(ctx) {
+    if (S.app.can == null) return h("div", { class: "page" }, waiting(S.failed));   // /api/app hasn't answered: don't say "only in the app" yet
     if (!S.app.app) return h("div", { class: "page" }, h("p", null, "Setup shows only in the app, opened from this machine."));
     const s = S.app.setup || {}, signed = s.signed_in || s.api_key || s.other, cfgd = S.app.settings;
     if (cfgd && cfgd.setup_done === false) return walkthrough(ctx, s);
@@ -100,10 +102,12 @@ export default {
         ctx.update();
       }, { kind: "primary", busy: isBusy("starter") }), F.starterErr ? h("span", { class: "fmsg" }, F.starterErr) : null) : null));
     if (signed) rows.push(hive("ask", p(h("b", null, "What do you want done?"), " Say it the way you'd tell a person: sort these photos, fix my site's contact form, watch this price. One message starts one agent, and it brings in helpers if the job has parts.")));
-    const out = outFor(null);
+    const out = outFor(null), box = signed && can("post");
+    // Only on arriving, or when the box first appears after signing in: taking focus on every render pulled the page back to the box after any real click elsewhere on it.
+    const arrived = F.arrived; if (box) F.arrived = false;
     return h("div", { class: "page st", "data-width": "narrow", "data-key": "start" },
       h("div", { class: "st-log", role: "log", "aria-label": "Setting up" }, rows, out.map(it => localMessage(it, outActions))),
-      signed && can("post") ? composer({ thread: null, update: ctx.update, place: "start", autofocus: !out.length }) : h("p", { class: "meta st-wait" }, "Once you're signed in, you can say what you want done."),
+      signed && can("post") ? composer({ thread: null, update: ctx.update, place: "start", autofocus: arrived && !out.length }) : h("p", { class: "meta st-wait" }, "Once you're signed in, you can say what you want done."),
       signed && can("post") ? (out.some(it => it.state !== "failed") ? closeLine() : !out.length && !hasSent() ? firstJobs() : null) : null,
       activityLog({ hideEmpty: true }),
       h("div", { class: "st-know" },

@@ -3,6 +3,7 @@
 // Rules, as everywhere in the chat: a file's contents only ever become text nodes, or go to the browser through an element
 // pointed at /files/ (served sandboxed by dash.py). HTML runs only in a sandboxed frame. Nothing is fetched from elsewhere.
 import { h } from "../core/dom.js";
+import { said } from "../core/store.js";
 import { kindOf, fileHref, viewHref } from "../ui/preview.js";
 import { markdown } from "../ui/markdown.js";
 import { fenceBlock } from "../rich/blocks.js";
@@ -19,7 +20,7 @@ const langOf = name => LANG[extOf(name)] || "";
 
 async function fetchOk(it, signal) {
   const r = await fetch(fileHref(it), { cache: "no-store", signal });
-  if (!r.ok) throw new Error(r.status === 404 ? "it isn't on this machine any more (404)" : "the server said " + r.status);
+  if (!r.ok) throw new Error(r.status === 404 ? "it isn't on this machine any more (404)" : said(r.status));
   const n = +r.headers.get("Content-Length");
   if (n > TEXT_MAX) { r.body && r.body.cancel(); throw new Error(`it's ${Math.round(n / 1048576)} MB, too big to show here; download it instead`); }
   return r;
@@ -27,7 +28,7 @@ async function fetchOk(it, signal) {
 async function textOf(it, signal) {
   if (it.kb) {   // a project's file: the Knowledge API's redacted text, cut at 512 kB by the server
     const r = await fetch("/api/kb/open?path=" + encodeURIComponent(it.kb), { cache: "no-store", signal });
-    if (!r.ok) throw new Error(r.status === 404 ? "it isn't there any more, or isn't shown" : r.status === 403 ? "this sign-in can't read project files" : "the server said " + r.status);
+    if (!r.ok) throw new Error(r.status === 404 ? "it isn't there any more, or isn't shown" : r.status === 403 ? "this sign-in can't read project files" : said(r.status));
     const d = await r.json();
     if (d.type !== "md" && d.type !== "text") return { bin: true, t: "", all: "" };
     return { t: d.text || "", cut: !!d.truncated, all: d.truncated ? null : d.text || "" };

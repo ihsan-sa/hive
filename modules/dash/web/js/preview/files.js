@@ -3,7 +3,7 @@
 // folder you were in. Folders come from the Knowledge API (/api/kb/open, under the "files" right), so a project file is read
 // the way Knowledge reads it: redacted text, images as images, nothing run.
 import { h } from "../core/dom.js";
-import { can } from "../core/store.js";
+import { can, said } from "../core/store.js";
 import { button, icon } from "../ui/kit.js";
 import { threadFiles, kindOf, badgeOf, filesClosedByHand } from "../ui/preview.js";
 
@@ -48,7 +48,7 @@ async function browse(box, path, open) {
     const r = await fetch("/api/kb/open?path=" + encodeURIComponent(path), { cache: "no-store" });
     if (r.status === 404 && path !== ROOT) return browse(box, ROOT, open);   // the remembered folder went away
     if (r.status === 403) return box.replaceChildren(h("p", { class: "meta pf-none" }, "This sign-in can't read project files."));
-    if (!r.ok) throw new Error("the server said " + r.status);
+    if (!r.ok) throw new Error(said(r.status));
     d = await r.json();
   } catch (e) {
     return box.replaceChildren(h("p", { class: "meta pf-none" }, "Couldn't list this folder: " + (e && e.message || e)));

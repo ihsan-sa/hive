@@ -139,7 +139,7 @@ export function codexPart(update) {
     return h("div", { class: "signin", "data-key": l.name },
       h("div", { class: "frow fsplit" }, h("b", null, codexName(l.name)), l.name === "codex" ? h("span", { class: "muted" }, "with a ChatGPT login") : h("span", { class: "muted mono" }, l.name),
         c.installed ? statusLabel(on ? "working" : "ended", on ? "signed in" : "not signed in") : statusLabel("ended", "not installed"),
-        c.installed && can("logins") && !busy ? h("span", { style: "margin-left:auto;display:flex;gap:var(--s2)" },
+        c.installed && can("logins") && !busy ? h("span", { class: "frow-end" },
           button(on ? "Sign in again" : "Sign in", () => go({ login: l.name }), { size: "s", busy: isBusy("codex") && mine }),
           l.name !== "codex" ? button("Remove", () => remove(l.name), { size: "s", kind: "quiet", busy: isBusy("codex-rm-" + l.name) }) : null) : null),
       !mine ? null : [
@@ -187,11 +187,11 @@ export function keysPart(update) {
     keys.length ? h("ul", { class: "list" }, keys.map(k => h("li", { class: "lr", "data-key": k.name },
       h("div", { class: "lr-in frow fsplit" }, h("b", { class: "mono" }, k.name), h("span", { class: "muted" }, k.label),
         h("span", { class: "meta" }, (k.ends ? "ends " + k.ends + ", " : "") + "saved " + ago(k.at * 1000)),
-        can("logins") ? h("span", { style: "margin-left:auto;display:flex;gap:var(--s2)" },
+        can("logins") ? h("span", { class: "frow-end" },
           button("Replace", () => { P.replacing = P.replacing === k.name ? null : k.name; P.repKey = ""; update(); }, { size: "s", kind: "quiet" }),
           button("Remove", () => remove(k), { size: "s", kind: "quiet" })) : null),
       P.replacing === k.name ? h("form", { class: "frow", onsubmit: e => { e.preventDefault(); if (P.repKey.trim()) replace(k); } },
-        h("div", { style: "flex:1;min-width:12rem" }, field("New key for " + k.name, input({ type: "password", autocomplete: "new-password", spellcheck: "false", "data-key": "replace-key", value: P.repKey, oninput: (e, n) => { P.repKey = n.value; } }))),
+        h("div", { class: "frow-grow" }, field("New key for " + k.name, input({ type: "password", autocomplete: "new-password", spellcheck: "false", "data-key": "replace-key", value: P.repKey, oninput: (e, n) => { P.repKey = n.value; } }))),
         button("Save", null, { type: "submit", size: "s", busy: isBusy("key") })) : null))) : null,
     a.by_hand && a.by_hand.length ? h("p", { class: "field-h" }, "Also set up by hand in config.json: ", a.by_hand.map(b => b.name + (b.paused ? " (paused)" : "")).join(", "), ".") : null,
     can("logins") && S.app.secrets_on === false ? h("p", { class: "field-h" }, "Saving API keys is off on this name, as secrets are. Whoever runs the Hive can turn it on with secrets_on in web.json, on the machine.") :
@@ -200,7 +200,7 @@ export function keysPart(update) {
       seg(kinds.map(k => [k.kind, k.own_url ? "Other API" : k.label.replace(/ API key$/, "")]), P.keyKind, v => { P.keyKind = v; update(); }, { label: "Which provider" }),
       kind.own_url ? field("API address", input({ type: "url", placeholder: "https://api.example.com", spellcheck: "false", "data-key": "account-url", value: P.keyUrl || "", oninput: (e, n) => { P.keyUrl = n.value; } }), "An Anthropic-compatible address, such as https://api.deepseek.com/anthropic. The key is named after its site.") : null,
       h("form", { class: "frow", onsubmit: e => { e.preventDefault(); if (P.key.trim()) save(); } },
-        h("div", { style: "flex:1;min-width:12rem" }, field("Key", input({ type: "password", autocomplete: "new-password", spellcheck: "false", "data-key": "account-key", value: P.key, oninput: (e, n) => { P.key = n.value; } }))),
+        h("div", { class: "frow-grow" }, field("Key", input({ type: "password", autocomplete: "new-password", spellcheck: "false", "data-key": "account-key", value: P.key, oninput: (e, n) => { P.key = n.value; } }))),
         button(keys.length ? "Add key" : "Save key", null, { type: "submit", busy: isBusy("key") }))] : null,
     P.keySay ? sayMsg(P.keySay.text, P.keySay.tone) : null);
 }

@@ -8,7 +8,7 @@ import { S, can, jget, SYS, OUTSIDE } from "../core/store.js";
 import { simpleOn, hiveName } from "../core/simple.js";
 import { isAgent, isWarden, isRunning, displayText, postSource, btwParent, btwText } from "../core/model.js";
 import { clock, stamp, now, short, mdPlain, ago, DAY, MIN } from "../core/format.js";
-import { markdown, mdCut } from "./markdown.js";
+import { markdown, mdCut, filesNamed } from "./markdown.js";
 import { agentRef, threadRef } from "./refs.js";
 import { agentHref } from "../core/router.js";
 import { button, icon, statusDot, copyPress } from "./kit.js";
@@ -156,11 +156,20 @@ function cut(t) {
   return { head: t.slice(0, a), tail: t.slice(z).replace(/^\s+/, ""), lines: mid.split("\n").filter(l => l.trim()).length, words: mid.split(/\s+/).filter(Boolean).length, chars: mid.length };
 }
 
+// A post's markdown, where a bare file name links to the file its conversation means. Rebuilt when the thread grows.
+const NAMED = new Map();
+function mdIn(t, p) {
+  const d = p && S.threads.get(p.th); if (!d) return markdown(t);
+  let c = NAMED.get(p.th);
+  if (!c || c.n !== d.posts.length) NAMED.set(p.th, c = { n: d.posts.length, files: filesNamed(d.posts) });
+  return markdown(t, c.files);
+}
+
 // Fold parsed blocks, so fences, footnotes and inline formatting remain intact.
 // Native details keep their children (and selection); the owned body survives morphs.
 const SECTIONS = new Map();
 function report(t, id, ws) {
-  const md = markdown(t), nodes = [...md.children];
+  const md = mdIn(t, S.byId[id]), nodes = [...md.children];
   const heads = nodes.filter(n => /^H[1-6]$/.test(n.tagName));
   if (heads.length < 3) return null;
   const level = [1, 2, 3, 4, 5, 6].find(l => heads.filter(n => n.tagName === "H" + l).length >= 3);
@@ -240,11 +249,11 @@ function body(p, ws) {
   if (t.length > LONG) { const r = report(t, p.id, ws); if (r) return r; }
   if (!t.trim()) return (p.files || []).length ? null : h("div", { class: "msg-b" }, h("p", { class: "meta" }, "No text"));
   const f = t.length > LONG && !OPEN.has(p.id) ? fold(t) : null;
-  if (!f) return h("div", { class: "msg-b" }, markBody(markdown(t), ws));
+  if (!f) return h("div", { class: "msg-b" }, markBody(mdIn(t, p), ws));
   return h("div", { class: "msg-b", "data-folded": "" },
-    markBody(markdown(f.head), ws),
+    markBody(mdIn(f.head, p), ws),
     button(`Show the middle: ${f.lines > 2 || f.words == null ? f.lines + " more lines" : f.words.toLocaleString() + " more words"}`, (e, b) => { OPEN.add(p.id); b.closest(".msg-b").replaceWith(body(p, ws)); }, { kind: "quiet", size: "s", cls: "msg-more" }),
-    markBody(markdown(f.tail), ws));
+    markBody(mdIn(f.tail, p), ws));
 }
 
 // ---- jumping to the post a reply answers. The view that lists posts says how. ----
@@ -364,7 +373,7 @@ function devBodyEl(p, ws) {
     const r = report(t, p.id, ws);
     if (r) { const md = r.firstElementChild; md.dataset.own = ""; md.dataset.sig = r.dataset.sig; return md; }
   }
-  return markBody(markdown(t), ws);
+  return markBody(mdIn(t, p), ws);
 }
 const moreLabel = p => OPEN.has(p.id) ? "Show less" : `Show all · ${devBody(p).length.toLocaleString("en-US")} characters`;
 // On hover, top right: Copy text, Copy link, and ⋯ for the raw post, its id and the author's page. Reply only where this address can post.

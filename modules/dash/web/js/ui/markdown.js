@@ -9,6 +9,8 @@ import { fenceBlock } from "../rich/blocks.js";
 import { equation, inlineMath } from "../rich/math.js";
 import { mathScan, opensDisplay, displayMath } from "../rich/mathscan.js";
 
+// What the preview panel can show from a project: text, and the images and PDFs the Knowledge API gives as bytes.
+const KBEXT = "(?:md|markdown|txt|csv|json|ya?ml|py|sh|html|pdf|png|jpe?g|gif|webp)";
 const INLINE = new RegExp([
   "\\\\([\\\\`*_~\\[\\]()#>|!$-])",                                        // 1 escaped character
   "(`+)(?!`)(.+?)(?<!`)\\2(?!`)",                                          // 2,3 code
@@ -22,14 +24,22 @@ const INLINE = new RegExp([
   "\\[\\^([^\\]\\s]+)\\]",                                                  // 11 footnote reference
   "(?<![\\w&#/])#([A-Za-z0-9][\\w.-]*[A-Za-z0-9_]|[A-Za-z0-9])",                // 12 #thread
   "(?<![\\w/.-])(?:~|\\/home\\/[\\w.-]+)?\\/files\\/([0-9a-f]{12})\\/([A-Za-z0-9_][A-Za-z0-9_.-]*[A-Za-z0-9_])",  // 13,14 a post's file
+  "(?<![\\w/.-])(?:~\\/|\\/home\\/[\\w.-]+\\/)?((?:projects|kb|modules|core|tools|investigations)\\/[\\w.-]+(?:\\/[\\w.-]+)*\\." + KBEXT + ")(?![\\w/-]|\\.\\w)",  // 15 a project's file
+  "(?<![\\w/.~-])([A-Za-z0-9_][\\w.-]*\\.[A-Za-z0-9]{1,8})(?![\\w/-]|\\.\\w)",  // 16 a bare file name: a link if this conversation knows it
 ].join("|"), "g");
 // A post's file, written as ~/files/<post id>/<name>: a link that opens it in the preview panel (preview.js handles the click).
 const FILE = /^(?:~|\/home\/[\w.-]+)?\/files\/([0-9a-f]{12})\/([A-Za-z0-9_][A-Za-z0-9_.-]*)$/;
 const fileRef = (id, name, ...kids) => h("a", { class: "ref", "data-kind": "file", "data-pv-key": id + "/" + name, href: `/files/${id}/${encodeURIComponent(name)}`, title: "Preview " + name }, ...kids);
 
 // A file in a project or the kb, written as projects/x/plan.md: opens in the preview panel, which keeps showing its newest revision.
-const KBREF = /^(?:~\/)?((?:projects|kb|modules|core|tools|investigations)\/[\w.-]+(?:\/[\w.-]+)*\.(?:md|markdown|txt|csv|json|ya?ml|py|sh|html))$/;
+const KBREF = new RegExp("^(?:~\\/|\\/home\\/[\\w.-]+\\/)?((?:projects|kb|modules|core|tools|investigations)\\/[\\w.-]+(?:\\/[\\w.-]+)*\\." + KBEXT + ")$");
 const kbRef = (path, ...kids) => h("a", { class: "ref", "data-kind": "kbfile", "data-pv-kb": path, "data-pv-key": "kb:" + path, href: "#knowledge/" + encodeURIComponent(path), title: "Open " + path + " (live)" }, ...kids);
+
+const KBNAMED = new RegExp(KBREF.source.slice(1, -1) + "(?![\\w/-]|\\.\\w)", "g");
+// A file named without its folder ("REPORT.md is updated"): the conversation's own earlier mention or attachment says which one.
+// known: name -> { kb: path } or { id: post id }, set for the length of one markdown() call.
+let known = null, inLink = false;
+const namedRef = (name, ...kids) => { const k = known && !inLink && known.get(name); return !k ? null : k.kb ? kbRef(k.kb, ...kids) : fileRef(k.id, name, ...kids); };
 
 const link = (href, ...kids) => h("a", { href, target: "_blank", rel: "noopener noreferrer" }, ...kids);
 
@@ -51,14 +61,15 @@ function run(s, ms) {
     if (m.index < at) continue;
     let end = m.index + m[0].length, node;
     if (m[1] != null) node = m[1];
-    else if (m[3] != null) { let c = raw(m[3], ms); c = /^ .*[^ ].* $|^ [^ ] $/.test(c) ? c.slice(1, -1) : c; const f = FILE.exec(c), k = !f && KBREF.exec(c); node = f ? fileRef(f[1], f[2], h("code", null, c)) : k ? kbRef(k[1], h("code", null, c)) : h("code", null, c); }
-    else if (m[5] != null) node = link(raw(m[5], ms), run(m[4], ms));
+    else if (m[3] != null) { let c = raw(m[3], ms); c = /^ .*[^ ].* $|^ [^ ] $/.test(c) ? c.slice(1, -1) : c; const f = FILE.exec(c), k = !f && KBREF.exec(c); node = f ? fileRef(f[1], f[2], h("code", null, c)) : k ? kbRef(k[1], h("code", null, c)) : namedRef(c, h("code", null, c)) || h("code", null, c); }
+    else if (m[5] != null) { const was = inLink; inLink = true; node = link(raw(m[5], ms), run(m[4], ms)); inLink = was; }
     else if (m[6] != null || m[7] != null) node = h("strong", null, run(m[6] ?? m[7], ms));
     else if (m[8] != null || m[9] != null) node = h("em", null, run(m[8] ?? m[9], ms));
     else if (m[10] != null) node = h("del", null, run(m[10], ms));
     else if (m[11] != null) node = footRef(m[11]) || m[0];
     else if (m[13] != null) node = fileRef(m[13], m[14], m[0]);
-    else if (m[15] != null) node = kbRef(m[15], m[0]);
+    else if (m[15] != null) node = inLink ? m[0] : kbRef(m[15], m[0]);
+    else if (m[16] != null) node = namedRef(m[16], m[0]) || m[0];
     else if (m[12] != null) node = S.threads && S.threads.has(m[12]) ? h("a", { class: "ref", "data-kind": "thread", href: threadHref(m[12]), title: "Thread " + m[12] }, "#" + m[12]) : m[0];
     else {
       // A bare link: leave sentence punctuation and an unmatched ) outside it.
@@ -178,16 +189,27 @@ function blocks(ls) {
   return out;
 }
 
-/** markdown(text): a div.md of DOM nodes. */
-export function markdown(text) {
+/** markdown(text, files): a div.md of DOM nodes. files: what a bare file name in it links to (filesNamed). */
+export function markdown(text, files) {
+  known = files || null;
   const t = String(text ?? "").replace(/\r\n?/g, "\n");
   let ls = t.split("\n");
   notes = t.includes("[^") ? new Map() : null;
   if (notes) ls = takeNotes(ls);
   const body = blocks(ls), got = notes && notes.size ? [...notes] : null;
   const end = got ? h("div", { class: "rc-fns" }, h("ol", null, got.map(([id, n]) => h("li", { "data-fn": id }, blocks(n.body))))) : null;
-  notes = null;
+  notes = known = null;
   return h("div", { class: "md", "data-rich": "" }, body, end);
+}
+
+/** The files a list of posts names by full path or attaches, by bare name; a later mention wins. */
+export function filesNamed(posts) {
+  const out = new Map();
+  for (const p of posts) {
+    for (const m of String(p.text || "").matchAll(KBNAMED)) out.set(m[1].split("/").pop(), { kb: m[1] });
+    for (const f of p.files || []) out.set(f.name, { id: p.id });
+  }
+  return out;
 }
 
 // Which fence a text ends inside, if any.

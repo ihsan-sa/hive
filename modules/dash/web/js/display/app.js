@@ -19,7 +19,7 @@ import { TILES } from "./tiles.js";
 import { deckEvent, deckMark } from "./deck.js";
 import { resume, setDisplay } from "../deck/control.js";
 
-const APP = "/";               // where a click on a name or a tile title leads
+const APP = location.pathname.endsWith("/preview-display.html") ? "/preview.html" + (q => (q.delete("page"), q.size ? "?" + q : ""))(new URLSearchParams(location.search)) : "/";   // where a click on a name or a tile title leads: the preview stays on the preview, whose shim answers /api, with its fixture switches but not the TV's own page=
 const RELOAD = 6 * 3600e3;     // a TV stays open for days: pick up new code now and then
 const BASE = 1536;             // layout units across the screen
 
@@ -176,7 +176,7 @@ const framed = window !== window.top;   // window.top: this file has its own `to
 const toApp = hash => { if (framed) window.top.postMessage({ leaveSingle: hash }, location.origin); else location.href = APP + hash; };
 addEventListener("hashchange", () => toApp(location.hash));
 if (framed) {
-  addEventListener("click", e => { const a = e.target.closest && e.target.closest('a[href^="/#"]'); if (a) { e.preventDefault(); e.stopPropagation(); toApp(a.getAttribute("href").slice(1)); } }, true);
+  addEventListener("click", e => { const a = e.target.closest && e.target.closest("a[href]"); if (a && a.getAttribute("href").startsWith(APP + "#")) { e.preventDefault(); e.stopPropagation(); toApp(a.getAttribute("href").slice(APP.length)); } }, true);   // on the preview APP carries the query too
   addEventListener("keydown", e => { if (e.key === "Escape") toApp(""); });
 }
 // The deck: the frame's messages come from the dashboard; on its own address the page connects, and EXIT goes to the dashboard.

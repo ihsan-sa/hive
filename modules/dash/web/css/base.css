@@ -1,6 +1,7 @@
 *,*::before,*::after{box-sizing:border-box}
 html{-webkit-text-size-adjust:100%}
 @media (min-width:640px){html:has(#top){scrollbar-gutter:stable}}   /* top-bar icons stay put between pages that scroll and pages that do not */
+html:has(#top):has(.rc-fig[data-full]),html:has(#top):has(dialog.fb[open]){scrollbar-gutter:auto;overflow:hidden}   /* a full-screen figure and the frozen feedback screen cover the window, gutter and scrollbar included */
 body{margin:0;font:var(--fs-body)/var(--lh) var(--font);background:var(--bg);color:var(--ink);font-synthesis:none;text-rendering:optimizeLegibility}
 button,input,select,textarea{font:inherit;color:inherit}
 a{color:var(--link);text-underline-offset:2px}

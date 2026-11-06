@@ -400,7 +400,7 @@ function legend(L) {
     L.nodes.some(n => n.agent && n.agent.warden) ? h("span", null, h("i", { class: "map-g", "data-st": "working", "data-w": "", style: "--r:6px" }), "warden") : null,
     h("span", null, g("ghost"), "also posts here"),
     ...Object.entries(outs).sort((x, y) => y[1] - x[1]).map(([k, n]) => h("span", null, h("span", { class: "map-chip" }, k + " ", h("b", null, String(n)))), ) , Object.keys(outs).length ? h("span", null, "outside posts") : null,
-    h("span", { class: "map-lnote" }, L.mode === "lineage" ? "Arrow: who started whom. Bar: share of spend." : "Thicker: more posts. Bar: share of spend.")].filter(Boolean));
+    h("span", { class: "map-lnote" }, L.mode === "lineage" ? "Arrow: who started whom. Bar: share of the cost." : "Thicker: more posts. Bar: share of the cost.")].filter(Boolean));
 }
 
 // ---- pointer and keys on the graph ----
@@ -714,7 +714,7 @@ export default {
   render(ctx) {
     M.update = ctx.update;
     // before the live feed has answered, "nobody is running" would be a guess: say it's loading, and build nothing yet
-    if (!S.live) return h("div", { class: "map", "data-key": "mesh", "aria-label": "Map: loading" }, waiting(S.failed, "Loading the map…", "the map"));
+    if (!S.live) return h("div", { class: "map", "data-key": "mesh", "aria-label": "Map: loading" }, waiting(S.failed, "Reading…", "the map"));
     if (!M.D || (M.cut == null && M.seenVer !== S.ver && now() - M.lastBuild >= 2000) || (M.cut == null && now() - M.lastBuild > 30000)) { M.seenVer = S.ver; build(); }
     else if (M.cut == null && M.seenVer !== S.ver) { clearTimeout(M.timer); M.timer = setTimeout(() => M.update(), 2000 - (now() - M.lastBuild)); }
     const D = M.D;

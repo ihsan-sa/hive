@@ -5,7 +5,7 @@ import { h } from "../core/dom.js";
 import { S, can, jget } from "../core/store.js";
 import { ago, pct, plural, short } from "../core/format.js";
 import { metrics } from "../templates.js";
-import { empty, pageHeader, section, seg, stats } from "../ui/kit.js";
+import { empty, pageHeader, section, seg, staleNote, stats } from "../ui/kit.js";
 import { agentRef, threadRef } from "../ui/refs.js";
 import { table } from "../ui/table.js";
 
@@ -70,7 +70,7 @@ function asksSection(V, update) {
         { label: "Asked", render: r => when(r.when) },
         { label: "Ask", clip: true, render: r => (app() || !r.evidence ? h("span", { title: r.ask || "" }, r.ask || "")
           : h("span", { title: r.ask || "" }, r.ask || "", h("div", { class: "meta", title: r.evidence }, "Evidence: " + short(r.evidence, 80)))) },
-        { label: "Status", render: r => tone(r.orphaned ? "bad" : ASK_TONE[r.status], r.orphaned ? (app() ? ASK_TEXT_APP.orphaned : "orphaned") : (app() ? ASK_TEXT_APP : ASK_TEXT)[r.status] || r.status, r.orphaned ? "owned, but its owner is gone and nobody posted" : r.why || null) },
+        { label: "Status", render: r => tone(r.orphaned ? "bad" : ASK_TONE[r.status], r.orphaned ? (app() ? ASK_TEXT_APP.orphaned : "owner gone") : (app() ? ASK_TEXT_APP : ASK_TEXT)[r.status] || r.status, r.orphaned ? "owned, but its owner is gone and nobody posted" : r.why || null) },
         { label: "Agent", render: r => (r.owner ? agentRef(r.owner) : "–") },
         { label: app() ? "Conversation" : "Thread", render: r => threadRef(r.thread) },
       ].filter(Boolean), rows }));
@@ -137,7 +137,7 @@ export default {
     if (!V) return h("div", { class: "page" }, P.failed ? empty("Couldn't read the progress data. It keeps trying.", { kind: "error" }) : empty("Reading…", { kind: "loading" }));
     const head = lead(V), update = () => ctx.update();
     return metrics({
-      header: pageHeader({ state: head.state, title: head.title, lead: head.text, tone: head.tone, meta: [S.app.app ? null : "hive progress, hive asks, hive outcomes, hive improve"].filter(Boolean) }),
+      header: pageHeader({ state: head.state, title: head.title, lead: head.text, tone: head.tone, after: P.failed ? staleNote("Couldn't refresh, so this shows what it read last. It keeps trying.") : null, meta: [S.app.app ? null : "hive progress, hive asks, hive outcomes, hive improve"].filter(Boolean) }),
       sections: [tiles(V), asksSection(V, update), outcomesSection(V, update), improvementsSection(V), scoreboardSection(V)].filter(Boolean),
     });
   },
