@@ -202,7 +202,7 @@ function brandBlocks(ctx) {
   const file = h("input", { type: "file", accept: "image/png,image/jpeg,image/gif,image/webp,image/svg+xml", hidden: true, class: "brand-pick", onchange: (e, n) => { pick(n.files[0]); n.value = ""; } });
   return [
     block({ title: "Name", key: "name", sub: "Shown in the top bar and the browser tab. Empty uses the default.",
-      actions: input({ type: "text", maxlength: 40, placeholder: DEFAULT_NAME, "aria-label": "Hive name", style: "width:14rem", value: F.name, oninput: (e, n) => { F.name = n.value; }, onchange: saveName }) }),
+      actions: input({ type: "text", maxlength: 40, placeholder: DEFAULT_NAME, "aria-label": "Hive name", style: "width:220px", value: F.name, oninput: (e, n) => { F.name = n.value; }, onchange: saveName }) }),
     block({ title: "Logo", sub: "Shown next to the name and as the tab's icon. PNG, JPEG, GIF, WebP or SVG, up to 2 MB. A square picture works best.",
       actions: [logo ? h("img", { class: "brand-logo set-logo", src: logo, alt: "Current logo", "data-key": "preview" }) : h("span", { class: "set-logo set-logo-none", "aria-hidden": "true" }), file,
         button(logo ? "Replace" : "Upload", (e, n) => n.parentNode.querySelector(".brand-pick").click(), { size: "s" }),
@@ -243,7 +243,7 @@ function hiveSection(ctx) {
   return section({ title: "The hive", level: 1, actions: statusLabel(up ? "working" : "ended", up ? "running" : "not running") },
     blocks(brand[0],
       block({ title: "Agents at once", sub: "Empty means no limit. Each saves when you leave the box.",
-        actions: input({ type: "number", min: 1, max: 200, placeholder: "no limit", "aria-label": "Agents at once", style: "width:7rem", value: E.max, oninput: (e, n) => { E.max = n.value; }, onchange: saveMax }) })),
+        actions: input({ type: "number", min: 1, max: 200, placeholder: "no limit", "aria-label": "Agents at once", style: "width:220px", value: E.max, oninput: (e, n) => { E.max = n.value; }, onchange: saveMax }) })),
     blocks(brand[1],
       block({ title: "Keep work moving", sub: E.kp ? `${paceSay(E.kpe)}, pick up work that stopped and start work nobody asked for, and sooner once nothing has run for half an hour. It uses your limits.` : "Off: work that stops waits until someone asks. Turn it on to pick it up by itself.",
         actions: [E.kp ? h("select", { class: "input", value: E.kpe, "aria-label": "How often to keep work moving", title: "How often to keep work moving", style: "width:auto",
