@@ -330,7 +330,7 @@ class Hunt:
             sig = people.sentences_with(clean, hit_terms, near) if hit_terms else ""
             close = bool(sig) and bool(near.search(fold(sig)))
             if not close and hit_terms:
-                reach = 700 if res["official"] else 300  # on someone else's page, a heading further off is about that site
+                reach = 300  # a heading further off is about the site, not this person (a UTEP research-assessment director under a tech-transfer banner)
                 for m in near.finditer(low):
                     if any(people.term_regex(t).search(low[max(0, m.start() - reach):m.end() + reach]) for t in hit_terms): close = True; break
             if hit_terms and not sig and not res["official"]: close = False  # only a menu says it, as on a namesake's site

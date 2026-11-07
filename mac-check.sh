@@ -53,6 +53,8 @@ recover_forward() {
   [ "$(as_hive 'systemctl --user is-active hive-dash' | tr -d '\r')" = active ] || return 1
   say "      the app is active in the VM but this Mac's port is dead: starting Lima's guest agent (the fault may have stopped it), then restarting the app"
   vm sudo -n sh -c 'systemctl unmask lima-guestagent; systemctl start lima-guestagent' >/dev/null 2>&1
+  # The agent start alone may bring the forward back: give it a short time before the app restart, so the report names the step that did it.
+  if answers_soon 20; then recovered="the guest agent start"; return 0; fi
   as_hive 'systemctl --user restart hive-dash' >/dev/null 2>&1
   if answers_soon 30; then recovered="the app restart"; return 0; fi
   say "      still dead: restarting the VM once"

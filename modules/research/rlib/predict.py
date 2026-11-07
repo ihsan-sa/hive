@@ -1,5 +1,6 @@
 """Numbers: forecasts with a backtest, trends, base rates, odds, a scored ledger of predictions, and lead ranking. Standard library only.
 Each method tells how far to trust it. A forecast with no backtest is a guess."""
+import re
 import csv, fcntl, json, math, os, random, statistics as st
 from contextlib import contextmanager
 from pathlib import Path
@@ -297,14 +298,18 @@ class Ledger:
         res = {"open": sum(r["outcome"] is None for r in self.all()), "resolved": len(done)}
         if not done: return res
         brier = sum((r["p"] - r["outcome"]) ** 2 for r in done) / len(done)
-        rate = sum(r["outcome"] for r in done) / len(done)
-        ref = sum(((r["base"] if r["base"] is not None else rate) - r["outcome"]) ** 2 for r in done) / len(done)
+        # skill is only judged against a base rate the forecaster gave beforehand; the hindsight rate of the resolved rows would flatter or punish arbitrarily
+        based = [r for r in done if r["base"] is not None]
+        ref = sum((r["base"] - r["outcome"]) ** 2 for r in based) / len(based) if based else None
+        skill_brier = sum((r["p"] - r["outcome"]) ** 2 for r in based) / len(based) if based else None
+        res["skill_rows"] = len(based)
         bins = {}
         for r in done:
             b = min(int(r["p"] * 5), 4)
             x = bins.setdefault(b, [0, 0, 0.0])
             x[0] += 1; x[1] += r["outcome"]; x[2] += r["p"]
-        res.update(brier=round(brier, 4), reference_brier=round(ref, 4), skill=round(1 - brier / ref, 3) if ref else None, calibration=[{"bin": f"{b * 20}-{b * 20 + 20}%", "n": x[0], "said": round(x[2] / x[0], 3), "happened": round(x[1] / x[0], 3)} for b, x in sorted(bins.items())])
+        res.update(brier=round(brier, 4), reference_brier=None if ref is None else round(ref, 4), skill=round(1 - skill_brier / ref, 3) if ref else None, calibration=[{"bin": f"{b * 20}-{b * 20 + 20}%", "n": x[0], "said": round(x[2] / x[0], 3), "happened": round(x[1] / x[0], 3)} for b, x in sorted(bins.items())])
+        if len(based) < len(done): res["skill_note"] = f"skill uses only the {len(based)} of {len(done)} resolved rows that were added with --base" if based else "no resolved row has a --base, so there is no skill figure"
         if len(done) < 30: res["warning"] = f"only {len(done)} resolved: too few to judge calibration"
         return res
 
@@ -407,6 +412,34 @@ def rank(rows, features, outcome=None, weights=None, seed=1):
         score = lambda z: sum(p * q for p, q in zip(w, z))
     ranked = sorted(zip(rows, Z), key=lambda t: -score(t[1]))
     return [dict(r, score=round(score(z), 4)) for r, z in ranked], info
+
+
+def series_dates(path, column, n_ahead, said=None):
+    """Dates of the last row and of the next n_ahead steps, from a CSV date column (ISO year, year-month or day). The step is the monthly/yearly calendar step when the rows fit one, else the median gap in days."""
+    import datetime as dt
+    text = Path(path).read_text(encoding="utf-8-sig")
+    rows = [r for r in csv.reader(text.splitlines()) if r]
+    if not rows or column not in rows[0]: raise ValueError(f"no date column {column}")
+    i = rows[0].index(column)
+    ds = []
+    for r in rows[1:]:
+        if len(r) > i and r[i].strip():
+            v = r[i].strip()
+            m = re.fullmatch(r"(\d{4})(?:-(\d{1,2})(?:-(\d{1,2}))?)?", v)
+            if not m: raise ValueError(f"date {v!r} isn't YYYY, YYYY-MM or YYYY-MM-DD")
+            ds.append(dt.date(int(m[1]), int(m[2] or 1), int(m[3] or 1)))
+    if len(ds) < 2: raise ValueError("need at least two dates")
+    gaps = sorted((b - a).days for a, b in zip(ds, ds[1:]))
+    if gaps[0] <= 0: raise ValueError("dates must increase")
+    months = [(b.year - a.year) * 12 + b.month - a.month for a, b in zip(ds, ds[1:])]
+    step = None
+    if len(set(months)) == 1 and months[0] > 0 and len({d.day for d in ds}) == 1: step = months[0]
+    def nxt(k):
+        if step:
+            t = ds[-1].year * 12 + ds[-1].month - 1 + step * k
+            return dt.date(t // 12, t % 12 + 1, min(ds[-1].day, 28))
+        return ds[-1] + dt.timedelta(days=gaps[len(gaps) // 2] * k)
+    return {"last_date": ds[-1].isoformat(), "dates": [nxt(k).isoformat() for k in range(1, n_ahead + 1)], "step": f"{step} month(s)" if step else f"{gaps[len(gaps) // 2]} day(s)"}
 
 
 def read_series(path, column=None, said=None):

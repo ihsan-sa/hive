@@ -259,6 +259,26 @@ def stop_gate(name, rec, t=None):
             "If none holds (a step is finished but the goal has a next one you can take, or the work got hard or long), don't stop: "
             "take the next step, and give the reason when one is true.")
 
+def focus_nudge(name, rec):
+    """One reminder per run, at Stop, when the run posted a result in a thread that is in a focus whose summary is older than
+    that result (projects/ui-redesign/human-workflow.md, 2026-11-07: the agent that posts the result updates the focus summary
+    in the same run; no cleanup pulses). Joined into the stop block when there is one; never a block on its own."""
+    thread = rec.get("thread")
+    if os.environ.get("HIVE_DOOR") or not rec.get("at") or not thread or WARDEN.fullmatch(name): return None
+    f = STATE / "focus-asked" / name
+    try:
+        if f.read_text().strip() == rec["at"]: return None
+    except OSError: pass
+    try:
+        import focus
+        at = dt.datetime.fromisoformat(rec["at"]); since = (at if at.tzinfo else at.replace(tzinfo=dt.timezone.utc)).timestamp()
+        msg = focus.nudge(name, thread, since)
+    except Exception: return None
+    if not msg: return None
+    try: f.parent.mkdir(parents=True, exist_ok=True); f.write_text(rec["at"])
+    except OSError: return None
+    return msg
+
 def stops(since_h=24.0):
     """`inbox.py stops [HOURS]`: what the stop gate saw. Per run: asked or not, the reason it stopped on, and whether it kept working after being asked (5 min or more to its last pass)."""
     runs = {}
@@ -379,7 +399,9 @@ def main():
     check = model_check(name, rec) if event != "Stop" else None
     if not ps:
         if event == "Stop" and (why := "\n\n".join(x for x in (unanswered(name, rec) or owns_open(name, rec), stop_gate(name, rec)) if x)):
-            print(json.dumps({"decision": "block", "reason": why}))
+            print(json.dumps({"decision": "block", "reason": "\n\n".join(x for x in (why, focus_nudge(name, rec)) if x)}))
+        elif event == "Stop" and (fn := focus_nudge(name, rec)):
+            print(json.dumps({"decision": "block", "reason": fn}))
         elif first or check:
             print(json.dumps({"hookSpecificOutput": {"hookEventName": event or "PostToolUse", "additionalContext": "\n\n".join(x for x in (first, check) if x)}}))
         return

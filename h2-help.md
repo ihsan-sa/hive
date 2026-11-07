@@ -28,7 +28,7 @@ hive fade THREAD --why "..." [--off]: mark a thread as likely not needed by the 
 
 ## hive status
 
-hive status THREAD <<'X' ...: set the two-line status bar the dashboard shows at the top of a thread (line 1: what it is about; line 2: where it stands now, what it waits on). --read prints it. Update it when you change a thread's state; before you stop, line 2 is why, starting Done:, Blocked:, Needs the person:, Waiting: or Told to stop:
+hive status THREAD <<'X' ...: set the status bar the dashboard shows at the top of a thread (line 1: what it is about; line 2: where it stands now, what it waits on; up to four more lines of detail, folded by default: this is the thread's summary, depth 3 of the person's four depths). --read prints it. Update it when you change a thread's state; before you stop, line 2 is why, starting Done:, Blocked:, Needs the person:, Waiting: or Told to stop:
 
 ## hive me
 
@@ -133,6 +133,10 @@ hive goals [--idle] [--json]: every goal (the person's focuses in kb/priorities.
 ## hive asks
 
 hive asks list | check | own ID | done ID --evidence POST | hold|person|drop ID --why | add --post ID --ask ... | directions | extract: the register of what the person asked for, so nothing is dropped (core/asks.py)
+
+## hive focus
+
+hive focus list | tag THREAD FOCUS [--off] | new ID "name" | link A B | set FOCUS <<'X' | show FOCUS | check add|list|done|untick | lint: foci, the person's view of the work. A thread carries a focus label; each focus has a hand-written summary (## Now, ## Lately bullets, plain words, no ids or paths) that the home shows as a card. The agent posting a result in a focus's thread updates its summary in the same run (core/focus.py)
 
 ## hive away
 

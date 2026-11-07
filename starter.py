@@ -1161,7 +1161,7 @@ def launch_failed(out, code):
     try:
         with open(out, errors="replace") as f: lines = [l.strip() for l in f if l.strip()]
     except (OSError, TypeError): return None
-    if any(l.startswith("{") for l in lines): return None
+    if any(l.startswith("{") or "No conversation found" in l for l in lines): return None  # a missing session is the session's fault, even with no json line
     return (lines[0] if lines else "no output")[:200].replace("`", "'")
 
 def wrote_json(out):

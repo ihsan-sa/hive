@@ -10,7 +10,7 @@ export const S = {
   app: { route: "open", can: null, app: false, setup: null },
   live: null, usage: null, projects: null, agentCosts: null, threadNames: {}, threadMeta: {}, shown: [], threadStatus: {}, agentStatus: {},
   posts: [], byId: {}, threads: new Map(), off: 0,
-  sessions: [], lastSess: {}, open: {}, byOut: {}, woke: {}, logOff: 0,
+  sessions: [], lastByThread: {}, lastSess: {}, open: {}, byOut: {}, woke: {}, logOff: 0,
   agents: new Set(), killed: {}, limited: [], limitedSess: new Set(), limitedNow: new Set(),
   ledger: [],                 // {t, kind, parts:[string | {a:name} | {th:thread}], lc}
   running: new Map(), pending: {},
@@ -89,7 +89,7 @@ function ingestLog(items) {
       S.limitedNow.delete(e.session); // resumed: limitedSess keeps the history, limitedNow means still stopped
       const s = { out: e.out ? String(e.out).split("/").pop().replace(/\.jsonl$/, "") : null, name: e.name, session: e.session, start: t, end: null, exit: null,
         thread: e.thread, from: e.from, post: e.post, resumed: !!e.resumed, heirOf: e.heir_of || null, model: e.model || null, effort: e.effort || null, harness: e.harness || null, provider: e.provider || null, login: e.login || null };
-      S.sessions.push(s); S.lastSess[e.name] = s; S.open[e.name + e.session] = s; S.agents.add(e.name);
+      S.sessions.push(s); if (e.thread) S.lastByThread[e.thread] = s; S.lastSess[e.name] = s; S.open[e.name + e.session] = s; S.agents.add(e.name);
       const by = e.from, re = !!e.resumed, known = by && by !== "anon";
       ledgerAdd({ t, kind: "agent", parts: [known ? { a: by } : "", known ? (re ? " woke " : " started ") : (re ? "Woke " : "Started "), { a: e.name }, e.thread ? " in " : "", e.thread ? { th: e.thread } : ""] }, ["started woke", e.name, by || "", e.thread || ""]);
       if (s.out) S.byOut[s.out] = s;
@@ -123,7 +123,7 @@ function ingestBoard(items) {
     const tos = p.men.filter(m => m !== "new");
     ledgerAdd({ t: p.t + 0.5, kind: SYS.has(p.from) ? "hive" : "post", post: p, parts: [{ a: p.from }, tos.length ? " → " : " in ", ...(tos.length ? tos.flatMap((m, i) => (i ? [", ", { a: m }] : [{ a: m }])) : [{ th }]), tos.length ? " in " : "", tos.length ? { th } : ""] },
       [p.from, th, ...tos, String(p.text).slice(0, 600)]);
-    d.posts.push(p); d.last = p.t; if (!SYS.has(p.from)) d.who.add(p.from);
+    d.posts.push(p); d.last = p.t; if (OUTSIDE.has(p.from)) d.lastYou = p.t; if (!SYS.has(p.from)) d.who.add(p.from);
   }
 }
 

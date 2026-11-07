@@ -356,7 +356,14 @@ function modulesSection(ctx) {
   const end = (x, inBrowse) => {
     if (x.name === "dash") return h("span", { class: "meta" }, "this app");
     if (x.name === "slack-door" && built("slack-door") && !(S.app.slack_door || {}).connected) return slackBtn();
-    if (x.name === "slack-door" && built("slack-door")) return h("span", { class: "meta" }, "Connected to " + (S.app.slack_door.channel || "Slack")); // connected: say where it answers, so a reload shows Slack is on
+    if (x.name === "slack-door" && built("slack-door")) return h("span", { class: "mod-end" }, // connected: say where it answers, so a reload shows Slack is on
+      h("span", { class: "meta" }, "Connected to " + (S.app.slack_door.channel || "Slack")), " ",
+      S.app.slack_door.problem ? h("span", { class: "meta mod-problem", "data-tone": "bad", title: "Disconnect, then Set up again with new tokens." }, "but " + S.app.slack_door.problem.split(": ")[0] + ": Disconnect, then Set up again") : null, // a token revoked in Slack after Connect
+      S.app.slack_door.problem ? " " : null,
+      button("Disconnect", () => confirm({ title: "Disconnect Slack?", body: ["The Hive stops answering in Slack and deletes its two Slack tokens from this computer. You can connect again from this row."], ok: "Disconnect", kind: "danger", onOk: async () => {
+        F.busy["slack-door"] = true; ctx.update();
+        try { const r = await post("/api/slack-door", { do: "disconnect" }); S.app.slack_door = { connected: r.connected, channel: r.channel }; F.slack = null; say("mods", r.said, "good"); } catch (e) { say("mods", e.message, "bad"); }
+        delete F.busy["slack-door"]; ctx.update(); } }), { size: "s", kind: "quiet", busy: F.busy["slack-door"] }));
     if (x.state === "installed" && x.default) return h("span", { class: "meta" }, "comes with the Hive");
     if (x.state === "installed" && inBrowse) return h("span", { class: "meta" }, "installed");
     return x.state === "installed"

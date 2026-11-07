@@ -4,9 +4,12 @@ Release notes are on the [releases page](https://github.com/ihsan-sa/hive/releas
 
 A release can ship several times a day. A new Hive installs at most one a day, once it has been out for at least 12 hours; **How often to update** in Settings changes that. The latest is at [releases/latest](https://github.com/ihsan-sa/hive/releases/latest).
 
+## Site edit mode: comment mode
+On a site's /edit pages, Ctrl+Alt+M (⌘⌥M on a Mac) turns on comment mode: click to pin a comment or drag a box around something, type, press Enter. Comments stay across pages and reloads until you press Send all, which sends them together, each with a small picture of the spot.
+
 ## Slack: connect it from Settings
 
-Settings > Modules > slack-door now has a working **Set up**: make the Slack app from the manifest shown there, paste its bot token (xoxb-) and app token (xapp-), name a channel the app was invited to, and press **Connect**. The Hive checks both tokens and the channel with Slack before it stores anything, says in words what Slack refused, and keeps the tokens on this computer, readable only by you. Everyone in that channel can then direct the Hive, so the channel can have at most 20 people. The row then says **Connected to #channel**, with **Disconnect** next to it, which stops the door and deletes both tokens. If Slack later refuses the stored bot token (revoked, or the app removed), the row says so next to **Connected to**, so a door that has stopped working no longer looks connected.
+Settings > Modules > slack-door now has a working **Set up**: make the Slack app from the manifest shown there, paste its bot token (xoxb-) and app token (xapp-), name a channel the app was invited to, and press **Connect**. The Hive checks both tokens and the channel with Slack before it stores anything, says in words what Slack refused, and keeps the tokens on this computer, readable only by you. Everyone in that channel can then direct the Hive, so the channel can have at most 20 people. The row then says **Connected to #channel**, with **Disconnect** next to it, which stops the door and deletes both tokens. If Slack later refuses the stored bot token (revoked, or the app removed), the row says so next to **Connected to**, so a door that has stopped working no longer looks connected. The same goes for the app token (xapp-): when Slack refuses the door's connection, the row says so until a connection works again.
 
 ## Agents on a phone: what each one is on
 
