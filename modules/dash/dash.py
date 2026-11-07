@@ -2900,6 +2900,24 @@ def delivered():
     except OSError: return set()
 
 
+_LADDER = {"at": 0.0, "rows": {}}
+def ladder_now(ttl=20):
+    """Each focus's open rung and counts, live from core/goals.py (0.1 s), by row name. The 30-minute summary carries the same fields and lags
+    while agents tick rungs, so the Work page's Next comes from here. {} when goals can't answer."""
+    if time.time() - _LADDER["at"] > ttl:
+        d = core_json("goals.py", "--json", timeout=20) or {}
+        _LADDER.update(at=time.time(), rows={r["name"]: {k: r.get(k) for k in ("rung", "rungs_done", "rungs_left")} for r in d.get("rows", []) if isinstance(r, dict) and r.get("name")})
+    return _LADDER["rows"]
+
+    f = HOME / "needs-you.json"
+    if not f.exists(): return b'{"absent": true}'  # needs_you.py writes it, atomically, every 30 min
+    raw = f.read_bytes()
+    try:
+        d = json.loads(raw); live = ladder_now()
+        for st in d.get("states") or []:
+            if isinstance(st, dict) and st.get("key") in live: st.update(live[st["key"]])
+        return json.dumps(d).encode() if live else raw
+    except (ValueError, AttributeError): return raw
 
 def inbox_view(limit=200):
     """Posts addressed to the person, newest first. "read" means handed over, by this page or by the door: both use the door's
@@ -2986,7 +3004,15 @@ _cfg_lock = threading.Lock()
 
 def config_view():
     c = cfg()
-    return {k: c.get(k) for k in ("max_sessions", "keeper_every_s", "keeper_idle_s", "usage_stop_pct", "auto_update", "update_every_s", "update_pace", "max_budget_usd")}
+    return {**{k: c.get(k) for k in ("max_sessions", "keeper_every_s", "keeper_idle_s", "usage_stop_pct", "auto_update", "update_every_s", "update_pace", "max_budget_usd", "max_daily_usd")}, "spend_today": spend_today()}
+
+
+def spend_today():
+    """Dollars the Hive's runs spent today (UTC), from the cost on each run's end in log.jsonl; 0 where core has no spend.py."""
+    try:
+        sys.path.insert(0, str(HOME / "core")); import spend
+        return spend.spend_on(HOME / "log.jsonl")
+    except Exception: return 0.0
 
 
 def set_config(d):
@@ -3008,6 +3034,10 @@ def set_config(d):
         v = d["max_budget_usd"]
         if v is not None and (isinstance(v, bool) or not isinstance(v, (int, float)) or not 0 < v < 10000): raise ValueError("the most one run may spend is a number of dollars above 0, or none")
         new["max_budget_usd"] = v
+    if "max_daily_usd" in d:
+        v = d["max_daily_usd"]
+        if v is not None and (isinstance(v, bool) or not isinstance(v, (int, float)) or not 0 < v < 100000): raise ValueError("the most the Hive may spend in a day is a number of dollars above 0, or none")
+        new["max_daily_usd"] = v
     if "auto_update" in d:
         if type(d["auto_update"]) is not bool: raise ValueError("auto_update is on or off")
         new["auto_update"] = d["auto_update"]
@@ -3023,7 +3053,8 @@ def set_config(d):
         c = jload(HOME / "core" / "config.json")
         if not isinstance(c, dict): raise ValueError("core/config.json can't be read")
         c.update(new)
-        if c.get("max_budget_usd") is None: c.pop("max_budget_usd", None)
+        for k in ("max_budget_usd", "max_daily_usd"):
+            if c.get(k) is None: c.pop(k, None)
         t = HOME / "core" / f".config.json.{os.getpid()}.{threading.get_ident()}"
         t.write_text(json.dumps(c, indent=2) + "\n"); t.replace(HOME / "core" / "config.json")
     return config_view()
@@ -3682,7 +3713,10 @@ def import_view():
     mcp = sorted(_person_mcp(ph))
     try: got = sorted(json.loads(MCP_COPY.read_text()).get("mcpServers") or {})
     except (OSError, ValueError, AttributeError): got = []
-    return {"claude_md": {"found": bool(txt.strip()), "chars": len(txt), "preview": txt.strip()[:400], "copied": USER_INSTR.is_file()}, "mcp": mcp, "mcp_copied": got}
+    have = _person_mcp(ph)  # names of the env/headers keys only, never their values: ticking copies those values into mcp.json in clear
+    secrets_ = {n: sorted(str(k) for key in ("env", "headers") if isinstance(have[n], dict) and isinstance(have[n].get(key), dict) for k in have[n][key]) for n in mcp}
+    return {"claude_md": {"found": bool(txt.strip()), "chars": len(txt), "preview": txt.strip()[:400], "copied": USER_INSTR.is_file()}, "mcp": mcp, "mcp_copied": got,
+            "mcp_secrets": {n: ks for n, ks in secrets_.items() if ks}}
 
 
 def _person_mcp(ph):

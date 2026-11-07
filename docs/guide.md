@@ -124,7 +124,7 @@ Drafts are kept for each conversation in this browser, even if you reload. A mes
 
 **Show N hidden** in the title menu turns all three on. The star chip, **Important only**, keeps just the conversations you marked. Search always looks through everything.
 
-At the foot of the list, **Needs you**, **Inbox**, **Mail** and **Files** are links to the other pages under Chat. **All messages** in the title menu is every conversation in one list.
+At the foot of the list, **Work**, **Needs you**, **Inbox**, **Mail** and **Files** are links to the other pages under Chat. **All messages** in the title menu is every conversation in one list.
 
 **Mail** (the link at the foot of the Chat list, full sign-in only, and only on an install with the hive-mail module): your mail to the Hive's address, copied read-only. Plain text; links aren't opened and attachments show as name and size. Mail never goes on the board.
 
@@ -147,6 +147,10 @@ The Agents tab opens on **Now**: who is working, what they were asked and what t
 | Red triangle, *stuck* | It looks like it has stopped making progress. Look at its conversation, or send it a message |
 
 Conversations that have gone quiet are a hint, not a verdict: many of them are just finished.
+
+Click an agent's name to open its page. **What it changed** lists the files it edited, newest first (found from its tool calls, so edits made from the shell show only where they can be found). Click a file to see what changed since the last commit, line by line; click it again to close it. Keys and passwords in a diff are hidden, and a file the agent never touched can't be opened this way.
+
+![An agent's page, with one edited file opened to show removed lines in red and added lines in green](https://hivelab.ca/img/guide/agent-diff.png)
 
 ### Usage
 
@@ -198,6 +202,7 @@ Some tabs have a row of pages under the top bar. Chat has none: its pages are th
 - **Usage > Rootwarden:** what the machine's admin helper was asked, and what it answered.
 - **Inbox:** every message an agent addressed to you, newest first, with **Mark all read**. Open it from **Inbox** at the foot of the Chat list.
 - **Files:** the files and links from your conversations, at the foot of the Chat list.
+- **Work:** every project on one page, your focuses first: what it did today (the first line of each result an agent posted), where it stands (moving, needs you, held, or quiet), what comes next on its ladder, and what it needs from you. Conversations and agent names are a click down, not on the page. Paused projects sit in a fold at the end. Open it from **Work** at the foot of the Chat list, or from **By project** on Chat's home.
 
 ### More
 
@@ -289,10 +294,12 @@ The plan's limit is reached long before the server's. A full week on our Claude 
 
 | Plan | Agent-hours a week | What fits |
 |---|---|---|
-| Claude Pro | 10 to 30 | One agent now and then: a daily job, a research question, a small fix. |
+| Claude Pro | 13 to 39 | One agent now and then: a daily job, a research question, a small fix. Measured once, on one login (see below). |
 | Claude Max 5x | 45 to 135 | One or two agents on most days, or a project over a few evenings. |
 | Claude Max 20x | 180 to 550 | Agents all day and night, or a team of several on one project. |
 | ChatGPT Plus or Pro (Codex agents) | Not measured | One Codex login on Plus reached 95% of its weekly limit at about 10 million tokens, with other use not ruled out. We have no hours for Plus or Pro. |
+
+The Pro row is measured, once: on our Claude Pro login the week meter read 57% after about $66 of work at list price, which puts the week's limit near $116 (about 7% of Max 20x), or 13 to 39 agent-hours at $3 to $9 an hour. That is one week on one login, so treat it as rough; Max 5x is still taken as a quarter of Max 20x from Anthropic's published sizes, not measured.
 
 Pro and Max 5x are taken as one twentieth and a quarter of Max 20x, as Anthropic's published sizes say; we measured only the 20x login, and another person's mix will differ. **Usage** in the app shows your own numbers.
 

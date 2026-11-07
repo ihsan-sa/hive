@@ -30,8 +30,8 @@ const CAPTEXT = { read: "Read everything", files: "Read files: notes, modules, s
 async function loadCfg(ctx) {
   if (!can("config")) return;
   try { F.cfg = await jget("/api/config"); F.cfgErr = null; } catch (e) { F.cfg = F.cfg || {}; F.cfgErr = e.message; ctx.update(); return; }   // no defaults on a failed read: a toggle would save them over the real values
-  F.ed ||= { max: F.cfg.max_sessions ?? "", kp: !!F.cfg.keeper_every_s, kpe: F.cfg.keeper_every_s || 10800, au: F.cfg.auto_update !== false, bud: F.cfg.max_budget_usd ?? "" };
-  F.saved ||= { max: F.ed.max, bud: F.ed.bud };
+  F.ed ||= { max: F.cfg.max_sessions ?? "", kp: !!F.cfg.keeper_every_s, kpe: F.cfg.keeper_every_s || 10800, au: F.cfg.auto_update !== false, bud: F.cfg.max_budget_usd ?? "", day: F.cfg.max_daily_usd ?? "" };
+  F.saved ||= { max: F.ed.max, bud: F.ed.bud, day: F.ed.day };
   ctx.update();
 }
 async function loadUpdate(ctx) {
@@ -241,6 +241,14 @@ function hiveSection(ctx) {
     F.saved.bud = v;
     save({ max_budget_usd: v === "" ? null : +v }, () => { E.bud = F.saved.bud = was; }, "Budget per run");
   };
+  const saveDay = () => {
+    const was = F.saved.day, v = String(E.day).trim();
+    if (v === String(was)) return;
+    if (v !== "" && !(+v > 0 && +v < 100000)) { E.day = was; say("hive", "The daily cap is a number of dollars above 0, or empty for no cap.", "bad"); ctx.update(); return; }
+    F.saved.day = v;
+    save({ max_daily_usd: v === "" ? null : +v }, () => { E.day = F.saved.day = was; }, "Daily cap");
+  };
+  const spent = `Spent today: $${(+(F.cfg.spend_today || 0)).toFixed(2)} at API prices (UTC day). `;
   const starter = async () => {
     say("starter", up ? "Stopping…" : "Starting…");
     try {
@@ -259,7 +267,9 @@ function hiveSection(ctx) {
       block({ title: "Agents at once", sub: "Empty means no limit. Each saves when you leave the box.",
         actions: input({ type: "number", min: 1, max: 200, placeholder: "no limit", "aria-label": "Agents at once", value: E.max, oninput: (e, n) => { E.max = n.value; }, onchange: saveMax }) }),
       block({ title: "Budget per run", sub: E.bud === "" ? "Empty means no cap. A cap stops a run that reaches it (counted at API prices) and says so in its thread. Applies from each run's next start." : `Each run stops at $${E.bud}, counted at API prices, and says so in its thread. Applies from each run's next start. Empty removes the cap.`,
-        actions: [savedMark("Budget per run"), input({ type: "number", min: 0, step: "any", placeholder: "no cap", "aria-label": "Budget per run in dollars", value: E.bud, oninput: (e, n) => { E.bud = n.value; }, onchange: saveBud })] })),
+        actions: [savedMark("Budget per run"), input({ type: "number", min: 0, step: "any", placeholder: "no cap", "aria-label": "Budget per run in dollars", value: E.bud, oninput: (e, n) => { E.bud = n.value; }, onchange: saveBud })] }),
+      block({ title: "Daily cap", sub: spent + (E.day === "" ? "Empty means no cap. A cap holds new agents from starting once a day's spend reaches it; running ones finish." : `No new agents start once a day's spend reaches $${E.day}; running ones finish. Empty removes the cap.`),
+        actions: [savedMark("Daily cap"), input({ type: "number", min: 0, step: "any", placeholder: "no cap", "aria-label": "Daily cap in dollars", value: E.day, oninput: (e, n) => { E.day = n.value; }, onchange: saveDay })] })),
     blocks(brand[1],
       block({ title: "Keep work moving", sub: E.kp ? `${paceSay(E.kpe)}, pick up work that stopped and start work nobody asked for, and sooner once nothing has run for half an hour. It uses your limits.` : "Off: work that stops waits until someone asks. Turn it on to pick it up by itself.",
         actions: [E.kp ? h("select", { class: "input", value: E.kpe, "aria-label": "How often to keep work moving", title: "How often to keep work moving" ,

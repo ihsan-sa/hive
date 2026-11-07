@@ -2409,10 +2409,12 @@ input[type=radio],input[type=checkbox]:not(.switch){accent-color:var(--ink)}
 .wk-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,360px),1fr));gap:var(--s4)}
 .wk{padding:var(--s3) var(--s4);display:grid;gap:var(--s3);min-width:0}
 .wk-hd{display:flex;align-items:baseline;gap:var(--s2);flex-wrap:wrap}.wk-hd>.sd{flex:none;align-self:center}
-.wk-t{margin:0;font-size:var(--fs-title);font-weight:var(--w-bold);min-width:0;overflow-wrap:anywhere}.wk-n{color:var(--ink-3);font-weight:var(--w-med)}
+.wk-t{margin:0;font-size:var(--fs-title);font-weight:var(--w-bold);min-width:0;flex:1 1 12em;overflow-wrap:anywhere}.wk-n{color:var(--ink-3);font-weight:var(--w-med)}
 .wk-st{margin-left:auto;white-space:nowrap}
 .wk-b{margin:0;display:grid;gap:var(--s2)}.wk-p{display:grid;grid-template-columns:5.5em minmax(0,1fr);gap:var(--s2);font-size:var(--fs-small)}
 .wk-p>dt{color:var(--ink-3);font-weight:var(--w-med)}.wk-p>dd{margin:0;min-width:0;overflow-wrap:anywhere;color:var(--ink)}
 .wk-l{margin:0;padding:0;list-style:none;display:grid;gap:2px}.wk-l a{color:inherit;text-decoration:none}.wk-l a:hover{text-decoration:underline}.wk-w{text-transform:capitalize}
 .wk-ft{display:flex;gap:var(--s3);flex-wrap:wrap;align-items:center;border-top:1px solid var(--line);padding-top:var(--s2)}.wk-who{display:inline-flex;gap:var(--s2);flex-wrap:wrap;align-items:center}
 @container (max-width:420px){.wk-p{grid-template-columns:1fr}.wk-st{margin-left:0}}
+/* A phone: the header's buttons share one row, the stop button with them rather than alone under them */
+@container (max-width:520px){.ph-actions{gap:6px}.ph-actions .btn[data-size=s]{padding:0 6px}.ph-actions .ac-kill{margin-left:0}}

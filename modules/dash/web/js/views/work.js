@@ -7,6 +7,7 @@ import { h } from "../core/dom.js";
 import { S, can, jget } from "../core/store.js";
 import { tierOf, threadChildren, threadTitle, displayText } from "../core/model.js";
 import { ago, plural, mdPlain, short, DAY, now } from "../core/format.js";
+import { gist } from "../core/gist.js";
 import { threadHref } from "../core/router.js";
 import { agentRef, threadRef } from "../ui/refs.js";
 import { empty, list, pageHeader, section } from "../ui/kit.js";
@@ -30,9 +31,10 @@ function today(threads) {
       if (p.t < since || p.from === "person") continue;
       const lines = String(p.text || "").split("\n").map(l => l.trim()).filter(Boolean);
       const m = lines.length > 1 && lines[lines.length - 1].match(RESULT); if (!m) continue;
-      const first = mdPlain(displayText(p)).split("\n").map(l => l.trim()).find(Boolean) || "";
-      const text = first.replace(/^@?[a-z]\w{3,5}:\s*/i, "").replace(/^(Rung done|Done):\s*/i, "");
-      if (text) out.push({ text: short(text, 170), word: m[1].toLowerCase(), thread: th, t: p.t, id: p.id });
+      const plain = mdPlain(displayText(p)).split("\n").map(l => l.trim()).filter(Boolean);
+      if (/^\(?this run ended without posting/i.test(plain[0] || "")) continue;   // the starter's relay of an unposted answer: nobody checked it
+      const text = gist(plain.slice(0, -1), lines[lines.length - 1]);   // the plainer of the first line and the Done line; names fade
+      if (text) out.push({ text: short(text, 150), word: m[1].toLowerCase(), thread: th, t: p.t, id: p.id });
     }
   }
   return out.sort((a, b) => b.t - a.t);
@@ -46,12 +48,17 @@ function stand(th) {
 const rungText = r => String(r || "").split(/\s+check:/i)[0].trim();
 const ordinal = key => { const m = String(key || "").match(/^(\d+)\.\s*/); return m ? m[1] : null; };
 
+/** A waiting row is settled when its thread's status bar says Done or Told to stop and was written after the row: the helper finished, the summary hasn't caught up. */
+function closed(w) {
+  const st = stand(w.thread), at = Date.parse(w.at || "");
+  return !!(st && /^(done|told to stop)$/.test(st.word) && st.at && at && st.at > at);
+}
 /** One project's reading of the data: everything a card or a row shows. */
 function reading(s, V) {
   const threads = [s.thread, ...(s.thread ? threadChildren(s.thread) : [])].filter(Boolean);
   const running = [...S.running.entries()].filter(([, a]) => threads.includes(a.thread)).map(([n]) => n);
   const did = today(threads), st = s.thread ? stand(s.thread) : null;
-  const asks = (V.waiting || []).filter(w => threads.includes(w.thread) && !w.stale);
+  const asks = (V.waiting || []).filter(w => threads.includes(w.thread) && !w.stale && !closed(w));
   const needs = asks.length + (s.open_asks || 0);
   const blocked = st && /^(blocked|waiting|needs the person)$/.test(st.word);
   const state = running.length ? { key: "moving", tone: "good", shape: "dot", label: `moving, ${plural(running.length, "agent")} on it` }
@@ -65,7 +72,7 @@ function reading(s, V) {
 }
 
 const dot = st => h("span", { class: "sd", "data-tone": st.tone, "data-shape": st.shape, "data-live": st.key === "moving" ? "" : null, "aria-hidden": "true" });
-const didLine = d => h("li", null, h("a", { href: threadHref(d.thread), title: `${threadTitle(d.thread)}, ${ago(d.t)}` }, d.text), d.word !== "done" ? h("span", { class: "meta wk-w" }, " " + d.word) : null);
+const didLine = d => h("li", null, h("a", { href: threadHref(d.thread), title: `${threadTitle(d.thread)}, ${ago(d.t)}` }, d.text), d.word !== "done" ? h("span", { class: "meta wk-w" }, " · " + d.word) : null);
 
 /** A focus or project card: what it did today, where it stands, what comes next, what it needs from you. */
 function card(s, V) {
@@ -113,7 +120,7 @@ export default {
     return h("div", { class: "page wk-page" },
       pageHeader({
         title, lead: "What the hive is working on, project by project. Threads and agents are one click down.",
-        meta: [`${moving} of ${plural(states.length, "project")} moving now`, `${plural(done, "step")} finished today`, needs ? `${needs} need you` : "nothing needs you", V.at ? `Summary updated ${when(V.at)}` : null],
+        meta: [`${moving} of ${plural(states.length, "project")} moving now`, `${plural(done, "result")} posted today`, needs ? `${needs} need you` : "nothing needs you", V.at ? `Summary updated ${when(V.at)}` : null],
         after: W.failed || old ? h("p", { class: "meta", role: "alert", "data-tone": "warn" }, W.failed ? "Couldn't refresh this page, so it shows what it read last." : "The summary hasn't refreshed in over an hour; the Today lines and agents are still live.") : null,
       }),
       focus.length ? section({ title: "Your focuses", note: "in your order", key: "wk-focus" }, h("div", { class: "wk-grid" }, focus.map(s => card(s, V)))) : null,

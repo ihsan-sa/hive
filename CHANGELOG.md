@@ -4,6 +4,14 @@ Release notes are on the [releases page](https://github.com/ihsan-sa/hive/releas
 
 A release can ship several times a day. A new Hive installs at most one a day, once it has been out for at least 12 hours; **How often to update** in Settings changes that. The latest is at [releases/latest](https://github.com/ihsan-sa/hive/releases/latest).
 
+## The work, by project, on one page
+
+A new **Work** page under Chat (and **By project** on Chat's home) shows every project with your focuses first: what it did today, where it stands, what comes next on its ladder and what it needs from you. Paused projects sit in a fold at the end. Conversations and agent names are a click down, so you can follow the work without following threads. Nothing changes for the agents: the page is read from what they already post.
+
+## The Work page is current and reads plainer
+
+On the **Work** page, **Next** now follows the ladder as it stands, not as it stood up to 30 minutes ago. A helper's question drops off a project's card once that helper's thread says it finished. **Today** prefers the plainest line of a result over the first one.
+
 ## An agent on the phone can't hang up while you're talking
 
 When an agent ends a call, it says goodbye and then waits for you to go quiet. If you start talking, the call stays on and the agent hears what you said.

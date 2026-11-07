@@ -3,6 +3,7 @@
 import datetime as dt, json, os, re, secrets, shutil, signal, subprocess, sys, time, urllib.request, uuid
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # tests load this file by path, under -I
+import spend
 try: import continuation as cont
 except ImportError: cont = None  # a pilot: the starter runs without it
 
@@ -331,6 +332,27 @@ def box():
 BOX_SHAPE = 4  # in a sandbox the run is: bwrap, its init, the supervisor, then the agent's own process. Under that are its jobs.
 box_state = {"ok": None, "at": 0.0}
 
+def run_cost(out):
+    """A run's total_cost_usd from its last result line, or None (no result yet, another harness)."""
+    cost = None
+    try:
+        with open(out, errors="replace") as f:
+            for ln in f:
+                if '"total_cost_usd"' in ln:
+                    try: v = json.loads(ln).get("total_cost_usd")
+                    except ValueError: continue
+                    if isinstance(v, (int, float)) and not isinstance(v, bool): cost = v
+    except (OSError, TypeError): pass
+    return cost
+
+def daily_cap_holds(c, st):
+    """Today's spend is at the person's daily cap: nothing new starts. The person is told once a day."""
+    cap = spend.over_cap(c, LOG)
+    if cap and st is not None and st.get("cap_told") != now()[:10]:
+        st["cap_told"] = now()[:10]
+        post(f"Today's spend reached your daily cap of ${cap:g}, so no new agents start until tomorrow (UTC). Raise or remove the cap in Settings (Budget) to start again.", ["person"])
+    return bool(cap)
+
 def box_holds():
     """On with a failing check: nothing starts, there's no quiet fallback. The person is told once, and it's tried again each minute."""
     if not (sb := box()): box_state["ok"] = None; return False
@@ -631,7 +653,7 @@ def running(st=None, by_hand=False):
         done = c.poll() is not None if c else gone or not Path(f"/proc/{r['pid']}").exists()
         if done:
             f.unlink(); children.pop(r["name"], None)
-            log(event="end", name=r["name"], session=r["session"], pid=r["pid"], exit=c.returncode if c else None)
+            log(event="end", name=r["name"], session=r["session"], pid=r["pid"], exit=c.returncode if c else None, **({"cost": cost} if (cost := run_cost(r.get("out"))) is not None else {}))
             hit = limit_hit(r.get("out"))
             authed = auth_hit(r.get("out")) is not None
             died = None if hit or authed else died_unfinished(r.get("out"))
@@ -1627,7 +1649,7 @@ def main():
                  if paused else "Usage has room again; starting sessions.", ["person"])
             log(event="paused" if paused else "resumed", usage=u)
         login = pick_login(c, room, st.get("limits"))  # None: every login is paused, past the stop line or held on a limit
-        hold = box_holds() or launch_held(st)
+        hold = box_holds() or launch_held(st) or daily_cap_holds(c, st)
         for n, r in ([] if hold else list(st.get("resume", {}).items())):  # resume limit-stopped sessions first, same name and session
             if (not login and not provider_of(c, r.get("model"))) or n in alive or len(alive) >= (c.get("max_sessions") or float("inf")): continue
             if paced(c, st, n, [{"from": r.get("from")}]): continue
