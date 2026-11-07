@@ -19,6 +19,13 @@ WHY = {"long": "It is over 30 words.",
        "chain": "It chains steps: ask for the one step only they can do, and do the rest.",
        "ours": "It asks them to check our work: test it yourself, and ask only for a device or account check you can't do."}
 
+EXAMPLE = {"command": "Instead of `For you: run `hive go` then reload`, write `For you: say yes and I'll switch it on.`",
+           "many": "Instead of two asks in one line, keep the one only they can answer: `For you: pick red or blue for the header.`",
+           "long": "Cut to one plain sentence: `For you: OK to buy the $12 domain?`",
+           "chain": "Ask for the single step and do the rest yourself: `For you: send me the account code.`",
+           "ours": "Test it yourself; ask only what needs their device: `For you: tell me if the phone login works.`"}
+ORDER = ["command", "many", "long", "chain", "ours"]  # commonest first in the last day's board
+
 def lines(text):
     """The text after each For you marker in a post, whitespace-joined, backticked spans left in. A marker inside a code fence or backticks isn't one."""
     out, text = [], FENCE.sub(" ", str(text or ""))
@@ -54,7 +61,9 @@ def warning(text):
     """What `hive post` says on stderr after a post whose For you line reads as more than a plain ask; None when none does. The post has landed either way."""
     kinds = list(dict.fromkeys(k for l in lines(text) for k in flags(l)))
     if not kinds: return None
+    main = next(k for k in ORDER if k in kinds)
     return (f"hive post: posted. The For you line reads as {', '.join(kinds)}: it goes on the person's card as written, and a plain one-sentence ask under 30 words lands better. {why(kinds)} "
+            f"Commonest here ({main}): {EXAMPLE[main]} "
             "What fits: a decision, money, an account or an action only they can take. If you can settle it yourself, do, and say so in a `Decided:` line.")
 
 def tally(posts, t0, t1):
@@ -66,3 +75,12 @@ def tally(posts, t0, t1):
             if NOTHING.match(l): continue
             n += 1; flagged += bool(flags(l))
     return n, flagged
+
+def kind_tally(posts, t0, t1):
+    """{kind: lines carrying it} over the same lines as tally; a line can carry several kinds."""
+    out = dict.fromkeys(ORDER, 0)
+    for p in posts:
+        if not t0 <= p.get("at", "") <= t1 or not AGENT.match(str(p.get("from", "")).lower()) or p.get("thread") in SELF_THREADS: continue
+        for l in lines(p.get("text")):
+            for k in flags(l): out[k] += 1
+    return out

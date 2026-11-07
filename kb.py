@@ -823,7 +823,11 @@ def cmd_recall(a):
         except (OSError, ValueError): pass
     if not text.strip(): return  # no such post, or nothing on stdin
     c = connect(); t0 = time.time()
-    hits = recall(c, text, a.n, ctx, thread=thread)
+    hits = recall(c, text, a.n + 4, ctx, thread=thread) if kbuse else recall(c, text, a.n, ctx, thread=thread)
+    if kbuse:  # what is injected leaves out the notes recall shows again and again and nobody opens (kbuse.duds); the ranking itself is untouched
+        try: bad = kbuse.duds()
+        except Exception: bad = set()
+        hits = ([h for h in hits if fmt_path(h["path"]) not in bad] or hits)[:a.n]
     if a.who: seen = recall_shown(a.who); hits = [h for h in hits if h["path"] not in seen]
     if hits:
         print("Notes that may bear on this (matched on its words, not checked; `kb open PATH:LINE` reads one):")
