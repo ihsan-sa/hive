@@ -8,6 +8,7 @@ import { uploadFile } from "../core/upload.js";
 import { h } from "../core/dom.js";
 import { S, can, jget, post, poll, loadApp } from "../core/store.js";
 import { simpleOn, hiveName } from "../core/simple.js";
+import { foci } from "../core/foci.js";
 import { go } from "../core/router.js";
 import { isAgent, isRunning, agentCard, agentStatus, threadPeople, partner, displayText, typedText } from "../core/model.js";
 import { short, mdPlain, now } from "../core/format.js";
@@ -32,7 +33,7 @@ export function draft(th) {
   const k = dkey(th); let d = D.get(k);
   if (!d) {
     let v = {}; try { v = JSON.parse(localStorage.getItem(k) || "{}"); } catch (e) {}
-    d = { th: th || null, text: v.text || "", replyId: v.reply || null, reply: null, to: v.to || null, name: v.name || "", naming: !!v.name, model: v.model || "", files: [], err: "" };
+    d = { th: th || null, text: v.text || "", replyId: v.reply || null, reply: null, to: v.to || null, name: v.name || "", naming: !!v.name, model: v.model || "", focus: v.focus || "", files: [], err: "" };
     D.set(k, d);
   }
   if (!d.reply && d.replyId && S.byId[d.replyId]) d.reply = S.byId[d.replyId];
@@ -45,7 +46,7 @@ export function hasDraft(th) {
 }
 function keep(d) {
   const k = dkey(d.th), rid = d.reply ? d.reply.id : d.replyId;
-  try { if (d.text || rid || d.to || d.name || d.model) localStorage.setItem(k, JSON.stringify({ text: d.text, reply: rid, to: d.to, name: d.name, model: d.model })); else localStorage.removeItem(k); } catch (e) {}
+  try { if (d.text || rid || d.to || d.name || d.model || d.focus) localStorage.setItem(k, JSON.stringify({ text: d.text, reply: rid, to: d.to, name: d.name, model: d.model, focus: d.focus })); else localStorage.removeItem(k); } catch (e) {}
 }
 const field = th => document.querySelector(`.cp[data-key="${CSS.escape("cp:" + (th || "(new)"))}"] .cp-t`);
 
@@ -127,14 +128,14 @@ async function deliver(it) {
     if (!it.refs) { it.uploading = it.files.length > 0; refresh(); const refs = []; for (const f of it.files) refs.push(await uploadFile(f.file)); it.refs = refs; it.uploading = false; }
     const res = await post("/api/post", { text: it.wire, thread: it.th || it.name || null, reply_to: it.reply ? it.reply.id : null, files: it.refs, simple: simpleOn(), model: it.model || null });
     it.id = res.id; it.state = "sent"; const thr = it.th;
-    if (!it.th && res.thread) { it.th = res.thread; go("comms", res.thread); loadApp(); }
+    if (!it.th && res.thread) { it.th = res.thread; if (it.focus) post("/api/focus", { thread: res.thread, focus: it.focus }).catch(() => {}); go("comms", res.thread); loadApp(); }   // filed under the focus picked in the box; a failure leaves it in Misc, where the title menu can file it
     else if (res.thread && res.thread !== it.th) { it.th = res.thread; it.aside = true; openAside(thr, res.thread, it.text.replace(/^\s*\/btw\s*/i, "")); loadApp(); }   // /btw: it lives in the side thread; stay here
     poll();
   } catch (e) { it.state = "failed"; it.err = simpleOn() && !/sign in/.test(e.message) ? "Check your connection, then try again." : e.message; it.uploading = false; }
   refresh();
 }
 function queue(th, d, r) {
-  const it = { lid: ++lid, th: th || null, text: d.text, files: d.files, reply: d.reply, to: th ? r.who : null, name: th ? null : d.name.trim() || null, wire: wire(th, d, r), model: d.model || null, state: "sending", err: "", t: now() };
+  const it = { lid: ++lid, th: th || null, text: d.text, files: d.files, reply: d.reply, to: th ? r.who : null, name: th ? null : d.name.trim() || null, wire: wire(th, d, r), model: d.model || null, focus: th ? null : d.focus || null, state: "sending", err: "", t: now() };
   OUT.push(it); deliver(it);
   return it;
 }
@@ -144,7 +145,7 @@ function send(th) {
   if (d.text.trim() === "/67" && !d.files.length) { d.text = ""; keep(d); const el = field(th); if (el) el.value = ""; refresh(); sixSeven(); return; }
   if (!d.files.length && /^\/(party|bees|matrix|rave)$/.test(d.text.trim())) { const t = d.text.trim(); d.text = ""; keep(d); const el = field(th); if (el) el.value = ""; refresh(); eggRun(t); return; }   // easter egg, not sent
   queue(th, d, recipient(th));
-  Object.assign(d, { text: "", files: [], reply: null, replyId: null, to: null, name: "", naming: false, err: "", model: "" }); keep(d);
+  Object.assign(d, { text: "", files: [], reply: null, replyId: null, to: null, name: "", naming: false, err: "", model: "" }); keep(d);   // the focus stays: the next one most likely goes to the same place
   CP.ac = null; CP.menu = false; CP.hist = null; if (!SB.open) SB.say = "";
   const el = field(th); if (el) { el.value = ""; el.focus(); }   // morph leaves a focused field alone, so clear it here
   refresh(); window.dispatchEvent(new CustomEvent("cp:sent", { detail: { th } }));
@@ -375,6 +376,15 @@ export function dropZone(th) {
 // ---- model picker: shows what the message will start on (default, the picked one, or an @model typed in the text) ----
 const MODEL_LABELS = { opus: "Opus", sonnet: "Sonnet", haiku: "Haiku", fable: "Fable", astra: "Astra" };
 function typedModel(text) { const w = named(text); return MODEL_WORDS.includes(w) ? w : null; }
+/** A new conversation's focus (the person, 110715182bab): the home card it is filed under, Misc when none. Prefilled when it starts from a focus. */
+function focusPick(d) {
+  const fs = foci(); if (!fs.length && !d.focus) return null;
+  return h("select", { class: "cp-focus", "aria-label": "Focus", title: "Which focus this conversation is filed under on the home; Misc is none",
+    onchange: e => { d.focus = e.target.value; keep(d); refresh(); } },
+    h("option", { value: "", selected: !d.focus ? "" : null }, "Misc"),
+    fs.map(f => h("option", { value: f.id, selected: f.id === d.focus ? "" : null }, f.name || f.id)),
+    d.focus && !fs.some(f => f.id === d.focus) ? h("option", { value: d.focus, selected: "" }, d.focus) : null);
+}
 function modelPick(d, r) {
   // An agent already running stays on its model for this run; a pick here is kept by the starter and holds from its next run.
   const who = r && r.who, live = who && who !== "new" && isRunning(who);
@@ -625,6 +635,7 @@ export function composer({ thread, update, place = "thread", autofocus, top }) {
           if (SB.open) dropSecrets(); else openSecrets(th); }, { kind: "icon", size: "s", icon: "lock", cls: "cp-lock", title: "Send a secret" }) : null,
         h("span", { class: "cp-sp" }),
         simpleOn() ? null : th ? toChip(th, r) : d.naming ? h("span", { class: "meta cp-new" }, "A new agent starts on this") : button("Name it", () => { d.naming = true; refresh(); queueMicrotask(() => document.querySelector(".cp-name")?.focus()); }, { kind: "quiet", size: "s", title: "Give this job a short name (optional). Without one it's called by its first words." }),
+        !th && S.app && !simpleOn() ? focusPick(d) : null,
         simpleOn() ? null : modelPick(d, r),
         button(place === "thread" ? "Send" : "Start", () => send(th), { kind: "primary", icon: "arrow-up", disabled: empty, cls: "cp-send", title: (place === "thread" ? "Send" : "Start") + " (Enter) · Shift+Enter for a new line · ↑ past messages · Tab completes" }))),
     CP.menu && th ? toMenu(th, r) : null);

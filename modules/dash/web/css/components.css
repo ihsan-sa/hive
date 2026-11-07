@@ -1194,24 +1194,68 @@ a.ref[data-kind=file][data-pv-on]{background:color-mix(in oklch,var(--accent) 16
 .cm-convo[data-drag] .cm-drop{position:absolute;inset:8px;z-index:30;display:flex;align-items:center;justify-content:center;border:2px dashed var(--focus);border-radius:var(--r-l);background:color-mix(in oklch,var(--surface) 86%,transparent);font-weight:var(--w-med);color:var(--ink);pointer-events:none}
 /* home: start something, and what needs you */
 .cm-home{flex:1;min-height:0;overflow:auto;padding:var(--s6) var(--gutter) var(--s7)}
-.cm-new,.cm-needs{max-width:720px;margin:0 auto}
+.cm-new{max-width:720px;margin:0 auto}
 .cm-home-t{font-size:var(--fs-head);font-weight:var(--w-bold);letter-spacing:-.012em}
 .cm-home-l{margin:4px 0 var(--s3);color:var(--ink-2);font-size:var(--fs-body);max-width:60ch;text-wrap:pretty}
 .cm-home-warn{display:flex;align-items:center;gap:8px;margin-bottom:var(--s3);font-size:var(--fs-small);color:var(--ci)}
 .cm-home .cp{padding:0;background:none}
 .cm-home .cp-t{min-height:88px;font-size:var(--fs-body)}
 .cm-home .cm-out{margin-top:var(--s3)}
-.cm-needs{display:grid;gap:var(--s5);margin-top:var(--s7)}
-.cm-needs-t{font-size:var(--fs-title);font-weight:var(--w-bold)}
-.cm-needs .lr-x{-webkit-line-clamp:2}
-.cm-stand{display:grid;gap:var(--s4)}.cm-stand-hd{display:flex;align-items:baseline;justify-content:space-between;gap:var(--s3);flex-wrap:wrap}.cm-stand-hd>.cm-needs-t{font-size:var(--fs-title);font-weight:var(--w-bold);color:var(--ink)}
-.cm-stand-by{font-size:var(--fs-meta);margin-right:auto}.cm-stand-brief{margin:0;color:var(--ink)}.cm-stand-at{font-size:var(--fs-meta);color:var(--ink-3);white-space:nowrap}
+/* Home, level 1 (design v2 §home): the box, one line about you, then one card per focus. No thread rows, no ids. */
+.cm-hline{max-width:720px;margin:var(--s6) auto 0;text-align:center;font-size:var(--fs-body);color:var(--ink-3)}
+.cm-hline[data-needs]{color:var(--ink)}
+.cm-hline a{color:var(--accent-ink);font-weight:var(--w-med)}
+.cm-foci-msg{max-width:720px;margin:var(--s6) auto 0;text-align:center}
+.cm-foci{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:var(--s4);max-width:1100px;margin:var(--s6) auto 0}
+.fc{display:flex;flex-direction:column;gap:var(--s3);min-width:0;padding:var(--s4) var(--s4) var(--s3);border:1px solid var(--line);border-radius:var(--r-l);background:var(--surface)}
+.fc-hd{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;min-width:0}
+.fc-name{font-size:var(--fs-title);font-weight:var(--w-bold);color:var(--ink);text-decoration:none;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fc-name:hover{text-decoration:underline}
+.fc-state{display:inline-flex;align-items:center;gap:6px;font-size:var(--fs-meta);color:var(--ci,var(--ink-3));white-space:nowrap}
+.fc-state::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--c,var(--ended))}
+.fc-ag{display:inline-flex;gap:6px;flex-wrap:wrap;margin-left:auto;font-size:var(--fs-meta)}
+.fc-ag .ref{color:var(--ink-3)}
+.fc-aim{margin:-6px 0 0;font-size:var(--fs-small);color:var(--ink-3);text-wrap:pretty}
+.fc-sec{display:grid;gap:4px;min-width:0}
+.fc-sec>h3{margin:0;font-size:var(--fs-micro);font-weight:var(--w-med);letter-spacing:.04em;text-transform:uppercase;color:var(--ink-3)}
+.fc-sec>p{margin:0;font-size:var(--fs-small)}
+.fc-ul,.fc-th{margin:0;padding:0;list-style:none;display:grid;gap:3px;font-size:var(--fs-small);color:var(--ink-2)}
+.fc-ul li{position:relative;padding-left:14px;text-wrap:pretty}
+.fc-ul li::before{content:"";position:absolute;left:2px;top:.62em;width:5px;height:5px;border-radius:50%;background:var(--line-2)}
+.fc-needs li::before{background:var(--accent)}
+.fc-needs a{color:var(--ink)}
+.fc-needs a:hover{text-decoration:underline}
+.fc-th li{min-width:0}
+.fc-th a{display:block;color:var(--ink);text-decoration:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.fc-th a:hover{text-decoration:underline}
+.fc-th a .muted{color:var(--ink-3)}
+.fc-th a .muted::before{content:" · "}
+.fc-ft{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:auto;padding-top:var(--s2);border-top:1px solid var(--line)}
+.fc-all{font-size:var(--fs-meta);color:var(--ink-3);text-decoration:none}
+.fc-all:hover{color:var(--ink);text-decoration:underline}
+.fc-misc{background:none;border-style:dashed}
+.fc-misc .fc-name{font-weight:var(--w-med);color:var(--ink-2)}
+/* a focus's status bar in its thread: the second sentence folds under More */
+.cm-status-more{display:inline}
+.cm-status-more>summary{display:inline;list-style:none;cursor:pointer;color:var(--ink-3);font-size:var(--fs-meta)}
+.cm-status-more>summary::-webkit-details-marker{display:none}
+.cm-status-more[open]>summary{display:none}
+.cm-status-more>p{margin:2px 0 0}
+/* the thread menu's Focus row and the composer's focus picker */
+.cm-focus-row{display:flex;align-items:center;gap:8px;padding:6px 10px;font-size:var(--fs-small);color:var(--ink-2)}
+.cm-focus-sel,.cp-focus{height:var(--ctl-s);max-width:200px;padding:0 6px;border:1px solid var(--line);border-radius:var(--r-s);background:var(--surface);color:var(--ink);font:inherit;font-size:var(--fs-meta)}
+.cp-focus{margin:0 4px;border-radius:var(--r-pill);color:var(--ink-3)}
+.cp-focus:hover{color:var(--ink)}
+/* rail, By focus: a focus's head has a + for a new conversation under it */
+.tm-sec-hw{display:flex;align-items:center;min-width:0}
+.tm-sec-hw>.tm-sec-h{flex:1;min-width:0}
+.tm-sec-add{display:inline-flex;flex:none;width:24px;height:24px;margin:4px 6px 0 0;padding:0;align-items:center;justify-content:center;border:0;border-radius:var(--r-s);background:none;color:var(--ink-3);cursor:pointer;opacity:0}
+.tm-sec-add .ic{width:14px;height:14px}
+.tm-sec-hw:hover .tm-sec-add,.tm-sec-add:focus-visible{opacity:1}
+.tm-sec-add:hover{background:var(--hover);color:var(--ink)}
+@media (hover:none){.tm-sec-add{opacity:1}}
+.tm-sec-none{margin:0;padding:2px 10px 8px}
 .cm-stand-ch{display:inline-flex;flex:none;color:var(--ink-3)}.cm-stand-ch:not([data-open]) svg{transform:rotate(-90deg)}
-.cm-stand .lr-in[style]{padding-left:calc(8px + var(--s5))}   /* a thread under its top-level thing */
-.cm-stand .lr-acts{display:flex;top:auto;bottom:4px}.cm-stand .lr-x{padding-right:var(--s6)}   /* its reply button is always there, clear of the words */
-.cm-tick{width:22px;height:22px;margin:0 4px;cursor:pointer;accent-color:var(--accent,currentColor)}
-@media (hover:none){.cm-tick{width:26px;height:26px}}
-.cm-home-all{display:flex;gap:var(--s2);margin-left:-8px}
 @container (max-width:640px){
   .cm{grid-template-columns:minmax(0,1fr)}
   .cm[data-in] .cm-side{display:none}
@@ -1241,7 +1285,8 @@ a.ref[data-kind=file][data-pv-on]{background:color-mix(in oklch,var(--accent) 16
   .cm-line>.sd{margin-top:5px}
   .cp{padding:6px 8px 8px}
   .cm-home{padding:var(--s4) 14px var(--s6)}
-  .cm-needs{margin-top:var(--s6)}
+  .cm-hline,.cm-foci,.cm-foci-msg{margin-top:var(--s5)}
+  .cm-foci{grid-template-columns:1fr;gap:var(--s3)}
 }
 
 /* ---- not built yet: a mark on designed features the server can't do yet ---- */
@@ -1491,7 +1536,6 @@ details.blk>summary .blk-t::after{border-color:var(--ink-3)}
 .cm-hint{display:none}
 .cm-home-t{font-size:30px;line-height:1.2;letter-spacing:-.025em;text-align:center;margin:0 0 var(--s4)}   /* the subtitle is hidden, so the heading carries the gap to the composer */
 .cm-home-l{display:none}
-.cm-needs-t{font-size:var(--fs-meta);font-weight:var(--w-med);color:var(--ink-3)}
 @container (max-width:640px){
   .cm-tools .avs{display:none}
   .cm{grid-template-columns:minmax(0,1fr)}                 /* one pane: the list, or the open conversation */
@@ -1973,7 +2017,6 @@ dialog.rc-rail[open]{display:flex;flex-direction:column;gap:var(--s2)}
 .ph-state{margin-bottom:6px}
 .ph-state .sd{width:7px;height:7px;border-radius:50%;background:var(--c,var(--ink-3))}
 .card.away{padding:14px 20px;display:grid;gap:12px;justify-items:start}
-.cm-home .card.away{margin-bottom:var(--s6)}
 .away-h{font-size:var(--fs-title);margin:0 0 4px}
 .away-l{margin:0;padding:0;list-style:none;display:grid;gap:4px}
 .card.now-today{padding:14px 20px}
@@ -2576,3 +2619,17 @@ button.fl-rn:hover{text-decoration:underline}
 .nd-queue-key i[data-band=mid]{background:var(--data)}
 .nd-queue-key i[data-band=long]{background:var(--accent)}
 .nd-head{display:flex;justify-content:space-between;gap:var(--s4);flex-wrap:wrap;width:100%}
+
+/* Focus page, level 2 (design v2): what is moving, what waits on you, to do, agents, conversations, files */
+.fp .fp-ul{margin:0;padding:0 0 0 18px;display:grid;gap:4px;font-size:var(--fs-body);color:var(--ink-2)}
+.fp .fp-ul li{text-wrap:pretty}
+.fp-todo{margin:0;padding:0;list-style:none;display:grid;gap:4px}
+.fp-todo li{display:flex;align-items:flex-start;gap:10px;font-size:var(--fs-body)}
+.fp-todo li[data-done]{color:var(--ink-3);text-decoration:line-through}
+.fp-box{flex:none;width:16px;height:16px;margin-top:2px;border:1.5px solid var(--line-2);border-radius:4px}
+.fp-todo li[data-done] .fp-box{background:var(--line-2)}
+.fp>.sec{margin-top:var(--s5)}   /* Now, Lately, Needs you, To do, Agents, Conversations, Files: air above each, the first one off the header too */
+.fp-ag{display:flex;flex-wrap:wrap;gap:8px 14px;font-size:var(--fs-small)}
+.fp-also{margin:var(--s3) 0 var(--s2)}
+.fp-ag p{display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px;margin:0}   /* each agent name its own pill, with air between (they ran together) */
+.fp-links{margin:0;padding:0;list-style:none;display:grid;gap:4px;font-size:var(--fs-small)}

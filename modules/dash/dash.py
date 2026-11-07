@@ -431,6 +431,18 @@ def dismiss_shown(d):
 # ---------- the checklist: threads the person ticked off on the Where things stand list (POST /api/checklist) ----------
 CHECKLIST = STATE / "checklist.json"   # needs_you.CHECKS: {"items": [...]}; agents write it with `hive summary check`
 
+FOCUS_ID = re.compile(r"[a-z0-9][a-z0-9_-]{0,60}")
+def focus_do(d):
+    """POST /api/focus: put a thread in a focus ({thread, focus}) or take it out ({thread, off: true}); focus.py keeps the record (hive focus tag)."""
+    th = str(d.get("thread") or "").strip(); f = str(d.get("focus") or "").strip().lower(); off = bool(d.get("off"))
+    if not THREAD_NAME.fullmatch(th): raise ValueError("bad thread")
+    if not off and not FOCUS_ID.fullmatch(f): raise ValueError("bad focus")
+    args = ["nice", "-n", "15", sys.executable, "-I", str(HOME / "core" / "focus.py"), "tag", th] + (["--off"] if off else [f])
+    r = subprocess.run(args, capture_output=True, text=True, timeout=30)
+    if r.returncode: raise ValueError((r.stderr or r.stdout or "focus.py failed").strip()[:200])
+    foci_c.t = 0
+    return {"ok": True, "thread": th, "focus": None if off else f, "said": r.stdout.strip()}
+
 def checklist_do(d):
     """The person ticks (or unticks) one checklist item. Only the tick is theirs to change: agents add and remove items (hive summary check)."""
     iid = str(d.get("id") or "")
@@ -1742,7 +1754,7 @@ GET_CAP = {"/api/call-chat": "post", "/api/live": "read", "/api/away": "read", "
            "/api/settings": "config", "/api/ntfy": "config", "/api/webpush": "config", "/api/update": "config", "/api/signin-codex": "logins", "/api/accounts": "logins", "/api/design": "logins", "/api/brand/logo": "read",
            "/api/kb/home": "files", "/api/kb/open": "files", "/api/kb/search": "files", "/api/kb/raw": "files", "/api/kb/map": "files", "/api/kb/history": "files", "/api/progress": "read", "/api/checklist": "read", "/api/share-preview": "read", "/api/approvals": "read", "/api/feedback-drafts": "read", "/api/mail": "files"}
 POST_CAP = {"/api/webpush": "config", "/api/share-build": "read", "/api/kill": "stop", "/api/approval": "stop", "/api/tier": "tier", "/api/agent-model": "post", "/api/login-pause": "limits", "/api/login-limit": "limits", "/api/provider-limit": "limits",
-            "/api/post": "post", "/api/side-ask": "post", "/api/thread-meta": "post", "/api/shown": "post", "/api/checklist": "post", "/api/feedback": "post", "/api/feedback-draft-done": "post", "/api/issue-link": "post", "/api/update": "config", "/api/share-copy": "config", "/api/share-pack": "config", "/api/draft": "config", "/api/import": "config", "/api/upload": "post", "/api/inbox-read": "post", "/api/ntfy": "config", "/api/config": "config", "/api/starter": "config",
+            "/api/post": "post", "/api/side-ask": "post", "/api/thread-meta": "post", "/api/shown": "post", "/api/checklist": "post", "/api/focus": "post", "/api/feedback": "post", "/api/feedback-draft-done": "post", "/api/issue-link": "post", "/api/update": "config", "/api/share-copy": "config", "/api/share-pack": "config", "/api/draft": "config", "/api/import": "config", "/api/upload": "post", "/api/inbox-read": "post", "/api/ntfy": "config", "/api/config": "config", "/api/starter": "config",
             "/api/module": "modules", "/api/signin": "logins", "/api/signin/code": "logins", "/api/signin/cancel": "logins", "/api/plan": "plans", "/api/secret": "secrets", "/api/slack-door": "modules",
             "/api/signin-codex": "logins", "/api/account-key": "logins", "/api/design": "logins", "/api/brand": "config", "/api/brand/logo": "config"}
 LOCAL_ONLY = {"/api/access", "/api/settings", "/api/import", "/api/share-copy", "/api/share-pack", "/api/draft"}  # who may do what is never changed from outside, whatever outside.can says
@@ -3353,11 +3365,21 @@ def slack_token_problem():
     return seen[1] if seen else ""
 
 
+def door_refusal_file(): return Path(os.environ.get("HIVE_DOOR_STATE") or HOME / ".local/state/slack-door") / "connect-refused.json"
+
+
+def door_refusal():
+    """What Slack said when the door last failed to connect (door.py note_connect), or None. Covers the app token, which the view's own check can't."""
+    r = jload(door_refusal_file(), {}) or {}
+    said = r.get("said") if isinstance(r, dict) else None
+    return said if isinstance(said, str) and said.startswith("Slack refused") else None
+
+
 def slack_door_view():
     c = jload(slack_dir() / "slack-door.json", {}) or {}
     toks = all((slack_dir() / f"slack-door-{k}-token").is_file() for k in ("bot", "app"))
     v = {"connected": bool(toks and isinstance(c, dict) and c.get("owners")), "channel": str(c.get("channel_name") or "") if isinstance(c, dict) else ""}
-    if v["connected"] and (p := slack_token_problem()): v["problem"] = p
+    if v["connected"] and (p := slack_token_problem() or door_refusal()): v["problem"] = p
     return v
 
 
@@ -3387,6 +3409,7 @@ def slack_door_connect(d, signer=None):
     sd = slack_dir(); sd.mkdir(parents=True, exist_ok=True)
     write_text_private(sd / "slack-door-bot-token", bot + "\n")
     write_text_private(sd / "slack-door-app-token", app + "\n")
+    door_refusal_file().unlink(missing_ok=True)   # Slack just took both tokens: an old refusal no longer holds
     c = jload(sd / "slack-door.json", {}) or {}
     c = c if isinstance(c, dict) else {}
     c.update(owners=people, members=[u for u in c.get("members") or [] if u not in people], channels=[found["id"]], channel_name="#" + name)
@@ -4718,13 +4741,14 @@ def serve(port):
                 try: return self.send(json.dumps(share_build(d)).encode(), J)
                 except KeyError: return self.send_error(404)
                 except ValueError as e: return self.deny(400, str(e))
-            if u.path in ("/api/post", "/api/side-ask", "/api/thread-meta", "/api/shown", "/api/checklist", "/api/feedback", "/api/feedback-draft-done", "/api/issue-link", "/api/update", "/api/inbox-read", "/api/ntfy", "/api/webpush", "/api/agent-model", "/api/config", "/api/starter", "/api/module", "/api/signin", "/api/signin/code", "/api/signin/cancel", "/api/access", "/api/plan", "/api/secret", "/api/settings", "/api/share-copy", "/api/share-pack", "/api/draft", "/api/import", "/api/signin-codex", "/api/account-key", "/api/design", "/api/brand", "/api/slack-door"):
+            if u.path in ("/api/post", "/api/side-ask", "/api/thread-meta", "/api/shown", "/api/checklist", "/api/focus", "/api/feedback", "/api/feedback-draft-done", "/api/issue-link", "/api/update", "/api/inbox-read", "/api/ntfy", "/api/webpush", "/api/agent-model", "/api/config", "/api/starter", "/api/module", "/api/signin", "/api/signin/code", "/api/signin/cancel", "/api/access", "/api/plan", "/api/secret", "/api/settings", "/api/share-copy", "/api/share-pack", "/api/draft", "/api/import", "/api/signin-codex", "/api/account-key", "/api/design", "/api/brand", "/api/slack-door"):
                 try:
                     if u.path == "/api/post": res = person_post(d.get("text"), d.get("thread"), d.get("reply_to"), d.get("files"), signer=self.signer, limited="config" not in self.can, simple=d.get("simple") is True, model=d.get("model"), sig=d.get("sig"))
                     elif u.path == "/api/side-ask": res = side_ask(d.get("q"), signer=self.signer, limited="config" not in self.can)
                     elif u.path == "/api/thread-meta": res = set_thread_meta(d)
                     elif u.path == "/api/shown": res = dismiss_shown(d)
                     elif u.path == "/api/checklist": res = checklist_do(d)
+                    elif u.path == "/api/focus": res = focus_do(d)
                     elif u.path == "/api/feedback": res = send_feedback(d)
                     elif u.path == "/api/feedback-draft-done": res = feedback_draft_done(d)
                     elif u.path == "/api/issue-link": res = issue_link(d)

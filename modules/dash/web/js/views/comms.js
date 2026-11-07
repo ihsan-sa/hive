@@ -9,9 +9,11 @@
 import { h, morph } from "../core/dom.js";
 import { S, SYS, can, OUTSIDE, built, post as apiPost, poll, jget } from "../core/store.js";
 import { simpleOn, plainName, hiveName } from "../core/simple.js";
-import { loadNeedsYou, waitingOn, needsN, needsHref, standLine, shownHere } from "../core/needs.js";
+import { loadNeedsYou, needsN, needsHref } from "../core/needs.js";
+import { loadFoci, fociFailed, fociOrder, focusOf, focusById, activeThreads, askedOf, agentsOf, stateOf, pills, threadLine, focusName, MISC } from "../core/foci.js";
+import { newIn } from "./focus.js";
 import { SIDE_THREAD, agentState, agentStatus, btwParent, threadParent, threadChildren, isAgent, isRunning, tierOf, threadTitle, threadState, threadPeople, isSystemThread, SHOW, postKind, threadKinds, closingPosts, displayText, postSource, inUse, fresh7, asksQuestion, fileInfo } from "../core/model.js";
-import { ago, dayName, stamp, clock, dur, short, mdPlain, now, plural, firstSentence, DAY, MIN, HOUR, money } from "../core/format.js";
+import { ago, dayName, stamp, clock, dur, short, mdPlain, now, plural, DAY, MIN, HOUR, money } from "../core/format.js";
 import { href, threadHref, go } from "../core/router.js";
 import { tier, status } from "../core/status.js";
 import { askTier, askStop, stopButton } from "../actions.js";
@@ -29,7 +31,7 @@ import { brought } from "../ui/brought.js";
 import { firstJobs, closeLine } from "../ui/firstjobs.js";
 import { awayCard } from "../ui/away.js";
 import { hiveStopped } from "../ui/shell.js";
-import { composer, cancelReply, replyTo, say, outFor, outSig, actions as outActions, dropZone, recipient, draft, hasDraft, focusComposer, quoteInto } from "../ui/composer.js";
+import { composer, cancelReply, replyTo, say, outFor, outSig, actions as outActions, dropZone, recipient, draft, hasDraft, focusComposer } from "../ui/composer.js";
 
 const STEP = 500, FIRST = 250, NEAR = 60, GROUP = 10 * MIN, HELPER_AFTER = 3 * MIN;
 const NONE = [];
@@ -46,12 +48,12 @@ const grip = () => h("div", { class: "cm-grip", role: "separator", "aria-orienta
     e.target.onpointerup = e.target.onpointercancel = () => { delete e.target.dataset.on; e.target.onpointermove = e.target.onpointerup = e.target.onpointercancel = null; }; },
   ondblclick: e => setSide(e.target.closest(".cm"), 272),
   onkeydown: e => { const d = e.key === "ArrowLeft" ? -24 : e.key === "ArrowRight" ? 24 : 0; if (d) { e.preventDefault(); setSide(e.target.closest(".cm"), sideW + d); } } });
-// The side list's three views (ideas is the default) (the person, 11061410615e and 11061116958d): "topics" puts conversations under the topics of the
-// Where things stand summary with helpers folded under the one they came from; "recent" is every conversation in one flat list,
+// The side list's two views (the person, 11071518 2bab): "focus" (the default) puts each conversation under its focus, in the order of the
+// home cards, Misc last, helpers folded under the one they came from; "recent" is every conversation in one flat list,
 // newest activity first, helpers included. hideFaded leaves out the ones marked Likely not needed. Both kept in this browser.
 const VIEW_KEY = "hive.comms.view", HIDE_KEY = "hive.comms.hidefaded";
 const store = (k, v) => { try { localStorage.setItem(k, v); } catch (e) { /* this page only */ } };
-const C = { view: (() => { try { const v = localStorage.getItem(VIEW_KEY); return v === "recent" || v === "topics" ? v : "ideas"; } catch (e) { return "ideas"; } })(),
+const C = { view: (() => { try { const v = localStorage.getItem(VIEW_KEY); return v === "recent" ? v : "focus"; } catch (e) { return "focus"; } })(),
   hideFaded: (() => { try { return localStorage.getItem(HIDE_KEY) === "1"; } catch (e) { return false; } })(),
   err: "", imp: false, arch: false, conv: undefined, q: "", show: null, limit: FIRST, tq: "", scope: "recent", next: null, menu: null, find: false, strip: false };
 let errTimer = 0;
@@ -360,23 +362,9 @@ function aiRows(c) {
   const also = (S.shown || []).filter(r => r.from === a.from && r.at * 1000 >= AI.at - 5000 && S.threads.has(r.thread));   // the app's box above the list holds these; the developer look has no box
   return [...note(q, a.text, { whole: true }), ...(app() ? [] : also.map(r => ({ key: r.thread, href: threadHref(r.thread), current: c.thread === r.thread, title: threadTitle(r.thread), text: r.why || "" })))];
 }
-// The topics come from the Where things stand summary (needs_you.py, every 30 min): each of its top-level entries lists its
-// threads, and a focus or project names its own thread. A conversation not in either takes its parent's topic, else Other.
-const TOPICS = { at: null, map: new Map() };
-function briefTopics() {
-  const n = needsFile(), b = n && n.brief, at = (b && b.at) + "|" + ((n && n.states) || []).length;
-  if (TOPICS.at === at) return TOPICS.map;
-  const map = new Map();
-  if (b) for (const g of ["needs", "going", "done"]) for (const top of b[g] || []) for (const it of top.items || []) if (it.thread && !map.has(it.thread)) map.set(it.thread, top.title);
-  for (const st of (n && n.states) || []) if (st.thread && st.name && !map.has(st.thread)) map.set(st.thread, st.name);
-  TOPICS.at = at; TOPICS.map = map; return map;
-}
-const topicsOn = () => app() && !simpleOn() && !C.imp && C.view === "topics" && briefTopics().size > 0;
-const OTHER = "Other";
-function topicOf(listed) {
-  const map = briefTopics();
-  return th => { let x = th; for (let i = 0; i < 8 && x; i++) { if (map.has(x)) return map.get(x); x = threadParent(x); } return OTHER; };
-}
+// By focus: a conversation sits under its focus (core/foci.js: the tag, the focus's own thread, else its parent's), the rest under Misc.
+const byFocusOn = () => app() && !simpleOn() && !C.imp && C.view === "focus";
+const focusSec = th => { let x = th; for (let i = 0; i < 8 && x; i++) { const f = focusOf(x); if (f) return "f:" + f; x = threadParent(x); } return "f:"; };
 function threadRows(c, ctx) {
   if (C.tq.trim().startsWith("@")) return aiRows(c);
   const ws = words(C.tq);
@@ -433,9 +421,9 @@ function threadRows(c, ctx) {
       onClick: e => holdScroll(e.currentTarget, () => { KIDS.has(d.name) ? KIDS.delete(d.name) : KIDS.add(d.name); ctx.update(); }) },
       ...(open ? kids.sort((a, b) => b.last - a.last).map(k => dress({ ...mk(k), key: d.name + "/" + k.name, sec, depth: 2 }, k.name)) : [])];
   };
-  const topic = topicsOn() ? topicOf(listed) : null;
+  const topic = byFocusOn() ? focusSec : null;
   const rowsOut = !app() ? ds.map(mk) : roots.flatMap(d => {
-    const r = dress(mk(d)), kids = kidsOf.get(d.name) || [], rest = topic ? "t:" + topic(d.name) : "rest";   // in the topics view, "the rest" is the conversation's topic
+    const r = dress(mk(d)), kids = kidsOf.get(d.name) || [], rest = topic ? topic(d.name) : "rest";   // by focus, "the rest" is the conversation's focus
     if (r.sec === "rest") r.sec = rest;
     const own = kids.filter(k => !["rest", "arch"].includes(secOf(k.name, threadState(k.name, seen)))).map(k => dress(mk(k)));   // a helper's own row where it needs the person
     if (C.imp || r.sec === rest || r.sec === "arch") return [r, ...kidRows(d, r.sec), ...own];
@@ -461,23 +449,28 @@ function foldAll(ctx) {
   saveFold(); ctx.update();
 }
 // The list in parts: Pinned, Needs you, the rest, and Archived folded at the end. A search is one list.
-// In the topics view the rest is one section per topic ("t:<title>"), in order of their latest activity, with Other last.
+// By focus the rest is one section per focus ("f:<id>") in the home cards' order, every focus listed (its "+" starts a conversation in it), Misc ("f:") last and only with rows.
 const SECS = [["pin", "Pinned"], ["imp", "Important"], ["need", "Needs you"], ["rest", null]];
 function sections(rs, ctx, opts) {
   if (words(C.tq).length) return list(rs, opts);
   const by = { pin: [], imp: [], need: [], rest: [], arch: [] }, tops = [];
-  for (const r of rs) { const k = r.sec || "rest"; if (k.startsWith("t:") && !by[k]) { by[k] = []; tops.push(k); } (by[k] || by.rest).push(r); }
-  tops.sort((a, b) => (a === "t:" + OTHER) - (b === "t:" + OTHER));
-  const parts = [...SECS.slice(0, 3), ...tops.map(k => [k, k.slice(2)]), SECS[3]].filter(([k]) => by[k].length), heads = parts.length > 1 || by.pin.length;
+  const byFocus = byFocusOn();
+  if (byFocus) for (const f of fociOrder()) { const k = "f:" + (f.id || ""); if (!by[k]) { by[k] = []; tops.push(k); } }
+  for (const r of rs) { const k = r.sec || "rest"; if (k.startsWith("f:") && !by[k]) { by[k] = []; tops.push(k); } (by[k] || by.rest).push(r); }
+  const order = new Map(tops.map((k, i) => [k, k === "f:" ? 1e9 : i])); tops.sort((a, b) => order.get(a) - order.get(b));
+  const label = k => k === "f:" ? "Misc" : focusName(focusById(k.slice(2)) || { name: k.slice(2) });
+  const parts = [...SECS.slice(0, 3), ...tops.map(k => [k, label(k)]), SECS[3]].filter(([k]) => by[k].length || (byFocus && k.startsWith("f:") && k !== "f:")), heads = parts.length > 1 || by.pin.length;
   L.foldSecs = heads ? parts.map(([k]) => k) : [];
   const sec = (k, label, rows) => {
     if (!heads) return h("div", { class: "tm-sec", "data-key": "sec:" + k, "data-sec": k }, list(rows, { ...opts, empty: "" }));
-    const shut = FOLD.has(k);
+    const shut = FOLD.has(k), fid = k.startsWith("f:") ? k.slice(2) : null;
     return h("div", { class: "tm-sec", "data-key": "sec:" + k, "data-sec": k, "data-folded": shut ? "" : null },
-      h("button", { type: "button", class: "tm-sec-h tm-fold", "aria-expanded": String(!shut), title: shut ? "Show this section" : "Fold this section",
-        onclick: () => { FOLD.has(k) ? FOLD.delete(k) : FOLD.add(k); saveFold(); ctx.update(); } },
-        icon(shut ? "chevron-right" : "chevron-down"), shut ? `${label} (${rows.length})` : label),
-      shut ? null : list(rows, { ...opts, empty: "" }));
+      h("div", { class: "tm-sec-hw" },
+        h("button", { type: "button", class: "tm-sec-h tm-fold", "aria-expanded": String(!shut), title: shut ? "Show this section" : "Fold this section",
+          onclick: () => { FOLD.has(k) ? FOLD.delete(k) : FOLD.add(k); saveFold(); ctx.update(); } },
+          icon(shut ? "chevron-right" : "chevron-down"), shut ? `${label} (${rows.length})` : label),
+        fid && can("post") ? h("button", { type: "button", class: "tm-sec-add", title: `New conversation in ${label}`, "aria-label": `New conversation in ${label}`, onclick: () => newIn(fid) }, icon("plus")) : null),
+      shut ? null : rows.length ? list(rows, { ...opts, empty: "" }) : h("p", { class: "meta tm-sec-none" }, "Nothing this week."));
   };
   return h("div", { class: "tm-secs" },
     parts.length ? parts.map(([k, l]) => sec(k, l || (app() ? "Recent" : "Threads"), by[k])) : by.arch.length ? null : list([], opts),
@@ -488,8 +481,8 @@ function sections(rs, ctx, opts) {
 }
 function syncThreads(c, ctx) {
   const tl = document.querySelector("#main .cm-tl"); if (!tl) return;
-  if (app() && !simpleOn() && C.view === "topics") loadStanding(ctx);
-  const sig = [S.ver, C.view, C.hideFaded, C.view === "topics" && needsFile() && needsFile().brief && needsFile().brief.at, C.scope, C.arch, C.imp, tmetaSig(), [...FOLD].join(), [...KIDS].join(), C.tq, AI.st + AI.res.length, AI.tag, S.shown && S.shown.length, showMask(), c.arg, Math.floor(now() / 3e4), S.runSig, marksSig().length].join("|");
+  if (app() && !simpleOn()) loadFoci();   // the foci (core/foci.js); a store emit when they change
+  const sig = [S.ver, C.view, C.hideFaded, S.foci && S.foci.at, C.scope, C.arch, C.imp, tmetaSig(), [...FOLD].join(), [...KIDS].join(), C.tq, AI.st + AI.res.length, AI.tag, S.shown && S.shown.length, showMask(), c.arg, Math.floor(now() / 3e4), S.runSig, marksSig().length].join("|");
   if (tl === L.tl && sig === L.tlSig) return;
   const fresh = tl !== L.tl || c.arg !== L.tlConv;
   L.tl = tl; L.tlSig = sig; L.tlConv = c.arg;
@@ -526,7 +519,8 @@ function statusBar(th) {
   const r = th && S.threadStatus && S.threadStatus[th]; if (!r) return null;
   const [a, ...rest] = r.text.split("\n");
   return h("div", { class: "cm-status", "data-key": "status", role: "note", "aria-label": "Thread status" },
-    h("b", null, a), rest.length ? h("span", null, rest.join(" ")) : null,
+    h("b", null, a), rest.length ? h("span", null, rest[0]) : null,
+    rest.length > 1 ? h("details", { class: "cm-status-more" }, h("summary", null, "More"), h("p", null, rest.slice(1).join(" "))) : null,
     h("span", { class: "meta cm-status-m" }, `${r.from} · updated ${ago(r.at * 1e3)}${lastAt(th) ? " · last post " + ago(lastAt(th)) : ""}`,
       can("post") ? h("button", { type: "button", class: "cm-status-r", title: "Reply about this summary", onclick: () => { const d = draft(th); if (!d.text) d.text = "> " + r.text.split("\n").join("\n> ") + "\n\n"; focusComposer(); } }, "Reply") : null));
 }
@@ -609,7 +603,13 @@ function titleMenu(c, n, d, off, ctx) {
     mine ? act(fd ? "Needed again" : "Not needed", "check", () => tryMeta(th, { faded: !fd }, ctx), fd ? fadeWhy(th) : "Grey it in the list: still there to open and write in, and back by itself when something new is for you") : null) : [];
   const prio = th && simpleOn() ? null : th && can("tier") ? button([h("span", { class: "ref-sw", "data-tone": t.tone }), "Priority", h("small", null, t.label)], () => { C.menu = null; askTier(th); }, { size: "s", kind: "quiet", title: "Where this sits in the hive's priority list" })
     : th ? h("p", { class: "meta cm-tier", title: "This thread's priority" }, h("span", { class: "ref-sw", "data-tone": t.tone }), "Priority: " + t.label) : null;
+  const fs = full && mine && S.foci ? fociOrder().filter(f => !f.misc) : [], cur = full ? focusOf(th) : null;
+  const focusRow = fs.length ? h("label", { class: "cm-focus-row" }, h("span", null, "Focus"),
+    h("select", { class: "cm-focus-sel", "aria-label": "The focus this conversation is filed under", title: "Which focus this conversation belongs to; Misc is none",
+      onchange: e => { const v = e.target.value; C.menu = null; apiPost("/api/focus", v ? { thread: th, focus: v } : { thread: th, off: true }).then(() => loadFoci(true), e2 => { C.err = "Couldn't file it: " + (e2 && e2.message || "the server didn't answer") + "."; }).then(() => ctx.update()); } },
+      h("option", { value: "", selected: !cur ? "" : null }, "Misc"), fs.map(f => h("option", { value: f.id, selected: f.id === cur ? "" : null }, focusName(f))))) : null;
   const where = part(
+    focusRow,
     off > 0 && !simpleOn() ? act(`Show ${off} hidden`, "filter", () => setShow(SHOW.ALL, ctx), "Turn on For you, Updates and Agent comms") : null,
     link("All messages", "chat", href("comms", "~all")),
     full ? link("On the timeline", "clock", href("timeline")) : null,
@@ -642,7 +642,7 @@ function showMenu(ctx) {
   const searching = words(C.tq).length > 0;
   return h("div", { class: "cm-menu cm-show-m", role: "menu", "data-key": "showmenu", "aria-label": "Show and group" },
     h("p", { class: "meta cm-show-l" }, "Show"), showChips(ctx),
-    app() && !searching ? [h("p", { class: "meta cm-show-l" }, "Group by"), viewBar(ctx)] : null,
+    app() && !searching ? [h("p", { class: "meta cm-show-l" }, "Arrange"), viewBar(ctx)] : null,
     searching ? null : h("div", { class: "cm-scope" }, h("span", null, app() ? "Conversations" : "Threads"),
       h("button", { type: "button", class: "cm-foldall", hidden: foldNone(), title: "Fold or open every section and helper list here", onclick: () => foldAll(ctx) }, foldWord()),
       h("button", { type: "button", class: "cm-scope-b", title: C.scope === "recent" ? (app() ? "Only the last 7 days are listed. Show every conversation." : "Only the last 24 hours are listed. Show every thread.") : "List only the recent ones",
@@ -659,13 +659,12 @@ function showChips(ctx) {
   return app() ? h("div", { class: "tm-showwrap" }, group, app() ? h("button", { type: "button", class: "tm-chip tm-chip-imp", "aria-pressed": String(!!C.imp), title: C.imp ? "Show every conversation again" : "Only conversations marked important", "aria-label": "Important only",
       onclick: () => { C.imp = !C.imp; ctx.update(); } }, icon("star")) : null) : group;
 }
-// Over the list: Topics or Recent, and whether the conversations marked Likely not needed are listed at all.
+// In the Show menu: By focus or By recency, and whether the conversations marked Likely not needed are listed at all.
 function viewBar(ctx) {
   const nFaded = [...S.threads.keys()].filter(th => faded(th) && !archived(th)).length;
   return h("div", { class: "cm-views", "data-key": "views" },
-    seg([["ideas", "Idea", "The main conversations, newest activity first, helper conversations folded under the one they came from"],
-      ["topics", "Group", "Under the sections of the Needs-you overview, the rest under Other, helper conversations folded under the one they came from"],
-      ["recent", "None", "Every conversation in one list, newest activity first, helper conversations included, each naming the one it came from"]], C.view,
+    seg([["focus", "By focus", "Each conversation under its focus, in the order of the home cards, Misc last; helper conversations folded under the one they came from"],
+      ["recent", "By recency", "Every conversation in one list, newest activity first, helper conversations included, each naming the one it came from"]], C.view,
       v => { C.view = v; store(VIEW_KEY, v); ctx.update(); }, { label: "How the list is arranged" }),
     h("button", { type: "button", class: "tm-chip cm-hidefaded", "aria-pressed": String(C.hideFaded),
       title: C.hideFaded ? `Show the ${nFaded} marked Likely not needed again` : `Hide the ${nFaded} conversations marked Likely not needed`,
@@ -715,46 +714,9 @@ function asideMenu(th) {
         h("span", { class: "cm-aside-q" }, threadTitle(t).replace(/^Aside: /, "")), last ? h("span", { class: "meta" }, ago(last.t)) : null); }));
 }
 
-// ---- home: start something, and what needs you ----
-function needs() {
-  const g = { asks: [], foryou: [], trouble: [], working: [] };
-  for (const d of S.threads.values()) {
-    if (isSystemThread(d) || !theirs(d)) continue;
-    const st = threadState(d.name, seen);
-    if (st.key === "asks") g.asks.push({ d, st });
-    else if (st.key === "foryou") g.foryou.push({ d, st });
-    else if (st.key === "limited" || st.key === "failed" || st.key === "stuck") g.trouble.push({ d, st });
-    else if (st.key === "working" || st.key === "quiet" || st.key === "queue" || st.key === "queued") g.working.push({ d, st });
-  }
-  for (const k in g) g[k].sort((a, b) => b.d.last - a.d.last);
-  return g;
-}
-function needRow({ d, st }) {
-  const lp = d.posts[d.posts.length - 1], plain = simpleOn(), name = plainName(st.who);
-  const text = st.key === "asks" ? [h("b", null, name + " asks: "), lastQuestion(st.post)]
-    : st.key === "foryou" ? [h("b", null, name + ": "), firstSentence(displayText(st.post))]
-    : plain && st.key === "limited" ? [h("b", null, "Your Hive is taking a break. "), "It carries on by itself."]
-    : plain && st.key === "failed" ? [h("b", null, "Something went wrong. "), "Send a message and it tries again."]
-    : plain ? [h("b", null, "Your Hive is working on it.")]
-    : st.key === "limited" ? [h("b", null, `${st.who} stopped at a usage limit ${ago(st.t)}. `), "Where it got to: " + firstSentence(displayText(lp))]
-    : st.key === "failed" ? [h("b", null, `${st.who} stopped with an error ${ago(st.t)}.`)]
-    : [h("b", null, st.who + ": "), (S.running.get(st.who) || {}).doing || st.label];
-  return { key: d.name, href: threadHref(d.name), title: threadTitle(d.name), meta: ago(st.post ? st.post.t : d.last), lead: statusDot(st.key, { live: isRunning(st.who) }), text };
-}
-// "Where things stand": the answer to "what was done, what needs me" without asking in a new chat and losing the answer.
-// Read from agents' status bars (S.threadStatus) and the 30-minute file behind the Needs you page, whose brief is an agent's
-// hourly top-down view: the few top-level things, each opening onto its threads. No brief (an installed Hive), just the threads.
-// The agent only groups and words the top level: a status line written after it wins at once, here and in which group the thread sits.
-const BRIEF_FOR = 6 * HOUR, STAND_LIMIT = 4, TOP_LIMIT = { needs: 12, done: 4, going: 4 }, HOME_LIMIT = 5, STAND_EVERY = 5 * MIN, DONE_FOR = 2 * DAY, GOING_FOR = 3 * DAY, NEEDS_FOR = 7 * DAY;
-const STAND = { at: 0, more: {}, open: {}, checks: [] };   // checks: the checklist under each Needs you entry (server: /api/checklist)
-/** Tick or untick one checklist item. It stays ticked until an agent has checked it was done and removes it. */
-function tick(it, ticked, ctx, from) {
-  const at = scrollersOf(from), upd = () => { ctx.update(); keepScroll(at); };
-  it.ticked = ticked; upd();
-  apiPost("/api/checklist", { id: it.id, ticked }).then(r => { if (r && r.items) { STAND.checks = r.items; upd(); } }, () => { it.ticked = !ticked; upd(); });
-}
-/** The checklist items that belong under one Needs you entry: those on one of its threads, or naming it. */
-const checksFor = r => { const ths = new Set((r.kids || []).map(k => k.th).concat(r.th ? [r.th] : [])); return STAND.checks.filter(c => (c.cat && c.cat === r.title) || (!c.cat && ths.has(c.thread)) || (c.cat && !r.title && ths.has(c.thread))); };
+// ---- home: start something, one line on what waits, then one card per focus ----
+// The home is the top of four depths (the person, 1107151649a6): home card (high level) > focus page > a conversation's status bar > the conversation.
+// A card shows only what agents put in the focus's summary (the focus command sets it) and the live state; nothing here is generated from the raw threads.
 /** Run a re-render without the page moving: every scroller around the row (and the window) goes back to where it was. */
 function holdScroll(from, fn) {
   const at = scrollersOf(from);
@@ -769,113 +731,42 @@ function keepScroll(at) {
   const put = () => at.forEach(([el, y]) => { if (el.isConnected && el.scrollTop !== y) el.scrollTop = y; });
   put(); queueMicrotask(put); requestAnimationFrame(put);
 }
-function loadStanding(ctx) {
-  if (now() - STAND.at < STAND_EVERY) return;
-  STAND.at = now();
-  jget("/api/checklist").then(v => { const n = (v && v.items) || []; if (JSON.stringify(n) !== JSON.stringify(STAND.checks)) { STAND.checks = n; ctx.update(); } }, () => {});
-  loadNeedsYou();   // the one needs-you load (core/needs.js); S.needsYou, and a store emit when it changes
+const HOME_NOW = 3, HOME_NEEDS = 3, HOME_LATELY = 2, HOME_THREADS = 4, MISC_THREADS = 6;
+const plainPills = t => t.replace(/(^|[\s(])@([A-Za-z0-9_-]+)/g, (m, a, n) => a + plainName(n));
+const bullet = t => h("li", null, simpleOn() ? plainPills(t) : pills(t));
+const cardThread = r => { const line = threadLine(r.th); return h("li", null, h("a", { href: threadHref(r.th) }, threadTitle(r.th)), line ? [" \u00b7 ", h("span", { class: "muted" }, line)] : null); };
+const cardSec = (title, body) => h("div", { class: "fc-sec" }, h("h3", { class: "meta" }, title), body);
+function focusCard(f) {
+  const id = f.id || null, page = href("focus", id || "misc"), rows = activeThreads(id).filter(r => !archived(r.th));
+  if (f.misc) return h("article", { class: "fc fc-misc", "data-key": "fc:misc" },
+    h("header", { class: "fc-hd" }, h("a", { class: "fc-name", href: page }, "Misc"), h("span", { class: "meta" }, "not filed under a focus")),
+    h("ul", { class: "fc-th" }, rows.slice(0, MISC_THREADS).map(cardThread)),
+    rows.length > MISC_THREADS ? h("a", { class: "fc-all meta", href: page }, `All ${rows.length}`) : null);
+  const st = stateOf(id), sum = f.summary, ag = agentsOf(id), asked = askedOf(id);
+  return h("article", { class: "fc", "data-key": "fc:" + id, "data-state": st.key },
+    h("header", { class: "fc-hd" }, h("a", { class: "fc-name", href: page }, focusName(f)), h("span", { class: "fc-state", "data-tone": st.tone }, st.word),
+      ag.now.length ? h("span", { class: "fc-ag" }, ag.now.slice(0, 4).map(n => agentRef(n, { dot: false }))) : null),
+    f.aim ? h("p", { class: "fc-aim" }, f.aim) : null,
+    sum && (sum.now || []).length ? cardSec("Now", h("ul", { class: "fc-ul" }, sum.now.slice(0, HOME_NOW).map(bullet))) : h("p", { class: "meta" }, sum ? "Nothing listed as moving." : "No summary yet."),
+    asked.length ? cardSec("Needs you", h("ul", { class: "fc-ul fc-needs" }, asked.slice(0, HOME_NEEDS).map(bullet))) : null,
+    sum && (sum.lately || []).length ? cardSec("Lately", h("ul", { class: "fc-ul" }, sum.lately.slice(0, HOME_LATELY).map(bullet))) : null,
+    rows.length ? cardSec("Conversations", h("ul", { class: "fc-th" }, rows.slice(0, HOME_THREADS).map(cardThread))) : null,
+    h("footer", { class: "fc-ft" }, h("a", { class: "fc-all meta", href: page }, rows.length > HOME_THREADS ? `All ${rows.length} conversations` : "The focus page"),
+      can("post") ? button("New", () => newIn(id), { kind: "quiet", size: "s", icon: "plus", title: "New conversation in " + focusName(f) }) : null));
 }
-/** The 30-minute summary (~/needs-you.json), or null when there is none: the brief and the project states come from it. */
-const needsFile = () => (S.needsYou && !S.needsYou.absent ? S.needsYou : null);
-const askedByThem = th => { const d = S.threads.get(th); return important(th) || pinned(th) || (!!d && d.posts.some(p => p.from === "person")); };
-function standing(g) {
-  const seenAbove = new Set([...g.asks, ...g.foryou, ...g.trouble, ...g.working].map(x => x.d.name)), used = new Set();
-  const rows = { needs: [], done: [], going: [], projects: [] };
-  const take = (group, th, text, t) => { if (used.has(th)) return; used.add(th); rows[group].push({ th, text, t }); };
-  const st = S.threadStatus || {};
-  const nf = needsFile(), drop = (nf && nf.brief && nf.brief.dropped) || {};   // an agent took it out of the summary as obsolete, until the thread says something newer
-  const open = th => !seenAbove.has(th) && shownHere(th) && !(drop[th] && drop[th] >= ((st[th] && st[th].at) || 0));
-  const bars = Object.keys(st).map(th => ({ th, r: st[th], s: standLine(st[th].text), t: st[th].at * 1e3 })).sort((a, b) => b.t - a.t);
-  const b0 = nf && nf.brief, bt = b0 ? Date.parse(b0.at) : 0, brief = b0 && now() - bt < BRIEF_FOR ? b0 : null;
-  const waiting = waitingOn().filter(w => w.src !== "live");   // the one list (core/needs.js); the live ones are the groups above
-  if (brief) {   // threads first, so a thread stays under its top-level thing; live state decides what's still in each
-    const when = th => st[th] ? st[th].at * 1e3 : bt, latest = new Map(); for (const w of waiting) if (!latest.has(w.th)) latest.set(w.th, w);   // newest first
-    // What a thread says since the brief, or null. A newer Done doesn't take it out of Needs you: a For you line still waits until they answer it.
-    const since = (group, th) => {
-      if (group === "needs") { const w = latest.get(th); return w && w.t > bt ? { text: w.text, t: w.t } : null; }
-      const s = st[th] && st[th].at * 1e3 > bt ? standLine(st[th].text) : null;
-      return s && { group: s.word === "done" ? "done" : s.word === "told to stop" || s.word === "needs the person" ? "" : "going", text: s.word === "done" ? s.line : s.full, t: st[th].at * 1e3 };
-    };
-    for (const group of ["needs", "done", "going"]) for (const top of brief[group] || []) {
-      const kids = (top.items || []).filter(r => {
-        if (group === "needs") return latest.has(r.thread);
-        const s = since(group, r.thread);   // moved to another group: the bars below place it there
-        return open(r.thread) && !used.has(r.thread) && (!s || s.group === group);
-      });
-      if (!kids.length) continue;
-      rows[group].push({ top: group + ":" + top.title, title: top.title, text: top.text, t: bt, kids: kids.map(r => { used.add(r.thread); const s = since(group, r.thread); return { th: r.thread, text: s ? s.text : r.text, t: s ? s.t : when(r.thread), fresh: !!s }; }) });
-    }
-    if (brief.headline) { rows.headline = brief.headline; rows.at = bt; }
-  }
-  for (const w of waiting) take("needs", w.th, w.text, w.t);
-  for (const b of bars) {
-    if (!open(b.th) || !askedByThem(b.th)) continue;
-    if (b.s.word === "done" && now() - b.t < DONE_FOR) take("done", b.th, b.s.line, b.t);
-    else if (b.s.word !== "done" && b.s.word !== "told to stop" && b.s.word !== "needs the person" && now() - b.t < GOING_FOR) take("going", b.th, b.s.full, b.t);
-  }
-  if (brief) for (const [group, title] of [["needs", "New since this summary"], ["done", "Also done"], ["going", "Also going"]]) {   // nothing that isn't in the brief vanishes; it just doesn't take over the view
-    const loose = rows[group].filter(r => !r.kids);
-    if (loose.length > 1) { const last = loose.reduce((a, b) => b.t > a.t ? b : a); rows[group] = [...rows[group].filter(r => r.kids), { top: group + ":" + title, title, text: plural(loose.length, "thread") + " not in the summary. Latest: " + last.text, t: last.t, kids: loose }]; }
-  }
-  rows.projects = ((nf && nf.states) || []).filter(s => s.state).map(s => ({ th: s.thread, name: s.name, key: s.key, text: s.state, t: s.at ? Date.parse(s.at) : 0 }));
-  return rows;
-}
-/** Adds the row to the new chat's prompt, with the thread's id so the agent that gets it can read that thread. */
-// A status bar's first line says what the thread is about, which beats its first post ("@fable") unless the person named it.
-const standTitle = r => { if (r.name) return r.name; if (r.title) return r.title; const own = tmeta(r.th).title, bar = S.threadStatus && S.threadStatus[r.th], l = bar && bar.text.split("\n"); return own || (l && l.length > 1 && l[0].replace(/\s*\(a[0-9a-f]{4,5}\)/g, "")) || threadTitle(r.th); };
-const standReply = r => {
-  const ids = r.kids ? "\n> Threads: " + r.kids.map(k => k.th).join(", ") : "";
-  const q = "> " + standTitle(r) + "\n> " + r.text.split("\n").join("\n> ") + ids + "\n\n";
-  const d = draft(null);
-  if (!d.text.includes(q.trim())) quoteInto(null, q); else focusComposer();
-};
-function standRow(r, more) {
-  return { key: r.key || r.th, href: r.th ? threadHref(r.th) : "#needs", title: standTitle(r), meta: r.t ? ago(r.t) : null, text: mdPlain(r.text).replace(/^[a-z]/, c => c.toUpperCase()), ...more,
-    acts: can("post") ? h("button", { type: "button", class: "lr-act", title: "Add to your new message", "aria-label": "Add this to your new message", onclick: () => standReply(r) }, icon("reply")) : null };
-}
-// A top-level thing opens onto its threads; with only one, the row just goes there.
-function checkRow(c, ctx) {
-  const box = h("input", { type: "checkbox", class: "cm-tick", checked: c.ticked || null, disabled: can("post") ? null : true, "aria-label": c.text, onchange: e => tick(c, e.target.checked, ctx, e.target) });
-  return { key: "ck:" + c.id, href: null, lead: box, title: c.text, whole: true, dim: c.ticked, depth: 1 };
-}
-function standRows(r, ctx, group) {
-  const cks = group === "needs" ? checksFor(r) : [];
-  if (!r.kids && !cks.length) return [standRow(r)];
-  if (r.kids && r.kids.length === 1 && !cks.length) return [standRow({ ...r, key: r.top, th: r.kids[0].th, text: r.kids[0].fresh ? r.kids[0].text : r.text }, { whole: true, meta: r.kids[0].t ? ago(r.kids[0].t) : null })];
-  const kids = r.kids || [], open = !!STAND.open[r.top], fresh = kids.filter(k => k.fresh).length, done = cks.filter(c => c.ticked).length;
-  const meta = [cks.length ? `${done}/${cks.length} ticked` : null, kids.length ? plural(kids.length, "thread") + (fresh ? `, ${fresh} updated` : "") : null].filter(Boolean).join(" · ");
-  return [standRow({ ...r, key: r.top }, { href: null, meta, whole: true, expanded: open, lead: h("span", { class: "cm-stand-ch", "data-open": open ? "" : null }, icon("chevron-down")), onClick: (e, n) => holdScroll(n, () => { STAND.open[r.top] = !open; ctx.update(); }) }),
-    ...(open ? [...cks.map(c => checkRow(c, ctx)), ...kids.map(k => standRow({ ...k, key: r.top + "/" + k.th }, { depth: 1 }))] : [])];
-}
-function standSec(id, title, rows, ctx) {
-  if (!rows.length) return null;
-  // The limit counts what the section lists, so opening one doesn't push the next behind Show more.
-  const most = STAND.more[id] ? 0 : TOP_LIMIT[id] && rows[0].kids ? TOP_LIMIT[id] : STAND_LIMIT, flat = rows.map(r => standRows(r, ctx, id));
-  return h("section", { class: "sec", "data-key": "st:" + id, "data-stand": id }, h("header", { class: "sec-h" }, h("h3", { class: "sec-t" }, title)),
-    list(flat.flat(), { limit: most && rows.length > most ? flat.slice(0, most).flat().length : 0, moreText: () => `Show ${rows.length - most} more`, onMore: () => { STAND.more[id] = true; ctx.update(); } }));
-}
-function standingPart(r, ctx) {
-  if (!r.needs.length && !r.done.length && !r.going.length && !r.projects.length) return null;
-  return h("div", { class: "cm-stand", "data-key": "stand" },
-    h("div", { class: "cm-stand-hd" }, h("h2", { class: "cm-needs-t" }, "Where things stand"), h("a", { class: "cm-stand-by", href: href("work"), title: "Every project on one page: what it did today, where it stands, what comes next" }, "By project"),
-      r.at ? h("span", { class: "cm-stand-at", title: "When the headline and group wording were last written. The lists and agents' status lines under them are live." }, "Summary updated " + ago(r.at)) : null),
-    r.headline ? h("p", { class: "cm-stand-brief" }, mdPlain(r.headline)) : null,
-    standSec("needs", "Needs you", r.needs, ctx),
-    standSec("done", "Done lately", r.done, ctx),
-    standSec("going", "Still going", r.going, ctx),
-    standSec("projects", "Your projects", r.projects, ctx));
+function fociGrid() {
+  if (S.foci === undefined) return h("p", { class: "meta cm-foci-msg" }, fociFailed() ? "Couldn't read the foci. It keeps trying." : "Reading\u2026");
+  const fs = fociOrder();
+  if (!fs.length) return h("p", { class: "meta cm-foci-msg" }, "No focus yet. Agents make one when work has a goal; every conversation is in the list on the left.");
+  return h("div", { class: "cm-foci", "data-key": "foci" }, fs.map(focusCard));
 }
 function homePane(ctx) {
-  const g = needs(), w = can("post"), n = needsN();   // the one count (core/needs.js): the same number as the Chat badge and the Needs you page
-  const local = outFor(null);
-  const room = hasRoom(), digest = app() && !simpleOn();
-  if (digest) loadStanding(ctx);
-  const stand = digest ? standing(g) : null;
+  const w = can("post"), n = needsN(), local = outFor(null), room = hasRoom(), digest = app();   // n: the one count (core/needs.js), the same as the Chat badge
+  if (digest) { loadFoci(); loadNeedsYou(); }   // the one needs-you load (core/needs.js): the line, the badge and the cards read S.needsYou
   // Only on arriving: taking focus on every render pulled the page back to the box after any real click elsewhere on it.
   const arrived = C.arrived; C.arrived = false;
-  // Long lists fold here, so what's under them stays in reach (the side list always has them all).
-  const sec = (title, note, items) => items.length ? h("section", { class: "sec", "data-key": "s:" + title }, title ? h("header", { class: "sec-h" }, h("h2", { class: "sec-t" }, title), note ? h("span", { class: "sec-n" }, note) : null) : null,
-    list(items.map(needRow), { limit: digest && !STAND.more[title] ? HOME_LIMIT : 0, onMore: () => { STAND.more[title] = true; ctx.update(); } })) : null;
+  const waits = `${plural(n, "thing")} ${n === 1 ? "waits" : "wait"} on you`;
+  const line = n ? (needsHref() ? h("a", { href: needsHref(), title: "The full list, newest first" }, waits) : waits) : simpleOn() || S.live.signin?.length ? null : IB.unread ? "No agent is waiting on you" : "Nothing needs you";
   return h("div", { class: "cm-home", "data-key": "home" },
     awayCard(ctx),
     w ? h("div", { class: "cm-new", "data-key": "new" },
@@ -886,13 +777,8 @@ function homePane(ctx) {
       !n && !local.length && ![...S.threads.values()].some(d => d.posts.some(p => p.from === "person")) ? firstJobs() : null,
       local.some(it => it.state !== "failed") ? closeLine() : null,
       local.length ? h("div", { class: "cm-out", "data-key": "out" }, local.map(it => localMessage(it, outActions))) : null) : null,
-    h("div", { class: "cm-needs", "data-key": "needs" },
-      n ? h("h2", { class: "cm-needs-t" }, needsHref() ? h("a", { href: needsHref(), title: "The full list, newest first" }, `${plural(n, "thing")} ${n === 1 ? "waits" : "wait"} on you`) : `${plural(n, "thing")} ${n === 1 ? "waits" : "wait"} on you`)
-        : !simpleOn() && !S.live.signin?.length ? h("h2", { class: "cm-needs-t" }, IB.unread ? "No agent is waiting on you" : "Nothing needs you") : null,
-      sec(null, null, [...g.asks, ...g.foryou, ...g.trouble]),   // one head above ("N things wait on you", opening the full list); each row's shape and first words say which kind
-      stand ? standingPart(stand, ctx) : null,
-      sec("Working now", null, g.working),
-      !n && !g.working.length && !S.live.signin?.length ? h("p", { class: "meta" }, simpleOn() ? "When your Hive asks you something or finishes, it shows here." : "When an agent asks you something, finishes, or stops, it shows here.") : null));
+    line ? h("p", { class: "cm-hline", "data-key": "line", "data-needs": n ? "" : null }, line) : null,
+    digest ? fociGrid() : null);
 }
 
 // Over the whole page, not in the list: it sets what you see of the hive's talk, both in a conversation and in which ones are listed. Each one turns on and off by itself.

@@ -15,6 +15,7 @@ export const S = {
   ledger: [],                 // {t, kind, parts:[string | {a:name} | {th:thread}], lc}
   running: new Map(), pending: {},
   stCache: new Map(),
+  foci: undefined,            // /api/foci, read by core/foci.js
   ver: 0, uver: 0, fresh: 0, failed: false,
 };
 /** Saved view settings. A TV page keeps its own, apart from the normal tabs. Values are JSON. */

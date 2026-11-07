@@ -11,9 +11,15 @@ them that an agent writes, so it stays in plain words: no rung ids, post ids, pa
                                       whose own thread it is or came from (the dashboard follows parents); the rest is Misc
   hive focus link A B [--off]           two foci that depend on each other (the GTM focus needs the mech lab's result)
   hive focus set FOCUS <<'X'            the summary, markdown on stdin: `## Now` bullets (what is being done, who, where: @agent and
-                                      #thread become pills) and `## Lately` bullets (decisions, turns, what changed). Plain words,
-                                      high level relative to the focus. Lint runs and prints what it flags; it never refuses
+                                      #thread become pills), `## Lately` bullets (decisions, turns, what changed) and, only when a
+                                      decision really needs the person, `## Needs you` bullets (one line each, with the #thread):
+                                      the home card shows those and nothing else under Needs you. Agents decide by default and say
+                                      `Decided:` in the result instead. Plain words, high level relative to the focus. Lint runs
+                                      and prints what it flags; it never refuses
   hive focus show FOCUS                 the summary as set
+  hive focus aim FOCUS "text"           one line on what the focus is for (the name isn't always enough: the person, 2026-11-07);
+                                      shown under the name on the home card and at the top of the focus page. Without one, the
+                                      text after the thread on the focus's priorities line is used
   hive focus check add FOCUS "text" | list FOCUS | done ID... | untick ID...   the focus page's to-do list
   hive focus lint [FOCUS] [--json]      what reads wrong: ids, paths, rung words, test names, long bullets, a summary older than
                                       the focus's newest result post (stale), a focus with threads and no summary (missing)
@@ -21,7 +27,7 @@ them that an agent writes, so it stays in plain words: no rung ids, post ids, pa
 
 The duty (time-invariant, no cleanup pulses): the agent that posts a result in a thread that is in a focus updates the focus's
 summary in the same run. The inbox hook says so once when it sees the result post and an older summary.
-Records go to ~/.hive/focus.jsonl, append-only: {kind: focus|tag|link|summary|check|check_done|check_untick, ..., from, at}.
+Records go to ~/.hive/focus.jsonl, append-only: {kind: focus|tag|link|summary|aim|check|check_done|check_untick, ..., from, at}.
 """
 import argparse, datetime as dt, json, os, re, sys, time
 from pathlib import Path
@@ -31,7 +37,7 @@ CORE, STATE, KB = HOME / "core", HOME / ".hive", HOME / "kb"
 FILE, BOARD, STATUS = STATE / "focus.jsonl", HOME / "board.jsonl", STATE / "thread-status.jsonl"
 ID = re.compile(r"[a-z][a-z0-9-]{1,40}")
 THREAD = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.:-]{0,100}")
-FOCUS_LINE = re.compile(r"^\s*(\d+)\.\s+\*\*(.+?)\*\*\s*\((?:thread\s+)?`([^`]+)`", re.M)   # goals.py's FOCUS
+FOCUS_LINE = re.compile(r"^\s*(\d+)\.\s+\*\*(.+?)\*\*\s*\((?:thread\s+)?`([^`]+)`\)?[,:]?[ \t]*([^\n]*)", re.M)   # goals.py's FOCUS, plus the rest of the line (a default aim)
 RESULT = re.compile(r"^(Done|Blocked|Needs the person|Waiting|Told to stop):\s*\S", re.I)
 MISC = "misc"
 MAX_SUMMARY, MAX_BULLET = 2500, 220
@@ -72,20 +78,20 @@ def priorities(text=None):
         try: text = (KB / "priorities.md").read_text(errors="replace")
         except OSError: return []
     seen, out = set(), []
-    for n, title, th in FOCUS_LINE.findall(text):
+    for n, title, th, rest in FOCUS_LINE.findall(text):
         th = th.strip().lower()
         if th in seen: continue
-        seen.add(th); out.append({"id": th, "name": title.strip(), "n": int(n), "thread": th})
+        seen.add(th); out.append({"id": th, "name": title.strip(), "n": int(n), "thread": th, "aim": re.sub(r"\s*\[[^\]]*\]", "", rest).strip(" ,;:.")[:200] or None})
     return out
 
 def parse_summary(text):
-    """`## Now` and `## Lately` bullets out of the summary's markdown; a bullet-less part is kept as one bullet."""
-    parts, cur = {"now": [], "lately": []}, None
+    """`## Now`, `## Lately` and `## Needs you` bullets out of the summary's markdown; a bullet-less part is kept as one bullet."""
+    parts, cur = {"now": [], "lately": [], "needs": []}, None
     for ln in (text or "").splitlines():
         s = ln.strip()
         if not s: continue
-        m = re.match(r"^(?:#{1,3}\s*)?(now|currently|lately|recent(?:ly)?.*|evolution.*)\s*:?\s*$", s, re.I)
-        if m: cur = "now" if m.group(1).lower() in ("now", "currently") else "lately"; continue
+        m = re.match(r"^(?:#{1,3}\s*)?(now|currently|lately|recent(?:ly)?.*|evolution.*|needs? (?:you|me|the person)|decisions?|for you)\s*:?\s*$", s, re.I)
+        if m: cur = "now" if m.group(1).lower() in ("now", "currently") else "needs" if m.group(1).lower().startswith(("need", "decision", "for")) else "lately"; continue
         if cur is None: cur = "now"
         parts[cur].append(re.sub(r"^[-*•]\s+", "", s))
     return parts
@@ -105,11 +111,11 @@ def ts(at):
     except (TypeError, ValueError): return 0.0
 
 def state(recs=None, pri=None, posts=None):
-    """Everything resolved: {foci: [...], tags: {thread: focus}, order: [ids]}. A focus: {id, name, n?, thread?, own, links, summary, checks, threads}."""
+    """Everything resolved: {foci: [...], tags: {thread: focus}, order: [ids]}. A focus: {id, name, n?, thread?, own, aim, links, summary, checks, threads}."""
     recs = records() if recs is None else recs
     foci, order = {}, []
     for f in (priorities() if pri is None else pri):
-        foci[f["id"]] = {**f, "own": True, "links": [], "summary": None, "checks": [], "threads": []}; order.append(f["id"])
+        foci[f["id"]] = {"aim": None, **f, "own": True, "links": [], "summary": None, "checks": [], "threads": []}; order.append(f["id"])
     for r in recs:
         if r["kind"] == "focus":
             fid = r.get("id")
@@ -117,7 +123,7 @@ def state(recs=None, pri=None, posts=None):
             if r.get("off"):
                 if fid in foci and not foci[fid].get("own"): del foci[fid]; order.remove(fid)
             elif fid not in foci:
-                foci[fid] = {"id": fid, "name": r.get("name") or fid, "thread": r.get("thread"), "own": False, "links": [], "summary": None, "checks": [], "threads": [], "made": r.get("at")}; order.append(fid)
+                foci[fid] = {"id": fid, "name": r.get("name") or fid, "thread": r.get("thread"), "own": False, "aim": None, "links": [], "summary": None, "checks": [], "threads": [], "made": r.get("at")}; order.append(fid)
             else: foci[fid]["name"] = r.get("name") or foci[fid]["name"]
     tags = {}
     for r in recs:
@@ -131,6 +137,8 @@ def state(recs=None, pri=None, posts=None):
             if r.get("off"): links.discard(k)
             else: links.add(k)
     for a, b in links: foci[a]["links"].append(b); foci[b]["links"].append(a)
+    for r in recs:
+        if r["kind"] == "aim" and r.get("focus") in foci: foci[r["focus"]]["aim"] = (r.get("text") or "").strip() or None
     for r in recs:
         if r["kind"] == "summary" and r.get("focus") in foci:
             foci[r["focus"]]["summary"] = {"text": r.get("text") or "", "from": r.get("from"), "at": r.get("at"), **parse_summary(r.get("text"))}
@@ -184,7 +192,7 @@ def lint(st, posts=None, only=None):
         if not s:
             if f["threads"]: out.append({"focus": f["id"], "kind": "missing", "what": "no summary yet", "fix": f"hive focus set {f['id']} <<'X' with ## Now and ## Lately bullets"})
             continue
-        for part in ("now", "lately"):
+        for part in ("now", "lately", "needs"):
             for b in s[part]:
                 for name, rx, fix in JARGON:
                     m = rx.search(b)
@@ -225,6 +233,7 @@ def main(argv=None):
     p = sp.add_parser("link"); p.add_argument("a"); p.add_argument("b"); p.add_argument("--off", action="store_true")
     p = sp.add_parser("set"); p.add_argument("focus")
     p = sp.add_parser("show"); p.add_argument("focus")
+    p = sp.add_parser("aim"); p.add_argument("focus"); p.add_argument("text", nargs="*")
     p = sp.add_parser("check"); p.add_argument("what", choices=["add", "list", "done", "untick"]); p.add_argument("args", nargs="*")
     p = sp.add_parser("lint"); p.add_argument("focus", nargs="?"); p.add_argument("--json", action="store_true")
     sp.add_parser("json")
@@ -258,6 +267,12 @@ def main(argv=None):
         fa, fb = find(st, a.a), find(st, a.b)
         if not fa or not fb or fa is fb: sys.exit("hive focus link: give two different foci (hive focus list)")
         append({"kind": "link", "a": fa["id"], "b": fb["id"], **({"off": True} if a.off else {})}); print(("unlinked" if a.off else "linked") + f" {fa['id']} and {fb['id']}"); return
+    if a.cmd == "aim":
+        f = find(st, a.focus)
+        if not f: sys.exit(f"hive focus aim: no focus {a.focus!r} (hive focus list)")
+        text = " ".join(" ".join(a.text).split())[:200]
+        if not text: print(f.get("aim") or "(no aim yet)"); return
+        append({"kind": "aim", "focus": f["id"], "text": text}); print(f"aim of {f['id']}: {text}"); return
     if a.cmd in ("set", "show"):
         f = find(st, a.focus)
         if not f: sys.exit(f"hive focus: no focus {a.focus!r} (hive focus list; hive focus new ID \"name\" adds one)")
@@ -268,7 +283,7 @@ def main(argv=None):
         if not parts["now"] and not parts["lately"]: sys.exit("hive focus set: empty; give ## Now and ## Lately bullets")
         append({"kind": "summary", "focus": f["id"], "text": text})
         st = state(); flags = [i for i in lint(st, only=f["id"]) if i["kind"] != "stale"]
-        print(f"summary set on {f['id']} ({len(parts['now'])} now, {len(parts['lately'])} lately)" + (f"\nreads as agent talk, fix when you can:\n{fmt_lint(flags)}" if flags else ""))
+        print(f"summary set on {f['id']} ({len(parts['now'])} now, {len(parts['lately'])} lately" + (f", {len(parts['needs'])} for the person" if parts["needs"] else "") + ")" + (f"\nreads as agent talk, fix when you can:\n{fmt_lint(flags)}" if flags else ""))
         return
     if a.cmd == "check":
         recs = records()

@@ -16,9 +16,20 @@ NOT_NAME = set("""has officially stepped steps expect compensation analysis by b
 _LINE_ROLE = re.compile(rf"^(?:the\s+)?(?:{ROLE})\b", re.I)
 
 
+# Office and abstract nouns that head a label ("Property Management", "Grants Administration"). Shape rule: a label whose every word is one of these, or ends like an abstract noun, is a heading. Nothing here is a common given name or surname.
+_COMMON = set("""property management grants grant administration accounting finance financial payroll procurement purchasing facilities operations planning compliance records admissions registrar marketing communications recruiting recruitment hiring employment benefits policy policies safety risk legal audit budget budgets assets inventory transportation parking housing dining library libraries athletics counseling advising tutoring outreach engagement partnerships partnership commercialization licensing patents patent transfer entrepreneurship ventures venture incubator accelerator sponsored programs project projects intellectual rights general main front desk senior junior full part time remote staff positions application applications requirements qualifications responsibilities description summary overview details location department division unit sector industry sciences studies arts humanities""".split())
+_ABSTRACT = re.compile(r"(?:ment|tion|sion|ness|ship|ance|ence|ity|ics|ings?)s?$", re.I)
+
+
+def _heading_like(toks):
+    low = [t.lower() for t in toks]
+    return all(t in _COMMON or (len(t) > 6 and _ABSTRACT.search(t)) for t in low)
+
+
 def plausible_name(n):
     toks = [t.strip(".,'’") for t in n.split()]
     if not 2 <= len(toks) <= 4 or len(n) > 45: return False
+    if _heading_like(toks): return False
     if any(t.lower() in NOT_NAME for t in toks): return False
     # BizTUCSON: capitals in the middle of a word make a brand. McDonald, DeShawn and O'Brien have just one.
     if any(re.search(r"[a-z].*[A-Z].*[A-Z]", part) for t in toks for part in re.split(r"[-'’]", t)): return False
