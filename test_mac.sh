@@ -199,7 +199,8 @@ for r in 'FAKE_UNAME=Linux' 'FAKE_UID=0' 'FAKE_MACOS=abc' '-u HIVE_MAC_TEST'; do
 done
 fresh; run env HIVE_SHARE_URL=$U FAKE_INSTALL_FAILS=1 HIVE_REPORT=1 >/dev/null 2>&1; yes_if "VM install fails with HIVE_REPORT=1: this wrapper sends nothing (the install sends its own)" test "$(posts)" = 0
 fresh; run env HIVE_SHARE_URL=$U FAKE_INSTALL_FAILS=1 >/dev/null 2>&1; yes_if "VM install fails, no terminal: sends nothing" test "$(posts)" = 0
-if command -v script >/dev/null 2>&1; then
+# GNU script and timeout only: BSD script (macOS) has other flags, so this check is skipped there
+if command -v timeout >/dev/null 2>&1 && script -qec true /dev/null >/dev/null 2>&1; then
   for ans in y n ''; do
     fresh; printf '%s\n' "$ans" | env TLOG="$T/mark" HOME="$H" PATH="$B:$PATH" HIVE_MAC_TEST=1 HIVE_SHARE_URL=$U FAKE_FREE_KB=1048576 timeout 15 script -qec "sh $D/get-mac.sh" /dev/null >"$T/tty.out" 2>&1
     want=0; [ "$ans" = y ] && want=1
