@@ -421,16 +421,26 @@ def series_dates(path, column, n_ahead, said=None):
     rows = [r for r in csv.reader(text.splitlines()) if r]
     if not rows or column not in rows[0]: raise ValueError(f"no date column {column}")
     i = rows[0].index(column)
-    ds = []
-    for r in rows[1:]:
+    ds, at = [], []
+    for n, r in enumerate(rows[1:], 2):
         if len(r) > i and r[i].strip():
             v = r[i].strip()
             m = re.fullmatch(r"(\d{4})(?:-(\d{1,2})(?:-(\d{1,2}))?)?", v)
             if not m: raise ValueError(f"date {v!r} isn't YYYY, YYYY-MM or YYYY-MM-DD")
-            ds.append(dt.date(int(m[1]), int(m[2] or 1), int(m[3] or 1)))
+            ds.append(dt.date(int(m[1]), int(m[2] or 1), int(m[3] or 1))); at.append(n)
     if len(ds) < 2: raise ValueError("need at least two dates")
+    for k in range(1, len(ds)):
+        if ds[k] == ds[k - 1]: raise ValueError(f"row {at[k]}: date {ds[k].isoformat()} repeats row {at[k - 1]}")
+        if ds[k] < ds[k - 1]: raise ValueError(f"row {at[k]}: date {ds[k].isoformat()} is before row {at[k - 1]} ({ds[k - 1].isoformat()}): sort the dates oldest first")
     gaps = sorted((b - a).days for a, b in zip(ds, ds[1:]))
-    if gaps[0] <= 0: raise ValueError("dates must increase")
+    if said is not None:
+        mm = [(b.year - a.year) * 12 + b.month - a.month for a, b in zip(ds, ds[1:])]
+        usual = sorted(mm)[len(mm) // 2]
+        by_month = usual > 0 and len({d.day for d in ds}) == 1
+        for k, g in enumerate(mm if by_month else [(b - a).days for a, b in zip(ds, ds[1:])], 1):
+            u = usual if by_month else gaps[len(gaps) // 2]
+            if g != u if by_month else g > 1.5 * u:
+                said.setdefault("warnings", []).append(f"row {at[k]}: gap of {g} {'month(s)' if by_month else 'day(s)'} after row {at[k - 1]}, usual {u}: a missing period shifts the season")
     months = [(b.year - a.year) * 12 + b.month - a.month for a, b in zip(ds, ds[1:])]
     step = None
     if len(set(months)) == 1 and months[0] > 0 and len({d.day for d in ds}) == 1: step = months[0]

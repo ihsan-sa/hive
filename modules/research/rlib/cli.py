@@ -92,11 +92,11 @@ def c_forecast(a):
     xs, said = _series(a)
     r = predict.forecast(xs, a.horizon, a.season)
     if a.date_column:
-        try: d = predict.series_dates(a.file, a.date_column, len(r["forecast"]))
+        try: d = predict.series_dates(a.file, a.date_column, len(r["forecast"]), said)
         except ValueError as e: _err(str(e))
         said.update(last_date=d["last_date"], step=d["step"])
         for row, day in zip(r["forecast"], d["dates"]): row["date"] = day
-    _out({**said, **r})
+    _out({**said, **r, "warnings": said.get("warnings", []) + r.get("warnings", [])} if said.get("warnings") else {**said, **r})
 
 
 def c_trend(a):
@@ -168,7 +168,7 @@ def main(argv=None):
     p = cmd("verify", c_verify, "check every row of a CSV against its page"); p.add_argument("csv"); p.add_argument("-o", "--out"); p.add_argument("--find", action="store_true", help="search for a page when a row's own page fails"); [p.add_argument(f"--{k}", help=f"the {k} column") for k in ("name", "title", "org", "url")]
     p = cmd("hunt", c_hunt, "build a verified list to a target from a spec"); p.add_argument("spec", help="JSON spec file; keys: "+HUNT_KEYS); p.add_argument("-o", "--out", help="output folder (sets spec out)"); p.add_argument("--max-seconds", type=int, help="time budget (sets spec max_seconds)")
     p = cmd("analyze", c_analyze, "how far to trust the case's sources, or profile a CSV"); p.add_argument("csv", nargs="?")
-    p = cmd("forecast", c_forecast, "backtest methods on a series, forecast with intervals"); p.add_argument("file", help="CSV or one number per line; - for stdin"); p.add_argument("--column", help="the value column (default: the last numeric one)"); p.add_argument("--date-column", help="a date column (YYYY, YYYY-MM or YYYY-MM-DD): the forecast rows are then labelled with dates"); p.add_argument("--horizon", type=int, default=4, help="steps ahead"); p.add_argument("--season", type=int, default=1, help="period length, e.g. 12 for monthly data with a yearly cycle")
+    p = cmd("forecast", c_forecast, "backtest methods on a series, forecast with intervals"); p.add_argument("file", help="CSV or one number per line; - for stdin"); p.add_argument("--column", help="the value column (default: the last numeric one)"); p.add_argument("--date-column", help="a date column (YYYY, YYYY-MM or YYYY-MM-DD): the forecast rows are then labelled with dates; unsorted or repeated dates are an error and gaps a warning, each naming the row"); p.add_argument("--horizon", type=int, default=4, help="steps ahead"); p.add_argument("--season", type=int, default=1, help="period length, e.g. 12 for monthly data with a yearly cycle")
     p = cmd("trend", c_trend, "Mann-Kendall and Theil-Sen"); p.add_argument("file"); p.add_argument("--column")
     p = cmd("estimate", c_estimate, "a rate with its uncertainty"); p.add_argument("hits", type=int); p.add_argument("total", type=int); p.add_argument("--prior-a", type=float, default=1.0); p.add_argument("--prior-b", type=float, default=1.0)
     p = cmd("odds", c_odds, "update a base rate with likelihood ratios"); p.add_argument("base", type=float); p.add_argument("lr", type=float, nargs="+")

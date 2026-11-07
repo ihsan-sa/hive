@@ -99,4 +99,5 @@ function waitingOnNow() {
 export const needsN = () => waitingOn().length;
 // Where the full list is read: the Needs you page, when this build has one (an installed Hive hasn't; the simple look lists the live ones on the home).
 // The literal "#needs", not href("needs"): the export removes every line with that call.
-export const needsHref = () => (!simpleOn() && APP_NAV.groups?.work?.includes("needs") ? "#needs" : null);   // null in simple mode and in builds without the page
+const hasNeeds = () => Object.values(APP_NAV.groups || {}).some(g => g.includes("needs")) || !!(APP_NAV.belongs && APP_NAV.belongs.needs) || (APP_NAV.more || []).includes("needs");
+export const needsHref = () => (!simpleOn() && hasNeeds() ? "#needs" : null);   // null in simple mode and in builds without the page

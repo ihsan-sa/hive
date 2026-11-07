@@ -859,6 +859,17 @@ def cmd_install():
           "  systemctl --user daemon-reload && systemctl --user enable --now slack-door.path")
 
 
+def note_connect(error=None, state=None):
+    """The door's last Slack connect refusal, in words and with no token, for the web app's Settings row: Settings only asks Slack about the bot
+    token, so an app token (xapp-) refused here would otherwise look fine there. None clears it after a connect that works."""
+    f = Path(state or DOOR_STATE) / "connect-refused.json"
+    if error is None: f.unlink(missing_ok=True); return
+    code = re.sub(r"[^a-z_]", "", str(error))[:40] or "refused"
+    why = {"token_revoked": "it was revoked in Slack", "invalid_auth": "Slack doesn't know it", "account_inactive": "the app or workspace is gone"}.get(code, code)
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(json.dumps({"at": time.time(), "said": f"Slack refused the app token (xapp-): {why}"}) + "\n")
+
+
 def socket_healthy(sock, now):
     s = sock.current_session
     if s is None or not s.is_active(): return False
@@ -904,7 +915,11 @@ def main():
 
     sock = SocketModeClient(app_token=APP_TOKEN.read_text().strip(), web_client=web)
     sock.socket_mode_request_listeners.append(on_request)
-    sock.connect()
+    from slack_sdk.errors import SlackApiError
+    try: sock.connect()
+    except SlackApiError as e:   # Slack answered and said no: say so in Settings, then exit for systemd to try again
+        note_connect((getattr(e, "response", None) or {}).get("error") or "refused"); raise
+    note_connect(None)
     threading.Thread(target=watch, args=(d, sock), daemon=True).start()
     log(f"slack door up, {len(d.allowed)} listed, board at {BOARD}")
     next_tick = 0
