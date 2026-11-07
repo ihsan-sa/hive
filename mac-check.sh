@@ -1,15 +1,16 @@
 #!/bin/sh
 # For someone with a Mac: does the Hive really work here? One line, about 20 minutes:
-#   curl -fsSL <THIS-SITE>/mac-check.sh -o mac-check.sh && sh mac-check.sh
+#   curl -fsSL https://hivelab.ca/mac-check.sh -o mac-check.sh && sh mac-check.sh
 # It installs the Hive if it isn't there, checks it, asks you to do three things, and writes a report you send back.
 # The report has versions, memory and results. It has no address, secret, user name or file of yours.
 # HIVE_CHECK_AUTO=1 is for a Mac runner with no person: nothing is asked, and sleep is only a pause of the VM.
 # HIVE_CHECK_FAULT=1 (with AUTO) breaks this Mac's port forward after the pause, so the recovery path has to run.
+# HIVE_CHECK_FAULT=2 also stops the app in the VM, so the guest agent start is not enough and the app restart has to do it.
 # HIVE_CHECK_LINE=FILE installs from that file, not the site.
 # After the check, to test uninstall: run the uninstall line it prints, then: sh mac-check.sh --after-uninstall
 set -u
 
-SITE="${HIVE_SITE:-<THIS-SITE>}"
+SITE="${HIVE_SITE:-https://hivelab.ca}"
 R="$HOME/hive-mac-report.txt"
 L="$HOME/.hive/lima-dist/bin/limactl"
 export LIMA_HOME="$HOME/.hive/lima"
@@ -50,8 +51,9 @@ forward_log() {
 # is not enough, restart the VM once. Says which one worked. recovered= holds the step.
 recover_forward() {
   recovered=
-  [ "$(as_hive 'systemctl --user is-active hive-dash' | tr -d '\r')" = active ] || return 1
-  say "      the app is active in the VM but this Mac's port is dead: starting Lima's guest agent (the fault may have stopped it), then restarting the app"
+  if [ "$(as_hive 'systemctl --user is-active hive-dash' | tr -d '\r')" = active ]; then say "      the app is active in the VM but this Mac's port is dead"
+  else say "      the app is not active in the VM and this Mac's port is dead"; fi
+  say "      starting Lima's guest agent (the fault may have stopped it), then restarting the app"
   vm sudo -n sh -c 'systemctl unmask lima-guestagent; systemctl start lima-guestagent' >/dev/null 2>&1
   # The agent start alone may bring the forward back: give it a short time before the app restart, so the report names the step that did it.
   if answers_soon 20; then recovered="the guest agent start"; return 0; fi
@@ -82,6 +84,7 @@ break_forward() {
   done
   if answers 2>/dev/null; then say "      fault: could not break the forward"; return 1; fi
   say "      fault: broke this Mac's forward by a ${how:-?}"
+  if [ "$FAULT" = 2 ]; then as_hive 'systemctl --user stop hive-dash' >/dev/null 2>&1; say "      fault: also stopped the app in the VM: $(as_hive 'systemctl --user is-active hive-dash' | tr -d '\r')"; fi
 }
 the_line() { if [ -n "$LINE" ]; then sh "$LINE"; else curl -fsSL "$SITE/install-mac.sh" | sh; fi; }
 ask() { [ -z "$AUTO" ] || return 0; printf '\n%s\nPress Return when done. ' "$1"; read -r _ </dev/tty; }
