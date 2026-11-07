@@ -23,7 +23,7 @@ jobs:
       if: always()
       continue-on-error: true
       timeout-minutes: 25
-      run: HIVE_CHECK_FAULT=1 HIVE_CHECK_AUTO=1 HIVE_CHECK_LINE=get-mac.sh HIVE_MAC_TEST=1 sh mac-check.sh 2>&1 | tee install.log | tail -n 80 || true
+      run: HIVE_CHECK_AUTO=1 HIVE_CHECK_LINE=get-mac.sh HIVE_MAC_TEST=1 sh mac-check.sh 2>&1 | tee install.log | tail -n 80 || true
     - name: Lima as downloaded
       if: always()
       run: |
