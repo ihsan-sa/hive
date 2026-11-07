@@ -1,6 +1,6 @@
 #!/bin/sh
 # Uninstall the Hive from a Mac. One line:
-#   curl -fsSL <THIS-SITE>/uninstall-mac.sh | sh
+#   curl -fsSL https://hivelab.ca/uninstall-mac.sh | sh
 # Deletes its VM and ~/.hive after you type delete. Its own Lima only: a Lima of yours, in ~/.lima, isn't touched.
 # Your projects, notes and board stay unless you say to delete them: they're copied out of the VM to ~/hive-kept-DATE first. HIVE_KEEP=projects,notes,board (any of them, or none) answers without asking.
 set -eu
@@ -34,7 +34,7 @@ keep_words() { w=$(echo $KEEP | sed 's/ /, /g; s/\(.*\), /\1 and /'); echo "${w:
 kept_dir() { b="$1/hive-kept-$(date +%Y%m%d)"; k="$b"; n=2; while [ -e "$k" ]; do k="$b-$n"; n=$((n + 1)); done; echo "$k"; }
 
 main() {
-  [ "$(uname -s)" = Darwin ] || die "this is the Mac uninstaller. On Linux: curl -fsSL <THIS-SITE>/uninstall.sh | sh"
+  [ "$(uname -s)" = Darwin ] || die "this is the Mac uninstaller. On Linux: curl -fsSL https://hivelab.ca/uninstall.sh | sh"
   [ "$(id -u)" != 0 ] || die "run this as yourself, not with sudo"
   D="$HOME/.hive"
   [ -e "$D/.hive-mac" ] || die "there's no Hive from the Mac installer here, so nothing changed"
