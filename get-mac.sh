@@ -1,6 +1,6 @@
 #!/bin/sh
 # Install the Hive on a Mac. One line:
-#   curl -fsSL https://hive.ihsan.cc/install-mac.sh | sh
+#   curl -fsSL <THIS-SITE>/install-mac.sh | sh
 # The Hive needs Linux with systemd, so this makes a small Linux VM (Lima, on Apple's Virtualization framework) and runs the normal
 # Linux install inside it, as the Windows line does in WSL. The VM can't see your files: no folder of the Mac is shared with it.
 # Run it again to update. Everything lives in ~/.hive. It uses only what every Mac has: no sudo, Homebrew, Python, or Apple's developer
@@ -18,6 +18,35 @@ MARK='# added by the Hive installer'
 TESTED=no
 
 die() { echo "hive: $*" >&2; exit 1; }
+
+# An install that stops before Linux starts in the VM can be told to the Hive's makers, only with a yes: asked on the terminal, or HIVE_REPORT=1 where there's none (HIVE_REPORT=0 never asks). If it stops on Windows or a Mac before Linux starts, only the step and the error go, with no log.
+# It holds only the stage that stopped, a fixed label for it, the exit code, the version and the OS family and chip, and no log, names, folders or printed text: this script keeps no log and has no scrub, so it sends nothing it didn't write itself.
+# A stop inside the VM's own install is asked about by that install when it has a terminal, which the VM has not; then this asks, and sends the same fixed words. Wrong OS, an unknown option, sudo and the test-build gate are refusals, not failures: they offer nothing.
+REPORT_URL="${HIVE_SHARE_URL:-<THIS-REPORTS>}"
+STOP=""; WHY=""
+stage() { STOP=$1; WHY=$2; }
+stop_report() {
+  rc=$1
+  case "$REPORT_URL" in http*) ;; *) return 0 ;; esac
+  [ "${HIVE_REPORT:-}" != 0 ] || return 0
+  # The VM's install was told to send (HIVE_REPORT=1) and sends its own.
+  [ "$STOP" != vm-install ] || [ "${HIVE_REPORT:-}" != 1 ] || return 0
+  if [ "${HIVE_REPORT:-}" != 1 ]; then
+    ( : </dev/tty ) 2>/dev/null || return 0
+    printf "Send this failure to the Hive's makers so they can fix it? It holds the installer version, the step that failed, a short error label, and the OS and chip type. No log, names or folders. Type y to send: " >/dev/tty
+    read -r a </dev/tty || a=""
+    case "$a" in y | Y | yes | Yes) ;; *) return 0 ;; esac
+  fi
+  case "$rc" in "" | *[!0-9]*) rc=1 ;; esac
+  chip=$(uname -m 2>/dev/null | tr -cd 'a-z0-9_' | cut -c1-16); [ -n "$chip" ] || chip=unknown
+  ref="i$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')"
+  if curl -fsS -m 20 -H 'Content-Type: application/json' -d "{\"install\":\"$ref\",\"version\":\"0\",\"type\":\"failure\",\"kind\":\"install\",\"os\":\"mac/$chip\",\"message\":\"install stopped at $STOP: $WHY (exit $rc)\"}" "$REPORT_URL" >/dev/null 2>&1
+  then echo "Sent, thank you. If you open an issue, this is its reference: $ref"
+  else echo "Could not send it just now."; fi
+}
+on_exit() { rc=$?; trap - EXIT INT TERM HUP; [ -z "$STOP" ] || [ "$rc" = 0 ] || [ "$rc" -ge 128 ] || stop_report "$rc" || true; exit "$rc"; }
+trap on_exit EXIT
+trap 'exit 130' INT TERM HUP
 
 # The VM. No mounts and no SSH keys from the Mac. Only the app's own ports reach the Mac, and only on its loopback.
 # Provision runs at every boot. It stops ordinary users inside reaching Lima's addresses, since 192.168.5.2 is the Mac's own localhost.
@@ -142,11 +171,47 @@ case "${1:-}" in
     ;;
   open)
     up; a=$(address)
-    case "$a" in http://localhost*|http://127.0.0.1*) open "$a" ;; *) echo "hive: no address yet. Try: hive web" >&2; exit 1 ;; esac
+    case "$a" in http://localhost*|http://127.0.0.1*) ;; *) echo "hive: no address yet. Try: hive web" >&2; exit 1 ;; esac
+    # The VM can be up a while before the app answers, so wait for it rather than open a page that says it can't connect.
+    base=$(printf '%s' "$a" | sed 's|^\(http://[^/]*\)/.*|\1/|'); n=0
+    until curl -s -o /dev/null --max-time 2 "$base" || [ "$n" -ge 45 ]; do n=$((n + 1)); sleep 2; done
+    open "$a"
     ;;
   *) up; in_vm hive "$@" ;;
 esac
 W
+}
+
+# A Hive icon in ~/Applications that runs hive open, so nobody needs Terminal to come back. Made here, on this Mac, so Gatekeeper has nothing to quarantine.
+# The icon is taken from the VM and made into an .icns with the Mac's own sips and iconutil; if either fails, the app just has the plain icon.
+make_app() {
+  A="$HOME/Applications/Hive.app"
+  [ ! -e "$A" ] || grep -qs 'made by the Hive install' "$A/Contents/MacOS/Hive" || { echo "$A is something else, so I left it."; return 0; }
+  rm -rf "$A"; mkdir -p "$A/Contents/MacOS" "$A/Contents/Resources" || return 0
+  printf '#!/bin/sh\n# made by the Hive install\nexec "%s/bin/hive" open\n' "$D" > "$A/Contents/MacOS/Hive"; chmod +x "$A/Contents/MacOS/Hive"
+  cat > "$A/Contents/Info.plist" <<'PL'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleName</key><string>Hive</string>
+  <key>CFBundleDisplayName</key><string>Hive</string>
+  <key>CFBundleIdentifier</key><string>local.hive.launcher</string>
+  <key>CFBundleExecutable</key><string>Hive</string>
+  <key>CFBundleIconFile</key><string>Hive</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleVersion</key><string>1</string>
+  <key>NSHighResolutionCapable</key><true/>
+</dict>
+</plist>
+PL
+  t=$(mktemp -d) && "$L" shell --workdir / "$VM" sudo -u hive -H bash -lc 'cat ~/modules/dash/web/icons/hive-1024.png' </dev/null > "$t/h.png" 2>/dev/null \
+    && mkdir "$t/Hive.iconset" && for z in 16 32 64 128 256 512; do
+      sips -z "$z" "$z" "$t/h.png" --out "$t/Hive.iconset/icon_${z}x${z}.png" >/dev/null 2>&1 || break
+      sips -z $((z * 2)) $((z * 2)) "$t/h.png" --out "$t/Hive.iconset/icon_${z}x${z}@2x.png" >/dev/null 2>&1 || break
+    done && iconutil -c icns "$t/Hive.iconset" -o "$A/Contents/Resources/Hive.icns" >/dev/null 2>&1 || true
+  rm -rf "${t:-}"
+  echo "There's now a Hive app in your Applications folder (in your home folder). Open it, or drag it to the Dock."
 }
 
 # Starts the VM when you log in, as the Startup link does on Windows. launchd reads it at the next login. Not "Background": that would slow the agents.
@@ -193,8 +258,8 @@ get_lima() {
   echo "Getting Lima $LIMA_VERSION, which runs the VM..."
   t=$(mktemp -d "$D/get.XXXXXX")
   curl -fsSL -o "$t/lima.tgz" "https://github.com/lima-vm/lima/releases/download/v$LIMA_VERSION/lima-$LIMA_VERSION-Darwin-$arch.tar.gz" \
-    || { rm -rf "$t"; die "couldn't download Lima. Check your connection and run this again"; }
-  [ "$(shasum -a 256 "$t/lima.tgz" | cut -d' ' -f1)" = "$sha" ] || { rm -rf "$t"; die "the Lima download doesn't match its checksum, so I won't use it"; }
+    || { rm -rf "$t"; stage lima-download "Lima download failed"; die "couldn't download Lima. Check your connection and run this again"; }
+  [ "$(shasum -a 256 "$t/lima.tgz" | cut -d' ' -f1)" = "$sha" ] || { rm -rf "$t"; stage lima-checksum "Lima checksum mismatch"; die "the Lima download doesn't match its checksum, so I won't use it"; }
   mkdir "$t/x"; tar -xzf "$t/lima.tgz" -C "$t/x"
   echo "$LIMA_VERSION-$arch" > "$t/x/.version"
   # A running VM keeps its own copy in memory; the new one takes over at its next start.
@@ -204,49 +269,55 @@ get_lima() {
 main() {
   [ "${1:-}" != --print-yaml ] || { vm_yaml 4 4; exit 0; }
   [ $# = 0 ] || die "unknown option $1"
-  [ "$(uname -s)" = Darwin ] || die "this is the Mac installer. On Linux: curl -fsSL https://hive.ihsan.cc/install.sh | sh"
+  [ "$(uname -s)" = Darwin ] || die "this is the Mac installer. On Linux: curl -fsSL <THIS-SITE>/install.sh | sh"
   [ "$TESTED" = yes ] || [ -n "${HIVE_MAC_TEST:-}" ] || die "the Mac version is a test build that has never run on a real Mac, so it may not work. To try it anyway:
-  curl -fsSL https://hive.ihsan.cc/install-mac.sh | HIVE_MAC_TEST=1 sh"
+  curl -fsSL <THIS-SITE>/install-mac.sh | HIVE_MAC_TEST=1 sh"
   [ "$(id -u)" != 0 ] || die "run this as yourself, not with sudo. It doesn't need sudo"
   major=$(sw_vers -productVersion | cut -d. -f1)
   case "$major" in "" | *[!0-9]*) die "couldn't read this Mac's macOS version" ;; esac
-  [ "$major" -ge 13 ] || die "this needs macOS 13 (Ventura) or newer, for Apple's Virtualization framework. This Mac has $(sw_vers -productVersion)"
+  [ "$major" -ge 13 ] || { stage macos-old "macOS older than 13"; die "this needs macOS 13 (Ventura) or newer, for Apple's Virtualization framework. This Mac has $(sw_vers -productVersion)"; }
 
-  SITE="${HIVE_SITE:-https://hive.ihsan.cc}"
+  SITE="${HIVE_SITE:-<THIS-SITE>}"
   D="$HOME/.hive"
   mkdir -p "$D/bin"
   : > "$D/.hive-mac"
   export LIMA_HOME="$D/lima"
   L="$D/lima-dist/bin/limactl"
+  stage lima "getting Lima failed"
   get_lima
 
   if [ ! -d "$LIMA_HOME/$VM" ]; then
     free_gb=$(( $(df -k "$HOME" | awk 'NR==2 {print $4}') / 1048576 ))
-    [ "$free_gb" -ge 15 ] || die "this needs about 15 GB free on your disk, and there's $free_gb GB"
+    [ "$free_gb" -ge 15 ] || { stage disk "not enough free disk"; die "this needs about 15 GB free on your disk, and there's $free_gb GB"; }
     # Half the Mac, within limits: 4 to 8 GB, 2 to 8 CPUs.
     mem=$(( $(sysctl -n hw.memsize) / 2147483648 )); [ "$mem" -ge 4 ] || mem=4; [ "$mem" -le 8 ] || mem=8
     cpus=$(( $(sysctl -n hw.ncpu) / 2 )); [ "$cpus" -ge 2 ] || cpus=2; [ "$cpus" -le 8 ] || cpus=8
     vm_yaml "$cpus" "$mem" > "$D/vm.yaml"
     echo "Making the Linux VM: $cpus CPUs, up to $mem GB of memory. The first time downloads about 600 MB..."
+    stage vm-create "creating the VM failed"
     "$L" create --tty=false --name="$VM" "$D/vm.yaml"
   fi
+  stage vm-start "starting the VM failed"
   [ "$("$L" list "$VM" --format '{{.Status}}' 2>/dev/null)" = Running ] || "$L" start --tty=false "$VM" \
     || die "the VM didn't start. Its log is in $LIMA_HOME/$VM/ha.stderr.log"
 
   # The normal Linux install, as root in the VM. Run again, it updates.
+  stage vm-install "the install in the VM failed"
   echo "Installing the Hive in the VM. This can sit quiet for several minutes, so please leave it running..."
   # A VM made before its provisioning recovered logind, or one whose logind spun later: a rerun has to fix this itself
   # or it fails the same way, with "Failed to connect to bus" after the linger note (lima-vm/lima#5730).
   "$L" shell --workdir / "$VM" sudo sh -c 'timeout 5 loginctl list-sessions >/dev/null 2>&1 || { systemctl kill --signal=SIGKILL systemd-logind.service; systemctl start systemd-logind; }' </dev/null || true
   # shellcheck disable=SC2016  # these expand in the VM
-  "$L" shell --workdir / "$VM" sudo env HIVE_INSIDE=1 HIVE_BRANCH="${HIVE_BRANCH:-}" SITE="$SITE" sh -c \
+  "$L" shell --workdir / "$VM" sudo env HIVE_INSIDE=1 HIVE_HOST=mac HIVE_REPORT="${HIVE_REPORT:-}" HIVE_BRANCH="${HIVE_BRANCH:-}" SITE="$SITE" sh -c \
     '[ -n "$HIVE_BRANCH" ] || unset HIVE_BRANCH; f=$(mktemp); curl -fsSL -o "$f" "$SITE/install.sh" && sh "$f"' </dev/null \
     || die "the install in the VM failed. Run this line again to retry"
 
+  STOP=""
   wrapper > "$D/bin/hive"; chmod +x "$D/bin/hive"
   add_to_path
   mkdir -p "$HOME/Library/LaunchAgents"
   agent_plist > "$HOME/Library/LaunchAgents/$AGENT.plist"
+  make_app
 
   address=$("$D/bin/hive" web 2>/dev/null | tr -d '\r' | sed -n 's/.*\(http:[^ ]*\).*/\1/p' | head -n 1)
   [ -n "$address" ] || die "the Hive installed, but it gave no address. Try, in a new Terminal window: hive web"
@@ -254,7 +325,7 @@ main() {
   echo "The Hive is running in its own Linux VM, which can't see your files."
   echo "It starts when you log in. It pauses while this Mac sleeps, and carries on when it wakes."
   echo "Open it at: $address"
-  echo "To open it again, in a new Terminal window: hive open"
+  echo "To open it again, click Hive in your Applications folder, or in a new Terminal window: hive open"
   case "$address" in
     http://localhost*|http://127.0.0.1*)
       # Lima forwards the port a moment after the app listens. If it never does, something on the Mac holds that port.

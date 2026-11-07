@@ -17,6 +17,8 @@ stub shasum 'f=$3; [ -n "${FAKE_BADSUM:-}" ] && { echo "0000  $f"; exit 0; }; ca
 stub open 'echo "open $*" >> "$TLOG"'
 stub launchctl 'echo "launchctl $*" >> "$TLOG"'
 stub sleep 'exit 0'
+stub sips 'while [ $# -gt 0 ]; do [ "$1" = --out ] && : > "$2"; shift; done'
+stub iconutil 'while [ $# -gt 0 ]; do [ "$1" = -o ] && : > "$2"; shift; done'
 # These must never run: on a Mac without Apple's tools, python3 and git open an install dialog.
 for n in python3 python git brew make cc; do stub "$n" 'echo "FORBIDDEN '"$n"' $*" >> "$TLOG"; exit 1'; done
 
@@ -31,8 +33,10 @@ case "$1" in
   delete) rm -f "$TLOG.running"; rm -rf "${LIMA_HOME:?}/hive" ;;
   shell)
     for a in "$@"; do printf 'arg[%s]\n' "$a" >> "$TLOG.args"; done
-    case "$*" in *" hive web"*) [ -n "${FAKE_NOADDR:-}" ] || printf 'http://%s/login#sekret\r\n' "${FAKE_ADDR:-127.0.0.1:8077}" ;; esac
+    case "$*" in *" hive web"*) [ -n "${FAKE_NOADDR:-}" ] || printf 'http://%s/login#sekret\r\n' "${FAKE_ADDR:-localhost:8077}" ;; esac
     [ -z "${FAKE_INSTALL_FAILS:-}" ] || case "$*" in *install.sh*) exit 1 ;; esac
+    # The copy out at uninstall: run its script in a fake VM home.
+    case "$*" in *"tar -cf"*) [ -z "${FAKE_COPY_FAILS:-}" ] || exit 1; for a in "$@"; do s=$a; done; mkdir -p "$TLOG.vm"; (cd "$TLOG.vm" && HOME="$TLOG.vm" bash -c "$s") ;; esac
     ;;
 esac
 L
@@ -87,12 +91,18 @@ yes_if "VM: blocks the way to the Mac's localhost" grep -q 'ip daddr 192.168.5.0
 yes_if "VM: half of 16 GB" grep -q 'memory: "8GiB"' "$Y"
 yes_if "runs the normal install as root in the VM" grep -q 'arg\[sudo\]' "$T/mark.args"
 yes_if "the install comes from the site" grep -q 'install.sh' "$T/mark.args"
-yes_if "opens the Mac's browser at the address" mark_has 'open http://127.0.0.1:8077/login#sekret'
-yes_if "checks the address without its secret" mark_has 'curl.*127.0.0.1:8077/login$'
-yes_if "prints the address" grep -q 'http://127.0.0.1:8077/login#sekret' <<<"$out"
+yes_if "opens the Mac's browser at the address" mark_has 'open http://localhost:8077/login#sekret'
+yes_if "checks the address without its secret" mark_has 'curl.*localhost:8077/login$'
+yes_if "prints the address" grep -q 'http://localhost:8077/login#sekret' <<<"$out"
 yes_if "never runs python, git, brew or a compiler" mark_lacks FORBIDDEN
 yes_if "no sudo on the Mac itself" test ! -e "$B/sudo"
 yes_if "the command is there" test -x "$H/.hive/bin/hive"
+A="$H/Applications/Hive.app"
+yes_if "the Hive app is made in ~/Applications" test -x "$A/Contents/MacOS/Hive"
+yes_if "the app runs hive open" grep -qF "exec \"$H/.hive/bin/hive\" open" "$A/Contents/MacOS/Hive"
+yes_if "the app names itself Hive, with an icon file" sh -c "grep -q '<string>Hive</string>' '$A/Contents/Info.plist' && grep -q CFBundleIconFile '$A/Contents/Info.plist'"
+yes_if "the app has its icon" test -e "$A/Contents/Resources/Hive.icns"
+yes_if "it tells the person where the app is" grep -q 'Hive app in your Applications' <<<"$out"
 yes_if "PATH in zsh's file" grep -qF '.hive/bin' "$H/.zprofile"
 yes_if "PATH in bash's file" grep -qF '.hive/bin' "$H/.bash_profile"
 P="$H/Library/LaunchAgents/hive.vm.plist"
@@ -136,30 +146,67 @@ yes_if "hive: nothing is expanded on the Mac" grep -qF 'arg[$(boom)]' "$T/mark.a
 yes_if "hive: the VM's login shell gets no word to expand" grep -qF 'sudo -u hive -H bash -lc' "$H/.hive/bin/hive"
 yes_if "mac-check: the report never gets the path of the home folder" sh -c "! grep -E 'say \\"[^\\"\\$]*\\\$(R|HOME)' '$D/mac-check.sh'"
 yes_if "mac-check: a check keeps its label" sh -c 'eval "$(grep -E "^(say|pass|bad|check)\(\)" "$0")"; R=/dev/null; fails=0; f() { n=5; }; check "my label" f | grep -q "ok    my label"' "$D/mac-check.sh"
+# The app wakes a stopped Hive and waits for it to answer, then opens the address.
+: > "$T/mark"; env TLOG="$T/mark" HOME="$H" PATH="$B:$PATH" "$H/Applications/Hive.app/Contents/MacOS/Hive" >/dev/null 2>&1; yes_if "the app opens the Hive" mark_has 'open http://localhost:8077/login#sekret'
+yes_if "hive open waits for the app to answer first" sh -c "grep -q 'curl -s -o /dev/null --max-time 2' '$H/.hive/bin/hive'"
+printf '#!/bin/sh\necho mine\n' > "$T/other"; mkdir -p "$T/ho/Applications/Hive.app/Contents/MacOS"; cp "$T/other" "$T/ho/Applications/Hive.app/Contents/MacOS/Hive"
+H0="$H"; H="$T/ho"; run env >/dev/null 2>&1; yes_if "a Hive.app that isn't ours is left alone" grep -qx 'echo mine' "$H/Applications/Hive.app/Contents/MacOS/Hive"; H="$H0"
 rm -f "$T/mark.running"; : > "$T/mark"; hv web >/dev/null 2>&1; yes_if "hive: starts a stopped VM first" mark_has ' start '
-: > "$T/mark"; hv open >/dev/null 2>&1; yes_if "hive open: the Mac's browser" mark_has 'open http://127.0.0.1:8077/login#sekret'
+: > "$T/mark"; hv open >/dev/null 2>&1; yes_if "hive open: the Mac's browser" mark_has 'open http://localhost:8077/login#sekret'
 
 # Uninstall. It reads the word from a terminal, so give it one, in each system's way.
 if script -qc true /dev/null >/dev/null 2>&1; then pty() { script -qec "$1" /dev/null; }; else pty() { script -q /dev/null sh -c "$1"; }; fi
 # The word comes after a pause and the pipe stays open: a word typed before the terminal is ready can be lost, and BSD script passes the end of the pipe on as an end of input.
-rm_it() { { sleep 1; printf '%s\n' "$1"; sleep 1; } | env TLOG="$T/mark" HOME="$H" PATH="$B:$PATH" bash -c "$(declare -f pty); pty 'sh $D/remove-mac.sh'" 2>&1; }
+rm_it() { { sleep 1; printf '%s\n' "$@"; sleep 1; } | env TLOG="$T/mark" HOME="$H" PATH="$B:$PATH" bash -c "$(declare -f pty); pty 'sh $D/remove-mac.sh'" 2>&1; }
 
 fresh; out=$(env TLOG="$T/mark" HOME="$H" PATH="$B:$PATH" sh "$D/remove-mac.sh" 2>&1); rc=$?
 if [ "$rc" != 0 ] && grep -q 'nothing changed' <<<"$out"; then ok "uninstall with no Hive here: nothing changed"; else bad "uninstall with no Hive"; echo "$out"; fi
 out=$(env TLOG="$T/mark" HOME="$H" PATH="$B:$PATH" FAKE_UNAME=Linux sh "$D/remove-mac.sh" 2>&1); [ $? != 0 ] && grep -q 'uninstall.sh' <<<"$out" && ok "uninstall on Linux: points to the Linux line" || bad "uninstall on Linux"
 
 fresh; printf 'mine\n' > "$H/.zprofile"; run env >/dev/null 2>&1; mkdir -p "$H/.lima/own" "$H/Documents"; echo keep > "$H/Documents/f"; : > "$T/mark"
-if out=$(rm_it no); [ -d "$H/.hive" ] && mark_lacks ' delete ' && grep -q 'nothing changed' <<<"$out"; then ok "uninstall: any other word changes nothing"; else bad "uninstall: other word"; echo "$out"; fi
-out=$(rm_it delete); rc=$?
+if out=$(rm_it '' '' '' no); [ -d "$H/.hive" ] && mark_lacks ' delete ' && grep -q 'nothing changed' <<<"$out"; then ok "uninstall: any other word changes nothing"; else bad "uninstall: other word"; echo "$out"; fi
+rm -rf "$T/mark.vm"; mkdir -p "$T/mark.vm/projects/one" "$T/mark.vm/kb" "$T/mark.vm/core"; echo work > "$T/mark.vm/projects/one/f"; echo note > "$T/mark.vm/kb/n.md"; echo '{}' > "$T/mark.vm/board.jsonl"
+if out=$(export FAKE_COPY_FAILS=1; rm_it '' '' '' delete); [ -d "$H/.hive" ] && mark_lacks ' delete ' && grep -q 'nothing was deleted' <<<"$out"; then ok "uninstall: the copy out fails: nothing deleted"; else bad "uninstall: copy fails"; echo "$out"; fi
+rm -rf "$H"/hive-kept-*
+out=$(rm_it '' y '' delete); rc=$?
+K="$H/hive-kept-$(date +%Y%m%d)"
+yes_if "uninstall: keeps projects and board by default, out of the VM" test "$(cat "$K/projects/one/f" 2>/dev/null)" = work -a -e "$K/board.jsonl"
+yes_if "uninstall: y deletes the notes; the Hive's own code isn't kept" test ! -e "$K/kb" -a ! -e "$K/core" -a ! -e "$K/.copy.tar"
+yes_if "uninstall: says where they are" grep -q "Kept in $K: projects and board" <<<"$out"
+yes_if "uninstall: copies before the VM goes" sh -c "grep -n 'shell\\|delete --force' '$T/mark' | tail -2 | head -1 | grep -q shell"
 grep -q 'gone from this Mac' <<<"$out" || { bad "uninstall: says it's done"; echo "$out"; }
 yes_if "uninstall: deletes the VM" mark_has "limactl LIMA_HOME=$H/.hive/lima delete --force hive"
 yes_if "uninstall: stops the login start" mark_has 'launchctl bootout gui/501/hive.vm'
+yes_if "uninstall: the Hive app gone" test ! -e "$H/Applications/Hive.app"
 yes_if "uninstall: login start gone" test ! -e "$H/Library/LaunchAgents/hive.vm.plist"
 yes_if "uninstall: its folder gone" test ! -e "$H/.hive"
 if grep -qF '.hive/bin' "$H/.zprofile" "$H/.bash_profile"; then bad "uninstall: PATH line left"; else ok "uninstall: PATH lines gone"; fi
 yes_if "uninstall: the rest of the shell file stays" grep -qx mine "$H/.zprofile"
 yes_if "uninstall: your own Lima stays" test -d "$H/.lima/own"
 yes_if "uninstall: your files stay" test -e "$H/Documents/f"
+
+# A stop before Linux starts: reported only on a yes, with fixed words and no log.
+posts() { grep -c -- "-d .*\"kind\":\"install\"" "$T/mark"; }
+U=http://reports.test/r
+fresh; run env HIVE_SHARE_URL=$U FAKE_FREE_KB=1048576 setsid </dev/null >/dev/null 2>&1; yes_if "stop, no terminal, no HIVE_REPORT: sends nothing" test "$(posts)" = 0
+fresh; run env HIVE_SHARE_URL=$U FAKE_FREE_KB=1048576 HIVE_REPORT=1 >/dev/null 2>&1; yes_if "stop with HIVE_REPORT=1: sends once" test "$(posts)" = 1
+yes_if "report: kind install, os mac/chip, the step, an exit code" mark_has '"kind":"install","os":"mac/arm64","message":"install stopped at disk: not enough free disk (exit 1)"'
+yes_if "report: no log key, no install id of the Hive" bash -c "! grep -q '\"log\"' '$T/mark' && grep -q '\"install\":\"i[0-9a-f]\\{16\\}\"' '$T/mark'"
+fresh; run env HIVE_SHARE_URL=$U FAKE_FREE_KB=1048576 HIVE_REPORT=0 >/dev/null 2>&1; yes_if "HIVE_REPORT=0: sends nothing" test "$(posts)" = 0
+fresh; run env FAKE_FREE_KB=1048576 HIVE_REPORT=1 >/dev/null 2>&1; yes_if "address not filled in: sends nothing" test "$(posts)" = 0
+for r in 'FAKE_UNAME=Linux' 'FAKE_UID=0' 'FAKE_MACOS=abc' '-u HIVE_MAC_TEST'; do
+  fresh; run env HIVE_SHARE_URL=$U HIVE_REPORT=1 $r >/dev/null 2>&1; yes_if "refusal ($r): offers and sends nothing" test "$(posts)" = 0
+done
+fresh; run env HIVE_SHARE_URL=$U FAKE_INSTALL_FAILS=1 HIVE_REPORT=1 >/dev/null 2>&1; yes_if "VM install fails with HIVE_REPORT=1: this wrapper sends nothing (the install sends its own)" test "$(posts)" = 0
+fresh; run env HIVE_SHARE_URL=$U FAKE_INSTALL_FAILS=1 >/dev/null 2>&1; yes_if "VM install fails, no terminal: sends nothing" test "$(posts)" = 0
+if command -v script >/dev/null 2>&1; then
+  for ans in y n ''; do
+    fresh; printf '%s\n' "$ans" | env TLOG="$T/mark" HOME="$H" PATH="$B:$PATH" HIVE_MAC_TEST=1 HIVE_SHARE_URL=$U FAKE_FREE_KB=1048576 timeout 15 script -qec "sh $D/get-mac.sh" /dev/null >"$T/tty.out" 2>&1
+    want=0; [ "$ans" = y ] && want=1
+    yes_if "terminal answer '$ans': $want report(s), one question" test "$(posts)" = "$want" -a "$(grep -c 'Send this failure' "$T/tty.out")" = 1
+  done
+fi
+fresh; run env >/dev/null 2>&1; yes_if "HIVE_HOST=mac goes into the VM's install" grep -q 'HIVE_HOST=mac' "$T/mark.args"
 
 # The syntax Macs run, and lint where it's installed.
 for f in get-mac.sh remove-mac.sh mac-check.sh; do yes_if "$f parses" sh -n "$D/$f"; done

@@ -1,6 +1,6 @@
 #!/bin/sh
 # For someone with a Mac: does the Hive really work here? One line, about 20 minutes:
-#   curl -fsSL https://hive.ihsan.cc/mac-check.sh -o mac-check.sh && sh mac-check.sh
+#   curl -fsSL <THIS-SITE>/mac-check.sh -o mac-check.sh && sh mac-check.sh
 # It installs the Hive if it isn't there, checks it, asks you to do three things, and writes a report you send back.
 # The report has versions, memory and results. It has no address, secret, user name or file of yours.
 # HIVE_CHECK_AUTO=1 is for a Mac runner with no person: nothing is asked, and sleep is only a pause of the VM.
@@ -8,7 +8,7 @@
 # After the check, to test uninstall: run the uninstall line it prints, then: sh mac-check.sh --after-uninstall
 set -u
 
-SITE="${HIVE_SITE:-https://hive.ihsan.cc}"
+SITE="${HIVE_SITE:-<THIS-SITE>}"
 R="$HOME/hive-mac-report.txt"
 L="$HOME/.hive/lima-dist/bin/limactl"
 export LIMA_HOME="$HOME/.hive/lima"
@@ -30,7 +30,7 @@ answers() { a=$(address); curl -fsS -o /dev/null -m 5 "${a%%#*}"; }
 answers_soon() { t0_=$(date +%s); while [ $(( $(date +%s) - t0_ )) -lt 180 ]; do answers 2>/dev/null && { waited=$(( $(date +%s) - t0_ )); return 0; }; sleep 2; done; waited=never; return 1; }
 # For the report when the app doesn't answer. The port and states only: the address holds a login key.
 why_no_answer() {
-  a=$(address); p=${a#http://127.0.0.1:}; p=${p%%/*}
+  a=$(address); p=${a#http://*:}; p=${p%%/*}
   say "      answered after: ${waited:-?} s. Port: ${p:-no address}"
   say "      in the VM: $(as_hive 'systemctl --user is-active hive-dash; ss -ltn | grep -c ":'"${p:-8077}"' "; curl -s -o /dev/null -m 5 -w "%{http_code}" http://127.0.0.1:'"${p:-8077}"'/login' 2>&1 | tr -d '\r' | tr '\n' ' ' | cut -c1-120)"
   say "      on this Mac: $(curl -s -o /dev/null -m 5 -w '%{http_code}' "http://127.0.0.1:${p:-8077}/login" 2>&1 | cut -c1-40)"
