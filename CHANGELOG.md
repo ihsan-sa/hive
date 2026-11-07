@@ -4,6 +4,10 @@ Release notes are on the [releases page](https://github.com/ihsan-sa/hive/releas
 
 A release can ship several times a day. A new Hive installs at most one a day, once it has been out for at least 12 hours; **How often to update** in Settings changes that. The latest is at [releases/latest](https://github.com/ihsan-sa/hive/releases/latest).
 
+## An agent on the phone can't hang up while you're talking
+
+When an agent ends a call, it says goodbye and then waits for you to go quiet. If you start talking, the call stays on and the agent hears what you said.
+
 ## Send everything to the makers in one go
 
 **Settings › Data sharing** has a new **Send everything** button next to **Send a copy now**. It sends your whole board and log, along with your projects, files and notes, as one zip. Version-control folders, caches, secret-looking files and anything over 50 MB are left out, and the zip says what was skipped. It only works with **Everything** turned on, you can send it once a day, and the makers delete it after 3 days.

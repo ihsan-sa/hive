@@ -844,7 +844,7 @@ function standSec(id, title, rows, ctx) {
 function standingPart(r, ctx) {
   if (!r.needs.length && !r.done.length && !r.going.length && !r.projects.length) return null;
   return h("div", { class: "cm-stand", "data-key": "stand" },
-    h("div", { class: "cm-stand-hd" }, h("h2", { class: "cm-needs-t" }, "Where things stand"),
+    h("div", { class: "cm-stand-hd" }, h("h2", { class: "cm-needs-t" }, "Where things stand"), h("a", { class: "cm-stand-by", href: href("work"), title: "Every project on one page: what it did today, where it stands, what comes next" }, "By project"),
       r.at ? h("span", { class: "cm-stand-at", title: "When the headline and group wording were last written. The lists and agents' status lines under them are live." }, "Summary updated " + ago(r.at)) : null),
     r.headline ? h("p", { class: "cm-stand-brief" }, mdPlain(r.headline)) : null,
     standSec("needs", "Needs you", r.needs, ctx),

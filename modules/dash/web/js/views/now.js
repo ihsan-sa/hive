@@ -48,7 +48,7 @@ function needsYou(run, states, waiting, L) {
   if (waiting.length) rows.push({ sev: 3, tone: "quiet", head: plural(waiting.length, "post") + " waiting", text: "for an agent to start: " + waiting.slice(0, 4).map(p => p.name).join(", ") + (waiting.length > 4 ? "…" : ""), href: href("comms"), act: "Chat" });
   rows.sort((a, b) => a.sev - b.sev);
   if (!rows.length) return null;
-  return section({ title: "Needs you", key: "needs" }, h("ul", { class: "nd-list" }, rows.map((r, i) => h("li", { "data-tone": r.tone, "data-key": r.head + i },
+  return section({ title: "Needs you", key: "needs", note: "only you can do the next step" }, h("ul", { class: "nd-list" }, rows.map((r, i) => h("li", { "data-tone": r.tone, "data-key": r.head + i },
     statusDot(r.tone === "bad" ? "stuck" : "limited"), h("b", null, r.head), h("span", { class: "meta", title: r.text }, r.text), h("a", { href: r.href, class: "nd-act" }, r.act)))));
 }
 
@@ -72,8 +72,8 @@ function devTables(run, states, t) {
       h("td", { class: "meta", "data-label": "Jobs" }, String(j.queued || 0)),
       h("td", { class: ["num", j.waited > 3600 ? "nt-long" : "meta"], "data-label": "Waited" }, dur((j.waited || 0) * 1e3))); }))));
   return cols(
-    section({ title: "Working", note: String(working.length) }, working.length ? w : empty("None.")),
-    section({ title: "In the job queue", note: String(queued.length) }, queued.length ? q : empty("None.")));
+    section({ title: "Working", note: `${working.length}: agents running right now`, info: "Agents that are in the middle of a turn." }, working.length ? w : empty("None.")),
+    section({ title: "In the job queue", note: `${queued.length}: heavy jobs waiting their turn` }, queued.length ? q : empty("None.")));
 }
 
 /** Addressed to the person, no reply yet, last 3 days: one row per thread. For the TV tile; the page itself leaves this to Chat. */

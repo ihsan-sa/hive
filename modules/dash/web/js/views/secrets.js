@@ -38,14 +38,14 @@ export function secretParts(ctx, level) {
     };
     const reach = S.app.settings ? secretsReach() : "Every agent on this account can read the file, so use tokens you can rotate.";
     return [
-      section({ title: "Add or replace", level },
+      section({ title: "Add or replace", note: "send a token to the Hive", level },
         h("p", { class: "field-h sec-lead" }, "Then tell an agent the name in chat and what it's for. ", reach, S.app.route === "outside" ? " Cloudflare carries it on the way here." : ""),
         h("div", { class: "fgrid" },
           field("Name", input({ value: F.name, autocomplete: "off", placeholder: "github-token", oninput: (e, n) => { F.name = n.value; } })),
           field("Value", input({ type: "password", value: F.value, autocomplete: "new-password", oninput: (e, n) => { F.value = n.value; } }))),
         h("div", { class: "frow" }, button("Save", save, { kind: "primary" }),
           F.say ? h("p", { class: "fmsg", "data-tone": F.tone, role: "status" }, F.say) : null)),
-      section({ title: "Stored", level }, list(F.items.map(r => ({
+      section({ title: "Stored", note: "names only; values are never shown", level }, list(F.items.map(r => ({
         key: r.name, title: r.name, meta: "set " + ago(r.at * 1000),
         text: h("span", { class: "frow" }, button("Replace", () => replace(r.name), { size: "s", kind: "quiet", title: `Type a new value for ${r.name}` }), button("Remove", () => remove(r.name), { size: "s", kind: "quiet" })),
       })), { empty: "Nothing stored yet." }))];

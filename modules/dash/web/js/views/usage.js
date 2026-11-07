@@ -196,7 +196,7 @@ const tag = (tone, text) => h("span", { class: "pg-t", "data-tone": tone || null
 /** The app look: a state, one answer, three cards, one chart, a short accounts table, the detail behind closed rows. */
 function appHead(U, t, R, pick, d1) {
   const us = U.logins || [], ans = leftAnswer(U, t), wk = activeUse(U, t) || totalUse(us, t);
-  const used = wk ? Math.round(wk.pct) : null, stopAt = U.stop_pct ?? 98, atStop = us.some(l => !l.paused) ? !us.some(l => inUse(l, U)) : used != null && used >= stopAt;
+  const used = wk ? Math.round(wk.pct) : null, stopAt = U.stop_pct ?? 100, atStop = us.some(l => !l.paused) ? !us.some(l => inUse(l, U)) : used != null && used >= stopAt;
   const state = used == null ? { tone: "quiet", text: "Not read yet" } : atStop ? { tone: "bad", text: "At the stop line" } : used >= 80 ? { tone: "warn", text: "Getting close" } : ans.tone === "warn" ? { tone: "warn", text: "Going fast" } : { tone: "good", text: "Plenty left" };
   const who = wk && wk.ls && us.length > 1 && wk.ls.length ? wk.ls.map(x => x.name) : null;
   const title = used == null ? "Usage isn't read yet." : who ? `${who.join(", ")} ${who.length > 1 ? "have" : "has"} ${Math.max(0, 100 - used)}% left.` : `${Math.max(0, 100 - used)}% of the week is left.`;
@@ -216,7 +216,7 @@ function appAccounts(U, t, R) {
   const rows = us.map(l => loginRow(U, l, t, Math.min(R.span, 7 * DAY)));
   const st = r => r.state.key === "inuse" ? tag("good", "in use") : r.state.key === "paused" ? tag("quiet", "paused") : r.state.key === "out" ? tag("bad", "signed out") : tag("warn", "at its stop line");
   const wStop = l => (l.stop && l.stop.weekly) ?? U.stop_pct;
-  return section({ title: "Claude accounts", note: `stop line ${U.stop_pct}%`, actions: can("config") ? button("Change stop line", () => askStopLine(U), { size: "s", kind: "quiet" }) : null },
+  return section({ title: "Claude accounts", note: `how much of each is used; stop line ${U.stop_pct}%`, actions: can("config") ? button("Change stop line", () => askStopLine(U), { size: "s", kind: "quiet" }) : null },
     table({ key: r => r.key, rows, columns: [
       { label: "Account", render: r => h("span", null, r.name, r.tag ? h("span", { class: "meta" }, " · " + r.tag) : null) },
       { label: "Weekly", render: r => cell(r.gauges.find(g => g.label === "Weekly"), r.gauges.find(g => g.label === "Weekly")?.stop) },
@@ -257,11 +257,11 @@ export default {
     });
 
     const key = h("span", { class: "chart-key" }, h("span", null, h("i"), "weekly"), h("span", null, h("i", { "data-k": "1" }), "5-hour"), h("span", null, h("i", { "data-k": "mark" }), "stop"), h("span", null, "· " + (R.span > 7 * DAY ? "last 7 days" : R.name)));
-    const limits = section({ title: app ? "Claude accounts" : "Logins", note: app ? `stop line ${U.stop_pct}%` : "pause one to keep the starter off it, or set where it stops",
+    const limits = section({ title: app ? "Claude accounts" : "Logins", note: app ? `how much of each is used; stop line ${U.stop_pct}%` : "pause one to keep the starter off it, or set where it stops",
         actions: app && can("config") ? button("Change stop line", () => askStopLine(U), { size: "s", kind: "quiet" }) : null },
       gaugeRows({ head: ["Account", "Limits", key, ""], histKey: key, rows: us.map(l => loginRow(U, l, t, Math.min(R.span, 7 * DAY))) }));
     const provs = Object.keys(P).filter(k => !k.startsWith("_"));
-    const others = provs.length ? section({ title: "Other providers" }, gaugeRows({ rows: provs.map(k => providerRow(k, P[k], P._checked)) })) : null;
+    const others = provs.length ? section({ title: "Other providers", note: "accounts other than Claude, and how much of each is used" }, gaugeRows({ rows: provs.map(k => providerRow(k, P[k], P._checked)) })) : null;
 
     // Spend
     const files = U.files, tk = [0, 0, 0, 0]; let all = 0, hours = 0;
@@ -295,12 +295,12 @@ export default {
       chart({ title: bStep === DAY ? "Cost per day" : bStep === HOUR ? "Cost per hour" : "Cost per 6 hours", note: R.span < bSpan ? "last 6 hours" : R.name, series: [bars], kind: "bar", start: hStart, step: bStep, fmt: money, top: money(Math.max(...bars)) }),
       chart({ title: "Cost so far", note: R.span < bSpan ? "last 6 hours" : R.name, series: [cum], kind: "step", start: hStart, step: bStep, fmt: money, top: money(run) }));
     const tot = d1 || 1;
-    const tiers = section({ title: "Cost by your priority list", note: R.name },
+    const tiers = section({ title: "Cost by your priority list", note: R.name + ": spend per priority" },
       share(TIERS.map(x => ({ key: x.key, label: x.label, tone: x.tone, value: byTier[x.key], text: `${money(byTier[x.key])} (${Math.round((100 * byTier[x.key]) / tot)}%)` }))));
     const who = cols(
-      section({ title: app ? "Costliest conversations" : "Costliest threads", note: R.name }, rank(top(byT).map(([k, v]) => ({ key: k, label: threadTitle(k) || k || (app ? "No conversation" : "No thread"), value: v, text: money(v), tone: tier(tierOf(k)).tone, href: threadHref(k) })))),
-      section({ title: "Costliest agents", note: R.name }, rank(top(byA).map(([k, v]) => ({ key: k, label: k || "No agent", value: v, text: money(v), tone: status(agentStatus(k).key).tone, href: agentHref(k), onClick: e => openRef(e, "agent", k) })))));
-    const models = section({ title: "By model", note: R.name }, !Object.keys(byM).length ? empty("No model cost in this range.") : rank(top(byM).map(([k, v]) => ({ key: k, label: k, value: v, text: money(v), tone: "data" }))));
+      section({ title: app ? "Costliest conversations" : "Costliest threads", note: R.name + ": who spent the most" }, rank(top(byT).map(([k, v]) => ({ key: k, label: threadTitle(k) || k || (app ? "No conversation" : "No thread"), value: v, text: money(v), tone: tier(tierOf(k)).tone, href: threadHref(k) })))),
+      section({ title: "Costliest agents", note: R.name + ": who spent the most" }, rank(top(byA).map(([k, v]) => ({ key: k, label: k || "No agent", value: v, text: money(v), tone: status(agentStatus(k).key).tone, href: agentHref(k), onClick: e => openRef(e, "agent", k) })))));
+    const models = section({ title: "By model", note: R.name + ": spend split by model" }, !Object.keys(byM).length ? empty("No model cost in this range.") : rank(top(byM).map(([k, v]) => ({ key: k, label: k, value: v, text: money(v), tone: "data" }))));
 
     if (app) {
       const fold = (title, summary, ...b) => section({ fold: true, title, summary }, ...b);

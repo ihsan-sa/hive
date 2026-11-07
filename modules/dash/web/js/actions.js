@@ -95,10 +95,10 @@ export function askLimits(U, l) {
 
 // ---- The line every account stops at unless it has its own. ----
 export function askStopLine(U) {
-  const i = pctInput(U.stop_pct, "98");
+  const i = pctInput(U.stop_pct, "100");
   confirm({
     title: "Where new agents stop", ok: "Save",
-    body: ["Past this share of its weekly limit, an account gets no new agents unless you ask for them. An account with its own line uses that instead. Subscriptions only.",
+    body: ["Past this share of its weekly limit, an account gets no new agents unless you ask for them. An account with its own line uses that instead. At 100, agents run right up to the account's real limit, which leaves no reserve for your own messages once every account is out. Subscriptions only.",
       field("Weekly, %", i)],
     onOk: async () => { const v = val(i, 100); if (!v) throw Error("Give a number from 1 to 100."); await post("/api/config", { usage_stop_pct: v }); await pollUsage(); },
   });

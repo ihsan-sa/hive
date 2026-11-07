@@ -290,6 +290,14 @@ def _yield_gpu(secs=120):
     except Exception: pass
 
 
+def wav_seconds(b64):
+    """How long a base64 wav plays, 0 if it can't be read."""
+    if not b64: return 0.0
+    try:
+        with wave.open(io.BytesIO(base64.b64decode(b64))) as w: return w.getnframes() / w.getframerate()
+    except (wave.Error, EOFError, ValueError): return 0.0
+
+
 def stt(pcm16k, partial=False, channel="browser", info=None):
     """16 kHz mono int16 little-endian bytes to text. Drops what's most likely noise, not speech.
     partial: a look at speech still going on, for showing it live; gives None rather than wait behind another transcription.
@@ -459,6 +467,16 @@ class Brain:
             except Exception: pass
 
 
+# Printed once by `phone answer`, so only the agent that picks up reads it.
+ON_THE_LINE = """`phone talk {id} "what you say"` speaks your words, waits and prints what the person says back. Keep running it until it says the call ended, then carry on with your work where you left off.
+Talk like on a phone: one to three short sentences, no markdown, ids, paths or links. Before a slow tool call, say one short line first.
+`phone transfer NAME --call {id}` puts them through to another agent; `phone hangup {id} "bye"` ends the call.
+You can work between turns: post in a thread, ask an agent on the board and wait for its answer, run a short script or look-up. Keep each under a minute; for anything bigger, start a new agent on it (hive post --model sonnet with a mention of new, in its own thread) and tell the person.
+One voice per call: to bring in other agents, ask them on the board and relay what they say, or transfer the call."""
+
+HANGUP_QUIET_S, HANGUP_GRACE_S, HANGUP_WAIT_S = 2.5, 2.0, 90  # a hang-up waits for this much quiet after their voice, this long after our goodbye ends, and this long at most
+
+
 class AgentLine:
     """The agent itself on the line, talking through `phone talk` from its own session. Stands where a Brain would:
     what the person says queues here until the agent's next `phone talk` or `phone listen` collects it."""
@@ -509,6 +527,9 @@ class Call:
         self.quiet = False       # a test call: no transcript on the board
         self.leaving = None      # the brain that ran `phone transfer`: muted from then on
         self.summoned = None     # (name, at): the agent asked to pick up itself
+        self.voice_at = 0.0      # the last moment the person's voice came in
+        self.stt_busy = 0        # their turns still being transcribed: words on the way
+        self.say_until = 0.0     # when what we've sent should have finished playing
 
     # events --------------------------------------------------------------
     def emit(self, kind, **kw):
@@ -538,6 +559,7 @@ class Call:
             if isinstance(brain, AgentLine): brain.spoke = time.time()
             if self.state == "hold":
                 self.state = "talking"; self.emit("pickup", agent=self.agent)
+            self.say_until = max(time.time(), self.say_until) + wav_seconds(audio)
             self.emit("say", text=text, agent=self.agent, audio=audio)
 
     def filler(self, brain):
@@ -591,15 +613,8 @@ class Call:
         self.summoned = (name, time.time())
         self.emit("hold", agent=name if name != "new" else "a new agent", why=why)
         self.lines.append(("system", f"calling {name if name != 'new' else 'a new agent on this thread'}: {why}"))
-        so_far = "\n".join(f"  {s}: {t}" for s, t in self.lines[-12:] if s != "system")
-        text = (f"The person is calling you on the phone right now ({why}). Pause your work and pick up now:\n\n"
-                f"  phone answer {self.id}\n  phone talk {self.id} \"what you say\"\n\n"
-                "phone talk speaks your words, then waits and prints what the person says back. Keep running it until it says the call "
-                "ended, then carry on with your work where you left off. Talk like on a phone: one to three short sentences, no markdown, "
-                "ids, paths or links. Before a slow tool call, say one short line first. `phone transfer NAME --call ID` puts them through "
-                "to another agent; `phone hangup ID \"bye\"` ends the call. You can still work while on the line, between turns: post in a thread, ask another agent on the board and wait for its answer, run a short script or a quick look-up. Keep each of those under a minute so your turns stay quick; for anything bigger, start a new agent on it (hive post --model sonnet with a mention of new, in its own thread) and tell the person. One voice per call: to bring in other agents, ask them on the board and relay what they say, or transfer the call."
-                + (f"\n\nSo far on the call:\n{so_far}" if so_far else "")
-                + f"\n\nThe person keeps waiting for you, no copy of you will answer: pick up as soon as this reaches you.")
+        # Short on purpose: it lands in the board and the agent's context on every call. How to talk and the call so far come from `phone answer`.
+        text = f"The person is calling you on the phone ({why}). They're waiting, pick up now: phone answer {self.id}"
         argv = ["hive", "post", "--as", "phone", "--to", name] + (["--model", BRAIN_MODEL] if name == "new" else []) + (["--thread", "phone-test" if self.quiet else self.thread] if self.thread or self.quiet else [])
         try:
             r = subprocess.run(argv, input=text.replace("@", "＠"), text=True, timeout=30, capture_output=True)
@@ -656,6 +671,32 @@ class Call:
         return "ok"
 
     # end -----------------------------------------------------------------
+    def taken_words(self, line):
+        with self.cv:
+            out, line.heard = line.heard, []
+        return out
+
+    def person_talking(self, line):
+        """Before a goodbye: words the agent hasn't read yet, or the person speaking right now. A call never ends on them (the person, 2026-11-06, post 11061803e095). A dict for the agent, or None."""
+        if line.heard: return {"hung_up": False, "heard": self.taken_words(line)}
+        if self.stt_busy or time.time() - self.voice_at < HANGUP_QUIET_S: return {"hung_up": False, "speaking": True}
+        return None
+
+    def end_when_quiet(self, name, line):
+        """The agent's hang-up, after its goodbye: end once that has played and the person stays quiet. If they say anything, the call stays on and the agent gets the words.
+        After HANGUP_WAIT_S of sound with no words at all it's noise on the line, and the call ends."""
+        t0 = time.time()
+        while time.time() - t0 < HANGUP_WAIT_S:
+            if self.ended or self.brain is not line: return {"hung_up": True}
+            if line.heard: return {"hung_up": False, "heard": self.taken_words(line)}
+            t = time.time()
+            if not self.stt_busy and t >= self.say_until + HANGUP_GRACE_S and t - self.voice_at >= HANGUP_QUIET_S: break
+            time.sleep(0.1)
+        else:
+            if self.partial: return {"hung_up": False, "speaking": True}
+        self.end(f"{name} hung up")
+        return {"hung_up": True}
+
     def end(self, why="hung up"):
         if self.ended: return
         self.ended, self.state = True, "ended"
@@ -813,7 +854,9 @@ class H(BaseHTTPRequestHandler):
             if text: threading.Thread(target=c.heard, args=(text,), daemon=True).start()
             return self.out({"text": text})
         if m[2] == "partial":
+            c.voice_at = time.time()
             text = stt(self.body(), partial=True)
+            c.voice_at = time.time()
             if text is not None and c.state != "hold": c.partial = text; c.emit("partial", text=text)
             return self.out({"text": text})
         if m[2] == "text":
@@ -825,7 +868,7 @@ class H(BaseHTTPRequestHandler):
             with c.cv: c.cv.notify_all()   # an agent waiting on the person's words gets back to its work
             return self.out({"ok": True, "muted": c.muted})
         if m[2] == "interrupt":
-            c.lines.append(("system", "the person cut in")); return self.out({"ok": True})
+            c.voice_at = time.time(); c.lines.append(("system", "the person cut in")); return self.out({"ok": True})
         if m[2] == "transfer":
             b = self.jbody(); to = str(b.get("to") or "").strip()
             if not to: return self.out({"error": "to: an agent name"}, 400)
@@ -839,10 +882,11 @@ class H(BaseHTTPRequestHandler):
                 return self.out({"result": r, "agent": c.agent, "lines": c.lines[-30:]})
             line = c.brain if isinstance(c.brain, AgentLine) and c.brain.name == name else None
             if not line: return self.out({"error": "you aren't on this call (run phone answer first, or it moved on)"}, 409)
+            if m[2] == "hangup" and (talking := c.person_talking(line)): return self.out(talking)
             for s in SENT_END.split(str(b.get("text") or "")):
                 if speakable(s): c.say(speakable(s), line)
             c.busy_since = None
-            if m[2] == "hangup": c.end(f"{name} hung up")
+            if m[2] == "hangup": return self.out({"ok": True, **c.end_when_quiet(name, line)})
             return self.out({"ok": True})
 
 
@@ -952,6 +996,7 @@ def main(argv):
         if r.get("result") == "ok":
             so_far = "\n".join(f"  {s}: {t}" for s, t in r.get("lines", []) if s != "system")
             print("You're on the line; the person hears hold music until you speak." + (f" The call so far:\n{so_far}" if so_far else "")
+                  + f"\n\n{ON_THE_LINE.format(id=a.call)}"
                   + f'\n\nNow say hi: phone talk {a.call} "..."')
         elif r.get("result") == "taken" or r.get("result") == "ended" or r.get("error"):
             print(f"Too late: {'the call ended' if r.get('result') == 'ended' or r.get('error') else 'someone else has the line (a copy of you, if you took too long)'}. "
@@ -960,7 +1005,10 @@ def main(argv):
     if a.cmd in ("talk", "hangup"):
         r = api("POST", f"/call/{a.call}/{'say' if a.cmd == 'talk' else 'hangup'}", {"name": me, "text": a.text}, timeout=120)   # it returns once every sentence is synthesised
         if r.get("error"): print(f"{r['error']}. Carry on with your work."); return
-        if a.cmd == "hangup": print("Hung up. Carry on with your work where you left off."); return
+        if a.cmd == "hangup":
+            if r.get("hung_up", True): print("Hung up. Carry on with your work where you left off."); return
+            if r.get("heard"): print("Not hung up: the person is still talking. They said:\n" + "\n".join(r["heard"]) + f'\n\nAnswer them: phone talk {a.call} "..."'); return
+            print("Not hung up: the person is speaking right now. Their words:")
         return listen(a.call, me)
     if a.cmd == "listen": return listen(a.call, me)
     if a.cmd == "transfer":

@@ -192,7 +192,7 @@ function changed(n, D, host) {
   if (!w) return empty("Reading…", { kind: "loading" });
   const limited = w.nfiles && !w.files.length;
   const parts = [];
-  if (w.prs.length) parts.push(section({ title: "Pull requests", level: null }, list(w.prs.map((x, i) => ({ key: "pr" + i, title: x.x, meta: ago(x.t * 1e3) })), { dense: true })));
+  if (w.prs.length) parts.push(section({ title: "Pull requests", note: "opened by this agent", level: null }, list(w.prs.map((x, i) => ({ key: "pr" + i, title: x.x, meta: ago(x.t * 1e3) })), { dense: true })));
   if (w.commits.length) parts.push(section({ title: "Commits", note: w.ncommits > w.commits.length ? `newest ${w.commits.length} of ${w.ncommits}` : null }, list(w.commits.map((x, i) => ({ key: "c" + i + x.t, title: x.x, meta: ago(x.t * 1e3) })), { dense: true, limit: panel ? 4 : 10 })));
   if (w.files.length) parts.push(section({ title: "Files", note: `${plural(w.nfiles, "file")}, newest first` },
     h("ul", { class: "wf" }, w.files.slice(0, panel ? 8 : 30).map(f => [h("li", { "data-key": f.p, class: "wf-f", role: "button", tabindex: 0, "aria-expanded": String(DF.name === n && DF.p === f.p),
@@ -201,7 +201,7 @@ function changed(n, D, host) {
       h("code", null, "\u200e" + f.p + "\u200e"), h("span", { class: "meta" }, `${f.n > 1 ? f.n + "× · " : ""}${ago(f.t * 1e3)}`)),
       DF.name === n && DF.p === f.p ? h("li", { class: "wf-diff" }, diffView(DF.data)) : null])),
     w.files.length > (panel ? 8 : 30) ? h("p", { class: "meta" }, `and ${w.files.length - (panel ? 8 : 30)} more`) : null));
-  if (D.attached.length) parts.push(section({ title: "Files it posted" }, h("ul", { class: "wf" }, D.attached.slice(-8).reverse().map(({ p, f }) => h("li", { "data-key": p.id + f.name },
+  if (D.attached.length) parts.push(section({ title: "Files it posted", note: "attached to its posts" }, h("ul", { class: "wf" }, D.attached.slice(-8).reverse().map(({ p, f }) => h("li", { "data-key": p.id + f.name },
     h("a", { href: fileUrl(p, f), target: "_blank", rel: "noopener" }, f.name), h("span", { class: "meta" }, ago(p.t)))))));
   if (limited) parts.push(h("p", { class: "meta" }, `${plural(w.nfiles, "file")} changed, ${plural(w.ncommits, "commit")}; your sign-in sees counts only.`));
   return parts.length ? h("div", { class: "stack" }, parts) : empty("Nothing it edited, committed or posted shows in its logs.");
@@ -249,7 +249,7 @@ export function agentPage(n, host = "page") {
       after: [nowBlock(n, L), defs(agentCard(n).map(r => r.k === "Model" && isAgent(n) && !isWarden(n) && can("post") ? { ...r, v: modelPicker(n, r, L) } : r))],
     }),
     sections: [
-      section({ title: "In numbers" }, stats([
+      section({ title: "In numbers", note: "this agent's turns, time and cost" }, stats([
         { label: "Cost", value: S.usage ? money(spend.usd) : "…", note: `${toks(tk[0] + tk[1] + tk[2] + tk[3])} tokens, ${pct(tk[2], read)} of reads from cache` + (spend.sub ? `; ${money(spend.sub)} in subagents` : ""), title: `At API list prices, from the ${spend.src}.` + (byModel.length > 1 ? " " + byModel.map(([k, v]) => `${modelName(k)} ${money(v)}`).join(", ") + "." : "") + (L ? " A turn under way may not be counted yet." : "") },
         { label: "Time running", value: ss.length ? dur(D.active) : "none", note: plural(ss.length, "session") + (spend.calls != null ? `, ${spend.calls.toLocaleString()} model calls` : "") },
         { label: "Posts", value: mine.length, note: `named in ${plural(toMe.length, "post")}; ${plural(threads.length, "thread")}` },
@@ -284,7 +284,7 @@ export function agentPage(n, host = "page") {
           { label: "How it ended", render: x => h("span", { class: "sess-end", "data-tone": endTone(x) }, ended(x)) },
         ],
       })),
-      section({ title: "Latest posts" }, mine.length ? h("div", { class: "msg-col" }, mine.slice(panel ? -5 : -12).reverse().map(p => message(p))) : empty("No posts yet.")),
+      section({ title: "Latest posts", note: "what it wrote on the board" }, mine.length ? h("div", { class: "msg-col" }, mine.slice(panel ? -5 : -12).reverse().map(p => message(p))) : empty("No posts yet.")),
     ],
   }));
 }

@@ -12,7 +12,7 @@ Ladders (2026-11-06, thread focus-ladders): a `## Ladder` section in a goals.md 
 with a thin brief re-read "nothing left" and repeated it. `hive goals --brief THREAD` hands a round its rung, and `hive goals --rounds` counts how
 many rounds did work rather than report a wait.
 """
-import argparse, datetime as dt, importlib.util, json, re, sys
+import argparse, datetime as dt, importlib.util, json, re, subprocess, sys, zlib
 from pathlib import Path
 
 HOME = Path.home()
@@ -32,6 +32,8 @@ PARKED = re.compile(r"^Parked until (\d{4}-\d{2}-\d{2}):\s*(.+)$", re.M)
 PARK_MAX_D = 3   # a parked ladder comes back within this many days; a date further out doesn't count, so nobody parks a focus for good
 WAIT = re.compile(r"no step left|changed nothing|nothing (has )?changed|nothing left|all with the person|no new person posts|started no round|(?<!nothing )\bwaits? (only )?on (the person|a sign-in)", re.I)   # how a round says it did no work
 ROUND = re.compile(r"\bkeeper round\b", re.I)
+BRIEF = re.compile(r"^@\S+ keeper round\b", re.I)   # a round's brief: to @new, or to the thread's last worker
+RESUME_AB_END = "2026-11-09"   # resume_arm's trial ends: judge it then (hive-meta/continuity.md)
 
 def now(): return dt.datetime.now(dt.timezone.utc)
 
@@ -57,9 +59,9 @@ def rounds(board, threads, since):
         if p.get("thread") in out: by.setdefault(p["thread"], []).append(p)
     for th, posts in by.items():
         for i, p in enumerate(posts):
-            if p.get("at", "") < since or "new" not in str(p.get("to", "")) or not ROUND.search(p.get("text", "")): continue
+            if p.get("at", "") < since or not BRIEF.search(p.get("text", "")): continue
             later = [q for q in posts[i + 1:] if str(q.get("from", "")).lower() not in NOT_AGENTS and q.get("from") != p.get("from")]
-            if not later or (i + 2 < len(posts) and ROUND.search(later[0].get("text", "")) and "new" in str(later[0].get("to", ""))): out[th][2] += 1; continue
+            if not later or (i + 2 < len(posts) and BRIEF.search(later[0].get("text", ""))): out[th][2] += 1; continue
             who = later[0].get("from"); last = [q for q in later if q.get("from") == who][-1]
             out[th][1 if WAIT.search(last.get("text", "")) else 0] += 1
     return out
@@ -111,7 +113,9 @@ def thread_state(board, runs, t):
         s["posts"] += 1
         f = str(p.get("from", "")).lower()
         if f == "person": s["person_at"] = max(s["person_at"], p.get("at", ""))
-        elif f not in NOT_AGENTS and p.get("at", "") >= s["agent_at"]: s["agent_at"], s["agent"] = p.get("at", ""), p.get("from")
+        elif f not in NOT_AGENTS and p.get("at", "") >= s["agent_at"]:
+            s["agent_at"], s["agent"] = p.get("at", ""), p.get("from")
+            if not BRIEF.search(p.get("text", "")): s["worker"] = p.get("from")   # who did the thread's work, not who posted its last brief
     for r in runs:
         if r.get("thread"): st.setdefault(r["thread"], {"agent_at": "", "agent": "", "person_at": "", "posts": 0, "running": set()})["running"].add(r.get("name"))
     return st
@@ -163,9 +167,20 @@ def with_ladder(row, g):
         if lad["parked"]: row["idle"] = False
     return row
 
+def resume_arm(thread):
+    """A/B until RESUME_AB_END (hive-meta/continuity.md): odd-hashed threads wake their last worker, who keeps what it learned there
+    (the starter gives an heir to one that is done or over resume_max_context); the rest start fresh as before."""
+    return now().date().isoformat() < RESUME_AB_END and zlib.crc32(str(thread).encode()) % 2 == 1
+
+def post_model_args(text, model):
+    """A brief's model is for a fresh agent only: on a woken worker the starter would hold it from then on, undoing a grader step-up or
+    the worker's own `hive model` (review 110618506919)."""
+    return ["--model", model] if model and text.startswith("@new ") else []
+
 def brief(row):
     """The brief a keeper round posts for one focus. Every clause is here because a thin hand-written brief produced the 'nothing changed' rounds."""
-    head = f"@new Keeper round on {row['name']}. The ladder is the `## Ladder` section of {row.get('goals_path') or 'this focus project goals.md (create it, one line a rung)'}: read that whole file, and obey any notes in the section.\n\n"
+    to = row["last_worker"] if row.get("last_worker") and resume_arm(row.get("thread")) else "new"
+    head = f"@{to} Keeper round on {row['name']}. The ladder is the `## Ladder` section of {row.get('goals_path') or 'this focus project goals.md (create it, one line a rung)'}: read that whole file, and obey any notes in the section.\n\n"
     rung = f"**Your rung:** {row['rung']}\n\nDo this rung. Land real work, then run its check." if row.get("rung") else "**The ladder has no rung you can take.** Your work this round is to write the next 3 to 5 rungs from the measure in that file, then do the first one."
     return head + rung + """
 
@@ -176,7 +191,7 @@ Rules for the round:
 - Rung truly needs the person or is blocked: change it to `- [!]` with why (add a `For you:` line in your post if they must act), then take the next rung in this same run. A `[!]` costs you nothing and is not your result.
 - Before you stop, leave at least 2 open rungs, each with a `check:`. Add new ones from the measure; no busywork: each must be something a person who cares about that number would want done.
 - Only if you honestly cannot name one rung of real work: add a line `Parked until YYYY-MM-DD: why` to the section (at most 3 days out, later dates are ignored) and say so. The keeper skips it until then.
-- Your last post says: the rung, the check's output, the measure now, the next rung. If the work turns hard, `hive model opus "why"`."""
+- Your last post says: the rung, the check's output, the measure now, and ends with the line `Next: <the next rung, with its check>` (the starter carries it on), or a `Blocked:`, `Needs the person:` or `Waiting:` line if nothing is left you can do. If the work turns hard, `hive model opus "why"`."""
 
 def state_row(s, threads, open_asks, t, idle_d=IDLE_D):
     threads = [threads] if isinstance(threads, str) else list(threads)
@@ -184,7 +199,8 @@ def state_row(s, threads, open_asks, t, idle_d=IDLE_D):
     limit, idle_d = idle_d, days(s.get("agent_at"), t)
     running = sorted(s.get("running", set()))
     idle = not running and (idle_d is None or idle_d >= limit)
-    return {"threads": threads, "last_agent": s.get("agent"), "last_agent_d": idle_d, "person_d": days(s.get("person_at"), t), "running": running,
+    at = s.get("agent_at")
+    return {"threads": threads, "last_agent": s.get("agent"), "last_worker": s.get("worker"), "last_agent_d": idle_d, "quiet_s": (t - dt.datetime.fromisoformat(at)).total_seconds() if at and idle_d is not None else None, "person_d": days(s.get("person_at"), t), "running": running,
             "open_asks": len(mine), "owned_asks": sum(1 for e in mine if e.get("status") == "owned"), "idle": idle}
 
 def focus_quiet(t=None, hours=4.0):
@@ -222,6 +238,8 @@ def main():
     ap = argparse.ArgumentParser(prog="hive goals", description=__doc__.split("\n")[0])
     ap.add_argument("--json", action="store_true"); ap.add_argument("--idle", action="store_true", help="only the idle goals")
     ap.add_argument("--brief", metavar="THREAD", help="print the keeper round's brief for this focus or ladder thread, with its next rung"); ap.add_argument("--ladder-threads", action="store_true", help="idle focus and ladder threads, one a line: each gets a round")
+    ap.add_argument("--post", metavar="THREAD", help="post that brief to its thread; --model applies only to a fresh agent, so a woken worker keeps its own (a grader step-up, its own hive model)")
+    ap.add_argument("--model", help="with --post: the model for a fresh agent")
     ap.add_argument("--rounds", metavar="DAYS", type=float, help="keeper rounds on focuses over the last DAYS: work, wait, silent")
     a = ap.parse_args()
     g = goals()
@@ -234,10 +252,14 @@ def main():
         for r in g["rows"]:
             if r["idle"] and (r["kind"] == "focus" or r.get("ladder")): print(r["thread"])
         return
-    if a.brief:
-        r = next((r for r in g["rows"] if r["thread"] == a.brief and (r["kind"] == "focus" or r.get("ladder"))), None)
-        if not r: sys.exit(f"no focus or ladder in thread {a.brief}")
-        print(brief(r)); return
+    if a.brief or a.post:
+        th = a.post or a.brief
+        r = next((r for r in g["rows"] if r["thread"] == th and (r["kind"] == "focus" or r.get("ladder"))), None)
+        if not r: sys.exit(f"no focus or ladder in thread {th}")
+        b = brief(r)
+        if not a.post: print(b); return
+        cmd = ["hive", "post", "--thread", th] + post_model_args(b, a.model)
+        sys.exit(subprocess.run(cmd, input=b, text=True).returncode)
     if a.idle: g["rows"] = [r for r in g["rows"] if r["idle"]]
     print(json.dumps(g, indent=1, default=str) if a.json else render(g))
 

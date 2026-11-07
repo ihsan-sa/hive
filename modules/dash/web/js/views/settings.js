@@ -107,7 +107,7 @@ const check = (label, on, onChange, hint) => h("label", { class: "check" }, h("i
 // Kept in this browser, like the theme: another person signed in elsewhere keeps theirs.
 function viewSection(ctx) {
   const on = simpleOn();
-  return section({ title: "This device", level: 1 },
+  return section({ title: "This device", note: "this browser only", level: 1 },
     blocks(block({ title: "Simple view", key: "simple", sub: on ? "On: you see a chat, and your Hive talks to you in plain words." : "Off: you see every tab, and what the agents say to each other. Turn it on for just a chat and what's been made, with agents told to use plain words.",
       actions: button(on ? "Show everything" : "Turn on simple view", () => { setSimple(!on); ctx.update(); }, { size: "s" }) }),
     notifyBlock(ctx), pushBlock(ctx), phoneBlock(ctx), signBlock(ctx)));
@@ -218,7 +218,7 @@ function brandBlocks(ctx) {
 
 function hiveSection(ctx) {
   if (!can("config")) return null;
-  if (!F.ed) return section({ title: "The hive", level: 1 }, F.cfgErr ? [empty(`Couldn't read the settings: ${F.cfgErr}`, { kind: "error" }), button("Try again", () => { F.cfgErr = null; ctx.update(); return loadCfg(ctx); }, { size: "s" })] : empty("Reading…", { kind: "loading" }));
+  if (!F.ed) return section({ title: "The hive", note: "its state and settings", level: 1 }, F.cfgErr ? [empty(`Couldn't read the settings: ${F.cfgErr}`, { kind: "error" }), button("Try again", () => { F.cfgErr = null; ctx.update(); return loadCfg(ctx); }, { size: "s" })] : empty("Reading…", { kind: "loading" }));
   const E = F.ed, up = S.app.setup && S.app.setup.starter, brand = brandBlocks(ctx);
   // Each control saves on its own and sends only its own field; a refusal puts the old value back.
   const save = async (fields, undo, mark) => {
@@ -254,7 +254,7 @@ function hiveSection(ctx) {
     } catch (e) { say("starter", e.message, "bad"); }
     ctx.update();
   };
-  return section({ title: "The hive", level: 1, actions: statusLabel(up ? "working" : "ended", up ? "running" : "not running") },
+  return section({ title: "The hive", note: "its state and settings", level: 1, actions: statusLabel(up ? "working" : "ended", up ? "running" : "not running") },
     blocks(brand[0],
       block({ title: "Agents at once", sub: "Empty means no limit. Each saves when you leave the box.",
         actions: input({ type: "number", min: 1, max: 200, placeholder: "no limit", "aria-label": "Agents at once", value: E.max, oninput: (e, n) => { E.max = n.value; }, onchange: saveMax }) }),
@@ -289,7 +289,7 @@ function otherAccounts(ctx) {
 function useSection() {
   const use = simpleOn() && !needsAccount() ? accountUse() : null; if (!use) return null;
   const row = (title, x, word) => x && block({ title, sub: x.back ? `${word} in ${dur(x.back - now())}` : null, state: h("b", null, x.used + "% used"), key: title }, meter({ value: x.used, label: title }));
-  return section({ title: "Usage limit", level: 1 },
+  return section({ title: "Usage limit", note: "where new work stops", level: 1 },
     h("p", null, "Your Claude account has a limit for the week and a shorter one for every 5 hours. If one fills up, your Hive takes a break until it refills."),
     blocks(row("This week", use.week, "Refills"), row("These 5 hours", use.five, "Refills")));
 }
@@ -300,13 +300,13 @@ function loginsSection(ctx) {
   const state = !logins.length ? statusLabel("off", "none yet") : out ? statusLabel("out", `${out} not signed in`) : statusLabel("working", "signed in");
   if (simpleOn()) {  // one account, no names for it, and nothing about the machinery
     const on = yes > 0, name = (logins.find(l => !l.signed_in) || logins[0] || {}).name || null;
-    return section({ title: "Accounts", level: 1 }, blocks(block({ title: "Claude", sub: on ? "Your Hive works through this account." : "Your Hive works through a paid Claude account. Sign in to yours, and it can start.",
+    return section({ title: "Accounts", note: "what your agents sign in with", level: 1 }, blocks(block({ title: "Claude", sub: on ? "Your Hive works through this account." : "Your Hive works through a paid Claude account. Sign in to yours, and it can start.",
       state: statusLabel(on ? "working" : "out", on ? "signed in" : "not signed in"), key: "claude",
       actions: button(on ? "Sign in again" : "Sign in to Claude Code", () => startSignin("login-first", name, false, ctx.update), { size: "s", kind: on ? "quiet" : "primary" }) },
       signinBox("login-first", ctx.update))));
   }
   const other = otherAccounts(ctx) || { rows: [] };
-  return section({ title: "Accounts", level: 1 }, other.note,
+  return section({ title: "Accounts", note: "what your agents sign in with", level: 1 }, other.note,
     blocks(block({ title: "Claude", sub: logins.length ? (out ? `${yes} of ${plural(logins.length, "account")}` : plural(logins.length, "account")) : "a subscription runs the agents", state, key: "claude", fold: true, open: F.acctOpen ?? (out > 0 || !logins.length), onToggle: o => { F.acctOpen = o; } },
       h("p", { class: "field-h" }, "What each has left, pausing it and where it stops are under ", h("a", { href: href("usage") }, "Usage"), "."),
       logins.length ? h("ul", { class: "list" }, logins.map(l => h("li", { class: "lr", "data-key": l.name },

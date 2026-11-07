@@ -428,7 +428,7 @@ def cmd_extract(a):
     todo = person_posts(posts, since)
     if not todo: print("no new posts from the person"); return
     by_id = {p["id"]: p for p in posts if p.get("id")}
-    added = closed = 0; cost = 0.0
+    added = closed = 0; cost = 0.0; fresh = []
     for k, b in enumerate(batches(todo)):
         if a.limit and k >= a.limit: print(f"stopped after {a.limit} batches (--limit); cursor at {b[0]['at']}"); break
         items = ledger()
@@ -448,7 +448,7 @@ def cmd_extract(a):
                 ask = (body.split("\n\n", 1)[-1] if body else ask).strip() + (" (with an attached file)" if "file: " in str(p.get("text", "")) else "")
             rec = {"id": next_id(items), "at": iso(), "by": "extract", "post": p["id"], "when": p.get("at"), "thread": p.get("thread") or p["id"],
                    "ask": ask[:300], "kind": n["kind"], "status": "standing" if n["kind"] == "direction" else "open"}
-            append(LEDGER, rec); items[rec["id"]] = rec; added += 1; print("+ " + fmt(rec))
+            append(LEDGER, rec); items[rec["id"]] = rec; added += 1; print("+ " + fmt(rec)); fresh.append(rec)
         for key in ("done", "dropped"):
             for d in j.get(key, []):
                 e = items.get(d.get("id"))
@@ -458,7 +458,77 @@ def cmd_extract(a):
         CURSOR.write_text(json.dumps({**cur, "at": b[-1]["at"], "post": b[-1]["id"], "run": iso()}))  # keep left_*/reconciled
     if not a.dry:
         cmd_directions(argparse.Namespace(write=True))
+        try: cost += note_continuations(fresh, a.model)
+        except Exception as ex: print(f"continuation notes skipped: {ex}", file=sys.stderr)
         print(f"{added} added, {closed} closed from {len(todo)} posts, ${cost:.2f}")
+
+# Continuation notes (hive-meta/continuity.md, ad6ee's option c, 2026-11-07). The person starts almost every thread @new
+# (208 of 234 since 11-03), and in 14 of 16 hand-checked follow-ups the agent who did the earlier work never appeared in the
+# new thread. So when a newly filed ask continues an earlier one in another thread, one plain line in the new thread names
+# the earlier ask and its worker; nothing is routed and nobody is woken (the name is in backticks). Word overlap only picks
+# candidates; the model decides, since overlap alone matched "Remove the bubbles" to "Remove the cap".
+CONT_DAYS, CONT_CANDS = 7, 12
+CONT_PROMPT = """Each new ask below from the person comes with earlier asks from other threads. For each new ask, say which earlier ask it continues, if any: the same deliverable asked again, a follow-up, fix or extension of that same thing, or a status question about it. Sharing a word, a site or a topic is not enough; most new asks continue none. Reply with JSON only, no prose, no code fence:
+{{"continues": [{{"new": "<new ask id>", "earlier": "<earlier ask id>"}}]}}
+
+{body}
+"""
+WORD = re.compile(r"[a-z]{4,}")
+def words(s): return set(WORD.findall(str(s).lower()))
+
+def cont_candidates(new, items, k=CONT_CANDS, days=CONT_DAYS):
+    """Earlier asks (any status) in other threads within `days`, ranked by rare-word overlap with the new ask."""
+    since = (dt.datetime.fromisoformat(new.get("when") or iso()) - dt.timedelta(days=days)).isoformat()
+    pool = [e for e in items.values() if e.get("kind") == "ask" and e.get("id") != new["id"] and e.get("thread") != new.get("thread")
+            and since <= (e.get("when") or "") < (new.get("when") or iso())]
+    df = {}
+    for e in pool:
+        for w in words(e.get("ask")): df[w] = df.get(w, 0) + 1
+    n, A = len(pool) + 1, words(new.get("ask"))
+    score = lambda e: sum(1 / (1 + df.get(w, 0)) for w in A & words(e.get("ask")))
+    ranked = sorted(((score(e), e.get("when") or "", e) for e in pool), key=lambda x: (x[0], x[1]), reverse=True)
+    return [e for s, _, e in ranked[:k] if s > 0]
+
+def worker(thread, posts, before=None):
+    """The last agent (not the person, a warden or a service) to post in a thread, before `before` if given."""
+    w = None
+    for p in posts:
+        f = str(p.get("from", ""))
+        if (p.get("thread") or p.get("id")) != thread or f.lower() in NOT_AGENTS or not re.fullmatch(r"a[0-9a-f]{4}", f): continue
+        if before and p.get("at", "") >= before: continue
+        w = f
+    return w
+
+def note_continuations(fresh, model, posts=None, post=None):
+    """Find which fresh asks continue earlier ones; record it on the ask and post one line in the new thread. Returns cost."""
+    fresh = [e for e in fresh if e.get("kind") == "ask"]
+    if not fresh: return 0.0
+    items, posts = ledger(), posts if posts is not None else board()
+    cands = {e["id"]: cont_candidates(e, items) for e in fresh}
+    body = "\n\n".join(f"New {e['id']}: {e['ask']}\nEarlier:\n" + "\n".join(f"- {c['id']}: {c['ask']}" for c in cands[e["id"]])
+                        for e in fresh if cands[e["id"]])
+    if not body: return 0.0
+    out, cost = ask_model(CONT_PROMPT.format(body=body), model)
+    try: j = parse_json(out) or {}
+    except ValueError: j = {}
+    by_id = {e["id"]: e for e in fresh}
+    for c in j.get("continues", []) if isinstance(j, dict) else []:
+        e, old = by_id.get(c.get("new")), items.get(c.get("earlier"))
+        if not e or not old or old["id"] not in {x["id"] for x in cands[e["id"]]}: continue   # only a candidate we offered
+        w = old.get("owner") if re.fullmatch(r"a[0-9a-f]{4}", str(old.get("owner", ""))) else None
+        w = w or worker(old.get("thread"), posts, before=e.get("when"))
+        here = {str(p.get("from")) for p in posts if (p.get("thread") or p.get("id")) == e.get("thread")}
+        append(LEDGER, {"id": e["id"], "at": iso(), "by": "extract", "continues": old["id"], "continues_worker": w})
+        if not w or w in here: continue   # nobody to point at, or the earlier worker is already in this thread
+        line = (f"This ask ({e['id']}) looks like it continues {old['id']}, \"{old['ask'][:120]}\", in thread {old.get('thread')}, "
+                f"worked by `{w}`. If that agent's detail would help, a mention of it wakes it.")
+        (post or h2_post)(e.get("thread"), line)
+        print(f"~ {e['id']} continues {old['id']} ({w})")
+    return cost or 0.0
+
+def h2_post(thread, text):
+    subprocess.run([sys.executable, "-I", str(Hive), "post", "--thread", thread, "--as", "asks"], input=text, text=True, timeout=60,
+                   stdout=subprocess.DEVNULL, check=False)
 
 RECONCILE = """You judge, from the board, which of the person's asks below have been delivered. For each ask you get the agents' posts in its thread after the ask was made (person posts are marked). Reply with JSON only, no prose, no code fence:
 {{"done": [{{"id": "k0012", "evidence": "<id of the post that reports the delivery>", "why": "<what was delivered, one line>"}}],

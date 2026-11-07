@@ -800,6 +800,7 @@ def usage(c, u):
             five[str(d)] = (r.get("five_hour") or {}).get("utilization")
             resets[str(d)] = {k: epoch((r.get(src) or {}).get("resets_at")) for k, src in (("weekly", "seven_day"), ("five_hour", "five_hour"))}
             resets[str(d)]["has_five_hour"] = r.get("five_hour") is not None  # some plans have no 5-hour limit at all
+            extra_usage_notice(d, r.get("extra_usage"))
         except Exception:  # a failed read isn't news: 429s (the dash polls the same API) read as "room" and flapped, 2026-11-02
             u[str(d)], five[str(d)], resets[str(d)] = carried(str(d), prev, prev5, prevr)
             # the runs on this login printed its real figure: fresher than a carried one, and there even with no good read yet
@@ -807,6 +808,20 @@ def usage(c, u):
                 u[str(d)] = max(seen[0], u[str(d)] or 0); resets[str(d)] = {"five_hour": None, "has_five_hour": False, **resets[str(d)], "weekly": seen[1]}
     save("usage.json", u); save("usage_5h.json", five); save("usage_resets.json", resets)
     return u
+
+def extra_usage_notice(login, extra):
+    """Tell the person once when a login's extra usage is on: past its real limit that login goes on spending money, and only usage_stop_pct's check at 100
+    keeps new runs off it (warden ruling 11061816f737). Asked again if it goes off and comes back on. A login with no reading is left as it was."""
+    if not isinstance(extra, dict) or "is_enabled" not in extra: return
+    told, k = load("extra_usage_told.json", []), str(login)
+    told = told if isinstance(told, list) else []
+    if not extra["is_enabled"]:
+        if k in told: save("extra_usage_told.json", [t for t in told if t != k])
+        return
+    if k in told: return
+    save("extra_usage_told.json", told + [k])
+    post(f"Extra usage is switched on for the login {Path(login).name}. If it has credits, runs on it can spend money once the login's own limit is reached; nothing new starts on it past 100%.\n"
+         "For you: if you don't want that, turn extra usage off in that account's settings.", to=["person"])
 
 def newest_seen(login):
     """seen_usage from the newest live run on this login, or None."""
@@ -1308,6 +1323,29 @@ def keeper(c, st, alive, login):
 
 IMPROVE = """@new Figure out how to improve everything in the hive, across all of it: the projects, the quality of the work, failures, how agents work, Hive itself. Judge it yourself: read what you need (the board, ~/sessions, the code, results), then do things yourself or start other agents. `hive read --thread improve` shows what earlier rounds did; `hive progress` shows the hive's numbers and what got worse; `hive improve list` shows which earlier changes were judged held or reverted, so you build on what held. Log each change you land with `hive improve log --what ... --measure ... --revisit 7d`. Say what you did in this thread."""
 
+def floor(c, st, alive, login):
+    """Keep agents_floor runs going on the ladders, so the person always sees the hive working (2026-11-06, post 1106181196b0: no stopping to wait for a pulse).
+    Below the floor, at most one a minute: a fresh agent on the keeper's brief for the focus or ladder quiet the longest, none sooner than floor_gap_s after its last agent post or floor start.
+    Skips a thread with someone on it, a post queued, a `Parked until` line or the person's stop. 0 turns it off."""
+    want = c.get("agents_floor", 0)
+    if not want or not login or not cont: return
+    t = time.time()
+    if t - st.get("floor_check", 0) < 60: return
+    st["floor_check"] = t
+    queued = [p for ps in st["pending"].values() for p in ps]
+    if len(alive) + sum(1 for n, ps in st["pending"].items() if ps and n not in alive) >= want: return  # posts waiting for a running agent are no extra run
+    gap = c.get("floor_gap_s", 1800); started = st.setdefault("floor_at", {})
+    busy = {p.get("thread") for p in queued} | {r.get("thread") for r in alive.values() if isinstance(r, dict)}
+    rows = [r for r in cont.G.goals()["rows"] if (r["kind"] == "focus" or r.get("ladder")) and not r["running"] and not r.get("parked") and r["thread"] not in busy
+            and t - started.get(r["thread"], 0) >= gap and (r["quiet_s"] is None or r["quiet_s"] >= gap)]
+    for r in sorted(rows, key=lambda r: -(r["quiet_s"] if r["quiet_s"] is not None else float("inf"))):
+        if cont.stopped_thread(r["thread"]): continue
+        started[r["thread"]] = t
+        text = cont.G.brief(r)   # to @new, or to the thread's last worker (goals.resume_arm), who keeps its own model
+        with BOARD.open("a") as f:
+            f.write(json.dumps({"id": dt.datetime.now().strftime("%m%d%H%M") + secrets.token_hex(2), "at": now(), "from": "starter", "to": [text.split()[0]], "thread": r["thread"], **({"model": c.get("floor_model", "sonnet")} if text.startswith("@new ") else {}), "text": text}) + "\n")
+        log(event="floor", thread=r["thread"], running=len(alive)); return
+
 def improver(c, st, alive, login):
     """Every improve_every_s, one fresh agent on a deliberately open brief (the person, 2026-11-02: "just a spawn with one line").
     Never while one is still on it, while paused or limited, or while improve_every_s is 0."""
@@ -1641,6 +1679,8 @@ def main():
                     if any(p.get("continue") for p in ps): guarded("launched", who, ps)
         if not hold:
             keeper(c, st, alive, login)
+            try: floor(c, st, alive, login)
+            except Exception as e: log(event="floor_error", why=f"{type(e).__name__}: {e}"[:300])
             improver(c, st, alive, login)
             dreamer(c, st, alive, login)
         save("starter.json", st)
