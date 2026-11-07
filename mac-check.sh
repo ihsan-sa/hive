@@ -99,7 +99,7 @@ main() {
   say "VM clock vs Mac after waking: ${gap} s, after $(( $(date +%s) - t0 )) s"
   g=${gap#-}; if [ "$g" -le 3 ]; then pass "the VM's clock caught up"; else bad "the VM's clock is still off"; fi
   check "the VM has a network after waking" as_hive 'curl -fsS -m 15 -o /dev/null https://api.anthropic.com/ || [ $? = 22 ]'
-  check "the app answers after waking" answers_soon
+  if answers_soon; then pass "the app answers after waking, after $waited s"; else bad "the app answers after waking"; why_no_answer; fi
   after=$(as_hive 'systemctl --user is-active hive-starter hive-dash' | tr -d '\r' | tr '\n' ' ')
   [ "$before" = "$after" ] && pass "services as before: $after" || bad "services were: $before, now: $after"
   yes_no "Does the page still work, and did any running task carry on or get picked up?" "the app and agents after waking"
