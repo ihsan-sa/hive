@@ -4,12 +4,13 @@
 // - main: the tabs. Keep it to what people open daily (MAX_MAIN). A new tab needs a reason.
 // - groups: a tab's own pages, a row under the bar. Each page keeps its own address. Put a view here when it's another way to look at something a tab already covers.
 // - more: everything else. Tools go here, in order. A view named nowhere lands here too, so a new view is still one line in views/index.js.
-export const MAX_MAIN = 6, MAX_TOOLS = 6;
+export const MAX_MAIN = 6, MAX_TOOLS = 6;   // MAX_MAIN counts word tabs: an icon place (Settings) takes no room in the bar
 
 export const APP_NAV = {
-  main: ["start", "comms", "knowledge", "now", "usage", "settings"],
+  main: ["start", "comms", "work", "knowledge", "now", "usage", "settings"],   // Work is a tab since 2026-11-07: where things stand is the second thing a person looks for, and under Chat it was hidden (person, 11071400de5b)
   groups: {
-    comms: ["comms", "work", "flow", "inbox", "mail", "made"],
+    comms: ["comms", "inbox", "mail", "made"],
+    work: ["work", "flow"],           // Work's row: the work by project, the same work in time, and the full list of what waits on the person
     now: ["now", "agents", "timeline", "mesh", "ledger", "progress"],
     usage: ["usage", "jobs"],
   },

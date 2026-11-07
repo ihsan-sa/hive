@@ -51,7 +51,8 @@ forward_log() {
 recover_forward() {
   recovered=
   [ "$(as_hive 'systemctl --user is-active hive-dash' | tr -d '\r')" = active ] || return 1
-  say "      the app is active in the VM but this Mac's port is dead: restarting the app so Lima forwards again"
+  say "      the app is active in the VM but this Mac's port is dead: starting Lima's guest agent (the fault may have stopped it), then restarting the app"
+  vm sudo -n sh -c 'systemctl unmask lima-guestagent; systemctl start lima-guestagent' >/dev/null 2>&1
   as_hive 'systemctl --user restart hive-dash' >/dev/null 2>&1
   if answers_soon 30; then recovered="the app restart"; return 0; fi
   say "      still dead: restarting the VM once"
@@ -66,10 +67,17 @@ break_forward() {
   a=$(address); p=${a#http://*:}; p=${p%%/*}; [ -n "$p" ] || return 1
   ssh -F "$LIMA_HOME/hive/ssh.config" -O cancel -L "127.0.0.1:$p:127.0.0.1:$p" lima-hive >/dev/null 2>&1 && how="ssh cancel of the forward"
   say "      fault: the listener on this Mac's port is: $(lsof -nP -iTCP:"$p" -sTCP:LISTEN 2>/dev/null | awk 'NR==2 {print $1}')"
-  if answers 2>/dev/null; then
-    # Not an ssh forward (Lima's own): stop the guest agent in the VM, which is what announces the port to the Mac.
-    vm sudo -n pkill -9 -f lima-guestagent >/dev/null 2>&1; sleep 5; how="kill of the guest agent"
-  fi
+  # Not an ssh forward (Lima's own, the listener is limactl): its tunnel goes through the guest agent, which
+  # systemd restarts after a kill. Try, one by one, until the port stops answering: stop the agent's unit (system,
+  # then user), then stop and mask it so nothing restarts it. Says which lever worked.
+  for lever in "systemctl stop lima-guestagent" "systemctl --user stop lima-guestagent" "systemctl mask --now lima-guestagent"; do
+    answers 2>/dev/null || break
+    # shellcheck disable=SC2086
+    case "$lever" in *--user*) as_hive "$lever" >/dev/null 2>&1 ;; *) vm sudo -n $lever >/dev/null 2>&1 ;; esac
+    vm sudo -n pkill -9 -f lima-guestagent >/dev/null 2>&1
+    sleep 5; how="'$lever' in the VM"
+    say "      fault: lever '$lever': port answers afterwards: $(answers 2>/dev/null && echo yes || echo no); agent: $(vm pgrep -c -f lima-guestagent 2>/dev/null | tr -d '\r')"
+  done
   if answers 2>/dev/null; then say "      fault: could not break the forward"; return 1; fi
   say "      fault: broke this Mac's forward by a ${how:-?}"
 }

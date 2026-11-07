@@ -356,6 +356,7 @@ function modulesSection(ctx) {
   const end = (x, inBrowse) => {
     if (x.name === "dash") return h("span", { class: "meta" }, "this app");
     if (x.name === "slack-door" && built("slack-door") && !(S.app.slack_door || {}).connected) return slackBtn();
+    if (x.name === "slack-door" && built("slack-door")) return h("span", { class: "meta" }, "Connected to " + (S.app.slack_door.channel || "Slack")); // connected: say where it answers, so a reload shows Slack is on
     if (x.state === "installed" && x.default) return h("span", { class: "meta" }, "comes with the Hive");
     if (x.state === "installed" && inBrowse) return h("span", { class: "meta" }, "installed");
     return x.state === "installed"

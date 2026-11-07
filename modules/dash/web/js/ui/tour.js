@@ -5,6 +5,7 @@ import { S, can, subscribe } from "../core/store.js";
 import { simpleOn } from "../core/simple.js";
 import { go, parse } from "../core/router.js";
 import { OUT } from "./composer.js";
+import { APP_NAV } from "../core/nav.js";
 
 export const HELP = "https://hivelab.ca/guide/";   // export.sh swaps the site name for its placeholder, then fills that in
 const SEEN = "hive.tour.seen", SEEN_SIMPLE = "hive.tour.seen.simple";
@@ -20,7 +21,9 @@ const hasTab = id => !!document.querySelector(tabSel(id));   // there, if not on
 const toBar = id => () => { if (inThread() && !q(tabSel(id))) go("comms"); };   // a step that says to click a tab: a phone hides its bottom bar inside a conversation, so step back out to the list
 const tabWhere = () => (q(".mn-bar") ? "at the bottom" : "at the top");   // on a phone the tabs are in the bottom bar
 const moreBtn = () => q(".more > button") || q(".mn-bar button.mn-t");   // on a phone More is in the bottom bar
-const workRing = () => (here() === "flow" ? q('a[href="#flow"]') : null) || q('a[href="#work"]');   // on Flow the step is about the page under them: ring its link in the row, not Work's at the foot of a Chat list that isn't there
+const WORKS = ["work", "flow", "needs"];   // Work's row: Work, Flow, Needs you (2026-11-07)
+const inWork = () => WORKS.includes(here());
+const workRing = () => (here() === "flow" ? q('.subtab[data-key="flow"]') : null) || q('.subtab[data-key="work"]') || q(tabSel("work"));   // on Flow the step is about the page under them: ring its link in the row
 const mine = () => (S.posts || []).filter(p => p.from === "person").length;
 const threads = () => (S.threads ? S.threads.size : 0);
 let sentFrom = 0, outFrom = 0;
@@ -29,7 +32,6 @@ let sentFrom = 0, outFrom = 0;
 const FULL_STEPS = [
   { title: "A quick look around", text: "A few minutes, one step at a time. This window says what to click and waits for you. You can drag it, and leave whenever you like." },
   { title: "This is where you talk to the Hive", text: () => `Click Chat ${tabWhere()}.`, ring: tab("comms"), done: () => here() === "comms", skip: () => here() === "comms" },
-  { title: "The work, by project", text: () => (here() === "flow" ? "This is Flow: the same work as a live timeline, a lane per project, who is on it, and the hand-offs. Work, in the row beside it, is every project on one page: what it did today, where it stands, what comes next and what it needs from you." : "Work, next to it, is every project on one page: what it did today, where it stands, what comes next and what it needs from you. Conversations and agents are a click down. Flow, beside it, is the same work as a live timeline: a lane per project, who is on it, and the hand-offs."), ring: workRing, skip: () => !workRing() },
   { title: "Start a job", text: () => `${q(HOME) ? "Type" : "Click New conversation, then type"} what you want done, the way you'd tell a person, and press Start. An agent starts on it and answers here. This is a real job and uses your Claude limits, so skip it if you're not ready.`, ring: () => q(HOME) || q(".cm-newbtn"), done: () => mine() > sentFrom || OUT.length > outFrom || inThread(), enter: () => { sentFrom = mine(); outFrom = OUT.length; if (parse().arg) go("comms"); }, skip: () => !can("post") },
   { title: "Open a conversation", text: "Each job is one conversation, and they're all listed here. Click one.", ring: () => q(".cm-tl a.lr-in"), done: inThread, enter: () => { if (here() === "comms" && parse().arg) go("comms"); }, skip: () => inThread() || !threads() },
   { title: "Answers land here", text: "Agents write back in this conversation as they go. You can close the app: the work carries on, and it's all here when you come back.", ring: () => q(".cm-msgs"), skip: () => !inThread() },
@@ -37,6 +39,8 @@ const FULL_STEPS = [
   { title: "When an agent asks you something", text: () => (q('.cm-line[data-key="asks"] button') ? "An agent here is waiting for you. Click Answer to reply to its question." : "A line appears here with an Answer button, and the Chat tab shows a number. The Chat page lists everything waiting for you."), ring: () => q('.cm-line[data-key="asks"] button') || q(".cm-strip"), done: () => (q('.cm-line[data-key="asks"] button') ? !!q(".cp-reply") : false), hasNext: true, skip: () => !inThread() },
   { title: "Reply any time", text: "Write here to carry on the conversation, even while the agent works. The To button shows who gets it, and you can change that. Nothing is sent until you press Send.", ring: () => q('.cp[data-place="thread"] .cp-t'), skip: () => !inThread() },
   { title: "Attach files", text: "Attach adds files to your message. You can also paste them or drop them on the conversation.", ring: () => q('.cp[data-place="thread"] .cp-attach'), skip: () => !inThread() },
+  { title: "Where things stand", text: () => `Click Work ${tabWhere()}.`, ring: tab("work"), done: inWork, enter: toBar("work"), skip: () => !hasTab("work") || inWork() },
+  { title: "The work, by project", text: () => (here() === "flow" ? "This is Flow: the same work as a live timeline, a lane per project, who is on it, and the hand-offs. Work, in the row beside it, is every project on one page: what it did today, where it stands, what comes next and what it needs from you." : "Every project on one page: what it did today, where it stands, what comes next and what it needs from you. Conversations and agents are a click down. The row under the top bar has Flow, the same work as a live timeline with a lane per project" + (APP_NAV.groups.work.includes("needs") ? ", and Needs you, the full list of what waits on you." : ".")), ring: workRing, skip: () => !inWork() || !workRing() },
   { title: "Look at what it keeps", text: () => `Click Knowledge ${tabWhere()}.`, ring: tab("knowledge"), done: () => here() === "knowledge", enter: toBar("knowledge"), skip: () => !hasTab("knowledge") },
   { title: "Knowledge", text: "Notes, projects and the files agents attach, to browse and search. It only reads. Keys and passwords are blanked out.", ring: () => q(".kb-side") || q('input[type="search"]'), skip: () => here() !== "knowledge" },
   { title: "See every agent", text: () => `Click Agents ${tabWhere()}.`, ring: tab("now"), done: () => here() === "now", enter: toBar("now"), skip: () => !hasTab("now") },

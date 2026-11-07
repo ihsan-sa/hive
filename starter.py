@@ -257,6 +257,37 @@ def limit_hit(out):
             reset = time.time() + 1800  # limit text without a reset time: try again in 30 min
     return (float(reset), sid) if reset else None
 
+# A model's own weekly bar (the CLI 2.1.319's rateLimitType values and the words it prints for them): it stops that model only, so the
+# login stays open for the others. Fable's is seven_day_overage_included ("Fable limit", the usage API's weekly_scoped row).
+SCOPED_TYPES = {"seven_day_opus": "opus", "seven_day_sonnet": "sonnet", "seven_day_overage_included": "fable"}
+SCOPED_TEXT = re.compile(r"(?:hit|reached) your (Fable|Opus|Sonnet) limit", re.I)
+
+def limit_scope(out):
+    """The model family ("fable", "opus", "sonnet") a run's rejected limit belongs to, or None for a whole-login (5-hour, weekly) one."""
+    try: lines = Path(out).read_text(errors="replace").splitlines()[-200:]
+    except (OSError, TypeError): return None
+    scope = None
+    for line in lines:
+        try: e = json.loads(line)
+        except ValueError:
+            if (m := SCOPED_TEXT.search(line)): scope = m[1].lower()
+            continue
+        if not isinstance(e, dict): continue
+        i = e.get("rate_limit_info") if e.get("type") == "rate_limit_event" else None
+        if isinstance(i, dict) and i.get("status") == "rejected": scope = SCOPED_TYPES.get(i.get("rateLimitType"))
+        elif e.get("type") == "result" and e.get("is_error") and (m := SCOPED_TEXT.search(str(e.get("result", "")))): scope = m[1].lower()
+    return scope
+
+def model_family(model):
+    return next((f for f in ("fable", "opus", "sonnet") if f in str(model or "").lower()), None)
+
+def scope_held(limits, login, model):
+    """True if login is held for this model by a model-scoped limit (limits key "login#family"). A run whose model isn't known
+    (the login's default) counts as held: it may be that model."""
+    now = time.time()
+    return any(now < t and (model is None or model_family(model) == k.rpartition("#")[2])
+               for k, t in (limits or {}).items() if isinstance(k, str) and k.startswith(login + "#"))
+
 AUTH_TEXT = re.compile(r"not logged in|login expired|please run /login|failed to authenticate|authentication_failed|invalid api key|oauth token (has|is|was)", re.I)
 LAUNCH_HOLD_S = 600  # claude wouldn't start at all: tried again after this
 AUTH_HOLD_S = 3600  # a rejected login is tried again after this, in case someone signed it back in
@@ -672,15 +703,17 @@ def running(st=None, by_hand=False):
                 post(f"`{r['name']}` on the fallback model died (exit {c.returncode}) without posting, so post {r.get('post')} wasn't done. Post again, or wait for a Claude login.", ["person"], r.get("thread"))
             if hit and st is not None:  # stopped on a usage limit: resume it when the limit resets
                 login, limits = r.get("login", ""), st.setdefault("limits", {})
-                fresh = not any(time.time() < t for t in limits.values())  # first stop of this limit episode
-                limits[login] = max(limits.get(login, 0), hit[0])
+                scope = limit_scope(r.get("out"))  # a model's own bar (Fable's share) holds that model, not the login
+                key = f"{login}#{scope}" if scope else login
+                fresh = not any(time.time() < t for k, t in limits.items() if str(k).partition("#")[2] == (scope or ""))  # first stop of this limit episode
+                limits[key] = max(limits.get(key, 0), hit[0])
                 st.setdefault("resume", {})[r["name"]] = {**r, "session": hit[1] or r["session"], "reset": hit[0]}
                 log(event="limited", name=r["name"], session=hit[1] or r["session"],
                     resets=dt.datetime.fromtimestamp(hit[0], dt.timezone.utc).isoformat(timespec="seconds"))
                 if fresh:  # one post per episode, not one per stopped agent
                     more = len(cfg().get("logins", [])) > 1
-                    post(f"Usage limit reached (`{r['name']}` first). Agents{f' on account {account_name(login)}' if more else ''} wait and carry on by themselves at "
-                         f"{dt.datetime.fromtimestamp(limits[login]).astimezone():%H:%M %Z}.{' Other accounts with room keep working.' if more else ''}", ["person"])
+                    post(f"Usage limit reached (`{r['name']}` first{f', the {scope.title()} limit' if scope else ''}). {f'{scope.title()} agents' if scope else 'Agents'}{f' on account {account_name(login)}' if more else ''} wait and carry on by themselves at "
+                         f"{dt.datetime.fromtimestamp(limits[key]).astimezone():%H:%M %Z}.{' Other models on it keep working.' if scope else ''}{' Other accounts with room keep working.' if more else ''}", ["person"])
             elif st is not None and r.get("login") in {str(Path(l).expanduser()) for l in cfg().get("logins", [])} \
                     and (sid := auth_hit(r.get("out"))) is not None:  # same treatment as a limit, or the run just vanishes
                 login, limits = r["login"], st.setdefault("limits", {})
@@ -807,10 +840,13 @@ def apply_model_sets(st, c):
 def usage(c, u):
     """Refresh usage per login every usage_check_s. Returns {login: weekly pct or None}; the 5-hour pcts from the same
     call go to ~/.hive/usage_5h.json ({login: pct or None}), and the reset times to ~/.hive/usage_resets.json ({login:
-    {"weekly": epoch|None, "five_hour": epoch|None, "has_five_hour": bool}}). Never refreshes tokens."""
+    {"weekly": epoch|None, "five_hour": epoch|None, "has_five_hour": bool}}), and each model's own weekly share (the
+    reply's limits[] kind weekly_scoped, e.g. Fable) to ~/.hive/usage_scoped.json ({login: {"fable": {"percent": N, "resets": epoch}}}).
+    Never refreshes tokens."""
     if time.time() - u.get("_checked", 0) < c["usage_check_s"]: return u
     prev, prev5, prevr = load("usage.json", {}), load("usage_5h.json", {}), load("usage_resets.json", {})  # the file, so a restart carries too
-    u, five, resets = {"_checked": time.time()}, {}, {}
+    prevs = load("usage_scoped.json", {})
+    u, five, resets, scoped = {"_checked": time.time()}, {}, {}, {}
     for login in c["logins"]:
         d = Path(login).expanduser()
         try:
@@ -822,14 +858,37 @@ def usage(c, u):
             five[str(d)] = (r.get("five_hour") or {}).get("utilization")
             resets[str(d)] = {k: epoch((r.get(src) or {}).get("resets_at")) for k, src in (("weekly", "seven_day"), ("five_hour", "five_hour"))}
             resets[str(d)]["has_five_hour"] = r.get("five_hour") is not None  # some plans have no 5-hour limit at all
+            scoped[str(d)] = scoped_shares(r)
             extra_usage_notice(d, r.get("extra_usage"))
         except Exception:  # a failed read isn't news: 429s (the dash polls the same API) read as "room" and flapped, 2026-11-02
             u[str(d)], five[str(d)], resets[str(d)] = carried(str(d), prev, prev5, prevr)
+            if isinstance(prevs, dict) and isinstance(prevs.get(str(d)), dict): scoped[str(d)] = prevs[str(d)]
             # the runs on this login printed its real figure: fresher than a carried one, and there even with no good read yet
             if (seen := newest_seen(str(d))) and time.time() < seen[1]:
                 u[str(d)] = max(seen[0], u[str(d)] or 0); resets[str(d)] = {"five_hour": None, "has_five_hour": False, **resets[str(d)], "weekly": seen[1]}
-    save("usage.json", u); save("usage_5h.json", five); save("usage_resets.json", resets)
+    save("usage.json", u); save("usage_5h.json", five); save("usage_resets.json", resets); save("usage_scoped.json", scoped)
     return u
+
+def scoped_shares(r):
+    """{family: {"percent", "resets"}} from a usage reply's limits[] rows of kind weekly_scoped (in 2026-11 only Fable's,
+    display_name "Fable"; its own bar inside the weekly one). Rows for a model family the starter doesn't know are left out."""
+    out = {}
+    for row in r.get("limits") or []:
+        if not isinstance(row, dict) or row.get("kind") != "weekly_scoped": continue
+        fam = model_family((((row.get("scope") or {}).get("model") or {}).get("display_name")))
+        if fam and isinstance(row.get("percent"), (int, float)):
+            out[fam] = {"percent": row["percent"], "resets": epoch(row.get("resets_at"))}
+    return out
+
+def share_full(login, model):
+    """True if usage_scoped.json reads this model's own weekly share at 100 on login, and its reset hasn't passed. Only a model
+    that's known: an unknown one (the login's default) isn't kept off a login on a reading, only on a real limit (scope_held)."""
+    fam = model_family(model) if model else None
+    if not fam: return False
+    sh = load("usage_scoped.json", {})
+    sh = ((sh.get(login) or {}).get(fam) if isinstance(sh, dict) and isinstance(sh.get(login), dict) else None) or {}
+    pct, reset = sh.get("percent"), sh.get("resets")
+    return isinstance(pct, (int, float)) and pct >= 100 and not (isinstance(reset, (int, float)) and time.time() >= reset)
 
 def extra_usage_notice(login, extra):
     """Tell the person once when a login's extra usage is on: past its real limit that login goes on spending money, and only usage_stop_pct's check at 100
@@ -987,10 +1046,12 @@ def unpaused(u):
     off = load("paused.json", [])
     return {k: v for k, v in u.items() if k not in off} if isinstance(off, list) else u
 
-def pick_login(c, u, limits=None, stop=None):
+def pick_login(c, u, limits=None, stop=None, model=False):
     """The login with the most weekly room, skipping any held on a 5-hour/weekly limit (limits: {login: until}) and any
     past its own stop lines (stop_lines). stop: one weekly line for every login instead, and no 5-hour lines
-    (login_for's 100 for the person's posts, which go past the stop lines up to a real limit)."""
+    (login_for's 100 for the person's posts, which go past the stop lines up to a real limit). model: the run's model, so a
+    login held only for one model ("login#fable") is skipped for that model (or an unknown one, None) and kept for the others;
+    left out (False), the scoped holds are ignored."""
     five = load("usage_5h.json", {}) if stop is None else {}
     five = five if isinstance(five, dict) else {}
     def room(k, v):
@@ -998,7 +1059,7 @@ def pick_login(c, u, limits=None, stop=None):
         f = five.get(k)
         return (v is None or v < w) and (h is None or not isinstance(f, (int, float)) or f < h)
     ok = [(v is None, v or 0, k) for k, v in u.items() if k != "_checked" and room(k, v)
-          and time.time() >= (limits or {}).get(k, 0)]
+          and time.time() >= (limits or {}).get(k, 0) and (model is False or not (scope_held(limits, k, model) or share_full(k, model)))]
     return min(ok)[2] if ok else None
 
 def under_pressure(c, posts=()):
@@ -1029,11 +1090,18 @@ def paced(c, st, n, posts):
     if not why: st.get("paced", {}).pop(n, None)
     return bool(why)
 
+def run_model(posts):
+    """The Claude model these posts would start on, or None for the login's default (see start)."""
+    return next((p["model"] for p in posts if p.get("model") in MODELS), None) or default_model()
+
 def login_for(c, u, limits, posts, login):
     """Past the stop line agents' posts wait, but a post from the person still starts its run: else the person
-    has no way into Hive until the reset. That run's own mentions wait like any other. Stops at a real limit."""
-    if login: return login
-    return pick_login(c, u, limits, 100) if any(p.get("from") == "person" for p in posts) else None
+    has no way into Hive until the reset. That run's own mentions wait like any other. Stops at a real limit,
+    and at a model's own limit for a run on that model (another login may still have it)."""
+    model = run_model(posts)
+    if login and not scope_held(limits, login, model) and not share_full(login, model): return login
+    if login: return pick_login(c, u, limits, model=model)
+    return pick_login(c, u, limits, 100, model) if any(p.get("from") == "person" for p in posts) else None
 
 def move_session(sid, src, dst):
     if (sb := box()): return sb.move_session(sid, src, dst)  # a login folder is agents' to write: no following their links out here
@@ -1137,7 +1205,7 @@ def wake_home(c, n, run, sid, posts, to, room, limits):
         if not prov[1].get("config_dir"): return None
         where = str(Path(prov[1]["config_dir"]).expanduser())
     else:
-        if own in room and pick_login(c, {own: room[own]}, limits): to = own  # the only login where the cache can still be warm
+        if own in room and pick_login(c, {own: room[own]}, limits, model=run_model(posts)): to = own  # the only login where the cache can still be warm
         where = to
     if own != where: return to if move_session(sid, own, where) else None
     return to if list(Path(own).glob(f"projects/*/{sid}.jsonl")) else None
@@ -1706,10 +1774,11 @@ def main():
             if (pv := provider_of(c, r.get("model"))):  # a provider run resumes on its provider, never on a Claude login
                 if time.time() < r["reset"] or provider_hold(c, st, n, pv, pcache, r.get("thread")): continue
                 to = own
-            elif own in room and time.time() >= r["reset"] and pick_login(c, {own: room[own]}, limits): to = own  # its login has room again
+            elif own in room and time.time() >= r["reset"] and pick_login(c, {own: room[own]}, limits, model=r.get("model")): to = own  # its login has room again
             elif r.get("wait") and time.time() < r["reset"]: continue  # stopped on something other than its login: moving wouldn't help
-            elif own != login and move_session(r["session"], own, login):  # or it moves to one that does
-                to = login; log(event="moved", name=n, session=r["session"], src=own, dst=to)
+            elif (dst := login if not (scope_held(limits, login, r.get("model")) or share_full(login, r.get("model"))) else pick_login(c, room, limits, model=r.get("model"))) \
+                    and own != dst and move_session(r["session"], own, dst):  # or it moves to one that does (and has its model)
+                to = dst; log(event="moved", name=n, session=r["session"], src=own, dst=to)
             else: continue
             st["resume"].pop(n)
             waiting = st["pending"].pop(n, []) if r.get("reaped") else []  # hand queued posts to the resumed run
