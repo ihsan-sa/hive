@@ -210,6 +210,9 @@ fi
 fresh; run env >/dev/null 2>&1; yes_if "HIVE_HOST=mac goes into the VM's install" grep -q 'HIVE_HOST=mac' "$T/mark.args"
 
 # The syntax Macs run, and lint where it's installed.
+yes_if "mac-check: the wake step reports tries, and the why-dump goes to the report" sh -c 'grep -q "tries" "$0" && grep -q "why_no_answer()" "$0" && grep -q "say \"      in the VM" "$0"' "$D/mac-check.sh"
+yes_if "mac-check: answers_soon counts tries" sh -c 'eval "$(grep -E "^answers_soon\(\)" "$0")"; n=0; answers() { n=$((n+1)); [ $n -ge 3 ]; }; sleep() { :; }; answers_soon && [ "$tries" = 3 ]' "$D/mac-check.sh"
+yes_if "mac-check: the forced fault runs only with AUTO and FAULT, after the pause, before the app check" sh -c 'grep -n "break_forward ||" "$0" | grep -q "AUTO.*FAULT" && [ "$(grep -n "break_forward ||" "$0" | cut -d: -f1)" -lt "$(grep -n "answers_soon 30; then pass" "$0" | cut -d: -f1)" ]' "$D/mac-check.sh"
 for f in get-mac.sh remove-mac.sh mac-check.sh; do yes_if "$f parses" sh -n "$D/$f"; done
 if command -v shellcheck >/dev/null 2>&1; then yes_if "shellcheck" shellcheck -S warning -s sh "$D/get-mac.sh" "$D/remove-mac.sh" "$D/mac-check.sh"; fi
 exit "$fail"

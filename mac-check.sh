@@ -4,6 +4,7 @@
 # It installs the Hive if it isn't there, checks it, asks you to do three things, and writes a report you send back.
 # The report has versions, memory and results. It has no address, secret, user name or file of yours.
 # HIVE_CHECK_AUTO=1 is for a Mac runner with no person: nothing is asked, and sleep is only a pause of the VM.
+# HIVE_CHECK_FAULT=1 (with AUTO) breaks this Mac's port forward after the pause, so the recovery path has to run.
 # HIVE_CHECK_LINE=FILE installs from that file, not the site.
 # After the check, to test uninstall: run the uninstall line it prints, then: sh mac-check.sh --after-uninstall
 set -u
@@ -14,6 +15,7 @@ L="$HOME/.hive/lima-dist/bin/limactl"
 export LIMA_HOME="$HOME/.hive/lima"
 export HIVE_MAC_TEST=1  # this script exists to test the test build
 AUTO="${HIVE_CHECK_AUTO:-}"
+FAULT="${HIVE_CHECK_FAULT:-}"
 LINE="${HIVE_CHECK_LINE:-}"
 fails=0
 
@@ -35,6 +37,11 @@ why_no_answer() {
   say "      answered after: ${waited:-?} s, ${tries:-?} tries. Port: ${p:-no address}"
   say "      in the VM: $(as_hive 'systemctl --user is-active hive-dash; ss -ltn | grep -c ":'"${p:-8077}"' "; curl -s -o /dev/null -m 5 -w "%{http_code}" http://127.0.0.1:'"${p:-8077}"'/login' 2>&1 | tr -d '\r' | tr '\n' ' ' | cut -c1-120)"
   say "      on this Mac: $(curl -s -o /dev/null -m 5 -w '%{http_code}' "http://127.0.0.1:${p:-8077}/login" 2>&1 | cut -c1-40)"
+  forward_log
+}
+# Lima's port-forward lines for the app's port (last 5), so a real sleep that breaks the forward shows in the report.
+forward_log() {
+  a=$(address); p=${a#http://*:}; p=${p%%/*}
   grep -iE 'forward|listen' "$LIMA_HOME/hive/ha.stderr.log" 2>/dev/null | grep -E "${p:-8077}|rror" | tail -n 5 | cut -c1-160 | while IFS= read -r l; do say "      lima: $l"; done
 }
 # After a pause or sleep the Mac side of the port forward can go stale while the app in the VM is fine
@@ -51,6 +58,19 @@ recover_forward() {
   "$L" stop hive >/dev/null 2>&1; "$L" start hive >/dev/null 2>&1
   if answers_soon 120; then recovered="the VM restart"; return 0; fi
   return 1
+}
+# For the forced-fault run: make this Mac's forward to the app stale while the app in the VM stays fine.
+# First ask Lima's ssh master to cancel the forward; if the forward is not an ssh one, stop the Mac-side
+# listener when it is an ssh process. Says what it did; fails (return 1) if the port still answers.
+break_forward() {
+  a=$(address); p=${a#http://*:}; p=${p%%/*}; [ -n "$p" ] || return 1
+  ssh -F "$LIMA_HOME/hive/ssh.config" -O cancel -L "127.0.0.1:$p:127.0.0.1:$p" lima-hive >/dev/null 2>&1 && how="ssh cancel of the forward"
+  if answers 2>/dev/null; then
+    pid=$(lsof -nP -iTCP:"$p" -sTCP:LISTEN -t 2>/dev/null | head -n 1)
+    if [ -n "$pid" ] && [ "$(ps -p "$pid" -o comm= | sed 's|.*/||')" = ssh ]; then kill "$pid" && how="kill of the ssh listener"; fi
+  fi
+  if answers 2>/dev/null; then say "      fault: could not break the forward"; return 1; fi
+  say "      fault: broke this Mac's forward by a ${how:-?}"
 }
 the_line() { if [ -n "$LINE" ]; then sh "$LINE"; else curl -fsSL "$SITE/install-mac.sh" | sh; fi; }
 ask() { [ -z "$AUTO" ] || return 0; printf '\n%s\nPress Return when done. ' "$1"; read -r _ </dev/tty; }
@@ -115,7 +135,8 @@ main() {
   say "VM clock vs Mac after waking: ${gap} s, after $(( $(date +%s) - t0 )) s"
   g=${gap#-}; if [ "$g" -le 3 ]; then pass "the VM's clock caught up"; else bad "the VM's clock is still off"; fi
   check "the VM has a network after waking" as_hive 'curl -fsS -m 15 -o /dev/null https://api.anthropic.com/ || [ $? = 22 ]'
-  if answers_soon 30; then pass "the app answers after waking, after $waited s, $tries tries"
+  if [ -n "$AUTO" ] && [ -n "$FAULT" ]; then break_forward || bad "the forced fault could not be set"; fi
+  if answers_soon 30; then pass "the app answers after waking, after $waited s, $tries tries"; say "      forward log after waking:"; forward_log
   else
     why_no_answer
     if recover_forward; then pass "the app answers after waking, after the stale port forward was fixed by $recovered"; else bad "the app answers after waking"; why_no_answer; fi
