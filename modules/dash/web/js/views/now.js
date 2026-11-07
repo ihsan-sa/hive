@@ -157,11 +157,7 @@ export default {
       const up = run.filter(a => a.alive), upThreads = new Set(up.map(a => a.thread)).size;   // a gone process isn't working: the same count as the top bar's
       const one = upThreads === 1 ? threadTitle(up[0].thread) : `${nWord(upThreads).toLowerCase()} conversations`;
       const title = up.length ? `${nWord(up.length)} ${up.length === 1 ? "agent is" : "agents are"} working on ${one}.` : "No agents are working right now.";
-      const waitN = run.filter(a => waits.has(a.thread)).length;
       const lead = sign ? sign : stopped ? `New agents wait for the usage limit until ${clock(L.limit_until * 1e3)}.`
-        : waitN ? `${nWord(waitN)} ${waitN === 1 ? "agent is" : "agents are"} waiting for your answer.`
-        : fy.length === 1 ? `${fy[0].title} is waiting for your answer.`
-        : fy.length ? `${nWord(fy.length)} conversations are waiting for your answer.`
         : stuckN ? `${nWord(stuckN)} ${stuckN === 1 ? "agent has" : "agents have"} stopped moving.` : null;
       const header = pageHeader({ state, title, lead });
       const main = run.length ? section({}, agentRows(run, states, t, waits)) : null;   // the header already says nobody is working: no "None." box under it

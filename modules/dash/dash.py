@@ -455,7 +455,7 @@ def thread_status():
         try: r = json.loads(ln)
         except ValueError: continue
         if isinstance(r, dict) and THREAD_NAME.fullmatch(str(r.get("thread") or "")) and r.get("text"):
-            try: out[r["thread"]] = {"text": str(r["text"])[:400], "from": str(r.get("from") or "")[:40], "at": float(r.get("at") or 0)}
+            try: out[r["thread"]] = {"text": str(r["text"])[:900], "from": str(r.get("from") or "")[:40], "at": float(r.get("at") or 0)}
             except (TypeError, ValueError): pass
     return out
 
@@ -1737,7 +1737,7 @@ INSTALLED = HOME / ".hive-installed"
 FORWARDED = ("cf-ray", "cf-connecting-ip", "cf-access-jwt-assertion", "cf-ipcountry", "cf-visitor", "cdn-loop", "x-forwarded-for",
              "x-forwarded-host", "x-forwarded-proto", "x-real-ip", "forwarded", "via", "true-client-ip")
 GET_CAP = {"/api/call-chat": "post", "/api/live": "read", "/api/away": "read", "/api/board": "read", "/api/log": "read", "/api/usage": "read", "/api/jobs": "read", "/api/agent": "read", "/api/agent-work": "read", "/api/agent-input": "read", "/api/agent-diff": "read", "/api/ledger": "read",
-           "/api/projects": "read", "/api/agent-costs": "read", "/api/thread-names": "read", "/api/thread-meta": "read", "/api/shown": "read", "/api/thread-status": "read", "/api/agent-status": "read", "/api/thread-find": "read", "/json": "read", "/api/target": "read", "/api/inbox": "read", "/api/delivered": "read",
+           "/api/projects": "read", "/api/agent-costs": "read", "/api/thread-names": "read", "/api/thread-meta": "read", "/api/shown": "read", "/api/thread-status": "read", "/api/foci": "read", "/api/agent-status": "read", "/api/thread-find": "read", "/json": "read", "/api/target": "read", "/api/inbox": "read", "/api/delivered": "read",
            "/api/config": "config", "/api/modules": "modules", "/api/slack-door": "modules", "/api/signin": "logins", "/api/plans": "plans", "/api/secrets": "secrets",
            "/api/settings": "config", "/api/ntfy": "config", "/api/webpush": "config", "/api/update": "config", "/api/signin-codex": "logins", "/api/accounts": "logins", "/api/design": "logins", "/api/brand/logo": "read",
            "/api/kb/home": "files", "/api/kb/open": "files", "/api/kb/search": "files", "/api/kb/raw": "files", "/api/kb/map": "files", "/api/kb/history": "files", "/api/progress": "read", "/api/checklist": "read", "/api/share-preview": "read", "/api/approvals": "read", "/api/feedback-drafts": "read", "/api/mail": "files"}
@@ -2920,6 +2920,12 @@ def delivered():
 
 
 _LADDER = {"at": 0.0, "rows": {}}
+def foci_bytes():
+    """core/focus.py json: the foci (labels, hand-written summaries, to-do, lint) the home's cards are built from (2026-11-07)."""
+    out = core_json("focus.py", "json", timeout=20)
+    return json.dumps(out if isinstance(out, dict) else {"foci": [], "tags": {}, "error": "focus.py gave nothing"}).encode()
+foci_c = Cached(foci_bytes, 20)
+
 def ladder_now(ttl=20):
     """Each focus's open rung and counts, live from core/goals.py (0.1 s), by row name. The 30-minute summary carries the same fields and lags
     while agents tick rungs, so the Work page's Next comes from here. {} when goals can't answer."""
@@ -3295,23 +3301,64 @@ SLACK_SAID = {"invalid_auth": "Slack refused the {what}: copy it again", "not_au
 def slack_dir(): return HOME / ".config/hive"
 
 
-def slack_call(method, token, what, **params):
+class SlackUnreachable(ValueError): pass
+
+
+def slack_call(method, token, what, _timeout=20, **params):
     import urllib.request, urllib.error, urllib.parse
     req = urllib.request.Request(SLACK_API + method, data=urllib.parse.urlencode(params).encode(),
                                  headers={"Authorization": "Bearer " + token, "Content-Type": "application/x-www-form-urlencoded"})
     try:
-        with urllib.request.urlopen(req, timeout=20) as r: d = json.loads(r.read())
-    except (urllib.error.URLError, OSError, ValueError) as e: raise ValueError(f"couldn't reach Slack ({short(str(e), 120)}): check this computer's connection")
+        with urllib.request.urlopen(req, timeout=_timeout) as r: d = json.loads(r.read())
+    except (urllib.error.URLError, OSError, ValueError) as e: raise SlackUnreachable(f"couldn't reach Slack ({short(str(e), 120)}): check this computer's connection")
     if not d.get("ok"):
         err = str(d.get("error") or "unknown")
         raise ValueError(SLACK_SAID.get(err, "Slack said {err} for the {what}").format(what=what, err=err))
     return d
 
 
+_SLACK_TOKEN_SEEN = {}   # (bot token file's mtime_ns, size) -> (when checked, Slack's refusal in words or "")
+_SLACK_CHECKING = {}     # the same key -> the thread asking Slack now
+_SLACK_LOCK = threading.Lock()
+SLACK_RECHECK, SLACK_WAIT = 300, 0.8
+
+
+def _slack_token_check(key, token):
+    try: slack_call("auth.test", token, "bot token (xoxb-)"); said = ""
+    except SlackUnreachable: said = ""
+    except (ValueError, OSError) as e: said = str(e)
+    with _SLACK_LOCK:
+        _SLACK_CHECKING.pop(key, None)
+        if len(_SLACK_TOKEN_SEEN) > 8: _SLACK_TOKEN_SEEN.clear()   # old token files; a late answer for one must not wipe the current one
+        _SLACK_TOKEN_SEEN[key] = (time.time(), said)
+
+
+def slack_token_problem():
+    """Slack's refusal of the stored bot token (revoked in Slack, app removed), or "": one auth.test at most every SLACK_RECHECK s per token file.
+    The check runs in its own thread and the page waits at most SLACK_WAIT s for it, so a hung Slack never stalls Settings: the last known
+    answer is shown and a later load gets the new one. A Slack that can't be reached says nothing, so a slow network never shows a working door as broken."""
+    f = slack_dir() / "slack-door-bot-token"
+    try: st = f.stat(); key = (st.st_mtime_ns, st.st_size)
+    except OSError: return ""
+    with _SLACK_LOCK:
+        seen = _SLACK_TOKEN_SEEN.get(key)
+        if seen and time.time() - seen[0] < SLACK_RECHECK: return seen[1]
+        t = _SLACK_CHECKING.get(key)
+        if not t:
+            try: token = f.read_text().strip()
+            except OSError: return ""
+            t = _SLACK_CHECKING[key] = threading.Thread(target=_slack_token_check, args=(key, token), daemon=True); t.start()
+    t.join(SLACK_WAIT)
+    with _SLACK_LOCK: seen = _SLACK_TOKEN_SEEN.get(key)
+    return seen[1] if seen else ""
+
+
 def slack_door_view():
     c = jload(slack_dir() / "slack-door.json", {}) or {}
     toks = all((slack_dir() / f"slack-door-{k}-token").is_file() for k in ("bot", "app"))
-    return {"connected": bool(toks and isinstance(c, dict) and c.get("owners")), "channel": str(c.get("channel_name") or "") if isinstance(c, dict) else ""}
+    v = {"connected": bool(toks and isinstance(c, dict) and c.get("owners")), "channel": str(c.get("channel_name") or "") if isinstance(c, dict) else ""}
+    if v["connected"] and (p := slack_token_problem()): v["problem"] = p
+    return v
 
 
 def slack_door_connect(d, signer=None):
@@ -3354,6 +3401,19 @@ def slack_door_connect(d, signer=None):
     dash_note(f"The Slack door was connected to #{name} by {signer or 'this machine'}, in the web app; {len(people)} owner(s). Tokens are in `~/.config/hive/slack-door-*-token`, mode 600. Don't print them.", "slack-door")
     return {"said": f"Connected to #{name}. {len(people)} {'person' if len(people) == 1 else 'people'} there can use it{started}.", **slack_door_view()}
 
+
+def slack_door_disconnect(signer=None):
+    """Settings > Modules > slack-door "Disconnect": stop the door, then delete both token files so nothing can answer in Slack. slack-door.json
+    stays (owners, channel), so Connect again keeps who's on the list. Like Connect, only the real home's systemd units are touched."""
+    stopped = " (a test Hive: no service to stop)"
+    if HOME.resolve() == Path(pwd.getpwuid(os.getuid()).pw_dir).resolve():
+        for a in (["disable", "--now", "slack-door.path"], ["stop", "slack-door.service"]):
+            q = subprocess.run(["systemctl", "--user", *a], capture_output=True, text=True, timeout=60, env=child_env())
+            if q.returncode and "not loaded" not in q.stderr and "does not exist" not in q.stderr: raise ValueError(f"the door didn't stop, so the tokens are kept: {short(q.stderr, 200)}")
+        stopped = ""
+    for k in ("bot", "app"): (slack_dir() / f"slack-door-{k}-token").unlink(missing_ok=True)
+    dash_note(f"The Slack door was disconnected by {signer or 'this machine'}, in the web app: its tokens are deleted and it answers nobody in Slack.", "slack-door")
+    return {"said": f"Disconnected. Nothing answers in Slack now{stopped}.", **slack_door_view()}
 
 class SignIn:
     """`claude auth login` needs a terminal, so this gives it one: a pty the page reads the link from and types the code into. One at a
@@ -4592,6 +4652,8 @@ def serve(port):
                 except Exception as e: self.send(json.dumps({"error": str(e)[:200]}).encode(), J)
             elif u.path == "/api/thread-status":
                 self.send(json.dumps(thread_status()).encode(), J)
+            elif u.path == "/api/foci":
+                self.send(foci_c.get(), J)
             elif u.path == "/api/agent-status":
                 self.send(json.dumps(agent_status()).encode(), J)
             elif u.path == "/api/agent-work":
@@ -4679,7 +4741,7 @@ def serve(port):
                     elif u.path == "/api/brand": res = set_brand(d)
                     elif u.path == "/api/starter": starter_do(d.get("do")); SETUP.t = 0; res = {"ok": True}
                     elif u.path == "/api/module": res = {"said": module_do(d.get("do"), d.get("name"))}
-                    elif u.path == "/api/slack-door": res = slack_door_connect(d, self.signer)
+                    elif u.path == "/api/slack-door": res = slack_door_disconnect(self.signer) if d.get("do") == "disconnect" else slack_door_connect(d, self.signer)
                     elif u.path == "/api/signin": res = SIGNIN.start(d.get("name"), bool(d.get("console")))
                     elif u.path == "/api/signin/code": SIGNIN.code(d.get("code")); res = {"ok": True}
                     elif u.path == "/api/signin/cancel": SIGNIN.cancel(); res = {"ok": True}

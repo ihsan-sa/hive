@@ -385,13 +385,20 @@ export function partner(th) {
   }
   return null;
 }
+// Running agents by thread, built once per /api/live reply rather than filtered per thread.
+let rbt = { live: undefined, m: new Map() };
+function runsByThread() {
+  if (rbt.live === S.live) return rbt.m;
+  const m = new Map(); for (const a of (S.live ? S.live.agents : [])) { const l = m.get(a.thread); if (l) l.push(a); else m.set(a.thread, [a]); }
+  rbt = { live: S.live, m }; return m;
+}
 /** A thread's state for the person, most urgent first: {key (a STATUS key), label, who, post}. */
 export function threadState(th, read) {
   const d = S.threads.get(th); if (!d) return { key: "none", label: "" };
-  let lastYou = 0; for (const p of d.posts) if (OUTSIDE.has(p.from)) lastYou = p.t;
+  const lastYou = d.lastYou || 0;   // kept by the store as posts arrive: scanning every post of every thread on each redraw froze the page
   let ask = null; for (let i = d.posts.length - 1; i >= 0 && d.posts[i].t > lastYou; i--) { const p = d.posts[i]; if (isAgent(p.from) && p.men.includes("person")) { ask = p; break; } }
-  const run = S.live ? S.live.agents.filter(a => a.thread === th) : [];
-  const ss = S.sessions.filter(s => s.thread === th), last = ss[ss.length - 1];
+  const run = runsByThread().get(th) || [];
+  const last = S.lastByThread[th];
   if (ask && asksQuestion(ask)) return { key: "asks", label: "waiting for your answer", who: ask.from, post: ask };
   for (const a of run) { const st = agentState(a); if (st.key === "stuck") return { key: "stuck", label: "stuck: " + st.text, who: a.name }; }
   const busy = run.find(a => agentState(a).key === "working") || run[0];

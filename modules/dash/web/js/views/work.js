@@ -4,7 +4,8 @@
 // (the first line of a post whose last line starts Done:/Waiting:/Blocked:), the threads' status bars and the live agent list.
 // No agent writes anything for this page. projects/ui-redesign/hive-view.md says why it looks like this.
 import { h } from "../core/dom.js";
-import { S, can, jget } from "../core/store.js";
+import { S, can } from "../core/store.js";
+import { loadNeedsYou, waitingOn, needsN, needsHref, needsFailed } from "../core/needs.js";
 import { tierOf, threadChildren, threadTitle, displayText } from "../core/model.js";
 import { ago, plural, mdPlain, short, DAY, now } from "../core/format.js";
 import { gist } from "../core/gist.js";
@@ -13,14 +14,11 @@ import { agentRef, threadRef } from "../ui/refs.js";
 import { button, empty, list, pageHeader, section } from "../ui/kit.js";
 import { quoteInto } from "../ui/composer.js";
 
-const W = { v: null, failed: false, more: false, jump: null };
+const W = { more: false, jump: null };
 const STALE_MS = 70 * 60e3;
 const ok = () => S.app.app && can("read");
 const when = at => (at ? ago(Date.parse(at)) : "");
-async function refresh(ctx) {
-  try { const v = await jget("/api/needs-you"); W.v = v && typeof v === "object" && !v.absent ? v : { absent: true }; W.failed = false; } catch { W.failed = true; }
-  ctx.update();
-}
+async function refresh(ctx) { await loadNeedsYou(true); ctx.update(); }   // the one read of the summary (core/needs.js)
 
 const RESULT = /^(Done|Blocked|Needs the person|Waiting|Told to stop):\s*/i;
 /** The result posts of the last day in these threads: {text, word, thread, t}, newest first. The first line says what was done; the last names how it ended. */
@@ -49,18 +47,13 @@ function stand(th) {
 const rungText = r => String(r || "").split(/\s+check:/i)[0].trim();
 const ordinal = key => { const m = String(key || "").match(/^(\d+)\.\s*/); return m ? m[1] : null; };
 
-/** A waiting row is settled when its thread's status bar says Done or Told to stop and was written after the row: the helper finished, the summary hasn't caught up. */
-function closed(w) {
-  const st = stand(w.thread), at = Date.parse(w.at || "");
-  return !!(st && /^(done|told to stop)$/.test(st.word) && st.at && at && st.at > at);
-}
 /** One project's reading of the data: everything a card or a row shows. */
 function reading(s, V) {
   const threads = [s.thread, ...(s.thread ? threadChildren(s.thread) : [])].filter(Boolean);
   const running = [...S.running.entries()].filter(([, a]) => threads.includes(a.thread)).map(([n]) => n);
   const did = today(threads), st = s.thread ? stand(s.thread) : null;
-  const asks = (V.waiting || []).filter(w => threads.includes(w.thread) && !w.stale && !closed(w));
-  const needs = asks.length + (s.open_asks || 0);
+  const asks = waitingOn().filter(w => threads.includes(w.th)).map(w => ({ thread: w.th, action: w.text, post: w.post, t: w.t }));   // the one list (core/needs.js), newest first
+  const needs = asks.length;
   const blocked = st && /^(blocked|waiting|needs the person)$/.test(st.word);
   const state = running.length ? { key: "moving", tone: "good", shape: "dot", label: `moving, ${plural(running.length, "agent")} on it` }
     : needs ? { key: "needs", tone: "info", shape: "square", label: "needs you" }
@@ -79,14 +72,14 @@ const didLine = d => h("li", null, h("a", { href: threadHref(d.thread), title: `
 export function card(s, V) {
   const r = reading(s, V), n = ordinal(s.key), did = r.did.slice(0, 3);
   const part = (key, label, body) => (body ? h("div", { class: "wk-p", "data-part": key }, h("dt", null, label), h("dd", null, body)) : null);
-  const ask = r.asks.at(-1), more = r.asks.length - 1;
+  const ask = r.asks[0], more = r.asks.length - 1;
   const decided = ask && ask.post && S.byId[ask.post] ? (String(S.byId[ask.post].text || "").match(/^\W*Decided:\s*(.+)$/im) || [])[1] : null;   // the same "Decided:" line Flow reads
   const who = r.running[0] || (s.thread && S.threadStatus[s.thread] && S.threadStatus[s.thread].from) || null;
   return h("article", { class: "card wk", "data-key": "wk:" + s.key, "data-state": r.state.key, "data-here": W.jump === s.key ? "" : null },
     h("div", { class: "wk-hd" }, dot(r.state), h("h3", { class: "wk-t", title: s.state ? `${r.state.label}. ${mdPlain(s.state)}${s.at ? " (" + when(s.at) + ")" : ""}` : r.state.label },
       n ? h("span", { class: "wk-n" }, n + " ") : null, s.thread ? h("a", { href: threadHref(s.thread) }, s.name) : s.name)),
     h("dl", { class: "wk-b" },
-      part("needs", "Needs you", r.needs ? [ask ? h("a", { href: threadHref(ask.thread) }, ask.action) : null,
+      part("needs", "Needs you", r.needs || s.open_asks ? [ask ? h("a", { href: threadHref(ask.thread) }, ask.action) : null,
         decided ? h("span", { class: "meta" }, " If you don't answer: " + short(decided, 120)) : null,
         more > 0 ? h("span", { class: "meta" }, ` · and ${more} more`) : null,
         s.open_asks ? h("span", { class: "meta" }, `${ask ? " · " : ""}${plural(s.open_asks, "open request")} of yours ${s.open_asks === 1 ? "is" : "are"} on it.`) : null] : null),
@@ -116,20 +109,20 @@ export default {
   render(ctx) {
     const title = "Work";
     if (!ok()) return h("div", { class: "page" }, empty("This page isn't available on this connection.", { kind: "page", title }));
-    if (!W.v) return h("div", { class: "page" }, W.failed ? empty("Couldn't read this page. It tries again in a few minutes.", { kind: "page", title }) : empty("Reading…", { kind: "loading" }));
-    const V = W.v, states = (V.states || []).filter(s => s && s.name);
+    if (S.needsYou === undefined) return h("div", { class: "page" }, needsFailed() ? empty("Couldn't read this page. It tries again in a few minutes.", { kind: "page", title }) : empty("Reading…", { kind: "loading" }));
+    const V = S.needsYou, states = (V.states || []).filter(s => s && s.name);
     if (V.absent || !states.length) return h("div", { class: "page" }, empty("Nothing written yet. The page fills in within 30 minutes of the hive's first work.", { kind: "page", title }));
     const focus = states.filter(s => s.kind === "focus"), rest = states.filter(s => s.kind !== "focus");
     const all = states.map(s => reading(s, V));
-    const moving = all.filter(r => r.state.key === "moving").length, done = all.reduce((a, r) => a + r.did.length, 0), needs = all.filter(r => r.needs).length;
+    const moving = all.filter(r => r.state.key === "moving").length, done = all.reduce((a, r) => a + r.did.length, 0), needs = needsN();   // the one count, the same as the Chat badge
     const old = V.at && Date.now() - Date.parse(V.at) > STALE_MS;
     const held = paused();
     if (W.jump && states.some(s => s.key === W.jump)) requestAnimationFrame(() => { const el = document.querySelector(`.wk-page .wk[data-key="wk:${W.jump.replace(/"/g, '\\"')}"]`); if (el) el.scrollIntoView({ block: "start" }); });
     return h("div", { class: "page wk-page" },
       pageHeader({
         title,
-        meta: [`${moving} of ${plural(states.length, "project")} moving now`, `${plural(done, "result")} posted today`, needs ? `${needs} need you` : "nothing needs you", V.at ? h("span", { class: "ph-right", title: old ? "The summary hasn't refreshed in over an hour; the Today lines and agents are still live." : "" }, `Summary updated ${when(V.at)}`) : null],
-        after: W.failed || old ? h("p", { class: "meta", role: "alert", "data-tone": "warn" }, W.failed ? "Couldn't refresh this page, so it shows what it read last." : "The summary hasn't refreshed in over an hour; the Today lines and agents are still live.") : null,
+        meta: [`${moving} of ${plural(states.length, "project")} moving now`, `${plural(done, "result")} posted today`, needs ? (needsHref() ? h("a", { href: needsHref(), title: "The full list, newest first" }, `${plural(needs, "thing")} ${needs === 1 ? "waits" : "wait"} on you`) : `${plural(needs, "thing")} ${needs === 1 ? "waits" : "wait"} on you`) : "nothing waits on you", V.at ? h("span", { class: "ph-right", title: old ? "The summary hasn't refreshed in over an hour; the Today lines and agents are still live." : "" }, `Summary updated ${when(V.at)}`) : null],
+        after: needsFailed() || old ? h("p", { class: "meta", role: "alert", "data-tone": "warn" }, needsFailed() ? "Couldn't refresh this page, so it shows what it read last." : "The summary hasn't refreshed in over an hour; the Today lines and agents are still live.") : null,
       }),
       focus.length ? section({ title: "Your focuses", note: "in your order", key: "wk-focus" }, h("div", { class: "wk-grid" }, focus.map(s => card(s, V)))) : null,
       rest.length ? section({ title: focus.length ? "Other projects" : "Projects", note: "one line each; open one for its thread", key: "wk-rest" },

@@ -63,6 +63,11 @@ def c_verify(a):
     _out(work.verify_csv(a.csv, _case(a), out=a.out, find=a.find, cols=cols))
 
 
+HUNT_KEYS = ("orgs (list) or discover (list of searches); target (rows wanted, 25); per_org (2); must (words near the person); roles / exclude_roles (patterns); "
+             "org_pattern; domains ({org: site}, strict); angles (search templates with {org}); sources; read_per_search (4); allow_secondary (true); "
+             "allow_page_signal (false); max_age_years (3); max_seconds (1800); out")
+
+
 def c_hunt(a):
     spec = json.loads(Path(a.spec).read_text())
     if a.out: spec["out"] = a.out
@@ -85,7 +90,13 @@ def _series(a):
 
 def c_forecast(a):
     xs, said = _series(a)
-    _out({**said, **predict.forecast(xs, a.horizon, a.season)})
+    r = predict.forecast(xs, a.horizon, a.season)
+    if a.date_column:
+        try: d = predict.series_dates(a.file, a.date_column, len(r["forecast"]))
+        except ValueError as e: _err(str(e))
+        said.update(last_date=d["last_date"], step=d["step"])
+        for row, day in zip(r["forecast"], d["dates"]): row["date"] = day
+    _out({**said, **r})
 
 
 def c_trend(a):
@@ -155,13 +166,13 @@ def main(argv=None):
     p = cmd("people", c_people, "names with roles on a page (candidates, not facts)"); p.add_argument("url")
     p = cmd("check", c_check, "does this page back name + title at org?"); p.add_argument("url"); p.add_argument("--name", required=True); p.add_argument("--title", required=True); p.add_argument("--org"); p.add_argument("--domain"); p.add_argument("--claim"); p.add_argument("--refresh", action="store_true")
     p = cmd("verify", c_verify, "check every row of a CSV against its page"); p.add_argument("csv"); p.add_argument("-o", "--out"); p.add_argument("--find", action="store_true", help="search for a page when a row's own page fails"); [p.add_argument(f"--{k}", help=f"the {k} column") for k in ("name", "title", "org", "url")]
-    p = cmd("hunt", c_hunt, "build a verified list to a target from a spec"); p.add_argument("spec"); p.add_argument("-o", "--out"); p.add_argument("--max-seconds", type=int)
+    p = cmd("hunt", c_hunt, "build a verified list to a target from a spec"); p.add_argument("spec", help="JSON spec file; keys: "+HUNT_KEYS); p.add_argument("-o", "--out", help="output folder (sets spec out)"); p.add_argument("--max-seconds", type=int, help="time budget (sets spec max_seconds)")
     p = cmd("analyze", c_analyze, "how far to trust the case's sources, or profile a CSV"); p.add_argument("csv", nargs="?")
-    p = cmd("forecast", c_forecast, "backtest methods on a series, forecast with intervals"); p.add_argument("file", help="CSV or one number per line; - for stdin"); p.add_argument("--column"); p.add_argument("--horizon", type=int, default=4); p.add_argument("--season", type=int, default=1)
+    p = cmd("forecast", c_forecast, "backtest methods on a series, forecast with intervals"); p.add_argument("file", help="CSV or one number per line; - for stdin"); p.add_argument("--column", help="the value column (default: the last numeric one)"); p.add_argument("--date-column", help="a date column (YYYY, YYYY-MM or YYYY-MM-DD): the forecast rows are then labelled with dates"); p.add_argument("--horizon", type=int, default=4, help="steps ahead"); p.add_argument("--season", type=int, default=1, help="period length, e.g. 12 for monthly data with a yearly cycle")
     p = cmd("trend", c_trend, "Mann-Kendall and Theil-Sen"); p.add_argument("file"); p.add_argument("--column")
     p = cmd("estimate", c_estimate, "a rate with its uncertainty"); p.add_argument("hits", type=int); p.add_argument("total", type=int); p.add_argument("--prior-a", type=float, default=1.0); p.add_argument("--prior-b", type=float, default=1.0)
     p = cmd("odds", c_odds, "update a base rate with likelihood ratios"); p.add_argument("base", type=float); p.add_argument("lr", type=float, nargs="+")
-    p = cmd("predict", c_predict, "a ledger of predictions, resolved and scored"); p.add_argument("do", choices=["add", "resolve", "list", "score"]); p.add_argument("question", nargs="?"); p.add_argument("--p", type=float); p.add_argument("--due"); p.add_argument("--base", type=float); p.add_argument("--id", type=int); p.add_argument("--outcome", choices=["yes", "no"]); p.add_argument("--ledger")
+    p = cmd("predict", c_predict, "a ledger of predictions, resolved and scored"); p.add_argument("do", choices=["add", "resolve", "list", "score"]); p.add_argument("question", nargs="?"); p.add_argument("--p", type=float, help="your probability, 0 to 1"); p.add_argument("--due", help="YYYY-MM-DD, when it can be resolved"); p.add_argument("--base", type=float, help="the base rate you started from; only rows with one count toward skill"); p.add_argument("--id", type=int, help="the prediction to resolve"); p.add_argument("--outcome", choices=["yes", "no"]); p.add_argument("--ledger", help="ledger file (default: shared, or the case's with --case)")
     p = cmd("rank", c_rank, "order a CSV: a tested model from past outcomes, or your weights"); p.add_argument("csv"); p.add_argument("--features", required=True); p.add_argument("--outcome"); p.add_argument("--weights", help="a=2,b=1"); p.add_argument("-o", "--out")
     p = cmd("sources", c_sources, "what can be searched; --test tries each now"); p.add_argument("--test", action="store_true")
     cmd("case", c_case, "what this case holds")

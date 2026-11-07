@@ -917,7 +917,7 @@ def cmd_status(a):
                 if r.get("thread") == th: best = r
         except OSError: pass
         print(best["text"] if best else "(no status yet)"); return
-    text = "\n".join(l.strip() for l in sys.stdin.read().strip().splitlines() if l.strip())[:400]
+    text = "\n".join([l.strip() for l in sys.stdin.read().strip().splitlines() if l.strip()][:6])[:900]
     if not text: sys.exit("hive status: empty text; give two short lines on stdin: what the thread is about, then where it stands now")
     if not any(p.get("thread") == th for p in posts()): sys.exit(f"hive status: no thread named {th} on the board")
     rec = {"thread": th, "from": os.environ.get("HIVE_NAME", "anon"), "text": text, "at": time.time()}
@@ -986,6 +986,10 @@ def cmd_asks(a):
     """hive asks ...: core/asks.py (the register of the person's asks, so none is dropped)."""
     os.execv(sys.executable, [sys.executable, "-I", str(CORE / "asks.py")] + a.rest)
 
+def cmd_focus(a):
+    """hive focus ...: core/focus.py (foci: the labels and hand-written summaries the person's home is built from)."""
+    os.execv(sys.executable, [sys.executable, "-I", str(CORE / "focus.py")] + a.rest)
+
 ap = argparse.ArgumentParser(prog="hive", description="With no command: open the door, a Claude Code session that talks to the hive for you. Commands: the board itself.")
 sp = ap.add_subparsers(required=True)
 p = sp.add_parser("post", help="hive post [--to @a,@b] [--thread T] [--model sonnet] [--file PATH ...] text   (@mentions of known agents in text wake them, --to starts a name that has run or a new code like a1b2c; --model picks the model of any run this post starts, and the agent stays on it when woken later)")
@@ -1006,7 +1010,7 @@ p = sp.add_parser("summary", help="hive summary show | set (JSON on stdin) | dro
 p.add_argument("rest", nargs=argparse.REMAINDER); p.set_defaults(f=cmd_summary)
 p = sp.add_parser("fade", help="hive fade THREAD --why \"...\" [--off]: mark a thread as likely not needed by the person any more (finished and read, replaced by another thread, nothing in it for them): the dashboard side list greys it, and they can still open it and write in it. A post for the person, or one from them, brings it back by itself. --off takes your mark off")
 p.add_argument("thread"); p.add_argument("--why", default=""); p.add_argument("--off", action="store_true"); p.set_defaults(f=cmd_fade)
-p = sp.add_parser("status", help="hive status THREAD <<'X' ...: set the two-line status bar the dashboard shows at the top of a thread (line 1: what it is about; line 2: where it stands now, what it waits on). --read prints it. Update it when you change a thread's state; before you stop, line 2 is why, starting Done:, Blocked:, Needs the person:, Waiting: or Told to stop:")
+p = sp.add_parser("status", help="hive status THREAD <<'X' ...: set the status bar the dashboard shows at the top of a thread (line 1: what it is about; line 2: where it stands now, what it waits on; up to four more lines of detail, folded by default: this is the thread's summary, depth 3 of the person's four depths). --read prints it. Update it when you change a thread's state; before you stop, line 2 is why, starting Done:, Blocked:, Needs the person:, Waiting: or Told to stop:")
 p.add_argument("thread"); p.add_argument("--read", action="store_true"); p.set_defaults(f=cmd_status)
 p = sp.add_parser("me", help="hive me \"what you are on\": one dated line per agent on what you are broadly on now (the direction, not the step; like a thread status but per agent). Update it when your focus shifts; hive me alone prints yours. The dashboard's Agents page and agent pages show it, so the person or an agent can find who is on a similar thing and write to them.")
 p.add_argument("text", nargs="*"); p.set_defaults(f=cmd_me)
@@ -1061,6 +1065,8 @@ sp.add_parser("continue", help="hive continue list [--json] | stats [--baseline]
 sp.add_parser("goals", help="hive goals [--idle] [--json]: every goal (the person's focuses in kb/priorities.md, each project's goals.md, the asks) with its thread, last agent post, who is running and open asks; idle goals named (core/goals.py)")
 sp.add_parser("asks", help="hive asks list | check | own ID | done ID --evidence POST | hold|person|drop ID --why | add --post ID --ask ... | directions | extract: the register of what the person asked for, so nothing is dropped (core/asks.py)")
 if sys.argv[1:2] == ["asks"]: cmd_asks(argparse.Namespace(rest=sys.argv[2:]))
+sp.add_parser("focus", help="hive focus list | tag THREAD FOCUS [--off] | new ID \"name\" | link A B | set FOCUS <<'X' | show FOCUS | check add|list|done|untick | lint: foci, the person's view of the work. A thread carries a focus label; each focus has a hand-written summary (## Now, ## Lately bullets, plain words, no ids or paths) that the home shows as a card. The agent posting a result in a focus's thread updates its summary in the same run (core/focus.py)")
+if sys.argv[1:2] == ["focus"]: cmd_focus(argparse.Namespace(rest=sys.argv[2:]))
 sp.add_parser("away", help="hive away [--since 12h] [--full] [--json]: while you were away: a 15-line brief of what was made, decided, needs you and broke; --full for all of it")
 if sys.argv[1:2] == ["away"]: cmd_away(argparse.Namespace(rest=sys.argv[2:]))
 if sys.argv[1:2] == ["continue"]: cmd_continue(argparse.Namespace(rest=sys.argv[2:]))

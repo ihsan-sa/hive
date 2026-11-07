@@ -5,7 +5,8 @@
 // they last spoke. Reads only what the hive already writes (sessions, posts, status bars, the summary): no new field, no
 // agent instruction. The only motion is time, at one speed. Design: projects/ui-redesign/flow-architecture.md.
 import { h, s } from "../core/dom.js";
-import { S, SYS, can, jget } from "../core/store.js";
+import { S, SYS, can } from "../core/store.js";
+import { loadNeedsYou, waitingOn } from "../core/needs.js";
 import { isRunning, sEnd, threadChildren, threadTitle, displayText } from "../core/model.js";
 import { ago, clock, dayName, dur, mdPlain, now, plural, short, DAY, HOUR, MIN } from "../core/format.js";
 import { threadHref, go, href } from "../core/router.js";
@@ -31,7 +32,7 @@ const lineOf = (p, re) => lines(p).find(l => re.test(l));
 const at = iso => (iso ? Date.parse(iso) || 0 : 0);
 
 async function refresh(ctx) {
-  try { const v = await jget("/api/needs-you"); F.v = v && typeof v === "object" && !v.absent ? v : { absent: true }; F.failed = false; } catch { F.failed = true; }
+  await loadNeedsYou(true); F.v = S.needsYou;   // the one read of the summary (core/needs.js)
   F.ver = -1; ctx.update();
 }
 
@@ -51,29 +52,36 @@ function lanes(t0, t1) {
 }
 /** What a lane holds in the window: runs (with hand-offs), waits on the person, decisions, the person's marks, result posts.
  *  A hand-off is a run whose starting post was written by an earlier runner in the lane: the work passed on, not two runs that
- *  happen to touch. Open waits are the needs-you summary's own (the same list as the Needs page, stale ones included); a wait the
- *  person has since answered is read from the posts: an ask line, then their next word in that thread. */
+ *  happen to touch. Open waits are the one list (core/needs.js: the same entries the Needs page and the Chat badge count), plus the
+ *  summary's stale ones drawn as old; a wait the person has since answered is read from the posts: an ask line, then their next word. */
 function read(l, t0, t1) {
   const runs = S.sessions.filter(x => l.threads.has(x.thread) && sEnd(x) >= t0 && x.start <= t1).sort((a, b) => a.start - b.start);
   const hand = new Map(), ran = new Set();
   for (const r of runs) { const p = S.byId[r.post]; if (p && p.from !== r.name && ran.has(p.from)) hand.set(r, p.from); ran.add(r.name); }
   const pre = t1 - 3 * WIN[F.win];   // posts a little before the window too: a wait or a hand-off may have started there
   const posts = S.posts.filter(p => l.threads.has(p.th) && !SYS.has(p.from) && p.t <= t1 && p.t >= pre).sort((a, b) => a.t - b.t);
-  const v = F.v || {}, openIds = new Set([...(v.waiting || []), ...(v.stale || [])].map(w => w && w.post).filter(Boolean));
-  const waits = [], marks = [], decided = [], results = [], open = {};
+  const v = F.v && !F.v.absent ? F.v : {};
+  const waits = [], marks = [], decided = [], results = [], open = {}, parsed = [];
   for (const p of posts) {
     if (p.from === "person") { for (const w of open[p.th] || []) w.until = p.t; open[p.th] = []; marks.push(p); continue; }
     const ls = lines(p), last = ls[ls.length - 1] || "", ask = ls.find(l => /^For you:/i.test(l)) || (/^Needs the person:/i.test(last) ? last : null);
     const dec = lineOf(p, /^Decided:/i), dflt = dec ? dec.replace(/^Decided:\s*/i, "") : "";
-    if (ask && !openIds.has(p.id)) { const w = { from: p.t, until: null, text: ask.replace(/^(For you|Needs the person):\s*/i, ""), post: p, dflt }; (open[p.th] = open[p.th] || []).push(w); waits.push(w); }
+    if (ask) { const w = { from: p.t, until: null, text: ask.replace(/^(For you|Needs the person):\s*/i, ""), post: p, dflt }; (open[p.th] = open[p.th] || []).push(w); parsed.push(w); }
     else if (dec) decided.push({ t: p.t, text: dflt, post: p });
     const m = ls.length > 1 && last.match(RESULT);
     if (m) results.push({ t: p.t, word: m[1].toLowerCase(), text: gist(ls.slice(0, -1), last), post: p });
   }
-  for (const w of [...(v.waiting || []), ...(v.stale || [])]) {
+  for (const w of parsed) if (w.until) waits.push(w);   // an ask the person answered: drawn to their word. Still open ones come from the one list below, so every page agrees
+  const dfltOf = p => (p.id && S.byId[p.id] && (lineOf(p, /^Decided:/i) || "").replace(/^Decided:\s*/i, "")) || "";
+  for (const w of waitingOn()) {
+    if (!l.threads.has(w.th)) continue;
+    const p = (w.post && S.byId[w.post]) || { th: w.th, id: w.post };
+    waits.push({ from: w.t || t1, until: null, stale: false, text: w.text, post: p, dflt: dfltOf(p) });
+  }
+  for (const w of v.stale || []) {
     if (!w || !l.threads.has(w.thread)) continue;
     const p = S.byId[w.post] || { th: w.thread, id: w.post };
-    waits.push({ from: at(w.at) || p.t || t1, until: null, stale: !!w.stale, text: w.action || "", post: p, dflt: (p.id && S.byId[p.id] && (lineOf(p, /^Decided:/i) || "").replace(/^Decided:\s*/i, "")) || "" });
+    waits.push({ from: at(w.at) || p.t || t1, until: null, stale: true, text: w.action || "", post: p, dflt: dfltOf(p) });
   }
   const live = runs.filter(x => !x.end && isRunning(x.name));
   return { runs, hand, waits: waits.filter(w => w.until == null || w.until >= t0), marks: marks.filter(p => p.t >= t0), decided: decided.filter(d => d.t >= t0), results: results.filter(r => r.t >= t0), live };

@@ -9,6 +9,7 @@
 import { h, morph } from "../core/dom.js";
 import { S, SYS, can, OUTSIDE, built, post as apiPost, poll, jget } from "../core/store.js";
 import { simpleOn, plainName, hiveName } from "../core/simple.js";
+import { loadNeedsYou, waitingOn, needsN, needsHref, standLine, shownHere } from "../core/needs.js";
 import { SIDE_THREAD, agentState, agentStatus, btwParent, threadParent, threadChildren, isAgent, isRunning, tierOf, threadTitle, threadState, threadPeople, isSystemThread, SHOW, postKind, threadKinds, closingPosts, displayText, postSource, inUse, fresh7, asksQuestion, fileInfo } from "../core/model.js";
 import { ago, dayName, stamp, clock, dur, short, mdPlain, now, plural, firstSentence, DAY, MIN, HOUR, money } from "../core/format.js";
 import { href, threadHref, go } from "../core/router.js";
@@ -363,7 +364,7 @@ function aiRows(c) {
 // threads, and a focus or project names its own thread. A conversation not in either takes its parent's topic, else Other.
 const TOPICS = { at: null, map: new Map() };
 function briefTopics() {
-  const n = STAND.needs, b = n && n.brief, at = (b && b.at) + "|" + ((n && n.states) || []).length;
+  const n = needsFile(), b = n && n.brief, at = (b && b.at) + "|" + ((n && n.states) || []).length;
   if (TOPICS.at === at) return TOPICS.map;
   const map = new Map();
   if (b) for (const g of ["needs", "going", "done"]) for (const top of b[g] || []) for (const it of top.items || []) if (it.thread && !map.has(it.thread)) map.set(it.thread, top.title);
@@ -488,7 +489,7 @@ function sections(rs, ctx, opts) {
 function syncThreads(c, ctx) {
   const tl = document.querySelector("#main .cm-tl"); if (!tl) return;
   if (app() && !simpleOn() && C.view === "topics") loadStanding(ctx);
-  const sig = [S.ver, C.view, C.hideFaded, C.view === "topics" && STAND.needs && STAND.needs.brief && STAND.needs.brief.at, C.scope, C.arch, C.imp, tmetaSig(), [...FOLD].join(), [...KIDS].join(), C.tq, AI.st + AI.res.length, AI.tag, S.shown && S.shown.length, showMask(), c.arg, Math.floor(now() / 3e4), S.runSig, marksSig().length].join("|");
+  const sig = [S.ver, C.view, C.hideFaded, C.view === "topics" && needsFile() && needsFile().brief && needsFile().brief.at, C.scope, C.arch, C.imp, tmetaSig(), [...FOLD].join(), [...KIDS].join(), C.tq, AI.st + AI.res.length, AI.tag, S.shown && S.shown.length, showMask(), c.arg, Math.floor(now() / 3e4), S.runSig, marksSig().length].join("|");
   if (tl === L.tl && sig === L.tlSig) return;
   const fresh = tl !== L.tl || c.arg !== L.tlConv;
   L.tl = tl; L.tlSig = sig; L.tlConv = c.arg;
@@ -745,7 +746,7 @@ function needRow({ d, st }) {
 // hourly top-down view: the few top-level things, each opening onto its threads. No brief (an installed Hive), just the threads.
 // The agent only groups and words the top level: a status line written after it wins at once, here and in which group the thread sits.
 const BRIEF_FOR = 6 * HOUR, STAND_LIMIT = 4, TOP_LIMIT = { needs: 12, done: 4, going: 4 }, HOME_LIMIT = 5, STAND_EVERY = 5 * MIN, DONE_FOR = 2 * DAY, GOING_FOR = 3 * DAY, NEEDS_FOR = 7 * DAY;
-const STAND = { needs: null, at: 0, more: {}, open: {}, checks: [] };   // checks: the checklist under each Needs you entry (server: /api/checklist)
+const STAND = { at: 0, more: {}, open: {}, checks: [] };   // checks: the checklist under each Needs you entry (server: /api/checklist)
 /** Tick or untick one checklist item. It stays ticked until an agent has checked it was done and removes it. */
 function tick(it, ticked, ctx, from) {
   const at = scrollersOf(from), upd = () => { ctx.update(); keepScroll(at); };
@@ -772,30 +773,21 @@ function loadStanding(ctx) {
   if (now() - STAND.at < STAND_EVERY) return;
   STAND.at = now();
   jget("/api/checklist").then(v => { const n = (v && v.items) || []; if (JSON.stringify(n) !== JSON.stringify(STAND.checks)) { STAND.checks = n; ctx.update(); } }, () => {});
-  jget("/api/needs-you").then(v => { const sig = n => JSON.stringify(n && [n.waiting, n.states, n.brief]); if (v && sig(v) !== sig(STAND.needs)) { STAND.needs = v; ctx.update(); } }, () => {});
+  loadNeedsYou();   // the one needs-you load (core/needs.js); S.needsYou, and a store emit when it changes
 }
-/** A status bar's last line, split into its state word and the words after it, without the agent's name tag. */
-function standLine(text) {
-  const l = text.split("\n").filter(Boolean), last = (l[l.length - 1] || "").replace(/\s*\(a[0-9a-f]{4,5}\)/g, "").trim();
-  const m = last.match(/^(Done|Blocked|Needs the person|Waiting|Told to stop):\s*/i);
-  return { word: m ? m[1].toLowerCase() : "", line: m ? last.slice(m[0].length) : last, full: last };
-}
-// A thread that went quiet is archived by age, but what it waits on still counts here; one archived by hand doesn't.
-const shownHere = th => { const d = S.threads.get(th); return !(btwParent(th) || faded(th) || (tmeta(th).archived && archived(th)) || (d && isSystemThread(d))); };
+/** The 30-minute summary (~/needs-you.json), or null when there is none: the brief and the project states come from it. */
+const needsFile = () => (S.needsYou && !S.needsYou.absent ? S.needsYou : null);
 const askedByThem = th => { const d = S.threads.get(th); return important(th) || pinned(th) || (!!d && d.posts.some(p => p.from === "person")); };
 function standing(g) {
   const seenAbove = new Set([...g.asks, ...g.foryou, ...g.trouble, ...g.working].map(x => x.d.name)), used = new Set();
   const rows = { needs: [], done: [], going: [], projects: [] };
   const take = (group, th, text, t) => { if (used.has(th)) return; used.add(th); rows[group].push({ th, text, t }); };
   const st = S.threadStatus || {};
-  const drop = (STAND.needs && STAND.needs.brief && STAND.needs.brief.dropped) || {};   // an agent took it out of the summary as obsolete, until the thread says something newer
+  const nf = needsFile(), drop = (nf && nf.brief && nf.brief.dropped) || {};   // an agent took it out of the summary as obsolete, until the thread says something newer
   const open = th => !seenAbove.has(th) && shownHere(th) && !(drop[th] && drop[th] >= ((st[th] && st[th].at) || 0));
   const bars = Object.keys(st).map(th => ({ th, r: st[th], s: standLine(st[th].text), t: st[th].at * 1e3 })).sort((a, b) => b.t - a.t);
-  const b0 = STAND.needs && STAND.needs.brief, bt = b0 ? Date.parse(b0.at) : 0, brief = b0 && now() - bt < BRIEF_FOR ? b0 : null;
-  const waits = ((STAND.needs && STAND.needs.waiting) || []).filter(w => !w.stale && w.thread && open(w.thread)).map(w => ({ th: w.thread, text: w.action, t: w.at ? Date.parse(w.at) : 0 }));
-  for (const b of bars) if (b.s.word === "needs the person" && now() - b.t < NEEDS_FOR && open(b.th)) waits.push({ th: b.th, text: b.s.line, t: b.t });
-  waits.sort((a, b) => b.t - a.t);
-  const waiting = waits.filter(w => { const mine = lastMine(w.th); return !mine || mine.t < w.t; });   // once they've answered since, it's not waiting on them
+  const b0 = nf && nf.brief, bt = b0 ? Date.parse(b0.at) : 0, brief = b0 && now() - bt < BRIEF_FOR ? b0 : null;
+  const waiting = waitingOn().filter(w => w.src !== "live");   // the one list (core/needs.js); the live ones are the groups above
   if (brief) {   // threads first, so a thread stays under its top-level thing; live state decides what's still in each
     const when = th => st[th] ? st[th].at * 1e3 : bt, latest = new Map(); for (const w of waiting) if (!latest.has(w.th)) latest.set(w.th, w);   // newest first
     // What a thread says since the brief, or null. A newer Done doesn't take it out of Needs you: a For you line still waits until they answer it.
@@ -825,7 +817,7 @@ function standing(g) {
     const loose = rows[group].filter(r => !r.kids);
     if (loose.length > 1) { const last = loose.reduce((a, b) => b.t > a.t ? b : a); rows[group] = [...rows[group].filter(r => r.kids), { top: group + ":" + title, title, text: plural(loose.length, "thread") + " not in the summary. Latest: " + last.text, t: last.t, kids: loose }]; }
   }
-  rows.projects = ((STAND.needs && STAND.needs.states) || []).filter(s => s.state).map(s => ({ th: s.thread, name: s.name, key: s.key, text: s.state, t: s.at ? Date.parse(s.at) : 0 }));
+  rows.projects = ((nf && nf.states) || []).filter(s => s.state).map(s => ({ th: s.thread, name: s.name, key: s.key, text: s.state, t: s.at ? Date.parse(s.at) : 0 }));
   return rows;
 }
 /** Adds the row to the new chat's prompt, with the thread's id so the agent that gets it can read that thread. */
@@ -874,7 +866,7 @@ function standingPart(r, ctx) {
     standSec("projects", "Your projects", r.projects, ctx));
 }
 function homePane(ctx) {
-  const g = needs(), w = can("post"), n = g.asks.length + g.foryou.length + g.trouble.length;
+  const g = needs(), w = can("post"), n = needsN();   // the one count (core/needs.js): the same number as the Chat badge and the Needs you page
   const local = outFor(null);
   const room = hasRoom(), digest = app() && !simpleOn();
   if (digest) loadStanding(ctx);
@@ -895,8 +887,9 @@ function homePane(ctx) {
       local.some(it => it.state !== "failed") ? closeLine() : null,
       local.length ? h("div", { class: "cm-out", "data-key": "out" }, local.map(it => localMessage(it, outActions))) : null) : null,
     h("div", { class: "cm-needs", "data-key": "needs" },
-      n || (!simpleOn() && !S.live.signin?.length && !(stand && stand.needs.length)) ? h("h2", { class: "cm-needs-t" }, n ? `${plural(n, "thing")} for you` : IB.unread ? "No agent is waiting on you" : "Nothing needs you") : null,
-      sec(null, null, [...g.asks, ...g.foryou, ...g.trouble]),   // one head above ("N things for you"); each row's shape and first words say which kind
+      n ? h("h2", { class: "cm-needs-t" }, needsHref() ? h("a", { href: needsHref(), title: "The full list, newest first" }, `${plural(n, "thing")} ${n === 1 ? "waits" : "wait"} on you`) : `${plural(n, "thing")} ${n === 1 ? "waits" : "wait"} on you`)
+        : !simpleOn() && !S.live.signin?.length ? h("h2", { class: "cm-needs-t" }, IB.unread ? "No agent is waiting on you" : "Nothing needs you") : null,
+      sec(null, null, [...g.asks, ...g.foryou, ...g.trouble]),   // one head above ("N things wait on you", opening the full list); each row's shape and first words say which kind
       stand ? standingPart(stand, ctx) : null,
       sec("Working now", null, g.working),
       !n && !g.working.length && !S.live.signin?.length ? h("p", { class: "meta" }, simpleOn() ? "When your Hive asks you something or finishes, it shows here." : "When an agent asks you something, finishes, or stops, it shows here.") : null));
@@ -916,7 +909,7 @@ function showSays(mask) {
 export default {
   id: "comms", label: () => (app() ? "Chat" : "Comms"),
   tab: true,
-  badge: () => { if (!app() || !S.live) return null; const g = needs(), n = g.asks.length + g.foryou.length + g.trouble.length; return n ? String(n) : null; },
+  badge: () => { if (!app() || !S.live) return null; const n = needsN(); return n ? String(n) : null; },
   poll: { every: 3000, run: async ctx => { if (await pollDelivered()) ctx.update(); } },
   escape: () => { if (C.menu || C.find) { C.menu = null; if (!C.q.trim()) C.find = false; L.ctx && L.ctx.update(); return; } if (!cancelReply() && asideOpen()) closeAside(); },
   enter: () => { C.arrived = true; },
