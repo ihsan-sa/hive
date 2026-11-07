@@ -220,17 +220,27 @@ function mdLayer(text) {
  *  (same wrapped height as the box); otherwise the layer is dropped and the box shows its plain text, so it can never glitch. */
 function mdSync(n) {
   const tw = n.parentNode, bd = tw && tw.querySelector(".cp-bd"); if (!bd) return;
-  if (bd.getAttribute("data-sig") !== n.value) { bd.replaceChildren(...mdLayer(n.value)); bd.setAttribute("data-sig", n.value); }
-  CP.md = false;
-  if (!n.value) { tw.removeAttribute("data-md"); return; }
+  if (!n.value) { tw.removeAttribute("data-md"); bd.setAttribute("data-sig", ""); CP.md = false; return; }
+  const fresh = bd.getAttribute("data-sig") !== n.value;
+  if (fresh) { bd.replaceChildren(...mdLayer(n.value)); bd.setAttribute("data-sig", n.value); }
+  // Reads that force a layout (computed style, widths, heights) run only when the text or the box's width changed:
+  // typing and idle re-renders no longer reflow the whole page each time.
+  const w = n.clientWidth, h = n.scrollHeight, key = w + "|" + h + "|" + n.className;
+  if (!fresh && bd.getAttribute("data-geo") === key) { if (CP.md) { tw.setAttribute("data-md", ""); bd.scrollTop = n.scrollTop; } return; }
   tw.setAttribute("data-md", "");   // shown so it can be measured; dropped below if it doesn't line up
-  const c = getComputedStyle(n);
-  for (const k of ["font", "padding", "lineHeight", "letterSpacing", "wordSpacing", "tabSize", "textIndent"]) bd.style[k] = c[k];
-  bd.style.width = n.clientWidth + "px";   // the box's wrapping width, scrollbar excluded
-  const ok = Math.abs(bd.scrollHeight - n.scrollHeight) <= 1;
+  if (bd.getAttribute("data-w") !== String(w) || !bd.style.font) {
+    const c = getComputedStyle(n);
+    for (const k of ["font", "padding", "lineHeight", "letterSpacing", "wordSpacing", "tabSize", "textIndent"]) bd.style[k] = c[k];
+    bd.style.width = w + "px"; bd.setAttribute("data-w", String(w));   // the box's wrapping width, scrollbar excluded
+  }
+  const ok = Math.abs(bd.scrollHeight - h) <= 1;
+  bd.setAttribute("data-geo", key);
   if (ok) bd.scrollTop = n.scrollTop;
-  if (!ok) tw.removeAttribute("data-md"); else CP.md = true;   // CP.md: a redraw keeps the attribute, so the text never flashes plain
+  if (!ok) tw.removeAttribute("data-md"); CP.md = ok;   // CP.md: a redraw keeps the attribute, so the text never flashes plain
 }
+let mdRaf = 0;
+/** One layer redraw per frame, however many keys or re-renders asked for it. */
+function mdSoon(th) { if (mdRaf) return; mdRaf = requestAnimationFrame(() => { mdRaf = 0; const t = field(th); if (t) mdSync(t); }); }
 /** Send a short message for the person from a button (Carry on, Answer). Shows like any other. */
 export function say(th, text, to) {
   const r = to ? { who: to, why: "chosen", server: (TG.v[th] || {}).who } : recipient(th);
@@ -563,7 +573,7 @@ export function composer({ thread, update, place = "thread", autofocus, top }) {
   if (CP.th !== th) { CP.th = th; CP.ac = null; CP.menu = false; CP.hist = null; }
   const d = draft(th), r = recipient(th), k = "cp:" + (th || "(new)"), empty = !d.text.trim() && !d.files.length;
   if (CP.focus || autofocus === true) { CP.focus = false; queueMicrotask(() => { const t = field(th); if (t && document.activeElement !== t) { t.focus(); t.setSelectionRange(t.value.length, t.value.length); } }); }
-  setTimeout(() => { const t = field(th); if (t) mdSync(t); }, 0);   // after the render lands, so the layer copies the box's font and padding
+  mdSoon(th);   // after the render lands, so the layer copies the box's font and padding
   CP.sig = (named(d.text) || "") + "|" + empty + "|" + isBtw(d.text);
   const ph = !th ? "Say what you want done" : simpleOn() ? "Message" : r.who === "new" ? "Message a new agent" : r.who ? `Reply to ${r.who}…` : "Message";
   return h("div", { class: "cp", "data-key": k, "data-place": place, "data-fmt": fmtOpen() ? "" : null, ...(th ? {} : dropZone(null)) },  // a thread's composer is inside its conversation's zone

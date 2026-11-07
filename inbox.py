@@ -161,6 +161,16 @@ STOP_WORDS = ("Done", "Blocked", "Needs the person", "Waiting", "Told to stop", 
 STOP_FRESH_S = 900  # a reason older than this was written before the work that came after it
 STOP_ASKS = 3       # asked this often with no reason given, a run is let go: a hook that never lets go is a loop
 STOP_LOG = "stop-gate.jsonl"
+STOP_HOLD_S = 600   # another agent's bar this fresh is theirs: a reason given by post is accepted and the bar left alone (hive-meta load P8)
+
+def _keep_bar_from():
+    """When reason_from_post stops overwriting another agent's fresh bar: config.json "stop_gate_keep_bar_from" (YYYY-MM-DD, UTC),
+    a measured trial from 2026-11-08 unless the person says no (review.md bundle item 1, post 1106025535b3); "never" turns it off."""
+    try: v = json.loads((Path(__file__).resolve().parent / "config.json").read_text()).get("stop_gate_keep_bar_from", "2026-11-08")
+    except (OSError, ValueError): v = "2026-11-08"
+    try: return dt.datetime.fromisoformat(str(v)).replace(tzinfo=dt.timezone.utc).timestamp()
+    except ValueError: return float("inf")
+KEEP_BAR_FROM = _keep_bar_from()
 
 def last_status(thread):
     """The newest status bar record for a thread (`hive status` appends to ~/.hive/thread-status.jsonl), or {}."""
@@ -181,10 +191,13 @@ def stop_reason(name, st, since):
     word = next((w for w in STOP_WORDS if line.lower().startswith(w.lower() + ":") and len(line) - len(w) > 12), None)
     return (word, line) if word else None
 
-def reason_from_post(name, rec, thread, st, since):
+def reason_from_post(name, rec, thread, st, since, t=None):
     """A stop reason given as the last line of this agent's newest post in the thread in this run (fresh, as for the bar), copied
     into the status bar so the person reads it there. Saves the turn an `hive status` call costs: 44 of 51 gate asks over
-    2026-11-03..06 led to nothing but that call (~/projects/agent-weight). (word, line), or None."""
+    2026-11-03..06 led to nothing but that call (~/projects/agent-weight). When another agent set the bar within STOP_HOLD_S
+    (from KEEP_BAR_FROM), the bar is theirs: the reason is accepted from the post and the bar left alone, so the newest stopper
+    no longer wipes the last one's reason (61 such overwrites in 3 days; hive-meta load P8). (word, line, via), or None;
+    via is "post" or "post, bar kept"."""
     ps = [p for p in own_posts(name, rec["at"]) or [] if p.get("thread") == thread]
     if not ps: return None
     p = ps[-1]
@@ -193,12 +206,15 @@ def reason_from_post(name, rec, thread, st, since):
     lines = [l.strip().strip("*_ ").strip() for l in str(p.get("text", "")).strip().splitlines() if l.strip()]
     got = stop_reason(name, {"from": name, "at": pat, "text": lines[-1] if lines else ""}, since)
     if not got: return None
+    t = t or time.time()
+    held = str(st.get("from", "")).lower() not in ("", name) and isinstance(st.get("at"), (int, float)) and t - st["at"] <= STOP_HOLD_S
+    if held and t >= KEEP_BAR_FROM: return got + ("post, bar kept",)
     line1 = (str(st.get("text", "")).strip().splitlines() or [""])[0].strip() or (lines[0][:120] if len(lines) > 1 else thread)
     try:
         with (STATE / "thread-status.jsonl").open("a") as fh:
-            fh.write(json.dumps({"thread": thread, "from": name, "text": f"{line1}\n{got[1]}"[:400], "at": time.time(), "via": "post " + str(p.get("id", ""))}) + "\n")
+            fh.write(json.dumps({"thread": thread, "from": name, "text": f"{line1}\n{got[1]}"[:400], "at": t, "via": "post " + str(p.get("id", ""))}) + "\n")
     except OSError: pass
-    return got
+    return got + ("post",)
 
 def stop_gate(name, rec, t=None):
     """Why this stop should wait: the run has given no reason for stopping. The person, 2026-11-06 (post 11052128aa48): before
@@ -218,11 +234,11 @@ def stop_gate(name, rec, t=None):
     except (OSError, ValueError): n = 0
     st = last_status(thread)
     since = max((at if at.tzinfo else at.replace(tzinfo=dt.timezone.utc)).timestamp(), t - STOP_FRESH_S)
-    got = stop_reason(name, st, since) or reason_from_post(name, rec, thread, st, since)
+    got = stop_reason(name, st, since) or reason_from_post(name, rec, thread, st, since, t)
     def log(event):
         try:
             with (STATE / STOP_LOG).open("a") as fh:
-                fh.write(json.dumps({"at": t, "name": name, "run": rec["at"], "thread": thread, "event": event, "asked": n, "why": got[1] if got else ""}) + "\n")
+                fh.write(json.dumps({"at": t, "name": name, "run": rec["at"], "thread": thread, "event": event, "asked": n, "why": got[1] if got else "", "via": (got[2] if len(got) > 2 else "bar") if got else ""}) + "\n")
         except OSError: pass
     if got or n >= STOP_ASKS:
         log("passed" if got else "let go"); return None
@@ -238,7 +254,7 @@ def stop_gate(name, rec, t=None):
             "- Waiting: on a job or an agent's answer that wakes you (say which, and about when).\n"
             "- Told to stop: say by whom.\n"
             "If one of them honestly holds, end your last post in the thread with it as a line of its own (e.g. `Blocked: on what, "
-            "and who has it`; it is copied to the bar), or set it and stop again:\n"
+            "and who has it`; it is copied to the bar, or read from the post when another agent set the bar just now), or set it and stop again:\n"
             f"hive status {thread} <<'X'\n{line1}\nBlocked: on what, and who has it\nX\n"
             "If none holds (a step is finished but the goal has a next one you can take, or the work got hard or long), don't stop: "
             "take the next step, and give the reason when one is true.")

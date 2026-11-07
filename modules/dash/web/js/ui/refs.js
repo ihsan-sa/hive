@@ -1,7 +1,7 @@
 // References to agents and threads. Real links (#agent/<name>, #comms/<thread>), so they open in a new tab,
 // show in the status bar, and work by keyboard. Status is shape + colour + the label in the tooltip.
 import { h, copyText } from "../core/dom.js";
-import { agentStatus, isAgent, isRunning, isWarden, threadTitle, tierOf } from "../core/model.js";
+import { agentBrief, agentStatus, isAgent, isRunning, isWarden, threadTitle, tierOf } from "../core/model.js";
 import { agentHref, threadHref } from "../core/router.js";
 import { status, tier } from "../core/status.js";
 import { statusDot, wardenMark } from "./kit.js";
@@ -55,5 +55,11 @@ export function avatars(names, { max = 4, size } = {}) {
     h("span", { class: "avs" }, names.slice(0, max).map(n => agentAvatar(n, { size })), names.length > max ? h("span", { class: "av", "data-size": size || null }, "+" + (names.length - max)) : null),
     h("div", { class: "avs-pop", role: "group", "aria-label": "Agents here" }, h("div", { class: "avs-pop-l" },
       h("div", { class: "avs-pop-h meta", style: "--i:0" }, `${names.length} ${names.length === 1 ? "agent" : "agents"}` + (running ? ` · ${running} running` : "")),
-      [...names].sort((a, b) => isRunning(b) - isRunning(a)).map((n, i) => h("div", { class: "avs-pop-r", "data-key": n, style: `--i:${Math.min(i + 1, 12)}` }, agentRef(n, { state: true }))))));
+      [...names].sort((a, b) => isRunning(b) - isRunning(a)).map((n, i) => h("div", { class: "avs-pop-r", "data-key": n, style: `--i:${Math.min(i + 1, 12)}` }, pill(n))))));
+}
+// A pill in the list: name, state, then model and cost so far (the person, 2026-11-07).
+function pill(n) {
+  const a = agentRef(n, { state: true }), b = isAgent(n) ? agentBrief(n) : "";
+  if (b) a.append(h("span", { class: "sl avs-pop-m" }, b));
+  return a;
 }

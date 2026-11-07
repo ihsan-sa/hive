@@ -16,3 +16,6 @@ h2{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:var(--mute
 .callpage .ph-call{left:12px;right:12px;bottom:calc(12px + env(safe-area-inset-bottom));width:auto;max-height:70vh}
 .callpage .ph-call .btn{min-height:52px;font-size:18px;flex:1}
 .callpage .ph-btns{display:flex;gap:10px}
+
+.ph-speed{display:flex;align-items:center;gap:10px;margin:8px 0;font-size:14px}
+.ph-speed span{white-space:nowrap}.ph-speed input{flex:1;min-width:0;height:32px}

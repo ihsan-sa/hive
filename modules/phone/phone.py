@@ -187,12 +187,37 @@ def models():
     return _stt, _tts
 
 
-def tts_wav(text, voice=None):
+PLAYBACK_LOG = Path.home() / ".hive" / "phone-playback.jsonl"   # calls whose browser refused the voice's <audio> element
+SETTINGS = Path.home() / ".hive" / "phone-settings.json"   # the person's call settings, kept on the server (one person per hive)
+SPEED_MIN, SPEED_MAX, SPEED_DEFAULT = 0.6, 1.6, 1.05
+_sp = (None, SPEED_DEFAULT)
+
+
+def get_speed():
+    """How fast replies are spoken (Kokoro speed). Re-read when the file changes, so a mid-call change applies to the next utterance."""
+    global _sp
+    try: m = SETTINGS.stat().st_mtime_ns
+    except OSError: return SPEED_DEFAULT
+    if _sp[0] != m:
+        try: v = float(json.loads(SETTINGS.read_text()).get("speed", SPEED_DEFAULT))
+        except (OSError, ValueError, TypeError, AttributeError): v = SPEED_DEFAULT
+        _sp = (m, min(SPEED_MAX, max(SPEED_MIN, v)) if v == v else SPEED_DEFAULT)
+    return _sp[1]
+
+
+def set_speed(v):
+    v = round(min(SPEED_MAX, max(SPEED_MIN, float(v))), 2)
+    SETTINGS.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    tmp = SETTINGS.with_suffix(".tmp"); tmp.write_text(json.dumps({"speed": v})); os.replace(tmp, SETTINGS)
+    return v
+
+
+def tts_wav(text, voice=None, speed=None):
     """Text to 24 kHz mono 16-bit wav bytes."""
     import numpy as np
     _, tts = models()
     with _mlock:
-        samples, sr = tts.create(text, voice=voice or VOICE, speed=1.05, lang="en-us")
+        samples, sr = tts.create(text, voice=voice or VOICE, speed=speed or get_speed(), lang="en-us")
     pcm = (np.clip(samples, -1, 1) * 32767).astype("<i2").tobytes()
     b = io.BytesIO()
     with wave.open(b, "wb") as w:
@@ -553,14 +578,15 @@ class Call:
             if brain is not self.brain or brain is self.leaving or self.ended: return
             self.lines.append((self.agent, text))
             t0 = time.time()
-            try: audio = base64.b64encode(tts_wav(text)).decode()
+            spd = get_speed()
+            try: audio = base64.b64encode(tts_wav(text, speed=spd)).decode()
             except Exception as e: self.note(f"tts: {e}"); audio = None
             if time.time() - t0 > 3: print(f"phone: call {self.id} slow tts {time.time() - t0:.1f}s for {len(text)} chars", flush=True)
             if isinstance(brain, AgentLine): brain.spoke = time.time()
             if self.state == "hold":
                 self.state = "talking"; self.emit("pickup", agent=self.agent)
             self.say_until = max(time.time(), self.say_until) + wav_seconds(audio)
-            self.emit("say", text=text, agent=self.agent, audio=audio)
+            self.emit("say", text=text, agent=self.agent, audio=audio, speed=spd)
 
     def filler(self, brain):
         return  # no spoken filler ("let me check"): silence beats generic sayings
@@ -644,9 +670,10 @@ class Call:
         with self.saying:
             if self.ended or self.brain: return
             self.lines.append(("phone", text))
-            try: audio = base64.b64encode(tts_wav(text)).decode()
+            spd = get_speed()
+            try: audio = base64.b64encode(tts_wav(text, speed=spd)).decode()
             except Exception as e: self.note(f"tts: {e}"); audio = None
-            self.emit("say", text=text, agent="phone", audio=audio)
+            self.emit("say", text=text, agent="phone", audio=audio, speed=spd)
 
     def _give_up(self, summoned):
         if self.ended or self.summoned is not summoned or self.brain: return
@@ -803,6 +830,7 @@ class H(BaseHTTPRequestHandler):
     def do_GET(self):
         u = urlparse(self.path); q = parse_qs(u.query); p = u.path.rstrip("/")
         if p == "/health": return self.out({"ok": True, "models": _tts is not None})
+        if p == "/settings": return self.out({"speed": get_speed(), "min": SPEED_MIN, "max": SPEED_MAX, "default": SPEED_DEFAULT})
         if p == "/rings": return self.out({"rings": sorted(RINGS.values(), key=lambda r: r["at"])})
         if p == "/history":
             try: rows = [json.loads(l) for l in (Path.home() / ".hive" / "phone-calls.jsonl").read_text().splitlines()[-40:]]
@@ -829,6 +857,9 @@ class H(BaseHTTPRequestHandler):
             th = str(b.get("thread") or "").strip() or None
             c = start_call(b.get("ring"), (b.get("to") or "").strip() or None, b.get("quiet"), th)
             return self.out({"id": c.id, "agent": c.agent})
+        if p == "/settings":
+            try: return self.out({"speed": set_speed(self.jbody()["speed"])})
+            except (KeyError, ValueError, TypeError): return self.out({"error": "speed: a number"}, 400)
         if p == "/ring":
             b = self.jbody(); name = str(b.get("from") or "").strip()
             if not re.fullmatch(r"[a-z0-9]{3,12}", name): return self.out({"error": "from: an agent name"}, 400)
@@ -840,7 +871,7 @@ class H(BaseHTTPRequestHandler):
             return self.out(r)
         m = re.fullmatch(r"/ring/(\w+)/decline", p)
         if m: RINGS.pop(m[1], None); return self.out({"ok": True})
-        m = re.fullmatch(r"/call/(\w+)/(turn|partial|text|transfer|end|interrupt|answer|say|hangup|mute)", p)
+        m = re.fullmatch(r"/call/(\w+)/(turn|partial|text|transfer|end|interrupt|answer|say|hangup|mute|playback)", p)
         if not m: return self.out({"error": "not found"}, 404)
         c = self.call(m[1])
         if not c: return
@@ -867,6 +898,11 @@ class H(BaseHTTPRequestHandler):
             c.muted = bool(self.jbody().get("muted"))
             with c.cv: c.cv.notify_all()   # an agent waiting on the person's words gets back to its work
             return self.out({"ok": True, "muted": c.muted})
+        if m[2] == "playback":   # the browser couldn't play the voice its usual way: the watchdog reads this file (check_phone_voice)
+            why = str(self.jbody().get("why") or "")[:200]
+            print(f"phone: call {c.id} browser refused the voice: {why}", flush=True)
+            with open(PLAYBACK_LOG, "a") as f: f.write(json.dumps({"at": time.time(), "call": c.id, "why": why}) + "\n")
+            return self.out({"ok": True})
         if m[2] == "interrupt":
             c.voice_at = time.time(); c.lines.append(("system", "the person cut in")); return self.out({"ok": True})
         if m[2] == "transfer":
@@ -982,13 +1018,13 @@ def main(argv):
     sp.add_parser("calls")
     x = sp.add_parser("enroll"); x.add_argument("files", nargs="*")
     sm = sp.add_parser("sms", help="text the person's own number (a link or a short note); capped per day"); sm.add_argument("text")
-    s = sp.add_parser("say"); s.add_argument("text"); s.add_argument("-o", default="say.wav")
+    s = sp.add_parser("say"); s.add_argument("text"); s.add_argument("-o", default="say.wav"); s.add_argument("--speed", type=float, help="override the saved call speed for this file")
     a = ap.parse_args(argv)
     if a.cmd == "serve": return serve()
     if a.cmd == "setup": return setup()
     if a.cmd == "enroll": return enroll(a.files)
     if a.cmd == "say":
-        Path(a.o).write_bytes(tts_wav(a.text)); print(a.o); return
+        Path(a.o).write_bytes(tts_wav(a.text, speed=a.speed)); print(a.o); return
     if a.cmd == "calls": print(json.dumps(api("GET", "/calls"), indent=1)); return
     me = os.environ.get("HIVE_NAME", "")
     if a.cmd == "answer":

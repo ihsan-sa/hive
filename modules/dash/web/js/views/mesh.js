@@ -686,7 +686,7 @@ export { G as graph };
 /** What a display tile says in its head. */
 export const meshNote = () => M.count;
 /** A display tile keeps the Map tab's window; 6 hours until the TV picks one. */
-export function meshForDisplay() { M.tile = true; M.win = getPref("meshWin", 6 * HOUR); }
+export function meshForDisplay() { M.tile = true; M.win = getPref("meshWin", 6 * HOUR); if (M.lay === "bands") M.lay = "lineage"; }   // a TV can't scroll: Bands runs past the tile, so it gets the newest layout
 let unsub = null;
 // The deck: BROWSE walks the agents in map order; crossfader and left jog scrub the replay; far right is live.
 const walk = () => M.lanes.flatMap(l => l.tracks.filter(t => t.kind === "run").map(t => t.a));

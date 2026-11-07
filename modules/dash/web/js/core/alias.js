@@ -38,7 +38,8 @@ export function initAlias() {
 /** Logo click handler: five quick clicks flip it. */
 let clicks = [];
 export function logoClick(e) {
-  if (e.currentTarget) { beeAround(e.currentTarget); logoClicks(); }
+  // Bees only on the third quick click, not on every click (the person, 2026-11-07).
+  if (e.currentTarget && logoClicks()) beeAround(e.currentTarget);
   const t = Date.now(); clicks = clicks.filter(x => t - x < 1500); clicks.push(t);
   if (clicks.length >= 5) { clicks = []; e.preventDefault(); toggleNames(); }
 }

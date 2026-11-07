@@ -49,7 +49,7 @@ export function delivery(p, m) {
   const set = DELIV.sets[m], last = S.lastSess[m];
   if ((set && set.has(p.id)) || (!queued && last && last.start >= p.t - 2000) || answered(p, m)) return { key: "seen", tone: "good", text: `Seen by ${m}`, who: m };
   // A running agent gets the post from its hook after its current step, even while the starter also holds it for the next start.
-  if (isRunning(m)) return { key: "waiting", tone: "warn", text: `${m} sees this after its current step`, who: m };
+  if (isRunning(m)) return { key: "waiting", tone: "quiet", text: `Queued · ${m} reads it after its current step`, who: m };
   if (queued) return { key: "queued", tone: "info", text: `Waiting for ${m} to start`, who: m };
   // Just posted to a sleeping agent: the starter takes a moment to wake it, so it isn't "not reached" yet.
   if (now() - p.t < 2 * MIN) return { key: "queued", tone: "info", text: `Waking ${m}…`, who: m };

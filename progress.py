@@ -82,16 +82,51 @@ def next_id(items):
     n = max((int(i[1:]) for i in items if re.fullmatch(r"i\d+", i)), default=0) + 1
     return f"i{n:04d}"
 
+OVERLAP_DAYS = 7  # floor: a landing this recent counts as open even when its revisit date has passed unjudged
+
+def named_numbers(measure):
+    """The numbers a measure names: snake_case names (stalled_threads, kb_recall_opened_pct), not script names (x_y.py)."""
+    return set(re.findall(r"\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b(?!\.py)", (measure or "").lower()))
+
+def overlaps(items, measure, t=None, skip=()):
+    """Open landings whose measure names a number this measure names: {id: [numbers]}.
+    Open = status landed and its revisit still ahead, or landed within OVERLAP_DAYS (revisit passed but unjudged)."""
+    t = t or now()
+    mine, t0, today, out = named_numbers(measure), t - dt.timedelta(days=OVERLAP_DAYS), t.date().isoformat(), {}
+    if not mine: return out
+    for e in items.values():
+        if e.get("status") != "landed" or e["id"] in skip: continue
+        shared = mine & named_numbers(e.get("measure"))
+        if not shared: continue
+        try: at = dt.datetime.fromisoformat(e.get("at", "").replace("Z", "+00:00"))
+        except ValueError: at = None
+        if str(e.get("revisit", "")) >= today or (at and at >= t0): out[e["id"]] = sorted(shared)
+    return out
+
+def judged_with(items, e):
+    """Ids judged together with e: its own --also, and entries that named it in theirs."""
+    return sorted(set(e.get("also") or []) | {o["id"] for o in items.values() if e["id"] in (o.get("also") or [])})
+
 def cmd_log(a):
     items = ledger()
     if not a.measure: sys.exit("hive improve log: --measure is the number that would show the change worked (or not). No measure, no entry.")
     rev = a.revisit or "7d"
     if re.fullmatch(r"\d+[dw]", rev): rev = (now() + span(rev)).date().isoformat()
+    also = sorted({i.strip().lower() for x in (a.also or []) for i in x.split(",") if i.strip()})
+    unknown = [i for i in also if i not in items]
     rec = {"id": next_id(items), "at": iso(), "by": os.environ.get("HIVE_NAME", os.environ.get("USER", "?")), "what": a.what, "where": a.where or "",
            "hypothesis": a.hypothesis or "", "measure": a.measure, "baseline": a.baseline or "", "revisit": rev, "status": "landed",
            "commit": a.commit or "", "thread": a.thread or os.environ.get("HIVE_THREAD", "")}
+    if also: rec["also"] = also
     append(LEDGER, rec)
     print(f"{rec['id']} logged; revisit {rev}. Someone else judges it then: hive improve judge {rec['id']} held|reverted|inconclusive --why ...")
+    if unknown: print(f"warning: --also {', '.join(unknown)}: not in the ledger (hive improve list); the overlap is stored as given", file=sys.stderr)
+    ov = overlaps(items, a.measure, skip=set(also))
+    if ov:  # a warning, never a refusal (meta-reflect, reflect-p0.md)
+        print(f"warning: {rec['id']}'s measure shares a number with open landings (revisit still ahead): "
+              + "; ".join(f"{i} ({', '.join(n)})" for i, n in sorted(ov.items()))
+              + ". Its revisit cannot credit one change. Say how they will be told apart (an A/B arm, a sub-number) in the measure,"
+              f" or log the overlap on purpose so the revisit judges them together: hive improve log ... --also {','.join(sorted(ov))}", file=sys.stderr)
 
 def cmd_judge(a):
     items = ledger()
@@ -102,6 +137,8 @@ def cmd_judge(a):
         sys.exit(f"hive improve judge: {a.id} was logged by you. The judge is never who proposed (the rule); pass --self only if nobody else can, and say why in --why.")
     if not a.why: sys.exit("hive improve judge: --why must give the number you looked at, against the baseline.")
     append(LEDGER, {"judge": a.id, "at": iso(), "by": me, "verdict": a.verdict, "why": a.why})
+    w = judged_with(items, e)
+    if w: print(f"judged with {', '.join(w)}: they share a number, so this verdict covers them together; judge them on the same figure.")
     print(f"{a.id}: {a.verdict}. " + ("Now revert it (or confirm it was) and say so in its thread." if a.verdict == "reverted" else
                                        "Set a later revisit with hive improve log if the number needs more time." if a.verdict == "inconclusive" else "Kept."))
 
@@ -116,8 +153,9 @@ def cmd_list(a):
     if a.json: print(json.dumps(rows, indent=1)); return
     if not rows: print("no overdue revisits" if a.due else "no improvements logged yet: hive improve log --what ... --measure ... --revisit 7d"); return
     rows = [{"id": e["id"], "at": e.get("at", "")[:10], "by": e.get("by"), "status": e.get("status"), "revisit": e.get("revisit", ""),
-             "what": e.get("what", "")[:70], "measure": e.get("measure", "")[:50]} for e in sorted(rows, key=lambda e: e.get("at", ""))]
-    table(rows, ["id", "at", "by", "status", "revisit", "what", "measure"])
+             "what": e.get("what", "")[:70], "measure": e.get("measure", "")[:50], "with": ",".join(judged_with(items, e))}
+            for e in sorted(rows, key=lambda e: e.get("at", ""))]
+    table(rows, ["id", "at", "by", "status", "revisit", "what", "measure"] + (["with"] if any(r["with"] for r in rows) else []))
     if not a.due:
         d = overdue(items)
         if d: print(f"\n{len(d)} overdue for judgement: hive improve list --due")
@@ -149,9 +187,25 @@ def runs_in(log, t0, t1):
             except ValueError: continue
             if 0 <= ta - te <= 180: return True
         return False
-    failed = sum(1 for r in ends if r.get("exit") not in (0, None) and not resumed(r))
+    # A run stopped by its provider's usage limit is held and resumed (or handed to an heir) by the starter: not a
+    # failure. Its "limited" event names the run but may carry another session id (a codex thread id), so match on
+    # name and time: a limited event for the same name within 60 s after the end. (2026-11-07: 32 codex runs stopped
+    # on Codex's limit read as fail_pct 0.0 -> 8.2.)
+    lim = {}
+    for r in log:
+        if r.get("event") == "limited" and r.get("name"): lim.setdefault(r["name"], []).append(r.get("at", ""))
+    def limited(e):
+        try: te = dt.datetime.fromisoformat(e.get("at", "")).timestamp()
+        except ValueError: return False
+        for a in lim.get(e.get("name"), []):
+            try: ta = dt.datetime.fromisoformat(a).timestamp()
+            except ValueError: continue
+            if 0 <= ta - te <= 60: return True
+        return False
+    bad = [r for r in ends if r.get("exit") not in (0, None) and not resumed(r)]
+    nlim = sum(1 for r in bad if limited(r))
     reaped = sum(1 for r in log if r.get("event") == "reaped" and t0 <= r.get("at", "") <= t1)
-    return len(starts), failed, reaped
+    return len(starts), len(bad) - nlim, reaped, nlim
 
 # the person finding a problem before the hive did: a chase ("hello?", "status?"), a thing not working or not showing, a "why is X not".
 # Plain "still" and "why is" matched ordinary feedback and design questions (13 of 29 matches on 2026-11-04), so they need a negative with them.
@@ -244,7 +298,13 @@ def for_you_numbers(posts, t0, t1):
         n, flagged = f.tally(posts, t0, t1)
         kinds = {f"for_you_{k}": v for k, v in f.kind_tally(posts, t0, t1).items()}
     except Exception: return {}
-    return {"for_you_lines": n, "for_you_flagged": flagged, "for_you_flagged_pct": round(100.0 * flagged / n, 1) if n else 0.0, **kinds}
+    return {"for_you_lines": n, "for_you_flagged": flagged, "for_you_flagged_pct": round(100.0 * flagged / n, 1) if n else 0.0, "decided_lines": decided_lines(posts, t0, t1), **kinds}
+
+DECIDED_LINE = re.compile(r"^\s*(?:[-*>]\s*)?(?:\*\*|__)?decided(?:\*\*|__)?\s*:\s*(?:\*\*|__)?\s*\S", re.I | re.M)
+
+def decided_lines(posts, t0, t1):
+    """`Decided:` lines from agents in the window (hive-meta P4; the convention's measure against person_asks). Same agent filter as For you: not the person, not the hive's own threads."""
+    return sum(len(DECIDED_LINE.findall(str(p.get("text", "")))) for p in posts if t0 <= p.get("at", "") <= t1 and p.get("from") not in ("person", "starter", "keeper") and p.get("thread") not in ("keeper", "improve", "watchdog"))
 
 def summary_numbers():
     """From the dash module's lint: stale, duplicate and wrong-owner items in Where things stand, and threads open on the person that it lacks. None where there's no dash module."""
@@ -254,13 +314,13 @@ def summary_numbers():
     except Exception: return {"summary_flagged": None, "needs_gap": None}
 
 def window(t0, t1, log, posts, items):
-    runs, failed, reaped = runs_in(log, t0, t1)
+    runs, failed, reaped, limited = runs_in(log, t0, t1)
     nposts, nperson, noticed = board_in(posts, t0, t1)
     rs = reply_s(posts, t0, t1)
     landed = [e for e in items.values() if t0 <= e.get("at", "") <= t1]
     judged = [e for e in items.values() if t0 <= e.get("judged_at", "") <= t1]
     rsi = [r for r in jsonl(RSI_LEDGER) if t0 <= r.get("at", "") <= t1]
-    w = {"from": t0, "to": t1, "runs": runs, "runs_failed": failed, "runs_reaped": reaped, "runs_woken": events_in(log, t0, t1, "woken"),
+    w = {"from": t0, "to": t1, "runs": runs, "runs_failed": failed, "runs_reaped": reaped, "runs_limited": limited, "runs_woken": events_in(log, t0, t1, "woken"),
          "fail_pct": round(100.0 * failed / runs, 1) if runs else 0.0,
          "posts": nposts, "person_posts": nperson, "person_noticed_first": noticed, "watchdog_trips": watchdog_in(t0, t1),
          "person_reply_p50_s": pct(rs, 0.5), "person_reply_p90_s": pct(rs, 0.9), "person_replies": len(rs),
@@ -290,9 +350,9 @@ def kb_numbers(t0, t1):
     return {"kb_finds": x["finds"], "kb_find_read_pct": x["find_read_pct"], "kb_recall_injections": x["recalls"], "kb_recall_opened_pct": x["recall_opened_pct"], "kb_misses_explicit": x["misses"], "kb_miss_candidates": x["candidates"]}
 
 LOWER_IS_BETTER = {"fail_pct", "runs_reaped", "person_noticed_first", "person_reply_p50_s", "person_reply_p90_s", "watchdog_trips", "stalled_threads", "improvements_overdue", "projects_unmeasured", "asks_orphaned", "leftovers_orphaned", "asks_stale", "asks_unowned", "leftovers_unowned", "asks_oldest_open_d", "outcomes_silent", "outcomes_nothing", "focus_quiet", "for_you_lines", "for_you_flagged", "for_you_flagged_pct", "for_you_command", "for_you_many", "for_you_long", "for_you_chain", "for_you_ours", "person_asks", "summary_flagged", "needs_gap"}
-NEUTRAL = {"kb_finds", "kb_find_read_pct", "kb_recall_injections", "kb_recall_opened_pct", "kb_misses_explicit", "kb_miss_candidates", "model_steps_up", "model_steps_down", "runs", "runs_woken", "person_replies", "keeper_rounds", "improve_rounds", "core_commits", "rsi_rounds", "reverted", "spend_usd", "asks_open", "leftovers_open", "leftovers_filed", "leftovers_closed", "outcomes_graded"}  # activity and cost: context, not a score (the person: don't ration work for pace)
+NEUTRAL = {"decided_lines", "kb_finds", "kb_find_read_pct", "kb_recall_injections", "kb_recall_opened_pct", "kb_misses_explicit", "kb_miss_candidates", "model_steps_up", "model_steps_down", "runs", "runs_woken", "person_replies", "keeper_rounds", "improve_rounds", "core_commits", "rsi_rounds", "reverted", "spend_usd", "asks_open", "leftovers_open", "leftovers_filed", "leftovers_closed", "outcomes_graded"}  # activity and cost: context, not a score (the person: don't ration work for pace)
 HEADLINE = ["kb_finds", "kb_find_read_pct", "kb_recall_injections", "kb_recall_opened_pct", "kb_misses_explicit", "kb_miss_candidates", "runs", "model_steps_up", "model_steps_down", "fail_pct", "runs_reaped", "runs_woken", "person_noticed_first", "person_reply_p50_s", "person_reply_p90_s", "watchdog_trips", "stalled_threads", "improvements_landed", "improvements_judged", "held", "reverted",
-            "improvements_overdue", "focus_quiet", "for_you_lines", "for_you_flagged", "for_you_flagged_pct", "for_you_command", "for_you_many", "for_you_long", "for_you_chain", "for_you_ours", "person_asks", "summary_flagged", "needs_gap", "asks_open", "leftovers_open", "leftovers_filed", "leftovers_closed", "asks_orphaned", "leftovers_orphaned", "asks_stale", "asks_unowned", "leftovers_unowned", "asks_done", "asks_oldest_open_d", "outcome_delivered_pct", "outcomes_silent", "outcomes_nothing", "outcomes_graded", "rsi_rounds", "rsi_wins", "keeper_rounds", "improve_rounds", "core_commits", "projects_unmeasured", "spend_usd"]
+            "improvements_overdue", "focus_quiet", "for_you_lines", "for_you_flagged", "for_you_flagged_pct", "for_you_command", "for_you_many", "for_you_long", "for_you_chain", "for_you_ours", "decided_lines", "person_asks", "summary_flagged", "needs_gap", "asks_open", "leftovers_open", "leftovers_filed", "leftovers_closed", "asks_orphaned", "leftovers_orphaned", "asks_stale", "asks_unowned", "leftovers_unowned", "asks_done", "asks_oldest_open_d", "outcome_delivered_pct", "outcomes_silent", "outcomes_nothing", "outcomes_graded", "rsi_rounds", "rsi_wins", "keeper_rounds", "improve_rounds", "core_commits", "projects_unmeasured", "spend_usd"]
 
 def scoreboard(since):
     log, posts, items = jsonl(LOG), jsonl(BOARD), ledger()
@@ -389,8 +449,9 @@ def cmd_progress(a):
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="hive improve / hive progress", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sp = ap.add_subparsers(required=True)
-    p = sp.add_parser("log", help="log a landed change: --what, --measure (required), --revisit 7d|YYYY-MM-DD, --where, --hypothesis, --baseline, --commit, --thread")
+    p = sp.add_parser("log", help="log a landed change: --what, --measure (required), --revisit 7d|YYYY-MM-DD, --where, --hypothesis, --baseline, --commit, --thread, --also IDS (warns when the measure names a number an open landing, revisit still ahead, names)")
     for f in ("what", "measure", "revisit", "where", "hypothesis", "baseline", "commit", "thread"): p.add_argument("--" + f)
+    p.add_argument("--also", action="append", help="ids of open landings on the same number, judged together with this one at the revisit (silences the overlap warning)")
     p.set_defaults(f=cmd_log)
     p = sp.add_parser("judge", help="judge a landed change on its revisit date: ID held|reverted|inconclusive --why 'the number vs baseline'")
     p.add_argument("id"); p.add_argument("verdict", choices=VERDICTS); p.add_argument("--why", default=""); p.add_argument("--self", action="store_true"); p.set_defaults(f=cmd_judge)

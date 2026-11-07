@@ -8,11 +8,12 @@ import { S, can, jget } from "../core/store.js";
 import { tierOf, threadChildren, threadTitle, displayText } from "../core/model.js";
 import { ago, plural, mdPlain, short, DAY, now } from "../core/format.js";
 import { gist } from "../core/gist.js";
-import { threadHref } from "../core/router.js";
+import { threadHref, go } from "../core/router.js";
 import { agentRef, threadRef } from "../ui/refs.js";
-import { empty, list, pageHeader, section } from "../ui/kit.js";
+import { button, empty, list, pageHeader, section } from "../ui/kit.js";
+import { quoteInto } from "../ui/composer.js";
 
-const W = { v: null, failed: false, more: false };
+const W = { v: null, failed: false, more: false, jump: null };
 const STALE_MS = 70 * 60e3;
 const ok = () => S.app.app && can("read");
 const when = at => (at ? ago(Date.parse(at)) : "");
@@ -74,20 +75,26 @@ function reading(s, V) {
 const dot = st => h("span", { class: "sd", "data-tone": st.tone, "data-shape": st.shape, "data-live": st.key === "moving" ? "" : null, "aria-hidden": "true" });
 const didLine = d => h("li", null, h("a", { href: threadHref(d.thread), title: `${threadTitle(d.thread)}, ${ago(d.t)}` }, d.text), d.word !== "done" ? h("span", { class: "meta wk-w" }, " · " + d.word) : null);
 
-/** A focus or project card: what it did today, where it stands, what comes next, what it needs from you. */
-function card(s, V) {
+/** A focus or project card: what it needs from you first (the newest ask), what it did today, what comes next; the footer is its state and agents. */
+export function card(s, V) {
   const r = reading(s, V), n = ordinal(s.key), did = r.did.slice(0, 3);
-  const part = (label, body) => (body ? h("div", { class: "wk-p" }, h("dt", null, label), h("dd", null, body)) : null);
-  return h("article", { class: "card wk", "data-key": "wk:" + s.key, "data-state": r.state.key },
-    h("div", { class: "wk-hd" }, dot(r.state), h("h3", { class: "wk-t" }, n ? h("span", { class: "wk-n" }, n + " ") : null, s.name), h("span", { class: "wk-st meta" }, r.state.label)),
+  const part = (key, label, body) => (body ? h("div", { class: "wk-p", "data-part": key }, h("dt", null, label), h("dd", null, body)) : null);
+  const ask = r.asks.at(-1), more = r.asks.length - 1;
+  const decided = ask && ask.post && S.byId[ask.post] ? (String(S.byId[ask.post].text || "").match(/^\W*Decided:\s*(.+)$/im) || [])[1] : null;   // the same "Decided:" line Flow reads
+  const who = r.running[0] || (s.thread && S.threadStatus[s.thread] && S.threadStatus[s.thread].from) || null;
+  return h("article", { class: "card wk", "data-key": "wk:" + s.key, "data-state": r.state.key, "data-here": W.jump === s.key ? "" : null },
+    h("div", { class: "wk-hd" }, dot(r.state), h("h3", { class: "wk-t", title: s.state ? `${r.state.label}. ${mdPlain(s.state)}${s.at ? " (" + when(s.at) + ")" : ""}` : r.state.label },
+      n ? h("span", { class: "wk-n" }, n + " ") : null, s.thread ? h("a", { href: threadHref(s.thread) }, s.name) : s.name)),
     h("dl", { class: "wk-b" },
-      part("Today", did.length ? [h("ul", { class: "wk-l" }, did.map(didLine)), r.did.length > 3 ? h("p", { class: "meta" }, `and ${r.did.length - 3} more in the thread`) : null] : h("span", { class: "muted" }, "No step finished in the last day.")),
-      part("Lately", s.state ? [mdPlain(s.state), s.at ? h("span", { class: "meta" }, " · " + when(s.at)) : null] : null),
-      part("Next", r.next ? [r.next.text, r.next.step ? h("span", { class: "meta" }, " · " + r.next.step) : null] : h("span", { class: "muted" }, "No ladder: the thread says what comes next.")),
-      part("Needs you", r.needs ? [r.asks.length ? h("ul", { class: "wk-l" }, r.asks.map(w => h("li", null, h("a", { href: threadHref(w.thread) }, w.action)))) : null,
-        s.open_asks ? h("span", { class: "meta" }, `${plural(s.open_asks, "open request")} of yours is on it.`) : null] : null)),
-    h("div", { class: "wk-ft meta" }, s.thread ? threadRef(s.thread) : null, r.threads.length > 1 ? `+${r.threads.length - 1} helper ${r.threads.length > 2 ? "threads" : "thread"}` : null,
-      r.running.length ? h("span", { class: "wk-who" }, "on it: ", r.running.map(a => agentRef(a))) : null));
+      part("needs", "Needs you", r.needs ? [ask ? h("a", { href: threadHref(ask.thread) }, ask.action) : null,
+        decided ? h("span", { class: "meta" }, " If you don't answer: " + short(decided, 120)) : null,
+        more > 0 ? h("span", { class: "meta" }, ` · and ${more} more`) : null,
+        s.open_asks ? h("span", { class: "meta" }, `${ask ? " · " : ""}${plural(s.open_asks, "open request")} of yours ${s.open_asks === 1 ? "is" : "are"} on it.`) : null] : null),
+      part("today", "Today", did.length ? [h("ul", { class: "wk-l" }, did.map(didLine)), r.did.length > 3 ? h("p", { class: "meta" }, `and ${r.did.length - 3} more in the thread`) : null] : h("span", { class: "muted" }, "No step finished in the last day.")),
+      part("next", r.next ? "Next" + (r.next.step ? " · " + r.next.step.replace(/^step /, "step ") : "") : "Next", r.next ? r.next.text : h("span", { class: "muted" }, "No ladder: the thread says what comes next."))),
+    h("div", { class: "wk-ft meta" }, h("span", { class: "wk-state" }, r.state.label), r.running.length ? h("span", { class: "wk-who" }, r.running.map(a => agentRef(a))) : null,
+      r.threads.length > 1 ? `+${r.threads.length - 1} helper ${r.threads.length > 2 ? "threads" : "thread"}` : null,
+      s.thread && who ? button(`Say something to ${who}`, () => { quoteInto(s.thread, "@" + who + " "); go("comms", s.thread); }, { kind: "icon", size: "s", icon: "chat", cls: "wk-say" }) : null));
 }
 /** A compact row for the projects that are not focuses: the same reading, one line of it. */
 function row(s, V) {
@@ -104,7 +111,7 @@ function paused() {
 export default {
   id: "work", label: "Work", about: "what each project did today, where it stands, and what comes next",
   tab: ok,
-  enter(ctx) { if (ok()) refresh(ctx); },
+  enter(ctx) { W.jump = ctx.arg || null; if (ok()) refresh(ctx); },   // #work/<key>: that project's card, scrolled to and marked
   poll: { every: 5 * 60e3, run(ctx) { return refresh(ctx); } },
   render(ctx) {
     const title = "Work";
@@ -117,10 +124,11 @@ export default {
     const moving = all.filter(r => r.state.key === "moving").length, done = all.reduce((a, r) => a + r.did.length, 0), needs = all.filter(r => r.needs).length;
     const old = V.at && Date.now() - Date.parse(V.at) > STALE_MS;
     const held = paused();
+    if (W.jump && states.some(s => s.key === W.jump)) requestAnimationFrame(() => { const el = document.querySelector(`.wk-page .wk[data-key="wk:${W.jump.replace(/"/g, '\\"')}"]`); if (el) el.scrollIntoView({ block: "start" }); });
     return h("div", { class: "page wk-page" },
       pageHeader({
-        title, lead: "What the hive is working on, project by project. Threads and agents are one click down.",
-        meta: [`${moving} of ${plural(states.length, "project")} moving now`, `${plural(done, "result")} posted today`, needs ? `${needs} need you` : "nothing needs you", V.at ? `Summary updated ${when(V.at)}` : null],
+        title,
+        meta: [`${moving} of ${plural(states.length, "project")} moving now`, `${plural(done, "result")} posted today`, needs ? `${needs} need you` : "nothing needs you", V.at ? h("span", { class: "ph-right", title: old ? "The summary hasn't refreshed in over an hour; the Today lines and agents are still live." : "" }, `Summary updated ${when(V.at)}`) : null],
         after: W.failed || old ? h("p", { class: "meta", role: "alert", "data-tone": "warn" }, W.failed ? "Couldn't refresh this page, so it shows what it read last." : "The summary hasn't refreshed in over an hour; the Today lines and agents are still live.") : null,
       }),
       focus.length ? section({ title: "Your focuses", note: "in your order", key: "wk-focus" }, h("div", { class: "wk-grid" }, focus.map(s => card(s, V)))) : null,

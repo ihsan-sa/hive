@@ -1,7 +1,7 @@
 // What the data means: statuses, the agent card, hive stats, usage pace. Pure reads of the store.
 import { S, OUTSIDE, SYS } from "./store.js";
 import { simpleOn } from "./simple.js";
-import { now, ago, dur, median, short, mdPlain, bareLinks, MIN, HOUR, DAY } from "./format.js";
+import { now, ago, dur, median, short, mdPlain, bareLinks, firstSentence, onWords, namesNoWork, MIN, HOUR, DAY } from "./format.js";
 
 export const isAgent = n => S.agents.has(n);
 /** A warden judges whether work crosses the hard limits. The starter names them w + 4 hex (core/starter.py is_warden); `warden` and `rootwarden` are the fixed names. */
@@ -47,10 +47,24 @@ export function agentStatus(n) {
   else if (S.pending[n]) v = { key: "queued", label: "queued" };
   else if (!s) v = { key: "none", label: "hasn't run" };
   else if (S.killed[n] >= s.start) v = { key: "killed", label: "killed" };
+  else if (s.replacedBy) v = { key: "ended", label: "replaced by " + s.replacedBy };
   else if (S.limitedNow.has(s.session)) v = { key: "limited", label: "stopped at a limit" };
   else if (s.exit && s.exit !== 143) v = { key: "failed", label: `failed (exit ${s.exit})` };
   else v = { key: "ended", label: "ended " + ago(sEnd(s)) };
   S.stCache.set(n, v); return v;
+}
+/** What an agent is on, in its own words (`hive me`) or, failing that, the first sentence of the post that started its last run.
+ *  {text, at (ms), said: it set the line itself, before: the line predates its current run (said in an earlier one)} or null. */
+export function agentOn(n) {
+  const me = S.agentStatus[n], s = S.lastSess[n];
+  if (me && me.text) return { text: me.text, at: me.at * 1e3, said: true, before: !!(s && S.running.get(n) && me.at * 1e3 < s.start - MIN) };
+  const p = s && S.byId[s.post]; if (!p) return null;
+  const asked = firstSentence(displayText(p));
+  // these posts don't say what this one is on, so its thread's status bar does: a reply from another agent or rootwarden on a wake (often a result, "Rung done: ..."), a post meant for the agent an heir took over from, a person's question that names no work.
+  // A first run's post is its brief (a status bar there can be another job's: a warden asked for a ruling in someone's thread), a person's instruction stays, and a system post (keeper, post-land check, release train) says what the run is for
+  const notIt = p.from === "person" ? namesNoWork(displayText(p)) : s.heirOf || (s.resumed && (S.agents.has(p.from) || p.from === "rootwarden"));
+  const bar = notIt && S.threadStatus[p.thread], line = bar && bar.text && bar.text.split("\n").map(x => x.trim()).find(Boolean);
+  return { text: line || onWords(asked), asked, bar: !!line, at: s.start, said: false, before: false };
 }
 
 // ---- the agent card: what an agent runs on. One list of rows, so a new harness or option adds a row here. ----
@@ -87,6 +101,30 @@ export function agentSpend(n, stream) {
   const A = S.agentCosts && S.agentCosts.by && S.agentCosts.by[n];
   if (A && A.usd >= stream.c) return { usd: A.usd, t: A.t, calls: A.calls, m: A.m, sub: A.sub, src: "transcripts" };
   return { usd: stream.c, t: stream.t, calls: A ? A.calls : null, m: stream.m || (A ? A.m : {}), sub: A ? A.sub : 0, src: "session logs" };
+}
+
+/** An agent's cost so far in USD over all its runs (agentSpend over its sessions' logs), or null if nothing is recorded. */
+export function agentCost(n) {
+  const files = (S.usage && S.usage.files) || {}, st = { c: 0, t: [0, 0, 0, 0], m: {} }; let seen = false;
+  for (const x of S.sessions) if (x.name === n && x.out && files[x.out]) {
+    const f = files[x.out]; seen = true; st.c += f.c || 0;
+    for (let i = 0; i < 4; i++) st.t[i] += (f.t && f.t[i]) || 0;
+    for (const k in f.m || {}) st.m[k] = (st.m[k] || 0) + f.m[k];
+  }
+  const A = S.agentCosts && S.agentCosts.by && S.agentCosts.by[n];
+  return seen || A ? agentSpend(n, st).usd : null;
+}
+
+/** "Sonnet 5.5 · $1.91": an agent's model and cost so far in one short line, for lists of many agents. Cached until the sessions or usage change. */
+let briefFor = [], briefs = new Map();
+export function agentBrief(n) {
+  const key = [S.sessions, S.sessions.length, S.usage && S.usage.files, S.agentCosts, S.live];
+  if (key.some((k, i) => k !== briefFor[i])) { briefFor = key; briefs = new Map(); }
+  if (!briefs.has(n)) {
+    const m = (agentCard(n)[0] || {}).short, c = agentCost(n);
+    briefs.set(n, [m, c != null ? (c >= 100 ? "$" + Math.round(c).toLocaleString() : "$" + c.toFixed(c < 10 ? 2 : 1)) : null].filter(Boolean).join(" · "));
+  }
+  return briefs.get(n);
 }
 
 // ---- hive stats, last window ----

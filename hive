@@ -315,6 +315,9 @@ def cmd_who(a):
         try: os.kill(r["pid"], 0); alive = "running"
         except OSError: alive = "gone"
         print(f"@{r['name']:<16} {alive:<8} since {r['at'][:19]}  woken by {r['post']}  login {login_name(c, r['login'])}  model {r.get('model', 'default')}")
+    # Usage is the starter's and the person's business, not an agent's: the person said on a call (2026-11-07, thread
+    # 1106213333ad) that agents worrying about usage stop work, so the lines show only on request.
+    if not getattr(a, "usage", False): return
     u = STATE / "usage.json"
     try: five = json.loads((STATE / "usage_5h.json").read_text())
     except (OSError, ValueError): five = {}
@@ -923,6 +926,29 @@ def cmd_status(a):
         fcntl.flock(f, fcntl.LOCK_EX); f.write(json.dumps(rec) + "\n")
     print(f"status set on {th}")
 
+def cmd_me(a):
+    """hive me [TEXT | text on stdin]: one dated line on what you are broadly on now (the direction, not the step); hive me alone prints it. Shown per agent on the dashboard's Agents page."""
+    f_ = STATE / "agent-status.jsonl"; me = os.environ.get("HIVE_NAME")
+    if not me: sys.exit("hive me: HIVE_NAME is not set; the line is an agent's own, so run it from an agent's shell")
+    text = " ".join(" ".join(a.text).split()) if a.text else ""
+    if not text and not sys.stdin.isatty():
+        import select
+        if select.select([sys.stdin], [], [], 0.3)[0]: text = " ".join(sys.stdin.read().split())
+    if not text:
+        best = None
+        try:
+            for ln in f_.read_text().splitlines():
+                try: r = json.loads(ln)
+                except ValueError: continue
+                if r.get("name") == me: best = r
+        except OSError: pass
+        print(best["text"] if best else "(nothing set yet: hive me \"what you are on\")"); return
+    rec = {"name": me, "text": text[:200], "thread": os.environ.get("HIVE_THREAD") or None, "at": time.time()}
+    STATE.mkdir(parents=True, exist_ok=True)
+    with open(f_, "a") as f:
+        fcntl.flock(f, fcntl.LOCK_EX); f.write(json.dumps(rec) + "\n")
+    print(f"on: {rec['text']}")
+
 def cmd_rename(a):
     """hive rename THREAD "new title": give a thread a clearer title in the dashboard; the person's own rename wins over it."""
     th = (a.thread or "").lstrip("#"); title = " ".join(a.title.split())[:80]
@@ -982,6 +1008,8 @@ p = sp.add_parser("fade", help="hive fade THREAD --why \"...\" [--off]: mark a t
 p.add_argument("thread"); p.add_argument("--why", default=""); p.add_argument("--off", action="store_true"); p.set_defaults(f=cmd_fade)
 p = sp.add_parser("status", help="hive status THREAD <<'X' ...: set the two-line status bar the dashboard shows at the top of a thread (line 1: what it is about; line 2: where it stands now, what it waits on). --read prints it. Update it when you change a thread's state; before you stop, line 2 is why, starting Done:, Blocked:, Needs the person:, Waiting: or Told to stop:")
 p.add_argument("thread"); p.add_argument("--read", action="store_true"); p.set_defaults(f=cmd_status)
+p = sp.add_parser("me", help="hive me \"what you are on\": one dated line per agent on what you are broadly on now (the direction, not the step; like a thread status but per agent). Update it when your focus shifts; hive me alone prints yours. The dashboard's Agents page and agent pages show it, so the person or an agent can find who is on a similar thing and write to them.")
+p.add_argument("text", nargs="*"); p.set_defaults(f=cmd_me)
 p = sp.add_parser("model", help="hive model haiku|sonnet|opus|fable WHY...: carry on with this conversation on another model. It posts WHY in your thread; end your turn and you resume on that model with your memory. --next: no resume, your next wake starts on it")
 p.add_argument("to_model", choices=CLAUDE_MODELS, metavar="MODEL"); p.add_argument("--next", action="store_true"); p.add_argument("why", nargs="+"); p.set_defaults(f=cmd_model)
 p = sp.add_parser("budget", help="hive budget [USD|off]: show or set the most one run may spend (dollars); applies from each run's next start")
@@ -994,7 +1022,7 @@ p.add_argument("--brief", action="store_true", help="one line per post: id, time
 p.add_argument("words", nargs="+"); p.set_defaults(f=cmd_search)
 p = sp.add_parser("done", help="hive done: your work is finished and needs no follow-up, so a later message gets a new agent instead of waking you"); p.set_defaults(f=cmd_done)
 p = sp.add_parser("verify", help="hive verify ID: does this post carry a good signature from a key root has pinned? exit 0 only if so"); p.add_argument("id"); p.set_defaults(f=cmd_verify)
-p = sp.add_parser("who", help="who's running, and usage"); p.set_defaults(f=cmd_who)
+p = sp.add_parser("who", help="who's running"); p.add_argument("--usage", action="store_true", help="also the logins' weekly usage (the starter paces on it; agents needn't)"); p.set_defaults(f=cmd_who)
 p = sp.add_parser("wait", help="hive wait [--to X] [--thread T] [--timeout 3600]: block until a new post for X or in T arrives")
 p.add_argument("--to"); p.add_argument("--thread"); p.add_argument("--timeout", type=int, default=3600); p.set_defaults(f=cmd_wait)
 p = sp.add_parser("module", help="hive module list [--json] | add NAME|GIT-URL | remove NAME")

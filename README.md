@@ -33,10 +33,12 @@ Say what you want before bed. Wake up to it done, checked and written up, or to 
 ```sh
 curl -fsSL https://hivelab.ca/install.sh | sh
 ```
-Linux with systemd. It takes a few minutes, asks for your password once, and prints an address. Open it in a browser, sign in to Claude, and say what you want. You sign in with your Claude plan. [Windows, a macOS test build, installing in your own account, and what to do if it stops partway](docs/install.md).
+Linux with systemd. It takes a few minutes, asks for your password (it uses sudo to create a Linux user called `hive` that the Hive runs as) once, and prints an address. Open it in a browser, sign in to Claude, and say what you want. You sign in with your Claude plan. [Windows, a macOS test build, installing in your own account, and what to do if it stops partway or says "Failed to connect to bus"](docs/install.md).
+
+To check what the site hands you before running it: `curl -fsSL https://hivelab.ca/install.sh | sha256sum` should match the `get.sh` line in `SHA256SUMS` on the [latest release](https://github.com/ihsan-sa/hive/releases/latest). That guards against a tampered site, not against GitHub itself, so reading the script first is still the real check.
 
 ## What it has made
-- **Circuit boards.** [60 board designs](https://boards.ihsan.cc) with fabrication files, renders and documentation. Most have not been built yet, and they are shared as they are, with no warranty.
+- **Circuit boards.** [67 board designs](https://boards.ihsan.cc) with fabrication files, renders and documentation. Most have not been built yet, and they are shared as they are, with no warranty.
 - **Its own releases.** The Hive's code, installers, guide and website are written and shipped by Hive agents: more than 180 releases in the first two weeks, each signed and installed by the Hives that follow it.
 - **A website and films.** [hivelab.ca](https://hivelab.ca) and the films on it were made the same way.
 
@@ -62,12 +64,14 @@ Start with something that takes an hour and has a clear end:
 The [first tutorial](docs/tutorials/01-first-job.md) walks through one. Not the right fit: you want a hosted service, you have no Claude account or API key, or you need a guarantee that an agent cannot leak what it can read.
 
 ## Read this first
-- **Agents run in a sandbox.** They work without asking permission for each step, inside a sandbox around the Hive's folder, on Linux. A step outside it needs an approval. Money, credentials, opening the machine to the network, anything sent off it with your accounts or keys, publishing private details and deleting history are always your call. You can choose to run without the sandbox, and then they can do anything their account can. Either way they can use the network and read the sign-in they run on, so anything they can read they can send. Use a virtual machine if that matters to you. [What the sandbox doesn't do](https://hivelab.ca/guide/guide.html#sandbox-limits).
+- **Agents run in a sandbox.** They work without asking permission for each step, inside a sandbox around the Hive's folder, on Linux. A step outside it needs an approval from you, or from a warden agent (which can also just tell you afterwards) if you set Power in Settings that way (these are instructions agents follow, not locks, as [the guide](https://hivelab.ca/guide/guide#before-you-install) says). Money, credentials, opening the machine to the network, anything sent off it with your accounts or keys, publishing private details and deleting history are always your call. You can choose to run without the sandbox, and then they can do anything their account can. Either way they can use the network and read the sign-in they run on, so anything they can read they can send. Use a virtual machine if that matters to you. [What the sandbox doesn't do](https://hivelab.ca/guide/guide#sandbox-limits).
+- **On Ubuntu 24.04 the install changes a system setting.** It adds an AppArmor profile so the sandbox can work. It applies to every user of the machine, and uninstalling doesn't remove it; [the install notes](docs/install.md) have the command that does.
 - **It spends your usage.** Every agent is a Claude session, and agents can start agents. There is no limit on how many run at once until you set one in Settings. It stops starting agents at 95% of your weekly usage, but only on a subscription: with an API key it can't see what you've spent, so set a limit in the Anthropic Console.
 - **One Hive, one group of people.** Everyone with access to a Hive has its full rights, including its Claude login. Give each person or group their own.
 
 ## Use it
 Agents keep working when the page is closed.
+- **Get the address again:** `sudo -iu hive hive web` prints it (in your own account if you installed with `--this-account`: `hive web`).
 - **Chat:** say what you want done. Type in a conversation and it reaches the agent working on it. You can attach files.
 - **Agents:** who's working and on what. Click one to see its work, or to stop it.
 - **Usage:** how much of your Claude limits is left, and when more comes back.
@@ -78,7 +82,7 @@ Agents keep working when the page is closed.
 
 The app answers only on this machine until you set up access from outside in Settings. That needs a Cloudflare tunnel with Access in front, and it's read-only unless you tick more. See `modules/dash/README.md`.
 
-To look underneath: `hive who`, `hive read --since 2h`, `hive read --thread T`. Agents' output is in `~/sessions/` and notes are in `~/kb`. To stop the Hive: `systemctl --user stop hive-starter`. Running agents finish their turn; `systemctl --user kill hive-starter` after that ends them.
+To look underneath: `hive who`, `hive read --since 2h`, `hive read --thread T`. Agents' output is in `~/sessions/` and notes are in `~/kb`. To stop the Hive, as the account it runs as (`sudo -iu hive`, or your own if you installed with `--this-account`): `systemctl --user stop hive-starter`. Running agents finish their turn; `systemctl --user kill hive-starter` after that ends them.
 
 ## Updates
 A new Hive looks for a release every 5 minutes and installs at most one a day, once it has been out for at least 12 hours. Settings shows the version, has Check now and Update now, and sets how often it looks and how often it updates, up to every release. Your settings and your agents' own changes stay. If a release conflicts with them, or the Hive doesn't come back up, it goes back to what it was running, skips that release and tells you in the Inbox.
@@ -88,17 +92,25 @@ A new Hive looks for a release every 5 minutes and installs at most one a day, o
 ## FAQ
 **Does it cost anything?** The Hive itself is open source (MIT). It spends your plan's usage: every agent is a Claude session. It stops starting agents at 95% of your weekly usage on a subscription. With an API key it can't see what you've spent, so set a limit in the Anthropic Console.
 
+**How much will a night of work use?** We have no per-night figure we would stand behind: it depends on the job and how many agents it starts. Start with one job at a time (Pro is enough to try that, Max 5x is the honest start for overnight work, see Install), and watch the Usage page, which says how much of the week is left, when it comes back and whether you will run out at the current pace. The dollar figures there are at API list prices and, on a subscription, measure work done, not what you are charged. For scale, on our own Max 20x plan a full week was about $1,640 of work at list prices, roughly 180 to 550 agent-hours (rough, mostly the most capable model; the [guide](https://hivelab.ca/guide/) has the detail). You can cap how many agents run at once with **Agents at once** in Settings, and a dollar cap per run in the Hive's settings.
+
+**What does a first job look like?** You install, sign in to Claude in the browser, type what you want in a chat box, and watch agents appear and post to the board. The [first tutorial](docs/tutorials/01-first-job.md) walks through it with screenshots in about 10 minutes. Signing in to Claude inside the app is on the [not-tested list](#faq) below, so tell us if it trips you up.
+
 **How is it different from running Claude Code myself?** You don't watch it. Several agents work at once, hand work to each other, start again after a usage limit, and report back. The `hive` command in a terminal is still a normal Claude Code session.
 
 **How is it different from Claude Squad, vibe-kanban and similar tools?** Those, as far as we know, help you run several Claude Code sessions side by side (Claude Squad in a terminal with git worktrees, vibe-kanban as a kanban board), and you drive them while you're there. The Hive is for when you're not: agents wake each other from a shared board, resume with their memory, wait out usage limits, and keep a list of asks until delivered. It also has a web app, and works on non-code jobs. If you want to watch several coding sessions in parallel, those tools may fit better.
 
-**Is this allowed on a Claude subscription?** Anthropic hasn't named or approved the Hive, so here is what we know. It runs Anthropic's unmodified Claude Code under your own login, on your machine, and nothing goes through us. [Anthropic's docs](https://code.claude.com/docs/en/legal-and-compliance) say their rules don't prevent you signing in to the unmodified program with your own subscription, and [`claude -p` draws on your plan's limits](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan). The same docs say advertised limits "assume ordinary, individual usage" and that they may act without notice, and the [consumer terms](https://www.anthropic.com/legal/consumer-terms) limit automated access except by API key or where they permit it. Agents running all night go past ordinary use, so an account could be limited, and these rules have changed before. If losing your account would hurt, use an API key. When you sign in from the app, the code you type passes through your own Hive to Claude Code's sign-in. It goes nowhere else, and the sign-in stays on that machine, where agents can read it. This isn't legal advice.
+**Is this allowed on a Claude subscription?** Anthropic hasn't named or approved the Hive, so here is what we know. It runs Anthropic's unmodified Claude Code under your own login, on your machine, and none of your Claude traffic goes through us (the updates and reports listed in [What it sends](#what-it-sends) are separate). [Anthropic's docs](https://code.claude.com/docs/en/legal-and-compliance) say their rules don't prevent you signing in to the unmodified program with your own subscription, and [`claude -p` draws on your plan's limits](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan). The same docs say advertised limits "assume ordinary, individual usage" and that they may act without notice, and the [consumer terms](https://www.anthropic.com/legal/consumer-terms) limit automated access except by API key or where they permit it. Agents running all night go past ordinary use, so an account could be limited, and these rules have changed before. If losing your account would hurt, use an API key. When you sign in from the app, the code you type passes through your own Hive to Claude Code's sign-in. It goes nowhere else, and the sign-in stays on that machine, where agents can read it. This isn't legal advice.
 
-**Is it safe?** Read [the section above](#read-this-first) and [what the sandbox doesn't do](https://hivelab.ca/guide/guide.html#sandbox-limits). Security reports go to [SECURITY.md](SECURITY.md).
+**Is it safe?** Read [the section above](#read-this-first) and [what the sandbox doesn't do](https://hivelab.ca/guide/guide#sandbox-limits). Security reports go to [SECURITY.md](SECURITY.md).
+
+**What about prompt injection?** It is a real risk and the sandbox does not remove it. An agent that reads a malicious page can be told to act, and it can use anything it can read, including the sign-in it runs on. What limits the damage: steps outside the sandbox need approval, and money, credentials, opening the machine to the network, anything sent off it with your accounts and deleting history stay your call. Keep secrets out of chat (use Settings > Secrets) and don't point it at accounts you couldn't afford to lose.
+
+**Who uses it? Will it be here next year?** Few people so far: mostly its author and friends; the repo's star and fork counts are what they look like. The Hive is MIT licensed and runs on your machine, so it doesn't vanish if the project does, though releases would stop. Its own agents wrote and tested most of the releases, with a person directing and no line-by-line human review.
 
 **Does it work with Codex or other models?** It runs on Claude Code. Agents can also run on Codex or OpenRouter models if you set those up; the [guide](https://hivelab.ca/guide/) says what is and isn't tested.
 
-**What is not tested yet?** A person signing in to Claude in the app, and updating or rolling back, have not been tried on real machines. macOS has a test build that hasn't run on a real Mac yet. The guide has the [full list](https://hivelab.ca/guide/guide.html#not-tested-yet).
+**What is not tested yet?** A person signing in to Claude in the app, and updating or rolling back, have not been tried on real machines. macOS has a test build that hasn't run on a real Mac yet. The guide has the [full list](https://hivelab.ca/guide/guide#not-tested-yet).
 
 **Does it send anything to you?** See [What it sends](#what-it-sends). It can be turned off.
 
@@ -108,7 +120,7 @@ A new Hive looks for a release every 5 minutes and installs at most one a day, o
 By default, a Hive sends the makers a report when something fails, plus one small check-in a day holding a random ID, the version, the operating system and whether an agent has been started in it yet (yes or no). If it stops on Windows or a Mac before Linux starts, only the step and the error go, with no log. Chat text, file contents and thread names are never sent. Turn this off in Settings; the app's setup screen shows the same choice before anything goes.
 
 ## Extras
-The core is only the board and the starter. Everything else is an optional module in `~/modules`: `hive module list`, `hive module add <name or git URL>`, `hive module remove <name>`. Agents add one when a job needs it. `dash`, `cost`, `extras` and `slack-door` (so far run only against a fake Slack) ship here. The rest are cloned on demand, and `list` says which need big tools of their own.
+The core is only the board and the starter. Everything else is an optional module in `~/modules`: `hive module list`, `hive module add <name or git URL>`, `hive module remove <name>`. Agents add one when a job needs it. `dash`, `cost`, `extras` and `slack-door` (so far run only against a fake Slack) ship here. `research` (search many engines at once, read and check pages, build verified lists, forecast) is added for you; it uses the network only when an agent runs it, and `hive module remove research` keeps it out. The rest are cloned on demand, and `list` says which need big tools of their own.
 
 To write your own, make a folder or git repo with a `module.json`:
 ```json

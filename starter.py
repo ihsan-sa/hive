@@ -1289,7 +1289,7 @@ def start(c, name, posts, login, resume=None, reaped=None, extra=(), moved=False
     if (k := next((p["continue"] for p in posts if p.get("continue")), None)):
         prompt += guarded("wake_note", k, first.get("thread"), bool(heir_of)) or ""
     fb = next((p["fallback"] for p in posts if p.get("fallback")), None)
-    if fb: prompt += "\n\n" + FALLBACK_NOTE[fb].format(model=model, tier=tier_of(model))
+    if fb: prompt += "\n\n" + FALLBACK_NOTE["codex" if fb == "fallback" and tier_of(model).startswith("codex") else fb].format(model=model, tier=tier_of(model))
     elif kind != "warden" and not prov and not asked and (not resume or slept): prompt += step_clause(model)
     path = HOME / "sessions" / f"{name}-{dt.datetime.now():%m%d-%H%M%S}.jsonl"
     last_start[0] = time.time(); recent_starts.append(last_start[0])
@@ -1333,7 +1333,8 @@ def keeper(c, st, alive, login):
     if not every or not login: return
     if any(isinstance(r, dict) and r.get("thread") == "keeper" for r in alive.values()): return
     if any(p.get("thread") == "keeper" for ps in st["pending"].values() for p in ps): return
-    if any(r.get("thread") == "keeper" for r in st.get("resume", {}).values()): return  # a limit-stopped round resumes instead
+    # a limit-stopped round resumes instead; but one parked on a fallback (Codex at its limit) must not block rounds while a Claude login has room (keeper stalled 2.6 h, 2026-11-07)
+    if any(r.get("thread") == "keeper" and not r.get("fallback") for r in st.get("resume", {}).values()): return
     t = time.time()
     if alive or st["pending"]: st["busy_at"] = t
     idle = t - st.get("busy_at", t) >= c.get("keeper_idle_s", 1800)
@@ -1345,28 +1346,49 @@ def keeper(c, st, alive, login):
 
 IMPROVE = """@new Figure out how to improve everything in the hive, across all of it: the projects, the quality of the work, failures, how agents work, Hive itself. Judge it yourself: read what you need (the board, ~/sessions, the code, results), then do things yourself or start other agents. `hive read --thread improve` shows what earlier rounds did; `hive progress` shows the hive's numbers and what got worse; `hive improve list` shows which earlier changes were judged held or reverted, so you build on what held. Log each change you land with `hive improve log --what ... --measure ... --revisit 7d`. Say what you did in this thread."""
 
+def floor_gap(c, st, r):
+    """How long a first-tier thread rests between floor starts: floor_focus_gap_s, doubling up to floor_gap_s each start that left its ladder unmoved (the fizzle brake)."""
+    base, top = c.get("floor_focus_gap_s", 300), c.get("floor_gap_s", 1800)
+    seen = st.get("floor_seen", {}).get(r["thread"])
+    if not seen or seen.get("sig") != [r.get("rungs_done"), r.get("rungs_left"), r.get("rung")]: return base
+    return min(base * 2 ** seen.get("n", 0), max(top, base))
+
 def floor(c, st, alive, login):
-    """Keep agents_floor runs going on the ladders, so the person always sees the hive working (2026-11-06, post 1106181196b0: no stopping to wait for a pulse).
-    Below the floor, at most one a minute: a fresh agent on the keeper's brief for the focus or ladder quiet the longest, none sooner than floor_gap_s after its last agent post or floor start.
-    Skips a thread with someone on it, a post queued, a `Parked until` line or the person's stop. 0 turns it off."""
-    want = c.get("agents_floor", 0)
-    if not want or not login or not cont: return
+    """Keep the ladders moving with no gaps on the timeline, one start a minute at most, so work overlaps instead of arriving in bursts (the person, 2026-11-07, direction k1303; before it, post 1106181196b0).
+    First tier, the focuses and floor_threads: a thread nobody is on gets its next agent floor_focus_gap_s after its last agent post or floor start, however many runs are going elsewhere, up to floor_focus_max running (floor_gap below backs off an unmoved ladder).
+    Second tier, the other ladders: only while under agents_floor runs, floor_gap_s apart. Longest quiet first within a tier.
+    Skips a thread with someone on it, a post queued, a `Parked until` line, a `Waiting:` that names a running agent or a time (continuation.waits), or the person's stop. 0 turns a tier off."""
+    want, focus_gap = c.get("agents_floor", 0), c.get("floor_focus_gap_s", 0)
+    if not (want or focus_gap) or not login or not cont: return
     t = time.time()
     if t - st.get("floor_check", 0) < 60: return
     st["floor_check"] = t
     queued = [p for ps in st["pending"].values() for p in ps]
-    if len(alive) + sum(1 for n, ps in st["pending"].items() if ps and n not in alive) >= want: return  # posts waiting for a running agent are no extra run
-    gap = c.get("floor_gap_s", 1800); started = st.setdefault("floor_at", {})
+    running = len(alive) + sum(1 for n, ps in st["pending"].items() if ps and n not in alive)  # posts waiting for a running agent are no extra run
+    below, room = want and running < want, focus_gap and running < c.get("floor_focus_max", float("inf"))
+    if not (below or room): return
+    gap = c.get("floor_gap_s", 1800); started = st.setdefault("floor_at", {}); first_tier = set(c.get("floor_threads", []))
     busy = {p.get("thread") for p in queued} | {r.get("thread") for r in alive.values() if isinstance(r, dict)}
-    rows = [r for r in cont.G.goals()["rows"] if (r["kind"] == "focus" or r.get("ladder")) and not r["running"] and not r.get("parked") and r["thread"] not in busy
-            and t - started.get(r["thread"], 0) >= gap and (r["quiet_s"] is None or r["quiet_s"] >= gap)]
-    for r in sorted(rows, key=lambda r: -(r["quiet_s"] if r["quiet_s"] is not None else float("inf"))):
-        if cont.stopped_thread(r["thread"]): continue
+    def first(r): return bool(focus_gap) and (r["kind"] == "focus" or r["thread"] in first_tier)
+    def due(r):
+        if first(r):
+            if not room: return False
+            g = floor_gap(c, st, r)
+        elif not below: return False
+        else: g = gap
+        return t - started.get(r["thread"], 0) >= g and (r["quiet_s"] is None or r["quiet_s"] >= g)
+    rows = [r for r in cont.G.goals()["rows"] if (r["kind"] == "focus" or r.get("ladder")) and not r["running"] and not r.get("parked") and r["thread"] not in busy and due(r)]
+    if not rows: return
+    held = cont.waits({r["thread"] for r in rows}, set(alive) | {n for n, ps in st["pending"].items() if ps}, t, c.get("floor_wait_max_s", 7200))
+    for r in sorted(rows, key=lambda r: (not first(r), -(r["quiet_s"] if r["quiet_s"] is not None else float("inf")))):
+        if held.get(r["thread"], 0) > t or cont.stopped_thread(r["thread"]): continue
         started[r["thread"]] = t
+        sig, seen = [r.get("rungs_done"), r.get("rungs_left"), r.get("rung")], st.setdefault("floor_seen", {}).get(r["thread"]) or {}
+        st["floor_seen"][r["thread"]] = {"sig": sig, "n": seen.get("n", 0) + 1 if seen.get("sig") == sig else 1}
         text = cont.G.brief(r)   # to @new, or to the thread's last worker (goals.resume_arm), who keeps its own model
         with BOARD.open("a") as f:
             f.write(json.dumps({"id": dt.datetime.now().strftime("%m%d%H%M") + secrets.token_hex(2), "at": now(), "from": "starter", "to": [text.split()[0]], "thread": r["thread"], **({"model": c.get("floor_model", "sonnet")} if text.startswith("@new ") else {}), "text": text}) + "\n")
-        log(event="floor", thread=r["thread"], running=len(alive)); return
+        log(event="floor", thread=r["thread"], running=len(alive), tier=1 if first(r) else 2); return
 
 def improver(c, st, alive, login):
     """Every improve_every_s, one fresh agent on a deliberately open brief (the person, 2026-11-02: "just a spawn with one line").
@@ -1475,6 +1497,10 @@ FALLBACK_NOTE = {
             "from a free agent, the word in the text starts nothing, so leave it out. Don't start more free agents. "
             "Before stopping, send your actual answer using hive post --thread THREAD. A local final answer alone is "
             "not delivered. Mention @person only if their opinion or decision is really needed.",
+    "codex": "Every Claude login is at its usage limit, so this run is on a fallback model ({model}, {tier}). Work doesn't wait for "
+             "that (the person, 2026-11-07: it doesn't matter if work is done on Claude or Codex): do the whole job as you would on Claude, "
+             "builds and sims too. One difference: a fresh agent you start now waits for Claude, so hand on to an agent by name or end on a "
+             "`Next:` line. You go back to Claude when you're woken after the reset.",
     "fallback": "Every Claude login is at its usage limit, so this run is on a fallback model ({model}, {tier}) because the "
                 "person's post shouldn't wait for the reset. Do only what's time-critical: answer, give an update, a small fix. "
                 "No heavy jobs, no builds or sims, and don't start other agents (they'd wait for Claude anyway). Leave the "
@@ -1502,22 +1528,42 @@ def fallback_model(c, st, chain, cache):
         return f"{pv[0]}:{pv[2]}"
     return None
 
-def fallback(c, st, n, posts, claude_ok, cache):
-    """For a free agent (@free) or a post from someone in fallback.for (the person) while no Claude login has room: pick a
-    fallback model, set it on the posts and mark them, so start() runs on it and tells the agent which tier it is on.
-    Returns True if it did; False to let the posts wait (with one note in the thread when nothing has room)."""
+def agents_chain(c):
+    """Where the hive's own posts (agents', keeper, floor) go with no Claude login free: fallback.agents, Codex only whatever the config says (warden w7fc9,
+    2026-11-07: the person paused OpenRouter, and these runs carry private context). An install with fallback.for "*" uses its chain for everyone."""
     fb = c.get("fallback") or {}
-    free = any(p.get("free") for p in posts)
+    if "*" in fb.get("for", ["person"]): return fb.get("chain", [])
+    return [m for m in fb.get("agents", []) if (pv := provider_of(c, m)) and family(pv[0], pv[1]) == "codex"]
+
+FALLBACK_RUN = {}  # agent name -> (when read, was its last run on a fallback)
+def on_fallback(name):
+    """Whether this agent's last run was on a fallback; read from the log at most once a minute, since a queued post asks every poll."""
+    t, was = FALLBACK_RUN.get(name, (0, False))
+    if time.time() - t > 60:
+        was = bool((last_run(name) or {}).get("fallback"))
+        FALLBACK_RUN[name] = (time.time(), was)
+    return was
+
+def fallback(c, st, n, posts, claude_ok, cache):
+    """For a free agent (@free), or any post while no Claude login has room: pick a fallback model, set it on the posts and mark them, so start() runs on it
+    and tells the agent which tier it is on. A batch with a post from someone in fallback.for (the person) takes fallback.chain; the rest take agents_chain.
+    A fresh agent asked for by a run already on a fallback waits for Claude, so runs on a fallback can't multiply. Returns True if it did; False to let the
+    posts wait, with one note in the thread when nothing has room for the person or a free agent. The hive's own posts wait quietly (the log says so)."""
+    fb = c.get("fallback") or {}
+    free, whom = any(p.get("free") for p in posts), fb.get("for", ["person"])
+    person = "*" in whom or any(p.get("from") in whom for p in posts)
     if free: chain = fb.get("free", [])
-    elif not claude_ok and any("*" in fb.get("for", ["person"]) or p.get("from") in fb.get("for", ["person"]) for p in posts): chain = fb.get("chain", [])
-    else: return False
+    elif claude_ok: return False
+    elif person: chain = fb.get("chain", [])
+    elif any(p.get("spawn") and on_fallback(p.get("from")) for p in posts): return False
+    else: chain = agents_chain(c)
     model = fallback_model(c, st, chain, cache)
     held = st.setdefault("fallback_held", {})
     if not model:
         if not held.get(n):
             held[n] = True; log(event="fallback_held", name=n, chain=chain)
-            post(f"`{n}` waits: {'no free model' if free else 'no Claude login and no fallback'} has room now "
-                 f"({', '.join(chain) or 'none set in config.json fallback'}). It starts once one does.", [], posts[0].get("thread"))
+            if free or person: post(f"`{n}` waits: {'no free model' if free else 'no Claude login and no fallback'} has room now "
+                                    f"({', '.join(chain) or 'none set in config.json fallback'}). It starts once one does.", [], posts[0].get("thread"))
         return False
     held.pop(n, None)
     for p in posts: p["model"], p["fallback"] = model, "free" if free else "fallback"
@@ -1643,13 +1689,16 @@ def main():
         if (pick_login(c, room) is None) != paused:
             paused = not paused
             signed_in = any((Path(l).expanduser() / ".credentials.json").exists() for l in c["logins"])
-            post(("Every login is paused or past its stop line; starting only runs the person asks for, on a login that isn't paused."
+            post(("Every login is paused or past its stop line; work carries on on the fallback (Codex), and your own asks also on a login that isn't paused."
                   if signed_in else "No Claude account is signed in yet, so only your own asks start, on another provider if one is set up."
                   " Sign in under Settings > Accounts.")
                  if paused else "Usage has room again; starting sessions.", ["person"])
             log(event="paused" if paused else "resumed", usage=u)
         login = pick_login(c, room, st.get("limits"))  # None: every login is paused, past the stop line or held on a limit
         hold = box_holds() or launch_held(st) or daily_cap_holds(c, st)
+        for n, r in ([] if hold else list(st.get("resume", {}).items())):  # a provider run held on its limit, asked since for a Claude model: its session can't move, so the post wakes it as a new run
+            if login and provider_of(c, r.get("model")) and any(p.get("model") in MODELS for p in st["pending"].get(n, [])) and provider_room(c, *provider_of(c, r.get("model"))[:2], pcache):
+                st["resume"].pop(n); log(event="resume_dropped_for_claude", name=n)
         for n, r in ([] if hold else list(st.get("resume", {}).items())):  # resume limit-stopped sessions first, same name and session
             if (not login and not provider_of(c, r.get("model"))) or n in alive or len(alive) >= (c.get("max_sessions") or float("inf")): continue
             if paced(c, st, n, [{"from": r.get("from")}]): continue
@@ -1685,6 +1734,10 @@ def main():
             pv = next((pv for p in st["pending"][n] if (pv := provider_of(c, p.get("model")))), None)
             if pv and (alt := with_room(c, pv, pcache))[0] != pv[0]:  # its login is at its limit: another login of the same kind
                 retarget(c, st["pending"][n], pv[0], alt[0]); log(event="provider_moved", name=n, src=pv[0], dst=alt[0]); pv = alt
+            if pv and login and all(p.get("fallback") == "fallback" for p in st["pending"][n]) and provider_room(c, pv[0], pv[1], pcache):
+                # it went to Codex only because Claude was full; Claude has room now and Codex doesn't: don't wait for Codex's reset
+                for p in st["pending"][n]: p.pop("model", None); p.pop("fallback", None)
+                log(event="fallback_back_to_claude", name=n); pv = None
             if pv: to = None if provider_hold(c, st, n, pv, pcache, st["pending"][n][0].get("thread")) else "provider"
             else:
                 to = login_for(c, room, st.get("limits"), st["pending"][n], login)
@@ -1700,10 +1753,11 @@ def main():
                     alive[who] = {"name": who, "thread": ps[0].get("thread")}
                     if any(p.get("continue") for p in ps): guarded("launched", who, ps)
         if not hold:
-            keeper(c, st, alive, login)
-            try: floor(c, st, alive, login)
+            work = login or ("fallback" if fallback_model(c, st, agents_chain(c), pcache) else None)  # the hive's own rounds run on whichever has room
+            keeper(c, st, alive, work)
+            try: floor(c, st, alive, work)
             except Exception as e: log(event="floor_error", why=f"{type(e).__name__}: {e}"[:300])
-            improver(c, st, alive, login)
+            improver(c, st, alive, work)
             dreamer(c, st, alive, login)
         save("starter.json", st)
         backup(c, st)

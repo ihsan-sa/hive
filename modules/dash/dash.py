@@ -459,6 +459,22 @@ def thread_status():
             except (TypeError, ValueError): pass
     return out
 
+# ---------- what each agent says it is on (GET /api/agent-status) ----------
+# `hive me "..."` appends to ~/.hive/agent-status.jsonl; newest line per agent: {name: {text, thread, at}}. Public, like every post.
+AGENT_STATUS = STATE / "agent-status.jsonl"
+
+def agent_status():
+    out = {}
+    try: lines = AGENT_STATUS.read_text().splitlines()[-5000:]
+    except OSError: return out
+    for ln in lines:
+        try: r = json.loads(ln)
+        except ValueError: continue
+        if isinstance(r, dict) and re.fullmatch(r"[A-Za-z0-9_.-]{1,40}", str(r.get("name") or "")) and r.get("text"):
+            try: out[r["name"]] = {"text": str(r["text"])[:200], "thread": str(r.get("thread") or "")[:100] or None, "at": float(r.get("at") or 0)}
+            except (TypeError, ValueError): pass
+    return out
+
 # ---------- the person's own view of threads (GET/POST /api/thread-meta) ----------
 # Pins, archive and new titles the person gives threads on Chat. Kept beside the board, never in it: the board and every link keep
 # the thread's id. {thread: {"title": str, "pin": ms, "archived": ms, "back": ms}}; a key that's off is left out, a thread with none is dropped.
@@ -1296,6 +1312,7 @@ class Steps:
             except OSError: continue
             if size <= self.off.get(k, 0): continue
             name, thread = self.owner.get(k) or (k.split("-")[0], "")
+            name, thread = sys.intern(name), sys.intern(thread)   # tens of thousands of rows share a few hundred names
             off = self.off.get(k, 0)
             try:
                 with open(q, "rb") as fh:
@@ -1311,13 +1328,13 @@ class Steps:
                         for c in (e.get("message") or {}).get("content") or []:
                             if c.get("type") == "tool_use":
                                 inp = c.get("input") or {}
-                                tool = str(c.get("name") or "")
+                                tool = sys.intern(str(c.get("name") or ""))
                                 d = inp.get("command") or inp.get("file_path") or inp.get("notebook_path") or inp.get("pattern") or inp.get("url") or inp.get("query") or inp.get("prompt") or ""
                                 x, d = redact(short(describe_tool(tool, inp), 220)), redact(short(d, 400))
-                                new.append((t, name, thread, "tool", tool, x, d, " ".join((name, thread, tool, x, d)).lower()))
+                                new.append((t, name, thread, "tool", tool, x, d))
                             elif c.get("type") == "text" and str(c.get("text") or "").strip():
                                 x = redact(short(c["text"], 400))
-                                new.append((t, name, thread, "said", "", x, "", " ".join((name, thread, x)).lower()))
+                                new.append((t, name, thread, "said", "", x, ""))
             except OSError: pass
             self.off[k] = off
         return new
@@ -1347,7 +1364,9 @@ class Steps:
             if thread and r[2] != thread: continue
             if kind in ("tool", "said") and r[3] != kind: continue
             if not full and r[3] != "tool": continue
-            if words and not all(w in r[7] for w in words): continue
+            if words:   # the search text is built per row here, not kept: it doubled the memory of every step
+                hay = " ".join((r[1], r[2], r[4], r[5], r[6])).lower() if r[3] == "tool" else " ".join((r[1], r[2], r[5])).lower()
+                if not all(w in hay for w in words): continue
             total += 1
             if len(out) < limit: out.append(list(r[:7]) if full else [*r[:5], "", ""])
         return {"rows": out, "total": total, "ready": self.ready}
@@ -1718,13 +1737,13 @@ INSTALLED = HOME / ".hive-installed"
 FORWARDED = ("cf-ray", "cf-connecting-ip", "cf-access-jwt-assertion", "cf-ipcountry", "cf-visitor", "cdn-loop", "x-forwarded-for",
              "x-forwarded-host", "x-forwarded-proto", "x-real-ip", "forwarded", "via", "true-client-ip")
 GET_CAP = {"/api/call-chat": "post", "/api/live": "read", "/api/away": "read", "/api/board": "read", "/api/log": "read", "/api/usage": "read", "/api/jobs": "read", "/api/agent": "read", "/api/agent-work": "read", "/api/agent-input": "read", "/api/agent-diff": "read", "/api/ledger": "read",
-           "/api/projects": "read", "/api/agent-costs": "read", "/api/thread-names": "read", "/api/thread-meta": "read", "/api/shown": "read", "/api/thread-status": "read", "/api/thread-find": "read", "/json": "read", "/api/target": "read", "/api/inbox": "read", "/api/delivered": "read",
-           "/api/config": "config", "/api/modules": "modules", "/api/signin": "logins", "/api/plans": "plans", "/api/secrets": "secrets",
+           "/api/projects": "read", "/api/agent-costs": "read", "/api/thread-names": "read", "/api/thread-meta": "read", "/api/shown": "read", "/api/thread-status": "read", "/api/agent-status": "read", "/api/thread-find": "read", "/json": "read", "/api/target": "read", "/api/inbox": "read", "/api/delivered": "read",
+           "/api/config": "config", "/api/modules": "modules", "/api/slack-door": "modules", "/api/signin": "logins", "/api/plans": "plans", "/api/secrets": "secrets",
            "/api/settings": "config", "/api/ntfy": "config", "/api/webpush": "config", "/api/update": "config", "/api/signin-codex": "logins", "/api/accounts": "logins", "/api/design": "logins", "/api/brand/logo": "read",
            "/api/kb/home": "files", "/api/kb/open": "files", "/api/kb/search": "files", "/api/kb/raw": "files", "/api/kb/map": "files", "/api/kb/history": "files", "/api/progress": "read", "/api/checklist": "read", "/api/share-preview": "read", "/api/approvals": "read", "/api/feedback-drafts": "read", "/api/mail": "files"}
 POST_CAP = {"/api/webpush": "config", "/api/share-build": "read", "/api/kill": "stop", "/api/approval": "stop", "/api/tier": "tier", "/api/agent-model": "post", "/api/login-pause": "limits", "/api/login-limit": "limits", "/api/provider-limit": "limits",
             "/api/post": "post", "/api/side-ask": "post", "/api/thread-meta": "post", "/api/shown": "post", "/api/checklist": "post", "/api/feedback": "post", "/api/feedback-draft-done": "post", "/api/issue-link": "post", "/api/update": "config", "/api/share-copy": "config", "/api/share-pack": "config", "/api/draft": "config", "/api/import": "config", "/api/upload": "post", "/api/inbox-read": "post", "/api/ntfy": "config", "/api/config": "config", "/api/starter": "config",
-            "/api/module": "modules", "/api/signin": "logins", "/api/signin/code": "logins", "/api/signin/cancel": "logins", "/api/plan": "plans", "/api/secret": "secrets",
+            "/api/module": "modules", "/api/signin": "logins", "/api/signin/code": "logins", "/api/signin/cancel": "logins", "/api/plan": "plans", "/api/secret": "secrets", "/api/slack-door": "modules",
             "/api/signin-codex": "logins", "/api/account-key": "logins", "/api/design": "logins", "/api/brand": "config", "/api/brand/logo": "config"}
 LOCAL_ONLY = {"/api/access", "/api/settings", "/api/import", "/api/share-copy", "/api/share-pack", "/api/draft"}  # who may do what is never changed from outside, whatever outside.can says
 
@@ -3263,6 +3282,79 @@ def module_do(what, name):
     return r.stdout[-2000:]
 
 
+# The Slack door, set up from Settings > Modules > slack-door instead of by hand (modules/slack-door/README.md, Setup). The tokens go
+# where the door reads them, mode 600, and are never sent back. Everyone in the chosen channel becomes an owner: the channel is the
+# trust group, so a big one is refused. HIVE_SLACK_API points the calls at a stub for tests.
+SLACK_API = os.environ.get("HIVE_SLACK_API", "https://slack.com/api/")
+SLACK_MAX_PEOPLE = 20
+SLACK_SAID = {"invalid_auth": "Slack refused the {what}: copy it again", "not_authed": "Slack refused the {what}: copy it again",
+              "account_inactive": "the Slack app for the {what} was removed or its workspace closed", "token_revoked": "the {what} was revoked in Slack: make a new one",
+              "missing_scope": "the Slack app lacks a permission: make it again from this page's manifest", "not_allowed_token_type": "that isn't the right kind of token for the {what}"}
+
+
+def slack_dir(): return HOME / ".config/hive"
+
+
+def slack_call(method, token, what, **params):
+    import urllib.request, urllib.error, urllib.parse
+    req = urllib.request.Request(SLACK_API + method, data=urllib.parse.urlencode(params).encode(),
+                                 headers={"Authorization": "Bearer " + token, "Content-Type": "application/x-www-form-urlencoded"})
+    try:
+        with urllib.request.urlopen(req, timeout=20) as r: d = json.loads(r.read())
+    except (urllib.error.URLError, OSError, ValueError) as e: raise ValueError(f"couldn't reach Slack ({short(str(e), 120)}): check this computer's connection")
+    if not d.get("ok"):
+        err = str(d.get("error") or "unknown")
+        raise ValueError(SLACK_SAID.get(err, "Slack said {err} for the {what}").format(what=what, err=err))
+    return d
+
+
+def slack_door_view():
+    c = jload(slack_dir() / "slack-door.json", {}) or {}
+    toks = all((slack_dir() / f"slack-door-{k}-token").is_file() for k in ("bot", "app"))
+    return {"connected": bool(toks and isinstance(c, dict) and c.get("owners")), "channel": str(c.get("channel_name") or "") if isinstance(c, dict) else ""}
+
+
+def slack_door_connect(d, signer=None):
+    bot, app, ch = (str(d.get(k) or "").strip() for k in ("bot_token", "app_token", "channel"))
+    if not re.fullmatch(r"xoxb-[A-Za-z0-9-]{8,250}", bot) or not re.fullmatch(r"xapp-[A-Za-z0-9-]{8,250}", app): raise ValueError("The bot token starts xoxb- and the app token xapp-.")
+    name = ch.lstrip("#").strip().lower()
+    if not re.fullmatch(r"[a-z0-9][a-z0-9_.-]{0,79}", name): raise ValueError("Give the channel's name, like #hive.")
+    me = slack_call("auth.test", bot, "bot token (xoxb-)")
+    slack_call("apps.connections.open", app, "app token (xapp-)")
+    found, cursor = None, ""
+    for _ in range(50):
+        r = slack_call("conversations.list", bot, "bot token (xoxb-)", types="public_channel,private_channel", exclude_archived="true", limit="200", **({"cursor": cursor} if cursor else {}))
+        found = next((c for c in r.get("channels") or [] if c.get("name") == name), None)
+        cursor = (r.get("response_metadata") or {}).get("next_cursor") or ""
+        if found or not cursor: break
+    if not found: raise ValueError(f"The app can't see a channel #{name}. Check the name; a private channel needs /invite @Hive in it first.")
+    if not found.get("is_member"): raise ValueError(f"The app isn't in #{name} yet. In Slack, type /invite @Hive there, then Connect again.")
+    mem = [u for u in slack_call("conversations.members", bot, "bot token (xoxb-)", channel=found["id"], limit="200").get("members") or [] if u != me.get("user_id")]
+    if len(mem) > SLACK_MAX_PEOPLE: raise ValueError(f"#{name} has {len(mem)} members. Everyone in the channel can direct this Hive with this computer's full rights, so pick one with {SLACK_MAX_PEOPLE} or fewer.")
+    people = [u for u in mem if u != "USLACKBOT" and not (lambda x: x.get("is_bot") or x.get("deleted"))(slack_call("users.info", bot, "bot token (xoxb-)", user=u).get("user") or {})]
+    if not people: raise ValueError(f"Nobody but the app is in #{name}. Join it yourself, then Connect again.")
+    door = HOME / "modules" / "slack-door" / "door.py"
+    if not door.is_file(): module_do("add", "slack-door")
+    r = subprocess.run([sys.executable, "-I", str(door), "install"], capture_output=True, text=True, env=child_env(), cwd=str(HOME), timeout=60)
+    if r.returncode: raise ValueError(short(r.stderr or r.stdout, 300) or "slack-door install failed")
+    sd = slack_dir(); sd.mkdir(parents=True, exist_ok=True)
+    write_text_private(sd / "slack-door-bot-token", bot + "\n")
+    write_text_private(sd / "slack-door-app-token", app + "\n")
+    c = jload(sd / "slack-door.json", {}) or {}
+    c = c if isinstance(c, dict) else {}
+    c.update(owners=people, members=[u for u in c.get("members") or [] if u not in people], channels=[found["id"]], channel_name="#" + name)
+    write_text_private(sd / "slack-door.json", json.dumps(c, indent=1) + "\n")
+    # Start it only when systemd's units are this Hive's: a test Hive under another HOME must not restart the machine's real door.
+    if HOME.resolve() == Path(pwd.getpwuid(os.getuid()).pw_dir).resolve():
+        for a in (["daemon-reload"], ["enable", "--now", "slack-door.path"], ["restart", "slack-door.service"]):
+            q = subprocess.run(["systemctl", "--user", *a], capture_output=True, text=True, timeout=60, env=child_env())
+            if q.returncode: raise ValueError(f"saved, but the door didn't start: {short(q.stderr, 200)}")
+        started = ""
+    else: started = " (a test Hive: the door's service wasn't started)"
+    dash_note(f"The Slack door was connected to #{name} by {signer or 'this machine'}, in the web app; {len(people)} owner(s). Tokens are in `~/.config/hive/slack-door-*-token`, mode 600. Don't print them.", "slack-door")
+    return {"said": f"Connected to #{name}. {len(people)} {'person' if len(people) == 1 else 'people'} there can use it{started}.", **slack_door_view()}
+
+
 class SignIn:
     """`claude auth login` needs a terminal, so this gives it one: a pty the page reads the link from and types the code into. One at a
     time. It holds no token: Claude Code writes its own credentials into the login's directory."""
@@ -4199,7 +4291,6 @@ def serve(port):
     from urllib.parse import parse_qs, urlparse
     usage = Usage()
     threading.Thread(target=usage.run, daemon=True).start()
-    threading.Thread(target=PROGRESS.get, daemon=True).start()  # warm the Progress page's cache; the first read runs progress.py (tens of seconds on a busy machine)
     threading.Thread(target=phone_watch, daemon=True).start()
     threading.Thread(target=sync_accounts, daemon=True).start()  # an account already signed in before the app first ran; does nothing without settings.json
     live_c, proj_c, usage_c, jobs_c = Cached(live, 1), Cached(projects, 60), Cached(usage.view, 2), Cached(Jobs().view, 2)
@@ -4219,7 +4310,7 @@ def serve(port):
             # Board text is written by agents: the page takes nothing from elsewhere and sends nothing anywhere.
             framing = "; frame-ancestors 'self'" if framed_here else "" if self.route == "open" else "; frame-ancestors 'none'"  # the page can post as the person, so it can't sit in someone's frame; a TV page may sit in this site's own (the deck's single screen)
             frames = ""
-            self.send_header("Content-Security-Policy", "default-src 'none'; connect-src 'self'; frame-src 'self'; manifest-src 'self'; worker-src 'self'; img-src 'self' blob: data:; media-src 'self'; font-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; base-uri 'none'; form-action 'none'".replace("frame-src 'self'", "frame-src 'self'" + frames) + framing)
+            self.send_header("Content-Security-Policy", "default-src 'none'; connect-src 'self'; frame-src 'self'; manifest-src 'self'; worker-src 'self'; img-src 'self' blob: data:; media-src 'self' blob:; font-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; base-uri 'none'; form-action 'none'".replace("frame-src 'self'", "frame-src 'self'" + frames) + framing)
             if self.route != "open": self.send_header("Referrer-Policy", "no-referrer")
             if gz: self.send_header("Content-Encoding", "gzip")
             self.end_headers(); self.wfile.write(body)
@@ -4346,6 +4437,7 @@ def serve(port):
             web = web_cfg() or {}
             info = {"route": self.route, "can": list(self.can), "app": self.route != "open", "brand": brand_view()}
             if self.route != "open": info.update(setup=SETUP.get(), secrets_on=self.secrets_on, settings=settings_brief())
+            if self.route != "open" and "modules" in self.can: info["features"] = ["slack-door"]; info["slack_door"] = slack_door_view()  # Settings > Modules > slack-door "Set up" (POST /api/slack-door)
             if self.route != "open": info["default_model"] = default_model(); info["voice"] = voice_ready(); info["phone"] = phone_ready() and "post" in self.can
             if self.mode: info.update(mode=self.mode, full_left=self.full_left)
             if self.signer: info["signer"] = self.signer
@@ -4407,7 +4499,7 @@ def serve(port):
                 self.send(json.dumps(self.app_info(), default=str).encode(), J)
             elif u.path == "/api/brand/logo":
                 self.send_logo()
-            elif u.path in ("/api/target", "/api/inbox", "/api/away", "/api/config", "/api/modules", "/api/signin", "/api/plans", "/api/secrets", "/api/settings", "/api/ntfy", "/api/webpush", "/api/update", "/api/signin-codex", "/api/accounts", "/api/design", "/api/kb/home", "/api/kb/open", "/api/kb/search", "/api/kb/raw", "/api/kb/map", "/api/kb/history", "/api/mail") and self.route == "open":
+            elif u.path in ("/api/target", "/api/inbox", "/api/away", "/api/config", "/api/modules", "/api/signin", "/api/plans", "/api/secrets", "/api/slack-door", "/api/settings", "/api/ntfy", "/api/webpush", "/api/update", "/api/signin-codex", "/api/accounts", "/api/design", "/api/kb/home", "/api/kb/open", "/api/kb/search", "/api/kb/raw", "/api/kb/map", "/api/kb/history", "/api/mail") and self.route == "open":
                 self.send_error(404)
             elif u.path == "/api/kb/home":
                 self.send(json.dumps(kb_home()).encode(), J)
@@ -4436,6 +4528,8 @@ def serve(port):
                 self.send(json.dumps(plans_view()).encode(), J)
             elif u.path == "/api/secrets":
                 self.send(json.dumps(secrets_view()).encode(), J)
+            elif u.path == "/api/slack-door":
+                self.send(json.dumps(slack_door_view()).encode(), J)
             elif u.path == "/api/target":
                 self.send(json.dumps(thread_target(q.get("thread", [""])[0])).encode(), J)
             elif u.path == "/api/inbox":
@@ -4498,6 +4592,8 @@ def serve(port):
                 except Exception as e: self.send(json.dumps({"error": str(e)[:200]}).encode(), J)
             elif u.path == "/api/thread-status":
                 self.send(json.dumps(thread_status()).encode(), J)
+            elif u.path == "/api/agent-status":
+                self.send(json.dumps(agent_status()).encode(), J)
             elif u.path == "/api/agent-work":
                 self.send(json.dumps(agent_work(q.get("name", [""])[0], self.route != "outside" or self.mode == "full")).encode(), J)
             elif u.path == "/api/agent-input":
@@ -4560,7 +4656,7 @@ def serve(port):
                 try: return self.send(json.dumps(share_build(d)).encode(), J)
                 except KeyError: return self.send_error(404)
                 except ValueError as e: return self.deny(400, str(e))
-            if u.path in ("/api/post", "/api/side-ask", "/api/thread-meta", "/api/shown", "/api/checklist", "/api/feedback", "/api/feedback-draft-done", "/api/issue-link", "/api/update", "/api/inbox-read", "/api/ntfy", "/api/webpush", "/api/agent-model", "/api/config", "/api/starter", "/api/module", "/api/signin", "/api/signin/code", "/api/signin/cancel", "/api/access", "/api/plan", "/api/secret", "/api/settings", "/api/share-copy", "/api/share-pack", "/api/draft", "/api/import", "/api/signin-codex", "/api/account-key", "/api/design", "/api/brand"):
+            if u.path in ("/api/post", "/api/side-ask", "/api/thread-meta", "/api/shown", "/api/checklist", "/api/feedback", "/api/feedback-draft-done", "/api/issue-link", "/api/update", "/api/inbox-read", "/api/ntfy", "/api/webpush", "/api/agent-model", "/api/config", "/api/starter", "/api/module", "/api/signin", "/api/signin/code", "/api/signin/cancel", "/api/access", "/api/plan", "/api/secret", "/api/settings", "/api/share-copy", "/api/share-pack", "/api/draft", "/api/import", "/api/signin-codex", "/api/account-key", "/api/design", "/api/brand", "/api/slack-door"):
                 try:
                     if u.path == "/api/post": res = person_post(d.get("text"), d.get("thread"), d.get("reply_to"), d.get("files"), signer=self.signer, limited="config" not in self.can, simple=d.get("simple") is True, model=d.get("model"), sig=d.get("sig"))
                     elif u.path == "/api/side-ask": res = side_ask(d.get("q"), signer=self.signer, limited="config" not in self.can)
@@ -4583,6 +4679,7 @@ def serve(port):
                     elif u.path == "/api/brand": res = set_brand(d)
                     elif u.path == "/api/starter": starter_do(d.get("do")); SETUP.t = 0; res = {"ok": True}
                     elif u.path == "/api/module": res = {"said": module_do(d.get("do"), d.get("name"))}
+                    elif u.path == "/api/slack-door": res = slack_door_connect(d, self.signer)
                     elif u.path == "/api/signin": res = SIGNIN.start(d.get("name"), bool(d.get("console")))
                     elif u.path == "/api/signin/code": SIGNIN.code(d.get("code")); res = {"ok": True}
                     elif u.path == "/api/signin/cancel": SIGNIN.cancel(); res = {"ok": True}
@@ -4640,6 +4737,13 @@ def serve(port):
     threading.Thread(target=live_usage, daemon=True).start()
     threading.Thread(target=record_usage, daemon=True).start()
     threading.Thread(target=provider_status, daemon=True).start()
+    steps.busy = True; threading.Thread(target=steps.refresh, daemon=True).start()  # read the session logs now, so the first History open after a restart isn't the cold one
+    def warm_progress():  # warm the Progress page's cache (progress.py takes tens of seconds); after the Steps scan, so the two don't fight over the page cache under the service's memory cap
+        for _ in range(300):
+            if not steps.busy: break
+            time.sleep(1)
+        PROGRESS.get()
+    threading.Thread(target=warm_progress, daemon=True).start()
     threading.Thread(target=SETUP.get, daemon=True).start()  # so the first page after a restart doesn't pay for it
     srv = ThreadingHTTPServer(("127.0.0.1", port), H)  # loopback only: never opens the machine
     srv.daemon_threads = True

@@ -57,7 +57,9 @@
 .dt-tile[data-tile=mesh] .dt-body,.dt-tile[data-tile=timeline] .dt-body{padding:0}
 .dt-body>.map>.empty,.dt-body>.page>.empty{padding:var(--s2) var(--s4)}
 .dt-body>.page{padding:0}
-.dt-body .map-scroll{mask-image:linear-gradient(#000 calc(100% - 40px),transparent)}
+.dt-body .map-scroll:not([data-free]){mask-image:linear-gradient(#000 calc(100% - 40px),transparent)}
+.dt-body>.map[data-tile]{height:100%}
+.dt-body>.map[data-tile]>.map-bd{height:100%;flex-wrap:nowrap}
 .dt-body>.cvp{position:absolute;inset:0;height:auto;background:none}
 .dt-body .cvp-bar{position:absolute;top:var(--s1);right:var(--s2);z-index:5;max-width:calc(100% - 2*var(--s2));padding:var(--s1) var(--s2);background:var(--surface);border:1px solid var(--line-2);border-radius:var(--r-m);box-shadow:var(--e2)}
 .dt-body .cvp-count{display:none}
