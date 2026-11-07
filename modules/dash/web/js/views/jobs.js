@@ -81,7 +81,7 @@ export default {
         after: app && !q ? h("p", { class: "ph-meta" }, "The queue for big jobs isn't installed here, so agents run their work directly. Its sections show once it is.") : null,
         meta: [J.failed ? "Couldn't refresh: this may be out of date" : `Updated ${clock(V.at * 1e3)}`, app ? null : "CPU in threads in use, averaged since the last refresh"] }),
       sections: [
-        section({ title: app ? "The computer" : "The machine" }, stats(tiles(V.machine))),
+        section({ title: app ? "The computer" : "The machine", note: "how busy the machine is now" }, stats(tiles(V.machine))),
         section({ title: "Who's using it", note: app ? "Memory counts what's in use, including swap." : "Memory is what's in use, RAM plus swap. The unfilled part of its bar is the kernel, shared memory and tmpfs." }, split(V)),
         ...(app && !q ? [] : [section({ title: "Running", note: `${V.running.length} of ${V.slots} slots, longest first` }, table({
           rows: V.running, key: r => r.lane + r.since, empty: "Nothing running in the queue.",

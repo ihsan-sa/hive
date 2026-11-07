@@ -1200,7 +1200,7 @@ a.ref[data-kind=file][data-pv-on]{background:color-mix(in oklch,var(--accent) 16
 .cm-needs-t{font-size:var(--fs-title);font-weight:var(--w-bold)}
 .cm-needs .lr-x{-webkit-line-clamp:2}
 .cm-stand{display:grid;gap:var(--s4)}.cm-stand-hd{display:flex;align-items:baseline;justify-content:space-between;gap:var(--s3);flex-wrap:wrap}.cm-stand-hd>.cm-needs-t{font-size:var(--fs-title);font-weight:var(--w-bold);color:var(--ink)}
-.cm-stand-brief{margin:0;color:var(--ink)}.cm-stand-at{font-size:var(--fs-meta);color:var(--ink-3);white-space:nowrap}
+.cm-stand-by{font-size:var(--fs-meta);margin-right:auto}.cm-stand-brief{margin:0;color:var(--ink)}.cm-stand-at{font-size:var(--fs-meta);color:var(--ink-3);white-space:nowrap}
 .cm-stand-ch{display:inline-flex;flex:none;color:var(--ink-3)}.cm-stand-ch:not([data-open]) svg{transform:rotate(-90deg)}
 .cm-stand .lr-in[style]{padding-left:calc(8px + var(--s5))}   /* a thread under its top-level thing */
 .cm-stand .lr-acts{display:flex;top:auto;bottom:4px}.cm-stand .lr-x{padding-right:var(--s6)}   /* its reply button is always there, clear of the words */
@@ -2399,3 +2399,20 @@ input[type=radio],input[type=checkbox]:not(.switch){accent-color:var(--ink)}
 .tm-from{color:var(--ink-3);font-style:italic}
 .away-what,.away-sum{margin:0}
 .card.away-one{padding:10px 20px}
+/* away card: the fold's title stays on one line; the long summary is what gives way (it ellipsizes) */
+.away-foot details.fold-row>summary{white-space:nowrap}
+.away-foot details.fold-row>summary>small{margin-left:0;min-width:0;overflow:hidden;text-overflow:ellipsis}
+/* phone: a part's title, its note and its status label share one line; the note gives way (ellipsis) instead of the label dropping to its own row */
+@media (max-width:600px){.sec[data-level="1"]>.sec-h{flex-wrap:nowrap}.sec[data-level="1"]>.sec-h .sec-t{flex:none}.sec[data-level="1"]>.sec-h .sec-n{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.sec[data-level="1"]>.sec-h .sec-a{flex:none}}
+
+/* ===== Work: one card per project (views/work.js) ===== */
+.wk-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,360px),1fr));gap:var(--s4)}
+.wk{padding:var(--s3) var(--s4);display:grid;gap:var(--s3);min-width:0}
+.wk-hd{display:flex;align-items:baseline;gap:var(--s2);flex-wrap:wrap}.wk-hd>.sd{flex:none;align-self:center}
+.wk-t{margin:0;font-size:var(--fs-title);font-weight:var(--w-bold);min-width:0;overflow-wrap:anywhere}.wk-n{color:var(--ink-3);font-weight:var(--w-med)}
+.wk-st{margin-left:auto;white-space:nowrap}
+.wk-b{margin:0;display:grid;gap:var(--s2)}.wk-p{display:grid;grid-template-columns:5.5em minmax(0,1fr);gap:var(--s2);font-size:var(--fs-small)}
+.wk-p>dt{color:var(--ink-3);font-weight:var(--w-med)}.wk-p>dd{margin:0;min-width:0;overflow-wrap:anywhere;color:var(--ink)}
+.wk-l{margin:0;padding:0;list-style:none;display:grid;gap:2px}.wk-l a{color:inherit;text-decoration:none}.wk-l a:hover{text-decoration:underline}.wk-w{text-transform:capitalize}
+.wk-ft{display:flex;gap:var(--s3);flex-wrap:wrap;align-items:center;border-top:1px solid var(--line);padding-top:var(--s2)}.wk-who{display:inline-flex;gap:var(--s2);flex-wrap:wrap;align-items:center}
+@container (max-width:420px){.wk-p{grid-template-columns:1fr}.wk-st{margin-left:0}}
