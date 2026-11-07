@@ -69,6 +69,11 @@ break_forward() {
     pid=$(lsof -nP -iTCP:"$p" -sTCP:LISTEN -t 2>/dev/null | head -n 1)
     if [ -n "$pid" ] && [ "$(ps -p "$pid" -o comm= | sed 's|.*/||')" = ssh ]; then kill "$pid" && how="kill of the ssh listener"; fi
   fi
+  say "      fault: the listener on this Mac's port is: $(lsof -nP -iTCP:"$p" -sTCP:LISTEN 2>/dev/null | awk 'NR==2 {print $1}')"
+  if answers 2>/dev/null; then
+    # Not an ssh forward (Lima's own): stop the guest agent in the VM, which is what announces the port to the Mac.
+    vm sudo -n pkill -9 -f lima-guestagent >/dev/null 2>&1; sleep 5; how="kill of the guest agent"
+  fi
   if answers 2>/dev/null; then say "      fault: could not break the forward"; return 1; fi
   say "      fault: broke this Mac's forward by a ${how:-?}"
 }
