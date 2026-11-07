@@ -44,6 +44,6 @@ jobs:
       if: always()
       timeout-minutes: 5
       run: |
-        { sleep 5; echo delete; sleep 5; } | script -q /dev/null sh remove-mac.sh || true
+        { sleep 5; echo delete; sleep 5; } | HIVE_KEEP=projects,notes,board script -q /dev/null sh remove-mac.sh || true
         sleep 5
         HIVE_CHECK_AUTO=1 sh mac-check.sh --after-uninstall || true
