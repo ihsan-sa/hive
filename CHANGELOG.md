@@ -6,7 +6,7 @@ A release can ship several times a day. A new Hive installs at most one a day, o
 
 ## Slack: connect it from Settings
 
-Settings > Modules > slack-door now has a working **Set up**: make the Slack app from the manifest shown there, paste its bot token (xoxb-) and app token (xapp-), name a channel the app was invited to, and press **Connect**. The Hive checks both tokens and the channel with Slack before it stores anything, says in words what Slack refused, and keeps the tokens on this computer, readable only by you. Everyone in that channel can then direct the Hive, so the channel can have at most 20 people.
+Settings > Modules > slack-door now has a working **Set up**: make the Slack app from the manifest shown there, paste its bot token (xoxb-) and app token (xapp-), name a channel the app was invited to, and press **Connect**. The Hive checks both tokens and the channel with Slack before it stores anything, says in words what Slack refused, and keeps the tokens on this computer, readable only by you. Everyone in that channel can then direct the Hive, so the channel can have at most 20 people. The row then says **Connected to #channel**, with **Disconnect** next to it, which stops the door and deletes both tokens. If Slack later refuses the stored bot token (revoked, or the app removed), the row says so next to **Connected to**, so a door that has stopped working no longer looks connected.
 
 ## Agents on a phone: what each one is on
 

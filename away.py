@@ -227,7 +227,7 @@ def summary(since, now=None):
     for login, a in (st.get("auth_told") or {}).items():
         n = sum(r.get("login") == login for r in (st.get("resume") or {}).values()) + len(st.get("pending") or {})
         needs.append({"kind": "sign_in", "agents": n, "at": now, "asks": [], "text": f"Sign in again to Claude: {word(n, 'agent')} {'is' if n == 1 else 'are'} waiting."})
-    until = [t for t in (st.get("limits") or {}).values() if t > now]
+    until = [t for k, t in (st.get("limits") or {}).items() if t > now and "#" not in str(k)]  # "login#fable": one model's hold, not everyone's
     if until: agents_wait.append({"kind": "limit", "until": min(until), "text": "the usage limit; they carry on by themselves when it resets"})
     lines_for_you = []
     for r in for_yous(posts, items, links, now - FOR_YOU_DAYS * 86400):

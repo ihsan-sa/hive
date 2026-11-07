@@ -622,6 +622,7 @@ function titleMenu(c, n, d, off, ctx) {
     own, own.length ? sep() : null, where, out.length ? sep() : null, out,
     full && th !== threadTitle(th) ? h("p", { class: "meta cm-menu-id" }, "Its id on the board: ", h("code", { title: "Click to select it" }, th), copyButton(th)) : null);   // copy it (the person, 11041333ab1a)
 }
+/** The rail's links to the pages Chat brings together: each only where this connection may open it, with a count where there is one. Needs you moved to Work's row (2026-11-07). */
 function places() {
   const link = (label, to, n, tip) => h("a", { class: "cm-place", href: to, title: tip }, label, n ? h("b", { class: "cm-place-n", "aria-label": n + " new" }, String(n)) : null);
   return h("nav", { class: "cm-places", "aria-label": "Also in Chat", "data-key": "places" },
@@ -629,7 +630,24 @@ function places() {
     can("files") ? link("Mail", href("mail"), MN.n, MN.n ? "Mail since you last opened it" : "Your mail") : null,
     link("Files", href("made"), 0, "Files and links from your conversations"));
 }
-// What shows: For you, Updates, Agent comms, each on or off: three toggles in the side, over the list (the person, 11040113eacf).
+// One button over the list holds every choice about it (the person, 11071400de5b: too many controls everywhere; the hand-off's §4): what shows, how it is grouped,
+// whether the not-needed ones are listed, fold and reach. Above the list there are New conversation, search and this. The button carries a dot when a choice is not the default.
+const showOff = () => showMask() !== SHOW.ALL || C.imp || C.hideFaded;
+function showBtn(ctx) {
+  return h("button", { type: "button", class: "btn cm-showbtn", "data-kind": "icon", "data-on": showOff() ? "" : null, "aria-label": "Show and group", title: "What the list shows and how it is grouped", "aria-haspopup": "true", "aria-expanded": String(C.menu === "show"),
+    onclick: e => { e.stopPropagation(); C.menu = C.menu === "show" ? null : "show"; ctx.update(); } }, icon("filter"));
+}
+function showMenu(ctx) {
+  const searching = words(C.tq).length > 0;
+  return h("div", { class: "cm-menu cm-show-m", role: "menu", "data-key": "showmenu", "aria-label": "Show and group" },
+    h("p", { class: "meta cm-show-l" }, "Show"), showChips(ctx),
+    app() && !searching ? [h("p", { class: "meta cm-show-l" }, "Group by"), viewBar(ctx)] : null,
+    searching ? null : h("div", { class: "cm-scope" }, h("span", null, app() ? "Conversations" : "Threads"),
+      h("button", { type: "button", class: "cm-foldall", hidden: foldNone(), title: "Fold or open every section and helper list here", onclick: () => foldAll(ctx) }, foldWord()),
+      h("button", { type: "button", class: "cm-scope-b", title: C.scope === "recent" ? (app() ? "Only the last 7 days are listed. Show every conversation." : "Only the last 24 hours are listed. Show every thread.") : "List only the recent ones",
+        onclick: () => { C.scope = C.scope === "recent" ? "all" : "recent"; ctx.update(); } }, C.scope === "recent" ? "Show all" : "Recent only")));
+}
+// What shows: For you, Updates, Agent comms, each on or off: three toggles, in the Show menu since 2026-11-07 (first over the list: the person, 11040113eacf).
 const tmetaSig = () => Object.entries(S.threadMeta || {}).map(([k, v]) => k + (v.important || 0) + (v.pin || 0) + (v.faded || 0)).join();
 function showChips(ctx) {
   const mask = showMask();
@@ -644,9 +662,9 @@ function showChips(ctx) {
 function viewBar(ctx) {
   const nFaded = [...S.threads.keys()].filter(th => faded(th) && !archived(th)).length;
   return h("div", { class: "cm-views", "data-key": "views" },
-    seg([["ideas", "Ideas", "The main conversations, newest activity first, helper conversations folded under the one they came from"],
-      ["recent", "All threads", "Every conversation in one list, newest activity first, helper conversations included, each naming the one it came from"],
-      ["topics", "Groups", "Under the sections of the Needs-you overview, the rest under Other, helper conversations folded under the one they came from"]], C.view,
+    seg([["ideas", "Idea", "The main conversations, newest activity first, helper conversations folded under the one they came from"],
+      ["topics", "Group", "Under the sections of the Needs-you overview, the rest under Other, helper conversations folded under the one they came from"],
+      ["recent", "None", "Every conversation in one list, newest activity first, helper conversations included, each naming the one it came from"]], C.view,
       v => { C.view = v; store(VIEW_KEY, v); ctx.update(); }, { label: "How the list is arranged" }),
     h("button", { type: "button", class: "tm-chip cm-hidefaded", "aria-pressed": String(C.hideFaded),
       title: C.hideFaded ? `Show the ${nFaded} marked Likely not needed again` : `Hide the ${nFaded} conversations marked Likely not needed`,
@@ -929,16 +947,13 @@ export default {
       h("nav", { class: "cm-side", "aria-label": app() ? "Conversations" : "Threads" }, grip(),
         h("div", { class: "cm-filters" },
           post ? button("New conversation", null, { href: href("comms", "~new"), kind: "quiet", icon: "new", cls: "cm-newbtn" }) : null,
-          h("div", { class: "cm-search" }, icon("search"),
-            input({ type: "search", placeholder: app() ? "Search, or @ to ask" : "Search threads", "aria-label": "Search all conversations by name or content. Start with @ to ask an agent, which answers here and brings up the conversations that help", value: C.tq, oninput: e => { C.tq = e.target.value; ctx.update(); }, onkeydown: e => { if (e.key === "Enter" && aiQ()) { e.preventDefault(); aiAsk(ctx); return; } if (e.key === "Escape") { e.stopPropagation(); C.tq = ""; e.target.value = ""; e.target.blur(); ctx.update(); } } })),
-          simpleOn() ? null : showChips(ctx),
+          h("div", { class: "cm-srow" },
+            h("div", { class: "cm-search" }, icon("search"),
+              input({ type: "search", placeholder: app() ? "Search, or @ to ask" : "Search threads", "aria-label": "Search all conversations by name or content. Start with @ to ask an agent, which answers here and brings up the conversations that help", value: C.tq, oninput: e => { C.tq = e.target.value; ctx.update(); }, onkeydown: e => { if (e.key === "Enter" && aiQ()) { e.preventDefault(); aiAsk(ctx); return; } if (e.key === "Escape") { e.stopPropagation(); C.tq = ""; e.target.value = ""; e.target.blur(); ctx.update(); } } })),
+            simpleOn() ? null : showBtn(ctx)),
+          simpleOn() || C.menu !== "show" ? null : showMenu(ctx),
           app() ? brought() : null,
-          C.err ? h("p", { class: "fmsg", "data-tone": "bad", role: "alert" }, C.err) : null,
-          words(C.tq).length || simpleOn() || !app() ? null : viewBar(ctx),
-          words(C.tq).length || simpleOn() ? null : h("div", { class: "cm-scope" }, h("span", null, app() ? "Conversations" : "Threads"),
-            h("button", { type: "button", class: "cm-foldall", hidden: foldNone(), title: "Fold or open every section and helper list here", onclick: () => foldAll(ctx) }, foldWord()),
-            h("button", { type: "button", class: "cm-scope-b", title: C.scope === "recent" ? (app() ? "Only the last 7 days are listed. Show every conversation." : "Only the last 24 hours are listed. Show every thread.") : "List only the recent ones",
-              onclick: () => { C.scope = C.scope === "recent" ? "all" : "recent"; ctx.update(); } }, C.scope === "recent" ? "Show all" : "Recent only"))),
+          C.err ? h("p", { class: "fmsg", "data-tone": "bad", role: "alert" }, C.err) : null),
         h("div", { class: "cm-tl", "data-own": "", "data-sig": "own", tabindex: "-1" }),
         app() && !simpleOn() ? places() : null),
       h("section", { class: "cm-convo", "aria-label": "Conversation", ...(post && c.thread ? dropZone(c.thread) : {}) },
@@ -957,7 +972,7 @@ function readOnly(th) {
 // A header menu (title, More) closes on a press anywhere outside it and its button (the person, 2026-11-04, post 11040100216b).
 // So does an empty "Search here" box (11040131d9c5); with words in it, it stays, since it's what the messages are filtered by.
 if (typeof document !== "undefined") document.addEventListener("pointerdown", e => {
-  const menu = C.menu && !e.target.closest?.(".cm-menu, .cm-head [aria-haspopup]");
+  const menu = C.menu && !e.target.closest?.(".cm-menu, .cm-head [aria-haspopup], .cm-showbtn");
   const find = C.find && !C.q.trim() && !e.target.closest?.(".cm-find, .cm-tools [aria-label=\"Search here\"]");
   if (!menu && !find) return;
   if (menu) C.menu = null; if (find) C.find = false;

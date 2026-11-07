@@ -74,13 +74,13 @@ When setup is finished, the app offers a short guided tour. It says what to clic
 
 ![The first step of the tour, in a small window over the Chat page](https://hivelab.ca/img/guide/tour.png)
 
-The top bar has **Chat, Knowledge, Agents** and **Usage**, with **Settings** as the sliders icon at the right and a **More** menu. A **Start** tab comes first until setup is finished. Some tabs have a row of pages under the bar (see [Pages inside a tab](#pages-inside-a-tab)). Press **Ctrl+K** anywhere for the quick switcher, a box that finds a conversation, an agent or a page and goes there, and press **?** for the list of keyboard shortcuts. On a phone the tabs are in a bar at the bottom. On the right it shows how many agents are working and how much of the week is used, and it has the colour theme and full-screen buttons.
+The top bar has **Chat, Work, Knowledge, Agents** and **Usage**, with **Settings** as the sliders icon at the right and a **More** menu. A **Start** tab comes first until setup is finished. Some tabs have a row of pages under the bar (see [Pages inside a tab](#pages-inside-a-tab)). Press **Ctrl+K** anywhere for the quick switcher, a box that finds a conversation, an agent or a page and goes there, and press **?** for the list of keyboard shortcuts. On a phone the tabs are in a bar at the bottom. On the right it shows how many agents are working and how much of the week is used, and it has the colour theme and full-screen buttons.
 
 If the Hive has stopped starting agents, a band under the bar says why and where to look.
 
 ### Chat
 
-Chat is where you'll spend your time. The left side lists your conversations. **Show all** and **Recent only** at the foot of the list change how far back it goes, and the search box looks through every conversation by name or content. Start with `@` to ask a question instead, such as `@where did we get to on the launch?`, and press Enter: an agent answers in one line right there and brings up the conversations that fit.
+Chat is where you'll spend your time. The left side lists your conversations. Above the list there are three things: **New conversation**, the search box, and the **Show** button (the funnel) beside it, which holds every choice about the list. The search box looks through every conversation by name or content. Start with `@` to ask a question instead, such as `@where did we get to on the launch?`, and press Enter: an agent answers in one line right there and brings up the conversations that fit.
 
 The home page answers two questions: what do you want done, and what needs you?
 
@@ -116,15 +116,15 @@ In a conversation:
 
 Drafts are kept for each conversation in this browser, even if you reload. A message that fails to send keeps its text and offers Retry, Edit and Discard. Sent messages can't be unsent.
 
-**For you, Updates** and **Agent comms,** the chips above the conversation list, choose what you see, both inside a conversation and which ones are listed. Each choice turns on and off by itself, so you can have any mix. The work carries on the same whichever you pick, and this browser remembers it.
+The **Show** button beside the search opens one small menu. **For you, Updates** and **Agent comms,** its first row, choose what you see, both inside a conversation and which ones are listed. Each choice turns on and off by itself, so you can have any mix. The work carries on the same whichever you pick, and this browser remembers it.
 
 - **For you:** your messages, what agents ask or tell you, and the result of each job. The rest runs in the background.
 - **Updates:** the agents' progress reports.
 - **Agent comms:** agents talking to each other and the Hive's own notes.
 
-**Show N hidden** in the title menu turns all three on. The star chip, **Important only**, keeps just the conversations you marked. Search always looks through everything.
+**Show N hidden** in the title menu turns all three on. The star, **Important only**, keeps just the conversations you marked. **Group by** in the same menu is **Idea** (the main conversations, helpers folded under theirs), **Group** (under the sections of Needs you) or **None** (every conversation flat by last activity); **Hide not needed** drops faded conversations; **Show all** and **Recent only** change how far back the list goes, and **Collapse all** folds every section. Search always looks through everything.
 
-At the foot of the list, **Work**, **Flow**, **Needs you**, **Inbox**, **Mail** and **Files** are links to the other pages under Chat. **All messages** in the title menu is every conversation in one list.
+At the foot of the list, **Inbox**, **Mail** and **Files** are links to the other pages under Chat. **All messages** in the title menu is every conversation in one list.
 
 **Mail** (the link at the foot of the Chat list, full sign-in only, and only on an install with the hive-mail module): your mail to the Hive's address, copied read-only. Plain text; links aren't opened and attachments show as name and size. Mail never goes on the board.
 
@@ -193,7 +193,7 @@ Settings shows one section at a time. The list on the left has **The hive, Accou
 
 ### Pages inside a tab
 
-Some tabs have a row of pages under the top bar. Chat has none: its pages are the links at the foot of its list.
+Some tabs have a row of pages under the top bar. Chat has none: its pages are the links at the foot of its list. Work's row is **Work**, **Flow** and **Needs you**.
 
 - **Agents > Now:** who is working and what on.
 - **Agents > All agents:** every agent that has run. Search, filter and sort.
@@ -204,8 +204,8 @@ Some tabs have a row of pages under the top bar. Chat has none: its pages are th
 - **Usage > Rootwarden:** what the machine's admin helper was asked, and what it answered.
 - **Inbox:** every message an agent addressed to you, newest first, with **Mark all read**. Open it from **Inbox** at the foot of the Chat list.
 - **Files:** the files and links from your conversations, at the foot of the Chat list.
-- **Work:** every project on one page, your focuses first: what it did today (the first line of each result an agent posted), where it stands (moving, needs you, held, or quiet), what comes next on its ladder, and what it needs from you. Conversations and agent names are a click down, not on the page. Paused projects sit in a fold at the end. Open it from **Work** at the foot of the Chat list, or from **By project** on Chat's home.
-- **Flow:** the same work as a live timeline, one lane per project over the last hours (zoom from 2 hours to a day): each bar is one agent's run, a diamond where one agent handed off to another, a tick where a result or an ask landed, a green line at now with what comes next on each project after it. A lane opens into its Work card; a bar opens the agent. Nothing moves when nothing happened, so a quiet hive looks quiet.
+- **Work:** every project on one page, your focuses first: what it did today (the first line of each result an agent posted), where it stands (moving, needs you, held, or quiet), what comes next on its ladder, and what it needs from you. Conversations and agent names are a click down, not on the page. Paused projects sit in a fold at the end. It is the **Work** tab in the top bar, and **By project** on Chat's home opens it too.
+- **Flow,** in Work's row: the same work as a live timeline, one lane per project over the last hours (zoom from 2 hours to a day): each bar is one agent's run, a diamond where one agent handed off to another, a tick where a result or an ask landed, a green line at now with what comes next on each project after it. A lane opens into its Work card; a bar opens the agent. Nothing moves when nothing happened, so a quiet hive looks quiet.
 
   ![Flow: a lane per project, bars for runs, a diamond at each hand-off, the now line and what comes next](https://hivelab.ca/img/guide/flow.png)
 
