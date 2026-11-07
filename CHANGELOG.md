@@ -4,6 +4,38 @@ Release notes are on the [releases page](https://github.com/ihsan-sa/hive/releas
 
 A release can ship several times a day. A new Hive installs at most one a day, once it has been out for at least 12 hours; **How often to update** in Settings changes that. The latest is at [releases/latest](https://github.com/ihsan-sa/hive/releases/latest).
 
+## Slack: connect it from Settings
+
+Settings > Modules > slack-door now has a working **Set up**: make the Slack app from the manifest shown there, paste its bot token (xoxb-) and app token (xapp-), name a channel the app was invited to, and press **Connect**. The Hive checks both tokens and the channel with Slack before it stores anything, says in words what Slack refused, and keeps the tokens on this computer, readable only by you. Everyone in that channel can then direct the Hive, so the channel can have at most 20 people.
+
+## Agents on a phone: what each one is on
+
+On a phone, the Agents page now shows what each agent is on right beside its name, wrapped so the whole line reads without a sideways scroll. The other columns are still a swipe away. The totals and the cost note fold into one line, one tap to open, so the page opens on the agents.
+
+## Research tools come with your Hive
+
+Agents now have `research`: it searches many engines at once, reads pages through a browser or an archive copy when a plain request gets no text, digs through results round by round, and checks each claim against a page it saved, so a list says which rows are backed and stops short rather than padding. It also does source analysis and forecasts with backtests. It needs no API key, uses the network only when an agent runs it, and `hive module remove research` keeps it out.
+
+## Agents: the On column names the run
+
+An agent that hasn't said what it's on no longer shows its brief's instructions in the On column: it now reads "Keeper round (periodic)" or "On a phone call", with the full text in the tooltip. An agent woken by another agent's post, or by a short question from you that names no work ("what is this about"), shows its conversation's status there instead of that post. On the Work page, Other projects has its space under the last card.
+
+## Calls: you can hear the agent again
+
+A change to the call's speed slider left the agent's voice silent in the browser, though the hold music played and the agent could hear you. The voice is back, keeps its pitch at any speed, and falls back to another way of playing if a browser refuses the first, so a call no longer goes quiet.
+
+## Flow: the work as a live timeline
+
+Flow, beside Work under Chat, draws the last hours of every project as lanes: one bar per agent's run, a diamond where an agent handed off, a tick where a result or an ask landed, a green line at now with what each project does next. It is built from what the Hive already writes, so agents have nothing new to do. Zoom from two hours to a day; a lane opens the project's Work card, a bar opens the agent.
+
+## Agents say what they are on
+
+`hive me "..."` lets an agent set one dated line on what it is broadly on. The Agents table shows it as an **On** column, the Now page and the agent's own page lead with it, so you can find the agent already on the thing you want and message it instead of starting another, or see when one has drifted from what you asked.
+
+## Codex runs can't reach blocked GitHub orgs
+
+A Codex agent now gets the same check as a Claude agent before a shell command or web fetch, so an org your Hive blocks stays blocked when work falls back to Codex.
+
 ## The work, by project, on one page
 
 A new **Work** page under Chat (and **By project** on Chat's home) shows every project with your focuses first: what it did today, where it stands, what comes next on its ladder and what it needs from you. Paused projects sit in a fold at the end. Conversations and agent names are a click down, so you can follow the work without following threads. Nothing changes for the agents: the page is read from what they already post.

@@ -20,6 +20,7 @@ const hasTab = id => !!document.querySelector(tabSel(id));   // there, if not on
 const toBar = id => () => { if (inThread() && !q(tabSel(id))) go("comms"); };   // a step that says to click a tab: a phone hides its bottom bar inside a conversation, so step back out to the list
 const tabWhere = () => (q(".mn-bar") ? "at the bottom" : "at the top");   // on a phone the tabs are in the bottom bar
 const moreBtn = () => q(".more > button") || q(".mn-bar button.mn-t");   // on a phone More is in the bottom bar
+const workRing = () => (here() === "flow" ? q('a[href="#flow"]') : null) || q('a[href="#work"]');   // on Flow the step is about the page under them: ring its link in the row, not Work's at the foot of a Chat list that isn't there
 const mine = () => (S.posts || []).filter(p => p.from === "person").length;
 const threads = () => (S.threads ? S.threads.size : 0);
 let sentFrom = 0, outFrom = 0;
@@ -28,7 +29,7 @@ let sentFrom = 0, outFrom = 0;
 const FULL_STEPS = [
   { title: "A quick look around", text: "A few minutes, one step at a time. This window says what to click and waits for you. You can drag it, and leave whenever you like." },
   { title: "This is where you talk to the Hive", text: () => `Click Chat ${tabWhere()}.`, ring: tab("comms"), done: () => here() === "comms", skip: () => here() === "comms" },
-  { title: "The work, by project", text: "Work, next to it, is every project on one page: what it did today, where it stands, what comes next and what it needs from you. Conversations and agents are a click down.", ring: () => q('a[href="#work"]'), skip: () => !q('a[href="#work"]') },
+  { title: "The work, by project", text: () => (here() === "flow" ? "This is Flow: the same work as a live timeline, a lane per project, who is on it, and the hand-offs. Work, in the row beside it, is every project on one page: what it did today, where it stands, what comes next and what it needs from you." : "Work, next to it, is every project on one page: what it did today, where it stands, what comes next and what it needs from you. Conversations and agents are a click down. Flow, beside it, is the same work as a live timeline: a lane per project, who is on it, and the hand-offs."), ring: workRing, skip: () => !workRing() },
   { title: "Start a job", text: () => `${q(HOME) ? "Type" : "Click New conversation, then type"} what you want done, the way you'd tell a person, and press Start. An agent starts on it and answers here. This is a real job and uses your Claude limits, so skip it if you're not ready.`, ring: () => q(HOME) || q(".cm-newbtn"), done: () => mine() > sentFrom || OUT.length > outFrom || inThread(), enter: () => { sentFrom = mine(); outFrom = OUT.length; if (parse().arg) go("comms"); }, skip: () => !can("post") },
   { title: "Open a conversation", text: "Each job is one conversation, and they're all listed here. Click one.", ring: () => q(".cm-tl a.lr-in"), done: inThread, enter: () => { if (here() === "comms" && parse().arg) go("comms"); }, skip: () => inThread() || !threads() },
   { title: "Answers land here", text: "Agents write back in this conversation as they go. You can close the app: the work carries on, and it's all here when you come back.", ring: () => q(".cm-msgs"), skip: () => !inThread() },

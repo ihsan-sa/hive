@@ -129,6 +129,11 @@ fi
 # The web app is the bundled dash. It's copied fresh, so rerunning this after a pull updates it; the secret stays.
 rm -rf "$HOME/modules/dash" "$HOME/modules/report" "$HOME/modules/providers"
 for m in dash report providers; do "$CORE/hive" module add "$m" >/dev/null; done
+# The research tools come with a Hive, once: someone who removes them keeps them removed, and a failure here doesn't stop the install. They use the network only when an agent runs them.
+if [ ! -e "$HOME/.hive-research-added" ]; then
+  if [ -d "$HOME/modules/research" ] || "$CORE/hive" module add research >/dev/null; then touch "$HOME/.hive-research-added"
+  else echo "NOTE: the research module didn't install. Try again with: hive module add research."; fi
+fi
 # A first install on a server gets the server module. It holds no root, opens nothing and starts nothing until someone asks. HIVE_SERVER=0 or 1 overrides the guess.
 if [ ! -e "$HOME/.hive-installed" ] && [ ! -e "$HOME/.hive-account" ] && [ ! -d "$HOME/modules/server" ] && [ "$(uname -s)" = Linux ] && ! grep -qi microsoft /proc/version 2>/dev/null \
   && { [ "${HIVE_SERVER:-}" = 1 ] || { [ "${HIVE_SERVER:-}" != 0 ] && [ ! -e /etc/systemd/system/display-manager.service ]; }; }; then

@@ -107,15 +107,74 @@ def newest_status(thread):
         if r.get("thread") == thread: best = r
     return best
 
-def find_next(r):
-    """The step a run ended on, from its newest own post and newest own status line in its thread: newest first, a Next line counts and a stop reason
-    wins. A plain newest post does not cancel a Next in the bar; an older post of the run is not read, since the newer one overtook it. {line, post, since}, or None."""
+def own_said(r):
+    """(all the thread's posts, the run's own posts, its newest post and newest status line: newest first as (time, order, kind, post or status))."""
     name, thread, since = str(r.get("name", "")).lower(), r.get("thread"), epoch(r.get("at", "")) or 0
     all_posts = thread_posts(thread)
     posts = [p for p in all_posts if str(p.get("from", "")).lower() == name and (epoch(p.get("at")) or 0) >= since]
     said = [(epoch(p.get("at")) or 0, 0, "post", p) for p in posts[-1:]]
     said += [(s["at"], 1, "status", s) for s in [s for s in jsonl(STATUS) if s.get("thread") == thread and str(s.get("from", "")).lower() == name and isinstance(s.get("at"), (int, float)) and s["at"] >= since][-1:]]
-    for at, _, kind, x in sorted(said, key=lambda y: y[:2], reverse=True):
+    return all_posts, posts, sorted(said, key=lambda y: y[:2], reverse=True)
+
+def open_rung(thread):
+    """The rung the thread's ladder would hand out next, or None: none open, or parked."""
+    for row in G.goals()["rows"]:
+        if row.get("thread") == thread and row.get("rung") and not row.get("parked"): return row["rung"]
+    return None
+
+def carry_on(r):
+    """A run that ended `Done:` or on no line at all, with a rung still open on its ladder: the next rung is the step, so the agent finishing it keeps the thread going rather than
+    leaving it for a floor start (the person, 2026-11-07, k1303). `Blocked:`, `Needs the person:`, `Waiting:` and `Told to stop:` stay stops; a run that posted nothing isn't carried on."""
+    _, posts, said = own_said(r)
+    for _, _, kind, x in said:
+        got = post_line(x) if kind == "post" else status_line(x)
+        if not got: continue
+        if not got[1].lower().startswith("done:"): return None
+        break
+    rung = open_rung(r.get("thread")) if posts else None
+    return {"line": f"Next: {rung[:400]}", "post": posts[-1]["id"], "since": epoch(posts[-1].get("at")) or 0} if rung else None
+
+WAIT_CLOCK = re.compile(r"\b(\d{1,2}):(\d{2})\s*(UTC|Z\b)?", re.I)
+WAIT_IN = re.compile(r"(?:\bin\s+|~\s*|\babout\s+)(\d+)\s*(h|hr|hrs|hours?|m|mins?|minutes?)\b", re.I)
+def wait_until(line, base):
+    """The time a `Waiting:` line names, as seconds, or None. A clock time is the next one after base (the host clock unless it says UTC)."""
+    if (m := WAIT_IN.search(line)): return base + int(m[1]) * (3600 if m[2][0].lower() == "h" else 60)
+    if not (m := WAIT_CLOCK.search(line)) or int(m[1]) > 23 or int(m[2]) > 59: return None
+    zone = dt.timezone.utc if m[3] else None
+    when = dt.datetime.fromtimestamp(base, zone).replace(hour=int(m[1]), minute=int(m[2]), second=0, microsecond=0)
+    return (when if when.timestamp() > base else when + dt.timedelta(days=1)).timestamp()
+
+def waits(threads, running, t, cap=7200):
+    """{thread: seconds} until which a `Waiting:` holds the floor off it. Only a wait that says who or when holds: a running or queued agent named in the line, or a time; a bare one
+    ("for the next keeper round"), or one on an agent that isn't coming, carries on now. Newest of the last agent post and the status bar decides; no wait outlasts cap after the last agent post, however often the bar is rewritten."""
+    out, last = {}, {}
+    try:
+        with BOARD.open("rb") as fh:
+            fh.seek(max(0, os.fstat(fh.fileno()).st_size - TAIL)); data = fh.read()
+    except OSError: data = b""
+    for ln in data.decode(errors="replace").splitlines():
+        try: p = json.loads(ln)
+        except ValueError: continue
+        th = isinstance(p, dict) and (p.get("thread") or p.get("id"))
+        if th in threads and AGENT.match(str(p.get("from", ""))): last[th] = p
+    bars = {s.get("thread"): s for s in jsonl(STATUS) if s.get("thread") in threads and isinstance(s.get("at"), (int, float))}
+    for th in threads:
+        p, bar = last.get(th), bars.get(th)
+        at = epoch(p.get("at")) or 0 if p else 0
+        text = bar["text"] if bar and bar["at"] > at else p.get("text", "") if p else ""
+        lines = [clean(l) for l in str(text).splitlines() if clean(l).lower().startswith("waiting:")]
+        if not lines: continue
+        base = at or bar["at"]
+        names = set(re.findall(r"\b[a-z][0-9a-f]{4,}\b", lines[-1]))
+        if names & set(running): out[th] = base + cap
+        elif (when := wait_until(lines[-1], base)): out[th] = min(when, base + cap)
+    return out
+
+def find_next(r):
+    """The step a run ended on, from its newest own post and newest own status line in its thread: newest first, a Next line counts and a stop reason
+    wins. A plain newest post does not cancel a Next in the bar; an older post of the run is not read, since the newer one overtook it. {line, post, since}, or None."""
+    all_posts, posts, said = own_said(r)
+    for at, _, kind, x in said:
         got = post_line(x) if kind == "post" else status_line(x)
         if not got: continue
         if got[0] == "stop": return None
@@ -195,9 +254,9 @@ def claim(path):
     except FileExistsError: return False
 
 def on_run_end(r, c, st, alive):
-    """A run ended cleanly: write its intent if it ended on a Next line in a thread that takes part. One run gives one at most, however many times it said so."""
+    """A run ended cleanly: write its intent if it ended on a Next line in a thread that takes part, or `Done:` or no line with a rung still open (carry_on). One run gives one at most, however many times it said so."""
     if not enabled(r.get("thread")): return None
-    got = find_next(r)
+    got = find_next(r) or carry_on(r)
     if not got or (DIR / "done" / safe(got["post"])).exists(): return None
     if not claim(DIR / "done" / f"run-{safe(r.get('name'))}-{safe(r.get('at'))}"): return None
     chain, hop = chain_of(r, got["post"])

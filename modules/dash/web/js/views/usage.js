@@ -212,7 +212,9 @@ function appHead(U, t, R, pick, d1) {
 
 function appAccounts(U, t, R) {
   const us = U.logins || [];
-  const cell = (g, stop) => g ? h("div", { class: "gauge-c" }, meter({ value: g.pct || 0, stop, label: g.label }), h("span", { class: "meta" }, g.value)) : h("span", { class: "meta" }, "–");
+  // Each bar carries its reset time beneath it (the person, 2026-11-06: "show reset times").
+  const cell = (g, stop) => g ? h("div", null, h("div", { class: "gauge-c" }, meter({ value: g.pct || 0, stop, label: g.label }), h("span", { class: "meta" }, g.value)),
+    (g.lines || []).find(x => typeof x === "string") ? h("div", { class: "gauge-rs meta" }, g.lines.find(x => typeof x === "string")) : null) : h("span", { class: "meta" }, "–");
   const rows = us.map(l => loginRow(U, l, t, Math.min(R.span, 7 * DAY)));
   const st = r => r.state.key === "inuse" ? tag("good", "in use") : r.state.key === "paused" ? tag("quiet", "paused") : r.state.key === "out" ? tag("bad", "signed out") : tag("warn", "at its stop line");
   const wStop = l => (l.stop && l.stop.weekly) ?? U.stop_pct;

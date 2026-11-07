@@ -1,4 +1,4 @@
-// Easter egg: click the logo and a bee flies a looping path around it for a few seconds. Display only; the click still works.
+// Easter egg: click the logo three times quickly and a bee flies a looping path around it for a few seconds. Display only; the click still works.
 export function beeAround(a) {
   const el = a.querySelector(".brand-logo") || a, r = el.getBoundingClientRect();
   if (!r.width) return;

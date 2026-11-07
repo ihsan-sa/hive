@@ -48,6 +48,6 @@
 .agp .ph .defs{margin-top:var(--s2)}
 .wf .wf-f{cursor:pointer}.wf .wf-f:hover,.wf .wf-f[aria-expanded=true]{background:var(--hover,rgba(127,127,127,.12))}
 .wf .wf-diff{display:block;border-bottom:1px solid var(--line)}
-@media (pointer:coarse),(max-width:640px){.wf li:not(.wf-diff){min-height:44px;align-items:center}.wf li>a{display:flex;align-items:center;min-height:44px}}   /* a finger-sized file row and posted-file link on a phone */
+@media (pointer:coarse),(max-width:640px){.wf li:not(.wf-diff){min-height:44px;align-items:center}.wf li>a{display:flex;align-items:center;min-height:44px;min-width:24px}}   /* a finger-sized file row and posted-file link on a phone */
 .diff{margin:4px 0;padding:6px;max-height:420px;overflow:auto;font-family:var(--mono);font-size:var(--fs-meta);line-height:1.4;background:var(--sunken);border-radius:4px;white-space:pre}
 .diff .da{color:var(--good)}.diff .dd{color:var(--bad,#c62828)}.diff .dk{color:var(--info,#0b6bcb)}.diff .dh{opacity:.6}

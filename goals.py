@@ -7,7 +7,7 @@ directions in the asks register (kind direction), the goals.md of each project, 
 and worked toward (post 11040210d8cf). A goal with no thread post for days and nobody running in it is listed as idle, oldest
 first, for the keeper to start someone on, or to say in the thread why it waits.
 
-Ladders (2026-11-06, thread focus-ladders): a `## Ladder` section in a goals.md lists next steps that need nobody's sign-off, each with a
+Ladders (2026-11-06, thread focus-ladders): a `## Ladder` section in a goals.md (or a `## <Topic> ladder` section naming its own thread, one goal each) lists next steps that need nobody's sign-off, each with a
 `check:` that says when it is done. HW projects keep moving because their gates define the next step; focuses stopped because a fresh agent
 with a thin brief re-read "nothing left" and repeated it. `hive goals --brief THREAD` hands a round its rung, and `hive goals --rounds` counts how
 many rounds did work rather than report a wait.
@@ -26,6 +26,7 @@ IDLE_D = 2.0   # a project goal with no agent post in its thread for this long a
 FOCUS_IDLE_H = 2.0   # a focus of the person's goes idle much sooner: it is their current work, and a focus is never held for an idle owner (2026-11-05, post 1104224972e6)
 
 LADDER = re.compile(r"^##\s+Ladder\b(.*)$", re.M)
+LADDER_ANY = re.compile(r"^##\s+(.*\bladder\b.*)$", re.M | re.I)   # a topic ladder of its own: `## Reflection ladder (thread meta-reflect)` moves at a focus's pace in that thread
 RUNG = re.compile(r"^\s*-\s+\[([ x!])\]\s+(.+)$", re.M)
 AFTER = re.compile(r"\bafter:(\d{4}-\d{2}-\d{2})\b")
 PARKED = re.compile(r"^Parked until (\d{4}-\d{2}-\d{2}):\s*(.+)$", re.M)
@@ -39,17 +40,32 @@ def now(): return dt.datetime.now(dt.timezone.utc)
 
 def ladder(txt, t=None):
     """The `## Ladder` section of a goals.md, or None. Rungs are `- [ ] what. check: how to tell`; `[x]` done, `[!]` blocked, `after:YYYY-MM-DD` not before that day."""
-    t = t or now(); m = LADDER.search(txt)
-    if not m: return None
+    m = LADDER.search(txt)
+    return section(txt, m, m.group(1), t) if m else None
+
+def ladders(txt, t=None):
+    """Every other `## <Topic> ladder ...` section that names a thread (in backticks, after the word thread, or the first hyphenated name in the heading):
+    a topic ladder of a project with several, like hive-meta's. Each is a goal of its own, at a focus's pace in its thread (2026-11-07: meta-reflect sat
+    2.4 h with open rungs because only `## Ladder` was read). The plain `## Ladder` is `ladder()`, not here."""
+    out = []
+    for m in LADDER_ANY.finditer(txt):
+        if LADDER.match(m.group(0)): continue
+        lad = section(txt, m, m.group(1), t)
+        if lad["thread"]: lad["section"] = re.split(r"[(:]", m.group(1), maxsplit=1)[0].strip(); out.append(lad)
+    return out
+
+def section(txt, m, heading, t=None):
+    t = t or now()
     body = txt[m.end():]; end = re.search(r"^#{1,2}\s", body, re.M); body = body[:end.start()] if end else body
-    th = re.search(r"`([^`]+)`", m.group(1)); rungs = []; today = t.date().isoformat()
+    th = re.search(r"`([^`]+)`", heading) or THREAD.search(heading) or re.search(r"(?<![\w-])([a-z][a-z0-9]*-[a-z0-9-]+)(?![\w-])", heading)
+    rungs = []; today = t.date().isoformat()
     for state, text in RUNG.findall(body):
         a = AFTER.search(text)
         rungs.append({"state": state, "text": text.strip(), "after": a.group(1) if a else None, "checked": "check:" in text})
     nxt = next((r for r in rungs if r["state"] == " " and r["checked"] and (not r["after"] or r["after"] <= today)), None)
     p = PARKED.search(body); parked = None
     if p and today < p.group(1) <= (t.date() + dt.timedelta(days=PARK_MAX_D)).isoformat(): parked = {"until": p.group(1), "why": p.group(2).strip()}
-    return {"thread": th.group(1) if th else None, "rungs": rungs, "next": nxt, "parked": parked, "done": sum(r["state"] == "x" for r in rungs),
+    return {"thread": th.group(1).lower() if th else None, "rungs": rungs, "next": nxt, "parked": parked, "done": sum(r["state"] == "x" for r in rungs),
             "left": sum(r["state"] == " " for r in rungs), "no_check": sum(r["state"] == " " and not r["checked"] for r in rungs)}
 
 def rounds(board, threads, since):
@@ -102,7 +118,7 @@ def project_goals():
         m = MEASURE.search(txt)
         measure = re.sub(r"^\W*(measure|metric)\W*", "", m.group(0).strip(), flags=re.I)[:160] if m else None
         out.append({"project": g.parent.name, "goal": head[:120], "measure": measure, "threads": [t.lower() for t in THREAD.findall(txt) if t.lower() != "thread"][:8],
-                    "edited": dt.datetime.fromtimestamp(g.stat().st_mtime, dt.timezone.utc).isoformat(timespec="seconds"), "ladder": ladder(txt), "path": str(g)})
+                    "edited": dt.datetime.fromtimestamp(g.stat().st_mtime, dt.timezone.utc).isoformat(timespec="seconds"), "ladder": ladder(txt), "ladders": ladders(txt), "path": str(g)})
     return out
 
 def thread_state(board, runs, t):
@@ -147,6 +163,9 @@ def goals(t=None):
         rows.append(with_ladder(row, g))
     taken = {g["project"] for g in claimed.values()}
     for g in projects:
+        for lad in g.get("ladders") or []:   # a topic ladder of its own (hive-meta's Reflection ladder, thread meta-reflect): a goal at a focus's pace in that thread
+            if lad["thread"] in fth or any(r["thread"] == lad["thread"] for r in rows): continue
+            s = dict(st.get(lad["thread"], {})); rows.append(with_ladder({"kind": "project", "name": f"{g['project']}: {lad['section']}", "goal": g["goal"], "thread": lad["thread"], "measure": g["measure"], "edited_d": days(g["edited"], t), **state_row(s, lad["thread"], open_asks, t, idle_d=FOCUS_IDLE_H / 24)}, {"ladder": lad, "path": g["path"]}))
         lad = g["ladder"] if g["project"] not in taken else None   # a project with a ladder no focus takes moves at a focus's pace, in the thread its heading names
         if lad and lad["thread"]:
             s = dict(st.get(lad["thread"], {})); rows.append(with_ladder({"kind": "project", "name": g["project"], "goal": g["goal"], "thread": lad["thread"], "measure": g["measure"], "edited_d": days(g["edited"], t), **state_row(s, lad["thread"], open_asks, t, idle_d=FOCUS_IDLE_H / 24)}, g)); continue
@@ -163,7 +182,7 @@ def with_ladder(row, g):
     lad = g["ladder"] if g else None
     row["ladder"] = bool(lad); row["goals_path"] = g["path"] if g else None
     if lad:
-        row.update(rung=lad["next"]["text"] if lad["next"] else None, rungs_left=lad["left"], rungs_done=lad["done"], rungs_no_check=lad["no_check"], parked=lad["parked"])
+        row.update(rung=lad["next"]["text"] if lad["next"] else None, rungs_left=lad["left"], rungs_done=lad["done"], rungs_no_check=lad["no_check"], parked=lad["parked"], **({"section": lad["section"]} if lad.get("section") else {}))
         if lad["parked"]: row["idle"] = False
     return row
 
@@ -180,7 +199,7 @@ def post_model_args(text, model):
 def brief(row):
     """The brief a keeper round posts for one focus. Every clause is here because a thin hand-written brief produced the 'nothing changed' rounds."""
     to = row["last_worker"] if row.get("last_worker") and resume_arm(row.get("thread")) else "new"
-    head = f"@{to} Keeper round on {row['name']}. The ladder is the `## Ladder` section of {row.get('goals_path') or 'this focus project goals.md (create it, one line a rung)'}: read that whole file, and obey any notes in the section.\n\n"
+    head = f"@{to} Keeper round on {row['name']}. The ladder is the `## {row.get('section') or 'Ladder'}` section of {row.get('goals_path') or 'this focus project goals.md (create it, one line a rung)'}: read that whole file, and obey any notes in the section.\n\n"
     rung = f"**Your rung:** {row['rung']}\n\nDo this rung. Land real work, then run its check." if row.get("rung") else "**The ladder has no rung you can take.** Your work this round is to write the next 3 to 5 rungs from the measure in that file, then do the first one."
     return head + rung + """
 
@@ -191,7 +210,7 @@ Rules for the round:
 - Rung truly needs the person or is blocked: change it to `- [!]` with why (add a `For you:` line in your post if they must act), then take the next rung in this same run. A `[!]` costs you nothing and is not your result.
 - Before you stop, leave at least 2 open rungs, each with a `check:`. Add new ones from the measure; no busywork: each must be something a person who cares about that number would want done.
 - Only if you honestly cannot name one rung of real work: add a line `Parked until YYYY-MM-DD: why` to the section (at most 3 days out, later dates are ignored) and say so. The keeper skips it until then.
-- Your last post says: the rung, the check's output, the measure now, and ends with the line `Next: <the next rung, with its check>` (the starter carries it on), or a `Blocked:`, `Needs the person:` or `Waiting:` line if nothing is left you can do. If the work turns hard, `hive model opus "why"`."""
+- Your last post says: the rung, the check's output, the measure now, and ends with the line `Next: <the next rung, with its check>` (the starter carries it on), or a `Blocked:` or `Needs the person:` line if nothing is left you can do, or `Waiting:` naming who or when (`Waiting: a1b2c's review`, `Waiting: the sim, about 04:20 UTC`). The next agent comes within minutes unless your wait names a running agent or a time. If the work turns hard, `hive model opus "why"`."""
 
 def state_row(s, threads, open_asks, t, idle_d=IDLE_D):
     threads = [threads] if isinstance(threads, str) else list(threads)

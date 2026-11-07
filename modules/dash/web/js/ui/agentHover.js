@@ -1,9 +1,10 @@
 // The agent hover card: rest the pointer on an agent's name or avatar (a.ref[data-kind=agent], a.av) and a small card
-// offers Call (a voice call with that agent itself: it pauses its work and answers) and DM (the composer, addressed to it).
+// shows its model and cost so far, and offers Call (a voice call with that agent itself: it pauses its work and answers) and DM (the composer, addressed to it).
 // One delegated listener for the whole app; touch screens get the same two buttons on the agent page.
 import { h } from "../core/dom.js";
 import { S, can } from "../core/store.js";
-import { agentStatus, agentThread, isAgent, isRunning, isWarden } from "../core/model.js";
+import { agentCard, agentCost, agentStatus, agentThread, isAgent, isRunning, isWarden } from "../core/model.js";
+import { money } from "../core/format.js";
 import { go } from "../core/router.js";
 import { status } from "../core/status.js";
 import { button, statusDot } from "./kit.js";
@@ -33,15 +34,16 @@ export function dm(n) {
 
 function show(a) {
   const n = a.dataset.name;
-  if (!isAgent(n) || isWarden(n)) return;
-  const acts = agentActions(n);
-  if (!acts.length) return;
+  if (!isAgent(n)) return;
+  const acts = agentActions(n), model = (agentCard(n)[0] || {}).short, cost = agentCost(n);
+  if (!acts.length && !model && cost == null) return;
   hide(); owner = a;
   const s = agentStatus(n);
   card = h("div", { class: "ahc", role: "dialog", "aria-label": `${n}: call or message` },
     h("div", { class: "ahc-h" }, s.key !== "none" ? statusDot(s.key, { live: isRunning(n) }) : null, h("b", null, n),
       s.label ? h("span", { class: "meta" }, s.key === "ended" ? s.label : status(s.key).label.toLowerCase()) : null),
-    h("div", { class: "ahc-b" }, acts));
+    model || cost != null ? h("div", { class: "ahc-m meta" }, [model, cost != null ? money(cost) + " so far" : null].filter(Boolean).join(" · ")) : null,
+    acts.length ? h("div", { class: "ahc-b" }, acts) : null);
   card.addEventListener("pointerenter", () => clearTimeout(closeT)); card.addEventListener("pointerleave", later);
   document.body.appendChild(card);
   const r = a.getBoundingClientRect(), w = card.offsetWidth, hgt = card.offsetHeight;
@@ -56,7 +58,7 @@ export function agentHoverInit() {
   document.addEventListener("pointerover", e => {
     if (e.pointerType !== "mouse") return;   // touch and pen: the agent page has the buttons
     const a = e.target.closest && e.target.closest(SEL);
-    if (!a) return;
+    if (!a || (a.matches("a.av") && a.closest(".avs-w"))) return;   // a stack's avatars open its own list (with model and cost); a card on top would steal the hover and close it
     if (a === owner) { clearTimeout(closeT); return; }
     clearTimeout(openT); openT = setTimeout(() => { if (a.isConnected && a.matches(":hover")) show(a); }, 450);
   });

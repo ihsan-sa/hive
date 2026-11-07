@@ -1,7 +1,7 @@
 // Now: what each agent is doing. Template: overview.
 import { h } from "../core/dom.js";
 import { S, SYS } from "../core/store.js";
-import { threadTitle, agentState, isRunning, hiveStats, tierHours, agentThread, spendSince, sEnd, hasTiers, activeUse } from "../core/model.js";
+import { threadTitle, agentOn, agentState, isRunning, hiveStats, tierHours, agentThread, spendSince, sEnd, hasTiers, activeUse } from "../core/model.js";
 import { now, ago, dur, clock, money, pct, plural, firstSentence, short, HOUR, DAY, MIN } from "../core/format.js";
 import { TIERS, status } from "../core/status.js";
 import { threadHref, agentHref, href } from "../core/router.js";
@@ -24,15 +24,17 @@ const TONE = { working: "good", queue: "warn", stuck: "bad", quiet: "quiet" };
 function agentRows(run, states, t, waits) {
   return h("div", { class: "tbl-w" }, h("table", { class: "tbl nowtbl" },
     h("caption", { class: "vh" }, "Running agents"),
-    h("thead", null, h("tr", null, ["Agent", "Conversation", "State", "Doing now"].map(x => h("th", { scope: "col" }, x)), h("th", { class: "num", scope: "col" }, "Up"), h("th", null, h("span", { class: "vh" }, "Actions")))),
+    h("thead", null, h("tr", null, ["Agent", "Conversation", "State", "Model", "Doing now"].map(x => h("th", { scope: "col" }, x)), h("th", { class: "num", scope: "col" }, "Up"), h("th", null, h("span", { class: "vh" }, "Actions")))),
     h("tbody", null, run.map(a => {
       const st = states.get(a.name), S_ = status(st.key), task = S.byId[a.post], model = (cardRows(a.name)[0] || {}).short, wait = waits.has(a.thread);
+      const on = agentOn(a.name), me = on && on.said ? on : null;   // what it says it is on (`hive me`), over what its last tool call shows
       const asked = task ? (a.from ? (a.from === "person" && S.app.app ? "you" : a.from) + ": " : "") + firstSentence(displayText(task)) : null;
-      return h("tr", { "data-key": a.name, "data-tone": S_.tone, "data-attn": st.key === "stuck" ? "" : null, title: model ? "Runs on " + model : null },
+      return h("tr", { "data-key": a.name, "data-tone": S_.tone, "data-attn": st.key === "stuck" ? "" : null },
         h("td", { "data-label": "Agent", class: "nt-a" }, agentRef(a.name)),
         h("td", { "data-label": "Conversation", class: "nt-th" }, threadRef(a.thread)),
         h("td", { "data-label": "State", class: "nt-st", title: S_.hint }, wait ? tag("info", "waits on you") : tag(TONE[st.key], st.text)),
-        h("td", { "data-label": "Doing now", class: "nt-do" }, a.doing ? h("div", { class: "nt-now", title: a.doing }, a.doing) : null, asked ? h("div", { class: a.doing ? "nt-ask meta" : "nt-now", title: task.text }, "Asked by " + asked) : a.doing ? null : h("span", { class: "muted" }, "–")),
+        h("td", { "data-label": "Model", class: "nt-md meta" }, model || "–"),
+        h("td", { "data-label": "Doing now", class: "nt-do" }, me ? h("div", { class: "nt-now nt-on", title: `Its own words, said ${ago(me.at)}${me.before ? ", before this run" : ""}` }, h("span", { class: "meta" }, me.before ? "was on " : "on "), me.text, h("span", { class: "meta" }, " · " + ago(me.at).replace(/ ago$/, ""))) : null, a.doing ? h("div", { class: me ? "nt-ask meta" : "nt-now", title: a.doing }, a.doing) : null, asked ? h("div", { class: a.doing ? "nt-ask meta" : "nt-now", title: task.text }, "Asked by " + asked) : a.doing ? null : h("span", { class: "muted" }, "–")),
         h("td", { "data-label": "Up", class: "num meta" }, dur(t - a.since * 1e3)),
         h("td", { "data-label": "", class: "nt-x" }, a.alive ? killButton(a.name) : null));
     }))));
@@ -42,8 +44,8 @@ function agentRows(run, states, t, waits) {
 function needsYou(run, states, waiting, L) {
   const rows = [];
   for (const a of run) if (states.get(a.name).key === "stuck") rows.push({ sev: 0, tone: "bad", head: a.name, text: states.get(a.name).text, href: agentHref(a.name), act: "Open" });
-  for (const l of (S.usage && S.usage.logins) || []) if (l.paused) rows.push({ sev: 1, tone: "warn", head: (l.name || "A login") + " is paused", text: "new agents won't start on it", href: href("usage"), act: "Usage" });
-  if (L.limit_until) rows.push({ sev: 1, tone: "warn", head: "Starts held for the usage limit", text: "until " + clock(L.limit_until * 1e3), href: href("usage"), act: "Usage" });
+  for (const l of (S.usage && S.usage.logins) || []) if (l.paused) rows.push({ sev: 1, tone: "warn", head: (l.name || "A login") + " is paused", text: "new agents won't start on it", href: href("usage"), act: "Open Usage" });
+  if (L.limit_until) rows.push({ sev: 1, tone: "warn", head: "Starts held for the usage limit", text: "until " + clock(L.limit_until * 1e3), href: href("usage"), act: "Open Usage" });
   for (const a of run) { const j = a.jobs || {}; if (j.queued && !j.running && j.waited > 3600) rows.push({ sev: 2, tone: "warn", head: a.name, text: `waiting ${dur(j.waited * 1e3)} for a job slot`, href: agentHref(a.name), act: "Open" }); }
   if (waiting.length) rows.push({ sev: 3, tone: "quiet", head: plural(waiting.length, "post") + " waiting", text: "for an agent to start: " + waiting.slice(0, 4).map(p => p.name).join(", ") + (waiting.length > 4 ? "…" : ""), href: href("comms"), act: "Chat" });
   rows.sort((a, b) => a.sev - b.sev);
@@ -53,27 +55,34 @@ function needsYou(run, states, waiting, L) {
 }
 
 /** Developer Now, the two tables: running (newest first) and waiting for the job queue (longest first). */
-function devTables(run, states, t) {
-  const doing = a => { const task = S.byId[a.post]; return a.doing || (task ? "Asked by " + firstSentence(displayText(task)) : "–"); };
-  const title = a => { const task = S.byId[a.post]; return [a.doing, task ? "Asked by " + (a.from || "") + ": " + firstSentence(displayText(task)) : null].filter(Boolean).join("\n") || null; };
-  const working = run.filter(a => states.get(a.name).key !== "queue").sort((a, b) => (b.since || 0) - (a.since || 0) || String(a.name).localeCompare(String(b.name)));
-  const queued = run.filter(a => states.get(a.name).key === "queue").sort((a, b) => ((b.jobs || {}).waited || 0) - ((a.jobs || {}).waited || 0) || String(a.name).localeCompare(String(b.name)));
+const MORE = { work: false, queue: false };
+function devTables(run, states, t, ctx) {
+  const own = a => { const on = agentOn(a.name); return on && on.said ? on : null; };
+  const doing = a => { const task = S.byId[a.post], me = own(a); return (me && me.text) || a.doing || (task ? "Asked by " + firstSentence(displayText(task)) : "–"); };
+  const title = a => { const task = S.byId[a.post], me = own(a); return [me ? `On: ${me.text} (said ${ago(me.at)})` : null, a.doing, task ? "Asked by " + (a.from || "") + ": " + firstSentence(displayText(task)) : null].filter(Boolean).join("\n") || null; };
+  const wl = (a, b) => ((b.jobs || {}).waited || 0) - ((a.jobs || {}).waited || 0);
+  const working = run.filter(a => states.get(a.name).key !== "queue").sort((a, b) => (a.since || 0) - (b.since || 0) || String(a.name).localeCompare(String(b.name)));
+  const queued = run.filter(a => states.get(a.name).key === "queue").sort((a, b) => wl(a, b) || String(a.name).localeCompare(String(b.name)));
   const w = h("div", { class: "tbl-w" }, h("table", { class: "tbl nowtbl" }, h("caption", { class: "vh" }, "Working"),
     h("thead", null, h("tr", null, ["Agent", "Thread", "Doing now"].map(x => h("th", { scope: "col" }, x)), h("th", { class: "num", scope: "col" }, "Up"), h("th", null, h("span", { class: "vh" }, "Actions")))),
-    h("tbody", null, working.map(a => h("tr", { "data-key": a.name },
+    h("tbody", null, (MORE.work ? working : working.slice(0, 7)).map(a => h("tr", { "data-key": a.name },
       h("td", { class: "nt-a", "data-label": "Agent" }, agentRef(a.name)), h("td", { class: "nt-th", "data-label": "Thread" }, threadRef(a.thread)),
       h("td", { class: "nt-do", "data-label": "Doing now", title: title(a) }, h("div", { class: "nt-now" }, doing(a))),
       h("td", { class: "num meta", "data-label": "Up" }, dur(t - a.since * 1e3)),
       h("td", { class: "nt-x", "data-label": "" }, a.alive ? killButton(a.name) : null))))));
+  const band = a => { const m = ((a.jobs || {}).waited || 0) / 60; return m > 60 ? "long" : m >= 20 ? "mid" : "short"; };
+  const bands = ["long", "mid", "short"].map(k => ({ k, n: queued.filter(a => band(a) === k).length })), BAND = { long: "over 1 h, also in Needs you", mid: "20 to 60 min", short: "under 20 min" };
+  const bar = h("div", { class: "nd-queue-bar", role: "img", "aria-label": bands.map(x => `${x.n} ${BAND[x.k]}`).join(", ") }, bands.filter(x => x.n).map(x => h("i", { "data-band": x.k, style: `flex:${x.n}`, title: `${x.n}: ${BAND[x.k]}` })));
+  const legend = h("div", { class: "meta nd-queue-key" }, bands.map(x => h("span", { "data-band": x.k }, h("i", { "data-band": x.k }), `${x.n} ${BAND[x.k]}`)));
   const q = h("div", { class: "tbl-w" }, h("table", { class: "tbl nowtbl" }, h("caption", { class: "vh" }, "In the job queue"),
     h("thead", null, h("tr", null, ["Agent", "Thread", "Jobs"].map(x => h("th", { scope: "col" }, x)), h("th", { class: "num", scope: "col" }, "Waited"))),
-    h("tbody", null, queued.map(a => { const j = a.jobs || {}; return h("tr", { "data-key": a.name },
+    h("tbody", null, (MORE.queue ? queued : queued.slice(0, 3)).map(a => { const j = a.jobs || {}; return h("tr", { "data-key": a.name },
       h("td", { class: "nt-a", "data-label": "Agent" }, agentRef(a.name)), h("td", { class: "nt-th", "data-label": "Thread" }, threadRef(a.thread)),
       h("td", { class: "meta", "data-label": "Jobs" }, String(j.queued || 0)),
       h("td", { class: ["num", j.waited > 3600 ? "nt-long" : "meta"], "data-label": "Waited" }, dur((j.waited || 0) * 1e3))); }))));
   return cols(
-    section({ title: "Working", note: `${working.length}: agents running right now`, info: "Agents that are in the middle of a turn." }, working.length ? w : empty("None.")),
-    section({ title: "In the job queue", note: `${queued.length}: heavy jobs waiting their turn` }, queued.length ? q : empty("None.")));
+    section({ title: "Working", note: `${working.length}: agents running right now, longest first`, info: "Agents that are in the middle of a turn." }, working.length ? [w, working.length > 7 && !MORE.work ? h("div", { class: "lr-more" }, button(`Show ${working.length - 7} more`, () => { MORE.work = true; ctx.update(); }, { kind: "quiet", size: "s" })) : null] : empty("None.")),
+    section({ title: "In the job queue", note: `${queued.length}: heavy jobs waiting their turn` }, queued.length ? [bar, legend, q, queued.length > 3 && !MORE.queue ? h("div", { class: "lr-more" }, button(`Show all ${queued.length}`, () => { MORE.queue = true; ctx.update(); }, { kind: "quiet", size: "s" })) : null] : empty("None.")));
 }
 
 /** Addressed to the person, no reply yet, last 3 days: one row per thread. For the TV tile; the page itself leaves this to Chat. */
@@ -122,7 +131,7 @@ function todayCard(t) {
   return section({ title: "Today", note: "last 24 hours" }, h("div", { class: "card now-today" }, stats([
     { label: "Finished", value: String(done), note: plural(done, "run") + " ended cleanly" },
     { label: "Hours of work", value: (ms / HOUR).toFixed(1) + "h", note: "agent time, all agents" },
-    { label: "Week left", value: h("a", { href: href("usage") }, left), note: act ? "of your weekly use" : "not read yet" },
+    { label: "Week left", value: act ? h("a", { href: href("usage") }, left) : left, note: act ? "of your weekly use" : "not read yet" },
   ])));
 }
 
@@ -168,19 +177,14 @@ export default {
 
     const header = pageHeader({
       title: run.length ? `${plural(run.length, "agent")} on ${plural(threads, S.app.app ? "conversation" : "thread")}` : S.app.app ? "No agents are working right now" : "Nobody is running right now",
-      after: run.length ? tally([
-        { n: active, label: "active now", status: "working" },
-        ...(!S.app.app || count("working") > active ? [{ n: count("working") - active, label: "on a running job", status: "working" }] : []),  // the app's install has no queue: don't show its counts at 0
-        ...(!S.app.app || count("queue") ? [{ n: count("queue"), label: "in the job queue", status: "queue" }] : []),
-        { n: count("quiet"), label: "quiet", status: "quiet" },
-        { n: count("stuck"), label: "stuck", status: "stuck" },
-      ]) : null,
+      after: run.length ? h("div", { class: "nd-head" }, h("span", { class: "meta" }, [
+        `${active} active`, count("working") - active > 0 || !S.app.app ? `${count("working") - active} on a job` : null,
+        !S.app.app || count("queue") ? `${count("queue")} queued` : null, `${count("stuck")} stuck`].filter(Boolean).join(" · ")),
+        h("span", { class: "meta nd-head-r" }, [`${plural(lastHour, "post")} in the last hour`, S.usage ? `${money(spendSince(t - DAY))} in 24h` : null].filter(Boolean).join(" · "))) : null,
       meta: [
         L.jobs && (!S.app.app || L.jobs.running || L.jobs.queued) ? `Machine: ${L.jobs.running} jobs running, ${L.jobs.queued} queued` : null,
-        `${plural(lastHour, "post")} in the last hour`,
         queuedPosts.length ? `${queuedPosts.length} waiting to start` : null,
         L.limit_until ? `starts held for the usage limit until ${clock(L.limit_until * 1e3)}` : null,
-        S.usage ? `${money(spendSince(t - DAY))} of work in 24h, at list prices` : null,
       ],
     });
 
@@ -191,6 +195,6 @@ export default {
     const tiers = section({ title: "Where the agent hours went", note: "against your priority list, last 24 hours" },
       share(TIERS.map(x => ({ key: x.key, label: S.app.app ? APP_TIER[x.key] || x.label : x.label, tone: x.tone, value: hrs[x.key], text: `${(hrs[x.key] / HOUR).toFixed(1)}h (${Math.round((100 * hrs[x.key]) / tot)}%)` }))));
 
-    return overview({ header, main: [needsYou(run, states, queuedPosts, L), run.length ? devTables(run, states, t) : null].filter(Boolean), after: [hive, charts, hasTiers() ? tiers : null] });
+    return overview({ header, main: [needsYou(run, states, queuedPosts, L), run.length ? devTables(run, states, t, ctx) : null].filter(Boolean), after: [hive, charts, hasTiers() ? tiers : null] });
   },
 };

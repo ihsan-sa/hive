@@ -25,6 +25,7 @@ def lines(c, pc):
     except (OSError, ValueError, AttributeError): over = {}
     return {**pc, **{k: v for k, v in over.items() if k in ("stop_pct", "monthly_usd") and isinstance(v, (int, float))}}
 INBOX = Path.home() / "core" / "inbox.py"
+DENY = Path.home() / "core" / "bin" / "cc-github-deny-hook"
 
 def key(pc):
     try: return Path(pc["key_file"]).expanduser().read_text().strip() or None
@@ -103,14 +104,19 @@ def command(pc, model, prompt, system, sid, resume):
 def codex_home(pc): return Path(pc.get("codex_home") or "~/.codex").expanduser()
 
 def codex_hooks(pc):
-    """The inbox hook (mid-run posts) in CODEX_HOME/hooks.json; Codex reads Claude Code's hook format."""
+    """The inbox hook (mid-run posts) and the GitHub deny hook in CODEX_HOME/hooks.json; Codex reads Claude Code's hook format, and a PreToolUse exit 2 stops the call
+    (checked on codex-cli 0.153.4). Each is added on its own, so an install from before the deny hook gets it."""
     f = codex_home(pc) / "hooks.json"
     try: s = json.loads(f.read_text()) if f.exists() else {}
     except ValueError: return
-    if str(INBOX) in json.dumps(s): return
-    h = {"hooks": [{"type": "command", "command": str(INBOX), "timeout": 10}]}
+    had = json.dumps(s)
     hooks = s.setdefault("hooks", {})
-    hooks.setdefault("PostToolUse", []).append({"matcher": "*", **h}); hooks.setdefault("Stop", []).append(h)
+    if str(INBOX) not in had:
+        h = {"hooks": [{"type": "command", "command": str(INBOX), "timeout": 10}]}
+        hooks.setdefault("PostToolUse", []).append({"matcher": "*", **h}); hooks.setdefault("Stop", []).append(h)
+    if str(DENY) not in had:
+        hooks.setdefault("PreToolUse", []).append({"matcher": "Bash|WebFetch", "hooks": [{"type": "command", "command": str(DENY), "timeout": 10}]})
+    if json.dumps(s) == had: return
     f.parent.mkdir(parents=True, exist_ok=True); f.write_text(json.dumps(s, indent=2) + "\n")
 
 def codex_limits(pc, timeout=20):

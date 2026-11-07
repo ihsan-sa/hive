@@ -8,7 +8,7 @@ export const SYS = new Set(["starter", "dash", "anon", "all", "400", "mention", 
 
 export const S = {
   app: { route: "open", can: null, app: false, setup: null },
-  live: null, usage: null, projects: null, agentCosts: null, threadNames: {}, threadMeta: {}, shown: [], threadStatus: {},
+  live: null, usage: null, projects: null, agentCosts: null, threadNames: {}, threadMeta: {}, shown: [], threadStatus: {}, agentStatus: {},
   posts: [], byId: {}, threads: new Map(), off: 0,
   sessions: [], lastSess: {}, open: {}, byOut: {}, woke: {}, logOff: 0,
   agents: new Set(), killed: {}, limited: [], limitedSess: new Set(), limitedNow: new Set(),
@@ -103,6 +103,7 @@ function ingestLog(items) {
       ledgerAdd({ t, kind: bad ? "trouble" : "agent", parts: [{ a: e.name }, bad ? ` failed (exit ${exit})` : " ended", th ? " in " : "", th ? { th } : ""] }, [bad ? "failed" : "ended", e.name, th || ""]);
     } else if (e.event === "woken" || e.event === "reaped") { const s = S.open[e.name + e.session]; if (s) s.byStarter = true; }
     else if (e.event === "killed") S.killed[e.name] = t;
+    else if (e.event === "heir") { const s = S.lastSess[e.name]; if (s) { s.replacedBy = e.heir; S.limitedNow.delete(s.session); } } // a new agent took over: the old name isn't "stopped" any more
     else if (e.event === "limited") {
       // Mark the run that just ended, not the session: a resumed agent keeps its session id, so a session-wide mark
       // would call every later normal end of that agent a usage limit.
@@ -180,6 +181,10 @@ export async function loadShown() {
 export async function loadThreadStatus() {
   try { const v = await jget("/api/thread-status"); if (JSON.stringify(v) !== JSON.stringify(S.threadStatus)) { S.threadStatus = v && typeof v === "object" ? v : {}; S.ver++; emit({ names: true }); } } catch (e) {}
 }
+/** What each agent says it is on (/api/agent-status): `hive me "..."`. */
+export async function loadAgentStatus() {
+  try { const v = await jget("/api/agent-status"); if (JSON.stringify(v) !== JSON.stringify(S.agentStatus)) { S.agentStatus = v && typeof v === "object" ? v : {}; S.ver++; emit({ names: true }); } } catch (e) {}
+}
 export async function loadProjects() {
   if (S.projects) return; S.projects = "loading"; emit({ projects: true });
   try { const p = await jget("/api/projects"); p.sort((a, b) => (b.t || 0) - (a.t || 0)); S.projects = p; } catch (e) { S.projects = null; }
@@ -187,7 +192,7 @@ export async function loadProjects() {
 }
 export function start() {
   const every = (ms, f) => setInterval(() => { if (!document.hidden) f(); }, ms);
-  every(1500, poll); every(3000, pollUsage); every(15000, loadApp); every(60000, loadThreadNames); every(15000, loadThreadMeta); every(5000, loadShown); every(20000, loadThreadStatus);
+  every(1500, poll); every(3000, pollUsage); every(15000, loadApp); every(60000, loadThreadNames); every(15000, loadThreadMeta); every(5000, loadShown); every(20000, loadThreadStatus); every(20000, loadAgentStatus);
   document.addEventListener("visibilitychange", () => { if (!document.hidden) { poll(); pollUsage(); } });
-  return Promise.all([loadApp(), pollUsage(), poll(), loadThreadNames(), loadThreadMeta(), loadShown(), loadThreadStatus()]);
+  return Promise.all([loadApp(), pollUsage(), poll(), loadThreadNames(), loadThreadMeta(), loadShown(), loadThreadStatus(), loadAgentStatus()]);
 }

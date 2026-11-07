@@ -44,5 +44,19 @@ export function firstSentence(s) {
   return m ? m[0].trim() : short(s, 240);
 }
 
+/** The asked sentence as a line for a table: a brief's own instruction or second person ("keeper round (periodic): read ~/core/keeper.md and follow it", "The person is calling you...") says what the run is instead. */
+export function onWords(s) {
+  if (/^the person is calling you\b/i.test(s)) return "On a phone call";
+  const m = s.match(/^([^:]{3,60}): read ~\/\S+ and follow it\.?$/i);
+  return m ? m[1][0].toUpperCase() + m[1].slice(1) : s;
+}
+
+/** A person's message that names no work: a short question ("what is this about") or only an attachment. A short instruction ("update the /dark/ page") names it. */
+export function namesNoWork(s) {
+  const t = s.trim();
+  if (/^attached: \S+$/i.test(t)) return true;
+  return t.length <= 80 && (t.endsWith("?") || /^(what|what's|whats|how|why|who|when|where|which|is|are|was|were|does|did|any)\b/i.test(t));
+}
+
 /** "Lost contact" line: no age when nothing has ever loaded (fresh is 0), so it never says "20760d ago". */
 export const lostText = (fresh, what = "data") => fresh ? `Lost contact, last ${what} ${ago(fresh)}` : "Can't reach the server yet";

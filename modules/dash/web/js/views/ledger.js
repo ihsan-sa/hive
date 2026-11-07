@@ -21,13 +21,12 @@ async function loadSteps(onChange) {
   if (ST.busy) return;
   ST.busy = true;
   try {
-    const r = await jget(`/api/ledger?limit=${L.limit}&q=${encodeURIComponent(L.q)}`), rows = Array.isArray(r.rows) ? r.rows : [], sig = JSON.stringify([r.total, rows[0]]);
+    const r = await jget(`/api/ledger?limit=${L.limit}&q=${encodeURIComponent(L.q)}`), rows = Array.isArray(r.rows) ? r.rows : [], sig = JSON.stringify([r.total, rows[0], r.ready]);
     if (key === stepKey() && (sig !== ST.sig || key !== ST.key)) {   // else the filter changed while it was asked: asked again below
       const n = {};
       ST.rows = rows.map(([t, a, th, k, tool, x, d]) => { const id = `${t}${a}${k}`; n[id] = (n[id] || 0) + 1; return { t: t * 1000, a, th, k, tool, x, d, key: "s" + id + n[id] }; });
-      Object.assign(ST, { key, total: r.total || 0, sig }); onChange();
+      Object.assign(ST, { key, total: r.total || 0, sig, reading: r.ready === false }); onChange();
     }
-    ST.reading = r.ready === false;
     if (ST.failed) { ST.failed = false; onChange(); }
   } catch (e) { const was = ST.failed; if (ST.key !== key) Object.assign(ST, { key, rows: [], total: 0, sig: "" }); ST.failed = true; if (!was) onChange(); }   // keeps the steps it read last, and says so
   ST.busy = false;
@@ -88,15 +87,16 @@ export default {
     const sig = [S.ver, L.kind, L.q, L.limit, ST.sig, ST.key].join("|"), changed = sig !== L.sig; L.sig = sig;
     if (changed && sig.split("|").slice(1, 4).join("|") === L.fsig) holdPlace();   // new rows above, same filter: the reader stays put
     L.fsig = [L.kind, L.q, L.limit].join("|");
+    const reading = wantSteps() && !ST.failed && (ST.reading || ST.key !== stepKey());
     const built = changed ? rows() : null;     // on an unchanged poll the list below is an empty node with the same sig: morph leaves the page's list alone
     const set = (k, v) => { L[k] = v; ctx.update(); };
     return metrics({
       header: pageHeader({ title: S.app.app ? "History" : "Ledger", lead: S.app.app ? "Everything that happened, newest first: messages, every step agents took, agents starting and ending, and trouble." : null, after: [toolbar(
         seg(S.app.app ? KINDS.map(([k, l]) => [k, k === "thread" ? "Conversations" : l]) : KINDS, L.kind, k => set("kind", k), { label: "Kind of event" }),
         input({ type: "search", placeholder: `Filter by agent, ${S.app.app ? "conversation" : "thread"} or words`, "aria-label": "Filter", value: L.q, oninput: e => set("q", e.target.value) }),
-        S.live ? h("span", { class: "meta" }, plural(L.count, "event")) : null), S.live && wantSteps() && ST.failed ? staleNote(ST.rows.length ? "Couldn't refresh the agents' steps, so they're the ones read last. It keeps trying." : "Couldn't read the agents' steps, so they're left out. It keeps trying.") : null] }),
+        S.live ? h("span", { class: "meta" }, plural(L.count, "event")) : null), reading ? h("p", { class: "meta lg-reading", role: "status" }, "Reading agents’ steps… Messages and events are available under Everything.") : null, S.live && wantSteps() && ST.failed ? staleNote(ST.rows.length ? "Couldn't refresh the agents' steps, so they're the ones read last. It keeps trying." : "Couldn't read the agents' steps, so they're left out. It keeps trying.") : null] }),
       sections: [
-        L.count ? null : S.live && L.kind === "step" && ST.failed ? null : S.live ? empty(L.kind === "all" && !L.q.trim() ? "Nothing has happened yet." : "No events match.") : waiting(S.failed, "Reading…", "the history"),
+        L.count || reading ? null : S.live && L.kind === "step" && ST.failed ? null : S.live ? empty(L.kind === "all" && !L.q.trim() ? "Nothing has happened yet." : "No events match.") : waiting(S.failed, "Reading…", "the history"),
         h("ol", { class: "lg", "data-own": "morph", "data-sig": sig }, built),
         L.count > L.limit ? h("div", { class: "lr-more" }, button(`Show older (${L.count - L.limit} more)`, () => set("limit", L.limit + 500), { kind: "quiet", size: "s" })) : null,
       ],

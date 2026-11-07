@@ -27,6 +27,7 @@ CORE, STATE = HOME / "core", HOME / ".hive"
 LEDGER, LOG, BOARD = HOME / "outcomes.jsonl", HOME / "log.jsonl", HOME / "board.jsonl"
 CURSOR = STATE / "outcomes-cursor.json"
 SAMPLE = 4                 # agent-woken runs with posts graded by the model per hour, on top of every person-woken run
+OTHER_MAX = 12             # runs on a non-Claude provider graded per hour on top of that: at 13% sampled, 1 of 21 agent-woken Codex runs had a grade, so nobody could say whether Codex delivers
 SETTLE_S = 180             # a run's end must be this old: its last post may still be landing
 TAIL_S = 90                # posts this long after the end still count as the run's
 BAD = ("silent", "nothing")
@@ -102,6 +103,8 @@ def named(run, post):
     """Did the post address this run? By name, by a fresh-agent word (the run is the agent it started), or from the person (whose posts always do)."""
     text = str((post or {}).get("text", ""))
     return (post or {}).get("to") == run["name"] or f"@{run['name']}" in text or bool(FRESH.search(text)) or str((post or {}).get("from", "")).lower() == "person"
+
+ROUND = re.compile(r"Keeper round on ")   # a brief from the floor or a keeper: a short round on an empty ladder says nothing about the model, so it doesn't count toward a step-up
 
 CONTENTLESS = re.compile(r"[A-Za-z0-9]")
 
@@ -193,13 +196,19 @@ Worth a note: how something was made to work, a number with how it was measured,
 
 {blocks}"""
 
-def pick(todo, sample, rng=random):
-    """Every person-woken run, plus `sample` others with posts."""
+def provider(r):
+    """Which provider a run or ledger row ran on, from its model: "codex:gpt-6-astra" is codex, "sonnet" (or none) is claude."""
+    m = str(r.get("model") or "")
+    return m.split(":")[0] if ":" in m else "claude"
+
+def pick(todo, sample, rng=random, other_max=OTHER_MAX):
+    """Every person-woken run, up to `other_max` agent-woken runs on another provider, plus `sample` Claude runs with posts."""
     run = lambda x: x[0] if isinstance(x, tuple) else x
     person = [x for x in todo if str(run(x).get("from", "")).lower() == "person"]
     rest = [x for x in todo if x not in person]
     rng.shuffle(rest)
-    return person + rest[:sample]
+    other = [x for x in rest if provider(run(x)) != "claude"]
+    return person + other[:other_max] + [x for x in rest if provider(run(x)) == "claude"][:sample]
 
 def write_draft(g, run, mine):
     """A grade's note as ~/kb/_drafts/<thread>-<date>.md, at most one a day per thread, or None. The model proposes; these rules decide. Never ~/kb proper."""
@@ -228,28 +237,31 @@ def cmd_grade(a):
     asks = asks_mod()
     try: cur = json.loads(CURSOR.read_text())
     except (OSError, ValueError): cur = {}
-    since = cur.get("at", iso(now() - dt.timedelta(hours=6))); until = iso(now() - dt.timedelta(seconds=SETTLE_S))
+    other = getattr(a, "other_since", "")  # older callers build the Namespace without it
+    since = other or cur.get("at", iso(now() - dt.timedelta(hours=6))); until = iso(now() - dt.timedelta(seconds=SETTLE_S))
     log, posts = jsonl(LOG), jsonl(BOARD); by_id = {p.get("id"): p for p in posts}
     done = {r.get("key") for r in jsonl(LEDGER)}
-    todo = [r for r in runs(log, since, until) if r["key"] not in done]
+    todo = [r for r in runs(log, since, until) if r["key"] not in done and (not other or provider(r) != "claude")]
     if a.limit: todo = todo[:a.limit]
-    graded, model_runs, cost, ticks, drafts = 0, [], 0.0, ticked_rungs(), 0
+    graded, model_runs, cost, ticks, drafts, limited = 0, [], 0.0, ticked_rungs(), 0, False
     for r in todo:
         post, mine, after = posts_of(r, posts, by_id)
-        r = {**r, **({"completion_wake": True} if completion_wake(r, by_id, mine, ticks) else {}), **({"self_wake": True} if post and self_wake(r, post) else {})}   # marks for the spot-check; the grade doesn't look at them
+        r = {**r, **({"completion_wake": True} if completion_wake(r, by_id, mine, ticks) else {}), **({"self_wake": True} if post and self_wake(r, post) else {}), **({"round": True} if post and ROUND.search(str(post.get("text", ""))[:80]) else {})}   # marks for the spot-check and the step-up; the grade doesn't look at them
         g = mechanical(r, post, mine)
         if g:
             why = "the post asked nothing" if g == "not_asked" else "posted nothing" + (" though named" if g == "silent" else "")
             if not a.dry: append(LEDGER, {**r, "at": iso(), "grade": g, "why": why, "posts": len(mine), "by": "rule"})
             graded += 1
         else: model_runs.append((r, post, mine, after))
-    chosen = pick(model_runs, a.sample) if not a.all else model_runs
+    chosen = pick(model_runs, a.sample) if not (a.all or other) else model_runs
     for i in range(0, len(chosen), 8):
         batch = chosen[i:i + 8]
         prompt = PROMPT.replace("{blocks}", "\n\n".join(block(*b) for b in batch))
         if a.dry: print(prompt[:3000] + ("\n..." if len(prompt) > 3000 else "")); print(f"... {len(batch)} runs, {len(prompt)} chars"); continue
         try: out, c = asks.ask_model(prompt, a.model)
-        except Exception as e: print(f"outcomes: model call failed: {e}", file=sys.stderr); break
+        except Exception as e:
+            limited = isinstance(e, getattr(asks, "Limited", ()))
+            print(f"outcomes: model call failed: {e}", file=sys.stderr); break
         cost += c or 0.0
         byk = {r["key"]: (r, post, mine) for r, post, mine, _ in batch}
         for g in parse_grades(out):
@@ -258,8 +270,9 @@ def cmd_grade(a):
             append(LEDGER, {**r, "at": iso(), "grade": g["grade"], "why": clip(g.get("why"), 200), "posts": len(mine), "by": a.model, "cost": round(cost / len(batch), 4)}); graded += 1
             try: drafts += bool(write_draft(g, r, mine))
             except OSError as e: print(f"outcomes: draft not written: {e}", file=sys.stderr)
-    if not a.dry and todo: CURSOR.write_text(json.dumps({"at": max(r["ended"] for r in todo), "run": iso()}))
-    if not a.dry and graded: step_up(graded)
+    # Claude at its limit is when fallback runs most need grading: hold the cursor, and the next hour picks them up (the ledger's keys stop a run being graded twice)
+    if not a.dry and todo and not limited and not other: CURSOR.write_text(json.dumps({"at": max(r["ended"] for r in todo), "run": iso()}))
+    if not a.dry and graded and not other: step_up(graded)
     print(f"{graded} runs graded ({len(chosen)} by the model, {len(model_runs) - len(chosen)} left unsampled), {drafts} drafts, ${cost:.2f}")
 
 def step_up(new, post=None):
@@ -272,10 +285,10 @@ def step_up(new, post=None):
         name, thread = r.get("name"), r.get("thread")
         if not name or not thread or (name, thread) in seen: continue
         seen.add((name, thread))
-        if r.get("grade") not in SHORT or r.get("model") not in CHEAP: continue
+        if r.get("grade") not in SHORT or r.get("model") not in CHEAP or r.get("round"): continue
         prev = [x for x in earlier if x.get("name") == name and x.get("thread") == thread and x.get("grade") in GRADED]
         run = [r] + [x for x in reversed(prev)][:STEP_UP_AFTER - 1]
-        if len(run) < STEP_UP_AFTER or any(x.get("grade") not in SHORT or x.get("model") not in CHEAP for x in run): continue
+        if len(run) < STEP_UP_AFTER or any(x.get("grade") not in SHORT or x.get("model") not in CHEAP or x.get("round") for x in run): continue
         f = STATE / "model-set" / f"{name}.json"
         if f.exists(): continue
         was = r.get("model") or "sonnet"
@@ -310,7 +323,18 @@ def cmd_list(a):
     for r in rows: print(f"{r.get('at', '')[:16]}  {r.get('name')}  {r.get('grade'):<10} woken by {r.get('from')} in {r.get('thread')} (post {r.get('post')}): {r.get('why', '')}")
     print(f"-- {len(rows)} runs; " + ", ".join(f"{k[9:]} {v}" for k, v in stats(rows).items() if k.startswith("outcomes_") and k != "outcomes_graded"))
 
+def by_provider(rows):
+    """Delivery per provider and who woke the run, since a person's post and an agent's are different asks: compare like with like."""
+    out = {}
+    for r in rows: out.setdefault((provider(r), "person" if str(r.get("from", "")).lower() == "person" else "agent"), []).append(r)
+    return {f"{k[0]}/{k[1]}": stats(v) for k, v in sorted(out.items())}
+
 def cmd_stats(a):
+    if getattr(a, "by", "") == "provider":
+        rows = by_provider(recent(a.since))
+        if a.json: print(json.dumps(rows)); return
+        for k, s in rows.items(): print(f"{k:<20} delivered {s['outcome_delivered_pct']}% of {sum(s['outcomes_' + g] for g in GRADED)} asked (delivered {s['outcomes_delivered']}, partial {s['outcomes_partial']}, nothing {s['outcomes_nothing']}, silent {s['outcomes_silent']}); quiet {s['outcomes_quiet']}, not asked {s['outcomes_not_asked']}")
+        return
     s = stats(recent(a.since)); done, own, wakes = completion_share(a.since)
     share, own_share = (round(100.0 * done / wakes, 1), round(100.0 * own / wakes, 1)) if wakes else (None, None)
     if a.json: print(json.dumps({**s, "completion_wakes": done, "self_wakes": own, "agent_code_wakes": wakes, "completion_wake_pct": share, "self_wake_pct": own_share})); return
@@ -322,9 +346,9 @@ def main(argv=None):
     ap = argparse.ArgumentParser(prog="hive outcomes", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sp = ap.add_subparsers(dest="cmd", required=True)
     p = sp.add_parser("grade"); p.add_argument("--limit", type=int, default=0); p.add_argument("--sample", type=int, default=SAMPLE); p.add_argument("--all", action="store_true", help="every run with posts, not a sample")
-    p.add_argument("--model", default="sonnet"); p.add_argument("--dry", action="store_true"); p.set_defaults(f=cmd_grade)
+    p.add_argument("--model", default="sonnet"); p.add_argument("--dry", action="store_true"); p.add_argument("--other-since", default="", metavar="DATE", help="backfill: every ungraded run on a non-Claude provider ended after DATE; the hourly cursor doesn't move"); p.set_defaults(f=cmd_grade)
     p = sp.add_parser("list"); p.add_argument("--since", default="24h"); p.add_argument("--grade"); p.add_argument("--name"); p.set_defaults(f=cmd_list)
-    p = sp.add_parser("stats"); p.add_argument("--since", default="24h"); p.add_argument("--json", action="store_true"); p.set_defaults(f=cmd_stats)
+    p = sp.add_parser("stats"); p.add_argument("--since", default="24h"); p.add_argument("--json", action="store_true"); p.add_argument("--by", choices=["provider"], help="delivery per provider, person-woken and agent-woken apart"); p.set_defaults(f=cmd_stats)
     a = ap.parse_args(argv); a.f(a)
 
 if __name__ == "__main__": main()

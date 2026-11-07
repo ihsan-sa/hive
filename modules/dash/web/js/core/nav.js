@@ -9,7 +9,7 @@ export const MAX_MAIN = 6, MAX_TOOLS = 6;
 export const APP_NAV = {
   main: ["start", "comms", "knowledge", "now", "usage", "settings"],
   groups: {
-    comms: ["comms", "work", "inbox", "mail", "made"],
+    comms: ["comms", "work", "flow", "inbox", "mail", "made"],
     now: ["now", "agents", "timeline", "mesh", "ledger", "progress"],
     usage: ["usage", "jobs"],
   },

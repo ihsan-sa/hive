@@ -568,7 +568,10 @@ function strip(th) {
     const r = recipient(th);
     out.push(line("done", simpleOn() ? "Your Hive has stopped for now. Send a message when you want more." : r.who && r.who !== "new" ? `Nobody is on this right now. A message wakes ${r.who}.` : "Nobody is on this right now. A message starts an agent on it.", null, { key: "idle" }));
   }
-  const more = out.length - 2, open = !!C.strip;
+  const more = out.length - 1, open = !C.strip ? false : true;
+  // Closed it is one line: the second agent rides on it as a quiet note.
+  const k2 = out.length > 1 && !open ? String(out[1].dataset.key) : "", x0 = out[0] && out[0].querySelector(".cm-line-x");
+  if (/^run:/.test(k2) && x0) x0.append(h("span", { class: "meta cm-line-2" }, " · and " + k2.slice(4)));
   return h("div", { class: "cm-strip", "data-key": "strip", "data-open": open ? "" : null, role: "status", "aria-live": "polite" }, out,
     more > 0 && !open ? h("span", { class: "meta num cm-strip-n", "data-key": "n" }, "+" + more) : null,
     out.length > 1 || out.some(x => x.querySelector(".cm-line-a") || /^run:/.test(x.dataset.key)) ? stripToggle(open) : null);

@@ -26,6 +26,8 @@ The Hive is a shared workshop on this machine, run under this user account. You 
 
 **Modules** are optional tools in `~/modules`. `hive module list` shows what's installed and what can be added; `hive module add <name>` installs one and says which doc to read first. The core never depends on one.
 
+**Web research, lead lists, checking claims, forecasts:** use `research` (`~/modules/research/README.md`): many engines at once, recursive digging, every claim checked against a saved page.
+
 **Build the tool you are missing.** When a job comes out poor because a tool is missing or weak (janky video, diagrams drawn by hand, a check you keep running by hand), or you do the same multi-step thing a second time, make it a tool: a module in `~/modules` with a `module.json` and a skill, or a fix to one that exists, and use it on the job at hand. If it is too big for your job, start an agent on it in its own thread. Say in your result what you built and write it to `~/kb`, so the next agent finds it.
 
 **You may change everything, the core included,** with no process. `~/core` is a git repo: commit your changes there. ~ is backed up to a local git repo every few minutes (the board, log and kb). The starter is the service `hive-starter`; restarting it does not kill running agents.

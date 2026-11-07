@@ -163,7 +163,7 @@ a.top-route[data-mode=limited]:hover{background:color-mix(in oklch,var(--warn) 3
 .ref-wrap:hover .copy,.copy:focus-visible{opacity:1}
 .copy:hover{color:var(--ink);background:var(--hover)}
 @media (hover:none){.copy{opacity:1}}
-@media (max-width:600px){.ref{min-height:24px;align-items:center}}   /* a phone tap target: refs in tables and lists are links too */
+@media (max-width:600px){.ref{min-height:24px;min-width:24px;align-items:center;justify-content:center}}   /* a phone tap target: refs in tables and lists are links too, even a one-digit one */
 @media (max-width:600px){.ag-f input[type=checkbox]{width:24px;height:24px;margin:0;flex:none}.ag-f label{display:inline-flex;align-items:center;gap:6px}}   /* the Columns checkboxes are phone tap targets */
 
 /* ---- button, seg, field (redesign 2026-11-04) ---- */
@@ -488,6 +488,9 @@ ul.plain{margin:0;padding-left:1.2em;display:grid;gap:var(--s2)}
   .panel-b{border-radius:var(--r-l) var(--r-l) 0 0}
 }
 .panel-b{border-bottom:0;background:color-mix(in oklch,var(--surface) 88%,transparent);backdrop-filter:blur(8px)}
+/* A sheet (a view's own piece, e.g. a Flow lane's Work card) moves the page over by its width, like the file preview, so what was
+   clicked and Flow's now line stay in view; an agent's page keeps floating over the view. Under 1000 px there is no room: it covers. */
+@media (min-width:1000px){body[data-panel=sheet] :is(#top,#main){margin-right:calc(min(var(--panel-w,640px),100% - 16px) + 16px)}}
 .agp .stats{gap:8px;margin:0;overflow:visible;grid-template-columns:repeat(auto-fill,minmax(150px,1fr))}
 .agp .stat{box-shadow:none;background:var(--sunken);border-radius:var(--r-m);padding:var(--s2) var(--s3) var(--s3)}
 
@@ -1451,7 +1454,7 @@ details.blk>summary .blk-t::after{border-color:var(--ink-3)}
 .cm-strip{display:flex;align-items:center;gap:var(--s3);min-height:34px;max-width:calc(var(--chat-col) - 28px);margin:0 auto;padding:0 6px 0 14px;border:1px solid var(--line);border-bottom:0;border-radius:var(--r-l) var(--r-l) 0 0;background:var(--bg);font-size:var(--fs-meta);color:var(--ink-2)}
 .cm-strip[data-open]{display:grid;padding:6px 6px 4px 14px}
 .cm-line{display:inline-flex;align-items:center;gap:7px;min-height:28px;min-width:0;font-size:var(--fs-meta)}
-.cm-strip:not([data-open]) .cm-line:nth-child(n+3){display:none}   /* closed: two agents, then +N */
+.cm-strip:not([data-open]) .cm-line:nth-child(n+2){display:none}   /* closed: one line, then +N */
 .cm-strip:not([data-open]) .cm-line:not([data-key=asks]) .cm-line-a,.cm-strip:not([data-open]) .cm-line[data-key=helper]{display:none}
 .cm-line[data-key=asks] .cm-line-a{opacity:1}   /* a question's Answer is always there */
 .cm-line-x{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -1650,13 +1653,15 @@ button.more-i{background:none;border:0;font:inherit;text-align:left;cursor:point
 .ag th[aria-sort] .ag-s{color:var(--ink);font-weight:600}
 .ag th.num .ag-s{flex-direction:row-reverse}
 .ag .ag-tm{min-width:9rem}
+.ag .ag-on{max-width:22rem;min-width:8rem}
 .ag .ag-m{max-width:7rem;overflow:hidden;text-overflow:ellipsis}
 .ag th:first-child,.ag td:first-child{position:sticky;left:0;background:var(--bg,var(--surface));z-index:1}
 /* The header stays in view. Narrow: the table is its own scroll box, sideways and down. Wide enough to fit: the page scrolls, under the top bar. */
 .ag-w{--bar:var(--bar-h);position:sticky;top:var(--bar);max-height:calc(100dvh - var(--bar) - 56px);overflow:auto}
 .ag th{position:sticky;top:0;z-index:2;background:var(--bg);padding-top:6px;box-shadow:inset 0 -1px 0 var(--line)}
 .ag th:first-child{z-index:3}
-@media (max-width:640px){.ag-w{max-height:calc(100dvh - var(--bar) - 100px)}} /* the page ends 98px below the table: a taller one is pushed up under the bar at the bottom */
+@media (max-width:640px){.ag-w{max-height:calc(100dvh - var(--bar) - 100px)}.ag .ag-on{white-space:normal;overflow-wrap:anywhere;min-width:min(22rem,calc(100vw - 9rem));max-width:min(22rem,calc(100vw - 9rem))}} /* the page ends 98px below the table: a taller one is pushed up under the bar at the bottom */
+@media (max-width:640px){.ag-w{margin-top:0}.after:has(>.ag-w){margin-top:var(--s3) !important}} /* the agent rows start in the top half of a phone screen */
 @media (min-width:1340px){.ag-w{position:static;max-height:none;overflow:visible}.ag th{top:var(--bar-h)}}
 .ag tbody tr:hover td:first-child{background:var(--hover)}
 
@@ -2262,6 +2267,7 @@ text.map-ring-t{font-size:var(--fs-micro);font-weight:var(--w-med);fill:var(--in
 /* Usage accounts table: a meter and its figure in one cell */
 .gauge-c{display:flex;align-items:center;gap:var(--s2);min-width:140px}
 .gauge-c .meter{flex:1;min-width:80px}
+.gauge-rs{font-size:var(--fs-small);margin-top:2px}
 .row-a-in{display:inline-flex;gap:var(--s2)}
 
 .cm-status{display:grid;gap:2px;padding:6px var(--s4);border-bottom:1px solid var(--line);font-size:var(--fs-small)}
@@ -2340,6 +2346,7 @@ input[type=radio],input[type=checkbox]:not(.switch){accent-color:var(--ink)}
 .cm-filters>.input,.cm-search>.input{height:var(--ctl)}
 .seg button{height:calc(var(--ctl) - 6px)}
 .pv-zb,.cm-picks button,.tm-chip{height:var(--ctl-s)}
+@media (max-width:600px){.seg button{min-height:24px}}   /* the developer look makes it 22px; a phone tap target is at least 24 */
 @media (hover:none){.more-i,.seg button{min-height:44px}}
 .map-sec>h3,.pf-h{text-transform:none;letter-spacing:0;font-size:var(--fs-meta);font-weight:var(--w-med);color:var(--ink-3)}
 .cm-sep,.more-sep{height:1px;margin:4px 0;background:var(--line)}
@@ -2407,6 +2414,7 @@ input[type=radio],input[type=checkbox]:not(.switch){accent-color:var(--ink)}
 
 /* ===== Work: one card per project (views/work.js) ===== */
 .wk-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,360px),1fr));gap:var(--s4)}
+.wk-page>.sec+.sec{margin-top:var(--s5)}   /* between Your focuses, Other projects and the paused fold; the sections carry no gap of their own */
 .wk{padding:var(--s3) var(--s4);display:grid;gap:var(--s3);min-width:0}
 .wk-hd{display:flex;align-items:baseline;gap:var(--s2);flex-wrap:wrap}.wk-hd>.sd{flex:none;align-self:center}
 .wk-t{margin:0;font-size:var(--fs-title);font-weight:var(--w-bold);min-width:0;flex:1 1 12em;overflow-wrap:anywhere}.wk-n{color:var(--ink-3);font-weight:var(--w-med)}
@@ -2418,3 +2426,141 @@ input[type=radio],input[type=checkbox]:not(.switch){accent-color:var(--ink)}
 @container (max-width:420px){.wk-p{grid-template-columns:1fr}.wk-st{margin-left:0}}
 /* A phone: the header's buttons share one row, the stop button with them rather than alone under them */
 @container (max-width:520px){.ph-actions{gap:6px}.ph-actions .btn[data-size=s]{padding:0 6px}.ph-actions .ac-kill{margin-left:0}}
+
+/* ---- flow: one lane per goal, time running into now; a run is a bar, a wait on the person a hollow stretch ---- */
+.fl-page{display:flex;flex-direction:column;gap:var(--s4);min-height:0}
+.fl-page .cvp{height:auto;flex:none}
+.fl-page .cvp-stage{flex:1 1 auto;min-height:120px}
+.fl-moved{padding:0 var(--s4) var(--s4)}
+/* a phone (the page under 640): the next-words list first, whole words that wrap, and the chart folded under "Show the chart" */
+.fl-listbox{display:none;padding:var(--s3) var(--s4) 0}
+@container (max-width:640px){.fl-page .fl-listbox{display:block}.fl-page[data-fold] .cvp{display:none}}
+.fl-listbox .sec-t{margin:0 0 var(--s1)}
+.fl-nextl{list-style:none;margin:0 0 var(--s2);padding:0}
+.fl-row{display:grid;grid-template-columns:minmax(0,1fr) auto;column-gap:var(--s2);padding:var(--s2) 0;border-bottom:1px solid var(--line)}
+.fl-rn{grid-column:1;min-width:0;margin:0;padding:0;border:0;background:none;font:inherit;font-size:var(--fs-meta);font-weight:var(--w-med);color:var(--ink-2);text-align:left;overflow-wrap:anywhere}
+.fl-row[data-live] .fl-rn{color:var(--ink);font-weight:var(--w-bold)}
+button.fl-rn{cursor:pointer}
+button.fl-rn:hover{text-decoration:underline}
+.fl-rsay{grid-column:2;grid-row:1/span 3;align-self:start}
+.fl-rs{grid-column:1;font-size:var(--fs-micro)}
+.fl-rw{color:var(--warn-ink,var(--warn))}
+.fl-rx{grid-column:1;margin:2px 0 0;font-size:var(--fs-meta);color:var(--ink);overflow-wrap:anywhere}
+.fl-fold{margin-top:var(--s1)}
+.fl-box{position:absolute;inset:0;overflow:auto;touch-action:pan-y}
+.fl-svg{display:block}
+.fl-box text{font-family:var(--font);font-size:var(--fs-micro);fill:var(--ink-3)}
+.fl-grid{stroke:var(--line);stroke-width:1}
+.fl-rule{stroke:var(--line);stroke-width:1}
+.fl-box .fl-nowt{fill:var(--good-ink);font-weight:var(--w-bold)}
+.fl-box .fl-nowl{stroke:var(--good-ink);stroke-width:1.5}
+.fl-box .fl-nextt{fill:var(--ink-3);font-weight:var(--w-med)}
+.fl-bg{fill:transparent}
+.fl-lane:hover .fl-bg{fill:var(--hover)}
+.fl-lane[data-cold] .fl-bg{fill:color-mix(in oklch,var(--surface-2,var(--surface)) 50%,transparent)}
+.fl-box .fl-name{font-size:var(--fs-meta);fill:var(--ink-2)}
+.fl-box .fl-name[data-live]{fill:var(--ink);font-weight:var(--w-bold)}
+.fl-box .fl-sub{fill:var(--ink-3)}
+.fl-box .fl-sub[data-cold]{opacity:.7}
+.fl-lane[data-card]{cursor:pointer}   /* a goal's lane opens its Work card in the panel */
+.fl-lane[data-card]:hover .fl-name{text-decoration:underline}
+.fl-name[role=button]:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+.wk-sheet{padding:var(--s3) var(--s3) var(--s5)}   /* the card alone, in the panel */
+.wk[data-here]{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-bg)}   /* #work/<key>: the card the link meant */
+.fl-bar{fill:color-mix(in oklch,var(--info) 24%,transparent);stroke:var(--info);stroke-width:1}
+.fl-bar[data-live]{fill:color-mix(in oklch,var(--good) 32%,transparent);stroke:var(--good);stroke-width:1.5}
+.fl-hit:hover .fl-bar{stroke-width:2}
+.fl-hand{fill:var(--surface);stroke:var(--info);stroke-width:1}
+.fl-wait{fill:transparent;stroke:var(--warn);stroke-width:1.2;stroke-dasharray:3 2}
+.fl-wait[data-open]{fill:color-mix(in oklch,var(--warn) 14%,transparent)}
+.fl-wait[data-stale]{opacity:.55}
+.ag-onage{white-space:nowrap}
+.fl-dec{fill:var(--warn);stroke:var(--surface);stroke-width:1}
+.fl-mark{fill:var(--ink);stroke:var(--surface);stroke-width:1}
+.fl-you{stroke:var(--ink);stroke-width:1;stroke-dasharray:2 3;opacity:.7}
+.fl-box .fl-yout{fill:var(--ink-2)}
+.fl-box .fl-next{font-size:var(--fs-meta);fill:var(--ink)}
+.fl-say{cursor:pointer}
+.fl-say rect{fill:var(--surface);stroke:var(--line-2,var(--line))}
+.fl-say:hover rect,.fl-say:focus-visible rect{stroke:var(--ink-3)}
+.fl-say:focus-visible{outline:none}
+.fl-box .fl-say text{fill:var(--ink-2);font-size:var(--fs-micro)}
+.fl-hit:focus-visible rect,.fl-hit:focus-visible path{outline:2px solid var(--focus)}
+.fl-legend{display:inline-flex;align-items:center;gap:var(--s1);flex-wrap:wrap}
+.fl-k{display:inline-block;width:14px;height:8px;border-radius:2px;vertical-align:middle}
+.fl-k-run{background:color-mix(in oklch,var(--info) 24%,transparent);border:1px solid var(--info)}
+.fl-k-hand{width:8px;height:8px;transform:rotate(45deg);background:var(--surface);border:1px solid var(--info)}
+.fl-k-wait{border:1px dashed var(--warn)}
+.fl-k-dec{width:8px;height:8px;transform:rotate(45deg);background:var(--warn)}
+.fl-k-you{width:0;height:0;border-left:5px solid transparent;border-right:5px solid transparent;border-bottom:8px solid var(--ink);border-radius:0}
+.fl-lead{margin:0}
+.fl-moved .sec-t{margin:0 0 var(--s2)}
+.fl-list{margin:0;padding-left:1.2em;display:grid;gap:var(--s1)}
+.fl-lanename{color:var(--ink-3)}
+@media (max-width:640px){.fl-legend{display:none}}
+.fl-waitt{stroke:var(--warn);stroke-width:1.2}
+
+/* Flow: one meaning per colour (design pass ui-regen-1107-1804, HANDOFF §1): runs are work (--data), waits on the person are the accent, "decided for you" is a grey outline, the now line is ink. */
+.fl-bar{fill:var(--data-bg);stroke:var(--data);stroke-width:1}
+.fl-bar[data-live]{fill:var(--data);stroke:var(--data);stroke-width:1.5}
+.fl-hand{fill:var(--surface);stroke:var(--data);stroke-width:1}
+.fl-wait{fill:transparent;stroke:var(--accent);stroke-width:1.3;stroke-dasharray:4 3}
+.fl-wait[data-open]{fill:var(--accent-bg)}
+.fl-waitt{stroke:var(--accent);stroke-width:1.3}
+.fl-dec{fill:var(--surface);stroke:var(--ink-3);stroke-width:1.3}
+.fl-box .fl-nowt{fill:var(--ink);font-weight:var(--w-bold)}
+.fl-box .fl-nowl{stroke:var(--ink);stroke-width:1.5}
+.fl-k-run{background:var(--data-bg);border:1px solid var(--data)}
+.fl-k-hand{border-color:var(--data)}
+.fl-k-wait{border:1px dashed var(--accent);background:var(--accent-bg)}
+.fl-k-dec{background:var(--surface);border:1.3px solid var(--ink-3)}
+
+/* Work card per design pass HANDOFF §3: Needs you first, state in the footer, say on hover */
+.wk{display:flex;flex-direction:column;gap:var(--s3);padding:var(--s5)}
+.wk[data-state=needs]{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-bg)}
+.wk-hd{align-items:center}
+.wk-t a{color:inherit;text-decoration:none}.wk-t a:hover{text-decoration:underline}
+.wk-b{display:flex;flex-direction:column;gap:var(--s3)}
+.wk-p{grid-template-columns:1fr;gap:4px}
+.wk-p>dt{font-size:var(--fs-micro);color:var(--ink-3);font-weight:var(--w-med)}
+.wk-p[data-part=today]>dd{font-size:var(--fs-small);color:var(--ink-2)}
+.wk-p[data-part=needs]{order:-1;padding:var(--s3) 14px;border-radius:var(--r-m);background:var(--accent-bg)}
+.wk-p[data-part=needs]>dt{color:var(--accent-ink);font-weight:var(--w-bold)}
+.wk-ft{margin-top:auto;padding-top:var(--s3);display:flex;align-items:center;gap:var(--s3);flex-wrap:wrap;border-top:1px solid var(--line);font-size:var(--fs-meta);color:var(--ink-3)}
+.wk-ft .wk-state{flex:1}
+.wk-say{opacity:0}
+.wk:hover .wk-say,.wk:focus-within .wk-say{opacity:1}
+@media (hover:none){.wk-say{opacity:1}}
+.ph-meta .ph-right{margin-left:auto}
+
+/* Flow layout and legend per design pass HANDOFF §1-2 */
+.fl-k-live{background:var(--data);border:1px solid var(--data)}
+.fl-box .fl-sub[data-wait],.fl-box .fl-next[data-wait]{fill:var(--accent-ink,var(--accent));font-weight:var(--w-med)}
+.fl-box .fl-next[data-wait]{text-decoration:underline;text-decoration-color:var(--accent)}
+.fl-say rect{rx:8}
+.fl-say .fl-say-ic{fill:none;stroke:var(--ink-2);stroke-width:1.8;stroke-linejoin:round;pointer-events:none}
+.fl-say{opacity:0}
+.fl-lane:hover .fl-say,.fl-say:focus-visible,.fl-lane:focus-within .fl-say{opacity:1}
+@media (hover:none){.fl-say{opacity:1}}
+.fl-row[data-wait] .fl-rs{color:var(--accent-ink,var(--accent))}
+.fl-rsay{padding:0 var(--s2)}
+.fl-list{list-style:none;padding:0;gap:0}
+.fl-list li{display:grid;grid-template-columns:minmax(90px,200px) 1fr auto;gap:var(--s3);padding:var(--s2) 0;border-top:1px solid var(--line);align-items:baseline}
+@media (max-width:640px){.fl-list li{grid-template-columns:1fr auto}.fl-list li>a{grid-column:1/-1;grid-row:2}}
+
+/* ===== HANDOFF §5-6: one-line strip, Developer Now ===== */
+.cm-line-2{color:var(--ink-3)}
+:root[data-dev] .nd-list a.nd-act{display:inline-flex;align-items:center;height:var(--ctl-s);padding:0 var(--s3);border:1px solid var(--line-2);border-radius:var(--r-s);background:var(--surface);color:var(--ink);font-size:var(--fs-meta);font-weight:var(--w-med);text-decoration:none}
+:root[data-dev] .nd-list a.nd-act:hover{background:var(--hover)}
+:root[data-dev] .nowtbl tr .nt-x>*{opacity:0}
+:root[data-dev] .nowtbl tr:hover .nt-x>*,:root[data-dev] .nowtbl tr:focus-within .nt-x>*{opacity:1}
+@media (hover:none){:root[data-dev] .nowtbl tr .nt-x>*{opacity:1}}
+.nd-queue-bar{display:flex;height:8px;gap:2px;border-radius:4px;overflow:hidden;margin:4px 0 8px}
+.nd-queue-bar>i{background:var(--data-bg)}
+.nd-queue-bar>i[data-band=mid]{background:var(--data)}
+.nd-queue-bar>i[data-band=long]{background:var(--accent)}
+.nd-queue-key{display:flex;gap:var(--s4);flex-wrap:wrap;margin-bottom:var(--s3)}
+.nd-queue-key i{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:6px;background:var(--data-bg)}
+.nd-queue-key i[data-band=mid]{background:var(--data)}
+.nd-queue-key i[data-band=long]{background:var(--accent)}
+.nd-head{display:flex;justify-content:space-between;gap:var(--s4);flex-wrap:wrap;width:100%}

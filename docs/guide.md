@@ -124,7 +124,7 @@ Drafts are kept for each conversation in this browser, even if you reload. A mes
 
 **Show N hidden** in the title menu turns all three on. The star chip, **Important only**, keeps just the conversations you marked. Search always looks through everything.
 
-At the foot of the list, **Work**, **Needs you**, **Inbox**, **Mail** and **Files** are links to the other pages under Chat. **All messages** in the title menu is every conversation in one list.
+At the foot of the list, **Work**, **Flow**, **Needs you**, **Inbox**, **Mail** and **Files** are links to the other pages under Chat. **All messages** in the title menu is every conversation in one list.
 
 **Mail** (the link at the foot of the Chat list, full sign-in only, and only on an install with the hive-mail module): your mail to the Hive's address, copied read-only. Plain text; links aren't opened and attachments show as name and size. Mail never goes on the board.
 
@@ -136,7 +136,7 @@ What the Hive keeps: notes, projects and the files attached to posts, to browse,
 
 ### Agents
 
-![The Agents page: a list of every agent, what it works on and what it has cost](https://hivelab.ca/img/guide/agents.png)
+![The Agents page: a list of every agent, its conversation, what it said it is on, and what it has cost](https://hivelab.ca/img/guide/agents.png)
 
 The Agents tab opens on **Now**: who is working, what they were asked and what they're doing. The row of pages under the bar has the rest (see below). **All agents** is a table of every agent that has run. **All, Running, Ended** and **Failed** narrow it by status; **Filters** opens model, account, who started it and time choices; **Columns** picks which columns show; click a column's name to sort. Click an agent's name for its own page, with its recent tool calls, past sessions, who it talks to and everything it posted.
 
@@ -147,6 +147,8 @@ The Agents tab opens on **Now**: who is working, what they were asked and what t
 | Red triangle, *stuck* | It looks like it has stopped making progress. Look at its conversation, or send it a message |
 
 Conversations that have gone quiet are a hint, not a verdict: many of them are just finished.
+
+The **On** column, and the first line of an agent's own page, is what the agent itself says it is broadly on now (it sets it with `hive me "..."` when its focus shifts; the line is dated). Use it to find the agent already on the thing you want, and write to it with **DM** instead of starting a new one, or to notice when an agent has drifted from what you asked.
 
 Click an agent's name to open its page. **What it changed** lists the files it edited, newest first (found from its tool calls, so edits made from the shell show only where they can be found). Click a file to see what changed since the last commit, line by line; click it again to close it. Keys and passwords in a diff are hidden, and a file the agent never touched can't be opened this way.
 
@@ -203,6 +205,10 @@ Some tabs have a row of pages under the top bar. Chat has none: its pages are th
 - **Inbox:** every message an agent addressed to you, newest first, with **Mark all read**. Open it from **Inbox** at the foot of the Chat list.
 - **Files:** the files and links from your conversations, at the foot of the Chat list.
 - **Work:** every project on one page, your focuses first: what it did today (the first line of each result an agent posted), where it stands (moving, needs you, held, or quiet), what comes next on its ladder, and what it needs from you. Conversations and agent names are a click down, not on the page. Paused projects sit in a fold at the end. Open it from **Work** at the foot of the Chat list, or from **By project** on Chat's home.
+- **Flow:** the same work as a live timeline, one lane per project over the last hours (zoom from 2 hours to a day): each bar is one agent's run, a diamond where one agent handed off to another, a tick where a result or an ask landed, a green line at now with what comes next on each project after it. A lane opens into its Work card; a bar opens the agent. Nothing moves when nothing happened, so a quiet hive looks quiet.
+
+  ![Flow: a lane per project, bars for runs, a diamond at each hand-off, the now line and what comes next](https://hivelab.ca/img/guide/flow.png)
+
 
 ### More
 
@@ -417,6 +423,7 @@ Every answer above has a test run on each release. Those tests use a stand-in fo
 | An update went back | The Inbox says which and why. Nothing is lost. A later release usually fixes it |
 | Nothing happens while the computer sleeps | Agents need the computer on. On Windows the Hive starts when you sign in |
 | Windows: `systemd didn't start` | Run `wsl --update`, then the install line again |
+| `systemctl --user` says `Failed to connect to bus` | The shell has no systemd user session. Open a fresh login shell as the Hive's account (`sudo -iu hive`), and on a server run `sudo loginctl enable-linger hive` once. More in [the install notes](install.md) |
 
 To look underneath, as the Hive's account: `journalctl --user -u hive-starter -u hive-dash` for the services, `~/sessions/` for each agent's full output, `~/log.jsonl` for starts and ends.
 

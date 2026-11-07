@@ -2,7 +2,7 @@
 // browser, from what the store already holds; the name opens the agent's panel with all its numbers. Cost and tokens: agentSpend.
 import { h } from "../core/dom.js";
 import { S, OUTSIDE, getPref, loadAgentCosts, setPref } from "../core/store.js";
-import { agentSpend, agentStatus, isRunning, loginName, modelName, sEnd, threadTitle } from "../core/model.js";
+import { agentOn, agentSpend, agentStatus, isRunning, loginName, modelName, sEnd, threadTitle } from "../core/model.js";
 import { ago, dur, money, plural, short, stamp, toks } from "../core/format.js";
 import { metrics } from "../templates.js";
 import { button, empty, waiting, input, pageHeader, seg, stats, toolbar } from "../ui/kit.js";
@@ -12,13 +12,16 @@ const STATUS = [["all", "Any status"], ["running", "Running"], ["queued", "Waiti
 const BY = [["all", "Started by anyone"], ["person", "Started by a person"], ["agent", "Started by an agent"], ["system", "Started by the Hive"]];
 const SINCE = [["all", "Any time"], ["1", "Last 24 hours"], ["7", "Last 7 days"], ["30", "Last 30 days"]];
 const PAGE = 200, DAY = 864e5;
-const L = { q: "", status: "all", by: "all", since: "all", model: "all", account: "all", limit: PAGE, sig: "", dataKey: "", all: [], shown: [] };
+const L = { q: "", house: false, status: "all", by: "all", since: "all", model: "all", account: "all", limit: PAGE, sig: "", dataKey: "", all: [], shown: [] };
 const pctOf = (a, b) => b ? Math.round(100 * a / b) + "%" : "0%";
 const app = () => !!S.app.app;
-const APP_COLS = ["name", "status", "spawned", "thread", "model", "lastSeen", "usd"];   // the app look starts with these; the developer look has every column on
+const APP_COLS = ["name", "status", "spawned", "thread", "on", "model", "lastSeen", "usd"];   // the app look starts with these; the developer look has every column on
 const colsOn = () => { const c = getPref("agents.cols", null); return new Set(Array.isArray(c) && c.length ? c : app() ? APP_COLS : COLS.map(x => x.k)); };
 const sort = () => getPref("agents.sort", { k: "spawned", d: -1 });
 
+// Housekeeping runs: the hive looking after itself (status-bar refreshes, keeper and improve rounds, watchdog trips, phone-call starts). Folded by default so the runs on someone's work show; one click brings them back.
+const HOUSE_THREADS = new Set(["thread-status", "keeper", "improve", "watchdog"]), HOUSE_FROM = new Set(["status-timer", "phone", "watchdog"]);
+const isHouse = a => { const p = S.byId[a.first.post]; return HOUSE_THREADS.has(a.first.thread) || !!p && (HOUSE_FROM.has(p.from) || /^\W*(@\w+\s+)?keeper round/i.test(String(p.text || ""))); };
 const statusOf = n => { const k = agentStatus(n).key; return isRunning(n) ? "running" : k; };
 const whoKind = f => (!f || f === "anon" ? "system" : OUTSIDE.has(f) ? "person" : S.agents.has(f) ? "agent" : "system");
 
@@ -46,18 +49,24 @@ function gather() {
     const model = init.model ? modelName(init.model) : s.model ? (prov ? s.model.slice(prov.length + 1) : modelName(s.model)) : "default";
     const lastSeen = Math.max(sEnd(s), a.lastPost || 0), account = prov || loginName(s.login) || "–";
     const status = statusOf(a.name), from = a.first.from, thread = a.first.thread;
-    return { ...a, spend: x, usd: x.usd, tok: x.t[0] + x.t[1] + x.t[2] + x.t[3], calls: x.calls, model, account, status, from, thread, lastSeen,
-      when: a.first.start, lc: [a.name, thread, threadTitle(thread), from, model, account, status, s.effort, s.harness].join(" ").toLowerCase() };
+    const on = agentOn(a.name);
+    return { ...a, house: isHouse(a), spend: x, usd: x.usd, tok: x.t[0] + x.t[1] + x.t[2] + x.t[3], calls: x.calls, model, account, status, from, thread, lastSeen, on,
+      when: a.first.start, lc: [a.name, thread, threadTitle(thread), from, model, account, status, s.effort, s.harness, on ? on.text : ""].join(" ").toLowerCase() };
   });
   return L.all;
 }
 
 let COST_DATA = true;
+// On a phone only the first columns fit, so On sits right after the name: what an agent is on is what a phone opens this page for. Sideways still reaches the rest.
+const phoneRank = c => c.k === "name" ? 0 : c.k === "on" ? 1 : 2;
 const COLS = [
   { k: "name", label: "Agent", get: a => a.name, render: a => agentRef(a.name) },
   { k: "status", label: "Status", get: a => a.status, render: a => h("span", { title: agentStatus(a.name).label }, (STATUS.find(x => x[0] === a.status) || [0, a.status])[1]) },
   { k: "spawned", get label() { return S.app.app ? "Started" : "Spawned"; }, get: a => a.when, render: a => h("span", { title: new Date(a.when).toISOString() }, stamp(a.when)) },
   { k: "thread", get label() { return S.app.app ? "Conversation" : "Thread"; }, cls: "clip ag-tm", get: a => threadTitle(a.thread) || "", render: a => threadRef(a.thread) },
+  // its own words (hive me) with their age; muted when it has said nothing and this is what its last run was asked; "was on" when the words predate the run
+  { k: "on", label: "On", cls: "clip ag-on", title: "What it says it is on (hive me), and when it said so; muted: what it was asked, when it has said nothing", get: a => (a.on && a.on.text) || "",
+    render: a => { const m = a.on; return m ? h("span", { class: m.said ? null : "meta", title: m.said ? `${m.before ? "Said in an earlier run, " : "Said "}${ago(m.at)}: ${m.text}` : `Has not said what it is on; ${m.bar ? `this is its thread's status, and its last run was woken by: ` : `its last run was asked: `}${m.asked}` }, m.before ? h("span", { class: "meta" }, "was on: ") : null, m.text, h("span", { class: "meta ag-onage" }, " · " + ago(m.at).replace(/ ago$/, ""))) : h("span", { class: "meta" }, "–"); } },
   { k: "from", label: "Started by", get: a => a.from || "", render: a => (a.from && S.agents.has(a.from) ? agentRef(a.from) : a.from === "person" && app() ? "you" : a.from || "–") },
   { k: "model", label: "Model", cls: "ag-m", get: a => a.model, render: a => h("span", { title: a.model }, a.model) },
   { k: "account", label: "Account", get: a => a.account, render: a => a.account },
@@ -72,10 +81,10 @@ const COLS = [
   { k: "children", label: "Started", num: 1, title: "Agents it started", get: a => a.spawned, render: a => a.spawned },
 ];
 
-function select() {
+function select(withHouse) {
   const words = L.q.toLowerCase().split(/\s+/).filter(Boolean), from = L.since === "all" ? 0 : Date.now() - +L.since * DAY;
   const found = gather().filter(a => (L.status === "all" || a.status === L.status) && (L.by === "all" || whoKind(a.from) === L.by)
-    && (L.model === "all" || a.model === L.model) && (L.account === "all" || a.account === L.account) && a.when >= from
+    && (L.model === "all" || a.model === L.model) && (L.account === "all" || a.account === L.account) && a.when >= from && (withHouse || !a.house || a.status === "running")
     && words.every(w => a.lc.includes(w)));
   const { k, d } = sort(), get = (COLS.find(c => c.k === k) || COLS[2]).get;
   return found.sort((a, b) => { const x = get(a), y = get(b); return (typeof x === "string" ? x.localeCompare(y) : x - y) * d || a.when - b.when; });
@@ -92,12 +101,20 @@ export default {
   render(ctx) {
     if (!S.live) return h("div", { class: "page" }, waiting(S.failed, "Reading…", "the agents"));
     const all = gather(), s = sort(), set = (k, v) => { L[k] = v; L.limit = PAGE; ctx.update(); };
-    const sig = [[...colsOn()].join(), L.dataKey.split("|")[0], S.agentCosts && S.agentCosts.at, L.q, L.status, L.by, L.since, L.model, L.account, L.limit, s.k, s.d].join("|"), changed = sig !== L.sig; L.sig = sig;
-    if (changed || !L.found) L.found = select();
+    const sig = [matchMedia("(max-width: 640px)").matches, [...colsOn()].join(), L.dataKey.split("|")[0], S.agentCosts && S.agentCosts.at, L.q, L.status, L.by, L.since, L.model, L.account, L.limit, L.house, s.k, s.d].join("|"), changed = sig !== L.sig; L.sig = sig;
+    if (changed || !L.found) { L.found = select(L.house); L.nHouse = L.house ? 0 : select(true).length - L.found.length; }   // nHouse: the housekeeping runs the fold hides now
+    const nHouse = L.nHouse;
     const found = L.found, narrowed = found.length < all.length, sum = f => found.reduce((a, x) => a + f(x), 0);
     const by = k => () => { const c = sort(), d = c.k === k ? -c.d : COLS.find(x => x.k === k).num || k === "spawned" ? -1 : 1; setPref("agents.sort", { k, d }); L.limit = PAGE; ctx.update(); };
-    const on = colsOn(), cols = COLS.filter(c => on.has(c.k)), nf = ["status", "model", "account", "by", "since"].filter(k => L[k] !== "all").length;
+    const on = colsOn(), phone = matchMedia("(max-width: 640px)").matches, cols = COLS.filter(c => on.has(c.k)).sort(phone ? (x, y) => phoneRank(x) - phoneRank(y) : () => 0), nf = ["status", "model", "account", "by", "since"].filter(k => L[k] !== "all").length;
     const costs = S.agentCosts; COST_DATA = all.some(a => a.usd > 0 || a.tok > 0);   // no cost data is "–", not a real zero (handoff 33)
+    const costNote = costs && costs.at ? `Cost and tokens from the transcripts, read ${ago(costs.at * 1e3)}${costs.refreshing ? ", reading again" : ""}. API list prices; nobody is billed this. Tokens add up every model call's input, output and cache, so context read again on each call counts each time.` : costs && costs.refreshing ? "Reading the transcripts for exact costs; until then these come from the session logs." : "Cost and tokens from the session logs.";
+    const totals = stats([
+        { label: narrowed ? "Agents shown" : "Agents", value: found.length.toLocaleString(), note: `${found.filter(a => a.status === "running").length} running` },
+        { label: "Total cost", value: COST_DATA ? money(sum(a => a.usd)) : "–", note: found.length && COST_DATA ? `${money(sum(a => a.usd) / found.length)} per agent` : null },
+        { label: "Tokens", value: COST_DATA ? toks(sum(a => a.tok)) : "–", note: !COST_DATA ? null : `${pctOf(sum(a => a.spend.t[2]), sum(a => a.tok))} re-read from cache; ${toks(sum(a => a.spend.t[1]))} written` },
+        { label: "Agent time", value: found.length ? dur(sum(a => a.ran)) : "–", note: found.length ? `added up over ${plural(sum(a => a.runs), "run")}, in ${dur(Date.now() - Math.min(...found.map(a => a.when || Date.now())))}` : null },
+    ]);
     return metrics({
       header: pageHeader({ title: "Agents", lead: `Every agent that has run, ${s.k === "spawned" && s.d < 0 ? "newest first" : s.k === "spawned" ? "oldest first" : "sorted by the column you chose"}.`, after: toolbar(
         input({ type: "search", placeholder: `Search name, ${S.app.app ? "conversation" : "thread"}, model, who started it`, "aria-label": "Search agents", value: L.q, oninput: e => set("q", e.target.value) }),
@@ -112,16 +129,15 @@ export default {
         h("details", { class: "now-more ag-f", open: L.cOpen || null, ontoggle: (e, n) => { if (e.target === n) L.cOpen = n.open; } }, h("summary", null, "Columns"),
           h("div", { class: "toolbar" }, COLS.map(c => h("label", { class: "meta" }, h("input", { type: "checkbox", checked: on.has(c.k) ? "" : null, disabled: c.k === "name" ? "" : null,
             onchange: e => { const n = new Set(on); e.target.checked ? n.add(c.k) : n.delete(c.k); setPref("agents.cols", [...n]); L.sig = ""; ctx.update(); } }), " " + c.label)))),
-        narrowed ? button("Clear", () => { Object.assign(L, { q: "", status: "all", by: "all", since: "all", model: "all", account: "all", limit: PAGE }); ctx.update(); }, { kind: "quiet", size: "s" }) : null,
-        h("span", { class: "meta" }, narrowed ? `${found.length} of ${plural(all.length, "agent")}` : plural(all.length, "agent"))),
-        meta: [costs && costs.at ? `Cost and tokens from the transcripts, read ${ago(costs.at * 1e3)}${costs.refreshing ? ", reading again" : ""}. API list prices; nobody is billed this. Tokens add up every model call's input, output and cache, so context read again on each call counts each time.` : costs && costs.refreshing ? "Reading the transcripts for exact costs; until then these come from the session logs." : "Cost and tokens from the session logs."] }),
+        narrowed && found.length < all.length - nHouse ? button("Clear", () => { Object.assign(L, { q: "", status: "all", by: "all", since: "all", model: "all", account: "all", limit: PAGE }); ctx.update(); }, { kind: "quiet", size: "s" }) : null,
+        h("span", { class: "meta" }, narrowed ? `${found.length} of ${phone && nHouse ? all.length : plural(all.length, "agent")}` : plural(all.length, "agent")),
+        nHouse > 0 || L.house ? button(L.house ? "Hide housekeeping" : `+${nHouse} housekeeping`, () => { L.house = !L.house; ctx.update(); }, { kind: "quiet", size: "s", title: "Housekeeping runs: status-bar refreshes, keeper and improve rounds, watchdog trips and phone-call starts" }) : null,
+        // On a phone the note and the tiles fold into the controls, so the page opens on the agents; the fold still says the two totals people look for.
+        phone ? h("details", { class: "now-more ag-f ag-sum", open: L.sOpen || null, ontoggle: (e, n) => { if (e.target === n) L.sOpen = n.open; } },
+          h("summary", null, `Totals: ${found.filter(a => a.status === "running").length} running${COST_DATA ? ", " + money(sum(a => a.usd)) : ""}`), totals, h("p", { class: "ph-meta" }, costNote)) : null),
+        meta: phone ? null : [costNote] }),
       sections: [
-        stats([
-          { label: narrowed ? "Agents shown" : "Agents", value: found.length.toLocaleString(), note: `${found.filter(a => a.status === "running").length} running` },
-          { label: "Total cost", value: COST_DATA ? money(sum(a => a.usd)) : "–", note: found.length && COST_DATA ? `${money(sum(a => a.usd) / found.length)} per agent` : null },
-          { label: "Tokens", value: COST_DATA ? toks(sum(a => a.tok)) : "–", note: !COST_DATA ? null : `${pctOf(sum(a => a.spend.t[2]), sum(a => a.tok))} re-read from cache; ${toks(sum(a => a.spend.t[1]))} written` },
-          { label: "Agent time", value: found.length ? dur(sum(a => a.ran)) : "–", note: found.length ? `added up over ${plural(sum(a => a.runs), "run")}, in ${dur(Date.now() - Math.min(...found.map(a => a.when || Date.now())))}` : null },
-        ]),
+        phone ? null : totals,
         found.length ? h("div", { class: "tbl-w ag-w" }, h("table", { class: "tbl ag" },
           h("caption", { class: "vh" }, "Agents"),
           h("thead", null, h("tr", null, cols.map(c => h("th", { scope: "col", class: c.num ? "num" : null, title: c.title || null, "aria-sort": s.k === c.k ? (s.d > 0 ? "ascending" : "descending") : null, "data-key": c.k },

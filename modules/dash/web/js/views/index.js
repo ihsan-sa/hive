@@ -13,6 +13,7 @@ import comms from "./comms.js";
 import work from "./work.js";
 import mail from "./mail.js";
 import inbox from "./inbox.js";
+import flow from "./flow.js";
 import mesh from "./mesh.js";
 import timeline from "./timeline.js";
 import start from "./start.js";
@@ -38,6 +39,7 @@ export default [
   usage,
   jobs,
   start,
+  flow,
   inbox,
   mail,
   made,

@@ -137,7 +137,7 @@ function angryBee() {
 }
 let logoN = [];
 /** Called on each logo click. */
-export function logoClicks() { const t = Date.now(); logoN = logoN.filter(x => t - x < 1500); logoN.push(t); if (logoN.length >= 3) { logoN = []; angryBee(); } }
+export function logoClicks() { const t = Date.now(); logoN = logoN.filter(x => t - x < 1500); logoN.push(t); if (logoN.length >= 3) { logoN = []; angryBee(); return true; } return false; }
 
 export function initEaster() {
   const hr = () => { if (location.hash === "#rave") { history.replaceState(null, "", location.pathname + location.search); rave(); } }; addEventListener("hashchange", hr); later(hr, 500);
