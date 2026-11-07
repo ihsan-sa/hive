@@ -111,14 +111,24 @@ class PhoneAlert:
         if v.get("on") is not True or not v.get("topic"): return False
         seen = str(v.get("seen") or "")
         new = [p for p in mine if str(p.get("at") or "") > seen and p.get("id") not in read]
-        if not new or self.now() - self.last_sent < GAP: return False
-        due = [p for p in new if _epoch(p.get("at")) <= self.now() - GRACE]
-        if not due: return False
+        if not new: return False
+        hot = [p for p in new if is_budget_stop(p)]   # the person must act on it: not spaced out, not held for the grace
+        if hot: due = hot
+        elif self.now() - self.last_sent < GAP: return False
+        else:
+            due = [p for p in new if _epoch(p.get("at")) <= self.now() - GRACE]
+            if not due: return False
         v["seen"] = max(str(p["at"]) for p in due)   # what came after stays for the next ping
         self.last_sent = self.now()   # a failure waits out the gap too
         try: self._push(v, "Hive"); v.pop("error", None)
         except Exception as e: v["error"] = "Couldn't reach ntfy: " + str(e)[:120]
         self._write(v); return "error" not in v
+
+
+def is_budget_stop(p):
+    """The starter's post that a run reached its budget or the daily cap held new starts (core/starter.py gave_up_text, daily_cap_holds)."""
+    t = str(p.get("text") or "")
+    return p.get("from") == "starter" and ("reached its budget" in t or "reached your daily cap" in t)
 
 
 def person_run_ends(events):
