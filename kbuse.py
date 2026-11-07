@@ -174,6 +174,37 @@ def records():
         except ValueError: pass
     return out
 
+DUD_SHOWN, DUD_PCT, DUD_DAYS, DUD_TTL = 15, 5, 3, 3600   # a note shown this often with a read this rarely is a dud for recall
+
+def duds(now=None, rs=None):
+    """Paths recall keeps showing that nobody opens: shown at least DUD_SHOWN times in the last DUD_DAYS days, opened in under DUD_PCT% of them.
+    Cached an hour in CACHE/duds.json so a recall doesn't read the whole log. A reader of 2 dozen generic notes (guide, keeper) is why recall_opened_pct sat at 6."""
+    now = time.time() if now is None else now; cache = CACHE + "/duds.json"
+    if rs is None:
+        try:
+            c = json.load(open(cache))
+            if now - c["at"] < DUD_TTL: return set(c["duds"])
+        except (OSError, ValueError, KeyError): pass
+        rs = records()
+    t0, t1 = iso(now - DUD_DAYS * 86400), iso(now + 1)
+    followed = {}
+    for r in rs:
+        if r.get("from"):
+            path = r.get("read") or re.sub(r":\d+$", "", r.get("open", ""))
+            for i in [r["from"], *r.get("also", [])]: followed.setdefault(i, set()).add(path)
+    shown, opened = {}, {}
+    for r in rs:
+        if not (r.get("recall") and r.get("id") and r.get("agent") and not r.get("neighbours") and t0 <= r.get("at", "")[:19] < t1): continue
+        for p, _ in r.get("shown", []):
+            shown[p] = shown.get(p, 0) + 1
+            opened[p] = opened.get(p, 0) + any(x == p or x == needle(p) or x.endswith("/" + needle(p)) for x in followed.get(r["id"], ()))
+    out = {p for p, n in shown.items() if n >= DUD_SHOWN and 100 * opened[p] < DUD_PCT * n}
+    if len(rs) and cache:
+        try:
+            os.makedirs(CACHE, exist_ok=True); json.dump({"at": now, "duds": sorted(out)}, open(cache, "w"))
+        except OSError: pass
+    return out
+
 def pct(a, b): return round(100 * a / b) if b else None
 
 def runs_observable(t0, t1):
