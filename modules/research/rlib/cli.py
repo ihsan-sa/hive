@@ -65,7 +65,7 @@ def c_verify(a):
 
 HUNT_KEYS = ("orgs (list) or discover (list of searches); target (rows wanted, 25); per_org (2); must (words near the person); roles / exclude_roles (patterns); "
              "org_pattern; domains ({org: site}, strict); angles (search templates with {org}); sources; read_per_search (4); allow_secondary (true); "
-             "allow_page_signal (false); max_age_years (3); max_seconds (1800); out")
+             "pages ({org: url or [urls]}, read directly and tied to that org); allow_page_signal (false); max_age_years (3); max_seconds (1800); out")
 
 
 def c_hunt(a):

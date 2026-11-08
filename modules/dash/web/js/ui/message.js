@@ -327,7 +327,7 @@ export function tagChips(p) {
     const i = String(t).indexOf(":"), kind = String(t).slice(0, i).toLowerCase(), id = String(t).slice(i + 1);
     if (i < 1 || !id) continue;
     if (kind === "focus") { const f = focusById(id.toLowerCase()); if (f) chips.push([kind, focusName(f), href("focus", f.id), `Open the focus ${focusName(f)}`]); }
-    else if (kind === "agent") { const th = agentThread(id); chips.push([kind, who(id), th ? threadHref(th) : agentHref(id), th ? `Open ${id}'s conversation, ${threadTitle(th)}` : `Open ${id}`]); }
+    else if (kind === "agent") { chips.push([kind, who(id), agentHref(id), `Open ${id}`]); }
     else if (kind === "thread") { if (id !== p.th) chips.push([kind, threadTitle(id), threadHref(id), `Open the conversation ${threadTitle(id)}`]); }
   }
   return chips.length ? h("div", { class: "msg-tags", "aria-label": "Tags" }, chips.map(([kind, label, to, title]) => h("a", { class: "msg-tag", "data-kind": kind, href: to, title }, h("span", null, label)))) : null;

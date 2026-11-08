@@ -467,8 +467,16 @@ function focusRow(f) {
 }
 function threadRow(th) {
   const f = focusById(focusOf(th));
-  return { kind: "thread", word: th, title: threadTitle(th), line: threadLine(th), focus: f ? focusName(f) : "", head: words(th, threadTitle(th)),
+  return { kind: "thread", word: th, title: threadTitle(th), line: threadGist(th), focus: f ? focusName(f) : "", head: words(th, threadTitle(th)),
     hay: words(th, threadTitle(th), threadLine(th), f && focusName(f), tagWords(th), "thread conversation") };
+}
+/** A conversation's line in the @ list: its status line, or else who spoke last and the first words they said (R10 #3: a row with only its id
+ *  told nobody which conversation it was). */
+function threadGist(th) {
+  const l = threadLine(th); if (l) return l;
+  const d = S.threads.get(th), p = d && d.posts[d.posts.length - 1]; if (!p) return "";
+  const t = mdPlain(String(displayText(p) || "")).split("\n").map(x => x.trim()).find(Boolean) || "";
+  return t ? `${p.from === "person" ? "You" : p.from}: ${short(t, 90)}` : "";
 }
 /** Rows in the order they're offered: this thread's agents, running agents, the foci, recent agents, then threads active this week, new and the model words. */
 function acRows(th) {
@@ -514,6 +522,7 @@ function acNames(th, q) {
 /** The @ list's rows with a small heading over each group (the # list has one kind, so no headings). */
 function acList(th) {
   const a = CP.ac, out = []; let last = null;
+  if (a.none) return [h("div", { class: "cp-none meta", role: "status", "data-key": "none" }, `No one matches “${a.q.trim()}”`)];
   a.items.forEach((r, i) => {
     const g = a.mark === "#" ? null : groupOf(r);
     if (g && g !== last) { out.push(h("div", { class: "menu-h", role: "presentation", "data-key": "h:" + g }, GROUPS.find(x => x[0] === g)[1])); last = g; }
@@ -534,8 +543,10 @@ function acCheck(el, th) {
   const mark = m ? (m[1] === "#" ? "#" : "@") : "@", q = m ? (mark === "#" ? m[2] : m[1]) : "";
   const first = q.split(" ")[0].toLowerCase(), done = mark === "@" && first && (q.includes(" ") || q === first) && !!wordTarget(first, th) || (mark === "@" && !!threadWord(first, th) && q !== first);
   const items = m && !done ? (mark === "#" ? acThreads(q.toLowerCase()) : acNames(th, q.toLowerCase())) : [];
-  const next = items.length && !(items.length === 1 && items[0].word === q) ? { q, mark, at: el.selectionStart - q.length - 1, items, i: 0 } : null;
-  const key = a => a && a.items.map(r => r.word).join(" ");
+  const at = el.selectionStart - q.length - 1;
+  const next = items.length && !(items.length === 1 && items[0].word === q) ? { q, mark, at, items, i: 0 }
+    : m && !done && mark === "@" && q.trim() && !items.length ? { q, mark, at, items: [], i: 0, none: true } : null;   // R10 #8: say nothing matches rather than vanish
+  const key = a => a && (a.none ? "\u0000none:" + a.q.trim() : a.items.map(r => r.word).join(" "));
   if (key(next) !== key(CP.ac)) { CP.ac = next; return true; }
   if (next) CP.ac.at = next.at, CP.ac.q = next.q;
   return false;
@@ -590,12 +601,13 @@ function histTab(th, n) {
  *  a focus with who keeps it; a thread with its title and status line. No working / not-working words: the dot says that. */
 function optRow(r, mark = "@", { here } = {}) {
   const m = (x, cls = "meta") => (x ? h("span", { class: cls }, x) : null), sep = x => (x ? h("span", { class: "meta cp-sep", "aria-hidden": "true" }, "·") : null);
-  if (r.kind === "focus") return [h("span", { class: "cp-fx", "aria-hidden": "true" }, "◆"), h("b", null, mark + r.word), m(r.name !== r.word ? r.name : ""), sep(1), m(r.keeper ? `kept by ${r.keeper}` : "nobody keeping it: a new agent in its thread")];
-  if (r.kind === "thread") return [h("span", { class: "cp-fx", "aria-hidden": "true" }, "#"), h("b", null, mark + r.word), m(r.title !== r.word && r.title !== (r.word[0].toUpperCase() + r.word.slice(1)).replace(/[-_]+/g, " ") ? r.title : "", "meta cp-title"), sep(r.line), m(r.line)];
+  if (r.kind === "focus") return [h("span", { class: "cp-fx", "aria-hidden": "true" }, "◆"), h("b", null, mark + r.word), m(r.name !== r.word ? r.name : ""), sep(1), m(r.keeper ? `kept by ${r.keeper}` : "nobody keeping it: a new agent in its thread", "meta cp-line")];
+  if (r.kind === "thread") return mark === "#" ? [h("span", { class: "cp-fx", "aria-hidden": "true" }, "#"), h("b", null, mark + r.word), m(r.title !== r.word ? r.title : "", "meta cp-title"), sep(r.line), m(r.line)]
+    : [h("span", { class: "cp-fx", "aria-hidden": "true" }, "#"), h("b", { class: "cp-ttl" }, r.title || r.word), m("@" + r.word, "meta cp-id"), sep(r.line), m(r.line, "meta cp-line")];   // the title leads, as on the rail; the id is what gets inserted
   if (r.kind === "word") return [statusDot("none"), h("b", null, mark + r.word), m(r.word === "new" ? "a new agent, with this conversation to read" : "a new agent on this model")];
   const inHere = here && r.th === here;
   return [statusDot(agentStatus(r.word).key, { live: S.running.has(r.word) }), h("b", null, mark + r.word), m(r.model, "meta cp-model"), sep(r.model && r.th && !inHere),
-    inHere ? null : m(r.th ? (r.title && r.title !== r.th ? r.title : r.th) : "", "meta cp-title"), sep(r.line), m(r.line)];
+    inHere ? null : m(r.th ? (r.title && r.title !== r.th ? r.title : r.th) : "", "meta cp-title"), sep(r.line), m(r.line, "meta cp-line")];
 }
 
 // ---- secret box ----
@@ -878,8 +890,9 @@ export function composer({ thread, update, place = "thread", autofocus, top }) {
         },
         onkeydown: (e, n) => {
           const a = CP.ac;
-          if (a && (e.key === "ArrowDown" || e.key === "ArrowUp")) { e.preventDefault(); a.i = (a.i + (e.key === "ArrowDown" ? 1 : a.items.length - 1)) % a.items.length; refresh(); return; }
-          if (a && (e.key === "Enter" || e.key === "Tab") && !e.shiftKey) { e.preventDefault(); acPick(th, a.items[a.i].word); return; }
+          if (a && a.none && e.key === "Tab") { e.preventDefault(); return; }
+          if (a && a.items.length && (e.key === "ArrowDown" || e.key === "ArrowUp")) { e.preventDefault(); a.i = (a.i + (e.key === "ArrowDown" ? 1 : a.items.length - 1)) % a.items.length; refresh(); return; }
+          if (a && a.items.length && (e.key === "Enter" || e.key === "Tab") && !e.shiftKey) { e.preventDefault(); acPick(th, a.items[a.i].word); return; }
           if (!e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey && !e.isComposing) {
             if ((e.key === "ArrowUp" || e.key === "ArrowDown") && histStep(th, n, e.key === "ArrowUp")) { e.preventDefault(); return; }
             if (e.key === "Tab" && histTab(th, n)) { e.preventDefault(); return; }

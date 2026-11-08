@@ -14,7 +14,8 @@ const OWNERS = [["jobs", "Queue jobs", "tier1"], ["outside", "Agents' work outsi
 
 const who = n => (n && n !== "?" ? agentRef(n) : "?");
 const num = (label, render) => ({ label, num: true, render });
-const col = (label, render) => ({ label, render });
+const col = (label, render, lead) => ({ label, render, lead });
+const agentCol = (label, render) => col(label, render, true);   // a phone row leads with the agent (R10 6)
 const cmd = { label: "Command", mono: true, clip: true, render: r => (r.cmd == null ? "not shown" : h("span", { title: r.cmd }, r.cmd)) };
 
 function headline(V) {
@@ -84,20 +85,20 @@ export default {
         section({ title: app ? "The computer" : "The machine", note: "how busy the machine is now" }, stats(tiles(V.machine))),
         section({ title: "Who's using it", note: app ? "Memory counts what's in use, including swap." : "Memory is what's in use, RAM plus swap. The unfilled part of its bar is the kernel, shared memory and tmpfs." }, split(V)),
         ...(app && !q ? [] : [section({ title: "Running", note: `${V.running.length} of ${V.slots} slots, longest first` }, table({
-          rows: V.running, key: r => r.lane + r.since, empty: "Nothing running in the queue.",
-          columns: [col("Agent", r => who(r.agent)), col("Lane", r => r.lane), col("Running", r => secs(t - r.since)), num(app ? "Cores" : "Threads", r => r.cores.toFixed(1)), num("Memory", r => gb(r.mem)), cmd],
+          rows: V.running, key: r => r.lane + r.since, fold: { n: 10, id: "jobs-running" }, empty: "Nothing running in the queue.",
+          columns: [agentCol("Agent", r => who(r.agent)), col("Lane", r => r.lane), col("Running", r => secs(t - r.since)), num(app ? "Cores" : "Threads", r => r.cores.toFixed(1)), num("Memory", r => gb(r.mem)), cmd],
         })),
         section({ title: "Queued", note: "in the order they'll start" }, table({
-          rows: V.queued, key: q => q.agent + q.since + q.cmd, empty: "The queue is empty.",
-          columns: [col("#", q => (q.first ? "first lane" : String(++pos))), col("Agent", q => who(q.agent)), col("Waiting", q => secs(t - q.since)), cmd],
+          rows: V.queued, key: q => q.agent + q.since + q.cmd, fold: { n: 10, id: "jobs-queued" }, empty: "The queue is empty.",
+          columns: [col("Place", q => (q.first ? "first lane" : String(++pos))), agentCol("Agent", q => who(q.agent)), col("Waiting", q => secs(t - q.since)), cmd],
         }))]),
         section({ title: app ? "Big work the agents are running" : "Outside the queue", note: app ? null : "the queue's limits don't apply to these" }, table({
           rows: V.outside, key: o => o.who, empty: "Nothing big outside the queue.",
-          columns: [col("Who", o => (o.agent ? who(o.who) : o.who)), num(app ? "Cores" : "Threads", o => o.cores.toFixed(1)), num("Memory", o => gb(o.mem)), num("Processes", o => o.procs), { ...cmd, label: "Biggest command" }],
+          columns: [agentCol("Who", o => (o.agent ? who(o.who) : o.who)), num(app ? "Cores" : "Threads", o => o.cores.toFixed(1)), num("Memory", o => gb(o.mem)), num("Processes", o => o.procs), { ...cmd, label: "Biggest command" }],
         })),
         ...(app && !q ? [] : [section({ title: "Just finished", note: "last 10 queue jobs" }, table({
           rows: V.done, key: d => d.end + d.cmd, empty: "None yet.",
-          columns: [col("Finished", d => ago(d.end * 1e3)), col("Agent", d => who(d.agent)), col("Waited", d => secs(d.waited)), col("Ran", d => secs(d.ran)),
+          columns: [col("Finished", d => ago(d.end * 1e3)), agentCol("Agent", d => who(d.agent)), col("Waited", d => secs(d.waited)), col("Ran", d => secs(d.ran)),
             col("Result", d => (d.rc ? statusLabel("error", `failed (${d.rc})`) : statusLabel("ok"))), cmd],
         }))]),
       ].filter(Boolean),

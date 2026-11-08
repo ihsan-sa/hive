@@ -6,7 +6,7 @@ import { agentOn, agentSpend, agentStatus, isRunning, loginName, modelName, sEnd
 import { ago, dur, money, plural, short, stamp, toks } from "../core/format.js";
 import { metrics } from "../templates.js";
 import { button, empty, waiting, input, pageHeader, seg, stats, toolbar, pageNav } from "../ui/kit.js";
-import { agentRef, threadRef } from "../ui/refs.js";
+import { agentAvatar, agentRef, threadRef } from "../ui/refs.js";
 
 const STATUS = [["all", "Any status"], ["running", "Running"], ["queued", "Waiting to start"], ["ended", "Ended"], ["killed", "Killed"], ["limited", "Stopped at a limit"], ["failed", "Failed"]];
 const BY = [["all", "Started by anyone"], ["person", "Started by a person"], ["agent", "Started by an agent"], ["system", "Started by the Hive"]];
@@ -57,11 +57,13 @@ function gather() {
 }
 
 let COST_DATA = true;
-// On a phone only the first columns fit, so On sits right after the name: what an agent is on is what a phone opens this page for. Sideways still reaches the rest.
-const phoneRank = c => c.k === "name" ? 0 : c.k === "on" ? 1 : 2;
+// On a phone a row stacks (R10 1, like ui/table.js): avatar, name and status on the first line, what it is on under them, then one labelled line per other column.
+const phoneRank = c => c.k === "name" ? 0 : c.k === "status" ? 1 : c.k === "on" ? 2 : 3;
+const PHONE_BARE = new Set(["name", "status", "on"]);   // these stand on their own lines on a phone; the rest carry their column's name
+const phoneName = a => { const av = agentAvatar(a.name, { size: "s" }); av.tabIndex = -1; av.setAttribute("aria-hidden", "true"); return [av, agentRef(a.name, { dot: false })]; };   // the avatar carries the status shape
 const COLS = [
-  { k: "name", label: "Agent", get: a => a.name, render: a => agentRef(a.name) },
-  { k: "status", label: "Status", get: a => a.status, render: a => h("span", { title: agentStatus(a.name).label }, (STATUS.find(x => x[0] === a.status) || [0, a.status])[1]) },
+  { k: "name", label: "Agent", cls: "ag-n", get: a => a.name, render: a => agentRef(a.name) },
+  { k: "status", label: "Status", cls: "ag-st", get: a => a.status, render: a => h("span", { title: agentStatus(a.name).label }, (STATUS.find(x => x[0] === a.status) || [0, a.status])[1]) },
   { k: "spawned", get label() { return S.app.app ? "Started" : "Spawned"; }, get: a => a.when, render: a => h("span", { title: new Date(a.when).toISOString() }, stamp(a.when)) },
   { k: "thread", get label() { return S.app.app ? "Conversation" : "Thread"; }, cls: "clip ag-tm", get: a => threadTitle(a.thread) || "", render: a => threadRef(a.thread) },
   // its own words (hive me) with their age; muted when it has said nothing and this is what its last run was asked; "was on" when the words predate the run
@@ -134,6 +136,7 @@ export default {
           h("div", { class: "toolbar" }, COLS.map(c => h("label", { class: "meta" }, h("input", { type: "checkbox", checked: on.has(c.k) ? "" : null, disabled: c.k === "name" ? "" : null,
             onchange: e => { const n = new Set(on); e.target.checked ? n.add(c.k) : n.delete(c.k); setPref("agents.cols", [...n]); L.sig = ""; ctx.update(); } }), " " + c.label)))),
         narrowed && found.length < all.length - nHouse ? button("Clear", () => { Object.assign(L, { q: "", status: "all", by: "all", since: "all", model: "all", account: "all", limit: PAGE }); ctx.update(); }, { kind: "quiet", size: "s" }) : null,
+        phone ? picker("Sort", s.k, cols.map(c => [c.k, "Sort: " + c.label]), k => { const d = COLS.find(x => x.k === k).num || k === "spawned" ? -1 : 1; setPref("agents.sort", { k, d }); L.limit = PAGE; ctx.update(); }) : null,   // the column headers sort on a desktop; a phone has no header row
         h("span", { class: "meta" }, narrowed ? `${found.length} of ${phone && nHouse ? all.length : plural(all.length, "agent")}` : plural(all.length, "agent")),
         nHouse > 0 || L.house ? button(L.house ? "Hide housekeeping" : `+${nHouse} housekeeping`, () => { L.house = !L.house; ctx.update(); }, { kind: "quiet", size: "s", title: "Housekeeping runs: status-bar refreshes, keeper and improve rounds, watchdog trips and phone-call starts" }) : null,
         // On a phone the note and the tiles fold into the controls, so the page opens on the agents; the fold still says the two totals people look for.
@@ -147,7 +150,7 @@ export default {
           h("div", { class: "tr th", role: "row" }, cols.map(c => h("span", { role: "columnheader", class: c.num ? "r" : null, title: c.title || null, "aria-sort": s.k === c.k ? (s.d > 0 ? "ascending" : "descending") : null, "data-key": c.k },
             h("button", { type: "button", class: "ag-s", onclick: by(c.k) }, c.label, s.k === c.k ? h("span", { "aria-hidden": "true" }, s.d > 0 ? "▲" : "▼") : null)))),
           h("div", { class: "tb", role: "rowgroup", "data-own": "morph", "data-sig": sig }, changed ? found.slice(0, L.limit).map(a => h("div", { class: "tr", role: "row", "data-key": a.name },
-            cols.map(c => h("span", { role: "cell", class: [c.num ? "r num" : null, c.cls || null].filter(Boolean).join(" ") || null }, c.render(a))))) : null)))
+            cols.map(c => h("span", { role: "cell", class: [c.num ? "r num" : null, c.cls || null].filter(Boolean).join(" ") || null, "data-label": phone && !PHONE_BARE.has(c.k) ? c.label : null }, phone && c.k === "name" ? phoneName(a) : c.render(a))))) : null)))
           : empty(all.length ? "No agents match." : "No agents have run yet. When one starts, it shows here."),
         found.length > L.limit ? h("div", { class: "lr-more" },
           button(found.length - L.limit > PAGE * 5 ? `Show ${PAGE * 5} more (${found.length - L.limit} left)` : `Show ${found.length - L.limit} more`, () => { L.limit += PAGE * 5; ctx.update(); }, { kind: "quiet", size: "s" })) : null,

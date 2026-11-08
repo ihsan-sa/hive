@@ -94,11 +94,12 @@ a.top-route[data-mode=limited]:hover{background:color-mix(in oklch,var(--warn) 3
 .more>.btn[aria-expanded=true]{background:var(--hover);color:var(--ink)}
 .more-dot{position:absolute;top:6px;right:6px;width:6px;height:6px;border-radius:50%;background:var(--accent)} /* NEW: a view from More is open */
 .more-c{display:none}
-.more-m{display:grid;min-width:240px;max-height:calc(100dvh - var(--bar-h,52px) - 16px)}   /* the grouped More (R7b): every page, so it may be taller than the 520 of other menus */
+.more-m{display:grid;min-width:240px;max-height:calc(100dvh - var(--bar-h,52px) - 16px);overflow:hidden auto}   /* never a sideways bar: nothing in it is wider than the panel (R10 #2) */   /* the grouped More (R7b): every page, so it may be taller than the 520 of other menus */
 .more-i[aria-current]{background:var(--hover)}
 .more-i b{font-weight:var(--w-med)}
 .more-i span{display:none}             /* the one-line descriptions go: the names say it */
-.more-m>.more-h:not(:first-child){margin-top:6px;border-top:1px solid var(--line);padding-top:10px}
+.more-m>.more-h:not(:first-child){margin-top:4px;border-top:1px solid var(--line);padding-top:8px}
+.more-m>.menu-sep+.more-h{border-top:0;margin-top:0;padding-top:4px}   /* Look has its own separator: one rule, not two */
 /* ---- band: the hive has stopped, in words, under the bar ---- */
 .band{display:flex;align-items:center;gap:8px;padding:6px var(--s4);border-top:1px solid var(--line);background:color-mix(in oklch,var(--bad) 9%,var(--surface));font-size:var(--fs-small);color:var(--ink)}
 .band>span:not(.st){flex:1;min-width:0;text-wrap:pretty}
@@ -386,13 +387,17 @@ table.tbl .clip{width:100%;max-width:0;overflow:hidden;text-overflow:ellipsis}
   .tbl.tg,.tbl.tg>.tb{display:block}
   .tbl.tg>.th{display:none}
   .tbl.tg>.tb>.tr{display:grid;grid-template-columns:minmax(0,1fr);row-gap:2px;padding:10px 0}
-  .tbl.tg>.tb>.tr>*{display:block;white-space:normal;overflow-wrap:anywhere;text-align:right}
-  .tbl.tg>.tb>.tr>.lead{order:-1;text-align:left;font-weight:var(--w-med)}
-  .tbl.tg>.tb>.tr>[data-label]::before{content:attr(data-label);float:left;margin-right:12px;color:var(--ink-3);font-size:var(--fs-meta);font-family:var(--font);font-weight:400}
-  .tbl.tg>.tb>.tr>.wrap:not(.lead){text-align:left}
-  .tbl.tg>.tb>.tr>.wrap[data-label]::before{float:none;display:block}
+  .tbl.tg>.tb>.tr>*{display:block;white-space:normal;overflow-wrap:anywhere;text-align:left}
+  .tbl.tg>.tb>.tr>.lead{order:-1;font-weight:var(--w-med)}
+  /* R10 6: the value starts at one left edge under the row's title, its label in a column before it, so a long command wraps under itself, not under the label */
+  .tbl.tg>.tb>.tr>[data-label]{position:relative;padding-left:7.5rem}
+  .tbl.tg>.tb>.tr>[data-label]::before{content:attr(data-label);position:absolute;left:0;top:0;max-width:7rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink-3);font-size:var(--fs-meta);font-family:var(--font);font-weight:400}
+  .tbl.tg>.tb>.tr>.wrap[data-label]{padding-left:0}
+  .tbl.tg>.tb>.tr>.wrap[data-label]::before{position:static;display:block;max-width:none}
   .tbl.tg>.tb>.tr>:empty{display:none}
 }
+.tbl.tg>.tb>.tr[hidden]{display:none}
+.tbl-fold{padding:8px 0}
 
 /* ---- chart (frame + plot) ---- */
 .chart{min-width:0}
@@ -489,7 +494,7 @@ table.tbl .clip{width:100%;max-width:0;overflow:hidden;text-overflow:ellipsis}
 .toolbar .seg{flex:none}   /* wraps to its own row rather than hide an option behind a scroll */
 .toolbar .seg button{flex:none}
 .toolbar>.now-more{border-top:0;padding-top:0}   /* a disclosure among the controls, not a section break */
-.sec-h .seg{max-width:100%;overflow-x:auto;scrollbar-width:none}
+.sec-h .seg{max-width:100%;flex-wrap:wrap}   /* R10 #11: on a phone the options wrap inside the pill; a hidden scroll hid "silent" and "quiet" on Progress */
 .sec-h .seg button{flex:none}
 @container (max-width:640px){.toolbar .input{width:100%}}
 
@@ -940,6 +945,7 @@ rc-lazy[data-mode=inline]{display:inline}
 .msg-tag[data-kind=focus]::before{background:var(--accent)}
 .msg-tag[data-kind=agent]::before{border-radius:50%}
 .msg-tag:hover,.msg-tag:focus-visible{color:var(--ink);border-color:var(--line-2)}
+@media (max-width:640px),(pointer:coarse){.msg-tags{gap:4px 8px}.msg-tag{position:relative}.msg-tag::after{content:"";position:absolute;left:-4px;right:-4px;top:50%;height:44px;transform:translateY(-50%)}}
 .msg-q{display:grid;width:fit-content;gap:1px;margin:2px 0 4px;padding:3px 10px;border:0;border-left:2px solid var(--line-2);background:none;color:var(--ink-2);font-size:var(--fs-small);text-align:left;cursor:pointer;min-width:0;max-width:100%}
 .msg-q:hover{border-left-color:var(--ink-3);color:var(--ink)}
 .msg-q[data-static]{cursor:default}
@@ -1182,6 +1188,15 @@ a.ref[data-kind=file][data-pv-on]{background:color-mix(in oklch,var(--accent) 16
 @media (pointer:coarse),(max-width:640px){.cp-opt{min-height:44px}}   /* a finger-sized row in the To list and the @ list */
 .cm-id{display:inline-flex;align-items:center;gap:4px;flex:none}
 .cp-opt .meta{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.cp-opt>b.cp-ttl{flex:none;max-width:45%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.cp-opt .cp-id{flex:none}.cp-opt .cp-line{flex:1}   /* a conversation row: title, @id, then its line takes what is left */
+@media (max-width:640px){   /* R10 #9: on a phone a row is two lines, the name and its thread, then the status line under them; the model goes */
+  .cp-ac .cp-opt{flex-wrap:wrap;row-gap:1px;padding-top:5px;padding-bottom:5px}
+  .cp-ac .cp-model,.cp-ac .cp-model+.cp-sep,.cp-ac .cp-sep:has(+.cp-line){display:none}
+  .cp-ac .cp-title{flex:1}
+  .cp-ac .cp-opt>b.cp-ttl{max-width:none;flex:0 1 auto}
+  .cp-ac .cp-line{flex:1 0 100%;padding-left:15px}
+}
+.cp-none{padding:10px 8px;color:var(--ink-3);font-size:var(--fs-small)}   /* the @ list when nothing matches (R10 #8) */
 .cp-menu-n{margin:4px 8px 4px;font-size:var(--fs-meta);color:var(--ink-3);line-height:1.4;text-wrap:pretty}
 .cp-menu-h{margin:6px 8px 2px;padding-top:6px;border-top:1px solid var(--line);font-size:var(--fs-meta)}
 .cp-ac .menu-h{padding:6px 8px 2px}   /* the @ list's group headings: Agents, Focuses, Conversations */
@@ -1877,6 +1892,20 @@ details.blk>summary .blk-t::after{border-color:var(--ink-3)}
 @media (max-width:640px){.ag-w{max-height:calc(100dvh - var(--bar) - 100px)}.tbl.ag{overflow:visible}.ag .tb>.tr>.ag-on{white-space:normal;overflow-wrap:anywhere}} /* the page ends 98px below the table: a taller one is pushed up under the bar at the bottom */
 @media (max-width:640px){.ag-w{margin-top:0}.after:has(>.ag-w){margin-top:var(--s3) !important}} /* the agent rows start in the top half of a phone screen */
 @media (min-width:1340px){.ag-w{position:static;max-height:none;overflow:visible}.ag .th{top:var(--bar-h)}}
+/* R10 1: on a phone a row stacks like ui/table.js's (.tg): avatar, name and status, then what it is on, then a labelled line per column; the page scrolls, not a box */
+@media (max-width:640px){
+  .ag-w{position:static;max-height:none;overflow:visible}
+  .tbl.ag{display:block;min-width:0}
+  .tbl.ag>.th{display:none}
+  .tbl.ag>.tb>.tr{grid-template-columns:minmax(0,1fr) auto;column-gap:12px;row-gap:2px;padding:10px 0;align-items:center}
+  .ag .tb>.tr>*{grid-column:1/-1;white-space:normal;overflow-wrap:anywhere;text-align:left}
+  .ag .tr>:first-child,.ag .tr:not(.th):hover>:first-child{position:static;background:none;box-shadow:none}
+  .ag .tb>.tr>.ag-n{grid-column:1;grid-row:1;display:flex;align-items:center;gap:8px;font-weight:var(--w-med);overflow:visible}
+  .ag .tb>.tr>.ag-st{grid-column:2;grid-row:1;color:var(--ink-2);font-size:var(--fs-meta)}
+  .ag .tb>.tr>.ag-on{color:var(--ink)}
+  .ag .tb>.tr>[data-label]{position:relative;padding-left:7.5rem;font-size:var(--fs-meta);color:var(--ink-2)}
+  .ag .tb>.tr>[data-label]::before{content:attr(data-label);position:absolute;left:0;color:var(--ink-3)}
+}
 
 /* ---- consumer first run: the one screen, the log of what is happening beside it ---- */
 .wt{max-width:1120px}
@@ -2505,7 +2534,7 @@ input[type=radio],input[type=checkbox]:not(.switch){accent-color:var(--ink)}
 .seg button{height:calc(var(--ctl) - 6px)}
 .pv-zb,.cm-picks button,.tm-chip{height:var(--ctl-s)}
 @media (max-width:600px){.seg button{min-height:24px}}   /* the developer look makes it 22px; a phone tap target is at least 24 */
-@media (hover:none){.more-i,.seg button{min-height:44px}}
+@media (hover:none) and (pointer:coarse){.more-i,.seg button{min-height:44px}}   /* touch screens only: a headless or no-pointer desktop keeps the 34 px menu rows (R10 #2) */
 .map-sec>h3,.pf-h{text-transform:none;letter-spacing:0;font-size:var(--fs-meta);font-weight:var(--w-med);color:var(--ink-3)}
 .cm-sep,.more-sep{height:1px;margin:4px 0;background:var(--line)}
 .cm-menu-h{padding:8px 8px 2px;font-size:var(--fs-meta);font-weight:var(--w-med);color:var(--ink-3)}
