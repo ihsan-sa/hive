@@ -9,6 +9,7 @@ import { now, DAY } from "./format.js";
 import { faded, archived } from "../ui/threadmeta.js";
 import { agentRef, threadRef } from "../ui/refs.js";
 import { waitingOn } from "./needs.js";
+import { plainName } from "./simple.js";
 
 export const FOCI_EVERY = 20e3, ACTIVE_FOR = 7 * DAY;
 export const MISC = { id: null, name: "Misc", misc: true, summary: null, checks: [], threads: [], links: [] };
@@ -114,19 +115,43 @@ export function stateOf(id) {
   return { key: "quiet", word: "quiet", tone: "ended" };
 }
 /** A summary bullet with its @agent and #thread words as pills. */
+// No ids on the home or the focus pages (the person, 1107151649a6; R16): an agent code, backticked or bare, is the chat's agent pill; a 12-hex post id
+// and an ask's own id are dropped; a leading step word ("R14:") goes. Agents' text is kept, only what the person cannot read is taken out.
+const CODE = /^[a-z](?=[0-9a-f]{0,3}\d)[0-9a-f]{4}$/;   // a letter and 4 hex with a digit in it: "a9179", not "added"
+export const isCode = w => isAgent(w) || CODE.test(w);
+/** The text with post ids, ask ids and a leading step word taken out, and the punctuation they leave tidied. */
+export function scrub(text) {
+  return String(text || "")
+    .replace(/^\s*(?:rung\s+)?R\d+[a-z]?(?:\s*(?:,|and|\+|&|-|–|\/)\s*R\d+[a-z]?)*\s*[:.–-]\s+(\S)/i, (m, c) => c.toUpperCase())
+    .replace(/\s*\((?:post\s+)?[0-9a-f]{12}\)/g, "")
+    .replace(/(?:\b(?:in|from|see|at)\s+)?\bpost\s+[0-9a-f]{12}\b/gi, "")
+    .replace(/(^|[\s(:,])(?:(?:on|in|from|at|see|by)\s+)?[0-9a-f]{12}\b/g, "$1")
+    .replace(/\s*\(k\d{4}\)/g, "").replace(/\bk\d{4}'s\s+/g, (m) => (isAgent(m.slice(0, 5)) ? m : "the ")).replace(/\bk\d{4}\b/g, w => (isAgent(w) ? w : "an ask"))
+    .replace(/\(\s*[,;]?\s*\)/g, "").replace(/\s+([,.;:)])/g, "$1").replace(/([,;:])\s*([.,;:])/g, "$2").replace(/[:,;]\s*$/, "").replace(/\s{2,}/g, " ").trim();
+}
+const WORD = /(^|[\s(\[,;:"'/])(?:([@#])([A-Za-z0-9_][A-Za-z0-9_.:-]*[A-Za-z0-9_])|`([a-z][0-9a-f]{4})`|([a-z][0-9a-f]{4})(?![\w-]))/g;
+/** Summary, status and needs text as nodes: @agent, a backticked or bare agent code and #thread as the chat's pills, ids scrubbed (above). */
 export function pills(text) {
-  const out = []; let last = 0; const re = /(^|[\s(])([@#])([A-Za-z0-9_][A-Za-z0-9_.:-]*[A-Za-z0-9_])/g; let m;
-  while ((m = re.exec(text))) {
-    const at = m.index + m[1].length, word = m[3];
-    const el = m[2] === "@" ? (isAgent(word) || /^[a-f0-9]{5}$/.test(word) || word === "person" ? agentRef(word, { dot: false }) : null) : S.threads.has(word) ? threadRef(word) : null;
+  text = scrub(text);
+  const out = []; let last = 0, m; WORD.lastIndex = 0;
+  while ((m = WORD.exec(text))) {
+    const at = m.index + m[1].length, word = m[3] || m[4] || m[5];
+    const el = m[2] === "#" ? (S.threads.has(word) ? threadRef(word) : null)
+      : m[2] === "@" ? (isAgent(word) || /^[a-f0-9]{5}$/.test(word) || word === "person" ? agentRef(word, { dot: false }) : null)
+      : m[4] || isCode(word) ? agentRef(word, { dot: false }) : null;
+    if (!el && m[2] === "@" && /^(new|free|claude|codex|opus|sonnet|haiku|fable|astra)$/.test(word)) { out.push(text.slice(last, at), word); last = at + m[0].length - m[1].length; continue; }   // "@new builder" read as a word, not a mention
     if (!el) continue;
     out.push(text.slice(last, at), el); last = at + m[0].length - m[1].length;
   }
   out.push(text.slice(last));
   return out.filter(x => x !== "");
 }
+/** The same text for the simple view: ids scrubbed and every agent named as the hive, as plain words. */
+export const plainPills = text => scrub(text).replace(WORD, (m, a, at, w1, w2, w3) => (at === "#" ? m : at === "@" || w2 || isCode(w3) ? a + plainName(w1 || w2 || w3) : m));
 /** A thread's one-line description: its status bar's first line, else nothing (the title says what it is). */
-export function threadLine(th) { const r = S.threadStatus && S.threadStatus[th]; const l = r && r.text.split("\n")[0].replace(/\s*\(a[0-9a-f]{4,5}\)/g, "").trim(); return l && l !== threadTitle(th) ? l : ""; }
+export function threadLine(th) { const r = S.threadStatus && S.threadStatus[th]; const l = r && scrub(r.text.split("\n")[0].replace(/\s*\(a[0-9a-f]{4,5}\)/g, "")); return l && l !== threadTitle(th) ? l : ""; }
+/** Where a needs row comes from, said for the person: its focus's name, else the thread's status line 1, else its title. */
+export function needSource(w) { const f = w.focus ? focusById(w.focus) : focusById(focusOf(w.th)); return f ? focusName(f) : (w.th && (threadLine(w.th) || threadTitle(w.th))) || ""; }
 /** A focus's name, said short where the long name explains more than it names. */
 export const focusName = f => (f && f.name) || "Misc";
 export const focusTitle = f => h("span", { class: "fc-name" }, focusName(f));

@@ -66,7 +66,7 @@ export function mobileNav({ views, current, nav, update }) {
 
 /** The view, on the root: css/phone.css hides both bars in a conversation (data-view=thread) and a file. */
 export function setView(id, arg) {
-  const b = document.body, thread = id === "comms" && !!arg && !String(arg).startsWith("focus:");   // a file (.kb[data-in]) is caught in the CSS
+  const b = document.body, thread = id === "comms" && !!arg && !String(arg).startsWith("focus:") && arg !== "~list";   // a file (.kb[data-in]) is caught in the CSS
   const v = thread ? "thread" : id;
   if (b.dataset.view !== v) b.dataset.view = v;
 }
@@ -95,11 +95,11 @@ if (typeof document !== "undefined") {
   addEventListener("focusout", () => setTimeout(kb, 60));
 
   const phone = () => root.clientWidth < 700;
-  // The status strip (.cm-strip[data-fold]): on a phone only its second line shows; a tap shows both, another folds it again.
+  // The status strip (.cm-strip[data-fold]): on a phone both lines show (one row and two at most); a tap shows every word, another folds it again (R15).
   // Kept on the root (data-strip=open), not the strip: a redraw rebuilds the strip with data-fold and would fold it back.
   addEventListener("click", e => {
     const s = phone() && e.target.closest?.(".cm-strip[data-fold]");
-    if (!s || e.target.closest("a,button,input,select,textarea,[role=menu]")) return;
+    if (!s || e.target.closest("a,button,input,select,textarea,summary,details>p,[role=menu]")) return;
     if (root.dataset.strip) delete root.dataset.strip; else root.dataset.strip = "open";
   });
   addEventListener("hashchange", () => { delete root.dataset.strip; });

@@ -1,0 +1,6 @@
+{
+  "name": "kb-dense",
+  "description": "Search by meaning for `kb find`: a small service on a unix socket (~/.cache/kb-dense/sock) holds bge-small-en-v1.5 vectors of the library's passages and answers the nearest ones; kb find merges them with the word search. CPU only, under 900 MB, off unless the unit is started; without it `kb find` is the word search alone.",
+  "bin": {},
+  "projects": ["kb-search"]
+}
