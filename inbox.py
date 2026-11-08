@@ -241,6 +241,7 @@ def reason_from_post(name, rec, thread, st, since, t=None):
     try: pat = dt.datetime.fromisoformat(p["at"]); pat = (pat if pat.tzinfo else pat.replace(tzinfo=dt.timezone.utc)).timestamp()
     except (KeyError, ValueError): return None
     lines = [l.strip().strip("*_ ").strip() for l in str(p.get("text", "")).strip().splitlines() if l.strip()]
+    while len(lines) > 1 and re.fullmatch(r"(?:@[\w.-]+[\s,.]*)+", lines[-1]): lines.pop()  # "Done: …" then the "@name" hand-back line (R25)
     got = stop_reason(name, {"from": name, "at": pat, "text": lines[-1] if lines else ""}, since)
     if not got: return None
     t = t or time.time()
