@@ -966,6 +966,7 @@ class Usage:
     def __init__(self):
         self.files, self.sess, self.limits, self.series, self.scanning = {}, {}, {}, {}, True
         self.owner, self.log_off = {}, 0  # session log's file name -> login path; how far ~/log.jsonl has been read
+        self.thread = {}  # session log's stem -> the thread its run was started in, for the foci's cost (by_thread)
         self.lock = threading.Lock()
 
     def scan_file(self, p):
@@ -1030,7 +1031,18 @@ class Usage:
                     try: e = json.loads(ln)
                     except ValueError: continue
                     if e.get("out") and e.get("login"): self.owner[Path(e["out"]).name] = e["login"]
+                    if e.get("out") and e.get("thread"): self.thread[Path(e["out"]).stem] = e["thread"]
         except OSError: pass
+
+    def by_thread(self, since):
+        """{thread: cost} since `since` (a timestamp), from each session log's hourly figures laid on the thread its run was started in;
+        "" is the cost of logs whose run no start event names (a session not begun by the starter). Same figures as the Usage page."""
+        out = {}
+        with self.lock:
+            for name, f in self.files.items():
+                c = sum(v for hr, v in (f.get("h") or {}).items() if int(hr) + 3600 > since)
+                if c: th = self.thread.get(name, ""); out[th] = out.get(th, 0.0) + c
+        return out
 
     def limit(self, f, e, p):
         info = e.get("rate_limit_info") or {}
@@ -2051,7 +2063,7 @@ class BoardIndex:
     for the person. inbox.py decides what's addressed to whom, so this page and the door agree."""
     def __init__(self):
         self.off, self.last, self.authors, self.mine, self.answered, self.lock = 0, {}, {}, [], {}, threading.Lock()
-        self.names = None
+        self.threads, self.names = set(), None
 
     def targets(self, p):
         if self.names is None:
@@ -2070,7 +2082,7 @@ class BoardIndex:
                 except ValueError: continue
                 if not isinstance(p, dict): continue
                 who, th = str(p.get("from", "")), p.get("thread") or p.get("id")
-                self.authors[p.get("id")] = who
+                self.authors[p.get("id")] = who; self.threads.add(th)
                 if AGENT_CODE.fullmatch(who.lower()): self.last[th] = who.lower()
                 if who == PERSON: self.answered[th] = p.get("at", "")
                 elif PERSON in self.targets(p):
@@ -2092,7 +2104,19 @@ def known_agents():
 def calls_someone(text):
     """Does the text itself call an agent? @person, @all or a word that names nobody wakes no one, so the app still adds a mention."""
     said = {m.lower() for m in MENTION.findall(MENTION_CODE.sub(" ", text))} - set(cfg().get("external") or []) - {"all", "here"}
-    return bool(said & known_agents()) if said else False
+    if not said: return False
+    if said & known_agents(): return True
+    return bool(said & focus_and_thread_names())
+
+
+def focus_and_thread_names():
+    """Focus ids and thread names: hive post treats them as names too (a focus reaches its keeper, a thread gets a copy)."""
+    out = set()
+    try: out |= {str(f.get("id", "")).lower() for f in json.loads(foci_c.get()).get("foci") or []}
+    except Exception: pass
+    try: INDEX.refresh(); out |= {str(t).lower() for t in INDEX.threads}   # any thread with a post, as hive post counts them
+    except Exception: pass
+    return out - {""}
 
 
 def thread_agent(thread):
@@ -2214,11 +2238,13 @@ def voice_ready():
     return isinstance(st, dict) and st.get("ok") is True and isinstance(st.get("at"), (int, float)) and time.time() - st["at"] < 120
 
 
-def person_post(text, thread=None, reply_to=None, uploads=(), signer=None, limited=False, simple=False, model=None, sig=None):
+def person_post(text, thread=None, reply_to=None, uploads=(), signer=None, limited=False, simple=False, model=None, sig=None, interrupt=False):
     """A post as the person. As the Slack mirror does it: a plain message wakes the agent on the thread (thread_agent), a reply wakes the author
     of the post replied to, and no thread (or a thread with no agent yet) starts a new agent. Mentions in the text win.
     signer: who signed in, from a verified Access token, when more than one person can: it heads the text, so an agent and the board can see who wrote it.
     sig: what the browser signed over the text as typed (core/signed.py checks it, in hive post). A /btw is rewritten, so it goes unsigned, as does a post of only attachments.
+    interrupt: the conversation's Interrupt button: hive post --interrupt, so a working agent gets it now (core/starter.py interrupt_step). A post of only
+    attachments keeps no text of its own: the files show as files.
     Returns {"id", "thread", "said"}, or raises ValueError with a sentence for the page."""
     text = str(text or "").strip()
     sig = {**sig, "n": len(text)} if isinstance(sig, dict) and text and not BTW.fullmatch(text) else None
@@ -2229,7 +2255,6 @@ def person_post(text, thread=None, reply_to=None, uploads=(), signer=None, limit
     if thread and not THREAD_NAME.fullmatch(str(thread)): raise ValueError("a thread name is letters, digits and . _ : -")
     if not text and not paths: raise ValueError("nothing to send")
     if model and model not in PICK_MODELS: raise ValueError("that model isn't one of " + ", ".join(PICK_MODELS))
-    if not text: text = "Attached: " + ", ".join(p.name for p in paths)
     btw = BTW.fullmatch(text)
     if btw:
         if not thread: raise ValueError("/btw asks aside about a conversation, so send it from one")
@@ -2258,7 +2283,7 @@ def person_post(text, thread=None, reply_to=None, uploads=(), signer=None, limit
     if pairing:  # before the post, so a connector reading the board always finds it
         PAIR_ACCEPTED.parent.mkdir(parents=True, exist_ok=True)
         with PAIR_ACCEPTED.open("a") as f: f.write(json.dumps({"at": time.time(), "text": text}) + "\n")
-    cmd = [str(HIVE_BIN), "post", "--as", PERSON] + (["--thread", str(thread)] if thread else []) + (["--to", who] if who else []) + (["--routed"] if routed else []) + (["--reply-to", reply_to] if reply_to else []) + (["--model", PICK_MODELS[model]] if model else [])
+    cmd = [str(HIVE_BIN), "post", "--as", PERSON] + (["--thread", str(thread)] if thread else []) + (["--to", who] if who else []) + (["--routed"] if routed else []) + (["--reply-to", reply_to] if reply_to else []) + (["--model", PICK_MODELS[model]] if model else []) + (["--interrupt"] if interrupt and not limited and not word else [])
     for p in paths: cmd += ["--file", str(p)]
     r = subprocess.run(cmd, input=text, text=True, capture_output=True, env={**child_env(), **({"HIVE_POST_VIA": "limited"} if limited else {}), **({"HIVE_POST_VIA": "web-pair"} if pairing else {}), **({"HIVE_POST_SIG": json.dumps(sig)} if sig else {})}, cwd=str(HOME), timeout=60)
     if r.returncode: raise ValueError(short(r.stderr, 300) or "the post failed")
@@ -2932,9 +2957,32 @@ def delivered():
 
 
 _LADDER = {"at": 0.0, "rows": {}}
+USAGE = None  # the one Usage, set by serve(): foci_bytes lays its per-session costs on the foci
+
+def foci_costs(act, usage):
+    """Add each focus's AI cost over the last day and week to focus.py's activity, on the thread -> focus map it gives (a run's cost goes to
+    the focus of the thread it was started in; a thread in no focus is Misc; a session no start event names is "unknown", in the total
+    only). So the card's gauge compares like with like: every figure is a share of the hive's total over the same window."""
+    if not isinstance(act, dict) or usage is None: return act
+    tag = act.get("threads") or {}
+    act["unknown"] = {}
+    for w, span in (act.get("windows") or {"day": 86400, "week": 7 * 86400}).items():
+        for b in list(act.get("foci", {}).values()) + [act.get("misc"), act.get("total")]:
+            if isinstance(b, dict) and isinstance(b.get(w), dict): b[w]["cost"] = 0.0
+        act["unknown"][w] = {"cost": 0.0}
+        for th, c in usage.by_thread(time.time() - span).items():
+            fid = tag.get(th) if th else None
+            if not th: act["unknown"][w]["cost"] += c
+            elif fid and fid in act.get("foci", {}): act["foci"][fid][w]["cost"] += c
+            elif isinstance(act.get("misc"), dict): act["misc"][w]["cost"] += c
+            if isinstance(act.get("total"), dict): act["total"][w]["cost"] += c
+    return act
+
 def foci_bytes():
-    """core/focus.py json: the foci (labels, hand-written summaries, to-do, lint) the home's cards are built from (2026-11-07)."""
+    """core/focus.py json: the foci (labels, hand-written summaries, to-do, lint) the home's cards are built from (2026-11-07),
+    with each one's share of the hive's runs, posts and cost over the last day and week (activity: focus.py's counts, the costs from Usage here)."""
     out = core_json("focus.py", "json", timeout=20)
+    if isinstance(out, dict) and out.get("activity"): out["activity"] = foci_costs(out["activity"], USAGE)
     return json.dumps(out if isinstance(out, dict) else {"foci": [], "tags": {}, "error": "focus.py gave nothing"}).encode()
 foci_c = Cached(foci_bytes, 20)
 
@@ -3148,8 +3196,18 @@ def set_logo(b):
 
 
 def starter_up():
-    try: return time.time() - (STATE / "starter.json").stat().st_mtime < 60  # the door's test
+    try: beat = (STATE / "starter.json").stat().st_mtime
     except OSError: return False
+    try:  # a clean stop (SIGTERM) leaves ~/.hive/stopped, which the next start removes: down at once, not after the heartbeat's minute
+        if (STATE / "stopped").stat().st_mtime >= beat: return False
+    except OSError: pass
+    try:  # a crash (SIGKILL, OOM) leaves no mark, but starter.lock holds the pid: gone means down now, not after the minute (a slow loop is still up)
+        pid = int((STATE / "starter.lock").read_text().strip())
+        if b"starter.py" not in Path(f"/proc/{pid}/cmdline").read_bytes(): return False
+    except FileNotFoundError as e:
+        if e.filename and str(e.filename).startswith("/proc/"): return False
+    except (OSError, ValueError): pass  # no lock, or a second starter waiting on it emptied the file, or no /proc: the heartbeat decides
+    return time.time() - beat < 60  # the door's test
 
 
 def starter_do(what):
@@ -4372,7 +4430,8 @@ def local_get(path, port=None, timeout=10):
 def serve(port):
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
     from urllib.parse import parse_qs, urlparse
-    usage = Usage()
+    global USAGE
+    usage = USAGE = Usage()
     threading.Thread(target=usage.run, daemon=True).start()
     threading.Thread(target=phone_watch, daemon=True).start()
     threading.Thread(target=sync_accounts, daemon=True).start()  # an account already signed in before the app first ran; does nothing without settings.json
@@ -4519,7 +4578,7 @@ def serve(port):
         def app_info(self):
             web = web_cfg() or {}
             info = {"route": self.route, "can": list(self.can), "app": self.route != "open", "brand": brand_view()}
-            if self.route != "open": info.update(setup=SETUP.get(), secrets_on=self.secrets_on, settings=settings_brief())
+            if self.route != "open": info.update(setup={**SETUP.get(), "starter": starter_up()}, secrets_on=self.secrets_on, settings=settings_brief())  # the starter heartbeat is one stat, so read it fresh: from the 20 s cache "isn't running" and "back" took ~35-43 s to show
             if self.route != "open" and "modules" in self.can: info["features"] = ["slack-door"]; info["slack_door"] = slack_door_view()  # Settings > Modules > slack-door "Set up" (POST /api/slack-door)
             if self.route != "open": info["default_model"] = default_model(); info["voice"] = voice_ready(); info["phone"] = phone_ready() and "post" in self.can
             if self.mode: info.update(mode=self.mode, full_left=self.full_left)
@@ -4743,7 +4802,7 @@ def serve(port):
                 except ValueError as e: return self.deny(400, str(e))
             if u.path in ("/api/post", "/api/side-ask", "/api/thread-meta", "/api/shown", "/api/checklist", "/api/focus", "/api/feedback", "/api/feedback-draft-done", "/api/issue-link", "/api/update", "/api/inbox-read", "/api/ntfy", "/api/webpush", "/api/agent-model", "/api/config", "/api/starter", "/api/module", "/api/signin", "/api/signin/code", "/api/signin/cancel", "/api/access", "/api/plan", "/api/secret", "/api/settings", "/api/share-copy", "/api/share-pack", "/api/draft", "/api/import", "/api/signin-codex", "/api/account-key", "/api/design", "/api/brand", "/api/slack-door"):
                 try:
-                    if u.path == "/api/post": res = person_post(d.get("text"), d.get("thread"), d.get("reply_to"), d.get("files"), signer=self.signer, limited="config" not in self.can, simple=d.get("simple") is True, model=d.get("model"), sig=d.get("sig"))
+                    if u.path == "/api/post": res = person_post(d.get("text"), d.get("thread"), d.get("reply_to"), d.get("files"), signer=self.signer, limited="config" not in self.can, simple=d.get("simple") is True, model=d.get("model"), sig=d.get("sig"), interrupt=d.get("interrupt") is True)
                     elif u.path == "/api/side-ask": res = side_ask(d.get("q"), signer=self.signer, limited="config" not in self.can)
                     elif u.path == "/api/thread-meta": res = set_thread_meta(d)
                     elif u.path == "/api/shown": res = dismiss_shown(d)

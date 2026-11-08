@@ -5,15 +5,16 @@ import { S, can, subscribe } from "../core/store.js";
 import { simpleOn } from "../core/simple.js";
 import { go, parse } from "../core/router.js";
 import { OUT } from "./composer.js";
-import { APP_NAV } from "../core/nav.js";
 
 export const HELP = "https://hivelab.ca/guide/";   // export.sh swaps the site name for its placeholder, then fills that in
 const SEEN = "hive.tour.seen", SEEN_SIMPLE = "hive.tour.seen.simple";
 
 const here = () => parse().id;
 const q = s => [...document.querySelectorAll(s)].find(e => e.getClientRects().length) || null;   // the first one on screen: on a phone the top tabs are hidden and the bottom bar's are the ones to ring
+const lastMsg = () => { const a = [...document.querySelectorAll(".cm-msgs .msg")].filter(e => e.getClientRects().length); return a.reverse().find(e => e.dataset.who !== "me") || a[0] || q(".cm-msgs"); };   // the newest agent message, not the whole column, so the window has room beside it
 const heading = text => [...document.querySelectorAll("#main .sec-t")].find(e => e.textContent.trim() === text) || null;
 const HOME = '.cp[data-place="home"] .cp-box';   // on a phone it's behind New conversation
+const onFocus = () => here() === "focus";   // a focus page (#focus/<id>), the second depth
 const inThread = () => { const r = parse(); return r.id === "comms" && !!r.arg && r.arg[0] !== "~"; };
 const tabSel = id => `.tabs a[data-key="${id}"], .top-icons a[data-key="${id}"], .mn-bar a[data-key="${id}"]`;   // Settings is an icon at the right of the bar; on a phone the tabs are in the bottom bar
 const tab = id => () => q(tabSel(id));
@@ -21,9 +22,6 @@ const hasTab = id => !!document.querySelector(tabSel(id));   // there, if not on
 const toBar = id => () => { if (inThread() && !q(tabSel(id))) go("comms"); };   // a step that says to click a tab: a phone hides its bottom bar inside a conversation, so step back out to the list
 const tabWhere = () => (q(".mn-bar") ? "at the bottom" : "at the top");   // on a phone the tabs are in the bottom bar
 const moreBtn = () => q(".more > button") || q(".mn-bar button.mn-t");   // on a phone More is in the bottom bar
-const WORKS = ["work", "flow", "needs"];   // Work's row: Work, Flow, Needs you (2026-11-07)
-const inWork = () => WORKS.includes(here());
-const workRing = () => (here() === "flow" ? q('.subtab[data-key="flow"]') : null) || q('.subtab[data-key="work"]') || q(tabSel("work"));   // on Flow the step is about the page under them: ring its link in the row
 const mine = () => (S.posts || []).filter(p => p.from === "person").length;
 const threads = () => (S.threads ? S.threads.size : 0);
 let sentFrom = 0, outFrom = 0;
@@ -32,16 +30,18 @@ let sentFrom = 0, outFrom = 0;
 const FULL_STEPS = [
   { title: "A quick look around", text: "A few minutes, one step at a time. This window says what to click and waits for you. You can drag it, and leave whenever you like." },
   { title: "This is where you talk to the Hive", text: () => `Click Chat ${tabWhere()}.`, ring: tab("comms"), done: () => here() === "comms", skip: () => here() === "comms" },
-  { title: "The work at a glance", text: "One line at the top says what waits on you. Under it, one card per focus: what moves, what waits, who is on it. Click a focus name for the whole picture, or a conversation for the detail.", ring: () => q(".cm-foci") || q(".cm-hline"), skip: () => !q(".cm-foci") && !q(".cm-hline") },
-  { title: "Start a job", text: () => `${q(HOME) ? "Type" : "Click New conversation, then type"} what you want done, the way you'd tell a person, and press Start. An agent starts on it and answers here. This is a real job and uses your Claude limits, so skip it if you're not ready.`, ring: () => q(HOME) || q(".cm-newbtn"), done: () => mine() > sentFrom || OUT.length > outFrom || inThread(), enter: () => { sentFrom = mine(); outFrom = OUT.length; if (parse().arg) go("comms"); }, skip: () => !can("post") },
+  // The four depths (the person, ui-redesign, 2026-11-07): the home says what you want, what needs you and where each focus stands; a focus page is the whole picture; a conversation's two lines say where it stands; then the conversation itself.
+  { title: "Say what you want", text: () => `${q(HOME) ? "Type" : "Click New conversation, then type"} what you want done, the way you'd tell a person, and press Start.${q(".cm-focus-row") ? " Focus, beside the box, files it under one piece of your work; Misc is none." : ""} An agent starts on it and answers here. This is a real job and uses your Claude limits, so skip it if you're not ready.`, ring: () => q(HOME) || q(".cm-newbtn"), done: () => mine() > sentFrom || OUT.length > outFrom || inThread(), enter: () => { sentFrom = mine(); outFrom = OUT.length; if (parse().arg) go("comms"); }, skip: () => !can("post") },
+  { title: "What needs you", text: "This one line is the first thing to read: how many things wait on you, and a link to each. When it says nothing needs you, you can close the app.", ring: () => q(".cm-hline"), skip: () => !q(".cm-hline") },
+  { title: "Where things stand", text: "One card per focus, a piece of your work with a goal: what moves now, what waits on you, what changed lately, and two small gauges for its share of the Hive's work and cost. Click a focus name for the whole picture.", ring: () => q(".cm-foci .fc") || q(".cm-foci"), done: onFocus, hasNext: true, skip: () => !q(".cm-foci") && !onFocus() },
+  { title: "The whole picture", text: "Everything about this focus on one page: what moves, what changed, what needs you, its to-do list, its agents and its conversations. Click a conversation for the detail.", ring: () => q(".fp .ph") || q(".fp"), done: inThread, hasNext: true, skip: () => !onFocus() },
   { title: "Open a conversation", text: "Each job is one conversation, and they're all listed here. Click one.", ring: () => q(".cm-tl a.lr-in"), done: inThread, enter: () => { if (here() === "comms" && parse().arg) go("comms"); }, skip: () => inThread() || !threads() },
-  { title: "Answers land here", text: "Agents write back in this conversation as they go. You can close the app: the work carries on, and it's all here when you come back.", ring: () => q(".cm-msgs"), skip: () => !inThread() },
+  { title: "Where it stands", text: "Two lines at the top of a conversation say what it is about and where it stands; the agent on it keeps them current. Home, a focus, these two lines, then the conversation itself: each is one click deeper.", ring: () => q(".cm-status"), skip: () => !inThread() || !q(".cm-status") },
+  { title: "Answers land here", text: "Agents write back in this conversation as they go. You can close the app: the work carries on, and it's all here when you come back.", ring: lastMsg, skip: () => !inThread() },
   { title: "Who's on it", text: "This line says who is working and what they're doing. If an agent is running, the round stop button is here too. It asks you to type the agent's name before anything ends, so you don't need to try it now.", ring: () => q(".cm-strip"), skip: () => !inThread() },
   { title: "When an agent asks you something", text: () => (q('.cm-line[data-key="asks"] button') ? "An agent here is waiting for you. Click Answer to reply to its question." : "A line appears here with an Answer button, and the Chat tab shows a number. The Chat page lists everything waiting for you."), ring: () => q('.cm-line[data-key="asks"] button') || q(".cm-strip"), done: () => (q('.cm-line[data-key="asks"] button') ? !!q(".cp-reply") : false), hasNext: true, skip: () => !inThread() },
   { title: "Reply any time", text: "Write here to carry on the conversation, even while the agent works. The To button shows who gets it, and you can change that. Nothing is sent until you press Send.", ring: () => q('.cp[data-place="thread"] .cp-t'), skip: () => !inThread() },
   { title: "Attach files", text: "Attach adds files to your message. You can also paste them or drop them on the conversation.", ring: () => q('.cp[data-place="thread"] .cp-attach'), skip: () => !inThread() },
-  { title: "Where things stand", text: () => `Click Work ${tabWhere()}.`, ring: tab("work"), done: inWork, enter: toBar("work"), skip: () => !hasTab("work") || inWork() },
-  { title: "The work, by project", text: () => (here() === "flow" ? "This is Flow: the same work as a live timeline, a lane per project, who is on it, and the hand-offs. Work, in the row beside it, is every project on one page: what it did today, where it stands, what comes next and what it needs from you." : "Every project on one page: what it did today, where it stands, what comes next and what it needs from you. Conversations and agents are a click down. The row under the top bar has Flow, the same work as a live timeline with a lane per project" + (!!(APP_NAV.belongs && APP_NAV.belongs.needs) ? ", and Needs you, the full list of what waits on you." : ".")), ring: workRing, skip: () => !inWork() || !workRing() },
   { title: "Look at what it keeps", text: () => `Click Knowledge ${tabWhere()}.`, ring: tab("knowledge"), done: () => here() === "knowledge", enter: toBar("knowledge"), skip: () => !hasTab("knowledge") },
   { title: "Knowledge", text: "Notes, projects and the files agents attach, to browse and search. It only reads. Keys and passwords are blanked out.", ring: () => q(".kb-side") || q('input[type="search"]'), skip: () => here() !== "knowledge" },
   { title: "See every agent", text: () => `Click Agents ${tabWhere()}.`, ring: tab("now"), done: () => here() === "now", enter: toBar("now"), skip: () => !hasTab("now") },
@@ -59,15 +59,14 @@ const SIMPLE_STEPS = [
   { title: "A quick look around", text: "Two minutes. This window says what to click and waits for you. You can drag it, and leave whenever you like." },
   { title: "Say what you want", text: () => `${q(HOME) ? "Type" : "Click New conversation, then type"} what you'd like done, the way you'd tell a person, and press Start. Your Hive works on it and answers here. This is a real request, so skip it if you're not ready.`, ring: () => q(HOME) || q(".cm-newbtn"), done: () => mine() > sentFrom || OUT.length > outFrom || inThread(), enter: () => { sentFrom = mine(); outFrom = OUT.length; if (parse().arg) go("comms"); }, skip: () => !can("post") },
   { title: "Your conversations", text: "Each request is one conversation, listed here. Click one to read it.", ring: () => q(".cm-tl a.lr-in"), done: inThread, enter: () => { if (here() === "comms" && parse().arg) go("comms"); }, skip: () => inThread() || !threads() },
-  { title: "Answers appear here", text: "Your Hive writes back as it goes. You can close this page: the work carries on, and it's all here when you come back.", ring: () => q(".cm-msgs"), skip: () => !inThread() },
+  { title: "Answers appear here", text: "Your Hive writes back as it goes. You can close this page: the work carries on, and it's all here when you come back.", ring: lastMsg, skip: () => !inThread() },
   { title: "Reply any time", text: "Write here to carry on, even while it works. Nothing is sent until you press Send. You can also attach files.", ring: () => q('.cp[data-place="thread"] .cp-t'), skip: () => !inThread() },
   { title: "Settings", text: "Click Settings at the top right.", ring: tab("settings"), done: () => here() === "settings", skip: () => !hasTab("settings") },
   { title: "Settings", text: "How much of your week is used is here, and how to sign in again. That's all: say what you want done in Chat.", ring: () => heading("Usage limit") || q("#main .sec-t"), enter: () => { if (here() === "settings") go("settings", "usage-limit"); }, last: true, skip: () => here() !== "settings" },
 ];
 let STEPS = FULL_STEPS;
 
-let win = null, ringEl = null, at = 0, timer = 0, raf = 0, dragged = false, spot = 0, moving = 0, dodged = "", armed = true;
-const SPOTS = ["bl", "br", "tr", "tl"];
+let win = null, ringEl = null, at = 0, timer = 0, raf = 0, dragged = false, moving = 0, placed = "", armed = true;
 const step = () => STEPS[at];
 const val = x => (typeof x === "function" ? x() : x);
 
@@ -86,7 +85,7 @@ function show(i, dir = 1) {
   clearTimeout(moving); moving = 0;
   while (STEPS[i] && STEPS[i].skip && STEPS[i].skip()) i += dir;
   if (!STEPS[i]) { if (dir > 0) return end(); i = 0; }
-  at = i;
+  at = i; placed = "";   // a new step: place the window afresh
   const s = step(); if (s.enter) s.enter();
   armed = dir > 0 || !s.done || !s.done();   // back on a step already done: wait for it, or it would bounce straight forward again
   paint();
@@ -95,31 +94,44 @@ function show(i, dir = 1) {
 const next = () => (step().last ? end() : show(at + 1));
 
 // ---- the ring follows its target through morphs and scrolling; the window stays out of its way ----
-function setSpot(n) { moveTo(n); spot = n; }
-function moveTo(n) {
+const M = 16, GAP = 12, PHONE = 640;   // the window's margin from the screen's edges, its gap from the ring; at or under PHONE it docks to an edge
+const topOf = () => (document.getElementById("top") || { offsetHeight: 0 }).offsetHeight + 12;
+/** Put the window at left/top (px), or on a phone at the bottom or top edge. */
+function moveTo(p) {
   const st = win.style;
-  const topH = (document.getElementById("top") || { offsetHeight: 0 }).offsetHeight + 12, k = SPOTS[n];
-  st.left = k[1] === "l" ? "16px" : "auto"; st.right = k[1] === "r" ? "16px" : "auto";
-  st.top = k[0] === "t" ? topH + "px" : "auto"; st.bottom = k[0] === "b" ? "16px" : "auto";
+  st.left = p.left + "px"; st.right = "auto";
+  if (p.dock === "b") { st.top = "auto"; st.bottom = M + "px"; } else { st.top = p.top + "px"; st.bottom = "auto"; }
 }
+function home() { moveTo(innerWidth <= PHONE ? { left: M, dock: "b" } : { left: M, top: innerHeight - M - win.offsetHeight }); }
 const covered = (a, b) => Math.max(0, Math.min(a.right, b.right) - Math.max(a.left, b.left)) * Math.max(0, Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top));
 function follow() {
   if (!win) return;
   raf = requestAnimationFrame(follow);
   const s = step(), modal = document.querySelector("dialog[open]"), e = !modal && s.ring ? s.ring() : null, r = e && e.getBoundingClientRect();
   ringEl.hidden = !r;
-  if (!r) return;
+  if (!r) { if (!dragged) { const b = win.getBoundingClientRect(); if (b.width && (b.left < 0 || b.top < 0 || b.right > innerWidth || b.bottom > innerHeight)) { home(); placed = ""; } } return; }   // nothing ringed: keep it on the screen through a resize
   const st = ringEl.style, p = 4; st.left = r.left - p + "px"; st.top = r.top - p + "px"; st.width = r.width + 2 * p + "px"; st.height = r.height + 2 * p + "px";
-  if (!dragged) dodge(r);
+  if (!dragged) place(r);
 }
-/** Put the window in the corner that covers least of the target, and leave it there. A target too big to clear, like a whole conversation, is under every corner, so the first clear corner would never come and the window would jump between them on every frame. */
-function dodge(r) {
-  const w = win.getBoundingClientRect(), key = [r.left, r.top, r.width, r.height, w.width, w.height, innerWidth, innerHeight].join();
-  if (key === dodged) return;
-  dodged = key;
-  let best = spot, least = covered(r, w);
-  for (let k = 1; least && k < SPOTS.length; k++) { const n = (spot + k) % SPOTS.length; moveTo(n); const c = covered(r, win.getBoundingClientRect()); if (c < least) { best = n; least = c; } }
-  setSpot(best);
+/** Place the window by the ringed thing: below it if there is room, else above, else beside; on a phone, docked to the bottom or top edge
+ *  away from it. A target too big to clear, like a whole conversation, gets the place that covers least of it. The place is kept until the
+ *  target, the window or the screen changes size or moves, so the window doesn't hop between places from frame to frame. */
+function place(t) {
+  const w = win.offsetWidth, ht = win.offsetHeight, W = innerWidth, H = innerHeight, key = [t.left, t.top, t.width, t.height, w, ht, W, H].join();
+  if (key === placed) return;
+  placed = key;
+  const pad = 6, r = { left: t.left - pad, top: t.top - pad, right: t.right + pad, bottom: t.bottom + pad };   // the ring's own box
+  const lo = topOf(), clampX = x => Math.max(M, Math.min(x, W - M - w)), clampY = y => Math.max(lo, Math.min(y, H - M - ht));
+  const box = p => { const top = p.dock === "b" ? H - M - ht : p.top; return { left: p.left, top, right: p.left + w, bottom: top + ht }; };
+  const spots = W <= PHONE
+    ? [r.top + r.bottom > H ? { left: M, top: lo } : { left: M, dock: "b" }, r.top + r.bottom > H ? { left: M, dock: "b" } : { left: M, top: lo }]   // the edge further from it first
+    : [{ left: clampX(r.left), top: r.bottom + GAP }, { left: clampX(r.left), top: r.top - GAP - ht },
+      { left: r.right + GAP, top: clampY(r.top) }, { left: r.left - GAP - w, top: clampY(r.top) },
+      { left: M, top: H - M - ht }, { left: W - M - w, top: H - M - ht }, { left: W - M - w, top: lo }, { left: M, top: lo }];   // the corners, for a target nothing clears
+  const fits = p => { const b = box(p); return b.left >= M - 0.5 && b.right <= W - M + 0.5 && b.top >= lo - 0.5 && b.bottom <= H - M + 0.5; };
+  let best = null, least = Infinity;
+  for (const p of spots) { if (!fits(p)) continue; const c = covered(r, box(p)); if (c < least) { best = p; least = c; } if (!c) break; }
+  moveTo(best || { left: M, top: lo });
 }
 /** What runs on its own every moment: a modal window sits above the page, so the tour rides inside it; and a waiting step moves on when it's done. */
 function tick() {
@@ -154,7 +166,7 @@ export function startTour() {
   ringEl = document.createElement("div"); ringEl.className = "tour-ring"; ringEl.setAttribute("aria-hidden", "true"); ringEl.hidden = true;
   document.body.append(ringEl, win);
   drag(win.querySelector(".tw-top"));
-  dragged = false; dodged = ""; setSpot(0); at = 0; show(0);
+  dragged = false; placed = ""; home(); at = 0; show(0);
   timer = setInterval(tick, 200); raf = requestAnimationFrame(follow);
   addEventListener("keydown", onEsc, true);
 }

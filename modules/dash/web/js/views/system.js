@@ -1,5 +1,6 @@
-// #system: the design system, drawn with the real components. Not a tab; linked from ARCHITECTURE.md.
+// #system: the design system, drawn with the real components. Under More in the developer look only; linked from ARCHITECTURE.md.
 import { h } from "../core/dom.js";
+import { S } from "../core/store.js";
 import { STATUS, TIERS } from "../core/status.js";
 import { HOUR, now } from "../core/format.js";
 import { metrics, cols } from "../templates.js";
@@ -14,7 +15,7 @@ const sw = (name, token) => h("div", { class: "swatch", "data-key": token }, h("
 const spec = (token, size, weight, text) => [h("span", null, `${token} ${size}`), h("div", { class: "sys-spec", style: `--fs:var(${token});--fw:${weight}` }, text)];
 
 export default {
-  id: "system", label: "System", tab: false,
+  id: "system", label: "Design system", tab: () => !S.app.app,
   render(ctx) {
     const t = now(), demo = Array.from({ length: 48 }, (_, i) => Math.round(8 + 6 * Math.sin(i / 5) + i / 4));
     return metrics({

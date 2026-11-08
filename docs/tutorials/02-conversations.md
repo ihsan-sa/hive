@@ -4,7 +4,7 @@ This walks through what happens in a real job: being asked a question, changing 
 
 ## Answer a question
 
-When an agent needs you, Chat shows a number on its tab, the conversation says **Waiting for your answer**, and the Chat home page lists it first (**Needs you** at the foot of the list has the longer version).
+When an agent needs you, Chat shows a number on its tab, the conversation says **Waiting for your answer**, and the Chat home page counts it in its one line under the box and lists it under **Needs you** on its focus's card (the line opens the full list). The cards are the grid under the box, one per focus; the list on the left can be grouped the same way (**By focus** in the **Show** menu) or kept newest first (**By recency**).
 
 ![An agent asks which of two fixes you want; an Answer button sits above the message box](https://hivelab.ca/img/guide/chat-question.png)
 

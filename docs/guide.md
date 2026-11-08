@@ -70,11 +70,13 @@ If WSL 2 is missing it installs it, which needs your approval and a restart; the
 
 ## The app
 
+The app is four depths, each one click down from the last. The **Chat home** says what you want done, what needs you, and where each piece of your work stands (a card per focus). A **focus page** is the whole picture of one of them. A **conversation's two lines**, at its top, say what it is about and where it stands. The **conversation** itself is the detail. Read down only as far as you need.
+
 When setup is finished, the app offers a short guided tour. It says what to click, highlights it and waits for you. It doesn't press or send anything itself: the one real step is your first job, which you type and can skip. You can leave at any time, and **Take the tour** under **More** starts it again.
 
 ![The first step of the tour, in a small window over the Chat page](https://hivelab.ca/img/guide/tour.png)
 
-The top bar has **Chat, Work, Knowledge, Agents** and **Usage**, with **Settings** as the sliders icon at the right and a **More** menu. A **Start** tab comes first until setup is finished. Some tabs have a row of pages under the bar (see [Pages inside a tab](#pages-inside-a-tab)). Press **Ctrl+K** anywhere for the quick switcher, a box that finds a conversation, an agent or a page and goes there, and press **?** for the list of keyboard shortcuts. On a phone the tabs are in a bar at the bottom. On the right it shows how many agents are working and how much of the week is used, and it has the colour theme and full-screen buttons.
+The top bar has **Chat, Knowledge, Agents** and **Usage**, with **Settings** as the sliders icon at the right and a **More** menu (**Flow** is in the Agents row). A **Start** tab comes first until setup is finished. Some tabs have a row of pages under the bar (see [Pages inside a tab](#pages-inside-a-tab)). Press **Ctrl+K** anywhere for the quick switcher, a box that finds a conversation, an agent or a page and goes there, and press **?** for the list of keyboard shortcuts. On a phone the tabs are in a bar at the bottom. On the right it shows how many agents are working and how much of the week is used, and it has the colour theme and full-screen buttons.
 
 If the Hive has stopped starting agents, a band under the bar says why and where to look.
 
@@ -82,13 +84,12 @@ If the Hive has stopped starting agents, a band under the bar says why and where
 
 Chat is where you'll spend your time. The left side lists your conversations. Above the list there are three things: **New conversation**, the search box, and the **Show** button (the funnel) beside it, which holds every choice about the list. The search box looks through every conversation by name or content. Start with `@` to ask a question instead, such as `@where did we get to on the launch?`, and press Enter: an agent answers in one line right there and brings up the conversations that fit.
 
-The home page answers two questions: what do you want done, and what needs you?
+The home page is three things, top to bottom: the box, one line, and a card for each focus.
 
-- **Waiting for your answer:** an agent asked you something.
-- **New for you:** answers you haven't opened.
-- **Stopped:** an agent hit a usage limit or an error, or looks stuck. One stopped by a limit usually resumes by itself after the reset. Otherwise a message gets it going.
-- **Where things stand:** the picture without having to ask. **Needs you** is what only you can do, **Done lately** is what finished in the last two days, **Still going** is what you asked for that isn't finished, and **Your projects** is one line on each focus and project. Each Needs-you row opens to a to-do checklist you can tick off (it works on a phone); ticks are saved, and an agent removes an item once it has checked it. Press a thread row to open its conversation, or its reply arrow to add it to your new message so you can ask about it or tell an agent what to do next. It shows what agents and the status helper have already written, so it costs nothing to look at. It isn't in Simple view.
-- **Working now:** what's under way.
+- **The box:** what do you want done? Type it and press Start. A **Focus** picker in the box files the new conversation under a focus, so it shows up on that focus's card and page.
+- **One line:** how many things wait on you, or "Nothing needs you". Press it for **Yours**, cut to what waits.
+- **Yours**, at the foot of the Chat list, is every exchange you had, newest first: what you said and everything addressed to you, with a thin line naming the conversation at each change, and a search box that looks only through those. Press any entry to open that message in its conversation.
+- **A card per focus:** its name (press it for the focus page, the whole picture), one line on what it is for, who is on it, two small gauges (**Work** and **Cost**: this focus's share of all the Hive's runs and posts, and of its AI spend, today as the bar and the week as the tick; the focus page has the numbers), **Now** (what moves), **Needs you** (the decisions agents have put to you in it), **Lately** (what changed), and its latest conversations. The agents write what the card says; nothing on the home is a raw list of conversations. A **Misc** card comes last, only when something not filed under a focus has been active this week.
 
 Long lists show the first few, with **Show more** under them.
 
@@ -100,9 +101,9 @@ If the phone module is running, a **phone button** next to it, and another in th
 
 In a conversation:
 
-- **Just typing** sends your message to the agent you've been talking to. If it's busy, it sees your message after its current step. If it's quiet, the message wakes it. Your message shows who has it underneath, such as "Seen by a7c31".
+- **Just typing** sends your message to the agent you've been talking to. If it's busy, it sees your message after its current step. If it's quiet, the message wakes it. Your message shows who has it underneath: "Sent · reaches a7c31 after its current step" while it waits, then "Reached a7c31 · 12:03". If the agent is working and your message can't wait, press **Interrupt** instead of Send: if the agent is in the middle of a long command, that command is stopped so your message reaches it now.
 - **Reply** on a message answers that message and goes to whoever wrote it.
-- **To** in the message box picks who gets it. You can also type `@` and a name.
+- **To** in the message box picks who gets it. You can also type `@` and a name: a list opens with the agents in this conversation, the focuses and a new agent, each with what it is on. Keep typing a word or two from an agent's conversation, a focus or a conversation's name to find it. Name a focus and the message goes to the agent keeping it, marked with the focus; name another conversation and a copy lands there, with a line under your message saying where it went.
 - **Answer** appears above the box when an agent is waiting for you.
 - **Carry on** appears when an agent stopped at a usage limit and there's room again.
 - The line above the box says what's happening right now. **Stop…** there ends an agent ([see below](#stopping-things)).
@@ -122,7 +123,7 @@ The **Show** button beside the search opens one small menu. **For you, Updates**
 - **Updates:** the agents' progress reports.
 - **Agent comms:** agents talking to each other and the Hive's own notes.
 
-**Show N hidden** in the title menu turns all three on. The star, **Important only**, keeps just the conversations you marked. **Group by** in the same menu is **Idea** (the main conversations, helpers folded under theirs), **Group** (under the sections of Needs you) or **None** (every conversation flat by last activity); **Hide not needed** drops faded conversations; **Show all** and **Recent only** change how far back the list goes, and **Collapse all** folds every section. Search always looks through everything.
+**Show N hidden** in the title menu turns all three on. The star, **Important only**, keeps just the conversations you marked. **By focus** in the same menu lists the conversations under their focus, each section with a **+** that starts a conversation filed under it, Misc last; **By recency** is every conversation flat by last activity; **Hide not needed** drops faded conversations; **Show all** and **Recent only** change how far back the list goes, and **Collapse all** folds every section. Search always looks through everything.
 
 At the foot of the list, **Inbox**, **Mail** and **Files** are links to the other pages under Chat. **All messages** in the title menu is every conversation in one list.
 
@@ -193,7 +194,7 @@ Settings shows one section at a time. The list on the left has **The hive, Accou
 
 ### Pages inside a tab
 
-Some tabs have a row of pages under the top bar. Chat has none: its pages are the links at the foot of its list. Work's row is **Work**, **Flow** and **Needs you**.
+Some tabs have a row of pages under the top bar. Chat has none: its pages are the links at the foot of its list, and a focus's page opens from its card on the home. **Flow** is in the Agents row.
 
 - **Agents > Now:** who is working and what on.
 - **Agents > All agents:** every agent that has run. Search, filter and sort.
@@ -202,10 +203,10 @@ Some tabs have a row of pages under the top bar. Chat has none: its pages are th
 - **Agents > History:** every event in order, with filters. Use it to see exactly what happened.
 - **Usage > This machine:** how busy the computer is, and the big work agents are running on it.
 - **Usage > Rootwarden:** what the machine's admin helper was asked, and what it answered.
+- **Yours:** every exchange you had, newest first. Open it from **Yours** at the foot of the Chat list.
 - **Inbox:** every message an agent addressed to you, newest first, with **Mark all read**. Open it from **Inbox** at the foot of the Chat list.
 - **Files:** the files and links from your conversations, at the foot of the Chat list.
-- **Work:** every project on one page, your focuses first: what it did today (the first line of each result an agent posted), where it stands (moving, needs you, held, or quiet), what comes next on its ladder, and what it needs from you. Conversations and agent names are a click down, not on the page. Paused projects sit in a fold at the end. It is the **Work** tab in the top bar, and **By project** on Chat's home opens it too.
-- **Flow,** in Work's row: the same work as a live timeline, one lane per project over the last hours (zoom from 2 hours to a day): each bar is one agent's run, a diamond where one agent handed off to another, a tick where a result or an ask landed, a green line at now with what comes next on each project after it. A lane opens into its Work card; a bar opens the agent. Nothing moves when nothing happened, so a quiet hive looks quiet.
+- **Flow,** in the Agents row: the same work as a live timeline, one lane per project over the last hours (zoom from 2 hours to a day): each bar is one agent's run, a diamond where one agent handed off to another, a tick where a result or an ask landed, a green line at now with what comes next on each project after it. A lane opens its project's card beside the chart (what it did today, what comes next, what it needs from you); a bar opens the agent. Nothing moves when nothing happened, so a quiet hive looks quiet.
 
   ![Flow: a lane per project, bars for runs, a diamond at each hand-off, the now line and what comes next](https://hivelab.ca/img/guide/flow.png)
 
@@ -402,7 +403,7 @@ Agents keep working while you're away, and when one has to stop it comes back by
 
 An agent that keeps dying is tried 3 times, then left, and you're told; a message to it carries it on. An agent you stopped stays stopped.
 
-Back after 4 hours or more, **While you were away** sits on top of the page, in at most 15 lines: what was made, with the evidence for each (a file, a closed ask, a status of Done), what was decided for you, up to 5 things that need you, what broke, and a count of the rest. **All of it** opens the whole list. `hive away` says the same in a terminal, and `hive away --full` lists everything.
+Back after a while, the home says it in the cards: each focus's **Lately** is what changed and **Needs you** what waits on you. In a terminal, `hive away` gives a 15-line brief of what was made, decided, needs you and broke, and `hive away --full` lists everything.
 
 Every answer above has a test run on each release. Those tests use a stand-in for Claude with Claude Code's real error words, and a pretended restart. See [Not tested yet](#not-tested-yet) for what hasn't been done for real.
 

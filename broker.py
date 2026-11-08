@@ -251,6 +251,7 @@ def post(name, req, blobs):
     for k in req.get("done") or []:  # --done ASK: the post inside closes the ask, as outside the sandbox
         if not re.fullmatch(r"k[0-9a-f]{3,8}", str(k)): return {"err": f"--done {k}: not an ask id (k0123)"}
         cmd.append(f"--done={k}")
+    if req.get("interrupt") is True: cmd.append("--interrupt")
     d = None
     try:
         if blobs:  # the bytes came over the socket: the broker never opens a path an agent names

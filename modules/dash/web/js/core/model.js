@@ -277,6 +277,8 @@ export function displayText(p) {
   const m = p.from === "person" && t.match(SOURCE);
   p.src = m ? { name: m[1] || null, how: SOURCE_LABEL[m[2]], said: m[0].trim().slice(1, -1) } : null;
   if (m) t = t.slice(m[0].length).replace(MENTIONS, "");
+  // An older post of only files carried "Attached: <their names>" as its text; the files show themselves, so it shows none.
+  if (p.from === "person" && (p.files || []).length && t.trim() === "Attached: " + p.files.map(f => f.name).join(", ")) t = "";
   // an agent's "@person" on a line of its own words: the post already says "to you", so the bare handle is noise
   if (p.from !== "person") t = t.replace(/^([ \t]*)@person\b[,:]?[ \t]*/gm, "$1").replace(/[ \t]+@person[.!]?[ \t]*$/gm, "");
   return (p.disp = t);

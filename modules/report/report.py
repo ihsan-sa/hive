@@ -239,9 +239,13 @@ def build(st, want_fail, want_use):
     off = st["offset"] if st["offset"] <= size else 0
     f.seek(off); raw = f.read(); raw = raw[:raw.rfind(b"\n") + 1]
     fails, use, first, last = [], {"runs": 0, "restarts": 0, "failed_exits": 0, "limit_hits": 0, "fallbacks": 0}, None, None
+    evs = []
     for line in raw.splitlines():
-        try: e = json.loads(line)
+        try: evs.append(json.loads(line))
         except ValueError: continue
+    # a run that hits the usage limit exits 1 after a "limited" event (same name+session); that is not a crash
+    limited = {(x.get("name"), x.get("session")) for x in evs if x.get("event") == "limited"}
+    for e in evs:
         at, ev = e.get("at", ""), e.get("event")
         if at < st["since"]: continue
         first, last = first or at, at
@@ -249,7 +253,7 @@ def build(st, want_fail, want_use):
         elif ev == "wake_resumed": use["restarts"] += 1
         elif ev == "limited": use["limit_hits"] += 1
         elif ev == "fallback": use["fallbacks"] += 1
-        elif ev == "end" and e.get("exit") not in (0, None):
+        elif ev == "end" and e.get("exit") not in (0, None) and (e.get("name"), e.get("session")) not in limited:
             use["failed_exits"] += 1
             fails.append(("agent-exit", at, "an agent ended with exit code %s" % e.get("exit")))
         if ev == "limited": fails.append(("limited", at, "a login hit its usage limit"))

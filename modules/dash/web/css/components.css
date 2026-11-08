@@ -851,6 +851,9 @@ rc-lazy[data-mode=inline]{display:inline}
 .msg-raw{margin:4px 0;padding:8px 10px;border-radius:var(--r-m);background:var(--sunken);font:var(--fs-small)/1.5 var(--mono);white-space:pre-wrap;overflow-wrap:anywhere}
 :root[data-dev] .msg[data-who=person]{margin-top:4px;margin-bottom:4px;background:var(--sunken)}
 :root[data-dev] .msg[data-cont]>.msg-h{display:none}
+.msg-relays{display:flex;flex-wrap:wrap;gap:2px 12px;margin:0 0 4px;font-size:var(--fs-meta);color:var(--ink-3)}
+.msg-relay{display:inline-flex;align-items:center;gap:4px}
+.msg-relay .icon{width:12px;height:12px}
 .msg-q{display:grid;width:fit-content;gap:1px;margin:2px 0 4px;padding:3px 10px;border:0;border-left:2px solid var(--line-2);background:none;color:var(--ink-2);font-size:var(--fs-small);text-align:left;cursor:pointer;min-width:0;max-width:100%}
 .msg-q:hover{border-left-color:var(--ink-3);color:var(--ink)}
 .msg-q[data-static]{cursor:default}
@@ -884,6 +887,8 @@ span.msg-thumb,span.msg-file{cursor:default}
 .msg-file .msg-fn{font-size:var(--fs-body,14px);font-weight:500}
 .msg-file .meta{font-size:var(--fs-micro)}
 .msg-open{flex:none;padding:4px 12px;border-radius:var(--r-m);background:var(--sunken);color:var(--ink);font-size:var(--fs-meta);font-weight:500}
+a.msg-file .msg-open{display:inline-flex;align-items:center;gap:4px}
+a.msg-file .msg-open svg{width:14px;height:14px}
 .msg-file:hover .msg-open,.msg-file[data-pv-on] .msg-open{background:var(--ink);color:var(--surface)}
 .msg-fn{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
@@ -1085,7 +1090,7 @@ a.ref[data-kind=file][data-pv-on]{background:color-mix(in oklch,var(--accent) 16
 .cp-to{display:inline-flex;align-items:center;gap:5px;height:var(--ctl-s);padding:0 8px;border:1px solid var(--line);border-radius:var(--r-pill);background:var(--sunken);color:var(--ink);font-size:var(--fs-small);cursor:pointer;white-space:nowrap;min-width:0}
 .cp-to:hover{border-color:var(--ink-3)}
 .cp-to b{font-weight:600}
-.cp-menu,.cp-ac{position:absolute;z-index:20;bottom:calc(100% - 6px);left:var(--s4);width:min(380px,calc(100% - 2 * var(--s4)));padding:4px;border:1px solid var(--line-2);border-radius:var(--r-l);background:var(--surface);box-shadow:var(--e1)}
+.cp-menu,.cp-ac{position:absolute;z-index:20;bottom:calc(100% - 6px);left:var(--s4);width:min(560px,calc(100% - 2 * var(--s4)));padding:4px;border:1px solid var(--line-2);border-radius:var(--r-l);background:var(--surface);box-shadow:var(--e1)}
 .cp-ac{bottom:calc(100% + 4px);left:6px}
 .cp-opt{display:flex;align-items:center;gap:7px;width:100%;padding:6px 8px;border:0;border-radius:var(--r-m);background:none;color:var(--ink);font-size:var(--fs-small);text-align:left;cursor:pointer}
 .cp-opt:hover,.cp-opt[aria-selected=true]{background:var(--hover)}
@@ -1093,6 +1098,14 @@ a.ref[data-kind=file][data-pv-on]{background:color-mix(in oklch,var(--accent) 16
 .cm-id{display:inline-flex;align-items:center;gap:4px;flex:none}
 .cp-opt .meta{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
 .cp-menu-n{margin:4px 8px 4px;font-size:var(--fs-meta);color:var(--ink-3);line-height:1.4;text-wrap:pretty}
+.cp-menu-h{margin:6px 8px 2px;padding-top:6px;border-top:1px solid var(--line);font-size:var(--fs-meta)}
+.cp-opt b{white-space:nowrap}
+.cp-opt .cp-model{flex:none}
+.cp-opt .cp-title{flex:0 1 auto;min-width:7ch}
+.cp-opt .cp-sep{flex:none;color:var(--ink-3)}
+.cp-opt .cp-fx{flex:none;width:8px;text-align:center;font-size:var(--fs-meta);color:var(--accent-ink)}
+.cp-opt[data-kind=thread] .cp-fx{color:var(--ink-3)}
+.cp-opt .meta:last-child{flex:1 1 auto}
 .cp-reply{display:flex;align-items:center;gap:6px;min-width:0;padding:4px 6px 4px 10px;border-left:2px solid var(--info);font-size:var(--fs-small)}
 .cp-reply-x{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink-2)}
 .cp-x{flex:none;width:24px;height:24px;border:0;border-radius:var(--r-s);background:none;color:var(--ink-3);font-size:var(--fs-title);line-height:1;cursor:pointer}
@@ -1170,6 +1183,24 @@ a.ref[data-kind=file][data-pv-on]{background:color-mix(in oklch,var(--accent) 16
 .cm-msgs{position:relative;flex:1;min-width:0;overflow:auto;overscroll-behavior:contain;padding:var(--s2) var(--s4) var(--s3)}
 .cm-msgs:focus-visible{outline-offset:-2px}
 .cm-day{display:flex;align-items:center;gap:var(--s3);max-width:820px;margin:var(--s4) auto var(--s2);font-size:var(--fs-meta);font-weight:var(--w-med);color:var(--ink-3)}
+/* Yours (views/yours.js): the person's exchanges as one stream. A day heading, a thin rule naming the conversation at each change, entries as rows. */
+.yr-search{margin-top:var(--s3);max-width:520px}
+.yr-search .input{width:100%}
+.yr-stream{display:grid;gap:2px;max-width:820px}
+.yr-day{display:flex;align-items:center;gap:var(--s3);margin:var(--s4) 0 var(--s2);font-size:var(--fs-meta);font-weight:var(--w-med);color:var(--ink-3)}
+.yr-day::after{content:"";flex:1;border-top:1px solid var(--line)}
+.yr-day:first-child{margin-top:var(--s2)}
+.yr-rule{display:flex;align-items:center;gap:var(--s2);margin:var(--s3) 0 var(--s1);font-size:var(--fs-small);color:var(--ink-2);min-width:0}
+.yr-rule::before{content:"";width:var(--s4);border-top:1px solid var(--line)}
+.yr-rule::after{content:"";flex:1;border-top:1px solid var(--line)}
+.yr-rule-n{color:inherit;text-decoration:none;font-weight:var(--w-med);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:70%}
+.yr-rule-n:hover{text-decoration:underline}
+.yr-e{display:grid;gap:2px;padding:var(--s2) var(--s3);border-radius:var(--r-m);color:inherit;text-decoration:none;min-width:0}
+.yr-e:hover,.yr-e:focus-visible{background:var(--hover)}
+.yr-h{display:flex;align-items:baseline;gap:var(--s2);font-size:var(--fs-small)}
+.yr-e[data-who="me"] .yr-h b{color:var(--accent-ink)}
+.yr-x{font-size:var(--fs-body);color:var(--ink-2);display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere}
+
 .cm-day::before,.cm-day::after{content:"";flex:1;border-top:1px solid var(--line)}
 .cm-ev{display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:4px 8px;max-width:820px;margin:var(--s2) auto;padding:6px 10px;border-radius:var(--r-m);background:color-mix(in oklch,var(--c) 10%,transparent);font-size:var(--fs-small)}
 .cm-ev b{font-weight:var(--w-med);color:var(--ci)}
@@ -1193,7 +1224,10 @@ a.ref[data-kind=file][data-pv-on]{background:color-mix(in oklch,var(--accent) 16
 .cm-drop{display:none}
 .cm-convo[data-drag] .cm-drop{position:absolute;inset:8px;z-index:30;display:flex;align-items:center;justify-content:center;border:2px dashed var(--focus);border-radius:var(--r-l);background:color-mix(in oklch,var(--surface) 86%,transparent);font-weight:var(--w-med);color:var(--ink);pointer-events:none}
 /* home: start something, and what needs you */
-.cm-home{flex:1;min-height:0;overflow:auto;padding:var(--s6) var(--gutter) var(--s7)}
+.cm-home,.cm-fpane{flex:1;min-height:0;overflow:auto;padding:var(--s6) var(--gutter) var(--s7)}
+/* a focus page in the conversation's place (views/focus.js): the chat's reading width, Back on a phone as in a conversation */
+.cm-fpane>.page{max-width:var(--chat-col);padding:0}
+.cm-fpane>.cm-back{margin:0 0 var(--s2) -10px}
 .cm-new{max-width:720px;margin:0 auto}
 .cm-home-t{font-size:var(--fs-head);font-weight:var(--w-bold);letter-spacing:-.012em}
 .cm-home-l{margin:4px 0 var(--s3);color:var(--ink-2);font-size:var(--fs-body);max-width:60ch;text-wrap:pretty}
@@ -1216,6 +1250,14 @@ a.ref[data-kind=file][data-pv-on]{background:color-mix(in oklch,var(--accent) 16
 .fc-ag{display:inline-flex;gap:6px;flex-wrap:wrap;margin-left:auto;font-size:var(--fs-meta)}
 .fc-ag .ref{color:var(--ink-3)}
 .fc-aim{margin:-6px 0 0;font-size:var(--fs-small);color:var(--ink-3);text-wrap:pretty}
+/* the card's gauge: two thin meters (work, cost), the day's share as the fill, the week's as a tick behind it; the track is a lighter step of the same amber */
+.fc-gauge{display:flex;gap:6px 16px;flex-wrap:wrap;margin-top:-2px}
+.fc-g{display:inline-flex;align-items:center;gap:6px;flex:1 1 140px;min-width:0}
+.fc-g-l{flex:none;min-width:30px}
+.fc-g-t{position:relative;flex:1 1 60px;height:4px;border-radius:2px;background:var(--accent-bg);overflow:visible}
+.fc-g-d{position:absolute;left:0;top:0;height:100%;border-radius:2px;background:var(--accent)}
+.fc-g-wk{position:absolute;top:-2px;width:2px;height:8px;margin-left:-1px;border-radius:1px;background:var(--accent-ink);opacity:.6}
+.fc-g-n{flex:none;min-width:32px;text-align:right;font-variant-numeric:tabular-nums}
 .fc-sec{display:grid;gap:4px;min-width:0}
 .fc-sec>h3{margin:0;font-size:var(--fs-micro);font-weight:var(--w-med);letter-spacing:.04em;text-transform:uppercase;color:var(--ink-3)}
 .fc-sec>p{margin:0;font-size:var(--fs-small)}
@@ -1284,7 +1326,7 @@ a.ref[data-kind=file][data-pv-on]{background:color-mix(in oklch,var(--accent) 16
   .cm-line{align-items:flex-start;font-size:var(--fs-meta)}
   .cm-line>.sd{margin-top:5px}
   .cp{padding:6px 8px 8px}
-  .cm-home{padding:var(--s4) 14px var(--s6)}
+  .cm-home,.cm-fpane{padding:var(--s4) 14px var(--s6)}
   .cm-hline,.cm-foci,.cm-foci-msg{margin-top:var(--s5)}
   .cm-foci{grid-template-columns:1fr;gap:var(--s3)}
 }
@@ -1560,6 +1602,10 @@ details.blk>summary .blk-t::after{border-color:var(--ink-3)}
 .cp-to:hover{background:var(--hover);color:var(--ink)}
 .cp-to b{font-family:var(--mono);font-size:var(--fs-meta);color:var(--ink)}
 .cp-reply{border-left:0;padding:8px 12px 0 16px;color:var(--ink-3);font-size:var(--fs-meta)}
+.cp-quote{margin:8px 10px 0;padding:4px 4px 4px 10px;border-left:2px solid var(--line-2);border-radius:var(--r-s);background:var(--sunken)}   /* "Ask about this": the quote above the box, never in it */
+.cp-int{flex:none;height:28px;margin-right:12px;padding:0 10px;font-size:var(--fs-meta)}   /* Interrupt: outlined, apart from Send, so it isn't pressed for it */
+.cp-int-hint{max-width:var(--chat-col);width:100%;margin:6px auto 0;padding:0 16px;font-size:var(--fs-meta);color:var(--ink-3)}
+@container (max-width:640px){.cp-int{width:32px;margin-right:4px;padding:0;justify-content:center}.cp-bar:has(.cp-int) .cp-to{max-width:76px}.cp-int>span{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}.cp-int-hint{padding:0 6px}}
 .cp-file{border-radius:var(--r-m);background:var(--sunken);border:0}
 @container (max-width:640px){.cp{padding:0 10px 12px}.cp-box{border-radius:22px}.cp-t{font-size:16px}}  /* 16px stops iOS zooming on focus */
 @container (max-width:640px){.cp{grid-template-columns:minmax(0,1fr)}.cp-bar{flex-wrap:wrap}}  /* the composer's content, not the screen, set its width at phone size */
@@ -1946,6 +1992,9 @@ dialog.fb::backdrop{background:rgb(0 0 0 / .38)}
 .tm-sec+.tm-sec{margin-top:var(--s2)}
 .tm-sec-h{display:flex;align-items:center;gap:4px;margin:0;padding:8px 10px 4px;font-size:var(--fs-meta);font-weight:var(--w-med);color:var(--ink-3)}
 .tm-sec[data-sec=need]>.tm-sec-h{color:var(--accent-ink)}
+.tm-sec-hw[aria-current]{border-radius:var(--r-m);background:var(--hover)}   /* the focus whose page is open beside the list */
+.tm-sec-hw[aria-current]>.tm-sec-h{color:var(--ink)}
+.cm-tl .lr[data-here]>.lr-in{box-shadow:inset 2px 0 0 var(--line-2)}   /* Recent, with a focus page open: that focus's conversations */
 .tm-arch-b,.tm-fold{width:100%;border:0;background:none;font:inherit;font-size:var(--fs-meta);text-align:left;cursor:pointer;border-radius:var(--r-s)}
 .tm-arch-b:hover,.tm-fold:hover{background:var(--hover);color:var(--ink)}
 .tm-arch-b .ic,.tm-fold .ic{width:14px;height:14px}
@@ -2016,9 +2065,6 @@ dialog.rc-rail[open]{display:flex;flex-direction:column;gap:var(--s2)}
 /* Agents, consumer (§4): Today card, 48h strip, Details fold */
 .ph-state{margin-bottom:6px}
 .ph-state .sd{width:7px;height:7px;border-radius:50%;background:var(--c,var(--ink-3))}
-.card.away{padding:14px 20px;display:grid;gap:12px;justify-items:start}
-.away-h{font-size:var(--fs-title);margin:0 0 4px}
-.away-l{margin:0;padding:0;list-style:none;display:grid;gap:4px}
 .card.now-today{padding:14px 20px}
 .now-today .stats{grid-template-columns:repeat(3,minmax(0,1fr));margin:0;overflow:visible}
 .now-today .stat{padding:0 20px;box-shadow:-1px 0 0 var(--line)}
@@ -2213,11 +2259,6 @@ text.map-ring-t{font-size:var(--fs-micro);font-weight:var(--w-med);fill:var(--in
 /* ===== 12. chat home: section notes go; rows match the list ===== */
 .cm-home .sec-n{display:none}
 .frow[data-key=starters]{justify-content:center}
-.away{padding:var(--s4) var(--s5)}
-.away-g+.away-g{margin-top:var(--s3)}
-.away-h{font-size:var(--fs-meta);font-weight:var(--w-med);color:var(--ink-3)}
-.away-l{display:grid;gap:4px;margin-top:4px;font-size:var(--fs-small);color:var(--ink-2)}
-.away .btn{margin-top:var(--s3)}
 
 /* ===== 13. consumer Now: table cells carry the tag; the "one row each" note goes (Now's overview passes no note in the app look) ===== */
 .nt-ask{max-width:62ch}
@@ -2379,14 +2420,6 @@ text.map-ring-t{font-size:var(--fs-micro);font-weight:var(--w-med);fill:var(--in
 .pv[data-kind=files] .pv-h small{display:none}
 .cm-status-r{margin-left:10px;border:0;background:none;color:var(--accent,var(--ink));font:inherit;font-size:var(--fs-meta);font-weight:600;cursor:pointer;padding:0 2px}
 .cm-status-r:hover{text-decoration:underline}
-/* While you were away: a brief row holds one line (all of it is in the fold), so the card stays at 15 */
-.card.away>*{width:100%;min-width:0}
-.away-brief{grid-template-columns:minmax(0,1fr)}
-.away-brief li{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.away-wait{margin:0}
-.away-foot{display:flex;align-items:flex-start;gap:var(--s2,8px)}
-.away-foot>.fold-row{flex:1;min-width:0}
-.away-foot .btn{margin-top:0}
 
 /* A view that threw: shown in place of the page (js/app.js crashPage). */
 .view-crash{max-width:44ch;margin:var(--s7) auto;text-align:center;display:grid;gap:var(--s2);justify-items:center;font-size:var(--fs-small);color:var(--ink-2)}
@@ -2459,26 +2492,18 @@ input[type=radio],input[type=checkbox]:not(.switch){accent-color:var(--ink)}
 .cm-views .seg{padding:2px}
 .cm-views .seg button{height:24px;padding:0 10px;font-size:var(--fs-meta)}
 .tm-from{color:var(--ink-3);font-style:italic}
-.away-what,.away-sum{margin:0}
-.card.away-one{padding:10px 20px}
-/* away card: the fold's title stays on one line; the long summary is what gives way (it ellipsizes) */
-.away-foot details.fold-row>summary{white-space:nowrap}
-.away-foot details.fold-row>summary>small{margin-left:0;min-width:0;overflow:hidden;text-overflow:ellipsis}
 /* phone: a part's title, its note and its status label share one line; the note gives way (ellipsis) instead of the label dropping to its own row */
 @media (max-width:600px){.sec[data-level="1"]>.sec-h{flex-wrap:nowrap}.sec[data-level="1"]>.sec-h .sec-t{flex:none}.sec[data-level="1"]>.sec-h .sec-n{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.sec[data-level="1"]>.sec-h .sec-a{flex:none}}
 
-/* ===== Work: one card per project (views/work.js) ===== */
-.wk-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,360px),1fr));gap:var(--s4)}
-.wk-page>.sec+.sec{margin-top:var(--s5)}   /* between Your focuses, Other projects and the paused fold; the sections carry no gap of their own */
+/* ===== A project card (ui/projectcard.js): Flow opens it in the panel ===== */
 .wk{padding:var(--s3) var(--s4);display:grid;gap:var(--s3);min-width:0}
 .wk-hd{display:flex;align-items:baseline;gap:var(--s2);flex-wrap:wrap}.wk-hd>.sd{flex:none;align-self:center}
 .wk-t{margin:0;font-size:var(--fs-title);font-weight:var(--w-bold);min-width:0;flex:1 1 12em;overflow-wrap:anywhere}.wk-n{color:var(--ink-3);font-weight:var(--w-med)}
-.wk-st{margin-left:auto;white-space:nowrap}
 .wk-b{margin:0;display:grid;gap:var(--s2)}.wk-p{display:grid;grid-template-columns:5.5em minmax(0,1fr);gap:var(--s2);font-size:var(--fs-small)}
 .wk-p>dt{color:var(--ink-3);font-weight:var(--w-med)}.wk-p>dd{margin:0;min-width:0;overflow-wrap:anywhere;color:var(--ink)}
 .wk-l{margin:0;padding:0;list-style:none;display:grid;gap:2px}.wk-l a{color:inherit;text-decoration:none}.wk-l a:hover{text-decoration:underline}.wk-w{text-transform:capitalize}
 .wk-ft{display:flex;gap:var(--s3);flex-wrap:wrap;align-items:center;border-top:1px solid var(--line);padding-top:var(--s2)}.wk-who{display:inline-flex;gap:var(--s2);flex-wrap:wrap;align-items:center}
-@container (max-width:420px){.wk-p{grid-template-columns:1fr}.wk-st{margin-left:0}}
+@container (max-width:420px){.wk-p{grid-template-columns:1fr}}
 /* A phone: the header's buttons share one row, the stop button with them rather than alone under them */
 @container (max-width:520px){.ph-actions{gap:6px}.ph-actions .btn[data-size=s]{padding:0 6px}.ph-actions .ac-kill{margin-left:0}}
 
@@ -2517,11 +2542,10 @@ button.fl-rn:hover{text-decoration:underline}
 .fl-box .fl-name[data-live]{fill:var(--ink);font-weight:var(--w-bold)}
 .fl-box .fl-sub{fill:var(--ink-3)}
 .fl-box .fl-sub[data-cold]{opacity:.7}
-.fl-lane[data-card]{cursor:pointer}   /* a goal's lane opens its Work card in the panel */
+.fl-lane[data-card]{cursor:pointer}   /* a goal's lane opens its project card in the panel */
 .fl-lane[data-card]:hover .fl-name{text-decoration:underline}
 .fl-name[role=button]:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
 .wk-sheet{padding:var(--s3) var(--s3) var(--s5)}   /* the card alone, in the panel */
-.wk[data-here]{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-bg)}   /* #work/<key>: the card the link meant */
 .fl-bar{fill:color-mix(in oklch,var(--info) 24%,transparent);stroke:var(--info);stroke-width:1}
 .fl-bar[data-live]{fill:color-mix(in oklch,var(--good) 32%,transparent);stroke:var(--good);stroke-width:1.5}
 .fl-hit:hover .fl-bar{stroke-width:2}
@@ -2629,6 +2653,11 @@ button.fl-rn:hover{text-decoration:underline}
 .fp-box{flex:none;width:16px;height:16px;margin-top:2px;border:1.5px solid var(--line-2);border-radius:4px}
 .fp-todo li[data-done] .fp-box{background:var(--line-2)}
 .fp>.sec{margin-top:var(--s5)}   /* Now, Lately, Needs you, To do, Agents, Conversations, Files: air above each, the first one off the header too */
+.fp-act{margin:0;padding:0;list-style:none;display:grid;gap:8px;font-size:var(--fs-body);color:var(--ink-2)}
+.fp-act li{display:grid;gap:4px}
+.fp-g{display:flex;gap:10px;max-width:360px}
+.fp-g .fp-g-t{flex:1 1 0;height:6px;border-radius:3px}
+.fp-g .fc-g-d{border-radius:3px}
 .fp-ag{display:flex;flex-wrap:wrap;gap:8px 14px;font-size:var(--fs-small)}
 .fp-also{margin:var(--s3) 0 var(--s2)}
 .fp-ag p{display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px;margin:0}   /* each agent name its own pill, with air between (they ran together) */

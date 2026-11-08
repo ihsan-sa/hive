@@ -9,14 +9,14 @@ export const MAX_MAIN = 6, MAX_TOOLS = 6;   // MAX_MAIN counts word tabs: an ico
 export const APP_NAV = {
   main: ["start", "comms", "knowledge", "now", "usage", "settings"],   // Chat · Knowledge · Agents · Usage, Settings as an icon. Where things stand is the home itself since 2026-11-07: one card per focus (person, 11071400de5b); the Work tab went with it.
   groups: {
-    comms: ["comms", "inbox", "mail", "made"],
+    comms: ["comms", "yours", "inbox", "mail", "made"],
     now: ["now", "agents", "timeline", "mesh", "ledger", "progress", "flow"],   // Agents' row: who is working, every agent, the timeline, the map, the history, the work in time
     usage: ["usage", "jobs"],
   },
   names: { now: "Now", agents: "All agents", made: "Files" },   // In the row, where the tab's own name would say the same thing twice.
   noRow: ["comms", "settings", "agent", "focus"],         // Full-height or already has its own side list: these pages show no row. The tab stays lit.
   belongs: { agent: "now", secrets: "settings", focus: "comms", needs: "comms" }, // Lights a tab without being a page in its row. Needs you is the home's line, a page behind it; a focus page is the home a level down.
-  more: ["work", "design"],                      // Work: the old by-project page, under More until its parts have moved to the focus pages (R5).
+  more: ["design"],                             // The Work page went (R5): the focus pages carry what it showed, Flow's lanes open its card.
   icons: ["settings"],                           // Main places drawn as an icon at the right of the bar, not as a word tab (redesign 2026-11-04).
 };
 // Simple mode: only these. The rest stays reachable by "Show everything" under More.

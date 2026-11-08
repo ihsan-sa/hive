@@ -298,13 +298,27 @@ def for_you_numbers(posts, t0, t1):
         n, flagged = f.tally(posts, t0, t1)
         kinds = {f"for_you_{k}": v for k, v in f.kind_tally(posts, t0, t1).items()}
     except Exception: return {}
-    return {"for_you_lines": n, "for_you_flagged": flagged, "for_you_flagged_pct": round(100.0 * flagged / n, 1) if n else 0.0, "decided_lines": decided_lines(posts, t0, t1), **kinds}
+    return {"for_you_lines": n, "for_you_flagged": flagged, "for_you_flagged_pct": round(100.0 * flagged / n, 1) if n else 0.0, "decided_lines": decided_lines(posts, t0, t1), **reversal_numbers(posts, t0, t1), **kinds}
 
 DECIDED_LINE = re.compile(r"^\s*(?:[-*>]\s*)?(?:\*\*|__)?decided(?:\*\*|__)?\s*:\s*(?:\*\*|__)?\s*\S", re.I | re.M)
 
 def decided_lines(posts, t0, t1):
     """`Decided:` lines from agents in the window (hive-meta P4; the convention's measure against person_asks). Same agent filter as For you: not the person, not the hive's own threads."""
     return sum(len(DECIDED_LINE.findall(str(p.get("text", "")))) for p in posts if t0 <= p.get("at", "") <= t1 and p.get("from") not in ("person", "starter", "keeper") and p.get("thread") not in ("keeper", "improve", "watchdog"))
+
+REVERSE = re.compile(r"\b(revers\w*|undo|revert\w*|instead|don'?t do|do not|wrong|no,|stop doing|take (?:that|it) back)\b", re.I)
+
+def reversal_numbers(posts, t0, t1, within_h=24):
+    """Reversals per 100 `Decided:` lines (hive-meta P4): decisions in the window whose thread got a person post within 24 h that reads as a reversal (keyword match, so a count to watch, not a verdict). Empty when there are no decisions."""
+    skip = ("person", "starter", "keeper"); n = rev = 0
+    stamp = lambda a: dt.datetime.fromisoformat(str(a)[:19]).timestamp()
+    for p in posts:
+        if not t0 <= p.get("at", "") <= t1 or p.get("from") in skip or p.get("thread") in ("keeper", "improve", "watchdog"): continue
+        k = len(DECIDED_LINE.findall(str(p.get("text", ""))))
+        if not k: continue
+        n += k; t = stamp(p["at"])
+        if any(q.get("from") == "person" and q.get("thread") == p.get("thread") and 0 < stamp(q["at"]) - t <= within_h * 3600 and REVERSE.search(str(q.get("text", ""))) for q in posts if q.get("at", "") > p["at"]): rev += k
+    return {"reversals_per_100": round(100.0 * rev / n, 1) if n else 0.0} if n else {}
 
 def summary_numbers():
     """From the dash module's lint: stale, duplicate and wrong-owner items in Where things stand, and threads open on the person that it lacks. None where there's no dash module."""
@@ -350,9 +364,9 @@ def kb_numbers(t0, t1):
     return {"kb_finds": x["finds"], "kb_find_read_pct": x["find_read_pct"], "kb_recall_injections": x["recalls"], "kb_recall_opened_pct": x["recall_opened_pct"], "kb_misses_explicit": x["misses"], "kb_miss_candidates": x["candidates"]}
 
 LOWER_IS_BETTER = {"fail_pct", "runs_reaped", "person_noticed_first", "person_reply_p50_s", "person_reply_p90_s", "watchdog_trips", "stalled_threads", "improvements_overdue", "projects_unmeasured", "asks_orphaned", "leftovers_orphaned", "asks_stale", "asks_unowned", "leftovers_unowned", "asks_oldest_open_d", "outcomes_silent", "outcomes_nothing", "focus_quiet", "for_you_lines", "for_you_flagged", "for_you_flagged_pct", "for_you_command", "for_you_many", "for_you_long", "for_you_chain", "for_you_ours", "person_asks", "summary_flagged", "needs_gap"}
-NEUTRAL = {"decided_lines", "kb_finds", "kb_find_read_pct", "kb_recall_injections", "kb_recall_opened_pct", "kb_misses_explicit", "kb_miss_candidates", "model_steps_up", "model_steps_down", "runs", "runs_woken", "person_replies", "keeper_rounds", "improve_rounds", "core_commits", "rsi_rounds", "reverted", "spend_usd", "asks_open", "leftovers_open", "leftovers_filed", "leftovers_closed", "outcomes_graded"}  # activity and cost: context, not a score (the person: don't ration work for pace)
+NEUTRAL = {"decided_lines", "reversals_per_100", "kb_finds", "kb_find_read_pct", "kb_recall_injections", "kb_recall_opened_pct", "kb_misses_explicit", "kb_miss_candidates", "model_steps_up", "model_steps_down", "runs", "runs_woken", "person_replies", "keeper_rounds", "improve_rounds", "core_commits", "rsi_rounds", "reverted", "spend_usd", "asks_open", "leftovers_open", "leftovers_filed", "leftovers_closed", "outcomes_graded"}  # activity and cost: context, not a score (the person: don't ration work for pace)
 HEADLINE = ["kb_finds", "kb_find_read_pct", "kb_recall_injections", "kb_recall_opened_pct", "kb_misses_explicit", "kb_miss_candidates", "runs", "model_steps_up", "model_steps_down", "fail_pct", "runs_reaped", "runs_woken", "person_noticed_first", "person_reply_p50_s", "person_reply_p90_s", "watchdog_trips", "stalled_threads", "improvements_landed", "improvements_judged", "held", "reverted",
-            "improvements_overdue", "focus_quiet", "for_you_lines", "for_you_flagged", "for_you_flagged_pct", "for_you_command", "for_you_many", "for_you_long", "for_you_chain", "for_you_ours", "decided_lines", "person_asks", "summary_flagged", "needs_gap", "asks_open", "leftovers_open", "leftovers_filed", "leftovers_closed", "asks_orphaned", "leftovers_orphaned", "asks_stale", "asks_unowned", "leftovers_unowned", "asks_done", "asks_oldest_open_d", "outcome_delivered_pct", "outcomes_silent", "outcomes_nothing", "outcomes_graded", "rsi_rounds", "rsi_wins", "keeper_rounds", "improve_rounds", "core_commits", "projects_unmeasured", "spend_usd"]
+            "improvements_overdue", "focus_quiet", "for_you_lines", "for_you_flagged", "for_you_flagged_pct", "for_you_command", "for_you_many", "for_you_long", "for_you_chain", "for_you_ours", "decided_lines", "reversals_per_100", "person_asks", "summary_flagged", "needs_gap", "asks_open", "leftovers_open", "leftovers_filed", "leftovers_closed", "asks_orphaned", "leftovers_orphaned", "asks_stale", "asks_unowned", "leftovers_unowned", "asks_done", "asks_oldest_open_d", "outcome_delivered_pct", "outcomes_silent", "outcomes_nothing", "outcomes_graded", "rsi_rounds", "rsi_wins", "keeper_rounds", "improve_rounds", "core_commits", "projects_unmeasured", "spend_usd"]
 
 def scoreboard(since):
     log, posts, items = jsonl(LOG), jsonl(BOARD), ledger()

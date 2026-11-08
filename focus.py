@@ -34,13 +34,14 @@ from pathlib import Path
 
 HOME = Path.home()
 CORE, STATE, KB = HOME / "core", HOME / ".hive", HOME / "kb"
-FILE, BOARD, STATUS = STATE / "focus.jsonl", HOME / "board.jsonl", STATE / "thread-status.jsonl"
+FILE, BOARD, STATUS, LOG = STATE / "focus.jsonl", HOME / "board.jsonl", STATE / "thread-status.jsonl", HOME / "log.jsonl"
 ID = re.compile(r"[a-z][a-z0-9-]{1,40}")
 THREAD = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.:-]{0,100}")
 FOCUS_LINE = re.compile(r"^\s*(\d+)\.\s+\*\*(.+?)\*\*\s*\((?:thread\s+)?`([^`]+)`\)?[,:]?[ \t]*([^\n]*)", re.M)   # goals.py's FOCUS, plus the rest of the line (a default aim)
 RESULT = re.compile(r"^(Done|Blocked|Needs the person|Waiting|Told to stop):\s*\S", re.I)
 MISC = "misc"
 MAX_SUMMARY, MAX_BULLET = 2500, 220
+WINDOWS = {"day": 86400, "week": 7 * 86400}   # the home card's gauge: each focus's share of the hive's work over the last day and week
 # What reads as agent talk on the person's pages. Each: (name, regex, what to do instead).
 JARGON = [
     ("post id", re.compile(r"\b[0-9a-f]{12}\b"), "say what the post said, or drop it"),
@@ -106,16 +107,44 @@ def board_posts():
         if isinstance(p, dict) and p.get("thread"): out.append(p)
     return out
 
+HASH = re.compile(r"[a-z][0-9a-f]{4,}")  # an agent's name (hive's HASH_NAME)
+
+def last_agent(posts, thread):
+    """The agent who last posted in `thread` (board order); when none has, an agent running on the thread (its run file), so a
+    copy passed on there doesn't start a second one beside it; else None."""
+    last = None
+    for p in posts:
+        if p.get("thread") == thread and HASH.fullmatch(str(p.get("from") or "").lower()): last = str(p["from"]).lower()
+    if last: return last
+    for f in sorted((HOME / "run").glob("*.json")):
+        try: r = json.loads(f.read_text()); os.kill(int(r["pid"]), 0)
+        except (OSError, ValueError, KeyError, TypeError): continue
+        if r.get("thread") == thread and HASH.fullmatch(str(r.get("name") or "").lower()): return str(r["name"]).lower()
+    return None
+
+def keeper(f, posts):
+    """Who keeps a focus, so a post naming the focus reaches someone (the person, 110717432468): the agent who wrote its latest
+    summary, unless another agent posted in its own thread since; None when nobody has."""
+    s = f.get("summary") or {}
+    best = (ts(s.get("at")), str(s["from"]).lower()) if HASH.fullmatch(str(s.get("from") or "").lower()) else (0.0, None)
+    th = f.get("thread") or f["id"]
+    for p in posts:  # a post passed on into the thread, or one asking another agent there, doesn't make its author the keeper
+        if p.get("thread") != th or p.get("relay_of") or not HASH.fullmatch(str(p.get("from") or "").lower()) or ts(p.get("at")) < best[0]: continue
+        if any(HASH.fullmatch(str(t).lstrip("@").lower()) and str(t).lstrip("@").lower() != str(p["from"]).lower() for t in (p.get("to") or [])): continue
+        best = (ts(p.get("at")), str(p["from"]).lower())
+    return best[1]
+
 def ts(at):
+    if isinstance(at, (int, float)): return float(at)  # records carry time.time(); posts an ISO string
     try: return dt.datetime.fromisoformat(str(at).replace("Z", "+00:00")).timestamp()
     except (TypeError, ValueError): return 0.0
 
 def state(recs=None, pri=None, posts=None):
-    """Everything resolved: {foci: [...], tags: {thread: focus}, order: [ids]}. A focus: {id, name, n?, thread?, own, aim, links, summary, checks, threads}."""
+    """Everything resolved: {foci: [...], tags: {thread: focus}, order: [ids]}. A focus: {id, name, n?, thread?, own, aim, links, summary, checks, threads, files}."""
     recs = records() if recs is None else recs
     foci, order = {}, []
     for f in (priorities() if pri is None else pri):
-        foci[f["id"]] = {"aim": None, **f, "own": True, "links": [], "summary": None, "checks": [], "threads": []}; order.append(f["id"])
+        foci[f["id"]] = {"aim": None, **f, "own": True, "links": [], "summary": None, "checks": [], "threads": [], "files": []}; order.append(f["id"])
     for r in recs:
         if r["kind"] == "focus":
             fid = r.get("id")
@@ -123,7 +152,7 @@ def state(recs=None, pri=None, posts=None):
             if r.get("off"):
                 if fid in foci and not foci[fid].get("own"): del foci[fid]; order.remove(fid)
             elif fid not in foci:
-                foci[fid] = {"id": fid, "name": r.get("name") or fid, "thread": r.get("thread"), "own": False, "aim": None, "links": [], "summary": None, "checks": [], "threads": [], "made": r.get("at")}; order.append(fid)
+                foci[fid] = {"id": fid, "name": r.get("name") or fid, "thread": r.get("thread"), "own": False, "aim": None, "links": [], "summary": None, "checks": [], "threads": [], "files": [], "made": r.get("at")}; order.append(fid)
             else: foci[fid]["name"] = r.get("name") or foci[fid]["name"]
     tags = {}
     for r in recs:
@@ -149,6 +178,12 @@ def state(recs=None, pri=None, posts=None):
         elif r["kind"] == "check_untick" and r.get("id") in checks: checks[r["id"]]["done"] = None
     for c in checks.values(): foci[c["focus"]]["checks"].append(c)
     for th, fid in tags.items(): foci[fid]["threads"].append(th)
+    files = {}   # kb notes filed under a focus (kb file --from POST / --focus): path -> {path, post, from, at}; the newest filing of a path wins, --off removes it
+    for r in recs:
+        if r["kind"] == "file" and r.get("focus") in foci and r.get("path"):
+            if r.get("off"): files.pop((r["focus"], r["path"]), None)
+            else: files[(r["focus"], r["path"])] = {"path": r["path"], "post": r.get("post"), "from": r.get("from"), "at": r.get("at")}
+    for (fid, _), x in sorted(files.items(), key=lambda kv: -(kv[1].get("at") or 0)): foci[fid]["files"].append(x)
     for f in foci.values():
         if f.get("thread") and f["thread"] not in f["threads"]: f["threads"].insert(0, f["thread"])
     return {"foci": [foci[i] for i in order], "tags": tags, "order": order}
@@ -170,6 +205,42 @@ def focus_of(st, thread, posts=None):
         par = first and first.get("parent")
         if par and par != thread: return focus_of(st, par, None)
     return None
+
+def run_starts(since):
+    """[(t, thread)] for every agent run the starter began after `since` (the start events in ~/log.jsonl)."""
+    out = []
+    try:
+        with open(LOG, "rb") as fh:
+            for ln in fh:
+                if b'"event": "start"' not in ln: continue
+                try: e = json.loads(ln)
+                except ValueError: continue
+                t = ts(e.get("at"))
+                if t >= since: out.append((t, e.get("thread") or ""))
+    except OSError: pass
+    return out
+
+def activity(st, posts, starts, at=None):
+    """Each focus's share of the hive's work: runs the starter began and posts agents wrote, in its threads, over the last day and week.
+    {"foci": {id: {"day": {"runs", "posts"}, "week": {...}}}, "misc": the same for threads in no focus, "total": the hive's,
+     "threads": {thread: focus id or None}} for every thread that saw a run or a post this week, so the dash can lay its costs
+    (one per run, from the session logs) on the same map. A run on a thread in no focus counts under Misc; every one counts in total."""
+    at = now() if at is None else at
+    zero = lambda: {w: {"runs": 0, "posts": 0} for w in WINDOWS}
+    out = {"windows": dict(WINDOWS), "foci": {f["id"]: zero() for f in st["foci"]}, "misc": zero(), "total": zero(), "threads": {}}
+    week = at - WINDOWS["week"]
+    def place(thread, t, what):
+        if thread not in out["threads"]: out["threads"][thread] = focus_of(st, thread, posts)
+        fid = out["threads"][thread]
+        for w, span in WINDOWS.items():
+            if t >= at - span:
+                for b in (out["foci"][fid] if fid else out["misc"], out["total"]): b[w][what] += 1
+    for t, th in starts:
+        if t >= week and th: place(th, t, "runs")
+    for p in posts:
+        t = ts(p.get("at"))
+        if t >= week and p.get("from") not in (None, "person"): place(p["thread"], t, "posts")
+    return out
 
 def newest_result(threads, posts):
     """The newest agent post in these threads whose last line is a result (Done: ...), as (t, post) or (0, None)."""
@@ -233,9 +304,11 @@ def main(argv=None):
     p = sp.add_parser("link"); p.add_argument("a"); p.add_argument("b"); p.add_argument("--off", action="store_true")
     p = sp.add_parser("set"); p.add_argument("focus")
     p = sp.add_parser("show"); p.add_argument("focus")
+    p = sp.add_parser("keeper"); p.add_argument("focus")
     p = sp.add_parser("aim"); p.add_argument("focus"); p.add_argument("text", nargs="*")
     p = sp.add_parser("check"); p.add_argument("what", choices=["add", "list", "done", "untick"]); p.add_argument("args", nargs="*")
     p = sp.add_parser("lint"); p.add_argument("focus", nargs="?"); p.add_argument("--json", action="store_true")
+    p = sp.add_parser("file"); p.add_argument("path"); p.add_argument("--post"); p.add_argument("--focus"); p.add_argument("--off", action="store_true")   # a kb note filed under a focus (kb file --from/--focus calls this)
     sp.add_parser("json")
     a = ap.parse_args(argv)
     st = state()
@@ -273,10 +346,11 @@ def main(argv=None):
         text = " ".join(" ".join(a.text).split())[:200]
         if not text: print(f.get("aim") or "(no aim yet)"); return
         append({"kind": "aim", "focus": f["id"], "text": text}); print(f"aim of {f['id']}: {text}"); return
-    if a.cmd in ("set", "show"):
+    if a.cmd in ("set", "show", "keeper"):
         f = find(st, a.focus)
         if not f: sys.exit(f"hive focus: no focus {a.focus!r} (hive focus list; hive focus new ID \"name\" adds one)")
         if a.cmd == "show": print((f.get("summary") or {}).get("text") or "(no summary yet)"); return
+        if a.cmd == "keeper": print(keeper(f, board_posts()) or "nobody"); return
         if sys.stdin.isatty(): sys.exit("hive focus set: the summary comes on stdin, a quoted heredoc with ## Now and ## Lately bullets")
         text = sys.stdin.read().strip()[:MAX_SUMMARY]
         parts = parse_summary(text)
@@ -308,9 +382,23 @@ def main(argv=None):
         if a.focus and not f: sys.exit(f"hive focus lint: no focus {a.focus!r}")
         items = lint(st, only=f["id"] if f else None)
         print(json.dumps(items) if a.json else fmt_lint(items)); return
+    if a.cmd == "file":
+        posts = board_posts(); fid = None
+        if a.focus:
+            f = find(st, a.focus)
+            if not f: sys.exit(f"no focus {a.focus}")
+            fid = f["id"]
+        elif a.post:
+            src = next((p for p in posts if p.get("id") == a.post), None)
+            if not src: sys.exit(f"no post {a.post} on the board")
+            fid = focus_of(st, src.get("thread"), posts)
+        if not fid: print("no focus for it (the post's thread is in Misc; give --focus ID)"); return
+        append({"kind": "file", "focus": fid, "path": a.path.strip(), **({"post": a.post} if a.post else {}), **({"off": True} if a.off else {})})
+        print(("taken off" if a.off else "listed on") + f" the focus page of {fid}: {a.path.strip()}"); return
     if a.cmd == "json":
         posts = board_posts()
-        out = {"foci": st["foci"], "tags": st["tags"], "misc": MISC, "lint": lint(st, posts), "at": now()}
+        for f in st["foci"]: f["keeper"] = keeper(f, posts)
+        out = {"foci": st["foci"], "tags": st["tags"], "misc": MISC, "lint": lint(st, posts), "activity": activity(st, posts, run_starts(now() - WINDOWS["week"])), "at": now()}
         print(json.dumps(out, default=str)); return
 
 if __name__ == "__main__": main()

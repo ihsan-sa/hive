@@ -46,7 +46,7 @@ Start with something quick so you can see how it works. Type this and press Ente
 2. The line above the message box says what the agent is doing. Click the top bar's **Agents** to see it there too.
 3. In a minute or two the agent answers with the file attached. Click it to download it.
 
-You can close the page at any time. The agent keeps working, and its answer will be waiting under **New for you** on the Chat home page.
+You can close the page at any time. The agent keeps working, and its answer will be waiting in the conversation, which the Chat home page lists on its focus's card.
 
 ## Ask for a change
 

@@ -2,7 +2,7 @@
 // keeps polling and the panel is never morphed away. Same render as the full page, in a narrower container (it lays out
 // as on a phone). Escape or a click on empty space closes it; "Full page" is a real link, and refs open in a new tab as usual.
 // A thread opens in Comms, as it always has, so openPanel("thread", name) goes there. openSheet() puts any view's piece in
-// the same panel (Flow's lane opens its Work card there): a draw function, drawn again on every store change, and its full page.
+// the same panel (Flow's lane opens its project card there): a draw function, drawn again on every store change, and its full page.
 import { h, mount, selecting } from "../core/dom.js";
 import { S, subscribe } from "../core/store.js";
 import { agentHref, go, parse, threadHref } from "../core/router.js";
