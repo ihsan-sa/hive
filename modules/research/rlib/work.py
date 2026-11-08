@@ -230,7 +230,12 @@ class Hunt:
         self.allow_page_signal = spec.get("allow_page_signal", False)
         self.max_age = spec.get("max_age_years", 3)
         self.pattern = _pattern(spec, "org_pattern") or re.compile(r"\b(?:[A-Z][\w.&'-]+\s+){1,5}(?:College|University|Institute of Technology)\b(?:\s+of\s+(?:(?:New|North|South|West|San|Los|Las|Rhode|Puerto|Saint|St\.)\s+)?[A-Z][\w-]+)?")
-        self.orgs = list(dict.fromkeys(spec.get("orgs", [])))
+        self.pages = {}  # org -> direct URLs to read: a known staff page fed in
+        for o, urls in (spec.get("pages") or {}).items():
+            if isinstance(urls, str): urls = [urls]
+            if not isinstance(urls, list) or not all(isinstance(u, str) for u in urls): raise ValueError(f"spec pages for {o!r} must be a URL or a list of URLs")
+            self.pages[o] = urls
+        self.orgs = list(dict.fromkeys(list(spec.get("orgs", [])) + list(self.pages)))
         self.leads, self.near, self.log_rows, self.blocked, self.errors = {}, {}, [], {}, collections.Counter()
         self.state_file = case.root / "hunt.json"
         self.done_orgs, self.tried = {}, set()
@@ -375,7 +380,14 @@ class Hunt:
         return got
 
     def try_org(self, org):
-        """Angles one by one until this org has given all it may."""
+        """Given pages first, then angles one by one, until this org has given all it may."""
+        for u in self.pages.get(org, []):
+            if len(self.leads) >= self.target or self.org_count(org) >= self.per_org or time.monotonic() > self.deadline: return
+            if (org, "(page) " + u) in self.tried: continue
+            found = self.weigh(org, fetcher.fetch(u, self.case), "(page) " + u)
+            self.tried.add((org, "(page) " + u))
+            self.log_rows.append({"org": org, "angle": "(page) " + u, "hits": 1, "read": 1, "found": found, "at": now()})
+            self._save()
         for angle in self.angles:
             if len(self.leads) >= self.target or self.org_count(org) >= self.per_org or time.monotonic() > self.deadline: return
             if (org, angle) in self.tried or (org, angle) in self.failed: continue
@@ -430,7 +442,7 @@ class Hunt:
         discover = list(self.s.get("discover", []))
         workers = int(self.s.get("workers", 4))
         while len(self.leads) < self.target and time.monotonic() < self.deadline:
-            todo = [o for o in self.orgs if self.org_count(o) < self.per_org and any((o, a) not in self.tried and (o, a) not in self.failed for a in self.angles)]
+            todo = [o for o in self.orgs if self.org_count(o) < self.per_org and (any((o, a) not in self.tried and (o, a) not in self.failed for a in self.angles) or any((o, "(page) " + u) not in self.tried for u in self.pages.get(o, [])))]
             if not todo:
                 if not discover: break
                 self.discover(discover.pop(0))

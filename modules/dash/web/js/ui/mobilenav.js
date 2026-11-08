@@ -42,7 +42,7 @@ export function mobileNav({ views, current, nav, update }) {
   const close = () => { shut(); update(); };
   const th = getTheme();
   const item = v => h("a", { class: "menu-i", role: "menuitem", href: href(v.id), "data-key": v.id, "aria-current": v.id === current ? "page" : null, onclick: shut },
-    icon(GLYPH[v.id] || "more"), h("span", { class: "menu-i-t" }, lab(v)));
+    icon(GLYPH[v.id] || "more"), h("span", { class: "menu-i-t" }, v.id === "agents" && nav && nav.names && nav.names.agents || lab(v)));   // "All agents", the desktop More menu's word (R10 #10)
   const act = (key, label, run, ic, right) => h("button", { type: "button", class: "menu-i", role: "menuitem", "data-key": key, onclick: run }, icon(ic), h("span", { class: "menu-i-t" }, label), right ? h("span", { class: "menu-i-r" }, right) : null);
   const tab = v => { const b = v.badge ? v.badge() : null;
     return h("a", { class: "bnav-i", href: href(v.id), "data-key": v.id, "aria-current": v.id === active ? "page" : null, onclick: shut },
