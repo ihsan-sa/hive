@@ -16,7 +16,7 @@
 .dt-sum{display:flex;align-items:baseline;gap:var(--s5)}
 .dt-run{font-size:var(--fs-body);font-weight:var(--w-med);color:var(--ink-2)}
 .dt-n{display:inline-flex;align-items:baseline;gap:8px}
-.dt-n .sd,.dt-room .sd,.dt-trouble .sd{zoom:1.5;align-self:center}
+.dt-n .st,.dt-room .st,.dt-trouble .st{zoom:1.5;align-self:center}
 .dt-n b{font-size:var(--fs-figure);font-weight:var(--w-bold);line-height:1;font-variant-numeric:tabular-nums}
 .dt-n span{font-size:var(--fs-body);color:var(--ink-2)}
 .dt-n[data-zero] b{color:var(--ink-3);font-weight:500}
@@ -112,7 +112,7 @@
 /* No data: a band readable across a room, and the old numbers plainly set back. */
 .dt-lost{display:flex;align-items:center;gap:16px;min-height:72px;padding:12px 24px;border-radius:var(--r-l);background:color-mix(in oklch,var(--bad) 12%,var(--surface))}
 .dt-lost b{font-size:26px;letter-spacing:-.01em}.dt-lost span{font-size:20px;color:var(--ink-2)}
-.dt-lost .sd{zoom:1.5;align-self:center}
+.dt-lost .st{zoom:1.5;align-self:center}
 body[data-lost] .dt-sum,body[data-lost] .dt-tile{opacity:.55}
 
 /* From across a room nothing can be hovered: let the usage notes and the map's agent lines say all of it. */

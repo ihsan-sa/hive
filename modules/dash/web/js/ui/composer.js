@@ -2,7 +2,9 @@
 // Up and Down walk the person's past messages like a shell's history; Tab finishes what they've started typing from them.
 // App mode only (can("post")). Everything lives here, outside the render, so polls never touch what the person is doing:
 // - a draft per thread (text, reply, quote, chosen recipient, name), kept in localStorage, so it survives leaving and reloading;
-//   a quote ("Ask about this") is a chip above the box, never text in it: it goes in front of the words when sent (quotePrefix);
+//   a quote ("Ask about this") and a reply are chips above the box, never text in it (R7 step 2: nothing is pasted into the box);
+//   the quote still goes in front of the words on the wire (quotePrefix), since the core ignores the post's quote field;
+// - interrupt mode (R7 step 2): the Interrupt link on the line above the box arms it; only then does Send (or Enter) interrupt;
 // - OUT, messages on their way: they show at once as "Sending…", settle when the board has them, and a failed one keeps
 //   its text and offers Retry, Edit and Discard. The board is append-only, so nothing here suggests unsending a posted one.
 import { uploadFile } from "../core/upload.js";
@@ -19,8 +21,11 @@ import { sixSeven } from "../core/sixseven.js";
 import { startCall, phoneReady, inCall } from "./phone.js";
 import { run as eggRun } from "../core/easter.js";
 import { wordBoxButton, wordBoxPanel } from "./rootword.js";
+import { delivery } from "./message.js";   // circular, used only at render time
 
-const CP = { update: null, th: undefined, focus: false, ac: null, menu: false, drag: false, sig: "", hist: null };
+// menu: which of the bar's menus is open (to | add | aa | model), or false. mode: thread → "interrupt" while armed.
+// sent: thread → the interrupt just sent there ({who, it, at, seen}), for the live line's stopping → reading → normal.
+const CP = { update: null, th: undefined, focus: false, ac: null, menu: false, drag: false, sig: "", hist: null, mode: {}, sent: {} };
 // The secret box (the person, 11041306e4d2): a name and a hidden value saved straight to /api/secret. The value never enters the draft, the board or localStorage.
 const SB = { open: false, rows: [{ name: "", value: "" }], say: "", tone: null, busy: false };
 const refresh = () => CP.update && CP.update();
@@ -56,23 +61,32 @@ export function replyTo(p) {
   const d = draft(p.th); d.reply = p; d.replyId = p.id; d.to = null; keep(d);
   CP.focus = true; go("comms", p.th); refresh();
 }
-/** Esc: close the @ list or the To menu, else drop a quote, else cancel a reply. True if it did something. */
+/** Esc: close the @ list or a menu, else leave interrupt mode, else drop a quote, else cancel a reply. True if it did something. */
 export function cancelReply() {
   if (CP.ac) { CP.ac = null; refresh(); return true; }
   if (CP.menu) { CP.menu = false; refresh(); return true; }
+  if (CP.th && CP.mode[CP.th]) { disarm(CP.th); return true; }
   const d = CP.th !== undefined && D.get(dkey(CP.th));
   if (d && d.quote) { d.quote = null; keep(d); refresh(); return true; }
   if (!d || !(d.reply || d.replyId)) return false;
   d.reply = null; d.replyId = null; keep(d); refresh(); return true;
 }
 export const focusComposer = () => { CP.focus = true; refresh(); };
-/** Add quoted text to a thread's draft and put the cursor there. It only adds text: the person still presses Send. */
-export function quoteInto(th, text) {
-  const d = draft(th), f = field(th), had = f ? f.value : d.text;
-  d.text = had + (had && !had.endsWith("\n\n") ? (had.endsWith("\n") ? "\n" : "\n\n") : "") + text;
-  if (f) f.value = d.text;
-  keep(d); CP.focus = true; refresh();
+/** Address the next message in a thread to who (the To menu's choice) and put the cursor in the box. Nothing is typed for the person. */
+export function sayTo(th, who) {
+  const d = draft(th); if (who) { d.to = who; keep(d); }
+  CP.focus = true; refresh();
 }
+/** Interrupt mode (R7 step 2): open th's conversation with the box armed to interrupt who. Nothing is sent until the person
+ *  presses Interrupt (or Enter) there; Esc or × goes back to an ordinary message. From the Interrupt link and Agents › Now. */
+export function armInterrupt(th, who) {
+  if (!th) return;
+  const d = draft(th);
+  if (who && recipient(th).who !== who) { d.to = who; keep(d); }
+  CP.mode[th] = "interrupt"; CP.menu = false; CP.ac = null; CP.focus = true;
+  go("comms", th); refresh();
+}
+function disarm(th) { if (!CP.mode[th]) return; delete CP.mode[th]; CP.focus = true; refresh(); }
 
 /** Quote a piece of a message above a thread's box ("Ask about this", a summary's Reply) and put the cursor there.
  *  q: {who, where, text, code}. Only one quote at a time: a new one replaces it. The person's words stay as they are. */
@@ -122,7 +136,7 @@ const named = (text, th) => { const w = namedWord(text, th); return w ? wordTarg
 export function recipient(th) {
   if (!th) return { who: "new", why: "first" };
   const d = draft(th), s = serverWho(th), sv = s && s.who;
-  if (isBtw(d.text)) return { who: "new", why: "btw", server: sv };
+  if (isBtw(d.text) || d.to === "btw") return { who: "new", why: "btw", server: sv };   // typed /btw, or "A new agent, on the side" in To
   if (d.reply) return { who: isAgent(d.reply.from) ? d.reply.from : sv, why: "reply", server: sv };
   const w = namedWord(d.text, th); if (w) return { who: wordTarget(w, th), why: "named", server: sv, to: w };
   if (d.to) return { who: wordTarget(d.to, th) || d.to, why: "chosen", server: sv, to: d.to };
@@ -134,7 +148,9 @@ export function recipient(th) {
 }
 function wire(th, d, r) {
   let t = (d.quote ? quotePrefix(d.quote) : "") + (d.text.trim() ? d.text : "");   // files with no words go as they are: the post shows them, no "Attached:" line
+  if (r.why === "btw" && !isBtw(t)) t = "/btw " + t;   // picked in the To menu: the wire carries it, the box never shows it
   if (!th || r.why === "reply" || r.why === "named" || r.why === "first" || r.why === "btw") return t;   // /btw goes to a fresh agent in a side thread (person_post)
+  if (!t && r.why !== "chosen") return "";   // files with no words and no To picked: nothing is added to the text (R7 step 2)
   if (r.to && r.to !== r.who && !named(t, th)) return "@" + r.to + " " + t;   // a focus picked in the To menu: hive post finds its keeper and marks the post
   if (r.who === "new") return "@new " + t;
   if (r.who && r.who !== r.server) return "@" + r.who + " " + t;
@@ -158,7 +174,7 @@ async function deliver(it) {
   it.state = "sending"; it.err = ""; refresh();
   try {
     if (!it.refs) { it.uploading = it.files.length > 0; refresh(); const refs = []; for (const f of it.files) refs.push(await uploadFile(f.file)); it.refs = refs; it.uploading = false; }
-    const res = await post("/api/post", { text: it.wire, thread: it.th || it.name || null, reply_to: it.reply ? it.reply.id : null, files: it.refs, simple: simpleOn(), model: it.model || null, ...(it.interrupt ? { interrupt: true } : {}) });
+    const res = await post("/api/post", { text: it.wire, thread: it.th || it.name || null, reply_to: it.reply ? it.reply.id : null, files: it.refs, simple: simpleOn(), model: it.model || null, quote: it.quote || null, ...(it.interrupt ? { interrupt: true } : {}) });
     it.id = res.id; it.state = "sent"; const thr = it.th;
     if (!it.th && res.thread) { it.th = res.thread; if (it.focus) post("/api/focus", { thread: res.thread, focus: it.focus }).catch(() => {}); go("comms", res.thread); loadApp(); }   // filed under the focus picked in the box; a failure leaves it in Misc, where the title menu can file it
     else if (res.thread && res.thread !== it.th) { it.th = res.thread; it.aside = true; openAside(thr, res.thread, it.text.replace(/^\s*\/btw\s*/i, "")); loadApp(); }   // /btw: it lives in the side thread; stay here
@@ -171,13 +187,17 @@ function queue(th, d, r, interrupt = false) {
   OUT.push(it); deliver(it);
   return it;
 }
-/** Send; interrupt: the Interrupt button's, so a working agent gets it now (dash.py person_post, hive post --interrupt). */
-function send(th, interrupt = false) {
+/** Send. It interrupts (dash.py person_post, hive post --interrupt) only when the box is armed and the agent it goes to still works:
+ *  Enter or Send in an ordinary box never does. */
+function send(th) {
   const d = draft(th);
   if (!d.text.trim() && !d.files.length) return;
   if (d.text.trim() === "/67" && !d.files.length) { d.text = ""; keep(d); const el = field(th); if (el) el.value = ""; refresh(); sixSeven(); return; }
   if (!d.files.length && /^\/(party|bees|matrix|rave)$/.test(d.text.trim())) { const t = d.text.trim(); d.text = ""; keep(d); const el = field(th); if (el) el.value = ""; refresh(); eggRun(t); return; }   // easter egg, not sent
-  queue(th, d, recipient(th), interrupt);
+  const r = recipient(th), int = !!th && CP.mode[th] === "interrupt" && busyWho(th, r) === r.who;
+  const it = queue(th, d, r, int);
+  if (th) delete CP.mode[th];
+  if (int) CP.sent[th] = { who: r.who, it, at: Date.now(), seen: 0 };
   Object.assign(d, { text: "", files: [], reply: null, replyId: null, quote: null, to: null, name: "", naming: false, err: "", model: "" }); keep(d);   // the focus stays: the next one most likely goes to the same place
   CP.ac = null; CP.menu = false; CP.hist = null; if (!SB.open) SB.say = "";
   const el = field(th); if (el) { el.value = ""; el.focus(); }   // morph leaves a focused field alone, so clear it here
@@ -418,19 +438,6 @@ function focusPick(d) {
     fs.map(f => h("option", { value: f.id, selected: f.id === d.focus ? "" : null }, f.name || f.id)),
     d.focus && !fs.some(f => f.id === d.focus) ? h("option", { value: d.focus, selected: "" }, d.focus) : null);
 }
-function modelPick(d, r) {
-  // An agent already running stays on its model for this run; a pick here is kept by the starter and holds from its next run.
-  const who = r && r.who, live = who && who !== "new" && isRunning(who);
-  const def = (S.app && S.app.default_model) || "", typed = typedModel(d.text), cur = typed || d.model || "";
-  // A sleeping agent wakes on the model it last ran on, not the default for new agents.
-  const known = who && who !== "new" && !MODEL_WORDS.includes(who), row = known && agentCard(who).find(x => x.k === "Model");
-  const nm = row && (row.v === "login default" ? "Default model" : row.v);   // the name alone; the title says whether it is running now or the default
-  const first = live ? nm || "Its model" : row ? nm : def ? MODEL_LABELS[def] || def : "Model";
-  return h("select", { class: "cp-model meta", "data-picked": d.model ? "" : null, "aria-label": "Model", title: (d.model ? `Picked: ${MODEL_LABELS[d.model] || d.model}, used when you send this message (the agent card shows it after that). ` : "") + (live ? `${who} is running on ${row ? row.v : "its model"}. Pick another and it moves to it from its next run (it can't switch mid-run), and stays there.` : row ? `${who} last ran on ${row.v} and wakes on it. Pick another and it moves to that one and stays there.` : (def ? `New agents start on ${MODEL_LABELS[def] || def} unless you pick another. ` : "") + "Model for a new or sleeping agent this message starts. It holds on that agent from then on. Typing @opus, @sonnet… in the message sets this too."),
-    onchange: e => { d.model = e.target.value; keep(d); refresh(); } },
-    [["", first], ...Object.entries(MODEL_LABELS).filter(([v]) => live || row || v !== def)].map(([v, l]) => h("option", { value: v, selected: cur === v }, l)));
-}
-
 // ---- @ names: agents, foci and threads, each with where it is and what it's on (the person, 11071752e4c2) ----
 /** The words a row is found by, lower-cased: name, model, thread name and title, its status line, its focus. */
 const words = (...xs) => xs.filter(Boolean).join(" ").toLowerCase();
@@ -506,7 +513,7 @@ function acPick(th, n) {
 function pastSent() {
   const out = [], seen = new Set(), add = t => { t = t.trim(); if (t && !seen.has(t)) { seen.add(t); out.push(t); } };
   for (let i = OUT.length - 1; i >= 0; i--) if (!OUT[i].id || !S.byId[OUT[i].id]) add(OUT[i].text);
-  for (let i = S.posts.length - 1; i >= 0 && out.length < 500; i--) if (S.posts[i].from === "person") { const t = typedText(S.posts[i]).replace(QUOTE_HEAD, ""); if (!/^Attached: /.test(t)) add(t); }
+  for (let i = S.posts.length - 1; i >= 0 && out.length < 500; i--) if (S.posts[i].from === "person") { const t = typedText(S.posts[i]).replace(QUOTE_HEAD, ""); if (!/^Attached: /.test(t)) add(t); }   // a files-only post's "Attached: <names>" line was never typed
   return out;
 }
 function recallTo(th, n, text) {
@@ -620,43 +627,164 @@ function secretRow() {
 }
 
 // ---- pieces ----
-// The To menu closes on a click anywhere outside it (and on Esc, above).
+// The bar's menus (To, +, Aa, model) close on a click outside their pop, and on Esc (cancelReply).
 document.addEventListener("pointerdown", e => {
-  if (CP.menu && !e.target.closest?.(".cp-menu, .cp-to")) { CP.menu = false; refresh(); }
+  if (CP.menu && !e.target.closest?.(".cp .pop")) { CP.menu = false; refresh(); }
 }, true);
+const toggle = m => () => { CP.menu = CP.menu === m ? false : m; CP.ac = null; refresh(); };
+const mono = n => /^[a-z][0-9a-f]{4,}$/.test(n) ? n.slice(1, 3) : String(n).slice(0, 2);
+/** The avatar box: two letters and the status dot for an agent, a glyph for anything else. */
+const av = (n, glyph) => h("span", { class: "av", "data-size": "s", "aria-hidden": "true" }, glyph || mono(n), glyph ? null : statusDot(agentStatus(n).key, { live: S.running.has(n) }));
+const menuHead = (t, key) => h("div", { class: "menu-h", role: "presentation", "data-key": key || "h:" + t }, t);
+const menuSep = key => h("div", { class: "menu-sep", role: "presentation", "data-key": key });
+/** One menu row: a bold label over a small line. off: no backing yet, so it shows dimmed with the title "not yet". */
+function menuItem(label, sub, onClick, { ic, key, cls, off, role = "menuitem", sel, right, title } = {}) {
+  return h("button", { type: "button", class: ["menu-i", cls], role, "data-key": key || label, "aria-disabled": off ? "true" : null, title: off ? "not yet" : title || null,
+    "aria-selected": role === "option" ? String(!!sel) : null, "aria-checked": role === "menuitemcheckbox" ? String(!!sel) : null, onclick: off ? null : onClick },
+    ic ? icon(ic) : null, h("span", { class: "menu-i-t" }, h("b", null, label), sub ? h("small", null, sub) : null), right ? h("span", { class: "menu-i-r" }, right) : null);
+}
+
+// Text size in conversations (Aa): --read-scale, kept in this browser.
+const SIZES = [["0.9", "Small"], ["1", "Default"], ["1.15", "Large"], ["1.3", "Larger"]];
+const readScale = () => { try { const v = localStorage.getItem("hive.cp.read"); return SIZES.some(s => s[0] === v) ? v : "1"; } catch (e) { return "1"; } };
+function setRead(v) { try { localStorage.setItem("hive.cp.read", v); } catch (e) {} document.documentElement.dataset.read = v; refresh(); }
+document.documentElement.dataset.read = readScale();
+const sizeWord = () => SIZES.find(s => s[0] === readScale())[1];
+
+/** The To button: who this goes to, as an avatar and a name. Why (a reply, a name typed) is in its title. */
 function toChip(th, r) {
-  const f = r.to && focusWord(r.to), n = r.who, label = f ? focusName(focusById(f.id)) + (n && n !== "new" ? ` → ${n}` : " → a new agent") : n === "new" ? "a new agent" : n || "…";
-  const why = { reply: "you're replying to it", named: "named in your message", chosen: "you chose it", btw: "side question" }[r.why];
-  return h("button", { type: "button", class: "cp-to", "aria-haspopup": "listbox", "aria-expanded": String(CP.menu), title: r.why === "btw" ? "A side question: it answers in its own thread, and this one's agent never sees it." : "Who this goes to. Change it here, or type @ and a name.",
-    onclick: () => { CP.menu = !CP.menu; refresh(); } },
-    h("span", { class: "meta" }, "To"), n && n !== "new" ? statusDot(agentStatus(n).key, { live: S.running.has(n) }) : null, h("b", null, label),
-    why ? h("span", { class: "meta cp-why" }, why) : null, h("span", { "aria-hidden": "true", class: "meta" }, "▾"));
+  const f = r.to && focusWord(r.to), n = r.who, btw = r.why === "btw";
+  const label = btw ? "a new agent, on the side" : f ? focusName(focusById(f.id)) + (n && n !== "new" ? ` → ${n}` : " → a new agent") : n === "new" ? "a new agent" : n || "…";
+  const why = { reply: "you're replying to it", named: "named in your message", chosen: "you chose it" }[r.why];
+  return h("button", { type: "button", class: "cp-to", "aria-haspopup": "listbox", "aria-expanded": String(CP.menu === "to"),
+    title: btw ? "A side question: it answers in its own thread, and this one's agent never sees it." : `Who this goes to${why ? ` (${why})` : ""}. Change it here, or type @ and a name.`, onclick: toggle("to") },
+    h("span", { class: "cp-hp" }, "To"), f ? av(null, "◆") : n && n !== "new" && isAgent(n) ? av(n) : av(null, "+"), h("b", null, label), icon("chevron"));
 }
 function toMenu(th, r) {
   const d = draft(th), names = threadPeople(th).filter(isAgent), pick = n => { d.to = n; keep(d); CP.menu = false; refresh(); field(th)?.focus(); };
-  const chosen = r.to || r.who, opt = (rr, extra) => h("button", { type: "button", role: "option", class: "cp-opt", "data-kind": rr.kind, "aria-selected": String(chosen === rr.word), "data-key": rr.word, onclick: () => pick(rr.word) },
-    ...optRow(rr, "", { here: th }), extra || null);
-  return h("div", { class: "cp-menu", role: "listbox", "aria-label": "Send to", "data-key": "menu" },
-    names.map(n => opt(agentRow(n), n === partner(th) ? h("span", { class: "meta" }, "· you've been talking to it") : null)),
-    opt({ kind: "word", word: "new" }),
-    foci().length ? h("p", { class: "cp-menu-h meta" }, "A focus: its keeper gets the message, marked with the focus") : null,
-    foci().map(f => opt(focusRow(f))),
-    h("p", { class: "cp-menu-n" }, r.why === "partner"
+  const chosen = r.why === "btw" ? "btw" : r.to || r.who;
+  const opt = (rr, glyph, label, sub) => h("button", { type: "button", role: "option", class: "menu-i cp-opt", "data-kind": rr.kind, "data-key": rr.word, "aria-selected": String(chosen === rr.word), onclick: () => pick(rr.word) },
+    glyph ? av(null, glyph) : av(rr.word), h("span", { class: "menu-i-t" }, h("b", null, label), sub ? h("small", null, sub) : null));
+  const agentOpt = n => { const a = agentRow(n), where = a.th && a.th !== th ? (a.title && a.title !== a.th ? a.title : a.th) : "";
+    return opt(a, null, n, [a.model, where, a.line, n === partner(th) ? "you've been talking to it" : ""].filter(Boolean).join(" · ")); };
+  return h("div", { class: "menu cp-menu", role: "listbox", "aria-label": "Send to", "data-side": "top-end", "data-w": "wide", "data-key": "menu" },
+    menuHead("Send to"),
+    names.map(agentOpt),
+    opt({ kind: "word", word: "new" }, "+", "A new agent", "Starts here, with this conversation to read"),
+    foci().length ? menuHead("A focus: its keeper gets it, marked with the focus", "h:foci") : null,
+    foci().map(f => { const x = focusRow(f); return opt(x, "◆", x.name, x.keeper ? `kept by ${x.keeper}` : "nobody keeping it: a new agent in its thread"); }),
+    menuSep("sep"),
+    opt({ kind: "word", word: "btw" }, "+", "A new agent, on the side", "Answers in its own conversation; nobody here sees it"),
+    h("p", { class: "cp-menu-n", "data-key": "note" }, r.why === "partner"
       ? `${r.server} wrote here last, so a message with no name would wake it. You've been talking to ${r.who}, so Hive sends it there.`
-      : "Typing @ in your message searches agents, foci and threads by their words; a name there sends it to that agent instead."));
+      : "Typing @ in your message searches agents, foci and threads; a name there sends it to that agent instead."));
 }
+
+// ---- model: what the message starts (or moves) its agent on; the default, the picked one, or an @model typed in the text ----
+const MODELS = [["opus", "Opus 5.5", "Most capable, uses the most of your plan"], ["sonnet", "Sonnet 5.5", "Fast and capable, for most jobs"], ["haiku", "Haiku 5.5", "Quickest, for small jobs"], ["fable", "Fable 5.1", ""], ["astra", "Astra", ""]];
+function modelPick(d, r) {
+  // An agent already running stays on its model for this run; a pick here is kept by the starter and holds from its next run.
+  const who = r && r.who, live = who && who !== "new" && isRunning(who);
+  const def = (S.app && S.app.default_model) || "", typed = typedModel(d.text), cur = typed || d.model || "";
+  // A sleeping agent wakes on the model it last ran on, not the default for new agents.
+  const known = who && who !== "new" && !MODEL_WORDS.includes(who), row = known && agentCard(who).find(x => x.k === "Model");
+  const nm = row && (row.v === "login default" ? "Default model" : row.v);
+  const first = live ? nm || "Its model" : row ? nm : def ? MODEL_LABELS[def] || def : "Model";
+  const note = live ? `${who} is on ${row ? row.v : "its model"} for this run` : row ? `${who} wakes on ${row.v}` : def ? `New agents start on ${MODEL_LABELS[def] || def}` : "The model a new agent starts on";
+  const label = cur ? MODEL_LABELS[cur] || cur : first, open = CP.menu === "model";
+  const pick = v => { d.model = v; keep(d); CP.menu = false; refresh(); };
+  return h("div", { class: "pop cp-mpop", "data-key": "model" },
+    h("button", { type: "button", class: "dd cp-model", "data-picked": d.model ? "" : null, "data-value": cur, "aria-haspopup": "listbox", "aria-expanded": String(open), "aria-label": "Model: " + label, title: note + ". Pick another to change it.", onclick: toggle("model") }, label, icon("chevron")),
+    open ? h("div", { class: "menu cp-mmenu", role: "listbox", "aria-label": "Model", "data-side": "top-end", "data-w": "wide", "data-key": "mm" },
+      menuHead(note, "h"),
+      [["", first, live || row ? "Leave it as it is" : "The default"], ...MODELS.filter(([v]) => live || row || v !== def).map(([v, l, s]) => [v, l, s])].map(([v, l, s]) =>
+        menuItem(l, s, () => pick(v), { role: "option", key: "m:" + v, sel: cur === v, cls: "cp-mopt" })),
+      menuSep("sep"),
+      h("p", { class: "cp-menu-n", "data-key": "foot" }, "It holds on that agent from its next run. Typing @opus or @sonnet in the message does the same.")) : null);
+}
+
+/** The lock's click: open the secret box, or say why it can't open in limited mode. */
+function secretClick(th) {
+  if (!can("secrets")) { SB.open = false; SB.tone = "bad"; SB.say = "Saving a secret needs full mode, which ends after 30 minutes without using the app. Press \"Limited · sign in for full\" at the top, then press the lock again."; refresh(); return; }
+  if (SB.open) dropSecrets(); else openSecrets(th);
+}
+const secretsOn = () => can("secrets") || !!(S.app && S.app.secrets_on && S.app.mode === "expired");
+
+/** +: files, a voice memo, a secret, a call; at home, Name it…; on a phone, Text size (Aa is hidden there). */
+function addPop(th, d) {
+  const open = CP.menu === "add", then = f => (e, b) => { const cp = b.closest(".cp"); CP.menu = false; refresh(); f(cp); };
+  const voice = !!(S.app && S.app.voice), call = phoneReady() && !inCall();
+  return h("div", { class: "pop cp-addpop", "data-key": "add" },
+    h("button", { type: "button", class: "btn cp-attach", "data-kind": "icon", "data-size": "s", "aria-label": "Attach", title: "Attach files, a voice memo or a secret", "aria-haspopup": "menu", "aria-expanded": String(open), onclick: toggle("add") }, icon("plus")),
+    open ? h("div", { class: "menu cp-addmenu", role: "menu", "aria-label": "Add to the message", "data-side": "top-start", "data-key": "am" },
+      menuItem("Files from this device", "Or paste or drop them in the box", then(cp => cp.querySelector(".cp-pick").click()), { ic: "file", key: "files" }),
+      menuItem("Voice memo", "Transcribed on this computer", then(() => recStart(th)), { ic: "mic", key: "voice", off: !voice }),
+      menuItem("A secret", "Saved on this computer; only its name is posted", then(() => secretClick(th)), { ic: "lock", key: "secret", off: !secretsOn() }),
+      menuItem("Voice call", th ? "A new agent picks up, reads this conversation and talks with you" : "Talk with the Hive", then(() => startCall(th ? { thread: th } : {})), { ic: "phone", key: "call", cls: "cp-call", off: !call }),
+      !th && !simpleOn() ? [menuSep("sep-n"), menuItem("Name it…", "Otherwise it is called by its first words", then(() => { d.naming = true; refresh(); queueMicrotask(() => document.querySelector(".cp-name")?.focus()); }), { ic: "edit", key: "name" })] : null,
+      h("div", { class: "only-phone", "data-key": "ph", role: "presentation" }, menuSep("sep-t"),
+        menuItem("Text size", null, () => { const i = SIZES.findIndex(s => s[0] === readScale()); setRead(SIZES[(i + 1) % SIZES.length][0]); }, { key: "size", right: sizeWord(), title: "Text size in conversations; press again for the next size" }))) : null);
+}
+/** Aa: text size in conversations, and the formatting bar. */
+function aaPop(th) {
+  const open = CP.menu === "aa", cur = readScale();
+  return h("div", { class: "pop cp-aapop hide-phone", "data-key": "aa" },
+    h("button", { type: "button", class: "btn cp-aa", "data-kind": "icon", "data-size": "s", "aria-label": "Text size and formatting", title: "Text size and formatting", "aria-haspopup": "menu", "aria-expanded": String(open), "data-on": fmtOpen() ? "" : null, onmousedown: e => e.preventDefault(), onclick: toggle("aa") }, "Aa"),
+    open ? h("div", { class: "menu cp-aamenu", role: "menu", "aria-label": "Text size", "data-side": "top-start", "data-key": "aam" },
+      menuHead("Text size in conversations", "h"),
+      h("div", { class: "menu-seg", "data-key": "seg" }, h("div", { class: "seg", role: "radiogroup", "aria-label": "Text size", onkeydown: e => {   // arrows move the choice, as in any radio group
+          const k = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[e.key]; if (!k) return;
+          e.preventDefault(); const i = SIZES.findIndex(s => s[0] === readScale()), v = SIZES[(i + k + SIZES.length) % SIZES.length][0]; setRead(v);
+          requestAnimationFrame(() => document.querySelector(`.cp-aamenu [data-size-v="${v}"]`)?.focus()); } },
+        SIZES.map(([v, w]) => h("button", { type: "button", role: "radio", "aria-checked": String(cur === v), "data-size-v": v, tabindex: cur === v ? "0" : "-1", onclick: () => setRead(v) }, w)))),
+      menuSep("sep"),
+      menuItem("Formatting bar", "Bold, code, links, lists", () => { fmtToggle(); refresh(); }, { role: "menuitemcheckbox", key: "fmt", sel: fmtOpen(), cls: "cp-fmtbox" })) : null);
+}
+
+/** After an interrupt is sent, the live line follows it: stopping (until the agent has the message), then reading for 20 s, then normal. */
+function livePhase(th, who) {
+  const s = CP.sent[th]; if (!s || s.who !== who) return null;
+  if (s.it.state === "failed") { delete CP.sent[th]; return null; }
+  const p = s.it.id && S.byId[s.it.id];
+  if (!s.seen) {
+    if (p && delivery(p, who)?.key === "seen") { s.seen = Date.now(); setTimeout(refresh, 20100); }
+    else if (Date.now() - s.at > 300e3) { delete CP.sent[th]; return null; }
+    else return "stopping";
+  }
+  if (Date.now() - s.seen < 20e3) return "reading";
+  delete CP.sent[th]; return null;
+}
+function doingWords(who) {
+  const L = S.running.get(who), x = L && String(L.doing || "").trim();
+  if (!x) return "is working";
+  return /^[A-Z][a-z]+ing\b/.test(x) ? "is " + x[0].toLowerCase() + x.slice(1) : "is working: " + x;
+}
+/** The line above the box while the agent this goes to works: what it is doing, and the way to reach it now. */
+function liveLine(th, who, phase, armed) {
+  const txt = phase === "stopping" ? "is stopping its current step…" : phase === "reading" ? "stopped and is reading your message" : doingWords(who);
+  let arm = null;
+  if (!phase && !armed) { arm = button("Interrupt", () => armInterrupt(th, who), { kind: "quiet", size: "s", icon: "pause", cls: "cp-arm", title: `Reach ${who} now, without waiting for its step to end` }); arm.setAttribute("aria-describedby", "cp-arm-d"); }
+  return h("div", { class: "cp-live", "data-key": "live", "data-phase": phase || null },
+    statusDot(agentStatus(who).key, { live: !phase || phase === "stopping" }),
+    h("span", { class: "grow" }, h("b", null, who), " " + txt),
+    arm, arm ? h("span", { class: "vh", id: "cp-arm-d", "data-key": "armd" }, "Opens interrupt mode. Nothing is sent until you press Interrupt again.") : null);
+}
+function intNote(th, who) {
+  return h("div", { class: "cp-int", role: "status", "data-key": "int" }, icon("pause"),
+    h("span", null, h("b", null, `Interrupt ${who}.`), " It stops its current step and reads this at once. Work in that step may be done again. Esc goes back to an ordinary message."),
+    h("button", { type: "button", class: "cp-x", title: "Cancel the interrupt (Esc)", "aria-label": "Cancel the interrupt", onclick: () => disarm(th) }, "×"));
+}
+const firstWords = t => short(t.replace(/\s+/g, " ").trim(), 60);
 function replyChip(d) {
   const p = d.reply;
-  return h("div", { class: "cp-reply", "data-key": "reply" },
-    h("span", { class: "meta" }, "Replying to"), h("b", null, p.from === "person" ? "yourself" : simpleOn() ? hiveName() : p.from),
-    h("span", { class: "cp-reply-x" }, short(mdPlain(displayText(p)), 120)),
+  return h("div", { class: "cp-reply", "data-key": "reply" }, icon("reply"),
+    h("span", null, h("b", null, "Replying to " + (p.from === "person" ? "yourself" : simpleOn() ? hiveName() : p.from)), " · ", h("q", null, firstWords(mdPlain(displayText(p))))),
     h("button", { type: "button", class: "cp-x", title: "Cancel the reply (Esc)", "aria-label": "Cancel the reply", onclick: () => { d.reply = null; d.replyId = null; keep(d); refresh(); } }, "×"));
 }
 function quoteChip(d) {
   const q = d.quote, first = q.text.split("\n").find(l => l.trim()) || "";
-  return h("div", { class: "cp-reply cp-quote", "data-key": "quote" },
-    h("span", { class: "meta" }, "Quoting"), h("b", null, [q.who, q.where].filter(Boolean).join(", ") || "a message"),
-    h("span", { class: "cp-reply-x" }, short(first, 120)),
+  return h("div", { class: "cp-reply cp-quote", "data-key": "quote" }, icon("reply"),
+    h("span", null, h("b", null, "Quoting " + ([q.who, q.where].filter(Boolean).join(", ") || "a message")), " · ", h("q", null, firstWords(first))),
     h("button", { type: "button", class: "cp-x", title: "Remove the quote (Esc)", "aria-label": "Remove the quote", onclick: () => { d.quote = null; keep(d); refresh(); } }, "×"));
 }
 function filesRow(th, d) {
@@ -665,6 +793,8 @@ function filesRow(th, d) {
     h("span", { class: "cp-fn" }, h("span", null, f.name), h("span", { class: "meta" }, size(f.size))),
     h("button", { type: "button", class: "cp-x", title: "Remove " + f.name, "aria-label": "Remove " + f.name, onclick: () => { const [x] = d.files.splice(i, 1); if (x.url) URL.revokeObjectURL(x.url); refresh(); } }, "×"))));
 }
+/** Who the message would reach while it works (the agent it goes to, running now), or null. Only then can it interrupt. */
+function busyWho(th, r) { return th && !simpleOn() && r.who && r.who !== "new" && r.why !== "btw" && isAgent(r.who) && isRunning(r.who) ? r.who : null; }
 
 /** composer({thread, update, place}): thread null is new work. place: thread | home | start (only changes the wording). */
 export function composer({ thread, update, place = "thread", autofocus, top }) {
@@ -675,24 +805,33 @@ export function composer({ thread, update, place = "thread", autofocus, top }) {
   if (CP.focus || autofocus === true) { CP.focus = false; queueMicrotask(() => { const t = field(th); if (t && document.activeElement !== t) { t.focus(); t.setSelectionRange(t.value.length, t.value.length); } }); }
   mdSoon(th);   // after the render lands, so the layer copies the box's font and padding
   CP.sig = (named(d.text, th) || "") + "|" + empty + "|" + isBtw(d.text);
-  // Interrupt (beside Send, only while the agent this goes to is working): it gets the message now, not after its current step.
-  const busy = th && !simpleOn() && r.who && r.who !== "new" && r.why !== "btw" && isAgent(r.who) && isRunning(r.who) ? r.who : null;
-  const ph = !th ? "Say what you want done" : simpleOn() ? "Message" : r.who === "new" ? "Message a new agent" : r.who ? `Reply to ${r.who}…` : "Message";
-  return h("div", { class: "cp", "data-key": k, "data-place": place, "data-fmt": fmtOpen() ? "" : null, ...(th ? {} : dropZone(null)) },  // a thread's composer is inside its conversation's zone
+  const busy = busyWho(th, r);
+  if (th && CP.mode[th] && !busy) delete CP.mode[th];   // the agent stopped (or the To changed): nothing left to interrupt
+  const armed = !!(th && CP.mode[th] === "interrupt");
+  const lw = busy || (th && CP.sent[th] && CP.sent[th].who), phase = th && lw ? livePhase(th, lw) : null;
+  const ph = armed ? `Tell ${busy} what to do instead…` : !th ? "Say what you want done" : simpleOn() ? "Message" : r.who === "new" ? "Message a new agent" : r.who ? `Reply to ${r.who}…` : "Message";
+  const sendWord = armed ? "Interrupt" : place === "thread" ? "Send" : "Start";
+  return h("div", { class: "cp", "data-key": k, "data-place": place, "data-mode": armed ? "interrupt" : null, "data-fmt": fmtOpen() ? "" : null, ...(th ? {} : dropZone(null)) },  // a thread's composer is inside its conversation's zone
     d.err ? h("p", { class: "cp-err", role: "alert", "data-key": "err" }, d.err) : null,
     wordBoxPanel(th, update),
     top || null,  // the conversation's status strip: a tab on the box's top edge
+    (busy || phase) ? liveLine(th, lw, phase, armed) : null,
     h("div", { class: "cp-box", "data-key": "box" },
-      d.reply ? replyChip(d) : null,  // inside the box, its first row
-      d.quote ? quoteChip(d) : null,
+      armed || d.reply || d.quote || d.files.length || (SB.open && can("secrets")) || SB.say || (!th && d.naming) ? h("div", { class: "cp-top", "data-key": "top" },
+        armed ? intNote(th, busy) : null,
+        d.reply ? replyChip(d) : null,
+        d.quote ? quoteChip(d) : null,
+        d.files.length ? filesRow(th, d) : null,
+        SB.open && can("secrets") ? secretRow() : null,
+        SB.say ? h("p", { class: "meta cp-ssay", "data-tone": SB.tone, role: "status", "data-key": "ssay" }, SB.say) : null,
+        !th && d.naming ? h("div", { class: "cp-name-row", "data-key": "name" }, input({ class: "input cp-name", placeholder: "A short name, like fix-contact-form", "aria-label": "Name for this job", value: d.name, oninput: (e, n) => { d.name = n.value; keep(d); } })) : null) : null,
       CP.ac ? h("div", { class: "cp-ac", role: "listbox", "aria-label": "Names", "data-key": "ac" }, CP.ac.items.map((r, i) => h("button", { type: "button", role: "option", class: "cp-opt", "data-key": r.word, "data-kind": r.kind, "aria-selected": String(i === CP.ac.i), onclick: () => acPick(th, r.word) },
         ...optRow(r, CP.ac.mark || "@")))) : null,
-      d.files.length ? filesRow(th, d) : null,
-      SB.open && can("secrets") ? secretRow() : null,
-      SB.say ? h("p", { class: "meta cp-ssay", "data-tone": SB.tone, role: "status", "data-key": "ssay" }, SB.say) : null,
-      !th && d.naming ? h("div", { class: "cp-name-row", "data-key": "name" }, input({ class: "input cp-name", placeholder: "A short name, like fix-contact-form", "aria-label": "Name for this job", value: d.name, oninput: (e, n) => { d.name = n.value; keep(d); } })) : null,
+      fmtOpen() ? fmtBar(th) : null,
       h("div", { class: "cp-tw", "data-key": "tw", ...(CP.md ? { "data-md": "" } : {}) },
-      h("div", { class: "cp-bd", "data-own": "", "data-sig": "", "aria-hidden": "true" }),
+      // The layer carries the draft's own signature and nodes: with an empty one the morph wiped it on every re-render and the
+      // next frame drew it back, a one-frame blank of the text under the box (drive_md caught it one run in six).
+      h("div", { class: "cp-bd", "data-own": "", "data-sig": d.text, "aria-hidden": "true" }, ...(d.text ? mdLayer(d.text) : [])),
       h("textarea", { class: "cp-t", "data-key": "t", rows: 1, placeholder: ph, "aria-label": th ? "Message" : "What do you want done?", value: d.text, enterkeyhint: "send",
         oninput: (e, n) => {
           d.text = n.value; keep(d); CP.hist = null; mdSync(n);
@@ -716,22 +855,19 @@ export function composer({ thread, update, place = "thread", autofocus, top }) {
         onpaste: e => { const fs = e.clipboardData && [...e.clipboardData.files]; if (fs && fs.length) { e.preventDefault(); addFiles(th, fs); } } })),
       h("div", { class: "cp-bar", "data-key": "bar" },
         h("input", { type: "file", multiple: true, hidden: true, class: "cp-pick", onchange: e => { addFiles(th, e.target.files); e.target.value = ""; } }),
-        button("Attach files", (e, b) => b.parentNode.querySelector(".cp-pick").click(), { kind: "icon", size: "s", icon: "plus", cls: "cp-attach", title: "Attach files. You can also paste or drop them here." }),
-        simpleOn() ? null : h("button", { type: "button", class: "btn cp-aa", "data-kind": "icon", "data-size": "s", title: "Formatting", "aria-label": "Formatting", "aria-pressed": fmtOpen() ? "true" : "false", onmousedown: e => e.preventDefault(), onclick: () => { fmtToggle(); refresh(); } }, "Aa"),
+        addPop(th, d),
+        simpleOn() ? null : aaPop(th),
+        secretsOn() ? h("button", { type: "button", class: "btn cp-lock hide-phone", "data-kind": "icon", "data-size": "s", "aria-label": "Send a secret", title: "Send a secret: saved on this computer, only its name is posted", "aria-pressed": String(!!SB.open), onclick: () => secretClick(th) }, icon("lock")) : null,
         recBar(th),
-        simpleOn() ? null : fmtBar(th),
         wordBoxButton(update),
-        phoneReady() && !(REC.state && REC.th === th) ? button("Call", () => { if (!inCall()) startCall(th ? { thread: th } : {}); },
-          { kind: "icon", size: "s", icon: "phone", cls: "cp-call", title: th ? "Voice call about this thread: a new agent picks up, reads the thread and talks with you. To talk with an agent itself, hover its name and press Call." : "Voice call with the Hive. Ask it anything, or ask to be put through to whoever is working on something." }) : null,
-        can("secrets") || (S.app && S.app.secrets_on && S.app.mode === "expired") ? button("Send a secret", () => {
-          if (!can("secrets")) { SB.open = false; SB.tone = "bad"; SB.say = "Saving a secret needs full mode, which ends after 30 minutes without using the app. Press \"Limited · sign in for full\" at the top, then press the lock again."; refresh(); return; }
-          if (SB.open) dropSecrets(); else openSecrets(th); }, { kind: "icon", size: "s", icon: "lock", cls: "cp-lock", title: "Send a secret" }) : null,
-        h("span", { class: "cp-sp" }),
-        simpleOn() ? null : th ? toChip(th, r) : d.naming ? h("span", { class: "meta cp-new" }, "A new agent starts on this") : button("Name it", () => { d.naming = true; refresh(); queueMicrotask(() => document.querySelector(".cp-name")?.focus()); }, { kind: "quiet", size: "s", title: "Give this job a short name (optional). Without one it's called by its first words." }),
-        !th && S.app && !simpleOn() ? focusPick(d) : null,
-        simpleOn() ? null : modelPick(d, r),
-        busy ? button("Interrupt", () => send(th, true), { size: "s", icon: "stop", disabled: empty, cls: "btn-stop cp-int", title: `Interrupt: ${busy} stops its current step and reads this now. A long command it is waiting on is stopped when that can be done cleanly.` }) : null,
-        button(place === "thread" ? "Send" : "Start", () => send(th), { kind: "primary", icon: "arrow-up", disabled: empty, cls: "cp-send", title: (place === "thread" ? "Send" : "Start") + " (Enter) · Shift+Enter for a new line · ↑ past messages · Tab completes" }))),
-    busy ? h("p", { class: "meta cp-int-hint", "data-key": "int-hint" }, `${busy} is working: Send reaches it after its current step; Interrupt stops that step.`) : null,
-    CP.menu && th ? toMenu(th, r) : null);
+        h("div", { class: "cp-r", "data-key": "r" },
+          simpleOn() ? null : th ? h("div", { class: "pop cp-topop", "data-key": "to" }, toChip(th, r), CP.menu === "to" ? toMenu(th, r) : null)
+            : d.naming ? h("span", { class: "meta cp-new" }, "A new agent starts on this") : null,
+          !th && S.app && !simpleOn() ? focusPick(d) : null,
+          simpleOn() ? null : modelPick(d, r),
+          button(sendWord, () => send(th), { kind: "primary", icon: armed ? "pause" : "arrow-up", disabled: empty, cls: "cp-send",
+            title: armed ? "Interrupt and send (Enter)" : sendWord + " (Enter) · Shift+Enter for a new line · ↑ past messages · Tab completes" })))),
+    h("div", { class: "cp-hint", "data-key": "hint" },
+      h("span", null, armed ? "Enter interrupts and sends · Esc cancels" : busy ? `Enter sends; ${busy} reads it after its current step` : "Enter sends · Shift+Enter for a new line"),
+      h("span", null, "Sent messages can't be edited or taken back")));
 }

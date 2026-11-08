@@ -223,3 +223,183 @@
 .cm-fold>.ic{margin-left:auto}
 
 @media print{.rc-block:not(.rc-fig){background:none;border:1px solid var(--line)}.rc-stage{background:none}}
+
+/* ==== R7 step 4 (thread ui-redesign-r7-4): the conversation — avatar + content grid, unboxed agent text,
+   the owner bubble with one status line, marks, folds, hover tools, crumb and strip.
+   Scoped to messages built with .msg-c (the default route); the developer route keeps its rules. ==== */
+.msg:has(>.msg-c){display:grid;grid-template-columns:28px minmax(0,1fr);column-gap:var(--s3,12px);align-items:start;padding:6px var(--s2,8px);border-radius:var(--r-l,12px)}
+.cm-msgs .msg:has(>.msg-c){max-width:calc(var(--chat-col) + 2 * var(--s2,8px))}
+.msg:has(>.msg-c)>.av{margin-top:1px;width:28px;height:28px}
+.msg-c{min-width:0;display:grid;gap:4px;align-content:start}
+.msg-c>.msg-h{margin-bottom:0;align-items:baseline}
+.msg[data-cont]:has(>.msg-c){margin-top:2px}
+.msg[data-cont]>.av{visibility:hidden}
+.msg[data-cont]>.msg-c>.msg-h{display:none}
+.msg-c .msg-time{opacity:0;transition:opacity var(--dur,.15s) var(--ease,ease)}
+.msg:hover>.msg-c .msg-time,.msg:focus-within>.msg-c .msg-time{opacity:1}
+/* agent text: no box, no fill */
+.msg:not([data-who=me])>.msg-c>.msg-b{padding:0;border:0;background:none;box-shadow:none}
+/* the owner's message: right, a soft bubble, no name, no avatar */
+.msg[data-who=me]:has(>.msg-c){display:grid;grid-template-columns:minmax(0,1fr);justify-items:end;padding:4px var(--s2,8px)}
+.msg[data-who=me]>.av{display:none}
+.msg[data-who=me]>.msg-c>.msg-h{display:none}
+.msg[data-who=me]>.msg-c{justify-items:end;max-width:min(560px,85%)}
+.cm-msgs .msg[data-who=me]>.msg-c>.msg-b,.msg[data-who=me]>.msg-c>.msg-b{max-width:100%;background:var(--surface);border:1px solid var(--line);border-radius:18px 18px 6px 18px;padding:9px 14px;line-height:1.5;box-shadow:none}
+.msg[data-who=me][data-cont]>.msg-c>.msg-b{border-top-right-radius:6px}
+.msg[data-who=me]>.msg-c>.msg-files{justify-content:flex-end}
+/* one status line under the owner's message */
+.msg-st{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:0;font-size:var(--fs-meta);color:var(--ink-3);min-height:18px}
+.msg-st[data-tone=bad]{color:var(--bad)}
+.msg-st[data-tone=accent],.msg-st[data-key=interrupt]{color:var(--accent-ink,var(--accent))}
+.msg-st .ic{width:13px;height:13px}
+.msg-st .btn{--h:24px;font-size:var(--fs-meta)}
+.msg[data-state=failed]>.msg-c>.msg-b{border-color:color-mix(in oklch,var(--bad) 55%,var(--line));background:var(--bad-bg,color-mix(in oklch,var(--bad) 8%,var(--surface)));box-shadow:none}
+.msg[data-state=sending]>.msg-c>.msg-b{opacity:.65}
+.msg[data-state=interrupt]>.msg-c>.msg-b{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
+/* marks: "Waiting on you", "Interrupt" */
+.msg-mark{display:inline-flex;align-items:center;gap:6px;font-size:var(--fs-meta);font-weight:var(--w-bold,600);color:var(--accent-ink,var(--accent))}
+.msg-mark .ic{width:13px;height:13px}
+.msg[data-asks]{background:var(--accent-bg)}
+.msg-acts{display:flex;flex-wrap:wrap;gap:var(--s2,8px);margin-top:var(--s2,8px)}
+/* hover tools: a small floating bar at the top right */
+.msg:has(>.msg-c)>.msg-tools{position:absolute;top:-14px;right:8px;display:none;gap:1px;padding:2px;border:0;border-radius:var(--r-m);background:var(--surface);box-shadow:var(--e2,0 2px 8px rgb(0 0 0/.12));z-index:5;opacity:1;pointer-events:auto}
+.msg:has(>.msg-c):hover>.msg-tools,.msg:has(>.msg-c):focus-within>.msg-tools,.msg:has(>.msg-c)>.msg-tools:has([aria-expanded=true]){display:flex}
+.msg-tools .btn{--h:28px}
+.msg-det{min-width:240px}
+.msg-det dl.kv{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;margin:0;padding:8px 12px;font-size:var(--fs-meta)}
+.msg-det dt{color:var(--ink-3)}
+.msg-det dd{margin:0;overflow-wrap:anywhere}
+/* flash when opened from Yours or a reply line */
+.msg[data-hl]{animation:msg-hl 2.4s var(--ease,ease)}
+@keyframes msg-hl{0%,40%{background:var(--accent-bg)}}
+@media (prefers-reduced-motion:reduce){.msg[data-hl]{animation:none;background:var(--accent-bg)}}
+/* "What it did": technical detail folded inside a message */
+.msg-fold{margin-top:4px;font-size:var(--fs-small)}
+.msg-fold>summary{display:inline-flex;align-items:center;gap:6px;cursor:pointer;color:var(--ink-3);list-style:none;padding:2px 6px;margin-left:-6px;border-radius:var(--r-s)}
+.msg-fold>summary::-webkit-details-marker{display:none}
+.msg-fold>summary:hover{color:var(--ink);background:var(--hover)}
+.msg-fold>summary .ic{width:12px;height:12px;transition:transform var(--dur,.15s) var(--ease,ease)}
+.msg-fold[open]>summary .ic{transform:rotate(90deg)}
+.msg-fold-b{margin-top:6px;padding:10px 12px;border-radius:var(--r-m);background:var(--sunken);font:12px/1.6 var(--mono);color:var(--ink-2);white-space:pre-wrap;overflow-x:auto}
+/* helper conversations folded to one line */
+.cm-helper{width:100%;max-width:var(--chat-col);margin:var(--s4,16px) auto 0;padding-left:40px;box-sizing:border-box}
+.cm-helper>summary{display:flex;align-items:center;gap:8px;cursor:pointer;list-style:none;padding:8px 10px;margin-left:-10px;border-radius:var(--r-m);font-size:var(--fs-small);color:var(--ink-2);min-width:0}
+.cm-helper>summary::-webkit-details-marker{display:none}
+.cm-helper>summary:hover{background:var(--hover);color:var(--ink)}
+.cm-helper>summary>.ic{flex:none;width:12px;height:12px;color:var(--ink-3);transition:transform var(--dur,.15s) var(--ease,ease)}
+.cm-helper[open]>summary>.ic{transform:rotate(90deg)}
+.cm-helper .avs{display:inline-flex;flex:none}
+.cm-helper .avs .av{width:20px;height:20px;font-size:9px}
+.cm-helper .avs .av+.av{margin-left:-6px;box-shadow:0 0 0 2px var(--bg)}
+.cm-helper-t{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cm-helper-t b{font-weight:var(--w-med,500);color:var(--ink)}
+.cm-helper>summary>.meta{flex:none;color:var(--ink-3);font-size:var(--fs-meta);white-space:nowrap}
+.cm-helper>summary>.meta:not(.cm-helper-when){flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis}
+.cm-helper-when{margin-left:auto}
+.cm-helper-b{padding:var(--s2,8px) 0 var(--s2,8px) var(--s4,16px);border-left:2px solid var(--line);margin-left:2px;display:flex;flex-direction:column}
+.cm-helper-b .msg{margin-left:0;margin-right:0}
+.cm-helper-b .msg-b{font-size:var(--fs-body)}
+/* header crumb and the status strip */
+.cm-crumb{display:flex;align-items:center;gap:6px;min-width:0;font-size:var(--fs-meta);color:var(--ink-3)}
+.cm-crumb a{color:var(--ink-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cm-crumb a:hover{color:var(--ink)}
+.cm-crumb .ic{width:12px;height:12px;flex:none}
+.cm-strip{display:grid;gap:2px;font-size:var(--fs-small);line-height:1.45}
+.cm-strip-a{color:var(--ink);font-weight:var(--w-med,500)}
+.cm-strip-b{display:flex;align-items:baseline;gap:8px;color:var(--ink-2);min-width:0}
+.cm-strip-m{color:var(--ink-3);font-size:var(--fs-meta);white-space:nowrap}
+@media (max-width:700px){
+  .cm-crumb{display:none}
+  .msg[data-who=me]>.msg-c{max-width:88%}
+  .cm-helper{padding-left:12px}
+  .cm-strip-b .cm-strip-m{display:none}
+  .cm-strip[data-fold] .cm-strip-a{display:none}
+  .cm-strip[data-fold] .cm-strip-b>span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+}
+
+/* ===== R7 step 2: the composer (.cp*), from the design's chat.css "the composer"; overrides the older .cp rules in components.css ===== */
+/* text size in conversations (the Aa menu): composer.js sets html[data-read]; tokens.css has --read-scale:1 */
+html[data-read="0.9"]{--read-scale:.9}
+html[data-read="1.15"]{--read-scale:1.15}
+html[data-read="1.3"]{--read-scale:1.3}
+.cm{--fs-read:calc(15px * var(--read-scale,1))}
+/* the line above the box: who is working, and the way to interrupt it */
+.cp-live{display:flex;align-items:center;gap:8px;min-height:30px;max-width:var(--chat-col);width:100%;margin:0 auto 6px;padding:0 4px;font-size:var(--fs-meta);color:var(--ink-3)}
+.cp-live b{color:var(--ink-2);font-weight:var(--w-bold);font-family:var(--mono)}
+.cp-live .grow{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cp-live .btn{flex:none}
+.cp[data-mode=interrupt] .cp-box,.cp[data-mode=interrupt] .cp-box:focus-within{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-bg)}
+/* chips over the text: the interrupt note, the reply, the quote, files, the secret row, the name */
+.cp-top{display:flex;flex-wrap:wrap;gap:6px;padding:10px 12px 0;min-width:0}
+.cp-top>*{min-width:0}
+.cp-top .cp-files,.cp-top .cp-secret,.cp-top .cp-name-row,.cp-top .cp-ssay{width:100%;padding:0}
+.cp-reply,.cp-quote{display:flex;align-items:center;gap:8px;width:100%;margin:0;padding:6px 6px 6px 10px;border:0;border-radius:var(--r-m);background:var(--sunken);font-size:var(--fs-meta);color:var(--ink-3)}
+.cp-reply>.ic{flex:none;width:14px;height:14px}
+.cp-reply b{color:var(--ink-2);font-weight:var(--w-bold)}
+.cp-reply>span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cp-reply q{quotes:"“" "”";color:var(--ink-2)}
+.cp-int{display:flex;align-items:flex-start;gap:8px;width:100%;height:auto;margin:0;padding:8px 6px 8px 10px;border-radius:var(--r-m);background:var(--accent-bg);font-size:var(--fs-meta);color:var(--ink);line-height:1.45}
+.cp-int>.ic{flex:none;width:14px;height:14px;margin-top:2px;color:var(--accent-ink)}
+.cp-int b{font-weight:var(--w-bold)}
+.cp-int>span{flex:1}
+.cp-x{display:grid;place-items:center;padding:0;color:var(--ink-2)}
+/* the bar: + Aa lock mic, then To, model and the round send on the right */
+.cp-bar{gap:2px;padding:4px 8px 8px;flex-wrap:nowrap}
+.cp-bar .btn[data-kind=icon]{--h:32px}
+.cp-aa{font-size:var(--fs-small);font-weight:var(--w-med)}
+.cp-r{margin-left:auto;display:flex;align-items:center;gap:4px;min-width:0}
+.cp-r>.pop{min-width:0}
+.cp-to{display:inline-flex;align-items:center;gap:6px;max-width:100%;height:28px;padding:0 6px;border:0;border-radius:var(--r-m);background:none;color:var(--ink-2);font-size:var(--fs-meta);white-space:nowrap;min-width:0}
+.cp-to:hover,.cp-to[aria-expanded=true]{background:var(--hover);color:var(--ink)}
+.cp-to b{min-width:0;overflow:hidden;text-overflow:ellipsis;color:var(--ink);font-weight:var(--w-bold);font-family:var(--mono);font-size:var(--fs-meta)}
+.cp-to .cp-hp{color:var(--ink-3)}
+.cp-to .ic{flex:none;width:14px;height:14px;color:var(--ink-3)}
+.cp-to .av,.cp-menu .av{flex:none;font-family:var(--mono)}
+.cp-model.dd{height:28px;margin:0;padding:0 6px;border:0;border-radius:var(--r-m);background:none;color:var(--ink-3);font-size:var(--fs-meta);white-space:nowrap}
+.cp-model.dd:hover,.cp-model.dd[aria-expanded=true]{background:var(--hover);color:var(--ink)}
+.cp-model[data-picked]{color:var(--ink)}
+.cp-send{margin-left:4px;width:32px;height:32px;padding:0;border-radius:50%}
+.cp[data-mode=interrupt] .cp-send{width:auto;min-width:0;padding:0 12px;border-radius:var(--r-pill);background:var(--accent);border-color:var(--accent);color:var(--on-accent)}
+.cp[data-mode=interrupt] .cp-send>span{position:static;width:auto;height:auto;overflow:visible;clip:auto}
+.cp[data-mode=interrupt] .cp-send .ic{width:14px;height:14px}
+/* the bar's menus open upward from their button (.pop/.menu from components.css), not from the box's corner */
+.cp .menu.cp-menu,.cp .menu.cp-mmenu{position:absolute;bottom:calc(100% + 6px);top:auto;left:auto;right:0;width:min(360px,calc(100vw - 24px));max-height:min(60vh,480px);overflow:auto}
+.cp .menu[data-side=top-start]{left:0;right:auto}
+.cp-menu .cp-opt{min-height:0}
+.cp-menu .menu-i-t small,.cp-mmenu .menu-i-t small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cp-menu .menu-i-t{min-width:0}
+.cp .menu .menu-seg{padding:4px 8px 6px}
+.seg [role=radio][aria-checked=true]{background:var(--surface);color:var(--ink);box-shadow:0 0 0 1px var(--line),0 1px 2px oklch(0% 0 0 / .05)}
+.cp .only-phone{display:none}
+/* the formatting bar: a row over the text */
+.cp[data-fmt] .cp-fmt,.cp-fmt{display:flex;gap:2px;padding:6px 10px 4px;margin:0 6px;border-bottom:1px solid var(--line)}
+/* the hint under the box */
+.cp-hint{display:flex;justify-content:space-between;gap:var(--s3);max-width:var(--chat-col);width:100%;margin:4px auto 0;padding:0 6px;font-size:var(--fs-micro);color:var(--ink-3);min-height:16px;white-space:normal}
+.cp-hint>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+@container (max-width:640px){
+  .cp .hide-phone{display:none}
+  .cp .only-phone{display:block}
+  .cp-hint{display:none}
+  .cp-bar{flex-wrap:nowrap}
+  .cp-bar .btn[data-kind=icon],.cp-send{min-width:40px;min-height:40px}
+  .cp-send{width:40px;height:40px}
+  .cp-to,.cp-model.dd{height:40px}
+  .cp-to .cp-hp{display:none}
+  .cp-to b{max-width:12ch}
+  .cp .menu .menu-i{min-height:44px}
+}
+/* the markdown layer behind the box keeps the width it was measured at; after a window resize it must not run off the side */
+.cp-bd{max-width:100%}
+/* phone.css flattens .menu-i-t to one clipped line; the composer's menus keep the note under the label */
+.cp-addmenu .menu-i-t,.cp-aamenu .menu-i-t,.cp-mmenu .menu-i-t{display:flex;flex-direction:column;white-space:normal}
+/* R7 step 4: the For-you dot (design item 26) follows the name line into .msg-c */
+.msg[data-who=agent][data-show=you]:not([data-ask]):not([data-asks])>.msg-c>.msg-h::before{content:"";width:6px;height:6px;margin-right:2px;border-radius:50%;background:var(--accent,#b8730a);flex:none;align-self:center}
+/* R7 step 4: a long report keeps its author line pinned while you scroll it, grouped or not */
+.msg[data-report]:not([data-who=me])>.msg-c>.msg-h,.msg[data-report][data-cont]:not([data-who=me])>.msg-c>.msg-h{display:flex;position:sticky;top:0;z-index:4;min-height:30px;background:var(--surface,#fff);padding:2px 0}
+/* R7 step 4: the thread status bar shares .cm-strip with the composer's live strip (components.css "status strip"), whose
+   closed-state grid squeezed line a into a word-wide column with line b drawn over it. The status bar is its own block:
+   line a, line b and the meta each a full-width row that wraps. */
+.cm-status.cm-strip,.cm-status.cm-strip:not([data-open]){display:grid;grid-template-columns:minmax(0,1fr);gap:2px;align-items:start;min-height:0;max-width:none;width:auto;margin:0;padding:6px var(--s4);border:0;border-bottom:1px solid var(--line);border-radius:0;background:none;font-size:var(--fs-small);line-height:1.45;color:var(--ink-2)}
+.cm-status.cm-strip>.cm-strip-a,.cm-status.cm-strip>.cm-strip-b,.cm-status.cm-strip>.cm-strip-m,.cm-status.cm-strip>.cm-status-more{grid-column:1;display:block;min-width:0;overflow-wrap:anywhere;white-space:normal}
+.cm-status.cm-strip>.cm-strip-m{white-space:normal}
+@media (max-width:699px){.cm-status.cm-strip,.cm-status.cm-strip:not([data-open]){padding:4px var(--s4) 6px}}

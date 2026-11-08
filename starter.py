@@ -772,7 +772,7 @@ def running(st=None, by_hand=False):
                 if fresh:  # one post per episode, not one per stopped agent
                     more = len(cfg().get("logins", [])) > 1
                     post(f"Usage limit reached (`{r['name']}` first{f', the {scope.title()} limit' if scope else ''}). {f'{scope.title()} agents' if scope else 'Agents'}{f' on account {account_name(login)}' if more else ''} wait and carry on by themselves at "
-                         f"{dt.datetime.fromtimestamp(limits[key]).astimezone():%H:%M %Z}.{' Other models on it keep working.' if scope else ''}{' Other accounts with room keep working.' if more else ''}", ["person"])
+                         f"{dt.datetime.fromtimestamp(limits[key]).astimezone():%H:%M %Z}.{' Other models on it keep working.' if scope else ''}{' Other accounts with room keep working.' if more else ''}", [])  # the person doesn't want these in the inbox (2026-11-08)
             elif st is not None and r.get("login") in {str(Path(l).expanduser()) for l in cfg().get("logins", [])} \
                     and (sid := auth_hit(r.get("out"))) is not None:  # same treatment as a limit, or the run just vanishes
                 login, limits = r["login"], st.setdefault("limits", {})
@@ -1620,7 +1620,7 @@ def provider_hold(c, st, n, pv, cache, thread):
     if why is None: held.pop(n, None); return False
     if held.get(n) != why:
         held[n] = why; log(event="provider_held", name=n, provider=pv[0], why=why)
-        post(f"`{n}` waits for provider `{pv[0]}`: {why}. It starts once that's fixed; the key and its credit are the person's.", [] if pv[1].get("paused") else ["person"], thread)
+        post(f"`{n}` waits for provider `{pv[0]}`: {why}. It starts once that's fixed; the key and its credit are the person's.", [] if pv[1].get("paused") or "limit at" in why else ["person"], thread)  # a usage limit lifts by itself: no inbox ping
     return True
 
 FALLBACK_NOTE = {

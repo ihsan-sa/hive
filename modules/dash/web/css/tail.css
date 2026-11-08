@@ -31,8 +31,7 @@
 .dlg p{color:var(--ink-3);line-height:1.5}
 .dlg-a{margin-top:var(--s4)}
 .dlg::backdrop{background:oklch(0% 0 0 / .32)}
-.fb-sent,.new-ver,.fb-card{border-color:var(--line);border-radius:var(--r-xl);font-size:var(--fs-small)}
-.new-ver{padding:10px 12px 10px 16px}
+.fb-sent,.fb-card{border-color:var(--line);border-radius:var(--r-xl);font-size:var(--fs-small)}
 .tip{border-radius:var(--r-m);padding:5px 8px;font-size:var(--fs-meta)}
 
 /* timeline: the how-to text is small print */

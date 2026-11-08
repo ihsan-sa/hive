@@ -144,7 +144,7 @@ hive asks list | check | own ID | done ID --evidence POST | hold|person|drop ID 
 
 ## hive focus
 
-hive focus list | tag THREAD FOCUS [--off] | new ID "name" | link A B | set FOCUS <<'X' | show FOCUS | keeper FOCUS | aim FOCUS "text" | check add|list|done|untick | lint: foci, the person's view of the work. A thread carries a focus label; each focus has a hand-written summary (## Now, ## Lately bullets, plain words, no ids or paths) that the home shows as a card. The agent posting a result in a focus's thread updates its summary in the same run (core/focus.py)
+hive focus list | tag THREAD FOCUS [--off] | new ID "name" | link A B | set FOCUS <<'X' | show FOCUS | keeper FOCUS | aim FOCUS "text" | check add|list|done|untick | lint | order ID ID...: foci, the person's view of the work. A thread carries a focus label; each focus has a hand-written summary (## Now, ## Lately bullets, plain words, no ids or paths) that the home shows as a card. The agent posting a result in a focus's thread updates its summary in the same run (core/focus.py)
 
 ## hive away
 

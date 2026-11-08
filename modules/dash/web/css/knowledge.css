@@ -354,3 +354,19 @@
 
 /* a mail message's text (views/mail.js) */
 .mail-body{margin:0;font:inherit;white-space:pre-wrap;overflow-wrap:anywhere}
+
+/* R7: "Lately learned" cards on Knowledge's home, before anything is picked. */
+.kb-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:var(--s3)}
+.kb-card{display:block;padding:var(--s3) var(--s4);color:inherit;text-decoration:none;min-width:0}
+.kb-card:hover{border-color:var(--line-2,var(--line));background:var(--hover)}
+.kb-card-t{display:block;margin:4px 0 6px;font-size:15px;font-weight:var(--w-med);overflow-wrap:anywhere}
+.kb-card-x{display:block;color:var(--ink-2);font-size:var(--fs-small);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.kb-all .ic{margin-left:-4px}
+
+/* Phone (R7, the app's own container): the list and a note are two panes, one at a time. */
+@container app (width < 700px){
+  .kb{grid-template-columns:minmax(0,1fr)}
+  .kb[data-in]>.kb-side{display:none}
+  .kb:not([data-in])>.kb-main{display:none}
+  .kb-cards{grid-template-columns:minmax(0,1fr)}
+}

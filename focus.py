@@ -23,11 +23,13 @@ them that an agent writes, so it stays in plain words: no rung ids, post ids, pa
   hive focus check add FOCUS "text" | list FOCUS | done ID... | untick ID...   the focus page's to-do list
   hive focus lint [FOCUS] [--json]      what reads wrong: ids, paths, rung words, test names, long bullets, a summary older than
                                       the focus's newest result post (stale), a focus with threads and no summary (missing)
+  hive focus order ID ID ...            the order foci show in (rail, home, this list): the listed ones first, the rest after in
+                                      their usual order; the newest order wins (the dash's drag writes it). --reset: back to default
   hive focus json                       everything, for the dashboard (/api/foci)
 
 The duty (time-invariant, no cleanup pulses): the agent that posts a result in a thread that is in a focus updates the focus's
 summary in the same run. The inbox hook says so once when it sees the result post and an older summary.
-Records go to ~/.hive/focus.jsonl, append-only: {kind: focus|tag|link|summary|aim|check|check_done|check_untick, ..., from, at}.
+Records go to ~/.hive/focus.jsonl, append-only: {kind: focus|tag|link|summary|aim|check|check_done|check_untick|file|order, ..., from, at}.
 """
 import argparse, datetime as dt, json, os, re, sys, time
 from pathlib import Path
@@ -186,7 +188,18 @@ def state(recs=None, pri=None, posts=None):
     for (fid, _), x in sorted(files.items(), key=lambda kv: -(kv[1].get("at") or 0)): foci[fid]["files"].append(x)
     for f in foci.values():
         if f.get("thread") and f["thread"] not in f["threads"]: f["threads"].insert(0, f["thread"])
+    order = ordered(order, recs)
     return {"foci": [foci[i] for i in order], "tags": tags, "order": order}
+
+def ordered(ids, recs):
+    """`ids` (the default order) rearranged by the newest order record: the ids it lists that exist first, in its order, then the
+    rest in their default order. An empty order record (--reset) gives the default back."""
+    want = next((r.get("ids") for r in reversed(recs) if r["kind"] == "order" and isinstance(r.get("ids"), list)), None)
+    if not want: return list(ids)
+    have, first = set(ids), []
+    for i in want:
+        if i in have and i not in first: first.append(i)
+    return first + [i for i in ids if i not in first]
 
 def find(st, key):
     key = (key or "").strip().lstrip("#").lower()
@@ -309,6 +322,7 @@ def main(argv=None):
     p = sp.add_parser("check"); p.add_argument("what", choices=["add", "list", "done", "untick"]); p.add_argument("args", nargs="*")
     p = sp.add_parser("lint"); p.add_argument("focus", nargs="?"); p.add_argument("--json", action="store_true")
     p = sp.add_parser("file"); p.add_argument("path"); p.add_argument("--post"); p.add_argument("--focus"); p.add_argument("--off", action="store_true")   # a kb note filed under a focus (kb file --from/--focus calls this)
+    p = sp.add_parser("order"); p.add_argument("ids", nargs="*"); p.add_argument("--reset", action="store_true")
     sp.add_parser("json")
     a = ap.parse_args(argv)
     st = state()
@@ -395,6 +409,16 @@ def main(argv=None):
         if not fid: print("no focus for it (the post's thread is in Misc; give --focus ID)"); return
         append({"kind": "file", "focus": fid, "path": a.path.strip(), **({"post": a.post} if a.post else {}), **({"off": True} if a.off else {})})
         print(("taken off" if a.off else "listed on") + f" the focus page of {fid}: {a.path.strip()}"); return
+    if a.cmd == "order":
+        if a.reset: append({"kind": "order", "ids": []}); print("order back to the default"); return
+        if not a.ids: print(" ".join(f["id"] for f in st["foci"])); return
+        ids = []
+        for k in a.ids:
+            f = find(st, k)
+            if not f: sys.exit(f"hive focus order: no focus {k!r} (hive focus list)")
+            if f["id"] not in ids: ids.append(f["id"])
+        append({"kind": "order", "ids": ids})
+        print("order: " + " ".join(f["id"] for f in state()["foci"])); return
     if a.cmd == "json":
         posts = board_posts()
         for f in st["foci"]: f["keeper"] = keeper(f, posts)

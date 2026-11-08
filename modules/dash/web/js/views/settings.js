@@ -1,4 +1,4 @@
-// Settings: the hive, logins, modules, access from outside. Shown only where can() allows each part.
+// Settings: Everyday, Accounts, Power and sandbox, Data sharing, Secrets, This device, Set once, Modules, Access from outside (R7). Shown only where can() allows each part.
 import { status as st } from "../core/status.js";
 import { h } from "../core/dom.js";
 import { S, can, built, jget, needsAccount, post, loadApp, said } from "../core/store.js";
@@ -22,7 +22,7 @@ import { forgetSecrets, secretParts } from "./secrets.js";
 const F = { cfg: null, ed: null, mods: null, say: {}, newLogin: "", url: "", busy: {}, access: null, saved: null, flash: {} };
 // A switch that saved says so beside it for 1.5 s.
 const flash = (k, update) => { F.flash[k] = Date.now(); setTimeout(() => { if (Date.now() - (F.flash[k] || 0) >= 1400) { delete F.flash[k]; update(); } }, 1500); };
-const savedMark = k => F.flash[k] ? h("span", { class: "blk-saved", role: "status" }, "Saved") : null;
+const savedMark = k => F.flash[k] ? h("span", { class: "blk-saved field-ok", role: "status" }, "✓ Saved") : null;
 const say = (k, text, tone) => { F.say[k] = text ? { text, tone } : null; };
 const msg = k => F.say[k] ? h("p", { class: "fmsg", "data-tone": F.say[k].tone || null, role: "status" }, F.say[k].text) : null;
 const CAPTEXT = { read: "Read everything", files: "Read files: notes, modules, scripts, projects", post: "Post as you, which starts agents", stop: "Kill agents", tier: "Change a thread's tier", limits: "Pause logins and change stop lines", logins: "Sign in and add logins", config: "Change settings", modules: "Add and remove modules", plans: "Edit project plans", secrets: "Store secrets" };
@@ -185,15 +185,17 @@ function pushBlock(ctx) {
 const LOGO_MAX = 2 * 2 ** 20;
 function brandBlocks(ctx) {
   F.name ??= brandName() || "";
-  const done = async (work, ok) => {
-    try { await work(); await loadApp(); say("brand", ok, "good"); }
+  const done = async (work, ok, mark) => {
+    try { await work(); await loadApp(); if (mark) { say("brand", ""); flash(mark, ctx.update); } else say("brand", ok, "good"); }
     catch (e) { say("brand", e.message, "bad"); }
     F.name = brandName() || "";
     ctx.update();
   };
   const saveName = () => {
     const v = F.name.trim();
-    if (v !== (brandName() || "")) done(() => post("/api/brand", { name: v }), v ? "Name saved." : "Back to the default name.");
+    if (v === (brandName() || "") || v === F.nameSent) return;
+    F.nameSent = v;   // a change and the blur after it are one save, not two
+    done(() => post("/api/brand", { name: v }), "", "Name").finally(() => { F.nameSent = null; });
   };
   const pick = async file => {
     if (!file) return;
@@ -209,7 +211,7 @@ function brandBlocks(ctx) {
   const file = h("input", { type: "file", accept: "image/png,image/jpeg,image/gif,image/webp,image/svg+xml", hidden: true, class: "brand-pick", onchange: (e, n) => { pick(n.files[0]); n.value = ""; } });
   return [
     block({ title: "Name", key: "name", sub: "Shown in the top bar and the browser tab. Empty uses the default.",
-      actions: input({ type: "text", maxlength: 40, placeholder: DEFAULT_NAME, "aria-label": "Hive name", value: F.name, oninput: (e, n) => { F.name = n.value; }, onchange: saveName }) }),
+      actions: [savedMark("Name"), input({ type: "text", maxlength: 40, placeholder: DEFAULT_NAME, "aria-label": "Hive name", value: F.name, oninput: (e, n) => { F.name = n.value; }, onchange: saveName, onfocusout: saveName })] }),
     block({ title: "Logo", sub: "Shown next to the name and as the tab's icon. PNG, JPEG, GIF, WebP or SVG, up to 2 MB. A square picture works best.",
       actions: [logo ? h("img", { class: "brand-logo set-logo", src: logo, alt: "Current logo", "data-key": "preview" }) : h("span", { class: "set-logo set-logo-none", "aria-hidden": "true" }), file,
         button(logo ? "Replace" : "Upload", (e, n) => n.parentNode.querySelector(".brand-pick").click(), { size: "s" }),
@@ -218,7 +220,7 @@ function brandBlocks(ctx) {
 
 function hiveSection(ctx) {
   if (!can("config")) return null;
-  if (!F.ed) return section({ title: "The hive", note: "its state and settings", level: 1 }, F.cfgErr ? [empty(`Couldn't read the settings: ${F.cfgErr}`, { kind: "error" }), button("Try again", () => { F.cfgErr = null; ctx.update(); return loadCfg(ctx); }, { size: "s" })] : empty("Reading…", { kind: "loading" }));
+  if (!F.ed) return section({ title: "Everyday", note: "what you change in a normal week", level: 1 }, F.cfgErr ? [empty(`Couldn't read the settings: ${F.cfgErr}`, { kind: "error" }), button("Try again", () => { F.cfgErr = null; ctx.update(); return loadCfg(ctx); }, { size: "s" })] : empty("Reading…", { kind: "loading" }));
   const E = F.ed, up = S.app.setup && S.app.setup.starter, brand = brandBlocks(ctx);
   // Each control saves on its own and sends only its own field; a refusal puts the old value back.
   const save = async (fields, undo, mark) => {
@@ -232,7 +234,7 @@ function hiveSection(ctx) {
     if (v === String(was)) return;
     if (v !== "" && !(Number.isInteger(+v) && +v >= 1 && +v <= 200)) { E.max = was; say("hive", "Agents at once is a whole number from 1 to 200, or empty for no limit.", "bad"); ctx.update(); return; }
     F.saved.max = v;
-    save({ max_sessions: v === "" ? null : +v }, () => { E.max = F.saved.max = was; });
+    save({ max_sessions: v === "" ? null : +v }, () => { E.max = F.saved.max = was; }, "Agents at once");
   };
   const saveBud = () => {
     const was = F.saved.bud, v = String(E.bud).trim();
@@ -262,25 +264,31 @@ function hiveSection(ctx) {
     } catch (e) { say("starter", e.message, "bad"); }
     ctx.update();
   };
-  return section({ title: "The hive", note: "its state and settings", level: 1, actions: statusLabel(up ? "working" : "ended", up ? "running" : "not running") },
-    blocks(brand[0],
-      block({ title: "Agents at once", sub: "Empty means no limit. Each saves when you leave the box.",
-        actions: input({ type: "number", min: 1, max: 200, placeholder: "no limit", "aria-label": "Agents at once", value: E.max, oninput: (e, n) => { E.max = n.value; }, onchange: saveMax }) }),
-      block({ title: "Budget per run", sub: E.bud === "" ? "Empty means no cap. A cap stops a run that reaches it (counted at API prices) and says so in its thread. Applies from each run's next start." : `Each run stops at $${E.bud}, counted at API prices, and says so in its thread. Applies from each run's next start. Empty removes the cap.`,
-        actions: [savedMark("Budget per run"), input({ type: "number", min: 0, step: "any", placeholder: "no cap", "aria-label": "Budget per run in dollars", value: E.bud, oninput: (e, n) => { E.bud = n.value; }, onchange: saveBud })] }),
-      block({ title: "Daily cap", sub: spent + (E.day === "" ? "Empty means no cap. A cap holds new agents from starting once a day's spend reaches it; running ones finish." : `No new agents start once a day's spend reaches $${E.day}; running ones finish. Empty removes the cap.`),
-        actions: [savedMark("Daily cap"), input({ type: "number", min: 0, step: "any", placeholder: "no cap", "aria-label": "Daily cap in dollars", value: E.day, oninput: (e, n) => { E.day = n.value; }, onchange: saveDay })] })),
-    blocks(brand[1],
+  const pg = S.app.settings ? pageData(ctx.update) : null;
+  // R7: the controls you reach for in a normal week first, Stop the Hive as the last of them; what you set up once lives in its own section.
+  const everyday = section({ title: "Everyday", note: "what you change in a normal week", level: 1, actions: statusLabel(up ? "working" : "ended", up ? "running" : "not running") },
+    blocks(
+      block({ title: "Agents at once", sub: "Empty means no limit. Saves when you leave the box.",
+        actions: [savedMark("Agents at once"), input({ type: "number", min: 1, max: 200, placeholder: "no limit", "aria-label": "Agents at once", value: E.max, oninput: (e, n) => { E.max = n.value; }, onchange: saveMax, onfocusout: saveMax })] }),
       block({ title: "Keep work moving", sub: E.kp ? `${paceSay(E.kpe)}, pick up work that stopped and start work nobody asked for, and sooner once nothing has run for half an hour. It uses your limits.` : "Off: work that stops waits until someone asks. Turn it on to pick it up by itself.",
         actions: [E.kp ? h("select", { class: "input", value: E.kpe, "aria-label": "How often to keep work moving", title: "How often to keep work moving" ,
             onchange: e => { const was = E.kpe, v = +e.target.value; E.kpe = v; save({ keeper_every_s: v }, () => { E.kpe = was; }, "Keep work moving"); } },
             paceOpts(E.kpe).map(([v, label]) => h("option", { value: v }, label))) : null,
           toggle("Keep work moving", E.kp, v => { E.kp = v; save({ keeper_every_s: v ? E.kpe : 0 }, () => { E.kp = !v; }, "Keep work moving"); })] }),
+      block({ title: up ? "Stop the Hive" : "Start the Hive", sub: up ? "Stopping lets agents finish their turn." : "The Hive isn't running.", key: "starter", actions: button(up ? "Stop the Hive…" : "Start the Hive", () => up ? confirm({ title: "Stop the Hive?", body: ["Agents finish their turn, and nothing new starts until you start it again here."], ok: "Stop the Hive", kind: "danger", onOk: starter }) : starter(), { size: "s", kind: up ? "danger" : "primary", busy: isBusy("starter"), title: up ? "Stop the Hive" : "Start the Hive" }) })),
+    msg("starter"), msg("hive"), foot(AUTO));
+  const setOnce = section({ title: "Set once", note: "the name, the model, updates and spending caps", level: 1 },
+    pg ? [h("h3", { class: "set-sub", "data-key": "model-h" }, "Model"), modelPart(ctx.update)] : null,
+    blocks(brand[0], brand[1],
       versionBlocks(ctx, save),
       block({ title: "Update by itself", sub: F.up && F.up.installed ? "Installs new releases as often as you chose above. Keeps your settings and goes back if it fails. When it's off, this Hive still looks and says so above, and you choose when to update." : "Installs each new release. Keeps your settings and goes back if it fails.",
         actions: toggle("Update by itself", E.au, v => { E.au = v; save({ auto_update: v }, () => { E.au = !v; }, "Update by itself"); }) }),
-      block({ title: up ? "Stop the Hive" : "Start the Hive", sub: up ? "Stopping lets agents finish their turn." : "The Hive isn't running.", key: "starter", actions: button(up ? "Stop" : "Start", () => up ? confirm({ title: "Stop the Hive?", body: ["Agents finish their turn, and nothing new starts until you start it again here."], ok: "Stop the Hive", kind: "danger", onOk: starter }) : starter(), { size: "s", kind: up ? "danger" : "primary", busy: isBusy("starter"), title: up ? "Stop the Hive" : "Start the Hive" }) })),
-    msg("brand"), msg("starter"), msg("hive"), foot(AUTO));
+      block({ title: "Budget per run", sub: E.bud === "" ? "Empty means no cap. A cap stops a run that reaches it (counted at API prices) and says so in its thread. Applies from each run's next start." : `Each run stops at $${E.bud}, counted at API prices, and says so in its thread. Applies from each run's next start. Empty removes the cap.`,
+        actions: [savedMark("Budget per run"), input({ type: "number", min: 0, step: "any", placeholder: "no cap", "aria-label": "Budget per run in dollars", value: E.bud, oninput: (e, n) => { E.bud = n.value; }, onchange: saveBud, onfocusout: saveBud })] }),
+      block({ title: "Daily cap", sub: spent + (E.day === "" ? "Empty means no cap. A cap holds new agents from starting once a day's spend reaches it; running ones finish." : `No new agents start once a day's spend reaches $${E.day}; running ones finish. Empty removes the cap.`),
+        actions: [savedMark("Daily cap"), input({ type: "number", min: 0, step: "any", placeholder: "no cap", "aria-label": "Daily cap in dollars", value: E.day, oninput: (e, n) => { E.day = n.value; }, onchange: saveDay, onfocusout: saveDay })] })),
+    msg("brand"), msg("hive"), foot(AUTO));
+  return [everyday, setOnce];
 }
 
 // Codex and API keys: same section as Claude, because to the person they're all accounts. With settings.json and config rights they come with the
@@ -332,13 +340,16 @@ function loginsSection(ctx) {
 }
 
 // ---- with settings.json only: the choices the first run made, to change here ----
+// When the sandbox's own check fails, say so in red above the power cards. The words are the check's own (sandbox_check.why); the
+// full note, with what to do, stays under Sandbox below.
+const sandboxBroken = pg => pg.settings.sandbox !== "bare" && pg.sandbox_check.state === "broken"
+  ? h("p", { class: "fmsg", "data-tone": "bad", "data-key": "sandbox-broken", role: "status" }, "The sandbox doesn't work on this machine, so these levels are only an instruction to the agents. ", pg.sandbox_check.why || "") : null;
 function setupSections(ctx) {
   if (!S.app.settings) return [];
   const pg = pageData(ctx.update);
   if (!can("config")) return [];
   return [
-    section({ title: "Model", level: 1, note: "what agents run on" }, pg ? [modelPart(ctx.update), foot(AUTO)] : reading()),
-    section({ title: "Power and sandbox", level: 1, note: "who decides what agents may do, and what holds them to it" }, pg ? [powerPart(ctx.update), h("h3", { class: "set-sub", "data-key": "sandbox" }, "Sandbox"), sandboxPart(ctx.update), foot(AUTO)] : reading()),
+    section({ title: "Power and sandbox", level: 1, note: "who decides what agents may do, and what holds them to it" }, pg ? [sandboxBroken(pg), powerPart(ctx.update), h("h3", { class: "set-sub", "data-key": "sandbox" }, "Sandbox"), sandboxPart(ctx.update), foot(AUTO)] : reading()),
     section({ title: "Data sharing", level: 1, note: "what's sent, and whether it is" }, pg ? [sharePart(ctx.update, true), foot(AUTO)] : reading())];
 }
 const secretsSection = ctx => can("secrets") ? section({ title: "Secrets", level: 1, note: "send a token to the Hive; it's never shown back" }, h("div", { class: "stack secrets" }, secretParts(ctx))) : null;
@@ -507,13 +518,13 @@ function accessSection(ctx) {
         h("div", { class: "fgrid" }, txt("Hostnames", "hosts", "hive.example.com"), txt("Access team domain", "team", "yourteam.cloudflareaccess.com"),
           txt("Application audience", "aud", "the Access application's AUD tag"), txt("Allowed emails", "emails", "optional: only these emails"),
           txt("People with full access", "full", "you@example.com"), txt("People with limited access", "limited", "friend@example.com")),
-        h("div", { class: "frow" }, button("Save", save, { kind: "primary", busy: isBusy("access") }), msg("access"))),
+        h("div", { class: "frow" }, button("Save access settings", save, { kind: "primary", busy: isBusy("access") }), msg("access"))),
       block({ title: "Names with their own sign-in", key: "access-sites", fold: true, open: F.sitesOpen ?? R.length > 0, onToggle: v => { F.sitesOpen = v; } },
         h("p", { class: "field-h" }, "A name here has its own Access team, audience and people, apart from the settings above. A sign-in for one name never works on another. Each needs a team, an audience and at least one person, and its tunnel must pass the public name on as the Host. Those above don't change when you save here."),
         ...siteRows,
         h("div", { class: "frow" }, button("Add a name", () => { R.push({ host: "", team: "", aud: "", emails: "", full: "", limited: "" }); F.sitesOpen = true; ctx.update(); }, { kind: "quiet" }),
           button("Save names", saveSites, { kind: "primary", busy: isBusy("sites") }), msg("sites")))),
-    foot("Nothing here changes until you press its Save."));
+    foot("Each part below saves as one set with its own button, because a half-typed sign-in rule could lock people out."));
 }
 
 // Each section's state, as a dot after its name in the side nav: what the six chips up top used to say.
@@ -522,7 +533,7 @@ function navDots(ctx) {
   if (simpleOn()) return d;
   // Only what is off or needs action gets a dot; "fine" repeats the section's own state.
   const dot = (title, tone, value) => { if (st(tone).tone !== "good") d[title] = [tone, value]; };
-  if (can("config")) dot("The hive", s.starter ? "working" : "ended", s.starter ? "running" : "not running");
+  if (can("config")) dot("Everyday", s.starter ? "working" : "ended", s.starter ? "running" : "not running");
   if (can("logins") && logins.length) dot("Accounts", logins.some(l => !l.signed_in) ? "out" : "working", `${logins.filter(l => l.signed_in).length} of ${logins.length} signed in`);
   if (pg) {
     const c = pg.sandbox_check.state, bare = pg.settings.sandbox === "bare";
@@ -540,7 +551,8 @@ export default {
   render(ctx) {
     if (S.app.can == null) return h("div", { class: "page" }, waiting(S.failed));   // /api/app hasn't answered: don't say "only in the app" yet
     if (!S.app.app) return h("div", { class: "page" }, empty("Settings show only in the app, opened from this machine.", { kind: "page", title: "Settings" }));
-    const secs = [hiveSection(ctx), loginsSection(ctx), useSection(), ...setupSections(ctx), secretsSection(ctx), modulesSection(ctx), accessSection(ctx), viewSection(ctx)].filter(Boolean);
+    const hive = hiveSection(ctx), [everyday, setOnce] = Array.isArray(hive) ? hive : [hive, null];
+    const secs = [everyday, loginsSection(ctx), useSection(), ...setupSections(ctx), secretsSection(ctx), viewSection(ctx), setOnce, modulesSection(ctx), accessSection(ctx)].filter(Boolean);
     const header = pageHeader({ title: "Settings" });
     if (!secs.length) return form({ header, sections: [empty("This connection can't change any settings.")] });
     const nav = secs.map(n => n.getAttribute("aria-label")), dots = navDots(ctx);
@@ -550,7 +562,7 @@ export default {
     const item = t => h("a", { href: href("settings", slugOf(t)), "data-key": t, "aria-current": t === now ? "page" : null, title: dots[t] ? dots[t][1] : null }, h("span", null, t), dots[t] ? statusDot(dots[t][0]) : null, dots[t] ? h("span", { class: "vh" }, dots[t][1]) : null);
     return h("div", { class: "page set", "data-width": "narrow", "data-key": "settings" }, header,
       h("div", { class: "set-b" },
-        h("nav", { class: "set-n", "aria-label": "Settings sections", "data-key": "nav" }, nav.map(t => t === "This device" ? [h("hr", { class: "set-rule" }), item(t)] : item(t))),
+        h("nav", { class: "set-n", "aria-label": "Settings sections", "data-key": "nav" }, nav.map(t => t === "Set once" ? [h("hr", { class: "set-rule" }), item(t)] : item(t))),
         h("div", { class: "set-s" }, secs.filter(n => n.getAttribute("aria-label") === now))));
   },
 };

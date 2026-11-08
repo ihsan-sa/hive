@@ -20,7 +20,7 @@ export function agentRef(n, { copy, state, href, dot = true } = {}) {
   const s = agentStatus(n), agent = isAgent(n), warden = isWarden(n);
   const a = h("a", { class: "ref", "data-kind": "agent", "data-name": n, href: href || (agent ? agentHref(n) : threadHref("@" + n)), title: `${n}${warden ? ", a warden" : ""}${s.label ? `: ${s.label}` : ""}`, onclick: !href && agent ? e => openRef(e, "agent", n) : null },
     dot ? statusDot(s.key, { live: isRunning(n) }) : null, h("span", { class: "ref-n" }, n), warden ? wardenMark() : null,
-    state && s.label && s.key !== "none" ? h("span", { class: "sl", "data-tone": null, style: "font-weight:400" }, status(s.key).label) : null);
+    state && s.label && s.key !== "none" ? h("span", { class: "sw", "data-tone": null, style: "font-weight:400" }, status(s.key).label) : null);
   if (!copy || !agent) return a;
   return h("span", { class: "ref-wrap" }, a, copyButton("@" + n));
 }
@@ -38,15 +38,14 @@ export function copyButton(text) {
     onclick: (e, b) => { e.preventDefault(); e.stopPropagation(); copyText(text).then(() => { b.textContent = "✓"; setTimeout(() => (b.textContent = "⧉"), 900); }, (er) => { b.title = er.message; b.textContent = "!"; setTimeout(() => (b.textContent = "⧉"), 1800); }); } }, "⧉");
 }
 
-/** agentAvatar(name) — a round mark with the name's first two characters and a status dot; a link to the agent. For stacks (.avs). */
+/** agentAvatar(name) — the agent mark: a soft square with the name's two middle letters (a7c31 → 7c) and its status shape; a link to the agent. For stacks (.avs). */
 export function agentAvatar(n, { size } = {}) {
   const s = agentStatus(n), agent = isAgent(n), label = `${n}${s.label ? ", " + status(s.key).label.toLowerCase() : ""}`;
-  return h("a", { class: "av", "data-name": n, "data-hue": hue(n), "data-size": size || null, href: agent ? agentHref(n) : threadHref("@" + n), title: label, "aria-label": label, onclick: agent ? e => openRef(e, "agent", n) : null },
+  return h("a", { class: "av", "data-name": n, "data-size": size || null, href: agent ? agentHref(n) : threadHref("@" + n), title: label, "aria-label": label, onclick: agent ? e => openRef(e, "agent", n) : null },
     h("span", null, mono(n)), s.key !== "none" ? statusDot(s.key, { live: isRunning(n) }) : null);
 }
-// An agent's two marks: a8779 → 87 (every agent starts with a letter), other names their first two letters. The hue comes from the name, so one agent keeps one colour.
+// An agent's two marks: a8779 → 87 (every agent starts with a letter), other names their first two letters.
 const mono = n => /^[a-z][0-9a-f]{4,}$/.test(n) ? n.slice(1, 3) : String(n).slice(0, 2);
-const hue = n => [...String(n)].reduce((a, c) => (a * 31 + c.charCodeAt(0)) >>> 0, 7) % 6;
 /** A stack of avatars, at most max, then +N. Hovering it (or tabbing into it) opens a list of every name with its status, each a link. */
 export function avatars(names, { max = 4, size } = {}) {
   if (!names.length) return null;
@@ -60,6 +59,6 @@ export function avatars(names, { max = 4, size } = {}) {
 // A pill in the list: name, state, then model and cost so far (the person, 2026-11-07).
 function pill(n) {
   const a = agentRef(n, { state: true }), b = isAgent(n) ? agentBrief(n) : "";
-  if (b) a.append(h("span", { class: "sl avs-pop-m" }, b));
+  if (b) a.append(h("span", { class: "sw avs-pop-m" }, b));
   return a;
 }

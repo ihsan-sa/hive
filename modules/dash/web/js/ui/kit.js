@@ -1,19 +1,35 @@
 // The component kit. Each factory takes plain data and returns DOM; styles live in components.css under the same name.
 import { h, copyText } from "../core/dom.js";
+import { href } from "../core/router.js";
 import { status as st } from "../core/status.js";
 import { icon } from "./icons.js";
 import { showTip, hideTip } from "./tip.js";
 export { icon };
 
-/** Page header: the answer first. {title, lead, tone, meta:[...], actions, after} */
-export function pageHeader({ title, lead, tone, meta, actions, after, size, state }) {
+/** Page header: the answer first. {title, lead, tone, meta:[...], actions, after, state:{tone,text}, subnav}
+ *  .ph > .subnav (the page's row, full width on top) + .ph-t (eyebrow .ph-k, h1, lead, meta) + .ph-a (actions); after runs the full width under them. */
+export function pageHeader({ title, lead, tone, meta, actions, after, size, state, subnav }) {
+  const m = meta && meta.filter(Boolean);
   return h("header", { class: "ph", "data-size": size || null },
-    state ? h("p", { class: "ph-state", "data-tone": state.tone || null }, h("span", { class: "sd", "data-tone": state.tone || null, "aria-hidden": "true" }), state.text) : null,
-    title || actions ? h("div", { class: "ph-row" }, title ? h("h1", { class: "ph-title" }, title) : null, actions ? h("div", { class: "ph-actions" }, actions) : null) : null,
-    lead ? h("p", { class: "ph-lead", "data-tone": tone || null }, lead) : null,
-    after || null,
-    meta && meta.filter(Boolean).length ? h("p", { class: "ph-meta" }, meta.filter(Boolean).map(m => h("span", null, m))) : null);
+    subnav || null,   // the page's row, above its title (the design: Agents' and Usage's pages); pageNav() builds it
+    h("div", { class: "ph-t" },
+      state ? h("p", { class: "ph-k ph-state", "data-tone": state.tone || null }, h("span", { class: "st", "data-tone": state.tone || null, "aria-hidden": "true" }), state.text) : null,
+      title ? h("h1", { class: "ph-title" }, title) : null,
+      lead ? h("p", { class: "ph-lead", "data-tone": tone || null }, lead) : null,
+      m && m.length ? h("p", { class: "ph-meta" }, m.map(x => h("span", null, x))) : null),
+    actions ? h("div", { class: "ph-a ph-actions" }, actions) : null,
+    after ? h("div", { class: "ph-after" }, after) : null);
 }
+
+// The page-head row (R7 step 6: the second bar under the top bar moved here). The top bar works out the row with
+// core/nav.js layout() on every render, before the page draws, and hands it over; pageNav() draws it, so a view
+// added to a group in APP_NAV shows up in every head of that group by itself.
+let ROW = [];
+/** shell.js: the row for the page being drawn, as nav.js rowItems() gives it ([] for none). */
+export const setPageRow = items => { ROW = items || []; };
+/** The row's links (nav.subnav), or null where the page has none: pass it as pageHeader's subnav, or put it at the top of a page with no head. */
+export const pageNav = () => ROW.length ? h("nav", { class: "subnav", "aria-label": "Pages here" },
+  ROW.map(x => h("a", { href: href(x.id), "data-key": x.id, "aria-current": x.current ? "page" : null }, x.label))) : null;
 
 /** A line that says a refresh failed and the page shows what it read last (or leaves a part out). Goes in pageHeader's after. */
 export const staleNote = text => h("p", { class: "fmsg", "data-tone": "warn", role: "status" }, text);
@@ -50,7 +66,7 @@ export function section({ title, note, info, actions, id, key, level, fold, summ
 /** Status dot: shape + colour from the STATUS table. */
 export function statusDot(key, { live } = {}) {
   const S = st(key);
-  return h("span", { class: "sd", "data-tone": S.tone, "data-shape": S.shape, "data-live": live ? "" : null, "aria-hidden": "true" });
+  return h("span", { class: "st", "data-tone": S.tone, "data-live": live ? "" : null, "aria-hidden": "true" });
 }
 /** A warden's mark, the hexagon the graphs draw around a warden. */
 export const wardenMark = () => h("span", { class: "wm", "aria-hidden": "true" });
@@ -59,8 +75,13 @@ export const wardenBadge = title => h("span", { class: "wb", title }, wardenMark
 /** Status label: dot and words, coloured by tone. text overrides the table's label. */
 export function statusLabel(key, text, { live, title } = {}) {
   const S = st(key);
-  return h("span", { class: "sl", "data-tone": S.tone, title: title || S.hint || null }, statusDot(key, { live }), h("span", null, text ?? S.label));
+  return h("span", { class: "sw", "data-tone": S.tone, title: title || S.hint || null }, statusDot(key, { live }), h("span", null, text ?? S.label));
 }
+
+/** Status word by tone alone: the tone's shape and a word, as one unit (.st + .sw). For a status that isn't in the STATUS table. */
+// The invisible layer under an open menu: a press outside the menu lands on it and closes the menu (R7 menu family). Out of the tab order; Esc is the keyboard way.
+export const scrim = onClose => h("button", { type: "button", class: "scrim", tabindex: "-1", "aria-label": "Close menu", "data-key": "scrim", onclick: e => { e.stopPropagation(); onClose(e); } });
+export const statusWord = (tone, text, title, cls) => h("span", { class: cls ? "sw " + cls : "sw", "data-tone": tone || "quiet", title: title || null }, h("span", { class: "st", "data-tone": tone || "quiet", "aria-hidden": "true" }), text ? h("span", null, text) : null);
 
 /** Tally: counts by status, e.g. 9 working · 12 in job queue. items: [{n, label, status}] */
 export function tally(items) {
@@ -72,7 +93,7 @@ export function stats(items, { card } = {}) {
   return h("dl", { class: ["stats", card ? "card" : null] }, items.filter(Boolean).map(i => h("div", { class: "stat", "data-tone": i.tone || null, title: i.title || null },
     h("dt", null, i.label), h("dd", { class: "stat-v" }, i.value),
     i.meter ? h("dd", null, meter(i.meter)) : null,
-    i.worse ? h("dd", { class: "stat-w" }, i.worse) : null,
+    i.worse ? h("dd", { class: "stat-w" }, h("span", { class: "st", "data-tone": "bad", "aria-hidden": "true" }), i.worse) : null,
     i.note ? h("dd", { class: "stat-n" }, i.note) : null)));
 }
 
@@ -168,14 +189,13 @@ export function share(parts, { total, label, legend: withLegend = true } = {}) {
     withLegend ? legend(parts) : null);
 }
 export function legend(parts) {
-  return h("div", { class: "legend" }, parts.map(p => h("span", { "data-tone": p.tone }, h("i", { class: "sw" }), `${p.label}: ${p.text}`)));
+  return h("div", { class: "legend" }, parts.map(p => h("span", { "data-tone": p.tone }, h("i", { class: "lg-sw" }), `${p.label}: ${p.text}`)));
 }
 
 /** Note: something to read before acting. tone info | warn | bad; title is one line, body short points. */
 export function note({ tone = "info", title, actions, key }, ...body) {
-  const shape = { info: "dot", warn: "square", bad: "tri" }[tone] || "ring";
   return h("aside", { class: "note", "data-tone": tone, "data-key": key || null },
-    h("span", { class: "sd", "data-shape": shape, "aria-hidden": "true" }),
+    h("span", { class: "st", "data-tone": tone, "aria-hidden": "true" }),
     h("div", { class: "note-in" }, title ? h("p", { class: "note-t" }, title) : null,
       body.flat().filter(Boolean).length ? h("div", { class: "note-b" }, body) : null,
       actions ? h("div", { class: "note-a" }, actions) : null));

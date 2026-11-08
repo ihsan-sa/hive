@@ -340,13 +340,32 @@ export const isSystemThread = d => !!d && (d.name === SIDE_THREAD || d.posts.eve
 // ---- how much of the board someone wants to see: Chat's For you, Updates and Agent comms ----
 export const SHOW = { you: 1, updates: 2, comms: 4, ALL: 7 };   // bits: any of them can be on
 const OPS = new Set(["watchdog", "memguard"]), HOUSE = new Set(["keeper", "improve", "watchdog"]);   // the hive looking after itself
-/** Which one a post is. For you: from or to the person. Updates: an agent or outsider saying how it's going. Agent comms: agents talking to each other, and the hive's own notices. */
+/** A line starting "For you:" marks what an agent wants the person to know, do or answer (110401502e1a). */
+export const FOR_YOU = /^\s*(?:[-*>]\s*)?(?:\*\*|__)?for you(?:\*\*|__)?\s*:\s*(?:\*\*|__)?\s*(.+)$/im;
+const ANSWER_FOR = 24 * 3600 * 1000;
+/** The person's latest post in the thread before p (set once per post as the thread grows). */
+function askBefore(p) {
+  const d = S.threads.get(p.th); if (!d) return null;
+  if (d.askN !== d.posts.length) { let cur = d.askN ? d.posts[d.askN - 1].ask || null : null; for (let i = d.askN || 0; i < d.posts.length; i++) { const q = d.posts[i]; q.ask = cur; if (q.from === "person") cur = q; } d.askN = d.posts.length; }
+  return p.ask || null;
+}
+/** An agent's answer to the person: it replies to their post, carries a "For you:" line, or is what the agent they named says back in the same thread within a day
+ *  (agents answer in the thread without naming the person, so by mentions alone every answer was an Update: 110803115633). */
+function answersPerson(p) {
+  if (!isAgent(p.from)) return false;
+  if (p.reply_to) { const q = S.byId[p.reply_to]; if (q && q.from === "person") return true; }
+  if (FOR_YOU.test(p.text || "")) return true;
+  const a = askBefore(p);
+  return !!a && a.men.includes(p.from) && p.t - a.t < ANSWER_FOR;
+}
+/** Which one a post is. For you: from or to the person, or an agent answering them. Updates: an agent or outsider saying how it's going. Agent comms: agents talking to each other, and the hive's own notices. */
 export function postKind(p) {
   if (p.lv !== undefined) return p.lv;
   if (p.th === SIDE_THREAD) return p.lv = 0;
   if (p.from === "person" || p.men.includes("person")) return p.lv = SHOW.you;
   if (SYS.has(p.from) || OPS.has(p.from) || isWarden(p.from) || HOUSE.has(p.th)) return p.lv = SHOW.comms;
-  return p.lv = p.men.some(m => m !== p.from && !OUTSIDE.has(m)) ? SHOW.comms : SHOW.updates;
+  if (p.men.some(m => m !== p.from && !OUTSIDE.has(m))) return p.lv = SHOW.comms;
+  return p.lv = answersPerson(p) ? SHOW.you : SHOW.updates;
 }
 /** Every kind of post a thread has: a thread with none of what's on isn't listed. */
 export function threadKinds(d) {

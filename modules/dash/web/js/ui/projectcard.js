@@ -11,7 +11,7 @@ import { gist } from "../core/gist.js";
 import { threadHref, go } from "../core/router.js";
 import { agentRef } from "./refs.js";
 import { button } from "./kit.js";
-import { quoteInto } from "./composer.js";
+import { sayTo } from "./composer.js";
 
 const when = at => (at ? ago(Date.parse(at)) : "");
 const RESULT = /^(Done|Blocked|Needs the person|Waiting|Told to stop):\s*/i;
@@ -59,7 +59,7 @@ function reading(s) {
   return { threads, running, did, st, asks, needs, state, next };
 }
 
-const dot = st => h("span", { class: "sd", "data-tone": st.tone, "data-shape": st.shape, "data-live": st.key === "moving" ? "" : null, "aria-hidden": "true" });
+const dot = st => h("span", { class: "st", "data-tone": st.tone, "data-live": st.key === "moving" ? "" : null, "aria-hidden": "true" });
 const didLine = d => h("li", null, h("a", { href: threadHref(d.thread), title: `${threadTitle(d.thread)}, ${ago(d.t)}` }, d.text), d.word !== "done" ? h("span", { class: "meta wk-w" }, " · " + d.word) : null);
 
 /** A focus or project card: what it needs from you first (the newest ask), what it did today, what comes next; the footer is its state and agents. */
@@ -81,5 +81,5 @@ export function card(s) {
       part("next", r.next ? "Next" + (r.next.step ? " · " + r.next.step.replace(/^step /, "step ") : "") : "Next", r.next ? r.next.text : h("span", { class: "muted" }, "No ladder: the thread says what comes next."))),
     h("div", { class: "wk-ft meta" }, h("span", { class: "wk-state" }, r.state.label), r.running.length ? h("span", { class: "wk-who" }, r.running.map(a => agentRef(a))) : null,
       r.threads.length > 1 ? `+${r.threads.length - 1} helper ${r.threads.length > 2 ? "threads" : "thread"}` : null,
-      s.thread && who ? button(`Say something to ${who}`, () => { quoteInto(s.thread, "@" + who + " "); go("comms", s.thread); }, { kind: "icon", size: "s", icon: "chat", cls: "wk-say" }) : null));
+      s.thread && who ? button(`Say something to ${who}`, () => { sayTo(s.thread, who); go("comms", s.thread); }, { kind: "icon", size: "s", icon: "chat", cls: "wk-say" }) : null));
 }

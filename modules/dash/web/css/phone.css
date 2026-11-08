@@ -1,0 +1,152 @@
+/* Hive on a phone (R7 step 3, from ~/designs/ui-redesign-v2/css/phone.css). The phone is its own layout, not a squeezed desktop.
+   It applies when the app is under 700px wide: a container query on .app (the body, base.css), so it holds in any frame.
+   Markup and the phone-only behaviours (keyboard, status fold, press and hold): js/ui/mobilenav.js. Replaces css/mobile.css.
+
+   The phone's rules, in short:
+   1. Thumb reach. What you do often sits in the bottom third: the bottom bar, the composer, sheets, the tour.
+      The top holds only what you read: where you are, and the way back.
+   2. One pane at a time. Home, a conversation, a file, a page: each fills the screen; a conversation and a file
+      have a back button at top left and no bars.
+   3. Nothing covers what it's about. Menus and dialogs rise from the bottom as sheets over a dim layer.
+   4. 40px controls, 44px rows, 16px text in inputs (no zoom on focus), safe areas respected.
+   The root states, set from JS on the body: data-view (the page; "thread" in a conversation), data-kb=open (the keyboard is up),
+   data-strip=open (the status strip shows both lines). A container query can't style its own container, so what sits on
+   html and body (the bar's room, scroll padding) is in the @media block at the end, at the same 700px. */
+
+#mnav,.only-phone{display:none}
+@keyframes sheetin{from{transform:translateY(24px);opacity:0}}
+
+@container app (width < 700px){
+  /* ---- the top bar: logo, what's going on, a few icons. Tabs live in the bottom bar ---- */
+  .top-in{height:48px;gap:var(--s2);padding-left:max(12px,env(safe-area-inset-left,0px));padding-right:max(6px,env(safe-area-inset-right,0px))}
+  .top-in .tabs,.top .top-hide,.top-in .top-icons .more{display:none}
+  .top-in .brand{margin-right:auto;min-width:0}
+  .top-in .top-status{display:flex;margin-left:0;gap:4px;min-width:0}
+  .top-in .top-status>span:not(:first-child),.top-in .top-status>.top-route:not([data-mode=limited]){display:none}
+  .top-in .top-status>span{height:32px;max-width:46vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .top-in .btn[data-kind=icon]{min-width:40px;height:40px}
+  /* a conversation, a file and the keyboard take the whole screen: no top bar, no bottom bar */
+  .app[data-view=thread] .top,.app[data-kb=open] .top,.top:has(~ #main .kb[data-in]){display:none}
+
+  /* ---- the bottom bar: Chat, Agents, Usage, Knowledge, More ---- */
+  #mnav{display:block}
+  .bnav{position:fixed;left:0;right:0;bottom:0;z-index:50;display:grid;grid-auto-flow:column;grid-auto-columns:minmax(0,1fr);padding:0 max(4px,env(safe-area-inset-left,0px)) env(safe-area-inset-bottom,0px) max(4px,env(safe-area-inset-right,0px));border-top:1px solid var(--line);background:var(--bg)}
+  .bnav-i{position:relative;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;min-width:0;min-height:56px;padding:0 2px;border:0;background:none;color:var(--ink-3);font:inherit;font-size:var(--fs-micro);font-weight:var(--w-med);text-decoration:none;cursor:pointer;touch-action:manipulation}
+  .bnav-i .ic{width:22px;height:22px}
+  .bnav-l{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .bnav-i[aria-current=page],.bnav-i[aria-expanded=true]{color:var(--ink)}
+  .bnav-i[aria-current=page] .ic{stroke-width:2.1}
+  .bnav-i:active{background:var(--hover)}
+  .bnav-i:focus-visible{outline:2px solid var(--ring,var(--ink));outline-offset:-4px;border-radius:var(--r-m)}
+  .bnav-n{position:absolute;top:6px;left:calc(50% + 6px);min-width:16px;padding:0 4px;border-radius:var(--r-pill);background:var(--ink);color:var(--bg);font-size:var(--fs-micro);font-weight:var(--w-bold);line-height:16px;text-align:center}
+  .app[data-view=thread] #mnav,.app[data-kb=open] #mnav,#main:has(.kb[data-in]) ~ #mnav{display:none}
+  .bnav-sheet{z-index:51;bottom:0;overscroll-behavior:contain}
+  .bnav-w>.scrim{z-index:50}
+
+  /* ---- menus and dialogs rise from the bottom as sheets (the Stop dialog, every .menu, the More sheet) ---- */
+  .menu,.menu[data-side]{position:fixed;left:0;right:0;bottom:0;top:auto;z-index:61;max-width:none;width:auto;min-width:0;max-height:75vh;overflow:auto;border-radius:var(--r-xl) var(--r-xl) 0 0;padding:var(--s2) var(--s2) calc(var(--s3) + env(safe-area-inset-bottom,0px));box-shadow:var(--e3);animation:sheetin var(--dur-l) var(--ease)}
+  .menu::before{content:"";display:block;width:36px;height:4px;border-radius:2px;background:var(--line-2);margin:2px auto 8px}
+  .menu-i{min-height:44px;font-size:var(--fs-body)}
+  .menu-i-t{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block}
+  .scrim{background:var(--scrim)}
+  .dlg{position:fixed;top:auto;bottom:0;left:0;right:0;margin:0;transform:none;width:auto;max-width:none;max-height:85vh;overflow:auto;border-radius:var(--r-xl) var(--r-xl) 0 0;border-bottom:0;padding-bottom:calc(var(--s5) + env(safe-area-inset-bottom,0px));animation:sheetin var(--dur-l) var(--ease)}
+  .dlg-a{flex-wrap:wrap}
+  .dlg-a .btn{flex:1 1 auto}
+  .toast{bottom:76px}
+  .app[data-view=thread] .toast{bottom:var(--s4)}
+
+  /* ---- the tour: a sheet above the bottom bar ---- */
+  /* tour.js docks it to the bottom (over the bar) or the top edge, away from the ring; here it only spans the width */
+  .tour,.tour[data-place]{position:fixed;right:16px!important;width:auto;max-width:none;border-radius:var(--r-xl);padding:var(--s4)}
+  .tour::before{display:none}
+
+  /* ---- home: what needs you first; the composer docks at the bottom, where the thumb is.
+     On a phone the rail is not beside it: home shows, with the latest conversations listed under it (comms.js phoneList). ---- */
+  .cm{grid-template-columns:minmax(0,1fr)}
+  /* the rail's top stays over home (search, the Show menu, the brought-up box); its list, places and grip don't: phoneList is the list */
+  .cm[data-home] .cm-side{display:block;position:static;height:auto;max-height:none;border:0;padding:var(--s3) var(--s4) 0;background:none;overflow:visible}
+  .cm[data-home] .cm-side>:not(.cm-filters),.cm[data-home] .cm-side .cm-newbtn{display:none}
+  .cm[data-home] .cm-convo{display:flex}
+  .cm-home{display:flex;flex-direction:column;gap:var(--s5);padding:var(--s4) var(--s4) 0}
+  .cm-home>.cm-new,.cm-home>section:first-child{order:99;position:sticky;bottom:0;z-index:6;margin:0 calc(-1 * var(--s4));padding:var(--s3);background:linear-gradient(to bottom,transparent,var(--bg) 14px)}
+  .cm-home>.cm-new>.cm-home-t,.cm-home>.cm-new>.cm-home-l,.cm-home>section:first-child h1{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+  .cm-home .cp-t{min-height:44px;max-height:120px}
+  .cm-home .fc{padding:var(--s3) var(--s4)}
+  .cm-hline,.cm-foci,.cm-foci-msg{margin-top:0}
+  .cm-foci{grid-template-columns:minmax(0,1fr);gap:var(--s3)}
+  .needs .lr>.btn{display:none}
+  .cm-plist .lr-in{padding:12px 8px}
+  .cm-plist .lr-t b{flex:0 1 auto;min-width:0}
+  .cm-plist .lr-x{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding-left:16px}
+
+  /* ---- a conversation: full screen, back, title, one line of status (tap for both) ---- */
+  .cm[data-in] .cm-side{display:none}
+  .cm-back{display:inline-flex;min-width:40px;min-height:40px;margin-left:-8px}
+  .cm-crumb{display:none}
+  .cm-head{padding:4px var(--s2) 6px var(--s1)}
+  .cm-title{flex:1 1 auto;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .cm-head .btn[data-kind=icon]{min-width:40px;min-height:40px}
+  .cm-strip{padding:4px var(--s4) 6px}
+  .cm-strip[data-fold]{cursor:pointer}
+  .cm-strip[data-fold]:has(.cm-strip-b) .cm-strip-a,.cm-strip[data-fold] .cm-strip-m,.cm-strip[data-fold] .cm-status-more{display:none}
+  .app[data-strip=open] .cm-strip[data-fold] .cm-strip-a{display:block}
+  .app[data-strip=open] .cm-strip[data-fold] .cm-strip-m{display:block}
+  .app[data-strip=open] .cm-strip[data-fold] .cm-status-more{display:inline}
+  .cm-strip[data-fold] .cm-strip-b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .app[data-strip=open] .cm-strip[data-fold] .cm-strip-b{white-space:normal}
+  .app[data-kb=open] .cm-strip[data-fold] .cm-strip-a,.app[data-kb=open] .cm-strip[data-fold] .cm-strip-m,.app[data-kb=open] .cm-strip[data-fold] .cm-status-more{display:none}
+  .app[data-kb=open] .cm-strip[data-fold] .cm-strip-b{white-space:nowrap}
+  /* press and hold a message: its tools (mobilenav.js sets data-held) */
+  .msg[data-held]>.msg-tools{display:flex;opacity:1;pointer-events:auto}
+  .msg[data-held]{background:var(--tint)}
+  .msg{-webkit-touch-callout:none}
+  .msg-h .msg-time{opacity:1}   /* no hover on a phone: the time always shows (HANDOFF, A conversation) */
+  .msg-thumb,.msg-file{max-width:100%}
+  .cm-msgs{overflow-anchor:none}   /* comms.js keeps the list at its end itself; the browser's anchoring would move it on a late reflow and unstick it */
+
+  /* the composer, one-handed: + at bottom left, send at bottom right, both 40px */
+  .cp{padding:6px 8px 8px}
+  .cp-bar .btn[data-kind=icon]{min-width:40px;min-height:40px}
+  .cp-send{min-width:40px;min-height:40px}
+  /* the composer never pushes the page sideways: its grid column and the focus menu may shrink (inputs at 16px make them wider) */
+  .cp-box{grid-template-columns:minmax(0,1fr)}
+  .cp-bar,.cp-r{min-width:0}
+  .cp-r>*{min-width:0}
+  .cp-focus,.cm-focus-sel{min-width:0;flex:0 1 auto;max-width:40vw;text-overflow:ellipsis}
+
+  /* ---- pages ---- */
+  .page{padding:var(--s4) max(var(--s4),env(safe-area-inset-right,0px)) var(--s7) max(var(--s4),env(safe-area-inset-left,0px))}
+  .ph{margin-bottom:var(--s4)}
+  .ph h1{font-size:19px}
+  .sec{margin-top:var(--s5)}
+  .ph-a{width:100%}
+  .ph-a .search{width:100%!important}
+  .panel{width:100%;padding-bottom:env(safe-area-inset-bottom,0px)}
+  table{max-width:100%}
+  .tbl,.table-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
+  .kb[data-in] .kb-side{display:none}
+
+  /* ---- touch targets and iOS zoom: inputs at 16px, controls 40px ---- */
+  input,select,textarea,.input{font-size:16px!important}
+  .btn{min-height:40px}
+  .btn[data-size=s]{min-height:36px}
+  .btn[data-kind=icon]{position:relative}
+  .btn[data-kind=icon]::before{content:"";position:absolute;inset:-4px}
+  a,button{touch-action:manipulation}
+  .hide-phone{display:none!important}
+  .only-phone{display:revert}
+  @media (prefers-reduced-motion:reduce){.menu,.dlg,.scrim{animation:none}}
+}
+
+/* html and body: the room under the page for the bar, the keyboard, scroll padding. Same width as the query above. */
+@media (max-width:699px){
+  body{--nav-h:calc(57px + env(safe-area-inset-bottom,0px));padding-bottom:var(--nav-h);overscroll-behavior-y:none}
+  body[data-view=thread],body[data-kb=open],body:has(.kb[data-in]){--nav-h:0px}
+  html{-webkit-text-size-adjust:100%;-webkit-tap-highlight-color:transparent;scroll-padding-bottom:calc(var(--nav-h,57px) + 16px)}
+  html:has(body[data-view=thread]){scroll-padding-bottom:16px}
+  #main{min-height:calc(100dvh - var(--bar-h) - var(--nav-h))}
+  .cm,.kb,.cvp{height:calc(100dvh - var(--top-h,var(--bar-h)) - var(--nav-h))}
+  body[data-view=thread] .cm,body:has(.kb[data-in]) .kb{height:100dvh}
+  body[data-kb=open] .cm,body[data-kb=open] .kb{height:var(--vvh,100dvh)}
+  body[data-kb=open] #main{min-height:0}
+}

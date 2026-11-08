@@ -6,14 +6,14 @@
 import { h, copyText } from "../core/dom.js";
 import { S, can, jget, SYS, OUTSIDE } from "../core/store.js";
 import { simpleOn, hiveName } from "../core/simple.js";
-import { isAgent, isWarden, isRunning, displayText, postSource, btwParent, btwText } from "../core/model.js";
+import { isAgent, isWarden, isRunning, displayText, postSource, btwParent, btwText, asksQuestion, threadState, threadChildren, threadTitle } from "../core/model.js";
 import { focusById, focusName } from "../core/foci.js";
 import { clock, stamp, now, short, mdPlain, ago, DAY, MIN } from "../core/format.js";
 import { markdown, mdCut, filesNamed } from "./markdown.js";
-import { agentRef, threadRef } from "./refs.js";
+import { agentRef, threadRef, agentAvatar } from "./refs.js";
 import { agentHref } from "../core/router.js";
-import { button, icon, statusDot, copyPress } from "./kit.js";
-import { replyTo } from "./composer.js";
+import { button, icon, statusDot, copyPress, scrim } from "./kit.js";
+import { replyTo, draft, quoteRef } from "./composer.js";
 import { wordButton } from "./rootword.js";
 import { voiceMemo, VOICE } from "./voicememo.js";
 import { openPreview, previewKey, kindOf, badgeOf, remember } from "./preview.js";
@@ -59,7 +59,7 @@ export function delivery(p, m) {
   const sess = !queued && last && last.start >= p.t - 2000;
   if ((set && set.has(p.id)) || sess || answered(p, m)) {
     const t = (DELIV.at[m] && DELIV.at[m].get(p.id)) || (sess ? Math.max(p.t, last.start) : 0);
-    return { key: "seen", tone: "good", text: t ? `Reached ${m} · ${clock(t)}` : `Reached ${m}`, who: m };
+    return { key: "seen", tone: "good", text: t ? `Reached ${m} · ${clock(t)}` : `Reached ${m}`, who: m, t };
   }
   // The Interrupt button's post: the starter stops a long command the agent is waiting on, so it reads this at once.
   if (p.interrupt && isRunning(m)) return { key: "interrupt", tone: "info", text: `Interrupt sent · ${m} gets it now`, who: m };
@@ -84,17 +84,40 @@ function isLastMine(p) {
   if (lastMine.ver !== S.ver) { lastMine = { ver: S.ver, by: {} }; for (const x of S.posts) if (OUTSIDE.has(x.from)) lastMine.by[x.th] = x.id; }
   return lastMine.by[p.th] === p.id;
 }
-/** The receipt under your own message: where it is, in words. Always returns the element, empty when there's nothing to say. */
+/** The receipt under your own message: one status line, in words. Always returns the element, empty when there's nothing to say.
+ *  The full look (R7): the state that needs you most, for the recipient it concerns: an interrupt reaching its agent, then one
+ *  that hasn't reached, waiting for a start, queued behind a step, and last Read by. Sent and Read show on your newest message,
+ *  on every one with ?receipts=1. */
+const RECEIPTS = () => /[?&]receipts=1\b/.test(location.search + location.hash);
+const RANK = { interrupt: 0, unseen: 1, queued: 2, waiting: 3, seen: 4 };
+const names = ms => ms.length < 3 ? ms.join(" and ") : ms.slice(0, -1).join(", ") + " and " + ms.at(-1);
 export function messageReceipt(p) {
-  const el = h("div", { class: "msg-rc", role: "status" });
+  const el = h("div", { class: "msg-rc msg-st", role: "status" });
   if (!S.app.app || !OUTSIDE.has(p.from) || now() - p.t > 3 * DAY) return el;
-  const ds = p.men.map(m => delivery(p, m)).filter(Boolean), last = isLastMine(p);
+  const ds = p.men.map(m => delivery(p, m)).filter(Boolean), last = isLastMine(p), all = RECEIPTS();
   if (simpleOn()) {  // no names and no machinery: one word, on your latest message
-    if (last && ds.length) el.append(h("span", { "data-tone": "quiet" }, ds.some(d => d.key === "seen") ? "Seen" : "Sent"));
+    if ((last || all) && ds.length) el.append(h("span", { "data-tone": "quiet" }, ds.some(d => d.key === "seen") ? "Seen" : "Sent"));
     return el;
   }
-  const show = ds.filter(d => last || d.key !== "seen");
-  for (const d of show) el.append(h("span", { "data-tone": d.tone }, h("b", { "aria-hidden": "true" }, RMARK[d.key]), d.text));
+  if (p.from !== "person") {   // a message from outside (Slack, mail) keeps its per-recipient words
+    for (const d of ds.filter(d => last || all || d.key !== "seen")) el.append(h("span", { "data-tone": d.tone }, h("b", { "aria-hidden": "true" }, RMARK[d.key]), d.text));
+    return el;
+  }
+  if (!ds.length) { if (last || all) el.append(icon("check"), h("span", null, "Sent")); return el; }
+  const top = ds.reduce((a, d) => RANK[d.key] < RANK[a.key] ? d : a), same = ds.filter(d => d.key === top.key && d.who).map(d => d.who);
+  const X = names(same.length ? same : [top.who || "the agent"]);
+  el.dataset.key = top.key;
+  if (top.key === "interrupt") { el.dataset.tone = "info"; el.append(icon("stop"), h("span", null, `Reached ${X} at once · it is stopping its step`)); }
+  else if (top.key === "unseen") { el.dataset.tone = "bad"; el.append(h("span", { class: "st", "data-tone": "bad", "aria-hidden": "true" }), h("span", null, top.who ? `Hasn't reached ${X}` : top.text)); }
+  else if (top.key === "queued") { el.dataset.tone = "warn"; el.append(h("span", { class: "st", "data-tone": "warn", "aria-hidden": "true" }), h("span", null, top.text)); }
+  else if (top.key === "waiting") { el.dataset.tone = "warn"; el.append(h("span", { class: "st", "data-tone": "warn", "aria-hidden": "true" }), h("span", null, `Queued · ${X} reads it after its current step`)); }
+  else if (p.interrupt) {
+    const t = (DELIV.at[top.who] && DELIV.at[top.who].get(p.id)) || top.t || 0;
+    el.append(icon("stop"), h("span", null, `Interrupted ${X} · it stopped its step${t ? " at " + clock(t) : ""}`));
+  } else if (last || all) {
+    const t = same.length === 1 && top.t;
+    el.append(icon("check"), h("span", null, /started on it|took it for/.test(top.text) ? top.text : `Read by ${X}`), t ? h("span", { class: "msg-st-t" }, "· " + clock(t)) : "");   // append(null) would write "null"
+  }
   return el;
 }
 
@@ -106,7 +129,7 @@ export const VID = /\.(mp4|webm|mov|m4v)$/i;
 export const PAGE = /\.html?$/i;
 export const pageUrl = (p, f) => fileUrl(p, f) + "?view=1";
 export const fsize = n => (n == null ? "" : n >= 1048576 ? (n / 1048576).toFixed(1) + " MB" : n >= 1024 ? Math.round(n / 1024) + " kB" : n + " B");
-const TYPE = { svg: "Picture", video: "Video", audio: "Audio", pdf: "PDF", html: "Web page", md: "Document", table: "Table", notebook: "Notebook", json: "Data", xlsx: "Spreadsheet", docx: "Document", pptx: "Slides", diff: "Changes", mermaid: "Diagram", code: "Code", text: "Text" };
+export const TYPE = { svg: "Picture", video: "Video", audio: "Audio", pdf: "PDF", html: "Web page", md: "Document", table: "Table", notebook: "Notebook", json: "Data", xlsx: "Spreadsheet", docx: "Document", pptx: "Slides", diff: "Changes", mermaid: "Diagram", code: "Code", text: "Text" };
 const OPEN_VERB = { video: "Play", audio: "Play" };
 
 // An image that won't load (gone, or not copied here) shows as a tile that says so, not the browser's broken icon. error doesn't bubble.
@@ -215,30 +238,30 @@ function sourceView(p, ws) {
 }
 const flash = (b, text) => copyText(text).then(() => { const was = b.textContent; b.dataset.ok = ""; b.textContent = "Copied"; setTimeout(() => { delete b.dataset.ok; b.textContent = was; }, 1400); }, () => {});
 function closeMenu() {
-  document.querySelector(".rc-menu")?.remove();
+  document.querySelector(".rc-menu")?.remove(); document.querySelector(".rc-more>.scrim")?.remove();
   document.querySelector('.rc-moreb[aria-expanded="true"], .msg-moreb[aria-expanded="true"]')?.setAttribute("aria-expanded", "false");
   menuFor = null;
 }
 addEventListener("click", e => { if (menuFor && !e.target.closest?.(".rc-more,dialog.fb")) closeMenu(); }, true);
 // Capture, so Escape closes only this menu and doesn't also cancel a reply or close the conversation's side panel.
 addEventListener("keydown", e => { if (e.key === "Escape" && menuFor && !document.querySelector("dialog[open]")) { e.stopPropagation(); closeMenu(); } }, true);
-const moreMenu = (p, ws) => h("div", { class: "rc-menu", role: "menu" },
-  h("button", { type: "button", role: "menuitem", onclick: () => { copyText(displayText(p)); closeMenu(); } }, "Copy as Markdown"),
-  h("button", { type: "button", role: "menuitem", onclick: () => { copyText(mdPlain(displayText(p))); closeMenu(); } }, "Copy as plain text"),
-  h("button", { type: "button", role: "menuitem", onclick: (e, b) => {
+const moreMenu = (p, ws) => h("div", { class: "rc-menu menu", role: "menu", "data-side": "bottom-end" },
+  h("button", { type: "button", class: "menu-i", role: "menuitem", onclick: () => { copyText(displayText(p)); closeMenu(); } }, "Copy as Markdown"),
+  h("button", { type: "button", class: "menu-i", role: "menuitem", onclick: () => { copyText(mdPlain(displayText(p))); closeMenu(); } }, "Copy as plain text"),
+  h("button", { type: "button", class: "menu-i", role: "menuitem", onclick: (e, b) => {
     const was = b.closest(".msg")?.querySelector(".msg-b"); closeMenu();
     if (SOURCE.has(p.id)) SOURCE.delete(p.id); else SOURCE.add(p.id);
     was?.replaceWith(body(p, ws));
   } }, SOURCE.has(p.id) ? "Back to the post" : "View source"));
 function more(p, ws) {
   const open = menuFor === p.id;
-  return h("span", { class: "rc-more" },
+  return h("span", { class: "rc-more pop" },
     h("button", { type: "button", class: "rc-t rc-moreb", "aria-haspopup": "menu", "aria-expanded": String(open), "aria-label": "More for this message", onclick: (e, b) => {
       const was = menuFor === p.id;
       closeMenu();
-      if (!was) { menuFor = p.id; b.setAttribute("aria-expanded", "true"); b.parentNode.append(moreMenu(p, ws)); }
+      if (!was) { menuFor = p.id; b.setAttribute("aria-expanded", "true"); b.parentNode.append(scrim(closeMenu), moreMenu(p, ws)); }
     } }, "⋯"),
-    open ? moreMenu(p, ws) : null);
+    open ? [scrim(closeMenu), moreMenu(p, ws)] : null);
 }
 
 // ---- search marks ----
@@ -378,15 +401,128 @@ export function message(p, opts = {}) {
   if (btwOpener(p)) return btwMessage(p, ws);
   const call = phoneCall(p); if (call) return call;
   const kind = SYS.has(p.from) ? "sys" : p.from === "person" ? "me" : OUTSIDE.has(p.from) ? "out" : "agent";
-  return h("article", { class: "msg", tabindex: "-1", "data-key": p.id, "data-who": kind, "data-cont": opts.cont ? "" : null, "data-report": displayText(p).length > LONG ? "" : null, "aria-label": `${who(p.from)}, ${stamp(p.t)}` },
-    messageHead(p, opts),
-    relayLine(p),
-    p.reply_to ? quote(p) : null,
-    body(p, ws),
-    files.length ? h("div", { class: "msg-files" }, files.map(f => attachment(p, f))) : null,
-    wordButton(p),
-    messageReceipt(p),
-    simpleOn() ? null : messageActions(p, ws));
+  const asks = kind === "agent" && !simpleOn() && asksYou(p), split = kind === "agent" && !SOURCE.has(p.id) ? didSplit(p) : null;
+  const q = split ? { ...p, disp: split.text } : p;
+  return h("article", { class: "msg", tabindex: "-1", "data-key": p.id, "data-who": kind, "data-cont": opts.cont ? "" : null, "data-report": displayText(p).length > LONG ? "" : null,
+    "data-state": kind === "me" && p.interrupt ? "interrupt" : null, "data-asks": asks ? "" : null, "aria-label": `${who(p.from)}, ${stamp(p.t)}` },
+    msgAvatar(p, kind),
+    h("div", { class: "msg-c" },
+      asks ? h("span", { class: "msg-mark" }, h("span", { class: "st", "data-tone": "info", "aria-hidden": "true" }), "Waiting on you") : null,
+      kind === "me" && p.interrupt ? h("span", { class: "msg-mark" }, icon("stop"), "Interrupt") : null,
+      messageHead(p, opts),
+      relayLine(p),
+      p.reply_to ? quote(p) : null,
+      body(q, ws),
+      files.length ? h("div", { class: "msg-files" }, files.map(f => attachment(p, f))) : null,
+      split ? didFold(p, split) : null,
+      wordButton(p),
+      messageReceipt(p),
+      asks ? askActions(p) : null),
+    simpleOn() ? null : msgTools(p, ws));
+}
+
+// ---- R7 step 4: the full look's message parts (the design hand-off, src/parts/30-thread.html) ----
+// The author's mark beside the words: an agent's links to it; yours, the outside senders' and the system's are plain.
+function msgAvatar(p, kind) {
+  if (kind === "agent") return agentAvatar(p.from);
+  return h("span", { class: "av", "aria-hidden": "true", "data-name": p.from }, h("span", null, kind === "me" ? "Y" : String(simpleOn() && kind !== "out" ? hiveName() : p.from).slice(0, 2)));
+}
+
+/** Is this agent message the question the conversation is waiting on you for (the thread's state names it)? */
+function asksYou(p) {
+  if (!isAgent(p.from) || !p.men.includes("person") || !asksQuestion(p)) return false;
+  const st = threadState(p.th); return st.key === "asks" && !!st.post && st.post.id === p.id;
+}
+/** Numbered options in a question: "1. …", "2) …", "Option 2: …". At most three, starting at 1. */
+export function picksIn(text) {
+  const n = [...String(text || "").matchAll(/^[ \t>*-]*(?:\*\*)?(?:\(?([1-9])[.):]|option ([1-9])\b[:.]?)\s+\S/gim)].map(m => +(m[1] || m[2]));
+  const u = [...new Set(n)].sort((a, b) => a - b);
+  return u[0] === 1 && u[1] === 2 ? u.filter((x, i) => x === i + 1).slice(0, 3) : [];
+}
+// Answer opens a reply to this message in the composer; Go with N puts the words in the box: you still press Send.
+function askActions(p) {
+  if (!can("post")) return null;
+  return h("div", { class: "msg-acts" },
+    button("Answer", () => replyTo(p), { size: "s", icon: "reply", cls: "msg-answer" }),
+    picksIn(displayText(p)).map(n => button(`Go with ${n}`, () => { const d = draft(p.th); d.text = `Go with ${n}.`; replyTo(p); }, { size: "s", kind: "quiet", cls: "msg-pick" })));
+}
+
+// "What it did": a closing section of steps, commands or checks folds under the words (the hand-off: technical detail, folded by default).
+// A section whose heading names it ("What I did", "Steps", "Checks", "Commands", "Technical detail", "How I checked") and runs to the end, or
+// to a last status line (Done:, Blocked: …), which stays in the open.
+const DID_HEAD = /^(?:#{1,6}\s*|\*\*)?(what (?:i|it|we) did|steps(?: taken)?|commands(?: run)?|checks(?: run)?|how i checked( it)?|technical(?: detail[s]?| notes)?|details|tool calls)\b[^\n]*$/im;
+const STATUS_LAST = /^(Done|Blocked|Waiting|Needs the person|Told to stop):/;
+const DIDS = new Map();
+function didSplit(p) {
+  const t = displayText(p), hit = DIDS.get(p.id);
+  if (hit && hit.src === t) return hit.v;
+  let v = null;
+  const m = t.length > 200 && !/^\s*(```|~~~)/m.test(t.slice(0, m0(t))) ? DID_HEAD.exec(t) : null;
+  if (m && m.index > 40) {
+    let rest = t.slice(m.index + m[0].length), tail = "";
+    const lines = rest.replace(/\s+$/, "").split("\n"), last = lines[lines.length - 1] || "";
+    if (STATUS_LAST.test(last.trim())) { tail = last.trim(); lines.pop(); }
+    const steps = lines.filter(l => /^\s*(?:[-*+]|\d+[.)])\s+/.test(l)).length || lines.filter(l => l.trim() && !/^\s*(```|~~~)/.test(l)).length;
+    if (steps >= 1) v = { text: (t.slice(0, m.index).replace(/\s+$/, "") + (tail ? "\n\n" + tail : "")), title: m[1], fold: lines.join("\n").replace(/^\s+|\s+$/g, ""), steps };
+  }
+  DIDS.set(p.id, { src: t, v });
+  return v;
+}
+const m0 = t => { const i = t.search(DID_HEAD); return i < 0 ? 0 : i; };   // a fence open where the heading sits means it is inside code: not a section
+const DID_OPEN = new Set();
+function didFold(p, s) {
+  return h("details", { class: "msg-fold", open: DID_OPEN.has(p.id) || null, ontoggle: (e, d) => { if (e.target !== d) return; if (d.open) DID_OPEN.add(p.id); else DID_OPEN.delete(p.id); } },
+    h("summary", null, icon("chevron-right"), `What it did · ${s.steps} ${s.steps === 1 ? "step" : "steps"}`),
+    h("div", { class: "msg-fold-b" }, mdIn(s.fold, p)));
+}
+
+// The hover toolbar (.msg-tools): Reply, Copy text, and … for Quote, Copy link, Open in Yours and Details. Nothing edits or takes back a sent message.
+const linkOf = p => `${location.origin}${location.pathname}${location.search}#comms/${encodeURIComponent(p.th)}/${p.id}`;
+const DETAILS = { id: null };
+function toolsMenu(p, ws) {
+  const item = (label, fn, sub, cls) => h("button", { type: "button", class: "menu-i" + (cls ? " " + cls : ""), role: "menuitem", onclick: fn }, label, sub ? h("small", null, sub) : null);
+  if (DETAILS.id === p.id) {
+    const tos = p.men.filter(m => m !== p.from);
+    return h("div", { class: "rc-menu menu msg-det", role: "dialog", "aria-label": "Message details", "data-side": "bottom-end" },
+      h("dl", { class: "kv" },
+        h("dt", null, "From"), h("dd", null, who(p.from)),
+        h("dt", null, "To"), h("dd", null, tos.length ? tos.map(m => m === "person" ? "you" : m).join(", ") : "the conversation"),
+        h("dt", null, "Sent"), h("dd", null, stamp(p.t)),
+        h("dt", null, "Id"), h("dd", { class: "num" }, p.id)),
+      h("div", { class: "menu-h" }, "Sent messages can't be edited or taken back."),
+      button("Close", () => { DETAILS.id = null; closeMenu(); }, { size: "s", kind: "quiet" }));
+  }
+  return h("div", { class: "rc-menu menu", role: "menu", "data-side": "bottom-end" },
+    can("post") ? item("Quote", () => { closeMenu(); quoteRef(p.th, { who: who(p.from), where: clock(p.t), text: quoteText(p) }); }, "Selected words, or the first lines", "msg-quote") : null,
+    item("Copy link", (e, b) => { copyText(linkOf(p)); closeMenu(); }, null, "msg-link"),
+    item("Copy as Markdown", () => { copyText(displayText(p)); closeMenu(); }),
+    item("Open in Yours", () => { closeMenu(); location.hash = "#yours"; }, null, "msg-yours"),
+    item(SOURCE.has(p.id) ? "Back to the post" : "View source", (e, b) => {
+      const was = b.closest(".msg")?.querySelector(".msg-b"); closeMenu();
+      if (SOURCE.has(p.id)) SOURCE.delete(p.id); else SOURCE.add(p.id);
+      was?.replaceWith(body(p, ws));
+    }),
+    h("div", { class: "menu-sep", role: "separator" }),
+    item("Details", (e, b) => { const box = b.closest(".rc-more"); closeMenu(); DETAILS.id = p.id; menuFor = p.id; box.firstChild.setAttribute("aria-expanded", "true"); box.append(scrim(closeMenu), toolsMenu(p, ws)); }, null, "msg-details"),
+    h("div", { class: "menu-h" }, "Sent messages can't be edited or taken back."));
+}
+// Quote: the words selected inside this message, else its first lines.
+function quoteText(p) {
+  const sel = getSelection && getSelection(), el = document.querySelector(`.msg[data-key="${CSS.escape(p.id)}"]`);
+  if (sel && el && !sel.isCollapsed && el.contains(sel.anchorNode)) return String(sel).trim();
+  return mdPlain(displayText(p)).split("\n").filter(l => l.trim()).slice(0, 4).join("\n");
+}
+function msgTools(p, ws) {
+  const mine = p.from === "person", tos = p.men.filter(m => m !== "new" && m !== p.from), open = menuFor === p.id;
+  return h("div", { class: "msg-tools", role: "toolbar", "aria-label": "Message actions" },
+    can("post") ? button("Reply", () => replyTo(p), { kind: "icon", size: "s", icon: "reply", cls: "msg-reply", title: mine && tos.length ? `Reply · this went to ${tos.join(", ")}` : "Reply to this message; it goes to its author" }) : null,
+    copyBtn(p),
+    h("span", { class: "rc-more pop" },
+      h("button", { type: "button", class: "btn msg-moreb", "data-kind": "icon", "data-size": "s", "aria-haspopup": "menu", "aria-expanded": String(open), "aria-label": "More actions", title: "More actions", onclick: (e, b) => {
+        const was = menuFor === p.id; closeMenu();
+        if (!was) { menuFor = p.id; b.setAttribute("aria-expanded", "true"); b.parentNode.append(scrim(closeMenu), toolsMenu(p, ws)); }
+      } }, icon("more")),
+      open ? [scrim(closeMenu), toolsMenu(p, ws)] : null));
 }
 
 // ---- the developer route: a dense log, as it was. Arrows and marks in the head, long posts cut short. ----
@@ -412,23 +548,23 @@ function devBodyEl(p, ws) {
 const moreLabel = p => OPEN.has(p.id) ? "Show less" : `Show all · ${devBody(p).length.toLocaleString("en-US")} characters`;
 // On hover, top right: Copy text, Copy link, and ⋯ for the raw post, its id and the author's page. Reply only where this address can post.
 function devTools(p, ws) {
-  const open = menuFor === p.id, menu = () => h("div", { class: "rc-menu", role: "menu" },
-    h("button", { type: "button", role: "menuitem", onclick: (e, b) => {
+  const open = menuFor === p.id, menu = () => h("div", { class: "rc-menu menu", role: "menu", "data-side": "bottom-end" },
+    h("button", { type: "button", class: "menu-i", role: "menuitem", onclick: (e, b) => {
       const m = b.closest(".msg"); closeMenu();
       if (RAW.has(p.id)) RAW.delete(p.id); else RAW.add(p.id);
       m?.querySelector(".md")?.replaceWith(devBodyEl(p, ws));
     } }, RAW.has(p.id) ? "Back to the post" : "Raw post"),
-    h("button", { type: "button", role: "menuitem", onclick: () => { copyText(p.id); closeMenu(); } }, `Copy post id · ${p.id}`),
-    SYS.has(p.from) || OUTSIDE.has(p.from) ? null : h("a", { role: "menuitem", href: agentHref(p.from), onclick: closeMenu }, `${p.from}'s page`));
+    h("button", { type: "button", class: "menu-i", role: "menuitem", onclick: () => { copyText(p.id); closeMenu(); } }, `Copy post id · ${p.id}`),
+    SYS.has(p.from) || OUTSIDE.has(p.from) ? null : h("a", { class: "menu-i", role: "menuitem", href: agentHref(p.from), onclick: closeMenu }, `${p.from}'s page`));
   return h("div", { class: "msg-tools" },
     can("post") ? button("Reply", () => replyTo(p), { kind: "icon", size: "s", icon: "reply", title: "Reply" }) : null,
     button("Copy text", (e, b) => copyPress(b, devBody(p)), { kind: "icon", size: "s", icon: "copy", title: "Copy text" }),
     button("Copy link", (e, b) => copyPress(b, `${location.origin}${location.pathname}${location.search}#comms/${encodeURIComponent(p.th)}/${p.id}`), { kind: "icon", size: "s", icon: "link", title: "Copy link" }),
-    h("span", { class: "rc-more" },
+    h("span", { class: "rc-more pop" },
       h("button", { type: "button", class: "btn msg-moreb", "data-kind": "icon", "data-size": "s", "aria-haspopup": "menu", "aria-expanded": String(open), "aria-label": "More for this post", title: "More", onclick: (e, b) => {
         const was = menuFor === p.id; closeMenu();
-        if (!was) { menuFor = p.id; b.setAttribute("aria-expanded", "true"); b.parentNode.append(menu()); }
-      } }, icon("more")), open ? menu() : null));
+        if (!was) { menuFor = p.id; b.setAttribute("aria-expanded", "true"); b.parentNode.append(scrim(closeMenu), menu()); }
+      } }, icon("more")), open ? [scrim(closeMenu), menu()] : null));
 }
 function devReceipt(p, m) {
   const d = delivery(p, m); if (!d || m === "new") return null;
@@ -466,20 +602,63 @@ function devMessage(p, opts) {
     }, { kind: "quiet", size: "s", cls: "msg-more", icon: "chevron" }) : null);
 }
 
-/** A message on its way: {lid, text, files:[File], url per image, state: sending|sent|failed, err}. actions: {retry, edit, discard} */
+/** A message on its way: {lid, text, files:[File], url per image, state: sending|sent|failed, err}. actions: {retry, edit, discard}
+ *  Failed (R7): the bubble turns red and one line says why, with Try again and Copy text; Discard drops it. */
 export function localMessage(it, { retry, edit, discard }) {
   const failed = it.state === "failed";
-  return h("article", { class: "msg", "data-key": "local:" + it.lid, "data-who": "me", "data-state": it.state, "aria-label": failed ? "Your message, not sent" : "Your message, sending" },
+  const kids = [
     h("div", { class: "msg-h" }, h("b", { class: "msg-me" }, "You"),
       it.to && !simpleOn() ? [h("span", { class: "msg-to" }, "to"), it.to === "new" ? h("span", { class: "muted" }, "a new agent") : agentRef(it.to)] : null,
-      h("span", { class: "msg-end" }, h("time", { class: "meta num" }, clock(it.t)))),
+      h("span", { class: "msg-end" }, h("time", { class: "meta num msg-time" }, clock(it.t)))),
     it.reply ? h("div", { class: "msg-q", "data-static": "" }, icon("reply"), h("b", null, who(it.reply.from)), h("span", null, short(mdPlain(displayText(it.reply)), 140))) : null,
     it.text.trim() ? h("div", { class: "msg-b" }, markdown(it.text)) : null,
     it.files.length ? h("div", { class: "msg-files" }, it.files.map(f => f.url
       ? h("span", { class: "msg-thumb" }, h("img", { src: f.url, alt: f.name }), h("span", null, f.name))
       : h("span", { class: "msg-file" }, h("b", null, badgeOf(f.name)), h("span", null, h("span", { class: "msg-fn" }, f.name), h("span", { class: "meta" }, fsize(f.size)))))) : null,
-    h("div", { class: "msg-rc", role: failed ? "alert" : "status" },
+    h("div", { class: "msg-rc msg-st", role: failed ? "alert" : "status", "data-tone": failed ? "bad" : null },
       failed ? [h("span", { "data-tone": "bad" }, h("b", { "aria-hidden": "true" }, "!"), `Not sent: ${String(it.err || "the Hive gave no reason").replace(/\.+$/, "")}.`),
-        button("Retry", () => retry(it), { size: "s" }), button("Edit", () => edit(it), { size: "s", kind: "quiet" }), button("Discard", () => discard(it), { size: "s", kind: "quiet" })]
-        : h("span", { "data-tone": "quiet" }, statusDot("sending"), it.state === "sent" ? "Sent" : it.files.length && it.uploading ? "Uploading…" : "Sending…")));
+        button("Try again", () => retry(it), { size: "s", cls: "msg-retry" }),
+        button("Copy text", (e, b) => copyPress(b, it.text), { size: "s", kind: "quiet", cls: "msg-copytext" }),
+        button("Discard", () => discard(it), { size: "s", kind: "quiet", cls: "msg-discard", title: "Drop this unsent message" })]
+        : h("span", { "data-tone": "quiet" }, statusDot("sending"), it.state === "sent" ? "Sent" : it.files.length && it.uploading ? "Uploading…" : "Sending…"))];
+  return h("article", { class: "msg", "data-key": "local:" + it.lid, "data-who": "me", "data-state": it.state, "aria-label": failed ? "Your message, not sent" : "Your message, sending" },
+    S.app.app ? [h("span", { class: "av", "aria-hidden": "true" }, h("span", null, "Y")), h("div", { class: "msg-c" }, kids)] : kids);
+}
+
+// ---- helper conversations, folded where they started (R7 step 4) ----
+// A conversation an agent here started with a helper (a child thread) shows as one line at the point it began:
+// "a7c31 asked a2e90 to write tests · 4 messages · last: …". Opened, its messages show indented under it.
+const HELP_OPEN = new Set();
+let kidsAt = { ver: -1, by: new Map() };
+function helpersOf(th) {
+  if (kidsAt.ver !== S.ver) kidsAt = { ver: S.ver, by: new Map() };
+  let v = kidsAt.by.get(th);
+  if (!v) {
+    v = threadChildren(th).filter(name => !btwParent(name)).map(name => ({ name, posts: (S.threads.get(name) || {}).posts || [] })).filter(k => k.posts.length)
+      .map(k => ({ ...k, t: k.posts[0].t })).sort((a, b) => a.t - b.t);
+    kidsAt.by.set(th, v);
+  }
+  return v;
+}
+/** The folds for th's helper conversations begun at or before t (all of them when t is Infinity) and not yet in done (a Set of names it fills). */
+export function helperFolds(th, t, done, opts = {}) {
+  if (!S.app.app) return [];
+  return helpersOf(th).filter(k => k.t <= t && !done.has(k.name)).map(k => { done.add(k.name); return helperFold(k, opts); });
+}
+function helperFold(k, opts) {
+  const first = k.posts[0], lastP = k.posts[k.posts.length - 1];
+  const asker = first.from, helper = first.men.find(m => m !== asker && m !== "new" && m !== "person") || (S.woke[first.id] || [])[0]?.name || k.posts.find(p => p.from !== asker)?.from;
+  const task = String(threadTitle(k.name) || k.name).replace(/^./, c => c.toLowerCase());
+  const n = k.posts.length, span = clock(first.t) + (lastP.t - first.t > MIN ? "–" + clock(lastP.t) : "");
+  const fill = d => { const b = d.querySelector(".cm-helper-b"); if (!b.firstChild) b.append(...k.posts.map((p, i) => message(p, { ...opts, showThread: false, cont: i > 0 && k.posts[i - 1].from === p.from && p.t - k.posts[i - 1].t < 5 * MIN }))); };
+  const d = h("details", { class: "cm-helper", "data-key": "helper:" + k.name, "data-th": k.name,
+      ontoggle: (e, el) => { if (e.target !== el) return; if (el.open) { HELP_OPEN.add(k.name); fill(el); } else HELP_OPEN.delete(k.name); } },
+    h("summary", null, icon("chevron-right"),
+      h("span", { class: "avs" }, [asker, helper].filter(Boolean).map(x => agentAvatar(x, { size: "s" }))),
+      h("span", { class: "cm-helper-t" }, h("b", null, asker), helper ? [" asked ", h("b", null, helper)] : " started", " ", task.length > 70 ? short(task, 70) : task),
+      h("span", { class: "meta" }, ` · ${n} ${n === 1 ? "message" : "messages"} · last: ${short(mdPlain(displayText(lastP)).replace(/\s+/g, " "), 60)}`),
+      h("span", { class: "meta num cm-helper-when" }, span)),
+    h("div", { class: "cm-helper-b" }));
+  if (HELP_OPEN.has(k.name)) { d.open = true; fill(d); }
+  return d;
 }

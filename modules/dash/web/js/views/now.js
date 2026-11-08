@@ -6,16 +6,17 @@ import { now, ago, dur, clock, money, pct, plural, firstSentence, short, HOUR, D
 import { TIERS, status } from "../core/status.js";
 import { threadHref, agentHref, href } from "../core/router.js";
 import { overview, cols } from "../templates.js";
-import { pageHeader, section, tally, stats, list, share, empty, waiting, button, statusDot } from "../ui/kit.js";
+import { pageHeader, section, tally, stats, list, share, empty, waiting, button, statusDot, statusWord, pageNav } from "../ui/kit.js";
 import { agentRef, threadRef } from "../ui/refs.js";
 import { agentCard as cardRows, displayText } from "../core/model.js";
 import { killButton } from "../actions.js";
 import { chart } from "../ui/chart.js";
 import { signInWords } from "../ui/shell.js";
+import { armInterrupt } from "../ui/composer.js";
 
 const V = {};
 
-const tag = (tone, text, title) => h("span", { class: "pg-t", "data-tone": tone || null, title: title || null }, text);
+const tag = (tone, text, title) => statusWord(tone, text, title, "pg-t");
 const TONE = { working: "good", queue: "warn", stuck: "bad", quiet: "quiet" };
 
 // Running agents as rows, not cards: one line to scan, the same columns all the way down, however many there are.
@@ -68,7 +69,7 @@ function devTables(run, states, t, ctx) {
       h("td", { class: "nt-a", "data-label": "Agent" }, agentRef(a.name)), h("td", { class: "nt-th", "data-label": "Thread" }, threadRef(a.thread)),
       h("td", { class: "nt-do", "data-label": "Doing now", title: title(a) }, h("div", { class: "nt-now" }, doing(a))),
       h("td", { class: "num meta", "data-label": "Up" }, dur(t - a.since * 1e3)),
-      h("td", { class: "nt-x", "data-label": "" }, a.alive ? killButton(a.name) : null))))));
+      h("td", { class: "nt-x", "data-label": "" }, a.alive && a.thread ? button("Interrupt", () => armInterrupt(a.thread, a.name), { size: "s", kind: "quiet", icon: "pause", title: "Open its conversation ready to interrupt it" }) : null, a.alive ? killButton(a.name) : null))))));
   const band = a => { const m = ((a.jobs || {}).waited || 0) / 60; return m > 60 ? "long" : m >= 20 ? "mid" : "short"; };
   const bands = ["long", "mid", "short"].map(k => ({ k, n: queued.filter(a => band(a) === k).length })), BAND = { long: "over 1 h, also in Needs attention", mid: "20 to 60 min", short: "under 20 min" };
   const bar = h("div", { class: "nd-queue-bar", role: "img", "aria-label": bands.map(x => `${x.n} ${BAND[x.k]}`).join(", ") }, bands.filter(x => x.n).map(x => h("i", { "data-band": x.k, style: `flex:${x.n}`, title: `${x.n}: ${BAND[x.k]}` })));
@@ -138,7 +139,7 @@ export default {
   id: "now", label: () => (S.app.app ? "Agents" : "Now"), about: "what each agent is doing", tab: true,
   render(ctx) {
     const L = S.live, t = now();
-    if (!L) return h("div", { class: "page" }, waiting(S.failed, "Reading the board…", "the board"));
+    if (!L) return h("div", { class: "page" }, pageNav(), waiting(S.failed, "Reading the board…", "the board"));
 
     // Working agents keep a fixed order (longest up first), so a new turn doesn't move a card. The rest follow, least quiet first; gone processes last.
     const isWorking = a => a.alive && t - (a.last || 0) * 1e3 < 3 * MIN, group = a => (isWorking(a) ? 0 : a.alive ? 1 : 2);
@@ -158,7 +159,7 @@ export default {
       const title = up.length ? `${nWord(up.length)} ${up.length === 1 ? "agent is" : "agents are"} working on ${one}.` : "No agents are working right now.";
       const lead = sign ? sign : stopped ? `New agents wait for the usage limit until ${clock(L.limit_until * 1e3)}.`
         : stuckN ? `${nWord(stuckN)} ${stuckN === 1 ? "agent has" : "agents have"} stopped moving.` : null;
-      const header = pageHeader({ state, title, lead });
+      const header = pageHeader({ state, title, lead, subnav: pageNav() });
       const main = run.length ? section({}, agentRows(run, states, t, waits)) : null;   // the header already says nobody is working: no "None." box under it
       const hrs = tierHours(t - DAY, t), tot = Object.values(hrs).reduce((a, b) => a + b, 0) || 1;
       const more = h("details", { class: "now-more", open: V.more || null, ontoggle: (e, n) => { if (e.target === n) V.more = n.open; } }, h("summary", null, "Details"),
@@ -170,7 +171,7 @@ export default {
       return overview({ header, main: [main], after: [todayCard(t), more] });
     }
 
-    const header = pageHeader({
+    const header = pageHeader({ subnav: pageNav(),
       title: run.length ? `${plural(run.length, "agent")} on ${plural(threads, S.app.app ? "conversation" : "thread")}` : S.app.app ? "No agents are working right now" : "Nobody is running right now",
       after: run.length ? h("div", { class: "nd-head" }, h("span", { class: "meta" }, [
         `${active} active`, count("working") - active > 0 || !S.app.app ? `${count("working") - active} on a job` : null,

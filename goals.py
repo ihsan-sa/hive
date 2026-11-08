@@ -266,6 +266,7 @@ def main():
     ap.add_argument("--brief", metavar="THREAD", help="print the keeper round's brief for this focus or ladder thread, with its next rung"); ap.add_argument("--ladder-threads", action="store_true", help="idle focus and ladder threads, one a line: each gets a round")
     ap.add_argument("--post", metavar="THREAD", help="post that brief to its thread; --model applies only to a fresh agent, so a woken worker keeps its own (a grader step-up, its own hive model)")
     ap.add_argument("--model", help="with --post: the model for a fresh agent")
+    ap.add_argument("--force", action="store_true", help="with --post: post even to a parked ladder")
     ap.add_argument("--rounds", metavar="DAYS", type=float, help="keeper rounds on focuses over the last DAYS: work, wait, silent")
     a = ap.parse_args()
     g = goals()
@@ -284,6 +285,8 @@ def main():
         if not r: sys.exit(f"no focus or ladder in thread {th}")
         b = brief(r)
         if not a.post: print(b); return
+        if r.get("parked") and not a.force:   # a keeper hand-picking threads posted rounds into a parked ladder every 4 h (fund-rsi, 2026-11-08)
+            sys.exit(f"{th} is parked until {r['parked']['until']}: {r['parked']['why'][:120]}\nNo round posted; --force posts one anyway.")
         cmd = ["hive", "post", "--thread", th] + post_model_args(b, a.model)
         sys.exit(subprocess.run(cmd, input=b, text=True).returncode)
     if a.idle: g["rows"] = [r for r in g["rows"] if r["idle"]]

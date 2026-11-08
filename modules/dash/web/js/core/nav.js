@@ -2,7 +2,7 @@
 //
 // Three places and one rule, so the bar doesn't grow as views and modules arrive:
 // - main: the tabs. Keep it to what people open daily (MAX_MAIN). A new tab needs a reason.
-// - groups: a tab's own pages, a row under the bar. Each page keeps its own address. Put a view here when it's another way to look at something a tab already covers.
+// - groups: a tab's own pages, a row in each page's head (the page-head subnav, R7 step 6). Each page keeps its own address. Put a view here when it's another way to look at something a tab already covers.
 // - more: everything else. Tools go here, in order. A view named nowhere lands here too, so a new view is still one line in views/index.js.
 export const MAX_MAIN = 6, MAX_TOOLS = 6;   // MAX_MAIN counts word tabs: an icon place (Settings) takes no room in the bar
 
@@ -13,7 +13,8 @@ export const APP_NAV = {
     usage: ["usage", "jobs"],
   },
   names: { now: "Now", agents: "All agents", made: "Files" },   // In the row, where the tab's own name would say the same thing twice.
-  noRow: ["comms", "settings", "agent", "focus"],         // Full-height or already has its own side list: these pages show no row. The tab stays lit.
+  heads: { now: "Agents", usage: "This computer" },        // A group's heading in the phone's More sheet (ui/mobilenav.js; the desktop More lists no groups, their pages are the page-head row), where the tab's own name would mislead: Usage's other pages are about this machine.
+  noRow: ["comms", "settings", "agent", "focus"],         // Full-height or already has its own side list: these pages show no row in their head. The tab stays lit.
   belongs: { agent: "now", secrets: "settings", focus: "comms", needs: "comms", yours: "comms", inbox: "comms", mail: "comms", made: "comms" }, // Lights a tab without being a page in its row. Needs you is the home's line, a page behind it; a focus page is the home a level down. Chat's pages (Yours, Inbox, Mail, Files) are the foot of its side list, so no row repeats them (R6 review, finding 12).
   more: ["design"],                             // The Work page went (R5): the focus pages carry what it showed, Flow's lanes open its card.
   icons: ["settings"],                           // Main places drawn as an icon at the right of the bar, not as a word tab (redesign 2026-11-04).
@@ -47,3 +48,11 @@ export function layout(views, nav, on, current) {
   const icons = new Set(nav.icons || []);
   return { main: main.filter(v => !icons.has(v.id)), icons: main.filter(v => icons.has(v.id)), more, active, row };
 }
+
+/** The page-head row (kit.js pageNav): layout().row as plain items, in the group's order, the open one marked. label(v) is the view's own name; nav.names wins where it is set. */
+export function rowItems(row, nav, current, label) {
+  return (row || []).map(v => ({ id: v.id, label: (nav.names && nav.names[v.id]) || label(v), current: v.id === current }));
+}
+
+/** A group's heading in a menu: nav.heads, else the tab's own label. */
+export const groupHead = (tab, nav, label) => (nav.heads && nav.heads[tab]) || label || tab;
