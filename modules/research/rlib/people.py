@@ -151,7 +151,7 @@ def _plain(text):
 
 
 # A contact card labels the post ("Title:\n Director, Technology Transfer"): drop the label so the post sits under the name.
-_LABEL = re.compile(r"\n[ \t]*(?:job\s+)?title[ \t]*:[ \t]*(?:\n[ \t\xa0]*)?", re.I)
+_LABEL = re.compile(r"\n[ \t]*(?:(?:job|current)\s+)?(?:title|position|role|designation)[ \t]*:[ \t]*(?:\n[ \t\xa0]*)?", re.I)
 
 
 def _page_lines(text):

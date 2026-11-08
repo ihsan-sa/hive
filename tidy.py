@@ -35,6 +35,12 @@ def asked():
     try: return {(r.get("thread"), r.get("name")) for r in map(json.loads, filter(str.strip, fc.FILE_ASKED.read_text().splitlines()))}
     except (OSError, ValueError): return set()
 
+LEAD = __import__("re").compile(r"^\s*(?:@\S+\s+)*(?:\([^)\n]*\)\s*)?")
+def quiet(text):
+    """A title quoted in the starter's @new brief: drop the leading @names and "(from ...)" and defuse any other @, so quoting a
+    thread does not wake its agents again (the first pass, post 110816144744, woke two more agents and rootwarden that way)."""
+    return LEAD.sub("", text).replace("@", "\uff20")
+
 def due(since, t=None, posts=None):
     """[{kind, thread|focus, what, agents: [{name, asked, ...runlog}]}] missed since `since`, settled for GRACE_S."""
     t = t or time.time(); st = fc.state(); posts = fc.board_posts() if posts is None else posts
@@ -54,7 +60,7 @@ def due(since, t=None, posts=None):
         last = max(fc.ts(p.get("at")) for p in ps)
         if last < since or t - last < GRACE_S: continue
         if not any(is_agent(p.get("from")) and fc.ts(p.get("at")) >= since for p in ps): continue
-        first = min(ps, key=lambda p: fc.ts(p.get("at"))); title = (str(first.get("text", "")).strip().splitlines() or [""])[0][:70]
+        first = min(ps, key=lambda p: fc.ts(p.get("at"))); title = quiet((str(first.get("text", "")).strip().splitlines() or [""])[0])[:70]
         if th not in tagged and fc.focus_of(st, th, posts) is None:
             out.append({"kind": "file", "thread": th, "what": f"in no focus: {title}", "agents": who(th, "file")})
         if not fc._titled(th):

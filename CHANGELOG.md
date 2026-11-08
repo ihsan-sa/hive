@@ -4,6 +4,9 @@ Release notes are on the [releases page](https://github.com/ihsan-sa/hive/releas
 
 A release can ship several times a day. A new Hive installs at most one a day, once it has been out for at least 12 hours; **How often to update** in Settings changes that. The latest is at [releases/latest](https://github.com/ihsan-sa/hive/releases/latest).
 
+## Chat: an agent's closing "Done:" line moves to the status bar
+When an agent ends a message with a line like "Done: shipped it" (or "**Done:**"), the line no longer shows in the message, in the side list's preview or under Yours. The conversation's status bar still shows it, and so does a message that is nothing but that line. This also works when the agent names someone on a line after it. "Blocked:" and "Needs you" lines always stay. Under Yours, a wait that names another conversation shows that conversation's title instead of its id. The Chat side list starts with its sections folded on a first visit, and a focus page shows the messages there that are for you under **For you here**.
+
 ## Search by meaning in `kb find` (optional module)
 
 The new `kb-dense` module adds a meaning search to `kb find`: passages whose words differ from the question but whose sense is near are merged into the word-search results. It runs as a small local service (CPU only, under 900 MB, a unix socket, nothing on the network) that you start with `systemctl --user start kb-dense`. Without it, or when it is stopped or slow, `kb find` answers exactly as before; `KB_DENSE=0` turns it off for one search.
