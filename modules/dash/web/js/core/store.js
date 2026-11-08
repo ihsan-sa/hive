@@ -136,6 +136,7 @@ export async function poll() {
     // All read together, then applied in one go: S.live set with a wait before the board is ingested let a page draw "No conversations yet" while they were still on their way.
     const [l, lg, b, a, d] = await Promise.all([jget("/api/live"), jget("/api/log?from=" + S.logOff), jget("/api/board?from=" + S.off), jget("/api/approvals").catch(() => null), jget("/api/feedback-drafts").catch(() => null)]);
     S.stCache.clear(); S.live = l;
+    if (typeof l.starter === "boolean" && S.app.setup && S.app.setup.starter !== l.starter) { S.app.setup.starter = l.starter; emit({ app: true }); }   // the Hive stopped or is back: from the live read, not /api/app's 15 s one
     S.approvals = a === null ? S.approvals || [] : Array.isArray(a) ? a : [];
     if (d && d.length) import("../ui/feedback.js").then(m => m.offerDraft(d[0]));   // an agent's drafted feedback: open the window prefilled
     S.running = new Map(l.agents.filter(a => a.alive).map(a => [a.name, a]));

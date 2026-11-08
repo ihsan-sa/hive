@@ -13,7 +13,7 @@ export const APP_NAV = {
     usage: ["usage", "jobs"],
   },
   names: { now: "Now", agents: "All agents", made: "Files" },   // In the row, where the tab's own name would say the same thing twice.
-  heads: { now: "Agents", usage: "This computer" },        // A group's heading in the phone's More sheet (ui/mobilenav.js; the desktop More lists no groups, their pages are the page-head row), where the tab's own name would mislead: Usage's other pages are about this machine.
+  heads: { now: "Agents", usage: "This computer" },        // A group's heading in the More menu (moreGroups: the desktop "…" and the phone's sheet), where the tab's own name would mislead: Usage's other pages are about this machine.
   noRow: ["comms", "settings", "agent", "focus"],         // Full-height or already has its own side list: these pages show no row in their head. The tab stays lit.
   belongs: { agent: "now", secrets: "settings", focus: "comms", needs: "comms", yours: "comms", inbox: "comms", mail: "comms", made: "comms" }, // Lights a tab without being a page in its row. Needs you is the home's line, a page behind it; a focus page is the home a level down. Chat's pages (Yours, Inbox, Mail, Files) are the foot of its side list, so no row repeats them (R6 review, finding 12).
   more: ["design"],                             // The Work page went (R5): the focus pages carry what it showed, Flow's lanes open its card.
@@ -52,6 +52,24 @@ export function layout(views, nav, on, current) {
 /** The page-head row (kit.js pageNav): layout().row as plain items, in the group's order, the open one marked. label(v) is the view's own name; nav.names wins where it is set. */
 export function rowItems(row, nav, current, label) {
   return (row || []).map(v => ({ id: v.id, label: (nav.names && nav.names[v.id]) || label(v), current: v.id === current }));
+}
+
+/** The grouped More menu (HANDOFF "Top bar"), the same on a desktop "…" and the phone's sheet: [heading, views] pairs.
+ *  Conversations (Chat's own pages), then each shown tab's row less what the bar already has, then the rest: tools (nav.more)
+ *  join the last tab group (This computer), anything else on the bar's side ends under "More", the icons (Settings) last under a rule.
+ *  bar: the ids already on the bar, left out. label(v) names a tab for its heading. */
+export const CHAT_PAGES = ["yours", "inbox", "made", "mail"];
+export function moreGroups(views, nav, on, L, bar, label) {
+  const by = new Map(views.map(v => [v.id, v])), shown = new Set([...L.main, ...L.icons].map(v => v.id)), used = new Set(bar);
+  const pick = ids => ids.map(id => by.get(id)).filter(v => v && on(v) && !used.has(v.id) && used.add(v.id));
+  const out = [];
+  if (shown.has("comms")) out.push(["Conversations", pick(CHAT_PAGES.filter(id => (nav.belongs || {})[id] === "comms"))]);
+  for (const [tab, ids] of Object.entries(nav.groups || {})) if (shown.has(tab)) out.push([groupHead(tab, nav, label(by.get(tab))), pick(ids)]);
+  const tools = pick(L.more.map(v => v.id)), last = out.length > (shown.has("comms") ? 1 : 0) ? out[out.length - 1] : null;
+  if (last) last[1].push(...tools); else out.push(["More", tools]);
+  out.push(["More", pick(L.main.map(v => v.id))]);
+  out.push(["", pick(L.icons.map(v => v.id))]);   // Settings, last, under a rule
+  return out.filter(([, vs]) => vs.length);
 }
 
 /** A group's heading in a menu: nav.heads, else the tab's own label. */

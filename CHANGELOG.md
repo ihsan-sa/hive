@@ -4,6 +4,9 @@ Release notes are on the [releases page](https://github.com/ihsan-sa/hive/releas
 
 A release can ship several times a day. A new Hive installs at most one a day, once it has been out for at least 12 hours; **How often to update** in Settings changes that. The latest is at [releases/latest](https://github.com/ihsan-sa/hive/releases/latest).
 
+## The page notices a stop or restart within 2 seconds
+An open page now sees within about 2 seconds that the part of the Hive that starts agents has stopped or started again. Before, it took up to 15. The "isn't running" line and the "Taking a break" pill come and go on their own, with no reload.
+
 ## Chat: tags on messages
 A message now shows small tags under it, in plain words: the goal its conversation belongs to, the agents it names and the other conversations it names. Each one opens that goal, that agent's conversation or that conversation. Search for `tag:NAME` (or `tag:agent:NAME`) in the chat list or in a conversation to find the messages carrying a tag. The simple view shows no tags. From the command line: `hive post --tag kind:id`, and `hive search tag:NAME`.
 

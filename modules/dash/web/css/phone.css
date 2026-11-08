@@ -65,7 +65,7 @@
   .cm{grid-template-columns:minmax(0,1fr)}
   /* the rail's top stays over home (search, the Show menu, the brought-up box); its list, places and grip don't: phoneList is the list */
   .cm[data-home] .cm-side{display:block;position:static;height:auto;max-height:none;border:0;padding:var(--s3) var(--s4) 0;background:none;overflow:visible}
-  .cm[data-home] .cm-side>:not(.cm-filters),.cm[data-home] .cm-side .cm-newbtn{display:none}
+  .cm[data-home] .cm-side>:not(.cm-filters),.cm[data-home] .cm-side .cm-newbtn,.cm[data-home] .cm-side .cm-places{display:none}   /* places: the More sheet's Conversations */
   .cm[data-home] .cm-convo{display:flex}
   .cm-home{display:flex;flex-direction:column;gap:var(--s5);padding:var(--s4) var(--s4) 0}
   .cm-home>.cm-new,.cm-home>section:first-child{order:99;position:sticky;bottom:0;z-index:6;margin:0 calc(-1 * var(--s4));padding:var(--s3);background:linear-gradient(to bottom,transparent,var(--bg) 14px)}

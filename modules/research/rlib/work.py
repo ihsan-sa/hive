@@ -353,8 +353,13 @@ class Hunt:
             close = bool(sig) and bool(near.search(fold(sig)))
             if not close and hit_terms:
                 reach = 300  # a heading further off is about the site, not this person (a UTEP research-assessment director under a tech-transfer banner)
-                for m in near.finditer(low):
-                    if any(people.term_regex(t).search(low[max(0, m.start() - reach):m.end() + reach]) for t in hit_terms): close = True; break
+                lines = [fold(x) for x in clean.split("\n") if x.strip()]
+                for k, ln in enumerate(lines):
+                    m = near.search(ln)
+                    if not m: continue
+                    # before the name only the line just above counts (a label); a unit heading higher up is not this person's job (Francis, Toledo)
+                    ctx = (lines[k - 1][-reach:] if k else "") + " " + ln[max(0, m.start() - reach):m.end() + reach] + " " + " ".join(lines[k + 1:k + 5])[:reach]  # the next few lines are the person's block; further down is the next unit
+                    if any(people.term_regex(t).search(ctx) for t in hit_terms): close = True; break
             if hit_terms and not sig and not res["official"]: close = False  # only a menu says it, as on a namesake's site
             row = dict(name=per["name"], title=per["title"], organisation=org, official_site="yes" if res["official"] else "no", signal=sig, signal_near_person="yes" if close else "no", source_url=page.get("final_url") or page["url"], via=res["via"], page_date=res["page_date"], read_on=res["as_of"], check_status=res["status"], check_quote=res["quote"], angle=angle, note=res["note"])
             why = self.held_back(res, row, org, bool(hit_terms and not close), text)

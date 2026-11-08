@@ -10,7 +10,7 @@ import { simpleOn, setSimple } from "../core/simple.js";
 import { accountUse, activeUse, fresh7, inUse, runOut, runway, totalUse } from "../core/model.js";
 import { ago, clock, dur, lostText, now, plural, stamp } from "../core/format.js";
 import { href } from "../core/router.js";
-import { layout, rowItems } from "../core/nav.js";
+import { layout, moreGroups, rowItems } from "../core/nav.js";
 import { getTheme, cycleTheme, setTheme, THEMES } from "../core/theme.js";
 import { statusDot, button, icon, scrim, setPageRow } from "./kit.js";
 import { banner } from "./banner.js";
@@ -188,8 +188,12 @@ export function topBar({ views, current, update, nav }) {
     const L = layout(views, nav, on, current);
     row = setup ? null : L.row;
     const inMore = L.more.find(v => v.id === current);
-    const tools = L.more.map(v => h("a", { class: "more-i menu-i", role: "menuitem", href: href(v.id), "data-key": v.id, "aria-current": v.id === current ? "page" : null, title: v.about ? (typeof v.about === "function" ? v.about() : v.about) : null },
-      h("b", null, lab(v)), v.about ? h("span", null, typeof v.about === "function" ? v.about() : v.about) : null));
+    // The grouped More menu, the same groups as the phone's sheet (core/nav.js moreGroups): every page the bar doesn't show, by where it belongs.
+    const about = v => v.about ? (typeof v.about === "function" ? v.about() : v.about) : null;
+    const page = v => h("a", { class: "more-i menu-i", role: "menuitem", href: href(v.id), "data-key": v.id, "aria-current": v.id === current ? "page" : null, title: about(v) },
+      h("b", null, v.id === "agents" && nav.names && nav.names.agents || lab(v)));   // "All agents", as in the Agents row
+    const groups = moreGroups(views, nav, on, L, [...L.main, ...L.icons].map(v => v.id), lab);
+    const tools = groups.flatMap(([title, vs], i) => [title ? moreHead(title) : h("div", { class: "menu-sep", role: "presentation", "data-key": "sep-" + i }), vs.map(page)]);   // a heading draws its own rule (.more-h)
     const help = [
       h("a", { class: "more-i menu-i", role: "menuitem", href: HELP, target: "_blank", rel: "noopener", "data-key": "help" }, h("b", null, "User guide")),
       h("button", { type: "button", class: "more-i menu-i", role: "menuitem", "data-key": "tour", onclick: () => { NAV.open = false; update(); startTour(); } }, h("b", null, "Take the tour")),
@@ -207,7 +211,7 @@ export function topBar({ views, current, update, nav }) {
         h("button", { type: "button", class: "btn", "data-kind": "icon", "aria-label": "More views", title: inMore ? `More views (${lab(inMore)} is open)` : "More views", "aria-expanded": String(NAV.open), "aria-haspopup": "menu", "aria-current": inMore ? "page" : null, onclick: () => { NAV.open = !NAV.open; update(); } },
           icon("more"), inMore ? h("span", { class: "more-dot", "aria-hidden": "true" }) : null),
         NAV.open ? scrim(() => { NAV.open = false; update(); }) : null,
-        NAV.open ? h("div", { class: "more-m menu", role: "menu", "data-side": "bottom-end" }, tools.length && !setup ? moreHead("Views") : null, setup ? null : tools, tools.length ? moreHead("Help") : null, help, look) : null)];
+        NAV.open ? h("div", { class: "more-m menu", role: "menu", "data-side": "bottom-end" }, setup ? null : tools, look, moreHead("Help"), help) : null)];
   }
   setPageRow(row ? rowItems(row, nav, current, lab) : []);   // the row is drawn in the page's head now (kit.js pageNav), not under this bar
   const bits = setup ? () => null : app ? (simple ? simpleBits : appBits) : statusBits;

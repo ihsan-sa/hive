@@ -9,7 +9,7 @@
 import { h, morph } from "../core/dom.js";
 import { S, SYS, can, OUTSIDE, built, post as apiPost, poll, jget } from "../core/store.js";
 import { simpleOn, plainName, hiveName } from "../core/simple.js";
-import { loadNeedsYou, needsN, needsHref, waitsOn } from "../core/needs.js";
+import { loadNeedsYou, needsN, needsHref, waitsOn, waitingOn } from "../core/needs.js";
 import { loadFoci, fociFailed, fociOrder, focusOf, focusById, activeThreads, askedOf, agentsOf, stateOf, pills, threadLine, focusName, MISC, activityOf, shareOf, fractionWords, pct, usd, needsOf, moveFocus, foci } from "../core/foci.js";
 import { newIn } from "./focus.js";
 import { SIDE_THREAD, agentState, agentStatus, btwParent, threadParent, threadChildren, isAgent, isRunning, tierOf, threadTitle, threadState, threadPeople, isSystemThread, SHOW, postKind, threadKinds, closingPosts, displayText, postSource, inUse, fresh7, asksQuestion, fileInfo } from "../core/model.js";
@@ -81,6 +81,8 @@ function conversation(arg) {
 const words = s => s.toLowerCase().split(/\s+/).filter(Boolean);
 /** What a search looks through in a post: its text, author and attachment names. */
 const hay = p => (p.lc ??= [p.text, p.from, ...(p.files || []).map(f => f.name)].join(" ").toLowerCase());
+/** A word of a search found in a post: tag:x matches its tags (tag:focus:site that tag, tag:site that id under any kind, as the board search command does); any other word its hay. */
+const hit = (p, w) => (w.startsWith("tag:") && w.length > 4 ? (p.tags || []).some(t => (w.includes(":", 4) ? t.toLowerCase() === w.slice(4) : t.toLowerCase().split(":").slice(1).join(":") === w.slice(4))) : hay(p).includes(w));
 
 // What to show: any of For you, Updates and Agent comms, as a mask of SHOW bits. Kept in this browser. Searching ignores it, so a hidden message can still be found.
 const SHOW_KEY = "hive.comms.kinds", OLD_KEY = "hive.comms.show", OLD = { you: SHOW.you, updates: SHOW.you | SHOW.updates, all: SHOW.ALL };
@@ -107,7 +109,7 @@ function matcher(c, mask, ended) {
     if (!(postKind(p) & mask) && !(last && last.has(p.id)) && c.thread !== SIDE_THREAD) return false;   // the sidebar agent's posts are in no list, but its own thread opens from Agents
     if (c.agent && p.from !== c.agent && !p.men.includes(c.agent)) return false;
     if (c.pair && !((p.from === c.pair[0] && p.men.includes(c.pair[1])) || (p.from === c.pair[1] && p.men.includes(c.pair[0])))) return false;
-    if (q.length && !q.every(w => hay(p).includes(w) || (!c.thread && (p.th + " " + threadTitle(p.th)).toLowerCase().includes(w)))) return false;
+    if (q.length && !q.every(w => hit(p, w) || (!c.thread && (p.th + " " + threadTitle(p.th)).toLowerCase().includes(w)))) return false;
     return true;
   };
 }
@@ -241,6 +243,8 @@ function sync(c, ctx) {
         for (const e of es) { if (e.isIntersecting) { L.near.add(e.target); refreshHead(e.target); } else L.near.delete(e.target); }
       }, { root: box, rootMargin: "800px 0px" });
     }
+    const fsig = S.foci ? (S.foci.foci || []).map(f => f.id + ":" + f.name).join() : "";   // a focus chip names its focus: redraw once the foci arrive
+    if (fsig !== L.fociSig) { if (L.fociSig !== undefined && L.all && L.all.some(p => p.tags && p.tags.length)) { L.rebuild = true; L.keep = true; } L.fociSig = fsig; }
     if (L.rebuild) {
       const fromEnd = L.keep ? box.scrollHeight - box.scrollTop : isNew && L.saved && L.saved.key === L.key ? L.saved.fromEnd : null;
       paint(box, ctx);
@@ -321,7 +325,7 @@ function searchRows(c, ctx, ws) {
     if (!theirs(d) || d.name === SIDE_THREAD) continue;
     const lc = (d.name + " " + threadTitle(d.name)).toLowerCase(), rest = ws.filter(w => !lc.includes(w));
     if (!rest.length) { total += d.posts.length; found.push({ d, hits: d.posts, rest }); continue; }
-    const hits = d.posts.filter(p => rest.every(w => hay(p).includes(w)));
+    const hits = d.posts.filter(p => rest.every(w => hit(p, w)));
     if (hits.length) { total += hits.length; found.push({ d, hits, rest }); }
   }
   found.sort((a, b) => b.hits.at(-1).t - a.hits.at(-1).t);
@@ -540,7 +544,7 @@ function sections(rs, ctx, opts) {
 }
 function syncThreads(c, ctx) {
   const tl = document.querySelector("#main .cm-tl"); if (!tl) return;
-  if (app() && !simpleOn()) loadFoci();   // the foci (core/foci.js); a store emit when they change
+  if (!simpleOn()) loadFoci();   // the foci (core/foci.js); a store emit when they change
   const sig = [S.ver, C.view, C.hideFaded, S.foci && S.foci.at, S.foci && (S.foci.foci || []).map(f => f.id).join(), C.scope, C.arch, C.imp, tmetaSig(), [...FOLD].join(), [...KIDS].join(), C.tq, AI.st + AI.res.length, AI.tag, S.shown && S.shown.length, showMask(), c.arg, Math.floor(now() / 3e4), S.runSig, marksSig().length].join("|");
   if (tl === L.tl && sig === L.tlSig) return;
   const fresh = tl !== L.tl || c.arg !== L.tlConv;
@@ -655,10 +659,12 @@ function titleMenu(c, n, d, off, ctx) {
   const link = (label, ic, to) => button(label, null, { href: to, size: "s", kind: "quiet", icon: ic });
   const t = th && tier(tierOf(th)), im = full && important(th), pin = full && pinned(th), arch = full && archived(th), fd = full && faded(th);
   const part = (...xs) => xs.filter(Boolean);
+  // R7b S6: the hand-off's items first (Rename, Move to a focus, Pin, Star, Files here, Yours, Copy link, Stop); ours that it lacks go under a divider.
   const own = full ? part(
-    mine ? act(im ? "Not important" : "Mark important", "star", () => tryMeta(th, { important: !im }, ctx), im ? "Take the important mark off" : "Keep it above the others in the list") : null,
-    mine ? act(pin ? "Unpin" : "Pin to the top", "pin", () => tryMeta(th, { pin: !pin }, ctx), pin ? "Back among the others" : "Keep it at the top of the list, whatever is on") : null,
     mine ? act("Rename", "edit", () => renameDialog(th), "Give it a name of your own. Only the dash shows it.") : null,
+    mine ? act(pin ? "Unpin" : "Pin to the top", "pin", () => tryMeta(th, { pin: !pin }, ctx), pin ? "Back among the others" : "Keep it at the top of the list, whatever is on") : null,
+    mine ? act(im ? "Not important" : "Mark important", "star", () => tryMeta(th, { important: !im }, ctx), im ? "Take the important mark off" : "Keep it above the others in the list") : null) : [];
+  const more = full ? part(
     mine ? act(arch ? "Unarchive" : "Archive", "archive", () => { tryMeta(th, { archived: !arch }, ctx); if (!arch) go("comms"); }, arch ? "Back in the list" : "Out of the list until something new is for you") : null,
     mine ? act(fd ? "Needed again" : "Not needed", "check", () => tryMeta(th, { faded: !fd }, ctx), fd ? fadeWhy(th) : "Grey it in the list: still there to open and write in, and back by itself when something new is for you") : null) : [];
   const prio = th && simpleOn() ? null : th && can("tier") ? button([h("span", { class: "ref-sw", "data-tone": t.tone }), "Priority", h("small", null, t.label)], () => { C.menu = null; askTier(th); }, { size: "s", kind: "quiet", title: "Where this sits in the hive's priority list" })
@@ -668,30 +674,32 @@ function titleMenu(c, n, d, off, ctx) {
     h("select", { class: "cm-focus-sel", "aria-label": "The focus this conversation is filed under", title: "Which focus this conversation belongs to; No focus leaves it in Misc",
       onchange: e => { const v = e.target.value; C.menu = null; apiPost("/api/focus", v ? { thread: th, focus: v } : { thread: th, off: true }).then(() => loadFoci(true), e2 => { C.err = "Couldn't file it: " + (e2 && e2.message || "the server didn't answer") + "."; }).then(() => ctx.update()); } },
       h("option", { value: "", selected: !cur ? "" : null }, "No focus"), fs.map(f => h("option", { value: f.id, selected: f.id === cur ? "" : null }, focusName(f))))) : null;
-  const where = part(
+  const lead = part(...own,
     focusRow,
+    full ? titleExtras(th, { files: () => import("../ui/preview.js").then(m => m.openFiles()), close: () => { C.menu = null; ctx.update(); } }) : null);
+  const where = part(...more,
+    prio,
     off > 0 && !simpleOn() ? act(`Show ${off} hidden`, "filter", () => setShow(SHOW.ALL, ctx), "Turn on For you, Updates and Agent comms") : null,
-    full ? titleExtras(th, { files: () => import("../ui/preview.js").then(m => m.openFiles()), close: () => { C.menu = null; ctx.update(); } }) : null,
     link("All messages", "chat", href("comms", "~all")),
-    full ? link("On the timeline", "clock", href("timeline")) : null,
-    prio);
+    full ? link("On the timeline", "clock", href("timeline")) : null);
   const out = full ? part(
     act("Share this result", "board", () => shareDialog(th), "Save the conversation as one page you can post: the ask, the agents at work, the result. You see it first and can remove anything."),
     act("Export as Markdown", "copy", () => downloadMarkdown(th), "Download the conversation as a .md file, with simple formatting"),
     act("Export as PDF", "board", () => printScript(th), "Lay it out like a script and save it as a PDF from the print dialog")) : [];
-  return h("div", { class: "cm-menu menu", role: "menu", "data-key": "title", "data-side": "bottom-end" },
+  const tb = document.querySelector(".cm-head .cm-title-b");   // R7b S6: under the title it opens from, not at the far right
+  return h("div", { class: "cm-menu menu", role: "menu", "data-key": "title", "data-side": "bottom-start", style: tb ? `--tx:${tb.offsetLeft}px` : null },
     h("p", { class: "meta cm-cost" }, (C.q.trim() ? plural(n, "match", "matches") : plural(n, app() ? "message" : "post")) + (d ? ` \u00b7 since ${stamp(d.first)}` : "") + (full && threadCost(th) != null ? ` \u00b7 ${money(threadCost(th))}` : "")),
-    own, own.length ? sep() : null, where, out.length ? sep() : null, out,
+    lead, lead.length ? sep() : null, where, out.length ? sep() : null, out,
     full && th !== threadTitle(th) ? h("p", { class: "meta cm-menu-id" }, "Its id on the board: ", h("code", { title: "Click to select it" }, th), copyButton(th)) : null);   // copy it (the person, 11041333ab1a)
 }
-/** The rail's links to the pages Chat brings together: each only where this connection may open it, with a count where there is one. Chat shows no row, so these are the way to them. */
+/** The rail's rows to the pages Chat brings together, under New conversation (the hand-off's Rail, `button.cm-nav`; links here, since each opens a page): each only where this connection may open it, with a count where there is one. Chat shows no row, so these are the way to them. */
 function places() {
-  const link = (label, to, n, tip) => h("a", { class: "cm-place", href: to, title: tip, "aria-current": L.place && to === href(L.place) ? "page" : null }, label, n ? h("b", { class: "cm-place-n", "aria-label": n + " new" }, String(n)) : null);
-  return h("nav", { class: "cm-places", "aria-label": "Also in Chat", "data-key": "places" },
-    link("Yours", href("yours"), 0, "Every exchange you had, newest first"),
-    can("read") ? link("Inbox", href("inbox"), IB.unread || 0, "Every message agents sent you") : null,
-    can("files") ? link("Mail", href("mail"), MN.n, MN.n ? "Mail since you last opened it" : "Your mail") : null,
-    link("Files", href("made"), 0, "Files and links from your conversations"));
+  const link = (label, ic, to, n, tip) => h("a", { class: "cm-place cm-nav", href: to, title: tip, "data-key": ic, "aria-current": L.place && to === href(L.place) ? "page" : null }, icon(ic), h("span", { class: "cm-place-l" }, label), n ? h("b", { class: "cm-place-n", "aria-label": n + " new" }, String(n)) : null);
+  return h("div", { class: "cm-places", role: "group", "aria-label": "Also in Chat", "data-key": "places" },
+    link("Yours", "yours", href("yours"), 0, "Every exchange you had, newest first"),
+    can("read") ? link("Inbox", "inbox", href("inbox"), IB.unread || 0, "Every message agents sent you") : null,
+    can("files") ? link("Mail", "mail", href("mail"), MN.n, MN.n ? "Mail since you last opened it" : "Your mail") : null,
+    link("Files", "file", href("made"), 0, "Files and links from your conversations"));
 }
 // One button over the list holds every choice about it (the person, 11071400de5b: too many controls everywhere; the hand-off's §4): what shows, how it is grouped,
 // whether the not-needed ones are listed, fold and reach. Above the list there are New conversation, search and this. The button carries a dot when a choice is not the default.
@@ -840,6 +848,23 @@ function focusCard(f, ctx) {
       mv ? h("span", { class: "fc-mvs", role: "group", "aria-label": "Order of the foci" }, move(-1, "chevron-up", "up"), move(1, "chevron-down", "down")) : null,
       can("post") ? button("New", () => newIn(id), { kind: "quiet", size: "s", icon: "plus", title: "New conversation in " + focusName(f) }) : null));
 }
+/** Needs you on the home (the hand-off's Home, R7b S5): each thing that waits, from the same list as the count above it and the Chat badge,
+ *  with the ask in full, its conversation, who asked and when, and Answer to the place to answer it. The rest behind All N. */
+const HOME_WAITS = 5;
+function homeNeeds(ws) {
+  if (!ws.length) return null;
+  const row = w => {
+    const d = S.threads.get(w.th), p = w.post && d ? d.posts.find(x => x.id === w.post) : null, who = (w.st && w.st.who) || (p && p.from) || null;
+    const to = w.src === "summary" && w.focus ? href("focus", w.focus) : threadHref(w.th);
+    return h("li", { class: "cm-need", "data-key": w.key || w.th + ":" + (w.post || w.src) },
+      h("p", { class: "cm-need-q" }, simpleOn() ? plainPills(w.text) : pills(w.text)),
+      h("p", { class: "cm-need-m meta" }, h("a", { href: to }, w.src === "summary" && w.focus && !d ? focusName(focusById(w.focus) || { id: w.focus }) : threadTitle(w.th)),
+        who ? [" \u00b7 ", plainName(who)] : null, w.t ? [" \u00b7 ", ago(w.t)] : null),
+      h("a", { class: "btn cm-need-a", "data-size": "s", href: to }, "Answer"));
+  };
+  return h("ul", { class: "cm-needs", "data-key": "needs", "aria-label": "Needs you" }, ws.slice(0, HOME_WAITS).map(row),
+    ws.length > HOME_WAITS ? h("li", { class: "cm-need-all" }, h("a", { href: needsHref() }, `All ${ws.length}`)) : null);
+}
 function fociGrid(ctx) {
   if (S.foci === undefined) return h("p", { class: "meta cm-foci-msg" }, fociFailed() ? "Couldn't read the foci. It keeps trying." : "Reading\u2026");
   const fs = fociOrder();
@@ -863,6 +888,7 @@ function homePane(ctx) {
       local.some(it => it.state !== "failed") ? closeLine() : null,
       local.length ? h("div", { class: "cm-out", "data-key": "out" }, local.map(it => localMessage(it, outActions))) : null) : null,
     line ? h("p", { class: "cm-hline", "data-key": "line", "data-needs": n ? "" : null }, line) : null,
+    n ? homeNeeds(waitingOn()) : null,
     digest ? fociGrid(ctx) : null,
     phoneList());
 }
@@ -947,6 +973,7 @@ function frame(ctx, c, pane) {
       h("nav", { class: "cm-side", "aria-label": app() ? "Conversations" : "Threads" }, grip(),
         h("div", { class: "cm-filters" },
           post ? button("New conversation", null, { href: href("comms", "~new"), kind: "quiet", icon: "new", cls: "cm-newbtn" }) : null,
+          app() && !simpleOn() ? places() : null,
           h("div", { class: "cm-srow" },
             h("div", { class: "cm-search" }, icon("search"),
               input({ type: "search", placeholder: app() ? "Search, or @ to ask" : "Search threads", "aria-label": "Search all conversations by name or content. Start with @ to ask an agent, which answers here and brings up the conversations that help", value: C.tq, oninput: e => { C.tq = e.target.value; ctx.update(); }, onkeydown: e => { if (e.key === "Enter" && aiQ()) { e.preventDefault(); aiAsk(ctx); return; } if (e.key === "Escape") { e.stopPropagation(); C.tq = ""; e.target.value = ""; e.target.blur(); ctx.update(); } } })),
@@ -954,8 +981,7 @@ function frame(ctx, c, pane) {
           simpleOn() || C.menu !== "show" ? null : showMenu(ctx),
           app() ? brought() : null,
           C.err ? h("p", { class: "fmsg", "data-tone": "bad", role: "alert" }, C.err) : null),
-        h("div", { class: "cm-tl", "data-own": "", "data-sig": "own", tabindex: "-1" }),
-        app() && !simpleOn() ? places() : null),
+        h("div", { class: "cm-tl", "data-own": "", "data-sig": "own", tabindex: "-1" })),
       h("section", { class: "cm-convo", "aria-label": "Conversation", ...(post && c.thread ? dropZone(c.thread) : {}) },
         convo,
         post && c.thread ? h("div", { class: "cm-drop", "aria-hidden": "true", "data-key": "drop" }, "Drop files to attach them") : null));
