@@ -307,6 +307,19 @@ class Hunt:
             except ValueError: pass
         return ""
 
+    def left_elsewhere(self, name, org):
+        """A row that stands on a profile aggregator (secondary) can be years out of date, and its page can't say so. One search for the person with retire/steps down/named; if a result's title or snippet says they left, hold the row. Returns why, or ''."""
+        hits, _ = engines.search(f'"{name}" "{org}" retire OR "steps down" OR named', self.sources, n=6, case=self.case)
+        for h in hits[:4]:
+            t = f"{h['title']} . {h['snippet']}"
+            if people.name_regex(name).search(fold(t)) is None: continue  # a result that doesn't print the name says nothing about this person
+            said = people.departed(t, name)
+            if not said:  # headlines name the event: "retirement of X", "X announces retirement"
+                m = re.search(r"\b(?:retirement|resignation|departure)\s+of\s+(?:\w+\.?\s+){0,2}?" + people.name_regex(name).pattern + "|" + people.name_regex(name).pattern + r"\W+(?:\w+\s+){0,3}?(?:announce\w*|plans?|submit\w*)\s+(?:\w+\s+){0,2}?(?:retirement|resignation|departure)\b", fold(t))
+                if m: said = " ".join(m.group(0).split())
+            if said: return f"a search result says they left: {said} ({h['url']})"
+        return ""
+
     def weigh(self, org, page, angle):
         """Every person on this page who fits becomes a row, a near miss, or nothing."""
         got = 0
@@ -336,6 +349,7 @@ class Hunt:
             if hit_terms and not sig and not res["official"]: close = False  # only a menu says it, as on a namesake's site
             row = dict(name=per["name"], title=per["title"], organisation=org, official_site="yes" if res["official"] else "no", signal=sig, signal_near_person="yes" if close else "no", source_url=page.get("final_url") or page["url"], via=res["via"], page_date=res["page_date"], read_on=res["as_of"], check_status=res["status"], check_quote=res["quote"], angle=angle, note=res["note"])
             why = self.held_back(res, row, org, bool(hit_terms and not close), text)
+            if not why and res["status"] == "secondary": why = self.left_elsewhere(per["name"], org)
             if why or len(self.leads) >= self.target or self.org_count(org) >= self.per_org:
                 if why: row["note"] = "; ".join(x for x in (f"not listed: {why}", row["note"]) if x)
                 self.near.setdefault(k, row)

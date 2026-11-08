@@ -6,7 +6,7 @@ Bigger jobs go better, and use less of your limits, if you agree the plan first:
 
 > I want a small site that tracks prices of three products and emails me when one drops. Before you build anything, tell me your plan, what you need from me, roughly how much of my limits it'd use, and what could go wrong. Then wait for my answer.
 
-Read the plan, push back and only then say go.
+Read the plan, push back and only then say go. Pick a **Focus** in the box when you start it, so the project's conversations sit on that focus's card in the grid on the Chat home and together under **By focus** in the list.
 
 ## Let it split the work
 

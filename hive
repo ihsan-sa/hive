@@ -153,24 +153,97 @@ def remind_asks(pid, thread):
         print(f"If this post delivers one: hive asks done ID --evidence {pid}; next time hive post --done ID; or hive asks hold|person|drop ID --why ...", flush=True)
     except Exception: pass
 
+NOBODY = {"warden", "all", "here", "person", "phone"}
+
+def places(words, me=""):
+    """Which of these words name a focus or a thread (the person, 110717432468: "mention a focus as a whole", "mention a thread"):
+    {word: {"kind": "focus", "id", "thread", "to"} | {"kind": "thread", "thread", "to"}}. `to` is the focus's keeper or the agent
+    last in the thread, None when nobody. A focus wins over a thread of the same name. Agents' names never get here."""
+    words = [w for w in words if w and w not in NOBODY and w not in FRESH and not HASH_NAME.fullmatch(w)]
+    if not words: return {}
+    try:
+        import focus
+        ps = focus.board_posts(); st = focus.state(posts=ps)
+    except Exception: return {}
+    threads = {p.get("thread") for p in ps}
+    out = {}
+    for w in words:
+        f = next((f for f in st["foci"] if f["id"] == w), None)
+        if f: out[w] = {"kind": "focus", "id": f["id"], "thread": f.get("thread") or f["id"], "to": focus.keeper(f, ps)}
+        elif w in threads: out[w] = {"kind": "thread", "thread": w, "to": focus.last_agent(ps, w)}
+    return out
+
+def relay_post(src, thread, to, me, why=None, model=None):
+    """A copy of post `src` in `thread` for `to`: "Passed on from X in thread Y" over the quoted text, linked back by relay_of so the
+    dash shows "passed on to" under the original. From the original's author (the keeper reads the person's words as the person's).
+    One copy per post and thread; none into the post's own thread. Returns the copy's id, or None."""
+    if src.get("thread") == thread: return None
+    for q in posts():
+        if q.get("relay_of") == src.get("id") and q.get("thread") == thread: return q.get("id")
+    pid = dt.datetime.now().strftime("%m%d%H%M") + secrets.token_hex(2)
+    head = f"Passed on from {src.get('from')} in thread {src.get('thread')} ({src.get('id')})" + (f": {why.strip()}" if why and why.strip() else "")
+    q = {"id": pid, "at": now(), "from": src.get("from"), "to": ["@" + to], "thread": thread,
+         "text": head + ":\n\n" + "\n".join("> " + ln for ln in str(src.get("text", "")).splitlines()), "relay_of": src.get("id"), "relay_by": me}
+    if model or src.get("model"): q["model"] = model or src.get("model")
+    if src.get("files"): q["files"] = src["files"]
+    with BOARD.open("a") as f:
+        fcntl.flock(f, fcntl.LOCK_EX); f.write(json.dumps(q) + "\n")
+    return pid
+
+def cmd_relay(a):
+    """hive relay POST TARGET: pass a post on to a focus (its keeper, in the focus's thread), an agent (in its thread) or a thread."""
+    src = next((p for p in posts() if p.get("id") == a.post), None)
+    if not src: sys.exit(f"hive relay: no post {a.post}")
+    me = os.environ.get("HIVE_NAME", "anon").lower(); t = a.target.lower().lstrip("@#")
+    try: c = read_cfg()
+    except (OSError, ValueError): c = {}
+    if HASH_NAME.fullmatch(t) or t in agents(c) - {*FRESH, *NOBODY}:
+        thread = None
+        try: thread = json.loads((RUN / f"{t}.json").read_text()).get("thread")  # where it is running, else where it last spoke
+        except (OSError, ValueError): pass
+        if not thread:
+            for p in posts():
+                if str(p.get("from", "")).lower() == t: thread = p.get("thread")
+        if not thread: sys.exit(f"hive relay: {t} has no thread to pass it to")
+        to = t
+    elif (v := places([t], me).get(t)): thread, to = v["thread"], v["to"] or "new"
+    else: sys.exit(f"hive relay: {t}: no such focus, agent or thread (hive focus list; hive who)")
+    if to == "new" and c.get("spawn_model") and not settings_model() and not a.model and HASH_NAME.fullmatch(me):
+        sys.exit(f"hive relay: nobody keeps {t}, so the copy starts a new agent there: add --model sonnet (or opus, haiku, fable).")
+    pid = relay_post(src, thread, to, me, a.why, a.model)
+    if not pid: sys.exit(f"hive relay: {a.post} is already in thread {thread}")
+    print(pid, flush=True)
+    print(f"hive relay: copied to thread {thread} for @{to}" + (" (nobody keeps it: a new agent)" if to == "new" else ""), file=sys.stderr)
+
 def cmd_post(a):
     text = " ".join(a.text) if a.text else sys.stdin.read()
     if os.environ.get("HIVE_BROKER"):
-        forward({"verb": "post", "thread": a.thread, "to": a.to, "model": a.model, "reply_to": a.reply_to, "done": a.done or [], "text": text}, a.file or [])
+        forward({"verb": "post", "thread": a.thread, "to": a.to, "model": a.model, "reply_to": a.reply_to, "done": a.done or [], "interrupt": bool(getattr(a, "interrupt", False)), "text": text}, a.file or [])
     try: c = read_cfg()
     except (OSError, ValueError): c = {}
     ext = set(c.get("external", []))
     said = list(dict.fromkeys(m.lower() for m in MENTION.findall(CODE.sub(" ", text))))
     asked = names(a.to)
-    if (bad := [n for n in asked if n not in ext and n not in {*FRESH, "warden"} and not HASH_NAME.fullmatch(n) and n not in agents(c)]):
-        sys.exit(f"hive post: {', '.join(bad)}: an agent's name is a letter and 4+ hex digits (a9aba), never a word. "
-                 "Use new (or claude, codex, free) for a fresh agent; --to takes a name that has run or a code like that.")
+    # A focus id or a thread name is a name too (the person, 110717432468): the focus reaches its keeper and the post is marked
+    # with the focus; a thread gets a copy of the post (relay_post), for the agent last in it. Looked up only for words that are
+    # neither agents nor the fixed names, so the usual post reads nothing extra.
     known = agents(c) if any(n not in asked and n not in ext for n in said) else set()
-    ignored = [n for n in said if n not in asked and n not in ext and n not in known]
-    to = asked + [n for n in said if n not in ignored]
+    where = places([n for n in dict.fromkeys(asked + said) if n not in ext and n not in known and n not in FRESH and n != "warden" and not HASH_NAME.fullmatch(n)])
+    if (bad := [n for n in asked if n not in ext and n not in {*FRESH, "warden"} and not HASH_NAME.fullmatch(n) and n not in known and n not in where]):
+        sys.exit(f"hive post: {', '.join(bad)}: an agent's name is a letter and 4+ hex digits (a9aba), never a word. "
+                 "Use new (or claude, codex, free) for a fresh agent; --to takes a name that has run or a code like that, a focus id or a thread.")
+    ignored = [n for n in said if n not in asked and n not in ext and n not in known and n not in where]
+    to, copies, foci_hit = [], [], []
+    for n in asked + [n for n in said if n not in ignored]:
+        if n not in where: to.append(n); continue
+        v = where[n]
+        if v["kind"] == "focus": foci_hit.append(v["id"])
+        if v["kind"] == "focus" and v["to"]: to.append(v["to"])
+        elif a.thread == v["thread"] and v["kind"] == "focus": to.append("new")   # already in the focus's thread, nobody keeping it
+        elif a.thread != v["thread"]: copies.append((v["thread"], v["to"] or "new"))
     # An agent starting an agent chooses its model; there's no default for that (the person, 2026-11-04). Scripts land on spawn_model, watchdog and
     # release-train included: they set HIVE_NAME too but read no refusal, so only an agent's own name is refused. A model chosen in Settings stands for that Hive's agents.
-    if c.get("spawn_model") and not settings_model() and HASH_NAME.fullmatch(os.environ.get("HIVE_NAME", "")) and not a.as_ and not a.model and (w := [n for n in to if n in ("new", "claude")]):
+    if c.get("spawn_model") and not settings_model() and HASH_NAME.fullmatch(os.environ.get("HIVE_NAME", "")) and not a.as_ and not a.model and (w := [n for n in to + [t for _, t in copies] if n in ("new", "claude")]):
         sys.exit(f"hive post: nothing posted. {' and '.join(w)} starts a new agent, so choose its model: add --model sonnet (or opus, haiku, fable, codex:gpt-6-astra), "
                  "or use the words opus, sonnet, haiku, fable or astra instead. If you only meant to write about it, put it in backticks.")
     # A post naming the person pings their phone: orientation asks for it short, plain, with one `For you:` line. Checked before
@@ -186,11 +259,15 @@ def cmd_post(a):
     if a.reply_to and not any(p.get("id") == a.reply_to for p in posts()): sys.exit(f"hive post: --reply-to {a.reply_to}: no such post")
     pid = dt.datetime.now().strftime("%m%d%H%M") + secrets.token_hex(2)
     files = attach([attachable(f) for f in a.file or []], pid)
-    if files and not text.strip(): text = "Attached: " + ", ".join(f["name"] for f in files)
     p = {"id": pid, "at": now(), "from": a.as_ or os.environ.get("HIVE_NAME", "anon"),
          "to": ["@" + n for n in dict.fromkeys(to)], "thread": a.thread or pid, "text": text}
     if a.model: p["model"] = a.model
     if a.routed: p["routed"] = True
+    # The person's "Interrupt" (the dash's button beside Send): the starter ends the agent's current step when it cleanly can (starter.interrupt_step),
+    # and the hook hands it over marked as one. Without it a post waits for the step to end, as always.
+    if getattr(a, "interrupt", False): p["interrupt"] = True
+    if foci_hit: p["foci"] = list(dict.fromkeys(foci_hit))
+    if copies: p["copies"] = list(dict.fromkeys(t for t, _ in copies))
     if a.reply_to: p["reply_to"] = a.reply_to
     # A thread an agent opens while working in another one (its helper's brief, a side thread) remembers where it came from,
     # so the dash can fold it under that conversation (110601450d55). The starter sets HIVE_THREAD to the thread that woke the agent.
@@ -209,12 +286,18 @@ def cmd_post(a):
     with BOARD.open("a") as f:
         fcntl.flock(f, fcntl.LOCK_EX); f.write(json.dumps(p) + "\n")
     print(pid, flush=True)
+    me = (a.as_ or os.environ.get("HIVE_NAME", "")).lower()
+    for t, who in dict(copies).items():
+        if relay_post(p, t, who, me, model=a.model): print(f"hive post: copied to thread {t} for @{who}" + (" (nobody is there: a new agent)" if who == "new" else ""), file=sys.stderr)
+    for n, v in where.items():
+        if v["kind"] == "focus": print(f"hive post: for focus {n}" + (f", kept by {v['to']}" if v["to"] else ", which nobody keeps yet"), file=sys.stderr)
     # Agents only, and only a warning: the post is on the board already (hive-meta P3).
     if HASH_NAME.fullmatch(os.environ.get("HIVE_NAME", "")) and not a.as_ and foryou and (w := foryou.warning(text)): print(w, file=sys.stderr, flush=True)
     for k in getattr(a, "done", None) or []:  # the result post closes the ask it delivers: no separate `hive asks done` turn
         subprocess.run([sys.executable, "-I", str(CORE / "asks.py"), "done", k, "--evidence", pid])
+    if getattr(a, "done", None):  # a closed ask's durable part goes in the kb, linked back to this post, so the focus page can list it
+        print(f"Filed? Put what should outlast this thread in the kb, linked back: kb file \"TITLE\" --from {pid} <<'X' ... X", flush=True)
     if not a.as_: remind_asks(pid, p["thread"])
-    me = (a.as_ or os.environ.get("HIVE_NAME", "")).lower()
     receipt(list(dict.fromkeys(to)), ignored, ext, me)
 
 def cmd_model(a):
@@ -243,7 +326,7 @@ def cmd_read(a):
            and (not a.from_ or p.get("from") == a.from_) and (not a.to or a.to.lstrip("@").lower() in names(p.get("to")))]
     if a.n and len(sel) > a.n: print(f"({len(sel) - a.n} older posts not shown; -n 0 for all)", file=sys.stderr)
     for p in sel[-a.n:]:
-        if a.short: print(f"[{p.get('id')}] {p.get('at', '')[5:16]} {p.get('from')}: " + " ".join(str(p.get("text", "")).split())[:100])
+        if a.short: print(f"[{p.get('id')}] {p.get('at', '')[5:16]} {p.get('from')}: " + (" ".join(str(p.get("text", "")).split())[:100] or "(files: " + ", ".join(str(f.get("name")) for f in p.get("files") or []) + ")"))
         else: show(p)
 
 def cmd_verify(a):
@@ -992,14 +1075,18 @@ def cmd_focus(a):
 
 ap = argparse.ArgumentParser(prog="hive", description="With no command: open the door, a Claude Code session that talks to the hive for you. Commands: the board itself.")
 sp = ap.add_subparsers(required=True)
-p = sp.add_parser("post", help="hive post [--to @a,@b] [--thread T] [--model sonnet] [--file PATH ...] text   (@mentions of known agents in text wake them, --to starts a name that has run or a new code like a1b2c; --model picks the model of any run this post starts, and the agent stays on it when woken later)")
+p = sp.add_parser("post", help="hive post [--to @a,@b] [--thread T] [--model sonnet] [--file PATH ...] text   (@mentions of known agents in text wake them, --to starts a name that has run or a new code like a1b2c; a focus id reaches the focus's keeper and marks the post with the focus, a thread name sends a copy into that thread; --model picks the model of any run this post starts, and the agent stays on it when woken later)")
 p.add_argument("--to"); p.add_argument("--thread"); p.add_argument("--as", dest="as_", help="from name (default $HIVE_NAME)")
 p.add_argument("--routed", action="store_true", help="for the doors: the name was picked by routing, not typed by the person")
 p.add_argument("--model", type=post_model, help="model for any run this post starts: opus, sonnet, haiku, fable, or provider:model for a provider in config.json (openrouter:openai/gpt-5); default: the login's")
 p.add_argument("--reply-to", dest="reply_to", metavar="ID", help="the post this answers; shown on the board, and a door puts the answer under that message")
 p.add_argument("--file", action="append", help="attach a file (repeatable): copied to ~/files/<post id>/, shown in hive read, Slack and the dashboard")
 p.add_argument("--done", action="append", metavar="ASK", help="mark this ask (k0123) done with this post as its evidence (repeatable)")
+p.add_argument("--interrupt", action="store_true", help="for the person: a running agent named gets this now; a long command it is waiting on is stopped when that can be done cleanly")
 p.add_argument("text", nargs="*"); p.set_defaults(f=cmd_post)
+p = sp.add_parser("relay", help="hive relay POST TARGET [--why \"...\"] [--model sonnet]: pass a post on to where it belongs: a focus id (a copy in the focus's thread, for its keeper), an agent (in its thread), or a thread (for the agent last in it, else a new agent). The copy quotes the post and links back, so the dash shows \"passed on to\" under the original. One copy per post and place. Use it when a post you got belongs to another focus too, and say in your reply where it went")
+p.add_argument("post"); p.add_argument("target"); p.add_argument("--why", help="one line on why it belongs there, shown over the quote")
+p.add_argument("--model", type=post_model, help="model for the agent the copy starts when nobody keeps the target"); p.set_defaults(f=cmd_relay)
 p = sp.add_parser("show", help="hive show THREAD --why \"...\" [--for 10m]: bring a thread up: the dashboard shows it in a pinned \"Brought up for you\" strip at the top for 10 min (or --for), with who raised it and why, so the person can click straight in. Use it when the person asks you to bring something up")
 p.add_argument("thread"); p.add_argument("--why", default=""); p.add_argument("--for", dest="for_", metavar="10m", help="how long it stays: 5m, 1h (default 10m, up to 24h)"); p.set_defaults(f=cmd_bringup)
 p = sp.add_parser("important", help="hive important THREAD --why \"...\" [--off]: mark a thread important for the person (something they would want to know): the dashboard side list shows it with an important icon, under an Important filter. --off takes your mark off when it is settled")
@@ -1065,7 +1152,7 @@ sp.add_parser("continue", help="hive continue list [--json] | stats [--baseline]
 sp.add_parser("goals", help="hive goals [--idle] [--json]: every goal (the person's focuses in kb/priorities.md, each project's goals.md, the asks) with its thread, last agent post, who is running and open asks; idle goals named (core/goals.py)")
 sp.add_parser("asks", help="hive asks list | check | own ID | done ID --evidence POST | hold|person|drop ID --why | add --post ID --ask ... | directions | extract: the register of what the person asked for, so nothing is dropped (core/asks.py)")
 if sys.argv[1:2] == ["asks"]: cmd_asks(argparse.Namespace(rest=sys.argv[2:]))
-sp.add_parser("focus", help="hive focus list | tag THREAD FOCUS [--off] | new ID \"name\" | link A B | set FOCUS <<'X' | show FOCUS | aim FOCUS \"text\" | check add|list|done|untick | lint: foci, the person's view of the work. A thread carries a focus label; each focus has a hand-written summary (## Now, ## Lately bullets, plain words, no ids or paths) that the home shows as a card. The agent posting a result in a focus's thread updates its summary in the same run (core/focus.py)")
+sp.add_parser("focus", help="hive focus list | tag THREAD FOCUS [--off] | new ID \"name\" | link A B | set FOCUS <<'X' | show FOCUS | keeper FOCUS | aim FOCUS \"text\" | check add|list|done|untick | lint: foci, the person's view of the work. A thread carries a focus label; each focus has a hand-written summary (## Now, ## Lately bullets, plain words, no ids or paths) that the home shows as a card. The agent posting a result in a focus's thread updates its summary in the same run (core/focus.py)")
 if sys.argv[1:2] == ["focus"]: cmd_focus(argparse.Namespace(rest=sys.argv[2:]))
 sp.add_parser("away", help="hive away [--since 12h] [--full] [--json]: while you were away: a 15-line brief of what was made, decided, needs you and broke; --full for all of it")
 if sys.argv[1:2] == ["away"]: cmd_away(argparse.Namespace(rest=sys.argv[2:]))

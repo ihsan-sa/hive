@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Hive starter: watch ~/board.jsonl, start a session per @mention, pace on weekly usage, log, back up ~ to git."""
-import datetime as dt, json, os, re, secrets, shutil, signal, subprocess, sys, time, urllib.request, uuid
+import datetime as dt, json, os, re, secrets, shutil, signal, subprocess, sys, tempfile, time, urllib.request, uuid
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # tests load this file by path, under -I
 import spend
@@ -80,7 +80,9 @@ def callable_names(p, c):
     # Its "@base 21000274", quoted from a test case, started an agent called base (2026-11-06).
     if str(p.get("from", "")).lower() == "rootwarden": to = set()
     # Broadcasts are delivered only by live sessions' inbox hooks, never queued to wake agents.
-    found = [n for n in mentions(p) if n not in {"all", "here"}]
+    # A focus id or a thread name is a name too (hive post resolved it: `foci` and `copies` on the post), not a word naming nobody.
+    skip = {"all", "here", *[str(x).lower() for x in (p.get("foci") or [])], *[str(x).lower() for x in (p.get("copies") or [])]}
+    found = [n for n in mentions(p) if n not in skip]
     if all(n in to or n in c["external"] for n in found): return found, []
     known = known_agents(c)
     return [n for n in found if n in to or n in c["external"] or n in known], [n for n in found if n not in to and n not in c["external"] and n not in known]
@@ -526,6 +528,63 @@ def kill_tree(pid):
             except OSError: pass
         time.sleep(2)
 
+def open_steps(out):
+    """The main agent's tool calls with no result yet, from a run's stream-json output: [(id, name, input)]. A subagent's own calls
+    (parent_tool_use_id set) are its business; its Task call shows here as one open step."""
+    calls = {}
+    try:
+        with open(out, "rb") as fh:
+            for line in fh:
+                if b'"tool_use' not in line and b'"tool_result' not in line: continue
+                try: m = json.loads(line)
+                except ValueError: continue
+                if not isinstance(m, dict) or m.get("parent_tool_use_id") or m.get("type") not in ("assistant", "user"): continue
+                for b in ((m.get("message") or {}).get("content") or []):
+                    if not isinstance(b, dict): continue
+                    if b.get("type") == "tool_use": calls[b.get("id")] = (b.get("id"), b.get("name"), b.get("input") or {})
+                    elif b.get("type") == "tool_result": calls.pop(b.get("tool_use_id"), None)
+    except OSError: return []
+    return list(calls.values())
+
+INTERRUPT_MIN_S = 5  # a command younger than this ends on its own about as soon: let it
+
+def interrupt_step(name, post_id=None):
+    """The person's Interrupt (hive post --interrupt): end the command a running Claude Code agent is waiting on, the way Esc
+    does, so the hook hands the post over now (the call ends as a failure, and PostToolUseFailure runs inbox.py) instead of
+    after it. Only when it can be done cleanly: one open step, and it is a Bash call in the foreground, with exactly one shell
+    of that shape under the claude process that is no background shell (each of those is named in the stream by its task
+    id). That shell and everything under it get SIGTERM, nothing harder, so a command can tidy up. Anything else (a file
+    edit, a web fetch, a subagent, several shells) is left to end on its own. Returns what it did, in a few words."""
+    try: rec = json.loads((RUN / f"{name}.json").read_text())
+    except (OSError, ValueError): return "no run record"
+    if rec.get("harness", "claude-code") != "claude-code": return "not a Claude Code run"
+    if run_gone(rec): return "not running"
+    steps = open_steps(rec.get("out") or "")
+    if len(steps) != 1: return f"{len(steps)} open steps"
+    _, tool, inp = steps[0]
+    if tool != "Bash" or inp.get("run_in_background"): return f"the open step is {tool}" + (" in the background" if tool == "Bash" else "")
+    try: stream = Path(rec["out"]).read_bytes()
+    except (OSError, KeyError): return "no output to read"
+    tick, up = os.sysconf("SC_CLK_TCK"), float(Path("/proc/uptime").read_text().split()[0])
+    shells = []
+    for q in tree_of(rec["pid"])[1:]:
+        try:
+            st_ = Path(f"/proc/{q}/stat").read_text().rsplit(")", 1)[1].split()
+            if Path(f"/proc/{st_[1]}/comm").read_text().strip() != "claude": continue   # a direct child of the claude process
+            cmd = Path(f"/proc/{q}/cmdline").read_bytes().split(b"\0")
+            out = os.readlink(f"/proc/{q}/fd/1")
+        except (OSError, IndexError): continue
+        if b"shell-snapshots" not in b" ".join(cmd) or "/tasks/" not in out: continue
+        if Path(out).name.split(".")[0].encode() in stream: continue   # a background shell: its id is in the stream
+        shells.append((q, up - int(st_[19]) / tick))
+    if len(shells) != 1: return f"{len(shells)} foreground shells"
+    q, age = shells[0]
+    if age < INTERRUPT_MIN_S: return "the command just started"
+    for k in reversed(tree_of(q)):
+        try: os.kill(k, signal.SIGTERM)
+        except OSError: pass
+    return "stopped the running command"
+
 def waiting_posts(st, r):
     """Posts queued for a run that has ended its turn and sits parked on a background shell. The inbox hook fires only on a
     tool call or a stop, so such a run is deaf until the shell ends: a5ea4 was parked on a queued `heavy` job with up to 90 min
@@ -537,7 +596,7 @@ def waiting_posts(st, r):
     except OSError: seen = set()
     ps = [p for p in ps if p["id"] not in seen]
     c = cfg()
-    grace = (c.get("wake_phone_s", 10) if any(p.get("from") == "phone" for p in ps)  # the person is on hold for it (modules/phone: phone answer)
+    grace = (c.get("wake_phone_s", 10) if any(p.get("from") == "phone" or p.get("interrupt") for p in ps)  # the person is on hold for it (modules/phone: phone answer)
              else c.get("wake_person_s", 60) if any(p.get("from") in ("person", "hives", r["name"]) for p in ps) else c.get("wake_agent_s", 600))  # its own post: `hive model`; hives: another Hive waiting on a reply, paced like the person (line 644)
     return ps if ps and finished_but_alive(r, grace) else []
 
@@ -1261,9 +1320,13 @@ def trial_orientation(name, live, path=None):
         if t.get("until") and now() > t["until"]: return live, None
         h = int(__import__("hashlib").sha1(f"{t['name']}:{name}".encode()).hexdigest()[:8], 16) / 2**32
         if h >= t.get("share", .5): return live, "base"
-        d = Path(t["dir"]); tmp = Path(os.environ.get("TMPDIR") or "/tmp") / f"trial-{name}.md"; tmp.write_text(live)
-        r = subprocess.run(["git", "merge-file", "-p", str(tmp), str(d / "base.md"), str(d / "cand.md")], capture_output=True, text=True, timeout=5)
-        tmp.unlink(missing_ok=True)
+        # a temp file of its own per call: a fixed trial-<name>.md was shared by test suites run side by side (same names), one
+        # overwrote or unlinked the other's between write and merge, and the agent fell out of the trial as "skip" (rsi-loop, 2026-11-07)
+        d = Path(t["dir"]); fd, tmp = tempfile.mkstemp(prefix=f"trial-{name}-", suffix=".md", dir=os.environ.get("TMPDIR") or None)
+        try:
+            with os.fdopen(fd, "w") as f: f.write(live)
+            r = subprocess.run(["git", "merge-file", "-p", tmp, str(d / "base.md"), str(d / "cand.md")], capture_output=True, text=True, timeout=5)
+        finally: Path(tmp).unlink(missing_ok=True)
         if r.returncode != 0 or (m := HARD.search(r.stdout)) is None or m.group(0) != (HARD.search(live) or [None])[0]:
             return live, "skip"
         return r.stdout, "cand"
@@ -1499,7 +1562,8 @@ def backup(c, st):
         log(event="backup-failed", rc=r.returncode, err=(r.stderr or r.stdout)[-300:])
 
 def hook_inbox(c):
-    """Make sure each login's settings.json runs inbox.py after every tool call and on stop (see inbox.py).
+    """Make sure each login's settings.json runs inbox.py after every tool call (one that fails too: a command stopped for the
+    person's Interrupt ends that way) and on stop (see inbox.py).
     Later logins share the first login's skills and the agents' memory, so an agent is the same on any of them."""
     h = {"hooks": [{"type": "command", "command": str(CORE / "inbox.py"), "timeout": 10}]}
     first = Path(c["logins"][0]).expanduser()
@@ -1514,8 +1578,10 @@ def hook_inbox(c):
         try: s = json.loads(f.read_text()) if f.exists() else {}
         except ValueError: continue  # don't clobber a settings file we can't parse
         hooks = s.setdefault("hooks", {})
-        if str(CORE / "inbox.py") in json.dumps(hooks): continue
-        hooks.setdefault("PostToolUse", []).append({"matcher": "*", **h}); hooks.setdefault("Stop", []).append(h)
+        wired = str(CORE / "inbox.py") in json.dumps(hooks)
+        if wired and str(CORE / "inbox.py") in json.dumps(hooks.get("PostToolUseFailure", [])): continue
+        if not wired: hooks.setdefault("PostToolUse", []).append({"matcher": "*", **h}); hooks.setdefault("Stop", []).append(h)
+        hooks.setdefault("PostToolUseFailure", []).append({"matcher": "*", **h})
         f.write_text(json.dumps(s, indent=2) + "\n")
 
 DENY_SEEN = None
@@ -1736,6 +1802,12 @@ def main():
                         st.setdefault("chosen", {})[n] = keep
                     if (om := c.get("only_model")) in MODELS:  # a test hive (rsi-loop bench/replay): every run on this model, whatever the post asked
                         q["model"] = om; q.pop("free", None); st.setdefault("chosen", {})[n] = {"model": om}
+                    if p.get("interrupt") and p.get("from") == "person" and not fresh:
+                        q["interrupt"] = True   # a run parked on a background shell wakes for it as for the phone (waiting_posts)
+                        if runs_now(n):
+                            try: did = interrupt_step(n, p.get("id"))
+                            except Exception as e: did = f"{type(e).__name__}: {e}"[:200]
+                            log(event="interrupt", name=n, post=p.get("id"), did=did)
                     st["pending"].setdefault(n, []).append(q)
         alive = running(st, by_hand)
         by_hand = False

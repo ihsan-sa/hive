@@ -27,7 +27,7 @@ export function toMarkdown(th) {
   for (const p of ps) {
     if (dayKey(p.t) !== last) { last = dayKey(p.t); out.push(`## ${day(p.t)}`, ""); }
     const s = speaker(p), files = (p.files || []).map(f => f.name);
-    out.push(`**${s.name}** · ${clock(p.t)}`, "", words(p) || "", ...(files.length ? ["", "Attached: " + files.join(", ")] : []), "");
+    out.push(`**${s.name}** · ${clock(p.t)}`, "", words(p) || "", ...(files.length ? ["", files.map(f => "- File: " + f).join("\n")] : []), "");
   }
   return out.join("\n").replace(/\n{3,}/g, "\n\n").trim() + "\n";
 }
@@ -52,7 +52,7 @@ export function scriptPage(th) {
     const s = speaker(p), files = (p.files || []).map(f => f.name);
     kids.push(h("section", { class: "xp-turn", "data-stage": s.stage ? "" : null },
       h("div", { class: "xp-who" }, h("b", null, s.name), h("time", null, clock(p.t))),
-      h("div", { class: "xp-says" }, markdown(words(p)), files.length ? h("p", { class: "xp-files" }, "Attached: " + files.join(", ")) : null)));
+      h("div", { class: "xp-says" }, markdown(words(p)), files.length ? h("ul", { class: "xp-files" }, files.map(f => h("li", null, "File: " + f))) : null)));
   }
   return h("article", { class: "xp", "aria-hidden": "true" }, kids);
 }

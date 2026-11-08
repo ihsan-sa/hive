@@ -489,6 +489,7 @@ def employer_listed(text, name, org):
         words = label.split()
         if not 1 <= len(words) <= 5 or not words[0][0].isupper() or label.lower() == initials: return ""
         low = set(re.findall(r"[a-z0-9]+", fold(label)))
+        if low and low <= POST_WORDS | ORG_NOISE | {"counsel"}: return ""  # the person's own unit or second post: "Technology Transfer", "Associate General Counsel"
         if _SCHOOL.search(fold(label)) and not names_org(org, label) and not low <= POST_WORDS: return label
         if not low or low & own or _ROLE_RE.search(label) or _NOT_EMPLOYER.search(label) or re.search(r"\d|@", label) or low <= NOT_NAME | ORG_NOISE: return ""
         return "" if plausible_name(label) and len(words) in (2, 3) and not re.search(r"\b(?:Inc|LLC|Ltd|Corp|Corporation|Company|Group|Bank|Partners)\b", label) else label

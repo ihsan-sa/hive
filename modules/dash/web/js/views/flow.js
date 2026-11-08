@@ -1,5 +1,5 @@
 // Flow: the hive's work as one moving picture, by goal. One lane per focus in the person's order (the needs-you summary's
-// states, as the Work page reads them) and one for everything else; time runs into a fixed now line. A run is a bar; a hand-off
+// states, as needs_you.py writes them) and one for everything else; time runs into a fixed now line. A run is a bar; a hand-off
 // is a bar that begins where the last ended; a wait on the person is a hollow stretch until their next word; a decision taken
 // for them is a mark; their own posts are their marks; right of now, the words for what comes next. Below, what moved since
 // they last spoke. Reads only what the hive already writes (sessions, posts, status bars, the summary): no new field, no
@@ -11,7 +11,8 @@ import { isRunning, sEnd, threadChildren, threadTitle, displayText } from "../co
 import { ago, clock, dayName, dur, mdPlain, now, plural, short, DAY, HOUR, MIN } from "../core/format.js";
 import { threadHref, go, href } from "../core/router.js";
 import { openSheet } from "../ui/panel.js";
-import { card as workCard } from "./work.js";
+import { card as projectCard } from "../ui/projectcard.js";
+import { focusOf } from "../core/foci.js";
 import { gist } from "../core/gist.js";
 import { quoteInto } from "../ui/composer.js";
 import { canvas } from "../templates.js";
@@ -139,9 +140,9 @@ function drawNow() {
   const since = [], list = [];
   L.forEach((l, i) => {
     const y = AXIS + i * LANE, r = read(l, t0, t1), cold = !r.live.length;
-    // a goal's lane opens its Work card in the panel (the thread, the agents and the ladder's rung are one click down in it);
+    // a goal's lane opens its project card in the panel (the thread, the agents and the ladder's rung are one click down in it), its full page the focus page (else the thread);
     // the bars, waits and say inside keep their own targets
-    const open = l.state ? e => { if (e.target.closest("a,.fl-say")) return; openSheet("work:" + l.key, l.name, () => h("div", { class: "wk-sheet" }, workCard(l.state, F.v)), href("work", l.key)); } : null;
+    const open = l.state ? e => { if (e.target.closest("a,.fl-say")) return; openSheet("work:" + l.key, l.name, () => h("div", { class: "wk-sheet" }, projectCard(l.state)), focusOf(l.thread) ? href("focus", focusOf(l.thread)) : threadHref(l.thread)); } : null;
     const g = s("g", { class: "fl-lane", "data-key": l.key, "data-live": r.live.length ? "" : null, "data-cold": cold && !r.runs.length ? "" : null, "data-card": open ? "" : null, onclick: open });
     g.append(s("rect", { class: "fl-bg", x: 0, y, width: W, height: LANE }));
     g.append(s("line", { class: "fl-rule", x1: X0, x2: X1, y1: y + LANE - 1, y2: y + LANE - 1 }));

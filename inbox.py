@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """inbox: Claude Code hook that hands a running Hive agent the board posts meant for it, mid-run.
 
-Wired in ~/.claude/settings.json for PostToolUse and Stop. Without it a post that mentions a running
+Wired in ~/.claude/settings.json for PostToolUse, PostToolUseFailure and Stop. Without it a post that mentions a running
 agent waits in the starter's queue until that agent ends, so agents can't talk while they work.
 It delivers posts made since the session started that mention $HIVE_NAME, or that land in the
-thread it was started on, not written by itself. Delivered ids go to ~/.hive/delivered/<name>; the
+thread it was started on, not written by itself. Delivered ids go to ~/.hive/delivered/<name>, one a line, each batch
+followed by a line "@<unix seconds>" saying when it was handed over (the dash's "Reached a5c83 · 12:03"); the
 starter drops those from its queue so the agent isn't restarted for a post it already saw.
+PostToolUseFailure counts as a step too: a command the starter stopped for the person's Interrupt ends as a failure.
 PostToolUse: the posts come back as additionalContext. Stop: if anything is new, the stop is
 blocked with the posts as the reason, so the agent answers instead of ending unaware. Stop also
 blocks once per run when the person started it and the agent is ending with no post since: its
@@ -85,9 +87,40 @@ def model_note(name, rec, ps):
 
 def fmt(p):
     to = " ".join("@" + n for n in sorted(names(p)))
+    tags = (f" for focus {', '.join(map(str, p['foci']))}" if p.get("foci") else "") + (f" (passed on by {p['relay_by']})" if p.get("relay_of") else "")
     return (f"[{p.get('id')}] {str(p.get('at', ''))[:19]} {p.get('from')}{' -> ' + to if to else ''} "
-            f"(thread {p.get('thread')})" + (f" replying to {p['reply_to']}" if p.get("reply_to") else "") + "\n  " + str(p.get("text", "")).replace("\n", "\n  ")
-            + "".join(f"\n  file: {f.get('path')}" for f in p.get("files") or []))
+            f"(thread {p.get('thread')})" + tags + (f" replying to {p['reply_to']}" if p.get("reply_to") else "") + "\n  " + str(p.get("text", "")).replace("\n", "\n  ")
+            + "".join(f"\n  file: {f.get('path')}" for f in p.get("files") or [])
+            + ("\n  (The person pressed Interrupt on this: read it before carrying on. If a command you were waiting on was stopped, that was for this; run it again only if this still wants it.)" if p.get("interrupt") else ""))
+
+WORD = re.compile(r"[a-z][a-z0-9-]{3,}")
+STOPWORDS = {"this", "that", "with", "from", "have", "what", "when", "where", "which", "also", "like", "just", "about", "into", "than",
+             "then", "them", "they", "their", "there", "these", "those", "will", "would", "could", "should", "your", "some", "more", "make",
+             "thread", "focus", "agent", "agents", "hive", "post", "posts", "maybe", "think", "know", "need", "needs", "want", "good", "well"}
+
+def focus_hint(ps, st=None):
+    """For a person's post: the foci whose id, name or aim share a word with it, with their keepers, and the standing ask to pass on
+    what belongs elsewhere (the person, 11071747b02b: a post should be tagged with the agents it concerns, or agents make the
+    connections). Word overlap only; an agentic search can slot in here later if words miss too much."""
+    mine = [p for p in ps if str(p.get("from", "")).lower() == "person"]
+    if not mine: return ""
+    try:
+        import focus
+        if st is None: st = focus.state()
+    except Exception: return ""
+    words = set()
+    for p in mine: words |= {w for w in WORD.findall(str(p.get("text", "")).lower()) if w not in STOPWORDS}
+    here = {str(p.get("thread")) for p in mine} | {str(x).lower() for p in mine for x in (p.get("foci") or [])}
+    hits = []
+    for f in st["foci"]:
+        if f["id"] in here or (f.get("thread") or "") in here: continue
+        own = {f["id"], *WORD.findall(str(f.get("name", "")).lower()), *WORD.findall(str(f.get("aim") or "").lower())} - STOPWORDS
+        if (shared := own & words):
+            k = focus.keeper(f, focus.board_posts())
+            hits.append(f"- {f['id']} ({f['name']}; " + (f"kept by {k}" if k else "nobody keeping it") + f"): shares {', '.join(sorted(shared)[:3])}")
+    if not hits: return ""
+    return ("\n\nFoci its words also touch (matched on words, not checked):\n" + "\n".join(hits[:4]) +
+            "\nIf part of it belongs there, pass it on with `hive relay POSTID FOCUS --why \"...\"` and say in your reply where it went.")
 
 def person_note(ps):
     """A post from the person among those handed over: ask for a reply with the next tool call, not after the current job. A
@@ -393,7 +426,7 @@ def main():
     lines, done = read_new(name, rec)
     ps = new_posts(name, rec, seen, lines)
     if ps:
-        with f.open("a") as fh: fh.write("".join(p["id"] + "\n" for p in ps))
+        with f.open("a") as fh: fh.write("".join(p["id"] + "\n" for p in ps) + f"@{int(time.time())}\n")
     done()
     first = first_line(name, rec) if event != "Stop" else None
     check = model_check(name, rec) if event != "Stop" else None
@@ -407,7 +440,7 @@ def main():
         return
     note = person_note(ps)
     msg = ("New on the board for you while you work (you'll get these automatically; answer with "
-           "hive post where it matters):\n\n" + "\n\n".join(fmt(p) for p in ps) + recall_note(name, ps) + note + model_note(name, rec, ps))
+           "hive post where it matters):\n\n" + "\n\n".join(fmt(p) for p in ps) + recall_note(name, ps) + focus_hint(ps) + note + model_note(name, rec, ps))
     if event == "Stop":
         print(json.dumps({"decision": "block", "reason": msg}))
     else:

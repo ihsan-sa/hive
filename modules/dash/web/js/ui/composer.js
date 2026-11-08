@@ -1,16 +1,17 @@
 // The composer: write a message, attach files (button, paste or drop), name an agent with @, reply, send.
 // Up and Down walk the person's past messages like a shell's history; Tab finishes what they've started typing from them.
 // App mode only (can("post")). Everything lives here, outside the render, so polls never touch what the person is doing:
-// - a draft per thread (text, reply, chosen recipient, name), kept in localStorage, so it survives leaving and reloading;
+// - a draft per thread (text, reply, quote, chosen recipient, name), kept in localStorage, so it survives leaving and reloading;
+//   a quote ("Ask about this") is a chip above the box, never text in it: it goes in front of the words when sent (quotePrefix);
 // - OUT, messages on their way: they show at once as "Sending…", settle when the board has them, and a failed one keeps
 //   its text and offers Retry, Edit and Discard. The board is append-only, so nothing here suggests unsending a posted one.
 import { uploadFile } from "../core/upload.js";
 import { h } from "../core/dom.js";
 import { S, can, jget, post, poll, loadApp } from "../core/store.js";
 import { simpleOn, hiveName } from "../core/simple.js";
-import { foci } from "../core/foci.js";
+import { foci, focusById, focusOf, focusName, listed, threadLine } from "../core/foci.js";
 import { go } from "../core/router.js";
-import { isAgent, isRunning, agentCard, agentStatus, threadPeople, partner, displayText, typedText } from "../core/model.js";
+import { isAgent, isRunning, agentCard, agentStatus, threadPeople, partner, displayText, typedText, threadTitle } from "../core/model.js";
 import { short, mdPlain, now } from "../core/format.js";
 import { button, icon, input, statusDot } from "./kit.js";
 import { openAside } from "./aside.js";
@@ -33,7 +34,7 @@ export function draft(th) {
   const k = dkey(th); let d = D.get(k);
   if (!d) {
     let v = {}; try { v = JSON.parse(localStorage.getItem(k) || "{}"); } catch (e) {}
-    d = { th: th || null, text: v.text || "", replyId: v.reply || null, reply: null, to: v.to || null, name: v.name || "", naming: !!v.name, model: v.model || "", focus: v.focus || "", files: [], err: "" };
+    d = { th: th || null, text: v.text || "", replyId: v.reply || null, reply: null, quote: v.quote || null, to: v.to || null, name: v.name || "", naming: !!v.name, model: v.model || "", focus: v.focus || "", files: [], err: "" };
     D.set(k, d);
   }
   if (!d.reply && d.replyId && S.byId[d.replyId]) d.reply = S.byId[d.replyId];
@@ -46,7 +47,7 @@ export function hasDraft(th) {
 }
 function keep(d) {
   const k = dkey(d.th), rid = d.reply ? d.reply.id : d.replyId;
-  try { if (d.text || rid || d.to || d.name || d.model || d.focus) localStorage.setItem(k, JSON.stringify({ text: d.text, reply: rid, to: d.to, name: d.name, model: d.model, focus: d.focus })); else localStorage.removeItem(k); } catch (e) {}
+  try { if (d.text || rid || d.quote || d.to || d.name || d.model || d.focus) localStorage.setItem(k, JSON.stringify({ text: d.text, reply: rid, quote: d.quote, to: d.to, name: d.name, model: d.model, focus: d.focus })); else localStorage.removeItem(k); } catch (e) {}
 }
 const field = th => document.querySelector(`.cp[data-key="${CSS.escape("cp:" + (th || "(new)"))}"] .cp-t`);
 
@@ -55,11 +56,12 @@ export function replyTo(p) {
   const d = draft(p.th); d.reply = p; d.replyId = p.id; d.to = null; keep(d);
   CP.focus = true; go("comms", p.th); refresh();
 }
-/** Esc: close the @ list or the To menu, else cancel a reply. True if it did something. */
+/** Esc: close the @ list or the To menu, else drop a quote, else cancel a reply. True if it did something. */
 export function cancelReply() {
   if (CP.ac) { CP.ac = null; refresh(); return true; }
   if (CP.menu) { CP.menu = false; refresh(); return true; }
   const d = CP.th !== undefined && D.get(dkey(CP.th));
+  if (d && d.quote) { d.quote = null; keep(d); refresh(); return true; }
   if (!d || !(d.reply || d.replyId)) return false;
   d.reply = null; d.replyId = null; keep(d); refresh(); return true;
 }
@@ -72,6 +74,24 @@ export function quoteInto(th, text) {
   keep(d); CP.focus = true; refresh();
 }
 
+/** Quote a piece of a message above a thread's box ("Ask about this", a summary's Reply) and put the cursor there.
+ *  q: {who, where, text, code}. Only one quote at a time: a new one replaces it. The person's words stay as they are. */
+export function quoteRef(th, q) {
+  const d = draft(th); d.quote = { who: q.who || "", where: q.where || "", text: String(q.text || ""), code: !!q.code }; keep(d);
+  CP.focus = true; refresh();
+}
+const QMAX = 12;
+/** The quote as it goes on the board: "> who, where:" and at most QMAX quoted lines, before the person's words.
+ *  A longer quote keeps its start and its last two lines (where Ask puts a plot's slider values or what a page reported). */
+export function quotePrefix(q) {
+  const lines = q.text.replace(/\s+$/, "").split("\n");
+  let body = lines.length > QMAX ? [...lines.slice(0, QMAX - 3), "…", ...lines.slice(-2)] : lines;
+  body = body.map(l => (l.length > 300 ? l.slice(0, 299) + "…" : l));
+  if (q.code && lines.length > 1) body = ["```", ...body, "```"];
+  return `> ${[q.who, q.where].filter(Boolean).join(", ")}:\n` + body.map(l => "> " + l).join("\n") + "\n\n";
+}
+const QUOTE_HEAD = /^> [^\n]*:\n(?:>[^\n]*\n)*\n/;
+
 // ---- who it goes to ----
 // The server's rule (person_post in dash.py, /api/target): a plain message wakes whoever posted last in the thread.
 // The person thinks of it as the agent they've been talking to, so that is the default here, and when the two differ
@@ -83,18 +103,29 @@ function serverWho(th) {
   return TG.v[th] || null;
 }
 const MODEL_WORDS = ["opus", "sonnet", "haiku", "fable", "astra"];
-function named(text) {
-  for (const m of text.matchAll(/(?:^|\s)@([\w.-]+)/g)) if (m[1] === "new" || MODEL_WORDS.includes(m[1]) || isAgent(m[1])) return m[1];
+/** A focus id in a message is a name too (hive post, the person 110717432468): it reaches the focus's keeper. {id, keeper} or null. */
+function focusWord(w) { const f = focusById(w); return f ? { id: f.id, keeper: f.keeper || null } : null; }
+/** A thread named with @ gets a copy of the message, for the agent last in it (hive post); its own thread is no target. */
+const threadWord = (w, th) => (w !== th && S.threads.has(w) && listed(w) ? w : null);
+/** The agent a typed @word reaches: the agent itself, a focus's keeper (a new one in the focus's own thread when nobody keeps it), or null. */
+function wordTarget(w, th) {
+  if (w === "new" || MODEL_WORDS.includes(w) || isAgent(w)) return w;
+  const f = focusWord(w); if (f) return f.keeper || (th && (th === f.id || th === (focusById(f.id).thread || f.id)) ? "new" : null);
   return null;
 }
+function namedWord(text, th) {
+  for (const m of text.matchAll(/(?:^|\s)@([\w.-]+)/g)) if (wordTarget(m[1], th)) return m[1];
+  return null;
+}
+const named = (text, th) => { const w = namedWord(text, th); return w ? wordTarget(w, th) : null; };
 /** {who: name | "new" | null, why: reply | named | chosen | partner | last | first, server: who the server would wake} */
 export function recipient(th) {
   if (!th) return { who: "new", why: "first" };
   const d = draft(th), s = serverWho(th), sv = s && s.who;
   if (isBtw(d.text)) return { who: "new", why: "btw", server: sv };
   if (d.reply) return { who: isAgent(d.reply.from) ? d.reply.from : sv, why: "reply", server: sv };
-  const m = named(d.text); if (m) return { who: m, why: "named", server: sv };
-  if (d.to) return { who: d.to, why: "chosen", server: sv };
+  const w = namedWord(d.text, th); if (w) return { who: wordTarget(w, th), why: "named", server: sv, to: w };
+  if (d.to) return { who: wordTarget(d.to, th) || d.to, why: "chosen", server: sv, to: d.to };
   const p = partner(th);
   if (p) return { who: p, why: sv && sv !== p ? "partner" : "last", server: sv };
   // The target is fetched when the board changes, and a run starting doesn't change the board: an agent already running here still counts.
@@ -102,8 +133,9 @@ export function recipient(th) {
   return { who: sv || (run ? run.name : "new"), why: sv || run ? "last" : "first", server: sv };
 }
 function wire(th, d, r) {
-  let t = d.text.trim() ? d.text : "Attached: " + d.files.map(f => f.name).join(", ");
+  let t = (d.quote ? quotePrefix(d.quote) : "") + (d.text.trim() ? d.text : "");   // files with no words go as they are: the post shows them, no "Attached:" line
   if (!th || r.why === "reply" || r.why === "named" || r.why === "first" || r.why === "btw") return t;   // /btw goes to a fresh agent in a side thread (person_post)
+  if (r.to && r.to !== r.who && !named(t, th)) return "@" + r.to + " " + t;   // a focus picked in the To menu: hive post finds its keeper and marks the post
   if (r.who === "new") return "@new " + t;
   if (r.who && r.who !== r.server) return "@" + r.who + " " + t;
   return t;
@@ -126,7 +158,7 @@ async function deliver(it) {
   it.state = "sending"; it.err = ""; refresh();
   try {
     if (!it.refs) { it.uploading = it.files.length > 0; refresh(); const refs = []; for (const f of it.files) refs.push(await uploadFile(f.file)); it.refs = refs; it.uploading = false; }
-    const res = await post("/api/post", { text: it.wire, thread: it.th || it.name || null, reply_to: it.reply ? it.reply.id : null, files: it.refs, simple: simpleOn(), model: it.model || null });
+    const res = await post("/api/post", { text: it.wire, thread: it.th || it.name || null, reply_to: it.reply ? it.reply.id : null, files: it.refs, simple: simpleOn(), model: it.model || null, ...(it.interrupt ? { interrupt: true } : {}) });
     it.id = res.id; it.state = "sent"; const thr = it.th;
     if (!it.th && res.thread) { it.th = res.thread; if (it.focus) post("/api/focus", { thread: res.thread, focus: it.focus }).catch(() => {}); go("comms", res.thread); loadApp(); }   // filed under the focus picked in the box; a failure leaves it in Misc, where the title menu can file it
     else if (res.thread && res.thread !== it.th) { it.th = res.thread; it.aside = true; openAside(thr, res.thread, it.text.replace(/^\s*\/btw\s*/i, "")); loadApp(); }   // /btw: it lives in the side thread; stay here
@@ -134,18 +166,19 @@ async function deliver(it) {
   } catch (e) { it.state = "failed"; it.err = simpleOn() && !/sign in/.test(e.message) ? "Check your connection, then try again." : e.message; it.uploading = false; }
   refresh();
 }
-function queue(th, d, r) {
-  const it = { lid: ++lid, th: th || null, text: d.text, files: d.files, reply: d.reply, to: th ? r.who : null, name: th ? null : d.name.trim() || null, wire: wire(th, d, r), model: d.model || null, focus: th ? null : d.focus || null, state: "sending", err: "", t: now() };
+function queue(th, d, r, interrupt = false) {
+  const it = { lid: ++lid, th: th || null, text: d.text, files: d.files, reply: d.reply, quote: d.quote || null, interrupt, to: th ? r.who : null, name: th ? null : d.name.trim() || null, wire: wire(th, d, r), model: d.model || null, focus: th ? null : d.focus || null, state: "sending", err: "", t: now() };
   OUT.push(it); deliver(it);
   return it;
 }
-function send(th) {
+/** Send; interrupt: the Interrupt button's, so a working agent gets it now (dash.py person_post, hive post --interrupt). */
+function send(th, interrupt = false) {
   const d = draft(th);
   if (!d.text.trim() && !d.files.length) return;
   if (d.text.trim() === "/67" && !d.files.length) { d.text = ""; keep(d); const el = field(th); if (el) el.value = ""; refresh(); sixSeven(); return; }
   if (!d.files.length && /^\/(party|bees|matrix|rave)$/.test(d.text.trim())) { const t = d.text.trim(); d.text = ""; keep(d); const el = field(th); if (el) el.value = ""; refresh(); eggRun(t); return; }   // easter egg, not sent
-  queue(th, d, recipient(th));
-  Object.assign(d, { text: "", files: [], reply: null, replyId: null, to: null, name: "", naming: false, err: "", model: "" }); keep(d);   // the focus stays: the next one most likely goes to the same place
+  queue(th, d, recipient(th), interrupt);
+  Object.assign(d, { text: "", files: [], reply: null, replyId: null, quote: null, to: null, name: "", naming: false, err: "", model: "" }); keep(d);   // the focus stays: the next one most likely goes to the same place
   CP.ac = null; CP.menu = false; CP.hist = null; if (!SB.open) SB.say = "";
   const el = field(th); if (el) { el.value = ""; el.focus(); }   // morph leaves a focused field alone, so clear it here
   refresh(); window.dispatchEvent(new CustomEvent("cp:sent", { detail: { th } }));
@@ -245,13 +278,13 @@ function mdSoon(th) { if (mdRaf) return; mdRaf = requestAnimationFrame(() => { m
 /** Send a short message for the person from a button (Carry on, Answer). Shows like any other. */
 export function say(th, text, to) {
   const r = to ? { who: to, why: "chosen", server: (TG.v[th] || {}).who } : recipient(th);
-  queue(th, { text, files: [], reply: null, name: "" }, r); refresh();
+  queue(th, { text, files: [], reply: null, quote: null, name: "" }, r); refresh();
 }
 export const actions = {
   retry: it => deliver(it),
   edit: it => {
     const d = draft(it.th);
-    d.text = d.text.trim() ? d.text + "\n\n" + it.text : it.text; d.files = d.files.concat(it.files); d.reply ||= it.reply; keep(d);
+    d.text = d.text.trim() ? d.text + "\n\n" + it.text : it.text; d.files = d.files.concat(it.files); d.reply ||= it.reply; d.quote ||= it.quote; keep(d);
     OUT.splice(OUT.indexOf(it), 1); CP.focus = true; const el = field(it.th); if (el) el.value = d.text; refresh();
   },
   discard: it => { OUT.splice(OUT.indexOf(it), 1); for (const f of it.files) if (f.url) URL.revokeObjectURL(f.url); refresh(); },
@@ -398,27 +431,66 @@ function modelPick(d, r) {
     [["", first], ...Object.entries(MODEL_LABELS).filter(([v]) => live || row || v !== def)].map(([v, l]) => h("option", { value: v, selected: cur === v }, l)));
 }
 
-// ---- @ names ----
+// ---- @ names: agents, foci and threads, each with where it is and what it's on (the person, 11071752e4c2) ----
+/** The words a row is found by, lower-cased: name, model, thread name and title, its status line, its focus. */
+const words = (...xs) => xs.filter(Boolean).join(" ").toLowerCase();
+const agentThread = n => { const L = S.running.get(n), s = S.lastSess[n]; return (L && L.thread) || (s && s.thread) || null; };
+const modelOf = n => { const r = agentCard(n)[0]; return r && r.v !== "login default" ? r.short : ""; };
+/** One row: {kind: agent | focus | thread | word, word (what @ inserts), ...what the row shows}. */
+function agentRow(n) {
+  const th = agentThread(n), f = th ? focusById(focusOf(th)) : null;
+  return { kind: "agent", word: n, model: modelOf(n), th, title: th ? threadTitle(th) : "", line: th ? threadLine(th) : "", focus: f ? focusName(f) : "",
+    hay: words(n, modelOf(n), th, th && threadTitle(th), th && threadLine(th), f && focusName(f)) };
+}
+function focusRow(f) {
+  return { kind: "focus", word: f.id, name: focusName(f), keeper: f.keeper || null, aim: f.aim || "", hay: words(f.id, f.name, f.aim, f.keeper, f.thread, "focus") };
+}
+function threadRow(th) {
+  const f = focusById(focusOf(th));
+  return { kind: "thread", word: th, title: threadTitle(th), line: threadLine(th), focus: f ? focusName(f) : "", hay: words(th, threadTitle(th), threadLine(th), f && focusName(f), "thread") };
+}
+/** Rows in the order they're offered: this thread's agents, running agents, the foci, recent agents, then threads active this week, new and the model words. */
+function acRows(th) {
+  const seen = new Set(), out = [], add = r => { if (r && !seen.has(r.word)) { seen.add(r.word); out.push(r); } };
+  if (th) for (const n of threadPeople(th)) if (isAgent(n)) add(agentRow(n));
+  for (const n of S.running.keys()) add(agentRow(n));
+  for (const f of foci()) add(focusRow(f));
+  for (let i = S.sessions.length - 1; i >= 0 && i > S.sessions.length - 40; i--) if (S.sessions[i].name) add(agentRow(S.sessions[i].name));
+  const week = now() - 7 * 86400e3;
+  for (let i = S.posts.length - 1; i >= 0 && S.posts[i].t > week; i--) { const t = S.posts[i].th; if (t && t !== th && listed(t)) add(threadRow(t)); }
+  add({ kind: "word", word: "new", hay: "new a new agent" });
+  MODEL_WORDS.forEach(w => add({ kind: "word", word: w, hay: w + " model" }));
+  return out;
+}
+/** The rows for what's typed after @: nothing typed, the first eight; else every word typed must appear in the row's words,
+ *  rows whose name starts with the first word coming first. "ui design" finds the agent whose thread's status bar says so. */
 function acNames(th, q) {
-  const seen = new Set(), out = [], add = n => { if (n && !seen.has(n) && n.startsWith(q)) { seen.add(n); out.push(n); } };
-  if (th) for (const n of threadPeople(th)) if (isAgent(n)) add(n);
-  for (const n of S.running.keys()) add(n);
-  for (let i = S.sessions.length - 1; i >= 0 && out.length < 8; i--) add(S.sessions[i].name);
-  add("new"); MODEL_WORDS.forEach(add);
-  return out.slice(0, 8);
+  const rows = acRows(th), ws = q.split(/\s+/).filter(Boolean);
+  if (!ws.length) {   // nothing typed yet: this thread's agents, the foci, then other agents, and a new one, ten at most
+    const here = new Set(th ? threadPeople(th) : []), own = rows.filter(r => r.kind === "agent" && here.has(r.word)), fx = rows.filter(r => r.kind === "focus");
+    const rest = rows.filter(r => r.kind === "agent" && !here.has(r.word)).slice(0, Math.max(0, 9 - own.length - fx.length));
+    return [...own, ...fx, ...rest, rows.find(r => r.word === "new")].filter(Boolean);
+  }
+  const hit = rows.filter(r => ws.every(w => r.hay.includes(w)));
+  const first = r => (r.word.startsWith(ws[0]) ? 0 : r.kind === "agent" ? 1 : 2);
+  return hit.sort((a, b) => first(a) - first(b)).slice(0, 8);
 }
 /** Threads that start with q, most recently active first. */
 function acThreads(q) {
   const out = [];
-  for (let i = S.posts.length - 1; i >= 0 && out.length < 8; i--) { const t = S.posts[i].th; if (t && !out.includes(t) && t.toLowerCase().startsWith(q)) out.push(t); }
+  for (let i = S.posts.length - 1; i >= 0 && out.length < 8; i--) { const t = S.posts[i].th; if (t && !out.includes(t) && t.toLowerCase().startsWith(q)) out.push({ kind: "thread", word: t, title: threadTitle(t), line: threadLine(t) }); }
   return out;
 }
+/** The list opens at @ or # and follows what's typed; after @ the words may have spaces in them (a search), until the first word is
+ *  a name the list knows (then the person has their name and is writing the message), or nothing matches any more. */
 function acCheck(el, th) {
-  const before = el.value.slice(0, el.selectionStart), m = simpleOn() ? null : before.match(/(?:^|\s)([@#])([\w.-]*)$/);
-  const mark = m ? m[1] : "@", q = m ? m[2] : "";
-  const items = m ? (mark === "#" ? acThreads(q.toLowerCase()) : acNames(th, q.toLowerCase())) : [];
-  const next = items.length && !(items.length === 1 && items[0] === q) ? { q, mark, at: el.selectionStart - q.length - 1, items, i: 0 } : null;
-  if (JSON.stringify(next && next.items) !== JSON.stringify(CP.ac && CP.ac.items)) { CP.ac = next; return true; }
+  const before = el.value.slice(0, el.selectionStart), m = simpleOn() ? null : before.match(/(?:^|\s)@([\w.-]*(?: [\w.-]*){0,3})$/) || before.match(/(?:^|\s)(#)([\w.-]*)$/);
+  const mark = m ? (m[1] === "#" ? "#" : "@") : "@", q = m ? (mark === "#" ? m[2] : m[1]) : "";
+  const first = q.split(" ")[0].toLowerCase(), done = mark === "@" && first && (q.includes(" ") || q === first) && !!wordTarget(first, th) || (mark === "@" && !!threadWord(first, th) && q !== first);
+  const items = m && !done ? (mark === "#" ? acThreads(q.toLowerCase()) : acNames(th, q.toLowerCase())) : [];
+  const next = items.length && !(items.length === 1 && items[0].word === q) ? { q, mark, at: el.selectionStart - q.length - 1, items, i: 0 } : null;
+  const key = a => a && a.items.map(r => r.word).join(" ");
+  if (key(next) !== key(CP.ac)) { CP.ac = next; return true; }
   if (next) CP.ac.at = next.at, CP.ac.q = next.q;
   return false;
 }
@@ -434,7 +506,7 @@ function acPick(th, n) {
 function pastSent() {
   const out = [], seen = new Set(), add = t => { t = t.trim(); if (t && !seen.has(t)) { seen.add(t); out.push(t); } };
   for (let i = OUT.length - 1; i >= 0; i--) if (!OUT[i].id || !S.byId[OUT[i].id]) add(OUT[i].text);
-  for (let i = S.posts.length - 1; i >= 0 && out.length < 500; i--) if (S.posts[i].from === "person") { const t = typedText(S.posts[i]); if (!/^Attached: /.test(t)) add(t); }
+  for (let i = S.posts.length - 1; i >= 0 && out.length < 500; i--) if (S.posts[i].from === "person") { const t = typedText(S.posts[i]).replace(QUOTE_HEAD, ""); if (!/^Attached: /.test(t)) add(t); }
   return out;
 }
 function recallTo(th, n, text) {
@@ -468,7 +540,17 @@ function histTab(th, n) {
   recallTo(th, n, list[0]);
   return true;
 }
-const stateWords = n => (n === "new" ? "starts a new agent" : agentStatus(n).label || "");
+/** What a row of the @ list or the To menu shows: the dot, the word, then agent · model · its thread · that thread's status line;
+ *  a focus with who keeps it; a thread with its title and status line. No working / not-working words: the dot says that. */
+function optRow(r, mark = "@", { here } = {}) {
+  const m = (x, cls = "meta") => (x ? h("span", { class: cls }, x) : null), sep = x => (x ? h("span", { class: "meta cp-sep", "aria-hidden": "true" }, "·") : null);
+  if (r.kind === "focus") return [h("span", { class: "cp-fx", "aria-hidden": "true" }, "◆"), h("b", null, mark + r.word), m(r.name !== r.word ? r.name : ""), sep(1), m(r.keeper ? `kept by ${r.keeper}` : "nobody keeping it: a new agent in its thread")];
+  if (r.kind === "thread") return [h("span", { class: "cp-fx", "aria-hidden": "true" }, "#"), h("b", null, mark + r.word), m(r.title !== r.word && r.title !== (r.word[0].toUpperCase() + r.word.slice(1)).replace(/[-_]+/g, " ") ? r.title : "", "meta cp-title"), sep(r.line), m(r.line)];
+  if (r.kind === "word") return [statusDot("none"), h("b", null, mark + r.word), m(r.word === "new" ? "a new agent, with this conversation to read" : "a new agent on this model")];
+  const inHere = here && r.th === here;
+  return [statusDot(agentStatus(r.word).key, { live: S.running.has(r.word) }), h("b", null, mark + r.word), m(r.model, "meta cp-model"), sep(r.model && r.th && !inHere),
+    inHere ? null : m(r.th ? (r.title && r.title !== r.th ? r.title : r.th) : "", "meta cp-title"), sep(r.line), m(r.line)];
+}
 
 // ---- secret box ----
 const SECRET_NAME = /^[A-Za-z0-9][A-Za-z0-9_.-]{1,63}$/, NOT_NAME = /\.(md|py|js|mjs|json|jsonl|sh|txt|png|toml|ya?ml|html|css)$/i;
@@ -543,7 +625,7 @@ document.addEventListener("pointerdown", e => {
   if (CP.menu && !e.target.closest?.(".cp-menu, .cp-to")) { CP.menu = false; refresh(); }
 }, true);
 function toChip(th, r) {
-  const n = r.who, label = n === "new" ? "a new agent" : n || "…";
+  const f = r.to && focusWord(r.to), n = r.who, label = f ? focusName(focusById(f.id)) + (n && n !== "new" ? ` → ${n}` : " → a new agent") : n === "new" ? "a new agent" : n || "…";
   const why = { reply: "you're replying to it", named: "named in your message", chosen: "you chose it", btw: "side question" }[r.why];
   return h("button", { type: "button", class: "cp-to", "aria-haspopup": "listbox", "aria-expanded": String(CP.menu), title: r.why === "btw" ? "A side question: it answers in its own thread, and this one's agent never sees it." : "Who this goes to. Change it here, or type @ and a name.",
     onclick: () => { CP.menu = !CP.menu; refresh(); } },
@@ -552,15 +634,16 @@ function toChip(th, r) {
 }
 function toMenu(th, r) {
   const d = draft(th), names = threadPeople(th).filter(isAgent), pick = n => { d.to = n; keep(d); CP.menu = false; refresh(); field(th)?.focus(); };
+  const chosen = r.to || r.who, opt = (rr, extra) => h("button", { type: "button", role: "option", class: "cp-opt", "data-kind": rr.kind, "aria-selected": String(chosen === rr.word), "data-key": rr.word, onclick: () => pick(rr.word) },
+    ...optRow(rr, "", { here: th }), extra || null);
   return h("div", { class: "cp-menu", role: "listbox", "aria-label": "Send to", "data-key": "menu" },
-    names.map(n => h("button", { type: "button", role: "option", class: "cp-opt", "aria-selected": String(r.who === n), "data-key": n, onclick: () => pick(n) },
-      statusDot(agentStatus(n).key, { live: S.running.has(n) }), h("b", null, n), h("span", { class: "meta" }, stateWords(n)),
-      n === partner(th) ? h("span", { class: "meta" }, "· you've been talking to it") : null)),
-    h("button", { type: "button", role: "option", class: "cp-opt", "aria-selected": String(r.who === "new"), "data-key": "new", onclick: () => pick("new") },
-      statusDot("none"), h("b", null, "A new agent"), h("span", { class: "meta" }, "starts fresh, with this conversation to read")),
+    names.map(n => opt(agentRow(n), n === partner(th) ? h("span", { class: "meta" }, "· you've been talking to it") : null)),
+    opt({ kind: "word", word: "new" }),
+    foci().length ? h("p", { class: "cp-menu-h meta" }, "A focus: its keeper gets the message, marked with the focus") : null,
+    foci().map(f => opt(focusRow(f))),
     h("p", { class: "cp-menu-n" }, r.why === "partner"
       ? `${r.server} wrote here last, so a message with no name would wake it. You've been talking to ${r.who}, so Hive sends it there.`
-      : "Typing @ and a name in your message sends it to that agent instead."));
+      : "Typing @ in your message searches agents, foci and threads by their words; a name there sends it to that agent instead."));
 }
 function replyChip(d) {
   const p = d.reply;
@@ -568,6 +651,13 @@ function replyChip(d) {
     h("span", { class: "meta" }, "Replying to"), h("b", null, p.from === "person" ? "yourself" : simpleOn() ? hiveName() : p.from),
     h("span", { class: "cp-reply-x" }, short(mdPlain(displayText(p)), 120)),
     h("button", { type: "button", class: "cp-x", title: "Cancel the reply (Esc)", "aria-label": "Cancel the reply", onclick: () => { d.reply = null; d.replyId = null; keep(d); refresh(); } }, "×"));
+}
+function quoteChip(d) {
+  const q = d.quote, first = q.text.split("\n").find(l => l.trim()) || "";
+  return h("div", { class: "cp-reply cp-quote", "data-key": "quote" },
+    h("span", { class: "meta" }, "Quoting"), h("b", null, [q.who, q.where].filter(Boolean).join(", ") || "a message"),
+    h("span", { class: "cp-reply-x" }, short(first, 120)),
+    h("button", { type: "button", class: "cp-x", title: "Remove the quote (Esc)", "aria-label": "Remove the quote", onclick: () => { d.quote = null; keep(d); refresh(); } }, "×"));
 }
 function filesRow(th, d) {
   return h("div", { class: "cp-files", "data-key": "files" }, d.files.map((f, i) => h("span", { class: "cp-file", "data-key": i + f.name, "data-img": f.url ? "" : null },
@@ -584,7 +674,9 @@ export function composer({ thread, update, place = "thread", autofocus, top }) {
   const d = draft(th), r = recipient(th), k = "cp:" + (th || "(new)"), empty = !d.text.trim() && !d.files.length;
   if (CP.focus || autofocus === true) { CP.focus = false; queueMicrotask(() => { const t = field(th); if (t && document.activeElement !== t) { t.focus(); t.setSelectionRange(t.value.length, t.value.length); } }); }
   mdSoon(th);   // after the render lands, so the layer copies the box's font and padding
-  CP.sig = (named(d.text) || "") + "|" + empty + "|" + isBtw(d.text);
+  CP.sig = (named(d.text, th) || "") + "|" + empty + "|" + isBtw(d.text);
+  // Interrupt (beside Send, only while the agent this goes to is working): it gets the message now, not after its current step.
+  const busy = th && !simpleOn() && r.who && r.who !== "new" && r.why !== "btw" && isAgent(r.who) && isRunning(r.who) ? r.who : null;
   const ph = !th ? "Say what you want done" : simpleOn() ? "Message" : r.who === "new" ? "Message a new agent" : r.who ? `Reply to ${r.who}…` : "Message";
   return h("div", { class: "cp", "data-key": k, "data-place": place, "data-fmt": fmtOpen() ? "" : null, ...(th ? {} : dropZone(null)) },  // a thread's composer is inside its conversation's zone
     d.err ? h("p", { class: "cp-err", role: "alert", "data-key": "err" }, d.err) : null,
@@ -592,8 +684,9 @@ export function composer({ thread, update, place = "thread", autofocus, top }) {
     top || null,  // the conversation's status strip: a tab on the box's top edge
     h("div", { class: "cp-box", "data-key": "box" },
       d.reply ? replyChip(d) : null,  // inside the box, its first row
-      CP.ac ? h("div", { class: "cp-ac", role: "listbox", "aria-label": "Names", "data-key": "ac" }, CP.ac.items.map((n, i) => h("button", { type: "button", role: "option", class: "cp-opt", "data-key": n, "aria-selected": String(i === CP.ac.i), onclick: () => acPick(th, n) },
-        CP.ac.mark === "#" ? null : n === "new" ? statusDot("none") : statusDot(agentStatus(n).key, { live: S.running.has(n) }), h("b", null, (CP.ac.mark || "@") + n), CP.ac.mark === "#" ? null : h("span", { class: "meta" }, stateWords(n))))) : null,
+      d.quote ? quoteChip(d) : null,
+      CP.ac ? h("div", { class: "cp-ac", role: "listbox", "aria-label": "Names", "data-key": "ac" }, CP.ac.items.map((r, i) => h("button", { type: "button", role: "option", class: "cp-opt", "data-key": r.word, "data-kind": r.kind, "aria-selected": String(i === CP.ac.i), onclick: () => acPick(th, r.word) },
+        ...optRow(r, CP.ac.mark || "@")))) : null,
       d.files.length ? filesRow(th, d) : null,
       SB.open && can("secrets") ? secretRow() : null,
       SB.say ? h("p", { class: "meta cp-ssay", "data-tone": SB.tone, role: "status", "data-key": "ssay" }, SB.say) : null,
@@ -603,13 +696,13 @@ export function composer({ thread, update, place = "thread", autofocus, top }) {
       h("textarea", { class: "cp-t", "data-key": "t", rows: 1, placeholder: ph, "aria-label": th ? "Message" : "What do you want done?", value: d.text, enterkeyhint: "send",
         oninput: (e, n) => {
           d.text = n.value; keep(d); CP.hist = null; mdSync(n);
-          const moved = acCheck(n, th), sig = (named(d.text) || "") + "|" + (!d.text.trim() && !d.files.length) + "|" + isBtw(d.text);
+          const moved = acCheck(n, th), sig = (named(d.text, th) || "") + "|" + (!d.text.trim() && !d.files.length) + "|" + isBtw(d.text);
           if (moved || sig !== CP.sig) refresh();
         },
         onkeydown: (e, n) => {
           const a = CP.ac;
           if (a && (e.key === "ArrowDown" || e.key === "ArrowUp")) { e.preventDefault(); a.i = (a.i + (e.key === "ArrowDown" ? 1 : a.items.length - 1)) % a.items.length; refresh(); return; }
-          if (a && (e.key === "Enter" || e.key === "Tab") && !e.shiftKey) { e.preventDefault(); acPick(th, a.items[a.i]); return; }
+          if (a && (e.key === "Enter" || e.key === "Tab") && !e.shiftKey) { e.preventDefault(); acPick(th, a.items[a.i].word); return; }
           if (!e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey && !e.isComposing) {
             if ((e.key === "ArrowUp" || e.key === "ArrowDown") && histStep(th, n, e.key === "ArrowUp")) { e.preventDefault(); return; }
             if (e.key === "Tab" && histTab(th, n)) { e.preventDefault(); return; }
@@ -637,6 +730,8 @@ export function composer({ thread, update, place = "thread", autofocus, top }) {
         simpleOn() ? null : th ? toChip(th, r) : d.naming ? h("span", { class: "meta cp-new" }, "A new agent starts on this") : button("Name it", () => { d.naming = true; refresh(); queueMicrotask(() => document.querySelector(".cp-name")?.focus()); }, { kind: "quiet", size: "s", title: "Give this job a short name (optional). Without one it's called by its first words." }),
         !th && S.app && !simpleOn() ? focusPick(d) : null,
         simpleOn() ? null : modelPick(d, r),
+        busy ? button("Interrupt", () => send(th, true), { size: "s", icon: "stop", disabled: empty, cls: "btn-stop cp-int", title: `Interrupt: ${busy} stops its current step and reads this now. A long command it is waiting on is stopped when that can be done cleanly.` }) : null,
         button(place === "thread" ? "Send" : "Start", () => send(th), { kind: "primary", icon: "arrow-up", disabled: empty, cls: "cp-send", title: (place === "thread" ? "Send" : "Start") + " (Enter) · Shift+Enter for a new line · ↑ past messages · Tab completes" }))),
+    busy ? h("p", { class: "meta cp-int-hint", "data-key": "int-hint" }, `${busy} is working: Send reaches it after its current step; Interrupt stops that step.`) : null,
     CP.menu && th ? toMenu(th, r) : null);
 }

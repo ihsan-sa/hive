@@ -7,6 +7,7 @@ import { h, copyText } from "../core/dom.js";
 import { S, can, jget, SYS, OUTSIDE } from "../core/store.js";
 import { simpleOn, hiveName } from "../core/simple.js";
 import { isAgent, isWarden, isRunning, displayText, postSource, btwParent, btwText } from "../core/model.js";
+import { focusById, focusName } from "../core/foci.js";
 import { clock, stamp, now, short, mdPlain, ago, DAY, MIN } from "../core/format.js";
 import { markdown, mdCut, filesNamed } from "./markdown.js";
 import { agentRef, threadRef } from "./refs.js";
@@ -19,8 +20,14 @@ import { openPreview, previewKey, kindOf, badgeOf, remember } from "./preview.js
 
 // ---- read marks ----
 // Has this post reached the agent it names? Read: handed to it mid-run (the inbox hook's record, /api/delivered),
-// or a session of it began after the post, whose prompt carries it.
-const DELIV = { sets: {}, sig: "" };
+// or a session of it began after the post, whose prompt carries it. The hook writes "@<unix seconds>" after each batch it hands over,
+// so the ids before such a token reached the agent at that time (DELIV.at).
+const DELIV = { sets: {}, at: {}, sig: "" };
+function deliveredAt(x) {
+  const at = new Map(); let open = [];
+  for (const w of x) { const t = /^@(\d+(?:\.\d+)?)$/.exec(w); if (t) { for (const id of open) at.set(id, +t[1] * 1e3); open = []; } else open.push(w); }
+  return at;
+}
 
 /** Fetch /api/delivered. Resolves true when the marks changed: call it from a view's poll, every 3 s, and update if true. */
 export async function pollDelivered() {
@@ -28,13 +35,15 @@ export async function pollDelivered() {
     const v = await jget("/api/delivered"), sig = JSON.stringify(v);
     if (sig === DELIV.sig) return false;
     DELIV.sig = sig; DELIV.sets = Object.fromEntries(Object.entries(v).map(([k, x]) => [k, new Set(x)]));
+    DELIV.at = Object.fromEntries(Object.entries(v).map(([k, x]) => [k, deliveredAt(x)]));
     return true;
   } catch (e) { return false; }
 }
 /** What read marks currently depend on, as a string to compare. */
 export const marksSig = () => DELIV.sig + JSON.stringify((S.live && S.live.pending) || []);
 
-/** Where a post stands with one recipient: {key: seen|waiting|queued|unseen, tone, text}. null when it doesn't apply. */
+/** Where a post stands with one recipient: {key: seen|interrupt|waiting|queued|unseen, tone, text}. null when it doesn't apply.
+ *  seen says when it reached the agent when that is known: the hook's time, or the start of the session that had it. */
 export function delivery(p, m) {
   if (m === "new") {
     const st = (S.woke[p.id] || [])[0];
@@ -47,9 +56,15 @@ export function delivery(p, m) {
   if (took) return { key: "seen", tone: "good", text: `${took.name} took it for ${m}`, who: took.name };
   const q = S.pending[m], queued = q && (q.ids || []).includes(p.id);
   const set = DELIV.sets[m], last = S.lastSess[m];
-  if ((set && set.has(p.id)) || (!queued && last && last.start >= p.t - 2000) || answered(p, m)) return { key: "seen", tone: "good", text: `Seen by ${m}`, who: m };
+  const sess = !queued && last && last.start >= p.t - 2000;
+  if ((set && set.has(p.id)) || sess || answered(p, m)) {
+    const t = (DELIV.at[m] && DELIV.at[m].get(p.id)) || (sess ? Math.max(p.t, last.start) : 0);
+    return { key: "seen", tone: "good", text: t ? `Reached ${m} · ${clock(t)}` : `Reached ${m}`, who: m };
+  }
+  // The Interrupt button's post: the starter stops a long command the agent is waiting on, so it reads this at once.
+  if (p.interrupt && isRunning(m)) return { key: "interrupt", tone: "info", text: `Interrupt sent · ${m} gets it now`, who: m };
   // A running agent gets the post from its hook after its current step, even while the starter also holds it for the next start.
-  if (isRunning(m)) return { key: "waiting", tone: "quiet", text: `Queued · ${m} reads it after its current step`, who: m };
+  if (isRunning(m)) return { key: "waiting", tone: "quiet", text: `Sent · reaches ${m} after its current step`, who: m };
   if (queued) return { key: "queued", tone: "info", text: `Waiting for ${m} to start`, who: m };
   // Just posted to a sleeping agent: the starter takes a moment to wake it, so it isn't "not reached" yet.
   if (now() - p.t < 2 * MIN) return { key: "queued", tone: "info", text: `Waking ${m}…`, who: m };
@@ -61,7 +76,7 @@ function answered(p, m) {
   for (let i = d.posts.length - 1; i >= 0 && d.posts[i].t > p.t; i--) if (d.posts[i].from === m) return true;
   return S.posts.some(x => x.reply_to === p.id && x.from === m);
 }
-const RMARK = { seen: "✓", waiting: "…", queued: "…", unseen: "○" };
+const RMARK = { seen: "✓", interrupt: "!", waiting: "…", queued: "…", unseen: "○" };
 
 // The person's newest post in each thread carries its receipt even once seen; older ones only while not seen.
 let lastMine = { ver: -1, by: {} };
@@ -108,10 +123,13 @@ function attachment(p, f) {
   // A voice memo or audio file plays in place: a waveform card, with the file's own panel one click away on its name.
   if (VOICE.test(f.name)) return voiceMemo(fileUrl(p, f) + "?view=1", f.name, fsize(f.size), f.size, { key, on, open: () => viewFile(p, f) });
   // A card, the way Claude shows a file it made: a page with the type on it, the name, type and size, and Open.
+  // A file the panel can't show (a zip, a binary) downloads straight away instead (the person, 2026-11-07).
+  const body = [h("b", { "aria-hidden": "true" }, badgeOf(f.name)),
+    h("span", null, h("span", { class: "msg-fn" }, f.name), h("span", { class: "meta" }, [TYPE[k] || badgeOf(f.name) + " file", fsize(f.size)].filter(Boolean).join(" · ")))];
+  if (k === "other") return h("a", { class: "msg-file", href: fileUrl(p, f), download: f.name, title: "Download " + f.name, "data-kind": k },
+    ...body, h("span", { class: "msg-open" }, icon("download"), "Download"));
   return h("button", { type: "button", class: "msg-file", title: "Open " + f.name + " beside the conversation", "data-pv-key": key, "data-pv-on": on, "data-kind": k, onclick: () => viewFile(p, f) },
-    h("b", { "aria-hidden": "true" }, badgeOf(f.name)),
-    h("span", null, h("span", { class: "msg-fn" }, f.name), h("span", { class: "meta" }, [TYPE[k] || badgeOf(f.name) + " file", fsize(f.size)].filter(Boolean).join(" · "))),
-    h("span", { class: "msg-open" }, OPEN_VERB[k] || "Open"));
+    ...body, h("span", { class: "msg-open" }, OPEN_VERB[k] || "Open"));
 }
 
 // ---- long posts: the start and the end show, the middle folds, so a report's conclusion is never the hidden part ----
@@ -259,8 +277,23 @@ function body(p, ws) {
 // ---- jumping to the post a reply answers. The view that lists posts says how. ----
 let jumper = null;
 export const onJump = fn => { jumper = fn; };
+/** Open post id in its conversation, highlighted (Chat says how; before Chat has drawn, it opens the conversation first). */
+export const jump = id => { if (jumper) jumper(id); else location.hash = "#comms"; };
 const who = n => (n === "person" ? "You" : simpleOn() ? hiveName() : n);
 
+// A post passed on from another thread (a relay, or @thread in the text) says where it came from; the original says where its copies went.
+let copyFor = [], copies = new Map();
+function copiesOf(p) {
+  if (copyFor[0] !== S.posts || copyFor[1] !== S.posts.length) { copyFor = [S.posts, S.posts.length]; copies = new Map(); for (const q of S.posts) if (q.relay_of) { const l = copies.get(q.relay_of); if (l) l.push(q); else copies.set(q.relay_of, [q]); } }
+  return copies.get(p.id) || [];
+}
+export function relayLine(p) {
+  const out = [];
+  if (p.relay_of) { const o = S.byId[p.relay_of], m = /in thread (\S+) \(/.exec(String(p.text || "")), from = (o && o.th) || (m && m[1]); out.push(h("span", { class: "msg-relay" }, icon("reply"), `Passed on${p.relay_by ? " by " + p.relay_by : ""} from `, from ? threadRef(from) : "another thread")); }
+  const cs = copiesOf(p); if (cs.length) out.push(h("span", { class: "msg-relay" }, "Passed on to ", ...cs.flatMap((c, i) => (i ? [", ", threadRef(c.th)] : [threadRef(c.th)]))));
+  for (const id of p.foci || []) { const f = focusById(id); out.push(h("span", { class: "msg-relay" }, "For the focus ", f ? focusName(f) : id)); }
+  return out.length ? h("div", { class: "msg-relays" }, ...out) : null;
+}
 function quote(p) {
   const q = S.byId[p.reply_to];
   return h("button", { type: "button", class: "msg-q", title: q ? "Go to the message this answers" : `Answers post ${p.reply_to}, not loaded here`, onclick: () => jumper && jumper(p.reply_to) },
@@ -347,6 +380,7 @@ export function message(p, opts = {}) {
   const kind = SYS.has(p.from) ? "sys" : p.from === "person" ? "me" : OUTSIDE.has(p.from) ? "out" : "agent";
   return h("article", { class: "msg", tabindex: "-1", "data-key": p.id, "data-who": kind, "data-cont": opts.cont ? "" : null, "data-report": displayText(p).length > LONG ? "" : null, "aria-label": `${who(p.from)}, ${stamp(p.t)}` },
     messageHead(p, opts),
+    relayLine(p),
     p.reply_to ? quote(p) : null,
     body(p, ws),
     files.length ? h("div", { class: "msg-files" }, files.map(f => attachment(p, f))) : null,

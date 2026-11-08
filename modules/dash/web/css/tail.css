@@ -81,7 +81,7 @@
   .xp-says img{max-width:100%}
   .xp-turn[data-stage] .xp-who b{font-weight:400;color:#777}
   .xp-turn[data-stage] .xp-says{color:#555}
-  .xp-files{font-size:9pt;color:#666}
+  .xp-files{font-size:9pt;color:#666;margin:4px 0 0;padding-left:16px}
 }
 .wb{margin:0 0 8px;border:1px solid var(--line-2);border-radius:8px;overflow:hidden}
 .wb-h{display:flex;gap:8px;align-items:flex-start;padding:8px 10px}

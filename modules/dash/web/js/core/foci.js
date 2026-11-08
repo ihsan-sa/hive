@@ -68,6 +68,27 @@ export function agentsOf(id) {
  *  The person does not read the raw list (too many, 11071606f4d4); agents decide by default and keep this part for what is really theirs. */
 export const askedOf = id => { const f = focusById(id); return (f && f.summary && f.summary.needs) || []; };
 /** One word for where a focus stands, and its tone: needs you, moving, waiting, quiet. */
+/** A focus's share of the hive's work: focus.py's runs and agent posts in its threads, with the dash's cost laid on them, over the last day and week.
+ *  { day: {runs, posts, cost}, week: {...}, total: {day, week}, windows } or null when the API has none yet. id null is Misc. */
+export function activityOf(id) {
+  const a = S.foci && S.foci.activity; if (!a || !a.total) return null;
+  const b = id ? a.foci && a.foci[id] : a.misc; if (!b) return null;
+  return { day: b.day, week: b.week, total: a.total, windows: a.windows };
+}
+/** Work is runs and posts together, cost is money: each as this focus's fraction of the hive's over the window, 0..1 (0 when the hive did nothing). */
+export function shareOf(act, win, what) {
+  if (!act || !act[win] || !act.total[win]) return 0;
+  const v = what === "cost" ? (act[win].cost || 0) : (act[win].runs || 0) + (act[win].posts || 0);
+  const t = what === "cost" ? (act.total[win].cost || 0) : (act.total[win].runs || 0) + (act.total[win].posts || 0);
+  return t > 0 ? Math.min(1, v / t) : 0;
+}
+/** A fraction in words, for simple view: it reads as a share, not a number. */
+export function fractionWords(x) {
+  return x >= 0.9 ? "nearly all" : x >= 0.6 ? "most" : x >= 0.4 ? "about half" : x >= 0.28 ? "a third" : x >= 0.18 ? "a quarter" : x >= 0.12 ? "a sixth" : x >= 0.07 ? "a tenth" : x > 0 ? "a little" : "none";
+}
+export const pct = x => `${Math.round(x * 100)}%`;
+export const usd = c => (c >= 100 ? `$${Math.round(c)}` : c >= 10 ? `$${c.toFixed(1)}` : `$${c.toFixed(2)}`);
+
 export function stateOf(id) {
   if (askedOf(id).length) return { key: "needs", word: "needs you", tone: "info" };
   if (agentsOf(id).now.length) return { key: "moving", word: "moving", tone: "good" };

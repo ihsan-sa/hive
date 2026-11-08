@@ -1,19 +1,17 @@
-// "Ask about this": put a quote into the composer of the thread the post is in. It only adds text; the person still presses Send.
+// "Ask about this": quote a piece of the post above the composer of its thread (a chip with ×, composer.js quoteRef).
+// The box stays the person's own; the quote goes in front of their words when they press Send.
 import { h } from "../core/dom.js";
 import { S, can } from "../core/store.js";
 import { clock } from "../core/format.js";
-import { quoteInto } from "../ui/composer.js";
+import { quoteRef } from "../ui/composer.js";
 
 const postOf = el => { const m = el.closest("article.msg"); return m ? S.byId[m.dataset.key] : null; };
 
-/** Quote `text` from the post holding el, as Markdown. `where` is a short label, such as "line 12". */
+/** Quote `text` from the post holding el. `where` is a short label, such as "line 12". */
 export function askQuote(el, text, where, prose = false) {
   const p = postOf(el);
   if (!p || !can("post")) return false;
-  const fence = !prose && text.includes("\n") && !text.startsWith("$$");
-  const body = fence ? "```\n" + text + "\n```" : text;
-  const label = (p.from === "person" ? "you" : p.from) + (where ? ", " + where : "");
-  quoteInto(p.th, `> ${label}:\n` + body.split("\n").map(l => "> " + l).join("\n") + "\n\n");
+  quoteRef(p.th, { who: p.from === "person" ? "you" : p.from, where, text, code: !prose && !text.startsWith("$$") });
   return true;
 }
 

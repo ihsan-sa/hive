@@ -141,7 +141,7 @@ export function list(rows, { empty: none = "Nothing here.", limit, onMore, moreT
   if (!rows.length) return empty(none);
   const shown = limit ? rows.slice(0, limit) : rows;
   return h("div", null,
-    h("ul", { class: "list", "data-dense": dense ? "" : null }, shown.map(r => h("li", { class: "lr", "data-key": r.key || null, "data-dim": r.dim ? "" : null },
+    h("ul", { class: "list", "data-dense": dense ? "" : null }, shown.map(r => h("li", { class: "lr", "data-key": r.key || null, "data-dim": r.dim ? "" : null, "data-here": r.here ? "" : null },
       h(r.href ? "a" : r.onClick ? "button" : "div", { class: "lr-in", style: r.depth ? `--d:${r.depth}` : null, href: r.href || null, type: !r.href && r.onClick ? "button" : null, "aria-current": r.current ? "true" : null, "aria-expanded": r.expanded == null ? null : String(r.expanded), onclick: r.onClick || null },
         h("div", { class: "lr-t" }, r.lead || null, h("b", { title: typeof r.title === "string" ? r.title : null }, r.title), r.sub ? h("span", { class: "muted" }, r.sub) : null, r.meta ? h("span", { class: "meta" }, r.meta) : null),
         r.text ? h("div", { class: r.whole ? "lr-x" : "lr-x clamp-2" }, r.text) : null),

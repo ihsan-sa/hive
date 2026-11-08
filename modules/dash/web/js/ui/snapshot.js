@@ -20,17 +20,21 @@ function keepScroll(from, to) {
     const box = document.createElement("div"); box.append(...to.childNodes); to.append(box);
     box.style.translate = `${-x}px ${-y}px`; return;
   }
-  // Children out of view are hidden, so the picture holds one screen of a long thread, not all of it shifted far off: a tall moved layer is what some
-  // browsers (Chrome on Windows) left blank. The rest move by a plain offset where they can, which paints without a layer of its own.
+  // Children out of view are left out, so the picture holds one screen of a long thread, not all of it shifted far off: a far-moved layer is what some
+  // browsers (Chrome on Windows) left blank, even with the rest only hidden (the person, 2026-11-07: the chat came out empty). With the ones above
+  // gone, those in view sit near the top already and move by at most a screen, by a plain offset where they can, which paints without a layer of its own.
   const box = from.getBoundingClientRect(), kids = [...from.children], twins = [...to.children];
+  const flows = c => /^(static|relative)$/.test(getComputedStyle(c).position), seen = c => { const r = c.getBoundingClientRect(); return !(r.bottom < box.top || r.top > box.bottom || r.right < box.left || r.left > box.right); };
+  const first = kids.find(flows), firstSeen = kids.find(c => flows(c) && seen(c));
+  // With the rows above it dropped, firstSeen takes first's place, less the difference in their top margins.
+    const mt = c => parseFloat(getComputedStyle(c).marginTop) || 0;
+    const gone = first && firstSeen ? firstSeen.getBoundingClientRect().top - first.getBoundingClientRect().top - mt(firstSeen) + mt(first) : 0, yy = y - gone;
   kids.forEach((c, i) => {
     const t = twins[i]; if (!t) return;
-    const r = c.getBoundingClientRect();
-    if (r.bottom < box.top || r.top > box.bottom || r.right < box.left || r.left > box.right) { t.style.visibility = "hidden"; return; }
-    const pos = getComputedStyle(c).position;
-    if (pos === "static" || pos === "relative") {
-      const cs = getComputedStyle(c), top = parseFloat(cs.top) || 0, left = parseFloat(cs.left) || 0;
-      t.style.position = "relative"; t.style.top = (pos === "relative" ? top : 0) - y + "px"; t.style.left = (pos === "relative" ? left : 0) - x + "px"; t.style.bottom = t.style.right = "auto";
+    if (!seen(c)) { t.style.setProperty("display", "none", "important"); return; }
+    if (flows(c)) {
+      const cs = getComputedStyle(c), rel = cs.position === "relative", top = parseFloat(cs.top) || 0, left = parseFloat(cs.left) || 0;
+      t.style.position = "relative"; t.style.top = (rel ? top : 0) - yy + "px"; t.style.left = (rel ? left : 0) - x + "px"; t.style.bottom = t.style.right = "auto";
     } else t.style.translate = `${-x}px ${-y}px`;
   });
 }

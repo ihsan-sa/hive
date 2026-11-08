@@ -4,6 +4,12 @@ Release notes are on the [releases page](https://github.com/ihsan-sa/hive/releas
 
 A release can ship several times a day. A new Hive installs at most one a day, once it has been out for at least 12 hours; **How often to update** in Settings changes that. The latest is at [releases/latest](https://github.com/ihsan-sa/hive/releases/latest).
 
+## Chat: Interrupt, and when a message reached the agent
+While an agent is working, the conversation has an **Interrupt** button beside Send. If the agent is waiting on a long command, that command is stopped the way Escape stops it, so the message reaches the agent now rather than after the command ends. Every message you send now says when it reached the agent ("Reached a5c83 · 12:03"); until then it says it reaches the agent after its current step. A file sent with no words shows just the file, with no "Attached:" text, and quoting a message puts a small quote above the box, with × to remove it, instead of pasting the text into what you type. From the command line: `hive post --interrupt`.
+
+## The page notices sooner when the Hive stops or starts
+When the part of the Hive that starts agents stops, an open page now says so within about 15 seconds, down from about 35. When it starts again, the "isn't running" line and the "Taking a break" pill go within the same time, with no reload. A clean stop (Stop everything, or `systemctl --user stop`) shows at once instead of after the minute it took the old check to notice. So does a crash: the page sees the process is gone, where it used to wait the minute plus a refresh, about 72 seconds.
+
 ## Site edit mode: comment mode
 On a site's /edit pages, Ctrl+Alt+M (⌘⌥M on a Mac) turns on comment mode: click to pin a comment or drag a box around something, type, press Enter. Comments stay across pages and reloads until you press Send all, which sends them together, each with a small picture of the spot.
 

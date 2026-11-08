@@ -428,6 +428,8 @@ def series_dates(path, column, n_ahead, said=None):
             m = re.fullmatch(r"(\d{4})(?:-(\d{1,2})(?:-(\d{1,2}))?)?", v)
             if not m: raise ValueError(f"date {v!r} isn't YYYY, YYYY-MM or YYYY-MM-DD")
             ds.append(dt.date(int(m[1]), int(m[2] or 1), int(m[3] or 1))); at.append(n)
+        elif any(c.strip() for c in r):
+            raise ValueError(f"row {n}: blank date in column {column!r}: a blank date would misalign dates and values; fill it or drop the row")
     if len(ds) < 2: raise ValueError("need at least two dates")
     for k in range(1, len(ds)):
         if ds[k] == ds[k - 1]: raise ValueError(f"row {at[k]}: date {ds[k].isoformat()} repeats row {at[k - 1]}")
@@ -475,8 +477,10 @@ def read_series(path, column=None, said=None):
             said["note"] = f"no column named: used the last numeric one, {head[i] if head else f'column {i + 1}'}. Others are {', '.join(names)}: choose with --column"
     if said is not None and head: said["column"] = head[i]
     out = []
-    for n, r in enumerate(body):
+    for n, r in enumerate(body, 2 if head else 1):
         if len(r) > i and r[i].strip():
-            if not isnum(r[i]): raise ValueError(f"row {n + 1}: {r[i]!r} isn't a number")
+            if not isnum(r[i]): raise ValueError(f"row {n}: {r[i]!r} isn't a number")
             out.append(float(r[i].replace(",", "")))
+        elif said is not None and any(c.strip() for c in r):
+            said.setdefault("warnings", []).append(f"row {n}: blank value, dropped: the rows after it move up one place, which shifts the season (fill it or drop the row)")
     return out

@@ -864,6 +864,11 @@ def cmd_file(a):
     if s and not a.force: sys.exit(f"kb file: refused, this looks like a credential or private address: {s.group(0)[:6]}... ~/kb is read by outside models. Take it out; --force if it's a false alarm.")
     who, day = os.environ.get("HIVE_NAME", "?"), time.strftime("%Y-%m-%d", time.gmtime())
     sup = ""
+    src = None
+    if a.from_:
+        src = board_post(a.from_)
+        if not src: sys.exit(f"kb file: --from {a.from_} isn't a post on the board")
+        sup += f"From post {src['id']} in thread `{src.get('thread') or '?'}`.\n\n"
     if a.supersedes:
         old = norm_path(a.supersedes)
         if not os.path.exists(os.path.join(H, old)): sys.exit(f"kb file: --supersedes {a.supersedes} doesn't exist (give the path under ~, like kb/NAME.md)")
@@ -889,6 +894,22 @@ def cmd_file(a):
         print("similar, so merge if it's the same fact (kb file --to NAME.md appends):")
         for h in sim[:4]: print("  " + fmt_path(h["path"]) + ":" + str(h["line"]))
     log({"filed": os.path.relpath(full, H), "to": bool(a.to)})
+    if src or a.focus:  # the focus page lists what was filed under it (core/focus.py file)
+        cmd = [sys.executable, "-I", os.path.join(H, "core", "focus.py"), "file", os.path.relpath(full, H)] + (["--post", src["id"]] if src else []) + (["--focus", a.focus] if a.focus else [])
+        try: r = subprocess.run(cmd, capture_output=True, text=True, timeout=30); print((r.stdout or r.stderr).strip() or "no focus for it")
+        except Exception as e: print(f"not listed on a focus page: {e}")
+
+def board_post(pid):
+    """The board post with this id, or None."""
+    try:
+        with open(os.path.join(H, "board.jsonl")) as f:
+            for ln in f:
+                if pid in ln:
+                    try: p = json.loads(ln)
+                    except ValueError: continue
+                    if p.get("id") == pid: return p
+    except OSError: pass
+    return None
 
 def hits_for(c, words):
     return [h for h in hydrate(c, rank(c, fts_expr(words[:25], []), 40)) if h["source"] in ("kb", "core", "modules", "projects")]
@@ -984,7 +1005,7 @@ def main():
     p = sp.add_parser("find", aliases=["search"]); p.add_argument("words", nargs="+"); p.add_argument("-n", type=int, default=12); p.add_argument("--all", action="store_true")
     p.add_argument("--from", dest="frm"); p.add_argument("--to"); p.add_argument("--in", dest="src"); p.add_argument("--board", action="store_true", help="board posts only, in board order, at most 40"); p.set_defaults(f=cmd_find)
     p = sp.add_parser("open"); p.add_argument("target"); p.add_argument("--lines", type=int, default=40); p.set_defaults(f=cmd_open)
-    p = sp.add_parser("file"); p.add_argument("title"); p.add_argument("--to"); p.add_argument("--supersedes", metavar="PATH"); p.add_argument("--force", action="store_true"); p.set_defaults(f=cmd_file)
+    p = sp.add_parser("file"); p.add_argument("title"); p.add_argument("--to"); p.add_argument("--supersedes", metavar="PATH"); p.add_argument("--from", dest="from_", metavar="POST", help="the board post this comes from: a link back, and the note is listed on that post's focus page"); p.add_argument("--focus", help="list it on this focus's page"); p.add_argument("--force", action="store_true"); p.set_defaults(f=cmd_file)
     p = sp.add_parser("alias"); p.add_argument("words", nargs="+"); p.set_defaults(f=cmd_alias)
     p = sp.add_parser("miss"); p.add_argument("question", nargs="+"); p.set_defaults(f=cmd_miss)
     p = sp.add_parser("recall"); p.add_argument("--post", action="append"); p.add_argument("-n", type=int, default=5); p.add_argument("--for", dest="who"); p.set_defaults(f=cmd_recall)

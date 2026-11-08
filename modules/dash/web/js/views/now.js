@@ -12,7 +12,6 @@ import { agentCard as cardRows, displayText } from "../core/model.js";
 import { killButton } from "../actions.js";
 import { chart } from "../ui/chart.js";
 import { signInWords } from "../ui/shell.js";
-import { awayCard } from "../ui/away.js";
 
 const V = {};
 
@@ -168,7 +167,7 @@ export default {
         cols(...activityCharts(t)),   // "Agents at work" would draw the same line as "running at once": one chart, not two
         hasTiers() ? section({ title: "Where the agent hours went", note: "against your priority list, last 24 hours" },
           share(TIERS.map(x => ({ key: x.key, label: S.app.app ? APP_TIER[x.key] || x.label : x.label, tone: x.tone, value: hrs[x.key], text: `${(hrs[x.key] / HOUR).toFixed(1)}h (${Math.round((100 * hrs[x.key]) / tot)}%)` })))) : null);
-      return overview({ header, main: [awayCard(ctx), main].filter(Boolean), after: [todayCard(t), more] });
+      return overview({ header, main: [main], after: [todayCard(t), more] });
     }
 
     const header = pageHeader({
