@@ -23,7 +23,9 @@ jobs:
       timeout-minutes: 35
       run: |
         set -o pipefail
-        HIVE_CHECK_LINE=get-mac.sh sh mac-check.sh 2>&1 | tee install.log | tail -n 80
+        # On the site install.sh is get.sh; on the raw branch it is the inner script, so point the VM at get.sh (as win-test.ps1 does)
+        sed 's|"$SITE/install.sh"|"$SITE/get.sh"|' get-mac.sh > line.sh; ! cmp -s get-mac.sh line.sh
+        HIVE_CHECK_LINE=line.sh sh mac-check.sh 2>&1 | tee install.log | tail -n 80
         grep -q '^done, 0 failed\.' install.log && ! grep -q '^done, [1-9][0-9]* failed' install.log
     - name: The report
       if: always()
