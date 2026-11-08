@@ -1,98 +1,114 @@
-/* Hive design tokens, 2026-11-05 (ui-regen-1105-0932). Replaces css/tokens.css and site/css/tokens.css (and the demo copy, which the site build makes).
-   Changes from the shipped file: --data-bg and --on-accent, both NEW and both drawn last pass but not yet landed. Everything else is unchanged:
-   Inter, cool greys, amber as the one accent, blue --data for charts.
-   Every variable name from the old file is kept, so JS and the other CSS files keep working.
-   New names: --fs-read, --fs-hero, --lh-read, --s8, --s9, --r-xl, --ctl-l, --accent, --accent-ink, --accent-bg.
-   One definition per token; light-dark() picks the theme. <html> follows the system; data-theme="light|dark" pins it. */
+/* Hive design tokens, v2 (ui-redesign-v2, 2026-11-07). Replaces css/tokens.css and site/css/tokens.css.
+   Every variable name from the shipped file is kept, so JS and the other CSS files keep working.
+   What changed, in short (CHANGED.md has the why):
+   - One accent, used only for "yours to act on", focus and selection. Primary buttons are ink, not amber.
+   - Status markers carry a SHAPE as well as a colour (see .st in components.css): working = filled dot,
+     queued = half-filled dot, quiet = hollow ring, stuck = triangle, needs you = diamond, ended = dash.
+     Red and green also differ in lightness, so they read apart for colour-blind owners and in greyscale.
+   - New: --tint (the faint fill under hovers/selected rows), --scrim, --e3, --ring, --dur/--ease, --bar-h, --rail-w, --read-w, --pane-w.
+   - Theme follows color-scheme on ANY element, not only <html>: [data-theme=dark] on a subtree switches it.
+     (light-dark() inside custom properties resolves where the property is used.) */
 :root{color-scheme:light dark}
-:root[data-theme=light]{color-scheme:light}
-:root[data-theme=dark]{color-scheme:dark}
+[data-theme=light]{color-scheme:light}
+[data-theme=dark]{color-scheme:dark}
 
-/* Inter, variable, SIL Open Font Licence 1.1. Bundled in vendor/inter/ (subset to Latin, 96 KB); the site build copies it.
-   https://rsms.me/inter/ ; 345 KB for the full file, ~110 KB subset to Latin + Latin-1 + punctuation (pyftsubset). */
+/* Inter, variable, SIL Open Font Licence 1.1, bundled in vendor/inter/. */
 @font-face{font-family:"Inter";font-style:normal;font-weight:100 900;font-display:swap;src:url("../vendor/inter/InterVariable.woff2") format("woff2")}
 
 :root{
-  /* type: one family, one scale */
+  /* type: one family, one scale. Inter's tabular figures are switched on where numbers line up (.num). */
   --font:"Inter",system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
   --mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,"Liberation Mono",monospace;
-  --fs-micro:11px;    /* table heads, axis ticks, badges */
+  --fs-micro:11px;    /* badges, axis ticks */
   --fs-meta:12px;     /* times, metadata, hints */
-  --fs-small:13px;    /* buttons, descriptions, table cells */
+  --fs-small:13px;    /* buttons, menu items, descriptions, table cells */
   --fs-body:14px;     /* body, rows, labels */
-  --fs-read:15px;     /* chat prose (chat.css used to define this) */
+  --fs-read:15px;     /* chat prose: the owner can raise it with Aa (see --read-scale) */
   --fs-title:15px;    /* names, card titles */
-  --fs-lead:17px;     /* section titles, page lead */
+  --fs-lead:17px;     /* section titles, conversation title */
   --fs-head:22px;     /* page headline */
-  --fs-figure:28px;   /* numbers in stats and gauges */
+  --fs-figure:28px;   /* the one number a page leads with */
   --fs-display:40px;  /* website section and guide title */
   --fs-hero:56px;     /* website hero only */
   --measure:66ch;
-  --lh:1.5; --lh-tight:1.2; --lh-read:1.65;
+  --lh:1.5; --lh-tight:1.25; --lh-read:1.6;
   --w-med:500; --w-bold:600;
+  --track-tight:-.011em;  /* headings 17px and up */
+  --read-scale:1;         /* Aa: .9, 1, 1.15, 1.3; set on .cm by the composer's text-size menu */
 
   /* space: 4px grid */
   --s1:4px; --s2:8px; --s3:12px; --s4:16px; --s5:24px; --s6:32px; --s7:48px; --s8:64px; --s9:96px;
-  --gutter:32px; --page-max:1360px; --page-narrow:1040px; /* Settings, Agents, Usage use .page[data-width=narrow] */
+  --gutter:32px; --page-max:1360px; --page-narrow:1040px;
+  --bar-h:52px;     /* the top bar */
+  --rail-w:280px;   /* the conversations rail */
+  --read-w:760px;   /* the reading column of a conversation, a focus page and Yours */
+  --pane-w:480px;   /* the file preview pane */
 
   /* radius: grows with size */
   --r-s:6px; --r-m:8px; --r-l:12px; --r-xl:20px; --r-pill:999px;
 
-  /* density: three control heights only */
+  /* density: three control heights. Touch targets stay >= 44px on a phone (the hit area grows, not the drawing). */
   --row:40px; --row-tight:32px; --ctl:32px; --ctl-s:28px; --ctl-l:40px;
 
   /* neutrals: cool grey, near-zero chroma */
-  --bg:       light-dark(oklch(98.6% .002 265), oklch(17%   .004 265));
+  --bg:       light-dark(oklch(98.6% .002 265), oklch(16.5% .004 265));
   --surface:  light-dark(oklch(100%  0 0),      oklch(19.5% .004 265));
-  --sunken:   light-dark(oklch(96.7% .003 265), oklch(15%   .004 265));
-  --hover:    light-dark(oklch(95.4% .004 265), oklch(24%   .005 265));
+  --sunken:   light-dark(oklch(96.7% .003 265), oklch(14.5% .004 265));
+  --hover:    light-dark(oklch(95.6% .004 265), oklch(23.5% .005 265));
+  --tint:     light-dark(oklch(20% .006 265 / .04), oklch(95% .003 265 / .05));
   --line:     light-dark(oklch(92.6% .004 265), oklch(26.5% .005 265));
-  --line-2:   light-dark(oklch(87.5% .005 265), oklch(33%   .006 265));
+  --line-2:   light-dark(oklch(86.5% .005 265), oklch(34%   .006 265));
   --ink:      light-dark(oklch(20%   .006 265), oklch(95%   .003 265));
-  --ink-2:    light-dark(oklch(42%   .008 265), oklch(78%   .005 265));
-  --ink-3:    light-dark(oklch(53%   .008 265), oklch(65%   .006 265)); /* 4.6:1 on --surface, light and dark */
-  --on-ink:   light-dark(oklch(99%   0 0),      oklch(17%   .004 265));
+  --ink-2:    light-dark(oklch(42%   .008 265), oklch(80%   .005 265));
+  --ink-3:    light-dark(oklch(52%   .008 265), oklch(67%   .006 265)); /* measured: 5.0 to 6.6:1 on --bg, --surface, --sunken, both themes */
+  --on-ink:   light-dark(oklch(99%   0 0),      oklch(16.5% .004 265));
+  --scrim:    light-dark(oklch(20% .006 265 / .32), oklch(0% 0 0 / .55));
 
-  /* the one accent: links, focus, selection, the tab badge, "needs your answer" */
-  --accent:     light-dark(oklch(62% .15 72), oklch(80% .16 80));   /* honeycomb amber, from the hive logo */
-  --accent-soft:light-dark(oklch(86% .11 85), oklch(92% .09 90));   /* the logo's lighter centre cell */
-  --accent-ink: light-dark(oklch(46% .11 68), oklch(85% .13 85));
-  --accent-bg:  light-dark(oklch(62% .15 72 / .11), oklch(80% .16 80 / .15));
+  /* the one accent: "yours to act on" (needs you, the tab count, waiting markers), focus, selection */
+  --accent:     light-dark(oklch(62% .15 72), oklch(80% .15 80));   /* honeycomb amber, from the hive logo */
+  --accent-soft:light-dark(oklch(86% .11 85), oklch(92% .09 90));
+  --accent-ink: light-dark(oklch(45% .11 68), oklch(85% .13 85));   /* amber text: 7.3:1 light, 12:1 dark on --bg (measured) */
+  --accent-bg:  light-dark(oklch(62% .15 72 / .10), oklch(80% .15 80 / .13));
+  --on-accent:  oklch(20% .02 70);                                   /* text on an amber fill: 4.9:1 light, 9.6:1 dark (measured) */
   --focus:var(--accent); --link:var(--accent-ink); --sel:var(--accent-bg);
+  --ring:0 0 0 2px var(--bg), 0 0 0 4px var(--focus);
 
   /* status: fill + ink. Only on status, always with a shape and a word. */
-  --good:     light-dark(oklch(62% .15 152), oklch(72% .15 152));
-  --good-ink: light-dark(oklch(45% .12 152), oklch(80% .13 152));
-  --warn:     light-dark(oklch(76% .15 75),  oklch(80% .14 75));
-  --warn-ink: light-dark(oklch(50% .12 62),  oklch(84% .12 78));
-  --bad:      light-dark(oklch(58% .2 27),   oklch(67% .18 25));
-  --bad-ink:  light-dark(oklch(50% .19 27),  oklch(77% .14 25));
-  /* data: the plain colour of bars, meters and chart lines. Blue, so a full bar never reads as a warning;
-     orange (--warn) and red (--bad) are kept for the bars that are (the person, 2026-11-04) */
+  --good:     light-dark(oklch(60% .15 152), oklch(74% .15 152));   /* working: mid-light green */
+  --good-ink: light-dark(oklch(44% .12 152), oklch(82% .13 152));
+  --warn:     light-dark(oklch(74% .15 75),  oklch(80% .14 75));    /* queued */
+  --warn-ink: light-dark(oklch(48% .12 62),  oklch(85% .12 78));
+  --bad:      light-dark(oklch(52% .2 27),   oklch(64% .19 25));    /* stuck: on --bg 5.9:1 light, 5.3:1 dark; working green 3.5:1 light, 8.9:1 dark: they never share a lightness */
+  --bad-ink:  light-dark(oklch(48% .19 27),  oklch(78% .14 25));
+  --bad-bg:   light-dark(oklch(52% .2 27 / .08), oklch(64% .19 25 / .14));
   --data:     light-dark(oklch(58% .14 250), oklch(72% .12 250));
-  --data-bg:  light-dark(oklch(58% .14 250 / .12), oklch(72% .12 250 / .16));   /* NEW: the fill under a chart line (charts used a hard-coded 15% mix) */
-  --on-accent:oklch(20% .02 70);   /* NEW: text on an amber fill (badge, pressed chip check). White on amber is 2.3:1; this is 8:1 */
-  --info:var(--accent); --info-ink:var(--accent-ink);   /* "waiting for you" is the accent: it's yours to act on */
-  --quiet:    light-dark(oklch(66% .006 265), oklch(58% .006 265));
+  --data-bg:  light-dark(oklch(58% .14 250 / .12), oklch(72% .12 250 / .16));
+  --info:var(--accent); --info-ink:var(--accent-ink);
+  --quiet:    light-dark(oklch(64% .006 265), oklch(58% .006 265));
   --ended:    light-dark(oklch(80% .004 265), oklch(42% .004 265));
 
-  /* categories (charts, priority tiers): kept, desaturated so they don't compete with status */
+  /* categories (charts, priority tiers): kept */
   --tier1: light-dark(oklch(60% .13 72), oklch(76% .13 80));
   --tier2: light-dark(oklch(55% .12 250), oklch(72% .11 250));
   --held:  light-dark(oklch(60% .08 190), oklch(70% .08 190));
   --other: light-dark(oklch(80% .004 265), oklch(42% .004 265));
   --warden: light-dark(oklch(50% .14 305), oklch(72% .12 305));
 
-  /* elevation: only things that float, plus the composer */
-  --e1: 0 1px 2px oklch(0% 0 0 / .05), 0 4px 16px oklch(0% 0 0 / .07);
-  --e2: 0 2px 6px oklch(0% 0 0 / .08), 0 16px 40px oklch(0% 0 0 / .16);
+  /* elevation: only things that float. e1 = composer and cards that lift on hover; e2 = menus, popovers; e3 = dialogs, sheets */
+  --e1: 0 1px 2px oklch(0% 0 0 / .05), 0 2px 8px oklch(0% 0 0 / .04);
+  --e2: 0 0 0 1px var(--line), 0 4px 12px oklch(0% 0 0 / .08), 0 12px 32px oklch(0% 0 0 / .10);
+  --e3: 0 0 0 1px var(--line), 0 8px 24px oklch(0% 0 0 / .14), 0 24px 64px oklch(0% 0 0 / .18);
+
+  /* motion: short, and none when the owner asks for less */
+  --dur:140ms; --dur-l:220ms; --ease:cubic-bezier(.2,.7,.2,1);
 }
+@media (prefers-reduced-motion:reduce){:root{--dur:0ms;--dur-l:0ms}}
 
 /* developer look: same system, denser */
 :root[data-dev]{
   --row:32px; --row-tight:28px; --ctl:28px; --ctl-s:24px;
   --fs-head:20px; --fs-figure:24px;
-  --gutter:28px;
+  --gutter:28px; --rail-w:300px;
 }
 
 /* tone hook: any element with data-tone gets --c (fill) and --ci (text) */

@@ -1,0 +1,89 @@
+/* R7 step 5: page CSS for first run, Usage, Settings, the preview pane, banners and the tour.
+   Ported from ~/designs/ui-redesign-v2 (pages.css, components.css .banner/.tour, chat.css .pv). Owned by step 5. */
+
+/* ---- banner: one line under the bar (offline, a newer version, the hive stopped) ---- */
+.banner{display:flex;align-items:center;gap:var(--s3,12px);min-height:40px;padding:6px var(--s4,16px);font-size:var(--fs-small);border-top:0;border-bottom:1px solid var(--line);background:var(--surface);color:var(--ink)}
+.banner[data-tone=bad]{background:var(--bad-bg);color:var(--bad-ink);border-color:color-mix(in oklch,var(--bad) 30%,transparent)}
+.banner[data-tone=info]{background:var(--accent-bg)}
+.banner[data-tone=warn]{background:color-mix(in oklch,var(--warn,var(--accent)) 10%,var(--surface))}
+.banner-t{flex:1;min-width:0;text-wrap:pretty}
+.banner-t b{font-weight:var(--w-bold,600)}
+.banner .btn{flex:none}
+.banner>.st{flex:none}
+.new-ver.banner{max-width:none;border:0;border-top:1px solid var(--line);border-radius:0;box-shadow:none;padding:6px var(--s4,16px)}   /* a row of the sticky top bar, like .band */
+@container app (width < 700px){.banner{padding:6px 12px;gap:8px;font-size:var(--fs-meta)}}
+
+/* ---- Usage (R7 step 5, design-d-usage): two meters, accounts as rows, the detail folded ---- */
+.usage-hero{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:var(--s5,20px) var(--s6,24px);margin-top:var(--s4,16px)}
+.usage-hero>.u-m{display:grid;gap:8px;min-width:0}
+.u-m-h{display:flex;justify-content:space-between;align-items:baseline;gap:12px;flex-wrap:wrap}
+.u-m-l{font-weight:600}
+.usage-hero .meter{height:10px}
+.u-accts{display:grid}
+.lr.u-acct{display:grid;grid-template-columns:auto minmax(0,1fr) 180px auto auto;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--line)}
+.lr.u-acct:last-child{border-bottom:0}
+.lr.u-acct[data-dim]{opacity:.7}
+.u-acct-m{display:grid;gap:2px;min-width:0}
+.u-acct-m .lr-t{display:flex;gap:8px;align-items:baseline;min-width:0}
+.lr-s{color:var(--ink-2);font-size:var(--fs-meta,13px);font-variant-numeric:tabular-nums}
+.u-acct-a{display:flex;gap:6px}
+.u-note{margin-top:8px}
+.u-folds{display:grid;gap:4px}
+@container app (width < 700px){
+  .lr.u-acct{grid-template-columns:auto minmax(0,1fr) auto;row-gap:6px}
+  .lr.u-acct>.meter{grid-column:2/-1;grid-row:2}
+  .lr.u-acct>.u-acct-a{grid-column:2/-1}
+}
+
+/* Settings on a phone: the section list is one row of chips that scrolls sideways, not a wrapped block. Relative, so what is
+   absolutely placed inside a chip scrolls with the strip instead of widening the page. */
+@container app (width < 700px){
+  .set-n{position:relative;flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;-webkit-overflow-scrolling:touch;padding-bottom:2px}
+  .set-n::-webkit-scrollbar{display:none}
+  .set-n a{flex:none;white-space:nowrap;border:1px solid var(--line);border-radius:999px}
+  .set-n hr{display:none}
+}
+/* The same strip for a narrow window whose app container isn't measured yet (a resize, an older look): it scrolls in place. */
+@media (max-width:760px){
+  .set-n{position:relative;flex-wrap:nowrap;overflow-x:auto;max-width:100%;min-width:0;scrollbar-width:none}
+  .set-n a{flex:none;white-space:nowrap}
+}
+
+/* Preview pane (R7): the footer with the file's path and Copy path; the table's size line; the can't-preview card. */
+.pv-f{flex:none;display:flex;align-items:center;gap:var(--s2);padding:6px 10px 6px 14px;border-top:1px solid var(--line);background:var(--surface)}
+.pv-f[hidden]{display:none}
+.pv-path{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--mono);font-size:var(--fs-meta);color:var(--ink-2)}
+.pv-dim{margin:0 0 var(--s2)}
+.pv-err.empty{align-items:center;text-align:center;margin:auto;max-width:42ch}
+.pv-err-a{display:flex;flex-wrap:wrap;justify-content:center;gap:var(--s2);margin:0}
+
+/* ---- The tour (R7): the ringed element carries [data-tour]; the ring layer draws the ring and dims the rest with one
+   shadow, so nothing on the page moves or restacks. The window points at it from data-place; a phone docks it (phone.css). */
+.tour-ring{box-shadow:0 0 0 4px var(--bg),0 0 0 6px var(--accent),0 0 0 100vmax var(--scrim);border-color:transparent;animation:none}
+.tour-w::before{content:"";position:absolute;width:12px;height:12px;background:var(--surface);border:1px solid var(--line-2);transform:rotate(45deg)}
+.tour-w[data-place=below]::before{top:-7px;left:var(--arrow,24px);border-right:0;border-bottom:0}
+.tour-w[data-place=above]::before{bottom:-7px;left:var(--arrow,24px);border-left:0;border-top:0}
+.tour-w[data-place=right]::before{left:-7px;top:var(--arrow,24px);border-top:0;border-right:0}
+.tour-w[data-place=left]::before{right:-7px;top:var(--arrow,24px);border-bottom:0;border-left:0}
+.tour-w[data-place=center]::before,.tour-w:not([data-place])::before{display:none}
+
+/* ---- First run (R7 step 5): three bars, one step per screen, choice rows. Ported from the design's pages.css. */
+.setup-steps{display:flex;gap:6px;margin:0 0 var(--s5)}
+.setup-steps i{flex:1;height:3px;border-radius:2px;background:var(--line)}
+.setup-steps i[data-on]{background:var(--ink)}
+.setup-list{display:grid;gap:var(--s2);margin:0 0 var(--s3)}
+.setup-opt{display:flex;align-items:center;gap:var(--s3);padding:var(--s3) var(--s4);border:1px solid var(--line);border-radius:var(--r-l);background:var(--surface);color:var(--ink);text-align:left;font:inherit;width:100%;box-sizing:border-box;cursor:pointer}
+.setup-opt:hover{border-color:var(--line-2)}
+.setup-opt b{font-weight:var(--w-bold);display:block}
+.setup-opt .meta{display:block}
+.setup-opt[aria-checked=true],.setup-opt:has(input:checked){border-color:var(--ink);box-shadow:inset 0 0 0 1px var(--ink)}
+.setup-opt input[type=radio]{accent-color:var(--ink);width:16px;height:16px;margin:0;flex:none}
+.setup-opt:focus-visible,.setup-opt:has(input:focus-visible){outline:none;box-shadow:var(--ring)}
+.setup-opt.signin,div.setup-opt{cursor:default}
+.setup-sub{padding:var(--s2) 0 0}
+/* A first-run card's column never grows past the card: the CLAUDE.md preview wraps instead of widening the page on a phone. */
+.wt .wt-card{grid-template-columns:minmax(0,1fr)}
+.wt .wt-pre{margin:0;padding:var(--s2) var(--s3);border-radius:var(--r-m,8px);background:var(--sunken);font-family:var(--mono);font-size:var(--fs-meta);white-space:pre-wrap;overflow-wrap:anywhere;max-height:12rem;overflow:auto}
+.wt .wt-foot{display:flex;align-items:center;gap:var(--s2);margin-top:var(--s4)}
+.wt .wt-next{margin-left:auto}
+.wt [data-key="starters"]{align-items:center;flex-wrap:wrap;margin-top:var(--s3)}

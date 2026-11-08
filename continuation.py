@@ -216,8 +216,11 @@ def overlap(a, b):
     return len(a & b) / len(a | b) if a | b else 0.0
 
 def limits(c):
+    """(hops a chain may take in a day, hops the hive may take in a day or None for no cap). Brakes against a loop, not a ration of work: the person
+    said limits like the run limit get in the way (k1101), and on 2026-11-07 a cap of 120 a day dropped 106 steps that agents knew how to continue,
+    each then waiting for a keeper round (thread 1107141044b9). 48 hops a day on one chain is one every 30 min round the clock: past that it is a loop."""
     k = (c or {}).get("continue_pilot") or {}
-    return k.get("hops_per_chain_day", 12), k.get("per_day", 40)
+    return k.get("hops_per_chain_day", 48), k.get("per_day")
 
 def check(intent, st, c, alive):
     """Why this continuation must not go ahead, or None. Asked before the intent is written and again right before launch."""
@@ -239,7 +242,7 @@ def check(intent, st, c, alive):
     day = iso()[:10]
     per_chain, per_day = limits(c)
     if sum(str(e.get("at", ""))[:10] == day for e in mine) >= per_chain: return "budget_chain"
-    if sum(str(e.get("at", ""))[:10] == day for e in ev) >= per_day: return "budget_day"
+    if per_day and sum(str(e.get("at", ""))[:10] == day for e in ev) >= per_day: return "budget_day"
     return None
 
 def chain_of(r, post):
@@ -315,7 +318,9 @@ def ladder_brief(thread):
 def wake_note(k, thread, heir):
     head = (f"\n\nThis is a continuation (chain {k['chain']}, hop {k['hop']}). " + ("The agent before you" if heir else "Your last step") + f" (post {k['post']}) ended on: {k['line']}\n"
             "That line is your job: do the step and run its check, unless the thread shows it was overtaken, in which case say so and stop. "
-            "End your result post with the next `Next: <one concrete step, with its check>` if there is one you can take, or with a `Done:`, `Blocked:`, `Needs the person:` or `Waiting:` line if not.")
+            "End your result post with the next `Next: <one concrete step, with its check>` if there is one you can take, or with a `Done:`, `Blocked:`, `Needs the person:` or `Waiting:` line if not.\n"
+            "Before you write that line, re-read the ladder in the project's goals.md against what you just learned: tick what is done, and add, split or strike rungs if the goal "
+            "has moved (the person, 2026-10-14 and k0492: goals get re-evaluated as work gets done, by the agent that did it, not by a round that comes later). Say in the post which rungs changed.")
     return head + (f"\n\nThe ladder this thread works from, for what comes after that step:\n{b}" if heir and (b := ladder_brief(thread)) else "")
 
 # --- hive continue: what it did, and whether it helped. Regexes from kb/why-hive-agents-stop-evidence-2026-11-02-06-meta-moving.md.

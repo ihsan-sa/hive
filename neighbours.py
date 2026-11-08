@@ -3,7 +3,7 @@
 moving.md P3). The word scoring of `kb recall`, over the last 24 h of board posts: a post is a passage, a thread counts by its
 best post, so a long thread doesn't win on length. Only the words of the waking post are looked for, in other threads' posts.
 
-  neighbours.py --post ID [--for NAME]   up to 3 lines for the start prompt, or nothing; each pointer is logged like a recall pointer
+  neighbours.py --post ID [--for NAME]   up to 2 lines for the start prompt, or nothing; each pointer is logged like a recall pointer
 Stdlib only. The starter runs it on a fresh start with a time limit, and a failure here only means no lines."""
 import argparse, datetime as dt, json, math, os, re, sys, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -11,7 +11,7 @@ import kb
 
 # A day of board is one conversation, so kb.recall's 12% lets `token` and `plain` through: replayed on 623 starts it fired on 97% of them.
 # At 2% of posts, at most 8 threads and 3 words in one post it fires on 25%, keeps gtm-content -> gtm-site and hwde-build-784 -> hwde-hdi-route, and drops the template every keeper round shares.
-CAP, WINDOW_H, MIN_WORDS, COMMON, SPREAD, DOC_WORDS = 3, 24, 3, 0.02, 8, 400
+CAP, WINDOW_H, MIN_WORDS, COMMON, SPREAD, DOC_WORDS = 2, 24, 3, 0.02, 8, 400
 NOT_AGENTS = {"person", "hives", "box", "starter", "watchdog", "progress", "asks", "keeper-timer", "postland", "leftover-router"}  # as goals.py
 SYSTEM_THREADS = {"keeper", "improve", "watchdog", "starter", "kb-dream"}  # as continuation.py: rounds on a timer, no one to ask
 BOARD, STATUS = kb.H + "/board.jsonl", kb.H + "/.hive/thread-status.jsonl"
@@ -73,9 +73,9 @@ def status_of(thread):
 
 def lines_for(hits, board, t):
     out = []
-    for th, _, _ in hits:
+    for th, _, ws in hits:
         who, at = last_agent(th, board, t); st = status_of(th)
-        out.append(f"- {th}: {who}, {max(0, int((t - at) // 60))} min ago" + (f": {st[:140]}" if st else ""))
+        out.append(f"- {th}: {who}, {max(0, int((t - at) // 60))} min ago, shares {', '.join(ws[:3])}" + (f": {st[:140]}" if st else ""))
     return out
 
 def main():

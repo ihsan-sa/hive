@@ -3,9 +3,11 @@
 // The "Open for you" card: at the end of a thread, what agents asked or told the person since they last wrote, so they needn't read back.
 import { h } from "../core/dom.js";
 import { S, can, OUTSIDE, post, loadThreadMeta, emit } from "../core/store.js";
-import { isAgent, threadTitle } from "../core/model.js";
+import { isAgent, threadTitle, FOR_YOU } from "../core/model.js";
 import { ago, short, mdPlain } from "../core/format.js";
-import { button, empty, icon } from "./kit.js";
+import { button, empty, icon, copyPress } from "./kit.js";
+import { focusOf, focusName } from "../core/foci.js";
+import { href } from "../core/router.js";
 import { confirm } from "./dialog.js";
 
 export const meta = th => (S.threadMeta && S.threadMeta[th]) || {};
@@ -67,7 +69,7 @@ export function renameDialog(th) {
 
 // ---- the "Open for you" card ----
 // Only what an agent marks for the person: a line starting "For you:" (110401502e1a). The card shows that line, not the message's first words.
-const FOR = /^\s*(?:[-*>]\s*)?(?:\*\*|__)?for you(?:\*\*|__)?\s*:\s*(?:\*\*|__)?\s*(.+)$/im;
+const FOR = FOR_YOU;   // one regex for the card and for postKind (core/model.js)
 export const forYouLine = p => { const m = FOR.exec((p && p.text) || ""); return m ? short(mdPlain(m[1]).replace(/\s+/g, " ").trim(), 220) : ""; };
 const asks = p => /\?["')]*\s*$/.test(forYouLine(p));
 const DONE_KEY = "hive.comms.cardDone", SAW_KEY = "hive.comms.cardSeen";
@@ -137,4 +139,25 @@ function approvalCard(th, update) {
           button("Approve", () => { if (box && box.value.trim() !== "x") { box.focus(); return; } answer(a, "approve", box ? "x" : undefined); }, { size: "s", title: a.major ? "Type x first" : "Approve this" }),
           button("Deny", () => answer(a, "deny"), { kind: "quiet", size: "s" })));
     })));
+}
+
+// ---- the conversation's header (R7 step 4): the focus it is filed under, and the title menu's ways out ----
+/** The focus name over the title, a link to the focus page; Misc when it has none. */
+export function threadCrumb(th) {
+  const f = focusOf(th);
+  return h("nav", { class: "cm-crumb", "aria-label": "Focus" },
+    h("a", { href: href("focus", f || "misc"), title: f ? "Open the focus this conversation is filed under" : "Not filed under a focus" }, f ? focusName(f) : "Misc"),
+    icon("chevron-right"));
+}
+/** Title menu rows: Files here, Your messages in Yours, Copy link, and Stop the agents here (designed, not built yet). close() shuts the menu. */
+export function titleExtras(th, { files, close }) {
+  const row = (label, ic, fn, title, cls) => button(label, fn, { size: "s", kind: "quiet", icon: ic, title, cls });
+  const link = `${location.origin}${location.pathname}${location.search}#comms/${encodeURIComponent(th)}`;
+  const stop = button(["Stop the agents here…", h("span", { class: "nb" }, "not built yet")], null, { size: "s", kind: "quiet", icon: "stop", cls: "cm-stopall", title: "Designed, not built yet: the server needs a way to stop every agent in one conversation" });
+  stop.disabled = true;
+  return [
+    row("Files here", "folder", () => { close(); files(); }, "This conversation's files, beside it", "cm-m-files"),
+    row("Your messages in Yours", "chat", () => { close(); location.hash = "#yours"; }, "Every exchange you had, newest first", "cm-m-yours"),
+    row("Copy link", "link", (e, b) => { copyPress(b, link); }, "A link that opens this conversation", "cm-m-link"),
+    stop];
 }

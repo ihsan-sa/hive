@@ -3,7 +3,7 @@
 // Every thread is in exactly one focus or in Misc; the home draws one card per focus, the rail groups by them, #focus/<id> is the page.
 // /api/foci is read once here for every page (S.foci), at most every 20 s; the server caches it as long.
 import { h } from "./dom.js";
-import { S, jget, emit } from "./store.js";
+import { S, jget, emit, post } from "./store.js";
 import { threadParent, isSystemThread, btwParent, isAgent, isRunning, threadTitle } from "./model.js";
 import { now, DAY } from "./format.js";
 import { faded, archived } from "../ui/threadmeta.js";
@@ -22,11 +22,29 @@ export function loadFoci(force) {
   L.p = jget("/api/foci").then(v => (v && Array.isArray(v.foci) ? v : { foci: [], tags: {}, lint: [] }), () => null).then(v => {
     L.p = null; L.failed = !v;
     if (!v) { if (S.foci === undefined) { S.foci = { foci: [], tags: {}, lint: [], failed: true }; emit({ foci: true }); } return S.foci; }
+    if (L.want) { if (now() - L.want.at > 60e3 || sameOrder(v.foci, L.want.ids)) L.want = null; else v.foci = arrange(v.foci, L.want.ids); }   // a read that left before the move landed keeps the moved order
     const sig = x => JSON.stringify(x && [x.tags, x.foci.map(f => [f.id, f.name, f.summary && f.summary.at, f.checks.map(c => c.id + (c.done ? 1 : 0)).join()])]);
     if (sig(v) !== sig(S.foci)) { S.foci = v; emit({ foci: true }); }
     return v;
   });
   return L.p;
+}
+// The person's own order (the person, 1108031067f6): one order for the rail and the home, kept by the server (the focus order command) so every page and
+// the command line's focus list agree. A move shows at once; the read after it confirms it.
+const arrange = (fs, ids) => { const at = new Map(ids.map((id, i) => [id, i])), n = ids.length; return fs.map((f, i) => [f, at.has(f.id) ? at.get(f.id) : n + i]).sort((a, b) => a[1] - b[1]).map(x => x[0]); };
+const sameOrder = (fs, ids) => { const got = fs.map(f => f.id).filter(id => ids.includes(id)); return got.join() === ids.filter(id => fs.some(f => f.id === id)).join(); };
+/** Put focus `id` just before `before` (an id), or last with before null; or move it by `step` places (-1 up, +1 down). Resolves to the error, or null. */
+export function moveFocus(id, { before, step } = {}) {
+  const ids = foci().map(f => f.id), from = ids.indexOf(id); if (from < 0) return Promise.resolve(null);
+  ids.splice(from, 1);
+  let to = step != null ? Math.max(0, Math.min(ids.length, from + step)) : before == null ? ids.length : ids.indexOf(before);
+  if (to < 0) to = ids.length;
+  ids.splice(to, 0, id);
+  if (ids.join() === foci().map(f => f.id).join()) return Promise.resolve(null);
+  L.want = { ids, at: now() };
+  S.foci = { ...S.foci, foci: arrange(S.foci.foci, ids) }; emit({ foci: true });
+  return post("/api/focus", { order: ids }).then(() => { L.at = 0; return loadFoci(true).then(() => null); },
+    e => { L.want = null; L.at = 0; loadFoci(true); return (e && e.message) || "the server didn't answer"; });
 }
 /** The foci in the person's order (none until read). */
 export const foci = () => (S.foci && S.foci.foci) || [];

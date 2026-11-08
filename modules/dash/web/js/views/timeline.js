@@ -7,7 +7,7 @@ import { clock, dayName, dur, mdPlain, now, short, stamp, DAY, HOUR, MIN } from 
 import { agentHref, threadHref } from "../core/router.js";
 import { status, tier } from "../core/status.js";
 import { canvas } from "../templates.js";
-import { button, infoButton, seg, statusDot, waiting } from "../ui/kit.js";
+import { button, infoButton, pageNav, seg, statusDot, waiting } from "../ui/kit.js";
 import { keep, shapePath, hollow } from "../ui/graph.js";
 import { openPanel } from "../ui/panel.js";
 import { showTip, hideTip } from "../ui/tip.js";
@@ -241,10 +241,10 @@ export default {
   leave() { hideTip(); },
   render(ctx) {
     T.update = ctx.update;
-    if (!S.live) return h("div", { class: "page" }, waiting(S.failed, "Reading…", "the timeline"));   // no board yet: an empty chart would say nothing ran
+    if (!S.live) return h("div", { class: "page" }, pageNav(), waiting(S.failed, "Reading…", "the timeline"));   // no board yet: an empty chart would say nothing ran
     const t = now(), r = range(t);
     if (box.isConnected && (T.ver !== S.ver || box.clientWidth !== T.w || t - T.last >= Math.min(3e4, (r.t1 - r.t0) / 60))) draw();
     else if (!box.isConnected) queueMicrotask(() => { if (box.isConnected) { draw(); T.update(); } });
-    return canvas({ key: "timeline", bar: toolbar(), note: note(), stage: keep(stage) });
+    return canvas({ key: "timeline", nav: pageNav(), bar: toolbar(), note: note(), stage: keep(stage) });
   },
 };

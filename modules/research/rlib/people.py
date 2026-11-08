@@ -50,7 +50,8 @@ def clean_title(t):
     # Where the post ends: "CEO of Nexeon, said:", "..., Dr Alex Groombridge, CTO" (the next person), "CEO, spearheads the ...".
     t = re.split(r"(?<![A-Z])[.;:|•]\s|\s[–—-]\s|\s(?:said|says|who|and has|has|is|was|will|at|in|on|to)\s|[\"“”(]|,?\s(?:said|says|added|explained)\b|,\s+(?:Dr|Prof|Mr|Ms|Mrs)\.?\s|,\s+[a-z]+s\s+(?:the|a|an|its)\b|,\s+the\s+[a-z]|,\s+(?:where|which|whose|when)\b|\suntil\s|\sand\s+(?:highly|widely|also|one)\b", t)[0].strip(" ,.")
     t = re.sub(r"\b((?:co-?)?founder)\s+of\s+[a-z][a-z -]*(?:,.*)?$", r"\1", t, flags=re.I)  # "co-founder of advanced materials supplier"
-    return t[:110]
+    if len(t) > 110: t = t[:110].rsplit(" ", 1)[0].strip(" ,")  # whole words only: a cut "Inno" read as another employer
+    return t
 
 
 _PATS = [
@@ -513,6 +514,11 @@ def same_person(a, b):
 
 BOILERPLATE = re.compile(r"live chat|powered by|was used for|ai[- ]generated|generated (?:by|with)|chatbot|cookies?\b|this site|this website", re.I)
 
+
+_EVENT = re.compile(r"(?:\b[A-Z][\w&'-]*\s+){0,4}\b(?:Symposium|Conference|Summit|Forum|Workshop|Expo|Showcase|Festival|Webinar|Colloquium|Hackathon|Pitch Competition)\b(?:\s*[:\u2013-]\s*(?:[A-Z&][\w&'-]*\s*){1,8})?")
+def without_events(text):
+    """Event and programme titles ("RISE Symposium: Research Innovation & Scholarship Exchange") name no one's job: blank them before looking for a signal word."""
+    return _EVENT.sub(lambda m: " " * len(m.group(0)), text)
 
 def without_boilerplate(text):
     """The text with the site's own small print taken out: "This site's live chat uses AI" says nothing about anyone there."""

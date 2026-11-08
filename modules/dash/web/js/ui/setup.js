@@ -207,7 +207,7 @@ export function keysPart(update) {
 export const rootNote = () => P.page.accounts.root ? h("p", { class: "fmsg", "data-tone": "warn" }, "This computer account can use sudo without a password, so the Hive won't run Codex or API-key models on it: an outside model must not share an account with root. Claude logins still work. Give the Hive an account without sudo to use the others.") : null;
 
 // ---- data sharing ----
-const SHARES = [
+export const SHARES = [
   ["failures", "Failure reports and a daily check-in", "What failed, when and why, and one small message a day saying this Hive is running and whether an agent has been started yet (yes or no)."],
   ["usage", "Usage reports", "Counts of runs, restarts and limit hits."],
   ["everything", "Everything, when I say so", "Separate from the reports above: a scrubbed copy of recent logs and of the board, and that includes your chats. Send everything adds every project folder and the files attached to posts. Ticking this sends nothing: it goes only when you press Send a copy now or Send everything, and each one is kept in reports/bundles in your Hive folder."],

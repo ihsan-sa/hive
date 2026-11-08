@@ -433,7 +433,15 @@ CHECKLIST = STATE / "checklist.json"   # needs_you.CHECKS: {"items": [...]}; age
 
 FOCUS_ID = re.compile(r"[a-z0-9][a-z0-9_-]{0,60}")
 def focus_do(d):
-    """POST /api/focus: put a thread in a focus ({thread, focus}) or take it out ({thread, off: true}); focus.py keeps the record (hive focus tag)."""
+    """POST /api/focus: put a thread in a focus ({thread, focus}) or take it out ({thread, off: true}); focus.py keeps the record (hive focus tag).
+    {order: [focus ids]} sets the order the foci show in, rail and home alike (hive focus order)."""
+    if "order" in d:
+        ids = d.get("order")
+        if not isinstance(ids, list) or not ids or len(ids) > 60 or not all(isinstance(i, str) and FOCUS_ID.fullmatch(i) for i in ids): raise ValueError("bad order")
+        r = subprocess.run(["nice", "-n", "15", sys.executable, "-I", str(HOME / "core" / "focus.py"), "order"] + ids, capture_output=True, text=True, timeout=30)
+        if r.returncode: raise ValueError((r.stderr or r.stdout or "focus.py failed").strip()[:200])
+        foci_c.t = 0
+        return {"ok": True, "order": ids, "said": r.stdout.strip()}
     th = str(d.get("thread") or "").strip(); f = str(d.get("focus") or "").strip().lower(); off = bool(d.get("off"))
     if not THREAD_NAME.fullmatch(th): raise ValueError("bad thread")
     if not off and not FOCUS_ID.fullmatch(f): raise ValueError("bad focus")

@@ -7,7 +7,7 @@ import { h, mount, delegate, selecting, copyText } from "./core/dom.js";
 import { button } from "./ui/kit.js";
 import { go, parse } from "./core/router.js";
 import { topBar } from "./ui/shell.js";
-import { mobileNav } from "./ui/mobilenav.js";
+import { mobileNav, setView } from "./ui/mobilenav.js";
 import views, { APP_NAV, SIMPLE_NAV } from "./views/index.js";
 import { simpleOn } from "./core/simple.js";
 import { resume, setViews, watch } from "./deck/control.js";
@@ -18,7 +18,7 @@ import { watchVersion } from "./ui/newversion.js";
 
 const byId = new Map(views.map(v => [v.id, v]));
 const top = document.getElementById("top"), main = document.getElementById("main");
-const mnav = document.body.appendChild(Object.assign(document.createElement("div"), { id: "mnav" }));   // phone tab bar (css/mobile.css hides it on wider screens)
+const mnav = document.body.appendChild(Object.assign(document.createElement("div"), { id: "mnav" }));   // phone bottom bar (css/phone.css hides it on wider screens)
 new ResizeObserver(() => { if (top.offsetHeight) document.documentElement.style.setProperty("--bar-h", top.offsetHeight + "px"); }).observe(top);   // phones wrap the bar and a tab's row adds to it; sticky headers and full-height pages follow
 const scrolls = {};
 // Where an empty address lands: the chat in the app, Now on the developer route.
@@ -31,15 +31,18 @@ function render(force) {
   if (S.live) document.title = brandName() ? `${brandName()} · ${S.live.agents.length} running` : `Hive · ${S.live.agents.length} running`;
   brandIcon();
   mount(top, topBar({ views, current: cur.id, update: ctx.update, nav: simpleOn() ? SIMPLE_NAV : APP_NAV }));
-  // On a phone the sub-page row scrolls sideways: keep the page you are on in view.
-  const here = top.querySelector(".subtab[aria-current=page]");
-  if (here && here.scrollIntoView) here.scrollIntoView({ block: "nearest", inline: "center" });
+  setView(cur.id, arg);   // body[data-view]: css/phone.css hides the bars in a conversation or a file
   mount(mnav, mobileNav({ views, current: cur.id, update: ctx.update, nav: simpleOn() ? SIMPLE_NAV : APP_NAV }));
   if (!force && selecting()) return;          // hold still while text is selected
   let page;
   try { page = cur.render(ctx); } catch (e) { console.error("view " + cur.id + " failed:", e); page = crashPage(cur, e); }
   mount(main, page);
+  // On a phone the page head's row (.subnav) scrolls sideways: bring the page you are on into view once, when you arrive. Sideways only, so it never moves the page.
+  const here = main.querySelector(".subnav a[aria-current=page]"), row = here && here.parentNode;
+  if (row && centred !== cur.id) { centred = cur.id; const a = here.getBoundingClientRect(), r = row.getBoundingClientRect(); row.scrollLeft += a.left - r.left - (r.width - a.width) / 2; }
+  else if (!row) centred = null;
 }
+let centred = null;   // the page whose row was last brought into view
 // A view that throws shows this instead of leaving the page before it on screen.
 function crashPage(v, e) {
   const detail = `${v.id}: ${e && e.stack || e}`;

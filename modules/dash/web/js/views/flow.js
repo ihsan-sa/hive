@@ -14,9 +14,9 @@ import { openSheet } from "../ui/panel.js";
 import { card as projectCard } from "../ui/projectcard.js";
 import { focusOf } from "../core/foci.js";
 import { gist } from "../core/gist.js";
-import { quoteInto } from "../ui/composer.js";
+import { sayTo } from "../ui/composer.js";
 import { canvas } from "../templates.js";
-import { button, empty, icon, infoButton, seg, toolbar, waiting } from "../ui/kit.js";
+import { button, empty, icon, infoButton, pageNav, seg, toolbar, waiting } from "../ui/kit.js";
 
 const WIN = { "1h": HOUR, "6h": 6 * HOUR, "24h": DAY, "3d": 3 * DAY };
 const PRE = [["1h", "1h"], ["6h", "6h"], ["24h", "24h"], ["3d", "3d"]];
@@ -109,7 +109,7 @@ const movedBox = () => pageBox(".fl-moved");
 function say(l, r) {
   const th = l.thread || (r.live[0] && r.live[0].thread) || (r.runs.length ? r.runs[r.runs.length - 1].thread : null); if (!th) return;
   const who = r.live[0] ? r.live[0].name : r.runs.length ? r.runs[r.runs.length - 1].name : null;
-  if (who && !SYS.has(who)) quoteInto(th, "@" + who + " ");
+  if (who && !SYS.has(who)) sayTo(th, who);
   go("comms", th);
 }
 function draw() {
@@ -244,13 +244,14 @@ export default {
   render(ctx) {
     F.update = ctx.update;
     const title = "Flow";
-    if (!ok()) return h("div", { class: "page" }, empty("This page isn't available on this connection.", { kind: "page", title }));
-    if (!S.live) return h("div", { class: "page" }, waiting(S.failed, "Reading…", "the flow"));
+    if (!ok()) return h("div", { class: "page" }, pageNav(), empty("This page isn't available on this connection.", { kind: "page", title }));
+    if (!S.live) return h("div", { class: "page" }, pageNav(), waiting(S.failed, "Reading…", "the flow"));
     if (box.isConnected && (F.ver !== S.ver || box.clientWidth !== F.w)) draw(); else if (!box.isConnected) queueMicrotask(() => { if (box.isConnected) { draw(); if (!F.raf) F.raf = requestAnimationFrame(tick); } });
     const bar = toolbar(
       seg(PRE, F.win, v => { F.win = v; F.ver = -1; draw(); }, { label: "Window" }),
       h("span", { class: "meta fl-legend" }, h("i", { class: "fl-k fl-k-run" }), " ran ", h("i", { class: "fl-k fl-k-live" }), " running ", h("i", { class: "fl-k fl-k-wait" }), " waits on you ", h("i", { class: "fl-k fl-k-dec" }), " decided for you ", h("i", { class: "fl-k fl-k-you" }), " you"),
       infoButton("About this chart", "One lane per goal in your order; time runs into now. Open a lane for its card, a bar for its conversation; the speech bubble speaks to whoever is on it."));
-    return h("div", { class: "fl-page", "data-fold": F.fold ? "" : null }, h("div", { class: "fl-listbox", "data-own": "", "data-sig": "flow" }), canvas({ key: "flow", bar, note: null, stage }), h("div", { class: "fl-moved", "data-own": "", "data-sig": "flow" }));
+    const nav = pageNav();   // the page row (R7 step 6): outside the canvas, which a phone folds away
+    return h("div", { class: "fl-page", "data-fold": F.fold ? "" : null }, nav && h("div", { class: "cvp-nav" }, nav), h("div", { class: "fl-listbox", "data-own": "", "data-sig": "flow" }), canvas({ key: "flow", bar, note: null, stage }), h("div", { class: "fl-moved", "data-own": "", "data-sig": "flow" }));
   },
 };

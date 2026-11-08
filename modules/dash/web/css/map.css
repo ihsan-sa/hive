@@ -73,7 +73,7 @@
 .map-idh-t small{font-size:var(--fs-meta);color:var(--ink-2)}
 .map-idh .lane-sw{width:12px;height:12px}
 .map-av{position:relative;flex:none;display:grid;place-items:center;width:40px;height:40px;border-radius:50%;background:var(--sunken);font:var(--w-bold) var(--fs-meta) var(--mono);color:var(--ink-2)}
-.map-av>.sd{position:absolute;right:-1px;bottom:-1px;box-shadow:0 0 0 2px var(--surface)}
+.map-av>.st{position:absolute;right:-1px;bottom:-1px;box-shadow:0 0 0 2px var(--surface)}
 .map-now small{display:block;margin-top:2px;font-size:var(--fs-meta);color:var(--ink-3)}
 .map-post{padding:6px 0;border-top:1px solid var(--line);font-size:var(--fs-small)}
 .map-post:first-of-type{border-top:0}

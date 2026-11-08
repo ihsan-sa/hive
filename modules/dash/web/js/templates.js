@@ -18,9 +18,10 @@ export const form = ({ header, sections }) =>
 /** Columns: equal columns that stack on narrow screens. */
 export const cols = (...kids) => h("div", { class: "cols" }, kids);
 
-/** Canvas: toolbar, a full-bleed stage (mount it data-own so polls leave it alone) and an optional side pane. key keeps one view from morphing onto another. */
-export const canvas = ({ key, bar, note, stage, grip, side, sideWidth }) =>
+/** Canvas: the page row (nav), toolbar, a full-bleed stage (mount it data-own so polls leave it alone) and an optional side pane. key keeps one view from morphing onto another. */
+export const canvas = ({ key, nav, bar, note, stage, grip, side, sideWidth }) =>
   h("div", { class: "cvp", "data-key": key },
+    nav ? h("div", { class: "cvp-nav" }, nav) : null,   // the page row (R7 step 6)
     h("div", { class: "cvp-bar" }, bar),
     note ? h("div", { class: "cvp-note" }, note) : null,
     h("div", { class: "cvp-body", style: sideWidth ? `--side:${sideWidth}px` : null }, stage, grip || null, side ? h("aside", { class: "cvp-side", "aria-label": "Details" }, side) : null));

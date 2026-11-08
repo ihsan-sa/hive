@@ -5,7 +5,7 @@ import { S, OUTSIDE, getPref, loadAgentCosts, setPref } from "../core/store.js";
 import { agentOn, agentSpend, agentStatus, isRunning, loginName, modelName, sEnd, threadTitle } from "../core/model.js";
 import { ago, dur, money, plural, short, stamp, toks } from "../core/format.js";
 import { metrics } from "../templates.js";
-import { button, empty, waiting, input, pageHeader, seg, stats, toolbar } from "../ui/kit.js";
+import { button, empty, waiting, input, pageHeader, seg, stats, toolbar, pageNav } from "../ui/kit.js";
 import { agentRef, threadRef } from "../ui/refs.js";
 
 const STATUS = [["all", "Any status"], ["running", "Running"], ["queued", "Waiting to start"], ["ended", "Ended"], ["killed", "Killed"], ["limited", "Stopped at a limit"], ["failed", "Failed"]];
@@ -81,6 +81,10 @@ const COLS = [
   { k: "children", label: "Started", num: 1, title: "Agents it started", get: a => a.spawned, render: a => a.spawned },
 ];
 
+// A column's track in the grid rows' --cols: the words get the spare room, the rest their usual width
+const W = { name: "minmax(120px,1fr)", status: "90px", spawned: "130px", thread: "minmax(140px,1.2fr)", on: "minmax(200px,2fr)", from: "110px", model: "110px", account: "110px", lastSeen: "100px" };
+const colW = (c, phone) => (phone && c.k === "on" ? "min(22rem,calc(100vw - 13rem))" : W[c.k] || (c.num ? "72px" : "110px"));
+
 function select(withHouse) {
   const words = L.q.toLowerCase().split(/\s+/).filter(Boolean), from = L.since === "all" ? 0 : Date.now() - +L.since * DAY;
   const found = gather().filter(a => (L.status === "all" || a.status === L.status) && (L.by === "all" || whoKind(a.from) === L.by)
@@ -99,7 +103,7 @@ export default {
   leave() { L.sig = ""; },   // the table is built afresh on the way back, so its rows must be too
   poll: { every: 30000, run() { loadAgentCosts(); } },
   render(ctx) {
-    if (!S.live) return h("div", { class: "page" }, waiting(S.failed, "Reading…", "the agents"));
+    if (!S.live) return h("div", { class: "page" }, pageNav(), waiting(S.failed, "Reading…", "the agents"));
     const all = gather(), s = sort(), set = (k, v) => { L[k] = v; L.limit = PAGE; ctx.update(); };
     const sig = [matchMedia("(max-width: 640px)").matches, [...colsOn()].join(), L.dataKey.split("|")[0], S.agentCosts && S.agentCosts.at, L.q, L.status, L.by, L.since, L.model, L.account, L.limit, L.house, s.k, s.d].join("|"), changed = sig !== L.sig; L.sig = sig;
     if (changed || !L.found) { L.found = select(L.house); L.nHouse = L.house ? 0 : select(true).length - L.found.length; }   // nHouse: the housekeeping runs the fold hides now
@@ -116,7 +120,7 @@ export default {
         { label: "Agent time", value: found.length ? dur(sum(a => a.ran)) : "–", note: found.length ? `added up over ${plural(sum(a => a.runs), "run")}, in ${dur(Date.now() - Math.min(...found.map(a => a.when || Date.now())))}` : null },
     ]);
     return metrics({
-      header: pageHeader({ title: "Agents", lead: `Every agent that has run, ${s.k === "spawned" && s.d < 0 ? "newest first" : s.k === "spawned" ? "oldest first" : "sorted by the column you chose"}.`, after: toolbar(
+      header: pageHeader({ subnav: pageNav(), title: "Agents", lead: `Every agent that has run, ${s.k === "spawned" && s.d < 0 ? "newest first" : s.k === "spawned" ? "oldest first" : "sorted by the column you chose"}.`, after: toolbar(
         input({ type: "search", placeholder: `Search name, ${S.app.app ? "conversation" : "thread"}, model, who started it`, "aria-label": "Search agents", value: L.q, oninput: e => set("q", e.target.value) }),
         seg(STATUS.filter(x => ["all", "running", "ended", "failed"].includes(x[0]) || x[0] === L.status).map(([k, l]) => [k, k === "all" ? "All" : l]), L.status, v => set("status", v), { label: "Status" }),
         h("details", { class: "now-more ag-f", open: L.fOpen || null, ontoggle: (e, n) => { if (e.target === n) L.fOpen = n.open; } }, h("summary", null, "Filters" + (nf ? ` (${nf})` : "")),
@@ -138,12 +142,12 @@ export default {
         meta: phone ? null : [costNote] }),
       sections: [
         phone ? null : totals,
-        found.length ? h("div", { class: "tbl-w ag-w" }, h("table", { class: "tbl ag" },
-          h("caption", { class: "vh" }, "Agents"),
-          h("thead", null, h("tr", null, cols.map(c => h("th", { scope: "col", class: c.num ? "num" : null, title: c.title || null, "aria-sort": s.k === c.k ? (s.d > 0 ? "ascending" : "descending") : null, "data-key": c.k },
-            h("button", { type: "button", class: "ag-s", onclick: by(c.k) }, c.label, s.k === c.k ? h("span", { "aria-hidden": "true" }, s.d > 0 ? "▲" : "▼") : null))))),
-          h("tbody", { "data-own": "morph", "data-sig": sig }, changed ? found.slice(0, L.limit).map(a => h("tr", { "data-key": a.name },
-            cols.map(c => h("td", { class: [c.num ? "num" : null, c.cls || null].filter(Boolean).join(" ") || null }, c.render(a))))) : null)))
+        // grid rows, not <table> (HANDOFF "Shared DOM changes" 6, R7 step 6): one --cols for every row, so the columns line up
+        found.length ? h("div", { class: "tblw ag-w" }, h("div", { class: "tbl ag", role: "table", "aria-label": "Agents", style: "--cols:" + cols.map(c => colW(c, phone)).join(" ") },
+          h("div", { class: "tr th", role: "row" }, cols.map(c => h("span", { role: "columnheader", class: c.num ? "r" : null, title: c.title || null, "aria-sort": s.k === c.k ? (s.d > 0 ? "ascending" : "descending") : null, "data-key": c.k },
+            h("button", { type: "button", class: "ag-s", onclick: by(c.k) }, c.label, s.k === c.k ? h("span", { "aria-hidden": "true" }, s.d > 0 ? "▲" : "▼") : null)))),
+          h("div", { class: "tb", role: "rowgroup", "data-own": "morph", "data-sig": sig }, changed ? found.slice(0, L.limit).map(a => h("div", { class: "tr", role: "row", "data-key": a.name },
+            cols.map(c => h("span", { role: "cell", class: [c.num ? "r num" : null, c.cls || null].filter(Boolean).join(" ") || null }, c.render(a))))) : null)))
           : empty(all.length ? "No agents match." : "No agents have run yet. When one starts, it shows here."),
         found.length > L.limit ? h("div", { class: "lr-more" },
           button(found.length - L.limit > PAGE * 5 ? `Show ${PAGE * 5} more (${found.length - L.limit} left)` : `Show ${found.length - L.limit} more`, () => { L.limit += PAGE * 5; ctx.update(); }, { kind: "quiet", size: "s" })) : null,

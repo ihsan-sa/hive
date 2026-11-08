@@ -8,7 +8,8 @@ import { agentStatus, isAgent, isRunning, isWarden, modelName, sEnd, threadTitle
 import { ago, clock, dur, firstSentence, money, now, short, toks, plural, DAY, HOUR, MIN } from "../core/format.js";
 import { agentHref, threadHref } from "../core/router.js";
 import { status, tier } from "../core/status.js";
-import { button, waiting, icon, seg, statusDot } from "../ui/kit.js";
+import { button, waiting, icon, pageNav, seg, statusDot } from "../ui/kit.js";
+const navBox = () => { const n = pageNav(); return n && h("div", { class: "cvp-nav" }, n); };   // the page row (R7 step 6)
 import { killButton } from "../actions.js";
 import { openPanel } from "../ui/panel.js";
 import { showTip, hideTip } from "../ui/tip.js";
@@ -714,7 +715,7 @@ export default {
   render(ctx) {
     M.update = ctx.update;
     // before the live feed has answered, "nobody is running" would be a guess: say it's loading, and build nothing yet
-    if (!S.live) return h("div", { class: "map", "data-key": "mesh", "aria-label": "Map: loading" }, waiting(S.failed, "Reading…", "the map"));
+    if (!S.live) return h("div", { class: "map", "data-key": "mesh", "aria-label": "Map: loading" }, navBox(), waiting(S.failed, "Reading…", "the map"));
     if (!M.D || (M.cut == null && M.seenVer !== S.ver && now() - M.lastBuild >= 2000) || (M.cut == null && now() - M.lastBuild > 30000)) { M.seenVer = S.ver; build(); }
     else if (M.cut == null && M.seenVer !== S.ver) { clearTimeout(M.timer); M.timer = setTimeout(() => M.update(), 2000 - (now() - M.lastBuild)); }
     const D = M.D;
@@ -724,7 +725,7 @@ export default {
     if (!showEmpty) syncGraph(D);
     const chart = h("main", { class: "map-chart" }, showEmpty ? emptyEl(D) : keep(stage), M.tile ? null : replayEl);
     const root = h("div", { class: "map", "data-key": "mesh", "data-tile": M.tile ? "" : null, "aria-label": "Map: " + M.count },
-      M.tile ? null : toolbar(), h("div", { class: "map-bd" }, chart, M.tile ? null : sidePane(D)));
+      M.tile ? null : navBox(), M.tile ? null : toolbar(), h("div", { class: "map-bd" }, chart, M.tile ? null : sidePane(D)));
     // the live element is found after the page puts it in place
     requestAnimationFrame(() => {
       M.root = document.querySelector(".map[data-key=mesh]");

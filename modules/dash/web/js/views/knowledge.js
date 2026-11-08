@@ -283,8 +283,22 @@ function sourcesView() {
   if (!ss.length) return null;
   return h("ul", { class: "kb-cover" }, ss.map(s => h("li", { "data-key": s.source }, h("b", null, s.files.toLocaleString()), h("span", null, SOURCE[s.source] || s.source))));
 }
+// R7: before anything is picked, the notes changed last as cards: folder · when, the title, and how it sits among the others.
+// TODO(server): /api/kb/map has no author or first line yet; "who" and the first line join the card once it sends them (n.by, n.first).
+function latelyCards() {
+  const ns = K.map && !K.map.failed ? [...K.map.notes].sort((a, b) => b.t - a.t).slice(0, 6) : [];
+  if (!ns.length) return null;
+  const week = K.map.notes.filter(n => Date.now() / 1e3 - n.t < 7 * 86400).length;
+  return h("section", { class: "sec kb-lately", "data-key": "lately" },
+    h("header", { class: "sec-h" }, h("h2", { class: "sec-t" }, "Lately learned"), h("span", { class: "sec-n" }, week ? `${plural(week, "note")} changed this week` : "")),
+    h("div", { class: "kb-cards" }, ns.map(n => h("a", { class: "card kb-card", href: open(n.path), "data-key": n.path, title: "~/" + n.path },
+      h("span", { class: "meta" }, [parent(n.path).split("/").pop() || "kb", age(n.t) + " ago", n.by].filter(Boolean).join(" · ")),
+      h("b", { class: "kb-card-t" }, n.title || n.path.split("/").pop()),
+      h("span", { class: "kb-card-x" }, n.first || (n.back.length ? `${plural(n.back.length, "note")} link here` : parent(n.path) + "/"))))));
+}
 // The home page below its title: what you opened, the map, the hubs, what changed, what search covers. On a phone it sits under the shelves.
 const homeSections = ctx => [
+  latelyCards(),
   recentRows() ? h("section", { class: "sec", "data-key": "opened" }, h("header", { class: "sec-h" }, h("h2", { class: "sec-t" }, "Recently opened"), h("span", { class: "sec-n" }, "on this device")), recentRows()) : null,
   h("section", { class: "sec", "data-key": "map" }, h("header", { class: "sec-h" }, h("h2", { class: "sec-t" }, "Notes by topic"), h("span", { class: "sec-n" }, K.map && !K.map.failed ? plural(K.map.notes.length, "note") : ""), button("Over time", null, { kind: "quiet", size: "s", icon: "clock", href: href("kbtime"), cls: "kb-time", title: "How the notes grew, linked and changed, from the backup history" })), mapView(ctx)),
   hubRows() ? h("section", { class: "sec", "data-key": "hubs" }, h("header", { class: "sec-h" }, h("h2", { class: "sec-t" }, "Most connected notes"), h("span", { class: "sec-n" }, "how many notes link to each, and it to others")), hubRows()) : null,
@@ -314,7 +328,9 @@ function fileHead(d, ctx) {
     h("h1", { class: "kb-t" }, d.name),
     h("p", { class: "meta" }, h("code", null, "~/" + d.path), d.size != null ? ` · ${bytes(d.size)}` : "", " · changed ", h("span", { title: stamp(d.t * 1e3) }, ago(d.t * 1e3))),
     h("div", { class: "frow" },
+      button("All notes", null, { kind: "quiet", size: "s", icon: "chevron-left", href: href("knowledge"), cls: "kb-all" }),
       button("Copy path", (e, b) => copyPress(b, "~/" + d.path), { kind: "quiet", size: "s" }),
+      d.path.startsWith("kb/") && isMd ? button("History", null, { kind: "quiet", size: "s", href: href("kbtime", d.path), title: "How this note changed, from the backup history" }) : null,
       isMd ? button(K.source ? "Formatted" : "Source", () => { K.source = !K.source; ctx.update(); }, { kind: "quiet", size: "s" }) : null,
       name && can("plans") ? button("Edit plan", () => startEdit(name, ctx), { size: "s" }) : null));
 }

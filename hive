@@ -173,6 +173,35 @@ def places(words, me=""):
         elif w in threads: out[w] = {"kind": "thread", "thread": w, "to": focus.last_agent(ps, w)}
     return out
 
+TAG = re.compile(r"([a-z]+):([^\s,]+)", re.I)
+
+def post_tag(t):
+    """--tag kind:id, as "kind:id" with the kind lowercased and a leading @ or # off the id; anything else is refused."""
+    m = TAG.fullmatch(str(t).strip())
+    if not m: sys.exit(f"hive post: nothing posted. --tag {t!r}: a tag is kind:id, like focus:site, agent:a5c83 or thread:release-train")
+    k, v = m.group(1).lower(), m.group(2).lstrip("@#")
+    if not v: sys.exit(f"hive post: nothing posted. --tag {t!r}: the id after the colon is missing")
+    return f"{k}:{v.lower() if k in ('focus', 'agent') else v}"
+
+def post_tags(given, p, where, named, foci_hit):
+    """The post's tags (tags-plan.md part 1): the --tag ones first, then the thread's focus, the foci named, every agent named and every
+    thread named, as "kind:id" without duplicates. The thread's focus is read from focus.jsonl (cheap); the board only when the thread
+    carries no label of its own, to follow its first post's parent as the dash does."""
+    out = list(given)
+    try:
+        import focus
+        st = focus.state(posts=[])
+        fid = focus.focus_of(st, p["thread"]) or (p.get("parent") and focus.focus_of(st, p["parent"]))
+        if not fid and p["thread"] != p["id"]:
+            first = next((q for q in posts() if q.get("thread") == p["thread"]), None)
+            if first and first.get("parent") and first["parent"] != p["thread"]: fid = focus.focus_of(st, first["parent"])
+        if fid: out.append(f"focus:{fid}")
+    except Exception: pass
+    out += [f"focus:{f}" for f in foci_hit]
+    out += [f"agent:{n}" for n in named if HASH_NAME.fullmatch(n)]
+    out += [f"thread:{v['thread']}" for v in where.values() if v["kind"] == "thread"]
+    return list(dict.fromkeys(out))
+
 def relay_post(src, thread, to, me, why=None, model=None):
     """A copy of post `src` in `thread` for `to`: "Passed on from X in thread Y" over the quoted text, linked back by relay_of so the
     dash shows "passed on to" under the original. From the original's author (the keeper reads the person's words as the person's).
@@ -218,7 +247,8 @@ def cmd_relay(a):
 def cmd_post(a):
     text = " ".join(a.text) if a.text else sys.stdin.read()
     if os.environ.get("HIVE_BROKER"):
-        forward({"verb": "post", "thread": a.thread, "to": a.to, "model": a.model, "reply_to": a.reply_to, "done": a.done or [], "interrupt": bool(getattr(a, "interrupt", False)), "text": text}, a.file or [])
+        forward({"verb": "post", "thread": a.thread, "to": a.to, "model": a.model, "reply_to": a.reply_to, "done": a.done or [], "tags": getattr(a, "tag", None) or [], "interrupt": bool(getattr(a, "interrupt", False)), "text": text}, a.file or [])
+    given = [post_tag(t) for t in getattr(a, "tag", None) or []]   # checked before anything else, so a bad tag costs a re-post and nothing more
     try: c = read_cfg()
     except (OSError, ValueError): c = {}
     ext = set(c.get("external", []))
@@ -273,6 +303,7 @@ def cmd_post(a):
     # so the dash can fold it under that conversation (110601450d55). The starter sets HIVE_THREAD to the thread that woke the agent.
     if (par := os.environ.get("HIVE_THREAD")) and p["thread"] == pid and par != pid: p["parent"] = par
     if os.environ.get("HIVE_POST_VIA"): p["via"] = os.environ["HIVE_POST_VIA"]
+    if (tags := post_tags(given, p, where, [n for n in asked + said if n not in where and n not in ignored], foci_hit)): p["tags"] = tags
     if re.fullmatch(r"f[0-9a-f]{4}", str(p["from"]).lower()) and (w := [n for n in said if n in FRESH]):
         print(f"hive post: from a free agent, {', '.join(w)} in the text starts nothing: leave the word out and use --to new", file=sys.stderr)
     if files: p["files"] = files
@@ -344,9 +375,17 @@ def brief_line(p):
     first = next((l.strip() for l in str(p.get("text", "")).splitlines() if l.strip()), "")
     return f"[{p.get('id')}] {p.get('at','')[:19]} {p.get('from')} (thread {p.get('thread')})  {first[:120]}"
 
+def tag_hit(want, tags):
+    """`want` is what follows tag: in a search: kind:id matches that tag, a bare id matches it under any kind (tag:site)."""
+    tags = [str(t).lower() for t in tags or []]
+    return want in tags if ":" in want else any(t.split(":", 1)[-1] == want for t in tags)
+
 def cmd_search(a):
     words = [w.lower() for w in a.words]
+    want = [w[4:] for w in words if w.startswith("tag:") and len(w) > 4]
+    words = [w for w in words if not (w.startswith("tag:") and len(w) > 4)]
     for p in posts():
+        if want and not all(tag_hit(t, p.get("tags")) for t in want): continue
         blob = json.dumps(p).lower()
         if all(w in blob for w in words):
             if a.brief: print(brief_line(p))
@@ -1034,10 +1073,11 @@ def cmd_status(a):
     print(f"status set on {th}")
 
 def cmd_me(a):
-    """hive me [TEXT | text on stdin]: one dated line on what you are broadly on now (the direction, not the step); hive me alone prints it. Shown per agent on the dashboard's Agents page."""
+    """hive me [TEXT | text on stdin]: one dated line on what you are broadly on now (the direction, not the step); hive me alone prints it. Shown per agent on the dashboard's Agents page. --about TEXT: a standing line on who you are (the dashboard's @ menu shows it)."""
     f_ = STATE / "agent-status.jsonl"; me = os.environ.get("HIVE_NAME")
     if not me: sys.exit("hive me: HIVE_NAME is not set; the line is an agent's own, so run it from an agent's shell")
     text = " ".join(" ".join(a.text).split()) if a.text else ""
+    key = "about" if a.about else "text"   # --about: who you are, kept until you change it (the @ menu shows it when your thread has no status line)
     if not text and not sys.stdin.isatty():
         import select
         if select.select([sys.stdin], [], [], 0.3)[0]: text = " ".join(sys.stdin.read().split())
@@ -1047,14 +1087,14 @@ def cmd_me(a):
             for ln in f_.read_text().splitlines():
                 try: r = json.loads(ln)
                 except ValueError: continue
-                if r.get("name") == me: best = r
+                if r.get("name") == me and r.get(key): best = r
         except OSError: pass
-        print(best["text"] if best else "(nothing set yet: hive me \"what you are on\")"); return
-    rec = {"name": me, "text": text[:200], "thread": os.environ.get("HIVE_THREAD") or None, "at": time.time()}
+        print(best[key] if best else "(nothing set yet: hive me " + ("--about " if a.about else "") + "\"what you are on\")"); return
+    rec = {"name": me, key: text[:200], "thread": os.environ.get("HIVE_THREAD") or None, "at": time.time()}
     STATE.mkdir(parents=True, exist_ok=True)
     with open(f_, "a") as f:
         fcntl.flock(f, fcntl.LOCK_EX); f.write(json.dumps(rec) + "\n")
-    print(f"on: {rec['text']}")
+    print(("about: " if a.about else "on: ") + rec[key])
 
 def cmd_rename(a):
     """hive rename THREAD "new title": give a thread a clearer title in the dashboard; the person's own rename wins over it."""
@@ -1106,6 +1146,7 @@ p.add_argument("--model", type=post_model, help="model for any run this post sta
 p.add_argument("--reply-to", dest="reply_to", metavar="ID", help="the post this answers; shown on the board, and a door puts the answer under that message")
 p.add_argument("--file", action="append", help="attach a file (repeatable): copied to ~/files/<post id>/, shown in hive read, Slack and the dashboard")
 p.add_argument("--done", action="append", metavar="ASK", help="mark this ask (k0123) done with this post as its evidence (repeatable)")
+p.add_argument("--tag", action="append", metavar="KIND:ID", help="tag the post (repeatable): focus:site, agent:a5c83, thread:release-train. The thread's focus and the agents and threads named are added by themselves; hive search tag:focus:site finds them")
 p.add_argument("--interrupt", action="store_true", help="for the person: a running agent named gets this now; a long command it is waiting on is stopped when that can be done cleanly")
 p.add_argument("text", nargs="*"); p.set_defaults(f=cmd_post)
 p = sp.add_parser("relay", help="hive relay POST TARGET [--why \"...\"] [--model sonnet]: pass a post on to where it belongs: a focus id (a copy in the focus's thread, for its keeper), an agent (in its thread), or a thread (for the agent last in it, else a new agent). The copy quotes the post and links back, so the dash shows \"passed on to\" under the original. One copy per post and place. Use it when a post you got belongs to another focus too, and say in your reply where it went")
@@ -1123,8 +1164,8 @@ p = sp.add_parser("fade", help="hive fade THREAD --why \"...\" [--off]: mark a t
 p.add_argument("thread"); p.add_argument("--why", default=""); p.add_argument("--off", action="store_true"); p.set_defaults(f=cmd_fade)
 p = sp.add_parser("status", help="hive status THREAD <<'X' ...: set the status bar the dashboard shows at the top of a thread (line 1: what it is about; line 2: where it stands now, what it waits on; up to four more lines of detail, folded by default: this is the thread's summary, depth 3 of the person's four depths). --read prints it. Update it when you change a thread's state; before you stop, line 2 is why, starting Done:, Blocked:, Needs the person:, Waiting: or Told to stop:")
 p.add_argument("thread"); p.add_argument("--read", action="store_true"); p.set_defaults(f=cmd_status)
-p = sp.add_parser("me", help="hive me \"what you are on\": one dated line per agent on what you are broadly on now (the direction, not the step; like a thread status but per agent). Update it when your focus shifts; hive me alone prints yours. The dashboard's Agents page and agent pages show it, so the person or an agent can find who is on a similar thing and write to them.")
-p.add_argument("text", nargs="*"); p.set_defaults(f=cmd_me)
+p = sp.add_parser("me", help="hive me \"what you are on\": one dated line per agent on what you are broadly on now (the direction, not the step; like a thread status but per agent). Update it when your focus shifts; hive me alone prints yours. The dashboard's Agents page and agent pages show it, so the person or an agent can find who is on a similar thing and write to them. --about \"...\": a standing line on who you are and what you do; the composer's @ menu shows it when your thread has no status line")
+p.add_argument("text", nargs="*"); p.add_argument("--about", action="store_true"); p.set_defaults(f=cmd_me)
 p = sp.add_parser("model", help="hive model haiku|sonnet|opus|fable WHY...: carry on with this conversation on another model. It posts WHY in your thread; end your turn and you resume on that model with your memory. --next: no resume, your next wake starts on it")
 p.add_argument("to_model", choices=CLAUDE_MODELS, metavar="MODEL"); p.add_argument("--next", action="store_true"); p.add_argument("why", nargs="+"); p.set_defaults(f=cmd_model)
 p = sp.add_parser("budget", help="hive budget [USD|off]: show or set the most one run may spend (dollars); applies from each run's next start")
@@ -1132,7 +1173,7 @@ p.add_argument("usd", nargs="?"); p.set_defaults(f=cmd_budget)
 p = sp.add_parser("read", help="hive read [--thread T] [--since 2h|ISO] [--from X] [--to X] [--id ID] [-n 30, 0 for all] [--short: one line per post]")
 p.add_argument("--thread"); p.add_argument("--since"); p.add_argument("--from", dest="from_"); p.add_argument("--to")
 p.add_argument("--id"); p.add_argument("-n", type=int, default=30); p.add_argument("--short", action="store_true"); p.set_defaults(f=cmd_read)
-p = sp.add_parser("search", help="hive search [--brief] words...  (all words, case-insensitive; --brief: one line per post)")
+p = sp.add_parser("search", help="hive search [--brief] words...  (all words, case-insensitive; tag:focus:site matches the post's tags, tag:site that id under any kind; --brief: one line per post)")
 p.add_argument("--brief", action="store_true", help="one line per post: id, time, from, thread, start of the text")
 p.add_argument("words", nargs="+"); p.set_defaults(f=cmd_search)
 p = sp.add_parser("done", help="hive done: your work is finished and needs no follow-up, so a later message gets a new agent instead of waking you"); p.set_defaults(f=cmd_done)
@@ -1178,7 +1219,7 @@ sp.add_parser("continue", help="hive continue list [--json] | stats [--baseline]
 sp.add_parser("goals", help="hive goals [--idle] [--json]: every goal (the person's focuses in kb/priorities.md, each project's goals.md, the asks) with its thread, last agent post, who is running and open asks; idle goals named (core/goals.py)")
 sp.add_parser("asks", help="hive asks list | check | own ID | done ID --evidence POST | hold|person|drop ID --why | add --post ID --ask ... | directions | extract: the register of what the person asked for, so nothing is dropped (core/asks.py)")
 if sys.argv[1:2] == ["asks"]: cmd_asks(argparse.Namespace(rest=sys.argv[2:]))
-sp.add_parser("focus", help="hive focus list | tag THREAD FOCUS [--off] | new ID \"name\" | link A B | set FOCUS <<'X' | show FOCUS | keeper FOCUS | aim FOCUS \"text\" | check add|list|done|untick | lint: foci, the person's view of the work. A thread carries a focus label; each focus has a hand-written summary (## Now, ## Lately bullets, plain words, no ids or paths) that the home shows as a card. The agent posting a result in a focus's thread updates its summary in the same run (core/focus.py)")
+sp.add_parser("focus", help="hive focus list | tag THREAD FOCUS [--off] | new ID \"name\" | link A B | set FOCUS <<'X' | show FOCUS | keeper FOCUS | aim FOCUS \"text\" | check add|list|done|untick | lint | order ID ID...: foci, the person's view of the work. A thread carries a focus label; each focus has a hand-written summary (## Now, ## Lately bullets, plain words, no ids or paths) that the home shows as a card. The agent posting a result in a focus's thread updates its summary in the same run (core/focus.py)")
 if sys.argv[1:2] == ["focus"]: cmd_focus(argparse.Namespace(rest=sys.argv[2:]))
 sp.add_parser("away", help="hive away [--since 12h] [--full] [--json]: while you were away: a 15-line brief of what was made, decided, needs you and broke; --full for all of it")
 if sys.argv[1:2] == ["away"]: cmd_away(argparse.Namespace(rest=sys.argv[2:]))

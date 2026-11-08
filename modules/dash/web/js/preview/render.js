@@ -4,9 +4,11 @@
 // pointed at /files/ (served sandboxed by dash.py). HTML runs only in a sandboxed frame. Nothing is fetched from elsewhere.
 import { h } from "../core/dom.js";
 import { said } from "../core/store.js";
-import { kindOf, fileHref, viewHref } from "../ui/preview.js";
+import { kindOf, typeOf, fileHref, viewHref } from "../ui/preview.js";
+import { parse } from "../core/router.js";
 import { markdown } from "../ui/markdown.js";
 import { fenceBlock } from "../rich/blocks.js";
+import { parseCsv, numOf } from "../rich/table.js";
 import { codeBlock } from "../rich/code.js";
 import { jsonTree } from "./json.js";
 
@@ -104,9 +106,47 @@ async function notebook(tx, name) {
 }
 
 // ---- the dispatcher ----
-const noPreview = (it, why) => ({ node: h("div", { class: "pv-err" }, h("p", null, why),
-  it.kb ? h("a", { class: "btn", "data-size": "s", href: "#knowledge/" + encodeURIComponent(it.kb) }, "Open in Knowledge")
-    : h("a", { class: "btn", "data-size": "s", href: fileHref(it), download: it.name }, "Download it")) });
+// Can't preview (R7): an empty state that says what the file is, with Download and Ask the agent (which puts a request in this
+// conversation's box; nothing is sent until the person sends it).
+const askFor = it => {
+  const r = parse();
+  if (r.id !== "comms" || !r.arg) return null;
+  return h("button", { type: "button", class: "btn", "data-size": "s", "data-kind": "quiet", onclick: () => import("../ui/composer.js").then(m => {
+    const d = m.draft(r.arg);
+    if (!d.text.trim()) d.text = `Could you send ${it.name} in a form I can open here, like a PDF, a picture or text?`;
+    import("../ui/preview.js").then(p => p.closePreview()); m.focusComposer();
+  }) }, "Ask the agent");
+};
+const noPreview = (it, why) => ({ node: h("div", { class: "pv-err empty", "data-kind": "empty" },
+  h("div", { class: "empty-t" }, `${typeOf(it.name)} · ${it.name}`), h("p", null, why),
+  h("p", { class: "pv-err-a" },
+    it.kb ? h("a", { class: "btn", "data-size": "s", href: "#knowledge/" + encodeURIComponent(it.kb) }, "Open in Knowledge")
+      : h("a", { class: "btn", "data-size": "s", "data-kind": "primary", href: fileHref(it), download: it.name }, "Download"),
+    it.kb ? null : askFor(it))) });
+// A CSV or TSV as the design's grid rows (.tbl > .tr, header row .tr.th, number columns right-aligned .r). Cells go in as text.
+// The first ROWS rows show; the count under it says how many there are.
+const ROWS = 500;
+function grid(t, ext, name) {
+  const rows = parseCsv(t, ext === "tsv" ? "\t" : ",");
+  if (!rows.length) return h("p", { class: "meta" }, "This table has no rows.");
+  const head = rows[0], body = rows.slice(1, ROWS + 1);
+  const num = head.map((_, c) => body.some(r => r[c]) && body.every(r => !r[c] || !isNaN(numOf(r[c]))));
+  const cols = head.map((_, c) => num[c] ? "minmax(4rem,max-content)" : "minmax(6rem,1fr)").join(" ");
+  const cell = (v, c, role) => h("span", { role, class: num[c] ? "r num" : null }, v ?? "");
+  return h("div", { class: "tblw", style: "margin:0" },
+    h("div", { class: "tbl", role: "table", "aria-label": name, style: `--cols:${cols}` },
+      h("div", { class: "tr th", role: "row" }, head.map((v, c) => cell(v, c, "columnheader"))),
+      body.map(r => h("div", { class: "tr", role: "row" }, head.map((_, c) => cell(r[c], c, "cell"))))),
+    rows.length - 1 > ROWS ? h("p", { class: "meta pv-dim" }, `The first ${ROWS} rows; open it as text or download it for the rest.`) : null);
+}
+// "N rows · M columns" over a CSV or TSV: counted from the text (a quoted field with the separator in it counts once).
+function tableSize(t, ext, cut) {
+  const lines = t.split(/\r?\n/).filter(l => l.trim()), sep = ext === "tsv" ? "\t" : ",";
+  if (!lines.length) return null;
+  const cols = (lines[0].match(new RegExp(`${sep}(?=(?:[^"]*"[^"]*")*[^"]*$)`, "g")) || []).length + 1;
+  const rows = lines.length - 1;
+  return h("p", { class: "meta pv-dim" }, `${cut ? "At least " : ""}${rows} row${rows === 1 ? "" : "s"} · ${cols} column${cols === 1 ? "" : "s"}`);
+}
 
 export async function render(it, { source, signal } = {}) {
   let k = kindOf(it.name);
@@ -134,7 +174,7 @@ export async function render(it, { source, signal } = {}) {
   if (source || k === "svg" || k === "html") return { node: asCode(langOf(it.name), it.name, tx), source: k !== "code" && k !== "text" && k !== "other" && k !== "diff", text };
   switch (k) {
     case "md": return rich(wrap(h("div", { class: "pv-md" }, markdown(tx.t)), tx.cut ? cutNote() : null));
-    case "table": return rich(wrap(fenceBlock(extOf(it.name) + " title=" + it.name.replace(/\s/g, "_"), tx.t), tx.cut ? cutNote() : null));
+    case "table": return rich(wrap(grid(tx.t, extOf(it.name), it.name), tableSize(tx.t, extOf(it.name), tx.cut), tx.cut ? cutNote() : null));
     case "mermaid": return rich(wrap(fenceBlock("mermaid", tx.t)));
     case "latex": {   // \includegraphics finds pictures sent in the same message
       const sibling = n => (!it.kb && it.id && /^[A-Za-z0-9_][A-Za-z0-9_.-]*$/.test(n) ? fileHref({ id: it.id, name: n }) : null);

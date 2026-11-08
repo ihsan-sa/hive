@@ -7,7 +7,7 @@ import { TIERS, tier, status } from "../core/status.js";
 import { threadHref, agentHref, href } from "../core/router.js";
 import { metrics, cols } from "../templates.js";
 import { table } from "../ui/table.js";
-import { pageHeader, section, tally, stats, share, rank, empty, waiting, button, seg, meter } from "../ui/kit.js";
+import { pageHeader, section, tally, stats, share, rank, empty, waiting, button, seg, meter, statusWord, pageNav } from "../ui/kit.js";
 import { gaugeRows } from "../ui/gauge.js";
 import { openRef } from "../ui/refs.js";
 import { chart, carry } from "../ui/chart.js";
@@ -191,59 +191,86 @@ function range(U, t) {
 }
 
 
-const tag = (tone, text) => h("span", { class: "pg-t", "data-tone": tone || null }, text);
+// The priority list in the person's words: first, second, held (not tier numbers).
+const PLAIN_TIER = { tier1: "First", tier2: "Second", held: "Held", other: "Everything else" };
 
-/** The app look: a state, one answer, three cards, one chart, a short accounts table, the detail behind closed rows. */
-function appHead(U, t, R, pick, d1) {
-  const us = U.logins || [], ans = leftAnswer(U, t), wk = activeUse(U, t) || totalUse(us, t);
+/** The app look (R7, design-d-usage): a state word, one answer, two meters, the accounts as rows, the detail behind closed rows. */
+function appHead(U, t, R, pick) {
+  const us = U.logins || [], ans = leftAnswer(U, t), act = activeUse(U, t), wk = act || totalUse(us, t);
   const used = wk ? Math.round(wk.pct) : null, stopAt = U.stop_pct ?? 100, atStop = us.some(l => !l.paused) ? !us.some(l => inUse(l, U)) : used != null && used >= stopAt;
   const state = used == null ? { tone: "quiet", text: "Not read yet" } : atStop ? { tone: "bad", text: "At the stop line" } : used >= 80 ? { tone: "warn", text: "Getting close" } : ans.tone === "warn" ? { tone: "warn", text: "Going fast" } : { tone: "good", text: "Plenty left" };
   const who = wk && wk.ls && us.length > 1 && wk.ls.length ? wk.ls.map(x => x.name) : null;
-  const title = used == null ? "Usage isn't read yet." : who ? `${who.join(", ")} ${who.length > 1 ? "have" : "has"} ${Math.max(0, 100 - used)}% left.` : `${Math.max(0, 100 - used)}% of the week is left.`;
-  const fig = l => (ans.figures.find(f => f.label === l) || null);
-  const wkF = fig("Left now"), f5 = fig("5-hour left"), tt = fig("Left overall");
-  const cards = [wkF && { ...wkF, label: "This week" }, f5 && { ...f5, label: "This 5 hours" },
-    { label: "Last 24 hours", value: money(spendSince(t - DAY)), note: "of work, at list prices" },
-    us.length > 1 ? tt && { ...tt, label: "Left overall", note: "all accounts together" } : null].filter(Boolean);
+  const title = used == null ? "Usage isn't read yet." : atStop ? "You're at the stop line." : who ? `${who.join(", ")} ${who.length > 1 ? "have" : "has"} ${Math.max(0, 100 - used)}% left.` : `${Math.max(0, 100 - used)}% of this week is left.`;
+  const tt = ans.figures.find(f => f.label === "Left overall");
+  const raise = atStop && us.some(l => !l.paused) && can("config") ? button("Raise the stop line…", () => askStopLine(U), { kind: "primary" }) : null;
   const lastAt = Math.max(0, ...us.map(l => (l.limits && l.limits.at) || 0));
-  return pageHeader({ state, title, lead: (tt && who ? `${tt.value} left across all accounts. ` : "") + ans.tail, tone: ans.tone, actions: pick, after: stats(cards, { card: true }),
+  return pageHeader({ subnav: pageNav(), state, title, lead: (tt && who ? `${tt.value} left across all accounts. ` : "") + (atStop ? ans.lead : ans.tail), tone: ans.tone, actions: [raise, pick], after: hero(U, t, used, stopAt, act),
     meta: [U.scanning ? "still reading the older logs" : null, lastAt ? `limits as last reported ${ago(lastAt * 1e3)}` : null] });
+}
+
+/** Two meters: this week against the stop line, and this 5 hours. The bar and its words come from the same figure. */
+function hero(U, t, used, stopAt, act) {
+  if (used == null) return null;
+  const next = nextBack(U, t), back = next && next.at;
+  const one = (label, pct, stop, under, k) => h("div", { class: "u-m", "data-key": k },
+    h("div", { class: "u-m-h" }, h("span", { class: "u-m-l" }, label), h("span", { class: "meta num" }, `${pct}% used` + (stop != null ? ` · stop line at ${stop}%` : ""))),
+    meter({ value: pct, stop, tone: stop != null && pct >= stop ? "bad" : null, label: `${pct}% of ${label.toLowerCase()} used` + (stop != null ? `; stop line at ${stop}%` : "") }),
+    under ? h("span", { class: "meta" }, under) : null);
+  const five = act && act.five ? Math.round(act.five.pct) : null;
+  return h("div", { class: "usage-hero" },
+    one("This week", used, stopAt < 100 ? stopAt : null, back ? (next.l && (U.logins || []).length > 1 ? `${next.l.name} comes back ${dayName(back).split(",")[0]} ${clock(back)}` : `Comes back in full ${dayName(back).split(",")[0]} ${clock(back)}`) : null, "week"),
+    five != null ? one("This 5 hours", five, null, `Refills ${clock(act.five.r)}`, "five") : null);
+}
+
+/** One account's state word, read from the same weekly figure its bar draws, so a full bar can't say "in use". */
+function acctWord(r) {
+  const w = r.gauges.find(g => g.label === "Weekly"), f = r.gauges.find(g => g.label === "5-hour");
+  const full = g => g && g.pct != null && g.pct >= (g.stop ?? 100);
+  if (r.state.key === "out") return ["bad", "signed out"];
+  if (r.state.key === "paused") return ["quiet", "paused"];
+  if (full(w)) return ["bad", "at the stop line"];
+  if (full(f)) return ["warn", "5-hour full"];
+  if (r.state.key === "atstop") return ["warn", "at its stop line"];
+  return ["good", "in use"];
 }
 
 function appAccounts(U, t, R) {
   const us = U.logins || [];
-  // Each bar carries its reset time beneath it (the person, 2026-11-06: "show reset times").
-  const cell = (g, stop) => g ? h("div", null, h("div", { class: "gauge-c" }, meter({ value: g.pct || 0, stop, label: g.label }), h("span", { class: "meta" }, g.value)),
-    (g.lines || []).find(x => typeof x === "string") ? h("div", { class: "gauge-rs meta" }, g.lines.find(x => typeof x === "string")) : null) : h("span", { class: "meta" }, "–");
   const rows = us.map(l => loginRow(U, l, t, Math.min(R.span, 7 * DAY)));
-  const st = r => r.state.key === "inuse" ? tag("good", "in use") : r.state.key === "paused" ? tag("quiet", "paused") : r.state.key === "out" ? tag("bad", "signed out") : tag("warn", "at its stop line");
-  const wStop = l => (l.stop && l.stop.weekly) ?? U.stop_pct;
-  return section({ title: "Claude accounts", note: `how much of each is used; stop line ${U.stop_pct}%`, actions: can("config") ? button("Change stop line", () => askStopLine(U), { size: "s", kind: "quiet" }) : null },
-    table({ key: r => r.key, rows, columns: [
-      { label: "Account", render: r => h("span", null, r.name, r.tag ? h("span", { class: "meta" }, " · " + r.tag) : null) },
-      { label: "Weekly", render: r => cell(r.gauges.find(g => g.label === "Weekly"), r.gauges.find(g => g.label === "Weekly")?.stop) },
-      { label: "5-hour", render: r => cell(r.gauges.find(g => g.label === "5-hour"), r.gauges.find(g => g.label === "5-hour")?.stop) },
-      { label: "State", render: st },
-      { label: "", cls: "row-a", render: r => h("span", { class: "row-a-in" }, ...(r.actions || [])) },
-    ] }));
+  const row = r => {
+    const w = r.gauges.find(g => g.label === "Weekly"), f = r.gauges.find(g => g.label === "5-hour"), [tone, word] = acctWord(r);
+    const reset = g => g && (g.lines || []).find(x => typeof x === "string");
+    return h("div", { class: "lr u-acct", "data-key": r.key, "data-dim": r.dim ? "" : null },
+      h("span", { class: "av", "aria-hidden": "true" }, (r.name || "?")[0].toUpperCase()),
+      h("span", { class: "u-acct-m" },
+        h("span", { class: "lr-t" }, h("b", null, r.name), r.tag ? h("span", { class: "meta" }, "Claude · " + r.tag) : null),
+        h("span", { class: "lr-s" }, [`Week ${w ? w.value : "?"}`, f ? `5 hours ${f.value}` : null].filter(Boolean).join(" · ")),
+        h("span", { class: "gauge-rs meta" }, reset(w) || "not read yet"), f && reset(f) ? h("span", { class: "gauge-rs meta" }, "5 hours " + reset(f)) : null),
+      w && w.pct != null ? meter({ value: w.pct, stop: w.stop, tone: tone === "bad" ? "bad" : null, label: `${r.name}: ${w.value} of the week used` }) : h("span", { class: "meta" }, "–"),
+      statusWord(tone, word, null, "pg-t"),
+      r.actions && r.actions.filter(Boolean).length ? h("span", { class: "u-acct-a" }, ...r.actions) : null);
+  };
+  const lastAt = Math.max(0, ...us.map(l => (l.limits && l.limits.at) || 0));
+  return section({ title: "Accounts", actions: can("config") ? button("Change stop line", () => askStopLine(U), { size: "s" }) : null },
+    h("div", { class: "list u-accts" }, rows.map(row)),
+    h("p", { class: "meta u-note" }, (lastAt ? `Limits as last reported ${ago(lastAt * 1e3)}. ` : "") + `A bar and its word come from the same reading; the stop line is ${U.stop_pct}%.`));
 }
 
-function appChart(U, t, R, pick) {
+function appChart(U, t, R) {
   const us = U.logins || [], T = totalSeries(us, t, R.span, R.step), color = new Map(us.map((l, i) => [l.name, slot(i)]));
   if (!T.per.length) return null;
-  if (T.per.every(x => x.vals.filter(v => v != null).length < 2)) return section({ title: "Used, " + R.name }, empty("No history yet: the chart fills in as the accounts are read."));   // one reading draws stray dots, not a line
+  if (T.per.every(x => x.vals.filter(v => v != null).length < 2)) return empty("No history yet: the chart fills in as the accounts are read.");   // one reading draws stray dots, not a line
   const many = T.per.length > 1;
   const series = many ? [T.total, ...T.per.map(x => x.vals)] : [T.total.some(v => v != null) ? T.total : T.per[0].vals];
   const key = many ? h("span", { class: "chart-key" }, T.per.map(x => h("span", null, h("i", { style: `border-top-color:${color.get(x.l.name)}` }), x.l.name))) : null;
-  return section({},
-    chart({ title: "Used, " + R.name, note: `% of the week; dashed: stop line ${U.stop_pct}%`, series, colors: many ? ["var(--data)", ...T.per.map(x => color.get(x.l.name))] : null, kind: "step", start: T.start, step: T.step, max: 100, mark: U.stop_pct, markLabel: "stop line", fmt: v => Math.round(v) + "%", top: "100%" }), key);
+  return h("div", null, chart({ title: "% of the week used", note: `dashed: stop line ${U.stop_pct}%`, series, colors: many ? ["var(--data)", ...T.per.map(x => color.get(x.l.name))] : null, kind: "step", start: T.start, step: T.step, max: 100, mark: U.stop_pct, markLabel: "stop line", fmt: v => Math.round(v) + "%", top: "100%" }), key);
 }
 
 export default {
   id: "usage", label: "Usage", about: "how much is left, and when it comes back", tab: true,
   render(ctx) {
     const U = S.usage;
-    if (!U) return h("div", { class: "page" }, waiting(S.usageFailed, "Reading usage…", "usage"));
+    if (!U) return h("div", { class: "page" }, pageNav(), waiting(S.usageFailed, "Reading usage…", "usage"));
     const t = now(), us = U.logins || [], P = U.providers || {}, R = range(U, t);
     const pick = seg(RANGES.map(x => [x[0], x[1], x[3]]), R.key, k => { setPref("usage.range", k); ctx && ctx.update ? ctx.update() : null; }, { label: "Time range" });
     const live = us.filter(l => inUse(l, U)), paused = us.filter(l => l.paused), full = us.filter(l => !l.paused && !inUse(l, U));
@@ -252,7 +279,7 @@ export default {
     const lastAt = Math.max(0, ...us.map(l => (l.limits && l.limits.at) || 0));
     const d1 = spendSince(R.since);
     // The app shows its answer as short figures; a sentence only when nothing can start.
-    const header = pageHeader({
+    const header = pageHeader({ subnav: pageNav(),
       title: app ? "How much is left" : "Usage", lead: app && tone !== "bad" ? null : lead, tone, actions: pick,
       after: app ? (ans.figures.length ? stats(ans.figures) : null) : us.length ? tally([{ n: live.length, label: "in use", status: "inuse" }, { n: full.length, label: "at the stop line", status: "atstop" }, { n: paused.length, label: "paused", status: "paused" }]) : null,
       meta: [`${money(d1)} of work, ${R.name}`, U.scanning ? "still reading the older logs" : null, lastAt ? `limits as last reported ${ago(lastAt * 1e3)}` : null],
@@ -291,14 +318,15 @@ export default {
         { label: "Per agent-hour", value: hours ? money(d1 / hours) : "–", note: `${hours.toFixed(0)} agent-hours, ${R.name}` },
         { label: app ? "Per message" : "Per board post", value: posts ? money(d1 / posts) : "–", note: `${posts} posts, ${R.name}` },
         { label: "Tokens written", value: toks(tk[1]), note: `output, all of it; ${toks(tk[0])} plain input` },
-        { label: "Input served from cache", value: pct(tk[2], tk[0] + tk[2] + tk[3]), note: `${toks(tk[2])} read from cache, ${toks(tk[3])} written to it` },
+        app ? { label: "Read from memory instead of again", value: pct(tk[2], tk[0] + tk[2] + tk[3]), note: "of what agents read (cheaper)" }
+          : { label: "Input served from cache", value: pct(tk[2], tk[0] + tk[2] + tk[3]), note: `${toks(tk[2])} read from cache, ${toks(tk[3])} written to it` },
       ]));
     const charts = cols(
       chart({ title: bStep === DAY ? "Cost per day" : bStep === HOUR ? "Cost per hour" : "Cost per 6 hours", note: R.span < bSpan ? "last 6 hours" : R.name, series: [bars], kind: "bar", start: hStart, step: bStep, fmt: money, top: money(Math.max(...bars)) }),
       chart({ title: "Cost so far", note: R.span < bSpan ? "last 6 hours" : R.name, series: [cum], kind: "step", start: hStart, step: bStep, fmt: money, top: money(run) }));
     const tot = d1 || 1;
     const tiers = section({ title: "Cost by your priority list", note: R.name + ": spend per priority" },
-      share(TIERS.map(x => ({ key: x.key, label: x.label, tone: x.tone, value: byTier[x.key], text: `${money(byTier[x.key])} (${Math.round((100 * byTier[x.key]) / tot)}%)` }))));
+      share(TIERS.map(x => ({ key: x.key, label: app ? PLAIN_TIER[x.key] : x.label, tone: x.tone, value: byTier[x.key], text: `${money(byTier[x.key])} (${Math.round((100 * byTier[x.key]) / tot)}%)` }))));
     const who = cols(
       section({ title: app ? "Costliest conversations" : "Costliest threads", note: R.name + ": who spent the most" }, rank(top(byT).map(([k, v]) => ({ key: k, label: threadTitle(k) || k || (app ? "No conversation" : "No thread"), value: v, text: money(v), tone: tier(tierOf(k)).tone, href: threadHref(k) })))),
       section({ title: "Costliest agents", note: R.name + ": who spent the most" }, rank(top(byA).map(([k, v]) => ({ key: k, label: k || "No agent", value: v, text: money(v), tone: status(agentStatus(k).key).tone, href: agentHref(k), onClick: e => openRef(e, "agent", k) })))));
@@ -306,9 +334,13 @@ export default {
 
     if (app) {
       const fold = (title, summary, ...b) => section({ fold: true, title, summary }, ...b);
-      return metrics({ header: appHead(U, t, R, pick, d1), sections: [appChart(U, t, R, pick), appAccounts(U, t, R), others,
-        fold("How much work was done", `${money(d1)}, ${R.name}`, spend, charts), hasTiers() ? fold("Cost by your priority list", R.name, tiers) : null,
-        fold("Costliest conversations and agents", R.name, who), fold("By model", R.name, models)] });
+      const hist = appChart(U, t, R), noHist = hist && hist.classList && hist.classList.contains("empty");   // one reading only: the fold's line says so, not a chart hidden in it
+      return metrics({ header: appHead(U, t, R, pick), sections: [appAccounts(U, t, R), others,
+        h("div", { class: "u-folds" },
+          fold("Used, by hour", noHist ? "No history yet: it fills in as the accounts are read" : R.name, hist),
+          fold("How much work was done", `${money(d1)} at list prices, ${R.name}`, spend, charts, models),
+          hasTiers() ? fold("Cost by your priority list", "first, second, held", tiers) : null,
+          fold("Costliest conversations and agents", R.name, who))] });
     }
     return metrics({ header, sections: [totalSection(U, t, R), limits, others, spend, charts, hasTiers() ? tiers : null, who, models] });
   },

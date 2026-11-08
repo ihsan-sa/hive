@@ -25,7 +25,7 @@ function setText(v, focus, ctx) { D.text = v; if (ctx) ctx.update(); const n = d
 const SCREEN_LINES = 40;
 const tailOf = t => { const lines = (t || "").split("\n"); return lines.length > SCREEN_LINES ? lines.slice(-SCREEN_LINES).join("\n") : t || ""; };
 const working = t => /esc to interrupt/i.test((t || "").split("\n").slice(-8).join("\n"));
-const state = (tone, text, title) => h("span", { class: "sl", "data-tone": tone, title: title || null }, h("span", { class: "sd", "data-tone": tone, "data-shape": tone === "bad" ? "tri" : tone === "warn" ? "square" : "dot", "aria-hidden": "true" }), h("span", null, text));
+const state = (tone, text, title) => h("span", { class: "sw", "data-tone": tone, title: title || null }, h("span", { class: "st", "data-tone": tone, "aria-hidden": "true" }), h("span", null, text));
 const GUIDE = "https://support.claude.com/en/articles/14604406-claude-design-admin-guide-for-team-and-enterprise-plans";
 
 const designCell = a => a.used_here ? state("good", "Yes, working here")

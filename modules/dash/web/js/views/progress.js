@@ -5,7 +5,7 @@ import { h } from "../core/dom.js";
 import { S, can, jget } from "../core/store.js";
 import { ago, pct, plural, short } from "../core/format.js";
 import { metrics } from "../templates.js";
-import { empty, pageHeader, section, seg, staleNote, stats } from "../ui/kit.js";
+import { empty, pageHeader, section, seg, staleNote, stats, statusWord, pageNav } from "../ui/kit.js";
 import { agentRef, threadRef } from "../ui/refs.js";
 import { table } from "../ui/table.js";
 
@@ -27,7 +27,7 @@ const LINES = [
   ["runs", "Runs"], ["fail_pct", "Runs that failed, %", true], ["keeper_rounds", "Keeper rounds"], ["improve_rounds", "Improver rounds"], ["core_commits", "Core commits"], ["spend_usd", "Spent, $", true],
 ];
 
-const tone = (t, text, title) => h("span", { class: "pg-t", "data-tone": t || null, title: title || null }, text);
+const tone = (t, text, title) => statusWord(t, text, title, "pg-t");
 const when = iso => { const t = Date.parse(iso || ""); return Number.isFinite(t) ? h("span", { title: iso }, ago(t)) : "?"; };
 const num = v => (v == null ? "–" : typeof v === "number" && !Number.isInteger(v) ? v.toFixed(1) : String(v));
 
@@ -134,10 +134,10 @@ export default {
   poll: { every: 60000, run(ctx) { return refresh(ctx); } },
   render(ctx) {
     const V = P.v && Array.isArray(P.v.asks) ? P.v : null;
-    if (!V) return h("div", { class: "page" }, P.failed ? empty("Couldn't read the progress data. It keeps trying.", { kind: "error" }) : empty("Reading…", { kind: "loading" }));
+    if (!V) return h("div", { class: "page" }, pageNav(), P.failed ? empty("Couldn't read the progress data. It keeps trying.", { kind: "error" }) : empty("Reading…", { kind: "loading" }));
     const head = lead(V), update = () => ctx.update();
     return metrics({
-      header: pageHeader({ state: head.state, title: head.title, lead: head.text, tone: head.tone, after: P.failed ? staleNote("Couldn't refresh, so this shows what it read last. It keeps trying.") : null, meta: [S.app.app ? null : "hive progress, hive asks, hive outcomes, hive improve"].filter(Boolean) }),
+      header: pageHeader({ subnav: pageNav(), state: head.state, title: head.title, lead: head.text, tone: head.tone, after: P.failed ? staleNote("Couldn't refresh, so this shows what it read last. It keeps trying.") : null, meta: [S.app.app ? null : "hive progress, hive asks, hive outcomes, hive improve"].filter(Boolean) }),
       sections: [tiles(V), asksSection(V, update), outcomesSection(V, update), improvementsSection(V), scoreboardSection(V)].filter(Boolean),
     });
   },

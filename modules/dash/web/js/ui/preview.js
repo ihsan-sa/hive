@@ -7,7 +7,7 @@
 // openPreview(items, i): items are { id, name, size, from, t }; id is the post's 12-hex id, name the file name.
 import { h } from "../core/dom.js";
 import { stamp, ago } from "../core/format.js";
-import { button, icon, copyPress } from "./kit.js";
+import { button, icon, copyPress, scrim } from "./kit.js";
 
 /** A file's kind, from its name: picks the renderer and the badge. */
 export const KINDS = [
@@ -101,7 +101,7 @@ export function openFiles(auto) {
   if (auto !== true) { try { localStorage.removeItem(AUTO); } catch (e) {} }   // opened by hand: it opens by itself again
   shell();
   P.list = true; P.seq++; clearTimeout(P.live); P.ctl && P.ctl.abort(); P.ctl = null;
-  P.root.setAttribute("aria-label", "Files"); P.root.dataset.kind = "files";
+  P.root.setAttribute("aria-label", "Files"); P.root.dataset.kind = "files"; P.foot.hidden = true;
   mark();
   import("../preview/files.js").then(m => { if (P.root && P.list) m.drawFiles(P.head, P.body, { open: openPreview, close: closePreview }); });
   if (auto !== true) P.root.focus({ preventScroll: true });
@@ -132,8 +132,8 @@ export function filesClosedByHand() { try { localStorage.setItem(AUTO, "1"); } c
 function shell() {
   import("./panel.js").then(m => { if (m.panelOpen()) m.closePanel(); }, () => {});   // one side panel at a time
   if (!P.root) {
-    P.head = h("div", { class: "pv-h" }); P.body = h("div", { class: "pv-s" });
-    P.root = h("aside", { class: "pv", tabindex: -1, role: "complementary" }, h("div", { class: "pv-grab", "aria-hidden": "true" }), P.head, P.body);
+    P.head = h("div", { class: "pv-h" }); P.body = h("div", { class: "pv-s" }); P.foot = h("div", { class: "pv-f", hidden: true });
+    P.root = h("aside", { class: "pv", tabindex: -1, role: "complementary" }, h("div", { class: "pv-grab", "aria-hidden": "true" }), P.head, P.body, P.foot);
     P.root.addEventListener("keydown", e => {
       if (e.target.closest("input,textarea,select,[contenteditable]")) return;
       if (!P.list && P.items.length > 1 && (e.key === "ArrowRight" || e.key === "ArrowLeft") && !e.target.closest(".pv-s")) { e.preventDefault(); show(P.i + (e.key === "ArrowRight" ? 1 : -1)); }
@@ -154,23 +154,36 @@ export function closePreview() {
   P.root.remove(); P.grip.remove(); document.body.removeAttribute("data-pv"); document.body.removeAttribute("data-pv-full");
   if (P.blob) { URL.revokeObjectURL(P.blob); P.blob = null; }
   const back = P.back;
-  Object.assign(P, { root: null, head: null, body: null, grip: null, items: [], i: 0, back: null, ctl: null, list: false });
+  Object.assign(P, { root: null, head: null, body: null, foot: null, grip: null, items: [], i: 0, back: null, ctl: null, list: false });
   mark();
   if (back && back.isConnected && back.focus) back.focus({ preventScroll: true });
 }
 
+// The word for a file's kind, first in the header's meta line (R7: "Type · size · from agent, when").
+const TYPE = { image: "Image", svg: "Drawing", video: "Video", audio: "Sound", pdf: "PDF", html: "Web page", md: "Note", table: "Table", notebook: "Notebook",
+  json: "Data", xlsx: "Spreadsheet", docx: "Document", pptx: "Slides", diff: "Change", mermaid: "Diagram", latex: "LaTeX", touchstone: "Network data",
+  spice: "Circuit", code: "Code", text: "Text" };
+export const typeOf = name => TYPE[kindOf(name)] || "File";
 function header(it, r) {
   const n = P.items.length, k = keyOf(it), src = MODE.get(k) === "src";
   const who = it.from ? (it.from === "person" ? "you" : it.from) : null;
-  const meta = [fsize(it.size), who && "from " + who, it.kb ? it.kb.replace(/\/[^/]*$/, "") : it.t && stamp(it.t)].filter(Boolean).join(" · ");
+  const when = it.t ? stamp(it.t) : null;
+  const meta = [typeOf(it.name), fsize(it.size), it.kb ? it.kb.replace(/\/[^/]*$/, "") : who ? "from " + who + (when ? ", " + when : "") : when].filter(Boolean).join(" · ");
   // A project file downloads as its raw bytes only if it's an image or PDF; otherwise as the text shown, and Open goes to Knowledge.
   const dl = !it.kb || kbRawOk(it) ? fileHref(it) : r && r.text != null ? URL.createObjectURL(new Blob([r.text], { type: "text/plain" })) : null;
   if (P.blob) URL.revokeObjectURL(P.blob); P.blob = dl && dl.startsWith("blob:") ? dl : null;
-  const tabs = r && r.source ? h("div", { class: "pv-tabs", role: "group", "aria-label": "Show" },
-    ["Preview", "Source"].map((t, j) => h("button", { type: "button", class: "pv-tab", "aria-pressed": String((j === 1) === src), onclick: () => {
+  // Preview (and Source when the file has one), then "All files here · N": this conversation's files, in the same panel.
+  const here = it.kb ? 0 : threadFiles().length;
+  const tabs = r && r.source || here > 1 ? h("div", { class: "pv-tabs", role: "group", "aria-label": "Show" },
+    (r && r.source ? ["Preview", "Source"] : ["Preview"]).map((t, j) => h("button", { type: "button", class: "pv-tab", "aria-pressed": String((j === 1) === src), onclick: () => {
       if ((j === 1) === (MODE.get(k) === "src")) return;
       if (j) MODE.set(k, "src"); else MODE.delete(k); show(P.i);
-    } }, t))) : null;
+    } }, t)),
+    here > 1 ? h("button", { type: "button", class: "pv-tab pv-here", "aria-pressed": "false", title: "This conversation's files", onclick: () => openFiles() }, `All files here · ${here}`) : null) : null;
+  // The footer: where the file is, in mono, and Copy path.
+  const path = it.kb ? "~/" + it.kb : `files/${it.id}/${it.name}`;
+  P.foot.hidden = false;
+  P.foot.replaceChildren(h("code", { class: "pv-path", title: path }, path), button("Copy path", (e, b) => copyPress(b, path), { size: "s", kind: "quiet", icon: "copy", cls: "pv-cp" }));
   const copy = r && r.text != null ? button("Copy", (e, b) => copyPress(b, r.text), { size: "s", kind: "quiet", icon: "copy", title: "Copy the text" }) : null;
   P.head.replaceChildren(
     h("div", { class: "pv-t" },
@@ -254,24 +267,25 @@ function switcher(it) {
   for (const x of [...P.items, ...threadFiles()]) { const kx = keyOf(x); if (!seen.has(kx)) { seen.add(kx); list.push(x); } }
   const name = h("span", { class: "pv-fn", title: it.name }, it.name);
   if (list.length < 2) return name;
-  const menu = h("div", { class: "pv-menu", role: "menu", hidden: true });
+  const menu = h("div", { class: "pv-menu menu", role: "menu", hidden: true }), sc = scrim(() => shut());
+  sc.hidden = true;
   menu._shut = () => { shut(); b.focus(); };
-  const shut = () => { menu.hidden = true; b.setAttribute("aria-expanded", "false"); removeEventListener("pointerdown", away, true); };
+  const shut = () => { menu.hidden = true; sc.hidden = true; b.setAttribute("aria-expanded", "false"); removeEventListener("pointerdown", away, true); };
   const away = e => { if (!b.parentNode.contains(e.target)) shut(); };
   const b = h("button", { type: "button", class: "pv-sw", "aria-haspopup": "menu", "aria-expanded": "false", title: "Switch file", onclick: () => {
     if (!menu.hidden) return shut();
-    menu.replaceChildren(...list.map(x => h("button", { type: "button", role: "menuitemradio", class: "pv-mi", "aria-checked": String(keyOf(x) === k), onclick: () => {
+    menu.replaceChildren(...list.map(x => h("button", { type: "button", role: "menuitemradio", class: "pv-mi menu-i", "aria-checked": String(keyOf(x) === k), onclick: () => {
       shut(); const j = P.items.findIndex(y => keyOf(y) === keyOf(x));
       if (j >= 0) show(j); else openPreview(list, list.indexOf(x));
     } }, h("b", { class: "pv-badge", "data-kind": kindOf(x.name) }, badgeOf(x.name)), h("span", null, x.name))));
-    menu.hidden = false; b.setAttribute("aria-expanded", "true"); addEventListener("pointerdown", away, true);
+    menu.hidden = false; sc.hidden = false; b.setAttribute("aria-expanded", "true"); addEventListener("pointerdown", away, true);
     (menu.querySelector("[aria-checked=true]") || menu.firstChild).focus();
   } }, name, icon("chevron-down"));
   menu.addEventListener("keydown", e => {
     const all = [...menu.children], i = all.indexOf(document.activeElement), d = e.key === "ArrowDown" ? 1 : e.key === "ArrowUp" ? -1 : 0;
     if (d) { e.preventDefault(); e.stopPropagation(); all[(i + d + all.length) % all.length].focus(); }
   });
-  return h("span", { class: "pv-swb" }, b, menu);
+  return h("span", { class: "pv-swb pop" }, b, sc, menu);
 }
 
 async function show(k) {

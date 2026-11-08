@@ -10,7 +10,7 @@ import { h, morph } from "../core/dom.js";
 import { S, SYS, can, OUTSIDE, built, post as apiPost, poll, jget } from "../core/store.js";
 import { simpleOn, plainName, hiveName } from "../core/simple.js";
 import { loadNeedsYou, needsN, needsHref, waitsOn } from "../core/needs.js";
-import { loadFoci, fociFailed, fociOrder, focusOf, focusById, activeThreads, askedOf, agentsOf, stateOf, pills, threadLine, focusName, MISC, activityOf, shareOf, fractionWords, pct, usd, needsOf } from "../core/foci.js";
+import { loadFoci, fociFailed, fociOrder, focusOf, focusById, activeThreads, askedOf, agentsOf, stateOf, pills, threadLine, focusName, MISC, activityOf, shareOf, fractionWords, pct, usd, needsOf, moveFocus, foci } from "../core/foci.js";
 import { newIn } from "./focus.js";
 import { SIDE_THREAD, agentState, agentStatus, btwParent, threadParent, threadChildren, isAgent, isRunning, tierOf, threadTitle, threadState, threadPeople, isSystemThread, SHOW, postKind, threadKinds, closingPosts, displayText, postSource, inUse, fresh7, asksQuestion, fileInfo } from "../core/model.js";
 import { ago, dayName, stamp, clock, dur, short, mdPlain, now, plural, DAY, MIN, HOUR, money } from "../core/format.js";
@@ -20,13 +20,13 @@ import { tier, status } from "../core/status.js";
 import { askTier, askStop, stopButton } from "../actions.js";
 import { seen, unreadIn, markRead, onInbox, IB } from "../core/inbox.js";
 import { MN, onMail } from "../core/mailnew.js";
-import { button, empty, icon, input, list, seg, statusDot } from "../ui/kit.js";
+import { button, empty, icon, input, list, scrim, seg, statusDot, statusWord } from "../ui/kit.js";
 import { agentRef, avatars, copyButton, threadRef } from "../ui/refs.js";
-import { message, messageHead, messageReceipt, localMessage, markWords, pollDelivered, marksSig, delivery, onJump } from "../ui/message.js";
+import { message, messageHead, messageReceipt, localMessage, markWords, pollDelivered, marksSig, delivery, onJump, helperFolds } from "../ui/message.js";
 import { asidePanel, asideOpen, closeAside } from "../ui/aside.js";
 import { downloadMarkdown, printScript } from "../ui/export.js";
 import { shareDialog } from "../ui/share.js";
-import { pinned, important, faded, meta as tmeta, archived, setMeta, renameDialog, openCard, markSeen } from "../ui/threadmeta.js";
+import { pinned, important, faded, meta as tmeta, archived, setMeta, renameDialog, openCard, markSeen, threadCrumb, titleExtras } from "../ui/threadmeta.js";
 import { callFor, hangUp } from "../ui/phone.js";
 import { brought } from "../ui/brought.js";
 import { firstJobs, closeLine } from "../ui/firstjobs.js";
@@ -127,7 +127,7 @@ function threadEvents(th) {
 
 /** Bring the matches up to date, looking only at posts not yet seen unless the conversation or filter changed. */
 function refresh(c) {
-  const src = c.thread ? (S.threads.get(c.thread) || { posts: NONE }).posts : c.home || c.focus != null ? NONE : S.posts;
+  const src = c.thread ? (S.threads.get(c.thread) || { posts: NONE }).posts : c.home || c.focus != null || c.place ? NONE : S.posts;
   // With For you on, a run ending can promote a post already in the list, so the list is redone then. That must not move someone who has scrolled up.
   const mask = maskFor(c), ended = mask & SHOW.you ? endedRuns() : 0, base = [c.arg, C.q, mask].join("\0"), key = base + "\0" + ended, match = matcher(c, mask, ended);
   const evs = c.thread && !C.q ? threadEvents(c.thread) : [];
@@ -164,6 +164,7 @@ function rows(items) {
     if (d !== L.day) { L.day = d; L.prev = null; out.push(h("div", { class: "cm-day", "data-key": "d:" + d }, h("span", null, d))); }
     if (p.ev) { out.push(evRow(p)); L.prev = null; continue; }
     L.names.add(p.from); for (const m of p.men) L.names.add(m);
+    if (!L.opts.showThread && L.helpers) { const hs = helperFolds(p.th, p.t, L.helpers, L.opts); if (hs.length) { out.push(...hs); L.prev = null; } }   // helper conversations fold where they began (R7)
     const q = L.prev, cont = !!q && q.from === p.from && q.th === p.th && !p.reply_to && p.t - q.t < GROUP && sameTo(q, p) && sameSource(q, p);
     const a = message(p, { ...L.opts, cont }); a.dataset.show = KIND_NAME[postKind(p)] || ""; if (a.dataset.show === "you" && asksQuestion(p)) a.dataset.ask = "";   // For you, Updates or Agent comms, marked in the list (11040113eacf)
     L.prev = p; a._head = L.heads; L.io.observe(a); out.push(a);
@@ -173,7 +174,8 @@ function rows(items) {
 
 function paint(box, ctx) {
   const shown = L.all.slice(-C.limit), older = L.all.length - shown.length;
-  L.day = ""; L.prev = null; L.names = new Set(); L.shown = shown.length; L.io.disconnect(); L.outSig = "";
+  L.day = ""; L.prev = null; L.names = new Set(); L.shown = shown.length; L.helpers = new Set();
+  if (older && shown.length && !L.opts.showThread) helperFolds(shown[0].th, shown[0].t - 1, L.helpers);   // the ones begun before what is drawn stay with it L.io.disconnect(); L.outSig = "";
   L.out = h("div", { class: "cm-out", "data-key": "out" });
   L.jump = h("button", { type: "button", class: "cm-jump", hidden: true, onclick: () => { box.scrollTop = box.scrollHeight; } });
   const q = C.q.trim();   // a search narrows the messages: say so where they are, so a sent one never seems lost (11040214d468)
@@ -181,7 +183,7 @@ function paint(box, ctx) {
     ...(q ? [h("div", { class: "cm-qbar", role: "status" }, h("span", null, `Showing ${plural(L.all.length, "match", "matches")} for “${short(q, 40)}”`),
       button("Clear search", () => { C.q = ""; C.find = false; ctx.update(); }, { size: "s", kind: "quiet", icon: "close" }))] : []),
     ...(older ? [h("div", { class: "cm-older" }, button(`Show older (${older} more)`, () => { C.limit += STEP; L.rebuild = true; L.keep = true; ctx.update(); }, { size: "s" }))] : []),
-    ...(shown.length ? rows(shown) : [empty(C.q ? "No messages match." : L.src.length && !simpleOn() ? "Nothing here with what Show has on. Turn on Agent comms to see all the messages." : "No messages yet.")]),
+    ...(shown.length ? [...rows(shown), ...(L.opts.showThread ? [] : helperFolds(shown.at(-1).th, Infinity, L.helpers, L.opts))] : [empty(C.q ? "No messages match." : L.src.length && !simpleOn() ? "Nothing here with what Show has on. Turn on Agent comms to see all the messages." : "No messages yet.")]),
     L.out, L.jump);
 }
 function setJump() {
@@ -193,7 +195,7 @@ function flash(box, el) {
   // a short message sits a third down; a tall one starts near the top so it reads from its first line
   box.scrollTop = Math.max(0, el.offsetTop - (el.offsetHeight > box.clientHeight * 0.6 ? 24 : box.clientHeight / 3));
   L.stuck = atEnd(box);
-  el.setAttribute("data-flash", ""); setTimeout(() => el.removeAttribute("data-flash"), 1800);
+  el.setAttribute("data-flash", ""); el.setAttribute("data-hl", ""); setTimeout(() => el.removeAttribute("data-flash"), 1800); setTimeout(() => el.removeAttribute("data-hl"), 2400);
 }
 const jumpTo = id => {
   const p = S.byId[id], box = L.box; if (!p) return;
@@ -224,11 +226,12 @@ function sync(c, ctx) {
       L.box = box; L.rebuild = true; L.stuck = true;
       box.addEventListener("scroll", () => {
         if (L.box !== box) return;
-        L.stuck = atEnd(box);
+        L.stuck = atEnd(box) || (L.stuck && !(performance.now() - L.hand < 1000));   // only the reader unsticks it: a scroll the browser makes when a message reflows late (a chart, code) keeps the end
         if (L.stuck && L.unseen) { L.unseen = 0; setJump(); }
         cardSeen(box);
         L.saved = L.stuck ? null : { key: L.key, fromEnd: box.scrollHeight - box.scrollTop };
       }, { passive: true });
+      for (const t of ["wheel", "touchstart", "pointerdown", "keydown"]) box.addEventListener(t, () => { L.hand = performance.now(); }, { passive: true });
       // The box changes size when the composer grows, the keyboard opens or the window moves: stay at the end if that's where it was.
       L.ro = new ResizeObserver(() => { if (L.stuck) box.scrollTop = box.scrollHeight; });
       L.ro.observe(box);
@@ -285,7 +288,7 @@ function refreshHead(a) {
   if (a._head === L.heads) return;
   a._head = L.heads;
   const p = S.byId[a.getAttribute("data-key")]; if (!p) return;
-  const hd = a.querySelector(":scope > .msg-h"), rc = a.querySelector(":scope > .msg-rc");
+  const hd = a.querySelector(":scope > .msg-h, :scope > .msg-c > .msg-h"), rc = a.querySelector(":scope > .msg-rc, :scope > .msg-c > .msg-rc");
   if (hd) morph(hd, messageHead(p, L.opts));
   if (rc) morph(rc, messageReceipt(p));
 }
@@ -381,7 +384,11 @@ function askRows(c) {
 }
 // By focus: a conversation sits under its focus (core/foci.js: the tag, the focus's own thread, else its parent's), the rest under Misc.
 const byFocusOn = () => app() && !simpleOn() && !C.imp && C.view === "focus";
-const focusSec = th => { let x = th; for (let i = 0; i < 8 && x; i++) { const f = focusOf(x); if (f) return "f:" + f; x = threadParent(x); } return "f:"; };
+// A conversation the person opened from the web app (its thread is named after their first post) belongs to no focus by nature: those sit
+// under "Conversations" ("c:"), so Misc holds only untagged work (the person, 1108032432b9: 194 of Misc's 522 were such chats).
+const personChat = th => { const d = S.threads.get(th), p = d && d.posts[0]; return !!p && p.id === th && p.from === "person"; };
+// A helper (started by an agent from a chat) follows the chat it came from: the top of its untagged chain decides, so its fold stays whole.
+const focusSec = th => { let x = th, top = th; for (let i = 0; i < 8 && x; i++) { const f = focusOf(x); if (f) return "f:" + f; top = x; x = threadParent(x); } return personChat(top) ? "c:" : "f:"; };
 function threadRows(c, ctx) {
   if (C.tq.trim().startsWith("@")) return aiRows(c);
   const ws = words(C.tq);
@@ -395,8 +402,11 @@ function threadRows(c, ctx) {
   const flat = !app() || C.imp || C.view === "recent";
   // A thread an agent started from a listed conversation folds under it (the person, 110601450d55: one chat made eight side entries
   // and the original got lost). A root is the top of its chain among the listed ones; its row sorts by the latest activity in the family.
+  // By focus, the chain stops where the focus changes: a focus's own thread was started from some other conversation (the planning
+  // one, 110400119446), and following that link put every focus and its helpers in one fold under Misc (the person, 110803020bbe).
   const listed = new Map(ds.map(d => [d.name, d]));
-  const rootOf = d => { let x = d; for (let i = 0; i < 8; i++) { const p = listed.get(threadParent(x.name) || ""); if (!p || p === d) break; x = p; } return x; };
+  const topic = byFocusOn() ? focusSec : null;
+  const rootOf = d => { let x = d; for (let i = 0; i < 8; i++) { const p = listed.get(threadParent(x.name) || ""); if (!p || p === d || (topic && topic(p.name) !== topic(x.name))) break; x = p; } return x; };
   const kidsOf = new Map(), act = new Map();
   if (!flat) for (const d of ds) { const r = rootOf(d); if (r !== d) { (kidsOf.get(r.name) || kidsOf.set(r.name, []).get(r.name)).push(d); act.set(r.name, Math.max(act.get(r.name) || r.last, d.last)); } }
   const roots = ds.filter(d => flat || rootOf(d) === d);
@@ -436,7 +446,6 @@ function threadRows(c, ctx) {
       onClick: e => holdScroll(e.currentTarget, () => { KIDS.has(d.name) ? KIDS.delete(d.name) : KIDS.add(d.name); ctx.update(); }) },
       ...(open ? kids.sort((a, b) => b.last - a.last).map(k => dress({ ...mk(k), key: d.name + "/" + k.name, sec, depth: 2 }, k.name)) : [])];
   };
-  const topic = byFocusOn() ? focusSec : null;
   const rowsOut = !app() ? ds.map(mk) : roots.flatMap(d => {
     const r = dress(mk(d)), kids = kidsOf.get(d.name) || [], rest = topic ? topic(d.name) : "rest";   // by focus, "the rest" is the conversation's focus
     if (r.sec === "rest") r.sec = rest;
@@ -465,25 +474,59 @@ function foldAll(ctx) {
   saveFold(); ctx.update();
 }
 // The list in parts: Pinned, Needs you, the rest, and Archived folded at the end. A search is one list.
-// By focus the rest is one section per focus ("f:<id>") in the home cards' order, every focus listed (its "+" starts a conversation in it), Misc ("f:") last and only with rows.
+// By focus the rest is one section per focus ("f:<id>") in the home cards' order, every focus listed (its "+" starts a conversation in it), then the
+// person's own chats ("c:", Conversations) and Misc ("f:") last, both only with rows.
+// The person's order of the foci (the person, 1108031067f6): drag a focus's heading in the list, or a card's head on the home, onto another; one order serves both.
+// Without a mouse: Alt+Up/Down on a focus heading, or the card's move buttons. Misc stays last and doesn't move.
+const DND = { id: null, el: null, at: 0 }, DND_TYPE = "text/x-h2-focus";
+const dropMark = el => { if (DND.el && DND.el !== el) DND.el.removeAttribute("data-drop"); DND.el = el; };
+function moved(err, ctx) { if (err) C.err = "Couldn't move the focus: " + err + "."; ctx.update(); }
+/** Drag-and-drop props for a focus's section (rail) or card (home): `grab` goes on the handle, `drop` on the whole block. */
+function focusDnd(fid, ctx) {
+  if (!fid || !can("post")) return { grab: {}, drop: {} };
+  const isMe = e => DND.id && DND.id !== fid && e.dataTransfer && [...(e.dataTransfer.types || [])].includes(DND_TYPE);
+  const after = (e, el) => { const r = el.getBoundingClientRect(), side = r.width < el.parentElement.getBoundingClientRect().width * 0.75;   // cards side by side: left or right half; a list: top or bottom
+    return side ? e.clientX > r.left + r.width / 2 : e.clientY > r.top + r.height / 2; };
+  return {
+    grab: { draggable: "true",
+      ondragstart: e => { DND.id = fid; DND.at = Date.now(); e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData(DND_TYPE, fid); e.dataTransfer.setData("text/plain", fid); e.stopPropagation(); },
+      ondragend: () => { DND.id = null; dropMark(null); } },
+    drop: {
+      ondragover: (e, el) => { if (!isMe(e)) return; e.preventDefault(); e.dataTransfer.dropEffect = "move"; dropMark(el); el.setAttribute("data-drop", after(e, el) ? "after" : "before"); },
+      ondragleave: (e, el) => { if (!el.contains(e.relatedTarget)) { el.removeAttribute("data-drop"); if (DND.el === el) DND.el = null; } },
+      ondrop: (e, el) => { if (!isMe(e)) return; e.preventDefault(); e.stopPropagation(); const id = DND.id, aft = after(e, el); DND.id = null; dropMark(null); el.removeAttribute("data-drop");
+        const ids = foci().map(f => f.id).filter(x => x !== id), i = ids.indexOf(fid);
+        moveFocus(id, { before: aft ? ids[i + 1] || null : fid }).then(err => moved(err, ctx)); } } };
+}
+/** Alt+Up / Alt+Down on a focus's heading moves it one place (the keyboard way to drag). */
+const focusKeys = (fid, ctx) => !fid || !can("post") ? null : e => {
+  if (!e.altKey || (e.key !== "ArrowUp" && e.key !== "ArrowDown")) return;
+  e.preventDefault(); moveFocus(fid, { step: e.key === "ArrowUp" ? -1 : 1 }).then(err => { moved(err, ctx); requestAnimationFrame(() => { const a = document.querySelector(`#main .tm-sec[data-sec="f:${fid}"] .tm-sec-link`); if (a) a.focus(); }); });
+};
 const SECS = [["pin", "Pinned"], ["imp", "Important"], ["need", "Needs you"], ["rest", null]];
 function sections(rs, ctx, opts) {
   if (words(C.tq).length) return list(rs, opts);
   const by = { pin: [], imp: [], need: [], rest: [], arch: [] }, tops = [];
   const byFocus = byFocusOn();
   if (byFocus) for (const f of fociOrder()) { const k = "f:" + (f.id || ""); if (!by[k]) { by[k] = []; tops.push(k); } }
-  for (const r of rs) { const k = r.sec || "rest"; if (k.startsWith("f:") && !by[k]) { by[k] = []; tops.push(k); } (by[k] || by.rest).push(r); }
-  const order = new Map(tops.map((k, i) => [k, k === "f:" ? 1e9 : i])); tops.sort((a, b) => order.get(a) - order.get(b));
-  const label = k => k === "f:" ? "Misc" : focusName(focusById(k.slice(2)) || { name: k.slice(2) });
+  for (const r of rs) { const k = r.sec || "rest"; if ((k.startsWith("f:") || k === "c:") && !by[k]) { by[k] = []; tops.push(k); } (by[k] || by.rest).push(r); }
+  const order = new Map(tops.map((k, i) => [k, k === "f:" ? 1e9 : k === "c:" ? 1e9 - 1 : i])); tops.sort((a, b) => order.get(a) - order.get(b));
+  const label = k => k === "f:" ? "Misc" : k === "c:" ? "Conversations" : focusName(focusById(k.slice(2)) || { name: k.slice(2) });
   const parts = [...SECS.slice(0, 3), ...tops.map(k => [k, label(k)]), SECS[3]].filter(([k]) => by[k].length || (byFocus && k.startsWith("f:") && k !== "f:")), heads = parts.length > 1 || by.pin.length;
   L.foldSecs = heads ? parts.map(([k]) => k) : [];
   const sec = (k, label, rows) => {
     if (!heads) return h("div", { class: "tm-sec", "data-key": "sec:" + k, "data-sec": k }, list(rows, { ...opts, empty: "" }));
-    const here = L.here === k, shut = FOLD.has(k) && !here, fid = k.startsWith("f:") ? k.slice(2) : null;   // the focus page open beside it: its section is marked and open
-    return h("div", { class: "tm-sec", "data-key": "sec:" + k, "data-sec": k, "data-folded": shut ? "" : null, "data-here": here ? "" : null },
-      h("div", { class: "tm-sec-hw", "aria-current": here ? "true" : null },
-        h("button", { type: "button", class: "tm-sec-h tm-fold", "aria-expanded": String(!shut), title: shut ? "Show this section" : "Fold this section",
-          onclick: () => { FOLD.has(k) ? FOLD.delete(k) : FOLD.add(k); saveFold(); ctx.update(); } },
+    const here = L.here === k, shut = FOLD.has(k), fid = k.startsWith("f:") ? k.slice(2) : null;   // the focus page open beside it: its section is marked; pressing its heading again folds it, the page stays
+    const toggle = () => { FOLD.has(k) ? FOLD.delete(k) : FOLD.add(k); saveFold(); ctx.update(); };
+    const dnd = focusDnd(fid, ctx);
+    // A focus's heading is a link to its page (the person, 11080309f795); the chevron before it folds the section. Other headings fold as a whole.
+    return h("div", { class: "tm-sec", "data-key": "sec:" + k, "data-sec": k, "data-folded": shut ? "" : null, "data-here": here ? "" : null, ...dnd.drop },
+      h("div", { class: "tm-sec-hw", "aria-current": here ? "true" : null, ...dnd.grab },
+        fid != null ? [
+          h("button", { type: "button", class: "tm-sec-ch", "aria-expanded": String(!shut), title: shut ? "Show this section" : "Fold this section", "aria-label": (shut ? "Show " : "Fold ") + label, onclick: toggle }, icon(shut ? "chevron-right" : "chevron-down")),
+          h("a", { class: "tm-sec-h tm-sec-link", href: href("focus", fid || "misc"), title: fid && can("post") ? `Open ${label}. Drag to reorder the foci (Alt+Up or Alt+Down moves it)` : `Open ${label}`, draggable: fid && can("post") ? "false" : null, onkeydown: focusKeys(fid, ctx),
+            onclick: e => { if (e.button || e.metaKey || e.ctrlKey || e.shiftKey) return; if (here) { e.preventDefault(); toggle(); } else if (FOLD.has(k)) { FOLD.delete(k); saveFold(); } } }, shut ? `${label} (${rows.length})` : label)] :
+        h("button", { type: "button", class: "tm-sec-h tm-fold", "aria-expanded": String(!shut), title: shut ? "Show this section" : "Fold this section", onclick: toggle },
           icon(shut ? "chevron-right" : "chevron-down"), shut ? `${label} (${rows.length})` : label),
         fid && can("post") ? h("button", { type: "button", class: "tm-sec-add", title: `New conversation in ${label}`, "aria-label": `New conversation in ${label}`, onclick: () => newIn(fid) }, icon("plus")) : null),
       shut ? null : rows.length ? list(rows, { ...opts, empty: "" }) : h("p", { class: "meta tm-sec-none" }, "Nothing this week."));
@@ -498,7 +541,7 @@ function sections(rs, ctx, opts) {
 function syncThreads(c, ctx) {
   const tl = document.querySelector("#main .cm-tl"); if (!tl) return;
   if (app() && !simpleOn()) loadFoci();   // the foci (core/foci.js); a store emit when they change
-  const sig = [S.ver, C.view, C.hideFaded, S.foci && S.foci.at, C.scope, C.arch, C.imp, tmetaSig(), [...FOLD].join(), [...KIDS].join(), C.tq, AI.st + AI.res.length, AI.tag, S.shown && S.shown.length, showMask(), c.arg, Math.floor(now() / 3e4), S.runSig, marksSig().length].join("|");
+  const sig = [S.ver, C.view, C.hideFaded, S.foci && S.foci.at, S.foci && (S.foci.foci || []).map(f => f.id).join(), C.scope, C.arch, C.imp, tmetaSig(), [...FOLD].join(), [...KIDS].join(), C.tq, AI.st + AI.res.length, AI.tag, S.shown && S.shown.length, showMask(), c.arg, Math.floor(now() / 3e4), S.runSig, marksSig().length].join("|");
   if (tl === L.tl && sig === L.tlSig) return;
   const fresh = tl !== L.tl || c.arg !== L.tlConv;
   L.tl = tl; L.tlSig = sig; L.tlConv = c.arg;
@@ -534,11 +577,11 @@ const lastAt = th => { const d = S.threads.get(th), p = d && d.posts.at(-1); ret
 function statusBar(th) {
   const r = th && S.threadStatus && S.threadStatus[th]; if (!r) return null;
   const [a, ...rest] = r.text.split("\n");
-  return h("div", { class: "cm-status", "data-key": "status", role: "note", "aria-label": "Thread status" },
-    h("b", null, a), rest.length ? h("span", null, rest[0]) : null,
+  return h("div", { class: "cm-status cm-strip", "data-key": "status", "data-fold": "", role: "note", "aria-label": "Thread status" },
+    h("b", { class: "cm-strip-a" }, a), rest.length ? h("span", { class: "cm-strip-b" }, rest[0]) : null,
     rest.length > 1 ? h("details", { class: "cm-status-more" }, h("summary", null, "More"), h("p", null, rest.slice(1).join(" "))) : null,
     // One agent named per conversation (R6 review): the strip names who is on it; the summary's author is on hover.
-    h("span", { class: "meta cm-status-m", title: "Summary by " + r.from }, `updated ${ago(r.at * 1e3)}${lastAt(th) ? " · last post " + ago(lastAt(th)) : ""}`,
+    h("span", { class: "meta cm-status-m cm-strip-m", title: "Summary by " + r.from }, `updated ${ago(r.at * 1e3)}${lastAt(th) ? " · last post " + ago(lastAt(th)) : ""}`,
       can("post") ? h("button", { type: "button", class: "cm-status-r", title: "Reply about this summary", onclick: () => quoteRef(th, { who: r.from, where: "summary", text: r.text }) }, "Reply") : null));
 }
 
@@ -628,6 +671,7 @@ function titleMenu(c, n, d, off, ctx) {
   const where = part(
     focusRow,
     off > 0 && !simpleOn() ? act(`Show ${off} hidden`, "filter", () => setShow(SHOW.ALL, ctx), "Turn on For you, Updates and Agent comms") : null,
+    full ? titleExtras(th, { files: () => import("../ui/preview.js").then(m => m.openFiles()), close: () => { C.menu = null; ctx.update(); } }) : null,
     link("All messages", "chat", href("comms", "~all")),
     full ? link("On the timeline", "clock", href("timeline")) : null,
     prio);
@@ -635,14 +679,14 @@ function titleMenu(c, n, d, off, ctx) {
     act("Share this result", "board", () => shareDialog(th), "Save the conversation as one page you can post: the ask, the agents at work, the result. You see it first and can remove anything."),
     act("Export as Markdown", "copy", () => downloadMarkdown(th), "Download the conversation as a .md file, with simple formatting"),
     act("Export as PDF", "board", () => printScript(th), "Lay it out like a script and save it as a PDF from the print dialog")) : [];
-  return h("div", { class: "cm-menu", role: "menu", "data-key": "title" },
+  return h("div", { class: "cm-menu menu", role: "menu", "data-key": "title", "data-side": "bottom-end" },
     h("p", { class: "meta cm-cost" }, (C.q.trim() ? plural(n, "match", "matches") : plural(n, app() ? "message" : "post")) + (d ? ` \u00b7 since ${stamp(d.first)}` : "") + (full && threadCost(th) != null ? ` \u00b7 ${money(threadCost(th))}` : "")),
     own, own.length ? sep() : null, where, out.length ? sep() : null, out,
     full && th !== threadTitle(th) ? h("p", { class: "meta cm-menu-id" }, "Its id on the board: ", h("code", { title: "Click to select it" }, th), copyButton(th)) : null);   // copy it (the person, 11041333ab1a)
 }
 /** The rail's links to the pages Chat brings together: each only where this connection may open it, with a count where there is one. Chat shows no row, so these are the way to them. */
 function places() {
-  const link = (label, to, n, tip) => h("a", { class: "cm-place", href: to, title: tip }, label, n ? h("b", { class: "cm-place-n", "aria-label": n + " new" }, String(n)) : null);
+  const link = (label, to, n, tip) => h("a", { class: "cm-place", href: to, title: tip, "aria-current": L.place && to === href(L.place) ? "page" : null }, label, n ? h("b", { class: "cm-place-n", "aria-label": n + " new" }, String(n)) : null);
   return h("nav", { class: "cm-places", "aria-label": "Also in Chat", "data-key": "places" },
     link("Yours", href("yours"), 0, "Every exchange you had, newest first"),
     can("read") ? link("Inbox", href("inbox"), IB.unread || 0, "Every message agents sent you") : null,
@@ -698,6 +742,7 @@ function head(c, ctx) {
   return h("header", { class: "cm-head", "data-key": "head", "data-find": find ? "" : null },
     h("div", { class: "cm-tt", "data-dev": app() ? null : "" },
       h("a", { class: "btn cm-back", href: href("comms"), "data-kind": "icon", "aria-label": app() ? "Chats" : "Threads", title: app() ? "Chats" : "Threads" }, icon("chevron-left")),
+      c.thread && app() && !simpleOn() ? threadCrumb(c.thread) : null,
       h("button", { type: "button", class: "cm-title-b", "data-hid": off > 0 && !simpleOn() ? "" : null, title: off > 0 && !simpleOn() ? `${off} hidden: open for the way to show them` : null, "aria-haspopup": "true", "aria-expanded": String(C.menu === "title"), onclick: e => { e.stopPropagation(); C.menu = C.menu === "title" ? null : "title"; ctx.update(); } },
         h("h1", { class: "cm-title" }, title), icon("chevron-down")),
       h("span", { class: "meta cm-count" }, (C.q.trim() ? plural(n, "match", "matches") : plural(n, app() ? "message" : "post")) + (d ? ` · since ${stamp(d.first)}` : "")),
@@ -710,6 +755,7 @@ function head(c, ctx) {
         onclick: () => { C.find = !find; if (!C.find) C.q = ""; ctx.update(); if (C.find) queueMicrotask(() => document.querySelector(".cm-find")?.focus()); } }, icon("search")),
       c.thread ? button("Files", () => import("../ui/preview.js").then(m => m.openFiles()), { kind: "icon", icon: "folder", cls: "cm-files", title: "Files: this conversation's and the projects'" }) : null,
       c.thread ? asideBtn(c.thread, ctx) : null),
+    C.menu === "title" || (C.menu === "asides" && c.thread) ? scrim(() => { C.menu = null; ctx.update(); }) : null,
     C.menu === "title" ? titleMenu(c, n, d, off, ctx) : null,
     C.menu === "asides" && c.thread ? asideMenu(c.thread) : null,
     who.length ? h("div", { class: "cm-people" }, who) : null);
@@ -725,10 +771,10 @@ function asideBtn(th, ctx) {
     onclick: e => { e.stopPropagation(); C.menu = C.menu === "asides" ? null : "asides"; ctx.update(); } }, h("span", null, "Side", h("span", { class: "cm-aside-w" }, " questions"), ` (${kids.length})`)) : null;
 }
 function asideMenu(th) {
-  return h("div", { class: "cm-menu cm-aside-m", role: "menu", "data-key": "asides" },
+  return h("div", { class: "cm-menu cm-aside-m menu", role: "menu", "data-key": "asides", "data-side": "bottom-end" },
     h("p", { class: "meta" }, "Side questions"),
     sideKids(th).reverse().map(t => { const d = S.threads.get(t), last = d && d.posts.at(-1);
-      return h("a", { href: threadHref(t), class: "cm-aside-i", role: "menuitem", "data-key": t, title: threadTitle(t).replace(/^Aside: /, "") },
+      return h("a", { href: threadHref(t), class: "cm-aside-i menu-i", role: "menuitem", "data-key": t, title: threadTitle(t).replace(/^Aside: /, "") },
         h("span", { class: "cm-aside-q" }, threadTitle(t).replace(/^Aside: /, "")), last ? h("span", { class: "meta" }, ago(last.t)) : null); }));
 }
 
@@ -769,15 +815,18 @@ function gauge(id) {
   };
   return h("div", { class: "fc-gauge", "data-key": "gauge" }, meter("work", simpleOn() ? "Of the work" : "Work"), meter("cost", simpleOn() ? "Of the cost" : "Cost"));
 }
-function focusCard(f) {
+function focusCard(f, ctx) {
   const id = f.id || null, page = href("focus", id || "misc"), rows = activeThreads(id).filter(r => !archived(r.th));
   if (f.misc) return h("article", { class: "fc fc-misc", "data-key": "fc:misc" },
     h("header", { class: "fc-hd" }, h("a", { class: "fc-name", href: page }, "Misc"), h("span", { class: "meta" }, "not filed under a focus")),
     h("ul", { class: "fc-th" }, rows.slice(0, MISC_THREADS).map(cardThread)),
     rows.length > MISC_THREADS ? h("a", { class: "fc-all meta", href: page }, `All ${rows.length}`) : null);
   const st = stateOf(id), sum = f.summary, ag = agentsOf(id), asked = askedOf(id), nd = needsOf(id), shown = Math.min(asked.length, HOME_NEEDS);
-  return h("article", { class: "fc", "data-key": "fc:" + id, "data-state": st.key },
-    h("header", { class: "fc-hd" }, h("a", { class: "fc-name", href: page }, focusName(f)), h("span", { class: "fc-state", "data-tone": st.tone }, st.word),
+  const dnd = focusDnd(id, ctx), all = foci().map(x => x.id), at = all.indexOf(id), mv = can("post") && all.length > 1;
+  const move = (step, ic, word) => h("button", { type: "button", class: "fc-mv", title: `Move ${focusName(f)} ${word}`, "aria-label": `Move ${focusName(f)} ${word}`, disabled: (step < 0 ? at <= 0 : at >= all.length - 1) ? "" : null,
+    onclick: () => moveFocus(id, { step }).then(err => moved(err, ctx)) }, icon(ic));
+  return h("article", { class: "fc", "data-key": "fc:" + id, "data-state": st.key, ...dnd.drop },
+    h("header", { class: "fc-hd", ...dnd.grab }, h("a", { class: "fc-name", href: page, draggable: mv ? "false" : null }, focusName(f)), statusWord(st.tone, st.word, null, "fc-state"),
       ag.now.length ? h("span", { class: "fc-ag" }, ag.now.slice(0, 4).map(n => agentRef(n, { dot: false }))) : null),
     f.aim ? h("p", { class: "fc-aim" }, f.aim) : null,
     gauge(id),
@@ -788,13 +837,14 @@ function focusCard(f) {
     sum && (sum.lately || []).length ? cardSec("Lately", h("ul", { class: "fc-ul" }, sum.lately.slice(0, HOME_LATELY).map(bullet))) : null,
     rows.length ? cardSec("Conversations", h("ul", { class: "fc-th" }, rows.slice(0, HOME_THREADS).map(cardThread))) : null,
     h("footer", { class: "fc-ft" }, h("a", { class: "fc-all meta", href: page }, rows.length > HOME_THREADS ? `All ${rows.length} conversations` : "The focus page"),
+      mv ? h("span", { class: "fc-mvs", role: "group", "aria-label": "Order of the foci" }, move(-1, "chevron-up", "up"), move(1, "chevron-down", "down")) : null,
       can("post") ? button("New", () => newIn(id), { kind: "quiet", size: "s", icon: "plus", title: "New conversation in " + focusName(f) }) : null));
 }
-function fociGrid() {
+function fociGrid(ctx) {
   if (S.foci === undefined) return h("p", { class: "meta cm-foci-msg" }, fociFailed() ? "Couldn't read the foci. It keeps trying." : "Reading\u2026");
   const fs = fociOrder();
   if (!fs.length) return h("p", { class: "meta cm-foci-msg" }, "No focus yet. Agents make one when work has a goal; every conversation is in the list on the left.");
-  return h("div", { class: "cm-foci", "data-key": "foci" }, fs.map(focusCard));
+  return h("div", { class: "cm-foci", "data-key": "foci" }, fs.map(f => focusCard(f, ctx)));
 }
 function homePane(ctx) {
   const w = can("post"), n = needsN(), local = outFor(null), room = hasRoom(), digest = app();   // n: the one count (core/needs.js), the same as the Chat badge
@@ -813,7 +863,19 @@ function homePane(ctx) {
       local.some(it => it.state !== "failed") ? closeLine() : null,
       local.length ? h("div", { class: "cm-out", "data-key": "out" }, local.map(it => localMessage(it, outActions))) : null) : null,
     line ? h("p", { class: "cm-hline", "data-key": "line", "data-needs": n ? "" : null }, line) : null,
-    digest ? fociGrid() : null);
+    digest ? fociGrid(ctx) : null,
+    phoneList());
+}
+/** On a phone the rail is a page of its own; home lists the latest conversations instead (css/phone.css shows it only there). */
+function phoneList() {
+  const ds = [...S.threads.values()].filter(d => !isSystemThread(d) && !archived(d.name) && !faded(d.name)).sort((a, b) => (pinned(b.name) - pinned(a.name)) || (b.last - a.last)).slice(0, 20);
+  if (!ds.length) return null;
+  return h("section", { class: "sec only-phone cm-plist", "data-key": "plist", "aria-label": "Conversations" },
+    h("header", { class: "sec-h" }, h("h2", { class: "sec-t" }, "Conversations")),
+    h("ul", { class: "list" }, ds.map(d => { const st = threadState(d.name, seen);
+      return h("li", { class: "lr", "data-key": d.name }, h("a", { class: "lr-in", href: threadHref(d.name) },
+        h("span", { class: "lr-t" }, statusDot(st.key), h("b", null, threadTitle(d.name)), h("span", { class: "meta" }, d.last ? ago(d.last) : "")),
+        st.label && st.key !== "done" ? h("span", { class: "lr-x" }, st.label) : null)); })));
 }
 
 // Over the whole page, not in the list: it sets what you see of the hive's talk, both in a conversation and in which ones are listed. Each one turns on and off by itself.
@@ -848,6 +910,13 @@ export function inChat(ctx, id, page) {
     page);
   return frame(ctx, { arg: "focus:" + (id || ""), focus: id || "" }, pane);
 }
+/** One of Chat's own pages (Files and links, made.js) the same way: the rail beside it, its link in the rail's foot lit (review M2: the design's Files has the rail). */
+export function inChatPlace(ctx, place, page) {
+  const pane = h("div", { class: "cm-fpane", "data-key": "place" },
+    h("a", { class: "btn cm-back", href: href("comms"), "data-kind": "icon", "aria-label": "Chats", title: "Chats" }, icon("chevron-left")),
+    page);
+  return frame(ctx, { arg: "place:" + place, place }, pane);
+}
 // Functions, not consts: focus.js reads them while this module, which imports it, is still loading.
 export function chatEscape() { if (C.menu) { C.menu = null; L.ctx && L.ctx.update(); } }
 export function chatLeave() { clearTimeout(qTimer); C.menu = null; C.find = false; }
@@ -856,7 +925,7 @@ export function chatLeave() { clearTimeout(qTimer); C.menu = null; C.find = fals
 function frame(ctx, c, pane) {
     L.ctx = ctx;
     if (C.conv !== c.arg) { Object.assign(C, { conv: c.arg, q: C.next || "", next: null, limit: FIRST, menu: null, find: false }); }
-    L.here = c.focus != null ? "f:" + c.focus : null;
+    L.here = c.focus != null ? "f:" + c.focus : null; L.place = c.place || null;
     L.opts = { showThread: !c.thread, mark: words(C.q) };
     refresh(c);
     queueMicrotask(() => sync(c, ctx));
@@ -902,7 +971,7 @@ function readOnly(th) {
 // A header menu (title, More) closes on a press anywhere outside it and its button (the person, 2026-11-04, post 11040100216b).
 // So does an empty "Search here" box (11040131d9c5); with words in it, it stays, since it's what the messages are filtered by.
 if (typeof document !== "undefined") document.addEventListener("pointerdown", e => {
-  const menu = C.menu && !e.target.closest?.(".cm-menu, .cm-head [aria-haspopup], .cm-showbtn");
+  const menu = C.menu && !e.target.closest?.(".cm-menu, .cm-head [aria-haspopup], .cm-showbtn, .scrim");
   const find = C.find && !C.q.trim() && !e.target.closest?.(".cm-find, .cm-tools [aria-label=\"Search here\"]");
   if (!menu && !find) return;
   if (menu) C.menu = null; if (find) C.find = false;

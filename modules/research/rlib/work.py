@@ -238,6 +238,7 @@ class Hunt:
         self.save_lock = threading.Lock()
         self.discovered = []
         self.stop_reason = ""
+        self.departure_searches = 0
         if self.state_file.exists(): self._load()
 
     def _load(self):
@@ -308,19 +309,22 @@ class Hunt:
         return ""
 
     def old_page(self, page_date):
-        """A verified row from a page older than `stale_days` (default 365) still gets the departure search: an old staff page can be out of date."""
+        """A verified row from a page older than `stale_days` (default 365), or from a page with no date at all, still gets the departure search: an old staff page can be out of date, and an undated one can't show it isn't."""
+        if not page_date: return True
         try: return (dt.date.today() - dt.date.fromisoformat(page_date)).days > self.s.get("stale_days", 365)
         except (ValueError, TypeError): return False
 
     def left_elsewhere(self, name, org):
         """A row that stands on a profile aggregator (secondary) can be years out of date, and its page can't say so. One search for the person with retire/steps down/named; if a result's title or snippet says they left, hold the row. Returns why, or ''."""
-        hits, _ = engines.search(f'"{name}" "{org}" retire OR "steps down" OR named', self.sources, n=6, case=self.case)
+        self.departure_searches += 1
+        hits, _ = engines.search(f'{name} {org} retirement', self.sources, n=6, case=self.case)  # plain words: the engines ignore quotes and OR, and "named" pulls namesakes
         for h in hits[:4]:
             t = f"{h['title']} . {h['snippet']}"
             if people.name_regex(name).search(fold(t)) is None: continue  # a result that doesn't print the name says nothing about this person
             said = people.departed(t, name)
             if not said:  # headlines name the event: "retirement of X", "X announces retirement"
-                m = re.search(r"\b(?:retirement|resignation|departure)\s+of\s+(?:\w+\.?\s+){0,2}?" + people.name_regex(name).pattern + "|" + people.name_regex(name).pattern + r"\W+(?:\w+\s+){0,3}?(?:announce\w*|plans?|submit\w*)\s+(?:\w+\s+){0,2}?(?:retirement|resignation|departure)\b", fold(t))
+                nm = "(?:" + people.name_regex(name).pattern + ")"  # the pattern has a top-level "|": ungrouped, the bare name alone matched and held Eric Muth
+                m = re.search(r"\b(?:retirement|resignation|departure)\s+of\s+(?:\w+\.?\s+){0,2}?" + nm + "|" + nm + r"\W+(?:\w+\s+){0,3}?(?:announce\w*|plans?|submit\w*)\s+(?:\w+\s+){0,2}?(?:retirement|resignation|departure)\b", fold(t))
                 if m: said = " ".join(m.group(0).split())
             if said: return f"a search result says they left: {said} ({h['url']})"
         return ""
@@ -332,7 +336,7 @@ class Hunt:
             self.blocked[page["url"]] = page.get("note", "")
             return 0
         text = page["text"]
-        clean = people.without_boilerplate(text)
+        clean = people.without_events(people.without_boilerplate(text))
         low = fold(clean)
         is_official = people.official(org, page.get("final_url") or page["url"], self.domains, text)
         if not people.names_org(org, text) and not is_official: return 0
@@ -461,7 +465,7 @@ class Hunt:
         if far and self.must: lines += ["## Held back", f"- {far} near misses are only held because the `must` words aren't close to the person. If those words describe the organisation rather than the person, set `\"allow_page_signal\": true` in the spec.", ""]
         if untried: lines += ["## Organisations not tried", *[f"- {o}" for o in untried[:30]], ""]
         (out_dir / "REPORT.md").write_text("\n".join(lines) + "\n")
-        return {"status": status, "leads": len(rows), "verified": n_ver, "target": self.target, "near": len(self.near), "out": str(out_dir), "stopped": self.stop_reason}
+        return {"status": status, "leads": len(rows), "verified": n_ver, "target": self.target, "near": len(self.near), "out": str(out_dir), "stopped": self.stop_reason, "departure_searches": self.departure_searches}
 
 
 def analyze_pages(pages, today=None):

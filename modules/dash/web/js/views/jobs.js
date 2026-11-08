@@ -3,7 +3,7 @@ import { h, selecting } from "../core/dom.js";
 import { S, jget } from "../core/store.js";
 import { ago, clock, gb, now, plural, secs } from "../core/format.js";
 import { metrics } from "../templates.js";
-import { empty, pageHeader, section, share, stats, statusLabel } from "../ui/kit.js";
+import { empty, pageHeader, section, share, stats, statusLabel, pageNav } from "../ui/kit.js";
 import { agentRef } from "../ui/refs.js";
 import { table } from "../ui/table.js";
 
@@ -50,7 +50,7 @@ function split(V) {
   const memTotal = Math.max(V.machine.mem.MemTotal || 0, V.held, OWNERS.reduce((a, [k]) => a + V.split[k].mem, 0)) || 1;
   const own = OWNERS.filter(([k]) => !(S.app.app && k === "jobs" && !hasQueue(V))).map(([k, l, tone]) => [k, S.app.app ? APP_OWNERS[k] : l, tone]);
   return [bar("CPU", "cores", V.machine.cpus, S.app.app ? " cores" : " threads", v => v.toFixed(1)), bar("Memory in use", "mem", memTotal, "", gb),
-    h("div", { class: "legend" }, own.map(([k, l, tone]) => h("span", { "data-tone": tone }, h("i", { class: "sw" }), `${l}: ${V.split[k].cores.toFixed(1)} ${S.app.app ? "cores" : "threads"}, ${gb(V.split[k].mem)}`)))];
+    h("div", { class: "legend" }, own.map(([k, l, tone]) => h("span", { "data-tone": tone }, h("i", { class: "lg-sw" }), `${l}: ${V.split[k].cores.toFixed(1)} ${S.app.app ? "cores" : "threads"}, ${gb(V.split[k].mem)}`)))];
 }
 
 /** The queue tool is installed: it has slots, or something has used it. The app's install doesn't include it. */
@@ -73,11 +73,11 @@ export default {
   },
   render() {
     const V = J.v;
-    if (!V) return h("div", { class: "page" }, J.failed ? empty("Couldn't read the job data. It keeps trying.", { kind: "error" }) : empty("Reading…", { kind: "loading" }));
+    if (!V) return h("div", { class: "page" }, pageNav(), J.failed ? empty("Couldn't read the job data. It keeps trying.", { kind: "error" }) : empty("Reading…", { kind: "loading" }));
     const t = now() / 1e3, app = S.app.app, q = hasQueue(V), head = app ? machineAnswer(V.machine) : headline(V);
     let pos = 0;
     return metrics({
-      header: pageHeader({ title: app ? "This machine" : "Jobs", lead: head.text, tone: head.tone,
+      header: pageHeader({ subnav: pageNav(), title: app ? "This machine" : "Jobs", lead: head.text, tone: head.tone,
         after: app && !q ? h("p", { class: "ph-meta" }, "The queue for big jobs isn't installed here, so agents run their work directly. Its sections show once it is.") : null,
         meta: [J.failed ? "Couldn't refresh: this may be out of date" : `Updated ${clock(V.at * 1e3)}`, app ? null : "CPU in threads in use, averaged since the last refresh"] }),
       sections: [

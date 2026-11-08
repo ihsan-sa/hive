@@ -6,7 +6,7 @@ import { h } from "../core/dom.js";
 import { S, jget } from "../core/store.js";
 import { clock, dayName, mdPlain, plural, short } from "../core/format.js";
 import { metrics } from "../templates.js";
-import { button, empty, waiting, input, pageHeader, seg, staleNote, toolbar } from "../ui/kit.js";
+import { button, empty, waiting, input, pageHeader, seg, staleNote, toolbar, pageNav } from "../ui/kit.js";
 import { agentRef, threadRef } from "../ui/refs.js";
 
 const KINDS = [["all", "Everything"], ["step", "Steps"], ["post", "Messages"], ["agent", "Agents"], ["thread", "Threads"], ["trouble", "Trouble"], ["hive", "Hive"]];
@@ -91,7 +91,7 @@ export default {
     const built = changed ? rows() : null;     // on an unchanged poll the list below is an empty node with the same sig: morph leaves the page's list alone
     const set = (k, v) => { L[k] = v; ctx.update(); };
     return metrics({
-      header: pageHeader({ title: S.app.app ? "History" : "Ledger", lead: S.app.app ? "Everything that happened, newest first: messages, every step agents took, agents starting and ending, and trouble." : null, after: [toolbar(
+      header: pageHeader({ subnav: pageNav(), title: S.app.app ? "History" : "Ledger", lead: S.app.app ? "Everything that happened, newest first: messages, every step agents took, agents starting and ending, and trouble." : null, after: [toolbar(
         seg(S.app.app ? KINDS.map(([k, l]) => [k, k === "thread" ? "Conversations" : l]) : KINDS, L.kind, k => set("kind", k), { label: "Kind of event" }),
         input({ type: "search", placeholder: `Filter by agent, ${S.app.app ? "conversation" : "thread"} or words`, "aria-label": "Filter", value: L.q, oninput: e => set("q", e.target.value) }),
         S.live ? h("span", { class: "meta" }, plural(L.count, "event")) : null), reading ? h("p", { class: "meta lg-reading", role: "status" }, "Reading agents’ steps… Messages and events are available under Everything.") : null, S.live && wantSteps() && ST.failed ? staleNote(ST.rows.length ? "Couldn't refresh the agents' steps, so they're the ones read last. It keeps trying." : "Couldn't read the agents' steps, so they're left out. It keeps trying.") : null] }),

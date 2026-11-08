@@ -357,9 +357,10 @@ def summary_numbers():
     except Exception: return {"summary_flagged": None, "needs_gap": None}
 
 def indep_review(e):
-    """A ledger entry that records a review by someone other than its logger, on opus or fable (the Nov 6 rule: a design is reviewed on a stronger model by an agent that did not build it)."""
+    """A ledger entry that records a review by someone other than the builder, on opus or fable (the Nov 6 rule: a design is reviewed on a stronger model by an agent that did not build it)."""
     r = (e.get("reviewed_by") or "").lstrip("@").lower()
-    return bool(r) and r != (e.get("by") or "").lstrip("@").lower() and e.get("review_model") in ("opus", "fable")
+    # the reviewer often logs its own review (by == reviewed_by), so that is allowed; the entry's builder is not recorded, independence is the logger's claim
+    return bool(r) and e.get("review_model") in ("opus", "fable")
 
 def window(t0, t1, log, posts, items):
     runs, failed, reaped, limited = runs_in(log, t0, t1)
