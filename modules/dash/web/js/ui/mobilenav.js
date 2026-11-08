@@ -4,7 +4,7 @@
 import { h } from "../core/dom.js";
 import { S } from "../core/store.js";
 import { href } from "../core/router.js";
-import { layout, groupHead } from "../core/nav.js";
+import { layout, moreGroups } from "../core/nav.js";
 import { simpleOn, setSimple } from "../core/simple.js";
 import { getTheme, cycleTheme, THEMES } from "../core/theme.js";
 import { icon } from "./kit.js";
@@ -19,20 +19,6 @@ const GLYPH = { start: "plus", comms: "chat", now: "agents", usage: "usage", set
 const SHORT = { comms: "Chat", now: "Agents" };
 const BAR = ["comms", "now", "usage", "knowledge"];   // the design's four (Chat, Agents, Usage, Knowledge); More is the fifth
 const DEV_MAIN = ["comms", "now", "agents", "usage"];
-const CHAT_PAGES = ["yours", "inbox", "made", "mail"];   // Chat's own pages (APP_NAV.belongs), the rail's foot on a desktop
-
-/** The More sheet's groups, built from the nav (APP_NAV): Chat's pages, each tab's row less the tab itself, then the rest. */
-function sheetGroups(views, nav, on, L, bar) {
-  const by = new Map(views.map(v => [v.id, v])), shown = new Set([...L.main, ...L.icons].map(v => v.id)), barIds = new Set(bar.map(v => v.id)), used = new Set(barIds);
-  const pick = ids => ids.map(id => by.get(id)).filter(v => v && on(v) && !used.has(v.id) && used.add(v.id));
-  const out = [];
-  if (shown.has("comms")) out.push(["Conversations", pick(CHAT_PAGES.filter(id => (nav.belongs || {})[id] === "comms"))]);
-  for (const [tab, ids] of Object.entries(nav.groups || {})) if (shown.has(tab)) out.push([groupHead(tab, nav, lab(by.get(tab))), pick(ids)]);
-  out.push(["More", pick([...L.main, ...L.more].map(v => v.id))]);
-  out.push(["", pick(L.icons.map(v => v.id))]);   // Settings, last, under a rule
-  return out.filter(([, vs]) => vs.length);
-}
-
 export function mobileNav({ views, current, nav, update }) {
   ST.update = update;
   const on = v => (typeof v.tab === "function" ? v.tab() : v.tab);
@@ -44,7 +30,7 @@ export function mobileNav({ views, current, nav, update }) {
     const all = [...L.main, ...L.icons];
     main = BAR.map(id => all.find(v => v.id === id)).filter(Boolean);
     if (main.length < 2) main = all.filter(v => v.id !== "start").slice(0, 4);   // simple view: Chat and Settings
-    groups = sheetGroups(views, nav, on, L, main);
+    groups = moreGroups(views, nav, on, L, main.map(v => v.id), lab);
   } else {
     const by = new Map(views.map(v => [v.id, v]));
     main = DEV_MAIN.map(id => by.get(id)).filter(Boolean);

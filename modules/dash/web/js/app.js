@@ -39,10 +39,10 @@ function render(force) {
   mount(main, page);
   // On a phone the page head's row (.subnav) scrolls sideways: bring the page you are on into view once, when you arrive. Sideways only, so it never moves the page.
   const here = main.querySelector(".subnav a[aria-current=page]"), row = here && here.parentNode;
-  if (row && centred !== cur.id) { centred = cur.id; const a = here.getBoundingClientRect(), r = row.getBoundingClientRect(); row.scrollLeft += a.left - r.left - (r.width - a.width) / 2; }
-  else if (!row) centred = null;
+  if (row && (centred !== cur.id || row !== centredRow)) { centred = cur.id; centredRow = row; const a = here.getBoundingClientRect(), r = row.getBoundingClientRect(); row.scrollLeft += a.left - r.left - (r.width - a.width) / 2; }
+  else if (!row) centred = centredRow = null;
 }
-let centred = null;   // the page whose row was last brought into view
+let centred = null, centredRow = null;   // the page whose row was last brought into view, and that row: a page that draws its head again (Progress, Flow once their data lands) gets a new row at scrollLeft 0, so it is centred again (R7b)
 // A view that throws shows this instead of leaving the page before it on screen.
 function crashPage(v, e) {
   const detail = `${v.id}: ${e && e.stack || e}`;

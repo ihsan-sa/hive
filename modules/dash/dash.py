@@ -484,15 +484,19 @@ def thread_status():
 AGENT_STATUS = STATE / "agent-status.jsonl"
 
 def agent_status():
-    out = {}
+    """{name: {text, thread, at, about?}}: each agent's newest `hive me` line, and its `hive me --about` line when it set one."""
+    out, about = {}, {}
     try: lines = AGENT_STATUS.read_text().splitlines()[-5000:]
     except OSError: return out
     for ln in lines:
         try: r = json.loads(ln)
         except ValueError: continue
-        if isinstance(r, dict) and re.fullmatch(r"[A-Za-z0-9_.-]{1,40}", str(r.get("name") or "")) and r.get("text"):
+        if not (isinstance(r, dict) and re.fullmatch(r"[A-Za-z0-9_.-]{1,40}", str(r.get("name") or ""))): continue
+        if r.get("about"): about[r["name"]] = str(r["about"])[:200]   # `hive me --about`: who the agent is, kept apart from what it is on now
+        elif r.get("text"):
             try: out[r["name"]] = {"text": str(r["text"])[:200], "thread": str(r.get("thread") or "")[:100] or None, "at": float(r.get("at") or 0)}
             except (TypeError, ValueError): pass
+    for n, t in about.items(): out.setdefault(n, {"text": "", "thread": None, "at": 0})["about"] = t
     return out
 
 # ---------- the person's own view of threads (GET/POST /api/thread-meta) ----------
@@ -2624,10 +2628,32 @@ def kb_home():
     return {"shelves": shelves, "recent": recent}
 
 
+def thread_find():
+    """thread_find.py beside this file, loaded once."""
+    tf = sys.modules.get("h2_thread_find")
+    if not tf:
+        spec = importlib.util.spec_from_file_location("h2_thread_find", Path(__file__).with_name("thread_find.py")); tf = importlib.util.module_from_spec(spec); spec.loader.exec_module(tf); sys.modules["h2_thread_find"] = tf
+    return tf
+
+
+def kb_tagged(q, n=40):
+    """A tag: search (tag:site, tag:agent:a1b2c): the posts carrying every tag, newest first, as ranked passages that open their thread.
+    Exact, like hive search tag:; None when q has no tag: word."""
+    try: posts = thread_find().tagged(q)
+    except Exception: return None
+    if posts is None: return None
+    out = [{"path": "board:" + str(p.get("id", "")), "line": 0, "text": KB_BLOB.sub("[hidden]", redact(" ".join(str(p.get("text", "")).split())[:240])), "title": "",
+            "source": "board", "date": str(p.get("at", ""))[:10], "thread": p["thread"], "post": p.get("id")} for p in posts[:n]]
+    return {"passages": out, "words": [w for w in q.lower().split() if not w.startswith("tag:")], "total": len(posts), "spelling": None}
+
+
 def kb_search(q):
-    """Names first, then lines inside files. A plain string, any case; a hard time limit, and never in worktrees or toolchains."""
+    """Names first, then lines inside files. A plain string, any case; a hard time limit, and never in worktrees or toolchains.
+    A tag: word makes it a tag search (kb_tagged): only posts, no names or lines."""
     q = str(q or "").strip()[:200]
     if len(q) < 2: return {"q": q, "names": [], "hits": [], "more": False}
+    tagged = kb_tagged(q)
+    if tagged is not None: return {"q": q, "names": [], "hits": [], "more": False, "ranked": tagged}
     ranked = kb_ranked(q)
     ws = q.lower().split(); names = []
     for path, t in kb_index()["items"]:
@@ -4708,7 +4734,9 @@ def serve(port):
             elif u.path == "/api/accounts":
                 self.send(json.dumps(accounts_view()).encode(), J)
             elif u.path == "/api/live":
-                self.send(json.dumps({**agents_for(live_c.get(), self.route != "outside" or self.mode == "full"), "web": web_c.get()}, default=str).encode(), J)
+                lv = {**agents_for(live_c.get(), self.route != "outside" or self.mode == "full"), "web": web_c.get()}
+                if self.route != "open": lv["starter"] = starter_up()  # read every 1.5 s with the rest: a stop or restart shows in ~2 s, not at /api/app's next 15 s read
+                self.send(json.dumps(lv, default=str).encode(), J)
             elif u.path == "/api/jobs":
                 self.send(json.dumps(jobs_for(jobs_c.get(), self.route != "outside" or self.mode == "full"), default=str).encode(), J)
             elif u.path in ("/api/board", "/api/log"):
@@ -4735,10 +4763,7 @@ def serve(port):
                 self.send(json.dumps(shown_now()).encode(), J)
             elif u.path == "/api/thread-find":
                 try:
-                    tf = sys.modules.get("h2_thread_find")
-                    if not tf:
-                        spec = importlib.util.spec_from_file_location("h2_thread_find", Path(__file__).with_name("thread_find.py")); tf = importlib.util.module_from_spec(spec); spec.loader.exec_module(tf); sys.modules["h2_thread_find"] = tf
-                    self.send(json.dumps(tf.find((q.get("q") or [""])[0])).encode(), J)
+                    self.send(json.dumps(thread_find().find((q.get("q") or [""])[0])).encode(), J)
                 except Exception as e: self.send(json.dumps({"error": str(e)[:200]}).encode(), J)
             elif u.path == "/api/thread-status":
                 self.send(json.dumps(thread_status()).encode(), J)

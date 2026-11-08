@@ -6,12 +6,12 @@
 import { h, copyText } from "../core/dom.js";
 import { S, can, jget, SYS, OUTSIDE } from "../core/store.js";
 import { simpleOn, hiveName } from "../core/simple.js";
-import { isAgent, isWarden, isRunning, displayText, postSource, btwParent, btwText, asksQuestion, threadState, threadChildren, threadTitle } from "../core/model.js";
+import { isAgent, isWarden, isRunning, agentThread, displayText, postSource, btwParent, btwText, asksQuestion, threadState, threadChildren, threadTitle } from "../core/model.js";
 import { focusById, focusName } from "../core/foci.js";
 import { clock, stamp, now, short, mdPlain, ago, DAY, MIN } from "../core/format.js";
 import { markdown, mdCut, filesNamed } from "./markdown.js";
 import { agentRef, threadRef, agentAvatar } from "./refs.js";
-import { agentHref } from "../core/router.js";
+import { agentHref, threadHref, href } from "../core/router.js";
 import { button, icon, statusDot, copyPress, scrim } from "./kit.js";
 import { replyTo, draft, quoteRef } from "./composer.js";
 import { wordButton } from "./rootword.js";
@@ -317,6 +317,21 @@ export function relayLine(p) {
   for (const id of p.foci || []) { const f = focusById(id); out.push(h("span", { class: "msg-relay" }, "For the focus ", f ? focusName(f) : id)); }
   return out.length ? h("div", { class: "msg-relays" }, ...out) : null;
 }
+// R8: the post's tags (hive post --tag, plus the thread's focus, the agents and threads it names), one small chip each, in plain words: the focus's name,
+// the agent's name, the conversation's title. A chip opens the focus page, the agent's own thread (its page when it has none) or the conversation.
+// A focus this page doesn't know, or a kind it can't name, is left off: no raw ids on a chip. The simple view has none.
+export function tagChips(p) {
+  if (!(p.tags || []).length || simpleOn()) return null;
+  const chips = [];
+  for (const t of p.tags) {
+    const i = String(t).indexOf(":"), kind = String(t).slice(0, i).toLowerCase(), id = String(t).slice(i + 1);
+    if (i < 1 || !id) continue;
+    if (kind === "focus") { const f = focusById(id.toLowerCase()); if (f) chips.push([kind, focusName(f), href("focus", f.id), `Open the focus ${focusName(f)}`]); }
+    else if (kind === "agent") { const th = agentThread(id); chips.push([kind, who(id), th ? threadHref(th) : agentHref(id), th ? `Open ${id}'s conversation, ${threadTitle(th)}` : `Open ${id}`]); }
+    else if (kind === "thread") { if (id !== p.th) chips.push([kind, threadTitle(id), threadHref(id), `Open the conversation ${threadTitle(id)}`]); }
+  }
+  return chips.length ? h("div", { class: "msg-tags", "aria-label": "Tags" }, chips.map(([kind, label, to, title]) => h("a", { class: "msg-tag", "data-kind": kind, href: to, title }, h("span", null, label)))) : null;
+}
 function quote(p) {
   const q = S.byId[p.reply_to];
   return h("button", { type: "button", class: "msg-q", title: q ? "Go to the message this answers" : `Answers post ${p.reply_to}, not loaded here`, onclick: () => jumper && jumper(p.reply_to) },
@@ -414,6 +429,7 @@ export function message(p, opts = {}) {
       p.reply_to ? quote(p) : null,
       body(q, ws),
       files.length ? h("div", { class: "msg-files" }, files.map(f => attachment(p, f))) : null,
+      tagChips(p),
       split ? didFold(p, split) : null,
       wordButton(p),
       messageReceipt(p),
@@ -594,6 +610,7 @@ function devMessage(p, opts) {
     devTools(p, ws),
     cut(devBodyEl(p, ws)),
     files.length ? h("div", { class: "msg-files" }, files.map(f => attachment(p, f))) : null,
+    tagChips(p),
     long ? button(moreLabel(p), (e, b) => {
       if (OPEN.has(p.id)) OPEN.delete(p.id); else OPEN.add(p.id);
       b.closest(".msg").querySelector(".md").replaceWith(cut(devBodyEl(p, ws)));

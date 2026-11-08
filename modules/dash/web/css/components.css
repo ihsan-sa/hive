@@ -94,7 +94,7 @@ a.top-route[data-mode=limited]:hover{background:color-mix(in oklch,var(--warn) 3
 .more>.btn[aria-expanded=true]{background:var(--hover);color:var(--ink)}
 .more-dot{position:absolute;top:6px;right:6px;width:6px;height:6px;border-radius:50%;background:var(--accent)} /* NEW: a view from More is open */
 .more-c{display:none}
-.more-m{display:grid;min-width:240px}
+.more-m{display:grid;min-width:240px;max-height:calc(100dvh - var(--bar-h,52px) - 16px)}   /* the grouped More (R7b): every page, so it may be taller than the 520 of other menus */
 .more-i[aria-current]{background:var(--hover)}
 .more-i b{font-weight:var(--w-med)}
 .more-i span{display:none}             /* the one-line descriptions go: the names say it */
@@ -370,6 +370,29 @@ table.tbl td.mono{font-family:var(--mono);font-size:var(--fs-meta);color:var(--i
 table.tbl .clip{width:100%;max-width:0;overflow:hidden;text-overflow:ellipsis}
 @container (max-width:640px){table.tbl .clip{max-width:none;width:auto;overflow:visible}}
 .tbl tbody tr:hover td{background:var(--hover)}
+/* ui/table.js (R7b S8): grid rows whose columns line up through subgrid; a phone stacks each row, the first cell its title, the rest a line each with the column's name */
+.tbl.tg{grid-template-columns:var(--cols);min-width:0}
+.tbl.tg>.tr,.tbl.tg>.tb,.tbl.tg>.tb>.tr{grid-column:1/-1;grid-template-columns:subgrid}
+.tbl.tg>.tb{display:grid}
+.tbl.tg .tr{padding:6px 8px;align-items:baseline}
+.tbl.tg .th{padding:0 8px 6px}
+.tbl.tg>.tb>.tr>*{min-width:0;white-space:nowrap;font-variant-numeric:tabular-nums}
+.tbl.tg .num{text-align:right}
+.tbl.tg>.tb>.tr>.wrap{white-space:normal;overflow-wrap:anywhere}
+.tbl.tg>.tb>.tr>.clip{overflow:hidden;text-overflow:ellipsis}
+.tbl.tg .mono{font-family:var(--mono);font-size:var(--fs-meta);color:var(--ink-2)}
+@container (max-width:640px){
+  .tblw:has(>.tg){overflow:visible;margin:0}
+  .tbl.tg,.tbl.tg>.tb{display:block}
+  .tbl.tg>.th{display:none}
+  .tbl.tg>.tb>.tr{display:grid;grid-template-columns:minmax(0,1fr);row-gap:2px;padding:10px 0}
+  .tbl.tg>.tb>.tr>*{display:block;white-space:normal;overflow-wrap:anywhere;text-align:right}
+  .tbl.tg>.tb>.tr>.lead{order:-1;text-align:left;font-weight:var(--w-med)}
+  .tbl.tg>.tb>.tr>[data-label]::before{content:attr(data-label);float:left;margin-right:12px;color:var(--ink-3);font-size:var(--fs-meta);font-family:var(--font);font-weight:400}
+  .tbl.tg>.tb>.tr>.wrap:not(.lead){text-align:left}
+  .tbl.tg>.tb>.tr>.wrap[data-label]::before{float:none;display:block}
+  .tbl.tg>.tb>.tr>:empty{display:none}
+}
 
 /* ---- chart (frame + plot) ---- */
 .chart{min-width:0}
@@ -901,7 +924,7 @@ rc-lazy[data-mode=inline]{display:inline}
 .msg-tools>.rc-more{display:flex}
 
 .msg-tools .btn[data-ok]{color:var(--good)}
-@media (hover:none) and (pointer:coarse){.msg-tools{display:none}}
+@media (hover:none) and (pointer:coarse){.msg:not([data-held])>.msg-tools{display:none}}   /* touch: no hover, so the tools wait for press-and-hold (phone.css .msg[data-held], set by mobilenav.js); one rule, nothing to out-rank (R7b, L4) */
 .msg>.md[data-cut]{max-height:none;-webkit-mask-image:linear-gradient(to bottom,#000 calc(100% - 1.6em),transparent);mask-image:linear-gradient(to bottom,#000 calc(100% - 1.6em),transparent)}
 .msg-chip{padding:0 6px;border-radius:999px;background:var(--sunken);font-size:var(--fs-meta)}
 .msg-raw{margin:4px 0;padding:8px 10px;border-radius:var(--r-m);background:var(--sunken);font:var(--fs-small)/1.5 var(--mono);white-space:pre-wrap;overflow-wrap:anywhere}
@@ -910,6 +933,13 @@ rc-lazy[data-mode=inline]{display:inline}
 .msg-relays{display:flex;flex-wrap:wrap;gap:2px 12px;margin:0 0 4px;font-size:var(--fs-meta);color:var(--ink-3)}
 .msg-relay{display:inline-flex;align-items:center;gap:4px}
 .msg-relay .icon{width:12px;height:12px}
+.msg-tags{display:flex;flex-wrap:wrap;gap:4px;margin:4px 0 2px}
+.msg-tag{display:inline-flex;align-items:center;gap:4px;max-width:24ch;padding:0 8px;border:1px solid var(--line);border-radius:999px;background:var(--sunken);color:var(--ink-2);font-size:var(--fs-meta);line-height:1.6;text-decoration:none;white-space:nowrap}
+.msg-tag>span{min-width:0;overflow:hidden;text-overflow:ellipsis}
+.msg-tag::before{content:"";flex:none;width:6px;height:6px;border-radius:2px;background:var(--ink-3)}
+.msg-tag[data-kind=focus]::before{background:var(--accent)}
+.msg-tag[data-kind=agent]::before{border-radius:50%}
+.msg-tag:hover,.msg-tag:focus-visible{color:var(--ink);border-color:var(--line-2)}
 .msg-q{display:grid;width:fit-content;gap:1px;margin:2px 0 4px;padding:3px 10px;border:0;border-left:2px solid var(--line-2);background:none;color:var(--ink-2);font-size:var(--fs-small);text-align:left;cursor:pointer;min-width:0;max-width:100%}
 .msg-q:hover{border-left-color:var(--ink-3);color:var(--ink)}
 .msg-q[data-static]{cursor:default}
@@ -1154,8 +1184,10 @@ a.ref[data-kind=file][data-pv-on]{background:color-mix(in oklch,var(--accent) 16
 .cp-opt .meta{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
 .cp-menu-n{margin:4px 8px 4px;font-size:var(--fs-meta);color:var(--ink-3);line-height:1.4;text-wrap:pretty}
 .cp-menu-h{margin:6px 8px 2px;padding-top:6px;border-top:1px solid var(--line);font-size:var(--fs-meta)}
+.cp-ac .menu-h{padding:6px 8px 2px}   /* the @ list's group headings: Agents, Focuses, Conversations */
+.cp-ac .cp-opt+.menu-h{margin-top:4px;border-top:1px solid var(--line)}
 .cp-opt b{white-space:nowrap}
-.cp-opt .cp-model{flex:none}
+.cp-opt .cp-model{flex:none;height:auto;margin:0;padding:0;border:0;background:none}   /* a label in the row, not the composer's model pill */
 .cp-opt .cp-title{flex:0 1 auto;min-width:7ch}
 .cp-opt .cp-sep{flex:none;color:var(--ink-3)}
 .cp-opt .cp-fx{flex:none;width:8px;text-align:center;font-size:var(--fs-meta);color:var(--accent-ink)}
@@ -1294,6 +1326,15 @@ a.ref[data-kind=file][data-pv-on]{background:color-mix(in oklch,var(--accent) 16
 .cm-hline{max-width:720px;margin:var(--s6) auto 0;text-align:center;font-size:var(--fs-body);color:var(--ink-3)}
 .cm-hline[data-needs]{color:var(--ink)}
 .cm-hline a{color:var(--accent-ink);font-weight:var(--w-med)}
+/* Needs you on the home (R7b S5): a row per thing that waits, the ask in full, then where, who and when, Answer at the right */
+.cm-needs{max-width:720px;margin:var(--s3) auto 0;padding:0;list-style:none;display:grid;gap:0;border:1px solid var(--line);border-radius:var(--r-l);background:var(--surface)}
+.cm-need{display:grid;grid-template-columns:1fr auto;column-gap:var(--s3);align-items:center;padding:10px 14px}
+.cm-need+.cm-need,.cm-need-all{border-top:1px solid var(--line)}
+.cm-need-q{grid-column:1;margin:0;color:var(--ink);overflow-wrap:anywhere}
+.cm-need-m{grid-column:1;margin:2px 0 0}
+.cm-need-m a{color:var(--ink-2)}
+.cm-need-a{grid-column:2;grid-row:1/span 2}
+.cm-need-all{padding:8px 14px;font-size:var(--fs-small)}
 .cm-foci-msg{max-width:720px;margin:var(--s6) auto 0;text-align:center}
 .cm-foci{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:var(--s4);max-width:1100px;margin:var(--s6) auto 0;align-items:start}   /* a short card doesn't stretch to its neighbour's height */
 .cm-foci>*{min-width:0}
@@ -1572,9 +1613,11 @@ details.blk>summary .blk-t::after{border-color:var(--ink-3)}
 .cm-st{font-weight:var(--w-med);color:var(--ci)}
 .cm-draft{font-weight:var(--w-med);color:var(--accent)}
 .cm-side-f{display:none}                                  /* "All messages" moves into the search menu */
-.cm-places{display:flex;flex-wrap:wrap;gap:2px 0;padding:var(--s2) var(--s2);border-top:1px solid var(--line)}
-.cm-place{display:inline-flex;align-items:center;gap:var(--s1);height:var(--ctl-s);padding:0 6px;border-radius:var(--r-s);color:var(--ink-3);font-size:var(--fs-meta);font-weight:var(--w-med);text-decoration:none}
-.cm-place:hover{background:var(--hover);color:var(--ink)}
+.cm-places{display:grid;gap:2px}                         /* Yours, Inbox, Mail, Files under New conversation (R7b S2, the hand-off's Rail) */
+.cm-nav{display:flex;align-items:center;gap:10px;height:34px;padding:0 10px;border:0;border-radius:var(--r-m);background:none;color:var(--ink-2);font-size:var(--fs-small);font-weight:var(--w-med);text-align:left;width:100%;text-decoration:none}
+.cm-nav:hover{background:var(--hover);color:var(--ink);text-decoration:none}
+.cm-nav .ic{color:var(--ink-3)}
+.cm-nav .cm-place-n{margin-left:auto}
 .cm-place-n{min-width:16px;height:16px;padding:0 4px;border-radius:var(--r-pill);background:var(--accent);color:var(--on-accent,#fff);font-size:var(--fs-micro);font-weight:var(--w-med);line-height:16px;text-align:center}
 .cm-head{display:flex;align-items:center;gap:var(--s3);min-height:52px;padding:0 var(--s3) 0 var(--s5);border-bottom:0}
 .cm-tt{flex:1;flex-wrap:nowrap;gap:var(--s2)}
@@ -1588,6 +1631,7 @@ details.blk>summary .blk-t::after{border-color:var(--ink-3)}
 .cm-menu .check{height:34px;align-items:center;padding:0 10px;border-radius:var(--r-s)}
 .cm-menu .check:hover{background:var(--hover)}
 .cm-head{position:relative}
+.cm-menu[data-key=title]{left:max(8px,min(var(--tx,8px),100% - 340px));right:auto}   /* R7b S6: under the title button (comms.js sets --tx), kept inside the head */
 .cm-title-b{display:inline-flex;align-items:center;gap:4px;min-width:0;height:32px;padding:0 8px;margin-left:-8px;border:0;border-radius:var(--r-s);background:none;color:var(--ink);cursor:pointer}
 .cm-title-b:hover,.cm-title-b[aria-expanded=true]{background:var(--hover)}
 .cm-title-b .ic{flex:none;width:14px;height:14px;color:var(--ink-3)}
@@ -1652,7 +1696,10 @@ details.blk>summary .blk-t::after{border-color:var(--ink-3)}
 .cm-home-t{font-size:30px;line-height:1.2;letter-spacing:-.025em;text-align:center;margin:0 0 var(--s4)}   /* the subtitle is hidden, so the heading carries the gap to the composer */
 .cm-home-l{display:none}
 @container (max-width:640px){
-  .cm-tools .avs{display:none}
+  .cm-tools .avs{gap:0;margin-right:4px}   /* R7b L2: the design keeps the agents in a phone head, as a small overlapped stack before Find and Files */
+  .cm-tools .avs .av{width:22px;height:22px;font-size:9px;border-radius:6px}
+  .cm-tools .avs .av+.av{margin-left:-6px;box-shadow:0 0 0 2px var(--bg)}
+  .cm-tools .avs .av:nth-child(n+3){display:none}                  /* two faces; a tap on the stack lists them all */
   .cm{grid-template-columns:minmax(0,1fr)}                 /* one pane: the list, or the open conversation */
   .cm-head{min-height:52px;padding:0 6px}
   .cm-back{display:inline-flex;width:44px;height:44px;margin:0}
@@ -2686,7 +2733,7 @@ button.fl-rn:hover{text-decoration:underline}
 .fp-ag p{display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px;margin:0}   /* each agent name its own pill, with air between (they ran together) */
 .fp-links{margin:0;padding:0;list-style:none;display:grid;gap:4px;font-size:var(--fs-small)}
 /* Files and links (views/made.js), in Chat's layout: a row per file or link, as in the design's Files: the type badge, the name, when, and "Type · size · from the conversation" */
-.cm-place[aria-current=page]{background:var(--hover);color:var(--ink)}
+.cm-place[aria-current=page]{background:var(--tint);color:var(--ink)}
 .mf-list{border-bottom:0;margin:var(--s3) -12px 0}
 .mf-row{display:grid;grid-template-columns:32px minmax(0,1fr) auto;grid-template-rows:auto auto;column-gap:12px;row-gap:1px;align-items:center;width:100%;padding:8px 12px;border:0;border-top:1px solid var(--line);border-radius:0;background:none;color:inherit;font:inherit;text-align:left;text-decoration:none;cursor:pointer}
 .mf-row:first-child{border-top:0}

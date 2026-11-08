@@ -443,18 +443,32 @@ function focusPick(d) {
 const words = (...xs) => xs.filter(Boolean).join(" ").toLowerCase();
 const agentThread = n => { const L = S.running.get(n), s = S.lastSess[n]; return (L && L.thread) || (s && s.thread) || null; };
 const modelOf = n => { const r = agentCard(n)[0]; return r && r.v !== "login default" ? r.short : ""; };
-/** One row: {kind: agent | focus | thread | word, word (what @ inserts), ...what the row shows}. */
+/** The words a thread's tags give it (R8's `tags` on posts, "kind:id"): the ids, and the focus's or thread's name for each. */
+function tagWords(th) {
+  const d = th && S.threads.get(th), out = new Set();
+  for (const p of d ? d.posts.slice(-80) : []) for (const t of Array.isArray(p.tags) ? p.tags : []) {
+    const [k, ...rest] = String(t).split(":"), id = rest.join(":") || k; out.add(id);
+    if (k === "focus") { const f = focusById(id); if (f) out.add(focusName(f)); } else if (k === "thread") out.add(threadTitle(id));
+  }
+  return [...out].join(" ");
+}
+/** What an agent says about itself: `hive me --about` first, else its `hive me` line. */
+const selfLine = n => { const m = S.agentStatus && S.agentStatus[n]; return (m && (m.about || m.text)) || ""; };
+/** One row: {kind: agent | focus | thread | word, word (what @ inserts), head (its name words), hay (every word it is found by), ...what the row shows}. */
 function agentRow(n) {
-  const th = agentThread(n), f = th ? focusById(focusOf(th)) : null;
-  return { kind: "agent", word: n, model: modelOf(n), th, title: th ? threadTitle(th) : "", line: th ? threadLine(th) : "", focus: f ? focusName(f) : "",
-    hay: words(n, modelOf(n), th, th && threadTitle(th), th && threadLine(th), f && focusName(f)) };
+  const th = agentThread(n), f = th ? focusById(focusOf(th)) : null, me = S.agentStatus && S.agentStatus[n];
+  const line = (th && threadLine(th)) || selfLine(n);
+  return { kind: "agent", word: n, model: modelOf(n), th, title: th ? threadTitle(th) : "", line, focus: f ? focusName(f) : "", head: words(n, th, th && threadTitle(th)),   // found through its thread's name, it is as close as the thread
+    hay: words(n, modelOf(n), th, th && threadTitle(th), line, me && me.about, me && me.text, f && focusName(f), tagWords(th)) };
 }
 function focusRow(f) {
-  return { kind: "focus", word: f.id, name: focusName(f), keeper: f.keeper || null, aim: f.aim || "", hay: words(f.id, f.name, f.aim, f.keeper, f.thread, "focus") };
+  return { kind: "focus", word: f.id, name: focusName(f), keeper: f.keeper || null, aim: f.aim || "", head: words(f.id, focusName(f)),
+    hay: words(f.id, f.name, f.aim, f.keeper, f.thread, f.summary && f.summary.text, f.thread && tagWords(f.thread), "focus") };
 }
 function threadRow(th) {
   const f = focusById(focusOf(th));
-  return { kind: "thread", word: th, title: threadTitle(th), line: threadLine(th), focus: f ? focusName(f) : "", hay: words(th, threadTitle(th), threadLine(th), f && focusName(f), "thread") };
+  return { kind: "thread", word: th, title: threadTitle(th), line: threadLine(th), focus: f ? focusName(f) : "", head: words(th, threadTitle(th)),
+    hay: words(th, threadTitle(th), threadLine(th), f && focusName(f), tagWords(th), "thread conversation") };
 }
 /** Rows in the order they're offered: this thread's agents, running agents, the foci, recent agents, then threads active this week, new and the model words. */
 function acRows(th) {
@@ -465,22 +479,47 @@ function acRows(th) {
   for (let i = S.sessions.length - 1; i >= 0 && i > S.sessions.length - 40; i--) if (S.sessions[i].name) add(agentRow(S.sessions[i].name));
   const week = now() - 7 * 86400e3;
   for (let i = S.posts.length - 1; i >= 0 && S.posts[i].t > week; i--) { const t = S.posts[i].th; if (t && t !== th && listed(t)) add(threadRow(t)); }
-  add({ kind: "word", word: "new", hay: "new a new agent" });
-  MODEL_WORDS.forEach(w => add({ kind: "word", word: w, hay: w + " model" }));
+  add({ kind: "word", word: "new", head: "new", hay: "new a new agent" });
+  MODEL_WORDS.forEach(w => add({ kind: "word", word: w, head: w, hay: w + " model" }));
   return out;
 }
-/** The rows for what's typed after @: nothing typed, the first eight; else every word typed must appear in the row's words,
- *  rows whose name starts with the first word coming first. "ui design" finds the agent whose thread's status bar says so. */
+/** The @ list's three groups, in this order, and how many rows each shows. A "word" row (new, a model) sits with the agents. */
+const GROUPS = [["agent", "Agents", 5], ["focus", "Focuses", 3], ["thread", "Conversations", 4]];
+const groupOf = r => (r.kind === "word" ? "agent" : r.kind);
+/** How close a row is to the typed words: a name that starts with a word beats one that holds it, which beats a title, which
+ *  beats a hit only in its status line, tags or summary. */
+function closeness(r, ws) {
+  let n = 0;
+  for (const w of ws) n += r.word.toLowerCase().startsWith(w) ? 4 : r.word.toLowerCase().includes(w) ? 3 : (r.head || "").includes(w) ? 2 : 1;
+  return n;
+}
+/** The rows for what's typed after @, grouped Agents, Focuses, Conversations, the closest first in each and the closest group first. Nothing typed: this thread's
+ *  agents, the foci, then other agents, and a new one. Typed: every word must appear in the row's words, so "ui design" finds the
+ *  agent whose thread's status line, tags or focus say so. */
 function acNames(th, q) {
   const rows = acRows(th), ws = q.split(/\s+/).filter(Boolean);
-  if (!ws.length) {   // nothing typed yet: this thread's agents, the foci, then other agents, and a new one, ten at most
+  let pick;
+  if (!ws.length) {
     const here = new Set(th ? threadPeople(th) : []), own = rows.filter(r => r.kind === "agent" && here.has(r.word)), fx = rows.filter(r => r.kind === "focus");
     const rest = rows.filter(r => r.kind === "agent" && !here.has(r.word)).slice(0, Math.max(0, 9 - own.length - fx.length));
-    return [...own, ...fx, ...rest, rows.find(r => r.word === "new")].filter(Boolean);
+    pick = [...own, ...rest, rows.find(r => r.word === "new"), ...fx].filter(Boolean);
+    return GROUPS.flatMap(([k]) => pick.filter(r => groupOf(r) === k));
   }
-  const hit = rows.filter(r => ws.every(w => r.hay.includes(w)));
-  const first = r => (r.word.startsWith(ws[0]) ? 0 : r.kind === "agent" ? 1 : 2);
-  return hit.sort((a, b) => first(a) - first(b)).slice(0, 8);
+  const hit = rows.filter(r => ws.every(w => r.hay.includes(w))).map((r, i) => ({ r, i, c: closeness(r, ws) }));
+  hit.sort((a, b) => b.c - a.c || a.i - b.i);
+  const best = k => { const x = hit.find(x => groupOf(x.r) === k); return x ? x.c : -1; };   // the group holding the closest row leads; ties keep Agents, Focuses, Conversations
+  return GROUPS.map((g, i) => [g, i]).sort((a, b) => best(b[0][0]) - best(a[0][0]) || a[1] - b[1])
+    .flatMap(([[k, , max]]) => hit.filter(x => groupOf(x.r) === k).slice(0, max).map(x => x.r));
+}
+/** The @ list's rows with a small heading over each group (the # list has one kind, so no headings). */
+function acList(th) {
+  const a = CP.ac, out = []; let last = null;
+  a.items.forEach((r, i) => {
+    const g = a.mark === "#" ? null : groupOf(r);
+    if (g && g !== last) { out.push(h("div", { class: "menu-h", role: "presentation", "data-key": "h:" + g }, GROUPS.find(x => x[0] === g)[1])); last = g; }
+    out.push(h("button", { type: "button", role: "option", class: "cp-opt", "data-key": r.word, "data-kind": r.kind, "aria-selected": String(i === a.i), onclick: () => acPick(th, r.word) }, ...optRow(r, a.mark || "@")));
+  });
+  return out;
 }
 /** Threads that start with q, most recently active first. */
 function acThreads(q) {
@@ -825,8 +864,7 @@ export function composer({ thread, update, place = "thread", autofocus, top }) {
         SB.open && can("secrets") ? secretRow() : null,
         SB.say ? h("p", { class: "meta cp-ssay", "data-tone": SB.tone, role: "status", "data-key": "ssay" }, SB.say) : null,
         !th && d.naming ? h("div", { class: "cp-name-row", "data-key": "name" }, input({ class: "input cp-name", placeholder: "A short name, like fix-contact-form", "aria-label": "Name for this job", value: d.name, oninput: (e, n) => { d.name = n.value; keep(d); } })) : null) : null,
-      CP.ac ? h("div", { class: "cp-ac", role: "listbox", "aria-label": "Names", "data-key": "ac" }, CP.ac.items.map((r, i) => h("button", { type: "button", role: "option", class: "cp-opt", "data-key": r.word, "data-kind": r.kind, "aria-selected": String(i === CP.ac.i), onclick: () => acPick(th, r.word) },
-        ...optRow(r, CP.ac.mark || "@")))) : null,
+      CP.ac ? h("div", { class: "cp-ac", role: "listbox", "aria-label": "Names", "data-key": "ac" }, acList(th)) : null,
       fmtOpen() ? fmtBar(th) : null,
       h("div", { class: "cp-tw", "data-key": "tw", ...(CP.md ? { "data-md": "" } : {}) },
       // The layer carries the draft's own signature and nodes: with an empty one the morph wiped it on every re-render and the
