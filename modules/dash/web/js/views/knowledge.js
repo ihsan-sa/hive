@@ -277,7 +277,7 @@ function hubRows() {
   const hubs = (K.map ? K.map.notes : []).filter(n => n.back.length + n.links.length >= 2).sort((a, b) => b.back.length - a.back.length || b.links.length - a.links.length).slice(0, 8);
   return hubs.length ? list(hubs.map(n => ({ key: "hub:" + n.path, href: open(n.path), title: n.title || n.path, text: parent(n.path), meta: `${plural(n.back.length, "note")} link here · links to ${n.links.length}` })), { dense: true }) : null;
 }
-const SOURCE = { kb: "Notes in ~/kb", board: "Board posts", projects: "Projects", modules: "Module notes", core: "Core", docs: "Old docs", dispatch: "Dispatch", slack: "Slack", journals: "Journals", boards: "Old boards", mail: "Mail", box: "Box" };
+const SOURCE = { kb: "Your notes", board: "Board posts", projects: "Projects", modules: "Module notes", core: "Core", docs: "Old docs", dispatch: "Dispatch", slack: "Slack", journals: "Journals", boards: "Old boards", mail: "Mail", box: "Box" };
 function sourcesView() {
   const ss = (K.map && K.map.sources) || [];
   if (!ss.length) return null;
@@ -286,7 +286,7 @@ function sourcesView() {
 // The home page below its title: what you opened, the map, the hubs, what changed, what search covers. On a phone it sits under the shelves.
 const homeSections = ctx => [
   recentRows() ? h("section", { class: "sec", "data-key": "opened" }, h("header", { class: "sec-h" }, h("h2", { class: "sec-t" }, "Recently opened"), h("span", { class: "sec-n" }, "on this device")), recentRows()) : null,
-  h("section", { class: "sec", "data-key": "map" }, h("header", { class: "sec-h" }, h("h2", { class: "sec-t" }, "Notes by topic"), h("span", { class: "sec-n" }, K.map && !K.map.failed ? `${plural(K.map.notes.length, "note")} in ~/kb` : ""), button("Over time", null, { kind: "quiet", size: "s", icon: "clock", href: href("kbtime"), cls: "kb-time", title: "How the notes grew, linked and changed, from the backup history" })), mapView(ctx)),
+  h("section", { class: "sec", "data-key": "map" }, h("header", { class: "sec-h" }, h("h2", { class: "sec-t" }, "Notes by topic"), h("span", { class: "sec-n" }, K.map && !K.map.failed ? plural(K.map.notes.length, "note") : ""), button("Over time", null, { kind: "quiet", size: "s", icon: "clock", href: href("kbtime"), cls: "kb-time", title: "How the notes grew, linked and changed, from the backup history" })), mapView(ctx)),
   hubRows() ? h("section", { class: "sec", "data-key": "hubs" }, h("header", { class: "sec-h" }, h("h2", { class: "sec-t" }, "Most connected notes"), h("span", { class: "sec-n" }, "how many notes link to each, and it to others")), hubRows()) : null,
   h("section", { class: "sec", "data-key": "changed" }, h("header", { class: "sec-h" }, h("h2", { class: "sec-t" }, "Changed lately")), K.home ? changedRows() : empty("Reading…", { kind: "loading" })),
   sourcesView() ? h("section", { class: "sec", "data-key": "cover" }, h("header", { class: "sec-h" }, h("h2", { class: "sec-t" }, "What search covers"), h("span", { class: "sec-n" }, "files and posts in the index")), sourcesView()) : null];

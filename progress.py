@@ -74,9 +74,19 @@ def ledger():
             if r2.get("judge") == i: items[i].update(status=r2["verdict"], judged_at=r2["at"], judged_by=r2.get("by"), judged_why=r2.get("why", ""))
     return items
 
+def due_groups(items, t=None):
+    """Overdue landings, one list per item: landings linked by --also or a shared number (shares) are judged together,
+    due on the earliest revisit among the group's open ones."""
+    today, out, seen = (t or now()).date().isoformat(), [], set()
+    for e in sorted(items.values(), key=lambda e: e.get("at", "")):
+        if e["id"] in seen or e.get("status") != "landed": continue
+        g = [items[i] for i in [e["id"]] + judged_with(items, e) if i in items and items[i].get("status") == "landed"]
+        seen.update(x["id"] for x in g)
+        if min(x.get("revisit") or "9999" for x in g) <= today: out.append(g)
+    return out
+
 def overdue(items, t=None):
-    today = (t or now()).date().isoformat()
-    return [e for e in items.values() if e.get("status") == "landed" and e.get("revisit", "9999") <= today]
+    return [e for g in due_groups(items, t) for e in g]
 
 def next_id(items):
     n = max((int(i[1:]) for i in items if re.fullmatch(r"i\d+", i)), default=0) + 1
@@ -103,9 +113,16 @@ def overlaps(items, measure, t=None, skip=()):
         if str(e.get("revisit", "")) >= today or (at and at >= t0): out[e["id"]] = sorted(shared)
     return out
 
+def links(e): return set(e.get("also") or []) | set(e.get("shares") or [])
+
 def judged_with(items, e):
-    """Ids judged together with e: its own --also, and entries that named it in theirs."""
-    return sorted(set(e.get("also") or []) | {o["id"] for o in items.values() if e["id"] in (o.get("also") or [])})
+    """Ids judged together with e: its own --also and shares, entries that named it in theirs, and theirs in turn."""
+    seen, todo = {e["id"]}, [e["id"]]
+    while todo:
+        x = todo.pop()
+        near = links(items.get(x, {})) | {o["id"] for o in items.values() if x in links(o)}
+        todo += sorted(near - seen); seen |= near
+    return sorted(seen - {e["id"]})
 
 def cmd_log(a):
     items = ledger()
@@ -118,27 +135,32 @@ def cmd_log(a):
            "hypothesis": a.hypothesis or "", "measure": a.measure, "baseline": a.baseline or "", "revisit": rev, "status": "landed",
            "commit": a.commit or "", "thread": a.thread or os.environ.get("HIVE_THREAD", "")}
     if also: rec["also"] = also
+    if a.reviewed_by: rec["reviewed_by"] = a.reviewed_by.lstrip("@").lower(); rec["review_model"] = (a.model or "").lower()
+    ov = overlaps(items, a.measure, skip=set(also))
+    if ov: rec["shares"] = sorted(ov)  # linked, never refused (meta-reflect, reflect-p0.md; rsi-loop rung 133): judged together
     append(LEDGER, rec)
     print(f"{rec['id']} logged; revisit {rev}. Someone else judges it then: hive improve judge {rec['id']} held|reverted|inconclusive --why ...")
     if unknown: print(f"warning: --also {', '.join(unknown)}: not in the ledger (hive improve list); the overlap is stored as given", file=sys.stderr)
-    ov = overlaps(items, a.measure, skip=set(also))
-    if ov:  # a warning, never a refusal (meta-reflect, reflect-p0.md)
-        print(f"warning: {rec['id']}'s measure shares a number with open landings (revisit still ahead): "
+    if ov:
+        print(f"linked: {rec['id']}'s measure names a number open landings already name: "
               + "; ".join(f"{i} ({', '.join(n)})" for i, n in sorted(ov.items()))
-              + ". Its revisit cannot credit one change. Say how they will be told apart (an A/B arm, a sub-number) in the measure,"
-              f" or log the overlap on purpose so the revisit judges them together: hive improve log ... --also {','.join(sorted(ov))}", file=sys.stderr)
+              + ". One revisit cannot credit one change, so they are judged together, as one item in hive improve list --due on the earliest revisit."
+              " To judge it apart, give it a number of its own (an A/B arm, a sub-number) in the measure.")
 
 def cmd_judge(a):
     items = ledger()
     e = items.get(a.id)
     if not e: sys.exit(f"hive improve judge: no improvement {a.id}")
     me = os.environ.get("HIVE_NAME", os.environ.get("USER", "?"))
-    if e.get("by") == me and not a.self:
-        sys.exit(f"hive improve judge: {a.id} was logged by you. The judge is never who proposed (the rule); pass --self only if nobody else can, and say why in --why.")
+    w = [i for i in judged_with(items, e) if items.get(i, {}).get("status") == "landed"]
+    mine = [x["id"] for x in [e] + [items[i] for i in w] if x.get("by") == me]
+    if mine and not a.self:
+        sys.exit(f"hive improve judge: {', '.join(mine)} was logged by you" + (f" and is judged with {a.id}" if mine != [a.id] else "")
+                 + ". The judge is never who proposed (the rule); pass --self only if nobody else can, and say why in --why.")
     if not a.why: sys.exit("hive improve judge: --why must give the number you looked at, against the baseline.")
-    append(LEDGER, {"judge": a.id, "at": iso(), "by": me, "verdict": a.verdict, "why": a.why})
-    w = judged_with(items, e)
-    if w: print(f"judged with {', '.join(w)}: they share a number, so this verdict covers them together; judge them on the same figure.")
+    for i in [a.id] + w:
+        append(LEDGER, {"judge": i, "at": iso(), "by": me, "verdict": a.verdict, "why": a.why if i == a.id else f"judged with {a.id}: {a.why}"})
+    if w: print(f"judged with {', '.join(w)}: they share a number, so this verdict is recorded for each of them.")
     print(f"{a.id}: {a.verdict}. " + ("Now revert it (or confirm it was) and say so in its thread." if a.verdict == "reverted" else
                                        "Set a later revisit with hive improve log if the number needs more time." if a.verdict == "inconclusive" else "Kept."))
 
@@ -149,15 +171,22 @@ def table(rows, cols):
 
 def cmd_list(a):
     items = ledger()
-    rows = overdue(items) if a.due else list(items.values())
-    if a.json: print(json.dumps(rows, indent=1)); return
+    rows = due_groups(items) if a.due else list(items.values())
+    if a.json and not a.due: print(json.dumps(rows, indent=1)); return
     if not rows: print("no overdue revisits" if a.due else "no improvements logged yet: hive improve log --what ... --measure ... --revisit 7d"); return
-    rows = [{"id": e["id"], "at": e.get("at", "")[:10], "by": e.get("by"), "status": e.get("status"), "revisit": e.get("revisit", ""),
-             "what": e.get("what", "")[:70], "measure": e.get("measure", "")[:50], "with": ",".join(judged_with(items, e))}
-            for e in sorted(rows, key=lambda e: e.get("at", ""))]
+    if a.due:  # one row per item: landings judged together show as one, with both changes
+        groups = due_groups(items)
+        if a.json: print(json.dumps(groups, indent=1)); return
+        rows = [{"id": "+".join(x["id"] for x in g), "at": g[0].get("at", "")[:10], "by": ",".join(dict.fromkeys(str(x.get("by")) for x in g)),
+                 "status": "landed", "revisit": min(x.get("revisit") or "9999" for x in g),
+                 "what": " | ".join(x.get("what", "")[:70 // len(g) + 10] for x in g), "measure": g[0].get("measure", "")[:50], "with": ""} for g in groups]
+    else:
+        rows = [{"id": e["id"], "at": e.get("at", "")[:10], "by": e.get("by"), "status": e.get("status"), "revisit": e.get("revisit", ""),
+                 "what": e.get("what", "")[:70], "measure": e.get("measure", "")[:50], "with": ",".join(judged_with(items, e))}
+                for e in sorted(rows, key=lambda e: e.get("at", ""))]
     table(rows, ["id", "at", "by", "status", "revisit", "what", "measure"] + (["with"] if any(r["with"] for r in rows) else []))
     if not a.due:
-        d = overdue(items)
+        d = due_groups(items)
         if d: print(f"\n{len(d)} overdue for judgement: hive improve list --due")
 
 def cmd_show(a):
@@ -327,6 +356,11 @@ def summary_numbers():
         return {"summary_flagged": n.flagged_count(), "needs_gap": n.needs_gap()}
     except Exception: return {"summary_flagged": None, "needs_gap": None}
 
+def indep_review(e):
+    """A ledger entry that records a review by someone other than its logger, on opus or fable (the Nov 6 rule: a design is reviewed on a stronger model by an agent that did not build it)."""
+    r = (e.get("reviewed_by") or "").lstrip("@").lower()
+    return bool(r) and r != (e.get("by") or "").lstrip("@").lower() and e.get("review_model") in ("opus", "fable")
+
 def window(t0, t1, log, posts, items):
     runs, failed, reaped, limited = runs_in(log, t0, t1)
     nposts, nperson, noticed = board_in(posts, t0, t1)
@@ -339,7 +373,7 @@ def window(t0, t1, log, posts, items):
          "posts": nposts, "person_posts": nperson, "person_noticed_first": noticed, "watchdog_trips": watchdog_in(t0, t1),
          "person_reply_p50_s": pct(rs, 0.5), "person_reply_p90_s": pct(rs, 0.9), "person_replies": len(rs),
          "keeper_rounds": events_in(log, t0, t1, "keeper"), "improve_rounds": events_in(log, t0, t1, "improve"),
-         "improvements_landed": len(landed), "improvements_judged": len(judged), **for_you_numbers(posts, t0, t1),
+         "improvements_landed": len(landed), "improvements_judged": len(judged), "reviews_independent": sum(1 for e in landed if indep_review(e)), **for_you_numbers(posts, t0, t1),
          "held": sum(1 for e in judged if e.get("status") == "held"), "reverted": sum(1 for e in judged if e.get("status") == "reverted"),
          "asks_done": asks_done_in(t0, t1), **leftovers_flow(items, t0, t1), "rsi_rounds": len(rsi), "rsi_wins": sum(1 for r in rsi if r.get("verdict") == "win"),
          "core_commits": commits_in(t0, t1), **outcomes_in(t0, t1), **kb_numbers(t0, t1),
@@ -351,9 +385,9 @@ def outcomes_in(t0, t1):
     try:
         spec = importlib.util.spec_from_file_location("outcomes", CORE / "outcomes.py"); oc = importlib.util.module_from_spec(spec); spec.loader.exec_module(oc)
         s = oc.stats([r for r in jsonl(HOME / "outcomes.jsonl") if t0 <= r.get("at", "") <= t1])
-    except Exception: return {"outcomes_graded": 0, "outcome_delivered_pct": None, "outcomes_silent": None, "outcomes_nothing": None}
-    if not s["outcomes_graded"]: return {"outcomes_graded": 0, "outcome_delivered_pct": None, "outcomes_silent": None, "outcomes_nothing": None}  # no grades, so no count: "0 -> 11, worse" on the grader's first day was a false verdict
-    return {k: s[k] for k in ("outcomes_graded", "outcome_delivered_pct", "outcomes_silent", "outcomes_nothing")}
+    except Exception: return {"outcomes_graded": 0, "outcome_delivered_pct": None, "outcomes_silent": None, "outcomes_nothing": None, "outcomes_intent_only": None}
+    if not s["outcomes_graded"]: return {"outcomes_graded": 0, "outcome_delivered_pct": None, "outcomes_silent": None, "outcomes_nothing": None, "outcomes_intent_only": None}  # no grades, so no count: "0 -> 11, worse" on the grader's first day was a false verdict
+    return {k: s[k] for k in ("outcomes_graded", "outcome_delivered_pct", "outcomes_silent", "outcomes_nothing", "outcomes_intent_only")}
 
 def kb_numbers(t0, t1):
     """From the kb query log (core/kbuse.py): searches, how many led to an observed read of what they showed, recall pointers, misses."""
@@ -363,10 +397,10 @@ def kb_numbers(t0, t1):
     except Exception: return {}
     return {"kb_finds": x["finds"], "kb_find_read_pct": x["find_read_pct"], "kb_recall_injections": x["recalls"], "kb_recall_opened_pct": x["recall_opened_pct"], "kb_misses_explicit": x["misses"], "kb_miss_candidates": x["candidates"]}
 
-LOWER_IS_BETTER = {"fail_pct", "runs_reaped", "person_noticed_first", "person_reply_p50_s", "person_reply_p90_s", "watchdog_trips", "stalled_threads", "improvements_overdue", "projects_unmeasured", "asks_orphaned", "leftovers_orphaned", "asks_stale", "asks_unowned", "leftovers_unowned", "asks_oldest_open_d", "outcomes_silent", "outcomes_nothing", "focus_quiet", "for_you_lines", "for_you_flagged", "for_you_flagged_pct", "for_you_command", "for_you_many", "for_you_long", "for_you_chain", "for_you_ours", "person_asks", "summary_flagged", "needs_gap"}
+LOWER_IS_BETTER = {"fail_pct", "runs_reaped", "person_noticed_first", "person_reply_p50_s", "person_reply_p90_s", "watchdog_trips", "stalled_threads", "improvements_overdue", "projects_unmeasured", "asks_orphaned", "leftovers_orphaned", "asks_stale", "asks_unowned", "leftovers_unowned", "asks_oldest_open_d", "outcomes_silent", "outcomes_nothing", "outcomes_intent_only", "focus_quiet", "for_you_lines", "for_you_flagged", "for_you_flagged_pct", "for_you_command", "for_you_many", "for_you_long", "for_you_chain", "for_you_ours", "person_asks", "summary_flagged", "needs_gap"}
 NEUTRAL = {"decided_lines", "reversals_per_100", "kb_finds", "kb_find_read_pct", "kb_recall_injections", "kb_recall_opened_pct", "kb_misses_explicit", "kb_miss_candidates", "model_steps_up", "model_steps_down", "runs", "runs_woken", "person_replies", "keeper_rounds", "improve_rounds", "core_commits", "rsi_rounds", "reverted", "spend_usd", "asks_open", "leftovers_open", "leftovers_filed", "leftovers_closed", "outcomes_graded"}  # activity and cost: context, not a score (the person: don't ration work for pace)
-HEADLINE = ["kb_finds", "kb_find_read_pct", "kb_recall_injections", "kb_recall_opened_pct", "kb_misses_explicit", "kb_miss_candidates", "runs", "model_steps_up", "model_steps_down", "fail_pct", "runs_reaped", "runs_woken", "person_noticed_first", "person_reply_p50_s", "person_reply_p90_s", "watchdog_trips", "stalled_threads", "improvements_landed", "improvements_judged", "held", "reverted",
-            "improvements_overdue", "focus_quiet", "for_you_lines", "for_you_flagged", "for_you_flagged_pct", "for_you_command", "for_you_many", "for_you_long", "for_you_chain", "for_you_ours", "decided_lines", "reversals_per_100", "person_asks", "summary_flagged", "needs_gap", "asks_open", "leftovers_open", "leftovers_filed", "leftovers_closed", "asks_orphaned", "leftovers_orphaned", "asks_stale", "asks_unowned", "leftovers_unowned", "asks_done", "asks_oldest_open_d", "outcome_delivered_pct", "outcomes_silent", "outcomes_nothing", "outcomes_graded", "rsi_rounds", "rsi_wins", "keeper_rounds", "improve_rounds", "core_commits", "projects_unmeasured", "spend_usd"]
+HEADLINE = ["kb_finds", "kb_find_read_pct", "kb_recall_injections", "kb_recall_opened_pct", "kb_misses_explicit", "kb_miss_candidates", "runs", "model_steps_up", "model_steps_down", "fail_pct", "runs_reaped", "runs_woken", "person_noticed_first", "person_reply_p50_s", "person_reply_p90_s", "watchdog_trips", "stalled_threads", "improvements_landed", "improvements_judged", "reviews_independent", "held", "reverted",
+            "improvements_overdue", "reviews_independent", "focus_quiet", "for_you_lines", "for_you_flagged", "for_you_flagged_pct", "for_you_command", "for_you_many", "for_you_long", "for_you_chain", "for_you_ours", "decided_lines", "reversals_per_100", "person_asks", "summary_flagged", "needs_gap", "asks_open", "leftovers_open", "leftovers_filed", "leftovers_closed", "asks_orphaned", "leftovers_orphaned", "asks_stale", "outcomes_intent_only", "asks_unowned", "leftovers_unowned", "asks_done", "asks_oldest_open_d", "outcome_delivered_pct", "outcomes_silent", "outcomes_nothing", "outcomes_graded", "rsi_rounds", "rsi_wins", "keeper_rounds", "improve_rounds", "core_commits", "projects_unmeasured", "spend_usd"]
 
 def scoreboard(since):
     log, posts, items = jsonl(LOG), jsonl(BOARD), ledger()
@@ -376,9 +410,9 @@ def scoreboard(since):
     both, cur_cost = cost_since(iso(tp)), cost_since(iso(t0))
     cur["spend_usd"] = None if cur_cost is None else round(cur_cost, 2)
     prev["spend_usd"] = None if both is None or cur_cost is None else round(both - cur_cost, 2)
-    od = overdue(items)
+    od = due_groups(items)
     fq = focus_quiet()
-    cur.update(stalled_threads=stalled_now(), improvements_overdue=len(od), overdue_ids=[e["id"] for e in od],
+    cur.update(stalled_threads=stalled_now(), improvements_overdue=len(od), overdue_ids=[e["id"] for g in od for e in g],
                focus_quiet=None if fq is None else len(fq), focus_quiet_threads=fq or [],
                projects_unmeasured=len(projects_unmeasured()), projects_unmeasured_names=projects_unmeasured(), at=iso(t1), since=since, **summary_numbers(), **asks_numbers(iso(t1)))
     snaps = jsonl(SNAPS)
@@ -465,6 +499,8 @@ def main(argv=None):
     sp = ap.add_subparsers(required=True)
     p = sp.add_parser("log", help="log a landed change: --what, --measure (required), --revisit 7d|YYYY-MM-DD, --where, --hypothesis, --baseline, --commit, --thread, --also IDS (warns when the measure names a number an open landing, revisit still ahead, names)")
     for f in ("what", "measure", "revisit", "where", "hypothesis", "baseline", "commit", "thread"): p.add_argument("--" + f)
+    p.add_argument("--reviewed-by", dest="reviewed_by", help="the agent that reviewed this design or build and did not build it (counted as reviews_independent when --model is opus or fable)")
+    p.add_argument("--model", help="the reviewer's model: opus|fable count as an independent review, anything else does not")
     p.add_argument("--also", action="append", help="ids of open landings on the same number, judged together with this one at the revisit (silences the overlap warning)")
     p.set_defaults(f=cmd_log)
     p = sp.add_parser("judge", help="judge a landed change on its revisit date: ID held|reverted|inconclusive --why 'the number vs baseline'")

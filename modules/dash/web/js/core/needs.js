@@ -3,7 +3,8 @@
 // The list joins three sources, one entry per thread, newest first:
 //   live: a thread whose last agent post asks the person something they haven't answered, or that stopped in trouble (threadState);
 //   file: the 30-minute summary's waiting rows (~/needs-you.json, /api/needs-you), when nothing the person said since is newer;
-//   bar: a status bar whose last line is "Needs the person:", within a week, on the same terms.
+//   bar: a status bar whose last line is "Needs the person:", within a week, on the same terms;
+//   summary: the Needs you bullets of a focus summary (what its home card shows), one entry each, on the focus's own thread.
 // A thread an agent is working in now is not waiting on them (the home lists it under Working now); nor is one archived by hand,
 // faded, a system thread, or one the summary dropped as obsolete until the thread said something newer.
 // /api/needs-you is read once here, every five minutes, for every page that wants it (S.needsYou).
@@ -80,11 +81,13 @@ export function waitingOn() {
 }
 function waitingOnNow() {
   const live = liveStates(), out = [], has = new Set();
-  const take = w => { if (has.has(w.th)) return; has.add(w.th); out.push(w); };
+  const take = w => { const k = w.key || w.th; if (has.has(k)) return; has.add(k); out.push(w); };
   const st = S.threadStatus || {}, v = S.needsYou && !S.needsYou.absent ? S.needsYou : null;
   const drop = (v && v.brief && v.brief.dropped) || {};
   const open = th => { const l = live.get(th); return !(l && l.busy) && shownHere(th) && !(drop[th] && drop[th] >= ((st[th] && st[th].at) || 0)); };
   for (const [th, l] of live) if (!l.busy) take({ th, text: liveText(l), t: l.st.post ? l.st.post.t : l.d.last, src: "live", st: l.st, post: l.st.post ? l.st.post.id : null });
+  // The summary's bullets are the agents' own words for what they put to the person (the person, 11071606f4d4: the card shows these), so they count as long as the summary keeps them.
+  for (const f of (S.foci && S.foci.foci) || []) for (const [i, b] of ((f.summary && f.summary.needs) || []).entries()) if (b) take({ th: f.thread || f.id, text: b, t: ((f.summary.at || 0) * 1e3) || now(), src: "summary", focus: f.id, key: `sum:${f.id}:${i}` });
   if (!simpleOn()) {
     const rest = [];
     // A later Done or Told to stop on the thread doesn't settle a row: a For you line waits until they answer it (answeredSince) or an agent drops it (brief.dropped). A thread with a live busy agent is out above.
@@ -95,8 +98,11 @@ function waitingOnNow() {
   }
   return out.sort((a, b) => b.t - a.t);
 }
-/** The one number: how many threads wait on the person. */
+/** The one number: how many things wait on the person. */
 export const needsN = () => waitingOn().length;
+/** Whether this thread is on the list: the rail's Needs you group and the one count read the same answer. */
+/** Does this conversation itself wait on the person (a live ask, a Needs line, a state word)? A focus summary's asks belong to the focus and show on its card, not here. */
+export const waitsOn = th => waitingOn().some(w => w.th === th && w.src !== "summary");
 // Where the full list is read: the Needs you page, when this build has one (an installed Hive hasn't; the simple look lists the live ones on the home).
 // The literal "#needs", not href("needs"): the export removes every line with that call.
 const hasNeeds = () => Object.values(APP_NAV.groups || {}).some(g => g.includes("needs")) || !!(APP_NAV.belongs && APP_NAV.belongs.needs) || (APP_NAV.more || []).includes("needs");

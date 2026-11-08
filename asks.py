@@ -338,9 +338,21 @@ def cmd_leftovers(a):
     if not a.dry: print(f"{added} leftovers filed from {len(todo)} posts, ${cost:.2f}")
     if not a.dry and not a.no_close: close_leftovers(a)
 
+def owner_finished(e, by):
+    """The id of a later post by the leftover's own owner whose last line starts `Done:`: the agent that said it was left has since closed its thread, so the remainder was optional."""
+    if e.get("by") != "leftovers" or not e.get("owner"): return None
+    for p in by.get(e.get("thread") or e.get("post"), []):
+        if p.get("from") == e["owner"] and p.get("at", "") > (e.get("when") or "") and p.get("id") != e.get("post"):
+            lines = [l.strip() for l in str(p.get("text", "")).strip().splitlines() if l.strip()]
+            if lines and lines[-1].startswith("Done:"): return p["id"]
+    return None
+
 def close_leftovers(a):
     """Open leftovers whose thread has had an agent post since they were filed: reconcile reads those threads and closes what they show done."""
     by = thread_posts(board())
+    for e in open_items(ledger()):
+        if e.get("kind") == "leftover" and e.get("status") in ("open", "owned") and (pid := owner_finished(e, by)):
+            set_status(e["id"], "dropped", why=f"its owner {e['owner']} ended post {pid} with Done: after filing it; the remainder was optional"); print(f"= {e['id']} dropped: owner finished in {pid}")
     ids = [e["id"] for e in open_items(ledger()) if e.get("kind") == "leftover" and e.get("status") in ("open", "owned")
            and any(p.get("at", "") > (e.get("when") or "") and p.get("id") != e.get("post") and str(p.get("from", "")).lower() not in NOT_AGENTS for p in by.get(e.get("thread") or e.get("post"), []))]
     if not ids: return

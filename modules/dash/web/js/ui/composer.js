@@ -412,9 +412,9 @@ function typedModel(text) { const w = named(text); return MODEL_WORDS.includes(w
 /** A new conversation's focus (the person, 110715182bab): the home card it is filed under, Misc when none. Prefilled when it starts from a focus. */
 function focusPick(d) {
   const fs = foci(); if (!fs.length && !d.focus) return null;
-  return h("select", { class: "cp-focus", "aria-label": "Focus", title: "Which focus this conversation is filed under on the home; Misc is none",
+  return h("select", { class: "cp-focus", "aria-label": "Focus", title: "Which focus this conversation is filed under on the home; No focus leaves it in Misc",
     onchange: e => { d.focus = e.target.value; keep(d); refresh(); } },
-    h("option", { value: "", selected: !d.focus ? "" : null }, "Misc"),
+    h("option", { value: "", selected: !d.focus ? "" : null }, "No focus"),
     fs.map(f => h("option", { value: f.id, selected: f.id === d.focus ? "" : null }, f.name || f.id)),
     d.focus && !fs.some(f => f.id === d.focus) ? h("option", { value: d.focus, selected: "" }, d.focus) : null);
 }

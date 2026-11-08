@@ -3,7 +3,6 @@
 #mnav{display:none}
 @media (max-width:640px){
   :root{--nav-h:calc(58px + env(safe-area-inset-bottom,0px))}
-  .cm-tl .lr .lr-acts,.cm-tl .lr:hover .lr-acts,.cm-tl .lr:focus-within .lr-acts{display:none}   /* star and pin are in the conversation's More menu; 24 px beside every row is too small to aim at */
   :root:has(.cm[data-in],.kb[data-in]){--nav-h:0px}            /* inside a conversation or a file the bar steps aside; the page head has Back */
   :root:has(.cm[data-in],.kb[data-in]) #mnav{display:none}
   body{padding-bottom:var(--nav-h);overscroll-behavior-y:none}

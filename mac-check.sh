@@ -25,6 +25,11 @@ say() { printf '%s\n' "$*" | tee -a "$R"; }
 pass() { say "ok    $1"; }
 bad() { say "FAIL  $1"; fails=$((fails + 1)); }
 check() { label=$1; shift; if "$@" >/dev/null 2>&1; then pass "$label"; else bad "$label"; fi; }  # label: what it runs has its own n
+# When the VM cannot start because this Mac (or its runner) is itself a virtual machine, say so in one line.
+no_virtualization() {
+  grep -qi 'virtualization is not available' "$LIMA_HOME/hive/ha.stderr.log" 2>/dev/null || return 1
+  say "      the VM cannot start here: Virtualization is not available on this Mac. A Mac that is itself a virtual machine (such as a CI runner) cannot run the Hive; a real Apple-silicon Mac can."
+}
 hive_() { "$HOME/.hive/bin/hive" "$@"; }
 vm() { "$L" shell --workdir / hive "$@"; }
 as_hive() { vm sudo -iu hive sh -c "$1"; }
@@ -121,7 +126,7 @@ main() {
 
   say; say "--- the install line"
   t0=$(date +%s)
-  if the_line; then pass "the line finished in $(( ($(date +%s) - t0) / 60 )) min"; else bad "the line failed"; say "See above in your Terminal; please paste what it said."; exit 1; fi
+  if the_line; then pass "the line finished in $(( ($(date +%s) - t0) / 60 )) min"; else bad "the line failed"; no_virtualization; say "See above in your Terminal; please paste what it said."; exit 1; fi
   check "the VM is running" sh -c "[ \"\$('$L' list hive --format '{{.Status}}')\" = Running ]"
   say "VM: $(vm uname -m | tr -d '\r') $(vm sh -c '. /etc/os-release; echo $PRETTY_NAME' | tr -d '\r'), Lima $("$L" --version 2>/dev/null | cut -d' ' -f3), Claude Code $(as_hive 'claude --version' 2>/dev/null | head -n 1 | tr -d '\r')"
   check "the VM uses Apple's framework" sh -c "'$L' list hive --format '{{.VMType}}' | grep -qx vz"

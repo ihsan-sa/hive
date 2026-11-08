@@ -477,8 +477,13 @@ def read_series(path, column=None, said=None):
             said["note"] = f"no column named: used the last numeric one, {head[i] if head else f'column {i + 1}'}. Others are {', '.join(names)}: choose with --column"
     if said is not None and head: said["column"] = head[i]
     out = []
+    width = len(head) if head else len(body[0])
     for n, r in enumerate(body, 2 if head else 1):
-        if len(r) > i and r[i].strip():
+        if said is not None and len(r) > width:
+            said.setdefault("warnings", []).append(f"row {n}: {len(r)} cells where the header has {width}: a thousands comma in an unquoted number splits it (write \"1,234\" in quotes or drop the comma); the value read is {r[i]!r}" if len(r) > i else f"row {n}: {len(r)} cells where the header has {width}")
+        if said is not None and len(r) <= i and any(c.strip() for c in r):
+            said.setdefault("warnings", []).append(f"row {n}: only {len(r)} cells, the value column is number {i + 1}: row dropped, the rows after it move up one place, which shifts the season")
+        elif len(r) > i and r[i].strip():
             if not isnum(r[i]): raise ValueError(f"row {n}: {r[i]!r} isn't a number")
             out.append(float(r[i].replace(",", "")))
         elif said is not None and any(c.strip() for c in r):

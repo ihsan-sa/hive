@@ -55,7 +55,7 @@ export const activeThreads = id => threadsOf(id).filter(r => r.active);
 /** The cards' order: the foci as listed, then Misc, only when something is going on there. */
 export function fociOrder() { const fs = foci().slice(); if (activeThreads(null).length) fs.push(MISC); return fs; }
 /** What waits on the person inside one focus (core/needs.js rows). */
-export const needsOf = id => waitingOn().filter(w => focusOf(w.th) === id);
+export const needsOf = id => waitingOn().filter(w => (w.focus ? w.focus === id : focusOf(w.th) === id));
 /** Agents in a focus's threads: running now, and the ones that worked there in the last day. */
 export function agentsOf(id) {
   const ths = new Set(threadsOf(id).map(r => r.th)), nowOn = new Set(), day = new Set(), since = now() - DAY;
@@ -87,10 +87,10 @@ export function fractionWords(x) {
   return x >= 0.9 ? "nearly all" : x >= 0.6 ? "most" : x >= 0.4 ? "about half" : x >= 0.28 ? "a third" : x >= 0.18 ? "a quarter" : x >= 0.12 ? "a sixth" : x >= 0.07 ? "a tenth" : x > 0 ? "a little" : "none";
 }
 export const pct = x => `${Math.round(x * 100)}%`;
-export const usd = c => (c >= 100 ? `$${Math.round(c)}` : c >= 10 ? `$${c.toFixed(1)}` : `$${c.toFixed(2)}`);
+export const usd = c => (c >= 100 ? `$${Math.round(c)}` : `$${c.toFixed(2)}`);   // one money format under $100 (R6 review: "$6.40 … $30.1" read as two)
 
 export function stateOf(id) {
-  if (askedOf(id).length) return { key: "needs", word: "needs you", tone: "info" };
+  if (needsOf(id).length) return { key: "needs", word: "needs you", tone: "info" };
   if (agentsOf(id).now.length) return { key: "moving", word: "moving", tone: "good" };
   if (activeThreads(id).length) return { key: "waiting", word: "waiting", tone: null };
   return { key: "quiet", word: "quiet", tone: "ended" };

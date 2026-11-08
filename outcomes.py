@@ -312,11 +312,17 @@ def recent(since):
     t0 = iso(now() - span(since))
     return [r for r in jsonl(LEDGER) if r.get("at", "") >= t0]
 
+INTENT = re.compile(r"intent[- ]only|only an intent|intent to|only (posted|said|says|stated|announced|promised)\b.*\b(taking|will|would|intent|plan|start)", re.I)
+
+def intent_only(r):
+    """A graded run that did not deliver and whose grade says all it posted was that it is taking the work (a60b7, 2026-11-08)."""
+    return r.get("grade") in ("nothing", "partial", "silent") and bool(INTENT.search(str(r.get("why", ""))))
+
 def stats(rows):
     n = {g: sum(1 for r in rows if r.get("grade") == g) for g in ("delivered", "partial", "nothing", "silent", "quiet", "not_asked")}
     den = sum(n[g] for g in GRADED)
     return {"outcomes_graded": len(rows), "outcome_delivered_pct": round(100.0 * n["delivered"] / den, 1) if den else None,
-            "outcomes_silent": n["silent"], "outcomes_nothing": n["nothing"], **{f"outcomes_{g}": v for g, v in n.items()}}
+            "outcomes_silent": n["silent"], "outcomes_nothing": n["nothing"], "outcomes_intent_only": sum(1 for r in rows if intent_only(r)), **{f"outcomes_{g}": v for g, v in n.items()}}
 
 def cmd_list(a):
     rows = [r for r in recent(a.since) if (not a.grade or r.get("grade") == a.grade) and (not a.name or r.get("name") == a.name)]

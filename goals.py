@@ -33,6 +33,8 @@ PARKED = re.compile(r"^Parked until (\d{4}-\d{2}-\d{2}):\s*(.+)$", re.M)
 PARK_MAX_D = 3   # a parked ladder comes back within this many days; a date further out doesn't count, so nobody parks a focus for good
 WAIT = re.compile(r"no step left|changed nothing|nothing (has )?changed|nothing left|all with the person|no new person posts|started no round|(?<!nothing )\bwaits? (only )?on (the person|a sign-in)", re.I)   # how a round says it did no work
 ROUND = re.compile(r"\bkeeper round\b", re.I)
+BUILD = re.compile(r"\b(built|landed|committed|shipped|implemented|prototype|first version)\b", re.I)   # a post that says something was built
+BUILD_D = 1.0   # a project with no ladder and a build post this recent needs one now (Nov 6 build rule), not after IDLE_D
 BRIEF = re.compile(r"^@\S+ keeper round\b", re.I)   # a round's brief: to @new, or to the thread's last worker
 RESUME_AB_END = "2026-11-09"   # resume_arm's trial ends: judge it then (hive-meta/continuity.md)
 
@@ -131,7 +133,8 @@ def thread_state(board, runs, t):
         if f == "person": s["person_at"] = max(s["person_at"], p.get("at", ""))
         elif f not in NOT_AGENTS and p.get("at", "") >= s["agent_at"]:
             s["agent_at"], s["agent"] = p.get("at", ""), p.get("from")
-            if not BRIEF.search(p.get("text", "")): s["worker"] = p.get("from")   # who did the thread's work, not who posted its last brief
+            if not BRIEF.search(p.get("text", "")): s["worker"] = p.get("from")
+            if BUILD.search(p.get("text", "")) and not BRIEF.search(p.get("text", "")): s["build_at"] = p.get("at", "")   # who did the thread's work, not who posted its last brief
     for r in runs:
         if r.get("thread"): st.setdefault(r["thread"], {"agent_at": "", "agent": "", "person_at": "", "posts": 0, "running": set()})["running"].add(r.get("name"))
     return st
@@ -172,7 +175,11 @@ def goals(t=None):
         th = g["project"]; cands = [th] + [k for k in g["threads"] if k != th] + [k for k in st if k != th and k not in g["threads"] and (k.startswith(th + "-") or k.startswith(th + "_"))]
         best = max(cands, key=lambda k: st.get(k, {}).get("agent_at", ""))
         s = dict(st.get(best, {})); s["running"] = set().union(*(st.get(k, {}).get("running", set()) for k in cands))
-        rows.append({"kind": "project", "name": g["project"], "goal": g["goal"], "thread": best, "measure": g["measure"], "edited_d": days(g["edited"], t), **state_row(s, cands, open_asks, t)})
+        row = {"kind": "project", "name": g["project"], "goal": g["goal"], "thread": best, "measure": g["measure"], "edited_d": days(g["edited"], t), **state_row(s, cands, open_asks, t)}
+        built = [d for d in (days(st.get(k, {}).get("build_at"), t) for k in cands) if d is not None]
+        if not row["running"] and built and min(built) <= BUILD_D:   # built within a day and no ladder: idle now, and the round writes it a ladder
+            row.update(idle=True, needs_ladder=True, ladder=False, goals_path=g["path"], rung=None, last_agent_d=min(built))
+        rows.append(row)
     covered = {r["thread"] for r in rows} | {th for r in rows for th in (r.get("threads") or [])}
     loose = [e for e in open_asks if e.get("thread") not in covered]
     return {"at": t.isoformat(timespec="seconds"), "rows": rows, "directions": len(directions), "open_asks": len(open_asks), "loose_asks": len(loose),
@@ -269,7 +276,7 @@ def main():
         print(f"all: {tot[0]} of {n} rounds did work ({100 * tot[0] // n if n else 0}%), {tot[1]} wait, {tot[2]} silent, over {a.rounds:g} days"); return
     if a.ladder_threads:
         for r in g["rows"]:
-            if r["idle"] and (r["kind"] == "focus" or r.get("ladder")): print(r["thread"])
+            if r["idle"] and (r["kind"] == "focus" or r.get("ladder") or r.get("needs_ladder")): print(r["thread"])
         return
     if a.brief or a.post:
         th = a.post or a.brief

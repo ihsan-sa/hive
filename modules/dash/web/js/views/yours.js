@@ -5,7 +5,8 @@ import { h } from "../core/dom.js";
 import { S } from "../core/store.js";
 import { yoursPosts, yoursSearch, yoursItems, yoursText } from "../core/yours.js";
 import { waitingOn, needsPage } from "../core/needs.js";
-import { clock, plural, short } from "../core/format.js";
+import { clock, plural, short, ago } from "../core/format.js";
+import { threadTitle } from "../core/model.js";
 import { threadHref, href } from "../core/router.js";
 import { simpleOn, hiveName } from "../core/simple.js";
 import { metrics } from "../templates.js";
@@ -16,13 +17,15 @@ const Y = { q: "", limit: 40 };
 const STEP = 60;
 const who = p => (p.from === "person" ? "You" : simpleOn() ? hiveName() : p.from);
 
-/** #yours/waits: only the exchanges that wait on the person (core/needs.js, the same list the badge counts), newest first. */
-function waiting(rows) {
-  const ids = new Set(), ths = new Set();
-  for (const w of waitingOn()) { ids.add(w.post || w.src); ths.add(w.th); }
-  const hit = rows.filter(p => ids.has(p.id));
-  for (const th of ths) if (!hit.some(p => p.th === th)) { const p = rows.find(r => r.th === th); if (p) hit.push(p); }
-  return hit.sort((a, b) => b.t - a.t);
+/** #yours/waits: the one list itself (core/needs.js, what the badge counts), each entry with its reason in words, newest first;
+ *  the R6 review found the stream of exchanges here didn't say why a thing waited. A search cuts it by the words. */
+const waitRows = q => { const k = q.trim().toLowerCase(); return waitingOn().filter(w => !k || `${threadTitle(w.th)} ${w.text || ""}`.toLowerCase().includes(k)); };
+function waitList(rows) {
+  const open = w => e => { if (!w.post || e.metaKey || e.ctrlKey || e.shiftKey) return; e.preventDefault(); jump(w.post); };
+  return h("ul", { class: "list yr-waits", "data-dense": "", "data-key": "waits" }, rows.map(w => h("li", { class: "lr", "data-key": "w:" + (w.key || w.th) },
+    h("a", { class: "lr-in", href: threadHref(w.th), onclick: open(w), title: w.post ? "Open it in the conversation, at that message" : "Open the conversation" },
+      h("div", { class: "lr-t" }, h("b", null, threadTitle(w.th)), h("span", { class: "meta" }, ago(w.t))),
+      h("div", { class: "lr-x clamp-2" }, w.text || "Waits on you")))));
 }
 
 function entry(p) {
@@ -45,7 +48,7 @@ function stream(items, ctx) {
 
 function page(ctx) {
   const waits = ctx.arg === "waits";
-  const all = yoursPosts(), base = waits ? waiting(all) : all, rows = Y.q ? yoursSearch(Y.q, base) : base;
+  const all = yoursPosts(), base = waits ? waitRows("") : all, rows = waits ? waitRows(Y.q) : Y.q ? yoursSearch(Y.q, all) : all;
   const threads = new Set(rows.map(p => p.th)).size;
   const title = waits ? "Waits on you" : "Yours";
   const lead = waits
@@ -62,7 +65,7 @@ function page(ctx) {
       oninput: e => { Y.q = e.target.value; Y.limit = 40; ctx.update(); } }));
   const body = !S.live && !S.posts.length ? empty("Reading…", { kind: "loading" })
     : !rows.length ? empty(Y.q ? "Nothing of yours has those words." : waits ? "Nothing waits on you." : "No exchanges yet. What you say in Chat, and what is said to you, shows up here.")
-    : stream(yoursItems(rows), ctx);
+    : waits ? waitList(rows) : stream(yoursItems(rows), ctx);
   return metrics({ header: pageHeader({ title, lead, meta: [meta], actions, after: search }), sections: [body] });
 }
 

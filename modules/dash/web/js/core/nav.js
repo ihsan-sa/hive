@@ -9,13 +9,12 @@ export const MAX_MAIN = 6, MAX_TOOLS = 6;   // MAX_MAIN counts word tabs: an ico
 export const APP_NAV = {
   main: ["start", "comms", "knowledge", "now", "usage", "settings"],   // Chat · Knowledge · Agents · Usage, Settings as an icon. Where things stand is the home itself since 2026-11-07: one card per focus (person, 11071400de5b); the Work tab went with it.
   groups: {
-    comms: ["comms", "yours", "inbox", "mail", "made"],
     now: ["now", "agents", "timeline", "mesh", "ledger", "progress", "flow"],   // Agents' row: who is working, every agent, the timeline, the map, the history, the work in time
     usage: ["usage", "jobs"],
   },
   names: { now: "Now", agents: "All agents", made: "Files" },   // In the row, where the tab's own name would say the same thing twice.
   noRow: ["comms", "settings", "agent", "focus"],         // Full-height or already has its own side list: these pages show no row. The tab stays lit.
-  belongs: { agent: "now", secrets: "settings", focus: "comms", needs: "comms" }, // Lights a tab without being a page in its row. Needs you is the home's line, a page behind it; a focus page is the home a level down.
+  belongs: { agent: "now", secrets: "settings", focus: "comms", needs: "comms", yours: "comms", inbox: "comms", mail: "comms", made: "comms" }, // Lights a tab without being a page in its row. Needs you is the home's line, a page behind it; a focus page is the home a level down. Chat's pages (Yours, Inbox, Mail, Files) are the foot of its side list, so no row repeats them (R6 review, finding 12).
   more: ["design"],                             // The Work page went (R5): the focus pages carry what it showed, Flow's lanes open its card.
   icons: ["settings"],                           // Main places drawn as an icon at the right of the bar, not as a word tab (redesign 2026-11-04).
 };
@@ -36,8 +35,9 @@ export function layout(views, nav, on, current) {
   const shown = new Set(main.map(v => v.id));
   const groups = nav.groups || {};
   const reachable = id => { const t = tabOf(id, nav); return t && shown.has(t); };
-  const placed = new Set([...nav.main, ...(nav.more || []), ...Object.values(groups).flat()]);
-  const orphans = Object.values(groups).flat().filter(id => !reachable(id));
+  const owned = [...Object.values(groups).flat(), ...Object.keys(nav.belongs || {})];   // pages a tab stands for: in its row, or reached from its pages
+  const placed = new Set([...nav.main, ...(nav.more || []), ...owned]);
+  const orphans = owned.filter(id => !reachable(id));
   const unnamed = nav.only ? [] : views.map(v => v.id).filter(id => !placed.has(id));
   const more = [...new Set([...(nav.more || []), ...orphans, ...unnamed])].map(id => by.get(id)).filter(v => v && on(v));
   const tab = tabOf(current, nav);

@@ -1240,9 +1240,10 @@ a.ref[data-kind=file][data-pv-on]{background:color-mix(in oklch,var(--accent) 16
 .cm-hline[data-needs]{color:var(--ink)}
 .cm-hline a{color:var(--accent-ink);font-weight:var(--w-med)}
 .cm-foci-msg{max-width:720px;margin:var(--s6) auto 0;text-align:center}
-.cm-foci{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:var(--s4);max-width:1100px;margin:var(--s6) auto 0}
+.cm-foci{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:var(--s4);max-width:1100px;margin:var(--s6) auto 0;align-items:start}   /* a short card doesn't stretch to its neighbour's height */
 .fc{display:flex;flex-direction:column;gap:var(--s3);min-width:0;padding:var(--s4) var(--s4) var(--s3);border:1px solid var(--line);border-radius:var(--r-l);background:var(--surface)}
-.fc-hd{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;min-width:0}
+.fc-hd{display:grid;grid-template-columns:1fr auto;align-items:baseline;gap:4px 8px;min-width:0}   /* the name on its own line, the state word always under it (R6 finding 10: one place for the state word) */
+.fc-hd .fc-name{grid-column:1/-1}
 .fc-name{font-size:var(--fs-title);font-weight:var(--w-bold);color:var(--ink);text-decoration:none;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .fc-name:hover{text-decoration:underline}
 .fc-state{display:inline-flex;align-items:center;gap:6px;font-size:var(--fs-meta);color:var(--ci,var(--ink-3));white-space:nowrap}
@@ -1257,7 +1258,6 @@ a.ref[data-kind=file][data-pv-on]{background:color-mix(in oklch,var(--accent) 16
 .fc-g-t{position:relative;flex:1 1 60px;height:4px;border-radius:2px;background:var(--accent-bg);overflow:visible}
 .fc-g-d{position:absolute;left:0;top:0;height:100%;border-radius:2px;background:var(--accent)}
 .fc-g-wk{position:absolute;top:-2px;width:2px;height:8px;margin-left:-1px;border-radius:1px;background:var(--accent-ink);opacity:.6}
-.fc-g-n{flex:none;min-width:32px;text-align:right;font-variant-numeric:tabular-nums}
 .fc-sec{display:grid;gap:4px;min-width:0}
 .fc-sec>h3{margin:0;font-size:var(--fs-micro);font-weight:var(--w-med);letter-spacing:.04em;text-transform:uppercase;color:var(--ink-3)}
 .fc-sec>p{margin:0;font-size:var(--fs-small)}
@@ -2399,13 +2399,8 @@ text.map-ring-t{font-size:var(--fs-micro);font-weight:var(--w-med);fill:var(--in
 .tm-chip-imp .ic{width:12px;height:12px}.tm-chip-imp[aria-pressed=true] .ic{fill:currentColor}
 .tm-sec[data-sec=imp]>.tm-sec-h{color:var(--accent-ink)}
 .lr{position:relative}
-.lr-acts{position:absolute;right:6px;top:4px;display:none;gap:2px;background:var(--surface,var(--bg));border-radius:var(--r-s)}
-.lr:hover .lr-acts,.lr:focus-within .lr-acts{display:flex}
-.lr-act{display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;border:0;border-radius:var(--r-s);background:none;color:var(--ink-3);cursor:pointer}
-.lr-act:hover{background:var(--hover);color:var(--ink)}
-.lr-act[aria-pressed=true]{color:var(--accent-ink)}.lr-act[aria-pressed=true] .ic{fill:currentColor}
-.lr-act .ic{width:14px;height:14px}
-@media (hover:none){.lr-acts{display:flex;top:auto;bottom:4px}}
+.tm-pin{display:inline-flex;color:var(--ink-3)}.tm-pin .ic{width:12px;height:12px}
+.fc-needs-n{margin:0;font-size:var(--fs-small)}
 .tm-showwrap>.tm-chip-imp{margin:6px 8px 0 0;flex:none}
 /* design item 6: the three filters and the star fit one row at the rail's width */
 .tm-showwrap{display:flex;flex-wrap:nowrap;align-items:flex-start;gap:4px}
