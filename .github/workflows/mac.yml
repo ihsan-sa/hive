@@ -1,0 +1,39 @@
+name: macos
+on: { push: { branches: [test-train] } }
+permissions: { contents: read }
+jobs:
+  install:
+    # Intel: GitHub's Apple-silicon Macs can't start a VM inside, so only this one runs the real line end to end.
+    runs-on: macos-15-intel
+    timeout-minutes: 50
+    env:
+      HIVE_SITE: https://raw.githubusercontent.com/ihsan-sa/hive/train-candidate
+      HIVE_BRANCH: train-candidate
+      HIVE_CHECK_AUTO: "1"
+    steps:
+    - uses: actions/checkout@v4
+      with: { ref: train-candidate }
+    - name: Where this runs
+      run: sw_vers; uname -m; sysctl -n hw.memsize hw.ncpu
+    - name: The login item is valid for plutil
+      run: |
+        sed '/^main "\$@"$/d' get-mac.sh > funcs.sh
+        ( set +e; . ./funcs.sh; D="$HOME/.hive"; agent_plist > hive.plist ); plutil -lint hive.plist
+    - name: The candidate's Mac line, real Lima, real VM, no person
+      timeout-minutes: 35
+      run: |
+        set -o pipefail
+        HIVE_CHECK_LINE=get-mac.sh sh mac-check.sh 2>&1 | tee install.log | tail -n 80
+        grep -q '^done, 0 failed\.' install.log && ! grep -q '^done, [1-9][0-9]* failed' install.log
+    - name: The report
+      if: always()
+      run: cat "$HOME/hive-mac-report.txt" || true
+    - name: Lima's log
+      if: failure()
+      run: tail -n 40 "$HOME/.hive/lima/hive/ha.stderr.log" 2>/dev/null || true
+    - name: Uninstall, for real
+      if: always()
+      timeout-minutes: 5
+      run: |
+        { sleep 5; echo delete; sleep 5; } | HIVE_KEEP=projects,notes,board script -q /dev/null sh remove-mac.sh || true
+        sleep 5; sh mac-check.sh --after-uninstall || true
