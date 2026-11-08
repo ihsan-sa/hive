@@ -5,14 +5,14 @@
 import { h } from "./dom.js";
 import { S, jget, emit, post } from "./store.js";
 import { threadParent, isSystemThread, btwParent, isAgent, isRunning, threadTitle } from "./model.js";
-import { now, DAY } from "./format.js";
+import { now, DAY, short } from "./format.js";
 import { faded, archived } from "../ui/threadmeta.js";
 import { agentRef, threadRef } from "../ui/refs.js";
-import { waitingOn } from "./needs.js";
+import { waitingNow , laterOf } from "./needs.js";
 import { plainName } from "./simple.js";
 
 export const FOCI_EVERY = 20e3, ACTIVE_FOR = 7 * DAY;
-export const MISC = { id: null, name: "Misc", misc: true, summary: null, checks: [], threads: [], links: [] };
+export const MISC = { id: null, name: "Other", misc: true, summary: null, checks: [], threads: [], links: [] };
 const L = { at: 0, p: null, failed: false };
 export const fociFailed = () => L.failed;
 /** Read /api/foci into S.foci (at most every 20 s unless forced); resolves when it is there. Emits on change. */
@@ -74,18 +74,25 @@ export const activeThreads = id => threadsOf(id).filter(r => r.active);
 /** The cards' order: the foci as listed, then Misc, only when something is going on there. */
 export function fociOrder() { const fs = foci().slice(); if (activeThreads(null).length) fs.push(MISC); return fs; }
 /** What waits on the person inside one focus (core/needs.js rows). */
-export const needsOf = id => waitingOn().filter(w => (w.focus ? w.focus === id : focusOf(w.th) === id));
+export const needsOf = id => waitingNow().filter(w => (w.focus ? w.focus === id : focusOf(w.th) === id));
 /** Agents in a focus's threads: running now, and the ones that worked there in the last day. */
 export function agentsOf(id) {
   const ths = new Set(threadsOf(id).map(r => r.th)), nowOn = new Set(), day = new Set(), since = now() - DAY;
   for (const a of (S.live && S.live.agents) || []) if (a.name && a.thread && ths.has(a.thread)) nowOn.add(a.name);
   for (const s of S.sessions) if (s.thread && ths.has(s.thread) && s.name) { if (isRunning(s.name) && !s.end) nowOn.add(s.name); else if ((s.end || s.start) > since) day.add(s.name); }
+  // Who posted in its threads, and who wrote its summary, in the last day: a run started elsewhere still counts (R21: Now from an agent 22 min ago
+  // beside "No agent has been on this in the last day").
+  for (const th of ths) { const d = S.threads.get(th); if (!d) continue; for (let i = d.posts.length - 1; i >= 0 && d.posts[i].t > since; i--) { const n = d.posts[i].from; if (n && isAgent(n)) day.add(n); } }
+  const f = id && focusById(id), sm = f && f.summary; if (sm && sm.from && isAgent(sm.from) && sm.at * 1e3 > since) day.add(sm.from);
   for (const n of nowOn) day.delete(n);
   return { now: [...nowOn], day: [...day] };
 }
 /** The decisions the agents put to the person in the focus's summary (`## Needs you`): what the card shows, and nothing else.
  *  The person does not read the raw list (too many, 11071606f4d4); agents decide by default and keep this part for what is really theirs. */
-export const askedOf = id => { const f = focusById(id); return (f && f.summary && f.summary.needs) || []; };
+// Less the ones the person put off (Later or Not needed, core/needs.js laterOf).
+export const askedOf = id => { const f = focusById(id), s = f && f.summary; return ((s && s.needs) || []).filter((text, i) => text && !laterOf({ src: "summary", focus: id, text, t: needAt(s, i) })); };
+/** When the summary's i-th ask was first raised (focus.py needs_at), in ms. */
+export const needAt = (s, i) => (((s && s.needs_at && s.needs_at[i]) || (s && s.at) || 0) * 1e3) || null;
 /** One word for where a focus stands, and its tone: needs you, moving, waiting, quiet. */
 /** A focus's share of the hive's work: focus.py's runs and agent posts in its threads, with the dash's cost laid on them, over the last day and week.
  *  { day: {runs, posts, cost}, week: {...}, total: {day, week}, windows } or null when the API has none yet. id null is Misc. */
@@ -109,7 +116,8 @@ export const pct = x => `${Math.round(x * 100)}%`;
 export const usd = c => (c >= 100 ? `$${Math.round(c)}` : `$${c.toFixed(2)}`);   // one money format under $100 (R6 review: "$6.40 … $30.1" read as two)
 
 export function stateOf(id) {
-  if (needsOf(id).length) return { key: "needs", word: "needs you", tone: "info" };
+  // Both at once (the person, 110812313986: a focus can need them and still be working): the needs part first, then "moving".
+  if (needsOf(id).length) return { key: "needs", word: agentsOf(id).now.length ? "needs you, moving" : "needs you", tone: "info", moving: !!agentsOf(id).now.length };
   if (agentsOf(id).now.length) return { key: "moving", word: "moving", tone: "good" };
   if (activeThreads(id).length) return { key: "waiting", word: "waiting", tone: null };
   return { key: "quiet", word: "quiet", tone: "ended" };
@@ -146,6 +154,15 @@ export function pills(text) {
   out.push(text.slice(last));
   return out.filter(x => x !== "");
 }
+/** An agent code as a pill that is not a link, for text that already sits inside one (a rail row, a Yours entry); anything else as it is. */
+export const codePill = n => (n && isCode(n) ? h("span", { class: "ref pill", "data-kind": "agent", title: n }, n) : n || "an agent");
+/** A one-line preview said for the person (R21): ids scrubbed, a leading "Rung:"/"Next:" word and any step word gone, agent codes as codePill. */
+export function railSay(text, max = 70) {
+  const t = short(scrub(String(text || "").replace(/\s+/g, " ").replace(/^\s*(?:rung(?:\s+done)?|next|step)\s*:\s*/i, "")).replace(/\b(?:(?:the|rung)\s+)?R\d+[a-z]?\b/g, "the step"), max);
+  const out = []; let last = 0, m; const re = /(^|[^\w`])`?([a-z][0-9a-f]{4})`?(?![\w-])/g;
+  while ((m = re.exec(t))) { if (!isCode(m[2])) continue; const at = m.index + m[1].length; out.push(t.slice(last, at), codePill(m[2])); last = re.lastIndex; }
+  out.push(t.slice(last)); return out.filter(x => x !== "");
+}
 /** The same text for the simple view: ids scrubbed and every agent named as the hive, as plain words. */
 export const plainPills = text => scrub(text).replace(WORD, (m, a, at, w1, w2, w3) => (at === "#" ? m : at === "@" || w2 || isCode(w3) ? a + plainName(w1 || w2 || w3) : m));
 /** A thread's one-line description: its status bar's first line, else nothing (the title says what it is). */
@@ -153,5 +170,6 @@ export function threadLine(th) { const r = S.threadStatus && S.threadStatus[th];
 /** Where a needs row comes from, said for the person: its focus's name, else the thread's status line 1, else its title. */
 export function needSource(w) { const f = w.focus ? focusById(w.focus) : focusById(focusOf(w.th)); return f ? focusName(f) : (w.th && (threadLine(w.th) || threadTitle(w.th))) || ""; }
 /** A focus's name, said short where the long name explains more than it names. */
-export const focusName = f => (f && f.name) || "Misc";
+/** The focus's name from its record or its id (the thread header's crumb and the focus page's links pass ids; handed an id this said Misc for every filed thread, the person, 11081224cf6a); "Misc" for none. */
+export const focusName = f => { if (typeof f === "string") f = focusById(f); return (f && f.name) || "Other"; };
 export const focusTitle = f => h("span", { class: "fc-name" }, focusName(f));

@@ -4,7 +4,7 @@
 // (the first line of a post whose last line starts Done:/Waiting:/Blocked:), the threads' status bars and the live agent list.
 import { h } from "../core/dom.js";
 import { S } from "../core/store.js";
-import { waitingOn } from "../core/needs.js";
+import { waitingNow } from "../core/needs.js";
 import { threadChildren, threadTitle, displayText } from "../core/model.js";
 import { ago, plural, mdPlain, short, DAY, now } from "../core/format.js";
 import { gist } from "../core/gist.js";
@@ -46,7 +46,7 @@ function reading(s) {
   const threads = [s.thread, ...(s.thread ? threadChildren(s.thread) : [])].filter(Boolean);
   const running = [...S.running.entries()].filter(([, a]) => threads.includes(a.thread)).map(([n]) => n);
   const did = today(threads), st = s.thread ? stand(s.thread) : null;
-  const asks = waitingOn().filter(w => threads.includes(w.th)).map(w => ({ thread: w.th, action: w.text, post: w.post, t: w.t }));   // the one list (core/needs.js), newest first
+  const asks = waitingNow().filter(w => threads.includes(w.th)).map(w => ({ thread: w.th, action: w.text, post: w.post, t: w.t }));   // the one list (core/needs.js), newest first
   const needs = asks.length;
   const blocked = st && /^(blocked|waiting|needs the person)$/.test(st.word);
   const state = running.length ? { key: "moving", tone: "good", shape: "dot", label: `moving, ${plural(running.length, "agent")} on it` }

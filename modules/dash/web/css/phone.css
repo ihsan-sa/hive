@@ -79,6 +79,7 @@
   .cm[data-list] .cm-convo{display:none}
   .cm[data-list] .cm-grip,.cm[data-list] .cm-places{display:none}
   .cm-lhead,.cm-lhead.only-phone{display:flex;align-items:center;gap:var(--s1)}
+  .cm-arch-up.only-phone{display:inline-flex;min-height:44px}
   .cm-lhead h1{margin:0;font-size:19px}
   .cm[data-list] .cm-views{padding:4px 0 0}
   .cm[data-list] .cm-views .seg button{height:36px;padding:0 14px}
@@ -89,7 +90,7 @@
   .cm-home>.cm-new,.cm-home>section:first-child{order:99;position:sticky;bottom:0;z-index:6;margin:0 calc(-1 * var(--s4));padding:var(--s3);background:linear-gradient(to bottom,transparent,var(--bg) 14px)}
   .cm-home>.cm-new>.cm-home-t,.cm-home>.cm-new>.cm-home-l,.cm-home>section:first-child h1{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
   .cm-home .cp-t{min-height:44px;max-height:120px}
-  .cm-home .fc{padding:var(--s3) var(--s4)}
+  .cm-home .fc{padding:14px 14px 6px}
   .cm-hline,.cm-foci,.cm-foci-msg{margin-top:0}
   .cm-foci{grid-template-columns:minmax(0,1fr);gap:var(--s3)}
   .needs .lr>.btn{display:none}
@@ -141,6 +142,9 @@
   .cp-bar{flex-wrap:nowrap}
   .cp-fpick .cp-focus{max-width:none;flex:0 1 auto;min-width:0}
   .cp-mpop,.cp-model.dd{flex:none}
+  .cp-fpop{min-width:0;flex:0 1 auto}
+  .cp-fbtn.dd{max-width:none;min-width:0;flex:0 1 auto}
+  .cp-fbtn .cp-fname{min-width:12ch}
   .cp-fpick[data-picked]>.cp-lab{display:none}
   .cp-lab{font-size:11px}
 
@@ -160,6 +164,8 @@
   input,select,textarea,.input{font-size:16px!important}
   .btn{min-height:40px}
   .btn[data-size=s]{min-height:36px}
+  .btn.cm-need-a{min-height:44px;min-width:44px}   /* an Answer that opens the quick-answer panel: 44 px on a phone (r23) */
+  .btn.nd-later,.btn.nd-moot,.yr-wb .btn,.fp-later-i .btn{min-height:44px}   /* Later, Not needed, Bring back: 44 px on a phone like Answer */
   .btn[data-kind=icon]{position:relative}
   .btn[data-kind=icon]::before{content:"";position:absolute;inset:-4px}
   a,button{touch-action:manipulation}
@@ -179,4 +185,35 @@
   body[data-view=thread] .cm,body:has(.kb[data-in]) .kb{height:100dvh}
   body[data-kb=open] .cm,body[data-kb=open] .kb{height:var(--vvh,100dvh)}
   body[data-kb=open] #main{min-height:0}
+}
+
+/* R18, thumb targets (R12 finding 6): on a phone every standalone thing you tap is at least 44px tall. Where a link sits in a line of
+   small text (the needs row's source, the focus's "N agents" line) the padding grows the hit area and a matching negative margin keeps
+   the text where it was. Agent and thread pills inside a sentence stay 24px: they are words in running text (WCAG 2.5.8's inline case). */
+@container app (width < 700px){
+  .top-in .brand{min-height:44px}
+  .top-pill-go{inset:-7px -1px}
+  .cm-hline a,.cm-need-m>a:first-child,.fp-agn,.fc-ask-n a,.fc-ask-h a{display:inline-block;padding-block:14px;margin-block:-14px}
+  .fc-name{padding-block:12px;margin-block:-12px}   /* a 44 px target without un-clamping the name */
+  .fc-ask-i,.fc-row{min-height:44px}
+  .fc-ag .ref{position:relative}.fc-ag .ref::after{content:"";position:absolute;inset:-10px -2px}   /* the card head's agent pills stand alone, not in a sentence: a 44 px hit area, same look (r23 review) */
+  .fc-ft>a,.cm-need-all a{display:inline-flex;align-items:center;min-height:44px}
+  .fc-ft .btn,.ph-a .btn{min-width:44px;min-height:44px}
+  .fc-menu .menu-i{min-height:44px}
+  .fp-a .btn,.fp-more .btn,.fmsg .btn{min-height:44px}
+  .fp-todo li{min-height:44px;align-items:center}
+  .fp-ask{min-height:52px}
+  .btn.fp-yr-r,.btn.fp-steer-s,.btn.fp-yr-mine{min-height:44px}
+  .fp-rel a,.fp-hd .fp-meta a{display:inline-flex;align-items:center;min-height:44px}
+  .fp-title{font-size:22px}
+  .fp-ev{grid-template-columns:56px minmax(0,1fr)}
+  .cp-fpick .cp-focus{height:44px}
+  .lr-in{min-height:44px;padding-block:6px}
+}
+
+/* R20 (R12 findings 9-10): a tab row wider than the phone fades at its right edge, so a cut tab reads as "scroll for more", and the last
+   tab can scroll clear of the fade; the faces in a conversation's head say what they are. */
+@container app (width < 700px){
+  .subnav{mask-image:linear-gradient(to right,#000 calc(100% - 28px),transparent);padding-right:28px}
+  .cm-tools .avs::before{content:"with";align-self:center;margin-right:4px;font-size:var(--fs-meta);color:var(--ink-3)}
 }

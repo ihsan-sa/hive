@@ -247,7 +247,7 @@ def cmd_relay(a):
 def cmd_post(a):
     text = " ".join(a.text) if a.text else sys.stdin.read()
     if os.environ.get("HIVE_BROKER"):
-        forward({"verb": "post", "thread": a.thread, "to": a.to, "model": a.model, "reply_to": a.reply_to, "done": a.done or [], "tags": getattr(a, "tag", None) or [], "interrupt": bool(getattr(a, "interrupt", False)), "text": text}, a.file or [])
+        forward({"verb": "post", "thread": a.thread, "to": a.to, "model": a.model, "effort": getattr(a, "effort", None), "reply_to": a.reply_to, "done": a.done or [], "tags": getattr(a, "tag", None) or [], "interrupt": bool(getattr(a, "interrupt", False)), "text": text}, a.file or [])
     given = [post_tag(t) for t in getattr(a, "tag", None) or []]   # checked before anything else, so a bad tag costs a re-post and nothing more
     try: c = read_cfg()
     except (OSError, ValueError): c = {}
@@ -292,6 +292,7 @@ def cmd_post(a):
     p = {"id": pid, "at": now(), "from": a.as_ or os.environ.get("HIVE_NAME", "anon"),
          "to": ["@" + n for n in dict.fromkeys(to)], "thread": a.thread or pid, "text": text}
     if a.model: p["model"] = a.model
+    if getattr(a, "effort", None): p["effort"] = a.effort
     if a.routed: p["routed"] = True
     # The person's "Interrupt" (the dash's button beside Send): the starter ends the agent's current step when it cleanly can (starter.interrupt_step),
     # and the hook hands it over marked as one. Without it a post waits for the step to end, as always.
@@ -734,8 +735,10 @@ def cmd_waits(a):
     for ln in (STATE / "stop-gate.jsonl").read_text().splitlines():
         try: r = json.loads(ln)
         except ValueError: continue
-        if r.get("event") == "passed" and str(r.get("why", "")).startswith("Waiting:") and r.get("at", 0) >= cutoff: last[(r["name"], r["thread"])] = r
-    ps = posts(); n = 0
+        if r.get("event") != "passed" or r.get("at", 0) < cutoff: continue
+        if str(r.get("why", "")).startswith("Waiting:"): last[(r["name"], r["thread"])] = r
+        else: last.pop((r.get("name"), r.get("thread")), None)  # a later Done:/Blocked: stop ends the wait
+    ps = list(posts()); n = 0  # a list: posts() is a generator, read once per wait below
     for (name, thread), r in sorted(last.items(), key=lambda kv: kv[1]["at"]):
         if name in queued: continue
         ts = lambda p: dt.datetime.fromisoformat(p["at"]).replace(tzinfo=dt.timezone.utc).timestamp() if "+" not in p["at"] else dt.datetime.fromisoformat(p["at"]).timestamp()
@@ -796,6 +799,8 @@ def cmd_budget(a):
     if not 0 < v < 10000: sys.exit("hive budget: dollars per run must be above 0")
     c["max_budget_usd"] = int(v) if v == int(v) else v; write_cfg(c)
     print(f"Each run is capped at ${c['max_budget_usd']} from its next start. A run that reaches the cap stops and says so in its thread.")
+
+EFFORTS = ("low", "medium", "high", "xhigh", "max")
 
 def post_model(m):
     """--model: a Claude alias, or provider:model where provider is in config.json's providers (see starter.provider_of)."""
@@ -1155,6 +1160,7 @@ p = sp.add_parser("post", help="hive post [--to @a,@b] [--thread T] [--model son
 p.add_argument("--to"); p.add_argument("--thread"); p.add_argument("--as", dest="as_", help="from name (default $HIVE_NAME)")
 p.add_argument("--routed", action="store_true", help="for the doors: the name was picked by routing, not typed by the person")
 p.add_argument("--model", type=post_model, help="model for any run this post starts: opus, sonnet, haiku, fable, or provider:model for a provider in config.json (openrouter:openai/gpt-5); default: the login's")
+p.add_argument("--effort", choices=EFFORTS, help="effort level for any Claude run this post starts or wakes: low, medium, high, xhigh, max; default: Claude Code's own")
 p.add_argument("--reply-to", dest="reply_to", metavar="ID", help="the post this answers; shown on the board, and a door puts the answer under that message")
 p.add_argument("--file", action="append", help="attach a file (repeatable): copied to ~/files/<post id>/, shown in hive read, Slack and the dashboard")
 p.add_argument("--done", action="append", metavar="ASK", help="mark this ask (k0123) done with this post as its evidence (repeatable)")

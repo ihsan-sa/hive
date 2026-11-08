@@ -27,6 +27,7 @@ QUESTION = ("Failure reports and a daily check-in are on unless you turn them of
     "The check-in is one small message a day that says this Hive is running, and whether an agent has been started in it yet (yes or no). "
     "A usage report counts agent runs, restarts, limit hits and fallbacks, with the time span it covers. "
     "Every report has the Hive version, the OS and a random install id. "
+    "The receiver also notes the country, region and internet provider each report comes from, never the IP address. "
     "Secrets, emails, your user name and your home folder are scrubbed on this machine first. "
     "Chat text, file contents and thread names are never sent.")
 
@@ -125,7 +126,7 @@ def version():
 
 def host_family():
     """linux, windows or mac: what this Hive runs on top of. The installer leaves ~/.hive-host (windows or mac) when it sets up
-    inside WSL or a Mac's VM; a Hive from before that is told apart as Windows by the kernel's own name. Nothing else is read or sent."""
+    inside WSL or a Mac's VM; a Hive from before that is told apart as Windows by the kernel's own name, and as a Mac by Lima's guest agent. Nothing else is read or sent."""
     try:
         m = open(os.path.join(home(), ".hive-host")).read(16).strip()
         if m in ("windows", "mac"): return m
@@ -133,6 +134,8 @@ def host_family():
     try:
         if "microsoft" in open("/proc/sys/kernel/osrelease").read(200).lower(): return "windows"
     except OSError: pass
+    # A Mac Hive installed before the marker runs in the Lima VM get-mac.sh makes; only the Mac line uses Lima
+    if any(os.path.exists(p) for p in ("/usr/local/bin/lima-guestagent", "/mnt/lima-cidata")): return "mac"
     return platform.system().lower()
 
 def base(st, typ):
@@ -142,6 +145,7 @@ def url():
     try: u = json.load(open(settings_path())).get("share_url")
     except (OSError, ValueError): u = None
     d = "" if DEFAULT_URL.startswith("<") else DEFAULT_URL
+    if not (u or os.environ.get("HIVE_SHARE_URL")) and installed_version() == "0": d = ""   # an exported tree that was never released (tests, trials) sends nothing to the makers
     return u or os.environ.get("HIVE_SHARE_URL") or d
 
 # ---- build reports from the hive's own log ----

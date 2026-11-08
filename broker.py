@@ -246,7 +246,7 @@ def post(name, req, blobs):
     names = req.get("names") or []
     if len(names) != len(blobs): return {"err": "a name for each file"}
     cmd = [sys.executable, "-I", str(CORE / "hive"), "post"]
-    for k in ("thread", "to", "model", "reply_to"):
+    for k in ("thread", "to", "model", "effort", "reply_to"):
         if req.get(k): cmd.append(f"--{k.replace('_', '-')}={req[k]}")
     for k in req.get("done") or []:  # --done ASK: the post inside closes the ask, as outside the sandbox
         if not re.fullmatch(r"k[0-9a-f]{3,8}", str(k)): return {"err": f"--done {k}: not an ask id (k0123)"}

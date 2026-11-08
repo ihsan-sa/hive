@@ -72,6 +72,8 @@ export function cancelReply() {
   d.reply = null; d.replyId = null; keep(d); refresh(); return true;
 }
 export const focusComposer = () => { CP.focus = true; refresh(); };
+/** Put text in a thread's box (null: the home's) and the cursor after it, on the person's own click (Stuff to address's "Go through them with an agent"). Nothing is sent: they edit or send it. */
+export function prefill(th, text) { const d = draft(th); if (!d.text.trim()) { d.text = text; keep(d); } CP.focus = true; refresh(); }
 /** Address the next message in a thread to who (the To menu's choice) and put the cursor in the box. Nothing is typed for the person. */
 export function sayTo(th, who) {
   const d = draft(th); if (who) { d.to = who; keep(d); }
@@ -198,7 +200,7 @@ function send(th) {
   const it = queue(th, d, r, int);
   if (th) delete CP.mode[th];
   if (int) CP.sent[th] = { who: r.who, it, at: Date.now(), seen: 0 };
-  Object.assign(d, { text: "", files: [], reply: null, replyId: null, quote: null, to: null, name: "", naming: false, err: "", model: "" }); keep(d);   // the focus stays: the next one most likely goes to the same place
+  Object.assign(d, { text: "", files: [], reply: null, replyId: null, quote: null, to: null, name: "", naming: false, err: "", model: "", focus: "" }); keep(d);   // the focus resets: a new conversation starts with no focus (the person, 2026-11-08)
   CP.ac = null; CP.menu = false; CP.hist = null; if (!SB.open) SB.say = "";
   const el = field(th); if (el) { el.value = ""; el.focus(); }   // morph leaves a focused field alone, so clear it here
   refresh(); window.dispatchEvent(new CustomEvent("cp:sent", { detail: { th } }));
@@ -299,6 +301,15 @@ function mdSoon(th) { if (mdRaf) return; mdRaf = requestAnimationFrame(() => { m
 export function say(th, text, to) {
   const r = to ? { who: to, why: "chosen", server: (TG.v[th] || {}).who } : recipient(th);
   queue(th, { text, files: [], reply: null, quote: null, name: "" }, r); refresh();
+}
+/** Answer from outside the conversation (the quick-answer panel, ui/quick.js): the same queue, signing, outbox and Retry as the box.
+ *  reply: the post answered (it goes to its author, as a reply does); to: a name or focus id to address it to; quote: shown above the words.
+ *  Returns the outbox item, whose state goes sending, sent or failed. */
+export function answer(th, text, { reply = null, to = null, quote = null } = {}) {
+  const s = serverWho(th), sv = (s && s.who) || null;
+  const r = reply ? { who: isAgent(reply.from) ? reply.from : sv, why: "reply", server: sv } : to ? { who: to, why: "chosen", server: sv } : recipient(th);
+  const it = queue(th, { text, files: [], reply, quote, name: "" }, r); refresh();
+  return it;
 }
 export const actions = {
   retry: it => deliver(it),
@@ -432,14 +443,17 @@ function typedModel(text) { const w = named(text); return MODEL_WORDS.includes(w
 /** A new conversation's focus (the person, 110715182bab): the home card it is filed under, Misc when none. Prefilled when it starts from a focus. */
 function focusPick(d) {
   const fs = foci(); if (!fs.length && !d.focus) return null;
-  return h("label", { class: "cp-fpick", "data-picked": d.focus ? "" : null, title: "Which focus this conversation is filed under on the home; No focus leaves it in Misc" },
-    h("span", { class: "cp-lab", "aria-hidden": "true" }, "Focus"),
-    h("select", { class: "cp-focus", "aria-label": "Focus",
-      onchange: e => { d.focus = e.target.value; keep(d); refresh(); } },
-      h("option", { value: "", selected: !d.focus ? "" : null }, "No focus"),
-      fs.map(f => h("option", { value: f.id, selected: f.id === d.focus ? "" : null }, f.name || f.id)),
-      d.focus && !fs.some(f => f.id === d.focus) ? h("option", { value: d.focus, selected: "" }, d.focus) : null),
-    icon("chevron"));
+  const open = CP.menu === "focus", f0 = d.focus && fs.find(f => f.id === d.focus), label = d.focus ? (f0 ? f0.name || f0.id : d.focus) : "No focus";
+  const pick = v => { d.focus = v; keep(d); CP.menu = false; refresh(); };
+  return h("div", { class: "pop cp-fpop", "data-key": "focus" },
+    h("button", { type: "button", class: "dd cp-fbtn", "data-picked": d.focus ? "" : null, "aria-haspopup": "listbox", "aria-expanded": String(open), "aria-label": "Focus: " + label,
+      title: "Which focus this conversation is filed under on the home; No focus leaves it in Other", onclick: toggle("focus") },
+      h("span", { class: "cp-lab", "aria-hidden": "true" }, "Focus"), h("span", { class: "cp-fname" }, label), icon("chevron")),
+    open ? h("div", { class: "menu cp-fmenu", role: "listbox", "aria-label": "Focus", "data-side": "bottom-end", "data-w": "wide", "data-key": "fm" },
+      menuHead("Filed under on the home", "h"),
+      menuItem("No focus", "Leaves it in Other", () => pick(""), { role: "option", key: "f:", sel: !d.focus }),
+      fs.map(f => menuItem(f.name || f.id, null, () => pick(f.id), { role: "option", key: "f:" + f.id, sel: f.id === d.focus })),
+      d.focus && !f0 ? menuItem(d.focus, null, () => pick(d.focus), { role: "option", key: "f:cur", sel: true }) : null) : null);
 }
 // ---- @ names: agents, foci and threads, each with where it is and what it's on (the person, 11071752e4c2) ----
 /** The words a row is found by, lower-cased: name, model, thread name and title, its status line, its focus. */
@@ -604,7 +618,7 @@ function histTab(th, n) {
  *  a focus with who keeps it; a thread with its title and status line. No working / not-working words: the dot says that. */
 function optRow(r, mark = "@", { here } = {}) {
   const m = (x, cls = "meta") => (x ? h("span", { class: cls }, x) : null), sep = x => (x ? h("span", { class: "meta cp-sep", "aria-hidden": "true" }, "·") : null);
-  if (r.kind === "focus") return [h("span", { class: "cp-fx", "aria-hidden": "true" }, "◆"), h("b", null, mark + r.word), m(r.name !== r.word ? r.name : ""), sep(1), m(r.keeper ? `kept by ${r.keeper}` : "nobody keeping it: a new agent in its thread", "meta cp-line")];
+  if (r.kind === "focus") return [h("span", { class: "cp-fx", "aria-hidden": "true" }, "◆"), h("b", null, mark + r.word), m(r.name !== r.word ? r.name : ""), sep(1), m(r.keeper ? "reaches the agent looking after it" : "starts a new agent in its conversation", "meta cp-line")];
   if (r.kind === "thread") return mark === "#" ? [h("span", { class: "cp-fx", "aria-hidden": "true" }, "#"), h("b", null, mark + r.word), m(r.title !== r.word ? r.title : "", "meta cp-title"), sep(r.line), m(r.line)]
     : [h("span", { class: "cp-fx", "aria-hidden": "true" }, "#"), h("b", { class: "cp-ttl" }, r.title || r.word), m("@" + r.word, "meta cp-id"), sep(r.line), m(r.line, "meta cp-line")];   // the title leads, as on the rail; the id is what gets inserted
   if (r.kind === "word") return [statusDot("none"), h("b", null, mark + r.word), m(r.word === "new" ? "a new agent, with this conversation to read" : "a new agent on this model")];
@@ -726,7 +740,7 @@ function toMenu(th, r) {
     names.map(agentOpt),
     opt({ kind: "word", word: "new" }, "+", "A new agent", "Starts here, with this conversation to read"),
     foci().length ? menuHead("A focus: its keeper gets it, marked with the focus", "h:foci") : null,
-    foci().map(f => { const x = focusRow(f); return opt(x, "◆", x.name, x.keeper ? `kept by ${x.keeper}` : "nobody keeping it: a new agent in its thread"); }),
+    foci().map(f => { const x = focusRow(f); return opt(x, "◆", x.name, x.keeper ? "Reaches the agent looking after it" : "Starts a new agent in its conversation"); }),
     menuSep("sep"),
     opt({ kind: "word", word: "btw" }, "+", "A new agent, on the side", "Answers in its own conversation; nobody here sees it"),
     h("p", { class: "cp-menu-n", "data-key": "note" }, r.why === "partner"
@@ -748,8 +762,8 @@ function modelPick(d, r) {
   const label = cur ? MODEL_LABELS[cur] || cur : first, open = CP.menu === "model";
   const pick = v => { d.model = v; keep(d); CP.menu = false; refresh(); };
   return h("div", { class: "pop cp-mpop", "data-key": "model" },
-    h("button", { type: "button", class: "dd cp-model", "data-picked": d.model ? "" : null, "data-value": cur, "aria-haspopup": "listbox", "aria-expanded": String(open), "aria-label": "Model: " + label, title: note + ". Pick another to change it.", onclick: toggle("model") }, h("span", { class: "cp-lab", "aria-hidden": "true" }, "Model"), label === "Model" ? "Default" : label, icon("chevron")),
-    open ? h("div", { class: "menu cp-mmenu", role: "listbox", "aria-label": "Model", "data-side": "top-end", "data-w": "wide", "data-key": "mm" },
+    h("button", { type: "button", class: "dd cp-model", "data-picked": d.model ? "" : null, "data-value": cur, "aria-haspopup": "listbox", "aria-expanded": String(open), "aria-label": "Model: " + label, title: note + ". Pick another to change it.", onclick: (e, b) => { const r = (b || e.target.closest(".cp-model")).getBoundingClientRect(); CP.mdown = innerHeight - r.bottom > r.top; toggle("model")(); } }, h("span", { class: "cp-lab", "aria-hidden": "true" }, "Model"), label === "Model" ? "Default" : label, icon("chevron")),
+    open ? h("div", { class: "menu cp-mmenu", role: "listbox", "aria-label": "Model", "data-side": CP.mdown ? "bottom-end" : "top-end", "data-w": "wide", "data-key": "mm" },
       menuHead(note, "h"),
       [["", first, live || row ? "Leave it as it is" : "The default"], ...MODELS.filter(([v]) => live || row || v !== def).map(([v, l, s]) => [v, l, s])].map(([v, l, s]) =>
         menuItem(l, s, () => pick(v), { role: "option", key: "m:" + v, sel: cur === v, cls: "cp-mopt" })),
@@ -823,6 +837,13 @@ function liveLine(th, who, phase, armed) {
     h("span", { class: "grow" }, h("b", null, who), " " + txt),
     arm, arm ? h("span", { class: "vh", id: "cp-arm-d", "data-key": "armd" }, "Opens interrupt mode. Nothing is sent until you press Interrupt again.") : null);
 }
+/** The Interrupt button for a running agent, for the conversation's status strip (the person, 11081336a82e: one line per agent,
+ *  not the strip and a second line over the box). null while the box is armed or an interrupt is on its way. */
+export function interruptButton(th, who) {
+  if (!th || !who || CP.mode[th] === "interrupt" || livePhase(th, who)) return null;
+  const b = button("Interrupt", () => armInterrupt(th, who), { kind: "quiet", size: "s", icon: "pause", cls: "cp-arm", title: `Reach ${who} now, without waiting for its step to end. Nothing is sent until you press Interrupt again.` });
+  return b;
+}
 function intNote(th, who) {
   return h("div", { class: "cp-int", role: "status", "data-key": "int" }, icon("pause"),
     h("span", null, h("b", null, `Interrupt ${who}.`), " It stops its current step and reads this at once. Work in that step may be done again. Esc goes back to an ordinary message."),
@@ -869,7 +890,8 @@ export function composer({ thread, update, place = "thread", autofocus, top }) {
     d.err ? h("p", { class: "cp-err", role: "alert", "data-key": "err" }, d.err) : null,
     wordBoxPanel(th, update),
     top || null,  // the conversation's status strip: a tab on the box's top edge
-    (busy || phase) ? liveLine(th, lw, phase, armed) : null,
+    // the strip already names a working agent and carries its Interrupt: the line over the box shows only an interrupt on its way
+    phase || (busy && !(top && top.querySelector(`[data-key="run:${busy}"]`))) ? liveLine(th, lw, phase, armed) : null,
     h("div", { class: "cp-box", "data-key": "box" },
       armed || d.reply || d.quote || d.files.length || (SB.open && can("secrets")) || SB.say || (!th && d.naming) ? h("div", { class: "cp-top", "data-key": "top" },
         armed ? intNote(th, busy) : null,

@@ -299,7 +299,8 @@ def stop_gate(name, rec, t=None):
 def focus_nudge(name, rec):
     """One reminder per run, at Stop, when the run posted a result in a thread that is in a focus whose summary is older than
     that result (projects/ui-redesign/human-workflow.md, 2026-11-07: the agent that posts the result updates the focus summary
-    in the same run; no cleanup pulses). Joined into the stop block when there is one; never a block on its own."""
+    in the same run; no cleanup pulses), and, once per conversation, when that thread is in no focus or still has no title
+    (focus.file_nudge; the person, 2026-11-08, post 1108153548ec). Joined into the stop block when there is one; never a block on its own."""
     thread = rec.get("thread")
     if os.environ.get("HIVE_DOOR") or not rec.get("at") or not thread or WARDEN.fullmatch(name): return None
     f = STATE / "focus-asked" / name
@@ -309,7 +310,8 @@ def focus_nudge(name, rec):
     try:
         import focus
         at = dt.datetime.fromisoformat(rec["at"]); since = (at if at.tzinfo else at.replace(tzinfo=dt.timezone.utc)).timestamp()
-        msg = focus.nudge(name, thread, since)
+        posts = focus.board_posts()
+        msg = "\n\n".join(x for x in (focus.nudge(name, thread, since, posts), focus.file_nudge(name, thread, since, posts)) if x)
     except Exception: return None
     if not msg: return None
     try: f.parent.mkdir(parents=True, exist_ok=True); f.write_text(rec["at"])

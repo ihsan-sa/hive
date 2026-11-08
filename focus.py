@@ -182,12 +182,22 @@ def state(recs=None, pri=None, posts=None):
         if r["kind"] == "aim" and r.get("focus") in foci: foci[r["focus"]]["aim"] = (r.get("text") or "").strip() or None
     for r in recs:
         if r["kind"] == "summary" and r.get("focus") in foci:
-            foci[r["focus"]]["summary"] = {"text": r.get("text") or "", "from": r.get("from"), "at": r.get("at"), **parse_summary(r.get("text"))}
+            prev = foci[r["focus"]]["summary"] or {}
+            parts = parse_summary(r.get("text"))
+            # needs_at[i]: when the i-th Needs you bullet first showed in an unbroken run of summaries, so a rewrite doesn't make an old
+            # ask look new (the person, 110813526b10: a needs-you that sits a day on fast work is likely obsolete).
+            was = {" ".join(t.split()).lower(): a for t, a in zip(prev.get("needs") or [], prev.get("needs_at") or [])}
+            parts["needs_at"] = [was.get(" ".join(t.split()).lower(), r.get("at")) for t in parts.get("needs") or []]
+            foci[r["focus"]]["summary"] = {"text": r.get("text") or "", "from": r.get("from"), "at": r.get("at"), **parts}
     checks = {}
     for r in recs:
-        if r["kind"] == "check" and r.get("focus") in foci and r.get("id"): checks[r["id"]] = {"id": r["id"], "focus": r["focus"], "text": r.get("text") or "", "from": r.get("from"), "at": r.get("at"), "done": None}
-        elif r["kind"] == "check_done" and r.get("id") in checks: checks[r["id"]]["done"] = r.get("at")
-        elif r["kind"] == "check_untick" and r.get("id") in checks: checks[r["id"]]["done"] = None
+        # The person's tick waits for an agent to confirm it (the person, 1108133400fb): done_by "person" and no ok yet. An agent's
+        # own done, or its confirm of the person's tick, sets ok: the step is finished and leaves the open list.
+        if r["kind"] == "check" and r.get("focus") in foci and r.get("id"): checks[r["id"]] = {"id": r["id"], "focus": r["focus"], "text": r.get("text") or "", "from": r.get("from"), "at": r.get("at"), "done": None, "done_by": None, "ok": None}
+        elif r["kind"] == "check_done" and r.get("id") in checks:
+            c = checks[r["id"]]; c["done"] = r.get("at"); c["done_by"] = r.get("from"); c["ok"] = None if r.get("from") == "person" else {"from": r.get("from"), "at": r.get("at")}
+        elif r["kind"] == "check_ok" and r.get("id") in checks and checks[r["id"]]["done"]: checks[r["id"]]["ok"] = {"from": r.get("from"), "at": r.get("at")}
+        elif r["kind"] == "check_untick" and r.get("id") in checks: checks[r["id"]].update(done=None, done_by=None, ok=None, why=r.get("why") or None)
     for c in checks.values(): foci[c["focus"]]["checks"].append(c)
     for th, fid in tags.items(): foci[fid]["threads"].append(th)
     files = {}   # kb notes filed under a focus (kb file --from POST / --focus): path -> {path, post, from, at}; the newest filing of a path wins, --off removes it
@@ -199,7 +209,14 @@ def state(recs=None, pri=None, posts=None):
     for f in foci.values():
         if f.get("thread") and f["thread"] not in f["threads"]: f["threads"].insert(0, f["thread"])
     order = ordered(order, recs)
-    return {"foci": [foci[i] for i in order], "tags": tags, "order": order}
+    # Needs-you items the person put off (the person, 1108133400fb): key -> {key, th, focus, text, t, what: "later"|"moot", from, at};
+    # "back" takes one off again. The item's t is kept so a newer question in the same conversation still shows.
+    later = {}
+    for r in recs:
+        if r["kind"] == "later" and r.get("key"):
+            if r.get("what") == "back": later.pop(r["key"], None)
+            elif r.get("what") in ("later", "moot"): later[r["key"]] = {k: r.get(k) for k in ("key", "th", "focus", "text", "t", "what", "from", "at")}
+    return {"foci": [foci[i] for i in order], "tags": tags, "order": order, "later": sorted(later.values(), key=lambda x: -(x.get("at") or 0))}
 
 def ordered(ids, recs):
     """`ids` (the default order) rearranged by the newest order record: the ids it lists that exist first, in its order, then the
@@ -313,6 +330,50 @@ def nudge(name, thread, since, posts=None):
             f"not the thread, so update it now, in plain words (what is being done and by whom, what changed), with @agent and #thread where they help:\n"
             f"hive focus set {f['id']} <<'X'\n## Now\n- …\n## Lately\n- …\nX")
 
+FILE_ASKED = STATE / "file-asked.jsonl"     # {thread, name, at, file, title}: which agent was asked to file or title which conversation
+META, RENAMED = STATE / "thread-meta.json", STATE / "renamed.jsonl"
+HEXID = re.compile(r"[0-9a-f]{12}")
+
+def _titled(thread):
+    """True when the thread has a real title: a name that is not a board id, the person's own title (thread-meta) or an `hive rename`."""
+    if not HEXID.fullmatch(thread): return True
+    try:
+        m = json.loads(META.read_text()).get(thread) or {}
+        if m.get("title"): return True
+    except (OSError, ValueError, AttributeError): pass
+    try: return any(json.loads(l).get("thread") == thread for l in RENAMED.read_text().splitlines() if l.strip())
+    except (OSError, ValueError): return False
+
+def file_nudge(name, thread, since, posts=None):
+    """For the inbox hook: one line, once per conversation ever, when `name` posted in `thread` since `since` and the thread is in no
+    focus (nobody ever tagged it, so the person has not put it in Misc on purpose) or still has its board id for a title. The agent
+    that worked in it files it and names it at its own hand-off: no hourly tidy pass (the person, 2026-11-08, post 1108153548ec,
+    time invariance). Asks are recorded in FILE_ASKED so the audit pass can see who was asked and did not. None otherwise."""
+    st = state(); posts = board_posts() if posts is None else posts
+    if not any(p.get("thread") == thread and str(p.get("from", "")).lower() == name and ts(p.get("at")) >= since for p in posts): return None
+    try:
+        if any(json.loads(l).get("thread") == thread for l in FILE_ASKED.read_text().splitlines() if l.strip()): return None
+    except (OSError, ValueError): pass
+    tagged = False
+    try: tagged = any(r.get("kind") == "tag" and r.get("thread") == thread for r in map(json.loads, filter(str.strip, FILE.read_text().splitlines())))
+    except (OSError, ValueError): pass
+    unfiled = not tagged and focus_of(st, thread, posts) is None
+    untitled = not _titled(thread)
+    if not (unfiled or untitled): return None
+    try:
+        STATE.mkdir(parents=True, exist_ok=True)
+        with FILE_ASKED.open("a") as f: f.write(json.dumps({"thread": thread, "name": name, "at": now(), "file": unfiled, "title": untitled}) + "\n")
+    except OSError: return None
+    out = []
+    if unfiled:
+        names = ", ".join(f"{f['id']} ({f['name']})" for f in st["foci"] if not f.get("off"))[:900]
+        out.append(f"This conversation is in no focus, so the person won't find it on a focus page. File it in the focus it serves: "
+                   f"hive focus tag {thread} FOCUS. The foci are: {names}. If none fits and the work will last, make one: hive focus new ID \"Name\" --thread {thread}. If it is plumbing the person needn't see, say so: hive focus tag {thread} --off.")
+    if untitled:
+        out.append(f"The conversation still shows its first words as a title. Give it a short title in plain words that says what it is about: "
+                   f"hive rename {thread} \"…\" (the person's own title always wins).")
+    return " ".join(out)
+
 def fmt_lint(items):
     return "\n".join(f"{i['focus']}: {i['kind']}: {i['what']}" + (f"  (in: {i['in']})" if i.get("in") else "") + f"\n    → {i['fix']}" for i in items) or "nothing flagged"
 
@@ -330,7 +391,10 @@ def main(argv=None):
     p = sp.add_parser("show"); p.add_argument("focus")
     p = sp.add_parser("keeper"); p.add_argument("focus")
     p = sp.add_parser("aim"); p.add_argument("focus"); p.add_argument("text", nargs="*")
-    p = sp.add_parser("check"); p.add_argument("what", choices=["add", "list", "done", "untick"]); p.add_argument("args", nargs="*")
+    p = sp.add_parser("check"); p.add_argument("what", choices=["add", "list", "done", "untick", "confirm", "ticked"]); p.add_argument("args", nargs="*"); p.add_argument("--why", default="")
+    p = sp.add_parser("later", help="put off a needs-you item: later (moved to the focus page's Later), moot (not needed), back (shown again)")
+    p.add_argument("what", choices=["later", "moot", "back", "list"]); p.add_argument("key", nargs="?"); p.add_argument("--th", default=""); p.add_argument("--focus", default="")
+    p.add_argument("--text", default=""); p.add_argument("--t", type=float, default=0)
     p = sp.add_parser("lint"); p.add_argument("focus", nargs="?"); p.add_argument("--json", action="store_true")
     p = sp.add_parser("file"); p.add_argument("path"); p.add_argument("--post"); p.add_argument("--focus"); p.add_argument("--off", action="store_true")   # a kb note filed under a focus (kb file --from/--focus calls this)
     p = sp.add_parser("order"); p.add_argument("ids", nargs="*"); p.add_argument("--reset", action="store_true")
@@ -401,16 +465,20 @@ def main(argv=None):
             f = find(st, a.args[0])
             if not f: sys.exit(f"hive focus check: no focus {a.args[0]!r}")
             r = append({"kind": "check", "focus": f["id"], "id": check_id(recs), "text": " ".join(" ".join(a.args[1:]).split())[:200]}); print(f"{r['id']}: {r['text']}"); return
-        if a.what == "list":
+        if a.what in ("list", "ticked"):   # ticked: the person's ticks no agent has checked yet
             f = find(st, a.args[0]) if a.args else None
             for g in st["foci"]:
                 if f and g is not f: continue
-                for c in g["checks"]: print(f"[{'x' if c['done'] else ' '}] {c['id']} {g['id']}: {c['text']}")
+                for c in g["checks"]:
+                    if a.what == "ticked" and not (c["done"] and not c.get("ok")): continue
+                    print(f"[{'x' if c.get('ok') else '?' if c['done'] else ' '}] {c['id']} {g['id']}: {c['text']}" + (" (ticked by the person: check it, then confirm or untick --why)" if c["done"] and not c.get("ok") else ""))
             return
-        known = {c["id"] for g in st["foci"] for c in g["checks"]}
+        known = {c["id"]: c for g in st["foci"] for c in g["checks"]}
         for cid in a.args:
             if cid not in known: sys.exit(f"hive focus check: no item {cid}")
-            append({"kind": "check_done" if a.what == "done" else "check_untick", "id": cid})
+            if a.what == "confirm" and not known[cid]["done"]: sys.exit(f"hive focus check: {cid} isn't ticked; use done")
+            kind = {"done": "check_done", "untick": "check_untick", "confirm": "check_ok"}[a.what]
+            append({"kind": kind, "id": cid, **({"why": " ".join(a.why.split())[:200]} if a.what == "untick" and a.why else {})})
         print(f"{a.what}: {' '.join(a.args)}"); return
     if a.cmd == "lint":
         f = find(st, a.focus) if a.focus else None
@@ -440,10 +508,19 @@ def main(argv=None):
             if f["id"] not in ids: ids.append(f["id"])
         append({"kind": "order", "ids": ids})
         print("order: " + " ".join(f["id"] for f in state()["foci"])); return
+    if a.cmd == "later":
+        if a.what == "list":
+            for x in st["later"]: print(f"{x['what']:5} {x.get('focus') or '-'} #{x.get('th') or '-'}: {x.get('text') or ''}  [{x['key']}]")
+            return
+        if not a.key or len(a.key) > 200: sys.exit("hive focus later later|moot|back KEY [--th T --focus F --text X --t SECONDS]")
+        if a.what == "back" and a.key not in {x["key"] for x in st["later"]}: sys.exit(f"hive focus later: {a.key!r} isn't put off")
+        f = find(st, a.focus) if a.focus else None
+        append({"kind": "later", "key": a.key, "what": a.what, **({} if a.what == "back" else {"th": a.th[:80] or None, "focus": f["id"] if f else None, "text": " ".join(a.text.split())[:300], "t": a.t or None})})
+        print(f"{a.what}: {a.key}"); return
     if a.cmd == "json":
         posts = board_posts()
         for f in st["foci"]: f["keeper"] = keeper(f, posts)
-        out = {"foci": st["foci"], "tags": st["tags"], "misc": MISC, "lint": lint(st, posts), "activity": activity(st, posts, run_starts(now() - WINDOWS["week"])), "at": now()}
+        out = {"foci": st["foci"], "tags": st["tags"], "later": st["later"], "misc": MISC, "lint": lint(st, posts), "activity": activity(st, posts, run_starts(now() - WINDOWS["week"])), "at": now()}
         print(json.dumps(out, default=str)); return
 
 if __name__ == "__main__": main()

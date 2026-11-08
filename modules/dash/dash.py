@@ -442,6 +442,29 @@ def focus_do(d):
         if r.returncode: raise ValueError((r.stderr or r.stdout or "focus.py failed").strip()[:200])
         foci_c.t = 0
         return {"ok": True, "order": ids, "said": r.stdout.strip()}
+    if "check" in d:   # the focus page's to-do boxes (the person, 110812372f5e: "why can I not click these check marks")
+        cid = str(d.get("check") or "")
+        if not re.fullmatch(r"c\d{1,6}", cid): raise ValueError("bad check")
+        r = subprocess.run(["nice", "-n", "15", sys.executable, "-I", str(HOME / "core" / "focus.py"), "check", "done" if d.get("done") is not False else "untick", cid],
+                           capture_output=True, text=True, timeout=30, env={**os.environ, "HIVE_NAME": "person"})
+        if r.returncode: raise ValueError((r.stderr or r.stdout or "focus.py failed").strip()[:200])
+        foci_c.t = 0
+        return {"ok": True, "check": cid, "done": d.get("done") is not False}
+    if "later" in d:   # a needs-you item put off: later, moot (not needed) or back (the person, 1108133400fb); focus.py keeps it (hive focus later)
+        x = d.get("later") if isinstance(d.get("later"), dict) else {}
+        what, key = str(x.get("what") or ""), str(x.get("key") or "")
+        if what not in ("later", "moot", "back") or not key or len(key) > 200 or not key.isprintable(): raise ValueError("bad later")
+        args = ["later", what, key]
+        if what != "back":
+            th, fid = str(x.get("th") or ""), str(x.get("focus") or "").lower()
+            if th and THREAD_NAME.fullmatch(th): args += ["--th", th]
+            if fid and FOCUS_ID.fullmatch(fid): args += ["--focus", fid]
+            args += ["--text=" + str(x.get("text") or "")[:300].replace("\n", " ")]
+            if isinstance(x.get("t"), (int, float)) and x["t"] > 0: args += ["--t", str(float(x["t"]))]
+        r = subprocess.run(["nice", "-n", "15", sys.executable, "-I", str(HOME / "core" / "focus.py")] + args, capture_output=True, text=True, timeout=30, env={**os.environ, "HIVE_NAME": "person"})
+        if r.returncode: raise ValueError((r.stderr or r.stdout or "focus.py failed").strip()[:200])
+        foci_c.t = 0
+        return {"ok": True, "later": what, "key": key}
     th = str(d.get("thread") or "").strip(); f = str(d.get("focus") or "").strip().lower(); off = bool(d.get("off"))
     if not THREAD_NAME.fullmatch(th): raise ValueError("bad thread")
     if not off and not FOCUS_ID.fullmatch(f): raise ValueError("bad focus")
@@ -3913,6 +3936,12 @@ def settings_norm(v):
             "share": {k: sh.get(k) is True for k in SHARE_KEYS}, "setup_done": v.get("setup_done") is not False}
 
 
+def install_id():
+    """The report module's install id (reports/state.json beside settings.json), or None before it has made one."""
+    v = (jload(SETTINGS.parent / "reports" / "state.json", {}) or {}).get("install")
+    return v if isinstance(v, str) and re.fullmatch(r"[0-9a-f]{32}", v) else None
+
+
 def settings_brief():
     v = settings_raw()
     return settings_norm(v) if v is not None else None
@@ -4614,6 +4643,7 @@ def serve(port):
             info = {"route": self.route, "can": list(self.can), "app": self.route != "open", "brand": brand_view()}
             if self.route != "open": info.update(setup={**SETUP.get(), "starter": starter_up()}, secrets_on=self.secrets_on, settings=settings_brief())  # the starter heartbeat is one stat, so read it fresh: from the 20 s cache "isn't running" and "back" took ~35-43 s to show
             if self.route != "open" and "modules" in self.can: info["features"] = ["slack-door"]; info["slack_door"] = slack_door_view()  # Settings > Modules > slack-door "Set up" (POST /api/slack-door)
+            if self.route != "open" and install_id(): info["install"] = install_id()   # the report module's install code, shown at the foot of Settings so the owner can match this Hive to its reports
             if self.route != "open": info["default_model"] = default_model(); info["voice"] = voice_ready(); info["phone"] = phone_ready() and "post" in self.can
             if self.mode: info.update(mode=self.mode, full_left=self.full_left)
             if self.signer: info["signer"] = self.signer

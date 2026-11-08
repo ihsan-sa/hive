@@ -5,6 +5,7 @@
 // and a collapsed one-line form for file pages (kbChat(ctx, { compact: true })).
 import { h } from "../core/dom.js";
 import { S, post, can } from "../core/store.js";
+import { displayText } from "../core/model.js";
 import { markdown } from "../ui/markdown.js";
 import { button, icon } from "../ui/kit.js";
 import { href, threadHref } from "../core/router.js";
@@ -70,7 +71,7 @@ export function kbChat(ctx, { compact = false, cur = "" } = {}) {
   const log = Q.th ? h("div", { class: "kb-ask-log", "data-key": "log", "aria-live": "polite" },
     posts.map(p => {
       if (p.from === "person") return h("div", { class: "kb-ask-m", "data-who": "me", "data-key": p.id },
-        h("p", null, String(p.text).replace(/^[^]*?Knowledge-page question from the person[^]*?Question: /, "")));
+        h("p", null, displayText({ ...p, text: String(p.text).replace(/^[^]*?Knowledge-page question from the person[^]*?Question: /, "") })));
       const { node, found } = linked(markdown(p.text), cur); found.forEach((_, k) => nfiles.add(k));
       node.classList.add("kb-ask-body");
       return h("div", { class: "kb-ask-m", "data-who": "agent", "data-key": p.id },

@@ -9,8 +9,8 @@
 import { h, morph } from "../core/dom.js";
 import { S, SYS, can, OUTSIDE, built, post as apiPost, poll, jget } from "../core/store.js";
 import { simpleOn, plainName, hiveName } from "../core/simple.js";
-import { loadNeedsYou, needsN, needsHref, waitsOn, waitingOn } from "../core/needs.js";
-import { loadFoci, fociFailed, fociOrder, focusOf, focusById, activeThreads, askedOf, agentsOf, stateOf, pills, plainPills, needSource, isCode, threadLine, focusName, MISC, activityOf, shareOf, fractionWords, pct, usd, needsOf, moveFocus, foci } from "../core/foci.js";
+import { loadNeedsYou, needsN, needsSplit, needsHref, waitsOn, waitingOn, waitingNow, waitingOlder } from "../core/needs.js";
+import { loadFoci, fociFailed, fociOrder, focusOf, focusById, activeThreads, askedOf, needAt, agentsOf, stateOf, pills, plainPills, needSource, isCode, scrub, codePill, railSay, threadLine, focusName, MISC, activityOf, shareOf, fractionWords, pct, usd, needsOf, moveFocus, foci } from "../core/foci.js";
 import { newIn } from "./focus.js";
 import { SIDE_THREAD, agentState, agentStatus, btwParent, threadParent, threadChildren, isAgent, isRunning, tierOf, threadTitle, threadState, threadPeople, isSystemThread, SHOW, postKind, threadKinds, closingPosts, displayText, postSource, inUse, fresh7, asksQuestion, fileInfo } from "../core/model.js";
 import { ago, dayName, stamp, clock, dur, short, mdPlain, now, plural, DAY, MIN, HOUR, money } from "../core/format.js";
@@ -24,6 +24,8 @@ import { button, empty, icon, input, list, scrim, seg, statusDot, statusWord } f
 import { agentRef, avatars, copyButton, threadRef } from "../ui/refs.js";
 import { message, messageHead, messageReceipt, localMessage, markWords, pollDelivered, marksSig, delivery, onJump, helperFolds } from "../ui/message.js";
 import { asidePanel, asideOpen, closeAside } from "../ui/aside.js";
+import { openQuick, quickOpen, closeQuick, quickPanel, laterButtons } from "../ui/quick.js";
+import { when } from "../ui/when.js";
 import { downloadMarkdown, printScript } from "../ui/export.js";
 import { shareDialog } from "../ui/share.js";
 import { pinned, important, faded, meta as tmeta, archived, setMeta, renameDialog, openCard, markSeen, threadCrumb, titleExtras } from "../ui/threadmeta.js";
@@ -31,7 +33,7 @@ import { callFor, hangUp } from "../ui/phone.js";
 import { brought } from "../ui/brought.js";
 import { firstJobs, closeLine } from "../ui/firstjobs.js";
 import { hiveStopped } from "../ui/shell.js";
-import { composer, cancelReply, replyTo, say, outFor, outSig, actions as outActions, dropZone, recipient, hasDraft, quoteRef } from "../ui/composer.js";
+import { composer, interruptButton, cancelReply, replyTo, say, outFor, outSig, actions as outActions, dropZone, recipient, hasDraft, quoteRef, prefill } from "../ui/composer.js";
 
 const STEP = 500, FIRST = 250, NEAR = 60, GROUP = 10 * MIN, HELPER_AFTER = 3 * MIN;
 const NONE = [];
@@ -49,13 +51,13 @@ const grip = () => h("div", { class: "cm-grip", role: "separator", "aria-orienta
   ondblclick: e => setSide(e.target.closest(".cm"), 272),
   onkeydown: e => { const d = e.key === "ArrowLeft" ? -24 : e.key === "ArrowRight" ? 24 : 0; if (d) { e.preventDefault(); setSide(e.target.closest(".cm"), sideW + d); } } });
 // The side list's two views (the person, 11071518 2bab): "focus" (the default) puts each conversation under its focus, in the order of the
-// home cards, Misc last, helpers folded under the one they came from; "recent" is every conversation in one flat list,
+// home cards, Other last, helpers folded under the one they came from; "recent" is every conversation in one flat list,
 // newest activity first, helpers included. hideFaded leaves out the ones marked Likely not needed. Both kept in this browser.
 const VIEW_KEY = "hive.comms.view", HIDE_KEY = "hive.comms.hidefaded";
 const store = (k, v) => { try { localStorage.setItem(k, v); } catch (e) { /* this page only */ } };
 const C = { view: (() => { try { const v = localStorage.getItem(VIEW_KEY); return v === "recent" ? v : "focus"; } catch (e) { return "focus"; } })(),
-  hideFaded: (() => { try { return localStorage.getItem(HIDE_KEY) === "1"; } catch (e) { return false; } })(),
-  err: "", imp: false, arch: false, conv: undefined, q: "", show: null, limit: FIRST, tq: "", scope: "recent", next: null, menu: null, find: false, strip: false };
+  hideFaded: (() => { try { return localStorage.getItem(HIDE_KEY) !== "0"; } catch (e) { return true; } })(),   // on unless the person turned it off (2026-11-08)
+  err: "", imp: false, conv: undefined, q: "", show: null, limit: FIRST, tq: "", scope: "recent", next: null, menu: null, find: false, strip: false };
 let errTimer = 0;
 /** A change to a conversation (pin, star, archive) is shown at once; when the server refuses it the list goes back, and this says why for a few seconds. */
 const tryMeta = (th, patch, ctx) => setMeta(th, patch).catch(e => { C.err = "Couldn't save that: " + (e && e.message || "the server didn't answer") + "."; clearTimeout(errTimer); errTimer = setTimeout(() => { C.err = ""; ctx.update(); }, 8000); ctx.update(); });
@@ -73,7 +75,8 @@ function conversation(arg) {
   if (!arg) return app() ? { arg: null, home: true } : { arg: null, all: true };
   if (arg === "~new") return { arg, home: true, open: true };
   if (arg === "~all") return { arg, all: true };
-  if (arg === "~list") return { arg, home: true, list: true };   // R14: on a phone, the rail as a page of its own (search, Show, By focus / By recency, + per focus); elsewhere the home
+  if (arg === "~list") return { arg, home: true, list: true };
+  if (arg === "~archived") return { arg, home: true, archived: true };   // the archived conversations, each with Bring back   // R14: on a phone, the rail as a page of its own (search, Show, By focus / By recency, + per focus); elsewhere the home
   if (arg[0] !== "@") return { arg, thread: arg };
   const names = arg.slice(1).split("+");
   return names.length === 2 ? { arg, pair: names } : { arg, agent: names[0] };
@@ -311,7 +314,7 @@ const authorName = n => (n === "person" ? "You" : plainName(n));
 const tierLead = th => (app() ? null : h("span", { class: "ref-sw", "data-tone": tier(tierOf(th)).tone, title: tier(tierOf(th)).label }));
 
 /** One thread's state in a few words, for the list: shape, colour and the words. */
-const STATE_WORDS = { asks: () => "Waiting for your answer", working: s => (simpleOn() ? "Working on it" : `${s.who} working`), quiet: s => (simpleOn() ? null : `${s.who} quiet`), stuck: () => (simpleOn() ? "Taking longer than it should" : "Stuck"), queue: s => (simpleOn() ? "Waiting its turn" : `${s.who} in the job queue`),
+const STATE_WORDS = { asks: () => "Waiting for your answer", working: s => (simpleOn() ? "Working on it" : [codePill(s.who), " working"]), quiet: s => (simpleOn() ? null : [codePill(s.who), " quiet"]), stuck: () => (simpleOn() ? "Taking longer than it should" : "Stuck"), queue: s => (simpleOn() ? "Waiting its turn" : [codePill(s.who), " in the job queue"]),
   queued: () => "Waiting to start", limited: () => (simpleOn() ? "Taking a break" : "Stopped at a usage limit"), failed: () => (simpleOn() ? "Ran into a problem" : "Stopped with an error"), foryou: () => "New reply for you", done: () => null };
 function stateTag(st) {
   const w = (STATE_WORDS[st.key] || (() => null))(st);
@@ -387,13 +390,11 @@ function askRows(c) {
   const also = (S.shown || []).filter(r => r.from === a.from && r.at * 1000 >= AI.at - 5000 && S.threads.has(r.thread));   // the app's box above the list holds these; the developer look has no box
   return [...note(q, a.text, { whole: true }), ...(app() ? [] : also.map(r => ({ key: r.thread, href: threadHref(r.thread), current: c.thread === r.thread, title: threadTitle(r.thread), text: r.why || "" })))];
 }
-// By focus: a conversation sits under its focus (core/foci.js: the tag, the focus's own thread, else its parent's), the rest under Misc.
+// By focus: a conversation sits under its focus (core/foci.js: the tag, the focus's own thread, else its parent's), the rest under Other.
 const byFocusOn = () => app() && !simpleOn() && !C.imp && C.view === "focus";
-// A conversation the person opened from the web app (its thread is named after their first post) belongs to no focus by nature: those sit
-// under "Conversations" ("c:"), so Misc holds only untagged work (the person, 1108032432b9: 194 of Misc's 522 were such chats).
-const personChat = th => { const d = S.threads.get(th), p = d && d.posts[0]; return !!p && p.id === th && p.from === "person"; };
-// A helper (started by an agent from a chat) follows the chat it came from: the top of its untagged chain decides, so its fold stays whole.
-const focusSec = th => { let x = th, top = th; for (let i = 0; i < 8 && x; i++) { const f = focusOf(x); if (f) return "f:" + f; top = x; x = threadParent(x); } return personChat(top) ? "c:" : "f:"; };
+// Everything in no focus, the person's own chats and untagged work alike, is one list, "Other" ("f:"), under the foci, newest first and never folded
+// (the person, 11081454b6bd: Misc and Conversations were two names for the same thing). A helper follows the chat it came from up its chain.
+const focusSec = th => { let x = th; for (let i = 0; i < 8 && x; i++) { const f = focusOf(x); if (f) return "f:" + f; x = threadParent(x); } return "f:"; };
 function threadRows(c, ctx) {
   if (C.tq.trim().startsWith("@")) return aiRows(c);
   const ws = words(C.tq);
@@ -426,16 +427,17 @@ function threadRows(c, ctx) {
         text: `${d.posts.length} · ${lp.from}: ${short(mdPlain(lp.text).replace(new RegExp("^(@\\S+\\s+)*" + who + ":\\s*"), ""), 60)}`, sec: secOf(d.name, null), dim: faded(d.name) };
     }
     const st = threadState(d.name, seen), par = flat && threadParent(d.name);
-    const say = short(mdPlain(displayText(lp)).replace(/\s+/g, " "), 70);
+    const say = railSay(mdPlain(displayText(lp)));
     const from = par ? [h("span", { class: "tm-from", title: "A helper conversation, started from " + threadTitle(par) }, "from " + short(threadTitle(par), 28)), " · "] : null;
     return { key: d.name, href: threadHref(d.name), current: c.thread === d.name, title: threadTitle(d.name), meta: ago(d.last).replace(" ago", ""),
       lead: [tierLead(d.name), h("span", { title: status(st.key).label || "" }, statusDot(st.key === "done" ? "ended" : st.key, { live }))],
-      text: [from, d.name !== c.thread && hasDraft(d.name) ? [h("span", { class: "cm-draft", title: "You left unsent text in this conversation" }, "Draft"), " · "] : null, fadeTag(d.name) || stateTag(st), fadeTag(d.name) || stateTag(st) ? " · " : null, lp.from === "person" ? `You: ${say}` : say], sec: secOf(d.name, st), dim: faded(d.name) };   // no agent code on the row: the conversation names its agent
+      text: [from, d.name !== c.thread && hasDraft(d.name) ? [h("span", { class: "cm-draft", title: "You left unsent text in this conversation" }, "Draft"), " · "] : null, fadeTag(d.name) || stateTag(st), fadeTag(d.name) || stateTag(st) ? " · " : null, lp.from === "person" ? ["You: ", ...say] : say], sec: secOf(d.name, st), dim: faded(d.name) };   // no agent code on the row: the conversation names its agent
   };
   const dress = (r, th = r.key.replace(/~recent$/, "")) => {
     const im = important(th), pn = pinned(th), m = tmeta(th);
     if (im) r.lead = [h("span", { class: "tm-imp", title: m.impWhy ? `Important, from ${m.impBy || "an agent"}: ${m.impWhy}` : m.impBy ? `Important, marked by ${m.impBy}` : "Important" }, icon("star")), r.lead];
     if (pn && !im) r.lead = [h("span", { class: "tm-pin", title: "Pinned to the top" }, icon("pin")), r.lead];   // star and pin are set from the conversation's title menu (R6 review: two hover buttons on every row was clutter)
+    if (app() && !simpleOn() && can("post")) r.acts = rowMore(th, ctx);   // the person, 11081252a9c1 / 110812537bec: one ⋯ on the right of the row, on hover, with pin, star, archive, not needed
     return r;
   };
   // Recent holds every conversation by last activity, so a pinned, important or needs-you one also keeps its place there (the person, 11060006f821):
@@ -453,8 +455,8 @@ function threadRows(c, ctx) {
   };
   const rowsOut = !app() ? ds.map(mk) : roots.flatMap(d => {
     const r = dress(mk(d)), kids = kidsOf.get(d.name) || [], rest = topic ? topic(d.name) : "rest";   // by focus, "the rest" is the conversation's focus
-    if (r.sec === "rest") r.sec = rest;
-    const own = kids.filter(k => !["rest", "arch"].includes(secOf(k.name, threadState(k.name, seen)))).map(k => dress(mk(k)));   // a helper's own row where it needs the person
+    if (r.sec === "rest" || (topic && (r.sec === "imp" || r.sec === "need"))) r.sec = rest;   // By focus there are no Important or Needs you sections (the person, 11081223f77a): the row stays under its focus, its star and state tag still show
+    const own = kids.filter(k => !["rest", "arch"].includes(secOf(k.name, threadState(k.name, seen))) && !(topic && ["imp", "need"].includes(secOf(k.name, threadState(k.name, seen))))).map(k => dress(mk(k)));   // a helper's own row where it needs the person
     if (C.imp || r.sec === rest || r.sec === "arch") return [r, ...kidRows(d, r.sec), ...own];
     return [r, dress({ ...mk(d), key: d.name + "~recent", sec: rest }), ...kidRows(d, rest), ...own];
   });
@@ -466,6 +468,8 @@ const KIDS = new Set();   // conversations whose helper fold is open, this page 
 // Folded sections (the person, 11040202d77c): kept in this browser.
 const FOLD_KEY = "hive.comms.folded";
 const FOLD = new Set((() => { try { return JSON.parse(localStorage.getItem(FOLD_KEY) || "[]"); } catch (e) { return []; } })());
+// First visit in this browser (nothing saved yet): every section starts collapsed (the person, 1108133751d8).
+let foldFresh = (() => { try { return localStorage.getItem(FOLD_KEY) === null; } catch (e) { return false; } })();
 function saveFold() { try { localStorage.setItem(FOLD_KEY, JSON.stringify([...FOLD])); } catch (e) { /* this page only */ } }
 // Collapse or expand all (the person, 11061437ab67): the section heads and the helper folds in the list now. syncThreads fills L.foldSecs and L.foldKids.
 // Which way it goes follows the sections, so a list with most of them open offers Collapse all; a list with no heads goes by its helper folds.
@@ -475,14 +479,14 @@ const foldNone = () => !(L.foldSecs || []).length && !(L.foldKids || []).length;
 function foldAll(ctx) {
   const open = foldShut(), ss = L.foldSecs || [], ks = L.foldKids || [];
   if (open) { ss.forEach(k => FOLD.delete(k)); ks.forEach(n => KIDS.add(n)); }
-  else { ss.forEach(k => FOLD.add(k)); KIDS.clear(); C.arch = false; }   // Expand all leaves Archived shut: it is out of the way on purpose
+  else { ss.forEach(k => FOLD.add(k)); KIDS.clear(); }
   saveFold(); ctx.update();
 }
-// The list in parts: Pinned, Needs you, the rest, and Archived folded at the end. A search is one list.
-// By focus the rest is one section per focus ("f:<id>") in the home cards' order, every focus listed (its "+" starts a conversation in it), then the
-// person's own chats ("c:", Conversations) and Misc ("f:") last, both only with rows.
+// The list in parts: Pinned, Needs you, the rest, and a link to the Archived page at the end (#comms/~archived). A search is one list.
+// By focus the rest is one section per focus ("f:<id>") in the home cards' order, every focus listed (its "+" starts a conversation in it), then
+// Other ("f:"), every conversation in no focus, last and always open.
 // The person's order of the foci (the person, 1108031067f6): drag a focus's heading in the list, or a card's head on the home, onto another; one order serves both.
-// Without a mouse: Alt+Up/Down on a focus heading, or the card's move buttons. Misc stays last and doesn't move.
+// Without a mouse: Alt+Up/Down on a focus heading, or the card's move buttons. Other stays last and doesn't move.
 const DND = { id: null, el: null, at: 0 }, DND_TYPE = "text/x-h2-focus";
 const dropMark = el => { if (DND.el && DND.el !== el) DND.el.removeAttribute("data-drop"); DND.el = el; };
 function moved(err, ctx) { if (err) C.err = "Couldn't move the focus: " + err + "."; ctx.update(); }
@@ -514,13 +518,16 @@ function sections(rs, ctx, opts) {
   const by = { pin: [], imp: [], need: [], rest: [], arch: [] }, tops = [];
   const byFocus = byFocusOn();
   if (byFocus) for (const f of fociOrder()) { const k = "f:" + (f.id || ""); if (!by[k]) { by[k] = []; tops.push(k); } }
-  for (const r of rs) { const k = r.sec || "rest"; if ((k.startsWith("f:") || k === "c:") && !by[k]) { by[k] = []; tops.push(k); } (by[k] || by.rest).push(r); }
-  const order = new Map(tops.map((k, i) => [k, k === "f:" ? 1e9 : k === "c:" ? 1e9 - 1 : i])); tops.sort((a, b) => order.get(a) - order.get(b));
-  const label = k => k === "f:" ? "Misc" : k === "c:" ? "Conversations" : focusName(focusById(k.slice(2)) || { name: k.slice(2) });
+  for (const r of rs) { const k = r.sec || "rest"; if (k.startsWith("f:") && !by[k]) { by[k] = []; tops.push(k); } (by[k] || by.rest).push(r); }
+  const order = new Map(tops.map((k, i) => [k, k === "f:" ? 1e9 : i])); tops.sort((a, b) => order.get(a) - order.get(b));
+  const label = k => k === "f:" ? "Other" : focusName(focusById(k.slice(2)) || { name: k.slice(2) });
   const parts = [...SECS.slice(0, 3), ...tops.map(k => [k, label(k)]), SECS[3]].filter(([k]) => by[k].length || (byFocus && k.startsWith("f:") && k !== "f:")), heads = parts.length > 1 || by.pin.length;
-  L.foldSecs = heads ? parts.map(([k]) => k) : [];
+  L.foldSecs = heads ? parts.map(([k]) => k).filter(k => k !== "f:") : [];   // Other has no fold
+  if (foldFresh && heads) { foldFresh = false; L.foldSecs.forEach(k => k !== L.here && FOLD.add(k)); saveFold(); }   // a focus page open beside it keeps its own section open
   const sec = (k, label, rows) => {
     if (!heads) return h("div", { class: "tm-sec", "data-key": "sec:" + k, "data-sec": k }, list(rows, { ...opts, empty: "" }));
+    if (k === "f:") return h("div", { class: "tm-sec", "data-key": "sec:" + k, "data-sec": k },   // Other: a plain heading, its rows always shown
+      h("div", { class: "tm-sec-hw" }, h("p", { class: "tm-sec-h tm-sec-other" }, label)), list(rows, { ...opts, empty: "" }));
     const here = L.here === k, shut = FOLD.has(k), fid = k.startsWith("f:") ? k.slice(2) : null;   // the focus page open beside it: its section is marked; pressing its heading again folds it, the page stays
     const toggle = () => { FOLD.has(k) ? FOLD.delete(k) : FOLD.add(k); saveFold(); ctx.update(); };
     const dnd = focusDnd(fid, ctx);
@@ -538,15 +545,15 @@ function sections(rs, ctx, opts) {
   };
   return h("div", { class: "tm-secs" },
     parts.length ? parts.map(([k, l]) => sec(k, l || (app() ? "Recent" : "Threads"), by[k])) : by.arch.length ? null : list([], opts),
+    // Archived is a page of its own, where a conversation can be brought back (the person, 11081454b6bd); the list ends with the way there.
     by.arch.length ? h("div", { class: "tm-sec", "data-key": "sec:arch", "data-sec": "arch" },
-      h("button", { type: "button", class: "tm-sec-h tm-arch-b", "aria-expanded": String(!!C.arch), onclick: () => { C.arch = !C.arch; ctx.update(); } },
-        icon(C.arch ? "chevron-down" : "chevron-right"), `Archived (${by.arch.length})`),
-      C.arch ? list(by.arch, { ...opts, empty: "" }) : null) : null);
+      h("a", { class: "tm-sec-h tm-arch-b", href: href("comms", "~archived"), "aria-current": C.conv === "~archived" ? "page" : null, title: "Conversations out of the list; bring one back from there" },
+        icon("archive"), `Archived (${by.arch.length})`)) : null);
 }
 function syncThreads(c, ctx) {
   const tl = document.querySelector("#main .cm-tl"); if (!tl) return;
   if (!simpleOn()) loadFoci();   // the foci (core/foci.js); a store emit when they change
-  const sig = [S.ver, C.view, C.hideFaded, S.foci && S.foci.at, S.foci && (S.foci.foci || []).map(f => f.id).join(), C.scope, C.arch, C.imp, tmetaSig(), [...FOLD].join(), [...KIDS].join(), C.tq, AI.st + AI.res.length, AI.tag, S.shown && S.shown.length, showMask(), c.arg, Math.floor(now() / 3e4), S.runSig, marksSig().length].join("|");
+  const sig = [S.ver, C.view, C.hideFaded, S.foci && S.foci.at, S.foci && (S.foci.foci || []).map(f => f.id).join(), C.scope, C.conv, C.imp, tmetaSig(), [...FOLD].join(), [...KIDS].join(), C.tq, AI.st + AI.res.length, AI.tag, S.shown && S.shown.length, showMask(), c.arg, Math.floor(now() / 3e4), S.runSig, marksSig().length].join("|");
   if (tl === L.tl && sig === L.tlSig) return;
   const fresh = tl !== L.tl || c.arg !== L.tlConv;
   L.tl = tl; L.tlSig = sig; L.tlConv = c.arg;
@@ -603,6 +610,16 @@ function strip(th) {
       room && post ? button("Carry on", () => say(th, "Please carry on where you stopped.", st.who), { size: "s" }) : null, { key: "limited" }));
   }
   if (st.key === "failed") out.push(line("failed", [who(st.who), simpleOn() ? " ran into a problem. Send a message and it tries again." : ` stopped with an error ${ago(st.t)}. A message wakes it to try again.`], null, { key: "failed" }));
+  for (const a of run) {
+    if (st.key === "asks" && a.name === st.who) continue;
+    const s = agentState(a);
+    if (simpleOn()) { if (!out.some(x => x.dataset.key === "run")) out.push(line("working", "Your Hive is working on it.", can("stop") ? stopButton("Stop this work", () => askStop(a.name)) : null, { key: "run", live: true })); continue; }
+    // Closed it reads "a7c31 Editing fetch.py"; how long ago it was active shows only when open.
+    const doing = a.doing ? a.doing.charAt(0).toUpperCase() + a.doing.slice(1) : AGENT_WORDS[s.key] || s.text;
+    out.push(line(s.key, [who(a.name), " ", doing, h("span", { class: "meta cm-line-m" }, " · " + (s.key === "working" ? ago(a.last * 1e3) : s.text))],
+      [post && th ? interruptButton(th, a.name) : null, can("stop") ? stopButton(`Stop ${a.name}`, () => askStop(a.name)) : null], { key: "run:" + a.name, live: true }));
+  }
+  // after the working agents (11081336a82e: folded, the strip shows who works and its Interrupt, not where the conversation sits)
   // Where it sits (the person, 110601450d55): a helper's conversation names the one it came from, and that one lists its helpers.
   const par = app() && threadParent(th), kids = app() ? threadChildren(th) : [];
   if (par) out.push(line("ended", ["Part of ", h("a", { href: threadHref(par) }, short(threadTitle(par), 60)), simpleOn() ? null : [": ", who(d0(th)), " started it from there"]], null, { key: "parent" }));
@@ -611,15 +628,6 @@ function strip(th) {
     const links = ks.slice(0, 5).flatMap((x, i) => [i ? ", " : "", h("a", { href: threadHref(x.k), title: status(x.st.key).label || "" }, short(threadTitle(x.k), 40))]);
     out.push(line(on ? "working" : ask ? "asks" : "ended", [plural(kids.length, "helper conversation"), on ? ` (${on} working${ask ? `, ${ask} waiting on you` : ""})` : ask ? ` (${ask} waiting on you)` : "", ": ", ...links, ks.length > 5 ? ` and ${ks.length - 5} more` : ""],
       post ? button(KIDS.has(th) ? "Hide in list" : "Show in list", () => { KIDS.has(th) ? KIDS.delete(th) : KIDS.add(th); L.ctx && L.ctx.update(); }, { size: "s" }) : null, { key: "kids", live: !!on }));
-  }
-  for (const a of run) {
-    if (st.key === "asks" && a.name === st.who) continue;
-    const s = agentState(a);
-    if (simpleOn()) { if (!out.some(x => x.dataset.key === "run")) out.push(line("working", "Your Hive is working on it.", can("stop") ? stopButton("Stop this work", () => askStop(a.name)) : null, { key: "run", live: true })); continue; }
-    // Closed it reads "a7c31 Editing fetch.py"; how long ago it was active shows only when open.
-    const doing = a.doing ? a.doing.charAt(0).toUpperCase() + a.doing.slice(1) : AGENT_WORDS[s.key] || s.text;
-    out.push(line(s.key, [who(a.name), " ", doing, h("span", { class: "meta cm-line-m" }, " · " + (s.key === "working" ? ago(a.last * 1e3) : s.text))],
-      can("stop") ? stopButton(`Stop ${a.name}`, () => askStop(a.name)) : null, { key: "run:" + a.name, live: true }));
   }
   // A second helper when the agent you wrote to is busy (not built): see PART1.md.
   const mine = lastMine(th), wait = mine && now() - mine.t > HELPER_AFTER && now() - mine.t < 2 * HOUR ? mine.men.map(m => delivery(mine, m)).find(x => x && x.key === "waiting") : null;
@@ -655,6 +663,34 @@ function threadCost(th) {
   for (const [k, f] of Object.entries(U.files)) if (fileInfo(k).thread === th) t += f.c || 0;
   return t;
 }
+// A row's ⋯ (the person, 110812537bec): sits where the row's time is and shows on hover or keyboard focus. Its menu is put on <body>
+// with a fixed place, so the rail's scroll box can't clip it, and goes on a pick, Escape, a press outside, or a scroll.
+let rowM = null;
+function closeRowMenu() { if (!rowM) return; rowM.nodes.forEach(n => n.remove()); rowM.btn.setAttribute("aria-expanded", "false"); rowM.btn.removeAttribute("data-open"); document.removeEventListener("keydown", rowM.key, true); window.removeEventListener("scroll", rowM.scroll, true); rowM = null; }
+function rowMore(th, ctx) {
+  return h("button", { type: "button", class: "lr-more-b", "aria-haspopup": "true", "aria-expanded": "false", title: "Pin, mark important, archive", "aria-label": "Actions for this conversation",
+    onclick: e => { e.preventDefault(); e.stopPropagation(); const b = e.target.closest(".lr-more-b"), was = rowM && rowM.btn === b; closeRowMenu(); if (!was) openRowMenu(b, th, ctx); } }, icon("more"));
+}
+function openRowMenu(b, th, ctx) {
+  const im = important(th), pn = pinned(th), ar = archived(th), fd = faded(th);
+  const it = (label, ic, patch, tip) => h("button", { type: "button", class: "menu-i", role: "menuitem", title: tip || null, onclick: e => { e.stopPropagation(); closeRowMenu(); tryMeta(th, patch, ctx); } }, icon(ic), h("span", { class: "menu-i-t" }, label));
+  const m = h("div", { class: "menu lr-menu", role: "menu", "aria-label": "Conversation actions" },
+    it(pn ? "Unpin" : "Pin to the top", "pin", { pin: !pn }),
+    it(im ? "Not important" : "Mark important", "star", { important: !im }),
+    h("div", { class: "menu-sep", role: "separator" }),
+    it(fd ? "Needed again" : "Not needed", "check", { faded: !fd }, fd ? null : "Grey it in the list; back by itself when something new is for you"),
+    it(ar ? "Unarchive" : "Archive", "archive", { archived: !ar }, ar ? null : "Out of the list until something new is for you"));
+  const sc = h("button", { type: "button", class: "scrim", "aria-label": "Close the menu", tabindex: "-1", onclick: e => { e.stopPropagation(); closeRowMenu(); } });
+  document.body.append(sc, m);
+  const r = b.getBoundingClientRect(), mh = m.offsetHeight, mw = m.offsetWidth;
+  const top = r.bottom + 4 + mh > innerHeight - 8 ? Math.max(8, r.top - 4 - mh) : r.bottom + 4;
+  Object.assign(m.style, { position: "fixed", top: top + "px", left: Math.max(8, Math.min(r.right - mw, innerWidth - mw - 8)) + "px" });
+  b.setAttribute("aria-expanded", "true"); b.dataset.open = "";
+  rowM = { btn: b, nodes: [sc, m], key: e => { if (e.key === "Escape") { e.stopPropagation(); closeRowMenu(); b.focus(); } }, scroll: e => { if (!m.contains(e.target)) closeRowMenu(); } };
+  document.addEventListener("keydown", rowM.key, true); window.addEventListener("scroll", rowM.scroll, true);
+  m.querySelector(".menu-i")?.focus();
+}
+
 function titleMenu(c, n, d, off, ctx) {
   const th = c.thread, full = th && app() && !simpleOn(), mine = can("post");
   const act = (label, ic, fn, title, val) => button(val ? [label, h("small", null, val)] : label, () => { C.menu = null; fn(); ctx.update(); }, { size: "s", kind: "quiet", icon: ic, title });
@@ -673,7 +709,7 @@ function titleMenu(c, n, d, off, ctx) {
     : th ? h("p", { class: "meta cm-tier", title: "This thread's priority" }, h("span", { class: "ref-sw", "data-tone": t.tone }), "Priority: " + t.label) : null;
   const fs = full && mine && S.foci ? fociOrder().filter(f => !f.misc) : [], cur = full ? focusOf(th) : null;
   const focusRow = fs.length ? h("label", { class: "cm-focus-row" }, h("span", null, "Focus"),
-    h("select", { class: "cm-focus-sel", "aria-label": "The focus this conversation is filed under", title: "Which focus this conversation belongs to; No focus leaves it in Misc",
+    h("select", { class: "cm-focus-sel", "aria-label": "The focus this conversation is filed under", title: "Which focus this conversation belongs to; No focus leaves it in Other",
       onchange: e => { const v = e.target.value; C.menu = null; apiPost("/api/focus", v ? { thread: th, focus: v } : { thread: th, off: true }).then(() => loadFoci(true), e2 => { C.err = "Couldn't file it: " + (e2 && e2.message || "the server didn't answer") + "."; }).then(() => ctx.update()); } },
       h("option", { value: "", selected: !cur ? "" : null }, "No focus"), fs.map(f => h("option", { value: f.id, selected: f.id === cur ? "" : null }, focusName(f))))) : null;
   const lead = part(...own,
@@ -699,6 +735,7 @@ function places() {
   const link = (label, ic, to, n, tip) => h("a", { class: "cm-place cm-nav", href: to, title: tip, "data-key": ic, "aria-current": L.place && to === href(L.place) ? "page" : null }, icon(ic), h("span", { class: "cm-place-l" }, label), n ? h("b", { class: "cm-place-n", "aria-label": n + " new" }, String(n)) : null);
   return h("div", { class: "cm-places", role: "group", "aria-label": "Also in Chat", "data-key": "places" },
     link("Yours", "yours", href("yours"), 0, "Every exchange you had, newest first"),
+    can("post") ? link("Needs me", "bell", href("yours", "waits"), needsN(), needsN() ? "What waits on you, newest first" : "Nothing waits on you") : null,
     can("read") ? link("Inbox", "inbox", href("inbox"), IB.unread || 0, "Every message agents sent you") : null,
     can("files") ? link("Mail", "mail", href("mail"), MN.n, MN.n ? "Mail since you last opened it" : "Your mail") : null,
     link("Files", "file", href("made"), 0, "Files and links from your conversations"));
@@ -735,7 +772,7 @@ function showChips(ctx) {
 function viewBar(ctx) {
   const nFaded = [...S.threads.keys()].filter(th => faded(th) && !archived(th)).length;
   return h("div", { class: "cm-views", "data-key": "views" },
-    seg([["focus", "By focus", "Each conversation under its focus, in the order of the home cards, Misc last; helper conversations folded under the one they came from"],
+    seg([["focus", "By focus", "Each conversation under its focus, in the order of the home cards, the rest under Other last; helper conversations folded under the one they came from"],
       ["recent", "By recency", "Every conversation in one list, newest activity first, helper conversations included, each naming the one it came from"]], C.view,
       v => { C.view = v; store(VIEW_KEY, v); ctx.update(); }, { label: "How the list is arranged" }),
     h("button", { type: "button", class: "tm-chip cm-hidefaded", "aria-pressed": String(C.hideFaded),
@@ -805,80 +842,166 @@ function keepScroll(at) {
   const put = () => at.forEach(([el, y]) => { if (el.isConnected && el.scrollTop !== y) el.scrollTop = y; });
   put(); queueMicrotask(put); requestAnimationFrame(put);
 }
-const HOME_NOW = 3, HOME_NEEDS = 2, HOME_LATELY = 2, HOME_THREADS = 4, MISC_THREADS = 6;   // two asks on a card, the rest behind All (R6 review)
-const bullet = t => h("li", null, simpleOn() ? plainPills(t) : pills(t));
-const cardThread = r => { const line = threadLine(r.th); return h("li", null, h("a", { href: threadHref(r.th) }, threadTitle(r.th)), line ? [" \u00b7 ", h("span", { class: "muted" }, simpleOn() ? plainPills(line) : pills(line))] : null); };
-const cardSec = (title, body) => h("div", { class: "fc-sec" }, h("h3", { class: "meta" }, title), body);
-/** The card's gauge: the focus's share of the hive's work (runs and posts) and of its AI cost, today as the bar and the week as the tick
- *  behind it (promised 11071617cbdd). A relative figure, so the cards compare at a glance; the focus page has the numbers.
- *  Simple view says it in words (a quarter), the full view in percent; the title carries the figures. Shown even at zero: a quiet focus reads as quiet. */
-function gauge(id) {
-  const a = activityOf(id); if (!a) return null;
-  const meter = (what, label) => {
-    const d = shareOf(a, "day", what), w = shareOf(a, "week", what);
-    const num = what === "cost" ? `${usd(a.day.cost || 0)} today, ${usd(a.week.cost || 0)} this week` : `${plural(a.day.posts || 0, "message")} today, ${plural(a.week.posts || 0, "message")} this week`;
-    return h("span", { class: "fc-g", "data-what": what, title: `${label}: ${num}; ${pct(d)} of the hive's today, ${pct(w)} over the week` },
-      h("span", { class: "fc-g-l meta" }, label),
-      h("span", { class: "fc-g-t", role: "img", "aria-label": `${label}: ${pct(d)} of the hive's today` }, h("i", { class: "fc-g-wk", style: `left:${(w * 100).toFixed(1)}%` }), h("i", { class: "fc-g-d", style: `width:${(d * 100).toFixed(1)}%` })),
-      );   // no figure beside the bar (R6 review): the bars compare at a glance, the title and the focus page carry the numbers
-  };
-  return h("div", { class: "fc-gauge", "data-key": "gauge" }, meter("work", simpleOn() ? "Of the work" : "Work"), meter("cost", simpleOn() ? "Of the cost" : "Cost"));
+const HOME_NOW = 3, HOME_NEEDS = 2, HOME_LATELY = 2, HOME_THREADS = 4, MISC_THREADS = 6, HOME_AGENTS = 4;   // two asks on a card, the rest behind All (R6 review)
+// The card and the page, v3 (designs/ui-redesign-v3/V3-HANDOFF.md 3a, 3b): what needs the person first, then a time-first timeline, compact rows.
+/** A summary line as {text, at (ms)}: a line is a string (its time is the summary's) or {text, at} once the summary keeps a time per line. */
+export const sumLine = (x, sum) => typeof x === "string" ? { text: x, at: ((sum && sum.at) || 0) * 1e3 || null } : { text: (x && x.text) || "", at: ((x && x.at) || (sum && sum.at) || 0) * 1e3 || null };
+export const sumLines = (sum, k) => ((sum && sum[k]) || []).map(x => sumLine(x, sum)).filter(l => l.text);
+/** A line in running text: agents as the app's agent pill (V3 rule: no agent code outside a pill), a #thread as a quiet link (no square), so a sentence doesn't fill with chips. */
+export function lineText(text) {
+  if (simpleOn()) return plainPills(text);
+  return pills(text).map(x => x && x.nodeType === 1 && x.dataset.kind === "thread" ? h("a", { class: "th", href: x.getAttribute("href"), title: x.title }, x.textContent)
+    : x && x.nodeType === 1 && x.dataset.kind === "agent" ? (x.classList.add("pill"), x) : x);
+}
+/** The same, inside a button: no link inside a button, so refs become spans. */
+export const flat = xs => [].concat(xs).map(x => x && x.nodeType === 1 && x.tagName === "A" ? h("span", { class: x.className, "data-kind": x.dataset.kind || null }, ...x.childNodes) : x);
+/** A needs line's trailing ", in #thread." lifted out: {text, th} (th null when there's none). */
+export function liftIn(text) {
+  const m = /,?\s+in\s+#([\w.-]+?)\.?\s*$/.exec(String(text || ""));
+  return m && S.threads.has(m[1]) ? { text: text.slice(0, m.index), th: m[1] } : { text, th: null };
+}
+/** When a focus last changed: the newest of its summary and its conversations. */
+export function updatedAt(f, rows) {
+  let t = ((f.summary && f.summary.at) || 0) * 1e3;
+  for (const r of rows) { const d = S.threads.get(r.th); if (d && d.last > t) t = d.last; }
+  return t || null;
+}
+/** A conversation's dot: working or queued only; idle draws an empty cell so titles line up. */
+export function rowDot(th) {
+  const k = threadState(th).key;
+  return k === "working" ? { tone: "good", word: "working" } : k === "queued" ? { tone: "warn", word: "waiting to start" } : null;
+}
+function cardRow(r) {
+  const d = S.threads.get(r.th), dot = rowDot(r.th), title = threadTitle(r.th);
+  return h("li", { "data-key": r.th }, h("a", { class: "fc-row", href: threadHref(r.th), title: title + (dot ? ", " + dot.word : "") },
+    dot ? h("span", { class: "st", "data-tone": dot.tone, "aria-hidden": "true" }) : h("span", { "aria-hidden": "true" }), h("b", null, title), d ? when(d.last, "t") : null));
+}
+const cardEv = kind => l => h("li", { class: "fc-ev", "data-kind": kind, "data-key": kind + ":" + l.text.slice(0, 80) }, when(l.at, "t"), h("span", { class: "fc-ev-x", title: l.text }, lineText(l.text)));
+const cardRows = (rows, n) => rows.length ? h("div", { class: "fc-cv" }, h("h3", { class: "fc-sub" }, "Conversations"), h("ul", { class: "fc-rows" }, rows.slice(0, n).map(cardRow))) : null;
+/** The card's … menu: move it earlier or later (the keyboard's drag), and a new conversation. */
+function cardMenu(f, id, ctx) {
+  const all = foci().map(x => x.id), at = all.indexOf(id), mv = all.length > 1, open = C.menu === "fc:" + id, name = focusName(f);
+  const close = () => { C.menu = null; ctx.update(); };
+  const item = (label, fn, off) => h("button", { type: "button", class: "menu-i", role: "menuitem", disabled: off ? "" : null, onclick: () => { C.menu = null; fn(); ctx.update(); } }, label);
+  return h("span", { class: "fc-more pop" },
+    h("button", { type: "button", class: "btn fc-moreb", "data-kind": "icon", "data-size": "s", "aria-haspopup": "menu", "aria-expanded": String(open), "aria-label": `More for ${name}: ${mv ? "move earlier or later, " : ""}new conversation`, title: "More",
+      onclick: () => { C.menu = open ? null : "fc:" + id; ctx.update(); } }, icon("more")),
+    open ? [scrim(close), h("div", { class: "cm-menu menu fc-menu", role: "menu", "data-side": "bottom-end", "data-key": "fcm" },
+      mv ? item("Move earlier", () => moveFocus(id, { step: -1 }).then(err => moved(err, ctx)), at <= 0) : null,
+      mv ? item("Move later", () => moveFocus(id, { step: 1 }).then(err => moved(err, ctx)), at >= all.length - 1) : null,
+      item("New conversation", () => newIn(id)))] : null);
 }
 function focusCard(f, ctx) {
-  const id = f.id || null, page = href("focus", id || "misc"), rows = activeThreads(id).filter(r => !archived(r.th));
-  if (f.misc) return h("article", { class: "fc fc-misc", "data-key": "fc:misc" },
-    h("header", { class: "fc-hd" }, h("a", { class: "fc-name", href: page }, "Misc"), h("span", { class: "meta" }, "not filed under a focus")),
-    h("ul", { class: "fc-th" }, rows.slice(0, MISC_THREADS).map(cardThread)),
-    rows.length > MISC_THREADS ? h("a", { class: "fc-all meta", href: page }, `All ${rows.length}`) : null);
-  const st = stateOf(id), sum = f.summary, ag = agentsOf(id), asked = askedOf(id), nd = needsOf(id), shown = Math.min(asked.length, HOME_NEEDS);
-  const dnd = focusDnd(id, ctx), all = foci().map(x => x.id), at = all.indexOf(id), mv = can("post") && all.length > 1;
-  const move = (step, ic, word) => h("button", { type: "button", class: "fc-mv", title: `Move ${focusName(f)} ${word}`, "aria-label": `Move ${focusName(f)} ${word}`, disabled: (step < 0 ? at <= 0 : at >= all.length - 1) ? "" : null,
-    onclick: () => moveFocus(id, { step }).then(err => moved(err, ctx)) }, icon(ic));
-  return h("article", { class: "fc", "data-key": "fc:" + id, "data-state": st.key, ...dnd.drop },
-    h("header", { class: "fc-hd", ...dnd.grab }, h("a", { class: "fc-name", href: page, draggable: mv ? "false" : null }, focusName(f)), statusWord(st.tone, st.word, null, "fc-state"),
-      ag.now.length ? h("span", { class: "fc-ag" }, ag.now.slice(0, 4).map(n => agentRef(n, { dot: false }))) : null),
-    f.aim ? h("p", { class: "fc-aim" }, f.aim) : null,
-    gauge(id),
-    sum && (sum.now || []).length ? cardSec("Now", h("ul", { class: "fc-ul" }, sum.now.slice(0, HOME_NOW).map(bullet))) : h("p", { class: "meta" }, sum ? "Nothing listed as moving." : "No summary yet."),
-    // Needs you: the summary's asks first (at most two), then All N to the page when the one list has more here; with no asks in the summary, one line with the count.
-    asked.length || nd.length ? cardSec("Needs you", [asked.length ? h("ul", { class: "fc-ul fc-needs" }, asked.slice(0, HOME_NEEDS).map(bullet)) : h("p", { class: "fc-needs-n" }, h("a", { href: page }, `${nd.length} wait${nd.length === 1 ? "s" : ""} on you in its conversations`)),
-      asked.length && nd.length > shown ? h("a", { class: "fc-all meta", href: page }, `All ${nd.length}`) : null]) : null,
-    sum && (sum.lately || []).length ? cardSec("Lately", h("ul", { class: "fc-ul" }, sum.lately.slice(0, HOME_LATELY).map(bullet))) : null,
-    rows.length ? cardSec("Conversations", h("ul", { class: "fc-th" }, rows.slice(0, HOME_THREADS).map(cardThread))) : null,
-    h("footer", { class: "fc-ft" }, h("a", { class: "fc-all meta", href: page }, rows.length > HOME_THREADS ? `All ${rows.length} conversations` : "The focus page"),
-      mv ? h("span", { class: "fc-mvs", role: "group", "aria-label": "Order of the foci" }, move(-1, "chevron-up", "up"), move(1, "chevron-down", "down")) : null,
-      can("post") ? button("New", () => newIn(id), { kind: "quiet", size: "s", icon: "plus", title: "New conversation in " + focusName(f) }) : null));
+  const id = f.id || null, page = href("focus", id || "misc"), rows = activeThreads(id).filter(r => !archived(r.th)), up = updatedAt(f, rows);
+  if (f.misc) return h("article", { class: "fc", "data-key": "fc:misc", "data-misc": "", "data-state": "misc" },
+    h("header", { class: "fc-hd" }, h("a", { class: "fc-name", href: page }, "Other"), when(up, "t", "updated"),
+      h("div", { class: "fc-lead" }, h("span", { class: "meta" }, "Not filed under a focus"))),
+    cardRows(rows, MISC_THREADS),
+    h("footer", { class: "fc-ft" }, h("a", { href: page }, rows.length > MISC_THREADS ? `All ${rows.length} conversations` : "The focus page")));
+  const st = stateOf(id), sum = f.summary, ag = agentsOf(id), asked = askedOf(id), nd = needsOf(id), n = Math.max(nd.length, asked.length);
+  const dnd = focusDnd(id, ctx), now = sumLines(sum, "now"), lately = sumLines(sum, "lately");
+  const pillsOf = ag.now.length ? ag.now : [];
+  return h("article", { class: "fc", "data-key": "fc:" + id, "data-state": st.key, "data-needs": asked.length ? "" : null, ...dnd.drop },
+    h("header", { class: "fc-hd", ...dnd.grab },
+      h("a", { class: "fc-name", href: page, title: focusName(f) + (f.aim ? ": " + f.aim : ""), draggable: dnd.grab.draggable ? "false" : null }, focusName(f)),
+      when(up, "t", "updated"),
+      h("div", { class: "fc-lead" }, statusWord(st.tone, st.word),
+        pillsOf.length ? h("span", { class: "fc-ag" }, pillsOf.slice(0, HOME_AGENTS).map(a => simpleOn() ? null : agentRef(a, { pill: true })),
+          !simpleOn() && pillsOf.length > HOME_AGENTS ? h("span", { class: "pill pill-more", title: pillsOf.slice(HOME_AGENTS).join(", ") }, "+" + (pillsOf.length - HOME_AGENTS)) : null) : null)),
+    // Needs you: the summary's own asks (the person's rule), at most two; the count and All N from the one list.
+    asked.length ? h("section", { class: "fc-ask", "aria-label": "Needs you" },
+      h("h3", { class: "fc-ask-h" }, h("span", { class: "st", "data-tone": "info", "aria-hidden": "true" }), `Needs you · ${n}`, n > HOME_NEEDS ? h("a", { href: page }, `All ${n}`) : null),
+      h("ul", null, asked.slice(0, HOME_NEEDS).map((t, i) => askItem(f, i, t)))) : null,
+    !asked.length && nd.length ? h("p", { class: "fc-ask fc-ask-n" }, h("span", { class: "st", "data-tone": "info", "aria-hidden": "true" }), h("a", { href: page }, `${nd.length} wait${nd.length === 1 ? "s" : ""} on you in its conversations`)) : null,
+    now.length || lately.length ? h("div", { class: "fc-tl" },
+      now.length ? [h("h3", { class: "fc-sub" }, "Now"), h("ol", null, now.slice(0, HOME_NOW).map(cardEv("now")))] : null,
+      lately.length ? [h("h3", { class: "fc-sub" }, "Lately"), h("ol", null, lately.slice(0, HOME_LATELY).map(cardEv("lately")))] : null)
+      : h("p", { class: "fc-none" }, sum ? "Nothing listed as moving." : "No summary yet. The agents on it write one as they work."),
+    cardRows(rows, HOME_THREADS),
+    h("footer", { class: "fc-ft" }, h("a", { href: page }, rows.length > HOME_THREADS ? `All ${rows.length} conversations` : "The focus page"),
+      can("post") ? button("New", () => newIn(id), { kind: "quiet", size: "s", icon: "plus", title: "New conversation in " + focusName(f) }) : null,
+      can("post") ? cardMenu(f, id, ctx) : null));
 }
 /** Needs you on the home (the hand-off's Home, R7b S5): each thing that waits, from the same list as the count above it and the Chat badge,
  *  with the ask in full, its conversation, who asked and when, and Answer to the place to answer it. The rest behind All N. */
-const HOME_WAITS = 5;
+// At most three rows, the rest behind All N, so the first focus card is within one screen of the top on a phone (R17).
+const HOME_WAITS = 3;
+/** Opens the quick-answer panel (ui/quick.js) for w, or null where this address can't post: then the row links to the conversation. */
+export const answerer = w => (can("post") ? (e, n) => { if (e.metaKey || e.ctrlKey || e.shiftKey || e.button > 0) return; e.preventDefault(); const el = n || e.target, r = el.closest("li"), b = el.closest(".fc-ask-i, .fp-ask") || (r && r.querySelector(".cm-need-a, .fc-ask-a")); openQuick(w, b || el); } : null);
+/** The summary's i-th ask for focus f as a waiting item (the one list's own entry when it has it), so it opens the panel. */
+export function summaryWait(f, i, text) {
+  const key = `sum:${f.id}:${i}`, s = f.summary, j = s && s.needs ? s.needs.indexOf(text) : -1;
+  return waitingOn().find(w => w.src === "summary" && w.focus === f.id && w.text === text) || { th: f.thread || f.id, text, t: needAt(s, j >= 0 ? j : i), src: "summary", focus: f.id, key };
+}
+/** One ask on a card: the whole item is a button that opens the quick-answer panel. Plain line where this address can't post. */
+export function askItem(f, i, text) {
+  const w = summaryWait(f, i, text), open = answerer(w), lf = liftIn(text), th = lf.th || (S.threads.has(w.th) ? w.th : null);
+  const body = [h("span", { class: "fc-ask-x" }, flat(lineText(lf.text))), when(w.t, "t"), th ? h("span", { class: "fc-ask-in" }, threadTitle(th)) : null];
+  if (!open) return h("li", { "data-key": w.key }, h("div", { class: "fc-ask-i" }, body));
+  return h("li", { "data-key": w.key }, h("button", { type: "button", class: "fc-ask-i", "aria-haspopup": "dialog", title: "Answer: " + text, onclick: open }, body));
+}
 function homeNeeds(ws) {
   if (!ws.length) return null;
   const row = w => {
     const d = S.threads.get(w.th), p = w.post && d ? d.posts.find(x => x.id === w.post) : null, who = (w.st && w.st.who) || (p && p.from) || null;
-    const to = w.src === "summary" && w.focus ? href("focus", w.focus) : threadHref(w.th);
-    return h("li", { class: "cm-need", "data-key": w.key || w.th + ":" + (w.post || w.src) },
-      h("p", { class: "cm-need-q" }, simpleOn() ? plainPills(w.text) : pills(w.text)),
-      h("p", { class: "cm-need-m meta" }, h("a", { href: to }, needSource(w)),
-        who ? [" \u00b7 ", simpleOn() || !isCode(who) ? plainName(who) : agentRef(who, { dot: false })] : null, w.t ? [" \u00b7 ", ago(w.t)] : null),
-      h("a", { class: "btn cm-need-a", "data-size": "s", href: to }, "Answer"));
+    const to = w.src === "summary" && w.focus ? href("focus", w.focus) : threadHref(w.th), open = answerer(w), lf = liftIn(w.text);
+    // The whole row opens the panel (the question holds agent and thread links, so it can't be a button itself); Answer is the keyboard's way.
+    return h("li", { class: "cm-need", "data-key": w.key || w.th + ":" + (w.post || w.src), "data-open": open ? "" : null, onclick: open ? (e, n) => { if (!e.target.closest("a,button")) open(e, n); } : null },
+      // A trailing ", in #thread" goes to the meta line, as on the card (V3 handoff point 9), so no pill sits mid-sentence.
+      h("p", { class: "cm-need-q" }, lineText(lf.text)),
+      h("p", { class: "cm-need-m meta" }, h("a", { href: to }, needSource(w)), lf.th && lf.th !== w.th ? [" \u00b7 in ", h("a", { class: "th", href: threadHref(lf.th) }, threadTitle(lf.th))] : null,
+        who ? [" \u00b7 ", simpleOn() || !isCode(who) ? plainName(who) : agentRef(who, { dot: false, pill: true })] : null, w.t ? [" \u00b7 ", when(w.t)] : null),
+      open ? h("div", { class: "cm-need-b" }, laterButtons(w), h("button", { type: "button", class: "btn cm-need-a", "data-size": "s", onclick: open }, "Answer"))
+        : h("a", { class: "btn cm-need-a", "data-size": "s", href: to }, "Answer"));
   };
   return h("ul", { class: "cm-needs", "data-key": "needs", "aria-label": "Needs you" }, ws.slice(0, HOME_WAITS).map(row),
     ws.length > HOME_WAITS ? h("li", { class: "cm-need-all" }, h("a", { href: needsHref() }, `All ${ws.length}`)) : null);
 }
+/** Stuff to address (the person, 11081245f002, 110813526b10): what waited on them past its time (core/needs.js olderWhy: a day if its work moved on, two if quiet), folded into one group instead of the
+ * needs-you list, to go through with an agent when they have time. Shut by default; the button puts the ask in the home box for them to send. */
+const OLDER_ASK = "Go through the older things in Stuff to address with me: clear the ones that are done, obsolete or no longer the focus, decide what an agent can, and bring me only what really needs me, one at a time.";
+function homeOlder(ws) {
+  if (!ws.length) return null;
+  const row = w => h("li", { class: "cm-old", "data-key": w.key || w.th + ":" + (w.post || w.src) },
+    h("a", { href: w.src === "summary" && w.focus ? href("focus", w.focus) : threadHref(w.th) }, needSource(w)),
+    h("span", { class: "cm-old-q" }, " \u2014 ", firstLine(w.text)), w.t ? h("span", { class: "meta" }, " \u00b7 ", when(w.t)) : null);
+  return h("section", { class: "cm-older", "data-key": "older", "aria-label": "Stuff to address" },
+    h("details", { class: "cm-older-d" },
+      h("summary", null, h("b", null, "Stuff to address"), h("span", { class: "meta" }, ` \u00b7 ${plural(ws.length, "older thing")}, likely moved past or not urgent`)),
+      h("ul", { class: "cm-old-l" }, ws.slice(0, 12).map(row),
+        ws.length > 12 && needsHref() ? h("li", { class: "cm-need-all" }, h("a", { href: needsHref() }, `All ${ws.length}`)) : null)),
+    can("post") ? button("Go through them with an agent", () => prefill(null, OLDER_ASK), { kind: "quiet", size: "s" }) : null);
+}
+const firstLine = t => { const s = mdPlain(String(t || "")).replace(/\s+/g, " ").trim(); return s.length > 140 ? s.slice(0, 139) + "\u2026" : s; };
 function fociGrid(ctx) {
   if (S.foci === undefined) return h("p", { class: "meta cm-foci-msg" }, fociFailed() ? "Couldn't read the foci. It keeps trying." : "Reading\u2026");
   const fs = fociOrder();
   if (!fs.length) return h("p", { class: "meta cm-foci-msg" }, "No focus yet. Agents make one when work has a goal; every conversation is in the list on the left.");
   return h("div", { class: "cm-foci", "data-key": "foci" }, fs.map(f => focusCard(f, ctx)));
 }
+/** #comms/~archived: every archived conversation, newest first, each with Bring back (the person, 11081454b6bd). Archived by hand or by age (ui/threadmeta.js). */
+function archivedPane(c, ctx) {
+  const mask = showMask(), back = th => tryMeta(th, { archived: false }, ctx);
+  const ds = [...S.threads.values()].filter(d => archived(d.name) && (threadKinds(d) & mask) && theirs(d)).sort((a, b) => b.last - a.last);
+  const rows = ds.map(d => { const lp = d.posts.at(-1);
+    return { key: d.name, href: threadHref(d.name), title: threadTitle(d.name), meta: ago(d.last).replace(" ago", ""), text: lp.from === "person" ? ["You: ", ...railSay(mdPlain(displayText(lp)))] : railSay(mdPlain(displayText(lp))),
+      acts: can("post") ? button("Bring back", () => back(d.name), { size: "s", kind: "quiet", icon: "archive", title: "Back in the list", cls: "cm-arch-back" }) : null }; });
+  return h("div", { class: "cm-home cm-arch", "data-key": "archived" },
+    h("a", { class: "cm-arch-up only-phone", href: href("comms", "~list") }, icon("chevron-left"), "Conversations"),
+    h("h1", { class: "cm-home-t" }, "Archived"),
+    h("p", { class: "meta" }, "Out of the list: archived by hand, or quiet for a day (a week when it ran longer). Something new for you brings one back by itself."),
+    list(rows, { empty: "Nothing archived." }));
+}
 function homePane(ctx) {
   const w = can("post"), n = needsN(), local = outFor(null), room = hasRoom(), digest = app();   // n: the one count (core/needs.js), the same as the Chat badge
   if (digest) { loadFoci(); loadNeedsYou(); }   // the one needs-you load (core/needs.js): the line, the badge and the cards read S.needsYou
   // Only on arriving: taking focus on every render pulled the page back to the box after any real click elsewhere on it.
   const arrived = C.arrived; C.arrived = false;
-  const waits = `${plural(n, "thing")} ${n === 1 ? "waits" : "wait"} on you`;
-  const line = n ? (needsHref() ? h("a", { href: needsHref(), title: "What waits on you, newest first, each in its conversation" }, waits) : waits) : simpleOn() || S.live.signin?.length ? null : IB.unread ? "No agent is waiting on you" : "Nothing needs you";
+  // The line counts the last three days and names the rest as older, so new things don't hide behind stale ones (the person, 110812234faa); the Chat badge and Yours keep the whole count.
+  // Older ones (olderWhy: a day on work that moved on, two on quiet work) are out of the count and folded into Stuff to address below (the person, 11081245f002).
+  const sp = needsSplit();
+  const waits = (n ? `${plural(n, "thing")} ${n === 1 ? "waits" : "wait"} on you` : "Nothing new waits on you") + (sp.older ? `, ${plural(sp.older, "older one")} in Stuff to address` : "");
+  const line = n || sp.older ? (needsHref() ? h("a", { href: needsHref(), title: "What waits on you, newest first, each in its conversation" }, waits) : waits) : simpleOn() || S.live.signin?.length ? null : IB.unread ? "No agent is waiting on you" : "Nothing needs you";
   return h("div", { class: "cm-home", "data-key": "home" },
     w ? h("div", { class: "cm-new", "data-key": "new" },
       h("h1", { class: "cm-home-t" }, "What do you want done?"),
@@ -889,7 +1012,8 @@ function homePane(ctx) {
       local.some(it => it.state !== "failed") ? closeLine() : null,
       local.length ? h("div", { class: "cm-out", "data-key": "out" }, local.map(it => localMessage(it, outActions))) : null) : null,
     line ? h("p", { class: "cm-hline", "data-key": "line", "data-needs": n ? "" : null }, line) : null,
-    n ? homeNeeds(waitingOn()) : null,
+    n ? homeNeeds(waitingNow()) : null,
+    sp.older ? homeOlder(waitingOlder()) : null,
     digest ? fociGrid(ctx) : null,
     phoneList());
 }
@@ -921,7 +1045,7 @@ export default {
   tab: true,
   badge: () => { if (!app() || !S.live) return null; const n = needsN(); return n ? String(n) : null; },
   poll: { every: 3000, run: async ctx => { if (await pollDelivered()) ctx.update(); } },
-  escape: () => { if (C.menu || C.find) { C.menu = null; if (!C.q.trim()) C.find = false; L.ctx && L.ctx.update(); return; } if (!cancelReply() && asideOpen()) closeAside(); },
+  escape: () => { if (closeQuick()) return; if (C.menu || C.find) { C.menu = null; if (!C.q.trim()) C.find = false; L.ctx && L.ctx.update(); return; } if (!cancelReply() && asideOpen()) closeAside(); },
   enter: () => { C.arrived = true; },
   leave: () => { clearTimeout(qTimer); C.menu = null; C.find = false; },
   render(ctx) {
@@ -945,20 +1069,22 @@ export function inChatPlace(ctx, place, page) {
   return frame(ctx, { arg: "place:" + place, place }, pane);
 }
 // Functions, not consts: focus.js reads them while this module, which imports it, is still loading.
-export function chatEscape() { if (C.menu) { C.menu = null; L.ctx && L.ctx.update(); } }
+export function chatEscape() { if (closeQuick()) return; if (C.menu) { C.menu = null; L.ctx && L.ctx.update(); } }
 export function chatLeave() { clearTimeout(qTimer); C.menu = null; C.find = false; }
 
 /** The layout: the rail, and in the other pane the home, a conversation, or what pane brings (a focus). */
 function frame(ctx, c, pane) {
     L.ctx = ctx;
     if (C.conv !== c.arg) { Object.assign(C, { conv: c.arg, q: C.next || "", next: null, limit: FIRST, menu: null, find: false }); }
-    L.here = c.focus != null ? "f:" + c.focus : null; L.place = c.place || null;
+    const here = c.focus != null ? "f:" + c.focus : null;
+    if (here && here !== L.here && FOLD.delete(here)) saveFold();   // opening a focus page opens its section in the rail; its heading folds it again
+    L.here = here; L.place = c.place || null;
     L.opts = { showThread: !c.thread, mark: words(C.q) };
     refresh(c);
     queueMicrotask(() => sync(c, ctx));
     if (c.thread && app()) { const un = unreadIn(c.thread), sig = c.thread + un.map(x => x.id).join(); if (un.length && sig !== L.marked && !document.hidden) { L.marked = sig; markRead({ ids: un.map(x => x.id) }); } }
     const top = document.getElementById("top"), post = S.app.app && can("post");
-    const convo = pane || (c.home ? homePane(ctx)
+    const convo = pane || (c.archived ? archivedPane(c, ctx) : c.home ? homePane(ctx)
       : [head(c, ctx),
         statusBar(c.thread),
         // Keyed by conversation: another one is a new element, so it opens at its end. Wrapped so that swap doesn't move the composer, which would drop focus.
@@ -989,6 +1115,7 @@ function frame(ctx, c, pane) {
         h("div", { class: "cm-tl", "data-own": "", "data-sig": "own", tabindex: "-1" })),
       h("section", { class: "cm-convo", "aria-label": "Conversation", ...(post && c.thread ? dropZone(c.thread) : {}) },
         convo,
+        !c.thread ? quickPanel(ctx.update) : null,
         post && c.thread ? h("div", { class: "cm-drop", "aria-hidden": "true", "data-key": "drop" }, "Drop files to attach them") : null));
 }
 
@@ -1002,7 +1129,7 @@ function readOnly(th) {
 // A header menu (title, More) closes on a press anywhere outside it and its button (the person, 2026-11-04, post 11040100216b).
 // So does an empty "Search here" box (11040131d9c5); with words in it, it stays, since it's what the messages are filtered by.
 if (typeof document !== "undefined") document.addEventListener("pointerdown", e => {
-  const menu = C.menu && !e.target.closest?.(".cm-menu, .cm-head [aria-haspopup], .cm-showbtn, .scrim");
+  const menu = C.menu && !e.target.closest?.(".cm-menu, .cm-head [aria-haspopup], .fc-moreb, .cm-showbtn, .scrim");
   const find = C.find && !C.q.trim() && !e.target.closest?.(".cm-find, .cm-tools [aria-label=\"Search here\"]");
   if (!menu && !find) return;
   if (menu) C.menu = null; if (find) C.find = false;

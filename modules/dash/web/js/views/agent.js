@@ -159,6 +159,17 @@ function nowBlock(n, L) {
 
 // ---- what went into each model call: exact token counts from the log, the new content sized by an estimate and split by where it came from ----
 const SRC = { self: "its own earlier output", tool: "tool result", hive: "sent to it" };
+// one item of a turn's input, readable: a JSON tool call becomes "key: value" lines with real line breaks; long ones fold, the first line is the summary
+function pretty(t) {
+  try { const o = JSON.parse(t); if (o && typeof o === "object" && !Array.isArray(o)) return Object.entries(o).map(([k, v]) => `${k}:\n${typeof v === "string" ? v : JSON.stringify(v, null, 2)}`).join("\n\n"); } catch (e) {}
+  return t;
+}
+function piece(raw, i, total, openFirst) {
+  const t = pretty(String(raw)), lines = t.split("\n"), first = (lines.find(l => l.trim() && !/^\w+:$/.test(l.trim())) || lines[0] || "").trim();
+  const sum = (total > 1 ? `${i + 1}. ` : "") + (first.length > 110 ? first.slice(0, 110) + "…" : first) + (t.length > 300 ? `  (${t.length.toLocaleString()} characters)` : "");
+  if (t.length <= 300) return h("pre", { class: "in-pre" }, t);
+  return h("details", { class: "in-det", "data-key": "it" + i, open: openFirst && i === 0 ? "" : null }, h("summary", null, sum), h("pre", { class: "in-pre" }, t.length > 20000 ? t.slice(0, 20000) + "\n… cut at 20,000 characters" : t));
+}
 function inputs(n, panel) {
   const d = IN.name === n ? IN.data : null;
   if (!d) return empty("Reading…", { kind: "loading" });
@@ -177,7 +188,7 @@ function inputs(n, panel) {
         on ? h("li", { "data-key": "ind" + t.t, class: "wf-diff" },
           h("p", { class: "meta" }, `${toks(t.fresh)} uncached, ${toks(t.cw)} written to the cache, ${toks(t.cr)} read from it; ${toks(t.out)} output.`),
           bits.length ? bits.map(p => h("div", { class: "stack", "data-key": p.src + p.label }, h("p", null, h("b", null, p.label), h("span", { class: "meta" }, ` · ${SRC[p.src]} · about ${toks(p.n)} tokens${p.items.length > 1 ? `, ${p.items.length} pieces` : ""}`)),
-            limited ? null : h("pre", { class: "diff" }, p.items.filter(Boolean).slice(0, 5).join("\n———\n")))) : h("p", { class: "meta" }, "Nothing new since the call before: it all came from the carried context.")) : null];
+            limited ? null : h("div", { class: "in-items" }, p.items.filter(Boolean).slice(0, 8).map((it, i, all) => piece(it, i, all.length, p.items.length > 1 ? all.length === 1 : true))))) : h("p", { class: "meta" }, "Nothing new since the call before: it all came from the carried context.")) : null];
     })),
     limited ? h("p", { class: "meta" }, "Your sign-in sees the sizes, not the text.") : null);
 }

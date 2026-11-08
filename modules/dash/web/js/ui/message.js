@@ -284,9 +284,13 @@ export function markBody(el, ws) {
   return el;
 }
 
+// An agent's closing "Done: …" line is its reason for stopping, for the status bar and the log, not for the chat (the person, 110814274633).
+// Hidden from the message when other words remain; "View source" and the thread's status bar still have it. Blocked/Waiting/Needs the person stay.
+const DONE_LAST = /\n[ \t]*(?:\*\*)?Done:[^\n]*\s*$/;
+export const chatText = p => { const t = displayText(p); if (p.from === "person" || !DONE_LAST.test(t)) return t; const r = t.replace(DONE_LAST, "").replace(/\s+$/, ""); return r.trim() ? r : t; };
 function body(p, ws) {
   if (SOURCE.has(p.id)) return sourceView(p, ws);
-  const t = displayText(p);
+  const t = chatText(p);
   if (t.length > LONG) { const r = report(t, p.id, ws); if (r) return r; }
   if (!t.trim()) return (p.files || []).length ? null : h("div", { class: "msg-b" }, h("p", { class: "meta" }, "No text"));
   const f = t.length > LONG && !OPEN.has(p.id) ? fold(t) : null;
@@ -470,7 +474,7 @@ const DID_HEAD = /^(?:#{1,6}\s*|\*\*)?(what (?:i|it|we) did|steps(?: taken)?|com
 const STATUS_LAST = /^(Done|Blocked|Waiting|Needs the person|Told to stop):/;
 const DIDS = new Map();
 function didSplit(p) {
-  const t = displayText(p), hit = DIDS.get(p.id);
+  const t = chatText(p), hit = DIDS.get(p.id);
   if (hit && hit.src === t) return hit.v;
   let v = null;
   const m = t.length > 200 && !/^\s*(```|~~~)/m.test(t.slice(0, m0(t))) ? DID_HEAD.exec(t) : null;
