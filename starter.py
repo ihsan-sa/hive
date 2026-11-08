@@ -1427,6 +1427,7 @@ def start(c, name, posts, login, resume=None, reaped=None, extra=(), moved=False
     tmp = HOME / ".cache" / "hive-tmp"; tmp.mkdir(parents=True, exist_ok=True)  # on disk: /tmp is tmpfs, its files hold RAM and swap
     # ENABLE_CLAUDEAI_MCP_SERVERS: the logins' claude.ai connectors (the person's Slack, Vercel buy_domain, ...) are 12k tokens on
     # every reply, and 12 calls in 542 transcripts, all Exa search; they also let an agent act in the person's name (kb/model-cost.md)
+    effort = next((p["effort"] for p in posts if p.get("effort") in ("low", "medium", "high", "xhigh", "max")), None)  # hive post --effort: for a Claude run only
     env, argv = {**os.environ, "HIVE_NAME": name, "HIVE_THREAD": first.get("thread", first["id"]), "CLAUDE_CONFIG_DIR": login, "TMPDIR": str(tmp), "ENABLE_CLAUDEAI_MCP_SERVERS": "false"}, None
     # Opus defaults to a 1M window, so a run grows to 400k+ and pays for all of it on every turn; 36% of spend was above 200k (kb/model-cost.md).
     # Compacting near resume_max_context also keeps a run resumable instead of leaving an heir. 0 or absent: Claude Code's default.
@@ -1437,7 +1438,9 @@ def start(c, name, posts, login, resume=None, reaped=None, extra=(), moved=False
         login = env.get("CODEX_HOME") or env.get("KIMI_CODE_HOME") or env["CLAUDE_CONFIG_DIR"]
         if hasattr(impl, "command") and (argv := impl.command(prov[1], prov[2], prompt, system, sid, resume)):  # another harness (codex)
             env.pop("CLAUDE_CONFIG_DIR", None)
+    if effort and not prov: env["CLAUDE_EFFORT"] = effort
     cmd = argv or ["claude", "-p", prompt, "--append-system-prompt", system,
+                   *(["--effort", effort] if effort and not prov else []),
                    *(["--resume", sid] if resume else ["--session-id", sid]),
                    *(["--model", prov[2] if prov else model] if model else []),
                    *(["--max-budget-usd", str(c["max_budget_usd"])] if c.get("max_budget_usd") and not prov else []), *(["--mcp-config", str(HOME / "mcp.json")] if (HOME / "mcp.json").is_file() and not prov else []), *c["claude_args"]]  # per-run cap; 0/absent = none; mcp.json: the servers the person ticked at setup
@@ -1551,6 +1554,26 @@ def dreamer(c, st, alive, login):
     if due.returncode: return
     post("@new Knowledge base dream: read ~/core/kb-dream.md and follow it. Work since the last one:\n" + due.stdout[:3000], ["new"], "kb-dream", "sonnet")
     log(event="kb-dream")
+
+def tidier(c, st, alive, login):
+    """Every tidy_every_s, `tidy.py due --mark` (no model use) lists what agents should have done at their own hand-offs and didn't
+    (a conversation in no focus, no title, a stale focus summary); only then one agent on ~/core/tidy.md fixes them and finds out why
+    from the agents' run logs. The person, 2026-11-08 (post 110815388fca): the passes are there to go away; `tidy.py stats` measures it.
+    Same limits as the dreamer; 0 turns it off."""
+    every = c.get("tidy_every_s", 0)
+    if not every or not login: return
+    if any(isinstance(r, dict) and r.get("thread") == "tidy" for r in alive.values()): return
+    if any(p.get("thread") == "tidy" for ps in st["pending"].values() for p in ps): return
+    if any(r.get("thread") == "tidy" for r in st.get("resume", {}).values()): return
+    t = time.time()
+    if t - st.setdefault("tidy_at", t) < every: return
+    st["tidy_at"] = t
+    try: due = subprocess.run([sys.executable, "-I", str(CORE / "tidy.py"), "due", "--mark"], capture_output=True, text=True, timeout=120)
+    except (OSError, subprocess.TimeoutExpired): return
+    if due.returncode:
+        log(event="tidy-clean" if due.returncode == 1 else "tidy-failed"); return
+    post("@new Tidy audit: read ~/core/tidy.md and follow it. Missed since the last pass:\n" + due.stdout[:3500], ["new"], "tidy", c.get("tidy_model", "sonnet"))
+    log(event="tidy", n=due.stdout.count("\n- ") + 1)
 
 def backup(c, st):
     if time.time() - st.get("committed", 0) < c["commit_s"]: return
@@ -1776,6 +1799,7 @@ def main():
                     # ...unless it asks for a stronger model (`hive model`): queued, it resumes on it when this run ends
                     if n == str(p.get("from", "")).lower() and runs_now(n) and not (called == [n] and p.get("model") in MODELS and not src_free): continue
                     q = {k: p.get(k) for k in ("id", "thread", "from")}
+                    if p.get("effort"): q["effort"] = p["effort"]  # hive post --effort
                     if p.get("routed"): q["routed"] = True  # a door picked this name; nobody typed it
                     q["model"] = asked_model(p, c)
                     if src_free and tier_of(q["model"]) == "paid, real money": q["model"] = None  # a free agent's post doesn't spend money
@@ -1900,6 +1924,7 @@ def main():
             except Exception as e: log(event="floor_error", why=f"{type(e).__name__}: {e}"[:300])
             improver(c, st, alive, work)
             dreamer(c, st, alive, login)
+            tidier(c, st, alive, login)
         save("starter.json", st)
         backup(c, st)
         nap(c["poll_s"])

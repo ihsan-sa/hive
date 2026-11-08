@@ -2,9 +2,12 @@
 // rule with the conversation's name at each change of thread. An entry opens that post in its conversation, highlighted. The search box
 // above it looks only over these exchanges. Built from the board (core/yours.js): the same in every build, with or without the Needs you page.
 import { h } from "../core/dom.js";
-import { S } from "../core/store.js";
+import { S, can } from "../core/store.js";
 import { yoursPosts, yoursSearch, yoursItems, yoursText } from "../core/yours.js";
-import { waitingOn, needsPage } from "../core/needs.js";
+import { waitingOn, waitingLater, waitingMoot, needsPage, olderWhy, needsN } from "../core/needs.js";
+import { quickPanel, closeQuick, laterButtons, setLater, quickIs } from "../ui/quick.js";
+import { answerer } from "./comms.js";
+import { focusOf, focusName, codePill, railSay } from "../core/foci.js";
 import { clock, plural, short, ago } from "../core/format.js";
 import { threadTitle } from "../core/model.js";
 import { threadHref, href } from "../core/router.js";
@@ -13,26 +16,59 @@ import { metrics } from "../templates.js";
 import { button, empty, input, pageHeader } from "../ui/kit.js";
 import { jump } from "../ui/message.js";
 
-const Y = { q: "", limit: 40 };
+const Y = { q: "", limit: 40, by: "new" };   // by: new (newest first) | focus (grouped by focus, the person, 11081355ecce)
 const STEP = 60;
-const who = p => (p.from === "person" ? "You" : simpleOn() ? hiveName() : p.from);
+const who = p => (p.from === "person" ? "You" : simpleOn() ? hiveName() : codePill(p.from));
 
 /** #yours/waits: the one list itself (core/needs.js, what the badge counts), each entry with its reason in words, newest first;
  *  the R6 review found the stream of exchanges here didn't say why a thing waited. A search cuts it by the words. */
 const waitRows = q => { const k = q.trim().toLowerCase(); return waitingOn().filter(w => !k || `${threadTitle(w.th)} ${w.text || ""}`.toLowerCase().includes(k)); };
-function waitList(rows) {
+/** What waits now, then Stuff to address: the older ones (core/needs.js olderWhy: a day on work that moved on, two on quiet work),
+ *  then Later: what the person put off (the person, 1108133400fb, 110813526b10). */
+function waitParts(rows, ctx) {
+  const now = rows.filter(w => !olderWhy(w)), old = rows.filter(w => olderWhy(w));
+  const later = putOff(waitingLater, Y.q), moot = putOff(waitingMoot, Y.q);
+  const part = (k, title, lead, list, kind) => list.length ? [
+    h("h2", { class: "sec-t yr-older", "data-key": k + "-h" }, `${title} \u00b7 ${list.length}`),
+    lead ? h("p", { class: "meta", "data-key": k + "-l" }, lead) : null, grouped(list, kind || k, ctx)] : [];
+  return h("div", { "data-key": "wparts" },
+    now.length ? grouped(now, "waits", ctx) : h("p", { class: "meta" }, rows.length ? "Nothing new waits on you." : "Nothing waits on you."),
+    ...part("older", "Stuff to address", "Not in the count: asks that sat a day while their work moved on (likely obsolete), or two days on quiet work. Go through them when you have time.", old),
+    ...part("later", "Later", "You put these off. They stay out of the count until you bring one back.", later),
+    ...part("moot", "Not needed", "You said these aren't needed. They're kept here in case you want one back.", moot));
+}
+const match = q => { const k = q.trim().toLowerCase(); return w => !k || `${threadTitle(w.th)} ${w.text || ""}`.toLowerCase().includes(k); };
+const putOff = (src, q) => src().filter(match(q));
+const focusFor = w => w.focus || focusOf(w.th) || "";
+/** By focus: one small heading per focus, in the order its newest item came, then that focus's items newest first. */
+function grouped(rows, key, ctx) {
+  if (Y.by !== "focus") return waitList(rows, key, ctx);
+  const g = new Map();
+  for (const w of [...rows].sort((a, b) => (b.t || 0) - (a.t || 0))) { const f = focusFor(w); if (!g.has(f)) g.set(f, []); g.get(f).push(w); }
+  return h("div", { class: "yr-groups", "data-key": key + "-g" }, [...g].map(([f, ws]) => h("div", { class: "yr-group", "data-key": key + ":f:" + f },
+    h("h3", { class: "yr-gt" }, f ? focusName(f) : "No focus", h("span", { class: "meta" }, " \u00b7 " + ws.length)), waitList(ws, key, ctx))));
+}
+const WHY = { moved: "its work moved on", quiet: "quiet work" };
+function waitList(rows, key = "waits", ctx) {
   const open = w => e => { if (!w.post || e.metaKey || e.ctrlKey || e.shiftKey) return; e.preventDefault(); jump(w.post); };
-  return h("ul", { class: "list yr-waits", "data-dense": "", "data-key": "waits" }, rows.map(w => h("li", { class: "lr", "data-key": "w:" + (w.key || w.th) },
-    h("a", { class: "lr-in", href: threadHref(w.th), onclick: open(w), title: w.post ? "Open it in the conversation, at that message" : "Open the conversation" },
-      h("div", { class: "lr-t" }, h("b", null, threadTitle(w.th)), h("span", { class: "meta" }, ago(w.t))),
-      h("div", { class: "lr-x clamp-2" }, w.text || "Waits on you")))));
+  const post = can("post");
+  return h("ul", { class: "list yr-waits", "data-dense": "", "data-key": key }, rows.map(w => {
+    const ans = post && key !== "later" && key !== "moot" ? answerer(w) : null, why = key === "older" ? WHY[olderWhy(w)] : null;
+    return h("li", { class: "lr yr-w", "data-key": "w:" + (w.key || w.th) },
+      h("a", { class: "lr-in", href: threadHref(w.th), onclick: open(w), title: w.post ? "Open it in the conversation, at that message" : "Open the conversation" },
+        h("div", { class: "lr-t" }, h("b", null, threadTitle(w.th)), h("span", { class: "meta" }, [why, ago(w.t)].filter(Boolean).join(" \u00b7 "))),
+        h("div", { class: "lr-x clamp-2" }, w.text ? railSay(w.text, 400) : "Waits on you")),
+      post ? h("div", { class: "yr-wb" },
+        key === "later" || key === "moot" ? button("Bring back", () => { setLater(w, "back"); ctx && ctx.update(); }, { size: "s", kind: "quiet" })
+          : [laterButtons(w), ans ? h("button", { type: "button", class: "btn cm-need-a", "data-size": "s", "aria-haspopup": "dialog", "aria-expanded": String(quickIs(w)), onclick: ans }, "Answer") : null]) : null);
+  }));
 }
 
 function entry(p) {
   const open = e => { if (e.metaKey || e.ctrlKey || e.shiftKey) return; e.preventDefault(); jump(p.id); };
   return h("a", { class: "yr-e", "data-key": "y:" + p.id, "data-who": p.from === "person" ? "me" : "agent", href: threadHref(p.th), onclick: open, title: "Open it in the conversation" },
     h("span", { class: "yr-h" }, h("b", null, who(p)), h("time", { class: "meta", datetime: new Date(p.t).toISOString() }, clock(p.t))),
-    h("span", { class: "yr-x" }, short(yoursText(p), 420) || "(no text)"));
+    h("span", { class: "yr-x" }, yoursText(p) ? railSay(yoursText(p), 420) : "(no text)"));
 }
 
 function stream(items, ctx) {
@@ -57,16 +93,18 @@ function page(ctx) {
   const meta = !base.length ? null : Y.q ? `${plural(rows.length, "match")} of ${base.length}` : `${plural(base.length, waits ? "thing" : "exchange")} in ${plural(threads, "conversation")}`;
   const actions = [
     waits ? button("Everything you exchanged", null, { href: href("yours"), kind: "quiet", size: "s" }) : null,
-    !waits && waitingOn().length ? button(`${plural(waitingOn().length, "thing")} ${waitingOn().length === 1 ? "waits" : "wait"} on you`, null, { href: href("yours", "waits"), kind: "quiet", size: "s" }) : null,
+    !waits && needsN() ? button(`${plural(needsN(), "thing")} ${needsN() === 1 ? "waits" : "wait"} on you`, null, { href: href("yours", "waits"), kind: "quiet", size: "s" }) : null,
     waits && needsPage() ? button("The full Needs you page", null, { href: needsPage(), kind: "quiet", size: "s" }) : null,
   ].filter(Boolean);
   const search = h("div", { class: "yr-search", "data-key": "search" },
     input({ type: "search", value: Y.q, placeholder: waits ? "Search what waits on you" : "Search your exchanges", "aria-label": "Search your exchanges",
-      oninput: e => { Y.q = e.target.value; Y.limit = 40; ctx.update(); } }));
+      oninput: e => { Y.q = e.target.value; Y.limit = 40; ctx.update(); } }),
+    waits ? h("div", { class: "seg yr-by", role: "group", "aria-label": "Order" }, [["new", "Newest first"], ["focus", "By focus"]].map(([k, l]) =>
+      h("button", { type: "button", class: "seg-b", "aria-pressed": String(Y.by === k), onclick: () => { Y.by = k; ctx.update(); } }, l))) : null);
   const body = !S.live && !S.posts.length ? empty("Reading…", { kind: "loading" })
-    : !rows.length ? empty(Y.q ? "Nothing of yours has those words." : waits ? "Nothing waits on you." : "No exchanges yet. What you say in Chat, and what is said to you, shows up here.")
-    : waits ? waitList(rows) : stream(yoursItems(rows), ctx);
-  return metrics({ header: pageHeader({ title, lead, meta: [meta], actions, after: search }), sections: [body] });
+    : !rows.length && !(waits && (waitingLater().length || waitingMoot().length)) ? empty(Y.q ? "Nothing of yours has those words." : waits ? "Nothing waits on you." : "No exchanges yet. What you say in Chat, and what is said to you, shows up here.")
+    : waits ? waitParts(rows, ctx) : stream(yoursItems(rows), ctx);
+  return metrics({ header: pageHeader({ title, lead, meta: [meta], actions, after: search }), sections: [body, waits ? quickPanel(ctx.update) : null].filter(Boolean) });
 }
 
 export default {
@@ -74,4 +112,6 @@ export default {
   tab: true,
   enter(ctx) { Y.limit = 40; ctx.update(); },
   render(ctx) { return page(ctx); },
+  escape: () => closeQuick(),
+  leave() { closeQuick(); },
 };

@@ -146,7 +146,7 @@ function approvalCard(th, update) {
 export function threadCrumb(th) {
   const f = focusOf(th);
   return h("nav", { class: "cm-crumb", "aria-label": "Focus" },
-    h("a", { href: href("focus", f || "misc"), title: f ? "Open the focus this conversation is filed under" : "Not filed under a focus" }, f ? focusName(f) : "Misc"),
+    h("a", { href: href("focus", f || "misc"), title: f ? "Open the focus this conversation is filed under" : "Not filed under a focus" }, f ? focusName(f) : "Other"),
     icon("chevron-right"));
 }
 /** Title menu rows: Files here, Your messages in Yours, Copy link, and Stop the agents here (designed, not built yet). close() shuts the menu. */

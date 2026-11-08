@@ -15,10 +15,10 @@ export function openRef(e, kind, name) {
 }
 
 /** agentRef(name, {copy, state}) — state: also show the status word. */
-export function agentRef(n, { copy, state, href, dot = true } = {}) {
+export function agentRef(n, { copy, state, href, dot = true, pill } = {}) {
   if (!n) return "?";
   const s = agentStatus(n), agent = isAgent(n), warden = isWarden(n);
-  const a = h("a", { class: "ref", "data-kind": "agent", "data-name": n, href: href || (agent ? agentHref(n) : threadHref("@" + n)), title: `${n}${warden ? ", a warden" : ""}${s.label ? `: ${s.label}` : ""}`, onclick: !href && agent ? e => openRef(e, "agent", n) : null },
+  const a = h("a", { class: pill ? "ref pill" : "ref", "data-kind": "agent", "data-name": n, href: href || (agent ? agentHref(n) : threadHref("@" + n)), title: `${n}${warden ? ", a warden" : ""}${s.label ? `: ${s.label}` : ""}`, onclick: !href && agent ? e => openRef(e, "agent", n) : null },
     dot ? statusDot(s.key, { live: isRunning(n) }) : null, h("span", { class: "ref-n" }, n), warden ? wardenMark() : null,
     state && s.label && s.key !== "none" ? h("span", { class: "sw", "data-tone": null, style: "font-weight:400" }, status(s.key).label) : null);
   if (!copy || !agent) return a;

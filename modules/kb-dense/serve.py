@@ -114,7 +114,7 @@ class Index:
         self.ready.set()
         return len(need)
     def top(self, sc, n):
-        v = self.vec; s = np.where(v >= 0, sc[np.maximum(v, 0)], -2.0)
+        v = self.vec; s = np.where((v >= 0) & (v < len(sc)), sc[np.clip(v, 0, max(len(sc) - 1, 0))], -2.0)   # a vector stored after sc was taken has no score yet: skip it, don't fail
         k = min(DEEP, len(s))
         if not k: return []
         ix = np.argpartition(-s, k - 1)[:k]; ix = ix[np.argsort(-s[ix], kind="stable")]

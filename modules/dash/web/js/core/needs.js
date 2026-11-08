@@ -52,7 +52,8 @@ const theirs = d => !simpleOn() || d.posts.some(p => p.from === "person");
 // A thread that went quiet is archived by age, but what it waits on still counts; one archived by hand doesn't.
 export const shownHere = th => { const d = S.threads.get(th); return !(btwParent(th) || faded(th) || (tmeta(th).archived && archived(th)) || (d && isSystemThread(d))); };
 
-const WAIT = new Set(["asks", "foryou", "limited", "failed", "stuck"]), BUSY = new Set(["working", "quiet", "queue", "queued"]);
+// "limited" is not in WAIT: the hive restarts an agent stopped at a usage limit by itself; nothing is asked of the person (the person, 110812234faa).
+const WAIT = new Set(["asks", "foryou", "failed", "stuck"]), BUSY = new Set(["working", "quiet", "queue", "queued"]);
 /** The live state of every thread the person could be waiting on, by thread: {st} for one that waits, {busy: true} for one an agent is in. */
 function liveStates() {
   const m = new Map();
@@ -75,10 +76,25 @@ function liveText({ st }) {
 // One page draw asks for the list many times (the badge in both bars, Work once per project): it is worked out once per task and
 // handed out as copies. Nothing it reads changes inside one task, and a click or poll is a new task, so it is never stale.
 let memo = null;
-export function waitingOn() {
-  if (!memo) { memo = waitingOnNow(); setTimeout(() => { memo = null; }, 0); }
-  return memo.slice();
+const all = () => { if (!memo) { memo = waitingOnNow(); setTimeout(() => { memo = null; }, 0); } return memo; };
+export function waitingOn() { return all().filter(w => !laterOf(w)); }
+/** Later and Not needed (the person, 1108133400fb): the person puts a needs-you item off, or says it isn't needed any more.
+ *  It leaves the top level (the badge, the home, the rail) and a Later one lists on its focus page until they bring it back.
+ *  The key is the item's: its post for a question, its words for a summary bullet (the bullets are renumbered when a summary is rewritten).
+ *  A newer item on the same key (a new question in the thread) is not put off: it shows again. */
+export const laterKey = w => (w.src === "summary" ? `sum:${w.focus}:${String(w.text || "").replace(/\s+/g, " ").slice(0, 120)}` : w.key || (w.post ? "p:" + w.post : w.src + ":" + w.th));
+const laterMap = () => { const m = new Map(); for (const e of (S.foci && S.foci.later) || []) if (e && e.key && !m.has(e.key)) m.set(e.key, e); return m; };
+/** The later entry that holds this item off, or null. */
+export function laterOf(w) {
+  const e = laterMap().get(laterKey(w));
+  const et = e && e.t && e.t < 1e11 ? e.t * 1000 : e && e.t;   // the later action's t takes seconds; the page sends ms
+  return e && (!w.t || !et || et >= w.t || (e.text && e.text === w.text)) ? e : null;
 }
+/** The items put off for later (not the Not needed ones), newest first, each with its entry: {...w, later: e}. */
+export const waitingPutOff = (what = "later") => all().map(w => ({ w, e: laterOf(w) })).filter(x => x.e && x.e.what === what).map(x => ({ ...x.w, later: x.e }));
+export const waitingLater = () => waitingPutOff("later");
+/** Not needed is an archive, not a delete (the person, 11081355ecce): the full Waits on you page lists them, to bring one back. */
+export const waitingMoot = () => waitingPutOff("moot");
 function waitingOnNow() {
   const live = liveStates(), out = [], has = new Set();
   const take = w => { const k = w.key || w.th; if (has.has(k)) return; has.add(k); out.push(w); };
@@ -87,7 +103,7 @@ function waitingOnNow() {
   const open = th => { const l = live.get(th); return !(l && l.busy) && shownHere(th) && !(drop[th] && drop[th] >= ((st[th] && st[th].at) || 0)); };
   for (const [th, l] of live) if (!l.busy) take({ th, text: liveText(l), t: l.st.post ? l.st.post.t : l.d.last, src: "live", st: l.st, post: l.st.post ? l.st.post.id : null });
   // The summary's bullets are the agents' own words for what they put to the person (the person, 11071606f4d4: the card shows these), so they count as long as the summary keeps them.
-  for (const f of (S.foci && S.foci.foci) || []) for (const [i, b] of ((f.summary && f.summary.needs) || []).entries()) if (b) take({ th: f.thread || f.id, text: b, t: ((f.summary.at || 0) * 1e3) || now(), src: "summary", focus: f.id, key: `sum:${f.id}:${i}` });
+  for (const f of (S.foci && S.foci.foci) || []) for (const [i, b] of ((f.summary && f.summary.needs) || []).entries()) if (b) take({ th: f.thread || f.id, text: b, t: ((((f.summary.needs_at || [])[i] || f.summary.at) || 0) * 1e3) || now(), src: "summary", focus: f.id, key: `sum:${f.id}:${i}` });
   if (!simpleOn()) {
     const rest = [];
     // A later Done or Told to stop on the thread doesn't settle a row: a For you line waits until they answer it (answeredSince) or an agent drops it (brief.dropped). A thread with a live busy agent is out above.
@@ -98,11 +114,42 @@ function waitingOnNow() {
   }
   return out.sort((a, b) => b.t - a.t);
 }
-/** The one number: how many things wait on the person. */
-export const needsN = () => waitingOn().length;
+/** Older things leave the needs-you list and fold into one "Stuff to address" group, to go through with an agent when the person has time
+ * (the person, 11081245f002: needs-me piles up, and often it went obsolete or is no longer the focus). How old is older depends on how
+ * fast that work moves (the person, 110813526b10): an ask on work that moved on a lot since (MOVED posts in its conversation or its
+ * focus's) is likely obsolete after FAST_FOR; on quiet work it stays relevant, just not first, and leaves the count after RECENT_FOR. */
+export const RECENT_FOR = 2 * DAY, FAST_FOR = DAY, MOVED = 15;
+let pace = null;
+const paceMemo = () => { if (!pace) { pace = new Map(); setTimeout(() => { pace = null; }, 0); } return pace; };
+/** Posts since t in w's conversation and the other conversations of its focus. */
+function movedSince(w) {
+  const m = paceMemo(), k = (w.key || w.th) + "@" + w.t; if (m.has(k)) return m.get(k);
+  const tags = (S.foci && S.foci.tags) || {}, fid = w.focus || tags[w.th];
+  const ths = new Set([w.th]); if (fid) for (const [th, f] of Object.entries(tags)) if (f === fid) ths.add(th);
+  let n = 0;
+  for (const th of ths) { const d = S.threads.get(th); if (!d) continue; for (let i = d.posts.length - 1; i >= 0 && d.posts[i].t > w.t; i--) n++; }
+  m.set(k, n); return n;
+}
+/** Why w is older: "moved" (the work went on without it, likely obsolete), "quiet" (old, on work that's been quiet), or null. */
+export function olderWhy(w) {
+  if (!w.t) return null;
+  const age = now() - w.t;
+  if (age < FAST_FOR) return null;
+  if (movedSince(w) >= MOVED) return "moved";
+  return age >= RECENT_FOR ? "quiet" : null;
+}
+export const isOlder = w => !!olderWhy(w);
+/** What waits on the person now: the list without the older ones. */
+export const waitingNow = () => waitingOn().filter(w => !isOlder(w));
+/** The "Stuff to address" group: waiting, but past its time (olderWhy), newest first. */
+export const waitingOlder = () => waitingOn().filter(isOlder);
+/** The one number: how many things wait on the person now (the older ones are in Stuff to address, not counted). */
+export const needsN = () => waitingNow().length;
+/** {recent, older}: the count and the size of Stuff to address. */
+export const needsSplit = () => { const w = waitingOn(), recent = w.filter(x => !isOlder(x)).length; return { recent, older: w.length - recent }; };
 /** Whether this thread is on the list: the rail's Needs you group and the one count read the same answer. */
 /** Does this conversation itself wait on the person (a live ask, a Needs line, a state word)? A focus summary's asks belong to the focus and show on its card, not here. */
-export const waitsOn = th => waitingOn().some(w => w.th === th && w.src !== "summary");
+export const waitsOn = th => waitingNow().some(w => w.th === th && w.src !== "summary");
 // Where the full list is read: the Needs you page, when this build has one (an installed Hive hasn't; the simple look lists the live ones on the home).
 // The literal "#needs", not href("needs"): the export removes every line with that call.
 const hasNeeds = () => Object.values(APP_NAV.groups || {}).some(g => g.includes("needs")) || !!(APP_NAV.belongs && APP_NAV.belongs.needs) || (APP_NAV.more || []).includes("needs");

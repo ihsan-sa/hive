@@ -1,6 +1,6 @@
 {
   "name": "phone",
-  "description": "Voice calls with the Hive from the dashboard's Call button: talk naturally to Hive or to any agent. Speech runs on this machine (Whisper large-v3-turbo in, Kokoro out), on the GPU when there is one, else the CPU. Off until `phone setup` builds it (~2 GB of models). \"Put me through to whoever's on X\" hands the call to that agent; agents ring the person with `phone ring`. Service hive-phone on a private socket (~/.hive/phone.sock), proxied by the dash at /api/phone/.",
+  "description": "Voice calls with the Hive from the dashboard's Call button: talk naturally to Hive or to any agent. Speech runs on this machine (Whisper large-v3-turbo in, Kokoro out), on the GPU when there is one, else the CPU. Installed by default on a new Hive (or `phone setup`): about 1.1 GB on the CPU, 6 GB with an NVIDIA GPU. \"Put me through to whoever's on X\" hands the call to that agent; agents ring the person with `phone ring`. Service hive-phone on a private socket (~/.hive/phone.sock), proxied by the dash at /api/phone/.",
   "bin": {"phone": "phone"},
   "projects": []
 }

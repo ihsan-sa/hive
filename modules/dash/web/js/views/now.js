@@ -10,6 +10,7 @@ import { pageHeader, section, tally, stats, list, share, empty, waiting, button,
 import { agentRef, threadRef } from "../ui/refs.js";
 import { agentCard as cardRows, displayText } from "../core/model.js";
 import { killButton } from "../actions.js";
+import { railSay } from "../core/foci.js";
 import { chart } from "../ui/chart.js";
 import { signInWords } from "../ui/shell.js";
 import { armInterrupt } from "../ui/composer.js";
@@ -19,6 +20,15 @@ const V = {};
 const tag = (tone, text, title) => statusWord(tone, text, title, "pg-t");
 const TONE = { working: "good", queue: "warn", stuck: "bad", quiet: "quiet" };
 
+// "Doing now" is the agent's own summary of its work (the person, 11081450f3e1: "its self written summary", not its tool call):
+// its `hive me` line, else the first line of its conversation's status bar, else what its brief asks for. The raw last step stays in the hover.
+function nowSay(a) {
+  const on = agentOn(a.name);
+  if (on && on.said) return { text: on.text, at: on.at, before: on.before, own: true };
+  const bar = a.thread && S.threadStatus && S.threadStatus[a.thread], line = bar && bar.text && bar.text.split("\n").map(x => x.trim()).find(Boolean);
+  return line ? { text: line } : on && on.text && !on.asked ? { text: on.text } : null;
+}
+
 // Running agents as rows, not cards: one line to scan, the same columns all the way down, however many there are.
 // An agent whose conversation waits on the person says so, and sorts first.
 function agentRows(run, states, t, waits) {
@@ -27,14 +37,16 @@ function agentRows(run, states, t, waits) {
     h("thead", null, h("tr", null, ["Agent", "Conversation", "State", "Model", "Doing now"].map(x => h("th", { scope: "col" }, x)), h("th", { class: "num", scope: "col" }, "Up"), h("th", null, h("span", { class: "vh" }, "Actions")))),
     h("tbody", null, run.map(a => {
       const st = states.get(a.name), S_ = status(st.key), task = S.byId[a.post], model = (cardRows(a.name)[0] || {}).short, wait = waits.has(a.thread);
-      const on = agentOn(a.name), me = on && on.said ? on : null;   // what it says it is on (`hive me`), over what its last tool call shows
+      const say = nowSay(a);   // what it says it is on, in its own words; the command it happens to be running is only in the hover (the person, 11081450f3e1)
       const asked = task ? (a.from ? (a.from === "person" && S.app.app ? "you" : a.from) + ": " : "") + firstSentence(displayText(task)) : null;
       return h("tr", { "data-key": a.name, "data-tone": S_.tone, "data-attn": st.key === "stuck" ? "" : null },
         h("td", { "data-label": "Agent", class: "nt-a" }, agentRef(a.name)),
         h("td", { "data-label": "Conversation", class: "nt-th" }, threadRef(a.thread)),
         h("td", { "data-label": "State", class: "nt-st", title: S_.hint }, wait ? tag("info", "waits on you") : tag(TONE[st.key], st.text)),
         h("td", { "data-label": "Model", class: "nt-md meta" }, model || "–"),
-        h("td", { "data-label": "Doing now", class: "nt-do" }, me ? h("div", { class: "nt-now nt-on", title: `Its own words, said ${ago(me.at)}${me.before ? ", before this run" : ""}` }, h("span", { class: "meta" }, me.before ? "was on " : "on "), me.text, h("span", { class: "meta" }, " · " + ago(me.at).replace(/ ago$/, ""))) : null, a.doing ? h("div", { class: me ? "nt-ask meta" : "nt-now", title: a.doing }, a.doing) : null, asked ? h("div", { class: a.doing ? "nt-ask meta" : "nt-now", title: task.text }, "Asked by " + asked) : a.doing ? null : h("span", { class: "muted" }, "–")),
+        h("td", { "data-label": "Doing now", class: "nt-do", title: [say && say.own ? `Its own words, said ${ago(say.at)}${say.before ? ", before this run" : ""}` : null, a.doing ? "Last step: " + a.doing : null].filter(Boolean).join("\n") || null },
+          say ? h("div", { class: "nt-now" + (say.own ? " nt-on" : "") }, say.own ? h("span", { class: "meta" }, say.before ? "was on " : "on ") : null, railSay(say.text, 200), say.own ? h("span", { class: "meta" }, " · " + ago(say.at).replace(/ ago$/, "")) : null) : null,
+          asked ? h("div", { class: say ? "nt-ask meta" : "nt-now", title: task.text }, "Asked by " + asked) : say ? null : h("span", { class: "muted" }, "–")),
         h("td", { "data-label": "Up", class: "num meta" }, dur(t - a.since * 1e3)),
         h("td", { "data-label": "", class: "nt-x" }, a.alive ? killButton(a.name) : null));
     }))));
@@ -58,8 +70,8 @@ function needsYou(run, states, waiting, L) {
 const MORE = { work: false, queue: false };
 function devTables(run, states, t, ctx) {
   const own = a => { const on = agentOn(a.name); return on && on.said ? on : null; };
-  const doing = a => { const task = S.byId[a.post], me = own(a); return (me && me.text) || a.doing || (task ? "Asked by " + firstSentence(displayText(task)) : "–"); };
-  const title = a => { const task = S.byId[a.post], me = own(a); return [me ? `On: ${me.text} (said ${ago(me.at)})` : null, a.doing, task ? "Asked by " + (a.from || "") + ": " + firstSentence(displayText(task)) : null].filter(Boolean).join("\n") || null; };
+  const doing = a => { const task = S.byId[a.post], say = nowSay(a); return say ? railSay(say.text, 200) : task ? "Asked by " + firstSentence(displayText(task)) : "–"; };
+  const title = a => { const task = S.byId[a.post], me = own(a); return [me ? `On: ${me.text} (said ${ago(me.at)})` : null, a.doing ? "Last step: " + a.doing : null, task ? "Asked by " + (a.from || "") + ": " + firstSentence(displayText(task)) : null].filter(Boolean).join("\n") || null; };
   const wl = (a, b) => ((b.jobs || {}).waited || 0) - ((a.jobs || {}).waited || 0);
   const working = run.filter(a => states.get(a.name).key !== "queue").sort((a, b) => (a.since || 0) - (b.since || 0) || String(a.name).localeCompare(String(b.name)));
   const queued = run.filter(a => states.get(a.name).key === "queue").sort((a, b) => wl(a, b) || String(a.name).localeCompare(String(b.name)));

@@ -10,7 +10,7 @@ _W = r"[A-ZÀ-Þ][\w'’-]+"
 _SP = r"[ \t\u00a0]+"  # a name stays on one line: across lines it's a menu
 _PARTICLE = r"(?:de|del|della|di|du|la|le|van|von|der|den|ter|bin|ibn|al|el|da|dos|das)"  # Jean de la Verpilliere
 NAME = rf"{_W}(?:{_SP}[A-Z]\.)*(?:{_SP}(?:{_PARTICLE}{_SP})*{_W}){{1,2}}"
-SUFFIX = r"(?:,?\s+(?:Jr\.?|Sr\.?|II|III|IV|Ph\.?\s?D\.?|Ed\.?\s?D\.?|M\.?D\.?|J\.?D\.?|MBA|M\.?S\.?|DBA))*"
+SUFFIX = r"(?:,?\s+(?:Jr\.?|Sr\.?|II|III|IV|Ph\.?\s?D\.?|Ed\.?\s?D\.?|M\.?D\.?|J\.?D\.?|MBA|M\.?S\.?|DBA|Esq\.?))*"
 HONOR = r"(?:(?:Dr|Prof|Mr|Ms|Mrs|Mx)\.?\s+)?"
 NOT_NAME = set("""has officially stepped steps expect compensation analysis by blvd boulevard ave avenue road rd drive highway parkway suite log copy position profile vertically integrated projects effectiveness governor senator congressman representative act acts report reports offices hub directory services resources contact contacts apply news events calendar careers staff faculty students alumni tech university college community center centre office department school institute program programs campus board foundation technology artificial intelligence data science workforce president vice dean director chief associate assistant executive senior interim the news read more contact student students services academic affairs human resources learn click home about our staff faculty new state national american united north south east west county city district education learning development innovation career careers business engineering computer health online division professional continuing leadership team trustees chancellor provost professor manager coordinator chair head email phone view all meet his her their this that these those when where with from for and page press release media event events research strategic planning economic public relations information systems digital cyber security machine ai it us january february march april may june july august september october november december monday tuesday wednesday thursday friday saturday sunday he she we they you read share follow privacy policy site map search menu working title property management job jobs salary posting vacancy vacancies opening openings""".split())
 _LINE_ROLE = re.compile(rf"^(?:the\s+)?(?:{ROLE})\b", re.I)
@@ -63,6 +63,7 @@ _PATS = [
 
 def people_in(text, ld=()):
     """[{name, title, how}] on a page, one per name, with the longest title seen. Candidates, not facts: check() decides."""
+    text = _plain(text)
     out = {}
     def add(name, title, how):
         name, title = clean_name(name), clean_title(title)
@@ -145,7 +146,12 @@ _LINE_LOOSE = rf"{_W}(?:{_SP}[A-Z]\.)*(?:{_SP}(?:{_PARTICLE}{_SP})*{_W}){{{{1,5}
 
 def _plain(text):
     """Accents off as fold does, capitals kept: they are how a person or an employer shows."""
-    return "".join(c for c in unicodedata.normalize("NFKD", text) if not unicodedata.combining(c)).replace("’", "'")
+    text = "".join(c for c in unicodedata.normalize("NFKD", text) if not unicodedata.combining(c)).replace("’", "'")
+    return _LABEL.sub("\n", text)
+
+
+# A contact card labels the post ("Title:\n Director, Technology Transfer"): drop the label so the post sits under the name.
+_LABEL = re.compile(r"\n[ \t]*(?:job\s+)?title[ \t]*:[ \t]*(?:\n[ \t\xa0]*)?", re.I)
 
 
 def _page_lines(text):

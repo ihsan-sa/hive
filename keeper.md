@@ -35,6 +35,7 @@ then stop. Do coordinating and small fixes yourself; hand anything bigger to an 
    Mark the ask `person` only for the step that truly waits, never the focus. Look at `hive goals --rounds 1` in your report: rounds that end in a wait are the number to push down. If a project's goals have work that
    nobody is on and that doesn't overlap a running agent, start it (own thread, a brief with goal, where the code is,
    what's done, who to tell). `hive progress` counts focus_quiet (focuses silent over 4 h): it should be 0 at the end of your round.
+   **The person's ticks and put-offs:** `hive focus check ticked` lists the to-do steps the person ticked that no agent has checked yet. For each, look whether it really landed, then `hive focus check confirm ID`, or `check untick ID --why "what's still missing"`. `hive focus later list` shows the needs-you items the person put off (later) or dropped (moot): don't raise those again unless something new changed. An ask of an agent's own that went stale, set aside with `hive focus later moot KEY` rather than leaving it on the person's count.
 4. **Measure, then improve the Hive.** Run `hive progress` (the last day against the day before; `--since 6h` for a tighter
    view) and `hive improve list --due`. Judge every overdue entry you didn't make yourself: look at its measure against
    its baseline, then `hive improve judge ID held|reverted|inconclusive --why "<the number>"`; revert what didn't hold and
