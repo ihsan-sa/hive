@@ -90,6 +90,10 @@ hive web: the address of the local web app, with its secret. --new-secret replac
 
 hive open: start the web app if it's stopped, then open it in the browser (the launcher icon runs this). --print shows the address instead
 
+## hive waits
+
+hive waits [--after 12]: runs that stopped on a Waiting: reason and haven't posted since, with the wait due (older than --after hours, or a post landed): resume these by name
+
 ## hive stalled
 
 hive stalled [--quiet 2h] [--within 3d] [--all]: quiet threads nobody is on with something still open (an ask, a question, a name that got no reply); --all adds resting ones

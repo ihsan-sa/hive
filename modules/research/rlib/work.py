@@ -307,6 +307,11 @@ class Hunt:
             except ValueError: pass
         return ""
 
+    def old_page(self, page_date):
+        """A verified row from a page older than `stale_days` (default 365) still gets the departure search: an old staff page can be out of date."""
+        try: return (dt.date.today() - dt.date.fromisoformat(page_date)).days > self.s.get("stale_days", 365)
+        except (ValueError, TypeError): return False
+
     def left_elsewhere(self, name, org):
         """A row that stands on a profile aggregator (secondary) can be years out of date, and its page can't say so. One search for the person with retire/steps down/named; if a result's title or snippet says they left, hold the row. Returns why, or ''."""
         hits, _ = engines.search(f'"{name}" "{org}" retire OR "steps down" OR named', self.sources, n=6, case=self.case)
@@ -349,7 +354,7 @@ class Hunt:
             if hit_terms and not sig and not res["official"]: close = False  # only a menu says it, as on a namesake's site
             row = dict(name=per["name"], title=per["title"], organisation=org, official_site="yes" if res["official"] else "no", signal=sig, signal_near_person="yes" if close else "no", source_url=page.get("final_url") or page["url"], via=res["via"], page_date=res["page_date"], read_on=res["as_of"], check_status=res["status"], check_quote=res["quote"], angle=angle, note=res["note"])
             why = self.held_back(res, row, org, bool(hit_terms and not close), text)
-            if not why and res["status"] == "secondary": why = self.left_elsewhere(per["name"], org)
+            if not why and (res["status"] == "secondary" or self.old_page(res["page_date"])): why = self.left_elsewhere(per["name"], org)
             if why or len(self.leads) >= self.target or self.org_count(org) >= self.per_org:
                 if why: row["note"] = "; ".join(x for x in (f"not listed: {why}", row["note"]) if x)
                 self.near.setdefault(k, row)

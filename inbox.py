@@ -216,12 +216,16 @@ def last_status(thread):
     except OSError: pass
     return best
 
+# a Waiting reason must name what wakes the run: a clock time or date, a post id, an agent name, or a job/shell/review/answer
+WAIT_SIGNAL = re.compile(r"\b\d{1,2}:\d{2}\b|\b20\d\d-\d\d-\d\d\b|\b[0-9a-f]{12}\b|\b[a-f][0-9a-f]{4}\b|@\w|\b(heavy|job|shell|waiter|sims?|ci|build|review\w*|reply|answers?|wakes?|agent|queue|deploy|run)\b", re.I)
+
 def stop_reason(name, st, since):
     """The reason this agent gave for stopping: the last line of the thread's status bar `st`, if this agent set it at or after
     `since` and the line starts with one of STOP_WORDS and says something after it. (word, line), or None."""
     if str(st.get("from", "")).lower() != name or not isinstance(st.get("at"), (int, float)) or st["at"] < since: return None
     line = (str(st.get("text", "")).strip().splitlines() or [""])[-1].strip()
     word = next((w for w in STOP_WORDS if line.lower().startswith(w.lower() + ":") and len(line) - len(w) > 12), None)
+    if word == "Waiting" and not WAIT_SIGNAL.search(line.split(":", 1)[1]): return None  # intent only ("back in 10 min"): no signal behind it
     return (word, line) if word else None
 
 def reason_from_post(name, rec, thread, st, since, t=None):

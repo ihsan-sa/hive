@@ -43,7 +43,7 @@ function activitySec(id) {
     const b = a[win] || {}, t = a.total[win] || {}, w = shareOf(a, win, "work"), c = shareOf(a, win, "cost");
     const text = simpleOn()
       ? `${label}: ${fractionWords(w)} of what your Hive did was here, and ${fractionWords(c)} of what it cost.`
-      : `${label}: ${plural(b.runs || 0, "run")}, ${plural(b.posts || 0, "post")}, ${usd(b.cost || 0)}; ${pct(w)} of the hive's work and ${pct(c)} of its cost (${plural(t.runs || 0, "run")}, ${usd(t.cost || 0)} in all).`;
+      : `${label}: ${plural(b.posts || 0, "message")}, ${usd(b.cost || 0)}; ${pct(w)} of the hive's work and ${pct(c)} of its cost (${plural(t.posts || 0, "message")}, ${usd(t.cost || 0)} in all).`;   // the person's words (R6 review, finding 13): messages, not runs and posts
     return h("li", null, h("span", null, text), h("span", { class: "fp-g" }, bar(win, "work"), bar(win, "cost")));
   };
   return section({ title: "Activity", note: simpleOn() ? null : "the bars: work, then cost, as a share of the hive's" }, h("ul", { class: "fp-act" }, line("day", "Last day"), line("week", "Last week")));
@@ -53,7 +53,7 @@ function page(ctx) {
   const id = idOf(ctx.arg), f = id ? focusById(id) : MISC;
   if (!f) return h("div", { class: "page fp" }, S.foci ? empty(`No focus called ${ctx.arg}. It may have been merged or renamed.`, { kind: "empty" }) : empty("Reading…", { kind: "loading" }), h("p", null, h("a", { href: href("comms") }, "Back to Chat")));
   const st = stateOf(id), rows = threadsOf(id), active = rows.filter(r => r.active && !archived(r.th)), quiet = rows.filter(r => !r.active && !archived(r.th)), arch = rows.filter(r => archived(r.th));
-  const ag = agentsOf(id), needs = needsOf(id), asked = askedOf(id), sum = f.summary, checks = f.checks || [], open = checks.filter(c => !c.done), done = checks.filter(c => c.done);
+  const ag = agentsOf(id), needs = needsOf(id), live = needs.filter(w => w.src !== "summary"), asked = askedOf(id), sum = f.summary, checks = f.checks || [], open = checks.filter(c => !c.done), done = checks.filter(c => c.done);
   const refs = names => names.map(n => agentRef(n, { dot: false }));
   const meta = simpleOn() ? null : [plural(rows.length, "conversation"), ag.now.length ? `${ag.now.length} working now` : null, needs.length ? `${needs.length} wait on you` : null, sum ? "summary " + ago(sum.at * 1e3) : "no summary yet"];
   const actions = [button("New conversation", () => newIn(id), { kind: "primary", size: "s", icon: "new" }),
@@ -63,13 +63,13 @@ function page(ctx) {
     pageHeader({ title: focusName(f), lead: f.misc ? "Conversations not filed under a focus." : f.aim || SENT[st.key], state: { text: st.word, tone: st.tone }, meta, actions, size: "l",
       after: fociFailed() ? h("p", { class: "fmsg", "data-tone": "warn", role: "status" }, "Couldn't refresh this focus; this is what was read last.") : null }),
     f.misc ? null : section({ title: "Now", note: sum ? `from ${plainName(sum.from)} ${ago(sum.at * 1e3)}` : null }, bullets(sum && sum.now, sum ? "Nothing listed as moving." : "No summary yet: the agents on this focus keep one here as they work.")),
-    f.misc || !sum || !(sum.lately || []).length ? null : section({ title: "Lately" }, bullets(sum.lately)),
     // Needs you: first the decisions the agents put to the person in the summary (what the home card shows), then every open
     // ask in the focus's conversations from the one list, quieter: the page is a level deeper than the card and may say it all.
-    section({ title: "Needs you", note: needs.length && asked.length ? plural(needs.length, "open ask") + " below" : null }, asked.length ? bullets(asked) : null,
-      needs.length ? [asked.length ? h("p", { class: "meta fp-also" }, "Also open in its conversations") : null, h("ul", { class: "list", "data-dense": "" }, needs.map(w => h("li", { class: "lr", "data-key": "nd:" + w.th }, h("a", { class: "lr-in", href: threadHref(w.th) },
+    section({ title: "Needs you", note: live.length && asked.length ? plural(live.length, "open ask") + " below" : null }, asked.length ? bullets(asked) : null,
+      live.length ? [asked.length ? h("p", { class: "meta fp-also" }, "Also open in its conversations") : null, h("ul", { class: "list", "data-dense": "" }, live.map(w => h("li", { class: "lr", "data-key": "nd:" + w.th }, h("a", { class: "lr-in", href: threadHref(w.th) },
         h("div", { class: "lr-t" }, h("b", null, threadTitle(w.th)), h("span", { class: "meta" }, ago(w.t))), w.text ? h("div", { class: "lr-x clamp-2" }, w.text) : null))))] : null,
       !asked.length && !needs.length ? h("p", { class: "meta" }, "Nothing waits on you here.") : null),
+    f.misc || !sum || !(sum.lately || []).length ? null : section({ title: "Lately" }, bullets(sum.lately)),
     f.misc || !checks.length ? null : section({ title: "To do", note: `${done.length} of ${checks.length} done` },
       h("ul", { class: "fp-todo" }, [...open, ...done].map(c => h("li", { "data-done": c.done ? "" : null }, h("span", { class: "fp-box", "aria-hidden": "true" }, c.done ? "✓" : ""), h("span", null, c.text), c.focus && c.focus !== id ? h("span", { class: "meta" }, c.focus) : null)))),
     activitySec(id),

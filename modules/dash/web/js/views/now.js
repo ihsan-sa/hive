@@ -49,7 +49,7 @@ function needsYou(run, states, waiting, L) {
   if (waiting.length) rows.push({ sev: 3, tone: "quiet", head: plural(waiting.length, "post") + " waiting", text: "for an agent to start: " + waiting.slice(0, 4).map(p => p.name).join(", ") + (waiting.length > 4 ? "…" : ""), href: href("comms"), act: "Chat" });
   rows.sort((a, b) => a.sev - b.sev);
   if (!rows.length) return null;
-  return section({ title: "Needs you", key: "needs", note: "only you can do the next step" }, h("ul", { class: "nd-list" }, rows.map((r, i) => h("li", { "data-tone": r.tone, "data-key": r.head + i },
+  return section({ title: "Needs attention", key: "needs", note: "machine trouble only you can clear; what agents ask you is on the home" }, h("ul", { class: "nd-list" }, rows.map((r, i) => h("li", { "data-tone": r.tone, "data-key": r.head + i },
     statusDot(r.tone === "bad" ? "stuck" : "limited"), h("b", null, r.head), h("span", { class: "meta", title: r.text }, r.text), h("a", { href: r.href, class: "nd-act" }, r.act)))));
 }
 
@@ -70,7 +70,7 @@ function devTables(run, states, t, ctx) {
       h("td", { class: "num meta", "data-label": "Up" }, dur(t - a.since * 1e3)),
       h("td", { class: "nt-x", "data-label": "" }, a.alive ? killButton(a.name) : null))))));
   const band = a => { const m = ((a.jobs || {}).waited || 0) / 60; return m > 60 ? "long" : m >= 20 ? "mid" : "short"; };
-  const bands = ["long", "mid", "short"].map(k => ({ k, n: queued.filter(a => band(a) === k).length })), BAND = { long: "over 1 h, also in Needs you", mid: "20 to 60 min", short: "under 20 min" };
+  const bands = ["long", "mid", "short"].map(k => ({ k, n: queued.filter(a => band(a) === k).length })), BAND = { long: "over 1 h, also in Needs attention", mid: "20 to 60 min", short: "under 20 min" };
   const bar = h("div", { class: "nd-queue-bar", role: "img", "aria-label": bands.map(x => `${x.n} ${BAND[x.k]}`).join(", ") }, bands.filter(x => x.n).map(x => h("i", { "data-band": x.k, style: `flex:${x.n}`, title: `${x.n}: ${BAND[x.k]}` })));
   const legend = h("div", { class: "meta nd-queue-key" }, bands.map(x => h("span", { "data-band": x.k }, h("i", { "data-band": x.k }), `${x.n} ${BAND[x.k]}`)));
   const q = h("div", { class: "tbl-w" }, h("table", { class: "tbl nowtbl" }, h("caption", { class: "vh" }, "In the job queue"),

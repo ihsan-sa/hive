@@ -684,6 +684,30 @@ def open_asks_by_thread():
     except Exception: pass
     return out
 
+def cmd_waits(a):
+    """Runs that stopped on a `Waiting:` reason (~/.hive/stop-gate.jsonl) and have not posted since: the wait came due (--after, default
+    3h old, or a post landed in the thread) without waking them. The keeper resumes these by name before starting anyone new."""
+    now = time.time(); cutoff = now - 86400
+    try: st = json.loads((STATE / "starter.json").read_text())
+    except (OSError, ValueError): st = {}
+    queued = set(st.get("pending", {})) | set(st.get("resume", {}))
+    last = {}
+    for ln in (STATE / "stop-gate.jsonl").read_text().splitlines():
+        try: r = json.loads(ln)
+        except ValueError: continue
+        if r.get("event") == "passed" and str(r.get("why", "")).startswith("Waiting:") and r.get("at", 0) >= cutoff: last[(r["name"], r["thread"])] = r
+    ps = posts(); n = 0
+    for (name, thread), r in sorted(last.items(), key=lambda kv: kv[1]["at"]):
+        if name in queued: continue
+        ts = lambda p: dt.datetime.fromisoformat(p["at"]).replace(tzinfo=dt.timezone.utc).timestamp() if "+" not in p["at"] else dt.datetime.fromisoformat(p["at"]).timestamp()
+        after = [p for p in ps if p.get("thread") == thread and ts(p) > r["at"]]
+        if any(str(p.get("from", "")).lower() == name for p in after): continue
+        age = now - r["at"]
+        if not after and (age < a.after * 3600 or "person" in r["why"].lower()): continue  # a wait on the person isn't lapsed; a lead, not a verdict
+        n += 1
+        print(f"{name}  {thread}  waiting {age / 3600:.1f}h, {len(after)} posts since: {r['why'][:110]}")
+    print(f"-- {n} waits to resume by name (`hive post --thread T` with @name)" if n else "-- no lapsed waits")
+
 def cmd_stalled(a):
     """Threads gone quiet with something still open in them (see open_in): last post older than --quiet, newer than --within,
     nobody in it running or queued, and the last post doesn't read as finished. --all lists resting threads too, as before
@@ -1126,6 +1150,8 @@ p = sp.add_parser("web", help="hive web: the address of the local web app, with 
 p.add_argument("--setup", action="store_true"); p.add_argument("--new-secret", action="store_true"); p.set_defaults(f=cmd_web)
 p = sp.add_parser("open", help="hive open: start the web app if it's stopped, then open it in the browser (the launcher icon runs this). --print shows the address instead")
 p.add_argument("--print", action="store_true"); p.set_defaults(f=cmd_open)
+p = sp.add_parser("waits", help="hive waits [--after 12]: runs that stopped on a Waiting: reason and haven't posted since, with the wait due (older than --after hours, or a post landed): resume these by name")
+p.add_argument("--after", type=float, default=12); p.set_defaults(f=cmd_waits)
 p = sp.add_parser("stalled", help="hive stalled [--quiet 2h] [--within 3d] [--all]: quiet threads nobody is on with something still open (an ask, a question, a name that got no reply); --all adds resting ones")
 p.add_argument("--quiet", default="2h"); p.add_argument("--within", default="3d"); p.add_argument("--all", action="store_true"); p.set_defaults(f=cmd_stalled)
 p = sp.add_parser("login", help="hive login list | add NAME [--paused] | rename OLD NEW | pause NAME | resume NAME | limit NAME --weekly N --five-hour N: the Claude logins Hive runs on (add signs in and puts it to use; a paused login is still read for usage but gets no runs)")
