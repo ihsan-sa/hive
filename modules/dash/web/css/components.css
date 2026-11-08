@@ -2776,3 +2776,16 @@ button.fl-rn:hover{text-decoration:underline}
 .mf-row>.lr-s{grid-column:2/4;grid-row:2;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 /* The preview's action row on a phone: one line, so Open no longer wraps onto a line of its own (review of step 5, the head at 390) */
 @media (max-width:520px){.pv-a{flex-wrap:nowrap;gap:2px}.pv-a>.btn[data-size=s]{padding-inline:7px}.pv-a>.btn .ic{display:none}.pv-tabs{flex:none}.pv-tab{padding-inline:8px}}
+
+/* R11: the composer's Focus and Model pills share one look: a small label, the value, a chevron; the native select stays under it */
+.cp-fpick{position:relative;display:inline-flex;align-items:center;gap:4px;height:28px;margin:0 2px;padding:0 6px;border-radius:var(--r-m);color:var(--ink-3);font-size:var(--fs-meta);cursor:pointer;min-width:0}
+.cp-fpick:hover,.cp-fpick:focus-within{background:var(--hover);color:var(--ink)}
+.cp-fpick:focus-within{outline:2px solid var(--accent);outline-offset:-2px}
+.cp-fpick[data-picked]{color:var(--accent);font-weight:var(--w-med)}
+.cp-fpick .cp-focus{field-sizing:content;appearance:none;-webkit-appearance:none;height:auto;max-width:160px;margin:0;padding:0;border:0;background:none;color:inherit;font:inherit;cursor:pointer;outline:0;text-overflow:ellipsis}
+.cp-fpick .cp-focus option{color:var(--ink);background:var(--surface);font-weight:var(--w-reg,400)}
+.cp-fpick>svg,.cp-model>svg{width:12px;height:12px;flex:none}
+.cp-fpick>svg{pointer-events:none}
+.cp-lab{flex:none;color:var(--ink-3);font-weight:var(--w-reg,400)}
+.cp-model{gap:4px}
+.cp-model.dd{display:inline-flex;align-items:center}
