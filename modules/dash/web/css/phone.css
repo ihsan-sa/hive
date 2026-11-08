@@ -113,6 +113,9 @@
   .cp-bar,.cp-r{min-width:0}
   .cp-r>*{min-width:0}
   .cp-focus,.cm-focus-sel{min-width:0;flex:0 1 auto;max-width:40vw;text-overflow:ellipsis}
+  .cp-fpick{height:40px;flex:0 1 auto;min-width:0}
+  .cp-fpick .cp-focus{max-width:20vw}
+  .cp-lab{font-size:11px}
 
   /* ---- pages ---- */
   .page{padding:var(--s4) max(var(--s4),env(safe-area-inset-right,0px)) var(--s7) max(var(--s4),env(safe-area-inset-left,0px))}

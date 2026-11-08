@@ -432,11 +432,14 @@ function typedModel(text) { const w = named(text); return MODEL_WORDS.includes(w
 /** A new conversation's focus (the person, 110715182bab): the home card it is filed under, Misc when none. Prefilled when it starts from a focus. */
 function focusPick(d) {
   const fs = foci(); if (!fs.length && !d.focus) return null;
-  return h("select", { class: "cp-focus", "aria-label": "Focus", title: "Which focus this conversation is filed under on the home; No focus leaves it in Misc",
-    onchange: e => { d.focus = e.target.value; keep(d); refresh(); } },
-    h("option", { value: "", selected: !d.focus ? "" : null }, "No focus"),
-    fs.map(f => h("option", { value: f.id, selected: f.id === d.focus ? "" : null }, f.name || f.id)),
-    d.focus && !fs.some(f => f.id === d.focus) ? h("option", { value: d.focus, selected: "" }, d.focus) : null);
+  return h("label", { class: "cp-fpick", "data-picked": d.focus ? "" : null, title: "Which focus this conversation is filed under on the home; No focus leaves it in Misc" },
+    h("span", { class: "cp-lab", "aria-hidden": "true" }, "Focus"),
+    h("select", { class: "cp-focus", "aria-label": "Focus",
+      onchange: e => { d.focus = e.target.value; keep(d); refresh(); } },
+      h("option", { value: "", selected: !d.focus ? "" : null }, "No focus"),
+      fs.map(f => h("option", { value: f.id, selected: f.id === d.focus ? "" : null }, f.name || f.id)),
+      d.focus && !fs.some(f => f.id === d.focus) ? h("option", { value: d.focus, selected: "" }, d.focus) : null),
+    icon("chevron"));
 }
 // ---- @ names: agents, foci and threads, each with where it is and what it's on (the person, 11071752e4c2) ----
 /** The words a row is found by, lower-cased: name, model, thread name and title, its status line, its focus. */
@@ -745,7 +748,7 @@ function modelPick(d, r) {
   const label = cur ? MODEL_LABELS[cur] || cur : first, open = CP.menu === "model";
   const pick = v => { d.model = v; keep(d); CP.menu = false; refresh(); };
   return h("div", { class: "pop cp-mpop", "data-key": "model" },
-    h("button", { type: "button", class: "dd cp-model", "data-picked": d.model ? "" : null, "data-value": cur, "aria-haspopup": "listbox", "aria-expanded": String(open), "aria-label": "Model: " + label, title: note + ". Pick another to change it.", onclick: toggle("model") }, label, icon("chevron")),
+    h("button", { type: "button", class: "dd cp-model", "data-picked": d.model ? "" : null, "data-value": cur, "aria-haspopup": "listbox", "aria-expanded": String(open), "aria-label": "Model: " + label, title: note + ". Pick another to change it.", onclick: toggle("model") }, h("span", { class: "cp-lab", "aria-hidden": "true" }, "Model"), label === "Model" ? "Default" : label, icon("chevron")),
     open ? h("div", { class: "menu cp-mmenu", role: "listbox", "aria-label": "Model", "data-side": "top-end", "data-w": "wide", "data-key": "mm" },
       menuHead(note, "h"),
       [["", first, live || row ? "Leave it as it is" : "The default"], ...MODELS.filter(([v]) => live || row || v !== def).map(([v, l, s]) => [v, l, s])].map(([v, l, s]) =>
