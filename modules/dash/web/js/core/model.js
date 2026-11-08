@@ -283,6 +283,11 @@ export function displayText(p) {
   if (p.from !== "person") t = t.replace(/^([ \t]*)@person\b[,:]?[ \t]*/gm, "$1").replace(/[ \t]+@person[.!]?[ \t]*$/gm, "");
   return (p.disp = t);
 }
+// An agent's closing "Done: …" line is its reason for stopping, for the status bar and the log, not for the chat (the person, 110814274633).
+// Hidden from the message, the side list's preview and Yours when other words remain; "View source" and the thread's status bar still have it.
+// Blocked/Waiting/Needs the person stay. A line of @names after it (the "end your result post with @name" hand-back) goes with it (R25).
+const DONE_LAST = /\n[ \t]*(?:\*\*)?Done:[^\n]*(?:\s*\n[ \t]*(?:@[\w.-]+[ \t,.]*)+)?(?=\s*$|\s*\n+[ \t]*(?:\*\*)?(?:Next|Measure):[^\n]*(?:\n[ \t]*(?:\*\*)?(?:Next|Measure):[^\n]*)*\s*$)/;
+export const chatText = p => { const t = displayText(p); if (p.from === "person" || !DONE_LAST.test(t)) return t; const r = t.replace(DONE_LAST, "").replace(/\s+$/, ""); return r.trim() && !/^(?:[ \t]*@[\w.-]+[ \t,.]*)+$/.test(r) ? r : t; };
 /** What the person typed, for sending again: no reply line, no source head and no agent's name (that agent may have moved on, so the To chip decides). @new and the like stay, since the person often types them. On every route, unlike displayText. */
 export function typedText(p) {
   let t = String(p.text || ""); const kept = [];

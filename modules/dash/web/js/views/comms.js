@@ -10,9 +10,9 @@ import { h, morph } from "../core/dom.js";
 import { S, SYS, can, OUTSIDE, built, post as apiPost, poll, jget } from "../core/store.js";
 import { simpleOn, plainName, hiveName } from "../core/simple.js";
 import { loadNeedsYou, needsN, needsSplit, needsHref, waitsOn, waitingOn, waitingNow, waitingOlder } from "../core/needs.js";
-import { loadFoci, fociFailed, fociOrder, focusOf, focusById, activeThreads, askedOf, needAt, agentsOf, stateOf, pills, plainPills, needSource, isCode, scrub, codePill, railSay, threadLine, focusName, MISC, activityOf, shareOf, fractionWords, pct, usd, needsOf, moveFocus, foci } from "../core/foci.js";
+import { loadFoci, fociFailed, fociOrder, focusOf, focusById, activeThreads, askedOf, needAt, agentsOf, stateOf, pills, plainPills, needSource, isCode, scrub, codePill, railSay, railTitle, threadLine, focusName, MISC, activityOf, shareOf, fractionWords, pct, usd, needsOf, moveFocus, foci } from "../core/foci.js";
 import { newIn } from "./focus.js";
-import { SIDE_THREAD, agentState, agentStatus, btwParent, threadParent, threadChildren, isAgent, isRunning, tierOf, threadTitle, threadState, threadPeople, isSystemThread, SHOW, postKind, threadKinds, closingPosts, displayText, postSource, inUse, fresh7, asksQuestion, fileInfo } from "../core/model.js";
+import { SIDE_THREAD, chatText, agentState, agentStatus, btwParent, threadParent, threadChildren, isAgent, isRunning, tierOf, threadTitle, threadState, threadPeople, isSystemThread, SHOW, postKind, threadKinds, closingPosts, displayText, postSource, inUse, fresh7, asksQuestion, fileInfo } from "../core/model.js";
 import { ago, dayName, stamp, clock, dur, short, mdPlain, now, plural, DAY, MIN, HOUR, money } from "../core/format.js";
 import { href, threadHref, go, parse } from "../core/router.js";
 import { yoursSearch, yoursText } from "../core/yours.js";
@@ -336,7 +336,7 @@ function searchRows(c, ctx, ws) {
   const all = C.tq.trim();
   return [
     simpleOn() ? null : { key: "(everything)", href: href("comms", "~all"), title: "All messages", text: `${plural(total, "match", "matches")} in ${plural(found.length, app() ? "conversation" : "thread")}`, current: c.all, onClick: () => { if (c.all) C.q = all; else C.next = all; ctx.update(); } },
-    ...found.map(({ d, hits, rest }) => ({ key: d.name, href: threadHref(d.name), current: c.thread === d.name, title: threadTitle(d.name), meta: ago(hits.at(-1).t).replace(" ago", ""),
+    ...found.map(({ d, hits, rest }) => ({ key: d.name, href: threadHref(d.name), current: c.thread === d.name, title: railTitle(d.name), meta: ago(hits.at(-1).t).replace(" ago", ""),
       lead: tierLead(d.name), onClick: open(d.name, rest.join(" ")),
       text: rest.length ? [`${hits.length} · ${authorName(hits.at(-1).from)}: `, snippet(hits.at(-1), rest)] : `${d.posts.length} · name matches` })),
   ];
@@ -382,13 +382,13 @@ function askRows(c) {
   if (AI.st === "error") return note("Couldn't ask", "Try again: press Enter");
   if (AI.st === "done") {
     const rows = AI.res.filter(r => S.threads.has(r.thread)).map(r => { const d = S.threads.get(r.thread);
-      return { key: r.thread, href: threadHref(r.thread), current: c.thread === r.thread, title: threadTitle(r.thread), meta: ago(d.last).replace(" ago", ""), lead: tierLead(r.thread), text: r.why || "fits" }; });
+      return { key: r.thread, href: threadHref(r.thread), current: c.thread === r.thread, title: railTitle(r.thread), meta: ago(d.last).replace(" ago", ""), lead: tierLead(r.thread), text: r.why || "fits" }; });
     return rows.length ? rows : note("Nothing fits", "Try other words");
   }
   const a = aiAnswer();
   if (!a) return now() - AI.at < AI_WAIT ? note("Looking…", "An agent is looking it up") : note("No answer yet", "It shows here if it comes. Claude may be at its limit");
   const also = (S.shown || []).filter(r => r.from === a.from && r.at * 1000 >= AI.at - 5000 && S.threads.has(r.thread));   // the app's box above the list holds these; the developer look has no box
-  return [...note(q, a.text, { whole: true }), ...(app() ? [] : also.map(r => ({ key: r.thread, href: threadHref(r.thread), current: c.thread === r.thread, title: threadTitle(r.thread), text: r.why || "" })))];
+  return [...note(q, a.text, { whole: true }), ...(app() ? [] : also.map(r => ({ key: r.thread, href: threadHref(r.thread), current: c.thread === r.thread, title: railTitle(r.thread), text: r.why || "" })))];
 }
 // By focus: a conversation sits under its focus (core/foci.js: the tag, the focus's own thread, else its parent's), the rest under Other.
 const byFocusOn = () => app() && !simpleOn() && !C.imp && C.view === "focus";
@@ -422,14 +422,14 @@ function threadRows(c, ctx) {
     // The developer route keeps its one-line log row: 100+ threads have to fit.
     if (!app()) {
       const who = lp.from.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      return { key: d.name, href: threadHref(d.name), current: c.thread === d.name, title: threadTitle(d.name), meta: ago(d.last).replace(" ago", ""),
+      return { key: d.name, href: threadHref(d.name), current: c.thread === d.name, title: railTitle(d.name), meta: ago(d.last).replace(" ago", ""),
         lead: [tierLead(d.name), live ? h("span", { title: "an agent is on this thread now" }, statusDot("working", { live: true })) : null],
         text: `${d.posts.length} · ${lp.from}: ${short(mdPlain(lp.text).replace(new RegExp("^(@\\S+\\s+)*" + who + ":\\s*"), ""), 60)}`, sec: secOf(d.name, null), dim: faded(d.name) };
     }
     const st = threadState(d.name, seen), par = flat && threadParent(d.name);
-    const say = railSay(mdPlain(displayText(lp)));
+    const say = railSay(mdPlain(chatText(lp)));
     const from = par ? [h("span", { class: "tm-from", title: "A helper conversation, started from " + threadTitle(par) }, "from " + short(threadTitle(par), 28)), " · "] : null;
-    return { key: d.name, href: threadHref(d.name), current: c.thread === d.name, title: threadTitle(d.name), meta: ago(d.last).replace(" ago", ""),
+    return { key: d.name, href: threadHref(d.name), current: c.thread === d.name, title: railTitle(d.name), meta: ago(d.last).replace(" ago", ""),
       lead: [tierLead(d.name), h("span", { title: status(st.key).label || "" }, statusDot(st.key === "done" ? "ended" : st.key, { live }))],
       text: [from, d.name !== c.thread && hasDraft(d.name) ? [h("span", { class: "cm-draft", title: "You left unsent text in this conversation" }, "Draft"), " · "] : null, fadeTag(d.name) || stateTag(st), fadeTag(d.name) || stateTag(st) ? " · " : null, lp.from === "person" ? ["You: ", ...say] : say], sec: secOf(d.name, st), dim: faded(d.name) };   // no agent code on the row: the conversation names its agent
   };
@@ -536,7 +536,7 @@ function sections(rs, ctx, opts) {
       h("div", { class: "tm-sec-hw", "aria-current": here ? "true" : null, ...dnd.grab },
         fid != null ? [
           h("button", { type: "button", class: "tm-sec-ch", "aria-expanded": String(!shut), title: shut ? "Show this section" : "Fold this section", "aria-label": (shut ? "Show " : "Fold ") + label, onclick: toggle }, icon(shut ? "chevron-right" : "chevron-down")),
-          h("a", { class: "tm-sec-h tm-sec-link", href: href("focus", fid || "misc"), title: fid && can("post") ? `Open ${label}. Drag to reorder the foci (Alt+Up or Alt+Down moves it)` : `Open ${label}`, draggable: fid && can("post") ? "false" : null, onkeydown: focusKeys(fid, ctx),
+          h("a", { class: "tm-sec-h tm-sec-link", href: href("focus", fid || "misc"), title: fid && can("post") ? `Open ${label}. Drag to reorder the focuses (Alt+Up or Alt+Down moves it)` : `Open ${label}`, draggable: fid && can("post") ? "false" : null, onkeydown: focusKeys(fid, ctx),
             onclick: e => { if (e.button || e.metaKey || e.ctrlKey || e.shiftKey) return; if (here) { e.preventDefault(); toggle(); } else if (FOLD.has(k)) { FOLD.delete(k); saveFold(); } } }, shut ? `${label} (${rows.length})` : label)] :
         h("button", { type: "button", class: "tm-sec-h tm-fold", "aria-expanded": String(!shut), title: shut ? "Show this section" : "Fold this section", onclick: toggle },
           icon(shut ? "chevron-right" : "chevron-down"), shut ? `${label} (${rows.length})` : label),
@@ -974,7 +974,7 @@ function homeOlder(ws) {
 }
 const firstLine = t => { const s = mdPlain(String(t || "")).replace(/\s+/g, " ").trim(); return s.length > 140 ? s.slice(0, 139) + "\u2026" : s; };
 function fociGrid(ctx) {
-  if (S.foci === undefined) return h("p", { class: "meta cm-foci-msg" }, fociFailed() ? "Couldn't read the foci. It keeps trying." : "Reading\u2026");
+  if (S.foci === undefined) return h("p", { class: "meta cm-foci-msg" }, fociFailed() ? "Couldn't read the focuses. It keeps trying." : "Reading\u2026");
   const fs = fociOrder();
   if (!fs.length) return h("p", { class: "meta cm-foci-msg" }, "No focus yet. Agents make one when work has a goal; every conversation is in the list on the left.");
   return h("div", { class: "cm-foci", "data-key": "foci" }, fs.map(f => focusCard(f, ctx)));
@@ -984,7 +984,7 @@ function archivedPane(c, ctx) {
   const mask = showMask(), back = th => tryMeta(th, { archived: false }, ctx);
   const ds = [...S.threads.values()].filter(d => archived(d.name) && (threadKinds(d) & mask) && theirs(d)).sort((a, b) => b.last - a.last);
   const rows = ds.map(d => { const lp = d.posts.at(-1);
-    return { key: d.name, href: threadHref(d.name), title: threadTitle(d.name), meta: ago(d.last).replace(" ago", ""), text: lp.from === "person" ? ["You: ", ...railSay(mdPlain(displayText(lp)))] : railSay(mdPlain(displayText(lp))),
+    return { key: d.name, href: threadHref(d.name), title: railTitle(d.name), meta: ago(d.last).replace(" ago", ""), text: lp.from === "person" ? ["You: ", ...railSay(mdPlain(chatText(lp)))] : railSay(mdPlain(chatText(lp))),
       acts: can("post") ? button("Bring back", () => back(d.name), { size: "s", kind: "quiet", icon: "archive", title: "Back in the list", cls: "cm-arch-back" }) : null }; });
   return h("div", { class: "cm-home cm-arch", "data-key": "archived" },
     h("a", { class: "cm-arch-up only-phone", href: href("comms", "~list") }, icon("chevron-left"), "Conversations"),

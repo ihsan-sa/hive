@@ -157,8 +157,11 @@ export function pills(text) {
 /** An agent code as a pill that is not a link, for text that already sits inside one (a rail row, a Yours entry); anything else as it is. */
 export const codePill = n => (n && isCode(n) ? h("span", { class: "ref pill", "data-kind": "agent", title: n }, n) : n || "an agent");
 /** A one-line preview said for the person (R21): ids scrubbed, a leading "Rung:"/"Next:" word and any step word gone, agent codes as codePill. */
+export const sayPlain = (text, max = 70) => short(scrub(String(text || "").replace(/(^|[\s(\[,;:"'])#([\w.-]*\w)/g, (m, a, w) => (S.threads.has(w) ? a + threadTitle(w) : m)).replace(/`/g, "").replace(/\s+/g, " ").replace(/^\s*(?:rung(?:\s+done)?|next|step)\s*:\s*/i, "")).replace(/\b(?:(?:the|rung)\s+)?R\d+[a-z]?\b/g, "the step").replace(/\b(?:[Ll]eftovers\s+)?rung(?:\s+\d+[a-z]?(?:\s+part\s+\w+)?)?(?=\s*[:(" ]|$)/g, "step").replace(/\bstep\s*:\s*/g, ""), max);
+/** A thread's title for a list row: a 12-hex post id in it is dropped. */
+export const railTitle = t => { const x = scrub(threadTitle(t)); return x && x !== "Untitled" ? x : threadTitle(t); };
 export function railSay(text, max = 70) {
-  const t = short(scrub(String(text || "").replace(/\s+/g, " ").replace(/^\s*(?:rung(?:\s+done)?|next|step)\s*:\s*/i, "")).replace(/\b(?:(?:the|rung)\s+)?R\d+[a-z]?\b/g, "the step"), max);
+  const t = sayPlain(text, max);
   const out = []; let last = 0, m; const re = /(^|[^\w`])`?([a-z][0-9a-f]{4})`?(?![\w-])/g;
   while ((m = re.exec(t))) { if (!isCode(m[2])) continue; const at = m.index + m[1].length; out.push(t.slice(last, at), codePill(m[2])); last = re.lastIndex; }
   out.push(t.slice(last)); return out.filter(x => x !== "");

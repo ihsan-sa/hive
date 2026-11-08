@@ -12,7 +12,7 @@ import { ago, clock, dayName, dur, mdPlain, now, plural, short, DAY, HOUR, MIN }
 import { threadHref, go, href } from "../core/router.js";
 import { openSheet } from "../ui/panel.js";
 import { card as projectCard } from "../ui/projectcard.js";
-import { focusOf } from "../core/foci.js";
+import { focusOf, sayPlain } from "../core/foci.js";
 import { gist } from "../core/gist.js";
 import { sayTo } from "../ui/composer.js";
 import { canvas } from "../templates.js";
@@ -88,7 +88,8 @@ function read(l, t0, t1) {
   return { runs, hand, waits: waits.filter(w => w.until == null || w.until >= t0), marks: marks.filter(p => p.t >= t0), decided: decided.filter(d => d.t >= t0), results: results.filter(r => r.t >= t0), live };
 }
 /** The words right of now: the open rung, else the last Next: line, else the status bar's second line. */
-function nextWords(l, r) {
+function nextWords(l, r) { return sayPlain(nextWords0(l, r), 90); }
+function nextWords0(l, r) {
   if (l.state && l.state.rung) return rungText(l.state.rung);
   for (let i = r.results.length - 1; i >= 0; i--) { const n = lineOf(r.results[i].post, /^Next:/i); if (n) return n.replace(/^Next:\s*/i, ""); }
   const st = l.thread && S.threadStatus[l.thread]; if (st && st.text) { const l2 = st.text.split("\n").map(x => x.trim()).filter(Boolean)[1]; if (l2) return l2.replace(/^Next:\s*/i, ""); }
@@ -190,7 +191,7 @@ function drawNow() {
     for (const d of r.decided) { const hit = s("a", { href: threadHref(d.post.th), class: "fl-hit" }); hit.append(s("title", null, "Decided for you: " + d.text)); hit.append(s("path", { class: "fl-dec", d: `M${x(d.t)} ${y + 44} l4 4 l-4 4 l-4 -4 z` })); g.append(hit); }
     for (const p of r.marks) { const hit = s("a", { href: threadHref(p.th), class: "fl-hit" }); hit.append(s("title", null, "You, " + ago(p.t) + ": " + short(mdPlain(displayText(p)), 120))); hit.append(s("path", { class: "fl-mark", d: l.rest ? `M${x(p.t)} ${y + LANE - 8} l3 6 l-6 0 z` : `M${x(p.t)} ${y + 50} l4 7 l-8 0 z` })); g.append(hit); }
     // right of now: the words for what comes next (a goal's; the rest lane has no one direction); on a phone they are in the list instead
-    const nx = l.rest ? "" : openW.length ? short(openW[openW.length - 1].text, 60) : nextWords(l, r);
+    const nx = l.rest ? "" : openW.length ? sayPlain(openW[openW.length - 1].text, 60) : nextWords(l, r);
     list.push({ l, r, open, sub, nx, openW });
     if (nx && !phone) {
       const tx = s("text", { class: "fl-next", "data-wait": openW.length ? "" : null, x: X1 + 12, y: y + 26 }, short(nx, narrow ? 18 : 38)); tx.append(s("title", null, nx));
@@ -222,7 +223,7 @@ function drawNow() {
   const mv = movedBox();
   if (mv) mv.replaceChildren(
     h("h2", { class: "sec-t" }, head),
-    since.length ? h("ul", { class: "fl-list" }, since.slice(0, 12).map(rs => h("li", null, h("span", { class: "fl-lanename" }, rs.lane), h("a", { href: threadHref(rs.post.th) }, short(rs.text, 140)), h("span", { class: "meta" }, ago(rs.t) + (rs.word !== "done" ? " · " + rs.word : "")))))
+    since.length ? h("ul", { class: "fl-list" }, since.slice(0, 12).map(rs => h("li", null, h("span", { class: "fl-lanename" }, rs.lane), h("a", { href: threadHref(rs.post.th) }, sayPlain(rs.text, 140)), h("span", { class: "meta" }, ago(rs.t) + (rs.word !== "done" ? " · " + rs.word : "")))))
       : h("p", { class: "meta" }, L.length ? "Nothing finished in this window yet; the bars above are the work under way." : "Nothing ran in this window."));
   F.w = cw; F.pw = Math.max(40, X1 - X0); F.ver = S.ver;
   F.last = mv ? t : 0;  // no list box yet (drawn before the page attached): the next frame draws again

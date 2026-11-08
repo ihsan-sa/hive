@@ -3,7 +3,7 @@
 // Newest first. The Yours page (views/yours.js) draws it with a day heading and a thin rule at each change of conversation; Chat's @ question
 // looks here before it asks an agent. Pure: no fetch, no DOM.
 import { S } from "./store.js";
-import { SHOW, SIDE_THREAD, postKind, closingPosts, displayText, threadTitle, isSystemThread } from "./model.js";
+import { SHOW, SIDE_THREAD, postKind, closingPosts, displayText, chatText, threadTitle, isSystemThread } from "./model.js";
 import { dayName, mdPlain } from "./format.js";
 
 const Y = { sig: "", rows: [] };
@@ -24,13 +24,13 @@ export function yoursPosts() {
 }
 
 /** Plain text of an exchange, as the stream and the search see it. */
-export const yoursText = p => mdPlain(displayText(p) || "");
+export const yoursText = p => mdPlain(chatText(p) || "");
 
 /** The exchanges that hold every word of q (in the text, the author or the conversation's name). */
 export function yoursSearch(q, rows = yoursPosts()) {
   const ws = String(q || "").toLowerCase().split(/\s+/).filter(Boolean);
   if (!ws.length) return rows;
-  return rows.filter(p => { const t = (yoursText(p) + " " + p.from + " " + threadTitle(p.th)).toLowerCase(); return ws.every(w => t.includes(w)); });
+  return rows.filter(p => { const t = (mdPlain(displayText(p) || "") + " " + p.from + " " + threadTitle(p.th)).toLowerCase(); return ws.every(w => t.includes(w)); });
 }
 
 /** The stream as items to draw: {day} at each new day, {thread, name} at each change of conversation within it, {post} for each exchange. */

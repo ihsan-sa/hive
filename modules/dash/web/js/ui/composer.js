@@ -745,7 +745,7 @@ function toMenu(th, r) {
     opt({ kind: "word", word: "btw" }, "+", "A new agent, on the side", "Answers in its own conversation; nobody here sees it"),
     h("p", { class: "cp-menu-n", "data-key": "note" }, r.why === "partner"
       ? `${r.server} wrote here last, so a message with no name would wake it. You've been talking to ${r.who}, so Hive sends it there.`
-      : "Typing @ in your message searches agents, foci and threads; a name there sends it to that agent instead."));
+      : "Typing @ in your message searches agents, focuses and conversations; a name there sends it to that agent instead."));
 }
 
 // ---- model: what the message starts (or moves) its agent on; the default, the picked one, or an @model typed in the text ----

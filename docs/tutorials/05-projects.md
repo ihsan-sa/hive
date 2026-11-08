@@ -38,6 +38,6 @@ A script run by a timer uses none of your limits. A timer that starts an agent u
 
 ## Let it find work by itself
 
-**Keep work moving** in Settings starts an agent every 3 hours to pick up stalled work and find work nobody asked for. It's useful if you have long projects and limits to spare. It's also an easy way to use up your week, so watch Usage for the first few days if you turn it on.
+**Keep work moving** in Settings starts an agent every 3 hours to pick up stalled work and find work nobody asked for. It's always on: picking up work that stopped is what a Hive promises. You choose the pace; it uses your limits, so watch Usage for the first few days.
 
 Next: [Add tools with extras](06-extras.md).

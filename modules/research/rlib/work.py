@@ -244,6 +244,7 @@ class Hunt:
         self.discovered = []
         self.stop_reason = ""
         self.departure_searches = 0
+        self.no_head = {}  # org -> page that was read and names nobody
         if self.state_file.exists(): self._load()
 
     def _load(self):
@@ -254,6 +255,7 @@ class Hunt:
         self.discovered = d.get("discovered", [])
         self.orgs = list(dict.fromkeys(self.orgs + self.discovered))
         self.errors.update(d.get("errors", {}))
+        self.no_head.update(d.get("no_head", {}))
         self.recheck_stored()
 
     def recheck_stored(self):
@@ -279,7 +281,7 @@ class Hunt:
     def _save(self):
         """Whole file or nothing: workers save side by side and a run can be killed at any moment."""
         with self.save_lock:
-            state = {"leads": list(self.leads.values()), "near": list(self.near.values()), "log": list(self.log_rows), "tried": sorted(self.tried), "discovered": list(self.discovered), "errors": dict(self.errors)}
+            state = {"leads": list(self.leads.values()), "near": list(self.near.values()), "log": list(self.log_rows), "tried": sorted(self.tried), "discovered": list(self.discovered), "errors": dict(self.errors), "no_head": dict(self.no_head)}
             tmp = self.state_file.with_name(f"{self.state_file.name}.{os.getpid()}.tmp")
             tmp.write_text(json.dumps(state, indent=0))
             os.replace(tmp, self.state_file)
@@ -347,7 +349,9 @@ class Hunt:
         if not people.names_org(org, text) and not is_official: return 0
         hit_terms = [m for m in self.must if people.term_regex(m).search(low)]
         if self.must and not hit_terms: return 0
-        for per in sorted(people.people_in(text, page["people_ld"]), key=lambda p: (not people.names_org(org, p["title"]), self.role_rank(p["title"]))):  # a title naming this organisation before one naming a unit of it
+        found_people = people.people_in(text, page["people_ld"])
+        if not found_people and re.search(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+|\(?\b\d{3}\)?[-. ]\d{3}[-. ]\d{4}\b", text): self.no_head.setdefault(org, page.get("final_url") or page["url"])  # read, and prints only a mailbox or phone
+        for per in sorted(found_people, key=lambda p: (not people.names_org(org, p["title"]), self.role_rank(p["title"]))):  # a title naming this organisation before one naming a unit of it
             if not self.good_role(per["title"]): continue
             k = people.person_key(per["name"])
             if k in self.leads or any(r["organisation"] == org and people.same_person(per["name"], r["name"]) for r in self.leads.values()): continue
@@ -480,9 +484,11 @@ class Hunt:
         if self.blocked: lines += ["## Pages that couldn't be read", *[f"- {u} — {w}" for u, w in list(self.blocked.items())[:20]], ""]
         far = sum("signal isn't near" in r.get("note", "") for r in self.near.values())
         if far and self.must: lines += ["## Held back", f"- {far} near misses are only held because the `must` words aren't close to the person. If those words describe the organisation rather than the person, set `\"allow_page_signal\": true` in the spec.", ""]
+        nh = {o: u for o, u in self.no_head.items() if not self.org_count(o)}
+        if nh: lines += ["## No named head", "The office page was read and prints only a mailbox or phone, no person. This is a gap in the source, not a miss by the search:", *[f"- {o} — {u}" for o, u in nh.items()], ""]
         if untried: lines += ["## Organisations not tried", *[f"- {o}" for o in untried[:30]], ""]
         (out_dir / "REPORT.md").write_text("\n".join(lines) + "\n")
-        return {"status": status, "leads": len(rows), "verified": n_ver, "target": self.target, "near": len(self.near), "out": str(out_dir), "stopped": self.stop_reason, "departure_searches": self.departure_searches}
+        return {"status": status, "leads": len(rows), "verified": n_ver, "target": self.target, "near": len(self.near), "out": str(out_dir), "stopped": self.stop_reason, "departure_searches": self.departure_searches, "no_named_head": sorted(nh)}
 
 
 def analyze_pages(pages, today=None):
