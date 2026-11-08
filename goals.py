@@ -28,7 +28,7 @@ FOCUS_IDLE_H = 2.0   # a focus of the person's goes idle much sooner: it is thei
 LADDER = re.compile(r"^##\s+Ladder\b(.*)$", re.M)
 LADDER_ANY = re.compile(r"^##\s+(.*\bladder\b.*)$", re.M | re.I)   # a topic ladder of its own: `## Reflection ladder (thread meta-reflect)` moves at a focus's pace in that thread
 RUNG = re.compile(r"^\s*-\s+\[([ x!])\]\s+(.+)$", re.M)
-AFTER = re.compile(r"\bafter:(\d{4}-\d{2}-\d{2})\b")
+AFTER = re.compile(r"\bafter:(\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2})?)Z?\b")   # a day, or a UTC minute (after:2026-11-08T09:50Z) for a rung that waits on a timed run
 PARKED = re.compile(r"^Parked until (\d{4}-\d{2}-\d{2}):\s*(.+)$", re.M)
 PARK_MAX_D = 3   # a parked ladder comes back within this many days; a date further out doesn't count, so nobody parks a focus for good
 WAIT = re.compile(r"no step left|changed nothing|nothing (has )?changed|nothing left|all with the person|no new person posts|started no round|(?<!nothing )\bwaits? (only )?on (the person|a sign-in)", re.I)   # how a round says it did no work
@@ -41,7 +41,7 @@ RESUME_AB_END = "2026-11-09"   # resume_arm's trial ends: judge it then (hive-me
 def now(): return dt.datetime.now(dt.timezone.utc)
 
 def ladder(txt, t=None):
-    """The `## Ladder` section of a goals.md, or None. Rungs are `- [ ] what. check: how to tell`; `[x]` done, `[!]` blocked, `after:YYYY-MM-DD` not before that day."""
+    """The `## Ladder` section of a goals.md, or None. Rungs are `- [ ] what. check: how to tell`; `[x]` done, `[!]` blocked, `after:YYYY-MM-DD` not before that day (`after:YYYY-MM-DDTHH:MMZ`, not before that UTC minute)."""
     m = LADDER.search(txt)
     return section(txt, m, m.group(1), t) if m else None
 
@@ -64,7 +64,7 @@ def section(txt, m, heading, t=None):
     for state, text in RUNG.findall(body):
         a = AFTER.search(text)
         rungs.append({"state": state, "text": text.strip(), "after": a.group(1) if a else None, "checked": "check:" in text})
-    nxt = next((r for r in rungs if r["state"] == " " and r["checked"] and (not r["after"] or r["after"] <= today)), None)
+    nxt = next((r for r in rungs if r["state"] == " " and r["checked"] and (not r["after"] or r["after"] <= (today if len(r["after"]) == 10 else t.strftime("%Y-%m-%dT%H:%M")))), None)
     p = PARKED.search(body); parked = None
     if p and today < p.group(1) <= (t.date() + dt.timedelta(days=PARK_MAX_D)).isoformat(): parked = {"until": p.group(1), "why": p.group(2).strip()}
     return {"thread": th.group(1).lower() if th else None, "rungs": rungs, "next": nxt, "parked": parked, "done": sum(r["state"] == "x" for r in rungs),
