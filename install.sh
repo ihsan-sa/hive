@@ -145,7 +145,7 @@ if [ -n "${HIVE_PLAIN:-}" ]; then "$CORE/hive" web --setup >/dev/null; else "$CO
 
 # A new Hive gets the setup walkthrough and the sandbox. Only here: no file means an install from before these, which carries on as it was.
 if [ ! -e "$HOME/.hive-installed" ] && [ ! -e "$HOME/settings.json" ]; then
-  (umask 077; printf '{"power":2,"sandbox":"on","share":{"failures":true,"usage":false},"share_defaults":1,"setup_done":false}\n' > "$HOME/settings.json")
+  (umask 077; printf '{"power":3,"sandbox":"on","share":{"failures":true,"usage":false},"share_defaults":1,"setup_done":false}\n' > "$HOME/settings.json")
 fi
 # A new Hive updates at the calm pace, kept on top of each release as a saved setting. Not in the shipped config.json: that would move every Hive already running, and our own must follow every release (Settings changes it).
 if [ ! -e "$HOME/.hive-installed" ]; then

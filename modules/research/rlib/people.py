@@ -147,11 +147,14 @@ _LINE_LOOSE = rf"{_W}(?:{_SP}[A-Z]\.)*(?:{_SP}(?:{_PARTICLE}{_SP})*{_W}){{{{1,5}
 def _plain(text):
     """Accents off as fold does, capitals kept: they are how a person or an employer shows."""
     text = "".join(c for c in unicodedata.normalize("NFKD", text) if not unicodedata.combining(c)).replace("’", "'")
-    return _LABEL.sub("\n", text)
+    return _LABEL_ALONE.sub("\n", _LABEL.sub("\n", text))
 
 
 # A contact card labels the post ("Title:\n Director, Technology Transfer"): drop the label so the post sits under the name.
 _LABEL = re.compile(r"\n[ \t]*(?:(?:job|current)\s+)?(?:title|position|role|designation)[ \t]*:[ \t]*(?:\n[ \t\xa0]*)?", re.I)
+
+# A table row or definition list puts the label in its own cell ("Name" / "Jane Doe" / "Position" / "Dean"): a label alone on a line goes too.
+_LABEL_ALONE = re.compile(r"\n[ \t\xa0]*(?:name|(?:(?:job|current)\s+)?(?:title|position|role|designation))[ \t]*:?[ \t\xa0]*(?=\n)", re.I)
 
 
 def _page_lines(text):

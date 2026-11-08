@@ -6,7 +6,7 @@
 import { h, copyText } from "../core/dom.js";
 import { S, can, jget, SYS, OUTSIDE } from "../core/store.js";
 import { simpleOn, hiveName } from "../core/simple.js";
-import { isAgent, isWarden, isRunning, agentThread, displayText, postSource, btwParent, btwText, asksQuestion, threadState, threadChildren, threadTitle } from "../core/model.js";
+import { isAgent, isWarden, isRunning, agentThread, displayText, chatText, postSource, btwParent, btwText, asksQuestion, threadState, threadChildren, threadTitle } from "../core/model.js";
 import { focusById, focusName } from "../core/foci.js";
 import { clock, stamp, now, short, mdPlain, ago, DAY, MIN } from "../core/format.js";
 import { markdown, mdCut, filesNamed } from "./markdown.js";
@@ -284,10 +284,6 @@ export function markBody(el, ws) {
   return el;
 }
 
-// An agent's closing "Done: …" line is its reason for stopping, for the status bar and the log, not for the chat (the person, 110814274633).
-// Hidden from the message when other words remain; "View source" and the thread's status bar still have it. Blocked/Waiting/Needs the person stay.
-const DONE_LAST = /\n[ \t]*(?:\*\*)?Done:[^\n]*\s*$/;
-export const chatText = p => { const t = displayText(p); if (p.from === "person" || !DONE_LAST.test(t)) return t; const r = t.replace(DONE_LAST, "").replace(/\s+$/, ""); return r.trim() ? r : t; };
 function body(p, ws) {
   if (SOURCE.has(p.id)) return sourceView(p, ws);
   const t = chatText(p);

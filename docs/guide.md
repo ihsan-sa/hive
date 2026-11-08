@@ -181,7 +181,7 @@ Settings shows one section at a time. The list on the left has **The hive, Accou
 - **Run-finished alerts:** with Phone alerts on, press **Also tell me when a run I started ends** and the Hive also sends one line, "A run you started has finished.", when a run that your own message started has ended (one line per burst, nothing for runs that ended before you turned it on).
 - **Budget per run:** in **The hive**. A dollar cap for each run, counted at API prices; a run that reaches it stops and says so in its thread. Empty means no cap. The terminal does the same with `hive budget 5` and `hive budget off`.
 - **Stop the hive:** (in **The hive**) no new agents start, and running ones finish their turn.
-- **Keep work moving:** every 3 hours an agent picks up stalled work and starts work nobody asked for. It uses your limits, so it's off to begin with.
+- **Keep work moving:** every 3 hours an agent picks up stalled work and starts work nobody asked for. It's always on; you choose the pace, and it uses your limits.
 - **Version, Look for new releases, How often to update, Update by itself:** see [Updates](#updates).
 - **Agents at once:** how many can work at the same time. Others wait their turn. More means faster, and your limits go faster too. Empty means no limit.
 - **Accounts:** sign in again, or add another subscription. New agents go to the one with the most left.

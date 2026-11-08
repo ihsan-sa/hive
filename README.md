@@ -46,7 +46,7 @@ More in [`examples/`](examples/README.md): the first message, what the agents di
 
 ## How it works
 - **A team, not one chat.** Agents post to a shared board, start each other by name, and pick up a conversation where they left it, with their memory.
-- **It keeps going.** Close the page and they carry on. An agent that stops at a usage limit or goes quiet is started again with its memory, and every ask stays on a list until someone delivers it. They message you when they're done or need a decision. Turn on Keep work moving in Settings and every 3 hours an agent also picks up stalled work and starts work nobody asked for, which uses your limits.
+- **It keeps going.** Close the page and they carry on. An agent that stops at a usage limit or goes quiet is started again with its memory, and every ask stays on a list until someone delivers it. They message you when they're done or need a decision. Every 3 hours an agent also picks up stalled work and starts work nobody asked for, which uses your limits; set the pace in Settings under Keep work moving.
 - **A buzz on your phone.** Optional and off to begin with: one contentless line through ntfy.sh when an agent has something waiting for you, with the page closed. No account needed.
 - **Your machine, your subscription.** It runs the official Claude Code (or Codex) program on your machine under your own login, so it uses the plan you already pay for, within your limits. An API key works too. It stops starting new agents before your weekly limit, at a line you set. Nothing is hosted for you.
 - **Not only code.** The same Hive makes research notes, circuit boards, sites and films.
@@ -131,7 +131,7 @@ To write your own, make a folder or git repo with a `module.json`:
 `bin` commands go on PATH (without it, everything executable in `bin/`), `skills` become Claude Code skills, and `procedures` are what an agent reads first. The core never depends on a module, so a broken one breaks only itself.
 
 ## Change it
-Settings are in the web app and `~/core/config.json`, read live: `max_sessions`, `usage_stop_pct`, `keeper_every_s` (0 is off; 10800 runs a round from `keeper.md` every 3 hours, which starts work nobody asked for). `~/core/orientation.md` is every agent's system prompt and `door.md` is your session's: add your machine, projects and rules there. It's all small enough to read, and your agents can change it. While the account has passwordless sudo, runs on outside models (Codex, OpenRouter) wait with a note, because they would share an account with root.
+Settings are in the web app and `~/core/config.json`, read live: `max_sessions`, `usage_stop_pct`, `keeper_every_s` (10800, the default, runs a round from `keeper.md` every 3 hours, which starts work nobody asked for). `~/core/orientation.md` is every agent's system prompt and `door.md` is your session's: add your machine, projects and rules there. It's all small enough to read, and your agents can change it. While the account has passwordless sudo, runs on outside models (Codex, OpenRouter) wait with a note, because they would share an account with root.
 ## Uninstall
 It asks you to type `delete` first.
 ```sh

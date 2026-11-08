@@ -1462,9 +1462,9 @@ def start(c, name, posts, login, resume=None, reaped=None, extra=(), moved=False
 def keeper(c, st, alive, login):
     """Keep work going without anyone asking: every keeper_every_s, or once the hive has been idle (no runs,
     nothing queued) for keeper_idle_s (and keeper_every_s/3 since the last round), start one fresh agent on ~/core/keeper.md in thread 'keeper'.
-    Never while one is still on it, while paused or limited, or while keeper_every_s is 0."""
-    every = c.get("keeper_every_s", 0)
-    if not every or not login: return
+    Never while one is still on it, or while paused or limited. Always on: 0 or unset means the 3-hour default, since picking up stopped work is the Hive's promise, not a switch (the person, 2026-11-08)."""
+    every = c.get("keeper_every_s") or 10800
+    if not login: return
     if any(isinstance(r, dict) and r.get("thread") == "keeper" for r in alive.values()): return
     if any(p.get("thread") == "keeper" for ps in st["pending"].values() for p in ps): return
     # a limit-stopped round resumes instead; but one parked on a fallback (Codex at its limit) must not block rounds while a Claude login has room (keeper stalled 2.6 h, 2026-11-07)
