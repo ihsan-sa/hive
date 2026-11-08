@@ -10,6 +10,8 @@ them that an agent writes, so it stays in plain words: no rung ids, post ids, pa
   hive focus tag THREAD FOCUS [--off]   put a thread under a focus (--off: take it out). Without a tag a thread is in the focus
                                       whose own thread it is or came from (the dashboard follows parents); the rest is Misc
   hive focus link A B [--off]           two foci that depend on each other (the GTM focus needs the mech lab's result)
+  hive focus relate FOCUS thread|agent|file X --why "..." [--off]   a thread, agent or file that bears on a focus without being in
+                                      it (a result post that touched another focus: relate it there); the focus's json lists them as relations
   hive focus set FOCUS <<'X'            the summary, markdown on stdin: `## Now` bullets (what is being done, who, where: @agent and
                                       #thread become pills), `## Lately` bullets (decisions, turns, what changed) and, only when a
                                       decision really needs the person, `## Needs you` bullets (one line each, with the #thread):
@@ -29,7 +31,7 @@ them that an agent writes, so it stays in plain words: no rung ids, post ids, pa
 
 The duty (time-invariant, no cleanup pulses): the agent that posts a result in a thread that is in a focus updates the focus's
 summary in the same run. The inbox hook says so once when it sees the result post and an older summary.
-Records go to ~/.hive/focus.jsonl, append-only: {kind: focus|tag|link|summary|aim|check|check_done|check_untick|file|order, ..., from, at}.
+Records go to ~/.hive/focus.jsonl, append-only: {kind: focus|tag|link|relation|summary|aim|check|check_done|check_untick|file|order, ..., from, at}.
 """
 import argparse, datetime as dt, json, os, re, sys, time
 from pathlib import Path
@@ -42,6 +44,7 @@ THREAD = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.:-]{0,100}")
 FOCUS_LINE = re.compile(r"^\s*(\d+)\.\s+\*\*(.+?)\*\*\s*\((?:thread\s+)?`([^`]+)`\)?[,:]?[ \t]*([^\n]*)", re.M)   # goals.py's FOCUS, plus the rest of the line (a default aim)
 RESULT = re.compile(r"^(Done|Blocked|Needs the person|Waiting|Told to stop):\s*\S", re.I)
 MISC = "misc"
+RELATE = ("thread", "agent", "file")   # what hive focus relate joins to a focus
 MAX_SUMMARY, MAX_BULLET = 2500, 220
 WINDOWS = {"day": 86400, "week": 7 * 86400}   # the home card's gauge: each focus's share of the hive's work over the last day and week
 # What reads as agent talk on the person's pages. Each: (name, regex, what to do instead).
@@ -146,7 +149,7 @@ def state(recs=None, pri=None, posts=None):
     recs = records() if recs is None else recs
     foci, order = {}, []
     for f in (priorities() if pri is None else pri):
-        foci[f["id"]] = {"aim": None, **f, "own": True, "links": [], "summary": None, "checks": [], "threads": [], "files": []}; order.append(f["id"])
+        foci[f["id"]] = {"aim": None, **f, "own": True, "links": [], "relations": [], "summary": None, "checks": [], "threads": [], "files": []}; order.append(f["id"])
     for r in recs:
         if r["kind"] == "focus":
             fid = r.get("id")
@@ -154,7 +157,7 @@ def state(recs=None, pri=None, posts=None):
             if r.get("off"):
                 if fid in foci and not foci[fid].get("own"): del foci[fid]; order.remove(fid)
             elif fid not in foci:
-                foci[fid] = {"id": fid, "name": r.get("name") or fid, "thread": r.get("thread"), "own": False, "aim": None, "links": [], "summary": None, "checks": [], "threads": [], "files": [], "made": r.get("at")}; order.append(fid)
+                foci[fid] = {"id": fid, "name": r.get("name") or fid, "thread": r.get("thread"), "own": False, "aim": None, "links": [], "relations": [], "summary": None, "checks": [], "threads": [], "files": [], "made": r.get("at")}; order.append(fid)
             else: foci[fid]["name"] = r.get("name") or foci[fid]["name"]
     tags = {}
     for r in recs:
@@ -168,6 +171,13 @@ def state(recs=None, pri=None, posts=None):
             if r.get("off"): links.discard(k)
             else: links.add(k)
     for a, b in links: foci[a]["links"].append(b); foci[b]["links"].append(a)
+    rel = {}   # (focus, kind, id) -> the newest relation row; --off removes it
+    for r in recs:
+        if r["kind"] == "relation" and r.get("focus") in foci and r.get("what") in RELATE and r.get("target"):
+            k = (r["focus"], r["what"], r["target"])
+            if r.get("off"): rel.pop(k, None)
+            else: rel.pop(k, None); rel[k] = {"kind": r["what"], "id": r["target"], "why": r.get("why") or "", "from": r.get("from"), "at": r.get("at")}
+    for (fid, _, _), x in rel.items(): foci[fid]["relations"].append(x)
     for r in recs:
         if r["kind"] == "aim" and r.get("focus") in foci: foci[r["focus"]]["aim"] = (r.get("text") or "").strip() or None
     for r in recs:
@@ -315,6 +325,7 @@ def main(argv=None):
     p = sp.add_parser("new"); p.add_argument("id"); p.add_argument("name", nargs="?"); p.add_argument("--thread"); p.add_argument("--off", action="store_true")
     p = sp.add_parser("tag"); p.add_argument("thread"); p.add_argument("focus", nargs="?"); p.add_argument("--off", action="store_true")
     p = sp.add_parser("link"); p.add_argument("a"); p.add_argument("b"); p.add_argument("--off", action="store_true")
+    p = sp.add_parser("relate"); p.add_argument("focus"); p.add_argument("what", choices=RELATE); p.add_argument("target"); p.add_argument("--why", default=""); p.add_argument("--off", action="store_true")
     p = sp.add_parser("set"); p.add_argument("focus")
     p = sp.add_parser("show"); p.add_argument("focus")
     p = sp.add_parser("keeper"); p.add_argument("focus")
@@ -354,6 +365,16 @@ def main(argv=None):
         fa, fb = find(st, a.a), find(st, a.b)
         if not fa or not fb or fa is fb: sys.exit("hive focus link: give two different foci (hive focus list)")
         append({"kind": "link", "a": fa["id"], "b": fb["id"], **({"off": True} if a.off else {})}); print(("unlinked" if a.off else "linked") + f" {fa['id']} and {fb['id']}"); return
+    if a.cmd == "relate":
+        f = find(st, a.focus)
+        if not f: sys.exit(f"hive focus relate: no focus {a.focus!r} (hive focus list)")
+        x = a.target.strip().lstrip("@#" if a.what != "file" else "@")
+        if a.what == "agent": x = x.lower()
+        if not x or (a.what != "file" and not THREAD.fullmatch(x)): sys.exit(f"hive focus relate: give the {a.what}'s name")
+        why = " ".join(a.why.split())[:200]
+        if not a.off and not why: sys.exit('hive focus relate: say why with --why "..." (one line: what it has to do with the focus)')
+        append({"kind": "relation", "focus": f["id"], "what": a.what, "target": x, **({"off": True} if a.off else {"why": why})})
+        print(("unrelated" if a.off else "related") + f" {a.what} {x} {'from' if a.off else 'to'} {f['id']}"); return
     if a.cmd == "aim":
         f = find(st, a.focus)
         if not f: sys.exit(f"hive focus aim: no focus {a.focus!r} (hive focus list)")

@@ -297,3 +297,11 @@ def report():
     out.append(f"{sum(1 for n in notes if n not in seen)} of {len(notes)} notes in kb/ with no observed read in 14 d (the log only goes back to {began})")
     out.append(drafts(rs, now)[1])
     return out
+
+if __name__ == "__main__":
+    # python3 kbuse.py neighbours [T0]: the live-neighbour read share from T0 (UTC, default 2026-11-08T09:43:00, the 2-pointer shape change, i0229) to now
+    import sys
+    if sys.argv[1:2] == ["neighbours"]:
+        x = numbers(sys.argv[2] if len(sys.argv) > 2 else "2026-11-08T09:43:00", iso(time.time() + 1))
+        print(f"neighbour_read_pct {x['neighbour_read_pct']}, {x['neighbour_pointers_read']} of {x['neighbour_pointers']} pointers")
+    else: print("\n".join(report()))

@@ -4,6 +4,9 @@ Release notes are on the [releases page](https://github.com/ihsan-sa/hive/releas
 
 A release can ship several times a day. A new Hive installs at most one a day, once it has been out for at least 12 hours; **How often to update** in Settings changes that. The latest is at [releases/latest](https://github.com/ihsan-sa/hive/releases/latest).
 
+## Chat: tags on messages
+A message now shows small tags under it, in plain words: the goal its conversation belongs to, the agents it names and the other conversations it names. Each one opens that goal, that agent's conversation or that conversation. Search for `tag:NAME` (or `tag:agent:NAME`) in the chat list or in a conversation to find the messages carrying a tag. The simple view shows no tags. From the command line: `hive post --tag kind:id`, and `hive search tag:NAME`.
+
 ## Chat: Interrupt, and when a message reached the agent
 While an agent is working, the conversation has an **Interrupt** button beside Send. If the agent is waiting on a long command, that command is stopped the way Escape stops it, so the message reaches the agent now rather than after the command ends. Every message you send now says when it reached the agent ("Reached a5c83 · 12:03"); until then it says it reaches the agent after its current step. A file sent with no words shows just the file, with no "Attached:" text, and quoting a message puts a small quote above the box, with × to remove it, instead of pasting the text into what you type. From the command line: `hive post --interrupt`.
 

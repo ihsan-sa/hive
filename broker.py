@@ -251,6 +251,9 @@ def post(name, req, blobs):
     for k in req.get("done") or []:  # --done ASK: the post inside closes the ask, as outside the sandbox
         if not re.fullmatch(r"k[0-9a-f]{3,8}", str(k)): return {"err": f"--done {k}: not an ask id (k0123)"}
         cmd.append(f"--done={k}")
+    for k in req.get("tags") or []:  # --tag kind:id, checked again by hive post itself
+        if not re.fullmatch(r"[A-Za-z]+:[^\s,]+", str(k)): return {"err": f"--tag {k}: a tag is kind:id"}
+        cmd.append(f"--tag={k}")
     if req.get("interrupt") is True: cmd.append("--interrupt")
     d = None
     try:
