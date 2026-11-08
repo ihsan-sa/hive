@@ -10,7 +10,7 @@ import { h, morph } from "../core/dom.js";
 import { S, SYS, can, OUTSIDE, built, post as apiPost, poll, jget } from "../core/store.js";
 import { simpleOn, plainName, hiveName } from "../core/simple.js";
 import { loadNeedsYou, needsN, needsHref, waitsOn, waitingOn } from "../core/needs.js";
-import { loadFoci, fociFailed, fociOrder, focusOf, focusById, activeThreads, askedOf, agentsOf, stateOf, pills, threadLine, focusName, MISC, activityOf, shareOf, fractionWords, pct, usd, needsOf, moveFocus, foci } from "../core/foci.js";
+import { loadFoci, fociFailed, fociOrder, focusOf, focusById, activeThreads, askedOf, agentsOf, stateOf, pills, plainPills, needSource, isCode, threadLine, focusName, MISC, activityOf, shareOf, fractionWords, pct, usd, needsOf, moveFocus, foci } from "../core/foci.js";
 import { newIn } from "./focus.js";
 import { SIDE_THREAD, agentState, agentStatus, btwParent, threadParent, threadChildren, isAgent, isRunning, tierOf, threadTitle, threadState, threadPeople, isSystemThread, SHOW, postKind, threadKinds, closingPosts, displayText, postSource, inUse, fresh7, asksQuestion, fileInfo } from "../core/model.js";
 import { ago, dayName, stamp, clock, dur, short, mdPlain, now, plural, DAY, MIN, HOUR, money } from "../core/format.js";
@@ -73,6 +73,7 @@ function conversation(arg) {
   if (!arg) return app() ? { arg: null, home: true } : { arg: null, all: true };
   if (arg === "~new") return { arg, home: true, open: true };
   if (arg === "~all") return { arg, all: true };
+  if (arg === "~list") return { arg, home: true, list: true };   // R14: on a phone, the rail as a page of its own (search, Show, By focus / By recency, + per focus); elsewhere the home
   if (arg[0] !== "@") return { arg, thread: arg };
   const names = arg.slice(1).split("+");
   return names.length === 2 ? { arg, pair: names } : { arg, agent: names[0] };
@@ -578,12 +579,13 @@ const notBuilt = () => h("span", { class: "nb", title: "Designed, not built yet:
 
 /** The two lines an agent (or the status refresher) wrote with `hive status`: what the thread is about, where it stands. */
 const lastAt = th => { const d = S.threads.get(th), p = d && d.posts.at(-1); return p ? p.t : 0; };
+const moreOpen = new Set();   // threads whose status "More" is open: a redraw (a new post) keeps it open (R15)
 function statusBar(th) {
   const r = th && S.threadStatus && S.threadStatus[th]; if (!r) return null;
   const [a, ...rest] = r.text.split("\n");
   return h("div", { class: "cm-status cm-strip", "data-key": "status", "data-fold": "", role: "note", "aria-label": "Thread status" },
     h("b", { class: "cm-strip-a" }, a), rest.length ? h("span", { class: "cm-strip-b" }, rest[0]) : null,
-    rest.length > 1 ? h("details", { class: "cm-status-more" }, h("summary", null, "More"), h("p", null, rest.slice(1).join(" "))) : null,
+    rest.length > 1 ? h("details", { class: "cm-status-more", open: moreOpen.has(th) || null, ontoggle: (e, n) => { if (e.target === n) n.open ? moreOpen.add(th) : moreOpen.delete(th); } }, h("summary", null, "More"), h("p", null, rest.slice(1).join(" "))) : null,
     // One agent named per conversation (R6 review): the strip names who is on it; the summary's author is on hover.
     h("span", { class: "meta cm-status-m cm-strip-m", title: "Summary by " + r.from }, `updated ${ago(r.at * 1e3)}${lastAt(th) ? " · last post " + ago(lastAt(th)) : ""}`,
       can("post") ? h("button", { type: "button", class: "cm-status-r", title: "Reply about this summary", onclick: () => quoteRef(th, { who: r.from, where: "summary", text: r.text }) }, "Reply") : null));
@@ -712,7 +714,7 @@ function showMenu(ctx) {
   const searching = words(C.tq).length > 0;
   return h("div", { class: "cm-menu cm-show-m", role: "menu", "data-key": "showmenu", "aria-label": "Show and group" },
     h("p", { class: "meta cm-show-l" }, "Show"), showChips(ctx),
-    app() && !searching ? [h("p", { class: "meta cm-show-l" }, "Arrange"), viewBar(ctx)] : null,
+    app() && !searching && C.conv !== "~list" ? [h("p", { class: "meta cm-show-l" }, "Arrange"), viewBar(ctx)] : null,   // the phone's list page has the toggle in sight
     searching ? null : h("div", { class: "cm-scope" }, h("span", null, app() ? "Conversations" : "Threads"),
       h("button", { type: "button", class: "cm-foldall", hidden: foldNone(), title: "Fold or open every section and helper list here", onclick: () => foldAll(ctx) }, foldWord()),
       h("button", { type: "button", class: "cm-scope-b", title: C.scope === "recent" ? (app() ? "Only the last 7 days are listed. Show every conversation." : "Only the last 24 hours are listed. Show every thread.") : "List only the recent ones",
@@ -804,9 +806,8 @@ function keepScroll(at) {
   put(); queueMicrotask(put); requestAnimationFrame(put);
 }
 const HOME_NOW = 3, HOME_NEEDS = 2, HOME_LATELY = 2, HOME_THREADS = 4, MISC_THREADS = 6;   // two asks on a card, the rest behind All (R6 review)
-const plainPills = t => t.replace(/(^|[\s(])@([A-Za-z0-9_-]+)/g, (m, a, n) => a + plainName(n));
 const bullet = t => h("li", null, simpleOn() ? plainPills(t) : pills(t));
-const cardThread = r => { const line = threadLine(r.th); return h("li", null, h("a", { href: threadHref(r.th) }, threadTitle(r.th)), line ? [" \u00b7 ", h("span", { class: "muted" }, line)] : null); };
+const cardThread = r => { const line = threadLine(r.th); return h("li", null, h("a", { href: threadHref(r.th) }, threadTitle(r.th)), line ? [" \u00b7 ", h("span", { class: "muted" }, simpleOn() ? plainPills(line) : pills(line))] : null); };
 const cardSec = (title, body) => h("div", { class: "fc-sec" }, h("h3", { class: "meta" }, title), body);
 /** The card's gauge: the focus's share of the hive's work (runs and posts) and of its AI cost, today as the bar and the week as the tick
  *  behind it (promised 11071617cbdd). A relative figure, so the cards compare at a glance; the focus page has the numbers.
@@ -858,8 +859,8 @@ function homeNeeds(ws) {
     const to = w.src === "summary" && w.focus ? href("focus", w.focus) : threadHref(w.th);
     return h("li", { class: "cm-need", "data-key": w.key || w.th + ":" + (w.post || w.src) },
       h("p", { class: "cm-need-q" }, simpleOn() ? plainPills(w.text) : pills(w.text)),
-      h("p", { class: "cm-need-m meta" }, h("a", { href: to }, w.src === "summary" && w.focus && !d ? focusName(focusById(w.focus) || { id: w.focus }) : threadTitle(w.th)),
-        who ? [" \u00b7 ", plainName(who)] : null, w.t ? [" \u00b7 ", ago(w.t)] : null),
+      h("p", { class: "cm-need-m meta" }, h("a", { href: to }, needSource(w)),
+        who ? [" \u00b7 ", simpleOn() || !isCode(who) ? plainName(who) : agentRef(who, { dot: false })] : null, w.t ? [" \u00b7 ", ago(w.t)] : null),
       h("a", { class: "btn cm-need-a", "data-size": "s", href: to }, "Answer"));
   };
   return h("ul", { class: "cm-needs", "data-key": "needs", "aria-label": "Needs you" }, ws.slice(0, HOME_WAITS).map(row),
@@ -969,15 +970,19 @@ function frame(ctx, c, pane) {
         c.thread && !can("post") ? readOnly(c.thread) : null,   // §5b: where this address can't post, say so in the composer's place
         post && c.thread ? composer({ thread: c.thread, update: ctx.update, top: app() ? strip(c.thread) : null }) : null,
         post && c.all ? h("p", { class: "cm-hint meta", "data-key": "hint" }, "To start something new, use New conversation.") : null]);
-    return h("div", { class: "cm", "data-key": "comms", "data-in": c.arg ? "" : null, "data-home": c.home ? "" : null, style: `--top-h:${top ? top.offsetHeight : 47}px;--cm-w:${sideW}px` },
+    return h("div", { class: "cm", "data-key": "comms", "data-in": c.arg ? "" : null, "data-home": c.home && !c.list ? "" : null, "data-list": c.list ? "" : null, style: `--top-h:${top ? top.offsetHeight : 47}px;--cm-w:${sideW}px` },
       h("nav", { class: "cm-side", "aria-label": app() ? "Conversations" : "Threads" }, grip(),
         h("div", { class: "cm-filters" },
+          // R14: the phone's way to the rail. Home has one row that opens it as a page; that page has a way back (css/phone.css shows these only there).
+          app() && c.home && !c.list ? h("a", { class: "cm-listbtn only-phone", href: href("comms", "~list"), "data-key": "listbtn" }, icon("search"), h("span", null, "Conversations"), h("span", { class: "meta" }, "search, filter, by focus"), icon("chevron-right")) : null,
+          app() && c.list ? h("div", { class: "cm-lhead only-phone", "data-key": "lhead" }, h("a", { class: "btn cm-back", href: href("comms"), "data-kind": "icon", "aria-label": "Chats", title: "Chats" }, icon("chevron-left")), h("h1", null, "Conversations")) : null,
           post ? button("New conversation", null, { href: href("comms", "~new"), kind: "quiet", icon: "new", cls: "cm-newbtn" }) : null,
           app() && !simpleOn() ? places() : null,
           h("div", { class: "cm-srow" },
             h("div", { class: "cm-search" }, icon("search"),
               input({ type: "search", placeholder: app() ? "Search, or @ to ask" : "Search threads", "aria-label": "Search all conversations by name or content. Start with @ to ask an agent, which answers here and brings up the conversations that help", value: C.tq, oninput: e => { C.tq = e.target.value; ctx.update(); }, onkeydown: e => { if (e.key === "Enter" && aiQ()) { e.preventDefault(); aiAsk(ctx); return; } if (e.key === "Escape") { e.stopPropagation(); C.tq = ""; e.target.value = ""; e.target.blur(); ctx.update(); } } })),
             simpleOn() ? null : showBtn(ctx)),
+          app() && c.list && !simpleOn() ? viewBar(ctx) : null,
           simpleOn() || C.menu !== "show" ? null : showMenu(ctx),
           app() ? brought() : null,
           C.err ? h("p", { class: "fmsg", "data-tone": "bad", role: "alert" }, C.err) : null),

@@ -1071,6 +1071,18 @@ def cmd_status(a):
     with open(f_, "a") as f:
         fcntl.flock(f, fcntl.LOCK_EX); f.write(json.dumps(rec) + "\n")
     print(f"status set on {th}")
+    leak = status_leaks(text.splitlines()[0])
+    if leak: print(f"hive status: warning: line 1 shows on the person's home card and holds {', '.join(leak)}; say it in plain words (agents as @name, no rung, post or test ids)", file=sys.stderr)
+
+def status_leaks(line):
+    """What in a status bar's line 1 the home card shouldn't show (R16, person 1107151649a6): a bare agent code, a post id, a rung word, a test count. Warns, never blocks."""
+    line = re.sub(r"@[a-z][0-9a-f]{4}\b", "", line)   # @a1b2c renders as a pill
+    out = []
+    if re.search(r"(?<![\w@#-])[a-z](?=[0-9a-f]{0,3}\d)[0-9a-f]{4}(?![\w-])", line): out.append("an agent code")
+    if re.search(r"\b[0-9a-f]{12}\b", line): out.append("a post id")
+    if re.search(r"\bR\d+[a-z]?\b", line): out.append("a rung id")
+    if re.search(r"\b\d+\s*(?:/\s*\d+\s*)?(?:pass(?:ed|es)?|fail(?:ed|s|ures?)?|PASS|FAIL|tests?)\b", line): out.append("a test count")
+    return out
 
 def cmd_me(a):
     """hive me [TEXT | text on stdin]: one dated line on what you are broadly on now (the direction, not the step); hive me alone prints it. Shown per agent on the dashboard's Agents page. --about TEXT: a standing line on who you are (the dashboard's @ menu shows it)."""

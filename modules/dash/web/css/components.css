@@ -2757,10 +2757,9 @@ button.fl-rn:hover{text-decoration:underline}
 .fp-g{display:flex;gap:10px;max-width:360px}
 .fp-g .fp-g-t{flex:1 1 0;height:6px;border-radius:3px}
 .fp-g .fc-g-d{border-radius:3px}
-.fp-ag{display:flex;flex-wrap:wrap;gap:8px 14px;font-size:var(--fs-small)}
+.fp-ag{display:grid;gap:10px;font-size:var(--fs-small)}   /* Now, then Last day: each a list of pills with the agent's own line (R16) */
 .fp-also{margin:var(--s3) 0 var(--s2)}
 .fp-ag p{display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px;margin:0}   /* each agent name its own pill, with air between (they ran together) */
-.fp-links{margin:0;padding:0;list-style:none;display:grid;gap:4px;font-size:var(--fs-small)}
 /* Files and links (views/made.js), in Chat's layout: a row per file or link, as in the design's Files: the type badge, the name, when, and "Type · size · from the conversation" */
 .cm-place[aria-current=page]{background:var(--tint);color:var(--ink)}
 .mf-list{border-bottom:0;margin:var(--s3) -12px 0}

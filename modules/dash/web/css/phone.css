@@ -63,10 +63,28 @@
   /* ---- home: what needs you first; the composer docks at the bottom, where the thumb is.
      On a phone the rail is not beside it: home shows, with the latest conversations listed under it (comms.js phoneList). ---- */
   .cm{grid-template-columns:minmax(0,1fr)}
-  /* the rail's top stays over home (search, the Show menu, the brought-up box); its list, places and grip don't: phoneList is the list */
-  .cm[data-home] .cm-side{display:block;position:static;height:auto;max-height:none;border:0;padding:var(--s3) var(--s4) 0;background:none;overflow:visible}
-  .cm[data-home] .cm-side>:not(.cm-filters),.cm[data-home] .cm-side .cm-newbtn,.cm[data-home] .cm-side .cm-places{display:none}   /* places: the More sheet's Conversations */
-  .cm[data-home] .cm-convo{display:flex}
+  /* the rail's top stays over home as one row, Conversations, that opens the rail as a page (R14), and the brought-up box; its search, Show menu,
+     list, places and grip don't. The home is a column, so that row takes its own room over the cards instead of sitting under them. */
+  .cm[data-home]{display:flex;flex-direction:column}
+  .cm[data-home] .cm-side{display:block;flex:none;position:static;height:auto;max-height:none;border:0;padding:var(--s3) var(--s4) 0;background:none;overflow:visible}
+  .cm[data-home] .cm-side>:not(.cm-filters),.cm[data-home] .cm-side .cm-newbtn,.cm[data-home] .cm-side .cm-places,.cm[data-home] .cm-side .cm-srow{display:none}   /* places: the More sheet's Conversations */
+  .cm[data-home] .cm-filters{padding:0;border:0}
+  .cm[data-home] .cm-convo{display:flex;flex:1 1 auto;min-height:0}
+  .cm-listbtn,.cm-listbtn.only-phone{display:flex;align-items:center;gap:var(--s2);min-height:44px;padding:0 var(--s3);border:1px solid var(--line-2);border-radius:var(--r-pill);background:var(--surface);color:var(--ink);text-decoration:none}
+  .cm-listbtn>span:not(.meta){font-weight:var(--w-med)}
+  .cm-listbtn>.meta{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .cm-listbtn .ic{flex:none;width:18px;height:18px;color:var(--ink-3)}
+  /* #comms/~list (R14): the rail as a page, the bottom bar still there: back, search and Show, By focus / By recency, the list with + per focus */
+  .cm[data-list][data-in] .cm-side{display:flex}
+  .cm[data-list] .cm-convo{display:none}
+  .cm[data-list] .cm-grip,.cm[data-list] .cm-places{display:none}
+  .cm-lhead,.cm-lhead.only-phone{display:flex;align-items:center;gap:var(--s1)}
+  .cm-lhead h1{margin:0;font-size:19px}
+  .cm[data-list] .cm-views{padding:4px 0 0}
+  .cm[data-list] .cm-views .seg button{height:36px;padding:0 14px}
+  .cm[data-list] .cm-hidefaded{min-height:36px}
+  .cm[data-list] .cm-showbtn{min-width:40px;min-height:40px}
+  .cm[data-list] .tm-sec-add{width:40px;height:40px;margin:0;opacity:1}
   .cm-home{display:flex;flex-direction:column;gap:var(--s5);padding:var(--s4) var(--s4) 0}
   .cm-home>.cm-new,.cm-home>section:first-child{order:99;position:sticky;bottom:0;z-index:6;margin:0 calc(-1 * var(--s4));padding:var(--s3);background:linear-gradient(to bottom,transparent,var(--bg) 14px)}
   .cm-home>.cm-new>.cm-home-t,.cm-home>.cm-new>.cm-home-l,.cm-home>section:first-child h1{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
@@ -87,15 +105,20 @@
   .cm-title{flex:1 1 auto;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .cm-head .btn[data-kind=icon]{min-width:40px;min-height:40px}
   .cm-strip{padding:4px var(--s4) 6px}
+  /* the status bar (R15): both lines show, the first on one row and the second on two at most, and More (a 36px row) opens the rest; a tap on the bar shows
+     every word and who wrote it. It is a block of its own over the posts (flex:none), never squeezed under them. */
+  .cm-status{flex:none}
   .cm-strip[data-fold]{cursor:pointer}
-  .cm-strip[data-fold]:has(.cm-strip-b) .cm-strip-a,.cm-strip[data-fold] .cm-strip-m,.cm-strip[data-fold] .cm-status-more{display:none}
-  .app[data-strip=open] .cm-strip[data-fold] .cm-strip-a{display:block}
+  .cm-strip[data-fold] .cm-strip-a,.cm-strip[data-fold] .cm-strip-b{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden}
+  .cm-strip[data-fold] .cm-strip-a{-webkit-line-clamp:1}
+  .cm-strip[data-fold] .cm-strip-m{display:none}
+  .cm-status-more>summary,.cm-status-more[open]>summary{display:flex;align-items:center;min-height:36px;color:var(--ink-2);font-weight:var(--w-med)}
+  .cm-status-more[open]>summary{font-size:0}
+  .cm-status-more[open]>summary::after{content:"Less";font-size:var(--fs-meta)}
+  .app[data-strip=open] .cm-strip[data-fold] .cm-strip-a,.app[data-strip=open] .cm-strip[data-fold] .cm-strip-b,.cm-strip[data-fold]:has(.cm-status-more[open]) :is(.cm-strip-a,.cm-strip-b){display:block;-webkit-line-clamp:none}
   .app[data-strip=open] .cm-strip[data-fold] .cm-strip-m{display:block}
-  .app[data-strip=open] .cm-strip[data-fold] .cm-status-more{display:inline}
-  .cm-strip[data-fold] .cm-strip-b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .app[data-strip=open] .cm-strip[data-fold] .cm-strip-b{white-space:normal}
   .app[data-kb=open] .cm-strip[data-fold] .cm-strip-a,.app[data-kb=open] .cm-strip[data-fold] .cm-strip-m,.app[data-kb=open] .cm-strip[data-fold] .cm-status-more{display:none}
-  .app[data-kb=open] .cm-strip[data-fold] .cm-strip-b{white-space:nowrap}
+  .app[data-kb=open] .cm-strip[data-fold] .cm-strip-b{-webkit-line-clamp:1}
   /* press and hold a message: its tools (mobilenav.js sets data-held) */
   .msg[data-held]>.msg-tools{display:flex;opacity:1;pointer-events:auto}
   .msg[data-held]{background:var(--tint)}
@@ -114,7 +137,11 @@
   .cp-r>*{min-width:0}
   .cp-focus,.cm-focus-sel{min-width:0;flex:0 1 auto;max-width:40vw;text-overflow:ellipsis}
   .cp-fpick{height:40px;flex:0 1 auto;min-width:0}
-  .cp-fpick .cp-focus{max-width:20vw}
+  /* R13: one row; the Model pill and send keep their width (the pill's wrapper too, or the button spills under send), the focus name gets what is left; once a focus is picked its word "Focus" goes, so "A dashboard built…" reads, not "Get the…" */
+  .cp-bar{flex-wrap:nowrap}
+  .cp-fpick .cp-focus{max-width:none;flex:0 1 auto;min-width:0}
+  .cp-mpop,.cp-model.dd{flex:none}
+  .cp-fpick[data-picked]>.cp-lab{display:none}
   .cp-lab{font-size:11px}
 
   /* ---- pages ---- */

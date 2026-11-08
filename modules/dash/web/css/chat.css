@@ -313,7 +313,6 @@
   .msg[data-who=me]>.msg-c{max-width:88%}
   .cm-helper{padding-left:12px}
   .cm-strip-b .cm-strip-m{display:none}
-  .cm-strip[data-fold] .cm-strip-a{display:none}
   .cm-strip[data-fold] .cm-strip-b>span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 }
 

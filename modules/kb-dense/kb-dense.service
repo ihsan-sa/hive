@@ -1,0 +1,17 @@
+[Unit]
+Description=Hive kb-dense: nearest passages by meaning for kb find, on a unix socket
+
+[Service]
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=CUDA_VISIBLE_DEVICES=
+ExecStart=%h/modules/kb-dense/.venv/bin/python %h/modules/kb-dense/serve.py
+Restart=on-failure
+RestartSec=20
+Nice=10
+CPUWeight=20
+IOWeight=20
+MemoryHigh=950M
+MemoryMax=1G
+
+[Install]
+WantedBy=default.target

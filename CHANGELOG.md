@@ -4,6 +4,10 @@ Release notes are on the [releases page](https://github.com/ihsan-sa/hive/releas
 
 A release can ship several times a day. A new Hive installs at most one a day, once it has been out for at least 12 hours; **How often to update** in Settings changes that. The latest is at [releases/latest](https://github.com/ihsan-sa/hive/releases/latest).
 
+## Search by meaning in `kb find` (optional module)
+
+The new `kb-dense` module adds a meaning search to `kb find`: passages whose words differ from the question but whose sense is near are merged into the word-search results. It runs as a small local service (CPU only, under 900 MB, a unix socket, nothing on the network) that you start with `systemctl --user start kb-dense`. Without it, or when it is stopped or slow, `kb find` answers exactly as before; `KB_DENSE=0` turns it off for one search.
+
 ## The page notices a stop or restart within 2 seconds
 An open page now sees within about 2 seconds that the part of the Hive that starts agents has stopped or started again. Before, it took up to 15. The "isn't running" line and the "Taking a break" pill come and go on their own, with no reload.
 

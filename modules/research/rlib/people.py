@@ -277,7 +277,7 @@ def title_slot(text, name, title, org=""):
     """
     rx = re.compile(name_regex(name).pattern, re.I)
     lines = _page_lines(text)
-    def role(candidate):
+    def role(candidate, appt=False):
         candidate = long_form(fold(candidate)).strip(" .")
         candidate = re.sub(r"^(?:the|a|an)\s+", "", candidate)
         for part in re.split(r"\s*[;/]\s*", title):
@@ -296,6 +296,9 @@ def title_slot(text, name, title, org=""):
             if re.fullmatch(r"since (?:19|20)\d\d\.?", tail): return True
             if tail.startswith(("|", "—", "–")) and "@" in tail: return True
             if _VERB_AFTER.match(tail): return True
+            # An appointment sentence names the unit the post sits in: "... appointed Dean within the College of X."
+            if appt and re.fullmatch(r",\s*[a-z][\w ,&'-]{2,80}\.?", tail): return True  # the unit's name continues past a comma
+            if appt and re.fullmatch(r"(?:within|in|at)\s+(?:the\s+)?[\w ,&'-]{3,120}\.?", tail): return True
             if org and re.fullmatch(r"(?:at|of|,)\s*" + re.escape(fold(org_core(org))) + r"(?:(?:" + _VERB_AFTER.pattern + r").*)?\.?", tail): return True
             # A short role may be followed by a department, or another role.
             extension = re.sub(r"^(?:of|for|and)\s+", "", tail)
@@ -324,8 +327,9 @@ def title_slot(text, name, title, org=""):
             tail = re.sub(rf"^{SUFFIX}", "", " " + tail).strip()
             tail = re.sub(r"^,?\s*(?:(?:Ph\.?\s?D\.?|Ed\.?\s?D\.?|MBA|M\.?D\.?),?\s*)+", "", tail, flags=re.I)
             if not head:
-                value = re.sub(r"^(?:[,|–—-]\s*|(?:currently\s+)?(?:is|serves as|has been)\s+)", "", tail, count=1, flags=re.I)
-                if tail and role(value): return " ".join(sent.split())[:300]
+                value = re.sub(r"^(?:[,|–—-]\s*|(?:currently\s+)?(?:(?:has been|was|is) (?:appointed|named|promoted|elevated) (?:as |to )?|(?:is|serves as|has been)\s+))", "", tail, count=1, flags=re.I)
+                appt = bool(re.match(r"(?:(?:has been|was|is) (?:appointed|named|promoted|elevated)\b)", tail, re.I))
+                if tail and role(value, appt): return " ".join(sent.split())[:300]
                 # "Jane Doe (Dean of Students)": the whole rest of the sentence in brackets.
                 inner = re.fullmatch(r"\(([^()]*)\)\.?", tail)
                 if inner and role(inner.group(1)): return " ".join(sent.split())[:300]
