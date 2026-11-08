@@ -6,7 +6,7 @@
 # HIVE_CHECK_AUTO=1 is for a Mac runner with no person: nothing is asked, and sleep is only a pause of the VM.
 # HIVE_CHECK_FAULT=1 (with AUTO) breaks this Mac's port forward after the pause, so the recovery path has to run.
 # HIVE_CHECK_FAULT=2 also stops the app in the VM, so the guest agent start is not enough and the app restart has to do it.
-# HIVE_CHECK_FAULT=3 also makes the guest agent's start fail (a drop-in under /run, which a VM restart clears), so only the VM restart can fix it.
+# HIVE_CHECK_FAULT=3 also makes the guest agent exit at once (/bin/false bound over its program, which a VM restart clears), so only the VM restart can fix it.
 # HIVE_CHECK_LINE=FILE installs from that file, not the site.
 # After the check, to test uninstall: run the uninstall line it prints, then: sh mac-check.sh --after-uninstall
 set -u
@@ -86,8 +86,10 @@ break_forward() {
   if answers 2>/dev/null; then say "      fault: could not break the forward"; return 1; fi
   say "      fault: broke this Mac's forward by a ${how:-?}"
   if [ "$FAULT" = 3 ]; then
-    vm sudo -n sh -c 'mkdir -p /run/systemd/system/lima-guestagent.service.d; printf "[Service]\nExecStartPre=/bin/false\n" > /run/systemd/system/lima-guestagent.service.d/fault.conf; systemctl daemon-reload' >/dev/null 2>&1
-    say "      fault: the guest agent cannot start now (runtime drop-in, gone after a VM restart): $(vm sudo -n sh -c 'systemctl start lima-guestagent >/dev/null 2>&1 && echo started || echo start fails' | tr -d '\r')"
+    # Bind /bin/false over the agent's program: it starts and exits at once, so no unmask or start fixes it. A VM restart clears the mount.
+    vm sudo -n sh -c 'systemctl start lima-guestagent; sleep 2; mount --bind /bin/false $(readlink -f /proc/$(pgrep -of lima-guestagent)/exe); systemctl restart lima-guestagent' >/dev/null 2>&1
+    sleep 3
+    say "      fault: the guest agent now exits at once (/bin/false bound over it, gone after a VM restart); agent processes: $(vm pgrep -c -f lima-guestagent 2>/dev/null | tr -d '\r'); mounts of false: $(vm sudo -n sh -c 'grep -c /bin/false /proc/self/mountinfo || true' 2>/dev/null | tr -d '\r')"
   fi
   if [ "$FAULT" = 2 ] || [ "$FAULT" = 3 ]; then as_hive 'systemctl --user stop hive-dash' >/dev/null 2>&1; say "      fault: also stopped the app in the VM: $(as_hive 'systemctl --user is-active hive-dash' | tr -d '\r')"; fi
 }
