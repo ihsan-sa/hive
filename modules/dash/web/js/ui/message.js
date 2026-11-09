@@ -107,7 +107,7 @@ export function messageReceipt(p) {
   const top = ds.reduce((a, d) => RANK[d.key] < RANK[a.key] ? d : a), same = ds.filter(d => d.key === top.key && d.who).map(d => d.who);
   const X = names(same.length ? same : [top.who || "the agent"]);
   el.dataset.key = top.key;
-  if (top.key === "interrupt") { el.dataset.tone = "info"; el.append(icon("stop"), h("span", null, `Reached ${X} at once · it is stopping its step`)); }
+  if (top.key === "interrupt") { el.dataset.tone = "info"; el.append(icon("stop"), h("span", null, `Interrupting ${X} · it reads this, and anything queued, once its step stops`)); }
   else if (top.key === "unseen") { el.dataset.tone = "bad"; el.append(h("span", { class: "st", "data-tone": "bad", "aria-hidden": "true" }), h("span", null, top.who ? `Hasn't reached ${X}` : top.text)); }
   else if (top.key === "queued") { el.dataset.tone = "warn"; el.append(h("span", { class: "st", "data-tone": "warn", "aria-hidden": "true" }), h("span", null, top.text)); }
   else if (top.key === "waiting") { el.dataset.tone = "warn"; el.append(h("span", { class: "st", "data-tone": "warn", "aria-hidden": "true" }), h("span", null, `Queued · ${X} reads it after its current step`)); }

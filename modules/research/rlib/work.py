@@ -200,6 +200,9 @@ def verify_csv(path, case, out=None, find=False, cols=None, domains=None, worker
     return {"rows": len(rows), "counts": dict(collections.Counter(r["check_status"] for r in rows)), "out": dest, "problems": [{"name": r.get(c["name"]), "status": r["check_status"], "note": r["check_note"]} for r in rows if r["check_status"] != "verified" or r["check_note"]]}
 
 
+HUNT_SPEC_KEYS = frozenset("goal orgs discover target per_org must roles exclude_roles org_pattern domains angles sources read_per_search allow_secondary pages allow_page_signal max_age_years max_seconds out".split())
+
+
 def _pattern(spec, key):
     if not spec.get(key): return None
     try: return re.compile(spec[key], re.I if key != "org_pattern" else 0)
