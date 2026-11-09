@@ -77,7 +77,7 @@
   /* #comms/~list (R14): the rail as a page, the bottom bar still there: back, search and Show, By focus / By recency, the list with + per focus */
   .cm[data-list][data-in] .cm-side{display:flex}
   .cm[data-list] .cm-convo{display:none}
-  .cm[data-list] .cm-grip,.cm[data-list] .cm-places{display:none}
+  .cm[data-list] .cm-grip,.top .cm-places{display:none}   /* the top bar's Chat buttons: the phone has its tab bar, and New conversation on the list page */
   .cm-lhead,.cm-lhead.only-phone{display:flex;align-items:center;gap:var(--s1)}
   .cm-arch-up.only-phone{display:inline-flex;min-height:44px}
   .cm-lhead h1{margin:0;font-size:19px}
@@ -171,6 +171,7 @@
   a,button{touch-action:manipulation}
   .hide-phone{display:none!important}
   .only-phone{display:revert}
+  .cm-side .cm-newbtn.only-phone{display:inline-flex}   /* New conversation on the list page, a quiet button as before (its desktop place is the top bar) */
   @media (prefers-reduced-motion:reduce){.menu,.dlg,.scrim{animation:none}}
 }
 

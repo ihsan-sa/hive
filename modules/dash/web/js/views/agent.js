@@ -3,8 +3,8 @@
 // agentPage(name) is the whole page; the side panel (ui/panel.js) draws the same thing in a narrower container.
 import { h } from "../core/dom.js";
 import { S, OUTSIDE, SYS, jget, loadAgentCosts, post, poll, can } from "../core/store.js";
-import { agentCard, agentSpend, agentState, agentStatus, isAgent, isRunning, isWarden, modelName, WARDEN_HINT, sEnd, displayText, agentOn } from "../core/model.js";
-import { DAY, HOUR, MIN, ago, dur, mdPlain, money, now, pct, plural, short, stamp, toks } from "../core/format.js";
+import { agentCard, agentSpend, agentState, agentStatus, isAgent, isRunning, isWarden, modelName, WARDEN_HINT, sEnd, displayText, agentOn, agentSay } from "../core/model.js";
+import { DAY, HOUR, MIN, ago, dur, firstSentence, mdPlain, money, now, pct, plural, short, stamp, toks } from "../core/format.js";
 import { threadHref } from "../core/router.js";
 import { metrics, cols } from "../templates.js";
 import { button, defs, empty, legend, list, note, pageHeader, rank, section, share, statusLabel, stats, wardenBadge } from "../ui/kit.js";
@@ -150,7 +150,7 @@ function nowBlock(n, L) {
   if (!L && !task) return null;
   const st = L && agentState(L), quiet = L && L.last ? now() - L.last * 1e3 : null;
   const rows = h("dl", { class: "ac-dl" },
-    L && S.agentStatus[n] && L.doing ? [h("dt", null, "Step"), h("dd", null, L.doing)] : null,
+    L && L.doing ? [h("dt", null, "Step"), h("dd", null, L.doing)] : null,
     task ? [h("dt", null, L ? "Asked" : "Last asked"), h("dd", null, `${task.from === "person" && S.app.app ? "you" : task.from}: `, short(mdPlain(displayText(task)), 600))] : null,
     L && L.said ? [h("dt", null, "Said"), h("dd", null, L.said)] : null,
     L ? [h("dt", null, "Last step"), h("dd", null, quiet == null ? "none yet" : quiet < MIN ? "just now" : ago(L.last * 1e3))] : null);
@@ -253,10 +253,13 @@ export function agentPage(n, host = "page") {
   const line = [D.chain.length ? `Started by ${D.chain.join(" → ")}` : null, D.first ? `first seen ${stamp(D.first.start)}` : null];
   const w = W.name === n ? W.data : null;
   const last = mine[mine.length - 1], on = agentOn(n), me = on && on.said ? on : null;   // what it says it is on (`hive me`), its own words and date
+  // the header says what Now's "Doing now" says: its own summary, not the command it is running (the person, 11081941703e); the step is in the block below
+  const say = agentSay(n, L ? L.thread : (S.lastSess[n] || {}).thread), task = L && S.byId[L.post];
+  const asked = task ? "Asked by " + (L.from ? (L.from === "person" && S.app.app ? "you" : L.from) + ": " : "") + firstSentence(displayText(task)) : null;   // Now's fallback, word for word
   return h("div", { class: "agp", "data-key": n, "data-host": host }, metrics({
     header: pageHeader({
       title: h("span", { class: "ref-wrap" }, n, isAgent(n) ? copyButton("@" + n) : null, isWarden(n) ? wardenBadge(WARDEN_HINT) : null),
-      lead: me ? (me.before ? "Was on: " : "") + me.text : L ? L.doing || "Starting" : isWarden(n) ? WARDEN_HINT : last ? `Last said: ${short(mdPlain(displayText(last)), 220)}` : null,
+      lead: say ? (say.before ? "Was on: " : "") + say.text : asked ? asked : isWarden(n) ? WARDEN_HINT : last ? `Last said: ${short(mdPlain(displayText(last)), 220)}` : L ? "Starting" : null,
       tone: L && agentState(L).key === "stuck" ? "bad" : null,
       actions: [L ? button("Open conversation", null, { href: threadHref(L.thread), size: "s", title: "Open " + L.thread }) : null, ...agentActions(n), button("All their posts", null, { href: threadHref("@" + n), size: "s" }), L ? killButton(n) : null],
       meta: [st.key === "outside" ? null : statusLabel(st.key, st.label || null, { live: isRunning(n) }), me ? h("span", { class: "ag-onset", title: new Date(me.at).toISOString() }, `said what it is on ${ago(me.at)}${me.before ? ", before this run" : ""}`) : null, ...line],

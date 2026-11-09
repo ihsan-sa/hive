@@ -34,6 +34,12 @@ async function loadCfg(ctx) {
   F.saved ||= { max: F.ed.max, bud: F.ed.bud, day: F.ed.day };
   ctx.update();
 }
+let upTimer = null;
+/** Keeps the Version block current while Settings is open: a release found or installed in the background shows without a reload. */
+function watchUpdate(ctx) {
+  clearInterval(upTimer);
+  upTimer = setInterval(() => { if (!isBusy("up-check") && !isBusy("up-install")) loadUpdate(ctx); else ctx.update(); }, 20e3);
+}
 async function loadUpdate(ctx) {
   if (!can("config")) return;
   try { F.up = await jget("/api/update"); } catch (e) { return false; }   // an update restarts the app, so a poll can miss
@@ -331,7 +337,7 @@ function loginsSection(ctx) {
         h("div", { class: "lr-in frow fsplit" }, h("b", null, l.name), l.signed_in ? null : statusLabel("out"),
           h("span", { class: "frow-end" }, button(l.signed_in ? "Sign in again" : "Sign in", () => startSignin("login-" + l.name, l.name, false, ctx.update), { size: "s", kind: l.signed_in ? "quiet" : null }))),
         signinBox("login-" + l.name, ctx.update)))) : null,
-      h("form", { class: "frow", onsubmit: e => { e.preventDefault(); if (F.newLogin.trim()) { say("newlogin", null); startSignin("login-new", F.newLogin.trim(), false, ctx.update); } else { say("newlogin", "Give it a name first.", "bad"); ctx.update(); } } },
+      h("form", { class: "frow", onsubmit: e => { e.preventDefault(); if (F.newLogin.trim()) { say("newlogin", null); startSignin("login-new", F.newLogin.trim(), false, ctx.update, () => { F.newLogin = ""; }); } else { say("newlogin", "Give it a name first.", "bad"); ctx.update(); } } },
         h("div", { class: "frow-grow", "data-size": "s" }, field("Add another account", input({ placeholder: "a name for it, like work", value: F.newLogin, oninput: (e, n) => { F.newLogin = n.value; } }))),
         button("Sign in to it", null, { type: "submit" })),
       msg("newlogin"),
@@ -545,9 +551,9 @@ function navDots(ctx) {
 
 export default {
   id: "settings", label: "Settings", about: "accounts, modules, access", tab: () => S.app.app && (can("config") || can("modules") || can("logins")),
-  enter(ctx) { F.keysOpen = null; F.flash = {}; F.ed = null; F.name = null; F.saved = null; F.access = null; F.acctOpen = null; F.accessOpen = null; F.sitesOpen = null; F.say = {}; clearSignin(); forget(); F.up = null; loadCfg(ctx); loadPhone(ctx); loadPush(ctx); loadUpdate(ctx); loadMods(ctx); if (S.app.settings && can("config")) loadPage(ctx.update);
+  enter(ctx) { F.keysOpen = null; F.flash = {}; F.ed = null; F.name = null; F.saved = null; F.access = null; F.acctOpen = null; F.accessOpen = null; F.sitesOpen = null; F.say = {}; clearSignin(); forget(); F.up = null; loadCfg(ctx); loadPhone(ctx); loadPush(ctx); loadUpdate(ctx); watchUpdate(ctx); loadMods(ctx); if (S.app.settings && can("config")) loadPage(ctx.update);
   },
-  leave() { forget(); forgetSecrets(); },
+  leave() { clearInterval(upTimer); upTimer = null; forget(); forgetSecrets(); },
   render(ctx) {
     if (S.app.can == null) return h("div", { class: "page" }, waiting(S.failed));   // /api/app hasn't answered: don't say "only in the app" yet
     if (!S.app.app) return h("div", { class: "page" }, empty("Settings show only in the app, opened from this machine.", { kind: "page", title: "Settings" }));

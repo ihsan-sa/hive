@@ -32,7 +32,7 @@ import { pinned, important, faded, meta as tmeta, archived, setMeta, renameDialo
 import { callFor, hangUp } from "../ui/phone.js";
 import { brought } from "../ui/brought.js";
 import { firstJobs, closeLine } from "../ui/firstjobs.js";
-import { hiveStopped } from "../ui/shell.js";
+import { hiveStopped, TOPX } from "../ui/shell.js";
 import { composer, interruptButton, cancelReply, replyTo, say, outFor, outSig, actions as outActions, dropZone, recipient, hasDraft, quoteRef, prefill } from "../ui/composer.js";
 
 const STEP = 500, FIRST = 250, NEAR = 60, GROUP = 10 * MIN, HELPER_AFTER = 3 * MIN;
@@ -730,23 +730,23 @@ function titleMenu(c, n, d, off, ctx) {
     lead, lead.length ? sep() : null, where, out.length ? sep() : null, out,
     full && th !== threadTitle(th) ? h("p", { class: "meta cm-menu-id" }, "Its id on the board: ", h("code", { title: "Click to select it" }, th), copyButton(th)) : null);   // copy it (the person, 11041333ab1a)
 }
-/** The rail's rows to the pages Chat brings together, under New conversation (the hand-off's Rail, `button.cm-nav`; links here, since each opens a page): each only where this connection may open it, with a count where there is one. Chat shows no row, so these are the way to them. */
+// Chat's fixed bar of buttons: New conversation, then the pages Chat brings together, each with a count where there is one, only where this
+// connection may open it. A row of its own under the top bar (ui/shell.js TOPX), above the list, not in it, so dragging the list wider or narrower
+// leaves it alone (the person, 110819287bb8, 110819316eed "a static button bar", 11081933e722 "dont put it in the sidebar", 11081937e3e8).
 function places() {
-  const link = (label, ic, to, n, tip) => h("a", { class: "cm-place cm-nav", href: to, title: tip, "data-key": ic, "aria-current": L.place && to === href(L.place) ? "page" : null }, icon(ic), h("span", { class: "cm-place-l" }, label), n ? h("b", { class: "cm-place-n", "aria-label": n + " new" }, String(n)) : null);
-  return h("div", { class: "cm-places", role: "group", "aria-label": "Also in Chat", "data-key": "places" },
+  const at = location.hash || "#comms";
+  const link = (label, ic, to, n, tip) => h("a", { class: "cm-place", href: to, title: tip, "data-key": ic, "aria-current": at === to ? "page" : null }, icon(ic), h("span", { class: "cm-place-l" }, label), n ? h("b", { class: "cm-place-n", "aria-label": n + " new" }, String(n)) : null);
+  return h("div", { class: "cm-places", role: "group", "aria-label": "Chat", "data-key": "places" },
+    can("post") ? h("a", { class: "cm-place cm-newbtn", href: href("comms", "~new"), title: "Start a new conversation", "aria-label": "New conversation", "data-key": "new", "aria-current": at === href("comms", "~new") ? "page" : null }, icon("new"), h("span", { class: "cm-place-l" }, "New")) : null,
     link("Yours", "yours", href("yours"), 0, "Every exchange you had, newest first"),
     can("post") ? link("Needs me", "bell", href("yours", "waits"), needsN(), needsN() ? "What waits on you, newest first" : "Nothing waits on you") : null,
     can("read") ? link("Inbox", "inbox", href("inbox"), IB.unread || 0, "Every message agents sent you") : null,
     can("files") ? link("Mail", "mail", href("mail"), MN.n, MN.n ? "Mail since you last opened it" : "Your mail") : null,
     link("Files", "file", href("made"), 0, "Files and links from your conversations"));
 }
-// One button over the list holds every choice about it (the person, 11071400de5b: too many controls everywhere; the hand-off's §4): what shows, how it is grouped,
-// whether the not-needed ones are listed, fold and reach. Above the list there are New conversation, search and this. The button carries a dot when a choice is not the default.
-const showOff = () => showMask() !== SHOW.ALL || C.imp || C.hideFaded;
-function showBtn(ctx) {
-  return h("button", { type: "button", class: "btn cm-showbtn", "data-kind": "icon", "data-on": showOff() ? "" : null, "aria-label": "Show and group", title: "What the list shows and how it is grouped", "aria-haspopup": "true", "aria-expanded": String(C.menu === "show"),
-    onclick: e => { e.stopPropagation(); C.menu = C.menu === "show" ? null : "show"; ctx.update(); } }, icon("filter"));
-}
+TOPX.chat = () => app() ? places() : null;
+// The choices about the list, always open over it (the person, 110819287bb8, after 11071400de5b had put them behind one button):
+// what shows, how it is grouped, whether the not-needed ones are listed, fold and reach.
 function showMenu(ctx) {
   const searching = words(C.tq).length > 0;
   return h("div", { class: "cm-menu cm-show-m", role: "menu", "data-key": "showmenu", "aria-label": "Show and group" },
@@ -1102,14 +1102,14 @@ function frame(ctx, c, pane) {
           // R14: the phone's way to the rail. Home has one row that opens it as a page; that page has a way back (css/phone.css shows these only there).
           app() && c.home && !c.list ? h("a", { class: "cm-listbtn only-phone", href: href("comms", "~list"), "data-key": "listbtn" }, icon("search"), h("span", null, "Conversations"), h("span", { class: "meta" }, "search, filter, by focus"), icon("chevron-right")) : null,
           app() && c.list ? h("div", { class: "cm-lhead only-phone", "data-key": "lhead" }, h("a", { class: "btn cm-back", href: href("comms"), "data-kind": "icon", "aria-label": "Chats", title: "Chats" }, icon("chevron-left")), h("h1", null, "Conversations")) : null,
-          post ? button("New conversation", null, { href: href("comms", "~new"), kind: "quiet", icon: "new", cls: "cm-newbtn" }) : null,
-          app() && !simpleOn() ? places() : null,
+          // New conversation: in the top bar's Chat buttons on a computer (places, above); here in simple view, and on the phone's list page, where the top bar has no room
+          post ? button("New conversation", null, { href: href("comms", "~new"), kind: "quiet", icon: "new", cls: "cm-newbtn" + (app() && !simpleOn() ? " only-phone" : "") }) : null,
           h("div", { class: "cm-srow" },
             h("div", { class: "cm-search" }, icon("search"),
               input({ type: "search", placeholder: app() ? "Search, or @ to ask" : "Search threads", "aria-label": "Search all conversations by name or content. Start with @ to ask an agent, which answers here and brings up the conversations that help", value: C.tq, oninput: e => { C.tq = e.target.value; ctx.update(); }, onkeydown: e => { if (e.key === "Enter" && aiQ()) { e.preventDefault(); aiAsk(ctx); return; } if (e.key === "Escape") { e.stopPropagation(); C.tq = ""; e.target.value = ""; e.target.blur(); ctx.update(); } } })),
-            simpleOn() ? null : showBtn(ctx)),
+),
           app() && c.list && !simpleOn() ? viewBar(ctx) : null,
-          simpleOn() || C.menu !== "show" ? null : showMenu(ctx),
+          simpleOn() ? null : showMenu(ctx),   // always open (the person, 110819287bb8: "always show the filters"), no button to open it
           app() ? brought() : null,
           C.err ? h("p", { class: "fmsg", "data-tone": "bad", role: "alert" }, C.err) : null),
         h("div", { class: "cm-tl", "data-own": "", "data-sig": "own", tabindex: "-1" })),

@@ -232,7 +232,7 @@ function draftDo(id, act, update) {
 }
 async function draftRun(id, act, update) {
   P.draftBusy = id; P.draftSay = null; update();
-  try { P.page = await post("/api/draft", { id, do: act }); P.draftSay = { text: act === "send" ? "Approved. It goes on the next report run, within a few hours." : "Discarded. Nothing was sent.", tone: "good" }; }
+  try { P.page = await post("/api/draft", { id, do: act }); const r = P.page; P.draftSay = { text: act === "send" ? (/once gh/.test(r.said || "") ? "Approved. It waits until gh is installed and signed in on the computer the Hive runs on: without it nothing goes to GitHub." : "Approved. It goes on the next report run, within a few hours.") : "Discarded. Nothing was sent.", tone: act === "send" && /once gh/.test(r.said || "") ? "warn" : "good" }; }
   catch (e) { P.draftSay = { text: e.message, tone: "warn" }; }
   finally { P.draftBusy = null; update(); }
 }
@@ -252,7 +252,7 @@ function draftsPart(g, update) {
         button("Discard", () => draftDo(d.id, "discard", update), { kind: "quiet", size: "s" })) : null)));
 }
 function sendCopy(update) {
-  confirm({ title: "Send the makers a copy?", body: ["A scrubbed copy of your recent logs and board, chats included. They keep it for 30 days."], ok: "Send", onOk: () => sendCopyRun(update) });
+  confirm({ title: "Send the makers a copy?", body: ["A scrubbed copy of your recent logs and board, chats included. They keep it for 30 days."], ok: "Send", busyText: "Scrubbing and sending the copy. This can take a minute.", onOk: () => sendCopyRun(update) });
 }
 async function sendCopyRun(update) {
   P.copyBusy = true; P.copySay = null; update();
@@ -261,7 +261,7 @@ async function sendCopyRun(update) {
   finally { P.copyBusy = false; update(); }
 }
 function sendAll(update) {
-  confirm({ title: "Send the makers everything?", body: ["One zip of your whole board and log (chats included), every project folder, the files attached to posts and your notes. Text is scrubbed of keys, emails and your names; pictures and other files go as they are. Left out: .git folders, build caches, key files, any file over 50 MB and anything past 100 MB in all. They keep it for 3 days. One a day."], ok: "Send everything", onOk: () => sendAllRun(update) });
+  confirm({ title: "Send the makers everything?", body: ["One zip of your whole board and log (chats included), every project folder, the files attached to posts and your notes. Text is scrubbed of keys, emails and your names; pictures and other files go as they are. Left out: .git folders, build caches, key files, any file over 50 MB and anything past 100 MB in all. They keep it for 3 days. One a day."], ok: "Send everything", busyText: "Packing and sending the zip. With big project folders this can take several minutes: keep this page open.", onOk: () => sendAllRun(update) });
 }
 async function sendAllRun(update) {
   P.allBusy = true; P.copySay = null; update();

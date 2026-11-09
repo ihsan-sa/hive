@@ -12,7 +12,9 @@ import { ago, clock, dayName, dur, mdPlain, now, plural, short, DAY, HOUR, MIN }
 import { threadHref, go, href } from "../core/router.js";
 import { openSheet } from "../ui/panel.js";
 import { card as projectCard } from "../ui/projectcard.js";
-import { focusOf, sayPlain } from "../core/foci.js";
+import { focusOf, sayPlain as sayPlain0, isCode } from "../core/foci.js";
+/** Plain words for the chart and its lists: no ids, jargon or agent codes (an agent is just "an agent", the chart has no room for pills). */
+const sayPlain = (t, n) => sayPlain0(String(t || "").replace(/`?@?\b([a-z][0-9a-f]{4})\b`?/g, (m, w) => (isCode(w) ? "an agent" : m)), n);
 import { gist } from "../core/gist.js";
 import { sayTo } from "../ui/composer.js";
 import { canvas } from "../templates.js";

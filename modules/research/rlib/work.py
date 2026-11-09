@@ -485,10 +485,10 @@ class Hunt:
         far = sum("signal isn't near" in r.get("note", "") for r in self.near.values())
         if far and self.must: lines += ["## Held back", f"- {far} near misses are only held because the `must` words aren't close to the person. If those words describe the organisation rather than the person, set `\"allow_page_signal\": true` in the spec.", ""]
         nh = {o: u for o, u in self.no_head.items() if not self.org_count(o)}
-        if nh: lines += ["## No named head", "The office page was read and prints only a mailbox or phone, no person. This is a gap in the source, not a miss by the search:", *[f"- {o} — {u}" for o, u in nh.items()], ""]
+        if nh: lines += ["## No named head", "The office page was read and prints only a mailbox or phone, no person. This is a gap in the source, not a miss by the search:", *[f"- {o} — [{u}]({u})" for o, u in nh.items()], ""]
         if untried: lines += ["## Organisations not tried", *[f"- {o}" for o in untried[:30]], ""]
         (out_dir / "REPORT.md").write_text("\n".join(lines) + "\n")
-        return {"status": status, "leads": len(rows), "verified": n_ver, "target": self.target, "near": len(self.near), "out": str(out_dir), "stopped": self.stop_reason, "departure_searches": self.departure_searches, "no_named_head": sorted(nh)}
+        return {"status": status, "leads": len(rows), "verified": n_ver, "target": self.target, "near": len(self.near), "out": str(out_dir), "stopped": self.stop_reason, "departure_searches": self.departure_searches, "lead_list": [{k: r.get(k, "") for k in ("name", "title", "organisation", "check_status")} for r in rows], "no_named_head": [{"org": o, "url": nh[o]} for o in sorted(nh)]}
 
 
 def analyze_pages(pages, today=None):

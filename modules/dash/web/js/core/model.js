@@ -67,6 +67,16 @@ export function agentOn(n) {
   return { text: line || onWords(asked), asked, bar: !!line, at: s.start, said: false, before: false };
 }
 
+/** What the Now page's "Doing now" and the agent page's header say an agent is on: its own summary, never the command it is running
+ *  (the person, 11081450f3e1 and 11081941703e). Its `hive me` line, else the first line of its conversation's status bar, else what its brief asks for.
+ *  {text, at?, before?, own?} or null. */
+export function agentSay(n, thread) {
+  const on = agentOn(n);
+  if (on && on.said) return { text: on.text, at: on.at, before: on.before, own: true };
+  const bar = thread && S.threadStatus && S.threadStatus[thread], line = bar && bar.text && bar.text.split("\n").map(x => x.trim()).find(Boolean);
+  return line ? { text: line } : on && on.text && !on.asked ? { text: on.text } : null;
+}
+
 // ---- the agent card: what an agent runs on. One list of rows, so a new harness or option adds a row here. ----
 export function modelName(id) { const m = /^claude-([a-z]+)-(\d+)-(\d+)(?:-\d{8})?$/.exec(id || ""); return m ? `${m[1][0].toUpperCase() + m[1].slice(1)} ${m[2]}.${m[3]}` : id; }
 export function loginName(path) { const l = ((S.live && S.live.logins) || []).find(x => x.path === path); return l ? l.name : path ? String(path).replace(/^.*\/\.claude-?/, "") || "main" : null; }
