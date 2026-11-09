@@ -25,7 +25,7 @@ export default {
     if (!IB.items) { pollInbox(); return h("div", { class: "page" }, empty("Reading…", { kind: "loading" })); }
     const w = can("post");
     return form({
-      header: pageHeader({ title: "Inbox", lead: "Every message an agent sent you, newest first. Chat's home shows the ones that need you now.",
+      header: pageHeader({ title: "Inbox", hint: "Every message an agent sent you, newest first. Chat's home shows the ones that need you now.",
         actions: w && IB.unread ? button("Mark all read", () => mark({ all: true }), { size: "s" }) : null,
         after: IB.err ? h("p", { class: "fmsg", role: "alert", "data-tone": "bad" }, IB.err) : null }),
       sections: [section({}, list(IB.items.map(p => ({

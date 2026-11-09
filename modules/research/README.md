@@ -55,6 +55,8 @@ A note says when a page is over two years old or came from an archive copy: both
  "max_seconds": 1500, "out": "results"}
 ```
 
+Other keys: `read_per_search` (4), `allow_secondary` (true), `pages` (`{org: url or [urls]}`), `max_age_years` (3), `stale_days` (365), `workers` (4), `sources`, `org_pattern`. `research hunt --help` lists them all, `--dry-run` checks a spec without searching, and an unknown key warns with a suggestion.
+
 `must` words normally have to be close to the person on the page. If they describe the organisation rather than the person ("open source" for a foundation), set `"allow_page_signal": true`.
 
 List `roles` most wanted first: when an org's `per_org` cap is hit on a page, the earlier roles get the places. It tries every angle on every org, finds more orgs from `discover`, and writes `leads.csv` (each row with its page and quote), `near_misses.csv` and `REPORT.md`. A row needs the person, the title and a `must` word near them on a page that names the org. If it can't reach the target it says it's short and exits 3: it never pads. Run it again on the same case to continue.

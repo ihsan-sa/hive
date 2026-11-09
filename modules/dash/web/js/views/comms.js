@@ -28,7 +28,7 @@ import { openQuick, quickOpen, closeQuick, quickPanel, laterButtons } from "../u
 import { when } from "../ui/when.js";
 import { downloadMarkdown, printScript } from "../ui/export.js";
 import { shareDialog } from "../ui/share.js";
-import { pinned, important, faded, meta as tmeta, archived, setMeta, renameDialog, openCard, markSeen, threadCrumb, titleExtras } from "../ui/threadmeta.js";
+import { pinned, important, faded, meta as tmeta, archived, setMeta, renameDialog, openCard, openFor, markSeen, threadCrumb, titleExtras } from "../ui/threadmeta.js";
 import { callFor, hangUp } from "../ui/phone.js";
 import { brought } from "../ui/brought.js";
 import { firstJobs, closeLine } from "../ui/firstjobs.js";
@@ -43,7 +43,8 @@ const app = () => S.app.app;
 // The conversation list's width: drag its edge, or use the arrow keys on it. Kept on this device.
 const SIDE_MIN = 220, SIDE_MAX = 640;
 let sideW = (() => { try { return Math.min(SIDE_MAX, Math.max(SIDE_MIN, +localStorage.getItem("cm.side") || 272)); } catch (e) { return 272; } })();
-const setSide = (box, w) => { sideW = Math.round(Math.min(SIDE_MAX, Math.max(SIDE_MIN, w))); box.style.setProperty("--cm-w", sideW + "px"); try { localStorage.setItem("cm.side", sideW); } catch (e) {} };
+try { document.documentElement.style.setProperty("--rail-now", sideW + "px"); } catch (e) {}   // the New cell in Chat's bar follows the stored rail width (Nov 9 handoff §A.3)
+const setSide = (box, w) => { sideW = Math.round(Math.min(SIDE_MAX, Math.max(SIDE_MIN, w))); box.style.setProperty("--cm-w", sideW + "px"); document.documentElement.style.setProperty("--rail-now", sideW + "px"); try { localStorage.setItem("cm.side", sideW); } catch (e) {} };
 const grip = () => h("div", { class: "cm-grip", role: "separator", "aria-orientation": "vertical", "aria-label": "Resize the conversation list", tabindex: "0", "data-key": "grip", title: "Drag to resize",
   onpointerdown: e => { const box = e.target.closest(".cm"), x0 = e.clientX, w0 = sideW; e.target.setPointerCapture(e.pointerId); e.target.dataset.on = "1";
     e.target.onpointermove = m => setSide(box, w0 + m.clientX - x0);
@@ -137,6 +138,8 @@ function refresh(c) {
   // With For you on, a run ending can promote a post already in the list, so the list is redone then. That must not move someone who has scrolled up.
   const mask = maskFor(c), ended = mask & SHOW.you ? endedRuns() : 0, base = [c.arg, C.q, mask].join("\0"), key = base + "\0" + ended, match = matcher(c, mask, ended);
   const evs = c.thread && !C.q ? threadEvents(c.thread) : [];
+  // One "New" rule above the first For-you message not yet on screen, taken once as the conversation opens (the Nov 8 handoff §8.2)
+  if (c.thread !== L.newTh) { L.newTh = c.thread; const o = c.thread ? openFor(c.thread) : null; L.newId = o ? o.items.reduce((a, p) => (p.t < a.t ? p : a)).id : null; }
   if (key !== L.key || src !== L.src) {
     const m = src.filter(match);
     Object.assign(L, { key, base, src, matched: m, seen: src.length, pend: [], evs: new Set(evs.map(e => e.key)), rebuild: true, keep: base === L.base && src === L.src && !L.stuck, unseen: 0 });
@@ -171,6 +174,7 @@ function rows(items) {
     if (p.ev) { out.push(evRow(p)); L.prev = null; continue; }
     L.names.add(p.from); for (const m of p.men) L.names.add(m);
     if (!L.opts.showThread && L.helpers) { const hs = helperFolds(p.th, p.t, L.helpers, L.opts); if (hs.length) { out.push(...hs); L.prev = null; } }   // helper conversations fold where they began (R7)
+    if (p.id === L.newId) { out.push(h("p", { class: "msg-new", role: "separator", "data-key": "new:" + p.id }, "New")); L.prev = null; }
     const q = L.prev, cont = !!q && q.from === p.from && q.th === p.th && !p.reply_to && p.t - q.t < GROUP && sameTo(q, p) && sameSource(q, p);
     const a = message(p, { ...L.opts, cont }); a.dataset.show = KIND_NAME[postKind(p)] || ""; if (a.dataset.show === "you" && asksQuestion(p)) a.dataset.ask = "";   // For you, Updates or Agent comms, marked in the list (11040113eacf)
     L.prev = p; a._head = L.heads; L.io.observe(a); out.push(a);
@@ -530,6 +534,9 @@ function sections(rs, ctx, opts) {
       h("div", { class: "tm-sec-hw" }, h("p", { class: "tm-sec-h tm-sec-other" }, label)), list(rows, { ...opts, empty: "" }));
     const here = L.here === k, shut = FOLD.has(k), fid = k.startsWith("f:") ? k.slice(2) : null;   // the focus page open beside it: its section is marked; pressing its heading again folds it, the page stays
     const toggle = () => { FOLD.has(k) ? FOLD.delete(k) : FOLD.add(k); saveFold(); ctx.update(); };
+    // The count is its own span after the name, with a dot before it when a row waits on you or is working (the Nov 8 handoff §2.1); + takes its place on hover.
+    const tone = rows.some(r => waitsOn(r.th)) ? "info" : rows.some(r => threadState(r.th).key === "working") ? "good" : null;
+    const count = h("span", { class: "tm-sec-n", title: plural(rows.length, "conversation") + (tone === "info" ? ", one waits on you" : tone ? ", one working" : "") }, tone ? h("span", { class: "st", "data-tone": tone, "aria-hidden": "true" }) : null, String(rows.length));
     const dnd = focusDnd(fid, ctx);
     // A focus's heading is a link to its page (the person, 11080309f795); the chevron before it folds the section. Other headings fold as a whole.
     return h("div", { class: "tm-sec", "data-key": "sec:" + k, "data-sec": k, "data-folded": shut ? "" : null, "data-here": here ? "" : null, ...dnd.drop },
@@ -537,9 +544,9 @@ function sections(rs, ctx, opts) {
         fid != null ? [
           h("button", { type: "button", class: "tm-sec-ch", "aria-expanded": String(!shut), title: shut ? "Show this section" : "Fold this section", "aria-label": (shut ? "Show " : "Fold ") + label, onclick: toggle }, icon(shut ? "chevron-right" : "chevron-down")),
           h("a", { class: "tm-sec-h tm-sec-link", href: href("focus", fid || "misc"), title: fid && can("post") ? `Open ${label}. Drag to reorder the focuses (Alt+Up or Alt+Down moves it)` : `Open ${label}`, draggable: fid && can("post") ? "false" : null, onkeydown: focusKeys(fid, ctx),
-            onclick: e => { if (e.button || e.metaKey || e.ctrlKey || e.shiftKey) return; if (here) { e.preventDefault(); toggle(); } else if (FOLD.has(k)) { FOLD.delete(k); saveFold(); } } }, shut ? `${label} (${rows.length})` : label)] :
+            onclick: e => { if (e.button || e.metaKey || e.ctrlKey || e.shiftKey) return; if (here) { e.preventDefault(); toggle(); } else if (FOLD.has(k)) { FOLD.delete(k); saveFold(); } } }, h("span", { class: "tm-sec-nm" }, label)), count] :
         h("button", { type: "button", class: "tm-sec-h tm-fold", "aria-expanded": String(!shut), title: shut ? "Show this section" : "Fold this section", onclick: toggle },
-          icon(shut ? "chevron-right" : "chevron-down"), shut ? `${label} (${rows.length})` : label),
+          icon(shut ? "chevron-right" : "chevron-down"), h("span", { class: "tm-sec-nm" }, label), count),
         fid && can("post") ? h("button", { type: "button", class: "tm-sec-add", title: `New conversation in ${label}`, "aria-label": `New conversation in ${label}`, onclick: () => newIn(fid) }, icon("plus")) : null),
       shut ? null : rows.length ? list(rows, { ...opts, empty: "" }) : h("p", { class: "meta tm-sec-none" }, "Nothing this week."));
   };
@@ -562,7 +569,7 @@ function syncThreads(c, ctx) {
   const tree = sections(rows, ctx, { dense: true, empty: simpleOn() ? "No conversations yet. Start one with New conversation." : S.threads.size ? "Nothing here with what Show has on. Turn on Agent comms to see all of them." : app() ? "No conversations yet. Start one with New." : "No threads." });
   if (tl.firstChild) morph(tl.firstChild, tree); else tl.append(tree);
   const fb = document.querySelector("#main .cm-foldall");   // the list is built after the bar, so the bar's word catches up here
-  if (fb) { fb.hidden = foldNone(); if (fb.textContent !== foldWord()) fb.textContent = foldWord(); }
+  if (fb) { fb.hidden = foldNone(); if (fb.title !== foldWord()) fb.title = foldWord(); }
   if (fresh) { const cur = tl.querySelector("[aria-current]"); if (cur) { const r = cur.getBoundingClientRect(), b = tl.getBoundingClientRect(); if (r.top < b.top || r.bottom > b.bottom) tl.scrollTop += r.top - b.top - 40; } }
 }
 
@@ -587,11 +594,16 @@ const notBuilt = () => h("span", { class: "nb", title: "Designed, not built yet:
 /** The two lines an agent (or the status refresher) wrote with `hive status`: what the thread is about, where it stands. */
 const lastAt = th => { const d = S.threads.get(th), p = d && d.posts.at(-1); return p ? p.t : 0; };
 const moreOpen = new Set();   // threads whose status "More" is open: a redraw (a new post) keeps it open (R15)
+const stOpen = new Set();   // threads whose summary popover is open (Nov 8 §8.4)
 function statusBar(th) {
   const r = th && S.threadStatus && S.threadStatus[th]; if (!r) return null;
   const [a, ...rest] = r.text.split("\n");
-  return h("div", { class: "cm-status cm-strip", "data-key": "status", "data-fold": "", role: "note", "aria-label": "Thread status" },
-    h("b", { class: "cm-strip-a" }, a), rest.length ? h("span", { class: "cm-strip-b" }, rest[0]) : null,
+  // Nov 8 §8.4: one muted line in the head beside the title; clicking it opens the whole summary as a popover under the head.
+  const open = stOpen.has(th);
+  return h("div", { class: "cm-status cm-strip", "data-key": "status", "data-fold": "", "data-open": open ? "" : null, role: "note", "aria-label": "Thread status" },
+    h("b", { class: "cm-strip-a", role: "button", tabindex: "0", "aria-expanded": String(open), title: open ? "Hide the summary" : "Show the whole summary",
+      onclick: e => { e.stopPropagation(); open ? stOpen.delete(th) : stOpen.add(th); L.ctx && L.ctx.update(); },
+      onkeydown: e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.currentTarget.click(); } } }, a), rest.length ? h("span", { class: "cm-strip-b" }, rest[0]) : null,
     rest.length > 1 ? h("details", { class: "cm-status-more", open: moreOpen.has(th) || null, ontoggle: (e, n) => { if (e.target === n) n.open ? moreOpen.add(th) : moreOpen.delete(th); } }, h("summary", null, "More"), h("p", null, rest.slice(1).join(" "))) : null,
     // One agent named per conversation (R6 review): the strip names who is on it; the summary's author is on hover.
     h("span", { class: "meta cm-status-m cm-strip-m", title: "Summary by " + r.from }, `updated ${ago(r.at * 1e3)}${lastAt(th) ? " · last post " + ago(lastAt(th)) : ""}`,
@@ -602,8 +614,8 @@ function strip(th) {
   const st = threadState(th, seen), out = [], run = (S.live ? S.live.agents : []).filter(a => a.thread === th), post = can("post") && app();
   const call = callFor(th);
   if (call) out.push(line("working", [who(call.agent), call.state === "hold" ? " is putting you through on your call" : " is on a call with you", h("span", { class: "meta cm-line-m" }, " · " + dur(now() - call.started * 1e3))], post ? button("Hang up", () => hangUp(call.id), { size: "s" }) : null, { key: "call", live: true }));
-  if (st.key === "asks") out.push(line("asks", [who(st.who), " is waiting for your answer: ", h("q", null, short(lastQuestion(st.post), 110))],
-    post ? button("Answer", () => replyTo(st.post), { size: "s" }) : null, { key: "asks" }));
+  // One line per state, no quoted question and no Answer: the composer is already addressed to it (the Nov 8 handoff §8.6).
+  if (st.key === "asks") out.push(line("asks", [who(st.who), " waits for your answer"], null, { key: "asks" }));
   if (st.key === "limited") {
     const room = hasRoom(), r = nextReset();
     out.push(line("limited", [who(st.who), simpleOn() ? " is taking a break. " : ` stopped at a usage limit ${ago(st.t)} and hasn't carried on. `, room ? "There's room again now, so it should carry on by itself soon." : r ? `It carries on by itself after ${stamp(r)}.` : "It carries on by itself once there's room."],
@@ -649,10 +661,6 @@ function stripToggle(open) {
   const b = button(open ? "Show less" : "Show all", () => { C.strip = !open; L.ctx && L.ctx.update(); }, { kind: "icon", size: "s", icon: open ? "chevron-down" : "chevron-up", cls: "cm-strip-t", title: open ? "Show less" : "Show everyone and what you can do" });
   b.setAttribute("aria-expanded", String(open)); return b;
 }
-function lastQuestion(p) {
-  const lines = mdPlain(displayText(p)).split(/\n|(?<=[.!])\s+/).map(s => s.trim()).filter(Boolean);
-  return [...lines].reverse().find(s => s.endsWith("?")) || lines.at(-1) || "";
-}
 
 // ---- the head of a conversation ----
 // One menu, opened by the title: the count, what you can do to the conversation, what shows, and the way out (export, share).
@@ -691,6 +699,13 @@ function openRowMenu(b, th, ctx) {
   m.querySelector(".menu-i")?.focus();
 }
 
+// §8.4 phone: the head shows only the summary's first line, under the title; the rest of it opens with the title's menu (hidden above 699 px).
+function stMenu(th) {
+  const r = th && S.threadStatus && S.threadStatus[th]; if (!r) return null;
+  const rest = r.text.split("\n").slice(1).filter(l => l.trim());
+  return rest.length ? h("div", { class: "cm-menu-st", role: "note", "aria-label": "Where it stands" }, rest.map(l => h("p", null, l)),
+    h("p", { class: "meta", title: "Summary by " + r.from }, "updated " + ago(r.at * 1e3))) : null;
+}
 function titleMenu(c, n, d, off, ctx) {
   const th = c.thread, full = th && app() && !simpleOn(), mine = can("post");
   const act = (label, ic, fn, title, val) => button(val ? [label, h("small", null, val)] : label, () => { C.menu = null; fn(); ctx.update(); }, { size: "s", kind: "quiet", icon: ic, title });
@@ -727,7 +742,7 @@ function titleMenu(c, n, d, off, ctx) {
   const tb = document.querySelector(".cm-head .cm-title-b");   // R7b S6: under the title it opens from, not at the far right
   return h("div", { class: "cm-menu menu", role: "menu", "data-key": "title", "data-side": "bottom-start", style: tb ? `--tx:${tb.offsetLeft}px` : null },
     h("p", { class: "meta cm-cost" }, (C.q.trim() ? plural(n, "match", "matches") : plural(n, app() ? "message" : "post")) + (d ? ` \u00b7 since ${stamp(d.first)}` : "") + (full && threadCost(th) != null ? ` \u00b7 ${money(threadCost(th))}` : "")),
-    lead, lead.length ? sep() : null, where, out.length ? sep() : null, out,
+    stMenu(th), lead, lead.length ? sep() : null, where, out.length ? sep() : null, out,
     full && th !== threadTitle(th) ? h("p", { class: "meta cm-menu-id" }, "Its id on the board: ", h("code", { title: "Click to select it" }, th), copyButton(th)) : null);   // copy it (the person, 11041333ab1a)
 }
 // Chat's fixed bar of buttons: New conversation, then the pages Chat brings together, each with a count where there is one, only where this
@@ -737,9 +752,9 @@ function places() {
   const at = location.hash || "#comms";
   const link = (label, ic, to, n, tip) => h("a", { class: "cm-place", href: to, title: tip, "data-key": ic, "aria-current": at === to ? "page" : null }, icon(ic), h("span", { class: "cm-place-l" }, label), n ? h("b", { class: "cm-place-n", "aria-label": n + " new" }, String(n)) : null);
   return h("div", { class: "cm-places", role: "group", "aria-label": "Chat", "data-key": "places" },
-    can("post") ? h("a", { class: "cm-place cm-newbtn", href: href("comms", "~new"), title: "Start a new conversation", "aria-label": "New conversation", "data-key": "new", "aria-current": at === href("comms", "~new") ? "page" : null }, icon("new"), h("span", { class: "cm-place-l" }, "New")) : null,
-    link("Yours", "yours", href("yours"), 0, "Every exchange you had, newest first"),
-    can("post") ? link("Needs me", "bell", href("yours", "waits"), needsN(), needsN() ? "What waits on you, newest first" : "Nothing waits on you") : null,
+    can("post") ? h("a", { class: "cm-place cm-newbtn", href: href("comms", "~new"), title: "Start a new conversation", "aria-label": "New conversation", "data-key": "new", "aria-current": at === href("comms", "~new") ? "page" : null }, icon("new"), h("span", { class: "cm-place-l" }, "New conversation")) : null,
+    // Needs me merged into Yours (Nov 9 handoff §A.2): its count, and its list when something waits
+    can("post") && needsN() ? link("Yours", "yours", href("yours", "waits"), needsN(), "What waits on you, newest first; every exchange you had is under it") : link("Yours", "yours", href("yours"), 0, "Every exchange you had, newest first"),
     can("read") ? link("Inbox", "inbox", href("inbox"), IB.unread || 0, "Every message agents sent you") : null,
     can("files") ? link("Mail", "mail", href("mail"), MN.n, MN.n ? "Mail since you last opened it" : "Your mail") : null,
     link("Files", "file", href("made"), 0, "Files and links from your conversations"));
@@ -750,12 +765,12 @@ TOPX.chat = () => app() ? places() : null;
 function showMenu(ctx) {
   const searching = words(C.tq).length > 0;
   return h("div", { class: "cm-menu cm-show-m", role: "menu", "data-key": "showmenu", "aria-label": "Show and group" },
-    h("p", { class: "meta cm-show-l" }, "Show"), showChips(ctx),
-    app() && !searching && C.conv !== "~list" ? [h("p", { class: "meta cm-show-l" }, "Arrange"), viewBar(ctx)] : null,   // the phone's list page has the toggle in sight
+    showChips(ctx),   // three rows, no kickers (Nov 9 handoff §B)
+    app() && !searching && C.conv !== "~list" ? viewBar(ctx) : null,   // the phone's list page has the toggle in sight
     searching ? null : h("div", { class: "cm-scope" }, h("span", null, app() ? "Conversations" : "Threads"),
-      h("button", { type: "button", class: "cm-foldall", hidden: foldNone(), title: "Fold or open every section and helper list here", onclick: () => foldAll(ctx) }, foldWord()),
+      h("button", { type: "button", class: "cm-foldall", hidden: foldNone(), title: foldWord(), "aria-label": "Fold or open every section", onclick: () => foldAll(ctx) }, icon("expand")),
       h("button", { type: "button", class: "cm-scope-b", title: C.scope === "recent" ? (app() ? "Only the last 7 days are listed. Show every conversation." : "Only the last 24 hours are listed. Show every thread.") : "List only the recent ones",
-        onclick: () => { C.scope = C.scope === "recent" ? "all" : "recent"; ctx.update(); } }, C.scope === "recent" ? "Show all" : "Recent only")));
+        onclick: () => { C.scope = C.scope === "recent" ? "all" : "recent"; ctx.update(); } }, C.scope === "recent" ? "All" : "Recent")));
 }
 // What shows: For you, Updates, Agent comms, each on or off: three toggles, in the Show menu since 2026-11-07 (first over the list: the person, 11040113eacf).
 const tmetaSig = () => Object.entries(S.threadMeta || {}).map(([k, v]) => k + (v.important || 0) + (v.pin || 0) + (v.faded || 0)).join();
@@ -791,7 +806,9 @@ function head(c, ctx) {
       h("a", { class: "btn cm-back", href: href("comms"), "data-kind": "icon", "aria-label": app() ? "Chats" : "Threads", title: app() ? "Chats" : "Threads" }, icon("chevron-left")),
       c.thread && app() && !simpleOn() ? threadCrumb(c.thread) : null,
       h("button", { type: "button", class: "cm-title-b", "data-hid": off > 0 && !simpleOn() ? "" : null, title: off > 0 && !simpleOn() ? `${off} hidden: open for the way to show them` : null, "aria-haspopup": "true", "aria-expanded": String(C.menu === "title"), onclick: e => { e.stopPropagation(); C.menu = C.menu === "title" ? null : "title"; ctx.update(); } },
-        h("h1", { class: "cm-title" }, title), icon("chevron-down")),
+        h("h1", { class: "cm-title" }, title), icon("chevron-down"),
+        c.thread && S.threadStatus?.[c.thread] ? h("span", { class: "cm-title-sub" }, S.threadStatus[c.thread].text.split("\n")[0]) : null),   // §8.4 phone: the summary's first line under the title
+      statusBar(c.thread),
       h("span", { class: "meta cm-count" }, (C.q.trim() ? plural(n, "match", "matches") : plural(n, app() ? "message" : "post")) + (d ? ` · since ${stamp(d.first)}` : "")),
       c.thread && !app() && title !== c.thread ? h("span", { class: "cm-id" }, h("code", { class: "meta", title: "Its id on the board" }, c.thread), copyButton(c.thread)) : null),
     h("div", { class: "cm-tools" },
@@ -848,10 +865,10 @@ const HOME_NOW = 3, HOME_NEEDS = 2, HOME_LATELY = 2, HOME_THREADS = 4, MISC_THRE
 export const sumLine = (x, sum) => typeof x === "string" ? { text: x, at: ((sum && sum.at) || 0) * 1e3 || null } : { text: (x && x.text) || "", at: ((x && x.at) || (sum && sum.at) || 0) * 1e3 || null };
 export const sumLines = (sum, k) => ((sum && sum[k]) || []).map(x => sumLine(x, sum)).filter(l => l.text);
 /** A line in running text: agents as the app's agent pill (V3 rule: no agent code outside a pill), a #thread as a quiet link (no square), so a sentence doesn't fill with chips. */
-export function lineText(text) {
+export function lineText(text, { pill = true } = {}) {   // pill: false draws an agent code as bold mono in the sentence (the Nov 8 handoff §1.5)
   if (simpleOn()) return plainPills(text);
   return pills(text).map(x => x && x.nodeType === 1 && x.dataset.kind === "thread" ? h("a", { class: "th", href: x.getAttribute("href"), title: x.title }, x.textContent)
-    : x && x.nodeType === 1 && x.dataset.kind === "agent" ? (x.classList.add("pill"), x) : x);
+    : x && x.nodeType === 1 && x.dataset.kind === "agent" ? (pill && x.classList.add("pill"), x) : x);
 }
 /** The same, inside a button: no link inside a button, so refs become spans. */
 export const flat = xs => [].concat(xs).map(x => x && x.nodeType === 1 && x.tagName === "A" ? h("span", { class: x.className, "data-kind": x.dataset.kind || null }, ...x.childNodes) : x);
@@ -876,8 +893,8 @@ function cardRow(r) {
   return h("li", { "data-key": r.th }, h("a", { class: "fc-row", href: threadHref(r.th), title: title + (dot ? ", " + dot.word : "") },
     dot ? h("span", { class: "st", "data-tone": dot.tone, "aria-hidden": "true" }) : h("span", { "aria-hidden": "true" }), h("b", null, title), d ? when(d.last, "t") : null));
 }
-const cardEv = kind => l => h("li", { class: "fc-ev", "data-kind": kind, "data-key": kind + ":" + l.text.slice(0, 80) }, when(l.at, "t"), h("span", { class: "fc-ev-x", title: l.text }, lineText(l.text)));
-const cardRows = (rows, n) => rows.length ? h("div", { class: "fc-cv" }, h("h3", { class: "fc-sub" }, "Conversations"), h("ul", { class: "fc-rows" }, rows.slice(0, n).map(cardRow))) : null;
+const cardEv = kind => l => h("li", { class: "fc-ev", "data-kind": kind, "data-key": kind + ":" + l.text.slice(0, 80) }, when(l.at, "t"), h("span", { class: "fc-ev-x", title: l.text }, lineText(l.text, { pill: false })));
+const cardRows = (rows, n) => rows.length ? h("div", { class: "fc-cv" }, h("ul", { class: "fc-rows", "aria-label": "Conversations" }, rows.slice(0, n).map(cardRow))) : null;
 /** The card's … menu: move it earlier or later (the keyboard's drag), and a new conversation. */
 function cardMenu(f, id, ctx) {
   const all = foci().map(x => x.id), at = all.indexOf(id), mv = all.length > 1, open = C.menu === "fc:" + id, name = focusName(f);
@@ -894,33 +911,32 @@ function cardMenu(f, id, ctx) {
 function focusCard(f, ctx) {
   const id = f.id || null, page = href("focus", id || "misc"), rows = activeThreads(id).filter(r => !archived(r.th)), up = updatedAt(f, rows);
   if (f.misc) return h("article", { class: "fc", "data-key": "fc:misc", "data-misc": "", "data-state": "misc" },
-    h("header", { class: "fc-hd" }, h("a", { class: "fc-name", href: page }, "Other"), when(up, "t", "updated"),
-      h("div", { class: "fc-lead" }, h("span", { class: "meta" }, "Not filed under a focus"))),
-    cardRows(rows, MISC_THREADS),
-    h("footer", { class: "fc-ft" }, h("a", { href: page }, rows.length > MISC_THREADS ? `All ${rows.length} conversations` : "The focus page")));
+    h("header", { class: "fc-hd" }, h("a", { class: "fc-name", href: page, title: rows.length > MISC_THREADS ? `Other: all ${rows.length} conversations` : "Other" }, "Other"), h("span", { class: "fc-tools" }),
+      h("div", { class: "fc-lead" }, h("span", { class: "meta" }, "Not filed under a focus"), when(up, "t", "updated"))),
+    cardRows(rows, MISC_THREADS));
   const st = stateOf(id), sum = f.summary, ag = agentsOf(id), asked = askedOf(id), nd = needsOf(id), n = Math.max(nd.length, asked.length);
   const dnd = focusDnd(id, ctx), now = sumLines(sum, "now"), lately = sumLines(sum, "lately");
   const pillsOf = ag.now.length ? ag.now : [];
   return h("article", { class: "fc", "data-key": "fc:" + id, "data-state": st.key, "data-needs": asked.length ? "" : null, ...dnd.drop },
     h("header", { class: "fc-hd", ...dnd.grab },
       h("a", { class: "fc-name", href: page, title: focusName(f) + (f.aim ? ": " + f.aim : ""), draggable: dnd.grab.draggable ? "false" : null }, focusName(f)),
-      when(up, "t", "updated"),
+      // + and … sit where the time was and show on hover or focus (the Nov 8 handoff §1.4); the time ends the lead line.
+      h("span", { class: "fc-tools" }, can("post") ? button("New conversation in " + focusName(f), () => newIn(id), { kind: "icon", size: "s", icon: "plus", cls: "fc-new" }) : null,
+        can("post") ? cardMenu(f, id, ctx) : null),
       h("div", { class: "fc-lead" }, statusWord(st.tone, st.word),
         pillsOf.length ? h("span", { class: "fc-ag" }, pillsOf.slice(0, HOME_AGENTS).map(a => simpleOn() ? null : agentRef(a, { pill: true })),
-          !simpleOn() && pillsOf.length > HOME_AGENTS ? h("span", { class: "pill pill-more", title: pillsOf.slice(HOME_AGENTS).join(", ") }, "+" + (pillsOf.length - HOME_AGENTS)) : null) : null)),
+          !simpleOn() && pillsOf.length > HOME_AGENTS ? h("span", { class: "pill pill-more", title: pillsOf.slice(HOME_AGENTS).join(", ") }, "+" + (pillsOf.length - HOME_AGENTS)) : null) : null,
+        when(up, "t", "updated"))),
     // Needs you: the summary's own asks (the person's rule), at most two; the count and All N from the one list.
     asked.length ? h("section", { class: "fc-ask", "aria-label": "Needs you" },
       h("h3", { class: "fc-ask-h" }, h("span", { class: "st", "data-tone": "info", "aria-hidden": "true" }), `Needs you · ${n}`, n > HOME_NEEDS ? h("a", { href: page }, `All ${n}`) : null),
       h("ul", null, asked.slice(0, HOME_NEEDS).map((t, i) => askItem(f, i, t)))) : null,
     !asked.length && nd.length ? h("p", { class: "fc-ask fc-ask-n" }, h("span", { class: "st", "data-tone": "info", "aria-hidden": "true" }), h("a", { href: page }, `${nd.length} wait${nd.length === 1 ? "s" : ""} on you in its conversations`)) : null,
     now.length || lately.length ? h("div", { class: "fc-tl" },
-      now.length ? [h("h3", { class: "fc-sub" }, "Now"), h("ol", null, now.slice(0, HOME_NOW).map(cardEv("now")))] : null,
-      lately.length ? [h("h3", { class: "fc-sub" }, "Lately"), h("ol", null, lately.slice(0, HOME_LATELY).map(cardEv("lately")))] : null)
+      now.length ? h("ol", { "aria-label": "Now" }, now.slice(0, HOME_NOW).map(cardEv("now"))) : null,
+      lately.length ? h("ol", { class: "fc-lately", "aria-label": "Lately" }, lately.slice(0, HOME_LATELY).map(cardEv("lately"))) : null)
       : h("p", { class: "fc-none" }, sum ? "Nothing listed as moving." : "No summary yet. The agents on it write one as they work."),
-    cardRows(rows, HOME_THREADS),
-    h("footer", { class: "fc-ft" }, h("a", { href: page }, rows.length > HOME_THREADS ? `All ${rows.length} conversations` : "The focus page"),
-      can("post") ? button("New", () => newIn(id), { kind: "quiet", size: "s", icon: "plus", title: "New conversation in " + focusName(f) }) : null,
-      can("post") ? cardMenu(f, id, ctx) : null));
+    cardRows(rows, HOME_THREADS));
 }
 /** Needs you on the home (the hand-off's Home, R7b S5): each thing that waits, from the same list as the count above it and the Chat badge,
  *  with the ask in full, its conversation, who asked and when, and Answer to the place to answer it. The rest behind All N. */
@@ -940,19 +956,30 @@ export function askItem(f, i, text) {
   if (!open) return h("li", { "data-key": w.key }, h("div", { class: "fc-ask-i" }, body));
   return h("li", { "data-key": w.key }, h("button", { type: "button", class: "fc-ask-i", "aria-haspopup": "dialog", title: "Answer: " + text, onclick: open }, body));
 }
+/** The phone's one button on a waiting row: a two-item menu with Later and Not needed (the three buttons don't fit at 390). */
+function needMore(w) {
+  const k = "nd:" + (w.key || w.th + ":" + (w.post || w.src)), open = C.menu === k, upd = () => L.ctx && L.ctx.update();
+  const [later, moot] = laterButtons(w), item = b => { b.classList.add("menu-i"); b.setAttribute("role", "menuitem"); b.removeAttribute("data-kind"); b.removeAttribute("data-size"); const go = b._on && b._on.click; (b._on ||= {}).click = e => { C.menu = null; go && go(e); upd(); }; return b; };
+  return h("span", { class: "pop cm-need-mp" },
+    h("button", { type: "button", class: "btn cm-need-more", "data-kind": "icon", "aria-haspopup": "menu", "aria-expanded": String(open), "aria-label": "Later or not needed", title: "Later or not needed",
+      onclick: e => { e.stopPropagation(); C.menu = open ? null : k; upd(); } }, icon("more")),
+    open ? [scrim(() => { C.menu = null; upd(); }), h("div", { class: "cm-menu menu", role: "menu", "data-side": "bottom-end", "data-key": "ndm" }, item(later), item(moot))] : null);
+}
 function homeNeeds(ws) {
   if (!ws.length) return null;
   const row = w => {
     const d = S.threads.get(w.th), p = w.post && d ? d.posts.find(x => x.id === w.post) : null, who = (w.st && w.st.who) || (p && p.from) || null;
     const to = w.src === "summary" && w.focus ? href("focus", w.focus) : threadHref(w.th), open = answerer(w), lf = liftIn(w.text);
     // The whole row opens the panel (the question holds agent and thread links, so it can't be a button itself); Answer is the keyboard's way.
-    return h("li", { class: "cm-need", "data-key": w.key || w.th + ":" + (w.post || w.src), "data-open": open ? "" : null, onclick: open ? (e, n) => { if (!e.target.closest("a,button")) open(e, n); } : null },
+    return h("li", { class: "cm-need", "data-hover-acts": open ? "" : null, "data-key": w.key || w.th + ":" + (w.post || w.src), "data-open": open ? "" : null, onclick: open ? (e, n) => { if (!e.target.closest("a,button")) open(e, n); } : null },
       // A trailing ", in #thread" goes to the meta line, as on the card (V3 handoff point 9), so no pill sits mid-sentence.
-      h("p", { class: "cm-need-q" }, lineText(lf.text)),
+      h("p", { class: "cm-need-q" }, lineText(lf.text, { pill: false })),
       h("p", { class: "cm-need-m meta" }, h("a", { href: to }, needSource(w)), lf.th && lf.th !== w.th ? [" \u00b7 in ", h("a", { class: "th", href: threadHref(lf.th) }, threadTitle(lf.th))] : null,
         who ? [" \u00b7 ", simpleOn() || !isCode(who) ? plainName(who) : agentRef(who, { dot: false, pill: true })] : null, w.t ? [" \u00b7 ", when(w.t)] : null),
-      open ? h("div", { class: "cm-need-b" }, laterButtons(w), h("button", { type: "button", class: "btn cm-need-a", "data-size": "s", onclick: open }, "Answer"))
-        : h("a", { class: "btn cm-need-a", "data-size": "s", href: to }, "Answer"));
+      // Its time rests at the right; on hover or focus the actions take its place (data-hover-acts, css §0). On a phone one … holds Later and Not needed and the row tap is Answer.
+      open ? h("div", { class: "cm-need-b" }, w.t ? h("span", { class: "row-t meta" }, when(w.t, "t")) : null,
+        h("span", { class: "row-acts" }, laterButtons(w), h("button", { type: "button", class: "btn cm-need-a", "data-size": "s", onclick: open }, "Answer")), needMore(w))
+        : h("div", { class: "cm-need-b" }, h("a", { class: "btn cm-need-a", "data-size": "s", href: to }, "Answer")));
   };
   return h("ul", { class: "cm-needs", "data-key": "needs", "aria-label": "Needs you" }, ws.slice(0, HOME_WAITS).map(row),
     ws.length > HOME_WAITS ? h("li", { class: "cm-need-all" }, h("a", { href: needsHref() }, `All ${ws.length}`)) : null);
@@ -966,7 +993,7 @@ function homeOlder(ws) {
     h("a", { href: w.src === "summary" && w.focus ? href("focus", w.focus) : threadHref(w.th) }, needSource(w)),
     h("span", { class: "cm-old-q" }, " \u2014 ", firstLine(w.text)), w.t ? h("span", { class: "meta" }, " \u00b7 ", when(w.t)) : null);
   return h("section", { class: "cm-older", "data-key": "older", "aria-label": "Stuff to address" },
-    h("details", { class: "cm-older-d" },
+    h("details", { class: "cm-older-d", open: C.olderOpen ? "" : null, ontoggle: (e, d) => { if (e.target === d) C.olderOpen = d.open; } },   // kept in view state: a live re-render shut it (the person, 110903147963)
       h("summary", null, h("b", null, "Stuff to address"), h("span", { class: "meta" }, ` \u00b7 ${plural(ws.length, "older thing")}, likely moved past or not urgent`)),
       h("ul", { class: "cm-old-l" }, ws.slice(0, 12).map(row),
         ws.length > 12 && needsHref() ? h("li", { class: "cm-need-all" }, h("a", { href: needsHref() }, `All ${ws.length}`)) : null)),
@@ -985,7 +1012,7 @@ function homeMoved() {
     h("span", { class: "cm-old-q" }, " \u2014 ", m.was ? [place(m.was), " \u2192 "] : "into ", place(m.to)),
     h("span", { class: "meta" }, " \u00b7 ", ago(m.at * 1e3), m.by === "person" ? " \u00b7 by you" : m.by && m.by !== "anon" ? [" \u00b7 by ", agentRef(m.by, { dot: false })] : null));
   return h("section", { class: "cm-older cm-moved", "data-key": "moved", "aria-label": "Recently moved" },
-    h("details", { class: "cm-older-d" },
+    h("details", { class: "cm-older-d", open: C.movedOpen ? "" : null, ontoggle: (e, d) => { if (e.target === d) C.movedOpen = d.open; } },   // kept in view state: a live re-render shut it and its threads vanished (the person, 110903147963)
       h("summary", null, h("b", null, "Recently moved"), h("span", { class: "meta" }, ` \u00b7 ${plural(ms.length, "conversation")} put in a focus or moved in the last 3 days`)),
       h("ul", { class: "cm-old-l" }, ms.slice(0, 40).map(row))));
 }
@@ -994,7 +1021,8 @@ function fociGrid(ctx) {
   if (S.foci === undefined || (S.foci.failed && fociFailed())) return h("p", { class: "meta cm-foci-msg" }, fociFailed() ? "Couldn't read the focuses. It keeps trying." : "Reading\u2026");
   const fs = fociOrder();
   if (!fs.length) return h("p", { class: "meta cm-foci-msg" }, "No focus yet. Agents make one when work has a goal; every conversation is in the list on the left.");
-  return h("div", { class: "cm-foci", "data-key": "foci" }, fs.map(f => focusCard(f, ctx)));
+  return [h("div", { class: "sec-h cm-foci-h", "data-key": "foci-h" }, h("h2", { class: "sec-t" }, "Focuses"), h("span", { class: "sec-n" }, String(fs.length)), h("a", { href: href("flow") }, "Flow")),
+    h("div", { class: "cm-foci", "data-key": "foci" }, fs.map(f => focusCard(f, ctx)))];
 }
 /** #comms/~archived: every archived conversation, newest first, each with Bring back (the person, 11081454b6bd). Archived by hand or by age (ui/threadmeta.js). */
 function archivedPane(c, ctx) {
@@ -1017,12 +1045,13 @@ function homePane(ctx) {
   // The line counts the last three days and names the rest as older, so new things don't hide behind stale ones (the person, 110812234faa); the Chat badge and Yours keep the whole count.
   // Older ones (olderWhy: a day on work that moved on, two on quiet work) are out of the count and folded into Stuff to address below (the person, 11081245f002).
   const sp = needsSplit();
-  const waits = (n ? `${plural(n, "thing")} ${n === 1 ? "waits" : "wait"} on you` : "Nothing new waits on you") + (sp.older ? `, ${plural(sp.older, "older one")} in Stuff to address` : "");
-  const line = n || sp.older ? (needsHref() ? h("a", { href: needsHref(), title: "What waits on you, newest first, each in its conversation" }, waits) : waits) : simpleOn() || S.live.signin?.length ? null : IB.unread ? "No agent is waiting on you" : "Nothing needs you";
+  // The waits head (the Nov 8 handoff §1.2): the count as plain words, and All to the full list on the right when there is more than the rows show.
+  const waits = n ? `${n} ${n === 1 ? "waits" : "wait"} on you` : "Nothing new waits on you";
+  const all = (n > HOME_WAITS || sp.older) && needsHref() ? h("a", { class: "cm-hline-all", href: needsHref(), title: sp.older ? `${plural(sp.older, "older one")} in Stuff to address` : "What waits on you, newest first, each in its conversation" }, "All") : null;
+  const line = n || sp.older ? [h("span", null, waits), all] : simpleOn() || S.live.signin?.length ? null : IB.unread ? "No agent is waiting on you" : "Nothing needs you";
   return h("div", { class: "cm-home", "data-key": "home" },
     w ? h("div", { class: "cm-new", "data-key": "new" },
       h("h1", { class: "cm-home-t" }, "What do you want done?"),
-      h("p", { class: "cm-home-l" }, simpleOn() ? "Say it the way you'd tell a person. Your Hive starts on it and answers here." : "Say it the way you'd tell a person. An agent starts on it and answers here; it may bring in helpers if the job has parts."),
       !room && !hiveStopped() ? h("p", { class: "cm-home-warn", "data-tone": "limited", role: "status" }, statusDot("limited"), simpleOn() ? "Your Hive has used up its allowance for now, so new work waits until it comes back." : (((S.app && S.app.setup && S.app.setup.logins) || []).some(l => l.signed_in) ? "Every Claude account is past its usage line, so new work waits until there's room. See Usage." : "No Claude account is signed in yet. Sign in under Settings > Accounts so new work can start.")) : null,
       composer({ thread: null, update: ctx.update, place: "home", autofocus: arrived && conversation(ctx.arg).open }),
       !n && !local.length && ![...S.threads.values()].some(d => d.posts.some(p => p.from === "person")) ? firstJobs() : null,
@@ -1104,7 +1133,6 @@ function frame(ctx, c, pane) {
     const top = document.getElementById("top"), post = S.app.app && can("post");
     const convo = pane || (c.archived ? archivedPane(c, ctx) : c.home ? homePane(ctx)
       : [head(c, ctx),
-        statusBar(c.thread),
         // Keyed by conversation: another one is a new element, so it opens at its end. Wrapped so that swap doesn't move the composer, which would drop focus.
         h("div", { class: "cm-mw", "data-key": "mw" },
           h("div", { class: "cm-msgs", "data-key": "m:" + (c.arg || ""), "data-own": "", "data-sig": "own", role: "log", "aria-live": "off", "aria-label": "Messages", tabindex: "0" })),

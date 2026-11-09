@@ -8,13 +8,13 @@ export { icon };
 
 /** Page header: the answer first. {title, lead, tone, meta:[...], actions, after, state:{tone,text}, subnav}
  *  .ph > .subnav (the page's row, full width on top) + .ph-t (eyebrow .ph-k, h1, lead, meta) + .ph-a (actions); after runs the full width under them. */
-export function pageHeader({ title, lead, tone, meta, actions, after, size, state, subnav }) {
+export function pageHeader({ title, lead, tone, meta, actions, after, size, state, subnav, hint }) {
   const m = meta && meta.filter(Boolean);
   return h("header", { class: "ph", "data-size": size || null },
     subnav || null,   // the page's row, above its title (the design: Agents' and Usage's pages); pageNav() builds it
     h("div", { class: "ph-t" },
       state ? h("p", { class: "ph-k ph-state", "data-tone": state.tone || null }, h("span", { class: "st", "data-tone": state.tone || null, "aria-hidden": "true" }), state.text) : null,
-      title ? h("h1", { class: "ph-title" }, title) : null,
+      title ? h("h1", { class: "ph-title", title: hint || null }, title) : null,   // hint: the page's explanation, on hover, where a lead sentence used to sit (the Nov 8 handoff §4, §7)
       lead ? h("p", { class: "ph-lead", "data-tone": tone || null }, lead) : null,
       m && m.length ? h("p", { class: "ph-meta" }, m.map(x => h("span", null, x))) : null),
     actions ? h("div", { class: "ph-a ph-actions" }, actions) : null,

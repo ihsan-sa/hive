@@ -63,9 +63,9 @@ def c_verify(a):
     _out(work.verify_csv(a.csv, _case(a), out=a.out, find=a.find, cols=cols))
 
 
-HUNT_KEYS = ("orgs (list) or discover (list of searches); target (rows wanted, 25); per_org (2); must (words near the person); roles / exclude_roles (patterns); "
+HUNT_KEYS = ("goal (what the list is for); orgs (list) or discover (list of searches); target (rows wanted, 25); per_org (2); must (words near the person); roles / exclude_roles (patterns); "
              "org_pattern; domains ({org: site}, strict); angles (search templates with {org}); sources; read_per_search (4); allow_secondary (true); "
-             "pages ({org: url or [urls]}, read directly and tied to that org); allow_page_signal (false); max_age_years (3); max_seconds (1800); out")
+             "pages ({org: url or [urls]}, read directly and tied to that org); allow_page_signal (false); max_age_years (3); stale_days (365: older pages get a departure search); workers (4, parallel orgs); max_seconds (1800); out")
 
 
 def c_hunt(a):
@@ -88,6 +88,9 @@ def c_hunt(a):
             for u in urls:
                 if not re.match(r"https?://\S+$", u): print(f"warning: pages URL for {o!r} is not http(s): {u!r}", file=sys.stderr)
         print(f"dry run: {len(h.orgs)} orgs, {len(h.angles)} angles, {len(h.sources)} sources, {len(h.pages)} direct pages, target {h.target}; no searches made")
+        disc = h.s.get("discover") or []
+        if h.orgs and h.angles: print("first search: " + h.angles[0].format(org=h.orgs[0]))
+        elif disc: print("first search: " + disc[0])
         return
     r = h.run()
     if a.text:

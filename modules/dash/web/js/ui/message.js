@@ -351,7 +351,7 @@ function unseenNote(ms) {
   return h("span", { class: "msg-r", "data-tone": "bad", title: ms.map(m => `Hasn't reached ${m}`).join("\n") }, `${names} ${ms.length === 1 ? "hasn't" : "haven't"} seen this`);
 }
 /** The line above a message: author, who it went to, thread (outside a thread), who it woke, Reply, time. */
-export function messageHead(p, { showThread = true, mark } = {}) {
+export function messageHead(p, { showThread = true, mark, asks } = {}) {
   if (!S.app.app) return devHead(p, showThread);
   if (btwOpener(p)) return btwHead(p);
   const mine = OUTSIDE.has(p.from) && p.from === "person";
@@ -371,7 +371,8 @@ export function messageHead(p, { showThread = true, mark } = {}) {
     toYou ? null : unseenNote(mine ? [] : tos.filter(m => delivery(p, m)?.key === "unseen")),
     showThread ? threadRef(p.th) : null,
     woke.length && !mine ? h("span", { class: "meta" }, woke.map(s => (s.resumed ? "woke " : "started ") + s.name).join(", ")) : null,
-    h("time", { class: "meta num msg-time", datetime: p.at, title: stamp(p.t) }, clock(p.t)));
+    h("time", { class: "meta num msg-time", datetime: p.at, title: stamp(p.t) }, clock(p.t)),
+    asks ? h("span", { class: "msg-mark" }, "Waits on you") : null);   // the last thing on the head line (the Nov 8 handoff §8.3)
 }
 
 /** Under the message, shown on hover or focus: Reply, Copy, ⋯ and the time. Own messages carry the To in Reply's title. */
@@ -423,9 +424,8 @@ export function message(p, opts = {}) {
     "data-state": kind === "me" && p.interrupt ? "interrupt" : null, "data-asks": asks ? "" : null, "aria-label": `${who(p.from)}, ${stamp(p.t)}` },
     msgAvatar(p, kind),
     h("div", { class: "msg-c" },
-      asks ? h("span", { class: "msg-mark" }, h("span", { class: "st", "data-tone": "info", "aria-hidden": "true" }), "Waiting on you") : null,
       kind === "me" && p.interrupt ? h("span", { class: "msg-mark" }, icon("stop"), "Interrupt") : null,
-      messageHead(p, opts),
+      messageHead(p, { ...opts, asks }),
       relayLine(p),
       p.reply_to ? quote(p) : null,
       body(q, ws),
@@ -459,8 +459,9 @@ export function picksIn(text) {
 // Answer opens a reply to this message in the composer; Go with N puts the words in the box: you still press Send.
 function askActions(p) {
   if (!can("post")) return null;
+  const picks = picksIn(displayText(p));   // no Answer: the composer is addressed to it and the hover bar has Reply (the Nov 8 handoff §8.3)
+  if (!picks.length) return null;
   return h("div", { class: "msg-acts" },
-    button("Answer", () => replyTo(p), { size: "s", icon: "reply", cls: "msg-answer" }),
     picksIn(displayText(p)).map(n => button(`Go with ${n}`, () => { const d = draft(p.th); d.text = `Go with ${n}.`; replyTo(p); }, { size: "s", kind: "quiet", cls: "msg-pick" })));
 }
 

@@ -218,3 +218,8 @@
   .subnav{mask-image:linear-gradient(to right,#000 calc(100% - 28px),transparent);padding-right:28px}
   .cm-tools .avs::before{content:"with";align-self:center;margin-right:4px;font-size:var(--fs-meta);color:var(--ink-3)}
 }
+@media (max-width:640px){
+  .cm-filters .tm-chip,.cm-filters .seg button{min-height:44px;height:auto}
+  .cm-foci-h>a{display:inline-flex;align-items:center;min-height:44px;padding:0 var(--s2)}   /* the Focuses head's Flow link, finger-sized */
+  .fc-tools .btn{min-width:44px;min-height:44px}   /* + and … on a focus card are always shown on a phone (hover:none): finger-sized */   /* finger-sized filter chips and By focus/recency on the phone home (R18: nothing tappable under 40 px) */
+}

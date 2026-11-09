@@ -6,7 +6,7 @@
 import { h } from "../core/dom.js";
 import { S, can, post } from "../core/store.js";
 import { threadTitle, agentOn } from "../core/model.js";
-import { plural, dur } from "../core/format.js";
+import { plural, dur, ago } from "../core/format.js";
 import { href, go, threadHref } from "../core/router.js";
 import { simpleOn, plainName } from "../core/simple.js";
 import { button, empty, statusWord, section } from "../ui/kit.js";
@@ -25,7 +25,7 @@ import { openQuick } from "../ui/quick.js";
 
 const idOf = arg => (arg === "misc" ? null : arg);
 const say = t => (simpleOn() ? plainPills(t) : pills(t));
-const FP = { more: false, yours: 5, mine: false, sent: [] };   // sent: what the steer box sent from this page, with its state   // the Quiet and archived conversations, shown on asking (this page only)
+const FP = { more: false, yours: 3, mine: false, sent: [] };   // sent: what the steer box sent from this page, with its state   // the Quiet and archived conversations, shown on asking (this page only)
 
 /** Start a new conversation already tagged with this focus: the composer carries the tag and posts it with the first message. */
 export function newIn(id) { draft(null).focus = id || ""; go("comms", "~new"); }
@@ -94,15 +94,18 @@ function steer(f, el, ctx) {
   FP.sent.push({ f: f.id, it: answer(f.thread || f.id, text, { to: f.id }) }); el.value = ""; ctx.update();
 }
 const sentWord = it => (it.state === "failed" ? "Couldn't send" : it.state === "sent" ? "Sent" : "Sending…");
+const STEER_SAYS = "Goes to the focus's own conversation, for whoever keeps it. To steer one piece of work, reply to it below.";
+// The page's one primary action. It stays under For you here, right above Conversations, as the person asked (11081916c2cb, 11081917dced), not first as the Nov 8 handoff §3.2 drew it;
+// and it keeps its own box: the chat composer is one per page and sends to a thread's agent, not to the focus.
 function steerBox(f, ctx) {
   if (f.misc || !can("post")) return null;
   const mine = FP.sent.filter(x => x.f === f.id && !(x.it.state === "sent" && x.it.id && S.byId[x.it.id]));
   return h("div", { class: "fp-steer", "data-key": "fp-steer" },
     mine.length ? h("ul", { class: "fp-steer-o", "aria-live": "polite" }, mine.map(({ it }) => h("li", { "data-key": "o" + it.lid, "data-state": it.state },
       h("span", null, it.text), h("span", { class: "meta" }, sentWord(it))))) : null,
-    h("textarea", { class: "input fp-steer-in", rows: 2, placeholder: "Message the whole focus…", "aria-label": "Message the whole focus",
+    h("textarea", { class: "input fp-steer-in", rows: 2, placeholder: "Message the whole focus…", "aria-label": "Message the whole focus", title: STEER_SAYS,
       onkeydown: (e, n) => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing && !matchMedia("(max-width: 699px)").matches) { e.preventDefault(); steer(f, n || e.target, ctx); } } }),
-    h("div", { class: "fp-steer-a" }, h("span", { class: "meta" }, "Goes to the focus's own conversation, for whoever keeps it. To steer one piece of work, reply to it above."),
+    h("div", { class: "fp-steer-a" },
       button("Send", e => steer(f, e.target.closest(".fp-steer").querySelector(".fp-steer-in"), ctx), { kind: "primary", size: "s", cls: "fp-steer-s" })));
 }
 function yoursSec(f, ctx) {
@@ -114,14 +117,14 @@ function yoursSec(f, ctx) {
   const who = p => (p.from === "person" ? h("b", null, "You") : simpleOn() ? h("b", null, plainName(p.from)) : agentRef(p.from, { pill: true }));
   const row = p => {
     const w = replyWait(p, id), open = e => { if (e.metaKey || e.ctrlKey || e.shiftKey) return; e.preventDefault(); jump(p.id); };
-    return h("li", { class: "fp-yr-i", "data-key": "y:" + p.id, "data-who": p.from === "person" ? "me" : null },
+    return h("li", { class: "fp-yr-i", "data-key": "y:" + p.id, "data-who": p.from === "person" ? "me" : null, "data-hover-acts": can("post") ? "" : null },
       h("a", { class: "fp-yr-in", href: threadHref(p.th), onclick: open, title: "Open it in the conversation, at that message" },
         h("span", { class: "fp-yr-m" }, who(p), h("span", { class: "fp-yr-th" }, threadTitle(p.th)), when(p.t, "t")),
         h("span", { class: "fp-yr-x" }, yoursText(p) ? railSay(yoursText(p), 420) : "(no text)")),
-      can("post") ? h("button", { type: "button", class: "btn fp-yr-r", "data-size": "s", "aria-haspopup": "dialog", "aria-expanded": String(quickIs(w)), title: "Reply here, beside the page",
-        onclick: (e, n) => { e.preventDefault(); openQuick(w, n || e.target); } }, "Reply") : null);
+      can("post") ? h("span", { class: "row-acts" }, h("button", { type: "button", class: "btn fp-yr-r", "data-size": "s", "aria-haspopup": "dialog", "aria-expanded": String(quickIs(w)), title: "Reply here, beside the page",
+        onclick: (e, n) => { e.preventDefault(); openQuick(w, n || e.target); } }, "Reply")) : null);
   };
-  const tog = all.length ? h("button", { type: "button", class: "btn fp-yr-mine", "data-kind": "quiet", "data-size": "s", "aria-pressed": String(FP.mine), onclick: () => { FP.mine = !FP.mine; FP.yours = 5; ctx.update(); } }, "Show what you said too") : null;
+  const tog = all.length ? h("label", { class: "fp-yr-mine meta" }, h("input", { type: "checkbox", role: "switch", class: "switch", checked: FP.mine, onchange: (e, n) => { FP.mine = n.checked; FP.yours = 3; ctx.update(); } }), "With what you said") : null;
   return h("section", { class: "fp-sec fp-yr", "data-key": "fp-yr", "aria-label": "For you here" }, head("For you here", rows.length ? String(rows.length) : null, tog),
     rows.length ? h("ul", { class: "fp-yr-l" }, shown.map(row)) : h("p", { class: "fp-calm" }, "Nothing was said to you in this focus yet."),
     more ? h("p", { class: "fp-more" }, button(`Show ${Math.min(more, 10)} more`, () => { FP.yours += 10; ctx.update(); }, { kind: "quiet", size: "s" })) : null,
@@ -134,7 +137,7 @@ function shareSec(id) {
   const WIN = [["day", "Last day"], ["week", "Last week"]];
   const paid = win => usd((a[win] || {}).cost || 0) !== usd(0);
   const anyPaid = WIN.some(([w]) => paid(w));
-  const bar = (label, d, what) => h("span", { class: "fp-bar", "data-tone": what === "work" ? "info" : null, role: "img", "aria-label": `${label}: ${pct(d)} of the hive's ${what}` }, h("i", { style: `width:${(d * 100).toFixed(1)}%` }));
+  const bar = (label, d, what) => h("span", { class: "fp-bar", role: "img", "aria-label": `${label}: ${pct(d)} of the hive's ${what}` }, h("i", { style: `width:${(d * 100).toFixed(1)}%` }));
   const rows = what => WIN.map(([win, label]) => { const d = shareOf(a, win, what);
     return h("div", { class: "fp-share-r", "data-key": what + win }, h("span", null, label), h("b", null, simpleOn() ? fractionWords(d) : pct(d)), simpleOn() ? null : bar(label, d, what)); });
   const nums = WIN.map(([win, label]) => { const b = a[win] || {};
@@ -164,8 +167,9 @@ function page(ctx) {
     ag.day.length ? [h("p", { class: "fp-by" }, "In the last day"), h("p", { class: "fp-rel" }, ag.day.slice(0, 12).map(pill), ag.day.length > 12 ? h("a", { href: href("agents") }, `+${ag.day.length - 12}`) : null)] : null)
     : h("section", { class: "fp-sec", "data-key": "fp-ag", "aria-label": "Agents" }, head("Agents"), h("p", { class: "fp-calm" }, "No agent has been on this in the last day."));
   const meta = [h("span", null, plural(rows.length, "conversation")), ag.now.length ? h("span", null, `${ag.now.length} working now`) : null, up ? h("span", null, when(up, "t", "updated")) : null];
-  const actions = h("div", { class: "fp-a" }, can("post") ? button("New conversation", () => newIn(id), { kind: "primary", size: "s", icon: "new" }) : null,
-    !simpleOn() ? button("Flow", null, { href: href("flow"), kind: "quiet", size: "s", title: "The Flow board: every conversation's state at a glance" }) : null);
+  // Send in the box below is the page's primary; New conversation is the plain button, Flow an icon (the Nov 8 handoff §3.1).
+  const actions = h("div", { class: "fp-a" }, can("post") ? button("New conversation", () => newIn(id), { size: "s", icon: "new" }) : null,
+    !simpleOn() ? button("This focus in Flow", null, { href: href("flow"), kind: "icon", size: "s", icon: "bands", cls: "fp-flow" }) : null);
   const allDone = checks.length && done.length === checks.length;
   const extra = quiet.length + arch.length;
   return h("div", { class: "page fp", "data-key": "fp:" + (id || "misc") },
@@ -178,22 +182,23 @@ function page(ctx) {
       actions),
     fociFailed() ? h("p", { class: "fmsg", "data-tone": "warn", role: "status" }, "Couldn't refresh this focus; this is what was read last. ", button("Try now", () => loadFoci(true).then(() => ctx.update()), { kind: "quiet", size: "s" })) : null,
     h("div", { class: "fp-grid" },
+      // The main column (the Nov 8 handoff §3.3, the box kept where the person put it): Needs you, Now, To do, For you here and the box, Conversations, Lately.
       h("div", { class: "fp-main" },
-        f.misc ? null : h("section", { class: "fp-sec", "data-key": "fp-now", "aria-label": "Now" }, head("Now", null, sum && sum.from ? h("span", { class: "fp-by" }, "from ", simpleOn() ? plainName(sum.from) : agentRef(sum.from, { pill: true }), "'s summary") : null),
-          now.length ? tl("now", now) : h("p", { class: "fp-calm" }, sum ? "Nothing listed as moving." : "No summary yet. The agents on this focus write one as they work; until then, its conversations below show what runs.")),
-        f.misc ? null : sec("todo", null, "To do", checks.length ? (allDone ? null : `${checks.filter(finished).length} of ${checks.length} done`) : null,
-          checks.length ? todoSec(checks, id, ctx) : h("p", { class: "fp-calm" }, "Nothing on the to-do list here.")),
-        f.misc || !lately.length ? null : sec("lately", null, "Lately", null, tl("lately", lately)),
         waits.length ? h("section", { class: "fp-sec fp-needs", "data-key": "fp-needs", "aria-label": "Needs you" }, head("Needs you", String(waits.length)),
           h("ul", null, waits.map(w => askRow(w, w.src === "summary" ? "From the summary" : needSource(w), ctx))))
           : f.misc ? null : h("p", { class: "fp-calm", "data-key": "fp-calm" }, h("span", { class: "st", "data-tone": "quiet", "aria-hidden": "true" }), "Nothing waits on you here."),
         laterSec(id, ctx),
+        f.misc ? null : h("section", { class: "fp-sec", "data-key": "fp-now", "aria-label": "Now" }, head("Now", null, sum && sum.from ? h("span", { class: "fp-by meta" }, "by ", simpleOn() ? plainName(sum.from) : agentRef(sum.from, { pill: true }), sum.at ? ` \u00b7 ${ago(sum.at * 1e3)}` : null) : null),
+          now.length ? tl("now", now) : h("p", { class: "fp-calm" }, sum ? "Nothing listed as moving." : "No summary yet. The agents on this focus write one as they work; until then, its conversations below show what runs.")),
+        f.misc ? null : sec("todo", null, "To do", checks.length ? (allDone ? null : `${checks.filter(finished).length} of ${checks.length} done`) : null,
+          checks.length ? todoSec(checks, id, ctx) : h("p", { class: "fp-calm" }, "Nothing on the to-do list here.")),
         yoursSec(f, ctx),
         sec("convs", "fp-convs", "Conversations", active.length ? `${active.length} active this week` : null,
           active.length ? h("ul", { class: "list", "data-dense": "" }, active.map(threadRow)) : h("p", { class: "fp-calm" }, "Nothing active this week."),
           extra ? [FP.more ? h("ul", { class: "list", "data-dense": "", "data-key": "fp-quiet" }, [...quiet, ...arch].map(threadRow)) : null,
             h("p", { class: "fp-more" }, h("button", { type: "button", class: "btn", "data-kind": "quiet", "data-size": "s", "aria-expanded": String(FP.more), onclick: () => { FP.more = !FP.more; ctx.update(); } },
-              FP.more ? "Show only the active ones" : [quiet.length ? `Quiet (${quiet.length})` : null, quiet.length && arch.length ? " and " : null, arch.length ? `${quiet.length ? "archived" : "Archived"} (${arch.length})` : null]))] : null)),
+              FP.more ? "Show only the active ones" : [quiet.length ? `Quiet (${quiet.length})` : null, quiet.length && arch.length ? " and " : null, arch.length ? `${quiet.length ? "archived" : "Archived"} (${arch.length})` : null]))] : null),
+        f.misc || !lately.length ? null : sec("lately", null, "Lately", null, tl("lately", lately))),
       f.misc ? null : h("aside", { class: "fp-side", "aria-label": "Who and how much" },
         agents,
         shareSec(id),
