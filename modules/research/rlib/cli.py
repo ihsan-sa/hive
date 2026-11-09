@@ -88,7 +88,7 @@ def c_hunt(a):
         if r["status"] != "reached" and r.get("stopped"): print(f"stopped: {r['stopped']}")
         if r.get("out"): print(f"out: {r['out']}")
     else: _out(r)
-    _log(f"hunt: {r['leads']} leads ({r['verified']} verified) of {r['target']}, {r['status']}" + (f"; no named head: {', '.join(e['org'] for e in r['no_named_head'])}" if r.get("no_named_head") else ""))
+    _log(f"hunt: {r['leads']} leads ({r['verified']} verified) of {r['target']}, {r['status']}, out {r['out']}" + (f"; no named head: {', '.join(e['org'] for e in r['no_named_head'])}" if r.get("no_named_head") else ""))
     if r["status"] != "reached": sys.exit(3)
 
 
