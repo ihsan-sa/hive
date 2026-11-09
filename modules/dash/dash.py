@@ -15,7 +15,7 @@ The web page is web/ next to this file (ui.html, the previous page, is at /old);
   hive-dash serve [--port P] web UI on http://127.0.0.1:P/ (loopback only; default 8077)
   hive-dash --json          the snapshot as JSON
 """
-import base64, fcntl, gzip, hashlib, hmac, importlib.util, json, os, pty, pwd, re, secrets, select, shutil, signal, sqlite3, stat, struct, subprocess, sys, tempfile, termios, threading, time
+import base64, email.utils, fcntl, gzip, hashlib, hmac, importlib.util, json, os, pty, pwd, re, secrets, select, shutil, signal, sqlite3, stat, struct, subprocess, sys, tempfile, termios, threading, time
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
@@ -1003,10 +1003,14 @@ class Usage:
         self.owner, self.log_off = {}, 0  # session log's file name -> login path; how far ~/log.jsonl has been read
         self.thread = {}  # session log's stem -> the thread its run was started in, for the foci's cost (by_thread)
         self.lock = threading.Lock()
+        # Each file's figures carry "v", the count of changes when they last changed, so a page asks /api/usage?since=V&epoch=E for
+        # only what changed (a few KB, not the 2 MB of every session ever, every 3 s); epoch is new each start, so V never carries over.
+        self.ver, self.epoch = 0, secrets.token_hex(4)
 
     def scan_file(self, p):
         name = p.stem
         f = self.files.get(name) or {"off": 0, "c": 0.0, "t": [0, 0, 0, 0], "m": {}, "h": {}, "tools": {}, "turns": 0, "ts": None}
+        was = f["off"] if name in self.files else -1
         try:
             with open(p, "rb") as fh:
                 fh.seek(f["off"])
@@ -1033,6 +1037,7 @@ class Usage:
                         except (ValueError, AttributeError, TypeError): continue
         except OSError:
             return
+        if f["off"] != was: self.ver += 1; f["v"] = self.ver
         self.files[name] = f
 
     def result(self, f, e, p):
@@ -1110,7 +1115,7 @@ class Usage:
 
     def view(self):
         with self.lock:
-            files = {k: {x: v.get(x) for x in ("c", "t", "m", "mh", "h", "tools", "turns", "init")} for k, v in self.files.items() if v["turns"] or v["tools"] or v.get("init")}
+            files = {k: {x: v.get(x) for x in ("c", "t", "m", "mh", "h", "tools", "turns", "init", "v")} for k, v in self.files.items() if v["turns"] or v["tools"] or v.get("init")}
             cfg = jload(HOME / "core" / "config.json", {}) or {}
             hist = {}  # the recorded history fills the 10-minute slots the session logs left empty
             since = time.time() - 8 * 86400  # a week's chart and a day to spare; the file keeps all of it
@@ -1122,7 +1127,7 @@ class Usage:
                         hist.setdefault(path, {})[int(r["t"] // 600)] = [r["t"], None if f is None else f / 100, v["w"] / 100]
             by_login = [{**l, "limits": self.limits.get(l["path"], {}),
                          "series": [v for _, v in sorted({**hist.get(l["path"], {}), **self.series.get(l["path"], {})}.items())]} for l in logins()]
-            return {"files": files, "logins": by_login,
+            return {"files": files, "logins": by_login, "ver": self.ver, "epoch": self.epoch,
                     "scanning": self.scanning, "stop_pct": cfg.get("usage_stop_pct"), "providers": dict(PROVIDERS)}
 
 
@@ -1477,6 +1482,28 @@ def web_stamp():
     files = [UI_DIR / "index.html", *(UI_DIR / "css").rglob("*.css"), *(UI_DIR / "js").rglob("*.js")]
     return hashlib.sha256(repr(sorted((str(f), f.stat().st_mtime_ns, f.stat().st_size) for f in files if f.exists())).encode()).hexdigest()[:12]
 
+_index = [None, b""]
+def index_html():
+    """index.html with a modulepreload link for every module app.js imports, found by following the static imports.
+    Without them the browser finds the 120 modules one import level at a time: seven round trips through the tunnel before anything draws."""
+    stamp = web_stamp()
+    if _index[0] == stamp: return _index[1]
+    page = (UI_DIR / "index.html").read_bytes()
+    js = (UI_DIR / "js").resolve(); seen, todo = set(), [js / "app.js"]
+    imp = re.compile(r'^\s*(?:import|export)\s[^;"]*?from\s+"(\.[^"]+)"|^\s*import\s+"(\.[^"]+)"', re.M)
+    while todo:
+        f = todo.pop()
+        if f in seen or not f.is_file() or not f.is_relative_to(js): continue
+        seen.add(f)
+        for m in imp.finditer(f.read_text(errors="replace")): todo.append((f.parent / (m[1] or m[2])).resolve())
+    seen.discard(js / "app.js")
+    links = "".join(f'<link rel="modulepreload" href="js/{f.relative_to(js).as_posix()}">\n' for f in sorted(seen)).encode()
+    tag = b'<script type="module" src="js/app.js">'
+    out = page.replace(tag, links + tag, 1) if tag in page else page
+    _index[:] = [stamp, out]
+    return out
+
+
 class Cached:
     """At most one computation per `ttl` seconds, however many tabs are open."""
     def __init__(self, fn, ttl): self.fn, self.ttl, self.t, self.v, self.lock = fn, ttl, 0, None, threading.Lock()
@@ -1761,18 +1788,34 @@ def call_chat(limit=60, window=3_000_000):
         if d.get("thread") == CALL_CHAT: out.append({k: d.get(k) for k in ("id", "at", "from", "text", "files")})
     return {"posts": out[-limit:]}
 
-def tail_lines(path, offset):
-    """Whole lines appended since byte `offset`, unparsed: the browser parses them, and the file is only ever read."""
+def usage_since(v, q):
+    """/api/usage, whole or, with ?since=V&epoch=E from this run of the dash, only the files that changed after V (delta: true)."""
+    since, ep = (q.get("since") or [""])[0], (q.get("epoch") or [""])[0]
+    if not since.isdigit() or ep != v.get("epoch"): return v
+    n = int(since)
+    return {**v, "delta": True, "files": {k: f for k, f in v["files"].items() if (f.get("v") or 0) > n}}
+
+
+def tail_lines(path, offset, last=0, upto=None):
+    """Whole lines appended since byte `offset`, unparsed: the browser parses them, and the file is only ever read.
+    last=N: only about the last N bytes, from the first line start in them, so a first load can draw before the rest arrives.
+    upto=B: stop at byte B (a line start an earlier tail read gave), for fetching the older part behind it.
+    Returns (end offset, lines, start offset)."""
     try:
         with open(path, "rb") as f:
             size = f.seek(0, 2)
             if offset > size: offset = 0
+            if last and size - offset > last:
+                f.seek(size - last - 1)
+                lead = f.read(last + 1)
+                nl = lead.find(b"\n")
+                if nl >= 0: offset = size - last - 1 + nl + 1
             f.seek(offset)
-            data = f.read()
+            data = f.read() if upto is None else f.read(max(0, min(upto, size) - offset))
     except OSError:
-        return offset, []
+        return offset, [], offset
     cut = data.rfind(b"\n") + 1  # a line still being appended waits for the next poll
-    return offset + cut, [ln.decode("utf-8", "replace") for ln in data[:cut].splitlines() if ln.strip()]
+    return offset + cut, [ln.decode("utf-8", "replace") for ln in data[:cut].splitlines() if ln.strip()], offset
 
 
 # ---------- who may do what ----------
@@ -2111,7 +2154,7 @@ class BoardIndex:
 
     def refresh(self):
         with self.lock:
-            self.off, lines = tail_lines(BOARD, self.off)
+            self.off, lines, _ = tail_lines(BOARD, self.off)
             for ln in lines:
                 try: p = json.loads(ln)
                 except ValueError: continue
@@ -4498,19 +4541,32 @@ def serve(port):
     threading.Thread(target=usage.run, daemon=True).start()
     threading.Thread(target=phone_watch, daemon=True).start()
     threading.Thread(target=sync_accounts, daemon=True).start()  # an account already signed in before the app first ran; does nothing without settings.json
-    live_c, proj_c, usage_c, jobs_c = Cached(live, 1), Cached(projects, 60), Cached(usage.view, 2), Cached(Jobs().view, 2)
+    live_c, proj_c, usage_c, jobs_c = Cached(live, 1), CachedStale(projects, 60), Cached(usage.view, 2), Cached(Jobs().view, 2)
     deliv_c = Cached(delivered_view, 2.5)
+    # Both run hundreds of git calls or the ladder's checks: seconds inside this busy process, so a page gets the last answer while a new one is read.
     web_c = Cached(web_stamp, 10)
     agent_costs = AgentCosts()
     steps = Steps()  # the Ledger page's tool calls and words; the first look starts reading the session logs
 
     class H(BaseHTTPRequestHandler):
-        def send(self, body, ct, status=200, cookie=None, framed_here=False, cache="no-store"):
+        def send_static(self, f, ct):
+            """The page's own css and js: revalidated on every load (no-cache), but an unchanged file answers 304 with no body,
+            so a reload through the tunnel doesn't download its 1.4 MB of modules again."""
+            st = f.stat(); tag = '"%x-%x"' % (st.st_mtime_ns, st.st_size)
+            lm = email.utils.formatdate(int(st.st_mtime), usegmt=True)   # Chrome won't revalidate an HTTP/1.0 answer by ETag, only by date
+            inm, ims = self.headers.get("If-None-Match"), self.headers.get("If-Modified-Since")
+            if (tag in inm) if inm else ims == lm:
+                self.send_response(304); self.send_header("ETag", tag); self.send_header("Last-Modified", lm); self.send_header("Cache-Control", "no-cache"); self.end_headers(); return
+            self.send(f.read_bytes(), ct, cache="no-cache", etag=tag, modified=lm)
+
+        def send(self, body, ct, status=200, cookie=None, framed_here=False, cache="no-store", etag=None, modified=None):
             gz = len(body) > 4096 and "gzip" in self.headers.get("Accept-Encoding", "")
             if gz: body = gzip.compress(body, 5)
             self.send_response(status)
             self.send_header("Content-Type", ct); self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", cache)
+            if etag: self.send_header("ETag", etag)
+            if modified: self.send_header("Last-Modified", modified)
             if cookie: self.send_header("Set-Cookie", cookie)
             # Board text is written by agents: the page takes nothing from elsewhere and sends nothing anywhere.
             framing = "; frame-ancestors 'self'" if framed_here else "" if self.route == "open" else "; frame-ancestors 'none'"  # the page can post as the person, so it can't sit in someone's frame; a TV page may sit in this site's own (the deck's single screen)
@@ -4686,14 +4742,14 @@ def serve(port):
             if u.path == "/call/":  # the one-tap call page for a phone's home screen (web/call.html)
                 return self.send((UI_DIR / "call.html").read_bytes(), "text/html; charset=utf-8")
             if u.path in ("/", "/index.html", "/new/"):
-                return self.send((UI_DIR / "index.html").read_bytes(), "text/html; charset=utf-8")
+                return self.send(index_html(), "text/html; charset=utf-8")
             if u.path == "/old":  # the previous page, kept for now
                 return self.send(UI.read_bytes(), "text/html; charset=utf-8")
             m = re.fullmatch(r"(?:/new)?/((?:css|js)(?:/[a-zA-Z0-9_-]+)*/[a-zA-Z0-9_-]+\.(?:js|css))", u.path)
             if m:
                 f = UI_DIR / m[1]
                 if f.is_symlink() or not f.is_file(): return self.send_error(404)
-                return self.send(f.read_bytes(), UI_CT[f.suffix])
+                return self.send_static(f, UI_CT[f.suffix])
             m = re.fullmatch(r"(?:/new)?/(vendor(?:/[a-zA-Z0-9_-][a-zA-Z0-9_.-]*)+\.(?:js|css|woff2))", u.path)  # no segment starts with a dot, so no way up
             if m:
                 f = UI_DIR / m[1]
@@ -4770,8 +4826,9 @@ def serve(port):
             elif u.path == "/api/jobs":
                 self.send(json.dumps(jobs_for(jobs_c.get(), self.route != "outside" or self.mode == "full"), default=str).encode(), J)
             elif u.path in ("/api/board", "/api/log"):
-                off, lines = tail_lines(BOARD if u.path == "/api/board" else LOG, off)
-                self.send(('{"offset":%d,"items":[%s]}' % (off, ",".join(lines))).encode(), J)
+                num = lambda k: int(v) if (v := (q.get(k) or [""])[0]).isdigit() else None
+                off, lines, start = tail_lines(BOARD if u.path == "/api/board" else LOG, off, num("last") or 0, num("upto"))
+                self.send(('{"offset":%d,"start":%d,"items":[%s]}' % (off, start, ",".join(lines))).encode(), J)
             elif u.path == "/api/approvals":
                 self.send(json.dumps(approvals_list()).encode(), J)
             elif u.path == "/api/feedback-drafts":
@@ -4779,7 +4836,7 @@ def serve(port):
             elif u.path == "/api/delivered":
                 self.send(json.dumps(deliv_c.get()).encode(), J)
             elif u.path == "/api/usage":
-                self.send(json.dumps(usage_c.get()).encode(), J)
+                self.send(json.dumps(usage_since(usage_c.get(), q)).encode(), J)
             elif u.path == "/api/agent-costs":
                 self.send(json.dumps(agent_costs.view()).encode(), J)
             elif u.path == "/api/share-preview":
@@ -4952,6 +5009,7 @@ def serve(port):
             time.sleep(1)
         PROGRESS.get()
     threading.Thread(target=warm_progress, daemon=True).start()
+    threading.Thread(target=lambda: (proj_c.get()), daemon=True).start()
     threading.Thread(target=SETUP.get, daemon=True).start()  # so the first page after a restart doesn't pay for it
     srv = ThreadingHTTPServer(("127.0.0.1", port), H)  # loopback only: never opens the machine
     srv.daemon_threads = True
