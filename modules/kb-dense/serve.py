@@ -180,14 +180,16 @@ class Service:
         return {"ok": True, "rss_mb": rss, "vectors": self.st.n, "maps": {p: {"passages": len(i.ids), "missing": len(i.missing)} for p, i in self.maps.items()}, "embedded": self.embedded, "up_s": int(time.time() - self.born)}
     def refresh_loop(self):
         while True:
-            try: self.refresh()
+            again = False
+            try: again = self.refresh()
             except Exception as e: log("refresh failed", repr(e))
-            time.sleep(REFRESH)
+            if not again: time.sleep(REFRESH)   # a moving index with vectors still missing: no wait, or the fill stalls for REFRESH after every change
     def refresh(self):
         if not os.path.exists(LIVE): return
         ix = self.index(LIVE, start=False)
         if not ix.ready.is_set() or ix.stat() != ix.sig:
             self._build(ix)
+        tb = time.time()   # a map is rebuilt at most every 30 s while filling
         while ix.missing:
             todo = ix.missing[:BATCH]; c = sqlite3.connect(f"file:{LIVE}?mode=ro", uri=True, timeout=20)
             try: rows = [c.execute("SELECT title, head, body FROM fts WHERE rowid=?", (int(ix.ids[j]),)).fetchone() for j in todo]
@@ -202,10 +204,11 @@ class Service:
                 for (j, _, _), r in zip(fresh, rs): ix.vec[j] = r
             for j, k in zip(todo, keys):   # another passage with the same text, or one that vanished
                 if ix.vec[j] < 0 and k in self.st.row: ix.vec[j] = self.st.row[k]
-            with ix.lock: ix.missing = [j for j in ix.missing if ix.vec[j] < 0 and j not in set(todo)]
+            done = set(todo)
+            with ix.lock: ix.missing = [j for j in ix.missing if ix.vec[j] < 0 and j not in done]
             self.embedded += len(todo)
             time.sleep(max(0.05, (time.time() - t0) * DUTY))
-            if ix.stat() != ix.sig: break   # the index moved on: look again at the next round
+            if time.time() - tb > 30 and ix.stat() != ix.sig: return True   # the index moved on: look again at once, there is still a fill to do
 
 class Handler(socketserver.StreamRequestHandler):
     def handle(self):

@@ -22,6 +22,8 @@
   "done_grace_s": 900,
   "keeper_every_s": 10800,
   "keeper_idle_s": 1800,
+  "tidy_every_s": 1800,
+  "tidy_model": "sonnet",
   "improve_every_s": 0,
   "auto_update": true,
   "spawn_model": "sonnet",

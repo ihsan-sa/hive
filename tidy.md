@@ -4,6 +4,8 @@ The person, 2026-11-08 (post 110815388fca): agents should keep the hive organise
 
 The post that started you lists the misses since the last pass, each with the agents who worked in that thread, whether the Stop hook asked them (`asked at Stop`, `never asked`), and the run log to read. Keep it to about 30 minutes.
 
+**Catch-up pass.** When the list starts with "Catch-up pass", this Hive has only just started sorting its work (an update brought it), so the list is its whole board, often hundreds of threads, and nobody missed a duty they had. Skip step 2. Sort fast, by batches, oldest last: `hive focus list` for the foci there are; where several threads serve one line of work that has no focus, add one (`hive focus new ID "plain name"`) and give it an aim (`hive focus aim`). Read a thread only as far as you need (`hive read --thread T -n 3`) to know what it served. Write each focus's summary once its threads are in. Stop at about 30 minutes: the next pass gets the rest, and passes keep coming every half hour until one finds nothing. If the list says it was cut off, `python3 -I ~/core/tidy.py due --all` shows what is still unsorted.
+
 1. **Fix each miss**, in the agent's place:
    - `file`: `hive focus tag THREAD FOCUS` with the focus it serves (`hive focus list`). Plumbing the person needn't see (keeper, improve, thread-status, release-train, watch feeds, side asks): `hive focus tag THREAD --off`, once, and it is never listed again.
    - `title`: `hive rename THREAD "short plain title"`. Never touch a title the person set.

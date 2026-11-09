@@ -76,6 +76,7 @@ def c_hunt(a):
     case = store.Case(a.case or os.environ.get("RESEARCH_CASE") or Path(spec.get("out") or Path(a.spec).with_suffix("")) / "case")
     r = work.Hunt(spec, case, log=_log).run()
     _out(r)
+    _log(f"hunt: {r['leads']} leads ({r['verified']} verified) of {r['target']}, {r['status']}" + (f"; no named head: {', '.join(r['no_named_head'])}" if r.get("no_named_head") else ""))
     if r["status"] != "reached": sys.exit(3)
 
 

@@ -4,12 +4,13 @@
 A release is a tag v<major>.<minor>.<patch> on origin; only this major line counts. hive-update.timer ticks every
 5 minutes, and `"update_every_s"` in config.json makes it look for a release less often. `"auto_update": false` stops
 it installing: it still looks, so the app can say a release is there, and `hive update` by hand or Update now in the app
-installs it. `"update_pace": "daily"` makes the timer's run calmer: at most one release a day, and only one out for CALM_AGE (a new install starts on it; no key means every release).
+installs it. `"update_pace": "daily"` makes the timer's run calmer: at most one release a day, and only one out for CALM_AGE (only if picked in Settings; no key means every release, the default).
 `hive update` by hand and Update now always take the newest. Those settings and the state in update.json (tag, newest, checked, at, failed, error) are read by Settings in the app.
 What it keeps: the agents' own commits in ~/core (rebased onto the release) and uncommitted edits such as saved settings.
 When either conflicts with the release, the release wins so the Hive still updates: the old state goes to a git branch kept/<tag>-<time>
 in ~/core, and an agent of this Hive is started to see whether any of it still matters (the person, post 110415432d10).
-A failed install or services that don't come back leave the Hive as it was, skip that release and tell the person. Restarting the starter doesn't stop running agents.
+A failed install or services that don't come back leave the Hive as it was, skip that release and tell the person.
+After a good one, selfcheck() looks over the setup at no model cost and starts an agent only when it finds something off. Restarting the starter doesn't stop running agents.
 """
 import argparse, calendar, fcntl, json, os, re, shutil, subprocess, sys, tempfile, time, urllib.error, urllib.request
 from pathlib import Path
@@ -126,6 +127,38 @@ def healthy():
     r = subprocess.run([str(CORE / "hive"), "who"], capture_output=True, text=True, timeout=60)
     if r.returncode: raise Failed("hive who: " + r.stderr.strip()[-300:])
 
+TIMERS = ("hive-update.timer", "hive-progress.timer", "hive-asks.timer", "hive-outcomes.timer")
+PROBES = (["focus", "json"], ["asks", "list"], ["waits"], ["stalled"])
+
+def selfcheck():
+    """After an update, a check that costs no model use (the person, 2026-11-08, post 1108182587f3: an agent checking every update
+    would be too expensive): the timers are on, config.json and settings.json read and have what the Hive promises (work kept moving,
+    stray work sorted into foci, an autonomy level), and the commands the keeper and the sorting pass rely on run. [] when all is well;
+    otherwise the problems, and the caller starts an agent on them."""
+    bad, tidy = [], (CORE / "tidy.py").exists()
+    if SYSTEMD: bad += [f"{u} isn't active" for u in TIMERS if (CORE / u).exists() and systemctl("is-active", "--quiet", u)]
+    try:
+        c = json.loads((CORE / "config.json").read_text())
+        if tidy and not c.get("tidy_every_s"): bad.append("tidy_every_s is off in ~/core/config.json, so stray conversations never get sorted into foci")
+        if not isinstance(c.get("keeper_every_s", 0), int) or c.get("keeper_every_s", 0) < 0: bad.append(f"keeper_every_s in ~/core/config.json is {c.get('keeper_every_s')!r}")
+    except (OSError, ValueError) as e: bad.append(f"~/core/config.json doesn't read: {e}")
+    try:
+        p = json.loads((HOME / "settings.json").read_text()).get("power", 2)
+        if p not in (1, 2, 3): bad.append(f"power in ~/settings.json is {p!r}, not 1, 2 or 3")
+    except FileNotFoundError: pass  # power defaults to 2 without it
+    except (OSError, ValueError) as e: bad.append(f"~/settings.json doesn't read: {e}")
+    for a in PROBES:
+        try:
+            r = subprocess.run([str(CORE / "hive"), *a], capture_output=True, text=True, timeout=120)
+            if r.returncode: bad.append(f"`hive {' '.join(a)}` fails: " + (r.stderr or r.stdout).strip()[-200:])
+        except (OSError, subprocess.TimeoutExpired) as e: bad.append(f"`hive {' '.join(a)}` doesn't finish: {e}")
+    if tidy:
+        try:
+            r = subprocess.run([sys.executable, "-I", str(CORE / "tidy.py"), "due", "--json"], capture_output=True, text=True, timeout=120)
+            if r.returncode not in (0, 1): bad.append("the sorting check (tidy.py due) fails: " + r.stderr.strip()[-200:])
+        except (OSError, subprocess.TimeoutExpired) as e: bad.append(f"the sorting check (tidy.py due) doesn't finish: {e}")
+    return bad
+
 def restore(old, dirty):
     git("rebase", "--abort", check=False)
     git("reset", "--hard", old)
@@ -234,10 +267,13 @@ def main():
     p = argparse.ArgumentParser(prog="hive update", description="Update this Hive to the newest release.")
     p.add_argument("--check", action="store_true", help="say what's installed and what's newest, and install nothing")
     p.add_argument("--verify", nargs=2, metavar=("REPO", "TAG"), help=argparse.SUPPRESS)  # release.sh publish checks its own tag with this before pushing it
+    p.add_argument("--selfcheck", action="store_true", help="check this Hive's setup as an update does after it installs, and install nothing")
     p.add_argument("--auto", action="store_true", help="the timer's run: keeps to update_every_s, and installs nothing if auto_update is off")
     a = p.parse_args()
     if a.verify:
         why = verify(a.verify[1], SIGNERS.read_text(), Path(a.verify[0])); sys.exit(f"hive update: {why}" if why else 0)
+    if a.selfcheck:
+        bad = selfcheck(); print("\n".join(bad) or "setup ok"); sys.exit(1 if bad else 0)
     if not (HOME / ".hive-installed").exists():  # the timer can tick during an install, or after one that stopped partway and will be rerun
         msg = "hive update: this isn't an installed Hive"
         later(msg) if a.auto else sys.exit(msg)
@@ -297,6 +333,11 @@ def main():
             "Work out what was set aside and whether any of it still matters on top of the release (the release may already do the same thing). "
             "If something does: in bare mode, apply it again as a commit in ~/core whose subject starts `local fix:`; in the sandbox ~/core is read-only, so write the diff to a file and draft it with `hive-report contribute`. "
             "Then say here, in a line or two the person can follow, what was set aside and whether anything was lost. Don't delete the branch.", to="new")
+    if bad := selfcheck():
+        say(f"Updated to {tag}, but the check after it found something off. An agent is fixing it: " + "; ".join(bad)[:400], person=True)
+        say(f"`hive update` put in {tag} and the services came back, but the setup check after it (`hive update --selfcheck`, no model use) found:\n"
+            + "\n".join(f"- {b}" for b in bad) + "\n\nFix what's wrong so the Hive works as the release promises, run `hive update --selfcheck` until it says `setup ok`, "
+            "and say here in a line or two the person can follow what was wrong and what you changed.", to="new")
     print(f"updated to {tag}")
 
 if __name__ == "__main__": main()

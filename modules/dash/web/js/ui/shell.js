@@ -197,8 +197,8 @@ export function topBar({ views, current, update, nav }) {
     const help = [
       h("a", { class: "more-i menu-i", role: "menuitem", href: HELP, target: "_blank", rel: "noopener", "data-key": "help" }, h("b", null, "User guide")),
       h("button", { type: "button", class: "more-i menu-i", role: "menuitem", "data-key": "tour", onclick: () => { NAV.open = false; update(); startTour(); } }, h("b", null, "Take the tour")),
-      h("button", { type: "button", class: "more-i menu-i", role: "menuitem", "data-key": "shortcuts", onclick: () => { NAV.open = false; update(); openShortcuts(); } }, h("b", null, "Keyboard shortcuts"), h("span", null, "?")),
-      canFeedback() ? h("button", { type: "button", class: "more-i menu-i", role: "menuitem", "data-key": "feedback", onclick: () => { NAV.open = false; update(); openFeedback(); } }, h("b", null, "Send feedback"), h("span", null, FEEDBACK_KEY)) : null,
+      h("button", { type: "button", class: "more-i menu-i", role: "menuitem", "data-key": "shortcuts", onclick: () => { NAV.open = false; update(); openShortcuts(); } }, h("b", null, "Keyboard shortcuts"), h("kbd", { class: "menu-i-r" }, "?")),
+      canFeedback() ? h("button", { type: "button", class: "more-i menu-i", role: "menuitem", "data-key": "feedback", onclick: () => { NAV.open = false; update(); openFeedback(); } }, h("b", null, "Send feedback"), h("kbd", { class: "menu-i-r" }, FEEDBACK_KEY)) : null,
       h("button", { type: "button", class: "more-i menu-i", role: "menuitem", "data-key": "simple", onclick: () => { NAV.open = false; setSimple(!simple); update(); } },
         h("b", null, simple ? "Show everything" : "Simple view"), h("span", null, simple ? "all the tabs and what's going on behind the scenes" : "just the chat")),
     ];
