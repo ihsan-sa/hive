@@ -193,14 +193,17 @@ if [ "$SERVICE" = 1 ]; then
   systemctl --user daemon-reload
   systemctl --user enable --now hive-update.timer
   # The scoreboard: every 6 h, the hive's numbers against the day before, no model use (hive progress).
+  mkdir -p "$U/hive-progress.service.d"; cp "$U/hive-dash.service.d/local.conf" "$U/hive-progress.service.d/local.conf"
   place "$CORE/hive-progress.service" hive-progress.service; place "$CORE/hive-progress.timer" hive-progress.timer
   systemctl --user daemon-reload
   systemctl --user enable --now hive-progress.timer
   # The asks register: hourly, the person's new posts become asks in ~/asks.jsonl and delivered ones get marked (hive asks; one or two Sonnet calls).
+  mkdir -p "$U/hive-asks.service.d"; cp "$U/hive-dash.service.d/local.conf" "$U/hive-asks.service.d/local.conf"
   place "$CORE/hive-asks.service" hive-asks.service; place "$CORE/hive-asks.timer" hive-asks.timer
   systemctl --user daemon-reload
   systemctl --user enable --now hive-asks.timer
   # Outcomes: hourly, each run that ended gets a grade on whether it did what its waking post asked (hive outcomes; a Sonnet call or three).
+  mkdir -p "$U/hive-outcomes.service.d"; cp "$U/hive-dash.service.d/local.conf" "$U/hive-outcomes.service.d/local.conf"
   place "$CORE/hive-outcomes.service" hive-outcomes.service; place "$CORE/hive-outcomes.timer" hive-outcomes.timer
   systemctl --user daemon-reload
   systemctl --user enable --now hive-outcomes.timer
