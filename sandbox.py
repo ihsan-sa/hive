@@ -269,7 +269,7 @@ NOTE = """
 
 This install runs agents inside a sandbox. What differs from the above:
 - `~` here is the sandbox's own folder. `~/projects` and `~/kb` are the real ones and you can write them; `~/core`, `~/modules`, the board and the run records are read-only. Nothing else of the account is here. So no other logins, no `~/.ssh`, no systemd, no `heavy`, no sudo.
-- `hive post` and `hive done` still work: they go through a broker outside, which signs them with your name.
+- `hive post` and `hive done` still work: they go through a broker outside, which signs them with your name. So does `hive module add NAME`, for a module in `hive module list`: not for a git URL, and `hive module remove` is the person's.
 - Network goes through a proxy (already set in your environment) that reaches the internet but not this machine or its local network. Tools that ignore the proxy settings, and git over ssh, won't connect.
 - You can read the sign-in of the login you run on, because Claude Code can't run without it. Never print it or send it anywhere.
 - To do something outside (`git push` with the person's keys, a service, an account setting), write a script and run `hive step ask --why "what and why, one line" --script PATH`. Depending on the install's power level, the person or the warden decides, except that money, credentials, opening the machine, anything sent off it with the person's accounts or keys (`git push`, `gh`, publishing, mail, posting), publishing private details, copying the person's files into anything you can write, and deleting repos or history always go to the person. To carry a project's commits out, the one form accepted is `git clone -q --bare --no-local <project> "$TMPDIR/c" && git -C "$TMPDIR/c" push <url> <full commit hash>:refs/heads/<branch>`, since running git in the project itself is refused. It runs once, outside, as the user, with up to 10 minutes. You get a post with the exit code, and its output stays with the person. Write the script to work on its own and to use nothing writable from in here, because it can't be judged otherwise. `hive step status` shows yours.
@@ -339,7 +339,7 @@ def check():
 def call(req, blobs=()):
     """From inside: one request to the broker. A JSON line, then the blobs' bytes; a JSON line back."""
     s = socket.socket(socket.AF_UNIX)
-    s.settimeout(120)
+    s.settimeout(320 if req.get("verb") == "module" else 120)  # a module's clone takes the broker up to 300 s
     try: s.connect(os.environ["HIVE_BROKER"])
     except OSError as x: sys.exit(f"can't reach the broker outside the sandbox: {x}")
     with s, s.makefile("rb") as r:

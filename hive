@@ -544,8 +544,34 @@ def module_blurb(text, cap=160):
     if cut.count("`") % 2: cut = cut[:cut.rfind("`")]
     return re.sub(r"(\s+(a|an|the|and|or|of|to|from|in|with|for|by))+$", "", cut.rstrip()).rstrip(" ,:;-") + "…"
 
+
+def marketplace(listed):
+    """The public index, read at most every 6 hours, and a failed read waits the same 6 hours, so `hive module list` stays quick offline. An entry's repo must be https:
+    agents install from this list without asking, and git runs other URL forms (ext::) as commands. It lives in the GitHub org of the modules the release lists: modules.json
+    is the one shipped file that may name the org (export.sh)."""
+    orgs = (re.match(r"https://github\.com/([\w.-]+)/", str(e.get("repo", ""))) for e in listed.values())
+    org = next((m[1] for m in orgs if m), None)
+    url = os.environ.get("HIVE_MARKETPLACE") or (org and f"https://raw.githubusercontent.com/{org}/marketplace/main/modules.json")
+    if not url: return {}
+    f = STATE / "marketplace.json"
+    try:
+        if time.time() - (f.stat().st_mtime if f.exists() else 0) > 6 * 3600:
+            try:
+                with urllib.request.urlopen(url, timeout=4) as r: fresh = json.loads(r.read(2 ** 20))
+                if not isinstance(fresh, dict): raise ValueError("not an index")
+                t = f.with_name(f".{f.name}.{os.getpid()}"); t.write_text(json.dumps(fresh)); t.replace(f)
+            except (OSError, ValueError):
+                if f.exists(): os.utime(f)
+                else: f.write_text("{}")
+    except OSError: pass  # no state folder to keep it in: the catalog goes without
+    try: index = json.loads(f.read_text())
+    except (OSError, ValueError): return {}
+    return {n: {k: e[k] for k in ("repo", "about", "needs", "recommended") if k in e} for n, e in index.items()
+            if MODULE_NAME.fullmatch(n) and isinstance(e, dict) and str(e.get("repo", "")).startswith("https://")}
+
 def catalog():
-    """What can be added: core's modules.json (name -> repo, about, needs, recommended) plus what ships in core/modules (default: put in place at install).
+    """What can be added: core's modules.json (name -> repo, about, needs, recommended), what ships in core/modules (default: put in place at install), then the public
+    marketplace, which only adds names: what this release lists stays as it shipped.
     A source tree has neither at its top, only dist/, whose bundled folders hold manifests without the code: those count only if already installed."""
     released = (CORE / "modules.json").exists() or (CORE / "modules").is_dir()
     pub = CORE if released else CORE / "dist"
@@ -554,6 +580,7 @@ def catalog():
     for d in sorted((pub / "modules").glob("*/")):
         if released or (MODULES / d.name).is_dir():
             m = manifest(d); c.setdefault(d.name, {"about": m.get("description", ""), "bundled": True, "default": bool(m.get("default")), "recommended": bool(m.get("recommended"))})
+    for n, e in marketplace(c).items(): c.setdefault(n, e)
     return c
 
 def module_rows():
@@ -593,6 +620,9 @@ def cmd_module(a):
     if not a.name: sys.exit(f"hive module {a.do}: name which module")
     name = re.sub(r"\.git$", "", a.name.rstrip("/").rsplit("/", 1)[-1]).removeprefix("hive-")
     if not MODULE_NAME.fullmatch(name): sys.exit(f"hive module {a.do}: {a.name} isn't a module's name or a git URL")
+    if os.environ.get("HIVE_BROKER"):  # ~/modules is read-only in the sandbox: the broker adds it, from the catalog only
+        if a.do == "remove": sys.exit("hive module remove: only the person removes modules, in the app (Settings, Modules)")
+        forward({"verb": "module", "name": a.name})
     d = MODULES / name
     if a.do == "remove":
         if not d.is_dir(): sys.exit(f"{name} isn't installed")
@@ -608,11 +638,15 @@ def cmd_module(a):
         else:
             url = c.get("repo") or (a.name if "/" in a.name else None)
             if not url: sys.exit(f"no module {a.name}; see hive module list, or give a git URL")
-            if subprocess.run(["git", "clone", "-q", "--depth", "1", url, str(d)]).returncode:
+            try: failed = subprocess.run(["git", "clone", "-q", "--depth", "1", url, str(d)], env={**os.environ, "GIT_TERMINAL_PROMPT": "0"}, timeout=int(os.environ.get("HIVE_MODULE_CLONE_S", 900))).returncode
+            except subprocess.TimeoutExpired: failed = True
+            if failed:
                 shutil.rmtree(d, ignore_errors=True); sys.exit(f"couldn't clone {url}; {a.name} wasn't added")
     if not manifest(d): print(f"note: {d} has no module.json, so nothing was linked")
     for link, target in module_links(d):
         link.parent.mkdir(parents=True, exist_ok=True)
+        if link.exists() and not link.resolve().is_relative_to(d.resolve()):  # a module never takes over another's command or skill (hive, claude, git)
+            print(f"note: {link} already belongs to something else, so it was left alone"); continue
         link.unlink(missing_ok=True); link.symlink_to(target); print(f"linked {link} -> {target}")
     m = manifest(d)
     print(f"{name}: {m.get('description', '')[:300]}")
@@ -1209,7 +1243,7 @@ p = sp.add_parser("verify", help="hive verify ID: does this post carry a good si
 p = sp.add_parser("who", help="who's running"); p.add_argument("--usage", action="store_true", help="also the logins' weekly usage (the starter paces on it; agents needn't)"); p.set_defaults(f=cmd_who)
 p = sp.add_parser("wait", help="hive wait [--to X] [--thread T] [--timeout 3600]: block until a new post for X or in T arrives")
 p.add_argument("--to"); p.add_argument("--thread"); p.add_argument("--timeout", type=int, default=3600); p.set_defaults(f=cmd_wait)
-p = sp.add_parser("module", help="hive module list [--json] | add NAME|GIT-URL | remove NAME")
+p = sp.add_parser("module", help="hive module list [--json] | add NAME|GIT-URL | remove NAME: what is installed and what the marketplace offers")
 p.add_argument("do", choices=["list", "add", "remove"]); p.add_argument("name", nargs="?"); p.add_argument("--json", action="store_true"); p.set_defaults(f=cmd_module)
 p = sp.add_parser("update", help="hive update [--check]: an installed Hive goes to the newest release, and back if that fails")
 p.add_argument("--check", action="store_true"); p.add_argument("--auto", action="store_true"); p.set_defaults(f=cmd_update)

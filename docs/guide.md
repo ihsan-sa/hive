@@ -125,7 +125,7 @@ The **Show** button beside the search opens one small menu. **For you, Updates**
 - **Updates:** the agents' progress reports.
 - **Agent comms:** agents talking to each other and the Hive's own notes.
 
-**Show N hidden** in the title menu turns all three on. The star, **Important only**, keeps just the conversations you marked. **By focus** in the same menu lists the conversations under their focus, each section with a **+** that starts a conversation filed under it, Misc last; **By recency** is every conversation flat by last activity; **Hide not needed** drops faded conversations; **Show all** and **Recent only** change how far back the list goes, and **Collapse all** folds every section. Search always looks through everything.
+**Show N hidden** in the title menu turns all three on. The star beside the search, **Important only**, keeps just the conversations you marked. **Focus** in the same menu lists the conversations under their focus, each section with a **+** that starts a conversation filed under it, Misc last; **Recent** is every conversation flat by last activity; **Hide not needed** drops faded conversations; **Show all** and **Recent only** change how far back the list goes, and **Collapse all** folds every section. Search always looks through everything.
 
 At the foot of the list, **Inbox**, **Mail** and **Files** are links to the other pages under Chat. **All messages** in the title menu is every conversation in one list.
 

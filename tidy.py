@@ -102,6 +102,8 @@ def main(argv=None):
         try: rows = [json.loads(l) for l in LOG.read_text().splitlines() if l.strip()]
         except (OSError, ValueError): rows = []
         rows = [r for r in rows if r["at"] >= t - a.hours * 3600]
+        cu = [r for r in rows if r.get("catchup")]; rows = [r for r in rows if not r.get("catchup")]
+        if cu: print(f"{len(cu)} catch-up passes (old unsorted work, not counted below): {cu[0]['n']} unsorted at the first, {cu[-1]['n']} at the last")
         tot = {k: sum(r.get(k, 0) for r in rows) for k in ("file", "title", "summary")}
         print(f"{len(rows)} passes in the last {a.hours:g} h: file {tot['file']}, title {tot['title']}, summary {tot['summary']}")
         for r in rows:
@@ -123,14 +125,17 @@ def main(argv=None):
             STATE.mkdir(parents=True, exist_ok=True)
             MARK.write_text(json.dumps({"at": t, **({"catchup": m["catchup"]} if first and items else {})}))
             with LOG.open("a") as f:
+                # a catch-up pass lists old unsorted work, not hand-offs missed since the last pass: flagged, counts only (no 800-entry
+                # misses list per pass), and left out of report's and stats' miss totals, so the R34/R38 measure stays a hand-off measure
                 f.write(json.dumps({"at": t, "since": since, "n": len(items), **{k: sum(i["kind"] == k for i in items) for k in ("file", "title", "summary")},
-                                    "misses": [{"kind": i["kind"], "thread": i.get("thread"), "post": i.get("post"), "agents": [x["name"] for x in i["agents"]]} for i in items]}) + "\n")
+                                    **({"catchup": True} if first else {"misses": [{"kind": i["kind"], "thread": i.get("thread"), "post": i.get("post"), "agents": [x["name"] for x in i["agents"]]} for i in items]})}) + "\n")
         print(json.dumps(items) if a.json else ("Catch-up pass: this Hive is new to sorting, so this is everything on the board still unsorted, not just since the last pass. Follow the catch-up note in tidy.md.\n" if first and items and not a.all else "") + fmt(items))
         return 0 if items else 1
     try: rows = [json.loads(l) for l in LOG.read_text().splitlines() if l.strip()]
     except (OSError, ValueError): rows = []
     rows = [r for r in rows if r["at"] >= t - a.days * 86400]
-    for r in rows: print(time.strftime("%m-%d %H:%M", time.gmtime(r["at"])), f"{r['n']:3d}  file {r['file']}  title {r['title']}  summary {r['summary']}")
+    for r in rows: print(time.strftime("%m-%d %H:%M", time.gmtime(r["at"])), f"{r['n']:3d}  file {r['file']}  title {r['title']}  summary {r['summary']}" + ("  (catch-up: old work)" if r.get("catchup") else ""))
+    rows = [r for r in rows if not r.get("catchup")]
     clean = sum(1 for r in rows if not r["n"])
     print(f"{len(rows)} passes, {clean} found nothing" + (f", last {rows[-1]['n']} misses" if rows else ""))
     return 0

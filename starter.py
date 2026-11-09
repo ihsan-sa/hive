@@ -1352,6 +1352,19 @@ def neighbours_note(name, posts):
     except (OSError, subprocess.SubprocessError): return ""
     return "\n\n" + r.stdout.strip() if r.returncode == 0 and r.stdout.strip() else ""
 
+modules_seen = (0, "")
+def modules_note():
+    """The modules this Hive could add, so an agent sees them with the job in hand (the person, 11091233e479). Read once every 5 minutes; none or an error: no note."""
+    global modules_seen
+    if time.time() - modules_seen[0] < 300: return modules_seen[1]
+    try:
+        rows = json.loads(subprocess.run([sys.executable, "-I", str(CORE / "hive"), "module", "list", "--json"], capture_output=True, text=True, timeout=8, cwd=str(HOME)).stdout)
+        free = [f"- {m['name']}: {m['about']}" + (f" (needs {str(m['needs'])[:120]})" if m.get("needs") else "") for m in rows if m.get("state") == "available"][:40]
+    except (OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError): free = []
+    text = "\n\n# Modules you can add\nNot installed here. If your job is in one of these fields, run `hive module add NAME` before you start, without asking:\n" + "\n".join(free) if free else ""
+    modules_seen = (time.time(), text)
+    return text
+
 def recall_note(name, posts):
     """Pointers to our own notes that share words with the posts being handed over (`kb recall`), so related notes turn up
     without the agent searching: a few lines, or nothing when kb isn't sure. The starter's own posts (keeper, improver,
@@ -1379,6 +1392,7 @@ def start(c, name, posts, login, resume=None, reaped=None, extra=(), moved=False
     try: mine = (HOME / "user-instructions.md").read_text().strip()  # the person's own CLAUDE.md, copied at setup on their tick
     except OSError: mine = ""
     if mine and kind != "warden": system += "\n\n# The person's own instructions (from their CLAUDE.md)\n" + mine
+    if kind != "warden": system += modules_note()
     if (sb := box()): system += sb.NOTE + ("\n" + (CORE / "warden-step.md").read_text() if kind == "warden" else "")
     prompt = (f"You are @{name}. You were woken by board post {', '.join(p['id'] for p in posts)} "
               f"(thread {first.get('thread', first['id'])}, from {first.get('from')}). "
@@ -1861,7 +1875,7 @@ def main():
         if (off := sorted(set(u) - set(room))) != st.get("paused_logins", []):
             st["paused_logins"] = off; log(event="logins_paused", logins=off)
         if (pick_login(c, room) is None) != paused:
-            paused = not paused
+            paused = not paused; st["all_paused"] = paused
             signed_in = any((Path(l).expanduser() / ".credentials.json").exists() for l in c["logins"])
             post(("Every login is paused or past its stop line; work carries on on the fallback (Codex), and your own asks also on a login that isn't paused."
                   if signed_in else "No Claude account is signed in yet, so only your own asks start, on another provider if one is set up."

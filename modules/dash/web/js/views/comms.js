@@ -28,7 +28,7 @@ import { openQuick, quickOpen, closeQuick, quickPanel, laterButtons } from "../u
 import { when } from "../ui/when.js";
 import { downloadMarkdown, printScript } from "../ui/export.js";
 import { shareDialog } from "../ui/share.js";
-import { pinned, important, faded, meta as tmeta, archived, setMeta, renameDialog, openCard, openFor, markSeen, threadCrumb, titleExtras } from "../ui/threadmeta.js";
+import { pinned, important, faded, meta as tmeta, archived, setMeta, renameDialog, openCard, openFor, doneFor, markSeen, threadCrumb, titleExtras } from "../ui/threadmeta.js";
 import { callFor, hangUp } from "../ui/phone.js";
 import { brought } from "../ui/brought.js";
 import { firstJobs, closeLine } from "../ui/firstjobs.js";
@@ -139,7 +139,8 @@ function refresh(c) {
   const mask = maskFor(c), ended = mask & SHOW.you ? endedRuns() : 0, base = [c.arg, C.q, mask].join("\0"), key = base + "\0" + ended, match = matcher(c, mask, ended);
   const evs = c.thread && !C.q ? threadEvents(c.thread) : [];
   // One "New" rule above the first For-you message not yet on screen, taken once as the conversation opens (the Nov 8 handoff §8.2)
-  if (c.thread !== L.newTh) { L.newTh = c.thread; const o = c.thread ? openFor(c.thread) : null; L.newId = o ? o.items.reduce((a, p) => (p.t < a.t ? p : a)).id : null; }
+  // Taken again on every visit (leave() forgets it), and not before the conversation's posts are read; "Got it" on the card clears it too.
+  if (c.thread !== L.newTh && (!c.thread || S.threads.has(c.thread))) { L.newTh = c.thread; const o = c.thread ? openFor(c.thread) : null; L.newId = o && doneFor(c.thread) !== o.last ? o.items.reduce((a, p) => (p.t < a.t ? p : a)).id : null; }
   if (key !== L.key || src !== L.src) {
     const m = src.filter(match);
     Object.assign(L, { key, base, src, matched: m, seen: src.length, pend: [], evs: new Set(evs.map(e => e.key)), rebuild: true, keep: base === L.base && src === L.src && !L.stuck, unseen: 0 });
@@ -174,7 +175,7 @@ function rows(items) {
     if (p.ev) { out.push(evRow(p)); L.prev = null; continue; }
     L.names.add(p.from); for (const m of p.men) L.names.add(m);
     if (!L.opts.showThread && L.helpers) { const hs = helperFolds(p.th, p.t, L.helpers, L.opts); if (hs.length) { out.push(...hs); L.prev = null; } }   // helper conversations fold where they began (R7)
-    if (p.id === L.newId) { out.push(h("p", { class: "msg-new", role: "separator", "data-key": "new:" + p.id }, "New")); L.prev = null; }
+    if (p.id === L.newId) { out.push(h("p", { class: "msg-new", role: "separator", "aria-label": "New messages", "data-key": "new:" + p.id }, "New")); L.prev = null; }
     const q = L.prev, cont = !!q && q.from === p.from && q.th === p.th && !p.reply_to && p.t - q.t < GROUP && sameTo(q, p) && sameSource(q, p);
     const a = message(p, { ...L.opts, cont }); a.dataset.show = KIND_NAME[postKind(p)] || ""; if (a.dataset.show === "you" && asksQuestion(p)) a.dataset.ask = "";   // For you, Updates or Agent comms, marked in the list (11040113eacf)
     L.prev = p; a._head = L.heads; L.io.observe(a); out.push(a);
@@ -750,11 +751,11 @@ function titleMenu(c, n, d, off, ctx) {
 // leaves it alone (the person, 110819287bb8, 110819316eed "a static button bar", 11081933e722 "dont put it in the sidebar", 11081937e3e8).
 function places() {
   const at = location.hash || "#comms";
-  const link = (label, ic, to, n, tip) => h("a", { class: "cm-place", href: to, title: tip, "data-key": ic, "aria-current": at === to ? "page" : null }, icon(ic), h("span", { class: "cm-place-l" }, label), n ? h("b", { class: "cm-place-n", "aria-label": n + " new" }, String(n)) : null);
+  const link = (label, ic, to, n, tip, word = "new") => h("a", { class: "cm-place", href: to, title: tip, "data-key": ic, "aria-current": at.split("/")[0] === to.split("/")[0] ? "page" : null }, icon(ic), h("span", { class: "cm-place-l" }, label), n ? h("b", { class: "cm-place-n", "aria-label": n + " " + word }, String(n)) : null);
   return h("div", { class: "cm-places", role: "group", "aria-label": "Chat", "data-key": "places" },
     can("post") ? h("a", { class: "cm-place cm-newbtn", href: href("comms", "~new"), title: "Start a new conversation", "aria-label": "New conversation", "data-key": "new", "aria-current": at === href("comms", "~new") ? "page" : null }, icon("new"), h("span", { class: "cm-place-l" }, "New conversation")) : null,
     // Needs me merged into Yours (Nov 9 handoff §A.2): its count, and its list when something waits
-    can("post") && needsN() ? link("Yours", "yours", href("yours", "waits"), needsN(), "What waits on you, newest first; every exchange you had is under it") : link("Yours", "yours", href("yours"), 0, "Every exchange you had, newest first"),
+    can("post") && needsN() ? link("Yours", "yours", href("yours", "waits"), needsN(), "What waits on you, newest first; every exchange you had is under it", "waiting on you") : link("Yours", "yours", href("yours"), 0, "Every exchange you had, newest first"),
     can("read") ? link("Inbox", "inbox", href("inbox"), IB.unread || 0, "Every message agents sent you") : null,
     can("files") ? link("Mail", "mail", href("mail"), MN.n, MN.n ? "Mail since you last opened it" : "Your mail") : null,
     link("Files", "file", href("made"), 0, "Files and links from your conversations"));
@@ -1009,11 +1010,11 @@ function homeMoved() {
   const place = id => id ? h("a", { href: href("focus", id) }, (focusById(id) || {}).name || id) : h("span", null, "Other");
   const row = m => h("li", { class: "cm-old cm-mv", "data-key": m.thread + ":" + m.at },
     h("a", { href: threadHref(m.thread) }, threadTitle(m.thread)),
-    h("span", { class: "cm-old-q" }, " \u2014 ", m.was ? [place(m.was), " \u2192 "] : "into ", place(m.to)),
-    h("span", { class: "meta" }, " \u00b7 ", ago(m.at * 1e3), m.by === "person" ? " \u00b7 by you" : m.by && m.by !== "anon" ? [" \u00b7 by ", agentRef(m.by, { dot: false })] : null));
+    h("span", { class: "cm-old-q" }, m.was ? [place(m.was), " \u2192 "] : "into ", place(m.to)),
+    h("span", { class: "meta" }, ago(m.at * 1e3), m.by === "person" ? " \u00b7 by you" : m.by && m.by !== "anon" ? [" \u00b7 by ", agentRef(m.by, { dot: false })] : null));
   return h("section", { class: "cm-older cm-moved", "data-key": "moved", "aria-label": "Recently moved" },
     h("details", { class: "cm-older-d", open: C.movedOpen ? "" : null, ontoggle: (e, d) => { if (e.target === d) C.movedOpen = d.open; } },   // kept in view state: a live re-render shut it and its threads vanished (the person, 110903147963)
-      h("summary", null, h("b", null, "Recently moved"), h("span", { class: "meta" }, ` \u00b7 ${plural(ms.length, "conversation")} put in a focus or moved in the last 3 days`)),
+      h("summary", { title: `${plural(ms.length, "conversation")} put in a focus or moved in the last 3 days` }, h("b", null, "Recently moved"), h("span", { class: "cm-mv-n" }, String(ms.length))),   // the sentence in the title (Nov 9 handoff §C.1)
       h("ul", { class: "cm-old-l" }, ms.slice(0, 40).map(row))));
 }
 function fociGrid(ctx) {
@@ -1094,7 +1095,7 @@ export default {
   poll: { every: 3000, run: async ctx => { if (await pollDelivered()) ctx.update(); } },
   escape: () => { if (closeQuick()) return; if (C.menu || C.find) { C.menu = null; if (!C.q.trim()) C.find = false; L.ctx && L.ctx.update(); return; } if (!cancelReply() && asideOpen()) closeAside(); },
   enter: () => { C.arrived = true; },
-  leave: () => { clearTimeout(qTimer); C.menu = null; C.find = false; },
+  leave: () => { clearTimeout(qTimer); C.menu = null; C.find = false; L.newTh = undefined; },
   render(ctx) {
     if (!S.live) return h("div", { class: "page" }, S.failed ? empty("Couldn't read the conversations. It keeps trying.", { kind: "error" }) : empty("Reading…", { kind: "loading" }));
     return frame(ctx, conversation(ctx.arg));
@@ -1117,7 +1118,7 @@ export function inChatPlace(ctx, place, page) {
 }
 // Functions, not consts: focus.js reads them while this module, which imports it, is still loading.
 export function chatEscape() { if (closeQuick()) return; if (C.menu) { C.menu = null; L.ctx && L.ctx.update(); } }
-export function chatLeave() { clearTimeout(qTimer); C.menu = null; C.find = false; }
+export function chatLeave() { clearTimeout(qTimer); C.menu = null; C.find = false; L.newTh = undefined; }
 
 /** The layout: the rail, and in the other pane the home, a conversation, or what pane brings (a focus). */
 function frame(ctx, c, pane) {

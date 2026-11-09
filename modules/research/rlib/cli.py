@@ -1,4 +1,4 @@
-import argparse, difflib, csv, http.client, json, os, re, sys
+import argparse, difflib, csv, http.client, json, os, re, sys, types
 from pathlib import Path
 from . import engines, fetcher, net, people, predict, store, work
 from .extract import parse_date
@@ -63,6 +63,9 @@ def c_verify(a):
     _out(work.verify_csv(a.csv, _case(a), out=a.out, find=a.find, cols=cols))
 
 
+HUNT_EXAMPLE = '{"goal": "deans of AI programs", "orgs": ["Valencia College"], "angles": ["\\"{org}\\" dean artificial intelligence"], "target": 1, "max_seconds": 300, "out": "hunt-out"}'
+
+
 HUNT_KEYS = ("goal (what the list is for); orgs (list) or discover (list of searches); target (rows wanted, 25); per_org (2); must (words near the person); roles / exclude_roles (patterns); "
              "org_pattern; domains ({org: site}, strict); angles (search templates with {org}); sources; read_per_search (4); allow_secondary (true); "
              "pages ({org: url or [urls]}, read directly and tied to that org); allow_page_signal (false); max_age_years (3); stale_days (365: older pages get a departure search); workers (4, parallel orgs); max_seconds (1800); out")
@@ -79,17 +82,35 @@ def c_hunt(a):
     if a.out: spec["out"] = a.out
     if a.max_seconds: spec["max_seconds"] = a.max_seconds
     if not (spec.get("orgs") or spec.get("discover")): _err("the spec needs orgs or discover")
-    case = store.Case(a.case or os.environ.get("RESEARCH_CASE") or Path(spec.get("out") or Path(a.spec).with_suffix("")) / "case")
-    h = work.Hunt(spec, case, log=_log)
+    case_path = Path(a.case or os.environ.get("RESEARCH_CASE") or Path(spec.get("out") or Path(a.spec).with_suffix("")) / "case")
+    if a.dry_run and not (case_path / "case.db").exists(): case = types.SimpleNamespace(root=case_path)  # a dry run must not create the case
+    else: case = store.Case(case_path)
+    try: h = work.Hunt(spec, case, log=_log)
+    except ValueError as e: _err(str(e))
     if a.dry_run:
+        warns = []
+        def warn(m): warns.append(m); print("warning: " + m, file=sys.stderr)
+        for g in h.angles:
+            if "{org}" not in str(g): warn(f"angle {g!r} has no {{org}}, so every organisation would run the same search")
         for o, d in h.domains.items():
-            if not isinstance(d, str) or not re.fullmatch(r"[A-Za-z0-9.-]+\.[A-Za-z]{2,}", d.strip()): print(f"warning: domains entry for {o!r} is {d!r}, not a bare site like 'example.edu'", file=sys.stderr)
+            if not isinstance(d, str) or not re.fullmatch(r"[A-Za-z0-9.-]+\.[A-Za-z]{2,}", d.strip()): warn(f"domains entry for {o!r} is {d!r}, not a bare site like 'example.edu'")
         for o, urls in h.pages.items():
             for u in urls:
-                if not re.match(r"https?://\S+$", u): print(f"warning: pages URL for {o!r} is not http(s): {u!r}", file=sys.stderr)
-        print(f"dry run: {len(h.orgs)} orgs, {len(h.angles)} angles, {len(h.sources)} sources, {len(h.pages)} direct pages, target {h.target}; no searches made")
+                if not re.match(r"https?://\S+$", u): warn(f"pages URL for {o!r} is not http(s): {u!r}")
         disc = h.s.get("discover") or []
-        if h.orgs and h.angles: print("first search: " + h.angles[0].format(org=h.orgs[0]))
+        total = len(h.orgs) * len(h.angles) + len(disc)
+        done = sum(1 for o in h.orgs for a in h.angles if (o, a) in h.tried) + sum(1 for q in disc if ("(discover)", q) in h.tried)
+        n = total - done
+        secs = sorted(r["secs"] for r in h.log_rows if r.get("secs"))
+        per = secs[len(secs) // 2] if secs else 5.0
+        budget = float(h.s.get("max_seconds", 1800)); workers = int(h.s.get("workers", 4)); est = n * per / max(workers, 1)
+        if est > budget: warn(f"{n} searches probably won't finish within max_seconds {budget:.0f}; a re-run carries on, or raise max_seconds or cut orgs/angles")
+        if a.json: _out(dict(orgs=len(h.orgs), angles=len(h.angles), searches=n, done=done, per_search_s=per, est_s=round(est), budget_s=budget, workers=workers, warnings=warns))
+        else:
+            print(f"dry run: {len(h.orgs)} orgs, {len(h.angles)} angles, {len(h.sources)} sources, {len(h.pages)} direct pages, target {h.target}; no searches made")
+            print(f"up to {n} searches ({len(disc)} discover), {done} already done, about {est:.0f} s at {per:g} s a search ({'logged median' if secs else 'default'}) over {workers} workers; budget {budget:.0f} s")
+        if a.json: pass
+        elif h.orgs and h.angles: print("first search: " + h.angles[0].format(org=h.orgs[0]))
         elif disc: print("first search: " + disc[0])
         return
     r = h.run()
@@ -100,7 +121,8 @@ def c_hunt(a):
         if r["status"] != "reached" and r.get("stopped"): print(f"stopped: {r['stopped']}")
         if r.get("out"): print(f"out: {r['out']}")
     else: _out(r)
-    _log(f"hunt: {r['leads']} leads ({r['verified']} verified) of {r['target']}, {r['status']}, out {r['out']}" + (f"; no named head: {', '.join(e['org'] for e in r['no_named_head'])}" if r.get("no_named_head") else ""))
+    left = sum(1 for o in h.orgs for g in h.angles if (o, g) not in h.tried) + sum(1 for q in (h.s.get("discover") or []) if ("(discover)", q) not in h.tried)
+    _log(f"hunt: {r['leads']} leads ({r['verified']} verified) of {r['target']}, {r['status']}" + (f" ({left} searches left)" if r["status"] != "reached" and left else "") + f", out {r['out']}" + (f"; no named head: {', '.join(e['org'] for e in r['no_named_head'])}" if r.get("no_named_head") else ""))
     if r["status"] != "reached": sys.exit(3)
 
 
@@ -191,7 +213,7 @@ def main(argv=None):
     p = cmd("people", c_people, "names with roles on a page (candidates, not facts)"); p.add_argument("url")
     p = cmd("check", c_check, "does this page back name + title at org?"); p.add_argument("url"); p.add_argument("--name", required=True); p.add_argument("--title", required=True); p.add_argument("--org"); p.add_argument("--domain"); p.add_argument("--claim"); p.add_argument("--refresh", action="store_true")
     p = cmd("verify", c_verify, "check every row of a CSV against its page"); p.add_argument("csv"); p.add_argument("-o", "--out"); p.add_argument("--find", action="store_true", help="search for a page when a row's own page fails"); [p.add_argument(f"--{k}", help=f"the {k} column") for k in ("name", "title", "org", "url")]
-    p = cmd("hunt", c_hunt, "build a verified list to a target from a spec"); p.add_argument("spec", help="JSON spec file; keys: "+HUNT_KEYS); p.add_argument("-o", "--out", help="output folder (sets spec out)"); p.add_argument("--max-seconds", type=int, help="time budget (sets spec max_seconds)"); p.add_argument("--dry-run", action="store_true", help="check the spec (keys, patterns, angles, pages) and print what would be searched, without searching"); p.add_argument("--text", action="store_true", help="print the summary (lead count, one line per lead, orgs with no named head and their page) instead of JSON"); p.epilog = "Exit code: 0 when the target is reached, 3 on SHORT (fewer leads than the target; the leads found are still written). 2 is a bad spec. --text prints the summary instead of JSON on stdout."
+    p = cmd("hunt", c_hunt, "build a verified list to a target from a spec"); p.add_argument("spec", help="JSON spec file; keys: "+HUNT_KEYS); p.add_argument("-o", "--out", help="output folder (sets spec out)"); p.add_argument("--max-seconds", type=int, help="time budget (sets spec max_seconds)"); p.add_argument("--dry-run", action="store_true", help="check the spec (keys, patterns, angles, pages) and print what would be searched, without searching"); p.add_argument("--json", action="store_true", help="with --dry-run, print the estimate as one JSON object"); p.add_argument("--text", action="store_true", help="print the summary (lead count, one line per lead, orgs with no named head and their page) instead of JSON"); p.formatter_class = argparse.RawDescriptionHelpFormatter; p.epilog = "Example spec (save as spec.json, check with --dry-run):\n  " + HUNT_EXAMPLE + "\n\nExit code: 0 when the target is reached, 3 on SHORT (fewer leads than the target; the leads found are still written). 2 is a bad spec. --text prints the summary instead of JSON on stdout."
     p = cmd("analyze", c_analyze, "how far to trust the case's sources, or profile a CSV"); p.add_argument("csv", nargs="?")
     p = cmd("forecast", c_forecast, "backtest methods on a series, forecast with intervals"); p.add_argument("file", help="CSV or one number per line; - for stdin"); p.add_argument("--column", help="the value column (default: the last numeric one)"); p.add_argument("--date-column", help="a date column (YYYY, YYYY-MM or YYYY-MM-DD): the forecast rows are then labelled with dates; unsorted or repeated dates are an error and gaps a warning, each naming the row"); p.add_argument("--horizon", type=int, default=4, help="steps ahead"); p.add_argument("--season", type=int, default=1, help="period length, e.g. 12 for monthly data with a yearly cycle")
     p = cmd("trend", c_trend, "Mann-Kendall and Theil-Sen"); p.add_argument("file"); p.add_argument("--column")

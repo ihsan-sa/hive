@@ -399,6 +399,7 @@ class Hunt:
             if len(self.leads) >= self.target or self.org_count(org) >= self.per_org or time.monotonic() > self.deadline: return
             if (org, angle) in self.tried or (org, angle) in self.failed: continue
             q = angle.format(org=org)
+            t0 = time.monotonic()
             hits, errs = engines.search(q, self.sources, n=8, case=self.case)
             for s, e in errs.items(): self.errors[f"{s}: {e[:70]}"] += 1
             if len(errs) >= len(self.sources):  # nobody answered, so this pair hasn't been tried
@@ -415,7 +416,7 @@ class Hunt:
                 found += self.weigh(org, p, angle)
                 if self.org_count(org) >= self.per_org: break
             self.tried.add((org, angle))
-            self.log_rows.append({"org": org, "angle": angle, "hits": len(hits), "read": read, "found": found, "at": now()})
+            self.log_rows.append({"org": org, "angle": angle, "hits": len(hits), "read": read, "found": found, "secs": round(time.monotonic() - t0, 2), "at": now()})
             self._save()
 
     def discover(self, q):

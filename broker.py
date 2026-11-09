@@ -1,7 +1,7 @@
 """What a sandboxed agent can ask of the outside. One per install, started by the starter (sandbox.ensure_broker), outside every sandbox.
 
 Each run gets a socket folder mounted read-only at /run/sandbox, so which socket a request came in on says who asked:
-- ctl.sock: post, done, step. A post is signed with that name, so nobody inside can post as the person, or as anyone else.
+- ctl.sock: post, done, step, module. A post is signed with that name, so nobody inside can post as the person, or as anyone else.
 - egress.sock: an HTTP proxy that refuses this machine and private ranges.
 
 A step is a script to run outside, as the user. Who decides goes by the power level in settings.json (kb/consumer-sandbox.md):
@@ -272,6 +272,19 @@ def done(name):
     (d / name).write_text("it said its work was finished\n")
     return {"out": f"{name} is marked done: a later message in its thread starts a new agent, unless the person names {name}."}
 
+module_lock = threading.Lock()
+
+def module(name, req):
+    """Add a module for a sandboxed agent, with no one asked: the person's call (11091233e479). By name from the catalog only, which is what keeps a page's or a post's
+    git URL out. Nothing of the module runs here: the clone and its links, and the agent then runs it inside its own sandbox. The door reads what agents write: not it."""
+    mod = str(req.get("name", ""))
+    if name == "person": return {"err": "the door can't add modules: the person adds them in the app (Settings, Modules)"}
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", mod): return {"err": "agents add a module by its name from `hive module list`; a git URL is for the person to add, in the app"}
+    with module_lock:  # two agents wanting the same module: the second finds it there
+        try: r = subprocess.run([sys.executable, "-I", str(CORE / "hive"), "module", "add", mod], capture_output=True, text=True, timeout=310, cwd=str(HOME), env={**os.environ, "HIVE_MODULE_CLONE_S": "300"})
+        except subprocess.TimeoutExpired: return {"err": f"adding {mod} took too long; it wasn't added"}
+    return {"out": r.stdout.strip()[-4000:], "err_out": r.stderr.strip()[-2000:], "rc": r.returncode}
+
 def serve_ctl(c, name):
     with c, c.makefile("rb") as r:
         try:
@@ -283,7 +296,7 @@ def serve_ctl(c, name):
             blobs = [r.read(n) for n in sizes]
             verb = req.get("verb")
             out = (post(name, req, blobs) if verb == "post" else done(name) if verb == "done" else ask(name, req, blobs) if verb == "ask"
-                   else status(name) if verb == "status" else verdict(name, req) if verb == "verdict" else {"err": f"no verb {verb}"})
+                   else status(name) if verb == "status" else verdict(name, req) if verb == "verdict" else module(name, req) if verb == "module" else {"err": f"no verb {verb}"})
         except (OSError, ValueError, TypeError, subprocess.SubprocessError) as x:
             out = {"err": str(x)[:300]}
         try: c.sendall((json.dumps(out) + "\n").encode())

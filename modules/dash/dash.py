@@ -1500,6 +1500,9 @@ def index_html():
     links = "".join(f'<link rel="modulepreload" href="js/{f.relative_to(js).as_posix()}">\n' for f in sorted(seen)).encode()
     tag = b'<script type="module" src="js/app.js">'
     out = page.replace(tag, links + tag, 1) if tag in page else page
+    # Each stylesheet's address carries its own version, so no cache on the way (the tunnel's edge, the browser) can hand back an old one after a change.
+    css = lambda m: b'href="css/%s?v=%x"' % (m[1], (UI_DIR / "css" / m[1].decode()).stat().st_mtime_ns if (UI_DIR / "css" / m[1].decode()).is_file() else 0)
+    out = re.sub(rb'href="css/([a-z0-9_-]+\.css)"', css, out)
     _index[:] = [stamp, out]
     return out
 
@@ -4556,8 +4559,8 @@ def serve(port):
             lm = email.utils.formatdate(int(st.st_mtime), usegmt=True)   # Chrome won't revalidate an HTTP/1.0 answer by ETag, only by date
             inm, ims = self.headers.get("If-None-Match"), self.headers.get("If-Modified-Since")
             if (tag in inm) if inm else ims == lm:
-                self.send_response(304); self.send_header("ETag", tag); self.send_header("Last-Modified", lm); self.send_header("Cache-Control", "no-cache"); self.end_headers(); return
-            self.send(f.read_bytes(), ct, cache="no-cache", etag=tag, modified=lm)
+                self.send_response(304); self.send_header("ETag", tag); self.send_header("Last-Modified", lm); self.send_header("Cache-Control", "no-cache, private"); self.end_headers(); return
+            self.send(f.read_bytes(), ct, cache="no-cache, private", etag=tag, modified=lm)   # private: only the browser keeps a copy, never the tunnel's edge
 
         def send(self, body, ct, status=200, cookie=None, framed_here=False, cache="no-store", etag=None, modified=None):
             gz = len(body) > 4096 and "gzip" in self.headers.get("Accept-Encoding", "")
