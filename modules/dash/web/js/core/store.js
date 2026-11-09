@@ -9,7 +9,7 @@ export const SYS = new Set(["starter", "dash", "anon", "all", "400", "mention", 
 export const S = {
   app: { route: "open", can: null, app: false, setup: null },
   live: null, usage: null, projects: null, agentCosts: null, threadNames: {}, threadMeta: {}, shown: [], threadStatus: {}, agentStatus: {},
-  posts: [], byId: {}, threads: new Map(), off: 0,
+  posts: [], byId: {}, threads: new Map(), off: 0, boardStart: null,
   sessions: [], lastByThread: {}, lastSess: {}, open: {}, byOut: {}, woke: {}, logOff: 0,
   agents: new Set(), killed: {}, limited: [], limitedSess: new Set(), limitedNow: new Set(),
   ledger: [],                 // {t, kind, parts:[string | {a:name} | {th:thread}], lc}
@@ -64,6 +64,7 @@ export async function post(path, body) {
 
 // ---- ingest ----
 const ledgerAdd = (r, words) => { r.lc = words.join(" ").toLowerCase(); S.ledger.push(r); };
+const boardRow = (r, words) => { r.b = 1; ledgerAdd(r, words); };   // a row made from a board post: dropped and remade when older posts arrive
 const LOGTEXT = { delivered: "had queued posts handed to it mid-run", kill_dropped: "had its queued wakes dropped after a kill", model_set: "was moved to another model from its panel", paced: "start was paced", provider_held: "waits for its provider", fallback_held: "waits: no fallback has room", unknown_mention: "was mentioned, but nobody has that name", free_spawn_ignored: "tried to start agents from a free model; ignored", reaped: "was ended by the starter after going quiet", moved: "moved to another login", login_rejected: "hit a rejected login", helper: "started as a helper: the agent asked was busy" };
 function logRow(e, t) {
   const k = e.event, n = e.name, a = { a: n };
@@ -120,11 +121,27 @@ function ingestBoard(items) {
     S.posts.push(p); S.byId[p.id] = p;
     let d = S.threads.get(th);
     if (!d) { d = { name: th, posts: [], who: new Set(), first: p.t, last: p.t }; S.threads.set(th, d);
-      ledgerAdd({ t: p.t, kind: "thread", parts: ["New thread ", { th }, " from ", { a: p.from }] }, ["new thread", th, p.from]); }
+      boardRow({ t: p.t, kind: "thread", parts: ["New thread ", { th }, " from ", { a: p.from }] }, ["new thread", th, p.from]); }
     const tos = p.men.filter(m => m !== "new");
-    ledgerAdd({ t: p.t + 0.5, kind: SYS.has(p.from) ? "hive" : "post", post: p, parts: [{ a: p.from }, tos.length ? " → " : " in ", ...(tos.length ? tos.flatMap((m, i) => (i ? [", ", { a: m }] : [{ a: m }])) : [{ th }]), tos.length ? " in " : "", tos.length ? { th } : ""] },
+    boardRow({ t: p.t + 0.5, kind: SYS.has(p.from) ? "hive" : "post", post: p, parts: [{ a: p.from }, tos.length ? " → " : " in ", ...(tos.length ? tos.flatMap((m, i) => (i ? [", ", { a: m }] : [{ a: m }])) : [{ th }]), tos.length ? " in " : "", tos.length ? { th } : ""] },
       [p.from, th, ...tos, String(p.text).slice(0, 600)]);
     d.posts.push(p); d.last = p.t; if (OUTSIDE.has(p.from)) d.lastYou = p.t; if (!SYS.has(p.from)) d.who.add(p.from);
+  }
+}
+
+// The first read takes only the board's last FIRST_BYTES (about a day), so the pages draw in about a second; the older part
+// is fetched right after and the board state is rebuilt in order with it. S.boardStart is where what's held begins (0: all of it).
+const FIRST_BYTES = 2_000_000;
+async function backfill(upto) {
+  for (let i = 0; i < 5; i++) {
+    try {
+      const b = await jget("/api/board?from=0&upto=" + upto);
+      const recent = S.posts;
+      S.posts = []; S.byId = {}; S.threads = new Map(); S.ledger = S.ledger.filter(r => !r.b);
+      ingestBoard(b.items); ingestBoard(recent);
+      S.boardStart = 0; S.ver++; emit({ live: true, older: true });
+      return;
+    } catch (e) { await new Promise(r => setTimeout(r, 3000 * (i + 1))); }
   }
 }
 
@@ -134,7 +151,7 @@ export async function poll() {
   if (polling) return; polling = true;
   try {
     // All read together, then applied in one go: S.live set with a wait before the board is ingested let a page draw "No conversations yet" while they were still on their way.
-    const [l, lg, b, a, d] = await Promise.all([jget("/api/live"), jget("/api/log?from=" + S.logOff), jget("/api/board?from=" + S.off), jget("/api/approvals").catch(() => null), jget("/api/feedback-drafts").catch(() => null)]);
+    const [l, lg, b, a, d] = await Promise.all([jget("/api/live"), jget("/api/log?from=" + S.logOff), jget("/api/board?from=" + S.off + (S.off || S.boardStart != null ? "" : "&last=" + FIRST_BYTES)), jget("/api/approvals").catch(() => null), jget("/api/feedback-drafts").catch(() => null)]);
     S.stCache.clear(); S.live = l;
     if (typeof l.starter === "boolean" && S.app.setup && S.app.setup.starter !== l.starter) { S.app.setup.starter = l.starter; emit({ app: true }); }   // the Hive stopped or is back: from the live read, not /api/app's 15 s one
     S.approvals = a === null ? S.approvals || [] : Array.isArray(a) ? a : [];
@@ -144,7 +161,9 @@ export async function poll() {
     const runSig = [...S.running.keys()].sort().join();
     const changed = b.items.length || lg.items.length || runSig !== S.runSig; S.runSig = runSig;
     S.logOff = lg.offset; S.off = b.offset;
+    const older = S.boardStart == null && b.start > 0; if (S.boardStart == null) S.boardStart = b.start || 0;
     ingestLog(lg.items); ingestBoard(b.items);
+    if (older) setTimeout(() => backfill(b.start), 50);
     if (changed) S.ver++;
     S.fresh = now(); S.failed = false;
     emit({ live: true, posts: b.items, log: lg.items });
@@ -152,7 +171,19 @@ export async function poll() {
   finally { polling = false; }
 }
 export async function pollUsage() {
-  try { S.usage = await jget("/api/usage"); S.usageFailed = false; S.uver++; emit({ usage: true }); }
+  // After the first read only the session files that changed come (?since=, delta: true; ~2 MB a read otherwise). The files object
+  // is kept as it is when none changed, so what is cached on it stays good, and nothing redraws when nothing moved.
+  try {
+    const was = S.usage, q = was && was.epoch && was.ver != null ? `?since=${was.ver}&epoch=${encodeURIComponent(was.epoch)}` : "";
+    const v = await jget("/api/usage" + q), fresh = S.usageFailed;
+    if (v.delta && was) {
+      const n = Object.keys(v.files).length;
+      v.files = n ? { ...was.files, ...v.files } : was.files; delete v.delta;
+      const rest = x => JSON.stringify([x.logins, x.scanning, x.stop_pct, x.providers]);
+      S.usage = v; S.usageFailed = false;
+      if (n || fresh || rest(v) !== rest(was)) { S.uver++; emit({ usage: true }); }
+    } else { S.usage = v; S.usageFailed = false; S.uver++; emit({ usage: true }); }
+  }
   catch (e) { if (!S.usageFailed) { S.usageFailed = true; emit({ usage: true }); } }
 }
 /** Cost and tokens per agent from the transcripts. Asked for only while a page that shows them is open; the server refreshes at most every 5 minutes. */

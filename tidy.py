@@ -9,7 +9,7 @@ didn't do it, so the mechanism gets fixed. The hive is time invariant when the p
                                   finds nothing or 2 days pass, so all its earlier work gets sorted)
   tidy.py due --all               what is still unsorted on the whole board, without marking
   tidy.py stats [DAYS]            misses per pass, by kind, oldest first
-Records: ~/.hive/tidy.json {at: last mark}, ~/.hive/tidy.jsonl {at, since, n, file, title, summary} per pass."""
+Records: ~/.hive/tidy.json {at: last mark}, ~/.hive/tidy.jsonl {at, since, n, file, title, summary, misses: [{kind, thread, post, agents}]} per pass."""
 import argparse, glob, json, os, sys, time
 from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__))); import focus as fc
@@ -59,22 +59,25 @@ def due(since, t=None, posts=None):
             n = str(p.get("from", "")).lower()
             if is_agent(n) and fc.ts(p.get("at")) >= since and n not in names: names.append(n)
         return [{"name": n, "asked": (th, n) in ask, **runlog(n)} for n in names[-3:]]
+    def last_agent(th):  # the newest agent post since `since` in the thread: the one to read to see why
+        ps = [p for p in by.get(th, []) if is_agent(p.get("from")) and fc.ts(p.get("at")) >= since]
+        return max(ps, key=lambda p: fc.ts(p.get("at")))["id"] if ps else None
     for th, ps in by.items():
         last = max(fc.ts(p.get("at")) for p in ps)
         if last < since or t - last < GRACE_S: continue
         if not any(is_agent(p.get("from")) and fc.ts(p.get("at")) >= since for p in ps): continue
         first = min(ps, key=lambda p: fc.ts(p.get("at"))); title = quiet((str(first.get("text", "")).strip().splitlines() or [""])[0])[:70]
         if th not in tagged and fc.focus_of(st, th, posts) is None:
-            out.append({"kind": "file", "thread": th, "what": f"in no focus: {title}", "agents": who(th, "file")})
+            out.append({"kind": "file", "thread": th, "post": last_agent(th), "what": f"in no focus: {title}", "agents": who(th, "file")})
         if not fc._titled(th):
-            out.append({"kind": "title", "thread": th, "what": f"no title, shows: {title}", "agents": who(th, "title")})
+            out.append({"kind": "title", "thread": th, "post": last_agent(th), "what": f"no title, shows: {title}", "agents": who(th, "title")})
     for f in st["foci"]:
         ths = {th for th, fid in st["tags"].items() if fid == f["id"]} | {x for x in (f.get("thread"), f["id"]) if x}
         rt, p = fc.newest_result(ths, posts)
         s = f.get("summary"); sat = float(s.get("at") or 0) if s else 0
         if p and rt >= since and t - rt >= GRACE_S and rt - sat > SUMMARY_SLACK_S:  # a summary written just before the result post (the Stop nudge order) is current
             n = str(p.get("from", "")).lower()
-            out.append({"kind": "summary", "focus": f["id"], "thread": p.get("thread"), "what": f"summary of {f['name']} is older than {n}'s result {p.get('id')}",
+            out.append({"kind": "summary", "focus": f["id"], "thread": p.get("thread"), "post": p.get("id"), "what": f"summary of {f['name']} is older than {n}'s result {p.get('id')}",
                         "agents": [{"name": n, "asked": None, **runlog(n)}]})
     return out
 
@@ -93,7 +96,21 @@ def main(argv=None):
     p = sp.add_parser("due"); p.add_argument("--mark", action="store_true"); p.add_argument("--json", action="store_true")
     p.add_argument("--all", action="store_true", help="the whole board, whatever the mark: what is still unsorted (a long first list is cut off in the post)")
     p = sp.add_parser("stats"); p.add_argument("days", nargs="?", type=float, default=7)
+    p = sp.add_parser("report", help="24 h totals and, per nonzero pass, who and which post missed"); p.add_argument("--hours", type=float, default=24)
     a = ap.parse_args(argv); t = time.time()
+    if a.cmd == "report":
+        try: rows = [json.loads(l) for l in LOG.read_text().splitlines() if l.strip()]
+        except (OSError, ValueError): rows = []
+        rows = [r for r in rows if r["at"] >= t - a.hours * 3600]
+        tot = {k: sum(r.get(k, 0) for r in rows) for k in ("file", "title", "summary")}
+        print(f"{len(rows)} passes in the last {a.hours:g} h: file {tot['file']}, title {tot['title']}, summary {tot['summary']}")
+        for r in rows:
+            if not r.get("n"): continue
+            print(time.strftime("%m-%d %H:%M", time.gmtime(r["at"])), f"{r['n']} misses")
+            for m in r.get("misses") or [{"kind": "?", "thread": "?", "post": "not recorded (before R35)", "agents": []}]:
+                print(f"  {m['kind']} #{m['thread']} post {m['post']} agents {','.join(m['agents']) or '-'}")
+        if not any(r.get("n") for r in rows): print("0 misses")
+        return 0
     if a.cmd == "due":
         # The first pass, as on a Hive that just updated to one with this, looks at the whole board, and so does every pass after it
         # until one finds nothing (at most CATCHUP_S): a Hive's earlier work all gets sorted into foci (the person, 2026-11-08, post 11081821428e).
@@ -106,7 +123,8 @@ def main(argv=None):
             STATE.mkdir(parents=True, exist_ok=True)
             MARK.write_text(json.dumps({"at": t, **({"catchup": m["catchup"]} if first and items else {})}))
             with LOG.open("a") as f:
-                f.write(json.dumps({"at": t, "since": since, "n": len(items), **{k: sum(i["kind"] == k for i in items) for k in ("file", "title", "summary")}}) + "\n")
+                f.write(json.dumps({"at": t, "since": since, "n": len(items), **{k: sum(i["kind"] == k for i in items) for k in ("file", "title", "summary")},
+                                    "misses": [{"kind": i["kind"], "thread": i.get("thread"), "post": i.get("post"), "agents": [x["name"] for x in i["agents"]]} for i in items]}) + "\n")
         print(json.dumps(items) if a.json else ("Catch-up pass: this Hive is new to sorting, so this is everything on the board still unsorted, not just since the last pass. Follow the catch-up note in tidy.md.\n" if first and items and not a.all else "") + fmt(items))
         return 0 if items else 1
     try: rows = [json.loads(l) for l in LOG.read_text().splitlines() if l.strip()]

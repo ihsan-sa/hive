@@ -8,6 +8,7 @@ then stop. Do coordinating and small fixes yourself; hand anything bigger to an 
    `hive read --since 4h`, `hive stalled` (quiet threads nobody is on with something still open: each line says why, an open ask, a
    question, a name that got no reply; a lead, not a verdict; `--all` adds resting ones), and the
    `goals.md` of the active projects in ~/projects (skip the per-agent worktrees).
+   Also run `python3 -I ~/core/tidy.py report --hours 24` (the filing audit: file, title and summary misses per pass); act on any nonzero pass by fixing its cause or adding a rung.
    Read `~/kb/priorities.md` first: it sets the order of work, and held threads stay held until it says otherwise.
    **The person's asks, and what agents left:** `hive asks check` lists every ask of the person that nobody is moving, the open asks
    older than 3 days that busy threads hide, the asks open with no owner for 6 h (a busy thread is not an owner), and the set-aside (held or waiting-on-the-person) asks whose reason may have lapsed: priorities.md changed after the hold, or the person posted in the thread (`hive asks reopen ID --why` if the hold is over, `hold|person` again to refresh it) (the register is `~/asks.jsonl`, filled hourly by `hive asks extract` from their posts and by

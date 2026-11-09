@@ -5,6 +5,8 @@
 import { h } from "../core/dom.js";
 import { S } from "../core/store.js";
 import { threadHref } from "../core/router.js";
+import { threadTitle } from "../core/model.js";
+import { jump } from "./message.js";
 import { fenceBlock } from "../rich/blocks.js";
 import { equation, inlineMath } from "../rich/math.js";
 import { mathScan, opensDisplay, displayMath } from "../rich/mathscan.js";
@@ -26,6 +28,7 @@ const INLINE = new RegExp([
   "(?<![\\w/.-])(?:~|\\/home\\/[\\w.-]+)?\\/files\\/([0-9a-f]{12})\\/([A-Za-z0-9_][A-Za-z0-9_.-]*[A-Za-z0-9_])",  // 13,14 a post's file
   "(?<![\\w/.-])(?:~\\/|\\/home\\/[\\w.-]+\\/)?((?:projects|kb|modules|core|tools|investigations)\\/[\\w.-]+(?:\\/[\\w.-]+)*\\." + KBEXT + ")(?![\\w/-]|\\.\\w)",  // 15 a project's file
   "(?<![\\w/.~-])([A-Za-z0-9_][\\w.-]*\\.[A-Za-z0-9]{1,8})(?![\\w/-]|\\.\\w)",  // 16 a bare file name: a link if this conversation knows it
+  "(?<![\\w/.~#-])([0-9a-f]{12})(?![\\w/-])",                                  // 17 a bare post or thread id: a link if the board has it
 ].join("|"), "g");
 // A post's file, written as ~/files/<post id>/<name>: a link that opens it in the preview panel (preview.js handles the click).
 const FILE = /^(?:~|\/home\/[\w.-]+)?\/files\/([0-9a-f]{12})\/([A-Za-z0-9_][A-Za-z0-9_.-]*)$/;
@@ -40,6 +43,20 @@ const KBNAMED = new RegExp(KBREF.source.slice(1, -1) + "(?![\\w/-]|\\.\\w)", "g"
 // known: name -> { kb: path } or { id: post id }, set for the length of one markdown() call.
 let known = null, inLink = false;
 const namedRef = (name, ...kids) => { const k = known && !inLink && known.get(name); return !k ? null : k.kb ? kbRef(k.kb, ...kids) : fileRef(k.id, name, ...kids); };
+
+// A thread or post the text names by id ("the results thread (110819468566)"): the thread opens under its title,
+// a post opens in its conversation at that message. An id the board doesn't hold stays plain text.
+const HEXID = /^[0-9a-f]{12}$/;
+const thLink = (th, mark) => h("a", { class: "ref", "data-kind": "thread", href: threadHref(th), title: "Open the conversation " + th }, mark + (HEXID.test(th) ? threadTitle(th) || th : th));
+function idRef(id, mark, written) {
+  if (inLink) return null;
+  if (S.threads && S.threads.has(id)) return thLink(id, mark);
+  const p = S.byId && S.byId[id];
+  if (!p) return null;
+  return h("a", { class: "ref", "data-kind": "post", "data-post": id, href: threadHref(p.th || p.thread),
+    title: `Open ${p.from === "person" ? "your" : p.from + "'s"} message in ${threadTitle(p.th || p.thread) || "its conversation"}, at that message`,
+    onclick: e => { if (e.metaKey || e.ctrlKey || e.shiftKey) return; e.preventDefault(); jump(id); } }, written);
+}
 
 const link = (href, ...kids) => h("a", { href, target: "_blank", rel: "noopener noreferrer" }, ...kids);
 
@@ -70,7 +87,8 @@ function run(s, ms) {
     else if (m[13] != null) node = fileRef(m[13], m[14], m[0]);
     else if (m[15] != null) node = inLink ? m[0] : kbRef(m[15], m[0]);
     else if (m[16] != null) node = namedRef(m[16], m[0]) || m[0];
-    else if (m[12] != null) node = S.threads && S.threads.has(m[12]) ? h("a", { class: "ref", "data-kind": "thread", href: threadHref(m[12]), title: "Thread " + m[12] }, "#" + m[12]) : m[0];
+    else if (m[12] != null) node = (S.threads && S.threads.has(m[12]) ? thLink(m[12], "#") : HEXID.test(m[12]) && idRef(m[12], "#", m[0])) || m[0];
+    else if (m[17] != null) node = idRef(m[17], "", m[0]) || m[0];
     else {
       // A bare link: leave sentence punctuation and an unmatched ) outside it.
       let u = m[0].replace(/[.,;:!?'"*_`\]]+$/, "");

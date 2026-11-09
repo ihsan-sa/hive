@@ -1147,6 +1147,7 @@ body[data-pv-full] :is(#top,#main){margin-right:0}
 .msg-file[data-pv-on],.msg-thumb[data-pv-on]{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
 /* a post's file or a project path in a message: underlined, so it reads as a link even inside bold text (feedback 2026-11-08: a bold path looked like plain text) */
 a.ref:is([data-kind=file],[data-kind=kbfile]){display:inline;font-weight:inherit;color:var(--ink);text-decoration:underline;text-decoration-color:var(--ink-3);text-underline-offset:2px;cursor:pointer}
+.md a.ref:is([data-kind=post],[data-kind=thread]){display:inline;font-weight:inherit;color:var(--ink);text-decoration:underline;text-decoration-color:var(--ink-3);text-underline-offset:2px}   /* a message or conversation named in a post: plainly a link (110821183442) */
 a.ref:is([data-kind=file],[data-kind=kbfile]):hover{text-decoration-color:var(--ink)}
 a.ref:is([data-kind=file],[data-kind=kbfile])[data-pv-on]{background:color-mix(in oklch,var(--accent) 16%,transparent);border-radius:var(--r-s)}
 /* phone: a sheet from the bottom, over the nav bar */
