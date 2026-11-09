@@ -24,7 +24,7 @@ export function faded(th) {
   return true;
 }
 /** Archived by hand or by age, and nothing new for the person since: a post for them brings it back to the list by itself.
- *  By age, as Slack's channels do: quiet for 1 day when it was a short one-off, 7 when it ran longer (4+ posts). Pinned ones stay,
+ *  An agent's @person or For you: line after the person's last word holds it in the list. By age, as Slack's channels do: quiet for 1 day when it was a short one-off, 7 when it ran longer (4+ posts). Pinned ones stay,
  *  and so does one the person took back out (counted from then). */
 export const QUIET_DAYS = d => (d.posts.length > 3 ? 7 : 1);
 export function archived(th) {
@@ -35,10 +35,10 @@ export function archived(th) {
     const last = Math.max(d.posts.at(-1).t, m.back || 0);
     if (Date.now() - last < QUIET_DAYS(d) * 864e5) return false;
     a = last;
-    for (let i = d.posts.length - 1; i >= 0 && !OUTSIDE.has(d.posts[i].from); i--) if (isAgent(d.posts[i].from) && d.posts[i].men.includes("person")) return false;   // still waiting on the person
+    for (let i = d.posts.length - 1; i >= 0 && !OUTSIDE.has(d.posts[i].from); i--) if (isAgent(d.posts[i].from) && (d.posts[i].men.includes("person") || forYouLine(d.posts[i]))) return false;   // still waiting on the person (a For you: line too: the replay of 2026-11-09 found 12 archived unanswered)
   }
   if (!d) return true;
-  for (let i = d.posts.length - 1; i >= 0 && d.posts[i].t > a; i--) { const p = d.posts[i]; if (isAgent(p.from) && p.men.includes("person")) return false; }
+  for (let i = d.posts.length - 1; i >= 0 && d.posts[i].t > a; i--) { const p = d.posts[i]; if (isAgent(p.from) && (p.men.includes("person") || forYouLine(p))) return false; }
   return true;
 }
 

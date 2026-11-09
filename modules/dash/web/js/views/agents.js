@@ -122,7 +122,7 @@ export default {
         { label: "Agent time", value: found.length ? dur(sum(a => a.ran)) : "–", note: found.length ? `added up over ${plural(sum(a => a.runs), "run")}, in ${dur(Date.now() - Math.min(...found.map(a => a.when || Date.now())))}` : null },
     ]);
     return metrics({
-      header: pageHeader({ subnav: pageNav(), title: "Agents", lead: `Every agent that has run, ${s.k === "spawned" && s.d < 0 ? "newest first" : s.k === "spawned" ? "oldest first" : "sorted by the column you chose"}.`, after: toolbar(
+      header: pageHeader({ subnav: pageNav(), title: "Agents", hint: `Every agent that has run, ${s.k === "spawned" && s.d < 0 ? "newest first" : s.k === "spawned" ? "oldest first" : "sorted by the column you chose"}.`, after: toolbar(
         input({ type: "search", placeholder: `Search name, ${S.app.app ? "conversation" : "thread"}, model, who started it`, "aria-label": "Search agents", value: L.q, oninput: e => set("q", e.target.value) }),
         seg(STATUS.filter(x => ["all", "running", "ended", "failed"].includes(x[0]) || x[0] === L.status).map(([k, l]) => [k, k === "all" ? "All" : l]), L.status, v => set("status", v), { label: "Status" }),
         h("details", { class: "now-more ag-f", open: L.fOpen || null, ontoggle: (e, n) => { if (e.target === n) L.fOpen = n.open; } }, h("summary", null, "Filters" + (nf ? ` (${nf})` : "")),

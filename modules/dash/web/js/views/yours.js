@@ -6,19 +6,21 @@ import { S, can } from "../core/store.js";
 import { yoursPosts, yoursSearch, yoursItems, yoursText } from "../core/yours.js";
 import { waitingOn, waitingLater, waitingMoot, needsPage, olderWhy, needsN } from "../core/needs.js";
 import { quickPanel, closeQuick, laterButtons, setLater, quickIs } from "../ui/quick.js";
-import { answerer } from "./comms.js";
-import { focusOf, focusName, codePill, railSay } from "../core/foci.js";
+import { answerer, flat } from "./comms.js";
+import { agentRef } from "../ui/refs.js";
+import { focusOf, focusName, railSay } from "../core/foci.js";
 import { clock, plural, short, ago } from "../core/format.js";
 import { threadTitle } from "../core/model.js";
-import { threadHref, href } from "../core/router.js";
+import { threadHref, href, go } from "../core/router.js";
 import { simpleOn, hiveName } from "../core/simple.js";
 import { metrics } from "../templates.js";
-import { button, empty, input, pageHeader } from "../ui/kit.js";
+import { button, empty, input, pageHeader, scrim } from "../ui/kit.js";
 import { jump } from "../ui/message.js";
 
-const Y = { q: "", limit: 40, by: "new" };   // by: new (newest first) | focus (grouped by focus, the person, 11081355ecce)
+const Y = { q: "", limit: 40, by: "new", menu: false };   // by: new (newest first) | focus (grouped by focus, the person, 11081355ecce)
 const STEP = 60;
-const who = p => (p.from === "person" ? "You" : simpleOn() ? hiveName() : codePill(p.from));
+// An agent's code plain, not a pill (the Nov 8 handoff §4.6): agentRef with no pill, flattened to a span because the row is a link.
+const who = p => (p.from === "person" ? "You" : simpleOn() ? hiveName() : flat(agentRef(p.from, { dot: false }))[0]);
 
 /** #yours/waits: the one list itself (core/needs.js, what the badge counts), each entry with its reason in words, newest first;
  *  the R6 review found the stream of exchanges here didn't say why a thing waited. A search cuts it by the words. */
@@ -91,26 +93,33 @@ function page(ctx) {
     ? "What waits on you, newest first: each one opens in its conversation, at that message."
     : "Every exchange you had, newest first: what you said, what was said to you, and each agent's answer. An entry opens in its conversation, at that message.";
   const meta = !base.length ? null : Y.q ? `${plural(rows.length, "match")} of ${base.length}` : `${plural(base.length, waits ? "thing" : "exchange")} in ${plural(threads, "conversation")}`;
-  const actions = [
-    waits ? button("Everything you exchanged", null, { href: href("yours"), kind: "quiet", size: "s" }) : null,
-    !waits && needsN() ? button(`${plural(needsN(), "thing")} ${needsN() === 1 ? "waits" : "wait"} on you`, null, { href: href("yours", "waits"), kind: "quiet", size: "s" }) : null,
-    waits && needsPage() ? button("The full Needs you page", null, { href: needsPage(), kind: "quiet", size: "s" }) : null,
-  ].filter(Boolean);
-  const search = h("div", { class: "yr-search", "data-key": "search" },
+  // One switch between the two lists (the Nov 8 handoff §4.2); the full Needs you page stays reachable from the home's "All".
+  const n = needsN();
+  const actions = h("span", { class: "seg yr-seg", role: "group", "aria-label": "Show" },
+    h("button", { type: "button", class: "seg-b", "aria-pressed": String(!waits), onclick: () => go("yours") }, "Everything"),
+    h("button", { type: "button", class: "seg-b", "aria-pressed": String(waits), onclick: () => go("yours", "waits") }, "Waits on you", n ? h("i", { class: "n" }, String(n)) : null));
+  const ORDER = [["new", "Newest first"], ["focus", "By focus"]];
+  const order = waits ? h("span", { class: "yr-order", style: "position:relative" },
+    button("Order: newest first, or by focus", () => { Y.menu = !Y.menu; ctx.update(); }, { kind: "icon", size: "s", icon: "filter", cls: "yr-sort" }),
+    Y.menu ? [scrim(() => { Y.menu = false; ctx.update(); }), h("div", { class: "menu", role: "menu", "data-side": "bottom-end", "data-key": "yr-menu" }, ORDER.map(([k, l]) =>
+      h("button", { type: "button", class: "menu-i", role: "menuitemradio", "aria-checked": String(Y.by === k), onclick: () => { Y.by = k; Y.menu = false; ctx.update(); } }, l)))] : null) : null;
+  const search = h("div", { class: "yr-tools", "data-key": "tools" }, h("div", { class: "yr-search", "data-key": "search" },
     input({ type: "search", value: Y.q, placeholder: waits ? "Search what waits on you" : "Search your exchanges", "aria-label": "Search your exchanges",
       oninput: e => { Y.q = e.target.value; Y.limit = 40; ctx.update(); } }),
-    waits ? h("div", { class: "seg yr-by", role: "group", "aria-label": "Order" }, [["new", "Newest first"], ["focus", "By focus"]].map(([k, l]) =>
-      h("button", { type: "button", class: "seg-b", "aria-pressed": String(Y.by === k), onclick: () => { Y.by = k; ctx.update(); } }, l))) : null);
+    waits ? h("div", { class: "seg yr-by", role: "group", "aria-label": "Order" }, ORDER.map(([k, l]) =>
+      h("button", { type: "button", class: "seg-b", "aria-pressed": String(Y.by === k), onclick: () => { Y.by = k; ctx.update(); } }, l))) : null), order);
   const body = !S.live && !S.posts.length ? empty("Reading…", { kind: "loading" })
     : !rows.length && !(waits && (waitingLater().length || waitingMoot().length)) ? empty(Y.q ? "Nothing of yours has those words." : waits ? "Nothing waits on you." : "No exchanges yet. What you say in Chat, and what is said to you, shows up here.")
     : waits ? waitParts(rows, ctx) : stream(yoursItems(rows), ctx);
-  return metrics({ header: pageHeader({ title, lead, meta: [meta], actions, after: search }), sections: [body, waits ? quickPanel(ctx.update) : null].filter(Boolean) });
+  const pg = metrics({ header: pageHeader({ title, hint: lead, actions, after: search }), sections: [meta ? h("p", { class: "meta yr-meta", "data-key": "meta" }, meta) : null, body, waits ? quickPanel(ctx.update) : null].filter(Boolean) });
+  pg.setAttribute("data-view", "yours");   // centred at the reading width (the Nov 8 handoff §4.1)
+  return pg;
 }
 
 export default {
   id: "yours", label: "Yours", about: "every exchange you had, newest first",
   tab: true,
-  enter(ctx) { Y.limit = 40; ctx.update(); },
+  enter(ctx) { Y.limit = 40; Y.menu = false; ctx.update(); },
   render(ctx) { return page(ctx); },
   escape: () => closeQuick(),
   leave() { closeQuick(); },

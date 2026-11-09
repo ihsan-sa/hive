@@ -160,7 +160,8 @@ export default {
 
     if (S.app.app) {
       const fy = forYouRows(t), stuckN = count("stuck"), sign = signInWords(), stopped = !!L.limit_until && !(S.app.setup && S.app.setup.other);
-      const state = stopped || sign ? { tone: "bad", text: "Stopped" } : fy.length || stuckN ? { tone: "info", text: "Needs you" } : { tone: "good", text: "All fine" };
+      // A kicker only when there's something to say (the Nov 8 handoff §6): no "All fine" over a calm page.
+      const state = stopped || sign ? { tone: "bad", text: "Stopped" } : fy.length || stuckN ? { tone: "info", text: "Needs you" } : null;
       const up = run.filter(a => a.alive), upThreads = new Set(up.map(a => a.thread)).size;   // a gone process isn't working: the same count as the top bar's
       const one = upThreads === 1 ? threadTitle(up[0].thread) : `${nWord(upThreads).toLowerCase()} conversations`;
       const title = up.length ? `${nWord(up.length)} ${up.length === 1 ? "agent is" : "agents are"} working on ${one}.` : "No agents are working right now.";

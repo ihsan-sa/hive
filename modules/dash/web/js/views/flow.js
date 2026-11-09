@@ -154,7 +154,7 @@ function drawNow() {
     if (open) name.append(s("title", null, `${l.name}: open its card`));
     g.append(name);
     const openW0 = r.waits.filter(w => !w.until);
-    const sub = openW0.length && !l.rest ? "waits on you" : l.rest && r.runs.length ? `${plural(r.runs.length, "run")} in ${plural(l.threads.size, "conversation")}` : r.live.length ? plural(r.live.length, "agent") + " on it" : r.runs.length ? "last run " + ago(sEnd(r.runs[r.runs.length - 1])) : "cold";
+    const sub = openW0.length && !l.rest ? "waits on you \u00b7 " + dur(now() - Math.min(...openW0.map(w => w.from))) : l.rest && r.runs.length ? `${plural(r.runs.length, "run")} in ${plural(l.threads.size, "conversation")}` : r.live.length ? r.live.length + " running" : r.runs.length ? (now() - sEnd(r.runs[r.runs.length - 1]) < DAY ? "quiet since " + clock(sEnd(r.runs[r.runs.length - 1])) : "last run " + ago(sEnd(r.runs[r.runs.length - 1]))) : "cold";
     g.append(s("text", { class: "fl-sub", "data-cold": cold ? "" : null, "data-wait": openW0.length && !l.rest ? "" : null, x: 8, y: y + 44 }, short(sub, narrow ? 14 : 28)));
     // runs
     const rows = []; // for the rest lane: greedy packing by end time, ROWS deep
@@ -251,8 +251,9 @@ export default {
     if (!S.live) return h("div", { class: "page" }, pageNav(), waiting(S.failed, "Reading…", "the flow"));
     if (box.isConnected && (F.ver !== S.ver || box.clientWidth !== F.w)) draw(); else if (!box.isConnected) queueMicrotask(() => { if (box.isConnected) { draw(); if (!F.raf) F.raf = requestAnimationFrame(tick); } });
     const bar = toolbar(
+      h("h1", { class: "ph-title" }, title),   // the Nov 8 handoff §5.2: the page names itself, the legend sits right
       seg(PRE, F.win, v => { F.win = v; F.ver = -1; draw(); }, { label: "Window" }),
-      h("span", { class: "meta fl-legend" }, h("i", { class: "fl-k fl-k-run" }), " ran ", h("i", { class: "fl-k fl-k-live" }), " running ", h("i", { class: "fl-k fl-k-wait" }), " waits on you ", h("i", { class: "fl-k fl-k-dec" }), " decided for you ", h("i", { class: "fl-k fl-k-you" }), " you"),
+      h("span", { class: "meta fl-legend" }, h("i", { class: "fl-k fl-k-run" }), " ran ", h("i", { class: "fl-k fl-k-live" }), " running ", h("i", { class: "fl-k fl-k-wait" }), " waits on you ", h("i", { class: "fl-k fl-k-you" }), " you"),   // "decided for you" left the key; the diamond keeps its <title> (§5.2)
       infoButton("About this chart", "One lane per goal in your order; time runs into now. Open a lane for its card, a bar for its conversation; the speech bubble speaks to whoever is on it."));
     const nav = pageNav();   // the page row (R7 step 6): outside the canvas, which a phone folds away
     return h("div", { class: "fl-page", "data-fold": F.fold ? "" : null }, nav && h("div", { class: "cvp-nav" }, nav), h("div", { class: "fl-listbox", "data-own": "", "data-sig": "flow" }), canvas({ key: "flow", bar, note: null, stage }), h("div", { class: "fl-moved", "data-own": "", "data-sig": "flow" }));

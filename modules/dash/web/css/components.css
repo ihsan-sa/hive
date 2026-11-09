@@ -3026,3 +3026,199 @@ kbd.menu-i-r{font-family:inherit;font-size:var(--fs-meta)}
 .cm-show-m .tm-showwrap .tm-chip[aria-pressed=true] i{display:inline-block}
 .cm-show-m .tm-chip[aria-pressed=true] i{background:var(--on-ink);border-color:var(--on-ink)}
 .cm-show-m .tm-chip[aria-pressed=true] i::after{border-color:var(--ink)}
+
+/* Hive UI, Nov 8 regen (ui-regen-1108-2140): changed rules for css/components.css.
+   Append at the END of components.css (after the Flow/Focus/Yours blocks), so these win on equal specificity.
+   HANDOFF.md §n points into the matching section here. No new tokens: everything is from tokens.css v2.
+   Two new helper hooks are used by more than one page: [data-hover-acts] (row actions on hover/focus) and .sec-h/.sec-t (one section head). */
+
+/* ───────────── §0 Shared: row actions show on hover and focus, always on touch ───────────── */
+/* Put data-hover-acts on the row and wrap its actions in .row-acts. The row's time goes in .row-t and hides while actions show. */
+[data-hover-acts] .row-acts{display:none;gap:2px;align-items:center}
+[data-hover-acts]:hover .row-acts,[data-hover-acts]:focus-within .row-acts{display:flex}
+[data-hover-acts]:hover .row-t,[data-hover-acts]:focus-within .row-t{display:none}
+@media (hover:none){[data-hover-acts] .row-acts{display:flex}[data-hover-acts] .row-t{display:none}}
+
+/* One section head everywhere a list has a title (home, Focus, Yours, Flow) */
+.sec-h{display:flex;align-items:baseline;gap:8px;min-height:24px}
+.sec-t{font-size:var(--fs-small);font-weight:var(--w-bold);color:var(--ink);display:inline-flex;align-items:center;gap:8px;margin:0}
+.sec-h .sec-n{font-size:var(--fs-meta);color:var(--ink-3)}
+.sec-h>a,.sec-h>.sec-a{margin-left:auto;font-size:var(--fs-meta);font-weight:var(--w-med);color:var(--ink-2);text-decoration:none}
+.sec-h>a:hover{color:var(--ink);text-decoration:underline}
+
+/* ───────────── §1 Chat home: one column ───────────── */
+.cm-home{max-width:var(--read-w);margin:0 auto;padding:72px var(--s5) var(--s8);display:grid;gap:var(--s6)}
+.cm-home-t{font-size:30px;letter-spacing:-.02em;text-align:center}
+.cm-home-l{display:none}                         /* the lead sentence goes; it is the placeholder's job */
+/* the waits head: was a centred, underlined amber link */
+.cm-hline{max-width:none;margin:0;text-align:left;display:flex;align-items:baseline;gap:8px;font-size:var(--fs-small);font-weight:var(--w-bold);color:var(--ink)}
+.cm-hline:not([data-needs]){font-weight:400;color:var(--ink-3)}
+.cm-hline a{color:inherit;text-decoration:none}
+.cm-hline a:hover{text-decoration:underline}
+.cm-hline[data-needs]::before{content:"";width:7px;height:7px;background:var(--accent);transform:rotate(45deg);border-radius:1px;flex:none;align-self:center}
+.cm-hline .cm-hline-all{margin-left:auto;font-size:var(--fs-meta);font-weight:var(--w-med);color:var(--ink-2)}
+/* the waits list */
+.cm-needs{max-width:none;margin:calc(var(--s6) * -1 + var(--s2)) 0 0;background:var(--surface)}
+.cm-need{padding:12px 14px;gap:2px 16px;min-height:60px}
+.cm-need-q{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;line-height:1.45}
+.cm-need-q .ref{background:none;padding:0;border:0;height:auto;font-weight:var(--w-bold)}   /* agent code in a sentence: bold mono, not a pill */
+.cm-need-m{display:flex;flex-wrap:wrap;gap:0 6px;align-items:center;color:var(--ink-3)}
+.cm-need-m a{color:var(--ink-2);text-decoration:none}
+.cm-need-m a:hover{text-decoration:underline}
+.cm-need-b{gap:2px}
+.cm-need-b .nd-later,.cm-need-b .nd-moot{width:var(--ctl-s);padding:0;font-size:0}   /* icon only; the label stays as aria-label/title (see HANDOFF §1.3) */
+.cm-need-b .nd-later svg,.cm-need-b .nd-moot svg{width:16px;height:16px}
+.cm-need[data-open]:hover{background:var(--tint)}
+@media (max-width:699px){
+  .cm-home{padding:var(--s5) var(--s4) var(--s6);gap:var(--s5)}
+  .cm-need{grid-template-columns:minmax(0,1fr) auto;padding:12px 6px 12px 14px}
+  .cm-need-b{grid-column:2;grid-row:1/span 2;margin:0}
+  .cm-need-b .nd-later,.cm-need-b .nd-moot,.cm-need-b .cm-need-a{display:none}
+  .cm-need-b .cm-need-more{display:inline-flex;width:44px;height:44px}
+}
+.cm-need-more{display:none}
+
+/* the focus cards: two columns inside the same reading column */
+.cm-foci{max-width:none;margin:0;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:var(--s3)}
+.fc{padding:14px 16px 12px;gap:12px;border-color:var(--line)}
+.fc[data-needs]{border-color:var(--line)}       /* the Needs you block inside says it; no coloured frame */
+.fc-hd{gap:4px 8px}
+.fc-lead{font-size:var(--fs-meta);color:var(--ink-3)}
+.fc-tools{display:flex;margin:-4px -6px 0 0}
+.fc-tools .btn{opacity:0;transition:opacity var(--dur) var(--ease)}
+.fc:hover .fc-tools .btn,.fc:focus-within .fc-tools .btn{opacity:1}
+@media (hover:none){.fc-tools .btn{opacity:1}}
+.fc-ev{grid-template-columns:48px minmax(0,1fr)}
+.fc-ev-x .pill.ref,.fc-ev-x .ref{background:none;padding:0;border:0;height:auto;font-family:var(--mono);font-weight:var(--w-bold);color:var(--ink)}
+.fc-sub{display:none}                            /* "Now", "Lately", "Conversations" labels: the ink step and the rule say it */
+.fc-rows{border-top:1px solid var(--line);padding-top:6px}
+.fc-ft{display:none}                             /* footer goes: the name opens the page; + and … move to .fc-tools (HANDOFF §1.4) */
+
+/* ───────────── §2 Rail: a focus head is one line; its count replaces "(2)" and swaps with + on hover ───────────── */
+.tm-sec-hw>.tm-sec-h{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:var(--fs-small);color:var(--ink-2);padding:6px 6px 6px 4px}
+.tm-sec-hw>.tm-sec-h .tm-sec-nm{overflow:hidden;text-overflow:ellipsis;min-width:0}
+.tm-sec-hw .tm-sec-n{font-size:var(--fs-meta);color:var(--ink-3);font-weight:400;padding:0 8px;flex:none}   /* new span (HANDOFF §2.1) */
+.tm-sec-hw:hover .tm-sec-n,.tm-sec-hw:focus-within .tm-sec-n{display:none}
+.tm-sec-add{opacity:0}
+@media (hover:none){.tm-sec-add{opacity:1}.tm-sec-hw .tm-sec-n{display:none}}
+
+/* ───────────── §3 Focus page ───────────── */
+.fp{padding:var(--s7) var(--gutter) var(--s8)}
+.fp-hd{border-bottom:0;padding-bottom:0}
+.fp-a .btn[data-kind=primary]{background:var(--surface);color:var(--ink);border-color:var(--line-2)}   /* "New conversation" is secondary: Send is this page's primary */
+.fp-h h2{font-size:var(--fs-small)}
+.fp-by{margin-left:0}
+.fp-ev{border-top:0;padding:4px 0}
+.fp-ev-x .ref{background:none;padding:0;border:0;height:auto;font-family:var(--mono);font-weight:var(--w-bold);color:inherit}
+.fp-bar i,.fp-bar[data-tone=info] i{background:var(--data)}   /* share of work/cost is data, not "yours to act on" */
+.fp-bar{height:6px;border-radius:3px}
+.fp-yr-i{padding:10px 12px;margin:0 -12px}
+.fp-yr-i+.fp-yr-i{box-shadow:none}
+.fp-yr-i:hover{background:var(--tint)}
+.fp-yr-i[data-who=me] .fp-yr-m b{color:var(--ink)}
+.fp-yr-mine{font-weight:400}
+/* the steer box becomes the composer card (HANDOFF §3.2 swaps the DOM); until then, make the old one look like it */
+.fp-steer{border-top:0;margin-top:0;padding-top:0}
+.fp-steer-in{resize:none;border:1px solid var(--line-2);border-radius:var(--r-xl);box-shadow:var(--e1);padding:14px 16px;min-height:88px;font-size:var(--fs-read)}
+.fp-steer-a .meta{display:none}
+
+/* ───────────── §4 Yours (views/yours.js; its .page gets data-view="yours", HANDOFF §4.1) ───────────── */
+.page[data-view=yours]{max-width:calc(var(--read-w) + 2 * var(--s5));margin:0 auto}
+.page[data-view=yours] .ph-lead{display:none}     /* the 2-line explanation moves to the h1's title */
+.page[data-view=yours] .ph{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:var(--s4)}
+.page[data-view=yours] .ph-after{grid-column:1/-1}
+.yr-tools{display:flex;gap:6px;align-items:center}  /* new wrapper: search + order button (HANDOFF §4.3) */
+.yr-search{margin:0;max-width:none;flex:1}
+.yr-stream{max-width:none}
+.yr-day{color:var(--ink);font-weight:var(--w-bold)}
+.yr-day::after{display:none}
+.yr-rule::before{display:none}
+.yr-e{padding:10px 12px;margin:0 -12px}
+.yr-e:hover,.yr-e:focus-visible{background:var(--tint)}
+.yr-e[data-who="me"] .yr-h b{color:var(--ink)}    /* "You" is not something to act on */
+.yr-x{color:var(--ink);-webkit-line-clamp:2}
+.yr-waits{border:1px solid var(--line);border-radius:var(--r-l);background:var(--surface);overflow:hidden}
+.yr-w{padding:12px 14px}
+.yr-w+.yr-w{border-top:1px solid var(--line)}
+.yr-by{display:none}                             /* Newest first / By focus moves into the order button's menu */
+
+/* ───────────── §5 Flow ───────────── */
+.fl-page{max-width:var(--page-max);margin:0 auto;padding:var(--s5) var(--gutter) var(--s8);background:none}
+.fl-page .cvp{border:1px solid var(--line);border-radius:var(--r-l);background:var(--surface);overflow:hidden}
+.fl-legend{gap:var(--s4);font-size:var(--fs-meta);color:var(--ink-2)}
+.fl-legend .fl-k{margin-right:6px}
+.fl-k-dec{display:none}                          /* "decided for you" leaves the legend; the diamond keeps its <title> */
+.fl-name{font-size:var(--fs-small);font-weight:var(--w-bold)}
+.fl-sub{font-size:var(--fs-meta);fill:var(--ink-3)}
+.fl-sub[data-wait],.fl-next[data-wait]{fill:var(--accent-ink);font-weight:var(--w-med)}
+.fl-moved{padding:0;max-width:var(--read-w);background:none}
+.fl-moved li{display:grid;grid-template-columns:200px minmax(0,1fr) auto;gap:12px;align-items:baseline;min-height:40px;border-bottom:1px solid var(--line);font-size:var(--fs-small)}
+
+/* ───────────── §6 Consumer Now: no CSS. now.js passes `state` only when something needs you (HANDOFF §6). ───────────── */
+
+/* ───────────── §7 The low ones: Inbox and Agents lose their lead sentence (moved to the h1 title in JS, HANDOFF §7) ───────────── */
+/* no CSS: pass lead: null in inbox.js and agents.js; keep the text as the h1's title. */
+/* R42: the Focuses head sits on its cards, not a whole home gap (--s6) above them */
+.cm-home>.cm-foci-h+.cm-foci{margin-top:calc(var(--s2) - var(--s6))}
+.fl-page .fl-legend{margin-left:auto}                /* R42: the legend sits right of the window control (Nov 8 §5.2) */
+
+/* ui-regen-1109-0818 §A/§B (R43) */
+/* ---------- §A  Chat's button bar (ui/shell.js TOPX, views/comms.js places()) ---------- */
+/* One hairline: the top bar already draws its bottom line, so the bar only draws its own bottom line. */
+.cm-places{height:44px;padding:0;gap:2px;border-top:0;border-bottom:1px solid var(--line);background:var(--surface)}
+/* New conversation sits over the rail: a cell exactly --rail-w wide, whose right edge continues the rail's border. */
+.cm-place.cm-newbtn{flex:0 0 auto;width:var(--rail-w);box-sizing:border-box;height:100%;margin:0 var(--s2) 0 0;padding:0 var(--s3);
+  border:0;border-right:1px solid var(--line);border-radius:0;background:none;box-shadow:none;justify-content:flex-start}
+.cm-place.cm-newbtn::after{content:none}                    /* the old divider: the rail's edge is the divider now */
+.cm-place.cm-newbtn .cm-place-l{display:inline-flex;align-items:center;height:32px;padding:0 12px 0 0;border-radius:var(--r-m)}
+.cm-place.cm-newbtn:hover{background:none}
+.cm-place.cm-newbtn:hover .cm-place-l,.cm-place.cm-newbtn:hover .ic{color:var(--ink)}
+.cm-place.cm-newbtn .ic{color:var(--ink)}
+/* The rail can be dragged wider. setSide() (views/comms.js) also sets --rail-now on <html> (one line, HANDOFF §A.3), so this cell follows the list's width. */
+.cm-places>.cm-place.cm-newbtn{width:var(--rail-now,var(--rail-w))}
+/* Counts: amber only for what's yours to act on (Yours, which takes Needs me's count, §A.2). Everything else is a plain grey number. */
+.cm-place-n{min-width:0;height:auto;padding:0;border-radius:0;background:none;color:var(--ink-3);font-size:var(--fs-meta);font-weight:var(--w-med)}
+.cm-place[data-key=yours] .cm-place-n,.cm-place[data-key=bell] .cm-place-n{min-width:18px;height:18px;padding:0 5px;box-sizing:border-box;border-radius:var(--r-pill);
+  background:var(--accent);color:var(--on-accent);font-size:var(--fs-micro);font-weight:var(--w-bold);display:inline-flex;align-items:center;justify-content:center}
+/* narrow: the cell shrinks to the icon + "New" */
+@container (max-width:760px){.cm-places>.cm-place.cm-newbtn{width:auto;border-right:1px solid var(--line);padding-right:var(--s2)}}
+
+/* ---------- §B  The rail's filters, always open (views/comms.js showMenu, showChips, viewBar) ---------- */
+/* Three rows, no kickers: [Show toggles · star] / [Arrange segmented · Hide-not-needed switch] / [Conversations · fold · All]. */
+.cm-show-m{gap:var(--s2);padding:var(--s1) 2px var(--s1);margin:0 0 var(--s1);border-bottom:0}
+.cm-show-m .cm-show-l{display:none}                         /* "SHOW", "ARRANGE": JS can drop them (§B.1) */
+.cm-show-m .tm-showwrap{align-items:center}
+.cm-show-m .tm-showwrap>.tm-show{padding-left:0;gap:var(--s1)}
+.cm-show-m .tm-showwrap>.tm-chip-imp{margin:0 0 0 auto;border:0;width:var(--ctl-s);padding:0;justify-content:center}
+.cm-show-m .tm-showwrap>.tm-chip-imp[aria-pressed=true]{background:var(--sunken);color:var(--ink)}
+/* the chip: on = filled ink with a check (the person's ask, kept), off = hairline, quieter ink; one height */
+.cm-show-m .tm-chip{height:26px;font-size:var(--fs-meta);font-weight:var(--w-med)}
+.cm-show-m .tm-showwrap .tm-chip[aria-pressed=true]{padding:0 9px 0 7px}
+.cm-show-m .tm-chip[aria-pressed=true] i{display:inline-block;width:10px;height:10px;border:0;background:none}
+.cm-show-m .tm-chip[aria-pressed=true] i::after{left:3px;top:0;border-color:var(--on-ink)}
+/* row 2: segmented left, switch right */
+.cm-show-m .cm-views{display:flex;align-items:center;justify-content:space-between;gap:var(--s2);padding:0}
+.cm-show-m .cm-views .seg{font-size:var(--fs-meta)}
+/* "Hide not needed" is a setting: a switch, not a chip. Same button, same aria-pressed; only the drawing changes. */
+.cm-show-m .cm-hidefaded{height:26px;padding:0;border:0;background:none!important;color:var(--ink-2)!important;gap:6px}
+.cm-show-m .cm-hidefaded i{order:-1;width:26px;height:16px;border:0;border-radius:var(--r-pill);background:var(--line-2)!important;position:relative}
+.cm-show-m .cm-hidefaded i::after{content:"";position:absolute;left:2px;top:2px;width:12px;height:12px;border:0!important;border-radius:50%;background:var(--surface);transform:none;transition:left var(--dur) var(--ease)}
+.cm-show-m .cm-hidefaded[aria-pressed=true] i{background:var(--ink)!important}
+.cm-show-m .cm-hidefaded[aria-pressed=true] i::after{left:12px;background:var(--on-ink)}
+/* row 3: the list's head: label left, fold (icon) and Show all ("All") right, a hairline above */
+.cm-show-m .cm-scope{display:flex;align-items:center;gap:2px;height:28px;padding:var(--s1) 0 0;border-top:1px solid var(--line);font-size:var(--fs-meta);font-weight:var(--w-med);color:var(--ink-3)}
+.cm-show-m .cm-scope>span{margin-right:auto}
+.cm-show-m .cm-foldall,.cm-show-m .cm-scope-b{height:26px;padding:0 var(--s2);border:0;border-radius:var(--r-s);background:none;color:var(--ink-3);font-size:var(--fs-meta);font-weight:var(--w-med)}
+.cm-show-m .cm-foldall:hover,.cm-show-m .cm-scope-b:hover{background:var(--hover);color:var(--ink)}
+/* developer look: the same three rows, 22px chips */
+:root[data-dev] .cm-show-m .tm-chip{height:22px}
+:root[data-dev] .cm-show-m{gap:6px}
+
+/* rail focus heads: one line, ellipsis, the count after (Nov 8 §2 still applies; this keeps the head from wrapping in the meantime) */
+.tm-sec-h .tm-sec-nm,.tm-sec-link{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+
+/* R43 fixes over the §A/§B block: the label is the full words in JS now (no ::after); the switch keeps its track when on (the older pressed-chip
+   rule shrank it to a 10px dot); the scope row grows to hold its 26px buttons (28px tall with 4px padding and the hairline left them spilling out). */
+.cm-place.cm-newbtn .cm-place-l::after{content:none}
+.cm-show-m .cm-hidefaded[aria-pressed] i{display:inline-block;width:26px;height:16px;border:0;flex:none}
+.cm-show-m .cm-scope{height:auto;min-height:28px}

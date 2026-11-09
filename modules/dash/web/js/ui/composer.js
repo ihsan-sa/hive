@@ -947,9 +947,11 @@ export function composer({ thread, update, place = "thread", autofocus, top }) {
             : d.naming ? h("span", { class: "meta cp-new" }, "A new agent starts on this") : null,
           !th && S.app && !simpleOn() ? focusPick(d) : null,
           simpleOn() ? null : modelPick(d, r),
-          button(sendWord, () => send(th), { kind: "primary", icon: armed ? "pause" : "arrow-up", disabled: empty, cls: "cp-send",
-            title: armed ? "Interrupt and send (Enter)" : sendWord + " (Enter) · Shift+Enter for a new line · ↑ past messages · Tab completes" })))),
-    h("div", { class: "cp-hint", "data-key": "hint" },
-      h("span", null, armed ? "Enter interrupts and sends · Esc cancels" : busy ? `Enter sends; ${busy} reads it after its current step` : "Enter sends · Shift+Enter for a new line"),
-      h("span", null, "Sent messages can't be edited or taken back")));
+          sendButton(sendWord, () => send(th), empty, armed ? "Enter interrupts and sends · Esc cancels"
+            : busy ? `${sendWord} (Enter). ${busy} reads it after its current step` : `${sendWord} (Enter). Shift+Enter for a new line. Sent messages can't be edited or taken back.`, armed)))));
+}
+// The hint lines under the box went into the send button's name and title (the Nov 8 handoff §8.1); the queued line under your bubble says the busy part.
+function sendButton(word, fn, empty, say, armed) {
+  const b = button(word, fn, { kind: "primary", icon: armed ? "pause" : "arrow-up", disabled: empty, cls: "cp-send", title: say + (armed ? "" : " ↑ past messages · Tab completes") });
+  b.setAttribute("aria-label", say); return b;
 }

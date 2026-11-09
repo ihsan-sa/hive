@@ -50,10 +50,11 @@ export function setLater(w, what) {
   emit({ foci: true });
   return post("/api/focus", { later: { what, key, th: w.th, focus: fid, text: w.text || "", t: w.t || null } }).then(() => loadFoci(true), () => loadFoci(true));
 }
-/** The two quiet buttons beside Answer. */
+/** The two quiet buttons beside Answer. Each has an icon and its name as aria-label: the home's waiting rows show the icon alone (css §1), the panel shows both. */
+const laterBtn = (label, ic, cls, title, fn) => { const b = button(label, e => { if (e) e.stopPropagation(); fn(); }, { size: "s", kind: "quiet", cls, title, icon: ic }); b.setAttribute("aria-label", label); return b; };
 export const laterButtons = w => [
-  button("Later", e => { if (e) e.stopPropagation(); setLater(w, "later"); }, { size: "s", kind: "quiet", cls: "nd-later", title: "Not now: move it to Later, out of the count" }),
-  button("Not needed", e => { if (e) e.stopPropagation(); setLater(w, "moot"); }, { size: "s", kind: "quiet", cls: "nd-moot", title: "It's obsolete or done: drop it" }),
+  laterBtn("Later", "clock", "nd-later", "Later: not now, move it out of the count", () => setLater(w, "later")),
+  laterBtn("Not needed", "close", "nd-moot", "Not needed: it's obsolete or done, drop it", () => setLater(w, "moot")),
 ];
 const keyOf = w => w.key || (w.post ? "p:" + w.post : w.src + ":" + w.th);
 
