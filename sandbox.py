@@ -279,12 +279,18 @@ This install runs agents inside a sandbox. What differs from the above:
 DOOR_NOTE = """- You are the door and you're in the sandbox too, because you read what agents write. So you can't change `~/core/config.json`, add modules, or sign in: tell the person to use the app for those. Your posts are marked as coming through the door, and a step's approval word in one counts for nothing: the person types it in the app, or runs `hive step approve ID` in their own terminal.
 """
 
+_AA_PROFILE = '# installed by the Hive\nabi <abi/4.0>,\ninclude <tunables/global>\nprofile bwrap /usr/bin/bwrap flags=(attach_disconnected,mediate_deleted) {\n  allow capability,\n  allow file rwlkm /{**,},\n  allow network,\n  allow unix,\n  allow ptrace,\n  allow signal,\n  allow mqueue,\n  allow io_uring,\n  allow userns,\n  allow mount,\n  allow umount,\n  allow pivot_root,\n  allow dbus,\n  allow pix /** -> &bwrap//&unpriv_bwrap,\n}\nprofile unpriv_bwrap flags=(attach_disconnected,mediate_deleted) {\n  allow file rwlkm /{**,},\n  allow network,\n  allow unix,\n  allow ptrace,\n  allow signal,\n  allow mqueue,\n  allow io_uring,\n  allow userns,\n  allow mount,\n  allow umount,\n  allow pivot_root,\n  allow dbus,\n  allow pix /** -> &unpriv_bwrap,\n  audit deny capability,\n}\n'
+
 def _userns_fix():
     try: limited = Path("/proc/sys/kernel/apparmor_restrict_unprivileged_userns").read_text().strip() == "1"
     except OSError: limited = False
     if not limited: return "Ask whoever administers this machine to allow unprivileged user namespaces for bubblewrap, then check again."
-    return ("Ask whoever administers this machine to run this, then check again. It lets bubblewrap make its private space: it re-allows unprivileged user namespaces for bubblewrap, a limit Ubuntu turns on by default, for every user of the machine, and that widens the kernel's attack surface: "
-            "printf '# installed by the Hive\\nabi <abi/4.0>,\\ninclude <tunables/global>\\nprofile bwrap /usr/bin/bwrap flags=(attach_disconnected,mediate_deleted) {\\n  allow capability,\\n  allow file rwlkm /{**,},\\n  allow network,\\n  allow unix,\\n  allow ptrace,\\n  allow signal,\\n  allow mqueue,\\n  allow io_uring,\\n  allow userns,\\n  allow mount,\\n  allow umount,\\n  allow pivot_root,\\n  allow dbus,\\n  allow pix /** -> &bwrap//&unpriv_bwrap,\\n}\\nprofile unpriv_bwrap flags=(attach_disconnected,mediate_deleted) {\\n  allow file rwlkm /{**,},\\n  allow network,\\n  allow unix,\\n  allow ptrace,\\n  allow signal,\\n  allow mqueue,\\n  allow io_uring,\\n  allow userns,\\n  allow mount,\\n  allow umount,\\n  allow pivot_root,\\n  allow dbus,\\n  allow pix /** -> &unpriv_bwrap,\\n  audit deny capability,\\n}\\n' | sudo tee /etc/apparmor.d/bwrap >/dev/null && sudo apparmor_parser -r /etc/apparmor.d/bwrap")
+    f = STATE / "bwrap.apparmor"
+    try: STATE.mkdir(exist_ok=True); f.write_text(_AA_PROFILE)
+    except OSError: f = None
+    why = ("Ask whoever administers this machine to run this, then check again. It lets bubblewrap make its private space: it re-allows unprivileged user namespaces for bubblewrap, a limit Ubuntu turns on by default, for every user of the machine, and that widens the kernel's attack surface")
+    if f: return f"{why}. The profile is in {f}: read it first, then run: sudo install -m 644 {f} /etc/apparmor.d/bwrap && sudo apparmor_parser -r /etc/apparmor.d/bwrap"
+    return why + ": printf '" + _AA_PROFILE.replace("\n", "\\n") + "' | sudo tee /etc/apparmor.d/bwrap >/dev/null && sudo apparmor_parser -r /etc/apparmor.d/bwrap"
 
 def check():
     """Does it work here, by trying: {"works", "why", "fix"}. Under 15 s; what it makes is in a temp folder and goes when it ends."""

@@ -27,6 +27,8 @@ them that an agent writes, so it stays in plain words: no rung ids, post ids, pa
                                       the focus's newest result post (stale), a focus with threads and no summary (missing)
   hive focus order ID ID ...            the order foci show in (rail, home, this list): the listed ones first, the rest after in
                                       their usual order; the newest order wins (the dash's drag writes it). --reset: back to default
+  hive focus moved [--since 2d]         threads moved between foci lately, newest first (from, to, who, when; up to a week back);
+                                      the dashboard's home shows the same as Recently moved
   hive focus json                       everything, for the dashboard (/api/foci)
 
 The duty (time-invariant, no cleanup pulses): the agent that posts a result in a thread that is in a focus updates the focus's
@@ -164,6 +166,7 @@ def state(recs=None, pri=None, posts=None):
         if r["kind"] == "tag" and r.get("thread"):
             if r.get("off"): tags.pop(r["thread"], None)
             elif r.get("focus") in foci: tags[r["thread"]] = r["focus"]
+    moved = moves(recs, foci)
     links = set()
     for r in recs:
         if r["kind"] == "link" and r.get("a") in foci and r.get("b") in foci:
@@ -216,7 +219,30 @@ def state(recs=None, pri=None, posts=None):
         if r["kind"] == "later" and r.get("key"):
             if r.get("what") == "back": later.pop(r["key"], None)
             elif r.get("what") in ("later", "moot"): later[r["key"]] = {k: r.get(k) for k in ("key", "th", "focus", "text", "t", "what", "from", "at")}
-    return {"foci": [foci[i] for i in order], "tags": tags, "order": order, "later": sorted(later.values(), key=lambda x: -(x.get("at") or 0))}
+    return {"foci": [foci[i] for i in order], "tags": tags, "order": order, "later": sorted(later.values(), key=lambda x: -(x.get("at") or 0)), "moved": moved}
+
+MOVED_FOR, MOVED_MAX, MOVED_MERGE = 7 * 86400, 80, 600
+def moves(recs, foci, at=None):
+    """Threads moved between foci lately, newest first (the person, 110901466282: hard to know where a thread went once it moved):
+    [{thread, was, to, by, at}], `was` the thread's previous tag (None: it had none, so it sat in Other or followed its parent),
+    `to` None when it was taken out. A re-tag to where it already was isn't a move; moves of one thread within 10 minutes are one."""
+    cur, out, last = {}, [], {}
+    for r in recs:
+        if r.get("kind") != "tag" or not r.get("thread"): continue
+        th = r["thread"]; to = None if r.get("off") else r.get("focus")
+        if to is not None and to not in foci: continue
+        was = cur.get(th)
+        if to == was: continue
+        if to is None: cur.pop(th, None)
+        else: cur[th] = to
+        m = last.get(th); t = r.get("at") or 0
+        if m and t - m["at"] < MOVED_MERGE:   # off then on, or a quick correction: one move from where it first was
+            m.update(to=to, by=r.get("from"), at=t)
+            if m["to"] == m["was"]: out.remove(m); last.pop(th)
+            continue
+        m = {"thread": th, "was": was, "to": to, "by": r.get("from"), "at": t}; out.append(m); last[th] = m
+    since = (now() if at is None else at) - MOVED_FOR
+    return sorted((m for m in out if m["at"] >= since), key=lambda m: -m["at"])[:MOVED_MAX]
 
 def ordered(ids, recs):
     """`ids` (the default order) rearranged by the newest order record: the ids it lists that exist first, in its order, then the
@@ -406,6 +432,7 @@ def main(argv=None):
     p = sp.add_parser("lint"); p.add_argument("focus", nargs="?"); p.add_argument("--json", action="store_true")
     p = sp.add_parser("file"); p.add_argument("path"); p.add_argument("--post"); p.add_argument("--focus"); p.add_argument("--off", action="store_true")   # a kb note filed under a focus (kb file --from/--focus calls this)
     p = sp.add_parser("order"); p.add_argument("ids", nargs="*"); p.add_argument("--reset", action="store_true")
+    p = sp.add_parser("moved", help="threads moved between foci lately, newest first"); p.add_argument("--since", default="2d", help="how far back: 30m, 12h, 3d (up to a week)")
     sp.add_parser("json")
     a = ap.parse_args(argv)
     st = state()
@@ -525,10 +552,19 @@ def main(argv=None):
         f = find(st, a.focus) if a.focus else None
         append({"kind": "later", "key": a.key, "what": a.what, **({} if a.what == "back" else {"th": a.th[:80] or None, "focus": f["id"] if f else None, "text": " ".join(a.text.split())[:300], "t": a.t or None})})
         print(f"{a.what}: {a.key}"); return
+    if a.cmd == "moved":
+        mt = re.fullmatch(r"(\d+(?:\.\d+)?)([mhd])", a.since.strip())
+        if not mt: sys.exit("hive focus moved: --since like 30m, 12h or 3d")
+        cut = now() - float(mt[1]) * {"m": 60, "h": 3600, "d": 86400}[mt[2]]
+        rows = [m for m in st["moved"] if m["at"] >= cut]
+        if not rows: print("no thread moved between foci in that time"); return
+        for m in rows:
+            print(f"{dt.datetime.fromtimestamp(m['at']).strftime('%m-%d %H:%M')}  {m['thread']:<14} {m['was'] or '(untagged)'} -> {m['to'] or MISC}  by {m['by']}")
+        return
     if a.cmd == "json":
         posts = board_posts()
         for f in st["foci"]: f["keeper"] = keeper(f, posts)
-        out = {"foci": st["foci"], "tags": st["tags"], "later": st["later"], "misc": MISC, "lint": lint(st, posts), "activity": activity(st, posts, run_starts(now() - WINDOWS["week"])), "at": now()}
+        out = {"foci": st["foci"], "tags": st["tags"], "later": st["later"], "moved": st["moved"], "misc": MISC, "lint": lint(st, posts), "activity": activity(st, posts, run_starts(now() - WINDOWS["week"])), "at": now()}
         print(json.dumps(out, default=str)); return
 
 if __name__ == "__main__": main()

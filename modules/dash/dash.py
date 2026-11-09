@@ -469,7 +469,7 @@ def focus_do(d):
     if not THREAD_NAME.fullmatch(th): raise ValueError("bad thread")
     if not off and not FOCUS_ID.fullmatch(f): raise ValueError("bad focus")
     args = ["nice", "-n", "15", sys.executable, "-I", str(HOME / "core" / "focus.py"), "tag", th] + (["--off"] if off else [f])
-    r = subprocess.run(args, capture_output=True, text=True, timeout=30)
+    r = subprocess.run(args, capture_output=True, text=True, timeout=30, env={**os.environ, "HIVE_NAME": "person"})   # the person's move: Recently moved says "by you"
     if r.returncode: raise ValueError((r.stderr or r.stdout or "focus.py failed").strip()[:200])
     foci_c.t = 0
     return {"ok": True, "thread": th, "focus": None if off else f, "said": r.stdout.strip()}

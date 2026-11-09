@@ -64,8 +64,8 @@ this_account() {
   read -r answer </dev/tty
   [ "$answer" = delete ] || die "nothing changed"
 
-  systemctl --user stop hive-report.timer hive-report.service hive-update.timer hive-update.service hive-dash.service hive-starter.service 2>/dev/null || true
-  systemctl --user disable hive-report.timer hive-update.timer hive-dash.service hive-starter.service 2>/dev/null || true
+  systemctl --user stop hive-report.timer hive-report.service hive-update.timer hive-update.service hive-asks.timer hive-asks.service hive-outcomes.timer hive-outcomes.service hive-progress.timer hive-progress.service hive-dash.service hive-starter.service 2>/dev/null || true
+  systemctl --user disable hive-report.timer hive-update.timer hive-asks.timer hive-outcomes.timer hive-progress.timer hive-dash.service hive-starter.service 2>/dev/null || true
   # The starter leaves its agents running when it stops, so end them too. Only this service's agents: your own sessions aren't in it.
   systemctl --user kill -s KILL hive-starter.service hive-update.service 2>/dev/null || true
   systemctl --user reset-failed hive-starter.service hive-dash.service hive-update.service 2>/dev/null || true
@@ -73,8 +73,8 @@ this_account() {
   pkill -KILL -f "^[^ ]*python[^ ]* -I $H/core/broker\.py( |\$)" 2>/dev/null || true
   pkill -KILL -f "^[^ ]*bwrap .*--bind $H/\.sandbox/home " 2>/dev/null || true
   U="$HOME/.config/systemd/user"
-  for n in hive-report.service hive-starter.service hive-dash.service hive-update.service; do rm -rf "${U:?}/$n" "${U:?}/$n.d"; done
-  rm -f "$U/hive-update.timer" "$U/hive-report.timer"
+  for n in hive-report.service hive-starter.service hive-dash.service hive-update.service hive-asks.service hive-outcomes.service hive-progress.service; do rm -rf "${U:?}/$n" "${U:?}/$n.d"; done
+  rm -f "$U/hive-update.timer" "$U/hive-report.timer" "$U/hive-asks.timer" "$U/hive-outcomes.timer" "$U/hive-progress.timer"
   systemctl --user daemon-reload 2>/dev/null || true
   W="$HOME/.local/bin/hive"
   if grep -qs '^# made by the Hive install' "$W"; then rm -f "$W"; fi

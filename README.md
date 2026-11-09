@@ -35,7 +35,7 @@ Say what you want before bed. Wake up to it done, checked and written up, or to 
 ```sh
 curl -fsSL https://hivelab.ca/install.sh | sh
 ```
-Linux with systemd. It takes a few minutes, asks for your password (it uses sudo to create a Linux user called `hive` that the Hive runs as) once, and prints an address. Open it in a browser, sign in to Claude, and say what you want. You sign in with your Claude plan. [Windows, a macOS test build, installing in your own account, and what to do if it stops partway or says "Failed to connect to bus"](docs/install.md).
+Linux with systemd; every release is installed fresh and checked on Ubuntu 24.04, Debian 12 and Fedora. It takes a few minutes, asks for your password (it uses sudo to create a Linux user called `hive` that the Hive runs as) once, and prints an address. Open it in a browser, sign in to Claude, and say what you want. You sign in with your Claude plan. [Windows, a macOS test build, installing in your own account, and what to do if it stops partway or says "Failed to connect to bus"](docs/install.md).
 
 To check what the site hands you before running it: `curl -fsSL https://hivelab.ca/install.sh | sha256sum` should match the `get.sh` line in `SHA256SUMS` on the [latest release](https://github.com/ihsan-sa/hive/releases/latest). That guards against a tampered site, not against GitHub itself, so reading the script first is still the real check.
 
