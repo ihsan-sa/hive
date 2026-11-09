@@ -564,7 +564,10 @@ function acCheck(el, th) {
   const next = items.length && !(items.length === 1 && items[0].word === q) ? { q, mark, at, items, i: 0 }
     : m && !done && mark === "@" && q.trim() && !items.length ? { q, mark, at, items: [], i: 0, none: true } : null;   // R10 #8: say nothing matches rather than vanish
   const key = a => a && (a.none ? "\u0000none:" + a.q.trim() : a.items.map(r => r.word).join(" "));
-  if (key(next) !== key(CP.ac)) { CP.ac = next; return true; }
+  // It opens down when there's more room below the box than above: at home the box sits near the top and an up list was cut off
+  // under the app bar (the person, 110819233249)
+  if (next) { const r = el.getBoundingClientRect(); next.down = innerHeight - r.bottom > r.top; }
+  if (key(next) !== key(CP.ac) || next && next.down !== CP.ac.down) { CP.ac = next; return true; }
   if (next) CP.ac.at = next.at, CP.ac.q = next.q;
   return false;
 }
@@ -700,6 +703,9 @@ document.addEventListener("pointerdown", e => {
   if (CP.menu && !e.target.closest?.(".cp .pop")) { CP.menu = false; refresh(); }
 }, true);
 const toggle = m => () => { CP.menu = CP.menu === m ? false : m; CP.ac = null; refresh(); };
+// A menu opens up from the box, or down when there's more room below: at home the box sits near the top and an up menu ran under the app bar (the person, 1108184885d2)
+const toggleRoom = m => (e, b) => { const r = (b || e.target.closest("button")).getBoundingClientRect(); CP.down = CP.down || {}; CP.down[m] = innerHeight - r.bottom > r.top; toggle(m)(); };
+const sideFor = (m, end) => (CP.down && CP.down[m] ? "bottom-" : "top-") + (end ? "end" : "start");
 const mono = n => /^[a-z][0-9a-f]{4,}$/.test(n) ? n.slice(1, 3) : String(n).slice(0, 2);
 /** The avatar box: two letters and the status dot for an agent, a glyph for anything else. */
 const av = (n, glyph) => h("span", { class: "av", "data-size": "s", "aria-hidden": "true" }, glyph || mono(n), glyph ? null : statusDot(agentStatus(n).key, { live: S.running.has(n) }));
@@ -783,8 +789,8 @@ function addPop(th, d) {
   const open = CP.menu === "add", then = f => (e, b) => { const cp = b.closest(".cp"); CP.menu = false; refresh(); f(cp); };
   const voice = !!(S.app && S.app.voice), call = phoneReady() && !inCall();
   return h("div", { class: "pop cp-addpop", "data-key": "add" },
-    h("button", { type: "button", class: "btn cp-attach", "data-kind": "icon", "data-size": "s", "aria-label": "Attach", title: "Attach files, a voice memo or a secret", "aria-haspopup": "menu", "aria-expanded": String(open), onclick: toggle("add") }, icon("plus")),
-    open ? h("div", { class: "menu cp-addmenu", role: "menu", "aria-label": "Add to the message", "data-side": "top-start", "data-key": "am" },
+    h("button", { type: "button", class: "btn cp-attach", "data-kind": "icon", "data-size": "s", "aria-label": "Attach", title: "Attach files, a voice memo or a secret", "aria-haspopup": "menu", "aria-expanded": String(open), onclick: toggleRoom("add") }, icon("plus")),
+    open ? h("div", { class: "menu cp-addmenu", role: "menu", "aria-label": "Add to the message", "data-side": sideFor("add"), "data-key": "am" },
       menuItem("Files from this device", "Or paste or drop them in the box", then(cp => cp.querySelector(".cp-pick").click()), { ic: "file", key: "files" }),
       menuItem("Voice memo", "Transcribed on this computer", then(() => recStart(th)), { ic: "mic", key: "voice", off: !voice }),
       menuItem("A secret", "Saved on this computer; only its name is posted", then(() => secretClick(th)), { ic: "lock", key: "secret", off: !secretsOn() }),
@@ -797,8 +803,8 @@ function addPop(th, d) {
 function aaPop(th) {
   const open = CP.menu === "aa", cur = readScale();
   return h("div", { class: "pop cp-aapop hide-phone", "data-key": "aa" },
-    h("button", { type: "button", class: "btn cp-aa", "data-kind": "icon", "data-size": "s", "aria-label": "Text size and formatting", title: "Text size and formatting", "aria-haspopup": "menu", "aria-expanded": String(open), "data-on": fmtOpen() ? "" : null, onmousedown: e => e.preventDefault(), onclick: toggle("aa") }, "Aa"),
-    open ? h("div", { class: "menu cp-aamenu", role: "menu", "aria-label": "Text size", "data-side": "top-start", "data-key": "aam" },
+    h("button", { type: "button", class: "btn cp-aa", "data-kind": "icon", "data-size": "s", "aria-label": "Text size and formatting", title: "Text size and formatting", "aria-haspopup": "menu", "aria-expanded": String(open), "data-on": fmtOpen() ? "" : null, onmousedown: e => e.preventDefault(), onclick: toggleRoom("aa") }, "Aa"),
+    open ? h("div", { class: "menu cp-aamenu", role: "menu", "aria-label": "Text size", "data-side": sideFor("aa"), "data-key": "aam" },
       menuHead("Text size in conversations", "h"),
       h("div", { class: "menu-seg", "data-key": "seg" }, h("div", { class: "seg", role: "radiogroup", "aria-label": "Text size", onkeydown: e => {   // arrows move the choice, as in any radio group
           const k = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[e.key]; if (!k) return;
@@ -901,7 +907,7 @@ export function composer({ thread, update, place = "thread", autofocus, top }) {
         SB.open && can("secrets") ? secretRow() : null,
         SB.say ? h("p", { class: "meta cp-ssay", "data-tone": SB.tone, role: "status", "data-key": "ssay" }, SB.say) : null,
         !th && d.naming ? h("div", { class: "cp-name-row", "data-key": "name" }, input({ class: "input cp-name", placeholder: "A short name, like fix-contact-form", "aria-label": "Name for this job", value: d.name, oninput: (e, n) => { d.name = n.value; keep(d); } })) : null) : null,
-      CP.ac ? h("div", { class: "cp-ac", role: "listbox", "aria-label": "Names", "data-key": "ac" }, acList(th)) : null,
+      CP.ac ? h("div", { class: "cp-ac", role: "listbox", "aria-label": "Names", "data-key": "ac", ...(CP.ac.down ? { "data-down": "" } : {}) }, acList(th)) : null,
       fmtOpen() ? fmtBar(th) : null,
       h("div", { class: "cp-tw", "data-key": "tw", ...(CP.md ? { "data-md": "" } : {}) },
       // The layer carries the draft's own signature and nodes: with an empty one the morph wiped it on every re-render and the

@@ -344,6 +344,14 @@ def _titled(thread):
     try: return any(json.loads(l).get("thread") == thread for l in RENAMED.read_text().splitlines() if l.strip())
     except (OSError, ValueError): return False
 
+def threads_posted(name, thread, since, posts):
+    """The run's own thread first, then any other thread `name` posted in since `since` (a keeper run posting in someone else's thread)."""
+    out = [thread]
+    for p in posts:
+        th = p.get("thread")
+        if th and th not in out and str(p.get("from", "")).lower() == name and ts(p.get("at")) >= since: out.append(th)
+    return out[:5]
+
 def file_nudge(name, thread, since, posts=None):
     """For the inbox hook: one line, once per conversation ever, when `name` posted in `thread` since `since` and the thread is in no
     focus (nobody ever tagged it, so the person has not put it in Misc on purpose) or still has its board id for a title. The agent
@@ -352,7 +360,7 @@ def file_nudge(name, thread, since, posts=None):
     st = state(); posts = board_posts() if posts is None else posts
     if not any(p.get("thread") == thread and str(p.get("from", "")).lower() == name and ts(p.get("at")) >= since for p in posts): return None
     try:
-        if any(json.loads(l).get("thread") == thread for l in FILE_ASKED.read_text().splitlines() if l.strip()): return None
+        if any(json.loads(l).get("thread") == thread and now() - json.loads(l).get("at", 0) < 3600 for l in FILE_ASKED.read_text().splitlines() if l.strip()): return None  # asked within the hour; a first ask nobody acted on is repeated to the next agent
     except (OSError, ValueError): pass
     tagged = False
     try: tagged = any(r.get("kind") == "tag" and r.get("thread") == thread for r in map(json.loads, filter(str.strip, FILE.read_text().splitlines())))

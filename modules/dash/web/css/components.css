@@ -530,6 +530,11 @@ table.tbl .clip{width:100%;max-width:0;overflow:hidden;text-overflow:ellipsis}
 .fgrid>.check{grid-column:1/-1}
 .sec>.field{margin-top:var(--s3)}
 .fmsg{font-size:var(--fs-small);color:var(--ink-2);margin:var(--s2) 0 0;white-space:pre-wrap;overflow-wrap:anywhere}
+/* a drafted fix in Settings > Data sharing: the text wraps inside its card; a diff keeps its lines and scrolls */
+.draft{min-width:0}
+.draft pre{margin:var(--s2) 0 0;padding:var(--s2) var(--s3);max-height:420px;overflow:auto;border:1px solid var(--line);border-radius:var(--r-m);background:var(--sunken);font:var(--fs-meta)/1.5 var(--mono)}
+.draft .draft-text{white-space:pre-wrap;overflow-wrap:anywhere}
+.draft .draft-diff{white-space:pre}
 .fmsg[data-tone=good]{color:var(--good-ink)}
 .fmsg[data-tone=bad]{color:var(--bad-ink)}
 .fmsg[data-tone=warn]{color:var(--warn-ink)}
@@ -1140,9 +1145,10 @@ body[data-pv-full] :is(#top,#main){margin-right:0}
 .pv-slide>:is(p,ul,ol){font-size:clamp(13px,2.2cqi,18px);color:#3a3a3c}
 /* the file you're looking at, marked where it was posted */
 .msg-file[data-pv-on],.msg-thumb[data-pv-on]{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
-a.ref[data-kind=file]{display:inline;font-weight:400;color:var(--ink);text-decoration:underline;text-decoration-color:var(--ink-3);text-underline-offset:2px;cursor:pointer}
-a.ref[data-kind=file]:hover{text-decoration-color:var(--ink)}
-a.ref[data-kind=file][data-pv-on]{background:color-mix(in oklch,var(--accent) 16%,transparent);border-radius:var(--r-s)}
+/* a post's file or a project path in a message: underlined, so it reads as a link even inside bold text (feedback 2026-11-08: a bold path looked like plain text) */
+a.ref:is([data-kind=file],[data-kind=kbfile]){display:inline;font-weight:inherit;color:var(--ink);text-decoration:underline;text-decoration-color:var(--ink-3);text-underline-offset:2px;cursor:pointer}
+a.ref:is([data-kind=file],[data-kind=kbfile]):hover{text-decoration-color:var(--ink)}
+a.ref:is([data-kind=file],[data-kind=kbfile])[data-pv-on]{background:color-mix(in oklch,var(--accent) 16%,transparent);border-radius:var(--r-s)}
 /* phone: a sheet from the bottom, over the nav bar */
 @media (max-width:700px){
   .pv{top:auto;left:0;right:0;bottom:0;width:100%;height:92dvh;border:1px solid var(--line);border-bottom:0;border-left:0;border-radius:20px 20px 0 0;z-index:51;overflow:hidden;animation:mn-up .18s ease-out;padding-bottom:env(safe-area-inset-bottom,0px)}
@@ -1183,6 +1189,7 @@ a.ref[data-kind=file][data-pv-on]{background:color-mix(in oklch,var(--accent) 16
 .cp-to b{font-weight:600}
 .cp-menu,.cp-ac{position:absolute;z-index:20;bottom:calc(100% - 6px);left:var(--s4);width:min(560px,calc(100% - 2 * var(--s4)));padding:4px;border:1px solid var(--line-2);border-radius:var(--r-l);background:var(--surface);box-shadow:var(--e1)}
 .cp-ac{bottom:calc(100% + 4px);left:6px}
+.cp-ac[data-down]{bottom:auto;top:calc(100% + 4px)}   /* opens down when the box sits high on the page (110819233249) */
 .cp-opt{display:flex;align-items:center;gap:7px;width:100%;padding:6px 8px;border:0;border-radius:var(--r-m);background:none;color:var(--ink);font-size:var(--fs-small);text-align:left;cursor:pointer}
 .cp-opt:hover,.cp-opt[aria-selected=true]{background:var(--hover)}
 @media (pointer:coarse),(max-width:640px){.cp-opt{min-height:44px}}   /* a finger-sized row in the To list and the @ list */
@@ -1649,7 +1656,21 @@ details.blk>summary .blk-t::after{border-color:var(--ink-3)}
 .cm-st{font-weight:var(--w-med);color:var(--ci)}
 .cm-draft{font-weight:var(--w-med);color:var(--accent)}
 .cm-side-f{display:none}                                  /* "All messages" moves into the search menu */
-.cm-places{display:grid;gap:2px}                         /* Yours, Inbox, Mail, Files under New conversation (R7b S2, the hand-off's Rail) */
+/* Chat's button bar: a row of its own under the top bar, above the list and the page (ui/shell.js TOPX; the person, 110819316eed, 11081937e3e8) */
+.cm-places{display:flex;align-items:center;gap:2px;height:44px;padding:0 var(--s3) 0 var(--s4);border-top:1px solid var(--line);overflow-x:auto;scrollbar-width:none}
+/* review acf8f 11081948fc71: left edge with the logo at every width; the row fades at its right edge when it scrolls; "New" alone when narrow */
+@container (max-width:780px){.cm-places{padding:0 var(--s2) 0 var(--s3)}}
+.cm-place{flex:none;display:inline-flex;align-items:center;gap:7px;height:32px;padding:0 11px;border-radius:var(--r-m);color:var(--ink-2);font-size:var(--fs-small);font-weight:var(--w-med);white-space:nowrap;text-decoration:none}
+.cm-place:hover{background:var(--hover);color:var(--ink);text-decoration:none}
+.cm-place .ic{width:17px;height:17px;color:var(--ink-3)}
+.cm-place:hover .ic,.cm-place[aria-current=page] .ic{color:var(--ink)}
+.cm-place.cm-newbtn{position:relative;margin-right:calc(var(--s3) + 1px);padding:0 13px 0 10px;border:1px solid var(--line-2);background:var(--surface);color:var(--ink);box-shadow:var(--shadow-1,none)}
+.cm-place.cm-newbtn .ic{color:var(--ink)}
+.cm-place.cm-newbtn .cm-place-l::after{content:" conversation"}
+@container (max-width:760px){.cm-place.cm-newbtn .cm-place-l::after{content:""}}
+.cm-place.cm-newbtn:hover{background:var(--hover)}
+.cm-place.cm-newbtn::after{content:"";position:absolute;right:calc(-1 * var(--s2) - 1px);top:6px;bottom:6px;width:1px;background:var(--line)}
+.cm-place-l{white-space:nowrap}
 .cm-nav{display:flex;align-items:center;gap:10px;height:34px;padding:0 10px;border:0;border-radius:var(--r-m);background:none;color:var(--ink-2);font-size:var(--fs-small);font-weight:var(--w-med);text-align:left;width:100%;text-decoration:none}
 .cm-nav:hover{background:var(--hover);color:var(--ink);text-decoration:none}
 .cm-nav .ic{color:var(--ink-3)}
@@ -2850,7 +2871,7 @@ input.fp-box:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .fp-hd-t>p:empty{display:none}
 .fp-ask-m .pill,.fp-by .pill{vertical-align:baseline}
 /* Files and links (views/made.js), in Chat's layout: a row per file or link, as in the design's Files: the type badge, the name, when, and "Type · size · from the conversation" */
-.cm-place[aria-current=page]{background:var(--tint);color:var(--ink)}
+.cm-place[aria-current=page]{background:var(--sunken);color:var(--ink);box-shadow:inset 0 0 0 1px var(--line)}   /* stronger than hover: "you are here" (review 11081948fc71) */
 .mf-list{border-bottom:0;margin:var(--s3) -12px 0}
 .mf-row{display:grid;grid-template-columns:32px minmax(0,1fr) auto;grid-template-rows:auto auto;column-gap:12px;row-gap:1px;align-items:center;width:100%;padding:8px 12px;border:0;border-top:1px solid var(--line);border-radius:0;background:none;color:inherit;font:inherit;text-align:left;text-decoration:none;cursor:pointer}
 .mf-row:first-child{border-top:0}
@@ -2977,12 +2998,12 @@ input.fp-box:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .fp-later{list-style:none;margin:0;padding:0;display:grid;gap:6px}
 .fp-later-i{display:flex;align-items:center;gap:8px}
 .fp-later-i>span:first-child{flex:1;min-width:0}
-.yr-w{display:flex;align-items:center;gap:8px}
+.yr-w{display:flex;align-items:flex-start;gap:8px}
 .yr-w .lr-in{flex:1;min-width:0}
-.yr-wb{display:flex;gap:4px;align-items:center;flex:none;padding-right:8px}
+.yr-wb{display:flex;gap:4px;align-items:center;flex:none;padding-right:8px;font-size:var(--fs-small);height:calc(12px + 1lh)}   /* as tall as the title line and its padding, so the buttons centre on that line, beside the time, not on the whole two-line row (consumer feedback 2026-11-08) */
 .yr-by{margin-top:8px}
 .yr-gt{font-size:var(--fs-small);font-weight:var(--w-med);color:var(--ink-2);margin:14px 0 4px}
-@media (max-width:699px){.yr-w,.fp-ask-li{flex-wrap:wrap}.yr-wb,.fp-ask-b{width:100%;justify-content:flex-end;padding-bottom:6px}}
+@media (max-width:699px){.yr-w,.fp-ask-li{flex-wrap:wrap}.yr-wb,.fp-ask-b{width:100%;justify-content:flex-end;padding-bottom:6px}.yr-wb{height:auto}}
 /* Other (the person, 11081454b6bd): a plain heading, no fold. The Archived link at the end of the list; its page lists them with Bring back. */
 .tm-sec-other{padding-left:10px}
 a.tm-arch-b{text-decoration:none;color:var(--ink-3)}
@@ -2994,3 +3015,13 @@ a.tm-arch-b[aria-current]{color:var(--ink);background:var(--hover)}
 .cm-arch-up{display:inline-flex;align-items:center;gap:4px;font-size:var(--fs-meta);color:var(--ink-3);text-decoration:none}
 /* a menu item's shortcut (Full screen F, Keyboard shortcuts ?, Send feedback): the menu's own font, not the browser's monospace (the person, 11081813328e) */
 kbd.menu-i-r{font-family:inherit;font-size:var(--fs-meta)}
+/* On or off at a glance in the rail's filters (the person, 110819310476: "more obvious when these are clicked vs not"): an on chip is filled
+   ink with a check, an off one is plain and dimmer. Covers For you / Updates / Agent comms, the star and Hide not needed. */
+.cm-show-m .tm-chip{color:var(--ink-3);background:none;border-color:var(--line-2);box-shadow:none}
+.cm-show-m .tm-chip[aria-pressed=true]{background:var(--ink);border-color:var(--ink);color:var(--on-ink);box-shadow:none}
+.cm-show-m .tm-chip[aria-pressed=true]:hover{background:color-mix(in oklch,var(--ink) 85%,var(--bg))}
+.cm-show-m .tm-chip[aria-pressed=false]:hover{background:var(--hover);color:var(--ink)}
+.cm-show-m .tm-chip i{border-color:var(--line-2);background:none}
+.cm-show-m .tm-showwrap .tm-chip[aria-pressed=true] i{display:inline-block}
+.cm-show-m .tm-chip[aria-pressed=true] i{background:var(--on-ink);border-color:var(--on-ink)}
+.cm-show-m .tm-chip[aria-pressed=true] i::after{border-color:var(--ink)}

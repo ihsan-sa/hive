@@ -75,8 +75,12 @@ def c_hunt(a):
     if not (spec.get("orgs") or spec.get("discover")): _err("the spec needs orgs or discover")
     case = store.Case(a.case or os.environ.get("RESEARCH_CASE") or Path(spec.get("out") or Path(a.spec).with_suffix("")) / "case")
     r = work.Hunt(spec, case, log=_log).run()
-    _out(r)
-    _log(f"hunt: {r['leads']} leads ({r['verified']} verified) of {r['target']}, {r['status']}" + (f"; no named head: {', '.join(r['no_named_head'])}" if r.get("no_named_head") else ""))
+    if a.text:
+        print(f"{r['leads']} leads ({r['verified']} verified) of {r['target']}, {r['status']}")
+        for l in r.get("lead_list") or []: print(f"{l['name']} | {l['title']} | {l['organisation']} | {l['check_status']}")
+        for e in r.get("no_named_head") or []: print(f"no named head: {e['org']} {e.get('url','')}".rstrip())
+    else: _out(r)
+    _log(f"hunt: {r['leads']} leads ({r['verified']} verified) of {r['target']}, {r['status']}" + (f"; no named head: {', '.join(e['org'] for e in r['no_named_head'])}" if r.get("no_named_head") else ""))
     if r["status"] != "reached": sys.exit(3)
 
 
@@ -167,7 +171,7 @@ def main(argv=None):
     p = cmd("people", c_people, "names with roles on a page (candidates, not facts)"); p.add_argument("url")
     p = cmd("check", c_check, "does this page back name + title at org?"); p.add_argument("url"); p.add_argument("--name", required=True); p.add_argument("--title", required=True); p.add_argument("--org"); p.add_argument("--domain"); p.add_argument("--claim"); p.add_argument("--refresh", action="store_true")
     p = cmd("verify", c_verify, "check every row of a CSV against its page"); p.add_argument("csv"); p.add_argument("-o", "--out"); p.add_argument("--find", action="store_true", help="search for a page when a row's own page fails"); [p.add_argument(f"--{k}", help=f"the {k} column") for k in ("name", "title", "org", "url")]
-    p = cmd("hunt", c_hunt, "build a verified list to a target from a spec"); p.add_argument("spec", help="JSON spec file; keys: "+HUNT_KEYS); p.add_argument("-o", "--out", help="output folder (sets spec out)"); p.add_argument("--max-seconds", type=int, help="time budget (sets spec max_seconds)")
+    p = cmd("hunt", c_hunt, "build a verified list to a target from a spec"); p.add_argument("spec", help="JSON spec file; keys: "+HUNT_KEYS); p.add_argument("-o", "--out", help="output folder (sets spec out)"); p.add_argument("--max-seconds", type=int, help="time budget (sets spec max_seconds)"); p.add_argument("--text", action="store_true", help="print the summary (lead count, one line per lead, orgs with no named head and their page) instead of JSON")
     p = cmd("analyze", c_analyze, "how far to trust the case's sources, or profile a CSV"); p.add_argument("csv", nargs="?")
     p = cmd("forecast", c_forecast, "backtest methods on a series, forecast with intervals"); p.add_argument("file", help="CSV or one number per line; - for stdin"); p.add_argument("--column", help="the value column (default: the last numeric one)"); p.add_argument("--date-column", help="a date column (YYYY, YYYY-MM or YYYY-MM-DD): the forecast rows are then labelled with dates; unsorted or repeated dates are an error and gaps a warning, each naming the row"); p.add_argument("--horizon", type=int, default=4, help="steps ahead"); p.add_argument("--season", type=int, default=1, help="period length, e.g. 12 for monthly data with a yearly cycle")
     p = cmd("trend", c_trend, "Mann-Kendall and Theil-Sen"); p.add_argument("file"); p.add_argument("--column")

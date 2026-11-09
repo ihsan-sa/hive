@@ -1,7 +1,7 @@
 // Now: what each agent is doing. Template: overview.
 import { h } from "../core/dom.js";
 import { S, SYS } from "../core/store.js";
-import { threadTitle, agentOn, agentState, isRunning, hiveStats, tierHours, agentThread, spendSince, sEnd, hasTiers, activeUse } from "../core/model.js";
+import { threadTitle, agentOn, agentSay, agentState, isRunning, hiveStats, tierHours, agentThread, spendSince, sEnd, hasTiers, activeUse } from "../core/model.js";
 import { now, ago, dur, clock, money, pct, plural, firstSentence, short, HOUR, DAY, MIN } from "../core/format.js";
 import { TIERS, status } from "../core/status.js";
 import { threadHref, agentHref, href } from "../core/router.js";
@@ -22,12 +22,7 @@ const TONE = { working: "good", queue: "warn", stuck: "bad", quiet: "quiet" };
 
 // "Doing now" is the agent's own summary of its work (the person, 11081450f3e1: "its self written summary", not its tool call):
 // its `hive me` line, else the first line of its conversation's status bar, else what its brief asks for. The raw last step stays in the hover.
-function nowSay(a) {
-  const on = agentOn(a.name);
-  if (on && on.said) return { text: on.text, at: on.at, before: on.before, own: true };
-  const bar = a.thread && S.threadStatus && S.threadStatus[a.thread], line = bar && bar.text && bar.text.split("\n").map(x => x.trim()).find(Boolean);
-  return line ? { text: line } : on && on.text && !on.asked ? { text: on.text } : null;
-}
+const nowSay = a => agentSay(a.name, a.thread);
 
 // Running agents as rows, not cards: one line to scan, the same columns all the way down, however many there are.
 // An agent whose conversation waits on the person says so, and sorts first.

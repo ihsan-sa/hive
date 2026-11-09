@@ -16,6 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__))); import focus as 
 
 HOME = Path.home(); STATE = HOME / ".hive"; MARK, LOG = STATE / "tidy.json", STATE / "tidy.jsonl"
 GRACE_S = 900          # an agent still finishing its run gets its own hand-off first
+SUMMARY_SLACK_S = 600   # a summary written within 10 min before the result is not stale (R33: 3 of 5 post-ask misses were this order)
 CATCHUP_S = 2 * 86400   # the whole-board passes of a Hive new to this stop after 2 days, sorted or not
 
 AGENT = __import__("re").compile(r"a[0-9a-f]{4}")
@@ -71,7 +72,7 @@ def due(since, t=None, posts=None):
         ths = {th for th, fid in st["tags"].items() if fid == f["id"]} | {x for x in (f.get("thread"), f["id"]) if x}
         rt, p = fc.newest_result(ths, posts)
         s = f.get("summary"); sat = float(s.get("at") or 0) if s else 0
-        if p and rt >= since and t - rt >= GRACE_S and rt > sat:
+        if p and rt >= since and t - rt >= GRACE_S and rt - sat > SUMMARY_SLACK_S:  # a summary written just before the result post (the Stop nudge order) is current
             n = str(p.get("from", "")).lower()
             out.append({"kind": "summary", "focus": f["id"], "thread": p.get("thread"), "what": f"summary of {f['name']} is older than {n}'s result {p.get('id')}",
                         "agents": [{"name": n, "asked": None, **runlog(n)}]})

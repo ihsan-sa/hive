@@ -312,7 +312,7 @@ def focus_nudge(name, rec):
         import focus
         at = dt.datetime.fromisoformat(rec["at"]); since = (at if at.tzinfo else at.replace(tzinfo=dt.timezone.utc)).timestamp()
         posts = focus.board_posts()
-        msg = "\n\n".join(x for x in (focus.nudge(name, thread, since, posts), focus.file_nudge(name, thread, since, posts)) if x)
+        msg = "\n\n".join(x for x in (focus.nudge(name, thread, since, posts), *(focus.file_nudge(name, th, since, posts) for th in focus.threads_posted(name, thread, since, posts))) if x)
     except Exception: return None
     if not msg: return None
     try: f.parent.mkdir(parents=True, exist_ok=True); f.write_text(rec["at"])

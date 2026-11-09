@@ -137,6 +137,10 @@ function band(current) {
 
 // ---- tabs: on the developer route every view in registry order; in the app core/nav.js says where each one sits ----
 const NAV = { open: false };
+// Chat's button bar (views/comms.js registers it): a row of its own under this bar, across the page, while Chat is the tab you're on. It is part
+// of the sticky header, so it never scrolls, and the conversation list's width doesn't touch it (the person, 110819316eed "a static button bar",
+// 11081933e722 "dont put it in the sidebar", 11081937e3e8 "above the sidebar, below the top bar ... cuz it's part of the chat page").
+export const TOPX = { chat: null };
 const lab = v => (typeof v.label === "function" ? v.label() : v.label);
 const tabLink = (v, active) => { const b = v.badge ? v.badge() : null;
   return h("a", { class: "tab", href: href(v.id), "data-key": v.id, "aria-current": v.id === active ? "page" : null }, lab(v), b ? h("span", { class: "tab-badge", "aria-label": `${b} for you` }, b) : null); };
@@ -182,7 +186,7 @@ export function topBar({ views, current, update, nav }) {
   // During the walkthrough only Settings (for Accounts) and Help: no tabs to wander off to before setup is finished.
   const setup = app && S.app.settings && S.app.settings.setup_done === false;
   NAV.update = update;
-  let tabs, row = null, icons = [];
+  let tabs, row = null, icons = [], extra = null;
   if (!app) tabs = views.filter(on).map(v => tabLink(v, current));
   else {
     const L = layout(views, nav, on, current);
@@ -204,6 +208,7 @@ export function topBar({ views, current, update, nav }) {
     ];
     const look = lookItems(update);
     tabs = setup ? [] : L.main.map(v => tabLink(v, L.active));
+    extra = !setup && !simple && L.active === "comms" && TOPX.chat ? TOPX.chat() : null;
     icons = [...L.icons.filter(v => !setup || v.id === "settings").map(v => { const b = v.badge ? v.badge() : null;
         return h("a", { class: "btn", "data-kind": "icon", href: href(v.id), "data-key": v.id, "aria-label": lab(v), title: lab(v), "aria-current": v.id === L.active || v.id === current ? "page" : null },
           icon(v.icon || v.id), b ? h("span", { class: "more-dot", "aria-label": `${b} for you` }) : null); }),
@@ -225,6 +230,7 @@ export function topBar({ views, current, update, nav }) {
         app ? null : button(`Colour theme: ${THEMES.find(x => x[0] === th)[1]}`, () => { cycleTheme(); update(); }, { kind: "icon", icon: th === "light" ? "sun" : th === "dark" ? "moon" : "auto", cls: "theme", title: `Colour theme: ${THEMES.find(x => x[0] === th)[1]}. Auto follows your system setting` }),
         app ? null : fullscreenButton())),   // in the app both live in the "…" menu under Look
     h("div", { class: "top-sub", "aria-hidden": "true" }, bits()),
+    extra,
     app ? band(current) : null,
     newVersionNote(update));   // its own row under the bar, so nothing on the page is covered
 }

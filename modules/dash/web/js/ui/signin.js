@@ -9,8 +9,8 @@ import { act, begin, finish, isBusy, note } from "./activity.js";
 const LOST = "Can't reach the Hive to follow the sign-in. It keeps trying.";
 const SI = { key: null, v: null, err: "", code: "", note: "", gen: 0 };
 
-/** Begin a sign-in for a place on the page (key), a login name or null, and API billing (console). */
-export function startSignin(key, name, api, update) {
+/** Begin a sign-in for a place on the page (key), a login name or null, and API billing (console); onDone(v) runs once when it has signed in. */
+export function startSignin(key, name, api, update, onDone) {
   const gen = ++SI.gen;
   Object.assign(SI, { key, v: null, err: "", code: "", note: "", name: name || null, seen: null, got: false });
   begin("signin", "Starting the sign-in" + (name ? " for " + name : ""), update);
@@ -30,7 +30,7 @@ export function startSignin(key, name, api, update) {
     }
     tell(v, update);
     update();
-    if (v.state === "done") { loadApp(); return; }
+    if (v.state === "done") { if (onDone) onDone(v); loadApp(); return; }
     if (v.state === "failed" || v.state === "cancelled") return;
     setTimeout(tick, 1500);
   };
@@ -83,6 +83,9 @@ export function signinBox(key, update) {
       h("div", { style: "flex:1;min-width:12rem" }, field("Code", input({ placeholder: "Paste the code here", autocomplete: "off", spellcheck: "false", value: SI.code, oninput: (e, n) => { SI.code = n.value; } }))),
       button("Send", null, { kind: "primary", type: "submit", busy: isBusy("signin-code") }), button("Cancel", () => cancel(update), { kind: "quiet", busy: isBusy("signin-cancel") })),
     SI.err ? say(SI.err, "bad") : SI.note ? say(SI.note) : null, fallback];
+  // After the code: Claude Code finishes, then a new account is added and makes one short test run (dash.py SignIn.watch, up to
+  // 5 minutes). Before, this fell to "Starting Claude's sign-in…" and read as stuck (consumer feedback, 2026-11-08).
+  else if (v.state === "checking") body = say(SI.key === "login-new" ? "Claude took the code. Now adding the account and making one short test run; this can take a minute or two." : "Claude took the code. Checking that the sign-in worked…");
   else if (v.state === "done") body = say(simpleOn() ? "Signed in. Your Hive is ready." : `Signed in${v.name ? " as login " + v.name : ""}.${v.said ? " " + v.said : ""}`, "good");
   else if (v.state === "failed") body = [say(v.why || "That didn't work.", "bad"), fallback];
   else if (v.state === "cancelled") body = say("Cancelled.");

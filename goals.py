@@ -36,7 +36,6 @@ ROUND = re.compile(r"\bkeeper round\b", re.I)
 BUILD = re.compile(r"\b(built|landed|committed|shipped|implemented|prototype|first version)\b", re.I)   # a post that says something was built
 BUILD_D = 1.0   # a project with no ladder and a build post this recent needs one now (Nov 6 build rule), not after IDLE_D
 BRIEF = re.compile(r"^@\S+ keeper round\b", re.I)   # a round's brief: to @new, or to the thread's last worker
-RESUME_AB_END = "2026-11-09"   # resume_arm's trial ends: judge it then (hive-meta/continuity.md)
 
 def now(): return dt.datetime.now(dt.timezone.utc)
 
@@ -194,9 +193,9 @@ def with_ladder(row, g):
     return row
 
 def resume_arm(thread):
-    """A/B until RESUME_AB_END (hive-meta/continuity.md): odd-hashed threads wake their last worker, who keeps what it learned there
-    (the starter gives an heir to one that is done or over resume_max_context); the rest start fresh as before."""
-    return now().date().isoformat() < RESUME_AB_END and zlib.crc32(str(thread).encode()) % 2 == 1
+    """Keeper briefs wake the thread's last worker, who keeps what it learned there (the starter gives an heir to one that is done or over
+    resume_max_context). The 11-06..11-09 A/B (hive-meta/continuity.md "A/B result") found resume 52% delivered vs fresh 32%, no kill, so it is the default."""
+    return True
 
 def post_model_args(text, model):
     """A brief's model is for a fresh agent only: on a woken worker the starter would hold it from then on, undoing a grader step-up or

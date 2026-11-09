@@ -24,9 +24,10 @@ function keepScroll(from, to) {
   // browsers (Chrome on Windows) left blank, even with the rest only hidden (the person, 2026-11-07: the chat came out empty). With the ones above
   // gone, those in view sit near the top already and move by at most a screen, by a plain offset where they can, which paints without a layer of its own.
   const box = from.getBoundingClientRect(), kids = [...from.children], twins = [...to.children];
-  const flows = c => /^(static|relative)$/.test(getComputedStyle(c).position), seen = c => { const r = c.getBoundingClientRect(); return !(r.bottom < box.top || r.top > box.bottom || r.right < box.left || r.left > box.right); };
+  const flows = c => c.getClientRects().length && /^(static|relative)$/.test(getComputedStyle(c).position), seen = c => { const r = c.getBoundingClientRect(); return !(r.bottom < box.top || r.top > box.bottom || r.right < box.left || r.left > box.right); };
   const first = kids.find(flows), firstSeen = kids.find(c => flows(c) && seen(c));
-  // With the rows above it dropped, firstSeen takes first's place, less the difference in their top margins.
+  // With the rows above it dropped, firstSeen takes first's place, less the difference in their top margins. A child with no box (display:none, like the focus
+  // pane's hidden Back link) has no place to take: measured, it reads as 0,0 and shifted the whole pane by its distance from the window's top (the person, 11081917052a).
     const mt = c => parseFloat(getComputedStyle(c).marginTop) || 0;
     const gone = first && firstSeen ? firstSeen.getBoundingClientRect().top - first.getBoundingClientRect().top - mt(firstSeen) + mt(first) : 0, yy = y - gone;
   kids.forEach((c, i) => {
