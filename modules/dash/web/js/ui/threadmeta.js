@@ -74,7 +74,7 @@ export const forYouLine = p => { const m = FOR.exec((p && p.text) || ""); return
 const asks = p => /\?["')]*\s*$/.test(forYouLine(p));
 const DONE_KEY = "hive.comms.cardDone", SAW_KEY = "hive.comms.cardSeen";
 const load = k => { try { return JSON.parse(localStorage.getItem(k) || "{}") || {}; } catch (e) { return {}; } };
-const doneFor = th => load(DONE_KEY)[th] || "";
+export const doneFor = th => load(DONE_KEY)[th] || "";
 function setDone(th, id) { try { const m = load(DONE_KEY); m[th] = id; localStorage.setItem(DONE_KEY, JSON.stringify(m)); } catch (e) { /* this page only */ } }
 let saw = null, sawRaw = null;   // read again when another tab (or a test) changed it
 function sawIt(id) { let raw = null; try { raw = localStorage.getItem(SAW_KEY); } catch (e) { /* none */ } if (raw !== sawRaw || !saw) { sawRaw = raw; saw = new Set(Object.keys(load(SAW_KEY))); } return saw.has(id); }

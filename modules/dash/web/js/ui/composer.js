@@ -566,8 +566,9 @@ function acCheck(el, th) {
   const key = a => a && (a.none ? "\u0000none:" + a.q.trim() : a.items.map(r => r.word).join(" "));
   // It opens down when there's more room below the box than above: at home the box sits near the top and an up list was cut off
   // under the app bar (the person, 110819233249)
-  if (next) { const r = el.getBoundingClientRect(); next.down = innerHeight - r.bottom > r.top; }
-  if (key(next) !== key(CP.ac) || next && next.down !== CP.ac.down) { CP.ac = next; return true; }
+  // Opened down, it is held to the room left under the box and scrolls inside, so it shows whole on a short screen (drive_at_menu).
+  if (next) { const r = el.getBoundingClientRect(), b = (el.closest(".cp") || el).getBoundingClientRect(); next.down = innerHeight - r.bottom > r.top; next.room = next.down ? Math.max(160, Math.floor(innerHeight - b.bottom - 16)) : 0; }
+  if (key(next) !== key(CP.ac) || next && (next.down !== CP.ac.down || next.room !== CP.ac.room)) { CP.ac = next; return true; }
   if (next) CP.ac.at = next.at, CP.ac.q = next.q;
   return false;
 }
@@ -907,7 +908,7 @@ export function composer({ thread, update, place = "thread", autofocus, top }) {
         SB.open && can("secrets") ? secretRow() : null,
         SB.say ? h("p", { class: "meta cp-ssay", "data-tone": SB.tone, role: "status", "data-key": "ssay" }, SB.say) : null,
         !th && d.naming ? h("div", { class: "cp-name-row", "data-key": "name" }, input({ class: "input cp-name", placeholder: "A short name, like fix-contact-form", "aria-label": "Name for this job", value: d.name, oninput: (e, n) => { d.name = n.value; keep(d); } })) : null) : null,
-      CP.ac ? h("div", { class: "cp-ac", role: "listbox", "aria-label": "Names", "data-key": "ac", ...(CP.ac.down ? { "data-down": "" } : {}) }, acList(th)) : null,
+      CP.ac ? h("div", { class: "cp-ac", role: "listbox", "aria-label": "Names", "data-key": "ac", ...(CP.ac.down ? { "data-down": "", style: `max-height:${CP.ac.room}px;overflow-y:auto` } : {}) }, acList(th)) : null,
       fmtOpen() ? fmtBar(th) : null,
       h("div", { class: "cp-tw", "data-key": "tw", ...(CP.md ? { "data-md": "" } : {}) },
       // The layer carries the draft's own signature and nodes: with an empty one the morph wiped it on every re-render and the
@@ -922,7 +923,7 @@ export function composer({ thread, update, place = "thread", autofocus, top }) {
         onkeydown: (e, n) => {
           const a = CP.ac;
           if (a && a.none && e.key === "Tab") { e.preventDefault(); return; }
-          if (a && a.items.length && (e.key === "ArrowDown" || e.key === "ArrowUp")) { e.preventDefault(); a.i = (a.i + (e.key === "ArrowDown" ? 1 : a.items.length - 1)) % a.items.length; refresh(); return; }
+          if (a && a.items.length && (e.key === "ArrowDown" || e.key === "ArrowUp")) { e.preventDefault(); a.i = (a.i + (e.key === "ArrowDown" ? 1 : a.items.length - 1)) % a.items.length; refresh(); document.querySelector(".cp-ac [aria-selected=true]")?.scrollIntoView({ block: "nearest" }); return; }
           if (a && a.items.length && (e.key === "Enter" || e.key === "Tab") && !e.shiftKey) { e.preventDefault(); acPick(th, a.items[a.i].word); return; }
           if (!e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey && !e.isComposing) {
             if ((e.key === "ArrowUp" || e.key === "ArrowDown") && histStep(th, n, e.key === "ArrowUp")) { e.preventDefault(); return; }
@@ -953,5 +954,5 @@ export function composer({ thread, update, place = "thread", autofocus, top }) {
 // The hint lines under the box went into the send button's name and title (the Nov 8 handoff §8.1); the queued line under your bubble says the busy part.
 function sendButton(word, fn, empty, say, armed) {
   const b = button(word, fn, { kind: "primary", icon: armed ? "pause" : "arrow-up", disabled: empty, cls: "cp-send", title: say + (armed ? "" : " ↑ past messages · Tab completes") });
-  b.setAttribute("aria-label", say); return b;
+  b.setAttribute("aria-label", armed ? `${word}. ${say}` : say); return b;   // the name starts with the visible word in every state
 }

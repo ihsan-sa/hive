@@ -1861,7 +1861,7 @@ def main():
         if (off := sorted(set(u) - set(room))) != st.get("paused_logins", []):
             st["paused_logins"] = off; log(event="logins_paused", logins=off)
         if (pick_login(c, room) is None) != paused:
-            paused = not paused
+            paused = not paused; st["all_paused"] = paused
             signed_in = any((Path(l).expanduser() / ".credentials.json").exists() for l in c["logins"])
             post(("Every login is paused or past its stop line; work carries on on the fallback (Codex), and your own asks also on a login that isn't paused."
                   if signed_in else "No Claude account is signed in yet, so only your own asks start, on another provider if one is set up."

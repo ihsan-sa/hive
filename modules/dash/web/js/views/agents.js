@@ -100,12 +100,16 @@ const options = (rows, key) => { const n = {}; for (const a of rows) n[a[key]] =
 const picker = (label, value, opts, on) => h("select", { class: "input", value, "aria-label": label, title: label, onchange: e => on(e.target.value) },
   opts.map(([k, l]) => h("option", { value: k, selected: k === value ? "" : null }, l)));
 
+// The phone order (name, status, On first) is chosen at render, so crossing 640 px re-renders: nothing else may come in time.
+matchMedia("(max-width: 640px)").addEventListener("change", () => { if (L.update && document.querySelector(".ag")) L.update(); });
+
 export default {
   id: "agents", label: "Agents", about: "every agent, in spawn order: search, filter, sort", tab: true,
   leave() { L.sig = ""; },   // the table is built afresh on the way back, so its rows must be too
   poll: { every: 30000, run() { loadAgentCosts(); } },
   render(ctx) {
     if (!S.live) return h("div", { class: "page" }, pageNav(), waiting(S.failed, "Reading…", "the agents"));
+    L.update = ctx.update;
     const all = gather(), s = sort(), set = (k, v) => { L[k] = v; L.limit = PAGE; ctx.update(); };
     const sig = [matchMedia("(max-width: 640px)").matches, [...colsOn()].join(), L.dataKey.split("|")[0], S.agentCosts && S.agentCosts.at, L.q, L.status, L.by, L.since, L.model, L.account, L.limit, L.house, s.k, s.d].join("|"), changed = sig !== L.sig; L.sig = sig;
     if (changed || !L.found) { L.found = select(L.house); L.nHouse = L.house ? 0 : select(true).length - L.found.length; }   // nHouse: the housekeeping runs the fold hides now

@@ -1339,12 +1339,12 @@ a.ref:is([data-kind=file],[data-kind=kbfile])[data-pv-on]{background:color-mix(i
 .cm-fpane>.page{max-width:var(--chat-col);padding:0}
 .cm-fpane>.page.fp{max-width:1120px}   /* v3: the focus page uses the width, a main and a side column */
 .cm-fpane>.cm-back{margin:0 0 var(--s2) -10px}
-.cm-new{max-width:720px;margin:0 auto}
+.cm-new{width:100%;max-width:720px;margin:0 auto}   /* width:100%: auto margins in the home grid would otherwise shrink it to its content */
 .cm-home-t{font-size:var(--fs-head);font-weight:var(--w-bold);letter-spacing:-.012em}
 .cm-home-l{margin:4px 0 var(--s3);color:var(--ink-2);font-size:var(--fs-body);max-width:60ch;text-wrap:pretty}
 .cm-home-warn{display:flex;align-items:center;gap:8px;margin-bottom:var(--s3);font-size:var(--fs-small);color:var(--ci)}
 .cm-home .cp{padding:0;background:none}
-.cm-home .cp-t{min-height:88px;font-size:var(--fs-body)}
+.cm-home .cp-t{min-height:132px;font-size:var(--fs-body)}
 .cm-home .cm-out{margin-top:var(--s3)}
 /* Home, level 1 (design v2 §home): the box, one line about you, then one card per focus. No thread rows, no ids. */
 .cm-hline{max-width:720px;margin:var(--s6) auto 0;text-align:center;font-size:var(--fs-body);color:var(--ink-3)}
@@ -1401,7 +1401,7 @@ div.fc-ask-i{cursor:default}
 button.fc-ask-i:hover{background:color-mix(in oklch,var(--accent) 12%,transparent)}
 .fc-ask-i:focus-visible{box-shadow:inset 0 0 0 2px var(--focus)}
 .fc-ask-x{font-size:var(--fs-small);font-weight:var(--w-med);color:var(--ink);display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;overflow-wrap:anywhere}
-.fc-ask-in{grid-column:1;font-size:var(--fs-meta);color:var(--ink-2)}
+.fc-ask-in{grid-column:1;min-width:0;overflow-wrap:anywhere;font-size:var(--fs-meta);color:var(--ink-2)}
 .fc-ask-i .t{grid-column:2;grid-row:1}
 .fc-tl{display:grid;gap:2px}
 .fc-sub{font-size:var(--fs-meta);font-weight:var(--w-med);color:var(--ink-3);padding-bottom:2px}
@@ -3047,7 +3047,7 @@ kbd.menu-i-r{font-family:inherit;font-size:var(--fs-meta)}
 .sec-h>a:hover{color:var(--ink);text-decoration:underline}
 
 /* ───────────── §1 Chat home: one column ───────────── */
-.cm-home{max-width:var(--read-w);margin:0 auto;padding:72px var(--s5) var(--s8);display:grid;gap:var(--s6)}
+.cm-home{width:100%;grid-template-columns:minmax(0,1fr);margin:0;padding:72px max(var(--s5),calc((100% - var(--read-w)) / 2 + var(--s5))) var(--s8);display:grid;gap:var(--s6)}   /* the scroller spans the pane so its bar sits at the window edge; the padding keeps the reading column centred */
 .cm-home-t{font-size:30px;letter-spacing:-.02em;text-align:center}
 .cm-home-l{display:none}                         /* the lead sentence goes; it is the placeholder's job */
 /* the waits head: was a centred, underlined amber link */
@@ -3222,3 +3222,15 @@ kbd.menu-i-r{font-family:inherit;font-size:var(--fs-meta)}
 .cm-place.cm-newbtn .cm-place-l::after{content:none}
 .cm-show-m .cm-hidefaded[aria-pressed] i{display:inline-block;width:26px;height:16px;border:0;flex:none}
 .cm-show-m .cm-scope{height:auto;min-height:28px}
+
+/* ui-regen-1109-0818 §C (R44) */
+/* ---------- §C  Recently moved, on the home (views/comms.js homeMoved) ---------- */
+/* Same fold as "Stuff to address": a 40px head with a count, no sentence; rows are title · from → to, with the age and who on the right. */
+.cm-moved .cm-older-d>summary{display:flex;align-items:center;gap:var(--s2);height:40px;font-size:var(--fs-small)}
+.cm-moved .cm-older-d>summary .meta{font-size:0}            /* the sentence moves to the summary's title (§C.1); hidden meanwhile */
+.cm-moved .cm-older-d>summary .cm-mv-n{font-size:var(--fs-small);color:var(--ink-3)}
+.cm-mv{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:var(--s3);padding:6px 0;font-size:var(--fs-small)}
+.cm-mv>a{font-weight:var(--w-med);color:var(--ink);text-decoration:none}
+.cm-mv .cm-old-q{grid-column:1;color:var(--ink-3)}
+.cm-mv .cm-old-q a{color:var(--ink-2)}
+.cm-mv>.meta{grid-column:2;grid-row:1;font-size:var(--fs-meta);color:var(--ink-3);white-space:nowrap}
