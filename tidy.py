@@ -5,7 +5,9 @@ titled by its board id, a focus whose summary is older than a result posted in i
 start one agent on ~/core/tidy.md, which fixes the misses and, above all, finds out from the responsible agent's run log why it
 didn't do it, so the mechanism gets fixed. The hive is time invariant when the passes find nothing: `tidy.py stats` is that measure.
 
-  tidy.py due [--mark] [--json]   what was missed since the last mark (the first time: the last 2 hours)
+  tidy.py due [--mark] [--json]   what was missed since the last mark (a Hive new to this: the whole board, each pass until one
+                                  finds nothing or 2 days pass, so all its earlier work gets sorted)
+  tidy.py due --all               what is still unsorted on the whole board, without marking
   tidy.py stats [DAYS]            misses per pass, by kind, oldest first
 Records: ~/.hive/tidy.json {at: last mark}, ~/.hive/tidy.jsonl {at, since, n, file, title, summary} per pass."""
 import argparse, glob, json, os, sys, time
@@ -14,7 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__))); import focus as 
 
 HOME = Path.home(); STATE = HOME / ".hive"; MARK, LOG = STATE / "tidy.json", STATE / "tidy.jsonl"
 GRACE_S = 900          # an agent still finishing its run gets its own hand-off first
-FIRST_S = 7200
+CATCHUP_S = 2 * 86400   # the whole-board passes of a Hive new to this stop after 2 days, sorted or not
 
 AGENT = __import__("re").compile(r"a[0-9a-f]{4}")
 def is_agent(who): return bool(AGENT.fullmatch(str(who or "").lower()))
@@ -88,17 +90,23 @@ def main(argv=None):
     ap = argparse.ArgumentParser(prog="tidy.py", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sp = ap.add_subparsers(dest="cmd", required=True)
     p = sp.add_parser("due"); p.add_argument("--mark", action="store_true"); p.add_argument("--json", action="store_true")
+    p.add_argument("--all", action="store_true", help="the whole board, whatever the mark: what is still unsorted (a long first list is cut off in the post)")
     p = sp.add_parser("stats"); p.add_argument("days", nargs="?", type=float, default=7)
     a = ap.parse_args(argv); t = time.time()
     if a.cmd == "due":
-        try: since = float(json.loads(MARK.read_text())["at"]) - GRACE_S
-        except (OSError, ValueError, KeyError): since = t - FIRST_S
+        # The first pass, as on a Hive that just updated to one with this, looks at the whole board, and so does every pass after it
+        # until one finds nothing (at most CATCHUP_S): a Hive's earlier work all gets sorted into foci (the person, 2026-11-08, post 11081821428e).
+        try: m = json.loads(MARK.read_text()); since = float(m["at"]) - GRACE_S
+        except (OSError, ValueError, KeyError): m = {"catchup": t}; since = 0
+        first = bool(m.get("catchup")) and t - m["catchup"] < CATCHUP_S
+        if first or a.all: since = 0
         items = due(since, t)
         if a.mark:
-            STATE.mkdir(parents=True, exist_ok=True); MARK.write_text(json.dumps({"at": t}))
+            STATE.mkdir(parents=True, exist_ok=True)
+            MARK.write_text(json.dumps({"at": t, **({"catchup": m["catchup"]} if first and items else {})}))
             with LOG.open("a") as f:
                 f.write(json.dumps({"at": t, "since": since, "n": len(items), **{k: sum(i["kind"] == k for i in items) for k in ("file", "title", "summary")}}) + "\n")
-        print(json.dumps(items) if a.json else fmt(items))
+        print(json.dumps(items) if a.json else ("Catch-up pass: this Hive is new to sorting, so this is everything on the board still unsorted, not just since the last pass. Follow the catch-up note in tidy.md.\n" if first and items and not a.all else "") + fmt(items))
         return 0 if items else 1
     try: rows = [json.loads(l) for l in LOG.read_text().splitlines() if l.strip()]
     except (OSError, ValueError): rows = []

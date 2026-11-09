@@ -2,7 +2,25 @@
 
 Release notes are on the [releases page](https://github.com/ihsan-sa/hive/releases). Each one says what's new and what to do if you run an older Hive, and links to the guide for limits and tests.
 
-A release can ship several times a day. A new Hive installs at most one a day, once it has been out for at least 12 hours; **How often to update** in Settings changes that. The latest is at [releases/latest](https://github.com/ihsan-sa/hive/releases/latest).
+A release can ship several times a day. A Hive installs each one as soon as it's out; **How often to update** in Settings can slow that to about once a day. The latest is at [releases/latest](https://github.com/ihsan-sa/hive/releases/latest).
+
+## Waits on you: the buttons line up with the time
+On the **Waits on you** page, Later, Not needed and Answer now sit on the same line as the item's title and time, instead of lower down in the middle of the row.
+
+## Chat: a file path in a message looks like a link
+A project file an agent names in a message (like projects/x/notes.md) is now underlined, as attached files already were, so you can see it opens beside the chat. Before, a path the agent had put in bold looked like plain bold text.
+
+## Settings: a fix an agent drafted is easier to read
+In Settings, under Data sharing, a fix an agent drafted now wraps its long lines inside its card instead of running off the right edge. If gh isn't installed or signed in, pressing Send now says the fix waits until it is, instead of saying it goes within a few hours.
+
+## Settings: sending a copy or everything shows it's working
+After you press Send in the window for **Send a copy now** or **Send everything**, its button now spins and a line says the copy is being packed and sent, instead of the window sitting there with a greyed button.
+
+## Settings: adding a Claude account no longer looks stuck
+After you paste the code, Settings now says it is checking the account and making a short test run, instead of seeming stuck on starting the sign-in. The name box empties once the account has signed in.
+
+## Updates go in as soon as they're out
+A Hive now installs each release as soon as it's out, instead of waiting until it has been out 12 hours and taking at most one a day. A Hive that was set to about once a day when it was installed moves to every release with this update. If you picked **About once a day** yourself in Settings, it stays; picking it there again keeps it from now on.
 
 ## Chat: an agent's closing "Done:" line moves to the status bar
 When an agent ends a message with a line like "Done: shipped it" (or "**Done:**"), the line no longer shows in the message, in the side list's preview or under Yours. The conversation's status bar still shows it, and so does a message that is nothing but that line. This also works when the agent names someone on a line after it. "Blocked:" and "Needs you" lines always stay. Under Yours, a wait that names another conversation shows that conversation's title instead of its id. The Chat side list starts with its sections folded on a first visit, and a focus page shows the messages there that are for you under **For you here**.

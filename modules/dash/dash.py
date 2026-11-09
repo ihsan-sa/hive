@@ -3189,7 +3189,7 @@ def set_config(d):
         new["update_every_s"] = v
     if "update_pace" in d:
         if d["update_pace"] not in ("every", "daily"): raise ValueError("how often to update is every release or about once a day")
-        new["update_pace"] = d["update_pace"]
+        new["update_pace"] = d["update_pace"]; new["update_pace_chosen"] = True  # install.sh drops a "daily" nobody chose
     if not new: raise ValueError("nothing to change")
     with _cfg_lock:
         c = jload(HOME / "core" / "config.json")

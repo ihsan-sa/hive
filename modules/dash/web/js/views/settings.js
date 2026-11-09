@@ -30,7 +30,7 @@ const CAPTEXT = { read: "Read everything", files: "Read files: notes, modules, s
 async function loadCfg(ctx) {
   if (!can("config")) return;
   try { F.cfg = await jget("/api/config"); F.cfgErr = null; } catch (e) { F.cfg = F.cfg || {}; F.cfgErr = e.message; ctx.update(); return; }   // no defaults on a failed read: a toggle would save them over the real values
-  F.ed ||= { max: F.cfg.max_sessions ?? "", kp: !!F.cfg.keeper_every_s, kpe: F.cfg.keeper_every_s || 10800, au: F.cfg.auto_update !== false, bud: F.cfg.max_budget_usd ?? "", day: F.cfg.max_daily_usd ?? "" };
+  F.ed ||= { max: F.cfg.max_sessions ?? "", kpe: F.cfg.keeper_every_s || 10800, au: F.cfg.auto_update !== false, bud: F.cfg.max_budget_usd ?? "", day: F.cfg.max_daily_usd ?? "" };
   F.saved ||= { max: F.ed.max, bud: F.ed.bud, day: F.ed.day };
   ctx.update();
 }
@@ -88,9 +88,9 @@ function versionBlocks(ctx, save) {
     block({ title: "Look for new releases", sub: "How often this Hive looks. It installs what it finds if Update by itself is on.",
       actions: h("select", { class: "input", value: every, "aria-label": "Look for new releases", title: "Look for new releases", onchange: e => { const was = U.update_every_s, v = +e.target.value; U.update_every_s = v; save({ update_every_s: v }, () => { U.update_every_s = was; }); } },
         opts.map(([v, label]) => h("option", { value: v }, label))) }),
-    block({ title: "How often to update", sub: "About once a day installs a release that has been out for at least 12 hours. Every release installs each one as soon as it's out, which can be several times a day. Update now always takes the newest.",
+    block({ title: "How often to update", sub: "Every release installs each one as soon as it's out. About once a day waits until a release has been out for 12 hours and installs at most one a day. Update now always takes the newest.",
       actions: h("select", { class: "input", value: U.update_pace, "aria-label": "How often to update", title: "How often to update", onchange: e => { const was = U.update_pace, v = e.target.value; U.update_pace = v; save({ update_pace: v }, () => { U.update_pace = was; }); } },
-        [["daily", "About once a day"], ["every", "Every release"]].map(([v, label]) => h("option", { value: v }, label))) }),
+        [["every", "Every release"], ["daily", "About once a day"]].map(([v, label]) => h("option", { value: v }, label))) }),
   ];
 }
 async function loadMods(ctx) {
@@ -270,11 +270,11 @@ function hiveSection(ctx) {
     blocks(
       block({ title: "Agents at once", sub: "Empty means no limit. Saves when you leave the box.",
         actions: [savedMark("Agents at once"), input({ type: "number", min: 1, max: 200, placeholder: "no limit", "aria-label": "Agents at once", value: E.max, oninput: (e, n) => { E.max = n.value; }, onchange: saveMax, onfocusout: saveMax })] }),
-      block({ title: "Keep work moving", sub: E.kp ? `${paceSay(E.kpe)}, pick up work that stopped and start work nobody asked for, and sooner once nothing has run for half an hour. It uses your limits.` : "Off: work that stops waits until someone asks. Turn it on to pick it up by itself.",
-        actions: [E.kp ? h("select", { class: "input", value: E.kpe, "aria-label": "How often to keep work moving", title: "How often to keep work moving" ,
+      // Always on: picking up work that stopped is the Hive's promise, not a switch (the person, 2026-11-08, post 110818074c18). Only the pace is chosen.
+      block({ title: "Keep work moving", sub: `${paceSay(E.kpe)}, pick up work that stopped and start work nobody asked for, and sooner once nothing has run for half an hour. It uses your limits.`,
+        actions: [h("select", { class: "input", value: E.kpe, "aria-label": "How often to keep work moving", title: "How often to keep work moving",
             onchange: e => { const was = E.kpe, v = +e.target.value; E.kpe = v; save({ keeper_every_s: v }, () => { E.kpe = was; }, "Keep work moving"); } },
-            paceOpts(E.kpe).map(([v, label]) => h("option", { value: v }, label))) : null,
-          toggle("Keep work moving", E.kp, v => { E.kp = v; save({ keeper_every_s: v ? E.kpe : 0 }, () => { E.kp = !v; }, "Keep work moving"); })] }),
+            paceOpts(E.kpe).map(([v, label]) => h("option", { value: v }, label)))] }),
       block({ title: up ? "Stop the Hive" : "Start the Hive", sub: up ? "Stopping lets agents finish their turn." : "The Hive isn't running.", key: "starter", actions: button(up ? "Stop the Hive…" : "Start the Hive", () => up ? confirm({ title: "Stop the Hive?", body: ["Agents finish their turn, and nothing new starts until you start it again here."], ok: "Stop the Hive", kind: "danger", onOk: starter }) : starter(), { size: "s", kind: up ? "danger" : "primary", busy: isBusy("starter"), title: up ? "Stop the Hive" : "Start the Hive" }) })),
     msg("starter"), msg("hive"), foot(AUTO));
   const setOnce = section({ title: "Set once", note: "the name, the model, updates and spending caps", level: 1 },

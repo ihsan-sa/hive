@@ -1572,7 +1572,8 @@ def tidier(c, st, alive, login):
     except (OSError, subprocess.TimeoutExpired): return
     if due.returncode:
         log(event="tidy-clean" if due.returncode == 1 else "tidy-failed"); return
-    post("@new Tidy audit: read ~/core/tidy.md and follow it. Missed since the last pass:\n" + due.stdout[:3500], ["new"], "tidy", c.get("tidy_model", "sonnet"))
+    out = due.stdout if len(due.stdout) <= 3500 else due.stdout[:3500].rsplit("\n- ", 1)[0] + "\n(cut off here: `python3 -I ~/core/tidy.py due --all` lists the rest)"
+    post("@new Tidy audit: read ~/core/tidy.md and follow it. Missed since the last pass:\n" + out, ["new"], "tidy", c.get("tidy_model", "sonnet"))
     log(event="tidy", n=due.stdout.count("\n- ") + 1)
 
 def backup(c, st):

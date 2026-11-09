@@ -236,6 +236,21 @@ def runs_in(log, t0, t1):
     reaped = sum(1 for r in log if r.get("event") == "reaped" and t0 <= r.get("at", "") <= t1)
     return len(starts), len(bad) - nlim, reaped, nlim
 
+def reaped_signalled(log, posts, t0, t1):
+    """Reaps of an agent whose latest post before the reap ended with a Waiting: line (it said what it waited on), against bare parked shells."""
+    n = 0
+    bar_rows = jsonl(HOME / ".hive" / "thread-status.jsonl")
+    for r in log:
+        if r.get("event") != "reaped" or not (t0 <= r.get("at", "") <= t1): continue
+        mine = [p for p in posts if p.get("from") == r.get("name") and p.get("at", "") <= r.get("at", "")]
+        if mine and re.search(r"(?mi)^\s*waiting:", max(mine, key=lambda p: p["at"]).get("text", "")): n += 1; continue
+        try: tr = dt.datetime.fromisoformat(r["at"]).timestamp()
+        except (KeyError, ValueError): continue
+        # the stop gate also takes the reason from the status bar's last line (`hive status`), so a bar that says Waiting: counts
+        bars = [b for b in bar_rows if str(b.get("from", "")).lower() == r.get("name") and b.get("at", 0) <= tr]
+        if bars and (str(max(bars, key=lambda b: b["at"]).get("text", "")).strip().splitlines() or [""])[-1].lower().startswith("waiting:"): n += 1
+    return n
+
 # the person finding a problem before the hive did: a chase ("hello?", "status?"), a thing not working or not showing, a "why is X not".
 # Plain "still" and "why is" matched ordinary feedback and design questions (13 of 29 matches on 2026-11-04), so they need a negative with them.
 NOTICED = re.compile(r"\b(?:hello\?|status\?|not seeing|noticed|isn.t working|broken|nothing happen|why am i not|still (?:not|no|isn|doesn|waiting|nothing|broken|missing)\b|why (?:is|are|does|do)\b[^?.!\n]{0,60}?\b(?:not|no|isn.t|doesn.t|don.t|only|gap|wrong|missing)\b)", re.I)
@@ -369,7 +384,7 @@ def window(t0, t1, log, posts, items):
     landed = [e for e in items.values() if t0 <= e.get("at", "") <= t1]
     judged = [e for e in items.values() if t0 <= e.get("judged_at", "") <= t1]
     rsi = [r for r in jsonl(RSI_LEDGER) if t0 <= r.get("at", "") <= t1]
-    w = {"from": t0, "to": t1, "runs": runs, "runs_failed": failed, "runs_reaped": reaped, "runs_limited": limited, "runs_woken": events_in(log, t0, t1, "woken"),
+    w = {"from": t0, "to": t1, "runs": runs, "runs_failed": failed, "runs_reaped": reaped, "runs_reaped_signalled": reaped_signalled(log, posts, t0, t1), "runs_limited": limited, "runs_woken": events_in(log, t0, t1, "woken"),
          "fail_pct": round(100.0 * failed / runs, 1) if runs else 0.0,
          "posts": nposts, "person_posts": nperson, "person_noticed_first": noticed, "watchdog_trips": watchdog_in(t0, t1),
          "person_reply_p50_s": pct(rs, 0.5), "person_reply_p90_s": pct(rs, 0.9), "person_replies": len(rs),
@@ -400,7 +415,7 @@ def kb_numbers(t0, t1):
 
 LOWER_IS_BETTER = {"fail_pct", "runs_reaped", "person_noticed_first", "person_reply_p50_s", "person_reply_p90_s", "watchdog_trips", "stalled_threads", "improvements_overdue", "projects_unmeasured", "asks_orphaned", "leftovers_orphaned", "asks_stale", "asks_unowned", "leftovers_unowned", "asks_oldest_open_d", "outcomes_silent", "outcomes_nothing", "outcomes_intent_only", "focus_quiet", "for_you_lines", "for_you_flagged", "for_you_flagged_pct", "for_you_command", "for_you_many", "for_you_long", "for_you_chain", "for_you_ours", "person_asks", "summary_flagged", "needs_gap"}
 NEUTRAL = {"decided_lines", "reversals_per_100", "kb_finds", "kb_find_read_pct", "kb_recall_injections", "kb_recall_opened_pct", "kb_misses_explicit", "kb_miss_candidates", "model_steps_up", "model_steps_down", "runs", "runs_woken", "person_replies", "keeper_rounds", "improve_rounds", "core_commits", "rsi_rounds", "reverted", "spend_usd", "asks_open", "leftovers_open", "leftovers_filed", "leftovers_closed", "outcomes_graded"}  # activity and cost: context, not a score (the person: don't ration work for pace)
-HEADLINE = ["kb_finds", "kb_find_read_pct", "kb_recall_injections", "kb_recall_opened_pct", "kb_misses_explicit", "kb_miss_candidates", "runs", "model_steps_up", "model_steps_down", "fail_pct", "runs_reaped", "runs_woken", "person_noticed_first", "person_reply_p50_s", "person_reply_p90_s", "watchdog_trips", "stalled_threads", "improvements_landed", "improvements_judged", "reviews_independent", "held", "reverted",
+HEADLINE = ["kb_finds", "kb_find_read_pct", "kb_recall_injections", "kb_recall_opened_pct", "kb_misses_explicit", "kb_miss_candidates", "runs", "model_steps_up", "model_steps_down", "fail_pct", "runs_reaped", "runs_reaped_signalled", "runs_woken", "person_noticed_first", "person_reply_p50_s", "person_reply_p90_s", "watchdog_trips", "stalled_threads", "improvements_landed", "improvements_judged", "reviews_independent", "held", "reverted",
             "improvements_overdue", "reviews_independent", "focus_quiet", "for_you_lines", "for_you_flagged", "for_you_flagged_pct", "for_you_command", "for_you_many", "for_you_long", "for_you_chain", "for_you_ours", "decided_lines", "reversals_per_100", "person_asks", "summary_flagged", "needs_gap", "asks_open", "leftovers_open", "leftovers_filed", "leftovers_closed", "asks_orphaned", "leftovers_orphaned", "asks_stale", "outcomes_intent_only", "asks_unowned", "leftovers_unowned", "asks_done", "asks_oldest_open_d", "outcome_delivered_pct", "outcomes_silent", "outcomes_nothing", "outcomes_graded", "rsi_rounds", "rsi_wins", "keeper_rounds", "improve_rounds", "core_commits", "projects_unmeasured", "spend_usd"]
 
 def scoreboard(since):

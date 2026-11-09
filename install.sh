@@ -147,12 +147,11 @@ if [ -n "${HIVE_PLAIN:-}" ]; then "$CORE/hive" web --setup >/dev/null; else "$CO
 if [ ! -e "$HOME/.hive-installed" ] && [ ! -e "$HOME/settings.json" ]; then
   (umask 077; printf '{"power":3,"sandbox":"on","share":{"failures":true,"usage":false},"share_defaults":1,"setup_done":false}\n' > "$HOME/settings.json")
 fi
-# A new Hive updates at the calm pace, kept on top of each release as a saved setting. Not in the shipped config.json: that would move every Hive already running, and our own must follow every release (Settings changes it).
-if [ ! -e "$HOME/.hive-installed" ]; then
-  python3 -c 'import json, sys
+# Every Hive takes each release as soon as it's out (the person, post 11081812ac64). New installs used to be written "update_pace": "daily" here; that goes, unless
+# someone picked it in Settings, which also saves "update_pace_chosen".
+python3 -c 'import json, sys
 c = json.load(open(sys.argv[1]))
-if "update_pace" not in c: c["update_pace"] = "daily"; open(sys.argv[1], "w").write(json.dumps(c, indent=2) + "\n")' "$CORE/config.json"
-fi
+if c.get("update_pace") == "daily" and not c.get("update_pace_chosen"): del c["update_pace"]; open(sys.argv[1], "w").write(json.dumps(c, indent=2) + "\n")' "$CORE/config.json" || true
 
 if [ -z "${HIVE_PLAIN:-}" ] && [ ! -s "$HOME/.claude/.credentials.json" ] && [ -z "${ANTHROPIC_API_KEY:-}" ]; then
   echo "NOTE: no Claude login yet. The web app walks you through it."

@@ -2992,3 +2992,5 @@ a.tm-arch-b[aria-current]{color:var(--ink);background:var(--hover)}
 .cm-arch .lr-acts{flex:none}
 .cm-arch .cm-home-t{text-align:left}
 .cm-arch-up{display:inline-flex;align-items:center;gap:4px;font-size:var(--fs-meta);color:var(--ink-3);text-decoration:none}
+/* a menu item's shortcut (Full screen F, Keyboard shortcuts ?, Send feedback): the menu's own font, not the browser's monospace (the person, 11081813328e) */
+kbd.menu-i-r{font-family:inherit;font-size:var(--fs-meta)}
