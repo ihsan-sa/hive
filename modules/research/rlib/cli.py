@@ -80,7 +80,16 @@ def c_hunt(a):
     if a.max_seconds: spec["max_seconds"] = a.max_seconds
     if not (spec.get("orgs") or spec.get("discover")): _err("the spec needs orgs or discover")
     case = store.Case(a.case or os.environ.get("RESEARCH_CASE") or Path(spec.get("out") or Path(a.spec).with_suffix("")) / "case")
-    r = work.Hunt(spec, case, log=_log).run()
+    h = work.Hunt(spec, case, log=_log)
+    if a.dry_run:
+        for o, d in h.domains.items():
+            if not isinstance(d, str) or not re.fullmatch(r"[A-Za-z0-9.-]+\.[A-Za-z]{2,}", d.strip()): print(f"warning: domains entry for {o!r} is {d!r}, not a bare site like 'example.edu'", file=sys.stderr)
+        for o, urls in h.pages.items():
+            for u in urls:
+                if not re.match(r"https?://\S+$", u): print(f"warning: pages URL for {o!r} is not http(s): {u!r}", file=sys.stderr)
+        print(f"dry run: {len(h.orgs)} orgs, {len(h.angles)} angles, {len(h.sources)} sources, {len(h.pages)} direct pages, target {h.target}; no searches made")
+        return
+    r = h.run()
     if a.text:
         print(f"{r['leads']} leads ({r['verified']} verified) of {r['target']}, {r['status']}; {r['near']} near misses, {r['departure_searches']} departure searches")
         for l in r.get("lead_list") or []: print(f"{l['name']} | {l['title']} | {l['organisation']} | {l['check_status']}")
@@ -179,7 +188,7 @@ def main(argv=None):
     p = cmd("people", c_people, "names with roles on a page (candidates, not facts)"); p.add_argument("url")
     p = cmd("check", c_check, "does this page back name + title at org?"); p.add_argument("url"); p.add_argument("--name", required=True); p.add_argument("--title", required=True); p.add_argument("--org"); p.add_argument("--domain"); p.add_argument("--claim"); p.add_argument("--refresh", action="store_true")
     p = cmd("verify", c_verify, "check every row of a CSV against its page"); p.add_argument("csv"); p.add_argument("-o", "--out"); p.add_argument("--find", action="store_true", help="search for a page when a row's own page fails"); [p.add_argument(f"--{k}", help=f"the {k} column") for k in ("name", "title", "org", "url")]
-    p = cmd("hunt", c_hunt, "build a verified list to a target from a spec"); p.add_argument("spec", help="JSON spec file; keys: "+HUNT_KEYS); p.add_argument("-o", "--out", help="output folder (sets spec out)"); p.add_argument("--max-seconds", type=int, help="time budget (sets spec max_seconds)"); p.add_argument("--text", action="store_true", help="print the summary (lead count, one line per lead, orgs with no named head and their page) instead of JSON"); p.epilog = "Exit code: 0 when the target is reached, 3 on SHORT (fewer leads than the target; the leads found are still written). 2 is a bad spec. --text prints the summary instead of JSON on stdout."
+    p = cmd("hunt", c_hunt, "build a verified list to a target from a spec"); p.add_argument("spec", help="JSON spec file; keys: "+HUNT_KEYS); p.add_argument("-o", "--out", help="output folder (sets spec out)"); p.add_argument("--max-seconds", type=int, help="time budget (sets spec max_seconds)"); p.add_argument("--dry-run", action="store_true", help="check the spec (keys, patterns, angles, pages) and print what would be searched, without searching"); p.add_argument("--text", action="store_true", help="print the summary (lead count, one line per lead, orgs with no named head and their page) instead of JSON"); p.epilog = "Exit code: 0 when the target is reached, 3 on SHORT (fewer leads than the target; the leads found are still written). 2 is a bad spec. --text prints the summary instead of JSON on stdout."
     p = cmd("analyze", c_analyze, "how far to trust the case's sources, or profile a CSV"); p.add_argument("csv", nargs="?")
     p = cmd("forecast", c_forecast, "backtest methods on a series, forecast with intervals"); p.add_argument("file", help="CSV or one number per line; - for stdin"); p.add_argument("--column", help="the value column (default: the last numeric one)"); p.add_argument("--date-column", help="a date column (YYYY, YYYY-MM or YYYY-MM-DD): the forecast rows are then labelled with dates; unsorted or repeated dates are an error and gaps a warning, each naming the row"); p.add_argument("--horizon", type=int, default=4, help="steps ahead"); p.add_argument("--season", type=int, default=1, help="period length, e.g. 12 for monthly data with a yearly cycle")
     p = cmd("trend", c_trend, "Mann-Kendall and Theil-Sen"); p.add_argument("file"); p.add_argument("--column")

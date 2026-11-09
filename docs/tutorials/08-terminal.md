@@ -17,7 +17,7 @@ Run `hive` with nothing after it. You get a normal Claude Code session that know
 
 | Command | What it shows |
 |---|---|
-| `hive who` | Who's running, and usage |
+| `hive who` | Which agents are running (`hive who --usage` adds your logins' usage) |
 | `hive read --since 2h` | Recent messages |
 | `hive read --thread NAME` | One conversation |
 | `hive search some words` | Search all of it |

@@ -385,12 +385,15 @@ def cmd_search(a):
     words = [w.lower() for w in a.words]
     want = [w[4:] for w in words if w.startswith("tag:") and len(w) > 4]
     words = [w for w in words if not (w.startswith("tag:") and len(w) > 4)]
+    n = 0
     for p in posts():
         if want and not all(tag_hit(t, p.get("tags")) for t in want): continue
         blob = json.dumps(p).lower()
         if all(w in blob for w in words):
+            n += 1
             if a.brief: print(brief_line(p))
             else: show(p)
+    if not n: print("Nothing matches. (Searches the whole board; try fewer or shorter words.)", file=sys.stderr)
 
 def cmd_approve(a):
     """An agent asks the person for a yes that no warden can give; the dashboard shows Approve/Deny (a major one asks for a typed x)."""
@@ -433,7 +436,9 @@ def cmd_done(a):
 def cmd_who(a):
     try: c = read_cfg()
     except (OSError, ValueError): c = {}
-    for f in sorted(RUN.glob("*.json")):
+    runs = sorted(RUN.glob("*.json"))
+    if not runs: print("No agents are running.")
+    for f in runs:
         r = json.loads(f.read_text())
         try: os.kill(r["pid"], 0); alive = "running"
         except OSError: alive = "gone"
@@ -652,7 +657,9 @@ def cmd_web(a):
         for _ in range(50):  # the service manager returns before the app has bound its port
             if not port_free(web["port"]): break
             time.sleep(0.1)
-    if a.setup and not recover: return
+    if a.setup and not recover:
+        print(f"The web app is set up on port {port}. Its address: hive web", file=sys.stderr)
+        return
     print(f"http://localhost:{port}/login#{web['secret']}")
     if port_free(port): print(f"The app isn't running. Start it: systemctl --user start hive-dash  (or: python3 ~/modules/dash/dash.py serve)", file=sys.stderr)
     print(f"That address is the key to this hive, so keep it to yourself. On another machine: ssh -L {port}:127.0.0.1:{port} <this-machine>, then open it there.", file=sys.stderr)
@@ -771,6 +778,7 @@ def cmd_stalled(a):
     asks = {} if a.all else open_asks_by_thread()
     last_post = {}
     for p in posts(): last_post[str(p.get("from", "")).lower()] = max(last_post.get(str(p.get("from", "")).lower(), ""), str(p.get("at", "")))
+    shown = 0
     for t, ps in sorted(threads.items(), key=lambda kv: kv[1][-1].get("at", "")):
         last = ps[-1]
         if not (within < last.get("at", "") < quiet) or t in ("keeper", "side"): continue
@@ -780,9 +788,11 @@ def cmd_stalled(a):
         why = open_in(t, ps, asks, ext, last_post)
         if not why and not a.all: continue
         jobs = {w: jobs_of(w) for w in who}
+        shown += 1
         print(f"{t}  last {last.get('at','')[:16]} by {last.get('from')}  agents {' '.join(who[-4:])}" + (f"  open: {why}" if why else "  resting")
               + (f"  jobs alive: {', '.join(f'{w}:{n}' for w, n in jobs.items() if n)}" if any(jobs.values()) else "")
               + "\n  " + str(last.get("text", ""))[:240].replace("\n", " "))
+    if not shown: print("No quiet thread is waiting on anyone.", file=sys.stderr)
 
 # ---------- logins ----------
 

@@ -6,10 +6,11 @@ You need a Claude account. The [guide](guide.md#before-you-install) has the full
 ```sh
 curl -fsSL https://hivelab.ca/install.sh | sh
 ```
-It asks for your password once, makes a Linux user called `hive`, installs git, Python and Claude Code if they're missing, and prints an address. Open that in a browser on the same machine, sign in to Claude, and say what you want.
+It asks for your password once, makes a Linux user called `hive`, installs git, Python, Claude Code and Codex if they're missing, starts setting up voice calls in the background (a few more minutes; `hive module remove phone voice` takes them out), and prints an address. Open that in a browser on the same machine, sign in to Claude, and say what you want.
 - To open it again, click the Hive icon in your app menu (it opens the address your browser already knows). To see the address: `sudo -iu hive hive web`.
 - On a server, forward the port: `ssh -L PORT:127.0.0.1:PORT server`, then open the address on your own machine. The install adds the [server module](guide.md#the-server-module), which checks the setup and gives you backups and memory limits.
 - On Ubuntu 24.04 it adds an AppArmor profile so that bubblewrap can make the sandbox. It applies to every user of the machine and widens the kernel's attack surface for them. Uninstalling doesn't remove it, but prints the command that does.
+- Checked on Ubuntu 24.04, Debian 12 and Fedora: a fresh install with a real systemd user session (in containers, using the own-account install below) left no failed units, and every scheduled job ran clean when started by hand.
 
 **Windows 10 or 11**, in PowerShell:
 ```powershell
@@ -38,3 +39,20 @@ The `install.sh` address on the site sends you to the file `get.sh` in `https://
 If the install stops partway, it says which step and why, and where the log is. Fix what it names and run the same line again. It carries on from where it stopped.
 
 **"Failed to connect to bus" from `systemctl --user`.** The shell has no systemd user session (the full message ends "$DBUS_SESSION_BUS_ADDRESS and $XDG_RUNTIME_DIR not defined"). `sudo` without `-i`, or a plain `su`, doesn't set it up. The install adds a line setting `XDG_RUNTIME_DIR` to the login profile of the account the Hive runs as (`hive`, or your own account if you installed with `--this-account`). Open a fresh login shell for it (`sudo -iu hive`, or log in again), check that `echo $XDG_RUNTIME_DIR` prints `/run/user/` and a number, then run the command there. In a shell you can't restart, `export XDG_RUNTIME_DIR=/run/user/$(id -u)` does the same for that shell. On a server, run `sudo loginctl enable-linger hive` once so its services keep running after you log out. If it still fails, open an issue with your Linux version and the last line the installer printed.
+
+## How we check installs
+After every release, a fresh machine installs it and we look for failures. This is what runs:
+
+1. A container (rootless podman) with a real systemd as its first process, on Ubuntu 24.04, Debian 12 and Fedora (latest).
+2. A new user with lingering turned on, so it gets a real `systemd --user` session, as it would on a server.
+3. The public installer in your own account (`get.sh --this-account`), downloaded from the site like any user would.
+4. Every scheduled job started by hand (update, asks, outcomes, progress, report), then `systemctl --user --failed`. The check passes only if nothing failed after the install and nothing failed after those jobs ran.
+5. A second run installs the release before and lets the Hive's own updater move it to the new one.
+
+Every part of this uses the public installer and public releases, so you can repeat it on your own machine with any rootless container tool.
+
+What it does not cover:
+- **The Claude sign-in.** The check uses a stand-in for the `claude` program, so nothing is signed in and no agent runs.
+- **macOS and Windows.** The Mac build and WSL have their own tests; they are not part of this check.
+- **Other Linux versions and non-systemd systems.** Only the three above are tried.
+- **A machine with years of other software on it.** The containers are clean, so a clash with something you already run would not show up here.

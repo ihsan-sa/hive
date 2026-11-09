@@ -7,7 +7,7 @@ import { h, copyText } from "../core/dom.js";
 import { S, can, jget, SYS, OUTSIDE } from "../core/store.js";
 import { simpleOn, hiveName } from "../core/simple.js";
 import { isAgent, isWarden, isRunning, agentThread, displayText, chatText, postSource, btwParent, btwText, asksQuestion, threadState, threadChildren, threadTitle } from "../core/model.js";
-import { focusById, focusName } from "../core/foci.js";
+import { focusById, focusName, focusOf } from "../core/foci.js";
 import { clock, stamp, now, short, mdPlain, ago, DAY, MIN } from "../core/format.js";
 import { markdown, mdCut, filesNamed } from "./markdown.js";
 import { agentRef, threadRef, agentAvatar } from "./refs.js";
@@ -320,13 +320,14 @@ export function relayLine(p) {
 // R8: the post's tags (hive post --tag, plus the thread's focus, the agents and threads it names), one small chip each, in plain words: the focus's name,
 // the agent's name, the conversation's title. A chip opens the focus page, the agent's own thread (its page when it has none) or the conversation.
 // A focus this page doesn't know, or a kind it can't name, is left off: no raw ids on a chip. The simple view has none.
+// The conversation's own focus is left off too: the header already says it, and every post in it carries it (the person, 11090228efdc).
 export function tagChips(p) {
   if (!(p.tags || []).length || simpleOn()) return null;
   const chips = [];
   for (const t of p.tags) {
     const i = String(t).indexOf(":"), kind = String(t).slice(0, i).toLowerCase(), id = String(t).slice(i + 1);
     if (i < 1 || !id) continue;
-    if (kind === "focus") { const f = focusById(id.toLowerCase()); if (f) chips.push([kind, focusName(f), href("focus", f.id), `Open the focus ${focusName(f)}`]); }
+    if (kind === "focus") { const f = focusById(id.toLowerCase()); if (f && f.id !== focusOf(p.th)) chips.push([kind, focusName(f), href("focus", f.id), `Open the focus ${focusName(f)}`]); }
     else if (kind === "agent") { chips.push([kind, who(id), agentHref(id), `Open ${id}`]); }
     else if (kind === "thread") { if (id !== p.th) chips.push([kind, threadTitle(id), threadHref(id), `Open the conversation ${threadTitle(id)}`]); }
   }

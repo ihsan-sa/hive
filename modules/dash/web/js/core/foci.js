@@ -18,13 +18,13 @@ export const fociFailed = () => L.failed;
 /** Read /api/foci into S.foci (at most every 20 s unless forced); resolves when it is there. Emits on change. */
 export function loadFoci(force) {
   if (L.p) return L.p;
-  if (!force && S.foci !== undefined && now() - L.at < FOCI_EVERY) return Promise.resolve(S.foci);
+  if (!force && S.foci !== undefined && now() - L.at < (L.failed ? 5e3 : FOCI_EVERY)) return Promise.resolve(S.foci);   // a failed read (a dash restart) retries soon
   L.at = now();
   L.p = jget("/api/foci").then(v => (v && Array.isArray(v.foci) ? v : { foci: [], tags: {}, lint: [] }), () => null).then(v => {
     L.p = null; L.failed = !v;
     if (!v) { if (S.foci === undefined) { S.foci = { foci: [], tags: {}, lint: [], failed: true }; emit({ foci: true }); } return S.foci; }
     if (L.want) { if (now() - L.want.at > 60e3 || sameOrder(v.foci, L.want.ids)) L.want = null; else v.foci = arrange(v.foci, L.want.ids); }   // a read that left before the move landed keeps the moved order
-    const sig = x => JSON.stringify(x && [x.tags, x.foci.map(f => [f.id, f.name, f.summary && f.summary.at, f.checks.map(c => c.id + (c.done ? 1 : 0)).join()])]);
+    const sig = x => JSON.stringify(x && [x.tags, (x.moved || []).length && x.moved[0].at, x.foci.map(f => [f.id, f.name, f.summary && f.summary.at, f.checks.map(c => c.id + (c.done ? 1 : 0)).join()])]);
     if (sig(v) !== sig(S.foci)) { S.foci = v; emit({ foci: true }); }
     return v;
   });

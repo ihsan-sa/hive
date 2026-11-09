@@ -973,8 +973,25 @@ function homeOlder(ws) {
     can("post") ? button("Go through them with an agent", () => prefill(null, OLDER_ASK), { kind: "quiet", size: "s" }) : null);
 }
 const firstLine = t => { const s = mdPlain(String(t || "")).replace(/\s+/g, " ").trim(); return s.length > 140 ? s.slice(0, 139) + "\u2026" : s; };
+/** Recently moved (the person, 110901466282): which conversations moved between focuses in the last three days, so one that left the
+ * place you knew it in can be found. From focus.py's moved list (the focus CLI's moved command); shut by default, like Stuff to address. */
+const MOVED_FOR = 3 * DAY;
+function homeMoved() {
+  const ms = ((S.foci && S.foci.moved) || []).filter(m => m && m.at * 1e3 > now() - MOVED_FOR && S.threads.has(m.thread) && !isSystemThread(S.threads.get(m.thread)) && !btwParent(m.thread));
+  if (!ms.length) return null;
+  const place = id => id ? h("a", { href: href("focus", id) }, (focusById(id) || {}).name || id) : h("span", null, "Other");
+  const row = m => h("li", { class: "cm-old cm-mv", "data-key": m.thread + ":" + m.at },
+    h("a", { href: threadHref(m.thread) }, threadTitle(m.thread)),
+    h("span", { class: "cm-old-q" }, " \u2014 ", m.was ? [place(m.was), " \u2192 "] : "into ", place(m.to)),
+    h("span", { class: "meta" }, " \u00b7 ", ago(m.at * 1e3), m.by === "person" ? " \u00b7 by you" : m.by && m.by !== "anon" ? [" \u00b7 by ", agentRef(m.by, { dot: false })] : null));
+  return h("section", { class: "cm-older cm-moved", "data-key": "moved", "aria-label": "Recently moved" },
+    h("details", { class: "cm-older-d" },
+      h("summary", null, h("b", null, "Recently moved"), h("span", { class: "meta" }, ` \u00b7 ${plural(ms.length, "conversation")} put in a focus or moved in the last 3 days`)),
+      h("ul", { class: "cm-old-l" }, ms.slice(0, 40).map(row))));
+}
 function fociGrid(ctx) {
-  if (S.foci === undefined) return h("p", { class: "meta cm-foci-msg" }, fociFailed() ? "Couldn't read the focuses. It keeps trying." : "Reading\u2026");
+  // A failed first read leaves an empty stand-in (core/foci.js): say so, not "no focus" (the person, 110901516bcd: cards gone after a dash restart).
+  if (S.foci === undefined || (S.foci.failed && fociFailed())) return h("p", { class: "meta cm-foci-msg" }, fociFailed() ? "Couldn't read the focuses. It keeps trying." : "Reading\u2026");
   const fs = fociOrder();
   if (!fs.length) return h("p", { class: "meta cm-foci-msg" }, "No focus yet. Agents make one when work has a goal; every conversation is in the list on the left.");
   return h("div", { class: "cm-foci", "data-key": "foci" }, fs.map(f => focusCard(f, ctx)));
@@ -1015,6 +1032,7 @@ function homePane(ctx) {
     n ? homeNeeds(waitingNow()) : null,
     sp.older ? homeOlder(waitingOlder()) : null,
     digest ? fociGrid(ctx) : null,
+    digest ? homeMoved() : null,
     phoneList());
 }
 /** On a phone the rail is a page of its own; home lists the latest conversations instead (css/phone.css shows it only there). */
