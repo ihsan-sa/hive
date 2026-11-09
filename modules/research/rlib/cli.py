@@ -90,6 +90,8 @@ def c_hunt(a):
     if a.dry_run:
         warns = []
         def warn(m): warns.append(m); print("warning: " + m, file=sys.stderr)
+        for g in h.angles:
+            if "{org}" not in str(g): warn(f"angle {g!r} has no {{org}}, so every organisation would run the same search")
         for o, d in h.domains.items():
             if not isinstance(d, str) or not re.fullmatch(r"[A-Za-z0-9.-]+\.[A-Za-z]{2,}", d.strip()): warn(f"domains entry for {o!r} is {d!r}, not a bare site like 'example.edu'")
         for o, urls in h.pages.items():
