@@ -561,10 +561,18 @@ def interrupt_step(name, post_id=None):
     if run_gone(rec): return "not running"
     steps = open_steps(rec.get("out") or "")
     if len(steps) != 1: return f"{len(steps)} open steps"
-    _, tool, inp = steps[0]
+    sid, tool, inp = steps[0]
     if tool != "Bash" or inp.get("run_in_background"): return f"the open step is {tool}" + (" in the background" if tool == "Bash" else "")
     try: stream = Path(rec["out"]).read_bytes()
     except (OSError, KeyError): return "no output to read"
+    # Claude Code now names a foreground command's shell too, in a task_started line under its own call: that shell is the
+    # step's, not a background one (ab2df's 15-min poll went unstopped as "0 foreground shells", 2026-11-09).
+    started = {}
+    for line in stream.splitlines():
+        if b'"task_started"' not in line: continue
+        try: m = json.loads(line)
+        except ValueError: continue
+        if isinstance(m, dict) and m.get("subtype") == "task_started" and m.get("task_id"): started[str(m["task_id"]).encode()] = m.get("tool_use_id")
     tick, up = os.sysconf("SC_CLK_TCK"), float(Path("/proc/uptime").read_text().split()[0])
     shells = []
     for q in tree_of(rec["pid"])[1:]:
@@ -575,7 +583,8 @@ def interrupt_step(name, post_id=None):
             out = os.readlink(f"/proc/{q}/fd/1")
         except (OSError, IndexError): continue
         if b"shell-snapshots" not in b" ".join(cmd) or "/tasks/" not in out: continue
-        if Path(out).name.split(".")[0].encode() in stream: continue   # a background shell: its id is in the stream
+        tid = Path(out).name.split(".")[0].encode()
+        if (started[tid] != sid) if tid in started else tid in stream: continue   # a background shell: its id is in the stream, not as this step's
         shells.append((q, up - int(st_[19]) / tick))
     if len(shells) != 1: return f"{len(shells)} foreground shells"
     q, age = shells[0]

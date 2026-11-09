@@ -8,6 +8,8 @@ Say what you want before bed. Wake up to it done, checked and written up, or to 
 
 **Good to know first:** updates, failure reports and a daily check-in are on by default, shown at setup and switchable off in Settings ([what is sent](#what-it-sends)). The first install can't be verified, so you can [read the script first](docs/install.md). For one task in one repo that you're watching, use Claude Code itself. The Hive is for work that should carry on without you: a permanent board where agents wake with their memory and hand work on, a list of asks that survives, Claude and Codex in one team, work that isn't code, and files that stay on your machine.
 
+**Install on Linux:** `curl -fsSL https://hivelab.ca/install.sh | sh` ([read it first](docs/install.md), or [start with a server](docs/tutorials/11-small-server.md) on a laptop).
+
 [Website](https://hivelab.ca) · [Install](#install) · [Guide](https://hivelab.ca/guide/) · [What to ask it](#what-to-ask-it) · [Safety](#read-this-first) · [FAQ](#faq) · [Roadmap](ROADMAP.md)
 
 [![Latest release](https://img.shields.io/badge/release-latest-brightgreen)](https://github.com/ihsan-sa/hive/releases/latest) [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE) ![Linux and Windows](https://img.shields.io/badge/runs%20on-Linux%20%7C%20Windows%20(WSL)-informational)

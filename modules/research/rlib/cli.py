@@ -72,6 +72,8 @@ def c_hunt(a):
     try: spec = json.loads(Path(a.spec).read_text())
     except (OSError, ValueError) as e: _err(f"cannot read spec {a.spec}: {e}")
     if not isinstance(spec, dict): _err("the spec must be a JSON object")
+    for k in spec:
+        if k not in work.HUNT_SPEC_KEYS: print(f"warning: unknown spec key {k!r} is ignored (keys: {', '.join(sorted(work.HUNT_SPEC_KEYS))})", file=sys.stderr)
     if a.out: spec["out"] = a.out
     if a.max_seconds: spec["max_seconds"] = a.max_seconds
     if not (spec.get("orgs") or spec.get("discover")): _err("the spec needs orgs or discover")
@@ -82,6 +84,7 @@ def c_hunt(a):
         for l in r.get("lead_list") or []: print(f"{l['name']} | {l['title']} | {l['organisation']} | {l['check_status']}")
         for e in r.get("no_named_head") or []: print(f"no named head: {e['org']} {e.get('url','')}".rstrip())
         if r["status"] != "reached" and r.get("stopped"): print(f"stopped: {r['stopped']}")
+        if r.get("out"): print(f"out: {r['out']}")
     else: _out(r)
     _log(f"hunt: {r['leads']} leads ({r['verified']} verified) of {r['target']}, {r['status']}" + (f"; no named head: {', '.join(e['org'] for e in r['no_named_head'])}" if r.get("no_named_head") else ""))
     if r["status"] != "reached": sys.exit(3)
