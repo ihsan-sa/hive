@@ -1,4 +1,4 @@
-import argparse, csv, http.client, json, os, re, sys
+import argparse, difflib, csv, http.client, json, os, re, sys
 from pathlib import Path
 from . import engines, fetcher, net, people, predict, store, work
 from .extract import parse_date
@@ -73,7 +73,9 @@ def c_hunt(a):
     except (OSError, ValueError) as e: _err(f"cannot read spec {a.spec}: {e}")
     if not isinstance(spec, dict): _err("the spec must be a JSON object")
     for k in spec:
-        if k not in work.HUNT_SPEC_KEYS: print(f"warning: unknown spec key {k!r} is ignored (keys: {', '.join(sorted(work.HUNT_SPEC_KEYS))})", file=sys.stderr)
+        if k not in work.HUNT_SPEC_KEYS:
+            near = difflib.get_close_matches(k, sorted(work.HUNT_SPEC_KEYS), n=1)
+            print(f"warning: unknown spec key {k!r} is ignored" + (f" (did you mean {near[0]!r}?)" if near else "") + f" (keys: {', '.join(sorted(work.HUNT_SPEC_KEYS))})", file=sys.stderr)
     if a.out: spec["out"] = a.out
     if a.max_seconds: spec["max_seconds"] = a.max_seconds
     if not (spec.get("orgs") or spec.get("discover")): _err("the spec needs orgs or discover")
