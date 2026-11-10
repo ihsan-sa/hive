@@ -19,6 +19,9 @@ them that an agent writes, so it stays in plain words: no rung ids, post ids, pa
                                       `Decided:` in the result instead. Plain words, high level relative to the focus. Lint runs
                                       and prints what it flags; it never refuses
   hive focus show FOCUS                 the summary as set
+  hive focus reader FOCUS               how far away the person is: when they last wrote in the focus and how often this week.
+                                      Write the card for that distance: someone a day away needs what was done and found since,
+                                      someone a week away needs where it stands and why. `set` and the stop reminder print it too
   hive focus aim FOCUS "text"           one line on what the focus is for (the name isn't always enough: the person, 2026-11-07);
                                       shown under the name on the home card and at the top of the focus page. Without one, the
                                       text after the thread on the focus's priorities line is used
@@ -140,6 +143,25 @@ def keeper(f, posts):
         if any(HASH.fullmatch(str(t).lstrip("@").lower()) and str(t).lstrip("@").lower() != str(p["from"]).lower() for t in (p.get("to") or [])): continue
         best = (ts(p.get("at")), str(p["from"]).lower())
     return best[1]
+
+def reader(f, posts, now=None):
+    """How far away the person is from a focus, as one line for whoever writes its card: when they last wrote in any of its
+    threads and how often in the last week. The card is written for that distance (the person, 2026-11-10: "reading the summary
+    should answer this question, not me having to message you"). A fact for judgement, never a gate."""
+    now = now or dt.datetime.now(dt.timezone.utc).timestamp()
+    th = set(f.get("threads") or []) | {f.get("thread") or f["id"]}
+    at = sorted(ts(p.get("at")) for p in posts if p.get("thread") in th and str(p.get("from", "")).lower() == "person")
+    if not at: return "The person has never written in this focus: the card is all they know of it, so it says what the work is for, where it stands and what changed, before any detail."
+    h = (now - at[-1]) / 3600; week = sum(1 for t in at if now - t <= 7 * 86400)
+    days = len({int(t // 86400) for t in at if now - t <= 7 * 86400})
+    span = lambda x: f"{x * 60:.0f} minutes" if x < 1 else f"{x:.0f} hours" if x < 48 else f"{x / 24:.0f} days"
+    back = [t for t in at if at[-1] - t > 3600]            # a post just now after a long gap is someone coming back, not someone close
+    away = (at[-1] - back[-1]) / 3600 if h < 3 and back else h
+    came = f", coming back after {span(away)} away" if away > h else ""
+    how = ("they are following closely, so the card can be about the current step" if away < 3 else
+           "its first bullets say what was done and what was found since then, at the level they would ask about, then what is next" if away < 72 else
+           "they have been away from it, so it opens with where the whole thing stands and why, and leaves out steps")
+    return f"The person last wrote in this focus {span(h)} ago{came} ({week} posts on {days} of the last 7 days): {how}."
 
 def ts(at):
     if isinstance(at, (int, float)): return float(at)  # records carry time.time(); posts an ISO string
@@ -359,7 +381,7 @@ def nudge(name, thread, since, posts=None, own=None):
     if s and float(s.get("at") or 0) >= t: return None
     return (f"{'This thread' if own in (None, thread) else f'#{thread}, where you posted a result,'} is in the focus \"{f['name']}\" and its summary is {'older than your result' if s else 'not written yet'}. The person reads the focus card, "
             f"not the thread, so update it now, in plain words (what is being done and by whom, what changed), with @agent and #thread where they help:\n"
-            f"hive focus set {f['id']} <<'X'\n## Now\n- …\n## Lately\n- …\nX")
+            f"hive focus set {f['id']} <<'X'\n## Now\n- …\n## Lately\n- …\nX\n" + reader(f, posts))
 
 FILE_ASKED = STATE / "file-asked.jsonl"     # {thread, name, at, file, title}: which agent was asked to file or title which conversation
 META, RENAMED = STATE / "thread-meta.json", STATE / "renamed.jsonl"
@@ -438,6 +460,7 @@ def main(argv=None):
     p = sp.add_parser("relate"); p.add_argument("focus"); p.add_argument("what", choices=RELATE); p.add_argument("target"); p.add_argument("--why", default=""); p.add_argument("--off", action="store_true")
     p = sp.add_parser("set"); p.add_argument("focus")
     p = sp.add_parser("show"); p.add_argument("focus")
+    p = sp.add_parser("reader"); p.add_argument("focus")
     p = sp.add_parser("keeper"); p.add_argument("focus")
     p = sp.add_parser("aim"); p.add_argument("focus"); p.add_argument("text", nargs="*")
     p = sp.add_parser("check"); p.add_argument("what", choices=["add", "list", "done", "untick", "confirm", "ticked"]); p.add_argument("args", nargs="*"); p.add_argument("--why", default="")
@@ -495,18 +518,20 @@ def main(argv=None):
         text = " ".join(" ".join(a.text).split())[:200]
         if not text: print(f.get("aim") or "(no aim yet)"); return
         append({"kind": "aim", "focus": f["id"], "text": text}); print(f"aim of {f['id']}: {text}"); return
-    if a.cmd in ("set", "show", "keeper"):
+    if a.cmd in ("set", "show", "keeper", "reader"):
         f = find(st, a.focus)
         if not f: sys.exit(f"hive focus: no focus {a.focus!r} (hive focus list; hive focus new ID \"name\" adds one)")
         if a.cmd == "show": print((f.get("summary") or {}).get("text") or "(no summary yet)"); return
         if a.cmd == "keeper": print(keeper(f, board_posts()) or "nobody"); return
+        if a.cmd == "reader": print(reader(f, board_posts())); return
         if sys.stdin.isatty(): sys.exit("hive focus set: the summary comes on stdin, a quoted heredoc with ## Now and ## Lately bullets")
-        text = sys.stdin.read().strip()[:MAX_SUMMARY]
+        raw = sys.stdin.read().strip(); text = raw[:MAX_SUMMARY]
+        if len(raw) > MAX_SUMMARY: print(f"hive focus set: {len(raw)} characters, the card keeps {MAX_SUMMARY}: the end was CUT OFF. Shorten it (fewer bullets, higher level) and set it again.", file=sys.stderr)
         parts = parse_summary(text)
         if not parts["now"] and not parts["lately"]: sys.exit("hive focus set: empty; give ## Now and ## Lately bullets")
         append({"kind": "summary", "focus": f["id"], "text": text})
         st = state(); flags = [i for i in lint(st, only=f["id"]) if i["kind"] != "stale"]
-        print(f"summary set on {f['id']} ({len(parts['now'])} now, {len(parts['lately'])} lately" + (f", {len(parts['needs'])} for the person" if parts["needs"] else "") + ")" + (f"\nreads as agent talk, fix when you can:\n{fmt_lint(flags)}" if flags else ""))
+        print(f"summary set on {f['id']} ({len(parts['now'])} now, {len(parts['lately'])} lately" + (f", {len(parts['needs'])} for the person" if parts["needs"] else "") + ")\n" + reader(f, board_posts()) + (f"\nreads as agent talk, fix when you can:\n{fmt_lint(flags)}" if flags else ""))
         return
     if a.cmd == "check":
         recs = records()

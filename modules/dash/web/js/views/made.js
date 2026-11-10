@@ -3,7 +3,7 @@ import { h } from "../core/dom.js";
 import { S, SYS, OUTSIDE } from "../core/store.js";
 import { threadTitle, displayText } from "../core/model.js";
 import { ago } from "../core/format.js";
-import { pageHeader, empty, icon } from "../ui/kit.js";
+import { pageHeader, empty, icon, waiting } from "../ui/kit.js";
 import { fileUrl, pageUrl, PAGE, TYPE, fsize } from "../ui/message.js";
 import { openPreview, remember, kindOf, badgeOf, previewKey } from "../ui/preview.js";
 import { inChatPlace, chatEscape, chatLeave } from "./comms.js";
@@ -51,7 +51,7 @@ export default {
   tab: () => !!S.app.app,
   leave: chatLeave, escape: chatEscape,
   render(ctx) {
-    if (!S.live) return h("div", { class: "page" }, empty("Reading…", { kind: "loading" }));
+    if (!S.live) return h("div", { class: "page" }, waiting(S.failed, "Reading…", "your files and links"));
     const things = madeThings(), files = things.filter(t => t.kind !== "link");
     // In Chat's own layout (comms.js inChatPlace), the way the design shows it: the rail beside it with Files lit in its foot.
     return inChatPlace(ctx, "made", h("div", { class: "page", "data-key": "made" },

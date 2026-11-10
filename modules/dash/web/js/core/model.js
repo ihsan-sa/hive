@@ -1,6 +1,6 @@
 // What the data means: statuses, the agent card, hive stats, usage pace. Pure reads of the store.
 import { S, OUTSIDE, SYS } from "./store.js";
-import { simpleOn } from "./simple.js";
+import { simpleOn, plainName } from "./simple.js";
 import { now, ago, dur, median, short, mdPlain, bareLinks, firstSentence, onWords, namesNoWork, MIN, HOUR, DAY } from "./format.js";
 
 export const isAgent = n => S.agents.has(n);
@@ -10,6 +10,20 @@ export const WARDEN_HINT = "A warden: it judges whether work crosses the hard li
 export const isRunning = n => S.running.has(n);
 export const sEnd = s => s.end ?? (isRunning(s.name) ? now() : s.start);
 export function agentThread(n) { for (let i = S.sessions.length - 1; i >= 0; i--) if (S.sessions[i].name === n) return S.sessions[i].thread; return null; }
+
+/** What the app look calls an agent: its conversation's agent ("Project 66's agent"), or "an agent". The code stays in the hover title and on the agent page; the developer look shows the code. */
+export function agentLabel(n) {
+  if (!n || !S.app || !S.app.app) return n;
+  if (simpleOn()) return plainName(n);
+  if (n === "person") return "you";
+  if (isWarden(n)) return "the warden";
+  if (!/^a[0-9a-f]{4}$/.test(n)) return n;
+  const th = agentThread(n), t = th ? threadTitle(th) : "";
+  return t && t !== "A conversation" && !/\ba[0-9a-f]{4}\b/.test(t) ? `${short(t, 40)}'s agent` : "an agent";
+}
+
+/** Agent codes inside a line of text, as agentLabel says them (the app look only; a known agent, or a + 4 hex with a digit, so "added" stays a word and a6aea-mesh.png a file name). */
+export const labelCodes = text => (!text || !S.app || !S.app.app ? text : String(text).replace(/(^|[^\w@])@?(a[0-9a-f]{4})\b(?![-_.]\w)/g, (m, a, n) => (isAgent(n) || /\d/.test(n) ? a + agentLabel(n) : m)));
 
 export function tierOf(th) {
   const P = (S.live && S.live.priorities) || {}; th = th || "";
@@ -344,7 +358,7 @@ export function threadChildren(th) { const out = []; for (const d of S.threads.v
 export function threadTitle(th) {
   const own = S.threadMeta && S.threadMeta[th] && S.threadMeta[th].title; if (own) return own;   // the person renamed it
   if (btwParent(th)) { const d = S.threads.get(th), p = d && d.posts[0]; return "Aside: " + (p ? short(bareLinks(btwText(mdPlain(displayText(p))).split("\n")[0]), 60) : btwParent(th)); }
-  if (!HEX.test(th || "")) return (simpleOn() || S.app.app) && th ? (t => t[0].toUpperCase() + t.slice(1))(th.replace(/[-_]+/g, " ")) : th;
+  if (!HEX.test(th || "")) return (simpleOn() || S.app.app) && th ? ({ keeper: "Hive upkeep", watchdog: "Hive watch" }[th] || (t => t[0].toUpperCase() + t.slice(1))(th.replace(/[-_]+/g, " "))) : th;   // "keeper" and "watchdog" are words only the builders use
   if (S.threadNames[th]) return S.threadNames[th];
   if (!S.app.app) return th;
   const d = S.threads.get(th), p = d && d.posts[0];

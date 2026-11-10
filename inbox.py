@@ -265,6 +265,55 @@ def bar_line(p):
     line = last if any(last.lower().startswith(w.lower() + ":") for w in STOP_WORDS) else re.split(r"(?<=[.!?])\s", lines[0], maxsplit=1)[0]
     return re.sub(r"@([\w.-]+)", r"\1", line)[:160]
 
+def has_stop_line(text):
+    """Does this post's last line (a trailing "@name" hand-back line aside) start with a stop word? What `hive post --end` requires."""
+    lines = [l.strip().strip("*_ ").strip() for l in str(text).strip().splitlines() if l.strip()]
+    while len(lines) > 1 and re.fullmatch(r"(?:@[\w.-]+[\s,.]*)+", lines[-1]): lines.pop()
+    return bool(lines) and any(lines[-1].lower().startswith(w.lower() + ":") for w in STOP_WORDS)
+
+END_POST_S = 120  # the --end post this tool call just made: newer than this
+END_CMD = re.compile(r"\bh2\s+post\b(?:\\\n|[^\n])*\s--end\b")
+END_FRESH_S = 30  # a delivery this close before the post may be one the model has not read yet: tool calls can run side by side
+
+def post_time(p):
+    at = dt.datetime.fromisoformat(p["at"])
+    return (at if at.tzinfo else at.replace(tzinfo=dt.timezone.utc)).timestamp()
+
+def end_post(name, rec, payload, t=None):
+    """The post this tool call made with `hive post --end`, or None. The command must say so, the agent's newest post of this run must carry the flag, and
+    the post's id must be in this call's output: so "--end" in text or in a grep does nothing, a refused post can't end the run on an older one, and a
+    post that was held once never ends it later. A subagent's post is not the run's."""
+    if os.environ.get("HIVE_DOOR") or not rec.get("at") or payload.get("agent_id") or payload.get("tool_name") != "Bash": return None
+    if not END_CMD.search(str((payload.get("tool_input") or {}).get("command", ""))): return None
+    ps = own_posts(name, rec["at"]) or []
+    if not ps or not ps[-1].get("end") or ps[-1].get("id", "\0") not in str(payload.get("tool_response")): return None
+    try:
+        if (t or time.time()) - post_time(ps[-1]) > END_POST_S: return None
+        if (STATE / "end-held" / name).read_text().strip() == ps[-1]["id"]: return None
+    except (KeyError, ValueError): return None
+    except OSError: pass  # no held post yet
+    return ps[-1]
+
+def delivered_since(name, at):
+    """Was anything delivered to this agent at or after this time? The delivered file's "@<unix>" lines say when."""
+    try: stamps = [int(l[1:]) for l in (STATE / "delivered" / name).read_text().split() if l.startswith("@") and l[1:].isdigit()]
+    except OSError: return False
+    return bool(stamps) and max(stamps) >= at
+
+def end_decision(name, rec, post):
+    """A run asked to end on its post (`hive post --end`, L48 in projects/hive-meta/load.md). Ending from PostToolUse skips the Stop hook, so this is the
+    Stop path run early: the same holds in the same order, the bars at the end. Returns None to end, else what holds it, handed to the run at once
+    (these checks are once-only, so what they say can't wait for a Stop that would no longer repeat it). A post handed over by a tool call beside this
+    one holds it first: ending would throw it away unread, and the starter counts it as delivered. The reply call this saves is 1.46% of run money."""
+    if delivered_since(name, post_time(post) - END_FRESH_S): why = "A post reached you around this one, so read it first."
+    else: why = "\n\n".join(x for x in (unanswered(name, rec) or owns_open(name, rec), stop_gate(name, rec), focus_nudge(name, rec)) if x)
+    if why:
+        d = STATE / "end-held"; d.mkdir(parents=True, exist_ok=True); (d / name).write_text(post["id"])
+        return "Not ended on that post, because:\n\n" + why
+    try: run_end_bars(name, rec)
+    except Exception: pass  # a bar never holds up a stop
+    return None
+
 def run_end_bars(name, rec, t=None):
     """At a run's real end, the status bar of each thread it posted in, from its newest post there, when the run didn't set one itself.
     The bar stays current without a model (the lab, 2026-11-10, post 111002559ce8: the timer spent ~165 agent starts a day on it). A bar this run set by hand is left; so is one another agent set
@@ -506,6 +555,10 @@ def main():
     first = first_line(name, rec) if event != "Stop" else None
     check = model_check(name, rec) if event != "Stop" else None
     if not ps:
+        if event == "PostToolUse" and not first and not check and (end := end_post(name, rec, payload)):
+            why = end_decision(name, rec, end)
+            print(json.dumps({"continue": False, "stopReason": "ended on its post (hive post --end)"} if why is None else {"hookSpecificOutput": {"hookEventName": event, "additionalContext": why}}))
+            return
         if event == "Stop" and (why := "\n\n".join(x for x in (unanswered(name, rec) or owns_open(name, rec), stop_gate(name, rec)) if x)):
             print(json.dumps({"decision": "block", "reason": "\n\n".join(x for x in (why, focus_nudge(name, rec)) if x)}))
         elif event == "Stop" and (fn := focus_nudge(name, rec)):

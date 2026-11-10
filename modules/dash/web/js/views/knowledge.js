@@ -5,7 +5,7 @@ import { h } from "../core/dom.js";
 import { S, can, getPref, jget, post, setPref } from "../core/store.js";
 import { ago, plural, stamp } from "../core/format.js";
 import { href, threadHref } from "../core/router.js";
-import { threadTitle } from "../core/model.js";
+import { labelCodes, threadTitle } from "../core/model.js";
 import { button, empty, skeleton, waiting, field, input, list, needFull, copyPress } from "../ui/kit.js";
 import { icon } from "../ui/icons.js";
 import { markdown } from "../ui/markdown.js";
@@ -267,7 +267,7 @@ function mapView(ctx) {
       h("ul", { class: "kb-notes" }, shown.map(n => {
         const days = (now - n.t) / 86400, fresh = days < 2 ? 3 : days < 7 ? 2 : days < 30 ? 1 : 0;
         return h("li", { "data-key": n.path }, h("a", { class: "kb-nr", "data-fresh": days < 2 ? "" : null, href: open(n.path), title: `~/${n.path} · ${bytes(n.size)} · changed ${age(n.t)} ago` + (n.back.length ? ` · linked from ${n.back.length}` : "") },
-          h("span", { class: "kb-nr-t" }, n.title || n.path.split("/").pop()),
+          h("span", { class: "kb-nr-t" }, labelCodes(n.title) || n.path.split("/").pop()),
           h("span", { class: "meta" }, age(n.t))));
       })),
       ns.length > 6 ? button(all ? "Show fewer" : `Show all ${ns.length}`, () => { all ? K.topics.delete(t) : K.topics.add(t); ctx.update(); }, { kind: "quiet", size: "s", cls: "kb-more" }) : null);
@@ -283,6 +283,8 @@ function sourcesView() {
   if (!ss.length) return null;
   return h("ul", { class: "kb-cover" }, ss.map(s => h("li", { "data-key": s.source }, h("b", null, s.files.toLocaleString()), h("span", null, SOURCE[s.source] || s.source))));
 }
+// A card names its place in words, not as a folder path (punch list item 4): kb/ is "Your notes", kb/history/ is "History of the hives".
+const placeName = p => { const d = parent(p), t = d.split("/").pop(); if (!d || d === "kb") return "Your notes"; return TOPIC[t] || (t[0].toUpperCase() + t.slice(1)).replace(/[-_]+/g, " "); };
 // R7: before anything is picked, the notes changed last as cards: folder · when, the title, and how it sits among the others.
 // TODO(server): /api/kb/map has no author or first line yet; "who" and the first line join the card once it sends them (n.by, n.first).
 function latelyCards() {
@@ -293,9 +295,9 @@ function latelyCards() {
   return h("section", { class: "sec kb-lately", "data-key": "lately" },
     h("header", { class: "sec-h" }, h("h2", { class: "sec-t" }, "Lately learned"), h("span", { class: "sec-n" }, week ? `${plural(week, "note")} changed this week` : "")),
     h("div", { class: "kb-cards" }, ns.map(n => h("a", { class: "card kb-card", href: open(n.path), "data-key": n.path, title: "~/" + n.path },
-      h("span", { class: "meta" }, [parent(n.path).split("/").pop() || "kb", age(n.t) + " ago", n.by].filter(Boolean).join(" · ")),
-      h("b", { class: "kb-card-t" }, n.title || n.path.split("/").pop()),
-      h("span", { class: "kb-card-x" }, n.first || (n.back.length ? `${plural(n.back.length, "note")} link here` : parent(n.path) + "/"))))));
+      h("span", { class: "meta" }, [placeName(n.path), age(n.t) + " ago", n.by].filter(Boolean).join(" · ")),
+      h("b", { class: "kb-card-t" }, labelCodes(n.title) || n.path.split("/").pop()),
+      h("span", { class: "kb-card-x" }, n.first || (n.back.length ? `${plural(n.back.length, "note")} link here` : "No other note links here yet"))))));
 }
 // The home page below its title: what you opened, the map, the hubs, what changed, what search covers. On a phone it sits under the shelves.
 const homeSections = ctx => [
@@ -305,14 +307,16 @@ const homeSections = ctx => [
   hubRows() ? h("section", { class: "sec", "data-key": "hubs" }, h("header", { class: "sec-h" }, h("h2", { class: "sec-t" }, "Most connected notes"), h("span", { class: "sec-n" }, "how many notes link to each, and it to others")), hubRows()) : null,
   h("section", { class: "sec", "data-key": "changed" }, h("header", { class: "sec-h" }, h("h2", { class: "sec-t" }, "Changed lately")), K.home ? changedRows() : skeleton(3)),
   sourcesView() ? h("section", { class: "sec", "data-key": "cover" }, h("header", { class: "sec-h" }, h("h2", { class: "sec-t" }, "What search covers"), h("span", { class: "sec-n" }, "files and posts in the index")), sourcesView()) : null];
+// The app look lists what the Hive wrote down, not its own workings: the core and modules folders, which the developer look keeps. A user's own code under projects/ stays listed.
+const hiveCode = p => !!S.app.app && /^(core|modules)(\/|$)/.test(p);
 function changedRows() {
   if (K.home.failed) return empty("Couldn't read what changed lately. It keeps trying.", { kind: "error" });
-  return list((K.home.recent || []).map(f => ({ key: f.path, href: open(f.path), title: f.title || f.name, text: parent(f.path), meta: ago(f.t * 1e3).replace(" ago", "") })), { empty: "Nothing yet." });
+  return list((K.home.recent || []).filter(f => !hiveCode(f.path)).map(f => ({ key: f.path, href: open(f.path), title: f.title || f.name, text: parent(f.path), meta: ago(f.t * 1e3).replace(" ago", "") })), { empty: "Nothing yet." });
 }
 function sideBody(path, ctx) {
   if (!path) {
     if (!K.home || K.home.failed) return waiting(K.home && K.home.failed, "Reading…", "your notes", "side");
-    return [list((K.home.shelves || []).map(s => ({ key: s.path, href: open(s.path), lead: icon("folder"), title: s.label, text: s.about, meta: String(s.n) })), { empty: "Nothing here yet." }),
+    return [list((K.home.shelves || []).filter(s => !hiveCode(s.path)).map(s => ({ key: s.path, href: open(s.path), lead: icon("folder"), title: s.label, text: s.about, meta: String(s.n) })), { empty: "Nothing here yet." }),
       h("div", { class: "kb-phone kb-home", "data-key": "recent" }, homeSections(ctx))];
   }
   const cur = K.seen.get(path), dir = cur && cur.type === "dir" ? cur : K.seen.get(parent(path));

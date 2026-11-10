@@ -1,7 +1,7 @@
 // References to agents and threads. Real links (#agent/<name>, #comms/<thread>), so they open in a new tab,
 // show in the status bar, and work by keyboard. Status is shape + colour + the label in the tooltip.
 import { h, copyText } from "../core/dom.js";
-import { agentBrief, agentStatus, isAgent, isRunning, isWarden, threadTitle, tierOf } from "../core/model.js";
+import { agentBrief, agentLabel, agentStatus, isAgent, isRunning, isWarden, threadTitle, tierOf } from "../core/model.js";
 import { agentHref, threadHref } from "../core/router.js";
 import { status, tier } from "../core/status.js";
 import { statusDot, wardenMark } from "./kit.js";
@@ -19,7 +19,7 @@ export function agentRef(n, { copy, state, href, dot = true, pill } = {}) {
   if (!n) return "?";
   const s = agentStatus(n), agent = isAgent(n), warden = isWarden(n);
   const a = h("a", { class: pill ? "ref pill" : "ref", "data-kind": "agent", "data-name": n, href: href || (agent ? agentHref(n) : threadHref("@" + n)), title: `${n}${warden ? ", a warden" : ""}${s.label ? `: ${s.label}` : ""}`, onclick: !href && agent ? e => openRef(e, "agent", n) : null },
-    dot ? statusDot(s.key, { live: isRunning(n) }) : null, h("span", { class: "ref-n" }, n), warden ? wardenMark() : null,
+    dot ? statusDot(s.key, { live: isRunning(n) }) : null, h("span", { class: "ref-n" }, agentLabel(n)), warden ? wardenMark() : null,
     state && s.label && s.key !== "none" ? h("span", { class: "sw", "data-tone": null, style: "font-weight:400" }, status(s.key).label) : null);
   if (!copy || !agent) return a;
   return h("span", { class: "ref-wrap" }, a, copyButton("@" + n));

@@ -27,7 +27,14 @@ export function faded(th) {
  *  An agent's @person or For you: line after the person's last word holds it in the list. By age, as Slack's channels do: quiet for 1 day when it was a short one-off, 7 when it ran longer (4+ posts). Pinned ones stay,
  *  and so does one the person took back out (counted from then). */
 export const QUIET_DAYS = d => (d.posts.length > 3 ? 7 : 1);
+// Asked once per thread per focus per draw, and each answer can walk a whole thread, so an answer is kept until the thread gets a post, its marks change or the minute turns.
+const archivedSeen = new Map();
 export function archived(th) {
+  const mark = S.threadMeta && S.threadMeta[th], n = S.threads.get(th)?.posts.length ?? -1, min = Math.floor(Date.now() / 6e4), k = archivedSeen.get(th);
+  if (k && k.mark === mark && k.n === n && k.min === min) return k.v;
+  const v = archivedNow(th); archivedSeen.set(th, { mark, n, min, v }); return v;
+}
+function archivedNow(th) {
   const m = meta(th), d = S.threads.get(th); if (m.pin) return false;
   let a = m.archived;
   if (!a) {

@@ -157,8 +157,11 @@ def logins():
 def calls(since=None):
     """Yield dict per model call, deduped by message id, in session order."""
     runs = load_runs()
+    mains = [m for login in logins() for m in glob.glob(os.path.join(login, "projects", "*", "*.jsonl"))]
+    copies = collections.Counter(os.path.basename(m) for m in mains)
+    counted = collections.defaultdict(set)  # session -> message ids already yielded, only for a session stored on more than one login (moved between logins: same messages in each copy)
     for login in logins():
-        for main in glob.glob(os.path.join(login, "projects", "*", "*.jsonl")):
+        for main in (m for m in mains if m.startswith(os.path.join(login, "projects") + os.sep)):
             session = os.path.basename(main)[:-6]
             files = [main] + sorted(glob.glob(os.path.join(main[:-6], "subagents", "*.jsonl")))
             if since and max(os.path.getmtime(f) for f in files) < since.timestamp():
@@ -183,6 +186,9 @@ def calls(since=None):
                         if not m.get("usage"):
                             continue
                         msgs[m.get("id") or d.get("uuid")] = (d.get("timestamp") or "", m.get("model"), m["usage"], d.get("cwd"), d.get("gitBranch"), f != main)
+            if copies[os.path.basename(main)] > 1:
+                msgs = {k: v for k, v in msgs.items() if k not in counted[session]}
+                counted[session].update(msgs)
             rs = runs.get(session, [])
             last, lastboard = None, {}
             for ts, model, u, cwd, branch, sub in sorted(msgs.values(), key=lambda r: r[0]):

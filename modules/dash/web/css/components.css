@@ -32,15 +32,15 @@
 .top-status{margin-left:auto;display:flex;align-items:center;gap:6px;white-space:nowrap;min-width:0}
 .top-status>span{display:inline-flex;align-items:center;gap:7px;height:28px;padding:0 10px;border:1px solid var(--line);border-radius:var(--r-pill);background:var(--surface);color:var(--ink-2);font-size:var(--fs-meta);font-weight:var(--w-med)}
 .top-status>span b{color:var(--ink);font-weight:var(--w-bold)}
-.top-status>span[data-tone=bad]{color:var(--bad-ink);border-color:color-mix(in oklch,var(--bad) 35%,var(--line))}
+.top-status>span[data-tone=bad]{color:var(--bad-ink);border-color:color-mix(in oklab,var(--bad) 35%,var(--line))}
 .top-ring{width:16px;height:16px;flex:none}                                  /* NEW: week used, as a ring */
 .top-logins{display:inline-flex;align-items:flex-end;gap:2px;height:14px}    /* NEW: dev, one mark per login */
 .top-logins>i{width:4px;border-radius:1px;background:var(--ink-2)}
 .top-logins>i[data-tone]{background:var(--c)}
 .top-route{font-size:var(--fs-meta);color:var(--ink-3)}
 .top-route[data-mode]{padding:2px var(--s2);border-radius:999px;border:1px solid var(--line);white-space:nowrap}
-.top-route[data-mode=limited]{color:var(--warn-ink);background:color-mix(in oklch,var(--warn) 22%,transparent);border-color:var(--warn);font-weight:var(--w-bold);text-decoration:none}
-a.top-route[data-mode=limited]:hover{background:color-mix(in oklch,var(--warn) 35%,transparent)}
+.top-route[data-mode=limited]{color:var(--warn-ink);background:color-mix(in oklab,var(--warn) 22%,transparent);border-color:var(--warn);font-weight:var(--w-bold);text-decoration:none}
+a.top-route[data-mode=limited]:hover{background:color-mix(in oklab,var(--warn) 35%,transparent)}
 .top-sub{display:none}
 .top-icons{display:flex;align-items:center;gap:2px;margin-left:4px}        /* NEW: settings, more, theme, full screen */
 .top-in .fs,.theme{align-self:center}
@@ -102,11 +102,11 @@ a.top-route[data-mode=limited]:hover{background:color-mix(in oklch,var(--warn) 3
 .more-m>.more-h:not(:first-child){margin-top:4px;border-top:1px solid var(--line);padding-top:8px}
 .more-m>.menu-sep+.more-h{border-top:0;margin-top:0;padding-top:4px}   /* Look has its own separator: one rule, not two */
 /* ---- band: the hive has stopped, in words, under the bar ---- */
-.band{display:flex;align-items:center;gap:8px;padding:6px var(--s4);border-top:1px solid var(--line);background:color-mix(in oklch,var(--bad) 9%,var(--surface));font-size:var(--fs-small);color:var(--ink)}
+.band{display:flex;align-items:center;gap:8px;padding:6px var(--s4);border-top:1px solid var(--line);background:color-mix(in oklab,var(--bad) 9%,var(--surface));font-size:var(--fs-small);color:var(--ink)}
 .band>span:not(.st){flex:1;min-width:0;text-wrap:pretty}
 .band>.st{flex:none}
 @container (max-width:640px){.band{padding:6px 12px;align-items:flex-start;font-size:var(--fs-meta)}.band>.st{margin-top:4px}.more-m{position:fixed;left:8px;right:8px;top:46px;min-width:0}}
-.band{display:flex;align-items:center;gap:10px;padding:10px var(--s4);border-top:1px solid var(--line);background:color-mix(in oklch,var(--bad) 7%,var(--surface));font-size:var(--fs-small);color:var(--ink)}
+.band{display:flex;align-items:center;gap:10px;padding:10px var(--s4);border-top:1px solid var(--line);background:color-mix(in oklab,var(--bad) 7%,var(--surface));font-size:var(--fs-small);color:var(--ink)}
 .page[data-width=narrow]{max-width:var(--page-narrow,1040px)}
 
 
@@ -176,18 +176,18 @@ a.top-route[data-mode=limited]:hover{background:color-mix(in oklch,var(--warn) 3
 
 /* ---- statusDot + statusLabel ---- */
 .st{display:inline-block;width:8px;height:8px;flex:none;border-radius:50%;background:var(--c,var(--quiet))}   /* R7: the shape comes from the tone */
-.st[data-tone=good]{box-shadow:0 0 0 3px color-mix(in oklch,var(--good) 22%,transparent)}
+.st[data-tone=good]{box-shadow:0 0 0 3px color-mix(in oklab,var(--good) 22%,transparent)}
 .st[data-tone=warn]{background:conic-gradient(var(--warn) 0 50%,transparent 0);border:1.5px solid var(--warn);transform:rotate(45deg)}
 .st[data-tone=quiet]{background:transparent;border:1.5px solid var(--quiet)}
 .st[data-tone=bad]{border-radius:0;width:10px;height:9px;clip-path:polygon(50% 0,100% 100%,0 100%)}
 .st[data-tone=info]{border-radius:1px;width:8px;height:8px;transform:rotate(45deg)}
 .st[data-tone=ended]{border-radius:1px;height:2px;width:9px}
 .st[data-live]{animation:breathe 2.4s ease-in-out infinite}
-@keyframes breathe{50%{box-shadow:0 0 0 5px color-mix(in oklch,var(--good) 8%,transparent)}}
+@keyframes breathe{50%{box-shadow:0 0 0 5px color-mix(in oklab,var(--good) 8%,transparent)}}
 @media (prefers-reduced-motion:reduce){.st[data-live]{animation:none}}
 .wm{position:relative;display:inline-block;flex:none;width:10px;height:11px;background:var(--warden);clip-path:polygon(50% 0,100% 25%,100% 75%,50% 100%,0 75%,0 25%)}
-.wm::after{content:"";position:absolute;inset:1.6px;background:color-mix(in oklch,var(--warden) 16%,var(--surface));clip-path:inherit}
-.wb{display:inline-flex;align-items:center;gap:5px;margin-left:var(--s2);padding:1px 8px;border-radius:999px;font-size:var(--fs-meta);font-weight:var(--w-med);letter-spacing:0;color:var(--warden);background:color-mix(in oklch,var(--warden) 12%,transparent);vertical-align:middle}
+.wm::after{content:"";position:absolute;inset:1.6px;background:color-mix(in oklab,var(--warden) 16%,var(--surface));clip-path:inherit}
+.wb{display:inline-flex;align-items:center;gap:5px;margin-left:var(--s2);padding:1px 8px;border-radius:999px;font-size:var(--fs-meta);font-weight:var(--w-med);letter-spacing:0;color:var(--warden);background:color-mix(in oklab,var(--warden) 12%,transparent);vertical-align:middle}
 .sw{display:inline-flex;align-items:center;gap:6px;font-size:var(--fs-meta);font-weight:var(--w-med);color:var(--ci,var(--ink-2));white-space:nowrap;min-width:0}
 .sw>span{overflow:hidden;text-overflow:ellipsis}
 
@@ -228,18 +228,18 @@ a.top-route[data-mode=limited]:hover{background:color-mix(in oklch,var(--warn) 3
 .btn.btn-stop{border:1px solid var(--line-2);border-radius:var(--r-pill);color:var(--ink-2)}
 .btn.btn-stop svg path{fill:currentColor;stroke:none}
 .btn.btn-stop[data-size=s] svg{width:14px;height:14px}
-.btn.btn-stop:hover{color:var(--bad-ink);border-color:color-mix(in oklch,var(--bad) 55%,var(--line-2));background:color-mix(in oklch,var(--bad) 10%,transparent)}
-.btn[data-kind=danger]{background:var(--surface);border-color:color-mix(in oklch,var(--bad) 40%,var(--line-2));color:var(--bad-ink)}  /* was filled red */
-.btn[data-kind=danger]:hover{background:color-mix(in oklch,var(--bad) 8%,var(--surface))}
+.btn.btn-stop:hover{color:var(--bad-ink);border-color:color-mix(in oklab,var(--bad) 55%,var(--line-2));background:color-mix(in oklab,var(--bad) 10%,transparent)}
+.btn[data-kind=danger]{background:var(--surface);border-color:color-mix(in oklab,var(--bad) 40%,var(--line-2));color:var(--bad-ink)}  /* was filled red */
+.btn[data-kind=danger]:hover{background:color-mix(in oklab,var(--bad) 8%,var(--surface))}
 .btn[data-tone]{color:var(--ci)}
 .btn:disabled{opacity:.4;cursor:not-allowed}
 /* R7: the rest of the family (danger-solid, accent), focus and open states, the aria-busy spinner (label kept for width) */
 .btn:active{transform:translateY(.5px)}
 .btn:focus-visible{outline:none;box-shadow:var(--ring)}
 .btn[data-kind=danger-solid]{background:var(--bad);border-color:var(--bad);color:#fff}
-.btn[data-kind=danger-solid]:hover{background:color-mix(in oklch,var(--bad) 88%,#000)}
+.btn[data-kind=danger-solid]:hover{background:color-mix(in oklab,var(--bad) 88%,#000)}
 .btn[data-kind=accent]{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}
-.btn[data-kind=accent]:hover{background:color-mix(in oklch,var(--accent) 88%,#000)}
+.btn[data-kind=accent]:hover{background:color-mix(in oklab,var(--accent) 88%,#000)}
 .btn[data-kind=icon][aria-pressed=true],.btn[aria-expanded=true]{background:var(--hover);color:var(--ink)}
 .btn[data-kind=primary][aria-expanded=true]{background:var(--ink);color:var(--on-ink)}
 .btn[aria-busy=true]{position:relative;color:transparent!important;cursor:progress}
@@ -261,7 +261,7 @@ a.top-route[data-mode=limited]:hover{background:color-mix(in oklch,var(--warn) 3
 .input:hover{border-color:color-mix(in oklch,var(--ink-3) 60%,var(--line-2))}
 .input:focus-visible{outline:none;border-color:var(--focus);box-shadow:0 0 0 3px var(--accent-bg)}
 textarea.input{height:auto;min-height:72px;padding:8px 10px;resize:vertical;line-height:var(--lh)}
-select.input{padding-right:28px}
+select.input{padding-right:28px;appearance:none;background-image:linear-gradient(45deg,transparent 50%,var(--ink-3) 50%),linear-gradient(135deg,var(--ink-3) 50%,transparent 50%);background-size:5px 5px;background-position:right 14px center,right 9px center;background-repeat:no-repeat}
 
 /* ---- stats: a strip of figures with hairlines between (no boxes) ---- */
 .stats{display:grid;grid-template-columns:repeat(auto-fill,minmax(178px,1fr));overflow:hidden;margin:0 0 0 calc(-1 * var(--s4))}
@@ -551,7 +551,7 @@ table.tbl .clip{width:100%;max-width:0;overflow:hidden;text-overflow:ellipsis}
 .lg-q{color:var(--ink-2)}
 .lg-r[data-kind=trouble] .lg-b{color:var(--bad-ink)}
 .lg-r[data-fresh]{animation:lg-fresh 2.5s ease-out}
-@keyframes lg-fresh{from{background:color-mix(in oklch,var(--good) 22%,transparent)}to{background:transparent}}
+@keyframes lg-fresh{from{background:color-mix(in oklab,var(--good) 22%,transparent)}to{background:transparent}}
 @media (prefers-reduced-motion:reduce){.lg-r[data-fresh]{animation:none}}
 @container (max-width:640px){.lg-r{flex-wrap:wrap;gap:0 var(--s2);padding:6px 0}.lg-b{white-space:normal;width:100%;overflow-wrap:anywhere}.lg-b .ref{max-width:calc(100% - 4px)}}
 
@@ -601,7 +601,7 @@ ul.plain{margin:0;padding-left:1.2em;display:grid;gap:var(--s2)}
 .feed-k{flex:none;padding:0 6px;border-radius:var(--r-s);font-size:var(--fs-micro);font-weight:var(--w-bold);line-height:1.5;color:var(--ink-2);background:var(--sunken);white-space:nowrap}
 .feed-k[data-said]{background:none;color:var(--ink-3)}   /* tool chips are categories, not statuses (handoff CSS 5) */
 .feed-x{min-width:0;font-family:var(--mono);color:var(--ink-2)}
-.feed-r[data-said] .feed-x{font-family:var(--font);font-size:var(--fs-small);color:var(--ink);white-space:pre-wrap;border-left:2px solid var(--info);padding-left:var(--s2)}
+.feed-r[data-said] .feed-x{font-family:var(--font);font-size:var(--fs-small);color:var(--ink);white-space:pre-wrap}
 
 /* ---- ego: its corner of the hive, on the graph engine, in a page that scrolls ---- */
 .ego-stage{position:relative;min-width:0}
@@ -622,8 +622,6 @@ ul.plain{margin:0;padding-left:1.2em;display:grid;gap:var(--s2)}
 /* A sheet (a view's own piece, e.g. a Flow lane's Work card) moves the page over by its width, like the file preview, so what was
    clicked and Flow's now line stay in view; an agent's page keeps floating over the view. Under 1000 px there is no room: it covers. */
 @media (min-width:1000px){body[data-panel=sheet] :is(#top,#main){margin-right:calc(min(var(--panel-w,640px),100% - 16px) + 16px)}}
-.agp .stats{gap:8px;margin:0;overflow:visible;grid-template-columns:repeat(auto-fill,minmax(150px,1fr))}
-.agp .stat{box-shadow:none;background:var(--sunken);border-radius:var(--r-m);padding:var(--s2) var(--s3) var(--s3)}
 
 /* ---- canvas template: toolbar, full-bleed stage, side pane (Mesh, Timeline) ---- */
 .cvp{display:flex;flex-direction:column;height:calc(100dvh - var(--bar-h));background:var(--surface)}
@@ -709,9 +707,9 @@ button.lr-in{width:calc(100% + 16px);border:0;background:none;text-align:left;fo
 .tl-cap[data-hollow]{fill:var(--surface);stroke:var(--c)}
 .tl-tick{fill:var(--ink);opacity:.6}
 .tl-tickhit{fill:transparent}
-.tl-sw{display:inline-block;width:22px;height:9px;border-radius:2px;vertical-align:-1px;margin-right:5px;background:color-mix(in oklch,var(--quiet) 30%,transparent);border:1px solid var(--quiet)}
+.tl-sw{display:inline-block;width:22px;height:9px;border-radius:2px;vertical-align:-1px;margin-right:5px;background:color-mix(in oklab,var(--good) 30%,transparent);border:1px solid var(--good)}
 .tl-sw[data-ended]{background:color-mix(in oklch,var(--quiet) 14%,transparent);border-style:dashed}
-.tl-sw[data-tone]{background:color-mix(in oklch,var(--c) 14%,transparent);border:1px dashed var(--c)}
+.tl-sw[data-tone]{background:color-mix(in oklab,var(--c) 14%,transparent);border:1px dashed var(--c)}
 
 
 /* ---- markdown: a post's text. Single line breaks are kept, as the board means them. ---- */
@@ -783,9 +781,9 @@ button.lr-in{width:calc(100% + 16px);border:0;background:none;text-align:left;fo
 .rc-code[data-wrap] .rc-lc{white-space:pre-wrap;overflow-wrap:anywhere}
 .rc-ln{display:table-cell;width:1%;padding:0 8px 0 10px;border:0;background:none;color:var(--ink-3);font:inherit;font-size:var(--fs-micro);text-align:right;white-space:nowrap;cursor:pointer;user-select:none;-webkit-user-select:none;font-variant-numeric:tabular-nums}
 .rc-ln:hover{color:var(--ink);background:var(--hover)}
-.rc-l[data-k=add] .rc-lc,.rc-l[data-k=add] .rc-ln{background:color-mix(in oklch,var(--good) 13%,transparent)}
-.rc-l[data-k=del] .rc-lc,.rc-l[data-k=del] .rc-ln{background:color-mix(in oklch,var(--bad) 12%,transparent)}
-.rc-l[data-k=hunk] .rc-lc{color:var(--info-ink);background:color-mix(in oklch,var(--info) 8%,transparent)}
+.rc-l[data-k=add] .rc-lc,.rc-l[data-k=add] .rc-ln{background:color-mix(in oklab,var(--good) 13%,transparent)}
+.rc-l[data-k=del] .rc-lc,.rc-l[data-k=del] .rc-ln{background:color-mix(in oklab,var(--bad) 12%,transparent)}
+.rc-l[data-k=hunk] .rc-lc{color:var(--info-ink);background:color-mix(in oklab,var(--info) 8%,transparent)}
 .rc-l[data-k=file] .rc-lc{font-weight:var(--w-bold)}
 .hl-k{color:light-dark(oklch(45% .16 305),oklch(76% .13 305))}
 .hl-s{color:light-dark(oklch(44% .11 155),oklch(79% .12 155))}
@@ -935,9 +933,9 @@ rc-lazy[data-mode=inline]{display:inline}
 .msg+.msg{margin-top:6px}
 .msg[data-cont]{margin-top:0;padding-top:1px}
 .msg[data-who=sys]{color:var(--ink-3);font-size:var(--fs-small)}
-.msg[data-who=me]{--mine:color-mix(in oklch,var(--info) 9%,var(--surface));display:flex;flex-direction:column;align-items:flex-end;padding:4px 0}
+.msg[data-who=me]{--mine:color-mix(in oklab,var(--info) 9%,var(--surface));display:flex;flex-direction:column;align-items:flex-end;padding:4px 0}
 .msg[data-who=me]>.msg-b,.msg[data-who=me]>.msg-q,.msg[data-who=me]>.msg-files{max-width:min(78%,620px)}
-.msg[data-who=me]>.msg-b{padding:7px 12px;border-radius:var(--r-l) var(--r-l) var(--r-s) var(--r-l);background:var(--mine);box-shadow:inset 0 0 0 1px color-mix(in oklch,var(--info) 14%,transparent)}
+.msg[data-who=me]>.msg-b{padding:7px 12px;border-radius:var(--r-l) var(--r-l) var(--r-s) var(--r-l);background:var(--mine);box-shadow:inset 0 0 0 1px color-mix(in oklab,var(--info) 14%,transparent)}
 .msg[data-who=me][data-cont]>.msg-b{border-top-right-radius:var(--r-s)}
 .msg[data-who=me]>.msg-h{justify-content:flex-end}
 .msg[data-who=me][data-state=failed]>.msg-b{box-shadow:inset 0 0 0 1px var(--bad)}
@@ -1095,7 +1093,7 @@ body[data-pv-full] :is(#top,#main){margin-right:0}
 .pf-row:hover,.pf-row:focus-visible{background:var(--sunken)}
 .pf-row .pv-badge{min-width:3.2em;text-align:center}
 @media (pointer:coarse),(max-width:640px){.pf-row{min-height:44px}}
-.pf-d .pv-badge{background:color-mix(in oklch,var(--accent) 14%,var(--sunken));color:var(--ink)}
+.pf-d .pv-badge{background:color-mix(in oklab,var(--accent) 14%,var(--sunken));color:var(--ink)}
 .pf-n{flex:1;min-width:0;display:flex;flex-direction:column;line-height:1.3}
 .pf-fn{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .pf-n>.meta{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:var(--fs-micro)}
@@ -1188,7 +1186,7 @@ body[data-pv-full] :is(#top,#main){margin-right:0}
 a.ref:is([data-kind=file],[data-kind=kbfile]){display:inline;font-weight:inherit;color:var(--ink);text-decoration:underline;text-decoration-color:var(--ink-3);text-underline-offset:2px;cursor:pointer}
 .md a.ref:is([data-kind=post],[data-kind=thread]){display:inline;font-weight:inherit;color:var(--ink);text-decoration:underline;text-decoration-color:var(--ink-3);text-underline-offset:2px}   /* a message or conversation named in a post: plainly a link (110821183442) */
 a.ref:is([data-kind=file],[data-kind=kbfile]):hover{text-decoration-color:var(--ink)}
-a.ref:is([data-kind=file],[data-kind=kbfile])[data-pv-on]{background:color-mix(in oklch,var(--accent) 16%,transparent);border-radius:var(--r-s)}
+a.ref:is([data-kind=file],[data-kind=kbfile])[data-pv-on]{background:color-mix(in oklab,var(--accent) 16%,transparent);border-radius:var(--r-s)}
 /* phone: a sheet from the bottom, over the nav bar */
 @media (max-width:700px){
   .pv{top:auto;left:0;right:0;bottom:0;width:100%;height:92dvh;border:1px solid var(--line);border-bottom:0;border-left:0;border-radius:20px 20px 0 0;z-index:51;overflow:hidden;animation:mn-up .18s ease-out;padding-bottom:env(safe-area-inset-bottom,0px)}
@@ -1215,7 +1213,7 @@ a.ref:is([data-kind=file],[data-kind=kbfile])[data-pv-on]{background:color-mix(i
 .cp-wavebox[data-state=starting]{opacity:.5}
 .cp-rtime{min-width:3.2em;padding:0 4px;font-variant-numeric:tabular-nums;text-align:right}
 .btn.cp-rec{color:var(--bad,#d33)}
-.cp-rec::after{content:"";position:absolute;inset:4px;border-radius:50%;box-shadow:0 0 0 0 color-mix(in oklch,var(--bad,#d33) 40%,transparent);animation:cp-recpulse 1.4s ease-out infinite;pointer-events:none}
+.cp-rec::after{content:"";position:absolute;inset:4px;border-radius:50%;box-shadow:0 0 0 0 color-mix(in oklab,var(--bad,#d33) 40%,transparent);animation:cp-recpulse 1.4s ease-out infinite;pointer-events:none}
 .cp-rec{position:relative}
 .cp-mic,.cp-rec{-webkit-touch-callout:none;user-select:none;-webkit-user-select:none;touch-action:manipulation}
 @keyframes cp-recpulse{to{box-shadow:0 0 0 8px transparent}}
@@ -1314,7 +1312,7 @@ a.ref:is([data-kind=file],[data-kind=kbfile])[data-pv-on]{background:color-mix(i
 .cm-st{font-weight:var(--w-med);color:var(--ci)}
 .cm-st[data-tone=ended]{color:var(--ink-3)}
 .cm-side-f{display:flex;align-items:center;justify-content:space-between;gap:var(--s2);padding:6px var(--s3);border-top:1px solid var(--line)}
-.cm mark{background:color-mix(in oklch,var(--warn) 40%,transparent);color:inherit;border-radius:2px}
+.cm mark{background:color-mix(in oklab,var(--warn) 40%,transparent);color:inherit;border-radius:2px}
 .cm-convo{position:relative;display:flex;flex-direction:column;min-width:0;min-height:0;background:var(--surface)}
 .cm-head{display:grid;gap:var(--s2);padding:14px var(--s4);border-bottom:1px solid var(--line);background:var(--surface)}
 .cm-tt{display:flex;flex-wrap:wrap;align-items:center;gap:4px var(--s3);min-width:0}
@@ -1417,7 +1415,7 @@ a.ref:is([data-kind=file],[data-kind=kbfile])[data-pv-on]{background:color-mix(i
 .cm-foci-msg p{margin:0;color:var(--ink-2);font-size:var(--fs-small);max-width:52ch}
 .cm-foci-msg[data-tone=bad] b{color:var(--bad-ink)}
 .fc{display:flex;flex-direction:column;gap:14px;min-width:0;padding:16px 16px 8px;border:1px solid var(--line);border-radius:var(--r-l);background:var(--surface)}
-.fc[data-needs]{border-color:color-mix(in oklch,var(--accent) 45%,var(--line))}
+.fc[data-needs]{border-color:color-mix(in oklab,var(--accent) 45%,var(--line))}
 .fc h3,.fc ol,.fc ul,.fc p{margin:0}
 .fc ol,.fc ul{padding:0;list-style:none}
 .fc-hd{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:6px 12px;align-items:start}
@@ -1432,14 +1430,14 @@ a.ref:is([data-kind=file],[data-kind=kbfile])[data-pv-on]{background:color-mix(i
 .pill .st{width:6px;height:6px}
 .pill .st[data-tone=good]{box-shadow:none}
 .pill.pill-more{background:none;box-shadow:none;padding:0 2px;font-weight:400;color:var(--ink-3);align-self:center}
-.fc-ask{margin:0 -6px;padding:8px 6px 6px;border-radius:var(--r-m);background:var(--accent-bg)}
+.fc-ask{margin:0 -6px;padding:8px 6px 6px;border-radius:var(--r-m)}
 .fc-ask-h{display:flex;align-items:center;gap:6px;padding:0 6px 4px;font-size:var(--fs-meta);font-weight:var(--w-bold);color:var(--accent-ink)}
 .fc-ask-h a{margin-left:auto;font-weight:var(--w-med)}
 .fc-ask-n{display:flex;align-items:center;gap:6px;padding:8px 12px;font-size:var(--fs-small)}
 .fc-ask-n a{color:var(--accent-ink)}
 .fc-ask-i{all:unset;box-sizing:border-box;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 10px;align-items:baseline;width:100%;min-height:36px;padding:6px;border-radius:var(--r-s);cursor:pointer}
 div.fc-ask-i{cursor:default}
-button.fc-ask-i:hover{background:color-mix(in oklch,var(--accent) 12%,transparent)}
+button.fc-ask-i:hover{background:color-mix(in oklab,var(--accent) 12%,transparent)}
 .fc-ask-i:focus-visible{box-shadow:inset 0 0 0 2px var(--focus)}
 .fc-ask-x{font-size:var(--fs-small);font-weight:var(--w-med);color:var(--ink);display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;overflow-wrap:anywhere}
 .fc-ask-in{grid-column:1;min-width:0;overflow-wrap:anywhere;font-size:var(--fs-meta);color:var(--ink-2)}
@@ -1459,7 +1457,7 @@ a.th{color:inherit;text-decoration:underline;text-decoration-color:var(--line-2)
 .fc-row:hover{background:var(--tint)}
 .fc-row b{font-weight:var(--w-med);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .fc-row .st{width:6px;height:6px;justify-self:center}
-.fc-row .st[data-tone=good]{box-shadow:0 0 0 2px color-mix(in oklch,var(--good) 22%,transparent)}
+.fc-row .st[data-tone=good]{box-shadow:0 0 0 2px color-mix(in oklab,var(--good) 22%,transparent)}
 .fc-ft{display:flex;align-items:center;gap:4px;margin:0 -8px;padding:4px 0 0 8px;border-top:1px solid var(--line)}
 .fc-ft>a{font-size:var(--fs-small);font-weight:var(--w-med);color:var(--ink-2);margin-right:auto}
 .fc-more{position:relative}
@@ -1604,7 +1602,7 @@ details.blk[open]>summary .blk-t::after{margin-bottom:-1px;transform:rotate(225d
 
 /* Deck: the DDJ-FLX4 remote. Cursor and hud sit outside the page, so morph leaves them alone. */
 .top-deck{align-self:center;font-size:var(--fs-meta);padding:1px 8px;border-radius:var(--r-s);color:var(--ink-3);text-decoration:none;white-space:nowrap}
-.top-deck[data-on]{color:var(--good-ink);background:color-mix(in oklch,var(--good) 14%,transparent)}
+.top-deck[data-on]{color:var(--good-ink);background:color-mix(in oklab,var(--good) 14%,transparent)}
 .top-deck[data-armed]{color:var(--on-ink);background:var(--bad);font-weight:var(--w-bold)}
 .deck-cursor{position:fixed;z-index:55;pointer-events:none;border:2px solid var(--info,var(--ink));border-radius:var(--r-s);transition:left .07s,top .07s,width .07s,height .07s}
 .deck-cursor[data-armed]{border-color:var(--bad)}
@@ -1666,8 +1664,7 @@ details.blk[open]>summary .blk-t::after{margin-bottom:-1px;transform:rotate(225d
 .blk-t{grid-column:1;font-size:var(--fs-body);font-weight:var(--w-med)}
 .blk-s{grid-column:1;font-size:var(--fs-meta);color:var(--ink-3);line-height:1.45}
 .blk-a{grid-column:2;grid-row:1 / span 2;display:flex;gap:var(--s2);align-items:center}
-.blk-a .input{width:240px}
-.blk-a select.input{width:auto}   /* a choice is as wide as its words */
+.blk-a .input,.blk-a select.input{width:200px}   /* one width for both, so a column of settings lines up */
 @media (max-width:640px){.blk-h{grid-template-columns:minmax(0,1fr)}.blk-a{grid-column:1;grid-row:auto;flex-wrap:wrap;margin-top:var(--s2);margin-left:0}.blk-a .input{width:100%!important}}   /* phone: the control goes under the words, not beside a 90 px column of them */
 .blk-b{display:grid;gap:var(--s3);margin-top:var(--s3);font-size:var(--fs-small)}
 .blk-save{display:flex;align-items:center;gap:var(--s2);padding:12px 20px;border-top:1px solid var(--line);background:var(--bg);font-size:var(--fs-meta);color:var(--ink-3)} /* NEW use: the footer of a group of text fields */
@@ -1872,7 +1869,7 @@ details.blk>summary .blk-t::after{border-color:var(--ink-3)}
 /* ===== agents (Now) cards — replaces .ac rules ===== */
 .agents{grid-template-columns:repeat(auto-fill,minmax(min(100%,300px),1fr));gap:var(--s4)}
 .ac{display:grid;gap:10px;padding:var(--s4) var(--s5);border:1px solid var(--line);border-radius:var(--r-l);background:var(--surface)}
-.ac[data-attn]{border-color:color-mix(in oklch,var(--accent) 35%,var(--line))}
+.ac[data-attn]{border-color:color-mix(in oklab,var(--accent) 35%,var(--line))}
 .ac-dl,.ac-f{display:none}            /* consumer: Asked / Said / model line fold behind the card's link to the agent page */
 :root[data-dev] .ac{padding:var(--s3) var(--s4)}
 :root[data-dev] .ac-dl,:root[data-dev] .ac-f{display:revert}
@@ -1957,7 +1954,7 @@ details.blk>summary .blk-t::after{border-color:var(--ink-3)}
 .tour-w [hidden]{display:none}
 .tour-ring{position:fixed;z-index:61;pointer-events:none;border:2px solid var(--info);border-radius:var(--r-m);animation:tour-pulse 1.2s ease-in-out infinite}
 .tour-ring[hidden]{display:none}
-@keyframes tour-pulse{50%{box-shadow:0 0 0 5px color-mix(in oklch,var(--info) 30%,transparent)}}
+@keyframes tour-pulse{50%{box-shadow:0 0 0 5px color-mix(in oklab,var(--info) 30%,transparent)}}
 @media (prefers-reduced-motion:reduce){.tour-ring{animation:none}}
 
 /* Agents: every agent, one row; the headers sort. Grid rows (.tbl .tr, one --cols set in views/agents.js), R7 step 6 */
@@ -2131,7 +2128,7 @@ dialog.fb::backdrop{background:rgb(0 0 0 / .38)}
 .set-logo{height:40px;max-width:120px;margin-right:0}
 /* /btw aside: a plain transcript above the composer, no boxes */
 /* The /btw side question (the person, 11040212d0e1): a card as wide as the composer, its own header row */
-.ba{display:grid;grid-template-columns:minmax(0,1fr);min-width:0;gap:8px;max-width:var(--chat-col);width:calc(100% - 2 * var(--s5));margin:0 auto var(--s2);padding:10px 12px;border-radius:var(--r-l);background:var(--accent-bg);box-shadow:inset 0 0 0 1px color-mix(in oklch,var(--accent) 35%,transparent);font-size:var(--fs-small);box-sizing:border-box}
+.ba{display:grid;grid-template-columns:minmax(0,1fr);min-width:0;gap:8px;max-width:var(--chat-col);width:calc(100% - 2 * var(--s5));margin:0 auto var(--s2);padding:10px 12px;border-radius:var(--r-l);background:var(--accent-bg);box-shadow:inset 0 0 0 1px color-mix(in oklab,var(--accent) 35%,transparent);font-size:var(--fs-small);box-sizing:border-box}
 .ba-top{display:flex;align-items:baseline;gap:10px;min-width:0}
 .ba-h{font-weight:600;color:var(--ink);flex:none}
 .ba-top>.meta{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -2174,6 +2171,7 @@ dialog.fb::backdrop{background:rgb(0 0 0 / .38)}
 .nowtbl .nt-a{font-weight:var(--w-med)}
 .nowtbl .nt-th{overflow:hidden;text-overflow:ellipsis}
 .nowtbl .nt-th .ref{display:flex;max-width:100%}
+:root:not([data-dev]) .nowtbl :has(>.nt-do)>.lead .st{display:none}   /* consumer: the State column carries the one mark; an agent can be "working" here while the row waits on you */
 .nowtbl .nt-st{color:var(--ink-2)}
 .nowtbl .tr[data-tone=good] .nt-st{color:var(--good)}
 .nowtbl .tr[data-attn] .nt-st{color:var(--bad)}
@@ -2188,6 +2186,22 @@ dialog.fb::backdrop{background:rgb(0 0 0 / .38)}
   .nowtbl.tg>.tb>.tr>.num[data-label]{position:absolute;top:10px;right:0;padding-left:0;width:auto}   /* the time sits beside the name, not on a line of its own */
   .nowtbl.tg>.tb>.tr>.num[data-label]::before{display:none}
   .nowtbl .nt-now,.nowtbl .nt-ask{white-space:normal}
+  /* a running agent is three lines on a phone: who, state, model and time; what it is doing; the conversation and Stop. Words carry it, so no field labels */
+  .nowtbl.tg>.tb>.tr:has(>.nt-do){display:flex;flex-wrap:wrap;align-items:baseline;column-gap:var(--s2)}
+  .nowtbl.tg>.tb>.tr:has(>.nt-do)>[data-label]{padding-left:0}
+  .nowtbl.tg>.tb>.tr:has(>.nt-do)>[data-label]::before{display:none}
+  .nowtbl.tg>.tb>.tr:has(>.nt-do)>.lead{order:1;padding-right:0}
+  .nowtbl.tg>.tb>.tr:has(>.nt-do)>.nt-st{order:2}
+  .nowtbl.tg>.tb>.tr:has(>.nt-do)>.nt-md{order:3}
+  .nowtbl.tg>.tb>.tr:has(>.nt-do)>.nt-md[data-label]::before{content:"· ";display:inline;position:static}
+  .nowtbl.tg>.tb>.tr:has(>.nt-do)>.num[data-label]{order:4;position:static;margin-left:auto}
+  .nowtbl.tg>.tb>.tr:has(>.nt-do)>.nt-do{order:5;flex:1 0 100%;min-width:0}
+  .nowtbl.tg>.tb>.tr:has(>.nt-do)>.nt-th{order:6;flex:1 1 calc(100% - 52px);min-width:0;font-size:var(--fs-meta);color:var(--ink-3)}
+  .nowtbl.tg>.tb>.tr:has(>.nt-do)>.nt-th .ref{justify-content:flex-start;font-weight:400;color:inherit}
+  .nowtbl.tg>.tb>.tr:has(>.nt-do)>.lead .st{display:none}   /* the state beside it already carries the dot */
+  .nowtbl.tg>.tb>.tr:has(>.nt-do)>.nt-x{order:7;margin-left:auto;align-self:center}
+  .nowtbl.tg>.tb>.tr:has(>.nt-do)>.nt-x>.btn{width:40px;height:40px;min-width:40px;padding:0}
+  .nowtbl.tg>.tb>.tr:has(>.nt-do)>.nt-x>.btn:first-child:not(:last-child){display:none}
 }
 
 .brand-hex{width:34px;height:34px;margin-right:var(--s2)}
@@ -2198,8 +2212,8 @@ dialog.fb::backdrop{background:rgb(0 0 0 / .38)}
 .tm-chip{display:inline-flex;align-items:center;gap:6px;height:26px;padding:0 10px;border:1px solid var(--line-2);border-radius:var(--r-pill);background:none;color:var(--ink-3);font:inherit;font-size:var(--fs-meta);font-weight:var(--w-med);cursor:pointer}
 .tm-chip:hover{background:var(--hover);color:var(--ink)}
 /* on vs off at a glance (110401319d61): on is filled with a check, off is an empty ring in grey text */
-.tm-chip[aria-pressed=true]{background:color-mix(in oklch,var(--accent) 13%,transparent);border-color:color-mix(in oklch,var(--accent) 45%,transparent);color:var(--ink)}
-.tm-chip[aria-pressed=true]:hover{background:color-mix(in oklch,var(--accent) 20%,transparent)}
+.tm-chip[aria-pressed=true]{background:color-mix(in oklab,var(--accent) 13%,transparent);border-color:color-mix(in oklab,var(--accent) 45%,transparent);color:var(--ink)}
+.tm-chip[aria-pressed=true]:hover{background:color-mix(in oklab,var(--accent) 20%,transparent)}
 .tm-chip i{position:relative;width:12px;height:12px;border-radius:50%;border:1.5px solid var(--line-2);flex:none}
 .tm-chip[aria-pressed=true] i{background:var(--accent);border-color:var(--accent)}
 .tm-chip[aria-pressed=true] i::after{content:"";position:absolute;left:3.2px;top:1px;width:3px;height:6px;border:solid var(--on-accent,#fff);border-width:0 1.5px 1.5px 0;transform:rotate(45deg)}
@@ -2227,7 +2241,7 @@ dialog.fb::backdrop{background:rgb(0 0 0 / .38)}
 :root[data-dev] .msg[data-show=comms]>.msg-h::after{content:none}
 
 /* the "Open for you" card, above the composer */
-.tm-card{max-width:var(--chat-col);width:calc(100% - 2 * var(--s5));margin:var(--s2) auto var(--s2);padding:10px 12px;border-radius:var(--r-l);background:var(--accent-bg);box-shadow:inset 0 0 0 1px color-mix(in oklch,var(--accent) 35%,transparent);font-size:var(--fs-small)}
+.tm-card{max-width:var(--chat-col);width:calc(100% - 2 * var(--s5));margin:var(--s2) auto var(--s2);padding:10px 12px;border-radius:var(--r-l);background:var(--accent-bg);box-shadow:inset 0 0 0 1px color-mix(in oklab,var(--accent) 35%,transparent);font-size:var(--fs-small)}
 .tm-card-h{display:flex;align-items:center;gap:8px;color:var(--accent-ink)}
 .tm-card-h .ic{width:16px;height:16px}
 .tm-card-h .meta{color:var(--ink-3)}
@@ -2541,7 +2555,7 @@ text.map-ring-t{font-size:var(--fs-micro);font-weight:var(--w-med);fill:var(--in
 .pv-md>.md strong{font-weight:var(--w-bold,700)}
 @media print{.pv,.pv-grip,#top{display:none}}
 /* ---- brought up for you: threads an agent raised with `hive show`, in the Chat side list over Conversations ---- */
-.brought{display:grid;gap:4px;min-width:0;margin-top:8px;padding:8px;border-radius:var(--r-m);background:color-mix(in oklch,var(--accent,var(--ink)) 8%,var(--surface));font-size:var(--fs-small)}
+.brought{display:grid;gap:4px;min-width:0;margin-top:8px;padding:8px;border-radius:var(--r-m);background:color-mix(in oklab,var(--accent,var(--ink)) 8%,var(--surface));font-size:var(--fs-small)}
 .brought-h{padding:0 2px;font-size:var(--fs-meta);font-weight:var(--w-med);color:var(--ink-2)}
 .brought-r{position:relative;display:grid;min-width:0}
 .brought-x{position:absolute;top:2px;right:2px}
@@ -2741,12 +2755,12 @@ button.fl-rn:hover{text-decoration:underline}
 .fl-lane[data-card]:hover .fl-name{text-decoration:underline}
 .fl-name[role=button]:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
 .wk-sheet{padding:var(--s3) var(--s3) var(--s5)}   /* the card alone, in the panel */
-.fl-bar{fill:color-mix(in oklch,var(--info) 24%,transparent);stroke:var(--info);stroke-width:1}
-.fl-bar[data-live]{fill:color-mix(in oklch,var(--good) 32%,transparent);stroke:var(--good);stroke-width:1.5}
+.fl-bar{fill:color-mix(in oklab,var(--info) 24%,transparent);stroke:var(--info);stroke-width:1}
+.fl-bar[data-live]{fill:color-mix(in oklab,var(--good) 32%,transparent);stroke:var(--good);stroke-width:1.5}
 .fl-hit:hover .fl-bar{stroke-width:2}
 .fl-hand{fill:var(--surface);stroke:var(--info);stroke-width:1}
 .fl-wait{fill:transparent;stroke:var(--warn);stroke-width:1.2;stroke-dasharray:3 2}
-.fl-wait[data-open]{fill:color-mix(in oklch,var(--warn) 14%,transparent)}
+.fl-wait[data-open]{fill:color-mix(in oklab,var(--warn) 14%,transparent)}
 .fl-wait[data-stale]{opacity:.55}
 .ag-onage{white-space:nowrap}
 .fl-dec{fill:var(--warn);stroke:var(--surface);stroke-width:1}
@@ -2762,7 +2776,7 @@ button.fl-rn:hover{text-decoration:underline}
 .fl-hit:focus-visible rect,.fl-hit:focus-visible path{outline:2px solid var(--focus)}
 .fl-legend{display:inline-flex;align-items:center;gap:var(--s1);flex-wrap:wrap}
 .fl-k{display:inline-block;width:14px;height:8px;border-radius:2px;vertical-align:middle}
-.fl-k-run{background:color-mix(in oklch,var(--info) 24%,transparent);border:1px solid var(--info)}
+.fl-k-run{background:color-mix(in oklab,var(--info) 24%,transparent);border:1px solid var(--info)}
 .fl-k-hand{width:8px;height:8px;transform:rotate(45deg);background:var(--surface);border:1px solid var(--info)}
 .fl-k-wait{border:1px dashed var(--warn)}
 .fl-k-dec{width:8px;height:8px;transform:rotate(45deg);background:var(--warn)}
@@ -2862,12 +2876,12 @@ button.fl-rn:hover{text-decoration:underline}
 .fp-h>a{margin-left:auto;font-size:var(--fs-small)}
 .fp-side .fp-h h2{font-size:var(--fs-small)}
 /* Needs you first: the accent block, each row answerable in place */
-.fp-needs{border:1px solid color-mix(in oklch,var(--accent) 40%,var(--line));border-radius:var(--r-l);background:var(--accent-bg);padding:12px 8px 6px}
+.fp-needs{border:1px solid color-mix(in oklab,var(--accent) 40%,var(--line));border-radius:var(--r-l);background:var(--accent-bg);padding:12px 8px 6px}
 .fp-needs .fp-h{padding:0 8px 4px}
 .fp-needs .fp-h h2{color:var(--accent-ink)}
 .fp-ask{all:unset;box-sizing:border-box;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:3px 16px;align-items:center;width:100%;min-height:52px;padding:10px 8px;border-radius:var(--r-m);cursor:pointer}
-.fp-ask+.fp-ask{box-shadow:0 -1px 0 color-mix(in oklch,var(--accent) 22%,transparent)}
-.fp-ask:hover{background:color-mix(in oklch,var(--accent) 10%,var(--surface))}
+.fp-ask+.fp-ask{box-shadow:0 -1px 0 color-mix(in oklab,var(--accent) 22%,transparent)}
+.fp-ask:hover{background:color-mix(in oklab,var(--accent) 10%,var(--surface))}
 .fp-ask:focus-visible{box-shadow:inset 0 0 0 2px var(--focus)}
 .fp-ask[aria-expanded=true]{background:var(--surface);box-shadow:inset 3px 0 0 var(--accent)}
 .fp-ask-x{font-size:var(--fs-body);font-weight:var(--w-med);color:var(--ink);overflow-wrap:anywhere;text-wrap:pretty}
@@ -3324,3 +3338,10 @@ kbd.menu-i-r{font-family:inherit;font-size:var(--fs-meta)}
 .cm-show-m .cm-hidefaded[aria-pressed] i::after{top:2px;left:2px;width:12px;height:12px;border:0!important;border-radius:50%;transform:none;background:var(--surface)}
 .cm-show-m .cm-hidefaded[aria-pressed=true] i::after{left:12px;background:var(--on-ink)}
 @media (max-width:640px){.rw-log{max-height:14rem}}
+
+/* ===== R-1110c-a: consumer Now on desktop reads as a list, not a console ===== */
+:root:not([data-dev]) .nowtbl.tg>.th{position:absolute!important;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);padding:0;white-space:nowrap}   /* heads stay for screen readers */
+@media (hover:hover){
+  :root:not([data-dev]) .nowtbl .tr .nt-x>*{opacity:0}
+  :root:not([data-dev]) .nowtbl .tr:hover .nt-x>*,:root:not([data-dev]) .nowtbl .tr:focus-within .nt-x>*{opacity:1}
+}

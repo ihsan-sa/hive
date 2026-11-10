@@ -91,7 +91,7 @@ function sessionPart(v, ctx) {
 
 // Designs as cards, newest first: a name worth reading (its brief, else the thread it was made for), where it came from, and Open.
 const designName = l => l.brief || (l.by ? `Design for ${l.by}` : "Untitled design");
-const linksPart = (v, ctx) => v.links && v.links.length ? section({ title: "Your designs", note: "only you can open them until you share them; export to PNG or PDF from a design's page", key: "links" },
+const linksPart = (v, ctx) => v.links && v.links.length ? section({ fold: innerWidth < 640, title: "Your designs", note: "only you can open them until you share them; export to PNG or PDF from a design's page", key: "links" },
   h("ul", { class: "list dcards" }, [...v.links].sort((a, b) => (b.at || 0) - (a.at || 0)).map(l => { const url = /^https:\/\//.test(l.url) ? l.url : "#";
     return h("li", { class: "dcard", "data-key": l.url },
       h("a", { class: "dcard-a", href: url, target: "_blank", rel: "noreferrer noopener" },

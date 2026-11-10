@@ -21,10 +21,12 @@ export function dur(ms) {
 }
 export const secs = s => (s < 60 ? Math.round(s) + "s" : dur(s * 1e3));
 export const untilText = ms => (ms <= 0 ? "now" : dur(ms));
-export const clock = t => new Date(t).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-export const dayName = t => new Date(t).toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" });
+// One formatter each: toLocale*String builds a new one per call, about a millisecond on a loaded machine, and a long list calls these once per row. A bad date still reads "Invalid Date", where format() would throw.
+const fmt = o => { const f = new Intl.DateTimeFormat([], o); return t => { const d = new Date(t); return isNaN(d) ? "Invalid Date" : f.format(d); }; };
+export const clock = fmt({ hour: "numeric", minute: "2-digit" });
+export const dayName = fmt({ weekday: "short", month: "short", day: "numeric" });
 export const stamp = t => dayName(t) + " " + clock(t);
-export const hourLabel = t => new Date(t).toLocaleTimeString([], { hour: "numeric" });
+export const hourLabel = fmt({ hour: "numeric" });
 export function short(s, n) { s = String(s || "").replace(/\s+/g, " ").trim(); return s.length <= n ? s : s.slice(0, n - 1) + "…"; }
 export const money = c => (c == null ? "–" : c >= 100 ? "$" + Math.round(c).toLocaleString() : "$" + c.toFixed(c < 10 ? 2 : 1));
 export const money$ = v => (v == null ? "?" : v > 0 && v < 0.01 ? "<$0.01" : "$" + (v < 10 ? v.toFixed(2) : v.toFixed(0)));

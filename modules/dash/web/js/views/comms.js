@@ -12,7 +12,7 @@ import { simpleOn, plainName, hiveName } from "../core/simple.js";
 import { loadNeedsYou, needsKnown, needsN, needsSplit, needsHref, waitsOn, waitingOn, waitingNow, waitingOlder } from "../core/needs.js";
 import { loadFoci, fociFailed, fociOrder, focusOf, focusById, activeThreads, askedOf, needAt, agentsOf, stateOf, pills, plainPills, needSource, isCode, scrub, codePill, railSay, railTitle, threadLine, focusName, MISC, activityOf, shareOf, fractionWords, pct, usd, needsOf, moveFocus, foci } from "../core/foci.js";
 import { newIn } from "./focus.js";
-import { SIDE_THREAD, chatText, agentState, agentStatus, btwParent, threadParent, threadChildren, isAgent, isRunning, tierOf, threadTitle, threadState, threadPeople, isSystemThread, SHOW, postKind, threadKinds, closingPosts, displayText, postSource, inUse, fresh7, asksQuestion, fileInfo } from "../core/model.js";
+import { SIDE_THREAD, agentLabel, labelCodes, chatText, agentState, agentStatus, btwParent, threadParent, threadChildren, isAgent, isRunning, tierOf, threadTitle, threadState, threadPeople, isSystemThread, SHOW, postKind, threadKinds, closingPosts, displayText, postSource, inUse, fresh7, asksQuestion, fileInfo } from "../core/model.js";
 import { ago, dayName, stamp, clock, dur, short, mdPlain, now, plural, DAY, MIN, HOUR, money } from "../core/format.js";
 import { href, threadHref, go, parse } from "../core/router.js";
 import { yoursSearch, yoursText } from "../core/yours.js";
@@ -130,7 +130,7 @@ function threadEvents(th) {
   for (const s of S.sessions) {
     if (s.thread !== th || !s.end) continue;
     if (s.limited) out.push({ ev: true, key: "ev:" + s.session + ":" + s.start, t: s.end, tone: "limited", text: simpleOn() ? "Your Hive took a break" : `${s.name} stopped at a usage limit`, sub: "It carries on by itself once there's room." });
-    else if (s.exit && s.exit !== 143) out.push({ ev: true, key: "ev:" + s.session + ":" + s.start, t: s.end, tone: "failed", text: simpleOn() ? "Your Hive ran into a problem" : `${s.name} stopped with an error (exit ${s.exit})`, sub: simpleOn() ? "Send a message and it tries again." : "Its last message above is where it got to." });
+    else if (s.exit && s.exit !== 143) out.push({ ev: true, key: "ev:" + s.session + ":" + s.start, t: s.end, tone: "failed", text: simpleOn() ? "Your Hive ran into a problem" : `${(w => w[0].toUpperCase() + w.slice(1))(agentLabel(s.name))} stopped with an error (exit ${s.exit})`, sub: simpleOn() ? "Send a message and it tries again." : "Its last message above is where it got to." });
   }
   return out;
 }
@@ -904,7 +904,9 @@ function cardRow(r) {
   return h("li", { "data-key": r.th }, h("a", { class: "fc-row", href: threadHref(r.th), title: title + (dot ? ", " + dot.word : "") },
     dot ? h("span", { class: "st", "data-tone": dot.tone, "aria-hidden": "true" }) : h("span", { "aria-hidden": "true" }), h("b", null, title), d ? when(d.last, "t") : null));
 }
-const cardEv = kind => l => h("li", { class: "fc-ev", "data-kind": kind, "data-key": kind + ":" + l.text.slice(0, 80) }, when(l.at, "t"), h("span", { class: "fc-ev-x", title: l.text }, lineText(l.text, { pill: false })));
+// A card line names a file, not its path: "`projects/x/build/cut.mp4`" reads "cut.mp4" (home_plain: the cards show no file path). The title keeps the whole line.
+const fileNames = t => t.replace(/`?(?:~\/|\/home\/[^\s`/]+\/)?(?:projects|kb|modules|core)\/(?:[^\s`]*\/)?([^\s`/]+)`?/g, "$1");
+const cardEv = kind => l => h("li", { class: "fc-ev", "data-kind": kind, "data-key": kind + ":" + l.text.slice(0, 80) }, when(l.at, "t"), h("span", { class: "fc-ev-x", title: l.text }, lineText(labelCodes(fileNames(l.text)), { pill: false })));
 const cardRows = (rows, n) => rows.length ? h("div", { class: "fc-cv" }, h("ul", { class: "fc-rows", "aria-label": "Conversations" }, rows.slice(0, n).map(cardRow))) : null;
 /** The card's … menu: move it earlier or later (the keyboard's drag), and a new conversation. */
 function cardMenu(f, id, ctx) {

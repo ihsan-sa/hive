@@ -1,7 +1,7 @@
 // Now: what each agent is doing. Template: overview.
 import { h } from "../core/dom.js";
 import { S, SYS } from "../core/store.js";
-import { threadTitle, agentOn, agentSay, agentState, isRunning, hiveStats, tierHours, agentThread, spendSince, sEnd, hasTiers, activeUse } from "../core/model.js";
+import { threadTitle, agentLabel, labelCodes, agentOn, agentSay, agentState, isRunning, hiveStats, tierHours, agentThread, spendSince, sEnd, hasTiers, activeUse } from "../core/model.js";
 import { needsKnown, needsN } from "../core/needs.js";
 import { now, ago, dur, clock, money, pct, plural, firstSentence, short, HOUR, DAY, MIN } from "../core/format.js";
 import { TIERS, status } from "../core/status.js";
@@ -38,9 +38,9 @@ function agentRows(run, states, t, waits) {
       { label: "Model", cls: "nt-md meta", render: a => (cardRows(a.name)[0] || {}).short || "–" },
       { label: "Doing now", cls: "nt-do clip", render: a => {
         const task = S.byId[a.post], say = nowSay(a);   // what it says it is on, in its own words; the command it happens to be running is only in the hover (the person, 11081450f3e1)
-        const askText = task ? firstSentence(displayText(task)) : "", asked = askText ? (a.from ? (a.from === "person" && S.app.app ? "you" : a.from) + ": " : "") + askText : null;
+        const askText = task ? labelCodes(firstSentence(displayText(task))) : "", asked = askText ? (a.from ? agentLabel(a.from) + ": " : "") + askText : null;
         return h("div", { title: [say && say.own ? `Its own words, said ${ago(say.at)}${say.before ? ", before this run" : ""}` : null, a.doing ? "Last step: " + a.doing : null].filter(Boolean).join("\n") || null },
-          say ? h("div", { class: "nt-now" + (say.own ? " nt-on" : "") }, say.own ? h("span", { class: "meta" }, say.before ? "was on " : "on ") : null, railSay(say.text, 200), say.own ? h("span", { class: "meta" }, " · " + ago(say.at).replace(/ ago$/, "")) : null) : null,
+          say ? h("div", { class: "nt-now" + (say.own ? " nt-on" : "") }, say.own ? h("span", { class: "meta" }, say.before ? "was on " : "on ") : null, railSay(labelCodes(say.text), 200), say.own ? h("span", { class: "meta" }, " · " + ago(say.at).replace(/ ago$/, "")) : null) : null,
           asked ? h("div", { class: say ? "nt-ask meta" : "nt-now", title: task.text }, "Asked by " + asked) : say ? null : h("span", { class: "muted" }, "–"));
       } },
       { label: "Up", num: true, cls: "meta", render: a => dur(t - a.since * 1e3) },
@@ -102,9 +102,9 @@ export function hiveFigures(t = now()) {
   return [
     { label: "Agents talking to agents", value: pct(hs.a2a, hs.total), note: `${hs.a2a} of ${hs.total} posts mention another agent` },
     { label: "Time to answer a mention", value: hs.lat == null ? "–" : dur(hs.lat), note: `median; ${pct(hs.answered, hs.asked)} of ${hs.asked} mentions answered within 6h` },
-    { label: "New agents started by agents", value: pct(hs.byAgents, hs.fresh), note: `${hs.byAgents} by agents, ${hs.byYou} by ${S.app.app ? "you" : "you or the box"}, ${hs.bySys} by the keeper or starter` },
+    { label: "New agents started by agents", value: pct(hs.byAgents, hs.fresh), note: `${hs.byAgents} by agents, ${hs.byYou} by ${S.app.app ? "you" : "you or the box"}, ${hs.bySys} by ${S.app.app ? "the Hive itself" : "the keeper or starter"}` },
     { label: S.app.app ? "Conversations with 2+ agents" : "Threads with 2+ agents", value: `${hs.multi} of ${hs.threads}`, note: (S.app.app ? "conversations" : "threads") + " where more than one agent posted" },
-    { label: S.app.app ? "Talks with most agents" : "Best connected", value: hs.hub || "–", note: hs.hub ? `talked with ${hs.hubN} other agents` + (agentThread(hs.hub) ? `, on ${agentThread(hs.hub)}` : "") : "no agent-to-agent mentions" },
+    { label: S.app.app ? "Talks with most agents" : "Best connected", value: hs.hub ? agentLabel(hs.hub) : "–", note: hs.hub ? `talked with ${hs.hubN} other agents` + (agentThread(hs.hub) && !S.app.app ? `, on ${agentThread(hs.hub)}` : "") : "no agent-to-agent mentions" },
     { label: "Session ends", value: hs.failed ? `${hs.failed} errored` : `${hs.clean} finished`, tone: hs.failed ? "bad" : null, note: `${hs.clean} finished, ${hs.stopped} stopped by a signal, ${hs.failed} errored; ${hs.limited} usage-limit stops` },
   ];
 }
@@ -131,11 +131,11 @@ function todayCard(t) {
   let ms = 0, done = 0;
   for (const s of S.sessions) { const a = Math.max(s.start, t - DAY), b = Math.min(sEnd(s), t); if (b > a) ms += b - a; if (s.end && s.end >= t - DAY && s.end <= t && s.exit === 0) done++; }
   const act = S.usage ? activeUse(S.usage, t) : null;
-  const left = act ? Math.max(0, 100 - Math.round(act.pct)) + "%" : "–";
+  const read = act && act.parts.length, left = read ? Math.max(0, 100 - Math.round(act.pct)) + "%" : "–";   // an account with no reading yet is not 100% left
   return section({ title: "Today", note: "last 24 hours" }, h("div", { class: "card now-today" }, stats([
     { label: "Finished", value: String(done), note: plural(done, "run") + " ended cleanly" },
     { label: "Hours of work", value: (ms / HOUR).toFixed(1) + "h", note: "agent time, all agents" },
-    { label: "Week left", value: act ? h("a", { href: href("usage") }, left) : left, note: act ? "of your weekly use" : "not read yet" },
+    { label: "Week left", value: read ? h("a", { href: href("usage") }, left) : left, note: read ? "of your weekly use" : "not read yet" },
   ])));
 }
 
@@ -177,20 +177,20 @@ export default {
       return overview({ header, main: [main], after: [todayCard(t), more] });
     }
 
+    const metaBits = [
+      L.jobs && (!S.app.app || L.jobs.running || L.jobs.queued) ? `Machine: ${L.jobs.running} jobs running, ${L.jobs.queued} queued` : null,
+      queuedPosts.length ? `${queuedPosts.length} waiting to start` : null,
+      L.limit_until ? `starts held for the usage limit until ${clock(L.limit_until * 1e3)}` : null];
     const header = pageHeader({ subnav: pageNav(),
       title: run.length ? `${plural(run.length, "agent")} on ${plural(threads, S.app.app ? "conversation" : "thread")}` : S.app.app ? "No agents are working right now" : "Nobody is running right now",
       after: run.length ? h("div", { class: "nd-head" }, h("span", { class: "meta" }, [
         `${active} active`, count("working") - active > 0 || !S.app.app ? `${count("working") - active} on a job` : null,
         !S.app.app || count("queue") ? `${count("queue")} queued` : null, `${count("stuck")} stuck`].filter(Boolean).join(" · ")),
-        h("span", { class: "meta nd-head-r" }, [`${plural(lastHour, "post")} in the last hour`, S.usage ? `${money(spendSince(t - DAY))} in 24h` : null].filter(Boolean).join(" · "))) : null,
-      meta: [
-        L.jobs && (!S.app.app || L.jobs.running || L.jobs.queued) ? `Machine: ${L.jobs.running} jobs running, ${L.jobs.queued} queued` : null,
-        queuedPosts.length ? `${queuedPosts.length} waiting to start` : null,
-        L.limit_until ? `starts held for the usage limit until ${clock(L.limit_until * 1e3)}` : null,
-      ],
+        h("span", { class: "meta nd-head-r" }, [...metaBits, `${plural(lastHour, "post")} in the last hour`, S.usage ? `${money(spendSince(t - DAY))} in 24h` : null].filter(Boolean).join(" · "))) : null,
+      meta: run.length ? null : metaBits,   // R-1110c-b: with agents running they ride the one line above
     });
 
-    const hive = section({ title: "How it's working as a hive", note: "last 24 hours" }, stats(hiveFigures(t)));
+    const hive = section({ title: "How it's working as a hive", note: "last 24 hours" }, stats(hiveFigures(t).map(f => ({ ...f, title: f.note, note: null }))));
     const charts = cols(...activityCharts(t));
 
     const hrs = tierHours(t - DAY, t), tot = Object.values(hrs).reduce((a, b) => a + b, 0) || 1;

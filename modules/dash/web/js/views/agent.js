@@ -3,7 +3,7 @@
 // agentPage(name) is the whole page; the side panel (ui/panel.js) draws the same thing in a narrower container.
 import { h } from "../core/dom.js";
 import { S, OUTSIDE, SYS, jget, loadAgentCosts, post, poll, can } from "../core/store.js";
-import { agentCard, agentSpend, agentState, costsPending, agentStatus, isAgent, isRunning, isWarden, modelName, WARDEN_HINT, sEnd, displayText, agentOn, agentSay } from "../core/model.js";
+import { agentCard, agentSpend, agentState, costsPending, agentStatus, agentLabel, isAgent, isRunning, isWarden, modelName, WARDEN_HINT, sEnd, displayText, agentOn, agentSay } from "../core/model.js";
 import { DAY, HOUR, MIN, ago, dur, firstSentence, mdPlain, money, now, pct, plural, short, stamp, toks } from "../core/format.js";
 import { threadHref } from "../core/router.js";
 import { metrics, cols } from "../templates.js";
@@ -137,7 +137,7 @@ function life(n, D) {
     t0, t1, step, bars, lanes, ticks, top: m => money(m),
     label: `${n}'s cost per ${dur(step)} from ${stamp(t0)} to ${stamp(t1)}: ${money(total)} in all`,
     legend: legend([
-      { label: "Cost", text: `per ${dur(step)}${work ? ", split by tokens" : ""}`, tone: "info" },
+      { label: "Cost", text: `per ${dur(step)}${work ? ", split by tokens" : ""}`, tone: "data" },
       { label: "Sessions", text: "grey ended, green running, red failed, amber at a limit", tone: "ended" },
       { label: "Ticks", text: "dark: it wrote, light: it was named", tone: "ink" },
     ]),
@@ -256,7 +256,7 @@ export function agentPage(n, host = "page") {
   const last = mine[mine.length - 1], on = agentOn(n), me = on && on.said ? on : null;   // what it says it is on (`hive me`), its own words and date
   // the header says what Now's "Doing now" says: its own summary, not the command it is running (the person, 11081941703e); the step is in the block below
   const say = agentSay(n, L ? L.thread : (S.lastSess[n] || {}).thread), task = L && S.byId[L.post];
-  const askText = task ? firstSentence(displayText(task)) : "", asked = askText ? "Asked by " + (L.from ? (L.from === "person" && S.app.app ? "you" : L.from) + ": " : "") + askText : null;   // Now's fallback, word for word
+  const askText = task ? firstSentence(displayText(task)) : "", asked = askText ? "Asked by " + (L.from ? agentLabel(L.from) + ": " : "") + askText : null;   // Now's fallback, word for word
   return h("div", { class: "agp", "data-key": n, "data-host": host }, metrics({
     header: pageHeader({
       title: h("span", { class: "ref-wrap" }, n, isAgent(n) ? copyButton("@" + n) : null, isWarden(n) ? wardenBadge(WARDEN_HINT) : null),

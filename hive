@@ -247,7 +247,7 @@ def cmd_relay(a):
 def cmd_post(a):
     text = " ".join(a.text) if a.text else sys.stdin.read()
     if os.environ.get("HIVE_BROKER"):
-        forward({"verb": "post", "thread": a.thread, "to": a.to, "model": a.model, "effort": getattr(a, "effort", None), "reply_to": a.reply_to, "done": a.done or [], "tags": getattr(a, "tag", None) or [], "interrupt": bool(getattr(a, "interrupt", False)), "text": text}, a.file or [])
+        forward({"verb": "post", "thread": a.thread, "to": a.to, "model": a.model, "effort": getattr(a, "effort", None), "reply_to": a.reply_to, "done": a.done or [], "tags": getattr(a, "tag", None) or [], "interrupt": bool(getattr(a, "interrupt", False)), "end": bool(getattr(a, "end", False)), "text": text}, a.file or [])
     given = [post_tag(t) for t in getattr(a, "tag", None) or []]   # checked before anything else, so a bad tag costs a re-post and nothing more
     try: c = read_cfg()
     except (OSError, ValueError): c = {}
@@ -293,6 +293,10 @@ def cmd_post(a):
          "to": ["@" + n for n in dict.fromkeys(to)], "thread": a.thread or pid, "text": text}
     if a.model: p["model"] = a.model
     if getattr(a, "effort", None): p["effort"] = a.effort
+    if getattr(a, "end", False):  # the run's last act: the hook ends the run here, with no further model call, if nothing holds the stop
+        import inbox
+        if inbox.has_stop_line(text): p["end"] = True
+        else: print("--end ignored: the post's last line must start Done:, Blocked:, Needs the person:, Waiting:, Told to stop: or Next:. The run carries on.", flush=True)
     if a.routed: p["routed"] = True
     # The person's "Interrupt" (the dash's button beside Send): the starter ends the agent's current step when it cleanly can (starter.interrupt_step),
     # and the hook hands it over marked as one. Without it a post waits for the step to end, as always.
@@ -1252,6 +1256,7 @@ p.add_argument("--effort", choices=EFFORTS, help="effort level for any Claude ru
 p.add_argument("--reply-to", dest="reply_to", metavar="ID", help="the post this answers; shown on the board, and a door puts the answer under that message")
 p.add_argument("--file", action="append", help="attach a file (repeatable): copied to ~/files/<post id>/, shown in hive read, Slack and the dashboard")
 p.add_argument("--done", action="append", metavar="ASK", help="mark this ask (k0123) done with this post as its evidence (repeatable)")
+p.add_argument("--end", action="store_true", help="this post is the run's last act: end the run here with no further model call, unless something holds the stop (it needs the stop line as last line; anything after it in the same command still runs)")
 p.add_argument("--tag", action="append", metavar="KIND:ID", help="tag the post (repeatable): focus:site, agent:a5c83, thread:release-train. The thread's focus and the agents and threads named are added by themselves; hive search tag:focus:site finds them")
 p.add_argument("--interrupt", action="store_true", help="for the person: a running agent named gets this now; a long command it is waiting on is stopped when that can be done cleanly")
 p.add_argument("text", nargs="*"); p.set_defaults(f=cmd_post)

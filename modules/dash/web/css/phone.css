@@ -72,7 +72,7 @@
   .cm[data-home] .cm-side>:not(.cm-filters),.cm[data-home] .cm-side .cm-newbtn,.cm[data-home] .cm-side .cm-places,.cm[data-home] .cm-side .cm-srow,.cm[data-home] .cm-side .cm-show-m{display:none}   /* places: the More sheet's Conversations */
   .cm[data-home] .cm-filters{padding:0;border:0}
   .cm[data-home] .cm-convo{display:flex;flex:1 1 auto;min-height:0}
-  .cm-listbtn,.cm-listbtn.only-phone{display:flex;align-items:center;gap:var(--s2);min-height:44px;padding:0 var(--s3);border:1px solid var(--line-2);border-radius:var(--r-pill);background:var(--surface);color:var(--ink);text-decoration:none}
+  .cm-listbtn,.cm-listbtn.only-phone{display:flex;align-items:center;min-width:0;max-width:100%;gap:var(--s2);min-height:44px;padding:0 var(--s3);border:1px solid var(--line-2);border-radius:var(--r-pill);background:var(--surface);color:var(--ink);text-decoration:none}
   .cm-listbtn>span:not(.meta){font-weight:var(--w-med)}
   .cm-listbtn>.meta{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .cm-listbtn .ic{flex:none;width:18px;height:18px;color:var(--ink-3)}
@@ -212,9 +212,10 @@
 @container app (width < 700px){
   .top-in .brand{min-height:44px}
   .top-pill-go{inset:-8px -1px}   /* fills the 48 px bar; the pill clipped it to its own 32 px (R58) */
-  .cm-hline a,.cm-need-m>a:first-child,.fp-agn,.fc-ask-n a,.fc-ask-h a{display:inline-block;padding-block:14px;margin-block:-14px}
+  .cm-hline a,.cm-need-m>a:first-child,.cm-need-m>.th,.cm-old>a:first-child,.fp-agn,.fc-ask-n a,.fc-ask-h a{display:inline-block;padding-block:14px;margin-block:-14px}
   .fc-name{padding-block:12px;margin-block:-12px}   /* a 44 px target without un-clamping the name */
   .fc-ask-i,.fc-row{min-height:44px}
+  .fc-ag{row-gap:16px}   /* pills that wrap: each row keeps its own 40 px hit area, or the row below takes it */
   .fc-ag .ref{position:relative}.fc-ag .ref::after{content:"";position:absolute;inset:-10px -2px}   /* the card head's agent pills stand alone, not in a sentence: a 44 px hit area, same look (r23 review) */
   .fc-ft>a,.cm-need-all a{display:inline-flex;align-items:center;min-height:44px}
   .fc-ft .btn,.ph-a .btn{min-width:44px;min-height:44px}
@@ -265,6 +266,7 @@
 @container app (width < 700px){
   .cm-hline-all,.fc-hd:not(:has(.fc-ag)) .fc-name{position:relative;z-index:1}
   .cm-foci-h{margin-bottom:20px}
+  .cm-old-q a{padding-block:4px}   /* a link inside the sentence: 24 px, no taller, so the lines stay even (R18) */
   .cm-need-m .ref{position:relative}
   .cm-need-m .ref::after{content:"";position:absolute;inset:-8px -2px}
   .tbl.tg .tb>.tr .ref{position:relative}

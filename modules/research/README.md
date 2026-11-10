@@ -63,6 +63,8 @@ Run `research hunt spec.json --dry-run` first. It searches nothing and writes no
 
 List `roles` most wanted first: when an org's `per_org` cap is hit on a page, the earlier roles get the places. It tries every angle on every org, finds more orgs from `discover`, and writes `leads.csv` (each row with its page and quote), `near_misses.csv` and `REPORT.md`. A row needs the person, the title and a `must` word near them on a page that names the org. If it can't reach the target it says it's short and exits 3: it never pads. Run it again on the same case to continue.
 
+The JSON summary a hunt prints has `lead_list`, one entry per lead with `name`, `title`, `organisation`, `check_status` (`verified` or not) and `source_url` (the page the person was read from); `--text` prints the first four of these as one line per lead.
+
 A complete two-org spec that passes `--dry-run` with no warnings is in `examples/hunt-spec.json`; copy it and change the orgs.
 
 ### Spec checks

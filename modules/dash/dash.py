@@ -2454,8 +2454,9 @@ def _ctl(s): return "".join(c for c in str(s) if c in "\n\t" or (c >= " " and c 
 def mail_view(limit=200):
     """The owner's mail copy (hive-mail inbox, read-only). Plain text only; control and bidi characters stripped; attachments by name and size.
     Held mail (marks stay in the store) shows as a stub. Gated by the `files` capability in GET_CAP; never goes on the board."""
-    out, err = [], None
+    out, err, unset = [], None, False
     try: names = sorted((f for f in (MAIL_DIR / "inbox").iterdir() if f.suffix == ".json" and MAIL_ID.fullmatch(f.stem)), key=lambda f: f.name, reverse=True)[:limit]
+    except FileNotFoundError: names, unset = [], True   # no mail set up on this machine is a state, not a failure
     except OSError: names, err = [], "The mail folder can't be read from here."
     for f in names:
         try:
@@ -2468,7 +2469,7 @@ def mail_view(limit=200):
         out.append({"id": f.stem, "subject": _ctl(d.get("subject", ""))[:300], "date": _ctl(d.get("date", ""))[:80], "received_at": _ctl(d.get("received_at", ""))[:40],
                     "text": _ctl(d.get("text", ""))[:100_000], "truncated": bool(d.get("truncated")), "attachments": att})
     status = jload(MAIL_DIR / "status.json", {}) or {}
-    return {"items": out, "error": err, "checked": status.get("at") if isinstance(status, dict) else None}
+    return {"items": out, "error": err, "unset": unset, "checked": status.get("at") if isinstance(status, dict) else None}
 
 
 def secrets_view():
@@ -2542,6 +2543,7 @@ KB_SHELVES = (("kb", "Notes", "What agents learned and wrote down"), ("modules",
               ("projects", "Projects", "Plans and code, one folder each"), ("files", "Post files", "What was attached to posts"),
               ("investigations", "Investigations", "Longer digs and their evidence"), ("tools", "Tools", "Installed toolchains"), ("archive", "Archive", "Kept from older Hives"))
 KB_SKIP = {"node_modules", "__pycache__", "venv", "site-packages"}
+KB_WALK_SKIP = {"archive/transcripts"}  # raw session logs, tens of thousands of folders of ids: still open from the shelf and found by a text search, but not walked for names
 KB_DENY = re.compile(r"^id_(rsa|dsa|ecdsa|ed25519)|\.(pem|key|p12|pfx|keystore|jks|gpg|asc|kdbx|env)$|^(web|auth|logins?)\.json$|^hosts\.ya?ml$|^(authorized_keys|known_hosts|htpasswd)$|credential", re.I)
 KB_WORDS = re.compile(r"secret|token|passw(or)?d|api[_-]?key", re.I)
 KB_CODE = {".py", ".go", ".js", ".mjs", ".ts", ".tsx", ".css", ".md", ".html", ".c", ".h", ".rs"}  # a name like tokens.css is code, not a token
@@ -2679,21 +2681,39 @@ def kb_walk(rel, depth, room):
             if not kb_name_ok(e.name) or e.name in KB_SKIP or e.is_symlink(): continue
             try:
                 if e.is_dir(follow_symlinks=False):
-                    if n < depth and not kb_is_worktree(Path(e.path)): todo.append((Path(e.path), f"{r}/{e.name}", n + 1))
+                    if n < depth and f"{r}/{e.name}" not in KB_WALK_SKIP and not kb_is_worktree(Path(e.path)): todo.append((Path(e.path), f"{r}/{e.name}", n + 1))
                 elif e.is_file(follow_symlinks=False): out.append((f"{r}/{e.name}", e.stat(follow_symlinks=False).st_mtime))
             except OSError: continue
     return out[:room]
 
 
-def kb_index():
-    """Every file's path and time, for name search and "changed lately". Bounded, and at most a minute old."""
+def kb_index_read():
+    """Walk the shelves into kb_index_memo. The caller holds kb_index_lock."""
+    items = []
+    for rel, depth in (("kb", 12), ("core", 12), ("modules", 12), ("files", 2), ("investigations", 8), ("archive", 6), ("projects", 3), ("tools", 2)):
+        items += kb_walk(rel, depth, KB_INDEX_MAX - len(items))
+    kb_index_memo.update(t=time.time(), items=items, more=len(items) >= KB_INDEX_MAX)
+
+
+def kb_index_again():
+    try: kb_index_read()
+    finally: kb_index_lock.release()
+
+
+def kb_index_warm():
+    """Read it once at start so the first Knowledge visit finds it, stamped old so a search still looks again."""
     with kb_index_lock:
-        if time.time() - kb_index_memo["t"] < 60: return kb_index_memo
-        items = []
-        for rel, depth in (("kb", 12), ("core", 12), ("modules", 12), ("files", 2), ("investigations", 8), ("archive", 6), ("projects", 3), ("tools", 2)):
-            items += kb_walk(rel, depth, KB_INDEX_MAX - len(items))
-        kb_index_memo.update(t=time.time(), items=items, more=len(items) >= KB_INDEX_MAX)
-        return kb_index_memo
+        kb_index_read(); kb_index_memo["t"] = 1
+
+
+def kb_index(wait=False):
+    """Every file's path and time, for name search and "changed lately". Bounded. Past a minute old it is handed back as it is while a thread reads the new one, because on a big home the walk takes seconds and a page shouldn't wait on it. A search passes wait, so what it looks through is at most a minute old."""
+    if time.time() - kb_index_memo["t"] < 60: return kb_index_memo
+    if wait or not kb_index_memo["t"]:
+        with kb_index_lock:
+            if time.time() - kb_index_memo["t"] >= 60: kb_index_read()
+    elif kb_index_lock.acquire(blocking=False): threading.Thread(target=kb_index_again, daemon=True).start()
+    return kb_index_memo
 
 
 def kb_home():
@@ -2740,7 +2760,7 @@ def kb_search(q):
     if tagged is not None: return {"q": q, "names": [], "hits": [], "more": False, "ranked": tagged}
     ranked = kb_ranked(q)
     ws = q.lower().split(); names = []
-    for path, t in kb_index()["items"]:
+    for path, t in kb_index(wait=True)["items"]:
         low = path.lower()  # the index only holds names kb_walk let through, and no links
         if all(w in low for w in ws): names.append({"path": path, "t": int(t)})
         if len(names) >= 60: break
@@ -4559,6 +4579,7 @@ def serve(port):
     usage = USAGE = Usage()
     threading.Thread(target=usage.run, daemon=True).start()
     threading.Thread(target=phone_watch, daemon=True).start()
+    threading.Thread(target=kb_index_warm, daemon=True).start()
     threading.Thread(target=sync_accounts, daemon=True).start()  # an account already signed in before the app first ran; does nothing without settings.json
     live_c, proj_c, usage_c, jobs_c = Cached(live, 1), CachedStale(projects, 60), Cached(usage.view, 2), Cached(Jobs().view, 2)
     deliv_c = Cached(delivered_view, 2.5)

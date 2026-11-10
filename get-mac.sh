@@ -321,7 +321,14 @@ main() {
   agent_plist > "$HOME/Library/LaunchAgents/$AGENT.plist"
   make_app
 
-  address=$("$D/bin/hive" web 2>/dev/null | tr -d '\r' | sed -n 's/.*\(http:[^ ]*\).*/\1/p' | head -n 1)
+  # The web app can still be starting right after the install (the rig hit "no address" here), so ask again for a minute.
+  address=""; n=0
+  while [ -z "$address" ] && [ "$n" -lt 20 ]; do
+    out=$("$D/bin/hive" web 2>&1 | tr -d '\r' || true)
+    address=$(printf '%s\n' "$out" | sed -n 's/.*\(http:[^ ]*\).*/\1/p' | head -n 1)
+    [ -n "$address" ] || { n=$((n + 1)); sleep 3; }
+  done
+  [ -n "$address" ] || echo "hive web said: $out" >&2
   [ -n "$address" ] || die "the Hive installed, but it gave no address. Try, in a new Terminal window: hive web"
   echo
   echo "The Hive is running in its own Linux VM, which can't see your files."

@@ -13,7 +13,7 @@ import { S, can, jget, post, poll, loadApp } from "../core/store.js";
 import { simpleOn, hiveName } from "../core/simple.js";
 import { foci, focusById, focusOf, focusName, listed, threadLine } from "../core/foci.js";
 import { go } from "../core/router.js";
-import { isAgent, isRunning, agentCard, agentStatus, threadPeople, partner, displayText, typedText, threadTitle } from "../core/model.js";
+import { isAgent, isRunning, agentCard, agentStatus, threadPeople, partner, displayText, typedText, threadTitle, threadState } from "../core/model.js";
 import { short, mdPlain, now } from "../core/format.js";
 import { button, icon, input, statusDot } from "./kit.js";
 import { openAside } from "./aside.js";
@@ -878,6 +878,8 @@ function filesRow(th, d) {
 /** Who the message would reach while it works (the agent it goes to, running now), or null. Only then can it interrupt. */
 function busyWho(th, r) { return th && !simpleOn() && r.who && r.who !== "new" && r.why !== "btw" && isAgent(r.who) && isRunning(r.who) ? r.who : null; }
 
+const waitsHere = (th, who) => { const st = threadState(th); return st.key === "asks" && st.who === who; };
+
 /** composer({thread, update, place}): thread null is new work. place: thread | home | start (only changes the wording). */
 export function composer({ thread, update, place = "thread", autofocus, top }) {
   CP.update = update;
@@ -897,8 +899,9 @@ export function composer({ thread, update, place = "thread", autofocus, top }) {
     d.err ? h("p", { class: "cp-err", role: "alert", "data-key": "err" }, d.err) : null,
     wordBoxPanel(th, update),
     top || null,  // the conversation's status strip: a tab on the box's top edge
-    // the strip already names a working agent and carries its Interrupt: the line over the box shows only an interrupt on its way
-    phase || (busy && !(top && top.querySelector(`[data-key="run:${busy}"]`))) ? liveLine(th, lw, phase, armed) : null,
+    // the strip already names a working agent and carries its Interrupt: the line over the box shows only an interrupt on its way.
+    // An agent waiting on the person's answer isn't working: the question above already says so, and there is nothing to interrupt.
+    phase || (busy && !(top && top.querySelector(`[data-key="run:${busy}"]`)) && !waitsHere(th, busy)) ? liveLine(th, lw, phase, armed) : null,
     h("div", { class: "cp-box", "data-key": "box" },
       armed || d.reply || d.quote || d.files.length || (SB.open && can("secrets")) || SB.say || (!th && d.naming) ? h("div", { class: "cp-top", "data-key": "top" },
         armed ? intNote(th, busy) : null,
