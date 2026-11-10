@@ -4,6 +4,15 @@ Release notes are on the [releases page](https://github.com/ihsan-sa/hive/releas
 
 A release can ship several times a day. A Hive installs each one as soon as it's out; **How often to update** in Settings can slow that to about once a day. The latest is at [releases/latest](https://github.com/ihsan-sa/hive/releases/latest).
 
+## Slow pages wait in their own shape
+While **Knowledge**, **Usage**, **This machine**, **Admin jobs** and **Design** read their data, grey blocks now stand where the content will land, instead of one line of "Reading…". The list in **Chat** also waits in grey until it knows your focuses, so it no longer draws flat and then re-sorts into groups.
+
+## Chat's page links match the rest of the app, and page widths agree
+**Yours**, **Inbox**, **Mail** and **Files** above Chat now look like the row of pages under Agents and Usage, with a line under the page you are on. **Yours** is now the same width as **Inbox**, and **Design** is narrower to match.
+
+## Signing in again no longer strands you on a logged-out page
+When full access ends on a Hive you reach through Cloudflare Access, **Sign in again** and **Limited · sign in for full** now take you straight to the sign-in page. Before, they stopped on Cloudflare's "You successfully logged out" page and you had to reopen the Hive yourself.
+
 ## Waits on you: the buttons line up with the time
 On the **Waits on you** page, Later, Not needed and Answer now sit on the same line as the item's title and time, instead of lower down in the middle of the row.
 
@@ -181,3 +190,6 @@ Start the Chat search box with an at sign and a question, then press Enter. An a
 ## Fewer refused requests just after a restart
 
 If the app couldn't reach Cloudflare the moment it restarted, requests from outside were refused for a minute with a message about an Access token. It now tries again within seconds.
+
+## dash: smarter "not needed" greying
+The thread importance pass now re-reads threads as they age and sees how old each post is, so delivered and finished threads get greyed instead of lingering. A thread that names videos, PDFs or other deliverables is never greyed. A thread waiting on a "For you:" answer is no longer archived by age.

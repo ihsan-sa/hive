@@ -111,9 +111,10 @@ export default {
   render(ctx) {
     if (!can("logins")) return h("div", { class: "page" }, empty("This page isn't open from here.", { kind: "page", title: "Design" }));
     const v = D.v;
-    if (!v) return h("div", { class: "page" }, waiting(D.readErr, "Reading…", "the design page"));
-    return h("div", { class: "page dpage", "data-key": "design" },
-      pageHeader({ title: "Design", lead: "Tell Claude what to design and get a link to it." }),
+    const head = pageHeader({ title: "Design", lead: "Tell Claude what to design and get a link to it." });
+    if (!v) return h("div", { class: "page dpage", "data-width": "narrow", "data-key": "design" }, head, waiting(D.readErr, "Reading…", "the design page", "design"));
+    return h("div", { class: "page dpage", "data-width": "narrow", "data-key": "design" },
+      head,
       D.err || D.readErr ? h("p", { class: "fmsg", "data-tone": "bad", role: "status" }, D.err || `Lost contact: ${D.readErr}`) : null,
       stepPart(v, ctx),
       v.running ? sessionPart(v, ctx) : null,

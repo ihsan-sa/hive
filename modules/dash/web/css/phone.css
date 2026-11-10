@@ -157,8 +157,17 @@
   .ph{margin-bottom:var(--s4)}
   .ph h1{font-size:19px}
   .sec{margin-top:var(--s5)}
+  .cvp,.map,.fl-page{--col-x:var(--s4)}   /* the row above a canvas sits where .page puts it on a phone */
+  .fl-page{padding:var(--s2) var(--s4) var(--s8)}
+  .cvp-nav{padding-top:var(--s2)}
   .ph-a{width:100%}
   .ph-a .search{width:100%!important}
+  /* Inbox (R61): Mark all read sits beside the title, and the list starts right under the head (the head's and the section's margins stacked to 49px) */
+  .ph:has(+.after>#inbox-list){align-items:center;flex-wrap:nowrap}
+  .ph:has(+.after>#inbox-list) .ph-t{flex:1 1 0}
+  .ph:has(+.after>#inbox-list) .ph-a{width:auto;flex:none;margin-left:auto}
+  .after>#inbox-list{margin-top:0}
+  .ph:has(+.after>#inbox-list)+.after{margin-top:var(--s4)!important}
   .panel{width:100%;padding-bottom:env(safe-area-inset-bottom,0px)}
   table{max-width:100%}
   .tbl,.table-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch}

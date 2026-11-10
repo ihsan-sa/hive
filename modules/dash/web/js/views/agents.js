@@ -11,7 +11,7 @@ import { agentAvatar, agentRef, threadRef } from "../ui/refs.js";
 const STATUS = [["all", "Any status"], ["running", "Running"], ["queued", "Waiting to start"], ["ended", "Ended"], ["killed", "Killed"], ["limited", "Stopped at a limit"], ["failed", "Failed"]];
 const BY = [["all", "Started by anyone"], ["person", "Started by a person"], ["agent", "Started by an agent"], ["system", "Started by the Hive"]];
 const SINCE = [["all", "Any time"], ["1", "Last 24 hours"], ["7", "Last 7 days"], ["30", "Last 30 days"]];
-const PAGE = 200, DAY = 864e5;
+const PAGE = matchMedia("(max-width: 640px)").matches ? 36 : 200, DAY = 864e5;   // R48: a phone opens on a short list; a phone row is about 110 px
 const L = { q: "", house: false, status: "all", by: "all", since: "all", model: "all", account: "all", limit: PAGE, sig: "", dataKey: "", all: [], shown: [] };
 const pctOf = (a, b) => b ? Math.round(100 * a / b) + "%" : "0%";
 const app = () => !!S.app.app;
@@ -58,6 +58,8 @@ function gather() {
 
 let COST_DATA = true;
 // On a phone a row stacks (R10 1, like ui/table.js): avatar, name and status on the first line, what it is on under them, then one labelled line per other column.
+// R63: between the phone and the width the default columns need (1012 px, so a 1075 px window), rows stack too; a table there needed its own scrollbar beside the page's.
+const STACK_BELOW = "(max-width: 1074px)";
 const phoneRank = c => c.k === "name" ? 0 : c.k === "status" ? 1 : c.k === "on" ? 2 : 3;
 const PHONE_BARE = new Set(["name", "status", "on"]);   // these stand on their own lines on a phone; the rest carry their column's name
 const phoneName = a => { const av = agentAvatar(a.name, { size: "s" }); av.tabIndex = -1; av.setAttribute("aria-hidden", "true"); return [av, agentRef(a.name, { dot: false })]; };   // the avatar carries the status shape
@@ -103,7 +105,7 @@ const picker = (label, value, opts, on) => h("select", { class: "input", value, 
   opts.map(([k, l]) => h("option", { value: k, selected: k === value ? "" : null }, l)));
 
 // The phone order (name, status, On first) is chosen at render, so crossing 640 px re-renders: nothing else may come in time.
-matchMedia("(max-width: 640px)").addEventListener("change", () => { if (L.update && document.querySelector(".ag")) L.update(); });
+for (const q of ["(max-width: 640px)", STACK_BELOW]) matchMedia(q).addEventListener("change", () => { if (L.update && document.querySelector(".ag")) L.update(); });
 
 export default {
   id: "agents", label: "Agents", about: "every agent, in spawn order: search, filter, sort", tab: true,
@@ -113,12 +115,12 @@ export default {
     if (!S.live) return h("div", { class: "page" }, pageNav(), waiting(S.failed, "Reading…", "the agents"));
     L.update = ctx.update;
     const all = gather(), s = sort(), set = (k, v) => { L[k] = v; L.limit = PAGE; ctx.update(); };
-    const sig = [matchMedia("(max-width: 640px)").matches, [...colsOn()].join(), L.dataKey.split("|")[0], S.agentCosts && S.agentCosts.at, L.q, L.status, L.by, L.since, L.model, L.account, L.limit, L.house, s.k, s.d].join("|"), changed = sig !== L.sig; L.sig = sig;
+    const sig = [matchMedia("(max-width: 640px)").matches, matchMedia(STACK_BELOW).matches, [...colsOn()].join(), L.dataKey.split("|")[0], S.agentCosts && S.agentCosts.at, L.q, L.status, L.by, L.since, L.model, L.account, L.limit, L.house, s.k, s.d].join("|"), changed = sig !== L.sig; L.sig = sig;
     if (changed || !L.found) { L.found = select(L.house); L.nHouse = L.house ? 0 : select(true).length - L.found.length; }   // nHouse: the housekeeping runs the fold hides now
     const nHouse = L.nHouse;
     const found = L.found, narrowed = found.length < all.length, sum = f => found.reduce((a, x) => a + f(x), 0);
     const by = k => () => { const c = sort(), d = c.k === k ? -c.d : COLS.find(x => x.k === k).num || k === "spawned" ? -1 : 1; setPref("agents.sort", { k, d }); L.limit = PAGE; ctx.update(); };
-    const on = colsOn(), phone = matchMedia("(max-width: 640px)").matches, cols = COLS.filter(c => on.has(c.k)).sort(phone ? (x, y) => phoneRank(x) - phoneRank(y) : () => 0), fits = !phone && tableFits(cols), nf = ["status", "model", "account", "by", "since"].filter(k => L[k] !== "all").length;
+    const on = colsOn(), phone = matchMedia("(max-width: 640px)").matches, shown = COLS.filter(c => on.has(c.k)), stack = phone || (matchMedia(STACK_BELOW).matches && !tableFits(shown)), cols = stack ? shown.sort((x, y) => phoneRank(x) - phoneRank(y)) : shown, fits = !stack && tableFits(cols), nf = ["status", "model", "account", "by", "since"].filter(k => L[k] !== "all").length;
     const costs = S.agentCosts; COST_DATA = all.some(a => a.usd > 0 || a.tok > 0);   // no cost data is "–", not a real zero (handoff 33)
     const costNote = costs && costs.at ? `Cost and tokens from the transcripts, read ${ago(costs.at * 1e3)}${costs.refreshing ? ", reading again" : ""}. API list prices; nobody is billed this. Tokens add up every model call's input, output and cache, so context read again on each call counts each time.` : costs && costs.refreshing ? "Reading the transcripts for exact costs; until then these come from the session logs." : "Cost and tokens from the session logs.";
     const totals = stats([
@@ -144,7 +146,7 @@ export default {
         !L.cOpen ? null : h("div", { class: "toolbar ag-f ag-fp", "data-key": "columns" }, COLS.map(c => h("label", { class: "meta" }, h("input", { type: "checkbox", checked: on.has(c.k) ? "" : null, disabled: c.k === "name" ? "" : null,
             onchange: e => { const n = new Set(on); e.target.checked ? n.add(c.k) : n.delete(c.k); setPref("agents.cols", [...n]); L.sig = ""; ctx.update(); } }), " " + c.label))),
         narrowed && found.length < all.length - nHouse ? button("Clear", () => { Object.assign(L, { q: "", status: "all", by: "all", since: "all", model: "all", account: "all", limit: PAGE }); ctx.update(); }, { kind: "quiet", size: "s" }) : null,
-        phone ? picker("Sort", s.k, cols.map(c => [c.k, "Sort: " + c.label]), k => { const d = COLS.find(x => x.k === k).num || k === "spawned" ? -1 : 1; setPref("agents.sort", { k, d }); L.limit = PAGE; ctx.update(); }) : null,   // the column headers sort on a desktop; a phone has no header row
+        stack ? picker("Sort", s.k, cols.map(c => [c.k, "Sort: " + c.label]), k => { const d = COLS.find(x => x.k === k).num || k === "spawned" ? -1 : 1; setPref("agents.sort", { k, d }); L.limit = PAGE; ctx.update(); }) : null,   // the column headers sort on a desktop; a phone has no header row
         h("span", { class: "meta" }, narrowed ? `${found.length} of ${phone && nHouse ? all.length : plural(all.length, "agent")}` : plural(all.length, "agent")),
         nHouse > 0 || L.house ? button(L.house ? "Hide housekeeping" : `+${nHouse} housekeeping`, () => { L.house = !L.house; ctx.update(); }, { kind: "quiet", size: "s", title: "Housekeeping runs: status-bar refreshes, keeper and improve rounds, watchdog trips and phone-call starts" }) : null,
         // On a phone the note and the tiles fold into the controls, so the page opens on the agents; the fold still says the two totals people look for.
@@ -154,11 +156,11 @@ export default {
       sections: [
         phone ? null : totals,
         // grid rows, not <table> (HANDOFF "Shared DOM changes" 6, R7 step 6): one --cols for every row, so the columns line up
-        found.length ? h("div", { class: "tblw ag-w" + (fits ? " ag-page" : "") }, h("div", { class: "tbl ag", role: "table", "aria-label": "Agents", style: "--cols:" + cols.map(c => colW(c, phone)).join(" ") },
+        found.length ? h("div", { class: "tblw ag-w" + (fits ? " ag-page" : stack ? " ag-stack" : "") }, h("div", { class: "tbl ag", role: "table", "aria-label": "Agents", style: "--cols:" + cols.map(c => colW(c, stack)).join(" ") },
           h("div", { class: "tr th", role: "row" }, cols.map(c => h("span", { role: "columnheader", class: c.num ? "r" : null, title: c.title || null, "aria-sort": s.k === c.k ? (s.d > 0 ? "ascending" : "descending") : null, "data-key": c.k },
             h("button", { type: "button", class: "ag-s", onclick: by(c.k) }, c.label, s.k === c.k ? h("span", { "aria-hidden": "true" }, s.d > 0 ? "▲" : "▼") : null)))),
           h("div", { class: "tb", role: "rowgroup", "data-own": "morph", "data-sig": sig }, changed ? found.slice(0, L.limit).map(a => h("div", { class: "tr", role: "row", "data-key": a.name },
-            cols.map(c => h("span", { role: "cell", class: [c.num ? "r num" : null, c.cls || null].filter(Boolean).join(" ") || null, "data-label": phone && !PHONE_BARE.has(c.k) ? c.label : null }, phone && c.k === "name" ? phoneName(a) : c.render(a))))) : null)))
+            cols.map(c => h("span", { role: "cell", class: [c.num ? "r num" : null, c.cls || null].filter(Boolean).join(" ") || null, "data-label": stack && !PHONE_BARE.has(c.k) ? c.label : null }, stack && c.k === "name" ? phoneName(a) : c.render(a))))) : null)))
           : empty(all.length ? "No agents match." : "No agents have run yet. When one starts, it shows here."),
         found.length > L.limit ? h("div", { class: "lr-more" },
           button(found.length - L.limit > PAGE * 5 ? `Show ${PAGE * 5} more (${found.length - L.limit} left)` : `Show ${found.length - L.limit} more`, () => { L.limit += PAGE * 5; ctx.update(); }, { kind: "quiet", size: "s" })) : null,

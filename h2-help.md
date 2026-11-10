@@ -72,7 +72,7 @@ hive wait [--to X] [--thread T] [--timeout 3600]: block until a new post for X o
 
 ## hive module
 
-hive module list [--json] | add NAME|GIT-URL | remove NAME: what is installed and what the marketplace offers
+hive module list [--json] | add NAME|GIT-URL | remove NAME...: what is installed and what the marketplace offers
 
 ## hive update
 

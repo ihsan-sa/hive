@@ -197,6 +197,23 @@ sandbox_dep() {
   fi || note "Couldn't install bubblewrap, so the sandbox won't work until it's there. The app will say so."
 }
 
+# Voice calls and memos are built after the install, as the Hive's user: they need ffmpeg and a Python that can make a venv (Debian and Ubuntu split that into python3-venv), and root is only here once. Not fatal: the Hive works without voice. WSL doesn't get voice, so nothing to fetch.
+voice_dep() {
+  grep -qi microsoft /proc/version 2>/dev/null && return 0
+  f=""; v=""
+  command -v ffmpeg >/dev/null 2>&1 || f=ffmpeg
+  if command -v apt-get >/dev/null 2>&1; then python3 -c 'import ensurepip' 2>/dev/null || v=python3-venv; fi
+  [ -n "$f$v" ] || return 0
+  echo "Installing what voice calls and memos need" >&3
+  if command -v apt-get >/dev/null 2>&1; then
+    $ROOT env DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=120 update -qq </dev/null >&3 2>&3 && $ROOT env DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=120 install -y -qq --no-install-recommends $f $v </dev/null >&3 2>&3
+  elif command -v dnf >/dev/null 2>&1; then $ROOT dnf install -y -q ffmpeg-free </dev/null >&3 2>&3
+  elif command -v pacman >/dev/null 2>&1; then $ROOT pacman -S --noconfirm --needed ffmpeg </dev/null >&3 2>&3
+  elif command -v zypper >/dev/null 2>&1; then $ROOT zypper -n install ffmpeg </dev/null >&3 2>&3
+  else false
+  fi || note "Couldn't install$( [ -z "$f" ] || printf ' ffmpeg')$( [ -z "$v" ] || printf ' python3-venv'), so voice calls or memos won't work until it's there."
+}
+
 # Ubuntu 24.04 stops bubblewrap making a user namespace unless a profile allows it (newer Ubuntu ships one). This is the shape of newer Ubuntu's bwrap-userns-restrict: bubblewrap may make its namespace, and what runs inside has no capabilities.
 # The same bytes as remove.sh, get-mac.sh and sandbox.py's _userns_fix(): remove.sh knows the file is ours by matching them, and test_get.sh holds them equal.
 AA_TEXT='# installed by the Hive\nabi <abi/4.0>,\ninclude <tunables/global>\nprofile bwrap /usr/bin/bwrap flags=(attach_disconnected,mediate_deleted) {\n  allow capability,\n  allow file rwlkm /{**,},\n  allow network,\n  allow unix,\n  allow ptrace,\n  allow signal,\n  allow mqueue,\n  allow io_uring,\n  allow userns,\n  allow mount,\n  allow umount,\n  allow pivot_root,\n  allow dbus,\n  allow pix /** -> &bwrap//&unpriv_bwrap,\n}\nprofile unpriv_bwrap flags=(attach_disconnected,mediate_deleted) {\n  allow file rwlkm /{**,},\n  allow network,\n  allow unix,\n  allow ptrace,\n  allow signal,\n  allow mqueue,\n  allow io_uring,\n  allow userns,\n  allow mount,\n  allow umount,\n  allow pivot_root,\n  allow dbus,\n  allow pix /** -> &unpriv_bwrap,\n  audit deny capability,\n}\n'
@@ -551,7 +568,7 @@ Or in a spare account: git clone -b $BRANCH $REPO ~/core, install Claude Code, a
   begin 1 1 "$OLD_A" 1 "$OLD_ROOT"
   step "Getting what it needs"
   deps
-  sandbox_dep; bwrap_profile
+  sandbox_dep; bwrap_profile; voice_dep
   clone
   old_remove
   step "Setting up the Hive, Claude Code and Codex (a few minutes)"

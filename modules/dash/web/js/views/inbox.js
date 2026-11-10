@@ -41,7 +41,7 @@ export default {
       header: pageHeader({ title: "Inbox", hint: "Every message an agent sent you, newest first. Chat's home shows the ones that need you now.",
         actions: w && IB.unread ? button("Mark all read", () => mark({ all: true }), { size: "s" }) : null,
         after: IB.err ? h("p", { class: "fmsg", role: "alert", "data-tone": "bad" }, IB.err) : null }),
-      sections: [section({}, list(folded(IB.items).map(({ p, all }) => { const unread = all.filter(x => !x.read).map(x => x.id); return {
+      sections: [section({ id: "inbox-list" }, list(folded(IB.items).map(({ p, all }) => { const unread = all.filter(x => !x.read).map(x => x.id); return {
         key: p.id, href: threadHref(p.thread),
         onClick: w && unread.length ? () => mark({ ids: unread }) : null,
         lead: unread.length ? h("span", { class: "inb-new", "data-tone": "info" }, "New") : null,

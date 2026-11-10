@@ -7,9 +7,9 @@ export const overview = ({ header, main, after }) =>
     h("div", { class: "ov" }, main),
     after && after.length ? h("div", { class: "after" }, after) : null);
 
-/** Metrics: header, then sections stacked. */
-export const metrics = ({ header, sections }) =>
-  h("div", { class: "page" }, header, h("div", { class: "after", style: "margin-top:var(--s6)" }, sections));
+/** Metrics: header, then sections stacked. width: "narrow" for a page that is read like a list (the reading width, as Inbox and Settings). */
+export const metrics = ({ header, sections, width }) =>
+  h("div", { class: "page", "data-width": width || null }, header, h("div", { class: "after", style: "margin-top:var(--s6)" }, sections));
 
 /** Form: a narrow column of sections (Settings, Start). */
 export const form = ({ header, sections }) =>

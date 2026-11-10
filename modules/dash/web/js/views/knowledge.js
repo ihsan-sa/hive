@@ -6,7 +6,7 @@ import { S, can, getPref, jget, post, setPref } from "../core/store.js";
 import { ago, plural, stamp } from "../core/format.js";
 import { href, threadHref } from "../core/router.js";
 import { threadTitle } from "../core/model.js";
-import { button, empty, waiting, field, input, list, needFull, copyPress } from "../ui/kit.js";
+import { button, empty, skeleton, waiting, field, input, list, needFull, copyPress } from "../ui/kit.js";
 import { icon } from "../ui/icons.js";
 import { markdown } from "../ui/markdown.js";
 import { markWords } from "../ui/message.js";
@@ -254,7 +254,7 @@ const topicName = (t, folder) => TOPIC[t] || (folder ? t + "/" : (t[0].toUpperCa
 // Notes grouped by topic (their folder, or a name prefix two or more share). Each row: a bar for its size, shaded for how recent it is.
 function mapView(ctx) {
   const m = K.map;
-  if (!m) return empty("Reading…", { kind: "loading" });
+  if (!m) return skeleton("topics");
   if (!m.notes.length) return m.failed ? empty(`Couldn't read the notes: ${m.failed}`, { kind: "error" }) : empty("No notes yet.");
   const groups = new Map(), now = Date.now() / 1e3, big = Math.log(Math.max(...m.notes.map(n => n.size), 2));
   for (const n of m.notes) { if (!groups.has(n.topic)) groups.set(n.topic, []); groups.get(n.topic).push(n); }
@@ -286,6 +286,7 @@ function sourcesView() {
 // R7: before anything is picked, the notes changed last as cards: folder · when, the title, and how it sits among the others.
 // TODO(server): /api/kb/map has no author or first line yet; "who" and the first line join the card once it sends them (n.by, n.first).
 function latelyCards() {
+  if (!K.map) return h("section", { class: "sec kb-lately", "data-key": "lately" }, skeleton("cards"));
   const ns = K.map && !K.map.failed ? [...K.map.notes].sort((a, b) => b.t - a.t).slice(0, 6) : [];
   if (!ns.length) return null;
   const week = K.map.notes.filter(n => Date.now() / 1e3 - n.t < 7 * 86400).length;
@@ -302,7 +303,7 @@ const homeSections = ctx => [
   recentRows() ? h("section", { class: "sec", "data-key": "opened" }, h("header", { class: "sec-h" }, h("h2", { class: "sec-t" }, "Recently opened"), h("span", { class: "sec-n" }, "on this device")), recentRows()) : null,
   h("section", { class: "sec", "data-key": "map" }, h("header", { class: "sec-h" }, h("h2", { class: "sec-t" }, "Notes by topic"), h("span", { class: "sec-n" }, K.map && !K.map.failed ? plural(K.map.notes.length, "note") : ""), button("Over time", null, { kind: "quiet", size: "s", icon: "clock", href: href("kbtime"), cls: "kb-time", title: "How the notes grew, linked and changed, from the backup history" })), mapView(ctx)),
   hubRows() ? h("section", { class: "sec", "data-key": "hubs" }, h("header", { class: "sec-h" }, h("h2", { class: "sec-t" }, "Most connected notes"), h("span", { class: "sec-n" }, "how many notes link to each, and it to others")), hubRows()) : null,
-  h("section", { class: "sec", "data-key": "changed" }, h("header", { class: "sec-h" }, h("h2", { class: "sec-t" }, "Changed lately")), K.home ? changedRows() : empty("Reading…", { kind: "loading" })),
+  h("section", { class: "sec", "data-key": "changed" }, h("header", { class: "sec-h" }, h("h2", { class: "sec-t" }, "Changed lately")), K.home ? changedRows() : skeleton(3)),
   sourcesView() ? h("section", { class: "sec", "data-key": "cover" }, h("header", { class: "sec-h" }, h("h2", { class: "sec-t" }, "What search covers"), h("span", { class: "sec-n" }, "files and posts in the index")), sourcesView()) : null];
 function changedRows() {
   if (K.home.failed) return empty("Couldn't read what changed lately. It keeps trying.", { kind: "error" });
@@ -310,7 +311,7 @@ function changedRows() {
 }
 function sideBody(path, ctx) {
   if (!path) {
-    if (!K.home || K.home.failed) return waiting(K.home && K.home.failed, "Reading…", "your notes");
+    if (!K.home || K.home.failed) return waiting(K.home && K.home.failed, "Reading…", "your notes", "side");
     return [list((K.home.shelves || []).map(s => ({ key: s.path, href: open(s.path), lead: icon("folder"), title: s.label, text: s.about, meta: String(s.n) })), { empty: "Nothing here yet." }),
       h("div", { class: "kb-phone kb-home", "data-key": "recent" }, homeSections(ctx))];
   }

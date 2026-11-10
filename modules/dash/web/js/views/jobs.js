@@ -3,7 +3,7 @@ import { h, selecting } from "../core/dom.js";
 import { S, jget } from "../core/store.js";
 import { ago, clock, gb, now, plural, secs } from "../core/format.js";
 import { metrics } from "../templates.js";
-import { empty, pageHeader, section, share, stats, statusLabel, pageNav } from "../ui/kit.js";
+import { empty, pageHeader, section, share, skeleton, stats, statusLabel, pageNav } from "../ui/kit.js";
 import { agentRef } from "../ui/refs.js";
 import { table } from "../ui/table.js";
 
@@ -74,7 +74,7 @@ export default {
   },
   render() {
     const V = J.v;
-    if (!V) return h("div", { class: "page" }, pageNav(), J.failed ? empty("Couldn't read the job data. It keeps trying.", { kind: "error" }) : empty("Reading…", { kind: "loading" }));
+    if (!V) return h("div", { class: "page" }, pageNav(), J.failed ? empty("Couldn't read the job data. It keeps trying.", { kind: "error" }) : skeleton("machine"));
     const t = now() / 1e3, app = S.app.app, q = hasQueue(V), head = app ? machineAnswer(V.machine) : headline(V);
     let pos = 0;
     return metrics({

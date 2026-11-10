@@ -148,14 +148,35 @@ export function empty(text, { kind = "empty", title } = {}) {
 }
 
 /** Data on its way: grey lines where the rows will be, in place of a word in an empty page. The word stays for a screen reader; the CSS holds it back 150 ms so a quick read never flashes it. */
-export function skeleton(rows = 4) {
-  return h("div", { class: "empty skel", "data-kind": "loading", role: "status" }, h("span", { class: "vh" }, "Reading…"),
-    Array.from({ length: rows }, () => h("div", { class: "skel-r" }, h("span", { class: "skel-b" }), h("span", { class: "skel-b" }))));
+export function skeleton(rows = 4, text = "Reading…") {
+  const shape = typeof rows === "string" ? rows : null;
+  return h("div", { class: "empty skel", "data-kind": "loading", "data-shape": shape, role: "status" }, h("span", { class: "vh" }, text),
+    shape ? SKEL[shape]() : Array.from({ length: rows }, () => h("div", { class: "skel-r" }, h("span", { class: "skel-b" }), h("span", { class: "skel-b" }))));
 }
+// The blocks of a slow page, drawn where its content lands so nothing jumps when the read arrives (the sizes follow the real rows).
+const bar = (w, ht = 9) => h("span", { class: "skel-x", style: `--w:${w};--h:${ht}px` });
+const rep = (n, f) => Array.from({ length: n }, (_, i) => f(i));
+const WIDE = ["72%", "54%", "64%", "46%"];
+const skHead = () => h("div", { class: "skel-head" }, bar("38%", 22), bar("62%", 12), bar("16%"));
+const skSec = (w = "14%") => bar(w, 11);
+const skTable = (n, cols) => h("div", { class: "skel-table" }, rep(n, i => h("div", { class: "skel-tr", style: `--c:${cols}` }, rep(cols, j => bar(WIDE[(i + j) % 4])))));
+const skCards = (n, cls = "") => h("div", { class: "skel-cards" + cls }, rep(n, i => h("div", { class: "skel-card" }, bar("34%"), bar(WIDE[i % 4], 12), bar("46%"))));
+const skList = (n, lines) => rep(n, i => h("div", { class: "skel-li", "data-lines": lines }, bar(WIDE[i % 4], 11), bar(lines > 1 ? WIDE[(i + 2) % 4] : "12%")));
+const SKEL = {
+  usage: () => [skHead(), h("div", { class: "skel-block" }, skSec("9%"), bar("100%", 10)), h("div", { class: "skel-block" }, skSec("9%"), skTable(5, 4))],
+  machine: () => [skHead(), h("div", { class: "skel-block" }, skSec(), h("div", { class: "skel-tiles" }, rep(7, () => h("div", {}, bar("50%"), bar("70%", 22), bar("100%", 6))))),
+    h("div", { class: "skel-block" }, skSec(), bar("100%", 8), bar("100%", 8)), h("div", { class: "skel-block" }, skSec(), skTable(6, 5))],
+  admin: () => [skHead(), h("div", { class: "skel-block" }, skSec(), skTable(3, 4)), h("div", { class: "skel-block" }, skSec(), skTable(6, 4))],
+  design: () => [h("div", { class: "skel-box" }), h("div", { class: "skel-block" }, skSec("24%"), skTable(3, 5))],
+  cards: () => skCards(6),
+  topics: () => skCards(3, " skel-tall"),
+  side: () => h("div", { class: "skel-block skel-side" }, skList(4, 1)),
+  rail: () => rep(3, i => h("div", { class: "skel-block skel-side" }, skSec("38%"), skList(3 - (i % 2), 2))),
+};
 
 /** A page's data hasn't come yet: "Reading…" while it may still come, the plain failure once a read has failed. Pages keep polling, so it clears itself. */
-export function waiting(failed, text = "Reading…", what = "the data") {
-  return failed ? empty(`Couldn't read ${what}. It keeps trying.`, { kind: "error" }) : empty(text, { kind: "loading" });
+export function waiting(failed, text = "Reading…", what = "the data", shape = null) {
+  return failed ? empty(`Couldn't read ${what}. It keeps trying.`, { kind: "error" }) : shape ? skeleton(shape, text) : empty(text, { kind: "loading" });
 }
 
 /** A copy button's press: copy t, then say on the button, for a moment, how it went. It worked: data-ok, and "Copied" on a worded button.

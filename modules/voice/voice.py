@@ -277,14 +277,20 @@ def setup():
     gpu = bool(shutil.which("nvidia-smi")) and subprocess.run(["nvidia-smi", "-L"], capture_output=True).returncode == 0
     venv, py, uv = MOD / ".venv", MOD / ".venv/bin/python", shutil.which("uv")
     def run(argv): print("+", " ".join(argv), flush=True); subprocess.run(argv, check=True)
-    if not py.exists(): run([uv, "venv", "-q", str(venv)] if uv else [sys.executable, "-m", "venv", str(venv)])
+    if not py.exists() or (not uv and subprocess.run([str(py), "-m", "pip", "--version"], capture_output=True).returncode):   # a failed build leaves a .venv with no pip: start it again, or a rerun would skip this
+        shutil.rmtree(venv, ignore_errors=True)
+        try: run([uv, "venv", "-q", str(venv)] if uv else [getattr(sys, "_base_executable", sys.executable), "-m", "venv", str(venv)])
+        except subprocess.CalledProcessError:
+            shutil.rmtree(venv, ignore_errors=True); sys.exit("voice: couldn't make a Python environment: install python3-venv (apt install python3-venv) or uv, then rerun voice setup")
     pkgs = ["faster-whisper", "numpy"] + (["nvidia-cublas-cu12", "nvidia-cudnn-cu12==9.*"] if gpu else [])
     run([uv, "pip", "install", "-q", "--python", str(py)] + pkgs if uv else [str(py), "-m", "pip", "install", "-q"] + pkgs)
     run([str(py), str(MOD / "voice.py"), "selftest"])
     unit = MOD / "hive-voice.service"
     if not shutil.which("systemctl"): print(f"No systemd here: run {py} {MOD / 'voice.py'} watch yourself, and keep it running."); return
     u = HOME / ".config/systemd/user"; u.mkdir(parents=True, exist_ok=True)
-    (u / unit.name).unlink(missing_ok=True); (u / unit.name).symlink_to(unit)
+    (u / unit.name).unlink(missing_ok=True)
+    if (HOME / ".hive-account").exists(): (u / unit.name).write_text(unit.read_text().replace("%h", str(HOME)))   # a Hive in a folder of someone's account: %h would be the account's home, not this folder
+    else: (u / unit.name).symlink_to(unit)
     dash = u / "hive-dash.service.d/local.conf"   # the install's PATH (where claude is) and env file, as the other services get them
     if dash.exists(): (u / f"{unit.name}.d").mkdir(exist_ok=True); shutil.copy(dash, u / f"{unit.name}.d/local.conf")
     run(["systemctl", "--user", "daemon-reload"]); run(["systemctl", "--user", "enable", "--now", unit.name]); run(["systemctl", "--user", "restart", unit.name])

@@ -607,6 +607,18 @@ def module_links(d):
         out += [(Path(l).expanduser() / "skills" / Path(s).parent.name, (d / s).parent) for l in logins]
     return out
 
+def module_stop_units(d):
+    """Stop and disable the services and timers a module installed, and take away their unit files and drop-ins. Only this module's: a link into its folder, or in a Hive inside someone's account (units are written out there) a file of that name."""
+    u, account = HOME / ".config/systemd/user", (HOME / ".hive-account").exists()
+    units = [f.name for f in sorted(d.glob("*.service")) + sorted(d.glob("*.timer")) if ((u / f.name).is_symlink() and (u / f.name).resolve().is_relative_to(d.resolve())) or (account and (u / f.name).is_file())]
+    if not units: return
+    def ctl(*argv):
+        try: return subprocess.run(["systemctl", "--user", *argv], capture_output=True, text=True, timeout=120).returncode == 0
+        except (OSError, subprocess.SubprocessError): return False
+    if not ctl("disable", "--now", *units): print(f"note: couldn't stop {' '.join(units)}; if it's still running, restart this machine's user services", file=sys.stderr)
+    for n in units: (u / n).unlink(missing_ok=True); shutil.rmtree(u / f"{n}.d", ignore_errors=True)
+    ctl("daemon-reload")
+
 def cmd_module(a):
     """Modules are optional folders in ~/modules with a module.json: commands, skills, docs. The core never uses them."""
     cat = catalog()
@@ -618,18 +630,24 @@ def cmd_module(a):
             if not (MODULES / n).exists(): print(f"{n:<14} available  {module_blurb(c.get('about'))}" + (f" [needs {c['needs']}]" if c.get("needs") else ""))
         return
     if not a.name: sys.exit(f"hive module {a.do}: name which module")
-    name = re.sub(r"\.git$", "", a.name.rstrip("/").rsplit("/", 1)[-1]).removeprefix("hive-")
-    if not MODULE_NAME.fullmatch(name): sys.exit(f"hive module {a.do}: {a.name} isn't a module's name or a git URL")
+    if a.do == "add" and len(a.name) > 1: sys.exit("hive module add: one module at a time")
+    names = [re.sub(r"\.git$", "", n.rstrip("/").rsplit("/", 1)[-1]).removeprefix("hive-") for n in a.name]
+    for n, given in zip(names, a.name):
+        if not MODULE_NAME.fullmatch(n): sys.exit(f"hive module {a.do}: {given} isn't a module's name or a git URL")
+    a.name, name = a.name[0], names[0]
     if os.environ.get("HIVE_BROKER"):  # ~/modules is read-only in the sandbox: the broker adds it, from the catalog only
         if a.do == "remove": sys.exit("hive module remove: only the person removes modules, in the app (Settings, Modules)")
         forward({"verb": "module", "name": a.name})
     d = MODULES / name
     if a.do == "remove":
-        if not d.is_dir(): sys.exit(f"{name} isn't installed")
-        if (d / ".git").exists() and subprocess.run(["git", "-C", str(d), "status", "--porcelain"], capture_output=True, text=True).stdout.strip():
-            sys.exit(f"{d} has uncommitted changes; commit or discard them first")
-        for link, _ in module_links(d): link.unlink(missing_ok=True)
-        shutil.rmtree(d); print(f"removed {name}")
+        for n in names:  # all or none: a problem with the second doesn't leave the first half done
+            if not (MODULES / n).is_dir(): sys.exit(f"{n} isn't installed")
+            if (MODULES / n / ".git").exists() and subprocess.run(["git", "-C", str(MODULES / n), "status", "--porcelain"], capture_output=True, text=True).stdout.strip():
+                sys.exit(f"{MODULES / n} has uncommitted changes; commit or discard them first")
+        for n in names:
+            d = MODULES / n; module_stop_units(d)
+            for link, _ in module_links(d): link.unlink(missing_ok=True)
+            shutil.rmtree(d); print(f"removed {n}")
         return
     if not d.exists():
         MODULES.mkdir(exist_ok=True)
@@ -1243,8 +1261,8 @@ p = sp.add_parser("verify", help="hive verify ID: does this post carry a good si
 p = sp.add_parser("who", help="who's running"); p.add_argument("--usage", action="store_true", help="also the logins' weekly usage (the starter paces on it; agents needn't)"); p.set_defaults(f=cmd_who)
 p = sp.add_parser("wait", help="hive wait [--to X] [--thread T] [--timeout 3600]: block until a new post for X or in T arrives")
 p.add_argument("--to"); p.add_argument("--thread"); p.add_argument("--timeout", type=int, default=3600); p.set_defaults(f=cmd_wait)
-p = sp.add_parser("module", help="hive module list [--json] | add NAME|GIT-URL | remove NAME: what is installed and what the marketplace offers")
-p.add_argument("do", choices=["list", "add", "remove"]); p.add_argument("name", nargs="?"); p.add_argument("--json", action="store_true"); p.set_defaults(f=cmd_module)
+p = sp.add_parser("module", help="hive module list [--json] | add NAME|GIT-URL | remove NAME...: what is installed and what the marketplace offers")
+p.add_argument("do", choices=["list", "add", "remove"]); p.add_argument("name", nargs="*"); p.add_argument("--json", action="store_true"); p.set_defaults(f=cmd_module)
 p = sp.add_parser("update", help="hive update [--check]: an installed Hive goes to the newest release, and back if that fails")
 p.add_argument("--check", action="store_true"); p.add_argument("--auto", action="store_true"); p.set_defaults(f=cmd_update)
 p = sp.add_parser("share", help="hive share CONVERSATION [-o FILE] [--show] [--remove ID,ID] [--no-files]: write one conversation as a single page you can post (the ask, the agents at work, the result). Private details are taken out; nothing is uploaded. --show prints the text to read first")

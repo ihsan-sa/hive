@@ -12,7 +12,7 @@ export const S = {
   app: { route: "open", can: null, app: lastApp(), setup: null },
   live: null, usage: null, projects: null, agentCosts: null, threadNames: {}, threadMeta: {}, shown: [], threadStatus: {}, agentStatus: {},
   posts: [], byId: {}, threads: new Map(), off: 0, boardStart: null,
-  sessions: [], lastByThread: {}, lastSess: {}, open: {}, byOut: {}, woke: {}, logOff: 0,
+  sessions: [], lastByThread: {}, lastSess: {}, open: {}, byOut: {}, woke: {}, logOff: 0, logStart: null, history: false,
   agents: new Set(), killed: {}, limited: [], limitedSess: new Set(), limitedNow: new Set(),
   ledger: [],                 // {t, kind, parts:[string | {a:name} | {th:thread}], lc}
   running: new Map(), pending: {},
@@ -131,20 +131,30 @@ function ingestBoard(items) {
   }
 }
 
-// The first read takes only the board's last FIRST_BYTES (about a day), so the pages draw in about a second; the older part
-// is fetched right after and the board state is rebuilt in order with it. S.boardStart is where what's held begins (0: all of it).
-const FIRST_BYTES = 2_000_000;
-async function backfill(upto) {
+// The first read takes only the last FIRST_BYTES of the board and LOG_FIRST_BYTES of the log (each about a day), so the pages draw in about a second;
+// the older parts are fetched right after and the state is rebuilt in order with them. S.boardStart and S.logStart are where what's held begins (0: all of it); S.history turns true once it is all in, and what counts across old threads (the waits) waits for it.
+const FIRST_BYTES = 2_000_000, LOG_FIRST_BYTES = 600_000;
+let logHeld = [];   // the log items read so far, kept until the older part has arrived: ingestLog keeps no raw events to rebuild from
+function resetLog() {
+  Object.assign(S, { sessions: [], lastByThread: {}, lastSess: {}, open: {}, byOut: {}, woke: {}, agents: new Set(), killed: {}, limited: [], limitedSess: new Set(), limitedNow: new Set() });
+  S.ledger = S.ledger.filter(r => r.b);
+}
+async function backfill(boardUpto, logUpto) {
   for (let i = 0; i < 5; i++) {
     try {
-      const b = await jget("/api/board?from=0&upto=" + upto);
-      const recent = S.posts;
-      S.posts = []; S.byId = {}; S.threads = new Map(); S.ledger = S.ledger.filter(r => !r.b);
-      ingestBoard(b.items); ingestBoard(recent);
-      S.boardStart = 0; S.ver++; emit({ live: true, older: true });
+      const [b, lg] = await Promise.all([boardUpto ? jget("/api/board?from=0&upto=" + boardUpto) : null, logUpto ? jget("/api/log?from=0&upto=" + logUpto) : null]);
+      if (lg) { const recent = logHeld; logHeld = null; resetLog(); ingestLog(lg.items); ingestLog(recent); S.logStart = 0; }
+      if (b) {
+        const recent = S.posts;
+        S.posts = []; S.byId = {}; S.threads = new Map(); S.ledger = S.ledger.filter(r => !r.b);
+        ingestBoard(b.items); ingestBoard(recent);
+        S.boardStart = 0;
+      }
+      S.history = true; S.ver++; emit({ live: true, older: true });
       return;
     } catch (e) { await new Promise(r => setTimeout(r, 3000 * (i + 1))); }
   }
+  logHeld = null; S.history = true; S.ver++; emit({ live: true, older: true });   // gave up: what's held is all there will be, and the pages stop waiting for the rest
 }
 
 // ---- polling: live + appended log and board every 1.5 s, usage every 3 s, only while the tab is visible ----
@@ -153,7 +163,7 @@ export async function poll() {
   if (polling) return; polling = true;
   try {
     // All read together, then applied in one go: S.live set with a wait before the board is ingested let a page draw "No conversations yet" while they were still on their way.
-    const [l, lg, b, a, d] = await Promise.all([jget("/api/live"), jget("/api/log?from=" + S.logOff), jget("/api/board?from=" + S.off + (S.off || S.boardStart != null ? "" : "&last=" + FIRST_BYTES)), jget("/api/approvals").catch(() => null), jget("/api/feedback-drafts").catch(() => null)]);
+    const [l, lg, b, a, d] = await Promise.all([jget("/api/live"), jget("/api/log?from=" + S.logOff + (S.logOff || S.logStart != null ? "" : "&last=" + LOG_FIRST_BYTES)), jget("/api/board?from=" + S.off + (S.off || S.boardStart != null ? "" : "&last=" + FIRST_BYTES)), jget("/api/approvals").catch(() => null), jget("/api/feedback-drafts").catch(() => null)]);
     S.stCache.clear(); S.live = l;
     if (typeof l.starter === "boolean" && S.app.setup && S.app.setup.starter !== l.starter) { S.app.setup.starter = l.starter; emit({ app: true }); }   // the Hive stopped or is back: from the live read, not /api/app's 15 s one
     S.approvals = a === null ? S.approvals || [] : Array.isArray(a) ? a : [];
@@ -163,9 +173,11 @@ export async function poll() {
     const runSig = [...S.running.keys()].sort().join();
     const changed = b.items.length || lg.items.length || runSig !== S.runSig; S.runSig = runSig;
     S.logOff = lg.offset; S.off = b.offset;
-    const older = S.boardStart == null && b.start > 0; if (S.boardStart == null) S.boardStart = b.start || 0;
+    const older = S.boardStart == null && b.start > 0, olderLog = S.logStart == null && lg.start > 0; if (S.boardStart == null) S.boardStart = b.start || 0; if (S.logStart == null) S.logStart = lg.start || 0;
+    if (S.logStart && logHeld) logHeld.push(...lg.items);
     ingestLog(lg.items); ingestBoard(b.items);
-    if (older) setTimeout(() => backfill(b.start), 50);
+    S.history ||= !(older || olderLog);
+    if (older || olderLog) setTimeout(() => backfill(older ? b.start : 0, olderLog ? lg.start : 0), 50);
     if (changed) S.ver++;
     S.fresh = now(); S.failed = false;
     emit({ live: true, posts: b.items, log: lg.items });
