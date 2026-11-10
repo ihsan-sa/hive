@@ -3,10 +3,31 @@
 // Not in the picture: iframes, and WebGL canvases. A browser that can't do this (Safari taints or blanks it) throws, and the caller offers its other ways.
 const LIMIT_MS = 4000;
 
-function cssOf(sheet) {
+function cssOf(sheet, fonts) {
   let out = "";
-  for (const r of sheet.cssRules) out += (r instanceof CSSImportRule && r.styleSheet ? cssOf(r.styleSheet) : r.cssText) + "\n";
+  for (const r of sheet.cssRules) out += (r instanceof CSSImportRule && r.styleSheet ? cssOf(r.styleSheet, fonts) : fonts.get(r) || r.cssText) + "\n";
   return out;
+}
+const fontFiles = new Map();   // address -> data: URL, so only the first picture fetches
+const asData = blob => new Promise((ok, no) => { const f = new FileReader(); f.onload = () => ok(f.result); f.onerror = no; f.readAsDataURL(blob); });
+/** An SVG image can't load anything itself, so without this its text is in a fallback font, a little wider, and lines break in other places than on the screen.
+ *  Each @font-face the page has actually used, with its file in the rule. Rule -> its text. A file that can't be read just leaves that rule as it was. */
+async function fontsIn(sheets) {
+  const used = new Set([...document.fonts].filter(f => f.status === "loaded").map(f => f.family.replace(/["']/g, ""))), fonts = new Map();
+  const walk = async sheet => {
+    for (const r of sheet.cssRules) {
+      if (r instanceof CSSImportRule && r.styleSheet) await walk(r.styleSheet);
+      if (!(r instanceof CSSFontFaceRule) || !used.has(r.style.getPropertyValue("font-family").replace(/["']/g, ""))) continue;
+      const m = /url\(["']?([^"')]+)/.exec(r.cssText); if (!m) continue;
+      try {
+        const url = new URL(m[1], sheet.href || location.href).href;
+        if (!fontFiles.has(url)) { const got = await fetch(url); if (!got.ok) continue; fontFiles.set(url, await asData(await got.blob())); }
+        fonts.set(r, r.cssText.replace(/src:[^;}]*/, () => `src: url("${fontFiles.get(url)}")`));
+      } catch {}
+    }
+  };
+  for (const s of sheets) await walk(s);
+  return fonts;
 }
 function urlOf(src, w, hh) {   // a same-origin picture as a data: URL at the size it's shown: an SVG image can't load anything itself
   const c = document.createElement("canvas"); c.width = Math.max(1, Math.round(w)); c.height = Math.max(1, Math.round(hh));
@@ -111,7 +132,7 @@ const esc = s => s.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, 
 /** A canvas of the window as it looks now, in device pixels (at most 2x). Throws if this browser can't. */
 export async function snapshot() {
   const root = document.documentElement, W = root.clientWidth, H = root.clientHeight, scale = Math.min(devicePixelRatio || 1, 2);
-  const css = [...document.styleSheets].map(cssOf).join("\n");
+  const sheets = [...document.styleSheets], fonts = await fontsIn(sheets), css = sheets.map(s => cssOf(s, fonts)).join("\n");
   const body = new XMLSerializer().serializeToString(copyPage(scale));
   // Root rules (:root, its data-theme and so on) land on the svg, which is the root in there, so it gets the page root's attributes and the resolved colour scheme.
   const attrs = [...root.attributes].filter(a => !/^(xmlns|style|lang)/.test(a.name)).map(a => ` ${a.name}="${esc(a.value)}"`).join("");

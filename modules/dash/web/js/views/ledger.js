@@ -82,6 +82,7 @@ function rows() {
 export default {
   id: "ledger", label: () => (S.app.app ? "History" : "Ledger"), about: "everything that happened, in order: messages, starts and ends, and every tool call", tab: true,
   poll: { every: 5000, run(ctx) { loadSteps(ctx.update); } },
+  leave() { L.sig = ""; },   // the list is a fresh empty node on the way back, so its rows must be built again
   render(ctx) {
     if ([L.kind, L.q, L.limit].join("|") !== ST.key) loadSteps(ctx.update);
     const sig = [S.ver, L.kind, L.q, L.limit, ST.sig, ST.key].join("|"), changed = sig !== L.sig; L.sig = sig;

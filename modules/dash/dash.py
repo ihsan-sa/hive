@@ -3086,8 +3086,9 @@ def foci_bytes():
     with each one's share of the hive's runs, posts and cost over the last day and week (activity: focus.py's counts, the costs from Usage here)."""
     out = core_json("focus.py", "json", timeout=20)
     if isinstance(out, dict) and out.get("activity"): out["activity"] = foci_costs(out["activity"], USAGE)
+    if not isinstance(out, dict) and foci_c.v: return foci_c.v  # a read that failed keeps the last good list: an empty one reads as "no such focus" on every focus page
     return json.dumps(out if isinstance(out, dict) else {"foci": [], "tags": {}, "error": "focus.py gave nothing"}).encode()
-foci_c = Cached(foci_bytes, 20)
+foci_c = CachedStale(foci_bytes, 20)  # stale, not Cached: at nice 15 focus.py took 2 to 9 s on a cold read, and every page that opened then waited on it (design round 2026-11-09)
 
 def ladder_now(ttl=20):
     """Each focus's open rung and counts, live from core/goals.py (0.1 s), by row name. The 30-minute summary carries the same fields and lags

@@ -23,6 +23,7 @@ new ResizeObserver(() => { if (top.offsetHeight) document.documentElement.style.
 const scrolls = {};
 // Where an empty address lands: the chat in the app, Now on the developer route.
 const home = () => byId.get(S.app.app ? "comms" : "now");
+let booted = false;   // true once S.app is in: home() depends on it, so a stale address waits for it before it is corrected
 let cur = home(), arg = null, raf = 0, timer = 0, entered = false;   // entered: the first route() enters the page even when it is home, so a fresh load draws it before the data comes
 
 const ctx = { update: () => schedule(true), get arg() { return arg; } };
@@ -39,9 +40,13 @@ function render(force) {
   mount(main, page);
   // On a phone the page head's row (.subnav) scrolls sideways: bring the page you are on into view once, when you arrive. Sideways only, so it never moves the page.
   const here = main.querySelector(".subnav a[aria-current=page]"), row = here && here.parentNode;
-  if (row && (centred !== cur.id || row !== centredRow)) { centred = cur.id; centredRow = row; const a = here.getBoundingClientRect(), r = row.getBoundingClientRect(); row.scrollLeft += a.left - r.left - (r.width - a.width) / 2; }
+  if (row && (centred !== cur.id || row !== centredRow)) { centred = cur.id; centredRow = row; centreTab(here, row); }
   else if (!row) centred = centredRow = null;
 }
+const centreTab = (here, row) => { const a = here.getBoundingClientRect(), r = row.getBoundingClientRect(); row.scrollLeft += a.left - r.left - (r.width - a.width) / 2; };
+// Turning a phone or narrowing the window makes the row scroll where it fitted before, so the page you are on is brought into view again. Width only: a phone's keyboard changes the height.
+let tabW = innerWidth, tabT = 0;
+addEventListener("resize", () => { if (innerWidth === tabW) return; tabW = innerWidth; clearTimeout(tabT); tabT = setTimeout(() => { const here = main.querySelector(".subnav a[aria-current=page]"); if (here) centreTab(here, here.parentNode); }, 120); });
 let centred = null, centredRow = null;   // the page whose row was last brought into view, and that row: a page that draws its head again (Progress, Flow once their data lands) gets a new row at scrollLeft 0, so it is centred again (R7b)
 // A view that throws shows this instead of leaving the page before it on screen.
 function crashPage(v, e) {
@@ -55,7 +60,9 @@ function schedule(force) { if (raf) { raf.force ||= force; return; } raf = { for
 
 function route() {
   if (parse().id === "plans") { location.replace("#knowledge/projects"); return; }   // the old Plans page lives in Knowledge now
-  const r = parse(), next = (r.id && byId.get(r.id)) || home();
+  const r = parse();
+  if (booted && r.id && !byId.get(r.id)) { location.replace("#" + home().id); return; }   // a stale or mistyped address lands on the first page and says so in the address bar, so Back and reload agree with what is on screen
+  const next = (r.id && byId.get(r.id)) || home();
   if (!entered || next !== cur || r.arg !== arg) {
     entered = true;
     scrolls[cur.id + (arg || "")] = scrollY;
@@ -76,6 +83,9 @@ import { agentHoverInit } from "./ui/agentHover.js"; agentHoverInit();
 import { popupKeys } from "./ui/popup.js"; popupKeys();
 delegate(document); dropFiles(document);
 setViews(views); initSwitcher(views); watch(() => schedule(false)); offerDeckTour(); resume();
+// The classic scrollbar's width on this browser and zoom, for the top bar on pages with no window scrollbar (base.css).
+const measureBar = () => { const d = document.createElement("div"); d.style.cssText = "position:absolute;top:-200px;width:100px;height:100px;overflow:scroll;visibility:hidden"; document.body.append(d); document.documentElement.style.setProperty("--sbw", d.offsetWidth - d.clientWidth + "px"); d.remove(); };
+measureBar(); addEventListener("resize", measureBar);
 addEventListener("hashchange", route);
 addEventListener("keydown", e => { if (e.key === "Escape" && cur.escape) cur.escape(ctx); });
 const markRoute = () => document.documentElement.toggleAttribute("data-dev", !S.app.app);   // the developer route keeps its dense log (components.css)
@@ -83,6 +93,7 @@ markRoute();
 watchVersion();
 subscribe(() => { markRoute(); schedule(false); });
 start().then(() => {
+  booted = true;
   markRoute();
   offerTour();
   const lapsed = S.app.setup?.has_posts && S.app.settings?.setup_done !== false;   // a Hive already in use whose login has expired isn't a first run: it lands on the chat, with the band saying what to do

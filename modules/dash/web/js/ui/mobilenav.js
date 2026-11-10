@@ -66,7 +66,7 @@ export function mobileNav({ views, current, nav, update }) {
 
 /** The view, on the root: css/phone.css hides both bars in a conversation (data-view=thread) and a file. */
 export function setView(id, arg) {
-  const b = document.body, thread = id === "comms" && !!arg && !String(arg).startsWith("focus:") && arg !== "~list";   // a file (.kb[data-in]) is caught in the CSS
+  const b = document.body, thread = id === "comms" && !!arg && !String(arg).startsWith("focus:") && arg !== "~list" && arg !== "~new";   // a file (.kb[data-in]) is caught in the CSS
   const v = thread ? "thread" : id;
   if (b.dataset.view !== v) b.dataset.view = v;
 }

@@ -106,13 +106,20 @@ export function meter({ value, stop, tone, label }) {
 }
 
 /** Button. kind: default | primary | danger | quiet. size: s. tone colours quiet text (e.g. bad for Kill). */
+/** Getting full mode back takes a fresh Access sign-in, and Access's logout URL ends on its own "logged out" page with no way back.
+ * So end the session in the background and reload, which lands on the sign-in page. The link's href stays as the fallback. */
+export function signInAgain(e) {
+  e.preventDefault();
+  fetch("/cdn-cgi/access/logout", { credentials: "same-origin" }).catch(() => null).finally(() => location.reload());
+}
+
 export function button(label, onClick, { kind, size, tone, title, disabled, type, cls, href, busy, icon: ic } = {}) {
   // icon: name from icons.js, shown before the label; kind "icon" shows the icon alone, the label becomes aria-label and title.
   const only = kind === "icon";
   const body = ic ? (only ? [icon(ic)] : [icon(ic), h("span", {}, label)]) : [label];
   const a = { class: ["btn", cls], "data-kind": kind || null, "data-size": size || null, "data-tone": tone || null,
     title: title || (only && typeof label === "string" ? label : null), "aria-label": only && typeof label === "string" ? label : null };
-  if (href) return h("a", { ...a, href }, ...body);
+  if (href) return h("a", { ...a, href, onclick: onClick }, ...body);
   return h("button", { ...a, type: type || "button", disabled: disabled || busy || null, "data-busy": busy ? "" : null, "aria-busy": busy ? "true" : null, onclick: onClick }, ...body);
 }
 
@@ -136,7 +143,14 @@ export function needFull(what, title) {
 }
 
 export function empty(text, { kind = "empty", title } = {}) {
+  if (kind === "loading" && text === "Reading…") return skeleton();
   return h("div", { class: "empty", "data-kind": kind, role: kind === "error" ? "alert" : null }, title ? h("div", { class: "empty-t" }, title) : null, text);
+}
+
+/** Data on its way: grey lines where the rows will be, in place of a word in an empty page. The word stays for a screen reader; the CSS holds it back 150 ms so a quick read never flashes it. */
+export function skeleton(rows = 4) {
+  return h("div", { class: "empty skel", "data-kind": "loading", role: "status" }, h("span", { class: "vh" }, "Reading…"),
+    Array.from({ length: rows }, () => h("div", { class: "skel-r" }, h("span", { class: "skel-b" }), h("span", { class: "skel-b" }))));
 }
 
 /** A page's data hasn't come yet: "Reading…" while it may still come, the plain failure once a read has failed. Pages keep polling, so it clears itself. */

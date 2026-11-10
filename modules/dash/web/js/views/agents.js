@@ -2,7 +2,7 @@
 // browser, from what the store already holds; the name opens the agent's panel with all its numbers. Cost and tokens: agentSpend.
 import { h } from "../core/dom.js";
 import { S, OUTSIDE, getPref, loadAgentCosts, setPref } from "../core/store.js";
-import { agentOn, agentSpend, agentStatus, isRunning, loginName, modelName, sEnd, threadTitle } from "../core/model.js";
+import { HOUSE_THREADS, agentOn, agentSpend, agentStatus, isRunning, loginName, modelName, sEnd, threadTitle } from "../core/model.js";
 import { ago, dur, money, plural, short, stamp, toks } from "../core/format.js";
 import { metrics } from "../templates.js";
 import { button, empty, waiting, input, pageHeader, seg, stats, toolbar, pageNav } from "../ui/kit.js";
@@ -20,7 +20,7 @@ const colsOn = () => { const c = getPref("agents.cols", null); return new Set(Ar
 const sort = () => getPref("agents.sort", { k: "spawned", d: -1 });
 
 // Housekeeping runs: the hive looking after itself (status-bar refreshes, keeper and improve rounds, watchdog trips, phone-call starts). Folded by default so the runs on someone's work show; one click brings them back.
-const HOUSE_THREADS = new Set(["thread-status", "keeper", "improve", "watchdog"]), HOUSE_FROM = new Set(["status-timer", "phone", "watchdog"]);
+const HOUSE_FROM = new Set(["status-timer", "phone", "watchdog"]);
 const isHouse = a => { const p = S.byId[a.first.post]; return HOUSE_THREADS.has(a.first.thread) || !!p && (HOUSE_FROM.has(p.from) || /^\W*(@\w+\s+)?keeper round/i.test(String(p.text || ""))); };
 const statusOf = n => { const k = agentStatus(n).key; return isRunning(n) ? "running" : k; };
 const whoKind = f => (!f || f === "anon" ? "system" : OUTSIDE.has(f) ? "person" : S.agents.has(f) ? "agent" : "system");
@@ -84,7 +84,9 @@ const COLS = [
 ];
 
 // A column's track in the grid rows' --cols: the words get the spare room, the rest their usual width
-const W = { name: "minmax(120px,1fr)", status: "90px", spawned: "130px", thread: "minmax(140px,1.2fr)", on: "minmax(200px,2fr)", from: "110px", model: "110px", account: "110px", lastSeen: "100px" };
+const W = { name: "minmax(120px,1fr)", status: "90px", spawned: "130px", thread: "minmax(140px,1.2fr)", on: "minmax(150px,2fr)", from: "110px", model: "110px", account: "110px", lastSeen: "100px" };
+// Do the chosen columns fit #main? Then the page scrolls and the table needs no box (and no second scrollbar) of its own. Each column's least width, 12px gaps, 16px row padding; 48px is the page's own side padding.
+const tableFits = cols => { const m = document.getElementById("main"); return !!m && m.clientWidth - 48 >= cols.reduce((n, c) => n + parseInt(colW(c).match(/\d+/)[0], 10) + 12, 4); };
 const colW = (c, phone) => (phone && c.k === "on" ? "min(22rem,calc(100vw - 13rem))" : W[c.k] || (c.num ? "72px" : "110px"));
 
 function select(withHouse) {
@@ -116,7 +118,7 @@ export default {
     const nHouse = L.nHouse;
     const found = L.found, narrowed = found.length < all.length, sum = f => found.reduce((a, x) => a + f(x), 0);
     const by = k => () => { const c = sort(), d = c.k === k ? -c.d : COLS.find(x => x.k === k).num || k === "spawned" ? -1 : 1; setPref("agents.sort", { k, d }); L.limit = PAGE; ctx.update(); };
-    const on = colsOn(), phone = matchMedia("(max-width: 640px)").matches, cols = COLS.filter(c => on.has(c.k)).sort(phone ? (x, y) => phoneRank(x) - phoneRank(y) : () => 0), nf = ["status", "model", "account", "by", "since"].filter(k => L[k] !== "all").length;
+    const on = colsOn(), phone = matchMedia("(max-width: 640px)").matches, cols = COLS.filter(c => on.has(c.k)).sort(phone ? (x, y) => phoneRank(x) - phoneRank(y) : () => 0), fits = !phone && tableFits(cols), nf = ["status", "model", "account", "by", "since"].filter(k => L[k] !== "all").length;
     const costs = S.agentCosts; COST_DATA = all.some(a => a.usd > 0 || a.tok > 0);   // no cost data is "–", not a real zero (handoff 33)
     const costNote = costs && costs.at ? `Cost and tokens from the transcripts, read ${ago(costs.at * 1e3)}${costs.refreshing ? ", reading again" : ""}. API list prices; nobody is billed this. Tokens add up every model call's input, output and cache, so context read again on each call counts each time.` : costs && costs.refreshing ? "Reading the transcripts for exact costs; until then these come from the session logs." : "Cost and tokens from the session logs.";
     const totals = stats([
@@ -125,20 +127,22 @@ export default {
         { label: "Tokens", value: COST_DATA ? toks(sum(a => a.tok)) : "–", note: !COST_DATA ? null : `${pctOf(sum(a => a.spend.t[2]), sum(a => a.tok))} re-read from cache; ${toks(sum(a => a.spend.t[1]))} written` },
         { label: "Agent time", value: found.length ? dur(sum(a => a.ran)) : "–", note: found.length ? `added up over ${plural(sum(a => a.runs), "run")}, in ${dur(Date.now() - Math.min(...found.map(a => a.when || Date.now())))}` : null },
     ]);
+    // Filters and Columns open into a full-width row under the controls. The row is the fold's sibling, not its body: a body would widen the fold and throw its button to a new line.
+    const fold = (k, label) => h("details", { class: "now-more ag-f", open: L[k] || null, ontoggle: (e, n) => { if (e.target === n && !!L[k] !== n.open) { L[k] = n.open; ctx.update(); } } }, h("summary", null, label));
     return metrics({
       header: pageHeader({ subnav: pageNav(), title: "Agents", hint: `Every agent that has run, ${s.k === "spawned" && s.d < 0 ? "newest first" : s.k === "spawned" ? "oldest first" : "sorted by the column you chose"}.`, after: toolbar(
         input({ type: "search", placeholder: `Search name, ${S.app.app ? "conversation" : "thread"}, model, who started it`, "aria-label": "Search agents", value: L.q, oninput: e => set("q", e.target.value) }),
         seg(STATUS.filter(x => ["all", "running", "ended", "failed"].includes(x[0]) || x[0] === L.status).map(([k, l]) => [k, k === "all" ? "All" : l]), L.status, v => set("status", v), { label: "Status" }),
-        h("details", { class: "now-more ag-f", open: L.fOpen || null, ontoggle: (e, n) => { if (e.target === n) L.fOpen = n.open; } }, h("summary", null, "Filters" + (nf ? ` (${nf})` : "")),
-          h("div", { class: "toolbar" },
+        fold("fOpen", "Filters" + (nf ? ` (${nf})` : "")),
+        !L.fOpen ? null : h("div", { class: "toolbar ag-f ag-fp", "data-key": "filters" },
             picker("Status", L.status, STATUS, v => set("status", v)),   // the row above shows the common four; the rest (waiting, killed, at a limit) are here
             picker("Model", L.model, [["all", "Any model"], ...options(all, "model")], v => set("model", v)),
             picker("Account", L.account, [["all", "Any account"], ...options(all, "account")], v => set("account", v)),
             picker("Started by", L.by, BY, v => set("by", v)),
-            picker(S.app.app ? "Started" : "Spawned", L.since, SINCE, v => set("since", v)))),
-        h("details", { class: "now-more ag-f", open: L.cOpen || null, ontoggle: (e, n) => { if (e.target === n) L.cOpen = n.open; } }, h("summary", null, "Columns"),
-          h("div", { class: "toolbar" }, COLS.map(c => h("label", { class: "meta" }, h("input", { type: "checkbox", checked: on.has(c.k) ? "" : null, disabled: c.k === "name" ? "" : null,
-            onchange: e => { const n = new Set(on); e.target.checked ? n.add(c.k) : n.delete(c.k); setPref("agents.cols", [...n]); L.sig = ""; ctx.update(); } }), " " + c.label)))),
+            picker(S.app.app ? "Started" : "Spawned", L.since, SINCE, v => set("since", v))),
+        fold("cOpen", "Columns"),
+        !L.cOpen ? null : h("div", { class: "toolbar ag-f ag-fp", "data-key": "columns" }, COLS.map(c => h("label", { class: "meta" }, h("input", { type: "checkbox", checked: on.has(c.k) ? "" : null, disabled: c.k === "name" ? "" : null,
+            onchange: e => { const n = new Set(on); e.target.checked ? n.add(c.k) : n.delete(c.k); setPref("agents.cols", [...n]); L.sig = ""; ctx.update(); } }), " " + c.label))),
         narrowed && found.length < all.length - nHouse ? button("Clear", () => { Object.assign(L, { q: "", status: "all", by: "all", since: "all", model: "all", account: "all", limit: PAGE }); ctx.update(); }, { kind: "quiet", size: "s" }) : null,
         phone ? picker("Sort", s.k, cols.map(c => [c.k, "Sort: " + c.label]), k => { const d = COLS.find(x => x.k === k).num || k === "spawned" ? -1 : 1; setPref("agents.sort", { k, d }); L.limit = PAGE; ctx.update(); }) : null,   // the column headers sort on a desktop; a phone has no header row
         h("span", { class: "meta" }, narrowed ? `${found.length} of ${phone && nHouse ? all.length : plural(all.length, "agent")}` : plural(all.length, "agent")),
@@ -150,7 +154,7 @@ export default {
       sections: [
         phone ? null : totals,
         // grid rows, not <table> (HANDOFF "Shared DOM changes" 6, R7 step 6): one --cols for every row, so the columns line up
-        found.length ? h("div", { class: "tblw ag-w" }, h("div", { class: "tbl ag", role: "table", "aria-label": "Agents", style: "--cols:" + cols.map(c => colW(c, phone)).join(" ") },
+        found.length ? h("div", { class: "tblw ag-w" + (fits ? " ag-page" : "") }, h("div", { class: "tbl ag", role: "table", "aria-label": "Agents", style: "--cols:" + cols.map(c => colW(c, phone)).join(" ") },
           h("div", { class: "tr th", role: "row" }, cols.map(c => h("span", { role: "columnheader", class: c.num ? "r" : null, title: c.title || null, "aria-sort": s.k === c.k ? (s.d > 0 ? "ascending" : "descending") : null, "data-key": c.k },
             h("button", { type: "button", class: "ag-s", onclick: by(c.k) }, c.label, s.k === c.k ? h("span", { "aria-hidden": "true" }, s.d > 0 ? "▲" : "▼") : null)))),
           h("div", { class: "tb", role: "rowgroup", "data-own": "morph", "data-sig": sig }, changed ? found.slice(0, L.limit).map(a => h("div", { class: "tr", role: "row", "data-key": a.name },

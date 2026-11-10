@@ -49,6 +49,8 @@
   .menu-i{min-height:44px;font-size:var(--fs-body)}
   .menu-i-t{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block}
   .scrim{background:var(--scrim)}
+  /* the composer's menus sit beside their button on a wide window (chat.css), which ran To and Model off the left edge here and left Attach short of the right one */
+  .cp .menu.cp-menu,.cp .menu.cp-mmenu,.cp .menu.cp-mmenu[data-side=bottom-end],.cp .menu[data-side=top-start]{position:fixed;left:0;right:0;bottom:0;top:auto;width:auto;max-height:75vh}
   .dlg{position:fixed;top:auto;bottom:0;left:0;right:0;margin:0;transform:none;width:auto;max-width:none;max-height:85vh;overflow:auto;border-radius:var(--r-xl) var(--r-xl) 0 0;border-bottom:0;padding-bottom:calc(var(--s5) + env(safe-area-inset-bottom,0px));animation:sheetin var(--dur-l) var(--ease)}
   .dlg-a{flex-wrap:wrap}
   .dlg-a .btn{flex:1 1 auto}
@@ -67,7 +69,7 @@
      list, places and grip don't. The home is a column, so that row takes its own room over the cards instead of sitting under them. */
   .cm[data-home]{display:flex;flex-direction:column}
   .cm[data-home] .cm-side{display:block;flex:none;position:static;height:auto;max-height:none;border:0;padding:var(--s3) var(--s4) 0;background:none;overflow:visible}
-  .cm[data-home] .cm-side>:not(.cm-filters),.cm[data-home] .cm-side .cm-newbtn,.cm[data-home] .cm-side .cm-places,.cm[data-home] .cm-side .cm-srow{display:none}   /* places: the More sheet's Conversations */
+  .cm[data-home] .cm-side>:not(.cm-filters),.cm[data-home] .cm-side .cm-newbtn,.cm[data-home] .cm-side .cm-places,.cm[data-home] .cm-side .cm-srow,.cm[data-home] .cm-side .cm-show-m{display:none}   /* places: the More sheet's Conversations */
   .cm[data-home] .cm-filters{padding:0;border:0}
   .cm[data-home] .cm-convo{display:flex;flex:1 1 auto;min-height:0}
   .cm-listbtn,.cm-listbtn.only-phone{display:flex;align-items:center;gap:var(--s2);min-height:44px;padding:0 var(--s3);border:1px solid var(--line-2);border-radius:var(--r-pill);background:var(--surface);color:var(--ink);text-decoration:none}
@@ -85,9 +87,10 @@
   .cm[data-list] .cm-views .seg button{height:36px;padding:0 14px}
   .cm[data-list] .cm-hidefaded{min-height:36px}
   .cm[data-list] .cm-showbtn{min-width:40px;min-height:40px}
+  .cm[data-list] .cm-srow>.tm-chip-imp{width:40px;height:40px}
   .cm[data-list] .tm-sec-add{width:40px;height:40px;margin:0;opacity:1}
   .cm-home{display:flex;flex-direction:column;gap:var(--s5);padding:var(--s4) var(--s4) 0}
-  .cm-home>.cm-new,.cm-home>section:first-child{order:99;position:sticky;bottom:0;z-index:6;margin:0 calc(-1 * var(--s4));padding:var(--s3);background:linear-gradient(to bottom,transparent,var(--bg) 14px)}
+  .cm-home>.cm-new,.cm-home>section:first-child{order:99;position:sticky;bottom:0;z-index:6;width:auto;max-width:none;margin:0 calc(-1 * var(--s4));padding:var(--s3) var(--s4);background:linear-gradient(to bottom,transparent,var(--bg) 14px)}
   .cm-home>.cm-new>.cm-home-t,.cm-home>.cm-new>.cm-home-l,.cm-home>section:first-child h1{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
   .cm-home .cp-t{min-height:44px;max-height:120px}
   .cm-home .fc{padding:14px 14px 6px}
@@ -99,7 +102,7 @@
   .cm-plist .lr-x{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding-left:16px}
 
   /* ---- a conversation: full screen, back, title, one line of status (tap for both) ---- */
-  .cm[data-in] .cm-side{display:none}
+  .cm[data-in]:not([data-home],[data-list]) .cm-side{display:none}
   .cm-back{display:inline-flex;min-width:40px;min-height:40px;margin-left:-8px}
   .cm-crumb{display:none}
   .cm-head{padding:4px var(--s2) 6px var(--s1)}
@@ -144,9 +147,10 @@
   .cp-mpop,.cp-model.dd{flex:none}
   .cp-fpop{min-width:0;flex:0 1 auto}
   .cp-fbtn.dd{max-width:none;min-width:0;flex:0 1 auto}
-  .cp-fbtn .cp-fname{min-width:12ch}
-  .cp-fpick[data-picked]>.cp-lab{display:none}
-  .cp-lab{font-size:11px}
+  .cp-fbtn[data-picked] .cp-fname{min-width:12ch}
+  .cp-fbtn:not([data-picked]) .cp-fname{min-width:0}
+  /* the words "Focus" and "Model" go on a phone: the value says it ("No focus", "Sonnet"), and with them the row ran the pills into each other and cut "To a552f" to "a" */
+  .cp-fbtn>.cp-lab,.cp-model>.cp-lab{display:none}
 
   /* ---- pages ---- */
   .page{padding:var(--s4) max(var(--s4),env(safe-area-inset-right,0px)) var(--s7) max(var(--s4),env(safe-area-inset-left,0px))}

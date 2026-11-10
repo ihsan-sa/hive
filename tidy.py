@@ -73,6 +73,7 @@ def due(since, t=None, posts=None):
             out.append({"kind": "title", "thread": th, "post": last_agent(th), "what": f"no title, shows: {title}", "agents": who(th, "title")})
     for f in st["foci"]:
         ths = {th for th, fid in st["tags"].items() if fid == f["id"]} | {x for x in (f.get("thread"), f["id"]) if x}
+        ths = {x for x in ths if not fc.asked_only(x)}
         rt, p = fc.newest_result(ths, posts)
         s = f.get("summary"); sat = float(s.get("at") or 0) if s else 0
         if p and rt >= since and t - rt >= GRACE_S and rt - sat > SUMMARY_SLACK_S:  # a summary written just before the result post (the Stop nudge order) is current

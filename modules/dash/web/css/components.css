@@ -54,7 +54,7 @@ a.top-route[data-mode=limited]:hover{background:color-mix(in oklch,var(--warn) 3
   .tab{flex:1;justify-content:center;padding:0 8px}
 }
 /* inside a conversation on a phone the app bar folds away; the thread head carries back + title */
-@container (max-width:640px){body:has(.cm[data-in]) .top{display:none}}
+@container (max-width:640px){body:has(.cm[data-in]:not([data-home])) .top{display:none}}
 
 /* ===== More: an icon button with a menu — replaces the "---- More ----" block ===== */
 /* ---- menus (R7): one family, from the design. The old per-menu classes (more-m, rc-menu, pv-menu, cm-menu) stay on as hooks and keep only where they sit. The phone sheet is step 3 ---- */
@@ -435,6 +435,18 @@ table.tbl .clip{width:100%;max-width:0;overflow:hidden;text-overflow:ellipsis}
 .empty[data-kind=page]{padding:var(--s7) 0;text-align:center}
 @keyframes pulse{50%{opacity:.25}}
 @media (prefers-reduced-motion:reduce){.empty[data-kind=loading]::before{animation:none}}
+/* skeleton: lines where the rows will be while a page reads (kit.skeleton, and the first paint in index.html) */
+.skel{display:grid;gap:var(--s5);max-width:720px;animation:skel-in .2s ease-out .15s both}
+.empty.skel[data-kind=loading]::before{display:none}
+.skel-r{display:grid;gap:9px}
+.skel-b{display:block;height:9px;width:68%;border-radius:var(--r-s);background:var(--line);animation:skel-p 1.8s ease-in-out infinite}
+.skel-b:first-child{width:30%;height:11px;background:var(--line-2)}
+.skel-r:nth-child(3n) .skel-b:last-child{width:52%}
+.skel-r:nth-child(3n+1) .skel-b:last-child{width:80%}
+.skel-r:nth-child(2n) .skel-b:first-child{width:22%}
+@keyframes skel-in{from{opacity:0}}
+@keyframes skel-p{50%{opacity:.5}}
+@media (prefers-reduced-motion:reduce){.skel,.skel-b{animation:none}}
 
 /* ---- agentCard ---- */
 .agents{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,360px),1fr));column-gap:var(--s6)}
@@ -494,6 +506,7 @@ table.tbl .clip{width:100%;max-width:0;overflow:hidden;text-overflow:ellipsis}
 .toolbar .seg{flex:none}   /* wraps to its own row rather than hide an option behind a scroll */
 .toolbar .seg button{flex:none}
 .toolbar>.now-more{border-top:0;padding-top:0}   /* a disclosure among the controls, not a section break */
+.toolbar>.ag-fp{order:99;flex-basis:100%;margin-top:0}   /* what Filters or Columns opens: last in the row, so the controls above it stay where they were */
 .sec-h .seg{max-width:100%;flex-wrap:wrap}   /* R10 #11: on a phone the options wrap inside the pill; a hidden scroll hid "silent" and "quiet" on Progress */
 .sec-h .seg button{flex:none}
 @container (max-width:640px){.toolbar .input{width:100%}}
@@ -516,7 +529,7 @@ table.tbl .clip{width:100%;max-width:0;overflow:hidden;text-overflow:ellipsis}
 .lg-r[data-fresh]{animation:lg-fresh 2.5s ease-out}
 @keyframes lg-fresh{from{background:color-mix(in oklch,var(--good) 22%,transparent)}to{background:transparent}}
 @media (prefers-reduced-motion:reduce){.lg-r[data-fresh]{animation:none}}
-@container (max-width:640px){.lg-r{flex-wrap:wrap;gap:0 var(--s2);padding:6px 0}.lg-b{white-space:normal;width:100%}}
+@container (max-width:640px){.lg-r{flex-wrap:wrap;gap:0 var(--s2);padding:6px 0}.lg-b{white-space:normal;width:100%;overflow-wrap:anywhere}.lg-b .ref{max-width:calc(100% - 4px)}}
 
 
 /* ---- forms: rows, grids, checks, sign-in (Settings, Start) ---- */
@@ -1372,6 +1385,8 @@ a.ref:is([data-kind=file],[data-kind=kbfile])[data-pv-on]{background:color-mix(i
 .cm-foci{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:var(--s4);max-width:1100px;margin:var(--s6) auto 0;align-items:start}   /* a short card doesn't stretch to its neighbour's height */
 .cm-foci>*{min-width:0}
 .cm-foci-msg{max-width:720px;margin:var(--s6) auto 0;padding:var(--s6) var(--s5);border:1px dashed var(--line-2);border-radius:var(--r-l);text-align:center;display:grid;gap:6px;justify-items:center}
+.cm-foci-msg{width:100%}   /* auto margins alone shrink it to its words inside the home's grid */
+.cm-foci-msg[data-loading]{margin-top:0;border:0;padding:var(--s3) 0}   /* the focuses are on their way: a quiet line, not an empty card */
 .cm-foci-msg b{font-size:var(--fs-title)}
 .cm-foci-msg p{margin:0;color:var(--ink-2);font-size:var(--fs-small);max-width:52ch}
 .cm-foci-msg[data-tone=bad] b{color:var(--bad-ink)}
@@ -1449,6 +1464,7 @@ a.tm-sec-link:hover{color:var(--ink)}
 .tm-sec-hw:hover .tm-sec-add,.tm-sec-add:focus-visible{opacity:1}
 .tm-sec-add:hover{background:var(--hover);color:var(--ink)}
 @media (hover:none){.tm-sec-add{opacity:1}}
+@media (hover:hover){.tm-sec-add{width:0;margin-right:0;overflow:hidden}.tm-sec-hw:hover .tm-sec-add,.tm-sec-add:focus-visible{width:24px;margin-right:6px}}   /* on a computer the hidden + gives its width to the focus's name (R50) */
 /* the foci in the person's order: a focus's heading (rail) or card head (home) drags onto another; a line shows where it lands */
 .tm-sec-hw[draggable=true],.fc-hd[draggable=true]{cursor:grab}
 .tm-sec[data-drop=before]{box-shadow:inset 0 2px 0 var(--accent)}
@@ -1460,7 +1476,7 @@ a.tm-sec-link:hover{color:var(--ink)}
 .cm-stand-ch{display:inline-flex;flex:none;color:var(--ink-3)}.cm-stand-ch:not([data-open]) svg{transform:rotate(-90deg)}
 @container (max-width:640px){
   .cm{grid-template-columns:minmax(0,1fr)}
-  .cm[data-in] .cm-side{display:none}
+  .cm[data-in]:not([data-home],[data-list]) .cm-side{display:none}
   .cm:not([data-in]) .cm-convo{display:none}
   .cm-side{border-right:0}
   .cm-show{padding:4px 12px}
@@ -1635,7 +1651,7 @@ details.blk>summary .blk-t::after{border-color:var(--ink-3)}
 .note{border-radius:var(--r-l);padding:var(--s4) var(--s5)}
 
 /* ===== 5. comms: list, head, strip — replaces the matching rules in the "---- comms ----" block ===== */
-.cm{grid-template-columns:var(--cm-w,272px) minmax(0,1fr);grid-template-rows:minmax(0,1fr)}
+.cm{grid-template-columns:var(--cm-w,280px) minmax(0,1fr);grid-template-rows:minmax(0,1fr)}
 .cm-show{display:none}                                   /* moves into the head's filter menu (.cm-menu) */
 .cm-side{background:var(--bg);border-right:1px solid var(--line)}
 .cm-filters{display:grid;gap:2px;padding:12px 10px 8px;border-bottom:0}
@@ -1932,13 +1948,13 @@ details.blk>summary .blk-t::after{border-color:var(--ink-3)}
 /* the name stays in view when the table scrolls sideways; its shadow covers the row's left padding */
 .ag .tr>:first-child{position:sticky;left:0;z-index:1;background:var(--bg);box-shadow:-8px 0 0 var(--bg)}
 .ag .tr:not(.th):hover>:first-child{background:linear-gradient(var(--tint),var(--tint)) var(--bg);box-shadow:-8px 0 0 var(--bg)}
-/* The header stays in view. Narrow: the table is its own scroll box, sideways and down. Wide enough to fit: the page scrolls, under the top bar. */
+/* The header stays in view. Too narrow for its columns: the table is its own scroll box, sideways and down. Wide enough (.ag-page, decided in views/agents.js from the columns chosen): the page scrolls, under the top bar. */
 .ag-w{--bar:var(--bar-h);position:sticky;top:var(--bar);max-height:calc(100dvh - var(--bar) - 56px);overflow:auto}
 .ag .th{position:sticky;top:0;z-index:2;background:var(--bg);box-shadow:inset 0 -1px 0 var(--line);border-bottom:0}
 .ag .th>:first-child{z-index:3}
 @media (max-width:640px){.ag-w{max-height:calc(100dvh - var(--bar) - 100px)}.tbl.ag{overflow:visible}.ag .tb>.tr>.ag-on{white-space:normal;overflow-wrap:anywhere}} /* the page ends 98px below the table: a taller one is pushed up under the bar at the bottom */
 @media (max-width:640px){.ag-w{margin-top:0}.after:has(>.ag-w){margin-top:var(--s3) !important}} /* the agent rows start in the top half of a phone screen */
-@media (min-width:1340px){.ag-w{position:static;max-height:none;overflow:visible}.ag .th{top:var(--bar-h)}}
+.ag-w.ag-page{position:static;max-height:none;overflow:visible}.ag-page .ag .th{top:var(--bar-h)}
 /* R10 1: on a phone a row stacks like ui/table.js's (.tg): avatar, name and status, then what it is on, then a labelled line per column; the page scrolls, not a box */
 @media (max-width:640px){
   .ag-w{position:static;max-height:none;overflow:visible}
@@ -2492,6 +2508,20 @@ text.map-ring-t{font-size:var(--fs-micro);font-weight:var(--w-med);fill:var(--in
 .pv-md>.md th,.pv-md>.md td{border:0;border-bottom:1px solid var(--line);padding:6px 12px}
 .pv-md>.md th{background:var(--sunken);border-bottom:2px solid var(--line-2)}
 .pv-md>.md tr:nth-child(even) td{background:color-mix(in srgb,var(--sunken) 45%,transparent)}
+/* library-style reading details: quotes with a bar, quiet rules, roomy lists, soft inline code, links that read as links */
+.pv-md>.md>:first-child{margin-top:0}
+.pv-md>.md h4{font-size:1em;margin:1.1em 0 .25em;color:var(--ink-2)}
+.pv-md>.md :is(ul,ol){margin:.6em 0;padding-left:1.6em}
+.pv-md>.md li>:is(ul,ol){margin:.2em 0}
+.pv-md>.md li::marker{color:var(--ink-3)}
+.pv-md>.md blockquote{margin:1em 0;padding:.1em 1em;border-left:3px solid var(--line-2);color:var(--ink-2)}
+.pv-md>.md blockquote>:is(p,ul,ol){margin:.5em 0}
+.pv-md>.md hr{border:0;border-top:1px solid var(--line);margin:1.8em 0}
+.pv-md>.md :not(pre)>code{font-size:.88em;padding:.12em .4em;border-radius:5px;background:var(--code-bg)}
+.pv-md>.md a{color:var(--ink);text-decoration:underline;text-decoration-color:color-mix(in srgb,currentColor 40%,transparent);text-underline-offset:2px;overflow-wrap:anywhere}
+.pv-md>.md a:hover{text-decoration-color:currentColor}
+.pv-md>.md img{max-width:100%;height:auto;border-radius:var(--r-m)}
+.pv-md>.md strong{font-weight:var(--w-bold,700)}
 @media print{.pv,.pv-grip,#top{display:none}}
 /* ---- brought up for you: threads an agent raised with `hive show`, in the Chat side list over Conversations ---- */
 .brought{display:grid;gap:4px;min-width:0;margin-top:8px;padding:8px;border-radius:var(--r-m);background:color-mix(in oklch,var(--accent,var(--ink)) 8%,var(--surface));font-size:var(--fs-small)}
@@ -2553,6 +2583,7 @@ text.map-ring-t{font-size:var(--fs-micro);font-weight:var(--w-med);fill:var(--in
 .tm-sec[data-sec=imp]>.tm-sec-h{color:var(--accent-ink)}
 .lr{position:relative}
 .tm-pin{display:inline-flex;color:var(--ink-3)}.tm-pin .ic{width:12px;height:12px}
+.cm-tl .lr-t>.tm-imp,.cm-tl .lr-t>.tm-pin{order:1;flex:none}.cm-tl .lr-t>.meta{order:2}   /* star and pin sit after the title, by the time: titles keep one left edge down the rail */
 .tm-showwrap>.tm-chip-imp{margin:6px 8px 0 0;flex:none}
 /* design item 6: the three filters and the star fit one row at the rail's width */
 .tm-showwrap{display:flex;flex-wrap:nowrap;align-items:flex-start;gap:4px}
@@ -2563,7 +2594,7 @@ text.map-ring-t{font-size:var(--fs-micro);font-weight:var(--w-med);fill:var(--in
 .tm-showwrap>.tm-show{gap:3px;padding-left:8px}
 .tm-showwrap .tm-chip-imp{padding:0 6px}
 /* design item 7: the small Files panel opens below the thread head, in the margin beside the column */
-@media (min-width:701px){.pv[data-kind=files]{top:calc(var(--top-h,52px) + 52px);width:208px}}   /* wide only: on a phone Files is the bottom sheet */
+@media (min-width:701px){.pv[data-kind=files]{top:var(--files-top,calc(var(--top-h,52px) + 52px));width:208px}}   /* wide only: on a phone Files is the bottom sheet */
 .pv[data-kind=files] .pv-h small{display:none}
 .cm-status-r{margin-left:10px;border:0;background:none;color:var(--accent,var(--ink));font:inherit;font-size:var(--fs-meta);font-weight:600;cursor:pointer;padding:0 2px}
 .cm-status-r:hover{text-decoration:underline}
@@ -3047,7 +3078,7 @@ kbd.menu-i-r{font-family:inherit;font-size:var(--fs-meta)}
 .sec-h>a:hover{color:var(--ink);text-decoration:underline}
 
 /* ───────────── §1 Chat home: one column ───────────── */
-.cm-home{width:100%;grid-template-columns:minmax(0,1fr);margin:0;padding:72px max(var(--s5),calc((100% - var(--read-w)) / 2 + var(--s5))) var(--s8);display:grid;gap:var(--s6)}   /* the scroller spans the pane so its bar sits at the window edge; the padding keeps the reading column centred */
+.cm-home{width:100%;grid-template-columns:minmax(0,720px);margin:0;padding:72px max(var(--s5),calc((100% - 720px) / 2 - 24px)) var(--s8) max(var(--s5),calc((100% - 720px) / 2));display:grid;align-content:start;gap:var(--s6)}   /* the scroller spans the pane so its bar sits at the window edge; the padding keeps the reading column centred; rows keep their own height while the page is still short; the left padding and 720px column put the box exactly where a conversation has it, and the right padding leaves room for the scrollbar, so New does not move it */
 .cm-home-t{font-size:30px;letter-spacing:-.02em;text-align:center}
 .cm-home-l{display:none}                         /* the lead sentence goes; it is the placeholder's job */
 /* the waits head: was a centred, underlined amber link */
@@ -3066,14 +3097,14 @@ kbd.menu-i-r{font-family:inherit;font-size:var(--fs-meta)}
 .cm-need-m a{color:var(--ink-2);text-decoration:none}
 .cm-need-m a:hover{text-decoration:underline}
 .cm-need-b{gap:2px}
-.cm-need-b .nd-later,.cm-need-b .nd-moot{width:var(--ctl-s);padding:0;font-size:0}   /* icon only; the label stays as aria-label/title (see HANDOFF §1.3) */
+.cm-need-b .nd-later:not(.menu-i),.cm-need-b .nd-moot:not(.menu-i){width:var(--ctl-s);padding:0;font-size:0}   /* icon only; the label stays as aria-label/title (see HANDOFF §1.3) */
 .cm-need-b .nd-later svg,.cm-need-b .nd-moot svg{width:16px;height:16px}
 .cm-need[data-open]:hover{background:var(--tint)}
 @media (max-width:699px){
   .cm-home{padding:var(--s5) var(--s4) var(--s6);gap:var(--s5)}
   .cm-need{grid-template-columns:minmax(0,1fr) auto;padding:12px 6px 12px 14px}
   .cm-need-b{grid-column:2;grid-row:1/span 2;margin:0}
-  .cm-need-b .nd-later,.cm-need-b .nd-moot,.cm-need-b .cm-need-a{display:none}
+  .cm-need-b .nd-later:not(.menu-i),.cm-need-b .nd-moot:not(.menu-i),.cm-need-b .cm-need-a{display:none}   /* :not(.menu-i): the same two buttons are the items of the phone's ... menu */
   .cm-need-b .cm-need-more{display:inline-flex;width:44px;height:44px}
 }
 .cm-need-more{display:none}
@@ -3119,7 +3150,7 @@ kbd.menu-i-r{font-family:inherit;font-size:var(--fs-meta)}
 .fp-yr-mine{font-weight:400}
 /* the steer box becomes the composer card (HANDOFF §3.2 swaps the DOM); until then, make the old one look like it */
 .fp-steer{border-top:0;margin-top:0;padding-top:0}
-.fp-steer-in{resize:none;border:1px solid var(--line-2);border-radius:var(--r-xl);box-shadow:var(--e1);padding:14px 16px;min-height:88px;font-size:var(--fs-read)}
+.fp-steer-in{resize:none;border:1px solid var(--line-2);border-radius:var(--r-xl);box-shadow:var(--e1);padding:14px 16px;min-height:88px;font-size:var(--fs-read);field-sizing:content;max-height:40vh}   /* grows with the message like the other composers, not a two-line slit */
 .fp-steer-a .meta{display:none}
 
 /* ───────────── §4 Yours (views/yours.js; its .page gets data-view="yours", HANDOFF §4.1) ───────────── */
@@ -3185,15 +3216,19 @@ kbd.menu-i-r{font-family:inherit;font-size:var(--fs-meta)}
 
 /* ---------- §B  The rail's filters, always open (views/comms.js showMenu, showChips, viewBar) ---------- */
 /* Three rows, no kickers: [Show toggles · star] / [Arrange segmented · Hide-not-needed switch] / [Conversations · fold · All]. */
-.cm-show-m{gap:var(--s2);padding:var(--s1) 2px var(--s1);margin:0 0 var(--s1);border-bottom:0}
+.cm-show-m{gap:var(--s2);padding:var(--s1) 0 var(--s1);margin:0 0 var(--s1);border-bottom:0}
 .cm-show-m .cm-show-l{display:none}                         /* "SHOW", "ARRANGE": JS can drop them (§B.1) */
 .cm-show-m .tm-showwrap{align-items:center}
 .cm-show-m .tm-showwrap>.tm-show{padding-left:0;gap:var(--s1)}
-.cm-show-m .tm-showwrap>.tm-chip-imp{margin:0 0 0 auto;border:0;width:var(--ctl-s);padding:0;justify-content:center}
-.cm-show-m .tm-showwrap>.tm-chip-imp[aria-pressed=true]{background:var(--sunken);color:var(--ink)}
+/* Important only sits beside the search now, so the toggles keep one row */
+.cm-srow>.tm-chip-imp{flex:none;width:var(--ctl-s);height:var(--ctl-s);margin:0;padding:0;border:0;background:none;color:var(--ink-3);justify-content:center}
+.cm-srow>.tm-chip-imp .ic{width:14px;height:14px}
+.cm-srow>.tm-chip-imp:hover{background:var(--hover);color:var(--ink)}
+.cm-srow>.tm-chip-imp[aria-pressed=true]{background:var(--sunken);color:var(--ink)}
 /* the chip: on = filled ink with a check (the person's ask, kept), off = hairline, quieter ink; one height */
 .cm-show-m .tm-chip{height:26px;font-size:var(--fs-meta);font-weight:var(--w-med)}
-.cm-show-m .tm-showwrap .tm-chip[aria-pressed=true]{padding:0 9px 0 7px}
+.cm-show-m .tm-showwrap .tm-chip{padding:0 8px}
+.cm-show-m .tm-showwrap .tm-chip[aria-pressed=true]{padding:0 8px 0 6px}
 .cm-show-m .tm-chip[aria-pressed=true] i{display:inline-block;width:10px;height:10px;border:0;background:none}
 .cm-show-m .tm-chip[aria-pressed=true] i::after{left:3px;top:0;border-color:var(--on-ink)}
 /* row 2: segmented left, switch right */

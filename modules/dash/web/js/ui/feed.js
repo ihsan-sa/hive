@@ -2,14 +2,14 @@
 import { h } from "../core/dom.js";
 import { S } from "../core/store.js";
 import { clock, short } from "../core/format.js";
-import { button, empty, note } from "./kit.js";
+import { button, empty, note, signInAgain } from "./kit.js";
 
 
 /** The server blanks these below full rights (feed_for in dash.py), so a row with a tool and no words needs saying why. Null when nothing is hidden. */
 export function feedHiddenNote(items) {
   if (!items || !items.length || items.some(e => e.k !== "tool" || e.x)) return null;
   const limited = S.app.mode === "limited";
-  return note({ key: "feed-hidden", actions: limited ? null : button("Sign in again", null, { size: "s", href: "/cdn-cgi/access/logout", title: "This signs you out; open this page again and sign in with Google." }) },
+  return note({ key: "feed-hidden", actions: limited ? null : button("Sign in again", signInAgain, { size: "s", href: "/cdn-cgi/access/logout", title: "Takes you to the Google sign-in to get full access back." }) },
     limited ? "Your sign-in is limited, so you see which tools this agent used, not its commands or what it said."
       : "Commands and what this agent said are hidden: full mode ends after 30 minutes without using the app. Sign in again to see them.");
 }

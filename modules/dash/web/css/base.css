@@ -1,12 +1,14 @@
 *,*::before,*::after{box-sizing:border-box}
 html{-webkit-text-size-adjust:100%}
 @media (min-width:640px){html:has(#top){scrollbar-gutter:stable}}   /* top-bar icons stay put between pages that scroll and pages that do not */
+@media (min-width:640px){html:has(#top):has(:is(.cm,.kb)){scrollbar-gutter:auto;overflow-y:hidden}html:has(#top):has(:is(.cm,.kb)) .top-in{margin-right:var(--sbw,0px)}}   /* Chat and Knowledge fill the window and scroll inside: a reserved gutter there was a blank strip beside their own scrollbar. The bar's own row steps in by the scrollbar's width (app.js sets --sbw), so its icons still stay put */
 html:has(#top):has(.rc-fig[data-full]),html:has(#top):has(dialog.fb[open]){scrollbar-gutter:auto;overflow:hidden}   /* a full-screen figure and the frozen feedback screen cover the window, gutter and scrollbar included */
 body{margin:0;font:var(--fs-body)/var(--lh) var(--font);background:var(--bg);color:var(--ink);font-synthesis:none;text-rendering:optimizeLegibility}
 .app{container:app/inline-size}   /* the phone: css/phone.css queries this (under 700px) */
 button,input,select,textarea{font:inherit;color:inherit}
-a{color:var(--link);text-underline-offset:2px}
-a:hover{color:var(--ink)}
+/* Links are ink with a quiet underline: amber is only for what is the person's to act on, and those links set it themselves (.cm-old a, .fc-ask-n a) */
+a{color:var(--link);text-underline-offset:2px;text-decoration-color:color-mix(in oklab,currentColor 35%,transparent)}
+a:hover{color:var(--ink);text-decoration-color:currentColor}
 h1,h2,h3,h4,p,dl,dd,ul,ol{margin:0}
 ul,ol{padding:0}
 :focus{outline:none}

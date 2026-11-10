@@ -320,6 +320,8 @@ def main():
         sys.exit(f"hive update: {e}")
     except Later as e:  # the app can say why it hasn't happened yet
         st["error"] = str(e); save(st); later(str(e))
+    st["failed"] = [t for t in st.get("failed", []) if key(t) > key(tag)]  # a skipped release now installed (by hand, say) is no longer skipped
+    if not st["failed"]: st.pop("failed")
     st.pop("stuck", None); st.pop("error", None); st.pop("newest", None); st["tag"] = tag; st["at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()); save(st)
     if dropped:
         say(f"Updated to {tag}. It changed the same lines as {'this fix' if len(dropped) == 1 else 'these fixes'} your Hive made to itself, so {'it was' if len(dropped) == 1 else 'they were'} dropped: "

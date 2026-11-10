@@ -230,7 +230,7 @@
 .msg:has(>.msg-c){display:grid;grid-template-columns:28px minmax(0,1fr);column-gap:var(--s3,12px);align-items:start;padding:6px var(--s2,8px);border-radius:var(--r-l,12px)}
 .cm-msgs .msg:has(>.msg-c){max-width:calc(var(--chat-col) + 2 * var(--s2,8px))}
 .msg:has(>.msg-c)>.av{margin-top:1px;width:28px;height:28px}
-.msg-c{min-width:0;display:grid;gap:4px;align-content:start}
+.msg-c{min-width:0;display:grid;grid-template-columns:minmax(0,1fr);gap:4px;align-content:start}   /* an implicit auto column grows to a file card's min-content and pushes the row past the pane on a phone */
 .msg-c>.msg-h{margin-bottom:0;align-items:baseline}
 .msg[data-cont]:has(>.msg-c){margin-top:2px}
 .msg[data-cont]>.av{visibility:hidden}

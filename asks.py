@@ -532,11 +532,16 @@ def note_continuations(fresh, model, posts=None, post=None):
         here = {str(p.get("from")) for p in posts if (p.get("thread") or p.get("id")) == e.get("thread")}
         append(LEDGER, {"id": e["id"], "at": iso(), "by": "extract", "continues": old["id"], "continues_worker": w})
         if not w or w in here: continue   # nobody to point at, or the earlier worker is already in this thread
-        line = (f"This ask ({e['id']}) looks like it continues {old['id']}, \"{old['ask'][:120]}\", in thread {old.get('thread')}, "
+        line = (f"This ask ({e['id']}) looks like it continues {old['id']}, \"{quiet(old['ask'][:120])}\", in thread {old.get('thread')}, "
                 f"worked by `{w}`. If that agent's detail would help, a mention of it wakes it.")
         (post or h2_post)(e.get("thread"), line)
         print(f"~ {e['id']} continues {old['id']} ({w})")
     return cost or 0.0
+
+def quiet(text):
+    """Mentions in quoted ask text go in backticks: a title like "picks Opus via @opus @fable" is written about, not a call.
+    On 2026-11-09 a continuation note quoting k0386 started an Opus and a Fable agent for a closed ask (post 1109171434cc)."""
+    return re.sub(r"(?<![\w.`])@([a-z0-9][a-z0-9_-]*)", lambda m: f"`{m.group(0)}`", text)
 
 def h2_post(thread, text):
     subprocess.run([sys.executable, "-I", str(Hive), "post", "--thread", thread, "--as", "asks"], input=text, text=True, timeout=60,

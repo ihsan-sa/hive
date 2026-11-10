@@ -1455,6 +1455,8 @@ def start(c, name, posts, login, resume=None, reaped=None, extra=(), moved=False
     # Opus defaults to a 1M window, so a run grows to 400k+ and pays for all of it on every turn; 36% of spend was above 200k (kb/model-cost.md).
     # Compacting near resume_max_context also keeps a run resumable instead of leaving an heir. 0 or absent: Claude Code's default.
     if c.get("auto_compact_window"): env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] = str(c["auto_compact_window"])
+    if not prov:  # config "model_ids": {"fable": "claude-fable-5-2"} pins what an alias means, without waiting for a CLI update
+        for k, v in (c.get("model_ids") or {}).items(): env[f"ANTHROPIC_DEFAULT_{k.upper()}_MODEL"] = str(v)
     if prov:  # main loop's provider_hold just loaded its module and found room
         impl = prov[1]["_impl"]; keep = impl.env(prov[1], prov[2]); env.update(keep); env["_BOX_KEEP"] = " ".join(keep)
         if prov[1].get("config_dir"): env["CLAUDE_CONFIG_DIR"] = str(Path(prov[1]["config_dir"]).expanduser())

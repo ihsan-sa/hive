@@ -2,6 +2,7 @@
 import { h } from "../core/dom.js";
 import { S, SYS } from "../core/store.js";
 import { threadTitle, agentOn, agentSay, agentState, isRunning, hiveStats, tierHours, agentThread, spendSince, sEnd, hasTiers, activeUse } from "../core/model.js";
+import { needsKnown, needsN } from "../core/needs.js";
 import { now, ago, dur, clock, money, pct, plural, firstSentence, short, HOUR, DAY, MIN } from "../core/format.js";
 import { TIERS, status } from "../core/status.js";
 import { threadHref, agentHref, href } from "../core/router.js";
@@ -159,9 +160,10 @@ export default {
     const lastHour = S.posts.filter(p => p.t > t - HOUR && !SYS.has(p.from)).length;
 
     if (S.app.app) {
-      const fy = forYouRows(t), stuckN = count("stuck"), sign = signInWords(), stopped = !!L.limit_until && !(S.app.setup && S.app.setup.other);
-      // A kicker only when there's something to say (the Nov 8 handoff §6): no "All fine" over a calm page.
-      const state = stopped || sign ? { tone: "bad", text: "Stopped" } : fy.length || stuckN ? { tone: "info", text: "Needs you" } : null;
+      const stuckN = count("stuck"), sign = signInWords(), stopped = !!L.limit_until && !(S.app.setup && S.app.setup.other);
+      // A kicker only when it names something real (the Nov 8 handoff §6, R54): a count of what waits on the person, the same count as Chat's badge.
+      const need = needsKnown() ? needsN() : 0;
+      const state = stopped || sign ? { tone: "bad", text: "Stopped" } : need ? { tone: "info", text: `${need} ${need === 1 ? "waits" : "wait"} on you` } : stuckN ? { tone: "info", text: `${stuckN} stuck` } : null;
       const up = run.filter(a => a.alive), upThreads = new Set(up.map(a => a.thread)).size;   // a gone process isn't working: the same count as the top bar's
       const one = upThreads === 1 ? threadTitle(up[0].thread) : `${nWord(upThreads).toLowerCase()} conversations`;
       const title = up.length ? `${nWord(up.length)} ${up.length === 1 ? "agent is" : "agents are"} working on ${one}.` : "No agents are working right now.";

@@ -20,7 +20,7 @@ export function loadFoci(force) {
   if (L.p) return L.p;
   if (!force && S.foci !== undefined && now() - L.at < (L.failed ? 5e3 : FOCI_EVERY)) return Promise.resolve(S.foci);   // a failed read (a dash restart) retries soon
   L.at = now();
-  L.p = jget("/api/foci").then(v => (v && Array.isArray(v.foci) ? v : { foci: [], tags: {}, lint: [] }), () => null).then(v => {
+  L.p = jget("/api/foci").then(v => (v && v.error ? null : v && Array.isArray(v.foci) ? v : { foci: [], tags: {}, lint: [] }), () => null).then(v => {
     L.p = null; L.failed = !v;
     if (!v) { if (S.foci === undefined) { S.foci = { foci: [], tags: {}, lint: [], failed: true }; emit({ foci: true }); } return S.foci; }
     if (L.want) { if (now() - L.want.at > 60e3 || sameOrder(v.foci, L.want.ids)) L.want = null; else v.foci = arrange(v.foci, L.want.ids); }   // a read that left before the move landed keeps the moved order
