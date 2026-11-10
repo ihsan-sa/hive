@@ -220,9 +220,11 @@ def cmd_num(a):
 
 def cmd_log(a):
     items = ledger()
-    if not a.measure: sys.exit("hive improve log: --measure is the number that would show the change worked (or not). No measure, no entry.")
+    if a.expect and not a.check:  # a gain no number reads (the person 11101138a853, 2026-11-10): written down before it lands, read by someone else at the revisit
+        a.measure, a.no_check = a.measure or "judged: " + a.expect, a.no_check or "a gain read by eye, not by a number"
+    if not a.measure: sys.exit("hive improve log: say how anyone will know it worked. --measure with --check CMD when a command can print the number; when the gain is one a reader sees and no number reads, --expect 'what will be visibly better, who could see it, and what would count as not better', and someone who didn't build it judges that at the revisit.")
     if a.control and not a.check: sys.exit("hive improve log: --control needs --check.")
-    if not a.check and not a.no_check: sys.exit("hive improve log: give --check CMD --want up|down, a command that prints the number now, so a script judges the change at its revisit and nobody grades their own. Written later it can't be a verdict. If no command can read this number, say why with --no-check WHY.")
+    if not a.check and not a.no_check: sys.exit("hive improve log: give --check CMD --want up|down, a command that prints the number now, so a script judges the change at its revisit and nobody grades their own. Written later it can't be a verdict. If no command can read this number, say why with --no-check WHY; if the gain is not a number at all, use --expect instead of forcing one.")
     if a.kind == "behaviour" and a.check and not a.control: sys.exit("hive improve log: a change meant to shift behaviour is compared against something it didn't touch: add --control CMD, printing the same number for that.")
     rev, fields = a.revisit or ("48h" if a.check and a.kind != "behaviour" else "7d"), {}
     if a.check:
@@ -240,6 +242,7 @@ def cmd_log(a):
            "commit": a.commit or "", "thread": a.thread or os.environ.get("HIVE_THREAD", ""), **fields}
     if also: rec["also"] = also
     if a.no_check and not a.check: rec["no_check"] = a.no_check
+    if a.expect: rec["expect"] = a.expect
     if a.reviewed_by: rec["reviewed_by"] = a.reviewed_by.lstrip("@").lower(); rec["review_model"] = (a.model or "").lower()
     ov = overlaps(items, a.measure, skip=set(also))
     if ov: rec["shares"] = sorted(ov)  # linked, never refused (meta-reflect, reflect-p0.md; rsi-loop rung 133): judged together
@@ -651,7 +654,8 @@ def main(argv=None):
     p.add_argument("--band", type=float, help="the move that counts as noise (default 5%% of the baseline)")
     p.add_argument("--reviewed-by", dest="reviewed_by", help="the agent that reviewed this design or build and did not build it (counted as reviews_independent when --model is opus or fable)")
     p.add_argument("--model", help="the reviewer's model: opus|fable count as an independent review, anything else does not")
-    p.add_argument("--no-check", metavar="WHY", help="why no command can read this number (the rare case)")
+    p.add_argument("--no-check", metavar="WHY", help="why no command can read this number")
+    p.add_argument("--expect", metavar="TEXT", help="for a gain no number reads: what will be visibly better, who could see it, and what would count as not better, written before it lands; a non-builder judges it at the revisit. A wrong or unchecked number is worse than none")
     p.add_argument("--also", action="append", help="ids of open landings on the same number, judged together with this one at the revisit (silences the overlap warning)")
     p.set_defaults(f=cmd_log)
     p = sp.add_parser("judge", help="judge a landed change on its revisit date: ID held|reverted|inconclusive --why 'the number vs baseline'")

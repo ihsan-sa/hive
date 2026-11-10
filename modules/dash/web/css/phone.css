@@ -202,6 +202,7 @@
   #main{min-height:calc(100dvh - var(--bar-h) - var(--nav-h))}
   .cm,.kb,.cvp{height:calc(100dvh - var(--bar-h) - var(--nav-h))}
   body[data-view=thread] .cm,body:has(.kb[data-in]) .kb{height:100dvh}
+  body:not([data-view=thread],[data-kb=open]):has(.cm[data-in]:not([data-home])) .cm{height:calc(100dvh - var(--nav-h))}   /* the top bar is hidden here, so its height is not taken off: it left a blank strip above the bottom bar on Files, Inbox, Mail, Needs and Yours */
   body[data-kb=open] .cm,body[data-kb=open] .kb{height:var(--vvh,100dvh)}
   body[data-kb=open] #main{min-height:0}
 }

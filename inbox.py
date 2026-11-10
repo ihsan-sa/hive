@@ -364,7 +364,7 @@ def stop_gate(name, rec, t=None):
     try: at = dt.datetime.fromisoformat(rec["at"])
     except ValueError: return None
     t = t or time.time()
-    if any(p.get("model") and name in names(p) for p in own_posts(name, rec["at"]) or []): return None  # hive model: resumes on the other model
+    if any((p.get("model") or p.get("effort")) and name in names(p) for p in own_posts(name, rec["at"]) or []): return None  # hive model, or a restart at another effort: resumes on it
     f = STATE / "stop-asked" / name
     try: k, n = f.read_text().split(); n = int(n) if k == rec["at"] else 0
     except (OSError, ValueError): n = 0

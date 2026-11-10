@@ -39,7 +39,7 @@ export function draft(th) {
   const k = dkey(th); let d = D.get(k);
   if (!d) {
     let v = {}; try { v = JSON.parse(localStorage.getItem(k) || "{}"); } catch (e) {}
-    d = { th: th || null, text: v.text || "", replyId: v.reply || null, reply: null, quote: v.quote || null, to: v.to || null, name: v.name || "", naming: !!v.name, model: v.model || "", focus: v.focus || "", files: [], err: "" };
+    d = { th: th || null, text: v.text || "", replyId: v.reply || null, reply: null, quote: v.quote || null, to: v.to || null, name: v.name || "", naming: !!v.name, model: v.model || "", effort: v.effort || "", focus: v.focus || "", files: [], err: "" };
     D.set(k, d);
   }
   if (!d.reply && d.replyId && S.byId[d.replyId]) d.reply = S.byId[d.replyId];
@@ -52,7 +52,7 @@ export function hasDraft(th) {
 }
 function keep(d) {
   const k = dkey(d.th), rid = d.reply ? d.reply.id : d.replyId;
-  try { if (d.text || rid || d.quote || d.to || d.name || d.model || d.focus) localStorage.setItem(k, JSON.stringify({ text: d.text, reply: rid, quote: d.quote, to: d.to, name: d.name, model: d.model, focus: d.focus })); else localStorage.removeItem(k); } catch (e) {}
+  try { if (d.text || rid || d.quote || d.to || d.name || d.model || d.effort || d.focus) localStorage.setItem(k, JSON.stringify({ text: d.text, reply: rid, quote: d.quote, to: d.to, name: d.name, model: d.model, effort: d.effort, focus: d.focus })); else localStorage.removeItem(k); } catch (e) {}
 }
 const field = th => document.querySelector(`.cp[data-key="${CSS.escape("cp:" + (th || "(new)"))}"] .cp-t`);
 
@@ -176,7 +176,7 @@ async function deliver(it) {
   it.state = "sending"; it.err = ""; refresh();
   try {
     if (!it.refs) { it.uploading = it.files.length > 0; refresh(); const refs = []; for (const f of it.files) refs.push(await uploadFile(f.file)); it.refs = refs; it.uploading = false; }
-    const res = await post("/api/post", { text: it.wire, thread: it.th || it.name || null, reply_to: it.reply ? it.reply.id : null, files: it.refs, simple: simpleOn(), model: it.model || null, quote: it.quote || null, ...(it.interrupt ? { interrupt: true } : {}) });
+    const res = await post("/api/post", { text: it.wire, thread: it.th || it.name || null, reply_to: it.reply ? it.reply.id : null, files: it.refs, simple: simpleOn(), model: it.model || null, effort: simpleOn() ? null : it.effort || null, quote: it.quote || null, ...(it.interrupt ? { interrupt: true } : {}) });
     it.id = res.id; it.state = "sent"; const thr = it.th;
     if (!it.th && res.thread) { it.th = res.thread; if (it.focus) post("/api/focus", { thread: res.thread, focus: it.focus }).catch(() => {}); go("comms", res.thread); loadApp(); }   // filed under the focus picked in the box; a failure leaves it in Misc, where the title menu can file it
     else if (res.thread && res.thread !== it.th) { it.th = res.thread; it.aside = true; openAside(thr, res.thread, it.text.replace(/^\s*\/btw\s*/i, "")); loadApp(); }   // /btw: it lives in the side thread; stay here
@@ -185,7 +185,7 @@ async function deliver(it) {
   refresh();
 }
 function queue(th, d, r, interrupt = false) {
-  const it = { lid: ++lid, th: th || null, text: d.text, files: d.files, reply: d.reply, quote: d.quote || null, interrupt, to: th ? r.who : null, name: th ? null : d.name.trim() || null, wire: wire(th, d, r), model: d.model || null, focus: th ? null : d.focus || null, state: "sending", err: "", t: now() };
+  const it = { lid: ++lid, th: th || null, text: d.text, files: d.files, reply: d.reply, quote: d.quote || null, interrupt, to: th ? r.who : null, name: th ? null : d.name.trim() || null, wire: wire(th, d, r), model: d.model || null, effort: d.effort || null, focus: th ? null : d.focus || null, state: "sending", err: "", t: now() };
   OUT.push(it); deliver(it);
   return it;
 }
@@ -200,7 +200,7 @@ function send(th) {
   const it = queue(th, d, r, int);
   if (th) delete CP.mode[th];
   if (int) CP.sent[th] = { who: r.who, it, at: Date.now(), seen: 0 };
-  Object.assign(d, { text: "", files: [], reply: null, replyId: null, quote: null, to: null, name: "", naming: false, err: "", model: "", focus: "" }); keep(d);   // the focus resets: a new conversation starts with no focus (the person, 2026-11-08)
+  Object.assign(d, { text: "", files: [], reply: null, replyId: null, quote: null, to: null, name: "", naming: false, err: "", model: "", effort: "", focus: "" }); keep(d);   // the focus resets: a new conversation starts with no focus (the person, 2026-11-08)
   CP.ac = null; CP.menu = false; CP.hist = null; if (!SB.open) SB.say = "";
   const el = field(th); if (el) { el.value = ""; el.focus(); }   // morph leaves a focused field alone, so clear it here
   refresh(); window.dispatchEvent(new CustomEvent("cp:sent", { detail: { th } }));
@@ -778,6 +778,28 @@ function modelPick(d, r) {
       h("p", { class: "cp-menu-n", "data-key": "foot" }, "It holds on that agent from its next run. Typing @opus or @sonnet in the message does the same.")) : null);
 }
 
+// ---- effort: how hard the message's agent thinks, for Claude runs. A run's effort is fixed when it starts, so like the model it holds from the next run ----
+const EFFORTS = [["low", "Low", "Quickest, for small jobs"], ["medium", "Medium", ""], ["high", "High", "Thinks harder, uses more of your plan"], ["xhigh", "Extra high", ""], ["max", "Max", "Thinks hardest, uses the most"]];
+function effortPick(d, r) {
+  const who = r && r.who, known = who && who !== "new" && !MODEL_WORDS.includes(who), live = known && isRunning(who);
+  const row = known && agentCard(who).find(x => x.k === "Effort"), held = (known && S.live && S.live.efforts && S.live.efforts[who]) || "";
+  const m = typedModel(d.text) || d.model || (known ? (S.live && S.live.chosen && S.live.chosen[who]) || "" : (S.app && S.app.default_model) || "");
+  const other = m === "astra" || m.includes(":") || (!typedModel(d.text) && !d.model && row && row.claude === false);
+  if (other && d.effort) d.effort = "";   // never sent for a run that can't use it
+  const cur = d.effort || "", shown = cur || held, open = !other && CP.menu === "effort";
+  const now = row && row.v !== "not seen yet" && row.v !== "not recorded" ? row.v : "";
+  const note = other ? "Effort applies to Claude runs only" : live ? (now ? `${who} is at ${now} effort for this run` : `${who} keeps its effort for this run`) : known ? (held ? `${who} wakes at ${held} effort` : `${who} wakes at Claude's default effort`) : "How hard a new agent thinks";
+  const pick = v => { d.effort = v; keep(d); CP.menu = false; refresh(); };
+  return h("div", { class: "pop cp-mpop cp-epop", "data-key": "effort" },
+    h("button", { type: "button", class: "dd cp-model cp-effort", disabled: other, "data-picked": cur ? "" : null, "data-value": cur, "aria-haspopup": "listbox", "aria-expanded": String(open), "aria-label": "Effort: " + (other ? "Claude runs only" : shown || "as is"), title: note + (other ? "" : ". Pick one to change it."), onclick: (e, b) => { const r = (b || e.target.closest(".cp-effort")).getBoundingClientRect(); CP.mdown = innerHeight - r.bottom > r.top; toggle("effort")(); } }, other || !shown ? "Effort" : "Effort: " + shown),
+    open ? h("div", { class: "menu cp-mmenu", role: "listbox", "aria-label": "Effort", "data-side": CP.mdown ? "bottom-end" : "top-end", "data-w": "wide", "data-key": "em" },
+      menuHead(note, "h"),
+      [["", "As is", held ? `Leave it at ${held}` : "Claude's default"], ...EFFORTS].map(([v, l, s]) =>
+        menuItem(l, s, () => pick(v), { role: "option", key: "e:" + v, sel: cur === v, cls: "cp-mopt" })),
+      menuSep("sep"),
+      h("p", { class: "cp-menu-n", "data-key": "foot" }, live ? `${who} can't change effort mid-run. It holds from its next run. Claude runs only.` : "It holds on that agent from this run on. Claude runs only.")) : null);
+}
+
 /** The lock's click: open the secret box, or say why it can't open in limited mode. */
 function secretClick(th) {
   if (!can("secrets")) { SB.open = false; SB.tone = "bad"; SB.say = "Saving a secret needs full mode, which ends after 30 minutes without using the app. Press \"Limited · sign in for full\" at the top, then press the lock again."; refresh(); return; }
@@ -951,6 +973,7 @@ export function composer({ thread, update, place = "thread", autofocus, top }) {
             : d.naming ? h("span", { class: "meta cp-new" }, "A new agent starts on this") : null,
           !th && S.app && !simpleOn() ? focusPick(d) : null,
           simpleOn() ? null : modelPick(d, r),
+          simpleOn() ? null : effortPick(d, r),
           sendButton(sendWord, () => send(th), empty, armed ? "Enter interrupts and sends · Esc cancels"
             : busy ? `${sendWord} (Enter). ${busy} reads it after its current step` : `${sendWord} (Enter). Shift+Enter for a new line. Sent messages can't be edited or taken back.`, armed)))));
 }

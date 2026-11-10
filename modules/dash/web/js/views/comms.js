@@ -1138,10 +1138,18 @@ export function inChat(ctx, id, page) {
 }
 /** One of Chat's own pages (Files and links, made.js) the same way: the rail beside it, its link in the rail's foot lit (review M2: the design's Files has the rail). */
 export function inChatPlace(ctx, place, page) {
-  const pane = h("div", { class: "cm-fpane", "data-key": "place" },
+  const pane = h("div", { class: "cm-fpane", "data-key": "place:" + place },
     h("a", { class: "btn cm-back", href: href("comms"), "data-kind": "icon", "aria-label": "Chats", title: "Chats" }, icon("chevron-left")),
     page);
   return frame(ctx, { arg: "place:" + place, place }, pane);
+}
+/** A page that belongs to Chat (Yours, Inbox, Mail, Needs you) keeps the rail beside it, as Files does, so the content doesn't jump and no blank column is left under New conversation. A function so a view can use it while this module is still loading. */
+export function chatPlace(place, view) {
+  const { render, leave, escape } = view;
+  return { ...view,
+    render: ctx => { const p = render(ctx); return S.live && S.app.app ? inChatPlace(ctx, place, p) : p; },
+    leave: ctx => { chatLeave(); return leave && leave(ctx); },
+    escape: e => { chatEscape(); return escape && escape(e); } };
 }
 // Functions, not consts: focus.js reads them while this module, which imports it, is still loading.
 export function chatEscape() { if (closeQuick()) return; if (C.menu) { C.menu = null; L.ctx && L.ctx.update(); } }

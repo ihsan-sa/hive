@@ -19,7 +19,10 @@ export function agentLabel(n) {
   if (isWarden(n)) return "the warden";
   if (!/^a[0-9a-f]{4}$/.test(n)) return n;
   const th = agentThread(n), t = th ? threadTitle(th) : "";
-  return t && t !== "A conversation" && !/\ba[0-9a-f]{4}\b/.test(t) ? `${short(t, 40)}'s agent` : "an agent";
+  if (!t || t === "A conversation" || /\ba[0-9a-f]{4}\b/.test(t)) return "an agent";
+  // "RSI lab: measure the hive and keep improving it" is "RSI lab's agent": the part before the colon names it, and a name cut in the middle read badly beside "'s agent".
+  const head = /^Aside:/.test(t) ? "" : (t.match(/^([^:]{3,32}):\s/) || [])[1];
+  return `${head || short(t, 40)}'s agent`;
 }
 
 /** Agent codes inside a line of text, as agentLabel says them (the app look only; a known agent, or a + 4 hex with a digit, so "added" stays a word and a6aea-mesh.png a file name). */
@@ -110,7 +113,7 @@ export function agentCard(n) {
   if (eff && !s.effort && L) s.effort = eff;
   const effText = eff || (L ? "not seen yet" : "not recorded");
   rows.push({ k: "Effort", v: effText, short: eff ? eff + " effort" : "effort " + effText,
-    hint: eff ? "reasoning effort, as the harness reports it" : L ? "shows once it runs its first tool" : "this session's start didn't record an effort" });
+    claude: h === "claude-code" && !prov, hint: eff ? "reasoning effort, as the harness reports it" : L ? "shows once it runs its first tool" : "this session's start didn't record an effort" });
   const acct = prov || loginName(s.login);
   if (acct) rows.push({ k: "Account", v: acct, short: acct, hint: prov ? "provider account" : "the Claude login it runs on" });
   if (init.fast === "on") rows.push({ k: "Fast mode", v: "on", short: "fast mode", hint: "" });
@@ -355,10 +358,13 @@ export function threadParent(th) {
 }
 /** Threads started from this one, oldest first. */
 export function threadChildren(th) { const out = []; for (const d of S.threads.values()) if (d.name !== th && threadParent(d.name) === th) out.push(d.name); return out; }
+// A slug read as words: first letter up, and the acronyms people write in capitals ("ui-test-loop" is "UI test loop", not "Ui test loop").
+const ACRONYM = /\b(?:ui|ux|ai|rsi|pcb|fpga|adc|pll|gps|sbc|api|cli|llm|gpu|cpu|mcp|pdf|url|usb|kb|h[0-9])\b/gi;
+const slugWords = th => (t => t[0].toUpperCase() + t.slice(1))(th.replace(/[-_]+/g, " ").replace(ACRONYM, m => m.toUpperCase()));
 export function threadTitle(th) {
   const own = S.threadMeta && S.threadMeta[th] && S.threadMeta[th].title; if (own) return own;   // the person renamed it
   if (btwParent(th)) { const d = S.threads.get(th), p = d && d.posts[0]; return "Aside: " + (p ? short(bareLinks(btwText(mdPlain(displayText(p))).split("\n")[0]), 60) : btwParent(th)); }
-  if (!HEX.test(th || "")) return (simpleOn() || S.app.app) && th ? ({ keeper: "Hive upkeep", watchdog: "Hive watch" }[th] || (t => t[0].toUpperCase() + t.slice(1))(th.replace(/[-_]+/g, " "))) : th;   // "keeper" and "watchdog" are words only the builders use
+  if (!HEX.test(th || "")) return (simpleOn() || S.app.app) && th ? ({ keeper: "Hive upkeep", watchdog: "Hive watch" }[th] || slugWords(th)) : th;   // "keeper" and "watchdog" are words only the builders use
   if (S.threadNames[th]) return S.threadNames[th];
   if (!S.app.app) return th;
   const d = S.threads.get(th), p = d && d.posts[0];

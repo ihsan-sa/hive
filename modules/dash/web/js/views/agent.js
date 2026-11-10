@@ -244,6 +244,30 @@ function modelPicker(n, row, L) {
     MP.err ? h("span", { class: "meta", role: "alert" }, " " + MP.err) : null);
 }
 
+// ---- the Effort row as a menu: a run's effort is fixed when it starts, so a pick is for the next run. "Restart now" asks the running agent to end its turn and resume at it ----
+const EFFS = ["low", "medium", "high", "xhigh", "max"];
+const EP = { busy: null, err: null, asked: {} };
+function effortPicker(n, row, L) {
+  const next = ((S.live && S.live.efforts) || {})[n] || "", known = EFFS.includes(row.v), moved = next && next !== row.v, mover = (((S.live && S.live.chosen) || {})[n] || "").includes(":");
+  if (row.claude === false || mover) return h("span", { class: "mpick" }, row.v, h("span", { class: "meta", title: "Only Claude runs take an effort level" }, "Claude runs only"));
+  const send = async (body, ask) => {
+    EP.busy = n; EP.err = null;
+    try { await post("/api/agent-effort", { name: n, ...body }); if (ask) EP.asked[n] = ask; } catch (x) { EP.err = x.message; }
+    EP.busy = null; await poll();
+  };
+  const pick = e => { const v = e.target.value; if (v) send({ effort: v === "default" ? "" : v }); };
+  const asked = L && EP.asked[n] === next;
+  return h("span", { class: "mpick mpick-e" },
+    moved && known ? h("s", { class: "meta", title: "the effort its current or last run used" }, row.v) : row.v,
+    h("select", { class: "cp-model cp-effort", "aria-label": `Effort for ${n}'s next run`, disabled: EP.busy === n,
+      title: L ? `${n} is running. A run's effort is fixed when it starts, so a pick here is for its next run, and stays there.` : `A pick here is for ${n}'s next run, and stays there. Nothing wakes it now.`,
+      onchange: pick },
+      [["", moved ? `→ ${next} next run` : "Set for next run…"], ...EFFS.map(v => [v, v]), ...(next ? [["default", "Claude's default"]] : [])].map(([v, l]) => h("option", { value: v, selected: v === "" }, l))),
+    L && moved ? h("span", { class: "meta mpick-n" }, asked ? `Asked ${n} to restart: it finishes its current step, then comes back in this conversation at ${next}.` : `This run stays at ${known ? row.v : "its effort"} until it ends.`) : null,
+    L && moved && !asked ? button(`Restart now at ${next}`, () => send({ effort: next, restart: true }, next), { size: "s", disabled: EP.busy === n, cls: "mpick-go", title: `Asks ${n} to finish its current step, end its turn and come back in this same conversation at ${next} effort. It is asked to wait for any background work it still needs first.` }) : null,
+    EP.err ? h("span", { class: "meta", role: "alert" }, " " + EP.err) : null);
+}
+
 /** The whole page for one agent. Used by the view and by the panel. */
 export function agentPage(n, host = "page") {
   if (!S.live) return h("div", { class: "page" }, empty("Reading…", { kind: "loading" }));
@@ -264,7 +288,7 @@ export function agentPage(n, host = "page") {
       tone: L && agentState(L).key === "stuck" ? "bad" : null,
       actions: [L ? button("Open conversation", null, { href: threadHref(L.thread), size: "s", title: "Open " + L.thread }) : null, ...agentActions(n), button("All their posts", null, { href: threadHref("@" + n), size: "s" }), L ? killButton(n) : null],
       meta: [st.key === "outside" ? null : statusLabel(st.key, st.label || null, { live: isRunning(n) }), me ? h("span", { class: "ag-onset", title: new Date(me.at).toISOString() }, `said what it is on ${ago(me.at)}${me.before ? ", before this run" : ""}`) : null, ...line],
-      after: [nowBlock(n, L), defs(agentCard(n).map(r => r.k === "Model" && isAgent(n) && !isWarden(n) && can("post") ? { ...r, v: modelPicker(n, r, L) } : r))],
+      after: [nowBlock(n, L), defs(agentCard(n).map(r => !(isAgent(n) && !isWarden(n) && can("post")) ? r : r.k === "Model" ? { ...r, v: modelPicker(n, r, L) } : r.k === "Effort" ? { ...r, v: effortPicker(n, r, L) } : r))],
     }),
     sections: [
       section({ title: "In numbers", note: "this agent's turns, time and cost" }, stats([

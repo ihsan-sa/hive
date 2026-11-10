@@ -214,6 +214,7 @@ def relay_post(src, thread, to, me, why=None, model=None):
     q = {"id": pid, "at": now(), "from": src.get("from"), "to": ["@" + to], "thread": thread,
          "text": head + ":\n\n" + "\n".join("> " + ln for ln in str(src.get("text", "")).splitlines()), "relay_of": src.get("id"), "relay_by": me}
     if model or src.get("model"): q["model"] = model or src.get("model")
+    if src.get("effort"): q["effort"] = src["effort"]
     if src.get("files"): q["files"] = src["files"]
     with BOARD.open("a") as f:
         fcntl.flock(f, fcntl.LOCK_EX); f.write(json.dumps(q) + "\n")
@@ -1252,7 +1253,7 @@ p = sp.add_parser("post", help="hive post [--to @a,@b] [--thread T] [--model son
 p.add_argument("--to"); p.add_argument("--thread"); p.add_argument("--as", dest="as_", help="from name (default $HIVE_NAME)")
 p.add_argument("--routed", action="store_true", help="for the doors: the name was picked by routing, not typed by the person")
 p.add_argument("--model", type=post_model, help="model for any run this post starts: opus, sonnet, haiku, fable, or provider:model for a provider in config.json (openrouter:openai/gpt-5); default: the login's")
-p.add_argument("--effort", choices=EFFORTS, help="effort level for any Claude run this post starts or wakes: low, medium, high, xhigh, max; default: Claude Code's own")
+p.add_argument("--effort", choices=EFFORTS, help="effort level for the Claude runs of the agents this post starts or wakes: low, medium, high, xhigh, max; it holds on them like --model, and an agent already running keeps its effort until that run ends; default: Claude Code's own")
 p.add_argument("--reply-to", dest="reply_to", metavar="ID", help="the post this answers; shown on the board, and a door puts the answer under that message")
 p.add_argument("--file", action="append", help="attach a file (repeatable): copied to ~/files/<post id>/, shown in hive read, Slack and the dashboard")
 p.add_argument("--done", action="append", metavar="ASK", help="mark this ask (k0123) done with this post as its evidence (repeatable)")

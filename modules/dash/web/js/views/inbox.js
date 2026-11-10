@@ -8,6 +8,7 @@ import { ago, firstSentence, plural } from "../core/format.js";
 import { threadHref } from "../core/router.js";
 import { form } from "../templates.js";
 import { button, empty, list, pageHeader, section } from "../ui/kit.js";
+import { chatPlace } from "./comms.js";
 
 let update = null;
 onInbox(() => update && update());
@@ -26,7 +27,7 @@ function folded(items) {   // items come newest first: a notice joins the row of
   return out;
 }
 
-export default {
+export default chatPlace("inbox", {
   id: "inbox", label: "Inbox", about: "every message agents sent you",
   tab: () => S.app.app && can("read"),
   badge: () => (!S.app.app && can("read") && IB.unread ? String(IB.unread) : null),
@@ -51,4 +52,4 @@ export default {
       }; }), { limit: innerWidth < 640 ? IB.shown || 12 : undefined, onMore: () => { IB.shown = (IB.shown || 12) + 20; update && update(); }, empty: "Nothing yet. When an agent needs you or finishes something you asked for, it shows here." }))],
     });
   },
-};
+});

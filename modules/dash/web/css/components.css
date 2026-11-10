@@ -2325,6 +2325,8 @@ dialog.rc-rail[open]{display:flex;flex-direction:column;gap:var(--s2)}
 .nd-act{display:inline-block;padding:4px 0;font-size:var(--fs-small);white-space:nowrap}
 .nowtbl .nt-long{color:var(--warn-ink)}
 .mpick{display:inline-flex;align-items:center;gap:var(--s2)}
+.mpick-e{flex-wrap:wrap}
+.mpick-n{flex-basis:100%}
 .cm-menu-id{display:flex;align-items:center;gap:6px;margin:4px 10px}
 .cm-menu-id code{user-select:all;-webkit-user-select:all;cursor:text}
 
@@ -3344,4 +3346,13 @@ kbd.menu-i-r{font-family:inherit;font-size:var(--fs-meta)}
 @media (hover:hover){
   :root:not([data-dev]) .nowtbl .tr .nt-x>*{opacity:0}
   :root:not([data-dev]) .nowtbl .tr:hover .nt-x>*,:root:not([data-dev]) .nowtbl .tr:focus-within .nt-x>*{opacity:1}
+}
+
+/* Design round 1110d. Agent names are names now, not codes: they stay in monospace only in the developer look. */
+:root:not([data-dev]) :is(.msg-h .ref[data-kind=agent],.map-id,.map-aid,.map-idh-t b,.cp-to b,.cp-live b,.fc-ev-x .ref,.fp-ev-x .ref){font-family:var(--font)}
+/* Inbox on a phone: the title takes a whole line, who and when go under it. Side by side, a 390 row left "Cold outrea…". */
+@container (max-width:640px){
+  #inbox-list .lr-t{flex-wrap:wrap;row-gap:2px}
+  #inbox-list .lr-t>b{flex:1 1 calc(100% - 20px);min-width:0}
+  #inbox-list .lr-t>.muted{flex:0 1 auto;min-width:0;max-width:calc(100% - 76px);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 }

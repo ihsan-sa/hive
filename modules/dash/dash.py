@@ -653,6 +653,40 @@ def set_agent_model(name, model):
     tmp = d / f".{name}.tmp"; tmp.write_text(json.dumps({"model": PICK_MODELS[model], "at": time.time()})); tmp.replace(d / f"{name}.json")
     return {"ok": True, "model": PICK_MODELS[model]}
 
+EFFORTS = ("low", "medium", "high", "xhigh", "max")   # `claude --effort`; EFFORTS in core/hive and starter.py
+
+def chosen_efforts(st):
+    """name -> the effort each agent wakes on next: the starter's st["efforts"], with picks from the agent panel it hasn't read yet on top."""
+    out = {n: e for n, e in (st.get("efforts") or {}).items() if e in EFFORTS}
+    for f in (STATE / "effort-set").glob("*.json"):
+        try: e = json.loads(f.read_text())["effort"]
+        except (OSError, ValueError, KeyError, TypeError): continue
+        if e in EFFORTS: out[f.stem] = e
+        elif e == "": out.pop(f.stem, None)
+    return out
+
+def set_agent_effort(name, effort, restart=False, signer=None, limited=False):
+    """The agent panel's Effort menu: `name` runs at `effort` from its next run and stays on it ("" goes back to Claude's default). A drop
+    file the starter reads on its next tick (apply_effort_sets in starter.py), so nothing wakes the agent: a run's effort is fixed when it starts.
+    restart: ask the running agent to come back at it. A post, not a signal, since killing a run mid-step isn't safe (only --interrupt's single
+    foreground command is): it finishes its step and posts to itself with --effort, which the starter queues and resumes the same session on."""
+    if not isinstance(name, str) or not AGENT_CODE.fullmatch(name): raise ValueError("that isn't an agent's name")
+    if effort != "" and effort not in EFFORTS: raise ValueError("pick one of " + ", ".join(EFFORTS))
+    run = None
+    if restart:
+        if not effort: raise ValueError("pick a level to restart at")
+        run = run_to_kill(name)
+        if not run: raise ValueError(f"{name} isn't running; its next run starts at {effort}")
+        if run.get("provider") or run.get("harness", "claude-code") != "claude-code": raise ValueError("effort applies to Claude runs only")
+    d = STATE / "effort-set"; d.mkdir(parents=True, exist_ok=True)
+    tmp = d / f".{name}.tmp"; tmp.write_text(json.dumps({"effort": effort, "at": time.time()})); tmp.replace(d / f"{name}.json")
+    if run:
+        thread = run.get("thread") or run.get("post")
+        person_post(f"@{name} The person set your effort to {effort} and asked you to restart at it. A run's effort is fixed when it starts, so finish the step you're on and wait for any background work "
+                    f"you still need (ending your turn stops it), then run `hive post --thread {thread} --to {name} --effort {effort} <<< 'Resuming at {effort} effort.'` and end your turn. "
+                    f"You come back in this same conversation at that effort.", thread, signer=signer, limited=limited)
+    return {"ok": True, "effort": effort, "asked": bool(run)}
+
 def run_to_kill(name):
     """The record of `name`'s run if it really is a live run of that agent, else None. ~/run/<name>.json says which pid; the
     process itself has to agree, so a stale file or a reused pid can't aim this at anything else."""
@@ -806,7 +840,7 @@ def live():
                for n, v in (st.get("pending") or {}).items()]
     usage = {k: v for k, v in (jload(STATE / "usage.json", {}) or {}).items() if not k.startswith("_")}
     return {"signin": signin_waiting(st), "now": time.time(), "agents": agents, "jobs": {"running": sum(j["running"] for j in jobs.values()), "queued": sum(j["queued"] for j in jobs.values())}, "pending": pending, "usage": usage, "logins": logins(),
-            "limit_until": limit_hold(st), "chosen": chosen_models(st), "priorities": priorities()}
+            "limit_until": limit_hold(st), "chosen": chosen_models(st), "efforts": chosen_efforts(st), "priorities": priorities()}
 
 
 _prio = (None, {})
@@ -1497,6 +1531,10 @@ def web_stamp():
     files = [UI_DIR / "index.html", *(UI_DIR / "css").rglob("*.css"), *(UI_DIR / "js").rglob("*.js")]
     return hashlib.sha256(repr(sorted((str(f), f.stat().st_mtime_ns, f.stat().st_size) for f in files if f.exists())).encode()).hexdigest()[:12]
 
+def static_cache(route):
+    """Cache-Control for the page's own css and js: a minute of reuse through the tunnel, a revalidation every load on this machine."""
+    return "private, max-age=60" if route == "outside" else "no-cache, private"
+
 _index = [None, b""]
 def index_html():
     """index.html with a modulepreload link for every module app.js imports, found by following the static imports.
@@ -1861,7 +1899,7 @@ GET_CAP = {"/api/call-chat": "post", "/api/live": "read", "/api/away": "read", "
            "/api/config": "config", "/api/modules": "modules", "/api/slack-door": "modules", "/api/signin": "logins", "/api/plans": "plans", "/api/secrets": "secrets",
            "/api/settings": "config", "/api/ntfy": "config", "/api/webpush": "config", "/api/update": "config", "/api/signin-codex": "logins", "/api/accounts": "logins", "/api/design": "logins", "/api/brand/logo": "read",
            "/api/kb/home": "files", "/api/kb/open": "files", "/api/kb/search": "files", "/api/kb/raw": "files", "/api/kb/map": "files", "/api/kb/history": "files", "/api/progress": "read", "/api/checklist": "read", "/api/share-preview": "read", "/api/approvals": "read", "/api/feedback-drafts": "read", "/api/mail": "files"}
-POST_CAP = {"/api/webpush": "config", "/api/share-build": "read", "/api/kill": "stop", "/api/approval": "stop", "/api/tier": "tier", "/api/agent-model": "post", "/api/login-pause": "limits", "/api/login-limit": "limits", "/api/provider-limit": "limits",
+POST_CAP = {"/api/webpush": "config", "/api/share-build": "read", "/api/kill": "stop", "/api/approval": "stop", "/api/tier": "tier", "/api/agent-model": "post", "/api/agent-effort": "post", "/api/login-pause": "limits", "/api/login-limit": "limits", "/api/provider-limit": "limits",
             "/api/post": "post", "/api/side-ask": "post", "/api/thread-meta": "post", "/api/shown": "post", "/api/loadtime": "post", "/api/checklist": "post", "/api/focus": "post", "/api/feedback": "post", "/api/feedback-draft-done": "post", "/api/issue-link": "post", "/api/update": "config", "/api/share-copy": "config", "/api/share-pack": "config", "/api/draft": "config", "/api/import": "config", "/api/upload": "post", "/api/inbox-read": "post", "/api/ntfy": "config", "/api/config": "config", "/api/starter": "config",
             "/api/module": "modules", "/api/signin": "logins", "/api/signin/code": "logins", "/api/signin/cancel": "logins", "/api/plan": "plans", "/api/secret": "secrets", "/api/slack-door": "modules",
             "/api/signin-codex": "logins", "/api/account-key": "logins", "/api/design": "logins", "/api/brand": "config", "/api/brand/logo": "config"}
@@ -2334,7 +2372,7 @@ def voice_ready():
     return isinstance(st, dict) and st.get("ok") is True and isinstance(st.get("at"), (int, float)) and time.time() - st["at"] < 120
 
 
-def person_post(text, thread=None, reply_to=None, uploads=(), signer=None, limited=False, simple=False, model=None, sig=None, interrupt=False):
+def person_post(text, thread=None, reply_to=None, uploads=(), signer=None, limited=False, simple=False, model=None, sig=None, interrupt=False, effort=None):
     """A post as the person. As the Slack mirror does it: a plain message wakes the agent on the thread (thread_agent), a reply wakes the author
     of the post replied to, and no thread (or a thread with no agent yet) starts a new agent. Mentions in the text win.
     signer: who signed in, from a verified Access token, when more than one person can: it heads the text, so an agent and the board can see who wrote it.
@@ -2351,6 +2389,7 @@ def person_post(text, thread=None, reply_to=None, uploads=(), signer=None, limit
     if thread and not THREAD_NAME.fullmatch(str(thread)): raise ValueError("a thread name is letters, digits and . _ : -")
     if not text and not paths: raise ValueError("nothing to send")
     if model and model not in PICK_MODELS: raise ValueError("that model isn't one of " + ", ".join(PICK_MODELS))
+    if effort and effort not in EFFORTS: raise ValueError("that effort isn't one of " + ", ".join(EFFORTS))
     btw = BTW.fullmatch(text)
     if btw:
         if not thread: raise ValueError("/btw asks aside about a conversation, so send it from one")
@@ -2379,7 +2418,7 @@ def person_post(text, thread=None, reply_to=None, uploads=(), signer=None, limit
     if pairing:  # before the post, so a connector reading the board always finds it
         PAIR_ACCEPTED.parent.mkdir(parents=True, exist_ok=True)
         with PAIR_ACCEPTED.open("a") as f: f.write(json.dumps({"at": time.time(), "text": text}) + "\n")
-    cmd = [str(HIVE_BIN), "post", "--as", PERSON] + (["--thread", str(thread)] if thread else []) + (["--to", who] if who else []) + (["--routed"] if routed else []) + (["--reply-to", reply_to] if reply_to else []) + (["--model", PICK_MODELS[model]] if model else []) + (["--interrupt"] if interrupt and not limited and not word else [])
+    cmd = [str(HIVE_BIN), "post", "--as", PERSON] + (["--thread", str(thread)] if thread else []) + (["--to", who] if who else []) + (["--routed"] if routed else []) + (["--reply-to", reply_to] if reply_to else []) + (["--model", PICK_MODELS[model]] if model else []) + (["--effort", effort] if effort and not word else []) + (["--interrupt"] if interrupt and not limited and not word else [])
     for p in paths: cmd += ["--file", str(p)]
     r = subprocess.run(cmd, input=text, text=True, capture_output=True, env={**child_env(), **({"HIVE_POST_VIA": "limited"} if limited else {}), **({"HIVE_POST_VIA": "web-pair"} if pairing else {}), **({"HIVE_POST_SIG": json.dumps(sig)} if sig else {})}, cwd=str(HOME), timeout=60)
     if r.returncode: raise ValueError(short(r.stderr, 300) or "the post failed")
@@ -4595,9 +4634,12 @@ def serve(port):
             st = f.stat(); tag = '"%x-%x"' % (st.st_mtime_ns, st.st_size)
             lm = email.utils.formatdate(int(st.st_mtime), usegmt=True)   # Chrome won't revalidate an HTTP/1.0 answer by ETag, only by date
             inm, ims = self.headers.get("If-None-Match"), self.headers.get("If-Modified-Since")
+            # Through the tunnel each revalidation is a round trip (152 files took the person 13 s on a reload, 2026-11-10), so the browser may reuse a file for a minute there.
+            # The tab's own stamp check (web_stamp) tells it to reload after a change; on this machine every load still revalidates.
+            cache = static_cache(getattr(self, "route", ""))
             if (tag in inm) if inm else ims == lm:
-                self.send_response(304); self.send_header("ETag", tag); self.send_header("Last-Modified", lm); self.send_header("Cache-Control", "no-cache, private"); self.end_headers(); return
-            self.send(f.read_bytes(), ct, cache="no-cache, private", etag=tag, modified=lm)   # private: only the browser keeps a copy, never the tunnel's edge
+                self.send_response(304); self.send_header("ETag", tag); self.send_header("Last-Modified", lm); self.send_header("Cache-Control", cache); self.end_headers(); return
+            self.send(f.read_bytes(), ct, cache=cache, etag=tag, modified=lm)   # private: only the browser keeps a copy, never the tunnel's edge
 
         def send(self, body, ct, status=200, cookie=None, framed_here=False, cache="no-store", etag=None, modified=None):
             gz = len(body) > 4096 and "gzip" in self.headers.get("Accept-Encoding", "")
@@ -4960,9 +5002,9 @@ def serve(port):
                 try: return self.send(json.dumps(share_build(d)).encode(), J)
                 except KeyError: return self.send_error(404)
                 except ValueError as e: return self.deny(400, str(e))
-            if u.path in ("/api/post", "/api/side-ask", "/api/thread-meta", "/api/shown", "/api/loadtime", "/api/checklist", "/api/focus", "/api/feedback", "/api/feedback-draft-done", "/api/issue-link", "/api/update", "/api/inbox-read", "/api/ntfy", "/api/webpush", "/api/agent-model", "/api/config", "/api/starter", "/api/module", "/api/signin", "/api/signin/code", "/api/signin/cancel", "/api/access", "/api/plan", "/api/secret", "/api/settings", "/api/share-copy", "/api/share-pack", "/api/draft", "/api/import", "/api/signin-codex", "/api/account-key", "/api/design", "/api/brand", "/api/slack-door"):
+            if u.path in ("/api/post", "/api/side-ask", "/api/thread-meta", "/api/shown", "/api/loadtime", "/api/checklist", "/api/focus", "/api/feedback", "/api/feedback-draft-done", "/api/issue-link", "/api/update", "/api/inbox-read", "/api/ntfy", "/api/webpush", "/api/agent-model", "/api/agent-effort", "/api/config", "/api/starter", "/api/module", "/api/signin", "/api/signin/code", "/api/signin/cancel", "/api/access", "/api/plan", "/api/secret", "/api/settings", "/api/share-copy", "/api/share-pack", "/api/draft", "/api/import", "/api/signin-codex", "/api/account-key", "/api/design", "/api/brand", "/api/slack-door"):
                 try:
-                    if u.path == "/api/post": res = person_post(d.get("text"), d.get("thread"), d.get("reply_to"), d.get("files"), signer=self.signer, limited="config" not in self.can, simple=d.get("simple") is True, model=d.get("model"), sig=d.get("sig"), interrupt=d.get("interrupt") is True)
+                    if u.path == "/api/post": res = person_post(d.get("text"), d.get("thread"), d.get("reply_to"), d.get("files"), signer=self.signer, limited="config" not in self.can, simple=d.get("simple") is True, model=d.get("model"), effort=d.get("effort"), sig=d.get("sig"), interrupt=d.get("interrupt") is True)
                     elif u.path == "/api/side-ask": res = side_ask(d.get("q"), signer=self.signer, limited="config" not in self.can)
                     elif u.path == "/api/thread-meta": res = set_thread_meta(d)
                     elif u.path == "/api/shown": res = dismiss_shown(d)
@@ -4976,6 +5018,7 @@ def serve(port):
                     elif u.path == "/api/plan": res = save_plan(d.get("name"), d.get("text"), d.get("version"), bool(d.get("start")), self.signer)
                     elif u.path == "/api/secret": res = set_secret(d.get("name"), d.get("value"), self.signer, delete=bool(d.get("delete")))
                     elif u.path == "/api/agent-model": res = set_agent_model(d.get("name"), d.get("model"))
+                    elif u.path == "/api/agent-effort": res = set_agent_effort(d.get("name"), d.get("effort"), d.get("restart") is True, signer=self.signer, limited="config" not in self.can)
                     elif u.path == "/api/inbox-read": res = {"marked": mark_read(None if d.get("all") else [str(i) for i in d.get("ids") or []])}
                     elif u.path == "/api/ntfy": res = phone_do(d.get("do"), self.headers)
                     elif u.path == "/api/webpush":
