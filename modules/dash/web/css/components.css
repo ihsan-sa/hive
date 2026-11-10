@@ -1977,7 +1977,7 @@ details.blk>summary .blk-t::after{border-color:var(--ink-3)}
 .ag .th{position:sticky;top:0;z-index:2;background:var(--bg);box-shadow:inset 0 -1px 0 var(--line);border-bottom:0}
 .ag .th>:first-child{z-index:3}
 @media (max-width:640px){.ag-w{max-height:calc(100dvh - var(--bar) - 100px)}.tbl.ag{overflow:visible}.ag .tb>.tr>.ag-on{white-space:normal;overflow-wrap:anywhere}} /* the page ends 98px below the table: a taller one is pushed up under the bar at the bottom */
-@media (max-width:640px){.ag-w{margin-top:0}.after:has(>.ag-w){margin-top:var(--s3) !important}} /* the agent rows start in the top half of a phone screen */
+@media (max-width:640px){.ag-w{margin-top:0}.after:has(>.ag-w){margin-top:var(--s2) !important}} /* the agent rows start in the top half of a phone screen */
 .ag-w.ag-page{position:static;max-height:none;overflow:visible}.ag-page .ag .th{top:var(--bar-h)}
 /* R10 1: on a phone a row stacks like ui/table.js's (.tg): avatar, name and status, then what it is on, then a labelled line per column; the page scrolls, not a box */
 .ag-w.ag-stack{position:static;max-height:none;overflow:visible}
@@ -3192,6 +3192,7 @@ kbd.menu-i-r{font-family:inherit;font-size:var(--fs-meta)}
 @media (prefers-reduced-motion:reduce){.yr-wait{animation:none}}
 .ag-cnt{display:contents}
 @container (max-width:640px){.ag-cnt{display:flex;flex:1 1 100%;align-items:center;gap:var(--s2) var(--s3)}.toolbar>.ag-sum{flex-basis:100%}}
+.ph:has(.ag-sum){margin-bottom:0}   /* a phone: the Totals fold is a 44 px target with its own air, so the first agent stays in the top half of the screen */
 .yr-day{color:var(--ink);font-weight:var(--w-bold)}
 .yr-day::after{display:none}
 .yr-rule::before{display:none}
