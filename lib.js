@@ -50,7 +50,9 @@ function installCommand(platform, env, accept) {
   if (accept) add.HIVE_ACCEPT = '1';
   if (platform === 'win32') {
     const ps = path.win32.join(env.windir || env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
-    return { file: ps, args: ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', `irm ${SITE}/install.ps1 | iex`], env: add };
+    return { file: ps, args: ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', `irm ${SITE}/install.ps1 | iex`], env: add,
+      // Started from PowerShell 7, the app would hand Windows' own PowerShell the newer one's module folders, and it then can't find its own commands (Get-FileHash).
+      unset: ['PSModulePath'] };
   }
   // To a file first: a failed curl piped into sh looks like success.
   const get = name => `f=$(mktemp) && curl -fsSL ${SITE}/${name} -o "$f" || { echo "Couldn't reach ${SITE}. Check the internet connection, then try again."; exit 1; }; `;

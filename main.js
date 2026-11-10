@@ -15,7 +15,8 @@ function run(cmd, out, timeoutMs) {
     let all = '', t = null, p;
     try {
       const env = { ...process.env, ...(cmd.env || {}) };
-      for (const k of cmd.unset || []) delete env[k];
+      // Windows keeps the case a name was set with (PSModulePath, Path), so match it loosely.
+      for (const k of cmd.unset || []) for (const have of Object.keys(env)) if (have.toLowerCase() === k.toLowerCase()) delete env[have];
       p = spawn(cmd.file, cmd.args, { env, detached: process.platform !== 'win32', windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
     } catch (e) { return resolve({ code: -1, text: String(e.message || e) }); }
     const take = d => { const s = d.toString(); all += s; if (out) out(s); };

@@ -23,6 +23,7 @@ t('linux: the Hive gets its own surroundings, as the installer gives it', () => 
   assert.ok(c.unset.includes('XDG_CONFIG_HOME') && c.unset.includes('CLAUDE_CONFIG_DIR'));
   assert.match(c.env.XDG_RUNTIME_DIR, /^\/run\/user\/-?\d+$/);
 });
+t('windows: the installer runs without another PowerShell\'s module folders', () => assert.deepStrictEqual(lib.installCommand('win32', { windir: 'C:\\Windows' }, false).unset, ['PSModulePath']));
 t('windows: the Hive system is kept awake', () => {
   const c = lib.openCommand('win32', { LOCALAPPDATA: 'C:\\Users\\a\\AppData\\Local', windir: 'C:\\Windows' }, () => true);
   assert.strictEqual(c.keep.file, 'C:\\Windows\\System32\\conhost.exe');
