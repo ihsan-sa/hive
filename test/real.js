@@ -5,6 +5,7 @@ const fs = require('fs');
 const { _electron } = require('playwright-core');
 const bin = process.argv[2];
 if (process.env.HIVE_APP_REAL !== '1' || !bin || !fs.existsSync(bin)) { console.error('usage: HIVE_APP_REAL=1 node test/real.js PATH-TO-APP-EXECUTABLE (on a throwaway machine)'); process.exit(2); }
+let logText = '';
 (async () => {
   const env = { ...process.env, HIVE_APP_TEST: '1' };
   const app = await _electron.launch({ executablePath: bin, args: process.platform === 'linux' ? ['--no-sandbox'] : [], env });
@@ -16,7 +17,10 @@ if (process.env.HIVE_APP_REAL !== '1' || !bin || !fs.existsSync(bin)) { console.
   await page.waitForFunction(() => document.querySelector('#title')?.textContent === 'Set up the Hive', null, { timeout: 60000 });
   await page.getByRole('button', { name: 'Install' }).click();
   const end = Date.now() + 40 * 60000; let accepted = false, last = '';
+  // if the app goes away mid-install, say how it ended and what the installer had printed up to then
+  app.process().on('exit', (code, sig) => console.log(new Date().toISOString(), `the app's process ended: code ${code}, signal ${sig}`));
   for (;;) {
+    logText = await page.locator('#log').textContent({ timeout: 3000 }).catch(() => logText);
     const at = await where();
     if (/^http:\/\/(localhost|127\.0\.0\.1):\d+\//.test(at)) break;
     const t = await title();
@@ -35,4 +39,4 @@ if (process.env.HIVE_APP_REAL !== '1' || !bin || !fs.existsSync(bin)) { console.
   if (html.length < 500) throw new Error('the Hive\'s page is nearly empty: ' + html);
   console.log(`ok real ${process.platform}: the window shows ${await where()} (${await page.title()})`);
   await app.close();
-})().catch(e => { console.error('FAILED', e.message || e); process.exit(1); });
+})().catch(e => { console.error('FAILED', e.message || e); console.error('the installer\'s output up to then:\n' + logText.slice(-6000)); process.exit(1); });
