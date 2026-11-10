@@ -258,7 +258,10 @@ def wrap(argv, env, name, box_home=None, sockets=None):
     a += [_python(), "-I", str(CORE / "sandbox_inner.py"), f"{INSIDE}/egress.sock", str(PORT), "--", *argv]
     if bpf: a = ["/bin/sh", "-c", 'exec "$@" 9<"$0"', str(bpf), *a]  # sh only opens the file and becomes bwrap, whoever starts this and whatever it closes
     proxy = f"http://127.0.0.1:{PORT}"
-    e = {k: v for k, v in env.items() if k in ENV_KEEP or k in env.get("_BOX_KEEP", "").split()}
+    # ANTHROPIC_DEFAULT_<ALIAS>_MODEL: the starter sets these from config model_ids (what `fable`, `opus`, ... mean); without them
+    # a run in the box falls back to whatever its CLI version thinks the alias is (2026-11-10: `@fable` came up on 5.1 after 5.2 was pinned)
+    e = {k: v for k, v in env.items() if k in ENV_KEEP or k in env.get("_BOX_KEEP", "").split()
+         or (k.startswith("ANTHROPIC_DEFAULT_") and k.endswith("_MODEL"))}
     e.update(HOME=str(HOME), TMPDIR=str(HOME / ".cache" / "hive-tmp"), HIVE_NAME=name, HIVE_BROKER=f"{INSIDE}/ctl.sock", DISABLE_AUTOUPDATER="1",
              HTTP_PROXY=proxy, HTTPS_PROXY=proxy, http_proxy=proxy, https_proxy=proxy, NO_PROXY="localhost,127.0.0.1", no_proxy="localhost,127.0.0.1")
     return a, e

@@ -756,7 +756,7 @@ function toMenu(th, r) {
 }
 
 // ---- model: what the message starts (or moves) its agent on; the default, the picked one, or an @model typed in the text ----
-const MODELS = [["opus", "Opus 5.5", "Most capable, uses the most of your plan"], ["sonnet", "Sonnet 5.5", "Fast and capable, for most jobs"], ["haiku", "Haiku 5.5", "Quickest, for small jobs"], ["fable", "Fable 5.1", ""], ["astra", "Astra", ""]];
+const MODELS = [["opus", "Opus 5.5", "Most capable, uses the most of your plan"], ["sonnet", "Sonnet 5.5", "Fast and capable, for most jobs"], ["haiku", "Haiku 5.5", "Quickest, for small jobs"], ["fable", "Fable 5.2", ""], ["astra", "Astra", ""]];
 function modelPick(d, r) {
   // An agent already running stays on its model for this run; a pick here is kept by the starter and holds from its next run.
   const who = r && r.who, live = who && who !== "new" && isRunning(who);

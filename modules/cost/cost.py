@@ -22,6 +22,7 @@ PROJ = os.path.join(HOME, "projects")
 
 # $/MTok: input, output, cache read. Cache writes: 5m = 1.25x input, 1h = 2x input.
 PRICES = {
+    "claude-fable-5-2": (8, 40, 0.20), "claude-mythos-5-2": (8, 40, 0.20),
     "claude-fable-5-1": (10, 50, 0.25), "claude-mythos-5-1": (10, 50, 0.25),
     "claude-fable-5": (10, 50, 1.0),
     "claude-opus-5-5": (4, 20, 0.20), "claude-opus-5": (5, 25, 0.50),
