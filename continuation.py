@@ -20,7 +20,7 @@ import goals as G
 HOME = Path.home()
 DIR, BOARD, STATUS, PROJECTS, CONFIG, OUTCOMES = HOME / ".hive" / "continue", HOME / "board.jsonl", HOME / ".hive" / "thread-status.jsonl", HOME / "projects", Path(__file__).resolve().parent / "config.json", HOME / "outcomes.jsonl"
 AGENT = re.compile(r"^[a-z][0-9a-f]{4,}$")
-PERSON_LINE = re.compile(r"\bfor you\b|\bperson\b", re.I)
+PERSON_LINE = re.compile(r"(?<![\w./-])(?:for you|person)\b(?!\.\w| would| items?\b)", re.I)   # not a file or flag named for-person.md or --person, 13 of 18 drops from 2026-11-09
 SYSTEM_THREADS = {"keeper", "improve", "watchdog", "starter", "kb-dream"}  # their rounds are started on a timer already
 STOP_LINE = re.compile(r"^(done|blocked|needs the person|waiting|told to stop):", re.I)
 TAIL = 4_000_000  # bytes of the board a check reads: posts since a step that has only just ended
@@ -53,20 +53,24 @@ def record(event, **e):
 def drop(intent, reason):
     record("drop", reason=reason, **{k: intent.get(k) for k in ("chain", "hop", "thread", "post", "name", "line")})
 
-def thread_posts(thread):
-    """The thread's posts in the board's tail, oldest first."""
+def tail_posts(word):
+    """The posts in the board's tail with this word (a JSON string) in them, oldest first."""
     try:
         with BOARD.open("rb") as fh:
             fh.seek(max(0, os.fstat(fh.fileno()).st_size - TAIL)); data = fh.read()
     except OSError: return []
     out = []
-    needle = json.dumps(str(thread))
+    needle = json.dumps(str(word))
     for ln in data.decode(errors="replace").splitlines():
         if needle not in ln: continue
         try: p = json.loads(ln)
         except ValueError: continue
-        if isinstance(p, dict) and (p.get("thread") or p.get("id")) == thread: out.append(p)
+        if isinstance(p, dict): out.append(p)
     return out
+
+def thread_posts(thread):
+    """The thread's posts in the board's tail, oldest first."""
+    return [p for p in tail_posts(thread) if (p.get("thread") or p.get("id")) == thread]
 
 def enabled(thread):
     """The goals.md of the project this thread belongs to, if it has `Continue: on` under `## Ladder`: (project, path, text), or None."""
@@ -144,6 +148,12 @@ def wait_until(line, base):
     when = dt.datetime.fromtimestamp(base, zone).replace(hour=int(m[1]), minute=int(m[2]), second=0, microsecond=0)
     return (when if when.timestamp() > base else when + dt.timedelta(days=1)).timestamp()
 
+def wait_holds(line, base, running, cap=7200):
+    """Until when a `Waiting:` line holds, as seconds, or None. It holds only if it says who (a running or queued agent) or when (a time)."""
+    if set(re.findall(r"\b[a-z][0-9a-f]{4,}\b", line)) & set(running): return base + cap
+    when = wait_until(line, base)
+    return min(when, base + cap) if when else None
+
 def waits(threads, running, t, cap=7200):
     """{thread: seconds} until which a `Waiting:` holds the floor off it. Only a wait that says who or when holds: a running or queued agent named in the line, or a time; a bare one
     ("for the next keeper round"), or one on an agent that isn't coming, carries on now. Newest of the last agent post and the status bar decides; no wait outlasts cap after the last agent post, however often the bar is rewritten."""
@@ -165,19 +175,21 @@ def waits(threads, running, t, cap=7200):
         lines = [clean(l) for l in str(text).splitlines() if clean(l).lower().startswith("waiting:")]
         if not lines: continue
         base = at or bar["at"]
-        names = set(re.findall(r"\b[a-z][0-9a-f]{4,}\b", lines[-1]))
-        if names & set(running): out[th] = base + cap
-        elif (when := wait_until(lines[-1], base)): out[th] = min(when, base + cap)
+        if (until := wait_holds(lines[-1], base, running, cap)): out[th] = until
     return out
 
-def find_next(r):
+def find_next(r, busy=()):
     """The step a run ended on, from its newest own post and newest own status line in its thread: newest first, a Next line counts and a stop reason
-    wins. A plain newest post does not cancel a Next in the bar; an older post of the run is not read, since the newer one overtook it. {line, post, since}, or None."""
+    wins. A plain newest post does not cancel a Next in the bar; an older post of the run is not read, since the newer one overtook it. {line, post, since}, or None.
+    A `Waiting:` in the bar that says neither who (an agent in busy) nor when doesn't cancel a Next in the post, the rule the floor applies (waits): the stop gate makes agents write one
+    beside their Next, usually about the person's items, and 26 of 27 lost Next lines on 2026-11-08..10 were that."""
     all_posts, posts, said = own_said(r)
     for at, _, kind, x in said:
         got = post_line(x) if kind == "post" else status_line(x)
         if not got: continue
-        if got[0] == "stop": return None
+        if got[0] == "stop":
+            if kind == "status" and got[1].lower().startswith("waiting:") and (wait_holds(got[1], at, busy) or 0) <= now().timestamp(): continue
+            return None
         src = x["id"] if kind == "post" else (str(x.get("via", "")).removeprefix("post ").strip() or (posts[-1]["id"] if posts else all_posts[-1]["id"] if all_posts else None))
         return {"line": got[1], "post": src, "since": at} if src else None
     return None
@@ -235,7 +247,7 @@ def check(intent, st, c, alive):
         at = epoch(p.get("at")) or 0
         if p.get("id") != intent["post"] and at > intent.get("since", 0) and AGENT.match(str(p.get("from", ""))) and \
                 not (str(p.get("from", "")).lower() == n and at <= (epoch(intent.get("at", "")) or 0)): return "superseded"
-    if PERSON_LINE.search(intent["line"]): return "person_line"
+    if PERSON_LINE.search(re.sub(r"`[^`]*`", "", intent["line"]).split("check:")[0]): return "person_line"
     ev = [e for e in events() if e.get("event") == "launch" and e.get("post") != intent["post"]]
     mine = [e for e in ev if e.get("chain") == intent["chain"]]
     if any(overlap(intent["line"], str(e.get("line", ""))) > OVERLAP for e in mine[-3:]): return "overlap"
@@ -256,12 +268,26 @@ def claim(path):
     try: os.close(os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)); return True
     except FileExistsError: return False
 
+def stated_next(r):
+    """The run's newest post anywhere on the board, if it ended on a Next line, or None."""
+    name, since = str(r.get("name", "")).lower(), epoch(r.get("at", "")) or 0
+    mine = [p for p in tail_posts(name) if str(p.get("from", "")).lower() == name and (epoch(p.get("at")) or 0) >= since]
+    return mine[-1] if mine and (post_line(mine[-1]) or ("",))[0] == "next" else None
+
 def on_run_end(r, c, st, alive):
-    """A run ended cleanly: write its intent if it ended on a Next line in a thread that takes part, or `Done:` or no line with a rung still open (carry_on). One run gives one at most, however many times it said so."""
-    if not enabled(r.get("thread")): return None
-    got = find_next(r) or carry_on(r)
-    if not got or (DIR / "done" / safe(got["post"])).exists(): return None
-    if not claim(DIR / "done" / f"run-{safe(r.get('name'))}-{safe(r.get('at'))}"): return None
+    """A run ended cleanly: write its intent if it ended on a Next line in a thread that takes part, or `Done:` or no line with a rung still open (carry_on). One run gives one at most, however many times it said so.
+    A Next line that gets no intent is logged as a drop with the reason, so a lost step shows in the log."""
+    on = enabled(r.get("thread"))
+    busy = set(alive or {}) | {n for n, ps in (st.get("pending") or {}).items() if ps}
+    got = (find_next(r, busy) or carry_on(r)) if on else None
+    if not got:
+        if r.get("thread") not in SYSTEM_THREADS and (p := stated_next(r)):
+            where = p.get("thread") or p.get("id")
+            drop({"thread": where, "post": p["id"], "name": r.get("name"), "line": post_line(p)[1]}, "other_thread" if where != r.get("thread") else "stop_line" if on else "off")
+        return None
+    seen = {"thread": r.get("thread"), "post": got["post"], "name": r.get("name"), "line": got["line"]}
+    if (DIR / "done" / safe(got["post"])).exists(): drop(seen, "post_done"); return None
+    if not claim(DIR / "done" / f"run-{safe(r.get('name'))}-{safe(r.get('at'))}"): drop(seen, "run_claimed"); return None
     chain, hop = chain_of(r, got["post"])
     intent = {"chain": chain, "hop": hop, "run": r.get("session"), "post": got["post"], "name": r.get("name"), "thread": r.get("thread"), "line": got["line"], "since": got["since"], "at": iso()}
     why = check(intent, st, c, alive)

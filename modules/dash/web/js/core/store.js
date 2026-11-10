@@ -135,6 +135,7 @@ function ingestBoard(items) {
 // the older parts are fetched right after and the state is rebuilt in order with them. S.boardStart and S.logStart are where what's held begins (0: all of it); S.history turns true once it is all in, and what counts across old threads (the waits) waits for it.
 const FIRST_BYTES = 2_000_000, LOG_FIRST_BYTES = 600_000;
 let logHeld = [];   // the log items read so far, kept until the older part has arrived: ingestLog keeps no raw events to rebuild from
+let filling = false;   // the older part is on its way: a poll that lands meanwhile has nothing older of its own, and must not call the history complete (R73)
 function resetLog() {
   Object.assign(S, { sessions: [], lastByThread: {}, lastSess: {}, open: {}, byOut: {}, woke: {}, agents: new Set(), killed: {}, limited: [], limitedSess: new Set(), limitedNow: new Set() });
   S.ledger = S.ledger.filter(r => r.b);
@@ -176,7 +177,8 @@ export async function poll() {
     const older = S.boardStart == null && b.start > 0, olderLog = S.logStart == null && lg.start > 0; if (S.boardStart == null) S.boardStart = b.start || 0; if (S.logStart == null) S.logStart = lg.start || 0;
     if (S.logStart && logHeld) logHeld.push(...lg.items);
     ingestLog(lg.items); ingestBoard(b.items);
-    S.history ||= !(older || olderLog);
+    filling ||= older || olderLog;
+    S.history ||= !filling;
     if (older || olderLog) setTimeout(() => backfill(older ? b.start : 0, olderLog ? lg.start : 0), 50);
     if (changed) S.ver++;
     S.fresh = now(); S.failed = false;

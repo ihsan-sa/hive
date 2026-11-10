@@ -102,7 +102,7 @@
    intuitive, and not random and chaotic". Positions come from mesh-layout.js; this file only draws. */
 .map-stage{position:relative;display:flex;flex-direction:column;height:clamp(420px,calc(100vh - 260px),900px);border:1px solid var(--line);border-radius:var(--r-l);background:var(--surface);overflow:hidden;
   --spoke:color-mix(in oklch,var(--ink-3) 42%,transparent)}
-.map-cap{flex:none;padding:var(--s2) var(--s4);font-size:var(--fs-small);font-weight:var(--w-bold);color:var(--ink);border-bottom:1px solid var(--line);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.map-cap{flex:none;padding:var(--s2) calc(var(--s3) + 124px) var(--s2) var(--s4);font-size:var(--fs-small);font-weight:var(--w-bold);color:var(--ink);border-bottom:1px solid var(--line);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .map-cap small{font-size:var(--fs-small);font-weight:400;color:var(--ink-3)}
 .map-cap[data-cut]{color:var(--accent-ink)}
 .map-cap[data-post]{font-weight:400;color:var(--ink-2)}
@@ -120,7 +120,7 @@
 .map-scroll[data-free] [data-body]{touch-action:none}
 .map-scroll[data-drag]{cursor:grabbing}
 .map-scroll[data-drag]>.map-cv,.map-scroll[data-drag]>.map-cv>*,.map-scroll[data-drag] .map-sp{transition:none}
-.map-zoom{position:absolute;right:var(--s3);top:calc(var(--s2) * 2 + 20px);z-index:3;display:flex;gap:4px}
+.map-zoom{position:absolute;right:var(--s3);top:4px;z-index:3;display:flex;gap:4px}
 .map-zoom[hidden]{display:none}
 .map-zoom>.btn{min-width:30px;justify-content:center;background:var(--surface)}
 .map-cv[data-dim]>:is(.map-ag,.map-more,.map-old,.map-band):not([data-lit]){opacity:.25}

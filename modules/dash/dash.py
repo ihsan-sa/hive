@@ -404,6 +404,21 @@ def thread_names():
 
 # ---------- threads an agent brought up for the person (GET /api/shown) ----------
 # `hive show THREAD --why ...` appends to ~/.hive/shown.jsonl; the page shows the ones whose time isn't up as "Brought up for you".
+LOADTIMES = STATE / "loadtimes.jsonl"  # first-load figures the app reports from the person's own browser (R69)
+
+
+def record_loadtime(d, route):
+    """One line per report: how long the page took to reach the chat in a real browser, so a slow load through the public name is measured, not guessed."""
+    keep = {k: round(float(d[k])) for k in ("ttfb", "dom", "boot", "chat", "load", "files", "bytes", "width") if isinstance(d.get(k), (int, float)) and not isinstance(d.get(k), bool)}
+    if not keep or any(v < 0 or v > 10**9 for v in keep.values()): raise ValueError("no figures")
+    keep.update(t=time.strftime("%Y-%m-%dT%H:%M:%S"), route=route, cold=d.get("cold") is True)
+    LOADTIMES.parent.mkdir(parents=True, exist_ok=True)
+    try: lines = LOADTIMES.read_text().splitlines()[-199:]
+    except OSError: lines = []
+    LOADTIMES.write_text("\n".join(lines + [json.dumps(keep)]) + "\n")
+    return {"ok": True}
+
+
 SHOWN = STATE / "shown.jsonl"
 
 def shown_now():
@@ -1847,7 +1862,7 @@ GET_CAP = {"/api/call-chat": "post", "/api/live": "read", "/api/away": "read", "
            "/api/settings": "config", "/api/ntfy": "config", "/api/webpush": "config", "/api/update": "config", "/api/signin-codex": "logins", "/api/accounts": "logins", "/api/design": "logins", "/api/brand/logo": "read",
            "/api/kb/home": "files", "/api/kb/open": "files", "/api/kb/search": "files", "/api/kb/raw": "files", "/api/kb/map": "files", "/api/kb/history": "files", "/api/progress": "read", "/api/checklist": "read", "/api/share-preview": "read", "/api/approvals": "read", "/api/feedback-drafts": "read", "/api/mail": "files"}
 POST_CAP = {"/api/webpush": "config", "/api/share-build": "read", "/api/kill": "stop", "/api/approval": "stop", "/api/tier": "tier", "/api/agent-model": "post", "/api/login-pause": "limits", "/api/login-limit": "limits", "/api/provider-limit": "limits",
-            "/api/post": "post", "/api/side-ask": "post", "/api/thread-meta": "post", "/api/shown": "post", "/api/checklist": "post", "/api/focus": "post", "/api/feedback": "post", "/api/feedback-draft-done": "post", "/api/issue-link": "post", "/api/update": "config", "/api/share-copy": "config", "/api/share-pack": "config", "/api/draft": "config", "/api/import": "config", "/api/upload": "post", "/api/inbox-read": "post", "/api/ntfy": "config", "/api/config": "config", "/api/starter": "config",
+            "/api/post": "post", "/api/side-ask": "post", "/api/thread-meta": "post", "/api/shown": "post", "/api/loadtime": "post", "/api/checklist": "post", "/api/focus": "post", "/api/feedback": "post", "/api/feedback-draft-done": "post", "/api/issue-link": "post", "/api/update": "config", "/api/share-copy": "config", "/api/share-pack": "config", "/api/draft": "config", "/api/import": "config", "/api/upload": "post", "/api/inbox-read": "post", "/api/ntfy": "config", "/api/config": "config", "/api/starter": "config",
             "/api/module": "modules", "/api/signin": "logins", "/api/signin/code": "logins", "/api/signin/cancel": "logins", "/api/plan": "plans", "/api/secret": "secrets", "/api/slack-door": "modules",
             "/api/signin-codex": "logins", "/api/account-key": "logins", "/api/design": "logins", "/api/brand": "config", "/api/brand/logo": "config"}
 LOCAL_ONLY = {"/api/access", "/api/settings", "/api/import", "/api/share-copy", "/api/share-pack", "/api/draft"}  # who may do what is never changed from outside, whatever outside.can says
@@ -4924,12 +4939,13 @@ def serve(port):
                 try: return self.send(json.dumps(share_build(d)).encode(), J)
                 except KeyError: return self.send_error(404)
                 except ValueError as e: return self.deny(400, str(e))
-            if u.path in ("/api/post", "/api/side-ask", "/api/thread-meta", "/api/shown", "/api/checklist", "/api/focus", "/api/feedback", "/api/feedback-draft-done", "/api/issue-link", "/api/update", "/api/inbox-read", "/api/ntfy", "/api/webpush", "/api/agent-model", "/api/config", "/api/starter", "/api/module", "/api/signin", "/api/signin/code", "/api/signin/cancel", "/api/access", "/api/plan", "/api/secret", "/api/settings", "/api/share-copy", "/api/share-pack", "/api/draft", "/api/import", "/api/signin-codex", "/api/account-key", "/api/design", "/api/brand", "/api/slack-door"):
+            if u.path in ("/api/post", "/api/side-ask", "/api/thread-meta", "/api/shown", "/api/loadtime", "/api/checklist", "/api/focus", "/api/feedback", "/api/feedback-draft-done", "/api/issue-link", "/api/update", "/api/inbox-read", "/api/ntfy", "/api/webpush", "/api/agent-model", "/api/config", "/api/starter", "/api/module", "/api/signin", "/api/signin/code", "/api/signin/cancel", "/api/access", "/api/plan", "/api/secret", "/api/settings", "/api/share-copy", "/api/share-pack", "/api/draft", "/api/import", "/api/signin-codex", "/api/account-key", "/api/design", "/api/brand", "/api/slack-door"):
                 try:
                     if u.path == "/api/post": res = person_post(d.get("text"), d.get("thread"), d.get("reply_to"), d.get("files"), signer=self.signer, limited="config" not in self.can, simple=d.get("simple") is True, model=d.get("model"), sig=d.get("sig"), interrupt=d.get("interrupt") is True)
                     elif u.path == "/api/side-ask": res = side_ask(d.get("q"), signer=self.signer, limited="config" not in self.can)
                     elif u.path == "/api/thread-meta": res = set_thread_meta(d)
                     elif u.path == "/api/shown": res = dismiss_shown(d)
+                    elif u.path == "/api/loadtime": res = record_loadtime(d, self.route)
                     elif u.path == "/api/checklist": res = checklist_do(d)
                     elif u.path == "/api/focus": res = focus_do(d)
                     elif u.path == "/api/feedback": res = send_feedback(d)

@@ -15,7 +15,7 @@ Rules, from an earlier lesson: the loop never edits its own scorers, gates or ke
 ledger; the judge is never who proposed; a judgement needs the number, not a feeling. Append-only ledger: a judge adds a
 record, the last record per id wins. Every reader of the raw data is optional: a consumer Hive without hive-cost or
 rsi-loop still gets a scoreboard."""
-import importlib.util, argparse, datetime as dt, json, os, re, subprocess, sys, time
+import importlib.util, argparse, datetime as dt, fcntl, json, math, os, re, subprocess, sys, time
 from pathlib import Path
 
 HOME = Path.home()
@@ -23,8 +23,10 @@ LEDGER, SNAPS, LOG, BOARD = HOME / "improvements.jsonl", HOME / "progress.jsonl"
 CORE, STATE, PROJECTS = HOME / "core", HOME / ".hive", HOME / "projects"
 Hive = next((CORE / n for n in ("hive", "hive") if (CORE / n).exists()), CORE / "hive")  # an installed Hive's CLI is called hive
 RSI_LEDGER = PROJECTS / "rsi-loop" / "ledger.jsonl"
-VERDICTS = ("held", "reverted", "inconclusive")
+VERDICTS = ("held", "reverted", "inconclusive", "reverted-candidate", "unjudgeable")  # reverted-candidate is the script's; unjudgeable: nothing could ever credit this one change: the number got worse, the owner decides
 MEASURE = re.compile(r"measure|metric|score|yardstick|benchmark|passes|pass rate|p&l|sharpe", re.I)
+
+CHECK_TIMEOUT_S = 120
 
 def now(): return dt.datetime.now(dt.timezone.utc)
 def iso(t=None): return (t or now()).isoformat(timespec="seconds")
@@ -75,14 +77,15 @@ def ledger():
     return items
 
 def due_groups(items, t=None):
-    """Overdue landings, one list per item: landings linked by --also or a shared number (shares) are judged together,
-    due on the earliest revisit among the group's open ones."""
+    """Overdue landings, one list per item: landings linked by --also or a shared number (shares) are listed together,
+    each only once its own revisit date has come."""
     today, out, seen = (t or now()).date().isoformat(), [], set()
     for e in sorted(items.values(), key=lambda e: e.get("at", "")):
         if e["id"] in seen or e.get("status") != "landed": continue
         g = [items[i] for i in [e["id"]] + judged_with(items, e) if i in items and items[i].get("status") == "landed"]
         seen.update(x["id"] for x in g)
-        if min(x.get("revisit") or "9999" for x in g) <= today: out.append(g)
+        g = [x for x in g if x.get("due_at", "") <= iso(t) and (x.get("revisit") or "9999") <= today]  # a check runs at its hour, not at the start of its day
+        if g: out.append(g)
     return out
 
 def overdue(items, t=None):
@@ -115,36 +118,140 @@ def overlaps(items, measure, t=None, skip=()):
 
 def links(e): return set(e.get("also") or []) | set(e.get("shares") or [])
 
+def same_check(items, x):
+    """Rows reading the very same check command over a window that overlaps x's: one number, so it can't credit either."""
+    e = items.get(x, {})
+    if not e.get("check"): return set()
+    return {o["id"] for o in items.values() if o["id"] != x and o.get("check") == e["check"] and o.get("at", "") <= e.get("due_at", "") and e.get("at", "") <= o.get("due_at", "")}
+
 def judged_with(items, e):
-    """Ids judged together with e: its own --also and shares, entries that named it in theirs, and theirs in turn."""
+    """Ids judged together with e: its own --also and shares, rows on the same check, entries that named it in theirs, and theirs in turn."""
     seen, todo = {e["id"]}, [e["id"]]
     while todo:
         x = todo.pop()
-        near = links(items.get(x, {})) | {o["id"] for o in items.values() if x in links(o)}
+        near = links(items.get(x, {})) | same_check(items, x) | {o["id"] for o in items.values() if x in links(o)}
         todo += sorted(near - seen); seen |= near
     return sorted(seen - {e["id"]})
+
+# ---------- the measure as a command: a script judges it ----------
+
+def run_check(cmd):
+    """(number, None), or (None, why not). The check must print exactly one number; it runs in ~ with nothing but HOME and PATH."""
+    env = {"HOME": str(HOME), "PATH": f"{HOME}/.local/bin:{CORE}:" + os.environ.get("PATH", "/usr/bin:/bin"), "LANG": "C.UTF-8"}
+    try: r = subprocess.run(["bash", "-c", cmd], cwd=HOME, env=env, capture_output=True, text=True, timeout=CHECK_TIMEOUT_S)
+    except (OSError, subprocess.SubprocessError) as e: return None, f"did not finish: {type(e).__name__}"
+    if r.returncode: return None, f"exit {r.returncode}: {r.stderr.strip()[-120:]}"
+    try: n = float(r.stdout.strip())
+    except ValueError: return None, f"printed {r.stdout.strip()[:60]!r}, not one number"
+    return (n, None) if math.isfinite(n) else (None, f"printed {n}")
+
+def read_check(e):
+    """((number, control number or None), None), or (None, why not)."""
+    n, err = run_check(e["check"])
+    if n is None or not e.get("control"): return ((n, None), None) if n is not None else (None, err)
+    c, err = run_check(e["control"])
+    return ((n, c), None) if c is not None else (None, f"control: {err}")
+
+def score(base, after, want, band=None):
+    """The verdict for a move from base to after. band is the move that counts as noise: 5% of the baseline unless stated.
+    Inside it a number says nothing, so inconclusive, except a count that wanted down and stayed at 0."""
+    band = abs(base) * 0.05 if band is None else band
+    gain = (after - base) if want == "up" else (base - after)
+    if gain > band: return "held"
+    if gain < -band: return "reverted-candidate"
+    return "held" if want == "down" and base == after == 0 else "inconclusive"
+
+def check_fields(a):
+    if a.want not in ("up", "down"): sys.exit("hive improve: --check needs --want up|down, the way the number should move.")
+    return {"check": a.check, "want": a.want, **({"band": a.band} if a.band is not None else {})}
+
+def autojudge(post=True, t=None):
+    """Judge every landed change whose check is due, with no model and no agent. Runs hourly after hive outcomes grade and at
+    hive improve list --due. Never reverts: a number that got worse is named to its owner in thread improve."""
+    STATE.mkdir(exist_ok=True)
+    with (STATE / "autojudge.lock").open("w") as lock:
+        try: fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError: return []  # another run is on it
+        t, items, out = t or now(), ledger(), []
+        for e in sorted(items.values(), key=lambda e: e.get("at", "")):
+            if e.get("status") != "landed" or not e.get("check") or e.get("due_at", "") > iso(t) or str(e.get("revisit") or "") > iso(t)[:10]: continue
+            base, (after, err) = e.get("before"), read_check(e)
+            try: retries_over = t - dt.datetime.fromisoformat(e["due_at"]) >= dt.timedelta(days=1)
+            except (KeyError, ValueError): retries_over = True
+            if after is None and not retries_over: continue  # a check that fails once gets a day of hourly retries
+            if after is not None and base is not None and e.get("control") and e.get("control_before"): base = base * after[1] / e["control_before"]  # what the untouched thing says would have happened anyway
+            control = after[1] if after is not None else None; after = after[0] if after is not None else None
+            reading = "inconclusive" if after is None or base is None else score(base, after, e.get("want"), e.get("band"))
+            why = (f"check failed: {err}" if after is None else "no baseline" if base is None else f"{e.get('want')}: {e.get('before'):g} -> {after:g}" + (f" (expected {base:g} from control {e['control_before']:g} -> {control:g})" if e.get("control") else "") + (f" (noise band {e['band']:g})" if e.get("band") is not None else ""))
+            w, v = judged_with(items, e), reading
+            if e.get("late"): v, why = "inconclusive", why + f"; the check was written after landing, so this read {reading} is not a verdict"
+            if w: v, why = "inconclusive", why + f"; shares its number with {', '.join(w)}, so this cannot credit one change"
+            append(LEDGER, {"judge": e["id"], "at": iso(t), "by": "late-check" if e.get("late") else "check", "verdict": v, "reading": reading, "why": why, "before": e.get("before"), "after": after})
+            out.append((e, v, why))
+    bad = [(e, why) for e, v, why in out if v == "reverted-candidate"]
+    if bad and post:
+        owner = lambda e: "@" + e["by"] if re.fullmatch(r"[a-z][0-9a-f]{4}", str(e.get("by"))) else str(e.get("by"))
+        body = "A check says these changes made their number worse. Nothing was reverted; each owner decides, then records it with `hive improve judge ID reverted|held --why ...`.\n" + "\n".join(f"- {e['id']} {owner(e)}: {why}. {e.get('what', '')[:100]}" for e, why in bad)
+        subprocess.run([sys.executable, "-I", str(Hive), "post", "--thread", "improve"], input=body, text=True, capture_output=True, env={**os.environ, "HIVE_NAME": "improve-judge"})
+    return out
+
+def cmd_autojudge(a):
+    out = autojudge(post=not a.no_post)
+    for e, v, why in out: print(e["id"], v, why)
+    if not out: print("no checks due")
+
+def cmd_attach(a):
+    """Give a logged change a check after the fact. Its number is recorded, but it is late-check and inconclusive, never held: the scorer is not chosen after the change."""
+    e = ledger().get(a.id)
+    if not e or not re.fullmatch(r"i\d+", a.id): sys.exit(f"hive improve attach: no improvement {a.id}")
+    if e.get("status") != "landed": sys.exit(f"hive improve attach: {a.id} already has a verdict ({e.get('status')})")
+    rec, n = {"id": a.id, "late": True, **check_fields(a)}, a.before
+    if n is None:
+        n, err = run_check(a.check)
+        if n is None: sys.exit(f"hive improve attach: the check doesn't work yet ({err})")
+    rec.update(before=n, due_at=max(iso(now() if a.before is not None else now() + span("48h")), str(e.get("revisit") or "")[:10] + "T00:00:00+00:00"))
+    append(LEDGER, rec); print(f"{a.id}: check attached, before {n:g}, due {rec['due_at']}")
+
+def cmd_num(a):
+    """One number from the scoreboard's snapshots, for a --check: the latest, or the mean over --from .. --to."""
+    v = [s[a.field] for s in jsonl(SNAPS) if s.get("since") == "1d" and isinstance(s.get(a.field), (int, float)) and (a.frm or "") <= s.get("at", "") and (not a.to or s.get("at", "") <= a.to)]
+    if not v: sys.exit(f"hive improve num: no snapshot has {a.field} in that window")
+    print(f"{sum(v) / len(v):.4g}" if a.frm or a.to else v[-1])
 
 def cmd_log(a):
     items = ledger()
     if not a.measure: sys.exit("hive improve log: --measure is the number that would show the change worked (or not). No measure, no entry.")
-    rev = a.revisit or "7d"
-    if re.fullmatch(r"\d+[dw]", rev): rev = (now() + span(rev)).date().isoformat()
+    if a.control and not a.check: sys.exit("hive improve log: --control needs --check.")
+    if not a.check and not a.no_check: sys.exit("hive improve log: give --check CMD --want up|down, a command that prints the number now, so a script judges the change at its revisit and nobody grades their own. Written later it can't be a verdict. If no command can read this number, say why with --no-check WHY.")
+    if a.kind == "behaviour" and a.check and not a.control: sys.exit("hive improve log: a change meant to shift behaviour is compared against something it didn't touch: add --control CMD, printing the same number for that.")
+    rev, fields = a.revisit or ("48h" if a.check and a.kind != "behaviour" else "7d"), {}
+    if a.check:
+        fields = {**check_fields(a), **({"kind": a.kind} if a.kind else {})}; fields["before"], err = run_check(a.check)
+        if err: sys.exit(f"hive improve log: the check doesn't work yet ({err}). It must print one number, now, in ~.")
+        if a.control:
+            fields["control"] = a.control; fields["control_before"], err = run_check(a.control)
+            if err: sys.exit(f"hive improve log: the control doesn't work yet ({err}).")
+        fields["due_at"] = iso(now() + span(rev)) if re.fullmatch(r"\d+[hdw]", rev) else rev + "T00:00:00+00:00"
+    if re.fullmatch(r"\d+[hdw]", rev): rev = (now() + span(rev)).date().isoformat()
     also = sorted({i.strip().lower() for x in (a.also or []) for i in x.split(",") if i.strip()})
     unknown = [i for i in also if i not in items]
     rec = {"id": next_id(items), "at": iso(), "by": os.environ.get("HIVE_NAME", os.environ.get("USER", "?")), "what": a.what, "where": a.where or "",
            "hypothesis": a.hypothesis or "", "measure": a.measure, "baseline": a.baseline or "", "revisit": rev, "status": "landed",
-           "commit": a.commit or "", "thread": a.thread or os.environ.get("HIVE_THREAD", "")}
+           "commit": a.commit or "", "thread": a.thread or os.environ.get("HIVE_THREAD", ""), **fields}
     if also: rec["also"] = also
+    if a.no_check and not a.check: rec["no_check"] = a.no_check
     if a.reviewed_by: rec["reviewed_by"] = a.reviewed_by.lstrip("@").lower(); rec["review_model"] = (a.model or "").lower()
     ov = overlaps(items, a.measure, skip=set(also))
     if ov: rec["shares"] = sorted(ov)  # linked, never refused (meta-reflect, reflect-p0.md; rsi-loop rung 133): judged together
     append(LEDGER, rec)
-    print(f"{rec['id']} logged; revisit {rev}. Someone else judges it then: hive improve judge {rec['id']} held|reverted|inconclusive --why ...")
+    print(f"{rec['id']} logged; before {fields['before']:g}; its check judges it at {fields['due_at']}, no agent needed." if a.check else f"{rec['id']} logged; revisit {rev}. Someone else judges it then: hive improve judge {rec['id']} held|reverted|inconclusive --why ...")
+    same = sorted(same_check({**items, rec["id"]: rec}, rec["id"]))
+    if same: print(f"linked: {', '.join(same)} read the same check over the same days, so a held here is recorded as inconclusive. Give it a number of its own to judge it apart.")
     if unknown: print(f"warning: --also {', '.join(unknown)}: not in the ledger (hive improve list); the overlap is stored as given", file=sys.stderr)
     if ov:
         print(f"linked: {rec['id']}'s measure names a number open landings already name: "
               + "; ".join(f"{i} ({', '.join(n)})" for i, n in sorted(ov.items()))
-              + ". One revisit cannot credit one change, so they are judged together, as one item in hive improve list --due on the earliest revisit."
+              + ". One revisit cannot credit one change, so a held on any of them is recorded as inconclusive."
               " To judge it apart, give it a number of its own (an A/B arm, a sub-number) in the measure.")
 
 def cmd_judge(a):
@@ -158,6 +265,12 @@ def cmd_judge(a):
         sys.exit(f"hive improve judge: {', '.join(mine)} was logged by you" + (f" and is judged with {a.id}" if mine != [a.id] else "")
                  + ". The judge is never who proposed (the rule); pass --self only if nobody else can, and say why in --why.")
     if not a.why: sys.exit("hive improve judge: --why must give the number you looked at, against the baseline.")
+    today = iso()[:10]
+    if str(e.get("revisit") or "") > today: sys.exit(f"hive improve judge: {a.id}'s revisit is {e['revisit']}. No verdict before it.")
+    w = [i for i in w if str(items[i].get("revisit") or "") <= today]
+    if a.verdict == "held" and judged_with(items, e):
+        a.verdict, a.why = "inconclusive", a.why + "; shares its number, so it cannot credit one change"
+        print(f"{a.id} shares its number with {', '.join(judged_with(items, e))}: recorded as inconclusive, not held. Give it a number of its own to judge it apart.")
     for i in [a.id] + w:
         append(LEDGER, {"judge": i, "at": iso(), "by": me, "verdict": a.verdict, "why": a.why if i == a.id else f"judged with {a.id}: {a.why}"})
     if w: print(f"judged with {', '.join(w)}: they share a number, so this verdict is recorded for each of them.")
@@ -170,6 +283,7 @@ def table(rows, cols):
     for r in rows: print("  ".join(str(r.get(c, "")).ljust(w[i]) for i, c in enumerate(cols)))
 
 def cmd_list(a):
+    if a.due: autojudge()
     items = ledger()
     rows = due_groups(items) if a.due else list(items.values())
     if a.json and not a.due: print(json.dumps(rows, indent=1)); return
@@ -392,7 +506,7 @@ def window(t0, t1, log, posts, items):
     nposts, nperson, noticed = board_in(posts, t0, t1)
     rs = reply_s(posts, t0, t1)
     landed = [e for e in items.values() if t0 <= e.get("at", "") <= t1]
-    judged = [e for e in items.values() if t0 <= e.get("judged_at", "") <= t1]
+    judged = [e for e in items.values() if t0 <= e.get("judged_at", "") <= t1 and e.get("judged_by") != "late-check" and e.get("status") != "unjudgeable"]
     rsi = [r for r in jsonl(RSI_LEDGER) if t0 <= r.get("at", "") <= t1]
     w = {"from": t0, "to": t1, "runs": runs, "runs_failed": failed, "runs_reaped": reaped, "runs_reaped_signalled": reaped_signalled(log, posts, t0, t1), "runs_reaped_repeat": reaped_repeat(log, t0, t1), "runs_limited": limited, "runs_woken": events_in(log, t0, t1, "woken"),
          "fail_pct": round(100.0 * failed / runs, 1) if runs else 0.0,
@@ -510,11 +624,20 @@ def text(cur, prev):
     if w: lines.append("Got worse, worst first: " + ", ".join(f"{k} {b}->{a}" for _, k, b, a in w[:4]))
     return "\n".join(lines)
 
+def steer():
+    """The few numbers the hive steers by, in the order the person named their pain points (the RSI lab's index; the table below is for diagnosis)."""
+    try:
+        r = subprocess.run([sys.executable, "-I", str(HOME / "projects" / "rsi-lab" / "index.py"), "--brief"], capture_output=True, text=True, timeout=60)
+        return r.stdout.strip() if r.returncode == 0 else ""
+    except Exception: return ""
+
 def cmd_progress(a):
     cur, prev = scoreboard(a.since)
     if a.snapshot: append(SNAPS, cur)
     if a.json: print(json.dumps({"now": cur, "before": prev, "worse": worst(cur, prev)}, indent=1)); return
     t = text(cur, prev)
+    s = steer()
+    if s: t = s + "\n\n" + t
     print(t)
     if a.post:
         subprocess.run([sys.executable, str(Hive), "post", "--thread", "progress"], input=t, text=True,
@@ -523,15 +646,22 @@ def cmd_progress(a):
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="hive improve / hive progress", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sp = ap.add_subparsers(required=True)
-    p = sp.add_parser("log", help="log a landed change: --what, --measure (required), --revisit 7d|YYYY-MM-DD, --where, --hypothesis, --baseline, --commit, --thread, --also IDS (warns when the measure names a number an open landing, revisit still ahead, names)")
-    for f in ("what", "measure", "revisit", "where", "hypothesis", "baseline", "commit", "thread"): p.add_argument("--" + f)
+    p = sp.add_parser("log", help="log a landed change: --what, --measure (required), --check CMD --want up|down [--band N] [--kind fix|behaviour] [--control CMD] (written at landing, a command printing the number: a script judges it; a fix is due in 48h, a behaviour change in 7d against a --control it didn't touch), --revisit 7d|YYYY-MM-DD, --where, --hypothesis, --baseline, --commit, --thread, --also IDS (warns when the measure names a number an open landing, revisit still ahead, names)")
+    for f in ("what", "measure", "revisit", "where", "hypothesis", "baseline", "commit", "thread", "check", "want", "kind", "control"): p.add_argument("--" + f)
+    p.add_argument("--band", type=float, help="the move that counts as noise (default 5%% of the baseline)")
     p.add_argument("--reviewed-by", dest="reviewed_by", help="the agent that reviewed this design or build and did not build it (counted as reviews_independent when --model is opus or fable)")
     p.add_argument("--model", help="the reviewer's model: opus|fable count as an independent review, anything else does not")
+    p.add_argument("--no-check", metavar="WHY", help="why no command can read this number (the rare case)")
     p.add_argument("--also", action="append", help="ids of open landings on the same number, judged together with this one at the revisit (silences the overlap warning)")
     p.set_defaults(f=cmd_log)
     p = sp.add_parser("judge", help="judge a landed change on its revisit date: ID held|reverted|inconclusive --why 'the number vs baseline'")
     p.add_argument("id"); p.add_argument("verdict", choices=VERDICTS); p.add_argument("--why", default=""); p.add_argument("--self", action="store_true"); p.set_defaults(f=cmd_judge)
     p = sp.add_parser("list", help="the ledger; --due for revisits past their date"); p.add_argument("--due", action="store_true"); p.add_argument("--json", action="store_true"); p.set_defaults(f=cmd_list)
+    p = sp.add_parser("attach", help="give a logged change a check after the fact, on or after its revisit date; the number is kept but never counts as held (late-check): ID --check CMD --want up|down [--band N] [--before N: the number from before the change; without it, measured now and read in 48 h]")
+    p.add_argument("id"); p.add_argument("--check", required=True); p.add_argument("--want"); p.add_argument("--band", type=float); p.add_argument("--before", type=float); p.set_defaults(f=cmd_attach)
+    p = sp.add_parser("autojudge", help="run the checks that are due and write verdicts, no model (hourly, after hive outcomes grade)"); p.add_argument("--no-post", action="store_true"); p.set_defaults(f=cmd_autojudge)
+    p = sp.add_parser("num", help="one scoreboard number for a --check: FIELD, the latest snapshot's, or the mean over --from ISO --to ISO")
+    p.add_argument("field"); p.add_argument("--from", dest="frm"); p.add_argument("--to"); p.set_defaults(f=cmd_num)
     p = sp.add_parser("show", help="one entry in full"); p.add_argument("id"); p.set_defaults(f=cmd_show)
     p = sp.add_parser("progress", help="the scoreboard: --since 1d (default), --snapshot appends to ~/progress.jsonl, --post puts it in thread progress, --json")
     p.add_argument("--since", default="1d"); p.add_argument("--snapshot", action="store_true"); p.add_argument("--post", action="store_true"); p.add_argument("--json", action="store_true"); p.set_defaults(f=cmd_progress)

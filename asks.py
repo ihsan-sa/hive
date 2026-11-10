@@ -11,7 +11,7 @@ direction: never done, listed by `hive asks directions`, and written to ~/kb/dir
                                           owner not running). The keeper starts someone on each; the watchdog trips after 3 h.
   hive asks add --post ID --ask "..." [--kind ask|direction] [--thread T]
   hive asks own ID [--owner NAME]           you (or NAME) are on it
-  hive asks done ID --evidence POSTID [--why ...]   finished, and the thread says so
+  hive asks done ID --evidence POSTID [--why ...] [--left STEP]   finished, and the thread says so; --left gives a step still owed by the person its own row
   hive asks hold|person|drop ID --why ...   held by kb/priorities.md | waits on the person | withdrawn or merged
   hive asks reopen ID --why ...             the hold or wait is over: open again, for someone to own (check lists set-aside asks whose reason may have lapsed)
   hive asks show ID
@@ -228,10 +228,14 @@ def set_status(id_, status, **kw):
     rec = {"id": id_, "at": iso(), "by": me(), "status": status, **{k: v for k, v in kw.items() if v}}
     append(LEDGER, rec); return rec
 
-def cmd_own(a): r = set_status(a.id, "owned", owner=a.owner or me()); print(f"{a.id}: owned by {r['owner']}")
+NAMES_PERSON = re.compile(r"\bthe person\b|\bfor you\b", re.I)
+def cmd_own(a): r = set_status(a.id, "owned", owner=a.owner or me(), evidence=a.evidence, why=a.why); print(f"{a.id}: owned by {r['owner']}")
 def cmd_done(a):
     if not a.evidence: sys.exit("No evidence, not done: --evidence POSTID, the post in the thread that says what was delivered.")
+    items = ledger(); e = items.get(a.id) or {}; left = getattr(a, "left", None)
     set_status(a.id, "done", evidence=a.evidence, why=a.why); print(f"{a.id}: done ({a.evidence})")
+    if left: print(f"+ {split_wait(items, e, left, a.evidence, me())['id']} waits on the person, split from {a.id}")
+    elif e.get("status") == "held" and NAMES_PERSON.search(e.get("why") or ""): print(f"Its record still names a step for the person: {e['why'][:200]}\nIf that step is still owed, it needs its own row: hive asks done {a.id} --evidence {a.evidence} --left \"the step\"")   # three finished asks hid behind a record like this (lab, 11100413d290)
 def cmd_hold(a): need_why(a); set_status(a.id, "held", why=a.why); print(f"{a.id}: held ({a.why})")
 def cmd_person(a): need_why(a); set_status(a.id, "person", why=a.why); print(f"{a.id}: waits on the person ({a.why})")
 def cmd_drop(a): need_why(a); set_status(a.id, "dropped", why=a.why); print(f"{a.id}: dropped ({a.why})")
@@ -552,7 +556,7 @@ RECONCILE = """You judge, from the board, which of the person's asks below have 
  "owned": [{{"id": "k0012", "owner": "<agent name>"}}],
  "person": [{{"id": "k0012", "why": "<what it waits on from the person>"}}],
  "held": [{{"id": "k0012", "why": "<why it was deliberately set aside>"}}]}}
-Rules. done only when an agent post reports the thing itself finished and checked (a fix landed, an answer given, a file delivered): a plan, a partial, "working on it", or a claim with nothing shown is not done. owned when an agent says it is on it and nothing reports it finished. person when the work waits for the person's answer, decision, money or credentials. An agent post that ends with a `For you:` line asking the person to act (approve, enter a word, create an account, send a file) means person, even when the rest of the work landed: the agent's own part is delivered, and nothing is left for an agent to do until the person acts. held when an agent says it was deliberately put aside (priorities, the person's hold). Say nothing about an ask the posts don't settle: it stays open. Prefer the person's own words over an agent's where they conflict.
+Rules. done only when an agent post reports the thing itself finished and checked (a fix landed, an answer given, a file delivered): a plan, a partial, "working on it", or a claim with nothing shown is not done. owned when an agent says it is on it and nothing reports it finished. person when the work waits for the person's answer, decision, money or credentials. An agent post that ends with a `For you:` line asking the person to act (approve, enter a word, create an account, send a file) means person, even when the rest of the work landed: the agent's own part is delivered, and nothing is left for an agent to do until the person acts. held when an agent says it was deliberately put aside (priorities, the person's hold). An ask that is a question (the person asked what, why, whether or how something is) is done at the first agent post that answers it, with that post as evidence, even when the answer names further work or leaves a step for the person, and even when that post has a `For you:` line; if a step is left for the person, add "wait": "<that step, one plain sentence>" to its done entry, and it gets its own row. Say nothing about an ask the posts don't settle: it stays open. Prefer the person's own words over an agent's where they conflict.
 
 {body}
 """
@@ -561,6 +565,12 @@ def thread_posts(posts):
     by = {}
     for p in posts: by.setdefault(p.get("thread") or p.get("id"), []).append(p)
     return by
+
+def split_wait(items, e, wait, post, by):
+    """A question closes on its first answer; a step it leaves for the person goes on its own row, so the wait isn't lost with the question (review D3)."""
+    rec = {"id": next_id(items), "at": iso(), "by": by, "post": post, "when": e.get("when") or iso(), "thread": e.get("thread") or e.get("post"),
+           "ask": str(wait).strip()[:300], "kind": "ask", "status": "person", "why": f"Split from {e['id']}, the step left after {post}"}
+    append(LEDGER, rec); items[rec["id"]] = rec; return rec
 
 def cmd_reconcile(a):
     posts = board(); by = thread_posts(posts); items = ledger()
@@ -609,6 +619,7 @@ def cmd_reconcile(a):
                 rec = {"id": e["id"], "at": iso(), "by": "reconcile", "status": key, "evidence": d.get("evidence"), "owner": d.get("owner"), "why": (d.get("why") or "")[:300]}
                 rec = {k: v for k, v in rec.items() if v}
                 append(LEDGER, rec); e.update(rec); changed += 1; print(f"= {e['id']} {key}: {rec.get('why') or rec.get('owner') or ''}")
+                if key == "done" and d.get("wait"): print(f"+ {split_wait(items, e, d['wait'], d['evidence'], 'reconcile')['id']} waits on the person, split from {e['id']}")
         batch, n = [], 0
     for es, b in blocks:
         if batch and (n + len(b) > 40000 or len(batch) >= 12): flush()
@@ -628,8 +639,8 @@ def main(argv=None):
     p.add_argument("--stale", type=float, default=STALE_S / 86400, help="days open after which an ask is listed even in a busy thread"); p.add_argument("--unowned", type=float, default=UNOWNED_S / 3600, help="hours open with no owner after which an ask is listed even in a busy thread"); p.add_argument("--limit", type=int, default=15); p.set_defaults(f=cmd_check)
     p = sp.add_parser("show"); p.add_argument("id"); p.set_defaults(f=cmd_show)
     p = sp.add_parser("add"); p.add_argument("--post", required=True); p.add_argument("--ask", required=True); p.add_argument("--kind", default="ask", choices=("ask", "direction")); p.add_argument("--thread"); p.set_defaults(f=cmd_add)
-    p = sp.add_parser("own"); p.add_argument("id"); p.add_argument("--owner"); p.set_defaults(f=cmd_own)
-    p = sp.add_parser("done"); p.add_argument("id"); p.add_argument("--evidence"); p.add_argument("--why", default=""); p.set_defaults(f=cmd_done)
+    p = sp.add_parser("own"); p.add_argument("id"); p.add_argument("--owner"); p.add_argument("--evidence", help="the post that shows it is agent work"); p.add_argument("--why"); p.set_defaults(f=cmd_own)
+    p = sp.add_parser("done"); p.add_argument("id"); p.add_argument("--evidence"); p.add_argument("--why", default=""); p.add_argument("--left", help="a step still owed by the person: gets its own row"); p.set_defaults(f=cmd_done)
     for name, f in (("hold", cmd_hold), ("person", cmd_person), ("drop", cmd_drop), ("reopen", cmd_reopen)):
         p = sp.add_parser(name); p.add_argument("id"); p.add_argument("--why", default=""); p.set_defaults(f=f)
     p = sp.add_parser("directions"); p.add_argument("--write", action="store_true"); p.set_defaults(f=cmd_directions)

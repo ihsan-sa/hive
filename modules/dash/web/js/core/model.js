@@ -113,6 +113,9 @@ export function agentSpend(n, stream) {
   return { usd: stream.c, t: stream.t, calls: A ? A.calls : null, m: stream.m || (A ? A.m : {}), sub: A ? A.sub : 0, src: "session logs" };
 }
 
+/** True until the first read of the transcripts has come back: session logs alone would show today's agents at $0.00 and a total a fraction of the real one. No h2-cost: at stays 0, refreshing false, and this is false. */
+export const costsPending = () => !S.agentCosts || (!S.agentCosts.at && !!S.agentCosts.refreshing);
+
 /** An agent's cost so far in USD over all its runs (agentSpend over its sessions' logs), or null if nothing is recorded. */
 export function agentCost(n) {
   const files = (S.usage && S.usage.files) || {}, st = { c: 0, t: [0, 0, 0, 0], m: {} }; let seen = false;

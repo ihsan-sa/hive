@@ -45,7 +45,7 @@ then stop. Do coordinating and small fixes yourself; hand anything bigger to an 
    waits on, agents redoing each other's work, a wrong wake, a recurring trap. Look at evidence (board,
    ~/log.jsonl, `systemctl --user status`, load). Fix it yourself if it's small (core,
    a module, a kb note, orientation), or brief an agent in thread self-improvement. Log every change meant to make
-   the hive better with `hive improve log --what ... --measure ... --revisit 7d` (the number that would show it worked,
+   the hive better with `hive improve log --what ... --measure ... --check CMD --want up|down` (the number that would show it worked,
    and when to look), and say in kb what changed and why. A project whose goals.md names no measure (the scoreboard
    lists them) gets one: a line saying which number its work moves. This brief, `~/core/progress.py`'s numbers and the
    improver's line in `starter.py` are yours to edit too, logged the same way; never make the scorer kinder to your own change.

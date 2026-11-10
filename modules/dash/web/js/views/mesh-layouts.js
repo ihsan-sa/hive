@@ -197,7 +197,7 @@ export function graphLayout(data, opt, mode) {
     const from = edgePoint(c, n.x, n.y), dx = n.x - from.x, dy = n.y - from.y, d = Math.hypot(dx, dy) || 1;
     const to = { x: n.x - dx / d * (n.r + 1), y: n.y - dy / d * (n.r + 1) };
     if (!l.main && n.agent) cl.linked.push(n.id);
-    spokes.push({ from, to, node: n.id, thread: l.q.t.id, d: `M${from.x.toFixed(1)} ${from.y.toFixed(1)}L${to.x.toFixed(1)} ${to.y.toFixed(1)}`,
+    spokes.push({ from, to, node: n.id, thread: l.q.t.id, d: curve(c, n),
                   width: l.more ? 1 : l.main ? spokeWidth(l.posts) : 1, dashed: !l.main || !!l.more, ended: n.agent ? !n.agent.running : false });
   }
 
@@ -251,6 +251,17 @@ function settle(B) {
 }
 
 // where the line from the card's centre to (x, y) leaves the card
+// a spoke in the free layouts: the same S-curve as Lineage and Bands. It leaves the card from the side facing the agent and arrives level with
+// the dot; an agent mostly above or below the card gets the same curve turned upright (feedback 11100245a336: all connections curved alike)
+function curve(c, n) {
+  const cx = c.x + c.w / 2, cy = c.y + c.h / 2, f = v => v.toFixed(1);
+  if (Math.abs(n.x - cx) > c.w / 2 + n.r) {
+    const s = n.x > cx ? 1 : -1, x1 = s > 0 ? c.x + c.w : c.x, x2 = n.x - s * (n.r + 1), m = s * Math.max(16, Math.abs(x2 - x1) * 0.5);
+    return `M${f(x1)} ${f(cy)}C${f(x1 + m)} ${f(cy)} ${f(x2 - m)} ${f(n.y)} ${f(x2)} ${f(n.y)}`;
+  }
+  const s = n.y > cy ? 1 : -1, y1 = s > 0 ? c.y + c.h : c.y, y2 = n.y - s * (n.r + 1), m = s * Math.max(12, Math.abs(y2 - y1) * 0.5);
+  return `M${f(n.x > cx ? Math.min(n.x, c.x + c.w) : Math.max(n.x, c.x))} ${f(y1)}C${f(n.x)} ${f(y1 + m)} ${f(n.x)} ${f(y2 - m)} ${f(n.x)} ${f(y2)}`;
+}
 function edgePoint(c, x, y) {
   const cx = c.x + c.w / 2, cy = c.y + c.h / 2, dx = x - cx, dy = y - cy;
   if (!dx && !dy) return { x: cx, y: cy };
@@ -268,7 +279,8 @@ function lineageLayout(data, opt) {
   const compact = data.agents.length > 28;
   const D = { ...(compact ? DENSITY.compact : DENSITY.normal), ...(opt.override || {}), lines: 1 };
   const pad = tile ? 10 : D.pad, byId = new Map(data.agents.map(a => [a.id, a]));
-  const gen = a => { let g = 0, x = a; while (x && x.from && x.from !== 'person' && g < 8) { x = byId.get(x.from); if (!x) break; g++; } return g; };
+  // an agent started by an agent that has ended (so it isn't in the data) is still a generation below it, never "Started by you" (feedback 11100257bb2d)
+  const gen = a => { let g = 0, x = a; while (x && x.from && (byId.has(x.from) || /^a[0-9a-f]{4,}$/.test(x.from)) && g < 8) { x = byId.get(x.from); g++; } return g; };
   const G = new Map(data.agents.map(a => [a.id, gen(a)]));
   const maxG = Math.max(0, ...G.values());
   const mine = new Map(data.threads.map(t => [t.id, []]));
@@ -319,13 +331,19 @@ function lineageLayout(data, opt) {
       slots.set(a.id, { x: colX(g, blockOf.get(t.id)), y: wy / ws + (i - (l.length - 1) / 2) * step });
     });
   }
+  // agents of different threads can be pulled to the same spot in a column (the pull toward their other threads): space each column out, top down,
+  // so no two dots or labels sit on each other (feedback 1110024612c1)
+  { const gap = tile ? 18 : 42, cols = new Map();
+    for (const [id, p] of slots) (cols.get(p.x) || cols.set(p.x, []).get(p.x)).push(p);
+    for (const l of cols.values()) { l.sort((p, q) => p.y - q.y); for (let i = 1; i < l.length; i++) if (l[i].y - l[i - 1].y < gap) l[i].y = l[i - 1].y + gap; } }
   const rOf = a => (a.running ? D.r : D.r - 2);
   for (const t of shown) for (const a of mine.get(t.id)) {
     const s = slots.get(a.id), p = pin && pin.get(a.id), r = rOf(a), px = p ? p.x : s.x, py = p ? p.y : s.y;
     const node = { id: a.id, agent: a, thread: t.id, ghost: false, x: Math.round(px), y: Math.round(py), r, labelX: Math.round(px) + r + 8, labelW, posts: a.threads[t.id] || 0 };
     nodes.push(node); byAgent.set(a.id, node); byThread.get(t.id).nodeIds.push(a.id); pos.set(a.id, { x: px, y: py });
   }
-  const bez = (x1, y1, x2, y2) => { const m = Math.max(20, (x2 - x1) * 0.5); return `M${x1.toFixed(1)} ${y1.toFixed(1)}C${(x1 + m).toFixed(1)} ${y1.toFixed(1)} ${(x2 - m).toFixed(1)} ${y2.toFixed(1)} ${x2.toFixed(1)} ${y2.toFixed(1)}`; };
+  // the same horizontal S-curve in either direction: leaves x1 heading toward x2 and arrives level (a right-to-left run bends the mirror way)
+  const bez = (x1, y1, x2, y2) => { const s = x2 < x1 ? -1 : 1, m = s * Math.max(20, Math.abs(x2 - x1) * 0.5); return `M${x1.toFixed(1)} ${y1.toFixed(1)}C${(x1 + m).toFixed(1)} ${y1.toFixed(1)} ${(x2 - m).toFixed(1)} ${y2.toFixed(1)} ${x2.toFixed(1)} ${y2.toFixed(1)}`; };
   const handoffs = [], chained = new Set();
   for (const n of nodes) {
     const a = n.agent, par = a.from && a.from !== 'person' ? byAgent.get(a.from) : null;
@@ -340,14 +358,17 @@ function lineageLayout(data, opt) {
     const main = tid === n.thread; if (main && chained.has(n.id)) continue;
     if (!main && !(c > 0)) continue;
     if (!main) cl.linked.push(n.id);
-    spokes.push({ node: n.id, thread: tid, d: bez(cl.card.x + cl.card.w, cl.port.y, n.x - n.r - 3, n.y), width: main ? spokeWidth(c) : 1, dashed: !main, ended: !n.agent.running });
+    // a card to the agent's right (a later block) is joined from its left edge to the end of the agent's label, so the curve doesn't cut back across either
+    const back = cl.card.x > n.x, lx = n.labelX + n.labelW + 4;
+    const d = !back ? bez(cl.card.x + cl.card.w, cl.port.y, n.x - n.r - 3, n.y) : bez(cl.card.x, cl.port.y, !tile && cl.card.x - lx >= 24 ? lx : n.x + n.r + 3, n.y);
+    spokes.push({ node: n.id, thread: tid, d, width: main ? spokeWidth(c) : 1, dashed: !main, ended: !n.agent.running });
   }
   // column heads: what each generation column means (the layout's title says it only on hover)
   const GEN = ['Started by you', 'Started by an agent', 'Started by those'];
   const heads = [];
   const colUsed = new Set([...slots.values()].map(p => p.x));   // a column nobody is in gets no heading
   if (!tile) for (let bi = 0; bi < B; bi++) for (let g = 0; g <= maxG; g++) if (colUsed.has(colX(g, bi))) heads.push({ x: Math.round(colX(g, bi)), y: Math.max(12, pad - 8), text: GEN[g] || 'Generation ' + (g + 1) });
-  const height = Math.max(yEnd + pad, 360);
+  const height = Math.max(yEnd + pad, ...nodes.map(n => n.y + step / 2 + pad), 360);
   return { mode: 'lineage', tile, heads, density: compact ? 'compact' : 'normal', D, cols: 2, colW: width - 2 * pad, cardW, width, height, bands: [], rings: [], clusters, nodes, spokes, handoffs,
            older: { x: pad, y: height, chips: [] }, olderCount: 0, byAgent, byThread, threadById: new Map(data.threads.map(t => [t.id, t])), pos };
 }

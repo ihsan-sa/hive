@@ -18,7 +18,7 @@ export default {
     if (!can("files")) return needFull("Mail", "Mail");
     const d = M.data;
     if (!d && !M.asked) { M.asked = true; load(ctx); }
-    if (!d) return h("div", { class: "page", "data-key": "mail" }, pageHeader({ title: "Mail" }), empty("Reading…", { kind: "loading" }));
+    if (!d) return h("div", { class: "page", "data-width": "narrow", "data-key": "mail" }, pageHeader({ title: "Mail" }), empty("Reading…", { kind: "loading" }));
     const rows = (d.items || []).map(m => {
       if (m.held) return { key: m.id, title: "Held mail", sub: "Kept in the store, not shown here" };
       const on = M.open === m.id;

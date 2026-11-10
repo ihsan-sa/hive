@@ -570,6 +570,6 @@ export default {
       h("div", { class: "set-b" },
         h("nav", { class: "set-n", "aria-label": "Settings sections", "data-key": "nav" }, nav.map(t => t === "Set once" ? [h("hr", { class: "set-rule" }), item(t)] : item(t))),
         h("div", { class: "set-s" }, secs.filter(n => n.getAttribute("aria-label") === now))),
-      S.app.install ? h("p", { class: "meta", "data-key": "install" }, "Install code ", h("code", { title: "This Hive's id in the reports it sends" }, S.app.install)) : null);
+      S.app.install ? h("p", { class: "meta", "data-key": "install" }, "Install code ", h("code", { title: "This Hive's id in the reports it sends" }, S.app.install), " · this Hive's id in the reports it sends") : null);
   },
 };

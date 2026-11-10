@@ -34,7 +34,7 @@ function agentRows(run, states, t, waits) {
     h("tbody", null, run.map(a => {
       const st = states.get(a.name), S_ = status(st.key), task = S.byId[a.post], model = (cardRows(a.name)[0] || {}).short, wait = waits.has(a.thread);
       const say = nowSay(a);   // what it says it is on, in its own words; the command it happens to be running is only in the hover (the person, 11081450f3e1)
-      const asked = task ? (a.from ? (a.from === "person" && S.app.app ? "you" : a.from) + ": " : "") + firstSentence(displayText(task)) : null;
+      const askText = task ? firstSentence(displayText(task)) : "", asked = askText ? (a.from ? (a.from === "person" && S.app.app ? "you" : a.from) + ": " : "") + askText : null;
       return h("tr", { "data-key": a.name, "data-tone": S_.tone, "data-attn": st.key === "stuck" ? "" : null },
         h("td", { "data-label": "Agent", class: "nt-a" }, agentRef(a.name)),
         h("td", { "data-label": "Conversation", class: "nt-th" }, threadRef(a.thread)),

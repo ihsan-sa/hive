@@ -141,6 +141,9 @@ const NAV = { open: false };
 // of the sticky header, so it never scrolls, and the conversation list's width doesn't touch it (the person, 110819316eed "a static button bar",
 // 11081933e722 "dont put it in the sidebar", 11081937e3e8 "above the sidebar, below the top bar ... cuz it's part of the chat page").
 export const TOPX = { chat: null };
+// Whether this browser's Chat pages have the row under the bar: index.html reads it before any code loads and keeps the row's room, so the page doesn't drop 44 px when the app mounts (R71). Nothing remembered keeps no room: a first visit may be setup, which has no row.
+let chatRow = null;
+const rememberChatRow = on => { if (on === chatRow) return; chatRow = on; try { localStorage.setItem("chatRow", on ? "1" : "0"); } catch (e) { /* no storage: the row comes in with the app */ } };
 const lab = v => (typeof v.label === "function" ? v.label() : v.label);
 const tabLink = (v, active) => { const b = v.badge ? v.badge() : null;
   return h("a", { class: "tab", href: href(v.id), "data-key": v.id, "aria-current": v.id === active ? "page" : null }, lab(v), b ? h("span", { class: "tab-badge", "aria-label": `${b} for you` }, b) : null); };
@@ -187,7 +190,7 @@ export function topBar({ views, current, update, nav }) {
   const setup = app && (S.app.pending || S.app.settings && S.app.settings.setup_done === false);
   NAV.update = update;
   let tabs, row = null, icons = [], extra = null;
-  if (!app) tabs = views.filter(on).map(v => tabLink(v, current));
+  if (!app) { tabs = views.filter(on).map(v => tabLink(v, current)); rememberChatRow(false); }
   else {
     const L = layout(views, nav, on, current);
     row = setup ? null : L.row;
@@ -209,6 +212,7 @@ export function topBar({ views, current, update, nav }) {
     const look = lookItems(update);
     tabs = setup ? [] : L.main.map(v => tabLink(v, L.active));
     extra = !setup && !simple && L.active === "comms" ? (TOPX.chat ? TOPX.chat() : app ? h("div", { class: "cm-places", "data-key": "places" }) : null) : null;   // its room is kept while comms.js loads, or the whole page drops 44 px (R67)
+    if (L.active === "comms" && !S.app.pending) rememberChatRow(!!extra);
     icons = [...L.icons.filter(v => !setup || v.id === "settings").map(v => { const b = v.badge ? v.badge() : null;
         return h("a", { class: "btn", "data-kind": "icon", href: href(v.id), "data-key": v.id, "aria-label": lab(v), title: lab(v), "aria-current": v.id === L.active || v.id === current ? "page" : null },
           icon(v.icon || v.id), b ? h("span", { class: "more-dot", "aria-label": `${b} for you` }) : null); }),

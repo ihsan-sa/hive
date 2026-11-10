@@ -127,14 +127,17 @@ export function stateOf(id) {
 // and an ask's own id are dropped; a leading step word ("R14:") goes. Agents' text is kept, only what the person cannot read is taken out.
 const CODE = /^[a-z](?=[0-9a-f]{0,3}\d)[0-9a-f]{4}$/;   // a letter and 4 hex with a digit in it: "a9179", not "added"
 export const isCode = w => isAgent(w) || CODE.test(w);
+/** Ask ids out and nothing else, for text in the person's own words. A bracket of nothing but ask ids goes whole; a real agent's code stays. */
+export const noAskIds = text => String(text || "")
+  .replace(/\s*\(\s*k\d{4}(?:\s*(?:,|;|\/|&|and)\s*k\d{4})*\s*\)/g, m => (m.match(/k\d{4}/g).some(isAgent) ? m : ""))
+  .replace(/\bk\d{4}'s\s+/g, m => (isAgent(m.slice(0, 5)) ? m : "the ")).replace(/\bk\d{4}\b/g, w => (isAgent(w) ? w : "an ask"));
 /** The text with post ids, ask ids and a leading step word taken out, and the punctuation they leave tidied. */
 export function scrub(text) {
-  return String(text || "")
+  return noAskIds(String(text || "")
     .replace(/^\s*(?:rung\s+)?R\d+[a-z]?(?:\s*(?:,|and|\+|&|-|–|\/)\s*R\d+[a-z]?)*\s*[:.–-]\s+(\S)/i, (m, c) => c.toUpperCase())
     .replace(/\s*\((?:post\s+)?[0-9a-f]{12}\)/g, "")
     .replace(/(?:\b(?:in|from|see|at)\s+)?\bpost\s+[0-9a-f]{12}\b/gi, "")
-    .replace(/(^|[\s(:,])(?:(?:on|in|from|at|see|by)\s+)?[0-9a-f]{12}\b/g, "$1")
-    .replace(/\s*\(k\d{4}\)/g, "").replace(/\bk\d{4}'s\s+/g, (m) => (isAgent(m.slice(0, 5)) ? m : "the ")).replace(/\bk\d{4}\b/g, w => (isAgent(w) ? w : "an ask"))
+    .replace(/(^|[\s(:,])(?:(?:on|in|from|at|see|by)\s+)?[0-9a-f]{12}\b/g, "$1"))
     .replace(/\(\s*[,;]?\s*\)/g, "").replace(/\s+([,.;:)])/g, "$1").replace(/([,;:])\s*([.,;:])/g, "$2").replace(/[:,;]\s*$/, "").replace(/\s{2,}/g, " ").trim();
 }
 const WORD = /(^|[\s(\[,;:"'/])(?:([@#])([A-Za-z0-9_][A-Za-z0-9_.:-]*[A-Za-z0-9_])|`([a-z][0-9a-f]{4})`|([a-z][0-9a-f]{4})(?![\w-]))/g;

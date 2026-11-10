@@ -75,8 +75,10 @@ function liveText({ st }) {
 /** Everything that waits on the person, one entry per thread, newest first: {th, text, t, src: "live"|"file"|"bar", st?, post?}. */
 // One page draw asks for the list many times (the badge in both bars, Work once per project): it is worked out once per task and
 // handed out as copies. Nothing it reads changes inside one task, and a click or poll is a new task, so it is never stale.
-let memo = null;
-const all = () => { if (!memo) { memo = waitingOnNow(); setTimeout(() => { memo = null; }, 0); } return memo; };
+// A read can land before that timer has fired, so the list also goes when what it reads has changed: the badge once kept 2 for a poll's length where the count was 3 (R74).
+const readsNow = () => [S.ver, S.foci, S.needsYou], sameReads = (a, b) => !!a && a.every((x, i) => x === b[i]);   // the foci and needs reads don't move S.ver
+let memo = null, memoAt = null;
+const all = () => { const at = readsNow(); if (!memo || !sameReads(memoAt, at)) { memo = waitingOnNow(); memoAt = at; setTimeout(() => { memo = null; }, 0); } return memo; };
 export function waitingOn() { return all().filter(w => !laterOf(w)); }
 /** Later and Not needed (the person, 1108133400fb): the person puts a needs-you item off, or says it isn't needed any more.
  *  It leaves the top level (the badge, the home, the rail) and a Later one lists on its focus page until they bring it back.
@@ -112,15 +114,30 @@ function waitingOnNow() {
     rest.sort((a, b) => b.t - a.t);
     for (const w of rest) if (!answeredSince(w.th, w.t)) take(w);   // once they've answered since, it's not waiting on them
   }
-  return out.sort((a, b) => b.t - a.t);
+  foldSameAct(out, v && v.brief && v.brief.needs);
+  return out.filter(w => !w.foldedIn).sort((a, b) => b.t - a.t);
+}
+/** One act of the person's that settles several threads is one thing to do (the summary's `also` names the others): those threads' rows fold into the row that carries the act, which keeps its own key, words and time, so a folded thread's Later or Not needed neither revives nor hides it.
+ *  A thread whose carrying row isn't on the list stays a row of its own. A focus bullet is never folded. */
+function foldSameAct(rows, briefNeeds) {
+  const by = new Map(rows.filter(w => w.src !== "summary").map(w => [w.th, w]));
+  for (const r of briefNeeds || []) for (const it of (r && r.items) || []) {
+    const head = by.get(it.thread);
+    if (!head || head.foldedIn) continue;
+    for (const th of it.also || []) {
+      const w = by.get(th);
+      if (!w || w === head || w.foldedIn || w.folded) continue;
+      w.foldedIn = head.th; (head.folded = head.folded || []).push(w); (head.also = head.also || []).push(th);
+    }
+  }
 }
 /** Older things leave the needs-you list and fold into one "Stuff to address" group, to go through with an agent when the person has time
  * (the person, 11081245f002: needs-me piles up, and often it went obsolete or is no longer the focus). How old is older depends on how
  * fast that work moves (the person, 110813526b10): an ask on work that moved on a lot since (MOVED posts in its conversation or its
  * focus's) is likely obsolete after FAST_FOR; on quiet work it stays relevant, just not first, and leaves the count after RECENT_FOR. */
 export const RECENT_FOR = 2 * DAY, FAST_FOR = DAY, MOVED = 15;
-let pace = null;
-const paceMemo = () => { if (!pace) { pace = new Map(); setTimeout(() => { pace = null; }, 0); } return pace; };
+let pace = null, paceAt = null;
+const paceMemo = () => { const at = readsNow(); if (!pace || !sameReads(paceAt, at)) { pace = new Map(); paceAt = at; setTimeout(() => { pace = null; }, 0); } return pace; };
 /** Posts since t in w's conversation and the other conversations of its focus. */
 function movedSince(w) {
   const m = paceMemo(), k = (w.key || w.th) + "@" + w.t; if (m.has(k)) return m.get(k);
@@ -132,6 +149,10 @@ function movedSince(w) {
 }
 /** Why w is older: "moved" (the work went on without it, likely obsolete), "quiet" (old, on work that's been quiet), or null. */
 export function olderWhy(w) {
+  const why = olderOne(w);
+  return why && (w.folded || []).every(olderOne) ? why : null;   // a row is as recent as the newest thread folded into it
+}
+function olderOne(w) {
   if (!w.t) return null;
   const age = now() - w.t;
   if (age < FAST_FOR) return null;
@@ -153,7 +174,7 @@ export const needsKnown = () => S.waitsIn.meta && S.waitsIn.status && S.history 
 export const needsSplit = () => { const w = waitingOn(), recent = w.filter(x => !isOlder(x)).length; return { recent, older: w.length - recent }; };
 /** Whether this thread is on the list: the rail's Needs you group and the one count read the same answer. */
 /** Does this conversation itself wait on the person (a live ask, a Needs line, a state word)? A focus summary's asks belong to the focus and show on its card, not here. */
-export const waitsOn = th => waitingNow().some(w => w.th === th && w.src !== "summary");
+export const waitsOn = th => waitingNow().some(w => (w.th === th || (w.also || []).includes(th)) && w.src !== "summary");
 // Where the full list is read: the Needs you page, when this build has one (an installed Hive hasn't; the simple look lists the live ones on the home).
 // The literal "#needs", not href("needs"): the export removes every line with that call.
 const hasNeeds = () => Object.values(APP_NAV.groups || {}).some(g => g.includes("needs")) || !!(APP_NAV.belongs && APP_NAV.belongs.needs) || (APP_NAV.more || []).includes("needs");

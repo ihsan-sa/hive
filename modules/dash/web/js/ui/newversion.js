@@ -16,6 +16,6 @@ export function newVersionNote(update) {
   const now = S.live && S.live.web; if (!now) return null;
   if (!mine) mine = now;
   if (now === mine || now === told) return null;
-  return banner({ tone: "info", cls: "new-ver", key: "new-ver", text: [h("b", null, "A newer version of Hive is ready."), " Reload when you're ready; what you've typed is kept."],
+  return banner({ tone: "info", cls: "new-ver", key: "new-ver", text: [h("b", null, "A newer version of Hive is ready."), h("span", { class: "new-ver-more" }, " Reload when you're ready; what you've typed is kept.")],
     actions: [button("Reload", () => location.reload(), { size: "s", kind: "primary" }), button("Later", () => { told = now; update(); }, { size: "s", kind: "quiet" })] });
 }

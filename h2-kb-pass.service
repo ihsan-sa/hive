@@ -1,0 +1,15 @@
+[Unit]
+Description=Hive weekly kb pass: list notes to mend, merge or retire, and start a non-builder on the list (projects/rsi-lab/kb_pass.py)
+
+[Service]
+Type=oneshot
+Slice=app-h2jobs.slice
+Environment=PATH=%h/core:%h/modules/bin:%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=HIVE_NAME=kb-pass
+Environment=KB_DENSE=0
+Environment=TMPDIR=%h/.cache/hive-tmp
+WorkingDirectory=%h
+ExecStart=/usr/bin/python3 -I %h/projects/rsi-lab/kb_pass.py --post
+Nice=15
+MemoryMax=1500M
+TimeoutStartSec=20min

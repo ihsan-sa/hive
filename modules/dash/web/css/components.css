@@ -630,6 +630,7 @@ ul.plain{margin:0;padding-left:1.2em;display:grid;gap:var(--s2)}
 .cvp-bar{flex:none;display:flex;flex-wrap:wrap;align-items:center;gap:var(--s2) var(--s3);padding:var(--s2) var(--s4);border-bottom:1px solid var(--line)}
 #main:has(.cvp){min-height:0}
 .cvp-ctl{display:contents}
+.tools-btn{display:none}
 .cvp-count{font-size:var(--fs-small);color:var(--ink-2);font-variant-numeric:tabular-nums}
 .cvp-note{flex:none;display:grid;gap:2px;padding:6px var(--s4);border-bottom:1px solid var(--line);font-size:var(--fs-meta);color:var(--ink-3)}
 .cvp-note .legend{margin-top:0}
@@ -1401,6 +1402,7 @@ a.ref:is([data-kind=file],[data-kind=kbfile])[data-pv-on]{background:color-mix(i
 .cm-older{max-width:720px;margin:var(--s3) auto 0;display:flex;flex-wrap:wrap;align-items:center;gap:var(--s2) var(--s3);padding:10px 14px;border:1px dashed var(--line);border-radius:var(--r-l)}
 .cm-older-d{flex:1 1 100%}
 .cm-older-d>summary{cursor:pointer;min-height:44px;display:flex;align-items:center;gap:4px;font-size:var(--fs-body)}
+.cm-older-d>summary b{flex:none;white-space:nowrap}
 .cm-old-l{margin:var(--s2) 0 0;padding:0;list-style:none;display:grid;gap:6px;font-size:var(--fs-small)}
 .cm-old{color:var(--ink-2);overflow-wrap:anywhere}
 .cm-old a{color:var(--accent-ink);font-weight:var(--w-med)}
@@ -2170,17 +2172,17 @@ dialog.fb::backdrop{background:rgb(0 0 0 / .38)}
 .top-pill:has(.top-pill-go:hover){background:var(--hover)}
 .top-pill-go:focus-visible{outline:2px solid var(--focus);outline-offset:1px}
 /* ---- Now page: running agents as rows (a7613, feedback) ---- */
-.nowtbl td{vertical-align:middle;white-space:nowrap}
+.nowtbl td{vertical-align:middle;white-space:nowrap;width:1%}   /* every column as narrow as its words; Doing now (auto below) takes the rest */
 .nowtbl td.nt-do{white-space:normal}
 .nowtbl tr[data-attn] td{background:color-mix(in srgb,var(--bad) 6%,transparent)}
 .nowtbl tbody tr:hover td{background:var(--hover)}
 .nowtbl .nt-a{font-weight:var(--w-med)}
-.nowtbl .nt-th{max-width:12rem;overflow:hidden;text-overflow:ellipsis}
+.nowtbl .nt-th{max-width:18rem;overflow:hidden;text-overflow:ellipsis}
 .nowtbl .nt-th .ref{display:flex;max-width:100%}
 .nowtbl .nt-st{color:var(--ink-2)}
 .nowtbl tr[data-tone=good] .nt-st{color:var(--good)}
 .nowtbl tr[data-attn] .nt-st{color:var(--bad)}
-.nowtbl .nt-do{width:100%;max-width:0}
+.nowtbl .nt-do{width:auto;max-width:0}
 .nowtbl .nt-now,.nowtbl .nt-ask{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .nowtbl .nt-ask{margin-top:1px}
 .nowtbl .nt-x{text-align:right;width:1%}
@@ -2188,7 +2190,7 @@ dialog.fb::backdrop{background:rgb(0 0 0 / .38)}
   .nowtbl thead{display:none}
   .nowtbl,.nowtbl tbody,.nowtbl tr{display:block}
   .nowtbl tr{padding:8px;border-top:1px solid var(--line);display:grid;grid-template-columns:1fr auto;gap:2px 12px}
-  .nowtbl tr td,.nowtbl tr:last-child td{padding:0;border:0;height:auto;white-space:normal}   /* tr td: tail.css and the row height set .tbl td later on */
+  .nowtbl tr td,.nowtbl tr:last-child td{padding:0;border:0;height:auto;white-space:normal;width:auto}   /* tr td: tail.css and the row height set .tbl td later on */
   .nowtbl .nt-do{grid-column:1;max-width:none;width:auto;min-width:0}
   .nowtbl td.num{grid-column:2;align-self:end;text-align:right}
   .nowtbl .nt-th,.nowtbl .nt-m,.nowtbl .nt-x:empty{display:none}
@@ -3119,7 +3121,9 @@ kbd.menu-i-r{font-family:inherit;font-size:var(--fs-meta)}
 .cm-need{padding:12px 14px;gap:2px 16px;min-height:60px}
 .cm-need-q{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;line-height:1.45}
 .cm-need-q .ref{background:none;padding:0;border:0;height:auto;font-weight:var(--w-bold)}   /* agent code in a sentence: bold mono, not a pill */
-.cm-need-m{display:flex;flex-wrap:wrap;gap:0 6px;align-items:center;color:var(--ink-3)}
+.cm-need-m{display:flex;flex-wrap:nowrap;white-space:nowrap;min-width:0;gap:0 6px;align-items:center;color:var(--ink-3)}
+.cm-need-m>a:first-child{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis}   /* one line: the source gives way, the time never lands alone on a second line */
+.cm-need-m>.th{flex:0 2 auto;min-width:3em;overflow:hidden;text-overflow:ellipsis}
 .cm-need-m a{color:var(--ink-2);text-decoration:none}
 .cm-need-m a:hover{text-decoration:underline}
 .cm-need-b{gap:2px}

@@ -155,11 +155,17 @@
   /* ---- pages ---- */
   .page{padding:var(--s4) max(var(--s4),env(safe-area-inset-right,0px)) var(--s7) max(var(--s4),env(safe-area-inset-left,0px))}
   .ph{margin-bottom:var(--s4)}
+  .ph+.after{margin-top:var(--s2)!important}   /* !important: pages set this one inline */
+  .ph+.after>:first-child{margin-top:0}   /* the first section starts right under the page's head, not a screenful of air later */
   .ph h1{font-size:19px}
   .sec{margin-top:var(--s5)}
   .cvp,.map,.fl-page{--col-x:var(--s4)}   /* the row above a canvas sits where .page puts it on a phone */
   .fl-page{padding:var(--s2) var(--s4) var(--s8)}
   .cvp-nav{padding-top:var(--s2)}
+  .tools-btn{display:inline-flex}
+  .tools-btn[aria-expanded=false]~.tools-more{display:none}   /* one row of controls above a chart or list until Options is open */
+  .map-tb>.seg:first-child{flex:1 1 0}
+  .map-side[data-view=overview]{order:0;border-bottom:0;border-top:1px solid var(--line)}   /* the Map itself first; what you tapped still opens above it */
   .ph-a{width:100%}
   .ph-a .search{width:100%!important}
   /* Inbox (R61): Mark all read sits beside the title, and the list starts right under the head (the head's and the section's margins stacked to 49px) */

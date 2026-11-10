@@ -3,7 +3,7 @@
 // agentPage(name) is the whole page; the side panel (ui/panel.js) draws the same thing in a narrower container.
 import { h } from "../core/dom.js";
 import { S, OUTSIDE, SYS, jget, loadAgentCosts, post, poll, can } from "../core/store.js";
-import { agentCard, agentSpend, agentState, agentStatus, isAgent, isRunning, isWarden, modelName, WARDEN_HINT, sEnd, displayText, agentOn, agentSay } from "../core/model.js";
+import { agentCard, agentSpend, agentState, costsPending, agentStatus, isAgent, isRunning, isWarden, modelName, WARDEN_HINT, sEnd, displayText, agentOn, agentSay } from "../core/model.js";
 import { DAY, HOUR, MIN, ago, dur, firstSentence, mdPlain, money, now, pct, plural, short, stamp, toks } from "../core/format.js";
 import { threadHref } from "../core/router.js";
 import { metrics, cols } from "../templates.js";
@@ -61,6 +61,7 @@ export async function loadFeed(n, onChange) {
 /** What the page and the panel poll: the feed while it's running (its work every 20 s), and the read marks on its posts. */
 export async function pollAgent(n, onChange) {
   if (isRunning(n)) { loadFeed(n, onChange); if (now() - W.at > 20e3) loadWork(n, onChange); if (now() - IN.at > 10e3) loadInput(n, onChange); }
+  if (costsPending() && now() - (F.costAt || 0) > 15e3) { F.costAt = now(); loadAgentCosts(); }   // opened while the first read was still going: pick up the figures when they land
   if (await pollDelivered()) onChange();
 }
 
@@ -245,7 +246,7 @@ function modelPicker(n, row, L) {
 
 /** The whole page for one agent. Used by the view and by the panel. */
 export function agentPage(n, host = "page") {
-  if (!S.live) return empty("Reading…", { kind: "loading" });
+  if (!S.live) return h("div", { class: "page" }, empty("Reading…", { kind: "loading" }));
   const D = gather(n), L = S.running.get(n), st = agentStatus(n), panel = host === "panel";
   const { ss, mine, toMe, spend, contactRows, started, threads, toolList } = D;
   if (!D.life) D.life = life(n, D) || {};
@@ -255,7 +256,7 @@ export function agentPage(n, host = "page") {
   const last = mine[mine.length - 1], on = agentOn(n), me = on && on.said ? on : null;   // what it says it is on (`hive me`), its own words and date
   // the header says what Now's "Doing now" says: its own summary, not the command it is running (the person, 11081941703e); the step is in the block below
   const say = agentSay(n, L ? L.thread : (S.lastSess[n] || {}).thread), task = L && S.byId[L.post];
-  const asked = task ? "Asked by " + (L.from ? (L.from === "person" && S.app.app ? "you" : L.from) + ": " : "") + firstSentence(displayText(task)) : null;   // Now's fallback, word for word
+  const askText = task ? firstSentence(displayText(task)) : "", asked = askText ? "Asked by " + (L.from ? (L.from === "person" && S.app.app ? "you" : L.from) + ": " : "") + askText : null;   // Now's fallback, word for word
   return h("div", { class: "agp", "data-key": n, "data-host": host }, metrics({
     header: pageHeader({
       title: h("span", { class: "ref-wrap" }, n, isAgent(n) ? copyButton("@" + n) : null, isWarden(n) ? wardenBadge(WARDEN_HINT) : null),
@@ -267,7 +268,7 @@ export function agentPage(n, host = "page") {
     }),
     sections: [
       section({ title: "In numbers", note: "this agent's turns, time and cost" }, stats([
-        { label: "Cost", value: S.usage ? money(spend.usd) : "…", note: `${toks(tk[0] + tk[1] + tk[2] + tk[3])} tokens, ${pct(tk[2], read)} of reads from cache` + (spend.sub ? `; ${money(spend.sub)} in subagents` : ""), title: `At API list prices, from the ${spend.src}.` + (byModel.length > 1 ? " " + byModel.map(([k, v]) => `${modelName(k)} ${money(v)}`).join(", ") + "." : "") + (L ? " A turn under way may not be counted yet." : "") },
+        { label: "Cost", value: !S.usage || costsPending() ? "…" : spend.usd > 0 ? money(spend.usd) : "–", note: costsPending() || !(tk[0] + tk[1] + tk[2] + tk[3]) ? null : `${toks(tk[0] + tk[1] + tk[2] + tk[3])} tokens, ${pct(tk[2], read)} of reads from cache` + (spend.sub ? `; ${money(spend.sub)} in subagents` : ""), title: `At API list prices, from the ${spend.src}.` + (byModel.length > 1 ? " " + byModel.map(([k, v]) => `${modelName(k)} ${money(v)}`).join(", ") + "." : "") + (L ? " A turn under way may not be counted yet." : "") },
         { label: "Time running", value: ss.length ? dur(D.active) : "none", note: plural(ss.length, "session") + (spend.calls != null ? `, ${spend.calls.toLocaleString()} model calls` : "") },
         { label: "Posts", value: mine.length, note: `named in ${plural(toMe.length, "post")}; ${plural(threads.length, "thread")}` },
         { label: "Changed", value: w ? plural(w.nfiles, "file") : "…", note: w ? [plural(w.ncommits, "commit"), w.prs.length ? plural(w.prs.length, "PR") : null, started.length ? `started ${plural(D.startedNames.length, "agent")}` : null].filter(Boolean).join(", ") : null },
@@ -310,5 +311,5 @@ export default {
   id: "agent", label: "Agent", tab: false,
   enter(ctx) { if (!ctx.arg) { location.hash = "#now"; return; } loadFeed(ctx.arg, ctx.update); },
   poll: { every: 2000, run(ctx) { if (ctx.arg) pollAgent(ctx.arg, ctx.update); } },
-  render(ctx) { return ctx.arg ? agentPage(ctx.arg) : empty("Reading…", { kind: "loading" }); },
+  render(ctx) { return ctx.arg ? agentPage(ctx.arg) : h("div", { class: "page" }, empty("Reading…", { kind: "loading" })); },
 };

@@ -4,6 +4,38 @@ Release notes are on the [releases page](https://github.com/ihsan-sa/hive/releas
 
 A release can ship several times a day. A Hive installs each one as soon as it's out; **How often to update** in Settings can slow that to about once a day. The latest is at [releases/latest](https://github.com/ihsan-sa/hive/releases/latest).
 
+## Settings, Inbox, Design and Start hold still while they load
+
+These pages started in the wide column and moved across to the narrow one when their data arrived, a jump of 270 px on a wide screen. They now start in the narrow column, and so do their loading and error messages.
+
+## Needs you rows read in plain words
+
+Rows on the Needs you page and the home could show ask codes such as `k0863` or "(an ask, an ask)", and some ended with a raw thread name. The codes are gone from every row, and a thread named at the end of a row now appears as that conversation's title beside the time.
+
+## The Chat badge is right as soon as it appears
+
+The number on the Chat badge could be one short for about a second and a half after the page loaded, until the next update corrected it. It now shows the right count from the moment it appears.
+
+## Agents list holds still while it loads
+
+The long list on the Agents page no longer shrinks for a moment when the older half of the history is slow to arrive, and the other pages that wait for the whole history no longer treat it as complete early. Narrowing the window after the page has loaded now switches to the shorter phone list, and widening it again brings the full list back.
+
+## What waits on you counts acts, not threads
+
+The summary of what waits on you now groups threads that one act would settle, so one payment or one call is one line. A line that names no money, account, voice, device or root work now draws a warning to decide it instead.
+
+## What waits on you stays true
+
+The summary of what waits on you is now checked against the threads each time it is rebuilt. Anything still open comes back even if someone removed it from the list, and something finished leaves on its own. Agents can take back a For you line that no longer applies, and one repeated in new words now counts once.
+
+## Phone pages start sooner
+
+On a phone, Timeline and the Map keep one row of controls above the chart, with the rest behind an Options button that also shows when a hidden filter is on. The Map now comes before its summary, the first section of a page sits right under the title, and every Settings page shows without scrolling sideways.
+
+## Chat and Yours stay still as they open
+
+The Chat and Yours pages no longer drop down when the app finishes loading. The first visit in a browser can still move once, because it has nothing remembered yet.
+
 ## Finger-sized links on Chat, Progress and Settings on a phone
 
 On a phone, the links and names on Chat, Progress and Settings are now big enough to hit with a finger. Links inside a running sentence keep their size.

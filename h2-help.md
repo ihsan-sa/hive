@@ -30,6 +30,10 @@ hive summary show | set (JSON on stdin) | drop THREAD... | lint [--json] (flags 
 
 hive fade THREAD --why "..." [--off]: mark a thread as likely not needed by the person any more (finished and read, replaced by another thread, nothing in it for them): the dashboard side list greys it, and they can still open it and write in it. A post for the person, or one from them, brings it back by itself. --off takes your mark off
 
+## hive foryou
+
+hive foryou list [--thread T] | close POST... --why WHY | close --thread T --why WHY | reopen POST... --why WHY: what's open on the person from For you lines, and the way to retract one that is obsolete, already decided or not a real wait. Dropping a thread from the summary closes nothing; this does
+
 ## hive status
 
 hive status THREAD <<'X' ...: set the status bar the dashboard shows at the top of a thread (line 1: what it is about; line 2: where it stands now, what it waits on; up to four more lines of detail, folded by default: this is the thread's summary, depth 3 of the person's four depths). --read prints it. Update it when you change a thread's state; before you stop, line 2 is why, starting Done:, Blocked:, Needs the person:, Waiting: or Told to stop:
@@ -120,7 +124,7 @@ hive step ask --why "..." --script PATH | status | list | approve ID | deny ID: 
 
 ## hive improve
 
-hive improve log --what ... --measure ... --revisit 7d | judge ID held|reverted|inconclusive --why ... | list [--due] | show ID: the ledger of changes meant to make the hive better, each judged later by someone else (core/progress.py)
+hive improve log --what ... --measure ... --check CMD --want up|down [--kind fix|behaviour --control CMD] (a script judges it), or --no-check WHY | attach ID --check CMD --want up|down (late: never a held) | autojudge | num FIELD | judge ID held|reverted|inconclusive --why ... | list [--due] | show ID: the ledger of changes meant to make the hive better, each judged later by someone else (core/progress.py)
 
 ## hive progress
 

@@ -18,7 +18,7 @@ const ASK_TEXT_APP = { open: "nobody on it yet", owned: "in hand", held: "held",
 const app = () => !!S.app.app;
 const GRADE_TONE = { delivered: "good", partial: "warn", nothing: "bad", silent: "bad", quiet: "quiet", not_asked: "quiet" };
 const GRADE_TEXT = { delivered: "delivered", partial: "partial", nothing: "nothing", silent: "silent", quiet: "quiet", not_asked: "not asked" };
-const IMP_TONE = { landed: "info", held: "good", reverted: "bad", inconclusive: "quiet" };
+const IMP_TONE = { landed: "info", held: "good", reverted: "bad", "reverted-candidate": "warn", inconclusive: "quiet", unjudgeable: "quiet" };
 // The scoreboard's lines, in plain words. lower: a fall is the good direction.
 const LINES = [
   ["asks_open", "Asks open", true], ["asks_oldest_open_d", "Oldest open ask, days", true], ["asks_orphaned", "Asks nobody is on", true], ["asks_done", "Asks done"],

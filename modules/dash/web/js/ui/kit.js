@@ -123,6 +123,14 @@ export function button(label, onClick, { kind, size, tone, title, disabled, type
   return h("button", { ...a, type: type || "button", disabled: disabled || busy || null, "data-busy": busy ? "" : null, "aria-busy": busy ? "true" : null, onclick: onClick }, ...body);
 }
 
+/** The phone's one button for a toolbar's second-string controls: mark those with toolsMore, after this button in the same parent, and CSS hides them on a phone until it is open. Keep `open` in view state so a refresh leaves it. `on` counts settings hidden while they are changing what's shown. */
+export function toolsButton(open, onToggle, on = 0) {
+  const b = button(on ? `Options (${on})` : "Options", onToggle, { cls: "tools-btn", size: "s", icon: "filter" });
+  b.setAttribute("aria-expanded", String(!!open));
+  return b;
+}
+export const toolsMore = el => { el.classList.add("tools-more"); return el; };
+
 /** Segmented choice. options: [[key, label]] */
 export function seg(options, value, onChange, { label } = {}) {
   return h("div", { class: "seg", role: "group", "aria-label": label || null },

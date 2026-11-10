@@ -19,6 +19,7 @@
 <script type="module" src="js/app.js"></script>
 </head><body class="app">
 <script>{const m=location.hash.match(/^#comms\/(.+)/);if(m&&!/^(focus:|~list$|~new$)/.test(m[1]))document.body.dataset.view="thread";}</script>
-<header class="top" id="top"><div><div class="top-in"></div></div></header>
+<header class="top" id="top"><div><div class="top-in"></div><script>{let r=null;try{r=localStorage.getItem("chatRow")}catch(e){}if(r==="1"&&/^#?((comms|focus|needs|yours|inbox|mail|made)(\/|$)|$)/.test(location.hash))document.currentScript.replaceWith(Object.assign(document.createElement("div"),{className:"cm-places"}))}</script></div></header>
 <main id="main"><div class="page"><div class="empty skel" data-kind="loading" role="status"><span class="vh">Reading…</span><div class="skel-r"><span class="skel-b"></span><span class="skel-b"></span></div><div class="skel-r"><span class="skel-b"></span><span class="skel-b"></span></div><div class="skel-r"><span class="skel-b"></span><span class="skel-b"></span></div><div class="skel-r"><span class="skel-b"></span><span class="skel-b"></span></div></div></div></main>
+<script>{const p=document.querySelector("#main .page"),h=location.hash;if(/^#yours(\/|$)/.test(h))p.dataset.view="yours";else if(/^#(needs|mail)(\/|$)/.test(h))p.dataset.width="narrow";}</script>
 </body></html>

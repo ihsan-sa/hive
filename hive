@@ -1138,8 +1138,34 @@ def cmd_status(a):
     with open(f_, "a") as f:
         fcntl.flock(f, fcntl.LOCK_EX); f.write(json.dumps(rec) + "\n")
     print(f"status set on {th}")
+    try:
+        import away
+        if w := away.done_but_open(th, text): print(w, file=sys.stderr)
+    except Exception: pass  # a warning: never costs the bar that was just written
     leak = status_leaks(text.splitlines()[0])
     if leak: print(f"hive status: warning: line 1 shows on the person's home card and holds {', '.join(leak)}; say it in plain words (agents as @name, no rung, post or test ids)", file=sys.stderr)
+
+def cmd_foryou(a):
+    """hive foryou list | close: the For you lines open on the person, and retracting one (core/away.py)."""
+    import away
+    rows = away.open_on_person()["for_yous"]
+    if a.do == "list":
+        for r in rows:
+            if not a.thread or r["thread"] == a.thread: print(f"{r['post']}  {r['thread']}  {r['from']}: {r['text']}")
+        return
+    if not a.why.strip(): sys.exit("hive foryou close: say why with --why (it's the record of why this no longer waits on the person)")
+    if a.do == "reopen":
+        was = away.closed_for_yous()
+        if not a.posts or (bad := [i for i in a.posts if str(i) not in was]): sys.exit(f"hive foryou reopen: not closed by an agent: {', '.join(a.posts and bad or ['(no post given)'])}")
+        away.reopen_for_yous(list(a.posts), os.environ.get("HIVE_NAME", "anon"), a.why.strip()); print(f"reopened {len(a.posts)}"); return
+    ids = list(dict.fromkeys(list(a.posts) + [r["post"] for r in rows if a.thread and r["thread"] == a.thread]))
+    known = {str(p.get("id")) for p in posts() if foryou and foryou.lines(p.get("text"))}
+    if bad := [i for i in ids if str(i) not in known]: sys.exit(f"hive foryou close: no For you line in: {', '.join(bad)}")
+    if not ids: sys.exit("hive foryou close: give post ids or a --thread with an open For you")
+    if foryou and (gap := foryou.close_gap(a.why, ids, [str(r["post"]) for r in rows], [i for i, e in away.asks.ledger().items() if e.get("status") not in away.asks.CLOSED and e.get("kind") != "direction"], {str(p.get("from", "")).lower() for p in posts()})):
+        sys.exit(f"hive foryou close: nothing closed. {gap}.")
+    away.close_for_yous(ids, os.environ.get("HIVE_NAME", "anon"), a.why.strip())
+    print(f"closed {len(ids)} For you line{'s' if len(ids) != 1 else ''}")
 
 def status_leaks(line):
     """What in a status bar's line 1 the home card shouldn't show (R16, person 1107151649a6): a bare agent code, a post id, a rung word, a test count. Warns, never blocks."""
@@ -1242,6 +1268,8 @@ p = sp.add_parser("summary", help="hive summary show | set (JSON on stdin) | dro
 p.add_argument("rest", nargs=argparse.REMAINDER); p.set_defaults(f=cmd_summary)
 p = sp.add_parser("fade", help="hive fade THREAD --why \"...\" [--off]: mark a thread as likely not needed by the person any more (finished and read, replaced by another thread, nothing in it for them): the dashboard side list greys it, and they can still open it and write in it. A post for the person, or one from them, brings it back by itself. --off takes your mark off")
 p.add_argument("thread"); p.add_argument("--why", default=""); p.add_argument("--off", action="store_true"); p.set_defaults(f=cmd_fade)
+p = sp.add_parser("foryou", help="hive foryou list [--thread T] | close POST... --why WHY | close --thread T --why WHY | reopen POST... --why WHY: what's open on the person from For you lines, and the way to retract one that is obsolete, already decided or not a real wait. Dropping a thread from the summary closes nothing; this does")
+p.add_argument("do", choices=["list", "close", "reopen"]); p.add_argument("posts", nargs="*"); p.add_argument("--thread"); p.add_argument("--why", default=""); p.set_defaults(f=cmd_foryou)
 p = sp.add_parser("status", help="hive status THREAD <<'X' ...: set the status bar the dashboard shows at the top of a thread (line 1: what it is about; line 2: where it stands now, what it waits on; up to four more lines of detail, folded by default: this is the thread's summary, depth 3 of the person's four depths). --read prints it. Update it when you change a thread's state; before you stop, line 2 is why, starting Done:, Blocked:, Needs the person:, Waiting: or Told to stop:")
 p.add_argument("thread"); p.add_argument("--read", action="store_true"); p.set_defaults(f=cmd_status)
 p = sp.add_parser("me", help="hive me \"what you are on\": one dated line per agent on what you are broadly on now (the direction, not the step; like a thread status but per agent). Update it when your focus shifts; hive me alone prints yours. The dashboard's Agents page and agent pages show it, so the person or an agent can find who is on a similar thing and write to them. --about \"...\": a standing line on who you are and what you do; the composer's @ menu shows it when your thread has no status line")
@@ -1287,7 +1315,7 @@ p.add_argument("do", choices=["check"]); p.add_argument("--json", action="store_
 p = sp.add_parser("step", help="hive step ask --why \"...\" --script PATH | status | list | approve ID | deny ID: run something once outside the sandbox")
 p.add_argument("do", choices=["ask", "status", "list", "approve", "deny", "verdict"]); p.add_argument("id_or_script", nargs="?"); p.add_argument("verdict", nargs="?")
 p.add_argument("--why", default=""); p.add_argument("--script"); p.set_defaults(f=cmd_step)
-sp.add_parser("improve", help="hive improve log --what ... --measure ... --revisit 7d | judge ID held|reverted|inconclusive --why ... | list [--due] | show ID: the ledger of changes meant to make the hive better, each judged later by someone else (core/progress.py)")
+sp.add_parser("improve", help="hive improve log --what ... --measure ... --check CMD --want up|down [--kind fix|behaviour --control CMD] (a script judges it), or --no-check WHY | attach ID --check CMD --want up|down (late: never a held) | autojudge | num FIELD | judge ID held|reverted|inconclusive --why ... | list [--due] | show ID: the ledger of changes meant to make the hive better, each judged later by someone else (core/progress.py)")
 sp.add_parser("progress", help="hive progress [--since 1d] [--snapshot] [--post] [--json]: the hive's numbers for the window against the window before, with what got worse (core/progress.py)")
 def cmd_outcomes(a):
     """hive outcomes ...: core/outcomes.py (did each run do what its post asked: the per-run outcome grade)."""

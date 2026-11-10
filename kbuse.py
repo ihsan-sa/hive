@@ -60,8 +60,22 @@ def remember(who, st, id, kind, shown, q="", calls=-1, **more):
     """calls -1: the tool call that ran this search hasn't ended, and what it does beside the search can't follow from it"""
     if who: st["live"].append({"id": id, "kind": kind, "q": q, "t": time.time(), "shown": shown, "calls": calls, "touched": [], **more}); save(who, st)
 
+def thread_has(thread, ids):
+    """is one of the board posts `ids` in `thread`? Reads the board only when a find showed posts and a thread was read."""
+    if not ids: return False
+    try:
+        with open(H + "/board.jsonl", errors="replace") as f:
+            for ln in f:
+                if any(i in ln for i in ids):
+                    try: x = json.loads(ln)
+                    except ValueError: continue
+                    if x.get("id") in ids and x.get("thread") == thread: return True
+    except OSError: pass
+    return False
+
 def shows(e, path, lo, hi):
     """does this search's list hold path, at a line in lo..hi when the read has a range?"""
+    if path.startswith("thread:") and thread_has(path[7:], [p[6:] for p, _ in e["shown"] if p.startswith("board:")]): return True   # a thread read reads every post in it
     for p, line in e["shown"]:
         n = needle(p)
         if (path == p or path == n or path.endswith("/" + n)) and (lo is None or lo - SLACK <= line <= hi + SLACK): return True
@@ -239,7 +253,10 @@ def numbers(t0, t1, rs=None):
     live = [(r["id"], p) for r in win if r.get("neighbours") and r.get("id") and r.get("agent") for p, _ in r.get("shown", [])]   # neighbours.py: counted apart, so the note pointers' baseline stays comparable
     live_read = sum(1 for i, p in live if p in followed.get(i, ()))
     fr = sum(1 for r in logged if r["id"] in followed)
+    nb = [r for r in logged if any(not p.startswith("board:") for p, _ in r["shown"])]   # finds that showed a note or file; board snippets answer in place (find-follow-by-source.md)
+    nbr = sum(1 for r in nb if r["id"] in followed)
     return {"finds": len(finds), "finds_logged": len(logged), "finds_read": fr, "find_read_pct": pct(fr, len(logged)),
+            "finds_nb": len(nb), "finds_nb_read": nbr, "find_nb_read_pct": pct(nbr, len(nb)),
             "finds_read_8": sum(1 for r in logged if r["id"] in near), "find_read_8_pct": pct(sum(1 for r in logged if r["id"] in near), len(logged)),
             "recalls": len(recalls), "recalls_opened": sum(1 for r in recalls if r["id"] in followed), "recall_opened_pct": pct(sum(1 for r in recalls if r["id"] in followed), len(recalls)),
             "pointers": len(pointers), "pointers_opened": opened, "pointer_opened_pct": pct(opened, len(pointers)),
@@ -247,6 +264,9 @@ def numbers(t0, t1, rs=None):
             "misses": sum(1 for r in win if "miss" in r), "candidates": sum(1 for r in win if "candidate" in r), "runs_observable_pct": runs_observable(t0, t1)}
 
 def iso(t): return time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(t))
+
+KEEP = re.compile(r"^kb-keep:(.*)$", re.M)   # a line in a note: the weekly pass (projects/rsi-lab/kb_pass.py) never moves it, whatever its reads
+RARE_KIND = re.compile(r"\b(prices?|pricing|quotes?|supplier|vendor|credentials?|api key|recover(?:y|ing)?)\b", re.I)   # notes read rarely that matter when they are: a word match that only prompts the question
 
 def drafts(rs=None, now=None):
     """The grader's drafts in kb/_drafts: ([{path, age, read, action}], the measure as one line). A read after the 14 days doesn't count as read in them;
@@ -268,7 +288,8 @@ def drafts(rs=None, now=None):
     at = {rel(w.get("path", "")): t(w["at"]) for w in written if w.get("at")}
     def read_in_time(path, born): return next((x for x in reads.get(path, []) if t(x) - born <= DRAFT_S), "")
     rows = []
-    for d, _, fs in os.walk(base):
+    for d, sub, fs in os.walk(base):
+        if d == base and "retired" in sub: sub.remove("retired")   # the weekly pass's retired notes: not drafts, so the dream never merges or drops them
         for f in sorted(fs):
             path = rel(os.path.join(d, f)); born = at.get(path) or os.path.getmtime(os.path.join(d, f))
             got = read_in_time(path, born); age = now - born
@@ -287,6 +308,7 @@ def report():
     for name, secs in (("24 h", 86400), ("7 d", 7 * 86400)):
         x = numbers(iso(now - secs), end, rs)
         out += [f"{name}: {x['finds']} finds; of {x['finds_logged']} logged with results, {x['finds_read']} ({p(x['find_read_pct'])}) with an observed read of a shown result in 10 min, {x['finds_read_8']} ({p(x['find_read_8_pct'])}) in 8 tool calls",
+                f"  without board-only finds: {x['finds_nb_read']} of {x['finds_nb']} ({p(x['find_nb_read_pct'])}) read",
                 f"  {x['recalls']} recall injections, {x['recalls_opened']} ({p(x['recall_opened_pct'])}) with a pointer read or opened; {x['pointers_opened']} of {x['pointers']} pointers ({p(x['pointer_opened_pct'])})",
                 f"  {x['neighbour_pointers']} live-neighbour pointers, {x['neighbour_pointers_read']} ({p(x['neighbour_read_pct'])}) with the thread read",
                 f"  {x['misses']} misses filed, {x['candidates']} miss candidates; {p(x['runs_observable_pct'])} of runs observable"]

@@ -2,7 +2,7 @@
 // browser, from what the store already holds; the name opens the agent's panel with all its numbers. Cost and tokens: agentSpend.
 import { h } from "../core/dom.js";
 import { S, OUTSIDE, getPref, loadAgentCosts, setPref } from "../core/store.js";
-import { HOUSE_THREADS, agentOn, agentSpend, agentStatus, isRunning, loginName, modelName, sEnd, threadTitle } from "../core/model.js";
+import { HOUSE_THREADS, agentOn, agentSpend, agentStatus, costsPending, isRunning, loginName, modelName, sEnd, threadTitle } from "../core/model.js";
 import { ago, dur, money, plural, short, stamp, toks } from "../core/format.js";
 import { metrics } from "../templates.js";
 import { button, empty, waiting, input, pageHeader, seg, stats, toolbar, pageNav } from "../ui/kit.js";
@@ -12,7 +12,8 @@ import { agentAvatar, agentRef, threadRef } from "../ui/refs.js";
 const STATUS = [["all", "Any status"], ["running", "Running"], ["queued", "Waiting to start"], ["ended", "Ended"], ["killed", "Killed"], ["limited", "Stopped at a limit"], ["failed", "Failed"]];
 const BY = [["all", "Started by anyone"], ["person", "Started by a person"], ["agent", "Started by an agent"], ["system", "Started by the Hive"]];
 const SINCE = [["all", "Any time"], ["1", "Last 24 hours"], ["7", "Last 7 days"], ["30", "Last 30 days"]];
-const PAGE = matchMedia("(max-width: 640px)").matches ? 36 : 200, DAY = 864e5;   // R48: a phone opens on a short list; a phone row is about 110 px
+const pageFor = () => (matchMedia("(max-width: 640px)").matches ? 36 : 200), DAY = 864e5;   // R48: a phone opens on a short list; a phone row is about 110 px
+let PAGE = pageFor();   // R73: crossing 640 px changes it (the listener below)
 const L = { q: "", house: false, status: "all", by: "all", since: "all", model: "all", account: "all", limit: PAGE, sig: "", dataKey: "", all: [], shown: [] };
 const pctOf = (a, b) => b ? Math.round(100 * a / b) + "%" : "0%";
 const app = () => !!S.app.app;
@@ -67,7 +68,7 @@ const phoneName = a => { const av = agentAvatar(a.name, { size: "s" }); av.tabIn
 const COLS = [
   { k: "name", label: "Agent", cls: "ag-n", get: a => a.name, render: a => agentRef(a.name) },
   { k: "status", label: "Status", cls: "ag-st", get: a => a.status, render: a => h("span", { title: agentStatus(a.name).label }, (STATUS.find(x => x[0] === a.status) || [0, a.status])[1]) },
-  { k: "spawned", get label() { return S.app.app ? "Started" : "Spawned"; }, get: a => a.when, render: a => h("span", { title: new Date(a.when).toISOString() }, stamp(a.when)) },
+  { k: "spawned", get label() { return S.app.app ? "Started" : "Spawned"; }, get: a => a.when, render: a => h("span", { title: new Date(a.when).toISOString() }, stamp(a.when).replace(/^\w+, /, "")) },
   { k: "thread", get label() { return S.app.app ? "Conversation" : "Thread"; }, cls: "clip ag-tm", get: a => threadTitle(a.thread) || "", render: a => threadRef(a.thread) },
   // its own words (hive me) with their age; muted when it has said nothing and this is what its last run was asked; "was on" when the words predate the run
   { k: "on", label: "On", cls: "clip ag-on", title: "What it says it is on (hive me), and when it said so; muted: what it was asked, when it has said nothing", get: a => (a.on && a.on.text) || "",
@@ -78,7 +79,7 @@ const COLS = [
   { k: "runs", label: "Runs", num: 1, title: "How many times it has been started or woken", get: a => a.runs, render: a => a.runs },
   { k: "ran", label: "Ran for", num: 1, title: "Time running, over all its runs", get: a => a.ran, render: a => (a.ran < 6e4 ? "<1m" : dur(a.ran)) },
   { k: "lastSeen", label: "Last active", num: 1, get: a => a.lastSeen, render: a => (isRunning(a.name) ? "now" : ago(a.lastSeen)) },
-  { k: "usd", label: "Cost", num: 1, title: "At API list prices; nobody is billed this", get: a => a.usd, render: a => !COST_DATA ? "–" : h("span", { title: `From the ${a.spend.src}` + (a.spend.sub ? `; ${money(a.spend.sub)} in subagents` : "") }, money(a.usd)) },
+  { k: "usd", label: "Cost", num: 1, title: "At API list prices; nobody is billed this", get: a => a.usd, render: a => costsPending() ? h("span", { class: "muted", title: "Reading the transcripts" }, "…") : !(a.usd > 0 || a.tok > 0) ? "–" : h("span", { title: `From the ${a.spend.src}` + (a.spend.sub ? `; ${money(a.spend.sub)} in subagents` : "") }, money(a.usd)) },
   { k: "tok", label: "Tokens", num: 1, title: "Input, output and cache together", get: a => a.tok, render: a => !COST_DATA ? "–" : h("span", { title: `${toks(a.spend.t[0])} input, ${toks(a.spend.t[1])} output, ${toks(a.spend.t[2])} cache read, ${toks(a.spend.t[3])} cache write` }, toks(a.tok)) },
   { k: "calls", label: "Calls", num: 1, title: "Model calls, subagents included", get: a => a.calls ?? -1, render: a => (a.calls == null ? "–" : a.calls.toLocaleString()) },
   { k: "tools", label: "Tools", num: 1, title: "Tool calls in its session logs", get: a => a.tools, render: a => a.tools.toLocaleString() },
@@ -106,7 +107,8 @@ const picker = (label, value, opts, on) => h("select", { class: "input", value, 
   opts.map(([k, l]) => h("option", { value: k, selected: k === value ? "" : null }, l)));
 
 // The phone order (name, status, On first) is chosen at render, so crossing 640 px re-renders: nothing else may come in time.
-for (const q of ["(max-width: 640px)", STACK_BELOW]) matchMedia(q).addEventListener("change", () => { if (L.update && document.querySelector(".ag")) L.update(); });
+// R73: a list still on its first page takes the new width's first page; one the person has opened further stays as it is.
+for (const q of ["(max-width: 640px)", STACK_BELOW]) matchMedia(q).addEventListener("change", () => { const was = PAGE; PAGE = pageFor(); if (L.limit === was) L.limit = PAGE; if (L.update && document.querySelector(".ag")) L.update(); });
 
 // The room under the list that the Show more row takes, once the older log has made the list longer than a page (R67).
 const moreRoom = () => { const w = document.querySelector(".ag-w"), m = w && w.nextElementSibling; return m && m.matches(".lr-more") ? m.getBoundingClientRect().bottom - w.getBoundingClientRect().bottom : 0; };
@@ -128,11 +130,11 @@ export default {
     const by = k => () => { const c = sort(), d = c.k === k ? -c.d : COLS.find(x => x.k === k).num || k === "spawned" ? -1 : 1; setPref("agents.sort", { k, d }); L.limit = PAGE; ctx.update(); };
     const on = colsOn(), phone = matchMedia("(max-width: 640px)").matches, shown = COLS.filter(c => on.has(c.k)), stack = phone || (matchMedia(STACK_BELOW).matches && !tableFits(shown)), cols = stack ? shown.sort((x, y) => phoneRank(x) - phoneRank(y)) : shown, fits = !stack && tableFits(cols), nf = ["status", "model", "account", "by", "since"].filter(k => L[k] !== "all").length;
     const costs = S.agentCosts; COST_DATA = all.some(a => a.usd > 0 || a.tok > 0);   // no cost data is "–", not a real zero (handoff 33)
-    const costNote = costs && costs.at ? `Cost and tokens from the transcripts, read ${ago(costs.at * 1e3)}${costs.refreshing ? ", reading again" : ""}. API list prices; nobody is billed this. Tokens add up every model call's input, output and cache, so context read again on each call counts each time.` : costs && costs.refreshing ? "Reading the transcripts for exact costs; until then these come from the session logs." : "Cost and tokens from the session logs.";
+    const costNote = costs && costs.at ? `Cost and tokens from the transcripts, read ${ago(costs.at * 1e3)}${costs.refreshing ? ", reading again" : ""}. API list prices; nobody is billed this. Tokens add up every model call's input, output and cache, so context read again on each call counts each time.` : costsPending() ? "Reading the transcripts for cost and tokens." : costs && costs.refreshing ? "Reading the transcripts for exact costs; until then these come from the session logs." : "Cost and tokens from the session logs.";
     const totals = stats([
         { label: narrowed ? "Agents shown" : "Agents", value: found.length.toLocaleString(), note: `${found.filter(a => a.status === "running").length} running` },
-        { label: "Total cost", value: COST_DATA ? money(sum(a => a.usd)) : "–", note: found.length && COST_DATA ? `${money(sum(a => a.usd) / found.length)} per agent` : null },
-        { label: "Tokens", value: COST_DATA ? toks(sum(a => a.tok)) : "–", note: !COST_DATA ? null : `${pctOf(sum(a => a.spend.t[2]), sum(a => a.tok))} re-read from cache; ${toks(sum(a => a.spend.t[1]))} written` },
+        { label: "Total cost", value: costsPending() ? "…" : COST_DATA ? money(sum(a => a.usd)) : "–", note: found.length && COST_DATA && !costsPending() ? `${money(sum(a => a.usd) / found.length)} per agent` : null },
+        { label: "Tokens", value: costsPending() ? "…" : COST_DATA ? toks(sum(a => a.tok)) : "–", note: !COST_DATA || costsPending() ? null : `${pctOf(sum(a => a.spend.t[2]), sum(a => a.tok))} re-read from cache; ${toks(sum(a => a.spend.t[1]))} written` },
         { label: "Agent time", value: found.length ? dur(sum(a => a.ran)) : "–", note: found.length ? `added up over ${plural(sum(a => a.runs), "run")}, in ${dur(Date.now() - Math.min(...found.map(a => a.when || Date.now())))}` : null },
     ]);
     // Filters and Columns open into a full-width row under the controls. The row is the fold's sibling, not its body: a body would widen the fold and throw its button to a new line.

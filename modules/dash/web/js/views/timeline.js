@@ -7,7 +7,7 @@ import { clock, dayName, dur, mdPlain, now, short, stamp, DAY, HOUR, MIN } from 
 import { agentHref, threadHref } from "../core/router.js";
 import { status, tier } from "../core/status.js";
 import { canvas } from "../templates.js";
-import { button, infoButton, pageNav, seg, statusDot, waiting } from "../ui/kit.js";
+import { button, infoButton, pageNav, seg, statusDot, toolsButton, toolsMore, waiting } from "../ui/kit.js";
 import { keep, shapePath, hollow } from "../ui/graph.js";
 import { openPanel } from "../ui/panel.js";
 import { showTip, hideTip } from "../ui/tip.js";
@@ -226,16 +226,17 @@ function toolbar() {
   const r = range(now());
   return [h("div", { class: "cvp-ctl" },
     seg(PRE, presetValue(), k => { setPref("tlWin", k); if (k === "fit") { T.fit = true; T.end = null; T.ver = -1; draw(); T.update(); } else { T.fit = false; set(WIN[k], null); } }, { label: "Window" }),
-    h("span", { class: "row-a-in" },
+    toolsButton(T.tools, () => { T.tools = !T.tools; T.update(); }, (T.active ? 1 : 0) + (T.house ? 1 : 0)),
+    h("span", { class: "row-a-in tools-more" },
       small("−", "Zoom out", () => zoom(1.6, centre())), small("+", "Zoom in", () => zoom(1 / 1.6, centre())),
       small("←", "Earlier", () => pan(-T.win / 4)), small("→", "Later", () => pan(T.win / 4))),
     !T.fit && T.end != null ? button("Now", () => set(T.win, null), { size: "s", title: "Back to the latest, following now" }) : null,
-    seg([["on", "Active only", "Show only the agents running now, and the rows they're on"]], T.active ? "on" : null, () => { T.active = !T.active; setPref("tlActive", T.active ? 1 : 0); T.ver = -1; draw(); T.update(); }, { label: "Filter" }),
-    seg([["on", "All upkeep", "Upkeep rows (status notes, the keeper, the watchdog) are one line each; this shows every run on them"]], T.house ? "on" : null, () => { T.house = !T.house; setPref("tlHouse", T.house ? 1 : 0); T.ver = -1; draw(); T.update(); }, { label: "Upkeep rows" }),
-    phone() && !T.fitRows ? seg([["chart", "Chart"], ["list", "List", "The same runs as rows you can tap"]], T.list ? "list" : "chart", k => { T.list = k === "list"; T.listN = LIST_STEP; setPref("tlList", T.list ? 1 : 0); T.ver = -1; T.update(); }, { label: "Show as" }) : null),
-    infoButton("About this chart", say(HELP), { size: "s" }),
-    h("span", { class: "cvp-count" }, `${stamp(r.t0)} – ${r.follows ? "now" : stamp(r.t1)} (${dur(r.t1 - r.t0)})`),
-    h("span", { class: "cvp-count", role: "status" }, `${T.nLive} running, ${T.nDone} ended in this range`),
+    toolsMore(seg([["on", "Active only", "Show only the agents running now, and the rows they're on"]], T.active ? "on" : null, () => { T.active = !T.active; setPref("tlActive", T.active ? 1 : 0); T.ver = -1; draw(); T.update(); }, { label: "Filter" })),
+    toolsMore(seg([["on", "All upkeep", "Upkeep rows (status notes, the keeper, the watchdog) are one line each; this shows every run on them"]], T.house ? "on" : null, () => { T.house = !T.house; setPref("tlHouse", T.house ? 1 : 0); T.ver = -1; draw(); T.update(); }, { label: "Upkeep rows" })),
+    phone() && !T.fitRows ? seg([["chart", "Chart"], ["list", "List", "The same runs as rows you can tap"]], T.list ? "list" : "chart", k => { T.list = k === "list"; T.listN = LIST_STEP; setPref("tlList", T.list ? 1 : 0); T.ver = -1; T.update(); }, { label: "Show as" }) : null,
+    toolsMore(infoButton("About this chart", say(HELP), { size: "s" })),
+    h("span", { class: "cvp-count tools-more" }, `${stamp(r.t0)} – ${r.follows ? "now" : stamp(r.t1)} (${dur(r.t1 - r.t0)})`),
+    h("span", { class: "cvp-count tools-more", role: "status" }, `${T.nLive} running, ${T.nDone} ended in this range`)),
   ];
 }
 const HELP = "Each row is a thread, each bar an agent's session (filled with a status mark at its end while running; pale and dashed once ended; rows with someone running come first, the hive's own upkeep rows last and one line each), each tick along the top of a row a post. Stacked bars mean agents worked in parallel. A bar's name shows when it fits: hover for any. Click a bar for the agent, a row to read the thread. To zoom: Ctrl+scroll or pinch, or the − and + buttons. Drag sideways to move through time.";

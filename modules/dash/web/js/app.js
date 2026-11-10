@@ -92,8 +92,9 @@ const markRoute = () => document.documentElement.toggleAttribute("data-dev", !S.
 markRoute();
 watchVersion();
 subscribe(() => { markRoute(); schedule(false); });
+import { reportLoad } from "./core/loadtime.js";
 start().then(() => {
-  booted = true;
+  booted = true; reportLoad();
   markRoute();
   offerTour();
   const lapsed = S.app.setup?.has_posts && S.app.settings?.setup_done !== false;   // a Hive already in use whose login has expired isn't a first run: it lands on the chat, with the band saying what to do

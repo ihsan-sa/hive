@@ -1,0 +1,9 @@
+[Unit]
+Description=Hive weekly kb pass, Wednesdays (nothing can come due before 2026-11-18, when the read log reaches 14 days)
+
+[Timer]
+OnCalendar=Wed *-*-* 05:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

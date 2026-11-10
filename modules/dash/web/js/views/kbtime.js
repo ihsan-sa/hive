@@ -223,7 +223,7 @@ export default {
   render(ctx) {
     K.update = ctx.update;
     if (!can("files")) return needFull("Seeing the knowledge base over time");
-    if (!K.D) return K.failed ? empty("Couldn't load the history: " + K.failed, { kind: "error" }) : empty("Reading the backup history…", { kind: "loading" });
+    if (!K.D) return h("div", { class: "page" }, K.failed ? empty("Couldn't load the history: " + K.failed, { kind: "error" }) : empty("Reading the backup history…", { kind: "loading" }));
     const D = K.D;
     if (!D.notes.length) return empty("No backup history of ~/kb yet.", { kind: "page" });
     if (K.sel && !(K.sel.kind === "note" ? D.by.has(K.sel.id) : D.links[K.sel.i])) K.sel = null;
