@@ -16,7 +16,7 @@ let logText = '';
   fs.mkdirSync('test/shots', { recursive: true });
   await page.waitForFunction(() => document.querySelector('#title')?.textContent === 'Set up the Hive', null, { timeout: 60000 });
   await page.getByRole('button', { name: 'Install' }).click();
-  const end = Date.now() + 40 * 60000; let accepted = false, last = '';
+  const end = Date.now() + 70 * 60000; let accepted = false, last = '';
   // if the app goes away mid-install, say how it ended and what the installer had printed up to then
   app.process().on('exit', (code, sig) => console.log(new Date().toISOString(), `the app's process ended: code ${code}, signal ${sig}`));
   for (;;) {

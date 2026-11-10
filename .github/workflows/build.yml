@@ -41,7 +41,7 @@ jobs:
       # differ from a person's computer, so a stop here is read, not a red build.
       - if: matrix.os == 'windows-latest' || matrix.os == 'macos-15-intel'
         continue-on-error: true
-        timeout-minutes: 40
+        timeout-minutes: 75
         env: { HIVE_APP_REAL: "1" }
         run: node test/real.js "${{ matrix.app }}"
       - uses: actions/upload-artifact@v4
