@@ -50,7 +50,7 @@ function lanes(t0, t1) {
   const rest = new Set();
   for (const x of S.sessions) if (x.thread && !taken.has(x.thread) && sEnd(x) >= t0 && x.start <= t1) rest.add(x.thread);
   for (const p of S.posts) if (p.th && !taken.has(p.th) && !SYS.has(p.from) && p.t >= t0 && p.t <= t1) rest.add(p.th);
-  if (rest.size) out.push({ key: "rest", name: src.length ? "Everything else" : "All work, no focuses yet", thread: null, threads: rest, state: null, rest: true });
+  if (rest.size) out.push({ key: "rest", name: src.length ? "Everything else" : F.v ? "All work, no focuses yet" : "All work", thread: null, threads: rest, state: null, rest: true });
   return out;
 }
 /** What a lane holds in the window: runs (with hand-offs), waits on the person, decisions, the person's marks, result posts.
@@ -90,7 +90,15 @@ function read(l, t0, t1) {
   return { runs, hand, waits: waits.filter(w => w.until == null || w.until >= t0), marks: marks.filter(p => p.t >= t0), decided: decided.filter(d => d.t >= t0), results: results.filter(r => r.t >= t0), live };
 }
 /** The words right of now: the open rung, else the last Next: line, else the status bar's second line. */
-function nextWords(l, r) { return sayPlain(nextWords0(l, r), 90); }
+function nextWords(l, r) { return sayPlain(stepWords(nextWords0(l, r)), 90); }
+/** What a rung or Next: line asks for, without the ladder's own marks (R59): its check, an `after:` date, the dated notes agents prepend, its number. */
+function stepWords(t) {
+  const was = rungText(t);
+  let x = was.replace(/\bafter:\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2})?Z?/g, "").replace(/\s*\(\d{4}-\d{2}-\d{2}[^()]*\)/g, "").trim();
+  for (let m; (m = /^\([^()]*\)\s*/.exec(x)); ) x = x.slice(m[0].length);   // whatever note still leads, "(manual sweep: 82 tests)", is about the past
+  x = x.replace(/^[A-Z]\d+[a-z]?(?:\s*[,:.]\s*|\s+(?=[A-Z]))/, "");
+  return x === was ? x : x.charAt(0).toUpperCase() + x.slice(1);   // words cut from the front leave a sentence that starts mid-way
+}
 function nextWords0(l, r) {
   if (l.state && l.state.rung) return rungText(l.state.rung);
   for (let i = r.results.length - 1; i >= 0; i--) { const n = lineOf(r.results[i].post, /^Next:/i); if (n) return n.replace(/^Next:\s*/i, ""); }
@@ -196,7 +204,7 @@ function drawNow() {
     const nx = l.rest ? "" : openW.length ? sayPlain(openW[openW.length - 1].text, 60) : nextWords(l, r);
     list.push({ l, r, open, sub, nx, openW });
     if (nx && !phone) {
-      const tx = s("text", { class: "fl-next", "data-wait": openW.length ? "" : null, x: X1 + 12, y: y + 26 }, short(nx, narrow ? 18 : 38)); tx.append(s("title", null, nx));
+      const tx = s("text", { class: "fl-next", "data-wait": openW.length ? "" : null, x: X1 + 12, y: y + 26 }, short(nx, narrow ? 16 : 32)); tx.append(s("title", null, nx));
       if (openW.length) { const lk = s("a", { href: threadHref(openW[openW.length - 1].post.th), class: "fl-hit" }); lk.append(tx); g.append(lk); } else g.append(tx);
     }
     if (l.thread && !phone) {
@@ -241,7 +249,7 @@ function tick() {
 export default {
   id: "flow", label: "Flow", about: "the work by goal, moving: runs, hand-offs, what waits on you, what comes next",
   tab: ok,
-  enter(ctx) { F.update = ctx.update; F.ver = -1; if (ok()) refresh(ctx); if (!F.raf) F.raf = requestAnimationFrame(tick); },
+  enter(ctx) { F.update = ctx.update; F.ver = -1; F.v = F.v || S.needsYou || null; if (ok()) refresh(ctx); if (!F.raf) F.raf = requestAnimationFrame(tick); },
   leave() { if (F.raf) cancelAnimationFrame(F.raf); F.raf = 0; },
   poll: { every: 5 * MIN, run(ctx) { return refresh(ctx); } },
   render(ctx) {

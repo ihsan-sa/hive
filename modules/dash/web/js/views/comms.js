@@ -9,7 +9,7 @@
 import { h, morph } from "../core/dom.js";
 import { S, SYS, can, OUTSIDE, built, post as apiPost, poll, jget } from "../core/store.js";
 import { simpleOn, plainName, hiveName } from "../core/simple.js";
-import { loadNeedsYou, needsN, needsSplit, needsHref, waitsOn, waitingOn, waitingNow, waitingOlder } from "../core/needs.js";
+import { loadNeedsYou, needsKnown, needsN, needsSplit, needsHref, waitsOn, waitingOn, waitingNow, waitingOlder } from "../core/needs.js";
 import { loadFoci, fociFailed, fociOrder, focusOf, focusById, activeThreads, askedOf, needAt, agentsOf, stateOf, pills, plainPills, needSource, isCode, scrub, codePill, railSay, railTitle, threadLine, focusName, MISC, activityOf, shareOf, fractionWords, pct, usd, needsOf, moveFocus, foci } from "../core/foci.js";
 import { newIn } from "./focus.js";
 import { SIDE_THREAD, chatText, agentState, agentStatus, btwParent, threadParent, threadChildren, isAgent, isRunning, tierOf, threadTitle, threadState, threadPeople, isSystemThread, SHOW, postKind, threadKinds, closingPosts, displayText, postSource, inUse, fresh7, asksQuestion, fileInfo } from "../core/model.js";
@@ -42,14 +42,14 @@ const app = () => S.app.app;
 // What the person chose. C.next: the message search a thread opened from the search box starts with.
 // The conversation list's width: drag its edge, or use the arrow keys on it. Kept on this device.
 const SIDE_MIN = 220, SIDE_MAX = 640;
-let sideW = (() => { try { return Math.min(SIDE_MAX, Math.max(SIDE_MIN, +localStorage.getItem("cm.side") || 272)); } catch (e) { return 272; } })();
+let sideW = (() => { try { return Math.min(SIDE_MAX, Math.max(SIDE_MIN, +localStorage.getItem("cm.side") || 280)); } catch (e) { return 280; } })();
 try { document.documentElement.style.setProperty("--rail-now", sideW + "px"); } catch (e) {}   // the New cell in Chat's bar follows the stored rail width (Nov 9 handoff §A.3)
 const setSide = (box, w) => { sideW = Math.round(Math.min(SIDE_MAX, Math.max(SIDE_MIN, w))); box.style.setProperty("--cm-w", sideW + "px"); document.documentElement.style.setProperty("--rail-now", sideW + "px"); try { localStorage.setItem("cm.side", sideW); } catch (e) {} };
 const grip = () => h("div", { class: "cm-grip", role: "separator", "aria-orientation": "vertical", "aria-label": "Resize the conversation list", tabindex: "0", "data-key": "grip", title: "Drag to resize",
-  onpointerdown: e => { const box = e.target.closest(".cm"), x0 = e.clientX, w0 = sideW; e.target.setPointerCapture(e.pointerId); e.target.dataset.on = "1";
+  onpointerdown: e => { e.preventDefault(); const box = e.target.closest(".cm"), x0 = e.clientX, w0 = sideW; e.target.setPointerCapture(e.pointerId); e.target.dataset.on = "1";
     e.target.onpointermove = m => setSide(box, w0 + m.clientX - x0);
     e.target.onpointerup = e.target.onpointercancel = () => { delete e.target.dataset.on; e.target.onpointermove = e.target.onpointerup = e.target.onpointercancel = null; }; },
-  ondblclick: e => setSide(e.target.closest(".cm"), 272),
+  ondblclick: e => setSide(e.target.closest(".cm"), 280),
   onkeydown: e => { const d = e.key === "ArrowLeft" ? -24 : e.key === "ArrowRight" ? 24 : 0; if (d) { e.preventDefault(); setSide(e.target.closest(".cm"), sideW + d); } } });
 // The side list's two views (the person, 11071518 2bab): "focus" (the default) puts each conversation under its focus, in the order of the
 // home cards, Other last, helpers folded under the one they came from; "recent" is every conversation in one flat list,
@@ -781,15 +781,17 @@ function showChips(ctx) {
     SHOW_PARTS.map(([b, l, t]) => h("button", { type: "button", class: "tm-chip", "data-show": KIND_NAME[b], "aria-pressed": String(!!(mask & b)), title: (mask & b ? "Hide " : "Show ") + t,
       onclick: () => setShow(showMask() ^ b, ctx) }, h("i", { "aria-hidden": "true" }), l)),
     mask ? null : h("p", { class: "meta tm-show-says" }, showSays(mask)));
-  return app() ? h("div", { class: "tm-showwrap" }, group, app() ? h("button", { type: "button", class: "tm-chip tm-chip-imp", "aria-pressed": String(!!C.imp), title: C.imp ? "Show every conversation again" : "Only conversations marked important", "aria-label": "Important only",
-      onclick: () => { C.imp = !C.imp; ctx.update(); } }, icon("star")) : null) : group;
+  return app() ? h("div", { class: "tm-showwrap" }, group) : group;
 }
+// Important only: beside the search, so the three toggles keep one row in a 280 px rail. It stays while searching.
+const importantStar = ctx => h("button", { type: "button", class: "tm-chip tm-chip-imp", "aria-pressed": String(!!C.imp), title: C.imp ? "Show every conversation again" : "Only conversations marked important", "aria-label": "Important only",
+  onclick: () => { C.imp = !C.imp; ctx.update(); } }, icon("star"));
 // In the Show menu: By focus or By recency, and whether the conversations marked Likely not needed are listed at all.
 function viewBar(ctx) {
   const nFaded = [...S.threads.keys()].filter(th => faded(th) && !archived(th)).length;
   return h("div", { class: "cm-views", "data-key": "views" },
-    seg([["focus", "By focus", "Each conversation under its focus, in the order of the home cards, the rest under Other last; helper conversations folded under the one they came from"],
-      ["recent", "By recency", "Every conversation in one list, newest activity first, helper conversations included, each naming the one it came from"]], C.view,
+    seg([["focus", "Focus", "Each conversation under its focus, in the order of the home cards, the rest under Other last; helper conversations folded under the one they came from"],
+      ["recent", "Recent", "Every conversation in one list, newest activity first, helper conversations included, each naming the one it came from"]], C.view,
       v => { C.view = v; store(VIEW_KEY, v); ctx.update(); }, { label: "How the list is arranged" }),
     h("button", { type: "button", class: "tm-chip cm-hidefaded", "aria-pressed": String(C.hideFaded),
       title: C.hideFaded ? `Show the ${nFaded} marked Likely not needed again` : `Hide the ${nFaded} conversations marked Likely not needed`,
@@ -1019,7 +1021,7 @@ function homeMoved() {
 }
 function fociGrid(ctx) {
   // A failed first read leaves an empty stand-in (core/foci.js): say so, not "no focus" (the person, 110901516bcd: cards gone after a dash restart).
-  if (S.foci === undefined || (S.foci.failed && fociFailed())) return h("p", { class: "meta cm-foci-msg" }, fociFailed() ? "Couldn't read the focuses. It keeps trying." : "Reading\u2026");
+  if (S.foci === undefined || (S.foci.failed && fociFailed())) return h("p", { class: "meta cm-foci-msg", "data-loading": fociFailed() ? null : "" }, fociFailed() ? "Couldn't read the focuses. It keeps trying." : "Reading\u2026");
   const fs = fociOrder();
   if (!fs.length) return h("p", { class: "meta cm-foci-msg" }, "No focus yet. Agents make one when work has a goal; every conversation is in the list on the left.");
   return [h("div", { class: "sec-h cm-foci-h", "data-key": "foci-h" }, h("h2", { class: "sec-t" }, "Focuses"), h("span", { class: "sec-n" }, String(fs.length)), h("a", { href: href("flow") }, "Flow")),
@@ -1046,6 +1048,8 @@ function homePane(ctx) {
   // The line counts the last three days and names the rest as older, so new things don't hide behind stale ones (the person, 110812234faa); the Chat badge and Yours keep the whole count.
   // Older ones (olderWhy: a day on work that moved on, two on quiet work) are out of the count and folded into Stuff to address below (the person, 11081245f002).
   const sp = needsSplit();
+  // The list is built from the foci and the needs file, and each arrives on its own: until both are read its count is partial (it read 8, then 13, then 10 while loading, and "Nothing needs you" before that), so the line and rows wait.
+  const settled = !digest || (S.foci !== undefined && S.needsYou !== undefined);
   // The waits head (the Nov 8 handoff §1.2): the count as plain words, and All to the full list on the right when there is more than the rows show.
   const waits = n ? `${n} ${n === 1 ? "waits" : "wait"} on you` : "Nothing new waits on you";
   const all = (n > HOME_WAITS || sp.older) && needsHref() ? h("a", { class: "cm-hline-all", href: needsHref(), title: sp.older ? `${plural(sp.older, "older one")} in Stuff to address` : "What waits on you, newest first, each in its conversation" }, "All") : null;
@@ -1058,9 +1062,9 @@ function homePane(ctx) {
       !n && !local.length && ![...S.threads.values()].some(d => d.posts.some(p => p.from === "person")) ? firstJobs() : null,
       local.some(it => it.state !== "failed") ? closeLine() : null,
       local.length ? h("div", { class: "cm-out", "data-key": "out" }, local.map(it => localMessage(it, outActions))) : null) : null,
-    line ? h("p", { class: "cm-hline", "data-key": "line", "data-needs": n ? "" : null }, line) : null,
-    n ? homeNeeds(waitingNow()) : null,
-    sp.older ? homeOlder(waitingOlder()) : null,
+    settled && line ? h("p", { class: "cm-hline", "data-key": "line", "data-needs": n ? "" : null }, line) : null,
+    settled && n ? homeNeeds(waitingNow()) : null,
+    settled && sp.older ? homeOlder(waitingOlder()) : null,
     digest ? fociGrid(ctx) : null,
     digest ? homeMoved() : null,
     phoneList());
@@ -1091,7 +1095,7 @@ function showSays(mask) {
 export default {
   id: "comms", label: () => (app() ? "Chat" : "Comms"),
   tab: true,
-  badge: () => { if (!app() || !S.live) return null; const n = needsN(); return n ? String(n) : null; },
+  badge: () => { if (!app() || !S.live) return null; if (!simpleOn()) { loadFoci(); loadNeedsYou(); } if (!needsKnown()) return null; const n = needsN(); return n ? String(n) : null; },
   poll: { every: 3000, run: async ctx => { if (await pollDelivered()) ctx.update(); } },
   escape: () => { if (closeQuick()) return; if (C.menu || C.find) { C.menu = null; if (!C.q.trim()) C.find = false; L.ctx && L.ctx.update(); return; } if (!cancelReply() && asideOpen()) closeAside(); },
   enter: () => { C.arrived = true; },
@@ -1154,6 +1158,7 @@ function frame(ctx, c, pane) {
           h("div", { class: "cm-srow" },
             h("div", { class: "cm-search" }, icon("search"),
               input({ type: "search", placeholder: app() ? "Search, or @ to ask" : "Search threads", "aria-label": "Search all conversations by name or content. Start with @ to ask an agent, which answers here and brings up the conversations that help", value: C.tq, oninput: e => { C.tq = e.target.value; ctx.update(); }, onkeydown: e => { if (e.key === "Enter" && aiQ()) { e.preventDefault(); aiAsk(ctx); return; } if (e.key === "Escape") { e.stopPropagation(); C.tq = ""; e.target.value = ""; e.target.blur(); ctx.update(); } } })),
+            app() && !simpleOn() ? importantStar(ctx) : null,
 ),
           app() && c.list && !simpleOn() ? viewBar(ctx) : null,
           simpleOn() ? null : showMenu(ctx),   // always open (the person, 110819287bb8: "always show the filters"), no button to open it

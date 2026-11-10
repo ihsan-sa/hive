@@ -350,6 +350,8 @@ export function threadTitle(th) {
 /** The agent behind "@question" in the side search works here (dash.py, side_ask): an agent like any other in Agents, but its thread is no conversation, so no chat list holds it. */
 export const SIDE_THREAD = "side";
 /** Only the starter, keeper or box ever posted here, or it's the sidebar agent's. */
+/** The hive's own upkeep conversations, as against the work: Agents leaves their runs out of the counts, Timeline folds their rows. */
+export const HOUSE_THREADS = new Set(["thread-status", "keeper", "improve", "watchdog"]);
 export const isSystemThread = d => !!d && (d.name === SIDE_THREAD || d.posts.every(p => SYS.has(p.from)));
 
 // ---- how much of the board someone wants to see: Chat's For you, Updates and Agent comms ----

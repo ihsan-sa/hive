@@ -65,7 +65,7 @@ const WMIN = 340, KEY = "pv.w", MODE = new Map();   // MODE: file key -> "src" w
 const maxW = () => Math.max(WMIN, innerWidth - 320);
 const clampW = w => Math.max(WMIN, Math.min(maxW(), Math.round(w)));
 function setW(w, save) { w = clampW(w); document.documentElement.style.setProperty("--pv-w", w + "px"); if (save) try { localStorage.setItem(KEY, String(w)); } catch (e) {} return w; }
-const P = { root: null, head: null, body: null, grip: null, items: [], i: 0, back: null, seq: 0, ctl: null, list: false };
+const P = { root: null, head: null, body: null, grip: null, items: [], i: 0, back: null, seq: 0, ctl: null, list: false, auto: false };
 
 export const previewOpen = () => !!P.root;
 export const previewKey = () => (P.root && !P.list && P.items[P.i] ? keyOf(P.items[P.i]) : null);
@@ -102,6 +102,7 @@ export function openFiles(auto) {
   shell();
   P.list = true; P.seq++; clearTimeout(P.live); P.ctl && P.ctl.abort(); P.ctl = null;
   P.root.setAttribute("aria-label", "Files"); P.root.dataset.kind = "files"; P.foot.hidden = true;
+  P.auto = auto === true; placeFiles();
   mark();
   import("../preview/files.js").then(m => { if (P.root && P.list) m.drawFiles(P.head, P.body, { open: openPreview, close: closePreview }); });
   if (auto !== true) P.root.focus({ preventScroll: true });
@@ -112,8 +113,9 @@ const AUTO = "pv.autoFiles.off";
 let autoFor = null;
 export function autoFiles(key) {
   if (key === autoFor) return; autoFor = key;
-  if (P.root && P.list) { openFiles(true); return; }   // another conversation: its files
+  if (P.root && P.list) { const by = P.auto; openFiles(true); P.auto = by; return; }   // another conversation: its files, still the hand's if the hand opened it
   let off = false; try { off = !!localStorage.getItem(AUTO); } catch (e) {}
+  if (innerWidth < 1100) autoFor = null;   // seen while narrow doesn't count: the same conversation on a wider window gets its list
   if (off || innerWidth < 1100 || P.root) return;   // narrower, there is never room beside the messages
   setTimeout(() => {   // the messages draw first: open only when this conversation has files and room beside them
     if (key !== autoFor || P.root || !threadFiles().length || !filesRoom()) return;
@@ -127,6 +129,21 @@ export function filesRoom() {
   for (const m of document.querySelectorAll("#main .cm-msgs .msg")) right = Math.max(right, m.getBoundingClientRect().right);
   return right > 0 && innerWidth - right >= FILES_W;
 }
+// The small list sits just under the conversation's head, whose controls it covered when placed by a fixed offset (the top bar's height changes).
+function placeFiles() {
+  const head = P.root && document.querySelector("#main .cm-head");
+  if (head) P.root.style.setProperty("--files-top", Math.round(head.getBoundingClientRect().bottom + 8) + "px");
+}
+// A list that opened by itself goes when the window narrows and it would cover the messages; one opened by hand stays.
+let filesResize = 0;
+addEventListener("resize", () => {
+  clearTimeout(filesResize);
+  filesResize = setTimeout(() => {
+    if (!P.root || !P.list) return;
+    placeFiles();
+    if (P.auto && (innerWidth < 1100 || !filesRoom())) { autoFor = null; closePreview(); }
+  }, 150);
+});
 export function filesClosedByHand() { try { localStorage.setItem(AUTO, "1"); } catch (e) {} }
 
 function shell() {

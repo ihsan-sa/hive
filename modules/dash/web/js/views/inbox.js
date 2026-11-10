@@ -12,6 +12,19 @@ import { button, empty, list, pageHeader, section } from "../ui/kit.js";
 let update = null;
 onInbox(() => update && update());
 const mark = async body => { await markRead(body); if (update) update(); };
+// The starter's notices repeat ("a7c31 waits for provider codex: limit at 96%", 150 of the latest 200): all of the same one are one row with a count. Agents' own messages are never folded.
+const body = p => String(p.text || "").replace(/^\[source thread: [^\]]*\]\s*/, "");   // the starter's routing note isn't for reading
+const sameNotice = p => p.from === "starter" && body(p).split("\n")[0].replace(/[0-9a-f]{5,}/g, "#").replace(/\d+/g, "N");
+function folded(items) {   // items come newest first: a notice joins the row of its newest repeat, wherever that is, so two notices taking turns stay two rows
+  const out = [], seen = new Map();
+  for (const p of items) {
+    const k = sameNotice(p), row = k && seen.get(k);
+    if (row) { row.all.push(p); continue; }
+    const r = { p, key: k, all: [p] };
+    out.push(r); if (k) seen.set(k, r);
+  }
+  return out;
+}
 
 export default {
   id: "inbox", label: "Inbox", about: "every message agents sent you",
@@ -28,14 +41,14 @@ export default {
       header: pageHeader({ title: "Inbox", hint: "Every message an agent sent you, newest first. Chat's home shows the ones that need you now.",
         actions: w && IB.unread ? button("Mark all read", () => mark({ all: true }), { size: "s" }) : null,
         after: IB.err ? h("p", { class: "fmsg", role: "alert", "data-tone": "bad" }, IB.err) : null }),
-      sections: [section({}, list(IB.items.map(p => ({
+      sections: [section({}, list(folded(IB.items).map(({ p, all }) => { const unread = all.filter(x => !x.read).map(x => x.id); return {
         key: p.id, href: threadHref(p.thread),
-        onClick: w && !p.read ? () => mark({ ids: [p.id] }) : null,
-        lead: p.read ? null : h("span", { class: "inb-new", "data-tone": "info" }, "New"),
+        onClick: w && unread.length ? () => mark({ ids: unread }) : null,
+        lead: unread.length ? h("span", { class: "inb-new", "data-tone": "info" }, "New") : null,
         title: threadTitle(p.thread), sub: p.from,
-        meta: [ago(Date.parse(p.at)), p.answered ? "you've replied since" : null, p.files ? plural(p.files, "file") : null].filter(Boolean).join(" · "),
-        text: firstSentence(displayText({ text: p.text })),
-      })), { empty: "Nothing yet. When an agent needs you or finishes something you asked for, it shows here." }))],
+        meta: [ago(Date.parse(p.at)), all.length > 1 ? `${all.length} like this` : null, p.answered ? "you've replied since" : null, p.files ? plural(p.files, "file") : null].filter(Boolean).join(" · "),
+        text: firstSentence(displayText({ text: body(p) })),
+      }; }), { empty: "Nothing yet. When an agent needs you or finishes something you asked for, it shows here." }))],
     });
   },
 };

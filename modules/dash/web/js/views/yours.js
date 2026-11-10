@@ -4,7 +4,7 @@
 import { h } from "../core/dom.js";
 import { S, can } from "../core/store.js";
 import { yoursPosts, yoursSearch, yoursItems, yoursText } from "../core/yours.js";
-import { waitingOn, waitingLater, waitingMoot, needsPage, olderWhy, needsN } from "../core/needs.js";
+import { waitingOn, waitingLater, waitingMoot, needsPage, olderWhy, needsN, needsSplit } from "../core/needs.js";
 import { quickPanel, closeQuick, laterButtons, setLater, quickIs } from "../ui/quick.js";
 import { answerer, flat } from "./comms.js";
 import { agentRef } from "../ui/refs.js";
@@ -92,7 +92,8 @@ function page(ctx) {
   const lead = waits
     ? "What waits on you, newest first: each one opens in its conversation, at that message."
     : "Every exchange you had, newest first: what you said, what was said to you, and each agent's answer. An entry opens in its conversation, at that message.";
-  const meta = !base.length ? null : Y.q ? `${plural(rows.length, "match")} of ${base.length}` : `${plural(base.length, waits ? "thing" : "exchange")} in ${plural(threads, "conversation")}`;
+  const split = needsSplit();   // the switch below counts the recent ones only: say both halves, so 5 there and 47 here don't look like a mistake
+  const meta = !base.length ? null : Y.q ? `${plural(rows.length, "match")} of ${base.length}` : waits ? `${split.recent} recent, ${split.older} older, in ${plural(threads, "conversation")}` : `${plural(base.length, "exchange")} in ${plural(threads, "conversation")}`;
   // One switch between the two lists (the Nov 8 handoff §4.2); the full Needs you page stays reachable from the home's "All".
   const n = needsN();
   const actions = h("span", { class: "seg yr-seg", role: "group", "aria-label": "Show" },

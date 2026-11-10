@@ -41,7 +41,7 @@
 .kb-q input:focus~kbd,.kb-q input:not(:placeholder-shown)~kbd{display:none}
 
 /* ---------- main pane ---------- */
-.kb-main{min-width:0;min-height:0;overflow:auto;background:var(--surface);scroll-padding-top:64px}
+.kb-main{position:relative;min-width:0;min-height:0;overflow:auto;background:var(--surface);scroll-padding-top:64px}   /* positioned, so the note's absolute bits (.vh labels) scroll and clip with it instead of making the whole page taller */
 .kb-find{position:sticky;top:0;z-index:4;padding:var(--s3) var(--gutter);background:color-mix(in oklab,var(--surface) 90%,transparent);backdrop-filter:blur(10px)}
 .kb-find .kb-q{max-width:calc(var(--kb-col) - 2*var(--gutter));margin-inline:auto}
 .kb-find .kb-q input{height:var(--ctl-l);border-radius:var(--r-l);background:var(--bg);border-color:transparent;font-size:var(--fs-body)}
@@ -310,7 +310,7 @@
   .kb-ask-in{font-size:16px}
   .kb-ask-tip{display:none}
   .kb-ask[data-state=idle] .kb-ask-f{min-height:0;padding:var(--s3) var(--s2) var(--s2) var(--s4);grid-template-rows:none}
-  .kb-ask[data-state=idle] .kb-ask-in{grid-column:1;align-self:center}
+  .kb-ask[data-state=idle] .kb-ask-in{grid-column:1;align-self:center;min-height:60px}   /* room for the placeholder's two lines, or the box shrinks on the first letter typed */
   .kb-ask-send{width:36px;height:36px}
   .kb-ask-link{height:28px}
   .kb-ask-d{display:none}                            /* the name is enough on a phone; the list below gives paths */

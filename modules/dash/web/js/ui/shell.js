@@ -12,7 +12,7 @@ import { ago, clock, dur, lostText, now, plural, stamp } from "../core/format.js
 import { href } from "../core/router.js";
 import { layout, moreGroups, rowItems } from "../core/nav.js";
 import { getTheme, cycleTheme, setTheme, THEMES } from "../core/theme.js";
-import { statusDot, button, icon, scrim, setPageRow } from "./kit.js";
+import { statusDot, button, icon, scrim, setPageRow, signInAgain } from "./kit.js";
 import { banner } from "./banner.js";
 import { newVersionNote } from "./newversion.js";
 import { startCall, phoneReady, inCall } from "./phone.js";
@@ -172,8 +172,8 @@ function modeBadge(mode) {
     return h("span", { class: "top-route", "data-mode": "full", title: `Full mode. It stays on while you use the app, and drops to limited after 30 minutes with no clicks or typing. ${caps}` },
       m <= 10 ? `full, ${m} min left` : "full");
   }
-  if (mode === "expired") return h("a", { class: "top-route", "data-mode": "limited", href: "/cdn-cgi/access/logout",
-    title: `Limited: full mode ended after 30 minutes without use, so commands, settings and logins are hidden. This signs you out; open this page again and sign in with Google to get full back. ${caps}` }, "Limited · sign in for full");
+  if (mode === "expired") return h("a", { class: "top-route", "data-mode": "limited", href: "/cdn-cgi/access/logout", onclick: signInAgain,
+    title: `Limited: full mode ended after 30 minutes without use, so commands, settings and logins are hidden. Click to sign in with Google and get full back. ${caps}` }, "Limited · sign in for full");
   if (mode) return h("span", { class: "top-route", "data-mode": "limited", title: `Your sign-in is limited: you can read, post and stop agents. ${caps}` }, "Limited");
   return h("span", { class: "top-route", title: caps }, can("post") ? "outside access" : "read-only");
 }

@@ -412,6 +412,15 @@ def recall_note(name, ps):
     except (OSError, subprocess.SubprocessError): return ""
     return "\n\n" + r.stdout.strip() if r.returncode == 0 and r.stdout.strip() else ""
 
+def nested(rec, payload):
+    """True for the hooks of a `claude -p` an agent started inside its own run: it inherits HIVE_NAME, so its Stop used up the run's one
+    filing ask and it could take the agent's posts (a44e1, 2026-11-09: five stops in one run, the ask went to its test of a model; R34).
+    A real run's session is the record's, or one the run's own output names if it changed; a tool result quoting one is escaped, so it can't match."""
+    sid, own = payload.get("session_id"), rec.get("session")
+    if not sid or not own or sid == own or rec.get("harness") != "claude-code": return False
+    try: return f'"session_id":"{sid}"'.encode() not in Path(rec["out"]).read_bytes()
+    except (OSError, KeyError, TypeError): return False
+
 def main():
     name = os.environ.get("HIVE_NAME", "").lower()
     if not name: return
@@ -421,6 +430,7 @@ def main():
         except (OSError, ValueError): return
     try: payload = json.load(sys.stdin)
     except ValueError: payload = {}
+    if nested(rec, payload): return
     event = payload.get("hook_event_name", "")
     if not os.environ.get("HIVE_DOOR"):  # what this agent read, for `kb stats`. Must never stop a post being delivered
         try:

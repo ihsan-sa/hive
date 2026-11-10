@@ -341,11 +341,15 @@ def lint(st, posts=None, only=None):
             out.append({"focus": f["id"], "kind": "stale", "what": f"a result was posted in #{p['thread']} by {p.get('from')} after the summary", "fix": f"the agent that posts a result updates the summary in the same run: hive focus set {f['id']}"})
     return out
 
+def asked_only(thread):
+    """An "Ask the Hive" conversation answers a question from the notes: it can be filed under a focus, but no work moved, so its answer owes the card nothing (ad775, 2026-11-09; R34)."""
+    return str(thread).startswith("kb-ask-")
+
 def nudge(name, thread, since, posts=None):
     """For the inbox hook: one line when `name` posted a result in `thread` since `since` and the thread's focus has an older summary (or none). None otherwise."""
     st = state(); posts = board_posts() if posts is None else posts
     fid = focus_of(st, thread, posts)
-    if not fid: return None
+    if not fid or asked_only(thread): return None
     f = find(st, fid)
     mine = [p for p in posts if p.get("thread") == thread and str(p.get("from", "")).lower() == name and ts(p.get("at")) >= since]
     t, p = newest_result({thread}, mine)

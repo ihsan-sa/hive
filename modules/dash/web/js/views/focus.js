@@ -9,7 +9,7 @@ import { threadTitle, agentOn } from "../core/model.js";
 import { plural, dur, ago } from "../core/format.js";
 import { href, go, threadHref } from "../core/router.js";
 import { simpleOn, plainName } from "../core/simple.js";
-import { button, empty, statusWord, section } from "../ui/kit.js";
+import { button, empty, statusWord, section, waiting } from "../ui/kit.js";
 import { agentRef } from "../ui/refs.js";
 import { loadFoci, fociFailed, focusById, focusOf, threadsOf, needsOf, askedOf, agentsOf, stateOf, pills, plainPills, needSource, scrub, threadLine, focusName, MISC, FOCI_EVERY, activityOf, shareOf, fractionWords, pct, usd } from "../core/foci.js";
 import { waitingLater } from "../core/needs.js";
@@ -151,7 +151,7 @@ function shareSec(id) {
 
 function page(ctx) {
   const id = idOf(ctx.arg), f = id ? focusById(id) : MISC;
-  if (!f) return h("div", { class: "page fp" }, S.foci ? empty(`No focus called ${ctx.arg}. It may have been merged or renamed.`, { kind: "empty" }) : empty("Reading…", { kind: "loading" }), h("p", null, h("a", { href: href("comms") }, "Back to Chat")));
+  if (!f) return h("div", { class: "page fp" }, S.foci && !S.foci.failed ? empty(`No focus called ${ctx.arg}. It may have been merged or renamed.`, { kind: "empty" }) : waiting(fociFailed(), "Reading…", "the focuses"), h("p", null, h("a", { href: href("comms") }, "Back to Chat")));
   const st = stateOf(id), rows = threadsOf(id), active = rows.filter(r => r.active && !archived(r.th)), quiet = rows.filter(r => !r.active && !archived(r.th)), arch = rows.filter(r => archived(r.th));
   const ag = agentsOf(id), needs = needsOf(id), live = needs.filter(w => w.src !== "summary"), asked = askedOf(id), sum = f.summary, checks = f.checks || [], done = checks.filter(c => finished(c));
   const now = sumLines(sum, "now"), lately = sumLines(sum, "lately"), up = updatedAt(f, rows), name = focusName(f);

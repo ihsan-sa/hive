@@ -219,6 +219,8 @@ class Hunt:
         self.s, self.case, self.log = spec, case, log
         self.target = int(spec.get("target", 25))
         self.per_org = int(spec.get("per_org", 2))
+        for k, v in (("target", self.target), ("per_org", self.per_org)):
+            if v < 1: raise ValueError(f"spec {k} must be at least 1, not {v}")
         self.must = list(spec.get("must", []))
         self.role, self.exclude = _pattern(spec, "roles"), _pattern(spec, "exclude_roles")
         self.angles = spec.get("angles") or ['"{org}" dean artificial intelligence', '"{org}" news release artificial intelligence program']
@@ -227,6 +229,9 @@ class Hunt:
             except (KeyError, IndexError, ValueError) as e: raise ValueError(f"spec angle {a!r} doesn't format: {{org}} is the only slot, and a literal brace is written twice ({e})")
         self.sources = engines.expand(spec.get("sources") or ["web"])
         self.domains = spec.get("domains") or {}
+        if not isinstance(self.domains, dict): raise ValueError("spec domains must map an organisation to a site or a list of sites")
+        for o, d in self.domains.items():
+            if not (isinstance(d, str) or (isinstance(d, list) and all(isinstance(x, str) for x in d))): raise ValueError(f"spec domains for {o!r} must be a site or a list of sites")
         self.deadline = time.monotonic() + float(spec.get("max_seconds", 1800))
         self.read = int(spec.get("read_per_search", 4))
         self.allow_secondary = spec.get("allow_secondary", True)

@@ -2,7 +2,7 @@
 // so recent work doesn't sit in a sliver at the right. A bar's name shows only if it fits; hover or focus shows it always.
 import { h, s, morph } from "../core/dom.js";
 import { S, SYS, getPref, setPref } from "../core/store.js";
-import { agentStatus, isRunning, sEnd, threadTitle, tierOf } from "../core/model.js";
+import { HOUSE_THREADS, agentStatus, isRunning, sEnd, threadTitle, tierOf } from "../core/model.js";
 import { clock, dayName, dur, mdPlain, now, short, stamp, DAY, HOUR, MIN } from "../core/format.js";
 import { agentHref, threadHref } from "../core/router.js";
 import { status, tier } from "../core/status.js";
@@ -17,7 +17,7 @@ const PRE = [["fit", "Fit", "Fit the current run of activity"], ["1h", "1h"], ["
 const WIN = { "1h": HOUR, "6h": 6 * HOUR, "24h": DAY, "3d": 3 * DAY, "7d": 7 * DAY };
 // T.fit: the window comes from the data. Otherwise T.win is the span and T.end its right edge; a null end follows now.
 const savedWin = getPref("tlWin", "fit");   // "fit" or a preset's key
-const T = { fit: !WIN[savedWin], win: WIN[savedWin] || DAY, end: null, active: !!getPref("tlActive", 0), ver: -1, w: 0, last: 0, raf: 0, nLive: 0, nDone: 0, update: () => {} };
+const T = { fit: !WIN[savedWin], win: WIN[savedWin] || DAY, end: null, active: !!getPref("tlActive", 0), house: !!getPref("tlHouse", 0), ver: -1, w: 0, last: 0, raf: 0, nLive: 0, nDone: 0, update: () => {} };
 
 const sLive = x => !x.end && isRunning(x.name);
 const gutter = W => (T.fitRows ? 128 : W < 640 ? 96 : 190);
@@ -75,9 +75,9 @@ function lanes(t0, t1) {
   for (const x of S.sessions) { const e = sEnd(x); if (e < t0 || x.start > t1) continue; if (sLive(x)) nLive++; else { nDone++; if (T.active) continue; } const l = lane(x.thread || "(none)"); l.bars.push(x); l.last = Math.max(l.last, e); }
   for (const p of S.posts) { if (p.t < t0 || p.t > t1 || SYS.has(p.from)) continue; if (T.active && !all.has(p.th)) continue; const l = lane(p.th); l.ticks.push(p); l.last = Math.max(l.last, p.t); }
   const rank = l => Math.max(l.last, S.threads.get(l.th)?.last || 0), live = l => l.bars.some(sLive);   // rows keep their order as the view moves
-  for (const l of all.values()) l.live = live(l);
+  for (const l of all.values()) { l.live = live(l); l.house = !T.fitRows && HOUSE_THREADS.has(l.th); }   // upkeep rows go after the work; a display tile keeps its own who's-running order
   T.nLive = nLive; T.nDone = nDone;
-  return [...all.values()].sort((a, b) => b.live - a.live || rank(b) - rank(a));
+  return [...all.values()].sort((a, b) => a.house - b.house || b.live - a.live || rank(b) - rank(a));
 }
 const barTone = x => (sLive(x) ? status(agentStatus(x.name).key) : x.exit ? { tone: "bad", shape: "diamond" } : { tone: "ended", shape: "dot" });
 const barTip = (x, th) => () => [x.name, `${threadTitle(th)} · ${clock(x.start)}${x.end ? "–" + clock(x.end) : ", still running"} · ${dur(sEnd(x) - x.start)}`, `${x.resumed ? "woken" : "started"} by ${x.from || "?"}` + (x.exit ? ` · exit ${x.exit}` : "")];
@@ -95,6 +95,10 @@ function placeBars(l, W, x) {
   const byStart = (a, b) => a.start - b.start;
   if (T.fitRows) {
     l.bars.filter(sLive).sort(byStart).forEach(b => put(b, true));
+    l.bars.filter(b => !sLive(b)).sort((a, b) => sEnd(b) - sEnd(a)).forEach(b => put(b, false));
+    placed.sort((a, b) => byStart(a.s, b.s));
+  } else if (l.house && !T.house) {   // an upkeep row is one line unless asked for (R55): it runs dozens of short sessions, and stacked they push the work off the page
+    l.bars.filter(sLive).sort(byStart).forEach(b => put(b, false));
     l.bars.filter(b => !sLive(b)).sort((a, b) => sEnd(b) - sEnd(a)).forEach(b => put(b, false));
     placed.sort((a, b) => byStart(a.s, b.s));
   } else [...l.bars].sort(byStart).forEach(b => put(b, true));
@@ -210,13 +214,14 @@ function toolbar() {
       small("−", "Zoom out", () => zoom(1.6, centre())), small("+", "Zoom in", () => zoom(1 / 1.6, centre())),
       small("←", "Earlier", () => pan(-T.win / 4)), small("→", "Later", () => pan(T.win / 4))),
     !T.fit && T.end != null ? button("Now", () => set(T.win, null), { size: "s", title: "Back to the latest, following now" }) : null,
-    seg([["on", "Active only", "Show only the agents running now, and the rows they're on"]], T.active ? "on" : null, () => { T.active = !T.active; setPref("tlActive", T.active ? 1 : 0); T.ver = -1; draw(); T.update(); }, { label: "Filter" })),
+    seg([["on", "Active only", "Show only the agents running now, and the rows they're on"]], T.active ? "on" : null, () => { T.active = !T.active; setPref("tlActive", T.active ? 1 : 0); T.ver = -1; draw(); T.update(); }, { label: "Filter" }),
+    seg([["on", "All upkeep", "Upkeep rows (status notes, the keeper, the watchdog) are one line each; this shows every run on them"]], T.house ? "on" : null, () => { T.house = !T.house; setPref("tlHouse", T.house ? 1 : 0); T.ver = -1; draw(); T.update(); }, { label: "Upkeep rows" })),
     infoButton("About this chart", say(HELP), { size: "s" }),
     h("span", { class: "cvp-count" }, `${stamp(r.t0)} – ${r.follows ? "now" : stamp(r.t1)} (${dur(r.t1 - r.t0)})`),
     h("span", { class: "cvp-count", role: "status" }, `${T.nLive} running, ${T.nDone} ended in this range`),
   ];
 }
-const HELP = "Each row is a thread, each bar an agent's session (filled with a status mark at its end while running; pale and dashed once ended; rows with someone running come first), each tick along the top of a row a post. Stacked bars mean agents worked in parallel. A bar's name shows when it fits: hover for any. Click a bar for the agent, a row to read the thread. To zoom: Ctrl+scroll or pinch, or the − and + buttons. Drag sideways to move through time.";
+const HELP = "Each row is a thread, each bar an agent's session (filled with a status mark at its end while running; pale and dashed once ended; rows with someone running come first, the hive's own upkeep rows last and one line each), each tick along the top of a row a post. Stacked bars mean agents worked in parallel. A bar's name shows when it fits: hover for any. Click a bar for the agent, a row to read the thread. To zoom: Ctrl+scroll or pinch, or the − and + buttons. Drag sideways to move through time.";
 const NOTE = "A row is a thread, a bar is an agent's session, a tick is a post. Click a bar for the agent, a row for the thread.";
 const say = t => (S.app.app ? t.replace(/\bthread\b/g, "conversation").replace(/\bpost\b/g, "message") : t);
 const note = () => [say(NOTE), h("div", { class: "legend" },
