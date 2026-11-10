@@ -368,7 +368,7 @@ def focus_nudge(name, rec):
             if run == rec["at"]: results_from = max(since, float(last))
         except (OSError, ValueError): pass
         posts = focus.board_posts()
-        summary = focus.nudge(name, thread, results_from, posts)
+        summary = "\n\n".join(focus.summary_nudges(name, thread, results_from, posts))
         msg = "\n\n".join(x for x in (summary, *(focus.file_nudge(name, th, since, posts) for th in focus.threads_posted(name, thread, since, posts))) if x)
     except Exception: return None
     if not msg: return None

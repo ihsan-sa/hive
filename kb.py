@@ -907,6 +907,8 @@ def cmd_file(a):
     if sim:
         print("similar, so merge if it's the same fact (kb file --to NAME.md appends):")
         for h in sim[:4]: print("  " + fmt_path(h["path"]) + ":" + str(h["line"]))
+    if kbuse and kbuse.RARE_KIND.search(a.title + " " + text) and not kbuse.KEEP.search(text):
+        print("if this is read rarely and matters when it is (a price, supplier terms, where a credential lives, how to recover something), add a line `kb-keep: why` so the weekly pass never retires it")
     log({"filed": os.path.relpath(full, H), "to": bool(a.to)})
     if src or a.focus:  # the focus page lists what was filed under it (core/focus.py file)
         cmd = [sys.executable, "-I", os.path.join(H, "core", "focus.py"), "file", os.path.relpath(full, H)] + (["--post", src["id"]] if src else []) + (["--focus", a.focus] if a.focus else [])

@@ -345,8 +345,9 @@ def asked_only(thread):
     """An "Ask the Hive" conversation answers a question from the notes: it can be filed under a focus, but no work moved, so its answer owes the card nothing (ad775, 2026-11-09; R34)."""
     return str(thread).startswith("kb-ask-")
 
-def nudge(name, thread, since, posts=None):
-    """For the inbox hook: one line when `name` posted a result in `thread` since `since` and the thread's focus has an older summary (or none). None otherwise."""
+def nudge(name, thread, since, posts=None, own=None):
+    """For the inbox hook: one line when `name` posted a result in `thread` since `since` and the thread's focus has an older summary (or none). None otherwise.
+    `own` is the run's own thread: any other thread is named in the line, since "this thread" would point the agent at the wrong card."""
     st = state(); posts = board_posts() if posts is None else posts
     fid = focus_of(st, thread, posts)
     if not fid or asked_only(thread): return None
@@ -356,7 +357,7 @@ def nudge(name, thread, since, posts=None):
     if not p: return None
     s = f.get("summary")
     if s and float(s.get("at") or 0) >= t: return None
-    return (f"This thread is in the focus \"{f['name']}\" and its summary is {'older than your result' if s else 'not written yet'}. The person reads the focus card, "
+    return (f"{'This thread' if own in (None, thread) else f'#{thread}, where you posted a result,'} is in the focus \"{f['name']}\" and its summary is {'older than your result' if s else 'not written yet'}. The person reads the focus card, "
             f"not the thread, so update it now, in plain words (what is being done and by whom, what changed), with @agent and #thread where they help:\n"
             f"hive focus set {f['id']} <<'X'\n## Now\n- …\n## Lately\n- …\nX")
 
@@ -381,6 +382,16 @@ def threads_posted(name, thread, since, posts):
         th = p.get("thread")
         if th and th not in out and str(p.get("from", "")).lower() == name and ts(p.get("at")) >= since: out.append(th)
     return out[:5]
+
+def summary_nudges(name, thread, since, posts):
+    """The summary reminders for a run: one per focus, over every thread it posted a result in, as the file ask does (rsi-lab-pickups: a keeper or a lab run posting its result in another focus's thread left that card stale)."""
+    st, out, seen = state(), [], set()
+    for th in threads_posted(name, thread, since, posts):
+        fid = focus_of(st, th, posts)
+        if fid in seen: continue
+        m = nudge(name, th, since, posts, own=thread)
+        if m: seen.add(fid); out.append(m)
+    return out
 
 def file_nudge(name, thread, since, posts=None):
     """For the inbox hook: one line, once per conversation ever, when `name` posted in `thread` since `since` and the thread is in no
