@@ -63,6 +63,22 @@ Run `research hunt spec.json --dry-run` first. It searches nothing and writes no
 
 List `roles` most wanted first: when an org's `per_org` cap is hit on a page, the earlier roles get the places. It tries every angle on every org, finds more orgs from `discover`, and writes `leads.csv` (each row with its page and quote), `near_misses.csv` and `REPORT.md`. A row needs the person, the title and a `must` word near them on a page that names the org. If it can't reach the target it says it's short and exits 3: it never pads. Run it again on the same case to continue.
 
+### Spec checks
+
+Each setting below is checked before anything is searched. "Exit 2" means the hunt stops and names the key, in a real run and in `--dry-run`; a warning is printed by `--dry-run` only.
+
+| Key | Exit 2 when | `--dry-run` warns when |
+|---|---|---|
+| `orgs`, `discover`, `angles` | not a list of strings | `orgs` has a duplicate or blank entry; an angle has no `{org}` |
+| `roles`, `exclude_roles`, `org_pattern` | not a string, or not a valid regex | `exclude_roles` matches the `roles` pattern itself; `roles` missing |
+| `must` | not a word or a list of words | missing |
+| `sources` | names something `research sources` doesn't know | |
+| `target`, `per_org` | not a number, or below 1 | `target` can't be reached with these orgs; `target` above 1000 |
+| `workers`, `max_seconds`, `read_per_search`, `stale_days`, `max_age_years` | not a number | `workers` above 32 or above the search count; `max_seconds` under 60 or too short for the estimate; `read_per_search` below 1; `stale_days` or `max_age_years` 0 or less |
+| `allow_secondary`, `allow_page_signal` | not true or false | |
+| `domains` | not a map of org to site or list of sites | a key matching no org; an entry that is not a bare site |
+| `pages` | not a map of org to URL or list of URLs | a URL that is not http(s) or is on another site than `domains` |
+
 ## Prediction, honestly
 
 `forecast` compares several simple methods on the series' own past and reports the winner's skill against "same as last time". `skill_vs_naive` is scored on the same backtests that chose the method, so it flatters; `skill_heldout` chooses on the earlier backtests and scores on the later ones, and a warning says when that doesn't clearly beat "same as last time". Believe the warning. Intervals are the backtest's own errors, widened a little because they overlap and helped pick the method, and there is none where there are under 8 of them. On a series that is all positive, errors are also taken as shares of the level and the wider interval is used, so compound growth and a season whose swing grows with the level still cover about 80% (3% growth at 100 points: 89-93%, up from 57-64%); a short seasonal series (three seasons) still runs narrow, and so does a series with a one-off jump in level (71-87% in the reviewer's runs), because past errors can't foresee a jump; every forecast warns that its ranges are nominal. On 8 real series they covered 80% pooled, but 67-93% by series. On those series it beat "same as last time" in all 16 rows, though two were near ties, and beat "same time last season" in only 4 of 8, so with `--season` compare the plain `seasonal` row in `methods` yourself. It can't find a season length on its own. `trend` allows for values that follow on from each other, and won't call a trend when a series wanders so much that one run can't tell the two apart. `rank` needs at least ten of each outcome, reports cross-validated AUC with its low end, and warns when that low end can't be told from chance; on pure noise about one run in 20 still passes, as a one-sided 95% bound should, and the bound only holds if you chose `--features` before looking at the outcomes (picking the best few of many on the same rows passes noise almost every time) and each row is a separate case (repeated rows warn); text it can't read as a number is an error, not a zero. Hand-set `--weights` are labelled as opinion. With no `--column`, `forecast` uses the last numeric column and says which: check it isn't the year. A ledger shows whether your probabilities were any good, once enough have resolved.

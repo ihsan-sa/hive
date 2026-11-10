@@ -6,10 +6,10 @@ import { signPost } from "./sign.js";
 export const OUTSIDE = new Set(["person", "hives"]);
 export const SYS = new Set(["starter", "dash", "anon", "all", "400", "mention", "name"]);
 
-// Which of the two apps this browser last saw (/api/app "app"): the first paint draws that shell, not the developer one, in the moment before the server answers.
-const lastApp = () => { try { return localStorage.getItem("appRoute") === "1"; } catch (e) { return false; } };
+// Which of the two apps this browser last saw (/api/app "app"): the first paint draws that shell in the moment before the server answers. A browser with nothing remembered draws the app's, with no pages in its bar (pending), since it can't know yet which pages this Hive shows.
+const lastApp = () => { try { return localStorage.getItem("appRoute"); } catch (e) { return null; } };
 export const S = {
-  app: { route: "open", can: null, app: lastApp(), setup: null },
+  app: { route: "open", can: null, app: lastApp() !== "0", pending: lastApp() === null, setup: null },
   live: null, usage: null, projects: null, agentCosts: null, threadNames: {}, threadMeta: {}, shown: [], threadStatus: {}, agentStatus: {},
   posts: [], byId: {}, threads: new Map(), off: 0, boardStart: null,
   sessions: [], lastByThread: {}, lastSess: {}, open: {}, byOut: {}, woke: {}, logOff: 0, logStart: null, history: false,
@@ -210,7 +210,7 @@ export async function loadAgentCosts() {
   } catch (e) { return S.agentCosts; }
 }
 export async function loadApp() {
-  try { const v = await jget("/api/app"); const was = JSON.stringify(S.app); Object.assign(S.app, v); try { localStorage.setItem("appRoute", S.app.app ? "1" : "0"); } catch (e) {} if (JSON.stringify(S.app) !== was) emit({ app: true }); } catch (e) {}
+  try { const v = await jget("/api/app"); const was = JSON.stringify(S.app); Object.assign(S.app, v); delete S.app.pending; try { localStorage.setItem("appRoute", S.app.app ? "1" : "0"); } catch (e) {} if (JSON.stringify(S.app) !== was) emit({ app: true }); } catch (e) {}
 }
 /** Readable names for number threads, from the Slack mirror's indexer. Display only: the board and every link keep the id. */
 export async function loadThreadNames() {

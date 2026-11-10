@@ -183,8 +183,8 @@ export function topBar({ views, current, update, nav }) {
   const simple = simpleOn();
   const mode = S.app.mode, route = simple || S.app.route !== "outside" ? null : modeBadge(mode);
   const th = getTheme(), app = S.app.app && nav;
-  // During the walkthrough only Settings (for Accounts) and Help: no tabs to wander off to before setup is finished.
-  const setup = app && S.app.settings && S.app.settings.setup_done === false;
+  // During the walkthrough only Settings (for Accounts) and Help: no tabs to wander off to before setup is finished. The same bar while a first-ever visit waits to hear which pages there are.
+  const setup = app && (S.app.pending || S.app.settings && S.app.settings.setup_done === false);
   NAV.update = update;
   let tabs, row = null, icons = [], extra = null;
   if (!app) tabs = views.filter(on).map(v => tabLink(v, current));

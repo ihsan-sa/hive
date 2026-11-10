@@ -4,6 +4,21 @@ Release notes are on the [releases page](https://github.com/ihsan-sa/hive/releas
 
 A release can ship several times a day. A Hive installs each one as soon as it's out; **How often to update** in Settings can slow that to about once a day. The latest is at [releases/latest](https://github.com/ihsan-sa/hive/releases/latest).
 
+## Finger-sized controls on a phone
+
+Buttons and links on Yours, Agents and Flow are now big enough to tap on a phone, and the rows of Agents stay as short as they were.
+
+## The Chat badge settles before it shows
+
+The Chat badge shows one number from the start, instead of a number that changes a moment later. It and the line on Chat's front page now wait until everything that goes into the count has arrived.
+
+## Chat's front page waits in grey
+
+While Chat's front page reads, grey blocks stand where the waiting rows and the focus cards will land, in place of the bare Reading line.
+
+## The top bar is there from the first moment
+The bar across the top now appears as soon as the page opens, at its full height, instead of after a blank moment. The first time a browser opens a Hive, the bar shows your logo and menu until the Hive answers, and the developer bar no longer flashes up.
+
 ## Slow pages wait in their own shape
 While **Knowledge**, **Usage**, **This machine**, **Admin jobs** and **Design** read their data, grey blocks now stand where the content will land, instead of one line of "Reading…". The list in **Chat** also waits in grey until it knows your focuses, so it no longer draws flat and then re-sorts into groups.
 

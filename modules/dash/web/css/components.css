@@ -16,6 +16,7 @@
 .brand{display:flex;align-items:center;gap:8px;font-weight:var(--w-bold);font-size:var(--fs-title);letter-spacing:-.01em;color:var(--ink);text-decoration:none;white-space:nowrap}
 /* consumer: tabs are a segmented control */
 .tabs{display:flex;gap:2px;padding:3px;border-radius:var(--r-m);background:var(--sunken);overflow-x:auto;scrollbar-width:none;min-width:0}
+.tabs:empty{display:none}   /* setup and a first-ever visit have no pages to show: no empty pill */
 .tabs::-webkit-scrollbar{display:none}
 .tab{position:relative;display:flex;align-items:center;gap:6px;height:28px;padding:0 12px;border:0;border-radius:var(--r-s);background:none;color:var(--ink-2);font-size:var(--fs-small);font-weight:var(--w-med);text-decoration:none;white-space:nowrap;cursor:pointer}
 .tab:hover{color:var(--ink)}
@@ -469,7 +470,7 @@ table.tbl .clip{width:100%;max-width:0;overflow:hidden;text-overflow:ellipsis}
 @container (max-width:640px){.skel-tr{grid-template-columns:minmax(0,1fr) 22%}.skel-tr>:nth-child(n+3){display:none}.skel-box{height:96px}.skel-tall .skel-card{height:160px}}
 @keyframes skel-in{from{opacity:0}}
 @keyframes skel-p{50%{opacity:.5}}
-@media (prefers-reduced-motion:reduce){.skel,.skel-b,.skel-x{animation:none}}
+@media (prefers-reduced-motion:reduce){.skel,.skel-b,.skel-x,.cm-hwait,.cm-foci-h[data-wait],.cm-fwait{animation:none}}
 
 /* ---- agentCard ---- */
 .agents{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,360px),1fr));column-gap:var(--s6)}
@@ -1409,7 +1410,6 @@ a.ref:is([data-kind=file],[data-kind=kbfile])[data-pv-on]{background:color-mix(i
 .cm-foci>*{min-width:0}
 .cm-foci-msg{max-width:720px;margin:var(--s6) auto 0;padding:var(--s6) var(--s5);border:1px dashed var(--line-2);border-radius:var(--r-l);text-align:center;display:grid;gap:6px;justify-items:center}
 .cm-foci-msg{width:100%}   /* auto margins alone shrink it to its words inside the home's grid */
-.cm-foci-msg[data-loading]{margin-top:0;border:0;padding:var(--s3) 0}   /* the focuses are on their way: a quiet line, not an empty card */
 .cm-foci-msg b{font-size:var(--fs-title)}
 .cm-foci-msg p{margin:0;color:var(--ink-2);font-size:var(--fs-small);max-width:52ch}
 .cm-foci-msg[data-tone=bad] b{color:var(--bad-ink)}
@@ -3215,6 +3215,15 @@ kbd.menu-i-r{font-family:inherit;font-size:var(--fs-meta)}
 /* no CSS: pass lead: null in inbox.js and agents.js; keep the text as the h1's title. */
 /* R42: the Focuses head sits on its cards, not a whole home gap (--s6) above them */
 .cm-home>.cm-foci-h+.cm-foci{margin-top:calc(var(--s2) - var(--s6))}
+/* the home while its reads are out (comms.js): the line's row, the rows' box and the cards, in grey and in the same places */
+.cm-hwait,.cm-foci-h[data-wait],.cm-fwait{animation:skel-in .2s ease-out .15s both}
+.cm-hwait{display:grid;gap:8px;min-width:0}
+.cm-hwait-l{display:flex;align-items:center;height:20px}
+.cm-hwait-b{border:1px solid var(--line);border-radius:var(--r-l);background:var(--surface)}
+.cm-hwait-r{display:grid;align-content:center;gap:8px;min-height:68px;padding:10px 14px}
+.cm-hwait-r+.cm-hwait-r{border-top:1px solid var(--line)}
+.cm-foci-h[data-wait]{align-items:center;min-height:24px}
+.skel-card.cm-fwait{height:280px;align-content:start;gap:var(--s3);padding:var(--s4);background:var(--surface)}
 .fl-page .fl-legend{margin-left:auto}                /* R42: the legend sits right of the window control (Nov 8 §5.2) */
 
 /* ui-regen-1109-0818 §A/§B (R43) */

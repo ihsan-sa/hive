@@ -20,7 +20,7 @@ import { tier, status } from "../core/status.js";
 import { askTier, askStop, stopButton } from "../actions.js";
 import { seen, unreadIn, markRead, onInbox, IB } from "../core/inbox.js";
 import { MN, onMail } from "../core/mailnew.js";
-import { button, empty, icon, input, list, scrim, seg, skeleton, statusDot, statusWord } from "../ui/kit.js";
+import { bar as skBar, button, empty, icon, input, list, scrim, seg, skeleton, statusDot, statusWord } from "../ui/kit.js";
 import { agentRef, avatars, copyButton, threadRef } from "../ui/refs.js";
 import { message, messageHead, messageReceipt, localMessage, markWords, pollDelivered, marksSig, delivery, onJump, helperFolds } from "../ui/message.js";
 import { asidePanel, asideOpen, closeAside } from "../ui/aside.js";
@@ -1026,9 +1026,17 @@ function homeMoved() {
       h("summary", { title: `${plural(ms.length, "conversation")} put in a focus or moved in the last 3 days` }, h("b", null, "Recently moved"), h("span", { class: "cm-mv-n" }, String(ms.length))),   // the sentence in the title (Nov 9 handoff §C.1)
       h("ul", { class: "cm-old-l" }, ms.slice(0, 40).map(row))));
 }
+// While the home's reads are out: grey in the places the line, its rows and the cards land, so they arrive where these stood (R65).
+const WAIT_W = ["72%", "54%", "64%", "46%"];
+const waitsHeld = () => h("div", { class: "cm-hwait", "data-key": "waits-held", role: "status" }, h("span", { class: "vh" }, "Reading\u2026"),
+  h("div", { class: "cm-hwait-l" }, skBar("18%", 11)),
+  h("div", { class: "cm-hwait-b" }, [0, 1, 2].map(i => h("div", { class: "cm-hwait-r", "data-key": "r" + i }, skBar(WAIT_W[i], 12), skBar("34%")))));
+const fociHeld = () => [h("div", { class: "sec-h cm-foci-h", "data-key": "foci-h", "data-wait": "" }, skBar("84px", 11)),
+  h("div", { class: "cm-foci", "data-key": "foci" }, WAIT_W.map((w, i) => h("div", { class: "skel-card cm-fwait", "data-key": "w" + i }, skBar("40%", 12), skBar(w, 11), skBar("84%"), skBar("62%"))))];
 function fociGrid(ctx) {
   // A failed first read leaves an empty stand-in (core/foci.js): say so, not "no focus" (the person, 110901516bcd: cards gone after a dash restart).
-  if (S.foci === undefined || (S.foci.failed && fociFailed())) return h("p", { class: "meta cm-foci-msg", "data-loading": fociFailed() ? null : "" }, fociFailed() ? "Couldn't read the focuses. It keeps trying." : "Reading\u2026");
+  if (S.foci === undefined && !fociFailed()) return fociHeld();
+  if (S.foci === undefined || S.foci.failed && fociFailed()) return h("p", { class: "meta cm-foci-msg" }, "Couldn't read the focuses. It keeps trying.");
   const fs = fociOrder();
   if (!fs.length) return h("p", { class: "meta cm-foci-msg" }, "No focus yet. Agents make one when work has a goal; every conversation is in the list on the left.");
   return [h("div", { class: "sec-h cm-foci-h", "data-key": "foci-h" }, h("h2", { class: "sec-t" }, "Focuses"), h("span", { class: "sec-n" }, String(fs.length)), h("a", { href: href("flow") }, "Flow")),
@@ -1069,6 +1077,7 @@ function homePane(ctx) {
       !n && !local.length && ![...S.threads.values()].some(d => d.posts.some(p => p.from === "person")) ? firstJobs() : null,
       local.some(it => it.state !== "failed") ? closeLine() : null,
       local.length ? h("div", { class: "cm-out", "data-key": "out" }, local.map(it => localMessage(it, outActions))) : null) : null,
+    settled ? null : waitsHeld(),
     settled && line ? h("p", { class: "cm-hline", "data-key": "line", "data-needs": n ? "" : null }, line) : null,
     settled && n ? homeNeeds(waitingNow()) : null,
     settled && sp.older ? homeOlder(waitingOlder()) : null,

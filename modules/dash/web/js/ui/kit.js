@@ -154,7 +154,7 @@ export function skeleton(rows = 4, text = "Reading…") {
     shape ? SKEL[shape]() : Array.from({ length: rows }, () => h("div", { class: "skel-r" }, h("span", { class: "skel-b" }), h("span", { class: "skel-b" }))));
 }
 // The blocks of a slow page, drawn where its content lands so nothing jumps when the read arrives (the sizes follow the real rows).
-const bar = (w, ht = 9) => h("span", { class: "skel-x", style: `--w:${w};--h:${ht}px` });
+export const bar = (w, ht = 9) => h("span", { class: "skel-x", style: `--w:${w};--h:${ht}px` });
 const rep = (n, f) => Array.from({ length: n }, (_, i) => f(i));
 const WIDE = ["72%", "54%", "64%", "46%"];
 const skHead = () => h("div", { class: "skel-head" }, bar("38%", 22), bar("62%", 12), bar("16%"));

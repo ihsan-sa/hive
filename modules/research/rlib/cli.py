@@ -132,6 +132,8 @@ def c_hunt(a):
         except (TypeError, ValueError): sd = 365
         if sd <= 0: warn(f"stale_days {h.s.get('stale_days')} is 0 or less, so every page would count as stale and get the extra departure search")
         if h.role and h.exclude and h.exclude.search(str(spec.get("roles"))): warn(f"exclude_roles {spec.get('exclude_roles')!r} matches the roles pattern {spec.get('roles')!r} itself, so it may rule out the titles you want")
+        if workers > 32: warn(f"workers {workers} is above 32, which is hard on the search engines; lower it")
+        if h.target > 1000: warn(f"target {h.target} is above 1000, which is likely a typo")
         if budget < 60: warn(f"max_seconds {budget:.0f} is under 60, so the hunt would read almost nothing; raise it")
         if workers > n > 0: warn(f"workers {workers} is more than the {n} searches to run, so some would sit idle")
         if est > budget: warn(f"{n} searches probably won't finish within max_seconds {budget:.0f}; a re-run carries on, or raise max_seconds or cut orgs/angles")
