@@ -327,6 +327,13 @@ main() {
     out=$("$D/bin/hive" web 2>&1 | tr -d '\r' || true)
     address=$(printf '%s\n' "$out" | sed -n 's/.*\(http:[^ ]*\).*/\1/p' | head -n 1)
     [ -n "$address" ] || { n=$((n + 1)); sleep 3; }
+    # The VM's ssh can stay down after a heavy install ("Connection refused", rig run 42885823260). A restart of the
+    # VM brings sshd back, and the install is on its disk, so do that once, after 30 s of it.
+    if [ -z "$address" ] && [ "$n" -eq 10 ] && printf '%s' "$out" | grep -q 'Connection refused'; then
+      echo "The VM isn't answering. Restarting it..." >&2
+      "$L" stop "$VM" >/dev/null 2>&1 || true
+      "$L" start --tty=false "$VM" >&2 || true
+    fi
   done
   [ -n "$address" ] || echo "hive web said: $out" >&2
   [ -n "$address" ] || die "the Hive installed, but it gave no address. Try, in a new Terminal window: hive web"

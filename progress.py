@@ -183,10 +183,15 @@ def autojudge(post=True, t=None):
             control = after[1] if after is not None else None; after = after[0] if after is not None else None
             reading = "inconclusive" if after is None or base is None else score(base, after, e.get("want"), e.get("band"))
             why = (f"check failed: {err}" if after is None else "no baseline" if base is None else f"{e.get('want')}: {e.get('before'):g} -> {after:g}" + (f" (expected {base:g} from control {e['control_before']:g} -> {control:g})" if e.get("control") else "") + (f" (noise band {e['band']:g})" if e.get("band") is not None else ""))
+            seen = None if after is None or base is None else (after - base if e.get("want") == "up" else base - after)
+            sized = seen is not None and e.get("gain") is not None and not e.get("late")  # a check attached later is not the number the size was written for
+            if sized: why += f"; sized at {e['gain']:g} before landing, came to {seen:g}" + (" net of the control" if e.get("control") else "")
+            if not e.get("late"): why += "".join(f"; {label}: {str(e[k])[:100]}" for k, label in (("needs", "rests on"), ("beats", "to beat")) if e.get(k))
             w, v = judged_with(items, e), reading
             if e.get("late"): v, why = "inconclusive", why + f"; the check was written after landing, so this read {reading} is not a verdict"
             if w: v, why = "inconclusive", why + f"; shares its number with {', '.join(w)}, so this cannot credit one change"
-            append(LEDGER, {"judge": e["id"], "at": iso(t), "by": "late-check" if e.get("late") else "check", "verdict": v, "reading": reading, "why": why, "before": e.get("before"), "after": after})
+            append(LEDGER, {"judge": e["id"], "at": iso(t), "by": "late-check" if e.get("late") else "check", "verdict": v, "reading": reading, "why": why, "before": e.get("before"), "after": after,
+                            **({"gain_expected": e["gain"], "gain_seen": round(seen, 6)} if sized else {}), **({"with": w} if w else {})})
             out.append((e, v, why))
     bad = [(e, why) for e, v, why in out if v == "reverted-candidate"]
     if bad and post:
@@ -226,6 +231,8 @@ def cmd_log(a):
     if a.control and not a.check: sys.exit("hive improve log: --control needs --check.")
     if not a.check and not a.no_check: sys.exit("hive improve log: give --check CMD --want up|down, a command that prints the number now, so a script judges the change at its revisit and nobody grades their own. Written later it can't be a verdict. If no command can read this number, say why with --no-check WHY; if the gain is not a number at all, use --expect instead of forcing one.")
     if a.kind == "behaviour" and a.check and not a.control: sys.exit("hive improve log: a change meant to shift behaviour is compared against something it didn't touch: add --control CMD, printing the same number for that.")
+    a.needs, a.beats = ((x or "").strip() or None for x in (a.needs, a.beats))
+    if a.gain is not None and not (math.isfinite(a.gain) and a.gain > 0): sys.exit("hive improve log: --gain is a size, above 0, in the check's own units; --want says which way.")
     rev, fields = a.revisit or ("48h" if a.check and a.kind != "behaviour" else "7d"), {}
     if a.check:
         fields = {**check_fields(a), **({"kind": a.kind} if a.kind else {})}; fields["before"], err = run_check(a.check)
@@ -234,6 +241,13 @@ def cmd_log(a):
             fields["control"] = a.control; fields["control_before"], err = run_check(a.control)
             if err: sys.exit(f"hive improve log: the control doesn't work yet ({err}).")
         fields["due_at"] = iso(now() + span(rev)) if re.fullmatch(r"\d+[hdw]", rev) else rev + "T00:00:00+00:00"
+        # The trial rule (from the fund's forecast trials, projects/rsi-lab/fund.md): the size expected, what the number rests on and the
+        # cheap alternative to beat are written before landing, and the check reads once, at the cut-off. A row without them is marked, not refused.
+        # --control is the do-nothing comparison, not the cheap alternative, so it does not stand in for --beats.
+        if a.gain is not None: fields["gain"] = a.gain
+        unsized = [k for k in ("gain", "needs", "beats") if getattr(a, k) is None] + (["cutoff"] if fields["due_at"] <= iso() else [])
+        if unsized: fields["unsized"] = unsized
+    fields.update({k: getattr(a, k) for k in ("needs", "beats") if getattr(a, k)})  # kept on every row: whoever judges a row no command reads wants them too
     if re.fullmatch(r"\d+[hdw]", rev): rev = (now() + span(rev)).date().isoformat()
     also = sorted({i.strip().lower() for x in (a.also or []) for i in x.split(",") if i.strip()})
     unknown = [i for i in also if i not in items]
@@ -248,6 +262,13 @@ def cmd_log(a):
     if ov: rec["shares"] = sorted(ov)  # linked, never refused (meta-reflect, reflect-p0.md; rsi-loop rung 133): judged together
     append(LEDGER, rec)
     print(f"{rec['id']} logged; before {fields['before']:g}; its check judges it at {fields['due_at']}, no agent needed." if a.check else f"{rec['id']} logged; revisit {rev}. Someone else judges it then: hive improve judge {rec['id']} held|reverted|inconclusive --why ...")
+    if a.check:
+        noise = abs(fields["before"]) * 0.05 if a.band is None else a.band
+        if a.gain is not None and a.gain <= noise: print(f"note: the gain you expect ({a.gain:g}) is inside this check's noise band ({noise:g}): if the number moves by that much the check reads inconclusive, and only a move above {noise:g} reads held. A later cut-off, a steadier number, or --expect with a reader would say more.")
+        missing = [k for k in fields.get("unsized", []) if k != "cutoff"]
+        if missing: print("marked unsized (no " + ", ".join("--" + k for k in missing) + "): logged all the same. The verdict will say which way the number went, with nothing written beforehand to hold it against.")
+        if "cutoff" in fields.get("unsized", []): print(f"note: the cut-off ({fields['due_at'][:10]}) has already come, so the check reads again within the hour and the change has had no time to show. Marked; give --revisit a later date to let it run.")
+    elif a.gain is not None: print("note: --gain is read only with --check (it is a move in the check's number), so it was not kept. Say the size you expect in --expect.")
     same = sorted(same_check({**items, rec["id"]: rec}, rec["id"]))
     if same: print(f"linked: {', '.join(same)} read the same check over the same days, so a held here is recorded as inconclusive. Give it a number of its own to judge it apart.")
     if unknown: print(f"warning: --also {', '.join(unknown)}: not in the ledger (hive improve list); the overlap is stored as given", file=sys.stderr)
@@ -268,6 +289,7 @@ def cmd_judge(a):
         sys.exit(f"hive improve judge: {', '.join(mine)} was logged by you" + (f" and is judged with {a.id}" if mine != [a.id] else "")
                  + ". The judge is never who proposed (the rule); pass --self only if nobody else can, and say why in --why.")
     if not a.why: sys.exit("hive improve judge: --why must give the number you looked at, against the baseline.")
+    if e.get("check") and e.get("status") == "landed": sys.exit(f"hive improve judge: {a.id} has a check, and its script reads it once, at {e.get('due_at', 'its revisit')} (hive improve autojudge, hourly). No verdict by hand before that; afterwards the owner's call on what the script found goes here.")
     today = iso()[:10]
     if str(e.get("revisit") or "") > today: sys.exit(f"hive improve judge: {a.id}'s revisit is {e['revisit']}. No verdict before it.")
     w = [i for i in w if str(items[i].get("revisit") or "") <= today]
@@ -516,7 +538,7 @@ def window(t0, t1, log, posts, items):
          "posts": nposts, "person_posts": nperson, "person_noticed_first": noticed, "watchdog_trips": watchdog_in(t0, t1),
          "person_reply_p50_s": pct(rs, 0.5), "person_reply_p90_s": pct(rs, 0.9), "person_replies": len(rs),
          "keeper_rounds": events_in(log, t0, t1, "keeper"), "improve_rounds": events_in(log, t0, t1, "improve"),
-         "improvements_landed": len(landed), "improvements_judged": len(judged), "reviews_independent": sum(1 for e in landed if indep_review(e)), **for_you_numbers(posts, t0, t1),
+         "improvements_landed": len(landed), "improvements_judged": len(judged), "improvements_sized": sum(1 for e in landed if e.get("check") and e.get("gain") is not None and not e.get("unsized")), "reviews_independent": sum(1 for e in landed if indep_review(e)), **for_you_numbers(posts, t0, t1),
          "held": sum(1 for e in judged if e.get("status") == "held"), "reverted": sum(1 for e in judged if e.get("status") == "reverted"),
          "asks_done": asks_done_in(t0, t1), **leftovers_flow(items, t0, t1), "rsi_rounds": len(rsi), "rsi_wins": sum(1 for r in rsi if r.get("verdict") == "win"),
          "core_commits": commits_in(t0, t1), **outcomes_in(t0, t1), **kb_numbers(t0, t1),
@@ -542,7 +564,7 @@ def kb_numbers(t0, t1):
 
 LOWER_IS_BETTER = {"fail_pct", "runs_reaped", "runs_reaped_repeat", "person_noticed_first", "person_reply_p50_s", "person_reply_p90_s", "watchdog_trips", "stalled_threads", "improvements_overdue", "projects_unmeasured", "asks_orphaned", "leftovers_orphaned", "asks_stale", "asks_unowned", "leftovers_unowned", "asks_oldest_open_d", "outcomes_silent", "outcomes_nothing", "outcomes_intent_only", "focus_quiet", "for_you_lines", "for_you_flagged", "for_you_flagged_pct", "for_you_command", "for_you_many", "for_you_long", "for_you_chain", "for_you_ours", "person_asks", "summary_flagged", "needs_gap"}
 NEUTRAL = {"decided_lines", "reversals_per_100", "kb_finds", "kb_find_read_pct", "kb_recall_injections", "kb_recall_opened_pct", "kb_misses_explicit", "kb_miss_candidates", "model_steps_up", "model_steps_down", "runs", "runs_woken", "person_replies", "keeper_rounds", "improve_rounds", "core_commits", "rsi_rounds", "reverted", "spend_usd", "asks_open", "leftovers_open", "leftovers_filed", "leftovers_closed", "outcomes_graded"}  # activity and cost: context, not a score (the person: don't ration work for pace)
-HEADLINE = ["kb_finds", "kb_find_read_pct", "kb_recall_injections", "kb_recall_opened_pct", "kb_misses_explicit", "kb_miss_candidates", "runs", "model_steps_up", "model_steps_down", "fail_pct", "runs_reaped", "runs_reaped_signalled", "runs_reaped_repeat", "runs_woken", "person_noticed_first", "person_reply_p50_s", "person_reply_p90_s", "watchdog_trips", "stalled_threads", "improvements_landed", "improvements_judged", "reviews_independent", "held", "reverted",
+HEADLINE = ["kb_finds", "kb_find_read_pct", "kb_recall_injections", "kb_recall_opened_pct", "kb_misses_explicit", "kb_miss_candidates", "runs", "model_steps_up", "model_steps_down", "fail_pct", "runs_reaped", "runs_reaped_signalled", "runs_reaped_repeat", "runs_woken", "person_noticed_first", "person_reply_p50_s", "person_reply_p90_s", "watchdog_trips", "stalled_threads", "improvements_landed", "improvements_judged", "improvements_sized", "reviews_independent", "held", "reverted",
             "improvements_overdue", "reviews_independent", "focus_quiet", "for_you_lines", "for_you_flagged", "for_you_flagged_pct", "for_you_command", "for_you_many", "for_you_long", "for_you_chain", "for_you_ours", "decided_lines", "reversals_per_100", "person_asks", "summary_flagged", "needs_gap", "asks_open", "leftovers_open", "leftovers_filed", "leftovers_closed", "asks_orphaned", "leftovers_orphaned", "asks_stale", "outcomes_intent_only", "asks_unowned", "leftovers_unowned", "asks_done", "asks_oldest_open_d", "outcome_delivered_pct", "outcomes_silent", "outcomes_nothing", "outcomes_graded", "rsi_rounds", "rsi_wins", "keeper_rounds", "improve_rounds", "core_commits", "projects_unmeasured", "spend_usd"]
 
 def scoreboard(since):
@@ -649,9 +671,12 @@ def cmd_progress(a):
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="hive improve / hive progress", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sp = ap.add_subparsers(required=True)
-    p = sp.add_parser("log", help="log a landed change: --what, --measure (required), --check CMD --want up|down [--band N] [--kind fix|behaviour] [--control CMD] (written at landing, a command printing the number: a script judges it; a fix is due in 48h, a behaviour change in 7d against a --control it didn't touch), --revisit 7d|YYYY-MM-DD, --where, --hypothesis, --baseline, --commit, --thread, --also IDS (warns when the measure names a number an open landing, revisit still ahead, names)")
+    p = sp.add_parser("log", help="log a landed change: --what, --measure (required), --check CMD --want up|down [--band N] [--kind fix|behaviour] [--control CMD] [--gain N --needs TEXT --beats TEXT: the size, written before landing] (written at landing, a command printing the number: a script judges it; a fix is due in 48h, a behaviour change in 7d against a --control it didn't touch), --revisit 7d|YYYY-MM-DD, --where, --hypothesis, --baseline, --commit, --thread, --also IDS (warns when the measure names a number an open landing, revisit still ahead, names)")
     for f in ("what", "measure", "revisit", "where", "hypothesis", "baseline", "commit", "thread", "check", "want", "kind", "control"): p.add_argument("--" + f)
     p.add_argument("--band", type=float, help="the move that counts as noise (default 5%% of the baseline)")
+    p.add_argument("--gain", type=float, help="the size: the move you expect in the check's number by the cut-off (--revisit), in its own units and above 0 (--want gives the direction). The check reads at landing and once more at the cut-off, not between, and the verdict prints this beside what came. A --check row without --gain, --needs and --beats is logged all the same and marked unsized")
+    p.add_argument("--needs", metavar="TEXT", help="what the number will rest on by the cut-off, e.g. '40 graded runs' or '12 days of readings'")
+    p.add_argument("--beats", metavar="TEXT", help="the strongest cheap alternative the change must beat, e.g. 'last week's number' or 'the one-line version' (--control CMD is the do-nothing comparison and does not stand in for it). The verdict names it, for whoever reads the number")
     p.add_argument("--reviewed-by", dest="reviewed_by", help="the agent that reviewed this design or build and did not build it (counted as reviews_independent when --model is opus or fable)")
     p.add_argument("--model", help="the reviewer's model: opus|fable count as an independent review, anything else does not")
     p.add_argument("--no-check", metavar="WHY", help="why no command can read this number")

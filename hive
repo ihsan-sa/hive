@@ -758,7 +758,12 @@ def jobs_of(name):
 NAMED = re.compile(r"(?<![\w.`])@([a-z][0-9a-f]{4})\b")
 QUESTION = re.compile(r"\?\s*$")
 
-def open_in(t, ps, asks, ext, last_post=None):
+def h2_agent_names():
+    """Every agent name Hive has started (log.jsonl): `@a7321`, the other Hive's seat, is not one, and can never reply on this board."""
+    try: return set(re.findall(r'"event": "start", "name": "([a-z][0-9a-f]{4})"', (HOME / "log.jsonl").read_text(errors="replace")))
+    except OSError: return None
+
+def open_in(t, ps, asks, ext, last_post=None, known=None):
     """Why a quiet thread is still open, or None if it is only resting (an agent's result with nothing waiting on anyone).
     Open: an open ask or leftover filed for it; the person or the other Hives spoke last; the last agent post asks the person
     or the other Hives; it names an agent that never posted anywhere after it (last_post: {name: latest post time}); or it
@@ -771,7 +776,7 @@ def open_in(t, ps, asks, ext, last_post=None):
     plain = CODE.sub(" ", text)
     if re.search(r"(?<![\w.`])@(person|hives)\b", plain) and ("?" in plain or re.search(r"^\s*For you:", plain, re.M)):  # a result that only pings them is resting: 22 of 23 such threads on 2026-11-04
         return "asked the person" if "@person" in plain else "asked the hives"
-    named = [n for n in dict.fromkeys(NAMED.findall(plain)) if n != frm and (last_post or {}).get(n, "") <= str(last.get("at", ""))]
+    named = [n for n in dict.fromkeys(NAMED.findall(plain)) if n != frm and (known is None or n in known or n in (last_post or {})) and (last_post or {}).get(n, "") <= str(last.get("at", ""))]
     if named: return f"named {' '.join(named)}, no reply"  # not a word anywhere since: one who went on elsewhere saw it (17 of 19 on 2026-11-04), as the watchdog's handoff check reads it
     if QUESTION.search(plain.strip()): return "ends with a question"
     return None
@@ -835,14 +840,14 @@ def cmd_stalled(a):
     asks = {} if a.all else open_asks_by_thread()
     last_post = {}
     for p in posts(): last_post[str(p.get("from", "")).lower()] = max(last_post.get(str(p.get("from", "")).lower(), ""), str(p.get("at", "")))
-    shown = 0
+    known, shown = h2_agent_names(), 0
     for t, ps in sorted(threads.items(), key=lambda kv: kv[1][-1].get("at", "")):
         last = ps[-1]
         if not (within < last.get("at", "") < quiet) or t in ("keeper", "side"): continue
         who = list(dict.fromkeys(str(p.get("from", "")).lower() for p in ps if str(p.get("from", "")).lower() not in ext))
         if not who or any(w in live or w in queued for w in who): continue
         if DONE.search(str(last.get("text", ""))[:300]) and last.get("from") not in ("person", "hives"): continue
-        why = open_in(t, ps, asks, ext, last_post)
+        why = open_in(t, ps, asks, ext, last_post, known)
         if not why and not a.all: continue
         jobs = {w: jobs_of(w) for w in who}
         shown += 1

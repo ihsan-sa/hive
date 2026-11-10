@@ -30,7 +30,7 @@ export function loadNeedsYou(force) {
   if (L.p) return L.p;
   if (!force && S.needsYou !== undefined && now() - L.at < NEEDS_EVERY) return Promise.resolve(S.needsYou);
   L.at = now();
-  L.p = jget("/api/needs-you").then(v => normNeeds(v), () => ({ absent: true, failed: true })).then(v => {
+  L.p = Promise.resolve({ absent: true }).then(normNeeds).then(v => {
     L.p = null; L.failed = !!v.failed;
     if (v.failed && S.needsYou && !S.needsYou.absent) return S.needsYou;   // keep the last good read
     const sig = x => JSON.stringify(x && [x.at, x.waiting, x.stale, x.states, x.brief]);
