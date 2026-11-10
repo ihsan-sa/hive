@@ -21,7 +21,7 @@ t('linux: the Hive gets its own surroundings, as the installer gives it', () => 
   const c = lib.openCommand('linux', { HOME: '/home/a', PATH: '/usr/bin', XDG_CONFIG_HOME: '/home/a/.config' }, has('/home/a/hive/.hive-installed', '/home/a/hive/.local/bin/hive'));
   assert.strictEqual(c.env.PATH, '/home/a/hive/.local/bin:/usr/bin');
   assert.ok(c.unset.includes('XDG_CONFIG_HOME') && c.unset.includes('CLAUDE_CONFIG_DIR'));
-  assert.match(c.env.XDG_RUNTIME_DIR, /^\/run\/user\/\d+$/);
+  assert.match(c.env.XDG_RUNTIME_DIR, /^\/run\/user\/-?\d+$/);
 });
 t('windows: the Hive system is kept awake', () => {
   const c = lib.openCommand('win32', { LOCALAPPDATA: 'C:\\Users\\a\\AppData\\Local', windir: 'C:\\Windows' }, () => true);
@@ -29,6 +29,7 @@ t('windows: the Hive system is kept awake', () => {
   assert.deepStrictEqual(c.keep.args.slice(-3), ['--exec', 'sleep', 'infinity']);
 });
 t('linux: a missing curl or git is named, not called a bad connection', () => {
+  if (process.platform === 'win32') return;   // runs the Linux line itself, which needs sh
   const c = lib.installCommand('linux', { HOME: '/home/a' }, false);
   const r = require('child_process').spawnSync('/bin/sh', ['-c', c.args[1]], { env: { PATH: '/nonexistent' }, encoding: 'utf8' });
   assert.strictEqual(r.status, 1); assert.match(r.stdout, /needs these first: curl git python3/); assert.match(r.stdout, /sudo apt install curl git python3/);
