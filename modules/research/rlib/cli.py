@@ -124,6 +124,14 @@ def c_hunt(a):
         secs = sorted(r["secs"] for r in h.log_rows if r.get("secs"))
         per = secs[len(secs) // 2] if secs else 5.0
         budget = float(h.s.get("max_seconds", 1800)); workers = int(h.s.get("workers", 4)); est = n * per / max(workers, 1)
+        try: age = float(h.max_age) if h.max_age is not None else None
+        except (TypeError, ValueError): age = None
+        if age is not None and age <= 0: warn(f"max_age_years {h.max_age} is 0 or less, so every dated page would count as stale")
+        if h.read < 1: warn(f"read_per_search {h.read} is below 1, so no page would be read and no lead could be found")
+        try: sd = float(h.s.get("stale_days", 365))
+        except (TypeError, ValueError): sd = 365
+        if sd <= 0: warn(f"stale_days {h.s.get('stale_days')} is 0 or less, so every page would count as stale and get the extra departure search")
+        if h.role and h.exclude and h.exclude.search(str(spec.get("roles"))): warn(f"exclude_roles {spec.get('exclude_roles')!r} matches the roles pattern {spec.get('roles')!r} itself, so it may rule out the titles you want")
         if budget < 60: warn(f"max_seconds {budget:.0f} is under 60, so the hunt would read almost nothing; raise it")
         if workers > n > 0: warn(f"workers {workers} is more than the {n} searches to run, so some would sit idle")
         if est > budget: warn(f"{n} searches probably won't finish within max_seconds {budget:.0f}; a re-run carries on, or raise max_seconds or cut orgs/angles")
