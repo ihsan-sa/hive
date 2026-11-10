@@ -391,7 +391,6 @@ export default {
         : K.failed.has(path) ? h("div", { class: "kb-note", "data-key": "gone" }, h("a", { class: "btn kb-back", href: open(parent(path)), "data-kind": "quiet", "data-size": "s" }, icon("chevron-left"), parent(path).split("/").pop() || "Knowledge"), empty(K.failed.get(path) === "404" ? `~/${path} isn't here, or isn't shown here. Dotfiles and anything named like a key stay hidden.` : `Couldn't read ~/${path}.`))
         : !d ? h("div", { class: "kb-none", "data-key": "wait" }, empty("Reading…", { kind: "loading" }))
         : [kbChat(ctx, { compact: true, cur: path }), isFile ? fileView(d, line, ctx) : folderView(d, ctx)]);
-    const top = document.getElementById("top");
     const want = `${path}::${line}`;
     if (d && K.shown !== want) {
       K.shown = want;
@@ -402,6 +401,6 @@ export default {
         const pane = document.querySelector(`.kb-list [aria-current]`); if (pane && pane.scrollIntoView) pane.scrollIntoView({ block: "nearest" });
       });
     }
-    return h("div", { class: "kb", "data-key": "kb", "data-in": isFile || editing || (path && K.failed.has(path)) ? "" : null, style: `--top-h:${top ? top.offsetHeight : 47}px` }, side, main);
+    return h("div", { class: "kb", "data-key": "kb", "data-in": isFile || editing || (path && K.failed.has(path)) ? "" : null }, side, main);
   },
 };

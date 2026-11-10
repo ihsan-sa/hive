@@ -5,6 +5,7 @@ import { h } from "../core/dom.js";
 import { S, can, jget } from "../core/store.js";
 import { ago, pct, plural, short } from "../core/format.js";
 import { metrics } from "../templates.js";
+import { heldRoom } from "../core/room.js";
 import { empty, pageHeader, section, seg, staleNote, stats, statusWord, pageNav } from "../ui/kit.js";
 import { agentRef, threadRef } from "../ui/refs.js";
 import { table } from "../ui/table.js";
@@ -136,7 +137,8 @@ export default {
   poll: { every: 60000, run(ctx) { return refresh(ctx); } },
   render(ctx) {
     const V = P.v && Array.isArray(P.v.asks) ? P.v : null;
-    if (!V) return h("div", { class: "page" }, pageNav(), P.failed ? empty("Couldn't read the progress data. It keeps trying.", { kind: "error" }) : empty("Reading…", { kind: "loading" }));
+    const room = heldRoom("progress-page", "#main > *", { settled: !!V });   // the page is one read: its height from last time while that read is out
+    if (!V) return h("div", { class: "page", style: room ? `min-height:${room}px` : null }, pageNav(), P.failed ? empty("Couldn't read the progress data. It keeps trying.", { kind: "error" }) : empty("Reading…", { kind: "loading" }));
     const head = lead(V), update = () => ctx.update();
     return metrics({
       header: pageHeader({ subnav: pageNav(), state: head.state, title: head.title, lead: head.text, tone: head.tone, after: P.failed ? staleNote("Couldn't refresh, so this shows what it read last. It keeps trying.") : null, meta: [S.app.app ? null : "hive progress, hive asks, hive outcomes, hive improve"].filter(Boolean) }),

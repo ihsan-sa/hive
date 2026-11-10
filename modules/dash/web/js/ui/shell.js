@@ -208,7 +208,7 @@ export function topBar({ views, current, update, nav }) {
     ];
     const look = lookItems(update);
     tabs = setup ? [] : L.main.map(v => tabLink(v, L.active));
-    extra = !setup && !simple && L.active === "comms" && TOPX.chat ? TOPX.chat() : null;
+    extra = !setup && !simple && L.active === "comms" ? (TOPX.chat ? TOPX.chat() : app ? h("div", { class: "cm-places", "data-key": "places" }) : null) : null;   // its room is kept while comms.js loads, or the whole page drops 44 px (R67)
     icons = [...L.icons.filter(v => !setup || v.id === "settings").map(v => { const b = v.badge ? v.badge() : null;
         return h("a", { class: "btn", "data-kind": "icon", href: href(v.id), "data-key": v.id, "aria-label": lab(v), title: lab(v), "aria-current": v.id === L.active || v.id === current ? "page" : null },
           icon(v.icon || v.id), b ? h("span", { class: "more-dot", "aria-label": `${b} for you` }) : null); }),

@@ -23,7 +23,7 @@
   .top-in .brand{margin-right:auto;min-width:0}
   .top-in .top-status{display:flex;margin-left:0;gap:4px;min-width:0}
   .top-in .top-status>span:not(:first-child),.top-in .top-status>.top-route:not([data-mode=limited]){display:none}
-  .top-in .top-status>span{height:32px;max-width:46vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .top-in .top-status>span{height:32px;max-width:46vw;overflow:clip visible;text-overflow:ellipsis;white-space:nowrap}
   .top-in .btn[data-kind=icon]{min-width:40px;height:40px}
   /* a conversation, a file and the keyboard take the whole screen: no top bar, no bottom bar */
   .app[data-view=thread] .top,.app[data-kb=open] .top,.top:has(~ #main .kb[data-in]){display:none}
@@ -176,7 +176,6 @@
   /* ---- touch targets and iOS zoom: inputs at 16px, controls 40px ---- */
   input,select,textarea,.input{font-size:16px!important}
   .btn{min-height:40px}
-  .btn[data-size=s]{min-height:36px}
   .btn.cm-need-a{min-height:44px;min-width:44px}   /* an Answer that opens the quick-answer panel: 44 px on a phone (r23) */
   .btn.nd-later,.btn.nd-moot,.yr-wb .btn,.fp-later-i .btn{min-height:44px}   /* Later, Not needed, Bring back: 44 px on a phone like Answer */
   .btn[data-kind=icon]{position:relative}
@@ -195,7 +194,7 @@
   html{-webkit-text-size-adjust:100%;-webkit-tap-highlight-color:transparent;scroll-padding-bottom:calc(var(--nav-h,57px) + 16px)}
   html:has(body[data-view=thread]){scroll-padding-bottom:16px}
   #main{min-height:calc(100dvh - var(--bar-h) - var(--nav-h))}
-  .cm,.kb,.cvp{height:calc(100dvh - var(--top-h,var(--bar-h)) - var(--nav-h))}
+  .cm,.kb,.cvp{height:calc(100dvh - var(--bar-h) - var(--nav-h))}
   body[data-view=thread] .cm,body:has(.kb[data-in]) .kb{height:100dvh}
   body[data-kb=open] .cm,body[data-kb=open] .kb{height:var(--vvh,100dvh)}
   body[data-kb=open] #main{min-height:0}
@@ -206,7 +205,7 @@
    the text where it was. Agent and thread pills inside a sentence stay 24px: they are words in running text (WCAG 2.5.8's inline case). */
 @container app (width < 700px){
   .top-in .brand{min-height:44px}
-  .top-pill-go{inset:-7px -1px}
+  .top-pill-go{inset:-8px -1px}   /* fills the 48 px bar; the pill clipped it to its own 32 px (R58) */
   .cm-hline a,.cm-need-m>a:first-child,.fp-agn,.fc-ask-n a,.fc-ask-h a{display:inline-block;padding-block:14px;margin-block:-14px}
   .fc-name{padding-block:12px;margin-block:-12px}   /* a 44 px target without un-clamping the name */
   .fc-ask-i,.fc-row{min-height:44px}
@@ -235,4 +234,37 @@
   .cm-filters .tm-chip,.cm-filters .seg button{min-height:44px;height:auto}
   .cm-foci-h>a{display:inline-flex;align-items:center;min-height:44px;padding:0 var(--s2)}   /* the Focuses head's Flow link, finger-sized */
   .fc-tools .btn{min-width:44px;min-height:44px}   /* + and … on a focus card are always shown on a phone (hover:none): finger-sized */   /* finger-sized filter chips and By focus/recency on the phone home (R18: nothing tappable under 40 px) */
+}
+
+/* R58: rule 4 under a finger, on Yours, Agents and Flow (test/drive_phone_targets.mjs). Where a control stands alone it's really taller;
+   the agent rows run several facts together, so their two links reach further than they're drawn and the rows stay as short as they were. */
+@container app (width < 700px){
+  select.input{min-height:40px}
+  .subnav a{height:44px}
+  .now-more>summary{min-height:44px}
+  .yr-rule{margin:0}
+  .yr-rule-n{padding-block:12px}
+  .fl-row{padding-block:0 var(--s2)}
+  .fl-rn{display:flex;align-items:center;min-height:40px}
+  .fl-rw{display:inline-flex;align-items:center;min-height:40px}
+  .fl-list li{padding-block:var(--s1) 0}
+  .fl-list li>a{display:block;padding-block:10px}
+  .ag-stack .ag .tb>.tr>[data-label]{overflow:clip visible}
+  .ag-stack .ag .tb>.tr .ref{position:relative}
+  .ag-stack .ag .tb>.tr .ref::after{content:"";position:absolute;left:0;right:0;top:50%;height:44px;transform:translateY(-50%)}
+}
+
+/* R66: rule 4 on Chat, Progress and Settings (test/drive_phone_targets.mjs). What runs in a sentence stays as it is (R18); the rest is reached by a finger.
+   Chat's heads and the first card or need below them overlap by a few pixels, so the link there comes up on top or gets the room. */
+@container app (width < 700px){
+  .cm-hline-all,.fc-hd:not(:has(.fc-ag)) .fc-name{position:relative;z-index:1}
+  .cm-foci-h{margin-bottom:20px}
+  .cm-need-m .ref{position:relative}
+  .cm-need-m .ref::after{content:"";position:absolute;inset:-8px -2px}
+  .tbl.tg .tb>.tr .ref{position:relative}
+  .tbl.tg .tb>.tr .ref::after{content:"";position:absolute;left:0;right:0;top:50%;height:44px;transform:translateY(-50%)}
+  .set-n a{min-height:44px}
+  /* Agent and Conversation sit one above the other in a stacked row, so two 44 px targets need that pitch between them. */
+  .tbl.tg:not(.ag)>.tb>.tr>[data-label]:has(>a.ref){padding-block:10px}
+  .tbl.tg:not(.ag)>.tb>.tr>[data-label]:has(>a.ref)::before{top:10px}
 }

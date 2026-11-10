@@ -683,6 +683,7 @@ button.lr-in{width:calc(100% + 16px);border:0;background:none;text-align:left;fo
 /* ---- timeline: a row per thread, a bar per session ---- */
 .tl-box{position:absolute;inset:0;overflow:auto;touch-action:pan-y;cursor:grab;user-select:none;-webkit-user-select:none}
 .tl-box[data-drag]{cursor:grabbing}
+.tl-list{overflow:auto;padding:0 var(--s4) var(--s4)}.tl-list>.lr:first-child{border-top:0}   /* a phone's list of the chart's runs (R68) */
 .tl-axis{position:sticky;top:0;z-index:1;display:block;background:var(--surface);border-bottom:1px solid var(--line)}
 .tl-body{display:block}
 .tl-box text{font-family:var(--font);font-size:var(--fs-micro);fill:var(--ink-3)}
@@ -1276,7 +1277,7 @@ a.ref:is([data-kind=file],[data-kind=kbfile])[data-pv-on]{background:color-mix(i
 @container (max-width:640px){.cp-hint{display:none}.cp-bar{justify-content:flex-start}.cp-send{margin-left:auto}.cp-t{font-size:16px}}
 
 /* ---- comms: conversations beside one conversation. On a phone they take turns (data-in: a conversation is open). ---- */
-.cm{display:grid;grid-template-columns:var(--cm-w,320px) minmax(0,1fr);grid-template-rows:auto minmax(0,1fr);height:calc(100dvh - var(--top-h,var(--bar-h)));min-height:0}
+.cm{display:grid;grid-template-columns:var(--cm-w,320px) minmax(0,1fr);grid-template-rows:auto minmax(0,1fr);height:calc(100dvh - var(--bar-h));min-height:0}
 #main:has(>.cm){min-height:0}
 .cm-show{grid-column:1/-1;display:flex;align-items:center;gap:var(--s2) var(--s3);min-width:0;padding:6px var(--s4);border-bottom:1px solid var(--line);background:var(--surface)}
 .cm-show-l{font-size:var(--fs-small);font-weight:var(--w-med);color:var(--ink-2)}
@@ -3114,6 +3115,7 @@ kbd.menu-i-r{font-family:inherit;font-size:var(--fs-meta)}
 .cm-hline .cm-hline-all{margin-left:auto;font-size:var(--fs-meta);font-weight:var(--w-med);color:var(--ink-2)}
 /* the waits list */
 .cm-needs{max-width:none;margin:calc(var(--s6) * -1 + var(--s2)) 0 0;background:var(--surface)}
+.cm-home>.cm-older:not(.cm-moved){max-width:none;margin-inline:0}   /* Stuff to address lines up with the list above it */
 .cm-need{padding:12px 14px;gap:2px 16px;min-height:60px}
 .cm-need-q{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;line-height:1.45}
 .cm-need-q .ref{background:none;padding:0;border:0;height:auto;font-weight:var(--w-bold)}   /* agent code in a sentence: bold mono, not a pill */
@@ -3185,6 +3187,11 @@ kbd.menu-i-r{font-family:inherit;font-size:var(--fs-meta)}
 .yr-tools{display:flex;gap:6px;align-items:center}  /* new wrapper: search + order button (HANDOFF §4.3) */
 .yr-search{margin:0;max-width:none;flex:1}
 .yr-stream{max-width:none}
+.yr-wait{align-content:start;animation:skel-in .2s ease-out .15s both}   /* the stream while the older log is on its way (R67) */
+.yr-wait-r{display:grid;gap:8px;min-height:84px;padding:10px 0;align-content:center}
+@media (prefers-reduced-motion:reduce){.yr-wait{animation:none}}
+.ag-cnt{display:contents}
+@container (max-width:640px){.ag-cnt{display:flex;flex:1 1 100%;align-items:center;gap:var(--s2) var(--s3)}.toolbar>.ag-sum{flex-basis:100%}}
 .yr-day{color:var(--ink);font-weight:var(--w-bold)}
 .yr-day::after{display:none}
 .yr-rule::before{display:none}

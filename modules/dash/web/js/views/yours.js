@@ -14,11 +14,17 @@ import { threadTitle } from "../core/model.js";
 import { threadHref, href, go } from "../core/router.js";
 import { simpleOn, hiveName } from "../core/simple.js";
 import { metrics } from "../templates.js";
-import { button, empty, input, pageHeader, scrim } from "../ui/kit.js";
+import { bar, button, empty, input, pageHeader, scrim } from "../ui/kit.js";
+import { heldRoom } from "../core/room.js";
 import { jump } from "../ui/message.js";
 
-const Y = { q: "", limit: 40, by: "new", menu: false };   // by: new (newest first) | focus (grouped by focus, the person, 11081355ecce)
+const Y = { q: "", limit: 40, by: "new", menu: false, at: 0, timer: 0 };   // by: new (newest first) | focus (grouped by focus, the person, 11081355ecce)
 const STEP = 60;
+// The first read holds only about a day of the log, so an agent's closing word is missing until the older part arrives, and the stream re-orders under the reader (R67).
+// Grey rows until it is in, at most HOLD_MS: a slow link gets what is held rather than a page that keeps waiting.
+const HOLD_MS = 4000, HELD_W = ["72%", "54%", "64%", "46%", "68%", "58%", "40%", "62%"];
+const heldStream = px => h("div", { class: "yr-stream yr-wait", "data-key": "stream-held", role: "status", style: px ? `min-height:${px}px` : null }, h("span", { class: "vh" }, "Reading\u2026"),
+  HELD_W.map((w, i) => h("div", { class: "yr-wait-r", "data-key": "r" + i }, bar("14%", 10), bar(w, 12), bar("38%"))));
 // An agent's code plain, not a pill (the Nov 8 handoff §4.6): agentRef with no pill, flattened to a span because the row is a link.
 const who = p => (p.from === "person" ? "You" : simpleOn() ? hiveName() : flat(agentRef(p.from, { dot: false }))[0]);
 
@@ -112,7 +118,9 @@ function page(ctx) {
   const body = !S.live && !S.posts.length ? empty("Reading…", { kind: "loading" })
     : !rows.length && !(waits && (waitingLater().length || waitingMoot().length)) ? empty(Y.q ? "Nothing of yours has those words." : waits ? "Nothing waits on you." : "No exchanges yet. What you say in Chat, and what is said to you, shows up here.")
     : waits ? waitParts(rows, ctx) : stream(yoursItems(rows), ctx);
-  const pg = metrics({ header: pageHeader({ title, hint: lead, actions, after: search }), sections: [meta ? h("p", { class: "meta yr-meta", "data-key": "meta" }, meta) : null, body, waits ? quickPanel(ctx.update) : null].filter(Boolean) });
+  const held = !waits && !Y.q && !S.history && performance.now() - Y.at < HOLD_MS;
+  const px = heldRoom("yours", ".yr-stream", { settled: !held && !!S.history, usual: !waits && !Y.q && Y.limit === 40 });
+  const pg = metrics({ header: pageHeader({ title, hint: lead, actions, after: search }), sections: [held ? h("p", { class: "meta yr-meta", "data-key": "meta" }, "\u00a0") : meta ? h("p", { class: "meta yr-meta", "data-key": "meta" }, meta) : null, held ? heldStream(px) : body, waits ? quickPanel(ctx.update) : null].filter(Boolean) });
   pg.setAttribute("data-view", "yours");   // centred at the reading width (the Nov 8 handoff §4.1)
   return pg;
 }
@@ -120,8 +128,8 @@ function page(ctx) {
 export default {
   id: "yours", label: "Yours", about: "every exchange you had, newest first",
   tab: true,
-  enter(ctx) { Y.limit = 40; Y.menu = false; ctx.update(); },
+  enter(ctx) { Y.limit = 40; Y.menu = false; Y.at = performance.now(); clearTimeout(Y.timer); if (!S.history) Y.timer = setTimeout(ctx.update, HOLD_MS + 20); ctx.update(); },
   render(ctx) { return page(ctx); },
   escape: () => closeQuick(),
-  leave() { closeQuick(); },
+  leave() { clearTimeout(Y.timer); closeQuick(); },
 };

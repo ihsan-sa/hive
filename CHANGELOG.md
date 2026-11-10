@@ -4,6 +4,14 @@ Release notes are on the [releases page](https://github.com/ihsan-sa/hive/releas
 
 A release can ship several times a day. A Hive installs each one as soon as it's out; **How often to update** in Settings can slow that to about once a day. The latest is at [releases/latest](https://github.com/ihsan-sa/hive/releases/latest).
 
+## Finger-sized links on Chat, Progress and Settings on a phone
+
+On a phone, the links and names on Chat, Progress and Settings are now big enough to hit with a finger. Links inside a running sentence keep their size.
+
+## Flow keeps its height while it loads
+
+Flow's page now opens at the height it had last time and stays there, so the chart and the list below it no longer jump down as the data arrives.
+
 ## Finger-sized controls on a phone
 
 Buttons and links on Yours, Agents and Flow are now big enough to tap on a phone, and the rows of Agents stay as short as they were.

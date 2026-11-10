@@ -10,7 +10,7 @@ export const SYS = new Set(["starter", "dash", "anon", "all", "400", "mention", 
 const lastApp = () => { try { return localStorage.getItem("appRoute"); } catch (e) { return null; } };
 export const S = {
   app: { route: "open", can: null, app: lastApp() !== "0", pending: lastApp() === null, setup: null },
-  live: null, usage: null, projects: null, agentCosts: null, threadNames: {}, threadMeta: {}, shown: [], threadStatus: {}, agentStatus: {},
+  live: null, usage: null, projects: null, agentCosts: null, threadNames: {}, threadMeta: {}, shown: [], threadStatus: {}, waitsIn: {}, agentStatus: {},
   posts: [], byId: {}, threads: new Map(), off: 0, boardStart: null,
   sessions: [], lastByThread: {}, lastSess: {}, open: {}, byOut: {}, woke: {}, logOff: 0, logStart: null, history: false,
   agents: new Set(), killed: {}, limited: [], limitedSess: new Set(), limitedNow: new Set(),
@@ -216,9 +216,12 @@ export async function loadApp() {
 export async function loadThreadNames() {
   try { const v = await jget("/api/thread-names"); if (JSON.stringify(v) !== JSON.stringify(S.threadNames)) { S.threadNames = v; S.ver++; emit({ names: true }); } } catch (e) {}
 }
+// Which of the reads the count of waits depends on have answered once, right or wrong (needsKnown): a read that fails mustn't keep the number away for good.
+const answered = k => { if (S.waitsIn[k]) return; S.waitsIn[k] = true; S.ver++; emit({ names: true }); };
 /** The person's pins, archive and titles for threads (/api/thread-meta), kept beside the board. */
 export async function loadThreadMeta() {
   try { const v = await jget("/api/thread-meta"); if (JSON.stringify(v) !== JSON.stringify(S.threadMeta)) { S.threadMeta = v; S.ver++; emit({ names: true }); } } catch (e) {}
+  answered("meta");
 }
 /** Threads an agent brought up for the person (/api/shown): `hive show THREAD --why ...`. The strip drops each at its end time. */
 export async function loadShown() {
@@ -227,6 +230,7 @@ export async function loadShown() {
 /** The two-line status bar of each thread (/api/thread-status): `hive status THREAD`. */
 export async function loadThreadStatus() {
   try { const v = await jget("/api/thread-status"); if (JSON.stringify(v) !== JSON.stringify(S.threadStatus)) { S.threadStatus = v && typeof v === "object" ? v : {}; S.ver++; emit({ names: true }); } } catch (e) {}
+  answered("status");
 }
 /** What each agent says it is on (/api/agent-status): `hive me "..."`. */
 export async function loadAgentStatus() {

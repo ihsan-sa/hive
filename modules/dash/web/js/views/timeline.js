@@ -17,7 +17,7 @@ const PRE = [["fit", "Fit", "Fit the current run of activity"], ["1h", "1h"], ["
 const WIN = { "1h": HOUR, "6h": 6 * HOUR, "24h": DAY, "3d": 3 * DAY, "7d": 7 * DAY };
 // T.fit: the window comes from the data. Otherwise T.win is the span and T.end its right edge; a null end follows now.
 const savedWin = getPref("tlWin", "fit");   // "fit" or a preset's key
-const T = { fit: !WIN[savedWin], win: WIN[savedWin] || DAY, end: null, active: !!getPref("tlActive", 0), house: !!getPref("tlHouse", 0), ver: -1, w: 0, last: 0, raf: 0, nLive: 0, nDone: 0, update: () => {} };
+const T = { list: !!getPref("tlList", 0), listN: 50, fit: !WIN[savedWin], win: WIN[savedWin] || DAY, end: null, active: !!getPref("tlActive", 0), house: !!getPref("tlHouse", 0), ver: -1, w: 0, last: 0, raf: 0, nLive: 0, nDone: 0, update: () => {} };
 
 const sLive = x => !x.end && isRunning(x.name);
 const gutter = W => (T.fitRows ? 128 : W < 640 ? 96 : 190);
@@ -69,6 +69,22 @@ const axisEl = s("svg", { class: "tl-axis", "aria-hidden": "true" }), bodyEl = s
 box.append(axisEl, bodyEl);
 const stage = h("div", { class: "cvp-stage", "data-own": "", "data-sig": "timeline" }, box);
 
+// ---- a phone: bars are a few px wide, so the chart is a picture there and this list is what a finger uses (R68). The same spans, same panel as a click on a bar. ----
+const phone = () => matchMedia("(max-width: 640px)").matches;
+const listing = () => !T.fitRows && T.list && phone();
+const LIST_STEP = 50;
+function spanList() {
+  const { t0, t1 } = range(now());
+  const all = lanes(t0, t1).filter(l => !l.house || T.house).flatMap(l => l.bars.map(x => ({ x, th: l.th }))).sort((a, b) => sLive(b.x) - sLive(a.x) || sEnd(b.x) - sEnd(a.x));
+  const row = ({ x, th }) => h("div", { class: "lr", "data-key": x.name + "@" + x.start },
+    h("a", { class: "lr-in", href: agentHref(x.name), onclick: e => { e.preventDefault(); openPanel("agent", x.name); } },
+      h("div", { class: "lr-t" }, statusDot(sLive(x) ? agentStatus(x.name).key : x.exit ? "failed" : "ended"), h("b", null, x.name), h("span", { class: "meta" }, dur(sEnd(x) - x.start))),
+      h("div", { class: "lr-x" }, `${threadTitle(th)} · ${clock(x.start)}${x.end ? "–" + clock(x.end) : ", still running"}`)));
+  return h("div", { class: "cvp-stage tl-list", "data-key": "list" },
+    all.length ? all.slice(0, T.listN).map(row) : h("p", { class: "meta" }, T.active ? "Nobody running in this range." : "Nothing in this window."),
+    all.length > T.listN ? h("div", { class: "lr-more", "data-key": "more" }, button(`Show ${Math.min(LIST_STEP, all.length - T.listN)} more`, () => { T.listN += LIST_STEP; T.update(); }, { kind: "quiet" })) : null);
+}
+
 function lanes(t0, t1) {
   const all = new Map(), lane = th => { let l = all.get(th); if (!l) { l = { th, bars: [], ticks: [], last: 0 }; all.set(th, l); } return l; };
   let nLive = 0, nDone = 0;
@@ -112,7 +128,7 @@ function drawLane(l, y, W, x, follows, nextLive) {
   const kids = [
     s("rect", { class: "tl-bg", x: 0, y, width: W, height: h_ }),
     s("line", { class: "tl-rule", "data-live": l.live && !nextLive ? "" : null, x1: 0, x2: W, y1: y + h_, y2: y + h_ }),
-    s("a", { href: threadHref(l.th), "aria-label": `${S.app.app ? "Conversation" : "Thread"} ${threadTitle(l.th)}, ${tier(tierOf(l.th)).label}`, "data-lane": "", ontip: () => [l.th, tier(tierOf(l.th)).label], onclick: e => { e.preventDefault(); } },
+    s(phone() ? "g" : "a", { href: phone() ? null : threadHref(l.th), "aria-label": `${S.app.app ? "Conversation" : "Thread"} ${threadTitle(l.th)}, ${tier(tierOf(l.th)).label}`, "data-lane": "", ontip: () => [l.th, tier(tierOf(l.th)).label], onclick: e => { e.preventDefault(); } },
       s("rect", { class: "tl-name-hit", x: 0, y, width: L, height: h_ }),
       s("text", { class: "tl-name", "data-live": l.live ? "" : null, x: 16, y: y + h_ / 2 + 4 }, label)),
     l.live ? s("path", { class: "tl-cap", "data-tone": "good", d: shapePath("dot", 8, y + h_ / 2, 3.5) }) : null,
@@ -120,7 +136,7 @@ function drawLane(l, y, W, x, follows, nextLive) {
   for (const b of placed) {
     const st = barTone(b.s), live = sLive(b.s), by = y + TICK + b.r * RH + (tight ? 0 : 1), bh = RH - (tight ? 1 : 3), wid = b.b - b.a, cap = live && follows;
     const room = wid - 8 - (cap ? 6 : 0), name = textW(b.s.name, T.F.bar) <= room ? b.s.name : null;
-    kids.push(s("a", { class: "tl-hit", "data-key": b.s.name + "@" + b.s.start, href: agentHref(b.s.name), tabindex: "-1", "data-tone": st.tone, "aria-label": `${b.s.name}, ${clock(b.s.start)}${b.s.end ? " to " + clock(b.s.end) : ", still running"}`,
+    kids.push(s(phone() ? "g" : "a", { class: "tl-hit", "data-key": b.s.name + "@" + b.s.start, href: phone() ? null : agentHref(b.s.name), tabindex: phone() ? null : "-1", "data-tone": st.tone, "aria-label": `${b.s.name}, ${clock(b.s.start)}${b.s.end ? " to " + clock(b.s.end) : ", still running"}`,
       ontip: barTip(b.s, l.th), onclick: e => { e.preventDefault(); e.stopPropagation(); hideTip(); openPanel("agent", b.s.name); } },
       s("rect", { class: "tl-bar", "data-ended": live ? null : "", x: b.a + .5, y: by + .5, width: Math.max(1.5, wid - 1), height: bh - 1, rx: 2.5 }),
       name ? s("text", { class: "tl-barn", "data-ended": live ? null : "", x: b.a + 4, y: by + bh / 2 + 4 }, name) : null,
@@ -215,7 +231,8 @@ function toolbar() {
       small("←", "Earlier", () => pan(-T.win / 4)), small("→", "Later", () => pan(T.win / 4))),
     !T.fit && T.end != null ? button("Now", () => set(T.win, null), { size: "s", title: "Back to the latest, following now" }) : null,
     seg([["on", "Active only", "Show only the agents running now, and the rows they're on"]], T.active ? "on" : null, () => { T.active = !T.active; setPref("tlActive", T.active ? 1 : 0); T.ver = -1; draw(); T.update(); }, { label: "Filter" }),
-    seg([["on", "All upkeep", "Upkeep rows (status notes, the keeper, the watchdog) are one line each; this shows every run on them"]], T.house ? "on" : null, () => { T.house = !T.house; setPref("tlHouse", T.house ? 1 : 0); T.ver = -1; draw(); T.update(); }, { label: "Upkeep rows" })),
+    seg([["on", "All upkeep", "Upkeep rows (status notes, the keeper, the watchdog) are one line each; this shows every run on them"]], T.house ? "on" : null, () => { T.house = !T.house; setPref("tlHouse", T.house ? 1 : 0); T.ver = -1; draw(); T.update(); }, { label: "Upkeep rows" }),
+    phone() && !T.fitRows ? seg([["chart", "Chart"], ["list", "List", "The same runs as rows you can tap"]], T.list ? "list" : "chart", k => { T.list = k === "list"; T.listN = LIST_STEP; setPref("tlList", T.list ? 1 : 0); T.ver = -1; T.update(); }, { label: "Show as" }) : null),
     infoButton("About this chart", say(HELP), { size: "s" }),
     h("span", { class: "cvp-count" }, `${stamp(r.t0)} – ${r.follows ? "now" : stamp(r.t1)} (${dur(r.t1 - r.t0)})`),
     h("span", { class: "cvp-count", role: "status" }, `${T.nLive} running, ${T.nDone} ended in this range`),
@@ -247,6 +264,7 @@ export default {
   render(ctx) {
     T.update = ctx.update;
     if (!S.live) return h("div", { class: "page" }, pageNav(), waiting(S.failed, "Reading…", "the timeline"));   // no board yet: an empty chart would say nothing ran
+    if (listing()) { const list = spanList(); return canvas({ key: "timeline-list", nav: pageNav(), bar: toolbar(), note: note(), stage: list }); }
     const t = now(), r = range(t);
     if (box.isConnected && (T.ver !== S.ver || box.clientWidth !== T.w || t - T.last >= Math.min(3e4, (r.t1 - r.t0) / 60))) draw();
     else if (!box.isConnected) queueMicrotask(() => { if (box.isConnected) { draw(); T.update(); } });

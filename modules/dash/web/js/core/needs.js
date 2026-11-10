@@ -146,8 +146,9 @@ export const waitingOlder = () => waitingOn().filter(isOlder);
 /** The one number: how many things wait on the person now (the older ones are in Stuff to address, not counted). */
 export const needsN = () => waitingNow().length;
 /** Whether the count can be trusted yet: without the focuses (Later, Not needed, each focus's asks) and the summary it is a different number, 11 where the answer was 5.
- *  So is it before the older board and log are in (S.history): 2 where the answer was 5. The Chat badge is on every page, so it asks for both (at most every 20 s and 5 min); a page outside Chat doesn't load them itself. */
-export const needsKnown = () => S.history && (simpleOn() || (S.foci !== undefined && S.needsYou !== undefined));
+ *  So is it before the older board and log are in (S.history): 2 where the answer was 5. The Chat badge is on every page, so it asks for both (at most every 20 s and 5 min); a page outside Chat doesn't load them itself.
+ *  And before the thread marks and status bars: a faded thread counts until the marks say it's faded, 6 where the answer was 5 (R62). */
+export const needsKnown = () => S.waitsIn.meta && S.waitsIn.status && S.history && (simpleOn() || (S.foci !== undefined && S.needsYou !== undefined));
 /** {recent, older}: the count and the size of Stuff to address. */
 export const needsSplit = () => { const w = waitingOn(), recent = w.filter(x => !isOlder(x)).length; return { recent, older: w.length - recent }; };
 /** Whether this thread is on the list: the rail's Needs you group and the one count read the same answer. */
