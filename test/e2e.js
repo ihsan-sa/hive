@@ -33,7 +33,8 @@ X
 chmod +x "$HOME/hive/.local/bin/hive"; touch "$HOME/hive/.hive-installed"
 echo "The Hive is installed. Open this address: http://localhost:${port}/login#SECRETKEY"
 `);
-  } else if (req.url.startsWith('/login')) { res.setHeader('content-type', 'text/html'); res.end('<title>Hive web app</title><h1 id="app">The web app</h1><a id="out" href="https://example.com/">out</a><a id="in" href="/thread">in</a>'); }
+  } else if (req.url.startsWith('/login')) { res.setHeader('content-type', 'text/html'); res.end('<title>Hive web app</title><h1 id="app">The web app</h1><a id="out" href="https://example.com/">out</a><a id="in" href="/thread">in</a><a id="away" href="/away">away</a>'); }
+  else if (req.url === '/away') { res.statusCode = 302; res.setHeader('location', 'https://example.com/'); res.end(); }
   else if (req.url === '/thread') { res.setHeader('content-type', 'text/html'); res.end('<h1 id="thread">A thread</h1>'); }
   else { res.statusCode = 404; res.end('no'); }
 });
@@ -76,6 +77,11 @@ const title = page => page.locator('#title').textContent();
   await new Promise(r => setTimeout(r, 1500));
   const at = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().map(w => w.webContents.getURL()));
   assert.strictEqual(at.length, 1); assert.ok(at[0].startsWith(`http://localhost:${port}/`), 'outside link stayed out of the window: ' + at);
+  // Nor may the Hive's own address send the window elsewhere.
+  await page.evaluate(() => { document.querySelector('#away').click(); });
+  await new Promise(r => setTimeout(r, 1500));
+  const at2 = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().map(w => w.webContents.getURL()));
+  assert.ok(at2.length === 1 && at2[0].startsWith(`http://localhost:${port}/`), 'a redirect stayed out of the window: ' + at2);
   await app.close();
 
   // Second start: straight in, no setup.

@@ -30,6 +30,13 @@ jobs:
       - run: ${{ matrix.run }} node test/smoke.js "${{ matrix.app }}"
       - if: runner.os == 'Linux'
         run: xvfb-run -a node test/e2e.js && HIVE_APP_BIN="$PWD/${{ matrix.app }}" xvfb-run -a node test/e2e.js
+      # The real install through the packaged app, on this throwaway machine: the site's installer, then the Hive's own web app in the window.
+      - if: runner.os == 'Linux'
+        run: |
+          sudo loginctl enable-linger "$USER"; export XDG_RUNTIME_DIR=/run/user/$(id -u)
+          for i in $(seq 20); do [ -S "$XDG_RUNTIME_DIR/bus" ] && break; sleep 1; done
+          export DBUS_SESSION_BUS_ADDRESS=unix:path=$XDG_RUNTIME_DIR/bus
+          HIVE_APP_REAL=1 xvfb-run -a node test/real.js "$PWD/${{ matrix.app }}"
       - uses: actions/upload-artifact@v4
         if: always()
         with:

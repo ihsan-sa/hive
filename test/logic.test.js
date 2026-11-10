@@ -11,11 +11,27 @@ t('windows: Hive', () => {
 });
 t('mac', () => {
   assert.strictEqual(lib.openCommand('darwin', { HOME: '/Users/a' }, has()), null);
-  assert.deepStrictEqual(lib.openCommand('darwin', { HOME: '/Users/a' }, has('/Users/a/.hive/bin/hive')), { file: '/Users/a/.hive/bin/hive', args: ['open', '--print'] });
+  assert.deepStrictEqual(lib.openCommand('darwin', { HOME: '/Users/a' }, has('/Users/a/.hive/bin/hive')), { file: '/Users/a/.hive/bin/hive', args: ['web'] });
 });
 t('linux: this account', () => {
   const c = lib.openCommand('linux', { HOME: '/home/a' }, has('/home/a/hive/.hive-installed', '/home/a/hive/.local/bin/hive'));
   assert.strictEqual(c.file, '/home/a/hive/.local/bin/hive'); assert.strictEqual(c.env.HOME, '/home/a/hive');
+});
+t('linux: the Hive gets its own surroundings, as the installer gives it', () => {
+  const c = lib.openCommand('linux', { HOME: '/home/a', PATH: '/usr/bin', XDG_CONFIG_HOME: '/home/a/.config' }, has('/home/a/hive/.hive-installed', '/home/a/hive/.local/bin/hive'));
+  assert.strictEqual(c.env.PATH, '/home/a/hive/.local/bin:/usr/bin');
+  assert.ok(c.unset.includes('XDG_CONFIG_HOME') && c.unset.includes('CLAUDE_CONFIG_DIR'));
+  assert.match(c.env.XDG_RUNTIME_DIR, /^\/run\/user\/\d+$/);
+});
+t('windows: the Hive system is kept awake', () => {
+  const c = lib.openCommand('win32', { LOCALAPPDATA: 'C:\\Users\\a\\AppData\\Local', windir: 'C:\\Windows' }, () => true);
+  assert.strictEqual(c.keep.file, 'C:\\Windows\\System32\\conhost.exe');
+  assert.deepStrictEqual(c.keep.args.slice(-3), ['--exec', 'sleep', 'infinity']);
+});
+t('linux: a missing curl or git is named, not called a bad connection', () => {
+  const c = lib.installCommand('linux', { HOME: '/home/a' }, false);
+  const r = require('child_process').spawnSync('/bin/sh', ['-c', c.args[1]], { env: { PATH: '/nonexistent' }, encoding: 'utf8' });
+  assert.strictEqual(r.status, 1); assert.match(r.stdout, /needs these first: curl git python3/); assert.match(r.stdout, /sudo apt install curl git python3/);
 });
 t('linux: half an install is no install', () => assert.strictEqual(lib.openCommand('linux', { HOME: '/home/a' }, has('/home/a/hive/.local/bin/hive')), null));
 t('linux: own user, by its launcher', () => {
@@ -37,6 +53,9 @@ t('install results', () => {
   assert.strictEqual(lib.installResult(0, 'WSL is installed. Restart Windows, then run the same line again.'), 'restart');
   assert.strictEqual(lib.installResult(0, 'The Hive is installed.'), 'done');
   assert.strictEqual(lib.installResult(1, 'curl: (6)'), 'failed');
+  // Windows' installer ends 0 whatever happened: only its last line means done (a repair that stopped has hive.cmd already).
+  assert.strictEqual(lib.installResult(0, 'Step 3\nCould not download the system.', 'win32'), 'failed');
+  assert.strictEqual(lib.installResult(0, 'The Hive is installed. This address is the key', 'win32'), 'done');
 });
 t('addresses', () => {
   assert.strictEqual(lib.localUrl('warning\r\nhttp://localhost:8077/login#abc\r\n'), 'http://localhost:8077/login#abc');
@@ -47,6 +66,7 @@ t('addresses', () => {
   assert.ok(!lib.sameApp('http://localhost:9000/', 'http://localhost:8077/login#x'));
   assert.ok(!lib.sameApp('https://example.com/', 'http://localhost:8077/'));
   assert.strictEqual(lib.redact('open http://localhost:8077/login#SECRETKEY now'), 'open http://localhost:8077/login#… now');
-  assert.strictEqual(lib.plain('\x1b[32mok\x1b[0m\rnext'), 'ok\nnext');
+  assert.strictEqual(lib.plain('\x1b[32mok\x1b[0m\rnext'), 'next');
+  assert.strictEqual(lib.plain('a\r\nb\n 10%\r 50%\r100%\nc'), 'a\r\nb\n100%\nc');
 });
 console.log(`ok ${n} tests`);

@@ -5,5 +5,4 @@ if (location.protocol === 'file:') contextBridge.exposeInMainWorld('hive', {
   retry: () => ipcRenderer.send('retry'),
   quit: () => ipcRenderer.send('quit'),
   on: (name, fn) => ipcRenderer.on(name, (_e, ...a) => fn(...a)),
-  ready: () => ipcRenderer.send('ready'),
 });

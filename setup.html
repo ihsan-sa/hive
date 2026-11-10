@@ -35,13 +35,13 @@ const how = {
   linux: "It installs in a folder of your own account (~/hive) and needs no password. Agents work in a sandbox around that folder.",
 };
 const screens = {
-  welcome: p => ({ title: "Set up the Hive", text: ["The Hive isn't on this computer yet. This installs it, which takes a few minutes and needs the internet.", how[p.platform] || how.linux, "Before anything is changed, it shows you what the agents will be able to reach and asks you to accept."], buttons: [["Install", "main", () => hive.install(false)], ["Not now", "", () => hive.quit()]] }),
+  welcome: p => ({ title: "Set up the Hive", text: ["The Hive isn't on this computer yet. This installs it, which takes a few minutes and needs the internet.", how[p.platform] || how.linux, ...(p.platform === 'linux' ? ["Before anything is changed, it shows you what the agents will be able to reach and asks you to accept."] : [])], buttons: [["Install", "main", () => hive.install(false)], ["Not now", "", () => hive.quit()]] }),
   installing: () => ({ title: "Installing the Hive", spin: true, text: ["This takes a few minutes. You can leave this window open and do something else."], buttons: [] }),
   accept: () => ({ title: "Before it installs", text: ["Read what it says below. Nothing has been changed so far."], buttons: [["Accept and install", "main", () => { $('log').textContent = ''; hive.install(true); }], ["Don't install", "", () => hive.quit()]], keep: true }),
   restart: () => ({ title: "Restart Windows", text: ["Windows installed the part the Hive needs (WSL 2), and has to restart before it works. Restart, then open Hive again and it carries on."], buttons: [["Close", "main", () => hive.quit()]], keep: true }),
-  failed: () => ({ title: "The install stopped", text: ["What it said is below. Trying again carries on from where it stopped."], buttons: [["Try again", "main", () => { $('log').textContent = ''; hive.install(true); }], ["Close", "", () => hive.quit()]], keep: true }),
-  starting: () => ({ title: "Opening the Hive", spin: true, text: ["Starting it up. After the computer has just been turned on this can take a minute or two."], buttons: [] }),
-  nostart: p => ({ title: "The Hive didn't start", text: ["It's installed, but it didn't answer."], note: p.note, buttons: [["Try again", "main", () => hive.retry()], ["Repair (run the installer again)", "", () => hive.install(true)], ["Close", "", () => hive.quit()]] }),
+  failed: () => ({ title: "The install stopped", text: ["What it said is below. Trying again carries on from where it stopped."], buttons: [["Try again", "main", () => { $('log').textContent = ''; hive.install(false); }], ["Close", "", () => hive.quit()]], keep: true }),
+  starting: () => ({ title: "Opening the Hive", spin: true, text: ["Starting it up. After the computer has just been turned on this can take a minute or two."], buttons: [["Close", "", () => hive.quit()]] }),
+  nostart: p => ({ title: "The Hive didn't start", text: ["It's installed, but it didn't answer."], note: p.note, buttons: [["Try again", "main", () => hive.retry()], ["Repair (run the installer again)", "", () => hive.install(false)], ["Close", "", () => hive.quit()]] }),
 };
 function show(state, p) {
   const s = (screens[state] || screens.welcome)(p || {});
