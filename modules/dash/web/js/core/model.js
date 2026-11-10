@@ -113,6 +113,9 @@ export function agentSpend(n, stream) {
   return { usd: stream.c, t: stream.t, calls: A ? A.calls : null, m: stream.m || (A ? A.m : {}), sub: A ? A.sub : 0, src: "session logs" };
 }
 
+/** True until the first read of the transcripts has come back: session logs alone would show today's agents at $0.00 and a total a fraction of the real one. No h2-cost: at stays 0, refreshing false, and this is false. */
+export const costsPending = () => !S.agentCosts || (!S.agentCosts.at && !!S.agentCosts.refreshing);
+
 /** An agent's cost so far in USD over all its runs (agentSpend over its sessions' logs), or null if nothing is recorded. */
 export function agentCost(n) {
   const files = (S.usage && S.usage.files) || {}, st = { c: 0, t: [0, 0, 0, 0], m: {} }; let seen = false;
@@ -345,7 +348,7 @@ export function threadTitle(th) {
   if (S.threadNames[th]) return S.threadNames[th];
   if (!S.app.app) return th;
   const d = S.threads.get(th), p = d && d.posts[0];
-  return p ? short(bareLinks(mdPlain(displayText(p)).split("\n")[0]), 64) : th;
+  return p ? short(bareLinks(mdPlain(displayText(p)).split("\n")[0]), 64) : "A conversation";
 }
 /** The agent behind "@question" in the side search works here (dash.py, side_ask): an agent like any other in Agents, but its thread is no conversation, so no chat list holds it. */
 export const SIDE_THREAD = "side";

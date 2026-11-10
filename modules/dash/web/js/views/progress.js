@@ -5,6 +5,7 @@ import { h } from "../core/dom.js";
 import { S, can, jget } from "../core/store.js";
 import { ago, pct, plural, short } from "../core/format.js";
 import { metrics } from "../templates.js";
+import { heldRoom } from "../core/room.js";
 import { empty, pageHeader, section, seg, staleNote, stats, statusWord, pageNav } from "../ui/kit.js";
 import { agentRef, threadRef } from "../ui/refs.js";
 import { table } from "../ui/table.js";
@@ -17,7 +18,7 @@ const ASK_TEXT_APP = { open: "nobody on it yet", owned: "in hand", held: "held",
 const app = () => !!S.app.app;
 const GRADE_TONE = { delivered: "good", partial: "warn", nothing: "bad", silent: "bad", quiet: "quiet", not_asked: "quiet" };
 const GRADE_TEXT = { delivered: "delivered", partial: "partial", nothing: "nothing", silent: "silent", quiet: "quiet", not_asked: "not asked" };
-const IMP_TONE = { landed: "info", held: "good", reverted: "bad", inconclusive: "quiet" };
+const IMP_TONE = { landed: "info", held: "good", reverted: "bad", "reverted-candidate": "warn", inconclusive: "quiet", unjudgeable: "quiet" };
 // The scoreboard's lines, in plain words. lower: a fall is the good direction.
 const LINES = [
   ["asks_open", "Asks open", true], ["asks_oldest_open_d", "Oldest open ask, days", true], ["asks_orphaned", "Asks nobody is on", true], ["asks_done", "Asks done"],
@@ -60,12 +61,14 @@ function tiles(V) {
   ], { card: true });
 }
 
+const PHONE_FOLD = id => (matchMedia("(max-width: 640px)").matches ? { n: 12, id: "progress." + id } : null);   // R48: a phone shows the first dozen, "Show all" for the rest
+
 function asksSection(V, update) {
   const rows = V.asks.filter(a => P.asks === "all" || (P.asks === "owed" ? OWED.has(a.status) : a.status === "done"))
     .sort((a, b) => (a.orphaned !== b.orphaned ? (a.orphaned ? -1 : 1) : (a.when || "") < (b.when || "") ? -1 : 1));
   return section({ title: "Asks", key: "asks", info: "Every ask from the person, read out of the board every hour. Nothing is dropped: an ask is open until an agent marks it done with evidence, or the person says so.",
     actions: seg([["owed", "Owed", null, V.asks.filter(a => OWED.has(a.status)).length], ["done", "Done lately", null, V.asks.filter(a => a.status === "done").length], ["all", "All", null, V.asks.length]], P.asks, k => { P.asks = k; update(); }, { label: "Which asks" }) },
-    table({ key: r => r.id, empty: P.asks === "owed" ? "Nothing is owed." : "No asks here.", caption: "Asks",
+    table({ key: r => r.id, empty: P.asks === "owed" ? "Nothing is owed." : "No asks here.", caption: "Asks", fold: PHONE_FOLD("asks"),
       columns: [
         { label: "Asked", render: r => when(r.when) },
         { label: "Ask", clip: true, render: r => (app() || !r.evidence ? h("span", { title: r.ask || "" }, r.ask || "")
@@ -81,7 +84,7 @@ function outcomesSection(V, update) {
   const rows = V.outcomes.recent.filter(r => P.outs === "all" || r.grade === P.outs);
   return section({ title: "Runs' outcomes", key: "outcomes", info: "Each run the person woke is graded an hour after it ends: did it deliver what the post asked? Silent means it posted nothing at all.",
     actions: seg([["all", "All"], ...order.filter(g => c[g]).map(g => [g, `${GRADE_TEXT[g]} ${c[g]}`])], P.outs, k => { P.outs = k; update(); }, { label: "Which grade" }) },
-    table({ key: r => r.key, empty: "No run graded in the last day.", caption: "Runs' outcomes in the last day",
+    table({ key: r => r.key, empty: "No run graded in the last day.", caption: "Runs' outcomes in the last day", fold: PHONE_FOLD("outcomes"),
       columns: [
         { label: "Ended", render: r => when(r.ended) },
         { label: "Agent", render: r => agentRef(r.name) },
@@ -134,7 +137,8 @@ export default {
   poll: { every: 60000, run(ctx) { return refresh(ctx); } },
   render(ctx) {
     const V = P.v && Array.isArray(P.v.asks) ? P.v : null;
-    if (!V) return h("div", { class: "page" }, pageNav(), P.failed ? empty("Couldn't read the progress data. It keeps trying.", { kind: "error" }) : empty("Reading…", { kind: "loading" }));
+    const room = heldRoom("progress-page", "#main > *", { settled: !!V });   // the page is one read: its height from last time while that read is out
+    if (!V) return h("div", { class: "page", style: room ? `min-height:${room}px` : null }, pageNav(), P.failed ? empty("Couldn't read the progress data. It keeps trying.", { kind: "error" }) : empty("Reading…", { kind: "loading" }));
     const head = lead(V), update = () => ctx.update();
     return metrics({
       header: pageHeader({ subnav: pageNav(), state: head.state, title: head.title, lead: head.text, tone: head.tone, after: P.failed ? staleNote("Couldn't refresh, so this shows what it read last. It keeps trying.") : null, meta: [S.app.app ? null : "hive progress, hive asks, hive outcomes, hive improve"].filter(Boolean) }),

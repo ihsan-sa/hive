@@ -10,7 +10,7 @@ import { button, empty, waiting, input, pageHeader, seg, staleNote, toolbar, pag
 import { agentRef, threadRef } from "../ui/refs.js";
 
 const KINDS = [["all", "Everything"], ["step", "Steps"], ["post", "Messages"], ["agent", "Agents"], ["thread", "Threads"], ["trouble", "Trouble"], ["hive", "Hive"]];
-const L = { kind: "all", q: "", limit: 300, seen: 0, sig: "", fsig: "", count: 0 };
+const L = { kind: "all", q: "", limit: matchMedia("(max-width: 640px)").matches ? 54 : 300, seen: 0, sig: "", fsig: "", count: 0 };
 const ST = { key: "", rows: [], total: 0, sig: "", busy: false, reading: false };   // the server's page of steps for the current filter
 const wantSteps = () => L.kind === "all" || L.kind === "step";
 

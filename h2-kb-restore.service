@@ -1,0 +1,15 @@
+[Unit]
+Description=Bring back kb notes the weekly pass moved, if they were read or found since (no model)
+
+[Service]
+Type=oneshot
+Slice=app-h2jobs.slice
+Environment=PATH=%h/core:%h/modules/bin:%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=HIVE_NAME=kb-pass
+Environment=TMPDIR=%h/.cache/hive-tmp
+Environment=KB_DENSE=0
+WorkingDirectory=%h
+ExecStart=/usr/bin/python3 -I %h/projects/rsi-lab/kb_pass.py --restore
+Nice=15
+MemoryMax=500M
+TimeoutStartSec=5min

@@ -37,7 +37,8 @@ export function mobileNav({ views, current, nav, update }) {
     groups = [["Pages", views.filter(v => on(v) && !DEV_MAIN.includes(v.id))]];
     active = current === "agent" ? "now" : main.some(v => v.id === current) ? current : null;
   }
-  const inMore = !active || !main.some(v => v.id === active);
+  if (S.app.pending) main = groups = [];   // a first-ever visit doesn't know this Hive's pages yet (store.js)
+  const inMore = !S.app.pending && (!active || !main.some(v => v.id === active));
   const shut = () => { ST.open = false; };
   const close = () => { shut(); update(); };
   const th = getTheme();

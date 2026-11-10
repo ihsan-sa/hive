@@ -5,7 +5,7 @@
    States are data attributes: .kb-ask[data-state=idle|sending|working|answered|error], .vm[data-playing]. */
 
 .kb{--kb-col:880px;--kb-side:272px;
-  display:grid;grid-template-columns:var(--kb-side) minmax(0,1fr);height:calc(100dvh - var(--top-h,var(--bar-h)));min-height:0;background:var(--bg)}
+  display:grid;grid-template-columns:var(--kb-side) minmax(0,1fr);height:calc(100dvh - var(--bar-h));min-height:0;background:var(--bg)}
 #main:has(>.kb){min-height:0}
 
 /* ---------- sidebar: the file tree ---------- */
@@ -277,7 +277,7 @@
   .kb{grid-template-columns:minmax(0,1fr);background:var(--surface)}
   .kb[data-in]>.kb-side{display:none}
   .kb:not([data-in])>.kb-main{display:none}
-  .kb:not([data-in]){height:auto;min-height:calc(100dvh - var(--top-h,var(--bar-h)))}   /* the list scrolls with the page, so Back returns to the same row (app.js keeps page scroll per route) */
+  .kb:not([data-in]){height:auto;min-height:calc(100dvh - var(--bar-h))}   /* the list scrolls with the page, so Back returns to the same row (app.js keeps page scroll per route) */
   .kb:not([data-in]) .kb-list{overflow:visible}
   .kb-side{border-right:0;background:var(--surface)}
   .kb-top{padding:var(--s3) var(--s4) var(--s1)}

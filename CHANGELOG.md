@@ -4,6 +4,70 @@ Release notes are on the [releases page](https://github.com/ihsan-sa/hive/releas
 
 A release can ship several times a day. A Hive installs each one as soon as it's out; **How often to update** in Settings can slow that to about once a day. The latest is at [releases/latest](https://github.com/ihsan-sa/hive/releases/latest).
 
+## Settings, Inbox, Design and Start hold still while they load
+
+These pages started in the wide column and moved across to the narrow one when their data arrived, a jump of 270 px on a wide screen. They now start in the narrow column, and so do their loading and error messages.
+
+## Needs you rows read in plain words
+
+Rows on the Needs you page and the home could show ask codes such as `k0863` or "(an ask, an ask)", and some ended with a raw thread name. The codes are gone from every row, and a thread named at the end of a row now appears as that conversation's title beside the time.
+
+## The Chat badge is right as soon as it appears
+
+The number on the Chat badge could be one short for about a second and a half after the page loaded, until the next update corrected it. It now shows the right count from the moment it appears.
+
+## Agents list holds still while it loads
+
+The long list on the Agents page no longer shrinks for a moment when the older half of the history is slow to arrive, and the other pages that wait for the whole history no longer treat it as complete early. Narrowing the window after the page has loaded now switches to the shorter phone list, and widening it again brings the full list back.
+
+## What waits on you counts acts, not threads
+
+The summary of what waits on you now groups threads that one act would settle, so one payment or one call is one line. A line that names no money, account, voice, device or root work now draws a warning to decide it instead.
+
+## What waits on you stays true
+
+The summary of what waits on you is now checked against the threads each time it is rebuilt. Anything still open comes back even if someone removed it from the list, and something finished leaves on its own. Agents can take back a For you line that no longer applies, and one repeated in new words now counts once.
+
+## Phone pages start sooner
+
+On a phone, Timeline and the Map keep one row of controls above the chart, with the rest behind an Options button that also shows when a hidden filter is on. The Map now comes before its summary, the first section of a page sits right under the title, and every Settings page shows without scrolling sideways.
+
+## Chat and Yours stay still as they open
+
+The Chat and Yours pages no longer drop down when the app finishes loading. The first visit in a browser can still move once, because it has nothing remembered yet.
+
+## Finger-sized links on Chat, Progress and Settings on a phone
+
+On a phone, the links and names on Chat, Progress and Settings are now big enough to hit with a finger. Links inside a running sentence keep their size.
+
+## Flow keeps its height while it loads
+
+Flow's page now opens at the height it had last time and stays there, so the chart and the list below it no longer jump down as the data arrives.
+
+## Finger-sized controls on a phone
+
+Buttons and links on Yours, Agents and Flow are now big enough to tap on a phone, and the rows of Agents stay as short as they were.
+
+## The Chat badge settles before it shows
+
+The Chat badge shows one number from the start, instead of a number that changes a moment later. It and the line on Chat's front page now wait until everything that goes into the count has arrived.
+
+## Chat's front page waits in grey
+
+While Chat's front page reads, grey blocks stand where the waiting rows and the focus cards will land, in place of the bare Reading line.
+
+## The top bar is there from the first moment
+The bar across the top now appears as soon as the page opens, at its full height, instead of after a blank moment. The first time a browser opens a Hive, the bar shows your logo and menu until the Hive answers, and the developer bar no longer flashes up.
+
+## Slow pages wait in their own shape
+While **Knowledge**, **Usage**, **This machine**, **Admin jobs** and **Design** read their data, grey blocks now stand where the content will land, instead of one line of "Reading…". The list in **Chat** also waits in grey until it knows your focuses, so it no longer draws flat and then re-sorts into groups.
+
+## Chat's page links match the rest of the app, and page widths agree
+**Yours**, **Inbox**, **Mail** and **Files** above Chat now look like the row of pages under Agents and Usage, with a line under the page you are on. **Yours** is now the same width as **Inbox**, and **Design** is narrower to match.
+
+## Signing in again no longer strands you on a logged-out page
+When full access ends on a Hive you reach through Cloudflare Access, **Sign in again** and **Limited · sign in for full** now take you straight to the sign-in page. Before, they stopped on Cloudflare's "You successfully logged out" page and you had to reopen the Hive yourself.
+
 ## Waits on you: the buttons line up with the time
 On the **Waits on you** page, Later, Not needed and Answer now sit on the same line as the item's title and time, instead of lower down in the middle of the row.
 
@@ -181,3 +245,6 @@ Start the Chat search box with an at sign and a question, then press Enter. An a
 ## Fewer refused requests just after a restart
 
 If the app couldn't reach Cloudflare the moment it restarted, requests from outside were refused for a minute with a message about an Access token. It now tries again within seconds.
+
+## dash: smarter "not needed" greying
+The thread importance pass now re-reads threads as they age and sees how old each post is, so delivered and finished threads get greyed instead of lingering. A thread that names videos, PDFs or other deliverables is never greyed. A thread waiting on a "For you:" answer is no longer archived by age.

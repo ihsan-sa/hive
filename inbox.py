@@ -18,7 +18,7 @@ PostToolUse also asks, once per run, for a first line when the person started th
 nothing has been posted since: the person chases after 1 to 3 min of silence ("hello?", 5 times on 2026-11-04).
 Outside an Hive session (no HIVE_NAME or no run record) it does nothing.
 """
-import datetime as dt, json, os, re, subprocess, sys, time
+import datetime as dt, hashlib, json, os, re, subprocess, sys, time
 from pathlib import Path
 
 HOME = Path.home()
@@ -254,6 +254,55 @@ def reason_from_post(name, rec, thread, st, since, t=None):
     except OSError: pass
     return got + ("post",)
 
+BAR_SKIP = {"thread-status", "watchdog", "keeper", "improve", "side"}  # as thread_status.SKIP
+
+def bar_line(p):
+    """Line 2 for a bar written from post `p`: its last line when that is a stop or Next line, else its first sentence. Names lose the @ so a bar never reads as a mention."""
+    lines = [l.strip().strip("*_ ").strip() for l in str(p.get("text", "")).strip().splitlines() if l.strip()]
+    while len(lines) > 1 and re.fullmatch(r"(?:@[\w.-]+[\s,.]*)+", lines[-1]): lines.pop()
+    if not lines: return ""
+    last = lines[-1]
+    line = last if any(last.lower().startswith(w.lower() + ":") for w in STOP_WORDS) else re.split(r"(?<=[.!?])\s", lines[0], maxsplit=1)[0]
+    return re.sub(r"@([\w.-]+)", r"\1", line)[:160]
+
+def run_end_bars(name, rec, t=None):
+    """At a run's real end, the status bar of each thread it posted in, from its newest post there, when the run didn't set one itself.
+    The bar stays current without a model (the lab, 2026-11-10, post 111002559ce8: the timer spent ~165 agent starts a day on it). A bar this run set by hand is left; so is one another agent set
+    after the post or within STOP_HOLD_S, as in reason_from_post. Returns the threads written."""
+    if os.environ.get("HIVE_DOOR") or not rec.get("at") or WARDEN.fullmatch(name) or name == "status-timer": return []
+    try: at = dt.datetime.fromisoformat(rec["at"]); start = (at if at.tzinfo else at.replace(tzinfo=dt.timezone.utc)).timestamp()
+    except ValueError: return []
+    t, newest, wrote = t or time.time(), {}, []
+    for p in own_posts(name, rec["at"]) or []:
+        if p.get("thread") and p["thread"] not in BAR_SKIP: newest[p["thread"]] = p
+    for thread, p in newest.items():
+        try: pat = dt.datetime.fromisoformat(p["at"]); pat = (pat if pat.tzinfo else pat.replace(tzinfo=dt.timezone.utc)).timestamp()
+        except (KeyError, ValueError): continue
+        st = last_status(thread)
+        sat = st.get("at") if isinstance(st.get("at"), (int, float)) else 0
+        mine = str(st.get("from", "")).lower() == name
+        if mine and sat >= start and not (str(st.get("via", "")).startswith("run-end") and sat < pat): continue  # set by hand this run, or already written for this post
+        if not mine and st.get("from") and (sat > pat or t - sat <= STOP_HOLD_S): continue  # another agent's newer or fresh bar is theirs
+        line = bar_line(p)
+        if not line: continue
+        line1 = (str(st.get("text", "")).strip().splitlines() or [""])[0].strip() or thread
+        try:
+            with (STATE / "thread-status.jsonl").open("a") as fh:
+                fh.write(json.dumps({"thread": thread, "from": name, "text": f"{line1}\n{line}"[:400], "at": t, "via": "run-end " + str(p.get("id", ""))}) + "\n")
+            wrote.append(thread)
+        except OSError: pass
+    return wrote
+
+def gate_off(name, t):
+    """True when this agent is in the no-ask arm of the stop-gate trial: ~/.hive/gate-trial.json {"name", "from", "until"} (ISO),
+    a coin on the trial and agent name. The gate still reads and logs the reason; it only doesn't ask for a missing one
+    (projects/rsi-lab/rules.md section 9: of 406 asks, 95% bought the line and nothing more, and run_end_bars now writes the bar)."""
+    try:
+        g = json.loads((STATE / "gate-trial.json").read_text())
+        ts = lambda v: (lambda d: d if d.tzinfo else d.replace(tzinfo=dt.timezone.utc))(dt.datetime.fromisoformat(v)).timestamp()
+        return ts(g["from"]) <= t < ts(g["until"]) and int(hashlib.sha1(f"{g['name']}:gate:{name}".encode()).hexdigest(), 16) % 2 == 1
+    except (OSError, ValueError, KeyError, TypeError): return False
+
 def stop_gate(name, rec, t=None):
     """Why this stop should wait: the run has given no reason for stopping. The person, 2026-11-06 (post 11052128aa48): before
     ending work an agent justifies the stop in the thread's status bar, against the goal of moving forward and stopping only
@@ -280,6 +329,7 @@ def stop_gate(name, rec, t=None):
         except OSError: pass
     if got or n >= STOP_ASKS:
         log("passed" if got else "let go"); return None
+    if gate_off(name, t): log("not asked"); return None
     try: f.parent.mkdir(parents=True, exist_ok=True); f.write_text(f"{rec['at']} {n + 1}")
     except OSError: return None  # can't count the asks: don't risk a loop
     log("asked")
@@ -298,25 +348,33 @@ def stop_gate(name, rec, t=None):
             "take the next step, and give the reason when one is true.")
 
 def focus_nudge(name, rec):
-    """One reminder per run, at Stop, when the run posted a result in a thread that is in a focus whose summary is older than
-    that result (projects/ui-redesign/human-workflow.md, 2026-11-07: the agent that posts the result updates the focus summary
-    in the same run; no cleanup pulses), and, once per conversation, when that thread is in no focus or still has no title
-    (focus.file_nudge; the person, 2026-11-08, post 1108153548ec). Joined into the stop block when there is one; never a block on its own."""
+    """A reminder at Stop when the run posted a result in a thread that is in a focus whose summary is older than that result
+    (projects/ui-redesign/human-workflow.md, 2026-11-07: the agent that posts the result updates the focus summary in the same
+    run; no cleanup pulses), and, once per conversation, when that thread is in no focus or still has no title (focus.file_nudge,
+    throttled by its own record; the person, 2026-11-08, post 1108153548ec). Joined into the stop block when there is one.
+    The summary reminder comes once per result, not once per run: the mark holds when it was last given, and only a result posted
+    after that is asked about, so an agent that ignores it is not held. Once per run missed a result posted after the first
+    reminder (a70a4, chipflow-build-195) and a thread filed at this very Stop, whose ask had used the run's one reminder
+    (ad78e, a552f): projects/rsi-lab/pickup_causes.py, thread rsi-lab-pickups."""
     thread = rec.get("thread")
     if os.environ.get("HIVE_DOOR") or not rec.get("at") or not thread or WARDEN.fullmatch(name): return None
     f = STATE / "focus-asked" / name
     try:
-        if f.read_text().strip() == rec["at"]: return None
-    except OSError: pass
-    try:
         import focus
         at = dt.datetime.fromisoformat(rec["at"]); since = (at if at.tzinfo else at.replace(tzinfo=dt.timezone.utc)).timestamp()
+        results_from = since
+        try:
+            run, last = f.read_text().split()
+            if run == rec["at"]: results_from = max(since, float(last))
+        except (OSError, ValueError): pass
         posts = focus.board_posts()
-        msg = "\n\n".join(x for x in (focus.nudge(name, thread, since, posts), *(focus.file_nudge(name, th, since, posts) for th in focus.threads_posted(name, thread, since, posts))) if x)
+        summary = focus.nudge(name, thread, results_from, posts)
+        msg = "\n\n".join(x for x in (summary, *(focus.file_nudge(name, th, since, posts) for th in focus.threads_posted(name, thread, since, posts))) if x)
     except Exception: return None
     if not msg: return None
-    try: f.parent.mkdir(parents=True, exist_ok=True); f.write_text(rec["at"])
-    except OSError: return None
+    if summary:
+        try: f.parent.mkdir(parents=True, exist_ok=True); f.write_text(f"{rec['at']} {time.time()}")
+        except OSError: return None
     return msg
 
 def stops(since_h=24.0):
@@ -407,7 +465,7 @@ def recall_note(name, ps):
     ids = [p["id"] for p in ps if str(p.get("from", "")).lower() not in ("starter", "watchdog")][:5]
     if not ids or WARDEN.fullmatch(name) or os.environ.get("HIVE_DOOR"): return ""
     try:
-        r = subprocess.run([sys.executable, "-I", str(KB), "recall", "--for", name, *(x for i in ids for x in ("--post", i))],
+        r = subprocess.run([sys.executable, "-I", str(KB), "recall", "--for", name, *(x for i in ids for x in ("--post", i)), "--midrun"],
                            capture_output=True, text=True, timeout=5)
     except (OSError, subprocess.SubprocessError): return ""
     return "\n\n" + r.stdout.strip() if r.returncode == 0 and r.stdout.strip() else ""
@@ -452,6 +510,9 @@ def main():
             print(json.dumps({"decision": "block", "reason": "\n\n".join(x for x in (why, focus_nudge(name, rec)) if x)}))
         elif event == "Stop" and (fn := focus_nudge(name, rec)):
             print(json.dumps({"decision": "block", "reason": fn}))
+        elif event == "Stop":
+            try: run_end_bars(name, rec)
+            except Exception: pass  # a bar never holds up a stop
         elif first or check:
             print(json.dumps({"hookSpecificOutput": {"hookEventName": event or "PostToolUse", "additionalContext": "\n\n".join(x for x in (first, check) if x)}}))
         return

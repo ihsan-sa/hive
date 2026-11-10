@@ -205,6 +205,7 @@ HUNT_SPEC_KEYS = frozenset("goal orgs discover target per_org must roles exclude
 
 def _pattern(spec, key):
     if not spec.get(key): return None
+    if not isinstance(spec[key], str): raise ValueError(f"spec {key} must be a pattern string, not {type(spec[key]).__name__}")
     try: return re.compile(spec[key], re.I if key != "org_pattern" else 0)
     except re.error as e: raise ValueError(f"spec {key} isn't a valid pattern: {e}")
 
@@ -217,12 +218,23 @@ class Hunt:
     Running again on the same case picks up where the last run stopped; pages and searches are reused."""
     def __init__(self, spec, case, log=print):
         self.s, self.case, self.log = spec, case, log
+        for k in ("target", "per_org", "workers", "max_seconds", "read_per_search", "stale_days", "max_age_years"):
+            v = spec.get(k)
+            if v is not None and (isinstance(v, bool) or not isinstance(v, (int, float))): raise ValueError(f"spec {k} must be a number, not {v!r}")
+        for k in ("allow_secondary", "allow_page_signal"):
+            if k in spec and not isinstance(spec[k], bool): raise ValueError(f"spec {k} must be true or false, not {spec[k]!r}")
         self.target = int(spec.get("target", 25))
         self.per_org = int(spec.get("per_org", 2))
         for k, v in (("target", self.target), ("per_org", self.per_org)):
             if v < 1: raise ValueError(f"spec {k} must be at least 1, not {v}")
-        self.must = list(spec.get("must", []))
+        m = spec.get("must") or []
+        if isinstance(m, str): m = [m]  # one word given bare: not a list of its letters
+        if not isinstance(m, list) or not all(isinstance(x, str) for x in m): raise ValueError("spec must is a list of words (or one word)")
+        self.must = list(m)
         self.role, self.exclude = _pattern(spec, "roles"), _pattern(spec, "exclude_roles")
+        for k in ("angles", "orgs", "discover"):
+            v = spec.get(k)
+            if v and (not isinstance(v, list) or not all(isinstance(x, str) for x in v)): raise ValueError(f"spec {k} must be a list of strings")
         self.angles = spec.get("angles") or ['"{org}" dean artificial intelligence', '"{org}" news release artificial intelligence program']
         for a in self.angles:
             try: a.format(org="x")
@@ -497,7 +509,7 @@ class Hunt:
         if nh: lines += ["## No named head", "The office page was read and prints only a mailbox or phone, no person. This is a gap in the source, not a miss by the search:", *[f"- {o} — [{u}]({u})" for o, u in nh.items()], ""]
         if untried: lines += ["## Organisations not tried", *[f"- {o}" for o in untried[:30]], ""]
         (out_dir / "REPORT.md").write_text("\n".join(lines) + "\n")
-        return {"status": status, "leads": len(rows), "verified": n_ver, "target": self.target, "near": len(self.near), "out": str(out_dir.resolve()), "stopped": self.stop_reason, "departure_searches": self.departure_searches, "lead_list": [{k: r.get(k, "") for k in ("name", "title", "organisation", "check_status")} for r in rows], "no_named_head": [{"org": o, "url": nh[o]} for o in sorted(nh)]}
+        return {"status": status, "leads": len(rows), "verified": n_ver, "target": self.target, "near": len(self.near), "out": str(out_dir.resolve()), "stopped": self.stop_reason, "departure_searches": self.departure_searches, "lead_list": [{k: r.get(k, "") for k in ("name", "title", "organisation", "check_status", "source_url")} for r in rows], "no_named_head": [{"org": o, "url": nh[o]} for o in sorted(nh)]}
 
 
 def analyze_pages(pages, today=None):

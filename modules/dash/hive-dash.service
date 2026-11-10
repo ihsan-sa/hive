@@ -8,7 +8,7 @@ ExecStart=/usr/bin/python3 -I %h/modules/dash/dash.py serve
 Restart=on-failure
 MemoryMax=300M
 # Never in the way of the hive: last in line for CPU and disk, and a hard ceiling.
-CPUQuota=25%
+CPUQuota=100%
 Nice=15
 IOSchedulingClass=idle
 

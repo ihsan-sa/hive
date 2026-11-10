@@ -8,7 +8,7 @@ import { agentStatus, isAgent, isRunning, isWarden, modelName, sEnd, threadTitle
 import { ago, clock, dur, firstSentence, money, now, short, toks, plural, DAY, HOUR, MIN } from "../core/format.js";
 import { agentHref, threadHref } from "../core/router.js";
 import { status, tier } from "../core/status.js";
-import { button, waiting, icon, pageNav, seg, statusDot } from "../ui/kit.js";
+import { button, waiting, icon, pageNav, seg, statusDot, toolsButton, toolsMore } from "../ui/kit.js";
 const navBox = () => { const n = pageNav(); return n && h("div", { class: "cvp-nav" }, n); };   // the page row (R7 step 6)
 import { killButton } from "../actions.js";
 import { openPanel } from "../ui/panel.js";
@@ -32,6 +32,8 @@ const span = () => { const t1 = curT(); return [M.win ? t1 - M.win : Math.min(fi
 const winName = () => (M.win ? "Last " + WIN_NAME[M.win] : "All time");
 
 // ---- data ----
+/** Session logs have no figure for a run still going: a dash, not a made-up $0.00. */
+const spent = v => v > 0 ? money(v) : "–";
 function fileModel(s) { const f = s.out && S.usage && S.usage.files[s.out], id = (f && f.init && f.init.model) || s.model; if (!id) return ""; const m = modelName(id.includes(":") ? id.split(":").pop() : id); return String(m).split(/[\s-]/)[0].replace(/^./, c => c.toUpperCase()); }
 function costs(t0, t1) {
   // a session's cost in [t0, t1], from the usage files' hourly buckets; it counts toward its own thread only
@@ -99,7 +101,7 @@ function build() {
   M.D = { t0, t1, replay, homes, main, runs, aposts, spawns: spawns.sort((x, y) => y.t - x.t), pairs, rel, posts, C, withWork, allRuns, byId: new Map(posts.map(p => [p.id, p])) };
   M.lanes = lanes; M.more = more;
   const live = replay ? allRuns.filter(t => t.live).length : S.running.size;   // the top bar's count, not the drawn runs
-  M.count = M.active && !live ? (replay ? "Nobody was running then" : "Nobody is running right now") : `${live} running · ${plural(lanes.length, S.app.app ? "conversation" : "thread")} · ${money(C.total)}`;
+  M.count = M.active && !live ? (replay ? "Nobody was running then" : "Nobody is running right now") : `${live} running · ${plural(lanes.length, S.app.app ? "conversation" : "thread")}${C.total > 0 ? " · " + money(C.total) : ""}`;
   M.lastBuild = now();
 }
 
@@ -311,7 +313,7 @@ function syncGraph(D) {
     const key = [M.lay, w, hh, input.threads.length, input.agents.length].join("|");
     if (key !== GS.tileKey) {
       GS.tileKey = key;
-      const probe = graphLayout(input, { width: w, height: hh, override, free: true }, M.lay), b = viewBox(probe), on = b.x0 <= b.x1 && fitK(probe, b) < FIT_TILE_K;
+      const probe = graphLayout(input, { width: w, height: hh, override, free: true }, M.lay), b = viewBox(probe), on = !phone && b.x0 <= b.x1 && fitK(probe, b) < FIT_TILE_K;   // a phone keeps its labels: rows of bare squares say nothing
       if (on !== !!GS.tile) { GS.tile = on; GS.pos = null; GS.pin = new Map(); }
     }
   }
@@ -333,8 +335,8 @@ function syncGraph(D) {
     const outs = Object.entries(t.outside).sort((x, y) => y[1] - x[1] || (x[0] < y[0] ? -1 : 1));
     const chips = L.cols === 1 && outs.length > 1 ? [h("span", { class: "map-chip" }, "+ " + outs.length)] : outs.slice(0, 2).map(([k, n]) => h("span", { class: "map-chip" }, k + " ", h("b", null, String(n))));
     put(seen, "c:" + t.id, "button", "map-card", cl.card.x, cl.card.y,
-      { "data-kind": "thread", "data-id": t.id, "data-body": "c:" + t.id, "data-tier": t.tier, "data-sel": sel || null, "data-lit": lit("c:" + t.id), style: `width:${cl.card.w}px;height:${cl.card.h}px`, title: t.id, "aria-label": `Thread ${t.id}, ${tier(t.tier).label}, ${plural(t.posts, "post")}, ${money(t.cost)}`, "aria-pressed": sel ? "true" : "false" },
-      [h("span", { class: "map-cr1" }, h("i", { class: "map-tsw", "data-tier": t.tier }), h("b", { class: "map-cn", title: t.id }, t.id), h("span", { class: "map-cc" }, money(t.cost))),
+      { "data-kind": "thread", "data-id": t.id, "data-body": "c:" + t.id, "data-tier": t.tier, "data-sel": sel || null, "data-lit": lit("c:" + t.id), style: `width:${cl.card.w}px;height:${cl.card.h}px`, title: t.id, "aria-label": `Thread ${t.id}, ${tier(t.tier).label}, ${plural(t.posts, "post")}${t.cost > 0 ? ", " + money(t.cost) : ""}`, "aria-pressed": sel ? "true" : "false" },
+      [h("span", { class: "map-cr1" }, h("i", { class: "map-tsw", "data-tier": t.tier }), (nm => h("b", { class: "map-cn", title: nm !== t.id ? t.id + ": " + nm : t.id, "data-named": nm !== t.id ? "" : null }, nm))(threadTitle(t.id)), t.cost > 0 ? h("span", { class: "map-cc" }, money(t.cost)) : null),
        compact ? null : h("span", { class: "map-cr2" }, t.stuck ? h("em", null, `▲ ${t.stuck} stuck`) : null, (m => h("span", { class: "map-cm", title: m }, m))(`${plural(t.posts, "post")} · ${since(t.last) || "–"}`), ...chips),
        h("i", { class: "map-cb" }, h("i", { style: `width:${Math.max(2, cl.costShare * 100).toFixed(1)}%` }))]);
   }
@@ -565,7 +567,7 @@ function overviewPane(D) {
     h("div", { class: "figs" },
       fig("Running", String(run.length), split || (D.replay ? "at " + clock(D.t1) : null)),
       fig("Threads with work", String(D.withWork), M.more.length ? `+${M.more.length} with posts only` : null),
-      fig("Spent", money(D.C.total), D.replay ? asOf(D) : money(spendSince(now() - HOUR)) + " an hour now"),
+      fig("Spent", spent(D.C.total), D.replay ? asOf(D) : D.C.total > 0 ? money(spendSince(now() - HOUR)) + " an hour now" : null),
       fig("Posts", String(D.posts.length), `${hour} in the last hour`)),
     empty && lastEnded(D, 1).length ? sec("Last to end", lastEnded(D, 3).map(s => row(s.name, statusDot(agentStatus(s.name).key), h("div", { class: "map-rt" }, h("div", null, idLink(s.name), " on ", thLink(s.thread)), h("small", null, agentStatus(s.name).label)), h("span", { class: "r" }, clock(s.end)))))
       : look.length ? sec("Needs a look", lookRows(look)) : null,
@@ -604,7 +606,7 @@ function agentPane(a, D) {
       h("div", { class: "map-idh-t" }, h("b", null, a), h("small", null, sub)), button("Close", () => select(null), { kind: "icon", icon: "close", size: "s" })),
     L && L.doing && !D.replay ? h("div", { class: "map-now" }, h("div", null, "Now: " + short(L.doing, 220)), L.last ? h("small", null, "Last action " + ago(L.last * 1e3)) : null) : null,
     h("div", { class: "figs" },
-      fig("Spent", money(cost), n.hr ? money(n.hr) + " in the last hour" : asOf(D)),
+      fig("Spent", spent(cost), n.hr ? money(n.hr) + " in the last hour" : asOf(D)),
       fig("Up", up ? dur(up) : "–", live ? "since " + clock(t.start) : null),
       fig("Posts", String(myPosts.length), plural(new Set(myPosts.map(p => p.th)).size, "thread")),
       fig("Work", plural(n.tools, "tool call"), n.tk ? toks(n.tk) + " tokens" : null)),
@@ -621,7 +623,7 @@ function threadPane(th, D) {
       h("div", { class: "map-idh-t" }, h("b", null, th), h("small", null, [threadTitle(th) !== th ? threadTitle(th) : null, t.label].filter(Boolean).join(" · "))), button("Close", () => select(null), { kind: "icon", icon: "close", size: "s" })),
     h("div", { class: "figs" },
       fig("Posts", String(ps.length), `${d ? d.posts.length : ps.length} in all`),
-      fig("Spent", money(l ? l.cost : 0), asOf(D)),
+      fig("Spent", spent(l ? l.cost : 0), asOf(D)),
       fig("Agents", String(runs.length), live ? `${live} running` : null),
       fig("Last post", ps.length ? clock(ps[ps.length - 1].t) : "–", ps.length ? ago(ps[ps.length - 1].t) : null)),
     runs.length ? sec("Agents", runs.map(x => { const L = S.running.get(x.a); return row(x.a, statusDot(x.st, { live: x.live }), h("div", { class: "map-rt" }, h("div", null, idLink(x.a), x.model ? " · " + x.model : "", x.from ? " · from " + x.from : ""),
@@ -658,9 +660,10 @@ function setLay(k) {
 function toolbar() {
   return h("div", { class: "map-tb" },
     seg(WINS.map(([l, w]) => [w, l]), M.win, setWin, { label: "Window" }),
-    seg(LAYOUTS.map(([k, l, t]) => [k, l, t, null, k]), M.lay, setLay, { label: "Layout" }),
-    h("label", { class: "map-sw" }, h("input", { type: "checkbox", role: "switch", class: "switch", checked: M.active, "aria-label": "Running only", onchange: (e, n) => setActive(n.checked) }), "Running only"),
-    h("label", { class: "map-search" }, icon("search"), h("input", { class: "input", type: "search", placeholder: "Find an agent or thread", "aria-label": "Find an agent or thread", value: M.q,
+    toolsButton(M.tools, () => { M.tools = !M.tools; M.update(); }, (M.active ? 0 : 1) + (M.q ? 1 : 0)),
+    toolsMore(seg(LAYOUTS.map(([k, l, t]) => [k, l, t, null, k]), M.lay, setLay, { label: "Layout" })),
+    h("label", { class: "map-sw tools-more" }, h("input", { type: "checkbox", role: "switch", class: "switch", checked: M.active, "aria-label": "Running only", onchange: (e, n) => setActive(n.checked) }), "Running only"),
+    h("label", { class: "map-search tools-more" }, icon("search"), h("input", { class: "input", type: "search", placeholder: "Find an agent or thread", "aria-label": "Find an agent or thread", value: M.q,
       oninput: (e, n) => { M.q = n.value.trim().toLowerCase(); M.update(); },
       onkeydown: (e, n) => { if (e.key === "Enter" && GS.hits[0]) { e.preventDefault(); const f = GS.hits[0]; M.q = ""; n.value = ""; select(f.kind, f.id); } } })),
     h("span", { class: "map-sum", role: "status" }, M.count));

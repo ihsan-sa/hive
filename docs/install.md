@@ -6,9 +6,10 @@ You need a Claude account. The [guide](guide.md#before-you-install) has the full
 ```sh
 curl -fsSL https://hivelab.ca/install.sh | sh
 ```
-It asks for your password once, makes a Linux user called `hive`, installs git, Python, Claude Code and Codex if they're missing, starts setting up voice calls in the background (a few more minutes; `hive module remove phone voice` takes them out), and prints an address. Open that in a browser on the same machine, sign in to Claude, and say what you want.
+It asks for your password once, makes a Linux user called `hive`, installs git, Python, ffmpeg, Claude Code and Codex if they're missing, starts setting up voice calls in the background (a few more minutes; `hive module remove phone voice` takes them out), and prints an address. Open that in a browser on the same machine, sign in to Claude, and say what you want.
 - To open it again, click the Hive icon in your app menu (it opens the address your browser already knows). To see the address: `sudo -iu hive hive web`.
 - On a server, forward the port: `ssh -L PORT:127.0.0.1:PORT server`, then open the address on your own machine. The install adds the [server module](guide.md#the-server-module), which checks the setup and gives you backups and memory limits.
+- The sandbox around agents needs bubblewrap. The install adds it when it can use sudo. If you install without sudo, install it yourself first (`sudo apt install bubblewrap` on Ubuntu or Debian); until then no agent starts and the first ask says so.
 - On Ubuntu 24.04 it adds an AppArmor profile so that bubblewrap can make the sandbox. It applies to every user of the machine and widens the kernel's attack surface for them. Uninstalling doesn't remove it, but prints the command that does.
 - Checked on Ubuntu 24.04, Debian 12 and Fedora: a fresh install with a real systemd user session (in containers, using the own-account install below) left no failed units, and every scheduled job ran clean when started by hand.
 
@@ -22,7 +23,7 @@ It sets up WSL 2 if needed (restart, then run the line again) and makes a separa
 ```sh
 curl -fsSL https://hivelab.ca/install.sh | sh -s -- --this-account
 ```
-It runs as you from `~/hive` (`HIVE_DIR=/path` picks another folder) and needs git and Python already there. Agents run in a sandbox inside your account. **If you choose to run without it, or this machine can't run it, they have full rights to your account: all your files, `~/.ssh` and your logins.** No agent starts until the sandbox works or you choose. You type `yes` to this first; `HIVE_ACCEPT=1` accepts it where there's no terminal.
+It runs as you from `~/hive` (`HIVE_DIR=/path` picks another folder) and needs git and Python already there. Agents run in a sandbox inside your account. **If you choose to run without it, or this machine can't run it, they have full rights to your account: all your files, `~/.ssh` and your logins.** No agent starts until the sandbox works or you choose. You type `yes` to this first; `HIVE_ACCEPT=1` accepts it where there's no terminal. Voice calls aren't set up here; add them with `hive module add phone && phone setup` (and `hive module add voice && voice setup` for memos), which needs ffmpeg and `python3-venv` or uv.
 
 **Coming from a v0.x Hive?** The install finds it and asks, then removes the old program and brings your projects, notes and chats across. Logins and keys stay behind, so you sign in again. The old folder stays whole as your backup. If a run fails halfway, run the line again. `HIVE_ACCEPT=1` skips the question.
 

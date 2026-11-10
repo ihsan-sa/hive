@@ -11,7 +11,7 @@
 .banner .btn{flex:none}
 .banner>.st{flex:none}
 .new-ver.banner{max-width:none;border:0;border-top:1px solid var(--line);border-radius:0;box-shadow:none;padding:6px var(--s4,16px)}   /* a row of the sticky top bar, like .band */
-@container app (width < 700px){.banner{padding:6px 12px;gap:8px;font-size:var(--fs-meta)}}
+@container app (width < 700px){.banner{padding:6px 12px;gap:8px;font-size:var(--fs-meta)}.new-ver-more{display:none}}
 
 /* ---- Usage (R7 step 5, design-d-usage): two meters, accounts as rows, the detail folded ---- */
 .usage-hero{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:var(--s5,20px) var(--s6,24px);margin-top:var(--s4,16px)}
@@ -37,19 +37,18 @@
   .lr.u-acct>.u-acct-a{grid-column:2/-1}
 }
 
-/* Settings on a phone: the section list is one row of chips that scrolls sideways, not a wrapped block. Relative, so what is
-   absolutely placed inside a chip scrolls with the strip instead of widening the page. */
+/* Settings on a phone: the section list is chips that wrap, so none is out of sight off the side. */
 @container app (width < 700px){
-  .set-n{position:relative;top:0;flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;-webkit-overflow-scrolling:touch;padding-bottom:2px}
+  .set-n{position:relative;top:0;flex-wrap:wrap;padding-bottom:2px}
   .set-n::-webkit-scrollbar{display:none}
   .set-n a{flex:none;white-space:nowrap;border:1px solid var(--line);border-radius:999px}
   .set-n hr{display:none}
   .set-b{row-gap:var(--s4)}
   .set-s>.sec:first-child{margin-top:0}
 }
-/* The same strip for a narrow window whose app container isn't measured yet (a resize, an older look): it scrolls in place. */
+/* The same chips for a narrow window whose app container isn't measured yet (a resize, an older look). */
 @media (max-width:760px){
-  .set-n{position:relative;top:0;flex-wrap:nowrap;overflow-x:auto;max-width:100%;min-width:0;scrollbar-width:none}
+  .set-n{position:relative;top:0;flex-wrap:wrap;max-width:100%;min-width:0}
   .set-n a{flex:none;white-space:nowrap}
 }
 

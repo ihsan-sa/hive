@@ -25,6 +25,20 @@ const PRE = [["1h", "1h"], ["6h", "6h"], ["24h", "24h"], ["3d", "3d"]];
 const F = { win: "6h", fold: true, v: null, failed: false, raf: 0, last: 0, w: 0, pw: 400, ver: -1, update: () => {} };
 const CHAT = "M4 5.5A1.5 1.5 0 0 1 5.5 4h13A1.5 1.5 0 0 1 20 5.5v9a1.5 1.5 0 0 1-1.5 1.5H10l-4.5 4v-4h0A1.5 1.5 0 0 1 4 14.5z";
 const AXIS = 32, LANE = 64, BOTTOM = 18, ROWS = 4;
+// What this page was last time, so it opens at that height and doesn't push what's below it down as its data arrives: the lanes, and the lists' heights by phone or desk.
+const HELD_KEY = "fl.held", HELD_WIN = "6h", HELD_LANES = 9;   // before any visit: the most lanes a summary without focuses makes
+const held = (() => { try { return JSON.parse(localStorage.getItem(HELD_KEY)) || {}; } catch (e) { return {}; } })();
+function keep() { try { localStorage.setItem(HELD_KEY, JSON.stringify(held)); } catch (e) { /* no storage: this page only */ } }
+function holdLists(k, boxes) {
+  const m = held[k] = held[k] || {}, settled = !!F.v && !!S.history, usual = F.win === HELD_WIN;   // the other windows are other heights
+  let moved = false;
+  for (const [id, el] of boxes) {
+    if (!el) continue;
+    el.style.minHeight = !settled && usual && m[id] ? m[id] + "px" : "";
+    if (settled && usual && el.offsetHeight && el.offsetHeight !== m[id]) { m[id] = el.offsetHeight; moved = true; }
+  }
+  if (moved) keep();
+}
 const RESULT = /^(Done|Blocked|Needs the person|Waiting|Told to stop):\s*/i;
 const ok = () => S.app.app && can("read");
 const rungText = r => String(r || "").split(/\s+check:/i)[0].trim();
@@ -132,7 +146,8 @@ function drawNow() {
   const t = now(), cw = box.clientWidth, W = cw || 800, main = box.closest("#main"), phone = (main ? main.clientWidth : W) < 640;
   const win = WIN[F.win], t1 = t, t0 = t1 - win, narrow = W < 640;
   const G = narrow ? 92 : 160, NX = phone ? 0 : narrow ? 118 : 230, X0 = G, X1 = W - NX - 10, px = (X1 - X0) / win, x = tt => X0 + (tt - t0) * px;
-  const L = lanes(t0, t1), H = AXIS + L.length * LANE + BOTTOM;
+  const L = lanes(t0, t1), H = AXIS + (F.v ? L.length : Math.max(L.length, held.lanes || HELD_LANES)) * LANE + BOTTOM;   // no summary yet: one lane to draw, the room of the usual ones
+  if (F.v && Array.isArray(F.v.states) && held.lanes !== L.length) { held.lanes = L.length; keep(); }
   svg.setAttribute("viewBox", `0 0 ${W} ${H}`); svg.setAttribute("width", W); svg.setAttribute("height", H); stage.style.height = H + "px";
   const kids = [];
   // axis: a tick each hour (local time, so 3h and 12h steps land on round local hours), a label where it fits
@@ -235,6 +250,7 @@ function drawNow() {
     h("h2", { class: "sec-t" }, head),
     since.length ? h("ul", { class: "fl-list" }, since.slice(0, 12).map(rs => h("li", null, h("span", { class: "fl-lanename" }, rs.lane), h("a", { href: threadHref(rs.post.th) }, sayPlain(rs.text, 140)), h("span", { class: "meta" }, ago(rs.t) + (rs.word !== "done" ? " · " + rs.word : "")))))
       : h("p", { class: "meta" }, L.length ? "Nothing finished in this window yet; the bars above are the work under way." : "Nothing ran in this window."));
+  holdLists(phone ? "phone" : "desk", [["list", lb], ["moved", mv]]);
   F.w = cw; F.pw = Math.max(40, X1 - X0); F.ver = S.ver;
   F.last = mv ? t : 0;  // no list box yet (drawn before the page attached): the next frame draws again
 }

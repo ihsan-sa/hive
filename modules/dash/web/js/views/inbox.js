@@ -33,15 +33,15 @@ export default {
   enter(ctx) { update = ctx.update; if (S.app.app) pollInbox(); },
   leave() { update = null; },
   render() {
-    if (!S.live) return h("div", { class: "page" }, S.failed ? empty("Couldn't read your messages. It keeps trying.", { kind: "error" }) : empty("Reading…", { kind: "loading" }));
-    if (!S.app.app || !can("read")) return h("div", { class: "page" }, empty("The inbox isn't available on this connection.", { kind: "page", title: "Inbox" }));
-    if (!IB.items) { pollInbox(); return h("div", { class: "page" }, empty("Reading…", { kind: "loading" })); }
+    if (!S.live) return h("div", { class: "page", "data-width": "narrow" }, S.failed ? empty("Couldn't read your messages. It keeps trying.", { kind: "error" }) : empty("Reading…", { kind: "loading" }));
+    if (!S.app.app || !can("read")) return h("div", { class: "page", "data-width": "narrow" }, empty("The inbox isn't available on this connection.", { kind: "page", title: "Inbox" }));
+    if (!IB.items) { pollInbox(); return h("div", { class: "page", "data-width": "narrow" }, empty("Reading…", { kind: "loading" })); }
     const w = can("post");
     return form({
       header: pageHeader({ title: "Inbox", hint: "Every message an agent sent you, newest first. Chat's home shows the ones that need you now.",
         actions: w && IB.unread ? button("Mark all read", () => mark({ all: true }), { size: "s" }) : null,
         after: IB.err ? h("p", { class: "fmsg", role: "alert", "data-tone": "bad" }, IB.err) : null }),
-      sections: [section({}, list(folded(IB.items).map(({ p, all }) => { const unread = all.filter(x => !x.read).map(x => x.id); return {
+      sections: [section({ id: "inbox-list" }, list(folded(IB.items).map(({ p, all }) => { const unread = all.filter(x => !x.read).map(x => x.id); return {
         key: p.id, href: threadHref(p.thread),
         onClick: w && unread.length ? () => mark({ ids: unread }) : null,
         lead: unread.length ? h("span", { class: "inb-new", "data-tone": "info" }, "New") : null,

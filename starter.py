@@ -1341,6 +1341,58 @@ def trial_orientation(name, live, path=None):
         return r.stdout, "cand"
     except Exception: return live, "skip"
 
+def tool_trial(name, sid="", path=None):
+    """A trial of dropping tools almost nobody uses (hive-meta L18/L21, i-number in the log): ~/.hive/tool_drop.json holds
+    {"name", "until", "share", "tools": [...]}, half the agents by a stable hash of their name run without those tools (each costs input on every model
+    call). Returns the tools to drop, [] for the other arm, None with no trial; every run start under a live trial adds a line to tool_drop.log with its
+    arm, which is what carried.py --trial reads. Never fails a start."""
+    try:
+        p = Path(path or STATE / "tool_drop.json"); t = json.loads(p.read_text())
+        if t.get("until") and now() > t["until"]: return None
+        on = int(__import__("hashlib").sha1(f"{t['name']}:{name}".encode()).hexdigest()[:8], 16) / 2**32 < t.get("share", .5)
+        with p.with_name("tool_drop.log").open("a") as f: f.write(json.dumps({"ts": now(), "trial": t["name"], "name": name, "session": sid, "on": on}) + "\n")
+        return list(t.get("tools") or []) if on else []
+    except Exception: return None
+
+def cache_trial(name, sid="", path=None):
+    """A trial of the split prompt cache (hive-meta L26/L27): ~/.hive/cache_split.json holds {"name", "until", "share"}, and that share of agents by a stable
+    hash of their name run with the conversation on the 5-minute cache while the system prompt and tools stay on 1 hour (a cache write costs 12.5 read units
+    instead of 20, and an idle over 5 minutes re-writes only the conversation). True for the trial arm, False for the other, None with no trial; every run start
+    under a live trial adds a line to cache_split.log with its arm, which the trial's reading joins on. Never fails a start."""
+    try:
+        p = Path(path or STATE / "cache_split.json"); t = json.loads(p.read_text())
+        if t.get("until") and now() > t["until"]: return None
+        on = int(__import__("hashlib").sha1(f"{t['name']}:{name}".encode()).hexdigest()[:8], 16) / 2**32 < t.get("share", .5)
+        with p.with_name("cache_split.log").open("a") as f: f.write(json.dumps({"ts": now(), "trial": t["name"], "name": name, "session": sid, "on": on}) + "\n")
+        return on
+    except Exception: return None
+
+def cut_orientation(name, text, path=None):
+    """A removal trial (projects/rsi-lab/rules.md): ~/.hive/cut.json holds {"name", "until", "groups": {group: [exact sentences]}} and each
+    group is dropped for half the agents, on a coin of its own per group and agent name. Returns (text, cut): cut is None with no
+    trial, "skip" (nobody counted) when a sentence under trial is no longer on the page or the hard-limit block would change, else
+    the dropped groups joined by commas ("" for none). Runs beside trial_orientation, on its result. Never fails a start.
+    Before any of that, holdout.json beside cut.json ({"share", "page"}) deals a fixed share of names the page in that file whole,
+    cut "holdout": the reference every later cut is measured against, so it outlives the rounds. Those agents are in no trial."""
+    try:
+        h = json.loads((path or STATE / "cut.json").with_name("holdout.json").read_text())
+        if int(__import__("hashlib").sha1(f"holdout:{name}".encode()).hexdigest()[:8], 16) / 2**32 < h["share"]:
+            page = Path(h["page"]).read_text()
+            if HARD.search(page)[0] == HARD.search(text)[0]: return page, "holdout"
+    except Exception: pass
+    try: t = json.loads((path or STATE / "cut.json").read_text())
+    except (OSError, ValueError): return text, None
+    try:
+        if t.get("until") and now() > t["until"]: return text, None
+        gs = t["groups"]
+        if any(x not in text for xs in gs.values() for x in xs): return text, "skip"
+        cut = sorted(g for g in gs if int(__import__("hashlib").sha1(f"{t['name']}:{g}:{name}".encode()).hexdigest()[:8], 16) % 2)
+        out = text
+        for g in cut:
+            for x in gs[g]: out = out.replace(x, "", 1)
+        return (out, ",".join(cut)) if HARD.search(out)[0] == HARD.search(text)[0] else (text, "skip")
+    except Exception: return text, "skip"
+
 def neighbours_note(name, posts):
     """Live threads that share uncommon words with the posts being handed over (neighbours.py, hive-meta moving.md P3): up to 3 lines, or
     nothing. Only on a fresh start: a mid-run delivery and a resume already have their work. Never holds up or fails a start."""
@@ -1380,6 +1432,7 @@ def recall_note(name, posts):
 def start(c, name, posts, login, resume=None, reaped=None, extra=(), moved=False, lost=False, woken=None, all_since=None, slept=None, heir_of=None, why=None):
     hook_inbox(c)  # a login can be added to config.json while the starter runs
     wire_deny(c)
+    wire_precompact(c)
     sid = resume or str(uuid.uuid4())  # the claude session id, so `claude --resume <session>` works
     first = posts[0]
     model = (next((p["model"] for p in posts if provider_of(c, p.get("model"))), None)  # a provider wins: main loop picked it
@@ -1388,6 +1441,8 @@ def start(c, name, posts, login, resume=None, reaped=None, extra=(), moved=False
     prov = provider_of(c, model)
     kind = "warden" if is_warden(name) else "agent"
     orient, trial = trial_orientation(name, (CORE / "orientation.md").read_text()) if kind != "warden" else ((CORE / "orientation.md").read_text(), None)
+    orient, cut = cut_orientation(name, orient) if kind != "warden" else (orient, None)
+    if cut == "holdout": trial = None   # the holdout page is served whole, so the agent saw no trial's edit
     system = orient + ("\n\n" + (CORE / "warden.md").read_text() if kind == "warden" else "")
     try: mine = (HOME / "user-instructions.md").read_text().strip()  # the person's own CLAUDE.md, copied at setup on their tick
     except OSError: mine = ""
@@ -1464,7 +1519,10 @@ def start(c, name, posts, login, resume=None, reaped=None, extra=(), moved=False
         if hasattr(impl, "command") and (argv := impl.command(prov[1], prov[2], prompt, system, sid, resume)):  # another harness (codex)
             env.pop("CLAUDE_CONFIG_DIR", None)
     if effort and not prov: env["CLAUDE_EFFORT"] = effort
+    drop = tool_trial(name, sid) if kind != "warden" and not prov else None
+    if kind != "warden" and not prov and cache_trial(name, sid): env["CLAUDE_CODE_MESSAGES_PROMPT_CACHE_TTL"] = "5m"
     cmd = argv or ["claude", "-p", prompt, "--append-system-prompt", system,
+                   *(["--disallowedTools", ",".join(drop)] if drop else []),
                    *(["--effort", effort] if effort and not prov else []),
                    *(["--resume", sid] if resume else ["--session-id", sid]),
                    *(["--model", prov[2] if prov else model] if model else []),
@@ -1479,7 +1537,7 @@ def start(c, name, posts, login, resume=None, reaped=None, extra=(), moved=False
     children[name] = proc
     if not resume and not sb: (STATE / "delivered" / name).unlink(missing_ok=True)  # the inbox hook starts fresh with this run; a resumed one keeps its list so an @all isn't handed over twice
     rec = {"name": name, "pid": proc.pid, "session": sid, "at": now(), "post": first["id"], "login": login,
-           "thread": first.get("thread"), "from": first.get("from"), "out": str(path), "proc": proc_start(proc.pid), "boot": boot_id(), **({"resumed": True} if resume else {}), **({"woke": list(extra)} if extra else {}), **({"slept": posts} if slept else {}), **({"heir_of": heir_of["name"]} if heir_of else {}), **({"all_since": all_since} if all_since else {}), **({"model": model} if model else {}), **({"fallback": fb} if fb else {}), **({"trial": trial} if trial else {}),
+           "thread": first.get("thread"), "from": first.get("from"), "out": str(path), "proc": proc_start(proc.pid), "boot": boot_id(), **({"resumed": True} if resume else {}), **({"woke": list(extra)} if extra else {}), **({"slept": posts} if slept else {}), **({"heir_of": heir_of["name"]} if heir_of else {}), **({"all_since": all_since} if all_since else {}), **({"model": model} if model else {}), **({"fallback": fb} if fb else {}), **({"trial": trial} if trial else {}), **({"cut": cut} if cut is not None else {}),
            "harness": prov[1].get("harness", "claude-code") if prov else "claude-code", **({"provider": prov[0]} if prov else {}), **({"effort": env["CLAUDE_EFFORT"]} if env.get("CLAUDE_EFFORT") else {})}
     (RUN / f"{name}.json").write_text(json.dumps(rec))
     log(event="start", **rec)
@@ -1505,6 +1563,11 @@ def keeper(c, st, alive, login):
 
 IMPROVE = """@new Figure out how to improve everything in the hive, across all of it: the projects, the quality of the work, failures, how agents work, Hive itself. Judge it yourself: read what you need (the board, ~/sessions, the code, results), then do things yourself or start other agents. `hive read --thread improve` shows what earlier rounds did; `hive progress` shows the hive's numbers and what got worse; `hive improve list` shows which earlier changes were judged held or reverted, so you build on what held. Log each change you land with `hive improve log --what ... --measure ... --revisit 7d`. Say what you did in this thread."""
 
+def drop_stale_resumes(st):
+    """A status-bar brief is worthless once the next 20-min pass has run: about 75 of 162 status-timer starts on 2026-11-09 were held runs bounced back on a limit."""
+    for n, r in list(st.get("resume", {}).items()):
+        if r.get("from") == "status-timer": st["resume"].pop(n); log(event="resume_dropped_stale", name=n)
+
 def floor_gap(c, st, r):
     """How long a first-tier thread rests between floor starts: floor_focus_gap_s, doubling up to floor_gap_s each start that left its ladder unmoved (the fizzle brake)."""
     base, top = c.get("floor_focus_gap_s", 300), c.get("floor_gap_s", 1800)
@@ -1512,13 +1575,19 @@ def floor_gap(c, st, r):
     if not seen or seen.get("sig") != [r.get("rungs_done"), r.get("rungs_left"), r.get("rung")]: return base
     return min(base * 2 ** seen.get("n", 0), max(top, base))
 
+def floor_off(c, t):
+    """config floor_off: ["YYYY-MM-DDTHH:MM:SSZ", "...Z"], the floor paused from the first time up to the second. Dated both ends so it lapses by itself with nobody remembering it; anything else leaves the floor on."""
+    try: a, b = (dt.datetime.strptime(x, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=dt.timezone.utc).timestamp() for x in c.get("floor_off"))
+    except (TypeError, ValueError): return False
+    return a <= t < b
+
 def floor(c, st, alive, login):
     """Keep the ladders moving with no gaps on the timeline, one start a minute at most, so work overlaps instead of arriving in bursts (the person, 2026-11-07, direction k1303; before it, post 1106181196b0).
     First tier, the focuses and floor_threads: a thread nobody is on gets its next agent floor_focus_gap_s after its last agent post or floor start, however many runs are going elsewhere, up to floor_focus_max running (floor_gap below backs off an unmoved ladder).
     Second tier, the other ladders: only while under agents_floor runs, floor_gap_s apart. Longest quiet first within a tier.
     Skips a thread with someone on it, a post queued, a `Parked until` line, a `Waiting:` that names a running agent or a time (continuation.waits), or the person's stop. 0 turns a tier off."""
     want, focus_gap = c.get("agents_floor", 0), c.get("floor_focus_gap_s", 0)
-    if not (want or focus_gap) or not login or not cont: return
+    if not (want or focus_gap) or not login or not cont or floor_off(c, time.time()): return
     t = time.time()
     if t - st.get("floor_check", 0) < 60: return
     st["floor_check"] = t
@@ -1631,6 +1700,20 @@ def hook_inbox(c):
         if wired and str(CORE / "inbox.py") in json.dumps(hooks.get("PostToolUseFailure", [])): continue
         if not wired: hooks.setdefault("PostToolUse", []).append({"matcher": "*", **h}); hooks.setdefault("Stop", []).append(h)
         hooks.setdefault("PostToolUseFailure", []).append({"matcher": "*", **h})
+        f.write_text(json.dumps(s, indent=2) + "\n")
+
+def wire_precompact(c):
+    """Make sure each login's settings.json runs precompact.py before a compaction. The hook does nothing unless ~/.hive/compact_limit.json
+    names a live trial (see precompact.py), so wiring it changes nothing by itself."""
+    cmd = str(CORE / "precompact.py")
+    if not (CORE / "precompact.py").exists(): return
+    for login in c["logins"] + [pc["config_dir"] for pc in c.get("providers", {}).values() if pc.get("config_dir")]:
+        f = Path(login).expanduser() / "settings.json"
+        f.parent.mkdir(parents=True, exist_ok=True)
+        try: s = json.loads(f.read_text()) if f.exists() else {}
+        except ValueError: continue
+        if cmd in json.dumps(s.get("hooks", {}).get("PreCompact", [])): continue
+        s.setdefault("hooks", {}).setdefault("PreCompact", []).append({"hooks": [{"type": "command", "command": cmd, "timeout": 10}]})
         f.write_text(json.dumps(s, indent=2) + "\n")
 
 DENY_SEEN = None
@@ -1790,6 +1873,7 @@ def main():
     signal.signal(signal.SIGTERM, stop_stamp)
     hook_inbox(cfg())
     wire_deny(cfg())
+    wire_precompact(cfg())
     st = load("starter.json", {"offset": 0, "pending": {}})
     u, paused, pcache = {}, False, {}
     while True:
@@ -1889,6 +1973,7 @@ def main():
         for n, r in ([] if hold else list(st.get("resume", {}).items())):  # a provider run held on its limit, asked since for a Claude model: its session can't move, so the post wakes it as a new run
             if login and provider_of(c, r.get("model")) and any(p.get("model") in MODELS for p in st["pending"].get(n, [])) and provider_room(c, *provider_of(c, r.get("model"))[:2], pcache):
                 st["resume"].pop(n); log(event="resume_dropped_for_claude", name=n)
+        drop_stale_resumes(st)
         for n, r in ([] if hold else list(st.get("resume", {}).items())):  # resume limit-stopped sessions first, same name and session
             if (not login and not provider_of(c, r.get("model"))) or n in alive or len(alive) >= (c.get("max_sessions") or float("inf")): continue
             if paced(c, st, n, [{"from": r.get("from")}]): continue

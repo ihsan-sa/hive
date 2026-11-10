@@ -2,7 +2,7 @@
 """phone: talk to Hive by voice. Speech recognition (faster-whisper) and the voice (Kokoro) run on this machine: on the GPU
 when it has one with CUDA, else on the CPU with a smaller recognition model.
 
-  phone setup                      build the speech environment, download the models (~1.5 GB), start hive-phone.service
+  phone setup                      build the speech environment, download the models (about 1.1 GB on the CPU, 6 GB with an NVIDIA GPU), start hive-phone.service
 
   phone serve                      the call service on ~/.hive/phone.sock (hive-phone.service); the dash proxies /api/phone/*
   phone answer CALL                an agent called by name picks up the call itself (the board post says so)
@@ -120,7 +120,11 @@ def setup():
     venv, py = MOD / ".venv", MOD / ".venv/bin/python"
     uv = shutil.which("uv")
     def run(argv): print("+", " ".join(argv), flush=True); subprocess.run(argv, check=True)
-    if not py.exists(): run([uv, "venv", "-q", str(venv)] if uv else [sys.executable, "-m", "venv", str(venv)])
+    if not py.exists() or (not uv and subprocess.run([str(py), "-m", "pip", "--version"], capture_output=True).returncode):   # a failed build leaves a .venv with no pip: start it again, or a rerun would skip this
+        shutil.rmtree(venv, ignore_errors=True)
+        try: run([uv, "venv", "-q", str(venv)] if uv else [getattr(sys, "_base_executable", sys.executable), "-m", "venv", str(venv)])
+        except subprocess.CalledProcessError:
+            shutil.rmtree(venv, ignore_errors=True); sys.exit("phone: couldn't make a Python environment: install python3-venv (apt install python3-venv) or uv, then rerun phone setup")
     pkgs = ["faster-whisper", "huggingface_hub", "numpy"] + (["kokoro-onnx[gpu]", "nvidia-cublas-cu12", "nvidia-cudnn-cu12==9.*"] if gpu else ["kokoro-onnx"])
     run([uv, "pip", "install", "-q", "--python", str(py)] + pkgs if uv else [str(py), "-m", "pip", "install", "-q"] + pkgs)
     m = MOD / "models"; m.mkdir(exist_ok=True)
@@ -134,7 +138,9 @@ def setup():
     unit = MOD / "hive-phone.service"
     if not shutil.which("systemctl"): print(f"No systemd here: run {py} {MOD / 'phone.py'} serve yourself, and keep it running."); return
     u = HOME / ".config/systemd/user"; u.mkdir(parents=True, exist_ok=True)
-    (u / unit.name).unlink(missing_ok=True); (u / unit.name).symlink_to(unit)
+    (u / unit.name).unlink(missing_ok=True)
+    if (HOME / ".hive-account").exists(): (u / unit.name).write_text(unit.read_text().replace("%h", str(HOME)))   # a Hive in a folder of someone's account: %h would be the account's home, not this folder
+    else: (u / unit.name).symlink_to(unit)
     dash = u / "hive-dash.service.d/local.conf"   # the install's PATH (where claude is) and env file, as the other services get them
     if dash.exists(): (u / f"{unit.name}.d").mkdir(exist_ok=True); shutil.copy(dash, u / f"{unit.name}.d/local.conf")
     run(["systemctl", "--user", "daemon-reload"]); run(["systemctl", "--user", "enable", "--now", unit.name]); run(["systemctl", "--user", "restart", unit.name])

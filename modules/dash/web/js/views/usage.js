@@ -270,7 +270,7 @@ export default {
   id: "usage", label: "Usage", about: "how much is left, and when it comes back", tab: true,
   render(ctx) {
     const U = S.usage;
-    if (!U) return h("div", { class: "page" }, pageNav(), waiting(S.usageFailed, "Reading usage…", "usage"));
+    if (!U) return h("div", { class: "page" }, pageNav(), waiting(S.usageFailed, "Reading usage…", "usage", "usage"));
     const t = now(), us = U.logins || [], P = U.providers || {}, R = range(U, t);
     const pick = seg(RANGES.map(x => [x[0], x[1], x[3]]), R.key, k => { setPref("usage.range", k); ctx && ctx.update ? ctx.update() : null; }, { label: "Time range" });
     const live = us.filter(l => inUse(l, U)), paused = us.filter(l => l.paused), full = us.filter(l => !l.paused && !inUse(l, U));

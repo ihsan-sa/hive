@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Keep each thread's two-line status bar fresh (`hive status`). Run by hive-thread-status.timer every 20 min.
+"""Keep each thread's two-line status bar fresh (`hive status`). Run by hive-thread-status.timer every hour; a run sets its own bars at its end (inbox.run_end_bars), so this only picks up what that missed.
 Finds threads with a post newer than their status (and active in the last 6 h), and if there are any posts one brief that starts a
 single Haiku agent in thread `thread-status` to read them and set the statuses. No model cost when nothing changed."""
 import json, os, subprocess, sys, time
@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 HOME = os.path.expanduser("~")
 SKIP = {"thread-status", "watchdog", "keeper", "improve", "side"}
 MAX = 20
+WAIT_HOLD = 24 * 3600  # a `Waiting:` bar an agent set is theirs for this long: the agent changes it when the wait ends
 
 def ts(s):
     try: return datetime.fromisoformat(s).replace(tzinfo=datetime.fromisoformat(s).tzinfo or timezone.utc).timestamp()
@@ -19,19 +20,41 @@ def stale():
         except ValueError: continue
         t = p.get("thread")
         if t: last[t] = max(last.get(t, 0), ts(p.get("at", ""))); n[t] = n.get(t, 0) + 1
-    st = {}
+    st, bar = {}, {}
     try:
         for ln in open(f"{HOME}/.hive/thread-status.jsonl"):
             try: r = json.loads(ln)
             except ValueError: continue
-            st[r["thread"]] = r["at"]
+            st[r["thread"]] = r["at"]; bar[r["thread"]] = r
     except OSError: pass
     now = time.time()
-    out = [(t, l) for t, l in last.items() if t not in SKIP and now - l < 6 * 3600 and l > st.get(t, 0) + 60 and (t in st or n[t] > 1)]
+    def waiting(t):
+        r = bar.get(t, {}); last_line = (str(r.get("text", "")).strip().splitlines() or [""])[-1]
+        return last_line.lower().startswith("waiting:") and r.get("from") != "status-timer" and now - r["at"] < WAIT_HOLD
+    out = [(t, l) for t, l in last.items() if t not in SKIP and now - l < 6 * 3600 and l > st.get(t, 0) + 60 and (t in st or n[t] > 1) and not waiting(t)]
     out.sort(key=lambda x: -x[1])
     return [t for t, _ in out[:MAX]]
 
+def current_pct(day=24 * 3600, grace=65 * 60):
+    """% of threads active in the last day, quiet long enough for the hourly timer to have run, whose bar is as new as their last post. What `thread_status.py current-pct` prints."""
+    last, n, st = {}, {}, {}
+    for ln in open(f"{HOME}/board.jsonl", errors="replace"):
+        try: p = json.loads(ln)
+        except ValueError: continue
+        t = p.get("thread")
+        if t: last[t] = max(last.get(t, 0), ts(p.get("at", ""))); n[t] = n.get(t, 0) + 1
+    try:
+        for ln in open(f"{HOME}/.hive/thread-status.jsonl", errors="replace"):
+            try: r = json.loads(ln)
+            except ValueError: continue
+            st[r["thread"]] = max(st.get(r["thread"], 0), r["at"])
+    except OSError: pass
+    now = time.time()
+    active = [t for t, l in last.items() if t not in SKIP and grace < now - l < day and (t in st or n[t] > 1)]
+    return round(100 * sum(st.get(t, 0) >= last[t] - 60 for t in active) / len(active), 1) if active else 100.0
+
 if __name__ == "__main__":
+    if sys.argv[1:] == ["current-pct"]: print(current_pct()); sys.exit(0)
     ts_ = stale()
     if not ts_: sys.exit(0)
     brief = ("Refresh thread status bars. For each thread below: `hive read --thread T -n 12` (and the existing bar with `hive status T --read`), then set it with "

@@ -19,14 +19,14 @@ The same model call also picks reusable facts out of result posts: at most one d
   hive outcomes list [--since 24h] [--grade G] [--name NAME]
   hive outcomes stats [--since 24h] [--json]
 """
-import argparse, datetime as dt, importlib.util, json, os, random, re, sys
+import argparse, datetime as dt, importlib.util, json, os, random, re, subprocess, sys
 from pathlib import Path
 
 HOME = Path.home()
 CORE, STATE = HOME / "core", HOME / ".hive"
 LEDGER, LOG, BOARD = HOME / "outcomes.jsonl", HOME / "log.jsonl", HOME / "board.jsonl"
 CURSOR = STATE / "outcomes-cursor.json"
-SAMPLE = 4                 # agent-woken runs with posts graded by the model per hour, on top of every person-woken run
+SAMPLE = 10                # agent-woken runs with posts graded by the model per hour, on top of every person-woken run (4 until 2026-11-10: only 15% of pulse roots had a grade, so away_ratio read low)
 OTHER_MAX = 12             # runs on a non-Claude provider graded per hour on top of that: at 13% sampled, 1 of 21 agent-woken Codex runs had a grade, so nobody could say whether Codex delivers
 SETTLE_S = 180             # a run's end must be this old: its last post may still be landing
 TAIL_S = 90                # posts this long after the end still count as the run's
@@ -356,5 +356,6 @@ def main(argv=None):
     p = sp.add_parser("list"); p.add_argument("--since", default="24h"); p.add_argument("--grade"); p.add_argument("--name"); p.set_defaults(f=cmd_list)
     p = sp.add_parser("stats"); p.add_argument("--since", default="24h"); p.add_argument("--json", action="store_true"); p.add_argument("--by", choices=["provider"], help="delivery per provider, person-woken and agent-woken apart"); p.set_defaults(f=cmd_stats)
     a = ap.parse_args(argv); a.f(a)
+    if a.cmd == "grade" and not a.dry: subprocess.run([sys.executable, "-I", str(Path(__file__).parent / "progress.py"), "autojudge"], capture_output=True)  # the same hour's other scoring: changes whose check is due
 
 if __name__ == "__main__": main()

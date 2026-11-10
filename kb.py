@@ -39,7 +39,7 @@ TEXT = re.compile(r"\.(md|txt|rst|jsonl?)$")
 SKIP_DIR = {".git", "node_modules", "__pycache__", "dist", "boards-site-pdfs", "build", "runs", ".venv", "venv", "target"}
 # Kept out on purpose: the graded tests hold the answers (they'd rank above the sources), the query log is ours.
 # Agent worktrees are copies of the main checkouts: 25,000 files that repeat the same few. Keep the main ones.
-SKIP_PROJECT = re.compile(r"^projects/(_wt|[^/]*-a[0-9a-f]{4,5}(-[^/]*)?|[^/]*-zc-[^/]*|[^/]*-wt|[^/]*-land)(/|$)|/(tests/fixtures|pinned|skills|reference/remediations)/")
+SKIP_PROJECT = re.compile(r"^projects/(rsi-loop/arms|hive-meta/interp/goals-history|_wt|[^/]*-a[0-9a-f]{4,5}(-[^/]*)?|[^/]*-zc-[^/]*|[^/]*-wt|[^/]*-land)(/|$)|/(tests/fixtures|pinned|skills|reference/remediations)/")
 # The grader's unchecked drafts are their own source, ranked low and marked [draft] (outcomes.py); ones the dream dropped aren't searched at all.
 SKIP_DRAFTS = re.compile(r"^kb/(_drafts|_dropped/drafts)(/|$)")
 SKIP_FILE = re.compile(r"(^|/)(question-test-[^/]*|\.queries\.jsonl|miss-candidates\.jsonl|MANIFEST)$")
@@ -413,8 +413,9 @@ def snippet(c, h, words, width=130):
     if not r: return "", ""
     body = r[1]; low = body.lower(); best, bi = -1, 0
     stems = [w[:max(4, len(w) - 2)] for w in words]
+    first = len(body) if "\n" not in body else body.index("\n")   # the chunk's first line is its title: a later window with as many stems shows more
     for i in range(0, max(1, len(low) - width), 40):
-        s = sum(1 for w in stems if w in low[i:i + width])
+        s = sum(1 for w in stems if w in low[i:i + width]) - (0.5 if i < first and first < len(body) else 0)
         if s > best: best, bi = s, i
     t = re.sub(r"\s+", " ", body[bi:bi + width]).strip()
     line = h["line"] + body[:bi].count("\n")
@@ -676,6 +677,7 @@ def cmd_open(a):
 RECALL_SRC = ("kb", "core", "modules"); RECALL_PREFIX = tuple(x + "/" for x in RECALL_SRC)  # notes we wrote: never the h4 mirror, the archive or project data
 RECALL_WORDS, RECALL_STALE, RECALL_ONCE, RECALL_CTX = 40, 600, 6 * 3600, 0.5
 RECALL_KNN, RECALL_KCTX, RECALL_FILES = 8, 0.3, 40  # neighbours that vote, weight of a thread word in matching messages, files weighed
+RECALL_BAR = 1.6  # score an agent's post must reach to be shown (word match + past readers, 2 is top on both); 30% opened above it against 2-6% below, 7 days to 2026-11-10
 FILLER = set("""ive idk like just really thing things stuff something anything everything want wants wanted need needs needed make makes made making
 get gets got getting going goes went know think thought see seen look looks looking way ways lot lots bit kind kinda sort maybe also still even much many please thanks
 thank hey hello yes yeah okay sure now today tomorrow yesterday soon later already always never ever one two three four five first second third new old good better best
@@ -815,24 +817,36 @@ def recall_posts(ids, before=3, cap=1500):
         ctx += th[:1] + th[1:][-before:]
     return " ".join(str(p.get("text") or "") for p in mine), " ".join(str(p.get("text") or "")[:cap] for p in ctx)
 
+def recall_gate(hits, bad, person, midrun, n):
+    """What of a ranked recall gets shown: say nothing unless it is probably right. A wrong pointer costs attention on every message, so a list
+    of known duds stays silent rather than falling back on them, a run already at work does not get pointers (3% opened against 10% at a fresh start),
+    and an agent's post needs RECALL_BAR. A post from the person is the exception: 31% opened at any score. Measured in projects/rsi-lab/kb_rules.py."""
+    if midrun: return []
+    return [h for h in hits if fmt_path(h["path"]) not in bad and (person or h["s"] >= RECALL_BAR)][:n]
+
 def cmd_recall(a):
     text, ctx = recall_posts(set(a.post)) if a.post else (sys.stdin.read(), "")
-    thread = ""
-    if a.post:  # the thread of the post, so its own earlier messages are never taken as like-minded neighbours
-        try: thread = next((str(p.get("thread") or "") for l in open(H + "/board.jsonl", errors="replace") for p in [json.loads(l)] if p.get("id") in set(a.post)), "")
+    thread, person = "", not a.post  # text on stdin has no sender to judge
+    if a.post:  # the thread of the post, so its own earlier messages are never taken as like-minded neighbours; and who wrote it, for the bar
+        try:
+            mine = [p for l in open(H + "/board.jsonl", errors="replace") for p in [json.loads(l)] if p.get("id") in set(a.post)]
+            thread = str(mine[0].get("thread") or "") if mine else ""
+            person = any(str(p.get("from") or "").lower() == "person" for p in mine)
         except (OSError, ValueError): pass
     if not text.strip(): return  # no such post, or nothing on stdin
     c = connect(); t0 = time.time()
     hits = recall(c, text, a.n + 4, ctx, thread=thread) if kbuse else recall(c, text, a.n, ctx, thread=thread)
+    bad = set()
     if kbuse:  # what is injected leaves out the notes recall shows again and again and nobody opens (kbuse.duds); the ranking itself is untouched
         try: bad = kbuse.duds()
-        except Exception: bad = set()
-        hits = ([h for h in hits if fmt_path(h["path"]) not in bad] or hits)[:a.n]
+        except Exception: pass
+    ranked = hits[:a.n]; hits = recall_gate(hits, bad, person, a.midrun, a.n); held = [h for h in ranked if h not in hits]
     if a.who: seen = recall_shown(a.who); hits = [h for h in hits if h["path"] not in seen]
     if hits:
         print("Notes that may bear on this (matched on its words, not checked; `kb open PATH:LINE` reads one):")
         for h in hits: print("- %s:%d  %s" % (fmt_path(h["path"]), h["line"], re.sub(r"\s+", " ", h["head"])[:90]))
     rec = {"recall": a.post or "stdin", "top": [h["path"] for h in hits], "ms": int((time.time() - t0) * 1000)}
+    if held: rec.update(held=len(held), held_paths=[fmt_path(h["path"]) for h in held])  # every message is still searched; what was ranked and not shown, so what the silence cost can be counted (did the run read it anyway?)
     if a.who: os.environ["HIVE_NAME"] = a.who
     if kbuse and hits:
         rec.update(id=kbuse.new_id(), shown=[[fmt_path(h["path"]), h["line"]] for h in hits])
@@ -1008,7 +1022,7 @@ def main():
     p = sp.add_parser("file"); p.add_argument("title"); p.add_argument("--to"); p.add_argument("--supersedes", metavar="PATH"); p.add_argument("--from", dest="from_", metavar="POST", help="the board post this comes from: a link back, and the note is listed on that post's focus page"); p.add_argument("--focus", help="list it on this focus's page"); p.add_argument("--force", action="store_true"); p.set_defaults(f=cmd_file)
     p = sp.add_parser("alias"); p.add_argument("words", nargs="+"); p.set_defaults(f=cmd_alias)
     p = sp.add_parser("miss"); p.add_argument("question", nargs="+"); p.set_defaults(f=cmd_miss)
-    p = sp.add_parser("recall"); p.add_argument("--post", action="append"); p.add_argument("-n", type=int, default=5); p.add_argument("--for", dest="who"); p.set_defaults(f=cmd_recall)
+    p = sp.add_parser("recall"); p.add_argument("--post", action="append"); p.add_argument("-n", type=int, default=5); p.add_argument("--for", dest="who"); p.add_argument("--midrun", action="store_true", help="searched and logged, nothing shown"); p.set_defaults(f=cmd_recall)
     p = sp.add_parser("due"); p.add_argument("--mark", action="store_true"); p.set_defaults(f=cmd_due)
     p = sp.add_parser("stats"); p.set_defaults(f=cmd_stats)
     p = sp.add_parser("drafts"); p.set_defaults(f=cmd_drafts)

@@ -9,6 +9,7 @@ import { threadHref, agentHref, href } from "../core/router.js";
 import { overview, cols } from "../templates.js";
 import { pageHeader, section, tally, stats, list, share, empty, waiting, button, statusDot, statusWord, pageNav } from "../ui/kit.js";
 import { agentRef, threadRef } from "../ui/refs.js";
+import { table } from "../ui/table.js";
 import { agentCard as cardRows, displayText } from "../core/model.js";
 import { killButton } from "../actions.js";
 import { railSay } from "../core/foci.js";
@@ -28,24 +29,23 @@ const nowSay = a => agentSay(a.name, a.thread);
 // Running agents as rows, not cards: one line to scan, the same columns all the way down, however many there are.
 // An agent whose conversation waits on the person says so, and sorts first.
 function agentRows(run, states, t, waits) {
-  return h("div", { class: "tbl-w" }, h("table", { class: "tbl nowtbl" },
-    h("caption", { class: "vh" }, "Running agents"),
-    h("thead", null, h("tr", null, ["Agent", "Conversation", "State", "Model", "Doing now"].map(x => h("th", { scope: "col" }, x)), h("th", { class: "num", scope: "col" }, "Up"), h("th", null, h("span", { class: "vh" }, "Actions")))),
-    h("tbody", null, run.map(a => {
-      const st = states.get(a.name), S_ = status(st.key), task = S.byId[a.post], model = (cardRows(a.name)[0] || {}).short, wait = waits.has(a.thread);
-      const say = nowSay(a);   // what it says it is on, in its own words; the command it happens to be running is only in the hover (the person, 11081450f3e1)
-      const asked = task ? (a.from ? (a.from === "person" && S.app.app ? "you" : a.from) + ": " : "") + firstSentence(displayText(task)) : null;
-      return h("tr", { "data-key": a.name, "data-tone": S_.tone, "data-attn": st.key === "stuck" ? "" : null },
-        h("td", { "data-label": "Agent", class: "nt-a" }, agentRef(a.name)),
-        h("td", { "data-label": "Conversation", class: "nt-th" }, threadRef(a.thread)),
-        h("td", { "data-label": "State", class: "nt-st", title: S_.hint }, wait ? tag("info", "waits on you") : tag(TONE[st.key], st.text)),
-        h("td", { "data-label": "Model", class: "nt-md meta" }, model || "–"),
-        h("td", { "data-label": "Doing now", class: "nt-do", title: [say && say.own ? `Its own words, said ${ago(say.at)}${say.before ? ", before this run" : ""}` : null, a.doing ? "Last step: " + a.doing : null].filter(Boolean).join("\n") || null },
+  return table({ caption: "Running agents", cls: "nowtbl", rows: run, key: a => a.name,
+    rowAttrs: a => { const st = states.get(a.name); return { "data-tone": status(st.key).tone, "data-attn": st.key === "stuck" ? "" : null }; },
+    columns: [
+      { label: "Agent", lead: true, cls: "nt-a", render: a => agentRef(a.name) },
+      { label: "Conversation", cls: "nt-th", render: a => threadRef(a.thread) },
+      { label: "State", cls: "nt-st", render: a => { const st = states.get(a.name); return h("span", { title: status(st.key).hint }, waits.has(a.thread) ? tag("info", "waits on you") : tag(TONE[st.key], st.text)); } },
+      { label: "Model", cls: "nt-md meta", render: a => (cardRows(a.name)[0] || {}).short || "–" },
+      { label: "Doing now", cls: "nt-do clip", render: a => {
+        const task = S.byId[a.post], say = nowSay(a);   // what it says it is on, in its own words; the command it happens to be running is only in the hover (the person, 11081450f3e1)
+        const askText = task ? firstSentence(displayText(task)) : "", asked = askText ? (a.from ? (a.from === "person" && S.app.app ? "you" : a.from) + ": " : "") + askText : null;
+        return h("div", { title: [say && say.own ? `Its own words, said ${ago(say.at)}${say.before ? ", before this run" : ""}` : null, a.doing ? "Last step: " + a.doing : null].filter(Boolean).join("\n") || null },
           say ? h("div", { class: "nt-now" + (say.own ? " nt-on" : "") }, say.own ? h("span", { class: "meta" }, say.before ? "was on " : "on ") : null, railSay(say.text, 200), say.own ? h("span", { class: "meta" }, " · " + ago(say.at).replace(/ ago$/, "")) : null) : null,
-          asked ? h("div", { class: say ? "nt-ask meta" : "nt-now", title: task.text }, "Asked by " + asked) : say ? null : h("span", { class: "muted" }, "–")),
-        h("td", { "data-label": "Up", class: "num meta" }, dur(t - a.since * 1e3)),
-        h("td", { "data-label": "", class: "nt-x" }, a.alive ? killButton(a.name) : null));
-    }))));
+          asked ? h("div", { class: say ? "nt-ask meta" : "nt-now", title: task.text }, "Asked by " + asked) : say ? null : h("span", { class: "muted" }, "–"));
+      } },
+      { label: "Up", num: true, cls: "meta", render: a => dur(t - a.since * 1e3) },
+      { label: h("span", { class: "vh" }, "Actions"), cls: "nt-x", render: a => (a.alive ? killButton(a.name) : null) },
+    ] });
 }
 
 /** Developer Now: what needs the owner first. Stuck or dead agents, logins at their limit, queue waits over an hour, posts waiting. One row each. */
@@ -71,23 +71,19 @@ function devTables(run, states, t, ctx) {
   const wl = (a, b) => ((b.jobs || {}).waited || 0) - ((a.jobs || {}).waited || 0);
   const working = run.filter(a => states.get(a.name).key !== "queue").sort((a, b) => (a.since || 0) - (b.since || 0) || String(a.name).localeCompare(String(b.name)));
   const queued = run.filter(a => states.get(a.name).key === "queue").sort((a, b) => wl(a, b) || String(a.name).localeCompare(String(b.name)));
-  const w = h("div", { class: "tbl-w" }, h("table", { class: "tbl nowtbl" }, h("caption", { class: "vh" }, "Working"),
-    h("thead", null, h("tr", null, ["Agent", "Thread", "Doing now"].map(x => h("th", { scope: "col" }, x)), h("th", { class: "num", scope: "col" }, "Up"), h("th", null, h("span", { class: "vh" }, "Actions")))),
-    h("tbody", null, (MORE.work ? working : working.slice(0, 7)).map(a => h("tr", { "data-key": a.name },
-      h("td", { class: "nt-a", "data-label": "Agent" }, agentRef(a.name)), h("td", { class: "nt-th", "data-label": "Thread" }, threadRef(a.thread)),
-      h("td", { class: "nt-do", "data-label": "Doing now", title: title(a) }, h("div", { class: "nt-now" }, doing(a))),
-      h("td", { class: "num meta", "data-label": "Up" }, dur(t - a.since * 1e3)),
-      h("td", { class: "nt-x", "data-label": "" }, a.alive && a.thread ? button("Interrupt", () => armInterrupt(a.thread, a.name), { size: "s", kind: "quiet", icon: "pause", title: "Open its conversation ready to interrupt it" }) : null, a.alive ? killButton(a.name) : null))))));
+  const w = table({ caption: "Working", cls: "nowtbl", rows: MORE.work ? working : working.slice(0, 7), key: a => a.name, columns: [
+    { label: "Agent", lead: true, cls: "nt-a", render: a => agentRef(a.name) }, { label: "Thread", cls: "nt-th", render: a => threadRef(a.thread) },
+    { label: "Doing now", cls: "nt-do clip", render: a => h("div", { class: "nt-now", title: title(a) }, doing(a)) },
+    { label: "Up", num: true, cls: "meta", render: a => dur(t - a.since * 1e3) },
+    { label: h("span", { class: "vh" }, "Actions"), cls: "nt-x", render: a => [a.alive && a.thread ? button("Interrupt", () => armInterrupt(a.thread, a.name), { size: "s", kind: "quiet", icon: "pause", title: "Open its conversation ready to interrupt it" }) : null, a.alive ? killButton(a.name) : null] }] });
   const band = a => { const m = ((a.jobs || {}).waited || 0) / 60; return m > 60 ? "long" : m >= 20 ? "mid" : "short"; };
   const bands = ["long", "mid", "short"].map(k => ({ k, n: queued.filter(a => band(a) === k).length })), BAND = { long: "over 1 h, also in Needs attention", mid: "20 to 60 min", short: "under 20 min" };
   const bar = h("div", { class: "nd-queue-bar", role: "img", "aria-label": bands.map(x => `${x.n} ${BAND[x.k]}`).join(", ") }, bands.filter(x => x.n).map(x => h("i", { "data-band": x.k, style: `flex:${x.n}`, title: `${x.n}: ${BAND[x.k]}` })));
   const legend = h("div", { class: "meta nd-queue-key" }, bands.map(x => h("span", { "data-band": x.k }, h("i", { "data-band": x.k }), `${x.n} ${BAND[x.k]}`)));
-  const q = h("div", { class: "tbl-w" }, h("table", { class: "tbl nowtbl" }, h("caption", { class: "vh" }, "In the job queue"),
-    h("thead", null, h("tr", null, ["Agent", "Thread", "Jobs"].map(x => h("th", { scope: "col" }, x)), h("th", { class: "num", scope: "col" }, "Waited"))),
-    h("tbody", null, (MORE.queue ? queued : queued.slice(0, 3)).map(a => { const j = a.jobs || {}; return h("tr", { "data-key": a.name },
-      h("td", { class: "nt-a", "data-label": "Agent" }, agentRef(a.name)), h("td", { class: "nt-th", "data-label": "Thread" }, threadRef(a.thread)),
-      h("td", { class: "meta", "data-label": "Jobs" }, String(j.queued || 0)),
-      h("td", { class: ["num", j.waited > 3600 ? "nt-long" : "meta"], "data-label": "Waited" }, dur((j.waited || 0) * 1e3))); }))));
+  const q = table({ caption: "In the job queue", cls: "nowtbl", rows: MORE.queue ? queued : queued.slice(0, 3), key: a => a.name, columns: [
+    { label: "Agent", lead: true, cls: "nt-a", render: a => agentRef(a.name) }, { label: "Thread", cls: "nt-th", render: a => threadRef(a.thread) },
+    { label: "Jobs", cls: "meta", render: a => String((a.jobs || {}).queued || 0) },
+    { label: "Waited", num: true, render: a => h("span", { class: (a.jobs || {}).waited > 3600 ? "nt-long" : "meta" }, dur(((a.jobs || {}).waited || 0) * 1e3)) }] });
   return cols(
     section({ title: "Working", note: `${working.length}: agents running right now, longest first`, info: "Agents that are in the middle of a turn." }, working.length ? [w, working.length > 7 && !MORE.work ? h("div", { class: "lr-more" }, button(`Show ${working.length - 7} more`, () => { MORE.work = true; ctx.update(); }, { kind: "quiet", size: "s" })) : null] : empty("None.")),
     section({ title: "In the job queue", note: `${queued.length}: heavy jobs waiting their turn` }, queued.length ? [bar, legend, q, queued.length > 3 && !MORE.queue ? h("div", { class: "lr-more" }, button(`Show all ${queued.length}`, () => { MORE.queue = true; ctx.update(); }, { kind: "quiet", size: "s" })) : null] : empty("None.")));

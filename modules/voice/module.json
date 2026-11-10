@@ -1,6 +1,6 @@
 {
   "name": "voice",
-  "description": "Voice memos: an audio file the person attaches to a post (the dashboard's record button, a phone recorder, a WhatsApp or Telegram note) is transcribed on this machine with faster-whisper large-v3-turbo (GPU when there is one, else CPU), summarized (gist, points, asks) by Sonnet, and answered in the same thread with the full transcript attached. Off until `voice setup` builds it.",
+  "description": "Voice memos: an audio file the person attaches to a post (the dashboard's record button, a phone recorder, a WhatsApp or Telegram note) is transcribed on this machine with faster-whisper large-v3-turbo (GPU when there is one, else CPU), summarized (gist, points, asks) by Sonnet, and answered in the same thread with the full transcript attached. Installed by default on a new Hive (or `voice setup`).",
   "bin": {"voice": "voice"},
   "projects": []
 }

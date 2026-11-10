@@ -20,7 +20,8 @@ import { tier, status } from "../core/status.js";
 import { askTier, askStop, stopButton } from "../actions.js";
 import { seen, unreadIn, markRead, onInbox, IB } from "../core/inbox.js";
 import { MN, onMail } from "../core/mailnew.js";
-import { button, empty, icon, input, list, scrim, seg, statusDot, statusWord } from "../ui/kit.js";
+import { heldRoom } from "../core/room.js";
+import { bar as skBar, button, empty, icon, input, list, scrim, seg, skeleton, statusDot, statusWord } from "../ui/kit.js";
 import { agentRef, avatars, copyButton, threadRef } from "../ui/refs.js";
 import { message, messageHead, messageReceipt, localMessage, markWords, pollDelivered, marksSig, delivery, onJump, helperFolds } from "../ui/message.js";
 import { asidePanel, asideOpen, closeAside } from "../ui/aside.js";
@@ -41,16 +42,18 @@ const app = () => S.app.app;
 
 // What the person chose. C.next: the message search a thread opened from the search box starts with.
 // The conversation list's width: drag its edge, or use the arrow keys on it. Kept on this device.
-const SIDE_MIN = 220, SIDE_MAX = 640;
+const SIDE_MIN = 220, SIDE_MAX = 640, CHAT_MIN = 480;
 let sideW = (() => { try { return Math.min(SIDE_MAX, Math.max(SIDE_MIN, +localStorage.getItem("cm.side") || 280)); } catch (e) { return 280; } })();
 try { document.documentElement.style.setProperty("--rail-now", sideW + "px"); } catch (e) {}   // the New cell in Chat's bar follows the stored rail width (Nov 9 handoff §A.3)
-const setSide = (box, w) => { sideW = Math.round(Math.min(SIDE_MAX, Math.max(SIDE_MIN, w))); box.style.setProperty("--cm-w", sideW + "px"); document.documentElement.style.setProperty("--rail-now", sideW + "px"); try { localStorage.setItem("cm.side", sideW); } catch (e) {} };
+// The list never takes the conversation's room: a width saved in a wide window waits for the window to grow again (the same limit is in .cm's columns, components.css).
+const sideRoom = box => Math.max(SIDE_MIN, box.clientWidth - CHAT_MIN), sideNow = box => Math.min(sideW, sideRoom(box));
+const setSide = (box, w) => { sideW = Math.round(Math.min(SIDE_MAX, sideRoom(box), Math.max(SIDE_MIN, w))); box.style.setProperty("--cm-w", sideW + "px"); document.documentElement.style.setProperty("--rail-now", sideW + "px"); try { localStorage.setItem("cm.side", sideW); } catch (e) {} };
 const grip = () => h("div", { class: "cm-grip", role: "separator", "aria-orientation": "vertical", "aria-label": "Resize the conversation list", tabindex: "0", "data-key": "grip", title: "Drag to resize",
-  onpointerdown: e => { e.preventDefault(); const box = e.target.closest(".cm"), x0 = e.clientX, w0 = sideW; e.target.setPointerCapture(e.pointerId); e.target.dataset.on = "1";
+  onpointerdown: e => { e.preventDefault(); const box = e.target.closest(".cm"), x0 = e.clientX, w0 = sideNow(box); e.target.setPointerCapture(e.pointerId); e.target.dataset.on = "1";
     e.target.onpointermove = m => setSide(box, w0 + m.clientX - x0);
     e.target.onpointerup = e.target.onpointercancel = () => { delete e.target.dataset.on; e.target.onpointermove = e.target.onpointerup = e.target.onpointercancel = null; }; },
   ondblclick: e => setSide(e.target.closest(".cm"), 280),
-  onkeydown: e => { const d = e.key === "ArrowLeft" ? -24 : e.key === "ArrowRight" ? 24 : 0; if (d) { e.preventDefault(); setSide(e.target.closest(".cm"), sideW + d); } } });
+  onkeydown: e => { const d = e.key === "ArrowLeft" ? -24 : e.key === "ArrowRight" ? 24 : 0; if (d) { e.preventDefault(); const box = e.target.closest(".cm"); setSide(box, sideNow(box) + d); } } });
 // The side list's two views (the person, 11071518 2bab): "focus" (the default) puts each conversation under its focus, in the order of the
 // home cards, Other last, helpers folded under the one they came from; "recent" is every conversation in one flat list,
 // newest activity first, helpers included. hideFaded leaves out the ones marked Likely not needed. Both kept in this browser.
@@ -561,10 +564,14 @@ function sections(rs, ctx, opts) {
 function syncThreads(c, ctx) {
   const tl = document.querySelector("#main .cm-tl"); if (!tl) return;
   if (!simpleOn()) loadFoci();   // the foci (core/foci.js); a store emit when they change
-  const sig = [S.ver, C.view, C.hideFaded, S.foci && S.foci.at, S.foci && (S.foci.foci || []).map(f => f.id).join(), C.scope, C.conv, C.imp, tmetaSig(), [...FOLD].join(), [...KIDS].join(), C.tq, AI.st + AI.res.length, AI.tag, S.shown && S.shown.length, showMask(), c.arg, Math.floor(now() / 3e4), S.runSig, marksSig().length].join("|");
+  const held = byFocusOn() && S.foci === undefined && !C.tq.trim();   // Focus groups its rows by the focuses: grey rows until they're read, not a flat list that re-sorts
+  const sig = [held, S.ver, C.view, C.hideFaded, S.foci && S.foci.at, S.foci && (S.foci.foci || []).map(f => f.id).join(), C.scope, C.conv, C.imp, tmetaSig(), [...FOLD].join(), [...KIDS].join(), C.tq, AI.st + AI.res.length, AI.tag, S.shown && S.shown.length, showMask(), c.arg, Math.floor(now() / 3e4), S.runSig, marksSig().length].join("|");
   if (tl === L.tl && sig === L.tlSig) return;
-  const fresh = tl !== L.tl || c.arg !== L.tlConv;
+  const fresh = tl !== L.tl || c.arg !== L.tlConv || L.tlHeld;
   L.tl = tl; L.tlSig = sig; L.tlConv = c.arg;
+  if (held || L.tlHeld) tl.replaceChildren();   // a skeleton and a list share no rows to morph
+  L.tlHeld = held;
+  if (held) { L.foldKids = []; tl.append(skeleton("rail")); return; }
   const rows = threadRows(c, ctx);
   L.foldKids = rows.filter(r => r.key.endsWith("~kids")).map(r => r.key.slice(0, -5));
   const tree = sections(rows, ctx, { dense: true, empty: simpleOn() ? "No conversations yet. Start one with New conversation." : S.threads.size ? "Nothing here with what Show has on. Turn on Agent comms to see all of them." : app() ? "No conversations yet. Start one with New." : "No threads." });
@@ -754,11 +761,12 @@ function places() {
   const link = (label, ic, to, n, tip, word = "new") => h("a", { class: "cm-place", href: to, title: tip, "data-key": ic, "aria-current": at.split("/")[0] === to.split("/")[0] ? "page" : null }, icon(ic), h("span", { class: "cm-place-l" }, label), n ? h("b", { class: "cm-place-n", "aria-label": n + " " + word }, String(n)) : null);
   return h("div", { class: "cm-places", role: "group", "aria-label": "Chat", "data-key": "places" },
     can("post") ? h("a", { class: "cm-place cm-newbtn", href: href("comms", "~new"), title: "Start a new conversation", "aria-label": "New conversation", "data-key": "new", "aria-current": at === href("comms", "~new") ? "page" : null }, icon("new"), h("span", { class: "cm-place-l" }, "New conversation")) : null,
+    h("nav", { class: "subnav", "aria-label": "Chat's pages" },   // the same sub-bar as Agents' and Usage's rows (R49)
     // Needs me merged into Yours (Nov 9 handoff §A.2): its count, and its list when something waits
     can("post") && needsN() ? link("Yours", "yours", href("yours", "waits"), needsN(), "What waits on you, newest first; every exchange you had is under it", "waiting on you") : link("Yours", "yours", href("yours"), 0, "Every exchange you had, newest first"),
     can("read") ? link("Inbox", "inbox", href("inbox"), IB.unread || 0, "Every message agents sent you") : null,
     can("files") ? link("Mail", "mail", href("mail"), MN.n, MN.n ? "Mail since you last opened it" : "Your mail") : null,
-    link("Files", "file", href("made"), 0, "Files and links from your conversations"));
+    link("Files", "file", href("made"), 0, "Files and links from your conversations")));
 }
 TOPX.chat = () => app() ? places() : null;
 // The choices about the list, always open over it (the person, 110819287bb8, after 11071400de5b had put them behind one button):
@@ -1019,13 +1027,24 @@ function homeMoved() {
       h("summary", { title: `${plural(ms.length, "conversation")} put in a focus or moved in the last 3 days` }, h("b", null, "Recently moved"), h("span", { class: "cm-mv-n" }, String(ms.length))),   // the sentence in the title (Nov 9 handoff §C.1)
       h("ul", { class: "cm-old-l" }, ms.slice(0, 40).map(row))));
 }
-function fociGrid(ctx) {
+// While the home's reads are out: grey in the places the line, its rows and the cards land, so they arrive where these stood (R65).
+const WAIT_W = ["72%", "54%", "64%", "46%"];
+// R67: at the height the line and rows took last time, or Focuses is pushed down when they land (384 px on a phone).
+const waitsRoom = () => { const home = document.querySelector(".cm-home"), foci = home && home.querySelector(".cm-foci-h:not([data-wait])"), first = home && home.querySelector(".cm-hline,.cm-needs,.cm-older:not(.cm-moved)"); return foci && first ? foci.getBoundingClientRect().top - first.getBoundingClientRect().top - parseFloat(getComputedStyle(home).rowGap || 0) : 0; };
+const waitsHeld = px => h("div", { class: "cm-hwait", "data-key": "waits-held", role: "status", style: px ? `height:${px}px;flex:none;overflow:hidden` : null }, h("span", { class: "vh" }, "Reading\u2026"),
+  h("div", { class: "cm-hwait-l" }, skBar("18%", 11)),
+  h("div", { class: "cm-hwait-b" }, [0, 1, 2].map(i => h("div", { class: "cm-hwait-r", "data-key": "r" + i }, skBar(WAIT_W[i], 12), skBar("34%")))));
+const fociHeld = room => [h("div", { class: "sec-h cm-foci-h", "data-key": "foci-h", "data-wait": "" }, skBar("84px", 11)),
+  h("div", { class: "cm-foci", "data-key": "foci", style: room }, WAIT_W.map((w, i) => h("div", { class: "skel-card cm-fwait", "data-key": "w" + i }, skBar("40%", 12), skBar(w, 11), skBar("84%"), skBar("62%"))))];
+function fociGrid(ctx, settled) {
+  const px = heldRoom("home-foci", ".cm-foci", { settled }), room = px ? `min-height:${px}px` : null;   // the cards gain lines as the waits arrive
   // A failed first read leaves an empty stand-in (core/foci.js): say so, not "no focus" (the person, 110901516bcd: cards gone after a dash restart).
-  if (S.foci === undefined || (S.foci.failed && fociFailed())) return h("p", { class: "meta cm-foci-msg", "data-loading": fociFailed() ? null : "" }, fociFailed() ? "Couldn't read the focuses. It keeps trying." : "Reading\u2026");
+  if (S.foci === undefined && !fociFailed()) return fociHeld(room);
+  if (S.foci === undefined || S.foci.failed && fociFailed()) return h("p", { class: "meta cm-foci-msg" }, "Couldn't read the focuses. It keeps trying.");
   const fs = fociOrder();
   if (!fs.length) return h("p", { class: "meta cm-foci-msg" }, "No focus yet. Agents make one when work has a goal; every conversation is in the list on the left.");
   return [h("div", { class: "sec-h cm-foci-h", "data-key": "foci-h" }, h("h2", { class: "sec-t" }, "Focuses"), h("span", { class: "sec-n" }, String(fs.length)), h("a", { href: href("flow") }, "Flow")),
-    h("div", { class: "cm-foci", "data-key": "foci" }, fs.map(f => focusCard(f, ctx)))];
+    h("div", { class: "cm-foci", "data-key": "foci", style: room }, fs.map(f => focusCard(f, ctx)))];
 }
 /** #comms/~archived: every archived conversation, newest first, each with Bring back (the person, 11081454b6bd). Archived by hand or by age (ui/threadmeta.js). */
 function archivedPane(c, ctx) {
@@ -1049,7 +1068,8 @@ function homePane(ctx) {
   // Older ones (olderWhy: a day on work that moved on, two on quiet work) are out of the count and folded into Stuff to address below (the person, 11081245f002).
   const sp = needsSplit();
   // The list is built from the foci and the needs file, and each arrives on its own: until both are read its count is partial (it read 8, then 13, then 10 while loading, and "Nothing needs you" before that), so the line and rows wait.
-  const settled = !digest || (S.foci !== undefined && S.needsYou !== undefined);
+  const settled = !digest || (needsKnown() && S.foci !== undefined && S.needsYou !== undefined);
+  const waitsPx = heldRoom("home-waits", waitsRoom, { settled, usual: !C.olderOpen });
   // The waits head (the Nov 8 handoff §1.2): the count as plain words, and All to the full list on the right when there is more than the rows show.
   const waits = n ? `${n} ${n === 1 ? "waits" : "wait"} on you` : "Nothing new waits on you";
   const all = (n > HOME_WAITS || sp.older) && needsHref() ? h("a", { class: "cm-hline-all", href: needsHref(), title: sp.older ? `${plural(sp.older, "older one")} in Stuff to address` : "What waits on you, newest first, each in its conversation" }, "All") : null;
@@ -1062,10 +1082,11 @@ function homePane(ctx) {
       !n && !local.length && ![...S.threads.values()].some(d => d.posts.some(p => p.from === "person")) ? firstJobs() : null,
       local.some(it => it.state !== "failed") ? closeLine() : null,
       local.length ? h("div", { class: "cm-out", "data-key": "out" }, local.map(it => localMessage(it, outActions))) : null) : null,
+    settled ? null : waitsHeld(waitsPx),
     settled && line ? h("p", { class: "cm-hline", "data-key": "line", "data-needs": n ? "" : null }, line) : null,
     settled && n ? homeNeeds(waitingNow()) : null,
     settled && sp.older ? homeOlder(waitingOlder()) : null,
-    digest ? fociGrid(ctx) : null,
+    digest ? fociGrid(ctx, settled) : null,
     digest ? homeMoved() : null,
     phoneList());
 }
@@ -1135,7 +1156,7 @@ function frame(ctx, c, pane) {
     refresh(c);
     queueMicrotask(() => sync(c, ctx));
     if (c.thread && app()) { const un = unreadIn(c.thread), sig = c.thread + un.map(x => x.id).join(); if (un.length && sig !== L.marked && !document.hidden) { L.marked = sig; markRead({ ids: un.map(x => x.id) }); } }
-    const top = document.getElementById("top"), post = S.app.app && can("post");
+    const post = S.app.app && can("post");
     const convo = pane || (c.archived ? archivedPane(c, ctx) : c.home ? homePane(ctx)
       : [head(c, ctx),
         // Keyed by conversation: another one is a new element, so it opens at its end. Wrapped so that swap doesn't move the composer, which would drop focus.
@@ -1147,7 +1168,7 @@ function frame(ctx, c, pane) {
         c.thread && !can("post") ? readOnly(c.thread) : null,   // §5b: where this address can't post, say so in the composer's place
         post && c.thread ? composer({ thread: c.thread, update: ctx.update, top: app() ? strip(c.thread) : null }) : null,
         post && c.all ? h("p", { class: "cm-hint meta", "data-key": "hint" }, "To start something new, use New conversation.") : null]);
-    return h("div", { class: "cm", "data-key": "comms", "data-in": c.arg ? "" : null, "data-home": c.home && !c.list ? "" : null, "data-list": c.list ? "" : null, style: `--top-h:${top ? top.offsetHeight : 47}px;--cm-w:${sideW}px` },
+    return h("div", { class: "cm", "data-key": "comms", "data-in": c.arg ? "" : null, "data-home": c.home && !c.list ? "" : null, "data-list": c.list ? "" : null, style: `--cm-w:${sideW}px` },
       h("nav", { class: "cm-side", "aria-label": app() ? "Conversations" : "Threads" }, grip(),
         h("div", { class: "cm-filters" },
           // R14: the phone's way to the rail. Home has one row that opens it as a page; that page has a way back (css/phone.css shows these only there).

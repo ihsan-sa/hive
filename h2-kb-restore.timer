@@ -1,0 +1,9 @@
+[Unit]
+Description=Daily check for kb notes to bring back
+
+[Timer]
+OnCalendar=*-*-* 04:30
+Persistent=true
+
+[Install]
+WantedBy=timers.target

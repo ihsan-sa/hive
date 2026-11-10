@@ -57,7 +57,7 @@ export default {
   enter() { location.hash = "#settings/secrets"; },
   leave: forgetSecrets,
   render(ctx) {
-    if (!S.app.app || !can("secrets")) return h("div", { class: "page" }, empty(S.app.secrets_on === false ? "Secrets are off on this Hive. Whoever runs it can turn them on with secrets_on in web.json, on the machine." : "Secrets need full mode. Sign in again if your hour is up.", { kind: "page", title: "Secrets" }));
+    if (!S.app.app || !can("secrets")) return h("div", { class: "page", "data-width": "narrow" }, empty(S.app.secrets_on === false ? "Secrets are off on this Hive. Whoever runs it can turn them on with secrets_on in web.json, on the machine." : "Secrets need full mode. Sign in again if your hour is up.", { kind: "page", title: "Secrets" }));
     return h("div", { class: "page", "data-width": "narrow", "data-key": "secrets" },
       pageHeader({ title: "Secrets", lead: "For giving the hive a token without putting it in chat. Nothing here shows a value again, and it never goes on the board." }),
       h("div", { class: "stack secrets" }, secretParts(ctx, 1)));
