@@ -3,6 +3,7 @@ import { h, selecting } from "../core/dom.js";
 import { S, can, jget, post } from "../core/store.js";
 import { ago } from "../core/format.js";
 import { confirm } from "../ui/dialog.js";
+import { table } from "../ui/table.js";
 import { pageHeader, section, button, input, empty, waiting, meter, note } from "../ui/kit.js";
 
 const D = { v: null, text: "", code: "", err: "", busy: false, full: false };
@@ -37,25 +38,22 @@ const designDate = d => new Date(d + "T12:00:00").toLocaleDateString(undefined, 
 
 function accountsPart(v, ctx) {
   const session = v.running ? v.session_login : null, cc = v.can_connect !== false;
-  const row = a => {
-    const here = session === a.name, other = !!session && !here;
-    const why = other ? `The session is on ${session}. End it first.` : a.open ? null : `This account is ${a.closed_why}.`;
-    return h("tr", { "data-key": a.name, "data-closed": a.open || here ? null : "" },
-      h("td", { "data-label": "Account" }, h("strong", null, a.name), here ? h("span", { class: "meta dhere" }, "in session") : null),
-      h("td", { "data-label": "Plan" }, a.plan || h("span", { class: "muted" }, "Not known")),
-      h("td", { "data-label": "Claude Design" }, designCell(a)),
-      cc ? h("td", { "data-label": "Agents' access" }, a.connected ? state("good", "Approved") : h("span", { class: "muted" }, "Not approved")) : null,
-      h("td", { "data-label": "This week", class: "dweek" }, a.weekly == null ? h("span", { class: "muted" }, "No reading") : h("span", { class: "dmeter" }, meter({ value: a.weekly, stop: a.stop, label: `${a.name}, this week` }), h("span", { class: "meta" }, Math.round(a.weekly) + "%"))),
-      h("td", { "data-label": "", class: "dacts" }, h("span", { class: "frow" },
+  const here = a => session === a.name, other = a => !!session && !here(a);
+  const why = a => other(a) ? `The session is on ${session}. End it first.` : a.open ? null : `This account is ${a.closed_why}.`;
+  const columns = [
+    { label: "Account", lead: true, render: a => [h("strong", null, a.name), here(a) ? h("span", { class: "meta dhere" }, "in session") : null] },
+    { label: "Plan", render: a => a.plan || h("span", { class: "muted" }, "Not known") },
+    { label: "Claude Design", render: designCell },
+    cc ? { label: "Agents' access", render: a => a.connected ? state("good", "Approved") : h("span", { class: "muted" }, "Not approved") } : null,
+    { label: "This week", cls: "dweek", render: a => a.weekly == null ? h("span", { class: "muted" }, "No reading") : h("span", { class: "dmeter" }, meter({ value: a.weekly, stop: a.stop, label: `${a.name}, this week` }), h("span", { class: "meta" }, Math.round(a.weekly) + "%")) },
+    { label: h("span", { class: "vh" }, "Actions"), cls: "dacts", render: a => h("span", { class: "frow" },
         !a.open ? h("span", { class: "meta" }, a.closed_why[0].toUpperCase() + a.closed_why.slice(1)) : session ? null : button("Start session", () => act({ do: "start", login: a.name }, ctx), { kind: "primary", size: "s", disabled: D.busy }),
-        !cc || (!a.open && !here) ? null : a.connected
-          ? button("Take back", () => act({ do: "revoke", login: a.name }, ctx), { size: "s", kind: "quiet", disabled: D.busy || other || !!v.step, title: why || "Stops agents opening your Claude Design projects on this account" })
-          : button("Sign in & approve", () => act({ do: "grant", login: a.name }, ctx), { size: "s", disabled: D.busy || other || !!v.step, title: why || "Signs in to Claude Design if it needs to, then approves agents' access" }))));
-  };
+        !cc || (!a.open && !here(a)) ? null : a.connected
+          ? button("Take back", () => act({ do: "revoke", login: a.name }, ctx), { size: "s", kind: "quiet", disabled: D.busy || other(a) || !!v.step, title: why(a) || "Stops agents opening your Claude Design projects on this account" })
+          : button("Sign in & approve", () => act({ do: "grant", login: a.name }, ctx), { size: "s", disabled: D.busy || other(a) || !!v.step, title: why(a) || "Signs in to Claude Design if it needs to, then approves agents' access" })) },
+  ].filter(Boolean);
   return section({ title: "Your Claude accounts", key: "accounts", note: session ? `one session at a time: this one is on ${session}` : "start a session on any of them; it ends by itself after 6 hours" },
-    h("div", { class: "tbl-w" }, h("table", { class: "tbl dacct" },
-      h("thead", null, h("tr", null, h("th", null, "Account"), h("th", null, "Plan"), h("th", null, "Claude Design"), cc ? h("th", null, "Agents' access") : null, h("th", null, "This week"), h("th", null, h("span", { class: "vh" }, "Actions")))),
-      h("tbody", null, sorted(v.accounts, session).map(row)))),
+    table({ caption: "Your Claude accounts", cls: "dacct", columns, rows: sorted(v.accounts, session), key: a => a.name, rowAttrs: a => ({ "data-closed": a.open || here(a) ? null : "" }) }),
     h("p", { class: "field-h dfoot" }, "You can make new designs without approving anything. ",
       cc ? `Approving lets agents open and change the projects you already have at claude.ai/design. It asks you to sign in only if it needs to, and goes away when standalone Claude Design closes on ${designDate(v.connect_until)}. ` : null,
       h("a", { href: GUIDE, target: "_blank", rel: "noreferrer noopener" }, "Which plans include it")));
@@ -109,7 +107,7 @@ export default {
   id: "design", label: "Design", about: "make designs with Claude Design", tab: () => !!S.app.app && can("logins"),
   poll: { every: 1500, async run(ctx) { try { const v = await jget("/api/design"); D.readErr = ""; if (selecting()) return; D.v = v; redraw(ctx); } catch (e) { D.readErr = e.message; ctx.update(); } } },
   render(ctx) {
-    if (!can("logins")) return h("div", { class: "page" }, empty("This page isn't open from here.", { kind: "page", title: "Design" }));
+    if (!can("logins")) return h("div", { class: "page", "data-width": "narrow" }, empty("This page isn't open from here.", { kind: "page", title: "Design" }));
     const v = D.v;
     const head = pageHeader({ title: "Design", lead: "Tell Claude what to design and get a link to it." });
     if (!v) return h("div", { class: "page dpage", "data-width": "narrow", "data-key": "design" }, head, waiting(D.readErr, "Reading…", "the design page", "design"));

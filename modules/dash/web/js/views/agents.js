@@ -66,7 +66,7 @@ const phoneRank = c => c.k === "name" ? 0 : c.k === "status" ? 1 : c.k === "on" 
 const PHONE_BARE = new Set(["name", "status", "on"]);   // these stand on their own lines on a phone; the rest carry their column's name
 const phoneName = a => { const av = agentAvatar(a.name, { size: "s" }); av.tabIndex = -1; av.setAttribute("aria-hidden", "true"); return [av, agentRef(a.name, { dot: false })]; };   // the avatar carries the status shape
 const COLS = [
-  { k: "name", label: "Agent", cls: "ag-n", get: a => a.name, render: a => agentRef(a.name) },
+  { k: "name", label: "Agent", cls: "ag-n", get: a => a.name, render: a => phoneName(a) },
   { k: "status", label: "Status", cls: "ag-st", get: a => a.status, render: a => h("span", { title: agentStatus(a.name).label }, (STATUS.find(x => x[0] === a.status) || [0, a.status])[1]) },
   { k: "spawned", get label() { return S.app.app ? "Started" : "Spawned"; }, get: a => a.when, render: a => h("span", { title: new Date(a.when).toISOString() }, stamp(a.when).replace(/^\w+, /, "")) },
   { k: "thread", get label() { return S.app.app ? "Conversation" : "Thread"; }, cls: "clip ag-tm", get: a => threadTitle(a.thread) || "", render: a => threadRef(a.thread) },

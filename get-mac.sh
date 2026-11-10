@@ -61,6 +61,8 @@ cpus: $1
 memory: "$2GiB"
 disk: "60GiB"
 mounts: []
+# Lima's own DNS server panics ("recvfrom: socket is not connected", dns.go:379) and takes the host agent down, which hung the install on the Mac rig five runs in a row. The VM uses the Mac's network DNS instead.
+hostResolver: {enabled: false}
 containerd: {system: false, user: false}
 ssh: {loadDotSSHPubKeys: false, forwardAgent: false, forwardX11: false}
 portForwards:

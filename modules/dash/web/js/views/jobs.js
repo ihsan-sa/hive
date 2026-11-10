@@ -92,11 +92,11 @@ export default {
           rows: V.queued, key: q => q.agent + q.since + q.cmd, fold: { n: 10, id: "jobs-queued" }, empty: "The queue is empty.",
           columns: [col("Place", q => (q.first ? "first lane" : String(++pos))), agentCol("Agent", q => who(q.agent)), col("Waiting", q => secs(t - q.since)), cmd],
         }))]),
-        section({ title: app ? "Big work the agents are running" : "Outside the queue", note: app ? null : "the queue's limits don't apply to these" }, table({
+        section({ fold: innerWidth < 640, title: app ? "Big work the agents are running" : "Outside the queue", note: app ? null : "the queue's limits don't apply to these" }, table({
           rows: V.outside, key: o => o.who, empty: "Nothing big outside the queue.",
           columns: [agentCol("Who", o => (o.agent ? who(o.who) : o.who)), num(app ? "Cores" : "Threads", o => o.cores.toFixed(1)), num("Memory", o => gb(o.mem)), num("Processes", o => o.procs), { ...cmd, label: "Biggest command" }],
         })),
-        ...(app && !q ? [] : [section({ title: "Just finished", note: "last 10 queue jobs" }, table({
+        ...(app && !q ? [] : [section({ fold: innerWidth < 640, title: "Just finished", note: "last 10 queue jobs" }, table({
           rows: V.done, key: d => d.end + d.cmd, empty: "None yet.",
           columns: [col("Finished", d => ago(d.end * 1e3)), agentCol("Agent", d => who(d.agent)), col("Waited", d => secs(d.waited)), col("Ran", d => secs(d.ran)),
             col("Result", d => (d.rc ? statusLabel("error", `failed (${d.rc})`) : statusLabel("ok"))), cmd],

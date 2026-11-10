@@ -33,9 +33,9 @@ export default {
   enter(ctx) { update = ctx.update; if (S.app.app) pollInbox(); },
   leave() { update = null; },
   render() {
-    if (!S.live) return h("div", { class: "page" }, S.failed ? empty("Couldn't read your messages. It keeps trying.", { kind: "error" }) : empty("Reading…", { kind: "loading" }));
-    if (!S.app.app || !can("read")) return h("div", { class: "page" }, empty("The inbox isn't available on this connection.", { kind: "page", title: "Inbox" }));
-    if (!IB.items) { pollInbox(); return h("div", { class: "page" }, empty("Reading…", { kind: "loading" })); }
+    if (!S.live) return h("div", { class: "page", "data-width": "narrow" }, S.failed ? empty("Couldn't read your messages. It keeps trying.", { kind: "error" }) : empty("Reading…", { kind: "loading" }));
+    if (!S.app.app || !can("read")) return h("div", { class: "page", "data-width": "narrow" }, empty("The inbox isn't available on this connection.", { kind: "page", title: "Inbox" }));
+    if (!IB.items) { pollInbox(); return h("div", { class: "page", "data-width": "narrow" }, empty("Reading…", { kind: "loading" })); }
     const w = can("post");
     return form({
       header: pageHeader({ title: "Inbox", hint: "Every message an agent sent you, newest first. Chat's home shows the ones that need you now.",

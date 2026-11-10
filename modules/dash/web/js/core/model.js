@@ -348,7 +348,7 @@ export function threadTitle(th) {
   if (S.threadNames[th]) return S.threadNames[th];
   if (!S.app.app) return th;
   const d = S.threads.get(th), p = d && d.posts[0];
-  return p ? short(bareLinks(mdPlain(displayText(p)).split("\n")[0]), 64) : th;
+  return p ? short(bareLinks(mdPlain(displayText(p)).split("\n")[0]), 64) : "A conversation";
 }
 /** The agent behind "@question" in the side search works here (dash.py, side_ask): an agent like any other in Agents, but its thread is no conversation, so no chat list holds it. */
 export const SIDE_THREAD = "side";

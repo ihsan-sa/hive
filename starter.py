@@ -1354,6 +1354,19 @@ def tool_trial(name, sid="", path=None):
         return list(t.get("tools") or []) if on else []
     except Exception: return None
 
+def cache_trial(name, sid="", path=None):
+    """A trial of the split prompt cache (hive-meta L26/L27): ~/.hive/cache_split.json holds {"name", "until", "share"}, and that share of agents by a stable
+    hash of their name run with the conversation on the 5-minute cache while the system prompt and tools stay on 1 hour (a cache write costs 12.5 read units
+    instead of 20, and an idle over 5 minutes re-writes only the conversation). True for the trial arm, False for the other, None with no trial; every run start
+    under a live trial adds a line to cache_split.log with its arm, which the trial's reading joins on. Never fails a start."""
+    try:
+        p = Path(path or STATE / "cache_split.json"); t = json.loads(p.read_text())
+        if t.get("until") and now() > t["until"]: return None
+        on = int(__import__("hashlib").sha1(f"{t['name']}:{name}".encode()).hexdigest()[:8], 16) / 2**32 < t.get("share", .5)
+        with p.with_name("cache_split.log").open("a") as f: f.write(json.dumps({"ts": now(), "trial": t["name"], "name": name, "session": sid, "on": on}) + "\n")
+        return on
+    except Exception: return None
+
 def cut_orientation(name, text, path=None):
     """A removal trial (projects/rsi-lab/rules.md): ~/.hive/cut.json holds {"name", "until", "groups": {group: [exact sentences]}} and each
     group is dropped for half the agents, on a coin of its own per group and agent name. Returns (text, cut): cut is None with no
@@ -1507,6 +1520,7 @@ def start(c, name, posts, login, resume=None, reaped=None, extra=(), moved=False
             env.pop("CLAUDE_CONFIG_DIR", None)
     if effort and not prov: env["CLAUDE_EFFORT"] = effort
     drop = tool_trial(name, sid) if kind != "warden" and not prov else None
+    if kind != "warden" and not prov and cache_trial(name, sid): env["CLAUDE_CODE_MESSAGES_PROMPT_CACHE_TTL"] = "5m"
     cmd = argv or ["claude", "-p", prompt, "--append-system-prompt", system,
                    *(["--disallowedTools", ",".join(drop)] if drop else []),
                    *(["--effort", effort] if effort and not prov else []),

@@ -134,8 +134,8 @@ export default {
   id: "start", label: "Start", tab: () => S.app.app && can("post") && !setupDone(),
   enter: () => { F.arrived = true; },
   render(ctx) {
-    if (S.app.can == null) return h("div", { class: "page" }, waiting(S.failed));   // /api/app hasn't answered: don't say "only in the app" yet
-    if (!S.app.app) return h("div", { class: "page" }, h("p", null, "Setup shows only in the app, opened from this machine."));
+    if (S.app.can == null) return h("div", { class: "page", "data-width": "narrow" }, waiting(S.failed));   // /api/app hasn't answered: don't say "only in the app" yet
+    if (!S.app.app) return h("div", { class: "page", "data-width": "narrow" }, h("p", null, "Setup shows only in the app, opened from this machine."));
     const s = S.app.setup || {}, signed = s.signed_in || s.api_key || s.other, cfgd = S.app.settings;
     if (cfgd && cfgd.setup_done === false) return walkthrough(ctx, s);
     if (F.finished && !hasSent() && can("post")) return setUp(ctx);

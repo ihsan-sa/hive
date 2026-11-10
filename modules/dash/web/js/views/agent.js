@@ -289,9 +289,9 @@ export function agentPage(n, host = "page") {
             ],
           })),
           section({ title: "Who it talks to", note: "posts naming each other" }, contacts(contactRows, { limit: panel ? 8 : 16 })))),
-      section({ title: "What goes into each turn", note: "its input to each model call, by source" }, inputs(n, panel)),
-      section({ title: "What it changed", note: w && w.nfiles ? "from its tool calls; edits made from the shell are found where they can be" : null }, changed(n, D, host)),
-      section({ title: "Sessions", note: "Cost per session is from its session log, so these can add up to less than the total above." }, table({
+      section({ fold: innerWidth < 640, title: "What goes into each turn", note: "its input to each model call, by source" }, inputs(n, panel)),
+      section({ fold: innerWidth < 640, title: "What it changed", note: w && w.nfiles ? "from its tool calls; edits made from the shell are found where they can be" : null }, changed(n, D, host)),
+      section({ fold: innerWidth < 640, title: "Sessions", note: "Cost per session is from its session log, so these can add up to less than the total above." }, table({
         rows: [...ss].reverse().slice(0, panel ? 8 : 40), key: x => String(x.start), empty: "No sessions.", caption: `${n}'s sessions`,
         columns: [
           { label: "Started", render: x => stamp(x.start) },
@@ -302,7 +302,7 @@ export function agentPage(n, host = "page") {
           { label: "How it ended", render: x => h("span", { class: "sess-end", "data-tone": endTone(x) }, ended(x)) },
         ],
       })),
-      section({ title: "Latest posts", note: "what it wrote on the board" }, mine.length ? h("div", { class: "msg-col" }, mine.slice(panel ? -5 : -12).reverse().map(p => message(p))) : empty("No posts yet.")),
+      section({ fold: innerWidth < 640, title: "Latest posts", note: "what it wrote on the board" }, mine.length ? h("div", { class: "msg-col" }, mine.slice(panel ? -5 : -12).reverse().map(p => message(p))) : empty("No posts yet.")),
     ],
   }));
 }

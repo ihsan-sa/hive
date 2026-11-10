@@ -336,7 +336,7 @@ function syncGraph(D) {
     const chips = L.cols === 1 && outs.length > 1 ? [h("span", { class: "map-chip" }, "+ " + outs.length)] : outs.slice(0, 2).map(([k, n]) => h("span", { class: "map-chip" }, k + " ", h("b", null, String(n))));
     put(seen, "c:" + t.id, "button", "map-card", cl.card.x, cl.card.y,
       { "data-kind": "thread", "data-id": t.id, "data-body": "c:" + t.id, "data-tier": t.tier, "data-sel": sel || null, "data-lit": lit("c:" + t.id), style: `width:${cl.card.w}px;height:${cl.card.h}px`, title: t.id, "aria-label": `Thread ${t.id}, ${tier(t.tier).label}, ${plural(t.posts, "post")}${t.cost > 0 ? ", " + money(t.cost) : ""}`, "aria-pressed": sel ? "true" : "false" },
-      [h("span", { class: "map-cr1" }, h("i", { class: "map-tsw", "data-tier": t.tier }), h("b", { class: "map-cn", title: t.id }, t.id), t.cost > 0 ? h("span", { class: "map-cc" }, money(t.cost)) : null),
+      [h("span", { class: "map-cr1" }, h("i", { class: "map-tsw", "data-tier": t.tier }), (nm => h("b", { class: "map-cn", title: nm !== t.id ? t.id + ": " + nm : t.id, "data-named": nm !== t.id ? "" : null }, nm))(threadTitle(t.id)), t.cost > 0 ? h("span", { class: "map-cc" }, money(t.cost)) : null),
        compact ? null : h("span", { class: "map-cr2" }, t.stuck ? h("em", null, `▲ ${t.stuck} stuck`) : null, (m => h("span", { class: "map-cm", title: m }, m))(`${plural(t.posts, "post")} · ${since(t.last) || "–"}`), ...chips),
        h("i", { class: "map-cb" }, h("i", { style: `width:${Math.max(2, cl.costShare * 100).toFixed(1)}%` }))]);
   }

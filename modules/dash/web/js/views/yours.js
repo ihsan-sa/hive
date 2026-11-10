@@ -18,7 +18,7 @@ import { bar, button, empty, input, pageHeader, scrim } from "../ui/kit.js";
 import { heldRoom } from "../core/room.js";
 import { jump } from "../ui/message.js";
 
-const Y = { q: "", limit: 40, by: "new", menu: false, at: 0, timer: 0 };   // by: new (newest first) | focus (grouped by focus, the person, 11081355ecce)
+const Y = { q: "", limit: 40, by: "new", menu: false, at: 0, timer: 0, cap: {} };   // by: new (newest first) | focus (grouped by focus, the person, 11081355ecce)
 const STEP = 60;
 // The first read holds only about a day of the log, so an agent's closing word is missing until the older part arrives, and the stream re-orders under the reader (R67).
 // Grey rows until it is in, at most HOLD_MS: a slow link gets what is held rather than a page that keeps waiting.
@@ -60,7 +60,10 @@ const WHY = { moved: "its work moved on", quiet: "quiet work" };
 function waitList(rows, key = "waits", ctx) {
   const open = w => e => { if (!w.post || e.metaKey || e.ctrlKey || e.shiftKey) return; e.preventDefault(); jump(w.post); };
   const post = can("post");
-  return h("ul", { class: "list yr-waits", "data-dense": "", "data-key": key }, rows.map(w => {
+  // R78: on a phone each list opens on its first rows; the rest is one tap away
+  const cap = innerWidth < 640 ? (Y.cap[key] || 10) : Infinity, left = rows.length - cap;
+  const shown = left > 0 ? rows.slice(0, cap) : rows;
+  const ul = h("ul", { class: "list yr-waits", "data-dense": "", "data-key": key }, shown.map(w => {
     const ans = post && key !== "later" && key !== "moot" ? answerer(w) : null, why = key === "older" ? WHY[olderWhy(w)] : null;
     return h("li", { class: "lr yr-w", "data-key": "w:" + (w.key || w.th) },
       h("a", { class: "lr-in", href: threadHref(w.th), onclick: open(w), title: w.post ? "Open it in the conversation, at that message" : "Open the conversation" },
@@ -70,6 +73,7 @@ function waitList(rows, key = "waits", ctx) {
         key === "later" || key === "moot" ? button("Bring back", () => { setLater(w, "back"); ctx && ctx.update(); }, { size: "s", kind: "quiet" })
           : [laterButtons(w), ans ? h("button", { type: "button", class: "btn cm-need-a", "data-size": "s", "aria-haspopup": "dialog", "aria-expanded": String(quickIs(w)), onclick: ans }, "Answer") : null]) : null);
   }));
+  return left > 0 ? h("div", { class: "yr-capped", "data-key": key + "-c" }, ul, h("div", { class: "lr-more" }, button(`Show ${Math.min(left, 20)} more`, () => { Y.cap[key] = cap + 20; ctx && ctx.update(); }, { kind: "quiet", size: "s" }))) : ul;
 }
 
 function entry(p) {
