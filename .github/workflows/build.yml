@@ -1,0 +1,45 @@
+# Builds the three downloads on real machines of each system and checks each one starts.
+# The Mac build is ad-hoc signed here (Apple silicon refuses a bundle with no signature at all); a paid Apple or Windows
+# certificate, when there is one, goes in as secrets and electron-builder picks it up.
+name: build
+on:
+  push:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-24.04, flags: "--linux", app: "dist/linux-unpacked/hive-app", run: "xvfb-run -a" }
+          - { os: windows-latest, flags: "--win", app: "dist/win-unpacked/Hive.exe", run: "" }
+          - { os: macos-15, flags: "--mac dmg zip --arm64 -c.mac.identity=-", app: "dist/mac-arm64/Hive.app/Contents/MacOS/Hive", run: "" }
+          - { os: macos-15-intel, flags: "--mac dmg zip --x64 -c.mac.identity=-", app: "dist/mac/Hive.app/Contents/MacOS/Hive", run: "" }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: npm ci --no-audit --no-fund
+      - run: npm test
+      - run: npx electron-builder ${{ matrix.flags }} --publish never
+      - if: runner.os == 'macOS'
+        run: codesign --verify --deep --strict --verbose=2 "$(dirname "$(dirname "$(dirname "${{ matrix.app }}")")")"
+      - run: ${{ matrix.run }} node test/smoke.js "${{ matrix.app }}"
+      - if: runner.os == 'Linux'
+        run: xvfb-run -a node test/e2e.js && HIVE_APP_BIN="$PWD/${{ matrix.app }}" xvfb-run -a node test/e2e.js
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: hive-${{ matrix.os }}
+          path: |
+            dist/*.exe
+            dist/*.dmg
+            dist/*.zip
+            dist/*.deb
+            dist/*.AppImage
+            test/shots/*.png
+          if-no-files-found: warn
+          retention-days: 7

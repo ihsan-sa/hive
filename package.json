@@ -1,0 +1,88 @@
+{
+  "name": "hive-app",
+  "productName": "Hive",
+  "version": "0.1.0",
+  "description": "The Hive as a desktop app: installs it on first launch, then shows the web app in its own window.",
+  "homepage": "https://hive.ihsan.cc",
+  "author": {
+    "name": "Hive",
+    "email": "hive@hive.ihsan.cc"
+  },
+  "license": "MIT",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "test": "node test/logic.test.js",
+    "dist": "electron-builder --linux --win --mac --publish never"
+  },
+  "devDependencies": {
+    "electron": "45.2.3",
+    "electron-builder": "26.18.0",
+    "playwright-core": "^1.62.1"
+  },
+  "build": {
+    "appId": "cc.ihsan.hive",
+    "productName": "Hive",
+    "files": [
+      "main.js",
+      "lib.js",
+      "preload.js",
+      "setup.html",
+      "build/icon.png"
+    ],
+    "directories": {
+      "output": "dist"
+    },
+    "artifactName": "Hive-${os}-${arch}.${ext}",
+    "linux": {
+      "target": [
+        {
+          "target": "deb",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "category": "Utility",
+      "icon": "build/icon.png",
+      "executableName": "hive-app"
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "runAfterFinish": true,
+      "artifactName": "Hive-Setup.${ext}"
+    },
+    "mac": {
+      "target": [
+        {
+          "target": "zip",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.png",
+      "category": "public.app-category.productivity",
+      "identity": null
+    }
+  }
+}

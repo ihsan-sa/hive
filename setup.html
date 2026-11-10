@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src file:">
+<title>Hive</title>
+<style>
+  :root { color-scheme: dark; }
+  html, body { height: 100%; margin: 0; }
+  body { background: #111; color: #eee; font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; display: flex; align-items: center; justify-content: center; }
+  main { width: min(680px, 92vw); padding: 24px 0; }
+  img { width: 72px; height: 72px; border-radius: 16px; display: block; margin-bottom: 20px; }
+  h1 { font-size: 26px; margin: 0 0 8px; font-weight: 650; }
+  p { margin: 8px 0; color: #c8c8c8; } p.small { font-size: 14px; color: #999; }
+  .row { margin-top: 22px; display: flex; gap: 12px; flex-wrap: wrap; }
+  button { font: inherit; padding: 10px 20px; border-radius: 10px; border: 1px solid #444; background: #1c1c1c; color: #eee; cursor: pointer; }
+  button.main { background: #f5b800; border-color: #f5b800; color: #111; font-weight: 600; }
+  button:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+  pre { margin: 18px 0 0; padding: 14px; background: #000; border: 1px solid #2a2a2a; border-radius: 10px; max-height: 44vh; overflow: auto; white-space: pre-wrap; word-break: break-word; font: 13px/1.45 ui-monospace, Menlo, Consolas, monospace; color: #cfcfcf; }
+  pre:empty { display: none; }
+  .spin { display: inline-block; width: 14px; height: 14px; border: 2px solid #555; border-top-color: #f5b800; border-radius: 50%; animation: s 0.9s linear infinite; vertical-align: -2px; margin-right: 8px; }
+  @keyframes s { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .spin { animation: none; } }
+</style></head>
+<body><main>
+  <img src="build/icon.png" alt="">
+  <h1 id="title">Hive</h1>
+  <div id="text"></div>
+  <div class="row" id="buttons"></div>
+  <pre id="log" aria-live="polite"></pre>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const how = {
+  win32: "The Hive runs on Linux, so it makes a separate Linux system called Hive inside Windows (WSL 2), with your Windows files switched off for the agents. Windows may ask for permission once, and may need a restart.",
+  darwin: "The Hive runs on Linux, so it makes a small Linux machine on this Mac for it, with none of your Mac's folders inside. It needs about 15 GB free. The Mac version is still a test build.",
+  linux: "It installs in a folder of your own account (~/hive) and needs no password. Agents work in a sandbox around that folder.",
+};
+const screens = {
+  welcome: p => ({ title: "Set up the Hive", text: ["The Hive isn't on this computer yet. This installs it, which takes a few minutes and needs the internet.", how[p.platform] || how.linux, "Before anything is changed, it shows you what the agents will be able to reach and asks you to accept."], buttons: [["Install", "main", () => hive.install(false)], ["Not now", "", () => hive.quit()]] }),
+  installing: () => ({ title: "Installing the Hive", spin: true, text: ["This takes a few minutes. You can leave this window open and do something else."], buttons: [] }),
+  accept: () => ({ title: "Before it installs", text: ["Read what it says below. Nothing has been changed so far."], buttons: [["Accept and install", "main", () => { $('log').textContent = ''; hive.install(true); }], ["Don't install", "", () => hive.quit()]], keep: true }),
+  restart: () => ({ title: "Restart Windows", text: ["Windows installed the part the Hive needs (WSL 2), and has to restart before it works. Restart, then open Hive again and it carries on."], buttons: [["Close", "main", () => hive.quit()]], keep: true }),
+  failed: () => ({ title: "The install stopped", text: ["What it said is below. Trying again carries on from where it stopped."], buttons: [["Try again", "main", () => { $('log').textContent = ''; hive.install(true); }], ["Close", "", () => hive.quit()]], keep: true }),
+  starting: () => ({ title: "Opening the Hive", spin: true, text: ["Starting it up. After the computer has just been turned on this can take a minute or two."], buttons: [] }),
+  nostart: p => ({ title: "The Hive didn't start", text: ["It's installed, but it didn't answer."], note: p.note, buttons: [["Try again", "main", () => hive.retry()], ["Repair (run the installer again)", "", () => hive.install(true)], ["Close", "", () => hive.quit()]] }),
+};
+function show(state, p) {
+  const s = (screens[state] || screens.welcome)(p || {});
+  $('title').textContent = s.title;
+  $('text').replaceChildren(...s.text.map((t, i) => { const e = document.createElement('p'); if (i === 0 && s.spin) { const sp = document.createElement('span'); sp.className = 'spin'; e.append(sp); } e.append(t); return e; }));
+  $('buttons').replaceChildren(...s.buttons.map(([label, cls, fn]) => { const b = document.createElement('button'); b.textContent = label; b.className = cls; b.onclick = fn; return b; }));
+  if (!s.keep && state !== 'installing') $('log').textContent = s.note || '';
+  const first = $('buttons').querySelector('button'); if (first) first.focus();
+}
+hive.on('state', show);
+hive.on('log', t => { const l = $('log'); l.textContent += t; l.scrollTop = l.scrollHeight; });
+show('starting', {});
+</script>
+</main></body></html>
