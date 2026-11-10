@@ -148,7 +148,8 @@
   .cp-fpop{min-width:0;flex:0 1 auto}
   .cp-fbtn.dd{max-width:none;min-width:0;flex:0 1 auto}
   .cp-fbtn[data-picked] .cp-fname{min-width:12ch}
-  .cp-fbtn:not([data-picked]) .cp-fname{min-width:0}
+  .cp-fbtn:not([data-picked]) .cp-fname{display:none}   /* unpicked, "No focus" was squeezed to a 4 px sliver at 390: a folder icon says it in the room there is */
+  .cp-fbtn:not([data-picked]) .cp-ficon{display:inline-block}
   /* the words "Focus" and "Model" go on a phone: the value says it ("No focus", "Sonnet"), and with them the row ran the pills into each other and cut "To a552f" to "a" */
   .cp-fbtn>.cp-lab,.cp-model>.cp-lab{display:none}
 

@@ -15,7 +15,7 @@ import { loadFoci, fociFailed, focusById, focusOf, threadsOf, needsOf, askedOf, 
 import { waitingLater } from "../core/needs.js";
 import { archived } from "../ui/threadmeta.js";
 import { draft, answer } from "../ui/composer.js";
-import { inChat, chatEscape, chatLeave, answerer, summaryWait, sumLines, lineText, flat, liftIn, updatedAt, rowDot } from "./comms.js";
+import { inChat, chatEscape, chatLeave, answerer, summaryWait, sumLines, lineText, flat, liftIn, updatedAt, rowDot, markEl } from "./comms.js";
 import { quickIs, laterButtons, setLater } from "../ui/quick.js";
 import { when } from "../ui/when.js";
 import { yoursPosts, yoursText } from "../core/yours.js";
@@ -38,7 +38,7 @@ const sec = (key, cls, title, note, ...kids) => h("section", { class: ["fp-sec",
 function threadRow(r) {
   const line = threadLine(r.th), d = S.threads.get(r.th), dot = rowDot(r.th);
   return h("li", { class: "lr", "data-key": "th:" + r.th }, h("a", { class: "lr-in", href: threadHref(r.th) },
-    h("span", { class: "lr-t" }, dot ? h("span", { class: "st", "data-tone": dot.tone, title: dot.word }) : null, h("b", null, threadTitle(r.th)), d ? when(d.last, "t") : null),
+    h("span", { class: "lr-t" }, dot ? h("span", { class: "st", "data-tone": dot.tone, title: dot.word }) : null, h("b", null, threadTitle(r.th)), markEl(r.th), d ? when(d.last, "t") : null),
     line ? h("span", { class: "lr-x clamp-1" }, say(line)) : null));
 }
 // A box the person can tick (the person, 110812372f5e): it marks the item done for the agents (the focus check done command), an untick reopens it.
@@ -54,7 +54,7 @@ const finished = c => c.done && (c.ok || c.ok === undefined);   // ok undefined:
 const todoNote = c => c.done && !finished(c) ? h("span", { class: "fp-tnote" }, "ticked by you · an agent will check it")
   : !c.done && c.why ? h("span", { class: "fp-tnote" }, "reopened: " + c.why) : null;
 const todoList = (rows, id, ctx) => h("ul", { class: "fp-todo" }, rows.map(c => h("li", { "data-key": "c:" + (c.id || c.text), "data-done": finished(c) ? "" : null, "data-ticked": c.done && !finished(c) ? "" : null }, box(c, ctx),
-  h("span", null, say(c.text), c.focus && c.focus !== id ? h("span", { class: "meta" }, " · ", focusName(c.focus)) : null, todoNote(c)), c.done ? when(c.done * 1e3, "t", "ticked") : h("span"))));
+  h("span", null, say(c.done ? c.text.replace(/^For you:\s*/i, "") : c.text), c.focus && c.focus !== id ? h("span", { class: "meta" }, " · ", focusName(c.focus)) : null, todoNote(c)), c.done ? when(c.done * 1e3, "t", "ticked") : h("span"))));
 const todoSec = (checks, id, ctx) => {
   const open = checks.filter(c => !finished(c)), fin = checks.filter(finished).sort((a, b) => b.done - a.done);
   return [open.length ? null : h("p", { class: "fp-calm" }, "Everything on the list is done."), todoList([...open, ...fin], id, ctx)];   // done ones inline, struck through, last
@@ -115,17 +115,18 @@ function yoursSec(f, ctx) {
   if (!all.length && f.misc) return null;
   const shown = rows.slice(0, FP.yours), more = rows.length - shown.length;
   const who = p => (p.from === "person" ? h("b", null, "You") : simpleOn() ? h("b", null, plainName(p.from)) : agentRef(p.from, { pill: true }));
+  const answered = p => p.from !== "person" && S.posts.some(q => q.th === p.th && q.from === "person" && q.t > p.t);   // SU-3: an answered ask is not still waiting on the person
   const row = p => {
     const w = replyWait(p, id), open = e => { if (e.metaKey || e.ctrlKey || e.shiftKey) return; e.preventDefault(); jump(p.id); };
     return h("li", { class: "fp-yr-i", "data-key": "y:" + p.id, "data-who": p.from === "person" ? "me" : null, "data-hover-acts": can("post") ? "" : null },
       h("a", { class: "fp-yr-in", href: threadHref(p.th), onclick: open, title: "Open it in the conversation, at that message" },
         h("span", { class: "fp-yr-m" }, who(p), h("span", { class: "fp-yr-th" }, threadTitle(p.th)), when(p.t, "t")),
         h("span", { class: "fp-yr-x" }, yoursText(p) ? railSay(yoursText(p), 420) : "(no text)")),
-      can("post") ? h("span", { class: "row-acts" }, h("button", { type: "button", class: "btn fp-yr-r", "data-size": "s", "aria-haspopup": "dialog", "aria-expanded": String(quickIs(w)), title: "Reply here, beside the page",
+      answered(p) ? h("span", { class: "meta fp-yr-ans" }, "answered") : can("post") ? h("span", { class: "row-acts" }, h("button", { type: "button", class: "btn fp-yr-r", "data-size": "s", "aria-haspopup": "dialog", "aria-expanded": String(quickIs(w)), title: "Reply here, beside the page",
         onclick: (e, n) => { e.preventDefault(); openQuick(w, n || e.target); } }, "Reply")) : null);
   };
   const tog = all.length ? h("label", { class: "fp-yr-mine meta" }, h("input", { type: "checkbox", role: "switch", class: "switch", checked: FP.mine, onchange: (e, n) => { FP.mine = n.checked; FP.yours = 3; ctx.update(); } }), "With what you said") : null;
-  return h("section", { class: "fp-sec fp-yr", "data-key": "fp-yr", "aria-label": "For you here" }, head("For you here", rows.length ? String(rows.length) : null, tog),
+  return h("section", { class: "fp-sec fp-yr", "data-key": "fp-yr", "aria-label": "For you here" }, head("For you here", rows.filter(p => !answered(p)).length ? String(rows.filter(p => !answered(p)).length) : null, tog),
     rows.length ? h("ul", { class: "fp-yr-l" }, shown.map(row)) : h("p", { class: "fp-calm" }, "Nothing was said to you in this focus yet."),
     more ? h("p", { class: "fp-more" }, button(`Show ${Math.min(more, 10)} more`, () => { FP.yours += 10; ctx.update(); }, { kind: "quiet", size: "s" })) : null,
     steerBox(f, ctx));

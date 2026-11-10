@@ -419,6 +419,16 @@ def record_loadtime(d, route):
     return {"ok": True}
 
 
+def record_opened(d, route):
+    """The person opened a thread in the app (the client sends {thread} on open). Turns "never came back" in the fade replay
+    (projects/rsi-lab/thread-retire) from an upper bound into a count. The thread name only, never its text."""
+    th = str(d.get("thread") or "")
+    if not THREAD_NAME.fullmatch(th): raise ValueError("a thread name is letters, digits and . _ : -")
+    THREAD_OPENED.parent.mkdir(parents=True, exist_ok=True)
+    with THREAD_OPENED.open("a") as f: f.write(json.dumps({"at": round(time.time(), 3), "thread": th, "from": "app", "route": route}) + "\n")
+    return {"ok": True}
+
+
 SHOWN = STATE / "shown.jsonl"
 
 def shown_now():
@@ -542,16 +552,19 @@ def agent_status():
 # the thread's id. {thread: {"title": str, "pin": ms, "archived": ms, "back": ms}}; a key that's off is left out, a thread with none is dropped.
 # "important" and "faded" (likely not needed any more, greyed in the list) can also come from agents; the person's own word on either wins.
 THREAD_META = STATE / "thread-meta.json"
+THREAD_META_LOG = STATE / "thread-meta-log.jsonl"   # one line per change made in the app: {at, thread, from, change}
 META_LOCK = threading.Lock()
 
 IMPORTANT = STATE / "important.jsonl"   # `hive important THREAD --why ...` appends {thread, from, why, at, off?}; the person's own mark is "important" in thread-meta
 RENAMED = STATE / "renamed.jsonl"       # `hive rename THREAD "title"`: {thread, from, title, at}; the person's own title wins
 FADED = STATE / "faded.jsonl"           # `hive fade THREAD --why ...`, same records: an agent's word that the person likely needn't look at the thread any more
+FADED_RULES = STATE / "faded-rules.jsonl"   # the plain-rule pass (fade_rules.py, E20): same records with from "rule"; `fade_rules.py --undo` takes them all back
+THREAD_OPENED = STATE / "thread-opened.jsonl"   # POST /api/opened: one line per thread the person opens in the app {at, thread, from}
 
-def agent_marks(path):
+def agent_marks(path, keep=1000):
     """Newest agent mark per thread that is still on: {thread: {by, why, at}}."""
     best = {}
-    try: lines = path.read_text().splitlines()[-1000:]
+    try: lines = path.read_text().splitlines()[-keep:]
     except OSError: return best
     for ln in lines:
         try: r = json.loads(ln); th = str(r["thread"]); at = float(r["at"])
@@ -565,8 +578,9 @@ def thread_meta():
     try: v = json.loads(THREAD_META.read_text())
     except (OSError, ValueError): v = {}
     if not isinstance(v, dict): v = {}
-    for path, key, off, by, why in ((IMPORTANT, "important", "impOff", "impBy", "impWhy"), (FADED, "faded", "fadeOff", "fadedBy", "fadedWhy")):
-        for th, a in agent_marks(path).items():      # an agent's mark counts unless the person took the mark off after it
+    for path, key, off, by, why, keep in ((IMPORTANT, "important", "impOff", "impBy", "impWhy", 1000), (FADED, "faded", "fadeOff", "fadedBy", "fadedWhy", 1000),
+                                          (FADED_RULES, "faded", "fadeOff", "fadedBy", "fadedWhy", 50000)):   # the rule file is read whole: a mark stays on until its own off
+        for th, a in agent_marks(path, keep).items():      # an agent's mark counts unless the person took the mark off after it
             m = dict(v.get(th) or {})
             if a["at"] > m.get(off, 0) and not m.get(key):
                 m[key] = a["at"]; m[by] = a["by"]; m[why] = a["why"]; v[th] = m
@@ -613,6 +627,12 @@ def set_thread_meta(d):
         STATE.mkdir(parents=True, exist_ok=True)
         t = STATE / f".thread-meta.json.{os.getpid()}.{threading.get_ident()}"
         t.write_text(json.dumps(all_, indent=1)); t.replace(THREAD_META)
+        # The history of what the person set by hand (thread-meta.json keeps only the present state). An un-fade or a "back" here is a
+        # wrong fade the person corrected: projects/rsi-lab/thread-retire/replay.py --cases turns each into a test of every fade rule.
+        try:
+            ch = {k: (True if k == "title" else d[k]) for k in ("title", "pin", "archived", "important", "faded") if k in d}
+            with THREAD_META_LOG.open("a") as f: f.write(json.dumps({"at": round(now_ms / 1000, 3), "thread": th, "from": "app", "change": ch}) + "\n")
+        except OSError: pass
     return m
 
 
@@ -1900,7 +1920,7 @@ GET_CAP = {"/api/call-chat": "post", "/api/live": "read", "/api/away": "read", "
            "/api/settings": "config", "/api/ntfy": "config", "/api/webpush": "config", "/api/update": "config", "/api/signin-codex": "logins", "/api/accounts": "logins", "/api/design": "logins", "/api/brand/logo": "read",
            "/api/kb/home": "files", "/api/kb/open": "files", "/api/kb/search": "files", "/api/kb/raw": "files", "/api/kb/map": "files", "/api/kb/history": "files", "/api/progress": "read", "/api/checklist": "read", "/api/share-preview": "read", "/api/approvals": "read", "/api/feedback-drafts": "read", "/api/mail": "files"}
 POST_CAP = {"/api/webpush": "config", "/api/share-build": "read", "/api/kill": "stop", "/api/approval": "stop", "/api/tier": "tier", "/api/agent-model": "post", "/api/agent-effort": "post", "/api/login-pause": "limits", "/api/login-limit": "limits", "/api/provider-limit": "limits",
-            "/api/post": "post", "/api/side-ask": "post", "/api/thread-meta": "post", "/api/shown": "post", "/api/loadtime": "post", "/api/checklist": "post", "/api/focus": "post", "/api/feedback": "post", "/api/feedback-draft-done": "post", "/api/issue-link": "post", "/api/update": "config", "/api/share-copy": "config", "/api/share-pack": "config", "/api/draft": "config", "/api/import": "config", "/api/upload": "post", "/api/inbox-read": "post", "/api/ntfy": "config", "/api/config": "config", "/api/starter": "config",
+            "/api/post": "post", "/api/side-ask": "post", "/api/thread-meta": "post", "/api/shown": "post", "/api/loadtime": "post", "/api/opened": "post", "/api/checklist": "post", "/api/focus": "post", "/api/feedback": "post", "/api/feedback-draft-done": "post", "/api/issue-link": "post", "/api/update": "config", "/api/share-copy": "config", "/api/share-pack": "config", "/api/draft": "config", "/api/import": "config", "/api/upload": "post", "/api/inbox-read": "post", "/api/ntfy": "config", "/api/config": "config", "/api/starter": "config",
             "/api/module": "modules", "/api/signin": "logins", "/api/signin/code": "logins", "/api/signin/cancel": "logins", "/api/plan": "plans", "/api/secret": "secrets", "/api/slack-door": "modules",
             "/api/signin-codex": "logins", "/api/account-key": "logins", "/api/design": "logins", "/api/brand": "config", "/api/brand/logo": "config"}
 LOCAL_ONLY = {"/api/access", "/api/settings", "/api/import", "/api/share-copy", "/api/share-pack", "/api/draft"}  # who may do what is never changed from outside, whatever outside.can says
@@ -4024,7 +4044,9 @@ def setup_state():
     ls = [{"name": l["name"], "signed_in": login_ok(l["path"])} for l in logins()]
     return {"logins": ls, "signed_in": any(l["signed_in"] for l in ls), "api_key": bool(os.environ.get("ANTHROPIC_API_KEY")),
             "has_posts": BOARD.exists() and BOARD.stat().st_size > 0, "starter": starter_up(),
-            "claude": bool(shutil.which("claude")), "other": other_account()}
+            "claude": bool(shutil.which("claude")), "other": other_account(),
+            "person_stop": 100,   # the weekly line for the person's own posts: the fixed 100 in starter.login_for (not a setting; changing it is the warden's call)
+            "fallback": bool(((jload(HOME / "core" / "config.json", {}) or {}).get("fallback") or {}).get("agents") or ((jload(HOME / "core" / "config.json", {}) or {}).get("fallback") or {}).get("chain"))}  # runs still start on another provider when no Claude login has room (core/config.json)
 
 
 SETUP = CachedStale(setup_state, 20)  # set .t = 0 to read again. Stale, since every login is a `claude auth status`: up to 16 s on a busy machine, and the page has no tabs of its own until /api/app answers
@@ -4712,9 +4734,25 @@ def serve(port):
             self.end_headers()
             self.wfile.write(b)
 
-        def send_kb_raw(self, rel):
+        def send_kb_page(self, f):
+            """A project's html page, for the preview to frame (?view=1): redacted like any text, then served under the same sandbox as a page from a post (R111)."""
+            if f.stat().st_size > KB_TEXT_MAX: return self.send_error(404)
+            body = redact(f.read_text(errors="replace")).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Content-Disposition", "inline")
+            self.send_header("Content-Security-Policy", PAGE_CSP)
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Referrer-Policy", "no-referrer")
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(body)
+
+        def send_kb_raw(self, rel, view=False):
             """An image or PDF for the Knowledge page. Text never comes this way, so it can't skip the redaction; nothing here runs in the page's origin."""
             f = kb_path(rel); ct = KB_IMAGE.get(f.suffix.lower()) if f else None
+            if view and f and f.is_file() and f.suffix.lower() in (".html", ".htm"): return self.send_kb_page(f)
             if not f or not f.is_file() or not (ct or f.suffix.lower() == ".pdf") or f.stat().st_size > KB_RAW_MAX: return self.send_error(404)
             name = re.sub(r"[^A-Za-z0-9_.-]", "_", f.name)
             self.send_response(200)
@@ -4865,7 +4903,7 @@ def serve(port):
                 if v is None: return self.deny(404, "that isn't here, or isn't shown")
                 self.send(json.dumps(v).encode(), J)
             elif u.path == "/api/kb/raw":
-                self.send_kb_raw(q.get("path", [""])[0])
+                self.send_kb_raw(q.get("path", [""])[0], q.get("view") == ["1"])
             elif u.path == "/api/mail":
                 self.send(json.dumps(mail_view()).encode(), J)
             elif u.path == "/api/plans":
@@ -5002,13 +5040,14 @@ def serve(port):
                 try: return self.send(json.dumps(share_build(d)).encode(), J)
                 except KeyError: return self.send_error(404)
                 except ValueError as e: return self.deny(400, str(e))
-            if u.path in ("/api/post", "/api/side-ask", "/api/thread-meta", "/api/shown", "/api/loadtime", "/api/checklist", "/api/focus", "/api/feedback", "/api/feedback-draft-done", "/api/issue-link", "/api/update", "/api/inbox-read", "/api/ntfy", "/api/webpush", "/api/agent-model", "/api/agent-effort", "/api/config", "/api/starter", "/api/module", "/api/signin", "/api/signin/code", "/api/signin/cancel", "/api/access", "/api/plan", "/api/secret", "/api/settings", "/api/share-copy", "/api/share-pack", "/api/draft", "/api/import", "/api/signin-codex", "/api/account-key", "/api/design", "/api/brand", "/api/slack-door"):
+            if u.path in ("/api/post", "/api/side-ask", "/api/thread-meta", "/api/shown", "/api/loadtime", "/api/opened", "/api/checklist", "/api/focus", "/api/feedback", "/api/feedback-draft-done", "/api/issue-link", "/api/update", "/api/inbox-read", "/api/ntfy", "/api/webpush", "/api/agent-model", "/api/agent-effort", "/api/config", "/api/starter", "/api/module", "/api/signin", "/api/signin/code", "/api/signin/cancel", "/api/access", "/api/plan", "/api/secret", "/api/settings", "/api/share-copy", "/api/share-pack", "/api/draft", "/api/import", "/api/signin-codex", "/api/account-key", "/api/design", "/api/brand", "/api/slack-door"):
                 try:
                     if u.path == "/api/post": res = person_post(d.get("text"), d.get("thread"), d.get("reply_to"), d.get("files"), signer=self.signer, limited="config" not in self.can, simple=d.get("simple") is True, model=d.get("model"), effort=d.get("effort"), sig=d.get("sig"), interrupt=d.get("interrupt") is True)
                     elif u.path == "/api/side-ask": res = side_ask(d.get("q"), signer=self.signer, limited="config" not in self.can)
                     elif u.path == "/api/thread-meta": res = set_thread_meta(d)
                     elif u.path == "/api/shown": res = dismiss_shown(d)
                     elif u.path == "/api/loadtime": res = record_loadtime(d, self.route)
+                    elif u.path == "/api/opened": res = record_opened(d, self.route)
                     elif u.path == "/api/checklist": res = checklist_do(d)
                     elif u.path == "/api/focus": res = focus_do(d)
                     elif u.path == "/api/feedback": res = send_feedback(d)

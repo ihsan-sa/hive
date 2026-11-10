@@ -29,7 +29,14 @@ const CAPTEXT = { read: "Read everything", files: "Read files: notes, modules, s
 
 async function loadCfg(ctx) {
   if (!can("config")) return;
-  try { F.cfg = await jget("/api/config"); F.cfgErr = null; } catch (e) { F.cfg = F.cfg || {}; F.cfgErr = e.message; ctx.update(); return; }   // no defaults on a failed read: a toggle would save them over the real values
+  try { F.cfg = await jget("/api/config"); F.cfgErr = null; F.cfgRead = true; if (F.say.hive && F.say.hive.held) say("hive", ""); }
+  catch (e) {
+    F.cfg = F.cfg || {}; F.cfgErr = e.message;
+    // No defaults on a failed read: a toggle would save them over the real values. Values read earlier this session are real, so the
+    // page keeps showing them (the Hive went away mid-session), and says they couldn't be refreshed.
+    if (!F.cfgRead) { ctx.update(); return; }
+    F.say.hive = { text: `Couldn't refresh the settings (${e.message}). These are from the last read.`, tone: "bad", held: true };
+  }
   F.ed ||= { max: F.cfg.max_sessions ?? "", kpe: F.cfg.keeper_every_s || 10800, au: F.cfg.auto_update !== false, bud: F.cfg.max_budget_usd ?? "", day: F.cfg.max_daily_usd ?? "" };
   F.saved ||= { max: F.ed.max, bud: F.ed.bud, day: F.ed.day };
   ctx.update();
@@ -42,7 +49,7 @@ function watchUpdate(ctx) {
 }
 async function loadUpdate(ctx) {
   if (!can("config")) return;
-  try { F.up = await jget("/api/update"); } catch (e) { return false; }   // an update restarts the app, so a poll can miss
+  try { F.up = await jget("/api/update"); } catch (e) { if (!F.up && F.upLast) { F.up = F.upLast; ctx.update(); } return false; }   // an update restarts the app, so a poll can miss; a failed first read on coming back shows the last one (the Hive went away mid-session)
   ctx.update(); return true;
 }
 /** How often the keeper round runs (keeper_every_s): the person asked to set it, 2026-11-04. */
@@ -550,7 +557,7 @@ function navDots(ctx) {
 
 export default {
   id: "settings", label: "Settings", about: "accounts, modules, access", tab: () => S.app.app && (can("config") || can("modules") || can("logins")),
-  enter(ctx) { F.keysOpen = null; F.flash = {}; F.ed = null; F.name = null; F.saved = null; F.access = null; F.acctOpen = null; F.accessOpen = null; F.sitesOpen = null; F.say = {}; clearSignin(); forget(); F.up = null; loadCfg(ctx); loadPhone(ctx); loadPush(ctx); loadUpdate(ctx); watchUpdate(ctx); loadMods(ctx); if (S.app.settings && can("config")) loadPage(ctx.update);
+  enter(ctx) { F.keysOpen = null; F.flash = {}; F.ed = null; F.name = null; F.saved = null; F.access = null; F.acctOpen = null; F.accessOpen = null; F.sitesOpen = null; F.say = {}; clearSignin(); forget(); F.upLast = F.up || F.upLast; F.up = null; loadCfg(ctx); loadPhone(ctx); loadPush(ctx); loadUpdate(ctx); watchUpdate(ctx); loadMods(ctx); if (S.app.settings && can("config")) loadPage(ctx.update);
   },
   leave() { clearInterval(upTimer); upTimer = null; forget(); forgetSecrets(); },
   render(ctx) {

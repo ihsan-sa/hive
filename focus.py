@@ -403,7 +403,7 @@ def threads_posted(name, thread, since, posts):
     for p in posts:
         th = p.get("thread")
         if th and th not in out and str(p.get("from", "")).lower() == name and ts(p.get("at")) >= since: out.append(th)
-    return out[:5]
+    return out[:20]
 
 def summary_nudges(name, thread, since, posts):
     """The summary reminders for a run: one per focus, over every thread it posted a result in, as the file ask does (rsi-lab-pickups: a keeper or a lab run posting its result in another focus's thread left that card stale)."""

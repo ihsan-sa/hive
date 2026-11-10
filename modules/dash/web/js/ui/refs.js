@@ -1,7 +1,7 @@
 // References to agents and threads. Real links (#agent/<name>, #comms/<thread>), so they open in a new tab,
 // show in the status bar, and work by keyboard. Status is shape + colour + the label in the tooltip.
 import { h, copyText } from "../core/dom.js";
-import { agentBrief, agentLabel, agentStatus, isAgent, isRunning, isWarden, threadTitle, tierOf } from "../core/model.js";
+import { agentBrief, agentLabel, agentMono, agentStatus, isAgent, isRunning, isWarden, threadTitle, tierOf } from "../core/model.js";
 import { agentHref, threadHref } from "../core/router.js";
 import { status, tier } from "../core/status.js";
 import { statusDot, wardenMark } from "./kit.js";
@@ -45,7 +45,7 @@ export function agentAvatar(n, { size } = {}) {
     h("span", null, mono(n)), s.key !== "none" ? statusDot(s.key, { live: isRunning(n) }) : null);
 }
 // An agent's two marks: a8779 → 87 (every agent starts with a letter), other names their first two letters.
-const mono = n => /^[a-z][0-9a-f]{4,}$/.test(n) ? n.slice(1, 3) : String(n).slice(0, 2);
+const mono = agentMono;
 /** A stack of avatars, at most max, then +N. Hovering it (or tabbing into it) opens a list of every name with its status, each a link. */
 export function avatars(names, { max = 4, size } = {}) {
   if (!names.length) return null;

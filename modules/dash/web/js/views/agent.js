@@ -7,7 +7,7 @@ import { agentCard, agentSpend, agentState, costsPending, agentStatus, agentLabe
 import { DAY, HOUR, MIN, ago, dur, firstSentence, mdPlain, money, now, pct, plural, short, stamp, toks } from "../core/format.js";
 import { threadHref } from "../core/router.js";
 import { metrics, cols } from "../templates.js";
-import { button, defs, empty, legend, list, note, pageHeader, rank, section, share, statusLabel, stats, wardenBadge } from "../ui/kit.js";
+import { button, defs, empty, legend, list, note, pageHeader, rank, section, share, statusLabel, stats, wardenBadge, figPending } from "../ui/kit.js";
 import { table } from "../ui/table.js";
 import { agentRef, copyButton, threadRef } from "../ui/refs.js";
 import { message, pollDelivered, fileUrl } from "../ui/message.js";
@@ -292,10 +292,10 @@ export function agentPage(n, host = "page") {
     }),
     sections: [
       section({ title: "In numbers", note: "this agent's turns, time and cost" }, stats([
-        { label: "Cost", value: !S.usage || costsPending() ? "…" : spend.usd > 0 ? money(spend.usd) : "–", note: costsPending() || !(tk[0] + tk[1] + tk[2] + tk[3]) ? null : `${toks(tk[0] + tk[1] + tk[2] + tk[3])} tokens, ${pct(tk[2], read)} of reads from cache` + (spend.sub ? `; ${money(spend.sub)} in subagents` : ""), title: `At API list prices, from the ${spend.src}.` + (byModel.length > 1 ? " " + byModel.map(([k, v]) => `${modelName(k)} ${money(v)}`).join(", ") + "." : "") + (L ? " A turn under way may not be counted yet." : "") },
+        { label: "Cost", value: !S.usage || costsPending() ? figPending() : spend.usd > 0 ? money(spend.usd) : "–", note: costsPending() || !(tk[0] + tk[1] + tk[2] + tk[3]) ? null : `${toks(tk[0] + tk[1] + tk[2] + tk[3])} tokens, ${pct(tk[2], read)} of reads from cache` + (spend.sub ? `; ${money(spend.sub)} in subagents` : ""), title: `At API list prices, from the ${spend.src}.` + (byModel.length > 1 ? " " + byModel.map(([k, v]) => `${modelName(k)} ${money(v)}`).join(", ") + "." : "") + (L ? " A turn under way may not be counted yet." : "") },
         { label: "Time running", value: ss.length ? dur(D.active) : "none", note: plural(ss.length, "session") + (spend.calls != null ? `, ${spend.calls.toLocaleString()} model calls` : "") },
         { label: "Posts", value: mine.length, note: `named in ${plural(toMe.length, "post")}; ${plural(threads.length, "thread")}` },
-        { label: "Changed", value: w ? plural(w.nfiles, "file") : "…", note: w ? [plural(w.ncommits, "commit"), w.prs.length ? plural(w.prs.length, "PR") : null, started.length ? `started ${plural(D.startedNames.length, "agent")}` : null].filter(Boolean).join(", ") : null },
+        { label: "Changed", value: w ? plural(w.nfiles, "file") : figPending("6ch"), note: w ? [plural(w.ncommits, "commit"), w.prs.length ? plural(w.prs.length, "PR") : null, started.length ? `started ${plural(D.startedNames.length, "agent")}` : null].filter(Boolean).join(", ") : null },
       ])),
       D.life.chart ? section({ title: "Over its life", note: D.life.note }, D.life.chart) : null,
       cols(

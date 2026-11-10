@@ -13,7 +13,7 @@ import { S, can, jget, post, poll, loadApp } from "../core/store.js";
 import { simpleOn, hiveName } from "../core/simple.js";
 import { foci, focusById, focusOf, focusName, listed, threadLine } from "../core/foci.js";
 import { go } from "../core/router.js";
-import { isAgent, isRunning, agentCard, agentStatus, threadPeople, partner, displayText, typedText, threadTitle, threadState } from "../core/model.js";
+import { isAgent, isRunning, agentCard, agentMono, agentLabel, agentStatus, threadPeople, partner, displayText, typedText, threadTitle, threadState } from "../core/model.js";
 import { short, mdPlain, now } from "../core/format.js";
 import { button, icon, input, statusDot } from "./kit.js";
 import { openAside } from "./aside.js";
@@ -448,7 +448,7 @@ function focusPick(d) {
   return h("div", { class: "pop cp-fpop", "data-key": "focus" },
     h("button", { type: "button", class: "dd cp-fbtn", "data-picked": d.focus ? "" : null, "aria-haspopup": "listbox", "aria-expanded": String(open), "aria-label": "Focus: " + label,
       title: "Which focus this conversation is filed under on the home; No focus leaves it in Other", onclick: toggle("focus") },
-      h("span", { class: "cp-lab", "aria-hidden": "true" }, "Focus"), h("span", { class: "cp-fname" }, label), icon("chevron")),
+      h("span", { class: "cp-lab", "aria-hidden": "true" }, "Focus"), icon("folder", { cls: "cp-ficon" }), h("span", { class: "cp-fname" }, label), icon("chevron")),
     open ? h("div", { class: "menu cp-fmenu", role: "listbox", "aria-label": "Focus", "data-side": "bottom-end", "data-w": "wide", "data-key": "fm" },
       menuHead("Filed under on the home", "h"),
       menuItem("No focus", "Leaves it in Other", () => pick(""), { role: "option", key: "f:", sel: !d.focus }),
@@ -707,7 +707,7 @@ const toggle = m => () => { CP.menu = CP.menu === m ? false : m; CP.ac = null; r
 // A menu opens up from the box, or down when there's more room below: at home the box sits near the top and an up menu ran under the app bar (the person, 1108184885d2)
 const toggleRoom = m => (e, b) => { const r = (b || e.target.closest("button")).getBoundingClientRect(); CP.down = CP.down || {}; CP.down[m] = innerHeight - r.bottom > r.top; toggle(m)(); };
 const sideFor = (m, end) => (CP.down && CP.down[m] ? "bottom-" : "top-") + (end ? "end" : "start");
-const mono = n => /^[a-z][0-9a-f]{4,}$/.test(n) ? n.slice(1, 3) : String(n).slice(0, 2);
+const mono = agentMono;
 /** The avatar box: two letters and the status dot for an agent, a glyph for anything else. */
 const av = (n, glyph) => h("span", { class: "av", "data-size": "s", "aria-hidden": "true" }, glyph || mono(n), glyph ? null : statusDot(agentStatus(n).key, { live: S.running.has(n) }));
 const menuHead = (t, key) => h("div", { class: "menu-h", role: "presentation", "data-key": key || "h:" + t }, t);
@@ -729,7 +729,9 @@ const sizeWord = () => SIZES.find(s => s[0] === readScale())[1];
 /** The To button: who this goes to, as an avatar and a name. Why (a reply, a name typed) is in its title. */
 function toChip(th, r) {
   const f = r.to && focusWord(r.to), n = r.who, btw = r.why === "btw";
-  const label = btw ? "a new agent, on the side" : f ? focusName(focusById(f.id)) + (n && n !== "new" ? ` → ${n}` : " → a new agent") : n === "new" ? "a new agent" : n || "…";
+  // The app look names no code (E10): the conversation's own agent is "this chat's agent", another one goes by agentLabel; the code stays in the menu and on hover.
+  const nm = !n || n === "new" || !isAgent(n) || !(S.app && S.app.app) ? n : agentThread(n) === th ? "this chat's agent" : agentLabel(n);
+  const label = btw ? "a new agent, on the side" : f ? focusName(focusById(f.id)) + (n && n !== "new" ? ` → ${nm}` : " → a new agent") : n === "new" ? "a new agent" : nm || "…";
   const why = { reply: "you're replying to it", named: "named in your message", chosen: "you chose it" }[r.why];
   return h("button", { type: "button", class: "cp-to", "aria-haspopup": "listbox", "aria-expanded": String(CP.menu === "to"),
     title: btw ? "A side question: it answers in its own thread, and this one's agent never sees it." : `Who this goes to${why ? ` (${why})` : ""}. Change it here, or type @ and a name.`, onclick: toggle("to") },
@@ -915,7 +917,7 @@ export function composer({ thread, update, place = "thread", autofocus, top }) {
   if (th && CP.mode[th] && !busy) delete CP.mode[th];   // the agent stopped (or the To changed): nothing left to interrupt
   const armed = !!(th && CP.mode[th] === "interrupt");
   const lw = busy || (th && CP.sent[th] && CP.sent[th].who), phase = th && lw ? livePhase(th, lw) : null;
-  const ph = armed ? `Tell ${busy} what to do instead…` : !th ? "Say what you want done" : simpleOn() ? "Message" : r.who === "new" ? "Message a new agent" : r.who ? `Reply to ${r.who}…` : "Message";
+  const ph = armed ? (S.app && S.app.app ? "Tell it what to do instead…" : `Tell ${busy} what to do instead…`) : !th ? "Say what you want done" : simpleOn() ? "Message" : r.who === "new" ? "Message a new agent" : r.who && !(S.app && S.app.app) ? `Reply to ${r.who}…` : "Reply…";   // the app look names no code in the box (E10)
   const sendWord = armed ? "Interrupt" : place === "thread" ? "Send" : "Start";
   return h("div", { class: "cp", "data-key": k, "data-place": place, "data-mode": armed ? "interrupt" : null, "data-fmt": fmtOpen() ? "" : null, ...(th ? {} : dropZone(null)) },  // a thread's composer is inside its conversation's zone
     d.err ? h("p", { class: "cp-err", role: "alert", "data-key": "err" }, d.err) : null,

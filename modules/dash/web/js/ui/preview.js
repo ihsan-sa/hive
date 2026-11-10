@@ -41,7 +41,7 @@ export function badgeOf(name) {
 const VIEW = new Set(["svg", "video", "audio", "pdf", "html"]);
 // A project's file (it.kb, a home-relative path) comes through the Knowledge API instead, with its rules: text redacted,
 // only images and PDFs as raw bytes. Such an item is { kb, name, size, t }.
-const kbRaw = it => "/api/kb/raw?path=" + encodeURIComponent(it.kb);
+const kbRaw = it => "/api/kb/raw?path=" + encodeURIComponent(it.kb) + (/\.html?$/i.test(it.name) ? "&view=1" : "");   // a page runs in the preview, redacted by the server (R111)
 export const kbRawOk = it => /\.(png|jpe?g|gif|webp|pdf)$/i.test(it.name);
 export const fileHref = it => (it.kb ? kbRaw(it) : `/files/${encodeURIComponent(it.id)}/${encodeURIComponent(it.name)}`);
 export const viewHref = it => (it.kb ? kbRaw(it) : fileHref(it) + (VIEW.has(kindOf(it.name)) ? "?view=1" : ""));

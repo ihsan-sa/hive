@@ -25,6 +25,14 @@ export function agentLabel(n) {
   return `${head || short(t, 40)}'s agent`;
 }
 
+/** An agent's two marks on its avatar: a8779 → 87, other names their first two letters. The app look shows no code there either (E10): the first letter of what agentLabel calls it ("Why is the sky…'s agent" → W). */
+export function agentMono(n) {
+  if (!/^[a-z][0-9a-f]{4,}$/.test(n)) return String(n).slice(0, 2);
+  if (!S.app || !S.app.app) return n.slice(1, 3);
+  const l = agentLabel(n), c = l && l !== n && l !== "an agent" ? (l.match(/[\p{L}\p{N}]/u) || [])[0] : "";
+  return c ? c.toUpperCase() : "A";
+}
+
 /** Agent codes inside a line of text, as agentLabel says them (the app look only; a known agent, or a + 4 hex with a digit, so "added" stays a word and a6aea-mesh.png a file name). */
 export const labelCodes = text => (!text || !S.app || !S.app.app ? text : String(text).replace(/(^|[^\w@])@?(a[0-9a-f]{4})\b(?![-_.]\w)/g, (m, a, n) => (isAgent(n) || /\d/.test(n) ? a + agentLabel(n) : m)));
 
@@ -209,7 +217,26 @@ export function sessionNewer(l) { return !l.read_at || ((l.limits && l.limits.at
 export function fresh7(l) { const w = l.limits && l.limits.seven_day; return w && sessionNewer(l) && w.r * 1e3 > now() ? w.u * 100 : l.weekly; }
 export const weeklyStop = (l, U) => { const st = l.stop || {}; return st.weekly ?? st.global ?? (U && U.stop_pct) ?? 98; };
 /** In use: an account the starter can still give new runs to (not paused, under its weekly stop line). */
-export function inUse(l, U) { if (l.paused) return false; const v = fresh7(l); return v == null || v < weeklyStop(l, U); }
+/** The login's own 5-hour stop line, when it has one and its 5-hour window is still open (the starter's pick_login skips it past that line too). */
+export function fiveFull(l) { const st = l.stop || {}, w = l.limits && l.limits.five_hour, r5 = l.resets && l.resets.five_hour;
+  const used = w && w.r * 1e3 > now() ? w.u * 100 : l.five != null && r5 && r5 * 1e3 > now() ? l.five : null;
+  return st.five_hour != null && used != null && used >= st.five_hour; }
+export function inUse(l, U) { if (l.paused || fiveFull(l)) return false; const v = fresh7(l); return v == null || v < weeklyStop(l, U); }
+/** The one answer to "is the Hive held at a usage limit?": {why: "limit"|"paused", until} or null. The starter's hold (S.live.limit_until, while it lasts)
+ *  or every Claude login past its line / paused; with a Codex login, a key or a fallback chain (setup.other, setup.fallback) agents still start, so nothing is held. Every banner, pill
+ *  and strip line reads this (shell.js hiveStopped, comms.js hasRoom), so two of them can't disagree. */
+export function limitStop() {
+  const su = (S.app && S.app.setup) || {}; if (su.other || su.fallback) return null;   // a Codex login, a key or a fallback chain: runs still start
+  const all = (S.usage && S.usage.logins) || (S.live && S.live.logins) || [], hold = S.live && S.live.limit_until;
+  if (hold && hold * 1e3 > now()) return { why: "limit", until: hold * 1e3 };
+  if (all.length && !all.some(l => inUse(l, S.usage))) {
+    const r = all.filter(l => !l.paused).map(l => runway(l, S.usage).toReset).filter(x => x != null).sort((a, b) => a - b)[0];
+    // The person\'s own posts still start past the stop line, up to a real limit (starter.login_for, a fixed 100 that setup.person_stop reports): say so, so nothing claims "nothing starts".
+    const line = su.person_stop ?? 100, own = all.some(l => !l.paused && (fresh7(l) == null || fresh7(l) < line));
+    return { why: all.every(l => l.paused) ? "paused" : "limit", until: r != null && r > 0 ? now() + r : null, own };
+  }
+  return null;
+}
 /** A login's share of all the Claude capacity: what its plan gives a week, with Pro as 1. The person's ratio (2026-11-04): Ultra (Max 20x) is 10 Pros.
  * Max 5x is a guess at 5 until the person says. An unknown plan counts as 1. */
 export const PLAN_WEIGHT = { Pro: 1, "Max 5x": 5, "Max 20x": 10, Ultra: 10 };

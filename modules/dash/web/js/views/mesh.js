@@ -216,7 +216,9 @@ function viewBox(L) {
   return { x0, y0, x1, y1 };
 }
 // a small graph grows to fill the panel; a big one shrinks to fit whole
-const fitK = (L, b) => Math.max(0.1, Math.min(L.tile ? 1.4 : 1.25, (scroller.clientWidth - 64) / (b.x1 - b.x0), (scroller.clientHeight - 64) / (b.y1 - b.y0)));
+// On a phone a graph is not shrunk below PHONE_MIN_K to fit the panel (R-1110d-a: whole, the 26-agent Lineage drew at 0.26, 3 px labels): it opens at the top left at a readable size and is panned, or zoomed out by hand.
+const PHONE_MIN_K = 0.85;
+const fitK = (L, b) => { const k = Math.max(0.1, Math.min(L.tile ? 1.4 : 1.25, (scroller.clientWidth - 64) / (b.x1 - b.x0), (scroller.clientHeight - 64) / (b.y1 - b.y0))); return scroller.clientWidth < 760 && !L.tile ? Math.max(k, PHONE_MIN_K) : k; };
 function fitView(L) {
   const B = viewBox(L), { x0, y0, x1, y1 } = B;
   if (x0 > x1) { GS.view = { k: 1, x: 0, y: 0, user: false }; return; }

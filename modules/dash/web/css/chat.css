@@ -406,6 +406,7 @@ html[data-read="1.3"]{--read-scale:1.3}
 .cm-status.cm-strip>.cm-strip-m{white-space:normal}
 @media (max-width:699px){.cm-status.cm-strip,.cm-status.cm-strip:not([data-open]){padding:4px var(--s4) 6px}}
 /* Focus picker: the model picker's menu, with a long name cut short */
+.cp-fbtn .cp-ficon{display:none;width:16px;height:16px;vertical-align:-3px}
 .cp-fbtn .cp-fname{max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .cp-fmenu{max-height:min(60vh,420px);overflow:auto}
 

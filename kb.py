@@ -43,6 +43,7 @@ SKIP_PROJECT = re.compile(r"^projects/(rsi-loop/arms|hive-meta/interp/goals-hist
 # The grader's unchecked drafts are their own source, ranked low and marked [draft] (outcomes.py); ones the dream dropped aren't searched at all.
 SKIP_DRAFTS = re.compile(r"^kb/(_drafts|_dropped/drafts)(/|$)")
 SKIP_FILE = re.compile(r"(^|/)(question-test-[^/]*|\.queries\.jsonl|miss-candidates\.jsonl|MANIFEST)$")
+NOINDEX = re.compile(r"<!--\s*kb:\s*skip\s*-->")  # in a file's first 500 chars: keep it out of the index (notes that quote many queries outrank real answers)
 PROJECT_ONLY = re.compile(r"\.md$")  # in projects/ and core/, prose only, not every data file
 MAXFILE = 4_000_000
 STOP = set("a an and are as at be been but by can could did do does for from had has have he her him his how i if in into is it its me my no not of on or our she should so than that the their them then there these they this to too us was we were what when where which who whom why will with would you your about after again all also any before being both each few more most other out over own same some such under until very while".split())
@@ -248,6 +249,7 @@ def refresh(c, force=False):
             try: text = open(p, errors="replace").read()
             except OSError: continue
             if k: drop_doc(c, k[0])
+            if NOINDEX.search(text[:500]): continue
             add_doc(c, src, p, rel, st, text); n += 1
         for rel, k in known.items():
             if rel not in seen: drop_doc(c, k[0])
@@ -615,7 +617,7 @@ def cmd_find(a):
         rec.update(id=kbuse.new_id(), shown=shown)
         if a.frm or a.to or a.src or a.board: rec["filtered"] = True
         who = kbuse.agent(); st = kbuse.load(who) if who else {"live": []}
-        if st.get("tester"): rec["tester"] = True
+        if st.get("tester") or os.environ.get("HIVE_KB_TEST"): rec["tester"] = True   # HIVE_KB_TEST=1: a bulk replay, not use
     log(rec)
     if kbuse and who:
         chained = False

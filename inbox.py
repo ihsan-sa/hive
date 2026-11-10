@@ -185,10 +185,39 @@ def owns_open(name, rec):
     mine = new
     if not mine: return None
     rows = "\n".join(f"{e['id']}: {str(e.get('ask'))[:120]}" for e in mine[:8])
-    try: (STATE / STOP_LOG).open("a").write(json.dumps({"at": time.time(), "name": name, "run": rec["at"], "thread": rec.get("thread"), "event": "owns_open"}) + "\n")
-    except OSError: pass
+    stop_log(name, rec, "owns_open")
     return ("You still own these open asks as you stop. Close each one that is delivered with `hive asks done ID --evidence POSTID`, "
             "mark `hold|person|drop ID --why ...` if it waits or is moot, or leave it if work remains (say so in your thread):\n" + rows)
+
+def stop_log(name, rec, event, **kw):
+    try: (STATE / STOP_LOG).open("a").write(json.dumps({"at": time.time(), "name": name, "run": rec["at"], "thread": rec.get("thread"), "event": event, **kw}) + "\n")
+    except OSError: pass
+
+def person_waits(name, rec):
+    """Once per run, at Stop only: what waits on the person in the threads this run touched, which owns_open skips: about 25 rows on the person's list had stopped waiting and nobody went back (projects/rsi-lab/simuse/foryou-pass.md).
+    Not in end_decision: this reminder warns and must not hold a `hive post --end`, so it keeps its own mark and a held --end leaves it for the real Stop. Whatever goes wrong here, the stop goes on."""
+    if os.environ.get("HIVE_DOOR") or not rec.get("at") or name.startswith("f"): return None   # free agents are kept light
+    mark = STATE / "nudged-person" / name
+    try: lines = mark.read_text().splitlines()
+    except OSError: lines = []
+    if lines and lines[0] == rec["at"]: return None
+    try:
+        seen = json.loads(lines[1]) if len(lines) > 1 else {}
+        sys.path.insert(0, str(Path(__file__).parent)); import asks, waits
+        posts = []
+        for line in BOARD.read_text(errors="replace").splitlines():
+            try: posts.append(json.loads(line))
+            except ValueError: pass
+        items = waits.at_stop(name, rec["at"], rec.get("thread"), posts, asks.ledger(), seen)
+        mark.parent.mkdir(parents=True, exist_ok=True); mark.write_text(rec["at"] + "\n" + json.dumps(seen))
+    except Exception: return None
+    if not items: return None
+    stop_log(name, rec, "person_waits", items=[r["id"] for r in items])
+    return waits.stop_text(items)
+
+def open_at_stop(name, rec):
+    """The Stop prompt's one reminder of what is still open: the agent's own asks, and what waits on the person."""
+    return "\n\n".join(x for x in (owns_open(name, rec), person_waits(name, rec)) if x) or None
 
 STOP_WORDS = ("Done", "Blocked", "Needs the person", "Waiting", "Told to stop", "Next")  # how a stop reason starts, as the last line of the status bar
 STOP_FRESH_S = 900  # a reason older than this was written before the work that came after it
@@ -432,7 +461,7 @@ def stops(since_h=24.0):
     try: rows = [json.loads(l) for l in (STATE / STOP_LOG).read_text().splitlines() if l.strip()]
     except (OSError, ValueError): rows = []
     for r in rows:
-        if r.get("at", 0) < time.time() - since_h * 3600 or r.get("event") == "owns_open": continue  # that one is measure_asks.py's, not the gate's
+        if r.get("at", 0) < time.time() - since_h * 3600 or r.get("event") in ("owns_open", "person_waits"): continue  # those are the reminder's (measure_asks.py), not the gate's
         x = runs.setdefault((r.get("name"), r.get("run")), {"asked": None, "last": None, "why": "", "event": ""})
         if r.get("event") == "asked" and x["asked"] is None: x["asked"] = r["at"]
         x["last"], x["event"] = r["at"], r.get("event")
@@ -559,7 +588,7 @@ def main():
             why = end_decision(name, rec, end)
             print(json.dumps({"continue": False, "stopReason": "ended on its post (hive post --end)"} if why is None else {"hookSpecificOutput": {"hookEventName": event, "additionalContext": why}}))
             return
-        if event == "Stop" and (why := "\n\n".join(x for x in (unanswered(name, rec) or owns_open(name, rec), stop_gate(name, rec)) if x)):
+        if event == "Stop" and (why := "\n\n".join(x for x in (unanswered(name, rec) or open_at_stop(name, rec), stop_gate(name, rec)) if x)):
             print(json.dumps({"decision": "block", "reason": "\n\n".join(x for x in (why, focus_nudge(name, rec)) if x)}))
         elif event == "Stop" and (fn := focus_nudge(name, rec)):
             print(json.dumps({"decision": "block", "reason": fn}))

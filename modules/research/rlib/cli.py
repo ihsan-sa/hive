@@ -153,6 +153,8 @@ def c_hunt(a):
         elif disc: print("first search: " + disc[0])
         return
     full0 = sum(1 for o in h.orgs if h.org_count(o) >= h.per_org)
+    kept = sorted({r["organisation"] for r in h.leads.values()} - set(h.orgs))
+    if kept: _log("hunt: kept earlier leads for " + ", ".join(kept) + ", not in this spec")
     r = h.run()
     if a.text:
         print(f"{r['leads']} leads ({r['verified']} verified) of {r['target']}, {r['status']}; {r['near']} near misses, {r['departure_searches']} departure searches")

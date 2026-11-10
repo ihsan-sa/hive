@@ -288,7 +288,7 @@ function lineageLayout(data, opt) {
   const used = new Set(); for (const a of data.agents) for (const k of Object.keys(a.threads || {})) used.add(k);
   const ck = t => Math.floor(Math.log2(t.cost + 1) * 2);
   const shown = data.threads.filter(t => used.has(t.id) || mine.get(t.id).length).sort((a, b) => (ck(b) - ck(a)) || byStr(a.id, b.id));
-  const cardW = tile ? TILE : Math.min(compact ? 150 : 176, Math.round((width - 2 * pad) * 0.4)), cardH = tile ? TILE : D.cardH, labelW = tile ? 0 : compact ? 112 : 204;
+  const cardW = tile ? TILE : Math.min(compact ? (width < 760 ? 172 : 150) : 176, Math.round((width - 2 * pad) * (width < 760 ? 0.5 : 0.4))), cardH = tile ? TILE : D.cardH, labelW = tile ? 0 : compact ? 112 : 204;
   const run = tile ? 36 : 110, tail = tile ? 22 : 70, genW = tile ? 40 : 150, step = tile ? 22 : 56, rowMin = tile ? 26 : 64;
   // lineages side by side: the threads are split into B blocks left to right (each block is the card column plus its generation columns), B chosen
   // so the whole picture fits the panel's shape; at B = 1 it is the old single column

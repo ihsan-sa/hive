@@ -38,6 +38,11 @@ THEIRS = re.compile(r"\$|\b(?:pay|buy|purchase|order|checkout|check out|invoice|
 DECIDE = ("Test before a For you line: is it money, an account, their voice, a device, root or a hard limit? "
           "This one names none of them, so decide it yourself, write `Decided: <what>` and carry on; keep the For you line only if it really is one of the six.")
 
+def ask_advice(id_):
+    """The same test put to `hive asks person`, whose reason says what the ask waits on."""
+    return (f"Test before waiting on the person: is it money, an account, their voice, a device, root or a hard limit? This reason names none of them. If it is a reversible choice, decide it yourself and write `Decided: <what>`. If it is a fact only they hold, leave it here. "
+            f"If it waits on a run, a machine or a later order: `hive asks hold {id_} --why ...`. If only one step is theirs: `hive asks done {id_} --evidence POST --left \"the step\"`.")
+
 CARRIED = re.compile(r"\b(?:supersed\w*|replaced by|restated|same (?:\S+ ){0,3}(?:wait|ask|order|run)|one wait|later line|newer line|carried (?:in|by)|agents? owns?|owned by|agent'?s job|agent work)\b", re.I)
 POST_ID, ASK_ID, AGENT_NAME = re.compile(r"\b[0-9a-f]{12}\b"), re.compile(r"\bk\d{4}\b"), re.compile(r"\b[a-z][0-9a-f]{4}\b")
 

@@ -10,7 +10,7 @@
 import { S, start, subscribe } from "../core/store.js";
 import { brandIcon, brandMark } from "../core/brand.js";
 import { h, mount, delegate } from "../core/dom.js";
-import { agentState, inUse, runway, threadTitle } from "../core/model.js";
+import { agentState, inUse, runway, threadTitle, limitStop } from "../core/model.js";
 import { clock, dur, now } from "../core/format.js";
 import { statusDot } from "../ui/kit.js";
 import { fullscreenButton } from "../ui/shell.js";
@@ -139,11 +139,11 @@ function trouble() {
   if (Lv) {
     const stuck = Lv.agents.map(a => [a, agentState(a)]).filter(([, s]) => s.key === "stuck");
     if (stuck.length) out.push([`${stuck.length} stuck`, stuck.map(([a, s]) => `${a.name} on ${threadTitle(a.thread)}, ${s.text}`).join(" · ")]);
-    if (Lv.limit_until) out.push(["Starts held", "until " + clock(Lv.limit_until * 1e3)]);
+    if (limitStop() && limitStop().until) out.push(["Starts held", "until " + clock(limitStop().until)]);
   }
   if (U && (U.logins || []).length) {
     const live = U.logins.filter(l => inUse(l, U));
-    if (!live.length) out.push(["No account has room", "nothing new starts"]);
+    if (limitStop()) out.push(["No account has room", "nothing new starts"]);
     for (const l of live) { const w = l.limits && l.limits.five_hour; if (w && w.r * 1e3 > t && w.u >= .9) out.push([`${l.name} at ${Math.round(w.u * 100)}%`, "of its 5-hour limit"]); }
   }
   return out.length ? h("div", { class: "dt-trouble", role: "alert" }, out.map(([a, b]) => h("span", { "data-key": a }, statusDot("stuck"), h("b", null, a), b ? h("span", null, b) : null))) : null;

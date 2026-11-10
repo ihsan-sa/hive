@@ -119,7 +119,7 @@ export function stateOf(id) {
   // Both at once (the person, 110812313986: a focus can need them and still be working): the needs part first, then "moving".
   if (needsOf(id).length) return { key: "needs", word: agentsOf(id).now.length ? "needs you, moving" : "needs you", tone: "info", moving: !!agentsOf(id).now.length };
   if (agentsOf(id).now.length) return { key: "moving", word: "moving", tone: "good" };
-  if (activeThreads(id).length) return { key: "waiting", word: "waiting", tone: null };
+  if (activeThreads(id).length) return { key: "waiting", word: "no agent running", tone: null };   // not "waiting": readers take that for waiting on them (SU-3)
   return { key: "quiet", word: "quiet", tone: "ended" };
 }
 /** A summary bullet with its @agent and #thread words as pills. */

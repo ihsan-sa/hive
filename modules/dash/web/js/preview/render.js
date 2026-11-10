@@ -153,7 +153,7 @@ export async function render(it, { source, signal } = {}) {
   if (it.kb) {   // the Knowledge API gives images and PDFs as bytes and everything else as text, so the rest shows as text
     if (k === "pdf") return noPreview(it, "A project's PDF opens in Knowledge or downloads; it doesn't show in this panel.");
     if (["video", "audio", "xlsx", "docx", "pptx"].includes(k)) return noPreview(it, "This kind of project file doesn't show here yet. Attach it to a message to preview it.");
-    if (k === "svg" || k === "html") k = "code";
+    if (k === "svg") k = "code";   // a project page (html) runs in the panel through the server, redacted (R111)
   }
   if (k === "image") return { node: image(it, fileHref(it)) };
   if (k === "video") return { node: h("div", { class: "pv-av" }, h("video", { src: viewHref(it), controls: true, playsinline: true, preload: "metadata", title: it.name })) };

@@ -1,7 +1,7 @@
 // Now: what each agent is doing. Template: overview.
 import { h } from "../core/dom.js";
 import { S, SYS } from "../core/store.js";
-import { threadTitle, agentLabel, labelCodes, agentOn, agentSay, agentState, isRunning, hiveStats, tierHours, agentThread, spendSince, sEnd, hasTiers, activeUse } from "../core/model.js";
+import { threadTitle, agentLabel, labelCodes, agentOn, agentSay, agentState, isRunning, hiveStats, tierHours, agentThread, spendSince, sEnd, hasTiers, activeUse, limitStop } from "../core/model.js";
 import { needsKnown, needsN } from "../core/needs.js";
 import { now, ago, dur, clock, money, pct, plural, firstSentence, short, HOUR, DAY, MIN } from "../core/format.js";
 import { TIERS, status } from "../core/status.js";
@@ -53,7 +53,8 @@ function needsYou(run, states, waiting, L) {
   const rows = [];
   for (const a of run) if (states.get(a.name).key === "stuck") rows.push({ sev: 0, tone: "bad", head: a.name, text: states.get(a.name).text, href: agentHref(a.name), act: "Open" });
   for (const l of (S.usage && S.usage.logins) || []) if (l.paused) rows.push({ sev: 1, tone: "warn", head: (l.name || "A login") + " is paused", text: "new agents won't start on it", href: href("usage"), act: "Open Usage" });
-  if (L.limit_until) rows.push({ sev: 1, tone: "warn", head: "Starts held for the usage limit", text: "until " + clock(L.limit_until * 1e3), href: href("usage"), act: "Open Usage" });
+  const lim = limitStop();   // one answer for every usage-limit message (core/model.js)
+  if (lim && lim.until) rows.push({ sev: 1, tone: "warn", head: "Starts held for the usage limit", text: "until " + clock(lim.until), href: href("usage"), act: "Open Usage" });
   for (const a of run) { const j = a.jobs || {}; if (j.queued && !j.running && j.waited > 3600) rows.push({ sev: 2, tone: "warn", head: a.name, text: `waiting ${dur(j.waited * 1e3)} for a job slot`, href: agentHref(a.name), act: "Open" }); }
   if (waiting.length) rows.push({ sev: 3, tone: "quiet", head: plural(waiting.length, "post") + " waiting", text: "for an agent to start: " + waiting.slice(0, 4).map(p => p.name).join(", ") + (waiting.length > 4 ? "…" : ""), href: href("comms"), act: "Chat" });
   rows.sort((a, b) => a.sev - b.sev);
@@ -156,14 +157,14 @@ export default {
     const lastHour = S.posts.filter(p => p.t > t - HOUR && !SYS.has(p.from)).length;
 
     if (S.app.app) {
-      const stuckN = count("stuck"), sign = signInWords(), stopped = !!L.limit_until && !(S.app.setup && S.app.setup.other);
+      const stuckN = count("stuck"), sign = signInWords(), stopped = !!limitStop();
       // A kicker only when it names something real (the Nov 8 handoff §6, R54): a count of what waits on the person, the same count as Chat's badge.
       const need = needsKnown() ? needsN() : 0;
       const state = stopped || sign ? { tone: "bad", text: "Stopped" } : need ? { tone: "info", text: `${need} ${need === 1 ? "waits" : "wait"} on you` } : stuckN ? { tone: "info", text: `${stuckN} stuck` } : null;
       const up = run.filter(a => a.alive), upThreads = new Set(up.map(a => a.thread)).size;   // a gone process isn't working: the same count as the top bar's
       const one = upThreads === 1 ? threadTitle(up[0].thread) : `${nWord(upThreads).toLowerCase()} conversations`;
       const title = up.length ? `${nWord(up.length)} ${up.length === 1 ? "agent is" : "agents are"} working on ${one}.` : "No agents are working right now.";
-      const lead = sign ? sign : stopped ? `New agents wait for the usage limit until ${clock(L.limit_until * 1e3)}.`
+      const lead = sign ? sign : stopped ? `New agents wait for the usage limit${limitStop().own ? " (your own messages still start one)" : ""}${limitStop().until ? " until " + clock(limitStop().until) : ""}.`
         : stuckN ? `${nWord(stuckN)} ${stuckN === 1 ? "agent has" : "agents have"} stopped moving.` : null;
       const header = pageHeader({ state, title, lead, subnav: pageNav() });
       const main = run.length ? section({}, agentRows(run, states, t, waits)) : null;   // the header already says nobody is working: no "None." box under it
@@ -180,7 +181,7 @@ export default {
     const metaBits = [
       L.jobs && (!S.app.app || L.jobs.running || L.jobs.queued) ? `Machine: ${L.jobs.running} jobs running, ${L.jobs.queued} queued` : null,
       queuedPosts.length ? `${queuedPosts.length} waiting to start` : null,
-      L.limit_until ? `starts held for the usage limit until ${clock(L.limit_until * 1e3)}` : null];
+      limitStop() && limitStop().until ? `starts held for the usage limit until ${clock(limitStop().until)}` : null];
     const header = pageHeader({ subnav: pageNav(),
       title: run.length ? `${plural(run.length, "agent")} on ${plural(threads, S.app.app ? "conversation" : "thread")}` : S.app.app ? "No agents are working right now" : "Nobody is running right now",
       after: run.length ? h("div", { class: "nd-head" }, h("span", { class: "meta" }, [

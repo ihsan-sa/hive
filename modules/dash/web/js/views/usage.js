@@ -135,7 +135,8 @@ export function leftAnswer(U, t = now()) {
   const next = nextBack(U, t), back = next && next.at, several = us.length > 1, whose = next && several && next.l.name, left = v == null ? null : Math.max(0, 100 - Math.round(v)), room = v == null ? null : Math.max(0, Math.round(r.stop - v));
   let lead, tone = null, tail = null;
   const when = back ? `${dayName(back)} ${clock(back)}, in ${dur(next.in)}` : "";
-  if (!live.length) { lead = `The Hive has stopped starting agents: ${!awake.length ? (several ? "every account is paused" : "your account is paused") : several ? "every account is paused or past its line" : `your account is past its ${r.stop}% line`}.` + (back ? ` ${whose || "It"} comes back ${when}.` : ""); tone = "bad"; }
+  const su = (S.app && S.app.setup) || {};   // a Codex login, a key or a fallback chain: runs still start, so this never says the Hive stopped (core/model.js limitStop)
+  if (!live.length && !su.other && !su.fallback) { lead = `The Hive has stopped starting agents: ${!awake.length ? (several ? "every account is paused" : "your account is paused") : several ? "every account is paused or past its line" : `your account is past its ${r.stop}% line`}.` + (back ? ` ${whose || "It"} comes back ${when}.` : ""); tone = "bad"; }
   else {
     const first = left == null ? "Claude hasn't said yet how much of this week is left" : `${left}% of this week is left`;
     const comes = back ? (whose ? `${whose} is the next to come back, ${when}.` : `It comes back in full ${when}.`) : "";

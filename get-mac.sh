@@ -177,7 +177,8 @@ case "${1:-}" in
     # The VM can be up a while before the app answers, so wait for it rather than open a page that says it can't connect.
     base=$(printf '%s' "$a" | sed 's|^\(http://[^/]*\)/.*|\1/|'); n=0
     until curl -s -o /dev/null --max-time 2 "$base" || [ "$n" -ge 45 ]; do n=$((n + 1)); sleep 2; done
-    open "$a"
+    # --print: only say the address (the desktop app shows it in its own window), as hive open --print does on Linux and Windows.
+    if [ "${2:-}" = --print ]; then printf '%s\n' "$a"; else open "$a"; fi
     ;;
   *) up; in_vm hive "$@" ;;
 esac
@@ -346,7 +347,8 @@ main() {
     http://localhost*|http://127.0.0.1*)
       # Lima forwards the port a moment after the app listens. If it never does, something on the Mac holds that port.
       n=0; while [ "$n" -lt 30 ] && ! curl -fsS -o /dev/null -m 2 "${address%%#*}" 2>/dev/null; do n=$((n + 1)); sleep 2; done
-      if [ "$n" -lt 30 ]; then open "$address" || true
+      # The desktop app (HIVE_FROM_APP=1) shows the Hive in its own window, so no browser tab beside it.
+      if [ "$n" -lt 30 ]; then [ "${HIVE_FROM_APP:-}" = 1 ] || open "$address" || true
       else echo "That address doesn't answer on this Mac yet. If it stays that way, another program may be using its port."; fi
       ;;
   esac

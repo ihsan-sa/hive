@@ -563,7 +563,7 @@ table.tbl .clip{width:100%;max-width:0;overflow:hidden;text-overflow:ellipsis}
 .frow>.frow-grow{flex:1;min-width:12rem}   /* the field that takes the row; data-size=s stops it at a name's width */
 .frow>.frow-grow[data-size=s]{max-width:20rem}
 .frow>.frow-end{margin-left:auto;display:flex;gap:var(--s2)}   /* the row's buttons, at its end */
-.fgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(16rem,1fr));gap:var(--s4);align-items:start}
+.fgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(16rem,100%),1fr));gap:var(--s4);align-items:start}
 .fgrid>.check{grid-column:1/-1}
 .sec>.field{margin-top:var(--s3)}
 .fmsg{font-size:var(--fs-small);color:var(--ink-2);margin:var(--s2) 0 0;white-space:pre-wrap;overflow-wrap:anywhere}
@@ -1004,8 +1004,9 @@ rc-lazy[data-mode=inline]{display:inline}
 .msg-thumb,.msg-file{border:1px solid var(--line-2);border-radius:var(--r-m);background:var(--surface);color:var(--ink);cursor:pointer;text-align:left;text-decoration:none;font-size:var(--fs-meta)}
 span.msg-thumb,span.msg-file{cursor:default}
 .msg-thumb:hover,.msg-file:hover{border-color:var(--ink-3);color:var(--ink)}
-.msg-thumb{display:flex;flex-direction:column;gap:2px;padding:4px;width:164px}
-.msg-thumb img{display:block;width:100%;height:112px;object-fit:contain;background:var(--sunken);border-radius:var(--r-s)}
+.msg-thumb{display:flex;flex-direction:column;gap:2px;padding:4px;width:fit-content;min-width:164px;max-width:min(100%,440px)}
+/* R108: an image shows at reading size (up to 440 wide, 360 tall), a GIF plays in place; a click opens it enlarged in the preview panel */
+.msg-thumb img{display:block;width:auto;max-width:100%;min-width:164px;height:auto;min-height:112px;max-height:360px;margin-inline:auto;object-fit:contain;background:var(--sunken);border-radius:var(--r-s)}
 .msg-thumb span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink-2)}
 .msg-thumb[data-broken] img{display:none}
 .msg-thumb[data-broken]::before{content:"Can't show this image";display:grid;place-items:center;height:112px;background:var(--sunken);border-radius:var(--r-s);color:var(--ink-3)}
@@ -1123,7 +1124,7 @@ body[data-pv-full] :is(#top,#main){margin-right:0}
 .pv-zb:hover{border-color:var(--ink-3)}
 .pv-img{flex:1;min-height:0;overflow:auto;padding:var(--s3);background:var(--sunken)}
 .pv-img>img{display:block;margin:0 auto;max-width:none;cursor:zoom-out;border-radius:var(--r-s);box-shadow:0 1px 3px rgb(0 0 0/.12),0 0 0 1px var(--line)}
-.pv-img[data-fit]{display:grid;place-items:center}
+.pv-img[data-fit]{display:grid;place-items:center;grid-template:minmax(0,1fr)/minmax(0,1fr)}   /* the row is the panel's height, so max-height:100% on the picture can hold: the whole picture shows (R108) */
 .pv-img[data-fit]>img{max-width:100%;max-height:100%;object-fit:contain;cursor:zoom-in}
 /* audio, video */
 .pv-av{flex:1;min-height:0;display:grid;place-items:center;background:#000}
@@ -2177,6 +2178,10 @@ dialog.fb::backdrop{background:rgb(0 0 0 / .38)}
 .nowtbl .tr[data-attn] .nt-st{color:var(--bad)}
 .nowtbl .nt-now,.nowtbl .nt-ask{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .nowtbl .nt-ask{margin-top:1px}
+.nowtbl.tg>.tb>.tr>.nt-a{overflow:hidden}
+.nowtbl .nt-a .ref{display:flex;max-width:100%}
+.nowtbl :is(.nt-a,.nt-th) .ref-n{min-width:0;overflow:hidden}   /* so the name shrinks and shows its "…" */   /* a long agent name ends in "…" inside its column, never over the next (feedback 1110131600b5) */
+.nowtbl.tg>.tb>.tr>.nt-st,.nowtbl .nt-st .sw{white-space:normal}   /* a long state ("4 jobs in the queue…, 1 new post when it returns") wraps instead of running into Model */
 .nowtbl.tg>.tb>.tr>.nt-x{display:flex;gap:6px;justify-content:flex-end}
 @media (max-width: 640px) {
   .nowtbl.tg>.tb>.tr>.nt-x{justify-content:flex-start}
@@ -3320,11 +3325,13 @@ kbd.menu-i-r{font-family:inherit;font-size:var(--fs-meta)}
 .cm-moved .cm-older-d>summary{display:flex;align-items:center;gap:var(--s2);height:40px;font-size:var(--fs-small)}
 .cm-moved .cm-older-d>summary .meta{font-size:0}            /* the sentence moves to the summary's title (§C.1); hidden meanwhile */
 .cm-moved .cm-older-d>summary .cm-mv-n{font-size:var(--fs-small);color:var(--ink-3)}
+.cm-older.cm-moved{width:100%;box-sizing:border-box}   /* open, it had shrunk to its summary's width and its rows ran 110 px off a 390 screen (design-1110e) */
+.cm-moved .cm-old-l{grid-template-columns:minmax(0,1fr)}
 .cm-mv{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:var(--s3);padding:6px 0;font-size:var(--fs-small)}
 .cm-mv>a{font-weight:var(--w-med);color:var(--ink);text-decoration:none}
 .cm-mv .cm-old-q{grid-column:1;color:var(--ink-3)}
 .cm-mv .cm-old-q a{color:var(--ink-2)}
-.cm-mv>.meta{grid-column:2;grid-row:1;font-size:var(--fs-meta);color:var(--ink-3);white-space:nowrap}
+.cm-mv>.meta{grid-column:2;grid-row:1;font-size:var(--fs-meta);color:var(--ink-3);white-space:nowrap;max-width:min(45vw,320px);overflow:hidden;text-overflow:ellipsis}   /* "by RSI lab's agent" ran past the edge at 390 */
 
 /* feedback 110921108343 ("looks bad": Hide not needed loose beside Focus / Recent). The Show block sat on the popup menu's surface, a lighter box
    inside the rail; it takes the rail's own background now. The switch reads as a setting pinned to the row's right edge, in line with All below:
@@ -3356,3 +3363,9 @@ kbd.menu-i-r{font-family:inherit;font-size:var(--fs-meta)}
   #inbox-list .lr-t>b{flex:1 1 calc(100% - 20px);min-width:0}
   #inbox-list .lr-t>.muted{flex:0 1 auto;min-width:0;max-width:calc(100% - 76px);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 }
+
+/* A conversation row's state word (SU-3): done / needs you / blocked / waiting, so a wait is not read as finished or stuck */
+.rmk{flex:none;margin-left:6px;padding:0 6px;border-radius:9px;font-size:.72rem;line-height:1.5;color:var(--muted,#667);background:var(--fill,rgba(128,128,128,.12))}
+.rmk[data-tone="info"]{color:var(--info,#2a5bd7)}
+.rmk[data-tone="warn"]{color:var(--warn,#b45309)}
+.rmk[data-tone="good"]{color:var(--good,#157f3d)}

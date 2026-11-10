@@ -288,7 +288,8 @@ ln -sf /etc/systemd/system/hive-no-windows.service /etc/systemd/system/multi-use
   Write-Host 'The Hive is installed. This address is the key to it, so keep it to yourself:'
   if ($address) { Write-Host "  $address" } else { Write-Host "  (it didn't print just now: wait a minute, then run: hive web)" }
   Write-Host 'To open it again, click the Hive icon on your Desktop or in the Start menu.'
-  if ($address -like 'http://localhost*' -or $address -like 'http://127.0.0.1*') { try { Start-Process $address } catch { } }
+  # The desktop app (HIVE_FROM_APP=1) shows the Hive in its own window, so no browser tab beside it.
+  if ($env:HIVE_FROM_APP -ne '1' -and ($address -like 'http://localhost*' -or $address -like 'http://127.0.0.1*')) { try { Start-Process $address } catch { } }
 }
 
 # How it talks: numbered steps, a dot every 5 seconds while one runs, and the commands' own output in the log.
