@@ -753,6 +753,13 @@ button.lr-in{width:calc(100% + 16px);border:0;background:none;text-align:left;fo
 .rc-fn{font-size:.75em;vertical-align:super;line-height:0;text-decoration:none;padding:0 1px}
 .rc-fns{margin-top:var(--s4);padding-top:var(--s2);border-top:1px solid var(--line);font-size:var(--fs-meta);color:var(--ink-2)}
 .rc-fns ol{margin:0;padding-left:1.5em}
+.rc-srcs-h{font-weight:600;color:var(--ink);margin-bottom:var(--s1)}
+.rc-src{display:inline-flex;flex-direction:column;max-width:100%;padding:2px 0;text-decoration:none;color:inherit}
+.rc-src-t{color:var(--link,var(--info-ink));overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:60ch}
+.rc-src:hover .rc-src-t{text-decoration:underline}
+.rc-src-d{font-size:.92em;color:var(--ink-2)}
+.rc-srcs li{margin:2px 0}
+a.rc-cite{text-decoration:none;font-weight:600}
 
 
 .rc-more{position:relative}
@@ -2228,7 +2235,11 @@ dialog.fb::backdrop{background:rgb(0 0 0 / .38)}
   .nowtbl.tg>.tb>.tr:has(>.nt-do)>.lead{order:1;padding-right:0}
   .nowtbl.tg>.tb>.tr:has(>.nt-do)>.nt-st{order:2}
   .nowtbl.tg>.tb>.tr:has(>.nt-do)>.nt-md{order:3}
-  .nowtbl.tg>.tb>.tr:has(>.nt-do)>.nt-md[data-label]::before{content:"· ";display:inline;position:static}
+  /* the "·" before the model sits in the gap, outside the model's own box, so when the model wraps to a line of its own the row clips it
+     instead of the line starting with a stray "·" (UI test round 18) */
+  .nowtbl.tg>.tb>.tr:has(>.nt-do){clip-path:inset(-1em -1em -1em -1px)}   /* the left edge only, so focus rings on the right and below still show */
+  .nowtbl.tg>.tb>.tr:has(>.nt-do)>.nt-md{position:relative}
+  .nowtbl.tg>.tb>.tr:has(>.nt-do)>.nt-md[data-label]::before{content:"·";display:block;position:absolute;left:calc(-1 * var(--s2));top:0;width:var(--s2);text-align:center}
   .nowtbl.tg>.tb>.tr:has(>.nt-do)>.num[data-label]{order:4;position:static;margin-left:auto}
   .nowtbl.tg>.tb>.tr:has(>.nt-do)>.nt-do{order:5;flex:1 0 100%;min-width:0}
   .nowtbl.tg>.tb>.tr:has(>.nt-do)>.nt-th{order:6;flex:1 1 calc(100% - 52px);min-width:0;font-size:var(--fs-meta);color:var(--ink-3)}

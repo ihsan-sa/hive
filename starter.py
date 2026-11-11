@@ -1826,7 +1826,8 @@ def floor(c, st, alive, login):
         elif not below: return False
         else: g = gap
         return t - started.get(r["thread"], 0) >= g and (r["quiet_s"] is None or r["quiet_s"] >= g)
-    rows = [r for r in cont.G.goals()["rows"] if (r["kind"] == "focus" or r.get("ladder")) and not r["running"] and not r.get("parked") and r["thread"] not in busy and due(r)]
+    only = set(c.get("floor_only") or [])  # config floor_only: when set, the floor starts only these threads (the person's "pause all but career", 2026-11-11, post 11111341a979); unset or [] is every ladder
+    rows = [r for r in cont.G.goals()["rows"] if (r["kind"] == "focus" or r.get("ladder")) and not r["running"] and not r.get("parked") and r["thread"] not in busy and (not only or r["thread"] in only) and due(r)]
     if not rows: return
     held = cont.waits({r["thread"] for r in rows}, set(alive) | {n for n, ps in st["pending"].items() if ps}, t, c.get("floor_wait_max_s", 7200))
     for r in sorted(rows, key=lambda r: (not first(r), -(r["quiet_s"] if r["quiet_s"] is not None else float("inf")))):

@@ -299,13 +299,16 @@ function lineageLayout(data, opt) {
   if (H && shown.length > 1) {
     let best = 0;
     for (let b = 1; b <= Math.min(tile ? 16 : 6, shown.length); b++) {
-      if (!tile && b > 1 && ((width - 2 * pad) / b - cardW - run - labelW - tail) / Math.max(1, maxG) < 90) break;   // a block too narrow for its generation columns would spill into the next block's cards
       const k = Math.min(tile ? 1.4 : 1.25, (width - 2 * pad) / (b * natW), (H - 64) / (total / b + 2 * pad));
+      // a block too narrow for its generation columns would spill into the next block's cards. Measured at the scale it is drawn at: a tall mesh is
+      // shrunk to fit the height anyway, so its blocks have that much more room, down to 0.7 (below that the cards are unreadable and tiles do better).
+      // Round 18: 14 threads drew one column at 0.6 on a 1707 screen, the right half of the panel blank
+      if (!tile && b > 1 && ((width - 2 * pad) / (b * Math.min(1, Math.max(0.7, k))) - cardW - run - labelW - tail) / Math.max(1, maxG) < 90) break;
       if (k > best * 1.05) { best = k; B = b; fitK = k; }
     }
   }
   // tiles take no more room than they need (what's left of the panel's width at the scale that fits goes to the generation columns, within reason); cards take the panel's width
-  const blockW = tile ? Math.max(natW, (width - 2 * pad) / (fitK * B)) : (width - 2 * pad) / B;
+  const blockW = tile ? Math.max(natW, (width - 2 * pad) / (fitK * B)) : (width - 2 * pad) / (B * Math.min(1, fitK));
   const cw = tile ? Math.min(90, (blockW - cardW - run - tail) / Math.max(1, maxG)) : Math.max(90, Math.min(220, (blockW - cardW - 110 - labelW - 70) / Math.max(1, maxG)));
   const blockOf = new Map(), target = total / B; { let acc = 0, bi = 0; shown.forEach((t, i) => { if (bi < B - 1 && acc >= target * (bi + 1) - rows[i] / 2) bi++; blockOf.set(t.id, bi); acc += rows[i]; }); }
   const colX = (g, bi) => pad + bi * blockW + cardW + run + g * cw;
