@@ -189,7 +189,7 @@ export async function startCall({ to = null, ring = null, quiet = false, thread 
     const r = await post(`${API}/call`, { to, ring, quiet, thread });
     C.id = r.id; C.agent = r.agent;
     events(r.id);
-  } catch (e) { C.err = e.name === "NotAllowedError" ? "The browser didn't allow the microphone." : String(e.message || e); end(false); }
+  } catch (e) { C.err = e.name === "NotAllowedError" ? "The browser didn't allow the microphone." : e.name === "NotFoundError" ? "No microphone found on this device." : String(e.message || e); end(false); }
   draw();
 }
 async function events(id) {
@@ -217,7 +217,7 @@ async function events(id) {
 export function end(tell = true) {
   if (tell && C.id && !C.ended) post(`${API}/call/${C.id}/end`, {}).catch(() => {});
   C.ended = true; C.state = "ended"; C.partial = ""; clearTimeout(C.holdT); holdStop(); micStop();
-  setTimeout(() => { if (C.ended) { C.id = null; draw(); } }, C.err ? 6000 : 2500);
+  setTimeout(() => { if (C.ended) { C.id = null; C.err = ""; draw(); } }, C.err ? 6000 : 2500);   // the error goes too: it kept the card up for good, with no button (round 18)
   draw();
 }
 
@@ -256,11 +256,12 @@ function draw() {
   fill(`<div class="ph-top"><span class="ph-dot ${C.state}${C.seg ? " live" : ""}"></span><div><div class="ph-who">${esc(who)}</div><div class="ph-st" aria-live="polite">${st}</div></div></div>
     <div class="ph-lines">${lines}</div>
     ${C.ended ? "" : `<div class="ph-speed-slot"></div>`}
-    <div class="ph-btns">${C.ended ? "" : `<button class="btn ph-mute" data-a="mute" aria-pressed="${C.muted}">${C.muted ? "Unmute" : "Mute"}</button><button class="btn ph-end" data-a="end">Hang up</button>`}</div>`);
+    <div class="ph-btns">${C.ended ? (C.err ? `<button class="btn" data-a="close">Close</button>` : "") : `<button class="btn ph-mute" data-a="mute" aria-pressed="${C.muted}">${C.muted ? "Unmute" : "Mute"}</button><button class="btn ph-end" data-a="end">Hang up</button>`}</div>`);
 }
 function onClick(e) {
   const a = e.target.closest("[data-a]"); if (!a) return;
   if (a.dataset.a === "end") end();
+  else if (a.dataset.a === "close") { C.err = ""; C.id = null; draw(); }
   else if (a.dataset.a === "hangup") hangUp(a.dataset.call);
   else if (a.dataset.a === "mute") { C.muted = !C.muted; post(`${API}/call/${C.id}/mute`, { muted: C.muted }).catch(() => {}); draw(); }
   else if (a.dataset.a === "hide") { LIVE.hidden.add(a.dataset.call); draw(); }

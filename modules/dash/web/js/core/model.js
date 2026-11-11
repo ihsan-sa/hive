@@ -75,7 +75,7 @@ let BASES = null, BASES_N = -1;
 function apart(base, th) {
   if (BASES_N !== S.sessions.length) {
     BASES_N = S.sessions.length; BASES = new Map();
-    const seen = new Set(); for (let i = S.sessions.length - 1; i >= 0; i--) { const t = S.sessions[i].thread; if (!t || seen.has(t)) continue; seen.add(t); const b = homeLabel(S.sessions[i].name); if (b) (BASES.get(b) || BASES.set(b, []).get(b)).push(t); }
+    const seen = new Set(); for (let i = S.sessions.length - 1; i >= 0; i--) { const t = S.sessions[i].thread; if (!t || seen.has(t)) continue; seen.add(t); const b = threadBase(t); if (b) (BASES.get(b) || BASES.set(b, []).get(b)).push(t); }
   }
   const ths = BASES.get(base); if (!ths || ths.length < 2 || !ths.includes(th)) return "";
   const rest = t => { const x = threadTitle(t) || "", i = x.indexOf(":"); return i > 0 && i < 40 ? titleName(x.slice(i + 1).trim().replace(/^(?:(?:a|an|the|of|in|on|to|for|and|or|with|at|by|from)\s+)+/i, "")) : ""; };
@@ -85,8 +85,10 @@ function apart(base, th) {
   return twins.length > 1 ? mine + (mine ? ", " : "") + "no. " + (twins.indexOf(th) + 1) : mine;
 }
 /** "X's agent" from the title of the thread an agent lives in; "" when that says nothing, or (skip) it is the conversation being read. */
-function homeLabel(n, skip) {
-  const th = agentThread(n), t = th && th !== skip ? threadTitle(th) : "";
+function homeLabel(n, skip) { const th = agentThread(n); return th && th !== skip ? threadBase(th) : ""; }
+/** "X's agent" for a conversation by its own title: apart() files each conversation under this, not under the base of whichever agent spoke there last (that agent may live elsewhere now). */
+function threadBase(th) {
+  const t = threadTitle(th);
   if (!t || t === "A conversation" || /\ba[0-9a-f]{4}\b/.test(t)) return "";
   // "RSI lab: measure the hive and keep improving it" is "RSI lab's agent": the part before the colon names it, and a name cut in the middle read badly beside "'s agent".
   const head = /^Aside:/.test(t) ? "" : (t.match(/^([^:]{3,32}):\s/) || [])[1];

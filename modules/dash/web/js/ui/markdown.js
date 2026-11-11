@@ -117,9 +117,27 @@ function inline(s) {
 let notes = null;
 function footRef(id) {
   const n = notes && notes.get(id);
-  return n ? h("sup", null, h("button", { type: "button", class: "rc-fn", "aria-label": "Footnote " + n.at, onclick: (e, b) => {
+  if (!n) return null;
+  // A note that is only a link is a source: the number opens it, as the chat apps' citations do, and names it on hover.
+  if (n.src) return h("sup", null, h("a", { class: "rc-fn rc-cite", href: n.src.url, target: "_blank", rel: "noopener noreferrer", title: n.src.host + ": " + n.src.title, "aria-label": `Source ${n.at}: ${n.src.title}, ${n.src.host}` }, String(n.at)));
+  return h("sup", null, h("button", { type: "button", class: "rc-fn", "aria-label": "Footnote " + n.at, onclick: (e, b) => {
     b.closest(".md")?.querySelector(`[data-fn="${CSS.escape(id)}"]`)?.scrollIntoView({ block: "nearest", behavior: "smooth" });
-  } }, String(n.at))) : null;
+  } }, String(n.at)));
+}
+// `[Title](https://…)` or a bare https link, alone in the note (a short tail such as a date is kept as the card's second line).
+const SRC = /^\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)[ \t]*[.,;:\u2014-]?[ \t]*(.{0,80})$|^<?(https?:\/\/[^\s<>]+?)>?[.,;]?$/;
+const hostOf = u => { try { return new URL(u).hostname.replace(/^www\./, ""); } catch { return ""; } };
+function sourceOf(body) {
+  if (body.length !== 1) return null;
+  const m = body[0].trim().match(SRC); if (!m) return null;
+  const url = m[2] || m[4], host = hostOf(url);
+  let bare = host; try { const u = new URL(url); bare = (host + decodeURIComponent(u.pathname)).replace(/\/$/, ""); } catch {}
+  return host ? { url, host, title: (m[1] || bare).trim(), more: (m[3] || "").trim() } : null;
+}
+function sourceCard(n) {
+  const s = n.src;
+  return h("a", { class: "rc-src", href: s.url, target: "_blank", rel: "noopener noreferrer", title: s.url },
+    h("span", { class: "rc-src-t" }, s.title), h("span", { class: "rc-src-d" }, s.host + (s.more ? " \u00b7 " + s.more : "")));
 }
 const FOOT = /^\[\^([^\]\s]+)\]:[ \t]+(.*)$/;
 /** Take the definitions out of the lines, outside fences. Returns the lines left. */
@@ -133,9 +151,26 @@ function takeNotes(ls) {
     if (!m) { out.push(ls[i]); continue; }
     const body = [m[2]];
     while (ls[i + 1] != null && /^ {2,}\S/.test(ls[i + 1])) body.push(ls[++i].trim());
-    notes.set(m[1], { at: notes.size + 1, body });
+    notes.set(m[1], { at: notes.size + 1, body, src: sourceOf(body) });
   }
   return out;
+}
+
+// A reply that ends with a "Sources:" line (or a "Sources" line over a list) of links only, with no footnotes, gets the same Sources list.
+const SRCHEAD = /^ {0,3}(?:#{1,6}[ \t]+)?(?:\*\*|__)?(?:Sources?|References?)(?:\*\*|__)?[ \t]*:?[ \t]*(?:\*\*|__)?[ \t]*(.*)$/i;
+function takeSourcesLine(ls) {
+  let e = ls.length; while (e && !ls[e - 1].trim()) e--;
+  for (let k = e - 1; k >= 0 && k >= e - 12; k--) {
+    const m = ls[k].match(SRCHEAD); if (!m) continue;
+    if (k && ls[k - 1].trim() && !m[1]) return ls;  // a "Sources" line inside a paragraph isn't the end list
+    const parts = m[1] ? m[1].split(/[ \t]*(?:,|;|\u00b7|\|)[ \t]*/) : [];
+    for (const l of ls.slice(k + 1, e)) parts.push(l.replace(/^ *(?:[-*+]|\d{1,9}[.)])[ \t]+/, ""));
+    const items = parts.map(x => x.trim()).filter(Boolean), srcs = items.map(x => sourceOf([x]));
+    if (!srcs.length || !srcs.every(Boolean)) return ls;
+    notes ||= new Map(); srcs.forEach((src, i) => notes.set("src" + (i + 1), { at: i + 1, body: [items[i]], src }));
+    return ls.slice(0, k);
+  }
+  return ls;
 }
 
 const FENCE = /^ *(`{3,}(?=[^`]*$)|~{3,})(.*)$/, TASK = /^\[( |x|X)\][ \t]+/, HEAD = /^ {0,3}(#{1,6})[ \t]+(.*?)(?:[ \t]+#+)?[ \t]*$/, HR = /^ {0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*$/, QUOTE = /^ {0,3}> ?/,
@@ -216,8 +251,11 @@ export function markdown(text, files, post) {
   let ls = t.split("\n");
   notes = t.includes("[^") ? new Map() : null;
   if (notes) ls = takeNotes(ls);
+  if (!notes || !notes.size) { if (notes && !notes.size) notes = null; if (/sources?|references?/i.test(t)) ls = takeSourcesLine(ls); }
   const body = blocks(ls), got = notes && notes.size ? [...notes] : null;
-  const end = got ? h("div", { class: "rc-fns" }, h("ol", null, got.map(([id, n]) => h("li", { "data-fn": id }, blocks(n.body))))) : null;
+  const allSrc = got && got.every(([, n]) => n.src);
+  const end = got ? h("div", { class: "rc-fns" + (allSrc ? " rc-srcs" : "") }, allSrc ? h("div", { class: "rc-srcs-h" }, "Sources") : null,
+    h("ol", null, got.map(([id, n]) => h("li", { "data-fn": id }, n.src ? sourceCard(n) : blocks(n.body))))) : null;
   notes = known = null; says = false;
   return h("div", { class: "md", "data-rich": "" }, body, end);
 }
