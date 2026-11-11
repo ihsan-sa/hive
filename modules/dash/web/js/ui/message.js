@@ -6,7 +6,7 @@
 import { h, copyText } from "../core/dom.js";
 import { S, can, jget, SYS, OUTSIDE } from "../core/store.js";
 import { simpleOn, hiveName } from "../core/simple.js";
-import { isAgent, isWarden, isRunning, agentThread, displayText, chatText, postSource, btwParent, btwText, asksQuestion, threadState, threadChildren, threadTitle } from "../core/model.js";
+import { isAgent, isWarden, isRunning, agentThread, agentLabel, displayText, chatText, postSource, btwParent, btwText, asksQuestion, threadState, threadChildren, threadTitle } from "../core/model.js";
 import { focusById, focusName, focusOf } from "../core/foci.js";
 import { clock, stamp, now, short, mdPlain, ago, DAY, MIN } from "../core/format.js";
 import { markdown, mdCut, filesNamed } from "./markdown.js";
@@ -47,7 +47,7 @@ export const marksSig = () => DELIV.sig + JSON.stringify((S.live && S.live.pendi
 export function delivery(p, m) {
   if (m === "new") {
     const st = (S.woke[p.id] || [])[0];
-    if (st) return { key: "seen", tone: "good", text: `${st.name} started on it`, who: st.name };
+    if (st) return { key: "seen", tone: "good", text: S.app && S.app.app ? "An agent started on it" : `${st.name} started on it`, who: st.name };   // the app look names no code (E10)
     return now() - p.t < 3 * MIN ? { key: "queued", tone: "info", text: "Starting an agent…" } : { key: "unseen", tone: "bad", text: "No agent has started on this" };
   }
   if (!isAgent(m) || now() - p.t > 3 * DAY || p.from === m) return null;
@@ -105,7 +105,7 @@ export function messageReceipt(p) {
   }
   if (!ds.length) { if (last || all) el.append(icon("check"), h("span", null, "Sent")); return el; }
   const top = ds.reduce((a, d) => RANK[d.key] < RANK[a.key] ? d : a), same = ds.filter(d => d.key === top.key && d.who).map(d => d.who);
-  const X = names(same.length ? same : [top.who || "the agent"]);
+  const app = S.app && S.app.app, X = names((same.length ? same : [top.who || "the agent"]).map(n => app && isAgent(n) ? (agentThread(n) === p.th ? "the agent" : agentLabel(n)) : n));   // E10: no agent code in the app look
   el.dataset.key = top.key;
   if (top.key === "interrupt") { el.dataset.tone = "info"; el.append(icon("stop"), h("span", null, `Interrupting ${X} · it reads this, and anything queued, once its step stops`)); }
   else if (top.key === "unseen") { el.dataset.tone = "bad"; el.append(h("span", { class: "st", "data-tone": "bad", "aria-hidden": "true" }), h("span", null, top.who ? `Hasn't reached ${X}` : top.text)); }
@@ -116,7 +116,7 @@ export function messageReceipt(p) {
     el.append(icon("stop"), h("span", null, `Interrupted ${X} · it stopped its step${t ? " at " + clock(t) : ""}`));
   } else if (last || all) {
     const t = same.length === 1 && top.t;
-    el.append(icon("check"), h("span", null, /started on it|took it for/.test(top.text) ? top.text : `Read by ${X}`), t ? h("span", { class: "msg-st-t" }, "· " + clock(t)) : "");   // append(null) would write "null"
+    el.append(icon("check"), h("span", null, /started on it|took it for/.test(top.text) ? top.text : app ? "Read" : `Read by ${X}`), t ? h("span", { class: "msg-st-t" }, "· " + clock(t)) : "");   // append(null) would write "null"
   }
   return el;
 }
@@ -364,10 +364,10 @@ export function messageHead(p, { showThread = true, mark, asks } = {}) {
     mine ? h("b", { class: "msg-me" }, other ? src.name : "You") : h("b", null, OUTSIDE.has(p.from) ? who(p.from) : hiveName()),
     h("span", { class: "msg-end" }, more(p, mark), h("time", { class: "meta num", datetime: p.at, title: stamp(p.t) }, clock(p.t))));
   return h("div", { class: "msg-h" },
-    mine ? h("b", { class: "msg-me", title: other ? src.said : "you (person)" }, other ? src.name : "You") : agentRef(p.from),
+    mine ? h("b", { class: "msg-me", title: other ? src.said : "you (person)" }, other ? src.name : "You") : agentRef(p.from, { dot: false }),   // §10.2: the consumer head has no dot
     src ? h("span", { class: "msg-src", title: src.said }, (src.name && src.name !== me && !other ? src.name + " · " : "") + src.how) : null,
     tos.length ? h("span", { class: "msg-to" }, toYou ? "to you" : "to") : null,
-    toYou ? null : tos.map(m => m === "person" ? h("b", { class: "msg-me" }, "you") : agentRef(m)),
+    toYou ? null : tos.map(m => m === "person" ? h("b", { class: "msg-me" }, "you") : agentRef(m, { dot: false })),
     toYou ? null : unseenNote(mine ? [] : tos.filter(m => delivery(p, m)?.key === "unseen")),
     showThread ? threadRef(p.th) : null,
     woke.length && !mine ? h("span", { class: "meta" }, woke.map(s => (s.resumed ? "woke " : "started ") + s.name).join(", ")) : null,

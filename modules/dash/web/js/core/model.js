@@ -1,6 +1,6 @@
 // What the data means: statuses, the agent card, hive stats, usage pace. Pure reads of the store.
 import { S, OUTSIDE, SYS } from "./store.js";
-import { simpleOn } from "./simple.js";
+import { simpleOn, plainName } from "./simple.js";
 import { now, ago, dur, median, short, mdPlain, bareLinks, firstSentence, onWords, namesNoWork, MIN, HOUR, DAY } from "./format.js";
 
 export const isAgent = n => S.agents.has(n);
@@ -10,6 +10,31 @@ export const WARDEN_HINT = "A warden: it judges whether work crosses the hard li
 export const isRunning = n => S.running.has(n);
 export const sEnd = s => s.end ?? (isRunning(s.name) ? now() : s.start);
 export function agentThread(n) { for (let i = S.sessions.length - 1; i >= 0; i--) if (S.sessions[i].name === n) return S.sessions[i].thread; return null; }
+
+/** What the app look calls an agent: its conversation's agent ("Project 66's agent"), or "an agent". The code stays in the hover title and on the agent page; the developer look shows the code. */
+export function agentLabel(n) {
+  if (!n || !S.app || !S.app.app) return n;
+  if (simpleOn()) return plainName(n);
+  if (n === "person") return "you";
+  if (isWarden(n)) return "the warden";
+  if (!/^a[0-9a-f]{4}$/.test(n)) return n;
+  const th = agentThread(n), t = th ? threadTitle(th) : "";
+  if (!t || t === "A conversation" || /\ba[0-9a-f]{4}\b/.test(t)) return "an agent";
+  // "RSI lab: measure the hive and keep improving it" is "RSI lab's agent": the part before the colon names it, and a name cut in the middle read badly beside "'s agent".
+  const head = /^Aside:/.test(t) ? "" : (t.match(/^([^:]{3,32}):\s/) || [])[1];
+  return `${head || short(t, 40)}'s agent`;
+}
+
+/** An agent's two marks on its avatar: a8779 → 87, other names their first two letters. The app look shows no code there either (E10): the first letter of what agentLabel calls it ("Why is the sky…'s agent" → W). */
+export function agentMono(n) {
+  if (!/^[a-z][0-9a-f]{4,}$/.test(n)) return String(n).slice(0, 2);
+  if (!S.app || !S.app.app) return n.slice(1, 3);
+  const l = agentLabel(n), c = l && l !== n && l !== "an agent" ? (l.match(/[\p{L}\p{N}]/u) || [])[0] : "";
+  return c ? c.toUpperCase() : "A";
+}
+
+/** Agent codes inside a line of text, as agentLabel says them (the app look only; a known agent, or a + 4 hex with a digit, so "added" stays a word and a6aea-mesh.png a file name). */
+export const labelCodes = text => (!text || !S.app || !S.app.app ? text : String(text).replace(/(^|[^\w@])@?(a[0-9a-f]{4})\b(?![-_.]\w)/g, (m, a, n) => (isAgent(n) || /\d/.test(n) ? a + agentLabel(n) : m)));
 
 export function tierOf(th) {
   const P = (S.live && S.live.priorities) || {}; th = th || "";
@@ -96,7 +121,7 @@ export function agentCard(n) {
   if (eff && !s.effort && L) s.effort = eff;
   const effText = eff || (L ? "not seen yet" : "not recorded");
   rows.push({ k: "Effort", v: effText, short: eff ? eff + " effort" : "effort " + effText,
-    hint: eff ? "reasoning effort, as the harness reports it" : L ? "shows once it runs its first tool" : "this session's start didn't record an effort" });
+    claude: h === "claude-code" && !prov, hint: eff ? "reasoning effort, as the harness reports it" : L ? "shows once it runs its first tool" : "this session's start didn't record an effort" });
   const acct = prov || loginName(s.login);
   if (acct) rows.push({ k: "Account", v: acct, short: acct, hint: prov ? "provider account" : "the Claude login it runs on" });
   if (init.fast === "on") rows.push({ k: "Fast mode", v: "on", short: "fast mode", hint: "" });
@@ -192,7 +217,26 @@ export function sessionNewer(l) { return !l.read_at || ((l.limits && l.limits.at
 export function fresh7(l) { const w = l.limits && l.limits.seven_day; return w && sessionNewer(l) && w.r * 1e3 > now() ? w.u * 100 : l.weekly; }
 export const weeklyStop = (l, U) => { const st = l.stop || {}; return st.weekly ?? st.global ?? (U && U.stop_pct) ?? 98; };
 /** In use: an account the starter can still give new runs to (not paused, under its weekly stop line). */
-export function inUse(l, U) { if (l.paused) return false; const v = fresh7(l); return v == null || v < weeklyStop(l, U); }
+/** The login's own 5-hour stop line, when it has one and its 5-hour window is still open (the starter's pick_login skips it past that line too). */
+export function fiveFull(l) { const st = l.stop || {}, w = l.limits && l.limits.five_hour, r5 = l.resets && l.resets.five_hour;
+  const used = w && w.r * 1e3 > now() ? w.u * 100 : l.five != null && r5 && r5 * 1e3 > now() ? l.five : null;
+  return st.five_hour != null && used != null && used >= st.five_hour; }
+export function inUse(l, U) { if (l.paused || fiveFull(l)) return false; const v = fresh7(l); return v == null || v < weeklyStop(l, U); }
+/** The one answer to "is the Hive held at a usage limit?": {why: "limit"|"paused", until} or null. The starter's hold (S.live.limit_until, while it lasts)
+ *  or every Claude login past its line / paused; with a Codex login, a key or a fallback chain (setup.other, setup.fallback) agents still start, so nothing is held. Every banner, pill
+ *  and strip line reads this (shell.js hiveStopped, comms.js hasRoom), so two of them can't disagree. */
+export function limitStop() {
+  const su = (S.app && S.app.setup) || {}; if (su.other || su.fallback) return null;   // a Codex login, a key or a fallback chain: runs still start
+  const all = (S.usage && S.usage.logins) || (S.live && S.live.logins) || [], hold = S.live && S.live.limit_until;
+  if (hold && hold * 1e3 > now()) return { why: "limit", until: hold * 1e3 };
+  if (all.length && !all.some(l => inUse(l, S.usage))) {
+    const r = all.filter(l => !l.paused).map(l => runway(l, S.usage).toReset).filter(x => x != null).sort((a, b) => a - b)[0];
+    // The person\'s own posts still start past the stop line, up to a real limit (starter.login_for, a fixed 100 that setup.person_stop reports): say so, so nothing claims "nothing starts".
+    const line = su.person_stop ?? 100, own = all.some(l => !l.paused && (fresh7(l) == null || fresh7(l) < line));
+    return { why: all.every(l => l.paused) ? "paused" : "limit", until: r != null && r > 0 ? now() + r : null, own };
+  }
+  return null;
+}
 /** A login's share of all the Claude capacity: what its plan gives a week, with Pro as 1. The person's ratio (2026-11-04): Ultra (Max 20x) is 10 Pros.
  * Max 5x is a guess at 5 until the person says. An unknown plan counts as 1. */
 export const PLAN_WEIGHT = { Pro: 1, "Max 5x": 5, "Max 20x": 10, Ultra: 10 };
@@ -341,10 +385,13 @@ export function threadParent(th) {
 }
 /** Threads started from this one, oldest first. */
 export function threadChildren(th) { const out = []; for (const d of S.threads.values()) if (d.name !== th && threadParent(d.name) === th) out.push(d.name); return out; }
+// A slug read as words: first letter up, and the acronyms people write in capitals ("ui-test-loop" is "UI test loop", not "Ui test loop").
+const ACRONYM = /\b(?:ui|ux|ai|rsi|pcb|fpga|adc|pll|gps|sbc|api|cli|llm|gpu|cpu|mcp|pdf|url|usb|kb|h[0-9])\b/gi;
+const slugWords = th => (t => t[0].toUpperCase() + t.slice(1))(th.replace(/[-_]+/g, " ").replace(ACRONYM, m => m.toUpperCase()));
 export function threadTitle(th) {
   const own = S.threadMeta && S.threadMeta[th] && S.threadMeta[th].title; if (own) return own;   // the person renamed it
   if (btwParent(th)) { const d = S.threads.get(th), p = d && d.posts[0]; return "Aside: " + (p ? short(bareLinks(btwText(mdPlain(displayText(p))).split("\n")[0]), 60) : btwParent(th)); }
-  if (!HEX.test(th || "")) return (simpleOn() || S.app.app) && th ? (t => t[0].toUpperCase() + t.slice(1))(th.replace(/[-_]+/g, " ")) : th;
+  if (!HEX.test(th || "")) return (simpleOn() || S.app.app) && th ? ({ keeper: "Hive upkeep", watchdog: "Hive watch" }[th] || slugWords(th)) : th;   // "keeper" and "watchdog" are words only the builders use
   if (S.threadNames[th]) return S.threadNames[th];
   if (!S.app.app) return th;
   const d = S.threads.get(th), p = d && d.posts[0];

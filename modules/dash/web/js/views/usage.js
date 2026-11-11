@@ -1,7 +1,7 @@
 // Usage: are we about to run out, then where the work went. Template: metrics.
 import { h } from "../core/dom.js";
 import { S, SYS, can, getPref, setPref } from "../core/store.js";
-import { spendSince, totalUse, activeUse, weekNow, planWeight, fresh7, sessionNewer, inUse, runway, runOut, nextBack, weeklyStop, fileInfo, threadTitle, tierOf, agentStatus, sEnd, hasTiers } from "../core/model.js";
+import { spendSince, totalUse, activeUse, weekNow, planWeight, fresh7, sessionNewer, inUse, runway, runOut, nextBack, weeklyStop, fileInfo, threadTitle, tierOf, agentStatus, sEnd, hasTiers, agentLabel } from "../core/model.js";
 import { now, ago, dur, clock, dayName, untilText, money, money$, toks, pct, plural, HOUR, DAY, MIN } from "../core/format.js";
 import { TIERS, tier, status } from "../core/status.js";
 import { threadHref, agentHref, href } from "../core/router.js";
@@ -135,7 +135,8 @@ export function leftAnswer(U, t = now()) {
   const next = nextBack(U, t), back = next && next.at, several = us.length > 1, whose = next && several && next.l.name, left = v == null ? null : Math.max(0, 100 - Math.round(v)), room = v == null ? null : Math.max(0, Math.round(r.stop - v));
   let lead, tone = null, tail = null;
   const when = back ? `${dayName(back)} ${clock(back)}, in ${dur(next.in)}` : "";
-  if (!live.length) { lead = `The Hive has stopped starting agents: ${!awake.length ? (several ? "every account is paused" : "your account is paused") : several ? "every account is paused or past its line" : `your account is past its ${r.stop}% line`}.` + (back ? ` ${whose || "It"} comes back ${when}.` : ""); tone = "bad"; }
+  const su = (S.app && S.app.setup) || {};   // a Codex login, a key or a fallback chain: runs still start, so this never says the Hive stopped (core/model.js limitStop)
+  if (!live.length && !su.other && !su.fallback) { lead = `The Hive has stopped starting agents: ${!awake.length ? (several ? "every account is paused" : "your account is paused") : several ? "every account is paused or past its line" : `your account is past its ${r.stop}% line`}.` + (back ? ` ${whose || "It"} comes back ${when}.` : ""); tone = "bad"; }
   else {
     const first = left == null ? "Claude hasn't said yet how much of this week is left" : `${left}% of this week is left`;
     const comes = back ? (whose ? `${whose} is the next to come back, ${when}.` : `It comes back in full ${when}.`) : "";
@@ -197,7 +198,7 @@ const PLAIN_TIER = { tier1: "First", tier2: "Second", held: "Held", other: "Ever
 /** The app look (R7, design-d-usage): a state word, one answer, two meters, the accounts as rows, the detail behind closed rows. */
 function appHead(U, t, R, pick) {
   const us = U.logins || [], ans = leftAnswer(U, t), act = activeUse(U, t), wk = act || totalUse(us, t);
-  const used = wk ? Math.round(wk.pct) : null, stopAt = U.stop_pct ?? 100, atStop = us.some(l => !l.paused) ? !us.some(l => inUse(l, U)) : used != null && used >= stopAt;
+  const used = wk && (wk.parts || []).length ? Math.round(wk.pct) : null, stopAt = U.stop_pct ?? 100, atStop = us.some(l => !l.paused) ? !us.some(l => inUse(l, U)) : used != null && used >= stopAt;
   const state = used == null ? { tone: "quiet", text: "Not read yet" } : atStop ? { tone: "bad", text: "At the stop line" } : used >= 80 ? { tone: "warn", text: "Getting close" } : ans.tone === "warn" ? { tone: "warn", text: "Going fast" } : { tone: "good", text: "Plenty left" };
   const who = wk && wk.ls && us.length > 1 && wk.ls.length ? wk.ls.map(x => x.name) : null;
   const title = used == null ? "Usage isn't read yet." : atStop ? "You're at the stop line." : who ? `${who.join(", ")} ${who.length > 1 ? "have" : "has"} ${Math.max(0, 100 - used)}% left.` : `${Math.max(0, 100 - used)}% of this week is left.`;
@@ -250,10 +251,9 @@ function appAccounts(U, t, R) {
       statusWord(tone, word, null, "pg-t"),
       r.actions && r.actions.filter(Boolean).length ? h("span", { class: "u-acct-a" }, ...r.actions) : null);
   };
-  const lastAt = Math.max(0, ...us.map(l => (l.limits && l.limits.at) || 0));
   return section({ title: "Accounts", actions: can("config") ? button("Change stop line", () => askStopLine(U), { size: "s" }) : null },
     h("div", { class: "list u-accts" }, rows.map(row)),
-    h("p", { class: "meta u-note" }, (lastAt ? `Limits as last reported ${ago(lastAt * 1e3)}. ` : "") + `A bar and its word come from the same reading; the stop line is ${U.stop_pct}%.`));
+    h("p", { class: "meta u-note" }, `A bar and its word come from the same reading; the stop line is ${U.stop_pct}%.`));
 }
 
 function appChart(U, t, R) {
@@ -329,7 +329,7 @@ export default {
       share(TIERS.map(x => ({ key: x.key, label: app ? PLAIN_TIER[x.key] : x.label, tone: x.tone, value: byTier[x.key], text: `${money(byTier[x.key])} (${Math.round((100 * byTier[x.key]) / tot)}%)` }))));
     const who = cols(
       section({ title: app ? "Costliest conversations" : "Costliest threads", note: R.name + ": who spent the most" }, rank(top(byT).map(([k, v]) => ({ key: k, label: threadTitle(k) || k || (app ? "No conversation" : "No thread"), value: v, text: money(v), tone: tier(tierOf(k)).tone, href: threadHref(k) })))),
-      section({ title: "Costliest agents", note: R.name + ": who spent the most" }, rank(top(byA).map(([k, v]) => ({ key: k, label: k || "No agent", value: v, text: money(v), tone: status(agentStatus(k).key).tone, href: agentHref(k), onClick: e => openRef(e, "agent", k) })))));
+      section({ title: "Costliest agents", note: R.name + ": who spent the most" }, rank(top(byA).map(([k, v]) => ({ key: k, label: k ? agentLabel(k) : "No agent", value: v, text: money(v), tone: status(agentStatus(k).key).tone, href: agentHref(k), onClick: e => openRef(e, "agent", k) })))));
     const models = section({ title: "By model", note: R.name + ": spend split by model" }, !Object.keys(byM).length ? empty("No model cost in this range.") : rank(top(byM).map(([k, v]) => ({ key: k, label: k, value: v, text: money(v), tone: "data" }))));
 
     if (app) {

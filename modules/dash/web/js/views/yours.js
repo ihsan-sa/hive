@@ -6,7 +6,7 @@ import { S, can } from "../core/store.js";
 import { yoursPosts, yoursSearch, yoursItems, yoursText } from "../core/yours.js";
 import { waitingOn, waitingLater, waitingMoot, needsPage, olderWhy, needsN, needsSplit } from "../core/needs.js";
 import { quickPanel, closeQuick, laterButtons, setLater, quickIs } from "../ui/quick.js";
-import { answerer, flat } from "./comms.js";
+import { answerer, flat, chatPlace } from "./comms.js";
 import { agentRef } from "../ui/refs.js";
 import { focusOf, focusName, railSay } from "../core/foci.js";
 import { clock, plural, short, ago } from "../core/format.js";
@@ -14,7 +14,7 @@ import { threadTitle } from "../core/model.js";
 import { threadHref, href, go } from "../core/router.js";
 import { simpleOn, hiveName } from "../core/simple.js";
 import { metrics } from "../templates.js";
-import { bar, button, empty, input, pageHeader, scrim } from "../ui/kit.js";
+import { bar, button, empty, input, pageHeader, scrim, waiting } from "../ui/kit.js";
 import { heldRoom } from "../core/room.js";
 import { jump } from "../ui/message.js";
 
@@ -61,7 +61,7 @@ function waitList(rows, key = "waits", ctx) {
   const open = w => e => { if (!w.post || e.metaKey || e.ctrlKey || e.shiftKey) return; e.preventDefault(); jump(w.post); };
   const post = can("post");
   // R78: on a phone each list opens on its first rows; the rest is one tap away
-  const cap = innerWidth < 640 ? (Y.cap[key] || 10) : Infinity, left = rows.length - cap;
+  const cap = innerWidth < 640 ? (Y.cap[key] || 6) : Infinity, left = rows.length - cap;
   const shown = left > 0 ? rows.slice(0, cap) : rows;
   const ul = h("ul", { class: "list yr-waits", "data-dense": "", "data-key": key }, shown.map(w => {
     const ans = post && key !== "later" && key !== "moot" ? answerer(w) : null, why = key === "older" ? WHY[olderWhy(w)] : null;
@@ -119,21 +119,21 @@ function page(ctx) {
       oninput: e => { Y.q = e.target.value; Y.limit = 40; ctx.update(); } }),
     waits ? h("div", { class: "seg yr-by", role: "group", "aria-label": "Order" }, ORDER.map(([k, l]) =>
       h("button", { type: "button", class: "seg-b", "aria-pressed": String(Y.by === k), onclick: () => { Y.by = k; ctx.update(); } }, l))) : null), order);
-  const body = !S.live && !S.posts.length ? empty("Reading…", { kind: "loading" })
+  const body = !S.live && !S.posts.length ? waiting(S.failed, "Reading…", "your exchanges")
     : !rows.length && !(waits && (waitingLater().length || waitingMoot().length)) ? empty(Y.q ? "Nothing of yours has those words." : waits ? "Nothing waits on you." : "No exchanges yet. What you say in Chat, and what is said to you, shows up here.")
     : waits ? waitParts(rows, ctx) : stream(yoursItems(rows), ctx);
-  const held = !waits && !Y.q && !S.history && performance.now() - Y.at < HOLD_MS;
+  const held = !waits && !Y.q && !S.history && !S.failed && performance.now() - Y.at < HOLD_MS;   // a failed read has nothing coming: say so now
   const px = heldRoom("yours", ".yr-stream", { settled: !held && !!S.history, usual: !waits && !Y.q && Y.limit === 40 });
-  const pg = metrics({ header: pageHeader({ title, hint: lead, actions, after: search }), sections: [held ? h("p", { class: "meta yr-meta", "data-key": "meta" }, "\u00a0") : meta ? h("p", { class: "meta yr-meta", "data-key": "meta" }, meta) : null, held ? heldStream(px) : body, waits ? quickPanel(ctx.update) : null].filter(Boolean) });
+  const pg = metrics({ header: pageHeader({ title, hint: lead, actions, after: search }), sections: [held ? h("p", { class: "meta yr-meta", "data-key": "meta" }, "\u00a0") : meta ? h("p", { class: "meta yr-meta", "data-key": "meta" }, meta) : null, held ? heldStream(px) : body, waits && !(S.live && S.app.app) ? quickPanel(ctx.update) : null].filter(Boolean) });
   pg.setAttribute("data-view", "yours");   // centred at the reading width (the Nov 8 handoff §4.1)
   return pg;
 }
 
-export default {
+export default chatPlace("yours", {
   id: "yours", label: "Yours", about: "every exchange you had, newest first",
   tab: true,
   enter(ctx) { Y.limit = 40; Y.menu = false; Y.at = performance.now(); clearTimeout(Y.timer); if (!S.history) Y.timer = setTimeout(ctx.update, HOLD_MS + 20); ctx.update(); },
   render(ctx) { return page(ctx); },
   escape: () => closeQuick(),
   leave() { clearTimeout(Y.timer); closeQuick(); },
-};
+});

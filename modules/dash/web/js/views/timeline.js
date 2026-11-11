@@ -135,7 +135,7 @@ function drawLane(l, y, W, x, follows, nextLive) {
   ];
   for (const b of placed) {
     const st = barTone(b.s), live = sLive(b.s), by = y + TICK + b.r * RH + (tight ? 0 : 1), bh = RH - (tight ? 1 : 3), wid = b.b - b.a, cap = live && follows;
-    const room = wid - 8 - (cap ? 6 : 0), name = textW(b.s.name, T.F.bar) <= room ? b.s.name : null;
+    const room = wid - 8 - (cap ? 6 : 0), name = !S.app.app && textW(b.s.name, T.F.bar) <= room ? b.s.name : null;   // the app look keeps the code in the tip: the lane already says whose it is
     kids.push(s(phone() ? "g" : "a", { class: "tl-hit", "data-key": b.s.name + "@" + b.s.start, href: phone() ? null : agentHref(b.s.name), tabindex: phone() ? null : "-1", "data-tone": st.tone, "aria-label": `${b.s.name}, ${clock(b.s.start)}${b.s.end ? " to " + clock(b.s.end) : ", still running"}`,
       ontip: barTip(b.s, l.th), onclick: e => { e.preventDefault(); e.stopPropagation(); hideTip(); openPanel("agent", b.s.name); } },
       s("rect", { class: "tl-bar", "data-ended": live ? null : "", x: b.a + .5, y: by + .5, width: Math.max(1.5, wid - 1), height: bh - 1, rx: 2.5 }),
@@ -231,8 +231,8 @@ function toolbar() {
       small("−", "Zoom out", () => zoom(1.6, centre())), small("+", "Zoom in", () => zoom(1 / 1.6, centre())),
       small("←", "Earlier", () => pan(-T.win / 4)), small("→", "Later", () => pan(T.win / 4))),
     !T.fit && T.end != null ? button("Now", () => set(T.win, null), { size: "s", title: "Back to the latest, following now" }) : null,
-    toolsMore(seg([["on", "Active only", "Show only the agents running now, and the rows they're on"]], T.active ? "on" : null, () => { T.active = !T.active; setPref("tlActive", T.active ? 1 : 0); T.ver = -1; draw(); T.update(); }, { label: "Filter" })),
-    toolsMore(seg([["on", "All upkeep", "Upkeep rows (status notes, the keeper, the watchdog) are one line each; this shows every run on them"]], T.house ? "on" : null, () => { T.house = !T.house; setPref("tlHouse", T.house ? 1 : 0); T.ver = -1; draw(); T.update(); }, { label: "Upkeep rows" })),
+    h("label", { class: "map-sw tools-more", title: "Show only the agents running now, and the rows they're on" }, h("input", { type: "checkbox", role: "switch", class: "switch", checked: T.active, "aria-label": "Active only", onchange: (e, n) => { T.active = n.checked; setPref("tlActive", T.active ? 1 : 0); T.ver = -1; draw(); T.update(); } }), "Active only"),
+    h("label", { class: "map-sw tools-more", title: "Upkeep rows (status notes, the keeper, the watchdog) are one line each; this shows every run on them" }, h("input", { type: "checkbox", role: "switch", class: "switch", checked: T.house, "aria-label": "All upkeep", onchange: (e, n) => { T.house = n.checked; setPref("tlHouse", T.house ? 1 : 0); T.ver = -1; draw(); T.update(); } }), "All upkeep"),
     phone() && !T.fitRows ? seg([["chart", "Chart"], ["list", "List", "The same runs as rows you can tap"]], T.list ? "list" : "chart", k => { T.list = k === "list"; T.listN = LIST_STEP; setPref("tlList", T.list ? 1 : 0); T.ver = -1; T.update(); }, { label: "Show as" }) : null,
     toolsMore(infoButton("About this chart", say(HELP), { size: "s" })),
     h("span", { class: "cvp-count tools-more" }, `${stamp(r.t0)} – ${r.follows ? "now" : stamp(r.t1)} (${dur(r.t1 - r.t0)})`),
@@ -240,9 +240,8 @@ function toolbar() {
   ];
 }
 const HELP = "Each row is a thread, each bar an agent's session (filled with a status mark at its end while running; pale and dashed once ended; rows with someone running come first, the hive's own upkeep rows last and one line each), each tick along the top of a row a post. Stacked bars mean agents worked in parallel. A bar's name shows when it fits: hover for any. Click a bar for the agent, a row to read the thread. To zoom: Ctrl+scroll or pinch, or the − and + buttons. Drag sideways to move through time.";
-const NOTE = "A row is a thread, a bar is an agent's session, a tick is a post. Click a bar for the agent, a row for the thread.";
 const say = t => (S.app.app ? t.replace(/\bthread\b/g, "conversation").replace(/\bpost\b/g, "message") : t);
-const note = () => [say(NOTE), h("div", { class: "legend" },
+const note = () => [h("div", { class: "legend" },
   h("span", null, h("i", { class: "tl-sw" }), "running"), h("span", null, h("i", { class: "tl-sw", "data-ended": "" }), "ended"), h("span", { "data-tone": "bad" }, h("i", { class: "tl-sw", "data-tone": "bad" }), "failed"),
   ["working", "queue", "quiet", "stuck"].map(k => h("span", { class: "tl-lg" }, statusDot(k), status(k).label)))];
 

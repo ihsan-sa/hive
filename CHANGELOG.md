@@ -4,6 +4,14 @@ Release notes are on the [releases page](https://github.com/ihsan-sa/hive/releas
 
 A release can ship several times a day. A Hive installs each one as soon as it's out; **How often to update** in Settings can slow that to about once a day. The latest is at [releases/latest](https://github.com/ihsan-sa/hive/releases/latest).
 
+## Choose how hard an agent thinks
+
+The message box has an Effort menu beside the model, and an agent's page has one in its Effort row. A choice holds on that agent from its next run, because a run's effort is fixed when it starts. On a running agent's page, **Restart now** asks it to finish its current step and come back in the same conversation at the new effort. The menu is off for agents on other providers, which don't take an effort.
+
+## Knowledge, Chat and Yours open faster
+
+On a Hive with a large archive, Knowledge could sit on grey rows for 8 seconds while it listed every folder. It now shows the last list at once and refreshes it in the background. Chat and Yours also draw 3 to 4 times faster on long histories, and search still looks through a list at most a minute old.
+
 ## Settings, Inbox, Design and Start hold still while they load
 
 These pages started in the wide column and moved across to the narrow one when their data arrived, a jump of 270 px on a wide screen. They now start in the narrow column, and so do their loading and error messages.

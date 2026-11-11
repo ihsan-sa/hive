@@ -419,6 +419,16 @@ def record_loadtime(d, route):
     return {"ok": True}
 
 
+def record_opened(d, route):
+    """The person opened a thread in the app (the client sends {thread} on open). Turns "never came back" in the fade replay
+    (projects/rsi-lab/thread-retire) from an upper bound into a count. The thread name only, never its text."""
+    th = str(d.get("thread") or "")
+    if not THREAD_NAME.fullmatch(th): raise ValueError("a thread name is letters, digits and . _ : -")
+    THREAD_OPENED.parent.mkdir(parents=True, exist_ok=True)
+    with THREAD_OPENED.open("a") as f: f.write(json.dumps({"at": round(time.time(), 3), "thread": th, "from": "app", "route": route}) + "\n")
+    return {"ok": True}
+
+
 SHOWN = STATE / "shown.jsonl"
 
 def shown_now():
@@ -542,16 +552,19 @@ def agent_status():
 # the thread's id. {thread: {"title": str, "pin": ms, "archived": ms, "back": ms}}; a key that's off is left out, a thread with none is dropped.
 # "important" and "faded" (likely not needed any more, greyed in the list) can also come from agents; the person's own word on either wins.
 THREAD_META = STATE / "thread-meta.json"
+THREAD_META_LOG = STATE / "thread-meta-log.jsonl"   # one line per change made in the app: {at, thread, from, change}
 META_LOCK = threading.Lock()
 
 IMPORTANT = STATE / "important.jsonl"   # `hive important THREAD --why ...` appends {thread, from, why, at, off?}; the person's own mark is "important" in thread-meta
 RENAMED = STATE / "renamed.jsonl"       # `hive rename THREAD "title"`: {thread, from, title, at}; the person's own title wins
 FADED = STATE / "faded.jsonl"           # `hive fade THREAD --why ...`, same records: an agent's word that the person likely needn't look at the thread any more
+FADED_RULES = STATE / "faded-rules.jsonl"   # the plain-rule pass (fade_rules.py, E20): same records with from "rule"; `fade_rules.py --undo` takes them all back
+THREAD_OPENED = STATE / "thread-opened.jsonl"   # POST /api/opened: one line per thread the person opens in the app {at, thread, from}
 
-def agent_marks(path):
+def agent_marks(path, keep=1000):
     """Newest agent mark per thread that is still on: {thread: {by, why, at}}."""
     best = {}
-    try: lines = path.read_text().splitlines()[-1000:]
+    try: lines = path.read_text().splitlines()[-keep:]
     except OSError: return best
     for ln in lines:
         try: r = json.loads(ln); th = str(r["thread"]); at = float(r["at"])
@@ -565,8 +578,9 @@ def thread_meta():
     try: v = json.loads(THREAD_META.read_text())
     except (OSError, ValueError): v = {}
     if not isinstance(v, dict): v = {}
-    for path, key, off, by, why in ((IMPORTANT, "important", "impOff", "impBy", "impWhy"), (FADED, "faded", "fadeOff", "fadedBy", "fadedWhy")):
-        for th, a in agent_marks(path).items():      # an agent's mark counts unless the person took the mark off after it
+    for path, key, off, by, why, keep in ((IMPORTANT, "important", "impOff", "impBy", "impWhy", 1000), (FADED, "faded", "fadeOff", "fadedBy", "fadedWhy", 1000),
+                                          (FADED_RULES, "faded", "fadeOff", "fadedBy", "fadedWhy", 50000)):   # the rule file is read whole: a mark stays on until its own off
+        for th, a in agent_marks(path, keep).items():      # an agent's mark counts unless the person took the mark off after it
             m = dict(v.get(th) or {})
             if a["at"] > m.get(off, 0) and not m.get(key):
                 m[key] = a["at"]; m[by] = a["by"]; m[why] = a["why"]; v[th] = m
@@ -613,6 +627,12 @@ def set_thread_meta(d):
         STATE.mkdir(parents=True, exist_ok=True)
         t = STATE / f".thread-meta.json.{os.getpid()}.{threading.get_ident()}"
         t.write_text(json.dumps(all_, indent=1)); t.replace(THREAD_META)
+        # The history of what the person set by hand (thread-meta.json keeps only the present state). An un-fade or a "back" here is a
+        # wrong fade the person corrected: projects/rsi-lab/thread-retire/replay.py --cases turns each into a test of every fade rule.
+        try:
+            ch = {k: (True if k == "title" else d[k]) for k in ("title", "pin", "archived", "important", "faded") if k in d}
+            with THREAD_META_LOG.open("a") as f: f.write(json.dumps({"at": round(now_ms / 1000, 3), "thread": th, "from": "app", "change": ch}) + "\n")
+        except OSError: pass
     return m
 
 
@@ -652,6 +672,40 @@ def set_agent_model(name, model):
     d = STATE / "model-set"; d.mkdir(parents=True, exist_ok=True)
     tmp = d / f".{name}.tmp"; tmp.write_text(json.dumps({"model": PICK_MODELS[model], "at": time.time()})); tmp.replace(d / f"{name}.json")
     return {"ok": True, "model": PICK_MODELS[model]}
+
+EFFORTS = ("low", "medium", "high", "xhigh", "max")   # `claude --effort`; EFFORTS in core/hive and starter.py
+
+def chosen_efforts(st):
+    """name -> the effort each agent wakes on next: the starter's st["efforts"], with picks from the agent panel it hasn't read yet on top."""
+    out = {n: e for n, e in (st.get("efforts") or {}).items() if e in EFFORTS}
+    for f in (STATE / "effort-set").glob("*.json"):
+        try: e = json.loads(f.read_text())["effort"]
+        except (OSError, ValueError, KeyError, TypeError): continue
+        if e in EFFORTS: out[f.stem] = e
+        elif e == "": out.pop(f.stem, None)
+    return out
+
+def set_agent_effort(name, effort, restart=False, signer=None, limited=False):
+    """The agent panel's Effort menu: `name` runs at `effort` from its next run and stays on it ("" goes back to Claude's default). A drop
+    file the starter reads on its next tick (apply_effort_sets in starter.py), so nothing wakes the agent: a run's effort is fixed when it starts.
+    restart: ask the running agent to come back at it. A post, not a signal, since killing a run mid-step isn't safe (only --interrupt's single
+    foreground command is): it finishes its step and posts to itself with --effort, which the starter queues and resumes the same session on."""
+    if not isinstance(name, str) or not AGENT_CODE.fullmatch(name): raise ValueError("that isn't an agent's name")
+    if effort != "" and effort not in EFFORTS: raise ValueError("pick one of " + ", ".join(EFFORTS))
+    run = None
+    if restart:
+        if not effort: raise ValueError("pick a level to restart at")
+        run = run_to_kill(name)
+        if not run: raise ValueError(f"{name} isn't running; its next run starts at {effort}")
+        if run.get("provider") or run.get("harness", "claude-code") != "claude-code": raise ValueError("effort applies to Claude runs only")
+    d = STATE / "effort-set"; d.mkdir(parents=True, exist_ok=True)
+    tmp = d / f".{name}.tmp"; tmp.write_text(json.dumps({"effort": effort, "at": time.time()})); tmp.replace(d / f"{name}.json")
+    if run:
+        thread = run.get("thread") or run.get("post")
+        person_post(f"@{name} The person set your effort to {effort} and asked you to restart at it. A run's effort is fixed when it starts, so finish the step you're on and wait for any background work "
+                    f"you still need (ending your turn stops it), then run `hive post --thread {thread} --to {name} --effort {effort} <<< 'Resuming at {effort} effort.'` and end your turn. "
+                    f"You come back in this same conversation at that effort.", thread, signer=signer, limited=limited)
+    return {"ok": True, "effort": effort, "asked": bool(run)}
 
 def run_to_kill(name):
     """The record of `name`'s run if it really is a live run of that agent, else None. ~/run/<name>.json says which pid; the
@@ -806,7 +860,7 @@ def live():
                for n, v in (st.get("pending") or {}).items()]
     usage = {k: v for k, v in (jload(STATE / "usage.json", {}) or {}).items() if not k.startswith("_")}
     return {"signin": signin_waiting(st), "now": time.time(), "agents": agents, "jobs": {"running": sum(j["running"] for j in jobs.values()), "queued": sum(j["queued"] for j in jobs.values())}, "pending": pending, "usage": usage, "logins": logins(),
-            "limit_until": limit_hold(st), "chosen": chosen_models(st), "priorities": priorities()}
+            "limit_until": limit_hold(st), "chosen": chosen_models(st), "efforts": chosen_efforts(st), "priorities": priorities()}
 
 
 _prio = (None, {})
@@ -1497,6 +1551,10 @@ def web_stamp():
     files = [UI_DIR / "index.html", *(UI_DIR / "css").rglob("*.css"), *(UI_DIR / "js").rglob("*.js")]
     return hashlib.sha256(repr(sorted((str(f), f.stat().st_mtime_ns, f.stat().st_size) for f in files if f.exists())).encode()).hexdigest()[:12]
 
+def static_cache(route):
+    """Cache-Control for the page's own css and js: a minute of reuse through the tunnel, a revalidation every load on this machine."""
+    return "private, max-age=60" if route == "outside" else "no-cache, private"
+
 _index = [None, b""]
 def index_html():
     """index.html with a modulepreload link for every module app.js imports, found by following the static imports.
@@ -1861,8 +1919,8 @@ GET_CAP = {"/api/call-chat": "post", "/api/live": "read", "/api/away": "read", "
            "/api/config": "config", "/api/modules": "modules", "/api/slack-door": "modules", "/api/signin": "logins", "/api/plans": "plans", "/api/secrets": "secrets",
            "/api/settings": "config", "/api/ntfy": "config", "/api/webpush": "config", "/api/update": "config", "/api/signin-codex": "logins", "/api/accounts": "logins", "/api/design": "logins", "/api/brand/logo": "read",
            "/api/kb/home": "files", "/api/kb/open": "files", "/api/kb/search": "files", "/api/kb/raw": "files", "/api/kb/map": "files", "/api/kb/history": "files", "/api/progress": "read", "/api/checklist": "read", "/api/share-preview": "read", "/api/approvals": "read", "/api/feedback-drafts": "read", "/api/mail": "files"}
-POST_CAP = {"/api/webpush": "config", "/api/share-build": "read", "/api/kill": "stop", "/api/approval": "stop", "/api/tier": "tier", "/api/agent-model": "post", "/api/login-pause": "limits", "/api/login-limit": "limits", "/api/provider-limit": "limits",
-            "/api/post": "post", "/api/side-ask": "post", "/api/thread-meta": "post", "/api/shown": "post", "/api/loadtime": "post", "/api/checklist": "post", "/api/focus": "post", "/api/feedback": "post", "/api/feedback-draft-done": "post", "/api/issue-link": "post", "/api/update": "config", "/api/share-copy": "config", "/api/share-pack": "config", "/api/draft": "config", "/api/import": "config", "/api/upload": "post", "/api/inbox-read": "post", "/api/ntfy": "config", "/api/config": "config", "/api/starter": "config",
+POST_CAP = {"/api/webpush": "config", "/api/share-build": "read", "/api/kill": "stop", "/api/approval": "stop", "/api/tier": "tier", "/api/agent-model": "post", "/api/agent-effort": "post", "/api/login-pause": "limits", "/api/login-limit": "limits", "/api/provider-limit": "limits",
+            "/api/post": "post", "/api/side-ask": "post", "/api/thread-meta": "post", "/api/shown": "post", "/api/loadtime": "post", "/api/opened": "post", "/api/checklist": "post", "/api/focus": "post", "/api/feedback": "post", "/api/feedback-draft-done": "post", "/api/issue-link": "post", "/api/update": "config", "/api/share-copy": "config", "/api/share-pack": "config", "/api/draft": "config", "/api/import": "config", "/api/upload": "post", "/api/inbox-read": "post", "/api/ntfy": "config", "/api/config": "config", "/api/starter": "config",
             "/api/module": "modules", "/api/signin": "logins", "/api/signin/code": "logins", "/api/signin/cancel": "logins", "/api/plan": "plans", "/api/secret": "secrets", "/api/slack-door": "modules",
             "/api/signin-codex": "logins", "/api/account-key": "logins", "/api/design": "logins", "/api/brand": "config", "/api/brand/logo": "config"}
 LOCAL_ONLY = {"/api/access", "/api/settings", "/api/import", "/api/share-copy", "/api/share-pack", "/api/draft"}  # who may do what is never changed from outside, whatever outside.can says
@@ -2334,7 +2392,7 @@ def voice_ready():
     return isinstance(st, dict) and st.get("ok") is True and isinstance(st.get("at"), (int, float)) and time.time() - st["at"] < 120
 
 
-def person_post(text, thread=None, reply_to=None, uploads=(), signer=None, limited=False, simple=False, model=None, sig=None, interrupt=False):
+def person_post(text, thread=None, reply_to=None, uploads=(), signer=None, limited=False, simple=False, model=None, sig=None, interrupt=False, effort=None):
     """A post as the person. As the Slack mirror does it: a plain message wakes the agent on the thread (thread_agent), a reply wakes the author
     of the post replied to, and no thread (or a thread with no agent yet) starts a new agent. Mentions in the text win.
     signer: who signed in, from a verified Access token, when more than one person can: it heads the text, so an agent and the board can see who wrote it.
@@ -2351,6 +2409,7 @@ def person_post(text, thread=None, reply_to=None, uploads=(), signer=None, limit
     if thread and not THREAD_NAME.fullmatch(str(thread)): raise ValueError("a thread name is letters, digits and . _ : -")
     if not text and not paths: raise ValueError("nothing to send")
     if model and model not in PICK_MODELS: raise ValueError("that model isn't one of " + ", ".join(PICK_MODELS))
+    if effort and effort not in EFFORTS: raise ValueError("that effort isn't one of " + ", ".join(EFFORTS))
     btw = BTW.fullmatch(text)
     if btw:
         if not thread: raise ValueError("/btw asks aside about a conversation, so send it from one")
@@ -2379,7 +2438,7 @@ def person_post(text, thread=None, reply_to=None, uploads=(), signer=None, limit
     if pairing:  # before the post, so a connector reading the board always finds it
         PAIR_ACCEPTED.parent.mkdir(parents=True, exist_ok=True)
         with PAIR_ACCEPTED.open("a") as f: f.write(json.dumps({"at": time.time(), "text": text}) + "\n")
-    cmd = [str(HIVE_BIN), "post", "--as", PERSON] + (["--thread", str(thread)] if thread else []) + (["--to", who] if who else []) + (["--routed"] if routed else []) + (["--reply-to", reply_to] if reply_to else []) + (["--model", PICK_MODELS[model]] if model else []) + (["--interrupt"] if interrupt and not limited and not word else [])
+    cmd = [str(HIVE_BIN), "post", "--as", PERSON] + (["--thread", str(thread)] if thread else []) + (["--to", who] if who else []) + (["--routed"] if routed else []) + (["--reply-to", reply_to] if reply_to else []) + (["--model", PICK_MODELS[model]] if model else []) + (["--effort", effort] if effort and not word else []) + (["--interrupt"] if interrupt and not limited and not word else [])
     for p in paths: cmd += ["--file", str(p)]
     r = subprocess.run(cmd, input=text, text=True, capture_output=True, env={**child_env(), **({"HIVE_POST_VIA": "limited"} if limited else {}), **({"HIVE_POST_VIA": "web-pair"} if pairing else {}), **({"HIVE_POST_SIG": json.dumps(sig)} if sig else {})}, cwd=str(HOME), timeout=60)
     if r.returncode: raise ValueError(short(r.stderr, 300) or "the post failed")
@@ -2454,8 +2513,9 @@ def _ctl(s): return "".join(c for c in str(s) if c in "\n\t" or (c >= " " and c 
 def mail_view(limit=200):
     """The owner's mail copy (hive-mail inbox, read-only). Plain text only; control and bidi characters stripped; attachments by name and size.
     Held mail (marks stay in the store) shows as a stub. Gated by the `files` capability in GET_CAP; never goes on the board."""
-    out, err = [], None
+    out, err, unset = [], None, False
     try: names = sorted((f for f in (MAIL_DIR / "inbox").iterdir() if f.suffix == ".json" and MAIL_ID.fullmatch(f.stem)), key=lambda f: f.name, reverse=True)[:limit]
+    except FileNotFoundError: names, unset = [], True   # no mail set up on this machine is a state, not a failure
     except OSError: names, err = [], "The mail folder can't be read from here."
     for f in names:
         try:
@@ -2468,7 +2528,7 @@ def mail_view(limit=200):
         out.append({"id": f.stem, "subject": _ctl(d.get("subject", ""))[:300], "date": _ctl(d.get("date", ""))[:80], "received_at": _ctl(d.get("received_at", ""))[:40],
                     "text": _ctl(d.get("text", ""))[:100_000], "truncated": bool(d.get("truncated")), "attachments": att})
     status = jload(MAIL_DIR / "status.json", {}) or {}
-    return {"items": out, "error": err, "checked": status.get("at") if isinstance(status, dict) else None}
+    return {"items": out, "error": err, "unset": unset, "checked": status.get("at") if isinstance(status, dict) else None}
 
 
 def secrets_view():
@@ -2542,6 +2602,7 @@ KB_SHELVES = (("kb", "Notes", "What agents learned and wrote down"), ("modules",
               ("projects", "Projects", "Plans and code, one folder each"), ("files", "Post files", "What was attached to posts"),
               ("investigations", "Investigations", "Longer digs and their evidence"), ("tools", "Tools", "Installed toolchains"), ("archive", "Archive", "Kept from older Hives"))
 KB_SKIP = {"node_modules", "__pycache__", "venv", "site-packages"}
+KB_WALK_SKIP = {"archive/transcripts"}  # raw session logs, tens of thousands of folders of ids: still open from the shelf and found by a text search, but not walked for names
 KB_DENY = re.compile(r"^id_(rsa|dsa|ecdsa|ed25519)|\.(pem|key|p12|pfx|keystore|jks|gpg|asc|kdbx|env)$|^(web|auth|logins?)\.json$|^hosts\.ya?ml$|^(authorized_keys|known_hosts|htpasswd)$|credential", re.I)
 KB_WORDS = re.compile(r"secret|token|passw(or)?d|api[_-]?key", re.I)
 KB_CODE = {".py", ".go", ".js", ".mjs", ".ts", ".tsx", ".css", ".md", ".html", ".c", ".h", ".rs"}  # a name like tokens.css is code, not a token
@@ -2679,21 +2740,39 @@ def kb_walk(rel, depth, room):
             if not kb_name_ok(e.name) or e.name in KB_SKIP or e.is_symlink(): continue
             try:
                 if e.is_dir(follow_symlinks=False):
-                    if n < depth and not kb_is_worktree(Path(e.path)): todo.append((Path(e.path), f"{r}/{e.name}", n + 1))
+                    if n < depth and f"{r}/{e.name}" not in KB_WALK_SKIP and not kb_is_worktree(Path(e.path)): todo.append((Path(e.path), f"{r}/{e.name}", n + 1))
                 elif e.is_file(follow_symlinks=False): out.append((f"{r}/{e.name}", e.stat(follow_symlinks=False).st_mtime))
             except OSError: continue
     return out[:room]
 
 
-def kb_index():
-    """Every file's path and time, for name search and "changed lately". Bounded, and at most a minute old."""
+def kb_index_read():
+    """Walk the shelves into kb_index_memo. The caller holds kb_index_lock."""
+    items = []
+    for rel, depth in (("kb", 12), ("core", 12), ("modules", 12), ("files", 2), ("investigations", 8), ("archive", 6), ("projects", 3), ("tools", 2)):
+        items += kb_walk(rel, depth, KB_INDEX_MAX - len(items))
+    kb_index_memo.update(t=time.time(), items=items, more=len(items) >= KB_INDEX_MAX)
+
+
+def kb_index_again():
+    try: kb_index_read()
+    finally: kb_index_lock.release()
+
+
+def kb_index_warm():
+    """Read it once at start so the first Knowledge visit finds it, stamped old so a search still looks again."""
     with kb_index_lock:
-        if time.time() - kb_index_memo["t"] < 60: return kb_index_memo
-        items = []
-        for rel, depth in (("kb", 12), ("core", 12), ("modules", 12), ("files", 2), ("investigations", 8), ("archive", 6), ("projects", 3), ("tools", 2)):
-            items += kb_walk(rel, depth, KB_INDEX_MAX - len(items))
-        kb_index_memo.update(t=time.time(), items=items, more=len(items) >= KB_INDEX_MAX)
-        return kb_index_memo
+        kb_index_read(); kb_index_memo["t"] = 1
+
+
+def kb_index(wait=False):
+    """Every file's path and time, for name search and "changed lately". Bounded. Past a minute old it is handed back as it is while a thread reads the new one, because on a big home the walk takes seconds and a page shouldn't wait on it. A search passes wait, so what it looks through is at most a minute old."""
+    if time.time() - kb_index_memo["t"] < 60: return kb_index_memo
+    if wait or not kb_index_memo["t"]:
+        with kb_index_lock:
+            if time.time() - kb_index_memo["t"] >= 60: kb_index_read()
+    elif kb_index_lock.acquire(blocking=False): threading.Thread(target=kb_index_again, daemon=True).start()
+    return kb_index_memo
 
 
 def kb_home():
@@ -2740,7 +2819,7 @@ def kb_search(q):
     if tagged is not None: return {"q": q, "names": [], "hits": [], "more": False, "ranked": tagged}
     ranked = kb_ranked(q)
     ws = q.lower().split(); names = []
-    for path, t in kb_index()["items"]:
+    for path, t in kb_index(wait=True)["items"]:
         low = path.lower()  # the index only holds names kb_walk let through, and no links
         if all(w in low for w in ws): names.append({"path": path, "t": int(t)})
         if len(names) >= 60: break
@@ -3965,7 +4044,9 @@ def setup_state():
     ls = [{"name": l["name"], "signed_in": login_ok(l["path"])} for l in logins()]
     return {"logins": ls, "signed_in": any(l["signed_in"] for l in ls), "api_key": bool(os.environ.get("ANTHROPIC_API_KEY")),
             "has_posts": BOARD.exists() and BOARD.stat().st_size > 0, "starter": starter_up(),
-            "claude": bool(shutil.which("claude")), "other": other_account()}
+            "claude": bool(shutil.which("claude")), "other": other_account(),
+            "person_stop": 100,   # the weekly line for the person's own posts: the fixed 100 in starter.login_for (not a setting; changing it is the warden's call)
+            "fallback": bool(((jload(HOME / "core" / "config.json", {}) or {}).get("fallback") or {}).get("agents") or ((jload(HOME / "core" / "config.json", {}) or {}).get("fallback") or {}).get("chain"))}  # runs still start on another provider when no Claude login has room (core/config.json)
 
 
 SETUP = CachedStale(setup_state, 20)  # set .t = 0 to read again. Stale, since every login is a `claude auth status`: up to 16 s on a busy machine, and the page has no tabs of its own until /api/app answers
@@ -4559,6 +4640,7 @@ def serve(port):
     usage = USAGE = Usage()
     threading.Thread(target=usage.run, daemon=True).start()
     threading.Thread(target=phone_watch, daemon=True).start()
+    threading.Thread(target=kb_index_warm, daemon=True).start()
     threading.Thread(target=sync_accounts, daemon=True).start()  # an account already signed in before the app first ran; does nothing without settings.json
     live_c, proj_c, usage_c, jobs_c = Cached(live, 1), CachedStale(projects, 60), Cached(usage.view, 2), Cached(Jobs().view, 2)
     deliv_c = Cached(delivered_view, 2.5)
@@ -4574,9 +4656,12 @@ def serve(port):
             st = f.stat(); tag = '"%x-%x"' % (st.st_mtime_ns, st.st_size)
             lm = email.utils.formatdate(int(st.st_mtime), usegmt=True)   # Chrome won't revalidate an HTTP/1.0 answer by ETag, only by date
             inm, ims = self.headers.get("If-None-Match"), self.headers.get("If-Modified-Since")
+            # Through the tunnel each revalidation is a round trip (152 files took the person 13 s on a reload, 2026-11-10), so the browser may reuse a file for a minute there.
+            # The tab's own stamp check (web_stamp) tells it to reload after a change; on this machine every load still revalidates.
+            cache = static_cache(getattr(self, "route", ""))
             if (tag in inm) if inm else ims == lm:
-                self.send_response(304); self.send_header("ETag", tag); self.send_header("Last-Modified", lm); self.send_header("Cache-Control", "no-cache, private"); self.end_headers(); return
-            self.send(f.read_bytes(), ct, cache="no-cache, private", etag=tag, modified=lm)   # private: only the browser keeps a copy, never the tunnel's edge
+                self.send_response(304); self.send_header("ETag", tag); self.send_header("Last-Modified", lm); self.send_header("Cache-Control", cache); self.end_headers(); return
+            self.send(f.read_bytes(), ct, cache=cache, etag=tag, modified=lm)   # private: only the browser keeps a copy, never the tunnel's edge
 
         def send(self, body, ct, status=200, cookie=None, framed_here=False, cache="no-store", etag=None, modified=None):
             gz = len(body) > 4096 and "gzip" in self.headers.get("Accept-Encoding", "")
@@ -4649,9 +4734,25 @@ def serve(port):
             self.end_headers()
             self.wfile.write(b)
 
-        def send_kb_raw(self, rel):
+        def send_kb_page(self, f):
+            """A project's html page, for the preview to frame (?view=1): redacted like any text, then served under the same sandbox as a page from a post (R111)."""
+            if f.stat().st_size > KB_TEXT_MAX: return self.send_error(404)
+            body = redact(f.read_text(errors="replace")).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Content-Disposition", "inline")
+            self.send_header("Content-Security-Policy", PAGE_CSP)
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Referrer-Policy", "no-referrer")
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(body)
+
+        def send_kb_raw(self, rel, view=False):
             """An image or PDF for the Knowledge page. Text never comes this way, so it can't skip the redaction; nothing here runs in the page's origin."""
             f = kb_path(rel); ct = KB_IMAGE.get(f.suffix.lower()) if f else None
+            if view and f and f.is_file() and f.suffix.lower() in (".html", ".htm"): return self.send_kb_page(f)
             if not f or not f.is_file() or not (ct or f.suffix.lower() == ".pdf") or f.stat().st_size > KB_RAW_MAX: return self.send_error(404)
             name = re.sub(r"[^A-Za-z0-9_.-]", "_", f.name)
             self.send_response(200)
@@ -4802,7 +4903,7 @@ def serve(port):
                 if v is None: return self.deny(404, "that isn't here, or isn't shown")
                 self.send(json.dumps(v).encode(), J)
             elif u.path == "/api/kb/raw":
-                self.send_kb_raw(q.get("path", [""])[0])
+                self.send_kb_raw(q.get("path", [""])[0], q.get("view") == ["1"])
             elif u.path == "/api/mail":
                 self.send(json.dumps(mail_view()).encode(), J)
             elif u.path == "/api/plans":
@@ -4939,13 +5040,14 @@ def serve(port):
                 try: return self.send(json.dumps(share_build(d)).encode(), J)
                 except KeyError: return self.send_error(404)
                 except ValueError as e: return self.deny(400, str(e))
-            if u.path in ("/api/post", "/api/side-ask", "/api/thread-meta", "/api/shown", "/api/loadtime", "/api/checklist", "/api/focus", "/api/feedback", "/api/feedback-draft-done", "/api/issue-link", "/api/update", "/api/inbox-read", "/api/ntfy", "/api/webpush", "/api/agent-model", "/api/config", "/api/starter", "/api/module", "/api/signin", "/api/signin/code", "/api/signin/cancel", "/api/access", "/api/plan", "/api/secret", "/api/settings", "/api/share-copy", "/api/share-pack", "/api/draft", "/api/import", "/api/signin-codex", "/api/account-key", "/api/design", "/api/brand", "/api/slack-door"):
+            if u.path in ("/api/post", "/api/side-ask", "/api/thread-meta", "/api/shown", "/api/loadtime", "/api/opened", "/api/checklist", "/api/focus", "/api/feedback", "/api/feedback-draft-done", "/api/issue-link", "/api/update", "/api/inbox-read", "/api/ntfy", "/api/webpush", "/api/agent-model", "/api/agent-effort", "/api/config", "/api/starter", "/api/module", "/api/signin", "/api/signin/code", "/api/signin/cancel", "/api/access", "/api/plan", "/api/secret", "/api/settings", "/api/share-copy", "/api/share-pack", "/api/draft", "/api/import", "/api/signin-codex", "/api/account-key", "/api/design", "/api/brand", "/api/slack-door"):
                 try:
-                    if u.path == "/api/post": res = person_post(d.get("text"), d.get("thread"), d.get("reply_to"), d.get("files"), signer=self.signer, limited="config" not in self.can, simple=d.get("simple") is True, model=d.get("model"), sig=d.get("sig"), interrupt=d.get("interrupt") is True)
+                    if u.path == "/api/post": res = person_post(d.get("text"), d.get("thread"), d.get("reply_to"), d.get("files"), signer=self.signer, limited="config" not in self.can, simple=d.get("simple") is True, model=d.get("model"), effort=d.get("effort"), sig=d.get("sig"), interrupt=d.get("interrupt") is True)
                     elif u.path == "/api/side-ask": res = side_ask(d.get("q"), signer=self.signer, limited="config" not in self.can)
                     elif u.path == "/api/thread-meta": res = set_thread_meta(d)
                     elif u.path == "/api/shown": res = dismiss_shown(d)
                     elif u.path == "/api/loadtime": res = record_loadtime(d, self.route)
+                    elif u.path == "/api/opened": res = record_opened(d, self.route)
                     elif u.path == "/api/checklist": res = checklist_do(d)
                     elif u.path == "/api/focus": res = focus_do(d)
                     elif u.path == "/api/feedback": res = send_feedback(d)
@@ -4955,6 +5057,7 @@ def serve(port):
                     elif u.path == "/api/plan": res = save_plan(d.get("name"), d.get("text"), d.get("version"), bool(d.get("start")), self.signer)
                     elif u.path == "/api/secret": res = set_secret(d.get("name"), d.get("value"), self.signer, delete=bool(d.get("delete")))
                     elif u.path == "/api/agent-model": res = set_agent_model(d.get("name"), d.get("model"))
+                    elif u.path == "/api/agent-effort": res = set_agent_effort(d.get("name"), d.get("effort"), d.get("restart") is True, signer=self.signer, limited="config" not in self.can)
                     elif u.path == "/api/inbox-read": res = {"marked": mark_read(None if d.get("all") else [str(i) for i in d.get("ids") or []])}
                     elif u.path == "/api/ntfy": res = phone_do(d.get("do"), self.headers)
                     elif u.path == "/api/webpush":

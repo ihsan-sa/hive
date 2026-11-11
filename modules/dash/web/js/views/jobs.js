@@ -38,7 +38,7 @@ function tiles(T) {
     T.slice_high ? tile("Queue jobs' memory", gb(T.slice_used), `soft limit ${gb(T.slice_high)}`, (T.slice_used * 100) / T.slice_high, T.slice_used >= T.slice_high - 3000) : null,
     ...T.gpus.map(g => tile("GPU", g.util + "%", `${gb(g.mem)} of ${gb(g.total)}, ${g.name}`, g.util)),
     // One Disk tile: further disks fold into its note, so the grid doesn't end on a lone tile labelled with a raw path.
-    ...T.disks.slice(0, 1).map(d => tile("Disk", d.used + " GB", [`of ${d.total} GB`, ...T.disks.slice(1).map(x => `${x.name}: ${x.used} of ${x.total} GB`)].join(", "), d.total ? (d.used * 100) / d.total : 0, T.disks.some(x => x.total && x.used / x.total >= 0.9))),
+    ...T.disks.slice(0, 1).map(d => tile("Disk", d.used + " GB", [`of ${d.total} GB`, ...T.disks.slice(1).map(x => `${S.app.app && /^[/~]/.test(x.name) ? "temporary files" : x.name}: ${x.used} of ${x.total} GB`)].join(", "), d.total ? (d.used * 100) / d.total : 0, T.disks.some(x => x.total && x.used / x.total >= 0.9))),
   ];
 }
 
@@ -83,12 +83,12 @@ export default {
         meta: [J.failed ? "Couldn't refresh: this may be out of date" : `Updated ${clock(V.at * 1e3)}`, app ? null : "CPU in threads in use, averaged since the last refresh"] }),
       sections: [
         section({ title: app ? "The computer" : "The machine", note: "how busy the machine is now" }, stats(tiles(V.machine))),
-        section({ title: "Who's using it", note: app ? "Memory counts what's in use, including swap." : "Memory is what's in use, RAM plus swap. The unfilled part of its bar is the kernel, shared memory and tmpfs." }, split(V)),
-        ...(app && !q ? [] : [section({ title: "Running", note: `${V.running.length} of ${V.slots} slots, longest first` }, table({
+        section({ fold: innerWidth < 640, title: "Who's using it", note: app ? "Memory counts what's in use, including swap." : "Memory is what's in use, RAM plus swap. The unfilled part of its bar is the kernel, shared memory and tmpfs." }, split(V)),
+        ...(app && !q ? [] : [section({ fold: innerWidth < 640, title: "Running", note: `${V.running.length} of ${V.slots} slots, longest first` }, table({
           rows: V.running, key: r => r.lane + r.since, fold: { n: 10, id: "jobs-running" }, empty: "Nothing running in the queue.",
           columns: [agentCol("Agent", r => who(r.agent)), col("Lane", r => r.lane), col("Running", r => secs(t - r.since)), num(app ? "Cores" : "Threads", r => r.cores.toFixed(1)), num("Memory", r => gb(r.mem)), cmd],
         })),
-        section({ title: "Queued", note: "in the order they'll start" }, table({
+        section({ fold: innerWidth < 640, title: "Queued", note: "in the order they'll start" }, table({
           rows: V.queued, key: q => q.agent + q.since + q.cmd, fold: { n: 10, id: "jobs-queued" }, empty: "The queue is empty.",
           columns: [col("Place", q => (q.first ? "first lane" : String(++pos))), agentCol("Agent", q => who(q.agent)), col("Waiting", q => secs(t - q.since)), cmd],
         }))]),

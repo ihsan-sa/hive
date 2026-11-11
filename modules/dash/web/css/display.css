@@ -27,7 +27,7 @@
 .dt-room>span:last-child{overflow:hidden;text-overflow:ellipsis}
 .dt-size{font-size:var(--fs-body);font-weight:var(--w-med)}
 .dt-clock{margin-left:auto;font-size:var(--fs-figure);font-weight:var(--w-med);line-height:1;font-variant-numeric:tabular-nums}
-.dt-trouble{display:flex;flex-wrap:wrap;gap:var(--s1) var(--s6);padding:var(--s2) var(--s3);border:1px solid color-mix(in oklch,var(--bad) 35%,var(--line));border-radius:var(--r-l);background:color-mix(in oklch,var(--bad) 6%,var(--surface));color:var(--bad-ink);font-size:var(--fs-body)}
+.dt-trouble{display:flex;flex-wrap:wrap;gap:var(--s1) var(--s6);padding:var(--s2) var(--s3);border:1px solid color-mix(in oklab,var(--bad) 35%,var(--line));border-radius:var(--r-l);background:color-mix(in oklab,var(--bad) 6%,var(--surface));color:var(--bad-ink);font-size:var(--fs-body)}
 .dt-trouble>span{display:inline-flex;align-items:baseline;gap:8px;min-width:0}
 .dt-trouble b{font-weight:var(--w-bold)}
 
@@ -110,7 +110,7 @@
 @container (max-width:420px){.dt-agents>li{grid-template-columns:5.2em minmax(0,1fr)}.dt-agents>li>.ref[data-kind=thread]{display:none}}
 
 /* No data: a band readable across a room, and the old numbers plainly set back. */
-.dt-lost{display:flex;align-items:center;gap:16px;min-height:72px;padding:12px 24px;border-radius:var(--r-l);background:color-mix(in oklch,var(--bad) 12%,var(--surface))}
+.dt-lost{display:flex;align-items:center;gap:16px;min-height:72px;padding:12px 24px;border-radius:var(--r-l);background:color-mix(in oklab,var(--bad) 12%,var(--surface))}
 .dt-lost b{font-size:26px;letter-spacing:-.01em}.dt-lost span{font-size:20px;color:var(--ink-2)}
 .dt-lost .st{zoom:1.5;align-self:center}
 body[data-lost] .dt-sum,body[data-lost] .dt-tile{opacity:.55}

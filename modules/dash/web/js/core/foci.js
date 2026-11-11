@@ -4,7 +4,7 @@
 // /api/foci is read once here for every page (S.foci), at most every 20 s; the server caches it as long.
 import { h } from "./dom.js";
 import { S, jget, emit, post } from "./store.js";
-import { threadParent, isSystemThread, btwParent, isAgent, isRunning, threadTitle } from "./model.js";
+import { threadParent, isSystemThread, btwParent, isAgent, isRunning, threadTitle, agentLabel } from "./model.js";
 import { now, DAY, short } from "./format.js";
 import { faded, archived } from "../ui/threadmeta.js";
 import { agentRef, threadRef } from "../ui/refs.js";
@@ -119,7 +119,7 @@ export function stateOf(id) {
   // Both at once (the person, 110812313986: a focus can need them and still be working): the needs part first, then "moving".
   if (needsOf(id).length) return { key: "needs", word: agentsOf(id).now.length ? "needs you, moving" : "needs you", tone: "info", moving: !!agentsOf(id).now.length };
   if (agentsOf(id).now.length) return { key: "moving", word: "moving", tone: "good" };
-  if (activeThreads(id).length) return { key: "waiting", word: "waiting", tone: null };
+  if (activeThreads(id).length) return { key: "waiting", word: "no agent running", tone: null };   // not "waiting": readers take that for waiting on them (SU-3)
   return { key: "quiet", word: "quiet", tone: "ended" };
 }
 /** A summary bullet with its @agent and #thread words as pills. */
@@ -158,7 +158,7 @@ export function pills(text) {
   return out.filter(x => x !== "");
 }
 /** An agent code as a pill that is not a link, for text that already sits inside one (a rail row, a Yours entry); anything else as it is. */
-export const codePill = n => (n && isCode(n) ? h("span", { class: "ref pill", "data-kind": "agent", title: n }, n) : n || "an agent");
+export const codePill = n => (n && isCode(n) ? h("span", { class: "ref pill", "data-kind": "agent", title: n }, agentLabel(n)) : n || "an agent");
 /** A one-line preview said for the person (R21): ids scrubbed, a leading "Rung:"/"Next:" word and any step word gone, agent codes as codePill. */
 export const sayPlain = (text, max = 70) => short(scrub(String(text || "").replace(/(^|[\s(\[,;:"'])#([\w.-]*\w)/g, (m, a, w) => (S.threads.has(w) ? a + threadTitle(w) : m)).replace(/`/g, "").replace(/\s+/g, " ").replace(/^\s*(?:rung(?:\s+done)?|next|step)\s*:\s*/i, "")).replace(/\b(?:(?:the|rung)\s+)?R\d+[a-z]?\b/g, "the step").replace(/\b(?:[Ll]eftovers\s+)?rung(?:\s+\d+[a-z]?(?:\s+part\s+\w+)?)?(?=\s*[:(" ]|$)/g, "step").replace(/\bstep\s*:\s*/g, ""), max);
 /** A thread's title for a list row: a 12-hex post id in it is dropped. */

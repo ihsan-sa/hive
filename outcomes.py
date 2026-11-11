@@ -8,25 +8,28 @@ Every run the starter logs (~/log.jsonl start/end) gets a grade in ~/outcomes.js
   partial    some of it, or a handover with a plan
   nothing    it posted, but no delivery and no handover: status only, questions back, the wrong thing
   not_asked  the post asked this agent nothing concrete
-Every run woken by the person is graded; of the rest, a sample per hour (SAMPLE), so the model cost stays near a dollar a day.
+Every run woken by the person is graded; of the rest, whole chains: a fixed share of roots (ROOT_PCT) has every run handed on from it graded, so a chain's rate means a chain.
 A completion wake (an agent's result post named this agent, asked it nothing, and it ticked no rung) and a self-wake (the agent's own post named it) are
 only counted, every one of them, and marked on a ledger row that gets graded anyway: hive-meta moving.md P4, measuring before anyone suppresses them. The
 signal is in the waking post, and it fires on about a quarter of runs that did deliver, so it must not set a grade. `stats` shows both shares of agent-code wakes.
 `hive progress` shows outcome_delivered_pct and outcomes_silent; the rsi loop and the keeper read them.
 The same model call also picks reusable facts out of result posts: at most one draft a day per thread in ~/kb/_drafts, which the dream merges or drops (hive-meta knowledge.md P6, `kb drafts`).
 
-  hive outcomes grade [--limit N] [--sample N] [--model sonnet] [--dry]   grade runs ended since the last run (hive-outcomes.timer, hourly)
+  hive outcomes grade [--limit N] [--model sonnet] [--dry]   grade runs ended since the last run (hive-outcomes.timer, hourly)
   hive outcomes list [--since 24h] [--grade G] [--name NAME]
   hive outcomes stats [--since 24h] [--json]
 """
-import argparse, datetime as dt, importlib.util, json, os, random, re, subprocess, sys
+import argparse, datetime as dt, hashlib, importlib.util, json, os, random, re, subprocess, sys
 from pathlib import Path
 
 HOME = Path.home()
 CORE, STATE = HOME / "core", HOME / ".hive"
 LEDGER, LOG, BOARD = HOME / "outcomes.jsonl", HOME / "log.jsonl", HOME / "board.jsonl"
 CURSOR = STATE / "outcomes-cursor.json"
-SAMPLE = 10                # agent-woken runs with posts graded by the model per hour, on top of every person-woken run (4 until 2026-11-10: only 15% of pulse roots had a grade, so away_ratio read low)
+SAMPLE = 10                # not used by the hourly run since 2026-11-10 (chains are drawn by ROOT_PCT); before: agent-woken runs with posts graded by the model per hour, on top of every person-woken run (4 until 2026-11-10: only 15% of pulse roots had a grade, so away_ratio read low)
+ROOT_PCT = 50              # share of chains (a root and every run handed on from it) graded whole: the hash of the root decides, so the hour a run ends in doesn't, and coverage of pulse-rooted work is this constant. Readings before 2026-11-10 17Z sampled runs, not chains: not comparable
+ROOT_MAX = 60              # runs chosen chains may send to the model per hour, a cost guard: whole chains are kept until it is reached, the rest are left ungraded (never bit on 11-07..09)
+PULSE_THREADS = {"keeper", "improve", "watchdog", "tidy", "progress"}   # an agent first started in one of these is a pulse acting through an agent: a run it wakes is a root (as projects/rsi-lab/movers.py)
 OTHER_MAX = 12             # runs on a non-Claude provider graded per hour on top of that: at 13% sampled, 1 of 21 agent-woken Codex runs had a grade, so nobody could say whether Codex delivers
 SETTLE_S = 180             # a run's end must be this old: its last post may still be landing
 TAIL_S = 90                # posts this long after the end still count as the run's
@@ -37,6 +40,7 @@ SHORT = ("partial", "nothing")   # graded runs that fell short of what was asked
 CHEAP = (None, "", "sonnet", "haiku")   # models the step-up moves off
 STEP_UP_AFTER = 2          # this many short runs in a row by one agent in one thread, on a cheap model, and its next wake is on opus
 STEP_UP_TO = "opus"
+AGENT = re.compile(r"[a-z][0-9a-f]{4}")   # an agent's name; a timer that shares a name with a service (nightly, boxwatch) starts a chain
 NOT_AGENTS = {"person", "hives", "box", "starter", "watchdog", "progress", "asks", "keeper-timer", "postland", "leftover-router"}   # as goals.py
 LONG_POST = 300   # chars: a waking post this long is result-shaped
 ORDERS = set("add answer apply ask build change check commit continue do find fix go implement land look make merge please post read remove rerun review run "
@@ -201,14 +205,45 @@ def provider(r):
     m = str(r.get("model") or "")
     return m.split(":")[0] if ":" in m else "claude"
 
-def pick(todo, sample, rng=random, other_max=OTHER_MAX):
-    """Every person-woken run, up to `other_max` agent-woken runs on another provider, plus `sample` Claude runs with posts."""
+def roots(log, by_id):
+    """Run key -> key of the run its chain began at. A run woken by an agent's post belongs to the run that agent was in when it wrote
+    the post; a run the starter carried on belongs to the same agent's run before. A chain starts where the waker is no agent
+    (the person, a timer, the starter's round) or is a pulse agent."""
+    starts = sorted((r for r in log if r.get("event") == "start" and r.get("post") and r.get("name")), key=lambda r: r.get("at", ""))
+    first, byname, root = {}, {}, {}
+    for s in starts: first.setdefault(s["name"], s.get("thread"))
+    for s in starts:
+        key, name = f"{s.get('session', '')[:8]}-{s.get('pid')}", s["name"]
+        post = str((s.get("woke") or [s.get("post")])[0]); p = by_id.get(post) or {}
+        who = name if post.startswith("run-end ") else p.get("from") or s.get("from")
+        when = p.get("at") or s.get("at", "")
+        mine = byname.get(who) or []
+        parent = next((k for at, k in reversed(mine) if at <= when and k != key), None) if who == name or (AGENT.fullmatch(str(who)) and first.get(who) not in PULSE_THREADS) else None
+        root[key] = root.get(parent, parent) if parent else key
+        byname.setdefault(name, []).append((s.get("at", ""), key))
+    return root
+
+def chosen_root(key, pct=None):
+    """Whether this root's chain is one of the graded ones: a fixed draw from the key, the same answer every hour."""
+    return int(hashlib.sha1(str(key).encode()).hexdigest()[:8], 16) % 100 < (ROOT_PCT if pct is None else pct)
+
+def pick(todo, sample, rng=random, other_max=OTHER_MAX, root=None):
+    """Every person-woken run, up to `other_max` agent-woken runs on another provider, plus the Claude runs with posts whose chain
+    is a chosen one (up to ROOT_MAX). With no `root` map: `sample` Claude runs at random, as before 2026-11-10."""
     run = lambda x: x[0] if isinstance(x, tuple) else x
     person = [x for x in todo if str(run(x).get("from", "")).lower() == "person"]
     rest = [x for x in todo if x not in person]
     rng.shuffle(rest)
     other = [x for x in rest if provider(run(x)) != "claude"]
-    return person + other[:other_max] + [x for x in rest if provider(run(x)) == "claude"][:sample]
+    claude = [x for x in rest if provider(run(x)) == "claude"]
+    if root is None: return person + other[:other_max] + claude[:sample]
+    of = lambda x: root.get(run(x)["key"], run(x)["key"])
+    kept = []
+    for r in sorted({of(x) for x in claude if chosen_root(of(x))}, key=lambda k: hashlib.sha1(str(k).encode()).hexdigest()):   # whole chains, never part of one
+        chain = [x for x in claude if of(x) == r]
+        if kept and len(kept) + len(chain) > ROOT_MAX: break
+        kept += chain
+    return person + other[:other_max] + kept
 
 def write_draft(g, run, mine):
     """A grade's note as ~/kb/_drafts/<thread>-<date>.md, at most one a day per thread, or None. The model proposes; these rules decide. Never ~/kb proper."""
@@ -244,16 +279,17 @@ def cmd_grade(a):
     todo = [r for r in runs(log, since, until) if r["key"] not in done and (not other or provider(r) != "claude")]
     if a.limit: todo = todo[:a.limit]
     graded, model_runs, cost, ticks, drafts, limited = 0, [], 0.0, ticked_rungs(), 0, False
+    root = roots(log, by_id)
     for r in todo:
         post, mine, after = posts_of(r, posts, by_id)
-        r = {**r, **({"completion_wake": True} if completion_wake(r, by_id, mine, ticks) else {}), **({"self_wake": True} if post and self_wake(r, post) else {}), **({"round": True} if post and ROUND.search(str(post.get("text", ""))[:80]) else {})}   # marks for the spot-check and the step-up; the grade doesn't look at them
+        r = {**r, **({"root": root[r["key"]]} if root.get(r["key"], r["key"]) != r["key"] else {}), **({"completion_wake": True} if completion_wake(r, by_id, mine, ticks) else {}), **({"self_wake": True} if post and self_wake(r, post) else {}), **({"round": True} if post and ROUND.search(str(post.get("text", ""))[:80]) else {})}   # marks for the spot-check and the step-up; the grade doesn't look at them
         g = mechanical(r, post, mine)
         if g:
             why = "the post asked nothing" if g == "not_asked" else "posted nothing" + (" though named" if g == "silent" else "")
             if not a.dry: append(LEDGER, {**r, "at": iso(), "grade": g, "why": why, "posts": len(mine), "by": "rule"})
             graded += 1
         else: model_runs.append((r, post, mine, after))
-    chosen = pick(model_runs, a.sample) if not (a.all or other) else model_runs
+    chosen = pick(model_runs, a.sample, root=root) if not (a.all or other) else model_runs
     for i in range(0, len(chosen), 8):
         batch = chosen[i:i + 8]
         prompt = PROMPT.replace("{blocks}", "\n\n".join(block(*b) for b in batch))
@@ -273,7 +309,7 @@ def cmd_grade(a):
     # Claude at its limit is when fallback runs most need grading: hold the cursor, and the next hour picks them up (the ledger's keys stop a run being graded twice)
     if not a.dry and todo and not limited and not other: CURSOR.write_text(json.dumps({"at": max(r["ended"] for r in todo), "run": iso()}))
     if not a.dry and graded and not other: step_up(graded)
-    print(f"{graded} runs graded ({len(chosen)} by the model, {len(model_runs) - len(chosen)} left unsampled), {drafts} drafts, ${cost:.2f}")
+    print(f"{graded} runs graded ({len(chosen)} by the model, {len(model_runs) - len(chosen)} left ungraded: chain not chosen or past ROOT_MAX), {drafts} drafts, ${cost:.2f}")
 
 def step_up(new, post=None):
     """An agent graded short STEP_UP_AFTER times in a row in one thread while on a cheap model gets its next wake on STEP_UP_TO:
@@ -351,7 +387,7 @@ def cmd_stats(a):
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="hive outcomes", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sp = ap.add_subparsers(dest="cmd", required=True)
-    p = sp.add_parser("grade"); p.add_argument("--limit", type=int, default=0); p.add_argument("--sample", type=int, default=SAMPLE); p.add_argument("--all", action="store_true", help="every run with posts, not a sample")
+    p = sp.add_parser("grade"); p.add_argument("--limit", type=int, default=0); p.add_argument("--sample", type=int, default=SAMPLE, help="unused since 2026-11-10: the hourly run grades whole chains (ROOT_PCT)"); p.add_argument("--all", action="store_true", help="every run with posts, not a sample")
     p.add_argument("--model", default="sonnet"); p.add_argument("--dry", action="store_true"); p.add_argument("--other-since", default="", metavar="DATE", help="backfill: every ungraded run on a non-Claude provider ended after DATE; the hourly cursor doesn't move"); p.set_defaults(f=cmd_grade)
     p = sp.add_parser("list"); p.add_argument("--since", default="24h"); p.add_argument("--grade"); p.add_argument("--name"); p.set_defaults(f=cmd_list)
     p = sp.add_parser("stats"); p.add_argument("--since", default="24h"); p.add_argument("--json", action="store_true"); p.add_argument("--by", choices=["provider"], help="delivery per provider, person-woken and agent-woken apart"); p.set_defaults(f=cmd_stats)

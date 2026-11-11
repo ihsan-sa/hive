@@ -2,6 +2,7 @@
 import { h, copyText } from "../core/dom.js";
 import { href } from "../core/router.js";
 import { status as st } from "../core/status.js";
+import { labelCodes } from "../core/model.js";
 import { icon } from "./icons.js";
 import { showTip, hideTip } from "./tip.js";
 export { icon };
@@ -182,6 +183,9 @@ const SKEL = {
   rail: () => rep(3, i => h("div", { class: "skel-block skel-side" }, skSec("38%"), skList(3 - (i % 2), 2))),
 };
 
+/** A figure still being read: a shaped placeholder about as wide as the number, so the strip doesn't jump when it lands (R-1110d-d). */
+export const figPending = (w = "4.5ch") => h("span", { class: "skel-x fig-ph", style: `--w:${w};--h:.85em;display:inline-block;vertical-align:baseline`, role: "img", "aria-label": "Reading" });
+
 /** A page's data hasn't come yet: "Reading…" while it may still come, the plain failure once a read has failed. Pages keep polling, so it clears itself. */
 export function waiting(failed, text = "Reading…", what = "the data", shape = null) {
   return failed ? empty(`Couldn't read ${what}. It keeps trying.`, { kind: "error" }) : shape ? skeleton(shape, text) : empty(text, { kind: "loading" });
@@ -200,6 +204,7 @@ export function copyPress(b, t) {
   return copyText(t).then(() => mark("ok", "Copied", "Copied"), e => mark("fail", "Couldn't copy", e.message));
 }
 
+const lc = t => (typeof t === "string" ? labelCodes(t) : t);   // the app look says agents by what they are on, not their code (rung 73)
 /** List: rows separated by hairlines. rows: [{key, href, title, sub, meta, text, lead, current, onClick, dim}] (dim greys the row); limit + onMore add "Show N more". */
 export function list(rows, { empty: none = "Nothing here.", limit, onMore, moreText = n => `Show ${n} more`, dense } = {}) {
   if (!rows.length) return empty(none);
@@ -207,8 +212,8 @@ export function list(rows, { empty: none = "Nothing here.", limit, onMore, moreT
   return h("div", null,
     h("ul", { class: "list", "data-dense": dense ? "" : null }, shown.map(r => h("li", { class: "lr", "data-key": r.key || null, "data-dim": r.dim ? "" : null, "data-here": r.here ? "" : null },
       h(r.href ? "a" : r.onClick ? "button" : "div", { class: "lr-in", style: r.depth ? `--d:${r.depth}` : null, href: r.href || null, type: !r.href && r.onClick ? "button" : null, "aria-current": r.current ? "true" : null, "aria-expanded": r.expanded == null ? null : String(r.expanded), onclick: r.onClick || null },
-        h("div", { class: "lr-t" }, r.lead || null, h("b", { title: typeof r.title === "string" ? r.title : null }, r.title), r.sub ? h("span", { class: "muted" }, r.sub) : null, r.meta ? h("span", { class: "meta" }, r.meta) : null),
-        r.text ? h("div", { class: r.whole ? "lr-x" : "lr-x clamp-2" }, r.text) : null),
+        h("div", { class: "lr-t" }, r.lead || null, h("b", { title: typeof r.title === "string" ? r.title : null }, lc(r.title)), r.sub && !(typeof r.sub === "string" && typeof r.title === "string" && r.sub.trim().toLowerCase() === r.title.trim().toLowerCase()) ? h("span", { class: "muted", title: typeof r.sub === "string" && lc(r.sub) !== r.sub ? r.sub : null }, lc(r.sub)) : null, r.meta ? h("span", { class: "meta" }, r.meta) : null),
+        r.text ? h("div", { class: r.whole ? "lr-x" : "lr-x clamp-2" }, lc(r.text)) : null),
       r.acts ? h("span", { class: "lr-acts" }, r.acts) : null))),
     rows.length > shown.length ? h("div", { class: "lr-more" }, onMore ? button(moreText(rows.length - shown.length), onMore, { kind: "quiet", size: "s" }) : h("span", { class: "meta" }, `and ${rows.length - shown.length} more`)) : null);
 }

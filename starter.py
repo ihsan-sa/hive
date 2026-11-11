@@ -14,6 +14,8 @@ CODE = re.compile(r"```.*?```|`[^`\n]*`", re.S)  # a name in backticks is being 
 MEMINFO, PSI_MEM = "/proc/meminfo", "/proc/pressure/memory"
 last_start = [0.0]  # when this process last started a run, for under_pressure
 recent_starts = []  # when, for under_pressure: runs too young to show in MemAvailable
+efforts = [{}]  # st["efforts"], {agent: level}: what start() reads, it has no st of its own
+EFFORTS = ("low", "medium", "high", "xhigh", "max")
 ended_clean = []  # runs that just ended with nothing owed by the starter: the continuation pilot looks at them once `alive` is complete
 children = {}  # name -> Popen, for sessions this process started (others are tracked by pid file only)
 
@@ -905,6 +907,26 @@ def apply_model_sets(st, c):
         log(event="model_set" if model_ok(c, m) else "model_set_refused", name=n, model=m, **({"why": str(why)[:200]} if why else {}))
         f.unlink(missing_ok=True)
 
+def hold_effort(st, n, e):
+    """Hold effort `e` on agent `n`, and on its heir if it has one: wake() sends a replaced agent's posts to the heir, whose own held effort start() reads."""
+    efforts[0][n] = e
+    if (heir := st.get("heirs", {}).get(n)): efforts[0][heir] = e
+
+def apply_effort_sets(st):
+    """The person picked an effort in the agent panel: ~/.hive/effort-set/<name>.json (set_agent_effort in the dash), {"effort": level},
+    or "" for Claude's default. Held in st["efforts"], so the agent's next run starts on it and later ones stay on it."""
+    for f in (STATE / "effort-set").glob("*.json"):
+        n = f.stem
+        try: e = json.loads(f.read_text()).get("effort")
+        except (OSError, ValueError, AttributeError): e = None
+        ok = re.fullmatch(r"[a-z][0-9a-f]{4,}", n) and (e == "" or e in EFFORTS)
+        if ok and e: hold_effort(st, n, e)
+        elif ok:
+            efforts[0].pop(n, None)
+            for q in st["pending"].get(n, []): q.pop("effort", None)  # or the next run would still take one off a queued post
+        log(event="effort_set" if ok else "effort_set_refused", name=n, effort=e)
+        f.unlink(missing_ok=True)
+
 def usage(c, u):
     """Refresh usage per login every usage_check_s. Returns {login: weekly pct or None}; the 5-hour pcts from the same
     call go to ~/.hive/usage_5h.json ({login: pct or None}), and the reset times to ~/.hive/usage_resets.json ({login:
@@ -1306,6 +1328,7 @@ def wake(c, st, n, posts, to, room):
     new = fresh_name(st, n[0] if re.fullmatch(r"[a-z][0-9a-f]{4}", n) else "a")
     st.setdefault("heirs", {})[n] = new
     if n in st.get("chosen", {}): st["chosen"][new] = st["chosen"][n]
+    if n in efforts[0]: efforts[0][new] = efforts[0][n]
     log(event="heir", name=n, heir=new, why=why)
     start(c, new, posts, to, heir_of={"name": n, "why": why, "out": run.get("out")})
     return new
@@ -1505,7 +1528,8 @@ def start(c, name, posts, login, resume=None, reaped=None, extra=(), moved=False
     tmp = HOME / ".cache" / "hive-tmp"; tmp.mkdir(parents=True, exist_ok=True)  # on disk: /tmp is tmpfs, its files hold RAM and swap
     # ENABLE_CLAUDEAI_MCP_SERVERS: the logins' claude.ai connectors (the person's Slack, Vercel buy_domain, ...) are 12k tokens on
     # every reply, and 12 calls in 542 transcripts, all Exa search; they also let an agent act in the person's name (kb/model-cost.md)
-    effort = next((p["effort"] for p in posts if p.get("effort") in ("low", "medium", "high", "xhigh", "max")), None)  # hive post --effort: for a Claude run only
+    # hive post --effort, or the effort picked in the agent panel: held on the agent like --model, so a resume keeps it. For a Claude run only
+    effort = next((e for e in [efforts[0].get(name), *(p.get("effort") for p in posts)] if e in EFFORTS), None)
     env, argv = {**os.environ, "HIVE_NAME": name, "HIVE_THREAD": first.get("thread", first["id"]), "CLAUDE_CONFIG_DIR": login, "TMPDIR": str(tmp), "ENABLE_CLAUDEAI_MCP_SERVERS": "false"}, None
     # Opus defaults to a 1M window, so a run grows to 400k+ and pays for all of it on every turn; 36% of spend was above 200k (kb/model-cost.md).
     # Compacting near resume_max_context also keeps a run resumable instead of leaving an heir. 0 or absent: Claude Code's default.
@@ -1875,6 +1899,7 @@ def main():
     wire_deny(cfg())
     wire_precompact(cfg())
     st = load("starter.json", {"offset": 0, "pending": {}})
+    efforts[0] = st.setdefault("efforts", {})
     u, paused, pcache = {}, False, {}
     while True:
         c = cfg()
@@ -1906,10 +1931,10 @@ def main():
                     if n in c["external"]: continue
                     # a self-mention wakes its author only when the author isn't running: a waiter's
                     # "done" post from a run that has already ended; a running agent mentioning itself doesn't
-                    # ...unless it asks for a stronger model (`hive model`): queued, it resumes on it when this run ends
-                    if n == str(p.get("from", "")).lower() and runs_now(n) and not (called == [n] and p.get("model") in MODELS and not src_free): continue
+                    # ...unless it asks for a stronger model (`hive model`) or an effort: queued, it resumes on it when this run ends
+                    if n == str(p.get("from", "")).lower() and runs_now(n) and not (called == [n] and (p.get("model") in MODELS or p.get("effort") in EFFORTS) and not src_free): continue
                     q = {k: p.get(k) for k in ("id", "thread", "from")}
-                    if p.get("effort"): q["effort"] = p["effort"]  # hive post --effort
+                    if p.get("effort") and not src_free: q["effort"] = p["effort"]  # hive post --effort
                     if p.get("routed"): q["routed"] = True  # a door picked this name; nobody typed it
                     q["model"] = asked_model(p, c)
                     if src_free and tier_of(q["model"]) == "paid, real money": q["model"] = None  # a free agent's post doesn't spend money
@@ -1931,6 +1956,7 @@ def main():
                     if is_warden(n):  # the warden rules on the hard limits and may come to hold root: Claude only, like @claude
                         q["claude"] = True
                         if provider_of(c, q.get("model")): q["model"] = None
+                    if q.get("effort") in EFFORTS: hold_effort(st, n, q["effort"])  # a run's effort is fixed when it starts: this holds from the next one on
                     if not fresh: stays_on(st, c, n, q)
                     elif (keep := {k: q[k] for k in ("model", "free", "claude") if q.get(k) and (k != "model" or model_ok(c, q[k]))}):
                         st.setdefault("chosen", {})[n] = keep
@@ -1948,6 +1974,7 @@ def main():
         drop_killed(st)
         auth_watch(c, st)
         apply_model_sets(st, c)
+        apply_effort_sets(st)
         continuations(st, c, alive)
         for th, text in slow_replies(recent_posts(), st, alive):   # straight into the thread: post() would move it to the starter thread
             with BOARD.open("a") as f:

@@ -81,6 +81,7 @@ import { initEaster } from "./core/easter.js"; initEaster();
 import { phoneInit } from "./ui/phone.js"; phoneInit();
 import { agentHoverInit } from "./ui/agentHover.js"; agentHoverInit();
 import { popupKeys } from "./ui/popup.js"; popupKeys();
+import { backCloses } from "./ui/backclose.js"; backCloses();
 delegate(document); dropFiles(document);
 setViews(views); initSwitcher(views); watch(() => schedule(false)); offerDeckTour(); resume();
 // The classic scrollbar's width on this browser and zoom, for the top bar on pages with no window scrollbar (base.css).

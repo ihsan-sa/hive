@@ -12,7 +12,7 @@ import { simpleOn, plainName, hiveName } from "../core/simple.js";
 import { loadNeedsYou, needsKnown, needsN, needsSplit, needsHref, waitsOn, waitingOn, waitingNow, waitingOlder } from "../core/needs.js";
 import { loadFoci, fociFailed, fociOrder, focusOf, focusById, activeThreads, askedOf, needAt, agentsOf, stateOf, pills, plainPills, needSource, isCode, scrub, codePill, railSay, railTitle, threadLine, focusName, MISC, activityOf, shareOf, fractionWords, pct, usd, needsOf, moveFocus, foci } from "../core/foci.js";
 import { newIn } from "./focus.js";
-import { SIDE_THREAD, chatText, agentState, agentStatus, btwParent, threadParent, threadChildren, isAgent, isRunning, tierOf, threadTitle, threadState, threadPeople, isSystemThread, SHOW, postKind, threadKinds, closingPosts, displayText, postSource, inUse, fresh7, asksQuestion, fileInfo } from "../core/model.js";
+import { SIDE_THREAD, agentLabel, labelCodes, chatText, agentState, agentStatus, btwParent, threadParent, threadChildren, isAgent, isRunning, tierOf, threadTitle, threadState, threadPeople, isSystemThread, SHOW, postKind, threadKinds, closingPosts, displayText, postSource, inUse, limitStop, fresh7, asksQuestion, fileInfo } from "../core/model.js";
 import { ago, dayName, stamp, clock, dur, short, mdPlain, now, plural, DAY, MIN, HOUR, money } from "../core/format.js";
 import { href, threadHref, go, parse } from "../core/router.js";
 import { yoursSearch, yoursText } from "../core/yours.js";
@@ -130,7 +130,7 @@ function threadEvents(th) {
   for (const s of S.sessions) {
     if (s.thread !== th || !s.end) continue;
     if (s.limited) out.push({ ev: true, key: "ev:" + s.session + ":" + s.start, t: s.end, tone: "limited", text: simpleOn() ? "Your Hive took a break" : `${s.name} stopped at a usage limit`, sub: "It carries on by itself once there's room." });
-    else if (s.exit && s.exit !== 143) out.push({ ev: true, key: "ev:" + s.session + ":" + s.start, t: s.end, tone: "failed", text: simpleOn() ? "Your Hive ran into a problem" : `${s.name} stopped with an error (exit ${s.exit})`, sub: simpleOn() ? "Send a message and it tries again." : "Its last message above is where it got to." });
+    else if (s.exit && s.exit !== 143) out.push({ ev: true, key: "ev:" + s.session + ":" + s.start, t: s.end, tone: "failed", text: simpleOn() ? "Your Hive ran into a problem" : `${(w => w[0].toUpperCase() + w.slice(1))(agentLabel(s.name))} stopped with an error (exit ${s.exit})`, sub: simpleOn() ? "Send a message and it tries again." : "Its last message above is where it got to." });
   }
   return out;
 }
@@ -582,13 +582,8 @@ function syncThreads(c, ctx) {
 }
 
 // ---- what's happening: the strip above the composer ----
-function hasRoom() { const ls = (S.usage && S.usage.logins) || (S.live && S.live.logins) || []; return !ls.length || ls.some(l => inUse(l, S.usage)); }
-function nextReset() {
-  let t = null;
-  for (const l of (S.live && S.live.logins) || []) { const L7 = l.limits && l.limits.seven_day, L5 = l.limits && l.limits.five_hour;
-    for (const w of [L5, L7]) if (w && w.u >= 0.95 && (!t || w.r * 1e3 < t)) t = w.r * 1e3; }
-  return t;
-}
+function hasRoom() { return !limitStop(); }
+function nextReset() { const st = limitStop(); return st && st.until; }   // the banner's time, not a second reading of the limits   // the same answer as the top bar's banner (core/model.js limitStop)
 const AGENT_WORDS = { working: "is working", quiet: "is here, quiet", stuck: "looks stuck", queue: "is waiting for the machine" };
 function line(key, text, act, opts = {}) {
   return h("div", { class: "cm-line", "data-key": opts.key || key, "data-tone": status(key).tone }, statusDot(key, { live: opts.live }), h("span", { class: "cm-line-x" }, text), act ? h("span", { class: "cm-line-a" }, act) : null);
@@ -653,7 +648,8 @@ function strip(th) {
   const mine = lastMine(th), wait = mine && now() - mine.t > HELPER_AFTER && now() - mine.t < 2 * HOUR ? mine.men.map(m => delivery(mine, m)).find(x => x && x.key === "waiting") : null;
   if (wait && built("helper") && !simpleOn()) out.push(line("queue", [who(wait.who), ` is busy and hasn't seen your message for ${dur(now() - mine.t)}. If it still hasn't by ${clock(mine.t + 10 * MIN)}, a helper starts on it. `, notBuilt()],
     post ? [button("Start a helper now", async (e, b) => { b.disabled = true; try { await apiPost("/api/helper", { post: mine.id }); poll(); } catch (x) { b.disabled = false; b.title = x.message; } }, { size: "s" })] : null, { key: "helper" }));
-  if (!out.length && th) {
+  // The app look says nothing when nobody is working (E10: "Nobody is on this right now. A message wakes a1b2c" read as hive talk around a plain answer); the developer look keeps the line.
+  if (!out.length && th && !(app() && !simpleOn())) {
     const r = recipient(th);
     out.push(line("done", simpleOn() ? "Your Hive has stopped for now. Send a message when you want more." : r.who && r.who !== "new" ? `Nobody is on this right now. A message wakes ${r.who}.` : "Nobody is on this right now. A message starts an agent on it.", null, { key: "idle" }));
   }
@@ -899,12 +895,25 @@ export function rowDot(th) {
   const k = threadState(th).key;
   return k === "working" ? { tone: "good", word: "working" } : k === "queued" ? { tone: "warn", word: "waiting to start" } : null;
 }
+/** The word a thread row leads with, from the thread's own bar and the register (SU-3): readers took a Done thread for stuck, and a wait for finished.
+ *  A thread that waits on the person says so wherever it shows; a Done bar says Done; Blocked/Waiting come from the bar's last line. Null when it has none. */
+export function rowMark(th) {
+  if (waitingOn().some(w => w.th === th)) return { word: "needs you", tone: "info" };
+  const k = threadState(th).key;
+  if (k === "working" || k === "queued") return null;   // the dot says it
+  const r = S.threadStatus && S.threadStatus[th], last = r && String(r.text || "").trim().split("\n").pop(), m = last && /^(Done|Blocked|Waiting|Needs the person|Told to stop):/.exec(last);
+  if (!m) return null;
+  return m[1] === "Done" ? { word: "done", tone: "good" } : m[1] === "Blocked" ? { word: "blocked", tone: "warn" } : m[1] === "Waiting" ? { word: "waiting", tone: null } : m[1] === "Needs the person" ? { word: "needs you", tone: "info" } : { word: "stopped", tone: null };
+}
+export const markEl = th => { const m = rowMark(th); return m ? h("span", { class: "rmk", "data-tone": m.tone, title: "This conversation: " + m.word }, m.word) : null; };
 function cardRow(r) {
   const d = S.threads.get(r.th), dot = rowDot(r.th), title = threadTitle(r.th);
   return h("li", { "data-key": r.th }, h("a", { class: "fc-row", href: threadHref(r.th), title: title + (dot ? ", " + dot.word : "") },
-    dot ? h("span", { class: "st", "data-tone": dot.tone, "aria-hidden": "true" }) : h("span", { "aria-hidden": "true" }), h("b", null, title), d ? when(d.last, "t") : null));
+    dot ? h("span", { class: "st", "data-tone": dot.tone, "aria-hidden": "true" }) : h("span", { "aria-hidden": "true" }), h("b", null, title), markEl(r.th), d ? when(d.last, "t") : null));
 }
-const cardEv = kind => l => h("li", { class: "fc-ev", "data-kind": kind, "data-key": kind + ":" + l.text.slice(0, 80) }, when(l.at, "t"), h("span", { class: "fc-ev-x", title: l.text }, lineText(l.text, { pill: false })));
+// A card line names a file, not its path: "`projects/x/build/cut.mp4`" reads "cut.mp4" (home_plain: the cards show no file path). The title keeps the whole line.
+const fileNames = t => t.replace(/`?(?:~\/|\/home\/[^\s`/]+\/)?(?:projects|kb|modules|core)\/(?:[^\s`]*\/)?([^\s`/]+)`?/g, "$1");
+const cardEv = kind => l => h("li", { class: "fc-ev", "data-kind": kind, "data-key": kind + ":" + l.text.slice(0, 80) }, when(l.at, "t"), h("span", { class: "fc-ev-x", title: l.text }, lineText(labelCodes(fileNames(l.text)), { pill: false })));
 const cardRows = (rows, n) => rows.length ? h("div", { class: "fc-cv" }, h("ul", { class: "fc-rows", "aria-label": "Conversations" }, rows.slice(0, n).map(cardRow))) : null;
 /** The card's … menu: move it earlier or later (the keyboard's drag), and a new conversation. */
 function cardMenu(f, id, ctx) {
@@ -1113,6 +1122,7 @@ function showSays(mask) {
   return (on.length ? on.join(", ") + " and " + last : last).replace(/^./, c => c.toUpperCase()) + (mask === SHOW.ALL ? "." : ". The rest runs in the background.");
 }
 
+let opened = "";   // the thread the beacon last went out for; leaving the page forgets it
 export default {
   id: "comms", label: () => (app() ? "Chat" : "Comms"),
   tab: true,
@@ -1120,10 +1130,12 @@ export default {
   poll: { every: 3000, run: async ctx => { if (await pollDelivered()) ctx.update(); } },
   escape: () => { if (closeQuick()) return; if (C.menu || C.find) { C.menu = null; if (!C.q.trim()) C.find = false; L.ctx && L.ctx.update(); return; } if (!cancelReply() && asideOpen()) closeAside(); },
   enter: () => { C.arrived = true; },
-  leave: () => { clearTimeout(qTimer); C.menu = null; C.find = false; L.newTh = undefined; },
+  leave: () => { clearTimeout(qTimer); C.menu = null; C.find = false; L.newTh = undefined; opened = ""; },
   render(ctx) {
     if (!S.live) return h("div", { class: "page" }, S.failed ? empty("Couldn't read the conversations. It keeps trying.", { kind: "error" }) : empty("Reading…", { kind: "loading" }));
-    return frame(ctx, conversation(ctx.arg));
+    const cv = conversation(ctx.arg);
+    if (cv.thread && cv.thread !== opened) { opened = cv.thread; apiPost("/api/opened", { thread: cv.thread }).catch(() => {}); }   // R107: the open beacon, once per thread open, no UI, no retry
+    return frame(ctx, cv);
   },
 };
 
@@ -1136,10 +1148,20 @@ export function inChat(ctx, id, page) {
 }
 /** One of Chat's own pages (Files and links, made.js) the same way: the rail beside it, its link in the rail's foot lit (review M2: the design's Files has the rail). */
 export function inChatPlace(ctx, place, page) {
-  const pane = h("div", { class: "cm-fpane", "data-key": "place" },
+  const pane = h("div", { class: "cm-fpane", "data-key": "place:" + place },
     h("a", { class: "btn cm-back", href: href("comms"), "data-kind": "icon", "aria-label": "Chats", title: "Chats" }, icon("chevron-left")),
     page);
   return frame(ctx, { arg: "place:" + place, place }, pane);
+}
+/** A page that belongs to Chat (Yours, Inbox, Mail, Needs you) keeps the rail beside it, as Files does, so the content doesn't jump and no blank column is left under New conversation. A function so a view can use it while this module is still loading. */
+export function chatPlace(place, view) {
+  const { render, leave, escape } = view;
+  return { ...view,
+    render: ctx => { const p = render(ctx); if (S.live) return S.app.app ? inChatPlace(ctx, place, p) : p;
+      // Before the data lands: S.app.app is already the look this browser last saw (store.js), so draw the frame's empty rail and the page doesn't start in the wide column and slide right when the rail arrives.
+      return S.app.app ? h("div", { class: "cm", "data-key": "comms", "data-in": "", style: `--cm-w:${sideW}px` }, h("nav", { class: "cm-side", "aria-hidden": "true" }), h("section", { class: "cm-convo", "aria-label": "Conversation" }, h("div", { class: "cm-fpane", "data-key": "place:" + place }, p))) : p; },
+    leave: ctx => { chatLeave(); return leave && leave(ctx); },
+    escape: e => { chatEscape(); return escape && escape(e); } };
 }
 // Functions, not consts: focus.js reads them while this module, which imports it, is still loading.
 export function chatEscape() { if (closeQuick()) return; if (C.menu) { C.menu = null; L.ctx && L.ctx.update(); } }

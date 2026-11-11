@@ -4,6 +4,7 @@
 import { h } from "../core/dom.js";
 import { S, can, jget } from "../core/store.js";
 import { ago, pct, plural, short } from "../core/format.js";
+import { labelCodes } from "../core/model.js";
 import { metrics } from "../templates.js";
 import { heldRoom } from "../core/room.js";
 import { empty, pageHeader, section, seg, staleNote, stats, statusWord, pageNav } from "../ui/kit.js";
@@ -27,6 +28,9 @@ const LINES = [
   ["improvements_landed", "Improvements landed"], ["improvements_judged", "Improvements judged"], ["improvements_overdue", "Judgements overdue", true], ["held", "Held after judgement"], ["reverted", "Reverted", true],
   ["runs", "Runs"], ["fail_pct", "Runs that failed, %", true], ["keeper_rounds", "Keeper rounds"], ["improve_rounds", "Improver rounds"], ["core_commits", "Core commits"], ["spend_usd", "Spent, $", true],
 ];
+
+// The same lines for the app look, where "keeper" and "core" mean nothing and the person is "you".
+const APP_LINE = { person_noticed_first: "Problems you saw first", person_reply_p50_s: "Reply to you, median s", person_reply_p90_s: "Reply to you, p90 s", watchdog_trips: "Stuck-work alarms", keeper_rounds: "Upkeep rounds", improve_rounds: "Self-improvement rounds", core_commits: "Changes to the Hive itself" };
 
 const tone = (t, text, title) => statusWord(t, text, title, "pg-t");
 const when = iso => { const t = Date.parse(iso || ""); return Number.isFinite(t) ? h("span", { title: iso }, ago(t)) : "?"; };
@@ -61,7 +65,7 @@ function tiles(V) {
   ], { card: true });
 }
 
-const PHONE_FOLD = id => (matchMedia("(max-width: 640px)").matches ? { n: 12, id: "progress." + id } : null);   // R48: a phone shows the first dozen, "Show all" for the rest
+const PHONE_FOLD = id => (matchMedia("(max-width: 640px)").matches ? { n: 5, id: "progress." + id } : null);   // R48, R91: a phone shows the first five, "Show all" for the rest
 
 function asksSection(V, update) {
   const rows = V.asks.filter(a => P.asks === "all" || (P.asks === "owed" ? OWED.has(a.status) : a.status === "done"))
@@ -71,7 +75,7 @@ function asksSection(V, update) {
     table({ key: r => r.id, empty: P.asks === "owed" ? "Nothing is owed." : "No asks here.", caption: "Asks", fold: PHONE_FOLD("asks"),
       columns: [
         { label: "Asked", render: r => when(r.when) },
-        { label: "Ask", clip: true, render: r => (app() || !r.evidence ? h("span", { title: r.ask || "" }, r.ask || "")
+        { label: "Ask", clip: true, render: r => (app() || !r.evidence ? h("span", { title: r.ask || "" }, labelCodes(r.ask || ""))
           : h("span", { title: r.ask || "" }, r.ask || "", h("div", { class: "meta", title: r.evidence }, "Evidence: " + short(r.evidence, 80)))) },
         { label: "Status", render: r => tone(r.orphaned ? "bad" : ASK_TONE[r.status], r.orphaned ? (app() ? ASK_TEXT_APP.orphaned : "owner gone") : (app() ? ASK_TEXT_APP : ASK_TEXT)[r.status] || r.status, r.orphaned ? "owned, but its owner is gone and nobody posted" : r.why || null) },
         { label: "Agent", render: r => (r.owner ? agentRef(r.owner) : "–") },
@@ -90,19 +94,19 @@ function outcomesSection(V, update) {
         { label: "Agent", render: r => agentRef(r.name) },
         { label: app() ? "Conversation" : "Thread", render: r => threadRef(r.thread) },
         { label: "Grade", render: r => tone(GRADE_TONE[r.grade], GRADE_TEXT[r.grade] || r.grade) },
-        { label: "Why", clip: true, render: r => h("span", { title: r.why || "" }, r.why || "") },
+        { label: "Why", clip: true, render: r => h("span", { title: r.why || "" }, labelCodes(r.why || "")) },
       ], rows }));
 }
 
 function improvementsSection(V) {
   const rows = [...V.improvements].sort((a, b) => (a.due !== b.due ? (a.due ? -1 : 1) : (a.at || "") > (b.at || "") ? -1 : 1));
   return section({ title: "Improvements", key: "improvements", info: "Every change to the hive itself, with the measure it should move and the day it is judged on. A landed change isn't an improvement until the measure says so.", fold: app(), summary: plural(rows.length, "change") + (rows.some(i => i.due) ? `, ${rows.filter(i => i.due).length} due` : "") },
-    table({ key: r => r.id, empty: "No improvement logged yet.", caption: "Improvements",
+    table({ key: r => r.id, empty: "No improvement logged yet.", caption: "Improvements", fold: PHONE_FOLD("improvements"),
       columns: [
         { label: "Logged", render: r => when(r.at) },
         { label: "By", render: r => (r.by ? agentRef(r.by) : "–") },
-        { label: "What", clip: true, render: r => h("span", { title: r.what || "" }, r.what || "") },
-        { label: "Measure", wrap: true, render: r => short(r.measure || "", 90) },
+        { label: "What", clip: true, render: r => h("span", { title: r.what || "" }, labelCodes(r.what || "")) },
+        { label: "Measure", wrap: true, render: r => short(labelCodes(r.measure || ""), 90) },
         { label: "Status", render: r => tone(r.due ? "warn" : IMP_TONE[r.status], r.due ? "due for judgement" : r.status, r.why || (r.due ? `revisit day ${r.revisit} has passed` : null)) },
         { label: "Judge on", render: r => r.revisit || "–" },
       ], rows }));
@@ -111,14 +115,14 @@ function improvementsSection(V) {
 function scoreboardSection(V) {
   const B = V.scoreboard; if (!B || !B.now) return null;
   const now = B.now, before = B.before || {}, worse = new Set((B.worse || []).map(w => w[1]));
-  const rows = LINES.filter(([k]) => now[k] != null).map(([k, label, lower]) => ({ k, label, lower, now: now[k], before: before[k] }));
+  const rows = LINES.filter(([k]) => now[k] != null).map(([k, label, lower]) => ({ k, label: (app() && APP_LINE[k]) || label, lower, now: now[k], before: before[k] }));
   const change = r => {
     if (r.before == null || r.now === r.before) return r.before == null ? "–" : "same";
     const up = r.now > r.before, good = r.lower ? !up : up;
     return tone(worse.has(r.k) ? "bad" : good ? "good" : "quiet", `${up ? "up" : "down"} from ${num(r.before)}`);
   };
   return section({ title: "Scoreboard", key: "scoreboard", info: `Every measure from \`hive progress\`, the last ${now.since || "day"} against the ${now.since || "day"} before${B.stale ? ", from the last snapshot (the live read failed)" : ""}. Lower is better where it says so.`, fold: app(), summary: plural(rows.length, "measure") + (B.stale ? ", from the last snapshot" : "") },
-    table({ key: r => r.k, caption: "Scoreboard", columns: [
+    table({ key: r => r.k, caption: "Scoreboard", fold: PHONE_FOLD("scoreboard"), columns: [
       { label: "Measure", render: r => (r.lower ? [r.label, h("span", { class: "muted" }, " · lower is better")] : r.label) },
       { label: "Now", num: true, render: r => num(r.now) },
       { label: "Before", num: true, render: r => num(r.before) },

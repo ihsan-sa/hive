@@ -53,6 +53,7 @@
   .kbt .map-tb{padding:var(--s2) var(--s3)}
   .kbt .map-sum{flex-basis:100%;margin-left:0;order:3}
   .kbt-sc{padding:var(--s2)}
+  .kbt-svg{min-width:0}   /* R-1110d-c: on a phone the drawing fits the width, it does not scroll sideways */
   .kbt-rp{position:sticky;bottom:calc(var(--nav-h,0px) + var(--s2))}
 }
 

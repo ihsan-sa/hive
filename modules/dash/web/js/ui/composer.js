@@ -13,7 +13,7 @@ import { S, can, jget, post, poll, loadApp } from "../core/store.js";
 import { simpleOn, hiveName } from "../core/simple.js";
 import { foci, focusById, focusOf, focusName, listed, threadLine } from "../core/foci.js";
 import { go } from "../core/router.js";
-import { isAgent, isRunning, agentCard, agentStatus, threadPeople, partner, displayText, typedText, threadTitle } from "../core/model.js";
+import { isAgent, isRunning, agentCard, agentMono, agentLabel, agentStatus, threadPeople, partner, displayText, typedText, threadTitle, threadState } from "../core/model.js";
 import { short, mdPlain, now } from "../core/format.js";
 import { button, icon, input, statusDot } from "./kit.js";
 import { openAside } from "./aside.js";
@@ -39,7 +39,7 @@ export function draft(th) {
   const k = dkey(th); let d = D.get(k);
   if (!d) {
     let v = {}; try { v = JSON.parse(localStorage.getItem(k) || "{}"); } catch (e) {}
-    d = { th: th || null, text: v.text || "", replyId: v.reply || null, reply: null, quote: v.quote || null, to: v.to || null, name: v.name || "", naming: !!v.name, model: v.model || "", focus: v.focus || "", files: [], err: "" };
+    d = { th: th || null, text: v.text || "", replyId: v.reply || null, reply: null, quote: v.quote || null, to: v.to || null, name: v.name || "", naming: !!v.name, model: v.model || "", effort: v.effort || "", focus: v.focus || "", files: [], err: "" };
     D.set(k, d);
   }
   if (!d.reply && d.replyId && S.byId[d.replyId]) d.reply = S.byId[d.replyId];
@@ -52,7 +52,7 @@ export function hasDraft(th) {
 }
 function keep(d) {
   const k = dkey(d.th), rid = d.reply ? d.reply.id : d.replyId;
-  try { if (d.text || rid || d.quote || d.to || d.name || d.model || d.focus) localStorage.setItem(k, JSON.stringify({ text: d.text, reply: rid, quote: d.quote, to: d.to, name: d.name, model: d.model, focus: d.focus })); else localStorage.removeItem(k); } catch (e) {}
+  try { if (d.text || rid || d.quote || d.to || d.name || d.model || d.effort || d.focus) localStorage.setItem(k, JSON.stringify({ text: d.text, reply: rid, quote: d.quote, to: d.to, name: d.name, model: d.model, effort: d.effort, focus: d.focus })); else localStorage.removeItem(k); } catch (e) {}
 }
 const field = th => document.querySelector(`.cp[data-key="${CSS.escape("cp:" + (th || "(new)"))}"] .cp-t`);
 
@@ -176,7 +176,7 @@ async function deliver(it) {
   it.state = "sending"; it.err = ""; refresh();
   try {
     if (!it.refs) { it.uploading = it.files.length > 0; refresh(); const refs = []; for (const f of it.files) refs.push(await uploadFile(f.file)); it.refs = refs; it.uploading = false; }
-    const res = await post("/api/post", { text: it.wire, thread: it.th || it.name || null, reply_to: it.reply ? it.reply.id : null, files: it.refs, simple: simpleOn(), model: it.model || null, quote: it.quote || null, ...(it.interrupt ? { interrupt: true } : {}) });
+    const res = await post("/api/post", { text: it.wire, thread: it.th || it.name || null, reply_to: it.reply ? it.reply.id : null, files: it.refs, simple: simpleOn(), model: it.model || null, effort: simpleOn() ? null : it.effort || null, quote: it.quote || null, ...(it.interrupt ? { interrupt: true } : {}) });
     it.id = res.id; it.state = "sent"; const thr = it.th;
     if (!it.th && res.thread) { it.th = res.thread; if (it.focus) post("/api/focus", { thread: res.thread, focus: it.focus }).catch(() => {}); go("comms", res.thread); loadApp(); }   // filed under the focus picked in the box; a failure leaves it in Misc, where the title menu can file it
     else if (res.thread && res.thread !== it.th) { it.th = res.thread; it.aside = true; openAside(thr, res.thread, it.text.replace(/^\s*\/btw\s*/i, "")); loadApp(); }   // /btw: it lives in the side thread; stay here
@@ -185,7 +185,7 @@ async function deliver(it) {
   refresh();
 }
 function queue(th, d, r, interrupt = false) {
-  const it = { lid: ++lid, th: th || null, text: d.text, files: d.files, reply: d.reply, quote: d.quote || null, interrupt, to: th ? r.who : null, name: th ? null : d.name.trim() || null, wire: wire(th, d, r), model: d.model || null, focus: th ? null : d.focus || null, state: "sending", err: "", t: now() };
+  const it = { lid: ++lid, th: th || null, text: d.text, files: d.files, reply: d.reply, quote: d.quote || null, interrupt, to: th ? r.who : null, name: th ? null : d.name.trim() || null, wire: wire(th, d, r), model: d.model || null, effort: d.effort || null, focus: th ? null : d.focus || null, state: "sending", err: "", t: now() };
   OUT.push(it); deliver(it);
   return it;
 }
@@ -200,7 +200,7 @@ function send(th) {
   const it = queue(th, d, r, int);
   if (th) delete CP.mode[th];
   if (int) CP.sent[th] = { who: r.who, it, at: Date.now(), seen: 0 };
-  Object.assign(d, { text: "", files: [], reply: null, replyId: null, quote: null, to: null, name: "", naming: false, err: "", model: "", focus: "" }); keep(d);   // the focus resets: a new conversation starts with no focus (the person, 2026-11-08)
+  Object.assign(d, { text: "", files: [], reply: null, replyId: null, quote: null, to: null, name: "", naming: false, err: "", model: "", effort: "", focus: "" }); keep(d);   // the focus resets: a new conversation starts with no focus (the person, 2026-11-08)
   CP.ac = null; CP.menu = false; CP.hist = null; if (!SB.open) SB.say = "";
   const el = field(th); if (el) { el.value = ""; el.focus(); }   // morph leaves a focused field alone, so clear it here
   refresh(); window.dispatchEvent(new CustomEvent("cp:sent", { detail: { th } }));
@@ -448,7 +448,7 @@ function focusPick(d) {
   return h("div", { class: "pop cp-fpop", "data-key": "focus" },
     h("button", { type: "button", class: "dd cp-fbtn", "data-picked": d.focus ? "" : null, "aria-haspopup": "listbox", "aria-expanded": String(open), "aria-label": "Focus: " + label,
       title: "Which focus this conversation is filed under on the home; No focus leaves it in Other", onclick: toggle("focus") },
-      h("span", { class: "cp-lab", "aria-hidden": "true" }, "Focus"), h("span", { class: "cp-fname" }, label), icon("chevron")),
+      h("span", { class: "cp-lab", "aria-hidden": "true" }, "Focus"), icon("folder", { cls: "cp-ficon" }), h("span", { class: "cp-fname" }, label), icon("chevron")),
     open ? h("div", { class: "menu cp-fmenu", role: "listbox", "aria-label": "Focus", "data-side": "bottom-end", "data-w": "wide", "data-key": "fm" },
       menuHead("Filed under on the home", "h"),
       menuItem("No focus", "Leaves it in Other", () => pick(""), { role: "option", key: "f:", sel: !d.focus }),
@@ -707,7 +707,7 @@ const toggle = m => () => { CP.menu = CP.menu === m ? false : m; CP.ac = null; r
 // A menu opens up from the box, or down when there's more room below: at home the box sits near the top and an up menu ran under the app bar (the person, 1108184885d2)
 const toggleRoom = m => (e, b) => { const r = (b || e.target.closest("button")).getBoundingClientRect(); CP.down = CP.down || {}; CP.down[m] = innerHeight - r.bottom > r.top; toggle(m)(); };
 const sideFor = (m, end) => (CP.down && CP.down[m] ? "bottom-" : "top-") + (end ? "end" : "start");
-const mono = n => /^[a-z][0-9a-f]{4,}$/.test(n) ? n.slice(1, 3) : String(n).slice(0, 2);
+const mono = agentMono;
 /** The avatar box: two letters and the status dot for an agent, a glyph for anything else. */
 const av = (n, glyph) => h("span", { class: "av", "data-size": "s", "aria-hidden": "true" }, glyph || mono(n), glyph ? null : statusDot(agentStatus(n).key, { live: S.running.has(n) }));
 const menuHead = (t, key) => h("div", { class: "menu-h", role: "presentation", "data-key": key || "h:" + t }, t);
@@ -729,7 +729,9 @@ const sizeWord = () => SIZES.find(s => s[0] === readScale())[1];
 /** The To button: who this goes to, as an avatar and a name. Why (a reply, a name typed) is in its title. */
 function toChip(th, r) {
   const f = r.to && focusWord(r.to), n = r.who, btw = r.why === "btw";
-  const label = btw ? "a new agent, on the side" : f ? focusName(focusById(f.id)) + (n && n !== "new" ? ` → ${n}` : " → a new agent") : n === "new" ? "a new agent" : n || "…";
+  // The app look names no code (E10): the conversation's own agent is "this chat's agent", another one goes by agentLabel; the code stays in the menu and on hover.
+  const nm = !n || n === "new" || !isAgent(n) || !(S.app && S.app.app) ? n : agentThread(n) === th ? "this chat's agent" : agentLabel(n);
+  const label = btw ? "a new agent, on the side" : f ? focusName(focusById(f.id)) + (n && n !== "new" ? ` → ${nm}` : " → a new agent") : n === "new" ? "a new agent" : nm || "…";
   const why = { reply: "you're replying to it", named: "named in your message", chosen: "you chose it" }[r.why];
   return h("button", { type: "button", class: "cp-to", "aria-haspopup": "listbox", "aria-expanded": String(CP.menu === "to"),
     title: btw ? "A side question: it answers in its own thread, and this one's agent never sees it." : `Who this goes to${why ? ` (${why})` : ""}. Change it here, or type @ and a name.`, onclick: toggle("to") },
@@ -776,6 +778,28 @@ function modelPick(d, r) {
         menuItem(l, s, () => pick(v), { role: "option", key: "m:" + v, sel: cur === v, cls: "cp-mopt" })),
       menuSep("sep"),
       h("p", { class: "cp-menu-n", "data-key": "foot" }, "It holds on that agent from its next run. Typing @opus or @sonnet in the message does the same.")) : null);
+}
+
+// ---- effort: how hard the message's agent thinks, for Claude runs. A run's effort is fixed when it starts, so like the model it holds from the next run ----
+const EFFORTS = [["low", "Low", "Quickest, for small jobs"], ["medium", "Medium", ""], ["high", "High", "Thinks harder, uses more of your plan"], ["xhigh", "Extra high", ""], ["max", "Max", "Thinks hardest, uses the most"]];
+function effortPick(d, r) {
+  const who = r && r.who, known = who && who !== "new" && !MODEL_WORDS.includes(who), live = known && isRunning(who);
+  const row = known && agentCard(who).find(x => x.k === "Effort"), held = (known && S.live && S.live.efforts && S.live.efforts[who]) || "";
+  const m = typedModel(d.text) || d.model || (known ? (S.live && S.live.chosen && S.live.chosen[who]) || "" : (S.app && S.app.default_model) || "");
+  const other = m === "astra" || m.includes(":") || (!typedModel(d.text) && !d.model && row && row.claude === false);
+  if (other && d.effort) d.effort = "";   // never sent for a run that can't use it
+  const cur = d.effort || "", shown = cur || held, open = !other && CP.menu === "effort";
+  const now = row && row.v !== "not seen yet" && row.v !== "not recorded" ? row.v : "";
+  const note = other ? "Effort applies to Claude runs only" : live ? (now ? `${who} is at ${now} effort for this run` : `${who} keeps its effort for this run`) : known ? (held ? `${who} wakes at ${held} effort` : `${who} wakes at Claude's default effort`) : "How hard a new agent thinks";
+  const pick = v => { d.effort = v; keep(d); CP.menu = false; refresh(); };
+  return h("div", { class: "pop cp-mpop cp-epop", "data-key": "effort" },
+    h("button", { type: "button", class: "dd cp-model cp-effort", disabled: other, "data-picked": cur ? "" : null, "data-value": cur, "aria-haspopup": "listbox", "aria-expanded": String(open), "aria-label": "Effort: " + (other ? "Claude runs only" : shown || "as is"), title: note + (other ? "" : ". Pick one to change it."), onclick: (e, b) => { const r = (b || e.target.closest(".cp-effort")).getBoundingClientRect(); CP.mdown = innerHeight - r.bottom > r.top; toggle("effort")(); } }, other || !shown ? "Effort" : "Effort: " + shown),
+    open ? h("div", { class: "menu cp-mmenu", role: "listbox", "aria-label": "Effort", "data-side": CP.mdown ? "bottom-end" : "top-end", "data-w": "wide", "data-key": "em" },
+      menuHead(note, "h"),
+      [["", "As is", held ? `Leave it at ${held}` : "Claude's default"], ...EFFORTS].map(([v, l, s]) =>
+        menuItem(l, s, () => pick(v), { role: "option", key: "e:" + v, sel: cur === v, cls: "cp-mopt" })),
+      menuSep("sep"),
+      h("p", { class: "cp-menu-n", "data-key": "foot" }, live ? `${who} can't change effort mid-run. It holds from its next run. Claude runs only.` : "It holds on that agent from this run on. Claude runs only.")) : null);
 }
 
 /** The lock's click: open the secret box, or say why it can't open in limited mode. */
@@ -878,6 +902,8 @@ function filesRow(th, d) {
 /** Who the message would reach while it works (the agent it goes to, running now), or null. Only then can it interrupt. */
 function busyWho(th, r) { return th && !simpleOn() && r.who && r.who !== "new" && r.why !== "btw" && isAgent(r.who) && isRunning(r.who) ? r.who : null; }
 
+const waitsHere = (th, who) => { const st = threadState(th); return st.key === "asks" && st.who === who; };
+
 /** composer({thread, update, place}): thread null is new work. place: thread | home | start (only changes the wording). */
 export function composer({ thread, update, place = "thread", autofocus, top }) {
   CP.update = update;
@@ -891,14 +917,15 @@ export function composer({ thread, update, place = "thread", autofocus, top }) {
   if (th && CP.mode[th] && !busy) delete CP.mode[th];   // the agent stopped (or the To changed): nothing left to interrupt
   const armed = !!(th && CP.mode[th] === "interrupt");
   const lw = busy || (th && CP.sent[th] && CP.sent[th].who), phase = th && lw ? livePhase(th, lw) : null;
-  const ph = armed ? `Tell ${busy} what to do instead…` : !th ? "Say what you want done" : simpleOn() ? "Message" : r.who === "new" ? "Message a new agent" : r.who ? `Reply to ${r.who}…` : "Message";
+  const ph = armed ? (S.app && S.app.app ? "Tell it what to do instead…" : `Tell ${busy} what to do instead…`) : !th ? "Say what you want done" : simpleOn() ? "Message" : r.who === "new" ? "Message a new agent" : r.who && !(S.app && S.app.app) ? `Reply to ${r.who}…` : "Reply…";   // the app look names no code in the box (E10)
   const sendWord = armed ? "Interrupt" : place === "thread" ? "Send" : "Start";
   return h("div", { class: "cp", "data-key": k, "data-place": place, "data-mode": armed ? "interrupt" : null, "data-fmt": fmtOpen() ? "" : null, ...(th ? {} : dropZone(null)) },  // a thread's composer is inside its conversation's zone
     d.err ? h("p", { class: "cp-err", role: "alert", "data-key": "err" }, d.err) : null,
     wordBoxPanel(th, update),
     top || null,  // the conversation's status strip: a tab on the box's top edge
-    // the strip already names a working agent and carries its Interrupt: the line over the box shows only an interrupt on its way
-    phase || (busy && !(top && top.querySelector(`[data-key="run:${busy}"]`))) ? liveLine(th, lw, phase, armed) : null,
+    // the strip already names a working agent and carries its Interrupt: the line over the box shows only an interrupt on its way.
+    // An agent waiting on the person's answer isn't working: the question above already says so, and there is nothing to interrupt.
+    phase || (busy && !(top && top.querySelector(`[data-key="run:${busy}"]`)) && !waitsHere(th, busy)) ? liveLine(th, lw, phase, armed) : null,
     h("div", { class: "cp-box", "data-key": "box" },
       armed || d.reply || d.quote || d.files.length || (SB.open && can("secrets")) || SB.say || (!th && d.naming) ? h("div", { class: "cp-top", "data-key": "top" },
         armed ? intNote(th, busy) : null,
@@ -948,6 +975,7 @@ export function composer({ thread, update, place = "thread", autofocus, top }) {
             : d.naming ? h("span", { class: "meta cp-new" }, "A new agent starts on this") : null,
           !th && S.app && !simpleOn() ? focusPick(d) : null,
           simpleOn() ? null : modelPick(d, r),
+          simpleOn() ? null : effortPick(d, r),
           sendButton(sendWord, () => send(th), empty, armed ? "Enter interrupts and sends · Esc cancels"
             : busy ? `${sendWord} (Enter). ${busy} reads it after its current step` : `${sendWord} (Enter). Shift+Enter for a new line. Sent messages can't be edited or taken back.`, armed)))));
 }

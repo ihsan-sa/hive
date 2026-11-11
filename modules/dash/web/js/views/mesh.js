@@ -4,7 +4,7 @@
 // lines appear only for the selection. The window picks who appears; replay shows the graph as it was at the cut.
 import { h } from "../core/dom.js";
 import { S, OUTSIDE, SYS, subscribe, getPref, setPref } from "../core/store.js";
-import { agentStatus, isAgent, isRunning, isWarden, modelName, sEnd, threadTitle, tierOf, fileInfo, spendSince } from "../core/model.js";
+import { agentLabel, agentStatus, isAgent, isRunning, isWarden, modelName, sEnd, threadTitle, tierOf, fileInfo, spendSince } from "../core/model.js";
 import { ago, clock, dur, firstSentence, money, now, short, toks, plural, DAY, HOUR, MIN } from "../core/format.js";
 import { agentHref, threadHref } from "../core/router.js";
 import { status, tier } from "../core/status.js";
@@ -117,7 +117,8 @@ const relSet = a => (M.D && M.D.rel.get(a)) || new Set([a]);
 const stop = (e, f) => { e.preventDefault(); e.stopPropagation(); f(); };
 const pickAgent = a => (e => stop(e, () => (e.detail >= 2 && isAgent(a) ? openPanel("agent", a) : select("agent", a))));
 const pickThread = th => (e => stop(e, () => select("thread", th)));
-const idLink = a => h("a", { class: "map-id", href: isAgent(a) ? agentHref(a) : threadHref("@" + a), onclick: pickAgent(a) }, a);
+const idName = a => (a === "person" ? "You" : agentLabel(a));   // §5.3: a hand-off from the person says "You"
+const idLink = a => h("a", { class: "map-id", href: isAgent(a) ? agentHref(a) : threadHref("@" + a), onclick: pickAgent(a), title: a }, idName(a));
 const thLink = th => h("a", { class: "map-th", href: threadHref(th), title: threadTitle(th) !== th ? th : null, onclick: pickThread(th) }, threadTitle(th));
 
 // ---- the graph: Claude Design's hub-and-fan layout (~/designs/mesh-graph/GRAPH-HANDOFF.md) ----
@@ -215,7 +216,9 @@ function viewBox(L) {
   return { x0, y0, x1, y1 };
 }
 // a small graph grows to fill the panel; a big one shrinks to fit whole
-const fitK = (L, b) => Math.max(0.1, Math.min(L.tile ? 1.4 : 1.25, (scroller.clientWidth - 64) / (b.x1 - b.x0), (scroller.clientHeight - 64) / (b.y1 - b.y0)));
+// On a phone a graph is not shrunk below PHONE_MIN_K to fit the panel (R-1110d-a: whole, the 26-agent Lineage drew at 0.26, 3 px labels): it opens at the top left at a readable size and is panned, or zoomed out by hand.
+const PHONE_MIN_K = 0.85;
+const fitK = (L, b) => { const k = Math.max(0.1, Math.min(L.tile ? 1.4 : 1.25, (scroller.clientWidth - 64) / (b.x1 - b.x0), (scroller.clientHeight - 64) / (b.y1 - b.y0))); return scroller.clientWidth < 760 && !L.tile ? Math.max(k, PHONE_MIN_K) : k; };
 function fitView(L) {
   const B = viewBox(L), { x0, y0, x1, y1 } = B;
   if (x0 > x1) { GS.view = { k: 1, x: 0, y: 0, user: false }; return; }
@@ -298,7 +301,7 @@ function nowLine(a) {
   if (!a.running) return h("span", { class: "map-nl", "data-tone": "quiet" }, `${status(a.status).label} ${M.D.replay ? "" : ago(a.track.end)}`.trim());
   return h("span", { class: "map-nl" }, txt || status(a.status).label);
 }
-function agentMeta(a) { return [[a.model, a.cost >= 0.005 ? money(a.cost) : null].filter(Boolean).join(" · "), a.from ? "from " + a.from : null].filter(Boolean).join(" "); }   // no "·" before "from": this line wraps there, and a dot would dangle
+function agentMeta(a) { return [[a.model, a.cost >= 0.005 ? money(a.cost) : null].filter(Boolean).join(" · "), a.from ? "from " + agentLabel(a.from) : null].filter(Boolean).join(" "); }   // no "·" before "from": this line wraps there, and a dot would dangle
 
 function syncGraph(D) {
   const w = scroller.clientWidth || GS.w || 960, phone = w < 760, isFree = M.lay !== "bands", hh = isFree ? scroller.clientHeight : 0;
@@ -351,7 +354,7 @@ function syncGraph(D) {
     const a = n.agent, sel = M.sel && M.sel.kind === "agent" && M.sel.id === a.id;
     const kids = n.ghost
       ? [glyph(n), h("span", { class: "map-l1" }, h("span", { class: "map-gl" }, compact ? a.id : `${a.id} also here · ${plural(n.posts, "post")}`))]
-      : [glyph(n, sel), h("span", { class: "map-l1" }, h("b", { class: "map-aid" }, a.id), h("span", { class: "map-am" }, compact ? (a.cost >= 0.005 ? " " + money(a.cost) : "") : agentMeta(a) ? " " + agentMeta(a) : "")),
+      : [glyph(n, sel), h("span", { class: "map-l1" }, h("b", { class: "map-aid", title: a.id }, agentLabel(a.id)), h("span", { class: "map-am" }, compact ? (a.cost >= 0.005 ? " " + money(a.cost) : "") : agentMeta(a) ? " " + agentMeta(a) : "")),
          lines >= 2 ? h("span", { class: "map-l2" }, nowLine(a)) : null];
     put(seen, "n:" + n.id, "button", "map-ag", x, y,
       { "data-kind": "agent", "data-id": a.id, "data-node": n.id, "data-body": n.ghost ? null : n.id, "data-ghost": n.ghost || null, "data-ended": !a.running || null, "data-sel": sel || null, "data-lit": lit("n:" + n.id),
@@ -402,8 +405,8 @@ function legend(L) {
   legendEl.replaceChildren(...[...[["working", "working"], ["queue", "in queue"], ["quiet", "quiet"], ["stuck", "stuck"], ["failed", "failed"], ["ended", "ended"]].map(([s, l]) => h("span", null, g(s), l)),
     L.nodes.some(n => n.agent && n.agent.warden) ? h("span", null, h("i", { class: "map-g", "data-st": "working", "data-w": "", style: "--r:6px" }), "warden") : null,
     h("span", null, g("ghost"), "also posts here"),
-    ...Object.entries(outs).sort((x, y) => y[1] - x[1]).map(([k, n]) => h("span", null, h("span", { class: "map-chip" }, k + " ", h("b", null, String(n)))), ) , Object.keys(outs).length ? h("span", null, "outside posts") : null,
-    h("span", { class: "map-lnote" }, L.mode === "lineage" ? "Arrow: who started whom. Bar: share of the cost." : "Thicker: more posts. Bar: share of the cost.")].filter(Boolean));
+    ...Object.entries(outs).sort((x, y) => y[1] - x[1]).map(([k, n]) => h("span", null, h("span", { class: "map-chip" }, k + " ", h("b", null, String(n)))), ) , Object.keys(outs).length ? h("span", null, "outside posts") : null].filter(Boolean));
+  legendEl.title = L.mode === "lineage" ? "Arrow: who started whom. Bar: share of the cost." : "Thicker: more posts. Bar: share of the cost.";
 }
 
 // ---- pointer and keys on the graph ----
@@ -574,7 +577,7 @@ function overviewPane(D) {
     h("button", { type: "button", class: "btn map-more-btn", "data-size": "s", "aria-expanded": String(M.showMore), onclick: () => { M.showMore = !M.showMore; M.update(); } }, M.showMore ? "Hide spend, hand-offs and links" : "Spend, hand-offs and links"),
     top.length ? sec("Where the money went", [...top.map(l => h("div", { class: "map-bar", "data-key": l.th }, thLink(l.th), h("em", null, h("i", { style: `width:${(l.cost / maxC * 100).toFixed(1)}%` })), h("span", null, money(l.cost)))),
       others.length ? h("div", { class: "map-bar", "data-key": "others" }, h("span", { class: "map-dim" }, plural(others.length, "other")), h("em"), h("span", null, money(others.reduce((s, l) => s + l.cost, 0)))) : null], true) : null,
-    hand.length ? sec("Hand-offs", [...hand.map(s => row(s.to + s.t, h("div", { class: "map-rt" }, h("div", null, idLink(s.from), " → ", idLink(s.to)), h("small", null, s.th)), h("span", { class: "r" }, clock(s.t)))),
+    hand.length ? sec("Hand-offs", [...hand.map(s => row(s.to + s.t, h("div", { class: "map-rt" }, h("div", null, idLink(s.from), " → ", idLink(s.to)), h("small", null, S.app.app ? threadTitle(s.th) : s.th)), h("span", { class: "r" }, clock(s.t)))),
       D.spawns.length > 6 && !M.allHand ? button(`Show all ${D.spawns.length}`, () => { M.allHand = true; M.update(); }, { size: "s", kind: "quiet" }) : null], true) : null,
     talk.length ? sec("Talk most", talk.map(p => row(p.a + p.b, h("div", { class: "map-rt" }, h("div", null, ...(p.ab && p.ba ? [idLink(p.a), " and ", idLink(p.b)] : p.ab ? [idLink(p.a), " to ", idLink(p.b)] : [idLink(p.b), " to ", idLink(p.a)]))), h("span", { class: "r" }, plural(p.n, "mention")))), true) : null,
   ];

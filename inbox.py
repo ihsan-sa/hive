@@ -185,10 +185,39 @@ def owns_open(name, rec):
     mine = new
     if not mine: return None
     rows = "\n".join(f"{e['id']}: {str(e.get('ask'))[:120]}" for e in mine[:8])
-    try: (STATE / STOP_LOG).open("a").write(json.dumps({"at": time.time(), "name": name, "run": rec["at"], "thread": rec.get("thread"), "event": "owns_open"}) + "\n")
-    except OSError: pass
+    stop_log(name, rec, "owns_open")
     return ("You still own these open asks as you stop. Close each one that is delivered with `hive asks done ID --evidence POSTID`, "
             "mark `hold|person|drop ID --why ...` if it waits or is moot, or leave it if work remains (say so in your thread):\n" + rows)
+
+def stop_log(name, rec, event, **kw):
+    try: (STATE / STOP_LOG).open("a").write(json.dumps({"at": time.time(), "name": name, "run": rec["at"], "thread": rec.get("thread"), "event": event, **kw}) + "\n")
+    except OSError: pass
+
+def person_waits(name, rec):
+    """Once per run, at Stop only: what waits on the person in the threads this run touched, which owns_open skips: about 25 rows on the person's list had stopped waiting and nobody went back (projects/rsi-lab/simuse/foryou-pass.md).
+    Not in end_decision: this reminder warns and must not hold a `hive post --end`, so it keeps its own mark and a held --end leaves it for the real Stop. Whatever goes wrong here, the stop goes on."""
+    if os.environ.get("HIVE_DOOR") or not rec.get("at") or name.startswith("f"): return None   # free agents are kept light
+    mark = STATE / "nudged-person" / name
+    try: lines = mark.read_text().splitlines()
+    except OSError: lines = []
+    if lines and lines[0] == rec["at"]: return None
+    try:
+        seen = json.loads(lines[1]) if len(lines) > 1 else {}
+        sys.path.insert(0, str(Path(__file__).parent)); import asks, waits
+        posts = []
+        for line in BOARD.read_text(errors="replace").splitlines():
+            try: posts.append(json.loads(line))
+            except ValueError: pass
+        items = waits.at_stop(name, rec["at"], rec.get("thread"), posts, asks.ledger(), seen)
+        mark.parent.mkdir(parents=True, exist_ok=True); mark.write_text(rec["at"] + "\n" + json.dumps(seen))
+    except Exception: return None
+    if not items: return None
+    stop_log(name, rec, "person_waits", items=[r["id"] for r in items])
+    return waits.stop_text(items)
+
+def open_at_stop(name, rec):
+    """The Stop prompt's one reminder of what is still open: the agent's own asks, and what waits on the person."""
+    return "\n\n".join(x for x in (owns_open(name, rec), person_waits(name, rec)) if x) or None
 
 STOP_WORDS = ("Done", "Blocked", "Needs the person", "Waiting", "Told to stop", "Next")  # how a stop reason starts, as the last line of the status bar
 STOP_FRESH_S = 900  # a reason older than this was written before the work that came after it
@@ -265,6 +294,55 @@ def bar_line(p):
     line = last if any(last.lower().startswith(w.lower() + ":") for w in STOP_WORDS) else re.split(r"(?<=[.!?])\s", lines[0], maxsplit=1)[0]
     return re.sub(r"@([\w.-]+)", r"\1", line)[:160]
 
+def has_stop_line(text):
+    """Does this post's last line (a trailing "@name" hand-back line aside) start with a stop word? What `hive post --end` requires."""
+    lines = [l.strip().strip("*_ ").strip() for l in str(text).strip().splitlines() if l.strip()]
+    while len(lines) > 1 and re.fullmatch(r"(?:@[\w.-]+[\s,.]*)+", lines[-1]): lines.pop()
+    return bool(lines) and any(lines[-1].lower().startswith(w.lower() + ":") for w in STOP_WORDS)
+
+END_POST_S = 120  # the --end post this tool call just made: newer than this
+END_CMD = re.compile(r"\bh2\s+post\b(?:\\\n|[^\n])*\s--end\b")
+END_FRESH_S = 30  # a delivery this close before the post may be one the model has not read yet: tool calls can run side by side
+
+def post_time(p):
+    at = dt.datetime.fromisoformat(p["at"])
+    return (at if at.tzinfo else at.replace(tzinfo=dt.timezone.utc)).timestamp()
+
+def end_post(name, rec, payload, t=None):
+    """The post this tool call made with `hive post --end`, or None. The command must say so, the agent's newest post of this run must carry the flag, and
+    the post's id must be in this call's output: so "--end" in text or in a grep does nothing, a refused post can't end the run on an older one, and a
+    post that was held once never ends it later. A subagent's post is not the run's."""
+    if os.environ.get("HIVE_DOOR") or not rec.get("at") or payload.get("agent_id") or payload.get("tool_name") != "Bash": return None
+    if not END_CMD.search(str((payload.get("tool_input") or {}).get("command", ""))): return None
+    ps = own_posts(name, rec["at"]) or []
+    if not ps or not ps[-1].get("end") or ps[-1].get("id", "\0") not in str(payload.get("tool_response")): return None
+    try:
+        if (t or time.time()) - post_time(ps[-1]) > END_POST_S: return None
+        if (STATE / "end-held" / name).read_text().strip() == ps[-1]["id"]: return None
+    except (KeyError, ValueError): return None
+    except OSError: pass  # no held post yet
+    return ps[-1]
+
+def delivered_since(name, at):
+    """Was anything delivered to this agent at or after this time? The delivered file's "@<unix>" lines say when."""
+    try: stamps = [int(l[1:]) for l in (STATE / "delivered" / name).read_text().split() if l.startswith("@") and l[1:].isdigit()]
+    except OSError: return False
+    return bool(stamps) and max(stamps) >= at
+
+def end_decision(name, rec, post):
+    """A run asked to end on its post (`hive post --end`, L48 in projects/hive-meta/load.md). Ending from PostToolUse skips the Stop hook, so this is the
+    Stop path run early: the same holds in the same order, the bars at the end. Returns None to end, else what holds it, handed to the run at once
+    (these checks are once-only, so what they say can't wait for a Stop that would no longer repeat it). A post handed over by a tool call beside this
+    one holds it first: ending would throw it away unread, and the starter counts it as delivered. The reply call this saves is 1.46% of run money."""
+    if delivered_since(name, post_time(post) - END_FRESH_S): why = "A post reached you around this one, so read it first."
+    else: why = "\n\n".join(x for x in (unanswered(name, rec) or owns_open(name, rec), stop_gate(name, rec), focus_nudge(name, rec)) if x)
+    if why:
+        d = STATE / "end-held"; d.mkdir(parents=True, exist_ok=True); (d / name).write_text(post["id"])
+        return "Not ended on that post, because:\n\n" + why
+    try: run_end_bars(name, rec)
+    except Exception: pass  # a bar never holds up a stop
+    return None
+
 def run_end_bars(name, rec, t=None):
     """At a run's real end, the status bar of each thread it posted in, from its newest post there, when the run didn't set one itself.
     The bar stays current without a model (the lab, 2026-11-10, post 111002559ce8: the timer spent ~165 agent starts a day on it). A bar this run set by hand is left; so is one another agent set
@@ -315,7 +393,7 @@ def stop_gate(name, rec, t=None):
     try: at = dt.datetime.fromisoformat(rec["at"])
     except ValueError: return None
     t = t or time.time()
-    if any(p.get("model") and name in names(p) for p in own_posts(name, rec["at"]) or []): return None  # hive model: resumes on the other model
+    if any((p.get("model") or p.get("effort")) and name in names(p) for p in own_posts(name, rec["at"]) or []): return None  # hive model, or a restart at another effort: resumes on it
     f = STATE / "stop-asked" / name
     try: k, n = f.read_text().split(); n = int(n) if k == rec["at"] else 0
     except (OSError, ValueError): n = 0
@@ -368,7 +446,7 @@ def focus_nudge(name, rec):
             if run == rec["at"]: results_from = max(since, float(last))
         except (OSError, ValueError): pass
         posts = focus.board_posts()
-        summary = focus.nudge(name, thread, results_from, posts)
+        summary = "\n\n".join(focus.summary_nudges(name, thread, results_from, posts))
         msg = "\n\n".join(x for x in (summary, *(focus.file_nudge(name, th, since, posts) for th in focus.threads_posted(name, thread, since, posts))) if x)
     except Exception: return None
     if not msg: return None
@@ -383,7 +461,7 @@ def stops(since_h=24.0):
     try: rows = [json.loads(l) for l in (STATE / STOP_LOG).read_text().splitlines() if l.strip()]
     except (OSError, ValueError): rows = []
     for r in rows:
-        if r.get("at", 0) < time.time() - since_h * 3600 or r.get("event") == "owns_open": continue  # that one is measure_asks.py's, not the gate's
+        if r.get("at", 0) < time.time() - since_h * 3600 or r.get("event") in ("owns_open", "person_waits"): continue  # those are the reminder's (measure_asks.py), not the gate's
         x = runs.setdefault((r.get("name"), r.get("run")), {"asked": None, "last": None, "why": "", "event": ""})
         if r.get("event") == "asked" and x["asked"] is None: x["asked"] = r["at"]
         x["last"], x["event"] = r["at"], r.get("event")
@@ -506,7 +584,11 @@ def main():
     first = first_line(name, rec) if event != "Stop" else None
     check = model_check(name, rec) if event != "Stop" else None
     if not ps:
-        if event == "Stop" and (why := "\n\n".join(x for x in (unanswered(name, rec) or owns_open(name, rec), stop_gate(name, rec)) if x)):
+        if event == "PostToolUse" and not first and not check and (end := end_post(name, rec, payload)):
+            why = end_decision(name, rec, end)
+            print(json.dumps({"continue": False, "stopReason": "ended on its post (hive post --end)"} if why is None else {"hookSpecificOutput": {"hookEventName": event, "additionalContext": why}}))
+            return
+        if event == "Stop" and (why := "\n\n".join(x for x in (unanswered(name, rec) or open_at_stop(name, rec), stop_gate(name, rec)) if x)):
             print(json.dumps({"decision": "block", "reason": "\n\n".join(x for x in (why, focus_nudge(name, rec)) if x)}))
         elif event == "Stop" and (fn := focus_nudge(name, rec)):
             print(json.dumps({"decision": "block", "reason": fn}))

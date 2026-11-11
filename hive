@@ -141,6 +141,14 @@ def forward(req, files=()):
     if out.get("err"): sys.exit(f"hive: {out['err']}")
     sys.exit(out.get("rc", 0))
 
+def waits_say(fn, *args):
+    """A reminder from waits.py, for a running agent only: whatever goes wrong there, the command has done its work."""
+    if not HASH_NAME.fullmatch(os.environ.get("HIVE_NAME", "")): return None
+    try:
+        import waits
+        return getattr(waits, fn)(*args)
+    except Exception: return None
+
 def remind_asks(pid, thread):
     """The asks this agent owns in the thread it just posted in, up to 3, at the moment it can act on them (hive-meta P1: the Stop block comes after it has delivered). Runs after --done, so an ask just closed is gone. Never holds up a post."""
     me = os.environ.get("HIVE_NAME", "")
@@ -214,6 +222,7 @@ def relay_post(src, thread, to, me, why=None, model=None):
     q = {"id": pid, "at": now(), "from": src.get("from"), "to": ["@" + to], "thread": thread,
          "text": head + ":\n\n" + "\n".join("> " + ln for ln in str(src.get("text", "")).splitlines()), "relay_of": src.get("id"), "relay_by": me}
     if model or src.get("model"): q["model"] = model or src.get("model")
+    if src.get("effort"): q["effort"] = src["effort"]
     if src.get("files"): q["files"] = src["files"]
     with BOARD.open("a") as f:
         fcntl.flock(f, fcntl.LOCK_EX); f.write(json.dumps(q) + "\n")
@@ -247,7 +256,7 @@ def cmd_relay(a):
 def cmd_post(a):
     text = " ".join(a.text) if a.text else sys.stdin.read()
     if os.environ.get("HIVE_BROKER"):
-        forward({"verb": "post", "thread": a.thread, "to": a.to, "model": a.model, "effort": getattr(a, "effort", None), "reply_to": a.reply_to, "done": a.done or [], "tags": getattr(a, "tag", None) or [], "interrupt": bool(getattr(a, "interrupt", False)), "text": text}, a.file or [])
+        forward({"verb": "post", "thread": a.thread, "to": a.to, "model": a.model, "effort": getattr(a, "effort", None), "reply_to": a.reply_to, "done": a.done or [], "tags": getattr(a, "tag", None) or [], "interrupt": bool(getattr(a, "interrupt", False)), "end": bool(getattr(a, "end", False)), "text": text}, a.file or [])
     given = [post_tag(t) for t in getattr(a, "tag", None) or []]   # checked before anything else, so a bad tag costs a re-post and nothing more
     try: c = read_cfg()
     except (OSError, ValueError): c = {}
@@ -278,11 +287,14 @@ def cmd_post(a):
                  "or use the words opus, sonnet, haiku, fable or astra instead. If you only meant to write about it, put it in backticks.")
     # A post naming the person pings their phone: orientation asks for it short, plain, with one `For you:` line. Checked before
     # anything is written, so a slip costs a re-post, not a second ping. Agents' own names only, like the model check above.
+    # (A chat answer has no need of the mention: refused here, agents added "For you: nothing needed" to get it through, projects/everyday E9.)
     if "person" in to and HASH_NAME.fullmatch(os.environ.get("HIVE_NAME", "")) and not a.as_:
         if not FOR_YOU.search(CODE.sub(" ", text)):
             sys.exit("hive post: nothing posted. This post names the person, which pings them, so it needs one line starting `For you:` that says "
                      "in a plain sentence what they should decide, do or answer (for example: For you: OK to buy the $12 domain? Reply yes or no here). "
-                     "Keep the rest short and non-technical. If you didn't mean to ping them, drop the mention or put it in backticks.")
+                     "Keep the rest short and non-technical. If you didn't mean to ping them, drop the mention or put it in backticks. "
+                     "If you are answering what they asked in their own conversation and nothing waits on them, drop the mention: they read your "
+                     "reply there, and a `For you:` line saying nothing is needed is noise.")
         if len(text) > PING_MAX:
             sys.exit(f"hive post: nothing posted. A post that pings the person should be short ({len(text)} chars; keep it under {PING_MAX}): "
                      "put the details in the thread in a post without the mention, then send a few plain lines with the `For you:` line.")
@@ -293,6 +305,10 @@ def cmd_post(a):
          "to": ["@" + n for n in dict.fromkeys(to)], "thread": a.thread or pid, "text": text}
     if a.model: p["model"] = a.model
     if getattr(a, "effort", None): p["effort"] = a.effort
+    if getattr(a, "end", False):  # the run's last act: the hook ends the run here, with no further model call, if nothing holds the stop
+        import inbox
+        if inbox.has_stop_line(text): p["end"] = True
+        else: print("--end ignored: the post's last line must start Done:, Blocked:, Needs the person:, Waiting:, Told to stop: or Next:. The run carries on.", flush=True)
     if a.routed: p["routed"] = True
     # The person's "Interrupt" (the dash's button beside Send): the starter ends the agent's current step when it cleanly can (starter.interrupt_step),
     # and the hook hands it over marked as one. Without it a post waits for the step to end, as always.
@@ -325,6 +341,7 @@ def cmd_post(a):
         if v["kind"] == "focus": print(f"hive post: for focus {n}" + (f", kept by {v['to']}" if v["to"] else ", which nobody keeps yet"), file=sys.stderr)
     # Agents only, and only a warning: the post is on the board already (hive-meta P3).
     if HASH_NAME.fullmatch(os.environ.get("HIVE_NAME", "")) and not a.as_ and foryou and (w := foryou.warning(text)): print(w, file=sys.stderr, flush=True)
+    if not a.as_ and (w := waits_say("on_for_you", text, p["thread"], pid)): print(w, file=sys.stderr, flush=True)
     for k in getattr(a, "done", None) or []:  # the result post closes the ask it delivers: no separate `hive asks done` turn
         subprocess.run([sys.executable, "-I", str(CORE / "asks.py"), "done", k, "--evidence", pid])
     if getattr(a, "done", None):  # a closed ask's durable part goes in the kb, linked back to this post, so the focus page can list it
@@ -753,7 +770,12 @@ def jobs_of(name):
 NAMED = re.compile(r"(?<![\w.`])@([a-z][0-9a-f]{4})\b")
 QUESTION = re.compile(r"\?\s*$")
 
-def open_in(t, ps, asks, ext, last_post=None):
+def h2_agent_names():
+    """Every agent name Hive has started (log.jsonl): `@a7321`, the other Hive's seat, is not one, and can never reply on this board."""
+    try: return set(re.findall(r'"event": "start", "name": "([a-z][0-9a-f]{4})"', (HOME / "log.jsonl").read_text(errors="replace")))
+    except OSError: return None
+
+def open_in(t, ps, asks, ext, last_post=None, known=None):
     """Why a quiet thread is still open, or None if it is only resting (an agent's result with nothing waiting on anyone).
     Open: an open ask or leftover filed for it; the person or the other Hives spoke last; the last agent post asks the person
     or the other Hives; it names an agent that never posted anywhere after it (last_post: {name: latest post time}); or it
@@ -766,7 +788,7 @@ def open_in(t, ps, asks, ext, last_post=None):
     plain = CODE.sub(" ", text)
     if re.search(r"(?<![\w.`])@(person|hives)\b", plain) and ("?" in plain or re.search(r"^\s*For you:", plain, re.M)):  # a result that only pings them is resting: 22 of 23 such threads on 2026-11-04
         return "asked the person" if "@person" in plain else "asked the hives"
-    named = [n for n in dict.fromkeys(NAMED.findall(plain)) if n != frm and (last_post or {}).get(n, "") <= str(last.get("at", ""))]
+    named = [n for n in dict.fromkeys(NAMED.findall(plain)) if n != frm and (known is None or n in known or n in (last_post or {})) and (last_post or {}).get(n, "") <= str(last.get("at", ""))]
     if named: return f"named {' '.join(named)}, no reply"  # not a word anywhere since: one who went on elsewhere saw it (17 of 19 on 2026-11-04), as the watchdog's handoff check reads it
     if QUESTION.search(plain.strip()): return "ends with a question"
     return None
@@ -830,14 +852,14 @@ def cmd_stalled(a):
     asks = {} if a.all else open_asks_by_thread()
     last_post = {}
     for p in posts(): last_post[str(p.get("from", "")).lower()] = max(last_post.get(str(p.get("from", "")).lower(), ""), str(p.get("at", "")))
-    shown = 0
+    known, shown = h2_agent_names(), 0
     for t, ps in sorted(threads.items(), key=lambda kv: kv[1][-1].get("at", "")):
         last = ps[-1]
         if not (within < last.get("at", "") < quiet) or t in ("keeper", "side"): continue
         who = list(dict.fromkeys(str(p.get("from", "")).lower() for p in ps if str(p.get("from", "")).lower() not in ext))
         if not who or any(w in live or w in queued for w in who): continue
         if DONE.search(str(last.get("text", ""))[:300]) and last.get("from") not in ("person", "hives"): continue
-        why = open_in(t, ps, asks, ext, last_post)
+        why = open_in(t, ps, asks, ext, last_post, known)
         if not why and not a.all: continue
         jobs = {w: jobs_of(w) for w in who}
         shown += 1
@@ -1164,8 +1186,10 @@ def cmd_foryou(a):
     if not ids: sys.exit("hive foryou close: give post ids or a --thread with an open For you")
     if foryou and (gap := foryou.close_gap(a.why, ids, [str(r["post"]) for r in rows], [i for i, e in away.asks.ledger().items() if e.get("status") not in away.asks.CLOSED and e.get("kind") != "direction"], {str(p.get("from", "")).lower() for p in posts()})):
         sys.exit(f"hive foryou close: nothing closed. {gap}.")
+    before = waits_say("open_threads")
     away.close_for_yous(ids, os.environ.get("HIVE_NAME", "anon"), a.why.strip())
     print(f"closed {len(ids)} For you line{'s' if len(ids) != 1 else ''}")
+    if w := waits_say("bar_note", before): print(w, file=sys.stderr, flush=True)
 
 def status_leaks(line):
     """What in a status bar's line 1 the home card shouldn't show (R16, person 1107151649a6): a bare agent code, a post id, a rung word, a test count. Warns, never blocks."""
@@ -1248,10 +1272,11 @@ p = sp.add_parser("post", help="hive post [--to @a,@b] [--thread T] [--model son
 p.add_argument("--to"); p.add_argument("--thread"); p.add_argument("--as", dest="as_", help="from name (default $HIVE_NAME)")
 p.add_argument("--routed", action="store_true", help="for the doors: the name was picked by routing, not typed by the person")
 p.add_argument("--model", type=post_model, help="model for any run this post starts: opus, sonnet, haiku, fable, or provider:model for a provider in config.json (openrouter:openai/gpt-5); default: the login's")
-p.add_argument("--effort", choices=EFFORTS, help="effort level for any Claude run this post starts or wakes: low, medium, high, xhigh, max; default: Claude Code's own")
+p.add_argument("--effort", choices=EFFORTS, help="effort level for the Claude runs of the agents this post starts or wakes: low, medium, high, xhigh, max; it holds on them like --model, and an agent already running keeps its effort until that run ends; default: Claude Code's own")
 p.add_argument("--reply-to", dest="reply_to", metavar="ID", help="the post this answers; shown on the board, and a door puts the answer under that message")
 p.add_argument("--file", action="append", help="attach a file (repeatable): copied to ~/files/<post id>/, shown in hive read, Slack and the dashboard")
 p.add_argument("--done", action="append", metavar="ASK", help="mark this ask (k0123) done with this post as its evidence (repeatable)")
+p.add_argument("--end", action="store_true", help="this post is the run's last act: end the run here with no further model call, unless something holds the stop (it needs the stop line as last line; anything after it in the same command still runs)")
 p.add_argument("--tag", action="append", metavar="KIND:ID", help="tag the post (repeatable): focus:site, agent:a5c83, thread:release-train. The thread's focus and the agents and threads named are added by themselves; hive search tag:focus:site finds them")
 p.add_argument("--interrupt", action="store_true", help="for the person: a running agent named gets this now; a long command it is waiting on is stopped when that can be done cleanly")
 p.add_argument("text", nargs="*"); p.set_defaults(f=cmd_post)

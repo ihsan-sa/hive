@@ -3,11 +3,11 @@
 // agentPage(name) is the whole page; the side panel (ui/panel.js) draws the same thing in a narrower container.
 import { h } from "../core/dom.js";
 import { S, OUTSIDE, SYS, jget, loadAgentCosts, post, poll, can } from "../core/store.js";
-import { agentCard, agentSpend, agentState, costsPending, agentStatus, isAgent, isRunning, isWarden, modelName, WARDEN_HINT, sEnd, displayText, agentOn, agentSay } from "../core/model.js";
+import { agentCard, agentSpend, agentState, costsPending, agentStatus, agentLabel, isAgent, isRunning, isWarden, modelName, WARDEN_HINT, sEnd, displayText, agentOn, agentSay } from "../core/model.js";
 import { DAY, HOUR, MIN, ago, dur, firstSentence, mdPlain, money, now, pct, plural, short, stamp, toks } from "../core/format.js";
 import { threadHref } from "../core/router.js";
 import { metrics, cols } from "../templates.js";
-import { button, defs, empty, legend, list, note, pageHeader, rank, section, share, statusLabel, stats, wardenBadge } from "../ui/kit.js";
+import { button, defs, empty, legend, list, note, pageHeader, rank, section, share, statusLabel, stats, wardenBadge, figPending } from "../ui/kit.js";
 import { table } from "../ui/table.js";
 import { agentRef, copyButton, threadRef } from "../ui/refs.js";
 import { message, pollDelivered, fileUrl } from "../ui/message.js";
@@ -137,7 +137,7 @@ function life(n, D) {
     t0, t1, step, bars, lanes, ticks, top: m => money(m),
     label: `${n}'s cost per ${dur(step)} from ${stamp(t0)} to ${stamp(t1)}: ${money(total)} in all`,
     legend: legend([
-      { label: "Cost", text: `per ${dur(step)}${work ? ", split by tokens" : ""}`, tone: "info" },
+      { label: "Cost", text: `per ${dur(step)}${work ? ", split by tokens" : ""}`, tone: "data" },
       { label: "Sessions", text: "grey ended, green running, red failed, amber at a limit", tone: "ended" },
       { label: "Ticks", text: "dark: it wrote, light: it was named", tone: "ink" },
     ]),
@@ -244,6 +244,30 @@ function modelPicker(n, row, L) {
     MP.err ? h("span", { class: "meta", role: "alert" }, " " + MP.err) : null);
 }
 
+// ---- the Effort row as a menu: a run's effort is fixed when it starts, so a pick is for the next run. "Restart now" asks the running agent to end its turn and resume at it ----
+const EFFS = ["low", "medium", "high", "xhigh", "max"];
+const EP = { busy: null, err: null, asked: {} };
+function effortPicker(n, row, L) {
+  const next = ((S.live && S.live.efforts) || {})[n] || "", known = EFFS.includes(row.v), moved = next && next !== row.v, mover = (((S.live && S.live.chosen) || {})[n] || "").includes(":");
+  if (row.claude === false || mover) return h("span", { class: "mpick" }, row.v, h("span", { class: "meta", title: "Only Claude runs take an effort level" }, "Claude runs only"));
+  const send = async (body, ask) => {
+    EP.busy = n; EP.err = null;
+    try { await post("/api/agent-effort", { name: n, ...body }); if (ask) EP.asked[n] = ask; } catch (x) { EP.err = x.message; }
+    EP.busy = null; await poll();
+  };
+  const pick = e => { const v = e.target.value; if (v) send({ effort: v === "default" ? "" : v }); };
+  const asked = L && EP.asked[n] === next;
+  return h("span", { class: "mpick mpick-e" },
+    moved && known ? h("s", { class: "meta", title: "the effort its current or last run used" }, row.v) : row.v,
+    h("select", { class: "cp-model cp-effort", "aria-label": `Effort for ${n}'s next run`, disabled: EP.busy === n,
+      title: L ? `${n} is running. A run's effort is fixed when it starts, so a pick here is for its next run, and stays there.` : `A pick here is for ${n}'s next run, and stays there. Nothing wakes it now.`,
+      onchange: pick },
+      [["", moved ? `→ ${next} next run` : "Set for next run…"], ...EFFS.map(v => [v, v]), ...(next ? [["default", "Claude's default"]] : [])].map(([v, l]) => h("option", { value: v, selected: v === "" }, l))),
+    L && moved ? h("span", { class: "meta mpick-n" }, asked ? `Asked ${n} to restart: it finishes its current step, then comes back in this conversation at ${next}.` : `This run stays at ${known ? row.v : "its effort"} until it ends.`) : null,
+    L && moved && !asked ? button(`Restart now at ${next}`, () => send({ effort: next, restart: true }, next), { size: "s", disabled: EP.busy === n, cls: "mpick-go", title: `Asks ${n} to finish its current step, end its turn and come back in this same conversation at ${next} effort. It is asked to wait for any background work it still needs first.` }) : null,
+    EP.err ? h("span", { class: "meta", role: "alert" }, " " + EP.err) : null);
+}
+
 /** The whole page for one agent. Used by the view and by the panel. */
 export function agentPage(n, host = "page") {
   if (!S.live) return h("div", { class: "page" }, empty("Reading…", { kind: "loading" }));
@@ -256,7 +280,7 @@ export function agentPage(n, host = "page") {
   const last = mine[mine.length - 1], on = agentOn(n), me = on && on.said ? on : null;   // what it says it is on (`hive me`), its own words and date
   // the header says what Now's "Doing now" says: its own summary, not the command it is running (the person, 11081941703e); the step is in the block below
   const say = agentSay(n, L ? L.thread : (S.lastSess[n] || {}).thread), task = L && S.byId[L.post];
-  const askText = task ? firstSentence(displayText(task)) : "", asked = askText ? "Asked by " + (L.from ? (L.from === "person" && S.app.app ? "you" : L.from) + ": " : "") + askText : null;   // Now's fallback, word for word
+  const askText = task ? firstSentence(displayText(task)) : "", asked = askText ? "Asked by " + (L.from ? agentLabel(L.from) + ": " : "") + askText : null;   // Now's fallback, word for word
   return h("div", { class: "agp", "data-key": n, "data-host": host }, metrics({
     header: pageHeader({
       title: h("span", { class: "ref-wrap" }, n, isAgent(n) ? copyButton("@" + n) : null, isWarden(n) ? wardenBadge(WARDEN_HINT) : null),
@@ -264,14 +288,14 @@ export function agentPage(n, host = "page") {
       tone: L && agentState(L).key === "stuck" ? "bad" : null,
       actions: [L ? button("Open conversation", null, { href: threadHref(L.thread), size: "s", title: "Open " + L.thread }) : null, ...agentActions(n), button("All their posts", null, { href: threadHref("@" + n), size: "s" }), L ? killButton(n) : null],
       meta: [st.key === "outside" ? null : statusLabel(st.key, st.label || null, { live: isRunning(n) }), me ? h("span", { class: "ag-onset", title: new Date(me.at).toISOString() }, `said what it is on ${ago(me.at)}${me.before ? ", before this run" : ""}`) : null, ...line],
-      after: [nowBlock(n, L), defs(agentCard(n).map(r => r.k === "Model" && isAgent(n) && !isWarden(n) && can("post") ? { ...r, v: modelPicker(n, r, L) } : r))],
+      after: [nowBlock(n, L), defs(agentCard(n).map(r => !(isAgent(n) && !isWarden(n) && can("post")) ? r : r.k === "Model" ? { ...r, v: modelPicker(n, r, L) } : r.k === "Effort" ? { ...r, v: effortPicker(n, r, L) } : r))],
     }),
     sections: [
       section({ title: "In numbers", note: "this agent's turns, time and cost" }, stats([
-        { label: "Cost", value: !S.usage || costsPending() ? "…" : spend.usd > 0 ? money(spend.usd) : "–", note: costsPending() || !(tk[0] + tk[1] + tk[2] + tk[3]) ? null : `${toks(tk[0] + tk[1] + tk[2] + tk[3])} tokens, ${pct(tk[2], read)} of reads from cache` + (spend.sub ? `; ${money(spend.sub)} in subagents` : ""), title: `At API list prices, from the ${spend.src}.` + (byModel.length > 1 ? " " + byModel.map(([k, v]) => `${modelName(k)} ${money(v)}`).join(", ") + "." : "") + (L ? " A turn under way may not be counted yet." : "") },
+        { label: "Cost", value: !S.usage || costsPending() ? figPending() : spend.usd > 0 ? money(spend.usd) : "–", note: costsPending() || !(tk[0] + tk[1] + tk[2] + tk[3]) ? null : `${toks(tk[0] + tk[1] + tk[2] + tk[3])} tokens, ${pct(tk[2], read)} of reads from cache` + (spend.sub ? `; ${money(spend.sub)} in subagents` : ""), title: `At API list prices, from the ${spend.src}.` + (byModel.length > 1 ? " " + byModel.map(([k, v]) => `${modelName(k)} ${money(v)}`).join(", ") + "." : "") + (L ? " A turn under way may not be counted yet." : "") },
         { label: "Time running", value: ss.length ? dur(D.active) : "none", note: plural(ss.length, "session") + (spend.calls != null ? `, ${spend.calls.toLocaleString()} model calls` : "") },
         { label: "Posts", value: mine.length, note: `named in ${plural(toMe.length, "post")}; ${plural(threads.length, "thread")}` },
-        { label: "Changed", value: w ? plural(w.nfiles, "file") : "…", note: w ? [plural(w.ncommits, "commit"), w.prs.length ? plural(w.prs.length, "PR") : null, started.length ? `started ${plural(D.startedNames.length, "agent")}` : null].filter(Boolean).join(", ") : null },
+        { label: "Changed", value: w ? plural(w.nfiles, "file") : figPending("6ch"), note: w ? [plural(w.ncommits, "commit"), w.prs.length ? plural(w.prs.length, "PR") : null, started.length ? `started ${plural(D.startedNames.length, "agent")}` : null].filter(Boolean).join(", ") : null },
       ])),
       D.life.chart ? section({ title: "Over its life", note: D.life.note }, D.life.chart) : null,
       cols(

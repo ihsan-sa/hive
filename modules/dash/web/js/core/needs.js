@@ -9,9 +9,9 @@
 // faded, a system thread, or one the summary dropped as obsolete until the thread said something newer.
 // /api/needs-you is read once here, every five minutes, for every page that wants it (S.needsYou).
 import { S, jget, emit } from "./store.js";
-import { threadState, isSystemThread, btwParent, displayText } from "./model.js";
+import { threadState, isSystemThread, btwParent, displayText, agentLabel } from "./model.js";
 import { seen } from "./inbox.js";
-import { simpleOn, plainName } from "./simple.js";
+import { simpleOn } from "./simple.js";
 import { firstSentence, mdPlain, now, DAY, MIN } from "./format.js";
 import { faded, archived, meta as tmeta } from "../ui/threadmeta.js";
 import { APP_NAV } from "./nav.js";
@@ -30,7 +30,7 @@ export function loadNeedsYou(force) {
   if (L.p) return L.p;
   if (!force && S.needsYou !== undefined && now() - L.at < NEEDS_EVERY) return Promise.resolve(S.needsYou);
   L.at = now();
-  L.p = jget("/api/needs-you").then(v => normNeeds(v), () => ({ absent: true, failed: true })).then(v => {
+  L.p = Promise.resolve({ absent: true }).then(normNeeds).then(v => {
     L.p = null; L.failed = !!v.failed;
     if (v.failed && S.needsYou && !S.needsYou.absent) return S.needsYou;   // keep the last good read
     const sig = x => JSON.stringify(x && [x.at, x.waiting, x.stale, x.states, x.brief]);
@@ -67,7 +67,7 @@ function liveStates() {
 }
 /** The words for a live entry: who asks or says what, or how the agent stopped. */
 function liveText({ st }) {
-  const who = plainName(st.who || "");
+  const who = (w => w && w[0].toUpperCase() + w.slice(1))(agentLabel(st.who || ""));   // the app look says what the agent is on, not its code
   if (st.key === "asks") return `${who} asks: ${firstSentence(mdPlain(displayText(st.post)))}`;
   if (st.key === "foryou") return `${who}: ${firstSentence(mdPlain(displayText(st.post)))}`;
   return `${who} ${st.label}`;

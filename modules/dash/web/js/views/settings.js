@@ -29,7 +29,14 @@ const CAPTEXT = { read: "Read everything", files: "Read files: notes, modules, s
 
 async function loadCfg(ctx) {
   if (!can("config")) return;
-  try { F.cfg = await jget("/api/config"); F.cfgErr = null; } catch (e) { F.cfg = F.cfg || {}; F.cfgErr = e.message; ctx.update(); return; }   // no defaults on a failed read: a toggle would save them over the real values
+  try { F.cfg = await jget("/api/config"); F.cfgErr = null; F.cfgRead = true; if (F.say.hive && F.say.hive.held) say("hive", ""); }
+  catch (e) {
+    F.cfg = F.cfg || {}; F.cfgErr = e.message;
+    // No defaults on a failed read: a toggle would save them over the real values. Values read earlier this session are real, so the
+    // page keeps showing them (the Hive went away mid-session), and says they couldn't be refreshed.
+    if (!F.cfgRead) { ctx.update(); return; }
+    F.say.hive = { text: `Couldn't refresh the settings (${e.message}). These are from the last read.`, tone: "bad", held: true };
+  }
   F.ed ||= { max: F.cfg.max_sessions ?? "", kpe: F.cfg.keeper_every_s || 10800, au: F.cfg.auto_update !== false, bud: F.cfg.max_budget_usd ?? "", day: F.cfg.max_daily_usd ?? "" };
   F.saved ||= { max: F.ed.max, bud: F.ed.bud, day: F.ed.day };
   ctx.update();
@@ -42,7 +49,7 @@ function watchUpdate(ctx) {
 }
 async function loadUpdate(ctx) {
   if (!can("config")) return;
-  try { F.up = await jget("/api/update"); } catch (e) { return false; }   // an update restarts the app, so a poll can miss
+  try { F.up = await jget("/api/update"); } catch (e) { if (!F.up && F.upLast) { F.up = F.upLast; ctx.update(); } return false; }   // an update restarts the app, so a poll can miss; a failed first read on coming back shows the last one (the Hive went away mid-session)
   ctx.update(); return true;
 }
 /** How often the keeper round runs (keeper_every_s): the person asked to set it, 2026-11-04. */
@@ -107,7 +114,6 @@ async function loadMods(ctx) {
 
 /** Once, at a section's foot: whether its changes need a Save. */
 const foot = text => h("p", { class: "field-h set-foot", "data-key": "saves" }, text);
-const AUTO = "Changes here save as you make them.";
 const check = (label, on, onChange, hint) => h("label", { class: "check" }, h("input", { type: "checkbox", checked: on, onchange: (e, n) => onChange(n.checked) }), h("span", null, label, hint ? h("span", { class: "field-h" }, hint) : null));
 
 // Kept in this browser, like the theme: another person signed in elsewhere keeps theirs.
@@ -226,7 +232,7 @@ function brandBlocks(ctx) {
 
 function hiveSection(ctx) {
   if (!can("config")) return null;
-  if (!F.ed) return section({ title: "Everyday", note: "what you change in a normal week", level: 1 }, F.cfgErr ? [empty(`Couldn't read the settings: ${F.cfgErr}`, { kind: "error" }), button("Try again", () => { F.cfgErr = null; ctx.update(); return loadCfg(ctx); }, { size: "s" })] : empty("Reading…", { kind: "loading" }));
+  if (!F.ed) return section({ title: "Everyday", note: "what you change in a normal week; changes save as you make them", level: 1 }, F.cfgErr ? [empty(`Couldn't read the settings: ${F.cfgErr}`, { kind: "error" }), button("Try again", () => { F.cfgErr = null; ctx.update(); return loadCfg(ctx); }, { size: "s" })] : empty("Reading…", { kind: "loading" }));
   const E = F.ed, up = S.app.setup && S.app.setup.starter, brand = brandBlocks(ctx);
   // Each control saves on its own and sends only its own field; a refusal puts the old value back.
   const save = async (fields, undo, mark) => {
@@ -272,7 +278,7 @@ function hiveSection(ctx) {
   };
   const pg = S.app.settings ? pageData(ctx.update) : null;
   // R7: the controls you reach for in a normal week first, Stop the Hive as the last of them; what you set up once lives in its own section.
-  const everyday = section({ title: "Everyday", note: "what you change in a normal week", level: 1, actions: statusLabel(up ? "working" : "ended", up ? "running" : "not running") },
+  const everyday = section({ title: "Everyday", note: "what you change in a normal week; changes save as you make them", level: 1, actions: statusLabel(up ? "working" : "ended", up ? "running" : "not running") },
     blocks(
       block({ title: "Agents at once", sub: "Empty means no limit. Saves when you leave the box.",
         actions: [savedMark("Agents at once"), input({ type: "number", min: 1, max: 200, placeholder: "no limit", "aria-label": "Agents at once", value: E.max, oninput: (e, n) => { E.max = n.value; }, onchange: saveMax, onfocusout: saveMax })] }),
@@ -282,8 +288,8 @@ function hiveSection(ctx) {
             onchange: e => { const was = E.kpe, v = +e.target.value; E.kpe = v; save({ keeper_every_s: v }, () => { E.kpe = was; }, "Keep work moving"); } },
             paceOpts(E.kpe).map(([v, label]) => h("option", { value: v }, label)))] }),
       block({ title: up ? "Stop the Hive" : "Start the Hive", sub: up ? "Stopping lets agents finish their turn." : "The Hive isn't running.", key: "starter", actions: button(up ? "Stop the Hive…" : "Start the Hive", () => up ? confirm({ title: "Stop the Hive?", body: ["Agents finish their turn, and nothing new starts until you start it again here."], ok: "Stop the Hive", kind: "danger", onOk: starter }) : starter(), { size: "s", kind: up ? "danger" : "primary", busy: isBusy("starter"), title: up ? "Stop the Hive" : "Start the Hive" }) })),
-    msg("starter"), msg("hive"), foot(AUTO));
-  const setOnce = section({ title: "Set once", note: "the name, the model, updates and spending caps", level: 1 },
+    msg("starter"), msg("hive"));
+  const setOnce = section({ title: "Set once", note: "the name, the model, updates and spending caps; changes save as you make them", level: 1 },
     pg ? [h("h3", { class: "set-sub", "data-key": "model-h" }, "Model"), modelPart(ctx.update)] : null,
     blocks(brand[0], brand[1],
       versionBlocks(ctx, save),
@@ -293,7 +299,7 @@ function hiveSection(ctx) {
         actions: [savedMark("Budget per run"), input({ type: "number", min: 0, step: "any", placeholder: "no cap", "aria-label": "Budget per run in dollars", value: E.bud, oninput: (e, n) => { E.bud = n.value; }, onchange: saveBud, onfocusout: saveBud })] }),
       block({ title: "Daily cap", sub: spent + (E.day === "" ? "Empty means no cap. A cap holds new agents from starting once a day's spend reaches it; running ones finish." : `No new agents start once a day's spend reaches $${E.day}; running ones finish. Empty removes the cap.`),
         actions: [savedMark("Daily cap"), input({ type: "number", min: 0, step: "any", placeholder: "no cap", "aria-label": "Daily cap in dollars", value: E.day, oninput: (e, n) => { E.day = n.value; }, onchange: saveDay, onfocusout: saveDay })] })),
-    msg("brand"), msg("hive"), foot(AUTO));
+    msg("brand"), msg("hive"));
   return [everyday, setOnce];
 }
 
@@ -355,8 +361,8 @@ function setupSections(ctx) {
   const pg = pageData(ctx.update);
   if (!can("config")) return [];
   return [
-    section({ title: "Power and sandbox", level: 1, note: "who decides what agents may do, and what holds them to it" }, pg ? [sandboxBroken(pg), powerPart(ctx.update), h("h3", { class: "set-sub", "data-key": "sandbox" }, "Sandbox"), sandboxPart(ctx.update), foot(AUTO)] : reading()),
-    section({ title: "Data sharing", level: 1, note: "what's sent, and whether it is" }, pg ? [sharePart(ctx.update, true), foot(AUTO)] : reading())];
+    section({ title: "Power and sandbox", level: 1, note: "who decides what agents may do, and what holds them to it; changes save as you make them" }, pg ? [sandboxBroken(pg), powerPart(ctx.update), h("h3", { class: "set-sub", "data-key": "sandbox" }, "Sandbox"), sandboxPart(ctx.update)] : reading()),
+    section({ title: "Data sharing", level: 1, note: "what's sent, and whether it is; changes save as you make them" }, pg ? [sharePart(ctx.update, true)] : reading())];
 }
 const secretsSection = ctx => can("secrets") ? section({ title: "Secrets", level: 1, note: "send a token to the Hive; it's never shown back" }, h("div", { class: "stack secrets" }, secretParts(ctx))) : null;
 
@@ -551,7 +557,7 @@ function navDots(ctx) {
 
 export default {
   id: "settings", label: "Settings", about: "accounts, modules, access", tab: () => S.app.app && (can("config") || can("modules") || can("logins")),
-  enter(ctx) { F.keysOpen = null; F.flash = {}; F.ed = null; F.name = null; F.saved = null; F.access = null; F.acctOpen = null; F.accessOpen = null; F.sitesOpen = null; F.say = {}; clearSignin(); forget(); F.up = null; loadCfg(ctx); loadPhone(ctx); loadPush(ctx); loadUpdate(ctx); watchUpdate(ctx); loadMods(ctx); if (S.app.settings && can("config")) loadPage(ctx.update);
+  enter(ctx) { F.keysOpen = null; F.flash = {}; F.ed = null; F.name = null; F.saved = null; F.access = null; F.acctOpen = null; F.accessOpen = null; F.sitesOpen = null; F.say = {}; clearSignin(); forget(); F.upLast = F.up || F.upLast; F.up = null; loadCfg(ctx); loadPhone(ctx); loadPush(ctx); loadUpdate(ctx); watchUpdate(ctx); loadMods(ctx); if (S.app.settings && can("config")) loadPage(ctx.update);
   },
   leave() { clearInterval(upTimer); upTimer = null; forget(); forgetSecrets(); },
   render(ctx) {

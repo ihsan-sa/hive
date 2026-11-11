@@ -228,17 +228,40 @@ def set_status(id_, status, **kw):
     rec = {"id": id_, "at": iso(), "by": me(), "status": status, **{k: v for k, v in kw.items() if v}}
     append(LEDGER, rec); return rec
 
+def remind(fn, *args):
+    """A reminder from waits.py: for a running agent only, and whatever goes wrong there, the command has done its work."""
+    if not os.environ.get("HIVE_NAME"): return None
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent)); import waits
+        return getattr(waits, fn)(*args)
+    except Exception: return None
+
+def noting_bar(f):
+    """Around a command that takes an ask off the person: if that empties its thread and the bar still says it waits, tell the closer."""
+    def run(a):
+        before = remind("open_threads") if ledger().get(a.id, {}).get("status") == "person" else None
+        f(a)
+        if before and (note := remind("bar_note", before)): print(note)
+    return run
+
 NAMES_PERSON = re.compile(r"\bthe person\b|\bfor you\b", re.I)
+@noting_bar
 def cmd_own(a): r = set_status(a.id, "owned", owner=a.owner or me(), evidence=a.evidence, why=a.why); print(f"{a.id}: owned by {r['owner']}")
+@noting_bar
 def cmd_done(a):
     if not a.evidence: sys.exit("No evidence, not done: --evidence POSTID, the post in the thread that says what was delivered.")
     items = ledger(); e = items.get(a.id) or {}; left = getattr(a, "left", None)
     set_status(a.id, "done", evidence=a.evidence, why=a.why); print(f"{a.id}: done ({a.evidence})")
     if left: print(f"+ {split_wait(items, e, left, a.evidence, me())['id']} waits on the person, split from {a.id}")
     elif e.get("status") == "held" and NAMES_PERSON.search(e.get("why") or ""): print(f"Its record still names a step for the person: {e['why'][:200]}\nIf that step is still owed, it needs its own row: hive asks done {a.id} --evidence {a.evidence} --left \"the step\"")   # three finished asks hid behind a record like this (lab, 11100413d290)
+@noting_bar
 def cmd_hold(a): need_why(a); set_status(a.id, "held", why=a.why); print(f"{a.id}: held ({a.why})")
-def cmd_person(a): need_why(a); set_status(a.id, "person", why=a.why); print(f"{a.id}: waits on the person ({a.why})")
+def cmd_person(a):
+    need_why(a); set_status(a.id, "person", why=a.why); print(f"{a.id}: waits on the person ({a.why})")
+    if note := remind("on_person", a.id, a.why): print(note)
+@noting_bar
 def cmd_drop(a): need_why(a); set_status(a.id, "dropped", why=a.why); print(f"{a.id}: dropped ({a.why})")
+@noting_bar
 def cmd_reopen(a):
     need_why(a)
     if ledger().get(a.id, {}).get("status") not in WAITING: sys.exit(f"{a.id} is not held or waiting on the person: `own` it or `done` it")

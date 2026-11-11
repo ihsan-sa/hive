@@ -17,7 +17,7 @@
 .empty[data-kind=loading]{padding:var(--s5) 0}
 
 /* inbox: a dot instead of a "New" chip */
-.inb-new{width:8px;height:8px;padding:0;border-radius:50%;background:var(--accent,var(--info));font-size:0;color:transparent}
+.inb-new{width:8px;height:8px;padding:0;border-radius:50%;background:var(--ink-3);font-size:0;color:transparent}
 
 /* tables and stat tiles: quieter rules and heads */
 .tbl th{font-weight:var(--w-med);color:var(--ink-3);border-bottom:1px solid var(--line)}

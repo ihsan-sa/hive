@@ -140,7 +140,7 @@
 .map-card[data-sel]{border:2px solid var(--accent);background:var(--accent-bg);padding:8px 11px 0}
 .map-card[data-sel] .map-cn{color:var(--accent-ink)}
 .map-cr1,.map-cr2{display:flex;align-items:center;gap:6px;min-width:0}
-.map-cn{flex:1;min-width:0;font:var(--w-bold) 13px/18px var(--mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.map-cn{flex:1;min-width:0;font:var(--w-bold) 13px/18px var(--font);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .map-cc{flex:none;font-size:13px;font-weight:var(--w-bold);font-variant-numeric:tabular-nums}
 .map-cr2{font-size:12px;color:var(--ink-3)}
 .map-cr2>em{flex:none;font-style:normal;font-weight:var(--w-bold);color:var(--bad-ink)}
@@ -177,15 +177,15 @@
 /* the glyph: shape and colour from the status (status.js) */
 .map-g{--r:6px;display:inline-block;flex:none;width:calc(var(--r)*2);height:calc(var(--r)*2);margin:calc(var(--r)*-1) 0 0 calc(var(--r)*-1);border-radius:50%;background:var(--good);box-sizing:border-box;vertical-align:middle}
 .map-legend .map-g,.map-hc .map-g,.map-legend .map-g[data-st],.map-hc .map-g[data-st]{position:relative;margin:0}   /* [data-st] beats the stuck/failed/ended offsets, which sit those shapes 4px high here */
-.map-g[data-st=queue]{border-radius:2px;background:var(--warn)}
+.map-g[data-st=queue]{border-radius:50%;border:2px solid var(--warn);background:linear-gradient(90deg,var(--warn) 50%,var(--surface) 50%)}
 .map-g:is([data-st=quiet],[data-st=limited],[data-st=queued],[data-st=ghost],[data-st=more]){background:var(--surface);border:2px solid var(--quiet)}
 .map-g[data-st=limited]{border-color:var(--warn)}
 .map-g[data-st=queued]{border-color:var(--accent)}
 .map-g:is([data-st=ghost],[data-st=more]){border-width:1.5px;border-color:var(--ink-3)}
 .map-g[data-st=more]{border-style:dashed}
 .map-g[data-st=stuck]{width:calc(var(--r)*2.67);height:calc(var(--r)*2.33);margin:calc(var(--r)*-1.33) 0 0 calc(var(--r)*-1.33);border-radius:0;background:var(--bad);clip-path:polygon(50% 0,100% 100%,0 100%)}
-.map-g:is([data-st=failed],[data-st=killed]){width:calc(var(--r)*2.33);height:calc(var(--r)*2.33);margin:calc(var(--r)*-1.17) 0 0 calc(var(--r)*-1.17);border-radius:0;background:var(--bad);clip-path:polygon(50% 0,100% 50%,50% 100%,0 50%)}
-.map-g[data-st=killed]{background:var(--quiet)}
+.map-g[data-st=failed]{width:calc(var(--r)*2.67);height:calc(var(--r)*2.33);margin:calc(var(--r)*-1.33) 0 0 calc(var(--r)*-1.33);border-radius:0;background:var(--bad);clip-path:polygon(50% 0,100% 100%,0 100%)}
+.map-g[data-st=killed]{width:calc(var(--r)*2);height:calc(var(--r)*2);margin:calc(var(--r)*-1) 0 0 calc(var(--r)*-1);clip-path:none;border-radius:50%;border:2px solid var(--quiet);background:var(--surface)}
 .map-g:is([data-st=ended],[data-st=none]){width:calc(var(--r)*1.33);height:calc(var(--r)*1.33);margin:calc(var(--r)*-.67) 0 0 calc(var(--r)*-.67);background:var(--ended)}
 .map-g[data-w]{box-shadow:0 0 0 2px var(--surface),0 0 0 3.5px var(--warden)}
 .map-g[data-sel]{box-shadow:0 0 0 3px var(--surface),0 0 0 5px var(--accent)}
@@ -224,7 +224,6 @@
 /* the legend */
 .map-legend{flex:none;display:flex;flex-wrap:wrap;align-items:center;gap:4px 16px;padding:var(--s2) var(--s4);border-top:1px solid var(--line);font-size:12px;color:var(--ink-3)}
 .map-legend>span{display:inline-flex;align-items:center;gap:6px}
-.map-legend>.map-lnote{margin-left:auto;text-align:right}
 
 /* a display tile: the graph only */
 .map[data-tile] .map-stage{height:100%;min-height:200px;border:0;border-radius:0}
@@ -232,6 +231,7 @@
 .map[data-tile] .map-legend{display:none}
 @container (max-width:760px){
   .map-stage{height:clamp(380px,70vh,640px)}
+  .map-rp{position:static}   /* R-1110c-c: pinned, it floated over the legend at the foot of the stage */
   .map-cap{padding:var(--s2) var(--s3);white-space:normal;min-height:calc(2lh + 2 * var(--s2))}   /* two lines held, so a longer caption doesn't move the map */
   .map-legend{padding:var(--s2) var(--s3);gap:4px 12px}
 }

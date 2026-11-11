@@ -255,6 +255,7 @@ def post(name, req, blobs):
         if not re.fullmatch(r"[A-Za-z]+:[^\s,]+", str(k)): return {"err": f"--tag {k}: a tag is kind:id"}
         cmd.append(f"--tag={k}")
     if req.get("interrupt") is True: cmd.append("--interrupt")
+    if req.get("end") is True: cmd.append("--end")
     d = None
     try:
         if blobs:  # the bytes came over the socket: the broker never opens a path an agent names

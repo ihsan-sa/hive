@@ -14,6 +14,7 @@ HOME = Path.home()
 STATE = HOME / ".hive"
 AGENT = re.compile(r"^[a-z][0-9a-f]{4,}$")   # agents' names are a letter and hex digits; the Hive's own (starter, keeper...) are words
 PERSON = {"person", "box"}
+WATCHERS = {"rootwarden", "boxwatch"}     # the Hive's own that ask the person for things only they can do: their For you lines count like an agent's
 SELF_THREADS = {"starter", "keeper", "improve", "watchdog", "progress"}
 FOR_YOU = re.compile(r"^\s*(?:[-*>]\s*)?(?:\*\*|__)?for you(?:\*\*|__)?\s*:\s*(?:\*\*|__)?\s*(.+)$", re.I | re.M)
 DECIDED = re.compile(r"^\s*(?:[-*>]\s*)?(?:\*\*|__)?decided(?:\*\*|__)?\s*:\s*(?:\*\*|__)?\s*(.+)$", re.I | re.M)   # as FOR_YOU
@@ -153,7 +154,7 @@ def for_yous(posts, items, links, cut, latest_only=False, dropped=None):
             for r in in_thread.get(th, []):
                 if re.search(rf"@{r['from']}\b", said) or re.search(rf"\b{r['from']}\b", to): r["answered"] = True
             continue
-        if not AGENT.match(who) or th in SELF_THREADS or t < cut: continue
+        if not (AGENT.match(who) or who in WATCHERS) or th in SELF_THREADS or t < cut: continue
         for m in FOR_YOU.finditer(body):
             newest[(th, who)] = p.get("id")
             line = " ".join(m[1].split())

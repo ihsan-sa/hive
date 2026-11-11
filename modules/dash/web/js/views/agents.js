@@ -2,23 +2,23 @@
 // browser, from what the store already holds; the name opens the agent's panel with all its numbers. Cost and tokens: agentSpend.
 import { h } from "../core/dom.js";
 import { S, OUTSIDE, getPref, loadAgentCosts, setPref } from "../core/store.js";
-import { HOUSE_THREADS, agentOn, agentSpend, agentStatus, costsPending, isRunning, loginName, modelName, sEnd, threadTitle } from "../core/model.js";
+import { HOUSE_THREADS, agentOn, agentSpend, agentStatus, costsPending, isRunning, labelCodes, loginName, modelName, sEnd, threadTitle } from "../core/model.js";
 import { ago, dur, money, plural, short, stamp, toks } from "../core/format.js";
 import { metrics } from "../templates.js";
-import { button, empty, waiting, input, pageHeader, seg, stats, toolbar, pageNav } from "../ui/kit.js";
+import { button, empty, waiting, input, pageHeader, seg, stats, toolbar, pageNav, infoButton, figPending } from "../ui/kit.js";
 import { heldRoom } from "../core/room.js";
 import { agentAvatar, agentRef, threadRef } from "../ui/refs.js";
 
 const STATUS = [["all", "Any status"], ["running", "Running"], ["queued", "Waiting to start"], ["ended", "Ended"], ["killed", "Killed"], ["limited", "Stopped at a limit"], ["failed", "Failed"]];
 const BY = [["all", "Started by anyone"], ["person", "Started by a person"], ["agent", "Started by an agent"], ["system", "Started by the Hive"]];
 const SINCE = [["all", "Any time"], ["1", "Last 24 hours"], ["7", "Last 7 days"], ["30", "Last 30 days"]];
-const pageFor = () => (matchMedia("(max-width: 640px)").matches ? 36 : 200), DAY = 864e5;   // R48: a phone opens on a short list; a phone row is about 110 px
+const pageFor = () => (matchMedia("(max-width: 640px)").matches ? 18 : 200), DAY = 864e5;   // R48: a phone opens on a short list; a phone row is about 110 px
 let PAGE = pageFor();   // R73: crossing 640 px changes it (the listener below)
 const L = { q: "", house: false, status: "all", by: "all", since: "all", model: "all", account: "all", limit: PAGE, sig: "", dataKey: "", all: [], shown: [] };
 const pctOf = (a, b) => b ? Math.round(100 * a / b) + "%" : "0%";
 const app = () => !!S.app.app;
-const APP_COLS = ["name", "status", "spawned", "thread", "on", "model", "lastSeen", "usd"];   // the app look starts with these; the developer look has every column on
-const colsOn = () => { const c = getPref("agents.cols", null); return new Set(Array.isArray(c) && c.length ? c : app() ? APP_COLS : COLS.map(x => x.k)); };
+const APP_COLS = ["name", "status", "spawned", "thread", "on", "model", "lastSeen", "usd"];   // the app look starts with these; the developer look has every column but Account and Runs (R-1110c-b: Last active and Cost fit at 1440)
+const colsOn = () => { const c = getPref("agents.cols", null); return new Set(Array.isArray(c) && c.length ? c : app() ? APP_COLS : COLS.map(x => x.k).filter(k => k !== "account" && k !== "runs")); };
 const sort = () => getPref("agents.sort", { k: "spawned", d: -1 });
 
 // Housekeeping runs: the hive looking after itself (status-bar refreshes, keeper and improve rounds, watchdog trips, phone-call starts). Folded by default so the runs on someone's work show; one click brings them back.
@@ -72,14 +72,14 @@ const COLS = [
   { k: "thread", get label() { return S.app.app ? "Conversation" : "Thread"; }, cls: "clip ag-tm", get: a => threadTitle(a.thread) || "", render: a => threadRef(a.thread) },
   // its own words (hive me) with their age; muted when it has said nothing and this is what its last run was asked; "was on" when the words predate the run
   { k: "on", label: "On", cls: "clip ag-on", title: "What it says it is on (hive me), and when it said so; muted: what it was asked, when it has said nothing", get: a => (a.on && a.on.text) || "",
-    render: a => { const m = a.on; return m ? h("span", { class: m.said ? null : "meta", title: m.said ? `${m.before ? "Said in an earlier run, " : "Said "}${ago(m.at)}: ${m.text}` : `Has not said what it is on; ${m.bar ? `this is its thread's status, and its last run was woken by: ` : `its last run was asked: `}${m.asked}` }, m.before ? h("span", { class: "meta" }, "was on: ") : null, m.text, h("span", { class: "meta ag-onage" }, " · " + ago(m.at).replace(/ ago$/, ""))) : h("span", { class: "meta" }, "–"); } },
+    render: a => { const m = a.on; return m ? h("span", { class: m.said ? null : "meta", title: m.said ? `${m.before ? "Said in an earlier run, " : "Said "}${ago(m.at)}: ${m.text}` : `Has not said what it is on; ${m.bar ? `this is its thread's status, and its last run was woken by: ` : `its last run was asked: `}${m.asked}` }, m.before ? h("span", { class: "meta" }, "was on: ") : null, labelCodes(m.text), h("span", { class: "meta ag-onage" }, " · " + ago(m.at).replace(/ ago$/, ""))) : h("span", { class: "meta" }, "–"); } },
   { k: "from", label: "Started by", get: a => a.from || "", render: a => (a.from && S.agents.has(a.from) ? agentRef(a.from) : a.from === "person" && app() ? "you" : a.from || "–") },
   { k: "model", label: "Model", cls: "ag-m", get: a => a.model, render: a => h("span", { title: a.model }, a.model) },
   { k: "account", label: "Account", get: a => a.account, render: a => a.account },
   { k: "runs", label: "Runs", num: 1, title: "How many times it has been started or woken", get: a => a.runs, render: a => a.runs },
   { k: "ran", label: "Ran for", num: 1, title: "Time running, over all its runs", get: a => a.ran, render: a => (a.ran < 6e4 ? "<1m" : dur(a.ran)) },
   { k: "lastSeen", label: "Last active", num: 1, get: a => a.lastSeen, render: a => (isRunning(a.name) ? "now" : ago(a.lastSeen)) },
-  { k: "usd", label: "Cost", num: 1, title: "At API list prices; nobody is billed this", get: a => a.usd, render: a => costsPending() ? h("span", { class: "muted", title: "Reading the transcripts" }, "…") : !(a.usd > 0 || a.tok > 0) ? "–" : h("span", { title: `From the ${a.spend.src}` + (a.spend.sub ? `; ${money(a.spend.sub)} in subagents` : "") }, money(a.usd)) },
+  { k: "usd", label: "Cost", num: 1, title: "At API list prices; nobody is billed this", get: a => a.usd, render: a => costsPending() ? figPending("3.5ch") : !(a.usd > 0 || a.tok > 0) ? "–" : h("span", { title: `From the ${a.spend.src}` + (a.spend.sub ? `; ${money(a.spend.sub)} in subagents` : "") }, money(a.usd)) },
   { k: "tok", label: "Tokens", num: 1, title: "Input, output and cache together", get: a => a.tok, render: a => !COST_DATA ? "–" : h("span", { title: `${toks(a.spend.t[0])} input, ${toks(a.spend.t[1])} output, ${toks(a.spend.t[2])} cache read, ${toks(a.spend.t[3])} cache write` }, toks(a.tok)) },
   { k: "calls", label: "Calls", num: 1, title: "Model calls, subagents included", get: a => a.calls ?? -1, render: a => (a.calls == null ? "–" : a.calls.toLocaleString()) },
   { k: "tools", label: "Tools", num: 1, title: "Tool calls in its session logs", get: a => a.tools, render: a => a.tools.toLocaleString() },
@@ -133,8 +133,8 @@ export default {
     const costNote = costs && costs.at ? `Cost and tokens from the transcripts, read ${ago(costs.at * 1e3)}${costs.refreshing ? ", reading again" : ""}. API list prices; nobody is billed this. Tokens add up every model call's input, output and cache, so context read again on each call counts each time.` : costsPending() ? "Reading the transcripts for cost and tokens." : costs && costs.refreshing ? "Reading the transcripts for exact costs; until then these come from the session logs." : "Cost and tokens from the session logs.";
     const totals = stats([
         { label: narrowed ? "Agents shown" : "Agents", value: found.length.toLocaleString(), note: `${found.filter(a => a.status === "running").length} running` },
-        { label: "Total cost", value: costsPending() ? "…" : COST_DATA ? money(sum(a => a.usd)) : "–", note: found.length && COST_DATA && !costsPending() ? `${money(sum(a => a.usd) / found.length)} per agent` : null },
-        { label: "Tokens", value: costsPending() ? "…" : COST_DATA ? toks(sum(a => a.tok)) : "–", note: !COST_DATA || costsPending() ? null : `${pctOf(sum(a => a.spend.t[2]), sum(a => a.tok))} re-read from cache; ${toks(sum(a => a.spend.t[1]))} written` },
+        { label: "Total cost", value: all.length && costsPending() ? figPending() : COST_DATA ? money(sum(a => a.usd)) : "–", note: found.length && COST_DATA && !costsPending() ? `${money(sum(a => a.usd) / found.length)} per agent` : null },
+        { label: "Tokens", value: all.length && costsPending() ? figPending() : COST_DATA ? toks(sum(a => a.tok)) : "–", note: !COST_DATA || costsPending() ? null : `${pctOf(sum(a => a.spend.t[2]), sum(a => a.tok))} re-read from cache; ${toks(sum(a => a.spend.t[1]))} written` },
         { label: "Agent time", value: found.length ? dur(sum(a => a.ran)) : "–", note: found.length ? `added up over ${plural(sum(a => a.runs), "run")}, in ${dur(Date.now() - Math.min(...found.map(a => a.when || Date.now())))}` : null },
     ]);
     // Filters and Columns open into a full-width row under the controls. The row is the fold's sibling, not its body: a body would widen the fold and throw its button to a new line.
@@ -157,11 +157,11 @@ export default {
         stack ? picker("Sort", s.k, cols.map(c => [c.k, "Sort: " + c.label]), k => { const d = COLS.find(x => x.k === k).num || k === "spawned" ? -1 : 1; setPref("agents.sort", { k, d }); L.limit = PAGE; ctx.update(); }) : null,   // the column headers sort on a desktop; a phone has no header row
         // The count and its button are one row on a phone: one digit more once the whole log is in wrapped them apart and pushed the list 48 px (R67).
         h("div", { class: "ag-cnt", "data-key": "count" }, h("span", { class: "meta" }, narrowed ? `${found.length} of ${phone && nHouse ? all.length : plural(all.length, "agent")}` : plural(all.length, "agent")),
-        nHouse > 0 || L.house ? button(L.house ? "Hide housekeeping" : `+${nHouse} housekeeping`, () => { L.house = !L.house; ctx.update(); }, { kind: "quiet", size: "s", title: "Housekeeping runs: status-bar refreshes, keeper and improve rounds, watchdog trips and phone-call starts" }) : null),
+        nHouse > 0 || L.house ? button(L.house ? "Hide housekeeping" : `+${nHouse} housekeeping`, () => { L.house = !L.house; ctx.update(); }, { kind: "quiet", size: "s", title: "Housekeeping runs: status-bar refreshes, keeper and improve rounds, watchdog trips and phone-call starts" }) : null,
+          !phone && costNote ? infoButton("About these numbers", costNote, { size: "s" }) : null),
         // On a phone the note and the tiles fold into the controls, so the page opens on the agents; the fold still says the two totals people look for.
         phone ? h("details", { class: "now-more ag-f ag-sum", open: L.sOpen || null, ontoggle: (e, n) => { if (e.target === n) L.sOpen = n.open; } },
-          h("summary", null, `Totals: ${found.filter(a => a.status === "running").length} running${COST_DATA ? ", " + money(sum(a => a.usd)) : ""}`), totals, h("p", { class: "ph-meta" }, costNote)) : null),
-        meta: phone ? null : [costNote] }),
+          h("summary", null, `Totals: ${found.filter(a => a.status === "running").length} running${COST_DATA ? ", " + money(sum(a => a.usd)) : ""}`), totals, h("p", { class: "ph-meta" }, costNote)) : null) }),
       sections: [
         phone ? null : totals,
         // grid rows, not <table> (HANDOFF "Shared DOM changes" 6, R7 step 6): one --cols for every row, so the columns line up

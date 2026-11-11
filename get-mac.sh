@@ -177,7 +177,8 @@ case "${1:-}" in
     # The VM can be up a while before the app answers, so wait for it rather than open a page that says it can't connect.
     base=$(printf '%s' "$a" | sed 's|^\(http://[^/]*\)/.*|\1/|'); n=0
     until curl -s -o /dev/null --max-time 2 "$base" || [ "$n" -ge 45 ]; do n=$((n + 1)); sleep 2; done
-    open "$a"
+    # --print: only say the address (the desktop app shows it in its own window), as hive open --print does on Linux and Windows.
+    if [ "${2:-}" = --print ]; then printf '%s\n' "$a"; else open "$a"; fi
     ;;
   *) up; in_vm hive "$@" ;;
 esac
@@ -321,7 +322,21 @@ main() {
   agent_plist > "$HOME/Library/LaunchAgents/$AGENT.plist"
   make_app
 
-  address=$("$D/bin/hive" web 2>/dev/null | tr -d '\r' | sed -n 's/.*\(http:[^ ]*\).*/\1/p' | head -n 1)
+  # The web app can still be starting right after the install (the rig hit "no address" here), so ask again for a minute.
+  address=""; n=0
+  while [ -z "$address" ] && [ "$n" -lt 20 ]; do
+    out=$("$D/bin/hive" web 2>&1 | tr -d '\r' || true)
+    address=$(printf '%s\n' "$out" | sed -n 's/.*\(http:[^ ]*\).*/\1/p' | head -n 1)
+    [ -n "$address" ] || { n=$((n + 1)); sleep 3; }
+    # The VM's ssh can stay down after a heavy install ("Connection refused", rig run 42885823260). A restart of the
+    # VM brings sshd back, and the install is on its disk, so do that once, after 30 s of it.
+    if [ -z "$address" ] && [ "$n" -eq 10 ] && printf '%s' "$out" | grep -q 'Connection refused'; then
+      echo "The VM isn't answering. Restarting it..." >&2
+      "$L" stop "$VM" >/dev/null 2>&1 || true
+      "$L" start --tty=false "$VM" >&2 || true
+    fi
+  done
+  [ -n "$address" ] || echo "hive web said: $out" >&2
   [ -n "$address" ] || die "the Hive installed, but it gave no address. Try, in a new Terminal window: hive web"
   echo
   echo "The Hive is running in its own Linux VM, which can't see your files."
@@ -332,7 +347,8 @@ main() {
     http://localhost*|http://127.0.0.1*)
       # Lima forwards the port a moment after the app listens. If it never does, something on the Mac holds that port.
       n=0; while [ "$n" -lt 30 ] && ! curl -fsS -o /dev/null -m 2 "${address%%#*}" 2>/dev/null; do n=$((n + 1)); sleep 2; done
-      if [ "$n" -lt 30 ]; then open "$address" || true
+      # The desktop app (HIVE_FROM_APP=1) shows the Hive in its own window, so no browser tab beside it.
+      if [ "$n" -lt 30 ]; then [ "${HIVE_FROM_APP:-}" = 1 ] || open "$address" || true
       else echo "That address doesn't answer on this Mac yet. If it stays that way, another program may be using its port."; fi
       ;;
   esac

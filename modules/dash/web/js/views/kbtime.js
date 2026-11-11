@@ -8,7 +8,7 @@ import { h, s } from "../core/dom.js";
 import { can, jget } from "../core/store.js";
 import { plural, stamp } from "../core/format.js";
 import { href } from "../core/router.js";
-import { button, empty, icon, seg, needFull } from "../ui/kit.js";
+import { button, empty, icon, seg, needFull, waiting } from "../ui/kit.js";
 
 const PLAY_MS = 12000, PITCH = 30, WIDTH = 1000;
 const K = { D: null, L: null, failed: "", at: 0, cut: null, playing: false, sel: null, how: false, show: "all", update: () => {} };
@@ -223,7 +223,7 @@ export default {
   render(ctx) {
     K.update = ctx.update;
     if (!can("files")) return needFull("Seeing the knowledge base over time");
-    if (!K.D) return h("div", { class: "page" }, K.failed ? empty("Couldn't load the history: " + K.failed, { kind: "error" }) : empty("Reading the backup history…", { kind: "loading" }));
+    if (!K.D) return h("div", { class: "page" }, waiting(K.failed, "Reading the backup history…", "the history"));
     const D = K.D;
     if (!D.notes.length) return empty("No backup history of ~/kb yet.", { kind: "page" });
     if (K.sel && !(K.sel.kind === "note" ? D.by.has(K.sel.id) : D.links[K.sel.i])) K.sel = null;

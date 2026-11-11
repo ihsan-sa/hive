@@ -7,7 +7,7 @@ import { canFeedback, openFeedback, FEEDBACK_KEY } from "./feedback.js";
 import { h, s } from "../core/dom.js";
 import { S, can, needsAccount, poll } from "../core/store.js";
 import { simpleOn, setSimple } from "../core/simple.js";
-import { accountUse, activeUse, fresh7, inUse, runOut, runway, totalUse } from "../core/model.js";
+import { accountUse, activeUse, fresh7, inUse, runOut, runway, totalUse, limitStop } from "../core/model.js";
 import { ago, clock, dur, lostText, now, plural, stamp } from "../core/format.js";
 import { href } from "../core/router.js";
 import { layout, moreGroups, rowItems } from "../core/nav.js";
@@ -19,14 +19,14 @@ import { startCall, phoneReady, inCall } from "./phone.js";
 import { D as deck, supported as deckSupported } from "../deck/control.js";
 
 export function statusBits() {
-  const n = S.running.size, all = (S.usage && S.usage.logins) || (S.live && S.live.logins) || [], us = all.filter(l => inUse(l, S.usage)), hold = S.live && S.live.limit_until;
+  const n = S.running.size, all = (S.usage && S.usage.logins) || (S.live && S.live.logins) || [], us = all.filter(l => inUse(l, S.usage)), hold = limitStop();
   return [
     S.failed ? h("span", { "data-tone": "bad", style: "color:var(--ci)" }, statusDot("stuck"), lostText(S.fresh)) : null,
     // before the first answer the count is not known: no chip, rather than "0 running"
     !S.live ? null : h("span", { title: "agents running now", "data-tone": n ? "good" : null }, statusDot("working", { live: n > 0 }), h("b", null, String(n)), " running"),
     us.length ? loginMarks()
-      : all.length ? h("span", { "data-tone": "bad", style: "color:var(--ci)" }, "no account has room") : null,
-    hold ? h("span", { "data-tone": "bad", style: "color:var(--ci)" }, "starts held until " + clock(hold * 1e3)) : null,
+      : all.length && hold ? h("span", { "data-tone": "bad", style: "color:var(--ci)" }, "no account has room") : null,
+    hold && hold.until ? h("span", { "data-tone": "bad", style: "color:var(--ci)" }, "starts held until " + clock(hold.until)) : null,
     ...us.map(l => { const w = l.limits && l.limits.five_hour; return w && w.r * 1e3 > now() ? h("span", { "data-tone": w.u >= 0.9 ? "bad" : null, style: w.u >= 0.9 ? "color:var(--ci)" : null }, "5-hour " + l.name + " " + Math.round(w.u * 100) + "%") : null; }),
   ];
 }
@@ -62,12 +62,7 @@ export function signInWords() {
   return n ? `Sign in again to Claude: ${n === 1 ? "1 agent is" : n + " agents are"} waiting.` : "Sign in again to Claude. New agents wait until you do.";
 }
 export function hiveStopped() {
-  const all = logins(), hold = S.live && S.live.limit_until;
-  if (hold && !(S.app.setup && S.app.setup.other)) return { why: "limit", until: hold * 1e3 };
-  if (all.length && !all.some(l => inUse(l, S.usage)) && !(S.app.setup && S.app.setup.other)) {  // with a Codex login or a key, agents still start
-    const r = all.filter(l => !l.paused).map(l => runway(l, S.usage).toReset).filter(x => x != null).sort((a, b) => a - b)[0];
-    return { why: all.every(l => l.paused) ? "paused" : "limit", until: r != null ? now() + r : null };
-  }
+  const lim = limitStop(); if (lim) return lim;
   if (S.app.app && S.app.setup && S.app.setup.starter === false && S.posts.length) return { why: "off" };
   return null;
 }
@@ -96,7 +91,7 @@ function appBits() {
   const ro = act && runOut(S.usage || { logins: all }), out = ro && ro.at != null ? ro.at : null;
   return [
     callBtn(),
-    stop ? goPill(stop.why === "off" ? "settings" : "usage", stop.why === "off" ? "Settings" : "Usage", { "data-tone": "bad", title: stop.why === "off" ? "The Hive isn't running" : "Every account is past its usage line" }, statusDot("limited"), stop.why === "off" ? "Not running" : "Stopped")
+    stop ? goPill(stop.why === "off" ? "settings" : "usage", stop.why === "off" ? "Settings" : "Usage", { "data-tone": "bad", title: stop.why === "off" ? "The Hive isn't running" : stop.own ? "Every account is past its usage line: agents wait, your own messages still start one" : "Every account is past its usage line" }, statusDot("limited"), stop.why === "off" ? "Not running" : "Stopped")
       : S.failed && !S.fresh ? goPill("now", "Agents: what each is doing", { title: "Can't reach the Hive, so this can't say what agents are doing: open Agents" }, statusDot("quiet"), "Not connected")
       : goPill("now", "Agents: what each is doing", { title: "agents running now: open Agents", "data-tone": n ? "good" : null }, statusDot("working", { live: n > 0 }), n ? h("span", null, h("b", null, String(n)), n === 1 ? " agent working" : " agents working") : "No agents working"),
     // What's left on the accounts the hive can run on now (the person, 2026-11-04), weighted by plan; and the 5-hour window when one is open.
@@ -127,10 +122,10 @@ function band(current) {
   const st = hiveStopped(); if (!st) return null;
   if (st.why === "off" && current === "start" && S.app.setup && S.app.setup.starter === false) return null;   // Start says this itself, with the button that fixes it
   if (simpleOn()) return h("div", { class: "band banner", role: "status", "data-tone": "bad", "data-key": "band" }, statusDot(st.why === "off" ? "failed" : "limited"),
-    h("span", null, st.why === "off" ? "Your Hive isn't running right now, so it won't answer yet." : "Your Hive has used up its allowance for now and is taking a break." + (st.until ? ` It comes back ${stamp(st.until)}. Nothing is lost.` : " Nothing is lost.")));
+    h("span", null, st.why === "off" ? "Your Hive isn't running right now, so it won't answer yet." : "Your Hive has used up its allowance for now and is taking a break." + (st.own ? " What you send still gets an answer." : "") + (st.until ? ` It comes back ${stamp(st.until)}. Nothing is lost.` : " Nothing is lost.")));
   const text = st.why === "off" ? "The Hive isn't running, so nothing you send starts an agent."
     : st.why === "paused" ? "Every Claude account is paused, so no new agents start. Running ones finish their turn."
-    : "The Hive has stopped starting agents: every Claude account is past its usage line. Running ones finish their turn." + (st.until ? ` It starts again ${stamp(st.until)}.` : "");
+    : (st.own ? "Agents have stopped starting on their own: every Claude account is past its usage line. Your own messages still start one, and running ones finish their turn." : "The Hive has stopped starting agents: every Claude account is past its usage line. Running ones finish their turn.") + (st.until ? ` Agents start again ${stamp(st.until)}.` : "");
   return h("div", { class: "band banner", role: "status", "data-tone": "bad", "data-key": "band" }, statusDot(st.why === "off" ? "failed" : "limited"), h("span", null, text),
     (to => current === to ? null : button(to === "settings" ? "Settings" : "Usage", null, { href: href(to), size: "s", kind: "quiet" }))(st.why === "off" ? "settings" : "usage"));   // no link to the page you're on
 }

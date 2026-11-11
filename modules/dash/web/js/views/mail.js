@@ -5,13 +5,14 @@ import { ago } from "../core/format.js";
 import { empty, list, pageHeader, needFull } from "../ui/kit.js";
 import { icon } from "../ui/icons.js";
 import { markMailSeen } from "../core/mailnew.js";
+import { chatPlace } from "./comms.js";
 
 const M = { data: null, open: null };
 const kb = n => n == null ? "" : n < 1024 ? n + " B" : Math.round(n / 1024) + " KB";
 
 const load = async ctx => { try { M.data = await jget("/api/mail"); markMailSeen(M.data.items); } catch (e) { M.data = { items: [], ...M.data, error: true }; } ctx.update(); };   // a failed refresh keeps what was already read
 
-export default {
+export default chatPlace("mail", {
   id: "mail", label: "Mail", tab: () => can("files"),
   poll: { every: 30000, run: load },
   render(ctx) {
@@ -34,6 +35,6 @@ export default {
     return h("div", { class: "page", "data-width": "narrow", "data-key": "mail" },
       pageHeader({ title: "Mail", lead: "Your mail, copied read-only. Plain text only; links aren't opened and attachments aren't brought across." + (d.checked ? " Checked " + ago(Date.parse(d.checked)) + "." : "") }),
       d.error ? h("p", { class: "fmsg", "data-tone": "bad", role: "status" }, rows.length ? "Couldn't check for new mail. This is what was there before; it tries again in 30 seconds." : "Couldn't read your mail. It tries again in 30 seconds.") : null,
-      d.error && !rows.length ? null : list(rows, { empty: "No mail yet." }));
+      d.error && !rows.length ? null : list(rows, { empty: d.unset ? "Mail isn't connected on this machine." : "No mail yet." }));
   },
-};
+});

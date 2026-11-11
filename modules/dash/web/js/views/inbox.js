@@ -3,11 +3,12 @@
 import { h } from "../core/dom.js";
 import { S, can } from "../core/store.js";
 import { IB, pollInbox, markRead, onInbox } from "../core/inbox.js";
-import { displayText, threadTitle } from "../core/model.js";
+import { agentLabel, displayText, threadTitle } from "../core/model.js";
 import { ago, firstSentence, plural } from "../core/format.js";
 import { threadHref } from "../core/router.js";
 import { form } from "../templates.js";
 import { button, empty, list, pageHeader, section } from "../ui/kit.js";
+import { chatPlace } from "./comms.js";
 
 let update = null;
 onInbox(() => update && update());
@@ -26,7 +27,7 @@ function folded(items) {   // items come newest first: a notice joins the row of
   return out;
 }
 
-export default {
+export default chatPlace("inbox", {
   id: "inbox", label: "Inbox", about: "every message agents sent you",
   tab: () => S.app.app && can("read"),
   badge: () => (!S.app.app && can("read") && IB.unread ? String(IB.unread) : null),
@@ -45,10 +46,10 @@ export default {
         key: p.id, href: threadHref(p.thread),
         onClick: w && unread.length ? () => mark({ ids: unread }) : null,
         lead: unread.length ? h("span", { class: "inb-new", "data-tone": "info" }, "New") : null,
-        title: threadTitle(p.thread), sub: p.from,
+        title: threadTitle(p.thread), sub: agentLabel(p.from),
         meta: [ago(Date.parse(p.at)), all.length > 1 ? `${all.length} like this` : null, p.answered ? "you've replied since" : null, p.files ? plural(p.files, "file") : null].filter(Boolean).join(" · "),
         text: firstSentence(displayText({ text: body(p) })),
-      }; }), { empty: "Nothing yet. When an agent needs you or finishes something you asked for, it shows here." }))],
+      }; }), { limit: innerWidth < 640 ? IB.shown || 12 : undefined, onMore: () => { IB.shown = (IB.shown || 12) + 20; update && update(); }, empty: "Nothing yet. When an agent needs you or finishes something you asked for, it shows here." }))],
     });
   },
-};
+});
