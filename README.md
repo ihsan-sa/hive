@@ -134,7 +134,7 @@ Everything beyond the core is an optional extra (a module), the app included. Ag
 | Slack (`slack-door`) | Send jobs and get answers back from Slack, with each conversation mirrored to a channel. So far run only against a fake Slack. | comes with the Hive, off until set up |
 | Phone calls (`phone`, `voice`) | Call the hive, or one agent, and talk. It can ring you when it needs a decision. | set up by the main install; `hive module remove phone voice` takes them out |
 | Machine management (`server`) | On a small server: checks, backups, memory limits and the admin lines printed for you to run. Nothing runs as root unless you type it. | added on servers |
-| Circuit board design (`hwde`) | KiCad, from a written brief to files ready to order, with electrical and design-rule checks and a 3D render. | on demand, needs KiCad |
+| Circuit board design (`pcb-flow`) | KiCad, from a written brief to files ready to order, with electrical and design-rule checks and a 3D render. | on demand, needs KiCad |
 | Chip design (`chip-flow`) | Open-tool chip flows: simulation, formal proofs, timing, layout and the checks between them. | on demand, needs big tools |
 | Enclosures and firmware (`mech`, `fw`) | 3D-printable enclosures fitted to a board, and ESP32 firmware with tests and simulated boots. | on demand |
 

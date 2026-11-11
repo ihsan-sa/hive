@@ -28,7 +28,7 @@ async function load(ctx) {
     v.start = ms(v.start); v.now = ms(v.now); v.gaps = v.gaps.map(([a, b]) => [ms(a), ms(b)]);
     v.by = new Map(v.notes.map(n => [n.path, n]));
     K.D = v; K.L = layout(v); K.failed = "";
-  } catch (e) { K.failed = e.message || "failed"; }
+  } catch (e) { K.at = 0; K.failed = e.message || "failed"; }   // a failed read isn't held back a minute: the page says so until one answers
   ctx.update();
 }
 

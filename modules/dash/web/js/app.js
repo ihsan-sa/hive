@@ -3,6 +3,8 @@
 import { brandIcon, brandName } from "./core/brand.js";
 import { dropFiles } from "./ui/dropfiles.js";
 import { S, can, needsAccount, setupDone, start, subscribe } from "./core/store.js";
+import { loadFoci } from "./core/foci.js";
+import { loadNeedsYou } from "./core/needs.js";
 import { h, mount, delegate, selecting, copyText } from "./core/dom.js";
 import { button } from "./ui/kit.js";
 import { go, parse } from "./core/router.js";
@@ -92,7 +94,12 @@ addEventListener("keydown", e => { if (e.key === "Escape" && cur.escape) cur.esc
 const markRoute = () => document.documentElement.toggleAttribute("data-dev", !S.app.app);   // the developer route keeps its dense log (components.css)
 markRoute();
 watchVersion();
-subscribe(() => { markRoute(); schedule(false); });
+let hiveAway = false;
+subscribe(w => {
+  markRoute(); schedule(false);
+  if (w?.failed) hiveAway = true;
+  else if (w?.live && hiveAway) { hiveAway = false; if (S.foci !== undefined) loadFoci(true); if (S.needsYou !== undefined) loadNeedsYou(true); if (cur.poll) cur.poll.run(ctx); if (cur.back) cur.back(ctx); }   // the Hive came back: the shared reads and the open page read now, or Needs you would say "couldn't refresh" for up to five more minutes; a page with no poll that reads on enter names its read as back
+});
 import { reportLoad } from "./core/loadtime.js";
 start().then(() => {
   booted = true; reportLoad();

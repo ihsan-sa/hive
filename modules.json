@@ -4,9 +4,10 @@
   "about": "3D-printable enclosures fitted to KiCad boards, modelled in code.",
   "needs": "uv"
  },
- "hwde": {
-  "repo": "https://github.com/Hive-RSI-Lab/hive-hwde.git",
-  "about": "KiCad PCB design from a written brief to a fab package.",
+ "pcb-flow": {
+  "repo": "https://github.com/Hive-RSI-Lab/hive-pcb-flow.git",
+  "about": "KiCad PCB design from a written brief to a fab package (formerly hwde).",
+  "formerly": "hwde",
   "needs": "KiCad 10, freerouting, Java, xvfb, uv; see its docs (HIVE_TOOLS)"
  },
  "chip-flow": {

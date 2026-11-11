@@ -13,7 +13,7 @@ import { S, can, jget, post, poll, loadApp } from "../core/store.js";
 import { simpleOn, hiveName } from "../core/simple.js";
 import { foci, focusById, focusOf, focusName, listed, threadLine } from "../core/foci.js";
 import { go } from "../core/router.js";
-import { isAgent, isRunning, agentCard, agentMono, agentLabel, agentStatus, threadPeople, partner, displayText, typedText, threadTitle, threadState } from "../core/model.js";
+import { isAgent, isRunning, agentCard, agentMono, agentLabel, capFirst, ownStep, inConversation, agentStatus, threadPeople, partner, displayText, typedText, threadTitle, threadState } from "../core/model.js";
 import { short, mdPlain, now } from "../core/format.js";
 import { button, icon, input, statusDot } from "./kit.js";
 import { openAside } from "./aside.js";
@@ -729,13 +729,13 @@ const sizeWord = () => SIZES.find(s => s[0] === readScale())[1];
 /** The To button: who this goes to, as an avatar and a name. Why (a reply, a name typed) is in its title. */
 function toChip(th, r) {
   const f = r.to && focusWord(r.to), n = r.who, btw = r.why === "btw";
-  // The app look names no code (E10): the conversation's own agent is "this chat's agent", another one goes by agentLabel; the code stays in the menu and on hover.
-  const nm = !n || n === "new" || !isAgent(n) || !(S.app && S.app.app) ? n : agentThread(n) === th ? "this chat's agent" : agentLabel(n);
+  // The app look names no code (E10): an agent goes by its place in this conversation ("the agent", "Agent B"), or by agentLabel if it isn't in it; the code stays in the menu and on hover.
+  const nm = !n || n === "new" || !isAgent(n) || !(S.app && S.app.app) ? n : inConversation(th, () => agentLabel(n));
   const label = btw ? "a new agent, on the side" : f ? focusName(focusById(f.id)) + (n && n !== "new" ? ` → ${nm}` : " → a new agent") : n === "new" ? "a new agent" : nm || "…";
   const why = { reply: "you're replying to it", named: "named in your message", chosen: "you chose it" }[r.why];
   return h("button", { type: "button", class: "cp-to", "aria-haspopup": "listbox", "aria-expanded": String(CP.menu === "to"),
     title: btw ? "A side question: it answers in its own thread, and this one's agent never sees it." : `Who this goes to${why ? ` (${why})` : ""}. Change it here, or type @ and a name.`, onclick: toggle("to") },
-    h("span", { class: "cp-hp" }, "To"), f ? av(null, "◆") : n && n !== "new" && isAgent(n) ? av(n) : av(null, "+"), h("b", null, label), icon("chevron"));
+    h("span", { class: "cp-hp" }, "To"), f ? av(null, "◆") : n && n !== "new" && isAgent(n) ? inConversation(th, () => av(n)) : av(null, "+"), h("b", null, label), icon("chevron"));
 }
 function toMenu(th, r) {
   const d = draft(th), names = threadPeople(th).filter(isAgent), pick = n => { d.to = n; keep(d); CP.menu = false; refresh(); field(th)?.focus(); };
@@ -759,7 +759,10 @@ function toMenu(th, r) {
 
 // ---- model: what the message starts (or moves) its agent on; the default, the picked one, or an @model typed in the text ----
 const MODELS = [["opus", "Opus 5.5", "Most capable, uses the most of your plan"], ["sonnet", "Sonnet 5.5", "Fast and capable, for most jobs"], ["haiku", "Haiku 5.5", "Quickest, for small jobs"], ["fable", "Fable 5.2", ""], ["astra", "Astra", ""]];
-function modelPick(d, r) {
+// The app look says an agent's place in this conversation in its hover words too (E10); the developer look keeps the code.
+const said = (th, n) => (S.app && S.app.app && n && isAgent(n) ? inConversation(th, () => agentLabel(n)) : n);
+const Said = (th, n) => (S.app && S.app.app && n && isAgent(n) ? capFirst(said(th, n)) : n);
+function modelPick(d, r, th) {
   // An agent already running stays on its model for this run; a pick here is kept by the starter and holds from its next run.
   const who = r && r.who, live = who && who !== "new" && isRunning(who);
   const def = (S.app && S.app.default_model) || "", typed = typedModel(d.text), cur = typed || d.model || "";
@@ -767,7 +770,7 @@ function modelPick(d, r) {
   const known = who && who !== "new" && !MODEL_WORDS.includes(who), row = known && agentCard(who).find(x => x.k === "Model");
   const nm = row && (row.v === "login default" ? "Default model" : row.v);
   const first = live ? nm || "Its model" : row ? nm : def ? MODEL_LABELS[def] || def : "Model";
-  const note = live ? `${who} is on ${row ? row.v : "its model"} for this run` : row ? `${who} wakes on ${row.v}` : def ? `New agents start on ${MODEL_LABELS[def] || def}` : "The model a new agent starts on";
+  const note = live ? `${Said(th, who)} is on ${row ? row.v : "its model"} for this run` : row ? `${Said(th, who)} wakes on ${row.v}` : def ? `New agents start on ${MODEL_LABELS[def] || def}` : "The model a new agent starts on";
   const label = cur ? MODEL_LABELS[cur] || cur : first, open = CP.menu === "model";
   const pick = v => { d.model = v; keep(d); CP.menu = false; refresh(); };
   return h("div", { class: "pop cp-mpop", "data-key": "model" },
@@ -782,7 +785,7 @@ function modelPick(d, r) {
 
 // ---- effort: how hard the message's agent thinks, for Claude runs. A run's effort is fixed when it starts, so like the model it holds from the next run ----
 const EFFORTS = [["low", "Low", "Quickest, for small jobs"], ["medium", "Medium", ""], ["high", "High", "Thinks harder, uses more of your plan"], ["xhigh", "Extra high", ""], ["max", "Max", "Thinks hardest, uses the most"]];
-function effortPick(d, r) {
+function effortPick(d, r, th) {
   const who = r && r.who, known = who && who !== "new" && !MODEL_WORDS.includes(who), live = known && isRunning(who);
   const row = known && agentCard(who).find(x => x.k === "Effort"), held = (known && S.live && S.live.efforts && S.live.efforts[who]) || "";
   const m = typedModel(d.text) || d.model || (known ? (S.live && S.live.chosen && S.live.chosen[who]) || "" : (S.app && S.app.default_model) || "");
@@ -790,7 +793,7 @@ function effortPick(d, r) {
   if (other && d.effort) d.effort = "";   // never sent for a run that can't use it
   const cur = d.effort || "", shown = cur || held, open = !other && CP.menu === "effort";
   const now = row && row.v !== "not seen yet" && row.v !== "not recorded" ? row.v : "";
-  const note = other ? "Effort applies to Claude runs only" : live ? (now ? `${who} is at ${now} effort for this run` : `${who} keeps its effort for this run`) : known ? (held ? `${who} wakes at ${held} effort` : `${who} wakes at Claude's default effort`) : "How hard a new agent thinks";
+  const note = other ? "Effort applies to Claude runs only" : live ? (now ? `${Said(th, who)} is at ${now} effort for this run` : `${Said(th, who)} keeps its effort for this run`) : known ? (held ? `${Said(th, who)} wakes at ${held} effort` : `${Said(th, who)} wakes at Claude's default effort`) : "How hard a new agent thinks";
   const pick = v => { d.effort = v; keep(d); CP.menu = false; refresh(); };
   return h("div", { class: "pop cp-mpop cp-epop", "data-key": "effort" },
     h("button", { type: "button", class: "dd cp-model cp-effort", disabled: other, "data-picked": cur ? "" : null, "data-value": cur, "aria-haspopup": "listbox", "aria-expanded": String(open), "aria-label": "Effort: " + (other ? "Claude runs only" : shown || "as is"), title: note + (other ? "" : ". Pick one to change it."), onclick: (e, b) => { const r = (b || e.target.closest(".cp-effort")).getBoundingClientRect(); CP.mdown = innerHeight - r.bottom > r.top; toggle("effort")(); } }, other || !shown ? "Effort" : "Effort: " + shown),
@@ -799,7 +802,7 @@ function effortPick(d, r) {
       [["", "As is", held ? `Leave it at ${held}` : "Claude's default"], ...EFFORTS].map(([v, l, s]) =>
         menuItem(l, s, () => pick(v), { role: "option", key: "e:" + v, sel: cur === v, cls: "cp-mopt" })),
       menuSep("sep"),
-      h("p", { class: "cp-menu-n", "data-key": "foot" }, live ? `${who} can't change effort mid-run. It holds from its next run. Claude runs only.` : "It holds on that agent from this run on. Claude runs only.")) : null);
+      h("p", { class: "cp-menu-n", "data-key": "foot" }, live ? `${Said(th, who)} can't change effort mid-run. It holds from its next run. Claude runs only.` : "It holds on that agent from this run on. Claude runs only.")) : null);
 }
 
 /** The lock's click: open the secret box, or say why it can't open in limited mode. */
@@ -855,29 +858,29 @@ function livePhase(th, who) {
 }
 function doingWords(who) {
   const L = S.running.get(who), x = L && String(L.doing || "").trim();
-  if (!x) return "is working";
+  if (!x || (S.app && S.app.app && ownStep(x))) return "is working";
   return /^[A-Z][a-z]+ing\b/.test(x) ? "is " + x[0].toLowerCase() + x.slice(1) : "is working: " + x;
 }
 /** The line above the box while the agent this goes to works: what it is doing, and the way to reach it now. */
 function liveLine(th, who, phase, armed) {
   const txt = phase === "stopping" ? "is stopping its current step…" : phase === "reading" ? "stopped and is reading your message" : doingWords(who);
   let arm = null;
-  if (!phase && !armed) { arm = button("Interrupt", () => armInterrupt(th, who), { kind: "quiet", size: "s", icon: "pause", cls: "cp-arm", title: `Reach ${who} now, without waiting for its step to end` }); arm.setAttribute("aria-describedby", "cp-arm-d"); }
+  if (!phase && !armed) { arm = button("Interrupt", () => armInterrupt(th, who), { kind: "quiet", size: "s", icon: "pause", cls: "cp-arm", title: `Reach ${said(th, who)} now, without waiting for its step to end` }); arm.setAttribute("aria-describedby", "cp-arm-d"); }
   return h("div", { class: "cp-live", "data-key": "live", "data-phase": phase || null },
     statusDot(agentStatus(who).key, { live: !phase || phase === "stopping" }),
-    h("span", { class: "grow" }, h("b", null, who), " " + txt),
+    h("span", { class: "grow" }, h("b", null, Said(th, who)), " " + txt),
     arm, arm ? h("span", { class: "vh", id: "cp-arm-d", "data-key": "armd" }, "Opens interrupt mode. Nothing is sent until you press Interrupt again.") : null);
 }
 /** The Interrupt button for a running agent, for the conversation's status strip (the person, 11081336a82e: one line per agent,
  *  not the strip and a second line over the box). null while the box is armed or an interrupt is on its way. */
 export function interruptButton(th, who) {
   if (!th || !who || CP.mode[th] === "interrupt" || livePhase(th, who)) return null;
-  const b = button("Interrupt", () => armInterrupt(th, who), { kind: "quiet", size: "s", icon: "pause", cls: "cp-arm", title: `Reach ${who} now, without waiting for its step to end. Nothing is sent until you press Interrupt again.` });
+  const b = button("Interrupt", () => armInterrupt(th, who), { kind: "quiet", size: "s", icon: "pause", cls: "cp-arm", title: `Reach ${said(th, who)} now, without waiting for its step to end. Nothing is sent until you press Interrupt again.` });
   return b;
 }
 function intNote(th, who) {
   return h("div", { class: "cp-int", role: "status", "data-key": "int" }, icon("pause"),
-    h("span", null, h("b", null, `Interrupt ${who}.`), " It stops its current step and reads this at once. Work in that step may be done again. Esc goes back to an ordinary message."),
+    h("span", null, h("b", null, `Interrupt ${said(th, who)}.`), " It stops its current step and reads this at once. Work in that step may be done again. Esc goes back to an ordinary message."),
     h("button", { type: "button", class: "cp-x", title: "Cancel the interrupt (Esc)", "aria-label": "Cancel the interrupt", onclick: () => disarm(th) }, "×"));
 }
 const firstWords = t => short(t.replace(/\s+/g, " ").trim(), 60);
@@ -974,10 +977,10 @@ export function composer({ thread, update, place = "thread", autofocus, top }) {
           simpleOn() ? null : th ? h("div", { class: "pop cp-topop", "data-key": "to" }, toChip(th, r), CP.menu === "to" ? toMenu(th, r) : null)
             : d.naming ? h("span", { class: "meta cp-new" }, "A new agent starts on this") : null,
           !th && S.app && !simpleOn() ? focusPick(d) : null,
-          simpleOn() ? null : modelPick(d, r),
-          simpleOn() ? null : effortPick(d, r),
+          simpleOn() ? null : modelPick(d, r, th),
+          simpleOn() ? null : effortPick(d, r, th),
           sendButton(sendWord, () => send(th), empty, armed ? "Enter interrupts and sends · Esc cancels"
-            : busy ? `${sendWord} (Enter). ${busy} reads it after its current step` : `${sendWord} (Enter). Shift+Enter for a new line. Sent messages can't be edited or taken back.`, armed)))));
+            : busy ? `${sendWord} (Enter). ${Said(th, busy)} reads it after its current step` : `${sendWord} (Enter). Shift+Enter for a new line. Sent messages can't be edited or taken back.`, armed)))));
 }
 // The hint lines under the box went into the send button's name and title (the Nov 8 handoff §8.1); the queued line under your bubble says the busy part.
 function sendButton(word, fn, empty, say, armed) {

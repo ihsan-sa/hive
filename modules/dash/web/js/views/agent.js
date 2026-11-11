@@ -38,8 +38,20 @@ async function openDiff(n, p) {
   let d; try { d = await jget(`/api/agent-diff?name=${encodeURIComponent(n)}&path=${encodeURIComponent(p)}`) || {}; } catch (e) { d = { error: e.message }; }
   if (DF.name === n && DF.p === p) { DF.data = d; again(); }
 }
-// IN: /api/agent-input, what went into each model call by source; `open` is the turn (its time) whose raw pieces are shown
-const IN = { name: null, data: null, sig: "", at: 0, open: null };
+// IN: /api/agent-input, what went into each model call by source; `open` is the turn (its time) whose raw pieces are shown.
+// The list polled here has sizes only; `whole` is the open turn with its full text, read once when it opens (a past call never changes).
+const IN = { name: null, data: null, sig: "", at: 0, open: null, whole: null };
+async function loadWhole(n, id) {
+  IN.whole = { id, turn: null };
+  let turn, failed = false;
+  try { turn = ((await jget(`/api/agent-input?name=${encodeURIComponent(n)}&turn=${encodeURIComponent(id)}`) || {}).turns || [])[0]; } catch (e) { failed = true; }
+  if (IN.name === n && IN.whole && IN.whole.id === id) { IN.whole = { id, turn, gone: !turn, failed }; again(); }
+}
+function toggleTurn(n, t, on) {
+  IN.open = on ? null : t.t;
+  if (on) IN.whole = null; else if (IN.data && IN.data.text) loadWhole(n, t.id);
+  again();
+}
 async function loadInput(n, onChange) {
   IN.at = now();
   try {
@@ -49,7 +61,7 @@ async function loadInput(n, onChange) {
 }
 export async function loadFeed(n, onChange) {
   again = onChange;
-  if (IN.name !== n) { Object.assign(IN, { name: n, data: null, sig: "", at: 0, open: null }); loadInput(n, onChange); }
+  if (IN.name !== n) { Object.assign(IN, { name: n, data: null, sig: "", at: 0, open: null, whole: null }); loadInput(n, onChange); }
   if (F.name !== n) { Object.assign(F, { name: n, items: null, sig: "" }); loadAgentCosts().then(onChange); }
   if (W.name !== n) { Object.assign(W, { name: n, data: null, sig: "", at: 0 }); loadWork(n, onChange); }
   try {
@@ -169,14 +181,23 @@ function piece(raw, i, total, openFirst) {
   const t = pretty(String(raw)), lines = t.split("\n"), first = (lines.find(l => l.trim() && !/^\w+:$/.test(l.trim())) || lines[0] || "").trim();
   const sum = (total > 1 ? `${i + 1}. ` : "") + (first.length > 110 ? first.slice(0, 110) + "…" : first) + (t.length > 300 ? `  (${t.length.toLocaleString()} characters)` : "");
   if (t.length <= 300) return h("pre", { class: "in-pre" }, t);
-  return h("details", { class: "in-det", "data-key": "it" + i, open: openFirst && i === 0 ? "" : null }, h("summary", null, sum), h("pre", { class: "in-pre" }, t.length > 20000 ? t.slice(0, 20000) + "\n… cut at 20,000 characters" : t));
+  return h("details", { class: "in-det", "data-key": "it" + i, open: openFirst && i === 0 ? "" : null }, h("summary", null, sum), h("pre", { class: "in-pre" }, t));
 }
 function inputs(n, panel) {
   const d = IN.name === n ? IN.data : null;
   if (!d) return empty("Reading…", { kind: "loading" });
   const turns = (d.turns || []).slice().reverse();
   if (!turns.length) return empty("No model calls in its latest session log.");
-  const limited = turns.every(t => t.parts.every(p => !(p.items || []).some(Boolean)));
+  const limited = !d.text;
+  // the open turn's pieces, once read; a row of the same source and label in the list matches one in the whole turn
+  const pieces = (t, p) => {
+    const w = IN.whole && IN.whole.id === t.id ? IN.whole : null;
+    if (w && w.failed) return h("p", { class: "meta" }, "Couldn't read this call's text. Close it and open it again to retry.");
+    if (w && w.gone) return h("p", { class: "meta" }, "This call has left the part of the log that's kept, so its text can't be shown.");
+    if (!w || !w.turn) return h("p", { class: "meta" }, "Reading…");
+    const r = w.turn.parts.find(y => y.src === p.src && y.label === p.label), all = r ? r.items.filter(Boolean) : [];
+    return h("div", { class: "in-items" }, all.map((it, i) => piece(it, i, all.length, p.items.length > 1 ? all.length === 1 : true)));
+  };
   const rows = turns.slice(0, panel ? 8 : 40), open = IN.open;
   const sum = t => t.parts.slice().sort((a, b) => b.n - a.n).map(p => `${p.label} ${toks(p.n)}`).join(", ") || "nothing new";
   return h("div", { class: "stack" },
@@ -184,12 +205,12 @@ function inputs(n, panel) {
     h("ul", { class: "wf" }, rows.map(t => {
       const on = open === t.t, bits = t.parts.slice().sort((a, b) => b.n - a.n);
       return [h("li", { "data-key": "in" + t.t, class: "wf-f wf-in", role: "button", tabindex: 0, "aria-expanded": String(on),
-        onclick: () => { IN.open = on ? null : t.t; again(); }, onkeydown: e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); IN.open = on ? null : t.t; again(); } } },
+        onclick: () => toggleTurn(n, t, on), onkeydown: e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggleTurn(n, t, on); } } },
         h("code", null, `${stamp(t.t * 1e3)} · ${toks(t.total)} in`), h("span", { class: "meta" }, `carried ${toks(t.carried)}${bits.length ? "; new: " + sum(t) : ""}`)),
         on ? h("li", { "data-key": "ind" + t.t, class: "wf-diff" },
           h("p", { class: "meta" }, `${toks(t.fresh)} uncached, ${toks(t.cw)} written to the cache, ${toks(t.cr)} read from it; ${toks(t.out)} output.`),
           bits.length ? bits.map(p => h("div", { class: "stack", "data-key": p.src + p.label }, h("p", null, h("b", null, p.label), h("span", { class: "meta" }, ` · ${SRC[p.src]} · about ${toks(p.n)} tokens${p.items.length > 1 ? `, ${p.items.length} pieces` : ""}`)),
-            limited ? null : h("div", { class: "in-items" }, p.items.filter(Boolean).slice(0, 8).map((it, i, all) => piece(it, i, all.length, p.items.length > 1 ? all.length === 1 : true))))) : h("p", { class: "meta" }, "Nothing new since the call before: it all came from the carried context.")) : null];
+            limited ? null : pieces(t, p))) : h("p", { class: "meta" }, "Nothing new since the call before: it all came from the carried context.")) : null];
     })),
     limited ? h("p", { class: "meta" }, "Your sign-in sees the sizes, not the text.") : null);
 }

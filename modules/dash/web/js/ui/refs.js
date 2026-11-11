@@ -1,7 +1,7 @@
 // References to agents and threads. Real links (#agent/<name>, #comms/<thread>), so they open in a new tab,
 // show in the status bar, and work by keyboard. Status is shape + colour + the label in the tooltip.
 import { h, copyText } from "../core/dom.js";
-import { agentBrief, agentLabel, agentMono, agentStatus, isAgent, isRunning, isWarden, threadTitle, tierOf } from "../core/model.js";
+import { agentBrief, agentLabel, agentMono, capFirst, inScope, agentStatus, isAgent, isRunning, isWarden, threadTitle, tierOf } from "../core/model.js";
 import { agentHref, threadHref } from "../core/router.js";
 import { status, tier } from "../core/status.js";
 import { statusDot, wardenMark } from "./kit.js";
@@ -14,12 +14,14 @@ export function openRef(e, kind, name) {
   openPanel(kind, name);
 }
 
+// Inside a conversation the hover says the name the page says (E10); elsewhere, and in the developer look, it keeps the code.
+const placed = (said, n) => inScope() && !!said && said !== n;
 /** agentRef(name, {copy, state}) — state: also show the status word. */
-export function agentRef(n, { copy, state, href, dot = true, pill } = {}) {
+export function agentRef(n, { copy, state, href, dot = true, pill, cap } = {}) {
   if (!n) return "?";
   const s = agentStatus(n), agent = isAgent(n), warden = isWarden(n);
-  const a = h("a", { class: pill ? "ref pill" : "ref", "data-kind": "agent", "data-name": n, href: href || (agent ? agentHref(n) : threadHref("@" + n)), title: `${n}${warden ? ", a warden" : ""}${s.label ? `: ${s.label}` : ""}`, onclick: !href && agent ? e => openRef(e, "agent", n) : null },
-    dot ? statusDot(s.key, { live: isRunning(n) }) : null, h("span", { class: "ref-n" }, agentLabel(n)), warden ? wardenMark() : null,
+  const a = h("a", { class: pill ? "ref pill" : "ref", "data-kind": "agent", "data-name": n, href: href || (agent ? agentHref(n) : threadHref("@" + n)), title: `${placed(agentLabel(n), n) ? capFirst(agentLabel(n)) : n}${warden ? ", a warden" : ""}${s.label ? `: ${s.label}` : ""}`, onclick: !href && agent ? e => openRef(e, "agent", n) : null },
+    dot ? statusDot(s.key, { live: isRunning(n) }) : null, h("span", { class: "ref-n" }, cap ? capFirst(agentLabel(n)) : agentLabel(n)), warden ? wardenMark() : null,
     state && s.label && s.key !== "none" ? h("span", { class: "sw", "data-tone": null, style: "font-weight:400" }, status(s.key).label) : null);
   if (!copy || !agent) return a;
   return h("span", { class: "ref-wrap" }, a, copyButton("@" + n));
@@ -40,7 +42,7 @@ export function copyButton(text) {
 
 /** agentAvatar(name) — the agent mark: a soft square with the name's two middle letters (a7c31 → 7c) and its status shape; a link to the agent. For stacks (.avs). */
 export function agentAvatar(n, { size } = {}) {
-  const s = agentStatus(n), agent = isAgent(n), label = `${n}${s.label ? ", " + status(s.key).label.toLowerCase() : ""}`;
+  const s = agentStatus(n), agent = isAgent(n), said = agentLabel(n), label = `${placed(said, n) ? capFirst(said) : said && said !== n ? `${capFirst(said)} (${n})` : n}${s.label ? ", " + status(s.key).label.toLowerCase() : ""}`;
   return h("a", { class: "av", "data-name": n, "data-size": size || null, href: agent ? agentHref(n) : threadHref("@" + n), title: label, "aria-label": label, onclick: agent ? e => openRef(e, "agent", n) : null },
     h("span", null, mono(n)), s.key !== "none" ? statusDot(s.key, { live: isRunning(n) }) : null);
 }

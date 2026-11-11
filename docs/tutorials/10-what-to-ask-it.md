@@ -31,7 +31,7 @@ None of these has yet been run on a clean install by someone new. Each has been 
 **Happens:** read-only review, so low risk. **Time:** 10 to 20 minutes. **Usage:** medium. **You get:** a ranked list.
 
 ## 7. A circuit board, brief to fab files
-Needs the **hwde** extra.
+Needs the **pcb-flow** extra.
 **Paste:** "Design a small board: [what it does, size, power, connectors]. Check it, and give me the files to order it."
 **Happens:** schematic, layout, automatic checks, fab files. **Time:** an hour or more. **Usage:** large. **You get:** the board files and a check report. Complex high-speed routing is still best left to a person.
 

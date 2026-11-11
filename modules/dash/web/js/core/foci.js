@@ -4,7 +4,7 @@
 // /api/foci is read once here for every page (S.foci), at most every 20 s; the server caches it as long.
 import { h } from "./dom.js";
 import { S, jget, emit, post } from "./store.js";
-import { threadParent, isSystemThread, btwParent, isAgent, isRunning, threadTitle, agentLabel } from "./model.js";
+import { threadParent, isSystemThread, btwParent, isAgent, isRunning, threadTitle, agentLabel, inScope } from "./model.js";
 import { now, DAY, short } from "./format.js";
 import { faded, archived } from "../ui/threadmeta.js";
 import { agentRef, threadRef } from "../ui/refs.js";
@@ -158,7 +158,7 @@ export function pills(text) {
   return out.filter(x => x !== "");
 }
 /** An agent code as a pill that is not a link, for text that already sits inside one (a rail row, a Yours entry); anything else as it is. */
-export const codePill = n => (n && isCode(n) ? h("span", { class: "ref pill", "data-kind": "agent", title: n }, agentLabel(n)) : n || "an agent");
+export const codePill = n => (n && isCode(n) ? h("span", { class: "ref pill", "data-kind": "agent", title: inScope() ? agentLabel(n) : n }, agentLabel(n)) : n || "an agent");
 /** A one-line preview said for the person (R21): ids scrubbed, a leading "Rung:"/"Next:" word and any step word gone, agent codes as codePill. */
 export const sayPlain = (text, max = 70) => short(scrub(String(text || "").replace(/(^|[\s(\[,;:"'])#([\w.-]*\w)/g, (m, a, w) => (S.threads.has(w) ? a + threadTitle(w) : m)).replace(/`/g, "").replace(/\s+/g, " ").replace(/^\s*(?:rung(?:\s+done)?|next|step)\s*:\s*/i, "")).replace(/\b(?:(?:the|rung)\s+)?R\d+[a-z]?\b/g, "the step").replace(/\b(?:[Ll]eftovers\s+)?rung(?:\s+\d+[a-z]?(?:\s+part\s+\w+)?)?(?=\s*[:(" ]|$)/g, "step").replace(/\bstep\s*:\s*/g, ""), max);
 /** A thread's title for a list row: a 12-hex post id in it is dropped. */

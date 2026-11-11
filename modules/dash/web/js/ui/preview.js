@@ -65,6 +65,7 @@ const WMIN = 340, KEY = "pv.w", MODE = new Map();   // MODE: file key -> "src" w
 const maxW = () => Math.max(WMIN, innerWidth - 320);
 const clampW = w => Math.max(WMIN, Math.min(maxW(), Math.round(w)));
 function setW(w, save) { w = clampW(w); document.documentElement.style.setProperty("--pv-w", w + "px"); if (save) try { localStorage.setItem(KEY, String(w)); } catch (e) {} return w; }
+function fitW() { let w = 0; try { w = +localStorage.getItem(KEY); } catch (e) {} setW(w || Math.max(560, innerWidth * 0.45), false); }
 const P = { root: null, head: null, body: null, grip: null, items: [], i: 0, back: null, seq: 0, ctl: null, list: false, auto: false };
 
 export const previewOpen = () => !!P.root;
@@ -139,7 +140,9 @@ let filesResize = 0;
 addEventListener("resize", () => {
   clearTimeout(filesResize);
   filesResize = setTimeout(() => {
-    if (!P.root || !P.list) return;
+    if (!P.root) return;
+    fitW();   // opened narrow, it would otherwise stay at the minimum after widening
+    if (!P.list) return;
     placeFiles();
     if (P.auto && (innerWidth < 1100 || !filesRoom())) { autoFor = null; closePreview(); }
   }, 150);
@@ -157,8 +160,7 @@ function shell() {
     });
     P.back = document.activeElement;
     // A width you set is kept; otherwise it opens near half the window, as wide as Claude's and ChatGPT's file views.
-    let w = 0; try { w = +localStorage.getItem(KEY); } catch (e) {}
-    setW(w || Math.max(560, innerWidth * 0.45), false);
+    fitW();
     P.grip = grip();
     document.body.append(P.root, P.grip);
     document.body.setAttribute("data-pv", "");
@@ -219,7 +221,7 @@ function header(it, r) {
       button("Close (Esc)", closePreview, { kind: "icon", icon: "close", size: "s", cls: "pv-x" })),
     h("div", { class: "pv-a" }, tabs, it.kb ? h("span", { class: "meta pv-live", title: "This panel shows the file's newest version and updates itself" }, "") : null, h("span", { class: "pv-sp" }), copy, saveAs(it, r),
       dl ? h("a", { class: "btn", "data-size": "s", "data-kind": "quiet", href: dl, download: it.name, title: "Download " + it.name }, "Download") : null,
-      it.kb ? h("a", { class: "btn", "data-size": "s", "data-kind": "quiet", href: "#knowledge/" + encodeURIComponent(it.kb), title: "Open in Knowledge" }, "Open")
+      it.kb && kindOf(it.name) !== "html" ? h("a", { class: "btn", "data-size": "s", "data-kind": "quiet", href: "#knowledge/" + encodeURIComponent(it.kb), title: "Open in Knowledge" }, "Open")   // a page opens running, like an attached one; Knowledge would show its code
         : h("a", { class: "btn", "data-size": "s", "data-kind": "quiet", href: viewHref(it), target: "_blank", rel: "noopener noreferrer", title: "Open in a new tab" }, "Open")));
 }
 

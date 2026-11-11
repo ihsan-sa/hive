@@ -154,7 +154,7 @@ def enroll(paths=None):
     import numpy as np, speaker, telnyx
     _preload_cuda()
     if not paths:
-        paths = sorted(Path(os.environ.get("TMPDIR", "/tmp"), "phone-turns").glob("*.pcm")) + sorted((HOME / "files").glob("*/voice-*"))
+        paths = sorted(TURNS.glob("*.pcm")) + sorted((HOME / "files").glob("*/voice-*"))
     raw = {"browser": [], "line": []}; names = []
     for p in map(Path, paths):
         if p.suffix == ".pcm": a = np.fromfile(p, dtype="<i2").astype("float32") / 32768
@@ -271,36 +271,54 @@ def isolate(a, mode):
     return a.astype("float32")
 
 
+TURNS = Path(os.environ.get("PHONE_TURNS", HOME / ".hive/phone-turns"))   # not $TMPDIR: the hourly sweep emptied that within a day, so no real call was ever left to tune on
+
+
 def keep_turn(cid, pcm, tag=""):
-    """Empty, long and partly muted turns stay on this machine to look at and to enrol from, the newest 300."""
-    d = Path(os.environ.get("TMPDIR", "/tmp"), "phone-turns"); d.mkdir(parents=True, exist_ok=True)
+    """Empty, long and partly muted turns stay on this machine, private to this account, to look at and to enrol from, the newest 300."""
+    d = TURNS; d.mkdir(mode=0o700, parents=True, exist_ok=True)
     (d / f"{tag}{cid}-{int(time.time())}.pcm").write_bytes(pcm)
     for f in sorted(d.glob("*.pcm"), key=lambda f: f.stat().st_mtime)[:-300]: f.unlink(missing_ok=True)
 
 
-_rejects = {}   # channel: turns in a row that sounded like nobody enrolled
-_matched = {}   # channel: when a turn last had some of the enrolled voice in it
-STALE = 180     # seconds without one match before rejects start failing open
+_calls = {}      # a call's id (or its channel, where there is none): what its voice check has seen so far
+STALE = 180      # with no call id, a gap this long between turns is a new call
+OPEN_AFTER = 30  # seconds into a call, and
+OPEN_REJECTS = 3 # whole turns rejected, with no solid match yet, before deciding the enrolled voice doesn't fit this call
 
 
-def voice_gain(a, channel, info, now=None):
-    """The mute mask for a final turn (see speaker.py), or None to keep all of it. This fails open: any error, no enrolment, or
-    a voice that has stopped matching (say a cold or a new mic) keeps the audio. Stopped matching means two whole turns in a row
-    rejected and no turn with the person in it for STALE seconds: while their voice still matches now and then, rejected turns
-    are someone else, and a room with other people talking gives runs of those (the 2026-11-05 calls let them through)."""
+def _check(key, now):
+    s = _calls.get(key)
+    if s is None or now - s["last"] > STALE:
+        s = _calls[key] = {"start": now, "last": now, "rejects": 0, "sure": False}
+        for k in [k for k, v in _calls.items() if now - v["last"] > 86400]: del _calls[k]
+    s["last"] = now
+    return s
+
+
+def _failed_open(s, now):
+    """A call where the enrolled voice has never solidly matched, and whole turns keep being rejected: a new mic, a cold, a bad line."""
+    return not s["sure"] and s["rejects"] >= OPEN_REJECTS and now - s["start"] >= OPEN_AFTER
+
+
+def voice_gain(a, channel, info, now=None, call=None, clean=None):
+    """The mute mask for a final turn (see speaker.py), or None to keep all of it. Any error or no enrolment keeps the audio. So does a
+    call where the voice doesn't fit: OPEN_REJECTS whole turns rejected, OPEN_AFTER seconds in, and no solid match in the whole call.
+    Once a call has one solid match the enrolled voice works on this mic, so rejected turns are someone else however long they go on
+    (the person may listen for minutes with a room talking); hanging up and calling back starts fresh if a mic dies mid-call."""
     now = time.time() if now is None else now
     try:
         import speaker
         ref = speaker.refs().get(channel)
         if ref is None: return None
-        g, kept = speaker.mask(a, ref)
+        s = _check(call or channel, now)
+        g, kept, sure = speaker.mask(a, ref, clean)
+        if kept is None: return g   # no speech: nobody to match or reject
         info["kept"] = round(kept, 2)
-        if g is None or kept > 0:
-            _rejects[channel] = 0
-            if g is not None: _matched[channel] = now
-            return g
-        _rejects[channel] = _rejects.get(channel, 0) + 1
-        if _rejects[channel] <= 2 or now - _matched.get(channel, 0) < STALE: info["not_person"] = True
+        if sure: s["sure"] = True; s["rejects"] = 0
+        if kept > 0: return g
+        s["rejects"] += 1
+        if not _failed_open(s, now): info["not_person"] = True
         return None
     except Exception as e:
         print(f"phone: speaker check failed, keeping the audio: {e}", flush=True); return None
@@ -329,26 +347,27 @@ def wav_seconds(b64):
     except (wave.Error, EOFError, ValueError): return 0.0
 
 
-def stt(pcm16k, partial=False, channel="browser", info=None):
+def stt(pcm16k, partial=False, channel="browser", info=None, call=None):
     """16 kHz mono int16 little-endian bytes to text. Drops what's most likely noise, not speech.
     partial: a look at speech still going on, for showing it live; gives None rather than wait behind another transcription.
     channel: browser or line, which enrolled voice to compare a final with. info, a dict, gets kept (fraction of the turn that
-    was the enrolled voice) and not_person (none of it was: the text is "" and what was heard goes to the log)."""
+    was the enrolled voice) and not_person (none of it was: the text is "" and what was heard goes to the log). call: the call's id."""
     import numpy as np
     info = {} if info is None else info
     a = np.frombuffer(pcm16k, dtype="<i2").astype("float32") / 32768
     if len(a) < 16000 * 0.25: return ""
     _yield_gpu()
     st, _ = models()
+    if partial and _mlock.locked(): return None   # before the work below, not after it
+    clean = isolate(a, PRE) if PRE != "base" else a   # before the mask: isolate learns the room from the quietest frames, and muted ones would fool it
     if partial:   # the live look is masked too, so a nearby talker doesn't flash up as the person's words
         try:
             import speaker
-            ref = speaker.refs().get(channel)
-            g = speaker.mask(a, ref)[0] if ref is not None else None
+            ref = speaker.refs().get(channel); now = time.time()
+            g = speaker.mask(a, ref, clean)[0] if ref is not None and not _failed_open(_check(call or channel, now), now) else None
         except Exception: g = None
-    else: g = voice_gain(a, channel, info)
-    if PRE != "base": a = isolate(a, PRE)   # the mask comes after: isolate learns the room from the quietest frames, and muted ones would fool it
-    if g is not None: a = a * g
+    else: g = voice_gain(a, channel, info, call=call, clean=clean)
+    a = clean if g is None else clean * g
     if not _mlock.acquire(blocking=not partial): return None
     try:
         # _hint is None on distil-whisper: with a prompt it gave no segments at all for 22 of 51 chunks of real speech
@@ -884,7 +903,8 @@ class H(BaseHTTPRequestHandler):
         if c.ended: return self.out({"error": "call ended"}, 410)
         if m[2] == "turn":
             pcm = self.body()
-            info = {}; text = stt(pcm, info=info)
+            info = {}; text = stt(pcm, info=info, call=c.id)
+            if info.get("not_person"): c.partial = ""   # what was on screen was not the person's either
             if not text and not info.get("not_person") and len(pcm) > 32000 * 1.5 and len((c.partial or "").split()) >= 2: text = c.partial  # shown live, so don't lose it
             print(f"phone: call {c.id} turn {len(pcm) / 32000:.1f}s heard {text!r}", flush=True)
             if os.environ.get("PHONE_DEBUG") or (not text and len(pcm) > 32000 * 1.5) or len(pcm) > 32000 * 20 or info.get("kept", 1) < 1: keep_turn(c.id, pcm)
@@ -892,7 +912,7 @@ class H(BaseHTTPRequestHandler):
             return self.out({"text": text})
         if m[2] == "partial":
             c.voice_at = time.time()
-            text = stt(self.body(), partial=True)
+            text = stt(self.body(), partial=True, call=c.id)
             c.voice_at = time.time()
             if text is not None and c.state != "hold": c.partial = text; c.emit("partial", text=text)
             return self.out({"text": text})
