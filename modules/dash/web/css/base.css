@@ -1,7 +1,7 @@
 *,*::before,*::after{box-sizing:border-box}
 html{-webkit-text-size-adjust:100%}
 @media (min-width:640px){html:has(#top){scrollbar-gutter:stable}}   /* top-bar icons stay put between pages that scroll and pages that do not */
-@media (min-width:640px){html:has(#top):has(:is(.cm,.kb)){scrollbar-gutter:auto;overflow-y:hidden}html:has(#top):has(:is(.cm,.kb)) .top-in{margin-right:var(--sbw,0px)}}   /* Chat and Knowledge fill the window and scroll inside: a reserved gutter there was a blank strip beside their own scrollbar. The bar's own row steps in by the scrollbar's width (app.js sets --sbw), so its icons still stay put */
+@media (min-width:640px){html:has(#top):has(:is(.cm,.kb,#main>.cvp)){scrollbar-gutter:auto;overflow-y:hidden}html:has(#top):has(:is(.cm,.kb,#main>.cvp)) .top-in{margin-right:var(--sbw,0px)}}   /* Chat and Knowledge fill the window and scroll inside: a reserved gutter there was a blank strip beside their own scrollbar. The bar's own row steps in by the scrollbar's width (app.js sets --sbw), so its icons still stay put. Timeline (#main>.cvp) fills the window the same way (R15: a blank strip beside its own scrollbar); Flow's canvas sits inside a page that scrolls, so it keeps the gutter */
 html:has(#top):has(.rc-fig[data-full]),html:has(#top):has(dialog.fb[open]){scrollbar-gutter:auto;overflow:hidden}   /* a full-screen figure and the frozen feedback screen cover the window, gutter and scrollbar included */
 body{margin:0;font:var(--fs-body)/var(--lh) var(--font);background:var(--bg);color:var(--ink);font-synthesis:none;text-rendering:optimizeLegibility}
 .app{container:app/inline-size}   /* the phone: css/phone.css queries this (under 700px) */

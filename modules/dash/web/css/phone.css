@@ -152,6 +152,8 @@
   .cp-fbtn:not([data-picked]) .cp-ficon{display:inline-block}
   /* the words "Focus" and "Model" go on a phone: the value says it ("No focus", "Sonnet"), and with them the row ran the pills into each other and cut "To a552f" to "a" */
   .cp-fbtn>.cp-lab,.cp-model>.cp-lab{display:none}
+  .cp-effort>.cp-lab{display:inline}   /* round 16: Effort keeps its word on a phone and drops the value until one is set, or a lone "Default" reads as nothing */
+  .cp-effort:not([data-picked]) .cp-ev{display:none}
 
   /* ---- pages ---- */
   .page{padding:var(--s4) max(var(--s4),env(safe-area-inset-right,0px)) var(--s7) max(var(--s4),env(safe-area-inset-left,0px))}

@@ -394,7 +394,7 @@ def main():
         offset = tick_board(offset)
         tick_time()
         if Path(__file__).stat().st_mtime != me and not any(s["state"] == "running" for s in all_steps()): return  # updated: the starter starts the new one
-        time.sleep(0.3)
+        time.sleep(0.1)
 
 if __name__ == "__main__":
     main()

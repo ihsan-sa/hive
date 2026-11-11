@@ -10,6 +10,16 @@ FILES, MAX_FILE = HOME / "files", 100 * 2**20  # a post's files, in ~/files/<pos
 MENTION = re.compile(r"(?<![\w.])@([a-z0-9][a-z0-9_-]*)", re.I)
 CODE = re.compile(r"```.*?```|`[^`\n]*`", re.S)  # a name in backticks is being written about, not called
 
+def woke_thread():
+    """The thread that woke this agent: HIVE_THREAD, set by the starter; else its run record (a warm agent was booted before its post, and a boxed
+    agent's hive runs in the broker, which never had HIVE_THREAD)."""
+    if (t := os.environ.get("HIVE_THREAD")): return t
+    n = os.environ.get("HIVE_NAME", "")
+    if not re.fullmatch(r"[a-z0-9_-]+", n.lower()): return None
+    try: r = json.loads((HOME / "run" / f"{n.lower()}.json").read_text())
+    except (OSError, ValueError): return None
+    return r.get("thread") or r.get("post")
+
 def now(): return dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
 
 def posts():
@@ -362,9 +372,14 @@ def cmd_post(a):
     if foci_hit: p["foci"] = list(dict.fromkeys(foci_hit))
     if copies: p["copies"] = list(dict.fromkeys(t for t, _ in copies))
     if a.reply_to: p["reply_to"] = a.reply_to
+    for k in ("edit_of", "retry_of"):
+        if (v := getattr(a, k, None)):
+            if p["from"] != "person": sys.exit(f"hive post: --{k.replace('_', '-')} is the person's (the dash sends it): post as person or leave it out")
+            if not any(q.get("id") == v and q.get("thread") == p["thread"] for q in posts()): sys.exit(f"hive post: --{k.replace('_', '-')} {v}: no such post in this thread")
+            p[k] = v
     # A thread an agent opens while working in another one (its helper's brief, a side thread) remembers where it came from,
     # so the dash can fold it under that conversation (110601450d55). The starter sets HIVE_THREAD to the thread that woke the agent.
-    if (par := os.environ.get("HIVE_THREAD")) and p["thread"] == pid and par != pid: p["parent"] = par
+    if (par := woke_thread()) and p["thread"] == pid and par != pid: p["parent"] = par
     if os.environ.get("HIVE_POST_VIA"): p["via"] = os.environ["HIVE_POST_VIA"]
     if (tags := post_tags(given, p, where, [n for n in asked + said if n not in where and n not in ignored], foci_hit)): p["tags"] = tags
     if re.fullmatch(r"f[0-9a-f]{4}", str(p["from"]).lower()) and (w := [n for n in said if n in FRESH]):
@@ -1292,7 +1307,7 @@ def cmd_me(a):
                 if r.get("name") == me and r.get(key): best = r
         except OSError: pass
         print(best[key] if best else "(nothing set yet: hive me " + ("--about " if a.about else "") + "\"what you are on\")"); return
-    rec = {"name": me, key: text[:200], "thread": os.environ.get("HIVE_THREAD") or None, "at": time.time()}
+    rec = {"name": me, key: text[:200], "thread": woke_thread(), "at": time.time()}
     STATE.mkdir(parents=True, exist_ok=True)
     with open(f_, "a") as f:
         fcntl.flock(f, fcntl.LOCK_EX); f.write(json.dumps(rec) + "\n")
@@ -1347,6 +1362,8 @@ p.add_argument("--routed", action="store_true", help="for the doors: the name wa
 p.add_argument("--model", type=post_model, help="model for any run this post starts: opus, sonnet, haiku, fable, or provider:model for a provider in config.json (openrouter:openai/gpt-5); default: the login's")
 p.add_argument("--effort", choices=EFFORTS, help="effort level for the Claude runs of the agents this post starts or wakes: low, medium, high, xhigh, max; it holds on them like --model, and an agent already running keeps its effort until that run ends; default: Claude Code's own")
 p.add_argument("--reply-to", dest="reply_to", metavar="ID", help="the post this answers; shown on the board, and a door puts the answer under that message")
+p.add_argument("--edit-of", dest="edit_of", metavar="ID", help="the person's edit of an earlier message of theirs (ID: the first version) in this thread: the chat shows it as that message's newer version (everyday E12)")
+p.add_argument("--retry-of", dest="retry_of", metavar="ID", help="the person's ask for another answer in place of a reply (ID: its first version): the chat hides this post and shows the next reply as that one's newer version (everyday E12)")
 p.add_argument("--file", action="append", help="attach a file (repeatable): copied to ~/files/<post id>/, shown in hive read, Slack and the dashboard")
 p.add_argument("--done", action="append", metavar="ASK", help="mark this ask (k0123) done with this post as its evidence (repeatable)")
 p.add_argument("--end", action="store_true", help="this post is the run's last act: end the run here with no further model call, unless something holds the stop (it needs the stop line as last line; anything after it in the same command still runs)")

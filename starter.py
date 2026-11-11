@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Hive starter: watch ~/board.jsonl, start a session per @mention, pace on weekly usage, log, back up ~ to git."""
-import datetime as dt, json, os, re, secrets, shutil, signal, subprocess, sys, tempfile, time, urllib.request, uuid
+import concurrent.futures, datetime as dt, json, os, re, secrets, shutil, signal, subprocess, sys, tempfile, time, urllib.request, uuid
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # tests load this file by path, under -I
 import spend
@@ -1304,7 +1304,7 @@ def fresh_name(st, prefix):
     """A code nobody has used: a code with a past run would resume that agent's session, not start a new one (@new drew a5d1f, 2026-11-03)."""
     while True:
         n = prefix + secrets.token_hex(2)
-        if n not in st.get("pending", {}) and n not in st.get("resume", {}) and not last_run(n): return n
+        if n not in st.get("pending", {}) and n not in st.get("resume", {}) and not last_run(n) and n != WARM.get("agent", {}).get("name"): return n  # nor the warm agent's
 
 def wake(c, st, n, posts, to, room):
     """Start n for these posts: fresh if it never ran, resumed if asleep or named by the person (or itself: its own waiter), else its heir takes them.
@@ -1364,7 +1364,7 @@ def trial_orientation(name, live, path=None):
         return r.stdout, "cand"
     except Exception: return live, "skip"
 
-def tool_trial(name, sid="", path=None):
+def tool_trial(name, sid="", path=None, quiet=False):
     """A trial of dropping tools almost nobody uses (hive-meta L18/L21, i-number in the log): ~/.hive/tool_drop.json holds
     {"name", "until", "share", "tools": [...]}, half the agents by a stable hash of their name run without those tools (each costs input on every model
     call). Returns the tools to drop, [] for the other arm, None with no trial; every run start under a live trial adds a line to tool_drop.log with its
@@ -1373,11 +1373,12 @@ def tool_trial(name, sid="", path=None):
         p = Path(path or STATE / "tool_drop.json"); t = json.loads(p.read_text())
         if t.get("until") and now() > t["until"]: return None
         on = int(__import__("hashlib").sha1(f"{t['name']}:{name}".encode()).hexdigest()[:8], 16) / 2**32 < t.get("share", .5)
-        with p.with_name("tool_drop.log").open("a") as f: f.write(json.dumps({"ts": now(), "trial": t["name"], "name": name, "session": sid, "on": on}) + "\n")
+        if not quiet:
+            with p.with_name("tool_drop.log").open("a") as f: f.write(json.dumps({"ts": now(), "trial": t["name"], "name": name, "session": sid, "on": on}) + "\n")
         return list(t.get("tools") or []) if on else []
     except Exception: return None
 
-def cache_trial(name, sid="", path=None):
+def cache_trial(name, sid="", path=None, quiet=False):
     """A trial of the split prompt cache (hive-meta L26/L27): ~/.hive/cache_split.json holds {"name", "until", "share"}, and that share of agents by a stable
     hash of their name run with the conversation on the 5-minute cache while the system prompt and tools stay on 1 hour (a cache write costs 12.5 read units
     instead of 20, and an idle over 5 minutes re-writes only the conversation). True for the trial arm, False for the other, None with no trial; every run start
@@ -1386,7 +1387,8 @@ def cache_trial(name, sid="", path=None):
         p = Path(path or STATE / "cache_split.json"); t = json.loads(p.read_text())
         if t.get("until") and now() > t["until"]: return None
         on = int(__import__("hashlib").sha1(f"{t['name']}:{name}".encode()).hexdigest()[:8], 16) / 2**32 < t.get("share", .5)
-        with p.with_name("cache_split.log").open("a") as f: f.write(json.dumps({"ts": now(), "trial": t["name"], "name": name, "session": sid, "on": on}) + "\n")
+        if not quiet:
+            with p.with_name("cache_split.log").open("a") as f: f.write(json.dumps({"ts": now(), "trial": t["name"], "name": name, "session": sid, "on": on}) + "\n")
         return on
     except Exception: return None
 
@@ -1452,29 +1454,192 @@ def recall_note(name, posts):
     except (OSError, subprocess.SubprocessError): return ""
     return "\n\n" + r.stdout.strip() if r.returncode == 0 and r.stdout.strip() else ""
 
-def start(c, name, posts, login, resume=None, reaped=None, extra=(), moved=False, lost=False, woken=None, all_since=None, slept=None, heir_of=None, why=None):
-    hook_inbox(c)  # a login can be added to config.json while the starter runs
-    wire_deny(c)
-    wire_precompact(c)
-    sid = resume or str(uuid.uuid4())  # the claude session id, so `claude --resume <session>` works
-    first = posts[0]
-    model = (next((p["model"] for p in posts if provider_of(c, p.get("model"))), None)  # a provider wins: main loop picked it
-             or next((p["model"] for p in posts if p.get("model") in MODELS), None)
-             or default_model())
-    prov = provider_of(c, model)
-    kind = "warden" if is_warden(name) else "agent"
+def thread_alone(tid, tail=262144, most=4000):
+    """The text of post tid if it is still the only post in its thread (read from the board's tail), else None."""
+    try:
+        with open(BOARD, "rb") as f:
+            f.seek(max(0, f.seek(0, 2) - tail)); lines = f.read().decode("utf-8", "replace").splitlines()
+    except OSError: return None
+    text = None
+    for l in lines:
+        if tid not in l: continue
+        try: p = json.loads(l)
+        except ValueError: continue
+        if p.get("id") == tid: text = str(p.get("text", ""))
+        elif p.get("thread") == tid: return None
+    return text if text and len(text) < most else None
+
+def start_model(c, posts):
+    """The model a start runs on: a provider wins (main loop picked it), then a model a post asked for, then the default."""
+    return (next((p["model"] for p in posts if provider_of(c, p.get("model"))), None)
+            or next((p["model"] for p in posts if p.get("model") in MODELS), None)
+            or default_model())
+
+def system_for(name, kind, modules):
+    """(system prompt, trial, cut) for a run: orientation (with this name's trial and cut), the warden page, the person's instructions, the modules note, the sandbox note."""
     orient, trial = trial_orientation(name, (CORE / "orientation.md").read_text()) if kind != "warden" else ((CORE / "orientation.md").read_text(), None)
     orient, cut = cut_orientation(name, orient) if kind != "warden" else (orient, None)
-    if cut == "holdout": trial = None   # the holdout page is served whole, so the agent saw no trial's edit
+    if cut == "holdout": trial = None  # a holdout agent is in no trial
     system = orient + ("\n\n" + (CORE / "warden.md").read_text() if kind == "warden" else "")
     try: mine = (HOME / "user-instructions.md").read_text().strip()  # the person's own CLAUDE.md, copied at setup on their tick
     except OSError: mine = ""
     if mine and kind != "warden": system += "\n\n# The person's own instructions (from their CLAUDE.md)\n" + mine
-    if kind != "warden": system += modules_note()
+    if kind != "warden": system += modules
     if (sb := box()): system += sb.NOTE + ("\n" + (CORE / "warden-step.md").read_text() if kind == "warden" else "")
+    return system, trial, cut
+
+# The warm agent (projects/everyday/WARM_AGENT.md, E11d): the next fresh @new's claude process, booted ahead with its name, session, system prompt
+# and sandbox fixed, waiting for its opening message on stdin. It cuts the CLI's own boot (about 0.8 s on a fresh install) out of a new chat's first reply.
+# Any start it doesn't fit (another model, an effort, a provider, a resume, an heir, a warden) starts cold as before. It lives in this process's memory
+# only: its output goes to ~/.hive/warm/ and moves into sessions/ at handover, and nothing is run/<name>.json until then, so the dash, reaper and wake
+# logic only ever see a handed-over run. If the starter dies, EOF on the child's stdin ends it.
+WARM = {}
+WARM_DIR = STATE / "warm"
+
+def warm_key(c, login, model):
+    """What a warm agent was built from: if any of it changed, it is stale."""
+    def mt(f):
+        try: return (str(f.resolve()), f.stat().st_mtime_ns)
+        except OSError: return 0
+    files = [CORE / "orientation.md", CORE / "warden-step.md", HOME / "user-instructions.md", CORE / "config.json", HOME / "mcp.json", HOME / "settings.json",
+             *(STATE / f for f in ("tool_drop.json", "cache_split.json", "cut.json", "holdout.json", "trial.json")), Path(login or "/").expanduser() / "settings.json"]
+    return (login, model, *map(mt, files), mt(Path(shutil.which("claude") or "/")), modules_seen[1], json.dumps(c.get("model_ids") or {}, sort_keys=True),
+            json.dumps(c.get("claude_args")), c.get("auto_compact_window"), c.get("max_budget_usd"))
+
+def warm_on(c):
+    return bool(c.get("warm_agent", True) and not c.get("only_model") and "stream-json" in c["claude_args"])
+
+def warm_drop(why, w=None):
+    """End a warm agent (the one in WARM, or w, already taken out): EOF on its stdin ends it by itself (it never got a message);
+    a kill of its own tree only if it is still there. Its output file goes: no run points at it."""
+    w = w or WARM.pop("agent", None)
+    if not w: return
+    try: w["proc"].stdin.close()
+    except (OSError, ValueError): pass
+    try: w["proc"].wait(timeout=3)
+    except subprocess.TimeoutExpired:
+        kill_tree(w["proc"].pid)  # boxed, the pid is the sandbox's outer shell
+        try: w["proc"].wait(timeout=3)
+        except subprocess.TimeoutExpired: pass
+    try: Path(w["path"]).unlink()
+    except OSError: pass
+    log(event="warm_dropped", name=w["name"], why=why)
+
+def warm_name(st, q):
+    """The warm agent's name for a fresh @new/@claude post it could take (q as queued), else None; claimed by that post. start() makes the final check."""
+    w = WARM.get("agent")
+    if not w or w.get("claimed") or w["proc"].poll() is not None or q.get("effort") or q.get("free") or q.get("model") not in (None, w["model"]): return None
+    if w["name"] in st.get("pending", {}): return None
+    w["claimed"] = True
+    return w["name"]
+
+def warm_take(c, name, posts, login, kind, resume, heir_of):
+    """The warm agent, if this start is the one it was booted for; else None (and a warm agent booted under this name, which this start can't use, ends)."""
+    w = WARM.get("agent")
+    if not w or w["name"] != name: return None
+    why = ("resume" if resume else "heir" if heir_of else "warden" if kind != "agent" else "off" if not warm_on(c)
+           else "exited" if w["proc"].poll() is not None else "login" if login != w["login"]
+           else "effort" if any(p.get("effort") in EFFORTS for p in posts) or efforts[0].get(name) else "model" if start_model(c, posts) != w["model"]
+           else "provider" if provider_of(c, w["model"]) else "fallback" if any(p.get("fallback") for p in posts)
+           else "stale" if warm_key(c, login, w["model"]) != w["key"] else None)
+    if why: warm_drop(why); return None
+    return WARM.pop("agent")
+
+def warm_boot(c, st, login):
+    """Boot the next fresh agent's claude process, if none is warm and nothing is starting. Never fails the loop."""
+    try:
+        w = WARM.get("agent")
+        if w and (code := w["proc"].poll()) is not None:  # it ended on its own: back off, so a CLI that can't start isn't relaunched every pass
+            WARM["fails"] = WARM.get("fails", 0) + 1; WARM["after"] = time.time() + min(900, 15 * 2 ** WARM["fails"])
+            warm_drop(f"exited {code}" + (f": {f}" if (f := launch_failed(w["path"], code)) else "")); w = None
+        elif w and w.get("claimed") and w["name"] not in st["pending"]:  # its post went (a stop, a drop) without starting it
+            warm_drop("unclaimed"); w = None
+        elif w and not w.get("claimed") and (time.time() - w["at"] > (c.get("warm_max_age_s") or 1800) or not warm_on(c)
+                                              or not login or w["login"] != login or warm_key(c, login, w["model"]) != w["key"]):
+            warm_drop("old" if time.time() - w["at"] > (c.get("warm_max_age_s") or 1800) else "off" if not warm_on(c) else "login" if w["login"] != login else "stale"); w = None
+        if w or not login or not warm_on(c) or time.time() < WARM.get("after", 0) or time.time() - last_start[0] < 2: return
+        if under_pressure(c): return
+        model = spawn_model(c) or default_model()
+        if provider_of(c, model) or model not in MODELS: return
+        if not WARM.get("swept"):  # a warm agent from before a restart ended on EOF; its file is left
+            for f in WARM_DIR.glob("*.jsonl"): f.unlink(missing_ok=True)
+            WARM["swept"] = True
+        WARM_DIR.mkdir(parents=True, exist_ok=True)
+        name, sid = fresh_name(st, "a"), str(uuid.uuid4())
+        system, trial, cut = system_for(name, "agent", modules_note())
+        cmd, env, _, _ = claude_launch(c, name, sid, model, None, login, "agent", [], None, system, quiet=True)
+        path = WARM_DIR / f"{name}-{dt.datetime.now():%m%d-%H%M%S}.jsonl"
+        proc = subprocess.Popen(cmd, cwd=HOME, env=env, stdout=path.open("w"), stderr=subprocess.STDOUT, stdin=subprocess.PIPE, text=True)
+        WARM["agent"] = {"name": name, "sid": sid, "model": model, "login": login, "env": env, "path": path, "proc": proc, "at": time.time(),
+                         "key": warm_key(c, login, model), "trial": trial, "cut": cut}
+        log(event="warm_boot", name=name, pid=proc.pid, model=model)
+    except Exception as e: log(event="warm_error", why=f"{type(e).__name__}: {e}"[:300]); WARM["after"] = time.time() + 300
+
+def claude_launch(c, name, sid, model, prov, login, kind, posts, prompt, system, resume=None, quiet=False):
+    """(cmd, env, login, effort) for a run: the same for a cold start and for a warm agent booted ahead (prompt None: it reads its
+    opening message as stream-json on stdin, and has no post, so no HIVE_THREAD; hive then reads the thread from run/<name>.json)."""
+    first = posts[0] if posts else None
+    sb = box()
+    tmp = HOME / ".cache" / "hive-tmp"; tmp.mkdir(parents=True, exist_ok=True)  # on disk: /tmp is tmpfs, its files hold RAM and swap
+    # ENABLE_CLAUDEAI_MCP_SERVERS: the logins' claude.ai connectors (the person's Slack, Vercel buy_domain, ...) are 12k tokens on
+    # every reply, and 12 calls in 542 transcripts, all Exa search; they also let an agent act in the person's name (kb/model-cost.md)
+    # hive post --effort, or the effort picked in the agent panel: held on the agent like --model, so a resume keeps it. For a Claude run only
+    effort = next((e for e in [efforts[0].get(name), *(p.get("effort") for p in posts)] if e in EFFORTS), None)
+    env, argv = {**os.environ, "HIVE_NAME": name, **({"HIVE_THREAD": first.get("thread", first["id"])} if first else {}), "CLAUDE_CONFIG_DIR": login, "TMPDIR": str(tmp), "ENABLE_CLAUDEAI_MCP_SERVERS": "false"}, None
+    # Opus defaults to a 1M window, so a run grows to 400k+ and pays for all of it on every turn; 36% of spend was above 200k (kb/model-cost.md).
+    # Compacting near resume_max_context also keeps a run resumable instead of leaving an heir. 0 or absent: Claude Code's default.
+    if c.get("auto_compact_window"): env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] = str(c["auto_compact_window"])
+    if not prov:  # config "model_ids": {"fable": "claude-fable-5-2"} pins what an alias means, without waiting for a CLI update
+        for k, v in (c.get("model_ids") or {}).items(): env[f"ANTHROPIC_DEFAULT_{k.upper()}_MODEL"] = str(v)
+    if prov:  # main loop's provider_hold just loaded its module and found room
+        impl = prov[1]["_impl"]; keep = impl.env(prov[1], prov[2]); env.update(keep); env["_BOX_KEEP"] = " ".join(keep)
+        if prov[1].get("config_dir"): env["CLAUDE_CONFIG_DIR"] = str(Path(prov[1]["config_dir"]).expanduser())
+        login = env.get("CODEX_HOME") or env.get("KIMI_CODE_HOME") or env["CLAUDE_CONFIG_DIR"]
+        if hasattr(impl, "command") and (argv := impl.command(prov[1], prov[2], prompt, system, sid, resume)):  # another harness (codex)
+            env.pop("CLAUDE_CONFIG_DIR", None)
+    if effort and not prov: env["CLAUDE_EFFORT"] = effort
+    drop = tool_trial(name, sid, quiet=quiet) if kind != "warden" and not prov else None
+    if kind != "warden" and not prov and cache_trial(name, sid, quiet=quiet): env["CLAUDE_CODE_MESSAGES_PROMPT_CACHE_TTL"] = "5m"
+    cmd = argv or ["claude", "-p", *([prompt] if prompt is not None else ["--input-format", "stream-json"]), "--append-system-prompt", system,
+                   *(["--disallowedTools", ",".join(drop)] if drop else []),
+                   *(["--effort", effort] if effort and not prov else []),
+                   *(["--resume", sid] if resume else ["--session-id", sid]),
+                   *(["--model", prov[2] if prov else model] if model else []),
+                   *(["--max-budget-usd", str(c["max_budget_usd"])] if c.get("max_budget_usd") and not prov else []), *(["--mcp-config", str(HOME / "mcp.json")] if (HOME / "mcp.json").is_file() and not prov else []), *c["claude_args"],
+                   *(["--include-partial-messages"] if "stream-json" in c["claude_args"] and "--include-partial-messages" not in c["claude_args"] else [])]  # per-run cap; 0/absent = none; mcp.json: the servers the person ticked at setup; partial messages: the dash shows a post while it is written (E11)
+    if sb:  # the delivered file is mounted by inode, so it's emptied before the run rather than removed after
+        sb.prepare(name)
+        if not resume: (STATE / "delivered" / name).write_text("")
+        sb.ensure_broker(); sb.ready(name)
+        cmd, env = sb.wrap(cmd, env, name)
+    else: env.pop("_BOX_KEEP", None)
+    return cmd, env, login, effort
+
+def start(c, name, posts, login, resume=None, reaped=None, extra=(), moved=False, lost=False, woken=None, all_since=None, slept=None, heir_of=None, why=None):
+    kind = "warden" if is_warden(name) else "agent"
+    w = warm_take(c, name, posts, login, kind, resume, heir_of)  # the claude process booted ahead for this name (projects/everyday/WARM_AGENT.md), or None: a cold start
+    if not w and (sb0 := box()): sb0.prepare(name); sb0.ensure_broker()  # first, so the broker (which looks every 0.1 s) has the run's sockets by the launch below (E11c: ready() waited 0.3 s)
+    pool = concurrent.futures.ThreadPoolExecutor(3)  # the notes below are subprocesses: run them side by side, not one after another (E11c: 0.23 s in a row)
+    ahead = {"modules": pool.submit(modules_note)} if kind != "warden" and not w else {}
+    if kind != "warden" and not resume:  # used below only if the start isn't `asked` too
+        ahead |= {"recall": pool.submit(lambda: recall_note(name, posts)), "neighbours": pool.submit(lambda: neighbours_note(name, posts))}
+    pool.shutdown(wait=False)
+    hook_inbox(c)  # a login can be added to config.json while the starter runs
+    wire_deny(c)
+    wire_precompact(c)
+    sid = w["sid"] if w else resume or str(uuid.uuid4())  # the claude session id, so `claude --resume <session>` works
+    first = posts[0]
+    model = w["model"] if w else start_model(c, posts)
+    prov = provider_of(c, model)
+    system, trial, cut = (None, w["trial"], w["cut"]) if w else system_for(name, kind, ahead["modules"].result() if kind != "warden" else "")
+    sb = box()
     prompt = (f"You are @{name}. You were woken by board post {', '.join(p['id'] for p in posts)} "
               f"(thread {first.get('thread', first['id'])}, from {first.get('from')}). "
               f"Start with `hive read --thread {first.get('thread', first['id'])}`.")
+    if not resume and len(posts) == 1 and first.get("thread", first["id"]) == first["id"] and (said := thread_alone(first["id"])):
+        # A fresh thread is just this post: hand it over, so the first reply doesn't wait a model turn on `hive read` (everyday E11b).
+        prompt = (f"You are @{name}. You were woken by board post {first['id']} (thread {first['id']}, from {first.get('from')}), "
+                  f"which starts its thread, so there is nothing more to read there. It says:\n\n{said}\n\n")
     if heir_of:
         prompt += (f" You are a new agent taking over from @{heir_of['name']}, which isn't being brought back because {heir_of['why']}. You have none of its memory. "
                    f"Its stream log, if a detail isn't in the thread or on disk, is {heir_of['out']}: search it, don't read it whole.")
@@ -1517,7 +1682,7 @@ def start(c, name, posts, login, resume=None, reaped=None, extra=(), moved=False
     # Fresh starts only: over 3 days (to 2026-11-06) pointers in a first prompt got a strict follow-up (kb open or a read of the note) 50% of the time,
     # on a resume wake 11% (5 of 44), by hook 21% (hive-meta recall-measure.md). The hook (inbox.recall_note) still delivers them mid-run.
     if kind != "warden" and not asked and not resume:
-        prompt += recall_note(name, posts) + neighbours_note(name, posts)
+        prompt += ahead["recall"].result() + ahead["neighbours"].result()
     if (k := next((p["continue"] for p in posts if p.get("continue")), None)):
         prompt += guarded("wake_note", k, first.get("thread"), bool(heir_of)) or ""
     fb = next((p["fallback"] for p in posts if p.get("fallback")), None)
@@ -1525,45 +1690,32 @@ def start(c, name, posts, login, resume=None, reaped=None, extra=(), moved=False
     elif kind != "warden" and not prov and not asked and (not resume or slept): prompt += step_clause(model)
     path = HOME / "sessions" / f"{name}-{dt.datetime.now():%m%d-%H%M%S}.jsonl"
     last_start[0] = time.time(); recent_starts.append(last_start[0])
-    tmp = HOME / ".cache" / "hive-tmp"; tmp.mkdir(parents=True, exist_ok=True)  # on disk: /tmp is tmpfs, its files hold RAM and swap
-    # ENABLE_CLAUDEAI_MCP_SERVERS: the logins' claude.ai connectors (the person's Slack, Vercel buy_domain, ...) are 12k tokens on
-    # every reply, and 12 calls in 542 transcripts, all Exa search; they also let an agent act in the person's name (kb/model-cost.md)
-    # hive post --effort, or the effort picked in the agent panel: held on the agent like --model, so a resume keeps it. For a Claude run only
-    effort = next((e for e in [efforts[0].get(name), *(p.get("effort") for p in posts)] if e in EFFORTS), None)
-    env, argv = {**os.environ, "HIVE_NAME": name, "HIVE_THREAD": first.get("thread", first["id"]), "CLAUDE_CONFIG_DIR": login, "TMPDIR": str(tmp), "ENABLE_CLAUDEAI_MCP_SERVERS": "false"}, None
-    # Opus defaults to a 1M window, so a run grows to 400k+ and pays for all of it on every turn; 36% of spend was above 200k (kb/model-cost.md).
-    # Compacting near resume_max_context also keeps a run resumable instead of leaving an heir. 0 or absent: Claude Code's default.
-    if c.get("auto_compact_window"): env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] = str(c["auto_compact_window"])
-    if not prov:  # config "model_ids": {"fable": "claude-fable-5-2"} pins what an alias means, without waiting for a CLI update
-        for k, v in (c.get("model_ids") or {}).items(): env[f"ANTHROPIC_DEFAULT_{k.upper()}_MODEL"] = str(v)
-    if prov:  # main loop's provider_hold just loaded its module and found room
-        impl = prov[1]["_impl"]; keep = impl.env(prov[1], prov[2]); env.update(keep); env["_BOX_KEEP"] = " ".join(keep)
-        if prov[1].get("config_dir"): env["CLAUDE_CONFIG_DIR"] = str(Path(prov[1]["config_dir"]).expanduser())
-        login = env.get("CODEX_HOME") or env.get("KIMI_CODE_HOME") or env["CLAUDE_CONFIG_DIR"]
-        if hasattr(impl, "command") and (argv := impl.command(prov[1], prov[2], prompt, system, sid, resume)):  # another harness (codex)
-            env.pop("CLAUDE_CONFIG_DIR", None)
-    if effort and not prov: env["CLAUDE_EFFORT"] = effort
-    drop = tool_trial(name, sid) if kind != "warden" and not prov else None
-    if kind != "warden" and not prov and cache_trial(name, sid): env["CLAUDE_CODE_MESSAGES_PROMPT_CACHE_TTL"] = "5m"
-    cmd = argv or ["claude", "-p", prompt, "--append-system-prompt", system,
-                   *(["--disallowedTools", ",".join(drop)] if drop else []),
-                   *(["--effort", effort] if effort and not prov else []),
-                   *(["--resume", sid] if resume else ["--session-id", sid]),
-                   *(["--model", prov[2] if prov else model] if model else []),
-                   *(["--max-budget-usd", str(c["max_budget_usd"])] if c.get("max_budget_usd") and not prov else []), *(["--mcp-config", str(HOME / "mcp.json")] if (HOME / "mcp.json").is_file() and not prov else []), *c["claude_args"]]  # per-run cap; 0/absent = none; mcp.json: the servers the person ticked at setup
-    if sb:  # the delivered file is mounted by inode, so it's emptied before the run rather than removed after
-        sb.prepare(name)
-        if not resume: (STATE / "delivered" / name).write_text("")
-        sb.ensure_broker(); sb.ready(name)
-        cmd, env = sb.wrap(cmd, env, name)
-    else: env.pop("_BOX_KEEP", None)
-    proc = subprocess.Popen(cmd, cwd=HOME, env=env, stdout=path.open("w"), stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)
+    def record():
+        rec = {"name": name, "pid": proc.pid, "session": sid, "at": now(), "post": first["id"], "login": login,
+               "thread": first.get("thread"), "from": first.get("from"), "out": str(path), "proc": proc_start(proc.pid), "boot": boot_id(), **({"resumed": True} if resume else {}), **({"woke": list(extra)} if extra else {}), **({"slept": posts} if slept else {}), **({"heir_of": heir_of["name"]} if heir_of else {}), **({"all_since": all_since} if all_since else {}), **({"model": model} if model else {}), **({"fallback": fb} if fb else {}), **({"trial": trial} if trial else {}), **({"cut": cut} if cut is not None else {}),
+               "harness": prov[1].get("harness", "claude-code") if prov else "claude-code", **({"provider": prov[0]} if prov else {}), **({"effort": env["CLAUDE_EFFORT"]} if env.get("CLAUDE_EFFORT") else {}), **({"warm": True} if w else {})}
+        (RUN / f"{name}.json").write_text(json.dumps(rec))
+        return rec
+    if w:  # hand over: the run record first (hive reads the thread from it: a warm process has no HIVE_THREAD), then the opening message on stdin
+        proc, login, env = w["proc"], w["login"], w["env"]  # and EOF, so the CLI runs this one turn and exits like `-p` (it waits for more while stdin is open)
+        try: os.replace(w["path"], path); w["path"] = path  # same inode: the child keeps writing to it
+        except OSError: path = w["path"]
+        rec = record()
+        try:
+            w["proc"].stdin.write(json.dumps({"type": "user", "message": {"role": "user", "content": prompt}}) + "\n"); w["proc"].stdin.close()
+            tool_trial(name, sid); cache_trial(name, sid)  # the arms it was booted on (same name, same trial file: the key), logged now it runs
+            WARM["fails"] = 0
+            log(event="warm_used", name=name, age=round(time.time() - w["at"], 1))
+        except (OSError, ValueError) as e:  # it died since warm_take looked: start cold, on a session id it never held
+            warm_drop(f"handover: {type(e).__name__}", w); w = None
+            sid, path = str(uuid.uuid4()), HOME / "sessions" / f"{name}-{dt.datetime.now():%m%d-%H%M%S}.jsonl"
+            system, trial, cut = system_for(name, kind, modules_note())
+    if not w:
+        cmd, env, login, _ = claude_launch(c, name, sid, model, prov, login, kind, posts, prompt, system, resume)
+        proc = subprocess.Popen(cmd, cwd=HOME, env=env, stdout=path.open("w"), stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)
+        rec = record()
     children[name] = proc
     if not resume and not sb: (STATE / "delivered" / name).unlink(missing_ok=True)  # the inbox hook starts fresh with this run; a resumed one keeps its list so an @all isn't handed over twice
-    rec = {"name": name, "pid": proc.pid, "session": sid, "at": now(), "post": first["id"], "login": login,
-           "thread": first.get("thread"), "from": first.get("from"), "out": str(path), "proc": proc_start(proc.pid), "boot": boot_id(), **({"resumed": True} if resume else {}), **({"woke": list(extra)} if extra else {}), **({"slept": posts} if slept else {}), **({"heir_of": heir_of["name"]} if heir_of else {}), **({"all_since": all_since} if all_since else {}), **({"model": model} if model else {}), **({"fallback": fb} if fb else {}), **({"trial": trial} if trial else {}), **({"cut": cut} if cut is not None else {}),
-           "harness": prov[1].get("harness", "claude-code") if prov else "claude-code", **({"provider": prov[0]} if prov else {}), **({"effort": env["CLAUDE_EFFORT"]} if env.get("CLAUDE_EFFORT") else {})}
-    (RUN / f"{name}.json").write_text(json.dumps(rec))
     log(event="start", **rec)
 
 def keeper(c, st, alive, login):
@@ -1868,12 +2020,12 @@ def load_stamp():
     return was == boot_id()
 
 def nap(secs):
-    """Sleep up to secs, but wake as soon as the board grows: a new post is seen in 0.2 s, not after a whole poll."""
+    """Sleep up to secs, but wake as soon as the board grows: a new post is seen in 0.05 s (E11c: a stat is cheap, and Send to start is under 0.4 s), not after a whole poll."""
     try: size = BOARD.stat().st_size
     except OSError: size = 0
     end = time.time() + secs
     while time.time() < end:
-        time.sleep(0.2)
+        time.sleep(0.05)
         try:
             if BOARD.stat().st_size != size: return
         except OSError: pass
@@ -1953,6 +2105,7 @@ def main():
                         elif word == "free": q["free"] = True
                         elif word in MODEL_WORDS: q["model"] = q.get("model") or MODEL_WORDS[word]
                         if word in ("new", "claude") and not q.get("model"): q["model"] = spawn_model(c)  # Sonnet by the person's choice, 2026-11-04
+                        if word in ("new", "claude") and not c.get("only_model") and (wn := warm_name(st, q)): n = wn  # the warm agent, if it fits this post as queued (E11d)
                     if is_warden(n):  # the warden rules on the hard limits and may come to hold root: Claude only, like @claude
                         q["claude"] = True
                         if provider_of(c, q.get("model")): q["model"] = None
@@ -2063,6 +2216,7 @@ def main():
             improver(c, st, alive, work)
             dreamer(c, st, alive, login)
             tidier(c, st, alive, login)
+            warm_boot(c, st, login)
         save("starter.json", st)
         backup(c, st)
         nap(c["poll_s"])

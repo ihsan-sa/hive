@@ -30,6 +30,7 @@ LADDER_ANY = re.compile(r"^##\s+(.*\bladder\b.*)$", re.M | re.I)   # a topic lad
 RUNG = re.compile(r"^\s*-\s+\[([ x!])\]\s+(.+)$", re.M)
 AFTER = re.compile(r"\bafter:(\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2})?)Z?\b")   # a day, or a UTC minute (after:2026-11-08T09:50Z) for a rung that waits on a timed run
 GATE = re.compile(r"\b(?:on or after|not before|after|on|from|until|revisits?|re-?recheck|re-?check|recheck|read(?:ing)?|judge)\b[^.;:()]{0,24}?\b(\d{4}-\d{2}-\d{2})\b", re.I)   # the same wait in words: 38 of 47 floor rounds that did nothing (2026-11-09/10) woke on a reading written with a date but no after:
+CHECK_ON = re.compile(r"check:\s*(?:on or after|not before|on|after|from)\s+(\d{4}-\d{2}-\d{2})\b", re.I)   # a check that opens with its date ("check: on 2026-11-18 ...") can't pass before it; other dates in a check don't gate (rsi-lab 11-11: 3 such rungs woke the keeper every 2 h)
 PARKED = re.compile(r"^Parked until (\d{4}-\d{2}-\d{2}):\s*(.+)$", re.M)
 PARK_MAX_D = 3   # a parked ladder comes back within this many days; a date further out doesn't count, so nobody parks a focus for good
 WAIT = re.compile(r"no step left|changed nothing|nothing (has )?changed|nothing left|all with the person|no new person posts|started no round|(?<!nothing )\bwaits? (only )?on (the person|a sign-in)", re.I)   # how a round says it did no work
@@ -62,7 +63,7 @@ def section(txt, m, heading, t=None):
     th = re.search(r"`([^`]+)`", heading) or THREAD.search(heading) or re.search(r"(?<![\w-])([a-z][a-z0-9]*-[a-z0-9-]+)(?![\w-])", heading)
     rungs = []; today = t.date().isoformat()
     for state, text in RUNG.findall(body):
-        a = AFTER.search(text) or GATE.search(text.split("check:")[0])
+        a = AFTER.search(text) or GATE.search(text.split("check:")[0]) or CHECK_ON.search(text)
         rungs.append({"state": state, "text": text.strip(), "after": a.group(1) if a else None, "checked": "check:" in text})
     nxt = next((r for r in rungs if r["state"] == " " and r["checked"] and (not r["after"] or r["after"] <= (today if len(r["after"]) == 10 else t.strftime("%Y-%m-%dT%H:%M")))), None)
     p = PARKED.search(body); parked = None
@@ -216,7 +217,8 @@ Rules for the round:
 - Check passes: in goals.md change `- [ ]` to `- [x]` and append your result post's id. Too big for one run: split it into rungs, land the first, tick that.
 - Rung truly needs the person or is blocked: change it to `- [!]` with why (add a `For you:` line in your post if they must act), then take the next rung in this same run. A `[!]` costs you nothing and is not your result.
 - Keep the focus's to-do list, which the person sees and ticks on its page: the next two or three steps in plain words (`hive focus check add FOCUS "text"`), ticked as each lands (`hive focus check done ID`; `hive focus check list FOCUS` shows them).
-- When what is left waits on the person or a date (a rung on a date carries `after:YYYY-MM-DD`), ask whether the goal or its Measure is still right; then either write a step that moves the Measure, with a `check:`, or end with the wait.
+- A rung that cannot pass before a date or time (a full day's reading, a window that ends later) carries `after:YYYY-MM-DD` or `after:YYYY-MM-DDTHH:MMZ` in its text: the keeper skips it until then. Without the tag it wakes an agent every hour to find nothing to do.
+- When what is left waits on the person or a date, ask whether the goal or its Measure is still right; then either write a step that moves the Measure, with a `check:`, or end with the wait.
 - Park only when the measure is at target, or every way left to move it needs the person (name which): add a line `Parked until YYYY-MM-DD: why` to the section (at most 3 days out, later dates are ignored) and say so. The keeper skips it until then. Waiting on a date or a later reading is no reason to park: write a rung that moves the measure today, or if the measure has stopped saying anything, rewrite it and keep the old one and the reason beside it.
 - Your last post says: the rung, the check's output, the measure now, and ends with the line `Next: <the next rung, with its check>` (the starter carries it on), or a `Blocked:` or `Needs the person:` line if nothing is left you can do, or `Waiting:` naming who or when (`Waiting: a1b2c's review`, `Waiting: the sim, about 04:20 UTC`). The next agent comes within minutes unless your wait names a running agent or a time. If the work turns hard, `hive model opus "why"`."""
 

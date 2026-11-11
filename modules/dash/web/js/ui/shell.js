@@ -150,9 +150,9 @@ function lookItems(update) {
     h("div", { class: "menu-seg", "data-key": "look" }, h("div", { class: "seg", role: "radiogroup", "aria-label": "Theme", onkeydown: e => {   // arrows move the choice, as in any radio group
         const d = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[e.key]; if (!d) return;
         e.preventDefault(); const T = ["auto", "light", "dark"], t = T[(T.indexOf(getTheme()) + d + 3) % 3]; setTheme(t); update();
-        requestAnimationFrame(() => document.querySelector(`.seg [data-theme=${t}]`)?.focus()); } },
+        requestAnimationFrame(() => document.querySelector(`.seg [data-pick=${t}]`)?.focus()); } },
       ...[["auto", "System", null], ["light", "Light", "sun"], ["dark", "Dark", "moon"]].map(([t, w, ic]) =>
-        h("button", { type: "button", role: "radio", "aria-checked": String(th === t), "data-theme": t, title: t === "auto" ? "Follows your system setting" : null, onclick: pick(t) }, ic ? icon(ic) : null, w)))),
+        h("button", { type: "button", role: "radio", "aria-checked": String(th === t), "data-pick": t, title: t === "auto" ? "Follows your system setting" : null, onclick: pick(t) }, ic ? icon(ic) : null, w)))),
     fsDoc.fullscreenEnabled ? h("button", { type: "button", class: "more-i menu-i", role: "menuitem", "data-key": "fullscreen", onclick: () => { NAV.open = false; update(); fsToggle(); } },
       icon("expand"), h("b", null, fsOn() ? "Leave full screen" : "Full screen"), h("kbd", { class: "menu-i-r" }, "F")) : null,
   ];

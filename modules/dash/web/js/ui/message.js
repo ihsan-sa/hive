@@ -4,9 +4,9 @@
 // messageHead() and messageReceipt(), so a long list refreshes names and read marks without touching the bodies.
 // localMessage(item) draws a message that hasn't reached the board yet: sending, or failed with Retry.
 import { h, copyText } from "../core/dom.js";
-import { S, can, jget, SYS, OUTSIDE } from "../core/store.js";
+import { S, can, jget, SYS, OUTSIDE, post as apiPost } from "../core/store.js";
 import { simpleOn, hiveName } from "../core/simple.js";
-import { isAgent, isWarden, isRunning, inConversation, capFirst, agentLabel, displayText, chatText, postSource, btwParent, btwText, asksQuestion, threadState, threadChildren, threadTitle } from "../core/model.js";
+import { isScript, isAgent, isWarden, isRunning, inConversation, capFirst, agentLabel, displayText, typedText, chatText, postSource, btwParent, btwText, asksQuestion, threadState, threadChildren, threadTitle } from "../core/model.js";
 import { focusById, focusName, focusOf } from "../core/foci.js";
 import { clock, stamp, now, short, mdPlain, ago, DAY, MIN } from "../core/format.js";
 import { markdown, mdCut, filesNamed } from "./markdown.js";
@@ -420,7 +420,7 @@ function appMessage(p, opts) {
   }
   if (btwOpener(p)) return btwMessage(p, ws);
   const call = phoneCall(p); if (call) return call;
-  const kind = SYS.has(p.from) ? "sys" : p.from === "person" ? "me" : OUTSIDE.has(p.from) ? "out" : "agent";
+  const kind = SYS.has(p.from) || isScript(p.from) ? "sys" : p.from === "person" ? "me" : OUTSIDE.has(p.from) ? "out" : "agent";
   const asks = kind === "agent" && !simpleOn() && asksYou(p), split = kind === "agent" && !SOURCE.has(p.id) ? didSplit(p) : null;
   const q = split ? { ...p, disp: split.text } : p;
   return h("article", { class: "msg", tabindex: "-1", "data-key": p.id, "data-who": kind, "data-cont": opts.cont ? "" : null, "data-report": displayText(p).length > LONG ? "" : null,
@@ -431,21 +431,64 @@ function appMessage(p, opts) {
       messageHead(p, { ...opts, asks }),
       relayLine(p),
       p.reply_to ? quote(p) : null,
-      body(q, ws),
+      EDIT.id === p.id ? editBox(p, opts) : body(q, ws),
       files.length ? h("div", { class: "msg-files" }, files.map(f => attachment(p, f))) : null,
       tagChips(p),
       split ? didFold(p, split) : null,
       wordButton(p),
       messageReceipt(p),
+      versionBar(p, opts),
       asks ? askActions(p) : null),
     simpleOn() ? null : msgTools(p, ws));
+}
+
+// ---- E12: edit a sent message, ask for another reply; the older versions stay behind the arrows ----
+// comms.js works out which version is drawn and passes opts.ver ({root, i, n}), opts.canEdit, opts.canRetry, opts.pick and opts.redraw.
+const EDIT = { id: null, text: "", err: "", busy: false };
+function versionBar(p, opts) {
+  const v = opts.ver, ed = opts.canEdit && can("post") && EDIT.id !== p.id, re = opts.canRetry && can("post");
+  if (!v && !ed && !re) return null;
+  const root = v ? v.root : p.id, what = p.from === "person" ? "message" : "reply";
+  return h("div", { class: "msg-ver" },
+    v ? h("span", { class: "msg-ver-n", role: "group", "aria-label": `Version ${v.i + 1} of ${v.n} of this ${what}` },
+      h("button", { type: "button", class: "msg-ver-b", disabled: v.i === 0 ? "" : null, title: `Older version`, "aria-label": `Older version of this ${what}`, onclick: () => opts.pick && opts.pick(root, v.i - 1) }, "‹"),
+      h("span", { class: "meta" }, `${v.i + 1} / ${v.n}`),
+      h("button", { type: "button", class: "msg-ver-b", disabled: v.i === v.n - 1 ? "" : null, title: `Newer version`, "aria-label": `Newer version of this ${what}`, onclick: () => opts.pick && opts.pick(root, v.i + 1) }, "›")) : null,
+    ed ? button("Edit", () => { Object.assign(EDIT, { id: p.id, text: typedText(p), err: "", busy: false }); opts.redraw && opts.redraw(); }, { size: "s", kind: "quiet", icon: "edit", cls: "msg-vact msg-edit", title: "Change this message and get a new answer; the old one stays behind the arrows" }) : null,
+    re ? button("Retry", e => retry(p, root, e), { size: "s", kind: "quiet", icon: "retry", cls: "msg-vact msg-retry", title: "Ask for another answer; this one stays behind the arrows" }) : null);
+}
+async function retry(p, root, e) {
+  const b = e && e.currentTarget; if (b) { b.disabled = true; b.textContent = "Asking…"; }
+  try { await apiPost("/api/post", { thread: p.th, retry_of: root }); }
+  catch (err) { if (b) { b.disabled = false; b.textContent = "Retry failed: " + err.message; } }
+}
+function editBox(p, opts) {
+  const root = opts.ver ? opts.ver.root : p.id;
+  const ta = h("textarea", { class: "msg-edit-t", rows: Math.min(12, Math.max(3, EDIT.text.split("\n").length + 1)), "aria-label": "Edit your message", oninput: e => { EDIT.text = e.target.value; }, onkeydown: e => {
+    if (e.key === "Escape") { e.preventDefault(); cancel(); }
+    else if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); save(); } } }, EDIT.text);
+  const cancel = () => { Object.assign(EDIT, { id: null, text: "", err: "" }); opts.redraw && opts.redraw(); };
+  const save = async () => {
+    const text = EDIT.text.trim(); if (!text || EDIT.busy) return;
+    if (text === typedText(p).trim()) return cancel();
+    EDIT.busy = true; EDIT.err = "";
+    try { await apiPost("/api/post", { text, thread: p.th, edit_of: root }); Object.assign(EDIT, { id: null, text: "", busy: false }); opts.redraw && opts.redraw(); }
+    catch (err) { EDIT.busy = false; EDIT.err = err.message; opts.redraw && opts.redraw(); }
+  };
+  setTimeout(() => { if (ta.isConnected && document.activeElement !== ta) { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); } }, 0);
+  return h("div", { class: "msg-editor" }, ta,
+    EDIT.err ? h("p", { class: "msg-edit-err", role: "alert" }, "Not sent: " + EDIT.err) : null,
+    h("div", { class: "msg-edit-acts" },
+      button("Save and send", save, { size: "s", kind: "primary", cls: "msg-edit-save" }),
+      button("Cancel", cancel, { size: "s", kind: "quiet", cls: "msg-edit-cancel" }),
+      h("span", { class: "meta" }, "The old version and its answer stay behind the arrows.")));
 }
 
 // ---- R7 step 4: the full look's message parts (the design hand-off, src/parts/30-thread.html) ----
 // The author's mark beside the words: an agent's links to it; yours, the outside senders' and the system's are plain.
 function msgAvatar(p, kind) {
   if (kind === "agent") return agentAvatar(p.from);
-  return h("span", { class: "av", "aria-hidden": "true", "data-name": p.from }, h("span", null, kind === "me" ? "Y" : String(simpleOn() && kind !== "out" ? hiveName() : p.from).slice(0, 2)));
+  return h("span", { class: "av", "aria-hidden": "true", "data-name": p.from }, h("span", null, kind === "sys" ? icon("bell") : kind === "me" ? "Y" : String(simpleOn() && kind !== "out" ? hiveName() : p.from).slice(0, 2)));
 }
 
 /** Is this agent message the question the conversation is waiting on you for (the thread's state names it)? */
@@ -510,7 +553,7 @@ function toolsMenu(p, ws) {
         h("dt", null, "To"), h("dd", null, tos.length ? tos.map(m => m === "person" ? "you" : m).join(", ") : "the conversation"),
         h("dt", null, "Sent"), h("dd", null, stamp(p.t)),
         h("dt", null, "Id"), h("dd", { class: "num" }, p.id)),
-      h("div", { class: "menu-h" }, "Sent messages can't be edited or taken back."),
+      h("div", { class: "menu-h" }, "Your last message can be edited, and the last reply tried again: the old versions stay behind the arrows."),
       button("Close", () => { DETAILS.id = null; closeMenu(); }, { size: "s", kind: "quiet" }));
   }
   return h("div", { class: "rc-menu menu", role: "menu", "data-side": "bottom-end" },
@@ -525,7 +568,7 @@ function toolsMenu(p, ws) {
     }),
     h("div", { class: "menu-sep", role: "separator" }),
     item("Details", (e, b) => { const box = b.closest(".rc-more"); closeMenu(); DETAILS.id = p.id; menuFor = p.id; box.firstChild.setAttribute("aria-expanded", "true"); box.append(scrim(closeMenu), toolsMenu(p, ws)); }, null, "msg-details"),
-    h("div", { class: "menu-h" }, "Sent messages can't be edited or taken back."));
+    h("div", { class: "menu-h" }, "Your last message can be edited, and the last reply tried again: the old versions stay behind the arrows."));
 }
 // Quote: the words selected inside this message, else its first lines.
 function quoteText(p) {
@@ -683,4 +726,15 @@ function helperFold(k, opts) {
     h("div", { class: "cm-helper-b" }));
   if (HELP_OPEN.has(k.name)) { d.open = true; fill(d); }
   return d;
+}
+
+/** E11: the reply an agent is still writing (/api/live's draft, read from its streamed post command), drawn as its message will be and grown as it is written. */
+export function draftMessage(a) {
+  const t = String(a.draft.text || "").replace(/^(?:[ \t]*@[\w.-]+[,:]?[ \t]+)+/, "");
+  const p = { id: "draft:" + a.name, from: a.name, th: a.draft.thread, t: a.draft.at * 1e3, men: [] };
+  return h("article", { class: "msg", "data-key": p.id, "data-who": "agent", "data-state": "draft", "aria-label": `${who(a.name)}, writing`, "aria-busy": "true" },
+    S.app.app ? msgAvatar(p, "agent") : null,
+    h("div", { class: "msg-c" },
+      h("div", { class: "msg-h" }, h("b", null, who(a.name)), h("span", { class: "msg-end" }, h("span", { class: "meta" }, "writing…"))),
+      h("div", { class: "msg-b" }, markdown(t))));
 }

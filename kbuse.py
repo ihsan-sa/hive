@@ -18,6 +18,16 @@ SCOPE = ("kb/", "core/", "projects/", "modules/")
 READERS = re.compile(r"\b(cat|head|tail|sed)\b|\bh2\s+read\b|\bcd\b")
 WRITES = re.compile(r"(?<![0-9&])>")
 
+
+def woke_thread():
+    """HIVE_THREAD, else the agent's run record (a warm agent was booted before its post; a boxed agent's env never had it): as hive's woke_thread."""
+    if (t := os.environ.get("HIVE_THREAD")): return t
+    n = os.environ.get("HIVE_NAME", "").lower()
+    if not re.fullmatch(r"[a-z0-9_-]+", n): return ""
+    try: r = json.loads(open(os.path.expanduser(f"~/run/{n}.json")).read())
+    except (OSError, ValueError): return ""
+    return r.get("thread") or r.get("post") or ""
+
 def agent(): return os.environ.get("HIVE_NAME", "")
 
 def log(rec):
@@ -172,7 +182,7 @@ def worded_again(st, q, filtered):
 
 def file_candidate(prev, q, id, shown):
     """two wordings with nothing read between: maybe a miss, maybe a search narrowing. kb-dream.md judges a sample."""
-    rec = {"agent": agent(), "thread": os.environ.get("HIVE_THREAD", ""), "queries": [prev["q"], q], "finds": [prev["id"], id], "shown": [prev["shown"], shown]}
+    rec = {"agent": agent(), "thread": woke_thread(), "queries": [prev["q"], q], "finds": [prev["id"], id], "shown": [prev["shown"], shown]}
     try:
         with open(CANDIDATES, "a") as f: f.write(json.dumps({"at": time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime()), **rec}) + "\n")
     except OSError: pass

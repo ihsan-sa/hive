@@ -28,6 +28,16 @@ MEASURE = re.compile(r"measure|metric|score|yardstick|benchmark|passes|pass rate
 
 CHECK_TIMEOUT_S = 120
 
+
+def woke_thread():
+    """HIVE_THREAD, else the agent's run record (a warm agent was booted before its post; a boxed agent's env never had it): as hive's woke_thread."""
+    if (t := os.environ.get("HIVE_THREAD")): return t
+    n = os.environ.get("HIVE_NAME", "").lower()
+    if not re.fullmatch(r"[a-z0-9_-]+", n): return ""
+    try: r = json.loads(open(os.path.expanduser(f"~/run/{n}.json")).read())
+    except (OSError, ValueError): return ""
+    return r.get("thread") or r.get("post") or ""
+
 def now(): return dt.datetime.now(dt.timezone.utc)
 def iso(t=None): return (t or now()).isoformat(timespec="seconds")
 
@@ -253,7 +263,7 @@ def cmd_log(a):
     unknown = [i for i in also if i not in items]
     rec = {"id": next_id(items), "at": iso(), "by": os.environ.get("HIVE_NAME", os.environ.get("USER", "?")), "what": a.what, "where": a.where or "",
            "hypothesis": a.hypothesis or "", "measure": a.measure, "baseline": a.baseline or "", "revisit": rev, "status": "landed",
-           "commit": a.commit or "", "thread": a.thread or os.environ.get("HIVE_THREAD", ""), **fields}
+           "commit": a.commit or "", "thread": a.thread or woke_thread(), **fields}
     if also: rec["also"] = also
     if a.no_check and not a.check: rec["no_check"] = a.no_check
     if a.expect: rec["expect"] = a.expect

@@ -77,7 +77,7 @@
 /* breadcrumbs */
 .kb-crumbs{display:flex;flex-wrap:wrap;align-items:baseline;gap:2px 5px;font-size:var(--fs-meta);min-width:0;overflow-wrap:anywhere;color:var(--ink-3)}
 .kb-crumbs [aria-current]{color:var(--ink);font-weight:var(--w-med)}
-.kb-crumbs span[aria-hidden]{color:var(--line-2)}
+.kb-crumbs span[aria-hidden]{color:var(--ink-3)}   /* the / between crumbs is text: line colours read under 2:1 (drive_app_contrast) */
 .kb-crumbs a{color:var(--ink-3);text-decoration:none}
 .kb-crumbs a:hover{color:var(--ink)}
 
