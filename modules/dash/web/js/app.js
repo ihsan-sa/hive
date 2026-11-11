@@ -2,7 +2,7 @@
 // Rendering is a morph of a freshly built tree onto the live one: only changed nodes are touched.
 import { brandIcon, brandName } from "./core/brand.js";
 import { dropFiles } from "./ui/dropfiles.js";
-import { S, can, needsAccount, setupDone, start, subscribe } from "./core/store.js";
+import { S, can, needsAccount, onOwnFail, setupDone, start, subscribe } from "./core/store.js";
 import { loadFoci } from "./core/foci.js";
 import { loadNeedsYou } from "./core/needs.js";
 import { h, mount, delegate, selecting, copyText } from "./core/dom.js";
@@ -95,6 +95,17 @@ const markRoute = () => document.documentElement.toggleAttribute("data-dev", !S.
 markRoute();
 watchVersion();
 let hiveAway = false;
+// A page's own read failed while the Hive still answers (core/store.js onOwnFail): run the page again in 4 s, then every 8 s (or its own timer, if sooner) while they keep failing, so its "couldn't refresh" note and stale lines go within about 10 s of the read recovering. A failed local read every 8 s costs little. Quiet for a minute starts the wait over.
+let soon = 0, soonWait = 0, lastOwnFail = 0;
+onOwnFail(() => {
+  const t = Date.now();
+  if (t - lastOwnFail > 60e3) soonWait = 0;
+  lastOwnFail = t;
+  if (soon || hiveAway) return;
+  soonWait = Math.min(soonWait ? soonWait * 2 : 4e3, 8e3, cur.poll?.every || 8e3);
+  const page = cur;
+  soon = setTimeout(() => { soon = 0; if (hiveAway || cur !== page || document.hidden) return; if (cur.poll) cur.poll.run(ctx); if (cur.back) cur.back(ctx); }, soonWait);
+});
 subscribe(w => {
   markRoute(); schedule(false);
   if (w?.failed) hiveAway = true;

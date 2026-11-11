@@ -48,10 +48,17 @@ export const activeNow = () => Date.now() - lastInput < 60000 && document.visibi
 export const said = n => n === 403 ? "this sign-in isn't allowed to do that" : n === 404 ? "the Hive doesn't have that" : n === 408 || n === 504 ? "the Hive took too long to answer"
   : n === 413 ? "it's too big" : n === 429 ? "the Hive is busy, so try again in a moment" : n === 502 || n === 503 ? "the Hive isn't answering" : n >= 500 ? "the Hive hit a problem" : "the Hive turned it down";
 const ask = (u, o) => fetch(u, o).catch(() => { throw Error("can't reach the server"); });
+// A page's own read that failed for a passing reason (no answer, a 5xx, busy) while the store's reads may still answer: app.js tries the page again soon instead of on its timer.
+const STORE_READS = /^\/api\/(live|log|board|approvals|feedback-drafts)$/;
+let ownFail = () => {};
+export const onOwnFail = fn => { ownFail = fn; };
+const passing = n => !n || n === 408 || n === 429 || n >= 500;
 export async function jget(u) {
-  const r = await ask(u, { cache: "no-store", headers: activeNow() ? { "X-Hive-Active": "1" } : {} });
+  const own = !STORE_READS.test(new URL(u, location.href).pathname);
+  let r;
+  try { r = await ask(u, { cache: "no-store", headers: activeNow() ? { "X-Hive-Active": "1" } : {} }); } catch (e) { if (own) ownFail(); throw e; }
   if (r.status === 401) location.replace("/");
-  if (!r.ok) { const e = Error(said(r.status)); e.status = r.status; throw e; }
+  if (!r.ok) { if (own && passing(r.status)) ownFail(); const e = Error(said(r.status)); e.status = r.status; throw e; }
   return r.json();
 }
 /** POST with the header the server requires; throws an Error with a plain reason. */

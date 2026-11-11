@@ -1906,6 +1906,7 @@ html:not([data-dev]) .av{text-transform:none}   /* lowercase is for the develope
 .av:hover{text-decoration:none;color:var(--ink)}
 .av[data-me]{background:var(--ink);color:var(--on-ink)}
 .av>.st{position:absolute;right:-3px;bottom:-3px;outline:2px solid var(--bg)}
+html:not([data-dev]) .av>.st[data-tone=ended]{display:none}   /* design 1110g: in the app look an ended agent is the resting state; its 9x2 dash under the letter read as a stray underline ("A_ B_" in a conversation head at 390). Live, waiting and failing marks stay; the developer look keeps all */
 .av>span{line-height:1}
 .av[data-s=l]{width:40px;height:40px;border-radius:11px;font-size:13px}
 .av[data-size=s]{width:20px;height:20px;border-radius:6px;font-size:9px}
@@ -3389,3 +3390,14 @@ kbd.menu-i-r{font-family:inherit;font-size:var(--fs-meta)}
 .rmk[data-tone="info"]{color:var(--info,#2a5bd7)}
 .rmk[data-tone="warn"]{color:var(--warn,#b45309)}
 .rmk[data-tone="good"]{color:var(--good,#157f3d)}
+/* one-line rule: a routine agent post as one quiet row that opens on click */
+.cm-oneline{padding:2px var(--s3);min-height:28px}
+.cm-one-b{all:unset;box-sizing:border-box;display:block;width:100%;cursor:pointer;min-height:28px;padding:4px 6px;border-radius:var(--r-s,6px);color:var(--ink-2,inherit);font-size:var(--fs-meta,.85em);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cm-one-b:hover,.cm-one-b:focus-visible{background:var(--hover,rgba(127,127,127,.12))}
+.cm-one-b:focus-visible{outline:2px solid var(--focus,currentColor);outline-offset:-2px}
+.cm-one-also{margin:0 0 2px 6px;white-space:pre-wrap}
+.cm-showall[aria-pressed="true"]{background:var(--hover,rgba(127,127,127,.18))}
+@media (max-width:640px){.cm-one-b{min-height:44px;display:flex;align-items:center}}
+
+.cm-sa-s{display:none}
+@media (max-width:640px){.cm-sa-l{display:none}.cm-sa-s{display:inline}}

@@ -7,7 +7,7 @@ import { agentCard, agentSpend, agentState, costsPending, agentStatus, agentLabe
 import { DAY, HOUR, MIN, ago, dur, firstSentence, mdPlain, money, now, pct, plural, short, stamp, toks } from "../core/format.js";
 import { threadHref } from "../core/router.js";
 import { metrics, cols } from "../templates.js";
-import { button, defs, empty, legend, list, note, pageHeader, rank, section, share, statusLabel, stats, wardenBadge, figPending } from "../ui/kit.js";
+import { button, defs, empty, legend, list, note, pageHeader, rank, section, share, staleNote, statusLabel, stats, wardenBadge, figPending } from "../ui/kit.js";
 import { table } from "../ui/table.js";
 import { agentRef, copyButton, threadRef } from "../ui/refs.js";
 import { message, pollDelivered, fileUrl } from "../ui/message.js";
@@ -27,8 +27,9 @@ async function loadWork(n, onChange) {
     const d = { files: [], commits: [], prs: [], b: [], nfiles: 0, ncommits: 0, ...r }, sig = JSON.stringify(d);
     for (const k of ["files", "commits", "prs", "b"]) if (!Array.isArray(d[k])) d[k] = [];
     d.nfiles = d.nfiles || d.files.length; d.ncommits = d.ncommits || d.commits.length;
+    if (W.name === n && W.failed) { W.failed = false; onChange(); }
     if (W.name === n && sig !== W.sig) { W.data = d; W.sig = sig; onChange(); }
-  } catch (e) {}
+  } catch (e) { if (W.name === n && !W.failed) { W.failed = true; onChange(); } }
 }
 // DF: the one file whose diff is open under "What it changed" (click a file again to close it)
 const DF = { name: null, p: null, data: null }; let again = () => {};
@@ -56,23 +57,28 @@ async function loadInput(n, onChange) {
   IN.at = now();
   try {
     const d = await jget("/api/agent-input?name=" + encodeURIComponent(n)) || {}, sig = JSON.stringify(d);
+    if (IN.name === n && IN.failed) { IN.failed = false; onChange(); }
     if (IN.name === n && sig !== IN.sig) { IN.data = d; IN.sig = sig; onChange(); }
-  } catch (e) {}
+  } catch (e) { if (IN.name === n && !IN.failed) { IN.failed = true; onChange(); } }
 }
 export async function loadFeed(n, onChange) {
   again = onChange;
-  if (IN.name !== n) { Object.assign(IN, { name: n, data: null, sig: "", at: 0, open: null, whole: null }); loadInput(n, onChange); }
-  if (F.name !== n) { Object.assign(F, { name: n, items: null, sig: "" }); loadAgentCosts().then(onChange); }
-  if (W.name !== n) { Object.assign(W, { name: n, data: null, sig: "", at: 0 }); loadWork(n, onChange); }
+  if (IN.name !== n) { Object.assign(IN, { name: n, data: null, sig: "", at: 0, open: null, whole: null, failed: false }); loadInput(n, onChange); }
+  if (F.name !== n) { Object.assign(F, { name: n, items: null, sig: "", failed: false }); loadAgentCosts().then(onChange); }
+  if (W.name !== n) { Object.assign(W, { name: n, data: null, sig: "", at: 0, failed: false }); loadWork(n, onChange); }
   try {
     const items = await jget("/api/agent?name=" + encodeURIComponent(n)), sig = JSON.stringify(items);
+    if (F.name === n && F.failed) { F.failed = false; onChange(); }
     if (F.name === n && sig !== F.sig) { F.items = items; F.sig = sig; onChange(); }
-  } catch (e) {}
+  } catch (e) { if (F.name === n && !F.failed) { F.failed = true; onChange(); } }
 }
 
 /** What the page and the panel poll: the feed while it's running (its work every 20 s), and the read marks on its posts. */
 export async function pollAgent(n, onChange) {
-  if (isRunning(n)) { loadFeed(n, onChange); if (now() - W.at > 20e3) loadWork(n, onChange); if (now() - IN.at > 10e3) loadInput(n, onChange); }
+  // a read that failed is tried again on every poll, running or not, so its "couldn't refresh" note goes once it answers
+  if (isRunning(n) || F.failed) loadFeed(n, onChange);
+  if ((isRunning(n) && now() - W.at > 20e3) || W.failed) loadWork(n, onChange);
+  if ((isRunning(n) && now() - IN.at > 10e3) || IN.failed) loadInput(n, onChange);
   if (costsPending() && now() - (F.costAt || 0) > 15e3) { F.costAt = now(); loadAgentCosts(); }   // opened while the first read was still going: pick up the figures when they land
   if (await pollDelivered()) onChange();
 }
@@ -309,7 +315,7 @@ export function agentPage(n, host = "page") {
       tone: L && agentState(L).key === "stuck" ? "bad" : null,
       actions: [L ? button("Open conversation", null, { href: threadHref(L.thread), size: "s", title: "Open " + L.thread }) : null, ...agentActions(n), button("All their posts", null, { href: threadHref("@" + n), size: "s" }), L ? killButton(n) : null],
       meta: [st.key === "outside" ? null : statusLabel(st.key, st.label || null, { live: isRunning(n) }), me ? h("span", { class: "ag-onset", title: new Date(me.at).toISOString() }, `said what it is on ${ago(me.at)}${me.before ? ", before this run" : ""}`) : null, ...line],
-      after: [nowBlock(n, L), defs(agentCard(n).map(r => !(isAgent(n) && !isWarden(n) && can("post")) ? r : r.k === "Model" ? { ...r, v: modelPicker(n, r, L) } : r.k === "Effort" ? { ...r, v: effortPicker(n, r, L) } : r))],
+      after: [(F.failed || W.failed || IN.failed) && F.name === n ? staleNote("Couldn't refresh this agent's steps, so this shows what it read last. It keeps trying.") : null, nowBlock(n, L), defs(agentCard(n).map(r => !(isAgent(n) && !isWarden(n) && can("post")) ? r : r.k === "Model" ? { ...r, v: modelPicker(n, r, L) } : r.k === "Effort" ? { ...r, v: effortPicker(n, r, L) } : r))],
     }),
     sections: [
       section({ title: "In numbers", note: "this agent's turns, time and cost" }, stats([

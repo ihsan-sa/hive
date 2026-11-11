@@ -24,7 +24,7 @@ CACHE = os.path.join(os.path.expanduser("~/.cache/hive-kb") if "KB_HOME" not in 
 DB, LOCK, QLOG, DREAMT = CACHE + "/index.db", CACHE + "/lock", CACHE + "/queries.jsonl", CACHE + "/dream_at"
 NOTES, ALIASES, MISSES = H + "/kb", H + "/kb/aliases.txt", H + "/kb/history/failed-lookups.md"
 # (source name, root, weight). Own notes outrank imported reports when text scores tie.
-ROOTS = [("kb", "kb", 1.25), ("draft", "kb/_drafts", 0.5), ("core", "core", 1.1), ("projects", "projects", 1.1), ("modules", "modules/_notes", 1.0),
+ROOTS = [("kb", "kb", 1.25), ("draft", "kb/_drafts", 0.5), ("core", "core", 1.1), ("projects", "projects", 1.1), ("modules", "modules/_notes", 1.0), ("moddocs", "modules", 1.0),
          ("docs", "archive/knowledge/docs", 1.0), ("boards", "archive/knowledge/boards", 1.0),
          ("journals", "archive/knowledge/journals", 1.0), ("journals", "archive/knowledge/journals-lines", 1.0),
          ("dispatch", "archive/knowledge/dispatch", 1.0), ("h0", "archive/knowledge/h0", 1.0), ("h1", "archive/knowledge/h1", 1.0),
@@ -40,6 +40,38 @@ SKIP_DIR = {".git", "node_modules", "__pycache__", "dist", "boards-site-pdfs", "
 # Kept out on purpose: the graded tests hold the answers (they'd rank above the sources), the query log is ours.
 # Agent worktrees are copies of the main checkouts: 25,000 files that repeat the same few. Keep the main ones.
 SKIP_PROJECT = re.compile(r"^projects/(rsi-loop/arms|hive-meta/interp/goals-history|_wt|[^/]*-a[0-9a-f]{4,5}(-[^/]*)?|[^/]*-zc-[^/]*|[^/]*-wt|[^/]*-land)(/|$)|/(tests/fixtures|pinned|skills|reference/remediations)/")
+# A module's own docs, read live from ~/modules (prose only; not its tests, fixtures, design data or the _notes above).
+# Agents' clones of a module under projects/ mostly hold older copies of those same files, so a clone's file that the live module
+# also has is left out when it has the same text or isn't newer; a newer, different one stays (a doc fixed on a branch not merged
+# yet), and so does what only the clone has (a report, a block's notes). On 2026-11-11 that left out 529 of 531 copies, 6 ms a search. Thread 11102350839c.
+SKIP_MODULE = re.compile(r"^modules/(_notes|[^/]+/(tests?|corpus|pinned|fixtures|vendor|third_party))(/|$)")
+_clone = {}
+def module_of(d, entries):
+    """The live ~/modules/NAME folder if d is the top of a git checkout of the org's hive-NAME repo, else None."""
+    if d in _clone: return _clone[d]
+    url, g = "", os.path.join(d, ".git")
+    if ".git" in entries:
+        try:
+            if os.path.isfile(g):  # a worktree: its config is in the main checkout's .git
+                gd = open(g).read().split("gitdir:", 1)[1].strip(); gd = os.path.normpath(os.path.join(d, gd))
+                cd = os.path.join(gd, "commondir"); g = os.path.normpath(os.path.join(gd, open(cd).read().strip())) if os.path.exists(cd) else gd
+            m = re.search(r'\[remote "origin"\][^\[]*?url\s*=\s*(\S+)', open(os.path.join(g, "config")).read()); url = m.group(1) if m else ""
+        except (OSError, IndexError): pass
+    m = re.search(r"[/:]Hive-R" + r"SI-Lab/hive-([\w.-]+?)(?:\.git)?/?$", url, re.I)
+    live = os.path.join(H, "modules", m.group(1).lower()) if m else None
+    _clone[d] = os.path.realpath(live) if live and os.path.isdir(live) else None
+    return _clone[d]
+
+def stale_copy(p, lp):
+    """Whether p, a clone's copy of the live module's file lp, holds nothing lp lacks: the same text, or not newer."""
+    try: a, b = os.stat(p), os.stat(lp)
+    except OSError: return False
+    if a.st_mtime <= b.st_mtime: return True
+    if a.st_size != b.st_size: return False
+    try:
+        with open(p, "rb") as f, open(lp, "rb") as g: return f.read() == g.read()
+    except OSError: return False
+
 # The grader's unchecked drafts are their own source, ranked low and marked [draft] (outcomes.py); ones the dream dropped aren't searched at all.
 SKIP_DRAFTS = re.compile(r"^kb/(_drafts|_dropped/drafts)(/|$)")
 SKIP_FILE = re.compile(r"(^|/)(question-test-[^/]*|\.queries\.jsonl|miss-candidates\.jsonl|MANIFEST)$")
@@ -72,14 +104,22 @@ def connect():
 
 def walk():
     for src, root, _ in ROOTS:
-        base = os.path.join(H, root)
+        base = os.path.join(H, root); skip = SKIP_MODULE if src == "moddocs" else SKIP_PROJECT; copy = {}  # dir -> (clone top, live module)
         for d, sub, files in os.walk(base):
-            sub[:] = [s for s in sub if s not in SKIP_DIR and not s.startswith(".") and not SKIP_PROJECT.search(os.path.relpath(os.path.join(d, s), H) + "/")
+            if src == "projects":
+                live = module_of(d, sub + files)
+                copy[d] = (d, live) if live else copy.get(os.path.dirname(d), (None, None))
+            if src == "moddocs" and d == base:  # only the public modules, each a clone of its own repo: not the Hive's private ones, which hold copies of core
+                sub[:] = [s for s in sub if not os.path.islink(os.path.join(d, s)) and module_of(os.path.join(d, s), os.listdir(os.path.join(d, s))) == os.path.realpath(os.path.join(d, s))]
+                files = []
+            sub[:] = [s for s in sub if s not in SKIP_DIR and not s.startswith(".") and not skip.search(os.path.relpath(os.path.join(d, s), H) + "/")
                       and not (src == "kb" and SKIP_DRAFTS.search(os.path.relpath(os.path.join(d, s), H)))]
+            top, live = copy.get(d, (None, None))
             for f in files:
                 p = os.path.join(d, f); rel = os.path.relpath(p, H)
-                if not TEXT.search(f) or SKIP_FILE.search(rel) or SKIP_PROJECT.search(rel): continue
-                if src in ("core", "projects") and not PROJECT_ONLY.search(f): continue
+                if not TEXT.search(f) or SKIP_FILE.search(rel) or skip.search(rel): continue
+                if src in ("core", "projects", "moddocs") and not PROJECT_ONLY.search(f): continue
+                if live and stale_copy(p, os.path.join(live, os.path.relpath(p, top))): continue
                 yield src, p, rel
 
 def chunks(text):
@@ -430,6 +470,20 @@ DENSE = {}  # what the last render asked of kb-dense: {"used": bool, "ms": int},
 DENSE_MS = float(os.environ.get("KB_DENSE_MS", 450))  # how long a find waits for the service before it answers with the word search alone
 DENSE_DEEP, DENSE_K, DENSE_WW, DENSE_WD, DENSE_BON = 30, 20, 1.0, 0.5, 0.02  # the merge measured as `hybrid` in projects/kb-search
 
+DENSE_PID = [0]
+def dense_peer(s):
+    """Note the service's pid from the socket, so the search log can show its swap beside each answer (projects/kb-search: are slow answers swap?)."""
+    import socket, struct
+    try: DENSE_PID[0] = struct.unpack("3i", s.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))[0]
+    except Exception: DENSE_PID[0] = 0
+
+def dense_state():
+    """{"swap_mb", "rss_mb", "load"} of the kb-dense service just asked, for the search log; {} if unknown."""
+    try:
+        m = dict(l.split(":", 1) for l in open(f"/proc/{DENSE_PID[0]}/status") if l.startswith(("VmSwap", "VmRSS")))
+        return {"swap_mb": int(m["VmSwap"].split()[0]) // 1024, "rss_mb": int(m["VmRSS"].split()[0]) // 1024, "load": round(os.getloadavg()[0], 1)}
+    except Exception: return {}
+
 def dense_ask(c, q, n=DENSE_DEEP):
     """Nearest passages by meaning from the kb-dense service (modules/kb-dense) as [path, line, end]; None on any trouble: no service, too slow, a bad reply."""
     import socket
@@ -439,7 +493,7 @@ def dense_ask(c, q, n=DENSE_DEEP):
     end = time.time() + DENSE_MS / 1000; s = socket.socket(socket.AF_UNIX)
     try:
         db = next(r[2] for r in c.execute("PRAGMA database_list") if r[1] == "main")
-        s.settimeout(DENSE_MS / 1000); s.connect(sock)
+        s.settimeout(DENSE_MS / 1000); s.connect(sock); dense_peer(s)
         s.sendall((json.dumps({"db": db, "q": q, "n": n}) + "\n").encode()); buf = b""
         while not buf.endswith(b"\n"):
             left = end - time.time()
@@ -548,8 +602,8 @@ def render(c, q, n=12, frm=None, to=None, src=None):
         if d is not None:
             live = dense_merge(c, hits, dl, 200 if rsock else n); m = live[:n]
             if m: top = m
-            DENSE.update(used=bool(m), ms=int((time.time() - t1) * 1000))
-        elif os.environ.get("KB_DENSE") != "0": DENSE.update(used=False, ms=int((time.time() - t1) * 1000))
+            DENSE.update(used=bool(m), ms=int((time.time() - t1) * 1000), **dense_state())
+        elif os.environ.get("KB_DENSE") != "0": DENSE.update(used=False, ms=int((time.time() - t1) * 1000), **dense_state())
         if rsock:
             RERANK.update(used=False, cut=False)
             try: r = rerank_order(c, q, live if d is not None and live else diversify(hits, 100)[:RERANK_NW], hits, d, n, rsock, t0 + RERANK_MS / 1000)
@@ -909,6 +963,9 @@ def cmd_file(a):
     if sim:
         print("similar, so merge if it's the same fact (kb file --to NAME.md appends):")
         for h in sim[:4]: print("  " + fmt_path(h["path"]) + ":" + str(h["line"]))
+    mods = modules_named(a.title + " " + text, sim)
+    if mods:  # the person, thread 11102350839c: a tool's lesson goes into the module and its public release too, not only the kb
+        print(f"this reads as a lesson about the {', '.join(mods)} module: put it in the module too (a PR to its docs or a fix, else an issue titled `Lesson: ...`) and add the link here, so other Hives get it")
     if kbuse and kbuse.RARE_KIND.search(a.title + " " + text) and not kbuse.KEEP.search(text):
         print("if this is read rarely and matters when it is (a price, supplier terms, where a credential lives, how to recover something), add a line `kb-keep: why` so the weekly pass never retires it")
     log({"filed": os.path.relpath(full, H), "to": bool(a.to)})
@@ -929,8 +986,26 @@ def board_post(pid):
     except OSError: pass
     return None
 
+def modules_named(text, sim=()):
+    """The installed modules of the public catalog (core/dist/modules.json: the ones with releases) a note is about: named in it (a
+    one-word name only as `NAME module`, `module NAME` or a modules/NAME path), or owning a doc among its similar passages."""
+    try: cat = json.load(open(os.path.join(H, "core", "dist", "modules.json")))
+    except (OSError, ValueError): return []
+    have = {n for n in cat if os.path.isdir(os.path.join(H, "modules", n))}
+    alias = {c["formerly"]: n for n, c in cat.items() if n in have and isinstance(c, dict) and c.get("formerly")}  # old names still in notes
+    low, out = text.lower(), set()
+    for w in set(re.findall(r"(?<![\w/.-])([a-z][a-z0-9]*(?:-[a-z0-9]+)*)(?![\w-])", low)):
+        n = alias.get(w, w)
+        if n in have and (w in alias or "-" in w): out.add(n)
+    for n in have:
+        if re.search(rf"\b{re.escape(n)}\s+module\b|\bmodules?\s+`?{re.escape(n)}\b|modules/{re.escape(n)}\b", low): out.add(n)
+    for h in sim:
+        parts = h["path"].split("/")
+        if h["source"] == "moddocs" and len(parts) > 1 and alias.get(parts[1], parts[1]) in have: out.add(alias.get(parts[1], parts[1]))
+    return sorted(out)
+
 def hits_for(c, words):
-    return [h for h in hydrate(c, rank(c, fts_expr(words[:25], []), 40)) if h["source"] in ("kb", "core", "modules", "projects")]
+    return [h for h in hydrate(c, rank(c, fts_expr(words[:25], []), 40)) if h["source"] in ("kb", "core", "modules", "moddocs", "projects")]
 
 def cmd_alias(a):
     with open(ALIASES, "a") as f: f.write(", ".join(a.words) + "\n")

@@ -18,7 +18,8 @@ NAME = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}")
 SYSTEM = ("/usr", "/bin", "/sbin", "/lib", "/lib32", "/lib64", "/libx32", "/etc", "/opt")
 READ_ONLY = ("core", "modules", "mcp.json", "board.jsonl", "log.jsonl", "run", "sessions", "files", "settings.json", ".local/bin", ".local/share/claude",
              ".hive/starter.json", ".hive/usage.json", ".hive/usage_5h.json", ".hive/usage_resets.json", ".hive/paused.json",
-             ".hive/login_limits.json", ".hive/provider_limits.json", ".hive/providers.json", ".hive/done", ".hive/killed")
+             ".hive/login_limits.json", ".hive/provider_limits.json", ".hive/providers.json", ".hive/done", ".hive/killed",
+             ".hive/thread-status.jsonl")  # the bars the dash reads: the stop gate checks them; they are set through the broker
 WRITABLE = ("projects", "kb", "reports/drafts")  # reports/drafts: hive-report contribute; approvals stay in reports/, out of reach
 LOGIN_READ_ONLY = ("settings.json", "CLAUDE.md", "skills", "agents", "commands", "plugins", "hooks")  # what a Claude run outside would load
 ENV_KEEP = {"PATH", "LANG", "LANGUAGE", "LC_ALL", "LC_CTYPE", "TERM", "TZ", "USER", "LOGNAME", "COLORTERM", "HIVE_NAME", "HIVE_DOOR", "CLAUDE_CONFIG_DIR", "CODEX_HOME", "KIMI_CODE_HOME",
@@ -239,6 +240,8 @@ def wrap(argv, env, name, box_home=None, sockets=None):
     box_home, sockets = Path(box_home or BOX_HOME), Path(sockets or prepare(name))
     box_home.mkdir(parents=True, exist_ok=True)
     for w in WRITABLE: (HOME / w).mkdir(parents=True, exist_ok=True)
+    try: (HOME / ".hive").mkdir(exist_ok=True); (HOME / ".hive" / "thread-status.jsonl").touch()  # bound as a file: it must be there, or the box reads its own
+    except OSError: pass
     for r in READ_ONLY + WRITABLE + (".cache/hive-tmp",): _unlink_links(box_home, r)  # a link left in the shared home would send a mount somewhere else
     size = ["--size", str(2 << 30)] if FLAGS["size"] else []
     bpf = _filter()

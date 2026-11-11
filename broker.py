@@ -249,7 +249,7 @@ def post(name, req, blobs):
     for k in ("thread", "to", "model", "effort", "reply_to"):
         if req.get(k): cmd.append(f"--{k.replace('_', '-')}={req[k]}")
     for k in req.get("done") or []:  # --done ASK: the post inside closes the ask, as outside the sandbox
-        if not re.fullmatch(r"k[0-9a-f]{3,8}", str(k)): return {"err": f"--done {k}: not an ask id (k0123)"}
+        if not re.fullmatch(r"k[0-9a-f]{3,8}|[0-9a-f]{12}", str(k)): return {"err": f"--done {k}: not an ask id (k0123) or the post that asked"}
         cmd.append(f"--done={k}")
     for k in req.get("tags") or []:  # --tag kind:id, checked again by hive post itself
         if not re.fullmatch(r"[A-Za-z]+:[^\s,]+", str(k)): return {"err": f"--tag {k}: a tag is kind:id"}
@@ -267,6 +267,14 @@ def post(name, req, blobs):
         return {"out": r.stdout.strip(), "err_out": r.stderr.strip(), "rc": r.returncode}
     finally:
         if d: shutil.rmtree(d, ignore_errors=True)
+
+def bar(name, req):
+    """`hive status` from inside the sandbox, and the stop hook's own bar writes: set outside, where the dash reads it (projects/everyday E30)."""
+    th, via = str(req.get("thread") or ""), req.get("via")
+    if via is not None and not re.fullmatch(r"(?:run-end|post|post-reason) [0-9a-f]{0,16}", str(via)): return {"err": "bad via"}
+    cmd = [sys.executable, "-I", str(CORE / "hive"), "status", th] + ([f"--via={via}"] if via else [])
+    r = subprocess.run(cmd, input=str(req.get("text", ""))[:2000], text=True, capture_output=True, timeout=60, env=post_env(name))
+    return {"out": r.stdout.strip(), "err_out": r.stderr.strip(), "rc": r.returncode}
 
 def done(name):
     d = STATE / "done"; d.mkdir(exist_ok=True)
@@ -297,7 +305,7 @@ def serve_ctl(c, name):
             blobs = [r.read(n) for n in sizes]
             verb = req.get("verb")
             out = (post(name, req, blobs) if verb == "post" else done(name) if verb == "done" else ask(name, req, blobs) if verb == "ask"
-                   else status(name) if verb == "status" else verdict(name, req) if verb == "verdict" else module(name, req) if verb == "module" else {"err": f"no verb {verb}"})
+                   else status(name) if verb == "status" else bar(name, req) if verb == "bar" else verdict(name, req) if verb == "verdict" else module(name, req) if verb == "module" else {"err": f"no verb {verb}"})
         except (OSError, ValueError, TypeError, subprocess.SubprocessError) as x:
             out = {"err": str(x)[:300]}
         try: c.sendall((json.dumps(out) + "\n").encode())

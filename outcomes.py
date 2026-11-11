@@ -8,6 +8,8 @@ Every run the starter logs (~/log.jsonl start/end) gets a grade in ~/outcomes.js
   partial    some of it, or a handover with a plan
   nothing    it posted, but no delivery and no handover: status only, questions back, the wrong thing
   not_asked  the post asked this agent nothing concrete
+A model or effort switch (`hive model X`) splits one piece of work over two runs: the run that only switched is not_asked by rule (marked `switch`), and the
+run that resumed on the switch post is graded against the post that woke the first one (`origin`), so the work is counted once, against what was asked.
 Every run woken by the person is graded; of the rest, whole chains: a fixed share of roots (ROOT_PCT) has every run handed on from it graded, so a chain's rate means a chain.
 A completion wake (an agent's result post named this agent, asked it nothing, and it ticked no rung) and a self-wake (the agent's own post named it) are
 only counted, every one of them, and marked on a ledger row that gets graded anyway: hive-meta moving.md P4, measuring before anyone suppresses them. The
@@ -115,6 +117,30 @@ CONTENTLESS = re.compile(r"[A-Za-z0-9]")
 def contentless(post):
     """The waking post said nothing beyond names and punctuation ("???", "!!", a bare mention): there is no ask to grade against."""
     return bool(post) and not CONTENTLESS.search(re.sub(r"@\w+", "", str(post.get("text") or "")))
+
+def switch_post(p, name):
+    """The agent's own post that carries a new model or effort and names it: `hive model X`, or a restart at another effort. It resumes on that post at once."""
+    to = p.get("to") if isinstance(p.get("to"), list) else str(p.get("to") or "").replace(",", " ").split()
+    return bool(p and (p.get("model") or p.get("effort"))) and p.get("from") == name and any(str(x).lstrip("@") == name for x in to)
+
+def switch_only(run, mine, log):
+    """The run did nothing but switch model or effort, and a later run of the same agent started on that post. The ask is carried by that later run
+    (see `origin`), so this one is outside the score: graded by the model, a ten-second switch read as "nothing" (ui-test-loop rounds 7 to 13, 2026-11-10)."""
+    if not mine or not all(switch_post(p, run["name"]) for p in mine): return False
+    ids = {p.get("id") for p in mine}
+    return any(r.get("event") == "start" and r.get("name") == run["name"] and ids & set(r.get("woke") or [r.get("post")]) for r in log)
+
+def origin(run, post, log, by_id, hops=5):
+    """For a run woken by its own switch post: the post that woke the run which made the switch, with the switch line under it. The grade is then against
+    what was asked, not against "Switching to sonnet: ...", which the model read as asking nothing (4 of 8 such runs were not_asked up to 2026-11-11)."""
+    first, said = post, []
+    while post and switch_post(post, run["name"]) and hops:
+        hops -= 1; said.append(str(post.get("text", "")))
+        prev = [r for r in runs(log) if r["name"] == run["name"] and r["key"] != run["key"] and r["started"] <= post.get("at", "")
+                <= (dt.datetime.fromisoformat(r["ended"]) + dt.timedelta(seconds=TAIL_S)).isoformat(timespec="seconds")]
+        post = by_id.get(prev[-1]["post"]) if prev else None
+    if not said or not post or switch_post(post, run["name"]): return first   # not a switch, or the ask can't be found: graded on the waking post, as before
+    return {**post, "text": str(post.get("text", "")) + "".join(f"\n(the agent then switched model or effort and carried on in this run; its switch line: {clip(t, 300)})" for t in reversed(said))}
 
 def mechanical(run, post, mine):
     if mine: return "not_asked" if contentless(post) else None   # "???" answered with where things stand was graded nothing on 2026-11-04
@@ -282,11 +308,14 @@ def cmd_grade(a):
     root = roots(log, by_id)
     for r in todo:
         post, mine, after = posts_of(r, posts, by_id)
-        r = {**r, **({"root": root[r["key"]]} if root.get(r["key"], r["key"]) != r["key"] else {}), **({"completion_wake": True} if completion_wake(r, by_id, mine, ticks) else {}), **({"self_wake": True} if post and self_wake(r, post) else {}), **({"round": True} if post and ROUND.search(str(post.get("text", ""))[:80]) else {})}   # marks for the spot-check and the step-up; the grade doesn't look at them
-        g = mechanical(r, post, mine)
+        ask = origin(r, post, log, by_id) if post and switch_post(post, r["name"]) else post   # resumed after a switch: graded on the ask the switch carried over
+        r = {**r, **({"root": root[r["key"]]} if root.get(r["key"], r["key"]) != r["key"] else {}), **({"completion_wake": True} if completion_wake(r, by_id, mine, ticks) else {}), **({"self_wake": True} if post and self_wake(r, post) else {}), **({"round": True} if ask and ROUND.search(str(ask.get("text", ""))[:80]) else {})}   # marks for the spot-check and the step-up; the grade doesn't look at them
+        sw = switch_only(r, mine, log)
+        post = ask
+        g = "not_asked" if sw else mechanical(r, post, mine)
         if g:
-            why = "the post asked nothing" if g == "not_asked" else "posted nothing" + (" though named" if g == "silent" else "")
-            if not a.dry: append(LEDGER, {**r, "at": iso(), "grade": g, "why": why, "posts": len(mine), "by": "rule"})
+            why = "only switched model or effort; the run it resumed as carries the ask" if sw else "the post asked nothing" if g == "not_asked" else "posted nothing" + (" though named" if g == "silent" else "")
+            if not a.dry: append(LEDGER, {**r, **({"switch": True} if sw else {}), "at": iso(), "grade": g, "why": why, "posts": len(mine), "by": "rule"})
             graded += 1
         else: model_runs.append((r, post, mine, after))
     chosen = pick(model_runs, a.sample, root=root) if not (a.all or other) else model_runs

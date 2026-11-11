@@ -7,7 +7,7 @@ import { deviceFingerprint } from "../core/sign.js";
 import { notifyBlocked, notifyOn, notifySupported, notifyTest, pushOn, pushSupported, setNotify, setPush } from "../core/notify.js";
 import { DEFAULT_NAME, brandLogo, brandName } from "../core/brand.js";
 import { form } from "../templates.js";
-import { pageHeader, section, block, blocks, button, field, infoButton, input, empty, meter, statusLabel, statusDot, waiting } from "../ui/kit.js";
+import { pageHeader, section, block, blocks, button, field, infoButton, input, empty, meter, statusLabel, staleNote, statusDot, waiting } from "../ui/kit.js";
 import { act, isBusy } from "../ui/activity.js";
 import { confirm } from "../ui/dialog.js";
 import { startSignin, signinBox, clearSignin } from "../ui/signin.js";
@@ -421,7 +421,7 @@ function modulesSection(ctx) {
     ];
   };
   return section({ title: "Modules", level: 1, note: "optional tools your agents can use" },
-    F.mods == null ? (F.modsErr ? [empty(`Couldn't read the modules: ${F.modsErr}`, { kind: "error" }), button("Try again", () => { F.modsErr = null; ctx.update(); return loadMods(ctx); }, { size: "s" })] : empty("Reading…", { kind: "loading" })) : F.mods.length ? shelves() : empty("No modules listed."),
+    F.mods == null ? (F.modsErr ? [empty(`Couldn't read the modules: ${F.modsErr}`, { kind: "error" }), button("Try again", () => { F.modsErr = null; ctx.update(); return loadMods(ctx); }, { size: "s" })] : empty("Reading…", { kind: "loading" })) : [F.modsErr ? staleNote("Couldn't refresh the modules, so this shows what it read last. It keeps trying.") : null, F.mods.length ? shelves() : empty("No modules listed.")],
     F.slack ? slackSetup(ctx) : null,
     msg("mods"));
 }

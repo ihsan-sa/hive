@@ -248,10 +248,19 @@ def noting_bar(f):
 NAMES_PERSON = re.compile(r"\bthe person\b|\bfor you\b", re.I)
 @noting_bar
 def cmd_own(a): r = set_status(a.id, "owned", owner=a.owner or me(), evidence=a.evidence, why=a.why); print(f"{a.id}: owned by {r['owner']}")
+def by_post(items, pid):
+    """The open asks a board post made, for `done` given the post's id instead of the ask's (bench k1-close-ask)."""
+    return [k for k, e in items.items() if e.get("post") == pid and e.get("status") not in CLOSED]
+
 @noting_bar
 def cmd_done(a):
     if not a.evidence: sys.exit("No evidence, not done: --evidence POSTID, the post in the thread that says what was delivered.")
-    items = ledger(); e = items.get(a.id) or {}; left = getattr(a, "left", None)
+    items = ledger()
+    if a.id not in items and (ks := by_post(items, a.id)):
+        for k in ks: print(f"{a.id} is a post; it made ask {k}")
+        for k in ks: cmd_done(argparse.Namespace(**{**vars(a), "id": k}))
+        return
+    e = items.get(a.id) or {}; left = getattr(a, "left", None)
     set_status(a.id, "done", evidence=a.evidence, why=a.why); print(f"{a.id}: done ({a.evidence})")
     if left: print(f"+ {split_wait(items, e, left, a.evidence, me())['id']} waits on the person, split from {a.id}")
     elif e.get("status") == "held" and NAMES_PERSON.search(e.get("why") or ""): print(f"Its record still names a step for the person: {e['why'][:200]}\nIf that step is still owed, it needs its own row: hive asks done {a.id} --evidence {a.evidence} --left \"the step\"")   # three finished asks hid behind a record like this (lab, 11100413d290)

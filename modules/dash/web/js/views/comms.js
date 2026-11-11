@@ -140,6 +140,7 @@ function threadEvents(th) {
 function refresh(c) {
   const src = c.thread ? (S.threads.get(c.thread) || { posts: NONE }).posts : c.home || c.focus != null || c.place ? NONE : S.posts;
   // With For you on, a run ending can promote a post already in the list, so the list is redone then. That must not move someone who has scrolled up.
+  L.th = c.thread || null; if (c.thread && L.ctx) loadShown(c.thread, L.ctx);
   const mask = maskFor(c), ended = mask & SHOW.you ? endedRuns() : 0, base = [c.arg, C.q, mask].join("\0"), key = base + "\0" + ended, match = matcher(c, mask, ended);
   const evs = c.thread && !C.q ? threadEvents(c.thread) : [];
   // One "New" rule above the first For-you message not yet on screen, taken once as the conversation opens (the Nov 8 handoff §8.2)
@@ -167,6 +168,31 @@ const atEnd = b => b.scrollTop + b.clientHeight > b.scrollHeight - NEAR;
 const sameTo = (a, b) => a.men.join() === b.men.join();
 const sameSource = (a, b) => { const x = postSource(a), y = postSource(b); return (x && x.name + x.how) === (y && y.name + y.how); };
 
+// One-line rule (the person, 11101818169f): the server says per post whether to draw it full, as one line or not at all (/api/thread-shown, modules/dash/shown_rule.py).
+// A line opens on click or Enter and stays open for the visit; "Show every message" is one switch per conversation, remembered, so nobody is stuck behind the rule.
+const SH = new Map(), OPENED = new Set(), ALL_KEY = "h2.showAllPosts";
+const showAll = th => { try { return (JSON.parse(localStorage.getItem(ALL_KEY)) || []).includes(th); } catch { return false; } };
+function setShowAll(th, on) { try { const l = new Set(JSON.parse(localStorage.getItem(ALL_KEY)) || []); on ? l.add(th) : l.delete(th); localStorage.setItem(ALL_KEY, JSON.stringify([...l])); } catch { /* this visit only */ } }
+function loadShown(th, ctx) {
+  const e = SH.get(th); if (!th || !app() || (e && now() - e.at < 5 * MIN)) return;
+  // The first time a conversation opens, its messages wait for the rule (about a second) rather than draw in full and then fold
+  // to a fifth of their height under the reader's eyes; past HOLD_MS, or if the rule fails, they draw in full.
+  const first = !(e && e.map), done = v => { SH.set(th, { map: v && v.posts ? v.posts : null, at: now() }); L.rebuild = true; L.keep = !first; ctx.update(); };
+  SH.set(th, { map: e ? e.map : null, at: now(), wait: first });
+  if (first) setTimeout(() => { const x = SH.get(th); if (x && x.wait) { x.wait = false; L.rebuild = true; ctx.update(); } }, HOLD_MS);
+  jget("/api/thread-shown?thread=" + encodeURIComponent(th)).then(done).catch(() => done(null));
+}
+const HOLD_MS = 3000;
+// The person's own posts never fold, so a conversation of only theirs (a new one) shows what was just sent at once.
+const shownHeld = items => { if (C.q.trim() || !L.th || showAll(L.th) || !items.some(p => !p.ev && p.from !== "person")) return false; const e = SH.get(L.th); return !!(e && e.wait && !e.map); };
+const shownOf = p => { if (C.q.trim() || !L.th || showAll(L.th)) return null; const e = SH.get(L.th); return e && e.map ? e.map[p.id] || null : null; };
+function lineRow(p, sh, ctx) {
+  const line = labelCodes(sh.line);
+  const open = () => { OPENED.add(p.id); L.rebuild = true; L.keep = true; L.ctx && L.ctx.update(); };
+  return h("div", { class: "cm-oneline", "data-key": p.id, "data-show": KIND_NAME[postKind(p)] || "" },
+    h("button", { type: "button", class: "cm-one-b", "aria-label": "Open the whole message: " + line, title: "Open the whole message", onclick: open }, h("span", { class: "cm-one-t" }, line)),
+    (sh.also || []).map(a => h("p", { class: "cm-one-also meta" }, labelCodes(a))));
+}
 function evRow(e) {
   return h("div", { class: "cm-ev", "data-key": e.key, "data-tone": status(e.tone).tone, role: "note" }, statusDot(e.tone), h("b", null, e.text), h("span", { class: "meta" }, clock(e.t) + " · " + e.sub));
 }
@@ -177,6 +203,9 @@ function rows(items) {
     const d = dayName(p.t);
     if (d !== L.day) { L.day = d; L.prev = null; out.push(h("div", { class: "cm-day", "data-key": "d:" + d }, h("span", null, d))); }
     if (p.ev) { out.push(evRow(p)); L.prev = null; continue; }
+    const sh = shownOf(p);
+    if (sh && sh.show === "hidden") continue;
+    if (sh && sh.show === "line" && sh.line && !OPENED.has(p.id)) { out.push(lineRow(p, sh)); L.prev = null; continue; }
     L.names.add(p.from); for (const m of p.men) L.names.add(m);
     if (!L.opts.showThread && L.helpers) { const hs = helperFolds(p.th, p.t, L.helpers, L.opts); if (hs.length) { out.push(...hs); L.prev = null; } }   // helper conversations fold where they began (R7)
     if (p.id === L.newId) { out.push(h("p", { class: "msg-new", role: "separator", "aria-label": "New messages", "data-key": "new:" + p.id }, "New")); L.prev = null; }
@@ -198,7 +227,8 @@ function paint(box, ctx) {
     ...(q ? [h("div", { class: "cm-qbar", role: "status" }, h("span", null, `Showing ${plural(L.all.length, "match", "matches")} for “${short(q, 40)}”`),
       button("Clear search", () => { C.q = ""; C.find = false; ctx.update(); }, { size: "s", kind: "quiet", icon: "close" }))] : []),
     ...(older ? [h("div", { class: "cm-older" }, button(`Show older (${older} more)`, () => { C.limit += STEP; L.rebuild = true; L.keep = true; ctx.update(); }, { size: "s" }))] : []),
-    ...(shown.length ? [...rows(shown), ...(L.opts.showThread ? [] : helperFolds(shown.at(-1).th, Infinity, L.helpers, L.opts))] : [empty(C.q ? "No messages match." : L.src.length && !simpleOn() ? "Nothing here with what Show has on. Turn on Agent comms to see all the messages." : "No messages yet.")]),
+    ...(shown.length && shownHeld(shown) ? [h("div", { class: "empty cm-held", "data-kind": "loading", role: "status", "aria-busy": "true" }, "Loading the conversation…")]
+      : shown.length ? [...rows(shown), ...(L.opts.showThread ? [] : helperFolds(shown.at(-1).th, Infinity, L.helpers, L.opts))] : [empty(C.q ? "No messages match." : L.src.length && !simpleOn() ? (app() ? "Nothing here for you yet. The rest is agents talking among themselves: Show hidden, in the title's menu, shows it." : "Nothing here with what Show has on. Turn on Agent comms to see all the messages.") : "No messages yet.")]),
     L.out, L.jump);
 }
 function setJump() {
@@ -577,7 +607,7 @@ function syncThreads(c, ctx) {
   if (held) { L.foldKids = []; tl.append(skeleton("rail")); return; }
   const rows = threadRows(c, ctx);
   L.foldKids = rows.filter(r => r.key.endsWith("~kids")).map(r => r.key.slice(0, -5));
-  const tree = sections(rows, ctx, { dense: true, empty: simpleOn() ? "No conversations yet. Start one with New conversation." : S.threads.size ? "Nothing here with what Show has on. Turn on Agent comms to see all of them." : app() ? "No conversations yet. Start one with New." : "No threads." });
+  const tree = sections(rows, ctx, { dense: true, empty: simpleOn() ? "No conversations yet. Start one with New conversation." : S.threads.size ? (app() ? "Nothing here for you yet. The rest is agents talking among themselves." : "Nothing here with what Show has on. Turn on Agent comms to see all of them.") : app() ? "No conversations yet. Start one with New." : "No threads." });
   if (tl.firstChild) morph(tl.firstChild, tree); else tl.append(tree);
   const fb = document.querySelector("#main .cm-foldall");   // the list is built after the bar, so the bar's word catches up here
   if (fb) { fb.hidden = foldNone(); if (fb.title !== foldWord()) fb.title = foldWord(); }
@@ -786,7 +816,9 @@ const tmetaSig = () => Object.entries(S.threadMeta || {}).map(([k, v]) => k + (v
 function showChips(ctx) {
   const mask = showMask();
   const group = h("div", { class: "tm-show", role: "group", "aria-label": "Show", title: showSays(mask) },
-    SHOW_PARTS.map(([b, l, t]) => h("button", { type: "button", class: "tm-chip", "data-show": KIND_NAME[b], "aria-pressed": String(!!(mask & b)), title: (mask & b ? "Hide " : "Show ") + t,
+    // E10 (ae6a2, 1110232186c2): in the app look Agent comms is off by default and means nothing to a newcomer, so its chip shows only once it is on
+    // (the title menu's Show N hidden turns it on), and then stays so it can be turned off again
+    SHOW_PARTS.filter(([b]) => !(app() && b === SHOW.comms && !(mask & b))).map(([b, l, t]) => h("button", { type: "button", class: "tm-chip", "data-show": KIND_NAME[b], "aria-pressed": String(!!(mask & b)), title: (mask & b ? "Hide " : "Show ") + t,
       onclick: () => setShow(showMask() ^ b, ctx) }, h("i", { "aria-hidden": "true" }), l)),
     mask ? null : h("p", { class: "meta tm-show-says" }, showSays(mask)));
   return app() ? h("div", { class: "tm-showwrap" }, group) : group;
@@ -828,6 +860,7 @@ function head(c, ctx) {
       input({ type: "search", class: "input cm-find", placeholder: c.thread ? "Search here" : "Search messages", "aria-label": "Search these messages", value: C.q, oninput: e => { C.q = e.target.value; clearTimeout(qTimer); qTimer = setTimeout(ctx.update, 120); }, onkeydown: e => { if (e.key === "Escape") { e.stopPropagation(); C.q = ""; C.find = false; e.target.blur(); ctx.update(); } } }),
       h("button", { type: "button", class: "btn", "data-kind": "icon", "aria-label": "Search here", title: "Search here", "aria-pressed": String(find),
         onclick: () => { C.find = !find; if (!C.find) C.q = ""; ctx.update(); if (C.find) queueMicrotask(() => document.querySelector(".cm-find")?.focus()); } }, icon("search")),
+      c.thread && SH.get(c.thread)?.map && Object.values(SH.get(c.thread).map).some(x => x.show !== "full") ? h("button", { type: "button", class: "btn cm-showall", "data-size": "s", "aria-pressed": String(showAll(c.thread)), title: "Show every message in full, not shortened to one line", "aria-label": "Show every message", onclick: () => { setShowAll(c.thread, !showAll(c.thread)); L.rebuild = true; L.keep = true; ctx.update(); } }, h("span", { class: "cm-sa-l" }, "Show every message"), h("span", { class: "cm-sa-s", "aria-hidden": "true" }, "All")) : null,
       c.thread ? button("Files", () => import("../ui/preview.js").then(m => m.openFiles()), { kind: "icon", icon: "folder", cls: "cm-files", title: "Files: this conversation's and the projects'" }) : null,
       c.thread ? asideBtn(c.thread, ctx) : null),
     C.menu === "title" || (C.menu === "asides" && c.thread) ? scrim(() => { C.menu = null; ctx.update(); }) : null,
@@ -908,10 +941,12 @@ const startedByPerson = th => { const d = S.threads.get(th); return !!(d && d.po
 /** Finished since the last visit (SU-3): asks of the person's that closed first (the ask register, /api/progress), then conversations they started that went Done. Ten shown, the rest behind one click. */
 const FIN = { asks: null, at: 0, open: true };   // open: shut, the reader saw "11 conversations" and no titles (reading 1812)
 function loadFinished(ctx) { if (now() - FIN.at < 5 * MIN) return; FIN.at = now(); jget("/api/progress").then(v => { FIN.asks = (v && v.asks) || []; ctx.update(); }).catch(() => { FIN.at = 0; }); }
+/** What came of a closed ask: the first line of its evidence post, one line; the ask's own words read as an order under a "Finished" heading (reading 20261110-2009). No post found: no words. */
+function outcome(ev) { const id = (String(ev || "").match(/\b\d{12}\b/) || [])[0], p = id && S.posts.find(q => q.id === id); return p ? firstLine(displayText(p)) : ""; }
 function finishedItems() {
-  const out = [], seenTh = new Set(), live = th => S.threads.has(th) && !isSystemThread(S.threads.get(th)) && !btwParent(th);
+  const out = [], seenTh = new Set(), waits = new Set(waitingOn().map(w => w.th)), live = th => !waits.has(th) && S.threads.has(th) && !isSystemThread(S.threads.get(th)) && !btwParent(th);
   for (const a of (FIN.asks || []).filter(a => a.status === "done" && a.done_at && Date.parse(a.done_at) > SEEN_BEFORE && live(a.thread)).sort((a, b) => (a.done_at < b.done_at ? 1 : -1))) {
-    if (seenTh.has(a.thread)) continue; seenTh.add(a.thread); out.push({ th: a.thread, t: Date.parse(a.done_at), what: firstLine(a.ask) });
+    if (seenTh.has(a.thread)) continue; seenTh.add(a.thread); out.push({ th: a.thread, t: Date.parse(a.done_at), what: outcome(a.evidence), more: (FIN.asks || []).some(b => b.thread === a.thread && b.id !== a.id && (b.status === "open" || b.status === "owned" || b.status === "person")) });
   }
   const rest = [...S.threads.values()].filter(d => !seenTh.has(d.name) && live(d.name) && d.last > SEEN_BEFORE && startedByPerson(d.name) && /(^|\n)Done:/.test(String((S.threadStatus && S.threadStatus[d.name] || {}).text || "").trim().split("\n").pop() || "") && !waitingOn().some(w => w.th === d.name))
     .sort((a, b) => b.last - a.last);
@@ -920,11 +955,11 @@ function finishedItems() {
 }
 function homeFinished() {
   const it = finishedItems(); if (!it.length) return null;
-  const row = x => h("li", { class: "cm-fin-r", "data-key": "fin:" + x.th }, h("a", { href: threadHref(x.th) }, threadTitle(x.th)), x.what ? h("span", { class: "cm-old-q" }, " \u2014 ", x.what) : null, h("span", { class: "meta" }, " \u00b7 ", when(x.t)));
+  const row = x => h("li", { class: "cm-fin-r", "data-key": "fin:" + x.th }, h("a", { href: threadHref(x.th) }, threadTitle(x.th)), x.what ? h("span", { class: "cm-old-q" }, " \u2014 ", x.what) : null, h("span", { class: "meta" }, " \u00b7 ", when(x.t)), x.more ? h("span", { class: "meta cm-fin-more" }, " \u00b7 another ask here is still open") : null);
   return h("section", { class: "cm-older cm-fin", "data-key": "fin", "aria-label": "Finished since your last visit" },
     h("details", { class: "cm-older-d", open: FIN.open ? "" : null, ontoggle: (e, d) => { if (e.target === d) FIN.open = d.open; } },
       h("summary", null, h("b", null, "Finished since your last visit"), h("span", { class: "meta" }, ` \u00b7 ${plural(it.length, "conversation")}`)),
-      h("ul", { class: "cm-old-l" }, it.slice(0, 16).map(row), it.length > 16 ? h("li", { class: "cm-need-all" }, h("details", null, h("summary", null, `${it.length - 16} more`), h("ul", { class: "cm-old-l" }, it.slice(16, 80).map(row)))) : null)));
+      h("ul", { class: "cm-old-l" }, it.slice(0, 80).map(row), it.length > 80 ? h("li", { class: "meta" }, `${it.length - 80} older ones not listed`) : null)));
 }
 export function rowMark(th) {
   if (waitingOn().some(w => w.th === th)) return { word: "needs you", tone: "info" };
@@ -932,7 +967,7 @@ export function rowMark(th) {
   if (k === "working" || k === "queued") return null;   // the dot says it
   const r = S.threadStatus && S.threadStatus[th], last = r && String(r.text || "").trim().split("\n").pop(), m = last && /^(Done|Blocked|Waiting|Needs the person|Told to stop):/.exec(last);
   if (!m) return null;
-  return m[1] === "Done" ? (S.threads.get(th) && S.threads.get(th).last > SEEN_BEFORE && startedByPerson(th) ? { word: "done · new", tone: "good" } : null) : m[1] === "Blocked" ? { word: "blocked", tone: "warn" } : m[1] === "Waiting" ? { word: "waiting", tone: null } : m[1] === "Needs the person" ? { word: "needs you", tone: "info" } : { word: "stopped", tone: null };
+  return m[1] === "Done" ? (S.threads.get(th) && S.threads.get(th).last > SEEN_BEFORE && startedByPerson(th) ? { word: "done · new", tone: "good" } : null) : m[1] === "Blocked" ? { word: /not (repaired|fixed)|failed/i.test(last) ? "failed, not fixed" : "blocked", tone: "warn" } : m[1] === "Waiting" ? { word: "waiting", tone: null } : m[1] === "Needs the person" ? { word: "needs you", tone: "info" } : { word: "paused", tone: null };   // Told to stop: set down on purpose, not broken
 }
 export const markEl = th => { const m = rowMark(th); return m ? h("span", { class: "rmk", "data-tone": m.tone, title: "This conversation: " + m.word }, m.word) : null; };
 function cardRow(r) {
@@ -1024,7 +1059,7 @@ function homeNeeds(ws) {
       // A trailing ", in #thread" goes to the meta line, as on the card (V3 handoff point 9), so no pill sits mid-sentence.
       h("p", { class: "cm-need-q" }, lineText(lf.text, { pill: false })),
       h("p", { class: "cm-need-m meta" }, h("a", { href: to }, needSource(w)), lf.th && lf.th !== w.th ? [" \u00b7 in ", h("a", { class: "th", href: threadHref(lf.th) }, threadTitle(lf.th))] : null,
-        who ? [" \u00b7 ", simpleOn() || !isCode(who) ? plainName(who) : agentRef(who, { dot: false, pill: true })] : null, w.t ? [" \u00b7 ", when(w.t)] : null),
+        who ? [h("span", { class: "cm-need-wsep" }, " \u00b7 "), simpleOn() || !isCode(who) ? h("span", { class: "cm-need-who" }, plainName(who)) : agentRef(who, { dot: false, pill: true })] : null, w.t ? [" \u00b7 ", when(w.t)] : null),
       // Its time rests at the right; on hover or focus the actions take its place (data-hover-acts, css §0). On a phone one … holds Later and Not needed and the row tap is Answer.
       open ? h("div", { class: "cm-need-b" }, w.t ? h("span", { class: "row-t meta" }, when(w.t, "t")) : null,
         h("span", { class: "row-acts" }, laterButtons(w), h("button", { type: "button", class: "btn cm-need-a", "data-size": "s", onclick: open }, "Answer")), needMore(w))
