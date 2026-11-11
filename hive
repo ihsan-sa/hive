@@ -155,9 +155,13 @@ def remind_asks(pid, thread):
     if os.environ.get("HIVE_DOOR") or not HASH_NAME.fullmatch(me) or me.startswith("f"): return  # free agents are kept light
     try:
         sys.path.insert(0, str(CORE)); import asks as A
-        mine = [e for e in A.ledger().values() if e.get("owner") == me and e.get("thread") == thread and e.get("status") not in A.CLOSED + A.WAITING][:3]
+        live = [e for e in A.ledger().values() if e.get("thread") == thread and e.get("status") not in A.CLOSED + A.WAITING]
+        mine = [e for e in live if e.get("owner") == me][:3]
+        # Nobody owns an ask the extractor filed from a post that woke this agent, so it never showed here and stayed open (bench k1-close-ask: 0 of 6 closed)
+        woke = {p.get("id") for p in posts() if p.get("thread") == thread and re.search(rf"@{me}\b", p.get("text") or "")} if not mine else set()
+        mine += [e for e in live if not e.get("owner") and e.get("post") in woke][:3 - len(mine)]
         if not mine: return
-        for e in mine: print(f"You own open asks here: {e['id']}: " + " ".join(str(e.get("ask")).split())[:100])
+        for e in mine: print(f"{'You own open asks here' if e.get('owner') == me else 'An open ask here was made of you'}: {e['id']}: " + " ".join(str(e.get("ask")).split())[:100])
         print(f"If this post delivers one: hive asks done ID --evidence {pid}; next time hive post --done ID; or hive asks hold|person|drop ID --why ...", flush=True)
     except Exception: pass
 
@@ -257,6 +261,38 @@ def cmd_relay(a):
 SHELL_BODY = re.compile(r"\$\((?:[^()]|\([^()]*\))*\)|\$\{?[A-Za-z_]\w*\}?")
 
 
+REASON_LINE = re.compile(r"\s*[*_]*(?:Done|Blocked|Needs the person|Waiting|Told to stop)\s*:.*", re.I)
+
+def chat_reason(p):
+    """A reply in a conversation the person started (its thread is the id of their own post) that ends on a reason line ("Done: ...",
+    "Waiting: ..."): the line belongs in the status bar, not the message, and 5 of 87 test replies left it in (projects/everyday E29).
+    (text without it, the line), or None. Work threads with a name (everyday, kb-...) keep the line: their posts end on it on purpose."""
+    th = p.get("thread") or ""
+    if not re.fullmatch(r"\d{8}[0-9a-f]{4}", th) or th == p["id"]: return None
+    if not any(q.get("id") == th and q.get("from") == "person" for q in posts()): return None
+    lines = p["text"].rstrip().split("\n")
+    tail = []
+    while len(lines) > 1 and re.fullmatch(r"\s*(?:@[\w.-]+[\s,.]*)+", lines[-1]): tail.insert(0, lines.pop())
+    if len(lines) < 2 or not REASON_LINE.fullmatch(lines[-1]): return None
+    line = lines.pop().strip().strip("*_ ").strip()
+    while lines and not lines[-1].strip(): lines.pop()
+    if not "".join(lines).strip(): return None
+    return "\n".join(lines + tail) + "\n", line
+
+def reason_bar(p):
+    """The reason line chat_reason took out of the post goes to the thread's status bar, as `hive status` would write it (line 1 kept)."""
+    import inbox
+    st = inbox.last_status(p["thread"])
+    line1 = (str(st.get("text", "")).strip().splitlines() or [""])[0].strip()
+    if not line1:
+        ask = next((q for q in posts() if q.get("id") == p["thread"]), {})
+        line1 = re.split(r"(?<=[.!?])\s", re.sub(r"^(?:@[\w.-]+[\s,:]*)+", "", " ".join(str(ask.get("text", "")).split())), maxsplit=1)[0][:120] or p["thread"]
+    try:
+        STATE.mkdir(parents=True, exist_ok=True)
+        with open(STATE / "thread-status.jsonl", "a") as f:
+            fcntl.flock(f, fcntl.LOCK_EX); f.write(json.dumps({"thread": p["thread"], "from": p["from"], "text": f"{line1}\n{p['reason']}"[:400], "at": time.time(), "via": "post-reason " + p["id"]}) + "\n")
+    except OSError: pass
+
 def cmd_post(a):
     text = " ".join(a.text) if a.text and a.text != ["-"] else sys.stdin.read()   # a lone - means stdin; agents write it, and it once went out as the whole message
     if SHELL_BODY.fullmatch(text.strip()):
@@ -313,6 +349,8 @@ def cmd_post(a):
          "to": ["@" + n for n in dict.fromkeys(to)], "thread": a.thread or pid, "text": text}
     if a.model: p["model"] = a.model
     if getattr(a, "effort", None): p["effort"] = a.effort
+    reason = chat_reason(p) if HASH_NAME.fullmatch(str(p["from"]).lower()) and not a.as_ else None
+    if reason: p["text"], p["reason"] = reason[0], reason[1]
     if getattr(a, "end", False):  # the run's last act: the hook ends the run here, with no further model call, if nothing holds the stop
         import inbox
         if inbox.has_stop_line(text): p["end"] = True
@@ -343,6 +381,7 @@ def cmd_post(a):
         fcntl.flock(f, fcntl.LOCK_EX); f.write(json.dumps(p) + "\n")
     print(pid, flush=True)
     me = (a.as_ or os.environ.get("HIVE_NAME", "")).lower()
+    if reason: reason_bar(p)
     for t, who in dict(copies).items():
         if relay_post(p, t, who, me, model=a.model): print(f"hive post: copied to thread {t} for @{who}" + (" (nobody is there: a new agent)" if who == "new" else ""), file=sys.stderr)
     for n, v in where.items():
@@ -1173,7 +1212,8 @@ def cmd_status(a):
     th = (a.thread or "").lstrip("#")
     if not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.:-]{0,100}", th): sys.exit("hive status: give a thread name (letters, digits and . _ : -)")
     f_ = STATE / "thread-status.jsonl"
-    if a.read or sys.stdin.isatty():
+    words = " ".join(getattr(a, "words", None) or [])  # `hive status T "Done: ..."`: 2 of 2 agents tried it first (projects/everyday E30)
+    if a.read or (sys.stdin.isatty() and not words):
         best = None
         try:
             for ln in f_.read_text().splitlines():
@@ -1182,10 +1222,11 @@ def cmd_status(a):
                 if r.get("thread") == th: best = r
         except OSError: pass
         print(best["text"] if best else "(no status yet)"); return
-    text = "\n".join([l.strip() for l in sys.stdin.read().strip().splitlines() if l.strip()][:6])[:900]
+    text = "\n".join([l.strip() for l in (words or sys.stdin.read()).strip().splitlines() if l.strip()][:6])[:900]
     if not text: sys.exit("hive status: empty text; give two short lines on stdin: what the thread is about, then where it stands now")
     if not any(p.get("thread") == th for p in posts()): sys.exit(f"hive status: no thread named {th} on the board")
-    rec = {"thread": th, "from": os.environ.get("HIVE_NAME", "anon"), "text": text, "at": time.time()}
+    if os.environ.get("HIVE_BROKER"): forward({"verb": "bar", "thread": th, "text": text})  # in the sandbox ~/.hive is the box's own: the dash would never see this bar (projects/everyday E30)
+    rec = {"thread": th, "from": os.environ.get("HIVE_NAME", "anon"), "text": text, "at": time.time(), **({"via": a.via} if getattr(a, "via", None) else {})}
     STATE.mkdir(parents=True, exist_ok=True)
     with open(f_, "a") as f:
         fcntl.flock(f, fcntl.LOCK_EX); f.write(json.dumps(rec) + "\n")
@@ -1193,6 +1234,8 @@ def cmd_status(a):
     try:
         import away
         if w := away.done_but_open(th, text): print(w, file=sys.stderr)
+        elif not any(away.REASON.match(l.strip().strip("*_ ")) for l in text.splitlines()):  # bench k4-status-bars: 0 of 6 bars said where the thread stands
+            print(f"hive status: no line says where {th} stands. Set it again with a last line that starts Done:, Waiting:, Blocked:, Needs the person: or Told to stop: and what is left.", file=sys.stderr)
     except Exception: pass  # a warning: never costs the bar that was just written
     leak = status_leaks(text.splitlines()[0])
     if leak: print(f"hive status: warning: line 1 shows on the person's home card and holds {', '.join(leak)}; say it in plain words (agents as @name, no rung, post or test ids)", file=sys.stderr)
@@ -1326,7 +1369,7 @@ p.add_argument("thread"); p.add_argument("--why", default=""); p.add_argument("-
 p = sp.add_parser("foryou", help="hive foryou list [--thread T] | close POST... --why WHY | close --thread T --why WHY | reopen POST... --why WHY: what's open on the person from For you lines, and the way to retract one that is obsolete, already decided or not a real wait. Dropping a thread from the summary closes nothing; this does")
 p.add_argument("do", choices=["list", "close", "reopen"]); p.add_argument("posts", nargs="*"); p.add_argument("--thread"); p.add_argument("--why", default=""); p.set_defaults(f=cmd_foryou)
 p = sp.add_parser("status", help="hive status THREAD <<'X' ...: set the status bar the dashboard shows at the top of a thread (line 1: what it is about; line 2: where it stands now, what it waits on; up to four more lines of detail, folded by default: this is the thread's summary, depth 3 of the person's four depths). --read prints it. Update it when you change a thread's state; before you stop, line 2 is why, starting Done:, Blocked:, Needs the person:, Waiting: or Told to stop:")
-p.add_argument("thread"); p.add_argument("--read", action="store_true"); p.set_defaults(f=cmd_status)
+p.add_argument("thread"); p.add_argument("words", nargs="*", help=argparse.SUPPRESS); p.add_argument("--read", action="store_true"); p.add_argument("--via", help=argparse.SUPPRESS); p.set_defaults(f=cmd_status)
 p = sp.add_parser("me", help="hive me \"what you are on\": one dated line per agent on what you are broadly on now (the direction, not the step; like a thread status but per agent). Update it when your focus shifts; hive me alone prints yours. The dashboard's Agents page and agent pages show it, so the person or an agent can find who is on a similar thing and write to them. --about \"...\": a standing line on who you are and what you do; the composer's @ menu shows it when your thread has no status line")
 p.add_argument("text", nargs="*"); p.add_argument("--about", action="store_true"); p.set_defaults(f=cmd_me)
 p = sp.add_parser("model", help="hive model haiku|sonnet|opus|fable WHY...: carry on with this conversation on another model. It posts WHY in your thread; end your turn and you resume on that model with your memory. --next: no resume, your next wake starts on it")

@@ -235,6 +235,18 @@ def _keep_bar_from():
     except ValueError: return float("inf")
 KEEP_BAR_FROM = _keep_bar_from()
 
+def write_bar(rec):
+    """Append a bar record. In the sandbox ~/.hive is the box's own and the real file is read-only, so the broker writes it (projects/everyday E30)."""
+    if os.environ.get("HIVE_BROKER"):
+        try:
+            sys.path.insert(0, str(Path(__file__).resolve().parent)); import sandbox
+            out = sandbox.call({"verb": "bar", "thread": rec["thread"], "text": rec["text"], "via": rec.get("via")})
+        except (SystemExit, Exception) as x: raise OSError(str(x))
+        if out.get("err") or out.get("rc"): raise OSError(out.get("err") or out.get("err_out") or "broker")
+        return
+    with (STATE / "thread-status.jsonl").open("a") as fh:
+        fh.write(json.dumps(rec) + "\n")
+
 def last_status(thread):
     """The newest status bar record for a thread (`hive status` appends to ~/.hive/thread-status.jsonl), or {}."""
     best = {}
@@ -247,7 +259,7 @@ def last_status(thread):
     return best
 
 # a Waiting reason must name what wakes the run: a clock time or date, a post id, an agent name, or a job/shell/review/answer
-WAIT_SIGNAL = re.compile(r"\b\d{1,2}:\d{2}\b|\b20\d\d-\d\d-\d\d\b|\b[0-9a-f]{12}\b|\b[a-f][0-9a-f]{4}\b|@\w|\b(heavy|job|shell|waiter|sims?|ci|build|review\w*|reply|answers?|wakes?|agent|queue|deploy|run)\b", re.I)
+WAIT_SIGNAL = re.compile(r"\b\d{1,2}:\d{2}(?:z|utc)?\b|\b20\d\d-\d\d-\d\d\b|\b[0-9a-f]{12}\b|\b[a-f][0-9a-f]{4}\b|@\w|\b(heavy|job|shell|waiter|sims?|ci|build|review\w*|reply|answers?|wakes?|agent|queue|deploy|run)\b", re.I)
 
 def stop_reason(name, st, since):
     """The reason this agent gave for stopping: the last line of the thread's status bar `st`, if this agent set it at or after
@@ -272,6 +284,9 @@ def reason_from_post(name, rec, thread, st, since, t=None):
     except (KeyError, ValueError): return None
     lines = [l.strip().strip("*_ ").strip() for l in str(p.get("text", "")).strip().splitlines() if l.strip()]
     while len(lines) > 1 and re.fullmatch(r"(?:@[\w.-]+[\s,.]*)+", lines[-1]): lines.pop()  # "Done: …" then the "@name" hand-back line (R25)
+    if p.get("reason"):  # hive post took it out of a chat reply and wrote the bar outside the sandbox, where this hook can't see it (projects/everyday E29)
+        got = stop_reason(name, {"from": name, "at": pat, "text": str(p["reason"])}, since)
+        return got + ("post reason",) if got else None
     got = stop_reason(name, {"from": name, "at": pat, "text": lines[-1] if lines else ""}, since)
     if not got: return None
     t = t or time.time()
@@ -279,8 +294,7 @@ def reason_from_post(name, rec, thread, st, since, t=None):
     if held and t >= KEEP_BAR_FROM: return got + ("post, bar kept",)
     line1 = (str(st.get("text", "")).strip().splitlines() or [""])[0].strip() or (lines[0][:120] if len(lines) > 1 else thread)
     try:
-        with (STATE / "thread-status.jsonl").open("a") as fh:
-            fh.write(json.dumps({"thread": thread, "from": name, "text": f"{line1}\n{got[1]}"[:400], "at": t, "via": "post " + str(p.get("id", ""))}) + "\n")
+        write_bar({"thread": thread, "from": name, "text": f"{line1}\n{got[1]}"[:400], "at": t, "via": "post " + str(p.get("id", ""))})
     except OSError: pass
     return got + ("post",)
 
@@ -290,6 +304,7 @@ def bar_line(p):
     """Line 2 for a bar written from post `p`: its last line when that is a stop or Next line, else its first sentence. Names lose the @ so a bar never reads as a mention."""
     lines = [l.strip().strip("*_ ").strip() for l in str(p.get("text", "")).strip().splitlines() if l.strip()]
     while len(lines) > 1 and re.fullmatch(r"(?:@[\w.-]+[\s,.]*)+", lines[-1]): lines.pop()
+    if p.get("reason"): lines.append(str(p["reason"]))  # the reason hive post moved out of a chat reply
     if not lines: return ""
     last = lines[-1]
     line = last if any(last.lower().startswith(w.lower() + ":") for w in STOP_WORDS) else re.split(r"(?<=[.!?])\s", lines[0], maxsplit=1)[0]
@@ -366,8 +381,7 @@ def run_end_bars(name, rec, t=None):
         if not line: continue
         line1 = (str(st.get("text", "")).strip().splitlines() or [""])[0].strip() or thread
         try:
-            with (STATE / "thread-status.jsonl").open("a") as fh:
-                fh.write(json.dumps({"thread": thread, "from": name, "text": f"{line1}\n{line}"[:400], "at": t, "via": "run-end " + str(p.get("id", ""))}) + "\n")
+            write_bar({"thread": thread, "from": name, "text": f"{line1}\n{line}"[:400], "at": t, "via": "run-end " + str(p.get("id", ""))})
             wrote.append(thread)
         except OSError: pass
     return wrote
@@ -413,7 +427,16 @@ def stop_gate(name, rec, t=None):
     except OSError: return None  # can't count the asks: don't risk a loop
     log("asked")
     line1 = (str(st.get("text", "")).strip().splitlines() or [""])[0].strip() or "what this thread is about, in one line"
-    return ("Before you stop, give the reason in this thread's status bar, where the person reads it. The hive keeps moving forward, "
+    mine = (str(st.get("text", "")).strip().splitlines() or [""])[-1].strip() if str(st.get("from", "")).lower() == name else ""
+    short = next((w for w in STOP_WORDS if mine.lower().startswith(w.lower() + ":")), None)  # e.g. "Done: answered": too short to tell the person anything (projects/everyday E29, t08 asked 3 times)
+    # Say which test the line failed: "too short" alone sent agents lengthening lines that failed on age or on the wait's signal (ae868, 11-11).
+    stale = short and not (isinstance(st.get("at"), (int, float)) and st["at"] >= since)
+    nosig = short and not stale and short == "Waiting" and len(mine) - len(short) > 12
+    why = (f"Your bar line `{mine}` was set before this run's work, so it no longer counts: set it again if it still holds.\n" if stale else
+           f"Your bar line `{mine}` names nothing that will wake you: say the job, run, agent (@name), post id or clock time (e.g. 09:00) you wait on.\n" if nosig else
+           f"Your bar line `{mine}` is too short to pass: say what, in a few more words (e.g. `{short}: answered how a web address loads, in 6 steps`).\n" if short else "")
+    return (why +
+            "Before you stop, give the reason in this thread's status bar, where the person reads it. The hive keeps moving forward, "
             "so a run stops only for one of these:\n"
             "- Done: what was asked is delivered, checked and posted, and no next step toward the goal behind it is yours to take now.\n"
             "- Blocked: the next step needs something only someone else can give (say what and who), and nothing else toward the goal is left that you can do meanwhile.\n"
@@ -584,6 +607,11 @@ def main():
     done()
     first = first_line(name, rec) if event != "Stop" else None
     check = model_check(name, rec) if event != "Stop" else None
+    if event == "PostToolUse":  # a served dash file that no longer parses blanks the person's page: say so to the editor at once
+        try:
+            import livecheck
+            if (lc := livecheck.check(payload)): check = "\n\n".join(x for x in (lc, check) if x)
+        except Exception: pass
     if not ps:
         if event == "PostToolUse" and not first and not check and (end := end_post(name, rec, payload)):
             why = end_decision(name, rec, end)

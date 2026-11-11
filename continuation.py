@@ -20,7 +20,19 @@ import goals as G
 HOME = Path.home()
 DIR, BOARD, STATUS, PROJECTS, CONFIG, OUTCOMES = HOME / ".hive" / "continue", HOME / "board.jsonl", HOME / ".hive" / "thread-status.jsonl", HOME / "projects", Path(__file__).resolve().parent / "config.json", HOME / "outcomes.jsonl"
 AGENT = re.compile(r"^[a-z][0-9a-f]{4,}$")
-PERSON_LINE = re.compile(r"(?<![\w./-])(?:for you|person)\b(?!\.\w| would| items?\b)", re.I)   # not a file or flag named for-person.md or --person, 13 of 18 drops from 2026-11-09
+# A step is the person's only when its line says so: it is for them, asks them, or waits on their word. Naming the person is not that: 48 of the 49
+# drops this rule made from 2026-11-06 to 2026-11-10 were agent work that mentioned the person ("the right person's section", "as the person gets it").
+# Agents also write to the person as "you" ("once you've decided", "needs your go"): a524d's review, 1,318 real lines, 2 waits caught, nothing new dropped.
+PERSON_LINE = re.compile(r"""(?<![\w./-])(?:
+    for\ you\b(?!\.\w|:?\ (?:lines?|items?|list|box)\b)
+  | @person\b
+  | (?:ask|asks|asking|asked)\ the\ person\b
+  | (?:needs?|waits?\ (?:on|for)|waiting\ (?:on|for)|wait\ (?:on|for)|blocked\ on|up\ to|until|unless|once|when|after|if)\ the\ person\b(?!['’]s\b|-)
+  | the\ person's\ (?:go\b|go-ahead|call|decision|answer|reply|ok\b|okay|approval|sign-?off|choice|word|say\b|yes\b|input|pick)
+  | (?:once|until|when|after|unless|waits?\ on|waiting\ on|needs?)\ you(?:'ve|'re|'ll)?\ (?:have\ )?(?:decided?|picked?|pick|choose|chosen|signed|sign|approved?|confirmed?|said|say|answered|answer|replied|reply|logged|log)\b
+  | (?:needs?|waits?\ (?:on|for)|waiting\ (?:on|for)|until|once|after|on)\ your\ (?:go\b|go-ahead|call|decision|answer|reply|ok\b|approval|sign-?off|choice|word|yes\b|pick)
+  | the\ person\ (?:decides?|says?|answers?|replies|approves?|picks?|chooses?|confirms?|signs?|must|has\ to|needs\ to|to\ (?:decide|pick|choose|confirm|approve|sign|answer))\b
+)""", re.I | re.X)
 SYSTEM_THREADS = {"keeper", "improve", "watchdog", "starter", "kb-dream"}  # their rounds are started on a timer already
 STOP_LINE = re.compile(r"^(done|blocked|needs the person|waiting|told to stop):", re.I)
 TAIL = 4_000_000  # bytes of the board a check reads: posts since a step that has only just ended

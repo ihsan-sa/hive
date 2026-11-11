@@ -270,6 +270,8 @@
   .cm-foci-h{margin-bottom:20px}
   .cm-old-q a{padding-block:4px}   /* a link inside the sentence: 24 px, no taller, so the lines stay even (R18) */
   .cm-need-m .ref{position:relative}
+  /* R-1110f-c: at phone width who asked gives way, so the source reads whole beside the time instead of two stubs ("Go to market: la… · Foryou p…"); the row tap still opens the answer. */
+  .cm-need-m>.cm-need-wsep,.cm-need-m>.cm-need-wsep+*{display:none}
   .cm-need-m .ref::after{content:"";position:absolute;inset:-8px -2px}
   .tbl.tg .tb>.tr .ref{position:relative}
   .tbl.tg .tb>.tr .ref::after{content:"";position:absolute;left:0;right:0;top:50%;height:44px;transform:translateY(-50%)}

@@ -302,7 +302,7 @@ let jumper = null;
 export const onJump = fn => { jumper = fn; };
 /** Open post id in its conversation, highlighted (Chat says how; before Chat has drawn, it opens the conversation first). */
 export const jump = id => { if (jumper) jumper(id); else location.hash = "#comms"; };
-const who = n => (n === "person" ? "You" : simpleOn() ? hiveName() : capFirst(agentLabel(n)));
+const who = n => (n === "person" ? "You" : simpleOn() ? hiveName() : agentLabel(n) === n ? n : capFirst(agentLabel(n)));   // a code stays as written
 
 // A post passed on from another thread (a relay, or @thread in the text) says where it came from; the original says where its copies went.
 let copyFor = [], copies = new Map();
@@ -347,7 +347,7 @@ function copyBtn(p) {
 // Between agents only trouble is worth a word (a running one sees its posts after its current step anyway), and it says who (the person, 11041326b458).
 function unseenNote(ms) {
   if (!ms.length) return null;
-  const said = ms.map(agentLabel), names = capFirst(said.length === 1 ? said[0] : said.slice(0, -1).join(", ") + " and " + said.at(-1));
+  const said = ms.map(agentLabel), joined = said.length === 1 ? said[0] : said.slice(0, -1).join(", ") + " and " + said.at(-1), names = said[0] === ms[0] ? joined : capFirst(joined);   // a code stays as written
   return h("span", { class: "msg-r", "data-tone": "bad", title: said.map(m => `Hasn't reached ${m}`).join("\n") }, `${names} ${ms.length === 1 ? "hasn't" : "haven't"} seen this`);
 }
 /** The line above a message: author, who it went to, thread (outside a thread), who it woke, Reply, time. */

@@ -533,6 +533,39 @@ def checklist_do(d):
     m.checks_save(c)
     return c
 
+# ---------- which posts the chat shows in full and which as one line (GET /api/thread-shown?thread=T) ----------
+# The rule is shown_rule.decide (beside this file), picked by the reader test in projects/rsi-lab/shown (READER-TEST.md, "Step 2").
+# Answer: {"thread": T, "posts": {post id: {"show": "full" | "line" | "hidden", "line": "HH:MM who: first line" | None, "also": [lines with a "?"]}}}.
+# Only posts the chat shows today get an entry; a post with none is drawn as today. The whole board is decided at once (a run's chains
+# cross threads) and kept until the board, the log or the asks file grows: about half a second on 20,000 posts.
+ASKS_FILE = HOME / "asks.jsonl"
+_shown_rule = [None, {}]   # [(file sizes), {thread: {post id: entry}}]
+_shown_rule_lock = threading.Lock()
+
+
+def shown_rule_mod():
+    m = sys.modules.get("h2_shown_rule")
+    if not m:
+        spec = importlib.util.spec_from_file_location("h2_shown_rule", Path(__file__).with_name("shown_rule.py")); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m); sys.modules["h2_shown_rule"] = m
+    return m
+
+
+def thread_shown(thread):
+    if not THREAD_NAME.fullmatch(thread or ""): raise ValueError("a thread name is letters, digits and . _ : -")
+    def size(p):
+        try: return p.stat().st_size
+        except OSError: return -1
+    key = (size(BOARD), size(LOG), size(ASKS_FILE))
+    with _shown_rule_lock:
+        if _shown_rule[0] != key:
+            board = [r for r in jlines(BOARD) if isinstance(r, dict)]
+            every, by_thread = shown_rule_mod().board_shown(board, jlines(LOG), jlines(ASKS_FILE)), {}
+            for r in board:
+                if r.get("id") in every: by_thread.setdefault(r.get("thread"), {})[r["id"]] = every[r["id"]]
+            _shown_rule[:] = [key, by_thread]
+        return {"thread": thread, "posts": _shown_rule[1].get(thread, {})}
+
+
 # ---------- the status bar at the top of a thread (GET /api/thread-status) ----------
 # `hive status THREAD` appends to ~/.hive/thread-status.jsonl; newest entry per thread: {thread: {text, from, at}}.
 THREAD_STATUS = STATE / "thread-status.jsonl"
@@ -1941,7 +1974,7 @@ INSTALLED = HOME / ".hive-installed"
 FORWARDED = ("cf-ray", "cf-connecting-ip", "cf-access-jwt-assertion", "cf-ipcountry", "cf-visitor", "cdn-loop", "x-forwarded-for",
              "x-forwarded-host", "x-forwarded-proto", "x-real-ip", "forwarded", "via", "true-client-ip")
 GET_CAP = {"/api/call-chat": "post", "/api/live": "read", "/api/away": "read", "/api/board": "read", "/api/log": "read", "/api/usage": "read", "/api/jobs": "read", "/api/agent": "read", "/api/agent-work": "read", "/api/agent-input": "read", "/api/agent-diff": "read", "/api/ledger": "read",
-           "/api/projects": "read", "/api/agent-costs": "read", "/api/thread-names": "read", "/api/thread-meta": "read", "/api/shown": "read", "/api/thread-status": "read", "/api/foci": "read", "/api/agent-status": "read", "/api/thread-find": "read", "/json": "read", "/api/target": "read", "/api/inbox": "read", "/api/delivered": "read",
+           "/api/projects": "read", "/api/agent-costs": "read", "/api/thread-names": "read", "/api/thread-meta": "read", "/api/shown": "read", "/api/thread-status": "read", "/api/thread-shown": "read", "/api/foci": "read", "/api/agent-status": "read", "/api/thread-find": "read", "/json": "read", "/api/target": "read", "/api/inbox": "read", "/api/delivered": "read",
            "/api/config": "config", "/api/modules": "modules", "/api/slack-door": "modules", "/api/signin": "logins", "/api/plans": "plans", "/api/secrets": "secrets",
            "/api/settings": "config", "/api/ntfy": "config", "/api/webpush": "config", "/api/update": "config", "/api/signin-codex": "logins", "/api/accounts": "logins", "/api/design": "logins", "/api/brand/logo": "read",
            "/api/kb/home": "files", "/api/kb/open": "files", "/api/kb/search": "files", "/api/kb/raw": "files", "/api/kb/map": "files", "/api/kb/history": "files", "/api/progress": "read", "/api/checklist": "read", "/api/share-preview": "read", "/api/approvals": "read", "/api/feedback-drafts": "read", "/api/mail": "files"}
@@ -4998,6 +5031,9 @@ def serve(port):
                 try:
                     self.send(json.dumps(thread_find().find((q.get("q") or [""])[0])).encode(), J)
                 except Exception as e: self.send(json.dumps({"error": str(e)[:200]}).encode(), J)
+            elif u.path == "/api/thread-shown":
+                try: self.send(json.dumps(thread_shown((q.get("thread") or [""])[0])).encode(), J)
+                except ValueError as e: self.send(json.dumps({"error": str(e)}).encode(), J)
             elif u.path == "/api/thread-status":
                 self.send(json.dumps(thread_status()).encode(), J)
             elif u.path == "/api/foci":

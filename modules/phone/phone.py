@@ -287,13 +287,19 @@ OPEN_AFTER = 30  # seconds into a call, and
 OPEN_REJECTS = 3 # whole turns rejected, with no solid match yet, before deciding the enrolled voice doesn't fit this call
 
 
-def _check(key, now):
-    s = _calls.get(key)
-    if s is None or now - s["last"] > STALE:
-        s = _calls[key] = {"start": now, "last": now, "rejects": 0, "sure": False}
-        for k in [k for k, v in _calls.items() if now - v["last"] > 86400]: del _calls[k]
-    s["last"] = now
-    return s
+_calls_lock = threading.Lock()
+
+
+def _check(key, now, by_call=True):
+    """The voice-check state of a call. Keyed by channel (no call id), a gap of STALE starts a new call; a real call id never resets,
+    since a call goes quiet for minutes on hold or while the person listens."""
+    with _calls_lock:
+        s = _calls.get(key)
+        if s is None or (not by_call and now - s["last"] > STALE):
+            s = _calls[key] = {"start": now, "last": now, "rejects": 0, "sure": False}
+            for k in [k for k, v in list(_calls.items()) if now - v["last"] > 86400]: del _calls[k]
+        s["last"] = now
+        return s
 
 
 def _failed_open(s, now):
@@ -311,7 +317,7 @@ def voice_gain(a, channel, info, now=None, call=None, clean=None):
         import speaker
         ref = speaker.refs().get(channel)
         if ref is None: return None
-        s = _check(call or channel, now)
+        s = _check(call or channel, now, call is not None)
         g, kept, sure = speaker.mask(a, ref, clean)
         if kept is None: return g   # no speech: nobody to match or reject
         info["kept"] = round(kept, 2)
@@ -364,7 +370,7 @@ def stt(pcm16k, partial=False, channel="browser", info=None, call=None):
         try:
             import speaker
             ref = speaker.refs().get(channel); now = time.time()
-            g = speaker.mask(a, ref, clean)[0] if ref is not None and not _failed_open(_check(call or channel, now), now) else None
+            g = speaker.mask(a, ref, clean)[0] if ref is not None and not _failed_open(_check(call or channel, now, call is not None), now) else None
         except Exception: g = None
     else: g = voice_gain(a, channel, info, call=call, clean=clean)
     a = clean if g is None else clean * g

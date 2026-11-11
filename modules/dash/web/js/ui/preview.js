@@ -114,14 +114,23 @@ const AUTO = "pv.autoFiles.off";
 let autoFor = null;
 export function autoFiles(key) {
   if (key === autoFor) return; autoFor = key;
-  if (P.root && P.list) { const by = P.auto; openFiles(true); P.auto = by; return; }   // another conversation: its files, still the hand's if the hand opened it
+  let tries = 0;
+  const settled = f => { const go = () => {   // what is on screen changes until the one-line rule has folded the messages (comms.js)
+    if (key !== autoFor) return;
+    if (document.querySelector("#main .cm-msgs .cm-held") && ++tries < 12) return void setTimeout(go, 300);
+    f();
+  }; setTimeout(go, 0); };   // after this render's messages are drawn
+  if (P.root && P.list) {   // another conversation: its files, still the hand's if the hand opened it; one that opened by itself shuts where there are none
+    const by = P.auto;
+    return settled(() => { if (!P.root || !P.list) return; if (by && !threadFiles().length) return closePreview(); openFiles(true); P.auto = by; });
+  }
   let off = false; try { off = !!localStorage.getItem(AUTO); } catch (e) {}
   if (innerWidth < 1100) autoFor = null;   // seen while narrow doesn't count: the same conversation on a wider window gets its list
   if (off || innerWidth < 1100 || P.root) return;   // narrower, there is never room beside the messages
-  setTimeout(() => {   // the messages draw first: open only when this conversation has files and room beside them
-    if (key !== autoFor || P.root || !threadFiles().length || !filesRoom()) return;
+  setTimeout(() => settled(() => {   // the messages draw first: open only when this conversation has files and room beside them
+    if (P.root || !threadFiles().length || !filesRoom()) return;
     import("./panel.js").then(m => { if (!m.panelOpen()) openFiles(true); }, () => openFiles(true));
-  }, 500);
+  }), 500);
 }
 // Room for the small Files list (208px wide, 16px in from the right: components.css) clear of the message column, with a gap.
 const FILES_W = 208 + 16 + 16;
