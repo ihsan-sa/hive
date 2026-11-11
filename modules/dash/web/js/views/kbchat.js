@@ -12,7 +12,10 @@ import { href, threadHref } from "../core/router.js";
 import { clock } from "../core/format.js";
 
 const BRIEF = "Knowledge-page question from the person (answer them on this thread; they read it inside the Knowledge page). Use `kb find WORDS` and the files under ~ to find what they ask for. Reply briefly. Name every file you point to by its home-relative path in backticks, like `kb/notes.md` or `projects/x/goals.md`, because each backticked path becomes a link that opens it in the knowledge base. Question: ";
-const Q = { th: null, text: "", busy: false, err: "", open: false, sent: 0 };
+// The draft is kept in localStorage like the composers' drafts, so a reload mid-question doesn't lose it (round 16).
+const KEY = "draft:kb-ask";
+const keepText = t => { try { t ? localStorage.setItem(KEY, t) : localStorage.removeItem(KEY); } catch (e) {} };
+const Q = { th: null, text: (() => { try { return localStorage.getItem(KEY) || ""; } catch (e) { return ""; } })(), busy: false, err: "", open: false, sent: 0 };
 const PATH = /^~?\/?((?:[\w.@+-]+\/)*[\w.@+-]+\.[A-Za-z0-9]{1,8}|(?:[\w.@+-]+\/)+[\w.@+-]+\/?)(?:::(\d+))?$/;
 
 /** A file chip: icon, the name, and the folder it is in (muted, cut from the left when long). */
@@ -50,7 +53,7 @@ async function send(ctx) {
   try {
     const th = Q.th || "kb-ask-" + Date.now().toString(36);
     await post("/api/post", { text: Q.th ? q : "@new " + BRIEF + q, thread: th, files: [], model: Q.th ? null : "sonnet" });
-    Q.th = th; Q.text = ""; Q.sent = Date.now(); Q.open = true;
+    Q.th = th; Q.text = ""; keepText(""); Q.sent = Date.now(); Q.open = true;
     const el = document.querySelector(".kb-ask-in"); if (el) el.value = "";
   } catch (e) { Q.err = e.message; }
   Q.busy = false; ctx.update();
@@ -86,7 +89,7 @@ export function kbChat(ctx, { compact = false, cur = "" } = {}) {
     button("New question", () => { Q.th = null; Q.open = false; ctx.update(); requestAnimationFrame(() => document.querySelector(".kb-ask-in")?.focus()); }, { size: "s", kind: "quiet", icon: "plus" }),
     button("Open as a conversation", null, { size: "s", kind: "quiet", href: threadHref(Q.th) })) : null;
   const ta = h("textarea", { class: "kb-ask-in", rows: "1", value: Q.text, placeholder: Q.th ? "Ask a follow-up…" : "Ask the Hive to find the notes and files on…", "aria-label": "Ask the Hive",
-    oninput: (e, n) => { Q.text = n.value; n.form.querySelector(".kb-ask-send").disabled = !n.value.trim() || Q.busy; },
+    oninput: (e, n) => { Q.text = n.value; keepText(n.value); n.form.querySelector(".kb-ask-send").disabled = !n.value.trim() || Q.busy; },
     onkeydown: (e, n) => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(ctx); } } });
   const head = h("h2", { class: "kb-ask-h", "data-key": "h", onclick: compact ? () => { Q.open = !Q.open; ctx.update(); } : null },
     icon("hive"), "Ask the Hive",

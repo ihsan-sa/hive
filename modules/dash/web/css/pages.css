@@ -23,7 +23,7 @@
 .u-accts{display:grid;grid-template-columns:auto minmax(0,1fr) 180px auto auto;column-gap:12px}
 .lr.u-acct{display:grid;grid-column:1/-1;grid-template-columns:subgrid;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--line)}
 .lr.u-acct:last-child{border-bottom:0}
-.lr.u-acct[data-dim]{opacity:.7}
+.lr.u-acct[data-dim]>.meter{opacity:.7}   /* a paused account: its bar fades, its letter and words stay readable (the whole row at .7 put them under 3:1; drive_app_contrast) */
 .u-acct-m{display:grid;gap:2px;min-width:0}
 .u-acct-m .lr-t{display:flex;gap:8px;align-items:baseline;min-width:0}
 .lr-s{color:var(--ink-2);font-size:var(--fs-meta,13px);font-variant-numeric:tabular-nums}

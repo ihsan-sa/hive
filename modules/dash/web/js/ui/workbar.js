@@ -8,7 +8,7 @@ import { href } from "../core/router.js";
 import { simpleOn } from "../core/simple.js";
 import { focusName, pct, usd } from "../core/foci.js";
 
-const SLOTS = [["#2a78d6", "#3987e5", "#fff", "#0b0b0b"], ["#eb6834", "#d95926", "#0b0b0b", "#0b0b0b"], ["#1baf7a", "#199e70", "#0b0b0b", "#0b0b0b"],
+const SLOTS = [["#2872d0", "#3987e5", "#fff", "#0b0b0b"], ["#eb6834", "#d95926", "#0b0b0b", "#0b0b0b"], ["#1baf7a", "#199e70", "#0b0b0b", "#0b0b0b"],   // slot 1 light: white on it measures 4.76:1 (was #2a78d6, 4.42:1; drive_app_contrast)
   ["#eda100", "#c98500", "#0b0b0b", "#0b0b0b"], ["#e87ba4", "#d55181", "#0b0b0b", "#0b0b0b"], ["#6250d6", "#9085e9", "#fff", "#0b0b0b"]];
 const WINDOWS = [["day", "Last 24 hours"], ["week", "Last 7 days"]];
 const MAIN = 6, LABEL_FROM = 0.07;   // under 7% a share's digits don't fit its block on a phone: it stays in the tooltip

@@ -211,7 +211,7 @@ def _login(d, keep=()):
     return args
 
 def ready(name, wait=3.0):
-    """Wait for the broker to have this run's sockets (it looks every 0.3 s). True if it has."""
+    """Wait for the broker to have this run's sockets (it looks every 0.1 s). True if it has."""
     f, t = SOCKETS / name / "ctl.sock", time.time() + wait
     while time.time() < t:
         try:
@@ -242,6 +242,12 @@ def wrap(argv, env, name, box_home=None, sockets=None):
     for w in WRITABLE: (HOME / w).mkdir(parents=True, exist_ok=True)
     try: (HOME / ".hive").mkdir(exist_ok=True); (HOME / ".hive" / "thread-status.jsonl").touch()  # bound as a file: it must be there, or the box reads its own
     except OSError: pass
+    # The board and the log are bound as files too. On a fresh install the warm agent's box starts before the first post, when there is no
+    # board yet: --ro-bind-try then binds nothing, the box never sees the person's question, its status call fails and it posts the answer
+    # two or three times (projects/everyday E12c). An empty file keeps the bind.
+    for f in ("board.jsonl", "log.jsonl"):
+        try: (HOME / f).touch()
+        except OSError: pass
     for r in READ_ONLY + WRITABLE + (".cache/hive-tmp",): _unlink_links(box_home, r)  # a link left in the shared home would send a mount somewhere else
     size = ["--size", str(2 << 30)] if FLAGS["size"] else []
     bpf = _filter()

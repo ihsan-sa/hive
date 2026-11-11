@@ -51,6 +51,8 @@ const mono = agentMono;
 /** A stack of avatars, at most max, then +N. Hovering it (or tabbing into it) opens a list of every name with its status, each a link. */
 export function avatars(names, { max = 4, size } = {}) {
   if (!names.length) return null;
+  // In a conversation an agent and its heirs share one name (E12b): one avatar for them, the running one else the last.
+  if (inScope()) { const by = new Map(); for (const n of names) { const l = /^a[0-9a-f]{4}$/.test(n) ? agentLabel(n) : n, o = by.get(l); if (!o || !isRunning(o)) by.set(l, n); } names = [...by.values()]; }
   const running = names.filter(n => isRunning(n)).length;
   return h("span", { class: "avs-w", tabindex: "0", "aria-label": `${names.length} agents here; show the list` },
     h("span", { class: "avs" }, names.slice(0, max).map(n => agentAvatar(n, { size })), names.length > max ? h("span", { class: "av", "data-size": size || null }, "+" + (names.length - max)) : null),

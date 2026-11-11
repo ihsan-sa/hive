@@ -32,11 +32,11 @@ function agentRows(run, states, t, waits) {
   return table({ caption: "Running agents", cls: "nowtbl", rows: run, key: a => a.name,
     rowAttrs: a => { const st = states.get(a.name); return { "data-tone": status(st.key).tone, "data-attn": st.key === "stuck" ? "" : null }; },
     columns: [
-      { label: "Agent", lead: true, cls: "nt-a", render: a => agentRef(a.name) },
-      { label: "Conversation", cls: "nt-th", render: a => threadRef(a.thread) },
-      { label: "State", cls: "nt-st", render: a => { const st = states.get(a.name); return h("span", { title: status(st.key).hint }, waits.has(a.thread) ? tag("info", "waits on you") : tag(TONE[st.key], st.text)); } },
+      { label: "Agent", lead: true, cls: "nt-a", width: "minmax(8rem,16rem)", render: a => agentRef(a.name) },
+      { label: "Conversation", cls: "nt-th", width: "minmax(6rem,15rem)", render: a => threadRef(a.thread) },
+      { label: "State", cls: "nt-st", width: "minmax(5rem,6.5rem)", render: a => { const st = states.get(a.name), head = st.text.split(", ")[0]; return h("span", { title: [head !== st.text ? st.text : null, status(st.key).hint].filter(Boolean).join("\n") || null }, waits.has(a.thread) ? tag("info", "waits on you") : tag(TONE[st.key], head)); } },   // the narrow column says the first part ("2 jobs running"); the rest is in the hover, where seven wrapped lines were (R-1111a-e)
       { label: "Model", cls: "nt-md meta", render: a => (cardRows(a.name)[0] || {}).short || "–" },
-      { label: "Doing now", cls: "nt-do clip", render: a => {
+      { label: "Doing now", cls: "nt-do", clip: true, render: a => {   // the spare width goes here, where the words are, not to the gap after State (1110h)
         const task = S.byId[a.post], say = nowSay(a);   // what it says it is on, in its own words; the command it happens to be running is only in the hover (the person, 11081450f3e1)
         const askText = task ? labelCodes(firstSentence(displayText(task))) : "", asked = askText ? (a.from ? agentLabel(a.from) + ": " : "") + askText : null;
         return h("div", { title: [say && say.own ? `Its own words, said ${ago(say.at)}${say.before ? ", before this run" : ""}` : null, a.doing ? "Last step: " + a.doing : null].filter(Boolean).join("\n") || null },

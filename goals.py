@@ -30,6 +30,7 @@ LADDER_ANY = re.compile(r"^##\s+(.*\bladder\b.*)$", re.M | re.I)   # a topic lad
 RUNG = re.compile(r"^\s*-\s+\[([ x!])\]\s+(.+)$", re.M)
 AFTER = re.compile(r"\bafter:(\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2})?)Z?\b")   # a day, or a UTC minute (after:2026-11-08T09:50Z) for a rung that waits on a timed run
 GATE = re.compile(r"\b(?:on or after|not before|after|on|from|until|revisits?|re-?recheck|re-?check|recheck|read(?:ing)?|judge)\b[^.;:()]{0,24}?\b(\d{4}-\d{2}-\d{2})\b", re.I)   # the same wait in words: 38 of 47 floor rounds that did nothing (2026-11-09/10) woke on a reading written with a date but no after:
+CHECK_ON = re.compile(r"check:\s*(?:on or after|not before|on|after|from)\s+(\d{4}-\d{2}-\d{2})\b", re.I)   # a check that opens with its date ("check: on 2026-11-18 ...") can't pass before it; other dates in a check don't gate (rsi-lab 11-11: 3 such rungs woke the keeper every 2 h)
 PARKED = re.compile(r"^Parked until (\d{4}-\d{2}-\d{2}):\s*(.+)$", re.M)
 PARK_MAX_D = 3   # a parked ladder comes back within this many days; a date further out doesn't count, so nobody parks a focus for good
 WAIT = re.compile(r"no step left|changed nothing|nothing (has )?changed|nothing left|all with the person|no new person posts|started no round|(?<!nothing )\bwaits? (only )?on (the person|a sign-in)", re.I)   # how a round says it did no work
@@ -62,7 +63,7 @@ def section(txt, m, heading, t=None):
     th = re.search(r"`([^`]+)`", heading) or THREAD.search(heading) or re.search(r"(?<![\w-])([a-z][a-z0-9]*-[a-z0-9-]+)(?![\w-])", heading)
     rungs = []; today = t.date().isoformat()
     for state, text in RUNG.findall(body):
-        a = AFTER.search(text) or GATE.search(text.split("check:")[0])
+        a = AFTER.search(text) or GATE.search(text.split("check:")[0]) or CHECK_ON.search(text)
         rungs.append({"state": state, "text": text.strip(), "after": a.group(1) if a else None, "checked": "check:" in text})
     nxt = next((r for r in rungs if r["state"] == " " and r["checked"] and (not r["after"] or r["after"] <= (today if len(r["after"]) == 10 else t.strftime("%Y-%m-%dT%H:%M")))), None)
     p = PARKED.search(body); parked = None
@@ -213,10 +214,11 @@ def brief(row):
 Rules for the round:
 - Read the last 5 posts of this thread for context, not for a conclusion. Earlier posts here may say nothing is left: that was a check-in, not a finding. "Nothing changed" is not a result, and you are not here to re-check the state.
 - A rung is work that needs nobody's sign-off and moves the measure in goals.md, with a `check:` someone else could run. Hard limits hold (no money, no acting in the person's name, no credentials handed out). Drafting, building, simulating and testing are all open while an account or a go waits.
-- Check passes: in goals.md change `- [ ]` to `- [x]` and append your result post's id. Too big for one run: split it into rungs, land the first, tick that.
+- Check passes: post your result, then `hive goals --tick POST_ID --rung "words from the rung"` (it checks the id is on the board and writes `[x]` and the id). Too big for one run: split it into rungs, land the first, tick that.
 - Rung truly needs the person or is blocked: change it to `- [!]` with why (add a `For you:` line in your post if they must act), then take the next rung in this same run. A `[!]` costs you nothing and is not your result.
 - Keep the focus's to-do list, which the person sees and ticks on its page: the next two or three steps in plain words (`hive focus check add FOCUS "text"`), ticked as each lands (`hive focus check done ID`; `hive focus check list FOCUS` shows them).
-- When what is left waits on the person or a date (a rung on a date carries `after:YYYY-MM-DD`), ask whether the goal or its Measure is still right; then either write a step that moves the Measure, with a `check:`, or end with the wait.
+- A rung that cannot pass before a date or time (a full day's reading, a window that ends later) carries `after:YYYY-MM-DD` or `after:YYYY-MM-DDTHH:MMZ` in its text: the keeper skips it until then. Without the tag it wakes an agent every hour to find nothing to do.
+- When what is left waits on the person or a date, ask whether the goal or its Measure is still right; then either write a step that moves the Measure, with a `check:`, or end with the wait.
 - Park only when the measure is at target, or every way left to move it needs the person (name which): add a line `Parked until YYYY-MM-DD: why` to the section (at most 3 days out, later dates are ignored) and say so. The keeper skips it until then. Waiting on a date or a later reading is no reason to park: write a rung that moves the measure today, or if the measure has stopped saying anything, rewrite it and keep the old one and the reason beside it.
 - Your last post says: the rung, the check's output, the measure now, and ends with the line `Next: <the next rung, with its check>` (the starter carries it on), or a `Blocked:` or `Needs the person:` line if nothing is left you can do, or `Waiting:` naming who or when (`Waiting: a1b2c's review`, `Waiting: the sim, about 04:20 UTC`). The next agent comes within minutes unless your wait names a running agent or a time. If the work turns hard, `hive model opus "why"`."""
 
@@ -261,6 +263,19 @@ def render(g):
     if g["loose_threads"]: lines.append(f"Open asks outside every focus and project: {g['loose_asks']} in {len(g['loose_threads'])} threads (`hive asks list`, `hive asks check`); these are the person's one-off asks and agents' leftovers, moved by the keeper, not by a goal.")
     return "\n".join(lines)
 
+def tick(txt, words, post):
+    """Tick the one open or blocked rung whose text holds `words` (any case), appending `(post ID)`. Returns (new text, the rung line) or raises ValueError.
+    Rounds ticked rungs by hand and left the id off: 1073 of 1601 ticks across project goals.md files had none (2026-11-11), and the
+    rsi-lab bench's s5u replay showed runs that knew their id was wrong stopping anyway. A tool that checks the id makes it a step, not a memory."""
+    lines = txt.split("\n"); w = words.lower().strip()
+    hits = [i for i, l in enumerate(lines) if re.match(r"\s*-\s+\[[ !]\]\s", l) and w in l.lower()]
+    if len(hits) != 1:
+        cands = [lines[i].strip()[:100] for i in hits]
+        raise ValueError(f"{len(hits)} open rungs hold {words!r}" + ("; say more of it:\n  " + "\n  ".join(cands) if cands else ""))
+    i = hits[0]; l = re.sub(r"\[[ !]\]", "[x]", lines[i], count=1).rstrip()
+    lines[i] = l + f" (post {post})"
+    return "\n".join(lines), lines[i]
+
 def main():
     ap = argparse.ArgumentParser(prog="hive goals", description=__doc__.split("\n")[0])
     ap.add_argument("--json", action="store_true"); ap.add_argument("--idle", action="store_true", help="only the idle goals")
@@ -269,7 +284,25 @@ def main():
     ap.add_argument("--model", help="with --post: the model for a fresh agent")
     ap.add_argument("--force", action="store_true", help="with --post: post even to a parked ladder")
     ap.add_argument("--rounds", metavar="DAYS", type=float, help="keeper rounds on focuses over the last DAYS: work, wait, silent")
+    ap.add_argument("--tick", metavar="POST", help="tick the rung --rung names, appending this result post's id after checking it is on the board")
+    ap.add_argument("--rung", metavar="WORDS", help="with --tick: words from the rung's text, enough to pick one open rung")
+    ap.add_argument("--file", metavar="GOALS_MD", help="with --tick: the goals.md (default: the one whose ladder runs in the post's thread)")
     a = ap.parse_args()
+    if a.tick:
+        if not a.rung: sys.exit("--tick needs --rung WORDS")
+        post = next((e for e in jsonl(BOARD) if e.get("id") == a.tick), None)
+        if not post: sys.exit(f"post {a.tick} is not on the board: tick with your result post's id (`hive read --thread T -n 3` shows it)")
+        path = a.file
+        if not path:
+            r = next((r for r in goals()["rows"] if r["thread"] == post.get("thread") and r.get("goals_path")), None)
+            th = str(post.get("thread") or "")   # a lane thread (rsi-lab-bench) falls back to the project it is named after
+            pj = max((d for d in PROJECTS.iterdir() if (d / "goals.md").exists() and (th == d.name or th.startswith(d.name + "-"))), key=lambda d: len(d.name), default=None)
+            if not r and not pj: sys.exit(f"no goals.md has a ladder in thread {th}: give --file")
+            path = r["goals_path"] if r else pj / "goals.md"
+        f = Path(path).expanduser()
+        try: new, line = tick(f.read_text(errors="replace"), a.rung, a.tick)
+        except ValueError as e: sys.exit(f"{f}: {e}")
+        f.write_text(new); print(f"ticked in {f}:\n{line.strip()}"); return
     g = goals()
     if a.rounds is not None:
         ths = [r["thread"] for r in g["rows"] if r["kind"] == "focus" or r.get("ladder")]; res = rounds(jsonl(BOARD), ths, (now() - dt.timedelta(days=a.rounds)).isoformat(timespec="seconds"))

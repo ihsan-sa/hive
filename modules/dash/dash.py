@@ -133,18 +133,65 @@ def describe_tool(name, inp):
 
 _activity = {}  # out path -> (mtime, result): a session's tail is parsed again only once it has changed
 
+_POST_CMD = re.compile(r"\b(?:hive|hive)\s+post\b([^\n]*?)<<-?\s*(['\"]?)(\w+)\2[^\n]*\n", re.S)
+
+
+def partial_str(raw, key="command"):
+    """The value of KEY in a JSON object cut off part way (a streamed tool input), decoded as far as it goes."""
+    m = re.search(r'"%s"\s*:\s*"' % re.escape(key), raw or "")
+    if not m: return None
+    s, i, out = raw[m.end():], 0, []
+    while i < len(s):
+        c = s[i]
+        if c == '"': break
+        if c == "\\":
+            esc = s[i:i + 6] if s[i + 1:i + 2] == "u" else s[i:i + 2]
+            if len(esc) < (6 if s[i + 1:i + 2] == "u" else 2): break   # an escape cut in half: stop before it
+            try: out.append(json.loads('"' + esc + '"'))
+            except ValueError: pass
+            i += len(esc); continue
+        out.append(c); i += 1
+    return "".join(out)
+
+
+def post_draft(cmd):
+    """(text, thread flag) of an `hive post ... <<'X'` command still being written, or None. Text stops at the closing X line."""
+    m = _POST_CMD.search(cmd or "")
+    if not m: return None
+    body = cmd[m.end():]
+    end = re.search(r"(?m)^%s\s*$" % re.escape(m.group(3)), body)
+    if end: body = body[:end.start()]
+    else:   # a last line that may yet be the closing word: hold it back so the text only grows
+        last = body.rsplit("\n", 1)[-1]
+        if last and m.group(3).startswith(last.strip()): body = body[:len(body) - len(last)]
+    th = re.search(r"--thread[= ]\s*['\"]?([\w.-]+)", m.group(1))
+    return body.rstrip("\n"), th.group(1) if th else None
+
 
 def activity(out):
     """Last thing the session did, from the tail of its stream-json output."""
     p = Path(out or "")
-    res = {"last": None, "doing": "", "said": "", "turns": 0, "cost": None}
+    res = {"last": None, "doing": "", "said": "", "turns": 0, "cost": None, "draft": None}
     try: m = p.stat().st_mtime
     except OSError: return res
     hit = _activity.get(str(p))
     if hit and hit[0] == m: return hit[1]
     res["last"] = m
+    cur = None   # E11: the Bash call being streamed (--include-partial-messages); a post it writes shows as a draft until it runs
     for e in jlines(p, 256 * 1024):
         t = e.get("type")
+        if t == "stream_event":
+            ev = e.get("event") or {}; et = ev.get("type")
+            if et == "content_block_start":
+                b = ev.get("content_block") or {}
+                if b.get("type") == "tool_use" and b.get("name") == "Bash": cur = {"i": ev.get("index"), "raw": []}
+            elif et == "content_block_delta" and cur and ev.get("index") == cur["i"]:
+                d = ev.get("delta") or {}
+                if d.get("type") == "input_json_delta": cur["raw"].append(d.get("partial_json") or "")
+            elif et == "message_start" and cur and not cur.get("done"): cur = None
+            elif et == "content_block_stop" and cur and ev.get("index") == cur["i"]: cur["done"] = True
+            continue
+        if t in ("user", "result"): cur = None   # the tool ran: the post is on the board now
         if t == "assistant":
             for c in e.get("message", {}).get("content", []) or []:
                 if c.get("type") == "tool_use":
@@ -154,6 +201,9 @@ def activity(out):
         elif t == "result":
             res["turns"] += 1
             if e.get("total_cost_usd") is not None: res["cost"] = e["total_cost_usd"]
+    if cur:
+        d = post_draft(partial_str("".join(cur["raw"])))
+        if d and d[0].strip(): res["draft"] = {"text": d[0][-20000:], "thread": d[1], "at": m}
     res["said"] = short(res["said"], 600); res["doing"] = short(res["doing"], 300)
     _activity[str(p)] = (m, res)
     return res
@@ -759,7 +809,7 @@ def set_agent_effort(name, effort, restart=False, signer=None, limited=False):
         thread = run.get("thread") or run.get("post")
         person_post(f"@{name} The person set your effort to {effort} and asked you to restart at it. A run's effort is fixed when it starts, so finish the step you're on and wait for any background work "
                     f"you still need (ending your turn stops it), then run `hive post --thread {thread} --to {name} --effort {effort} <<< 'Resuming at {effort} effort.'` and end your turn. "
-                    f"You come back in this same conversation at that effort.", thread, signer=signer, limited=limited)
+                    f"You come back in this same conversation at that effort.", thread, signer=signer, limited=limited, notice=True)
     return {"ok": True, "effort": effort, "asked": bool(run)}
 
 def run_to_kill(name):
@@ -896,6 +946,17 @@ def limit_hold(st):
     held = [(st.get("limits") or {}).get(l, 0) for l in every]
     return min(held) if held and min(held) > time.time() and not st.get("auth_told") else None
 
+def drafts_in(thread):
+    """The posts live agents are writing in this thread right now: cheap, as activity() is kept per out file until it changes."""
+    if not thread: return []
+    got = []
+    for f in sorted(RUN.glob("*.json")):
+        r = jload(f, {}) or {}
+        if not alive(r.get("pid")): continue
+        d = activity(r.get("out"))["draft"]
+        if d and (d["thread"] or r.get("thread")) == thread: got.append({"name": r.get("name", f.stem), "draft": {**d, "thread": thread}})
+    return got
+
 def live():
     """The cheap part, polled by the web page: who is running and what the starter holds. No board parse."""
     agents, jobs = [], heavy_jobs()
@@ -905,7 +966,8 @@ def live():
         agents.append({
             "name": r.get("name", f.stem), "pid": r.get("pid"), "alive": alive(r.get("pid")),
             "since": ts(r.get("at")), "thread": r.get("thread"), "from": r.get("from"), "post": r.get("post"),
-            "last": a["last"], "doing": a["doing"], "said": a["said"], "out": r.get("out"), "effort": run_effort(r.get("pid")),
+            "last": a["last"], "doing": a["doing"], "said": a["said"], "out": r.get("out"),
+            "draft": a["draft"] and {**a["draft"], "thread": a["draft"]["thread"] or r.get("thread")}, "effort": run_effort(r.get("pid")),
             "jobs": jobs.get(r.get("name", f.stem)), "shells": bg_shells(r.get("pid")),
         })
     keep = {str(a["out"]) for a in agents}
@@ -1732,7 +1794,7 @@ def jobs_for(view, full):
 def agents_for(view, full):
     """/api/live and /json as a caller may see them: the same rule as jobs_for. What an agent is doing or said can quote a command, so a limited sign-in sees who runs, not that."""
     if full or not isinstance(view, dict): return view
-    return {**view, "agents": [{f: v for f, v in a.items() if f not in ("doing", "said")} for a in view.get("agents") or []]}
+    return {**view, "agents": [{f: v for f, v in a.items() if f not in ("doing", "said", "draft")} for a in view.get("agents") or []]}
 
 
 def feed_for(rows, full):
@@ -1973,7 +2035,7 @@ WEB = STATE / "web.json"
 INSTALLED = HOME / ".hive-installed"
 FORWARDED = ("cf-ray", "cf-connecting-ip", "cf-access-jwt-assertion", "cf-ipcountry", "cf-visitor", "cdn-loop", "x-forwarded-for",
              "x-forwarded-host", "x-forwarded-proto", "x-real-ip", "forwarded", "via", "true-client-ip")
-GET_CAP = {"/api/call-chat": "post", "/api/live": "read", "/api/away": "read", "/api/board": "read", "/api/log": "read", "/api/usage": "read", "/api/jobs": "read", "/api/agent": "read", "/api/agent-work": "read", "/api/agent-input": "read", "/api/agent-diff": "read", "/api/ledger": "read",
+GET_CAP = {"/api/call-chat": "post", "/api/live": "read", "/api/drafts": "read", "/api/away": "read", "/api/board": "read", "/api/log": "read", "/api/usage": "read", "/api/jobs": "read", "/api/agent": "read", "/api/agent-work": "read", "/api/agent-input": "read", "/api/agent-diff": "read", "/api/ledger": "read",
            "/api/projects": "read", "/api/agent-costs": "read", "/api/thread-names": "read", "/api/thread-meta": "read", "/api/shown": "read", "/api/thread-status": "read", "/api/thread-shown": "read", "/api/foci": "read", "/api/agent-status": "read", "/api/thread-find": "read", "/json": "read", "/api/target": "read", "/api/inbox": "read", "/api/delivered": "read",
            "/api/config": "config", "/api/modules": "modules", "/api/slack-door": "modules", "/api/signin": "logins", "/api/plans": "plans", "/api/secrets": "secrets",
            "/api/settings": "config", "/api/ntfy": "config", "/api/webpush": "config", "/api/update": "config", "/api/signin-codex": "logins", "/api/accounts": "logins", "/api/design": "logins", "/api/brand/logo": "read",
@@ -2277,6 +2339,7 @@ class BoardIndex:
     def __init__(self):
         self.off, self.last, self.authors, self.mine, self.answered, self.lock = 0, {}, {}, [], {}, threading.Lock()
         self.threads, self.names = set(), None
+        self.pfiles = {}   # the person's posts with files: id -> (thread, first version's id, [paths]), so an edit keeps them (everyday E12d)
 
     def targets(self, p):
         if self.names is None:
@@ -2297,7 +2360,9 @@ class BoardIndex:
                 who, th = str(p.get("from", "")), p.get("thread") or p.get("id")
                 self.authors[p.get("id")] = who; self.threads.add(th)
                 if AGENT_CODE.fullmatch(who.lower()): self.last[th] = who.lower()
-                if who == PERSON: self.answered[th] = p.get("at", "")
+                if who == PERSON:
+                    self.answered[th] = p.get("at", "")
+                    if p.get("files"): self.pfiles[p.get("id")] = (th, str(p.get("edit_of") or p.get("id")), [str(f.get("path", "")) for f in p["files"] if isinstance(f, dict)])
                 elif PERSON in self.targets(p):
                     self.mine.append({"id": p.get("id"), "at": p.get("at"), "from": who, "thread": th,
                                       "text": str(p.get("text", ""))[:600], "files": len(p.get("files") or [])})
@@ -2451,22 +2516,44 @@ def voice_ready():
     return isinstance(st, dict) and st.get("ok") is True and isinstance(st.get("at"), (int, float)) and time.time() - st["at"] < 120
 
 
-def person_post(text, thread=None, reply_to=None, uploads=(), signer=None, limited=False, simple=False, model=None, sig=None, interrupt=False, effort=None):
+# Must match EDIT_NOTE in web/js/core/model.js, byte for byte: the page signs it.
+EDIT_NOTE = "(edited message {v}: this version replaces it. Answer it instead, as if that message and your answer to it were never sent; anything already done for it stays done, so don't redo it.)\n"
+
+def person_post(text, thread=None, reply_to=None, uploads=(), signer=None, limited=False, simple=False, model=None, sig=None, interrupt=False, effort=None, notice=False, edit_of=None, retry_of=None, files_from=None):
     """A post as the person. As the Slack mirror does it: a plain message wakes the agent on the thread (thread_agent), a reply wakes the author
     of the post replied to, and no thread (or a thread with no agent yet) starts a new agent. Mentions in the text win.
     signer: who signed in, from a verified Access token, when more than one person can: it heads the text, so an agent and the board can see who wrote it.
     sig: what the browser signed over the text as typed (core/signed.py checks it, in hive post). A /btw is rewritten, so it goes unsigned, as does a post of only attachments.
+    notice: the text is the server's own words for a click (the effort restart). It and a /btw go unsigned, so they carry via "web-notice": the board
+    and the safety count (projects/rsi-lab/safety.py unsigned_person) can tell them from a typed post that lost its signature, and the broker never takes one as an approval.
     interrupt: the conversation's Interrupt button: hive post --interrupt, so a working agent gets it now (core/starter.py interrupt_step). A post of only
     attachments keeps no text of its own: the files show as files.
+    edit_of: the person edited their message with this id (its first version) in this thread; retry_of: they asked for another answer in place
+    of the agent's reply with this id. Both go on the board as fields (hive post --edit-of/--retry-of) and the chat draws them as versions; the
+    agent reads a one-line note on what to do (everyday E12). A retry has no typed text, so it goes unsigned, like a notice.
+    files_from: with edit_of, the version being edited (its id): its files go with the new version, so editing the words keeps them (E12d).
     Returns {"id", "thread", "said"}, or raises ValueError with a sentence for the page."""
     text = str(text or "").strip()
+    for k, v in (("edit", edit_of), ("retry", retry_of)):
+        if v is not None and (not thread or not re.fullmatch(r"[0-9a-f]{6,20}", str(v))): raise ValueError(f"the message to {k} isn't one in this conversation")
+    if retry_of: text, notice, interrupt, reply_to, uploads = "", True, False, None, ()
     sig = {**sig, "n": len(text)} if isinstance(sig, dict) and text and not BTW.fullmatch(text) else None
+    if edit_of:   # the page puts the note in front itself and signs it with the words, so the edit's signature holds (core/signed.py lets nothing else in front)
+        reply_to, note = None, EDIT_NOTE.format(v=edit_of)
+        if not text.startswith(note): text = note + text
+        if not text[len(note):].strip(): raise ValueError("nothing to send")
     refs = [UPLOAD_REF.fullmatch(str(u)) for u in uploads or []]
     if not all(refs): raise ValueError("an attachment wasn't recognised")
     paths = [INCOMING / m[1] / m[2] for m in refs]
     if not all(p.is_file() and not p.is_symlink() for p in paths): raise ValueError("an attachment is gone; attach it again")
+    kept = []
+    if edit_of and files_from:
+        INDEX.refresh(); kf = INDEX.pfiles.get(str(files_from))
+        if not kf or kf[0] != str(thread) or kf[1] != str(edit_of): raise ValueError("the message's files aren't in this conversation")
+        kept = [Path(f) for f in kf[2]]
+        if not all(f.parent == HOME_FILES / str(files_from) and f.is_file() and not f.is_symlink() for f in kept): raise ValueError("a file of that message is gone")
     if thread and not THREAD_NAME.fullmatch(str(thread)): raise ValueError("a thread name is letters, digits and . _ : -")
-    if not text and not paths: raise ValueError("nothing to send")
+    if not text and not paths and not retry_of: raise ValueError("nothing to send")
     if model and model not in PICK_MODELS: raise ValueError("that model isn't one of " + ", ".join(PICK_MODELS))
     if effort and effort not in EFFORTS: raise ValueError("that effort isn't one of " + ", ".join(EFFORTS))
     btw = BTW.fullmatch(text)
@@ -2489,6 +2576,12 @@ def person_post(text, thread=None, reply_to=None, uploads=(), signer=None, limit
         author = INDEX.authors[reply_to].lower()
         who = author if AGENT_CODE.fullmatch(author) else None
         text = f"reply to message {reply_to}: {text}"
+    if edit_of or retry_of:
+        INDEX.refresh(); v = str(edit_of or retry_of); author = INDEX.authors.get(v, "").lower()
+        if edit_of and author != PERSON: raise ValueError("only your own messages can be edited")
+        if retry_of and not AGENT_CODE.fullmatch(author): raise ValueError("only an agent's reply can be tried again")
+        if retry_of: who = author
+        if retry_of: text = (f"(retry of reply {v}: the person asked for another answer in its place. Write that answer again from scratch as a new attempt. The chat shows it as a newer version of that reply, so don't mention the earlier one or this note.)")
     routed = False
     if not word and not calls_someone(text):
         who = who or (thread_agent(thread) if thread else None)
@@ -2497,9 +2590,9 @@ def person_post(text, thread=None, reply_to=None, uploads=(), signer=None, limit
     if pairing:  # before the post, so a connector reading the board always finds it
         PAIR_ACCEPTED.parent.mkdir(parents=True, exist_ok=True)
         with PAIR_ACCEPTED.open("a") as f: f.write(json.dumps({"at": time.time(), "text": text}) + "\n")
-    cmd = [str(HIVE_BIN), "post", "--as", PERSON] + (["--thread", str(thread)] if thread else []) + (["--to", who] if who else []) + (["--routed"] if routed else []) + (["--reply-to", reply_to] if reply_to else []) + (["--model", PICK_MODELS[model]] if model else []) + (["--effort", effort] if effort and not word else []) + (["--interrupt"] if interrupt and not limited and not word else [])
-    for p in paths: cmd += ["--file", str(p)]
-    r = subprocess.run(cmd, input=text, text=True, capture_output=True, env={**child_env(), **({"HIVE_POST_VIA": "limited"} if limited else {}), **({"HIVE_POST_VIA": "web-pair"} if pairing else {}), **({"HIVE_POST_SIG": json.dumps(sig)} if sig else {})}, cwd=str(HOME), timeout=60)
+    cmd = [str(HIVE_BIN), "post", "--as", PERSON] + (["--thread", str(thread)] if thread else []) + (["--to", who] if who else []) + (["--routed"] if routed else []) + (["--reply-to", reply_to] if reply_to else []) + (["--model", PICK_MODELS[model]] if model else []) + (["--effort", effort] if effort and not word else []) + (["--interrupt"] if interrupt and not limited and not word else []) + (["--edit-of", str(edit_of)] if edit_of else []) + (["--retry-of", str(retry_of)] if retry_of else [])
+    for p in paths + kept: cmd += ["--file", str(p)]
+    r = subprocess.run(cmd, input=text, text=True, capture_output=True, env={**child_env(), **({"HIVE_POST_VIA": "web-notice"} if (notice or btw) and not limited else {}), **({"HIVE_POST_VIA": "limited"} if limited else {}), **({"HIVE_POST_VIA": "web-pair"} if pairing else {}), **({"HIVE_POST_SIG": json.dumps(sig)} if sig else {})}, cwd=str(HOME), timeout=60)
     if r.returncode: raise ValueError(short(r.stderr, 300) or "the post failed")
     for p in paths: shutil.rmtree(p.parent, ignore_errors=True)
     pid = r.stdout.strip()
@@ -5002,6 +5095,8 @@ def serve(port):
                 lv = {**agents_for(live_c.get(), self.route != "outside" or self.mode == "full"), "web": web_c.get()}
                 if self.route != "open": lv["starter"] = starter_up()  # read every 1.5 s with the rest: a stop or restart shows in ~2 s, not at /api/app's next 15 s read
                 self.send(json.dumps(lv, default=str).encode(), J)
+            elif u.path == "/api/drafts":   # E11b: polled every 0.1 s (E11d) by an open thread awaiting its reply, so the first words show without the 1.5 s live poll
+                self.send(json.dumps(drafts_in((q.get("thread") or [""])[0]) if self.route != "outside" or self.mode == "full" else []).encode(), J)
             elif u.path == "/api/jobs":
                 self.send(json.dumps(jobs_for(jobs_c.get(), self.route != "outside" or self.mode == "full"), default=str).encode(), J)
             elif u.path in ("/api/board", "/api/log"):
@@ -5104,7 +5199,7 @@ def serve(port):
                 except ValueError as e: return self.deny(400, str(e))
             if u.path in ("/api/post", "/api/side-ask", "/api/thread-meta", "/api/shown", "/api/loadtime", "/api/opened", "/api/checklist", "/api/focus", "/api/feedback", "/api/feedback-draft-done", "/api/issue-link", "/api/update", "/api/inbox-read", "/api/ntfy", "/api/webpush", "/api/agent-model", "/api/agent-effort", "/api/config", "/api/starter", "/api/module", "/api/signin", "/api/signin/code", "/api/signin/cancel", "/api/access", "/api/plan", "/api/secret", "/api/settings", "/api/share-copy", "/api/share-pack", "/api/draft", "/api/import", "/api/signin-codex", "/api/account-key", "/api/design", "/api/brand", "/api/slack-door"):
                 try:
-                    if u.path == "/api/post": res = person_post(d.get("text"), d.get("thread"), d.get("reply_to"), d.get("files"), signer=self.signer, limited="config" not in self.can, simple=d.get("simple") is True, model=d.get("model"), effort=d.get("effort"), sig=d.get("sig"), interrupt=d.get("interrupt") is True)
+                    if u.path == "/api/post": res = person_post(d.get("text"), d.get("thread"), d.get("reply_to"), d.get("files"), signer=self.signer, limited="config" not in self.can, simple=d.get("simple") is True, model=d.get("model"), effort=d.get("effort"), sig=d.get("sig"), interrupt=d.get("interrupt") is True, edit_of=d.get("edit_of"), retry_of=d.get("retry_of"), files_from=d.get("files_from"))
                     elif u.path == "/api/side-ask": res = side_ask(d.get("q"), signer=self.signer, limited="config" not in self.can)
                     elif u.path == "/api/thread-meta": res = set_thread_meta(d)
                     elif u.path == "/api/shown": res = dismiss_shown(d)

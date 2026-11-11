@@ -13,7 +13,7 @@ import { loadNeedsYou, needsKnown, needsN, needsSplit, needsHref, waitsOn, waiti
 import { workBar, workBarHeld } from "../ui/workbar.js";
 import { loadFoci, fociFailed, fociOrder, focusOf, focusById, activeThreads, askedOf, needAt, agentsOf, stateOf, pills, plainPills, needSource, isCode, scrub, codePill, railSay, railTitle, threadLine, focusName, MISC, activityOf, shareOf, fractionWords, pct, usd, needsOf, moveFocus, foci } from "../core/foci.js";
 import { newIn } from "./focus.js";
-import { SIDE_THREAD, agentLabel, capFirst, ownStep, inConversation, labelCodes, chatText, agentState, agentStatus, btwParent, threadParent, threadChildren, isAgent, isRunning, tierOf, threadTitle, threadState, threadPeople, isSystemThread, SHOW, postKind, threadKinds, closingPosts, displayText, postSource, inUse, limitStop, fresh7, asksQuestion, fileInfo } from "../core/model.js";
+import { SIDE_THREAD, agentLabel, capFirst, ownStep, inConversation, labelCodes, chatText, agentState, agentStatus, btwParent, threadParent, threadChildren, isAgent, tierOf, threadTitle, threadState, threadPeople, isSystemThread, SHOW, postKind, threadKinds, closingPosts, displayText, postSource, inUse, limitStop, fresh7, asksQuestion, fileInfo } from "../core/model.js";
 import { ago, dayName, stamp, clock, dur, short, mdPlain, now, plural, DAY, MIN, HOUR, money } from "../core/format.js";
 import { href, threadHref, go, parse } from "../core/router.js";
 import { yoursSearch, yoursText } from "../core/yours.js";
@@ -24,7 +24,8 @@ import { MN, onMail } from "../core/mailnew.js";
 import { heldRoom } from "../core/room.js";
 import { bar as skBar, button, empty, icon, input, list, scrim, seg, skeleton, statusDot, statusWord } from "../ui/kit.js";
 import { agentRef, avatars, copyButton, threadRef } from "../ui/refs.js";
-import { message, messageHead, messageReceipt, localMessage, markWords, pollDelivered, marksSig, delivery, onJump, helperFolds } from "../ui/message.js";
+import { message, messageHead, messageReceipt, localMessage, draftMessage, markWords, pollDelivered, marksSig, delivery, onJump, helperFolds, chatPages } from "../ui/message.js";
+import { chatView } from "../rich/artifact.js";
 import { asidePanel, asideOpen, closeAside } from "../ui/aside.js";
 import { openQuick, quickOpen, closeQuick, quickPanel, laterButtons } from "../ui/quick.js";
 import { when } from "../ui/when.js";
@@ -49,6 +50,12 @@ try { document.documentElement.style.setProperty("--rail-now", sideW + "px"); } 
 // The list never takes the conversation's room: a width saved in a wide window waits for the window to grow again (the same limit is in .cm's columns, components.css).
 const sideRoom = box => Math.max(SIDE_MIN, box.clientWidth - CHAT_MIN), sideNow = box => Math.min(sideW, sideRoom(box));
 const setSide = (box, w) => { sideW = Math.round(Math.min(SIDE_MAX, sideRoom(box), Math.max(SIDE_MIN, w))); box.style.setProperty("--cm-w", sideW + "px"); document.documentElement.style.setProperty("--rail-now", sideW + "px"); try { localStorage.setItem("cm.side", sideW); } catch (e) {} };
+// A conversation head narrower than 600 px (a list pane dragged wide in a 1100 window) drops the crumb and says "All" for "Show every message",
+// so the title keeps its room (round 16: it was cut to one letter). #main is the CSS container, so a container query can't see the column;
+// a container on the head would pull in every phone rule written for #main. The render carries the mark, since morph() drops attributes it didn't set.
+let headTight = false, headSeen = null;
+const headRO = typeof ResizeObserver === "function" ? new ResizeObserver(es => { for (const e of es) { headTight = e.contentRect.width < 600; e.target.toggleAttribute("data-tight", headTight); } }) : null;
+const watchHead = () => { const n = document.querySelector(".cm-head"); if (headRO && n && n !== headSeen) { if (headSeen) headRO.unobserve(headSeen); headRO.observe(headSeen = n); } };
 const grip = () => h("div", { class: "cm-grip", role: "separator", "aria-orientation": "vertical", "aria-label": "Resize the conversation list", tabindex: "0", "data-key": "grip", title: "Drag to resize",
   onpointerdown: e => { e.preventDefault(); const box = e.target.closest(".cm"), x0 = e.clientX, w0 = sideNow(box); e.target.setPointerCapture(e.pointerId); e.target.dataset.on = "1";
     e.target.onpointermove = m => setSide(box, w0 + m.clientX - x0);
@@ -177,7 +184,7 @@ function loadShown(th, ctx) {
   const e = SH.get(th); if (!th || !app() || (e && now() - e.at < 5 * MIN)) return;
   // The first time a conversation opens, its messages wait for the rule (about a second) rather than draw in full and then fold
   // to a fifth of their height under the reader's eyes; past HOLD_MS, or if the rule fails, they draw in full.
-  const first = !(e && e.map), done = v => { SH.set(th, { map: v && v.posts ? v.posts : null, at: now() }); L.rebuild = true; L.keep = !first; ctx.update(); };
+  const first = !(e && e.map), done = v => { const ok = v && v.posts; SH.set(th, { map: ok ? v.posts : e ? e.map : null, at: ok ? now() : now() - 5 * MIN + 15e3 });   /* a failed read (the Hive away) keeps the last rule and tries again in 15 s, not after 5 min */ L.rebuild = true; L.keep = !first; ctx.update(); };
   SH.set(th, { map: e ? e.map : null, at: now(), wait: first });
   if (first) setTimeout(() => { const x = SH.get(th); if (x && x.wait) { x.wait = false; L.rebuild = true; ctx.update(); } }, HOLD_MS);
   jget("/api/thread-shown?thread=" + encodeURIComponent(th)).then(done).catch(() => done(null));
@@ -187,7 +194,8 @@ const HOLD_MS = 3000;
 const shownHeld = items => { if (C.q.trim() || !L.th || showAll(L.th) || !items.some(p => !p.ev && p.from !== "person")) return false; const e = SH.get(L.th); return !!(e && e.wait && !e.map); };
 const shownOf = p => { if (C.q.trim() || !L.th || showAll(L.th)) return null; const e = SH.get(L.th); return e && e.map ? e.map[p.id] || null : null; };
 function lineRow(p, sh, ctx) {
-  const line = labelCodes(sh.line);
+  // "14:10 ac5f5: ac5f5 taking round 17" read the agent's name twice once codes became names (design round 1111b): drop the author's own code when the post starts with it
+  const line = labelCodes(String(sh.line || "").replace(/^(\d\d:\d\d (@?[\w-]+): )@?\2\b[:,]?\s*/, "$1"));
   const open = () => { OPENED.add(p.id); L.rebuild = true; L.keep = true; L.ctx && L.ctx.update(); };
   return h("div", { class: "cm-oneline", "data-key": p.id, "data-show": KIND_NAME[postKind(p)] || "" },
     h("button", { type: "button", class: "cm-one-b", "aria-label": "Open the whole message: " + line, title: "Open the whole message", onclick: open }, h("span", { class: "cm-one-t" }, line)),
@@ -197,6 +205,47 @@ function evRow(e) {
   return h("div", { class: "cm-ev", "data-key": e.key, "data-tone": status(e.tone).tone, role: "note" }, statusDot(e.tone), h("b", null, e.text), h("span", { class: "meta" }, clock(e.t) + " · " + e.sub));
 }
 const KIND_NAME = { [SHOW.you]: "you", [SHOW.updates]: "updates", [SHOW.comms]: "comms" };
+// ---- E12: edited messages and replies tried again, with the older versions kept ----
+// The board only grows, so an edit is a new post with edit_of (its first version's id) and a retry a hidden post with retry_of (the reply's first id).
+// A version runs from where it starts to where the next one starts; the chat draws the chosen one (the newest unless arrows picked another).
+const VSEL = new Map(), V = { info: new Map(), old: false, wait: false, edit: null, retry: null, retryRoot: null };
+// Only in one conversation, in the app's look, with no search: elsewhere every version shows as it was posted.
+// Only the person's edit_of/retry_of count (posting refuses them from anyone else; this is the page's own check too).
+function versioned(items) {
+  V.info = new Map(); V.old = V.wait = false; V.edit = V.retry = V.retryRoot = null;
+  if (!L.th || !app() || C.q.trim()) return items;
+  const starts = new Map();
+  for (const p of items) { const r = !p.ev && p.from === "person" && (p.edit_of || p.retry_of); if (r) (starts.get(r) || starts.set(r, []).get(r)).push(p); }
+  const out = starts.size ? walk(items, starts) : items;
+  if (!V.old) {   // Edit on your last message (its files go with the edit); Retry on the last reply once nothing of yours follows it.
+    // Either works while the reply is still being written: the starter stops that run and hands the agent the new ask (E12d).
+    const posts = out.filter(p => !p.ev && !p.retry_of), li = posts.findLastIndex(p => p.from === "person"), lastMe = posts[li];
+    V.edit = lastMe ? lastMe.id : null;
+    const after = posts.slice(li + 1).filter(p => isAgent(p.from)), lastAg = after.at(-1);
+    if (lastAg && !V.wait) { V.retry = lastAg.id; V.retryRoot = (V.info.get(after[0].id) || {}).root || after[0].id; }
+  }
+  return out;
+}
+// A version's part runs from its start to the next one's. A retry no reply has come to yet has no part to draw: the one before stays, and V.wait says one is coming.
+function walk(seg, starts) {
+  const ins = new Set(seg), i = seg.findIndex(p => !p.ev && starts.has(p.id) && starts.get(p.id).some(s => ins.has(s)));
+  if (i < 0) return seg.filter(p => !p.retry_of);
+  const root = seg[i], vs = [root, ...starts.get(root.id).filter(s => ins.has(s))], pos = vs.map(v => seg.indexOf(v));
+  const part = j => seg.slice(pos[j], j + 1 < vs.length ? pos[j + 1] : seg.length);
+  const idx = vs.map((_, j) => j).filter(j => part(j).some(p => !p.ev && !p.retry_of)), n = idx.length;
+  if (n < vs.length) V.wait = true;
+  const k = VSEL.has(root.id) ? Math.min(VSEL.get(root.id), n - 1) : n - 1; if (k < n - 1) V.old = true;
+  const pt = part(idx[k]), head = pt.find(p => !p.ev && !p.retry_of);
+  if (n > 1) V.info.set(head.id, { root: root.id, i: k, n });
+  return [...seg.slice(0, i).filter(p => !p.retry_of), ...walk(pt, starts)];
+}
+const verRedraw = () => { L.rebuild = true; L.keep = true; L.ctx && L.ctx.update(); };
+const verPick = (root, i, n) => { if (i >= n - 1) VSEL.delete(root); else VSEL.set(root, i); verRedraw(); };
+const verOpts = p => ({ ver: V.info.get(p.id) || null, canEdit: V.edit === p.id, canRetry: V.retry === p.id, retryRoot: V.retry === p.id ? V.retryRoot : null, pick: verPick, redraw: verRedraw });
+// E13: in one conversation, in the app's look, with no search, a page posted again shows as the newest version of the earlier one.
+const pagesOn = () => L.th && app() && !C.q.trim();
+function pagesOf(all) { if (pagesOn()) chatPages(L.th, all); }
+const pageRows = items => (pagesOn() ? chatView(L.th, () => rows(items)) : rows(items));
 function rows(items) {
   const out = [];
   for (const p of items) {
@@ -210,16 +259,18 @@ function rows(items) {
     if (!L.opts.showThread && L.helpers) { const hs = helperFolds(p.th, p.t, L.helpers, L.opts); if (hs.length) { out.push(...hs); L.prev = null; } }   // helper conversations fold where they began (R7)
     if (p.id === L.newId) { out.push(h("p", { class: "msg-new", role: "separator", "aria-label": "New messages", "data-key": "new:" + p.id }, "New")); L.prev = null; }
     const q = L.prev, cont = !!q && q.from === p.from && q.th === p.th && !p.reply_to && p.t - q.t < GROUP && sameTo(q, p) && sameSource(q, p);
-    const a = message(p, { ...L.opts, cont }); a.dataset.show = KIND_NAME[postKind(p)] || ""; if (a.dataset.show === "you" && asksQuestion(p)) a.dataset.ask = "";   // For you, Updates or Agent comms, marked in the list (11040113eacf)
+    const a = message(p, { ...L.opts, cont, ...verOpts(p) }); a.dataset.show = KIND_NAME[postKind(p)] || ""; if (a.dataset.show === "you" && asksQuestion(p)) a.dataset.ask = "";   // For you, Updates or Agent comms, marked in the list (11040113eacf)
     L.prev = p; a._head = L.heads; L.io.observe(a); out.push(a);
   }
   return out;
 }
 
 function paint(box, ctx) {
-  const shown = L.all.slice(-C.limit), older = L.all.length - shown.length;
+  const all = versioned(L.all), shown = all.slice(-C.limit), older = all.length - shown.length;
+  pagesOf(all);
   L.day = ""; L.prev = null; L.names = new Set(); L.shown = shown.length; L.helpers = new Set();
-  if (older && shown.length && !L.opts.showThread) helperFolds(shown[0].th, shown[0].t - 1, L.helpers);   // the ones begun before what is drawn stay with it L.io.disconnect(); L.outSig = "";
+  if (older && shown.length && !L.opts.showThread) helperFolds(shown[0].th, shown[0].t - 1, L.helpers);   // the ones begun before what is drawn stay with it
+  L.io.disconnect(); L.outSig = "";   // a fresh .cm-out: syncOut must fill it again
   L.out = h("div", { class: "cm-out", "data-key": "out" });
   L.jump = h("button", { type: "button", class: "cm-jump", hidden: true, onclick: () => { box.scrollTop = box.scrollHeight; } });
   const q = C.q.trim();   // a search narrows the messages: say so where they are, so a sent one never seems lost (11040214d468)
@@ -228,8 +279,9 @@ function paint(box, ctx) {
       button("Clear search", () => { C.q = ""; C.find = false; ctx.update(); }, { size: "s", kind: "quiet", icon: "close" }))] : []),
     ...(older ? [h("div", { class: "cm-older" }, button(`Show older (${older} more)`, () => { C.limit += STEP; L.rebuild = true; L.keep = true; ctx.update(); }, { size: "s" }))] : []),
     ...(shown.length && shownHeld(shown) ? [h("div", { class: "empty cm-held", "data-kind": "loading", role: "status", "aria-busy": "true" }, "Loading the conversation…")]
-      : shown.length ? [...rows(shown), ...(L.opts.showThread ? [] : helperFolds(shown.at(-1).th, Infinity, L.helpers, L.opts))] : [empty(C.q ? "No messages match." : L.src.length && !simpleOn() ? (app() ? "Nothing here for you yet. The rest is agents talking among themselves: Show hidden, in the title's menu, shows it." : "Nothing here with what Show has on. Turn on Agent comms to see all the messages.") : "No messages yet.")]),
-    L.out, L.jump);
+      : shown.length ? [...pageRows(shown), ...(L.opts.showThread ? [] : helperFolds(shown.at(-1).th, Infinity, L.helpers, L.opts))] : [empty(C.q ? "No messages match." : L.src.length && !simpleOn() ? (app() ? "Nothing here for you yet. The rest is agents talking among themselves: Show hidden, in the title's menu, shows it." : "Nothing here with what Show has on. Turn on Agent comms to see all the messages.") : "No messages yet.")]),
+    L.out, L.drafts = h("div", { class: "cm-drafts", "data-key": "drafts", "aria-live": "polite" }), L.jump);
+  L.draftSig = "";
 }
 function setJump() {
   if (!L.jump) return;
@@ -262,6 +314,43 @@ function syncOut(c, box) {
   if (grew || L.stuck) { box.scrollTop = box.scrollHeight; L.stuck = true; }
 }
 
+// E11: a reply still being written shows under the messages and grows each poll (1.5 s); it goes once the post is on the board.
+function syncDrafts(c, box) {
+  const th = c.thread; if (!th || !L.drafts) return;
+  const posted = a => (S.threads.get(th)?.posts || []).some(p => p.from === a.name && p.t > now() - 10 * MIN && String(p.text || "").includes(a.draft.text.trim().slice(0, 60)));
+  const fast = L.fast && L.fast.th === th ? L.fast.ds : [];   // E11b: the 0.3 s read is newer than the 1.5 s one
+  const ds = [...fast.map(f => ({ ...(S.running?.get(f.name) || {}), name: f.name, draft: f.draft })),
+    ...(S.live ? S.live.agents : []).filter(a => a.alive !== false && a.draft && a.draft.thread === th && !fast.some(f => f.name === a.name))].filter(a => !posted(a));
+  const sig = ds.map(a => a.name + ":" + a.draft.text.length).join();
+  if (sig === L.draftSig) return;
+  const stick = atEnd(box) || L.stuck; L.draftSig = sig;
+  L.drafts.replaceChildren(...ds.map(draftMessage));
+  if (stick) { box.scrollTop = box.scrollHeight; L.stuck = true; }
+}
+
+/** E11b: while the person's message here waits for its first reply (up to a minute), read just the drafts every 0.3 s,
+ *  so the reply's first words show as they are written rather than at the next 1.5 s poll. */
+function waitingReply(th) {
+  const ps = S.threads.get(th)?.posts || [], last = ps[ps.length - 1], out = outFor(th).filter(x => x.state !== "failed").pop();
+  const t = Math.max(out ? out.t : 0, last && last.from === "person" ? last.t : 0);
+  return t > now() - MIN && !(last && last.from !== "person" && last.t >= t);
+}
+function fastDrafts(th) {
+  if (!th || !can("read") || L.fastTh === th) return;   // its loop runs (L.fastTh is cleared only by the loop that owns it)
+  if (!waitingReply(th)) { if (L.fast && L.fast.th === th) L.fast = null; return; }
+  clearTimeout(L.fastTimer); L.fastTh = th;
+  const tick = async () => {
+    L.fastTimer = null;
+    if (L.fastTh !== th) return;
+    if (!L.box || !L.box.isConnected) { L.fastTh = null; return; }
+    try { const ds = await jget("/api/drafts?thread=" + encodeURIComponent(th)); if (L.fastTh === th) { L.fast = { th, ds: Array.isArray(ds) ? ds : [] }; syncDrafts({ thread: th }, L.box); } } catch (e) { /* the 1.5 s poll still carries drafts */ }
+    if (L.fastTh !== th) return;   // another thread opened: its own loop runs
+    if (waitingReply(th)) L.fastTimer = setTimeout(tick, 100);   // E11d: 0.1 s, not 0.3: only while a chat waits for its first reply (a few seconds), and the read is cached per out file
+    else { L.fast = null; L.fastTh = null; }
+  };
+  L.fastTimer = setTimeout(tick, 0);
+}
+
 function sync(c, ctx) {
   const box = document.querySelector("#main .cm-msgs");
   if (box) {
@@ -288,6 +377,8 @@ function sync(c, ctx) {
     }
     const fsig = S.foci ? (S.foci.foci || []).map(f => f.id + ":" + f.name).join() : "";   // a focus chip names its focus: redraw once the foci arrive
     if (fsig !== L.fociSig) { if (L.fociSig !== undefined && L.all && L.all.some(p => p.tags && p.tags.length)) { L.rebuild = true; L.keep = true; } L.fociSig = fsig; }
+    // E12: a new post can move the Edit and Retry buttons or add a version: draw the list again, where the reader is (at the end if there)
+    if (!L.rebuild && L.pend.length && (V.info.size || V.wait || V.edit || V.retry || L.pend.some(p => p.edit_of || p.retry_of))) { L.rebuild = true; L.keep = !L.stuck && !atEnd(box); }
     if (L.rebuild) {
       const fromEnd = L.keep ? box.scrollHeight - box.scrollTop : isNew && L.saved && L.saved.key === L.key ? L.saved.fromEnd : null;
       paint(box, ctx);
@@ -302,19 +393,23 @@ function sync(c, ctx) {
           if (i >= 0 && L.all.length - i > C.limit) { C.limit = L.all.length - i + 20; paint(box, ctx); el = box.querySelector(sel); }
           else if (i < 0 && showMask() !== SHOW.ALL && L.src.includes(p)) { setShow(SHOW.ALL, ctx); return; }
         }
-        L.jumpTo = null; if (el) flash(box, el);
+        const held = !el && SH.get(L.th) && SH.get(L.th).wait;   // the messages wait for the one-line rule on a first visit: keep the jump until they are drawn
+        if (!held) { L.jumpTo = null; if (el) flash(box, el); }
       }
       for (const el of box.children) L.ro.observe(el);   // a message that grows after it lands (a table or code drawn late) keeps the list at its end
     } else if (L.pend.length) {
       const stick = atEnd(box) || L.stuck;
       box.querySelector(":scope > .empty")?.remove();
-      const fresh = rows(L.pend); L.out.before(...fresh); fresh.forEach(el => el instanceof Element && L.ro.observe(el));
+      pagesOf(versioned(L.all));   // E12: Edit and Retry move to the newest message and reply; E13: a page posted again repaints its older copies
+      for (const b of box.querySelectorAll(".msg-vact")) { const k = b.closest("[data-key]")?.dataset.key; if (k !== V.edit && k !== V.retry) b.remove(); }
+      const fresh = pageRows(L.pend); L.out.before(...fresh); fresh.forEach(el => el instanceof Element && L.ro.observe(el));
       L.shown += L.pend.length;
       if (stick) box.scrollTop = box.scrollHeight;
       else { L.unseen += L.pend.filter(p => !p.ev && !OUTSIDE.has(p.from)).length; setJump(); }
     }
     L.pend = [];
     syncOut(c, box);
+    syncDrafts(c, box); fastDrafts(c.thread);
     refreshHeads();
   }
   syncThreads(c, ctx);
@@ -373,7 +468,7 @@ function searchRows(c, ctx, ws) {
     const hits = d.posts.filter(p => rest.every(w => hit(p, w)));
     if (hits.length) { total += hits.length; found.push({ d, hits, rest }); }
   }
-  found.sort((a, b) => b.hits.at(-1).t - a.hits.at(-1).t);
+  found.sort((a, b) => a.rest.length - b.rest.length || b.hits.at(-1).t - a.hits.at(-1).t);   // a title or id that holds every search word before a thread that matched only in its posts (ae868, sidebar-sim)
   const all = C.tq.trim();
   return [
     simpleOn() ? null : { key: "(everything)", href: href("comms", "~all"), title: "All messages", text: `${plural(total, "match", "matches")} in ${plural(found.length, app() ? "conversation" : "thread")}`, current: c.all, onClick: () => { if (c.all) C.q = all; else C.next = all; ctx.update(); } },
@@ -554,6 +649,11 @@ const focusKeys = (fid, ctx) => !fid || !can("post") ? null : e => {
   e.preventDefault(); moveFocus(fid, { step: e.key === "ArrowUp" ? -1 : 1 }).then(err => { moved(err, ctx); requestAnimationFrame(() => { const a = document.querySelector(`#main .tm-sec[data-sec="f:${fid}"] .tm-sec-link`); if (a) a.focus(); }); });
 };
 const SECS = [["pin", "Pinned"], ["imp", "Important"], ["need", "Needs you"], ["rest", null]];
+// Recent view: Important shows its 10 newest rows; the rest sit behind an "N more" row (sidebar-sim, a9ac6/ae868).
+let impAll = false;
+const IMP_CAP = 10, capImp = (k, rows) => k === "imp" && C.view === "recent" && !impAll && rows.length > IMP_CAP ? rows.slice(0, IMP_CAP) : rows;
+const moreImp = (k, rows, ctx) => k === "imp" && C.view === "recent" && !impAll && rows.length > IMP_CAP
+  ? h("button", { type: "button", class: "tm-sec-more meta", onclick: () => { impAll = true; ctx.update(); } }, `${rows.length - IMP_CAP} more`) : null;
 function sections(rs, ctx, opts) {
   if (words(C.tq).length) return list(rs, opts);
   const by = { pin: [], imp: [], need: [], rest: [], arch: [] }, tops = [];
@@ -562,7 +662,7 @@ function sections(rs, ctx, opts) {
   for (const r of rs) { const k = r.sec || "rest"; if (k.startsWith("f:") && !by[k]) { by[k] = []; tops.push(k); } (by[k] || by.rest).push(r); }
   const order = new Map(tops.map((k, i) => [k, k === "f:" ? 1e9 : i])); tops.sort((a, b) => order.get(a) - order.get(b));
   const label = k => k === "f:" ? "Other" : focusName(focusById(k.slice(2)) || { name: k.slice(2) });
-  const parts = [...SECS.slice(0, 3), ...tops.map(k => [k, label(k)]), SECS[3]].filter(([k]) => by[k].length || (byFocus && k.startsWith("f:") && k !== "f:")), heads = parts.length > 1 || by.pin.length;
+  const parts = [...(C.view === "recent" ? [SECS[0], SECS[2], SECS[1]] : SECS.slice(0, 3)), ...tops.map(k => [k, label(k)]), SECS[3]].filter(([k]) => by[k].length || (byFocus && k.startsWith("f:") && k !== "f:")), heads = parts.length > 1 || by.pin.length;
   L.foldSecs = heads ? parts.map(([k]) => k).filter(k => k !== "f:") : [];   // Other has no fold
   if (foldFresh && heads) { foldFresh = false; L.foldSecs.forEach(k => k !== L.here && FOLD.add(k)); saveFold(); }   // a focus page open beside it keeps its own section open
   const sec = (k, label, rows) => {
@@ -585,7 +685,7 @@ function sections(rs, ctx, opts) {
         h("button", { type: "button", class: "tm-sec-h tm-fold", "aria-expanded": String(!shut), title: shut ? "Show this section" : "Fold this section", onclick: toggle },
           icon(shut ? "chevron-right" : "chevron-down"), h("span", { class: "tm-sec-nm" }, label), count),
         fid && can("post") ? h("button", { type: "button", class: "tm-sec-add", title: `New conversation in ${label}`, "aria-label": `New conversation in ${label}`, onclick: () => newIn(fid) }, icon("plus")) : null),
-      shut ? null : rows.length ? list(rows, { ...opts, empty: "" }) : h("p", { class: "meta tm-sec-none" }, "Nothing this week."));
+      shut ? null : rows.length ? [list(capImp(k, rows), { ...opts, empty: "" }), moreImp(k, rows, ctx)] : h("p", { class: "meta tm-sec-none" }, "Nothing this week."));
   };
   return h("div", { class: "tm-secs" },
     parts.length ? parts.map(([k, l]) => sec(k, l || (app() ? "Recent" : "Threads"), by[k])) : by.arch.length ? null : list([], opts),
@@ -598,10 +698,11 @@ function syncThreads(c, ctx) {
   const tl = document.querySelector("#main .cm-tl"); if (!tl) return;
   if (!simpleOn()) loadFoci();   // the foci (core/foci.js); a store emit when they change
   const held = byFocusOn() && S.foci === undefined && !C.tq.trim();   // Focus groups its rows by the focuses: grey rows until they're read, not a flat list that re-sorts
-  const sig = [held, S.ver, C.view, C.hideFaded, S.foci && S.foci.at, S.foci && (S.foci.foci || []).map(f => f.id).join(), C.scope, C.conv, C.imp, tmetaSig(), [...FOLD].join(), [...KIDS].join(), C.tq, AI.st + AI.res.length, AI.tag, S.shown && S.shown.length, showMask(), c.arg, Math.floor(now() / 3e4), S.runSig, marksSig().length].join("|");
+  const sig = [held, S.ver, C.view, impAll, C.hideFaded, S.foci && S.foci.at, S.foci && (S.foci.foci || []).map(f => f.id).join(), C.scope, C.conv, C.imp, tmetaSig(), [...FOLD].join(), [...KIDS].join(), C.tq, AI.st + AI.res.length, AI.tag, S.shown && S.shown.length, showMask(), c.arg, Math.floor(now() / 3e4), S.runSig, marksSig().length].join("|");
   if (tl === L.tl && sig === L.tlSig) return;
   const fresh = tl !== L.tl || c.arg !== L.tlConv || L.tlHeld;
   L.tl = tl; L.tlSig = sig; L.tlConv = c.arg;
+  if (C.tq !== L.tlQ) { L.tlQ = C.tq; tl.scrollTop = 0; }   // a new search starts at its best match, not wherever the list was scrolled to
   if (held || L.tlHeld) tl.replaceChildren();   // a skeleton and a list share no rows to morph
   L.tlHeld = held;
   if (held) { L.foldKids = []; tl.append(skeleton("rail")); return; }
@@ -844,7 +945,8 @@ function head(c, ctx) {
   const people = simpleOn() || !c.thread ? [] : threadPeople(c.thread).filter(m => m !== "person");
   const who = simpleOn() || c.thread ? [] : c.agent ? [...new Set(S.posts.filter(p => p.from === c.agent).map(p => p.th))].slice(-14).map(t => threadRef(t)) : [];
   const find = C.find || !!C.q.trim();
-  return h("header", { class: "cm-head", "data-key": "head", "data-find": find ? "" : null },
+  requestAnimationFrame(watchHead);
+  return h("header", { class: "cm-head", "data-key": "head", "data-find": find ? "" : null, "data-tight": headTight ? "" : null },
     h("div", { class: "cm-tt", "data-dev": app() ? null : "" },
       h("a", { class: "btn cm-back", href: href("comms"), "data-kind": "icon", "aria-label": app() ? "Chats" : "Threads", title: app() ? "Chats" : "Threads" }, icon("chevron-left")),
       c.thread && app() && !simpleOn() ? threadCrumb(c.thread) : null,

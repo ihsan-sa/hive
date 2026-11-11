@@ -253,7 +253,13 @@ function appAccounts(U, t, R) {
   };
   return section({ title: "Accounts", actions: can("config") ? button("Change stop line", () => askStopLine(U), { size: "s" }) : null },
     h("div", { class: "list u-accts" }, rows.map(row)),
-    h("p", { class: "meta u-note" }, `A bar and its word come from the same reading; the stop line is ${U.stop_pct}%.`));
+    h("p", { class: "meta u-note" }, `A bar and its word come from the same reading; the stop line is ${U.stop_pct}%` + stopsApart(rows, U.stop_pct) + "."));
+}
+/** Accounts whose own weekly stop line differs from the global one, so the note doesn't say 100% beside a lead that says 75% (round 1111b, R15-1). */
+function stopsApart(rows, g) {
+  const by = new Map();
+  for (const r of rows) { const s = (r.gauges.find(x => x.label === "Weekly") || {}).stop; if (s != null && s !== g) by.set(s, [...(by.get(s) || []), r.name]); }
+  return [...by].map(([s, n]) => `, ${s}% for ${n.join(" and ")}`).join("");
 }
 
 function appChart(U, t, R) {

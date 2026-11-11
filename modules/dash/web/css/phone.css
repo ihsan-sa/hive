@@ -37,7 +37,7 @@
   .bnav-i[aria-current=page],.bnav-i[aria-expanded=true]{color:var(--ink)}
   .bnav-i[aria-current=page] .ic{stroke-width:2.1}
   .bnav-i:active{background:var(--hover)}
-  .bnav-i:focus-visible{outline:2px solid var(--ring,var(--ink));outline-offset:-4px;border-radius:var(--r-m)}
+  .bnav-i:focus-visible{outline:2px solid var(--focus);outline-offset:-4px;border-radius:var(--r-m)}
   .bnav-n{position:absolute;top:6px;left:calc(50% + 6px);min-width:16px;padding:0 4px;border-radius:var(--r-pill);background:var(--ink);color:var(--bg);font-size:var(--fs-micro);font-weight:var(--w-bold);line-height:16px;text-align:center}
   .app[data-view=thread] #mnav,.app[data-kb=open] #mnav,#main:has(.kb[data-in]) ~ #mnav{display:none}
   .bnav-sheet{z-index:51;bottom:0;overscroll-behavior:contain}
@@ -152,6 +152,8 @@
   .cp-fbtn:not([data-picked]) .cp-ficon{display:inline-block}
   /* the words "Focus" and "Model" go on a phone: the value says it ("No focus", "Sonnet"), and with them the row ran the pills into each other and cut "To a552f" to "a" */
   .cp-fbtn>.cp-lab,.cp-model>.cp-lab{display:none}
+  .cp-effort>.cp-lab{display:inline}   /* round 16: Effort keeps its word on a phone and drops the value until one is set, or a lone "Default" reads as nothing */
+  .cp-effort:not([data-picked]) .cp-ev{display:none}
 
   /* ---- pages ---- */
   .page{padding:var(--s4) max(var(--s4),env(safe-area-inset-right,0px)) var(--s7) max(var(--s4),env(safe-area-inset-left,0px))}

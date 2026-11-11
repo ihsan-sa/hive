@@ -41,6 +41,8 @@ export function draft(th) {
     let v = {}; try { v = JSON.parse(localStorage.getItem(k) || "{}"); } catch (e) {}
     d = { th: th || null, text: v.text || "", replyId: v.reply || null, reply: null, quote: v.quote || null, to: v.to || null, name: v.name || "", naming: !!v.name, model: v.model || "", effort: v.effort || "", focus: v.focus || "", files: [], err: "" };
     D.set(k, d);
+    // A reload puts the draft back and the caret in it (R-1111-r16a), but not on a phone, where it would raise the keyboard.
+    if (d.text && performance.now() < 8000 && innerWidth > 600) CP.focus = true;
   }
   if (!d.reply && d.replyId && S.byId[d.replyId]) d.reply = S.byId[d.replyId];
   return d;
@@ -796,7 +798,9 @@ function effortPick(d, r, th) {
   const note = other ? "Effort applies to Claude runs only" : live ? (now ? `${Said(th, who)} is at ${now} effort for this run` : `${Said(th, who)} keeps its effort for this run`) : known ? (held ? `${Said(th, who)} wakes at ${held} effort` : `${Said(th, who)} wakes at Claude's default effort`) : "How hard a new agent thinks";
   const pick = v => { d.effort = v; keep(d); CP.menu = false; refresh(); };
   return h("div", { class: "pop cp-mpop cp-epop", "data-key": "effort" },
-    h("button", { type: "button", class: "dd cp-model cp-effort", disabled: other, "data-picked": cur ? "" : null, "data-value": cur, "aria-haspopup": "listbox", "aria-expanded": String(open), "aria-label": "Effort: " + (other ? "Claude runs only" : shown || "as is"), title: note + (other ? "" : ". Pick one to change it."), onclick: (e, b) => { const r = (b || e.target.closest(".cp-effort")).getBoundingClientRect(); CP.mdown = innerHeight - r.bottom > r.top; toggle("effort")(); } }, other || !shown ? "Effort" : "Effort: " + shown),
+    h("button", { type: "button", class: "dd cp-model cp-effort", disabled: other, "data-picked": cur ? "" : null, "data-value": cur, "aria-haspopup": "listbox", "aria-expanded": String(open), "aria-label": "Effort: " + (other ? "Claude runs only" : shown || "as is"), title: note + (other ? "" : ". Pick one to change it."), onclick: (e, b) => { const r = (b || e.target.closest(".cp-effort")).getBoundingClientRect(); CP.mdown = innerHeight - r.bottom > r.top; toggle("effort")(); } },
+      // Label and value like the Model and Focus pills beside it, so "Effort" alone never reads as a missing value (round 16)
+      h("span", { class: "cp-lab", "aria-hidden": "true" }, "Effort"), h("span", { class: "cp-ev" }, other ? "Claude only" : shown ? (EFFORTS.find(([v]) => v === shown) || [, shown])[1] : "Default"), other ? null : icon("chevron")),
     open ? h("div", { class: "menu cp-mmenu", role: "listbox", "aria-label": "Effort", "data-side": CP.mdown ? "bottom-end" : "top-end", "data-w": "wide", "data-key": "em" },
       menuHead(note, "h"),
       [["", "As is", held ? `Leave it at ${held}` : "Claude's default"], ...EFFORTS].map(([v, l, s]) =>
@@ -980,7 +984,7 @@ export function composer({ thread, update, place = "thread", autofocus, top }) {
           simpleOn() ? null : modelPick(d, r, th),
           simpleOn() ? null : effortPick(d, r, th),
           sendButton(sendWord, () => send(th), empty, armed ? "Enter interrupts and sends · Esc cancels"
-            : busy ? `${sendWord} (Enter). ${Said(th, busy)} reads it after its current step` : `${sendWord} (Enter). Shift+Enter for a new line. Sent messages can't be edited or taken back.`, armed)))));
+            : busy ? `${sendWord} (Enter). ${Said(th, busy)} reads it after its current step` : `${sendWord} (Enter). Shift+Enter for a new line. Edit your last message from its Edit button.`, armed)))));
 }
 // The hint lines under the box went into the send button's name and title (the Nov 8 handoff §8.1); the queued line under your bubble says the busy part.
 function sendButton(word, fn, empty, say, armed) {

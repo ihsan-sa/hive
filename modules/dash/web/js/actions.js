@@ -22,7 +22,7 @@ export function stopButton(label, onClick, cls) {
 export function askKill(n, said) {
   const L = S.running.get(n), done = said ? "stopped" : "killed", say = { 400: "the code didn't match", 403: "this connection isn't allowed to kill", 409: `${n} isn't running any more` };
   confirm({
-    title: said ? said + "?" : `Kill ${n}?`, ok: said || `Kill ${n}`, kind: "danger", typed: n, failText: `Nothing was ${done}`,
+    title: said ? said + "?" : `Kill ${n}?`, ok: said || `Kill ${n}`, kind: "danger", typed: S.app.app && said ? null : n, failText: `Nothing was ${done}`,
     body: [
       L && L.doing ? h("p", { class: "meta" }, "Doing now: " + short(L.doing, 160)) : null,
       "This ends the run and the shells it started, right away, without letting it save its work.",
@@ -30,7 +30,7 @@ export function askKill(n, said) {
     ],
     onOk: async code => {
       let d;
-      try { d = await post("/api/kill", { name: n, confirm: code }); }
+      try { d = await post("/api/kill", { name: n, confirm: code || n }); }
       catch (e) { throw Error(say[e.status] || e.message); }
       await poll();
       const stuck = d.stuck || [], det = d.detached || [];
