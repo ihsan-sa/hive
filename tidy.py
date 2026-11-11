@@ -67,7 +67,7 @@ def due(since, t=None, posts=None):
         if last < since or t - last < GRACE_S: continue
         if not any(is_agent(p.get("from")) and fc.ts(p.get("at")) >= since for p in ps): continue
         first = min(ps, key=lambda p: fc.ts(p.get("at"))); title = quiet((str(first.get("text", "")).strip().splitlines() or [""])[0])[:70]
-        if th not in tagged and fc.focus_of(st, th, posts) is None:
+        if th not in tagged and not th.endswith("-security-read") and fc.focus_of(st, th, posts) is None:  # a rootwarden read of one PR is plumbing, not a line of work (R38-1)
             out.append({"kind": "file", "thread": th, "post": last_agent(th), "what": f"in no focus: {title}", "agents": who(th, "file")})
         if not fc._titled(th):
             out.append({"kind": "title", "thread": th, "post": last_agent(th), "what": f"no title, shows: {title}", "agents": who(th, "title")})

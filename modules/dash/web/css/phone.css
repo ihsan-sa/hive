@@ -37,7 +37,7 @@
   .bnav-i[aria-current=page],.bnav-i[aria-expanded=true]{color:var(--ink)}
   .bnav-i[aria-current=page] .ic{stroke-width:2.1}
   .bnav-i:active{background:var(--hover)}
-  .bnav-i:focus-visible{outline:2px solid var(--ring,var(--ink));outline-offset:-4px;border-radius:var(--r-m)}
+  .bnav-i:focus-visible{outline:2px solid var(--focus);outline-offset:-4px;border-radius:var(--r-m)}
   .bnav-n{position:absolute;top:6px;left:calc(50% + 6px);min-width:16px;padding:0 4px;border-radius:var(--r-pill);background:var(--ink);color:var(--bg);font-size:var(--fs-micro);font-weight:var(--w-bold);line-height:16px;text-align:center}
   .app[data-view=thread] #mnav,.app[data-kb=open] #mnav,#main:has(.kb[data-in]) ~ #mnav{display:none}
   .bnav-sheet{z-index:51;bottom:0;overscroll-behavior:contain}

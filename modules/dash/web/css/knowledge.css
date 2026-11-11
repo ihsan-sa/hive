@@ -36,7 +36,7 @@
 .kb-q input{width:100%;height:var(--ctl);padding:0 var(--s3) 0 32px;border:1px solid var(--line);border-radius:var(--r-m);background:var(--surface);font:inherit;font-size:var(--fs-small);color:var(--ink)}
 .kb-q input::placeholder{color:var(--ink-3)}
 .kb-q input:hover{border-color:var(--line-2)}
-.kb-q input:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-bg)}
+.kb-q input:focus{outline:none;border-color:var(--focus);box-shadow:0 0 0 3px var(--accent-bg)}
 .kb-q kbd{position:absolute;right:8px;top:50%;transform:translateY(-50%);padding:0 5px;border:1px solid var(--line);border-radius:4px;font:var(--fs-micro)/18px var(--font);color:var(--ink-3);background:var(--bg)}
 .kb-q input:focus~kbd,.kb-q input:not(:placeholder-shown)~kbd{display:none}
 
@@ -46,7 +46,7 @@
 .kb-find .kb-q{max-width:calc(var(--kb-col) - 2*var(--gutter));margin-inline:auto}
 .kb-find .kb-q input{height:var(--ctl-l);border-radius:var(--r-l);background:var(--bg);border-color:transparent;font-size:var(--fs-body)}
 .kb-find .kb-q input:hover{border-color:var(--line)}
-.kb-find .kb-q input:focus{background:var(--surface);border-color:var(--accent)}
+.kb-find .kb-q input:focus{background:var(--surface);border-color:var(--focus)}
 .kb-find .kb-q>.ic{left:13px}
 .kb-find .kb-q input{padding-left:36px}
 
@@ -282,6 +282,7 @@
   .kb-side{border-right:0;background:var(--surface)}
   .kb-top{padding:var(--s3) var(--s4) var(--s1)}
   .kb-top .kb-q input,.kb-phone.kb-find .kb-q input{height:var(--ctl-l);font-size:16px;border-radius:var(--r-l);background:var(--bg);border-color:transparent}   /* 16px: no zoom on iOS */
+  .kb-top .kb-q input:focus,.kb-phone.kb-find .kb-q input:focus{background:var(--surface);border-color:var(--focus)}   /* the line above outranks the focus border */
   .kb-top>.kb-q{display:none}                         /* one search box on the phone: "search everything" also matches names */
   .kb-phone{display:block}
   .kb-phone.kb-find{padding:0 var(--s4) var(--s3)}

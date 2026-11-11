@@ -2339,6 +2339,7 @@ class BoardIndex:
     def __init__(self):
         self.off, self.last, self.authors, self.mine, self.answered, self.lock = 0, {}, {}, [], {}, threading.Lock()
         self.threads, self.names = set(), None
+        self.pfiles = {}   # the person's posts with files: id -> (thread, first version's id, [paths]), so an edit keeps them (everyday E12d)
 
     def targets(self, p):
         if self.names is None:
@@ -2359,7 +2360,9 @@ class BoardIndex:
                 who, th = str(p.get("from", "")), p.get("thread") or p.get("id")
                 self.authors[p.get("id")] = who; self.threads.add(th)
                 if AGENT_CODE.fullmatch(who.lower()): self.last[th] = who.lower()
-                if who == PERSON: self.answered[th] = p.get("at", "")
+                if who == PERSON:
+                    self.answered[th] = p.get("at", "")
+                    if p.get("files"): self.pfiles[p.get("id")] = (th, str(p.get("edit_of") or p.get("id")), [str(f.get("path", "")) for f in p["files"] if isinstance(f, dict)])
                 elif PERSON in self.targets(p):
                     self.mine.append({"id": p.get("id"), "at": p.get("at"), "from": who, "thread": th,
                                       "text": str(p.get("text", ""))[:600], "files": len(p.get("files") or [])})
@@ -2513,7 +2516,10 @@ def voice_ready():
     return isinstance(st, dict) and st.get("ok") is True and isinstance(st.get("at"), (int, float)) and time.time() - st["at"] < 120
 
 
-def person_post(text, thread=None, reply_to=None, uploads=(), signer=None, limited=False, simple=False, model=None, sig=None, interrupt=False, effort=None, notice=False, edit_of=None, retry_of=None):
+# Must match EDIT_NOTE in web/js/core/model.js, byte for byte: the page signs it.
+EDIT_NOTE = "(edited message {v}: this version replaces it. Answer it instead, as if that message and your answer to it were never sent; anything already done for it stays done, so don't redo it.)\n"
+
+def person_post(text, thread=None, reply_to=None, uploads=(), signer=None, limited=False, simple=False, model=None, sig=None, interrupt=False, effort=None, notice=False, edit_of=None, retry_of=None, files_from=None):
     """A post as the person. As the Slack mirror does it: a plain message wakes the agent on the thread (thread_agent), a reply wakes the author
     of the post replied to, and no thread (or a thread with no agent yet) starts a new agent. Mentions in the text win.
     signer: who signed in, from a verified Access token, when more than one person can: it heads the text, so an agent and the board can see who wrote it.
@@ -2525,17 +2531,27 @@ def person_post(text, thread=None, reply_to=None, uploads=(), signer=None, limit
     edit_of: the person edited their message with this id (its first version) in this thread; retry_of: they asked for another answer in place
     of the agent's reply with this id. Both go on the board as fields (hive post --edit-of/--retry-of) and the chat draws them as versions; the
     agent reads a one-line note on what to do (everyday E12). A retry has no typed text, so it goes unsigned, like a notice.
+    files_from: with edit_of, the version being edited (its id): its files go with the new version, so editing the words keeps them (E12d).
     Returns {"id", "thread", "said"}, or raises ValueError with a sentence for the page."""
     text = str(text or "").strip()
     for k, v in (("edit", edit_of), ("retry", retry_of)):
         if v is not None and (not thread or not re.fullmatch(r"[0-9a-f]{6,20}", str(v))): raise ValueError(f"the message to {k} isn't one in this conversation")
     if retry_of: text, notice, interrupt, reply_to, uploads = "", True, False, None, ()
-    if edit_of: reply_to = None
     sig = {**sig, "n": len(text)} if isinstance(sig, dict) and text and not BTW.fullmatch(text) else None
+    if edit_of:   # the page puts the note in front itself and signs it with the words, so the edit's signature holds (core/signed.py lets nothing else in front)
+        reply_to, note = None, EDIT_NOTE.format(v=edit_of)
+        if not text.startswith(note): text = note + text
+        if not text[len(note):].strip(): raise ValueError("nothing to send")
     refs = [UPLOAD_REF.fullmatch(str(u)) for u in uploads or []]
     if not all(refs): raise ValueError("an attachment wasn't recognised")
     paths = [INCOMING / m[1] / m[2] for m in refs]
     if not all(p.is_file() and not p.is_symlink() for p in paths): raise ValueError("an attachment is gone; attach it again")
+    kept = []
+    if edit_of and files_from:
+        INDEX.refresh(); kf = INDEX.pfiles.get(str(files_from))
+        if not kf or kf[0] != str(thread) or kf[1] != str(edit_of): raise ValueError("the message's files aren't in this conversation")
+        kept = [Path(f) for f in kf[2]]
+        if not all(f.parent == HOME_FILES / str(files_from) and f.is_file() and not f.is_symlink() for f in kept): raise ValueError("a file of that message is gone")
     if thread and not THREAD_NAME.fullmatch(str(thread)): raise ValueError("a thread name is letters, digits and . _ : -")
     if not text and not paths and not retry_of: raise ValueError("nothing to send")
     if model and model not in PICK_MODELS: raise ValueError("that model isn't one of " + ", ".join(PICK_MODELS))
@@ -2565,8 +2581,7 @@ def person_post(text, thread=None, reply_to=None, uploads=(), signer=None, limit
         if edit_of and author != PERSON: raise ValueError("only your own messages can be edited")
         if retry_of and not AGENT_CODE.fullmatch(author): raise ValueError("only an agent's reply can be tried again")
         if retry_of: who = author
-        text = (f"(edited message {v}: this version replaces it. Answer it as if that message and your answer to it were never sent.)\n{text}" if edit_of else
-                f"(retry of reply {v}: the person asked for another answer in its place. Write that answer again from scratch as a new attempt. The chat shows it as a newer version of that reply, so don't mention the earlier one or this note.)")
+        if retry_of: text = (f"(retry of reply {v}: the person asked for another answer in its place. Write that answer again from scratch as a new attempt. The chat shows it as a newer version of that reply, so don't mention the earlier one or this note.)")
     routed = False
     if not word and not calls_someone(text):
         who = who or (thread_agent(thread) if thread else None)
@@ -2576,7 +2591,7 @@ def person_post(text, thread=None, reply_to=None, uploads=(), signer=None, limit
         PAIR_ACCEPTED.parent.mkdir(parents=True, exist_ok=True)
         with PAIR_ACCEPTED.open("a") as f: f.write(json.dumps({"at": time.time(), "text": text}) + "\n")
     cmd = [str(HIVE_BIN), "post", "--as", PERSON] + (["--thread", str(thread)] if thread else []) + (["--to", who] if who else []) + (["--routed"] if routed else []) + (["--reply-to", reply_to] if reply_to else []) + (["--model", PICK_MODELS[model]] if model else []) + (["--effort", effort] if effort and not word else []) + (["--interrupt"] if interrupt and not limited and not word else []) + (["--edit-of", str(edit_of)] if edit_of else []) + (["--retry-of", str(retry_of)] if retry_of else [])
-    for p in paths: cmd += ["--file", str(p)]
+    for p in paths + kept: cmd += ["--file", str(p)]
     r = subprocess.run(cmd, input=text, text=True, capture_output=True, env={**child_env(), **({"HIVE_POST_VIA": "web-notice"} if (notice or btw) and not limited else {}), **({"HIVE_POST_VIA": "limited"} if limited else {}), **({"HIVE_POST_VIA": "web-pair"} if pairing else {}), **({"HIVE_POST_SIG": json.dumps(sig)} if sig else {})}, cwd=str(HOME), timeout=60)
     if r.returncode: raise ValueError(short(r.stderr, 300) or "the post failed")
     for p in paths: shutil.rmtree(p.parent, ignore_errors=True)
@@ -5184,7 +5199,7 @@ def serve(port):
                 except ValueError as e: return self.deny(400, str(e))
             if u.path in ("/api/post", "/api/side-ask", "/api/thread-meta", "/api/shown", "/api/loadtime", "/api/opened", "/api/checklist", "/api/focus", "/api/feedback", "/api/feedback-draft-done", "/api/issue-link", "/api/update", "/api/inbox-read", "/api/ntfy", "/api/webpush", "/api/agent-model", "/api/agent-effort", "/api/config", "/api/starter", "/api/module", "/api/signin", "/api/signin/code", "/api/signin/cancel", "/api/access", "/api/plan", "/api/secret", "/api/settings", "/api/share-copy", "/api/share-pack", "/api/draft", "/api/import", "/api/signin-codex", "/api/account-key", "/api/design", "/api/brand", "/api/slack-door"):
                 try:
-                    if u.path == "/api/post": res = person_post(d.get("text"), d.get("thread"), d.get("reply_to"), d.get("files"), signer=self.signer, limited="config" not in self.can, simple=d.get("simple") is True, model=d.get("model"), effort=d.get("effort"), sig=d.get("sig"), interrupt=d.get("interrupt") is True, edit_of=d.get("edit_of"), retry_of=d.get("retry_of"))
+                    if u.path == "/api/post": res = person_post(d.get("text"), d.get("thread"), d.get("reply_to"), d.get("files"), signer=self.signer, limited="config" not in self.can, simple=d.get("simple") is True, model=d.get("model"), effort=d.get("effort"), sig=d.get("sig"), interrupt=d.get("interrupt") is True, edit_of=d.get("edit_of"), retry_of=d.get("retry_of"), files_from=d.get("files_from"))
                     elif u.path == "/api/side-ask": res = side_ask(d.get("q"), signer=self.signer, limited="config" not in self.can)
                     elif u.path == "/api/thread-meta": res = set_thread_meta(d)
                     elif u.path == "/api/shown": res = dismiss_shown(d)

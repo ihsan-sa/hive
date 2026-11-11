@@ -26,10 +26,14 @@ function sessionsIn(th) {
 function cast(th) {
   const d = S.threads.get(th), n = d ? d.posts.length : 0, c = CAST.get(th);
   if (c && c.n === n && c.s === S.sessions.length && c.live === S.live) return c.names;
-  const first = new Map(), saw = (a, t) => { if (CODE_NAME.test(a) && !(first.get(a) <= t)) first.set(a, t); };
+  // An heir (a fresh agent the starter hands the chat to after its agent said Done) carries on the same conversation: it is the same agent to the person (E12b),
+  // so it takes the name of the one it took over from, and the cast counts the chain once.
+  const heirOf = new Map(); for (const s of sessionsIn(th)) if (s.heirOf && s.heirOf !== s.name) heirOf.set(s.name, s.heirOf);
+  const root = a => { for (let i = 0; i < 50 && heirOf.has(a); i++) a = heirOf.get(a); return a; };
+  const first = new Map(), saw = (a, t) => { if (!CODE_NAME.test(a)) return; a = root(a); if (!(first.get(a) <= t)) first.set(a, t); };
   if (d) for (const p of d.posts) saw(p.from, p.t);
   for (const s of sessionsIn(th)) saw(s.name, s.start);
-  for (const a of threadPeople(th)) if (CODE_NAME.test(a) && !first.has(a)) first.set(a, Infinity);   // running or queued here, nothing posted yet: after the ones already seen
+  for (const a of threadPeople(th)) if (CODE_NAME.test(a) && !first.has(root(a))) first.set(root(a), Infinity);   // running or queued here, nothing posted yet: after the ones already seen
   const order = [...first].sort((a, b) => a[1] - b[1] || (a[0] < b[0] ? -1 : 1)).map(x => x[0]), names = new Map();
   // Past Z a letter runs out and "Agent 30" tells a person nothing (R-1110f-f): say where it lives, else what it was asked here, else two letters.
   const taken = new Set(), late = (a, i) => {
@@ -37,6 +41,7 @@ function cast(th) {
     return "Agent " + String.fromCharCode(65 + Math.floor(i / 26) - 1) + String.fromCharCode(65 + i % 26);
   };
   order.forEach((a, i) => names.set(a, order.length === 1 ? "the agent" : i < 26 ? "Agent " + String.fromCharCode(65 + i) : late(a, i)));
+  for (const a of heirOf.keys()) if (names.has(root(a))) names.set(a, names.get(root(a)));
   CAST.set(th, { n, s: S.sessions.length, live: S.live, names });
   return names;
 }
@@ -59,10 +64,25 @@ export function agentLabel(n) {
 /** Outside its conversation an agent is "X's agent", and when X has had several agents, with the mark it has inside X ("UI design loop's agent B", "Feedback's agent on the zoom"),
  *  so two agents of one conversation never share a name on Now, Map hand-offs or a focus's agent list (round 1111a), and the name matches what the conversation calls it. */
 function awayLabel(n) {
-  const base = homeLabel(n); if (!base) return "";
-  const th = agentThread(n), names = cast(th); if (names.size < 2) return base;
+  let base = homeLabel(n); if (!base) return "";
+  const th = agentThread(n), q = apart(base, th); if (q) base += " (" + q + ")";
+  const names = cast(th); if (names.size < 2) return base;
   const c = names.get(n) || "", m = /^Agent ([A-Z]{1,2})$/.exec(c);
   return m ? base + " " + m[1] : /^Agent on /.test(c) ? base + c.slice(5) : base;
+}
+// Two conversations can shorten to one name ("Phone call handling's agent" for ten of them, R-1111a-a): such a name takes what differs in its title, else its day.
+let BASES = null, BASES_N = -1;
+function apart(base, th) {
+  if (BASES_N !== S.sessions.length) {
+    BASES_N = S.sessions.length; BASES = new Map();
+    const seen = new Set(); for (let i = S.sessions.length - 1; i >= 0; i--) { const t = S.sessions[i].thread; if (!t || seen.has(t)) continue; seen.add(t); const b = homeLabel(S.sessions[i].name); if (b) (BASES.get(b) || BASES.set(b, []).get(b)).push(t); }
+  }
+  const ths = BASES.get(base); if (!ths || ths.length < 2 || !ths.includes(th)) return "";
+  const rest = t => { const x = threadTitle(t) || "", i = x.indexOf(":"); return i > 0 && i < 40 ? titleName(x.slice(i + 1).trim().replace(/^(?:(?:a|an|the|of|in|on|to|for|and|or|with|at|by|from)\s+)+/i, "")) : ""; };
+  const d = t => { const f = S.sessions.find(x => x.thread === t); return f && f.start ? new Date(f.start).toLocaleDateString([], { month: "short", day: "numeric" }) : ""; };
+  const lab = t => { const m = rest(t); return ths.some(o => o !== t && rest(o) === m) ? [m, d(t)].filter(Boolean).join(", ") : m || d(t); };
+  const mine = lab(th), twins = ths.filter(t => lab(t) === mine);   // the same words on the same day: told apart by number
+  return twins.length > 1 ? mine + (mine ? ", " : "") + "no. " + (twins.indexOf(th) + 1) : mine;
 }
 /** "X's agent" from the title of the thread an agent lives in; "" when that says nothing, or (skip) it is the conversation being read. */
 function homeLabel(n, skip) {
@@ -389,7 +409,9 @@ const SOURCE_LABEL = { "web app": "Web", "in Slack": "Slack", "via the box": "Bo
  *  The board keeps the text as it is; this is for display only. */
 // The developer route reads the board as it is: mentions, reply lines and thread ids stay.
 // E12: the line the server puts before an edited message for the agent to read (dash.py person_post); the chat shows the version arrows instead.
-export const EDIT_NOTE = /^\(edited message [0-9a-f]+: [^\n]*\)\n/i;
+export const EDIT_NOTE = /^(?:\(edited message [0-9a-f]+: [^\n]*\)\n)+/i;
+// The note an edit carries for the agent; must match EDIT_NOTE in dash.py byte for byte, since the page signs it with the words.
+export const editNote = v => `(edited message ${v}: this version replaces it. Answer it instead, as if that message and your answer to it were never sent; anything already done for it stays done, so don't redo it.)\n`;
 export function displayText(p) {
   if (!S.app.app) return String(p.text || "");
   if (p.disp != null) return p.disp;
@@ -401,7 +423,7 @@ export function displayText(p) {
   // Only on the person's own posts, so an agent quoting one keeps its words.
   const m = p.from === "person" && t.match(SOURCE);
   p.src = m ? { name: m[1] || null, how: SOURCE_LABEL[m[2]], said: m[0].trim().slice(1, -1) } : null;
-  if (m) t = t.slice(m[0].length).replace(MENTIONS, "");
+  if (m) t = t.slice(m[0].length).replace(MENTIONS, "").replace(EDIT_NOTE, "");
   // An older post of only files carried "Attached: <their names>" as its text; the files show themselves, so it shows none.
   if (p.from === "person" && (p.files || []).length && t.trim() === "Attached: " + p.files.map(f => f.name).join(", ")) t = "";
   // an agent's "@person" on a line of its own words: the post already says "to you", so the bare handle is noise
@@ -420,7 +442,7 @@ export function typedText(p) {
   let t = String(p.text || ""); const kept = [];
   const heads = () => { const m = t.match(MENTIONS); if (m) { t = t.slice(m[0].length); kept.push(...m[0].trim().split(/[\s,:]+/)); } };
   heads(); t = t.replace(/^reply to message [0-9a-f]+:\s*/i, "").replace(EDIT_NOTE, "");
-  const m = t.match(SOURCE); if (m) t = t.slice(m[0].length);
+  const m = t.match(SOURCE); if (m) t = t.slice(m[0].length).replace(EDIT_NOTE, "");
   heads();
   const say = simpleOn() ? [] : kept.filter(n => !/^@[a-z][0-9a-f]{4}$/.test(n) && n !== "@person");
   return (say.length ? say.join(" ") + " " : "") + t;

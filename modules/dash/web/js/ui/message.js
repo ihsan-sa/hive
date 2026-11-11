@@ -6,10 +6,11 @@
 import { h, copyText } from "../core/dom.js";
 import { S, can, jget, SYS, OUTSIDE, post as apiPost } from "../core/store.js";
 import { simpleOn, hiveName } from "../core/simple.js";
-import { isScript, isAgent, isWarden, isRunning, inConversation, capFirst, agentLabel, displayText, typedText, chatText, postSource, btwParent, btwText, asksQuestion, threadState, threadChildren, threadTitle } from "../core/model.js";
+import { isScript, isAgent, isWarden, isRunning, inConversation, capFirst, agentLabel, displayText, typedText, editNote, chatText, postSource, btwParent, btwText, asksQuestion, threadState, threadChildren, threadTitle } from "../core/model.js";
 import { focusById, focusName, focusOf } from "../core/foci.js";
 import { clock, stamp, now, short, mdPlain, ago, DAY, MIN } from "../core/format.js";
 import { markdown, mdCut, filesNamed } from "./markdown.js";
+import { artifactSeries, collectPages, inChat } from "../rich/artifact.js";
 import { agentRef, threadRef, agentAvatar } from "./refs.js";
 import { agentHref, threadHref, href } from "../core/router.js";
 import { button, icon, statusDot, copyPress, scrim } from "./kit.js";
@@ -203,7 +204,16 @@ function mdIn(t, p) {
   const d = p && S.threads.get(p.th); if (!d) return markdown(t, null, !!p);
   let c = NAMED.get(p.th);
   if (!c || c.n !== d.posts.length) NAMED.set(p.th, c = { n: d.posts.length, files: filesNamed(d.posts) });
-  return markdown(t, c.files, true);
+  return inChat(p.th, p.id, () => markdown(t, c.files, true));
+}
+// The pages the chat view shows (posts: what it draws, hidden versions left out), as versions of each other. Parsed again only when they change.
+const PAGES = new Map();
+export function chatPages(th, posts) {
+  const items = posts.filter(p => !p.ev && p.from !== "person" && /(`{3,}|~{3,})\s*html/i.test(p.text || "")).map(p => [p.id, chatText(p)]);
+  const sig = items.map(([id, t]) => id + ":" + t.length).join(",");
+  if (PAGES.get(th) === sig) return;
+  PAGES.set(th, sig); if (PAGES.size > 50) PAGES.delete(PAGES.keys().next().value);
+  artifactSeries(th, collectPages(t => markdown(t, null, true), items));
 }
 
 // Fold parsed blocks, so fences, footnotes and inline formatting remain intact.
@@ -451,16 +461,16 @@ function versionBar(p, opts) {
   const root = v ? v.root : p.id, what = p.from === "person" ? "message" : "reply";
   return h("div", { class: "msg-ver" },
     v ? h("span", { class: "msg-ver-n", role: "group", "aria-label": `Version ${v.i + 1} of ${v.n} of this ${what}` },
-      h("button", { type: "button", class: "msg-ver-b", disabled: v.i === 0 ? "" : null, title: `Older version`, "aria-label": `Older version of this ${what}`, onclick: () => opts.pick && opts.pick(root, v.i - 1) }, "‹"),
-      h("span", { class: "meta" }, `${v.i + 1} / ${v.n}`),
-      h("button", { type: "button", class: "msg-ver-b", disabled: v.i === v.n - 1 ? "" : null, title: `Newer version`, "aria-label": `Newer version of this ${what}`, onclick: () => opts.pick && opts.pick(root, v.i + 1) }, "›")) : null,
-    ed ? button("Edit", () => { Object.assign(EDIT, { id: p.id, text: typedText(p), err: "", busy: false }); opts.redraw && opts.redraw(); }, { size: "s", kind: "quiet", icon: "edit", cls: "msg-vact msg-edit", title: "Change this message and get a new answer; the old one stays behind the arrows" }) : null,
-    re ? button("Retry", e => retry(p, root, e), { size: "s", kind: "quiet", icon: "retry", cls: "msg-vact msg-retry", title: "Ask for another answer; this one stays behind the arrows" }) : null);
+      h("button", { type: "button", class: "msg-ver-b", disabled: v.i === 0 ? "" : null, title: `Older version`, "aria-label": `Older version of this ${what}`, onclick: () => opts.pick && opts.pick(root, v.i - 1, v.n) }, "‹"),
+      h("span", { class: "meta", "aria-live": "polite" }, `${v.i + 1} / ${v.n}`),
+      h("button", { type: "button", class: "msg-ver-b", disabled: v.i === v.n - 1 ? "" : null, title: `Newer version`, "aria-label": `Newer version of this ${what}`, onclick: () => opts.pick && opts.pick(root, v.i + 1, v.n) }, "›")) : null,
+    ed ? button("Edit", () => { Object.assign(EDIT, { id: p.id, text: typedText(p).replace(/^@new\s+/, ""), err: "", busy: false, focused: false }); opts.redraw && opts.redraw(); }, { size: "s", kind: "quiet", icon: "edit", cls: "msg-vact msg-edit", title: "Change this message and get a new answer; the old one stays behind the arrows" }) : null,
+    re ? button("Retry", e => retry(p, opts.retryRoot || root, e), { size: "s", kind: "quiet", icon: "retry", cls: "msg-vact msg-retry", title: "Ask for another answer; this one stays behind the arrows" }) : null);
 }
 async function retry(p, root, e) {
   const b = e && e.currentTarget; if (b) { b.disabled = true; b.textContent = "Asking…"; }
   try { await apiPost("/api/post", { thread: p.th, retry_of: root }); }
-  catch (err) { if (b) { b.disabled = false; b.textContent = "Retry failed: " + err.message; } }
+  catch (err) { if (b) { b.disabled = false; b.textContent = "Retry failed"; b.title = err.message; } }
 }
 function editBox(p, opts) {
   const root = opts.ver ? opts.ver.root : p.id;
@@ -470,18 +480,18 @@ function editBox(p, opts) {
   const cancel = () => { Object.assign(EDIT, { id: null, text: "", err: "" }); opts.redraw && opts.redraw(); };
   const save = async () => {
     const text = EDIT.text.trim(); if (!text || EDIT.busy) return;
-    if (text === typedText(p).trim()) return cancel();
+    if (text === typedText(p).replace(/^@new\s+/, "").trim()) return cancel();
     EDIT.busy = true; EDIT.err = "";
-    try { await apiPost("/api/post", { text, thread: p.th, edit_of: root }); Object.assign(EDIT, { id: null, text: "", busy: false }); opts.redraw && opts.redraw(); }
+    try { await apiPost("/api/post", { text: editNote(root) + text, thread: p.th, edit_of: root, simple: simpleOn(), ...((p.files || []).length ? { files_from: p.id } : {}) }); Object.assign(EDIT, { id: null, text: "", busy: false }); opts.redraw && opts.redraw(); }
     catch (err) { EDIT.busy = false; EDIT.err = err.message; opts.redraw && opts.redraw(); }
   };
-  setTimeout(() => { if (ta.isConnected && document.activeElement !== ta) { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); } }, 0);
+  if (!EDIT.focused) { EDIT.focused = true; setTimeout(() => { if (ta.isConnected) { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); } }, 0); }
   return h("div", { class: "msg-editor" }, ta,
     EDIT.err ? h("p", { class: "msg-edit-err", role: "alert" }, "Not sent: " + EDIT.err) : null,
     h("div", { class: "msg-edit-acts" },
       button("Save and send", save, { size: "s", kind: "primary", cls: "msg-edit-save" }),
       button("Cancel", cancel, { size: "s", kind: "quiet", cls: "msg-edit-cancel" }),
-      h("span", { class: "meta" }, "The old version and its answer stay behind the arrows.")));
+      h("span", { class: "meta" }, (p.files || []).length ? "Its files go with it. The old version and its answer stay behind the arrows." : "The old version and its answer stay behind the arrows.")));
 }
 
 // ---- R7 step 4: the full look's message parts (the design hand-off, src/parts/30-thread.html) ----

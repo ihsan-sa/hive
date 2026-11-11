@@ -606,6 +606,7 @@ def waiting_posts(st, r):
     try: seen = set((STATE / "delivered" / r["name"]).read_text().split())
     except OSError: seen = set()
     ps = [p for p in ps if p["id"] not in seen]
+    if any(p.get("supersede") for p in ps): return ps   # the person edited the message it is answering, or asked for another answer: stop that reply now (everyday E12d)
     c = cfg()
     grace = (c.get("wake_phone_s", 10) if any(p.get("from") == "phone" or p.get("interrupt") for p in ps)  # the person is on hold for it (modules/phone: phone answer)
              else c.get("wake_person_s", 60) if any(p.get("from") in ("person", "hives", r["name"]) for p in ps) else c.get("wake_agent_s", 600))  # its own post: `hive model`; hives: another Hive waiting on a reply, paced like the person (line 644)
@@ -625,6 +626,32 @@ def release_shells(pid):
     except OSError: pass
     for q in rest: kill_tree(q)
     return shells
+
+SEEN = {}   # recent board posts by id: (from, at, thread, edit_of), so an edit or retry can be traced to the run answering it
+def note_seen(p):
+    SEEN[str(p.get("id"))] = (str(p.get("from", "")).lower(), p.get("at", ""), p.get("thread"), p.get("edit_of"))
+    if len(SEEN) > 20000: del SEEN[next(iter(SEEN))]
+
+def overtakes(name, p):
+    """Whether the person's edit or retry `p` replaces what `name`'s live run is answering right now (everyday E12d): an edit of a
+    message this run started on or was handed (any version of it), or a retry of a reply this run posted. Anything else the run is
+    doing (an older job in the same chat) is left alone, and the post reaches it the usual way."""
+    try: rec = json.loads((RUN / f"{name}.json").read_text())
+    except (OSError, ValueError): return False
+    if rec.get("harness", "claude-code") != "claude-code" or run_gone(rec) or rec.get("thread") != p.get("thread"): return False
+    if p.get("edit_of"):
+        root = str(p["edit_of"])
+        versions = {root} | {i for i, v in SEEN.items() if v[3] and str(v[3]) == root and i != str(p.get("id"))}
+        try: got = set((STATE / "delivered" / name).read_text().split())
+        except OSError: got = set()
+        return bool(versions & (got | {str(rec.get("post"))}))
+    v = SEEN.get(str(p.get("retry_of")))
+    return bool(v) and v[0] == name and v[1] >= rec.get("at", "")
+
+def open_command(rec):
+    """The foreground command `rec`'s run is in the middle of, or None: stopping the run leaves it running."""
+    steps = [i for _, t, i in open_steps(rec.get("out") or "") if t == "Bash" and not i.get("run_in_background")]
+    return str(steps[-1].get("command", ""))[:300] if steps else None
 
 def runs_now(name):
     """Whether `name` has a run whose claude process is alive right now (no reaping, unlike running())."""
@@ -739,11 +766,12 @@ def running(st=None, by_hand=False):
                 st.setdefault("resume", {})[r["name"]] = {**r, "session": session_in(r.get("out")) or r["session"], "reset": 0, "reaped": bg or ["(none listed)"], "move": move}
             work.pop(r["name"], None)
         elif st is not None and (ps := waiting_posts(st, r)):
+            step = open_command(r) if any(p.get("supersede") for p in ps) else None   # stopped mid-command: the command runs on, and the resumed run is told
             shells = release_shells(r["pid"])
             log(event="woken", name=r["name"], session=r["session"], pid=r["pid"], posts=[p["id"] for p in ps], shells=shells)
             if c: c.wait(timeout=10)
             st.setdefault("resume", {})[r["name"]] = {**r, "session": session_in(r.get("out")) or r["session"], "reset": 0, "reaped": ["(none: shells left running)"],
-                "shells": shells, "from": "person" if any(p.get("from") == "person" for p in ps) else ps[0].get("from")}  # the person's post isn't paced
+                "shells": shells, "step": step, "from": "person" if any(p.get("from") == "person" for p in ps) else ps[0].get("from")}  # the person's post isn't paced
             work.pop(r["name"], None)
         elif st is not None and quiet and carries_on(r) and stalled(r, quiet):
             log(event="stalled", name=r["name"], session=r["session"], pid=r["pid"], quiet=quiet)
@@ -1652,6 +1680,15 @@ def start(c, name, posts, login, resume=None, reaped=None, extra=(), moved=False
                   + "; ".join(f"{p['id']} (thread {p.get('thread', p['id'])}, from {p.get('from')})" for p in posts)
                   + f". Start with `hive read --thread {first.get('thread', first['id'])}`. Files and threads may have changed while you slept: "
                   "check the current state before relying on what you remember.")
+    elif resume and woken and any(p.get("supersede") for p in woken["posts"]):
+        sup = [p for p in woken["posts"] if p.get("supersede")]; other = [p for p in woken["posts"] if not p.get("supersede")]
+        new = "; ".join(f"{p['id']} in thread {p.get('thread', p['id'])}" for p in sup)
+        prompt = (f"The person edited the message you were answering, or asked for another answer to it, so the starter stopped your answer to hand you: {new}. "
+                  f"Read it with `hive read --thread {sup[0].get('thread', sup[0]['id'])}` and answer that instead. Don't post or finish the answer you were writing, and don't mention it: "
+                  "the chat keeps it behind the older version. Work you already did (files, commands) stays done; if other work of yours was under way, check its state and carry it on. ")
+        if woken.get("step"): prompt += f"You were stopped in the middle of this command, which was not killed and may still be running: {json.dumps(woken['step'])}; check it before running it again. "
+        if other: prompt += "Also new for you: " + "; ".join(f"{p['id']} (thread {p.get('thread', p['id'])}, from {p.get('from')})" for p in other) + ". "
+        if woken["shells"]: prompt += f"Your background shells were not killed and keep running: {json.dumps(woken['shells'])}. "
     elif resume and woken:
         new = "; ".join(f"{p['id']} in thread {p.get('thread', p['id'])}, from {p.get('from')}" for p in woken["posts"])
         prompt = (f"You had ended your turn and were parked on a background shell, which can't receive posts, so the starter restarted you to hand you these: {new}. "
@@ -1734,8 +1771,16 @@ def keeper(c, st, alive, login):
     last = st.setdefault("keeper_at", t)  # first boot: wait a full period
     if t - last < every and not (idle and t - last >= max(c.get("keeper_idle_s", 1800), every / 3)): return
     st["keeper_at"] = st["busy_at"] = t
-    post(f"@new keeper round ({'idle' if idle else 'periodic'}): read ~/core/keeper.md and follow it.", ["new"], "keeper")
+    post(f"@new keeper round ({'idle' if idle else 'periodic'}): read ~/core/keeper.md and follow it. " + KEEPER_RULES, ["new"], "keeper")
     log(event="keeper", why="idle" if idle else "periodic")
+
+# The steps keeper rounds skipped, stated in the waking post: replayed real misses went 0/30 at every model and effort with only
+# keeper.md, and 2/3 with this text in the post. A post naming some steps pushed out one it didn't name (3/3), hence the first
+# sentence and the ladder line (projects/rsi-lab/bench/settings.md, improve i0308).
+KEEPER_RULES = ("Do every step; one this post names doesn't replace one it doesn't. Never leave the asks list as you found it: every "
+                "set-aside ask `hive asks check` lists gets a new register line (reopen, hold, person, done or drop, with --why), and so does "
+                "at least one other ask it lists. Run `hive-mirror h3` and `hive-mirror h4`, and `tidy.py report --hours 24` (name any nonzero "
+                "pass in your post). Still dispatch the ladder rungs (`hive goals --post`) as every round does.")
 
 IMPROVE = """@new Figure out how to improve everything in the hive, across all of it: the projects, the quality of the work, failures, how agents work, Hive itself. Judge it yourself: read what you need (the board, ~/sessions, the code, results), then do things yourself or start other agents. `hive read --thread improve` shows what earlier rounds did; `hive progress` shows the hive's numbers and what got worse; `hive improve list` shows which earlier changes were judged held or reverted, so you build on what held. Log each change you land with `hive improve log --what ... --measure ... --revisit 7d`. Say what you did in this thread."""
 
@@ -2067,6 +2112,7 @@ def main():
                 try: p = json.loads(line)
                 except ValueError: continue
                 called, unknown = callable_names(p, c)
+                note_seen(p)
                 guarded("note_post", p, is_stop(p))
                 if is_stop(p) and (gone := drop_spawns(st, p.get("thread"))):
                     log(event="stop_dropped", names=gone, post=p.get("id"), thread=p.get("thread"))
@@ -2121,6 +2167,8 @@ def main():
                             try: did = interrupt_step(n, p.get("id"))
                             except Exception as e: did = f"{type(e).__name__}: {e}"[:200]
                             log(event="interrupt", name=n, post=p.get("id"), did=did)
+                    if (p.get("edit_of") or p.get("retry_of")) and p.get("from") == "person" and not fresh and overtakes(n, p):
+                        q["supersede"] = True   # its reply in this chat is overtaken: waiting_posts stops the run at once and resumes it with this post (everyday E12d)
                     st["pending"].setdefault(n, []).append(q)
         alive = running(st, by_hand)
         by_hand = False
@@ -2169,11 +2217,15 @@ def main():
             else: continue
             st["resume"].pop(n)
             waiting = st["pending"].pop(n, []) if r.get("reaped") else []  # hand queued posts to the resumed run
+            if "shells" in r:   # woken mid-run: the inbox hook already handed it some of these (an edit's first version, everyday E12d)
+                try: got = set((STATE / "delivered" / n).read_text().split())
+                except OSError: got = set()
+                waiting = [p for p in waiting if p["id"] not in got or p.get("continue")]
             # a queued post that asked for a model holds here too: a parked agent woken for it comes back on that model
             model = r.get("model") if pv else next((p["model"] for p in waiting if p.get("model") in MODELS), r.get("model"))
             start(c, n, [{"id": r["post"], "thread": r.get("thread"), "from": r.get("from"), "model": model}], to,
                   resume=r["session"], reaped=r.get("reaped"), extra=[p["id"] for p in waiting], moved=r.get("move", False), lost=r.get("lost", False),
-                  woken={"shells": r["shells"], "posts": waiting} if "shells" in r else None, all_since=r.get("all_since") or r.get("at"), why=r.get("why"))
+                  woken={"shells": r["shells"], "posts": waiting, "step": r.get("step")} if "shells" in r else None, all_since=r.get("all_since") or r.get("at"), why=r.get("why"))
             alive[n] = {"name": n, "thread": r.get("thread")}  # a dict, so keeper() sees a resumed keeper (two rounds at once, 2026-11-02)
         for n in ([] if hold else list(st["pending"])):
             if n in alive or n in st.get("resume", {}): continue

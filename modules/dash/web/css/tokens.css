@@ -70,7 +70,8 @@
   --accent-ink: light-dark(oklch(45% .11 68), oklch(85% .13 85));   /* amber text: 7.3:1 light, 12:1 dark on --bg (measured) */
   --accent-bg:  light-dark(oklch(62% .15 72 / .10), oklch(80% .15 80 / .13));
   --on-accent:  oklch(20% .02 70);                                   /* text on an amber fill: 4.9:1 light, 9.6:1 dark (measured) */
-  --focus:var(--accent); --link:var(--ink); --sel:var(--accent-bg);
+  --focus:light-dark(oklch(52% .14 70), var(--accent));   /* the light amber (3.7:1 on white) left focus rings near the 3:1 floor; this deeper amber keeps them over 4:1 on every fill (drive_app_focus min=4) */
+  --link:var(--ink); --sel:var(--accent-bg);
   --ring:0 0 0 2px var(--bg), 0 0 0 4px var(--focus);
 
   /* status: fill + ink. Only on status, always with a shape and a word. */

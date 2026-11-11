@@ -13,7 +13,7 @@ import { loadNeedsYou, needsKnown, needsN, needsSplit, needsHref, waitsOn, waiti
 import { workBar, workBarHeld } from "../ui/workbar.js";
 import { loadFoci, fociFailed, fociOrder, focusOf, focusById, activeThreads, askedOf, needAt, agentsOf, stateOf, pills, plainPills, needSource, isCode, scrub, codePill, railSay, railTitle, threadLine, focusName, MISC, activityOf, shareOf, fractionWords, pct, usd, needsOf, moveFocus, foci } from "../core/foci.js";
 import { newIn } from "./focus.js";
-import { SIDE_THREAD, agentLabel, capFirst, ownStep, inConversation, labelCodes, chatText, agentState, agentStatus, btwParent, threadParent, threadChildren, isAgent, isRunning, tierOf, threadTitle, threadState, threadPeople, isSystemThread, SHOW, postKind, threadKinds, closingPosts, displayText, postSource, inUse, limitStop, fresh7, asksQuestion, fileInfo } from "../core/model.js";
+import { SIDE_THREAD, agentLabel, capFirst, ownStep, inConversation, labelCodes, chatText, agentState, agentStatus, btwParent, threadParent, threadChildren, isAgent, tierOf, threadTitle, threadState, threadPeople, isSystemThread, SHOW, postKind, threadKinds, closingPosts, displayText, postSource, inUse, limitStop, fresh7, asksQuestion, fileInfo } from "../core/model.js";
 import { ago, dayName, stamp, clock, dur, short, mdPlain, now, plural, DAY, MIN, HOUR, money } from "../core/format.js";
 import { href, threadHref, go, parse } from "../core/router.js";
 import { yoursSearch, yoursText } from "../core/yours.js";
@@ -24,7 +24,8 @@ import { MN, onMail } from "../core/mailnew.js";
 import { heldRoom } from "../core/room.js";
 import { bar as skBar, button, empty, icon, input, list, scrim, seg, skeleton, statusDot, statusWord } from "../ui/kit.js";
 import { agentRef, avatars, copyButton, threadRef } from "../ui/refs.js";
-import { message, messageHead, messageReceipt, localMessage, draftMessage, markWords, pollDelivered, marksSig, delivery, onJump, helperFolds } from "../ui/message.js";
+import { message, messageHead, messageReceipt, localMessage, draftMessage, markWords, pollDelivered, marksSig, delivery, onJump, helperFolds, chatPages } from "../ui/message.js";
+import { chatView } from "../rich/artifact.js";
 import { asidePanel, asideOpen, closeAside } from "../ui/aside.js";
 import { openQuick, quickOpen, closeQuick, quickPanel, laterButtons } from "../ui/quick.js";
 import { when } from "../ui/when.js";
@@ -207,31 +208,44 @@ const KIND_NAME = { [SHOW.you]: "you", [SHOW.updates]: "updates", [SHOW.comms]: 
 // ---- E12: edited messages and replies tried again, with the older versions kept ----
 // The board only grows, so an edit is a new post with edit_of (its first version's id) and a retry a hidden post with retry_of (the reply's first id).
 // A version runs from where it starts to where the next one starts; the chat draws the chosen one (the newest unless arrows picked another).
-const VSEL = new Map(), V = { info: new Map(), old: false, edit: null, retry: null };
+const VSEL = new Map(), V = { info: new Map(), old: false, wait: false, edit: null, retry: null, retryRoot: null };
+// Only in one conversation, in the app's look, with no search: elsewhere every version shows as it was posted.
+// Only the person's edit_of/retry_of count (posting refuses them from anyone else; this is the page's own check too).
 function versioned(items) {
+  V.info = new Map(); V.old = V.wait = false; V.edit = V.retry = V.retryRoot = null;
+  if (!L.th || !app() || C.q.trim()) return items;
   const starts = new Map();
-  for (const p of items) { const r = !p.ev && (p.edit_of || p.retry_of); if (r) (starts.get(r) || starts.set(r, []).get(r)).push(p); }
-  V.info = new Map(); V.old = false; V.edit = V.retry = null;
+  for (const p of items) { const r = !p.ev && p.from === "person" && (p.edit_of || p.retry_of); if (r) (starts.get(r) || starts.set(r, []).get(r)).push(p); }
   const out = starts.size ? walk(items, starts) : items;
-  if (!V.old && !C.q.trim()) {   // Edit on your last message; Retry on the last reply, once nothing of yours follows it
-    const posts = out.filter(p => !p.ev), lastMe = posts.findLast(p => p.from === "person");
+  if (!V.old) {   // Edit on your last message (its files go with the edit); Retry on the last reply once nothing of yours follows it.
+    // Either works while the reply is still being written: the starter stops that run and hands the agent the new ask (E12d).
+    const posts = out.filter(p => !p.ev && !p.retry_of), li = posts.findLastIndex(p => p.from === "person"), lastMe = posts[li];
     V.edit = lastMe ? lastMe.id : null;
-    const lastAg = posts.findLast(p => isAgent(p.from));
-    if (lastAg && !posts.slice(posts.indexOf(lastAg)).some(p => p.from === "person")) V.retry = lastAg.id;
+    const after = posts.slice(li + 1).filter(p => isAgent(p.from)), lastAg = after.at(-1);
+    if (lastAg && !V.wait) { V.retry = lastAg.id; V.retryRoot = (V.info.get(after[0].id) || {}).root || after[0].id; }
   }
   return out;
 }
+// A version's part runs from its start to the next one's. A retry no reply has come to yet has no part to draw: the one before stays, and V.wait says one is coming.
 function walk(seg, starts) {
   const ins = new Set(seg), i = seg.findIndex(p => !p.ev && starts.has(p.id) && starts.get(p.id).some(s => ins.has(s)));
   if (i < 0) return seg.filter(p => !p.retry_of);
-  const root = seg[i], vs = [root, ...starts.get(root.id).filter(s => ins.has(s))], pos = vs.map(v => seg.indexOf(v)), n = vs.length;
+  const root = seg[i], vs = [root, ...starts.get(root.id).filter(s => ins.has(s))], pos = vs.map(v => seg.indexOf(v));
+  const part = j => seg.slice(pos[j], j + 1 < vs.length ? pos[j + 1] : seg.length);
+  const idx = vs.map((_, j) => j).filter(j => part(j).some(p => !p.ev && !p.retry_of)), n = idx.length;
+  if (n < vs.length) V.wait = true;
   const k = VSEL.has(root.id) ? Math.min(VSEL.get(root.id), n - 1) : n - 1; if (k < n - 1) V.old = true;
-  const part = seg.slice(pos[k], k + 1 < n ? pos[k + 1] : seg.length), head = part.find(p => !p.ev && !p.retry_of);
-  if (head) V.info.set(head.id, { root: root.id, i: k, n });
-  return [...seg.slice(0, i).filter(p => !p.retry_of), ...walk(part, starts)];
+  const pt = part(idx[k]), head = pt.find(p => !p.ev && !p.retry_of);
+  if (n > 1) V.info.set(head.id, { root: root.id, i: k, n });
+  return [...seg.slice(0, i).filter(p => !p.retry_of), ...walk(pt, starts)];
 }
 const verRedraw = () => { L.rebuild = true; L.keep = true; L.ctx && L.ctx.update(); };
-const verOpts = p => ({ ver: V.info.get(p.id) || null, canEdit: V.edit === p.id, canRetry: V.retry === p.id, pick: (root, i) => { VSEL.set(root, i); verRedraw(); }, redraw: verRedraw });
+const verPick = (root, i, n) => { if (i >= n - 1) VSEL.delete(root); else VSEL.set(root, i); verRedraw(); };
+const verOpts = p => ({ ver: V.info.get(p.id) || null, canEdit: V.edit === p.id, canRetry: V.retry === p.id, retryRoot: V.retry === p.id ? V.retryRoot : null, pick: verPick, redraw: verRedraw });
+// E13: in one conversation, in the app's look, with no search, a page posted again shows as the newest version of the earlier one.
+const pagesOn = () => L.th && app() && !C.q.trim();
+function pagesOf(all) { if (pagesOn()) chatPages(L.th, all); }
+const pageRows = items => (pagesOn() ? chatView(L.th, () => rows(items)) : rows(items));
 function rows(items) {
   const out = [];
   for (const p of items) {
@@ -253,6 +267,7 @@ function rows(items) {
 
 function paint(box, ctx) {
   const all = versioned(L.all), shown = all.slice(-C.limit), older = all.length - shown.length;
+  pagesOf(all);
   L.day = ""; L.prev = null; L.names = new Set(); L.shown = shown.length; L.helpers = new Set();
   if (older && shown.length && !L.opts.showThread) helperFolds(shown[0].th, shown[0].t - 1, L.helpers);   // the ones begun before what is drawn stay with it
   L.io.disconnect(); L.outSig = "";   // a fresh .cm-out: syncOut must fill it again
@@ -264,7 +279,7 @@ function paint(box, ctx) {
       button("Clear search", () => { C.q = ""; C.find = false; ctx.update(); }, { size: "s", kind: "quiet", icon: "close" }))] : []),
     ...(older ? [h("div", { class: "cm-older" }, button(`Show older (${older} more)`, () => { C.limit += STEP; L.rebuild = true; L.keep = true; ctx.update(); }, { size: "s" }))] : []),
     ...(shown.length && shownHeld(shown) ? [h("div", { class: "empty cm-held", "data-kind": "loading", role: "status", "aria-busy": "true" }, "Loading the conversation…")]
-      : shown.length ? [...rows(shown), ...(L.opts.showThread ? [] : helperFolds(shown.at(-1).th, Infinity, L.helpers, L.opts))] : [empty(C.q ? "No messages match." : L.src.length && !simpleOn() ? (app() ? "Nothing here for you yet. The rest is agents talking among themselves: Show hidden, in the title's menu, shows it." : "Nothing here with what Show has on. Turn on Agent comms to see all the messages.") : "No messages yet.")]),
+      : shown.length ? [...pageRows(shown), ...(L.opts.showThread ? [] : helperFolds(shown.at(-1).th, Infinity, L.helpers, L.opts))] : [empty(C.q ? "No messages match." : L.src.length && !simpleOn() ? (app() ? "Nothing here for you yet. The rest is agents talking among themselves: Show hidden, in the title's menu, shows it." : "Nothing here with what Show has on. Turn on Agent comms to see all the messages.") : "No messages yet.")]),
     L.out, L.drafts = h("div", { class: "cm-drafts", "data-key": "drafts", "aria-live": "polite" }), L.jump);
   L.draftSig = "";
 }
@@ -363,7 +378,7 @@ function sync(c, ctx) {
     const fsig = S.foci ? (S.foci.foci || []).map(f => f.id + ":" + f.name).join() : "";   // a focus chip names its focus: redraw once the foci arrive
     if (fsig !== L.fociSig) { if (L.fociSig !== undefined && L.all && L.all.some(p => p.tags && p.tags.length)) { L.rebuild = true; L.keep = true; } L.fociSig = fsig; }
     // E12: a new post can move the Edit and Retry buttons or add a version: draw the list again, where the reader is (at the end if there)
-    if (!L.rebuild && L.pend.length && (V.info.size || L.pend.some(p => p.edit_of || p.retry_of))) { L.rebuild = true; L.keep = !L.stuck && !atEnd(box); }
+    if (!L.rebuild && L.pend.length && (V.info.size || V.wait || V.edit || V.retry || L.pend.some(p => p.edit_of || p.retry_of))) { L.rebuild = true; L.keep = !L.stuck && !atEnd(box); }
     if (L.rebuild) {
       const fromEnd = L.keep ? box.scrollHeight - box.scrollTop : isNew && L.saved && L.saved.key === L.key ? L.saved.fromEnd : null;
       paint(box, ctx);
@@ -385,9 +400,9 @@ function sync(c, ctx) {
     } else if (L.pend.length) {
       const stick = atEnd(box) || L.stuck;
       box.querySelector(":scope > .empty")?.remove();
-      versioned(L.all);   // E12: Edit and Retry move to the newest message and reply
+      pagesOf(versioned(L.all));   // E12: Edit and Retry move to the newest message and reply; E13: a page posted again repaints its older copies
       for (const b of box.querySelectorAll(".msg-vact")) { const k = b.closest("[data-key]")?.dataset.key; if (k !== V.edit && k !== V.retry) b.remove(); }
-      const fresh = rows(L.pend); L.out.before(...fresh); fresh.forEach(el => el instanceof Element && L.ro.observe(el));
+      const fresh = pageRows(L.pend); L.out.before(...fresh); fresh.forEach(el => el instanceof Element && L.ro.observe(el));
       L.shown += L.pend.length;
       if (stick) box.scrollTop = box.scrollHeight;
       else { L.unseen += L.pend.filter(p => !p.ev && !OUTSIDE.has(p.from)).length; setJump(); }
